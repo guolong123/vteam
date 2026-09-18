@@ -1,0 +1,134 @@
+# task-12 docs evidence — server-gate-removal-tool-authority
+
+Todo 12: [docs] Correct the permission documentation to the new invariant.
+Commit: docs(permissions): document worker-owned tool authority
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+
+## 0. What was corrected
+
+Docs touched (scope: permission/role/gate docs only):
+
+| doc | stale claim corrected | new content |
+|-----|-----------------------|-------------|
+| `docs/agent-platform/33-评审轮次机制.md` | :104 `vteam_plan_complete`「仅主 Agent」; :108-109 非 `executing` → 拒绝派发 + 落点二选一; :118 完工「仅主 Agent」; :156 执行门禁「非 executing 拒绝派发」; :161 a_plan 豁免不变 | authority from role `toolAllows`, not main identity; plan-status hard gate REMOVED; only the plan-revision hash check retained (incl. plan-role target, exemption deleted) |
+| `docs/agent-platform/16-内置Agent角色与提示词库.md` | §2.1 prelude had no invariant/retained list/grant matrix; §2.1 bash column stale (`deny`/`ask`); §8.2 layer② described as "辅"; per-role mapping rows stale `bash deny/ask` | added §2.1.1 retained checks WITH CODES; added §2.1.2 grant matrix (sourced from constants); §8.2 states worker guard = single source of tool permission; bash values corrected to constants (`allow` except PM `deny`) |
+| `docs/agent-platform/A1-opencode-channel-report.md` | §0「全角色 task:deny」(vteam-plan is `allow`); §0「seed 5 条角色」（now 7） | corrected to 6 deny + `vteam-plan` allow; 7 policies / `vteam-plan` + 6 `vteam-<role>`; added invariant sentence |
+
+Docs checked and found carrying NO stale claim (no edit needed): `docs/agent-platform/11-资源与注册机制（工具skills-mcp）.md`, `docs/agent-platform/14-Agent配置与虚拟团队模型.md` (generic product permission model; no identity gate, no plan-status dispatch).
+
+## 1. NEW INVARIANT (stated in docs 16 §2.1/§8.2, A1 §0)
+
+> worker guard 是工具权限的唯一来源；服务端保留流程状态合法性、拓扑路由、人类权威与资源范围/归属校验。
+
+## 2. RETAINED CHECKS (docs 16 §2.1.1) — codes cross-checked against source
+
+| # | family | code | source check |
+|---|--------|------|--------------|
+| b.1 | notify routing | `PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION` | SOURCE-OK |
+| b.2 | terminal-task dispatch | plain `Error` (no HTTP code) | SOURCE-OK |
+| b.3 | accept/archive both sites | `TASK_AGENT_COMPLETION_FORBIDDEN` | SOURCE-OK |
+| b.4 | global-memory scope | `PLATFORM_MCP_FORBIDDEN` | SOURCE-OK |
+| b.5 | hook_cancel owner-or-main | `PLATFORM_MCP_FORBIDDEN` | SOURCE-OK |
+| + | stale plan-revision hash (incl. plan-role; exemption removed) | `plan-gated` / dual-short-hash `Error` | SOURCE-OK |
+| + | question_confirm self-approval | `QUESTION_SELF_CONFIRMATION_FORBIDDEN` | SOURCE-OK |
+| + | question_confirm cross-task | `QUESTION_CROSS_TASK_FORBIDDEN` | SOURCE-OK |
+
+Doc §2.1.1 codes present: `PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION`, `TASK_AGENT_COMPLETION_FORBIDDEN`, `PLATFORM_MCP_FORBIDDEN`, `QUESTION_SELF_CONFIRMATION_FORBIDDEN`, `QUESTION_CROSS_TASK_FORBIDDEN` (+ `GATE_SPEC_FILES`, `ROLE_BOUNDARIES` as references). Matches todo 1(b) + todo 10 registry (5 families + hash + 2 integrity = 10 sites).
+
+## 3. GRANT MATRIX cross-check — doc 16 §2.1.2 vs constants
+
+Derived (node read of `server/src/common/constants/agent.constants.ts`):
+
+```
+vteam-product            mcp=26 full=27
+vteam-architect          mcp=17 full=23
+vteam-developer          mcp=19 full=27
+vteam-tester             mcp=18 full=25
+vteam-project_manager    mcp=27 full=27
+vteam-plan               mcp=11 full=12
+vteam-librarian          mcp=9  full=16
+full-sum=157
+```
+
+Doc §2.1.2 MCP column: 26/17/19/18/27/11/9 = matches constants exactly.
+Doc §2.1.2 full column: 27/23/27/25/27/12/16 = matches; sum 157 = 157 allow cells of the 259-cell matrix (102 deny); +15 new grants. Matches `.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json` (allowCellCount 157, denyCellCount 102).
+
+## 4. HAPPY PATH — recorded detector run (docs/), before any mutation
+
+Detector: `/tmp/sgrta-docs-detector.sh` (4 affirmative-claim families; removal/negation phrasing excluded).
+
+```
+$ /tmp/sgrta-docs-detector.sh docs
+--- D1: main-only identity gate on retired tool (affirmative) ---
+CLEAN
+--- D2: plan-status dispatch requirement (affirmative) ---
+CLEAN
+--- D3: server-gated / identity-exemption still live (affirmative) ---
+CLEAN
+--- D4: a_plan exemption still live (affirmative) ---
+CLEAN
+===== DETECTOR RESULT: 0 stale pattern family(ies) flagged =====
+VERDICT: CLEAN — no doc asserts a removed claim
+HAPPY_EXIT=0
+```
+
+## 5. FAILURE MODE — deliberately re-added stale claim, detected, reverted
+
+Backup FIRST (never `git checkout --`):
+
+```
+$ cp docs/agent-platform/33-评审轮次机制.md /tmp/sgrta-doc33.backup.md
+$ shasum -a 256 docs/agent-platform/33-评审轮次机制.md /tmp/sgrta-doc33.backup.md
+b3474c3a9a09d976d22b774134e7cae2fac47b6f2d008c618a8d921263ed0383  docs/agent-platform/33-评审轮次机制.md
+b3474c3a9a09d976d22b774134e7cae2fac47b6f2d008c618a8d921263ed0383  /tmp/sgrta-doc33.backup.md
+```
+
+Injected (appended) stale sentence:
+
+```
+* 回归演示（临时）：`vteam_plan_complete` 仅主 Agent 可调用；执行门禁：非 `executing` 拒绝派发。
+```
+
+Detector run — FLAGGED (2 families):
+
+```
+$ /tmp/sgrta-docs-detector.sh docs
+--- D1: main-only identity gate on retired tool (affirmative) ---
+docs/agent-platform/33-评审轮次机制.md:165:* 回归演示（临时）：`vteam_plan_complete` 仅主 Agent 可调用；执行门禁：非 `executing` 拒绝派发。
+--- D2: plan-status dispatch requirement (affirmative) ---
+docs/agent-platform/33-评审轮次机制.md:165:* 回归演示（临时）：`vteam_plan_complete` 仅主 Agent 可调用；执行门禁：非 `executing` 拒绝派发。
+--- D3: server-gated / identity-exemption still live (affirmative) ---
+CLEAN
+--- D4: a_plan exemption still live (affirmative) ---
+CLEAN
+===== DETECTOR RESULT: 2 stale pattern family(ies) flagged =====
+VERDICT: STALE CLAIM PRESENT
+FAILURE_EXIT=2
+```
+
+Revert with `cp` (NOT git checkout):
+
+```
+$ cp /tmp/sgrta-doc33.backup.md docs/agent-platform/33-评审轮次机制.md
+$ shasum -a 256 docs/agent-platform/33-评审轮次机制.md /tmp/sgrta-doc33.backup.md
+b3474c3a9a09d976d22b774134e7cae2fac47b6f2d008c618a8d921263ed0383  docs/agent-platform/33-评审轮次机制.md
+b3474c3a9a09d976d22b774134e7cae2fac47b6f2d008c618a8d921263ed0383  /tmp/sgrta-doc33.backup.md
+$ /tmp/sgrta-docs-detector.sh docs
+...
+VERDICT: CLEAN — no doc asserts a removed claim
+POST_REVERT_EXIT=0
+```
+
+Byte-identity restored (sha equal to backup); tail shows no stale token left.
+
+## 6. QA verdict
+
+- happy — docs match the shipped behaviour: detector CLEAN (0 families); retained codes match source; grant matrix matches constants (157/259).
+- failure — a deliberately re-added stale claim (identity gate + plan-status dispatch) is detected by the recorded grep (FAILURE_EXIT=2), then reverted byte-identically.
+
+## 7. Cleanup receipt
+
+- `/tmp/sgrta-doc33.backup.md`: retained during run; safe to delete.
+- `/tmp/sgrta-docs-detector.sh`: retained during run; safe to delete.
+- Product source under `server/`, `worker/`, `web/`: UNCHANGED (docs-only task).
+- No `git checkout --` / `git restore` used to revert.

@@ -3,12 +3,12 @@ title: 内置 Agent 角色与提示词库
 id: builtin-agent-prompts
 order: 16
 kind: 技术设计
-description: 平台内置五类 Agent 角色（产品经理/项目经理/架构师/开发者/测试者）的完备提示词库专章：每个角色给出可直接使用的系统提示词（职责/权限/工作方式/协同方式四方向）+ 默认配置映射 + 协作矩阵，功能依据 04 篇 FR-30/33 与 03 篇 FR-08，落库 15 篇 agents.prompt；运行时强制执行见 ExecutionPolicy（seed `ep_<role>`）+ opencode 原生 permission + worker guard（§8.2）
+description: 平台内置五类 Agent 角色（产品经理/项目经理/架构师/开发者/测试者）的完备提示词库专章：每个角色给出可直接使用的系统提示词（职责/权限/工作方式/协同方式四方向）+ 默认配置映射 + 协作矩阵，功能依据 04 篇 FR-30/33 与 03 篇 FR-08，落库 15 篇 agents.prompt；运行时强制执行见 ExecutionPolicy（seed `ep_<role>`）+ opencode 原生 permission + worker guard：worker guard 是工具权限唯一来源，服务端只保留流程状态/拓扑路由/人类权威/资源范围校验（§2.1.1/§8.2）
 ---
 
 # 内置 Agent 角色与提示词库
 
-本文档是平台内置 Agent 角色的提示词库。14 篇 §4.1 定义了四类预置模板的**结构与默认配置**（每类一行「默认提示词定位」），本文档在此之上给出每个角色**可直接复制使用的完整提示词**——按「职责 / 权限 / 工作方式 / 协同方式」四个方向组织。提示词是 Agent 行为的第一来源（FR-33：提示词定义行为方式与角色边界），运行时强制执行另有两层（§8.2）：层① opencode 原生 `permission`（`edit` 路径 glob 为唯一写闸门 + `read` glob + `bash` + `task:"deny"` + `vteam_<action>` deny，随 `ExecutionPolicy.config.permission` 下发）与层② worker guard 插件（`tool.execute.before`，未知/自定义/MCP 工具 allowlist 默认拒绝 + 越界纠正）。`agent_tool_effects` / `permissionScope` 不是运行时强制来源。
+本文档是平台内置 Agent 角色的提示词库。14 篇 §4.1 定义了四类预置模板的**结构与默认配置**（每类一行「默认提示词定位」），本文档在此之上给出每个角色**可直接复制使用的完整提示词**——按「职责 / 权限 / 工作方式 / 协同方式」四个方向组织。提示词是 Agent 行为的第一来源（FR-33：提示词定义行为方式与角色边界），运行时强制执行另有两层（§8.2）：层① opencode 原生 `permission`（`edit` 路径 glob 为唯一写闸门 + `read` glob + `bash` + `task:"deny"` + `vteam_<action>` deny，随 `ExecutionPolicy.config.permission` 下发）与层② worker guard 插件（`tool.execute.before`，未知/自定义/MCP 工具 allowlist 默认拒绝 + 越界纠正）。**层②（worker guard）是工具权限的唯一来源**：服务端不再按主实例身份做工具级门禁，只保留流程状态合法性、拓扑路由、人类权威与资源范围/归属校验（§2.1.1/§8.2）。`agent_tool_effects` / `permissionScope` 不是运行时强制来源。
 
 ## 1. 定位与文档关系
 
@@ -33,17 +33,52 @@ description: 平台内置五类 Agent 角色（产品经理/项目经理/架构�
 
 ### 2.1 五角色总览表
 
-平台预置五类角色模板（seed 五个模板 Agent：产品经理/项目经理/架构师/开发者/测试者），每类带默认提示词、四方向定位与种子策略 `ep_<role>`（`type:'template'`，`config={permission, correction}`，模板 Agent `policyId` 绑定，clone 继承）。层①强制（opencode 原生 `permission`）与层② guard allowlist 均由此派生，唯一事实来源为 `server/src/common/constants/agent.constants.ts` 的 `ROLE_BOUNDARIES`（key 为 opencode agent 名）：
+平台预置五类角色模板（seed 五个模板 Agent：产品经理/项目经理/架构师/开发者/测试者），每类带默认提示词、四方向定位与种子策略 `ep_<role>`（`type:'template'`，`config={permission, correction}`，模板 Agent `policyId` 绑定，clone 继承）。层①强制（opencode 原生 `permission`）与层② guard allowlist 均由此派生，唯一事实来源为 `server/src/common/constants/agent.constants.ts` 的 `ROLE_BOUNDARIES`（key 为 opencode agent 名）。
+
+> **工具授权不变量**：**worker guard 是工具权限的唯一来源；服务端保留流程状态合法性、拓扑路由、人类权威与资源范围/归属校验**。服务端不再按主实例身份（`mainAgentMemberId`）做工具级判定——`task_create` / `task_transition` / `plan_mode` / `plan_complete` / `team_add_member` / `question_confirm` / `skill_create` 的身份门禁已全部移除；某角色是否可调用某工具，只由该角色 `toolAllows` 决定（未列出即 deny，`ROLE_SERVER_GATED_TOOLS` 恒为空数组）。保留的服务端校验见 §2.1.1。
 
 | opencode agent 名 | 角色 | 定位一句话 | 核心产出物 | 层① `permission.edit`（`edit` 为唯一写闸门，无 `write` 键） | 层① `permission.read` / `bash` / `task` | 种子策略 |
 |------|------|-----------|-----------|---------------------|---------------------|---------|
-| `vteam-product` | 产品经理 | 需求拆解与原型设计，输出需求文档、原型与验收标准 | 需求文档、原型设计 | `{"*":"deny","**tasks/*/prototypes/**":"allow","**tasks/*/docs/**":"allow"}` | read 全 allow / bash deny / task deny | `ep_product` |
+| `vteam-product` | 产品经理 | 需求拆解与原型设计，输出需求文档、原型与验收标准 | 需求文档、原型设计 | `{"*":"deny","**tasks/*/prototypes/**":"allow","**tasks/*/docs/**":"allow"}` | read 全 allow / bash allow / task deny | `ep_product` |
 | `vteam-project_manager` | 项目经理 | 流程控制：任务拆解编排、进度跟踪、风险与阻塞协调；不产出需求/方案/代码/用例 | 任务拆解、进度与风险、协调记录 | `{"*":"deny"}`（无写 glob） | read 全 allow / bash deny / task deny | `ep_project_manager` |
-| `vteam-architect` | 架构师 | 技术方案设计与推演，权衡取舍输出设计文档；只读核对仓库 | 技术方案、设计文档 | `{"*":"deny","**tasks/*/docs/**":"allow"}` | read 全 allow / bash ask / task deny | `ep_architect` |
-| `vteam-developer` | 开发者 | 编码实现与问题排查，输出实现代码与说明 | 实现代码、实现说明 | `{"*":"deny","**tasks/*/**":"allow"}` | read 全 allow / bash ask / task deny | `ep_developer` |
-| `vteam-tester` | 测试者 | 用例设计与缺陷验证（用例/计划/执行/报告），穷举边界输出验证结论 | 测试用例、测试计划、测试执行、测试报告 | `{"*":"deny","**tasks/*/tests/**":"allow","**tasks/*/docs/**":"allow"}` | read 全 allow / bash ask / task deny | `ep_tester` |
+| `vteam-architect` | 架构师 | 技术方案设计与推演，权衡取舍输出设计文档；只读核对仓库 | 技术方案、设计文档 | `{"*":"deny","**tasks/*/docs/**":"allow"}` | read 全 allow / bash allow / task deny | `ep_architect` |
+| `vteam-developer` | 开发者 | 编码实现与问题排查，输出实现代码与说明 | 实现代码、实现说明 | `{"*":"deny","**tasks/*/**":"allow"}` | read 全 allow / bash allow / task deny | `ep_developer` |
+| `vteam-tester` | 测试者 | 用例设计与缺陷验证（用例/计划/执行/报告），穷举边界输出验证结论 | 测试用例、测试计划、测试执行、测试报告 | `{"*":"deny","**tasks/*/tests/**":"allow","**tasks/*/docs/**":"allow"}` | read 全 allow / bash allow / task deny | `ep_tester` |
 
-> glob 为通用根无关形式 `**tasks/*/<subdir>/**`（两种 worktree 基址均命中，禁用绝对路径）；MCP 工具按真实暴露名 `vteam_<action>` 显式 deny（未列入该角色 guard `tools` allowlist 者）；全角色 `permission.task:"deny"`（运行时拒绝子代理调用，非工具隐藏）。完整 guard allowlist 与 bash 硬化清单见计划 Permission matrix 与 `ROLE_BASH_DENY_PATTERNS`。`vteam-plan`（计划职责，只读产出实施计划）随 `/agent-policies` 一并下发，非模板第五角色。
+> glob 为通用根无关形式 `**tasks/*/<subdir>/**`（两种 worktree 基址均命中，禁用绝对路径）；MCP 工具按真实暴露名 `vteam_<action>` 显式 deny（未列入该角色 guard `tools` allowlist 者）；全角色 `permission.task:"deny"`（运行时拒绝子代理调用，非工具隐藏）。完整 guard allowlist 见 §2.1.2，`ROLE_BASH_DENY_PATTERNS` 已下线（空数组，bash 仅受层① `permission.bash` 约束）。`vteam-plan`（计划职责，只读产出实施计划）随 `/agent-policies` 一并下发，非模板第五角色。
+
+#### 2.1.1 服务端保留校验（身份门禁移除后仍在）
+
+工具级授权归 worker guard（§8.2 层②）；服务端不再按主实例身份判工具调用，但保留以下**非工具权限**的流程/拓扑/人类权威/资源校验。这些校验的拒绝码是稳定契约，文档与代码必须一致：
+
+| # | 族 | 拒绝码 | 性质 | 拒绝条件 |
+|---|----|--------|------|---------|
+| b.1 | `notify_agent` 路由（自通知 + 非主→非主） | `PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION` | 拓扑路由 | 通知自己；或调用方与目标均非主成员（协作图须经主 Agent 中转） |
+| b.2 | 终态任务执行派发拒绝（`completed`/`archived`） | 纯 `Error`（该层无 HTTP 码） | 流程状态合法性 | 向终态任务派发 execution（review/nudge/wake 按设计豁免） |
+| b.3 | accept/archive 拒绝（MCP 与 service 两站点） | `TASK_AGENT_COMPLETION_FORBIDDEN` | 人类权威 | Agent 调用 `accept`/`archive`（验收/归档归人类操作员） |
+| b.4 | 全局记忆写范围（`memory_save`/`memory_update`，global 级） | `PLATFORM_MCP_ERRORS.FORBIDDEN`（`PLATFORM_MCP_FORBIDDEN`） | 资源范围 | 非主成员写/改 `global` 级记忆（团队级跨团队写拒绝同族） |
+| b.5 | `hook_cancel` 所有者或主成员 | `PLATFORM_MCP_ERRORS.FORBIDDEN`（`PLATFORM_MCP_FORBIDDEN`） | 资源归属 | 非 hook 所有者且非主成员取消（跨团队取消同族） |
+| + | 计划版本哈希过期（含计划员 `a_plan` 目标，豁免已删） | `plan-gated`（notify 层）/ 双短哈希 `Error`（dispatcher 层） | 流程状态 | 携带的 `planHash` 与冻结哈希不一致 |
+| + | `question_confirm` 完整性 #1：发起者不得自批 | `QUESTION_SELF_CONFIRMATION_FORBIDDEN` | 完整性 | 确认者本人即请求发起者 |
+| + | `question_confirm` 完整性 #2：跨任务确认拒绝 | `QUESTION_CROSS_TASK_FORBIDDEN` | 完整性 | 请求归属任务与调用方任务不一致 |
+
+> 五族 + 哈希校验 + 两条 `question_confirm` 完整性校验，即服务端保留校验的完整清单（对应移除计划 todo 1(b) 与 todo 10 的 10 条物理/行为站点登记）。`QUESTION_*` 码定义于 `server/src/questions/questions.constants.ts`。校验回归锁定于 `GATE_SPEC_FILES`（`server/src/gates/gate-spec-registry.ts`，16 个门禁单测文件，删一即红）。
+
+#### 2.1.2 授权矩阵（role × tool，源自 `ROLE_BOUNDARIES`）
+
+7 角色 × 37 工具（29 个 `vteam_<action>` MCP + 7 个 `git_<action>` 自定义 + `browser`）= **259 格，157 allow / 102 deny**。下表为各角色 `toolAllows` 总数与本次翻转**新增授予**（身份门禁移除后按角色下发，而非按主实例身份放行）：
+
+| opencode agent 名 | MCP 工具数（`vteam_<action>`） | 全量 `toolAllows`（含 `git_*` / `browser`） | 本次新增授予 |
+|------|------|------|------|
+| `vteam-product` | 26 | 27 | `vteam_task_transition`、`vteam_task_create`、`vteam_plan_mode`、`vteam_team_add_member`、`vteam_question_confirm`（+5） |
+| `vteam-architect` | 17 | 23 | `vteam_issue_create`（+1） |
+| `vteam-developer` | 19 | 27 | `vteam_issue_create`（+1） |
+| `vteam-tester` | 18 | 25 | 无（`vteam_issue_create` 原已持有）（+0） |
+| `vteam-project_manager` | 27 | 27 | `vteam_task_transition`、`vteam_task_create`、`vteam_plan_mode`、`vteam_team_add_member`、`vteam_question_confirm`、`vteam_plan_complete`、`vteam_skill_create`（+7） |
+| `vteam-plan` | 11 | 12 | `vteam_plan_complete`（+1） |
+| `vteam-librarian` | 9 | 16 | 无（+0） |
+
+> 全量 `toolAllows` 合计 **157**（= 157 allow 格；其余 102 格为 deny）。合计 **15 条新增授予**。未获授予的角色对相应工具得到显式 deny（`mcpDenies` = 全部 MCP 工具 − `toolAllows`，纯补集推导）；**持有主实例身份不等于持有工具**——权威来自角色授权。矩阵由 `server/src/execution-policies/agent-policies.matrix.spec.ts` / `platform-mcp.authority-matrix.spec.ts` 与 `agent.constants.spec.ts` 的硬编码快照锁定，证据见 `.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json`。
 
 ### 2.2 五角色协同关系图（mermaid）
 
@@ -112,7 +147,7 @@ flowchart LR
 | 配置项 | 建议值 | 依据 |
 |--------|--------|------|
 | 默认技能 skillIds | 需求分析、文档撰写、产出物协议 | FR-34 |
-| 运行时强制（种子策略） | `ep_product`：层① edit 放行 `prototypes`/`docs`、bash deny、全角色 task deny；层② guard allowlist 见计划 Permission matrix | §2.1 / §8.2 |
+| 运行时强制（种子策略） | `ep_product`：层① edit 放行 `prototypes`/`docs`、bash allow、全角色 task deny；层② guard allowlist 见 §2.1.2 | §2.1 / §8.2 |
 | 默认模型侧重 | 通用对话模型（结构化文本梳理） | FR-47 |
 | 产出物类型 | `doc` 需求文档、`text` 验收标准/需求结论 | 12 篇 FR-39 |
 | 主要协作对象 | 架构师、开发者、测试者、项目经理（流程协调）、成员（验收判定） | FR-08 |
@@ -228,7 +263,7 @@ flowchart LR
 | 配置项 | 建议值 | 依据 |
 |--------|--------|------|
 | 默认技能 skillIds | 架构设计、方案评审、文档撰写 | FR-34 |
-| 运行时强制（种子策略） | `ep_architect`：层① edit 仅放行 `docs`、bash ask、全角色 task deny；只读 git 工具（`git_clone`/`git_pull`/`git_status`/`git_diff`/`git_log`）列入 guard allowlist | §2.1 / §8.2 |
+| 运行时强制（种子策略） | `ep_architect`：层① edit 仅放行 `docs`、bash allow、全角色 task deny；只读 git 工具（`git_clone`/`git_pull`/`git_status`/`git_diff`/`git_log`）列入 guard allowlist | §2.1 / §8.2 |
 | 默认模型侧重 | 推理模型（复杂逻辑推演与方案权衡） | FR-47 |
 | 产出物类型 | `doc` 设计文档、`text` 方案评审结论 | 12 篇 FR-39 |
 | 主要协作对象 | 产品经理（上游需求）、开发者（下游实现） | — |
@@ -289,7 +324,7 @@ flowchart LR
 | 配置项 | 建议值 | 依据 |
 |--------|--------|------|
 | 默认技能 skillIds | 编码、代码审查、调试 | FR-34 |
-| 运行时强制（种子策略） | `ep_developer`：层① edit 放行任务整棵子树、bash ask、全角色 task deny；git 工具族列入 guard allowlist | §2.1 / §8.2 |
+| 运行时强制（种子策略） | `ep_developer`：层① edit 放行任务整棵子树、bash allow、全角色 task deny；git 工具族列入 guard allowlist | §2.1 / §8.2 |
 | 默认模型侧重 | 代码能力突出的通用模型 | FR-47 |
 | 产出物类型 | `file` 代码文件、`doc` 实现说明、`text` 排查结论 | 12 篇 FR-39 |
 | 主要协作对象 | 架构师（上游方案）、UI 设计（上游稿）、测试者（下游验证） | — |
@@ -349,7 +384,7 @@ flowchart LR
 | 配置项 | 建议值 | 依据 |
 |--------|--------|------|
 | 默认技能 skillIds | 用例设计、缺陷验证、文档撰写 | FR-34 |
-| 运行时强制（种子策略） | `ep_tester`：层① edit 放行 `tests`/`docs`、bash ask、全角色 task deny；git 只读工具列入 guard allowlist | §2.1 / §8.2 |
+| 运行时强制（种子策略） | `ep_tester`：层① edit 放行 `tests`/`docs`、bash allow、全角色 task deny；git 只读工具列入 guard allowlist | §2.1 / §8.2 |
 | 默认模型侧重 | 推理模型（边界推演与场景穷举） | FR-47 |
 | 产出物类型 | `doc` 测试用例、`text` 验证结论/缺陷复现步骤 | 12 篇 FR-39 |
 | 主要协作对象 | 开发者（上游实现）、产品经理（上游验收标准）、成员（下游判定） | FR-08 |
@@ -411,7 +446,7 @@ flowchart LR
 | 配置项 | 建议值 | 依据 |
 |--------|--------|------|
 | 种子策略 | `ep_plan`（`type:'template'`，`config={permission, correction}`，模板 Agent `a_plan` 的 `policyId` 绑定，`agentKey='plan'`） | seed.ts |
-| 层①强制 | `permission.edit` 仅放行计划目录、 `read={"*":"allow"}`、`bash=deny`、`task=allow`（仅计划员；其余五角色 `task=deny`） | §2.1 / §8.2 |
+| 层①强制 | `permission.edit` 仅放行计划目录、 `read={"*":"allow"}`、`bash=allow`、`task=allow`（仅计划员；其余五角色 `task=deny`） | §2.1 / §8.2 |
 | 默认技能 | `plan-creation`（起草，计划成员侧） + 按需加载的 `plan-review-<role>`（评审口径） | seed `BUILTIN_SKILLS` |
 | 产出物类型 | 落盘计划文件（`.opencode/plans/`）+ 群聊摘要（text） | `plan-creation` skill |
 | 主要协作对象 | 主 Agent（派活与 feedback 闭环）、评审子会话（扇出只读评审） | — |
@@ -439,13 +474,17 @@ flowchart LR
 
 ### 8.2 角色边界声明 vs 强制约束的分工
 
-**提示词声明行为边界，`ExecutionPolicy` 做强约束**——两者分工明确，防止提示词被绕过。`agent_tool_effects` / `permissionScope` 不是运行时强制来源（遗留配置列，见下表）：
+**提示词声明行为边界，`ExecutionPolicy` 做强约束**——两者分工明确，防止提示词被绕过。`agent_tool_effects` / `permissionScope` 不是运行时强制来源（遗留配置列，见下表）。
+
+> **工具授权不变量**：**worker guard 是工具权限的唯一来源；服务端保留流程状态合法性、拓扑路由、人类权威与资源范围/归属校验**（§2.1.1）。服务端不再按主实例身份（`mainAgentMemberId`）对 `task_create`/`task_transition`/`plan_mode`/`plan_complete`/`team_add_member`/`question_confirm`/`skill_create` 做工具级门禁；某角色是否可调用某工具只由层②的 `tools` allowlist（`ROLE_BOUNDARIES[*].toolAllows`）决定，未列出即 deny。
+
+**层② guard 是工具授权唯一来源（为何成立）。** 层②（worker guard）对未知/自定义/MCP 工具按 `tools` allowlist 判定，未列出即 deny——这是工具权限的**唯一判定入口**；`ROLE_SERVER_GATED_TOOLS` 恒为空数组（曾被层①/层②当作「服务端放行的身份豁免工具」的旧机制已退休），`mcpDenies` 由 `toolAllows` 纯补集推导。层①（opencode 原生 `permission`）仍对文件写（`edit` glob）、读取（`read` glob）、`bash`、子代理（`task`）做原生约束，但其对 MCP/自定义工具的 `deny` 是**收窄命名空间的镜像**，不构成第二套授权真相。服务端只保留 §2.1.1 列出的八类流程/拓扑/人类权威/资源校验。
 
 | 层 | 载体 | 性质 | 作用 |
 |----|------|------|------|
 | 行为声明（软约束） | 提示词「权限」块 | 指导 Agent 自觉遵守，可被模型理解 | 声明「应该做什么/不应该做什么」，如「禁止越权验收」「不产出具体交付物」 |
-| 强制约束（硬约束）层① | `ExecutionPolicy.config.permission` → opencode 原生 `agent.<name>.permission` | 随配置生效（`--pure` 下仍生效） | `permission.edit` 路径 glob（`edit` 是 edit/write/apply_patch 的唯一闸门，无 `write` 键）做文件写约束；`permission.read` glob 约束读取；`permission.bash`；MCP/自定义工具 `permission.<真实名>:"deny"`；全角色 `permission.task:"deny"`（运行时拒绝子代理调用，非工具隐藏）。glob 用通用根无关形式 `**tasks/*/<subdir>/**` |
-| 强制约束（硬约束）层② | worker guard 插件 `tool.execute.before`（`.vteam-role-guard/roles.json`，`{enabled, roles}`） | 仅对未知/自定义/MCP 工具有默认拒绝 | 分支优先级：`roles.json` 缺失/`enabled!==true`/解析失败 → pass-through；session 未映射/agent 未知 → pass-through；角色条目残缺 → fail-closed；read 类交层①；edit 类按 writeGlobs；bash 仅按硬化清单（`ROLE_BASH_DENY_PATTERNS`），未命中交层①；`task`/`execute` deny；其余未知/自定义/MCP（真实名 `vteam_<action>`）按 `tools` allowlist，未列出即 deny；deny 回传纠正文案 `【越界拦截｜角色：X】…转交…` |
+| 强制约束（硬约束）层① | `ExecutionPolicy.config.permission` → opencode 原生 `agent.<name>.permission` | 随配置生效（`--pure` 下仍生效） | `permission.edit` 路径 glob（`edit` 是 edit/write/apply_patch 的唯一闸门，无 `write` 键）做文件写约束；`permission.read` glob 约束读取；`permission.bash`；MCP/自定义工具 `permission.<真实名>:"deny"`（`mcpDenies` 纯补集镜像）；全角色 `permission.task:"deny"`（运行时拒绝子代理调用，非工具隐藏）。glob 用通用根无关形式 `**tasks/*/<subdir>/**` |
+| 强制约束（硬约束）层②（**工具授权唯一来源**） | worker guard 插件 `tool.execute.before`（`.vteam-role-guard/roles.json`，`{enabled, roles}`） | 对未知/自定义/MCP 工具的默认拒绝 + 工具级授权判定 | 分支优先级：`roles.json` 缺失/`enabled!==true`/解析失败 → pass-through；session 未映射/agent 未知 → pass-through；角色条目残缺 → fail-closed；read 类交层①；edit 类按 writeGlobs；bash 按 `ROLE_BASH_DENY_PATTERNS`（已下线，空数组）未命中交层①；`task`/`execute` deny；其余未知/自定义/MCP（真实名 `vteam_<action>`）按 `tools` allowlist，未列出即 deny；deny 回传纠正文案 `【越界拦截｜角色：X】…转交…` |
 | 遗留配置（非强制） | `agent_tool_effects` / `agents.permission_scope` | 仅落库，无运行时消费 | 不参与 enforcement；文档与代码中不得将其描述为生效约束 |
 
 > **一致性要求**：提示词「权限」块的声明必须与种子策略一致。例如测试者提示词声明「不改实现代码」，种子侧 `ep_tester` 的 edit glob 仅放行 `tests`/`docs`——若仅靠提示词声明而无层① glob，模型可能直接写实现代码。唯一事实来源：`ROLE_BOUNDARIES` → seed `ep_<role>` → `/agent-policies` → worker 注入。
