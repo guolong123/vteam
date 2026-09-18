@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import {
   CHANNEL_TYPE,
   EVENT_TYPES,
@@ -23,6 +24,7 @@ import {
 } from '../workers/worker.client';
 import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 import { SKILL_ERRORS } from '../common/constants/skill.constants';
+import { TASK_ERRORS } from '../common/constants/task.constants';
 import { SkillsService } from '../skills/skills.service';
 import { GitReposService } from '../git-repos/git-repos.service';
 import { PlatformMcpService } from './platform-mcp.service';
@@ -34,9 +36,11 @@ import {
 import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
+import { QUESTION_CONFIRM_INTEGRITY_ERRORS } from '../questions/questions.constants';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 import { MessageReceiptsService } from '../chat/message-receipts.service';
+import { HookService } from '../triggers/hook.service';
 
 describe('PlatformMcpService', () => {
   let service: PlatformMcpService;
@@ -90,6 +94,7 @@ describe('PlatformMcpService', () => {
       update: jest.Mock;
       deleteMany: jest.Mock;
     };
+    hook: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
   let idGen: { nextId: jest.Mock };
@@ -122,6 +127,7 @@ describe('PlatformMcpService', () => {
   let outboundDispatcher: { sendToChannelByIdOrName: jest.Mock };
   let executionPolicyService: { resolveByAgent: jest.Mock };
   let receiptsService: { countPending: jest.Mock };
+  let hookService: { cancelHook: jest.Mock; registerHook: jest.Mock };
   const allowPolicy = () => {
     executionPolicyService.resolveByAgent.mockResolvedValue({
       policyId: 'ep_developer',
@@ -218,6 +224,7 @@ describe('PlatformMcpService', () => {
         update: jest.fn(),
         deleteMany: jest.fn(),
       },
+      hook: { findUnique: jest.fn() },
       $transaction: jest.fn(),
     };
     // FR-41：$transaction 直接透传回调（tx 复用 prisma mock），事务内查询可断言
@@ -259,6 +266,10 @@ describe('PlatformMcpService', () => {
     receiptsService = {
       countPending: jest.fn().mockResolvedValue({ pending: 0, total: 0 }),
     };
+    hookService = {
+      cancelHook: jest.fn(),
+      registerHook: jest.fn(),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -280,6 +291,7 @@ describe('PlatformMcpService', () => {
         { provide: SkillsService, useValue: skillsService },
         { provide: GitReposService, useValue: gitReposService },
         { provide: MessageReceiptsService, useValue: receiptsService },
+        { provide: HookService, useValue: hookService },
       ],
     }).compile();
 
@@ -6470,6 +6482,333 @@ describe('PlatformMcpService', () => {
           name: 'git-ops',
         }).success,
       ).toBe(false);
+    });
+  });
+
+  describe('todo 10 保留检查锁定（retained server-side checks）', () => {
+    const RETAINED_CHECKS = [
+      {
+        family: 'notify-self',
+        code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+        spec: 'server/src/platform-mcp/platform-mcp.service.spec.ts',
+      },
+      {
+        family: 'notify-non-main-to-non-main',
+        code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+        spec: 'server/src/platform-mcp/platform-mcp.service.spec.ts',
+      },
+      {
+        family: 'terminal-task-execution-dispatch',
+        code: 'TERMINAL_TASK_DISPATCH_REFUSED',
+        spec: 'server/src/chat/worker-dispatcher.gate.spec.ts',
+      },
+      {
+        family: 'accept-archive-mcp-site',
+        code: TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
+        spec: 'server/src/platform-mcp/platform-mcp.service.spec.ts',
+      },
+      {
+        family: 'accept-archive-service-site',
+        code: TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
+        spec: 'server/src/tasks/tasks.service.spec.ts',
+      },
+      {
+        family: 'global-memory-write-scope',
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        spec: 'server/src/platform-mcp/platform-mcp.service.spec.ts',
+      },
+      {
+        family: 'hook-cancel-owner-or-main',
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        spec: 'server/src/platform-mcp/platform-mcp.service.spec.ts',
+      },
+      {
+        family: 'plan-hash-stale-including-plan-role',
+        code: 'PLAN_HASH_STALE',
+        spec: 'server/src/chat/worker-dispatcher.gate.spec.ts',
+      },
+      {
+        family: 'question-confirm-self-approval',
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
+        spec: 'server/src/platform-mcp/platform-mcp.service.spec.ts',
+      },
+      {
+        family: 'question-confirm-cross-task',
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,
+        spec: 'server/src/platform-mcp/platform-mcp.service.spec.ts',
+      },
+    ] as const;
+
+    it('保留检查注册表非空、族名互异、每条命名错误码且其锁定 spec 文件存在', () => {
+      const repoRoot = path.resolve(__dirname, '..', '..', '..');
+      expect(RETAINED_CHECKS.length).toBe(10);
+      expect(new Set(RETAINED_CHECKS.map((c) => c.family)).size).toBe(
+        RETAINED_CHECKS.length,
+      );
+      for (const check of RETAINED_CHECKS) {
+        expect(check.code.length).toBeGreaterThan(0);
+        expect(fs.existsSync(path.join(repoRoot, check.spec))).toBe(true);
+      }
+    });
+
+    it('notify_agent self-notify → 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（不落库不触发）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId } as never);
+      prisma.teamMember.findFirst.mockResolvedValue({
+        agentId: 'a_sender',
+        alias: null,
+        agent: { id: 'a_sender', name: '发送者' },
+      } as never);
+
+      await expectCode(
+        service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: senderInstanceId,
+          content: '自言自语',
+          selfInstanceId: senderInstanceId,
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+      );
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('notify_agent 非主→非主 → 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（不落库不广播不触发）', async () => {
+      allowWorker();
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId } as never);
+      prisma.teamMember.findFirst.mockResolvedValue({
+        agentId: 'a_tester',
+        alias: null,
+        agent: { id: 'a_tester', name: '测试' },
+      } as never);
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+      } as never);
+
+      await expectCode(
+        service.notifyAgent(ctx, {
+          taskId,
+          targetInstanceId: 'tmm_tester',
+          content: '请查看',
+          selfInstanceId: senderInstanceId,
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+      );
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    // accept/archive 站点 2（TasksService.transitionByAgent）由 tasks.service.spec.ts 锁定。
+    it.each([['accept'], ['archive']] as const)(
+      'MCP taskTransition %s → 403 TASK_AGENT_COMPLETION_FORBIDDEN，不触达 transitionByAgent（站点 1）',
+      async (action) => {
+        await expectCode(
+          service.taskTransition(ctx, {
+            taskId,
+            selfInstanceId: senderInstanceId,
+            action,
+          }),
+          ForbiddenException,
+          TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
+        );
+        expect(tasksService.transitionByAgent).not.toHaveBeenCalled();
+      },
+    );
+
+    it('memory_save level=global 非主成员 → 403 PLATFORM_MCP_FORBIDDEN，不落库', async () => {
+      allowWorker();
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_other',
+      } as never);
+
+      await expectCode(
+        service.memorySave(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          level: 'global',
+          content: 'x',
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+      expect(prisma.memory.create).not.toHaveBeenCalled();
+    });
+
+    it('memory_save 团队维度 level=global 非主成员 → 403 PLATFORM_MCP_FORBIDDEN，不落库', async () => {
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_team',
+        teamMemberId: 'tmm_2',
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_1',
+        name: 'T1',
+        mainAgentMemberId: 'tmm_main',
+      } as never);
+
+      await expectCode(
+        service.memorySave(ctx, {
+          teamId: 'tm_1',
+          selfInstanceId: 'tmm_2',
+          level: 'global',
+          content: 'x',
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+      expect(prisma.memory.create).not.toHaveBeenCalled();
+    });
+
+    it('memory_update global 行非主成员 → 403 PLATFORM_MCP_FORBIDDEN，不更新', async () => {
+      allowWorker();
+      prisma.memory.findUnique.mockResolvedValue({
+        id: 'me_0000000001',
+        level: 'global',
+        taskId: null,
+        teamId: null,
+        content: '旧经验',
+        description: '旧',
+        tags: null,
+        createdBy: 'tmm_other',
+        deletedAt: null,
+      } as never);
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_other',
+      } as never);
+
+      await expectCode(
+        service.memoryUpdate(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          memoryId: 'me_0000000001',
+          content: 'x',
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('hook_cancel 非所有者且非主 Agent → 403 PLATFORM_MCP_FORBIDDEN，不触达 cancelHook', async () => {
+      allowWorker();
+      prisma.hook.findUnique.mockResolvedValue({
+        id: 'hks_0000000001',
+        ownerInstanceId: 'tmm_owner',
+        scopeType: 'task',
+        scopeId: taskId,
+        status: 'pending',
+      } as never);
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_other',
+      } as never);
+
+      await expectCode(
+        service.hookCancel(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          hookId: 'hks_0000000001',
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+      expect(hookService.cancelHook).not.toHaveBeenCalled();
+    });
+
+    // question_confirm 的两条完整性校验（todo 2 新增）用真实 QuestionsService 执行，
+    // 不 mock —— 证明实现本身拒绝，而非断言 mock 抛错。
+    const realQuestions = (overrides: {
+      taskId: string;
+      sessionMemberId?: string | null;
+    }) =>
+      new QuestionsService(
+        {
+          task: {
+            findUnique: jest
+              .fn()
+              .mockResolvedValue({ id: 't_0000000001', teamId: 'tm_1' }),
+          },
+          team: { findUnique: jest.fn().mockResolvedValue({ id: 'tm_1' }) },
+          agentQuestion: {
+            findUnique: jest.fn().mockResolvedValue({
+              id: 'aq_1',
+              requestId: 'que_x',
+              sessionId: 's_1',
+              taskId: overrides.taskId,
+              kind: 'question',
+              status: 'pending',
+            }),
+          },
+          session: {
+            findUnique: jest
+              .fn()
+              .mockResolvedValue(
+                overrides.sessionMemberId
+                  ? { teamMemberId: overrides.sessionMemberId }
+                  : null,
+              ),
+          },
+        } as never,
+        {} as never,
+        {} as never,
+        {} as never,
+      );
+
+    it('questionConfirm 跨任务请求 → 403 QUESTION_CROSS_TASK_FORBIDDEN（真实实现）', async () => {
+      await expectCode(
+        realQuestions({ taskId: 't_other' }).confirmByAgent({
+          taskId: 't_0000000001',
+          instanceId: 'tmm_main',
+          requestId: 'que_x',
+          kind: 'question',
+          answers: [['确认']],
+        }),
+        ForbiddenException,
+        QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,
+      );
+    });
+
+    it('questionConfirm 发起者本人确认 → 403 QUESTION_SELF_CONFIRMATION_FORBIDDEN（真实实现）', async () => {
+      await expectCode(
+        realQuestions({
+          taskId: 't_0000000001',
+          sessionMemberId: 'tmm_self',
+        }).confirmByAgent({
+          taskId: 't_0000000001',
+          instanceId: 'tmm_self',
+          requestId: 'que_x',
+          kind: 'question',
+          answers: [['确认']],
+        }),
+        ForbiddenException,
+        QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
+      );
+    });
+
+    it('questionConfirm MCP 网关：完整性拒绝码原样向上传播（不降级为 warning），且先过归属校验', async () => {
+      allowWorker();
+      questionsService.confirmByAgent.mockRejectedValue(
+        new ForbiddenException({
+          code: QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
+          message: '请求由本人发起，不可自行确认',
+        }),
+      );
+
+      await expectCode(
+        service.questionConfirm(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          requestId: 'que_x',
+          kind: 'question',
+          answers: [['确认']],
+        }),
+        ForbiddenException,
+        QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
+      );
+      expect(questionsService.confirmByAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId, instanceId: senderInstanceId }),
+      );
     });
   });
 });

@@ -5,6 +5,7 @@ import { WorkerEventIngress } from '../workers/worker-event.ingress';
 import { WorkersService } from '../workers/workers.service';
 import { WorkerDispatcher } from './worker-dispatcher';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
+import { createLedger, embedLedger } from '../issues/review-round-ledger';
 
 /**
  * plan-review-execution-gates Todo 4：dispatchAgentMention 门禁执行点。
@@ -16,6 +17,7 @@ import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => {
   let prisma: {
     task: { findUnique: jest.Mock };
+    issue: { findMany: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
   let realtime: { broadcast: jest.Mock };
@@ -51,7 +53,10 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
     );
 
   beforeEach(() => {
-    prisma = { task: { findUnique: jest.fn() } };
+    prisma = {
+      task: { findUnique: jest.fn() },
+      issue: { findMany: jest.fn().mockResolvedValue([]) },
+    };
     idGen = { nextId: jest.fn().mockResolvedValue('m_0000000002') };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
     sessionLifecycle = { ensureTeamSession: jest.fn() };
@@ -371,6 +376,66 @@ describe('WorkerDispatcher dispatchAgentMention 计划门禁（todo4）', () => 
         .mockResolvedValue({ replies: [] });
 
       await d.dispatchAgentMention(input);
+
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('todo 10 保留检查锁定：过期哈希对 plan-role 目标照样拒绝（豁免已删）', () => {
+    const FROZEN_HASH = 'frz00001';
+    const STALE_HASH = 'deadbeef';
+
+    const armFrozenLedger = () => {
+      prisma.issue.findMany.mockResolvedValue([
+        {
+          description: embedLedger(
+            '派发评审',
+            createLedger({
+              round: 2,
+              planVersion: { version: 'v0.2', lines: 233, hash: FROZEN_HASH },
+              expected: ['tmm_arch'],
+              status: 'complete',
+              timeoutAt: '2026-09-16T00:40:00Z',
+            }),
+          ),
+        },
+      ]);
+    };
+
+    it('过期 planHash + a_plan 目标 → 抛出（a_plan 豁免已删除，哈希对每个目标生效）', async () => {
+      armFrozenLedger();
+      const d = createDispatcher();
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
+
+      const err = await d
+        .dispatchAgentMention({
+          ...input,
+          targetInstanceId: 'tmm_plan',
+          planHash: STALE_HASH,
+        })
+        .then(() => null)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      const message = String((err as Error)?.message ?? err);
+      expect(message).toContain(`#${FROZEN_HASH}`);
+      expect(message).toContain(`#${STALE_HASH}`);
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it('匹配 planHash + a_plan 目标 → 放行（保留哈希门不误拦匹配）', async () => {
+      armFrozenLedger();
+      const d = createDispatcher();
+      const dispatchSpy = jest
+        .spyOn(d, 'dispatch')
+        .mockResolvedValue({ replies: [] });
+
+      await d.dispatchAgentMention({
+        ...input,
+        targetInstanceId: 'tmm_plan',
+        planHash: FROZEN_HASH,
+      });
 
       expect(dispatchSpy).toHaveBeenCalledTimes(1);
     });

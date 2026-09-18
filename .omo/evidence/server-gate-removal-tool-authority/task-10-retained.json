@@ -1,0 +1,233 @@
+{
+  "task": "todo 10 — prove the retained checks still refuse, and that the new integrity checks hold",
+  "plan": "server-gate-removal-tool-authority",
+  "headAtStart": "26b2e14",
+  "flipCommit": "0dc2509",
+  "allowlistSource": ".omo/evidence/server-gate-removal-tool-authority/task-1-change-map.txt §(b)",
+  "codegraphSymbolsUsed": [
+    "PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION",
+    "hook_cancel",
+    "confirmByAgent",
+    "question_confirm",
+    "planHash",
+    "assertPlanExecutionAllowed",
+    "accept",
+    "archive",
+    "isStalePlanHash"
+  ],
+  "retainedBaseAllowlistTodo1b": {
+    "source": "task-1-change-map.txt §(b) — 5 refusal families at 9 physical throw sites",
+    "families": [
+      { "key": "b.1", "family": "notify routing", "code": "PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION", "subCases": ["self-notify", "non-main→non-main"] },
+      { "key": "b.2", "family": "terminal-task execution-dispatch refusal", "code": null, "note": "plain Error (no HTTP code) — message asserts 已终态终止 / execution 派发已拒绝" },
+      { "key": "b.3", "family": "accept/archive refusal at BOTH sites", "code": "TASK_AGENT_COMPLETION_FORBIDDEN", "sites": ["platform-mcp.service.ts (MCP)", "tasks.service.ts (service)"] },
+      { "key": "b.4", "family": "global-memory write scope (memory_save/memory_update)", "code": "PLATFORM_MCP_FORBIDDEN" },
+      { "key": "b.5", "family": "hook_cancel owner-or-main (resource-ownership)", "code": "PLATFORM_MCP_FORBIDDEN" }
+    ]
+  },
+  "todo10Supplement": {
+    "note": "Explicitly required by todo 10 beyond the b allowlist: the hash check (per todo 3, incl. plan-role target) and the two todo-2 question_confirm integrity checks.",
+    "families": [
+      { "family": "plan-revision hash stale refusal, INCLUDING for a plan-role (a_plan) target", "reason": "plan-gated / Error with both short hashes" },
+      { "family": "question_confirm self-approval refusal", "code": "QUESTION_SELF_CONFIRMATION_FORBIDDEN" },
+      { "family": "question_confirm cross-task refusal", "code": "QUESTION_CROSS_TASK_FORBIDDEN" }
+    ]
+  },
+  "retainedSetComparison": {
+    "method": "Exact set comparison of the todo-10 proof registry (RETAINED_CHECKS in platform-mcp.service.spec.ts) against the todo 1(b) allowlist above. The registry splits two multi-site families into their physical sites (notify ×2, accept/archive ×2) so each site has one independent assertion.",
+    "todo1bFamilies": 5,
+    "todo10SupplementFamilies": 3,
+    "registryEntries": 10,
+    "expansion": {
+      "notify routing (b.1)": ["notify-self", "notify-non-main-to-non-main"],
+      "terminal-task (b.2)": ["terminal-task-execution-dispatch"],
+      "accept/archive both sites (b.3)": ["accept-archive-mcp-site", "accept-archive-service-site"],
+      "global-memory scope (b.4)": ["global-memory-write-scope"],
+      "hook_cancel (b.5)": ["hook-cancel-owner-or-main"],
+      "hash (todo 3)": ["plan-hash-stale-including-plan-role"],
+      "question_confirm (todo 2)": ["question-confirm-self-approval", "question-confirm-cross-task"]
+    },
+    "extra": [],
+    "missing": [],
+    "verdict": "EXACT MATCH — no extra, no missing. Every todo 1(b) family is covered; the 3 supplement families are the todo-10 additions. No removed-gate tool (task_create/task_transition/plan_mode/plan_complete/team_add_member/question_confirm identity/skill_create) is re-asserted as refusing."
+  },
+  "assertions": [
+    {
+      "id": "notify-self",
+      "retainedFamily": "b.1 notify routing",
+      "code": "PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION",
+      "assertedVia": "getResponse().code (ForbiddenException) — not log text",
+      "spec": "server/src/platform-mcp/platform-mcp.service.spec.ts",
+      "test": "notify_agent self-notify → 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（不落库不触发）",
+      "status": "pass"
+    },
+    {
+      "id": "notify-non-main-to-non-main",
+      "retainedFamily": "b.1 notify routing",
+      "code": "PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION",
+      "assertedVia": "getResponse().code (ForbiddenException)",
+      "spec": "server/src/platform-mcp/platform-mcp.service.spec.ts",
+      "test": "notify_agent 非主→非主 → 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（不落库不广播不触发）",
+      "status": "pass"
+    },
+    {
+      "id": "notify-routing-reply-join",
+      "retainedFamily": "b.1 notify routing (reply/join path cannot bypass)",
+      "code": "PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION",
+      "assertedVia": "getResponse().code (ForbiddenException)",
+      "spec": "server/src/platform-mcp/platform-mcp.service.reply-join.spec.ts",
+      "test": "todo 10: 非主→非主 reply 上报不绕过路由门 → 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（零 join 记账）",
+      "status": "pass"
+    },
+    {
+      "id": "terminal-task-execution-dispatch",
+      "retainedFamily": "b.2 terminal-task dispatch refusal",
+      "code": null,
+      "codeNote": "plain Error (no HTTP error code exists at the dispatcher layer); asserted by exact message fragments 已终态终止 / status=<value> / execution 派发已拒绝",
+      "assertedVia": "rejects.toThrow / Error message + zero dispatch side-effects",
+      "assertedForStatuses": ["completed", "archived"],
+      "spec": "server/src/chat/worker-dispatcher.gate.spec.ts",
+      "tests": [
+        "execution + completed → 抛错（含任务 id/终态/task_create），不调 dispatch/ensureTeamSession，不读计划门禁",
+        "execution + archived → 抛错（含任务 id/终态/task_create），不调 dispatch/ensureTeamSession，不读计划门禁"
+      ],
+      "status": "pass",
+      "note": "Pre-existing lock (todo 7) retained and re-run; terminal set asserted for BOTH completed and archived."
+    },
+    {
+      "id": "accept-archive-mcp-site",
+      "retainedFamily": "b.3 accept/archive (site 1 = MCP)",
+      "code": "TASK_AGENT_COMPLETION_FORBIDDEN",
+      "assertedVia": "getResponse().code (ForbiddenException)",
+      "spec": "server/src/platform-mcp/platform-mcp.service.spec.ts",
+      "tests": [
+        "MCP taskTransition accept → 403 TASK_AGENT_COMPLETION_FORBIDDEN，不触达 transitionByAgent（站点 1）",
+        "MCP taskTransition archive → 403 TASK_AGENT_COMPLETION_FORBIDDEN，不触达 transitionByAgent（站点 1）"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "accept-archive-service-site",
+      "retainedFamily": "b.3 accept/archive (site 2 = service)",
+      "code": "TASK_AGENT_COMPLETION_FORBIDDEN",
+      "assertedVia": "getResponse().code (ForbiddenException) via expectForbiddenCode",
+      "spec": "server/src/tasks/tasks.service.spec.ts",
+      "tests": [
+        "transitionByAgent + accept → 403 TASK_AGENT_COMPLETION_FORBIDDEN（任务不变、无事件）",
+        "transitionByAgent + archive → 403 TASK_AGENT_COMPLETION_FORBIDDEN（任务不变、无事件）"
+      ],
+      "status": "pass",
+      "note": "Unowned spec (not edited); re-run by this task to prove both sites still refuse."
+    },
+    {
+      "id": "global-memory-write-scope",
+      "retainedFamily": "b.4 global-memory write scope",
+      "code": "PLATFORM_MCP_FORBIDDEN",
+      "assertedVia": "getResponse().code (ForbiddenException)",
+      "spec": "server/src/platform-mcp/platform-mcp.service.spec.ts",
+      "tests": [
+        "memory_save level=global 非主成员 → 403 PLATFORM_MCP_FORBIDDEN，不落库",
+        "memory_save 团队维度 level=global 非主成员 → 403 PLATFORM_MCP_FORBIDDEN，不落库",
+        "memory_update global 行非主成员 → 403 PLATFORM_MCP_FORBIDDEN，不更新"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "hook-cancel-owner-or-main",
+      "retainedFamily": "b.5 hook_cancel owner-or-main",
+      "code": "PLATFORM_MCP_FORBIDDEN",
+      "assertedVia": "getResponse().code (ForbiddenException)",
+      "spec": "server/src/platform-mcp/platform-mcp.service.spec.ts",
+      "test": "hook_cancel 非所有者且非主 Agent → 403 PLATFORM_MCP_FORBIDDEN，不触达 cancelHook",
+      "status": "pass"
+    },
+    {
+      "id": "plan-hash-stale-including-plan-role",
+      "retainedFamily": "todo 3 plan-hash check (exemption removed)",
+      "code": null,
+      "codeNote": "worker-dispatcher throws plain Error whose message names both short hashes (buildStalePlanHashHint); platform-mcp layer returns reason=plan-gated. No single HTTP code at this layer.",
+      "assertedVia": "Error message contains #<frozen> and #<stale>, zero dispatch",
+      "spec": "server/src/chat/worker-dispatcher.gate.spec.ts",
+      "tests": [
+        "过期 planHash + a_plan 目标 → 抛出（a_plan 豁免已删除，哈希对每个目标生效）",
+        "匹配 planHash + a_plan 目标 → 放行（保留哈希门不误拦匹配）"
+      ],
+      "status": "pass",
+      "note": "The plan-role target (a_plan) is the point of the todo-3 exemption removal: before the fix the whole guard was skipped for it."
+    },
+    {
+      "id": "question-confirm-self-approval",
+      "retainedFamily": "todo 2 question_confirm integrity check 1",
+      "code": "QUESTION_SELF_CONFIRMATION_FORBIDDEN",
+      "assertedVia": "real QuestionsService.confirmByAgent → getResponse().code (no mock of the rejection); plus MCP gateway propagation test",
+      "spec": "server/src/platform-mcp/platform-mcp.service.spec.ts",
+      "tests": [
+        "questionConfirm 发起者本人确认 → 403 QUESTION_SELF_CONFIRMATION_FORBIDDEN（真实实现）",
+        "questionConfirm MCP 网关：完整性拒绝码原样向上传播（不降级为 warning），且先过归属校验"
+      ],
+      "status": "pass"
+    },
+    {
+      "id": "question-confirm-cross-task",
+      "retainedFamily": "todo 2 question_confirm integrity check 2",
+      "code": "QUESTION_CROSS_TASK_FORBIDDEN",
+      "assertedVia": "real QuestionsService.confirmByAgent → getResponse().code",
+      "spec": "server/src/platform-mcp/platform-mcp.service.spec.ts",
+      "test": "questionConfirm 跨任务请求 → 403 QUESTION_CROSS_TASK_FORBIDDEN（真实实现）",
+      "status": "pass"
+    }
+  ],
+  "vacuousLoopGuard": {
+    "trap": "ROLE_SERVER_GATED_TOOLS === [] means loops over it assert nothing while green.",
+    "mitigation": "The todo-10 block registers RETAINED_CHECKS (non-empty; asserted length 10, family names unique, and each entry's locking spec file exists on disk via fs.existsSync). Anti-vacuity registry test: 保留检查注册表非空、族名互异、每条命名错误码且其锁定 spec 文件存在.",
+    "iterationCounts": {
+      "retainedChecksRegistry": 10,
+      "terminalStatusAssertions": 2,
+      "acceptArchiveMcpSiteAssertions": 2
+    }
+  },
+  "crossCheckAgainstTodo8LiveEvidence": {
+    "source": ".omo/evidence/permission-matrix/retained-*.json (read-only; not edited)",
+    "match": [
+      { "live": "retained-notify-self.json", "code": "-32003 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION", "spec": "notify-self" },
+      { "live": "retained-notify-cross.json", "code": "-32003 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION", "spec": "notify-non-main-to-non-main" },
+      { "live": "retained-global-memory.json", "code": "-32003 PLATFORM_MCP_FORBIDDEN 仅主 Agent 可写入全局记忆", "spec": "global-memory-write-scope" },
+      { "live": "retained-hook-cancel.json", "code": "-32003 PLATFORM_MCP_FORBIDDEN 仅 hook 所有者或主 Agent 可取消", "spec": "hook-cancel-owner-or-main" },
+      { "live": "retained-terminal-task.json", "code": "-32603 已终态终止 … execution 派发已拒绝", "spec": "terminal-task-execution-dispatch" },
+      { "live": "retained-accept-archive-accept.json / -archive.json", "code": "invalid option at the zod layer for action=accept/archive (agent cannot even reach transition)", "spec": "accept-archive-mcp-site / service-site", "note": "the live tool schema rejects accept/archive before the service; the service+layer assertions remain the authoritative refusal lock" },
+      { "live": "retained-stale-hash.json", "code": "reason=plan-gated with both short hashes in hint", "spec": "plan-hash-stale-including-plan-role" }
+    ],
+    "observedDivergence": {
+      "entries": ["retained-accept-archive-accept.json", "retained-accept-archive-archive.json"],
+      "detail": "Todo-8 recorded the live accept/archive call being rejected at the zod/input layer (-32602 Invalid option: expected one of start|mark-pending-review|reject) rather than reaching the service-layer TASK_AGENT_COMPLETION_FORBIDDEN code. This is an additional front-line refusal, not a weakening: the service-layer refusal is separately locked here and in tasks.service.spec.ts. Recorded, not papered over."
+    }
+  },
+  "specFilesEdited": [
+    "server/src/platform-mcp/platform-mcp.service.spec.ts",
+    "server/src/chat/worker-dispatcher.gate.spec.ts",
+    "server/src/platform-mcp/platform-mcp.service.reply-join.spec.ts"
+  ],
+  "specFilesReadOnlyRerun": [
+    "server/src/tasks/tasks.service.spec.ts",
+    "server/src/questions/questions.service.spec.ts",
+    "server/src/platform-mcp/platform-mcp.service.hook.spec.ts",
+    "server/src/chat/worker-dispatcher.plan-hash.spec.ts",
+    "server/src/platform-mcp/platform-mcp.service.plan-hash.spec.ts"
+  ],
+  "commands": [
+    {
+      "cmd": "cd server && npx jest src/platform-mcp/platform-mcp.service.spec.ts src/chat/worker-dispatcher.gate.spec.ts src/platform-mcp/platform-mcp.service.reply-join.spec.ts src/tasks/tasks.service.spec.ts src/questions/questions.service.spec.ts src/platform-mcp/platform-mcp.service.hook.spec.ts src/chat/worker-dispatcher.plan-hash.spec.ts src/platform-mcp/platform-mcp.service.plan-hash.spec.ts",
+      "result": "Test Suites: 8 passed, 8 total; Tests: 462 passed, 462 total"
+    },
+    {
+      "cmd": "cd server && npx tsc -p tsconfig.json --noEmit",
+      "result": "EXIT=0"
+    }
+  ],
+  "sizeNote": {
+    "platform-mcp.service.spec.ts": "pre-existing 6475-line integration spec; this task appended ~240 lines (retained-check block). Splitting it is out of scope for a proof-only todo.",
+    "worker-dispatcher.gate.spec.ts": "383 -> ~427 lines; focused gate spec.",
+    "platform-mcp.service.reply-join.spec.ts": "511 -> ~537 lines; focused join spec."
+  },
+  "retainedInvariant": "The worker guard is the single source for tool permission; the server retains flow-state legality, topology routing, human authority, and resource-scope / ownership checks."
+}

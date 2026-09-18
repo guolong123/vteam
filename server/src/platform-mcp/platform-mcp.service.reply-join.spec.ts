@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ForbiddenException } from '@nestjs/common';
 import {
   MESSAGE_STATUS,
   SENDER_TYPE,
@@ -11,6 +12,7 @@ import { WorkerDispatcher } from '../chat/worker-dispatcher';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { WorkerClient } from '../workers/worker.client';
 import { PlatformMcpService } from './platform-mcp.service';
+import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
@@ -507,5 +509,27 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     expect(loggerWarnSpy).toHaveBeenCalled();
     expect(receipts.ackPendingFor).not.toHaveBeenCalled();
     expect(wakeSpy).not.toHaveBeenCalled();
+  });
+
+  it('todo 10: 非主→非主 reply 上报不绕过路由门 → 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（零 join 记账）', async () => {
+    const err = await service
+      .notifyAgent(ctx, {
+        ...baseArgs,
+        targetInstanceId: sub2,
+        type: 'answer',
+        stage: 'end',
+      })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect(err).toBeInstanceOf(ForbiddenException);
+    expect((err as ForbiddenException).getResponse()).toMatchObject({
+      code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
+    });
+    expect(receipts.ackPendingFor).not.toHaveBeenCalled();
+    expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    expect(prisma.message.create).not.toHaveBeenCalled();
   });
 });
