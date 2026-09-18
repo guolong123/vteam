@@ -1,0 +1,2243 @@
+{
+  "matrix": {
+    "roles": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "tools": [
+      "vteam_chat_history",
+      "vteam_doclib",
+      "vteam_task_context",
+      "vteam_group_post",
+      "vteam_read_file",
+      "vteam_notify_agent",
+      "vteam_submit_artifact",
+      "vteam_issue_create",
+      "vteam_issue_list",
+      "vteam_issue_get",
+      "vteam_issue_update",
+      "vteam_issue_transition",
+      "vteam_task_transition",
+      "vteam_question_confirm",
+      "vteam_memory_save",
+      "vteam_memory_search",
+      "vteam_memory_update",
+      "vteam_team_view",
+      "vteam_my_profile",
+      "vteam_team_add_member",
+      "vteam_plan_mode",
+      "vteam_plan_complete",
+      "vteam_channel_send",
+      "vteam_wecom_reply",
+      "vteam_task_create",
+      "vteam_skill_create",
+      "vteam_git_repos_list",
+      "vteam_hook_register",
+      "vteam_hook_cancel",
+      "git_clone",
+      "git_pull",
+      "git_fetch",
+      "git_status",
+      "git_diff",
+      "git_log",
+      "git_push",
+      "browser"
+    ],
+    "expectedCellCount": 259,
+    "iteratedCellCount": 259,
+    "allowCellCount": 157,
+    "denyCellCount": 102,
+    "allCellsMatch": true,
+    "cells": [
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_chat_history",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_doclib",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_task_context",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_group_post",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_read_file",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_notify_agent",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_submit_artifact",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_issue_create",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_issue_list",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_issue_get",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_issue_update",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_issue_update。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_issue_transition",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_issue_transition。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_task_transition",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_task_transition。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_question_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_question_confirm。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_memory_save",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_memory_search",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_memory_update",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_team_view",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_my_profile",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_team_add_member",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_team_add_member。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_plan_mode",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_plan_mode。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_plan_complete",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_plan_complete。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_channel_send",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_wecom_reply",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_task_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_task_create。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_skill_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_skill_create。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_git_repos_list",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_git_repos_list。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_hook_register",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_hook_register。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_hook_cancel",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 vteam_hook_cancel。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "git_clone",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "git_pull",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "git_fetch",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 git_fetch。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "git_status",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "git_diff",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "git_log",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "git_push",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-architect】不能调用 git_push。职责：技术方案与设计文档：基于需求产出架构/技术方案与设计文档，只读核对仓库；不编写实现代码。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "browser",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_chat_history",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_doclib",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_task_context",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_group_post",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_read_file",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_notify_agent",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_submit_artifact",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_issue_create",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_issue_list",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_issue_get",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_issue_update",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_issue_transition",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_task_transition",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_task_transition。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_question_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_question_confirm。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_memory_save",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_memory_search",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_memory_update",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_team_view",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_my_profile",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_team_add_member",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_team_add_member。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_plan_mode",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_plan_mode。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_plan_complete",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_plan_complete。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_channel_send",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_wecom_reply",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_task_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_task_create。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_skill_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_skill_create。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_git_repos_list",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_git_repos_list。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_hook_register",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_hook_register。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_hook_cancel",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-developer】不能调用 vteam_hook_cancel。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "git_clone",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "git_pull",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "git_fetch",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "git_status",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "git_diff",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "git_log",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "git_push",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "browser",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_chat_history",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_doclib",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_task_context",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_group_post",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_read_file",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_notify_agent",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_notify_agent。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_submit_artifact",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_submit_artifact。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_issue_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_issue_create。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_issue_list",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_issue_list。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_issue_get",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_issue_get。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_issue_update",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_issue_update。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_issue_transition",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_issue_transition。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_task_transition",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_task_transition。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_question_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_question_confirm。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_memory_save",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_memory_save。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_memory_search",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_memory_update",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_memory_update。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_team_view",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_my_profile",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_team_add_member",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_team_add_member。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_plan_mode",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_plan_mode。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_plan_complete",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_plan_complete。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_channel_send",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_channel_send。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_wecom_reply",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_wecom_reply。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_task_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_task_create。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_skill_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_skill_create。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_git_repos_list",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_hook_register",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_hook_register。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_hook_cancel",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 vteam_hook_cancel。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "git_clone",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "git_pull",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "git_fetch",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "git_status",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "git_diff",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "git_log",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "git_push",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-librarian】不能调用 git_push。职责：私域知识问答：只读检索已沉淀知识（记忆/文档库/文件/仓库）并作答，附出处与置信度；无出处即认不知；不写文件、不执行变更、不主动通知。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "browser",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_chat_history",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_doclib",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_task_context",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_group_post",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_read_file",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_notify_agent",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_submit_artifact",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_submit_artifact。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_issue_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_issue_create。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_issue_list",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_issue_list。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_issue_get",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_issue_get。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_issue_update",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_issue_update。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_issue_transition",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_issue_transition。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_task_transition",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_task_transition。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_question_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_question_confirm。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_memory_save",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_memory_save。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_memory_search",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_memory_update",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_memory_update。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_team_view",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_my_profile",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_team_add_member",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_team_add_member。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_plan_mode",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_plan_mode。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_plan_complete",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_channel_send",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_channel_send。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_wecom_reply",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_task_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_task_create。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_skill_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_skill_create。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_git_repos_list",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_git_repos_list。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_hook_register",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_hook_register。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_hook_cancel",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 vteam_hook_cancel。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "git_clone",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 git_clone。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "git_pull",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 git_pull。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "git_fetch",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 git_fetch。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "git_status",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 git_status。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "git_diff",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 git_diff。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "git_log",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 git_log。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "git_push",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 git_push。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "browser",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_chat_history",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_doclib",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_task_context",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_group_post",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_read_file",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_notify_agent",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_submit_artifact",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_issue_create",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_issue_list",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_issue_get",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_issue_update",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_issue_transition",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_task_transition",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_question_confirm",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_memory_save",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_memory_search",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_memory_update",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_team_view",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_my_profile",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_team_add_member",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_plan_mode",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_plan_complete",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 vteam_plan_complete。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_channel_send",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_wecom_reply",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_task_create",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_skill_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 vteam_skill_create。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_git_repos_list",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 vteam_git_repos_list。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_hook_register",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_hook_cancel",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "git_clone",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 git_clone。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "git_pull",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 git_pull。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "git_fetch",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 git_fetch。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "git_status",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 git_status。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "git_diff",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 git_diff。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "git_log",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 git_log。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "git_push",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-product】不能调用 git_push。职责：需求分析与原型设计：澄清并定义需求，产出需求文档与原型；不编写实现代码、不做技术方案、不替代测试判定。。请把该工作转交 vteam-architect，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "browser",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_chat_history",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_doclib",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_task_context",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_group_post",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_read_file",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_notify_agent",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_submit_artifact",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 vteam_submit_artifact。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_issue_create",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_issue_list",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_issue_get",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_issue_update",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_issue_transition",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_task_transition",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_question_confirm",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_memory_save",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_memory_search",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_memory_update",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_team_view",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_my_profile",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_team_add_member",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_plan_mode",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_plan_complete",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_channel_send",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_wecom_reply",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_task_create",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_skill_create",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_git_repos_list",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 vteam_git_repos_list。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_hook_register",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_hook_cancel",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "git_clone",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 git_clone。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "git_pull",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 git_pull。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "git_fetch",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 git_fetch。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "git_status",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 git_status。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "git_diff",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 git_diff。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "git_log",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 git_log。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "git_push",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 git_push。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "browser",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-project_manager】不能调用 browser。职责：流程控制：负责进度跟踪、风险与阻塞协调；不拆解任务、不制定计划、不产出需求/方案/代码/用例、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_chat_history",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_doclib",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_task_context",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_group_post",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_read_file",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_notify_agent",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_submit_artifact",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_issue_create",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_issue_list",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_issue_get",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_issue_update",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_issue_update。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_issue_transition",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_task_transition",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_task_transition。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_question_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_question_confirm。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_memory_save",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_memory_search",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_memory_update",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_team_view",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_my_profile",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_team_add_member",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_team_add_member。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_plan_mode",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_plan_mode。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_plan_complete",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_plan_complete。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_channel_send",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_wecom_reply",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_task_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_task_create。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_skill_create",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_skill_create。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_git_repos_list",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_git_repos_list。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_hook_register",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_hook_register。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_hook_cancel",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 vteam_hook_cancel。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "git_clone",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "git_pull",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "git_fetch",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "git_status",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "git_diff",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "git_log",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "git_push",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "【越界拦截｜角色：vteam-tester】不能调用 git_push。职责：测试用例/计划/执行/报告：设计并执行测试、输出报告；不修改实现代码、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "browser",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      }
+    ]
+  },
+  "plan": "server-gate-removal-tool-authority",
+  "todo": 9,
+  "generatedBy": "server/src/platform-mcp/platform-mcp.authority-matrix.spec.ts (worker matrix + service-level proof)",
+  "generatedAt": "2026-09-18T18:48:10.359Z",
+  "mainHappyPath": {
+    "steps": [
+      {
+        "step": "task_create",
+        "ok": true,
+        "result": {
+          "id": "t_happy",
+          "teamId": "tm_1",
+          "status": "pending"
+        }
+      },
+      {
+        "step": "task_transition.start",
+        "ok": true,
+        "result": {
+          "id": "t_happy",
+          "status": "in_progress"
+        }
+      },
+      {
+        "step": "plan_mode",
+        "ok": true,
+        "result": {
+          "taskId": "t_happy",
+          "planMode": true,
+          "agentName": null
+        }
+      },
+      {
+        "step": "plan_complete",
+        "ok": true,
+        "result": {
+          "taskId": "t_happy",
+          "status": "completed",
+          "idempotent": false
+        }
+      },
+      {
+        "step": "task_transition.mark-pending-review",
+        "ok": true,
+        "result": {
+          "id": "t_happy",
+          "status": "pending_review"
+        }
+      }
+    ],
+    "allStepsOk": true
+  },
+  "liveHappyPath": {
+    "requiredSteps": [
+      "task_create",
+      "task_transition.start",
+      "plan_mode",
+      "plan_complete",
+      "task_transition.mark-pending-review"
+    ],
+    "taskId": "t_0000000021",
+    "teamId": "tm_0000000006",
+    "selfInstanceId": "tmm_0000000019",
+    "workerId": "w_compose_worker",
+    "allStepsOk": true,
+    "steps": [
+      {
+        "step": "task_create",
+        "ok": true,
+        "error": null,
+        "result": {
+          "id": "t_0000000021",
+          "title": "t9-authority-matrix happy path",
+          "description": "todo9 live happy path (auto-deleted by prove-authority-matrix.sh)",
+          "priority": "medium",
+          "status": "pending",
+          "mainAgentId": "a_project_manager",
+          "mainAgentInstanceId": "tmm_0000000019",
+          "executionMode": "direct",
+          "planMode": false,
+          "effectivePlanMode": false,
+          "backgroundDocs": [],
+          "teamId": "tm_0000000006",
+          "teamAgentIds": [
+            "a_plan",
+            "a_product",
+            "a_project_manager",
+            "a_tester"
+          ],
+          "instances": [
+            {
+              "id": "tmm_0000000021",
+              "agentId": "a_plan",
+              "alias": "计划员-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/计划员",
+              "name": "计划员",
+              "role": "plan",
+              "main": false,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": null,
+              "sessionId": null
+            },
+            {
+              "id": "tmm_0000000018",
+              "agentId": "a_product",
+              "alias": "产品经理-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/产品经理",
+              "name": "产品经理",
+              "role": "product",
+              "main": false,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": null,
+              "sessionId": null
+            },
+            {
+              "id": "tmm_0000000019",
+              "agentId": "a_project_manager",
+              "alias": "项目经理-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/项目经理",
+              "name": "项目经理",
+              "role": "project_manager",
+              "main": true,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": "failed",
+              "sessionId": "s_t9matrix_0000000006"
+            },
+            {
+              "id": "tmm_0000000020",
+              "agentId": "a_tester",
+              "alias": "测试-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/测试",
+              "name": "测试",
+              "role": "tester",
+              "main": false,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": null,
+              "sessionId": null
+            }
+          ],
+          "createdBy": "u_admin",
+          "createdAt": "2026-09-18T18:47:40.075Z",
+          "startedAt": null,
+          "pendingReviewAt": null,
+          "completedAt": null,
+          "archivedAt": null
+        }
+      },
+      {
+        "step": "task_transition.start",
+        "ok": true,
+        "error": null,
+        "result": {
+          "id": "t_0000000021",
+          "title": "t9-authority-matrix happy path",
+          "description": "todo9 live happy path (auto-deleted by prove-authority-matrix.sh)",
+          "priority": "medium",
+          "status": "in_progress",
+          "mainAgentId": "a_project_manager",
+          "mainAgentInstanceId": "tmm_0000000019",
+          "executionMode": "direct",
+          "planMode": false,
+          "effectivePlanMode": false,
+          "backgroundDocs": [],
+          "teamId": "tm_0000000006",
+          "teamAgentIds": [
+            "a_plan",
+            "a_product",
+            "a_project_manager",
+            "a_tester"
+          ],
+          "instances": [
+            {
+              "id": "tmm_0000000021",
+              "agentId": "a_plan",
+              "alias": "计划员-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/计划员",
+              "name": "计划员",
+              "role": "plan",
+              "main": false,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": null,
+              "sessionId": null
+            },
+            {
+              "id": "tmm_0000000018",
+              "agentId": "a_product",
+              "alias": "产品经理-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/产品经理",
+              "name": "产品经理",
+              "role": "product",
+              "main": false,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": null,
+              "sessionId": null
+            },
+            {
+              "id": "tmm_0000000019",
+              "agentId": "a_project_manager",
+              "alias": "项目经理-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/项目经理",
+              "name": "项目经理",
+              "role": "project_manager",
+              "main": true,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": "failed",
+              "sessionId": "s_t9matrix_0000000006"
+            },
+            {
+              "id": "tmm_0000000020",
+              "agentId": "a_tester",
+              "alias": "测试-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/测试",
+              "name": "测试",
+              "role": "tester",
+              "main": false,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": null,
+              "sessionId": null
+            }
+          ],
+          "createdBy": "u_admin",
+          "createdAt": "2026-09-18T18:47:40.075Z",
+          "startedAt": "2026-09-18T18:47:40.213Z",
+          "pendingReviewAt": null,
+          "completedAt": null,
+          "archivedAt": null
+        }
+      },
+      {
+        "step": "plan_mode",
+        "ok": true,
+        "error": null,
+        "result": {
+          "taskId": "t_0000000021",
+          "planMode": true,
+          "agentName": null
+        }
+      },
+      {
+        "step": "plan_complete",
+        "ok": true,
+        "error": null,
+        "result": {
+          "taskId": "t_0000000021",
+          "status": "completed",
+          "idempotent": false
+        }
+      },
+      {
+        "step": "task_transition.mark-pending-review",
+        "ok": true,
+        "error": null,
+        "result": {
+          "id": "t_0000000021",
+          "title": "t9-authority-matrix happy path",
+          "description": "todo9 live happy path (auto-deleted by prove-authority-matrix.sh)",
+          "priority": "medium",
+          "status": "pending_review",
+          "mainAgentId": "a_project_manager",
+          "mainAgentInstanceId": "tmm_0000000019",
+          "executionMode": "direct",
+          "planMode": true,
+          "effectivePlanMode": true,
+          "backgroundDocs": [],
+          "teamId": "tm_0000000006",
+          "teamAgentIds": [
+            "a_plan",
+            "a_product",
+            "a_project_manager",
+            "a_tester"
+          ],
+          "instances": [
+            {
+              "id": "tmm_0000000021",
+              "agentId": "a_plan",
+              "alias": "计划员-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/计划员",
+              "name": "计划员",
+              "role": "plan",
+              "main": false,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": null,
+              "sessionId": null
+            },
+            {
+              "id": "tmm_0000000018",
+              "agentId": "a_product",
+              "alias": "产品经理-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/产品经理",
+              "name": "产品经理",
+              "role": "product",
+              "main": false,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": null,
+              "sessionId": null
+            },
+            {
+              "id": "tmm_0000000019",
+              "agentId": "a_project_manager",
+              "alias": "项目经理-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/项目经理",
+              "name": "项目经理",
+              "role": "project_manager",
+              "main": true,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": "failed",
+              "sessionId": "s_t9matrix_0000000006"
+            },
+            {
+              "id": "tmm_0000000020",
+              "agentId": "a_tester",
+              "alias": "测试-1",
+              "seq": 1,
+              "workDir": "/data/vteam-worker/测试",
+              "name": "测试",
+              "role": "tester",
+              "main": false,
+              "enabled": true,
+              "overrideModelId": null,
+              "opencodeAgentName": null,
+              "sessionStatus": null,
+              "sessionId": null
+            }
+          ],
+          "createdBy": "u_admin",
+          "createdAt": "2026-09-18T18:47:40.075Z",
+          "startedAt": "2026-09-18T18:47:40.213Z",
+          "pendingReviewAt": "2026-09-18T18:47:40.525Z",
+          "completedAt": null,
+          "archivedAt": null
+        }
+      }
+    ],
+    "dbTruth": {
+      "taskStatus": "pending_review"
+    },
+    "note": "task + plan/events/messages rows deleted by the runner's scoped cleanup after this artifact is written"
+  }
+}
