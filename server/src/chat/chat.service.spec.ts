@@ -704,7 +704,7 @@ describe('ChatService', () => {
         expect((prisma as any).teamMember.findFirst).toHaveBeenCalledWith(
           expect.objectContaining({
             where: { teamId: 'tm_0000000001' },
-            orderBy: { seq: 'asc' },
+            orderBy: [{ seq: 'asc' }, { id: 'asc' }],
           }),
         );
         expect(prisma.session.findFirst).toHaveBeenCalledWith({

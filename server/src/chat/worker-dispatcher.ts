@@ -1609,7 +1609,7 @@ export class WorkerDispatcher
     }
     const first = await (this.prisma as any).teamMember.findFirst({
       where: { teamId },
-      orderBy: { seq: 'asc' },
+      orderBy: [{ seq: 'asc' }, { id: 'asc' }],
       select: { id: true, agentId: true },
     });
     return first ? { memberId: first.id, agentId: first.agentId } : null;

@@ -188,12 +188,16 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
     enabled: status === "pending",
     retry: false,
   });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const taskDetail: any = taskQuery.data;
   const teamSize: number = Array.isArray(taskDetail?.instances)
     ? taskDetail.instances.length
     : 0;
-  const hasMainAgent: boolean = !!taskDetail?.mainAgentInstanceId || !!taskDetail?.mainAgentId;
+  // 主 Agent 判定唯一依据 instances[].main（服务端按 team.mainAgentMemberId 算）；
+  // task.mainAgentInstanceId/mainAgentId 是已停写的历史标量，in_progress 任务的主变更
+  // 刻意不同步它——读标量会误判「未设主」。
+  const hasMainAgent: boolean = Array.isArray(taskDetail?.instances)
+    ? taskDetail.instances.some((i: { main?: boolean }) => i.main === true)
+    : false;
 
   // 排队等待 mutation 必须位于 early return 之前（hooks 顺序规则）；teamId 取自任务详情查询
   const teamId: string | null = taskDetail?.teamId ?? null;

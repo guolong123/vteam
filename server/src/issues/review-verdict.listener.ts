@@ -299,7 +299,7 @@ export class ReviewVerdictListener implements OnModuleInit, OnModuleDestroy {
       try {
         const planner = await (this.prisma as any).teamMember.findFirst({
           where: { teamId, agentId: PLANNER_AGENT_ID },
-          orderBy: { seq: 'asc' },
+          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
           select: { id: true },
         });
         plannerMemberId =

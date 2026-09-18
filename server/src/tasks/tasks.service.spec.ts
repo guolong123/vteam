@@ -1651,7 +1651,7 @@ describe('TasksService', () => {
       expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { teamId: 'tm_0000000001' },
-          orderBy: { seq: 'asc' },
+          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
         }),
       );
       // 私信定位到回退主成员
@@ -2627,7 +2627,7 @@ describe('TasksService', () => {
       expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { teamId: 'tm_0000000001' },
-          orderBy: { seq: 'asc' },
+          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
         }),
       );
       expect(txModels.taskEvent.create).toHaveBeenCalledWith({

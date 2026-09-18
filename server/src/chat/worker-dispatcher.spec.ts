@@ -7022,7 +7022,7 @@ describe('WorkerDispatcher', () => {
         agentId: 'a_developer',
       });
       expect((prisma as any).teamMember.findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({ orderBy: { seq: 'asc' } }),
+        expect.objectContaining({ orderBy: [{ seq: 'asc' }, { id: 'asc' }] }),
       );
 
       (prisma as any).team.findUnique.mockResolvedValue(null);

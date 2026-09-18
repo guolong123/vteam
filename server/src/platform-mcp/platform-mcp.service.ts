@@ -419,8 +419,8 @@ export class PlatformMcpService implements OnModuleInit {
     @Inject(MessageReceiptsService)
     private readonly receipts?: MessageReceiptsService,
     @Optional()
-  @Inject(TriggerService)
-  private readonly timers?: TriggerService,
+    @Inject(TriggerService)
+    private readonly timers?: TriggerService,
     // 评审轮次账本串行写（review-round-open）：缺省可空——单测/旧装配未提供时
     // 开轮跳过 + warn，派发本身不受影响；生产装配经 IssuesModule（已 import）提供。
     @Optional()
@@ -781,7 +781,10 @@ export class PlatformMcpService implements OnModuleInit {
     }
     const dedupKey =
       args.dedupKey ??
-      buildHookDedupKey(scopeType, `${scopeId}:${ownerInstanceId}:${now.getTime()}`);
+      buildHookDedupKey(
+        scopeType,
+        `${scopeId}:${ownerInstanceId}:${now.getTime()}`,
+      );
     let hook: { id: string; status: string; kind: string };
     try {
       const created = await hooks.registerHook({
@@ -970,9 +973,7 @@ export class PlatformMcpService implements OnModuleInit {
       where: { id: hook.ownerInstanceId },
       select: { teamId: true },
     });
-    return (
-      (member as { teamId?: string | null } | null)?.teamId ?? null
-    );
+    return (member as { teamId?: string | null } | null)?.teamId ?? null;
   }
 
   /**
@@ -1380,13 +1381,13 @@ export class PlatformMcpService implements OnModuleInit {
    * 6. 调 WorkerDispatcher.dispatchAgentMention 触发目标实例的 dispatch 全链路
    *    （assignWorker → createSession/bind → execute → 回复经 task.completed 回流群聊）。
    *    任务维度传 taskId；团队维度（无任务）传 teamId 直走团队路径（会话即建即得）。
-    *    统一返回契约（plan-review todo 3，见 NotifyAgentResult）：
-    *    {triggered, reason: ok|duplicate|dedup|throttled|plan-gated|review-triplet|join-pending,
-    *    origMessageId?, messageId: string|null, issueBound}（+既有 channelId/targetInstanceId）——
-    *    成功 triggered=true+reason=ok；子 Agent 回执（answer、目标为主 Agent）
-    *    triggered=false+reason=join-pending（消息已落库已广播、回执照记，
-    *    只是本次调用不在主 Agent 上开执行 turn，主 Agent 只由 drain 唤醒
-    *    或 question/help 打断）；被节流 triggered=false+reason=throttled+messageId=null
+   *    统一返回契约（plan-review todo 3，见 NotifyAgentResult）：
+   *    {triggered, reason: ok|duplicate|dedup|throttled|plan-gated|review-triplet|join-pending,
+   *    origMessageId?, messageId: string|null, issueBound}（+既有 channelId/targetInstanceId）——
+   *    成功 triggered=true+reason=ok；子 Agent 回执（answer、目标为主 Agent）
+   *    triggered=false+reason=join-pending（消息已落库已广播、回执照记，
+   *    只是本次调用不在主 Agent 上开执行 turn，主 Agent 只由 drain 唤醒
+   *    或 question/help 打断）；被节流 triggered=false+reason=throttled+messageId=null
    *    （内部 pair_limit|task_budget 在此收敛，不再透出）；issueId 缺省 →
    *    issueBound=false（hint，不硬拦），透传时 issueBound=true 并经 dispatchAgentMention
    *    带给执行链路（todo 4 消费 issue 锁/去重）。
@@ -1886,13 +1887,13 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-    * ACK 子 Agent 的待回执并触发 fan-out drain 检查。
-    * 幂等：ackPendingFor 内部 ack() 保证 double-ack = no-op。
-    * 并发安全：drain 检查 + 唤醒经 claim 机制保证恰好一次。
-    *
-    * 回执方向固定为 MAIN→REPORTER（主 Agent 派发给子 Agent 的待回执）；
-    * 清账该子 Agent 后按 MAIN 剩余 pending 判收敛。
-    */
+   * ACK 子 Agent 的待回执并触发 fan-out drain 检查。
+   * 幂等：ackPendingFor 内部 ack() 保证 double-ack = no-op。
+   * 并发安全：drain 检查 + 唤醒经 claim 机制保证恰好一次。
+   *
+   * 回执方向固定为 MAIN→REPORTER（主 Agent 派发给子 Agent 的待回执）；
+   * 清账该子 Agent 后按 MAIN 剩余 pending 判收敛。
+   */
   private async ackAndDrain(input: {
     teamId: string | null;
     mainMemberId: string;
@@ -2055,12 +2056,20 @@ export class PlatformMcpService implements OnModuleInit {
     }
     let channel: { id: string } | null = null;
     channel = await this.prisma.chatChannel.findFirst({
-      where: { teamId: input.teamId, teamMemberId: mainMemberId, deletedAt: null },
+      where: {
+        teamId: input.teamId,
+        teamMemberId: mainMemberId,
+        deletedAt: null,
+      },
       select: { id: true },
     });
     if (!channel) {
       channel = await this.prisma.chatChannel.findFirst({
-        where: { teamId: input.teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+        where: {
+          teamId: input.teamId,
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
         select: { id: true },
       });
     }
@@ -2095,8 +2104,10 @@ export class PlatformMcpService implements OnModuleInit {
       where: { id: teamId },
       select: { mainAgentMemberId: true },
     });
-    return (team as { mainAgentMemberId?: string | null } | null)
-      ?.mainAgentMemberId ?? null;
+    return (
+      (team as { mainAgentMemberId?: string | null } | null)
+        ?.mainAgentMemberId ?? null
+    );
   }
 
   /**
@@ -2560,7 +2571,11 @@ export class PlatformMcpService implements OnModuleInit {
         RECEIPT_NUDGE_KIND,
         fireAt,
         payload,
-        buildTriggerDedupKey(TRIGGER_KIND.RECEIPT_NUDGE, input.teamId, receiptId),
+        buildTriggerDedupKey(
+          TRIGGER_KIND.RECEIPT_NUDGE,
+          input.teamId,
+          receiptId,
+        ),
       );
     } catch (err) {
       this.logger.warn(
@@ -2879,7 +2894,7 @@ export class PlatformMcpService implements OnModuleInit {
     try {
       const first = await (this.prisma as any).teamMember.findFirst({
         where: { teamId },
-        orderBy: { seq: 'asc' },
+        orderBy: [{ seq: 'asc' }, { id: 'asc' }],
         select: { id: true },
       });
       return (first as { id: string } | null)?.id ?? null;
@@ -2894,9 +2909,9 @@ export class PlatformMcpService implements OnModuleInit {
   /**
    * task_create：团队会话无任务时由主 Agent 建任务（team-free-chat todo-4；
    * remove-project-dimension Todo 7 去 pid：团队即归属，无项目防提权门）。
-   * 上下文解析：taskId 优先走任务维度（门 = task.mainAgentInstanceId === 调用方，
-   * 该字段为 NULL（存量任务）时回退所属团队主成员判定；对齐 task_transition
-   * 的 isMain 语义；建任务目标团队取该任务所属团队）；无 taskId
+   * 上下文解析：taskId 优先走任务维度（门 = 任务所属团队的 mainAgentMemberId
+   * 解析出的主成员 === 调用方；task.mainAgentInstanceId 已停写不再读，读它会因
+   * in_progress 任务改主未同步而误 403）；无 taskId
    * 走团队维度（门 = session 团队成员 === 团队主成员 id，
    * 主 id 经 resolveTeamMainMemberId 解析：显式绑定优先，否则首位成员回退）。
    * 成功路径经 TasksService.createByAgent（attribution createdBy = 团队用户成员
@@ -2926,40 +2941,27 @@ export class PlatformMcpService implements OnModuleInit {
           message: '任务不存在',
         });
       }
-      if (task.mainAgentInstanceId != null) {
-        if (task.mainAgentInstanceId !== exec.callerId) {
-          throw new ForbiddenException({
-            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-            message: `仅主 Agent（${task.mainAgentInstanceId}）可创建任务；请知会主 Agent 调用 task_create`,
-          });
-        }
-      } else {
-        // 兼容：存量任务 mainAgentInstanceId 为空（Todo 6 迁移置空）→ 回退到
-        // 所属团队主成员判定（团队显式绑定优先，否则首位成员；查不到 → 未设置）。
-        if (!task.teamId) {
-          throw new BadRequestException(
-            '当前任务未绑定团队，无法解析建任务目标团队',
-          );
-        }
-        const gateTeam = await this.prisma.team.findUnique({
-          where: { id: task.teamId },
-          select: { mainAgentMemberId: true },
-        });
-        const taskDimMainId = await this.resolveTeamMainMemberId(
-          task.teamId,
-          gateTeam?.mainAgentMemberId ?? null,
-        );
-        if (taskDimMainId !== exec.callerId) {
-          throw new ForbiddenException({
-            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-            message: `仅主 Agent（${taskDimMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
-          });
-        }
-      }
+      // 主门唯一依据 task.teamId → team.mainAgentMemberId（对齐 notify/memory 门）。
+      // task.mainAgentInstanceId 是已停写的历史标量：in_progress 任务改主时刻意不同步它，
+      // 读它会把新主误判为「非主」而 403（实测踩坑）。
       if (!task.teamId) {
         throw new BadRequestException(
           '当前任务未绑定团队，无法解析建任务目标团队',
         );
+      }
+      const gateTeam = await this.prisma.team.findUnique({
+        where: { id: task.teamId },
+        select: { mainAgentMemberId: true },
+      });
+      const taskDimMainId = await this.resolveTeamMainMemberId(
+        task.teamId,
+        gateTeam?.mainAgentMemberId ?? null,
+      );
+      if (taskDimMainId !== exec.callerId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: `仅主 Agent（${taskDimMainId ?? '未设置'}）可创建任务；请知会主 Agent 调用 task_create`,
+        });
       }
       teamId = task.teamId;
     } else {
@@ -2992,8 +2994,8 @@ export class PlatformMcpService implements OnModuleInit {
 
   /**
    * skill_create：主 Agent 沉淀新 SKILL.md（learning-mode P2）。
-   * 双上下文主门（对齐 task_create）：任务维度门 = task.mainAgentInstanceId
-   * === 调用方（该字段为 NULL 时回退所属团队主成员判定），否则 403；团队维度门 = 调用方 === 团队主成员 id
+   * 双上下文主门（对齐 task_create）：任务维度门 = 任务所属团队主成员 === 调用方
+   * （经 resolveTeamMainMemberId 解析，不读已停写的 task.mainAgentInstanceId），否则 403；团队维度门 = 调用方 === 团队主成员 id
    * （经 resolveTeamMainMemberId 解析：显式绑定优先，否则首位成员回退），
    * 否则 403。归属冒充（selfInstanceId 非会话成员）由 resolveExecContext
    * 经 assertWorkerTask/Team 先行 403。
@@ -3026,37 +3028,27 @@ export class PlatformMcpService implements OnModuleInit {
           message: '任务不存在',
         });
       }
-      if (task.mainAgentInstanceId != null) {
-        if (task.mainAgentInstanceId !== exec.callerId) {
-          throw new ForbiddenException({
-            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-            message: `仅主 Agent（${task.mainAgentInstanceId}）可沉淀技能；请知会主 Agent 调用 skill_create`,
-          });
-        }
-      } else {
-        // 兼容：存量任务 mainAgentInstanceId 为空（Todo 6 迁移置空）→ 回退到
-        // 所属团队主成员判定（团队显式绑定优先，否则首位成员；查不到 → 未设置）。
-        if (!task.teamId) {
-          throw new ForbiddenException({
-            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-            message:
-              '仅主 Agent（未设置）可沉淀技能；请知会主 Agent 调用 skill_create',
-          });
-        }
-        const skillGateTeam = await this.prisma.team.findUnique({
-          where: { id: task.teamId },
-          select: { mainAgentMemberId: true },
+      // 主门唯一依据 task.teamId → team.mainAgentMemberId（同上，不再读已停写的标量）。
+      if (!task.teamId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message:
+            '仅主 Agent（未设置）可沉淀技能；请知会主 Agent 调用 skill_create',
         });
-        const taskDimSkillMainId = await this.resolveTeamMainMemberId(
-          task.teamId,
-          skillGateTeam?.mainAgentMemberId ?? null,
-        );
-        if (taskDimSkillMainId !== exec.callerId) {
-          throw new ForbiddenException({
-            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-            message: `仅主 Agent（${taskDimSkillMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
-          });
-        }
+      }
+      const skillGateTeam = await this.prisma.team.findUnique({
+        where: { id: task.teamId },
+        select: { mainAgentMemberId: true },
+      });
+      const taskDimSkillMainId = await this.resolveTeamMainMemberId(
+        task.teamId,
+        skillGateTeam?.mainAgentMemberId ?? null,
+      );
+      if (taskDimSkillMainId !== exec.callerId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: `仅主 Agent（${taskDimSkillMainId ?? '未设置'}）可沉淀技能；请知会主 Agent 调用 skill_create`,
+        });
       }
     } else {
       const team = await this.prisma.team.findUnique({
@@ -3223,7 +3215,7 @@ export class PlatformMcpService implements OnModuleInit {
    *   - team：teamId 从 task 行反查（**不接收 teamId 入参**，防跨团队写入——
    *     写 team 级 = 写当前任务所属团队的记忆；任务无团队归属 → 400）；
    *   - project：已下线（400 指引改用 team，防绕过 schema 直调 service）；
-   *   - global：**仅主 Agent 可写**（task.mainAgentInstanceId === selfInstanceId，
+   *   - global：**仅主 Agent 可写**（任务所属团队 mainAgentMemberId === selfInstanceId，
    *     否则 403 PLATFORM_MCP_FORBIDDEN，防全局污染）。
    * - 落库 memories（me_ 前缀 IdGenerator 生成；createdBy=selfInstanceId 精确归属；
    *   tags 为 Json 列，无标签传 null）。

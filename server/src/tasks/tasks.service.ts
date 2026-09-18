@@ -1357,7 +1357,7 @@ export class TasksService implements OnModuleInit {
     try {
       const first = await (this.prisma as any).teamMember.findFirst({
         where: { teamId },
-        orderBy: { seq: 'asc' },
+        orderBy: [{ seq: 'asc' }, { id: 'asc' }],
         select: { id: true },
       });
       return (first as { id: string } | null)?.id ?? null;

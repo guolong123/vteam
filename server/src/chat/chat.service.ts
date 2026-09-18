@@ -1273,7 +1273,7 @@ export class ChatService {
       const legacyTeamMember = agentIdInput
         ? await (this.prisma as any).teamMember.findFirst({
             where: { teamId: legacyTask.teamId, agentId: agentIdInput },
-            orderBy: { seq: 'asc' },
+            orderBy: [{ seq: 'asc' }, { id: 'asc' }],
           })
         : null;
       if (!legacyTeamMember && agentIdInput) {
@@ -1351,7 +1351,7 @@ export class ChatService {
       }
       teamMember = await (this.prisma as any).teamMember.findFirst({
         where: { teamId, agentId: agentIdInput },
-        orderBy: { seq: 'asc' },
+        orderBy: [{ seq: 'asc' }, { id: 'asc' }],
         select: { id: true, agentId: true },
       });
       if (!teamMember) {
@@ -1840,7 +1840,7 @@ export class ChatService {
         })
       : await (this.prisma as any).teamMember.findFirst({
           where: { teamId },
-          orderBy: { seq: 'asc' },
+          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
           select: TEAM_MEMBER_SELECT,
         });
     if (!row || (row as any).removedAt || (row as any).enabled === false)

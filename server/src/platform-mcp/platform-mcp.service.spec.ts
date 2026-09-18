@@ -2579,7 +2579,10 @@ describe('PlatformMcpService', () => {
 
         expect(result.triggered).toBe(true);
         const data = prisma.message.create.mock.calls[0][0].data;
-        expect(data.content).toEqual({ text: '@测试 请查看这个文件', parts: [] });
+        expect(data.content).toEqual({
+          text: '@测试 请查看这个文件',
+          parts: [],
+        });
         expect(data.mentions).toHaveLength(1);
       });
 
@@ -2607,7 +2610,10 @@ describe('PlatformMcpService', () => {
         });
 
         const data = prisma.message.create.mock.calls[0][0].data;
-        expect(data.content).toEqual({ text: '@测试 请查看这个文件', parts: [] });
+        expect(data.content).toEqual({
+          text: '@测试 请查看这个文件',
+          parts: [],
+        });
       });
 
       it('@目标-2 之于目标 测试 → token 不等仍补前缀（宁可显示重复，不可指派错人）', async () => {
@@ -5623,7 +5629,10 @@ describe('PlatformMcpService', () => {
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: senderInstanceId,
+        mainAgentInstanceId: null,
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: senderInstanceId,
       });
       tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
@@ -5640,31 +5649,26 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('任务维度非空主绑定保持严格语义：不查团队表，403 点名任务主', async () => {
+    it('任务维度陈旧标量不参与判定：团队主为准（标量停写，读它会误 403）', async () => {
       allowWorker();
+      // 标量指向 tmm_other（陈旧值），但团队主是 senderInstanceId → 仍放行
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
         mainAgentInstanceId: 'tmm_other',
       });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: senderInstanceId,
+      });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
-      const err = await service
-        .taskCreate(ctx, {
-          taskId,
-          selfInstanceId: senderInstanceId,
-          title: '新任务',
-        })
-        .then(
-          () => null,
-          (e: unknown) => e,
-        );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      const resp = (err as { getResponse(): any }).getResponse();
-      expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
-      expect(resp.message).toContain('tmm_other');
-      expect(prisma.team.findUnique).not.toHaveBeenCalled();
-      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
-      expect(tasksService.createByAgent).not.toHaveBeenCalled();
+      const result = await service.taskCreate(ctx, {
+        taskId,
+        selfInstanceId: senderInstanceId,
+        title: '新任务',
+      });
+      expect(result).toEqual({ id: 't_new' });
+      expect(tasksService.createByAgent).toHaveBeenCalled();
     });
 
     it('任务维度任务主为空 + 团队绑定已设 → 绑定成员放行（不再死锁）', async () => {
@@ -5746,7 +5750,7 @@ describe('PlatformMcpService', () => {
       expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { teamId: 'tm_1' },
-          orderBy: { seq: 'asc' },
+          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
         }),
       );
       expect(tasksService.createByAgent).toHaveBeenCalledWith(
@@ -5856,7 +5860,7 @@ describe('PlatformMcpService', () => {
       expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { teamId: 'tm_1' },
-          orderBy: { seq: 'asc' },
+          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
         }),
       );
       expect(tasksService.createByAgent).toHaveBeenCalledWith(
@@ -6085,7 +6089,10 @@ describe('PlatformMcpService', () => {
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: senderInstanceId,
+        mainAgentInstanceId: null,
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: senderInstanceId,
       });
     };
 
@@ -6154,25 +6161,27 @@ describe('PlatformMcpService', () => {
       expect(skillsService.create).not.toHaveBeenCalled();
     });
 
-    it('任务维度非空主绑定保持严格语义：不查团队表，403 点名任务主', async () => {
+    it('任务维度陈旧标量不参与判定：团队主为准（标量停写，读它会误 403）', async () => {
       allowWorker();
+      // 标量指向 tmm_other（陈旧值），但团队主是 senderInstanceId → 仍放行
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
         mainAgentInstanceId: 'tmm_other',
       });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: senderInstanceId,
+      });
+      skillsService.create.mockResolvedValue({
+        id: 'sk_0000000001',
+        name: 'git-ops',
+        enabled: false,
+      });
 
-      const err = await service.skillCreate(ctx, { ...skillArgs }).then(
-        () => null,
-        (e: unknown) => e,
-      );
-      expect(err).toBeInstanceOf(ForbiddenException);
-      const resp = (err as { getResponse(): any }).getResponse();
-      expect(resp.code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
-      expect(resp.message).toContain('tmm_other');
-      expect(prisma.team.findUnique).not.toHaveBeenCalled();
-      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
-      expect(skillsService.create).not.toHaveBeenCalled();
+      const result = await service.skillCreate(ctx, { ...skillArgs });
+
+      expect(result).toMatchObject({ name: 'git-ops' });
+      expect(skillsService.create).toHaveBeenCalled();
     });
 
     it('任务维度任务主为空 + 团队绑定已设 → 绑定成员放行（不再死锁）', async () => {
@@ -6262,7 +6271,7 @@ describe('PlatformMcpService', () => {
       expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { teamId: 'tm_1' },
-          orderBy: { seq: 'asc' },
+          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
         }),
       );
       expect(skillsService.create).toHaveBeenCalledTimes(1);
@@ -6318,7 +6327,7 @@ describe('PlatformMcpService', () => {
       expect(prisma.teamMember.findFirst).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { teamId: 'tm_1' },
-          orderBy: { seq: 'asc' },
+          orderBy: [{ seq: 'asc' }, { id: 'asc' }],
         }),
       );
       expect(skillsService.create).toHaveBeenCalledTimes(1);

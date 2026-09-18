@@ -255,7 +255,7 @@ export class TeamsService implements OnModuleInit {
             include: {
               agent: { select: { id: true, name: true, role: true } },
             },
-            orderBy: { seq: 'asc' },
+            orderBy: [{ seq: 'asc' }, { id: 'asc' }],
           },
           userMembers: { orderBy: { joinedAt: 'asc' } },
           queues: {
@@ -377,7 +377,11 @@ export class TeamsService implements OnModuleInit {
     }
 
     const full = await this.findOne(id);
-    // 主 Agent 变更回填：仅同步尚未启动的任务（pending/queued），进行中任务不动（避免干扰运行中会话路由）
+    // 主 Agent 变更回填：同步全部未终态任务（含 in_progress）。
+    // 原实现刻意跳过 in_progress（怕干扰运行中会话路由），但标量停写会与
+    // team.mainAgentMemberId 不一致，而读标量的地方（会话页主徽章 / 任务动作门 / MCP 门）
+    // 会因此误判——实测表现为改主后旧主仍显示「主」（双主徽章）。运行时路由与鉴权
+    // 已全部改判 team.mainAgentMemberId，此处同步标量只为消除陈旧读源。
     if ((dto as any).mainAgentMemberId !== undefined) {
       try {
         const mainId: string | null = (full as any).mainAgentMemberId ?? null;
@@ -385,7 +389,10 @@ export class TeamsService implements OnModuleInit {
           ? await this.prisma.teamMember.findUnique({ where: { id: mainId } })
           : null;
         const openTasks = await this.prisma.task.findMany({
-          where: { teamId: id, status: { in: ['pending', 'queued'] } },
+          where: {
+            teamId: id,
+            status: { in: ['pending', 'queued', 'in_progress'] },
+          },
           select: { id: true },
         });
         for (const t of openTasks) {

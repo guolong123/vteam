@@ -316,7 +316,10 @@ export default function TeamSessionPage() {
           name: inst.alias ?? inst.name,
           role,
           seq: inst.seq,
-          main: inst.main || inst.id === currentTask?.mainAgentInstanceId,
+          /* 主来源唯一：inst.main（服务端按 team.mainAgentMemberId 判定）。
+           * currentTask.mainAgentInstanceId 是已停写的历史标量，且 in_progress 任务的主变更
+           * 刻意不同步它——再叠加会导致双主徽章（实测踩坑）。 */
+          main: inst.main,
           enabled: (inst as { enabled?: boolean | null }).enabled ?? true,
           overrideModelId: (inst as { overrideModelId?: string | null }).overrideModelId ?? null,
           opencodeAgentName: (inst as { opencodeAgentName?: string | null }).opencodeAgentName ?? null,
