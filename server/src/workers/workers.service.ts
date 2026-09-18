@@ -13,7 +13,10 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
-import { MODEL_ERRORS } from '../models/models.constants';
+import {
+  MODEL_ERRORS,
+  ModelProviderConfigEntry,
+} from '../models/models.constants';
 import { ModelsService } from '../models/models.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CredentialCryptoService } from '../common/credential-crypto.service';
@@ -103,12 +106,18 @@ export interface ModelCredentialEntry {
 /**
  * C5：model-credentials 命令负载（对齐 worker ModelCredentialsPayload）。
  * targetWorkerIds 空 = 全量（定向走 enqueueCommand、全量走 broadcastCommand，
- * worker 侧仅消费 providerKeys，targetWorkerIds 为元数据）。
+ * worker 侧仅消费 providerKeys + providerConfigs，targetWorkerIds 为元数据）。
  */
 export interface ModelCredentialsPayload {
   providerKeys: ModelCredentialEntry[];
   /** 定向 worker id 列表；空 = 全量下发 */
   targetWorkerIds?: string[];
+  /**
+   * C6：opencode.json `provider` 段全量状态（providerID → baseUrl + models，
+   * 对齐 worker ModelProviderConfigEntry 双写）。undefined = 不触碰配置文件
+   * （旧 server 向后兼容）；{} = 清空全部 provider 配置。
+   */
+  providerConfigs?: Record<string, ModelProviderConfigEntry>;
 }
 
 /**
@@ -445,18 +454,22 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * C5：模型凭据下发（唯一化分发入口）。
    * - targetWorkerIds 非空 → 定向：enqueueCommand 逐个精确下发（精确 workerId 语义）；
    * - 空 → 全量：broadcastCommand 原样广播（不改 broadcastCommand 签名，空=全量无需过滤）。
+   * - providerConfigs（C6）：opencode.json provider 段全量状态，随 payload 透传
+   *   （undefined = 不触碰配置，向后兼容）。
    * 返回下发目标 worker 数（定向=targetWorkerIds.length，全量=在线 worker 数）。
    * token 只经下行命令明文传输（心跳取出即清空），不落本服务日志。
    */
   async dispatchModelCredentials(
     providerKeys: ModelCredentialEntry[],
     targetWorkerIds?: string[],
+    providerConfigs?: Record<string, ModelProviderConfigEntry>,
   ): Promise<number> {
     const command: WorkerCommand = {
       type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
       resourceVersion: 'model-credentials',
       payload: {
         providerKeys,
+        ...(providerConfigs !== undefined ? { providerConfigs } : {}),
         ...(targetWorkerIds && targetWorkerIds.length > 0
           ? { targetWorkerIds }
           : {}),
@@ -475,7 +488,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * C5（R5）：回放全部未吊销凭据到指定 worker（注册/重注册后调用）。
    * 查 ModelCredential revokedAt=null 行 → decrypt credentialRef 组装 providerKeys →
    * enqueueCommand 下发（该 worker 下一次心跳携带并清空）。
-   * 无未吊销凭据 → 静默跳过；解密/查询失败 → warn 不阻断（worker 仍可注册成功）。
+   * C6：一并携带 opencode.json provider 段全量状态（providerConfigs 查询失败时
+   * 降级 undefined = 不触碰配置，不阻断凭据回放）。
+   * 无未吊销凭据且无 provider 配置 → 静默跳过；解密/查询失败 → warn 不阻断
+   * （worker 仍可注册成功）。
    */
   private async replayModelCredentials(workerId: string): Promise<void> {
     try {
@@ -483,7 +499,19 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         where: { revokedAt: null },
         select: { providerID: true, credentialRef: true },
       });
-      if (active.length === 0) {
+      let providerConfigs: Record<string, ModelProviderConfigEntry> | undefined;
+      try {
+        providerConfigs = await this.modelsService.getLocalProviderConfigs();
+      } catch (err) {
+        this.logger.warn(
+          `模型 provider 配置查询失败（回放降级为仅凭据，不触碰配置）: ${(err as Error).message}`,
+        );
+      }
+      if (
+        active.length === 0 &&
+        (providerConfigs === undefined ||
+          Object.keys(providerConfigs).length === 0)
+      ) {
         return;
       }
       const providerKeys = active.map((row) => ({
@@ -493,10 +521,13 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       this.enqueueCommand(workerId, {
         type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
         resourceVersion: 'model-credentials',
-        payload: { providerKeys },
+        payload: {
+          providerKeys,
+          ...(providerConfigs !== undefined ? { providerConfigs } : {}),
+        },
       });
       this.logger.log(
-        `模型凭据回放：worker=${workerId} providerKeys=${providerKeys.map((k) => k.providerID).join(', ')}`,
+        `模型凭据回放：worker=${workerId} providerKeys=${providerKeys.map((k) => k.providerID).join(', ')} providerConfigs=[${providerConfigs ? Object.keys(providerConfigs).join(', ') : '(不触碰)'}]`,
       );
     } catch (err) {
       this.logger.warn(

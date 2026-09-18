@@ -13,7 +13,9 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AdminGuard } from '../users/admin.guard';
 import { CreateModelDto } from './dto/create-model.dto';
 import { QueryModelsDto } from './dto/query-models.dto';
+import { ProbeEndpointDto } from './dto/probe-endpoint.dto';
 import { UpdateModelDto } from './dto/update-model.dto';
+import { UpdateProviderDto } from './dto/update-provider.dto';
 import { SetModelCredentialDto } from './dto/set-model-credential.dto';
 import { ModelsService } from './models.service';
 
@@ -70,6 +72,45 @@ export class ModelsController {
   })
   revokeCredentialByProvider(@Param('providerID') providerID: string) {
     return this.modelsService.revokeCredentialByProvider(providerID);
+  }
+
+  /**
+   * 探测 OpenAI 兼容端点的模型元数据（C8 自动预填，AdminGuard）。
+   * POST /api/v1/models/probe-endpoint {baseUrl} → 200 + {models:[{id, context?}]}
+   *   context 来自 vLLM 的 max_model_len（OpenAI 官方端点无此字段 → 空返回）；
+   *   探测失败不报错（返回空列表，前端提示手填）——探测是便利功能不是校验。
+   *   静态段 probe-endpoint 声明在 :id 之前（Nest 路由按声明顺序匹配）。
+   */
+  @Post('probe-endpoint')
+  @UseGuards(AdminGuard)
+  @ApiOperation({
+    summary:
+      '探测端点模型元数据（vLLM max_model_len → 上下文长度预填，AdminGuard）',
+  })
+  probeEndpoint(@Body() dto: ProbeEndpointDto) {
+    return this.modelsService.probeEndpoint(dto.baseUrl);
+  }
+
+  /**
+   * Provider 级配置更新（AdminGuard）：一次原子重写该 provider 全部模型行的
+   * providerType + baseUrl。
+   * PATCH /api/v1/models/providers/:providerID {providerType?, baseUrl?} → 200 + ProviderSummary
+   *   baseUrl=null/空串 = 清空（cloud 可去掉自定义端点）；local/custom 需 http(s) URL；
+   *   两字段皆缺 → 400；provider 无模型行 → 404 MODEL_NOT_FOUND；
+   *   有活跃凭据时触发 C6 全量下发（worker 重写 opencode.json）。
+   *   静态段 providers 声明在 :id 之前（Nest 路由按声明顺序匹配）。
+   */
+  @Patch('providers/:providerID')
+  @UseGuards(AdminGuard)
+  @ApiOperation({
+    summary:
+      '更新 Provider 配置（providerType/baseUrl 全模型行原子重写，AdminGuard）',
+  })
+  updateProvider(
+    @Param('providerID') providerID: string,
+    @Body() dto: UpdateProviderDto,
+  ) {
+    return this.modelsService.updateProvider(providerID, dto);
   }
 
   /**

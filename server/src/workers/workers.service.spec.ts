@@ -71,6 +71,7 @@ describe('WorkersService', () => {
     syncFromWorkerCapabilities: jest.Mock;
     syncLiveModels: jest.Mock;
     findCatalogByRef: jest.Mock;
+    getLocalProviderConfigs: jest.Mock;
   };
 
   /** 构造一个 Worker 行（prisma findMany/findUnique 返回值）。 */
@@ -164,6 +165,7 @@ describe('WorkersService', () => {
         name: 'DeepSeek V4 Flash',
         enabled: true,
       }),
+      getLocalProviderConfigs: jest.fn().mockResolvedValue({}),
     };
     prisma.modelCredential.findMany.mockResolvedValue([]);
     prisma.gitRepo.findMany.mockResolvedValue([]);
@@ -355,6 +357,63 @@ describe('WorkersService', () => {
               { providerID: 'opencode-go', key: 'sk-raw-token' },
               { providerID: 'opencode', key: 'sk-raw-token' },
             ],
+            // C6：回放始终携带 provider 配置全量状态（mock 默认空 = 清空语义）
+            providerConfigs: {},
+          },
+        },
+      ]);
+    });
+
+    it('C6：回放携带 getLocalProviderConfigs 的 baseUrl + models 配置', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'my-local', credentialRef: 'iv:tag:data1' },
+      ]);
+      modelsService.getLocalProviderConfigs.mockResolvedValue({
+        'my-local': {
+          baseUrl: 'http://192.168.10.10:18020/v1',
+          models: { 'qwen3.8-27b': {} },
+        },
+      });
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+        {
+          type: 'model-credentials',
+          resourceVersion: 'model-credentials',
+          payload: {
+            providerKeys: [{ providerID: 'my-local', key: 'sk-raw-token' }],
+            providerConfigs: {
+              'my-local': {
+                baseUrl: 'http://192.168.10.10:18020/v1',
+                models: { 'qwen3.8-27b': {} },
+              },
+            },
+          },
+        },
+      ]);
+    });
+
+    it('C6：getLocalProviderConfigs 抛错 → 回放降级为仅凭据（不触碰配置），不阻断注册', async () => {
+      prisma.worker.upsert.mockResolvedValue(workerRow());
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'opencode-go', credentialRef: 'iv:tag:data1' },
+      ]);
+      modelsService.getLocalProviderConfigs.mockRejectedValue(
+        new Error('db down'),
+      );
+      const dto = registerDto();
+
+      await service.register('secret-token', dto);
+
+      expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+        {
+          type: 'model-credentials',
+          resourceVersion: 'model-credentials',
+          payload: {
+            providerKeys: [{ providerID: 'opencode-go', key: 'sk-raw-token' }],
           },
         },
       ]);
@@ -743,6 +802,7 @@ describe('WorkersService', () => {
           resourceVersion: 'model-credentials',
           payload: {
             providerKeys: [{ providerID: 'opencode-go', key: 'sk-raw-token' }],
+            providerConfigs: {},
           },
         },
       ]);
@@ -871,6 +931,39 @@ describe('WorkersService', () => {
 
       const second = await service.heartbeat('w_0000000001', dto);
       expect(second.commands).toBeUndefined();
+    });
+
+    it('C6：providerConfigs 携带 → payload 透传（空对象 = 清空语义，非省略）', async () => {
+      const providerConfigs = {
+        'my-local': {
+          baseUrl: 'http://192.168.10.10:18020/v1',
+          models: { 'qwen3.8-27b': {} },
+        },
+      };
+      const spy = jest.spyOn(service, 'broadcastCommand').mockResolvedValue(2);
+
+      await service.dispatchModelCredentials(
+        providerKeys,
+        undefined,
+        providerConfigs,
+      );
+      expect(spy).toHaveBeenCalledWith({
+        type: 'model-credentials',
+        resourceVersion: 'model-credentials',
+        payload: { providerKeys, providerConfigs },
+      });
+    });
+
+    it('C6：providerConfigs=空对象（显式清空）→ payload 保留 {}（区别于 undefined 省略）', async () => {
+      const spy = jest.spyOn(service, 'broadcastCommand').mockResolvedValue(1);
+
+      await service.dispatchModelCredentials(providerKeys, [], {});
+
+      expect(spy).toHaveBeenCalledWith({
+        type: 'model-credentials',
+        resourceVersion: 'model-credentials',
+        payload: { providerKeys, providerConfigs: {} },
+      });
     });
   });
 
