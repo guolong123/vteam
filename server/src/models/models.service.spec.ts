@@ -473,6 +473,326 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     });
   });
 
+  describe('updateProvider（Provider 级配置：全模型行原子重写 + C6 门控下发）', () => {
+    /* updateProvider 链路里 model.findMany 有三处用途，按 select 形态路由：
+     * provider 行（{providerType, baseUrl}）、getLocalProviderConfigs
+     * （{providerID, modelID, baseUrl}）、listProviders 元数据（{providerID, providerType, baseUrl}）。 */
+    const routeFindMany = (opts: {
+      providerRows: Array<{ providerType: string; baseUrl: string | null }>;
+      configRows?: Array<{
+        providerID: string;
+        modelID: string;
+        baseUrl: string;
+      }>;
+      metaRows?: Array<{
+        providerID: string;
+        providerType: string;
+        baseUrl: string;
+      }>;
+    }) => {
+      prisma.model.findMany.mockImplementation(
+        (args: { select?: Record<string, boolean> }) => {
+          const sel = args?.select ?? {};
+          if (sel.modelID) return Promise.resolve(opts.configRows ?? []);
+          if (sel.providerID) return Promise.resolve(opts.metaRows ?? []);
+          return Promise.resolve(opts.providerRows);
+        },
+      );
+    };
+
+    it('providerType+baseUrl 原子重写（updateMany）+ 有活跃凭据 → C6 全量下发携带新配置', async () => {
+      routeFindMany({
+        providerRows: [
+          { providerType: 'local', baseUrl: 'http://old:8000/v1' },
+        ],
+        configRows: [
+          {
+            providerID: 'vllm',
+            modelID: 'qwen3-27b',
+            baseUrl: 'http://new:8000/v1',
+          },
+        ],
+        metaRows: [
+          {
+            providerID: 'vllm',
+            providerType: 'local',
+            baseUrl: 'http://new:8000/v1',
+          },
+        ],
+      });
+      prisma.model.updateMany.mockResolvedValue({ count: 2 });
+      prisma.modelCredential.findUnique.mockResolvedValue({ revokedAt: null });
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'vllm', credentialRef: 'iv:tag:data' },
+      ]);
+      prisma.model.groupBy.mockResolvedValue([
+        { providerID: 'vllm', _count: { _all: 2 } },
+      ]);
+
+      const result = await service.updateProvider('vllm', {
+        providerType: 'local',
+        baseUrl: 'http://new:8000/v1',
+      });
+
+      expect(prisma.model.updateMany).toHaveBeenCalledWith({
+        where: { providerID: 'vllm' },
+        data: { providerType: 'local', baseUrl: 'http://new:8000/v1' },
+      });
+      expect(workers.dispatchModelCredentials).toHaveBeenCalledWith(
+        [{ providerID: 'vllm', key: 'sk-raw-token' }],
+        undefined,
+        {
+          vllm: { baseUrl: 'http://new:8000/v1', models: { 'qwen3-27b': {} } },
+        },
+      );
+      expect(result).toMatchObject({
+        providerID: 'vllm',
+        providerType: 'local',
+        baseUrl: 'http://new:8000/v1',
+        modelCount: 2,
+      });
+    });
+
+    it('cloud 显式 baseUrl=null → 清空（updateMany baseUrl: null）', async () => {
+      routeFindMany({
+        providerRows: [{ providerType: 'cloud', baseUrl: 'http://x:8000/v1' }],
+        metaRows: [{ providerID: 'p', providerType: 'cloud', baseUrl: '' }],
+      });
+      prisma.model.updateMany.mockResolvedValue({ count: 1 });
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.groupBy.mockResolvedValue([
+        { providerID: 'p', _count: { _all: 1 } },
+      ]);
+
+      await service.updateProvider('p', { baseUrl: null });
+
+      expect(prisma.model.updateMany).toHaveBeenCalledWith({
+        where: { providerID: 'p' },
+        data: { providerType: 'cloud', baseUrl: null },
+      });
+      expect(workers.dispatchModelCredentials).not.toHaveBeenCalled();
+    });
+
+    it('存在行但类型为 local 且缺 baseUrl → 400 MODEL_BASEURL_REQUIRED（不写库）', async () => {
+      routeFindMany({
+        providerRows: [{ providerType: 'local', baseUrl: null }],
+      });
+
+      await expect(
+        service.updateProvider('vllm', { providerType: 'local' }),
+      ).rejects.toMatchObject({
+        response: { code: MODEL_ERRORS.MODEL_BASEURL_REQUIRED },
+      });
+      expect(prisma.model.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('两字段皆缺省 → 400 MODEL_PROVIDER_UPDATE_EMPTY（不查询不写库）', async () => {
+      await expect(service.updateProvider('p', {})).rejects.toMatchObject({
+        response: { code: 'MODEL_PROVIDER_UPDATE_EMPTY' },
+      });
+      expect(prisma.model.findMany).not.toHaveBeenCalled();
+      expect(prisma.model.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('provider 无模型行 → 404 MODEL_NOT_FOUND（不写库）', async () => {
+      routeFindMany({ providerRows: [] });
+
+      await expect(
+        service.updateProvider('ghost', { baseUrl: 'http://y:8000/v1' }),
+      ).rejects.toMatchObject({
+        response: { code: MODEL_ERRORS.MODEL_NOT_FOUND },
+      });
+      expect(prisma.model.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('无活跃凭据 → 只改目录，不触发下发', async () => {
+      routeFindMany({
+        providerRows: [{ providerType: 'cloud', baseUrl: null }],
+        metaRows: [
+          {
+            providerID: 'p',
+            providerType: 'cloud',
+            baseUrl: 'http://y:8000/v1',
+          },
+        ],
+      });
+      prisma.model.updateMany.mockResolvedValue({ count: 1 });
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.model.groupBy.mockResolvedValue([
+        { providerID: 'p', _count: { _all: 1 } },
+      ]);
+
+      await service.updateProvider('p', { baseUrl: 'http://y:8000/v1' });
+
+      expect(prisma.model.updateMany).toHaveBeenCalledWith({
+        where: { providerID: 'p' },
+        data: { providerType: 'cloud', baseUrl: 'http://y:8000/v1' },
+      });
+      expect(workers.dispatchModelCredentials).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('C8：per-model 能力下发（capabilities → providerConfigs）+ 端点探测', () => {
+    it('getLocalProviderConfigs：capabilities 白名单提取（limit/布尔/modalities/options）', async () => {
+      prisma.model.findMany.mockResolvedValue([
+        {
+          providerID: 'vllm',
+          modelID: 'qwen3.8-27b',
+          name: 'Qwen3.8 27B',
+          baseUrl: 'http://192.168.10.10:18020/v1',
+          capabilities: {
+            limit: { context: 262144, output: 16384 },
+            reasoning: true,
+            toolCall: true,
+            temperature: false,
+            attachment: true,
+            modalities: { input: ['text', 'image'], output: ['text'] },
+            options: { reasoningEffort: 'high' },
+          },
+        },
+      ]);
+
+      const configs = await service.getLocalProviderConfigs();
+
+      expect(configs).toEqual({
+        vllm: {
+          baseUrl: 'http://192.168.10.10:18020/v1',
+          models: {
+            'qwen3.8-27b': {
+              name: 'Qwen3.8 27B',
+              capabilities: {
+                limit: { context: 262144, output: 16384 },
+                reasoning: true,
+                toolCall: true,
+                temperature: false,
+                attachment: true,
+                modalities: { input: ['text', 'image'], output: ['text'] },
+                options: { reasoningEffort: 'high' },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    it('getLocalProviderConfigs：非法 capabilities（残缺 limit/未知键/坏 modalities）→ 丢弃且不抛错', async () => {
+      prisma.model.findMany.mockResolvedValue([
+        {
+          providerID: 'p',
+          modelID: 'm1',
+          name: 'm1',
+          baseUrl: 'http://h:1/v1',
+          capabilities: {
+            limit: { context: 4096 },
+            bogusKey: 'x',
+            modalities: { input: ['not-a-modality'] },
+          },
+        },
+        {
+          providerID: 'p',
+          modelID: 'm2',
+          name: 'm2',
+          baseUrl: 'http://h:1/v1',
+          capabilities: null,
+        },
+      ]);
+
+      const configs = await service.getLocalProviderConfigs();
+
+      expect(configs.p.models.m1).toEqual({});
+      expect(configs.p.models.m2).toEqual({});
+    });
+
+    it('getLocalProviderConfigs：name 与 modelID 相同 → 省略 name（避免冗余下发）', async () => {
+      prisma.model.findMany.mockResolvedValue([
+        {
+          providerID: 'p',
+          modelID: 'qwen3.8-27b',
+          name: 'qwen3.8-27b',
+          baseUrl: 'http://h:1/v1',
+          capabilities: { reasoning: true },
+        },
+      ]);
+
+      const configs = await service.getLocalProviderConfigs();
+
+      expect(configs.p.models['qwen3.8-27b']).toEqual({
+        capabilities: { reasoning: true },
+      });
+    });
+
+    it('update：capabilities 变更 → 触发门控下发（此前会静默丢失）', async () => {
+      prisma.model.findUnique.mockResolvedValue({
+        ...modelRowFull,
+        providerID: 'vllm',
+        baseUrl: 'http://h:1/v1',
+      });
+      prisma.model.update.mockResolvedValue(modelRowFull);
+      prisma.modelCredential.findUnique.mockResolvedValue({ revokedAt: null });
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'vllm', credentialRef: 'iv:tag:data' },
+      ]);
+      prisma.model.findMany.mockResolvedValue([]);
+
+      await service.update('md_0000000001', {
+        capabilities: { limit: { context: 262144, output: 16384 } },
+      });
+
+      expect(workers.dispatchModelCredentials).toHaveBeenCalled();
+    });
+
+    it('update：仅改 name/enabled → 不触发下发（非形态字段）', async () => {
+      prisma.model.findUnique.mockResolvedValue({
+        ...modelRowFull,
+        providerID: 'vllm',
+        baseUrl: 'http://h:1/v1',
+      });
+      prisma.model.update.mockResolvedValue(modelRowFull);
+
+      await service.update('md_0000000001', { name: '新名字' });
+
+      expect(workers.dispatchModelCredentials).not.toHaveBeenCalled();
+    });
+
+    it('probeEndpoint：vLLM max_model_len → context；缺该字段的模型只回 id', async () => {
+      const spy = jest.spyOn(global, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: 'qwen3.8-27b', max_model_len: 262144 },
+            { id: 'plain-model' },
+          ],
+        }),
+      } as Response);
+
+      const result = await service.probeEndpoint('http://h:1/v1/');
+
+      expect(spy).toHaveBeenCalledWith(
+        'http://h:1/v1/models',
+        expect.objectContaining({ signal: expect.anything() }),
+      );
+      expect(result).toEqual({
+        models: [{ id: 'qwen3.8-27b', context: 262144 }, { id: 'plain-model' }],
+      });
+      spy.mockRestore();
+    });
+
+    it('probeEndpoint：端点不可达/非 200 → 返回空列表（探测失败不抛错，不阻断表单）', async () => {
+      const spy = jest
+        .spyOn(global, 'fetch')
+        .mockRejectedValue(new Error('ECONNREFUSED'));
+
+      await expect(
+        service.probeEndpoint('http://unreachable:1/v1'),
+      ).resolves.toEqual({
+        models: [],
+      });
+      spy.mockRestore();
+    });
+  });
+
   describe('remove（物理删除 + availability 级联清理）', () => {
     it('先删 worker_model_availabilities 再删 model（事务）', async () => {
       prisma.model.findUnique.mockResolvedValue(modelRowFull);
@@ -1072,21 +1392,34 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
 
     it('C5：保存成功后触发凭据下发（targetWorkerIds 缺省 → 全量）', async () => {
       prisma.model.findUnique.mockResolvedValue(modelRow);
+      // setCredential 流程中 prisma.model.findMany 有两个用途：
+      // providerType 查询（select.providerType）与 C6 配置全量查询（其余）
+      prisma.model.findMany.mockImplementation(
+        async (args?: { select?: { providerType?: boolean } }) =>
+          args?.select?.providerType ? [{ providerType: 'cloud' }] : [],
+      );
       prisma.modelCredential.findUnique.mockResolvedValue(null);
       prisma.modelCredential.create.mockResolvedValue(credentialRow);
+      prisma.modelCredential.findMany.mockResolvedValue([credentialRow]);
 
       await service.setCredential('md_0000000001', 'sk-raw-token');
 
       expect(workers.dispatchModelCredentials).toHaveBeenCalledWith(
         [{ providerID: 'opencode-go', key: 'sk-raw-token' }],
         undefined,
+        {},
       );
     });
 
     it('C5：targetWorkerIds 非空时定向传递到 WorkersService.dispatchModelCredentials', async () => {
       prisma.model.findUnique.mockResolvedValue(modelRow);
+      prisma.model.findMany.mockImplementation(
+        async (args?: { select?: { providerType?: boolean } }) =>
+          args?.select?.providerType ? [{ providerType: 'cloud' }] : [],
+      );
       prisma.modelCredential.findUnique.mockResolvedValue(null);
       prisma.modelCredential.create.mockResolvedValue(credentialRow);
+      prisma.modelCredential.findMany.mockResolvedValue([credentialRow]);
 
       await service.setCredential(
         'md_0000000001',
@@ -1098,6 +1431,40 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(workers.dispatchModelCredentials).toHaveBeenCalledWith(
         [{ providerID: 'opencode-go', key: 'sk-raw-token' }],
         ['w_0000000001'],
+        {},
+      );
+    });
+
+    it('C6：local provider 保存凭据 → 下发负载携带该 provider 的 baseUrl + models 配置', async () => {
+      prisma.model.findUnique.mockResolvedValue(modelRow);
+      prisma.model.findMany.mockImplementation(
+        async (args?: { select?: { providerType?: boolean } }) =>
+          args?.select?.providerType
+            ? [{ providerType: 'local' }]
+            : [
+                {
+                  providerID: 'opencode-go',
+                  modelID: 'deepseek-v4-flash',
+                  baseUrl: 'http://192.168.10.10:18020/v1',
+                },
+              ],
+      );
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.modelCredential.create.mockResolvedValue(credentialRow);
+      prisma.modelCredential.findMany.mockResolvedValue([credentialRow]);
+      // 空 token + local → local-noop 占位凭据路径（decrypt mock 对齐落库值）
+      crypto.decrypt.mockReturnValue('local-noop');
+      await service.setCredential('md_0000000001', '');
+
+      expect(workers.dispatchModelCredentials).toHaveBeenCalledWith(
+        [{ providerID: 'opencode-go', key: 'local-noop' }],
+        undefined,
+        {
+          'opencode-go': {
+            baseUrl: 'http://192.168.10.10:18020/v1',
+            models: { 'deepseek-v4-flash': {} },
+          },
+        },
       );
     });
 

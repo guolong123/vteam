@@ -16,16 +16,28 @@ import { PrismaService } from '../prisma/prisma.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
 import { WorkerClient } from '../workers/worker.client';
 import { WorkersService } from '../workers/workers.service';
-import { MODEL_ERRORS, MODEL_PROVIDER_TYPES } from './models.constants';
+import {
+  MODEL_ERRORS,
+  MODEL_MODALITIES,
+  MODEL_PROVIDER_TYPES,
+  ModelCapabilities,
+  ModelModality,
+  ModelProviderConfigEntry,
+  ProviderModelEntry,
+} from './models.constants';
 import { CreateModelDto } from './dto/create-model.dto';
 import { QueryModelsDto } from './dto/query-models.dto';
 import { UpdateModelDto } from './dto/update-model.dto';
+import { UpdateProviderDto } from './dto/update-provider.dto';
 
 /** 模型目录域主键前缀（C1：`md_<零填充序号>`，如 md_0000000001）。 */
 const MODEL_ID_PREFIX = 'md';
 
 /** 模型凭据域主键前缀（15 篇 §2.2：`mc_<零填充序号>`，如 mc_0000000001）。 */
 const MODEL_CREDENTIAL_ID_PREFIX = 'mc';
+
+/** C8：端点探测超时 ms（local/custom 端点常在容器网络内，短超时避免拖慢表单）。 */
+const PROBE_TIMEOUT_MS = 6000;
 
 /** 凭据对外视图（脱敏：绝不携带 credentialRef 明文，17 篇 §3.4 明文零接触）。 */
 export interface ModelCredentialView {
@@ -244,7 +256,7 @@ export class ModelsService implements OnModuleInit {
     const effectiveProviderType = providerType ?? 'cloud';
     const baseUrl = this.normalizeBaseUrl(dto.baseUrl, effectiveProviderType);
     await this.assertBaseUrlConsistent(dto.providerID.trim(), baseUrl);
-    return this.prisma.model.create({
+    const row = await this.prisma.model.create({
       data: {
         id: await this.idGen.nextId(MODEL_ID_PREFIX),
         providerID: dto.providerID.trim(),
@@ -256,6 +268,30 @@ export class ModelsService implements OnModuleInit {
         ...(baseUrl ? { baseUrl } : {}),
       },
     });
+    // C6：带 baseUrl 的新模型且该 provider 已有活跃凭据 → 下发全量配置
+    // （models map 立即含新模型，worker 重启后生效）；尚无凭据时不下发
+    // （worker 无 key 该 provider 本不可用，首次配凭据的下发自然携带配置）
+    if (baseUrl) {
+      await this.maybeDispatchAfterShapeChange(dto.providerID.trim());
+    }
+    return row;
+  }
+
+  /**
+   * C6：provider 形态变化（create/update 的 providerID/modelID/providerType/
+   * baseUrl）后的下发门控——仅当该 provider 存在未吊销凭据时下发全量状态
+   * （避免无凭据 provider 的无谓广播；首次配凭据的下发自然携带最新配置）。
+   */
+  private async maybeDispatchAfterShapeChange(
+    providerID: string,
+  ): Promise<void> {
+    const credential = await this.prisma.modelCredential.findUnique({
+      where: { providerID },
+      select: { revokedAt: true },
+    });
+    if (credential && credential.revokedAt === null) {
+      await this.dispatchCredentialState();
+    }
   }
 
   /**
@@ -307,7 +343,7 @@ export class ModelsService implements OnModuleInit {
       );
     }
 
-    return this.prisma.model.update({
+    const row = await this.prisma.model.update({
       where: { id },
       data: {
         ...(dto.providerID !== undefined
@@ -325,6 +361,122 @@ export class ModelsService implements OnModuleInit {
         ...(dto.baseUrl !== undefined ? { baseUrl: effectiveBaseUrl } : {}),
       },
     });
+    // C6/C8：provider 形态字段（providerID/modelID/providerType/baseUrl）或
+    // per-model 能力（capabilities）变化 → 门控下发
+    // （见 maybeDispatchAfterShapeChange；baseUrl 改错路径、上下文长度等配置在此收敛）
+    const shapeChanged =
+      dto.providerID !== undefined ||
+      dto.modelID !== undefined ||
+      dto.providerType !== undefined ||
+      dto.baseUrl !== undefined ||
+      dto.capabilities !== undefined;
+    if (shapeChanged && effectiveBaseUrl) {
+      await this.maybeDispatchAfterShapeChange(effectiveProvider);
+    }
+    return row;
+  }
+
+  /**
+   * C8：探测 OpenAI 兼容端点的模型元数据（自动预填上下文长度）。
+   * `GET {baseUrl}/models` 的 vLLM 扩展字段 `max_model_len` 即上下文窗口 token 数
+   * （实测 192.168.10.10:18020/v1 → qwen3.8-27b max_model_len=262144，与手写
+   * `limit.context` 一致），OpenAI 官方端点无此字段 → 返回空列表（前端不预填）。
+   * 为什么放 server 而非 worker：server 直接可达（实测 163ms），同步返回即可，
+   * 免去命令往返与等待；探测失败不抛错——返回空结果，由前端提示手填。
+   */
+  async probeEndpoint(
+    baseUrl: string,
+  ): Promise<{ models: { id: string; context?: number }[] }> {
+    const root = baseUrl.trim().replace(/\/+$/, '');
+    try {
+      const res = await fetch(`${root}/models`, {
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const body = (await res.json()) as {
+        data?: { id?: unknown; max_model_len?: unknown }[];
+      };
+      const models: { id: string; context?: number }[] = [];
+      for (const m of body.data ?? []) {
+        const id = typeof m.id === 'string' ? m.id.trim() : '';
+        if (!id) continue;
+        const context = Number(m.max_model_len);
+        models.push(
+          Number.isFinite(context) && context > 0 ? { id, context } : { id },
+        );
+      }
+      return { models };
+    } catch (err) {
+      this.logger.warn(
+        `端点探测失败（${root}/models）: ${(err as Error).message}`,
+      );
+      return { models: [] };
+    }
+  }
+
+  /**
+   * PATCH /models/providers/:providerID：Provider 级配置更新（C7）。
+   *
+   * 为何需要 provider 级端点（逐行 PATCH /models/:id 走不通）：
+   * - assertBaseUrlConsistent 只放行「与其余行相同」的值——把 A、B 两行从 /v1 改到 /v2 时，
+   *   先 PATCH 任一行必然撞上另一行残留的 /v1 → 409（批量顺序更新无解）；
+   * - UpdateModelDto.baseUrl 挂 @Matches(/^https?:\/\/.+/) 且 @IsOptional 只跳过
+   *   undefined/null，空串直接 400 —— 清空 baseUrl 无路径。
+   * 本方法用单条 updateMany 原子重写该 provider 全部模型行（消掉中间态冲突窗口），
+   * 且 baseUrl 按「生效后的类型」归一化：local/custom 必填 http(s)、cloud 可空（null=清空）。
+   *
+   * C6：该 provider 有活跃（未吊销）凭据才全量下发——worker 据此重写 opencode.json
+   * provider 段（baseUrl 配错在此收敛）；内容不变时 worker 侧幂等跳过（不重启）。
+   */
+  async updateProvider(
+    providerID: string,
+    dto: UpdateProviderDto,
+  ): Promise<ProviderSummary> {
+    if (dto.providerType === undefined && dto.baseUrl === undefined) {
+      throw new BadRequestException({
+        code: 'MODEL_PROVIDER_UPDATE_EMPTY',
+        message: 'providerType 与 baseUrl 至少需提供一项',
+      });
+    }
+    const rows = await this.prisma.model.findMany({
+      where: { providerID },
+      select: { providerType: true, baseUrl: true },
+    });
+    if (rows.length === 0) {
+      throw new NotFoundException({
+        code: MODEL_ERRORS.MODEL_NOT_FOUND,
+        message: `provider ${providerID} 不存在`,
+      });
+    }
+    const effectiveType =
+      dto.providerType !== undefined
+        ? this.normalizeProviderType(dto.providerType)
+        : (rows[0].providerType ?? 'cloud');
+    const rawBaseUrl =
+      dto.baseUrl !== undefined ? dto.baseUrl : (rows[0].baseUrl ?? null);
+    const effectiveBaseUrl = this.normalizeBaseUrl(
+      rawBaseUrl ?? undefined,
+      effectiveType,
+    );
+    await this.prisma.model.updateMany({
+      where: { providerID },
+      data: { providerType: effectiveType, baseUrl: effectiveBaseUrl },
+    });
+    await this.maybeDispatchAfterShapeChange(providerID);
+    const summary = await this.listProviders();
+    return (
+      summary.find((p) => p.providerID === providerID) ?? {
+        providerID,
+        modelCount: 0,
+        configured: false,
+        fingerprint: null,
+        revokedAt: null,
+        providerType: effectiveType,
+        baseUrl: effectiveBaseUrl,
+      }
+    );
   }
 
   /**
@@ -337,12 +489,23 @@ export class ModelsService implements OnModuleInit {
     if (!existing) {
       this.throwNotFound(id);
     }
-    return this.prisma.$transaction([
+    const hadBaseUrl = !!(
+      (existing as { baseUrl?: string | null }).baseUrl ?? ''
+    ).trim();
+    const result = await this.prisma.$transaction([
       this.prisma.workerModelAvailability.deleteMany({
         where: { modelId: id },
       }),
       this.prisma.model.delete({ where: { id } }),
     ]);
+    // C6：删除带 baseUrl 的模型 → 门控下发（该 provider 最后一个模型删除时
+    // provider 配置段随之消失）
+    if (hadBaseUrl) {
+      await this.maybeDispatchAfterShapeChange(
+        (existing as { providerID: string }).providerID,
+      );
+    }
+    return result;
   }
 
   /**
@@ -773,8 +936,9 @@ export class ModelsService implements OnModuleInit {
    * - body.providerID 可选：缺省取 model.providerID；显式提供时须与 model 一致
    *   （校验一致策略，冲突 → 400 MODEL_PROVIDER_MISMATCH，避免 GET 按 model.providerID 查不到）；
    * - 同 providerID 重复 POST → 覆盖更新（credentialRef/fingerprint 替换 + 清除 revokedAt）。
-   * - C5：保存成功后触发 worker 凭据下发（targetWorkerIds 非空定向 / 空全量）；
-   *   下发失败不阻断保存（凭据已加密落库，worker 注册/重注册回放可兜底）。
+   * - C5/C6：保存成功后触发 worker 凭据 + provider 配置全量下发（targetWorkerIds
+   *   非空定向 / 空全量）；下发失败不阻断保存（凭据已加密落库，worker
+   *   注册/重注册回放可兜底）。
    * 返回脱敏视图（无明文 token）。
    */
   async setCredential(
@@ -829,11 +993,7 @@ export class ModelsService implements OnModuleInit {
             },
           });
         }
-        await this.dispatchAfterSave(
-          modelProviderID,
-          placeholder,
-          targetWorkerIds,
-        );
+        await this.dispatchCredentialState(targetWorkerIds);
         await this.enableProviderModelsAfterCredential(
           modelProviderID,
           targetWorkerIds,
@@ -875,11 +1035,7 @@ export class ModelsService implements OnModuleInit {
         `模型凭据录入：model=${modelId} provider=${modelProviderID} fingerprint=${fingerprint}`,
       );
     }
-    await this.dispatchAfterSave(
-      modelProviderID,
-      trimmedToken,
-      targetWorkerIds,
-    );
+    await this.dispatchCredentialState(targetWorkerIds);
     await this.enableProviderModelsAfterCredential(
       modelProviderID,
       targetWorkerIds,
@@ -888,20 +1044,175 @@ export class ModelsService implements OnModuleInit {
     return this.toView(row);
   }
 
-  /** C5：凭据保存后触发下发（token 只经下行命令明文传输，本方法不落日志）。 */
-  private async dispatchAfterSave(
-    providerID: string,
-    token: string,
+  /**
+   * C6：baseUrl provider 的 opencode 配置全量状态（providerID → baseUrl + models）。
+   * 覆盖 local/custom 及带自定义 baseUrl 的 cloud provider——opencode 对 custom
+   * 端点只认 opencode.json 的 options.baseURL，不带配置则 provider 在 worker 侧
+   * 永远不可达（auth.json 只有 key 不建 provider）。
+   * - 同 provider 多个不一致 baseUrl → 保留首个并 warn（create/update 已按
+   *   MODEL_BASEURL_CONFLICT 拦截，此处为存量脏数据防御）；
+   * - 无模型行的 provider 不产出条目（opencode provider 无 models map 是死配置）；
+   * - 不按 enabled 过滤：opencode.json 只是引擎级注册，可用性由 server
+   *   availability/目录 enabled 门控，避免启停模型还要重新下发配置。
+   */
+  async getLocalProviderConfigs(): Promise<
+    Record<string, ModelProviderConfigEntry>
+  > {
+    const rows = (await this.prisma.model.findMany({
+      where: { baseUrl: { not: null } },
+      select: {
+        providerID: true,
+        modelID: true,
+        name: true,
+        baseUrl: true,
+        capabilities: true,
+      },
+    } as never)) as unknown as {
+      providerID: string;
+      modelID: string;
+      name: string;
+      baseUrl: string | null;
+      capabilities: unknown;
+    }[];
+    const map: Record<string, ModelProviderConfigEntry> = {};
+    for (const row of rows) {
+      const url = row.baseUrl?.trim();
+      if (!row.providerID || !url) {
+        continue;
+      }
+      let entry = map[row.providerID];
+      if (!entry) {
+        entry = { baseUrl: url, models: {} };
+        map[row.providerID] = entry;
+      } else if (entry.baseUrl !== url) {
+        this.logger.warn(
+          `模型 baseUrl 冲突（保留首个 ${entry.baseUrl}，忽略 ${url}）: provider=${row.providerID}`,
+        );
+      }
+      if (!entry.models[row.modelID]) {
+        entry.models[row.modelID] = this.toProviderModelEntry(row);
+      }
+    }
+    return Object.fromEntries(
+      Object.entries(map).filter(([, e]) => Object.keys(e.models).length > 0),
+    );
+  }
+
+  /**
+   * C8：DB 行 → 下发条目的单模型项（只带实际生效的键）。
+   * capabilities 为历史遗留的任意 JSON——只挑白名单内的合法字段，
+   * 非法/未知键静默丢弃（worker 侧还会再兜一层归一化）。
+   */
+  private toProviderModelEntry(row: {
+    modelID: string;
+    name: string;
+    capabilities: unknown;
+  }): ProviderModelEntry {
+    const entry: ProviderModelEntry = {};
+    const displayName = row.name?.trim();
+    if (displayName && displayName !== row.modelID) {
+      entry.name = displayName;
+    }
+    const caps = this.readModelCapabilities(row.capabilities);
+    return caps ? { ...entry, capabilities: caps } : entry;
+  }
+
+  /**
+   * C8：从 Model.capabilities Json 提取受支持的能力字段（白名单过滤）。
+   * 全部字段均非法/缺失 → 返回 undefined（调用方据此省略 capabilities 键）。
+   */
+  private readModelCapabilities(raw: unknown): ModelCapabilities | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+    const src = raw as Record<string, unknown>;
+    const caps: ModelCapabilities = {};
+    const limit = src.limit as
+      { context?: unknown; output?: unknown } | undefined;
+    const context = Number(limit?.context);
+    const output = Number(limit?.output);
+    if (
+      limit &&
+      Number.isFinite(context) &&
+      context > 0 &&
+      Number.isFinite(output) &&
+      output > 0
+    ) {
+      caps.limit = { context, output };
+    }
+    for (const key of [
+      'reasoning',
+      'toolCall',
+      'temperature',
+      'attachment',
+    ] as const) {
+      if (typeof src[key] === 'boolean') {
+        caps[key] = src[key] as boolean;
+      }
+    }
+    const modalities = src.modalities as
+      { input?: unknown; output?: unknown } | undefined;
+    if (modalities && typeof modalities === 'object') {
+      const picked: { input?: ModelModality[]; output?: ModelModality[] } = {};
+      for (const dir of ['input', 'output'] as const) {
+        const list = modalities[dir];
+        if (!Array.isArray(list)) continue;
+        const valid = list.filter(
+          (m): m is ModelModality =>
+            typeof m === 'string' &&
+            (MODEL_MODALITIES as readonly string[]).includes(m),
+        );
+        if (valid.length > 0) picked[dir] = valid;
+      }
+      if (picked.input || picked.output) caps.modalities = picked;
+    }
+    const options = src.options;
+    if (
+      options &&
+      typeof options === 'object' &&
+      !Array.isArray(options) &&
+      Object.keys(options).length > 0
+    ) {
+      caps.options = options as Record<string, unknown>;
+    }
+    return Object.keys(caps).length > 0 ? caps : undefined;
+  }
+
+  /**
+   * C5/C6：凭据 + provider 配置的全量状态下发（唯一触发面）。
+   * - 凭据：全部未吊销 credentialRef 解密为 providerKeys（**全量**而非单条——
+   *   worker 按负载整体重写 auth.json，单条下发会抹掉其他 provider 的 key）；
+   * - 配置：getLocalProviderConfigs() 全量 providerConfigs（undefined 仅在
+   *   查询失败时省略 = 不触碰配置）。
+   * token 只经下行命令明文传输，本方法不落日志；失败只 warn 不阻断
+   * （凭据已落库，worker 注册回放兜底收敛）。
+   */
+  private async dispatchCredentialState(
     targetWorkerIds?: string[],
   ): Promise<void> {
     try {
+      const active = await this.prisma.modelCredential.findMany({
+        where: { revokedAt: null },
+        select: { providerID: true, credentialRef: true },
+      });
+      const providerKeys = active.map((row) => ({
+        providerID: row.providerID,
+        key: this.crypto.decrypt(row.credentialRef),
+      }));
+      let providerConfigs: Record<string, ModelProviderConfigEntry> | undefined;
+      try {
+        providerConfigs = await this.getLocalProviderConfigs();
+      } catch (err) {
+        this.logger.warn(
+          `模型 provider 配置查询失败（下发降级为仅凭据）: ${(err as Error).message}`,
+        );
+      }
       await this.workers.dispatchModelCredentials(
-        [{ providerID, key: token }],
+        providerKeys,
         targetWorkerIds,
+        providerConfigs,
       );
     } catch (err) {
       this.logger.warn(
-        `模型凭据下发失败（凭据已落库，worker 注册回放兜底）: provider=${providerID} ${(err as Error).message}`,
+        `模型凭据全量下发失败（worker 注册回放兜底）: ${(err as Error).message}`,
       );
     }
   }
@@ -1004,6 +1315,8 @@ export class ModelsService implements OnModuleInit {
     this.logger.log(
       `模型凭据吊销：model=${modelId} provider=${providerID} fingerprint=${row.fingerprint}`,
     );
+    // C6：吊销后即刻全量下发（worker 移除 auth.json 条目；配置段按目录现状重算）
+    await this.dispatchCredentialState();
     await this.resyncAfterCredentialChange();
     return this.toView(row);
   }
@@ -1033,6 +1346,8 @@ export class ModelsService implements OnModuleInit {
     this.logger.log(
       `模型凭据吊销（provider 粒度）：provider=${providerID} fingerprint=${row.fingerprint}`,
     );
+    // C6：同 revokeCredential——吊销后即刻全量下发收敛 worker 侧
+    await this.dispatchCredentialState();
     await this.resyncAfterCredentialChange();
     return this.toView(row);
   }
