@@ -371,4 +371,17 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expectNavShell(page);
     await expect(page.getByTestId("models-manage-root")).toBeVisible();
   });
+
+  test("/system 落地页重定向到第一个子导航（不再空转占位页）", async ({ page }) => {
+    await page.goto("/system");
+    // 落地页服务端 redirect 到 SYSTEM_NAV_ITEMS 第一项（触发器）
+    await expect(page).toHaveURL(/\/system\/triggers$/);
+    await expectNavShell(page);
+    await expect(page.getByTestId("system-sidebar")).toBeVisible();
+    // 子页真实渲染（非占位"即将上线"）
+    await expect(page.getByTestId("triggers-list")).toBeVisible();
+    // 侧栏激活项与落点一致，面包屑同步
+    await expect(page.getByTestId("system-sidebar-item").first()).toHaveAttribute("data-active", "true");
+    await expect(page.getByTestId("system-breadcrumb-current")).toHaveText("触发器");
+  });
 });

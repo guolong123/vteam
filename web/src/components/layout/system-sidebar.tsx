@@ -16,6 +16,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import type { CSSProperties } from "react";
 import { neutral, surface, border, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
+import { SYSTEM_NAV_ITEMS, type SystemNavItem } from "@/src/lib/system-nav";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -30,22 +31,9 @@ export const SYSTEM_SIDEBAR_WIDTH = 208;
 /** 窄屏断点：低于 1024px 侧栏收起为顶部横向 pill 行 */
 const COLLAPSE_MAX = 1023;
 
-export interface SystemNavItem {
-  key: string;
-  label: string;
-  href: string;
-  icon: string;
-}
+export type { SystemNavItem };
 
-/** /system 二级导航（顺序固定；平台配置已明确延期，不设占位项） */
-export const SYSTEM_NAV_ITEMS: SystemNavItem[] = [
-  { key: "triggers", label: "触发器", href: "/system/triggers", icon: "◷" },
-  { key: "users", label: "用户管理", href: "/system/users", icon: "○" },
-  { key: "roles", label: "角色权限", href: "/system/roles", icon: "⬡" },
-  { key: "memories", label: "记忆管理", href: "/system/memories", icon: "◈" },
-];
-
-/** 由 pathname 派生激活项 key（/system 本体无子段时返回 ""，即无激活项） */
+/** 由 pathname 派生激活项 key（未知/无子段路径返回 ""，即无激活项） */
 export function systemActiveKey(pathname: string): string {
   const hit = SYSTEM_NAV_ITEMS.find(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`),

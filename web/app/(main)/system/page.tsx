@@ -1,59 +1,19 @@
-"use client";
-
 /**
- * 系统管理落地页（trigger-unification Todo 14：薄占位）
+ * /system 落地页 → 第一个二级导航项（trigger-unification Todo 14 占位的收尾）
  * =============================================
- * Dock「系统管理」（system，/system）的导航目标；users / roles / memories
- * 收敛进本节，子导航壳（Todo 15）与子页面（Todo 16/17）后续在此挂载。
- * 本页仅渲染标题 + 占位说明，不建 sidebar、不搬迁旧页面。
- * - 铁律（T15）：无 fixed / 100vh / 100vw；root flex:1 铺满（AppShell 提供导航）。
+ * Dock「系统管理」/ Cmd+K 的导航目标都是 `/system` 本体。Todo 14 时子页面尚未
+ * 上线，这里放的是「子导航即将上线」薄占位；Todo 16/17 交付后子页已可用，占位页
+ * 就成了一进就空转的死页（文案也过期：只列用户/角色/记忆，漏了触发器）。
+ *
+ * 现改为服务端重定向到 SYSTEM_NAV_ITEMS 的**第一项**（触发器），与侧栏顺序同源
+ * （system-nav.ts），避免两处各自硬编码导致调整顺序后落点漂移。
+ * 同 `/users` → `/system/users`、`/roles` → `/system/roles` 的既有兼容模式。
+ *
+ * 直接落在子页而非渲染占位页，用户点「系统管理」即见真实内容，无中间空页。
  */
-import { neutral, space, fontSize, fontFamily } from "@/src/theme/tokens";
+import { redirect } from "next/navigation";
+import { SYSTEM_DEFAULT_HREF } from "@/src/lib/system-nav";
 
 export default function SystemPage() {
-  return (
-    <div
-      data-testid="system-manage-root"
-      style={{
-        flex: 1,
-        minHeight: 0,
-        position: "relative",
-        display: "flex",
-        flexDirection: "column",
-        backgroundColor: neutral[50],
-        fontFamily: fontFamily.body,
-        overflow: "auto",
-        padding: `${space.xl}px ${space.xxl}px`,
-      }}
-    >
-      <div
-        style={{
-          maxWidth: 1080,
-          margin: "0 auto",
-          width: "100%",
-          display: "flex",
-          flexDirection: "column",
-          gap: space.md,
-        }}
-      >
-        <h1
-          data-testid="system-manage-title"
-          style={{
-            fontSize: fontSize.xxl,
-            fontWeight: 700,
-            color: neutral[900],
-            margin: 0,
-          }}
-        >
-          系统管理
-        </h1>
-        <p
-          data-testid="system-manage-hint"
-          style={{ fontSize: fontSize.md, color: neutral[500], margin: 0 }}
-        >
-          平台管理 · 用户账号 · 角色权限 · Agent 记忆（子导航即将上线）
-        </p>
-      </div>
-    </div>
-  );
+  redirect(SYSTEM_DEFAULT_HREF ?? "/system/triggers");
 }
