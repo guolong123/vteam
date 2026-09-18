@@ -11,7 +11,10 @@ import {
 } from './git/git-credential-injector';
 import { WorkerCommand } from './protocol/worker-protocol';
 import { InjectReport } from './resources/injector';
-import { buildAuthJson } from './credentials/model-credential-injector';
+import {
+  buildAuthJson,
+  DEFAULT_OPENCODE_CONFIG_PATH,
+} from './credentials/model-credential-injector';
 import {
   buildCapabilities,
   buildRegisterOptions,
@@ -520,32 +523,66 @@ describe('T4a 命令分派（onCommands + dispatchCommands）', () => {
   });
 });
 
-describe('handleModelCredentials（F3 防循环：auth.json 内容幂等）', () => {
+describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json 双文件幂等）', () => {
   const KEY = [{ providerID: 'opencode-go', key: 'sk-secret' }];
 
   function makeDeps() {
     return {
-      readContent: jest.fn<Promise<string | null>, [string]>(),
+      readContent: jest.fn<Promise<string | null>, [string]>().mockResolvedValue(null),
       writeAuthJson: jest.fn().mockReturnValue({
         authJsonPath: DEFAULT_AUTH_JSON_PATH,
       }),
       cleanupAuthJson: jest.fn(),
+      readConfig: jest.fn<Promise<string | null>, [string]>().mockResolvedValue(null),
+      writeOpencodeConfig: jest
+        .fn()
+        .mockReturnValue({ changed: false, path: DEFAULT_OPENCODE_CONFIG_PATH }),
       requestRestart: jest.fn().mockResolvedValue('executed'),
       log: jest.fn(),
       warn: jest.fn(),
     };
   }
 
-  it('现有 auth.json 内容与新内容相同 → 不写盘、不重启 serve（切断回放循环）', async () => {
+  it('auth.json 与 opencode.json 均未变化 → 不写盘、不重启 serve（切断回放循环）', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson(KEY));
+    // 现有 config 已含相同 provider 段 → merge 结果与现有内容一致
+    // （必须与 mergeProviderSection 的 JSON.stringify(base, null, 2) 字节一致才判未变化）
+    deps.readConfig.mockResolvedValue(
+      JSON.stringify(
+        {
+          provider: {
+            'my-local': {
+              npm: '@ai-sdk/openai-compatible',
+              name: 'my-local',
+              options: { baseURL: 'http://127.0.0.1:11434/v1' },
+              models: { 'qwen:latest': {} },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
 
-    const result = await handleModelCredentials(KEY, DEFAULT_AUTH_JSON_PATH, deps);
+    const result = await handleModelCredentials(
+      KEY,
+      {
+        'my-local': {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          models: ['qwen:latest'],
+        },
+      },
+      DEFAULT_AUTH_JSON_PATH,
+      DEFAULT_OPENCODE_CONFIG_PATH,
+      deps,
+    );
 
     expect(deps.writeAuthJson).not.toHaveBeenCalled();
-    expect(deps.cleanupAuthJson).not.toHaveBeenCalled();
+    expect(deps.writeOpencodeConfig).not.toHaveBeenCalled();
     expect(deps.requestRestart).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
+    expect(result.configChanged).toBe(false);
     expect(deps.log).toHaveBeenCalledWith(
       expect.stringContaining('凭据未变化，跳过注入与重启'),
     );
@@ -557,10 +594,17 @@ describe('handleModelCredentials（F3 防循环：auth.json 内容幂等）', ()
       buildAuthJson([{ providerID: 'opencode-go', key: 'sk-old-secret' }]),
     );
 
-    const result = await handleModelCredentials(KEY, DEFAULT_AUTH_JSON_PATH, deps);
+    const result = await handleModelCredentials(
+      KEY,
+      undefined,
+      DEFAULT_AUTH_JSON_PATH,
+      DEFAULT_OPENCODE_CONFIG_PATH,
+      deps,
+    );
 
     expect(deps.writeAuthJson).toHaveBeenCalledWith(KEY);
     expect(deps.cleanupAuthJson).toHaveBeenCalledWith(DEFAULT_AUTH_JSON_PATH);
+    expect(deps.writeOpencodeConfig).not.toHaveBeenCalled();
     expect(deps.requestRestart).toHaveBeenCalledWith(
       expect.stringContaining('model-credentials'),
     );
@@ -569,9 +613,14 @@ describe('handleModelCredentials（F3 防循环：auth.json 内容幂等）', ()
 
   it('无现有 auth.json（容器重启后）→ 写盘 + 重启 serve（恢复路径，不清理）', async () => {
     const deps = makeDeps();
-    deps.readContent.mockResolvedValue(null);
 
-    const result = await handleModelCredentials(KEY, null, deps);
+    const result = await handleModelCredentials(
+      KEY,
+      undefined,
+      null,
+      null,
+      deps,
+    );
 
     expect(deps.writeAuthJson).toHaveBeenCalledWith(KEY);
     expect(deps.cleanupAuthJson).not.toHaveBeenCalled();
@@ -580,6 +629,97 @@ describe('handleModelCredentials（F3 防循环：auth.json 内容幂等）', ()
     );
     expect(result.changed).toBe(true);
     expect(result.authJsonPath).toBe(DEFAULT_AUTH_JSON_PATH);
+  });
+
+  it('C6：providerConfigs 携带且 config 缺失 → 写 opencode.json + 重启（auth 同变只重启一次）', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(buildAuthJson([{ providerID: 'a', key: 'old' }]));
+
+    const result = await handleModelCredentials(
+      [{ providerID: 'a', key: 'new' }],
+      {
+        'my-local': { baseUrl: 'http://127.0.0.1:11434/v1', models: ['qwen:latest'] },
+      },
+      DEFAULT_AUTH_JSON_PATH,
+      null,
+      deps,
+    );
+
+    expect(deps.writeAuthJson).toHaveBeenCalledTimes(1);
+    expect(deps.writeOpencodeConfig).toHaveBeenCalledWith(
+      null,
+      {
+        'my-local': {
+          npm: '@ai-sdk/openai-compatible',
+          name: 'my-local',
+          options: { baseURL: 'http://127.0.0.1:11434/v1' },
+          models: { 'qwen:latest': {} },
+        },
+      },
+    );
+    expect(deps.requestRestart).toHaveBeenCalledTimes(1);
+    expect(result.changed).toBe(true);
+    expect(result.configPath).toBe(DEFAULT_OPENCODE_CONFIG_PATH);
+  });
+
+  it('C6：auth 未变、config 变化 → 只写 opencode.json + 重启', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(buildAuthJson(KEY));
+
+    const result = await handleModelCredentials(
+      KEY,
+      { 'my-local': { baseUrl: 'http://127.0.0.1:11434/v1', models: ['qwen:latest'] } },
+      DEFAULT_AUTH_JSON_PATH,
+      DEFAULT_OPENCODE_CONFIG_PATH,
+      deps,
+    );
+
+    expect(deps.writeAuthJson).not.toHaveBeenCalled();
+    expect(deps.writeOpencodeConfig).toHaveBeenCalled();
+    expect(deps.requestRestart).toHaveBeenCalledTimes(1);
+    expect(result.changed).toBe(true);
+    expect(result.configChanged).toBe(true);
+  });
+
+  it('C6：providerConfigs 为空对象 → 删除现有 provider 段（清空）+ 重启', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(buildAuthJson(KEY));
+    deps.readConfig.mockResolvedValue(
+      JSON.stringify({
+        mcp: { x: {} },
+        provider: { 'old-local': { npm: 'n', options: { baseURL: 'http://x' } } },
+      }),
+    );
+
+    const result = await handleModelCredentials(
+      KEY,
+      {},
+      DEFAULT_AUTH_JSON_PATH,
+      DEFAULT_OPENCODE_CONFIG_PATH,
+      deps,
+    );
+
+    expect(deps.writeOpencodeConfig).toHaveBeenCalledWith(
+      expect.stringContaining('"provider"'),
+      {},
+    );
+    expect(deps.requestRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it('C6：providerConfigs=undefined（旧 server 负载）→ 不触碰 opencode.json', async () => {
+    const deps = makeDeps();
+    deps.readConfig.mockResolvedValue(JSON.stringify({ mcp: { x: {} } }));
+
+    const result = await handleModelCredentials(
+      KEY,
+      undefined,
+      DEFAULT_AUTH_JSON_PATH,
+      null,
+      deps,
+    );
+
+    expect(deps.writeOpencodeConfig).not.toHaveBeenCalled();
+    expect(result.configPath).toBe(DEFAULT_OPENCODE_CONFIG_PATH);
   });
 });
 

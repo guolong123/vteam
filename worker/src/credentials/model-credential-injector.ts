@@ -1,5 +1,7 @@
 /**
  * C5b：模型凭据 auth.json 注入器（opencode 1.18.16 实测路径结论写死于此）。
+ * C6：同文件兼管 opencode.json 的 `provider` 段（baseUrl provider 配置注入，
+ * 实测结论见 buildProviderSection/mergeProviderSection）。
  *
  * 注入通道：worker 直接写 `$HOME/.local/share/opencode/auth.json`（600 权限）。
  * opencode 1.18.16 实测凭据**固定**读该路径（`opencode auth list` 只认
@@ -11,6 +13,8 @@
  * token 为明文写入（权限 600 是唯一防线），退出/下次写入前 cleanup 删除文件
  * （明文 key 零留存；只删 auth.json 文件，不删 $HOME/.local/share/opencode 目录
  * —— 内含 opencode.db 会话库）。
+ * opencode.json 不含明文凭据（仅 baseUrl + 模型 id 列表），故 worker 退出**不**
+ * 删除它——serve 重启后可直接读取，无需等回放。
  */
 
 import * as fs from 'fs';
@@ -50,56 +54,241 @@ export function buildAuthJson(providerKeys: ModelCredentialEntry[]): string {
   return JSON.stringify(map, null, 2);
 }
 
-export function ensureLocalProviderKeys(providerKeys: ModelCredentialEntry[], localProviderIds: string[]): ModelCredentialEntry[] {
-  const existing = new Set((providerKeys ?? []).map((e) => e?.providerID?.trim()).filter(Boolean));
-  const extra: ModelCredentialEntry[] = [];
-  for (const pid of localProviderIds ?? []) {
-    const id = pid?.trim();
-    if (id && !existing.has(id)) {
-      extra.push({ providerID: id, key: 'dummy-local-key' });
-    }
-  }
-  return [...(providerKeys ?? []), ...extra];
+/** C8：per-model 能力声明（对齐 protocol/worker-protocol.ts 双写类型，内部 camelCase）。 */
+export interface ModelCapabilities {
+  limit?: { context?: number; output?: number };
+  reasoning?: boolean;
+  toolCall?: boolean;
+  temperature?: boolean;
+  attachment?: boolean;
+  modalities?: { input?: string[]; output?: string[] };
+  options?: Record<string, unknown>;
 }
 
-export function buildOpencodeConfig(providerBaseUrls: Map<string, string>): string {
-  const providers: Record<string, { baseUrl: string }> = {};
-  for (const [pid, url] of providerBaseUrls.entries()) {
-    const id = pid?.trim();
-    const u = url?.trim();
-    if (id && u && /^https?:\/\/.+/.test(u)) {
-      if (providers[id] && providers[id].baseUrl !== u) {
-        console.warn(`[model-credential-injector] provider ${id} 多 baseUrl 不一致，保留首个 ${providers[id].baseUrl} 忽略 ${u}`);
-        continue;
+/** provider 配置条目内的单模型项。 */
+export interface ProviderModelEntry {
+  name?: string;
+  capabilities?: ModelCapabilities;
+}
+
+/** C6/C8：baseUrl provider 配置条目（对齐 protocol/worker-protocol.ts 双写类型）。 */
+export interface ModelProviderConfigEntry {
+  baseUrl: string;
+  /** 双形状兼容：旧 server 下发 string[]，C8 起为 Record<modelID, ProviderModelEntry> */
+  models: string[] | Record<string, ProviderModelEntry>;
+}
+
+/**
+ * C6：custom provider 唯一 npm SDK（opencode 1.18.31 实测：openai-compatible
+ * 随 opencode 内置解析，无需 worker 容器预装 node_modules）。
+ */
+export const OPENAI_COMPATIBLE_NPM = '@ai-sdk/openai-compatible';
+
+/**
+ * C6：opencode.json 固定写入路径（$HOME/.config/opencode/ 全局配置层，600 权限）。
+ * 工作目录（/data/vteam-worker）的 opencode.json 归资源注入器管（mcp/agent/plugin），
+ * 两文件 key 不相交，provider 段写全局层避免互踩。
+ */
+export const DEFAULT_OPENCODE_CONFIG_PATH = path.join(
+  os.homedir(),
+  '.config',
+  'opencode',
+  'opencode.json',
+);
+
+/** opencode modalities 合法枚举（v1.18.31 schema）。 */
+const MODALITY_ENUM = ['text', 'audio', 'image', 'video', 'pdf'];
+
+/** 正整数归一（limit 用；非法/非正/非数 → undefined，避免写脏值破坏 serve 配置解析）。 */
+function toPositiveInt(raw: unknown): number | undefined {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined;
+  const n = Math.floor(raw);
+  return n > 0 ? n : undefined;
+}
+
+/** 归一 modalities（过滤非枚举值 + 去重；空数组视为未声明，避免把 text 也关掉）。 */
+function buildModalities(
+  raw: ModelCapabilities['modalities'],
+): { input?: string[]; output?: string[] } | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const pick = (list: unknown): string[] | undefined => {
+    if (!Array.isArray(list)) return undefined;
+    const seen: string[] = [];
+    for (const v of list) {
+      if (typeof v === 'string' && MODALITY_ENUM.includes(v) && !seen.includes(v)) {
+        seen.push(v);
       }
-      providers[id] = { baseUrl: u };
     }
-  }
-  return JSON.stringify({ providers }, null, 2);
+    return seen.length > 0 ? seen : undefined;
+  };
+  const input = pick(raw.input);
+  const output = pick(raw.output);
+  if (!input && !output) return undefined;
+  return { ...(input ? { input } : {}), ...(output ? { output } : {}) };
 }
 
-export function writeOpencodeConfig(providerBaseUrls: Map<string, string>): string {
-  const configDir = path.join(os.homedir(), '.config', 'opencode');
-  const configPath = path.join(configDir, 'opencode.json');
-  fs.mkdirSync(configDir, { recursive: true });
-  const content = buildOpencodeConfig(providerBaseUrls);
-  const existing = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null;
-  if (existing) {
+/**
+ * C8：per-model 能力翻译（内部 camelCase → opencode 配置 snake_case 形状）。
+ * 只输出实际生效的键——opencode 模型对象 schema 是 additionalProperties:false，
+ * 且 `limit` 声明了 required:[context,output]：
+ * - 残缺 limit（只给一半）→ **整体丢弃并 warn**（写半截会触发配置解析 InvalidError，
+ *   风险是 serve 起不来，宁可少配不可写脏）；
+ * - 未提供的键一律不写（留空 = opencode 用默认值：reasoning/attachment/temperature=false、
+ *   tool_call=true、modalities 仅 text）。
+ */
+export function buildModelEntry(
+  entry: ProviderModelEntry | undefined,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const name = entry?.name?.trim();
+  if (name) out.name = name;
+  const caps = entry?.capabilities;
+  if (!caps) return out;
+  const context = toPositiveInt(caps.limit?.context);
+  const output = toPositiveInt(caps.limit?.output);
+  if (context && output) {
+    out.limit = { context, output };
+  } else if (context || output) {
+    console.warn(
+      `[model-credential-injector] limit 残缺已丢弃（opencode 要求 context+output 同时存在）: context=${String(caps.limit?.context)} output=${String(caps.limit?.output)}`,
+    );
+  }
+  if (typeof caps.reasoning === 'boolean') out.reasoning = caps.reasoning;
+  if (typeof caps.temperature === 'boolean') out.temperature = caps.temperature;
+  if (typeof caps.attachment === 'boolean') out.attachment = caps.attachment;
+  if (typeof caps.toolCall === 'boolean') out.tool_call = caps.toolCall;
+  const modalities = buildModalities(caps.modalities);
+  if (modalities) out.modalities = modalities;
+  if (
+    caps.options &&
+    typeof caps.options === 'object' &&
+    Object.keys(caps.options).length > 0
+  ) {
+    out.options = caps.options;
+  }
+  return out;
+}
+
+/** 归一 models 双形状（旧 server 的 string[] → 空配置项；新 server 的 Record 原样）。 */
+function normalizeProviderModels(
+  raw: string[] | Record<string, ProviderModelEntry> | undefined,
+): Record<string, ProviderModelEntry> {
+  if (Array.isArray(raw)) {
+    const out: Record<string, ProviderModelEntry> = {};
+    for (const item of raw) {
+      const modelID = typeof item === 'string' ? item.trim() : '';
+      if (modelID) out[modelID] = {};
+    }
+    return out;
+  }
+  return raw && typeof raw === 'object' ? raw : {};
+}
+
+/**
+ * C6：组装 opencode.json 的 `provider` 段（key 为单数，opencode 配置 schema 实测）。
+ * 实测结论（opencode 1.18.31）：custom provider 必须带 npm 包名 + 显式
+ * `models` map——不写 models map 时 provider 静默不出现在 `opencode models`
+ * （`{baseURL}/models` 不会被自动发现），故 models 必须来自 server 目录。
+ * `options.baseURL` 须为 OpenAI 兼容根（SDK 追加 /models、/chat/completions）。
+ * C8：每个模型项带 per-model 能力（limit/reasoning/modalities/options…）。
+ * 无效条目（空 providerID / 非 http(s) baseUrl / 无有效模型）跳过并 warn
+ * （防脏负载破坏 serve 配置解析导致 serve 起不来）。
+ */
+export function buildProviderSection(
+  providerConfigs: Record<string, ModelProviderConfigEntry> | undefined,
+): Record<string, unknown> {
+  const section: Record<string, unknown> = {};
+  for (const [rawId, cfg] of Object.entries(providerConfigs ?? {})) {
+    const providerID = rawId?.trim();
+    const baseUrl = cfg?.baseUrl?.trim();
+    const models: Record<string, unknown> = {};
+    for (const [rawModel, entry] of Object.entries(
+      normalizeProviderModels(cfg?.models),
+    )) {
+      const modelID = rawModel?.trim();
+      if (modelID) {
+        models[modelID] = buildModelEntry(entry);
+      }
+    }
+    if (
+      !providerID ||
+      !baseUrl ||
+      !/^https?:\/\/.+/.test(baseUrl) ||
+      Object.keys(models).length === 0
+    ) {
+      console.warn(
+        `[model-credential-injector] opencode provider 配置无效跳过: provider=${providerID ?? '(空)'} baseUrl=${baseUrl ?? '(空)'} models=${Object.keys(models).length}`,
+      );
+      continue;
+    }
+    section[providerID] = {
+      npm: OPENAI_COMPATIBLE_NPM,
+      name: providerID,
+      options: { baseURL: baseUrl },
+      models,
+    };
+  }
+  return section;
+}
+
+/**
+ * C6：把 provider 段并入现有 opencode.json 内容（纯函数，幂等对比用）。
+ * 全局配置文件含安装器/注入器维护的 mcp/agent/plugin 等 key，只允许整体替换
+ * `provider` 段，其余 key 原样保留。
+ * - section=undefined → 原样返回（负载缺失，不触碰文件）；
+ * - section={} → 删除 provider key（清空全部）；
+ * - existingRaw=null 且 section 空 → 返回 null（无文件也不创建空文件）；
+ * - existingRaw 解析失败 → 重建（warn，旧内容丢弃）。
+ */
+export function mergeProviderSection(
+  existingRaw: string | null,
+  section: Record<string, unknown> | undefined,
+): string | null {
+  if (section === undefined) {
+    return existingRaw;
+  }
+  if (existingRaw === null && Object.keys(section).length === 0) {
+    return null;
+  }
+  let base: Record<string, unknown> = {};
+  if (existingRaw) {
     try {
-      const parsed = JSON.parse(existing);
-      const merged = { ...parsed, providers: { ...(parsed.providers ?? {}), ...JSON.parse(content).providers } };
-      fs.writeFileSync(configPath, JSON.stringify(merged, null, 2), { mode: AUTH_FILE_MODE });
-      fs.chmodSync(configPath, AUTH_FILE_MODE);
-      return configPath;
+      const parsed: unknown = JSON.parse(existingRaw);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        base = parsed as Record<string, unknown>;
+      }
     } catch {
-      fs.writeFileSync(configPath, content, { mode: AUTH_FILE_MODE });
-      fs.chmodSync(configPath, AUTH_FILE_MODE);
-      return configPath;
+      console.warn(
+        '[model-credential-injector] 现有 opencode.json 解析失败，重建（旧内容丢弃）',
+      );
     }
   }
-  fs.writeFileSync(configPath, content, { mode: AUTH_FILE_MODE });
+  if (Object.keys(section).length === 0) {
+    delete base['provider'];
+  } else {
+    base['provider'] = section;
+  }
+  return JSON.stringify(base, null, 2);
+}
+
+/**
+ * C6：写 opencode.json（600，仿 writeAuthJson 双保险 chmod）。
+ * 幂等：内容与现有相同 → 跳过写盘（mtime 不变，配合 F3 防循环）。
+ */
+export function writeOpencodeConfig(
+  existingRaw: string | null,
+  section: Record<string, unknown> | undefined,
+): { changed: boolean; path: string } {
+  const configPath = DEFAULT_OPENCODE_CONFIG_PATH;
+  const newContent = mergeProviderSection(existingRaw, section);
+  if (newContent === null || newContent === existingRaw) {
+    return { changed: false, path: configPath };
+  }
+  const configDir = path.dirname(configPath);
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(configPath, newContent, { mode: AUTH_FILE_MODE });
   fs.chmodSync(configPath, AUTH_FILE_MODE);
-  return configPath;
+  return { changed: true, path: configPath };
 }
 
 /**

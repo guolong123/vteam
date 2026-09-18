@@ -40,6 +40,7 @@ import { McpStatusProbe } from './mcp-status/mcp-status-probe';
 import {
   GitCredentialsPayload,
   ModelCredentialsPayload,
+  ModelProviderConfigEntry,
   WorkerCapabilities,
   WorkerCommand,
   WorkerCommandType,
@@ -59,9 +60,13 @@ import {
 import {
   AuthJsonResult,
   buildAuthJson,
+  buildProviderSection,
   cleanupAuthJson,
+  DEFAULT_OPENCODE_CONFIG_PATH,
+  mergeProviderSection,
   ModelCredentialEntry,
   writeAuthJson,
+  writeOpencodeConfig,
 } from './credentials/model-credential-injector';
 
 /** 无注入时的空报告（buildCapabilities/buildRegisterOptions 默认值；main() 总会传入真实报告）。 */
@@ -111,12 +116,17 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
       );
     }
     if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
-      // C5：只打 providerID 清单（token 绝不进日志，安全基线）
+      // C5：只打 providerID 清单（token 绝不进日志，安全基线）；C6 附带
+      // providerConfigs 的 providerID 清单（baseUrl 非密，便于排查配置未生效）。
       const modelPayload = command.payload as ModelCredentialsPayload | undefined;
       const providerIDs =
         modelPayload?.providerKeys?.map((k) => k.providerID).join(', ') ?? '';
+      const cfgIDs =
+        modelPayload?.providerConfigs !== undefined
+          ? `，providerConfigs=[${Object.keys(modelPayload.providerConfigs).join(', ')}]`
+          : '';
       console.log(
-        `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]），分派 auth.json 注入+重启`,
+        `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]${cfgIDs}），分派 auth.json/opencode.json 注入+重启`,
       );
     }
     if (command.type === WORKER_COMMAND_TYPES.GIT_CREDENTIALS) {
@@ -148,6 +158,13 @@ export interface ModelCredentialsHandlingDeps {
   readContent: (authJsonPath: string) => Promise<string | null>;
   writeAuthJson: (providerKeys: ModelCredentialEntry[]) => AuthJsonResult;
   cleanupAuthJson: (authJsonPath: string) => void;
+  /** 读取 opencode.json 现有内容（C6，不存在/读取失败 → null）。 */
+  readConfig: (configPath: string) => Promise<string | null>;
+  /** C6：写 opencode.json（provider 段合并，600；内容未变跳过写盘）。 */
+  writeOpencodeConfig: (
+    existingRaw: string | null,
+    section: Record<string, unknown> | undefined,
+  ) => { changed: boolean; path: string };
   requestRestart: (reason: string) => Promise<RestartDecision>;
   log: (message: string) => void;
   warn: (message: string) => void;
@@ -163,41 +180,82 @@ export const DEFAULT_AUTH_JSON_PATH = path.join(
 );
 
 /**
- * F3 防循环：model-credentials 命令幂等注入。
- * 用 buildAuthJson 生成新内容与现有 auth.json 内容对比（不重复实现序列化逻辑）：
- * - 相同 → 跳过写盘 + 不重启 serve（server 无条件回放场景下切断
+ * F3 防循环 + C6：model-credentials 命令幂等注入（auth.json 与 opencode.json 双文件）。
+ * 先对比后写盘：
+ * - auth.json：buildAuthJson 生成新内容与现有对比，相同不写；不同/缺失 →
+ *   cleanup 旧文件 → 写新。
+ * - opencode.json：provider 段（C6，仅 payload 携带 providerConfigs 时）合并进
+ *   现有内容，相同不写；section 为空对象 → 删除 provider key（清空）。
+ * - 两文件均未变化 → 跳过写盘 + 不重启 serve（server 无条件回放场景下切断
  *   “重启 → reRegister → 回放 → 心跳 → 再重启”无限循环）
- * - 不同/缺失 → cleanup 旧文件 → 写新 auth.json → 重启 serve（凭据变更/容器重启后恢复）
- * 返回 { changed, authJsonPath }（authJsonPath 供调用方后续 cleanup）。
+ * - 任一变化 → 写变化项 → 重启 serve 一次（凭据/配置变更/容器重启后恢复）
+ * 返回 { changed, authJsonPath, configPath }（两个路径均供调用方记录下次对比）。
  */
 export async function handleModelCredentials(
   providerKeys: ModelCredentialEntry[],
+  providerConfigs: Record<string, ModelProviderConfigEntry> | undefined,
   injectedAuthJsonPath: string | null,
+  injectedConfigPath: string | null,
   deps: ModelCredentialsHandlingDeps,
-): Promise<{ changed: boolean; authJsonPath: string }> {
-  // 处理前读取现有 auth.json 内容：优先已记录注入路径，兜底默认路径（容器重启后
-  // injectedAuthJsonPath 为 null，但 auth.json 可能仍在默认路径 → 靠内容对比判幂等）。
-  const existingPath = injectedAuthJsonPath ?? DEFAULT_AUTH_JSON_PATH;
-  const existingContent = await deps.readContent(existingPath);
-  // 生成新内容（不落盘先对比）
-  const newContent = buildAuthJson(providerKeys);
-  if (existingContent === newContent) {
+): Promise<{
+  changed: boolean;
+  configChanged: boolean;
+  authJsonPath: string;
+  configPath: string;
+}> {
+  // 优先已记录注入路径，兜底默认路径（容器重启后记录为 null，但文件可能仍在
+  // 默认路径 → 靠内容对比判幂等）。
+  const authPath = injectedAuthJsonPath ?? DEFAULT_AUTH_JSON_PATH;
+  const configPath = injectedConfigPath ?? DEFAULT_OPENCODE_CONFIG_PATH;
+  const existingAuth = await deps.readContent(authPath);
+  const existingConfig = await deps.readConfig(configPath);
+
+  const newAuth = buildAuthJson(providerKeys);
+  const authChanged = existingAuth !== newAuth;
+
+  // providerConfigs=undefined（旧 server 负载）→ section=undefined → merge 原样返回
+  // → 不触碰 opencode.json（向后兼容）。
+  const section =
+    providerConfigs === undefined
+      ? undefined
+      : buildProviderSection(providerConfigs);
+  const newConfig = mergeProviderSection(existingConfig, section);
+  const configChanged = newConfig !== existingConfig;
+
+  if (!authChanged && !configChanged) {
     deps.log('[worker] model-credentials：凭据未变化，跳过注入与重启');
-    return { changed: false, authJsonPath: existingPath };
+    return {
+      changed: false,
+      configChanged: false,
+      authJsonPath: authPath,
+      configPath,
+    };
   }
-  // 内容变化/缺失：保留现有逻辑——清理上一次注入的 auth.json → 写新 → 重启 serve
-  if (injectedAuthJsonPath) {
-    deps.cleanupAuthJson(injectedAuthJsonPath);
+
+  if (authChanged) {
+    // 保留现有逻辑：清理上一次注入的 auth.json（明文 key 零留存）→ 写新
+    if (injectedAuthJsonPath) {
+      deps.cleanupAuthJson(injectedAuthJsonPath);
+    }
+    const injected = deps.writeAuthJson(providerKeys);
+    deps.log(
+      `[worker] model-credentials：auth.json 已注入 ${injected.authJsonPath}（providerKeys=${providerKeys.length}）`,
+    );
   }
-  const injected = deps.writeAuthJson(providerKeys);
-  deps.log(
-    `[worker] model-credentials：auth.json 已注入 ${injected.authJsonPath}（providerKeys=${providerKeys.length}），重启 serve 生效`,
-  );
+  if (configChanged) {
+    deps.writeOpencodeConfig(existingConfig, section);
+    deps.log(
+      `[worker] model-credentials：opencode.json provider 段已更新（providers=[${Object.keys(
+        section ?? {},
+      ).join(', ')}]，baseUrl 明细见 ${configPath}）`,
+    );
+  }
+  // 任一文件变化 → 重启 serve 一次生效（auth 与 config 同时变也只重启一次）。
   const decision = await deps.requestRestart('model-credentials（凭据注入）');
   if (decision === 'pending') {
     deps.log('[worker] model-credentials：存在活跃会话，重启挂起（会话归零后自动执行）');
   }
-  return { changed: true, authJsonPath: injected.authJsonPath };
+  return { changed: true, configChanged, authJsonPath: authPath, configPath };
 }
 
 /** handleGitCredentials 的依赖注入面（单测可 mock 文件 IO）。 */
@@ -637,6 +695,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       return null;
     });
     if (result !== null) {
+      // C6：记录本次注册是否携带 models（探测降级 undefined = 未上报）——
+      // reRegister 快路径据此决定是否必须全量重探。
+      lastModelsReported = models !== undefined;
       // 覆盖补注入：首次启动的 injectAll 在注册前执行，server 尚无本 worker 的
       // capabilities.mcpUrl（注册才上报）→ 内置 vteam 地址不会被覆盖。注册成功
       // （mcpUrl 已入库）后重拉 mcp-servers，使覆盖地址写入 opencode.json。
@@ -656,8 +717,12 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // T4c：重启后重新注册——serve 随机端口重启后可能变化，用当前 port 重新组装注册选项；
   // 失败不退出（serve 已在新端口运行，server 连旧端口报 degraded，再次 reload-config 可修复）。
   const reRegister = async (): Promise<void> => {
-    // 重注册快路径：模型目录没变，跳过稳定性探测（省 ~9s）
-    const result = await registerCurrent(true);
+    // 重注册快路径：模型目录没变，跳过稳定性探测（省 ~9s）——但上次注册降级
+    // （未上报 models）或 C6 配置刚变更（opencode provider 段可能变了模型集）时
+    // 必须全量重探，否则降级永不自愈 / 新模型永不上报。
+    const needsFullProbe = !lastModelsReported || configChangedSinceRegister;
+    configChangedSinceRegister = false;
+    const result = await registerCurrent(!needsFullProbe);
     if (result === null) {
       console.warn(
         '[worker] 重启后重新注册失败：serve 已在新端口运行，server 可能连不上（可再次触发 reload-config 修复）',
@@ -691,7 +756,14 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // T4b：注册命令处理回调（T4a 挂载点）——reload-config 触发资源重拉 + 注入 +
   // T4c 重启判定（无活跃会话立即重启 serve 使新配置生效，有活跃会话则挂起）。
   // C5b：记录上一次注入的 auth.json 路径（下次写入前 cleanup，不留存旧凭据明文）。
+  // C6：同理记录 opencode.json（config 无明文凭据，写盘幂等，不需 cleanup）。
   let injectedAuthJsonPath: string | null = null;
+  let injectedConfigPath: string | null = null;
+  // C6：上次成功注册是否携带了 models（探测降级 undefined = false）。快路径
+  // （reRegister 复用）只在“上次已上报过 models 且配置自注册后未变”时跳过探测——
+  // 否则首次注册降级（启动预热竞态）将永不自愈，C6 配置变更的新模型也永不上报。
+  let lastModelsReported = false;
+  let configChangedSinceRegister = false;
   onCommands(async (commands) => {
     for (const command of commands) {
       if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
@@ -719,29 +791,45 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
           continue;
         }
         try {
-          // F3 防循环：内容幂等注入——auth.json 内容未变化时跳过写盘与重启 serve，
-          // 切断“server 无条件回放 → 重启 → reRegister → 回放 → 再重启”无限循环。
-          injectedAuthJsonPath = (
-            await handleModelCredentials(
-              payload.providerKeys,
-              injectedAuthJsonPath,
-              {
-                readContent: async (authJsonPath) => {
-                  try {
-                    return await fs.promises.readFile(authJsonPath, 'utf8');
-                  } catch {
-                    return null;
-                  }
-                },
-                writeAuthJson,
-                cleanupAuthJson,
-                requestRestart: (reason) =>
-                  restartCoordinator.requestRestart(reason),
-                log: (message) => console.log(message),
-                warn: (message) => console.warn(message),
+          // F3 防循环：内容幂等注入——auth.json 与 opencode.json（C6）内容均未
+          // 变化时跳过写盘与重启 serve，切断“server 无条件回放 → 重启 →
+          // reRegister → 回放 → 再重启”无限循环。
+          const result = await handleModelCredentials(
+            payload.providerKeys,
+            payload.providerConfigs,
+            injectedAuthJsonPath,
+            injectedConfigPath,
+            {
+              readContent: async (authJsonPath) => {
+                try {
+                  return await fs.promises.readFile(authJsonPath, 'utf8');
+                } catch {
+                  return null;
+                }
               },
-            )
-          ).authJsonPath;
+              writeAuthJson,
+              cleanupAuthJson,
+              readConfig: async (configPath) => {
+                try {
+                  return await fs.promises.readFile(configPath, 'utf8');
+                } catch {
+                  return null;
+                }
+              },
+              writeOpencodeConfig,
+              requestRestart: (reason) =>
+                restartCoordinator.requestRestart(reason),
+              log: (message) => console.log(message),
+              warn: (message) => console.warn(message),
+            },
+          );
+          injectedAuthJsonPath = result.authJsonPath;
+          injectedConfigPath = result.configPath;
+          // C6：provider 配置段实际变更 → 重启后的 reRegister 必须全量重探
+          // （新模型进目录 / baseUrl 变化，快路径复用会漏报）
+          if (result.configChanged) {
+            configChangedSinceRegister = true;
+          }
         } catch (err) {
           console.warn(`[worker] model-credentials 注入失败: ${(err as Error).message}`);
         }
