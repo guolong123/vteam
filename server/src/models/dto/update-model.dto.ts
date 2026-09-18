@@ -1,4 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsIn,
@@ -8,7 +9,9 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
+import { ModelCapabilitiesDto } from './model-capabilities.dto';
 import { MODEL_ID_PATTERN, MODEL_SLUG_PATTERN } from './create-model.dto';
 
 /**
@@ -51,10 +54,16 @@ export class UpdateModelDto {
   @MaxLength(128)
   name?: string;
 
-  @ApiPropertyOptional({ description: '模型能力声明（Json）', type: Object })
+  @ApiPropertyOptional({
+    description:
+      'C8 模型能力声明（limit 上下文/输出 token、reasoning、modalities、options 等；受校验）',
+    type: ModelCapabilitiesDto,
+  })
   @IsOptional()
   @IsObject()
-  capabilities?: Record<string, unknown>;
+  @ValidateNested()
+  @Type(() => ModelCapabilitiesDto)
+  capabilities?: ModelCapabilitiesDto;
 
   @ApiPropertyOptional({ description: '是否启用（false=停用）' })
   @IsOptional()
