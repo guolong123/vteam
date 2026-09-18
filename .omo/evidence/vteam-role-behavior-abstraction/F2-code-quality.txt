@@ -294,3 +294,211 @@ and uncommitted required artifacts.
 
 F2 VERDICT: REJECT
 ================================================================================
+
+################################################################################
+################################################################################
+##                                                                            ##
+##   F2 RE-REVIEW (round 2) — independent re-verification of commit ab72dc1   ##
+##   Original review above is preserved verbatim (296 lines).                 ##
+##   Everything below was reproduced from scratch; no fix taken on trust.     ##
+##                                                                            ##
+################################################################################
+################################################################################
+
+RE-REVIEW SCOPE
+---------------
+$ git log --oneline f0b1924..HEAD
+ab72dc1 fix(policies): close F2 blockers — track evidence fixtures + normalize custom permission
+412de74 test(e2e): prove builtin policies are db-driven end to end
+...
+(ab72dc1 is the only fix commit on top of my originally-reviewed range)
+
+$ git show --stat ab72dc1
+  96 files changed, 15173 insertions(+), 344 deletions(-)
+  source touched: execution-policy.service.ts (+29/-?), worker-dispatcher.spec.ts (52),
+                  + new __fixtures__/policy-fixtures.ts (224), execution-policy.service.spec.ts (221),
+                  spec consolidations; 84 tracked files under .omo/evidence/...
+Uncommitted non-.omo changes: none ($ git status --porcelain -- ':!.omo' → empty).
+
+================================================================================
+BLOCKER-1 — RE-VERIFIED FIXED  ✅
+================================================================================
+Fixtures are now git-tracked:
+  $ git ls-files .omo/evidence/vteam-role-behavior-abstraction/ | wc -l
+  84
+  $ git ls-files ... | grep -E 'before-agent-policies|before-boundary'
+  .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+  .omo/evidence/vteam-role-behavior-abstraction/before-boundary.json
+  $ git log --all --oneline -- '...before-agent-policies.json'
+  ab72dc1 fix(policies): close F2 blockers ...   # now present in history
+
+Clean-checkout reproduction (throwaway detached worktree of ab72dc1 + node_modules symlink):
+  $ git worktree add --detach /tmp/.../f2-clean ab72dc1
+  $ git -C /tmp/.../f2-clean status --porcelain   → (empty; no untracked reliance)
+  $ cd /tmp/.../f2-clean/server && npx jest --runInBand \
+      src/execution-policies/agent-policies-db-builtin.spec.ts \
+      src/execution-policies/agent-policies-db-driven.spec.ts \
+      src/chat/worker-dispatcher.spec.ts
+  PASS src/chat/worker-dispatcher.spec.ts
+  PASS src/execution-policies/agent-policies-db-driven.spec.ts
+  PASS src/execution-policies/agent-policies-db-builtin.spec.ts
+  Test Suites: 3 passed, 3 total
+  Tests:       247 passed, 247 total
+→ The fixture-reading suites now pass in a clean checkout with NO untracked files.
+
+Loud-failure check (remove a fixture, expect a clear error — not a silent skip):
+  $ mv .omo/evidence/.../before-agent-policies.json /tmp/...
+  $ npx jest ... agent-policies-db-builtin.spec.ts
+  FAIL src/execution-policies/agent-policies-db-builtin.spec.ts
+    [policy-fixtures] 缺失冻结基线 <path>。该文件必须随仓库提交
+    （.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json），
+    否则干净检出下测试无法复现；请 git add 该文件后重跑。
+  Tests: 0 total
+→ loadEvidenceJson() (server/src/execution-policies/__fixtures__/policy-fixtures.ts:201-214)
+  throws with the path + `git add` remedy. No silent skip. BLOCKER-1 CLOSED.
+
+================================================================================
+BLOCKER-2 — RE-VERIFIED FIXED  ✅
+================================================================================
+Fix present in source:
+  execution-policy.service.ts:651-654  resolveByAgent custom path now:
+      permission: canonicalizePermission(config.permission as Record<string,unknown>, agentName)
+  execution-policy.service.ts:764-777  buildAgentPolicies custom branch computes
+      `const permission = canonicalizePermission(config.permission, name)` and uses it for
+      BOTH agents.push({...permission}) and roles[name].permission.
+  execution-policy.service.ts:818  assertValidConfig now `delete (cfg.permission as Record<string,unknown>).write;`
+
+Independent end-to-end probe (own throwaway spec, not the committed one), custom policy
+config.permission poisoned with `write: { '*': 'allow' }`:
+  AGENT PERM:    {"edit":{"*":"deny"},"task":"deny"}     ← no write
+  ROLE PERM:     {"edit":{"*":"deny"},"task":"deny"}     ← no write
+  RESOLVED PERM: {"edit":{"*":"deny"},"task":"deny"}     ← no write
+  STORED PERM:   {"edit":{"*":"deny"},"task":"deny"}     ← update() stripped write at store
+  PASS  (3/3 probe tests)
+→ buildAgentPolicies() agents[] + guard.roles[] and resolveByAgent() all drop `write`;
+  PATCH no longer persists it. Worker assertAgentShape can no longer throw → guard intact.
+  BLOCKER-2 CLOSED.
+
+Byte-identity preserved (no regression from BLOCKER-2 fix):
+  $ shasum -a 256 before-agent-policies.json after-agent-policies.json
+  793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a  before...
+  793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a  after...
+  (matches the required baseline sha)
+
+================================================================================
+FINDING-3 — RE-VERIFIED FIXED  ✅
+================================================================================
+$ git show ab72dc1 -- server/src/chat/worker-dispatcher.spec.ts | grep -E '^\+.*as any'
+(none added)
+$ git show ab72dc1 -- server/src/chat/worker-dispatcher.spec.ts | grep -E '^\+.*as unknown as ExecutionPolicyService'
++      policyService as unknown as ExecutionPolicyService,
+Typed stub: worker-dispatcher.spec.ts:149-151 `type PolicyResolverStub = { resolveByAgent: jest.Mock }`.
+Scoped cast at :164. The added `as any` is gone.
+
+Full added-line sweep (source + web):
+  $ git diff f0b1924..HEAD -U0 -- 'server/src/**/*.ts' 'web/**' | grep '^\+' | grep -E '\bas any\b|@ts-ignore|@ts-expect-error'
+  (NONE)
+Added non-null assertions: (NONE).
+Note: remaining `as any` hits in the full diff are inside committed .omo evidence artifacts
+(a mutation-check log) and this report — not in shipped source/web code.
+
+================================================================================
+FINDING-5 — RE-VERIFIED FIXED  ✅
+================================================================================
+New server/src/execution-policies/execution-policy.service.spec.ts (221 lines) exercises the
+REAL ExecutionPolicyService with an in-memory prisma store:
+  :88-110  template row PATCH config → succeeds and persists (asserts findUnique + update called)
+  :112-121 template row PATCH name → succeeds
+  :123-129 missing id → 404
+  :133-147 create(type=template) → 403, create NOT called
+  :149-162 create(type=custom) → succeeds, id from idGen
+  :164-172 remove(template) → 403, row retained
+  :174-180 remove(custom) → deletes
+  :196-219 PATCH carrying permission.write → stripped before store
+This is non-vacuous (real service, real update/create/remove paths), replacing the mocked
+controller-only assertion. FINDING-5 CLOSED.
+
+================================================================================
+FINDING-6 — RE-VERIFIED FIXED  ✅
+================================================================================
+Duplicated helpers consolidated into shared __fixtures__/policy-fixtures.ts:
+  reorderLikeMysql (:114-135), reverseKeys (:138-152), storageRoundTrip (:155-157),
+  factorySeedConfig (:57-76), constantDerived (:32-54), builtinPoliciesFixture (:82-107),
+  builtinPolicyRow (:160-170), BUILTIN_ORDER (:21-29), loadEvidenceJson (:201-214).
+Specs now import from it (grep confirms no remaining local copies of reorderLikeMysql in the
+three canonical specs). FINDING-6 CLOSED.
+
+================================================================================
+FINDING-4 — PARTIALLY FIXED  ⚠️ (residual: 2 prettier errors; NOT a gate blocker)
+================================================================================
+Per-file base(f0b1924) vs HEAD lint-message counts (worktree base + symlinked node_modules):
+  BASE=0 HEAD=0  src/execution-policies/execution-policy.service.ts        ← fixed
+  BASE=0 HEAD=0  all new spec files (db-builtin/db-driven/canonical/derivation/fallback/
+                 policy-fixtures/execution-policy.service.spec)             ← fixed
+  BASE=0 HEAD=0  src/chat/worker-dispatcher.ts
+  BASE=0 HEAD=0  src/prisma/seed.ts
+  BASE=0 HEAD=0  src/chat/chat.module.ts
+  BASE=1 HEAD=1  src/agents/agents.service.ts                              ← pre-existing
+  BASE=24 HEAD=24 src/platform-mcp/platform-mcp.service.ts                 ← pre-existing
+  BASE=9 HEAD=5  src/chat/worker-dispatcher.spec.ts                        ← improved
+  BASE=3 HEAD=3  src/platform-mcp/platform-mcp.service.spec.ts             ← pre-existing
+  BASE=4 HEAD=4  src/prisma/seed.spec.ts                                   ← pre-existing
+  BASE=1 HEAD=1  web/app/(main)/agents/page.tsx                            ← pre-existing
+
+REMAINING NEW errors (both files were clean at base; both auto-fixable via `eslint --fix`):
+  src/execution-policies/execution-policies.controller.ts:67  error  prettier/prettier
+    SRC: "  @ApiOperation({ summary: '更新策略（template 内置可直接编辑；非法 config → 400）' })"
+  src/execution-policies/execution-policies.controller.spec.ts:208  error  prettier/prettier
+    (line-wrap in the FINDING-5 rewritten PATCH assertion)
+  → 2 problems (2 errors, 0 warnings); `npx eslint --fix` resolves both (verified in the
+    clean worktree; produces a 2-file, formatting-only diff).
+
+Assessment: This is NOT a blocker under the stated gate. The gate's hard-fail categories are
+`any` casts, stubs, dead code, and a broken wire contract — all four are clean (verified below).
+The repo's own lint script is `eslint ... --fix` (server/package.json:15), i.e. formatting is
+self-healing and there is no CI workflow asserting raw eslint exit. Still, the ab72dc1 claim
+that "changed files are lint/prettier clean" is not fully true: 2 formatting errors remain in
+files changed by this work. Recommend `npm run lint` before merge (Quick, <5 min).
+
+================================================================================
+RE-VERIFIED INVARIANTS
+================================================================================
+[x] worker/ diff EMPTY:
+    $ git diff f0b1924..HEAD -- worker/ | wc -l
+    0
+[x] Wire contract field sets unchanged (validated on after-agent-policies.json):
+    agent keys   = ['description','mode','name','permission']            (= {name,description,mode,permission})
+    role keys    = ['bashDeny','correction','permission','tools']        (= {permission,tools,bashDeny,correction})
+    no extra keys, no permission.write → WIRE OK. Worker won't throw → guard not neutralized.
+[x] before-agent-policies.json sha256 = 793093dc...abbc3a (matches required).
+[x] worker tsc --noEmit → exit 0; server tsc --noEmit → exit 0; web tsc --noEmit → exit 0.
+[x] server full suite:
+    $ cd server && npx jest --runInBand
+    Test Suites: 131 passed, 131 total
+    Tests:       3026 passed, 3026 total
+    Snapshots:   1 passed, 1 total
+[x] worker suite: 25 passed / 1 failed (driver/v1-driver.spec.ts, 2 tests). Verified
+    PRE-EXISTING at base f0b1924 (same 2 failures in the base worktree) and `worker/` diff is
+    empty → unrelated to this work.
+[x] `.only` / `.skip` / `xit` / `fit` / `xdescribe`: NONE in changed specs.
+[x] No new TODO/FIXME/HACK/stub markers (matches are literal "Todo N" plan references).
+[x] No `兼容/废弃/deprecated/legacy/双轨` annotations added (convention respected).
+
+================================================================================
+ROUND-2 VERDICT
+================================================================================
+BLOCKER-1: FIXED — fixtures tracked (84), clean-checkout suites pass, missing fixture fails loud.
+BLOCKER-2: FIXED — canonicalizePermission wired to both custom paths; write stripped on PATCH;
+           independently reproduced (agents[]/guard.roles[]/resolveByAgent/update all clean).
+FINDING-3: FIXED — no added `as any`; typed stub + scoped `as unknown as`.
+FINDING-4: PARTIAL — core service + all new specs now clean; 2 prettier errors remain in
+           execution-policies.controller.ts:67 and execution-policies.controller.spec.ts:208
+           (auto-fixable; non-blocking under the stated gate criteria).
+FINDING-5: FIXED — real-service spec covers update/create/remove template behavior.
+FINDING-6: FIXED — shared __fixtures__/policy-fixtures.ts.
+Wire contract intact; byte-identity sha unchanged; server 131 suites / 3026 tests green.
+
+No blocker reproduces. Both original BLOCKERs are independently verified closed, and the four
+hard gate categories (any casts, stubs, dead code, broken wire contract) are clean.
+
+F2 VERDICT: APPROVE

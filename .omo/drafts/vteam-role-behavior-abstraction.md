@@ -1,6 +1,6 @@
 ---
 slug: vteam-role-behavior-abstraction
-status: approved
+status: plan-written
 intent: clear
 review_required: false
 pending-action: write .omo/plans/vteam-role-behavior-abstraction.md

@@ -1,0 +1,153 @@
+================================================================================
+LOCAL COMPOSE REBUILD + REDEPLOY — SUMMARY
+vteam @ HEAD 96b06a5460c451ddc60687549a8b76f48e95b6f9
+Executed 2026-09-17 23:26Z .. 23:47Z  (2026-09-18 07:26..07:47 +0800)
+================================================================================
+
+ACCEPTANCE CHECKBOXES
+--------------------------------------------------------------------------------
+[PASS] 1. All stale images rebuilt (new CreatedAt):
+        aiagents-server:latest  2026-09-17 21:52:13 -> 2026-09-18 07:27:15 +0800  (3890a9b5150e)
+        aiagents-init:latest    2026-09-17 21:52:13 -> 2026-09-18 07:27:15 +0800  (2e9150238667)
+        aiagents-web:latest     2026-09-17 20:46:42 -> 2026-09-18 07:27:48 +0800  (9e7248f6af3c)
+        aiagents-worker:latest  2026-09-16 23:59:12 -> 2026-09-18 07:36:28 +0800  (5c738316ecce)
+
+[PASS] 2. Stack recreated and healthy:
+        db      Up (healthy), image mysql:8, untouched (2 days)
+        server  Up (healthy) 0.0.0.0:13000->3000
+        web     Up (healthy) 0.0.0.0:13001->3000
+        worker  Up           :14000->4000, :14848->4848
+        init    Exited (0)   — prisma migrate deploy: "No pending migrations to apply."
+
+[PASS] 3. Health endpoints:
+        http://localhost:13000/api/v1/health -> 200
+        http://localhost:13001               -> 200
+        http://localhost:13001/agents        -> 200
+
+[PASS] 4. New SERVER code live FROM THE IMAGE (no hot-patch):
+        /app/dist/src/execution-policies/execution-policy.service.js
+          container sha256 = 9b0027e2306d0e66f4739b5e45074976ff84e56148b2d683c7d98472f14bb112
+          image     sha256 = 9b0027e2306d0e66f4739b5e45074976ff84e56148b2d683c7d98472f14bb112
+          => EQUAL.  (BEFORE deploy: container=a83ad40654bd… vs image=45f7666900f3… — unequppl,
+             proving the old running code was a docker-cp hot-patch. Now it comes from the image.)
+          Marker counts in compiled file:
+            canonicalizePermission = 5
+            resolveBuiltinPolicy   = 5
+          F2 `permission.write` strip present:
+            line 85:  delete copy.write;            (canonicalizePermission — strips write from permission)
+            line 438: delete cfg.permission.write;  (update path — strips write before persist)
+          Also verified identical mtime (2026-09-17 23:26:47.571Z) in container and image.
+
+[PASS] 5. New WEB code live:
+        agent-readonly-badge in web container /app/.next = 0 hits (grep_rc=1)
+        POSITIVE CONTROL: stale pre-deploy image fa03be09aeb6 DOES contain it, at
+          /app/.next/server/app/(main)/agents/page.js
+          /app/.next/static/chunks/app/(main)/agents/page-964a899aef44d3a5.js
+        => badge removed from the rebuilt bundle (commit eaf3a41), control proves the grep works.
+        Page still serves: GET /agents -> 200, GET / -> 200.
+
+[PASS] 6. Worker image refreshed:
+        2026-09-16 23:59:12 +0800 (69707bce33c9) -> 2026-09-18 07:36:28 +0800 (5c738316ecce)
+        Worker booted on new image, injectAll ran ("9 skills, 0 tools, 2 mcp servers"),
+        registered as w_compose_worker.
+
+[PASS] 7. Functional round-trip proven (full detail in 09-functional-roundtrip.txt):
+        7.1 GET ep_product                       -> 200, original captured (05-…)
+        7.2 PATCH ep_product (browser allow->ask, bash allow->deny) -> 200
+        7.3 GET /agent-policies                  -> edit REFLECTED
+              guard.roles[vteam-product].tools.browser    = ask
+              guard.roles[vteam-product].permission.bash  = deny
+              exactly 1 of 7 built-ins changed; other 6 deep-equal factory
+        7.4 docker restart worker                -> injected roles.json carried the edit
+              tools.browser=ask, permission.bash=deny ; other 6 roles factory-equal
+        7.5 PATCH restore original               -> 200, config DEEP-EQUAL original
+              (only updatedAt metadata advanced 17:37:49Z -> 23:42:11Z)
+              /agent-policies deep-equal pre-patch baseline
+        7.6 docker restart worker again          -> roles.json returned to factory,
+              all 7 built-in roles deep-equal factory baseline; sha changed
+              f64e48eb… -> 5040734f… proving genuine re-inject
+        FINAL: ep_product tools.browser=allow, permission.bash=allow — fully restored.
+
+[PASS] 8. Seed did NOT clobber factory state (full detail in 10-factory-intact.txt):
+        Policies: all 7 ep_* configs DEEP-EQUAL .omo/evidence/vteam-role-behavior-abstraction/
+                  before-seed-policy-config.json  (script-verified, no eyeballing)
+        Prompts : all 7 template agent prompts EXACT-MATCH seed.ts `templateAgents`
+                  (length + sha256 per role; planToolLine reconciled from seed's own
+                  ROLE_BOUNDARIES ordering; e.g. product 1732 chars sha d29275d5…)
+        => init re-running seed with `update: {}` was a genuine no-op on built-ins.
+
+[PASS] 9. Evidence written under .omo/evidence/local-compose-deploy/ (see list below).
+================================================================================
+
+NO HOT-PATCH PROOF (the two sha256 values)
+--------------------------------------------------------------------------------
+  BEFORE deploy:  container a83ad40654bde240dc8ca6082a6330285aa5ba790a9283ea1de200aa6284cd87
+                  image     45f7666900f3a5ff57338ea8287344b57cb48f9e9dcbda534990c9e733d59d53
+                  -> DIFFERENT (running code had been docker-cp'd by hand)
+  AFTER  deploy:  container 9b0027e2306d0e66f4739b5e45074976ff84e56148b2d683c7d98472f14bb112
+                  image     9b0027e2306d0e66f4739b5e45074976ff84e56148b2d683c7d98472f14bb112
+                  -> IDENTICAL (new code comes from aiagents-server:latest)
+
+WEB BADGE GREP RESULT
+--------------------------------------------------------------------------------
+  new image/container : 0 hits  (agent-readonly-badge ABSENT)
+  stale control image : 2 hits  (present) -> test is meaningful
+
+HEALTH CODES
+--------------------------------------------------------------------------------
+  server:200   web:200   web/agents:200
+  compose ps: db healthy, server healthy, web healthy, worker up, init Exited(0)
+
+FUNCTIONAL ROUND-TRIP OUTCOME
+--------------------------------------------------------------------------------
+  PASS — edit propagated DB -> /agent-policies -> worker injector; restore verified by
+  deep-equal on both API and injected artifacts, and confirmed by a second worker restart.
+
+FACTORY-INTACT RESULT
+--------------------------------------------------------------------------------
+  PASS — 7/7 policies and 7/7 prompts unchanged after the deploy's init+seed.
+
+NOTES / DEVIATIONS
+--------------------------------------------------------------------------------
+  * `docker compose build` (normal, no --no-cache) was sufficient: the server dist in
+    the new image contains the new markers and matches the container exactly.
+  * No git write command was run; HEAD unchanged at 96b06a5.
+  * No `down -v`, no volume removal; e2e leftovers (vteam-myagent / ep_0000000001,
+    e2e-* teams/tasks) untouched — they still appear in /agent-policies as expected.
+  * `--force-recreate worker` was NOT used; only `docker restart` as instructed.
+  * Runtime container list shows image by ID; aiagents-server:latest == 3890a9b5150e
+    == the image of the running server container.
+
+EVIDENCE FILES (.omo/evidence/local-compose-deploy/)
+--------------------------------------------------------------------------------
+  00-before.txt                      BEFORE: git, ps, images, health, dist hashes (hot-patch proof)
+  01-build.log                       full docker compose build log (BUILD_EXIT=0)
+  02a-up.log                         docker compose up -d log
+  02-after-infra.txt                 AFTER: ps, images, health, init logs
+  03-server-code.txt                 server code markers + container/image sha256 + write-strip lines
+  04-web-code.txt                    web badge grep + positive control + page codes
+  05-ep_product-original.json        original policy (for restore)
+  06a-patch-request.json             modified PATCH body
+  06b-patch-response.json            PATCH response (200)
+  06-agent-policies-after-patch.json /agent-policies reflecting the edit
+  07-injected-after-restart.json     worker roles.json carrying the edit
+  07-diff-summary.txt                assertions: edit present, others unchanged
+  07-roles-sha.txt                   sha of modified-state roles.json
+  07b-injected-after-restore-restart.json  roles.json after restore + restart (factory)
+  07b-restore-inject-summary.txt     assertions: factory restored, re-inject proven
+  08a-restore-request.json            restore PATCH body
+  08b-restore-response.json           restore PATCH response (200)
+  08-restore.json                     GET after restore
+  08-restore-diff.txt                 diff report (only updatedAt differs)
+  08c-agent-policies-after-restore.json  /agent-policies deep-equal pre-patch baseline
+  09-functional-roundtrip.txt         full narrative of Step 7
+  10-factory-intact.txt              Step 8: 7 policies + 7 prompts script-verified intact
+  10b-prompts-intact.txt             raw prompt comparison output
+  11-final-state.txt                 final snapshot at end of deploy
+  prepatch-agent-policies.json       baseline /agent-policies (reference)
+  prepatch-worker-roles.json         baseline worker roles.json (reference)
+  login-raw.json                     seed-admin login response (contains local JWT; dev-only evidence)
+  policy-ep_*.json                   the 7 live policies captured for Step 8
+  agents-list.json                   live template agents (prompts) for Step 8
+  SUMMARY.txt                        this file
+================================================================================

@@ -1,0 +1,129 @@
+================================================================================
+STEP 7 — FUNCTIONAL ROUND-TRIP (real acceptance test)
+Local compose redeploy of vteam @ 96b06a5  |  2026-09-18 (UTC 2026-09-17 23:26–23:46)
+================================================================================
+
+PURPOSE
+  Prove the deployed server+worker actually read ExecutionPolicy config from the DB,
+  propagate it to /agent-policies (server) and to the worker's injected guard
+  artifacts (roles.json), and that edits are fully reversible.
+
+AUTH
+  POST /api/v1/auth/login  {"username":"seed-admin","password":"Admin@123456"}  -> 200
+  Response shape: {"accessToken":"...","refreshToken":"...","user":{...}}
+  token_len = 235.  Raw response saved to login-raw.json.
+
+--------------------------------------------------------------------------------
+7.1  ORIGINAL ep_product captured
+--------------------------------------------------------------------------------
+  GET /api/v1/execution-policies/ep_product -> 200
+  Saved: 05-ep_product-original.json
+  Original salient values:
+    config.tools.browser          = allow
+    config.permission.bash        = allow
+    config.tools.vteam_* (all 21) = allow
+  (createdAt 2026-09-15T07:40:29.770Z, updatedAt 2026-09-17T17:37:49.002Z)
+
+--------------------------------------------------------------------------------
+7.2  PATCH with a MODIFIED config -> expect 200
+--------------------------------------------------------------------------------
+  PATCH /api/v1/execution-policies/ep_product -> HTTP 200
+  Body: {config: <original with 2 deterministic flips>}
+    - tool  browser:          allow -> ask
+    - permission.bash:        allow -> deny
+  Request  saved: 06a-patch-request.json
+  Response saved: 06b-patch-response.json
+  Response confirms persisted config.tools.browser="ask", config.permission.bash="deny".
+
+--------------------------------------------------------------------------------
+7.3  /agent-policies REFLECTS the edit -> expect yes
+--------------------------------------------------------------------------------
+  GET /api/v1/agent-policies -> 200
+  Saved: 06-agent-policies-after-patch.json
+  ASSERTIONS (all PASS):
+    guard.roles["vteam-product"].tools.browser      = ask     [correct]
+    guard.roles["vteam-product"].permission.bash    = deny    [correct]
+    agents["vteam-product"].permission.bash         = deny    [correct]
+  Blast-radius check vs .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json:
+    guard role vteam-plan              UNCHANGED
+    guard role vteam-architect         UNCHANGED
+    guard role vteam-developer         UNCHANGED
+    guard role vteam-tester            UNCHANGED
+    guard role vteam-project_manager   UNCHANGED
+    guard role vteam-librarian         UNCHANGED
+    agent def  vteam-plan              UNCHANGED
+    agent def  vteam-architect         UNCHANGED
+    agent def  vteam-developer         UNCHANGED
+    agent def  vteam-tester            UNCHANGED
+    agent def  vteam-project_manager   UNCHANGED
+    agent def  vteam-librarian         UNCHANGED
+    agent def  vteam-product           CHANGED (expected)
+    guard role vteam-product           CHANGED (expected)
+    => exactly ONE role changed; everything else untouched.
+
+--------------------------------------------------------------------------------
+7.4  docker restart worker -> injected artifacts reflect the edit
+--------------------------------------------------------------------------------
+  `docker restart aiagents-compose-worker` (NOT --force-recreate; per instruction).
+  Worker booted 2026-09-17T23:38:32Z, ran injectAll (log: "平台资源注入完成: 9 skills,
+  0 tools, 2 mcp servers"), re-registered ("注册成功: workerId=w_compose_worker").
+  roles.json rewritten at mtime 1789688312 (2026-09-17 23:38:32 UTC);
+  sha256 f64e48eb7f017adc35a75638a16c6d27c144c8472c42ffd37cb236269831a58f
+  Saved: 07-injected-after-restart.json   +   07-diff-summary.txt
+  ASSERTIONS (all PASS):
+    worker roles.json enabled = True
+    roles["vteam-product"].tools.browser   = ask     -> INJECTED EDIT PRESENT: OK
+    roles["vteam-product"].permission.bash = deny    -> INJECTED EDIT PRESENT: OK
+    vteam-plan / architect / developer / tester / project_manager / librarian
+      vs factory before-agent-policies.json -> ALL UNCHANGED
+    Pre-patch worker baseline sanity: the 6 other roles deep-equal factory too.
+
+  NOTE (transparency): the first read captured the pre-restart file because the poll
+  threshold (RESTART_TS) was taken 4 s after the file's actual rewrite instant.
+  Re-read after confirming the 23:38:32 boot + mtime 1789688312 corrected this; the
+  assertion above is against the post-restart content.
+
+--------------------------------------------------------------------------------
+7.5  RESTORE ep_product -> expect 200 + deep-equal original
+--------------------------------------------------------------------------------
+  PATCH /api/v1/execution-policies/ep_product with the ORIGINAL config -> HTTP 200
+  Request  saved: 08a-restore-request.json
+  Response saved: 08b-restore-response.json
+  GET after restore saved: 08-restore.json
+  Diff report saved: 08-restore-diff.txt
+  RESULT:
+    top-level diff vs original: ONLY `updatedAt`
+      original 2026-09-17T17:37:49.002Z -> restored 2026-09-17T23:42:11.660Z
+    config DEEP-EQUAL: True
+    DEEP-EQUAL excluding updatedAt: True
+    restored tools.browser = allow | permission.bash = allow
+    => RESTORE VERIFIED
+
+  Cross-check: GET /agent-policies after restore -> DEEP-EQUAL to pre-patch baseline
+  (prepatch-agent-policies.json).  Saved: 08c-agent-policies-after-restore.json.
+
+--------------------------------------------------------------------------------
+7.6  docker restart worker again -> injected state returns to factory
+--------------------------------------------------------------------------------
+  Second `docker restart aiagents-compose-worker`; worker booted
+  2026-09-17T23:42:31Z, re-ran injectAll ("平台资源注入完成: 9 skills, 0 tools,
+  2 mcp servers"), re-registered.
+  roles.json rewritten at mtime 1789688551 (23:42:31 UTC); sha256
+  5040734fed6048a6f6dd12b9ba76b9ae8a69b9ee8c4b84d7780e743243ad2e3f
+  (changed from f64e48eb... -> proof the file was actually re-injected, not cached).
+  Saved: 07b-injected-after-restore-restart.json + 07b-restore-inject-summary.txt
+  ASSERTIONS (all PASS):
+    roles["vteam-product"].tools.browser   = allow
+    roles["vteam-product"].permission.bash = allow
+    INJECTED STATE RETURNED TO FACTORY: OK
+    roles.json differs from modified-state capture: True  (re-inject proof)
+    ALL 7 BUILT-IN ROLES DEEP-EQUAL FACTORY: OK
+    CHANGED_VS_FACTORY = []
+
+--------------------------------------------------------------------------------
+ROUND-TRIP VERDICT: PASS
+--------------------------------------------------------------------------------
+  edit -> /agent-policies reflects -> worker restart -> roles.json reflects
+  -> restore -> /agent-policies factory-equal -> worker restart -> roles.json factory-equal
+  No residual modification.  `ep_product` final state = config deep-equal to original
+  (only updatedAt metadata advanced, which is unavoidable and semantically inert).

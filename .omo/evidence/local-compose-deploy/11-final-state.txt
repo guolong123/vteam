@@ -1,0 +1,37 @@
+=== FINAL STATE SNAPSHOT 2026-09-17T23:47:26Z ===
+
+--- docker compose ps -a ---
+NAME                      IMAGE             COMMAND                   SERVICE   CREATED          STATUS                      PORTS
+aiagents-compose-db       mysql:8           "docker-entrypoint.s…"   db        2 days ago       Up 2 days (healthy)         3306/tcp, 33060/tcp
+aiagents-compose-init     aiagents-init     "docker-entrypoint.s…"   init      10 minutes ago   Exited (0) 10 minutes ago   
+aiagents-compose-server   aiagents-server   "docker-entrypoint.s…"   server    10 minutes ago   Up 10 minutes (healthy)     0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+aiagents-compose-web      aiagents-web      "docker-entrypoint.s…"   web       10 minutes ago   Up 10 minutes (healthy)     0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+aiagents-compose-worker   aiagents-worker   "docker-entrypoint.s…"   worker    10 minutes ago   Up 4 minutes                0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp
+
+--- images (aiagents-*, unique tags) ---
+aiagents-init	latest	2026-09-18 07:27:15 +0800 CST	2e9150238667
+aiagents-server	latest	2026-09-18 07:27:15 +0800 CST	3890a9b5150e
+aiagents-server	pre-docs-followup	2026-09-17 07:25:12 +0800 CST	292bbc0dfc8e
+aiagents-server	pre-t12	2026-09-16 21:56:37 +0800 CST	be3b2d7a12f5
+aiagents-server	t12-fresh	2026-09-17 00:27:07 +0800 CST	785a94fe266d
+aiagents-web	latest	2026-09-18 07:27:48 +0800 CST	9e7248f6af3c
+aiagents-web	pre-docs-followup	2026-09-17 07:25:41 +0800 CST	99ed450ee3ec
+aiagents-worker	latest	2026-09-18 07:36:28 +0800 CST	5c738316ecce
+
+--- health ---
+server:200
+web:200
+web/agents:200
+
+--- server dist sha256 (container vs image) ---
+container: 9b0027e2306d0e66f4739b5e45074976ff84e56148b2d683c7d98472f14bb112  /app/dist/src/execution-policies/execution-policy.service.js
+image    : 9b0027e2306d0e66f4739b5e45074976ff84e56148b2d683c7d98472f14bb112  /app/dist/src/execution-policies/execution-policy.service.js
+
+--- worker roles.json sha256 (factory-restored) ---
+5040734fed6048a6f6dd12b9ba76b9ae8a69b9ee8c4b84d7780e743243ad2e3f  /data/vteam-worker/.vteam-role-guard/roles.json
+
+--- web badge grep (new image) ---
+hits=0 grep_rc=1
+
+--- ep_product final (salient) ---
+tools.browser = allow | permission.bash = allow | updatedAt = 2026-09-17T23:42:11.660Z

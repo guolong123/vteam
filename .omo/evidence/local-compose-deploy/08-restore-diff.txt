@@ -1,0 +1,7 @@
+=== top-level key diffs ===
+  DIFF updatedAt: original='2026-09-17T17:37:49.002Z' restored='2026-09-17T23:42:11.660Z'
+=== config deep-equal ===
+  config DEEP-EQUAL: True
+  DEEP-EQUAL(excluding updatedAt): True
+  restored tools.browser = allow | permission.bash = allow
+RESTORE VERIFIED (config deep-equal; only updatedAt metadata advanced): OK

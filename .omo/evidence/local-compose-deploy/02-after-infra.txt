@@ -1,0 +1,59 @@
+=== DATE ===
+2026-09-17T23:37:08Z
+
+=== docker compose ps -a ===
+NAME                      IMAGE             COMMAND                   SERVICE   CREATED          STATUS                            PORTS
+aiagents-compose-db       mysql:8           "docker-entrypoint.s…"   db        2 days ago       Up 2 days (healthy)               3306/tcp, 33060/tcp
+aiagents-compose-init     aiagents-init     "docker-entrypoint.s…"   init      26 seconds ago   Exited (0) 10 seconds ago         
+aiagents-compose-server   aiagents-server   "docker-entrypoint.s…"   server    25 seconds ago   Up 10 seconds (healthy)           0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+aiagents-compose-web      aiagents-web      "docker-entrypoint.s…"   web       15 seconds ago   Up 4 seconds (health: starting)   0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+aiagents-compose-worker   aiagents-worker   "docker-entrypoint.s…"   worker    15 seconds ago   Up 4 seconds                      0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp
+
+=== docker images (aiagents-*) ===
+aiagents-worker	2026-09-18 07:36:28 +0800 CST	5c738316ecce
+aiagents-web	2026-09-18 07:27:48 +0800 CST	9e7248f6af3c
+aiagents-init	2026-09-18 07:27:15 +0800 CST	2e9150238667
+aiagents-server	2026-09-18 07:27:15 +0800 CST	3890a9b5150e
+aiagents-web	2026-09-17 07:25:41 +0800 CST	99ed450ee3ec
+aiagents-server	2026-09-17 07:25:12 +0800 CST	292bbc0dfc8e
+aiagents-server	2026-09-17 00:27:07 +0800 CST	785a94fe266d
+aiagents-server	2026-09-16 21:56:37 +0800 CST	be3b2d7a12f5
+
+=== health curls ===
+server:200
+web:200
+server:200
+web:200
+server:200
+web:200
+
+=== container states ===
+db: status=running health=healthy exit=0 image=sha256:5e7e005a680e75d935984d3d9390990d2a709b3ed67e92708e9e6747f1f754c9
+init: status=exited health=n/a exit=0 image=sha256:2e91502386678f03d7394f9328bc2320cf34c0d07236284763fc891ebcc0e8fa
+server: status=running health=healthy exit=0 image=sha256:3890a9b5150eeda64d7ccf064b7667ec1065b2cf1ac6832f654d7a20e3ff846c
+web: status=running health=starting exit=0 image=sha256:9e7248f6af3c5d08825dd3cd182ee86f148145438ecf94e5ce204a0e048f9f03
+worker: status=running health=n/a exit=0 image=sha256:5c738316ecce0e3841b85c513160cd2fe8da3212a0a4a1ad78dbac357ec1afe9
+
+=== init logs (tail 60) ===
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": MySQL database "aiagents" at "db:3306"
+
+58 migrations found in prisma/migrations
+
+
+No pending migrations to apply.
+Seed 完成：
+  - 角色：admin / member
+  - 用户：admin(u_admin) / seed-admin(u_seed_admin) / seed-member(u_seed_member)
+  - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+  - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+  - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+  - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+  - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+  - 模型目录：0 个模型（）
+  - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+  - 管理员密码：Admin@123456
+  - 初始 admin 账号：admin / admin123

@@ -1,0 +1,14 @@
+worker enabled: True
+roles: ['vteam-plan', 'vteam-product', 'vteam-architect', 'vteam-developer', 'vteam-tester', 'vteam-project_manager', 'vteam-librarian', 'vteam-myagent']
+AFTER PATCH  vteam-product tools.browser   = ask
+AFTER PATCH  vteam-product permission.bash = deny
+INJECTED EDIT PRESENT: OK
+
+vteam-plan: vs factory UNCHANGED
+vteam-architect: vs factory UNCHANGED
+vteam-developer: vs factory UNCHANGED
+vteam-tester: vs factory UNCHANGED
+vteam-project_manager: vs factory UNCHANGED
+vteam-librarian: vs factory UNCHANGED
+CHANGED_OTHER_ROLES= []
+PREPATCH BASELINE SANITY (6 roles deep-equal factory): OK

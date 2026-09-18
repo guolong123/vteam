@@ -47,6 +47,10 @@ coverage/
 # md-docs: standalone git repo (own remote gitee.com/guojongg/mddocs), not part of this tree
 md-docs/
 
+# 本地部署核对留存的运行凭据（登录 JWT / worker token），严禁入库
+.omo/evidence/local-compose-deploy/.token
+.omo/evidence/local-compose-deploy/login-raw.json
+
 # scratch scripts
 *.tmp.cjs
 

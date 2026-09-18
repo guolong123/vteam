@@ -1,0 +1,12 @@
+=== corrected grep exit codes (grep only, no pipe) ===
+web container /app/.next: 0
+grep_rc=1 (no matches)
+
+web image aiagents-web:latest: 0
+grep_rc=1 (no matches)
+
+=== POSITIVE CONTROL: stale web image fa03be09aeb6 (pre-deploy) ===
+hits:
+/app/.next/server/app/(main)/agents/page.js
+/app/.next/static/chunks/app/(main)/agents/page-964a899aef44d3a5.js
+STALE grep_rc=0 (MATCHES FOUND - control valid)

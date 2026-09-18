@@ -1,0 +1,14 @@
+AFTER RESTORE-RESTART vteam-product tools.browser   = allow
+AFTER RESTORE-RESTART vteam-product permission.bash = allow
+INJECTED STATE RETURNED TO FACTORY: OK
+
+roles.json differs from modified-state capture (proof of re-inject): True
+vteam-plan: vs factory UNCHANGED
+vteam-product: vs factory UNCHANGED
+vteam-architect: vs factory UNCHANGED
+vteam-developer: vs factory UNCHANGED
+vteam-tester: vs factory UNCHANGED
+vteam-project_manager: vs factory UNCHANGED
+vteam-librarian: vs factory UNCHANGED
+CHANGED_VS_FACTORY= []
+ALL 7 BUILT-IN ROLES DEEP-EQUAL FACTORY: OK

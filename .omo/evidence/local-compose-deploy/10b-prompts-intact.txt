@@ -1,0 +1,20 @@
+vteam-plan toolAllows keys (source order): vteam_task_context / vteam_read_file / vteam_doclib / vteam_team_view / vteam_my_profile / vteam_chat_history / vteam_wecom_reply / vteam_group_post / vteam_notify_agent / vteam_memory_search / browser
+parsed templateAgents entries: 7
+
+[seed templateAgents prompt] vs [live /agents systemPrompt]:
+  product            seedLen=1732   liveLen=1732   EXACT MATCH
+      seed sha256=d29275d5715fb981a1990859  live sha256=d29275d5715fb981a1990859
+  project_manager    seedLen=2324   liveLen=2324   EXACT MATCH
+      seed sha256=1d4a8929a53824e7cddbf2b2  live sha256=1d4a8929a53824e7cddbf2b2
+  architect          seedLen=1546   liveLen=1546   EXACT MATCH
+      seed sha256=b43f463cdfe9021c6fcf2f34  live sha256=b43f463cdfe9021c6fcf2f34
+  developer          seedLen=1793   liveLen=1793   EXACT MATCH
+      seed sha256=95af379744e72d75cbe8726c  live sha256=95af379744e72d75cbe8726c
+  tester             seedLen=1826   liveLen=1826   EXACT MATCH
+      seed sha256=434d7954182eb13256b19c93  live sha256=434d7954182eb13256b19c93
+  plan               seedLen=2088   liveLen=2088   EXACT MATCH
+      seed sha256=755c79ecbe833e2d9a1d2386  live sha256=755c79ecbe833e2d9a1d2386
+  librarian          seedLen=1646   liveLen=1646   EXACT MATCH
+      seed sha256=22bd899f8264cf32c655ab6a  live sha256=22bd899f8264cf32c655ab6a
+
+RESULT: ALL 7 PROMPTS EXACT-MATCH seed templateAgents (factory prompts intact)

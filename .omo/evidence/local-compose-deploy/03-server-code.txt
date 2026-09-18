@@ -1,0 +1,52 @@
+=== CONTAINER (aiagents-compose-server) ===
+2026-09-17 23:26:47.571696999 +0000 /app/dist/src/execution-policies/execution-policy.service.js
+9b0027e2306d0e66f4739b5e45074976ff84e56148b2d683c7d98472f14bb112  /app/dist/src/execution-policies/execution-policy.service.js
+canonicalizePermission count: 5
+resolveBuiltinPolicy count: 5
+write count: 4
+
+=== IMAGE (aiagents-server:latest, throwaway container, read-only) ===
+2026-09-17 23:26:47.571696999 +0000 /app/dist/src/execution-policies/execution-policy.service.js
+9b0027e2306d0e66f4739b5e45074976ff84e56148b2d683c7d98472f14bb112  /app/dist/src/execution-policies/execution-policy.service.js
+canonicalizePermission count: 5
+resolveBuiltinPolicy count: 5
+
+=== F2 fix: permission.write strip ===
+85:    delete copy.write;
+277:        await this.prisma.executionPolicy.delete({ where: { id } });
+438:        delete cfg.permission.write;
+
+--- context around permission write strip ---
+3-79-function canonicalizeEditMap(edit, agentName) {
+4-80-    const boundary = boundaryOf(agentName);
+5-81-    return orderKeys(edit, ['*', ...(boundary?.writeGlobs ?? [])]);
+6-82-}
+7-83:function canonicalizePermission(permission, agentName) {
+8-84:    const copy = { ...permission };
+9:85-    delete copy.write;
+10-86-    if (isPlainObject(copy.edit)) {
+11-87-        copy.edit = canonicalizeEditMap(copy.edit, agentName);
+12-88-    }
+13-89-    if (isPlainObject(copy.read)) {
+14-90-        copy.read = orderKeys(copy.read, ['*']);
+15---
+16-139-        denyTemplate: agent_constants_1.ROLE_POLICY_DENY_TEMPLATE,
+17-140-    }, name);
+18-141-}
+19-142-function resolveBuiltinPolicy(name, config) {
+20-143-    const boundary = agent_constants_1.ROLE_BOUNDARIES[name];
+21-144-    const cfg = isPlainObject(config) ? config : {};
+--
+149-432-            (cfg.tools !== undefined && !isPlainObject(cfg.tools))) {
+150-433-            throw new common_1.BadRequestException({
+151-434-                code: 'POLICY_CONFIG_INVALID',
+152-435:                message: 'config 非法：permission/correction 均须为对象',
+153-436-            });
+154-437-        }
+155:438:        delete cfg.permission.write;
+156-439-    }
+157-440-    policyKeyOf(agent) {
+158-441-        return agent.policyId ?? (agent.role ? `ep_${agent.role}` : null);
+159-442-    }
+160-443-    agentNameOf(agent) {
+161-444-        return agent.agentKey

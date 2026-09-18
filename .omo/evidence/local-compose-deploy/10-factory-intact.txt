@@ -1,0 +1,70 @@
+================================================================================
+STEP 8 — FACTORY INTACT AFTER 'init' RE-RAN SEED (local compose deploy 2026-09-18)
+================================================================================
+Both parts must be verified with a script (no eyeballing), per plan Step 8.
+
+--------------------------------------------------------------------------------
+PART 1 — 7 built-in EXECUTION POLICIES vs factory fixture
+         (.omo/evidence/vteam-role-behavior-abstraction/before-seed-policy-config.json)
+--------------------------------------------------------------------------------
+========================================================================
+STEP 8 — FACTORY INTACT AFTER init RE-RAN SEED (deploy 2026-09-18)
+========================================================================
+
+fixture: 7 policies, _meta.derivedFrom = server/prisma/seed.ts:893-929 config construction, values via canonical server/src/common/...
+
+[1] Built-in POLICY configs — live DB vs factory fixture (deep compare):
+  ep_product             agentName=vteam-product          INTACT
+      live config sha256 = 3d3054de2a73bfaa149b1348
+  ep_project_manager     agentName=vteam-project_manager  INTACT
+      live config sha256 = 7b442bea25e21861cefd4622
+  ep_architect           agentName=vteam-architect        INTACT
+      live config sha256 = dc75e4609397579b88b51592
+  ep_developer           agentName=vteam-developer        INTACT
+      live config sha256 = 2c513aca11719a553f0667c6
+  ep_tester              agentName=vteam-tester           INTACT
+      live config sha256 = 1c5d4289fa75f705043d5165
+  ep_plan                agentName=vteam-plan             INTACT
+      live config sha256 = 6fe6da90b8b288b5faeb2ce6
+  ep_librarian           agentName=vteam-librarian        INTACT
+      live config sha256 = 3bcf9d59b640624a283a5a31
+
+[2] Seed-owned fields only (fixture field set = permission/correction[/tools if present]) — strict:
+  ep_product             INTACT
+  ep_project_manager     INTACT
+  ep_architect           INTACT
+  ep_developer           INTACT
+  ep_tester              INTACT
+  ep_plan                INTACT
+  ep_librarian           INTACT
+
+  → seed-owned fields verdict: ALL INTACT
+
+RESULT: ALL 7 BUILT-IN POLICIES INTACT vs FACTORY FIXTURE
+vteam-plan toolAllows keys (source order): vteam_task_context / vteam_read_file / vteam_doclib / vteam_team_view / vteam_my_profile / vteam_chat_history / vteam_wecom_reply / vteam_group_post / vteam_notify_agent / vteam_memory_search / browser
+
+================================================================================
+PART 2 — 7 built-in PROMPTS vs server/prisma/seed.ts `templateAgents`
+         (extracted from source with seed's own planToolLine reconstruction)
+================================================================================
+parsed templateAgents entries: 7
+
+[seed templateAgents prompt] vs [live /agents systemPrompt]:
+  product            seedLen=1732   liveLen=1732   EXACT MATCH
+      seed sha256=d29275d5715fb981a1990859  live sha256=d29275d5715fb981a1990859
+  project_manager    seedLen=2324   liveLen=2324   EXACT MATCH
+      seed sha256=1d4a8929a53824e7cddbf2b2  live sha256=1d4a8929a53824e7cddbf2b2
+  architect          seedLen=1546   liveLen=1546   EXACT MATCH
+      seed sha256=b43f463cdfe9021c6fcf2f34  live sha256=b43f463cdfe9021c6fcf2f34
+  developer          seedLen=1793   liveLen=1793   EXACT MATCH
+      seed sha256=95af379744e72d75cbe8726c  live sha256=95af379744e72d75cbe8726c
+  tester             seedLen=1826   liveLen=1826   EXACT MATCH
+      seed sha256=434d7954182eb13256b19c93  live sha256=434d7954182eb13256b19c93
+  plan               seedLen=2088   liveLen=2088   EXACT MATCH
+      seed sha256=755c79ecbe833e2d9a1d2386  live sha256=755c79ecbe833e2d9a1d2386
+  librarian          seedLen=1646   liveLen=1646   EXACT MATCH
+      seed sha256=22bd899f8264cf32c655ab6a  live sha256=22bd899f8264cf32c655ab6a
+
+RESULT: ALL 7 PROMPTS EXACT-MATCH seed templateAgents (factory prompts intact)
+
+--- combined: policies (step 8 part 1) + prompts (part 2) above ---

@@ -1,0 +1,44 @@
+=== DATE ===
+2026-09-17T23:26:27Z
+
+=== git rev-parse HEAD ===
+96b06a5460c451ddc60687549a8b76f48e95b6f9
+
+=== git status --porcelain ===
+ M .omo/boulder.json
+ M .omo/drafts/vteam-role-behavior-abstraction.md
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/vteam-role-behavior-abstraction/F2-code-quality.txt
+ M .omo/plans/vteam-role-behavior-abstraction.md
+ M .omo/start-work/ledger.jsonl
+?? .omo/evidence/local-compose-deploy/
+
+=== docker compose ps -a ===
+NAME                      IMAGE             COMMAND                   SERVICE   CREATED        STATUS                   PORTS
+aiagents-compose-db       mysql:8           "docker-entrypoint.s…"   db        2 days ago     Up 2 days (healthy)      3306/tcp, 33060/tcp
+aiagents-compose-init     aiagents-init     "docker-entrypoint.s…"   init      10 hours ago   Exited (0) 6 hours ago   
+aiagents-compose-server   aiagents-server   "docker-entrypoint.s…"   server    10 hours ago   Up 6 hours (healthy)     0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+aiagents-compose-web      aiagents-web      "docker-entrypoint.s…"   web       11 hours ago   Up 11 hours (healthy)    0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+aiagents-compose-worker   aiagents-worker   "docker-entrypoint.s…"   worker    6 hours ago    Up 6 hours               0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp
+
+=== docker images (aiagents-*) ===
+aiagents-server	2026-09-17 21:52:13 +0800 CST	ca445e9f0d37
+aiagents-init	2026-09-17 21:52:13 +0800 CST	e34af12ed400
+aiagents-web	2026-09-17 20:46:42 +0800 CST	fa03be09aeb6
+aiagents-web	2026-09-17 07:25:41 +0800 CST	99ed450ee3ec
+aiagents-server	2026-09-17 07:25:12 +0800 CST	292bbc0dfc8e
+aiagents-server	2026-09-17 00:27:07 +0800 CST	785a94fe266d
+aiagents-worker	2026-09-16 23:59:12 +0800 CST	69707bce33c9
+aiagents-server	2026-09-16 21:56:37 +0800 CST	be3b2d7a12f5
+
+=== health curls ===
+server:200
+web:200
+
+=== running server dist sha256 (hot-patch check) ===
+2026-09-17 17:01:58.000000000 +0000 /app/dist/src/execution-policies/execution-policy.service.js
+a83ad40654bde240dc8ca6082a6330285aa5ba790a9283ea1de200aa6284cd87  /app/dist/src/execution-policies/execution-policy.service.js
+
+=== image server dist sha256 ===
+2026-09-17 13:51:50.711563311 +0000 /app/dist/src/execution-policies/execution-policy.service.js
+45f7666900f3a5ff57338ea8287344b57cb48f9e9dcbda534990c9e733d59d53  /app/dist/src/execution-policies/execution-policy.service.js
