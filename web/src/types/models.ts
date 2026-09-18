@@ -16,6 +16,17 @@ export interface AvailableModel {
   name: string;
 }
 
+/** C8 per-model 能力声明（opencode 配置透传；null/缺省 = 未配置） */
+export interface ApiModelCapabilities {
+  limit?: { context?: number; output?: number };
+  reasoning?: boolean;
+  toolCall?: boolean;
+  temperature?: boolean;
+  attachment?: boolean;
+  modalities?: { input?: string[]; output?: string[] };
+  options?: Record<string, unknown>;
+}
+
 /** GET /models 条目（Model 表行，id=md_xxx 目录行 id）。 */
 export interface ApiModel {
   id: string;
@@ -25,6 +36,7 @@ export interface ApiModel {
   enabled: boolean;
   baseUrl?: string | null;
   providerType?: string | null;
+  capabilities?: ApiModelCapabilities | null;
   createdAt: string;
   updatedAt: string;
 }

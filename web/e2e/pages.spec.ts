@@ -330,6 +330,39 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("provider-modal-workers")).toBeVisible();
     await page.getByTestId("provider-modal-cancel").first().click();
     await expect(page.getByTestId("provider-config-modal")).toHaveCount(0);
+    // 新增 Provider（admin 会话）：点击 → 弹窗含 providerID/类型/模型ID/Key/worker 字段，取消关闭
+    await expect(page.getByTestId("provider-add-button")).toBeVisible();
+    await page.getByTestId("provider-add-button").click();
+    await expect(page.getByTestId("provider-add-modal")).toBeVisible();
+    await expect(page.getByTestId("provider-add-provider-input")).toBeVisible();
+    await expect(page.getByTestId("provider-add-type")).toBeVisible();
+    await expect(page.getByTestId("provider-add-baseurl-input")).toBeVisible();
+    await expect(page.getByTestId("provider-add-model-id-input")).toBeVisible();
+    await expect(page.getByTestId("provider-add-model-name-input")).toBeVisible();
+    await expect(page.getByTestId("provider-add-key-input")).toBeVisible();
+    await expect(page.getByTestId("provider-add-workers")).toBeVisible();
+    await page.getByTestId("provider-add-modal-cancel").first().click();
+    await expect(page.getByTestId("provider-add-modal")).toHaveCount(0);
+    // 编辑 Provider 配置（admin 会话）：类型/Base URL 预填 + Provider ID 只读，取消关闭
+    await page.getByTestId("provider-edit-button").first().click();
+    await expect(page.getByTestId("provider-edit-modal")).toBeVisible();
+    await expect(page.getByTestId("provider-edit-provider")).toBeDisabled();
+    await expect(page.getByTestId("provider-edit-type")).toBeVisible();
+    await expect(page.getByTestId("provider-edit-baseurl-input")).toBeVisible();
+    await page.getByTestId("provider-edit-modal-cancel").first().click();
+    await expect(page.getByTestId("provider-edit-modal")).toHaveCount(0);
+    // 模型能力配置（admin 会话）：模型行「配置」→ 能力弹窗各控件可见，取消关闭
+    //（仅开+断言+取消，不点保存——保存会 PATCH 真实模型行）
+    await page.getByTestId("provider-model-edit-button").first().click();
+    await expect(page.getByTestId("provider-model-capabilities-modal")).toBeVisible();
+    await expect(page.getByTestId("provider-model-context-input")).toBeVisible();
+    await expect(page.getByTestId("provider-model-output-input")).toBeVisible();
+    await expect(page.getByTestId("provider-model-reasoning-toggle")).toBeVisible();
+    await expect(page.getByTestId("provider-model-options-input")).toBeVisible();
+    await expect(page.getByTestId("provider-model-effort-select")).toBeVisible();
+    await expect(page.getByTestId("provider-model-probe-button")).toBeVisible();
+    await page.getByTestId("provider-model-capabilities-cancel").first().click();
+    await expect(page.getByTestId("provider-model-capabilities-modal")).toHaveCount(0);
   });
 
   test("旧路由 /providers 重定向到 /models（单一入口兼容）", async ({ page }) => {
