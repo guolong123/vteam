@@ -15,8 +15,7 @@ import {
  * 反序列化后可完整读取（server 侧 DTO 反序列化同路径）。断言字段结构完整、
  * 事件 type 枚举点号命名、可选字段缺省语义。
  */
-describe('worker 协议契约（T1 双端 JSON 互通）', () => {
-  it('RegisterWorkerPayload 序列化/反序列化后字段完整（对齐 POST /workers/register）', () => {
+describe('worker 协议契约（T1 双端 JSON 互通）', () => {  it('RegisterWorkerPayload 序列化/反序列化后字段完整（对齐 POST /workers/register）', () => {
     const registration: RegisterWorkerPayload = {
       workerId: 'w_0000000001',
       name: 'worker-1',
@@ -212,8 +211,7 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
     });
   });
 
-  it('C5：model-credentials 命令 targetWorkerIds 缺省时 payload 不含该字段（全量语义）', () => {
-    const command: WorkerCommand = {
+  it('C5：model-credentials 命令 targetWorkerIds 缺省时 payload 不含该字段（全量语义）', () => {    const command: WorkerCommand = {
       type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
       resourceVersion: 'model-credentials',
       payload: { providerKeys: [{ providerID: 'opencode-go', key: 'sk-a' }] },
@@ -227,6 +225,48 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {
       { providerID: 'opencode-go', key: 'sk-a' },
     ]);
     expect(modelPayload?.targetWorkerIds).toBeUndefined();
+  });
+
+  it('C8：model-credentials 的 providerConfigs 带 per-model 能力 → round-trip 字段完整（camelCase 内部形状）', () => {
+    const command: WorkerCommand = {
+      type: WORKER_COMMAND_TYPES.MODEL_CREDENTIALS,
+      resourceVersion: 'model-credentials',
+      payload: {
+        providerKeys: [{ providerID: 'qwen-27b', key: 'local-noop' }],
+        providerConfigs: {
+          'qwen-27b': {
+            baseUrl: 'http://192.168.10.10:18020/v1',
+            models: {
+              'qwen3.8-27b': {
+                name: 'Qwen3.8 27B',
+                capabilities: {
+                  limit: { context: 262144, output: 16384 },
+                  reasoning: true,
+                  toolCall: true,
+                  modalities: { input: ['text', 'image'], output: ['text'] },
+                  options: { reasoningEffort: 'high' },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(command)) as WorkerCommand;
+    const payload = parsed.payload as ModelCredentialsPayload | undefined;
+    const entry = payload?.providerConfigs?.['qwen-27b'];
+    const models = entry?.models as Record<
+      string,
+      { name?: string; capabilities?: { limit?: { context?: number }; options?: Record<string, unknown> } }
+    >;
+
+    expect(entry?.baseUrl).toBe('http://192.168.10.10:18020/v1');
+    expect(models['qwen3.8-27b'].name).toBe('Qwen3.8 27B');
+    expect(models['qwen3.8-27b'].capabilities?.limit?.context).toBe(262144);
+    expect(models['qwen3.8-27b'].capabilities?.options).toEqual({
+      reasoningEffort: 'high',
+    });
   });
 
   it('git-credentials：命令携带 payload（credentials + 可选 targetWorkerIds），round-trip 完整', () => {

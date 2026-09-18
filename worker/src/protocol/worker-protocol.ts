@@ -148,14 +148,59 @@ export interface ModelCredentialEntry {
 }
 
 /**
+ * C8：per-model 能力声明（对齐 server ModelCapabilities 双写，内部 camelCase）。
+ * worker 在 buildProviderSection 里翻译为 opencode 配置的 snake_case 输出形状
+ * （limit → limit{context,output}；toolCall → tool_call；options 原样透传）。
+ * 字段取舍依据见 server models.constants.ts 同名类型注释（v1.18.31 实测）。
+ */
+export interface ModelCapabilities {
+  limit?: { context?: number; output?: number };
+  reasoning?: boolean;
+  toolCall?: boolean;
+  temperature?: boolean;
+  attachment?: boolean;
+  modalities?: { input?: string[]; output?: string[] };
+  options?: Record<string, unknown>;
+}
+
+/** provider 配置条目内的单模型项。 */
+export interface ProviderModelEntry {
+  name?: string;
+  capabilities?: ModelCapabilities;
+}
+
+/**
+ * C6/C8：baseUrl provider 的 opencode 配置条目（对齐 server ModelProviderConfigEntry 双写）。
+ * server 是事实源：每次下发/回放都携带当前全量（非增量）；worker 侧写入
+ * opencode.json 的 `provider` 段（local/custom 及带自定义 baseUrl 的 cloud provider，
+ * 否则 opencode 只认内置端点，自定义 baseUrl 永远不可达）。
+ * `models` 形态双形状兼容：**旧 server 下发 string[]（仅模型 id）**、
+ * 新 server 下发 Record<modelID, ProviderModelEntry>（含 per-model 能力）。
+ */
+export interface ModelProviderConfigEntry {
+  /** OpenAI 兼容根（SDK 自行追加 /models 与 /chat/completions 路径） */
+  baseUrl: string;
+  /** 该 provider 在 server 目录中的模型集合（opencode 1.18.31 实测：custom
+   * provider 不自动发现 `{baseURL}/models`，必须显式 models map，否则静默不出现） */
+  models: string[] | Record<string, ProviderModelEntry>;
+}
+
+/**
  * C5：model-credentials 命令负载（对齐 server ModelCredentialsPayload）。
  * targetWorkerIds 空 = 全量（server 侧已按广播/定向分好——定向走 enqueueCommand、
- * 全量走 broadcastCommand；worker 侧仅消费 providerKeys，targetWorkerIds 为元数据）。
+ * 全量走 broadcastCommand；worker 侧仅消费 providerKeys + providerConfigs，
+ * targetWorkerIds 为元数据）。
  */
 export interface ModelCredentialsPayload {
   providerKeys: ModelCredentialEntry[];
   /** 定向 worker id 列表；空 = 全量下发 */
   targetWorkerIds?: string[];
+  /**
+   * C6：opencode.json `provider` 段全量状态（providerID → baseUrl + models）。
+   * undefined = 不触碰配置文件（旧 server 下发的负载，向后兼容）；
+   * {} = 清空全部 provider 配置（所有 baseUrl provider 已移除）。
+   */
+  providerConfigs?: Record<string, ModelProviderConfigEntry>;
 }
 
 /**
