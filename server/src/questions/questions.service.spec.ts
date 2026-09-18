@@ -514,7 +514,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       content: {
         questions: [
           {
-            question: '主 Agent 申请将 开发者 加入团队，是否确认？',
+            question: '申请将 开发者 加入团队，是否确认？',
             header: '团队增员确认',
             options: [
               { label: '确认', description: '' },
@@ -543,11 +543,11 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       const result = await service.createForPlatform(
         't_1',
         {
-          question: '主 Agent 申请将 开发者 加入团队，是否确认？',
+          question: '申请将 开发者 加入团队，是否确认？',
           header: '团队增员确认',
           options: ['确认', '拒绝'],
         },
-        { agentId: 'a_1' },
+        { agentId: 'a_1', requesterInstanceId: 'tmm_sender' },
       );
 
       expect(prisma.agentQuestion.create).toHaveBeenCalledWith({
@@ -561,7 +561,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
           content: {
             questions: [
               {
-                question: '主 Agent 申请将 开发者 加入团队，是否确认？',
+                question: '申请将 开发者 加入团队，是否确认？',
                 header: '团队增员确认',
                 options: [
                   { label: '确认', description: '' },
@@ -570,6 +570,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
               },
             ],
             source: 'platform',
+            requesterInstanceId: 'tmm_sender',
           },
           status: 'pending',
         },
@@ -841,6 +842,109 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         expect.objectContaining({ resolved: true }),
         { type: 'team', id: 'tm_1' },
       );
+    });
+  });
+
+  describe('平台 question 自批拒绝端到端（发起者记录 → 确认者比对，真实路径）', () => {
+    /**
+     * 走真实 createForPlatform 组装 content（requesterInstanceId 落库）→ 捕获落库行供
+     * 后续按 requestId 读回 → 真实 confirmByAgent 校验。刻意**不** mock session.findUnique
+     * 返回确认者自身 id（旧套件正因如此而盲）：平台行必须靠记录的发起者拒绝自批，
+     * 不能依赖主成员会话占位。
+     */
+    const createThenReadBack = async (requesterInstanceId: string) => {
+      let created: Record<string, unknown> | null = null;
+      prisma.agentQuestion.create.mockImplementation(
+        async ({ data }: { data: Record<string, unknown> }) => {
+          created = { ...platformRow(), ...data };
+          return created;
+        },
+      );
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+        managedMode: true,
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+
+      await service.createForPlatform(
+        't_1',
+        { question: 'Q', options: ['确认', '拒绝'] },
+        { agentId: 'a_1', requesterInstanceId },
+      );
+      expect(
+        (created as unknown as { content: { requesterInstanceId: string } })
+          .content.requesterInstanceId,
+      ).toBe(requesterInstanceId);
+      prisma.agentQuestion.findUnique.mockImplementation(async () => created);
+    };
+
+    it('createForPlatform(requester=m_A) → confirmByAgent(m_A) 拒绝 SELF_CONFIRMATION_FORBIDDEN', async () => {
+      await createThenReadBack('m_A');
+
+      const err = await service
+        .confirmByAgent({
+          taskId: 't_1',
+          instanceId: 'm_A',
+          requestId: 'que_platform_0000000001',
+          kind: 'question',
+          answers: [['确认']],
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as ForbiddenException).getResponse()).toMatchObject({
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
+      });
+      // 自批在终态落库前被拒：请求仍 pending，未执行增员钩子。
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+    });
+
+    it('同一请求由不同成员 m_B 确认 → 成功终态（能力未被移除）', async () => {
+      await createThenReadBack('m_A');
+      prisma.agentQuestion.update.mockResolvedValue(
+        platformRow({ status: 'resolved', answers: [['确认']] }),
+      );
+
+      const result = await service.confirmByAgent({
+        taskId: 't_1',
+        instanceId: 'm_B',
+        requestId: 'que_platform_0000000001',
+        kind: 'question',
+        answers: [['确认']],
+      });
+
+      expect(result.status).toBe('resolved');
+      expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
+        where: { id: 'aq_0000000001' },
+        data: { status: 'resolved', answers: [['确认']] },
+      });
+    });
+
+    it('跨任务确认（请求归属他任务）→ 仍拒绝 CROSS_TASK_FORBIDDEN', async () => {
+      await createThenReadBack('m_A');
+
+      const err = await service
+        .confirmByAgent({
+          taskId: 't_other',
+          instanceId: 'm_A',
+          requestId: 'que_platform_0000000001',
+          kind: 'question',
+          answers: [['确认']],
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as ForbiddenException).getResponse()).toMatchObject({
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,
+      });
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
     });
   });
 });

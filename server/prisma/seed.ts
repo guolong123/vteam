@@ -67,8 +67,6 @@ const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_hook_cancel',
 ] as const;
 
-const ROLE_SERVER_GATED_TOOLS: readonly string[] = [] as const;
-
 function defineBoundary(base: Omit<RoleBoundary, 'mcpDenies'>): RoleBoundary {
   const allowed = new Set(Object.keys(base.toolAllows));
   return {

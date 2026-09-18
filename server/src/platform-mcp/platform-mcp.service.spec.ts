@@ -4837,7 +4837,7 @@ describe('PlatformMcpService', () => {
     });
   });
 
-  describe('team_add_member（主 Agent 申请增员确认门，L2 自治）', () => {
+  describe('team_add_member（成员申请增员确认门，L2 自治）', () => {
     const mainInstanceId = 'tmm_main';
 
     /** 主成员归属校验通过（session 绑定主成员）。 */
@@ -4928,13 +4928,13 @@ describe('PlatformMcpService', () => {
       expect(questionsService.createForPlatform).toHaveBeenCalledWith(
         taskId,
         {
-          question:
-            '主 Agent 申请将 开发者（别名 开发者-2）加入团队，是否确认？',
+          question: '申请将 开发者（别名 开发者-2）加入团队，是否确认？',
           header: '团队增员确认',
           options: ['确认', '拒绝'],
         },
         expect.objectContaining({
           agentId: 'a_developer',
+          requesterInstanceId: mainInstanceId,
           onResolved: expect.any(Function),
         }),
       );
@@ -4963,7 +4963,7 @@ describe('PlatformMcpService', () => {
       expect(questionsService.createForPlatform).toHaveBeenCalledWith(
         taskId,
         expect.objectContaining({
-          question: '主 Agent 申请将 开发者 加入团队，是否确认？',
+          question: '申请将 开发者 加入团队，是否确认？',
         }),
         expect.any(Object),
       );

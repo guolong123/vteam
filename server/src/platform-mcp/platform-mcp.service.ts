@@ -2851,11 +2851,12 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * 团队主成员解析（task_create / skill_create 团队维度门共用，唯一回退点）：
+   * 团队主成员解析（plan_mode 等「写团队主成员」目标解析，唯一回退点）：
    * team.mainAgentMemberId 显式绑定优先返回；为 NULL 时回退首位成员（seq 升序，
    * 对齐 chat.service buildMainAgentTrigger / worker-dispatcher resolveTeamMainMember；
-   * TeamMember 无软删字段，过滤域恒为 { teamId }）。空名册或查询失败 → null
-   * （调用方保持今日 403，失败永不放行）。
+   * TeamMember 无软删字段，过滤域恒为 { teamId }）。空名册或查询失败 → null。
+   * 注意：此处不再充当身份门——调用方权限由 ROLE toolAllows 决定，无调用方据此 403；
+   * 返回值仅供「写入目标 / 归属判定」，缺失时调用方各自降级（不再拒绝授权调用）。
    */
   private async resolveTeamMainMemberId(
     teamId: string,
@@ -2878,13 +2879,13 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * task_create：团队会话无任务时由主 Agent 建任务（team-free-chat todo-4；
+   * task_create：团队会话无任务时建任务（team-free-chat todo-4；
    * remove-project-dimension Todo 7 去 pid：团队即归属，无项目防提权门）。
-   * 上下文解析：taskId 优先走任务维度（门 = 任务所属团队的 mainAgentMemberId
-   * 解析出的主成员 === 调用方；task.mainAgentInstanceId 已停写不再读，读它会因
-   * in_progress 任务改主未同步而误 403）；无 taskId
-   * 走团队维度（门 = session 团队成员 === 团队主成员 id，
-   * 主 id 经 resolveTeamMainMemberId 解析：显式绑定优先，否则首位成员回退）。
+   * 上下文解析：taskId 优先走任务维度；无 taskId 走团队维度（经 resolveExecContext）。
+   * 身份门禁（原「是否主 Agent」403）已移除：调用方身份由 resolveExecContext
+   * （assertWorkerTask/Team，防冒充/跨任务）先行校验，建任务资格由调用方 ROLE 的
+   * toolAllows 授权；任务维度目标团队取 task.teamId，团队维度取 exec.teamId。
+   * task.mainAgentInstanceId 已停写不再读（读它会因 in_progress 任务改主未同步而误判）。
    * 成功路径经 TasksService.createByAgent（attribution createdBy = 团队用户成员
    * owner 回填；永不直调 create，其按调用方 userId 的团队成员校验会 403 agent）。
    */
@@ -2941,12 +2942,11 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * skill_create：主 Agent 沉淀新 SKILL.md（learning-mode P2）。
-   * 双上下文主门（对齐 task_create）：任务维度门 = 任务所属团队主成员 === 调用方
-   * （经 resolveTeamMainMemberId 解析，不读已停写的 task.mainAgentInstanceId），否则 403；团队维度门 = 调用方 === 团队主成员 id
-   * （经 resolveTeamMainMemberId 解析：显式绑定优先，否则首位成员回退），
-   * 否则 403。归属冒充（selfInstanceId 非会话成员）由 resolveExecContext
-   * 经 assertWorkerTask/Team 先行 403。
+   * skill_create：沉淀新 SKILL.md（learning-mode P2）。
+   * 身份门禁（原「仅主 Agent」双上下文 403）已移除：调用权限由调用方 ROLE 的
+   * toolAllows 决定；归属冒充（selfInstanceId 非会话成员）由 resolveExecContext
+   * 经 assertWorkerTask/Team 先行 403。落库不依赖 teamId（任务维度仅做任务存在性
+   * 校验后继续；团队维度仅做团队存在性校验）。
    * 内容门：全文超 100KB → 400；parseSkillMarkdown 先行（frontmatter
    * 非法 → 400 SKILL_FRONTMATTER_INVALID）；file 适配由 MCP 输入合成
    * （originalname `<name>.md` + utf8 byte length + text/markdown）。
@@ -3809,8 +3809,10 @@ export class PlatformMcpService implements OnModuleInit {
    * 归属校验（assertWorkerTask）→ 任务团队解析（findTaskTeamGate，仅供落库归属与
    * 幂等判定）→ 幂等（已加入 400 / pending 重复申请 409）→ createForPlatform 创建
    * 平台确认请求（question=「是否确认」，options=['确认','拒绝']，content.source='platform'）。
-   * 身份门禁（原「仅主成员」403）已移除：调用权限由调用方 ROLE 的 toolAllows 决定。
-   * 用户确认后 onResolved 钩子执行 handleTeamAddResolved（校验 + updateTeam + 审计）。
+   * 身份门禁（原「仅主成员」403）已移除：调用权限由调用方 ROLE 的 toolAllows 决定，
+   * 任何被授权的角色实例均可发起；发起者以 args.selfInstanceId 记入
+   * content.requesterInstanceId，供 question_confirm 的自批校验拒绝本人确认。
+   * 用户/其他成员确认后 onResolved 钩子执行 handleTeamAddResolved（校验 + updateTeam + 审计）。
    */
   async teamAddMember(
     ctx: PlatformMcpContext,
@@ -3882,8 +3884,8 @@ export class PlatformMcpService implements OnModuleInit {
     const alias = explicitAlias ?? agentRow.name;
     const aliasText = alias !== agentRow.name ? `（别名 ${alias}）` : '';
     const question = aliasText
-      ? `主 Agent 申请将 ${agentRow.name}${aliasText}加入团队，是否确认？`
-      : `主 Agent 申请将 ${agentRow.name} 加入团队，是否确认？`;
+      ? `申请将 ${agentRow.name}${aliasText}加入团队，是否确认？`
+      : `申请将 ${agentRow.name} 加入团队，是否确认？`;
     const created = await this.questionsService.createForPlatform(
       args.taskId,
       {
@@ -3893,6 +3895,7 @@ export class PlatformMcpService implements OnModuleInit {
       },
       {
         agentId: args.agentId,
+        requesterInstanceId: args.selfInstanceId,
         onResolved: async (resolved) => {
           await this.handleTeamAddResolved({
             taskId: args.taskId,
@@ -3906,7 +3909,7 @@ export class PlatformMcpService implements OnModuleInit {
       },
     );
     this.logger.log(
-      `[team-add] 主 Agent 申请增员 task=${args.taskId} agent=${args.agentId} requestId=${created.requestId}`,
+      `[team-add] 成员 ${args.selfInstanceId} 申请增员 task=${args.taskId} agent=${args.agentId} requestId=${created.requestId}`,
     );
     return {
       requestId: created.requestId,

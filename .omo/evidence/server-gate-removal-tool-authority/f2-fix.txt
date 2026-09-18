@@ -1,0 +1,171 @@
+F2 FIX — make the question_confirm self-approval check effective for platform questions
+=========================================================================================
+Plan: .omo/plans/server-gate-removal-tool-authority.md (Final-Verification-Wave fix)
+Base HEAD: 30febde (132 suites / 3070 tests green)
+Scope: ONLY the F2 blocking finding + its stated re-review conditions. Non-blocking F2
+findings (migration drift lock, matrix-spec tautology, writeEvidence dirtying worktree)
+were explicitly OUT OF SCOPE and were NOT touched.
+
+--------------------------------------------------------------------------------
+1. BEFORE — the bug (independently confirmed)
+--------------------------------------------------------------------------------
+`createForPlatform` (questions.service.ts:~621) stored:
+    sessionId = (await this.mainAgentSessionOf(taskId)) ?? 's_placeholder'
+    agentId   = options.agentId
+and recorded the requester's instance id NOWHERE.
+
+`confirmByAgent` (questions.service.ts:313-328) inferred the requester as:
+    row.sessionId -> Session.teamMemberId  ==  input.instanceId ?
+
+For a PLATFORM question, row.sessionId is the MAIN member's session (or a
+placeholder that misses `session.findUnique` entirely). So the check could never
+fire for a non-main requester, and fail-opened completely when there was no
+mainAgentMemberId ('s_placeholder' -> findUnique miss).
+
+Live grant check (verified): vteam-product.toolAllows holds BOTH
+vteam_team_add_member AND vteam_question_confirm (same for vteam-project_manager).
+
+EXPLOIT (before fix): a non-main vteam-product instance calls team_add_member
+(records no requester) -> question_confirm on its own requestId -> the self-check
+resolves the "requester" to the MAIN member, never matches the caller ->
+resolvePlatformQuestion runs the onResolved hook -> handleTeamAddResolved ->
+the agent is added with confirmedBy: '主 Agent' and NO user confirmation.
+
+--------------------------------------------------------------------------------
+2. AFTER — the fix (data-integrity, no role gate, no schema change)
+--------------------------------------------------------------------------------
+(a) createForPlatform now records the true requester in the existing content JSON
+    (`content.requesterInstanceId`), threaded from a new optional option
+    `options.requesterInstanceId`. No Prisma schema/migration change.
+
+    content = { questions:[...], source:'platform', requesterInstanceId: <string|null> }
+
+(b) teamAddMember (platform-mcp.service.ts) passes `requesterInstanceId:
+    args.selfInstanceId`. That identity is already validated by assertWorkerTask
+    (anti-impersonation), so it is the trustworthy requester.
+
+(c) confirmByAgent integrity check 1 now reads the recorded requester FIRST:
+      - check 1a: recordedRequester === input.instanceId -> 403
+        QUESTION_SELF_CONFIRMATION_FORBIDDEN  (works for ANY requester, main or not)
+      - check 1b (fallback): when there is NO recorded requester (non-platform
+        question, or a legacy/platform row created before this fix), fall back to
+        the existing session.teamMemberId comparison. Legacy/absent requester is
+        handled DELIBERATELY (documented in the confirmByAgent docblock): the old
+        weaker semantics are preserved, NOT silently widened.
+    The CROSS_TASK_FORBIDDEN check is unchanged and always in force.
+
+    This is a DATA-INTEGRITY check, not a role/identity gate: authority still comes
+    from the agent's own tool allowlist; no mainAgentMemberId- or role-name-based
+    permission check was introduced; NO capability was removed (any granted role can
+    still confirm OTHER members' requests — proven by the m_B test below).
+
+(d) Stale docblocks corrected (they documented a 403 gate that no longer exists):
+      - resolveTeamMainMemberId  (~2853): removed "调用方保持今日 403"; now states it
+        no longer acts as an identity gate and no caller 403s on it.
+      - taskCreate               (~2880): removed "门 = mainAgentMemberId 解析出的
+        主成员 === 调用方 / 否则 403"; now states authority = role toolAllows +
+        resolveExecContext anti-impersonation.
+      - skillCreate              (~2943): removed "双上下文主门（对齐 task_create）
+        … 否则 403"; now states authority = role toolAllows.
+      - teamAddMember            (~3807): already correct (no 403 claim) — verified;
+        updated to note ANY granted role may raise it and requester is recorded.
+    Question text + log de-hardcoded from "主 Agent 申请…":
+      QUESTION: "申请将 X（别名 Y）加入团队，是否确认？"  /  "申请将 X 加入团队，是否确认？"
+      LOG:      "[team-add] 成员 <selfInstanceId> 申请增员 task=… agent=… requestId=…"
+
+(e) Dead code dropped: server/prisma/seed.ts:70
+      `const ROLE_SERVER_GATED_TOOLS: readonly string[] = [] as const;`
+    Verified ZERO reads in that file (grep). The separately-exported constant in
+    src/common/constants/agent.constants.ts is a DIFFERENT symbol, still referenced
+    by specs, and was left untouched.
+
+--------------------------------------------------------------------------------
+3. NEW round-trip regression test (would have caught the bug)
+--------------------------------------------------------------------------------
+File: server/src/questions/questions.service.spec.ts
+Describe: "平台 question 自批拒绝端到端（发起者记录 → 确认者比对，真实路径）"
+
+The helper `createThenReadBack(requesterInstanceId)` drives the REAL path:
+  - real `createForPlatform` (needs idGen + real content assembly),
+  - captures the persisted row via `agentQuestion.create.mockImplementation`,
+  - asserts the captured `content.requesterInstanceId` equals the input,
+  - serves that captured row back through `agentQuestion.findUnique`.
+It deliberately does NOT mock `prisma.session.findUnique` to return the confirmer's
+own id — that is exactly why the old suite was blind.
+
+Tests:
+  (i)   createForPlatform(requester= m_A) → confirmByAgent(instanceId: m_A)
+        → rejects QUESTION_SELF_CONFIRMATION_FORBIDDEN; agentQuestion.update NOT
+        called (still pending).
+  (ii)  same request confirmed by DIFFERENT member m_B → succeeds (status resolved;
+        update called).
+  (iii) cross-task confirmation (caller task = t_other) → still rejects
+        QUESTION_CROSS_TASK_FORBIDDEN; agentQuestion.update NOT called.
+
+Existing-suite updates (not weakened — adjusted to the new, accurate contract):
+  - createForPlatform now asserts content.requesterInstanceId in the落库 shape.
+  - Question-text assertions updated to the de-hardcoded wording.
+  - The existing "confirmByAgent 非主成员…" / "自批（…会话成员…）" tests are kept.
+
+--------------------------------------------------------------------------------
+4. FALSIFIABILITY — the new test actually detects the regression
+--------------------------------------------------------------------------------
+Mutated questions.service.ts check 1a guard to `if (false && …)`.
+Command: npx jest --runInBand src/questions/questions.service.spec.ts -t "平台 question 自批拒绝端到端"
+Result (mutation present, the REJECTION test fails, m_B/cross-task still pass):
+    ✕ createForPlatform(requester=m_A) → confirmByAgent(m_A) 拒绝 SELF_CONFIRMATION_FORBIDDEN
+    ✓ 同一请求由不同成员 m_B 确认 → 成功终态（能力未被移除）
+    ✓ 跨任务确认（请求归属他任务）→ 仍拒绝 CROSS_TASK_FORBIDDEN
+    Expected constructor: ForbiddenException / Received constructor: TypeError
+Restored via `cp /tmp/CLEAN-questions.service.ts`; sha256 match verified
+(712a4deeb4b1cafbd4fb0a3fdcf99263177d60974837eb35da3cf52e3e10c49b both sides);
+`git diff --stat` still shows the fix (43 insertions / 12 deletions). Test green again.
+
+--------------------------------------------------------------------------------
+5. ASSERTION OUTPUT proving self-approval is now refused
+--------------------------------------------------------------------------------
+Focused run (after fix):
+    PASS src/questions/questions.service.spec.ts
+      平台 question 自批拒绝端到端（发起者记录 → 确认者比对，真实路径）
+        ✓ createForPlatform(requester=m_A) → confirmByAgent(m_A) 拒绝 SELF_CONFIRMATION_FORBIDDEN (5 ms)
+        ✓ 同一请求由不同成员 m_B 确认 → 成功终态（能力未被移除） (1 ms)
+        ✓ 跨任务确认（请求归属他任务）→ 仍拒绝 CROSS_TASK_FORBIDDEN (1 ms)
+    Test Suites: 1 passed, 1 total / Tests: 31 passed, 31 total
+
+--------------------------------------------------------------------------------
+6. VERIFICATION
+--------------------------------------------------------------------------------
+- cd server && npx tsc -p tsconfig.json --noEmit            -> exit 0
+- cd server && npx jest --runInBand                         -> 132 suites / 3073 tests PASS
+                                                               (baseline 3070 + 3 new)
+- cd worker && npx jest                                     -> 26 suites / 683 tests PASS
+  NOTE (not a regression): one full worker run first showed a failure in
+  worker/driver/prompt-await.spec.ts:315 (timing assertion `calls > 10`). It passed
+  on two isolated reruns and on the next full run. No worker file was modified by
+  this fix; it is a pre-existing timing flake.
+
+--------------------------------------------------------------------------------
+7. WHAT WAS NOT FIXED (stated plainly)
+--------------------------------------------------------------------------------
+- Legacy/platform rows created BEFORE this fix carry no content.requesterInstanceId;
+  for those, check 1a does not arm and check 1b (session-based) is the only guard,
+  so a non-main requester of a legacy platform row can still self-confirm
+  (fail-open) until that row is gone. This is documented in the confirmByAgent
+  docblock and is the deliberate "do not silently widen" choice. New rows are
+  always armed.
+- Out-of-scope F2 non-blocking findings (migration drift lock, matrix-spec
+  tautology, writeEvidence dirtying the worktree) were NOT addressed.
+- The handleTeamAddResolved audited label still says '主 Agent' for agent actors
+  (tasks.service message "（经主 Agent 申请、…确认）"). Left as-is: it is an audit
+  label, not part of §2, and changing it would ripple into tasks.service/spec
+  assertions beyond this fix's minimal-diff mandate.
+
+--------------------------------------------------------------------------------
+8. OWNER-DECISION NUANCE (stated explicitly, per task §6)
+--------------------------------------------------------------------------------
+.omo/drafts/chat-flow-deblocking.md D10 accepted "a product/PM instance could
+confirm its own request" as residual risk AFTER the server gate was removed; the
+PLAN then mandated integrity checks as the replacement. This fix makes the
+mandated check actually function for platform questions. It is strictly safer and
+removes no capability (the m_B test proves other members can still confirm). It is
+implemented rather than skipped; the D10 tension is recorded here for the owner.

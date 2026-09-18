@@ -256,13 +256,16 @@ export class QuestionsService {
    * 托管确认（question_confirm MCP 工具）：团队托管模式下确认成员请求。
    * 身份门禁（原「仅主成员」403）已移除：调用权限由调用方 ROLE 的 toolAllows 决定；
    * 缺口由两道完整性校验补上：
-   *   1) 确认者不得为请求发起者本人（session.teamMemberId === instanceId → 拒绝），防自批；
+   *   1) 确认者不得为请求发起者本人，防自批。发起者身份来源分两种：
+   *      - 平台 question（source='platform'）：发起者由 createForPlatform 在创建时记入
+   *        content.requesterInstanceId（row.sessionId 只是主成员会话占位，反映不了真实
+   *        发起者，不能作为依据）→ 直接比对记录值；
+   *      - 非平台 question，或本次修复前创建的历史平台行（无 requesterInstanceId 记录）→
+   *        回退原 session.teamMemberId 比对（保持既有语义，**不静默放宽**）。历史平台行
+   *        对非主发起者仍可能 fail-open，属已知残留，新行恒武装。
    *   2) 请求归属任务须与调用方任务一致（row.taskId === input.taskId），防跨任务确认。
    * requestId 精确命中 AgentQuestion（requestId 唯一键），kind 须与落库一致；
    * 回复语义与用户 reply 相同（question=answers / permission=response，answers=null=拒绝）。
-   * 残余风险：发起者身份经 row.sessionId → Session.teamMemberId 解析；平台 question 的
-   * sessionId 是主成员会话占位、且会话行缺失/无 teamMemberId 时无法断定发起者，此时校验 1
-   * 不武装（fail-open）——但校验 2（任务归属）恒生效。
    */
   async confirmByAgent(input: {
     taskId: string;
@@ -310,13 +313,24 @@ export class QuestionsService {
         message: `请求 ${input.requestId} 归属任务 ${row.taskId}，与调用方任务 ${input.taskId} 不一致，禁止跨任务确认`,
       });
     }
-    // 完整性校验 1：自批拒绝（发起者会话的 teamMemberId === 确认者 instanceId）。
-    const requesterSession = row.sessionId
-      ? await this.prisma.session.findUnique({
-          where: { id: row.sessionId },
-          select: { teamMemberId: true },
-        })
-      : null;
+    // 完整性校验 1a：平台 question 自批拒绝——发起者实例 id 创建时记入 content
+    // （row.sessionId 是主成员会话占位，不能据此判断真实发起者）。
+    const recordedRequester = this.platformRequesterOf(row);
+    if (recordedRequester && recordedRequester === input.instanceId) {
+      throw new ForbiddenException({
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
+        message: `请求 ${input.requestId} 由成员 ${input.instanceId} 本人发起，不可自行确认`,
+      });
+    }
+    // 完整性校验 1b：非平台 question（或历史平台行无发起者记录）回退既有会话比对
+    // （发起者会话的 teamMemberId === 确认者 instanceId）。历史行不静默放宽。
+    const requesterSession =
+      recordedRequester || !row.sessionId
+        ? null
+        : await this.prisma.session.findUnique({
+            where: { id: row.sessionId },
+            select: { teamMemberId: true },
+          });
     if (
       requesterSession?.teamMemberId &&
       requesterSession.teamMemberId === input.instanceId
@@ -589,6 +603,9 @@ export class QuestionsService {
    * 平台侧创建 question（L2 自治确认门，如 team_add_member）。
    * - content 保持前端兼容形状：{questions: [{question, header, options}], source: 'platform'}，
    *   options 落库为 {label, description} 对象数组（对齐 ingress/serve 契约）；
+   * - content.requesterInstanceId：创建时记录真实发起者实例 id（options.requesterInstanceId），
+   *   供 confirmByAgent 的自批校验比对（sessionId 只是主成员会话占位，反映不了发起者）。
+   *   缺省 null（无发起者身份的历史/占位调用），校验回退会话比对，不静默放宽；
    * - sessionId 用任务主 Agent 会话占位（仅满足非空约束，平台 question 不实际转发 worker）；
    * - requestId 用 que_platform_ 前缀（区别于 serve 下发的 que_ id，防唯一键碰撞）；
    * - options.onResolved：终态（确认/拒绝）时触发的执行钩子（按 requestId 注册）。
@@ -596,7 +613,11 @@ export class QuestionsService {
   async createForPlatform(
     taskId: string,
     question: { question: string; header?: string; options?: string[] },
-    options: { agentId?: string; onResolved?: PlatformResolveHook } = {},
+    options: {
+      agentId?: string;
+      requesterInstanceId?: string;
+      onResolved?: PlatformResolveHook;
+    } = {},
   ): Promise<AgentQuestionDto> {
     const seq = await this.idGen.nextId('que');
     const requestId = `que_platform_${seq.split('_')[1] ?? ''}`;
@@ -613,6 +634,7 @@ export class QuestionsService {
         },
       ],
       source: PLATFORM_QUESTION_SOURCE,
+      requesterInstanceId: options.requesterInstanceId ?? null,
     } as unknown as Prisma.InputJsonValue;
     const row = await this.prisma.agentQuestion.create({
       data: {
@@ -652,6 +674,15 @@ export class QuestionsService {
   private isPlatformQuestion(row: AgentQuestion): boolean {
     const content = (row.content ?? {}) as { source?: string };
     return content.source === PLATFORM_QUESTION_SOURCE;
+  }
+
+  /** content.requesterInstanceId：平台 question 创建时记录的发起者实例 id（历史/占位行为 null）。 */
+  private platformRequesterOf(row: AgentQuestion): string | null {
+    const content = (row.content ?? {}) as { requesterInstanceId?: unknown };
+    return typeof content.requesterInstanceId === 'string' &&
+      content.requesterInstanceId.length > 0
+      ? content.requesterInstanceId
+      : null;
   }
 
   /**
