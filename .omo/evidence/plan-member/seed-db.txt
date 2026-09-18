@@ -7,4 +7,6 @@ tmm_0000000006	tm_0000000001	a_plan	计划员-1
 == teams main (must NOT be the plan member) ==
 tm_0000000001	tmm_0000000002
 == seed team member count ==
-6
+7
+== builtin template agent count ==
+7

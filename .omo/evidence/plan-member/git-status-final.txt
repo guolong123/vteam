@@ -1,35 +1,48 @@
  M .omo/boulder.json
+ M .omo/evidence/permission-matrix/e2e.txt
+ M .omo/evidence/permission-matrix/injected-opencode.json
+ M .omo/evidence/plan-member/agent-policies.json
  M .omo/evidence/plan-member/agents.json
  M .omo/evidence/plan-member/baseline-git.txt
+ M .omo/evidence/plan-member/channels.json
  M .omo/evidence/plan-member/e2e.txt
  M .omo/evidence/plan-member/git-status-final.txt
  M .omo/evidence/plan-member/group-after-4.json
  M .omo/evidence/plan-member/group-trigger.json
  M .omo/evidence/plan-member/group-watermark-4.json
  M .omo/evidence/plan-member/group-watermark.json
- M .omo/evidence/plan-member/serve-msg-5-assistant.txt
- M .omo/evidence/plan-member/serve-msg-5.json
- M .omo/evidence/plan-member/taskdir-after-4.txt
+ M .omo/evidence/plan-member/injected-opencode.json
+ M .omo/evidence/plan-member/injection-compare.txt
+ M .omo/evidence/plan-member/live-path.txt
+ M .omo/evidence/plan-member/needs-attention.txt
+ M .omo/evidence/plan-member/plan-file-4.md
+ M .omo/evidence/plan-member/roles.json
+ M .omo/evidence/plan-member/seed-db.txt
  M .omo/evidence/plan-member/taskdir-before.txt
  M .omo/evidence/plan-member/taskdir-final.txt
- M server/src/platform-mcp/platform-mcp.controller.spec.ts
-?? .omo/drafts/agent-tool-permission-align.md
-?? .omo/drafts/vteam-role-behavior-enforcement.md
-?? .omo/evidence/custom-agent-opencode/permission-matrix-audit.txt
-?? .omo/evidence/plan-member/F2-code-quality.txt
-?? .omo/evidence/plan-member/F4-scope-fidelity.txt
-?? .omo/evidence/role-enforcement/F1-plan-audit.txt
-?? .omo/evidence/role-enforcement/F2-code-quality.txt
-?? .omo/evidence/role-enforcement/F3-manual-qa.txt
-?? .omo/evidence/role-enforcement/F3-own/
-?? .omo/evidence/role-enforcement/F3-raw/
-?? .omo/evidence/role-enforcement/F4-scope-fidelity.txt
-?? .omo/evidence/role-enforcement/baseline-git.txt
-?? .omo/evidence/role-enforcement/seed-spec.txt
-?? .omo/notepads/vteam-role-behavior-enforcement/decisions.md
-?? .omo/notepads/vteam-role-behavior-enforcement/issues.md
-?? .omo/notepads/vteam-role-behavior-enforcement/problems.md
-?? .omo/plans/vteam-omo-toggle-agent-split.md
-?? .omo/plans/vteam-plan-member-subagents.md
-?? md-docs/
-?? web/shot-omo3.tmp.cjs
+ M .omo/evidence/plan-member/team.json
+ M .omo/evidence/plan-member/tools-list.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/notepads/vteam-plan-member-subagents/learnings.md
+ M .omo/start-work/ledger.jsonl
+ M scripts/e2e-permission-matrix.sh
+ M scripts/e2e-plan-member.sh
+?? .omo/evidence/permission-matrix/absence-nonmain-plan_mode.json
+?? .omo/evidence/permission-matrix/absence-nonmain-task_transition.json
+?? .omo/evidence/permission-matrix/guard-matrix.json
+?? .omo/evidence/permission-matrix/retained-accept-archive-accept.json
+?? .omo/evidence/permission-matrix/retained-accept-archive-archive.json
+?? .omo/evidence/permission-matrix/retained-global-memory.json
+?? .omo/evidence/permission-matrix/retained-hook-cancel-cleanup.json
+?? .omo/evidence/permission-matrix/retained-hook-cancel.json
+?? .omo/evidence/permission-matrix/retained-hook-register.json
+?? .omo/evidence/permission-matrix/retained-notify-cross.json
+?? .omo/evidence/permission-matrix/retained-notify-self.json
+?? .omo/evidence/permission-matrix/retained-stale-hash.json
+?? .omo/evidence/permission-matrix/retained-terminal-task.json
+?? .omo/evidence/permission-matrix/roles-live.json
+?? .omo/evidence/permission-matrix/source-constants.json
+?? .omo/evidence/server-gate-removal-tool-authority/task-8-e2e.txt
+?? .omo/explainers/
+?? docs/agent-platform/prototypes/agent-manage/
+?? docs/agent-platform/prototypes/agent-role/

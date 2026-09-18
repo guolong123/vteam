@@ -1,4 +1,4 @@
-live path taken: live
+live path taken: guard-fallback
 parent spawn gate (guard): vteam-plan task+subagent_type=vteam-plan -> allow (see guard-decisions.json)
 parent spawn gate (layer-1): injected vteam-plan permission.task=allow (see injected-opencode.json)
 nesting block (guard): vteam-plan task+missing/other-subagent -> deny; execute -> deny (see guard-decisions.json)

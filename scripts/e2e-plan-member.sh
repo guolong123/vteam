@@ -9,11 +9,8 @@
 #      /teams members include 计划员.
 #   2) injection truth: worker restart re-injects opencode.json agent['vteam-plan']
 #      with mode='all', permission.task='allow', edit glob covering .opencode/plans/,
-#      NO edit rights outside; the other 5 roles keep split-aware parity with the
-#      F3-own baseline built-in subset (retained keys byte-identical, no new keys;
-#      baseline-only deny keys allowed iff guard-moved or server-gated — the
-#      baseline predates the allowlist-split design; vteam-plan's own entry is
-#      EXPECTED to differ — mode/task/plans-glob flip + split-aware removals).
+#      NO edit rights outside; every built-in entry is byte-identical to the
+#      regenerated F3-own baseline (post server-gate-removal-tool-authority).
 #   3) guard gate: the worker's OWN guard code (dist/role-guard/policy.js
 #      evaluateToolCall, same code the injected plugin snapshots) decides
 #      (vteam-plan, task + subagent_type=vteam-plan) -> allow;
@@ -389,6 +386,8 @@ SEED_DB="$EVIDENCE_DIR/seed-db.txt"
   db_query "SELECT id, main_agent_member_id FROM teams WHERE id='${TEAM_ID}';"
   echo "== seed team member count =="
   db_query "SELECT COUNT(*) FROM team_members WHERE team_id='${TEAM_ID}';"
+  echo "== builtin template agent count =="
+  db_query "SELECT COUNT(*) FROM agents WHERE type='template';"
 } >"$SEED_DB" 2>&1 || fail "1-seed" "db queries failed (raw: $SEED_DB)"
 cat "$SEED_DB" | tee -a "$E2E_LOG" >/dev/null
 if ! python3 - "$SEED_DB" <<'EOF'
@@ -419,8 +418,12 @@ assert len(main) == 1, "want 1 team row, got %r" % main
 tcols = main[0].split()
 assert tcols[1] != "tmm_0000000006", "plan member must NOT be main agent: %r" % main
 cnt = section("seed team member count")
-assert cnt and cnt[0].strip() == "6", "seed team must have 6 members, got %r" % cnt
-print("db: a_plan template/plan + ep_plan template + tmm_0000000006 计划员 non-main + 6 members")
+tpl = section("builtin template agent count")
+assert cnt and tpl, "member/template counts missing: %r %r" % (cnt, tpl)
+assert cnt[0].strip() == tpl[0].strip(), \
+  "seed team members (%s) != builtin template agents (%s) — one instance per role expected" % (
+    cnt[0], tpl[0])
+print("db: a_plan template/plan + ep_plan template + tmm_0000000006 计划员 non-main + %s members (== template agents)" % cnt[0].strip())
 EOF
 then
   fail "1-seed" "seed DB assertions failed (raw: $SEED_DB)"
@@ -488,9 +491,9 @@ assert plans_hits, "vteam-plan edit allow globs miss plans dir: %r" % allows
 outside = [g for g in allows if ".opencode/plans" not in g]
 assert not outside, "vteam-plan edit allows paths OUTSIDE plans dir: %r" % outside
 rep("vteam-plan: mode=all task=allow edit=%r" % edit)
-# group_post is allowed via the guard tools allowlist, so (like the 5 gated
-# tools in e2e-permission-matrix step 2) it must have NO layer-1 permission key;
-# the allow lives in roles.json guard tools (asserted below from live roles.json).
+# group_post is allowed via the guard tools allowlist, so (like every
+# guard-allowlisted tool) it must have NO layer-1 permission key; the allow
+# lives in roles.json guard tools (asserted below from live roles.json).
 assert "vteam_group_post" not in perm, \
   "vteam-plan layer-1 must not carry vteam_group_post key (allowlist-complement design): %r" % perm
 rep("vteam-plan: no layer-1 vteam_group_post key (guard-allowlisted)")
@@ -501,14 +504,12 @@ rtools = guard_by_role.get("vteam-plan") or {}
 assert rtools.get("vteam_group_post") == "allow", \
   "live roles.json guard tools vteam_group_post=%r (want allow)" % rtools.get("vteam_group_post")
 rep("live roles.json: vteam-plan guard tools vteam_group_post=allow")
-# Baseline staleness note: F3-own/injected-opencode.json predates the
-# allowlist-split design (22e95ee, in HEAD history): layer-1 permission now
-# carries ONLY {edit,read,bash,task} + mcpDenies (non-allowlisted, non-gated
-# MCP tools as deny). Guard-allowlisted tools moved to guard roles only, and
-# ROLE_SERVER_GATED_TOOLS (task_transition/question_confirm/task_create/
-# plan_mode/team_add_member) live in NEITHER layer (server-side 401/403).
-# Hence a baseline-only key is legitimate IFF it was deny-valued AND either
-# moved to this role's guard tools or vanished from both layers (gated).
+# F3-own/injected-opencode.json was regenerated for the
+# server-gate-removal-tool-authority re-baseline, so it now carries the new
+# tool-authority allowlists (layer-1 permission = mcpDenies complement; formerly
+# gated tools are granted per role). This helper keeps the structural invariant
+# that a baseline-only key is legitimate IFF it was deny-valued AND either moved
+# to this role's guard tools or vanished from both layers.
 def assert_split_aware_parity(name, nj, bj):
     assert nj.get("mode") == bj.get("mode"), \
       "%s mode changed: %r vs %r" % (name, nj.get("mode"), bj.get("mode"))
@@ -525,40 +526,29 @@ def assert_split_aware_parity(name, nj, bj):
         assert bp[k] == "deny", \
           "%s removed key %r was not deny-valued in baseline: %r" % (name, k, bp[k])
         assert k in gtools or k not in guard_union, \
-          "%s removed key %r neither in its guard tools nor server-gated (union has it but role lacks it)" % (name, k)
+          "%s removed key %r neither in its guard tools nor denied platform-wide (union has it but role lacks it)" % (name, k)
     rep("%s: parity ok (retained keys identical; %d baseline-only deny keys split-aware)" % (name, len(set(bp) - set(np))))
 # --- other five roles: split-aware parity (mode primary/task deny enforced) ---
 for b in BUILTINS[1:]:
     assert na[b].get("mode") == "primary", "role %s mode=%r (want primary)" % (b, na[b].get("mode"))
     assert (na[b].get("permission") or {}).get("task") == "deny", "role %s task not deny" % b
     assert_split_aware_parity(b, na[b], ba[b])
-rep("other five roles parity ok (no new/changed keys; removals only guard-moved or server-gated denies)")
-# --- vteam-plan diff limited to mode/task/plans-glob + split-aware removals ---
-nb, bb = dict(na["vteam-plan"]), dict(ba["vteam-plan"])
-assert set(nb.keys()) == set(bb.keys()), \
-  "vteam-plan top-level keys changed: %r vs %r" % (sorted(nb.keys()), sorted(bb.keys()))
-assert nb.get("description") == bb.get("description"), "vteam-plan description changed (not in allowed diff)"
-assert nb.get("mode") != bb.get("mode"), "vteam-plan mode unexpectedly unchanged"
-np, bp = dict(nb.get("permission") or {}), dict(bb.get("permission") or {})
-added = set(np) - set(bp)
-assert not added, "vteam-plan has NEW layer-1 keys vs baseline: %r" % sorted(added)
-diff = {k for k in set(np) & set(bp) if json.dumps(np[k], sort_keys=True) != json.dumps(bp.get(k), sort_keys=True)}
-assert diff == {"task", "edit"}, \
-  "vteam-plan changed-value keys = %r (want exactly {task, edit}; group_post moved to guard-only)" % diff
-assert np.get("task") == "allow" and bp.get("task") == "deny", "vteam-plan task must flip deny->allow"
-assert bp.get("vteam_group_post") == "deny" and "vteam_group_post" not in np, \
-  "vteam-plan group_post must move baseline-deny -> guard-only"
-gtools = guard_by_role.get("vteam-plan") or {}
-for k in set(bp) - set(np) - {"vteam_group_post"}:
-    assert bp[k] == "deny", "vteam-plan removed key %r was not deny-valued: %r" % (k, bp[k])
-    assert k in gtools or k not in guard_union, \
-      "vteam-plan removed key %r neither in its guard tools nor server-gated" % k
-rep("vteam-plan diff limited to mode/task/plans-glob + split-aware deny removals")
+rep("other five roles parity ok (no new/changed keys; removals only guard-moved or platform-denied)")
+# --- every built-in entry byte-identical to the regenerated baseline ---
+# F3-own/injected-opencode.json was regenerated under the
+# server-gate-removal-tool-authority re-baseline, so it now carries the new
+# tool-authority allowlists and is expected to match live exactly. A drift here
+# is a real regression, not the old "vteam-plan is expected to differ" case.
+for b in BUILTINS:
+    assert json.dumps(na[b], sort_keys=True, ensure_ascii=False) == \
+      json.dumps(ba[b], sort_keys=True, ensure_ascii=False), \
+      "%s injected entry differs from the regenerated F3-own baseline" % b
+rep("all 6 built-ins byte-identical to the regenerated F3-own baseline")
 EOF
 then
   fail "2-inject" "injection assertions failed (raw: $INJECTED_OUT, report: $EVIDENCE_DIR/injection-compare.txt)"
 fi
-pass "2 (vteam-plan mode all/task allow/plans-scoped edit/group_post guard-only; other five split-aware parity; plan diff limited)"
+pass "2 (vteam-plan mode all/task allow/plans-scoped edit/group_post guard-only; all six built-ins byte-identical to the regenerated baseline)"
 
 # ---------------------------------------------------------------- step 3: guard gate (worker's OWN guard code)
 log "--- step 3: guard decisions via worker dist role-guard/policy.js ---"
@@ -936,8 +926,8 @@ if [[ -d "$(dirname "$NOTEPAD")" ]]; then
   {
     echo ""
     echo "## e2e-plan-member.sh run ($(date -u +%FT%TZ)) HEAD=$BASELINE_HEAD"
-    echo "- seed: a_plan(ep_plan)/tmm_0000000006 non-main/6 members; /agents template; /teams 计划员."
-    echo "- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; other five split-aware parity vs F3-own baseline (baseline predates allowlist-split); plan diff limited to mode/task/plans-glob + deny removals."
+    echo "- seed: a_plan(ep_plan)/tmm_0000000006 non-main/one instance per builtin template; /agents template; /teams 计划员."
+    echo "- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; all six built-ins byte-identical to the regenerated F3-own baseline."
     echo "- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny)."
     echo "- live step4 (group @): ${LIVE4_OK:-infra-skipped}; live step5 path: $LIVE5_PATH."
     echo "- plan_review: tools/list clean; POST /review HTTP $REVIEW_CODE; /agent-policies clean; repo non-spec grep zero hits."

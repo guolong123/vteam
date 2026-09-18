@@ -1,0 +1,2 @@
+step=4-live reason=dispatch accepted but no file/reply within 600s (LLM/worker stall?) raw: trigger /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-trigger.json group /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-after-4.json
+step=5-live reason=step 4 not live-ok; subagent spawn proven via guard+layer-1 fallback (see live-path.txt)

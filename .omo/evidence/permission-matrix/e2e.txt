@@ -1,27 +1,30 @@
 [e2e] SERVER_URL=http://localhost:13000 WORKER_ID=w_compose_worker TEAM_ID=tm_0000000001
 [e2e] server live (via /api/v1/health)
-[e2e] --- step 0: ensure live roles.json already passes the gated sentinel ---
-[e2e] live roles.json fresh (sentinel=allow), no restart needed
-[e2e] [32mPASS[0m 0 (live guard state fresh)
-[e2e] --- step 1/3/6: guard decisions via worker dist role-guard/policy.js ---
-[e2e] guard matrix raw: /Users/mac/01work/git-project/vteam/.omo/evidence/permission-matrix/guard-decision.json
-[e2e] [32mPASS[0m 1 (guard pass-through: 6 roles x 5 gated = allow; unlisted non-gated = deny)
-[e2e] [32mPASS[0m 3 (newly allowed: PM chat_history, dev doclib, all-6 wecom_reply = allow)
-[e2e] [32mPASS[0m 6 (no regression: plan group_post + developer issue_create = deny)
-[e2e] --- step 2: injected opencode.json permission has no gated key ---
-[e2e] [32mPASS[0m 2 (layer-1: no gated key in permission for all 6 built-ins)
-[e2e] --- step 4: server main-instance gate via POST /api/v1/platform-mcp ---
-[e2e] main=tmm_0000000002 nonmain=tmm_0000000001 task=t_0000000001 status=pending planMode=0
-[e2e] non-main plan_mode raw: {"jsonrpc":"2.0","id":11,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_FORBIDDEN 仅主 Agent（tmm_0000000002）可切换计划模式；请知会主 Agent 调用 plan_mode"}}
-[e2e] [32mPASS[0m 4a (server gate: non-main plan_mode rejected with 403 main-instance message)
-[e2e] main plan_mode raw: {"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"{\"taskId\":\"t_0000000001\",\"planMode\":false,\"agentName\":null}"}]}}
-[e2e] [32mPASS[0m 4b (server gate: main plan_mode passes identity gate)
-[e2e] non-main task_transition raw: {"jsonrpc":"2.0","id":13,"error":{"code":-32003,"message":"[403] TASK_STATUS_MAIN_AGENT_ONLY 仅主 Agent（tmm_0000000002）可流转任务状态；请知会主 Agent 调用 task_transition，或由管理员在任务管理界面操作"}}
-[e2e] [32mPASS[0m 4c (server gate: non-main task_transition rejected with 403)
-[e2e] task status=pending -> probing main with state-invalid action=archive
-[e2e] main task_transition raw: {"jsonrpc":"2.0","id":14,"error":{"code":-32009,"message":"[409] TASK_INVALID_TRANSITION 任务状态迁移不合法"}}
-[e2e] [32mPASS[0m 4d (server gate: main task_transition passes identity gate; task unmutated)
-[e2e] --- step 5: ROLE_SERVER_GATED_TOOLS == SERVER_GATED_TOOLS ---
-[e2e] [32mPASS[0m 5 (server ROLE_SERVER_GATED_TOOLS == worker SERVER_GATED_TOOLS, 5 values)
-[e2e] ALL STEPS DONE: 0/1/2/3/4a/4b/4c/4d/5/6
-[e2e] [32mPASS[0m permission-matrix (evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/permission-matrix)
+[e2e] --- step 0: read authoritative constants from the running server dist ---
+[e2e] source constants: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/permission-matrix/source-constants.json
+[e2e] --- step 0b: ensure live roles.json guard allowlists match the source ---
+[e2e] live roles.json guard allowlists already match source; no restart needed
+[e2e] [32mPASS[0m 0 (source constants read; live guard allowlists match source)
+[e2e] --- step 1: role×tool allow/deny matrix (source-derived, worker guard) ---
+[e2e] guard matrix raw: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/permission-matrix/guard-matrix.json
+[e2e] [32mPASS[0m 1 (derived role×tool guard matrix: every cell matches source toolAllows; unlisted = deny)
+[e2e] --- step 2: injected opencode.json layer-① permission = VTEAM_MCP − toolAllows, all deny ---
+[e2e] [32mPASS[0m 2 (layer-① permission is the source-derived mcpDenies complement, all deny)
+[e2e] --- step 3: former server identity refusals are ABSENT (non-main over real HTTP) ---
+[e2e] main=tmm_0000000002 nonmain=tmm_0000000001 task=t_0000000001 status=pending_review planMode=0
+[e2e] non-main plan_mode raw: {"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"{\"taskId\":\"t_0000000001\",\"planMode\":false,\"agentName\":null}"}]}}
+[e2e] [32mPASS[0m 3a (former plan_mode identity gate ABSENT: non-main same-value call succeeds)
+[e2e] non-main task_transition action=start raw: {"jsonrpc":"2.0","id":12,"error":{"code":-32009,"message":"[409] TASK_INVALID_TRANSITION 任务状态迁移不合法"}}
+[e2e] [32mPASS[0m 3b (former task_transition identity gate ABSENT: non-main reaches business validation; task unmutated)
+[e2e] --- step 4: retained server-side refusals still enforced (by code/message) ---
+[e2e] [32mPASS[0m 4a (retained: self-notify -> 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION)
+[e2e] [32mPASS[0m 4b (retained: non-main -> non-main -> 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION)
+[e2e] [32mPASS[0m 4c (retained: accept/archive refused to agent; both retained sites present in dist)
+[e2e] [32mPASS[0m 4d (retained: non-main global memory_save -> 403 scope refusal)
+[e2e] [32mPASS[0m 4e (retained: non-owner non-main hook_cancel -> 403 owner-or-main)
+[e2e] [32mPASS[0m 4f (retained: stale planHash -> plan-gated with both short hashes in hint)
+[e2e] [32mPASS[0m 4g (retained: execution dispatch into completed/archived task refused)
+[e2e] --- step 5: retired gating constant is empty and absent from compiled artefacts ---
+[e2e] [32mPASS[0m 5 (retired constant empty; worker dist has 0 SERVER_GATED_TOOLS refs; 0 removed gate messages in dist/src)
+[e2e] ALL STEPS DONE: 0/0b/1/2/3a/3b/4a/4b/4c/4d/4e/4f/4g/5
+[e2e] [32mPASS[0m permission-matrix (evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/permission-matrix)
