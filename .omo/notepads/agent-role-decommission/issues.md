@@ -124,3 +124,30 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **`web/.auth/user.json` is :3001-bound** — reusing it against the :13001 container yields an
   empty shell and false-negative "element not found" failures. Use a fresh login setup on the
   target origin for live-container proof.
+
+## todo 10 — findings / gotchas
+
+- **The plan's line numbers were stale again** (as with todos 2-6): the reads were at
+  `:159` / `:584` / `:587` / `:2048` / `:2058` / `:2070` / `:2085` / `:2135` / `:3707` /
+  `:3712` at plan-writing time, and had drifted by 1-40 lines at edit time (e.g. `:159` was
+  already `:159` but `:3707` → `:3746` after todo 2's edits, then shifted again after the
+  final doc pass). Grep-first confirmed every site.
+- **9 existing dispatch specs failed after the production change — all FIXTURES, not
+  behaviour.** They returned `{role, ...}` with no `agentKey`, so the new key-derived label
+  produced `''` and the assertions expecting `角色: product` failed. The live row invariant
+  (`agent_key = role` for templates) means the fix is to make fixtures mirror the real row:
+  add `agentKey` alongside `role`. This is why the "before/after" proof runs on a fixture
+  that has BOTH keys (a pre-drop row shape).
+- **`role: null, agentKey: null` on a custom-agent fixture is fine to leave** — the label
+  helper returns `''` for null keys, byte-identical to the old behaviour. Only fixtures with
+  a non-null role whose assertions expect a rendered label needed the `agentKey`.
+- **The spec's `mockAgentRow` helper spreads `...row`, so the base row keeps
+  `role: null, agentKey: null`.** Do not "clean up" that base: the spread-carried `role: null`
+  is inert (the production code no longer reads the key), and removing it would touch 10+
+  call sites for zero behaviour change. Todo 8 owns the sweep.
+- **`roleToAgentName` is still production-reachable** via `roleLabelOfAgentKey` (built-in
+  detection) and `resolveBoundaryAndTools` (constant fallback). Todo 8's "delete
+  roleToAgentName" task must check both callers before deleting — the function is NOT dead.
+- **eslint/prettier churn**: the new nested fixtures tripped 34 prettier errors; `--fix`
+  resolved them, but the reformat moved lines, so the manifest had to be regenerated AGAIN
+  after the fix. Sequence matters: edit → lint --fix → regenerate manifest → run gates.

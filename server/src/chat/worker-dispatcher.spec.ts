@@ -49,6 +49,7 @@ import {
   PENDING_INSTANCE_REF,
   renderBoundarySection,
   resolvePolicyAgentCandidate,
+  roleLabelOfAgentKey,
   roleToAgentName,
   ARTIFACT_SUBMISSION_INSTRUCTION,
   ISSUE_FULL_INSTRUCTION,
@@ -465,11 +466,14 @@ describe('WorkerDispatcher', () => {
       expect(system).not.toContain(WECOM_SYSTEM_INSTRUCTION);
     });
 
-    it('system 注入 Agent 完整身份（buildSystemInstructions 含 id/name/role/prompt + selfInstanceId 引导）', async () => {
+    it('system 注入 Agent 完整身份（buildSystemInstructions 含 id/name/角色key/prompt + selfInstanceId 引导）', async () => {
+      // 行形状 = 迁移期真实 DB 行（模板行 agent_key = role）；todo 10 起身份段
+      // 『角色』由 agentKey 派生，值仍是 key（product），不是展示名。
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_product',
         name: '产品经理助手',
-        role: '产品经理',
+        role: 'product',
+        agentKey: 'product',
         prompt: '你是产品需求分析专家，负责梳理需求并输出方案。',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
@@ -483,7 +487,7 @@ describe('WorkerDispatcher', () => {
       expect(execArgs.system).toContain('vteam_issue_create');
       // 单入口：目标实例即团队成员 → 身份段实例 id 为 tmm_（会话 teamMemberId）
       expect(execArgs.system).toContain(
-        '你是本任务的 产品经理助手（实例 id: tmm_0000000001，角色: 产品经理）',
+        '你是本任务的 产品经理助手（实例 id: tmm_0000000001，角色: product）',
       );
       expect(execArgs.system).toContain(
         '【职责】你是产品需求分析专家，负责梳理需求并输出方案。',
@@ -496,6 +500,7 @@ describe('WorkerDispatcher', () => {
         id: 'a_product',
         name: '产品经理',
         role: 'product',
+        agentKey: 'product',
         prompt: '负责需求拆解。',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
@@ -507,7 +512,12 @@ describe('WorkerDispatcher', () => {
           agentId: 'a_product',
           alias: '产品经理-1',
           seq: 1,
-          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+          agent: {
+            id: 'a_product',
+            name: '产品经理',
+            role: 'product',
+            agentKey: 'product',
+          },
           role: { rolePrompt },
         },
       ]);
@@ -542,6 +552,7 @@ describe('WorkerDispatcher', () => {
         id: 'a_product',
         name: '产品经理',
         role: 'product',
+        agentKey: 'product',
         prompt: '负责需求拆解。',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
@@ -551,7 +562,12 @@ describe('WorkerDispatcher', () => {
           agentId: 'a_product',
           alias: '产品经理-1',
           seq: 1,
-          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+          agent: {
+            id: 'a_product',
+            name: '产品经理',
+            role: 'product',
+            agentKey: 'product',
+          },
           role: null,
         },
       ]);
@@ -582,11 +598,12 @@ describe('WorkerDispatcher', () => {
       expect(execArgs.system).toContain('selfInstanceId');
     });
 
-    it('plan 目标：dispatch 按 role 传入 agentRole → system 无【记忆管理】段（guard 不拒）', async () => {
+    it('plan 目标：dispatch 按 agentKey 推导策略/职责 → system 无【记忆管理】段（guard 不拒）', async () => {
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_plan',
         name: '计划员',
         role: 'plan',
+        agentKey: 'plan',
         prompt: '负责计划编制。',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
@@ -621,6 +638,7 @@ describe('WorkerDispatcher', () => {
         id: 'a_product',
         name: '产品经理助手',
         role: 'product',
+        agentKey: 'product',
         prompt: '负责需求拆解。',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
@@ -668,6 +686,120 @@ describe('WorkerDispatcher', () => {
       expect(system).not.toContain('【职责】');
     });
 
+    it('todo 10：装配来源是 agentKey 而非 role 列——role 列值不同也不进入身份段/issue 判据（突变检测器）', async () => {
+      // 鉴别性夹具：DB role 列故意放中文展示名（若代码回退读 agent.role，
+      // 身份段会渲染 `产品经理` 且 issueDetail 命中「产品」子串 → 测试失败）。
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_myagent',
+        name: '自定义助手',
+        role: '产品经理',
+        agentKey: 'myagent',
+        prompt: '负责专项。',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const d = createDispatcher();
+      await d.dispatch({
+        ...request,
+        targets: [
+          {
+            agentId: 'a_myagent',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      });
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).toContain('角色: ）');
+      expect(system).not.toContain('角色: 产品经理');
+      expect(system).not.toContain(ISSUE_FULL_INSTRUCTION);
+    });
+
+    it('todo 10：identity/roster 标签不泄漏自定义 agentKey（dispatch 装配：role 段为空串）', async () => {
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        {
+          id: 'tmm_0000000001',
+          agentId: 'a_myagent',
+          alias: '自定义-1',
+          seq: 1,
+          agent: {
+            id: 'a_myagent',
+            name: '自定义助手',
+            role: null,
+            agentKey: 'myagent',
+          },
+        },
+      ]);
+      (prisma as any).team.findUnique = jest
+        .fn()
+        .mockResolvedValue({ mainAgentMemberId: null });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_myagent',
+        name: '自定义助手',
+        role: null,
+        agentKey: 'myagent',
+        prompt: '负责专项。',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const d = createDispatcher();
+      await d.dispatch({
+        ...request,
+        targets: [
+          {
+            agentId: 'a_myagent',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      });
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).toContain(
+        '你是本任务的 自定义-1（实例 id: tmm_0000000001，角色: ）',
+      );
+      expect(system).toContain('自定义-1（实例 id: tmm_0000000001，角色: ）');
+      expect(system).not.toContain('角色: myagent');
+    });
+
+    it('todo 10：issue 完整版判据改由 agentKey 驱动——product 注入完整版、自定义 agentKey 只收一句版', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        agentKey: 'product',
+        prompt: '负责需求。',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const d = createDispatcher();
+      await d.dispatch(request);
+      const productSystem = workerClient.execute.mock.calls[0][1]
+        .system as string;
+      expect(productSystem).toContain(ISSUE_FULL_INSTRUCTION);
+
+      workerClient.execute.mockClear();
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_myagent',
+        name: '自定义助手',
+        role: null,
+        agentKey: 'myagent',
+        prompt: '负责专项。',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      await d.dispatch({
+        ...request,
+        targets: [
+          {
+            agentId: 'a_myagent',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      });
+      const customSystem = workerClient.execute.mock.calls[0][1]
+        .system as string;
+      expect(customSystem).toContain('【Issue协作】');
+      expect(customSystem).not.toContain(ISSUE_FULL_INSTRUCTION);
+      expect(customSystem).not.toContain('vteam_issue_create');
+    });
+
     it('Todo 11：自定义 agent 的策略 correction → system 注入【职责边界】（此前为空）', async () => {
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_demo',
@@ -711,7 +843,6 @@ describe('WorkerDispatcher', () => {
       };
       expect(policyService.resolveByAgent).toHaveBeenCalledWith({
         policyId: 'ep_custom_demo',
-        role: null,
         agentKey: 'demo-agent',
       });
       expect(execArgs.system).toContain(
@@ -755,9 +886,11 @@ describe('WorkerDispatcher', () => {
         ],
       });
 
-      const system = (workerClient.execute.mock.calls[0][1] as {
-        system: string;
-      }).system;
+      const system = (
+        workerClient.execute.mock.calls[0][1] as {
+          system: string;
+        }
+      ).system;
       expect(policyService.resolveByAgent).toHaveBeenCalledTimes(1);
       expect(system).not.toContain('【记忆管理】');
       expect(system).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
@@ -800,10 +933,19 @@ describe('WorkerDispatcher', () => {
         ],
       });
 
-      const system = (workerClient.execute.mock.calls[0][1] as {
-        system: string;
-      }).system;
+      const system = (
+        workerClient.execute.mock.calls[0][1] as {
+          system: string;
+        }
+      ).system;
       expect(policyService.resolveByAgent).toHaveBeenCalledTimes(1);
+      // todo 10：resolveByAgent 不再收 role 参数（D4；exact-object 断言已足够，
+      // 此处额外显式钉死键集合，防未来 refactor 把 role 加回去）
+      expect(
+        Object.keys(
+          policyService.resolveByAgent.mock.calls[0][0] as object,
+        ).sort(),
+      ).toEqual(['agentKey', 'policyId']);
       expect(system).toContain('【记忆管理】');
       expect(system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
     });
@@ -855,14 +997,24 @@ describe('WorkerDispatcher', () => {
           agentId: 'a_product',
           alias: '产品经理-1',
           seq: 1,
-          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+          agent: {
+            id: 'a_product',
+            name: '产品经理',
+            role: 'product',
+            agentKey: 'product',
+          },
         },
         {
           id: 'tmm_0000000002',
           agentId: 'a_architect',
           alias: '架构师-1',
           seq: 1,
-          agent: { id: 'a_architect', name: '架构师', role: 'architect' },
+          agent: {
+            id: 'a_architect',
+            name: '架构师',
+            role: 'architect',
+            agentKey: 'architect',
+          },
         },
       ]);
       (prisma as any).team.findUnique = jest
@@ -872,6 +1024,7 @@ describe('WorkerDispatcher', () => {
         id: 'a_product',
         name: '产品经理',
         role: 'product',
+        agentKey: 'product',
         prompt: '负责需求拆解。',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
@@ -908,7 +1061,12 @@ describe('WorkerDispatcher', () => {
           agentId: 'a_product',
           alias: '产品经理-1',
           seq: 1,
-          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+          agent: {
+            id: 'a_product',
+            name: '产品经理',
+            role: 'product',
+            agentKey: 'product',
+          },
         },
         {
           id: 'tmm_0000000002',
@@ -919,6 +1077,7 @@ describe('WorkerDispatcher', () => {
             id: 'a_project_manager',
             name: '项目经理',
             role: 'project_manager',
+            agentKey: 'project_manager',
           },
         },
       ]);
@@ -930,6 +1089,7 @@ describe('WorkerDispatcher', () => {
         id: 'a_product',
         name: '产品经理',
         role: 'product',
+        agentKey: 'product',
         prompt: '负责需求拆解。',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
@@ -957,6 +1117,7 @@ describe('WorkerDispatcher', () => {
             id: 'a_project_manager',
             name: '项目经理',
             role: 'project_manager',
+            agentKey: 'project_manager',
           },
         },
         {
@@ -964,14 +1125,24 @@ describe('WorkerDispatcher', () => {
           agentId: 'a_developer',
           alias: '开发者-1',
           seq: 1,
-          agent: { id: 'a_developer', name: '开发者', role: 'developer' },
+          agent: {
+            id: 'a_developer',
+            name: '开发者',
+            role: 'developer',
+            agentKey: 'developer',
+          },
         },
         {
           id: 'tmm_0000000003',
           agentId: 'a_developer',
           alias: '开发者-2',
           seq: 2,
-          agent: { id: 'a_developer', name: '开发者', role: 'developer' },
+          agent: {
+            id: 'a_developer',
+            name: '开发者',
+            role: 'developer',
+            agentKey: 'developer',
+          },
         },
       ];
       (prisma as any).teamMember.findMany = jest
@@ -984,6 +1155,7 @@ describe('WorkerDispatcher', () => {
         id: 'a_developer',
         name: '开发者',
         role: 'developer',
+        agentKey: 'developer',
         prompt: '负责编码实现。',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
@@ -1708,7 +1880,11 @@ describe('WorkerDispatcher', () => {
       });
       expect(buildSystemInstructions(agent)).toBe(withNull);
       expect(withNull).toBe(withUndefined);
-      for (const s of [withNull, withUndefined, buildSystemInstructions(agent)]) {
+      for (const s of [
+        withNull,
+        withUndefined,
+        buildSystemInstructions(agent),
+      ]) {
         expect(s).not.toContain('【岗位职责】');
         expect(s).toContain(`【职责】${agent.prompt}`);
       }
@@ -1923,29 +2099,33 @@ describe('WorkerDispatcher', () => {
       expect(isVteamAgentName(null)).toBe(false);
     });
 
-    it('Todo custom-agent：resolvePolicyAgentCandidate 优先 agentKey，非法/缺席回退角色', () => {
-      // 自定义 agent：agentKey 优先（role=null 也不影响）
-      expect(
-        resolvePolicyAgentCandidate({ agentKey: 'demo-agent', role: null }),
-      ).toBe('vteam-demo-agent');
+    it('todo 10：resolvePolicyAgentCandidate 只认 agentKey（规则 4 收窄：无 key 无候选，角色回退已移除）', () => {
+      // 自定义 agent：agentKey 有效 → 直接命中（不再有 role 键参与）
+      expect(resolvePolicyAgentCandidate({ agentKey: 'demo-agent' })).toBe(
+        'vteam-demo-agent',
+      );
       // 模板行 agentKey = role → 与 roleToAgentName 同值
-      expect(
-        resolvePolicyAgentCandidate({ agentKey: 'product', role: 'product' }),
-      ).toBe('vteam-product');
-      // 存量行 agentKey=null → 角色回退（零行为差）
-      expect(
-        resolvePolicyAgentCandidate({ agentKey: null, role: 'developer' }),
-      ).toBe('vteam-developer');
-      // 非法 key 视为缺席 → 回退角色（绝不拼出非法 agent 名）
-      expect(
-        resolvePolicyAgentCandidate({ agentKey: 'Bad-Key', role: 'product' }),
-      ).toBe('vteam-product');
-      expect(
-        resolvePolicyAgentCandidate({ agentKey: 'Bad-Key', role: null }),
-      ).toBeNull();
+      expect(resolvePolicyAgentCandidate({ agentKey: 'product' })).toBe(
+        'vteam-product',
+      );
+      // 规则 4：agentKey 缺席 → 无候选（旧实现回退 vteam-developer，已收窄）
+      expect(resolvePolicyAgentCandidate({ agentKey: null })).toBeNull();
+      // 非法 key 视为缺席 → 无候选（绝不拼出非法 agent 名）
+      expect(resolvePolicyAgentCandidate({ agentKey: 'Bad-Key' })).toBeNull();
       expect(resolvePolicyAgentCandidate(null)).toBeNull();
+      // 运行时旧形状（role 键由未迁移调用方传入；编译期签名已不含该键）：
+      // role 一律忽略——缺席 key 仍 null，非法 key 仍 null。
       expect(
-        resolvePolicyAgentCandidate({ agentKey: null, role: 'mystery' }),
+        resolvePolicyAgentCandidate({
+          agentKey: null,
+          role: 'developer',
+        } as never),
+      ).toBeNull();
+      expect(
+        resolvePolicyAgentCandidate({
+          agentKey: 'Bad-Key',
+          role: 'product',
+        } as never),
       ).toBeNull();
     });
 
@@ -1957,6 +2137,118 @@ describe('WorkerDispatcher', () => {
       expect(section).toContain('【职责边界】自定义职责：只做示例分析。');
       expect(section).toContain('review→vteam-tester');
       expect(section).toContain('vteam_notify_agent');
+    });
+
+    it('todo 10：roleLabelOfAgentKey——内置 key 原样、自定义/缺席/非法为空串（装配标签的唯一来源）', () => {
+      for (const key of [
+        'product',
+        'project_manager',
+        'architect',
+        'developer',
+        'tester',
+        'plan',
+        'librarian',
+      ]) {
+        expect(roleLabelOfAgentKey(key)).toBe(key);
+      }
+      expect(roleLabelOfAgentKey('myagent')).toBe('');
+      expect(roleLabelOfAgentKey('t4-dev-t4-mu8fnf18')).toBe('');
+      expect(roleLabelOfAgentKey('Bad-Key')).toBe('');
+      expect(roleLabelOfAgentKey('')).toBe('');
+      expect(roleLabelOfAgentKey(null)).toBe('');
+      expect(roleLabelOfAgentKey(undefined)).toBe('');
+    });
+
+    it('todo 10：身份段『角色』值由 agentKey 派生——模板注入 key（product），与旧 Agent.role 逐字节一致', () => {
+      const template: AgentIdentityInfo = {
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        prompt: null,
+        persona: null,
+        agentKey: 'product',
+      };
+      const s = buildSystemInstructions(template);
+      expect(s).toContain(
+        '你是本任务的 产品经理（实例 id: a_product，角色: product）',
+      );
+      // 双维度形态（团队成员 id + 任务实例 id）同样注入 key
+      const s2 = buildSystemInstructions(template, {
+        selfInstanceId: 'tmm_0000000001',
+        selfAlias: '产品经理-1',
+        taskInstanceId: 'ta_0000000001',
+      });
+      expect(s2).toContain(
+        '你是本任务的 产品经理-1（团队成员 id: tmm_0000000001，任务实例 id: ta_0000000001，角色: product）',
+      );
+      for (const key of [
+        'product',
+        'project_manager',
+        'architect',
+        'developer',
+        'tester',
+        'plan',
+        'librarian',
+      ]) {
+        expect(
+          buildSystemInstructions({ ...template, role: key, agentKey: key }),
+        ).toContain(`角色: ${key}）`);
+      }
+    });
+
+    it('todo 10：身份段『角色』对自定义 agent 保持空串（旧 agent.role=null 为空，不泄漏 myagent）', () => {
+      const custom: AgentIdentityInfo = {
+        id: 'a_myagent',
+        name: '自定义助手',
+        role: '',
+        prompt: null,
+        persona: null,
+        agentKey: 'myagent',
+      };
+      const s = buildSystemInstructions(custom);
+      expect(s).toContain(
+        '你是本任务的 自定义助手（实例 id: a_myagent，角色: ）',
+      );
+      expect(s).not.toContain('角色: myagent');
+    });
+
+    it('todo 10：名册行『角色』对自定义成员同样为空串（roster 行与身份行同源）', () => {
+      const team: TeamMemberInfo[] = [
+        {
+          id: 'a_product',
+          name: '产品经理',
+          role: 'product',
+          instanceId: 'tmm_0000000001',
+          alias: '产品经理-1',
+          seq: 1,
+        },
+        {
+          id: 'a_myagent',
+          name: '自定义助手',
+          role: '',
+          instanceId: 'tmm_0000000002',
+          alias: '自定义-1',
+          seq: 1,
+        },
+      ];
+      const s = buildSystemInstructions(agent, { team });
+      expect(s).toContain(
+        '产品经理-1（实例 id: tmm_0000000001，角色: product）',
+      );
+      expect(s).toContain('自定义-1（实例 id: tmm_0000000002，角色: ）');
+      expect(s).not.toContain('角色: myagent');
+    });
+
+    it('todo 10：roleNeedsIssueDetail 与旧结果一致——7 内置 key 逐一对齐（product/tester/developer 真）', () => {
+      for (const key of ['product', 'tester', 'developer']) {
+        expect(roleNeedsIssueDetail(key)).toBe(true);
+      }
+      for (const key of ['project_manager', 'architect', 'plan', 'librarian']) {
+        expect(roleNeedsIssueDetail(key)).toBe(false);
+      }
+      // 自定义 agentKey 永不命中中文子串检查 → 与旧 null 输入同为 false
+      expect(roleNeedsIssueDetail('myagent')).toBe(false);
+      expect(roleNeedsIssueDetail('t4-dev-t4-mu8fnf18')).toBe(false);
     });
 
     it('Todo 11：7 内置出厂 correction → boundary 与变更前冻结基线逐字节一致', () => {
@@ -2297,13 +2589,62 @@ describe('WorkerDispatcher', () => {
     const count = (haystack: string, needle: string): number =>
       haystack.split(needle).length - 1;
     const BUILTIN_IDENTITIES: AgentIdentityInfo[] = [
-      { id: 'a_product', name: '产品经理', role: 'product', prompt: null, persona: null, agentKey: null },
-      { id: 'a_project_manager', name: '项目经理', role: 'project_manager', prompt: null, persona: null, agentKey: null },
-      { id: 'a_architect', name: '架构师', role: 'architect', prompt: null, persona: null, agentKey: null },
-      { id: 'a_developer', name: '开发者', role: 'developer', prompt: null, persona: null, agentKey: null },
-      { id: 'a_tester', name: '测试', role: 'tester', prompt: null, persona: null, agentKey: null },
-      { id: 'a_plan', name: '计划员', role: 'plan', prompt: null, persona: null, agentKey: null },
-      { id: 'a_librarian', name: '知识管理员', role: 'librarian', prompt: null, persona: null, agentKey: null },
+      {
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      },
+      {
+        id: 'a_project_manager',
+        name: '项目经理',
+        role: 'project_manager',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      },
+      {
+        id: 'a_architect',
+        name: '架构师',
+        role: 'architect',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      },
+      {
+        id: 'a_developer',
+        name: '开发者',
+        role: 'developer',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      },
+      {
+        id: 'a_tester',
+        name: '测试',
+        role: 'tester',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      },
+      {
+        id: 'a_plan',
+        name: '计划员',
+        role: 'plan',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      },
+      {
+        id: 'a_librarian',
+        name: '知识管理员',
+        role: 'librarian',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      },
     ];
 
     it('团队协作规约块对全部 7 个内置 Agent 各出现恰好一次（常量字节注入）', () => {
@@ -2331,14 +2672,14 @@ describe('WorkerDispatcher', () => {
     });
 
     it('两个平台常量文本字节与 seed 原文一致（不可改写/换行）', () => {
-      expect(TEAM_COLLABORATION_CHARTER_INSTRUCTION.split('\n')).toHaveLength(5);
+      expect(TEAM_COLLABORATION_CHARTER_INSTRUCTION.split('\n')).toHaveLength(
+        5,
+      );
       expect(AGENT_RECEIPT_IRON_LAW_INSTRUCTION.split('\n')).toHaveLength(4);
       expect(TEAM_COLLABORATION_CHARTER_INSTRUCTION).toContain(
         'docs/agent-platform/30-团队协作规约.md',
       );
-      expect(AGENT_RECEIPT_IRON_LAW_INSTRUCTION).toContain(
-        '- 回执必@派发人：',
-      );
+      expect(AGENT_RECEIPT_IRON_LAW_INSTRUCTION).toContain('- 回执必@派发人：');
     });
   });
 
@@ -6157,6 +6498,7 @@ describe('WorkerDispatcher', () => {
         id: 'a_product',
         name: '产品经理',
         role: 'product',
+        agentKey: 'product',
         prompt: '负责需求。',
         persona: null,
         defaultModelId: null,
@@ -6190,7 +6532,12 @@ describe('WorkerDispatcher', () => {
             agentId: 'a_product',
             alias: '产品经理-1',
             seq: 1,
-            agent: { id: 'a_product', name: '产品经理', role: 'product' },
+            agent: {
+              id: 'a_product',
+              name: '产品经理',
+              role: 'product',
+              agentKey: 'product',
+            },
           },
           {
             id: 'tmm_0000000002',
@@ -6198,7 +6545,12 @@ describe('WorkerDispatcher', () => {
             agentId: 'a_developer',
             alias: '开发者-1',
             seq: 1,
-            agent: { id: 'a_developer', name: '开发者', role: 'developer' },
+            agent: {
+              id: 'a_developer',
+              name: '开发者',
+              role: 'developer',
+              agentKey: 'developer',
+            },
           },
           {
             id: 'tmm_0000000003',
@@ -6206,7 +6558,12 @@ describe('WorkerDispatcher', () => {
             agentId: 'a_developer',
             alias: '开发者-2',
             seq: 2,
-            agent: { id: 'a_developer', name: '开发者', role: 'developer' },
+            agent: {
+              id: 'a_developer',
+              name: '开发者',
+              role: 'developer',
+              agentKey: 'developer',
+            },
           },
         ]),
       };
@@ -6262,7 +6619,12 @@ describe('WorkerDispatcher', () => {
             id: 'tmm_0000000001',
             alias: '产品经理-1',
             seq: 1,
-            agent: { id: 'a_product', name: '产品经理', role: 'product' },
+            agent: {
+              id: 'a_product',
+              name: '产品经理',
+              role: 'product',
+              agentKey: 'product',
+            },
           },
         ]),
       };
@@ -6369,7 +6731,12 @@ describe('WorkerDispatcher', () => {
             id: 'tmm_0000000001',
             alias: '产品经理-1',
             seq: 1,
-            agent: { id: 'a_product', name: '产品经理', role: 'product' },
+            agent: {
+              id: 'a_product',
+              name: '产品经理',
+              role: 'product',
+              agentKey: 'product',
+            },
           },
         ]),
       };
@@ -6602,6 +6969,7 @@ describe('WorkerDispatcher', () => {
         id: 'a_product',
         name: '产品经理',
         role: 'product',
+        agentKey: 'product',
         prompt: '负责需求',
         persona: null,
         defaultModelId: null,
@@ -7354,10 +7722,8 @@ describe('WorkerDispatcher', () => {
           taskContext: { taskId: 't_0000000001', ...extra },
         }) as any;
 
-      it('rule 4 (pure)：agentKey 缺席且无 role → 无候选（resolvePolicyAgentCandidate 返回 null）', () => {
-        expect(
-          resolvePolicyAgentCandidate({ agentKey: null, role: null }),
-        ).toBeNull();
+      it('rule 4 (pure)：agentKey 缺席 → 无候选（resolvePolicyAgentCandidate 返回 null）', () => {
+        expect(resolvePolicyAgentCandidate({ agentKey: null })).toBeNull();
       });
 
       it('rule 1：策略候选解析且 worker 支持 → 候选胜出，opencodeAgentName 被忽略', async () => {

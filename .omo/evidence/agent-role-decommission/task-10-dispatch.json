@@ -1,0 +1,226 @@
+{
+  "todo": 10,
+  "title": "[server] Migrate the REMAINING worker-dispatcher Agent.role consumers (DISCOVERED)",
+  "date": "2026-09-20",
+  "commit": "refactor(dispatch): stop reading Agent.role in the dispatcher",
+  "baselineHead": "20f0784",
+  "changedFiles": [
+    "server/src/chat/worker-dispatcher.ts",
+    "server/src/chat/worker-dispatcher.spec.ts",
+    "scripts/agent-role-consumer-manifest.txt"
+  ],
+  "theReadsAndTheirReplacement": {
+    "candidateFallback": {
+      "before": "resolvePolicyAgentCandidate row type {agentKey, role}; fallback `return roleToAgentName(row?.role ?? null)`",
+      "after": "row type {agentKey} only; `return null` (rule-4 narrowing declared in todo 1). Runtime legacy shapes with a `role` key are ignored (2 spec assertions)."
+    },
+    "identityLine": {
+      "before": "buildSystemInstructions identityLine interpolates `${agent.role ?? ''}` (2 branches)",
+      "after": "const { role: agentRoleLabel } = agent; interpolates `${agentRoleLabel ?? ''}` — same DTO field, no DB column read, no `agent.role` literal left (grep gate)."
+    },
+    "agentRowSelect": {
+      "before": "prisma.agent.findUnique select { id, name, role: true, prompt, persona, agentKey, policyId }",
+      "after": "role: true removed from the select (id/name/prompt/persona/agentKey/policyId remain)."
+    },
+    "agentIdentityRole": {
+      "before": "role: agentRow?.role ?? null",
+      "after": "role: roleLabelOfAgentKey(agentRow?.agentKey ?? null) — a NEW exported pure helper: built-in key (VTEAM_AGENT_NAMES namespace) -> the key itself; custom/absent/invalid -> ''. Fields KEPT on AgentIdentityInfo/TeamMemberInfo per D2, with a doc comment stating the value is key-derived and todo 8 may rename/delete."
+    },
+    "teamMemberInclude": {
+      "before": "agent: { select: { id: true, name: true, role: true } }",
+      "after": "agent: { select: { id: true, name: true, agentKey: true } }"
+    },
+    "teamMemberInfoRole": {
+      "before": "role: tm.agent.role",
+      "after": "role: roleLabelOfAgentKey(tm.agent.agentKey ?? null) (feeds the roster line `角色: ${m.role ?? ''}`)"
+    },
+    "issueDetail": {
+      "before": "issueDetail: roleNeedsIssueDetail(agentIdentity.role)",
+      "after": "issueDetail: roleNeedsIssueDetail(agentIdentity.agentKey)"
+    },
+    "boundaryConstantName": {
+      "before": "const constantName = roleToAgentName(agent.role)",
+      "after": "const constantName = roleToAgentName(agent.agentKey)"
+    },
+    "resolveByAgentArg": {
+      "before": "resolveByAgent({ policyId, role: agent.role, agentKey })",
+      "after": "resolveByAgent({ policyId, agentKey }) — role arg dropped (inert per todo 3)"
+    }
+  },
+  "D2_mechanism": {
+    "chosen": "roleLabelOfAgentKey(agentKey): `roleToAgentName(agentKey) ? agentKey : ''`",
+    "why": "Returns the role KEY when agentKey names a built-in vteam agent (template rows have agentKey === role -> byte-identical to the old Agent.role value), and EMPTY STRING for custom/clone rows (old Agent.role was null -> `?? ''`). Reuses the existing isVteamAgentName/VTEAM_AGENT_NAMES namespace used by roleToAgentName; no new constant.",
+    "rejectedAlternatives": [
+      "tool-derived rule: no tool predicate separates {product,tester,developer} from project_manager (identical ROLE_BOUNDARIES sets) -> would flip project_manager to the full issue instruction (forbidden).",
+      "AgentRole.name: would inject the Chinese label where the prompt today injects the key."
+    ],
+    "fieldDisposition": "Fields `role` KEPT on AgentIdentityInfo/TeamMemberInfo (set in ~15 spec fixture literals; removing = TS excess-property churn). Doc comment added: value is now key-derived; rename/delete belongs to todo 8. Recorded per D2."
+  },
+  "D3_narrowing": {
+    "claim": "Every template row has agent_key === role; every custom row has agent_key and role IS NULL; no live row has NULL agent_key with a usable role.",
+    "liveDBQuery": "SELECT id, name, role, agent_key, type FROM aiagents.agents ORDER BY type, id; (via docker exec aiagents-compose-db mysql)",
+    "liveDBRows": "7 templates: a_architect|architect|architect, a_developer|developer|developer, a_librarian|librarian|librarian, a_plan|plan|plan, a_product|product|product, a_project_manager|project_manager|project_manager, a_tester|tester|tester; 3 customs: a_0000000001 (role NULL, key myagent), a_0000000002 (role NULL, key t4-dev-t4-mu8fnf18), a_0000000004 (role NULL, key t4-dev-t4-mu8fnzad)",
+    "liveDBCounts": "null_agentKey=0; template_with(agent_key<>role)=0; custom_with_role_not_null=0; null_key_with_usable_role=0; null_role=3; total=10",
+    "conclusion": "The narrowing is behaviour-preserving for every live row: templates keep the same vteam-<key> candidate (agentKey === role); customs keep theirs via agentKey; no row loses a candidate."
+  },
+  "assembledPromptBeforeAfter": {
+    "method": "A temporary jest capture spec drove the real dispatcher path (WorkerDispatcher.dispatch -> workerClient.execute payload.system) for (a) a template member (agentKey=role=product) and (b) a custom member (agentKey=myagent, role=null), each with and without a resolved policy service. Same fixed WORK_DIR root for both runs. Captured BEFORE (production file stashed to HEAD) and AFTER (final shipped source); compared with cmp.",
+    "template": {
+      "template_noSvc.txt": "BYTE-IDENTICAL",
+      "template_withSvc.txt": "BYTE-IDENTICAL"
+    },
+    "custom": {
+      "custom_noSvc.txt": "BYTE-IDENTICAL",
+      "custom_withSvc.txt": "BYTE-IDENTICAL"
+    },
+    "customRoleLabelRemainedEmpty": true,
+    "customRoleLabelEvidence": "The assembled prompt for the custom member contains `你是本任务的 自定义-1（实例 id: tmm_0000000002，角色: ）` — role segment IS the empty string (no `myagent` leak) before and after.",
+    "resolveByAgentArgs": {
+      "templateBefore": {
+        "policyId": "ep_product",
+        "role": "product",
+        "agentKey": "product"
+      },
+      "templateAfter": {
+        "policyId": "ep_product",
+        "agentKey": "product"
+      },
+      "customBefore": {
+        "policyId": "ep_custom",
+        "role": null,
+        "agentKey": "myagent"
+      },
+      "customAfter": {
+        "policyId": "ep_custom",
+        "agentKey": "myagent"
+      }
+    },
+    "finalSourceSha256": "359e8d5fe258e7d70f74d7c64c8051b03c2b6ff395625e5ab6d31e50f26b6ed7"
+  },
+  "mutationChecks": [
+    {
+      "mutation": "resolvePolicyAgentCandidate falls back to roleToAgentName((row as any)?.role) again",
+      "killed": true,
+      "evidence": "1 failed / 263 passed: 'todo 10：resolvePolicyAgentCandidate 只认 agentKey（规则 4 收窄…）'",
+      "restoredSha": "359e8d5fe258e7d70f74d7c64c8051b03c2b6ff395625e5ab6d31e50f26b6ed7"
+    },
+    {
+      "mutation": "identity label re-reads the DB role column (`role: (agentRow as any)?.role ?? null` + `role: true` back in the select)",
+      "killed": true,
+      "evidence": "1 failed / 263 passed: 'todo 10：装配来源是 agentKey 而非 role 列——role 列值不同也不进入身份段/issue 判据（突变检测器）' (role='产品经理' with agentKey='myagent' renders `角色: 产品经理`)",
+      "restoredSha": "359e8d5fe258e7d70f74d7c64c8051b03c2b6ff395625e5ab6d31e50f26b6ed7"
+    },
+    {
+      "mutation": "issueDetail reverts to the DB role column (with the select + identity wired to role)",
+      "killed": true,
+      "evidence": "1 failed / 263 passed via the same discriminating fixture (no ISSUE_FULL_INSTRUCTION assertion)",
+      "restoredSha": "359e8d5fe258e7d70f74d7c64c8051b03c2b6ff395625e5ab6d31e50f26b6ed7"
+    },
+    {
+      "mutation": "resolveBoundaryAndTools constant name from agent.role AND the role arg restored in resolveByAgent",
+      "killed": true,
+      "evidence": "2 failed / 262 passed: 'Todo 11：自定义 agent 的策略 correction → system 注入【职责边界】（此前为空）' + 'todo 2：dispatch 用 resolved policy tools 驱动（持有工具 → 两段照常注入，即使 role=plan）'",
+      "restoredSha": "359e8d5fe258e7d70f74d7c64c8051b03c2b6ff395625e5ab6d31e50f26b6ed7"
+    },
+    {
+      "mutation": "roleLabelOfAgentKey returns the raw agentKey (`return agentKey ?? ''`) — leaks custom keys",
+      "killed": true,
+      "evidence": "3 failed / 261 passed: 'todo 10：装配来源是 agentKey 而非 role 列…（突变检测器）' + 'todo 10：identity/roster 标签不泄漏自定义 agentKey（dispatch 装配：role 段为空串）' + 'todo 10：roleLabelOfAgentKey——内置 key 原样、自定义/缺席/非法为空串'. Honest note: the dispatch-leak test was added BECAUSE this mutation survived the first spec revision.",
+      "restoredSha": "359e8d5fe258e7d70f74d7c64c8051b03c2b6ff395625e5ab6d31e50f26b6ed7"
+    },
+    {
+      "mutation": "agentKey dropped from the agent-row prisma select",
+      "killed": true,
+      "evidence": "compile-time: ts-jest TS2339 (Property 'agentKey' does not exist on type) -> suite fails to run",
+      "restoredSha": "359e8d5fe258e7d70f74d7c64c8051b03c2b6ff395625e5ab6d31e50f26b6ed7"
+    }
+  ],
+  "grep": {
+    "command": "grep -n \"agent\\.role\\|agentRow?\\.role\\|tm\\.agent\\.role\\|role: true\\|role: agent\\.role\" server/src/chat/worker-dispatcher.ts",
+    "result": [
+      "612:  // DTO，不再触碰 DB 列 `Agent.role`（todo 7 删除）。解构读取以避免 `agent.role` 字面量",
+      "2112:            // agent.agentKey 派生（todo 10，不再读已删除的 agent.role 列）。",
+      "2183:      // （不注入【岗位职责】，不抛错）。agent.role 是标签 key，不是此段来源。"
+    ],
+    "commentsOnly": true
+  },
+  "checker": {
+    "command": "bash scripts/check-agent-role-consumers.sh",
+    "observed": 149,
+    "unmapped": 0,
+    "rc": 0,
+    "manifestRegenerated": "147 -> 149 keys after the final doc-comment edits, regenerated with the checker's own grep pipeline (only worker-dispatcher.ts lines drifted; web/other-server files untouched — verified by diff).",
+    "negativeControl": {
+      "command": "bash scripts/check-agent-role-consumers.sh --extra-dir /tmp/armap-neg (synthetic file with agent.role outside the repo)",
+      "observed": 148,
+      "unmapped": 1,
+      "rc": 1
+    },
+    "deltaExplanation": "149 - 147 = +2 keys, purely line-drift-driven: the final doc-comment edits moved 2 additional worker-dispatcher.ts lines into the `.role\\b` grep net (a new interface field doc + helper doc). No consumer was added or removed."
+  },
+  "gates": {
+    "serverTsc": {
+      "command": "cd server && npx tsc -p tsconfig.json --noEmit",
+      "exit": 0
+    },
+    "serverFullSuite": {
+      "command": "cd server && npx jest --runInBand",
+      "suites": "140 passed, 140 total",
+      "tests": "3244 passed, 3244 total",
+      "baseline": "140 suites / 3236 tests",
+      "delta": "+8 tests"
+    },
+    "chatSuite": {
+      "command": "npx jest --runInBand src/chat",
+      "suites": "13 passed",
+      "tests": "494 passed"
+    },
+    "workerSuite": {
+      "command": "cd worker && npx jest --runInBand",
+      "suites": "26 passed",
+      "tests": "688 passed",
+      "unchanged": true,
+      "workerTouched": false
+    },
+    "frozenSha": {
+      "file": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json",
+      "sha": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+      "unchanged": true
+    },
+    "livePayload": {
+      "command": "curl -s -H 'X-Worker-Token: compose-worker-token' http://localhost:13000/api/v1/agent-policies",
+      "result": "The 7 built-ins (vteam-plan, vteam-product, vteam-architect, vteam-developer, vteam-tester, vteam-project_manager, vteam-librarian) deep-equal the frozen baseline; guard.roles for those 7 also deep-equal. 3 extra live custom agents (vteam-myagent, vteam-t4-dev-t4-mu8fnf18, vteam-t4-dev-t4-mu8fnzad) are outside the baseline by design."
+    },
+    "eslint": {
+      "command": "npx eslint src/chat/worker-dispatcher.ts src/chat/worker-dispatcher.spec.ts",
+      "errors": 0,
+      "warnings": 5,
+      "note": "The 5 warnings are pre-existing (unused imports in the spec). Pre-todo baseline: 16 errors / 5 warnings; introduced prettier errors were fixed with --fix."
+    }
+  },
+  "scopeFidelity": {
+    "touched": [
+      "server/src/chat/worker-dispatcher.ts",
+      "server/src/chat/worker-dispatcher.spec.ts",
+      "scripts/agent-role-consumer-manifest.txt"
+    ],
+    "NOT_touched": [
+      "worker/**",
+      "server/prisma/**",
+      "server/src/execution-policies/execution-policy.service.ts",
+      "server/src/agents/agents.service.ts",
+      "web/**",
+      "schema.prisma"
+    ],
+    "helpersDeleted": "none (isPlanRole / roleToAgentName / roleNeedsIssueDetail / VTEAM_AGENT_NAMES all remain; removals are todo 8's)",
+    "newHelpers": "roleLabelOfAgentKey (exported, pure) — the only new production symbol",
+    "wireFormatChanged": false,
+    "pushed": false
+  },
+  "residuals": [
+    "Agent.role still exists in the DB (schema.prisma:629) until todo 7.",
+    "AgentIdentityInfo.role / TeamMemberInfo.role still exist and carry the key-derived label; todo 8 may rename/delete them.",
+    "roleToAgentName is still used by production code (roleLabelOfAgentKey + resolveBoundaryAndTools) — intentional; todo 8 owns the removal decision."
+  ],
+  "finalSourceSha256": "359e8d5fe258e7d70f74d7c64c8051b03c2b6ff395625e5ab6d31e50f26b6ed7"
+}

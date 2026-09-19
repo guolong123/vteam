@@ -204,3 +204,42 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   regenerating with the checker's own pipeline gives `OBSERVED: 148 / UNMAPPED: 0` and the
   synthetic `--extra-dir` probe still yields `UNMAPPED: 1` (exit 1) — the negative control keeps
   the happy path honest. Net shrink 150 → 148 keys = the 5 deleted maps.
+
+## todo 10 — remaining worker-dispatcher reads re-sourced from `agentKey`
+
+- **The field name `role` survives, the DB column does not.** `AgentIdentityInfo.role` and
+  `TeamMemberInfo.role` are KEPT (removing them churns ~15 spec fixture literals with TS
+  excess-property errors), but their value now comes from a new pure helper
+  `roleLabelOfAgentKey(agentKey) = roleToAgentName(agentKey) ? agentKey : ''`. Built-in
+  template rows (`agent_key === role`) render the key byte-for-byte; custom rows render the
+  empty string — exactly what the old `agent.role ?? ''` produced when the column was null.
+  A doc comment on each field names todo 8 as the rename/delete owner.
+- **`resolvePolicyAgentCandidate`'s signature narrowed to `{ agentKey }` — that IS the
+  compile-time guard.** Dropping `role` from the row type makes every spec fixture that
+  passed `{agentKey, role}` a TS2353 error, so the compiler enumerates the migration sites.
+  The 2 remaining role-key runtime assertions use `as never` deliberately to prove the
+  legacy shape is ignored. This is the todo-1 rule-4 narrowing, not a spec weakening.
+- **Live DB confirms the narrowing is safe: 0 rows have `agent_key IS NULL`; all 7 templates
+  satisfy `agent_key = role`; all 3 custom rows have `role IS NULL` + a lowercase-ASCII key.**
+  So no live row loses a policy candidate (`resolvePolicyAgentCandidate`) and no custom row
+  gains an issue-detail instruction (`roleNeedsIssueDetail(customKey)` cannot match the
+  Chinese substring checks because `AGENT_KEY_PATTERN` is `^[a-z][a-z0-9_-]{0,62}$`).
+- **Assembled-prompt proof needs a FIXED work dir.** The first BEFORE/AFTER run diffed only by
+  the random `keta-cap-XXXX` tmpdir embedded in the `【运行时工作目录】` section. Pinning
+  `CAPTURE_WORKROOT` in the harness made all 4 captures (template/custom × with/without a
+  policy service) byte-identical with stable shas. Lesson: any prompt capture involving a
+  mkdtemp needs the root pinned, or the "diff" is noise.
+- **A mutation that SURVIVES is a coverage finding, not a dead end.** `roleLabelOfAgentKey`
+  returning the raw key passed the whole suite on the first spec revision (the custom-key
+  leak was only unit-tested via built-in assertions). Adding a dispatch-level test with a
+  custom member asserting `角色: ）` (and `not.toContain('角色: myagent')`) killed it. Record
+  the survived mutation in the evidence — it is the honest reason the test exists.
+- **A discriminating fixture beats three assertion fixtures.** One row with
+  `role: '产品经理'` + `agentKey: 'myagent'` makes both the identity-line and the
+  issue-detail regressions fail loudly, because the label leak is a Chinese display name and
+  the issue check matches `产品`. Three separate "happy path" fixtures would not have caught
+  a code path reading the wrong field for the same row.
+- **The manifest is `file:line`-keyed, so doc-comment edits drift it.** Final regeneration
+  after the comment pass: 147 → 149 keys, purely line drift on `worker-dispatcher.ts`
+  (verified key-by-key: nothing outside that file changed). Regenerate LAST, from the frozen
+  source, then run the checker (rc 0) plus the `--extra-dir` negative control (UNMAPPED 1).
