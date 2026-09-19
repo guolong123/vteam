@@ -80,3 +80,26 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Restore discipline:** pre-mutation sha `ca42274a…` (backed to `/tmp/todo4-backup/page.tsx.final`), post-mutation `370237b5…`, restored via `cp` + `shasum -a 256` + `diff -q` → identical. **Never `git checkout --`/`git restore`** (destroys uncommitted work in this file owned by todos 3/5).
 - **ACCEPTED residual (recorded in code at the mutation, review fix m4):** the single-page in-flight gate does not close a **multi-client** race — `execution_policies` has no `version`/CAS column, so two browsers (or the raw API) PATCHing the same policy still last-write-wins. Not solved by design; no version column, no migration.
 - **Result:** new suite 4/4 green, todo-3 suite 7/7 green (updated test 6), `npx tsc --noEmit` exit 0. Cleanup verified: 0 residue agents/policies.
+
+## Todo 5 — [web] 重启通知 + 一键重启（2026-09-19）
+
+- **传播规则是设计的核心**：策略行（`execution_policies`）是全局的，而 worker 侧 `injectAll()`
+  （写 `opencode.json` + `.vteam-role-guard/roles.json`）逐 worker 执行 → 策略 PATCH 广播为 0，
+  必须重启**每一个**已注册 worker。重启动作**不筛在线态**：命令经心跳下发，离线 worker 上线后
+  仍会收到排队命令；筛掉离线只会留下永不生效的 worker。
+- **写盘成功 ≠ 生效**：`policyMutation.onSuccess` 是唯一可靠的「已落库」信号，`setRestartNeeded(true)`
+  挂在那里；通知文案必须说「尚未生效」，完成态只说「命令已下发」，绝不宣称已生效。
+- **不自动重启**：重启会中断在途会话 → 只提示、由用户显式点击。e2e 用 `page.route` 拦截
+  `**/workers/*/restart` 计数为 0 来锁定该行为。
+- **零 worker**：不要渲染禁用按钮（死按钮），改渲染空态句（`policy-restart-empty`）。
+- **e2e 测试写盘确认的可靠手法**：`expect.poll` 直读服务端 `GET /execution-policies/:id` 的
+  `config.permission.bash`，而不是轮询 UI（debounce 400ms + PATCH 在途 + 回读竞态下 UI 断言脆弱）。
+- **负断言窗口**：断言「某请求从未发出」时无事件可等，用短 `waitForTimeout(750)` + 计数断言
+  （先等一个后置的肯定信号，如按钮仍可见，再等窗口）——避免把 flaky 引入用固定 sleep 监听的误区。
+- **restart 端点真实存在，测试必须拦截**：`POST /workers/:id/restart` 经心跳真实排队重启命令；
+  本 QA 全程用 `page.route` + `route.fulfill` 本地应答，未向真实 worker 下发任何重启（收据：
+  task-5-restart-notice.json 内 `real_restart_avoided_by_route_fulfil: true`；worker 仍 online）。
+- **mutation proof 手法**：拷 `page.tsx` 到 `/tmp` → 删 `setRestartNeeded(true)`（4 个测试全红）
+  → `cp` 回覆盖 + `shasum -a 256` 与原 sha 逐字节比对 -> 重新 build。**绝不 `git checkout --`**。
+- **截图证据**：fullPage 截图会从页顶开始，通知在折叠线下 → `scrollIntoViewIfNeeded()` 先把
+  `[data-testid=policy-restart-notice]` 滚进视口再截，否则证据图里看不到本次交付物。

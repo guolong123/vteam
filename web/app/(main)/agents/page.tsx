@@ -886,6 +886,12 @@ interface EffectivePermissionSectionProps {
   mcpTools: ApiTool[];
   /** MCP 目录加载中（原生行照常渲染，分组区占位）。 */
   loading: boolean;
+  /**
+   * GET /workers 全量（重启通知的作用域来源）。策略是**全局**的（execution_policies 行），
+   * 而 worker 侧 injectAll() 是**逐 worker** 落盘（opencode.json + .vteam-role-guard/roles.json），
+   * 因此策略写入后必须重启**每一个**已注册 worker 才会生效。
+   */
+  workers: ApiWorkerRow[];
 }
 
 /** policy config 全量载荷（PATCH /execution-policies/:policyId 的 `config` 形状，不新增键）。 */
@@ -898,10 +904,14 @@ interface PolicyConfigPayload {
 /** 原生编辑 debounce 窗口（规则表 onChange 每击键触发；远小于 Playwright 期望超时且用户不可感）。 */
 const NATIVE_DEBOUNCE_MS = 400;
 
-function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, loading }: EffectivePermissionSectionProps) {
+function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, loading, workers }: EffectivePermissionSectionProps) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const queryClient = useQueryClient();
   const [policyError, setPolicyError] = useState<string | null>(null);
+  /** 本挂载内至少一次策略写盘成功 → 需要重启全部 worker 才生效（见 props.workers 注释）。 */
+  const [restartNeeded, setRestartNeeded] = useState(false);
+  /** 重启请求已全部下发（worker 侧经心跳异步执行，此处仅表示命令已排队）。 */
+  const [restartDone, setRestartDone] = useState(false);
   // 原生 permission 草稿（渲染用；写盘经 configRef + debounce 合并进统一 policy mutation）。
   const [draftNative, setDraftNative] = useState<Record<string, unknown>>({});
   const nativeValue = (key: string): unknown =>
@@ -1072,6 +1082,10 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
     },
     onSuccess: () => {
       setPolicyError(null);
+      // 写盘成功 ≠ 生效：策略行已落库，但 worker 侧 opencode.json/roles.json 仍为旧值
+      // （injectAll() 只在 worker 启动 / reload-config 时执行）→ 挂起「需重启」通知。
+      setRestartNeeded(true);
+      setRestartDone(false);
       writePendingRef.current = false;
       setWritePending(false);
       queryClient.invalidateQueries({ queryKey: ["agents"] });
@@ -1082,6 +1096,25 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
       setWritePending(false);
       setPolicyError(isApiError(err) ? err.message : "保存权限失败，请稍后重试");
     },
+  });
+
+  /**
+   * 重启全部已注册 worker 使新策略生效。**不筛选在线态**：策略全局、injectAll() 逐 worker，
+   * 且命令经心跳下发（离线 worker 上线后即收到排队命令），筛选只会留下永不生效的 worker。
+   * 不做自动重启：重启会中断在途会话，必须由用户显式触发。
+   */
+  const restartMutation = useMutation({
+    mutationFn: async () => {
+      const results = await Promise.all(
+        workers.map((w) => api.post<{ workerId: string; queued: boolean }>(`/workers/${w.id}/restart`)),
+      );
+      return results;
+    },
+    onSuccess: () => {
+      setRestartDone(true);
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+    onError: (err) => setPolicyError(isApiError(err) ? err.message : "重启 worker 失败，请稍后重试"),
   });
 
   /** 单工具切换：取消挂起的原生 debounce（草稿已在 ref），在权威 config 上组合出下一份全量。 */
@@ -1376,6 +1409,68 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
           </div>
         );
       })}
+
+      {/* 写盘 ≠ 生效：策略 PATCH 只落库，worker 侧 injectAll()（启动 / reload-config）才写
+          opencode.json + roles.json。因此每次写盘成功后提示需重启，且**只**提示、不自动重启
+          （重启会中断在途会话）。策略全局 × injectAll() 逐 worker → 重启全部已注册 worker。 */}
+      {restartNeeded && (
+        <div
+          data-testid="policy-restart-notice"
+          role="status"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: space.xs,
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: "rgba(245,158,11,0.10)",
+            border: "1px solid rgba(245,158,11,0.28)",
+            fontSize: fontSize.sm,
+            color: "#B45309",
+          }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: space.xs, fontWeight: 600 }}>
+            <span aria-hidden>!</span>
+            权限已保存到策略，但尚未生效：worker 重启后才会写入 opencode.json / roles.json。
+          </span>
+          <span data-testid="policy-restart-hint" style={{ fontSize: fontSize.xs, color: neutral[600] }}>
+            策略是全局的，而 injectAll() 按 worker 执行：所有已注册 worker 都需重启，新权限才会生效。
+          </span>
+          {workers.length === 0 ? (
+            <span data-testid="policy-restart-empty" style={{ fontSize: fontSize.xs, color: neutral[600] }}>
+              当前没有已注册 worker，暂无可重启对象；新权限将在 worker 注册启动（injectAll()）时生效。
+            </span>
+          ) : restartDone ? (
+            <span data-testid="policy-restart-done" style={{ fontSize: fontSize.xs, color: "#0D9488" }}>
+              重启命令已下发（{workers.length} 个 worker）；各 worker 重启完成后新权限生效。
+            </span>
+          ) : (
+            <button
+              type="button"
+              data-testid="policy-restart-action"
+              disabled={restartMutation.isPending}
+              onClick={() => {
+                setPolicyError(null);
+                restartMutation.mutate();
+              }}
+              style={{
+                alignSelf: "flex-start",
+                fontFamily: fontFamily.body,
+                fontSize: fontSize.sm,
+                fontWeight: 600,
+                color: "#FFFFFF",
+                backgroundColor: restartMutation.isPending ? neutral[400] : "#D97706",
+                border: "none",
+                borderRadius: radius.md,
+                padding: `${space.xs}px ${space.md}px`,
+                cursor: restartMutation.isPending ? "not-allowed" : "pointer",
+              }}
+            >
+              {restartMutation.isPending ? "重启中…" : "重启全部 worker 使其生效"}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* MCP 工具分组（server 目录驱动）：停用 server 默认收起，启用默认展开 */}
       {renderMcpGroups()}
@@ -2078,6 +2173,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
           mcpServers={mcpServers}
           mcpTools={mcpTools}
           loading={mcpLoading}
+          workers={workers}
         />
       </div>
     </section>

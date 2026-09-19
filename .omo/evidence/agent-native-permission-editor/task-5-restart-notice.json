@@ -1,0 +1,44 @@
+[
+  {
+    "screenshot": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/task-5-restart-notice.png",
+    "captured_at": "test-1-notice-after-save"
+  },
+  {
+    "test": "notice_after_successful_save",
+    "agent": "a_0000000130",
+    "policy_id": "ep_0000000130",
+    "stored_bash": "allow",
+    "notice_visible": true,
+    "notice_says_not_effective_yet": true,
+    "hint_mentions_propagation": true
+  },
+  {
+    "test": "no_auto_restart_on_save",
+    "agent": "a_0000000131",
+    "policy_id": "ep_0000000131",
+    "saves": 2,
+    "restart_requests": 0,
+    "action_still_offered": true
+  },
+  {
+    "test": "restart_all_workers",
+    "agent": "a_0000000132",
+    "policy_id": "ep_0000000132",
+    "expected_worker_ids": [
+      "w_compose_worker"
+    ],
+    "restart_requests": [
+      "http://localhost:13001/api/v1/workers/w_compose_worker/restart"
+    ],
+    "done_hint_visible": true,
+    "real_restart_avoided_by_route_fulfil": true
+  },
+  {
+    "test": "zero_worker_empty_state",
+    "agent": "a_0000000133",
+    "policy_id": "ep_0000000133",
+    "workers_stubbed": [],
+    "empty_state_visible": true,
+    "action_button_absent": true
+  }
+]

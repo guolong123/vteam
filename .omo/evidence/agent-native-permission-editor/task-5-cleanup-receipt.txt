@@ -1,0 +1,16 @@
+Todo 5 cleanup receipt — 2026-09-19T02:42Z, HEAD bfbc526
+=========================================================
+QA agents created per run, all deleted (agent DELETE 200 + policy DELETE 200 + re-GET 404):
+  run 1 (02:36): a_0000000118..a_0000000121  (t5 notice / noauto / restartall / noworker)
+  run 2 (02:36b): a_0000000122..a_0000000125 (same four specs, screenshot scrollIntoView pass)
+  run 3 (02:38, MUTATION proof): same four, all failed, agents still cleaned in `finally`
+  run 4 (02:41, restored): a_0000000126..a_0000000129 (all passed)
+Regression suites also cleaned their own throwaway agents (todo 4 + todo 3 receipts in e2e.txt).
+Verified: GET /agents filtered by name "t5 " -> [] (no strays).
+
+worker restart: NO real restart was ever queued.
+  - Test 2 intercepts **/workers/*/restart: 0 requests observed (asserted).
+  - Test 3 intercepts and route.fulfill()s locally: 1 request to
+    /workers/w_compose_worker/restart, answered by the test itself — never reached the server.
+  - Test 1/4 never render an enabled action (no auto-restart), so no request exists to send.
+  - Post-run health: GET /workers -> w_compose_worker status=online, unchanged.

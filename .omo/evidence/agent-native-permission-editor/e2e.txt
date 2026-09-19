@@ -409,3 +409,408 @@ mysql: [Warning] Using a password on the command line interface can be insecure.
 [e2e] result passed	7. 未知 effect 原样保留（不归一化）
 [e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
 [e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 4 run 2026-09-19T02:26:24Z =====
+
+[e2e] date=2026-09-19T02:26:24Z HEAD=bfbc526104633232ac91049d244860b275f0343c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000108 (agent 200, policy ep_0000000108 200, re-GET 404)
+  ✓  1 e2e/policy-serialize.spec.ts:163:7 › Todo 4 · 策略写入串行化 › 1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见） (3.3s)
+[cleanup] a_0000000109 (agent 200, policy ep_0000000109 200, re-GET 404)
+  ✓  2 e2e/policy-serialize.spec.ts:235:7 › Todo 4 · 策略写入串行化 › 2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复 (1.5s)
+[cleanup] a_0000000110 (agent 200, policy ep_0000000110 200, re-GET 404)
+  ✓  3 e2e/policy-serialize.spec.ts:337:7 › Todo 4 · 策略写入串行化 › 3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow (2.9s)
+[cleanup] a_0000000111 (agent 200, policy ep_0000000111 200, re-GET 404)
+  ✓  4 e2e/policy-serialize.spec.ts:383:7 › Todo 4 · 策略写入串行化 › 4. debounce 合并击键 burst：一次 burst 仅一个 PATCH (2.3s)
+
+  4 passed (11.0s)
+----- end playwright raw -----
+[e2e] PASS playwright green; evidence json present
+[e2e] cleanup [cleanup] a_0000000108 (agent 200, policy ep_0000000108 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000109 (agent 200, policy ep_0000000109 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000110 (agent 200, policy ep_0000000110 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000111 (agent 200, policy ep_0000000111 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见）
+[e2e] result passed	2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复
+[e2e] result passed	3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow
+[e2e] result passed	4. debounce 合并击键 burst：一次 burst 仅一个 PATCH
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 3 run 2026-09-19T02:26:44Z =====
+
+[e2e] date=2026-09-19T02:26:44Z HEAD=bfbc526104633232ac91049d244860b275f0343c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 7 tests using 1 worker
+
+  ✓  1 e2e/native-rule-editor.spec.ts:180:7 › Todo 3 · 原生 glob 规则表编辑器 › 1. 四行恒显 + 编辑器形态（模板 agent） (1.5s)
+[cleanup] a_0000000112 (agent 200, policy ep_0000000112 200, re-GET 404)
+  ✓  2 e2e/native-rule-editor.spec.ts:229:7 › Todo 3 · 原生 glob 规则表编辑器 › 2. absent task 仍渲染（只读 + note） (1.4s)
+[cleanup] a_0000000113 (agent 200, policy ep_0000000113 200, re-GET 404)
+  ✓  3 e2e/native-rule-editor.spec.ts:264:7 › Todo 3 · 原生 glob 规则表编辑器 › 3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask (1.4s)
+[cleanup] a_0000000114 (agent 200, policy ep_0000000114 200, re-GET 404)
+  ✓  4 e2e/native-rule-editor.spec.ts:330:7 › Todo 3 · 原生 glob 规则表编辑器 › 4. `*` 兜底警告：切 allow 即出现 (1.4s)
+[cleanup] a_0000000115 (agent 200, policy ep_0000000115 200, re-GET 404)
+  ✓  5 e2e/native-rule-editor.spec.ts:352:7 › Todo 3 · 原生 glob 规则表编辑器 › 5. 重复 glob 客户端拒绝（提交面不增长） (1.3s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000116 (agent 200, policy ep_0000000116 200, re-GET 404)
+  ✓  6 e2e/native-rule-editor.spec.ts:390:7 › Todo 3 · 原生 glob 规则表编辑器 › 7. 未知 effect 原样保留（不归一化） (1.7s)
+[cleanup] a_0000000117 (agent 200, policy ep_0000000117 200, re-GET 404)
+  ✓  7 e2e/native-rule-editor.spec.ts:428:7 › Todo 3 · 原生 glob 规则表编辑器 › 6. bash 三态：当前值选中且可切换（持久化） (2.8s)
+
+  7 passed (12.7s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000112 (agent 200, policy ep_0000000112 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000113 (agent 200, policy ep_0000000113 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000114 (agent 200, policy ep_0000000114 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000115 (agent 200, policy ep_0000000115 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000116 (agent 200, policy ep_0000000116 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000117 (agent 200, policy ep_0000000117 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 四行恒显 + 编辑器形态（模板 agent）
+[e2e] result passed	2. absent task 仍渲染（只读 + note）
+[e2e] result passed	3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask
+[e2e] result passed	4. `*` 兜底警告：切 allow 即出现
+[e2e] result passed	5. 重复 glob 客户端拒绝（提交面不增长）
+[e2e] result passed	7. 未知 effect 原样保留（不归一化）
+[e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 5 run 2026-09-19T02:36:03Z =====
+
+[e2e] date=2026-09-19T02:36:03Z HEAD=bfbc526104633232ac91049d244860b275f0343c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000118 (agent 200, policy ep_0000000118 200, re-GET 404)
+  ✓  1 e2e/policy-restart-notice.spec.ts:180:7 › Todo 5 · 策略写入后的重启通知 › 1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则 (3.0s)
+[cleanup] a_0000000119 (agent 200, policy ep_0000000119 200, re-GET 404)
+  ✓  2 e2e/policy-restart-notice.spec.ts:228:7 › Todo 5 · 策略写入后的重启通知 › 2. 保存不自动重启：写盘两次，restart 请求数为 0 (4.0s)
+[cleanup] a_0000000120 (agent 200, policy ep_0000000120 200, re-GET 404)
+  ✓  3 e2e/policy-restart-notice.spec.ts:289:7 › Todo 5 · 策略写入后的重启通知 › 3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态 (2.3s)
+[cleanup] a_0000000121 (agent 200, policy ep_0000000121 200, re-GET 404)
+  ✓  4 e2e/policy-restart-notice.spec.ts:355:7 › Todo 5 · 策略写入后的重启通知 › 4. 零 worker 空态：显示空态句，不显示死按钮 (2.2s)
+
+  4 passed (13.1s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000118 (agent 200, policy ep_0000000118 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000119 (agent 200, policy ep_0000000119 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000120 (agent 200, policy ep_0000000120 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000121 (agent 200, policy ep_0000000121 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则
+[e2e] result passed	2. 保存不自动重启：写盘两次，restart 请求数为 0
+[e2e] result passed	3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态
+[e2e] result passed	4. 零 worker 空态：显示空态句，不显示死按钮
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 5 run 2026-09-19T02:36:36Z =====
+
+[e2e] date=2026-09-19T02:36:36Z HEAD=bfbc526104633232ac91049d244860b275f0343c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000122 (agent 200, policy ep_0000000122 200, re-GET 404)
+  ✓  1 e2e/policy-restart-notice.spec.ts:181:7 › Todo 5 · 策略写入后的重启通知 › 1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则 (2.7s)
+[cleanup] a_0000000123 (agent 200, policy ep_0000000123 200, re-GET 404)
+  ✓  2 e2e/policy-restart-notice.spec.ts:229:7 › Todo 5 · 策略写入后的重启通知 › 2. 保存不自动重启：写盘两次，restart 请求数为 0 (3.9s)
+[cleanup] a_0000000124 (agent 200, policy ep_0000000124 200, re-GET 404)
+  ✓  3 e2e/policy-restart-notice.spec.ts:290:7 › Todo 5 · 策略写入后的重启通知 › 3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态 (2.3s)
+[cleanup] a_0000000125 (agent 200, policy ep_0000000125 200, re-GET 404)
+  ✓  4 e2e/policy-restart-notice.spec.ts:356:7 › Todo 5 · 策略写入后的重启通知 › 4. 零 worker 空态：显示空态句，不显示死按钮 (2.2s)
+
+  4 passed (12.2s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000122 (agent 200, policy ep_0000000122 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000123 (agent 200, policy ep_0000000123 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000124 (agent 200, policy ep_0000000124 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000125 (agent 200, policy ep_0000000125 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则
+[e2e] result passed	2. 保存不自动重启：写盘两次，restart 请求数为 0
+[e2e] result passed	3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态
+[e2e] result passed	4. 零 worker 空态：显示空态句，不显示死按钮
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 5 run 2026-09-19T02:38:21Z =====
+
+[e2e] date=2026-09-19T02:38:21Z HEAD=bfbc526104633232ac91049d244860b275f0343c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000126 (agent 200, policy ep_0000000126 200, re-GET 404)
+  ✘  1 e2e/policy-restart-notice.spec.ts:181:7 › Todo 5 · 策略写入后的重启通知 › 1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则 (13.3s)
+[cleanup] a_0000000127 (agent 200, policy ep_0000000127 200, re-GET 404)
+  ✘  2 e2e/policy-restart-notice.spec.ts:229:7 › Todo 5 · 策略写入后的重启通知 › 2. 保存不自动重启：写盘两次，restart 请求数为 0 (13.5s)
+[cleanup] a_0000000128 (agent 200, policy ep_0000000128 200, re-GET 404)
+  ✘  3 e2e/policy-restart-notice.spec.ts:290:7 › Todo 5 · 策略写入后的重启通知 › 3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态 (12.5s)
+[cleanup] a_0000000129 (agent 200, policy ep_0000000129 200, re-GET 404)
+  ✘  4 e2e/policy-restart-notice.spec.ts:356:7 › Todo 5 · 策略写入后的重启通知 › 4. 零 worker 空态：显示空态句，不显示死按钮 (12.5s)
+
+
+  1) e2e/policy-restart-notice.spec.ts:181:7 › Todo 5 · 策略写入后的重启通知 › 1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByTestId('policy-restart-notice')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 10000ms
+      - waiting for getByTestId('policy-restart-notice')
+
+
+      207 |       // Then 通知出现，明说尚未生效，并给出传播规则（全局策略 × 逐 worker injectAll()）
+      208 |       const notice = page.getByTestId("policy-restart-notice");
+    > 209 |       await expect(notice).toBeVisible({ timeout: 10_000 });
+          |                            ^
+      210 |       await expect(notice).toContainText("尚未生效");
+      211 |       await expect(page.getByTestId("policy-restart-hint")).toContainText("injectAll()");
+      212 |       await expect(page.getByTestId("policy-restart-hint")).toContainText("全局");
+        at /Volumes/SSD-Data/01work/git-project/vteam/web/e2e/policy-restart-notice.spec.ts:209:28
+
+    Error Context: test-results/policy-restart-notice-Todo-701cb--通知只在成功写盘后出现，且明确「尚未生效」-传播规则/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/policy-restart-notice-Todo-701cb--通知只在成功写盘后出现，且明确「尚未生效」-传播规则/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/policy-restart-notice-Todo-701cb--通知只在成功写盘后出现，且明确「尚未生效」-传播规则/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) e2e/policy-restart-notice.spec.ts:229:7 › Todo 5 · 策略写入后的重启通知 › 2. 保存不自动重启：写盘两次，restart 请求数为 0 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByTestId('policy-restart-action')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 10000ms
+      - waiting for getByTestId('policy-restart-action')
+
+
+      270 |
+      271 |       // 第二次写盘已回读确认；若 onSuccess 里挂了自动重启，此刻早该发出
+    > 272 |       await expect(page.getByTestId("policy-restart-action")).toBeVisible();
+          |                                                               ^
+      273 |       await page.waitForTimeout(750); // 负断言的观察窗口（无事件可等待）
+      274 |       expect(restartUrls).toHaveLength(0);
+      275 |       await expect(page.getByTestId("policy-restart-done")).toHaveCount(0);
+        at /Volumes/SSD-Data/01work/git-project/vteam/web/e2e/policy-restart-notice.spec.ts:272:63
+
+    Error Context: test-results/policy-restart-notice-Todo-42786-保存不自动重启：写盘两次，restart-请求数为-0/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/policy-restart-notice-Todo-42786-保存不自动重启：写盘两次，restart-请求数为-0/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/policy-restart-notice-Todo-42786-保存不自动重启：写盘两次，restart-请求数为-0/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  3) e2e/policy-restart-notice.spec.ts:290:7 › Todo 5 · 策略写入后的重启通知 › 3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByTestId('policy-restart-action')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 10000ms
+      - waiting for getByTestId('policy-restart-action')
+
+
+      326 |         )
+      327 |         .toBe("allow");
+    > 328 |       await expect(page.getByTestId("policy-restart-action")).toBeVisible({ timeout: 10_000 });
+          |                                                               ^
+      329 |
+      330 |       // When 点击动作
+      331 |       await page.getByTestId("policy-restart-action").click();
+        at /Volumes/SSD-Data/01work/git-project/vteam/web/e2e/policy-restart-notice.spec.ts:328:63
+
+    Error Context: test-results/policy-restart-notice-Todo-e1d76--worker-各一次-restart，随后展示完成态/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/policy-restart-notice-Todo-e1d76--worker-各一次-restart，随后展示完成态/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/policy-restart-notice-Todo-e1d76--worker-各一次-restart，随后展示完成态/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4) e2e/policy-restart-notice.spec.ts:356:7 › Todo 5 · 策略写入后的重启通知 › 4. 零 worker 空态：显示空态句，不显示死按钮 ───
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByTestId('policy-restart-notice')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 10000ms
+      - waiting for getByTestId('policy-restart-notice')
+
+
+      387 |         )
+      388 |         .toBe("allow");
+    > 389 |       await expect(page.getByTestId("policy-restart-notice")).toBeVisible({ timeout: 10_000 });
+          |                                                               ^
+      390 |
+      391 |       // Then 空态句出现，按钮缺席
+      392 |       await expect(page.getByTestId("policy-restart-empty")).toBeVisible();
+        at /Volumes/SSD-Data/01work/git-project/vteam/web/e2e/policy-restart-notice.spec.ts:389:63
+
+    Error Context: test-results/policy-restart-notice-Todo-e1193--4-零-worker-空态：显示空态句，不显示死按钮/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/policy-restart-notice-Todo-e1193--4-零-worker-空态：显示空态句，不显示死按钮/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/policy-restart-notice-Todo-e1193--4-零-worker-空态：显示空态句，不显示死按钮/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  4 failed
+    e2e/policy-restart-notice.spec.ts:181:7 › Todo 5 · 策略写入后的重启通知 › 1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则 ─
+    e2e/policy-restart-notice.spec.ts:229:7 › Todo 5 · 策略写入后的重启通知 › 2. 保存不自动重启：写盘两次，restart 请求数为 0 ─
+    e2e/policy-restart-notice.spec.ts:290:7 › Todo 5 · 策略写入后的重启通知 › 3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态 
+    e2e/policy-restart-notice.spec.ts:356:7 › Todo 5 · 策略写入后的重启通知 › 4. 零 worker 空态：显示空态句，不显示死按钮 ────
+----- end playwright raw -----
+[e2e] FAIL ui reason=playwright run failed (raw above)
+
+===== todo 5 run 2026-09-19T02:41:06Z =====
+
+[e2e] date=2026-09-19T02:41:06Z HEAD=bfbc526104633232ac91049d244860b275f0343c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000130 (agent 200, policy ep_0000000130 200, re-GET 404)
+  ✓  1 e2e/policy-restart-notice.spec.ts:181:7 › Todo 5 · 策略写入后的重启通知 › 1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则 (3.0s)
+[cleanup] a_0000000131 (agent 200, policy ep_0000000131 200, re-GET 404)
+  ✓  2 e2e/policy-restart-notice.spec.ts:229:7 › Todo 5 · 策略写入后的重启通知 › 2. 保存不自动重启：写盘两次，restart 请求数为 0 (4.0s)
+[cleanup] a_0000000132 (agent 200, policy ep_0000000132 200, re-GET 404)
+  ✓  3 e2e/policy-restart-notice.spec.ts:290:7 › Todo 5 · 策略写入后的重启通知 › 3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态 (2.2s)
+[cleanup] a_0000000133 (agent 200, policy ep_0000000133 200, re-GET 404)
+  ✓  4 e2e/policy-restart-notice.spec.ts:356:7 › Todo 5 · 策略写入后的重启通知 › 4. 零 worker 空态：显示空态句，不显示死按钮 (2.3s)
+
+  4 passed (12.9s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000130 (agent 200, policy ep_0000000130 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000131 (agent 200, policy ep_0000000131 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000132 (agent 200, policy ep_0000000132 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000133 (agent 200, policy ep_0000000133 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则
+[e2e] result passed	2. 保存不自动重启：写盘两次，restart 请求数为 0
+[e2e] result passed	3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态
+[e2e] result passed	4. 零 worker 空态：显示空态句，不显示死按钮
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 4 run 2026-09-19T02:41:25Z =====
+
+[e2e] date=2026-09-19T02:41:25Z HEAD=bfbc526104633232ac91049d244860b275f0343c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000134 (agent 200, policy ep_0000000134 200, re-GET 404)
+  ✓  1 e2e/policy-serialize.spec.ts:163:7 › Todo 4 · 策略写入串行化 › 1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见） (3.1s)
+[cleanup] a_0000000135 (agent 200, policy ep_0000000135 200, re-GET 404)
+  ✓  2 e2e/policy-serialize.spec.ts:235:7 › Todo 4 · 策略写入串行化 › 2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复 (1.4s)
+[cleanup] a_0000000136 (agent 200, policy ep_0000000136 200, re-GET 404)
+  ✓  3 e2e/policy-serialize.spec.ts:337:7 › Todo 4 · 策略写入串行化 › 3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow (2.6s)
+[cleanup] a_0000000137 (agent 200, policy ep_0000000137 200, re-GET 404)
+  ✓  4 e2e/policy-serialize.spec.ts:383:7 › Todo 4 · 策略写入串行化 › 4. debounce 合并击键 burst：一次 burst 仅一个 PATCH (2.3s)
+
+  4 passed (10.1s)
+----- end playwright raw -----
+[e2e] PASS playwright green; evidence json present
+[e2e] cleanup [cleanup] a_0000000134 (agent 200, policy ep_0000000134 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000135 (agent 200, policy ep_0000000135 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000136 (agent 200, policy ep_0000000136 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000137 (agent 200, policy ep_0000000137 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见）
+[e2e] result passed	2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复
+[e2e] result passed	3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow
+[e2e] result passed	4. debounce 合并击键 burst：一次 burst 仅一个 PATCH
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 3 run 2026-09-19T02:41:41Z =====
+
+[e2e] date=2026-09-19T02:41:41Z HEAD=bfbc526104633232ac91049d244860b275f0343c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 7 tests using 1 worker
+
+  ✓  1 e2e/native-rule-editor.spec.ts:180:7 › Todo 3 · 原生 glob 规则表编辑器 › 1. 四行恒显 + 编辑器形态（模板 agent） (1.4s)
+[cleanup] a_0000000138 (agent 200, policy ep_0000000138 200, re-GET 404)
+  ✓  2 e2e/native-rule-editor.spec.ts:229:7 › Todo 3 · 原生 glob 规则表编辑器 › 2. absent task 仍渲染（只读 + note） (1.3s)
+[cleanup] a_0000000139 (agent 200, policy ep_0000000139 200, re-GET 404)
+  ✓  3 e2e/native-rule-editor.spec.ts:264:7 › Todo 3 · 原生 glob 规则表编辑器 › 3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask (1.4s)
+[cleanup] a_0000000140 (agent 200, policy ep_0000000140 200, re-GET 404)
+  ✓  4 e2e/native-rule-editor.spec.ts:330:7 › Todo 3 · 原生 glob 规则表编辑器 › 4. `*` 兜底警告：切 allow 即出现 (1.3s)
+[cleanup] a_0000000141 (agent 200, policy ep_0000000141 200, re-GET 404)
+  ✓  5 e2e/native-rule-editor.spec.ts:352:7 › Todo 3 · 原生 glob 规则表编辑器 › 5. 重复 glob 客户端拒绝（提交面不增长） (1.3s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000142 (agent 200, policy ep_0000000142 200, re-GET 404)
+  ✓  6 e2e/native-rule-editor.spec.ts:390:7 › Todo 3 · 原生 glob 规则表编辑器 › 7. 未知 effect 原样保留（不归一化） (1.5s)
+[cleanup] a_0000000143 (agent 200, policy ep_0000000143 200, re-GET 404)
+  ✓  7 e2e/native-rule-editor.spec.ts:428:7 › Todo 3 · 原生 glob 规则表编辑器 › 6. bash 三态：当前值选中且可切换（持久化） (2.7s)
+
+  7 passed (11.6s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000138 (agent 200, policy ep_0000000138 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000139 (agent 200, policy ep_0000000139 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000140 (agent 200, policy ep_0000000140 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000141 (agent 200, policy ep_0000000141 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000142 (agent 200, policy ep_0000000142 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000143 (agent 200, policy ep_0000000143 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 四行恒显 + 编辑器形态（模板 agent）
+[e2e] result passed	2. absent task 仍渲染（只读 + note）
+[e2e] result passed	3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask
+[e2e] result passed	4. `*` 兜底警告：切 allow 即出现
+[e2e] result passed	5. 重复 glob 客户端拒绝（提交面不增长）
+[e2e] result passed	7. 未知 effect 原样保留（不归一化）
+[e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt

@@ -1,0 +1,36 @@
+Todo 5 mutation proof — "notice appears only because onSuccess sets restartNeeded"
+====================================================================================
+Date: 2026-09-19T02:38Z
+HEAD: bfbc526104633232ac91049d244860b275f0343c
+Subject: web/app/(main)/agents/page.tsx (uncommitted work at proof time)
+
+MUTATION
+  Removed `setRestartNeeded(true);` from policyMutation.onSuccess
+  (line replaced with a marker comment; file copied to /tmp/t5-agents-page.backup.tsx first).
+  Rebuilt + recreated web: docker compose build web && docker compose up -d web
+
+OBSERVED (discriminating: the harness exit code is 1)
+  [e2e] FAIL ui reason=playwright run failed (raw above)
+  4 failed
+    e2e/policy-restart-notice.spec.ts:181 › 1. 通知只在成功写盘后出现… — Test timeout: policy-restart-notice never appeared
+    e2e/policy-restart-notice.spec.ts:229 › 2. 保存不自动重启… — action button absent (notice never rendered)
+    e2e/policy-restart-notice.spec.ts:290 › 3. 点击重启… — action button absent
+    e2e/policy-restart-notice.spec.ts:356 › 4. 零 worker 空态… — notice never appeared
+  Raw transcript: .omo/evidence/agent-native-permission-editor/e2e.txt (todo 5 mutation section)
+
+WHY THIS PROVES THE TEST DISCRIMINATES
+  Test 1 asserts the notice BECOMES visible only after a confirmed server-side write. With the
+  state setter gone the write still lands (stored bash=allow — the mutation is NOT in the write
+  path) yet policy-restart-notice never mounts → the assertion fails for exactly the behavior it
+  names, not for a broken write. Tests 2-4 fail transitively because every one of them first
+  requires the notice (that gate is intentional — no QA may click a restart action that isn't real).
+
+RESTORE (byte-identical; NO git checkout --/git restore was ever used)
+  cp /tmp/t5-agents-page.backup.tsx "web/app/(main)/agents/page.tsx"
+  shasum -a 256 web/app/(main)/agents/page.tsx = fe241d2d040b874f41502cc4e855bd1032fbe7d6776d842904e6da826581ab00
+  pre-mutation sha                             = fe241d2d040b874f41502cc4e855bd1032fbe7d6776d842904e6da826581ab00  (IDENTICAL)
+
+POST-RESTORE VERIFICATION
+  docker compose build web && docker compose up -d web
+  npx tsc --noEmit                             -> exit 0
+  bash scripts/e2e-policy-restart-notice.sh    -> 4 passed; PASS
