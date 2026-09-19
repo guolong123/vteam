@@ -124,6 +124,51 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** 层① permission 三态取值集合（`ask` 是合法态：guard 视同 allow，opencode 原生支持）。 */
+const PERMISSION_EFFECTS: ReadonlySet<string> = new Set([
+  'allow',
+  'ask',
+  'deny',
+]);
+
+const MAX_PERMISSION_GLOB_LENGTH = 256;
+
+const MAX_PERMISSION_RULES = 64;
+
+function throwConfigInvalid(message: string): never {
+  throw new BadRequestException({
+    code: 'POLICY_CONFIG_INVALID',
+    message: `config 非法：${message}`,
+  });
+}
+
+/**
+ * edit/read glob 映射逐键校验：键须为非空字符串且 ≤256 字符（含 symbol 键拒绝），
+ * 值为三态；规则条数 ≤64。
+ */
+function assertPermissionRuleMap(map: Record<string, unknown>, label: string): void {
+  const keys = Reflect.ownKeys(map);
+  if (keys.length > MAX_PERMISSION_RULES) {
+    throwConfigInvalid(`${label} 规则条数超过 ${MAX_PERMISSION_RULES}`);
+  }
+  for (const key of keys) {
+    if (
+      typeof key !== 'string' ||
+      key.length === 0 ||
+      key.length > MAX_PERMISSION_GLOB_LENGTH
+    ) {
+      throwConfigInvalid(
+        `${label} 键须为非空字符串且 ≤${MAX_PERMISSION_GLOB_LENGTH} 字符`,
+      );
+    }
+  }
+  for (const effect of Object.values(map)) {
+    if (typeof effect !== 'string' || !PERMISSION_EFFECTS.has(effect)) {
+      throwConfigInvalid(`${label} 值须为 allow/ask/deny`);
+    }
+  }
+}
+
 /** 取内置角色边界；非内置名（自定义 agent）→ undefined。 */
 function boundaryOf(agentName: string): RoleBoundary | undefined {
   return (ROLE_BOUNDARIES as Record<string, RoleBoundary | undefined>)[
@@ -803,6 +848,13 @@ export class ExecutionPolicyService implements OnModuleInit {
    * `canonicalizePermission` 的发射前 `delete write` 同策略），使该非法键不落库、
    * 也不会经自定义策略路径直通 `/agent-policies`——worker 对 `permission.write`
    * 是抛错并整体中性化 guard，单条坏 PATCH 不得废掉全角色 guard。
+   *
+   * 原生 permission 形状（todo 1）：`edit`/`read` 存在时须为 glob 映射（三态值 + 有界
+   * 键），`bash` 存在时须为三态之一；`edit` 缺失或缺 `'*'` 时**注入 catch-all
+   * `{ '*': 'deny' }`**（保留既有 allow glob）——`worker/src/role-guard/policy.ts`
+   * 的 `isEditDenied` 缺 `'*'` 时 fail-open，调用方对非对象 `edit` 直接 allow，
+   * 不注入则落库一条"全放行"策略。`read` 绝不注入（默认 `{'*':'allow'}`，
+   * 注入 deny 会禁掉全部读取）。仅写路径注入；`canonicalizePermission` 发射路径不动。
    */
   private assertValidConfig(config: unknown): void {
     const cfg = config as {
@@ -821,7 +873,34 @@ export class ExecutionPolicyService implements OnModuleInit {
         message: 'config 非法：permission/correction 均须为对象',
       });
     }
-    delete (cfg.permission as Record<string, unknown>).write;
+    const permission = cfg.permission as Record<string, unknown>;
+    delete permission.write;
+
+    if (permission.edit !== undefined && !isPlainObject(permission.edit)) {
+      throwConfigInvalid('permission.edit 须为对象');
+    }
+    if (permission.read !== undefined && !isPlainObject(permission.read)) {
+      throwConfigInvalid('permission.read 须为对象');
+    }
+    if (
+      permission.bash !== undefined &&
+      (typeof permission.bash !== 'string' ||
+        !PERMISSION_EFFECTS.has(permission.bash))
+    ) {
+      throwConfigInvalid('permission.bash 须为 allow/ask/deny');
+    }
+    if (isPlainObject(permission.edit)) {
+      assertPermissionRuleMap(permission.edit, 'permission.edit');
+    }
+    if (isPlainObject(permission.read)) {
+      assertPermissionRuleMap(permission.read, 'permission.read');
+    }
+
+    if (!isPlainObject(permission.edit)) {
+      permission.edit = { '*': 'deny' };
+    } else if (!Object.prototype.hasOwnProperty.call(permission.edit, '*')) {
+      permission.edit = { '*': 'deny', ...permission.edit };
+    }
   }
 
   private policyKeyOf(agent: {

@@ -218,4 +218,191 @@ describe('ExecutionPolicyService（真实 service，FINDING-5）', () => {
       expect(storedConfig.permission).not.toHaveProperty('write');
     });
   });
+
+  describe('assertValidConfig 原生 permission 形状校验（todo 1）', () => {
+    /** 写路径最小合法 config（permission 按需覆盖，correction 恒合法）。 */
+    function configWith(permission: Record<string, unknown>): {
+      permission: Record<string, unknown>;
+      correction: Record<string, unknown>;
+    } {
+      return { permission, correction: { scopeSummary: 'scope' } };
+    }
+
+    it("edit 缺 '*' → 注入 catch-all 且保留原 allow glob（写入落库）", async () => {
+      const prisma = store([row()]);
+      const service = serviceWith({ executionPolicy: prisma });
+
+      const updated = await service.update('ep_product', {
+        config: configWith({
+          edit: { '**tasks/*/docs/**': 'allow' },
+          read: { '*': 'allow' },
+          bash: 'allow',
+        }),
+      });
+
+      expect(updated.config).toEqual({
+        permission: {
+          edit: { '*': 'deny', '**tasks/*/docs/**': 'allow' },
+          read: { '*': 'allow' },
+          bash: 'allow',
+        },
+        correction: { scopeSummary: 'scope' },
+      });
+      const stored = prisma.rows[0].config as {
+        permission: { edit: Record<string, string> };
+      };
+      expect(Object.keys(stored.permission.edit)).toEqual([
+        '*',
+        '**tasks/*/docs/**',
+      ]);
+    });
+
+    it("edit 整个缺失 → 注入 edit: { '*': 'deny' } 落库", async () => {
+      const prisma = store([row()]);
+      const service = serviceWith({ executionPolicy: prisma });
+
+      const updated = await service.update('ep_product', {
+        config: configWith({ bash: 'deny' }),
+      });
+
+      expect(updated.config).toEqual({
+        permission: { edit: { '*': 'deny' }, bash: 'deny' },
+        correction: { scopeSummary: 'scope' },
+      });
+    });
+
+    it("read 存在但无 '*' → 原样落库（绝不注入，read 默认 allow）", async () => {
+      const prisma = store([row()]);
+      const service = serviceWith({ executionPolicy: prisma });
+
+      const updated = await service.update('ep_product', {
+        config: configWith({
+          edit: { '*': 'deny' },
+          read: { 'src/**': 'allow' },
+        }),
+      });
+
+      const stored = prisma.rows[0].config as {
+        permission: { read: Record<string, string> };
+      };
+      expect(stored.permission.read).toEqual({ 'src/**': 'allow' });
+      expect(updated.config).toMatchObject({
+        permission: { read: { 'src/**': 'allow' } },
+      });
+    });
+
+    it("read = { '*': 'allow' } → 原样落库（无注入）", async () => {
+      const prisma = store([row()]);
+      const service = serviceWith({ executionPolicy: prisma });
+
+      await service.update('ep_product', {
+        config: configWith({
+          edit: { '*': 'deny' },
+          read: { '*': 'allow' },
+        }),
+      });
+
+      const stored = prisma.rows[0].config as {
+        permission: { read: Record<string, string> };
+      };
+      expect(stored.permission.read).toEqual({ '*': 'allow' });
+    });
+
+    it("'ask' 被接受并原样保留（edit 与 read 都不拒绝 ask）", async () => {
+      const prisma = store([row()]);
+      const service = serviceWith({ executionPolicy: prisma });
+
+      const updated = await service.update('ep_product', {
+        config: configWith({
+          edit: { '*': 'ask', 'src/**': 'allow' },
+          read: { '*': 'ask' },
+        }),
+      });
+
+      expect(updated.config).toEqual({
+        permission: {
+          edit: { '*': 'ask', 'src/**': 'allow' },
+          read: { '*': 'ask' },
+        },
+        correction: { scopeSummary: 'scope' },
+      });
+    });
+
+    it.each([
+      ['空串 glob', { edit: { '': 'allow' } }],
+      ['非三态值', { edit: { x: 'maybe' } }],
+      ['非对象 edit', { edit: 'deny' }],
+      ['非对象 read', { read: 'allow' }],
+      ['超长 glob（>256）', { edit: { '*': 'deny', x: 'a'.repeat(257) } }],
+      ['bash 非法值', { bash: 'sometimes', edit: { '*': 'deny' } }],
+    ])('拒绝 %s → 400 POLICY_CONFIG_INVALID 且不落库', async (_label, permission) => {
+      const prisma = store([row()]);
+      const service = serviceWith({ executionPolicy: prisma });
+      const before = prisma.rows[0].config;
+
+      await expect(
+        service.update('ep_product', { config: configWith(permission) }),
+      ).rejects.toMatchObject({
+        response: { code: 'POLICY_CONFIG_INVALID' },
+      });
+
+      expect(prisma.update).not.toHaveBeenCalled();
+      expect(prisma.rows[0].config).toBe(before);
+    });
+
+    it('拒绝 65 条规则（>64 上限）→ 400 且不落库', async () => {
+      const prisma = store([row()]);
+      const service = serviceWith({ executionPolicy: prisma });
+      const before = prisma.rows[0].config;
+      const many = Object.fromEntries(
+        Array.from({ length: 65 }, (_unused, i) => [`glob${i}`, 'allow']),
+      );
+
+      await expect(
+        service.update('ep_product', {
+          config: configWith({ edit: many }),
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'POLICY_CONFIG_INVALID' },
+      });
+
+      expect(prisma.update).not.toHaveBeenCalled();
+      expect(prisma.rows[0].config).toBe(before);
+    });
+
+    it('拒绝非字符串键（symbol 键）→ 400 且不落库', async () => {
+      const prisma = store([row()]);
+      const service = serviceWith({ executionPolicy: prisma });
+      const before = prisma.rows[0].config;
+      const edit: Record<PropertyKey, unknown> = { '*': 'deny' };
+      edit[Symbol('bad')] = 'allow';
+
+      await expect(
+        service.update('ep_product', {
+          config: configWith({ edit }),
+        }),
+      ).rejects.toMatchObject({
+        response: { code: 'POLICY_CONFIG_INVALID' },
+      });
+
+      expect(prisma.update).not.toHaveBeenCalled();
+      expect(prisma.rows[0].config).toBe(before);
+    });
+
+    it('create 路径同样注入 catch-all（edit 缺失）', async () => {
+      const prisma = store([]);
+      const service = serviceWith({ executionPolicy: prisma });
+
+      const created = await service.create({
+        name: '自定义',
+        type: 'custom',
+        config: configWith({ read: { '*': 'allow' } }),
+      });
+
+      expect(created.config).toEqual({
+        permission: { edit: { '*': 'deny' }, read: { '*': 'allow' } },
+        correction: { scopeSummary: 'scope' },
+      });
+    });
+  });
 });
