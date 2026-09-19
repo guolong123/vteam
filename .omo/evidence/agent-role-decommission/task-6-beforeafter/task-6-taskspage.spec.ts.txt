@@ -1,0 +1,12 @@
+import { test, expect } from "@playwright/test";
+
+test("team tasks page avatars carry role colours (not all developer)", async ({ page }) => {
+  await page.goto("/teams/tm_0000000001/tasks");
+  await expect(page.getByTestId("agent-avatar").first()).toBeVisible({ timeout: 20_000 });
+  const roles = await page.getByTestId("agent-avatar").evaluateAll((els) =>
+    els.map((e) => (e as HTMLElement).getAttribute("data-role")),
+  );
+  const unique = [...new Set(roles)];
+  console.log("TASKS_PAGE_ROLE_SET:", JSON.stringify(unique));
+  expect(unique).not.toEqual(["developer"]);
+});

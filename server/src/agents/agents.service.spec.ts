@@ -60,7 +60,6 @@ describe('AgentsService', () => {
     {
       id: 'a_product',
       name: '产品经理',
-      role: 'product',
       agentKey: 'product',
       type: 'template',
       prompt: 'prompt1',
@@ -77,7 +76,6 @@ describe('AgentsService', () => {
     {
       id: 'a_architect',
       name: '架构师',
-      role: 'architect',
       agentKey: 'architect',
       type: 'template',
       prompt: 'prompt2',
@@ -94,7 +92,6 @@ describe('AgentsService', () => {
     {
       id: 'a_developer',
       name: '开发者',
-      role: 'developer',
       agentKey: 'developer',
       type: 'template',
       prompt: 'prompt3',
@@ -111,7 +108,6 @@ describe('AgentsService', () => {
     {
       id: 'a_tester',
       name: '测试',
-      role: 'tester',
       agentKey: 'tester',
       type: 'template',
       prompt: 'prompt4',
@@ -133,7 +129,7 @@ describe('AgentsService', () => {
     type: 'custom',
     baseAgentId: null,
     name: '数据分析师',
-    role: 'analyst',
+    agentKey: 'analyst',
     prompt: 'prompt-custom',
     defaultModelId: 'opencode-go/deepseek-v4-flash',
     persona: null,
@@ -290,7 +286,7 @@ describe('AgentsService', () => {
           agentName: 'vteam-product',
         },
       });
-      // role 与前端 task-create 的 data-role 对齐（展示标签透传，todo 5/6 迁移）
+      // role 透传 agentKey（agent-role-decommission todo 6：模板两者同值）
       const roles = result.items.map((i) => i.role);
       expect(roles).toEqual(['product', 'architect', 'developer', 'tester']);
       // 扩展字段契约：扁平数组 + 策略绑定 + 生效权限
@@ -1734,7 +1730,6 @@ describe('AgentsService', () => {
       prisma.agent.findUnique.mockResolvedValue({
         ...customRow,
         agentKey: 'demo-agent',
-        role: 'analyst',
         policyId: 'ep_demo',
         skills: [],
       });
@@ -1759,7 +1754,10 @@ describe('AgentsService', () => {
       expect(executionPolicyService.resolveManyByAgents).toHaveBeenCalledWith([
         { policyId: 'ep_demo', agentKey: 'demo-agent' },
       ]);
-      expect(result).toMatchObject({ agentKey: 'demo-agent' });
+      expect(result).toMatchObject({
+        agentKey: 'demo-agent',
+        role: 'demo-agent',
+      });
       expect(result.effectivePermission).toMatchObject({
         agentName: 'vteam-demo-agent',
         tools: {
@@ -2027,7 +2025,6 @@ describe('AgentsService', () => {
         ...customRow,
         id: 'a_0000000007',
         agentKey: 'qa-demo',
-        role: null,
         policyId: 'ep_0000000007',
       });
       prisma.executionPolicy.findUnique.mockResolvedValue({

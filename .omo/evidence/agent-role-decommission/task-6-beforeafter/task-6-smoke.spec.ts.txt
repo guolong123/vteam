@@ -1,0 +1,44 @@
+import { test, expect } from "@playwright/test";
+
+test.describe("task-6 touched-page smoke", () => {
+  test("board page renders task members avatars", async ({ page }) => {
+    await page.goto("/board?teamId=tm_0000000001");
+    await expect(page.getByTestId("task-board-root")).toBeVisible();
+    await expect(page.getByTestId("status-filter")).toBeVisible();
+  });
+
+  test("team tasks page renders member avatars", async ({ page }) => {
+    await page.goto("/teams/tm_0000000001/tasks");
+    await expect(page.getByText("历史任务").first()).toBeVisible();
+    const avatars = page.getByTestId("agent-avatar");
+    console.log("TASKS_PAGE_AVATARS:", await avatars.count());
+  });
+
+  test("session page renders member panel + avatar roles", async ({ page }) => {
+    await page.goto("/teams/tm_0000000001/session");
+    await expect(page.getByTestId("members-panel")).toBeVisible();
+    await expect(page.getByTestId("member-item").first()).toBeVisible();
+    const rows = page.getByTestId("member-item");
+    const n = await rows.count();
+    for (let i = 0; i < n; i++) {
+      const role = await rows.nth(i).getByTestId("agent-avatar").first().getAttribute("data-role");
+      console.log(`SESSION_MEMBER_${i}: ${role}`);
+    }
+    await page.screenshot({
+      path: "../.omo/evidence/agent-role-decommission/task-6-beforeafter/session-members-after.png",
+      fullPage: false,
+    });
+  });
+
+  test("task detail drawer renders members", async ({ page }) => {
+    await page.goto("/board?teamId=tm_0000000001");
+    const card = page.getByTestId("task-card").first();
+    await expect(card).toBeVisible();
+    await card.click();
+    await expect(page.getByTestId("task-detail-drawer")).toBeVisible({ timeout: 15_000 });
+    await page.screenshot({
+      path: "../.omo/evidence/agent-role-decommission/task-6-beforeafter/task-drawer-after.png",
+      fullPage: false,
+    });
+  });
+});

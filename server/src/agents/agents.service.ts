@@ -51,14 +51,12 @@ const AGENT_INCLUDE = {
 /**
  * Agent 行（含关联，toAgentDto 输入）。
  *
- * `role` 仅作**展示标签透传**（todo 5/6 迁移的既有 DTO 字段形状，见
- * `.omo/evidence/agent-role-decommission/task-1-consumer-map.txt` §6/§7）；能力解析
- * （策略/工具）不再读取它——create/clone/update 的写入路径已由 todo 4 移除。
+ * `role` 不再从行上读取（agent-role-decommission todo 6）：DTO 的 `role` 输出字段
+ * 透传 `agentKey`（机器键，与 `AgentRole.key` 对齐），能力解析（策略/工具）与它无关。
  */
 type AgentRow = {
   id: string;
   name: string;
-  role: string | null;
   agentKey: string | null;
   type: string;
   prompt: string;
@@ -616,7 +614,7 @@ export class AgentsService implements OnModuleInit {
   private async toAgentDto(agent: AgentRow): Promise<{
     id: string;
     name: string;
-    /** 展示标签透传（todo 5/6 迁移；不参与能力解析）。 */
+    /** 透传 `agentKey`（机器键，对齐 `AgentRole.key`；不参与能力解析）。 */
     role: string | null;
     agentKey: string | null;
     type: string;
@@ -641,7 +639,7 @@ export class AgentsService implements OnModuleInit {
     return {
       id: agent.id,
       name: agent.name,
-      role: agent.role,
+      role: agent.agentKey,
       agentKey: agent.agentKey,
       type: agent.type,
       prompt: agent.prompt,
@@ -667,7 +665,7 @@ export class AgentsService implements OnModuleInit {
     return rows.map((agent, i) => ({
       id: agent.id,
       name: agent.name,
-      role: agent.role,
+      role: agent.agentKey,
       agentKey: agent.agentKey,
       type: agent.type,
       prompt: agent.prompt,

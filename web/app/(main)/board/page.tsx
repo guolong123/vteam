@@ -152,16 +152,6 @@ function toBoardStatus(status: string): BoardStatus {
   return STATUS_LABEL[status as TaskApiStatus] ?? "待开始";
 }
 
-/** seed 模板 Agent id → 角色 key（T14 Agents 模块预置 a_product/a_architect/a_developer/a_tester）。 */
-const AGENT_ID_ROLE: Record<string, RoleKey> = {
-  a_product: "product",
-  a_project_manager: "project_manager",
-  a_architect: "architect",
-  a_developer: "developer",
-  a_tester: "tester",
-  a_plan: "plan",
-};
-
 /** 产出物数量（Phase 2 无产出物端点，0 为真实兜底值，对齐 project-list 页 EMPTY_TASK_COUNT 模式）。 */
 const EMPTY_ARTIFACT_COUNT = 0;
 
@@ -171,11 +161,6 @@ const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect"
 function toRoles(agentIds: string[]): RoleKey[] {
   const roles: RoleKey[] = [];
   for (const id of agentIds) {
-    const direct = AGENT_ID_ROLE[id];
-    if (direct) {
-      roles.push(direct);
-      continue;
-    }
     const rest = id.startsWith("a_") ? id.slice(2) : id;
     if ((ROLE_KEYS as readonly string[]).includes(rest)) {
       roles.push(rest as RoleKey);

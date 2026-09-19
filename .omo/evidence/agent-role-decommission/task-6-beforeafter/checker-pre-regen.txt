@@ -1,0 +1,26 @@
+MANIFEST: /Users/mac/01work/git-project/vteam/scripts/agent-role-consumer-manifest.txt
+OBSERVED: 148 keys (fresh grep)
+UNMAPPED: 22
+--- offending lines (in fresh grep, absent from manifest) ---
+server/src/agents/agents.service.ts:188
+server/src/agents/agents.service.ts:205
+server/src/agents/agents.service.ts:271
+server/src/agents/agents.service.ts:766
+server/src/agents/agents.service.ts:773
+server/src/agents/agents.service.ts:810
+web/app/(main)/teams/[id]/session/page.tsx:1088
+web/app/(main)/teams/[id]/session/page.tsx:1186
+web/app/(main)/teams/[id]/session/page.tsx:300
+web/app/(main)/teams/[id]/session/page.tsx:301
+web/app/(main)/teams/[id]/session/page.tsx:320
+web/app/(main)/teams/[id]/session/page.tsx:321
+web/app/(main)/teams/[id]/session/page.tsx:341
+web/app/(main)/teams/[id]/session/page.tsx:357
+web/app/(main)/teams/[id]/session/page.tsx:358
+web/app/(main)/teams/[id]/session/page.tsx:494
+web/app/(main)/teams/[id]/session/page.tsx:502
+web/src/components/teams/TeamMembersPanel.tsx:175
+web/src/components/teams/TeamMembersPanel.tsx:306
+web/src/components/teams/TeamMembersPanel.tsx:333
+web/src/components/teams/TeamMembersPanel.tsx:79
+web/src/components/teams/TeamMembersPanel.tsx:80

@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useSSE } from "@/hooks/use-sse";
 import { AgentAvatar, StatusBadge } from "@/src/components/ui";
+import { toRole } from "@/src/components/teams/TeamMembersPanel";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 import type { CSSProperties } from "react";
 
@@ -59,15 +60,6 @@ const PRIORITY_LABEL: Record<string, { label: string; color: string }> = {
   high: { label: "高", color: "#DC2626" },
   medium: { label: "中", color: "#D97706" },
   low: { label: "低", color: "var(--color-neutral-500)" },
-};
-
-const AGENT_ID_ROLE: Record<string, "product" | "project_manager" | "architect" | "developer" | "tester" | "plan"> = {
-  a_product: "product",
-  a_project_manager: "project_manager",
-  a_architect: "architect",
-  a_developer: "developer",
-  a_tester: "tester",
-  a_plan: "plan",
 };
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -283,7 +275,7 @@ export default function TeamTasksPage() {
                   <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
                     <div data-testid="task-members" style={{ display: "flex", alignItems: "center" }}>
                       {(task.teamAgentIds ?? []).slice(0, 5).map((id: string, idx: number) => {
-                        const role = AGENT_ID_ROLE[id] ?? "developer";
+                        const role = toRole(id) ?? "developer";
                         return (
                           <span key={id} style={{ marginLeft: idx === 0 ? 0 : -6 }}>
                             <AgentAvatar role={role} size="sm" />

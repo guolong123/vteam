@@ -170,3 +170,37 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Behaviour proof must come from the RUNNING build, not the source.** Rebuild the server
   container and grep `dist/` for a new marker (`roleBindingOf`) plus the absence of the old one
   (`ROLE_LABELS`) before trusting an AFTER capture — otherwise the "after" is the old process.
+
+## todo 6 — web role identity off `Agent.role` (the DTO seam + 5 map deletions)
+
+- **The DTO `role` field is now a `agentKey` alias, and that is exactly what the web consumes.**
+  `toAgentDto`/`toAgentDtoList` emit `role: agent.agentKey` and `AgentRow` no longer carries a
+  `role` column. The web's `toAvatarRole(role)` therefore receives the machine key: templates are
+  byte-identical (`agent_key === role` for all 7), custom agents move from `null → <agentKey>`
+  and still fall back to `developer` because their key is not a theme key. Grep proof for
+  `Agent.role` in `web/` is now comments-only.
+- **Not every `AGENT_ID_ROLE` had the `a_`-derivation fallback the plan assumed.**
+  `teams/[id]/tasks/page.tsx` used `AGENT_ID_ROLE[id] ?? "developer"` — no strip-and-check. Deleting
+  only the map would have silently repainted every seeded task-member avatar to the neutral
+  `developer` colour. The fix reuses `TeamMembersPanel`'s already-exported `toRole` (cross-page
+  import is fine in Next App Router; no new constant, no `tokens.ts` edit) and the proof asserts
+  the avatar role set stays `["architect","developer","plan","product"]`.
+- **`librarian` is a template role that is NOT in `ROLE_KEYS`.** So the literal S3 expression
+  `a.role && ROLE_KEYS.includes(a.role) ? a.role : a.type` flips `知识管理员 (librarian)` →
+  `(template)`. The type-gated form `a.type === "template" && a.role ? a.role : a.type` is
+  byte-identical to the old `a.role ?? a.type` on every live row including `librarian` — always
+  check what the live seed renders before accepting a plan's expression verbatim.
+- **BEFORE/AFTER on a live stack needs the origin-bound auth file, not the repo one.**
+  `web/.auth/user.json` is bound to `http://localhost:3001` (the dev server origin) and gives
+  an empty app shell on `:13001`. A one-shot setup project doing a real form login on the
+  container origin fixes it; `storageState` does not port across origins.
+- **One Playwright `options` read is racy**: the first read returned only `请选择` (the agents
+  query had not resolved). `await expect.poll(() => select.locator("option").count())` before
+  reading makes the capture deterministic.
+- **Mechanical BEFORE/AFTER diff beats eyeballing.** Extract the marker blocks from both logs
+  and `difflib.unified_diff` the fact lines: 37/37 identical, zero diff. Screenshot inspection
+  is the complement, not the proof.
+- **The checker manifest stays line-keyed, so any edit drifts it.** `UNMAPPED: 22` was pure drift;
+  regenerating with the checker's own pipeline gives `OBSERVED: 148 / UNMAPPED: 0` and the
+  synthetic `--extra-dir` probe still yields `UNMAPPED: 1` (exit 1) — the negative control keeps
+  the happy path honest. Net shrink 150 → 148 keys = the 5 deleted maps.

@@ -1,0 +1,113 @@
+/**
+ * todo 6 前后对照探针（临时：跑完即删）
+ * =============================================
+ * 捕获 SEEDED 数据的渲染事实（头像 data-role / 角色徽章文案 / 成员行配色），
+ * 供 task-6-beforeafter 记录 BEFORE/AFTER 相等；并断言缺失角色的中性兜底。
+ */
+import { test, expect } from "@playwright/test";
+
+test.describe("task-6 role identity proof", () => {
+  test("agents list: avatar data-role + type badge per row", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
+    const rows = page.getByTestId("agent-list-item");
+    const n = await rows.count();
+    const facts: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const row = rows.nth(i);
+      const id = await row.getAttribute("data-agent-id");
+      const avatarRole = await row.getByTestId("agent-avatar").first().getAttribute("data-role");
+      const text = (await row.innerText()).replace(/\s+/g, " ").trim();
+      facts.push(`${id} | avatar=${avatarRole} | ${text}`);
+    }
+    console.log("AGENT_ROWS_BEGIN");
+    facts.forEach((f) => console.log(f));
+    console.log("AGENT_ROWS_END");
+    expect(facts.length).toBeGreaterThan(0);
+  });
+
+  test("agent avatar colours are from the role theme (seeded templates)", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
+    const facts: string[] = [];
+    for (const id of ["a_product", "a_architect", "a_developer", "a_tester", "a_plan"]) {
+      const row = page.locator(`[data-testid="agent-list-item"][data-agent-id="${id}"]`);
+      if ((await row.count()) === 0) continue;
+      const avatar = row.getByTestId("agent-avatar").first();
+      facts.push(
+        `${id} data-role=${await avatar.getAttribute("data-role")} bg=${await avatar.evaluate((el) => getComputedStyle(el).backgroundColor)} border=${await avatar.evaluate((el) => getComputedStyle(el).borderTopColor)}`,
+      );
+    }
+    console.log("AGENT_COLOR_BEGIN");
+    facts.forEach((f) => console.log(f));
+    console.log("AGENT_COLOR_END");
+    expect(facts.length).toBe(5);
+  });
+
+  test("team detail: member row role badge + avatar role", async ({ page }) => {
+    await page.goto("/teams/tm_0000000001");
+    await expect(page.getByTestId("member-row").first()).toBeVisible();
+    const rows = page.getByTestId("member-row");
+    const n = await rows.count();
+    const facts: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const row = rows.nth(i);
+      const avatarRole = await row.getByTestId("agent-avatar").first().getAttribute("data-role");
+      const badge = await row.locator("span").nth(0).innerText();
+      facts.push(
+        `${await row.getAttribute("data-member-id")} | avatar=${avatarRole} | badge=${badge.trim()}`,
+      );
+    }
+    console.log("MEMBER_ROWS_BEGIN");
+    facts.forEach((f) => console.log(f));
+    console.log("MEMBER_ROWS_END");
+    expect(facts.length).toBeGreaterThan(0);
+  });
+
+  test("add-member option label preserves (custom agent shows type, not agentKey)", async ({ page }) => {
+    await page.goto("/teams/tm_0000000001");
+    await page.getByTestId("add-member-toggle").click();
+    const select = page.getByTestId("add-member-agent-select");
+    await expect(select).toBeVisible();
+    await expect.poll(async () => select.locator("option").count()).toBeGreaterThan(1);
+    const options = await select.locator("option").allInnerTexts();
+    console.log("OPTIONS_BEGIN");
+    options.forEach((o) => console.log(o));
+    console.log("OPTIONS_END");
+    // 自定义 agent（myagent）：旧渲染 = (custom)，绝不能退化成 (myagent / agentKey)
+    const custom = options.find((o) => o.includes("myagent"));
+    if (custom) expect(custom).toContain("(custom)");
+    // 模板 agent：旧渲染 = (role) —— librarian 不在 theme keys 内，但旧行为就是 (librarian)
+    const product = options.find((o) => o.includes("产品经理"));
+    if (product) expect(product).toContain("(product)");
+    const librarian = options.find((o) => o.includes("知识管理员"));
+    if (librarian) expect(librarian).toContain("(librarian)");
+  });
+
+  test("missing-role fallback: unknown custom agent never crashes", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
+    // 自定义 agent（role=null BEFORE / agentKey AFTER）头像必须中性兜底 developer，页面无崩溃
+    const row = page.locator('[data-testid="agent-list-item"][data-agent-id="a_0000000001"]');
+    if ((await row.count()) > 0) {
+      await expect(row.getByTestId("agent-avatar").first()).toHaveAttribute("data-role", "developer");
+    }
+    await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
+  });
+
+  test("evidence screenshots", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
+    await page.screenshot({
+      path: "../.omo/evidence/agent-role-decommission/task-6-web.png",
+      fullPage: true,
+    });
+    await page.goto("/teams/tm_0000000001");
+    await page.getByTestId("add-member-toggle").click();
+    await expect(page.getByTestId("add-member-agent-select")).toBeVisible();
+    await page.screenshot({
+      path: "../.omo/evidence/agent-role-decommission/task-6-beforeafter/team-members-after.png",
+      fullPage: true,
+    });
+  });
+});

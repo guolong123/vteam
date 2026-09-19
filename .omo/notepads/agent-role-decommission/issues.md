@@ -104,3 +104,23 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **D3 compat arg is inert but must stay value-identical.** `resolveByAgent({role})` is ignored by
   todo 3's resolver; passing `AgentRole.key` (not `agent.role`) keeps todo 3's
   `toHaveBeenCalledWith({policyId, role, agentKey})` assertions green. Removal is todo 8's.
+
+## todo 6 — issues found
+
+- **Plan-line drift again (benign):** the brief's `TaskDetailDrawer.tsx:96` /
+  `TeamMembersPanel.tsx:51` / `board/page.tsx:156` / `tasks/page.tsx:64` / `session/page.tsx:45`
+  line numbers all matched on the day, but the follow-up line numbers (e.g. S3 at `~:553`) were
+  stale. Grep-first confirmed each site before editing; nothing was missed.
+- **Brief's "keep the EXISTING `a_`-prefix derivation" was wrong for one of the five files.**
+  `teams/[id]/tasks/page.tsx:286` had no derivation, only `AGENT_ID_ROLE[id] ?? "developer"`.
+  Un-guarded deletion would have repainted all seeded task-member avatars neutral. Fixed by
+  importing the exported `toRole` from `TeamMembersPanel` (documented deviation; rendered output
+  preserved). Watch for this same assumption in todo 8's collapse.
+- **`ROLE_KEYS` does not contain `librarian`, but `librarian` is a live template role.**
+  Any `.role`-gated UI must distinguish "known theme key" from "known role". S3 uses
+  `a.type === "template"` instead, which also keeps custom rows showing `(custom)` rather than
+  their agentKey. Todo 8's de-duplication must not "simplify" this back to `ROLE_KEYS.includes`,
+  or `知识管理员 (librarian)` regresses to `(template)`.
+- **`web/.auth/user.json` is :3001-bound** — reusing it against the :13001 container yields an
+  empty shell and false-negative "element not found" failures. Use a fresh login setup on the
+  target origin for live-container proof.

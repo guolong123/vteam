@@ -93,25 +93,11 @@ const ISSUE_LABEL: Record<IssueItem["status"], string> = {
   rejected: "已驳回",
 };
 
-const AGENT_ID_ROLE: Record<string, RoleKey> = {
-  a_product: "product",
-  a_project_manager: "project_manager",
-  a_architect: "architect",
-  a_developer: "developer",
-  a_tester: "tester",
-  a_plan: "plan",
-};
-
 const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 function toRoles(agentIds: string[]): RoleKey[] {
   const roles: RoleKey[] = [];
   for (const id of agentIds ?? []) {
-    const direct = AGENT_ID_ROLE[id];
-    if (direct) {
-      roles.push(direct);
-      continue;
-    }
     const rest = id.startsWith("a_") ? id.slice(2) : id;
     if ((ROLE_KEYS as readonly string[]).includes(rest)) {
       roles.push(rest as RoleKey);

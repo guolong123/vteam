@@ -100,7 +100,7 @@ Your next move: run `$start-work agent-role-decommission` to execute, or ask for
   QA scenarios: happy — the duty/suppression tests pass and the built-in payload still matches the baseline; failure — reverting to name-based detection makes the "planner by data" test fail (mutation check, recorded). Evidence `.omo/evidence/agent-role-decommission/task-2-duty.json`
   Commit: Y | `refactor(dispatch): derive plan duties from policy tools, not agent names`
 
-- [ ] 3. [server] Migrate `execution-policies` consumers off `role`
+- [x] 3. [server] Migrate `execution-policies` consumers off `role`
   What to do / Must NOT use: Update `execution-policy.service.ts` so policy resolution no longer reads `agent.role`: `policyKeyOf` uses `policyId` only (the `ep_<role>` fallback is removed after the migration backfills `policyId`), `constantRoleNameOf` and `agentNameOf` resolve from `agentKey`. Preserve the constant fallback path for missing rows — but keyed by `agentKey`/the registered name rather than a role string. Must NOT change the emitted `/agent-policies` payload (the byte-identity gate depends on it). Must NOT drop the fallback (partially-migrated DBs must still work).
   Parallelization: Wave 2 | Blocked by: 1,2 | Blocks: 8
   References: `server/src/execution-policies/execution-policy.service.ts` (`policyKeyOf` :821-827, `agentNameOf` :829-838, `resolveAgentWithFallback`, `buildAgentPolicies` :682-788, `resolveConstantPolicySource`), `server/src/execution-policies/agent-policies.matrix.spec.ts` + `agent-policies.custom-agents.spec.ts` (the byte-identity locks), `.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json`
@@ -121,7 +121,7 @@ Your next move: run `$start-work agent-role-decommission` to execute, or ask for
   QA scenarios: happy — all three create paths produce the documented config; failure — changing only the label does NOT auto-replace the bound policy (assert unchanged). Evidence `.omo/evidence/agent-role-decommission/task-4-agents.json`
   Commit: Y | `refactor(agents): create/clone/update without Agent.role`
 
-- [ ] 5. [server] Migrate label consumers (teams aliases, tasks, platform-mcp, chat, triggers)
+- [x] 5. [server] Migrate label consumers (teams aliases, tasks, platform-mcp, chat, triggers)
   What to do / Must NOT do: Replace every remaining `Agent.role` read used for display or labelling with the `AgentRole`/`TeamMember` source: the team member default-alias label map, the task-side role labels, the platform-MCP profile payloads, the chat-service reads, and the triggers reads. Behaviour (the rendered label text) must stay identical for the seeded data. Must NOT change any API response shape beyond removing the now-absent `role` field (and where that field is part of a public response, decide and document whether it is replaced by the role label — do not silently drop a field the UI needs).
   Parallelization: Wave 2 | Blocked by: 1,2 | Blocks: 8
   References: `server/src/teams/teams.service.ts` (`defaultAlias`, `ROLE_LABELS`), `server/src/tasks/tasks.service.ts` (role labels ~:1832, `effectivePlanMode` ~:1809), `server/src/platform-mcp/platform-mcp.service.ts` (~:1124, 3734, 3819-3845), `server/src/chat/chat.service.ts` (~:120, 1880), `server/src/timers/triggers.service.ts` (~:406, 589), the plan-2 `AgentRole` entity
@@ -129,7 +129,7 @@ Your next move: run `$start-work agent-role-decommission` to execute, or ask for
   QA scenarios: happy — a seeded member's alias is byte-identical before/after; failure — a member whose role mapping is missing renders the documented fallback rather than an empty label. Evidence `.omo/evidence/agent-role-decommission/task-5-labels.json`
   Commit: Y | `refactor(server): resolve labels from AgentRole, not Agent.role`
 
-- [ ] 6. [web] Migrate the web role maps off `Agent.role`
+- [x] 6. [web] Migrate the web role maps off `Agent.role`
   What to do / Must NOT do: Replace the web-side reads of the agent's `role` string: the avatar/colour mapping and the duplicated `AGENT_ID_ROLE`/`ROLE_AGENT_ID`/`ROLE_KEYS` maps. Source role identity from the `AgentRole`/`TeamMember` data instead of the deprecated string. The rendered colours/labels must stay the same for the seeded roles. Must NOT introduce a new duplicated constant — prefer a single shared source (the `roles` labels in `web/src/theme/tokens.ts:19-26` plus the role API). Must NOT change unrelated UI.
   Parallelization: Wave 2 | Blocked by: 1,2 | Blocks: 8
   References: `web/app/(main)/agents/page.tsx` (`toAvatarRole` ~:444, the role colour helpers ~:577-583, the `ROLE_KEYS` duplicate ~:441), `web/src/components/teams/TeamMembersPanel.tsx` (~:59-69), `web/app/(main)/teams/new/page.tsx` (~:49-57), `web/app/(main)/teams/[id]/page.tsx`, `web/src/theme/tokens.ts:8-26`, the `Agent.role` removal (`server/prisma/schema.prisma:588`)

@@ -42,18 +42,8 @@ import { type RoleKey, neutral, space, radius, fontSize, fontFamily } from "@/sr
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-const AGENT_ID_ROLE: Record<string, RoleKey> = {
-  a_product: "product",
-  a_project_manager: "project_manager",
-  a_architect: "architect",
-  a_developer: "developer",
-  a_tester: "tester",
-  a_plan: "plan",
-};
 const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 function toRole(agentId: string): RoleKey | null {
-  const direct = AGENT_ID_ROLE[agentId];
-  if (direct) return direct;
   const rest = agentId.startsWith("a_") ? agentId.slice(2) : agentId;
   if ((ROLE_KEYS as readonly string[]).includes(rest)) return rest as RoleKey;
   return null;

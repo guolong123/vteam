@@ -550,7 +550,7 @@ export default function TeamDetailPage() {
                 <select data-testid="add-member-agent-select" value={selectedAgentId} onChange={(e) => setSelectedAgentId(e.target.value)} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
                   <option value="">请选择</option>
                   {(agentsQuery.data?.items ?? []).map((a) => (
-                    <option key={a.id} value={a.id}>{a.name} ({a.role ?? a.type})</option>
+                    <option key={a.id} value={a.id}>{a.name} ({a.type === "template" && a.role ? a.role : a.type})</option>
                   ))}
                 </select>
               </div>
