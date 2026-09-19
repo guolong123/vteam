@@ -613,3 +613,132 @@ describe('parsePatchFilePaths', () => {
     expect(parsePatchFilePaths('hello world')).toEqual([]);
   });
 });
+
+/**
+ * third-party-agent-display Todo 4：外部（引擎自带/第三方）agent 的 guard 行为钉死。
+ *
+ * UI 对外部 agent 的诚实声明是"不受 vteam 权限治理"。本组从 worker 侧证明该声明：
+ * 1) 未映射 agent 名（不在 guard `roles` 键集）→ pass-through（allow，绝不误拦）——
+ *    即 `policy.ts` 固定分支 2（session 未映射/`agent` 不在 `roles` → allow，
+ *    `policy.ts:117-121`；分支注释注明"非角色会话，绝不 fail-closed"）。该 pass-through
+ *    是**故意的安全属性**，本组只钉住、绝不弱化；
+ * 2) 判定为**精确键**匹配：大小写/空白/后缀变体一律未映射 → 仍 pass-through
+ *    （无模糊/前缀匹配泄漏，外部名不会因拼写相近被"卷入"治理）；
+ * 3) 对照：同一 rolesDoc 下映射到受治理角色时，同一危险调用被 deny——证明上面的
+ *    allow 是真实 pass-through，而非判定空转。
+ */
+describe('third-party-agent-display Todo 4：外部 agent 名未映射 → pass-through（零治理）', () => {
+  /** 危险调用代表集：write/bash/task/execute/vteam_ 命名空间——受治理角色下必拦。 */
+  const DANGEROUS_CALLS: ReadonlyArray<readonly [string, unknown]> = [
+    ['write', { filePath: '/data/w/server/src/evil.ts' }],
+    ['bash', { command: 'rm -rf /' }],
+    ['task', {}],
+    ['execute', {}],
+    ['vteam_bogus', {}],
+    ['vteam_task_transition', {}],
+  ];
+
+  /** 本部署真实引擎外部名（todo 1 live 证据；含大写/空格/连字符变体）。 */
+  const EXTERNAL_ENGINE_NAMES = [
+    'build',
+    'plan',
+    'oracle',
+    'general',
+    'explore',
+    'librarian',
+    'multimodal-looker',
+    'prometheus',
+    'Sisyphus',
+    'Sisyphus-Junior',
+    'Sisyphus - ultraworker',
+    'Prometheus - Plan Builder',
+    'Atlas - Plan Executor',
+    'Metis - Plan Consultant',
+    'Momus - Plan Critic',
+  ] as const;
+
+  const rolesDoc = doc({ 'vteam-developer': role() });
+
+  it('真实引擎外部名（含大写/空格/连字符）对全部危险调用一律 allow（非空转：断言数 > 0）', () => {
+    let assertions = 0;
+    for (const agent of EXTERNAL_ENGINE_NAMES) {
+      for (const [tool, args] of DANGEROUS_CALLS) {
+        expectAllow(call(rolesDoc, sess(agent), tool, args));
+        assertions += 1;
+      }
+    }
+    expect(assertions).toBe(EXTERNAL_ENGINE_NAMES.length * DANGEROUS_CALLS.length);
+    expect(assertions).toBeGreaterThan(0);
+  });
+
+  it('对照：受治理角色同一 rolesDoc 下危险调用被 deny（上面的 allow 绝非空转）', () => {
+    const mapped = sess('vteam-developer');
+    const message = expectDeny(
+      call(rolesDoc, mapped, 'write', { filePath: '/data/w/server/src/evil.ts' }),
+    );
+    expect(message).toContain('【越界拦截｜角色：vteam-developer】');
+    expectDeny(call(rolesDoc, mapped, 'bash', { command: 'rm -rf /' }));
+    expectDeny(call(rolesDoc, mapped, 'task', {}));
+    expectDeny(call(rolesDoc, mapped, 'execute', {}));
+    expectDeny(call(rolesDoc, mapped, 'vteam_bogus', {}));
+  });
+
+  it('判定为精确键匹配：大小写/空白/后缀/裸前缀变体均未映射 → 仍 pass-through', () => {
+    const nearMisses = [
+      'VTEAM-DEVELOPER',
+      'Vteam-Developer',
+      'vteam-developer ',
+      ' vteam-developer',
+      'vteam-developer2',
+      'vteam-developer-x',
+      'vteam-',
+      'vteam-unknown',
+      'vteam-plan ',
+    ] as const;
+    let assertions = 0;
+    for (const agent of nearMisses) {
+      expectAllow(call(rolesDoc, sess(agent), 'write', { filePath: '/etc/passwd' }));
+      expectAllow(call(rolesDoc, sess(agent), 'bash', { command: 'rm -rf /' }));
+      assertions += 2;
+    }
+    expect(assertions).toBe(nearMisses.length * 2);
+    // 对照：精确名同一调用被拦（deny 优先级不因近名全部放行而失效）。
+    expectDeny(call(rolesDoc, sess('vteam-developer'), 'write', { filePath: '/etc/passwd' }));
+    expectDeny(call(rolesDoc, sess('vteam-developer'), 'bash', { command: 'rm -rf /' }));
+  });
+
+  it('治理边界 = guard 键集：外部名与带 vteam- 前缀的未映射名同类 pass-through', () => {
+    // `vteam-unknown`（如 policyId 为 null 的 vteam- 名前缀 agent）不在键集内，
+    // 与 `build` 一样未被治理：allow。键集之外不存在任何可被治理的入口。
+    expectAllow(call(rolesDoc, sess('vteam-unknown'), 'bash', { command: 'rm -rf /' }));
+    expectAllow(call(rolesDoc, sess('build'), 'bash', { command: 'rm -rf /' }));
+    expectDeny(call(rolesDoc, sess('vteam-developer'), 'bash', { command: 'rm -rf /' }));
+  });
+
+  it('roles 键集不含外部名（服务端零发射的下游面）：外部名无匹配条目，只可能 pass-through', () => {
+    // 模拟控制面下发的 roles.json：键全部来自 vteam 策略集（服务端零发射由
+    // server `agent-policies.no-external-emission.spec.ts` 证明；此处钉住下游后果）。
+    const governed = [
+      'vteam-architect',
+      'vteam-developer',
+      'vteam-librarian',
+      'vteam-plan',
+      'vteam-product',
+      'vteam-project_manager',
+      'vteam-tester',
+    ] as const;
+    const governedDoc = doc(
+      Object.fromEntries(governed.map((name) => [name, role()])),
+    );
+    let assertions = 0;
+    for (const external of EXTERNAL_ENGINE_NAMES) {
+      expect(
+        Object.prototype.hasOwnProperty.call(governedDoc.roles, external),
+      ).toBe(false);
+      expectAllow(call(governedDoc, sess(external), 'task', {}));
+      assertions += 2;
+    }
+    expect(assertions).toBe(EXTERNAL_ENGINE_NAMES.length * 2);
+    expect(assertions).toBeGreaterThan(0);
+  });
+});

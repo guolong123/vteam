@@ -2445,7 +2445,15 @@ describe('ExecServer：session→policy 映射（Todo 19 guard 会话映射）',
   });
 
   it('非 vteam agent / 未传 agent：不写映射（未映射 pass-through，不建目录）', async () => {
-    for (const agent of [undefined, 'build'] as const) {
+    const nonVteamAgents = [
+      undefined,
+      'build',
+      'prometheus',
+      'oracle',
+      'Prometheus - Plan Builder',
+      'Sisyphus-Junior',
+    ] as const;
+    for (const [index, agent] of nonVteamAgents.entries()) {
       const { driver } = mockDriver();
       const { sender, sent } = createSender();
       const exec = new ExecServer({
@@ -2455,7 +2463,7 @@ describe('ExecServer：session→policy 映射（Todo 19 guard 会话映射）',
       try {
         const res = await postExecute(bound, {
           taskId: 't_1',
-          sessionId: `ses_nomap_${agent ?? 'none'}`,
+          sessionId: `ses_nomap_${index}`,
           ...(agent ? { agent } : {}),
           prompt: 'go',
         });

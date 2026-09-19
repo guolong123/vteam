@@ -1,0 +1,95 @@
+{
+  "task": "third-party-agent-display / todo 4",
+  "title": "No emission and no enforcement for external names: buildAgentPolicies() emits only vteam-governed names; worker guard pass-through for unmapped agents is preserved",
+  "claim": "An external engine agent (Prometheus/Sisyphus/build/plan/oracle/general/explore/librarian/multimodal-looker/...) is genuinely outside vteam enforcement: no policy artifact is emitted for it on the server, and the worker guard does not govern it (unmapped -> allow, the deliberate pass-through safety property).",
+  "externalNamesUsed": [
+    "build",
+    "plan",
+    "oracle",
+    "general",
+    "explore",
+    "librarian",
+    "multimodal-looker",
+    "prometheus",
+    "Sisyphus",
+    "Sisyphus-Junior",
+    "Sisyphus - ultraworker",
+    "Prometheus - Plan Builder",
+    "Atlas - Plan Executor",
+    "Metis - Plan Consultant",
+    "Momus - Plan Critic",
+    "compaction",
+    "summary",
+    "title"
+  ],
+  "externalNamesSource": "todo 1 live evidence .omo/evidence/third-party-agent-display/task-1-api.json (24 live engine agents minus the 8 governed names), incl. space/uppercase/hyphen variants to prove no fuzzy/prefix match leaks them",
+  "serverAssertions": {
+    "spec": "server/src/execution-policies/agent-policies.no-external-emission.spec.ts",
+    "suite": "agent-policies 零发射：外部/引擎 agent 名绝不进入策略集（third-party-agent-display Todo 4）",
+    "tests": [
+      "agents[].name 与 guard.roles 键集恰为 7 个受治理内置名（硬编码期望 + 常量交叉校验）",
+      "不变式：每个发射名都是 vteam- 前缀 + AGENT_KEY_PATTERN 键；违例为空且样本非空",
+      "真实引擎外部名（含大小写/空格变体）在 agents 与 guard.roles 两侧均零出现（无模糊/前缀泄漏）",
+      "发射并集恰为 内置 ∪ vteam-<agentKey>（多一个名即失败；两侧同集）",
+      "外部引擎名（含大小写/空格变体）在自定义块存在时仍零出现",
+      "自定义发出名可从 mock 行独立推导：vteam-demo-agent / vteam-zeta 均在两侧"
+    ],
+    "newTests": 6,
+    "oracleIndependence": "expected governed sets are hardcoded (7 explicit builtins, cross-checked against ROLE_BOUNDARIES keys) or derived from this spec's own mocked DB rows; no expected value is read back from buildAgentPolicies()",
+    "invariant": "every emitted name is `vteam-` + a string matching AGENT_KEY_PATTERN (^[a-z][a-z0-9_-]{0,62}$); violations must be empty and sample size > 0",
+    "governedSetEquality": "union(agents[].name, guard.roles keys) === expected governed set for the mocked DB rows (7 builtins with empty custom rows; 7 builtins + vteam-demo-agent + vteam-zeta with custom rows)"
+  },
+  "workerAssertions": {
+    "specs": [
+      "worker/src/role-guard/policy.spec.ts",
+      "worker/src/exec/exec-server.spec.ts"
+    ],
+    "passThroughProperty": "policy.ts:117-121 (branch 2): session unmapped or session.agent not a key in roles -> { action: 'allow' }. This is deliberate, never fail-closed.",
+    "testsAdded": {
+      "worker/src/role-guard/policy.spec.ts": [
+        "真实引擎外部名（含大写/空格/连字符）对全部危险调用一律 allow（非空转：断言数 > 0）",
+        "对照：受治理角色同一 rolesDoc 下危险调用被 deny（上面的 allow 绝非空转）",
+        "判定为精确键匹配：大小写/空白/后缀/裸前缀变体均未映射 → 仍 pass-through",
+        "治理边界 = guard 键集：外部名与带 vteam- 前缀的未映射名同类 pass-through",
+        "roles 键集不含外部名（服务端零发射的下游面）：外部名无匹配条目，只可能 pass-through"
+      ],
+      "worker/src/exec/exec-server.spec.ts": [
+        "非 vteam agent / 未传 agent：不写映射（未映射 pass-through，不建目录） — extended the agent list from [undefined, 'build'] to [undefined, 'build', 'prometheus', 'oracle', 'Prometheus - Plan Builder', 'Sisyphus-Junior']"
+      ]
+    },
+    "newTests": 5,
+    "processGatePinned": "exec-server.ts:1129 `if (!agent.startsWith('vteam-')) return;` — only vteam- names get a session→policy mapping; external names are never mapped, so the guard only sees them via branch 2 pass-through",
+    "productionWorkerCodeChanged": false
+  },
+  "mutationCheck": {
+    "injected": "server/src/execution-policies/execution-policy.service.ts buildAgentPolicies(): before `return { agents, guard: ... }`, push agents entry { name: 'prometheus', ... } and roles['prometheus'] = { permission: {}, tools: {}, bashDeny: [], correction: {} }",
+    "pristineSha256": "c5f50430c92fe1572491affc8e0700140ba1e397c1644d1ae2db8b689b458bb2",
+    "mutatedSha256": "7faf9068645bac763facc26d0097818fd270498a12f04f359c63bad88e712148",
+    "command": "cd server && npx jest --runInBand src/execution-policies/agent-policies.no-external-emission.spec.ts",
+    "failedTests": [
+      "agents[].name 与 guard.roles 键集恰为 7 个受治理内置名（硬编码期望 + 常量交叉校验）",
+      "不变式：每个发射名都是 vteam- 前缀 + AGENT_KEY_PATTERN 键；违例为空且样本非空",
+      "发射并集恰为 内置 ∪ vteam-<agentKey>（多一个名即失败；两侧同集）",
+      "外部引擎名（含大小写/空格变体）在自定义块存在时仍零出现",
+      "真实引擎外部名（含大小写/空格变体）在 agents 与 guard.roles 两侧均零出现（无模糊/前缀泄漏）"
+    ],
+    "failedCount": 5,
+    "passedCount": 1,
+    "result": "5 failed, 1 passed, 6 total — the test discriminates",
+    "restoredSha": "c5f50430c92fe1572491affc8e0700140ba1e397c1644d1ae2db8b689b458bb2",
+    "restoreVerified": "byte-identical (git diff --numstat on the production file = 0 lines)",
+    "greenAgain": "npx jest --runInBand src/execution-policies/agent-policies.no-external-emission.spec.ts -> 6 passed"
+  },
+  "commands": [
+    "cd server && npx tsc -p tsconfig.json --noEmit  => exit 0",
+    "cd server && npx jest --runInBand src/execution-policies src/chat  => 26 suites / 658 tests passed",
+    "cd server && npx jest --runInBand  => 140 suites / 3196 tests passed (baseline 139 / 3190)",
+    "cd worker && npx tsc --noEmit  => exit 0",
+    "cd worker && npx jest --runInBand src/role-guard src/exec/exec-server.spec.ts  => 3 suites / 202 tests passed",
+    "cd worker && npx jest --runInBand  => 26 suites / 688 tests passed (baseline 26 / 683)"
+  ],
+  "baseline": {
+    "server": { "suites": 139, "tests": 3190 },
+    "worker": { "suites": 26, "tests": 683 }
+  }
+}
