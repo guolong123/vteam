@@ -18,6 +18,7 @@ import { isApiError } from "@/lib/errors";
 import { AgentAvatar, EmptyState, PageWindow, Pagination } from "@/src/components/ui";
 import {
   type RoleKey,
+  ROLE_KEYS,
   neutral,
   space,
   radius,
@@ -28,7 +29,6 @@ import {
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 const PAGE_SIZE = 12;
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 function toAvatarRole(role: string | null): RoleKey {
   return role && (ROLE_KEYS as readonly string[]).includes(role) ? (role as RoleKey) : "developer";
 }

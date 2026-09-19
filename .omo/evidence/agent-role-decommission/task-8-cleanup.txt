@@ -1,0 +1,118 @@
+task 8 — remove dead role helpers + collapse duplicated ROLE_KEYS
+==================================================================
+date (UTC): 2026-09-19T18:19:09Z
+commit under test: working tree (pre-commit); base 0ce61d4
+
+## 1. FILES CHANGED
+server/src/chat/worker-dispatcher.ts     — deleted isPlanRole; renamed roleToAgentName -> agentKeyToVteamAgentName; removed TODO(agent-role-decommission todo 8) marker; interface doc updated
+server/src/chat/worker-dispatcher.spec.ts — deleted isPlanRole import + spec block; renamed helper refs (3 sites)
+web/src/theme/tokens.ts                  — added derived ROLE_KEYS export
+web/src/components/tasks/TaskDetailDrawer.tsx   — local ROLE_KEYS removed, imported
+web/src/components/teams/TeamRightPanel.tsx     — local ROLE_KEYS removed, imported
+web/src/components/teams/TeamMembersPanel.tsx   — local ROLE_KEYS removed, imported
+web/app/(main)/tasks/new/page.tsx        — local (function-scoped) ROLE_KEYS removed, imported
+web/app/(main)/board/page.tsx            — local ROLE_KEYS removed, imported
+web/app/(main)/agents/page.tsx           — local ROLE_KEYS removed, imported (CREATE_ROLE_KEYS derivation preserved)
+web/app/(main)/teams/[id]/page.tsx       — local 'as const' ROLE_KEYS removed, imported
+web/app/(main)/teams/[id]/session/page.tsx — local ROLE_KEYS removed, imported
+web/app/(main)/teams/page.tsx            — local ROLE_KEYS removed, imported
+scripts/agent-role-consumer-manifest.txt — regenerated with the checker's own grep pipeline (line drift only)
+
+## 2. DELETED vs KEPT (reference counts)
+
+-- DELETED: isPlanRole (worker-dispatcher.ts:439-448 old)
+   pre-deletion non-test/non-decl refs: 0 (only its own export, doc comments, spec import at spec:44 + spec block :1922-1938)
+   post-deletion:
+   $ grep -rn "isPlanRole" server/src --include="*.ts"
+   (no output — exit 1, 0 callers)
+   spec block deleted verbatim ('isPlanRole 保留纯判定（不再是屏蔽来源，删除归 todo 8）');
+   import removed from worker-dispatcher.spec.ts:44.
+
+-- KEPT: roleToAgentName (7 pre-existing live references; NOT dead)
+   refs: :182 (inside roleLabelOfAgentKey), :3751 (resolveBoundaryAndTools), + 5 doc mentions, + spec import/4 asserts.
+   DECISION: RENAMED (mechanical) to agentKeyToVteamAgentName, because every live call site already passed an
+   agentKey, not a role — the name was the only stale thing left and did not revert cleanly to 'role' semantics.
+   All call sites + spec updated; tsc/eslint/jest prove the rename is total:
+   $ grep -rn "roleToAgentName" server/src --include="*.ts"
+   (no output — exit 1, 0 references)
+
+-- KEPT: roleNeedsIssueDetail — live at worker-dispatcher.ts:2155 (roleNeedsIssueDetail(agentIdentity.agentKey));
+   key-based predicate, tests intact.
+
+-- VERIFIED ALREADY CLEAN: constantRoleNameOf (execution-policy.service.ts:765) — todo 3 re-keyed it to
+   agentKey; its role path no longer exists. Nothing to delete.
+
+-- KEPT with reason: listPlanDutyAgents / listExecuteDutyAgents (common/opencode-agent-duty.ts:86,90)
+   referenced only by opencode-agent-duty.spec.ts; documented as '供测试/文档使用的约定表快照（只读）'.
+   Deleting them would delete their spec coverage for no dead-code gain.
+
+## 3. TODO MARKER RESOLVED (worker-dispatcher.ts ~:171-173)
+   DECISION: keep both AgentIdentityInfo.role and TeamMemberInfo.role (they are live: identity line + roster line,
+   both fed from agentKey via roleLabelOfAgentKey). Removing them would ripple into ~15 spec fixture literals +
+   the assembled prompt lines for zero behavioural gain. The TODO marker was DELETED and the comment now states
+   plainly: the field carries a key-derived label (built-in key verbatim, empty for custom/absent), never reads a
+   DB column, and is the identity/roster label source.
+   $ grep -rn "TODO(agent-role-decommission" server/src web/src worker/src
+   (no output — 0 markers)
+
+## 4. ROLE_KEYS COLLAPSE — single source
+   $ grep -rn "const ROLE_KEYS" web/src web/app
+   web/src/theme/tokens.ts:29:export const ROLE_KEYS: readonly RoleKey[] = Object.keys(roles) as RoleKey[];
+   HITS: 1 (exactly the tokens.ts export)
+   Key order verified: Object.keys(roles) === [product, project_manager, architect, developer, tester, plan]
+   (insertion order of the roles literal) — byte-identical to every replaced local array, so no order-derived
+   rendering change is possible. No explicit ordered derivation was needed.
+   9 replacement sites: TaskDetailDrawer, TeamRightPanel, TeamMembersPanel, tasks/new, board, agents,
+   teams/[id], teams/[id]/session, teams/page (all now import from @/src/theme/tokens).
+   agents/page.tsx CREATE_ROLE_KEYS = ROLE_KEYS.filter(k => k !== 'plan') preserved verbatim.
+   Built-output check (running container):
+   $ docker exec aiagents-compose-web grep -c '["product",..."plan"]' <page.js>
+   agents/page.js: 0 | board/page.js: 0   (literal array gone from the collapsed pages)
+   NOTE: web/app/(main)/teams/new/page.tsx keeps a separately-named ROLE_ORDER constant (different name,
+   different semantics: instance-bucket ordering, not the presence-check key set) — out of this todo's scope,
+   not one of the 9 listed sites.
+
+## 5. NEGATIVE CONTROLS (the reference check is real)
+   (a) deleted-symbol probe — server/src/chat/__negctl_deleted_symbol.ts importing { isPlanRole }:
+       src/chat/__negctl_deleted_symbol.ts(2,10): error TS2305: Module '"./worker-dispatcher"' has no exported member 'isPlanRole'.
+       NEGCTL_EXIT=2 | after rm + restore: RESTORED_EXIT=0
+   (b) accidental-deletion-of-a-still-used-helper — renamed agentKeyToVteamAgentName's declaration only,
+       leaving call sites:
+       src/chat/worker-dispatcher.spec.ts(31,3): error TS2305: ... has no exported member 'agentKeyToVteamAgentName'.
+       src/chat/worker-dispatcher.ts(181,10): error TS2304: Cannot find name 'agentKeyToVteamAgentName'.
+       src/chat/worker-dispatcher.ts(3729,26): error TS2304: Cannot find name 'agentKeyToVteamAgentName'.
+       NEGCTL2_EXIT=2 | restored copy-back + tsc: RESTORED2_EXIT=0
+
+## 6. GATES
+   cd server && npx tsc -p tsconfig.json --noEmit            -> exit 0 (TSC_SERVER_OK)
+   cd web && npx tsc --noEmit                               -> exit 0 (TSC_WEB_OK)
+   cd server && npx jest --runInBand                        -> 141 suites / 3250 tests passed
+       (baseline 141/3251; delta -1 = the deleted isPlanRole spec block, exactly as predicted)
+   cd worker && npx jest --runInBand                        -> 26 suites / 688 tests passed (unchanged)
+   npx eslint server/src/chat/worker-dispatcher{,.spec}.ts  -> 0 errors, 5 pre-existing warnings
+       (unused imports at spec.ts:10,22,24,27,28 — all predate this todo)
+   npx eslint <9 web files + tokens.ts>                     -> 0 errors, 7 pre-existing warnings
+       (unused 'deleting', 2 react-hooks/exhaustive-deps, 2 '_drop', 2 unused in TeamRightPanel)
+   frozen sha before-agent-policies.json = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 (unchanged)
+   bash scripts/check-agent-role-consumers.sh -> OBSERVED 136 / UNMAPPED 0 (manifest regenerated: 146->136, drift only)
+   checker negative control (--extra-dir with a synthetic .role read) -> OBSERVED 137 / UNMAPPED 1, exit 1
+
+## 7. WEB BEFORE/AFTER (rendering unchanged)
+   Probe: 8 Playwright tests, 6 fact blocks on the live stack (:13001, seed-admin).
+   BEFORE ran on the todo-7 web build; AFTER ran after 'docker compose up -d --build web' (no --force-recreate);
+   the built page.js was then checked to contain 0 copies of the literal array.
+   Mechanical diff (difflib.unified_diff) over all 64 fact lines:
+     AGENT_ROWS        10 lines  IDENTICAL
+     CREATE_ROLE_OPTIONS 6 lines IDENTICAL
+     AGENT_COLOR        5 lines  IDENTICAL
+     MEMBER_ROWS        7 lines  IDENTICAL
+     ADD_MEMBER_OPTIONS 11 lines IDENTICAL
+     TEAMS_LIST_AVATARS 25 lines IDENTICAL
+     TOTAL_DIFF_LINES: 0
+   Screenshots: task-8-agents.png, task-8-members.png
+
+## 8. isPlanRole TRACE STATEMENT
+   No trace remains in server/src (0 hits), or in any source tree (web/src, worker/src): 0 hits.
+   The only remaining textual mentions are (a) the stale, gitignored server/dist build artifact, and
+   (b) the checker script's own pattern list, where 'isPlanRole' is intentionally kept as a regression
+   tripwire so a reintroduction is caught. Neither is a code reference.

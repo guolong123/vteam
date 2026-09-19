@@ -25,6 +25,9 @@ export const roles: Record<RoleKey, RoleTheme> = {
   plan: { label: "计划员", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
 };
 
+/** 全部 RoleKey（键序 = `roles` 声明序），由 `roles` 派生以保证与色板永不漂移。 */
+export const ROLE_KEYS: readonly RoleKey[] = Object.keys(roles) as RoleKey[];
+
 /** 角色对应导航/面板上的强调色（深一档，用于文字） */
 export const roleText: Record<RoleKey, string> = {
   product: "#0F766E",

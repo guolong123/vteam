@@ -1,0 +1,13 @@
+import { test as setup } from "@playwright/test";
+import path from "node:path";
+
+const AUTH_FILE = path.join(process.cwd(), ".auth/task-8-user.json");
+
+setup("login seed-admin on :13001", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByTestId("username").fill("seed-admin");
+  await page.getByTestId("password").fill("Admin@123456");
+  await page.getByTestId("login-button").click();
+  await page.waitForURL(/\/teams/, { timeout: 30_000 });
+  await page.context().storageState({ path: AUTH_FILE });
+});

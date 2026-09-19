@@ -127,17 +127,18 @@ export function isVteamAgentName(x: unknown): x is VteamAgentName {
 }
 
 /**
- * 由模板 Agent 的角色 key 解析 opencode agent 名（`role` → `vteam-<role>`，Todo 4）。
- * 目标成员未显式绑定 `opencodeAgentName` 时按角色回退；未知/空角色返回 null
+ * 由 Agent 的绑定 key（`agents.agent_key`）解析 opencode agent 名
+ * （`agentKey` → `vteam-<agentKey>`，vteam-custom-agent-opencode Todo 4）。
+ * 目标成员未显式绑定 `opencodeAgentName` 时按 key 回退；未知/空 key 返回 null
  * （调用方据此省略 boundarySection，与引入前逐字节一致）。
  */
-export function roleToAgentName(
-  role: string | null | undefined,
+export function agentKeyToVteamAgentName(
+  agentKey: string | null | undefined,
 ): VteamAgentName | null {
-  if (!role) {
+  if (!agentKey) {
     return null;
   }
-  const candidate = `vteam-${role}`;
+  const candidate = `vteam-${agentKey}`;
   return isVteamAgentName(candidate) ? candidate : null;
 }
 
@@ -147,7 +148,7 @@ export function roleToAgentName(
  *
  * 唯一来源 `agentKey` → `vteam-<agentKey>`（模板行 `agentKey = role`，与引入前同值）；
  * `agentKey` 缺席/非法（`AGENT_KEY_PATTERN` 未命中 → 视为缺席，绝不拼出非法 agent 名）
- * 时返回 **null**——不再回退 `roleToAgentName(role)`（`Agent.role` 列随 todo 7 删除）。
+ * 时返回 **null**——不做任何按名回退（`Agent.role` 列已随 todo 7 删除）。
  * 该收窄即 todo 1 声明的规则 4（无 `agentKey` 者无策略候选），调用方据此回退现状：
  * `opencodeAgentName` 或省略 `agent` 键。
  * 纯函数；worker 能力位门控由调用方执行（此处不判定）。
@@ -164,14 +165,12 @@ export function resolvePolicyAgentCandidate(
 
 /**
  * 装配用「角色」标签（agent-role-decommission todo 10）：仅当 `agentKey` 命中内置
- * vteam 注册名空间（`roleToAgentName` 即 `vteam-<agentKey>` ∈ `VTEAM_AGENT_NAMES`）
+ * vteam 注册名空间（`agentKeyToVteamAgentName` 即 `vteam-<agentKey>` ∈ `VTEAM_AGENT_NAMES`）
  * 时返回其 key——模板行 `agentKey = role`，与旧 `Agent.role` 值逐字节一致；
  * 自定义/克隆（如 `myagent`）与缺席 → 空串（旧 `Agent.role` 为 null，`?? ''` 后即空串）。
  *
- * **不再读取已废弃的 `Agent.role` 列**：本函数是身份行（`buildSystemInstructions`）与
- * 团队成员名册行的唯一标签来源，两者都只消费该 key-derived 值。
- * TODO(agent-role-decommission todo 8)：随 `AgentIdentityInfo.role` / `TeamMemberInfo.role`
- * 字段一并重命名/删除（字段仅剩装配用途）。
+ * **不读取任何 DB 列**：本函数是身份行（`buildSystemInstructions`）与团队成员名册行的
+ * 唯一标签来源，两者都只消费该 key-derived 值。
  */
 export function roleLabelOfAgentKey(
   agentKey: string | null | undefined,
@@ -179,7 +178,7 @@ export function roleLabelOfAgentKey(
   if (!agentKey) {
     return '';
   }
-  return roleToAgentName(agentKey) ? agentKey : '';
+  return agentKeyToVteamAgentName(agentKey) ? agentKey : '';
 }
 
 /**
@@ -355,12 +354,10 @@ export interface AgentIdentityInfo {
   id: string;
   name: string | null;
   /**
-   * 装配用角色标签（identity 行 / 名册行渲染）。
-   *
-   * agent-role-decommission todo 10 起：dispatch 装配处已由 `agent.agentKey` 派生
-   * （`roleLabelOfAgentKey`：内置 key 原样、自定义/缺席为空串），**不再来自 DB 列
-   * `Agent.role`**（todo 7 删除）。字段本身保留以兼容既有 spec 夹具与装配读取；
-   * 重命名/删除归 **todo 8**。
+   * 装配用角色标签（identity 行 / 名册行渲染）。dispatch 装配处由 `agent.agentKey`
+   * 经 `roleLabelOfAgentKey` 派生：内置 key 原样（模板行即角色 key），自定义/缺席为空串。
+   * 它只是 key 派生的**渲染标签**——从不读取任何 DB 列（`Agent.role` 已删除），
+   * 是身份行与名册行的唯一标签来源。
    */
   role: string | null;
   prompt: string | null;
@@ -374,7 +371,7 @@ export interface AgentIdentityInfo {
 
 /** 团队成员信息（dispatch 时从 TeamMember→Agent 组装，注入全局上下文供 agent 判断与谁协作）。
  *  TeamMember 维度：instanceId 为团队成员 id（tmm_ 前缀，TeamMember.id），alias/seq 来自团队模板；
- *  id/name 来自模板 agent；role 为 agentKey 派生的装配标签（todo 10；重命名/删除归 todo 8）。 */
+ *  id/name 来自模板 agent；role 为 agentKey 派生的装配标签（同 `AgentIdentityInfo.role`）。 */
 export interface TeamMemberInfo {
   /** 模板 agent id（继承 name/prompt/model）。 */
   id: string;
@@ -427,24 +424,6 @@ export function roleNeedsIssueDetail(role: string | null | undefined): boolean {
     return true;
   }
   return r.includes('产品') || r.includes('测试') || r.includes('开发');
-}
-
-/**
- * plan 角色判定（记忆段屏蔽用）——兼容大小写及中文“计划员”，写法参考 roleNeedsIssueDetail。
- *
- * ⚠️ agent-role-decommission todo 2：本函数**已不再是任何生产分支的判定来源**
- * （记忆/产出物段改由已解析策略 `tools` 驱动，见 `toolAllowed`）。保留仅供既有单测
- * 引用，删除归 todo 8（届时一并删除引用它的 spec）。
- */
-export function isPlanRole(role: string | null | undefined): boolean {
-  if (!role) {
-    return false;
-  }
-  const r = role.toLowerCase();
-  if (r === 'plan' || r === 'vteam-plan') {
-    return true;
-  }
-  return r.includes('计划');
 }
 
 /**
@@ -608,9 +587,8 @@ export function buildSystemInstructions(
 ): string {
   const selfInstanceId = opts?.selfInstanceId ?? agent.id;
   const selfName = opts?.selfAlias ?? agent.name ?? agent.id;
-  // 装配用角色标签（todo 10）：dispatch 装配处已把该字段由 `agentKey` 派生，此处只读内存
-  // DTO，不再触碰 DB 列 `Agent.role`（todo 7 删除）。解构读取以避免 `agent.role` 字面量
-  // 残留（todo 10 的 grep 闸门）；字段本身去留/重命名归 todo 8。
+  // 装配用角色标签：dispatch 装配处已把该字段由 `agentKey` 派生，此处只读内存 DTO，
+  // 不触碰任何 DB 列。解构读取以避免 `agent.role` 字面量残留（todo 10 的 grep 闸门）。
   const { role: agentRoleLabel } = agent;
   // 双维度身份：团队会话按团队成员（tmm_）调度时，另行明确其任务实例 id，
   // 避免 agent 拿成员 id 去任务成员表自查时误判"不是任务团队成员"
@@ -2236,7 +2214,7 @@ export class WorkerDispatcher
     // Todo 11：目标 Agent 的职责边界段由解析出的策略 correction 提供（不再按 agent 名
     // 白名单读取常量）——内置角色走绑定策略（出厂 correction == 常量，输出逐字节一致），
     // 自定义 agent 的自定义 correction 同样注入。策略解析失败/无服务/无 correction →
-    // 回退 `roleToAgentName(agentKey)` 常量派生，保证基线行为与引入前逐字节一致。
+    // 回退 `agentKeyToVteamAgentName(agentKey)` 常量派生，保证基线行为与引入前逐字节一致。
     const boundarySection = renderBoundarySection(correction);
     if (boundarySection) {
       systemOpts.boundarySection = boundarySection;
@@ -3733,7 +3711,7 @@ export class WorkerDispatcher
    * （vteam-role-behavior-abstraction Todo 11；agent-role-decommission todo 2 合并）：
    * 优先其绑定策略（`resolveByAgent`，内置/自定义同路径）——解析成功即采用其 `correction`
    * （DB 值胜出，含用户清空 `scopeSummary` 的场景 → `renderBoundarySection` 返回空串）
-   * 与 `tools`；策略缺席/无服务/解析异常 → 回退 `roleToAgentName` 常量派生的
+   * 与 `tools`；策略缺席/无服务/解析异常 → 回退 `agentKeyToVteamAgentName` 常量派生的
    * `resolveConstantPolicySource`（内置角色出厂态与按名读取常量逐字节一致），其 tools
    * 来自同一常量；均无 → `{ correction: null, tools: null }`。
    *
@@ -3747,8 +3725,8 @@ export class WorkerDispatcher
     tools: Record<string, AgentToolState> | null;
   }> {
     // todo 10：常量名由 `agentKey` 派生（模板行 agentKey === role ⇒ 与旧调用同值；
-    // 自定义 agentKey 不在 vteam 名空间 ⇒ null，与旧 roleToAgentName(null) 同值）。
-    const constantName = roleToAgentName(agent.agentKey);
+    // 自定义 agentKey 不在 vteam 名空间 ⇒ null，与旧常量派生(null) 同值）。
+    const constantName = agentKeyToVteamAgentName(agent.agentKey);
     if (this.executionPolicyService) {
       try {
         const resolved = await this.executionPolicyService.resolveByAgent({

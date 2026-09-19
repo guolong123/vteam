@@ -19,6 +19,7 @@ import { teamsApi } from "@/src/api/teams";
 import { AgentAvatar } from "@/src/components/ui";
 import {
   type RoleKey,
+  ROLE_KEYS,
   neutral,
   space,
   radius,
@@ -92,8 +93,6 @@ const ISSUE_LABEL: Record<IssueItem["status"], string> = {
   closed: "已关闭",
   rejected: "已驳回",
 };
-
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 function toRoles(agentIds: string[]): RoleKey[] {
   const roles: RoleKey[] = [];

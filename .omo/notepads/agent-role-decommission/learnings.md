@@ -282,3 +282,41 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   after an app relaunch all compose services returned via `restart: unless-stopped` and `init`
   stayed exited (no reseed). `docker cp` the new migration into the server container, then
   `prisma migrate deploy` — no host bind-mount, no `--force-recreate`.
+
+## todo 8 — findings / gotchas
+
+- **The plan's "delete `roleToAgentName`" premise was stale by the time todo 8 ran.** Every live
+  call site already passed an `agentKey` (todo 10 migrated the last two), so the function was
+  alive and only its NAME was stale. Renaming (`roleToAgentName` → `agentKeyToVteamAgentName`)
+  was the lower-risk option vs. leaving a name that lies: 2 call sites + the spec, zero behaviour.
+  Had we deleted it per the literal plan text, `roleLabelOfAgentKey` and `resolveBoundaryAndTools`
+  would both have broken — caught by the reference search, exactly the discipline the todo demands.
+- **`isPlanRole` was the only genuinely dead symbol.** Its refs were self-export + doc comment +
+  its own spec import/block. Deleting the spec block is what drops the suite from 3251 → 3250;
+  a stale `TODO(agent-role-decommission todo 8)` marker sat in `roleLabelOfAgentKey`'s doc — the
+  marker named a deferral the plan's own reconsideration had already answered (keep the fields).
+  Resolving it = deleting the marker and stating the field's nature in one line.
+- **`AgentIdentityInfo.role` / `TeamMemberInfo.role` LOOK dead but are not.** They feed the
+  assembled identity line (`角色: <key>`) and the roster line; removing them ripples into ~15 spec
+  fixture literals plus every assembled-prompt assertion for zero rendering gain. The correct
+  cleanup is to stop calling them "role" in the comment and document them as key-derived labels —
+  a comment-accurate field, not a deleted one.
+- **`Object.keys(roles)` as a derived constant is order-safe here because JS integer-like keys do
+  not exist in this map.** All six keys are non-numeric strings, so insertion order is guaranteed;
+  the derived array is byte-identical to every replaced literal. Had a numeric-like key existed
+  (`"1"`, `"2"`), `Object.keys` would reorder it ahead of string keys and an explicit ordered
+  derivation would have been mandatory.
+- **A differently-named sibling constant can hide in the same collapse.** `teams/new/page.tsx:50`
+  declares `ROLE_ORDER` (same six values, different name AND different semantics: instance-bucket
+  ordering). It is NOT one of the nine `ROLE_KEYS` sites, so the literal survives in the built
+  bundle. Collapsing purely by VALUE rather than by symbol would have silently changed an
+  ordering contract — grep by `const <name>` and read the usage, not just the value.
+- **The checker's `UNMAPPED>0` after a real deletion is line drift, not a false alarm.** The
+  manifest is line-keyed, so deleting ~10 lines above every remaining `.role` mention in
+  `worker-dispatcher.ts` invalidates nearly every key in that file. Regenerate with the checker's
+  OWN pipeline (`emit_server` + `emit_web` blocks) before declaring failure — then re-run the
+  `--extra-dir` negative control to prove the checker still catches genuinely new reads.
+- **Stale gitignored `server/dist` keeps deleted symbols "visible" to a naive repo-wide grep.**
+  `dist/.../worker-dispatcher.d.ts` still declares `isPlanRole` and `isPlanRoleTarget` after the
+  source is gone. Any "is this symbol really deleted" evidence MUST scope to `server/src`, and
+  say so — a repo-wide grep hit in `dist` is an artifact, not a reference.

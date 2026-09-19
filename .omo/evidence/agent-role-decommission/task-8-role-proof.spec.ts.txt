@@ -1,0 +1,116 @@
+/**
+ * todo 8 前后对照探针（临时：跑完即删）
+ * ROLE_KEYS 单一来源折叠的前后渲染事实：agents 列表 + 团队详情成员行 + 会话成员面板。
+ */
+import { test, expect } from "@playwright/test";
+
+test.describe("task-8 ROLE_KEYS collapse proof", () => {
+  test("agents list: avatar data-role + row text per row", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
+    const rows = page.getByTestId("agent-list-item");
+    const n = await rows.count();
+    const facts: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const row = rows.nth(i);
+      const id = await row.getAttribute("data-agent-id");
+      const avatarRole = await row.getByTestId("agent-avatar").first().getAttribute("data-role");
+      const text = (await row.innerText()).replace(/\s+/g, " ").trim();
+      facts.push(`${id} | avatar=${avatarRole} | ${text}`);
+    }
+    console.log("AGENT_ROWS_BEGIN");
+    facts.forEach((f) => console.log(f));
+    console.log("AGENT_ROWS_END");
+    expect(facts.length).toBeGreaterThan(0);
+  });
+
+  test("agents list: create-modal role options (agents page ROLE_KEYS/CREATE_ROLE_KEYS)", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
+    await page.getByTestId("create-agent-button").click();
+    // 岗位选择下拉（CreateAgentModal）：选项来自 /agent-roles ∩ CREATE_ROLE_KEYS
+    const select = page.getByTestId("create-agent-role");
+    await expect(select).toBeVisible({ timeout: 15_000 });
+    await expect.poll(async () => select.locator("option").count()).toBeGreaterThan(1);
+    const texts = await select.locator("option").allInnerTexts();
+    console.log("CREATE_ROLE_OPTIONS_BEGIN");
+    texts.forEach((t) => console.log(t.replace(/\s+/g, " ").trim()));
+    console.log("CREATE_ROLE_OPTIONS_END");
+    expect(texts.length).toBeGreaterThan(1);
+  });
+
+  test("agents list: avatar theme colours (seeded templates)", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
+    const facts: string[] = [];
+    for (const id of ["a_product", "a_architect", "a_developer", "a_tester", "a_plan"]) {
+      const row = page.locator(`[data-testid="agent-list-item"][data-agent-id="${id}"]`);
+      if ((await row.count()) === 0) continue;
+      const avatar = row.getByTestId("agent-avatar").first();
+      facts.push(
+        `${id} data-role=${await avatar.getAttribute("data-role")} bg=${await avatar.evaluate((el) => getComputedStyle(el).backgroundColor)} border=${await avatar.evaluate((el) => getComputedStyle(el).borderTopColor)}`,
+      );
+    }
+    console.log("AGENT_COLOR_BEGIN");
+    facts.forEach((f) => console.log(f));
+    console.log("AGENT_COLOR_END");
+    expect(facts.length).toBe(5);
+  });
+
+  test("team detail: member row avatar role + badge text", async ({ page }) => {
+    await page.goto("/teams/tm_0000000001");
+    await expect(page.getByTestId("member-row").first()).toBeVisible();
+    const rows = page.getByTestId("member-row");
+    const n = await rows.count();
+    const facts: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const row = rows.nth(i);
+      const avatarRole = await row.getByTestId("agent-avatar").first().getAttribute("data-role");
+      const badge = await row.locator("span").nth(0).innerText();
+      facts.push(`${await row.getAttribute("data-member-id")} | avatar=${avatarRole} | badge=${badge.trim()}`);
+    }
+    console.log("MEMBER_ROWS_BEGIN");
+    facts.forEach((f) => console.log(f));
+    console.log("MEMBER_ROWS_END");
+    expect(facts.length).toBeGreaterThan(0);
+  });
+
+  test("team detail: add-member agent options (TeamMembersPanel roleOptionsOf)", async ({ page }) => {
+    await page.goto("/teams/tm_0000000001");
+    await page.getByTestId("add-member-toggle").click();
+    const select = page.getByTestId("add-member-agent-select");
+    await expect(select).toBeVisible();
+    await expect.poll(async () => select.locator("option").count()).toBeGreaterThan(1);
+    const options = await select.locator("option").allInnerTexts();
+    console.log("ADD_MEMBER_OPTIONS_BEGIN");
+    options.forEach((o) => console.log(o.replace(/\s+/g, " ").trim()));
+    console.log("ADD_MEMBER_OPTIONS_END");
+    expect(options.length).toBeGreaterThan(1);
+  });
+
+  test("teams list: avatar role per team card", async ({ page }) => {
+    await page.goto("/teams");
+    await page.waitForLoadState("networkidle");
+    const avatars = page.getByTestId("agent-avatar");
+    const n = await avatars.count();
+    const facts: string[] = [];
+    for (let i = 0; i < n; i++) {
+      const r = await avatars.nth(i).getAttribute("data-role");
+      if (r) facts.push(`avatar=${r}`);
+    }
+    console.log("TEAMS_LIST_AVATARS_BEGIN");
+    facts.forEach((f) => console.log(f));
+    console.log("TEAMS_LIST_AVATARS_END");
+    expect(n).toBeGreaterThan(0);
+  });
+
+  test("evidence screenshot", async ({ page }) => {
+    await page.goto("/agents");
+    await expect(page.getByTestId("agent-list-item").first()).toBeVisible();
+    await page.screenshot({ path: "../.omo/evidence/agent-role-decommission/task-8-agents.png", fullPage: true });
+    await page.goto("/teams/tm_0000000001");
+    await page.getByTestId("add-member-toggle").click();
+    await expect(page.getByTestId("add-member-agent-select")).toBeVisible();
+    await page.screenshot({ path: "../.omo/evidence/agent-role-decommission/task-8-members.png", fullPage: true });
+  });
+});

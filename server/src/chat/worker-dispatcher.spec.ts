@@ -28,6 +28,7 @@ import { WorkerEventIngress } from '../workers/worker-event.ingress';
 import { WorkersService } from '../workers/workers.service';
 import {
   AgentIdentityInfo,
+  agentKeyToVteamAgentName,
   buildSystemInstructions,
   DEFAULT_AGENT_IDLE_TIMEOUT_MS,
   DEFAULT_CHAT_HISTORY_MAX_BYTES,
@@ -41,7 +42,6 @@ import {
   stripGroupPostDeclarations,
   GLOBAL_SYSTEM_INSTRUCTIONS,
   GROUP_TRIGGER_INSTRUCTION,
-  isPlanRole,
   isVteamAgentName,
   roleNeedsIssueDetail,
   MAIN_AGENT_INSTRUCTION,
@@ -50,7 +50,6 @@ import {
   renderBoundarySection,
   resolvePolicyAgentCandidate,
   roleLabelOfAgentKey,
-  roleToAgentName,
   ARTIFACT_SUBMISSION_INSTRUCTION,
   ISSUE_FULL_INSTRUCTION,
   TASK_TRANSITION_INSTRUCTION,
@@ -656,7 +655,7 @@ describe('WorkerDispatcher', () => {
     });
 
     it('Todo 4：角色未知（未绑定）目标 → 不注入【职责边界】，与基线构造逐字节一致', async () => {
-      // 默认 mock agent 无 role → roleToAgentName 返回 null → 省略 boundarySection
+      // 默认 mock agent 无 agentKey → agentKeyToVteamAgentName 返回 null → 省略 boundarySection
       const d = createDispatcher();
       await d.dispatch(request);
 
@@ -1919,23 +1918,6 @@ describe('WorkerDispatcher', () => {
       expect(buildSystemInstructions(plan)).toContain('【记忆管理】');
     });
 
-    it('isPlanRole 保留纯判定（不再是屏蔽来源，删除归 todo 8）', () => {
-      for (const role of ['plan', 'Plan', 'PLAN', '计划员', '计划']) {
-        expect(isPlanRole(role)).toBe(true);
-      }
-      for (const role of [
-        'product',
-        'developer',
-        'project_manager',
-        'architect',
-        'tester',
-        null,
-        undefined,
-      ]) {
-        expect(isPlanRole(role)).toBe(false);
-      }
-    });
-
     describe('指令屏蔽由 resolved tools 驱动（todo 2：与 plan-mode 推导解耦）', () => {
       const identity: AgentIdentityInfo = {
         id: 'a_plan',
@@ -2087,12 +2069,14 @@ describe('WorkerDispatcher', () => {
       expect(renderBoundarySection({ scopeSummary: 42 })).toBe('');
     });
 
-    it('Todo 4：roleToAgentName / isVteamAgentName 映射（角色 key → vteam-<role>）', () => {
-      expect(roleToAgentName('product')).toBe('vteam-product');
-      expect(roleToAgentName('project_manager')).toBe('vteam-project_manager');
-      expect(roleToAgentName('unknown')).toBeNull();
-      expect(roleToAgentName('')).toBeNull();
-      expect(roleToAgentName(null)).toBeNull();
+    it('Todo 4：agentKeyToVteamAgentName / isVteamAgentName 映射（agentKey → vteam-<key>）', () => {
+      expect(agentKeyToVteamAgentName('product')).toBe('vteam-product');
+      expect(agentKeyToVteamAgentName('project_manager')).toBe(
+        'vteam-project_manager',
+      );
+      expect(agentKeyToVteamAgentName('unknown')).toBeNull();
+      expect(agentKeyToVteamAgentName('')).toBeNull();
+      expect(agentKeyToVteamAgentName(null)).toBeNull();
       expect(isVteamAgentName('vteam-developer')).toBe(true);
       expect(isVteamAgentName('vteam-plan')).toBe(true);
       expect(isVteamAgentName('developer')).toBe(false);
@@ -2104,7 +2088,7 @@ describe('WorkerDispatcher', () => {
       expect(resolvePolicyAgentCandidate({ agentKey: 'demo-agent' })).toBe(
         'vteam-demo-agent',
       );
-      // 模板行 agentKey = role → 与 roleToAgentName 同值
+      // 模板行 agentKey = role → 与 agentKeyToVteamAgentName 同值
       expect(resolvePolicyAgentCandidate({ agentKey: 'product' })).toBe(
         'vteam-product',
       );

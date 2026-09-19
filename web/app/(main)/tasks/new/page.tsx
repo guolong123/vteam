@@ -19,6 +19,7 @@ import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { teamsApi, type TeamDto } from "@/src/api/teams";
 import {
+  ROLE_KEYS,
   neutral,
   roles,
   space,
@@ -137,7 +138,6 @@ function TeamSelectPanel({
   resetAfterComplete: boolean; onResetChange: (v: boolean) => void;
   teamError: string | null; submitting: boolean; created: boolean; createError: string | null; onCreate: () => void;
 }) {
-  const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
   const toRole = (r: string | null): RoleKey => (r && (ROLE_KEYS as readonly string[]).includes(r) ? r as RoleKey : "developer");
   return (
     <section style={{ width: 340, flexShrink: 0, display: "flex", flexDirection: "column", gap: space.lg, ...baseFont }}>

@@ -38,11 +38,10 @@ import type {
   ArtifactsResponse,
 } from "@/src/components/tasks/task-detail-types";
 import { docIdFor } from "@/src/components/tasks/task-detail-types";
-import { type RoleKey, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
+import { type RoleKey, ROLE_KEYS, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 function toRole(agentId: string): RoleKey | null {
   const rest = agentId.startsWith("a_") ? agentId.slice(2) : agentId;
   if ((ROLE_KEYS as readonly string[]).includes(rest)) return rest as RoleKey;

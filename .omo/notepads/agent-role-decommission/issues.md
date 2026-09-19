@@ -170,3 +170,18 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `plan-docs.service.ts`, -1 in the verdict listener, -1 in platform-mcp, -1 in review-verdict
   `isPlanDutyMember` doc; +1 in `execution-policy.service.ts` (the new todo-7 doc comment line).
   Net 149 → 146. Regenerate BEFORE running the checker, not after.
+
+## todo 8 — findings / gotchas
+
+- **Manifest 146 → 136 keys**, all drift + deletions: the entire first grep block of
+  `worker-dispatcher.ts` shifted up by ~10 lines (isPlanRole block + comment removals), plus the
+  9 web `ROLE_KEYS` declarations gone and `tokens.ts` gaining one key. Regenerated with the
+  checker's own pipeline; `UNMAPPED 0`; `--extra-dir` control still reports `UNMAPPED 1`, exit 1.
+- **`server/dist` is stale and gitignored** — it still declares `isPlanRole` /
+  `isPlanRoleTarget`. Do not treat a `dist` grep hit as a live reference; the acceptance grep is
+  `server/src --include="*.ts"`.
+- **The `isPlanRole` spec block deletion is the ONLY test-count change** (3251 → 3250, 141 suites
+  both before and after). Any other delta would indicate an accidental deletion — report it.
+- **No `--force-recreate` was used** for the web rebuild; `docker compose up -d --build web` was
+  sufficient and the built `agents/page.js` + `board/page.js` were grepped to confirm the literal
+  array is gone from the bundle (0 hits each), i.e. the rebuild really shipped the collapse.

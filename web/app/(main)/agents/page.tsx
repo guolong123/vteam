@@ -48,6 +48,7 @@ import { ExternalAgentsPanel } from "@/src/components/agents/ExternalAgentsPanel
 import { type AvailableModel } from "@/src/types/models";
 import {
   type RoleKey,
+  ROLE_KEYS,
   neutral,
   space,
   radius,
@@ -402,7 +403,6 @@ const TYPE_LABEL: Record<string, string> = {
   clone: "克隆",
 };
 
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 /**
  * 新建 Agent 的岗位选择项（弹窗下拉）。**提交 `agentRoleId`，绝不提交 `role` 字符串**

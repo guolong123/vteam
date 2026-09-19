@@ -36,6 +36,7 @@ import { AgentAvatar } from "@/src/components/ui";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
   type RoleKey,
+  ROLE_KEYS,
   neutral,
   roles,
   space,
@@ -46,8 +47,6 @@ import {
 } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
-
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 /** 自定义 agent 中性主题（teal）。 */
 const CUSTOM_THEME = { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4", label: "自定义" };

@@ -37,6 +37,7 @@ import { AgentAvatar, EmptyState, StatusBadge } from "@/src/components/ui";
 import {
   type RoleKey,
   type StatusKey,
+  ROLE_KEYS,
   neutral,
   space,
   radius,
@@ -154,8 +155,6 @@ function toBoardStatus(status: string): BoardStatus {
 
 /** 产出物数量（Phase 2 无产出物端点，0 为真实兜底值，对齐 project-list 页 EMPTY_TASK_COUNT 模式）。 */
 const EMPTY_ARTIFACT_COUNT = 0;
-
-const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 /** teamAgentIds（agent id 列表）→ 头像可渲染的 RoleKey[]；未知/自定义 Agent 跳过不渲染。 */
 function toRoles(agentIds: string[]): RoleKey[] {
