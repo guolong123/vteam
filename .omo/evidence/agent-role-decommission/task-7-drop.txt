@@ -1,0 +1,178 @@
+# Evidence — agent-role-decommission todo 7: backfill then DROP `agents.role`
+
+Generated: 2026-09-20 (host=darwin, DB container `aiagents-compose-db`, MySQL 8)
+Plan: `.omo/plans/agent-role-decommission.md` todo 7
+Commit target: `feat(db): drop agents.role after backfill`
+
+## Changed files
+- `server/prisma/schema.prisma`                      `role String?` deleted from `model Agent` (+ avatar/agentKey doc note)
+- `server/prisma/migrations/20260919000010_drop_agents_role/migration.sql`   NEW (backfill a1/a2 → orphan guard → custom list → DROP)
+- `server/prisma/seed.ts`                            literal `role:` → `agentKey:`; `resolvePolicyBinding(agent.agentKey)`; `agentKey: agent.role` removed; console label updated
+- `server/src/tasks/plan-docs.service.ts`            select `{id, agentKey}`; fallback `agentKey ?? null`
+- `server/src/issues/review-verdict.listener.ts`     select `{agentKey}`; `isPlanDutyMember` uses `agentKey` only
+- `server/src/execution-policies/execution-policy.service.ts`  `AgentPolicyInput.role` compat field DELETED (no caller passed it)
+- `server/src/platform-mcp/platform-mcp.service.ts`  dropped the `role: agentRoleKey` argument from `resolveByAgent`
+- specs: `seed.spec.ts`, `plan-docs.service.spec.ts`, `review-verdict.listener.spec.ts`, `agent-policy-fallback.spec.ts`, `platform-mcp.service.spec.ts`, `agent-role.migration.spec.ts`
+- `server/src/prisma/agent-role-drop.migration.spec.ts`  NEW (7 structural contract tests)
+- `scripts/agent-role-consumer-manifest.txt`         regenerated (146 keys; -3 net: the 2 select sites + platform arg)
+- `scripts/verify-instruction-parity.mjs`            seed literal reader `a.role` → `a.agentKey`
+
+## Migration SQL (backfill predicate + drop), verbatim
+```sql
+-- (a1) 旧 ep_<role> 回退：role 非空 + 同名内置策略行存在 + 本行尚未绑定。
+UPDATE `agents` AS `a`
+INNER JOIN `execution_policies` AS `p` ON `p`.`id` = CONCAT('ep_', `a`.`role`)
+SET `a`.`policy_id` = `p`.`id`
+WHERE `a`.`policy_id` IS NULL AND `a`.`role` IS NOT NULL;
+
+-- (a2) ep_<agentKey> 键路径（仅 a1 未命中的行）。
+UPDATE `agents` AS `a`
+INNER JOIN `execution_policies` AS `p` ON `p`.`id` = CONCAT('ep_', `a`.`agent_key`)
+SET `a`.`policy_id` = `p`.`id`
+WHERE `a`.`policy_id` IS NULL AND `a`.`agent_key` IS NOT NULL;
+
+-- (b) 孤儿守卫：非 custom 行若仍 NULL → INSERT NULL 报 1048，迁移失败、DROP 不执行。
+CREATE TEMPORARY TABLE `_drop_agents_role_orphan_guard` (`id` VARCHAR(191) NOT NULL);
+INSERT INTO `_drop_agents_role_orphan_guard` (`id`)
+  SELECT NULL FROM `agents` WHERE `policy_id` IS NULL AND `type` <> 'custom' LIMIT 1;
+DROP TEMPORARY TABLE `_drop_agents_role_orphan_guard`;
+
+-- (c) 有意无策略的 custom 清单（绝不静默）。
+SELECT `id`, `name`, `agent_key`, `role` FROM `agents`
+WHERE `type` = 'custom' AND `policy_id` IS NULL ORDER BY `id`;
+
+-- (d) 单向删除。
+ALTER TABLE `agents` DROP COLUMN `role`;
+```
+
+## Did any live non-custom agent need a backfill?
+**NO — the live `aiagents` DB had 0 rows needing a1/a2** (both types already 0 NULL policy_id):
+`custom 3 / 0 null`, `template 7 / 0 null`. The backfill is therefore a no-op live; it was proven
+non-vacuous on scratch by deliberately nulling `a_product.policy_id` (see below) — a1 restored it
+to `ep_product`. The guard + m6 predicate are exercised, just not load-bearing on today's data.
+
+## Pre-migration dump (mandatory rollback artifact)
+```
+$ docker exec aiagents-compose-db sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" \
+    --single-transaction --routines --triggers --default-character-set=utf8mb4 aiagents' \
+  > .omo/evidence/agent-role-decommission/pre-migration-dump.sql
+bytes=636417952   sha256=6c1c1032a4cc650123fe40b433ac0c2a804c0e4d8785a437730c5423b5d17586
+(gitignored: .omo/evidence/**/*.sql — .gitignore:45)
+```
+
+## Rollback command (exact) — EXERCISED on a copy
+```
+$ docker exec -T aiagents-compose-db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" aiagents' \
+  < .omo/evidence/agent-role-decommission/pre-migration-dump.sql
+```
+Exercise (scratch `aiagents_t7rb`): restore dump → migrate deploy (role_col=0) → run the exact
+documented command above → role_col=1 again, agents=10, migrations=62. `rc=0`.
+No reverse SQL exists (DROP is one-way); the dump path is the only rollback, as the migration
+header states.
+
+## PROOF 1 — populated-DB migration (scratch `aiagents_t7`, restored from the dump)
+```
+$ docker exec -i -e MYSQL_PWD=... aiagents-compose-db sh -c 'mysql -uroot aiagents_t7' < pre-migration-dump.sql
+62 applied migrations, 10 agents, 28 members restored.
+
+$ docker exec -e DATABASE_URL='...@db:3306/aiagents_t7' -w /app aiagents-compose-server \
+    npx prisma migrate deploy --schema prisma/schema.prisma
+63 migrations found; Applying migration `20260919000010_drop_agents_role`; All migrations applied. rc=0
+```
+Pre-state (before migration, deliberately shaped):
+```
+a_product        template  role=product   agent_key=product   policy_id=NULL   <- m6 orphan case
+a_t7_customrole  custom    role=analyst   agent_key=analyst-t7 policy_id=ep_0000000001  <- custom-role case
+orphans_before = 1
+```
+Post-state (after migration):
+```
+role_col_present          = 0
+orphans_noncustom         = 0
+backfilled_a_product      = ep_product          (a1 fired; m6 predicate non-vacuous)
+custom_role_survived      = ep_0000000001|analyst-t7   (custom role VALUE was only a label; policy kept)
+custom_policyless         = (none)
+```
+Acceptance assertion `SELECT COUNT(*) FROM agents WHERE policy_id IS NULL AND type <> 'custom'` = **0**.
+Custom rows: all 3 live customs keep a policy; the synthesized `analyst` custom was also listed —
+there were **no intentionally policy-less custom agents** (the migration's (c) SELECT returned empty).
+
+## PROOF 1b — idempotent / re-runnable
+Re-running `migrate deploy` on the migrated scratch → `No pending migrations to apply.` rc=0
+(Prisma ledger). The SQL file itself is NOT idempotent (a second `DROP COLUMN` would error 1091);
+re-entrancy is the ledger's job — documented in the migration header.
+
+## PROOF 2 — rollback exercised ONCE on a copy
+Scratch `aiagents_t7rb`: restore dump → `migrate deploy` (role_col=0) → documented `mysql < dump`
+→ role_col=1, agents=10, _prisma_migrations=62. rc=0. (see above)
+
+## PROOF 3 — custom-`role` value case
+No live row has a non-builtin `role` (all live `role`s are the 7 builtin keys or NULL). Synthesized
+`a_t7_customrole` (`type=custom`, `role='analyst'`, `policy_id=ep_0000000001`) in the scratch BEFORE
+migrating: migration succeeded, the agent survived with `policy_id=ep_0000000001` and
+`agent_key=analyst-t7` intact. The custom `role` value (only a label) is gone with the column, as designed.
+
+## PROOF 4 — byte-identity (frozen sha `3b8c5d4b…`), live stack
+`GET /agent-policies` canonical-subset python check against
+`.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json`:
+```
+pre-migration  (new image, old DB): 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87  BYTE-IDENTICAL True
+post-migration (new image, new DB): 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87  BYTE-IDENTICAL True
+frozen file sha256 (shasum -a 256) : 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87  untouched (git diff empty)
+```
+`/agents` API post-drop: 10 agents, `role` DTO == `agentKey`, all with `effectivePermission` (10/10).
+
+## PROOF 4b — fresh-install path (init container flow: migrate deploy → seed)
+```
+DROP/CREATE aiagents_t7fresh; migrate deploy -> 63 applied; node dist/prisma/seed.js -> "Seed 完成" rc=0
+agents=7  orphans_noncustom=0  role_col=0  members_null_roleid=0  all 7 bound to ep_<key>
+```
+The seed no longer writes a `role` column → no `Unknown argument 'role'` in the init container.
+
+## PROOF 5 — grep proof
+```
+$ grep -rn "agent\.role" server/src server/prisma --include=*.ts    (non-spec)
+server/src/chat/worker-dispatcher.ts:612,2112,2183   <- comments ("不再触碰 DB 列 Agent.role")
+server/src/timers/triggers.service.ts:618             <- comment ("与旧 agent.role ?? agent.name 同规则")
+server/src/teams/teams.service.ts:1417                <- comment ("ROLE_LABELS[agent.role] ?? agent.name 对 seed 数据…")
+```
+All 5 hits are comments; **zero code reads**. (Specs contain 4 more comment/fixture mentions.)
+
+## PROOF 6 — mutation / negative control (guard is real)
+Both on fresh scratch restores of the pre-migration dump, running migration.sql directly:
+```
+M1  a_tester: policy_id=NULL, role='tester'
+    -> migration SUCCEEDED because a1 repaired it (role resolved to ep_tester). rc=0.   <- m6 predicate is real
+M2  a_tester: policy_id=NULL, role='no-such-role-xyz', agent_key='no-such-key-xyz'
+    -> ERROR 1048 (23000) at line 65: Column 'id' cannot be null   rc=1
+    -> role column SURVIVED (role_col=1), orphan still present (1)  <- guard fires, DROP does not execute
+```
+
+## GATES
+```
+cd server && npx prisma generate                         -> OK (Prisma Client regenerated)
+cd server && npx tsc -p tsconfig.json --noEmit           -> exit 0
+cd server && npx jest --runInBand                        -> 141 suites / 3251 tests, all pass
+                                                            (baseline 140/3244 + new 7-test migration contract spec)
+cd worker && npx jest --runInBand                        -> 26 suites / 688 tests, unchanged
+cd worker && npx tsc --noEmit                            -> 0 ;  cd web && npx tsc --noEmit -> 0
+cd server && npx prisma migrate deploy (populated live)  -> Applying 20260919000010_drop_agents_role, rc=0
+frozen sha 3b8c5d4b…                                     -> unchanged (file untouched + payload byte-identical)
+bash scripts/check-agent-role-consumers.sh               -> OBSERVED: 146 keys, UNMAPPED: 0 (rc=0)
+bash scripts/check-agent-role-consumers.sh --extra-dir /tmp/armap/control
+                                                         -> OBSERVED: 147, UNMAPPED: 1 (rc=1)   <- control real
+```
+
+## Cleanup
+Scratch DBs `aiagents_t7`, `aiagents_t7rb`, `aiagents_t7m`, `aiagents_t7fresh` all DROPPED;
+`SHOW DATABASES` = aiagents / information_schema / mysql / performance_schema / sys.
+Live DB left on the migrated state (migration 20260919000010 applied; server container on the new
+image, healthy). `aiagents-compose-init` never re-ran (Exited (0), 2h) — no reseed occurred.
+`docker compose up -d --no-deps server` was used (never `--force-recreate`).
+
+## Note on the container/image
+During the proof the Docker (OrbStack) daemon wedged on an external bind-mount `docker run`; the
+engine was restarted (OrbStack app relaunch). All four compose services returned healthy via
+`restart: unless-stopped`; `init` (no restart policy) stayed exited, so no reseed. The migration was
+then applied with `docker cp` + `prisma migrate deploy` inside the running server container (the
+same path the previous plan's evidence used) instead of a host bind-mount.

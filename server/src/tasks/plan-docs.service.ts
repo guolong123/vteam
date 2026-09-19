@@ -208,21 +208,20 @@ export class PlanDocsService {
   }
 
   /**
-   * 解析计划职责 agent 的模板 id（agent-role-decommission todo 2）：
-   * `vteam-<agentKey ?? role>` 经职责注册表判定为 `plan` 的首个 Agent 行——不再硬编码
+   * 解析计划职责 agent 的模板 id（agent-role-decommission todo 2；todo 7 去 `role` 列）：
+   * `vteam-<agentKey>` 经职责注册表判定为 `plan` 的首个 Agent 行——不再硬编码
    * `a_plan`。无匹配/读失败 → null（调用方按既有 fail-open 口径跳过门的咨询，不伪造身份）。
    */
   private async resolvePlanAgentId(): Promise<string | null> {
     try {
       const rows = (await this.prisma.agent.findMany({
-        select: { id: true, agentKey: true, role: true },
+        select: { id: true, agentKey: true },
       })) as Array<{
         id: string;
         agentKey?: string | null;
-        role?: string | null;
       }>;
       const planner = rows.find((row) => {
-        const name = row.agentKey ?? row.role ?? null;
+        const name = row.agentKey ?? null;
         return !!name && getOpencodeAgentDuty(`vteam-${name}`) === 'plan';
       });
       return typeof planner?.id === 'string' && planner.id ? planner.id : null;

@@ -683,11 +683,13 @@ async function main() {
   // ## 铁律节附于原文之后），禁止改写既有派发 prose 文风。冲突优先级：平台校验（门禁返回码
   // triggered:false / reason=duplicate|throttled|plan-gated）> 本文件铁律追加句 > 上文原文风；
   // 探针见 server/src/prisma/seed.spec.ts「todo9」describe，证据见 task-9/probe.json。
+  // agent-role-decommission todo 7：字面量字段 `role` 更名 `agentKey`（值逐字不变，7 模板
+  // 满足 agent_key = role）——`Agent.role` 列已删除，二者此前同值同源，合并为单一字段。
   const templateAgents = [
     {
       id: 'a_product',
       name: '产品经理',
-      role: 'product',
+      agentKey: 'product',
       persona: 'innovative',
       prompt:
         '\n' +
@@ -705,7 +707,7 @@ async function main() {
     {
       id: 'a_project_manager',
       name: '项目经理',
-      role: 'project_manager',
+      agentKey: 'project_manager',
       persona: 'aggressive',
       prompt:
         '\n' +
@@ -732,7 +734,7 @@ async function main() {
     {
       id: 'a_architect',
       name: '架构师',
-      role: 'architect',
+      agentKey: 'architect',
       persona: 'steady',
       prompt:
         '\n' +
@@ -749,7 +751,7 @@ async function main() {
     {
       id: 'a_developer',
       name: '开发者',
-      role: 'developer',
+      agentKey: 'developer',
       persona: 'conservative',
       prompt:
         '\n' +
@@ -768,7 +770,7 @@ async function main() {
     {
       id: 'a_tester',
       name: '测试',
-      role: 'tester',
+      agentKey: 'tester',
       persona: 'strict',
       prompt:
         '\n' +
@@ -786,7 +788,7 @@ async function main() {
     {
       id: 'a_plan',
       name: '计划员',
-      role: 'plan',
+      agentKey: 'plan',
       persona: 'steady',
       prompt:
         '\n' +
@@ -812,7 +814,7 @@ async function main() {
     {
       id: 'a_librarian',
       name: '知识管理员',
-      role: 'librarian',
+      agentKey: 'librarian',
       persona: 'steady',
       prompt:
         '\n' +
@@ -859,16 +861,16 @@ async function main() {
     librarian: { policyId: 'ep_librarian', agentName: 'vteam-librarian' },
   };
 
-  const resolvePolicyBinding = (role: string) => {
-    const binding = ROLE_POLICY_BINDINGS[role];
+  const resolvePolicyBinding = (agentKey: string) => {
+    const binding = ROLE_POLICY_BINDINGS[agentKey];
     if (!binding) {
-      throw new Error(`seed: 角色 ${role} 缺少 ExecutionPolicy 绑定`);
+      throw new Error(`seed: 角色 ${agentKey} 缺少 ExecutionPolicy 绑定`);
     }
     return binding;
   };
 
   for (const agent of templateAgents) {
-    const { policyId, agentName } = resolvePolicyBinding(agent.role);
+    const { policyId, agentName } = resolvePolicyBinding(agent.agentKey);
     const boundary = ROLE_BOUNDARIES[agentName];
     const boundaryTaskEffect = (boundary as unknown as { taskEffect?: unknown }).taskEffect;
     const taskEffect =
@@ -913,7 +915,7 @@ async function main() {
   // 其余字段（defaultModelId/name/persona 等）本就不覆盖用户已改配置，
   // defaultModelId 与 persona 模板默认值仅首次 create 时生效（存量环境已设 persona 不被 seed 覆盖）。
   for (const agent of templateAgents) {
-    const { policyId } = resolvePolicyBinding(agent.role);
+    const { policyId } = resolvePolicyBinding(agent.agentKey);
     await prisma.agent.upsert({
       where: { id: agent.id },
       update: {},
@@ -922,7 +924,6 @@ async function main() {
         type: 'template',
         baseAgentId: null,
         policyId,
-        agentKey: agent.role,
         defaultModelId: TEMPLATE_DEFAULT_MODELS[agent.id] ?? null,
         createdBy: adminUser.id,
       },
@@ -2216,8 +2217,8 @@ version: 0.1.0
   console.log('Seed 完成：');
   console.log(`  - 角色：${adminRole.name} / ${memberRole.name}`);
   console.log(`  - 用户：admin(u_admin) / seed-admin(${admin.id}) / seed-member(u_seed_member)`);
-  console.log(`  - 模板 Agent：${templateAgents.map((a) => `${a.name}(${a.role})`).join('、')}（type=template）`);
-  console.log(`  - 角色策略：${templateAgents.map((a) => resolvePolicyBinding(a.role).policyId).join('、')}（type=template）`);
+  console.log(`  - 模板 Agent：${templateAgents.map((a) => `${a.name}(${a.agentKey})`).join('、')}（type=template）`);
+  console.log(`  - 角色策略：${templateAgents.map((a) => resolvePolicyBinding(a.agentKey).policyId).join('、')}（type=template）`);
   console.log(`  - 内置工具：${builtinTools.map((t) => t.action).join('、')}（source=builtin）`);
   console.log(`  - MCP 工具：${vteamTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=vteam）`);
   console.log(`  - MCP Server：vteam（remote，${platformMcpUrl}）`);

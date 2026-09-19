@@ -70,9 +70,9 @@ describe('PlanDocsService', () => {
       status: 'online',
       capabilities: { execBaseUrl: 'http://worker:4198' },
     });
-    // 计划职责 agent 行（todo 2：requester 由职责解析，不再是字面量 a_plan）。
+    // 计划职责 agent 行（todo 2：requester 由职责解析，不再是字面量 a_plan；todo 7：无 role 列）。
     prisma.agent.findMany.mockResolvedValue([
-      { id: 'a_plan', agentKey: 'plan', role: 'plan' },
+      { id: 'a_plan', agentKey: 'plan' },
     ]);
   }
 
@@ -405,8 +405,8 @@ describe('PlanDocsService', () => {
       happyPath();
       ledgerHost();
       prisma.agent.findMany.mockResolvedValue([
-        { id: 'a_developer', agentKey: 'developer', role: 'developer' },
-        { id: 'a_my_planner', agentKey: 'plan', role: 'plan' },
+        { id: 'a_developer', agentKey: 'developer' },
+        { id: 'a_my_planner', agentKey: 'plan' },
       ]);
       workerClient.writePlanFile.mockResolvedValue({
         name: 'plan.md',
@@ -422,7 +422,7 @@ describe('PlanDocsService', () => {
       happyPath();
       ledgerHost();
       prisma.agent.findMany.mockResolvedValue([
-        { id: 'a_developer', agentKey: 'developer', role: 'developer' },
+        { id: 'a_developer', agentKey: 'developer' },
       ]);
       workerClient.writePlanFile.mockResolvedValue({
         name: 'plan.md',

@@ -210,9 +210,11 @@ describe('unified agent policy fallback (Todo 5)', () => {
     });
 
     it('role 键被忽略：仅 role（无 agentKey/policyId）不产生候选 → null（旧实现会回退 vteam-<role>）', async () => {
+      // todo 7：类型上 `role` 字段已删除；此处以旧运行时形状（未迁移调用方）显式钉死
+      // 该键被忽略，防未来 refactor 把它加回解析路径。
       const resolved = await serviceWith(editedProductRow).resolveByAgent({
         role: 'product',
-      });
+      } as never);
 
       expect(resolved).toBeNull();
     });
@@ -221,7 +223,7 @@ describe('unified agent policy fallback (Todo 5)', () => {
       const resolved = await serviceWith(editedProductRow).resolveByAgent({
         policyId: 'ep_product',
         role: 'product',
-      });
+      } as never);
 
       expect(resolved?.agentName).toBe('vteam-plan');
       expect(resolved?.agentName).not.toBe('vteam-product');

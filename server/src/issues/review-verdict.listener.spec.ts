@@ -49,7 +49,7 @@ const setup = (opts?: { withLedger?: boolean }) => {
       findMany: jest.fn(async () => [
         {
           id: PLANNER,
-          agent: { agentKey: 'plan', role: 'plan' },
+          agent: { agentKey: 'plan' },
         },
       ]),
     },
@@ -232,8 +232,8 @@ describe('ReviewVerdictListener', () => {
   it('计划员按职责解析：a_plan（agentKey=plan）成员仍被解析（todo 2）', async () => {
     const { gate, prisma, listener } = setup();
     prisma.teamMember.findMany.mockResolvedValueOnce([
-      { id: 'tmm_other', agent: { agentKey: 'developer', role: 'developer' } },
-      { id: PLANNER, agent: { agentKey: 'plan', role: 'plan' } },
+      { id: 'tmm_other', agent: { agentKey: 'developer' } },
+      { id: PLANNER, agent: { agentKey: 'plan' } },
     ]);
     await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
     expect(prisma.teamMember.findMany).toHaveBeenCalledWith(
@@ -241,7 +241,7 @@ describe('ReviewVerdictListener', () => {
         where: { teamId: TEAM },
         select: {
           id: true,
-          agent: { select: { agentKey: true, role: true } },
+          agent: { select: { agentKey: true } },
         },
       }),
     );
@@ -258,9 +258,9 @@ describe('ReviewVerdictListener', () => {
     prisma.teamMember.findMany.mockResolvedValueOnce([
       {
         id: otherPlanner,
-        agent: { agentKey: 'plan', role: 'plan' },
+        agent: { agentKey: 'plan' },
       },
-      { id: 'tmm_other', agent: { agentKey: 'developer', role: 'developer' } },
+      { id: 'tmm_other', agent: { agentKey: 'developer' } },
     ]);
     await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
     expect(gate.recordVerdict).toHaveBeenCalledWith(
@@ -273,7 +273,7 @@ describe('ReviewVerdictListener', () => {
   it('无计划职责成员 → plannerMemberId 空串（fail-open，不崩）', async () => {
     const { gate, prisma, listener } = setup();
     prisma.teamMember.findMany.mockResolvedValueOnce([
-      { id: 'tmm_other', agent: { agentKey: 'developer', role: 'developer' } },
+      { id: 'tmm_other', agent: { agentKey: 'developer' } },
     ]);
     await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
     expect(gate.recordVerdict).toHaveBeenCalledWith(

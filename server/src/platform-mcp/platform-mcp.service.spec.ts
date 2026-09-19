@@ -4680,7 +4680,6 @@ describe('PlatformMcpService', () => {
         );
         expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
           policyId: 'ep_developer',
-          role: 'developer',
           agentKey: null,
         });
         expect(out).toEqual({
@@ -4741,7 +4740,6 @@ describe('PlatformMcpService', () => {
 
         expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
           policyId: 'ep_developer',
-          role: 'developer',
           agentKey: null,
         });
         expect(out.effectivePermission).toBeNull();
@@ -4774,7 +4772,6 @@ describe('PlatformMcpService', () => {
 
         expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
           policyId: null,
-          role: null,
           agentKey: null,
         });
         expect(out.role).toBeNull();
@@ -4805,7 +4802,6 @@ describe('PlatformMcpService', () => {
 
         expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
           policyId: 'ep_0000000009',
-          role: null,
           agentKey: 'data-analyst',
         });
       });

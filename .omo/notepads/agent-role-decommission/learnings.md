@@ -243,3 +243,42 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   after the comment pass: 147 → 149 keys, purely line drift on `worker-dispatcher.ts`
   (verified key-by-key: nothing outside that file changed). Regenerate LAST, from the frozen
   source, then run the checker (rc 0) plus the `--extra-dir` negative control (UNMAPPED 1).
+
+## todo 7 — backfill + drop `agents.role`
+
+- **The live DB needed NO backfill (0 orphans both types), yet the migration is not vacuous.**
+  Proving a backfill "works" on data that needs none requires SYNTHESIZING the orphan: nulling
+  `a_product.policy_id` in the scratch made a1 restore `ep_product`, which is the only way to
+  show the m6 predicate fires. A migration proven only on already-clean data proves nothing.
+- **A "mutation control" that gets auto-repaired is not a failed control — it is the predicate
+  working.** First attempt: `policy_id=NULL, role='tester'` → migration succeeded (a1 resolved
+  `ep_tester`). The guard only fires for a role that resolves to NO existing `ep_*` row. The
+  discriminating mutation is `role='no-such-role-xyz' + agent_key='no-such-key-xyz'`; then
+  a1/a2 miss, the guard INSERTs NULL, MySQL raises 1048, and DROP never runs (role_col=1).
+- **MySQL pure SQL has no SIGNAL; a NOT-NULL temporary column is the conditional-failure idiom.**
+  `CREATE TEMPORARY TABLE g (id VARCHAR NOT NULL); INSERT ... SELECT NULL FROM agents WHERE <bad>;`
+  raises 1048 iff the predicate matches, aborting the migration before the destructive statement.
+  It is the only portable pure-SQL assertion — verified live (rc=1) and pinned by a spec that
+  asserts the guard appears BEFORE the `ALTER TABLE` in the file.
+- **The seed's literal `role` field was BOTH the policy key and the column value.** Renaming it
+  to `agentKey` (values identical for all 7 templates, live-verified) is safe precisely because
+  the seed is the only writer of the literal and `@unique(agent_key)` already held the same
+  strings. `create: {...agent}` spread meant the literal key was the wire key — a dropped column
+  becomes `Unknown argument 'role'` at seed time, i.e. a broken `init` container, not a TS error.
+- **The literal is parsed by scripts too.** `scripts/verify-instruction-parity.mjs` reads the
+  `templateAgents` array textually (`a.role` → `a.agentKey`); any seed-literal rename must grep
+  `scripts/` in addition to `server/` — the compiler never sees these readers.
+- **One existing spec pinned the EXPAND-phase invariant and MUST flip in contract.** 
+  `agent-role.migration.spec.ts` asserted `Agent.role` "未被 drop/rename" — that assertion is the
+  todo-1 promise, and todo 7 is the todo that fulfils it. Flipping it to `not.toMatch` (with the
+  migration id named) is the correct contract transition, not a weakened test; leaving it would
+  mean the suite forbids the plan's own goal.
+- **A baseline test count is not a ceiling.** Here the suite grew 140→141/3244→3251 because the
+  drop migration got its own structural contract spec (7 tests) — the repo's convention for every
+  data migration (`agent-role.migration.spec.ts`, `agent-prompt-backfill.migration.spec.ts`).
+  Report both numbers with the delta explained.
+- **Docker can wedge on an external bind-mount `docker run`; `docker cp` + exec inside a running
+  container is the recovery path.** The engine (OrbStack) hung mid-`docker run -v /Volumes/...`;
+  after an app relaunch all compose services returned via `restart: unless-stopped` and `init`
+  stayed exited (no reseed). `docker cp` the new migration into the server container, then
+  `prisma migrate deploy` — no host bind-mount, no `--force-recreate`.

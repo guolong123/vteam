@@ -115,7 +115,7 @@ describe('agent_roles 迁移 + 三态回填契约', () => {
       expect(sql).toContain('pre-migration-dump.sql');
     });
 
-    it('schema：model AgentRole @@map("agent_roles")，TeamMember.roleId 带 FK 语义', () => {
+    it('schema：model AgentRole @@map("agent_roles") + TeamMember.roleId FK 语义 + Agent.role 已 drop', () => {
       const schema = fs.readFileSync(SCHEMA, 'utf8');
       expect(schema).toMatch(/model AgentRole \{[\s\S]*?@@map\("agent_roles"\)/);
       // RBAC Role 仍恰有一个（本轮不得引入第二个 model Role / @@map("roles")）。
@@ -128,9 +128,10 @@ describe('agent_roles 迁移 + 三态回填契约', () => {
       expect(schema).toMatch(/role\s+AgentRole\?\s+@relation\(fields: \[roleId\][\s\S]*?onDelete: Restrict/);
       // defaultAgentId 关系 onDelete: SetNull。
       expect(schema).toMatch(/defaultAgent\s+Agent\?\s+@relation\("AgentRoleDefaultAgent"[\s\S]*?onDelete: SetNull/);
-      // Agent.role 未被 drop/rename（Agent 模型内仍是 `role  String?`）。
+      // Agent.role 已在 contract 阶段被 drop（agent-role-decommission todo 7：
+      // 迁移 20260919000010 `ALTER TABLE agents DROP COLUMN role`）。
       const agentModel = schema.match(/^model Agent \{[\s\S]*?^\}/m)?.[0] ?? '';
-      expect(agentModel).toMatch(/^\s*role\s+String\?\s*$/m);
+      expect(agentModel).not.toMatch(/^\s*role\s+String\?\s*$/m);
       expect(agentModel).toContain('defaultForRoles');
     });
   });

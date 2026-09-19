@@ -33,14 +33,14 @@ export const VERDICT_PATTERN = /VERDICT:\s*(APPROVE|REJECT)/i;
 export const VERDICT_VERSION_PATTERN = /@\s*v(\d+(?:\.\d+)?)/i;
 
 /**
- * 计划员的 opencode 名（`vteam-<agentKey ?? role>`）是否属计划职责——供团队内定位
- * 计划员成员（agent-role-decommission todo 2：不再硬编码 `a_plan` 模板 id）。
+ * 计划员的 opencode 名（`vteam-<agentKey>`）是否属计划职责——供团队内定位
+ * 计划员成员（agent-role-decommission todo 2：不再硬编码 `a_plan` 模板 id；
+ * todo 7：不再读已删除的 `Agent.role` 列）。
  */
 function isPlanDutyMember(member: {
-  agent?: { agentKey?: string | null; role?: string | null } | null;
+  agent?: { agentKey?: string | null } | null;
 }): boolean {
-  const agent = member.agent;
-  const name = agent?.agentKey ?? agent?.role ?? null;
+  const name = member.agent?.agentKey ?? null;
   if (!name) {
     return false;
   }
@@ -315,7 +315,7 @@ export class ReviewVerdictListener implements OnModuleInit, OnModuleDestroy {
           orderBy: [{ seq: 'asc' }, { id: 'asc' }],
           select: {
             id: true,
-            agent: { select: { agentKey: true, role: true } },
+            agent: { select: { agentKey: true } },
           },
         });
         const planner = Array.isArray(members)

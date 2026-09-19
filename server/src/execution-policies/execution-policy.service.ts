@@ -51,14 +51,12 @@ export type AgentToolState = 'allow' | 'ask' | 'deny';
  * `resolveByAgent`/`resolveManyByAgents` 的 agent 输入：解析只读 `policyId`（绑定唯一来源）
  * 与 `agentKey`（opencode agent 名 `vteam-<agentKey>` + 常量回退命中键）。
  *
- * `role` 仅为兼容尚未迁移的并行调用点而保留，本服务不读取——`ep_<role>` 字符串派生与
- * `vteam-<role>` 名称回退已移除（agent-role-decommission todo 3）。
+ * agent-role-decommission todo 7：`role` 兼容字段已删除——所有调用点先于本 todo 迁移完毕
+ * （todo 3 移除解析路径、todo 10 移除 dispatcher 传参），且承载它的 `Agent.role` 列已 drop。
  */
 export interface AgentPolicyInput {
   policyId?: string | null;
   agentKey?: string | null;
-  /** 兼容字段：不参与解析。 */
-  role?: string | null;
 }
 
 export interface ResolvedExecutionPolicy {

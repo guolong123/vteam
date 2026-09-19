@@ -112,7 +112,7 @@ const templateAgents = evalLiteral(
   { planToolLine: derivePlanToolLine() },
 );
 const seedAgentPrompts = new Map(
-  templateAgents.map((a) => [a.role, a.prompt.split('\n')]),
+  templateAgents.map((a) => [a.agentKey, a.prompt.split('\n')]),
 );
 const seedRoleMirror = evalLiteral(
   sliceObjectLiteral(seedSrc, 'const BUILTIN_ROLE_PROMPTS'),

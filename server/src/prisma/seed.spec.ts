@@ -60,8 +60,8 @@ const POLICY_BY_AGENT: Record<string, string> = {
   a_librarian: 'ep_librarian',
 };
 
-/** 模板 Agent id → role（seed templateAgents 的 role，模板 agentKey 固定等于 role）。 */
-const ROLE_BY_AGENT: Record<string, string> = {
+/** 模板 Agent id → agentKey（seed templateAgents 的 agentKey；todo 7 起字面量只带该字段）。 */
+const AGENT_KEY_BY_AGENT: Record<string, string> = {
   a_product: 'product',
   a_project_manager: 'project_manager',
   a_architect: 'architect',
@@ -302,7 +302,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     }
   });
 
-  it('模板 Agent create 分支写入 agentKey = role（update 不覆盖存量绑定，opencode 注入名 vteam-<agentKey> 与现状一致）', async () => {
+  it('模板 Agent create 分支写入 agentKey，且不再写已删除的 role 列（update 不覆盖存量绑定，opencode 注入名 vteam-<agentKey> 与现状一致）', async () => {
     await main();
 
     // agentKey='plan' 满足 AGENT_KEY_PATTERN（小写开头，不假设、直接验证）
@@ -312,7 +312,10 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     expect(templateCalls).toHaveLength(7);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
-      expect(call[0].create.agentKey).toBe(ROLE_BY_AGENT[id]);
+      expect(call[0].create.agentKey).toBe(AGENT_KEY_BY_AGENT[id]);
+      // todo 7：`Agent.role` 列已删除，seed 的 create 载荷绝不能再带 role 键
+      //（Prisma 对已删除列会在 init 容器 seed 时抛 Unknown argument 'role'）。
+      expect(call[0].create).not.toHaveProperty('role');
       expect(call[0].update).toEqual({});
     }
   });

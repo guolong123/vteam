@@ -3745,9 +3745,6 @@ export class PlatformMcpService implements OnModuleInit {
     try {
       const resolved = await this.executionPolicyService?.resolveByAgent({
         policyId: agentPolicyId,
-        // 兼容字段（todo 3 已声明不参与解析）：值改为成员绑定角色的机器键 `AgentRole.key`，
-        // 与旧 `agent.role` 对 seed 数据同值；删除归 todo 8。
-        role: agentRoleKey,
         agentKey,
       });
       effectivePermission = resolved

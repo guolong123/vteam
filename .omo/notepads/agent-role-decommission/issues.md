@@ -151,3 +151,22 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **eslint/prettier churn**: the new nested fixtures tripped 34 prettier errors; `--fix`
   resolved them, but the reformat moved lines, so the manifest had to be regenerated AGAIN
   after the fix. Sequence matters: edit → lint --fix → regenerate manifest → run gates.
+
+## todo 7 — findings / gotchas
+
+- **`resolveByAgent`'s inert `role` compat field had exactly ONE non-spec caller left**
+  (`platform-mcp.service.ts` `myProfile`) — the field was deleted together with that argument
+  (todo 8 owns the helper sweep, but a type field whose last caller is gone is dead weight the
+  drop makes deletable now). The two fallback specs that pin "role key is ignored" keep their
+  discriminating power via `as never`, deliberately asserting the legacy runtime shape fails.
+- **Three live `role`-reading selects remained at drop time** (plan-docs.service.ts,
+  review-verdict.listener.ts ×1 select + 1 helper, platform-mcp arg). Two more plans cited by the
+  brief were already gone. Grep-first confirmed the line numbers had drifted from the plan text.
+- **`aiagents-compose-init` has no restart policy** — a Docker engine restart leaves it
+  `Exited (0)`, so no reseed can occur; `docker compose up -d --no-deps server` (used to swap the
+  image) does not touch `init` either. `--force-recreate` remains forbidden and unnecessary.
+- **Manifest drift after the drop was semantic, not cosmetic**: -5 keys in
+  `execution-policy.service.ts` (the `role?` field + doc mentions), -2 in
+  `plan-docs.service.ts`, -1 in the verdict listener, -1 in platform-mcp, -1 in review-verdict
+  `isPlanDutyMember` doc; +1 in `execution-policy.service.ts` (the new todo-7 doc comment line).
+  Net 149 → 146. Regenerate BEFORE running the checker, not after.
