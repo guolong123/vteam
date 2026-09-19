@@ -12,7 +12,9 @@
  * - 权限区渲染 `effectivePermission`（ExecutionPolicy 解析：edit/read glob + bash/task +
  *   vteam_* MCP 工具 deny）；层② guard 工具行在策略已绑定时可切换 allow/ask/deny
  *   （PATCH /execution-policies/:policyId，template 与 custom/clone 同一路径）；
- *   层① 原生行（edit/read/bash/task）保持只读展示；未绑定策略时中性提示，不做历史回退。
+ *   层① 原生行（edit/read/bash/task）在策略已绑定时同样可编辑：edit/read 为 glob 规则表编辑器
+ *   （草稿 state-only，写盘由 todo 4 的统一 policy mutation 承接）、bash 为三态分段、task 为只读
+ *   （引擎仅对内置计划器 vteam-plan 放行）；未绑定策略时中性提示，不做历史回退。
  * - MCP 工具按 `mcpServer` 分组（GET /mcp-servers + GET /tools?source=mcp&includeDisabled=true
  *   解析归属；匹配按工具 name/action 双键，vteam_ 前缀兼容裸名）；
  *   停用 server 的分组默认收起（aria-expanded 可展开），启用 server 默认展开。
@@ -31,7 +33,7 @@
  * - 导航（NavTopBar/NavDock/CmdKPanel）由 AppShell 提供，本页仅渲染内容区。
  * - 铁律（T15）：无 fixed / 100vh / 100vw；新建弹窗 absolute 相对页面 root（flex:1 铺满）。
  */
-import { useCallback, useEffect, useMemo, useState, type CSSProperties, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -287,14 +289,14 @@ function EffectBadge({ value }: { value: unknown }) {
 }
 
 /** 三态分段控制（复刻 ce3edd1^ tool-effect-select 视觉；只读/保存中时 data-readonly，点击无操作）。 */
-function ToolEffectSelect({ toolName, value, readOnly, pending, onChange }: { toolName: string; value: ToolEffect; readOnly: boolean; pending: boolean; onChange: (next: ToolEffect) => void }) {
+function ToolEffectSelect({ toolName, value, readOnly, pending, onChange, testId = "tool-effect-select" }: { toolName?: string; value: ToolEffect; readOnly: boolean; pending: boolean; onChange: (next: ToolEffect) => void; testId?: string }) {
   return (
     <div
-      data-testid="tool-effect-select"
+      data-testid={testId}
       data-tool={toolName}
       data-readonly={readOnly ? "true" : "false"}
       role="radiogroup"
-      aria-label={`${toolName} 权限`}
+      aria-label={toolName ? `${toolName} 权限` : "权限"}
       title={readOnly ? "模板只读" : undefined}
       style={{
         flexShrink: 0,
@@ -576,6 +578,303 @@ const NATIVE_PERMISSION_KEYS = [
 /** 未收录工具分组 key（permission 中 vteam_* 键在工具目录无匹配时保留展示）。 */
 const UNKNOWN_MCP_GROUP = "__unknown";
 
+/* ---------------- 原生 glob 规则表编辑器（edit/read 层① 权限；todo 3） ---------------- */
+
+/** glob 规则表编辑态单行。 */
+interface NativeRuleRow { glob: string; effect: string; }
+
+/** 普通对象判据（镜像 server execution-policy.service.ts:123，用于区分规则表与缺失/非对象值）。 */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** 三态判据（own 属性；`in` 会命中原型链——未知值必须走灰显 chip，不能被误判为已知）。 */
+function isToolEffect(value: unknown): value is ToolEffect {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(toolEffectMeta, value);
+}
+
+/** 规则行校验错误码（镜像 server assertPermissionRuleMap；`duplicate` 为客户端补充判据）。 */
+type NativeRuleErrorCode = "empty" | "too-long" | "duplicate" | "too-many";
+
+/** 层① glob 规则表上限（与 server execution-policy.service.ts 同值：键 ≤256 字符、规则 ≤64 条）。 */
+const MAX_RULE_GLOB_LENGTH = 256;
+const MAX_RULE_COUNT = 64;
+
+/** 缺失键展示种子（仅展示；用户编辑前不落 draft、不 emit）：镜像 todo 1 服务端 edit 兜底 / read 默认。 */
+const EDIT_RULE_SEED: Record<string, string> = { "*": "deny" };
+const READ_RULE_SEED: Record<string, string> = { "*": "allow" };
+
+/** 规则表编辑行：展示值 → 编辑行（`*` 兜底行置首，其余按存储序）。 */
+function ruleRowsOf(value: unknown, seed: Record<string, string>): NativeRuleRow[] {
+  const source = isPlainObject(value) ? value : seed;
+  const rows = Object.entries(source).map(([glob, effect]) => ({
+    glob,
+    effect: typeof effect === "string" ? effect : String(effect),
+  }));
+  const star = rows.findIndex((row) => row.glob === "*");
+  if (star > 0) rows.unshift(...rows.splice(star, 1));
+  // 缺失 `*` 时用该行自身的默认态补齐（edit=deny / read=allow），不做跨行归一化。
+  if (star < 0) rows.unshift({ glob: "*", effect: seed["*"] ?? "deny" });
+  return rows;
+}
+
+/** 行错误码：null=合法（镜像 server 校验；重复 glob 为客户端补充判据）。 */
+function ruleErrorOf(rows: NativeRuleRow[], row: NativeRuleRow, index: number): NativeRuleErrorCode | null {
+  if (rows.length > MAX_RULE_COUNT) return "too-many";
+  const glob = row.glob.trim();
+  if (!glob) return "empty";
+  if (glob.length > MAX_RULE_GLOB_LENGTH) return "too-long";
+  return rows.some((other, i) => i !== index && other.glob.trim() === glob) ? "duplicate" : null;
+}
+
+/**
+ * 层① glob 规则表编辑器（edit/read）：命中 `*` 兜底行置首且 glob 锁定；三态 chips 选择；
+ * 客户端校验镜像 server（非空 / ≤256 / ≤64 / 无重复），非法行不参与 emit 且父级不收到任何变更。
+ * 未知 effect 值原样保留（灰显 chip，绝不归一化）——coercion 会静默改写存储语义。
+ * emit 只在用户事件后触发（渲染期不发射）：种子/服务端值回读不落 draft。
+ * 兜底警告仅 edit 行渲染：`isEditDenied` 只对 edit map 有 `*` 失配 fail-open 语义（read 无兜底概念，
+ * `*:allow` 是 READ_TOOLS 的常态默认），对 read 恒亮「放开写入」警告是错误语义。
+ * 写盘不在本组件内：草稿经 onChange 上抛父级 state，todo 4 的统一 policy mutation 负责落库。
+ */
+function NativeRuleMapEditor({ name, value, seed, readOnly, pending, onChange }: {
+  name: "edit" | "read";
+  /** 存储值：普通对象=规则表；缺失/非对象→用 seed 展示 */
+  value: unknown;
+  /** 仅展示种子（用户编辑前不落 draft） */
+  seed: Record<string, string>;
+  readOnly: boolean;
+  pending: boolean;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  const [rows, setRows] = useState<NativeRuleRow[]>(() => ruleRowsOf(value, seed));
+  // 最近一次 emit 出的 map（null=用户尚未编辑，提交面回落到存储值条数）。
+  // 供 QA 观测：条数（重复 glob 不增长）与原始值保留（未知 effect 不归一化）。
+  const [emitted, setEmitted] = useState<Record<string, string> | null>(null);
+  // 存储值在挂载后到达（query 异步 resolve）时，仅当用户尚未编辑（rows 仍等于种子）才重播，
+  // 否则会把用户草稿打回。父级以 key=`${agentId}:${key}` 重挂载来切换 agent/策略。
+  const initial = useRef<NativeRuleRow[]>(ruleRowsOf(value, seed));
+  const pristine = JSON.stringify(rows) === JSON.stringify(initial.current);
+  useEffect(() => {
+    if (!pristine) return;
+    const next = ruleRowsOf(value, seed);
+    if (JSON.stringify(next) === JSON.stringify(initial.current)) return;
+    initial.current = next;
+    setRows(next);
+  }, [value, seed, pristine]);
+
+  const errors = rows.map((row, index) => ruleErrorOf(rows, row, index));
+
+  const commit = (nextRows: NativeRuleRow[]) => {
+    const invalid = nextRows.some((row, index) => ruleErrorOf(nextRows, row, index) !== null);
+    if (invalid) return;
+    const next: Record<string, string> = {};
+    for (const row of nextRows) next[row.glob.trim()] = row.effect;
+    setEmitted(next);
+    onChange(next);
+  };
+
+  const updateRow = (index: number, patch: Partial<NativeRuleRow>) => {
+    const next = rows.map((row, i) => (i === index ? { ...row, ...patch } : row));
+    setRows(next);
+    commit(next);
+  };
+  const addRow = () => {
+    const next = [...rows, { glob: "", effect: "deny" }];
+    setRows(next);
+    commit(next);
+  };
+  const removeRow = (index: number) => {
+    const next = rows.filter((_, i) => i !== index);
+    setRows(next);
+    commit(next);
+  };
+
+  const catchAll = rows.find((row) => row.glob === "*");
+  const canAdd = !readOnly && !pending && rows.length < MAX_RULE_COUNT;
+  const hint = readOnly ? "模板只读" : pending ? "保存中…" : rows.length >= MAX_RULE_COUNT ? `已达上限 ${MAX_RULE_COUNT} 条` : null;
+
+  return (
+    <div
+      data-testid="native-rule-editor"
+      data-native={name}
+      data-readonly={readOnly ? "true" : "false"}
+      data-committed={emitted ? Object.keys(emitted).length : isPlainObject(value) ? Object.keys(value).length : 0}
+      data-emitted={emitted ? JSON.stringify(emitted) : undefined}
+      style={{ display: "flex", flexDirection: "column", gap: space.xs, width: "100%" }}
+    >
+      {rows.map((row, index) => {
+        const isCatchAll = row.glob === "*";
+        const error = errors[index];
+        const isUnknown = !isToolEffect(row.effect);
+        return (
+          <div
+            key={index}
+            data-testid="native-rule-row"
+            data-native={name}
+            data-glob={row.glob}
+            style={{ display: "flex", flexDirection: "column", gap: 2 }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: space.xs, flexWrap: "wrap" }}>
+              <input
+                type="text"
+                data-testid={isCatchAll ? "native-catchall-glob" : "native-rule-glob"}
+                data-native={name}
+                value={row.glob}
+                readOnly={isCatchAll}
+                disabled={isCatchAll || readOnly || pending}
+                onChange={(e) => updateRow(index, { glob: e.target.value })}
+                spellCheck={false}
+                aria-label={`${name} 规则 glob`}
+                style={{
+                  width: 180,
+                  boxSizing: "border-box",
+                  padding: `2px ${space.sm}px`,
+                  borderRadius: radius.sm,
+                  border: `1px solid ${isCatchAll ? neutral[200] : error ? "#DC2626" : neutral[200]}`,
+                  backgroundColor: isCatchAll ? neutral[100] : "var(--color-surface, #fff)",
+                  color: isCatchAll ? neutral[500] : neutral[800],
+                  fontSize: fontSize.xs,
+                  fontFamily: fontFamily.mono,
+                }}
+              />
+              <span
+                role="radiogroup"
+                aria-label={`${name} 规则 ${row.glob || "(空)"} 权限`}
+                style={{
+                  display: "inline-flex",
+                  gap: 2,
+                  padding: 3,
+                  borderRadius: radius.pill,
+                  backgroundColor: neutral[50],
+                  border: `1px solid ${neutral[200]}`,
+                }}
+              >
+                {(Object.keys(toolEffectMeta) as ToolEffect[]).map((key) => {
+                  const meta = toolEffectMeta[key];
+                  const active = row.effect === key;
+                  return (
+                    <span
+                      key={key}
+                      data-testid="native-rule-effect"
+                      data-effect={key}
+                      data-native={name}
+                      aria-checked={active}
+                      role="radio"
+                      aria-disabled={readOnly || pending}
+                      onClick={readOnly || pending ? undefined : () => updateRow(index, { effect: key })}
+                      style={{
+                        padding: `2px ${space.sm}px`,
+                        borderRadius: radius.pill,
+                        fontSize: fontSize.xs,
+                        fontWeight: 500,
+                        cursor: readOnly || pending ? "default" : "pointer",
+                        fontFamily: fontFamily.mono,
+                        color: active ? "#FFFFFF" : neutral[500],
+                        backgroundColor: active ? meta.color : "transparent",
+                      }}
+                    >
+                      {meta.label}
+                    </span>
+                  );
+                })}
+                {isUnknown && (
+                  <span
+                    data-testid="native-rule-effect"
+                    data-effect={row.effect}
+                    data-unknown="true"
+                    aria-checked="true"
+                    role="radio"
+                    style={{
+                      padding: `2px ${space.sm}px`,
+                      borderRadius: radius.pill,
+                      fontSize: fontSize.xs,
+                      fontWeight: 500,
+                      fontFamily: fontFamily.mono,
+                      color: neutral[500],
+                      backgroundColor: neutral[100],
+                      border: `1px solid ${neutral[200]}`,
+                    }}
+                  >
+                    {row.effect}
+                  </span>
+                )}
+              </span>
+              {error && (
+                <span data-testid="native-rule-error" data-code={error} style={{ fontSize: fontSize.xs, color: "#DC2626" }}>
+                  {error === "empty" ? "glob 不能为空" : error === "too-long" ? `glob 最多 ${MAX_RULE_GLOB_LENGTH} 字符` : error === "duplicate" ? "glob 重复" : `规则最多 ${MAX_RULE_COUNT} 条`}
+                </span>
+              )}
+              {!isCatchAll && (
+                <button
+                  type="button"
+                  data-testid="native-rule-remove"
+                  data-glob={row.glob}
+                  data-native={name}
+                  onClick={readOnly || pending ? undefined : () => removeRow(index)}
+                  disabled={readOnly || pending}
+                  aria-label={`删除规则 ${row.glob}`}
+                  style={{
+                    border: `1px solid ${neutral[200]}`,
+                    borderRadius: radius.sm,
+                    backgroundColor: "transparent",
+                    color: neutral[500],
+                    fontSize: fontSize.xs,
+                    cursor: readOnly || pending ? "default" : "pointer",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })}
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          data-testid="native-rule-add"
+          data-native={name}
+          onClick={addRow}
+          disabled={!canAdd}
+          style={{
+            border: `1px dashed ${neutral[300]}`,
+            borderRadius: radius.sm,
+            backgroundColor: "transparent",
+            color: canAdd ? neutral[600] : neutral[400],
+            fontSize: fontSize.xs,
+            padding: `2px ${space.sm}px`,
+            cursor: canAdd ? "pointer" : "default",
+          }}
+        >
+          + 添加规则
+        </button>
+        {hint && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{hint}</span>}
+      </div>
+      {name === "edit" && catchAll && catchAll.effect !== "deny" && (
+        <div
+          data-testid="native-catchall-warning"
+          role="alert"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.xs}px ${space.sm}px`,
+            borderRadius: radius.sm,
+            backgroundColor: "rgba(245,158,11,0.10)",
+            border: "1px solid rgba(245,158,11,0.28)",
+            color: "#B45309",
+            fontSize: fontSize.xs,
+          }}
+        >
+          <span aria-hidden style={{ fontWeight: 700 }}>!</span>
+          `*` 兜底规则非「拒绝」：未命中其余规则的路径将放开写入（`ask` 在 guard 层同样按放行处理），请确认范围。
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface EffectivePermissionSectionProps {
   effective: EffectivePermission | null;
   agentId: string;
@@ -592,6 +891,16 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
   const queryClient = useQueryClient();
   const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [policyError, setPolicyError] = useState<string | null>(null);
+  // 原生 permission 草稿（state-only；todo 4 接入统一 policy mutation 后负责写盘）。
+  const [draftNative, setDraftNative] = useState<Record<string, unknown>>({});
+  const nativeValue = (key: string): unknown =>
+    key in draftNative ? draftNative[key] : permission[key];
+  // edit/read 规则表草稿；bash 三态同理（task 为只读，无需草稿）。
+  const handleNativeChange = (key: string, next: Record<string, string>) =>
+    setDraftNative((prev) => ({ ...prev, [key]: next }));
+  // todo 4：接入统一 policy mutation 的写盘入口在此扩展（本 todo 仅 state-only）。
+  const handleNativeEffectChange = (key: string, next: ToolEffect) =>
+    setDraftNative((prev) => ({ ...prev, [key]: next }));
   // 可编辑判据 = 策略已绑定（PATCH /execution-policies/:policyId 的入参）：template 绑 ep_<role>
   // 行（服务端已放开），custom/clone 绑自有行；与 agent.type 无关。
   const editable = effective !== null;
@@ -864,7 +1173,8 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
   }
 
   const scopeSummary = effective.correction?.scopeSummary;
-  const nativeRows = NATIVE_PERMISSION_KEYS.filter(({ key }) => key in permission);
+  // 四行恒显（含 permission 里缺失的键）：缺失键按 seed 展示默认态。
+  const nativeRows = NATIVE_PERMISSION_KEYS;
 
   return (
     <div
@@ -896,9 +1206,13 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
         )}
       </div>
 
-      {/* 原生权限行：glob map 可读渲染，其余三态徽章 */}
+      {/* 原生权限行：edit/read glob 规则表可编辑（草稿 state-only；todo 4 落库），bash 三态，task 只读。
+          缺失键 seed（仅展示态）：edit→{'*':'deny'}（镜像 todo 1 服务端写入时注入的兜底）、
+          read→{'*':'allow'}（worker READ_TOOLS 恒放行）、bash→'deny'、task→'deny'；
+          seed 不 emit——用户未编辑该行前不会进入 draft。
+          effective === null 时本节开头即提前 return 加载/空态分支，走不到本行（无编辑器，也无写盘）。 */}
       {nativeRows.map(({ key, label }) => {
-        const value = permission[key];
+        const value = nativeValue(key);
         return (
           <div
             key={key}
@@ -921,20 +1235,33 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
               <span style={{ color: neutral[300] }}> · </span>
               {label}
             </span>
-            <span style={{ textAlign: "right", minWidth: 0 }}>
-              {typeof value === "object" && value !== null && !Array.isArray(value) ? (
-                <span style={{ lineHeight: 1.8 }}>
-                  {Object.entries(value).map(([glob, eff], i) => (
-                    <span key={glob}>
-                      {i > 0 && <span style={{ color: neutral[300] }}>；</span>}
-                      <span style={{ fontFamily: fontFamily.mono, color: neutral[700] }}>{glob}</span>
-                      {" "}
-                      <EffectBadge value={eff} />
-                    </span>
-                  ))}
-                </span>
+            <span style={{ textAlign: "right", minWidth: 0, flex: key === "edit" || key === "read" ? 1 : undefined }}>
+              {key === "edit" || key === "read" ? (
+                <NativeRuleMapEditor
+                  key={`${agentId}:${key}`}
+                  name={key}
+                  value={value}
+                  seed={key === "edit" ? EDIT_RULE_SEED : READ_RULE_SEED}
+                  readOnly={!editable}
+                  pending={!!pendingKey}
+                  onChange={(next) => handleNativeChange(key, next)}
+                />
+              ) : key === "bash" ? (
+                <ToolEffectSelect
+                  testId="native-bash-effect"
+                  toolName="bash"
+                  value={typeof value === "string" && value in toolEffectMeta ? (value as ToolEffect) : "deny"}
+                  readOnly={!editable}
+                  pending={!!pendingKey}
+                  onChange={(next) => handleNativeEffectChange("bash", next)}
+                />
               ) : (
-                <EffectBadge value={value} />
+                <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                  <EffectBadge value={typeof value === "string" ? value : "deny"} />
+                  <span data-testid="native-task-note" style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                    引擎仅对内置计划器 vteam-plan 放行 task；其他 Agent 的子任务由 guard 拒绝。
+                  </span>
+                </span>
               )}
             </span>
           </div>

@@ -1,0 +1,35 @@
+# Cleanup receipt — agent-native-permission-editor Todo 3
+
+Spec: `web/e2e/native-rule-editor.spec.ts` (7 tests, each creates one throwaway
+custom agent + its custom execution policy, deleted in a `finally` block).
+
+## DELETE receipts (agent + policy, then re-GET proves 404)
+
+```
+a_0000000050 / ep_0000000050 (agent 200, policy 200, re-GET 404)
+a_0000000051 / ep_0000000051 (agent 200, policy 200, re-GET 404)
+a_0000000052 / ep_0000000052 (agent 200, policy 200, re-GET 404)
+a_0000000053 / ep_0000000053 (agent 200, policy 200, re-GET 404)
+a_0000000054 / ep_0000000054 (agent 200, policy 200, re-GET 404)
+a_0000000055 / ep_0000000055 (agent 200, policy 200, re-GET 404)
+```
+
+(6 rows = the last full green run. Earlier red runs also cleaned up in `finally`;
+the mutation-proof run left 2 agents (`t3 absent`, `t3 unk`) which were swept
+via the same DELETE endpoint before the final green run.)
+
+## Post-run DB assertion (independent of the API)
+
+```
+t3 agents remaining: 0
+t3 policies remaining: 0
+```
+
+`execution_policies` row count back to the pre-run 8 (7 built-ins + 1 pre-existing
+custom `ep_0000000001`, untouched by this todo).
+
+## Notes
+
+- `DELETE /agents/:id` does NOT cascade the policy row — the spec deletes both.
+- The DB-injected unknown-effect fixture (`ask2`) lives on a throwaway policy that
+  is deleted with its agent; no built-in row was ever mutated by this todo.

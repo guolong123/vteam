@@ -1,0 +1,60 @@
+# Mutation proof — agent-native-permission-editor Todo 3
+
+Target file: `web/app/(main)/agents/page.tsx`
+Pre-mutation sha256: `8005e99e1d6babccf3a964cfe091d71164c2beaa4e939d753da17af3d5fa284c`
+Restored sha256:    `8005e99e1d6babccf3a964cfe091d71164c2beaa4e939d753da17af3d5fa284c` (identical)
+Method: backup to `/tmp/todo3-backup/page.tsx.before-mutation` → `cp` restore → `shasum -a 256` + `diff -q`.
+NEVER used `git checkout --` / `git restore`.
+
+## Run 1 — presence filter reintroduced (render all four rows broken)
+
+Mutation A: `const nativeRows = NATIVE_PERMISSION_KEYS;`
+         → `const nativeRows = NATIVE_PERMISSION_KEYS.filter(({ key }) => key in permission);`
+
+Result (7 tests, 6 passed / 1 failed):
+
+```
+✓ 1. 四行恒显 + 编辑器形态（模板 agent）
+✘ 2. absent task 仍渲染（只读 + note）
+✓ 3. 往返不归一化
+✓ 4. `*` 兜底警告
+✓ 5. 重复 glob 客户端拒绝
+✓ 6. bash 三态
+
+  Error: expect(locator).toHaveCount(expected) failed
+  Expected: 4
+  Received: 2
+```
+
+The second assertion targets exactly the `permission` map with `task` (and `read`) absent.
+With the presence filter restored, only `edit`+`bash` render → count 2 ≠ 4.
+
+## Run 2 — coercion reintroduced (round-trip preservation broken)
+
+Mutation B (emit path): `for (const row of nextRows) next[row.glob.trim()] = row.effect;`
+                      → `for (const row of nextRows) next[row.glob.trim()] = normalizeToolEffect(row.effect);`
+
+Result (7 tests, 6 passed / 1 failed):
+
+```
+✓ 1. 四行恒显 + 编辑器形态（模板 agent）
+✓ 2. absent task 仍渲染（read seed allow）
+✘ 7. 未知 effect 原样保留（不归一化）
+✓ 3. 往返不归一化
+✓ 4. `*` 兜底警告
+✓ 5. 重复 glob 客户端拒绝
+✓ 6. bash 三态
+
+  Error: expect(locator).toHaveAttribute(expected) failed
+  Expected: "{\"*\":\"deny\",\"legacy\":\"ask2\"}"
+  Received: "{\"*\":\"deny\",\"legacy\":\"deny\"}"
+```
+
+`normalizeToolEffect('ask2')` → `'deny'`: the unknown value is silently rewritten on emit.
+Test 7's `data-emitted` assertion catches it; test 3 (stored `ask`) stays green because
+`ask` is a legal tri-state value for the coercer — which is exactly why the unknown-effect
+fixture (DB-injected `ask2`, since the API correctly rejects unknown values) is the
+*sharpest* coercion signal.
+
+## Both mutations shown separately; restore byte-identical; re-run green
+Post-restore full run: 7 passed (11.7s), screenshot + JSON regenerated.
