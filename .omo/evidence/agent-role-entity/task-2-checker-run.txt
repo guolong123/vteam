@@ -1,0 +1,16 @@
+prompt classification check
+  artifact : .omo/evidence/agent-role-entity/task-2-classification.json
+  source   : server/prisma/seed.ts
+  product            source= 39 classified= 39
+  project_manager    source= 42 classified= 42
+  architect          source= 36 classified= 36
+  developer          source= 38 classified= 38
+  tester             source= 38 classified= 38
+  plan               source= 41 classified= 41
+  librarian          source= 30 classified= 30
+  TOTAL              source=264 classified=264 EQUAL
+  by destination  : { role: 97, agent: 92, platform: 55, 'removed-intentionally': 20 }
+  blocks          : 团队协作规约=7/7 platform, 回执铁律=4/4 platform, 派发铁律=1/1 role-specific, 修订铁律=1/1 role-specific
+  removed(lines)  : 20 enumerated (intentional)
+
+OK: 100% of prompt lines classified (source == classified).

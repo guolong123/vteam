@@ -33,3 +33,32 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - Jest baseline grew 134→136 suites / 3101→3124 tests; `tsc --noEmit` exit 0; frozen baseline sha unchanged.
 - **Next todos read `roleId`**: the running server container still has the OLD generated Prisma client
   (built before this migration); a rebuild/`prisma generate` is needed before services can use `agentRole`/`roleId`.
+
+## todo 2 — classify the 7 built-in prompts (role/agent/platform) (done)
+
+- **Reconstruction method**: `seed.ts` stores prompts as JS string concatenations across many physical
+  lines. Classify the LOGICAL (rendered) lines: evaluate the `templateAgents` array literal with
+  `planToolLine` in scope, then `prompt.split("\n")`. `planToolLine` is itself re-derived from
+  `ROLE_BOUNDARIES["vteam-plan"].toolAllows` in the same file (the eval string came from seed.ts alone).
+  Stable key for todo 8 = `(agent key, rendered line index)`; 264 lines total
+  (39/42/36/38/38/41/30).
+- **Artifact**: `.omo/evidence/agent-role-entity/task-2-classification.json` (oracle) +
+  `task-2-classification.txt` (human table). Checker `scripts/verify-prompt-classification.mjs`
+  re-derives both sides and exits 1 on any unclassified/drifted/duplicated line; negative case proven.
+- **Tally**: role=97, agent=92, platform=55, removed-intentionally=20.
+- **Block semantics**: 团队协作规约 ×7 + 回执铁律 ×4 are `platform` (universal). 派发铁律 (PM) and
+  修订铁律 (plan) are role-specific → `agent` (NOT folded into the platform block). 收敛契约 (plan) is
+  likewise role-specific → `agent`. librarian has no 铁律 section; todo 3 deliberately EXTENDS 回执铁律 to
+  all 7 (PM/plan/librarian gain it). This is why the artifact marks 回执铁律 platform at only 4 of 7 rows.
+- **O6 removals**: 20 `## 权限` enumerated prose lines → `removed-intentionally`; pointer
+  `权限边界以 ExecutionPolicy/【职责边界】为准，越界会被拒绝` is kept (product/PM/architect/developer/tester/
+  librarian already have a live pointer line; **plan has none** — its 权限 §13 is an enumerated tool list
+  that must be REPLACED by the pointer in todo 4, and the `seed.spec.ts` "可用工具" assertion must move).
+- **Marker drift vs the task brief**: the brief quoted 团队协作规约 at seed `:576..849` and 回执铁律 at
+  `:582/674/719/764`; the literal string lines are `:605,650,697,742,787,831,878` and `:611,703,748,793`.
+  I anchor by content (checker-verified), not by the stale offsets.
+- **Do NOT classify** the 3 unrelated `团队协作规约` occurrences at `seed.ts:2236-2260` (team-memory
+  charter content) — they are not `templateAgents[].prompt` content.
+- **Split consequence for todo 4**: all `## 职责` module-example bullets stay `role` even when they name a
+  tool (vteam_issue_*, git_*, vteam_plan_complete) — the *responsibility* is the post, the tool is its means.
+  Only `## 工作方式`/refusal-script/pointer lines are `agent`; the task-brief examples put 工作方式 in agent.

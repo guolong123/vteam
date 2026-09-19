@@ -1,0 +1,18 @@
+prompt classification check
+  artifact : .omo/evidence/agent-role-entity/task-2-classification.json
+  source   : server/prisma/seed.ts
+  product            source= 39 classified= 38
+  project_manager    source= 42 classified= 42
+  architect          source= 36 classified= 36
+  developer          source= 38 classified= 38
+  tester             source= 38 classified= 38
+  plan               source= 41 classified= 41
+  librarian          source= 30 classified= 30
+  TOTAL              source=264 classified=263 MISMATCH
+  by destination  : { role: 96, agent: 92, platform: 55, 'removed-intentionally': 20 }
+  blocks          : 团队协作规约=7/7 platform, 回执铁律=4/4 platform, 派发铁律=1/1 role-specific, 修订铁律=1/1 role-specific
+  removed(lines)  : 20 enumerated (intentional)
+
+FAIL:
+  - agent 'product' line 5: UNCLASSIFIED -> "- 需求文档（doc 产出物）：背景与目标、用户场景、功能清单、非功能约束、验收标准。"
+  - TOTAL source 264 != classified 263
