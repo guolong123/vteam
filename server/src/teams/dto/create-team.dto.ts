@@ -11,9 +11,21 @@ import {
 } from 'class-validator';
 
 export class TeamMemberInput {
-  @ApiProperty({ description: '模板 Agent id（同一 agent 可重复 = 多实例）' })
+  @ApiPropertyOptional({
+    description:
+      '模板 Agent id（同一 agent 可重复 = 多实例；与 roleId 至少给一个；两者都给时本字段优先）',
+  })
+  @IsOptional()
   @IsString()
-  agentId: string;
+  agentId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '岗位角色 id（AgentRole）；给出且未显式给 agentId 时，用角色 defaultAgentId 预填 agentId',
+  })
+  @IsOptional()
+  @IsString()
+  roleId?: string;
 
   @ApiPropertyOptional({
     description: '实例别名（缺省 = `<角色中文名>-<seq>`）',

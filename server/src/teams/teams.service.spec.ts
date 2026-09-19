@@ -89,6 +89,7 @@ describe('TeamsService', () => {
       },
       user: { findUnique: jest.fn() },
       agent: { findUnique: jest.fn() },
+      agentRole: { findUnique: jest.fn() },
       $transaction: jest.fn(),
       $queryRawUnsafe: jest.fn(),
     };
@@ -221,6 +222,7 @@ describe('TeamsService', () => {
           id: 'tmm_0000000001',
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
+          roleId: null,
           alias: '开发者-1',
           seq: 1,
           workDir: '/data/vteam-worker/开发者',
@@ -231,6 +233,7 @@ describe('TeamsService', () => {
           id: 'tmm_0000000002',
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
+          roleId: null,
           alias: '开发者-2',
           seq: 2,
           workDir: '/data/vteam-worker/开发者-2',
@@ -817,6 +820,131 @@ describe('TeamsService', () => {
         { type: 'global' },
       );
       expect(result.members).toBeDefined();
+    });
+
+    it('addMember 仅给 roleId → 用角色 defaultAgentId 预填 agentId 并持久化 roleId', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_developer',
+        defaultAgentId: 'a_developer',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_developer',
+        name: '开发者',
+        role: 'developer',
+      });
+      idGen.nextId.mockResolvedValue('tmm_0000000003');
+      const tx: any = {
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 0 }]),
+        teamMember: {
+          create: jest.fn().mockImplementation(({ data }: any) =>
+            Promise.resolve({ ...data }),
+          ),
+          aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
+        },
+        team: { update: jest.fn().mockResolvedValue({}) },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+
+      await service.addMember('tm_0000000001', {
+        roleId: 'ar_developer',
+      } as any);
+
+      expect(prisma.agentRole.findUnique).toHaveBeenCalledWith({
+        where: { id: 'ar_developer' },
+        select: { id: true, defaultAgentId: true },
+      });
+      expect(prisma.agent.findUnique).toHaveBeenCalledWith({
+        where: { id: 'a_developer' },
+        select: { id: true, name: true, role: true },
+      });
+      expect(tx.teamMember.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            agentId: 'a_developer',
+            roleId: 'ar_developer',
+          }),
+        }),
+      );
+    });
+
+    it('addMember 同时给 agentId 与 roleId → 显式 agentId 胜出，不被角色默认覆盖', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_developer',
+        defaultAgentId: 'a_developer',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_tester',
+        name: '测试',
+        role: 'tester',
+      });
+      idGen.nextId.mockResolvedValue('tmm_0000000004');
+      const tx: any = {
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 0 }]),
+        teamMember: {
+          create: jest.fn().mockImplementation(({ data }: any) =>
+            Promise.resolve({ ...data }),
+          ),
+          aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
+        },
+        team: { update: jest.fn().mockResolvedValue({}) },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+
+      await service.addMember('tm_0000000001', {
+        agentId: 'a_tester',
+        roleId: 'ar_developer',
+      } as any);
+
+      // 显式 agentId 优先：不解析角色默认值
+      expect(prisma.agentRole.findUnique).not.toHaveBeenCalled();
+      expect(tx.teamMember.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            agentId: 'a_tester',
+            roleId: 'ar_developer',
+          }),
+        }),
+      );
+    });
+
+    it('addMember 两者都缺 → 400 MEMBER_AGENT_REQUIRED（roleId 仍可选，存量行为不变）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      await expect(
+        service.addMember('tm_0000000001', {} as any),
+      ).rejects.toThrow(BadRequestException);
+      try {
+        await service.addMember('tm_0000000001', {} as any);
+      } catch (e) {
+        expect((e as BadRequestException).getResponse()).toMatchObject({
+          code: 'MEMBER_AGENT_REQUIRED',
+        });
+      }
+    });
+
+    it('addMember 仅给 roleId 且角色无默认 Agent → 400 ROLE_DEFAULT_AGENT_MISSING', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_general',
+        defaultAgentId: null,
+      });
+      await expect(
+        service.addMember('tm_0000000001', { roleId: 'ar_general' } as any),
+      ).rejects.toThrow(BadRequestException);
+      try {
+        await service.addMember('tm_0000000001', { roleId: 'ar_general' } as any);
+      } catch (e) {
+        expect((e as BadRequestException).getResponse()).toMatchObject({
+          code: 'ROLE_DEFAULT_AGENT_MISSING',
+        });
+      }
     });
 
     it('removeMember 联动 updatedAt/version', async () => {

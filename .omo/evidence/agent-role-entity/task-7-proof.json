@@ -1,0 +1,34 @@
+[
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu827eb0",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000003 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000035",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  }
+]

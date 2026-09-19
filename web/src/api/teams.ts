@@ -11,6 +11,7 @@ export interface TeamMemberDto {
   id: string;
   teamId: string;
   agentId: string;
+  roleId?: string | null;
   alias: string;
   seq: number;
   workDir: string;
@@ -66,7 +67,7 @@ export interface CreateTeamPayload {
   name: string;
   description?: string;
   reuseSession?: boolean;
-  members?: { agentId: string; alias?: string; workDir?: string }[];
+  members?: { agentId?: string; roleId?: string; alias?: string; workDir?: string }[];
   mainAgentMemberId?: string;
 }
 
@@ -80,7 +81,8 @@ export interface UpdateTeamPayload {
 }
 
 export interface AddMemberPayload {
-  agentId: string;
+  agentId?: string;
+  roleId?: string;
   alias?: string;
   workDir?: string;
 }
@@ -89,6 +91,8 @@ export interface UpdateMemberPayload {
   alias?: string;
   workDir?: string;
   overrideModelId?: string | null;
+  roleId?: string | null;
+  agentId?: string;
 }
 
 export interface AddUserMemberPayload {

@@ -980,9 +980,9 @@ export default function TeamSessionPage() {
     },
   });
   const addInstanceMutation = useMutation({
-    mutationFn: (payload: { agentId: string; alias?: string }) =>
+    mutationFn: (payload: { agentId: string; roleId?: string; alias?: string }) =>
       api.post<TaskDetail>(`/tasks/${currentTaskId}/team`, {
-        addInstances: [{ agentId: payload.agentId, ...(payload.alias ? { alias: payload.alias } : {}) }],
+        addInstances: [{ agentId: payload.agentId, ...(payload.roleId ? { roleId: payload.roleId } : {}), ...(payload.alias ? { alias: payload.alias } : {}) }],
         removeInstanceIds: [],
       }),
     onSuccess: (updated) => {
@@ -995,12 +995,12 @@ export default function TeamSessionPage() {
       setAddError(isApiError(err) ? err.message : "添加实例失败，请稍后重试");
     },
   });
-  const handleAddInstance = async (agentId: string, alias?: string): Promise<boolean> => {
+  const handleAddInstance = async (payload: { agentId: string; roleId?: string; alias?: string }): Promise<boolean> => {
     if (addInstanceMutation.isPending) return false;
     setAddError(null);
     return new Promise((resolve) => {
       addInstanceMutation.mutate(
-        { agentId, alias },
+        payload,
         { onSuccess: () => resolve(true), onError: () => resolve(false) },
       );
     });

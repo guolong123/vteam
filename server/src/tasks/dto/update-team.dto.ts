@@ -13,6 +13,14 @@ export class TeamInstanceInput {
   @IsString()
   agentId: string;
 
+  @ApiPropertyOptional({
+    description:
+      '岗位角色 id（AgentRole）；随成员一并持久化，用于「成员 ⇄ 角色」绑定',
+  })
+  @IsOptional()
+  @IsString()
+  roleId?: string;
+
   @ApiPropertyOptional({ description: '实例别名' })
   @IsOptional()
   @IsString()

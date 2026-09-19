@@ -16,6 +16,7 @@ import { AgentAvatar } from "@/src/components/ui";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { teamsApi } from "@/src/api/teams";
+import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
   type RoleKey,
   neutral,
@@ -46,14 +47,6 @@ const FIXED_DESC: Record<RoleKey, string> = {
   tester: "用例设计与质量验收",
   plan: "执行计划编制与评审",
 };
-const ROLE_AGENT_ID: Record<RoleKey, string> = {
-  product: "a_product",
-  project_manager: "a_project_manager",
-  architect: "a_architect",
-  developer: "a_developer",
-  tester: "a_tester",
-  plan: "a_plan",
-};
 const ROLE_ORDER: RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
 
 interface InstanceDraft {
@@ -63,6 +56,7 @@ interface InstanceDraft {
   seq: number;
   workDir: string;
   roleKey: RoleKey | null;
+  roleId?: string;
   agentName?: string;
 }
 type InstanceBucketKey = RoleKey | "custom";
@@ -201,6 +195,25 @@ export default function TeamNewPage() {
   });
   const customAgents = useMemo(() => (agentsQuery.data?.items ?? []).filter((a) => a.type !== "template"), [agentsQuery.data]);
 
+  // 岗位列表：唯一来源 /agent-roles（替代原硬编码 ROLE_AGENT_ID）；defaultAgentId 预填 Agent
+  const rolesQuery = useQuery({
+    queryKey: ["agent-roles"],
+    queryFn: () => agentRolesApi.list({ page: 1, pageSize: 100 }),
+    retry: false,
+  });
+  const roleItems: AgentRoleDto[] = rolesQuery.data?.items ?? [];
+  const roleByKey = useMemo(
+    () => new Map(roleItems.map((r) => [r.key, r])),
+    [roleItems],
+  );
+  /** 角色 key → Agent id：优先角色 defaultAgentId，其次 /agents 列表按 role 匹配（防角色未配默认）。 */
+  const agentIdForRoleKey = (role: RoleKey): string => {
+    const bound = roleByKey.get(role)?.defaultAgentId;
+    if (bound) return bound;
+    const fromDir = (agentsQuery.data?.items ?? []).find((a) => a.role === role && a.type === "template");
+    return fromDir?.id ?? "";
+  };
+
   const handleToggleRole = (role: RoleKey) => {
     setInstancesByRole((prev) => {
       const enabled = (prev[role] ?? []).length > 0;
@@ -209,14 +222,14 @@ export default function TeamNewPage() {
         if (mainAgentKey && removedKeys.has(mainAgentKey)) setMainAgentKey(null);
         return { ...prev, [role]: [] };
       }
-      return { ...prev, [role]: [{ key: nextKey(), agentId: ROLE_AGENT_ID[role], alias: defaultAliasOf(role, undefined, 1), workDir: defaultWorkDirOf(role, undefined, 1), seq: 1, roleKey: role }] };
+      return { ...prev, [role]: [{ key: nextKey(), agentId: agentIdForRoleKey(role), alias: defaultAliasOf(role, undefined, 1), workDir: defaultWorkDirOf(role, undefined, 1), seq: 1, roleKey: role, roleId: roleByKey.get(role)?.id }] };
     });
   };
   const handleAddInstance = (role: RoleKey) => {
     setInstancesByRole((prev) => {
       const list = prev[role] ?? [];
       const seq = list.reduce((m, i) => Math.max(m, i.seq), 0) + 1;
-      return { ...prev, [role]: [...list, { key: nextKey(), agentId: ROLE_AGENT_ID[role], alias: defaultAliasOf(role, undefined, seq), workDir: defaultWorkDirOf(role, undefined, seq), seq, roleKey: role }] };
+      return { ...prev, [role]: [...list, { key: nextKey(), agentId: agentIdForRoleKey(role), alias: defaultAliasOf(role, undefined, seq), workDir: defaultWorkDirOf(role, undefined, seq), seq, roleKey: role, roleId: roleByKey.get(role)?.id }] };
     });
   };
   const handleAddCustomAgent = (agent: AgentItem) => {
@@ -250,6 +263,7 @@ export default function TeamNewPage() {
     mutationFn: () => {
       const members = allInstances.map((inst) => ({
         agentId: inst.agentId,
+        ...(inst.roleId ? { roleId: inst.roleId } : {}),
         ...(inst.alias !== defaultAliasOf(inst.roleKey ?? "custom", inst.agentName, inst.seq) ? { alias: inst.alias } : {}),
         ...(inst.workDir.trim() !== defaultWorkDirOf(inst.roleKey ?? "custom", inst.agentName, inst.seq) ? { workDir: inst.workDir.trim() } : {}),
       }));

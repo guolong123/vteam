@@ -33,6 +33,7 @@ export function isSelectableOpencodeAgent(a: OpencodeAgentItem): boolean {
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { AgentAvatar } from "@/src/components/ui";
+import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
   type RoleKey,
   neutral,
@@ -57,16 +58,6 @@ const AGENT_ID_ROLE: Record<string, RoleKey> = {
 };
 
 const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
-
-/** seed 模板 Agent 角色 → id 兜底。 */
-const ROLE_AGENT_ID: Record<RoleKey, string> = {
-  product: "a_product",
-  project_manager: "a_project_manager",
-  architect: "a_architect",
-  developer: "a_developer",
-  tester: "a_tester",
-  plan: "a_plan",
-};
 
 /** 自定义 agent 中性主题（teal）。 */
 const CUSTOM_THEME = { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4", label: "自定义" };
@@ -106,11 +97,6 @@ export function roleOptionsOf(items: AgentItem[]): AgentOption[] {
   });
 }
 
-/** 角色 → 模板 agent id。 */
-export function agentIdForRole(role: RoleKey, options: AgentOption[]): string {
-  return options.find((o) => o.role === role)?.id ?? ROLE_AGENT_ID[role];
-}
-
 /** agent id / role 字符串 → RoleKey。 */
 export function toRole(agentId: string): RoleKey | null {
   const direct = AGENT_ID_ROLE[agentId];
@@ -118,6 +104,18 @@ export function toRole(agentId: string): RoleKey | null {
   const rest = agentId.startsWith("a_") ? agentId.slice(2) : agentId;
   if ((ROLE_KEYS as readonly string[]).includes(rest)) return rest as RoleKey;
   return null;
+}
+
+/** 岗位 key → 主题 RoleKey（key 即模板 role；未知/librarian/general 回退 developer 中性色）。 */
+export function toRoleKey(roleKey: string): RoleKey | null {
+  return (ROLE_KEYS as readonly string[]).includes(roleKey) ? (roleKey as RoleKey) : null;
+}
+
+/** 添加实例提交载荷：roleId 随成员落库；agentId 为最终选择的 Agent（可被用户覆盖角色默认）。 */
+export interface AddInstancePayload {
+  agentId: string;
+  roleId?: string;
+  alias?: string;
 }
 
 /* ================================ 成员面板（224px，T5 按实例展示） ================================ */
@@ -148,7 +146,7 @@ export function TeamMembersPanel({
   customAgents: AgentItem[];
   adding: boolean;
   addError: string | null;
-  onAddInstance: (agentId: string, alias?: string) => Promise<boolean>;
+  onAddInstance: (payload: AddInstancePayload) => Promise<boolean>;
   width?: number;
   onToggleEnabled?: (instanceId: string, enabled: boolean) => void;
   onResetSession?: (instanceId: string) => void;
@@ -159,16 +157,40 @@ export function TeamMembersPanel({
   footerText?: string;
 }) {
   const [addOpen, setAddOpen] = useState(false);
-  /** 选中项：内置角色 RoleKey 或自定义 agent id（is_0000000035）。 */
-  const [selectedRole, setSelectedRole] = useState<string | null>(null);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [alias, setAlias] = useState("");
-  /** 选中主题：内置角色主题；自定义 agent 用中性 CUSTOM_THEME（别名占位提示 agent 名）。 */
-  const selectedCustom = customAgents.find((a) => a.id === selectedRole);
+
+  // 岗位列表：唯一来源 todo 6 的 /agent-roles（替代原硬编码 ROLE_KEYS/ROLE_AGENT_ID）
+  const rolesQuery = useQuery({
+    queryKey: ["agent-roles"],
+    queryFn: () => agentRolesApi.list({ page: 1, pageSize: 100 }),
+    retry: false,
+  });
+  const roleItems: AgentRoleDto[] = rolesQuery.data?.items ?? [];
+  const roleById = useMemo(
+    () => new Map(roleItems.map((r) => [r.id, r])),
+    [roleItems],
+  );
+
+  const selectedRole = selectedRoleId ? roleById.get(selectedRoleId) ?? null : null;
+  const selectedCustom = customAgents.find((a) => a.id === selectedAgentId);
   const theme = selectedCustom
     ? { ...CUSTOM_THEME, label: selectedCustom.name }
     : selectedRole
-      ? (roles[selectedRole as RoleKey] ?? roles.developer)
+      ? (roles[toRoleKey(selectedRole.key) ?? "developer"] ?? roles.developer)
       : null;
+
+  const agentSelectOptions = useMemo(() => {
+    const fromTemplates = agentOptions.map((o) => ({
+      id: o.id,
+      label: roles[o.role]?.label ?? o.role,
+    }));
+    const fromCustom = customAgents.map((a) => ({ id: a.id, label: a.name }));
+    return [...fromTemplates, ...fromCustom];
+  }, [agentOptions, customAgents]);
+
+  const hasAgentInList = agentSelectOptions.some((o) => o.id === selectedAgentId);
 
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
@@ -216,7 +238,8 @@ export function TeamMembersPanel({
 
   const openPanel = () => {
     if (!teamEditable || adding) return;
-    setSelectedRole(null);
+    setSelectedRoleId(null);
+    setSelectedAgentId("");
     setAlias("");
     setAddOpen(true);
   };
@@ -224,16 +247,22 @@ export function TeamMembersPanel({
     if (adding) return;
     setAddOpen(false);
   };
+  /** 选岗位：用角色 defaultAgentId 预填 Agent；用户仍可在下方下拉里切换（显式覆盖）。 */
+  const pickRole = (role: AgentRoleDto) => {
+    setSelectedRoleId(role.id);
+    setSelectedAgentId(role.defaultAgentId ?? "");
+  };
   const confirmAdd = async () => {
-    if (!selectedRole || adding) return;
-    // 内置角色 → 模板 agent id；自定义 agent id 直用
-    const agentId = (ROLE_KEYS as readonly string[]).includes(selectedRole)
-      ? agentIdForRole(selectedRole as RoleKey, agentOptions)
-      : selectedRole;
-    const ok = await onAddInstance(agentId, alias.trim() || undefined);
+    if (!selectedAgentId || adding) return;
+    const ok = await onAddInstance({
+      agentId: selectedAgentId,
+      roleId: selectedRoleId ?? undefined,
+      alias: alias.trim() || undefined,
+    });
     if (ok) {
       setAddOpen(false);
-      setSelectedRole(null);
+      setSelectedRoleId(null);
+      setSelectedAgentId("");
       setAlias("");
     }
   };
@@ -698,21 +727,28 @@ export function TeamMembersPanel({
             }}
           >
             <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>添加实例</div>
-            {/* 角色选择：六角色行（角色色点 + 中文名），点击选中（选中态 = 角色主题边框/背景） */}
-            <div style={{ display: "flex", flexDirection: "column", gap: space.xs }} role="radiogroup" aria-label="选择角色">
-              {ROLE_KEYS.map((role) => {
-                const t = roles[role] ?? roles.developer;
-                const selected = selectedRole === role;
+            {/* 岗位选择：来源 /agent-roles（7 内置 + 自定义）；选中即用角色 defaultAgentId 预填 Agent */}
+            <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>选择岗位（Agent 随岗位预填，可在下方切换）</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: space.xs }} role="radiogroup" aria-label="选择岗位">
+              {rolesQuery.isPending && (
+                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>岗位加载中…</span>
+              )}
+              {roleItems.map((role) => {
+                const roleKey = toRoleKey(role.key) ?? "developer";
+                const t = roles[roleKey] ?? roles.developer;
+                const selected = selectedRoleId === role.id;
                 return (
                   <button
-                    key={role}
+                    key={role.id}
                     type="button"
                     role="radio"
                     aria-checked={selected}
                     data-testid="add-instance-role"
-                    data-role={role}
-                    aria-label={`添加${t.label}实例`}
-                    onClick={() => setSelectedRole(role)}
+                    data-role={role.key}
+                    data-role-id={role.id}
+                    data-default-agent={role.defaultAgentId ?? ""}
+                    aria-label={`添加${role.name}实例`}
+                    onClick={() => pickRole(role)}
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -727,8 +763,8 @@ export function TeamMembersPanel({
                     }}
                   >
                     <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: t.color, flexShrink: 0 }} />
-                    <span style={{ flex: 1, fontSize: fontSize.md, color: neutral[700], fontWeight: selected ? 600 : 500 }}>
-                      {t.label}
+                    <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.md, color: neutral[700], fontWeight: selected ? 600 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {role.name}
                     </span>
                     {selected && (
                       <span aria-hidden style={{ color: t.color, fontSize: fontSize.sm, fontWeight: 700 }}>✓</span>
@@ -736,7 +772,7 @@ export function TeamMembersPanel({
                   </button>
                 );
               })}
-              {/* is_0000000035：自定义/clone agent 可选（中性 teal 主题） */}
+              {/* is_0000000035：自定义/clone agent 可选（中性 teal 主题）；无岗位时仍可直接选自定义 Agent */}
               {customAgents.length > 0 && (
                 <>
                   <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.xs, padding: `0 ${space.sm}px` }}>
@@ -745,7 +781,7 @@ export function TeamMembersPanel({
                     <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
                   </div>
                   {customAgents.map((a) => {
-                    const selected = selectedRole === a.id;
+                    const selected = selectedRoleId === null && selectedAgentId === a.id;
                     return (
                       <button
                         key={a.id}
@@ -755,7 +791,10 @@ export function TeamMembersPanel({
                         data-testid="add-instance-custom-role"
                         data-agent-id={a.id}
                         aria-label={`添加自定义 Agent ${a.name}`}
-                        onClick={() => setSelectedRole(a.id)}
+                        onClick={() => {
+                          setSelectedRoleId(null);
+                          setSelectedAgentId(a.id);
+                        }}
                         style={{
                           display: "flex",
                           alignItems: "center",
@@ -783,6 +822,33 @@ export function TeamMembersPanel({
                 </>
               )}
             </div>
+            {/* Agent 选择：由岗位 defaultAgentId 预填；用户可切换（显式选择优先于岗位默认） */}
+            <select
+              data-testid="add-instance-agent-select"
+              value={hasAgentInList ? selectedAgentId : ""}
+              onChange={(e) => setSelectedAgentId(e.target.value)}
+              disabled={adding || agentSelectOptions.length === 0}
+              aria-label="选择 Agent"
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: `${space.sm}px ${space.sm}px`,
+                borderRadius: radius.sm,
+                border: `1px solid ${neutral[200]}`,
+                backgroundColor: "var(--color-surface)",
+                fontSize: fontSize.md,
+                color: neutral[800],
+                fontFamily: fontFamily.body,
+              }}
+            >
+              <option value="">请选择 Agent</option>
+              {selectedAgentId && !hasAgentInList && (
+                <option value={selectedAgentId}>{selectedAgentId}（当前）</option>
+              )}
+              {agentSelectOptions.map((o) => (
+                <option key={o.id} value={o.id}>{o.label}</option>
+              ))}
+            </select>
             {/* 别名（可选，缺省服务端生成 <角色中文名>-<seq>） */}
             <input
               data-testid="add-instance-alias"
@@ -835,7 +901,7 @@ export function TeamMembersPanel({
                 type="button"
                 data-testid="add-instance-confirm"
                 onClick={confirmAdd}
-                disabled={!selectedRole || adding}
+                disabled={!selectedAgentId || adding}
                 style={{
                   flex: 1,
                   padding: `${space.sm - 1}px ${space.md}px`,
@@ -845,8 +911,8 @@ export function TeamMembersPanel({
                   color: "#FFFFFF",
                   fontSize: fontSize.sm,
                   fontWeight: 500,
-                  cursor: !selectedRole || adding ? "default" : "pointer",
-                  opacity: !selectedRole || adding ? 0.5 : 1,
+                  cursor: !selectedAgentId || adding ? "default" : "pointer",
+                  opacity: !selectedAgentId || adding ? 0.5 : 1,
                   fontFamily: fontFamily.body,
                 }}
               >

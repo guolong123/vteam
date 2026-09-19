@@ -128,3 +128,39 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   NOT in CI; todo 8 owns the post-split parity proof. Did not touch it.
 - **Suite**: 138 suites / 3169 tests passed (+7 vs the 3162 baseline); tsc exit 0. Evidence:
   `.omo/evidence/agent-role-entity/task-3-platform-const.txt`.
+
+## Todo 7 · members ⇄ roles + Roles tab + member pre-fill (2026-09-19)
+
+- **Precedence lives in ONE helper** (`TeamsService.resolveMemberBinding`, `teams.service.ts`): explicit
+  `agentId` wins; `roleId`-only resolves `AgentRole.defaultAgentId`; `roleId` with a null default → 400
+  `ROLE_DEFAULT_AGENT_MISSING`; both missing → 400 `MEMBER_AGENT_REQUIRED`. `create()` resolves all members
+  BEFORE the transaction (fast-fail + avoids re-querying AgentRole inside the tx); `addMember`/`updateMember`
+  call the same helper. This is the single seam — do not add a second resolution path.
+- **Generic return preserves the row**: `resolveMemberBinding<T extends {agentId?; roleId?}>(input: T)` returns
+  `T & {...}` so `alias`/`workDir` survive. A narrower `{agentId;roleId}` return type silently drops them and
+  TS raises `Property 'alias' does not exist` at the create loop — caught immediately by tsc.
+- **`ValidationPipe` is `whitelist: true, forbidNonWhitelisted: false`** (`main.ts:56`), and
+  `AddMemberDto.agentId` had to become optional; the required-ness moved to the service. Existing exact-match
+  specs (`teamMember.create` with `toHaveBeenNthCalledWith`) now need `roleId: null` added — 2 in teams.service
+  + 2 in tasks.service; the `objectContaining` ones were unaffected.
+- **`roleId` is persisted on BOTH member-creation paths**: `teams.service` (create/addMember/updateMember) and
+  `tasks.service.createTeamMembers` (`POST /tasks/:id/team` addInstances) — the session add-instance flow.
+  `toTeamDto` now surfaces `roleId` so the UI can round-trip it.
+- **Roles tab is a separate component** `src/components/agents/AgentRolesTab.tsx` (page.tsx is already 3100+
+  LOC). `SegmentedTabs` was NOT imported in agents/page.tsx — added it (testids `manage-tabs`/`manage-tab`,
+  label filter must use `hasText: "角色"` not exact). The Agent tab is wrapped in a fragment so its DOM/behaviour
+  is byte-unchanged; existing `pages.spec.ts` `/agents` assertions stayed green.
+- **Capability fence**: AgentRolesTab imports only identity/DTO code and renders zero permission/tool editors;
+  a hint line points capability to the Agent tab. `canEdit`/`canCreate`/`canDelete` are gated by
+  `hasPermission(agents.*)`.
+- **Member pre-fill de-hardcoded**: `TeamMembersPanel` no longer uses `ROLE_KEYS`/`ROLE_AGENT_ID` for the
+  picker — it lists `/agent-roles` and on pick sets `selectedAgentId = role.defaultAgentId`; the added Agent
+  `<select>` (testid `add-instance-agent-select`) lets the user override, and `onAddInstance` now takes
+  `{agentId, roleId, alias}`. `teams/new` uses a local `agentIdForRoleKey` backed by the role API. Dead
+  `agentIdForRole` export + `ROLE_AGENT_ID` const removed; `ROLE_KEYS` retained only for avatar/theme mapping.
+- **Playwright harness copy** (`scripts/e2e-roles-members.sh` + `web/e2e/roles-members.spec.ts`): tmp config →
+  compose web :13001, `channel:"chrome"`, admin login. The session add-member flow requires a team WITH a
+  `pending` task (`teamEditable = currentTask.status pending|in_progress`) — a fresh team whose task is created
+  via `POST /tasks` is `pending`, so the flow is reachable. Delete the throwaway team in `finally`.
+- **Suite**: server 138 suites / 3169 tests green; `npx tsc --noEmit` exit 0 server + web; Playwright 3/3 green.
+  Evidence `.omo/evidence/agent-role-entity/{task-7-proof.json,e2e.txt,task-7-roles-and-members.png}`.

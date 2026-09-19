@@ -1839,7 +1839,7 @@ export class TasksService implements OnModuleInit {
   private async createTeamMembers(
     tx: Prisma.TransactionClient,
     teamId: string,
-    agents: { agentId: string; alias?: string; workDir?: string }[],
+    agents: { agentId: string; roleId?: string; alias?: string; workDir?: string }[],
   ): Promise<TeamMemberView[]> {
     const created: TeamMemberView[] = [];
     for (const item of agents) {
@@ -1866,6 +1866,7 @@ export class TasksService implements OnModuleInit {
           id: await this.idGen.nextId(ID_PREFIX.teamMember),
           teamId,
           agentId: item.agentId,
+          roleId: item.roleId?.trim() || null,
           alias,
           seq,
           workDir,

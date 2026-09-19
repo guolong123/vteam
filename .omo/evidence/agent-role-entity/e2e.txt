@@ -1,0 +1,22 @@
+[e2e] date=2026-09-19T07:21:52Z HEAD=e7333a7bd712a1883036427f0652b6c5a617ac14
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-role-entity
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 3 tests using 1 worker
+
+  ✓  1 e2e/roles-members.spec.ts:97:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除 (1.8s)
+[cleanup] custom role ar_0000000003 deleted (re-GET 404)
+  ✓  2 e2e/roles-members.spec.ts:146:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除 (2.2s)
+[cleanup] team tm_0000000035 DELETE -> 200
+  ✓  3 e2e/roles-members.spec.ts:222:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 3. 成员按岗位添加：预填 Agent → 覆盖后持久化 (1.5s)
+
+  3 passed (6.6s)
+----- end playwright raw -----
+[e2e] PASS playwright 3/3 green; screenshot present (roles tab)
+[e2e] cleanup [cleanup] custom role ar_0000000003 deleted (re-GET 404)
+[e2e] cleanup [cleanup] team tm_0000000035 DELETE -> 200
+[e2e] result passed	1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除
+[e2e] result passed	2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除
+[e2e] result passed	3. 成员按岗位添加：预填 Agent → 覆盖后持久化
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-role-entity/e2e.txt

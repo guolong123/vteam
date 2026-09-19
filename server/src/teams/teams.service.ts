@@ -45,6 +45,9 @@ const TEAM_ERRORS = {
   TEAM_NAME_CONFLICT: 'TEAM_NAME_CONFLICT',
   TEAM_TASK_RUNNING: 'TEAM_TASK_RUNNING',
   AGENT_NOT_FOUND: 'AGENT_NOT_FOUND',
+  ROLE_NOT_FOUND: 'ROLE_NOT_FOUND',
+  ROLE_DEFAULT_AGENT_MISSING: 'ROLE_DEFAULT_AGENT_MISSING',
+  MEMBER_AGENT_REQUIRED: 'MEMBER_AGENT_REQUIRED',
   MEMBER_NOT_FOUND: 'MEMBER_NOT_FOUND',
   USER_NOT_FOUND: 'USER_NOT_FOUND',
   USER_ALREADY_MEMBER: 'USER_ALREADY_MEMBER',
@@ -100,12 +103,11 @@ export class TeamsService implements OnModuleInit {
       });
     }
     const members = dto.members ?? [];
-    // validate agent existence before transaction (fast fail), also validated inside transaction
-    for (const m of members) {
-      if (!m.agentId) {
-        throw new BadRequestException('成员 agentId 不能为空');
-      }
-    }
+    // 成员 agent 绑定解析（roleId 预填 / 显式 agentId 优先，见 resolveMemberBinding）
+    // 在事务前完成：快速失败，且解析结果直接进入事务循环，避免事务内重复查询 AgentRole。
+    const resolvedMembers = await Promise.all(
+      members.map((m) => this.resolveMemberBinding(m)),
+    );
 
     const teamId = await this.idGen.nextId(ID_PREFIX.team);
 
@@ -127,7 +129,7 @@ export class TeamsService implements OnModuleInit {
         agentId: string;
         seq: number;
       }> = [];
-      for (const item of members) {
+      for (const item of resolvedMembers) {
         const agent = await tx.agent.findUnique({
           where: { id: item.agentId },
           select: { id: true, name: true, role: true },
@@ -147,6 +149,7 @@ export class TeamsService implements OnModuleInit {
             id: memberId,
             teamId,
             agentId: item.agentId,
+            roleId: item.roleId ?? null,
             alias,
             seq,
             workDir,
@@ -616,26 +619,29 @@ export class TeamsService implements OnModuleInit {
         message: '团队不存在',
       });
     }
+    // roleId 预填 / 显式 agentId 优先的唯一判定点。
+    const binding = await this.resolveMemberBinding(dto);
     const agent = await this.prisma.agent.findUnique({
-      where: { id: dto.agentId },
+      where: { id: binding.agentId },
       select: { id: true, name: true, role: true },
     });
     if (!agent) {
       throw new NotFoundException({
         code: TEAM_ERRORS.AGENT_NOT_FOUND,
-        message: `Agent ${dto.agentId} 不存在`,
+        message: `Agent ${binding.agentId} 不存在`,
       });
     }
 
     const member = await this.prisma.$transaction(async (tx) => {
-      const seq = await this.nextSeqForUpdate(tx, teamId, dto.agentId);
+      const seq = await this.nextSeqForUpdate(tx, teamId, binding.agentId);
       const alias = dto.alias?.trim() || this.defaultAlias(agent, seq);
       const workDir = dto.workDir?.trim() || this.defaultWorkDir(agent, seq);
       const created = await tx.teamMember.create({
         data: {
           id: await this.idGen.nextId(ID_PREFIX.teamMember),
           teamId,
-          agentId: dto.agentId,
+          agentId: binding.agentId,
+          roleId: binding.roleId,
           alias,
           seq,
           workDir,
@@ -841,6 +847,34 @@ export class TeamsService implements OnModuleInit {
     if (dto.workDir !== undefined) data.workDir = dto.workDir?.trim() || null;
     if (dto.overrideModelId !== undefined)
       data.overrideModelId = dto.overrideModelId?.trim() || null;
+    if (dto.agentId !== undefined || dto.roleId !== undefined) {
+      // 同一优先级判定点（resolveMemberBinding）：显式 agentId 优先；只改 roleId 时用其默认
+      // Agent 预填；roleId 显式清空（null/空串）仅解绑角色、agent 保持不变。
+      const roleCleared =
+        dto.roleId === null || String(dto.roleId ?? '').trim() === '';
+      if (dto.agentId?.trim()) {
+        data.agentId = dto.agentId.trim();
+        if (!roleCleared) data.roleId = dto.roleId?.trim() || null;
+      } else if (roleCleared) {
+        data.roleId = null;
+      } else {
+        const binding = await this.resolveMemberBinding({ roleId: dto.roleId });
+        data.agentId = binding.agentId;
+        data.roleId = binding.roleId;
+      }
+      if (data.agentId && data.agentId !== member.agentId) {
+        const nextAgent = await this.prisma.agent.findUnique({
+          where: { id: data.agentId },
+          select: { id: true },
+        });
+        if (!nextAgent) {
+          throw new NotFoundException({
+            code: TEAM_ERRORS.AGENT_NOT_FOUND,
+            message: `Agent ${data.agentId} 不存在`,
+          });
+        }
+      }
+    }
     if (dto.opencodeAgentName !== undefined) {
       // 空串 → null（清除选择，回 opencode 默认 agent）；非空 → 弱校验后落库。
       // 弱校验：worker 可能离线，无法实时核对，故仅在取得清单时告警、不阻断写入
@@ -848,7 +882,7 @@ export class TeamsService implements OnModuleInit {
       const name = dto.opencodeAgentName?.trim() || null;
       data.opencodeAgentName = name;
       if (name) {
-        await this.warnIfOpencodeAgentUnknown(name, member.agentId);
+        await this.warnIfOpencodeAgentUnknown(name, data.agentId ?? member.agentId);
       }
     }
     if (Object.keys(data).length === 0) {
@@ -1268,12 +1302,62 @@ export class TeamsService implements OnModuleInit {
     return this.findOne(teamId);
   }
 
+  /**
+   * 成员 ⇄ 角色绑定解析（唯一优先级判定点，agent-role-entity todo 7）。
+   *
+   * **优先级规则（全流程唯一事实来源）**：
+   *   1. 显式 `agentId` **恒胜出**——用户明确选了 agent，就绝不被角色的默认值覆盖。
+   *   2. 只给 `roleId`（未显式给 `agentId`）→ 用 `AgentRole.defaultAgentId` 预填 `agentId`
+   *      （「选岗位，Agent 随岗位来」）。
+   *   3. `roleId` 指向的角色 `defaultAgentId` 为空 → 400 `ROLE_DEFAULT_AGENT_MISSING`
+   *      （角色没有可预填的默认 Agent，无法只凭岗位定位 Agent）。
+   *   4. 两者都缺 → 400 `MEMBER_AGENT_REQUIRED`（agent 必须可解析，向后兼容旧请求）。
+   *
+   * `roleId` 可选：只给 `agentId` 的存量请求走分支 1，行为与引入本表前逐字一致。
+   */
+  private async resolveMemberBinding<T extends { agentId?: string; roleId?: string }>(
+    input: T,
+  ): Promise<T & { agentId: string; roleId: string | null }> {
+    const explicitAgentId = input.agentId?.trim() || null;
+    const roleId = input.roleId?.trim() || null;
+
+    if (explicitAgentId) {
+      // 规则 1：显式 agentId 优先；roleId 仅在给出时随行持久化（不覆盖 agent 选择）。
+      return { ...input, agentId: explicitAgentId, roleId };
+    }
+
+    if (!roleId) {
+      throw new BadRequestException({
+        code: TEAM_ERRORS.MEMBER_AGENT_REQUIRED,
+        message: '成员必须提供 agentId 或 roleId（给 roleId 时用角色默认 Agent 预填）',
+      });
+    }
+
+    const role = await this.prisma.agentRole.findUnique({
+      where: { id: roleId },
+      select: { id: true, defaultAgentId: true },
+    });
+    if (!role) {
+      throw new NotFoundException({
+        code: TEAM_ERRORS.ROLE_NOT_FOUND,
+        message: `AgentRole ${roleId} 不存在`,
+      });
+    }
+    if (!role.defaultAgentId) {
+      throw new BadRequestException({
+        code: TEAM_ERRORS.ROLE_DEFAULT_AGENT_MISSING,
+        message: `角色 ${roleId} 未设置默认 Agent，请显式指定 agentId`,
+      });
+    }
+    // 规则 2：只给 roleId → 用角色默认 Agent 预填。
+    return { ...input, agentId: role.defaultAgentId, roleId };
+  }
+
   private async nextSeqForUpdate(
     tx: any,
     teamId: string,
     agentId: string,
-  ): Promise<number> {
-    // row-level lock: SELECT MAX(seq) FOR UPDATE inside transaction
+  ): Promise<number> {    // row-level lock: SELECT MAX(seq) FOR UPDATE inside transaction
     const rows: Array<{ maxSeq: number | null }> = await tx.$queryRawUnsafe(
       'SELECT MAX(seq) as maxSeq FROM team_members WHERE team_id = ? AND agent_id = ? FOR UPDATE',
       teamId,
@@ -1319,6 +1403,7 @@ export class TeamsService implements OnModuleInit {
       id: m.id,
       teamId: m.teamId,
       agentId: m.agentId,
+      roleId: m.roleId ?? null,
       alias: m.alias,
       seq: m.seq,
       workDir: m.workDir,

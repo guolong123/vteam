@@ -41,7 +41,8 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { hasPermission } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { AgentAvatar, ConfirmDialog, PageWindow } from "@/src/components/ui";
+import { AgentAvatar, ConfirmDialog, PageWindow, SegmentedTabs } from "@/src/components/ui";
+import { AgentRolesTab } from "@/src/components/agents/AgentRolesTab";
 import { type AvailableModel } from "@/src/types/models";
 import {
   type RoleKey,
@@ -2764,7 +2765,12 @@ export default function AgentConfigPage() {
   const canCreateAgent = hasPermission(user?.permissions, "agents", "create");
   // 删除权限（对齐后端 PermissionGuard agents.delete，UX-14）；template 由 ConfigPanel 二次过滤
   const canDeleteAgent = hasPermission(user?.permissions, "agents", "delete");
+  // 编辑权限（对齐后端 PermissionGuard agents.edit；角色 Tab 的自定义角色保存用）
+  const canEditAgent = hasPermission(user?.permissions, "agents", "edit");
   const queryClient = useQueryClient();
+
+  // Tab 1 Agent（既有内容，行为不变）/ Tab 2 角色（AgentRole 岗位管理，todo 7）
+  const [tab, setTab] = useState<"agent" | "role">("agent");
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -2954,6 +2960,18 @@ export default function AgentConfigPage() {
       testId="agent-config-root"
       style={{ position: "relative", backgroundColor: neutral[50], ...baseFont }}
     >
+      <SegmentedTabs
+        items={[
+          { key: "agent", label: "Agent" },
+          { key: "role", label: "角色" },
+        ]}
+        active={tab}
+        onChange={(k) => setTab(k as "agent" | "role")}
+      />
+      {tab === "role" ? (
+        <AgentRolesTab canCreate={canCreateAgent} canEdit={canEditAgent} canDelete={canDeleteAgent} />
+      ) : (
+      <>
       {/* 窗口内保持左右双栏（列表 320px + 配置面板），原根容器行布局下移一层 */}
       <div style={{ display: "flex", gap: space.lg, alignItems: "flex-start" }}>
       {/* 左：Agent 列表（320px） */}
@@ -3128,6 +3146,8 @@ export default function AgentConfigPage() {
         }}
       />
       </div>
+      </>
+      )}
     </PageWindow>
   );
 }
