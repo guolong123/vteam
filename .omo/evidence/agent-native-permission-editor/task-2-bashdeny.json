@@ -1,0 +1,68 @@
+{
+  "task": "agent-native-permission-editor / todo 2",
+  "title": "Round-trip bashDeny in the policy config DTO (option a)",
+  "date": "2026-09-19T00:52:39.080Z",
+  "commit_message": "feat(policies): round-trip bashDeny in the policy config DTO",
+  "decision": "option (a): declare bashDeny?: string[] on PolicyConfigDto so the global whitelist pipe round-trips it. Option (b) (silently drop) rejected: guardForAgent/resolveBashDeny still read config.bashDeny, and the editor owns whole-config PATCH writes.",
+  "implementation": {
+    "file": "server/src/execution-policies/dto/policy-config.dto.ts",
+    "added_field": "bashDeny?: string[] with @IsOptional() @IsArray() @IsString({ each: true }) + @ApiProperty({ type: [String], required: false })",
+    "added_imports": [
+      "IsArray",
+      "IsString"
+    ],
+    "base_commit": "035612c0b392b471afc2f4d6acb4add72f12c94d",
+    "dto_file_sha256": "7e197b03e9016ece068be390b3194c84bee838ae063ed94fba6d59f4a8f612da",
+    "spec_file_sha256": "f22902255d6a271ad9832cdd2db037fde6dfb66e17b78c6bfbcaf18e53c39586"
+  },
+  "guard_semantics_untouched": {
+    "ROLE_BASH_DENY_PATTERNS": "server/src/common/constants/agent.constants.ts:264",
+    "value": "[] as const",
+    "unchanged": true,
+    "proof": "git diff --name-only -- server/src/common/constants/agent.constants.ts -> empty"
+  },
+  "discriminating_observable": {
+    "description": "Before fix the global ValidationPipe whitelist strips config.bashDeny; stored config has NO bashDeny key. After fix it does. hasOwnProperty(bashDeny) is the discriminator.",
+    "before_fix": "storedConfig has no bashDeny key (hasOwnProperty === false); bashDeny=[123] resolves instead of 400",
+    "after_fix": "storedConfig.bashDeny === ['rm -rf /']; non-string element -> 400"
+  },
+  "red_first": {
+    "command": "cd server && npx jest --runInBand src/execution-policies/dto/policy-config.dto.spec.ts",
+    "exit_code": 1,
+    "summary": "Tests: 2 failed, 1 passed, 3 total",
+    "raw_output": "FAIL src/execution-policies/dto/policy-config.dto.spec.ts\n  PolicyConfigDto.bashDeny 往返（全局 whitelist pipe）\n    ✕ PATCH config.bashDeny=['rm -rf /'] → 落库并经 GET 回读存活 (3 ms)\n    ✕ PATCH config.bashDeny=[123]（非字符串元素）→ 400 拒绝且不落库 (1 ms)\n    ✓ PATCH 不含 bashDeny → 仍可保存（字段可选，不强制注入）\n\n  ● PolicyConfigDto.bashDeny 往返（全局 whitelist pipe） › PATCH config.bashDeny=['rm -rf /'] → 落库并经 GET 回读存活\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: true\n    Received: false\n\n      118 |     // 落库对象必须真实携带键（不是 undefined），且数组原样保留。\n      119 |     const storedConfig = prisma.rows[0].config as Record<string, unknown>;\n    > 120 |     expect(Object.prototype.hasOwnProperty.call(storedConfig, 'bashDeny')).toBe(\n          |                                                                            ^\n      121 |       true,\n      122 |     );\n      123 |     expect(storedConfig.bashDeny).toEqual(['rm -rf /']);\n\n      at Object.<anonymous> (execution-policies/dto/policy-config.dto.spec.ts:120:76)\n\n  ● PolicyConfigDto.bashDeny 往返（全局 whitelist pipe） › PATCH config.bashDeny=[123]（非字符串元素）→ 400 拒绝且不落库\n\n    expect(received).rejects.toBeInstanceOf()\n\n    Received promise resolved instead of rejected\n    Resolved to value: {\"config\": {\"correction\": {\"scopeSummary\": \"scope\"}, \"permission\": {\"edit\": {\"*\": \"deny\"}, \"task\": \"deny\"}}, \"createdAt\": 2026-09-01T00:00:00.000Z, \"description\": null, \"id\": \"ep_product\", \"name\": \"产品经理\", \"type\": \"template\", \"updatedAt\": 2026-09-01T00:00:00.000Z}\n\n      147 |     const before = prisma.rows[0].config;\n      148 |\n    > 149 |     await expect(\n          |           ^\n      150 |       patch(controller, 'ep_product', {\n      151 |         config: {\n      152 |           permission: { edit: { '*': 'deny' }, task: 'deny' },\n\n      at expect (../node_modules/expect/build/index.js:113:15)\n      at Object.<anonymous> (execution-policies/dto/policy-config.dto.spec.ts:149:11)\n\nTest Suites: 1 failed, 1 total\nTests:       2 failed, 1 passed, 3 total\nSnapshots:   0 total\nTime:        2.726 s\nRan all test suites matching /src\\/execution-policies\\/dto\\/policy-config.dto.spec.ts/i.\n"
+  },
+  "mutation_check": {
+    "method": "Temporarily removed the entire bashDeny property block from PolicyConfigDto; re-ran the same spec; restored from /tmp byte-identically.",
+    "command": "cd server && npx jest --runInBand src/execution-policies/dto/policy-config.dto.spec.ts",
+    "exit_code": 1,
+    "failing_tests": [
+      "PATCH config.bashDeny=['rm -rf /'] -> 落库并经 GET 回读存活",
+      "PATCH config.bashDeny=[123]（非字符串元素）-> 400 拒绝且不落库"
+    ],
+    "summary": "Tests: 2 failed, 1 passed, 3 total — exactly the bashDeny tests fail, proving the assertions are real.",
+    "restore": {
+      "backup": "/tmp/policy-config.dto.ts.final.bak",
+      "sha_before_mutation": "7e197b03e9016ece068be390b3194c84bee838ae063ed94fba6d59f4a8f612da",
+      "sha_after_restore": "7e197b03e9016ece068be390b3194c84bee838ae063ed94fba6d59f4a8f612da",
+      "byte_identical": true,
+      "command": "cp /tmp/policy-config.dto.ts.final.bak src/execution-policies/dto/policy-config.dto.ts && shasum -a 256 (both match) && diff -q"
+    },
+    "raw_output": "FAIL src/execution-policies/dto/policy-config.dto.spec.ts\n  PolicyConfigDto.bashDeny 往返（全局 whitelist pipe）\n    ✕ PATCH config.bashDeny=['rm -rf /'] → 落库并经 GET 回读存活 (4 ms)\n    ✕ PATCH config.bashDeny=[123]（非字符串元素）→ 400 拒绝且不落库 (1 ms)\n    ✓ PATCH 不含 bashDeny → 仍可保存（字段可选，不强制注入） (1 ms)\n\n  ● PolicyConfigDto.bashDeny 往返（全局 whitelist pipe） › PATCH config.bashDeny=['rm -rf /'] → 落库并经 GET 回读存活\n\n    expect(received).toBe(expected) // Object.is equality\n\n    Expected: true\n    Received: false\n\n      118 |     // 落库对象必须真实携带键（不是 undefined），且数组原样保留。\n      119 |     const storedConfig = prisma.rows[0].config as Record<string, unknown>;\n    > 120 |     expect(Object.prototype.hasOwnProperty.call(storedConfig, 'bashDeny')).toBe(\n          |                                                                            ^\n      121 |       true,\n      122 |     );\n      123 |     expect(storedConfig.bashDeny).toEqual(['rm -rf /']);\n\n      at Object.<anonymous> (execution-policies/dto/policy-config.dto.spec.ts:120:76)\n\n  ● PolicyConfigDto.bashDeny 往返（全局 whitelist pipe） › PATCH config.bashDeny=[123]（非字符串元素）→ 400 拒绝且不落库\n\n    expect(received).rejects.toBeInstanceOf()\n\n    Received promise resolved instead of rejected\n    Resolved to value: {\"config\": {\"correction\": {\"scopeSummary\": \"scope\"}, \"permission\": {\"edit\": {\"*\": \"deny\"}, \"task\": \"deny\"}}, \"createdAt\": 2026-09-01T00:00:00.000Z, \"description\": null, \"id\": \"ep_product\", \"name\": \"产品经理\", \"type\": \"template\", \"updatedAt\": 2026-09-01T00:00:00.000Z}\n\n      147 |     const before = prisma.rows[0].config;\n      148 |\n    > 149 |     await expect(\n          |           ^\n      150 |       patch(controller, 'ep_product', {\n      151 |         config: {\n      152 |           permission: { edit: { '*': 'deny' }, task: 'deny' },\n\n      at expect (../node_modules/expect/build/index.js:113:15)\n      at Object.<anonymous> (execution-policies/dto/policy-config.dto.spec.ts:149:11)\n\nTest Suites: 1 failed, 1 total\nTests:       2 failed, 1 passed, 3 total\nSnapshots:   0 total\nTime:        2.494 s\nRan all test suites matching /src\\/execution-policies\\/dto\\/policy-config.dto.spec.ts/i.\n"
+  },
+  "green": {
+    "tsc": "cd server && npx tsc -p tsconfig.json --noEmit -> exit 0",
+    "new_spec": "PASS src/execution-policies/dto/policy-config.dto.spec.ts | Test Suites: 1 passed | Tests: 3 passed, 3 total",
+    "execution_policies_suite": "Test Suites: 11 passed, 11 total | Tests: 171 passed, 171 total (was 10/168 at todo-1 baseline; +1 suite / +3 tests)",
+    "raw_output": "PASS src/execution-policies/dto/policy-config.dto.spec.ts\n  PolicyConfigDto.bashDeny 往返（全局 whitelist pipe）\n    ✓ PATCH config.bashDeny=['rm -rf /'] → 落库并经 GET 回读存活 (4 ms)\n    ✓ PATCH config.bashDeny=[123]（非字符串元素）→ 400 拒绝且不落库 (1 ms)\n    ✓ PATCH 不含 bashDeny → 仍可保存（字段可选，不强制注入） (1 ms)\n\nTest Suites: 1 passed, 1 total\nTests:       3 passed, 3 total\nSnapshots:   0 total\nTime:        2.137 s\nRan all test suites matching /src\\/execution-policies\\/dto\\/policy-config.dto.spec.ts/i.\n"
+  },
+  "frozen_baseline": {
+    "file": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json",
+    "sha256": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "note": "Not re-run here; policy-canonical / agent-policies.matrix / agent-policies-db-builtin specs stayed green in the module suite run."
+  },
+  "changed_files": [
+    "server/src/execution-policies/dto/policy-config.dto.ts",
+    "server/src/execution-policies/dto/policy-config.dto.spec.ts"
+  ]
+}
