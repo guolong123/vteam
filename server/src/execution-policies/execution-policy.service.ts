@@ -33,7 +33,7 @@ import { UpdateExecutionPolicyDto } from './dto/update-execution-policy.dto';
 
 /**
  * resolveByAgent 返回（Todo 11/12 契约 + agent 详情双层展示）：
- * - `agentName`：opencode agent 名（`vteam-<role>`，无 role 回退 `vteam-plan`）；
+ * - `agentName`：opencode agent 名（`vteam-<agentKey>`，缺 `agentKey` 回退 `vteam-plan`）；
  * - `permission`：config 嵌套 `permission`（层① opencode 原生权限）；
  * - `tools`：层② guard allowlist（`config.tools` 合法项胜出，否则按 `agentName` 回退
  *   `ROLE_BOUNDARIES.toolAllows` 常量，与 `/agent-policies` 同源；未知角色 → `{}`）；
@@ -46,6 +46,20 @@ import { UpdateExecutionPolicyDto } from './dto/update-execution-policy.dto';
  */
 /** 层② guard 单个工具三态（可编辑矩阵：allow/ask/deny；内置 allowlist 仅用前两者）。 */
 export type AgentToolState = 'allow' | 'ask' | 'deny';
+
+/**
+ * `resolveByAgent`/`resolveManyByAgents` 的 agent 输入：解析只读 `policyId`（绑定唯一来源）
+ * 与 `agentKey`（opencode agent 名 `vteam-<agentKey>` + 常量回退命中键）。
+ *
+ * `role` 仅为兼容尚未迁移的并行调用点而保留，本服务不读取——`ep_<role>` 字符串派生与
+ * `vteam-<role>` 名称回退已移除（agent-role-decommission todo 3）。
+ */
+export interface AgentPolicyInput {
+  policyId?: string | null;
+  agentKey?: string | null;
+  /** 兼容字段：不参与解析。 */
+  role?: string | null;
+}
 
 export interface ResolvedExecutionPolicy {
   policyId: string;
@@ -487,7 +501,9 @@ export function resolveConstantPolicySource(
  *   `type='template'` 为 seed 维护的平台内置角色策略——仅 POST/DELETE → 403
  *   （禁止伪造内置行、禁止删除使 dispatch 丢失角色边界）；PATCH 允许直接编辑
  *   内置策略的 config/name/description（vteam-role-behavior-abstraction Todo 8）；
- * - `resolveByAgent`：按 `policyId`（优先）或 `role`（`ep_<role>`）解析策略，
+ * - `resolveByAgent`：按 `policyId` 解析策略（`ep_<role>` 字符串派生已移除——
+ *   agent-role-decommission todo 3：绑定唯一来源为 `Agent.policyId`，由迁移回填）；
+ *   `policyId` 缺失的内置 agent 按 `agentKey` 回退常量派生（见下），
  *   供 ChatModule dispatcher 注入【职责边界】（Todo 4 已预留 boundarySection）与
  *   `/agent-policies`（Todo 12）消费；未绑定/策略缺失/配置残缺 → null（调用方回退现状）。
  *
@@ -641,14 +657,14 @@ export class ExecutionPolicyService implements OnModuleInit {
 
   /**
    * 按 agent 解析其绑定策略（dispatcher boundary 注入 + Todo 12 `/agent-policies` 共用）。
-   * 统一回退策略（vteam-role-behavior-abstraction Todo 5）：DB 行胜出；行缺失时内置名
-   * 回退 `ROLE_BOUNDARIES` 常量派生（非内置名 → null），与 `buildAgentPolicies()` 同源。
+   * 统一回退策略（vteam-role-behavior-abstraction Todo 5；agent-role-decommission todo 3
+   * 去掉 `role` 输入）：绑定 id 取 `policyId`（缺省时见 `policyKeyOf` 的 agentKey 键路径）；
+   * DB 行缺失时按 `agentKey` 回退 `ROLE_BOUNDARIES` 常量派生（非内置名 → null），
+   * 与 `buildAgentPolicies()` 同源。
    */
-  async resolveByAgent(agent: {
-    policyId?: string | null;
-    role?: string | null;
-    agentKey?: string | null;
-  }): Promise<ResolvedExecutionPolicy | null> {
+  async resolveByAgent(
+    agent: AgentPolicyInput,
+  ): Promise<ResolvedExecutionPolicy | null> {
     const policyId = this.policyKeyOf(agent);
     const policy = policyId
       ? await this.prisma.executionPolicy.findUnique({
@@ -665,11 +681,7 @@ export class ExecutionPolicyService implements OnModuleInit {
    * 返回与入参同序同长的 `(ResolvedExecutionPolicy | null)[]`。
    */
   async resolveManyByAgents(
-    agents: {
-      policyId?: string | null;
-      role?: string | null;
-      agentKey?: string | null;
-    }[],
+    agents: AgentPolicyInput[],
   ): Promise<(ResolvedExecutionPolicy | null)[]> {
     const keys = agents.map((a) => this.policyKeyOf(a));
     const ids = [...new Set(keys.filter((k): k is string => k !== null))];
@@ -686,18 +698,14 @@ export class ExecutionPolicyService implements OnModuleInit {
   }
 
   /**
-   * 统一解析（vteam-role-behavior-abstraction Todo 5）：
+   * 统一解析（vteam-role-behavior-abstraction Todo 5；agent-role-decommission todo 3 去 role）：
    * - DB 行存在 → 沿用既有解析（`config.permission`/`correction` + `guardForAgent`）；
-   * - DB 行缺失且 `role` 命中内置角色 → 回退 `resolveBuiltinPolicy` 常量派生（非 null、
-   *   与 `/agents` 视图同源）；
-   * - 其余（自定义 agent 行缺失）→ null。
+   * - DB 行缺失且 `agentKey` 命中内置角色 → 回退 `resolveBuiltinPolicy` 常量派生（非 null、
+   *   与 `/agents` 视图同源）；部分迁移库（`policyId` 为 null、`agentKey` 已回填）由此路径解析；
+   * - 其余（自定义 agent 行缺失 / 无 `agentKey`）→ null。
    */
   private resolveAgentWithFallback(
-    agent: {
-      policyId?: string | null;
-      role?: string | null;
-      agentKey?: string | null;
-    },
+    agent: AgentPolicyInput,
     policy: {
       id: string;
       name: string;
@@ -707,7 +715,7 @@ export class ExecutionPolicyService implements OnModuleInit {
   ): ResolvedExecutionPolicy | null {
     const agentName = this.agentNameOf(agent);
     if (!policy) {
-      const constantName = this.constantRoleNameOf(agent.role);
+      const constantName = this.constantRoleNameOf(agent.agentKey);
       if (!constantName) {
         return null;
       }
@@ -750,12 +758,17 @@ export class ExecutionPolicyService implements OnModuleInit {
     };
   }
 
-  /** `role` → `vteam-<role>`（命中 `ROLE_BOUNDARIES` 才返回，否则 null）。 */
-  private constantRoleNameOf(role?: string | null): VteamAgentName | null {
-    if (!role) {
+  /**
+   * `agentKey` → `vteam-<agentKey>`（命中 `ROLE_BOUNDARIES` 才返回，否则 null）。
+   *
+   * agent-role-decommission todo 3：键从 `role` 改为 `agentKey`。模板行 `agentKey = role`
+   * （schema 注释声明 + 迁移 20260914000000 回填），故内置 7 名的常量回退逐字节不变。
+   */
+  private constantRoleNameOf(agentKey?: string | null): VteamAgentName | null {
+    if (!agentKey) {
       return null;
     }
-    const name = `vteam-${role}`;
+    const name = `vteam-${agentKey}`;
     return boundaryOf(name) ? (name as VteamAgentName) : null;
   }
 
@@ -943,23 +956,27 @@ export class ExecutionPolicyService implements OnModuleInit {
     }
   }
 
-  private policyKeyOf(agent: {
-    policyId?: string | null;
-    role?: string | null;
-    agentKey?: string | null;
-  }): string | null {
-    return agent.policyId ?? (agent.role ? `ep_${agent.role}` : null);
+  /**
+   * 绑定策略 id：`policyId` 优先；缺省时对**注册名（agentKey）命中的内置角色**取约定 id
+   * `ep_<agentKey>`（`builtinPolicyIdOf`）。
+   *
+   * 决策记录（agent-role-decommission todo 3）：`role` 输入与 `ep_<role>` 字符串派生已**移除**；
+   * 保留的这条不是 role 派生，而是 **agentKey 派生的 policyId-keyed 路径**——部分迁移库中
+   * 存量内置 agent 的 `policy_id` 仍为 NULL（todo 7 才回填），若此处直接返回 null，解析会跳过
+   * 已存在（且可能被用户编辑过）的内置策略行、静默退回出厂常量，改变现有 agent 的实际权限。
+   * 该路径与旧 `ep_<role>` 对模板行等价（模板 `agentKey = role`，迁移 20260914000000 已回填），
+   * 但对无 `agentKey` 的行不再臆造 id；`policy_id` 回填完成后它自然失效，可由 todo 8 删除。
+   */
+  private policyKeyOf(agent: AgentPolicyInput): string | null {
+    if (agent.policyId) {
+      return agent.policyId;
+    }
+    const constantName = this.constantRoleNameOf(agent.agentKey);
+    return constantName ? builtinPolicyIdOf(constantName) : null;
   }
 
-  private agentNameOf(agent: {
-    role?: string | null;
-    agentKey?: string | null;
-  }): string {
-    return agent.agentKey
-      ? `vteam-${agent.agentKey}`
-      : agent.role
-        ? `vteam-${agent.role}`
-        : 'vteam-plan';
+  private agentNameOf(agent: AgentPolicyInput): string {
+    return agent.agentKey ? `vteam-${agent.agentKey}` : 'vteam-plan';
   }
 
   /**

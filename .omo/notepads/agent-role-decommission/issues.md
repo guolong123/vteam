@@ -44,3 +44,24 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `resolvePlanAgentId` logs a warn and skips the gate; existing assertions expecting
   `requestRevision('is_7','a_plan')` still pass because the fixture resolves
   `a_plan` by duty.
+
+## todo 3 — findings / gotchas
+
+- **The plan's `:938`/`:946`/`:746` were again stale** (todo 2 shifted lines): actual
+  at edit time `policyKeyOf:946`, `agentNameOf:954`, `constantRoleNameOf:754`.
+  Post-edit: `:970` / `:978` / `:767`. Grep, never trust.
+- **`create-agent.dto.ts` already dropped `role?:`** (sibling todo 4, unstaged) so the
+  shared tree does not currently compile end to end; my files do (clean-worktree tsc 0).
+  Anyone running the full suite on the shared tree before todos 4/5 land will see 4
+  suite-compile failures that are NOT from this todo.
+- **`agent-policies.native-edit.spec.ts` has 2 pre-existing prettier errors** (lines
+  58/93) and `execution-policy.service.ts:169` one more; confirmed pre-existing by
+  stashing my diff. Left untouched (todo-8 territory), only my own new error was fixed.
+
+- **Manifest staleness shipped once (caught in final QA, fixed by amend).** The first
+  regenerated manifest (176 keys) ran before a last doc-comment edit; the committed tree
+  then had `UNMAPPED: 9` at its own sha. The bug was hidden because the regeneration run
+  piped through `tail`, swallowing the checker's rc. Regenerated against the committed
+  source (177 keys, rc=0 in a clean worktree at the sha) and the commit was amended. Do
+  not trust a manifest unless `check-agent-role-consumers.sh` exits 0 on a clean checkout
+  of the exact commit.

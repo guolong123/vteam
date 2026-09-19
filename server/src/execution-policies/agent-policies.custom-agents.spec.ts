@@ -280,7 +280,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
         },
       });
       const resolved = await service.resolveByAgent({
-        role: 'product',
+        agentKey: 'product',
         policyId: 'ep_product',
       });
       expect(ROLE_SERVER_GATED_TOOLS).toEqual([]);
@@ -306,7 +306,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
         },
       });
       const resolved = await service.resolveByAgent({
-        role: 'product',
+        agentKey: 'product',
         policyId: 'ep_product',
       });
       expect(resolved?.agentName).toBe('vteam-product');
@@ -339,7 +339,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
           },
         });
         const resolved = await service.resolveByAgent({
-          role: 'product',
+          agentKey: 'product',
           policyId: 'ep_product',
         });
         expect(resolved?.tools).toEqual(
@@ -363,7 +363,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
             },
           }),
         },
-      }).resolveByAgent({ role: 'product', policyId: 'ep_product' });
+      }).resolveByAgent({ agentKey: 'product', policyId: 'ep_product' });
       expect(withPatterns?.bashDeny).toEqual(['rm -rf /']);
 
       const fallback = await serviceWith({
@@ -378,7 +378,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
             },
           }),
         },
-      }).resolveByAgent({ role: 'product', policyId: 'ep_product' });
+      }).resolveByAgent({ agentKey: 'product', policyId: 'ep_product' });
       expect(fallback?.bashDeny).toEqual([...ROLE_BASH_DENY_PATTERNS]);
     });
   });

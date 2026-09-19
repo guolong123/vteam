@@ -70,3 +70,46 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **D4** (`plan-docs.service.ts`): `resolvePlanAgentId()` queries Agent rows
   (`{id,agentKey,role}`) and returns the first plan-duty agent's `id`; unresolvable →
   warn + skip the gate consult (fail-open, no forged `'a_plan'` identity).
+
+## todo 3 — execution-policies off `role` (policyId/agentKey)
+
+- **`role` → `agentKey` is byte-safe for the constant fallback because template rows
+  have `agentKey = role`** (schema comment + migration `20260914000000_add_agent_key`
+  backfills `agent_key = role` for `type='template'`). So `constantRoleNameOf(agentKey)`
+  produces the same `vteam-<name>` for all 7 built-ins; the emitted payload is untouched.
+- **Removing `ep_<role>` outright would have silently changed capabilities, not just
+  the code path.** On a partially-migrated DB (`policy_id` NULL — backfill is todo 7),
+  returning null from `policyKeyOf` makes `resolveByAgent` skip an existing built-in
+  row (possibly user-edited) and drop to factory constants. Kept a **policyId-keyed path
+  derived from `agentKey` only** (`ep_<agentKey>` via `builtinPolicyIdOf`), never from
+  `role`; it dies naturally after todo 7 and todo 8 deletes it.
+- **Input type is the seam.** `AgentPolicyInput` keeps an optional `role?:` key purely
+  so sibling callers (worker-dispatcher:3712, platform-mcp:3744, agents.service:620/647)
+  still compile without cross-module edits; the service never reads it, and two specs
+  prove that (only-`role` input → null; `agentNameOf` falls to `vteam-plan`).
+- **Mutation checks are cheap and decisive here**: reverting the fallback to `role`
+  killed 5 tests; deleting the agentKey-derived `policyKeyOf` branch killed exactly the
+  partially-migrated-DB case. Both mutations were applied with `perl -0pi` on a backup
+  copy and reverted.
+- **Sibling todos edit the same working tree.** Todo 4's in-flight
+  `create-agent.dto.ts`/`agents.service.ts` edits broke 4 *unrelated* suites at the time
+  of my verification. Solution: a throwaway `git worktree add <tmp> HEAD`, copy ONLY the
+  todo's files + symlink `server/node_modules`, run tsc/jest there — 140/3224 green —
+  that is the honest signal for the commit. Never `git add` shared paths.
+- **Manifest regeneration again** (todo 2 precedent): pure line drift showed
+  `UNMAPPED: 10` after the edit; regenerated from the checker's own grep pipeline,
+  178 → 176 keys, UNMAPPED 0. The net shrink is the migration-progress signal.
+- **CORRECTION (same todo, final numbers):** the committed manifest is **178 → 177**
+  (exec-policy keys 12 → 11). The first regeneration produced 176 but ran *before* a last
+  doc-comment edit, so it was stale by 9 keys in the committed tree; regenerating against
+  the committed source gives 177 and UNMAPPED 0. **Lesson: regenerate the manifest LAST,
+  from the frozen source, and verify the checker in a clean worktree at the commit sha —
+  a `| tail` that swallows the exit code will hide a red checker.**
+
+## todo 3 — spec re-point vs. assertion weakening
+
+- Existing resolution specs passed `role:` because that was the only way to name a
+  built-in before `agentKey` was threaded. Re-pointing those *inputs* to `agentKey:`
+  changes no assertion and no expected value — it is the migration, not a weakening.
+  Byte-identity specs (`matrix`/`custom-agents`/`db-builtin`) were only extended:
+  +2 pins (deep-equal to the frozen baseline, and the baseline file's own sha256).

@@ -155,7 +155,7 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
   it('resolveByAgent(): 内置名的 guard payload 反映 DB tools/permission（Todo 4 短路已移除）', async () => {
     const { service } = serviceWith(mixedRows());
     const resolved = await service.resolveByAgent({
-      role: 'product',
+      agentKey: 'product',
       policyId: 'ep_product',
     });
 
@@ -170,8 +170,8 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
   it('resolveManyByAgents(): 与单条解析同源，内置名的 guard payload 同样反映 DB 值', async () => {
     const { service } = serviceWith(mixedRows());
     const [product, plan] = await service.resolveManyByAgents([
-      { policyId: 'ep_product', role: 'product' },
-      { policyId: 'ep_plan', role: 'plan' },
+      { policyId: 'ep_product', agentKey: 'product' },
+      { policyId: 'ep_plan', agentKey: 'plan' },
     ]);
 
     expect(product?.tools).toEqual(DB_TOOLS_CANONICAL);

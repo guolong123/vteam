@@ -160,7 +160,7 @@ describe('agent-policies native edit (Todo 8a proof)', () => {
   it('resolveByAgent(): permission.edit 反映 DB 值（非常量回退）', async () => {
     const { service } = serviceWith(mixedRows());
     const resolved = await service.resolveByAgent({
-      role: 'product',
+      agentKey: 'product',
       policyId: 'ep_product',
     });
 
@@ -180,7 +180,7 @@ describe('agent-policies native edit (Todo 8a proof)', () => {
     );
     expect(canon(policies)).toBe(canon(baseline));
 
-    const resolved = await service.resolveByAgent({ role: 'product' });
+    const resolved = await service.resolveByAgent({ agentKey: 'product' });
     expect(resolved?.permission.edit).toEqual(FACTORY_EDIT);
     expect(canon(resolved?.permission.edit)).not.toBe(canon(DB_EDIT_CANONICAL));
   });

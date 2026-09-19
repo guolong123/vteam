@@ -1,0 +1,150 @@
+{
+  "todo": 3,
+  "title": "[server] Migrate execution-policies consumers off role",
+  "date": "2026-09-19",
+  "commit": "refactor(policies): resolve policy without Agent.role",
+  "changedFiles": [
+    "server/src/execution-policies/execution-policy.service.ts",
+    "server/src/execution-policies/agent-policy-fallback.spec.ts",
+    "server/src/execution-policies/agent-policies.matrix.spec.ts",
+    "server/src/execution-policies/agent-policies-db-driven.spec.ts",
+    "server/src/execution-policies/agent-policies.custom-agents.spec.ts",
+    "server/src/execution-policies/agent-policies.native-edit.spec.ts",
+    "scripts/agent-role-consumer-manifest.txt"
+  ],
+  "before": {
+    "policyKeyOf": {
+      "line": 946,
+      "signature": "private policyKeyOf(agent: { policyId?: string | null; role?: string | null; agentKey?: string | null }): string | null",
+      "body": "return agent.policyId ?? (agent.role ? `ep_${agent.role}` : null);",
+      "reads": "agent.policyId, agent.role"
+    },
+    "agentNameOf": {
+      "line": 954,
+      "signature": "private agentNameOf(agent: { role?: string | null; agentKey?: string | null }): string",
+      "body": "return agent.agentKey ? `vteam-${agent.agentKey}` : agent.role ? `vteam-${agent.role}` : 'vteam-plan';",
+      "reads": "agent.agentKey, agent.role"
+    },
+    "constantRoleNameOf": {
+      "line": 754,
+      "signature": "private constantRoleNameOf(role?: string | null): VteamAgentName | null",
+      "body": "if (!role) return null; const name = `vteam-${role}`; return boundaryOf(name) ? (name as VteamAgentName) : null;",
+      "reads": "role"
+    }
+  },
+  "after": {
+    "policyKeyOf": {
+      "line": 970,
+      "signature": "private policyKeyOf(agent: AgentPolicyInput): string | null",
+      "body": "if (agent.policyId) return agent.policyId; const constantName = this.constantRoleNameOf(agent.agentKey); return constantName ? builtinPolicyIdOf(constantName) : null;",
+      "reads": "agent.policyId, agent.agentKey (transitively); NEVER agent.role",
+      "note": "The ep_<role> string derivation is REMOVED. Retained is an agentKey-derived policyId-keyed path (ep_<agentKey> via builtinPolicyIdOf) so a partially-migrated DB (policy_id NULL, agent_key backfilled) still hits an existing built-in policy row instead of silently reverting to constants."
+    },
+    "agentNameOf": {
+      "line": 978,
+      "signature": "private agentNameOf(agent: AgentPolicyInput): string",
+      "body": "return agent.agentKey ? `vteam-${agent.agentKey}` : 'vteam-plan';",
+      "reads": "agent.agentKey only; NEVER agent.role",
+      "note": "Rule 4 narrowing from todo 1: an agent with no agentKey has no vteam-<role> derived name anymore."
+    },
+    "constantRoleNameOf": {
+      "line": 767,
+      "signature": "private constantRoleNameOf(agentKey?: string | null): VteamAgentName | null",
+      "body": "if (!agentKey) return null; const name = `vteam-${agentKey}`; return boundaryOf(name) ? (name as VteamAgentName) : null;",
+      "reads": "agentKey only",
+      "note": "Re-keyed from role to agentKey. Template rows have agentKey = role (schema comment + migration 20260914000000 backfill), so the 7 built-ins' constant fallback is byte-identical."
+    },
+    "fallbackCallSite": {
+      "line": 718,
+      "before": "const constantName = this.constantRoleNameOf(agent.role);",
+      "after": "const constantName = this.constantRoleNameOf(agent.agentKey);"
+    },
+    "inputType": {
+      "name": "AgentPolicyInput",
+      "line": 57,
+      "shape": "{ policyId?: string | null; agentKey?: string | null; role?: string | null }",
+      "note": "role is a compile-compat key for sibling callers owned by todos 4/5/8 (worker-dispatcher / platform-mcp / agents.service). The service NEVER reads it; every spec added in this todo proves the key is ignored."
+    }
+  },
+  "fallback": {
+    "what": "Two distinct fallbacks remain, both keyed by agentKey / policyId — never by role: (1) constant fallback (resolveConstantPolicySource path): when the resolved policy row is missing, an agent whose agentKey maps to a built-in name (vteam-<agentKey> in ROLE_BOUNDARIES) resolves the constant-derived policy (resolveBuiltinPolicy); (2) agentKey-derived policyId path: when policyId is null but agentKey is a built-in name, policyKeyOf resolves the conventional id ep_<agentKey> and reads the existing DB row (which may carry user edits).",
+    "why": "The migration backfilling policyId is todo 7; until it lands, existing installs have built-in agents with policy_id NULL. If policyKeyOf returned null unconditionally, resolveByAgent would skip existing (possibly user-edited) built-in policy rows and silently revert every such agent to factory constants — a capability change, not a refactor. The retained path is NOT the old ep_<role> derivation: it is derived from agentKey, so a row without agentKey no longer fabricates a policy id, and role is never consulted.",
+    "decision": "KEEP a policyId-keyed path, derived from agentKey only. The ep_<role> string derivation is removed. Natural removal point: after todo 7 backfills policy_id, the fallback branch becomes dead and can be deleted by todo 8.",
+    "degradationWhenNeither": "agentKey absent and policyId null -> policyKeyOf returns null -> constantRoleNameOf(undefined) returns null -> resolveAgentWithFallback returns null (no throw), identical to today's behaviour for an unknown/no-role agent."
+  },
+  "byteIdentity": {
+    "baseline": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json",
+    "baselineSha": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "shaNow": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "match": true,
+    "how": "buildAgentPolicies() untouched; the emitted 7 built-ins deep-equal the frozen baseline in jest (toEqual + JSON.stringify) and the baseline file's own sha256 is pinned inside the spec.",
+    "specsAdded": [
+      "agent-policies.matrix.spec.ts: '7 内置发射结果 deep-equal 冻结基线（before-agent-policies.json）'",
+      "agent-policies.matrix.spec.ts: '冻结基线文件 sha256 未变（3b8c5d4b…：字节身份闸门自身不可动）'"
+    ],
+    "existingSpecs": "agent-policies.matrix.spec.ts / agent-policies.custom-agents.spec.ts / agent-policies-db-builtin.spec.ts byte-identity specs were extended, never regenerated or weakened; the 1 snapshot still passes unchanged."
+  },
+  "tests": [
+    {
+      "file": "agent-policy-fallback.spec.ts",
+      "describe": "agent-role-decommission todo 3：解析不再读 role",
+      "cases": [
+        { "name": "policyId 已绑定且输入无 role 键（列已删/缺席）→ DB 行解析成功", "result": "pass" },
+        { "name": "policyId 为 null + 注册名（agentKey 命中内置）→ 常量回退解析（行缺失，无 null 崩溃）", "result": "pass" },
+        { "name": "部分迁移库：policyId 为 null + 注册名 + 已存在（用户编辑过）的内置行 → DB 行胜出（行为不变）", "result": "pass" },
+        { "name": "role 键被忽略：仅 role（无 agentKey/policyId）不产生候选 → null（旧实现会回退 vteam-<role>）", "result": "pass" },
+        { "name": "role 键被忽略：agentKey 缺席时解析名不取 vteam-<role>（规则 4 收窄）", "result": "pass" }
+      ]
+    },
+    {
+      "file": "agent-policies.matrix.spec.ts",
+      "describe": "buildAgentPolicies()（service 直接调用，无 HTTP）",
+      "cases": [
+        { "name": "7 内置发射结果 deep-equal 冻结基线（before-agent-policies.json）", "result": "pass" },
+        { "name": "冻结基线文件 sha256 未变（3b8c5d4b…：字节身份闸门自身不可动）", "result": "pass" }
+      ]
+    },
+    {
+      "file": "agent-policy-fallback.spec.ts + agent-policies-db-driven/custom-agents/native-edit.spec.ts",
+      "note": "Existing resolution specs re-pointed from role: to agentKey: inputs where they exercise resolveByAgent/resolveManyByAgents (their subject is policy resolution, not the role column). No assertion was weakened; expected values unchanged.",
+      "result": "pass"
+    }
+  ],
+  "mutationChecks": [
+    {
+      "mutation": "constant fallback reads agent.role again (constantRoleNameOf(agent.role))",
+      "killed": true,
+      "evidence": "5 tests fail, incl. 'policyId 为 null + 注册名 … 常量回退解析' and 'role 键被忽略：仅 role … → null' (fallback spec: 5 failed, 4 passed)"
+    },
+    {
+      "mutation": "drop the agentKey-derived policyId path (policyKeyOf returns null when policyId is null)",
+      "killed": true,
+      "evidence": "1 test fails: '部分迁移库：policyId 为 null + 注册名 + 已存在（用户编辑过）的内置行 → DB 行胜出（行为不变）' — proves the retained path is load-bearing"
+    }
+  ],
+  "checker": {
+    "command": "bash scripts/check-agent-role-consumers.sh",
+    "before": { "observed": 178, "unmapped": 0, "note": "after todo 2" },
+    "after": { "observed": 177, "unmapped": 0 },
+    "delta": -1,
+    "deltaDetail": "Only the execution-policy.service.ts key set changed: 12 keys -> 11 keys (line drift from the edits, the shrunken agentNameOf body, and one key collapsing because the resolveByAgent JSDoc moved past the helper-pattern match). No other file's keys changed. Net 178 -> 177: the shrink is the migration-progress signal (todo 2 precedent). Regenerated with the checker's exact grep pipeline against the COMMITTED source; NOT hand-edited.",
+    "verification": "A clean checkout of this commit (git worktree at the commit sha) runs `bash scripts/check-agent-role-consumers.sh` -> OBSERVED 177, UNMAPPED 0, rc=0. An earlier staged manifest was generated before a final doc-comment edit and was stale by 9 keys; it was regenerated and the commit amended (no source change)."
+  },
+  "gates": {
+    "serverTsc": { "command": "cd server && npx tsc -p tsconfig.json --noEmit", "exit": 0, "scope": "verified on a clean worktree at HEAD 277e285 carrying ONLY this todo's files — the shared worktree simultaneously carries sibling todos 4/5 in-flight edits under server/src/agents/**, which are not part of this commit" },
+    "executionPoliciesJest": { "command": "npx jest --runInBand src/execution-policies", "suites": "13 passed, 13 total", "tests": "195 passed, 195 total" },
+    "fullServerSuite": { "command": "npx jest --runInBand", "baseline": "140 suites / 3217 tests", "result": "140 suites / 3224 tests, all pass", "delta": "+7 tests (5 fallback pins + 2 byte-identity/sha pins)", "scope": "clean worktree with only this todo's files" },
+    "workerJest": { "command": "cd worker && npx jest --runInBand", "result": "26 suites / 688 tests, unchanged", "workerFilesTouched": "none" },
+    "frozenSha": { "file": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json", "sha": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87", "unchanged": true },
+    "eslint": { "command": "npx eslint <changed files>", "newErrors": 0, "note": "3 prettier errors in execution-policy.service.ts:169 / agent-policies.native-edit.spec.ts:58,93 were confirmed PRE-EXISTING by stashing this todo's changes; only the matrix spec error introduced by this todo was fixed with --fix" }
+  },
+  "scopeFidelity": {
+    "productionFilesEdited": ["server/src/execution-policies/execution-policy.service.ts"],
+    "workerTouched": false,
+    "payloadShapeChanged": false,
+    "byteIdentitySpecsWeakened": false,
+    "baselineModified": false,
+    "siblingTodosTouched": "none of teams/tasks/chat/platform-mcp/agents/web; the shared worktree's server/src/agents/** edits belong to sibling todo 4 and were deliberately left unstaged",
+    "pushed": false
+  }
+}

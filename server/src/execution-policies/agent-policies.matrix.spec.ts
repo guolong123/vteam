@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   buildEditPermission,
   buildReadPermission,
@@ -8,6 +11,10 @@ import {
   VTEAM_MCP_TOOL_NAMES,
   type VteamAgentName,
 } from '../common/constants/agent.constants';
+import {
+  EVIDENCE_DIR,
+  loadAgentPoliciesBaseline,
+} from './__fixtures__/policy-fixtures';
 import { ExecutionPolicyService } from './execution-policy.service';
 
 /**
@@ -197,6 +204,20 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
 
     beforeAll(async () => {
       policies = await service.buildAgentPolicies();
+    });
+
+    it('7 内置发射结果 deep-equal 冻结基线（before-agent-policies.json）', () => {
+      const baseline = loadAgentPoliciesBaseline();
+      expect(policies).toEqual(baseline);
+      expect(JSON.stringify(policies)).toBe(JSON.stringify(baseline));
+    });
+
+    it('冻结基线文件 sha256 未变（3b8c5d4b…：字节身份闸门自身不可动）', () => {
+      const file = join(EVIDENCE_DIR, 'before-agent-policies.json');
+      const sha = createHash('sha256').update(readFileSync(file)).digest('hex');
+      expect(sha).toBe(
+        '3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87',
+      );
     });
 
     it('返回 7 agents（vteam-plan + 5 角色 + vteam-librarian），guard.enabled === true', () => {
