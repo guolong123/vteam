@@ -46,6 +46,7 @@ import {
   VTEAM_MCP_TOOL_NAMES,
 } from '../common/constants/agent.constants';
 import { BUILTIN_AGENT_ROLES } from '../common/constants/agent-role.constants';
+import { BUILTIN_ROLE_PROMPTS } from '../common/constants/agent-role-prompts.constants';
 import { computeMemoryContentHash } from '../memories/memory.constants';
 
 /** 模板 Agent id → 角色 ExecutionPolicy id（seed ROLE_POLICY_BINDINGS 的绑定产物）。 */
@@ -132,6 +133,60 @@ const templateAgentCalls = () =>
   mockPrisma.agent.upsert.mock.calls.filter((call) =>
     String(call[0].where.id).startsWith('a_'),
   );
+
+/** 模板 Agent id → 其 `create` 分支落库的 rolePrompt（agent_roles.role_prompt）。 */
+const rolePromptById = (): Map<string, string> => {
+  const byRoleId = new Map(
+    mockPrisma.agentRole.upsert.mock.calls.map((call) => [
+      String(call[0].where.id),
+      call[0].create.rolePrompt as string,
+    ]),
+  );
+  const m = new Map<string, string>();
+  for (const [agentId, roleId] of Object.entries(
+    BUILTIN_AGENT_ROLE_ID_BY_AGENT,
+  )) {
+    m.set(agentId, byRoleId.get(roleId) ?? '');
+  }
+  return m;
+};
+
+/** agent id → 内置 AgentRole id（与 seed 的 ar_<role> 一一对应）。 */
+const BUILTIN_AGENT_ROLE_ID_BY_AGENT: Record<string, string> = {
+  a_product: 'ar_product',
+  a_project_manager: 'ar_project_manager',
+  a_architect: 'ar_architect',
+  a_developer: 'ar_developer',
+  a_tester: 'ar_tester',
+  a_plan: 'ar_plan',
+  a_librarian: 'ar_librarian',
+};
+
+/** agent id → 内置角色身份行（rolePrompt 首行，逐字断言「岗位定义」语义）。 */
+const ROLE_IDENTITY_BY_AGENT: Record<string, string> = {
+  a_product: '# 角色：产品经理',
+  a_project_manager: '# 角色：项目经理',
+  a_architect: '# 角色：架构师',
+  a_developer: '# 角色：开发者',
+  a_tester: '# 角色：测试',
+  a_plan: '# 角色：计划员',
+  a_librarian: '# 角色：知识管理员',
+};
+
+/**
+ * 句子级切片（de-dup 判据）：按换行 / 中文句号 / 分号切分，剥掉 markdown 前缀与空白，
+ * 只保留长度 ≥ 8 的片段——短片段（heading 单词、列表符号）不构成「重复句子」。
+ */
+const splitSentences = (text: string): string[] =>
+  text
+    .split(/[\n。；]/)
+    .map((s) =>
+      s
+        .trim()
+        .replace(/^[-#\s]+/, '')
+        .trim(),
+    )
+    .filter((s) => s.length >= 8);
 
 describe('seed（模板 Agent 预置 + 角色策略）', () => {
   beforeEach(() => {
@@ -316,120 +371,116 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     }
   });
 
-  it('模板 prompt 四方向齐全、含越界转交，且不含禁用词/裸 MCP 名', async () => {
+  it('模板 prompt 拆分为「岗位定义 rolePrompt + 工作方式 prompt」：各段落按归属落位，且不含禁用词/裸 MCP 名', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
     expect(templateCalls).toHaveLength(7);
+    const rolePrompts = rolePromptById();
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
       const prompt = call[0].create.prompt as string;
-      for (const section of [
-        '## 职责',
-        '## 权限',
-        '## 工作方式',
-        '## 协同方式',
-      ]) {
-        expect(prompt).toContain(section);
-      }
-      // 越界拒绝与转交（vteam_notify_agent 为真实暴露名）
-      expect(prompt).toContain('转交');
-      expect(prompt).toContain('vteam_notify_agent');
-      // 主 Agent 禁令仅约束旧五角色：计划员 prompt 必须写明只接受主 Agent 派活
+      const rolePrompt = rolePrompts.get(id) as string;
+      // agent prompt：只保留「怎么干活」两段（权限指针 + 工作方式）
+      expect(prompt).toContain('## 权限');
+      expect(prompt).toContain('## 工作方式');
+      // 岗位定义（身份/职责/协同）已上提到 rolePrompt，不再留在 agent prompt
+      expect(prompt).not.toContain('## 职责');
+      expect(prompt).not.toContain('## 协同方式');
+      expect(rolePrompt).toContain(ROLE_IDENTITY_BY_AGENT[id]);
+      expect(rolePrompt).toContain('## 职责');
+      expect(rolePrompt).toContain('## 协同方式');
+      // 越界转交（单一来源 ROLE_BOUNDARIES）随「协同方式」落在 rolePrompt
+      expect(rolePrompt).toContain('转交');
+      // 主 Agent 禁令仅约束旧五角色：计划员 rolePrompt 必须写明只接受主 Agent 派活
       if (id === 'a_plan') {
-        expect(prompt).toContain('主 Agent');
+        expect(rolePrompt).toContain('主 Agent');
       } else {
         expect(prompt).not.toContain('主 Agent');
       }
       expect(prompt).not.toContain('牵头协调者');
       expect(prompt).not.toContain('UI 设计');
-      // 裸 MCP 工具名（不带 vteam_ 前缀）一律禁止
-      for (const bare of BARE_MCP_NAMES) {
-        const barePattern = new RegExp(`(?<!vteam_)\\b${bare}\\b`);
-        expect(prompt).not.toMatch(barePattern);
+      // 裸 MCP 工具名（不带 vteam_ 前缀）一律禁止（两段都查）
+      for (const text of [prompt, rolePrompt]) {
+        for (const bare of BARE_MCP_NAMES) {
+          const barePattern = new RegExp(`(?<!vteam_)\\b${bare}\\b`);
+          expect(text).not.toMatch(barePattern);
+        }
       }
     }
   });
 
-  it('计划员 prompt 四方向内容齐全（身份/职责/边界/协同）', async () => {
+  it('计划员岗位定义（rolePrompt）与工作方式（prompt）齐全（身份/职责/边界/协同）', async () => {
     await main();
+
+    const planRolePrompt = rolePromptById().get('a_plan') as string;
+    // 身份：团队计划专员，群内可见可@，agent 管理可见
+    expect(planRolePrompt).toContain('计划专员');
+    expect(planRolePrompt).toContain('@');
+    // 职责：响应主 Agent @ 派活起草计划（explore-first，可 fan-out task 子会话）
+    expect(planRolePrompt).toContain('派活');
+    expect(planRolePrompt).toContain('subagent_type恒为vteam-plan');
+    // 职责：落盘 .opencode/plans/；群聊回复摘要；按 feedback 修订
+    expect(planRolePrompt).toContain('.opencode/plans/');
+    expect(planRolePrompt).toContain('摘要');
+    expect(planRolePrompt).toContain('feedback');
+    // 边界：只读分析 + 计划目录窄写 + 群聊回复；禁实现/禁执行/禁直接问用户；禁改他文件
+    expect(planRolePrompt).toContain('只读');
+    expect(planRolePrompt).toContain('不执行变更');
+    // 协同：只接受主 Agent 派活；评审视角任务走各 plan-review-<role> skill
+    expect(planRolePrompt).toContain('只接受主 Agent 派活');
 
     const planCall = templateAgentCalls().find(
       (call) => String(call[0].where.id) === 'a_plan',
     );
     expect(planCall).toBeDefined();
     const prompt = planCall![0].create.prompt as string;
-    // 身份：团队计划专员，群内可见可@，agent 管理可见
-    expect(prompt).toContain('计划专员');
-    expect(prompt).toContain('@');
-    // 职责：响应主 Agent @ 派活起草计划（explore-first，可 fan-out task 子会话）
-    expect(prompt).toContain('派活');
-    expect(prompt).toContain('subagent_type恒为vteam-plan');
-    // 职责：落盘 .opencode/plans/；群聊回复摘要；按 feedback 修订
-    expect(prompt).toContain('.opencode/plans/');
-    expect(prompt).toContain('摘要');
-    expect(prompt).toContain('feedback');
-    // 边界：只读分析 + 计划目录窄写 + 群聊回复；禁实现/禁执行/禁直接问用户；禁改他文件
-    expect(prompt).toContain('只读');
-    expect(prompt).toContain('禁改');
-    expect(prompt).toContain('不执行变更');
-    // 协同：只接受主 Agent 派活；评审视角任务走各 plan-review-<role> skill
-    expect(prompt).toContain('只接受主 Agent 派活');
+    // 工作方式：plan-creation skill 与评审视角 skill 加载
     expect(prompt).toContain('plan-review-');
+    expect(prompt).toContain('skill(plan-creation)');
   });
 
-  it('模板 prompt 越界转交去重：统一一句以【职责边界】为准，不再手写全量映射（a_plan 保留主 Agent 转交语义）', async () => {
+  it('模板 rolePrompt 越界转交去重：统一一句以【职责边界】为准，不再手写全量映射（a_plan 保留主 Agent 转交语义）', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
     expect(templateCalls).toHaveLength(7);
+    const rolePrompts = rolePromptById();
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
-      const prompt = call[0].create.prompt as string;
+      const rolePrompt = rolePrompts.get(id) as string;
       // 新文案：单一来源 ROLE_BOUNDARIES，映射表由系统提示【职责边界】动态渲染
-      expect(prompt).toContain(
+      expect(rolePrompt).toContain(
         '越界按系统提示【职责边界】转交（单一来源 ROLE_BOUNDARIES）',
       );
       // 旧全量映射句已删除
-      expect(prompt).not.toContain('越界拒绝与转交');
+      expect(rolePrompt).not.toContain('越界拒绝与转交');
       if (id === 'a_plan') {
-        expect(prompt).toContain('主 Agent');
-        expect(prompt).toContain('vteam_notify_agent');
+        expect(rolePrompt).toContain('主 Agent');
+        expect(rolePrompt).toContain('vteam_notify_agent');
       }
     }
   });
 
-  it('模板 prompt「可用工具」去重：旧五角色用统一句，计划员保留 planToolLine 动态派生', async () => {
+  it('模板 prompt「可用工具」去重：7 角色统一 canonical 指针，计划员不再内联 planToolLine 枚举', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
     expect(templateCalls).toHaveLength(7);
     for (const call of templateCalls) {
       const id = String(call[0].where.id);
-      const agentName = AGENT_NAME_BY_POLICY[POLICY_BY_AGENT[id]];
-      expect(agentName).toBeDefined();
       const prompt = call[0].create.prompt as string;
-      if (id === 'a_plan') {
-        // 计划员：planToolLine 动态派生保留，仍可解析出 toolAllows 键集
-        const line = prompt.match(/可用工具：([^。]+)。/);
-        expect(line).not.toBeNull();
-        const listed = line![1]
-          .split(/[/+]/)
-          .map((token) => token.trim().replace(/（.*）$/, ''))
-          .filter((token) => token.length > 0);
-        expect([...listed].sort()).toEqual(
-          [...Object.keys(ROLE_BOUNDARIES[agentName].toolAllows)].sort(),
-        );
-        continue;
-      }
-      // 旧五角色：统一一句，不再手写全量工具列表
+      // 7 角色（含计划员）统一一句，不再手写全量工具列表
       expect(prompt).toContain(
         '可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝',
       );
       expect(prompt).not.toMatch(/可用工具：vteam_/);
-      // PM 职责含计划完工铁律（prompt 点名 vteam_plan_complete，运行时按角色授权）。
       expect(prompt).not.toContain('vteam_task_create');
       expect(prompt).not.toContain('vteam_team_add_member');
+      // 计划员的枚举工具行（planToolLine）已被上述指针取代
+      if (id === 'a_plan') {
+        expect(prompt).not.toContain('可用工具：');
+      }
     }
   });
 
@@ -949,7 +1000,7 @@ describe('seed（计划 skills + 评审子句）', () => {
     expect(librarian.alias).toBe('知识管理员-1');
   });
 
-  it('7 个内置 AgentRole upsert：key/name/type=builtin/defaultAgentId/sortOrder 与 src 常量一致（agent-role-entity T1）', async () => {
+  it('7 个内置 AgentRole upsert：key/name/type=builtin/defaultAgentId/rolePrompt/sortOrder 与 src 常量一致（agent-role-entity T1+T4）', async () => {
     await main();
 
     const roleCalls = mockPrisma.agentRole.upsert.mock.calls;
@@ -965,6 +1016,8 @@ describe('seed（计划 skills + 评审子句）', () => {
         name: role.name,
         type: 'builtin',
         defaultAgentId: role.defaultAgentId,
+        // todo 4：fresh install 的 role_prompt 正文与 src 单一来源逐字节一致。
+        rolePrompt: BUILTIN_ROLE_PROMPTS[role.key],
         sortOrder: role.sortOrder,
       });
       // 补齐分支：仅对 defaultAgentId 为空的存量内置行绑定默认 Agent。
@@ -974,6 +1027,58 @@ describe('seed（计划 skills + 评审子句）', () => {
       expect(patch?.[0].where).toMatchObject({ id: role.id, defaultAgentId: null });
       expect(patch?.[0].data).toEqual({ defaultAgentId: role.defaultAgentId });
     }
+  });
+
+  it('7 个内置 rolePrompt 均非空、以角色身份行开头、且含 ## 职责（岗位定义非空）', async () => {
+    await main();
+
+    const rolePrompts = rolePromptById();
+    expect([...rolePrompts.keys()].sort()).toEqual(
+      Object.keys(ROLE_IDENTITY_BY_AGENT).sort(),
+    );
+    for (const [agentId, identity] of Object.entries(ROLE_IDENTITY_BY_AGENT)) {
+      const rolePrompt = rolePrompts.get(agentId) as string;
+      expect(typeof rolePrompt).toBe('string');
+      expect(rolePrompt.length).toBeGreaterThan(100);
+      expect(rolePrompt.startsWith(identity)).toBe(true);
+      expect(rolePrompt).toContain('## 职责');
+      // 定义段不得含「工作方式」类内容（那是 agent prompt 的职责）
+      expect(rolePrompt).not.toContain('## 工作方式');
+    }
+  });
+
+  it('de-dup：任一内置角色的 rolePrompt 与其 agent prompt 无共享句子（逐句互斥）', async () => {
+    await main();
+
+    const rolePrompts = rolePromptById();
+    for (const call of templateAgentCalls()) {
+      const id = String(call[0].where.id);
+      const agentPrompt = call[0].create.prompt as string;
+      const rolePrompt = rolePrompts.get(id) as string;
+      const roleSentences = new Set(splitSentences(rolePrompt));
+      const shared = splitSentences(agentPrompt).filter((s) =>
+        roleSentences.has(s),
+      );
+      expect(shared).toEqual([]);
+    }
+  });
+
+  it('de-dup 判据自检：人工把 rolePrompt 的一句塞进 agent prompt 时，检查必须报重复', async () => {
+    await main();
+
+    const rolePrompts = rolePromptById();
+    const id = 'a_product';
+    const agentCall = templateAgentCalls().find(
+      (call) => String(call[0].where.id) === id,
+    )!;
+    const agentPrompt = agentCall[0].create.prompt as string;
+    const roleSentence = splitSentences(rolePrompts.get(id) as string)[0];
+    expect(roleSentence.length).toBeGreaterThanOrEqual(8);
+    // 变异：注入共享句 → 交集非空（证明判据真的能发现重复，而非恒真）
+    const mutated = `${agentPrompt}\n${roleSentence}`;
+    const roleSet = new Set(splitSentences(rolePrompts.get(id) as string));
+    const shared = splitSentences(mutated).filter((s) => roleSet.has(s));
+    expect(shared).toContain(roleSentence);
   });
 
   it('示例团队成员 create 分支绑定内置 roleId（agent-role-entity T1）', async () => {
@@ -1077,12 +1182,13 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
   });
 
   it('PM 计划完工铁律：交付齐备或待验收时调 vteam_plan_complete 标记完工，不 @计划员改文件', async () => {
-    const pm = (await promptsById()).get('a_project_manager')!;
-    expect(pm).toContain('vteam_plan_complete');
-    expect(pm).toContain('计划完工');
-    expect(pm).toContain('executing→completed');
-    expect(pm).toContain('DB plans.status');
-    expect(pm).toContain('不要 @计划员-1 去改文件');
+    await promptsById();
+    const pmRole = rolePromptById().get('a_project_manager')!;
+    expect(pmRole).toContain('vteam_plan_complete');
+    expect(pmRole).toContain('计划完工');
+    expect(pmRole).toContain('executing→completed');
+    expect(pmRole).toContain('DB plans.status');
+    expect(pmRole).toContain('不要 @计划员-1 去改文件');
   });
 
   it('PM 消息风暴治理三铁律齐全（已通知不重发/只发增量/唤醒即派发），且不泄漏到其他角色', async () => {

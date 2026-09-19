@@ -1,0 +1,286 @@
+{
+  "plan": "agent-role-entity",
+  "todo": 4,
+  "title": "Split the role vs agent parts and re-point the seed prompts",
+  "generatedAt": "2026-09-19T07:58:51.824Z",
+  "oracle": ".omo/evidence/agent-role-entity/task-2-classification.json",
+  "oracleTotals": {
+    "sourceLines": 264,
+    "classifiedLines": 264,
+    "byDestination": {
+      "role": 97,
+      "agent": 92,
+      "platform": 55,
+      "removed-intentionally": 20
+    }
+  },
+  "verification": {
+    "oracleReconstructionCountsMatch": true,
+    "roleAndAgentDisjoint": true,
+    "deDupHeuristic": "split on \\n/。/；, strip markdown prefix, keep fragments length>=8; intersection must be empty"
+  },
+  "perAgent": [
+    {
+      "key": "product",
+      "agentId": "a_product",
+      "roleLines": 15,
+      "agentLines": 11,
+      "removedLines": 3,
+      "platformLines": 10,
+      "rolePromptChars": 580,
+      "agentPromptChars": 415,
+      "rolePromptSha256": "7fe8b869adfec5bed123abe7cb75b9de0dce0b7df9a7a715f5b924fb15eee50e",
+      "agentPromptSha256": "16455a058ce52a1736407572b3ecc543ef482eb3b0d988280732048d801823f9"
+    },
+    {
+      "key": "project_manager",
+      "agentId": "a_project_manager",
+      "roleLines": 15,
+      "agentLines": 20,
+      "removedLines": 2,
+      "platformLines": 5,
+      "rolePromptChars": 613,
+      "agentPromptChars": 1207,
+      "rolePromptSha256": "2d2b4ccd6e2611ec013117fd0fc6c9f157133a70b3aa82730637ab98b0d98ecc",
+      "agentPromptSha256": "b9bac2a93bf180f21da7abb2637aa7b995a29c8217ac1454dcfbc3083ddd2a0b"
+    },
+    {
+      "key": "architect",
+      "agentId": "a_architect",
+      "roleLines": 13,
+      "agentLines": 10,
+      "removedLines": 3,
+      "platformLines": 10,
+      "rolePromptChars": 449,
+      "agentPromptChars": 361,
+      "rolePromptSha256": "ca640f82438975ab188e842473721f196371a67c2503ba71f0310db3430f4aeb",
+      "agentPromptSha256": "36eb7427a616b544186bef6c12d4183cc5cc9096287b08951deb43d2b5e970d5"
+    },
+    {
+      "key": "developer",
+      "agentId": "a_developer",
+      "roleLines": 13,
+      "agentLines": 12,
+      "removedLines": 3,
+      "platformLines": 10,
+      "rolePromptChars": 471,
+      "agentPromptChars": 525,
+      "rolePromptSha256": "1ca0f7692f521da4f67d5d3331a197fb4e0ff5170ff83b8c95f87e7ea7508eb1",
+      "agentPromptSha256": "462e2cde778ba168e62fc6ca3046d205673ec685656694b128d20ba5d7d2a8b3"
+    },
+    {
+      "key": "tester",
+      "agentId": "a_tester",
+      "roleLines": 14,
+      "agentLines": 11,
+      "removedLines": 3,
+      "platformLines": 10,
+      "rolePromptChars": 560,
+      "agentPromptChars": 405,
+      "rolePromptSha256": "8d2d8b0be95f6eccf9ca7786a8e3266e238bf9c48089cfe133fefd5294f87bf4",
+      "agentPromptSha256": "b2b0922a89b5c550ebd54705a3b25bf45fc6d639cfe90625cc7dc7794c41e9a3"
+    },
+    {
+      "key": "plan",
+      "agentId": "a_plan",
+      "roleLines": 14,
+      "agentLines": 18,
+      "removedLines": 4,
+      "platformLines": 5,
+      "rolePromptChars": 635,
+      "agentPromptChars": 737,
+      "rolePromptSha256": "7b5b2818534b6a6ce70f05ce727d9ed1eda067efe7633f39a2e523263ef7c137",
+      "agentPromptSha256": "7e0f0e4b97037f4dd06a4db9f0cc2979c9ec4e622bc799f8be7820c15a8afc7c"
+    },
+    {
+      "key": "librarian",
+      "agentId": "a_librarian",
+      "roleLines": 13,
+      "agentLines": 10,
+      "removedLines": 2,
+      "platformLines": 5,
+      "rolePromptChars": 597,
+      "agentPromptChars": 335,
+      "rolePromptSha256": "f23d96db0bdd4eb4b86fcb061519e80175db72f7c58877e9be07c644faec62f3",
+      "agentPromptSha256": "ca10db4d1c125792603a79931a5f61f2322406b44abf91032068c3a2fcadb04a"
+    }
+  ],
+  "totals": {
+    "roleLines": 97,
+    "agentLines": 92,
+    "removedLines": 20,
+    "platformLines": 55,
+    "sourceLines": 264,
+    "classifiedLines": 264
+  },
+  "removedProse": {
+    "description": "Enumerated ## 权限 prose (paths/effects/tool lists) removed per O6; replaced by the canonical pointer.",
+    "canonicalPointer": "权限边界以 ExecutionPolicy/【职责边界】为准，越界会被拒绝",
+    "keptPointerLine": "- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。",
+    "keptPointerLines": [
+      {
+        "agent": "product",
+        "index": 14
+      },
+      {
+        "agent": "project_manager",
+        "index": 13
+      },
+      {
+        "agent": "architect",
+        "index": 12
+      },
+      {
+        "agent": "developer",
+        "index": 12
+      },
+      {
+        "agent": "tester",
+        "index": 13
+      },
+      {
+        "agent": "librarian",
+        "index": 11
+      }
+    ],
+    "addWhereMissing": [
+      {
+        "agent": "plan",
+        "index": 13,
+        "note": "currently an enumerated tool list (removed); replace with the canonical pointer."
+      }
+    ],
+    "removedLineCount": 20,
+    "removedLineCountFromOracle": 20,
+    "planBefore": "- 可用工具：<enumerated 12 tools>。",
+    "planAfter": "- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。",
+    "planEnumerationRemoved": true
+  },
+  "changedFiles": [
+    "server/prisma/seed.ts",
+    "server/prisma/migrations/20260919000008_populate_builtin_role_prompts/migration.sql",
+    "server/src/common/constants/agent-role-prompts.constants.ts",
+    "server/src/prisma/seed.spec.ts",
+    "server/src/prisma/agent-role.migration.spec.ts"
+  ],
+  "migration": {
+    "name": "20260919000008_populate_builtin_role_prompts",
+    "idempotent": true,
+    "statementCount": 7,
+    "predicate": "WHERE key = '<k>' AND (role_prompt IS NULL OR role_prompt = '')",
+    "rerunProof": "second execution left updated_at unchanged (all 7 rows skipped) — true no-op",
+    "deployCommand": "docker cp <migration dir> aiagents-compose-server:/app/prisma/migrations/... ; docker exec -w /app aiagents-compose-server npx prisma migrate deploy",
+    "deployResult": "Applied migration 20260919000008_populate_builtin_role_prompts; All migrations successfully applied"
+  },
+  "populatedDbProof": {
+    "query": "SELECT COUNT(*) FROM agent_roles WHERE type='builtin' AND (role_prompt IS NULL OR role_prompt='')",
+    "result": 0,
+    "rows": [
+      {
+        "key": "product",
+        "chars": 580,
+        "sha256": "7fe8b869adfec5bed123abe7cb75b9de0dce0b7df9a7a715f5b924fb15eee50e"
+      },
+      {
+        "key": "project_manager",
+        "chars": 613,
+        "sha256": "2d2b4ccd6e2611ec013117fd0fc6c9f157133a70b3aa82730637ab98b0d98ecc"
+      },
+      {
+        "key": "architect",
+        "chars": 449,
+        "sha256": "ca640f82438975ab188e842473721f196371a67c2503ba71f0310db3430f4aeb"
+      },
+      {
+        "key": "developer",
+        "chars": 471,
+        "sha256": "1ca0f7692f521da4f67d5d3331a197fb4e0ff5170ff83b8c95f87e7ea7508eb1"
+      },
+      {
+        "key": "tester",
+        "chars": 560,
+        "sha256": "8d2d8b0be95f6eccf9ca7786a8e3266e238bf9c48089cfe133fefd5294f87bf4"
+      },
+      {
+        "key": "plan",
+        "chars": 635,
+        "sha256": "7b5b2818534b6a6ce70f05ce727d9ed1eda067efe7633f39a2e523263ef7c137"
+      },
+      {
+        "key": "librarian",
+        "chars": 597,
+        "sha256": "f23d96db0bdd4eb4b86fcb061519e80175db72f7c58877e9be07c644faec62f3"
+      }
+    ],
+    "oracleByteEqual": true
+  },
+  "seedMigrationEquality": {
+    "method": "extract BUILTIN_ROLE_PROMPTS literal from seed.ts + role_prompt literal from migration.sql; compare strings and sha256 (utf8)",
+    "allByteEqual": true,
+    "rows": [
+      {
+        "key": "product",
+        "seedChars": 580,
+        "migChars": 580,
+        "byteEqual": true,
+        "sha256": "7fe8b869adfec5bed123abe7cb75b9de0dce0b7df9a7a715f5b924fb15eee50e"
+      },
+      {
+        "key": "project_manager",
+        "seedChars": 613,
+        "migChars": 613,
+        "byteEqual": true,
+        "sha256": "2d2b4ccd6e2611ec013117fd0fc6c9f157133a70b3aa82730637ab98b0d98ecc"
+      },
+      {
+        "key": "architect",
+        "seedChars": 449,
+        "migChars": 449,
+        "byteEqual": true,
+        "sha256": "ca640f82438975ab188e842473721f196371a67c2503ba71f0310db3430f4aeb"
+      },
+      {
+        "key": "developer",
+        "seedChars": 471,
+        "migChars": 471,
+        "byteEqual": true,
+        "sha256": "1ca0f7692f521da4f67d5d3331a197fb4e0ff5170ff83b8c95f87e7ea7508eb1"
+      },
+      {
+        "key": "tester",
+        "seedChars": 560,
+        "migChars": 560,
+        "byteEqual": true,
+        "sha256": "8d2d8b0be95f6eccf9ca7786a8e3266e238bf9c48089cfe133fefd5294f87bf4"
+      },
+      {
+        "key": "plan",
+        "seedChars": 635,
+        "migChars": 635,
+        "byteEqual": true,
+        "sha256": "7b5b2818534b6a6ce70f05ce727d9ed1eda067efe7633f39a2e523263ef7c137"
+      },
+      {
+        "key": "librarian",
+        "seedChars": 597,
+        "migChars": 597,
+        "byteEqual": true,
+        "sha256": "f23d96db0bdd4eb4b86fcb061519e80175db72f7c58877e9be07c644faec62f3"
+      }
+    ]
+  },
+  "gates": {
+    "tsc": "cd server && npx tsc -p tsconfig.json --noEmit -> exit 0",
+    "jestPrisma": "cd server && npx jest --runInBand src/prisma -> 2 suites / 66 tests passed",
+    "jestFull": "cd server && npx jest --runInBand -> 138 suites / 3175 tests passed (baseline eabb5ce: 138/3169)"
+  },
+  "acceptance": {
+    "sevenRolePromptsNonEmpty": true,
+    "identityLineAsserted": true,
+    "deduplicationAsserted": true,
+    "removedPermissionProse": true,
+    "idempotentDataMigration": true,
+    "seedInSyncWithMigration": true,
+    "zeroEmptyBuiltinRolePromptOnPopulatedDb": true
+  }
+}

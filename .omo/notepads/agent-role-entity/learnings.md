@@ -164,3 +164,43 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   via `POST /tasks` is `pending`, so the flow is reachable. Delete the throwaway team in `finally`.
 - **Suite**: server 138 suites / 3169 tests green; `npx tsc --noEmit` exit 0 server + web; Playwright 3/3 green.
   Evidence `.omo/evidence/agent-role-entity/{task-7-proof.json,e2e.txt,task-7-roles-and-members.png}`.
+
+## Todo 4 — role/agent prompt split (2026-09-19)
+
+- **Oracle counts reproduce exactly**: evaluating the 7 `templateAgents[].prompt` literals and splitting on
+  `\n` yields role=97 / agent=92 / removed=20 / platform=55 — same as `task-2-classification.json`. Re-run the
+  reconstruction before touching seed.ts: if the counts drift, the oracle is stale and the split is wrong.
+- **The oracle already places the `## 权限` heading in `agent`** (its `## 权限 heading` ambiguity resolution),
+  so the split keeps `## 权限` on the agent and appends the canonical pointer
+  `- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。`. Six agents already had that exact
+  pointer line (keptPointerLines); `plan` had the enumerated `planToolLine` which is now REPLACED by the pointer
+  (addWhereMissing). Net: the canonical pointer line appears in all 7 agent prompts.
+- **`planToolLine` becomes dead** once plan's enumerated tool line is replaced — removing it also removes the
+  `Object.keys(ROLE_BOUNDARIES['vteam-plan'].toolAllows)` runtime derivation. The seed.spec test that parsed
+  that line had to be rewritten (it asserted a tool-key set that no longer exists in any prompt).
+- **rolePrompt content moved to `agent`-side sections too**: the oracle's 协同方式 heading resolves to `role`,
+  and the 越界转交 line (单一来源 ROLE_BOUNDARIES) lives under 协同方式 → therefore the whole 协同方式 block
+  goes to rolePrompt, NOT the agent prompt. The agent prompt keeps only `## 权限` (pointer) + `## 工作方式`
+  + role-specific 铁律 (派发/收敛/修订). So the agent prompt no longer contains `## 职责`/`## 协同方式`.
+- **Three-source byte-identity is the real risk**: (1) `seed.ts` BUILTIN_ROLE_PROMPTS (fresh install, create
+  branch), (2) the new `src/common/constants/agent-role-prompts.constants.ts`, (3) migration
+  `20260919000008`'s `role_prompt` literals. seed.spec asserts (1)==(2); the migration contract spec asserts
+  (3)==(2). Any drift = fresh-install vs upgrade divergence. SHA256 of the DB value also matches the oracle.
+- **MySQL literal round-trip**: the role text has no ASCII single quotes / backslashes (all quotes are full-width
+  「」/""), so only `\n` needs escaping. Writing the prompt as ONE single-line literal with `\n` escapes (rather
+  than a multi-line literal) is the safe form — a multi-line literal relying on the client's literal-newline
+  handling round-trips through `mysql <` but is a migration-parser risk. `sql_mode` here has no
+  `NO_BACKSLASH_ESCAPES`, so `\n`=0x0A. Prove equality by `SHA2(role_prompt,256)` vs the seed string hash —
+  length-and-hash, not eyeballing.
+- **Idempotency predicate matters**: `WHERE key='<k>' AND (role_prompt IS NULL OR role_prompt = '')` makes a
+  re-run a true no-op (verified: `updated_at` unchanged after running the migration SQL directly on the live
+  DB). A bare `WHERE key=...` would clobber user edits on every deploy.
+- **O7 is real**: todo 1's INSERT set role_prompt NULL and the migration only runs once; seed's `update: {}`
+  deliberately does NOT re-sync prompt text. So without the data migration, CI (fresh seed) is green while a
+  pre-existing deployment serves empty role prompts from `/agent-roles`. Copy the migration dir into
+  `aiagents-compose-server` then `npx prisma migrate deploy` (host MySQL port is unpublished on macOS).
+- **Seed↔migration equality extractor gotcha**: a `[\s\S]*?WHERE` regex over the whole SQL is greedy across
+  statements — split the SQL on `;` first, then match within the statement. The earlier greedy version passed
+  for the first key and failed for the rest.
+- **Suite**: server 138 suites / 3175 tests green (baseline 3169; +6 new: 3 seed.spec + 3 migration spec);
+  `npx tsc -p tsconfig.json --noEmit` exit 0. Evidence `.omo/evidence/agent-role-entity/task-4-split.json`.

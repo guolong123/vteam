@@ -6,6 +6,7 @@ import {
   FALLBACK_AGENT_ROLE,
   deriveCustomAgentRoleId,
 } from '../common/constants/agent-role.constants';
+import { BUILTIN_ROLE_PROMPTS } from '../common/constants/agent-role-prompts.constants';
 
 /**
  * agent-role-entity todo 1 迁移契约测试。
@@ -27,6 +28,15 @@ const MIGRATION_DIR = path.resolve(
   'migration.sql',
 );
 const SCHEMA = path.resolve(__dirname, '..', '..', 'prisma', 'schema.prisma');
+const POPULATE_MIGRATION = path.resolve(
+  __dirname,
+  '..',
+  '..',
+  'prisma',
+  'migrations',
+  '20260919000008_populate_builtin_role_prompts',
+  'migration.sql',
+);
 
 const BUILTIN_KEYS = BUILTIN_AGENT_ROLES.map((r) => r.key);
 
@@ -158,5 +168,74 @@ describe('agent_roles 迁移 + 三态回填契约', () => {
       expect(BUILTIN_AGENT_ROLES.filter((r) => !r.defaultAgentId)).toHaveLength(0);
       expect(BUILTIN_KEYS).toHaveLength(7);
     });
+  });
+});
+
+/**
+ * todo 4 数据迁移 (`20260919000008_populate_builtin_role_prompts`) 契约。
+ *
+ * 该迁移把 7 个内置行的 `role_prompt` 从 NULL 补齐为正文字面量，必须在存量（不重跑 seed）
+ * 部署上也生效（review fix O7）。这里做静态契约：
+ *   1. 恰 7 条 `UPDATE agent_roles SET role_prompt = ...`，逐 key 幂等（含「空值才写」谓词）；
+ *   2. 迁移写入的字面量与 `BUILTIN_ROLE_PROMPTS`（seed 镜像的同源）**逐字节相等**——
+ *      防 fresh-install 与 upgrade 两条路径正文漂移。
+ * 真库「0 空正文」运行时证明见 .omo/evidence/agent-role-entity/task-4-split.json。
+ */
+describe('role_prompt 回填迁移契约（agent-role-entity todo 4）', () => {
+  const sql = fs.readFileSync(POPULATE_MIGRATION, 'utf8');
+
+  /** 迁移 SQL 中单引号字面量的反转义（生成侧只转义 \n 与 ''；正文无 ASCII 反斜杠/引号）。 */
+  const unescapeSqlString = (literal: string): string =>
+    literal.replace(/''/g, "'").replace(/\\n/g, '\n');
+
+  /** 抽出 `WHERE key = '<k>'` 那条 UPDATE 写入的 role_prompt 字面量（按语句切分，避免跨语句贪婪匹配）。 */
+  const extractRolePrompt = (key: string): string => {
+    const statement = sql
+      .split(';')
+      .find(
+        (s) =>
+          s.includes('UPDATE `agent_roles` SET `role_prompt`') &&
+          s.includes(`WHERE \`key\` = '${key}'`),
+      );
+    expect(statement).toBeDefined();
+    const m = statement!.match(/SET `role_prompt` = '((?:[^']|'')*)'/);
+    expect(m).not.toBeNull();
+    return unescapeSqlString(m![1]);
+  };
+
+  it('恰 7 条 UPDATE，逐 key 幂等（role_prompt IS NULL OR = 空 才写）', () => {
+    const updates = sql.match(/UPDATE `agent_roles` SET `role_prompt`/g) ?? [];
+    expect(updates).toHaveLength(7);
+    for (const key of BUILTIN_KEYS) {
+      expect(sql).toMatch(
+        new RegExp(
+          "WHERE `key` = '" +
+            key +
+            "' AND \\(`role_prompt` IS NULL OR `role_prompt` = ''\\)",
+        ),
+      );
+    }
+  });
+
+  it('迁移正文与 BUILTIN_ROLE_PROMPTS 逐字节相等（fresh seed == 存量升级）', () => {
+    for (const key of BUILTIN_KEYS) {
+      const fromMigration = extractRolePrompt(key);
+      expect(fromMigration).toBe(BUILTIN_ROLE_PROMPTS[key]);
+      // 非空 + 身份行开头（岗位定义；不是被截断的空串）
+      expect(fromMigration.length).toBeGreaterThan(100);
+      expect(fromMigration.startsWith('# 角色：')).toBe(true);
+    }
+  });
+
+  it('迁移不触碰能力字段（只有 role_prompt 与 updated_at 两个 SET 目标）', () => {
+    const setAssignments = [
+      ...sql.matchAll(/UPDATE `agent_roles` SET ([\s\S]*?)WHERE/g),
+    ];
+    expect(setAssignments).toHaveLength(7);
+    for (const m of setAssignments) {
+      const targets = [...m[1].matchAll(/`([a-z_]+)`\s*=/g)].map((x) => x[1]);
+      expect(targets).toEqual(['role_prompt', 'updated_at']);
+    }
+    expect(sql).not.toMatch(/permission|tools|policy|worker/i);
   });
 });
