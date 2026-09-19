@@ -25,6 +25,17 @@ export class CloneAgentDto {
   @MaxLength(64)
   name?: string;
 
+  @ApiPropertyOptional({
+    description:
+      '岗位 id（AgentRole）备用能力模板：仅当**源无绑定策略**时用于取起始 config' +
+      '（取岗位 defaultAgentId 的 Agent 的 policyId，深拷贝为新 custom 策略）；' +
+      '源有绑定策略时本字段被忽略（源策略深拷贝恒胜出）。',
+    example: 'ar_developer',
+  })
+  @IsOptional()
+  @IsString()
+  agentRoleId?: string;
+
   @ApiProperty({
     description:
       '克隆体的 machine-safe 标识（opencode agent 名 = `vteam-<agentKey>`；源 key 不可复用）',

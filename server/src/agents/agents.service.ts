@@ -48,7 +48,13 @@ const AGENT_INCLUDE = {
   skills: true,
 } as const;
 
-/** Agent 行（含关联，toAgentDto 输入）。 */
+/**
+ * Agent 行（含关联，toAgentDto 输入）。
+ *
+ * `role` 仅作**展示标签透传**（todo 5/6 迁移的既有 DTO 字段形状，见
+ * `.omo/evidence/agent-role-decommission/task-1-consumer-map.txt` §6/§7）；能力解析
+ * （策略/工具）不再读取它——create/clone/update 的写入路径已由 todo 4 移除。
+ */
 type AgentRow = {
   id: string;
   name: string;
@@ -180,10 +186,13 @@ export class AgentsService implements OnModuleInit {
    * POST /agents：完全自定义（FR-32）。
    * 二表事务：Agent（type=custom、baseAgentId=null、createdBy=当前用户）
    * + agent_skills 批量，返回 toAgentDto 格式。
-   * 策略装配（custom agent 必有可编辑 custom 策略）：
-   * - 显式 `dto.policyId` → 原样绑定，不建策略；
-   * - 无 policyId + `dto.role` 命中模板策略（`ep_<role>`）→ 深拷贝为新 custom 策略并绑定；
-   * - 无 policyId + 无命中 → 建 deny-by-default 骨架 custom 策略并绑定。
+   *
+   * 起始能力三路径（`Agent.role` 已不参与，agent-role-decommission todo 4）：
+   * - PATH 1 显式 `dto.policyId` → 原样绑定，不建策略（显式选择恒胜出）；
+   * - PATH 2 无 policyId + `dto.agentRoleId` → 岗位默认 Agent 的绑定策略 config
+   *   深拷贝为新 custom 策略（行缺失但默认 Agent 的 agentKey 命中内置角色时走常量派生）；
+   * - PATH 3 两者皆无（或岗位无 defaultAgentId / 其 Agent 无 policyId）→
+   *   deny-by-default 骨架 custom 策略。
    * 写操作全在同事务内（失败不留半装配行）；effectivePermission 在提交后解析，
    * 保证新建策略行提交可见（事务内经别连接读不到未提交行）。
    */
@@ -195,7 +204,9 @@ export class AgentsService implements OnModuleInit {
         const name = dto.name.trim();
         let policyId: string | null = dto.policyId ?? null;
         if (!policyId) {
-          const source = await this.resolveTemplateSource(tx, dto.role ?? null);
+          const source = await this.resolveTemplateSource(tx, {
+            agentRoleId: dto.agentRoleId ?? null,
+          });
           const config = source?.config ?? this.buildSkeletonConfig(name);
           policyId = await this.provisionCustomPolicy(tx, {
             agentName: name,
@@ -208,7 +219,6 @@ export class AgentsService implements OnModuleInit {
             id: await this.idGen.nextId(ID_PREFIX.agent),
             name,
             type: dto.type,
-            role: dto.role ?? null,
             agentKey: dto.agentKey,
             prompt: dto.prompt ?? '',
             baseAgentId: null,
@@ -235,8 +245,8 @@ export class AgentsService implements OnModuleInit {
    * 源不存在 → 404；新行 type=clone、baseAgentId=源.id、name=请求名或「源名副本」；
    * 同事务复制 skills（不含会话/任务关系），克隆不触碰源行。
    * 策略装配：恒为源策略 config 的深拷贝新 `type='custom'` 策略（源为 template/custom
-   * 均不共享可写策略；源无策略时回退模板/骨架），写操作全在同事务内；
-   * effectivePermission 在提交后解析（理由同 create）。
+   * 均不共享可写策略）；源无绑定策略时按 `dto.agentRoleId` 岗位模板深拷贝，仍无 → 骨架。
+   * 写操作全在同事务内；effectivePermission 在提交后解析（理由同 create）。
    */
   async clone(userId: string, id: string, dto: CloneAgentDto) {
     const source = await this.prisma.agent.findUnique({
@@ -260,7 +270,9 @@ export class AgentsService implements OnModuleInit {
           : null;
         const template = bound
           ? null
-          : await this.resolveTemplateSource(tx, source.role);
+          : await this.resolveTemplateSource(tx, {
+              agentRoleId: dto.agentRoleId ?? null,
+            });
         const config =
           (bound ? (bound.config as unknown) : undefined) ??
           template?.config ??
@@ -282,7 +294,6 @@ export class AgentsService implements OnModuleInit {
             name: newName,
             type: 'clone',
             baseAgentId: source.id,
-            role: source.role,
             agentKey: dto.agentKey,
             prompt: source.prompt,
             defaultModelId: source.defaultModelId,
@@ -308,12 +319,19 @@ export class AgentsService implements OnModuleInit {
 
   /**
    * PATCH /agents/:id（is_0000000030 放开内置 agent 设置修改）：
-   * - template（内置）允许修改全部**设置字段**（name/role/prompt/defaultModelId/
-   *   workerId/policyId + skillIds 关联重建），
-   *   使内置 agent 可自定义配置；agentId/type 不可改（不在 DTO，天然安全红线）；
+   * - template（内置）允许修改设置字段（name/prompt/defaultModelId/workerId/persona/
+   *   policyId + skillIds 关联重建），使内置 agent 可自定义配置；
+   *   agentId/type 不可改（不在 DTO，天然安全红线）；
    * - clone/custom → 同规则更新；
    * - 删除（remove）仍对 template 403（销毁性操作不在"设置修改"范围）。
    * skillIds 显式传入时重建关联（不传保持原关联）。
+   *
+   * 标签 vs 能力（agent-role-decommission todo 4，显式决策）：本方法**不接受标签字段**，
+   * `policyId` 仅在显式传入时写入。改名（name）或改岗位标签（AgentRole / TeamMember.roleId，
+   * 各自走 PATCH /agent-roles/:id 或团队端点）**不会**重配或重拷本 agent 的绑定策略——
+   * 用户对策略的编辑必须存活于任何标签变更。因此"改了标签但没改策略"的结果是：
+   * 展示名/岗位变化，`policyId` 与生效权限逐字节不变；要改能力必须显式 PATCH `policyId`
+   * 或编辑 `PATCH /execution-policies/:policyId` 的 config。
    */
   async update(id: string, dto: UpdateAgentDto) {
     const agent = await this.prisma.agent.findUnique({ where: { id } });
@@ -331,7 +349,6 @@ export class AgentsService implements OnModuleInit {
           where: { id },
           data: {
             ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
-            ...(dto.role !== undefined ? { role: dto.role } : {}),
             ...(dto.agentKey !== undefined ? { agentKey: dto.agentKey } : {}),
             ...(dto.prompt !== undefined ? { prompt: dto.prompt } : {}),
             ...(dto.defaultModelId !== undefined
@@ -599,6 +616,7 @@ export class AgentsService implements OnModuleInit {
   private async toAgentDto(agent: AgentRow): Promise<{
     id: string;
     name: string;
+    /** 展示标签透传（todo 5/6 迁移；不参与能力解析）。 */
     role: string | null;
     agentKey: string | null;
     type: string;
@@ -617,7 +635,6 @@ export class AgentsService implements OnModuleInit {
       await this.executionPolicyService.resolveManyByAgents([
         {
           policyId: agent.policyId,
-          role: agent.role,
           agentKey: agent.agentKey,
         },
       ]);
@@ -644,7 +661,6 @@ export class AgentsService implements OnModuleInit {
     const permissions = await this.executionPolicyService.resolveManyByAgents(
       rows.map((agent) => ({
         policyId: agent.policyId,
-        role: agent.role,
         agentKey: agent.agentKey,
       })),
     );
@@ -744,38 +760,66 @@ export class AgentsService implements OnModuleInit {
   }
 
   /**
-   * 按 role 解析模板策略来源（create 无 policyId / clone 源无绑定时回退）。
-   * 优先库内 `ep_<role>` 行的 config（seed 已含 tools 矩阵）；行缺失但 role 命中
-   * `ROLE_BOUNDARIES` 时经 `resolveConstantPolicySource` 派生同一形状（与
-   * `resolveByAgent` 的行缺失回退共用常量推导，保证 tools 非空且两路径一致）；
-   * 均无 → null（调用方建骨架）。
+   * 起始能力模板解析（create 无 policyId / clone 源无绑定时回退）——PATH 2。
+   *
+   * `AgentRole` 不携带任何能力字段，故岗位只作**选择器**：取其 `defaultAgentId`
+   * 指向的 Agent，读该 Agent 的 `policyId`，返回其策略 config（行存在，用户编辑后的
+   * 版本即模板）；行缺失但该 Agent 的 `agentKey` 命中内置角色常量时，经
+   * `resolveConstantPolicySource('vteam-<agentKey>')` 派生同形 config（与
+   * `resolveByAgent` 的行缺失回退共用同一常量推导，避免两处漂移）。
+   *
+   * 返回 null 的四种情形（调用方建 deny-by-default 骨架，PATH 3）：
+   * 未传 `agentRoleId` / 岗位不存在 / 岗位无 `defaultAgentId` / 默认 Agent 无 `policyId`
+   * 且 agentKey 非内置名。岗位**不会**在执行期持续绑定：本结果只在装配时深拷贝一次。
    */
   private async resolveTemplateSource(
     tx: Prisma.TransactionClient,
-    role: string | null,
+    opts: { agentRoleId: string | null },
   ): Promise<{ config: unknown; description: string | null } | null> {
-    if (!role) {
+    const agentRoleId = opts.agentRoleId;
+    if (!agentRoleId) {
       return null;
     }
-    const stored = await tx.executionPolicy.findUnique({
-      where: { id: `ep_${role}` },
+    const role = await tx.agentRole.findUnique({
+      where: { id: agentRoleId },
+      select: { defaultAgentId: true },
     });
-    if (stored) {
-      return {
-        config: stored.config as unknown,
-        description:
-          typeof stored.description === 'string' ? stored.description : null,
-      };
+    if (!role?.defaultAgentId) {
+      return null;
     }
-    const constant = resolveConstantPolicySource(`vteam-${role}`);
+    const defaultAgent = await tx.agent.findUnique({
+      where: { id: role.defaultAgentId },
+      select: { policyId: true, agentKey: true },
+    });
+    if (!defaultAgent) {
+      return null;
+    }
+    if (defaultAgent.policyId) {
+      const stored = await tx.executionPolicy.findUnique({
+        where: { id: defaultAgent.policyId },
+      });
+      if (stored) {
+        return {
+          config: stored.config as unknown,
+          description:
+            typeof stored.description === 'string'
+              ? stored.description
+              : null,
+        };
+      }
+    }
+    const constant = defaultAgent.agentKey
+      ? resolveConstantPolicySource(`vteam-${defaultAgent.agentKey}`)
+      : null;
     return constant
       ? { config: constant.config, description: constant.description }
       : null;
   }
 
   /**
-   * 未配置 agent 的 deny-by-default 骨架 config（无命中 role 时的安全默认）：
-   * 不写文件、bash 禁用、tools 空矩阵（协作工具默认拒绝）。
+   * 未配置 agent 的 deny-by-default 骨架 config（PATH 3：无显式 policyId 且岗位模板
+   * 不可用时）的安全默认：不写文件、bash 禁用、tools 空矩阵（协作工具默认拒绝）。
+   * 出厂值自 agent-native-permission-editor 起冻结，本 todo 不改动。
    */
   private buildSkeletonConfig(agentName: string): {
     permission: Record<string, unknown>;

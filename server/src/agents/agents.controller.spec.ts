@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { ValidationPipe } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -288,6 +289,68 @@ describe('AgentsController', () => {
   describe('DTO 校验（class-validator，QA ISSUE-009 空名）', () => {
     const errorsOf = async (cls: new () => object, obj: object) =>
       validate(plainToInstance(cls, obj));
+
+    /**
+     * 全局 ValidationPipe 形状（src/main.ts：whitelist:true）：
+     * 未声明字段被**静默剥离**。todo 4 的缺陷防线——若前端仍投 `role`，
+     * DTO 已无该字段 → 到不了 service → 每个新 agent 静默落骨架。
+     */
+    const whitelistPipe = new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: false,
+    });
+
+    it('CreateAgentDto：agentRoleId 是已知字段，经 whitelist 管道保留', async () => {
+      const out = (await whitelistPipe.transform(
+        {
+          name: '开发者',
+          type: 'custom',
+          agentKey: 'dev-agent',
+          agentRoleId: 'ar_developer',
+        },
+        { type: 'body', metatype: CreateAgentDto },
+      )) as CreateAgentDto;
+
+      expect(out.agentRoleId).toBe('ar_developer');
+    });
+
+    it('CreateAgentDto：陈旧 `role` 字段被 whitelist 管道静默剥离（能力不得经旧列传递）', async () => {
+      const out = (await whitelistPipe.transform(
+        {
+          name: '开发者',
+          type: 'custom',
+          agentKey: 'dev-agent',
+          agentRoleId: 'ar_developer',
+          role: 'developer',
+        },
+        { type: 'body', metatype: CreateAgentDto },
+      )) as CreateAgentDto & { role?: string };
+
+      expect(out.role).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(out, 'role')).toBe(false);
+      expect(out.agentRoleId).toBe('ar_developer');
+    });
+
+    it('CloneAgentDto：agentRoleId 保留；陈旧 role 剥离', async () => {
+      const out = (await whitelistPipe.transform(
+        { agentKey: 'copy-agent', agentRoleId: 'ar_developer', role: 'developer' },
+        { type: 'body', metatype: CloneAgentDto },
+      )) as CloneAgentDto & { role?: string };
+
+      expect(out.agentRoleId).toBe('ar_developer');
+      expect(out.role).toBeUndefined();
+    });
+
+    it('UpdateAgentDto：陈旧 role 剥离（改名/改标签不得经 DTO 夹带能力字段）', async () => {
+      const out = (await whitelistPipe.transform(
+        { name: '仅改名', role: 'developer', policyId: 'ep_developer' },
+        { type: 'body', metatype: UpdateAgentDto },
+      )) as UpdateAgentDto & { role?: string };
+
+      expect(out.role).toBeUndefined();
+      expect(out.policyId).toBe('ep_developer');
+    });
 
     it('CreateAgentDto：name 空串 → 校验失败（@IsNotEmpty，空名 400 非 201）', async () => {
       expect(

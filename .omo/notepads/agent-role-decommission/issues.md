@@ -65,3 +65,23 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   source (177 keys, rc=0 in a clean worktree at the sha) and the commit was amended. Do
   not trust a manifest unless `check-agent-role-consumers.sh` exits 0 on a clean checkout
   of the exact commit.
+
+## todo 4 — findings / gotchas
+
+- **Live-stack QA requires rebuilding BOTH containers**: `docker compose build server web
+  && docker compose up -d server web` (no `--force-recreate`). The web picker change is
+  invisible until the web image is rebuilt; the server DTO change is invisible until the
+  server image is rebuilt. Rebuild both before asserting the create flow in the browser.
+- **The e2e wrapper hard-codes the `T6_*` env names and `web/.t6.playwright.config.ts`.**
+  Running `npx playwright test` manually with `T4_*` vars produces green tests but NO
+  evidence JSON. Use the `T6_*` names (or edit the wrapper) so `task-6-proof.json` and
+  the screenshots are actually written.
+- **The picker's option set must be key-filtered, not "all /agent-roles rows"**: the live
+  DB has a custom `ar_general` role with no `defaultAgentId`, which the modal intentionally
+  does not offer. An e2e assertion comparing against all non-plan rows will fail — compare
+  against the create key set.
+- **urllib in this environment routes through a system proxy and 502s**; use
+  `urllib.request.build_opener(ProxyHandler({}))` or plain `curl` for localhost API probes.
+- **The plan's line numbers were stale again** (`create :190`, `clone :241`,
+  `resolveTemplateSource :753`, web picker `<select> :2448`) — all confirmed by grep at
+  edit time, and they had shifted once more by the time of the edits.

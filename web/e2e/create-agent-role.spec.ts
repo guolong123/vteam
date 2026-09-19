@@ -3,35 +3,36 @@ import { dirname } from "node:path";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 
 /**
- * agent-native-permission-editor Todo 6 · 新建 Agent 角色选择器
+ * agent-role-decommission Todo 4 · 新建 Agent 岗位选择器
+ * （原 agent-native-permission-editor Todo 6 的 `role` 选择器迁移）
  * ============================================================
- * 覆盖 `CreateAgentModal` 新增的角色下拉（data-testid=create-agent-role）：
- *  A. 选项集：恰好 6 项 = 「无」 + 5 个角色（product/project_manager/
- *     architect/developer/tester）；`plan` 不提供。
- *  B. role=developer：新建成功后，agent 绑定的策略是该角色的能力集
- *     —— `permission.edit['**tasks/* /**']='allow'`（可写任务工作区）、
- *     `permission.bash='allow'`、`tools` 非空（27 条 allow）——不是骨架。
+ * 覆盖 `CreateAgentModal` 的岗位下拉（data-testid=create-agent-role）：
+ *  A. 选项集：值全部来自 `GET /agent-roles` 的 AgentRole.id（前缀 `ar_`），
+ *     plan 不提供、旧 role 字符串（"developer" 等）绝不出现；首项「无」value=""。
+ *  B. 选中开发岗位：新建成功后 agent 绑定的策略是该岗位 defaultAgentId 指向
+ *     Agent 的能力集深拷贝——`permission.edit['**tasks/* /**']='allow'`、
+ *     `permission.bash='allow'`、tools 非空——不是骨架。
  *  C. 「无」（默认）：绑定策略是 deny-by-default 骨架
  *     —— `permission.edit` 只有 `{'*':'deny'}`、`bash='deny'`、`tools={}`。
- *  D. 提交体判别：「无」时请求体不含 `role` 键（undefined 不发），
- *     developer 时含 `role:"developer"`；绝不出现 `role:""`。
- *  E. 「无」再选回 developer：状态重置有效（下拉受控值往返）。
+ *  D. 提交体判别：请求体**绝不含 `role` 键**（该键已被 whitelist 管道静默剥离，
+ *     信它等于信一个到不了 service 的字段）；「无」不含 `agentRoleId`（undefined 不发），
+ *     选中岗位时含 `agentRoleId:"ar_developer"`；绝不出现 `role:""`。
+ *  E. 「无」再选回岗位：状态重置有效（下拉受控值往返）。
  *
- * 判别性（MUST DO）：断言 B 直接读服务端回包 `effectivePermission` 与
- * 落库策略 config；若前端停发 role，后端走 `dto.role ?? null` → 骨架，
- * B 的 edit/bash/tools 断言必然失败（见 learnings.md 的 mutation 记录）。
+ * 判别性（MUST DO）：断言 B 直接读服务端回包 `effectivePermission` 与落库策略
+ * config；若前端停发 agentRoleId（或仍投旧 role），后端走骨架路径，
+ * B 的 edit/bash/tools 断言必然失败。
  *
  * 运行（仓库根）：`bash scripts/e2e-create-agent-role.sh`
  * （独立 tmp config，不碰 playwright.config.ts；baseURL 指向 compose web :13001）
  */
 
 const SERVER_URL = "http://localhost:13000";
-const RUN_TAG = `t6-${Date.now().toString(36)}`;
+const RUN_TAG = `t4-${Date.now().toString(36)}`;
 
 type CreatedAgent = {
   id: string;
   name: string;
-  role: string | null;
   policyId: string;
   effectivePermission: {
     agentName: string;
@@ -65,7 +66,7 @@ function optionValues(page: Page) {
 /** 填必填字段并提交；返回捕获到的 POST /agents 请求体与 201 响应体。 */
 async function submitCreate(
   page: Page,
-  fields: { name: string; agentKey: string; role?: string },
+  fields: { name: string; agentKey: string; agentRoleId?: string },
 ): Promise<{ body: Record<string, unknown>; created: CreatedAgent }> {
   const caught: Record<string, unknown>[] = [];
   await page.route("**/api/v1/agents", async (route) => {
@@ -78,8 +79,8 @@ async function submitCreate(
   );
   await page.getByTestId("agent-name-input").fill(fields.name);
   await page.getByTestId("agent-key-input").fill(fields.agentKey);
-  if (fields.role !== undefined) {
-    await page.getByTestId("create-agent-role").selectOption(fields.role);
+  if (fields.agentRoleId !== undefined) {
+    await page.getByTestId("create-agent-role").selectOption(fields.agentRoleId);
   }
   await page.getByTestId("create-agent-confirm").click();
   const response = await responsePromise;
@@ -143,30 +144,59 @@ function recordEvidence(entry: Record<string, unknown>) {
   writeFileSync(path, `${JSON.stringify(records, null, 2)}\n`);
 }
 
-test.describe("Todo 6 · 新建 Agent 角色选择器", () => {
-  test("1. 选项集 = 「无」 + 五角色，plan 不提供", async ({ page }) => {
+/** 读 `GET /agent-roles` 的岗位行（唯一数据路径），断言 id 是 ar_ 前缀而非旧 role 字符串。 */
+async function roleRows(
+  request: APIRequestContext,
+): Promise<{ id: string; key: string; name: string }[]> {
+  const res = await request.get(`${SERVER_URL}/api/v1/agent-roles?pageSize=100`, {
+    headers: authHeaders(await adminToken(request)),
+  });
+  expect(res.ok()).toBeTruthy();
+  return ((await res.json()) as { items: { id: string; key: string; name: string }[] }).items;
+}
+
+async function roleIdOf(request: APIRequestContext, key: string): Promise<string> {
+  const row = (await roleRows(request)).find((r) => r.key === key);
+  expect(row).toBeTruthy();
+  expect(row!.id.startsWith("ar_")).toBe(true);
+  return row!.id;
+}
+
+test.describe("Todo 4 · 新建 Agent 岗位选择器（agentRoleId）", () => {
+  test("1. 选项集来自 /agent-roles（ar_ id）；plan 不提供、旧 role 字符串不出现", async ({
+    page,
+    request,
+  }) => {
+    const rows = await roleRows(request);
+    const devRoleId = await roleIdOf(request, "developer");
     await loginAsAdmin(page);
     await openCreateModal(page);
+    const select = page.getByTestId("create-agent-role");
+    // 选项异步装载（GET /agent-roles）：等待真实岗位出现
+    await expect
+      .poll(async () => (await optionValues(page)).length, { timeout: 15_000 })
+      .toBeGreaterThan(1);
     const values = await optionValues(page);
-    expect(values).toEqual([
-      "",
-      "product",
-      "project_manager",
-      "architect",
-      "developer",
-      "tester",
-    ]);
+    expect(values[0]).toBe("");
+    expect(values).toContain(devRoleId);
+    // 选项集 = 弹窗键集（CREATE_ROLE_KEYS 去掉 plan）∩ /agent-roles 现有行；
+    // 自定义岗位（如 ar_general，无 defaultAgentId）不在选项集内。
+    const createKeys = rows.filter((r) =>
+      ["product", "project_manager", "architect", "developer", "tester"].includes(r.key),
+    );
+    expect([...values.filter((v) => v !== "")].sort()).toEqual(
+      createKeys.map((r) => r.id).sort(),
+    );
     expect(values).not.toContain("plan");
-    const labels = await page
-      .getByTestId("create-agent-role")
+    expect(values).not.toContain("developer");
+    const labels = await select
       .locator("option")
       .evaluateAll((els) => els.map((e) => (e as HTMLOptionElement).textContent ?? ""));
     expect(labels[0]).toContain("无");
     expect(labels.some((l) => l.includes("开发"))).toBe(true);
     expect(labels.join("|")).not.toContain("计划");
-    // 默认选中「无」（骨架语义）
-    await expect(page.getByTestId("create-agent-role")).toHaveValue("");
-    await page.getByTestId("create-agent-role").selectOption("developer");
+    await expect(select).toHaveValue("");
+    await select.selectOption(devRoleId);
     await page.setViewportSize({ width: 900, height: 980 });
     await page.locator("#agent-role").scrollIntoViewIfNeeded();
     await save(process.env.T6_SCREENSHOT, page);
@@ -175,33 +205,38 @@ test.describe("Todo 6 · 新建 Agent 角色选择器", () => {
       offered: values,
       labels,
       plan_offered: values.includes("plan"),
+      role_string_values_offered: values.includes("developer"),
       default_selected: "",
     });
   });
 
-  test("2. role=developer → 继承开发者能力集（非骨架）", async ({ page, request }) => {
+  test("2. 选中开发岗位 → 继承其默认 Agent 能力集（非骨架）", async ({ page, request }) => {
+    const devRoleId = await roleIdOf(request, "developer");
     await loginAsAdmin(page);
     await openCreateModal(page);
+    await expect
+      .poll(async () => (await optionValues(page)).length, { timeout: 15_000 })
+      .toBeGreaterThan(1);
     const { body, created } = await submitCreate(page, {
-      name: `t6 开发者 ${RUN_TAG}`,
-      agentKey: `t6-dev-${RUN_TAG}`,
-      role: "developer",
+      name: `t4 开发者 ${RUN_TAG}`,
+      agentKey: `t4-dev-${RUN_TAG}`,
+      agentRoleId: devRoleId,
     });
 
-    const agent: CreatedAgent = { ...created, name: `t6 开发者 ${RUN_TAG}` };
+    const agent: CreatedAgent = { ...created, name: `t4 开发者 ${RUN_TAG}` };
     const ep = agent.effectivePermission;
     expect(ep).not.toBeNull();
     expect(ep!.permission.edit?.["**tasks/*/**"]).toBe("allow");
     expect(ep!.permission.edit?.["*"]).toBe("deny");
     expect(ep!.permission.bash).toBe("allow");
     expect(Object.keys(ep!.tools).length).toBeGreaterThan(0);
-    expect(agent.role).toBe("developer");
 
-    // 请求契约：「无」不发 role，选中角色才发
-    expect(body.role).toBe("developer");
+    // 请求契约：选中岗位发 agentRoleId；绝不发旧 role 键
+    expect(body.agentRoleId).toBe(devRoleId);
+    expect(body).not.toHaveProperty("role");
     expect(body.type).toBe("custom");
 
-    // 落库策略 config 同形（深拷贝模板，非共享 template 行）
+    // 落库策略 config 同形（深拷贝岗位模板，非共享 template 行）
     const token = await adminToken(request);
     const policy = (await (
       await request.get(`${SERVER_URL}/api/v1/execution-policies/${agent.policyId}`, {
@@ -224,8 +259,9 @@ test.describe("Todo 6 · 新建 Agent 角色选择器", () => {
     await save(process.env.T6_SCREENSHOT_DEV_PANEL, page);
     recordEvidence({
       test: "developer",
-      request_body_role: body.role,
-      agent: { id: agent.id, role: agent.role, policyId: agent.policyId },
+      request_body_agentRoleId: body.agentRoleId,
+      request_body_role_present: Object.prototype.hasOwnProperty.call(body, "role"),
+      agent: { id: agent.id, policyId: agent.policyId },
       effectivePermission: ep,
       stored_policy: {
         id: policy.id,
@@ -240,17 +276,16 @@ test.describe("Todo 6 · 新建 Agent 角色选择器", () => {
   test("3. 「无」→ 骨架策略（deny-by-default）", async ({ page, request }) => {
     await loginAsAdmin(page);
     await openCreateModal(page);
-    // 不选角色 = 默认「无」
     const { body, created } = await submitCreate(page, {
-      name: `t6 骨架 ${RUN_TAG}`,
-      agentKey: `t6-none-${RUN_TAG}`,
+      name: `t4 骨架 ${RUN_TAG}`,
+      agentKey: `t4-none-${RUN_TAG}`,
     });
     expect(body).not.toHaveProperty("role");
+    expect(body).not.toHaveProperty("agentRoleId");
     expect(JSON.stringify(body)).not.toContain('"role":""');
 
     const token = await adminToken(request);
-    const agent: CreatedAgent = { ...created, name: `t6 骨架 ${RUN_TAG}` };
-    expect(agent.role).toBeNull();
+    const agent: CreatedAgent = { ...created, name: `t4 骨架 ${RUN_TAG}` };
     const ep = agent.effectivePermission;
     expect(ep).not.toBeNull();
     expect(ep!.permission.edit).toEqual({ "*": "deny" });
@@ -266,7 +301,11 @@ test.describe("Todo 6 · 新建 Agent 角色选择器", () => {
     recordEvidence({
       test: "none",
       request_body_role_present: Object.prototype.hasOwnProperty.call(body, "role"),
-      agent: { id: agent.id, role: agent.role, policyId: agent.policyId },
+      request_body_agentRoleId_present: Object.prototype.hasOwnProperty.call(
+        body,
+        "agentRoleId",
+      ),
+      agent: { id: agent.id, policyId: agent.policyId },
       effectivePermission: ep,
       skeleton: {
         edit: ep!.permission.edit,
@@ -277,20 +316,25 @@ test.describe("Todo 6 · 新建 Agent 角色选择器", () => {
     console.log(`[cleanup] ${await deleteAgent(request, token, agent)}`);
   });
 
-  test("4. 下拉往返：developer → 无 → developer 重置有效", async ({ page }) => {
+  test("4. 下拉往返：岗位 → 无 → 岗位 重置有效", async ({ page, request }) => {
+    const devRoleId = await roleIdOf(request, "developer");
+    const testerId = await roleIdOf(request, "tester");
     await loginAsAdmin(page);
     await openCreateModal(page);
     const select = page.getByTestId("create-agent-role");
-    await select.selectOption("developer");
-    await expect(select).toHaveValue("developer");
+    await expect
+      .poll(async () => (await optionValues(page)).length, { timeout: 15_000 })
+      .toBeGreaterThan(1);
+    await select.selectOption(devRoleId);
+    await expect(select).toHaveValue(devRoleId);
     await select.selectOption("");
     await expect(select).toHaveValue("");
-    await select.selectOption("tester");
-    await expect(select).toHaveValue("tester");
+    await select.selectOption(testerId);
+    await expect(select).toHaveValue(testerId);
     // 关闭再打开：重置回「无」
     await page.getByTestId("create-agent-close").click();
     await page.getByTestId("create-agent-button").click();
     await expect(page.getByTestId("create-agent-role")).toHaveValue("");
-    recordEvidence({ test: "roundtrip_reset", values: ["developer", "", "tester", "reopen:"] });
+    recordEvidence({ test: "roundtrip_reset", values: [devRoleId, "", testerId, "reopen:"] });
   });
 });

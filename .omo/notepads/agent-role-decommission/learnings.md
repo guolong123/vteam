@@ -113,3 +113,34 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   changes no assertion and no expected value — it is the migration, not a weakening.
   Byte-identity specs (`matrix`/`custom-agents`/`db-builtin`) were only extended:
   +2 pins (deep-equal to the frozen baseline, and the baseline file's own sha256).
+
+## todo 4 — agents.service create/clone/update off `role` + picker re-point
+
+- **The three capability paths are exactly**: PATH 1 explicit `policyId` (bound as-is,
+  no new policy row) > PATH 2 `agentRoleId` → `AgentRole.defaultAgentId` → that Agent's
+  `policyId` → its stored `ExecutionPolicy.config` (deep-copied) → fallback
+  `resolveConstantPolicySource('vteam-<agentKey>')` when the row is missing but the
+  `agentKey` is a builtin name > PATH 3 `buildSkeletonConfig` (values frozen).
+  `AgentRole` still carries NO capability — it is only a **selector**.
+- **`resolveTemplateSource` signature changed to an options object**
+  (`{ agentRoleId: string | null }`), so any spec that pokes it must be updated. The
+  cross-module spec was `execution-policies/agent-policy-fallback.spec.ts` (todo 3's
+  file) — the *call shape* only; todo 3 owns the service.
+- **The whitelist-strip defect is now guarded at two levels**: a unit test runs the real
+  `ValidationPipe({whitelist:true})` shape over create/update/clone DTOs and asserts
+  `agentRoleId` survives while a stale `role` key is stripped; a live API control
+  (`POST /agents {role:'developer'}` with no `agentRoleId`) proves the old wire yields
+  the skeleton. Assert the *capability*, never just the request status.
+- **`toAgentDto`'s `role` field was deliberately LEFT as a display passthrough** — todo 5
+  owns the label consumers and todo 6 the web maps. Dropping the field here would have
+  broken their byte-identical-label acceptance. Only capability resolution stopped
+  reading `role` (`resolveManyByAgents` now receives `{policyId, agentKey}`).
+- **`update()` label-vs-policy**: no label field exists in the DTO, and `policyId` is
+  written only when explicitly passed. Live proof: create via `ar_developer` →
+  `PATCH {name, role:'tester'}` → policyId/tools/permission identical, policy row config
+  and `updatedAt` identical, and the stray `role` in the body was stripped by the pipe.
+- **Mutation checks**: forcing `update()` to write `policyId` on a name change killed the
+  label-noop test; nulling the PATH 2 resolution killed 4 PATH 2 tests. Both reverted.
+- **Manifest regeneration (todo 2/3 precedent)**: 176 → 171 keys. The delta is exactly
+  the removed write-path keys (3 writes + 1 `ep_<role>` read + 1 merged comment) plus the
+  picker's replaced state key — verified key-by-key before regenerating, never hand-edited.

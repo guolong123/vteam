@@ -102,14 +102,24 @@ describe('unified agent policy fallback (Todo 5)', () => {
     expect(resolved).toBeNull();
   });
 
-  it('两条路径共用同一常量推导：resolveByAgent 与 resolveTemplateSource 行缺失结果一致', async () => {
+  it('两条路径共用同一常量推导：resolveByAgent 与 resolveTemplateSource（岗位选择器）行缺失结果一致', async () => {
     const resolved = await serviceWith(null).resolveByAgent({
       policyId: 'ep_developer',
       agentKey: 'developer',
     });
 
     const agents = new AgentsService(
-      { executionPolicy: { findUnique: () => Promise.resolve(null) } } as never,
+      {
+        agentRole: {
+          findUnique: () =>
+            Promise.resolve({ defaultAgentId: 'a_developer' }),
+        },
+        agent: {
+          findUnique: () =>
+            Promise.resolve({ policyId: null, agentKey: 'developer' }),
+        },
+        executionPolicy: { findUnique: () => Promise.resolve(null) },
+      } as never,
       {} as never,
       {} as never,
       {} as never,
@@ -120,12 +130,21 @@ describe('unified agent policy fallback (Todo 5)', () => {
       agents as unknown as {
         resolveTemplateSource: (
           tx: unknown,
-          role: string,
+          opts: { agentRoleId: string | null },
         ) => Promise<{ config: Record<string, unknown> } | null>;
       }
     ).resolveTemplateSource(
-      { executionPolicy: { findUnique: () => Promise.resolve(null) } },
-      'developer',
+      {
+        agentRole: {
+          findUnique: () => Promise.resolve({ defaultAgentId: 'a_developer' }),
+        },
+        agent: {
+          findUnique: () =>
+            Promise.resolve({ policyId: null, agentKey: 'developer' }),
+        },
+        executionPolicy: { findUnique: () => Promise.resolve(null) },
+      },
+      { agentRoleId: 'ar_developer' },
     );
 
     expect(source).not.toBeNull();

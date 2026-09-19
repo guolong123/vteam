@@ -46,6 +46,7 @@ describe('AgentsService', () => {
       delete: jest.Mock;
     };
     agentSkill: { create: jest.Mock; deleteMany: jest.Mock };
+    agentRole: { findUnique: jest.Mock };
     executionPolicy: { findUnique: jest.Mock; create: jest.Mock };
     worker: { findUnique: jest.Mock };
     $transaction: jest.Mock;
@@ -60,6 +61,7 @@ describe('AgentsService', () => {
       id: 'a_product',
       name: '产品经理',
       role: 'product',
+      agentKey: 'product',
       type: 'template',
       prompt: 'prompt1',
       baseAgentId: null,
@@ -76,6 +78,7 @@ describe('AgentsService', () => {
       id: 'a_architect',
       name: '架构师',
       role: 'architect',
+      agentKey: 'architect',
       type: 'template',
       prompt: 'prompt2',
       baseAgentId: null,
@@ -92,6 +95,7 @@ describe('AgentsService', () => {
       id: 'a_developer',
       name: '开发者',
       role: 'developer',
+      agentKey: 'developer',
       type: 'template',
       prompt: 'prompt3',
       baseAgentId: null,
@@ -108,6 +112,7 @@ describe('AgentsService', () => {
       id: 'a_tester',
       name: '测试',
       role: 'tester',
+      agentKey: 'tester',
       type: 'template',
       prompt: 'prompt4',
       baseAgentId: null,
@@ -168,30 +173,33 @@ describe('AgentsService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
-      agentSkill: { create: jest.fn(), deleteMany: jest.fn() },
-      // 策略装配（clone/create 恒建 custom 策略）：默认库内无模板行，
-      // role 命中内置边界时走 ROLE_BOUNDARIES 派生回退；create 回显 data 行。
-      executionPolicy: {
-        findUnique: jest.fn().mockResolvedValue(null),
-        create: jest
-          .fn()
-          .mockImplementation(
-            async ({ data }: { data: Record<string, unknown> }) => ({
-              ...data,
-              createdAt: new Date('2026-09-14T00:00:00Z'),
-              updatedAt: new Date('2026-09-14T00:00:00Z'),
-            }),
-          ),
-      },
+    agentSkill: { create: jest.fn(), deleteMany: jest.fn() },
+    // 岗位（AgentRole）只作能力模板选择器：resolveTemplateSource 读 defaultAgentId，
+    // 默认无岗位行；用例按需覆盖为 { defaultAgentId }。
+    agentRole: { findUnique: jest.fn().mockResolvedValue(null) },
+    // 策略装配（clone/create 恒建 custom 策略）：默认库内无模板行，
+    // defaultAgent 的 agentKey 命中内置边界时走 ROLE_BOUNDARIES 派生回退；create 回显 data 行。
+    executionPolicy: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      create: jest
+        .fn()
+        .mockImplementation(
+          async ({ data }: { data: Record<string, unknown> }) => ({
+            ...data,
+            createdAt: new Date('2026-09-14T00:00:00Z'),
+            updatedAt: new Date('2026-09-14T00:00:00Z'),
+          }),
+        ),
+    },
       // listOpencodeAgents / getAvailableModels 需读 worker.capabilities 解析 exec 基址
       worker: { findUnique: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
     };
     executionPolicyService = {
       resolveManyByAgents: jest.fn(
-        async (agents: { policyId?: string | null; role?: string | null }[]) =>
+        async (agents: { policyId?: string | null; agentKey?: string | null }[]) =>
           agents.map((a) => {
-            const key = a.policyId ?? (a.role ? `ep_${a.role}` : null);
+            const key = a.policyId ?? null;
             if (
               !key ||
               ![
@@ -204,7 +212,7 @@ describe('AgentsService', () => {
             ) {
               return null;
             }
-            const agentName = a.role ? `vteam-${a.role}` : 'vteam-plan';
+            const agentName = a.agentKey ? `vteam-${a.agentKey}` : 'vteam-plan';
             const boundary = (
               ROLE_BOUNDARIES as Record<
                 string,
@@ -282,7 +290,7 @@ describe('AgentsService', () => {
           agentName: 'vteam-product',
         },
       });
-      // role 与前端 task-create 的 data-role 对齐
+      // role 与前端 task-create 的 data-role 对齐（展示标签透传，todo 5/6 迁移）
       const roles = result.items.map((i) => i.role);
       expect(roles).toEqual(['product', 'architect', 'developer', 'tester']);
       // 扩展字段契约：扁平数组 + 策略绑定 + 生效权限
@@ -319,10 +327,10 @@ describe('AgentsService', () => {
         1,
       );
       expect(executionPolicyService.resolveManyByAgents).toHaveBeenCalledWith([
-        { policyId: 'ep_product', role: 'product' },
-        { policyId: 'ep_architect', role: 'architect' },
-        { policyId: 'ep_developer', role: 'developer' },
-        { policyId: 'ep_tester', role: 'tester' },
+        { policyId: 'ep_product', agentKey: 'product' },
+        { policyId: 'ep_architect', agentKey: 'architect' },
+        { policyId: 'ep_developer', agentKey: 'developer' },
+        { policyId: 'ep_tester', agentKey: 'tester' },
       ]);
       expect(result.items.map((i) => i.effectivePermission?.policyId)).toEqual([
         'ep_product',
@@ -435,7 +443,6 @@ describe('AgentsService', () => {
         name: ' 数据分析师 ',
         type: 'custom',
         agentKey: 'data-analyst',
-        role: 'analyst',
         prompt: 'prompt-custom',
         skillIds: ['s_skill1', 's_skill2'],
         defaultModelId: 'opencode-go/deepseek-v4-flash',
@@ -450,7 +457,6 @@ describe('AgentsService', () => {
             id: expect.any(String),
             name: '数据分析师',
             type: 'custom',
-            role: 'analyst',
             agentKey: 'data-analyst',
             prompt: 'prompt-custom',
             baseAgentId: null,
@@ -459,6 +465,11 @@ describe('AgentsService', () => {
           }),
         }),
       );
+      // 写路径不再携带 role（列已不写）
+      expect(
+        (prisma.agent.create.mock.calls[0][0].data as Record<string, unknown>)
+          .role,
+      ).toBeUndefined();
       // 批量关联
       expect(prisma.agentSkill.create).toHaveBeenCalledTimes(2);
       expect(prisma.agentSkill.create).toHaveBeenCalledWith(
@@ -561,13 +572,16 @@ describe('AgentsService', () => {
             name: '产品经理副本',
             type: 'clone',
             baseAgentId: 'a_product',
-            role: 'product',
             agentKey: 'product-copy',
             prompt: 'prompt1',
             createdBy: 'u_admin',
           }),
         }),
       );
+      expect(
+        (prisma.agent.create.mock.calls[0][0].data as Record<string, unknown>)
+          .role,
+      ).toBeUndefined();
       // 克隆恒装配新 custom 策略（库内无 ep_product 行 → ROLE_BOUNDARIES 派生回退），不继承模板绑定
       const policyId = prisma.executionPolicy.create.mock.calls[0][0].data.id;
       expect(prisma.executionPolicy.create).toHaveBeenCalledTimes(1);
@@ -1366,7 +1380,6 @@ describe('AgentsService', () => {
         name: '策略分析师',
         type: 'custom',
         agentKey: 'policy-analyst',
-        role: 'analyst',
         prompt: 'prompt-custom',
         policyId: 'ep_developer',
       };
@@ -1379,12 +1392,13 @@ describe('AgentsService', () => {
         }),
       );
       expect(result).toMatchObject({ policyId: 'ep_developer' });
-      // 显式绑定不建策略
+      // PATH 1：显式绑定不建策略、不解析岗位模板
       expect(prisma.executionPolicy.create).not.toHaveBeenCalled();
       expect(prisma.executionPolicy.findUnique).not.toHaveBeenCalled();
+      expect(prisma.agentRole.findUnique).not.toHaveBeenCalled();
     });
 
-    it('create：不传 policyId + 未知 role → 装配 deny-by-default 骨架 custom 策略并绑定', async () => {
+    it('create：不传 policyId + 不传 agentRoleId → 装配 deny-by-default 骨架 custom 策略并绑定（PATH 3）', async () => {
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       prisma.agent.create.mockImplementation(
         async ({ data }: { data: Record<string, unknown> }) => ({
@@ -1484,7 +1498,7 @@ describe('AgentsService', () => {
       expect(result).toMatchObject({ policyId: 'ep_developer' });
     });
 
-    it('update：不传 policyId → 不触碰原绑定', async () => {
+    it('update：不传 policyId → 不触碰原绑定，且改名（标签变更）不重配策略', async () => {
       prisma.agent.findUnique
         .mockResolvedValueOnce({ ...customRow, policyId: 'ep_developer' })
         .mockResolvedValueOnce({
@@ -1502,9 +1516,14 @@ describe('AgentsService', () => {
           data: expect.not.objectContaining({ policyId: expect.anything() }),
         }),
       );
+      // 标签变更（name/岗位）绝不自动重配/重拷贝策略：无新策略行、无策略查询
+      expect(prisma.executionPolicy.create).not.toHaveBeenCalled();
+      expect(prisma.executionPolicy.findUnique).not.toHaveBeenCalled();
+      expect(prisma.agentRole.findUnique).not.toHaveBeenCalled();
       expect(result).toMatchObject({
         name: '仅改名',
         policyId: 'ep_developer',
+        effectivePermission: { policyId: 'ep_developer' },
       });
     });
 
@@ -1567,7 +1586,6 @@ describe('AgentsService', () => {
         name: '数据分析师',
         type: 'custom',
         agentKey: 'data-analyst',
-        role: 'analyst',
       });
 
       expect(prisma.agent.create).toHaveBeenCalledWith(
@@ -1739,7 +1757,7 @@ describe('AgentsService', () => {
       const result = await service.findOne('a_0000000005');
 
       expect(executionPolicyService.resolveManyByAgents).toHaveBeenCalledWith([
-        { policyId: 'ep_demo', role: 'analyst', agentKey: 'demo-agent' },
+        { policyId: 'ep_demo', agentKey: 'demo-agent' },
       ]);
       expect(result).toMatchObject({ agentKey: 'demo-agent' });
       expect(result.effectivePermission).toMatchObject({
@@ -1806,9 +1824,17 @@ describe('AgentsService', () => {
       };
     }
 
-    it('create role=developer 命中库内 ep_developer：装配策略的 permission/tools 逐字段等于该 config（角色继承真实生效，非骨架）', async () => {
+    it('PATH 2 create agentRoleId=ar_developer：岗位默认 Agent 的绑定策略 config 逐字段拷贝（能力继承真实生效，非骨架）', async () => {
       const epDeveloperConfig = seedRolePolicyConfig('vteam-developer');
       expect(Object.keys(epDeveloperConfig.tools).length).toBeGreaterThan(0);
+      prisma.agentRole.findUnique.mockResolvedValue({
+        defaultAgentId: 'a_developer',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_developer',
+        policyId: 'ep_developer',
+        agentKey: 'developer',
+      });
       prisma.executionPolicy.findUnique.mockImplementation(
         async ({ where }: { where: { id: string } }) =>
           where.id === 'ep_developer'
@@ -1829,9 +1855,13 @@ describe('AgentsService', () => {
         name: '外包开发者',
         type: 'custom',
         agentKey: 'role-inherit-dev',
-        role: 'developer',
+        agentRoleId: 'ar_developer',
       });
 
+      expect(prisma.agentRole.findUnique).toHaveBeenCalledWith({
+        where: { id: 'ar_developer' },
+        select: { defaultAgentId: true },
+      });
       expect(prisma.executionPolicy.findUnique).toHaveBeenCalledWith({
         where: { id: 'ep_developer' },
       });
@@ -1847,9 +1877,69 @@ describe('AgentsService', () => {
       expect(policyData.config.permission.bash).toBe('allow');
       expect(policyData.type).toBe('custom');
       expect(policyData.id).not.toBe('ep_developer');
+      expect(policyData.description).toBe(
+        ROLE_BOUNDARIES['vteam-developer'].scopeSummary,
+      );
     });
 
-    it('create 无 role：不查模板行、绑定 deny 骨架（角色继承的阴性对照，保证上例非偶然通过）', async () => {
+    it('PATH 2 回退：岗位默认 Agent 无绑定策略但 agentKey 命中内置 → 常量派生（tools 非空）', async () => {
+      prisma.agentRole.findUnique.mockResolvedValue({
+        defaultAgentId: 'a_developer',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_developer',
+        policyId: null,
+        agentKey: 'developer',
+      });
+      prisma.executionPolicy.findUnique.mockResolvedValue(null);
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      echoAgentCreate();
+
+      const result = await service.create('u_admin', {
+        name: '外包开发者',
+        type: 'custom',
+        agentKey: 'role-fallback-dev',
+        agentRoleId: 'ar_developer',
+      });
+
+      const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
+      expect(policyData.type).toBe('custom');
+      expect(policyData.id).not.toBe('ep_developer');
+      expect(policyData.config.tools).toEqual(
+        ROLE_BOUNDARIES['vteam-developer'].toolAllows,
+      );
+      expect(Object.keys(policyData.config.tools).length).toBeGreaterThan(0);
+      expect(policyData.description).toBe(
+        ROLE_BOUNDARIES['vteam-developer'].scopeSummary,
+      );
+      expect(result).toMatchObject({ policyId: policyData.id });
+    });
+
+    it('PATH 2 失效：岗位无 defaultAgentId → PATH 3 骨架（能力继承的阴性对照，保证上例非偶然通过）', async () => {
+      prisma.agentRole.findUnique.mockResolvedValue({ defaultAgentId: null });
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      echoAgentCreate();
+
+      await service.create('u_admin', {
+        name: '无默认开发者',
+        type: 'custom',
+        agentKey: 'role-nodefault-dev',
+        agentRoleId: 'ar_developer',
+      });
+
+      expect(prisma.executionPolicy.findUnique).not.toHaveBeenCalled();
+      const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
+      expect(policyData.config.permission).toEqual({
+        edit: { '*': 'deny' },
+        read: { '*': 'allow' },
+        bash: 'deny',
+        task: 'deny',
+      });
+      expect(policyData.config.tools).toEqual({});
+      expect(policyData.type).toBe('custom');
+    });
+
+    it('PATH 3 create 无 agentRoleId：不查岗位/模板行、绑定 deny 骨架（阴性对照，保证 PATH 1/2 非偶然通过）', async () => {
       prisma.executionPolicy.findUnique.mockResolvedValue(null);
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       echoAgentCreate();
@@ -1860,6 +1950,7 @@ describe('AgentsService', () => {
         agentKey: 'role-less-analyst',
       });
 
+      expect(prisma.agentRole.findUnique).not.toHaveBeenCalled();
       expect(prisma.executionPolicy.findUnique).not.toHaveBeenCalled();
       const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
       expect(policyData.config.permission).toEqual({
@@ -1967,7 +2058,15 @@ describe('AgentsService', () => {
       expect(result).toMatchObject({ policyId: policyData.id });
     });
 
-    it('create 有 role 无 policyId：深拷贝模板策略为新 custom 策略并绑定', async () => {
+    it('PATH 2 create 有 agentRoleId 无 policyId：深拷贝岗位默认 Agent 的绑定策略为新 custom 策略并绑定', async () => {
+      prisma.agentRole.findUnique.mockResolvedValue({
+        defaultAgentId: 'a_developer',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_developer',
+        policyId: 'ep_developer',
+        agentKey: 'developer',
+      });
       prisma.executionPolicy.findUnique.mockResolvedValue({
         id: 'ep_developer',
         name: '开发者',
@@ -1987,7 +2086,7 @@ describe('AgentsService', () => {
         name: '外包开发者',
         type: 'custom',
         agentKey: 'outsourced-dev',
-        role: 'developer',
+        agentRoleId: 'ar_developer',
       });
 
       expect(prisma.executionPolicy.findUnique).toHaveBeenCalledWith({
@@ -2003,7 +2102,15 @@ describe('AgentsService', () => {
       expect(result).toMatchObject({ policyId: policyData.id });
     });
 
-    it('create 有内置 role + 库内无 ep_<role> 行：回退常量派生（tools 非空）、策略 id 为自有 custom id', async () => {
+    it('PATH 2 create 有岗位 + 库内无内置行：回退常量派生（tools 非空）、策略 id 为自有 custom id', async () => {
+      prisma.agentRole.findUnique.mockResolvedValue({
+        defaultAgentId: 'a_developer',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_developer',
+        policyId: 'ep_developer',
+        agentKey: 'developer',
+      });
       prisma.executionPolicy.findUnique.mockResolvedValue(null);
       prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
       echoAgentCreate();
@@ -2012,7 +2119,7 @@ describe('AgentsService', () => {
         name: '外包开发者',
         type: 'custom',
         agentKey: 'outsourced-dev-fallback',
-        role: 'developer',
+        agentRoleId: 'ar_developer',
       });
 
       const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
@@ -2031,6 +2138,102 @@ describe('AgentsService', () => {
         }),
       );
       expect(result).toMatchObject({ policyId: policyData.id });
+    });
+
+    it('PATH 2 create 岗位不存在：回落骨架（不臆造能力）', async () => {
+      prisma.agentRole.findUnique.mockResolvedValue(null);
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      echoAgentCreate();
+
+      await service.create('u_admin', {
+        name: '幽灵岗位',
+        type: 'custom',
+        agentKey: 'ghost-role-agent',
+        agentRoleId: 'ar_nonexistent',
+      });
+
+      expect(prisma.agent.findUnique).not.toHaveBeenCalled();
+      const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
+      expect(policyData.config.tools).toEqual({});
+      expect(policyData.config.permission.bash).toBe('deny');
+    });
+
+    it('clone 源无绑定策略 + agentRoleId：按岗位模板深拷贝（clone 的 PATH 2）', async () => {
+      const sourceConfig = {
+        permission: { edit: { '*': 'deny' } },
+        correction: { scopeSummary: '模板' },
+        tools: { vteam_group_post: 'allow' },
+      };
+      prisma.agent.findUnique
+        .mockResolvedValueOnce({
+          ...templateRows[0],
+          policyId: null,
+          agentKey: 'product',
+        })
+        .mockResolvedValueOnce({
+          id: 'a_developer',
+          policyId: 'ep_developer',
+          agentKey: 'developer',
+        });
+      prisma.agentRole.findUnique.mockResolvedValue({
+        defaultAgentId: 'a_developer',
+      });
+      prisma.executionPolicy.findUnique.mockResolvedValue({
+        id: 'ep_developer',
+        name: '开发者',
+        description: '编码与实现说明',
+        type: 'template',
+        config: sourceConfig,
+        ...stamp,
+      });
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      echoAgentCreate();
+
+      const result = await service.clone('u_admin', 'a_product', {
+        agentKey: 'role-copy',
+        agentRoleId: 'ar_developer',
+      });
+
+      const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
+      expect(policyData.type).toBe('custom');
+      expect(policyData.id).not.toBe('ep_developer');
+      expect(policyData.config).toEqual(sourceConfig);
+      expect(policyData.config).not.toBe(sourceConfig);
+      expect(policyData.description).toBe('编码与实现说明');
+      expect(result).toMatchObject({ policyId: policyData.id });
+    });
+
+    it('clone 源有绑定策略：源策略深拷贝恒胜出，agentRoleId 被忽略', async () => {
+      const boundConfig = {
+        permission: { edit: { '*': 'deny' } },
+        correction: { scopeSummary: '源策略' },
+        tools: { vteam_submit_artifact: 'allow' },
+      };
+      prisma.agent.findUnique.mockResolvedValue({
+        ...templateRows[0],
+        policyId: 'ep_product',
+        agentKey: 'product',
+      });
+      prisma.executionPolicy.findUnique.mockResolvedValue({
+        id: 'ep_product',
+        name: '产品经理',
+        description: '需求分析与原型设计',
+        type: 'template',
+        config: boundConfig,
+        ...stamp,
+      });
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      echoAgentCreate();
+
+      await service.clone('u_admin', 'a_product', {
+        agentKey: 'bound-copy',
+        agentRoleId: 'ar_developer',
+      });
+
+      expect(prisma.agentRole.findUnique).not.toHaveBeenCalled();
+      const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
+      expect(policyData.config).toEqual(boundConfig);
+      expect(policyData.description).toBe('需求分析与原型设计');
     });
   });
 });

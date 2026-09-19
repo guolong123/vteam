@@ -1,0 +1,4 @@
+[e2e] date=2026-09-19T13:38:06Z HEAD=41f37f579a9746f8374ced7c43e88e0ae85d56dd
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-role-decommission/task-4-live
+[e2e] stack healthy (web + server)
+[e2e] FAIL ui reason=playwright run failed (raw follows)

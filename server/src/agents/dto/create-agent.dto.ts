@@ -46,11 +46,16 @@ export class CreateAgentDto {
   agentKey: string;
 
   @ApiPropertyOptional({
-    description: '角色 key（与前端 task-create data-role 对齐）',
+    description:
+      '岗位 id（AgentRole，`GET /agent-roles`）。起始能力来源之一：未传 policyId 时取该岗位 ' +
+      '`defaultAgentId` 指向的 Agent 的 policyId，深拷贝其 ExecutionPolicy config 为新 custom 策略；' +
+      '无 defaultAgentId / 其 Agent 无 policyId → 回落 deny-by-default 骨架。' +
+      '岗位本身不携带能力（权限/工具矩阵属 ExecutionPolicy），仅作能力模板的选择器。',
+    example: 'ar_developer',
   })
   @IsOptional()
   @IsString()
-  role?: string;
+  agentRoleId?: string;
 
   @ApiPropertyOptional({ description: '角色提示词（FR-33）' })
   @IsOptional()
@@ -92,7 +97,8 @@ export class CreateAgentDto {
 
   @ApiPropertyOptional({
     description:
-      '绑定的 ExecutionPolicy id（角色模板策略 ep_<role>；custom 经 PATCH 改 policyId 生效）',
+      '绑定的 ExecutionPolicy id（显式指定即原样绑定、不新建策略；缺省时按 agentRoleId 深拷贝模板或建骨架。' +
+      '变更权限仍走 PATCH /execution-policies/:policyId —— 改 label 不会自动重配策略）',
     example: 'ep_developer',
   })
   @IsOptional()

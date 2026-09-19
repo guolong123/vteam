@@ -1,0 +1,131 @@
+{
+  "todo": 4,
+  "plan": ".omo/plans/agent-role-decommission.md",
+  "title": "Migrate agents.service create/clone/update off role, AND re-point the create-form role picker",
+  "date": "2026-09-19",
+  "commit": "refactor(agents): create/clone/update without Agent.role",
+  "changedFiles": [
+    "server/src/agents/agents.service.ts",
+    "server/src/agents/dto/create-agent.dto.ts",
+    "server/src/agents/dto/update-agent.dto.ts",
+    "server/src/agents/dto/clone-agent.dto.ts",
+    "server/src/agents/agents.service.spec.ts",
+    "server/src/agents/agents.controller.spec.ts",
+    "server/src/execution-policies/agent-policy-fallback.spec.ts",
+    "web/app/(main)/agents/page.tsx",
+    "web/e2e/create-agent-role.spec.ts",
+    "scripts/agent-role-consumer-manifest.txt"
+  ],
+  "capabilityPaths": {
+    "PATH 1 — explicit policyId": {
+      "code": "agents.service.ts create(): `let policyId = dto.policyId ?? null` — bound as-is, no new policy row",
+      "precedence": "HIGHEST (an explicit policy always wins)",
+      "test": "policyId 绑定 › create：DTO 传 policyId → 落库 policyId（asserts no executionPolicy.create/findUnique, no agentRole lookup）",
+      "live": "POST /agents {policyId} → effectivePermission.policyId === bound id (pre-existing behaviour, unchanged)"
+    },
+    "PATH 2 — chosen AgentRole (agentRoleId)": {
+      "code": "resolveTemplateSource(tx,{agentRoleId}) reads AgentRole.defaultAgentId -> that Agent's policyId -> its ExecutionPolicy config (stored row wins) -> fallback resolveConstantPolicySource('vteam-<agentKey>') when the row is absent but the agentKey is a builtin name",
+      "precedence": "middle",
+      "tests": [
+        "PATH 2 create agentRoleId=ar_developer: permission/tools deep-equal ep_developer config (non-skeleton)",
+        "PATH 2 回退: default Agent policyId null + agentKey=developer -> constant derivation (tools non-empty)",
+        "PATH 2 create 有 agentRoleId 无 policyId: deep copy of the role default Agent's bound policy",
+        "PATH 2 create 有岗位 + 库内无内置行: constant fallback, own custom id",
+        "PATH 2 create 岗位不存在 -> skeleton",
+        "clone 源无绑定策略 + agentRoleId: PATH 2 on clone",
+        "clone 源有绑定策略: source config deep copy wins, agentRoleId ignored"
+      ],
+      "live": "POST /agents {agentRoleId:'ar_developer'} → 201, policyId=ep_0000000010 (new custom), edit={'*':'deny','**tasks/*/**':'allow'}, bash=allow, tools=27 entries"
+    },
+    "PATH 3 — skeleton": {
+      "code": "config ?? buildSkeletonConfig(name) — deny-by-default values UNCHANGED",
+      "skeletonFrozenValues": {
+        "permission": { "edit": { "*": "deny" }, "read": { "*": "allow" }, "bash": "deny", "task": "deny" },
+        "tools": {}
+      },
+      "tests": [
+        "PATH 3 create 无 agentRoleId: no agentRole/executionPolicy lookup, binds deny skeleton",
+        "PATH 2 失效: role without defaultAgentId -> skeleton",
+        "create：不传 policyId + 不传 agentRoleId -> skeleton"
+      ],
+      "live": "POST /agents {} → effectivePermission edit={'*':'deny'}, bash='deny', tools={}"
+    }
+  },
+  "removedWrites": {
+    "create": "`role: dto.role ?? null` REMOVED from tx.agent.create data (spec asserts .role === undefined)",
+    "clone": "`role: source.role` REMOVED (spec asserts .role === undefined)",
+    "update": "`...(dto.role !== undefined ? { role: dto.role } : {})` REMOVED",
+    "dto": "role removed from create-agent.dto.ts / update-agent.dto.ts (clone-agent.dto.ts never had it); agentRoleId added to create+clone"
+  },
+  "labelVsPolicy": {
+    "decision": "A label change NEVER re-provisions the policy. update() accepts no label field; policyId is written only when explicitly passed.",
+    "documentedBehaviour": "Changing only the label (name / AgentRole / TeamMember.roleId) changes the display label and the bound role identity but leaves policyId and effectivePermission byte-identical. Changing capability requires an explicit PATCH policyId on the agent or PATCH /execution-policies/:policyId config.",
+    "unitProof": "update（PATCH /agents/:id）› update：不传 policyId → 不触碰原绑定，且改名（标签变更）不重配策略 — asserts executionPolicy.create/findUnique and agentRole.findUnique NOT called, result.policyId unchanged",
+    "liveProof": {
+      "create": "POST /agents {agentRoleId:'ar_developer'} -> a_0000000008 / ep_0000000008, tools#=27, bash=allow",
+      "patch": "PATCH /agents/a_0000000008 {name:'t4 renamed label', role:'tester'} -> 200; policyId still ep_0000000008; 'role' key silently stripped by whitelist pipe (role field null in response)",
+      "comparison": "effectivePermission.policyId same=true, tools equal=true, permission equal=true; policy row config unchanged=true, updatedAt unchanged=true",
+      "cleanupReceipt": "DELETE agent 200, DELETE policy 200"
+    }
+  },
+  "picker": {
+    "file": "web/app/(main)/agents/page.tsx",
+    "payloadShape": "{ name, prompt?, persona?, agentKey, agentRoleId? } — NO `role` key, ever",
+    "options": "GET /agent-roles rows filtered to the create key set (product/project_manager/architect/developer/tester); value = AgentRole.id (ar_ prefix); no label fallback (a fallback value would silently produce a skeleton)",
+    "liveOptionValues": ["", "ar_product", "ar_project_manager", "ar_architect", "ar_developer", "ar_tester"],
+    "liveAssertions": {
+      "plan_offered": false,
+      "role_string_values_offered": false,
+      "developer_submit_request_body_agentRoleId": "ar_developer",
+      "developer_request_body_role_present": false,
+      "none_request_body_agentRoleId_present": false,
+      "none_request_body_role_present": false
+    }
+  },
+  "whitelistStripDefectGuard": {
+    "statement": "The global ValidationPipe (whitelist:true) silently strips unknown DTO fields. If the picker still posted `role` after its removal from the DTO, every new agent would silently fall back to the skeleton.",
+    "unitGuard": "agents.controller.spec.ts › DTO 校验: runs the real ValidationPipe shape over create/update/clone DTOs and asserts agentRoleId survives while a stale `role` key is stripped (hasOwnProperty false)",
+    "liveGuard": "legacy-role-only POST /agents {role:'developer'} (no agentRoleId) → 201 with tools#=0, bash=deny (skeleton) — the old wire is verified DEAD end-to-end, not assumed"
+  },
+  "tests": {
+    "serverAgents": "npx jest --runInBand src/agents -> 3 suites / 115 tests passed",
+    "fullServer": "npx jest --runInBand -> 140 suites / 3233 tests passed, 1 snapshot passed (baseline 140/3217; +16 from this todo and the parallel todo 3)",
+    "serverTsc": "npx tsc -p tsconfig.json --noEmit -> exit 0",
+    "webTsc": "npx tsc --noEmit -> exit 0",
+    "webEslint": "npx eslint changed files -> 0 errors (1 pre-existing warning unrelated to this todo)",
+    "worker": "cd worker && npx jest --runInBand -> 26 suites / 688 tests passed (unchanged)",
+    "mutationChecks": [
+      "Force update() to write policyId on name change -> '标签变更不重配策略' test FAILS (label-noop test is load-bearing)",
+      "Null out the PATH 2 source resolution -> 4 PATH 2 tests FAIL (capability path is load-bearing)"
+    ]
+  },
+  "liveStack": {
+    "containers": "docker compose build server web && docker compose up -d server web (no --force-recreate)",
+    "playwright": "4/4 passed: option set from /agent-roles, developer role inheritance, blank skeleton, dropdown round-trip",
+    "artifacts": [
+      ".omo/evidence/agent-role-decommission/task-4-live/e2e.txt",
+      ".omo/evidence/agent-role-decommission/task-4-live/task-6-proof.json",
+      ".omo/evidence/agent-role-decommission/task-4-live/task-6-role-picker.png",
+      ".omo/evidence/agent-role-decommission/task-4-live/task-6-developer-panel.png",
+      ".omo/evidence/agent-role-decommission/task-4-live/task-6-none-panel.png"
+    ],
+    "apiProof": "label-change no-op + legacy-role skeleton control (see labelVsPolicy.liveProof and whitelistStripDefectGuard.liveGuard)"
+  },
+  "checkerDelta": {
+    "command": "bash scripts/check-agent-role-consumers.sh",
+    "before": "OBSERVED 176 / UNMAPPED 10 (line drift from the parallel todo 3)",
+    "after": "OBSERVED 171 / UNMAPPED 0",
+    "manifest": "scripts/agent-role-consumer-manifest.txt regenerated from the checker's own grep pipeline (177 -> 171 keys)",
+    "deltaExplanation": "server/src/agents/agents.service.ts 14 -> 9 keys: -3 removed write-path keys (role: dto.role, role: source.role, dto.role write), -1 removed ep_<role> read, -1 merged comment. web agents/page.tsx 9 -> 8: the picker's role-state key replaced by agentRoleId. No consumer was dropped; every remaining key is mapped.",
+    "positiveControl": "bash scripts/check-agent-role-consumers.sh --extra-dir /tmp/armap/control -> UNMAPPED 1, rc=1 (checker still fails on an unmapped consumer)"
+  },
+  "guardrails": {
+    "skeletonConfig": "deny-by-default values unchanged (verified by PATH 3 tests asserting the exact frozen object)",
+    "labelChange": "does NOT auto-re-provision the policy (unit + live proof above)",
+    "worker": "worker/** untouched",
+    "executionPolicyService": "not edited by this todo; only the cross-module spec call-shape for resolveTemplateSource was adapted (todo 3 owns the service)",
+    "frozenBaselineSha": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 (unchanged)",
+    "manifestFrozen": "not applicable to this plan",
+    "scope": "todo 5 owns label consumers (teams/tasks/chat/platform-mcp/triggers); todo 6 owns the web colour/role maps; the toAgentDto `role` display passthrough is untouched so their acceptance (byte-identical labels) still holds"
+  }
+}

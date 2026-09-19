@@ -16,6 +16,9 @@ import { AGENT_KEY_PATTERN } from '../../common/constants/agent.constants';
  * PATCH /agents/:id 请求体（09 篇 §3.7：FR-33~36/47/48）。
  * skillIds 显式传入时重建关联（deleteMany + create），不传则保持原关联。
  * 权限只读经 policyId 绑定 ExecutionPolicy（effectivePermission 经服务端解析返回）。
+ *
+ * 无标签字段（agent-role-decommission todo 4）：改名不重配策略——`policyId` 仅显式
+ * 传入时写入，标签/岗位变更不得静默改写能力（用户策略编辑必须存活）。
  */
 export class UpdateAgentDto {
   @ApiPropertyOptional({ description: 'Agent 名称', maxLength: 64 })
@@ -24,11 +27,6 @@ export class UpdateAgentDto {
   @IsNotEmpty()
   @MaxLength(64)
   name?: string;
-
-  @ApiPropertyOptional({ description: '角色 key' })
-  @IsOptional()
-  @IsString()
-  role?: string;
 
   @ApiPropertyOptional({
     description:
