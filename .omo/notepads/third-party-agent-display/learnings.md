@@ -62,3 +62,34 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `git diff --numstat` on the production file = 0 lines afterwards. Record pristine/mutated/restored shas.
 - Server baselines: 139 suites / 3190 tests → 140 suites / 3196 tests (+1 suite, +6 tests). Worker:
   26 suites / 683 tests → 26 suites / 688 tests (+5 tests, no new suite). `npx tsc --noEmit` clean both sides.
+
+## todo 2 — external agents read-only tab (web) (2026-09-19)
+
+- Third tab is a 3-line change, not a refactor: `useState<"agent"|"role"|"external">`, one
+  `items[]` entry `{key:"external",label:"外部 Agent"}`, and the existing ternary becomes
+  `tab === "role" ? <AgentRolesTab/> : tab === "external" ? <ExternalAgentsPanel/> : <Agent+ConfigPanel>`.
+  The `useState` union keeps the `as` cast type-safe (no `any`).
+- Component lives at `web/src/components/agents/ExternalAgentsPanel.tsx`, same two-column shape as
+  `AgentRolesTab` (left 320px + right flex:1), tokens only from `src/theme/tokens.ts`.
+- Two queries, both inline `api.get` (there is still no `web/src/api/agents.ts`):
+  list `["external-agents"]` → `/agents/opencode` with `query: {}` (omit workerId; server auto-assigns);
+  prompt `["omo-agent-prompt","external",name]` → `/agents/omo-agent-prompt?name=` — the SAME endpoint
+  `AgentPromptModal` uses, keyed per selected name so no prompt is fetched up front.
+- `retry:false` on both queries is deliberate: the mocked-500 failure path must resolve to the explicit
+  unavailable state fast, not after 1 retry delay. The read-only branch renders
+  `external-agent-instructions-unavailable` and NEVER an empty `<pre>`.
+- Freshness guard: react-query v5 keeps the previous query's `data` while a new key loads, so
+  `d.name !== agent.name` is treated as stale and nothing is shown for that tick — otherwise agent B
+  could momentarily display agent A's 33KB prompt.
+- Playwright `toHaveText` fails on the warning block because the decorative `!` glyph is inside the
+  element's text; use `toContainText(WARNING)` — the verbatim sentence is still pinned, the icon is not.
+- `page.route("**/agents/omo-agent-prompt**", ...)` intercepts before login and the mock survives SPA
+  navigation, so test 2 needs no second mouting.
+- Read-only assertions that make the honesty claim falsifiable: within `external-agents-root`,
+  count 0 of `textarea` / `input` / `select` / `[contenteditable]`, plus 0 of `prompt-editor`,
+  `save-agent-button`, `effective-permission-section`, `native-rule-editor`, `model-select` page-wide
+  (the panels don't mount on this tab).
+- Live numbers on the rebuilt compose web: 24 engine agents = 8 governed + 5 hidden non-governed
+  + 11 visible external (the tab shows 11 rows). `general` returns `empty:true` (no engine prompt) →
+  that path shows 该 agent 未定义自定义提示词; `Sisyphus - ultraworker` returns 33,304 chars / 716 lines.
+- `npx tsc --noEmit` clean; spec green 2/2 via tmp `.tpad.playwright.config.ts` against :13001.

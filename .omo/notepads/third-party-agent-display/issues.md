@@ -40,3 +40,22 @@ SAFE surfaces: `/teams/[id]` team detail page (`web/app/(main)/teams/[id]/page.t
 - Notepad note: this notepad carried uncommitted concurrent todo-3 (web) notes at commit time; todo-4 entries
   were appended after them and the whole file was staged with them (same plan, same notepad file — cannot
   split by file). No web/production source file was touched by this todo.
+
+## todo 2 — notes/observations
+
+- **`web/e2e/roles-members.spec.ts` had to be reconciled (2 assertions).** Its todo-7 test 1 asserted
+  `manage-tab` `toHaveCount(2)` and selected the Agent tab with `filter({ hasText: "Agent" })`.
+  Adding the third tab breaks both: the count becomes 3, and the substring filter now matches TWO
+  buttons ("Agent" and "外部 Agent") → Playwright strict-mode violation. Fixed minimally to
+  `toHaveCount(3)` + `filter({ hasText: /^Agent$/ })`; nothing about the 角色 tab behaviour changed.
+  The git-master rule applied here: any `hasText` that is a prefix of another label must be anchored.
+- `no-agent-picker.spec.ts` and `playwright.config.ts` were NOT touched (todo 3 owns the former).
+- The evidence PNGs are gitignored by `.gitignore:39` (`.omo/evidence/**/*.png`) — consistent with
+  every prior todo; the file exists on disk at the required path but is not part of the commit.
+- The `!` in the warning block is a decorative `<span aria-hidden>` but it IS text content, so
+  `toHaveText(exact)` fails; `toContainText` is the correct assertion (see learnings).
+- Spec design choice: test 1 accepts BOTH `external-agent-instructions` (real prompt) and
+  `external-agent-instructions-empty` (`empty:true`) as valid, because the engine's answer depends on
+  whether the auto-selected first external agent has a prompt — but it never accepts the error state.
+  Test 2 forces the error state with `page.route` fulfill 500 and asserts the empty/`<pre>` states are
+  absent (the "never a blank" guarantee).

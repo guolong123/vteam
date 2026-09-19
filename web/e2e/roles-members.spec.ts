@@ -100,8 +100,8 @@ test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
     await expect(page.getByTestId("agent-config-root")).toBeVisible({ timeout: 20_000 });
 
     await expect(page.getByTestId("manage-tabs")).toBeVisible();
-    await expect(page.getByTestId("manage-tab")).toHaveCount(2);
-    await expect(page.getByTestId("manage-tab").filter({ hasText: "Agent" })).toHaveAttribute("data-active", "true");
+    await expect(page.getByTestId("manage-tab")).toHaveCount(3);
+    await expect(page.getByTestId("manage-tab").filter({ hasText: /^Agent$/ })).toHaveAttribute("data-active", "true");
 
     await page.getByTestId("manage-tab").filter({ hasText: "角色" }).click();
     await expect(page.getByTestId("agent-role-root")).toBeVisible({ timeout: 15_000 });
