@@ -62,3 +62,39 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Split consequence for todo 4**: all `## 职责` module-example bullets stay `role` even when they name a
   tool (vteam_issue_*, git_*, vteam_plan_complete) — the *responsibility* is the post, the tool is its means.
   Only `## 工作方式`/refusal-script/pointer lines are `agent`; the task-brief examples put 工作方式 in agent.
+
+## todo 6 — AgentRole CRUD module + builtin protection (done)
+
+- **New module** `server/src/agent-roles/` (controller/service/dto + 2 specs), registered in `app.module.ts`.
+  Routes `/api/v1/agent-roles`: GET / (list), GET /:id, POST, PATCH /:id, DELETE /:id.
+- **Permissions reused from the agents matrix, NOT invented**: read=`agents.view`, create=`agents.create`,
+  update=`agents.edit`, delete=`agents.delete` — same `@UseGuards(PermissionGuard)` + `@RequirePermission(...)`
+  idiom as `agents.controller.ts`. Asserted directly in the controller spec via
+  `Reflect.getMetadata(REQUIRE_PERMISSION_KEY, handler)` (pattern from artifacts/tasks/chat controller specs).
+- **Builtin protection constant**: `AGENT_ROLE_ERRORS.AGENT_ROLE_BUILTIN_READONLY` (mirrors
+  `AGENT_ERRORS.AGENT_READONLY` = `PERMISSION_AGENT_READONLY`). Declared `type='builtin'` → DELETE 403 and
+  the row survives (asserted: `agentRole.delete` never called; live GET still 200). Same code for
+  PATCH-builtin-`key` → 403.
+- **Decision (recorded): PATCH on a builtin IS allowed** for `name`/`description`/`rolePrompt`/`defaultAgentId`
+  (the Roles tab reads them), but changing `key` → 403. Mirrors the agents module (is_0000000030 lets template
+  agents edit settings, `agentId`/`type` immutable). `type` is absent from the DTO, so it is structurally
+  immutable; `key` is the builtin identity anchor and is explicitly guarded.
+- **defaultAgentId validation**: non-null value must resolve to an existing `Agent` (else 400
+  `AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND`); `null`/absent clears/skips without a DB lookup. Validated on both
+  create and update.
+- **key**: `AGENT_KEY_PATTERN` (`^[a-z][a-z0-9_-]{0,62}$`) at DTO + service; uniqueness via `uk_agent_roles_key`
+  → P2002 mapped to 409 `AGENT_ROLE_KEY_CONFLICT`. In-use role delete (FK RESTRICT) → P2003 mapped to 409
+  `AGENT_ROLE_IN_USE` (never silently deletes).
+- **No capability fields**: response object is exactly {id,key,name,description,type,defaultAgentId,rolePrompt,
+  sortOrder,createdAt,updatedAt}; a spec asserts the key set and the absence of permission/tools/model/worker.
+- **List order**: `orderBy: [{type:'asc'},{sortOrder:'asc'}]` — 'builtin'<'custom', so the 7 builtins lead,
+  which is the authoritative listing contract (the task brief said "type/sortOrder order").
+- **Live data caveat (expected, not a bug)**: todo 4 has not run, so all 7 builtin `role_prompt`s are still
+  NULL. GET returns 7 builtins each with `defaultAgentId` set and the `rolePrompt` key present (value null).
+  The spec asserts key presence + a mocked value, not non-null live data, so it won't false-fail pre-todo-4.
+- **Container rebuild required** (carries over from todo 1): the running image predated the AgentRole model.
+  `docker compose build server && docker compose up -d server` (plain up, NO `--force-recreate`) — the `init`
+  service ran `migrate deploy` + seed, both idempotent; 8 rows preserved (7 builtin + ar_general).
+- **Full-suite baseline**: grew 136→138 suites / 3124→3162 tests; `tsc -p tsconfig.json --noEmit` exit 0.
+- **Evidence**: `.omo/evidence/agent-role-entity/task-6-api.json` (+ reusable `task-6-proof.sh`) with raw
+  HTTP 200/201/403 outputs; DB recheck after delete-builtin = 8 rows, `ar_product` intact.

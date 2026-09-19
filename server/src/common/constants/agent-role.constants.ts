@@ -54,6 +54,31 @@ export function deriveCustomAgentRoleId(raw: string): string {
   return `ar_c_${hash.slice(0, 16)}`;
 }
 
+/**
+ * Agent 角色域错误码（agent-role-entity todo 6，随异常响应的 code 字段返回）。
+ *
+ * 命名沿用现有约定（大写 SNAKE）。`AGENT_ROLE_BUILTIN_READONLY` 镜像 agents 模块的
+ * `PERMISSION_AGENT_READONLY`（`type=template` → 403）保护语义：本域 `type='builtin'`
+ * 的内置角色不可删除。其余为角色域自有码（404/400/409）。
+ */
+export const AGENT_ROLE_ERRORS = {
+  /** 目标角色不存在 → 404。 */
+  AGENT_ROLE_NOT_FOUND: 'AGENT_ROLE_NOT_FOUND',
+  /** 内置角色只读：DELETE type=builtin → 403（镜像 AGENT_ERRORS.AGENT_READONLY）。 */
+  AGENT_ROLE_BUILTIN_READONLY: 'AGENT_ROLE_BUILTIN_READONLY',
+  /** key 非法（格式不符 / 缺失）→ 400。 */
+  AGENT_ROLE_KEY_INVALID: 'AGENT_ROLE_KEY_INVALID',
+  /** key 唯一冲突 → 409（P2002）。 */
+  AGENT_ROLE_KEY_CONFLICT: 'AGENT_ROLE_KEY_CONFLICT',
+  /** defaultAgentId 指向不存在的 Agent → 400。 */
+  AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND: 'AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND',
+  /** 角色被团队成员引用（FK ON DELETE RESTRICT）→ 409，不可静默删除。 */
+  AGENT_ROLE_IN_USE: 'AGENT_ROLE_IN_USE',
+} as const;
+
+export type AgentRoleErrorCode =
+  (typeof AGENT_ROLE_ERRORS)[keyof typeof AGENT_ROLE_ERRORS];
+
 /** 内置角色行定义（7 个模板角色；`defaultAgentId` 指向 seed 的模板 Agent）。 */
 export interface BuiltinAgentRole {
   id: string;

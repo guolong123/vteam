@@ -6,6 +6,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { AgentsModule } from './agents/agents.module';
+import { AgentRolesModule } from './agent-roles/agent-roles.module';
 import { TasksModule } from './tasks/tasks.module';
 import { ChatModule } from './chat/chat.module';
 import { ArtifactsModule } from './artifacts/artifacts.module';
@@ -50,6 +51,7 @@ import { TimersModule } from './timers/timers.module';
     AuthModule,
     UsersModule,
     AgentsModule,
+    AgentRolesModule,
     TasksModule,
     ChatModule,
     ArtifactsModule,

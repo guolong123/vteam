@@ -1,0 +1,140 @@
+{
+  "task": "agent-role-entity todo 6 — AgentRole CRUD module + seed (API + builtin protection)",
+  "generatedAt": "2026-09-19T06:44:45.444Z",
+  "serverContainerRebuilt": true,
+  "endpoint": "/api/v1/agent-roles",
+  "permissionsReused": {
+    "read": [
+      "agents.view"
+    ],
+    "create": [
+      "agents.create"
+    ],
+    "update": [
+      "agents.edit"
+    ],
+    "delete": [
+      "agents.delete"
+    ]
+  },
+  "builtinProtectionCode": "AGENT_ROLE_BUILTIN_READONLY",
+  "steps": [
+    {
+      "name": "list",
+      "raw": {
+        "http": 200,
+        "body": "{\"items\":[{\"id\":\"ar_product\",\"key\":\"product\",\"name\":\"产品经理\",\"description\":\"内置角色：产品经理（需求分析与原型设计）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_product\",\"rolePrompt\":null,\"sortOrder\":1,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_project_manager\",\"key\":\"project_manager\",\"name\":\"项目经理\",\"description\":\"内置角色：项目经理（流程控制，不产出交付物）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_project_manager\",\"rolePrompt\":null,\"sortOrder\":2,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_architect\",\"key\":\"architect\",\"name\":\"架构师\",\"description\":\"内置角色：架构师（技术方案与设计文档）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_architect\",\"rolePrompt\":null,\"sortOrder\":3,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_developer\",\"key\":\"developer\",\"name\":\"开发者\",\"description\":\"内置角色：开发者（编码实现与缺陷修复）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_developer\",\"rolePrompt\":null,\"sortOrder\":4,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_tester\",\"key\":\"tester\",\"name\":\"测试\",\"description\":\"内置角色：测试（用例设计与验证）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_tester\",\"rolePrompt\":null,\"sortOrder\":5,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_plan\",\"key\":\"plan\",\"name\":\"计划员\",\"description\":\"内置角色：计划员（计划编制与修订）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_plan\",\"rolePrompt\":null,\"sortOrder\":6,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_librarian\",\"key\":\"librarian\",\"name\":\"知识管理员\",\"description\":\"内置角色：知识管理员（只读检索与问答）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_librarian\",\"rolePrompt\":null,\"sortOrder\":7,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_general\",\"key\":\"general\",\"name\":\"通用\",\"description\":\"通用角色（未分类）：存量成员的 Agent.role 为空时的回填兜底。\",\"type\":\"custom\",\"defaultAgentId\":null,\"rolePrompt\":null,\"sortOrder\":100,\"createdAt\":\"2026-09-19T06:26:48.998Z\",\"updatedAt\":\"2026-09-19T06:26:48.998Z\"}],\"total\":8,\"page\":1,\"pageSize\":20}"
+      }
+    },
+    {
+      "name": "list?type=builtin",
+      "raw": {
+        "http": 200,
+        "body": "{\"items\":[{\"id\":\"ar_product\",\"key\":\"product\",\"name\":\"产品经理\",\"description\":\"内置角色：产品经理（需求分析与原型设计）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_product\",\"rolePrompt\":null,\"sortOrder\":1,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_project_manager\",\"key\":\"project_manager\",\"name\":\"项目经理\",\"description\":\"内置角色：项目经理（流程控制，不产出交付物）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_project_manager\",\"rolePrompt\":null,\"sortOrder\":2,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_architect\",\"key\":\"architect\",\"name\":\"架构师\",\"description\":\"内置角色：架构师（技术方案与设计文档）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_architect\",\"rolePrompt\":null,\"sortOrder\":3,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_developer\",\"key\":\"developer\",\"name\":\"开发者\",\"description\":\"内置角色：开发者（编码实现与缺陷修复）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_developer\",\"rolePrompt\":null,\"sortOrder\":4,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_tester\",\"key\":\"tester\",\"name\":\"测试\",\"description\":\"内置角色：测试（用例设计与验证）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_tester\",\"rolePrompt\":null,\"sortOrder\":5,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_plan\",\"key\":\"plan\",\"name\":\"计划员\",\"description\":\"内置角色：计划员（计划编制与修订）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_plan\",\"rolePrompt\":null,\"sortOrder\":6,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"},{\"id\":\"ar_librarian\",\"key\":\"librarian\",\"name\":\"知识管理员\",\"description\":\"内置角色：知识管理员（只读检索与问答）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_librarian\",\"rolePrompt\":null,\"sortOrder\":7,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:26:48.989Z\"}],\"total\":7,\"page\":1,\"pageSize\":20}"
+      }
+    },
+    {
+      "name": "create-custom",
+      "raw": {
+        "http": 201,
+        "body": "{\"id\":\"ar_0000000001\",\"key\":\"data-analyst-task6\",\"name\":\"数据分析师\",\"description\":null,\"type\":\"custom\",\"defaultAgentId\":\"a_developer\",\"rolePrompt\":\"你是数据分析师，负责数据洞察。\",\"sortOrder\":0,\"createdAt\":\"2026-09-19T06:44:44.912Z\",\"updatedAt\":\"2026-09-19T06:44:44.912Z\"}"
+      },
+      "parsed": {
+        "id": "ar_0000000001",
+        "key": "data-analyst-task6",
+        "name": "数据分析师",
+        "description": null,
+        "type": "custom",
+        "defaultAgentId": "a_developer",
+        "rolePrompt": "你是数据分析师，负责数据洞察。",
+        "sortOrder": 0,
+        "createdAt": "2026-09-19T06:44:44.912Z",
+        "updatedAt": "2026-09-19T06:44:44.912Z"
+      }
+    },
+    {
+      "name": "update-custom",
+      "raw": {
+        "http": 200,
+        "body": "{\"id\":\"ar_0000000001\",\"key\":\"data-analyst-task6\",\"name\":\"高级数据分析师\",\"description\":null,\"type\":\"custom\",\"defaultAgentId\":\"a_developer\",\"rolePrompt\":\"你是高级数据分析师，负责数据洞察与决策建议。\",\"sortOrder\":0,\"createdAt\":\"2026-09-19T06:44:44.912Z\",\"updatedAt\":\"2026-09-19T06:44:44.958Z\"}"
+      },
+      "parsed": {
+        "id": "ar_0000000001",
+        "key": "data-analyst-task6",
+        "name": "高级数据分析师",
+        "description": null,
+        "type": "custom",
+        "defaultAgentId": "a_developer",
+        "rolePrompt": "你是高级数据分析师，负责数据洞察与决策建议。",
+        "sortOrder": 0,
+        "createdAt": "2026-09-19T06:44:44.912Z",
+        "updatedAt": "2026-09-19T06:44:44.958Z"
+      }
+    },
+    {
+      "name": "get-custom",
+      "raw": {
+        "http": 200,
+        "body": "{\"id\":\"ar_0000000001\",\"key\":\"data-analyst-task6\",\"name\":\"高级数据分析师\",\"description\":null,\"type\":\"custom\",\"defaultAgentId\":\"a_developer\",\"rolePrompt\":\"你是高级数据分析师，负责数据洞察与决策建议。\",\"sortOrder\":0,\"createdAt\":\"2026-09-19T06:44:44.912Z\",\"updatedAt\":\"2026-09-19T06:44:44.958Z\"}"
+      },
+      "parsed": {
+        "id": "ar_0000000001",
+        "key": "data-analyst-task6",
+        "name": "高级数据分析师",
+        "description": null,
+        "type": "custom",
+        "defaultAgentId": "a_developer",
+        "rolePrompt": "你是高级数据分析师，负责数据洞察与决策建议。",
+        "sortOrder": 0,
+        "createdAt": "2026-09-19T06:44:44.912Z",
+        "updatedAt": "2026-09-19T06:44:44.958Z"
+      }
+    },
+    {
+      "name": "patch-builtin-rolePrompt",
+      "raw": {
+        "http": 200,
+        "body": "{\"id\":\"ar_product\",\"key\":\"product\",\"name\":\"产品经理\",\"description\":\"内置角色：产品经理（需求分析与原型设计）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_product\",\"rolePrompt\":\"__TASK6_PROBE__ 你是产品经理。\",\"sortOrder\":1,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:44:44.991Z\"}"
+      }
+    },
+    {
+      "name": "restore-builtin-rolePrompt-null",
+      "raw": {
+        "http": 200,
+        "body": "{\"id\":\"ar_product\",\"key\":\"product\",\"name\":\"产品经理\",\"description\":\"内置角色：产品经理（需求分析与原型设计）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_product\",\"rolePrompt\":null,\"sortOrder\":1,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:44:45.015Z\"}"
+      }
+    },
+    {
+      "name": "patch-builtin-key-403",
+      "raw": {
+        "http": 403,
+        "body": "{\"code\":\"AGENT_ROLE_BUILTIN_READONLY\",\"message\":\"内置角色的 key 不可修改\"}"
+      }
+    },
+    {
+      "name": "delete-builtin-403",
+      "raw": {
+        "http": 403,
+        "body": "{\"code\":\"AGENT_ROLE_BUILTIN_READONLY\",\"message\":\"内置角色不可删除\"}"
+      }
+    },
+    {
+      "name": "builtin-row-survives",
+      "raw": {
+        "http": 200,
+        "body": "{\"id\":\"ar_product\",\"key\":\"product\",\"name\":\"产品经理\",\"description\":\"内置角色：产品经理（需求分析与原型设计）。\",\"type\":\"builtin\",\"defaultAgentId\":\"a_product\",\"rolePrompt\":null,\"sortOrder\":1,\"createdAt\":\"2026-09-19T06:26:48.989Z\",\"updatedAt\":\"2026-09-19T06:44:45.015Z\"}"
+      }
+    },
+    {
+      "name": "delete-custom-cleanup",
+      "raw": {
+        "http": 200,
+        "body": ""
+      }
+    }
+  ],
+  "db": {
+    "rowCountAfterAll": "8",
+    "arProductRow": "ar_product\tproduct\tbuiltin\ta_product"
+  }
+}
