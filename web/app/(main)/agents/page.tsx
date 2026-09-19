@@ -1082,8 +1082,8 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
     },
     onSuccess: () => {
       setPolicyError(null);
-      // 写盘成功 ≠ 生效：策略行已落库，但 worker 侧 opencode.json/roles.json 仍为旧值
-      // （injectAll() 只在 worker 启动 / reload-config 时执行）→ 挂起「需重启」通知。
+      // 保存已落库并广播 reload-config：传播由各 worker 收敛（在线自动 injectAll() 重注入，
+      // 离线待下次注册，活跃会话下 serve 重启挂起）→ 仍挂通知，交代传播路径并提供可选强制重启。
       setRestartNeeded(true);
       setRestartDone(false);
       writePendingRef.current = false;
@@ -1410,9 +1410,10 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
         );
       })}
 
-      {/* 写盘 ≠ 生效：策略 PATCH 只落库，worker 侧 injectAll()（启动 / reload-config）才写
-          opencode.json + roles.json。因此每次写盘成功后提示需重启，且**只**提示、不自动重启
-          （重启会中断在途会话）。策略全局 × injectAll() 逐 worker → 重启全部已注册 worker。 */}
+      {/* 保存即广播 reload-config：在线 worker 收到后 injectAll() 重写 opencode.json + roles.json，
+          serve 随后自动重启（有活跃会话时挂起至会话结束）→ 通常十余秒自动生效，无需手动操作。
+          离线 worker 在下次注册启动时 injectAll() 应用。策略全局 × injectAll() 逐 worker，故提供
+          「立即重启全部 worker」作为可选强制手段；**不**自动重启（重启会中断在途会话）。 */}
       {restartNeeded && (
         <div
           data-testid="policy-restart-notice"
@@ -1431,10 +1432,11 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
         >
           <span style={{ display: "flex", alignItems: "center", gap: space.xs, fontWeight: 600 }}>
             <span aria-hidden>!</span>
-            权限已保存到策略，但尚未生效：worker 重启后才会写入 opencode.json / roles.json。
+            权限已保存。在线 worker 将自动重新注入并在约十几秒内生效；离线 worker 会在下次注册时应用。
           </span>
           <span data-testid="policy-restart-hint" style={{ fontSize: fontSize.xs, color: neutral[600] }}>
-            策略是全局的，而 injectAll() 按 worker 执行：所有已注册 worker 都需重启，新权限才会生效。
+            策略是全局的，而 injectAll() 按 worker 执行：在线 worker 会自动重注入生效；离线 worker
+            在下次注册时应用；若 worker 有活跃会话，serve 重启会挂起至会话结束。
           </span>
           {workers.length === 0 ? (
             <span data-testid="policy-restart-empty" style={{ fontSize: fontSize.xs, color: neutral[600] }}>
@@ -1466,7 +1468,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
                 cursor: restartMutation.isPending ? "not-allowed" : "pointer",
               }}
             >
-              {restartMutation.isPending ? "重启中…" : "重启全部 worker 使其生效"}
+              {restartMutation.isPending ? "重启中…" : "立即重启全部 worker"}
             </button>
           )}
         </div>

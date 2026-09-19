@@ -196,3 +196,48 @@ green run → mutation failure → restored green), raw responses under `task-8/
 **Gate:** `npx tsc -p tsconfig.json --noEmit` exit 0; full `npx jest --runInBand` = **134 suites /
 3101 tests** green (baseline unchanged). Part (a) spec `agent-policies.native-edit.spec.ts` 6/6.
 Production `server/src/**` + `worker/**` diff empty after the transient mutation was restored.
+
+---
+
+## Todo 10 — restart-notice copy correction (F1+F3 finding, verified live)
+
+**Fact that invalidated the todo-5 copy:** `worker/src/index.ts:769-785` on `reload-config`
+does `await injector.injectAll()` (rewrites BOTH `opencode.json` and
+`.vteam-role-guard/roles.json`) and THEN `restartCoordinator.requestRestart()`. So for an
+ONLINE worker with no active session the policy change applies automatically in ~10-15s —
+manual restart is NOT required. F3 observed the artifacts update and the `serve` PID change
+(5855→5926→6093→6163) with zero manual restarts. The todo-5 copy ("尚未生效…worker 重启后
+才会写入") told users a false requirement.
+
+**Real propagation rule now encoded in the UI (and asserted in the spec):**
+1. policy is global, `injectAll()` runs per worker;
+2. online worker → auto re-inject (+ serve restart) → effective in ~10-15s;
+3. offline worker → applies on next register/start;
+4. worker with an ACTIVE session → the `serve` restart is deferred until the session drains.
+The restart button stays as an OPTIONAL "立即重启全部 worker" (force it / offline workers),
+and save still does NOT auto-restart (spec asserts 0 restart requests on save).
+
+**Mutation-proof recipe that worked (no git checkout/restore):**
+- back up the file: `cp <src> /tmp/task10-page.tsx.fixed`; `shasum -a 256` both;
+- mutate with a python one-liner asserting the exact new string count == 1;
+- rebuild ONLY web (`docker compose build web && docker compose up -d web`) — never
+  `--force-recreate` (re-runs `init`, can reseed/revert the DB);
+- run the spec → the corrected-copy assertion must FAIL with `toContainText(expected)`
+  and Received string showing the old sentence; the other 3 tests stay green;
+- restore with `cp /tmp/...backup <src>`; `shasum -a 256` must match byte-identically.
+
+**Pitfall:** `scripts/e2e-policy-restart-notice.sh` deletes its tmp
+`web/.t5.playwright.config.ts` on EXIT (trap). A mutation run that does not go through the
+script must recreate that tmp config itself, otherwise Playwright exits 1 with
+"config does not exist" (a false red that is NOT the discriminating failure).
+
+**Evidence:** `.omo/evidence/agent-native-permission-editor/task-10-notice-copy.png|json`,
+`task-10-mutation-proof.txt`, `task-10-cleanup-receipt.txt`. Suites re-run green:
+restart-notice 4/4, native-rule-editor, policy-serialize, create-agent-role 4/4.
+
+**Pitfall 2 (evidence file clobber):** `scripts/e2e-create-agent-role.sh` line 40 does
+`: >"$E2E_LOG"` — running it TRUNCATES the shared `.omo/evidence/.../e2e.txt` (all prior
+suites' sections). The append-only scripts (native-rule-editor, policy-serialize,
+policy-restart-notice) are safe. Recovery: `git show HEAD:<path> > <path>` (read-only, NOT
+`git checkout --`), then re-append the current run; keep the clobbering suite's own section
+in a side file and paste it under the new run header.

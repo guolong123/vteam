@@ -3,12 +3,14 @@ import { dirname } from "node:path";
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 
 /**
- * agent-native-permission-editor Todo 5 · 策略写入后的「需重启 worker」提示与一键重启
+ * agent-native-permission-editor Todo 5 · 策略写入后的传播提示与可选重启
  * =====================================================================================
- * 背景：策略 PATCH 只写 DB `execution_policies` 行；worker 侧 opencode.json +
- * .vteam-role-guard/roles.json 仅在 injectAll()（worker 启动 / reload-config）时落盘。
- * 因此写盘成功 ≠ 生效。本 spec 断言四件事：
- *   1. 通知只在一次成功写盘后出现，且明说「尚未生效」+ 传播规则（全局策略 × 逐 worker injectAll()）；
+ * 背景：策略 PATCH 落库后，server 广播 reload-config；在线 worker 收到即 injectAll()
+ * 重写 opencode.json + .vteam-role-guard/roles.json，随后自动重启 serve（有活跃会话时
+ * 挂起至会话结束）→ 通常十余秒自动生效，无需手动操作。离线 worker 在下次注册时 injectAll()
+ * 应用。因此写盘成功 ≠ 立即生效，但**也不需要**用户手动重启才能生效。本 spec 断言四件事：
+ *   1. 通知只在一次成功写盘后出现，且明说「自动生效」+ 真实传播规则
+ *      （全局策略 × 逐 worker injectAll()，离线待注册，活跃会话下 serve 重启挂起）；
  *   2. 保存**不**自动重启（拦截 restart 端点计数为 0）——重启会中断在途会话；
  *   3. 点击动作对**每一个**已注册 worker 各发一次 restart（GET /workers 为期望集合），随后展示完成态；
  *   4. 零 worker 时展示空态（policy-restart-empty），**不**渲染死按钮。
@@ -177,8 +179,8 @@ async function saveScreenshot(page: Page, entryLabel: string) {
   recordEvidence({ screenshot: path, captured_at: entryLabel });
 }
 
-test.describe("Todo 5 · 策略写入后的重启通知", () => {
-  test("1. 通知只在成功写盘后出现，且明确「尚未生效」+ 传播规则", async ({ page, request }) => {
+test.describe("Todo 5 · 策略写入后的传播通知", () => {
+  test("1. 通知只在成功写盘后出现，且明确「自动生效」+ 真实传播规则", async ({ page, request }) => {
     const token = await adminToken(request);
     const agent = await createAgent(request, token, "notice");
     const policyId = agent.effectivePermission!.policyId;
@@ -204,12 +206,18 @@ test.describe("Todo 5 · 策略写入后的重启通知", () => {
         )
         .toBe("allow");
 
-      // Then 通知出现，明说尚未生效，并给出传播规则（全局策略 × 逐 worker injectAll()）
+      // Then 通知出现，明说自动生效，并给出真实传播规则（全局策略 × 逐 worker injectAll()，
+      // 离线待下次注册，活跃会话下 serve 重启挂起）
       const notice = page.getByTestId("policy-restart-notice");
       await expect(notice).toBeVisible({ timeout: 10_000 });
-      await expect(notice).toContainText("尚未生效");
-      await expect(page.getByTestId("policy-restart-hint")).toContainText("injectAll()");
-      await expect(page.getByTestId("policy-restart-hint")).toContainText("全局");
+      await expect(notice).toContainText("在线 worker 将自动重新注入");
+      await expect(notice).not.toContainText("尚未生效");
+      await expect(notice).not.toContainText("重启后才会写入");
+      const hint = page.getByTestId("policy-restart-hint");
+      await expect(hint).toContainText("injectAll()");
+      await expect(hint).toContainText("全局");
+      await expect(hint).toContainText("离线 worker");
+      await expect(hint).toContainText("活跃会话");
 
       await saveScreenshot(page, "test-1-notice-after-save");
       recordEvidence({
@@ -218,7 +226,8 @@ test.describe("Todo 5 · 策略写入后的重启通知", () => {
         policy_id: policyId,
         stored_bash: "allow",
         notice_visible: true,
-        notice_says_not_effective_yet: true,
+        notice_says_auto_apply: true,
+        notice_no_false_restart_requirement: true,
         hint_mentions_propagation: true,
       });
     } finally {

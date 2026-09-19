@@ -1,0 +1,22 @@
+task-10 mutation proof (discriminating assertion on the CORRECTED copy)
+=======================================================================
+Method: temporarily replaced the corrected headline at agents/page.tsx:1435 with the
+OLD false sentence ("权限已保存到策略，但尚未生效：worker 重启后才会写入 ..."), rebuilt
+the web image, ran the updated spec, then restored the file via cp from a /tmp backup
+and verified sha256 equality. `git checkout --` / `git restore` were never used.
+
+Backup:   /tmp/task10-page.tsx.fixed
+sha256 (fixed, before mutation):  29cdd69de5eecb5e9041ed5e8d915989676a9378a785b6cf5b14b496a917d593
+sha256 (mutated build)          :  a9cdc17f44baee02e0cfc550db94f63284676c444b6af14719a9e7759b87c788
+sha256 (after cp restore)       :  29cdd69de5eecb5e9041ed5e8d915989676a9378a785b6cf5b14b496a917d593  == backup: IDENTICAL
+
+Run (mutated image): npx playwright test --config .t5.playwright.config.ts  -> exit 1
+  ✘ 1. 通知只在成功写盘后出现，且明确「自动生效」+ 真实传播规则
+      Error: expect(locator).toContainText(expected) failed
+      Locator: getByTestId('policy-restart-notice')
+      Expected substring: "在线 worker 将自动重新注入"
+      Received string: "!权限已保存到策略，但尚未生效：worker 重启后才会写入 opencode.json / roles.json。..."
+  ✓ 2/3/4 (no-auto-restart, restart-all-workers, zero-worker empty state) unaffected
+
+Interpretation: the assertion is discriminating — it fails precisely on the old false
+claim and passes only against the corrected copy. Raw log: /tmp/task10-mutation-run.log

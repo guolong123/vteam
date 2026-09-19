@@ -814,3 +814,81 @@ mysql: [Warning] Using a password on the command line interface can be insecure.
 [e2e] result passed	7. 未知 effect 原样保留（不归一化）
 [e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
 [e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 5 run 2026-09-19T04:14:57Z =====
+
+[e2e] date=2026-09-19T04:14:57Z HEAD=69ec9b4d81b56249cbc8556edf180d027dc80f9b
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000061 (agent 200, policy ep_0000000062 200, re-GET 404)
+  ✓  1 e2e/policy-restart-notice.spec.ts:183:7 › Todo 5 · 策略写入后的传播通知 › 1. 通知只在成功写盘后出现，且明确「自动生效」+ 真实传播规则 (2.9s)
+[cleanup] a_0000000062 (agent 200, policy ep_0000000063 200, re-GET 404)
+  ✓  2 e2e/policy-restart-notice.spec.ts:238:7 › Todo 5 · 策略写入后的传播通知 › 2. 保存不自动重启：写盘两次，restart 请求数为 0 (3.9s)
+[cleanup] a_0000000063 (agent 200, policy ep_0000000064 200, re-GET 404)
+  ✓  3 e2e/policy-restart-notice.spec.ts:299:7 › Todo 5 · 策略写入后的传播通知 › 3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态 (2.3s)
+[cleanup] a_0000000064 (agent 200, policy ep_0000000065 200, re-GET 404)
+  ✓  4 e2e/policy-restart-notice.spec.ts:365:7 › Todo 5 · 策略写入后的传播通知 › 4. 零 worker 空态：显示空态句，不显示死按钮 (2.3s)
+
+  4 passed (12.4s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000061 (agent 200, policy ep_0000000062 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000062 (agent 200, policy ep_0000000063 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000063 (agent 200, policy ep_0000000064 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000064 (agent 200, policy ep_0000000065 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 通知只在成功写盘后出现，且明确「自动生效」+ 真实传播规则
+[e2e] result passed	2. 保存不自动重启：写盘两次，restart 请求数为 0
+[e2e] result passed	3. 点击重启：每个已注册 worker 各一次 restart，随后展示完成态
+[e2e] result passed	4. 零 worker 空态：显示空态句，不显示死按钮
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 10 regression runs 2026-09-19T04:15:15Z (appended; created after e2e.txt restore) =====
+
+----- task10-reg-native.log -----
+[e2e] date=2026-09-19T04:12:30Z HEAD=69ec9b4d81b56249cbc8556edf180d027dc80f9b
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+----- end task10-reg-native.log -----
+----- task10-reg-serialize.log -----
+[e2e] date=2026-09-19T04:12:43Z HEAD=69ec9b4d81b56249cbc8556edf180d027dc80f9b
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+[e2e] PASS playwright green; evidence json present
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+----- end task10-reg-serialize.log -----
+----- task-10-regression-create-agent-role.txt (its script truncates e2e.txt; full section preserved here) -----
+[e2e] date=2026-09-19T04:12:54Z HEAD=69ec9b4d81b56249cbc8556edf180d027dc80f9b
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+  ✓  1 e2e/create-agent-role.spec.ts:147:7 › Todo 6 · 新建 Agent 角色选择器 › 1. 选项集 = 「无」 + 五角色，plan 不提供 (1.4s)
+[cleanup] a_0000000059 (agent 200, policy ep_0000000060 200, re-GET 404)
+  ✓  2 e2e/create-agent-role.spec.ts:182:7 › Todo 6 · 新建 Agent 角色选择器 › 2. role=developer → 继承开发者能力集（非骨架） (1.8s)
+[cleanup] a_0000000060 (agent 200, policy ep_0000000061 200, re-GET 404)
+  ✓  3 e2e/create-agent-role.spec.ts:240:7 › Todo 6 · 新建 Agent 角色选择器 › 3. 「无」→ 骨架策略（deny-by-default） (2.0s)
+  ✓  4 e2e/create-agent-role.spec.ts:280:7 › Todo 6 · 新建 Agent 角色选择器 › 4. 下拉往返：developer → 无 → developer 重置有效 (1.3s)
+
+  4 passed (7.1s)
+----- end playwright raw -----
+[e2e] PASS playwright 4/4 green; screenshots present (role-picker / developer-panel / none-panel)
+[e2e] cleanup [cleanup] a_0000000059 (agent 200, policy ep_0000000060 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000060 (agent 200, policy ep_0000000061 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 选项集 = 「无」 + 五角色，plan 不提供
+[e2e] result passed	2. role=developer → 继承开发者能力集（非骨架）
+[e2e] result passed	3. 「无」→ 骨架策略（deny-by-default）
+[e2e] result passed	4. 下拉往返：developer → 无 → developer 重置有效
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+----- end create-agent-role -----

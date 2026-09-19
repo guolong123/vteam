@@ -1,0 +1,20 @@
+task-10 cleanup receipt
+=======================
+QA footprint: 8 throwaway agents (t5 */t5-* RUN_TAG) + their custom policies, created by
+the restart-notice suite runs (2 runs x 4 tests) and the mutation-proof run (1 test).
+Each was deleted in the spec's finally block; receipts are in e2e.txt as
+"[cleanup] a_... (agent 200, policy ... 200, re-GET 404)" — DELETE 200 + re-GET 404.
+
+Post-run audit (admin token, against live server :13000):
+  GET /api/v1/agents  -> agents with name prefix "t5 " : 0
+  GET /api/v1/workers -> [w_compose_worker] status=online
+
+Worker untouched: restart endpoint was intercepted via page.route in tests 2/3 and
+false-claimed in the route; no real restart command was queued during any run.
+The screenshot/notice run never clicks restart (test 1 only reads the notice).
+
+Note (e2e.txt): running scripts/e2e-create-agent-role.sh TRUNCATES the shared
+e2e.txt (`: >"$E2E_LOG"` at its line 40) — the pre-existing script behavior. The
+committed history was restored with `git show HEAD:... > e2e.txt` (read-only), and the
+todo-10 green runs were appended on top; create-agent-role's section is preserved in
+task-10-regression-create-agent-role.txt and pasted into e2e.txt under the todo-10 block.
