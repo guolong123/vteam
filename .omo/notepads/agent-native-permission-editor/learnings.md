@@ -140,3 +140,59 @@ broadcast after a successful `update()`.
 
 **Baseline drift observed:** current full jest is 134 suites / 3101 tests (the native-edit spec +
 the 3 new tests), and `agent-policies.controller.spec.ts` was an unlisted 13th ctor site.
+
+## [2026-09-19] todo 8 — end-to-end enforcement + byte-identity (parts b-e)
+
+**The proof is one script: `scripts/e2e-native-edit-enforcement.sh`** (modelled on
+`e2e-role-boundaries.sh`: `REPO_ROOT`/`SERVER_URL`/`EVIDENCE_DIR`/`log/pass/fail`/`sha256_of`/
+`docker_compose` + cleanup-on-EXIT). It needs NO model/serve — only server + worker.
+
+**Propagation is automatic, and the assertion must NOT depend on a restart.** After the PATCH the
+worker re-injects within ~10s (todo-9 broadcast). The script POLLS `<WORK_DIR>/opencode.json`
+(`/data/vteam-worker/opencode.json`) via `docker compose exec -T worker cat …` and never calls
+`POST /workers/:id/restart`. Observed convergence: iter #2 (~10s), consistently.
+
+**The probe must be an `edit` glob, and it lands in `opencode.json`, NOT `roles.json`.** `edit` is
+layer-① only; `roles.json`'s `vteam-product.tools` map is layer-② and does not change. Assert
+`roles.json` is still well-formed and `tools` count stays 27 (proves the edit did not corrupt the
+guard roles doc) — do NOT assert the glob appears in `roles.json`.
+
+**Frozen-sha gate ran FIRST and LAST** (`shasum -a 256` on
+`.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json` == `3b8c5d4b…`), and it
+is never written to. The EXIT trap also prints it.
+
+**Byte-identity of the other 6 builtins**: canonical JSON compare of a 7-agent subset of
+`/agent-policies` against the frozen baseline (same technique as `e2e-role-boundaries.sh` f2).
+`/agent-policies` also carries a custom agent (`vteam-myagent`) — the subset pins only the 7
+baseline names, so a custom agent does not break the compare.
+
+**Mutation check (the acceptance criterion):** neutralize ONLY the two-line catch-all injection at
+the end of `assertValidConfig` (replace each assignment with `void permission.edit;` — a bare
+comment-out breaks TS narrowing on the `...edit` spread, TS2698; `void` keeps tsc exit 0), rebuild
+server, run the script → **(e) FAILS** with `edit=None (want {'*':'deny'})`, stored config
+`{"bash":"deny"}` (no edit key). Everything else stays green: **(b) does not exercise the
+injection** because its PATCH explicitly carries the `'*'` key, and **(d)** is untouched. The
+failure is captured verbatim in `task-8-enforcement.txt` Part 2.
+
+**Restore discipline (never `git checkout --`/`git restore`):** snapshot to
+`/tmp/t8-eps-final.ts.bak` (sha `c5f50430…`), `cp` back, `shasum -a 256` both sides identical,
+`diff -q` identical, `grep -c MUTATION` = 0, `git diff` on the file EMPTY. Rebuild, re-run → green
+again. The `[e2e] cleanup:` EXIT-trap also proves `ep_product`/all 7 restored each run.
+
+**(d) `permission.write`:** PATCH `ep_product` with `permission.write='allow'` on top of its snapshot
+→ stored `config.permission` has NO `write` key and equals the snapshot permission; a recursive scan
+of the emitted `/agent-policies` finds no `write` key anywhere (worker throws at
+`opencode-config-builder.ts:111-115` → would neutralize the whole guard). `assertValidConfig`
+strips it in place (`delete permission.write`).
+
+**(e) M1:** PATCH `permission={'bash':'deny'}` (no `edit`) → stored `permission.edit == {'*':'deny'}`.
+
+**Restore is first-class and verified three ways** per cycle: probe absent from the injected
+artifact, stored `name`/`description`/`config` == snapshot (canonical), and all 7 builtins
+byte-identical to the frozen baseline.
+
+**Evidence:** `.omo/evidence/agent-native-permission-editor/task-8-enforcement.txt` (3 parts:
+green run → mutation failure → restored green), raw responses under `task-8/`.
+**Gate:** `npx tsc -p tsconfig.json --noEmit` exit 0; full `npx jest --runInBand` = **134 suites /
+3101 tests** green (baseline unchanged). Part (a) spec `agent-policies.native-edit.spec.ts` 6/6.
+Production `server/src/**` + `worker/**` diff empty after the transient mutation was restored.

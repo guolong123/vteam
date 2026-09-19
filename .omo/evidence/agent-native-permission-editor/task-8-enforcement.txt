@@ -1,0 +1,173 @@
+================================================================================
+task-8 — End-to-end enforcement + byte-identity
+plan: .omo/plans/agent-native-permission-editor.md  (todo 8, parts b-e)
+script: scripts/e2e-native-edit-enforcement.sh
+server: http://localhost:13000   worker container: aiagents-compose-worker
+work dir (in container): /data/vteam-worker
+baseline: .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+frozen sha256: 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+propagation: AUTOMATIC via fde75ad reload-config broadcast — NO restart issued
+================================================================================
+
+################################################################################
+# PART 1 — GREEN RUN (pre-mutation), exit 0
+################################################################################
+[e2e] SERVER_URL=http://localhost:13000 EDIT_POLICY_ID=ep_product WORKER_WORK_DIR=/data/vteam-worker
+[e2e] EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] --- (c) frozen-sha gate (start) ---
+[e2e] baseline sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 (frozen: 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87)
+[e2e] PASS c (frozen baseline sha256 matches at start)
+[e2e] login admin ...
+[e2e] pre-flight: injected artifact is free of the probe marker
+[e2e] --- (b) live round-trip: PATCH edit rule -> poll injected artifacts ---
+edit body: add permission.edit['**t8-enforce/**']='allow' (catch-all + existing globs preserved)
+[e2e] PASS b1 (PATCH accepted; edit rule stored)
+control-plane: /agent-policies reflects edit for vteam-product
+[e2e] PASS b2 (control-plane /agent-policies reflects the edit)
+[e2e] polling injected artifacts (budget 120s, interval 5s; NO restart) ...
+[e2e] poll #1: probe not yet present in injected opencode.json
+[e2e] probe landed after ~10s (iters=2)
+[e2e] PASS b3 (injected opencode.json carries the edited rule; auto-propagated, no restart)
+injected: probe present in opencode.json edit; roles.json well-formed; vteam-product tools=27 (unchanged); glob not in tools map
+[e2e] PASS b4 (roles.json well-formed, tool count unchanged, no glob corruption)
+other 6 builtins byte-identical to frozen baseline (canonical)
+[e2e] PASS b5 (other 6 builtins byte-identical to frozen baseline)
+[e2e] restoring ep_product ...
+[e2e] polling for probe-absent (budget 120s) ...
+[e2e] poll #1: probe still present after restore
+[e2e] poll #2: probe still present after restore
+restore: stored name/description/config == snapshot (canonical)
+post-restore: all 7 builtins byte-identical to frozen baseline
+[e2e] PASS b6 (restored; probe gone; stored config == snapshot; all 7 byte-identical to baseline)
+[e2e] --- (d) permission.write stripped and never emitted ---
+write-edit body: permission contains a 'write' key (must be stripped)
+stored: config.permission has NO 'write' key; equals snapshot permission
+/agent-policies: no 'write' key anywhere (worker would throw at opencode-config-builder.ts:111)
+[e2e] PASS d (permission.write stripped on store; never emitted by /agent-policies)
+[e2e] --- (e) M1: permission.edit ABSENT is stored with the catch-all ---
+m1-edit body: permission={ bash: 'deny' } (NO edit key)
+stored config.permission = {"bash": "deny", "edit": {"*": "deny"}}
+stored: permission.edit == {'*': 'deny'} (catch-all injected)
+[e2e] PASS e (edit ABSENT stored with the catch-all)
+[e2e] restoring ep_product after (e) ...
+[e2e] PASS e-restore (worker artifact settled; probe absent)
+[e2e] --- (c) frozen-sha gate (end) ---
+[e2e] baseline sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 (frozen: 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87)
+[e2e] PASS c (frozen baseline sha256 matches at end)
+[e2e] ALL ASSERTIONS PASSED: b (live round-trip + restore), c (frozen gate x2), d (write stripped/never emitted), e (M1 catch-all)
+[e2e] cleanup: restoring ep_product original config ...
+[e2e] cleanup: probe absent from injected artifact = yes (iters=1)
+[e2e] cleanup: all 7 builtins byte-identical to baseline = True
+[e2e] cleanup: baseline sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+
+################################################################################
+# PART 2 — MUTATION CHECK (§3): todo-1 catch-all injection neutralized
+#
+# File: server/src/execution-policies/execution-policy.service.ts
+#   assertValidConfig, the two-line injection block replaced with `void permission.edit`.
+#   Backup: /tmp/t8-eps-final.ts.bak (sha c5f50430c92fe1572491affc8e0700140ba1e397c1644d1ae2db8b689b458bb2)
+#   Rebuild: docker compose build server && docker compose up -d server  (BUILD_EXIT=0, health 200)
+#   tsc --noEmit before rebuild: exit 0
+#
+# EXPECTED: (e) FAILS (edit ABSENT stored WITHOUT the catch-all); (b) still passes
+#           because (b)'s PATCH explicitly carries the '*' key.
+################################################################################
+[e2e] SERVER_URL=http://localhost:13000 EDIT_POLICY_ID=ep_product WORKER_WORK_DIR=/data/vteam-worker
+[e2e] EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] --- (c) frozen-sha gate (start) ---
+[e2e] baseline sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 (frozen: 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87)
+[e2e] PASS c (frozen baseline sha256 matches at start)
+[e2e] login admin ...
+[e2e] pre-flight: injected artifact is free of the probe marker
+[e2e] --- (b) live round-trip: PATCH edit rule -> poll injected artifacts ---
+edit body: add permission.edit['**t8-enforce/**']='allow' (catch-all + existing globs preserved)
+[e2e] PASS b1 (PATCH accepted; edit rule stored)
+control-plane: /agent-policies reflects edit for vteam-product
+[e2e] PASS b2 (control-plane /agent-policies reflects the edit)
+[e2e] polling injected artifacts (budget 120s, interval 5s; NO restart) ...
+[e2e] poll #1: probe not yet present in injected opencode.json
+[e2e] probe landed after ~10s (iters=2)
+[e2e] PASS b3 (injected opencode.json carries the edited rule; auto-propagated, no restart)
+injected: probe present in opencode.json edit; roles.json well-formed; vteam-product tools=27 (unchanged); glob not in tools map
+[e2e] PASS b4 (roles.json well-formed, tool count unchanged, no glob corruption)
+other 6 builtins byte-identical to frozen baseline (canonical)
+[e2e] PASS b5 (other 6 builtins byte-identical to frozen baseline)
+[e2e] restoring ep_product ...
+[e2e] polling for probe-absent (budget 120s) ...
+[e2e] poll #1: probe still present after restore
+restore: stored name/description/config == snapshot (canonical)
+post-restore: all 7 builtins byte-identical to frozen baseline
+[e2e] PASS b6 (restored; probe gone; stored config == snapshot; all 7 byte-identical to baseline)
+[e2e] --- (d) permission.write stripped and never emitted ---
+write-edit body: permission contains a 'write' key (must be stripped)
+stored: config.permission has NO 'write' key; equals snapshot permission
+/agent-policies: no 'write' key anywhere (worker would throw at opencode-config-builder.ts:111)
+[e2e] PASS d (permission.write stripped on store; never emitted by /agent-policies)
+[e2e] --- (e) M1: permission.edit ABSENT is stored with the catch-all ---
+m1-edit body: permission={ bash: 'deny' } (NO edit key)
+stored config.permission = {"bash": "deny"}
+Traceback (most recent call last):
+  File "<stdin>", line 6, in <module>
+AssertionError: edit=None (want {'*':'deny'})
+[e2e] FAIL scenario=e reason=edit ABSENT was NOT stored with the catch-all {'*':'deny'}
+[e2e] cleanup: restoring ep_product original config ...
+[e2e] cleanup: probe absent from injected artifact = yes (iters=1)
+[e2e] cleanup: all 7 builtins byte-identical to baseline = True
+[e2e] cleanup: baseline sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+
+################################################################################
+# PART 3 — RESTORE (byte-identical) + GREEN RUN (post-restore), exit 0
+#
+# Restore: cp /tmp/t8-eps-final.ts.bak server/src/execution-policies/execution-policy.service.ts
+#   sha256 before: c5f50430c92fe1572491affc8e0700140ba1e397c1644d1ae2db8b689b458bb2
+#   sha256 after : c5f50430c92fe1572491affc8e0700140ba1e397c1644d1ae2db8b689b458bb2  (identical)
+#   diff -q -> identical; `grep -c MUTATION` -> 0; `git diff` on the file -> empty
+#   Rebuild: docker compose build server && docker compose up -d server  (BUILD_EXIT=0, health 200)
+################################################################################
+[e2e] SERVER_URL=http://localhost:13000 EDIT_POLICY_ID=ep_product WORKER_WORK_DIR=/data/vteam-worker
+[e2e] EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] --- (c) frozen-sha gate (start) ---
+[e2e] baseline sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 (frozen: 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87)
+[e2e] PASS c (frozen baseline sha256 matches at start)
+[e2e] login admin ...
+[e2e] pre-flight: injected artifact is free of the probe marker
+[e2e] --- (b) live round-trip: PATCH edit rule -> poll injected artifacts ---
+edit body: add permission.edit['**t8-enforce/**']='allow' (catch-all + existing globs preserved)
+[e2e] PASS b1 (PATCH accepted; edit rule stored)
+control-plane: /agent-policies reflects edit for vteam-product
+[e2e] PASS b2 (control-plane /agent-policies reflects the edit)
+[e2e] polling injected artifacts (budget 120s, interval 5s; NO restart) ...
+[e2e] poll #1: probe not yet present in injected opencode.json
+[e2e] probe landed after ~10s (iters=2)
+[e2e] PASS b3 (injected opencode.json carries the edited rule; auto-propagated, no restart)
+injected: probe present in opencode.json edit; roles.json well-formed; vteam-product tools=27 (unchanged); glob not in tools map
+[e2e] PASS b4 (roles.json well-formed, tool count unchanged, no glob corruption)
+other 6 builtins byte-identical to frozen baseline (canonical)
+[e2e] PASS b5 (other 6 builtins byte-identical to frozen baseline)
+[e2e] restoring ep_product ...
+[e2e] polling for probe-absent (budget 120s) ...
+[e2e] poll #1: probe still present after restore
+[e2e] poll #2: probe still present after restore
+restore: stored name/description/config == snapshot (canonical)
+post-restore: all 7 builtins byte-identical to frozen baseline
+[e2e] PASS b6 (restored; probe gone; stored config == snapshot; all 7 byte-identical to baseline)
+[e2e] --- (d) permission.write stripped and never emitted ---
+write-edit body: permission contains a 'write' key (must be stripped)
+stored: config.permission has NO 'write' key; equals snapshot permission
+/agent-policies: no 'write' key anywhere (worker would throw at opencode-config-builder.ts:111)
+[e2e] PASS d (permission.write stripped on store; never emitted by /agent-policies)
+[e2e] --- (e) M1: permission.edit ABSENT is stored with the catch-all ---
+m1-edit body: permission={ bash: 'deny' } (NO edit key)
+stored config.permission = {"bash": "deny", "edit": {"*": "deny"}}
+stored: permission.edit == {'*': 'deny'} (catch-all injected)
+[e2e] PASS e (edit ABSENT stored with the catch-all)
+[e2e] restoring ep_product after (e) ...
+[e2e] PASS e-restore (worker artifact settled; probe absent)
+[e2e] --- (c) frozen-sha gate (end) ---
+[e2e] baseline sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 (frozen: 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87)
+[e2e] PASS c (frozen baseline sha256 matches at end)
+[e2e] ALL ASSERTIONS PASSED: b (live round-trip + restore), c (frozen gate x2), d (write stripped/never emitted), e (M1 catch-all)
+[e2e] cleanup: restoring ep_product original config ...
+[e2e] cleanup: probe absent from injected artifact = yes (iters=1)
+[e2e] cleanup: all 7 builtins byte-identical to baseline = True
+[e2e] cleanup: baseline sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
