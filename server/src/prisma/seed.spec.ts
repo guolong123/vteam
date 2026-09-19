@@ -433,20 +433,19 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
     }
   });
 
-  it('7 模板 prompt 协同方式含协作规约摘录（求助三要素/转交落 issue/广播纪律/10 分钟升级）', async () => {
+  it('7 模板 prompt 不再内联平台共享块（团队协作规约/回执铁律已上提为 worker-dispatcher 常量）', async () => {
     await main();
 
     const templateCalls = templateAgentCalls();
     expect(templateCalls).toHaveLength(7);
     for (const call of templateCalls) {
       const prompt = call[0].create.prompt as string;
-      expect(prompt).toContain('团队协作规约');
-      expect(prompt).toContain('docs/agent-platform/30-团队协作规约.md');
-      expect(prompt).toContain('求助带三要素');
-      expect(prompt).toContain('责任转交落 issue');
-      expect(prompt).toContain('广播纪律');
-      expect(prompt).toContain('定向 @ 超时升级');
-      expect(prompt).toContain('10 分钟');
+      expect(prompt).not.toContain('团队协作规约');
+      expect(prompt).not.toContain('docs/agent-platform/30-团队协作规约.md');
+      expect(prompt).not.toContain('求助带三要素');
+      expect(prompt).not.toContain('责任转交落 issue');
+      expect(prompt).not.toContain('## 回执铁律');
+      expect(prompt).not.toContain('回执必@派发人');
     }
   });
 
@@ -1101,12 +1100,25 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     }
   });
 
-  it('成员回执铁律：四角色 prompt 含回执必@派发人句，知识管理员不含', async () => {
+  it('角色专属铁律保留：PM 派发铁律、计划员修订铁律各自仅在所属 prompt（不随平台块上提）', async () => {
     const prompts = await promptsById();
+    const pm = prompts.get('a_project_manager')!;
+    expect(pm).toContain('## 派发铁律');
+    const plan = prompts.get('a_plan')!;
+    expect(plan).toContain('## 修订铁律');
     for (const id of MEMBER_IDS) {
-      expect(prompts.get(id)).toContain(RECEIPT_AT);
+      expect(prompts.get(id)).not.toContain('## 派发铁律');
     }
-    expect(prompts.get('a_librarian')).not.toContain(RECEIPT_AT);
+    for (const id of [
+      'a_product',
+      'a_project_manager',
+      'a_architect',
+      'a_developer',
+      'a_tester',
+      'a_librarian',
+    ]) {
+      expect(prompts.get(id)).not.toContain('## 修订铁律');
+    }
   });
 
   it('计划员收敛契约：收敛输入=轮次账本+verdicts明细，输出=冻结候选版+归档清单', async () => {
@@ -1136,12 +1148,11 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     }
   });
 
-  it('优先级声明：各铁律节均声明平台校验 > 本铁律 > 上文原文风且顺序正确', async () => {
+  it('优先级声明：角色专属铁律节均声明平台校验 > 本铁律 > 上文原文风且顺序正确', async () => {
     const prompts = await promptsById();
     const contents = await reviewContents();
     const ironLawTexts = [
       prompts.get('a_project_manager')!,
-      ...MEMBER_IDS.map((id) => prompts.get(id)!),
       prompts.get('a_plan')!,
     ];
     for (const text of ironLawTexts) {
@@ -1193,8 +1204,8 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
       pm.indexOf('本铁律') < pm.indexOf('上文原文风');
     expect(precedencePass).toBe(true);
 
-    const memberPass = MEMBER_IDS.every((id) =>
-      prompts.get(id)!.includes(RECEIPT_AT),
+    const receiptLiftedOut = [...prompts.values()].every(
+      (prompt) => !prompt.includes(RECEIPT_AT),
     );
     const plannerPass =
       plan.includes(PLAN_NO_EARLY_REVISE) && plan.includes(EARLY_REVISE_HINT);
@@ -1206,7 +1217,7 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
     const reviseProbe = plannerPass;
     const pass =
       precedencePass &&
-      memberPass &&
+      receiptLiftedOut &&
       plannerPass &&
       reviewerPass &&
       nudgeProbe &&
@@ -1239,10 +1250,10 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
       },
       ironLaws: {
         pm: ['先查后派', '被催先报', '催办引原文'],
-        memberReceipt: MEMBER_IDS,
+        memberReceipt: 'lifted-to-platform-constant',
         planner: ['非收敛不修订', '教师 override 除外'],
         reviewer: REVIEW_SKILLS,
-        pass: memberPass && plannerPass && reviewerPass,
+        pass: receiptLiftedOut && plannerPass && reviewerPass,
       },
       pass,
     };

@@ -98,3 +98,33 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Full-suite baseline**: grew 136→138 suites / 3124→3162 tests; `tsc -p tsconfig.json --noEmit` exit 0.
 - **Evidence**: `.omo/evidence/agent-role-entity/task-6-api.json` (+ reusable `task-6-proof.sh`) with raw
   HTTP 200/201/403 outputs; DB recheck after delete-builtin = 8 rows, `ar_product` intact.
+
+## todo 3 — lift shared platform blocks into injected constants (2026-09-19)
+- **Real occurrence lines drift from the plan** (plan cited :575/:581/…, already stale). Anchored by
+  CONTENT via the todo-2 artifact + grep: charter (团队协作规约) at seed `:605,650,697,742,787,831,878`;
+  receipt (回执铁律) at `:611,703,748,793`; PM 派发铁律 `:656`; plan 修订铁律 `:841`. All 7 charter copies
+  are byte-identical; all 4 receipt copies are byte-identical (sha256-verified).
+- **The team-memory seed also contains 团队协作规约** (`seed.ts:2239/2260`, the fixed-id
+  `me_team_collab_charter` memory). It is NOT prompt content — do not remove it.
+- **Universality decision (Momus-B1/M4)**: both blocks lifted and injected UNCONDITIONALLY for all 7
+  built-ins, no `role ===`/name branch at the injection site. 回执铁律 is thereby deliberately extended to
+  project_manager/plan/librarian (was 4 agents). This is the whole point: a name-keyed conditional would be a
+  5th hardcoded special case that plan 4 deletes.
+- **Byte-identity gotcha**: the seed charter block ended with a trailing `\n` (the blank separator before the
+  receipt block). The constant stores the 5 joined lines WITHOUT that trailing `\n`, and the assembler joins
+  blocks with `\n\n`. Verify ASSEMBLED equivalence (old `charter+\n\n+receipt` == new blocks), not raw-string
+  equality — raw charter strings differ only by that separator. `git diff --stat` shows exactly 55 deletions,
+  0 insertions.
+- **Removal pitfall**: the terminal `',` of each affected prompt literal lived on the last removed receipt
+  line, so a naive block-delete leaves 5 prompts unterminated (`TS1109: Expression expected`). Fix the now-final
+  line in place (`…\n' +` → `…',`, and drop the trailing `\n` to match the original terminal style).
+- **Spillover tests to update**, all from seed.spec.ts + one dispatcher byte-oracle:
+  the "7 模板 prompt 协同方式含协作规约摘录" test (invert to not-contain), the "成员回执铁律" test (now
+  asserts each prompt does NOT contain the receipt text), the todo9 优先级 test (iron-law texts list drops the
+  4 member prompts — they no longer carry PRECEDENCE inline; PM/plan keep their own iron laws), and
+  worker-dispatcher.spec.ts `task-mode 文本字节不变` which pinned reception→artifact adjacency (now inserts
+  before the charter block).
+- **`scripts/verify-prompt-classification.mjs` is now stale by design** (todo 2's pre-removal oracle) and is
+  NOT in CI; todo 8 owns the post-split parity proof. Did not touch it.
+- **Suite**: 138 suites / 3169 tests passed (+7 vs the 3162 baseline); tsc exit 0. Evidence:
+  `.omo/evidence/agent-role-entity/task-3-platform-const.txt`.

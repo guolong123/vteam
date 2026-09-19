@@ -1,0 +1,158 @@
+agent-role-entity — todo 3: lift the shared platform blocks into injected constants
+====================================================================================
+Date: 2026-09-19
+Source of blocks: server/prisma/seed.ts (pre-change, git HEAD)
+Destination: server/src/chat/worker-dispatcher.ts (platform-constant area)
+Commit: refactor(prompts): lift the shared platform blocks into injected constants
+
+------------------------------------------------------------------------------------
+1. PRE-CHANGE OCCURRENCE INVENTORY (content-anchored, not the plan's stale lines)
+------------------------------------------------------------------------------------
+server/prisma/seed.ts @ HEAD, per-agent physical lines:
+
+团队协作规约 — 7 occurrences (identical text across all 7):
+  product         :605-609
+  project_manager :650-654
+  architect       :697-701
+  developer       :742-746
+  tester          :787-791
+  plan            :831-835
+  librarian       :878-882
+
+回执铁律 — 4 occurrences (identical text across all 4):
+  product         :611-614
+  architect       :703-706
+  developer       :748-751
+  tester          :793-796
+
+派发铁律 — 1 occurrence, role-specific (NOT lifted):
+  project_manager :656-663
+
+修订铁律 — 1 occurrence, role-specific (NOT lifted):
+  plan            :841-844
+
+收敛契约 — 1 occurrence, role-specific (NOT lifted, pre-existing):
+  plan            :837-839
+
+Team-memory seed (NOT prompt content, NOT touched):
+  团队协作规约 at :2239 and :2260 (fixed-id team memory me_team_collab_charter)
+
+Total prompt occurrences removed: 7 (charter) + 4 (receipt) = 11 blocks / 55 physical lines.
+
+------------------------------------------------------------------------------------
+2. DELIBERATE UNIVERSALITY DECISION (review fix Momus-B1/M4)
+------------------------------------------------------------------------------------
+Both blocks are lifted to ONE platform constant each and injected UNCONDITIONALLY for
+ALL 7 built-in agents. There is NO agent-name / role-keyed conditional at the injection
+site.
+
+(a) 团队协作规约 — already universal (present in all 7) → no behaviour change.
+(b) 回执铁律 — previously present in only 4 agents (product/architect/developer/tester).
+    Lifting it and injecting unconditionally DELIBERATELY EXTENDS it to
+    project_manager / plan / librarian. ACKNOWLEDGED BEHAVIOUR CHANGE, not an accident:
+    it removes the need for any name/role-keyed branch in the assembly (which would be a
+    fifth hardcoded special case that plan 4 exists to delete), and the receipt rules are
+    platform-wide policy every vteam agent should follow. Recorded in code (JSDoc on
+    AGENT_RECEIPT_IRON_LAW_LINES) and in the plan's Success criteria (orchestrator).
+(c) 派发铁律 (PM) and 修订铁律 (plan) — LEFT role-specific in their prompts.
+
+------------------------------------------------------------------------------------
+3. BYTE-IDENTITY PROOF (move-only, no text change)
+------------------------------------------------------------------------------------
+Proof script: extracts the removed text from `git show HEAD:server/prisma/seed.ts` and the
+new constants from worker-dispatcher.ts, compares literally (sha256 + equality).
+
+  团队协作规约 block:
+    removed seed text sha256 : ebbbe4ef88d813092f564689b90aa6b95674a69d7562c16cc1c8ed3d1dfbcd2d
+    new constant     sha256   : 49305da828919e7b3ed56ccf50ebb26fc45af09f9fef4d6368a8e1aac8b7c49b
+    NOTE: these two raw strings differ ONLY by the block's trailing '\n' — the blank-line
+    separator that, in seed, sat between the charter block and the receipt block. The
+    constant stores the block WITHOUT that trailing newline (join('\n') of 5 lines).
+
+  回执铁律 block:
+    removed seed text sha256 : 0cf02b9f113ac9306b2cf8096c26f876490ddfe80df2eb75ae8ff23baf44ea63
+    new constant     sha256   : 0cf02b9f113ac9306b2cf8096c26f876490ddfe80df2eb75ae8ff23baf44ea63
+    → BYTE-IDENTICAL.
+
+  ASSEMBLED-EQUIVALENCE (the property that actually matters):
+    old product combined text (charter 605-609 + blank 610 + receipt 611-614):
+      sha256 = 05e3dcda76d11dc9116816292144d65c84bca68951e6ade6de3ffba270d66c9c
+    new assembly (charter + '\n\n' + receipt):
+      sha256 = 05e3dcda76d11dc9116816292144d65c84bca68951e6ade6de3ffba270d66c9c
+    → BYTE-IDENTICAL. Moving the text and re-joining with '\n\n' reproduces the original
+      seed prompt segment exactly (only the blank separator moved with the block).
+    The jest test 'two platform constants text bytes match seed verbatim' pins line counts
+    (charter 5 lines / receipt 4 lines) and sentinel strings.
+
+------------------------------------------------------------------------------------
+4. NEW CONSTANTS (worker-dispatcher.ts, platform-constant area ~:281-317)
+------------------------------------------------------------------------------------
+  TEAM_COLLABORATION_CHARTER_LINES : readonly string[5]
+  TEAM_COLLABORATION_CHARTER_INSTRUCTION = TEAM_COLLABORATION_CHARTER_LINES.join('\n')
+  AGENT_RECEIPT_IRON_LAW_LINES : readonly string[4]
+  AGENT_RECEIPT_IRON_LAW_INSTRUCTION = AGENT_RECEIPT_IRON_LAW_LINES.join('\n')
+
+Injection (buildSystemInstructions, after the team-mode reception block, before the
+artifact/issue/plan sections):
+
+    if (isTeamMode) { blocks.push(TEAM_SYSTEM_RECEPTION_INSTRUCTION); }
+    // platform-level shared blocks: unconditional for ALL 7 built-ins
+    blocks.push(TEAM_COLLABORATION_CHARTER_INSTRUCTION);
+    blocks.push(AGENT_RECEIPT_IRON_LAW_INSTRUCTION);
+
+Grep of the injection diff for `vteam-project_manager | role === | isPlanRole | agentKey |
+agent.id ===` in the added lines → NO MATCHES (no name/role-keyed branch introduced).
+
+------------------------------------------------------------------------------------
+5. PER-AGENT ASSEMBLED COUNTS (all 7 built-ins)
+------------------------------------------------------------------------------------
+Asserted by jest (`平台共享块注入` describe in worker-dispatcher.spec.ts):
+
+  role              charter   receipt
+  product           1/1       1/1
+  project_manager   1/1       1/1   ← receipt extension (was 0 before)
+  architect         1/1       1/1
+  developer         1/1       1/1
+  tester            1/1       1/1
+  plan              1/1       1/1   ← receipt extension (was 0 before)
+  librarian         1/1       1/1   ← receipt extension (was 0 before)
+
+  role-specific:
+  派发铁律 : present only in project_manager; absent in the other 6.
+  修订铁律 : present only in plan;          absent in the other 6.
+
+------------------------------------------------------------------------------------
+6. REMOVAL FROM seed.ts (no second copy anywhere)
+------------------------------------------------------------------------------------
+  git diff --stat server/prisma/seed.ts → 60 deletions(-), 5 insertions(+).
+  The 55 removed lines are the 11 lifted blocks; the 5 changed lines are the now-final
+  `- 验收边界：…` line of each prompt that previously ended `…\n' +` and now ends `…',`
+  (the literal's terminal comma lived on the last removed receipt line). No new prompt
+  content was added.
+  New seed grep:
+    团队协作规约（全文见 : 0 in prompts (only the team-memory seed at :2184 remains)
+    ## 回执铁律          : 0
+    ## 派发铁律          : 1 (project_manager, unchanged)
+    ## 修订铁律          : 1 (plan, unchanged)
+
+------------------------------------------------------------------------------------
+7. TEST / BUILD VERIFICATION
+------------------------------------------------------------------------------------
+  cd server && npx tsc -p tsconfig.json --noEmit      → exit 0
+  cd server && npx jest --runInBand                   → 138 suites / 3169 tests passed
+    (was 138 suites / 3162 tests baseline; net +7 — new platform-block assertions and the
+     seed both-blocks-removed test and the role-specific iron-law test)
+  Targeted:
+    npx jest --runInBand src/prisma src/chat/worker-dispatcher.spec.ts → 3 suites / 298 passed
+
+------------------------------------------------------------------------------------
+8. SCOPE / GUARDRAILS
+------------------------------------------------------------------------------------
+- Permission values untouched; /agent-policies payload untouched; worker/** untouched.
+- Frozen baseline .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+  NOT modified.
+- server/src/teams/**, server/src/agent-roles/**, web/** untouched (todo 7 parallel).
+- No second copy of either lifted block: seed grep shows 0 prompt occurrences.
+- `scripts/verify-prompt-classification.mjs` (todo 2's pre-split oracle) is now stale by
+  design — its artifact records the pre-removal lines — and is NOT wired into CI; todo 8
+  owns the post-split parity proof. It was not modified (out of scope).

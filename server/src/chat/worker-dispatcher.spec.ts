@@ -56,6 +56,8 @@ import {
   HOSTED_CONFIRM_INSTRUCTION,
   NON_MAIN_AGENT_NOTE,
   WECOM_SYSTEM_INSTRUCTION,
+  TEAM_COLLABORATION_CHARTER_INSTRUCTION,
+  AGENT_RECEIPT_IRON_LAW_INSTRUCTION,
   PLAN_PRODUCE_INSTRUCTION,
   PLAN_REVIEW_INSTRUCTION,
   TEAM_GROUP_TRIGGER_INSTRUCTION,
@@ -2011,6 +2013,59 @@ describe('WorkerDispatcher', () => {
       });
       expect(s).toContain('【Issue协作】');
       expect(s).not.toContain(ISSUE_FULL_INSTRUCTION);
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 平台共享块注入（agent-role-entity todo 3）：团队协作规约 + 回执铁律
+  // 对全部 7 个内置 Agent 无条件注入，无 name/role 分支。
+  // ------------------------------------------------------------------
+  describe('平台共享块注入（team charter + receipt iron law，全 7 内置无条件）', () => {
+    const count = (haystack: string, needle: string): number =>
+      haystack.split(needle).length - 1;
+    const BUILTIN_IDENTITIES: AgentIdentityInfo[] = [
+      { id: 'a_product', name: '产品经理', role: 'product', prompt: null, persona: null, agentKey: null },
+      { id: 'a_project_manager', name: '项目经理', role: 'project_manager', prompt: null, persona: null, agentKey: null },
+      { id: 'a_architect', name: '架构师', role: 'architect', prompt: null, persona: null, agentKey: null },
+      { id: 'a_developer', name: '开发者', role: 'developer', prompt: null, persona: null, agentKey: null },
+      { id: 'a_tester', name: '测试', role: 'tester', prompt: null, persona: null, agentKey: null },
+      { id: 'a_plan', name: '计划员', role: 'plan', prompt: null, persona: null, agentKey: null },
+      { id: 'a_librarian', name: '知识管理员', role: 'librarian', prompt: null, persona: null, agentKey: null },
+    ];
+
+    it('团队协作规约块对全部 7 个内置 Agent 各出现恰好一次（常量字节注入）', () => {
+      expect(BUILTIN_IDENTITIES).toHaveLength(7);
+      for (const identity of BUILTIN_IDENTITIES) {
+        const s = buildSystemInstructions(identity);
+        expect(count(s, TEAM_COLLABORATION_CHARTER_INSTRUCTION)).toBe(1);
+        expect(count(s, '团队协作规约（全文见')).toBe(1);
+      }
+    });
+
+    it('回执铁律块对全部 7 个内置 Agent 各出现恰好一次（含 PM/plan/librarian 的刻意扩展）', () => {
+      for (const identity of BUILTIN_IDENTITIES) {
+        const s = buildSystemInstructions(identity);
+        expect(count(s, AGENT_RECEIPT_IRON_LAW_INSTRUCTION)).toBe(1);
+        expect(count(s, '## 回执铁律')).toBe(1);
+      }
+      // 扩展的三角色此前无回执铁律，现必须收到（若引入 name/role 条件分支即在此红）
+      for (const id of ['a_project_manager', 'a_plan', 'a_librarian']) {
+        const identity = BUILTIN_IDENTITIES.find((a) => a.id === id)!;
+        expect(buildSystemInstructions(identity)).toContain(
+          AGENT_RECEIPT_IRON_LAW_INSTRUCTION,
+        );
+      }
+    });
+
+    it('两个平台常量文本字节与 seed 原文一致（不可改写/换行）', () => {
+      expect(TEAM_COLLABORATION_CHARTER_INSTRUCTION.split('\n')).toHaveLength(5);
+      expect(AGENT_RECEIPT_IRON_LAW_INSTRUCTION.split('\n')).toHaveLength(4);
+      expect(TEAM_COLLABORATION_CHARTER_INSTRUCTION).toContain(
+        'docs/agent-platform/30-团队协作规约.md',
+      );
+      expect(AGENT_RECEIPT_IRON_LAW_INSTRUCTION).toContain(
+        '- 回执必@派发人：',
+      );
     });
   });
 
@@ -6201,8 +6256,8 @@ describe('WorkerDispatcher', () => {
       expect(base).not.toContain('团队接待');
       expect(teamOut).toBe(
         base.replace(
-          ARTIFACT_SUBMISSION_INSTRUCTION,
-          `${TEAM_SYSTEM_RECEPTION_INSTRUCTION}\n\n${ARTIFACT_SUBMISSION_INSTRUCTION}`,
+          TEAM_COLLABORATION_CHARTER_INSTRUCTION,
+          `${TEAM_SYSTEM_RECEPTION_INSTRUCTION}\n\n${TEAM_COLLABORATION_CHARTER_INSTRUCTION}`,
         ),
       );
     });

@@ -279,6 +279,44 @@ export const WECOM_SYSTEM_INSTRUCTION =
   '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到任务群聊，确保用户在企微端收到回复。';
 
 /**
+ * 平台级共享块（agent-role-entity 计划 todo 3）：原在 seed 的 7 个 prompt 内各抄一份，
+ * 现上提为唯一常量、由 buildSystemInstructions 对**全部内置 Agent 无条件注入**。
+ * 逐行取自 `prisma/seed.ts` 的原样文本（仅移动位置，字节不变）：
+ * - 团队协作规约 7 处（product/PM/architect/developer/tester/plan/librarian）→
+ *   TEAM_COLLABORATION_CHARTER_INSTRUCTION。
+ * - 回执铁律 4 处（product/architect/developer/tester）→ AGENT_RECEIPT_IRON_LAW_INSTRUCTION。
+ */
+export const TEAM_COLLABORATION_CHARTER_LINES = [
+  '- 团队协作规约（全文见 docs/agent-platform/30-团队协作规约.md）：',
+  '- 求助带三要素：背景（一句话）+ 要什么（具体交付物）+ 期望（谁、何时）；要素不全先追问，不开工。',
+  '- 责任转交落 issue：转交带事项 + 已有材料（issue/产出物 id）+ 期望动作，被转交人须回执；转交链超 3 轮未闭环则升级协调，改派或落 issue 跟踪，并提示成员介入。',
+  '- 广播纪律：@all 仅用于全员需知的结论/决策或紧急阻塞；私域问答定向问对口角色，与己无关的 @all 不回复。',
+  '- 定向 @ 超时升级：被 @ 后 10 分钟无回执，发起人再点名一次，仍无响应则升级协调，改派或落 issue 跟踪；调用失败不伪造成功，核对后汇报并给替代路径。',
+];
+
+export const TEAM_COLLABORATION_CHARTER_INSTRUCTION =
+  TEAM_COLLABORATION_CHARTER_LINES.join('\n');
+
+/**
+ * 回执铁律块（4 处副本合一）。
+ *
+ * **有意的行为变更（agent-role-entity todo 3 决策）**：本块原只出现在 product/architect/
+ * developer/tester 的 prompt（4 个角色）。上提为平台常量后**对全部 7 个内置 Agent 无条件
+ * 注入**——project_manager/plan/librarian 现在也收到回执铁律。这是刻意选择「普遍性」而非
+ * 「按名条件注入」的结果：避免在装配处再加一个按 agent 名/角色分支的硬编码特例（plan 4
+ * 的目标正是删除这类特例），且回执规则本就是全体 vteam Agent 应遵守的平台级策略。
+ */
+export const AGENT_RECEIPT_IRON_LAW_LINES = [
+  '## 回执铁律（优先级：平台校验 > 本铁律 > 上文原文风）',
+  '- 回执必@派发人：任务回执消息必须 @ 派发人定向发送，禁止只发群聊消息充当回执；无 @ 的回执视为未送达。',
+  '- 回执参数：进度汇报 type=answer+stage=process（不唤醒主Agent）；完工必须 stage=answer+end（主Agent汇总唤醒）；阻塞用 type=question/help（立即唤醒主Agent）。',
+  '- 冲突裁决：平台校验 > 本铁律 > 上文原文风。',
+];
+
+export const AGENT_RECEIPT_IRON_LAW_INSTRUCTION =
+  AGENT_RECEIPT_IRON_LAW_LINES.join('\n');
+
+/**
  * P8：分派时动态构建系统提示——在 GLOBAL_SYSTEM_INSTRUCTIONS 基础上注入当前 Agent 的完整
  * 身份（id + 名称 + 角色 + 用户设置的 prompt 职责），供 MCP 工具调用的 selfInstanceId 参数
  * 填写（服务端按 session.teamMemberId 校验后精确落库 senderId/senderInstanceId，
@@ -541,6 +579,10 @@ export function buildSystemInstructions(
   if (isTeamMode) {
     blocks.push(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
   }
+  // 平台级共享块（agent-role-entity todo 3）：对全部 7 个内置 Agent 无条件注入，
+  // 无任何 agent 名/角色分支——普遍性优先于按名条件注入。
+  blocks.push(TEAM_COLLABORATION_CHARTER_INSTRUCTION);
+  blocks.push(AGENT_RECEIPT_IRON_LAW_INSTRUCTION);
   // plan 屏蔽产出物段：plan 的 toolAllows 无 vteam_submit_artifact（计划正文落盘
   // `.opencode/plans/` 即交付，教了会被 guard 拒），与 MEMORY_INSTRUCTION 同机制；
   // 其余角色照常注入（逐字节不变）。
