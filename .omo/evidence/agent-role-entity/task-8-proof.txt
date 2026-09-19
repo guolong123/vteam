@@ -1,0 +1,359 @@
+# Evidence — agent-role-entity todo 8: instruction parity + populated-DB migration + policy-byte regression
+
+Generated: 2026-09-19  host=darwin
+Plan: .omo/plans/agent-role-entity.md todo 8 (Wave 4, the closing proof)
+Commit target: test(e2e): prove instruction parity and role migration
+
+## Summary of the five proofs
+
+| # | Proof | Result |
+| - | ----- | ------ |
+| a | Instruction parity (post-split, 0 lost / 0 duplicated) | PASS (checker exit 0); mutation detected (exit 1) |
+| b | Assembly order (role -> agent -> platform, once each) | PASS |
+| c | Populated-DB migration (0 null role_id, correct mapping, unchanged dispatch) | PASS |
+| d | Policy bytes (frozen baseline sha unchanged) | PASS — sha = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 |
+| e | Rollback exercised (on a COPY; live DB provably untouched) | PASS |
+
+Gates: `npx tsc -p tsconfig.json --noEmit` exit 0; `npx jest --runInBand` 138 suites / 3179 tests green.
+
+---
+
+## Checker decision (the stale-classifier trap — task 6/§2 CRITICAL)
+
+The pre-split classifier `scripts/verify-prompt-classification.mjs` is STALE BY DESIGN: it
+re-derives the 7 rendered prompts from `server/prisma/seed.ts` (the POST-split seed, now 93
+lines) and compares them against todo 2's PRE-split oracle (264 lines). Post-split it can never
+pass.
+
+Observed TODAY, verbatim (`node scripts/verify-prompt-classification.mjs`):
+```
+  TOTAL              source=93 classified=264 MISMATCH
+  - agent 'product': artifact sourceLineCount 39 != seed 11
+  - agent 'product' line 11: index out of range
+  ... (hundreds more)
+EXIT=1
+```
+NOTE ON THE TASK TEXT: the task said the stale script "exits 0 even while printing
+TOTAL source 93 != classified 264". It does NOT exit 0 today — it exits 1 (the `process.exit(1)`
+path fires after the failure list). Either way the exit code is untrustworthy as a gate because
+its oracle is dead. **Decision: I wrote a NEW post-split checker AND retired the old one into a
+delegating tombstone.** Both are stated below.
+
+### New checker: `scripts/verify-instruction-parity.mjs`
+
+Source of truth: `.omo/evidence/agent-role-entity/task-2-classification.json` (todo 2 oracle).
+It proves every PRE-SPLIT line lands EXACTLY ONCE across the four destinations:
+
+- role part     = `server/src/common/constants/agent-role-prompts.constants.ts` `BUILTIN_ROLE_PROMPTS`
+- agent part    = `server/prisma/seed.ts` `templateAgents[].prompt`
+- platform part = `server/src/chat/worker-dispatcher.ts` `TEAM_COLLABORATION_CHARTER_LINES` + `AGENT_RECEIPT_IRON_LAW_LINES`
+- removed       = the 20 enumerated `## 权限` prose lines (O6 decision)
+
+Assertions (all must hold):
+1. exact byte-rebuild: oracle `role` lines (in order) == live rolePrompt, byte for byte;
+2. exact byte-rebuild: oracle `agent` lines (in order, minus the one documented additive
+   canonical pointer) == live agent prompt, byte for byte;
+3. every oracle `platform` line is present in the shared platform constant AND absent from every
+   agent/role prompt (the 7x/4x copies collapsed to one);
+4. every oracle `removed-intentionally` line is absent from live content; the canonical pointer is
+   present for every agent whose oracle kept it or whose `replacementPointer.addWhereMissing`
+   documents it;
+5. no live non-blank role/agent line is unaccounted for beyond the documented additive pointer;
+6. `seed.ts`'s self-contained `BUILTIN_ROLE_PROMPTS` mirror == the constants file, byte for byte;
+7. the platform constants are each defined exactly once (no second copy anywhere in the file);
+8. oracle `byDestination` totals match the counted totals (97/92/55/20).
+
+### Retired checker: `scripts/verify-prompt-classification.mjs`
+
+Rewritten as a tombstone that PRINTS the retirement notice and DELEGATES to the new checker,
+propagating its exit code. A bare invocation therefore cannot produce a false pass.
+Proven correct on BOTH paths (below).
+
+---
+
+## (a) Instruction parity — PASS
+
+Command / raw output (`node scripts/verify-instruction-parity.mjs`, exit 0):
+```
+instruction parity check (post-split)
+  oracle   : .omo/evidence/agent-role-entity/task-2-classification.json
+  role     : server/src/common/constants/agent-role-prompts.constants.ts
+  agent    : server/prisma/seed.ts
+  platform : server/src/chat/worker-dispatcher.ts
+
+  pre-split lines by destination (oracle):
+    role=97 agent=92 platform=55 removed-intentionally=20 total=264
+  post-split live content:
+    role prompts=7 agent prompts=7 platform constant lines=9 (unique content 9)
+    platform oracle occurrences 55 collapse to 9 shared constant lines
+
+  LOST        : 0
+  DUPLICATED  : 0
+  UNACCOUNTED : 0
+  removed-intentionally still present in live content : 0
+  platform text still inside an agent/role prompt     : 0
+  canonical pointer missing                           : 0
+  role prompt byte-rebuild mismatches                 : 0
+  agent prompt byte-rebuild mismatches                : 0
+  platform content not in shared constant             : 0
+  documented additive pointer agents                  : plan
+  oracle removed-intentionally enumerated             : 20
+
+OK: 0 lost, 0 duplicated, 0 unaccounted — every pre-split line lands in exactly one destination.
+EXIT=0
+```
+
+Interpretation:
+- 0 lost, 0 duplicated, 0 unaccounted.
+- The 20 `removed-intentionally` lines are asserted DROPPED (not present in live content) and
+  replaced by the canonical pointer `- 可用工具以 ExecutionPolicy/【职责边界】为准，越界调用会被直接拒绝。`
+  which is present for all 6 agents whose oracle kept it plus `plan` (the documented
+  `addWhereMissing` agent).
+- Platform dedup win: 55 oracle occurrences → 9 shared constant lines (charter 5 + receipt 4).
+
+### Mutation proof (the plan's own QA failure scenario) — DETECTED
+
+Backup with `cp` (NEVER `git checkout --` / `git restore`), delete one role-prompt line, run,
+restore byte-identically.
+
+```
+MUTATION: deleting role-prompt line 21 -> '- 需求分析：以产品视角澄清任务目标与业务背景，识别核心诉求与边界，将需求拆分为可执行、可验证的条目。\n' +
+sha256 before = 869d7a11a32553a2b10468e2701c886de70ba34f5d7247fe3e62074c30f8e7e9
+sha256 mutated = a9d71a890b53d160efb6467ee99cda10a2a6447e354b5de2d4e76d64c7e3d073
+```
+Checker on the mutation (EXIT=1):
+```
+  LOST        : 1
+    - product:role:4 "- 需求分析：以产品视角澄清任务目标与业务背景，识别核心诉求与边界，将需求拆分为可执行、可验证的条目。"
+  role prompt byte-rebuild mismatches                 : 1
+    - product
+FAIL:
+  - agent 'product': seed mirror rolePrompt != constants-file rolePrompt
+```
+Restore byte-identically (`cp` the backup back):
+```
+sha256 restored = 869d7a11a32553a2b10468e2701c886de70ba34f5d7247fe3e62074c30f8e7e9
+before == after : IDENTICAL
+checker re-run  : EXIT=0
+git diff --stat server/src/common/constants/agent-role-prompts.constants.ts : (empty)
+```
+
+### Retired-shim exit code (proven on BOTH paths)
+
+```
+node scripts/verify-prompt-classification.mjs   (clean tree)  -> EXIT=0
+node scripts/verify-prompt-classification.mjs   (one line deleted) -> EXIT=1, LOST: 1
+restored byte-identically; checker -> EXIT=0
+```
+
+---
+
+## (b) Assembly — PASS
+
+Real built-in (`tester`) assembled via `buildSystemInstructions(agent, { rolePrompt })` with the
+live `BUILTIN_ROLE_PROMPTS['tester']` and the seed `tester` agent prompt, `npx ts-node` direct call:
+```
+{
+  "len": 3183,
+  "counts": {
+    "roleHeading": 1, "roleBody": 1, "agentHeading": 1, "agentBody": 1,
+    "charter": 1, "receipt": 1
+  },
+  "indices": { "role": 1117, "agent": 1685, "charter": 2478, "receipt": 2816 },
+  "order": true,
+  "roleBeforeAgent": true,
+  "platformAfterAgent": true,
+  "hasRoleBlock": true,
+  "hasAgentBlock": true
+}
+ASSEMBLY OK   (EXIT=0)
+```
+- role block (`【岗位职责】`) exactly once, before agent block (`【职责】`) exactly once;
+- both platform blocks (charter, receipt) exactly once each, after the agent block;
+- monotonic indices: role(1117) < agent(1685) < charter(2478) < receipt(2816).
+
+Reuses todo 5's ordered assertions:
+`worker-dispatcher.spec.ts` "todo 5：rolePrompt 非空 → 【岗位职责】(角色) + 【职责】(agent) +
+平台块各恰好一次，顺序 role→agent→platform" — run alone: `4 passed` (the todo-5 block),
+full suite green (below).
+
+---
+
+## (c) Migration on a POPULATED DB — PASS
+
+The live DB is ALREADY migrated, so an honest before/after requires a pre-migration copy. Method:
+restore the recorded pre-migration dump into a SCRATCH database `aiagents_t8` (live DB untouched),
+construct case (ii)/(iii) probes there (as todo 1 did on the live DB), then run the full chain.
+
+### Scratch DB restored to the exact pre-migration state (from `pre-migration-dump.sql`)
+```
+$ docker compose exec -T db sh -c 'mysql ... -e "CREATE DATABASE aiagents_t8"'
+$ docker compose exec -T db sh -c 'mysql ... aiagents_t8' < .omo/evidence/agent-role-entity/pre-migration-dump.sql
+pre-migration scratch state:
+  agents=8  team_members=28
+  agent_roles_table_exists=0
+  team_members.role_id_col_exists=0
+  migration_0006_applied=1   migration_0007_applied=0
+```
+Then add the same probes todo 1 constructed (case ii non-builtin role, case iii NULL role):
+```
+INSERT agents a_probe_analyst (role='analyst'), a_probe_norole (role=NULL)
+INSERT team tm_probe_ar; INSERT team_members tmm_probe_analyst, tmm_probe_norole
+=> 30 members
+pre-migration member→agent.role tally:
+  <NULL>=1  analyst=1  architect=8  developer=3  librarian=1  plan=4  product=3  project_manager=4  tester=5
+```
+
+### Full chain applied to the populated scratch DB
+```
+$ docker compose exec -T -e DATABASE_URL='mysql://root:aiagents-root@db:3306/aiagents_t8' server \
+    npx prisma migrate deploy --schema prisma/schema.prisma
+61 migrations found in prisma/migrations
+Applying migration `20260919000007_add_agent_roles_and_member_role_id`
+Applying migration `20260919000008_populate_builtin_role_prompts`
+All migrations have been successfully applied.
+```
+
+### Acceptance assertions (populated scratch DB)
+```
+null_role_members           = 0
+total_members               = 30
+agent_roles                 = 9  (7 builtin + ar_general + ar_c_05d5c5dfb743a5bd)
+builtin_empty_role_prompt   = 0
+```
+### Correct mapping for all three backfill cases (30 members, 0 mismatch)
+```
+case-i (builtin)                = 28   (agent.role == role.key)
+case-ii  tmm_probe_analyst  analyst -> custom_analyst_05d5c5df (type=custom)
+case-iii tmm_probe_norole   NULL    -> general                 (type=custom)
+agent.role != role.key among builtin = 0
+null role_key                        = 0
+```
+
+### Resolved dispatch agent UNCHANGED (member→agent_id)
+```
+diff <(pre  member->agent_id ) <(post member->agent_id)  ->  (empty)
+MEMBER_AGENT_MAPPING_UNCHANGED=yes
+builtin rows where AgentRole.defaultAgentId <> member.agentId = 0
+```
+The migration SQL only writes `team_members.role_id` (three UPDATE…JOIN branches); it never
+touches `agent_id`, so the member→agent resolution used at dispatch is provably identical.
+
+---
+
+## (d) Policy bytes — PASS
+
+Baseline file: `.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json`
+FROZEN_BASELINE_SHA256 (scripts/e2e-role-boundaries.sh:90) =
+`3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87`
+
+Harness run (exit 0):
+```
+$ SERVER_URL=http://localhost:13000 X_WORKER_TOKEN=compose-worker-token SCENARIOS=f \
+    WORK_DIR=/data/vteam-worker INJECTED_OPENCODE_JSON=/tmp/t8-db/injected-opencode.json \
+    bash scripts/e2e-role-boundaries.sh
+[e2e] --- scenario (f): permission.task contract (only vteam-plan allow) ---
+agent-policies: 8 agents, exactly vteam-plan task=allow, others deny, no write key
+opencode.json: 8 agents, exactly vteam-plan task=allow, others deny
+[e2e] PASS f (task contract on /agent-policies + injected opencode.json)
+[e2e] --- scenario (f2): DB-driven builtin policy (edit ep_product -> worker reload) ---
+[e2e] baseline sha256 ok: 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+pre-edit: live 7 builtins == frozen baseline (canonical)
+[e2e] PASS f2a ...
+control-plane: vteam-product guard reflects DB edit  [PASS f2b]
+... roles/opencode for the other 6 builtins: IDENTICAL  [PASS f2c]
+[e2e] cleanup: restoring ep_product original config ...
+after-agent-policies.json sha256  = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+before-agent-policies.json sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+byte-identical = True
+[e2e] PASS f2d (post-restore after-agent-policies.json byte-identical to frozen baseline)
+[e2e] ALL SCENARIOS DONE
+HARNESS_EXIT=0
+```
+Post-run baseline integrity (file NOT modified; the script only reads it):
+```
+$ shasum -a 256 .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87  ...
+$ git status --porcelain .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+(clean)
+```
+
+---
+
+## (e) Rollback exercise (on a COPY) — PASS
+
+Two documented rollback paths, BOTH exercised on scratch databases only. The live DB was never
+targeted.
+
+### A. 0008 documented reverse SQL (role_prompt -> NULL), on `aiagents_t8` (the post-migration copy)
+```
+before: builtins non-empty role_prompt = 7
+$ UPDATE agent_roles SET role_prompt = NULL WHERE `key` IN (...7 builtin keys...);
+after:  builtins non-empty role_prompt = 0
+builtin rows kept        = 7      (identity rows survive)
+team_members still linked = 30    (role_id untouched by this path)
+```
+FINDING (recorded, not hidden): the 0008 migration header documents the reverse as
+`... WHERE key IN (...)` WITHOUT backticks. `key` is a MySQL reserved word, so the literal
+documented statement errors `ERROR 1064 (42000) ... near 'key IN'`. The backticked equivalent
+(`WHERE \`key\` IN (...)`) runs clean (exit 0). The rollback PATH is sound; the header snippet
+needs backticks. I did NOT edit the migration (out of scope for a proof todo) — recorded here.
+
+### B. 0007 documented rollback = restore pre-migration dump, on a fresh scratch DB `aiagents_t8_rb`
+```
+$ CREATE DATABASE aiagents_t8_rb
+$ mysql ... aiagents_t8_rb < .omo/evidence/agent-role-entity/pre-migration-dump.sql
+rollback DB state after restore:
+  agent_roles_table_exists=0   team_members.role_id_col_exists=0
+  team_members=28   agents=8   migration_0007_applied=0
+diff rollback-DB member->role  vs  recorded pre-migration base (28 rows)  ->  (empty)
+ROLLBACK_MATCHES_PRE_MIGRATION_BASE=yes
+```
+Re-forward sanity check on the same restored DB (the chain re-applies cleanly):
+```
+Applying migration 20260919000007... / 20260919000008...  All migrations applied.
+null_role_members=0  total_members=28  agent_roles=8  builtin_empty_role_prompt=0
+```
+
+### Proof the LIVE DB was untouched
+Identity snapshot taken before (c)+(e) and after (e), live DB `aiagents`:
+```
+                 before              after
+team_members       28                  28
+null role_id        0                   0
+agent_roles         8                   8
+builtin roles       7                   7
+role ids    ar_architect,ar_developer,ar_general,ar_librarian,ar_plan,ar_product,ar_project_manager,ar_tester  (identical)
+teams              10                  10
+agents              8                   8
+live builtin non-empty role_prompt = 7   (unchanged)
+diff before after -> IDENTICAL
+LIVE_DB_UNTOUCHED=yes
+```
+All scratch databases (`aiagents_t8`, `aiagents_t8_rb`) are separate schemas; no
+`prisma migrate reset` and no `docker compose down -v` were run on the live DB.
+
+---
+
+## Static + test gates
+
+```
+$ cd server && npx tsc -p tsconfig.json --noEmit    -> exit 0
+$ cd server && npx jest --runInBand
+Test Suites: 138 passed, 138 total
+Tests:       3179 passed, 3179 total
+Snapshots:   1 passed, 1 total
+JEST_EXIT=0   (baseline after todo 5: 138 suites / 3179 tests -> unchanged)
+```
+The todo-5 assembly regression block specifically (`-t "todo 5"`): 4 passed.
+
+## Changed files in this todo
+
+- `scripts/verify-instruction-parity.mjs`   NEW — the post-split parity checker (exit code proven
+  on pass=0 and mutation=1)
+- `scripts/verify-prompt-classification.mjs` — RETIRED into a delegating tombstone (was the stale
+  pre-split oracle; can no longer false-pass)
+- `.omo/evidence/agent-role-entity/task-8-proof.txt` — this file
+
+NOT touched (guardrails): `before-agent-policies.json`, prompts, `seed.ts`, assembly logic,
+permissions, `/agent-policies`, `worker/**`, the plan file.

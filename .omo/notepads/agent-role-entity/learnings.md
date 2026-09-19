@@ -227,3 +227,45 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   proving non-vacuous. Restored with `cp` from /tmp + `shasum` equality (never `git checkout --`).
 - **Suite**: server 138 suites / 3179 tests green (baseline 3175; +4 new); `npx tsc -p tsconfig.json --noEmit`
   exit 0. Evidence `.omo/evidence/agent-role-entity/task-5-assembly.json`.
+
+## Todo 8 — closing proof: parity + populated-DB migration + policy bytes + rollback (2026-09-19)
+
+- **The stale todo-2 classifier's real behaviour TODAY differs from the task note**: it exits **1**, not 0
+  (the note said it exits 0 while printing `TOTAL source 93 != classified 264`). Either way its exit code is
+  useless as a gate because its oracle (the pre-split seed) is gone. Did BOTH: wrote the new post-split
+  checker AND retired the old one into a tombstone that delegates to it and propagates the exit code.
+  A tombstone (not a delete) keeps the historical path from ever false-passing. Its exit code was proven on
+  both paths: clean=0, one-line-deleted=1.
+- **The oracle maps cleanly onto post-split sources with ZERO drift**: oracle `role` lines (in order) rebuild
+  `BUILTIN_ROLE_PROMPTS[key]` byte-for-byte; oracle `agent` lines rebuild `templateAgents[].prompt`
+  byte-for-byte EXCEPT `plan`, where the enumerated `planToolLine` was dropped and the canonical pointer
+  added (`replacementPointer.addWhereMissing`) — compare with the pointer line filtered out of both sides.
+  Oracle `platform` lines map to the two worker-dispatcher constants (charter 5 + receipt 4 = 9 unique),
+  and 55 oracle occurrences collapse to those 9.
+- **Byte-rebuild beats set-membership**: `occurrences(...) === 1` proves no loss/dup, but
+  `oracleLines.join('\n') === liveString` proves the ORDER survived too. Do both — a reordering that keeps
+  all lines would slip past a pure multiset check.
+- **`migrate deploy` with a scratch DB is the honest populated-DB proof**: the live DB was already migrated,
+  so restoring `pre-migration-dump.sql` into `aiagents_t8` (a separate schema) gives the true before-state.
+  The dump itself has NO case (ii)/(iii) members (todo 1 constructed those on the live DB), so both probes
+  were reconstructed in the copy — same as todo 1. "Unchanged dispatch resolution" = `diff` of
+  `member.id -> member.agent_id` pre/post (empty) + `AgentRole.defaultAgentId <> member.agentId` count = 0.
+  The 0007 SQL only writes `role_id`, never `agent_id`.
+- **0008's documented rollback snippet is broken as written**: `UPDATE ... WHERE key IN (...)` errors
+  `ERROR 1064 (42000) ... near 'key IN'` because `key` is a MySQL reserved word. The backticked equivalent
+  (`WHERE \`key\` IN (...)`) works. The path is sound; the header doc needs backticks. Recorded, migration
+  NOT edited (proof todo).
+- **Rollback proof = two paths on scratch only**: (A) 0008 reverse `SET role_prompt=NULL` on the
+  post-migration copy (7 -> 0, rows kept, members untouched); (B) 0007 restore `pre-migration-dump.sql`
+  into a fresh `aiagents_t8_rb` (agent_roles table + role_id column gone, migration_0007 unapplied, 28
+  members match the pre-migration BASE exactly). Re-applying the chain to the restored DB succeeds
+  (round-trip sound). Live DB identity snapshot before/after is `diff`-identical; both scratch DBs dropped.
+- **Harness (d) is read-only on the baseline**: `scripts/e2e-role-boundaries.sh SCENARIOS=f` passed
+  f/f2a-f2d; baseline sha `3b8c5d4b...` unchanged before AND after; the file is only read
+  (`sha256_of "$BASELINE_POLICIES"`), never written. Needs `INJECTED_OPENCODE_JSON` pointed at a host copy
+  of `worker:/data/vteam-worker/opencode.json` (worker WORK_DIR is a named volume, not host-visible).
+- **Checker LOC note**: `verify-instruction-parity.mjs` is 338 pure LOC — it is an evidence/proof script
+  (`.mjs`, reference-only TS), not one of the four activated languages under the 250-LOC production ceiling.
+- **Gates**: server 138 suites / 3179 tests green (baseline after todo 5 unchanged — this todo adds no
+  server tests, only the repo-level checker); `npx tsc -p tsconfig.json --noEmit` exit 0.
+  Evidence `.omo/evidence/agent-role-entity/task-8-proof.txt`.
