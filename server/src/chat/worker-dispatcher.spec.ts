@@ -7119,6 +7119,91 @@ describe('WorkerDispatcher', () => {
       });
     });
 
+    // Normative agent-selection contract: rules (1)-(4) declared in
+    // .omo/evidence/agent-role-decommission/task-1-consumer-map.txt, source
+    // expression at worker-dispatcher.ts:2141-2148.
+    describe('agent-selection precedence（4 条规范契约，todo 1 钉死）', () => {
+      const capsWith = (enabled: boolean, names: string[]) => {
+        prisma.worker.findUnique.mockResolvedValue({
+          id: 'w_0000000001',
+          status: 'online',
+          capabilities: {
+            maxInstances: 1,
+            agentPolicies: { enabled, names },
+          },
+          defaultModelId: null,
+        } as any);
+      };
+      const selectMemberAgent = (name: string | null) => {
+        (prisma as any).teamMember.findFirst.mockImplementation(
+          async (q: any) =>
+            q?.select?.opencodeAgentName !== undefined
+              ? { opencodeAgentName: name }
+              : { overrideModelId: null },
+        );
+      };
+      const mockAgentRow = (row: Record<string, unknown>) => {
+        prisma.agent.findUnique.mockResolvedValue({
+          id: 'a_product',
+          name: '产品经理',
+          role: 'product',
+          prompt: '负责需求',
+          persona: null,
+          defaultModelId: null,
+          ...row,
+        } as any);
+      };
+      const execPayload = () => workerClient.execute.mock.calls[0][1] as any;
+      const withTask = (extra: Record<string, unknown> = {}) =>
+        teamRequest({
+          taskContext: { taskId: 't_0000000001', ...extra },
+        }) as any;
+
+      it('rule 4 (pure)：agentKey 缺席且无 role → 无候选（resolvePolicyAgentCandidate 返回 null）', () => {
+        expect(
+          resolvePolicyAgentCandidate({ agentKey: null, role: null }),
+        ).toBeNull();
+      });
+
+      it('rule 1：策略候选解析且 worker 支持 → 候选胜出，opencodeAgentName 被忽略', async () => {
+        mockAgentRow({ agentKey: 'demo-agent', role: null });
+        capsWith(true, ['vteam-demo-agent', 'vteam-plan']);
+        selectMemberAgent('plan');
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('vteam-demo-agent');
+      });
+
+      it('rule 2：候选未被 worker 支持 → opencodeAgentName 胜出', async () => {
+        mockAgentRow({ agentKey: 'demo-agent', role: null });
+        capsWith(false, ['vteam-demo-agent']);
+        selectMemberAgent('plan');
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('plan');
+      });
+
+      it('rule 3：无候选且无 opencodeAgentName → 省略 agent 键（引擎默认）', async () => {
+        mockAgentRow({ agentKey: 'demo-agent', role: null });
+        capsWith(true, ['vteam-product']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(
+          Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
+        ).toBe(false);
+      });
+
+      it('rule 4 (dispatch)：agentKey 缺席 + 无 role → 无策略候选，直接回退 opencodeAgentName', async () => {
+        mockAgentRow({ agentKey: null, role: null });
+        capsWith(true, ['vteam-product', 'vteam-plan']);
+        selectMemberAgent('plan');
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('plan');
+      });
+    });
+
     it('缺 teamId → throw 400 TEAM_SESSION_MISSING_DIMENSION（不触碰 worker 链路）', async () => {
       const d = createDispatcher();
       const errors: unknown[] = [];

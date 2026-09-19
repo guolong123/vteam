@@ -1,0 +1,581 @@
+================================================================================
+agent-role-decommission — todo 1
+EXHAUSTIVE `Agent.role` CONSUMER MAP + AGENT-SELECTION PRECEDENCE + CREATE/CLONE DESIGN
+================================================================================
+Repo:   /Volumes/SSD-Data/01work/git-project/vteam
+Date:   2026-09-19
+Todo:   [server] Build the complete `Agent.role` consumer map and the replacement
+Status: INVENTORY + DESIGN ONLY. No production file edited.
+Commit: docs(agents): map every Agent.role consumer and declare agent-selection precedence
+
+Baselines at inventory time (recorded for later todos):
+  server  npx tsc -p tsconfig.json --noEmit     -> exit 0
+  web     npx tsc --noEmit                      -> exit 0
+  server  npx jest --runInBand                  -> 140 suites / 3196 tests (BEFORE this todo's spec)
+  server  npx jest --runInBand  (after spec)    -> 140 suites / 3201 tests (+5 precedence pins)
+  worker  npx jest --runInBand                  -> 26 suites / 688 tests
+  Frozen baseline sha (unchanged):
+    .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+    = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+
+--------------------------------------------------------------------------------
+SECTION 0 — THE RECORDED GREP COMMANDS (the machine-checkable source of truth)
+--------------------------------------------------------------------------------
+The inventory is the UNION of these exact commands run at the repo root. No hit
+was inspected from the plan's References block (its line numbers drift; see §5).
+
+# (P1) every `.role` read in server source, non-test
+grep -rnE "\.role\b" server/src --include="*.ts" | grep -v "\.spec\.ts"
+                                                              -> 73 hits
+
+# (P2) every `role: true` prisma select/include in server source, non-test
+grep -rnE "\brole:\s*true\b" server/src --include="*.ts" | grep -v "\.spec\.ts"
+                                                              -> 28 hits
+
+# (P3) every named helper that depends on Agent.role, non-test
+grep -rnE "resolveTemplateSource|resolveConstantPolicySource|roleToAgentName|isPlanRole|roleNeedsIssueDetail|ROLE_LABELS|constantRoleNameOf|policyKeyOf|agentNameOf|resolvePolicyAgentCandidate" \
+  server/src --include="*.ts" | grep -v "\.spec\.ts"
+                                                              -> 41 hits
+
+# (P4) the plan-duty name literals / duty sets, non-test
+grep -rnE "isPlanRoleTarget|PLAN_AGENT_ID|PLANNER_AGENT_ID|listPlanDutyAgents|PLAN_DUTY_AGENTS" \
+  server/src --include="*.ts" | grep -v "\.spec\.ts"
+                                                              -> 6 hits
+
+# (WEB) every `.role` read in the web app, non-test/e2e
+grep -rnE "\.role\b" web --include="*.ts" --include="*.tsx" \
+  | grep -v node_modules | grep -v "\.spec\.ts" | grep -v "e2e/"
+                                                              -> 44 hits
+
+UNION (dedup by file:line, path made repo-relative):
+  server P1 ∪ server P2 ∪ server P3 ∪ server P4 ∪ WEB = 184 distinct file:line keys
+  Committed inventory: scripts/agent-role-consumer-manifest.txt (184 lines)
+
+Checker (prints UNMAPPED: <n>, exits non-zero if n>0):
+  bash scripts/check-agent-role-consumers.sh
+Positive control (synthetic consumer in a scratch dir, never committed):
+  bash scripts/check-agent-role-consumers.sh --extra-dir /tmp/armap/control
+
+--------------------------------------------------------------------------------
+SECTION 1 — CHECKER PROOF (happy path UNMAPPED: 0, positive control UNMAPPED: 1)
+--------------------------------------------------------------------------------
+Command + verbatim run 1 (real tree):
+  $ bash scripts/check-agent-role-consumers.sh
+  MANIFEST: /Volumes/SSD-Data/01work/git-project/vteam/scripts/agent-role-consumer-manifest.txt
+  OBSERVED: 184 keys (fresh grep)
+  UNMAPPED: 0
+  rc=0
+
+Command + verbatim run 2 (positive control). A synthetic unmapped consumer is
+placed OUTSIDE the repo so it can be exercised without committing it:
+  /tmp/armap/control/control-consumer.ts:
+      // POSITIVE CONTROL (temporary, never committed): a synthetic unmapped consumer.
+      export function controlLeak(agent: { role: string | null }) {
+        return agent.role;
+      }
+
+  $ bash scripts/check-agent-role-consumers.sh --extra-dir /tmp/armap/control
+  MANIFEST: /Volumes/SSD-Data/01work/git-project/vteam/scripts/agent-role-consumer-manifest.txt
+  OBSERVED: 185 keys (fresh grep)
+  UNMAPPED: 1
+  --- offending lines (in fresh grep, absent from manifest) ---
+  /tmp/armap/control/control-consumer.ts:3
+  rc=1
+
+Revert / re-run (real tree) -> UNMAPPED: 0, rc=0 (run 1 above is the same state).
+The checker is real: it fails on a genuinely unmapped consumer and passes when
+every observed key is in the committed manifest.
+
+--------------------------------------------------------------------------------
+SECTION 2 — REPLACEMENT LEGEND
+--------------------------------------------------------------------------------
+Every hit below is tagged with exactly one disposition. "OUT-OF-SCOPE" means the
+hit is NOT `Agent.role` at all and must not be migrated by this plan — it is
+listed so the "no unmapped consumer" claim is honest, not to hide a read.
+
+  LABEL   -> the Agent.role *label key* -> `AgentRole` / `TeamMember.roleId`
+             (display name from `AgentRole.name`; role identity from
+             `TeamMember.roleId`; the base role key is `AgentRole.key`).
+  POLICY  -> the policy derived from role -> `Agent.policyId`.
+  ONAME   -> the opencode agent name `vteam-<role>` -> `Agent.agentKey`
+             (name = `vteam-<agentKey>`).
+  DUTY    -> plan duties (`isPlanRole`, `roleNeedsIssueDetail`, the `vteam-plan`
+             literal, `PLANNER_AGENT_ID='a_plan'`) -> tool-derived duties (todo 2).
+  PLUMB   -> a prisma select/include `role: true` or a DTO passthrough that
+             carries the value to a LABEL consumer. Migrates with its consumer:
+             stop selecting the dropped column; carry `roleId` / resolved label.
+  DOC     -> a comment/doc only (no runtime read); updated by todo 8.
+  OUT     -> not Agent.role (account RBAC `Role`, `user.role`, LLM message
+             `info.role`, TeamUserMember.role, AgentRole relation alias). No change.
+
+--------------------------------------------------------------------------------
+SECTION 3 — SERVER CONSUMERS (file:line, owning function, disposition, replacement)
+--------------------------------------------------------------------------------
+
+### server/src/agents/agents.service.ts  (create/clone/update + DTO)
+185  create() doc comment (policy wiring)                  DOC     rewrite for the 3-path design (§6)
+198  create(): resolveTemplateSource(tx, dto.role)         POLICY  replaced by PATH 1/2/3 (§6); dto.role removed
+211  create(): `role: dto.role ?? null` write              DOC/WRITE removed (column dropped); see §6
+263  clone(): resolveTemplateSource(tx, source.role)      POLICY  replaced by PATH 1/2/3 (§6); source.role gone
+285  clone(): `role: source.role` write                   DOC/WRITE removed (column dropped); see §6
+334  update(): `role: dto.role` write                     DOC/WRITE removed; label change must NOT re-provision policy (§6)
+620  toAgentDto(): role passed into resolveManyByAgents   POLICY  drop `role`; pass `{ policyId, agentKey }`
+627  toAgentDto(): `role: agent.role` DTO field           LABEL   resolve from AgentRole/roleId (§6 DTO decision)
+647  toAgentDtoList(): role into resolveManyByAgents      POLICY  drop `role`; pass `{ policyId, agentKey }`
+654  toAgentDtoList(): `role: agent.role` DTO field       LABEL   resolve from AgentRole/roleId
+31   import resolveConstantPolicySource                   PLUMB   keep (helper stays, input becomes agentKey)
+749  resolveTemplateSource() doc comment                  DOC     rewrite (§6)
+753  private resolveTemplateSource(tx, role)              POLICY  replaced by explicit-source resolver (§6)
+770  `resolveConstantPolicySource(\`vteam-${role}\`)`     POLICY  re-key to `vteam-<agentKey>` / policyId
+
+### server/src/execution-policies/execution-policy.service.ts
+445  resolveConstantPolicySource doc ref to resolveTemplateSource  DOC  rewrite; shared-source note stays
+458  export function resolveConstantPolicySource(name)    ONAME   KEEP (already takes an opencode name); callers re-key
+644  resolveByAgent(): this.policyKeyOf(agent)            POLICY  unchanged signature; impl drops `role` fallback
+666  resolveManyByAgents(): policyKeyOf(a)                POLICY  unchanged signature; impl drops `role` fallback
+700  resolveAgentWithFallback(): agentNameOf(agent)       ONAME   unchanged; impl drops `role` fallback
+702  resolveAgentWithFallback(): constantRoleNameOf(agent.role)  ONAME  re-key to agentKey
+746  private constantRoleNameOf(role)                     ONAME   replace with agentKey-keyed resolver
+938  private policyKeyOf(agent) signature {role?}         POLICY  drop `role` from the param type
+943  `agent.policyId ?? (agent.role ? \`ep_${agent.role}\` : null)`  POLICY  becomes `agent.policyId ?? null`
+946  private agentNameOf(agent) signature {role?}         ONAME   drop `role` from the param type
+952  `: agent.role ?` fallback branch                     ONAME   remove (rule 4 narrowing)
+953  `? \`vteam-${agent.role}\`` fallback name            ONAME   removed
+
+### server/src/chat/worker-dispatcher.ts  (dispatch core)
+35   import resolveConstantPolicySource                   PLUMB   keep
+130  export function roleToAgentName(role)                ONAME   todo 8 deletes; replaced by agentKey mapping
+143  roleToAgentName doc comment                          DOC     rewrite
+144  roleToAgentName doc comment                          DOC     rewrite
+148  export function resolvePolicyAgentCandidate(row)     ONAME   KEEP; drop the roleToAgentName fallback (rule 4)
+155  `return roleToAgentName(row?.role ?? null)`          ONAME   becomes `return null` (no agentKey -> no candidate)
+491  BuildSystemInstructionsOptions doc (issueDetail)     DUTY    rewrite (todo 2)
+495  doc: agentRole from agentIdentity.role               DUTY    rewrite (todo 2)
+496  doc: isPlanRole suppression                          DUTY    rewrite (todo 2)
+497  doc: fallback agent.role                             DUTY    rewrite (todo 2)
+505  doc: Agent.role is only a label key                  DOC     keep intent, drop the column reference
+506  doc: isPlanRole / policy candidate                   DUTY    rewrite (todo 2)
+554  buildSystemInstructions(): identity string `agent.role`   LABEL  use AgentRole.name / team member roleId
+557  buildSystemInstructions(): identity string `agent.role`   LABEL  use AgentRole.name / team member roleId
+561  `const effectiveRole = opts?.agentRole ?? agent.role`     DUTY   input becomes resolved tools (todo 2)
+562  `const globalText = isPlanRole(effectiveRole)`            DUTY   derive from resolved policy tools (todo 2)
+568  doc: role prompt source = TeamMember.roleId          DOC     largely correct already; drop Agent.role aside
+569  doc: Agent.role is label key / isPlanRole            DUTY    rewrite (todo 2)
+606  `if (!isPlanRole(effectiveRole))`                    DUTY   derive from resolved policy tools (todo 2)
+623  roster line `m.role` (TeamMemberInfo.role)           LABEL   TeamMemberInfo.role <- roleId/AgentRole.name
+747  `m.info?.role !== 'assistant'`                       OUT     LLM message role; no change
+768  `m.info?.role !== 'assistant'`                       OUT     LLM message role; no change
+789  `.filter(m => m.info?.role === 'assistant')`         OUT     LLM message role; no change
+2010 agentRow select `role: true`                        PLUMB   stop selecting role; select roleId/agentKey/policyId
+2020 `role: agentRow?.role ?? null` (AgentIdentityInfo)  LABEL   carry AgentRole name or drop; see §6 DTO note
+2032 teamMember include `agent.role`                     PLUMB   stop selecting agent.role; keep TeamMember.roleId
+2034 comment: agent.role is only a label key            DOC     update to roleId
+2047 `role: tm.agent.role` (TeamMemberInfo)              LABEL   tm.roleId -> AgentRole.name
+2093 `roleNeedsIssueDetail(agentIdentity.role)`          DUTY    derive issue-detail duty from resolved tools (todo 2)
+2095 `agentRole: agentIdentity.role`                     DUTY    replaced by resolved tools (todo 2)
+2098 comment: agent.role is label key, not this source  DOC     update
+2100 `teamMemberRows.find(...)?.role?.rolePrompt`       OUT     this is the AgentRole relation alias; KEEP
+2136 comment: `vteam-<agentKey|role>`                   DOC     rewrite for rule 4 narrowing
+2143 `resolvePolicyAgentCandidate(agentIdentity)`       ONAME   KEEP (precedence expression, §4)
+2152 comment: fallback roleToAgentName                  DOC     rewrite
+3650 comment: fallback roleToAgentName                  DOC     rewrite
+3658 `const constantName = roleToAgentName(agent.role)`  ONAME  derive from agentKey
+3663 `role: agent.role` into resolveByAgent             POLICY  drop; pass `{ policyId, agentKey }`
+3678 `resolveConstantPolicySource(constantName)?.config.correction`  ONAME  constantName now from agentKey
+385  export function roleNeedsIssueDetail(role)          DUTY    removed / re-pointed (todo 2, todo 8)
+397  roleNeedsIssueDetail doc comment                    DUTY    removed with the helper
+400  export function isPlanRole(role)                    DUTY    removed (todo 2, todo 8)
+4327 `m.info?.role === 'assistant'`                     OUT     LLM message role; no change
+4339 `m.info?.role === 'assistant'`                     OUT     LLM message role; no change
+
+### server/src/tasks/tasks.service.ts
+52   ROLE_LABELS doc comment                            DOC     rewrite to AgentRole source
+53   const ROLE_LABELS = {product..tester}               LABEL   replace with AgentRole.name lookup
+226  userMember select `role: true`                      OUT     TeamUserMember.role (owner/member); no change
+229  `find(m => m.role === 'owner')`                     OUT     TeamUserMember.role; no change
+357  teamMember include agent.role                       PLUMB   drop agent.role; keep roleId
+809  teamMember include agent.role                       PLUMB   drop agent.role; keep roleId
+1539 teamMember include agent.role                       PLUMB   drop agent.role; keep roleId
+1739 teamMember include agent.role                       PLUMB   drop agent.role; keep roleId
+1769 `role: m.agent.role` (instances DTO)               LABEL   resolve from roleId/AgentRole.name
+1815 `ROLE_LABELS[agent.role ?? ''] ?? agent.name` (defaultAlias)  LABEL  AgentRole.name; fallback agent.name
+1848 agent select `role: true`                           PLUMB   drop; keep roleId
+
+### server/src/teams/teams.service.ts
+35   const ROLE_LABELS = {product..tester}               LABEL   replace with AgentRole.name lookup
+135  agent select `role: true` (createTeam)              PLUMB   drop; keep roleId
+259  teamMember include agent.role                       PLUMB   drop agent.role; keep roleId
+288  teamMember include agent.role                       PLUMB   drop agent.role; keep roleId
+626  agent select `role: true` (addMember)               PLUMB   drop; keep roleId
+752  `role: dto.role?.trim() || 'member'` (userMember)   OUT     TeamUserMember.role; no change
+1387 `ROLE_LABELS[agent.role ?? ''] ?? agent.name` (defaultAlias)  LABEL  AgentRole.name; fallback agent.name
+1415 `role: m.agent.role` (toTeamDto member.agent)      LABEL   resolve from roleId/AgentRole.name
+1422 `role: u.role` (toTeamDto userMembers)             OUT     TeamUserMember.role; no change
+
+### server/src/chat/chat.service.ts
+120  AGENT_SELECT agent `role: true`                     PLUMB   drop; keep roleId
+319  agentMembers select agent.role                      PLUMB   drop agent.role; keep roleId
+343  agentMembers select agent.role                      PLUMB   drop agent.role; keep roleId
+514  `const role = info.role` (user/assistant filter)    OUT     LLM message role; no change
+1880 `role: row.agent.role` (message DTO)               LABEL   resolve from roleId/AgentRole.name
+
+### server/src/platform-mcp/platform-mcp.service.ts
+1097 task_context teamMember include agent.role         PLUMB   drop agent.role; keep roleId
+1119 `role: r.agent.role` (agentMembers payload)        LABEL   resolve from roleId/AgentRole.name
+3615 team view select agent.role                         PLUMB   drop agent.role; keep roleId
+3644 `role: r.agent.role` (team view members)           LABEL   resolve from roleId/AgentRole.name
+3711 my_profile select agent.role                         PLUMB   drop agent.role; keep roleId/agentKey
+3729 `const agentRole = profile.agent.role`              POLICY  drop; resolveByAgent takes `{ policyId, agentKey }`
+3763 `role: profile.agent.role` (my_profile payload)     LABEL   resolve from roleId/AgentRole.name
+3838 agent select `role: true`                           PLUMB   drop; keep roleId
+
+### server/src/timers/triggers.service.ts
+304  user select `role: true`                            OUT     account RBAC Role; no change
+309  `user.role.permissions`                             OUT     account RBAC Role; no change
+406  teamMember select agent.role                        PLUMB   drop agent.role; keep roleId
+420  teamMember select agent.role (inIds typing)         PLUMB   drop agent.role; keep roleId
+442  type decl `agent.role`                              PLUMB   drops with the select
+518  type decl `agent.role`                              PLUMB   drops with the select
+589  `const role = m.agent?.role ?? m.agent?.name`       LABEL   AgentRole.name ?? agent.name
+618  type decl `agent.role`                              PLUMB   drops with the select
+
+### server/src/platform-mcp/... (typing plumbing — same module, listed for completeness)
+3577 type decl `role: string | null`                     PLUMB   drop / re-point with 3615
+3670 type decl `role: string | null`                     PLUMB   drop / re-point with 3711
+
+### server/src/common/constants/agent-role.constants.ts
+36   comment: SQL `MD5(a.role)` consistency              DOC     keep (historical migration note), no read
+111  comment: `Agent.role IS NULL` backfill case iii     DOC     keep (historical), no read
+118  FALLBACK_AGENT_ROLE description string              DOC     keep; user-visible text, no read
+
+### server/src/common/opencode-agent-duty.ts  (DUTY source — todo 2 re-points)
+29   `const PLAN_DUTY_AGENTS = new Set([...])`           DUTY    duty keyed by REGISTERED duty, not Agent.role
+68   `PLAN_DUTY_AGENTS.has(baseAgentName(name))`         DUTY    unchanged logic; callers stop feeding Agent.role
+76   `export function listPlanDutyAgents()`              DUTY    keep (read-only snapshot)
+77   `return [...PLAN_DUTY_AGENTS]`                      DUTY    keep
+
+### server/src/issues/review-verdict.listener.ts  (plan-duty literal — todo 2 re-points)
+35   `const PLANNER_AGENT_ID = 'a_plan'`                 DUTY    derive from registered plan duty (todo 2)
+301  `where: { teamId, agentId: PLANNER_AGENT_ID }`      DUTY    look up the plan-duty member, not a_plan literal
+
+### server/src/tasks/plan-docs.service.ts  (plan-duty literal)
+191  `this.gate.requestRevision(hostIssueId, 'a_plan')`  DUTY    derive the planner agent id from plan duty (todo 2)
+
+### server/src/auth/auth.service.ts — OUT (account RBAC Role)
+79   `prisma.role.findUnique`                            OUT
+117  `include: { role: true }`                           OUT
+150  `include: { role: true }`                           OUT
+283  `user.role.name`                                    OUT
+286  `user.role.permissions`                             OUT
+
+### server/src/users/roles.service.ts — OUT (account RBAC Role CRUD)
+21, 30, 35, 58, 66, 99, 104                              OUT
+
+### server/src/users/users.service.ts — OUT
+143, 199                                                OUT
+
+### server/src/users/roles.constants.ts
+43   comment `schema.role.is_builtin`                    OUT
+
+### server/src/common/guards/permission.guard.ts — OUT
+85   `include: { role: true }`                           OUT
+94   `user.role.permissions`                             OUT
+
+### server/src/users/admin.guard.ts — OUT
+42   `include: { role: true }`                           OUT
+51   `user.role.permissions`                             OUT
+
+### server/src/tools/tools.service.ts — OUT
+227  `include: { role: true }`                           OUT
+232  `user.role.permissions`                             OUT
+
+### server/src/skills/skills.service.ts — OUT
+360  `include: { role: true }`                           OUT
+365  `user.role.permissions`                             OUT
+
+--------------------------------------------------------------------------------
+SECTION 4 — WEB CONSUMERS
+--------------------------------------------------------------------------------
+All web `.role` hits read the server DTO `role` field (a label key) carried on
+`AgentItem` / `TeamMemberDto.agent` / task `instances[]`. Replacement = LABEL:
+source the role identity from `AgentRole` / `TeamMember.roleId` (todo 6 owns the
+web re-point; the duplicated maps in §4b are todo 8's to collapse).
+
+### 4a — direct `.role` reads
+agents/page.tsx:414  comment (CreateAgentModal posts existing Agent.role)  DOC   the handoff this todo consumes (§6)
+agents/page.tsx:444  AgentListItem toAvatarRole(agent.role)                LABEL  roleId/AgentRole.key
+agents/page.tsx:1565 ROLE_COLORS[toAvatarRole(agent.role)]                LABEL
+agents/page.tsx:1644 role={toAvatarRole(agent.role)}                       LABEL
+agents/page.tsx:1666 roleColor(toAvatarRole(agent.role))                   LABEL
+agents/page.tsx:1667 roleBg(toAvatarRole(agent.role))                      LABEL
+agents/page.tsx:1668 roleBorder(toAvatarRole(agent.role))                  LABEL
+agents/page.tsx:2261 comment (CreateAgentModal submit nullish)            DOC   replaced by explicit policyId/AgentRole
+agents/page.tsx:2262 comment ('' vs undefined)                            DOC
+tasks/new/page.tsx:192 toRole(m.agent?.role)                              LABEL  roleId
+teams/[id]/page.tsx:92 toAvatarRole(member.agent?.role)                   LABEL
+teams/[id]/page.tsx:553 option label `a.role ?? a.type`                   LABEL
+teams/[id]/session/page.tsx:310,311 inst.role -> RoleKey                  LABEL
+teams/[id]/session/page.tsx:330,331 m.agent.role -> RoleKey               LABEL
+teams/[id]/session/page.tsx:351 agentMap role                             LABEL
+teams/[id]/session/page.tsx:367,368 teamMemberById role                   LABEL
+teams/[id]/session/page.tsx:504 mentionable role                          LABEL
+teams/[id]/session/page.tsx:512 issueModalAgents role                     LABEL
+teams/[id]/session/page.tsx:1098 AgentAvatar role={a.role}                LABEL
+teams/[id]/session/page.tsx:1196 message author role                      LABEL
+teams/page.tsx:109 toAvatarRole(m.agent?.role)                            LABEL
+issues/page.tsx:368 assignee option label                                 LABEL
+issues/page.tsx:442 assignee label                                        LABEL
+issues/page.tsx:735 assigneeAgents role                                   LABEL
+issue-detail-modal.tsx:404 assignee option label                          LABEL
+issue-detail-modal.tsx:414 assignee label                                 LABEL
+TeamRightPanel.tsx:175 comment toRoleKey                                  DOC
+TeamRightPanel.tsx:306 AgentAvatar toRoleKey(mainMember.agent?.role)      LABEL
+TeamRightPanel.tsx:309 label toRoleKey(mainMember.agent?.role)            LABEL
+TeamRightPanel.tsx:321 toRoleKey(m.agent?.role)                           LABEL
+TeamMembersPanel.tsx:89,90 role -> RoleKey                                LABEL
+TeamMembersPanel.tsx:187 label roles[o.role]                              LABEL
+TeamMembersPanel.tsx:318 data-role={a.role}                               LABEL
+TeamMembersPanel.tsx:330 roles[a.role]?.border                            LABEL
+TeamMembersPanel.tsx:345 AgentAvatar role={a.role}                        LABEL
+message-input.tsx:287 roles[agent.role]                                   LABEL
+message-input.tsx:288 roleText[agent.role]                                LABEL
+message-input.tsx:293 data-role={agent.role}                              LABEL
+user-members.tsx:83 {member.role}                                         OUT    TeamUserMember.role (owner/member)
+
+### 4b — SUPPLEMENTARY consumers the `.role` grep does NOT catch (sweep result)
+These read the role *label concept* via hardcoded maps/constants, not via a
+`.role` property, so they are invisible to P1. Listed so nothing is unmapped.
+They are the "duplicate role maps" todo 8 de-collapses and todo 6 re-points; the
+checker cannot cover them because they post-date/parallel the column.
+
+web/src/theme/tokens.ts:9          RoleKey union                         LABEL  keep as presentation-only key set
+web/src/theme/tokens.ts:19-26      `roles` label/colour map              LABEL  label from AgentRole.name (todo 6)
+web/src/theme/tokens.ts:29-36      `roleText` map                        LABEL  presentation-only
+web/app/(main)/agents/page.tsx:405 ROLE_KEYS                             LABEL  collapse to one source (todo 8)
+web/app/(main)/agents/page.tsx:419-422 CREATE_ROLE_OPTIONS (picker)      POLICY/SOURCE -> §6, todo 4
+web/app/(main)/teams/[id]/page.tsx:33 ROLE_KEYS                         LABEL  collapse (todo 8)
+web/app/(main)/teams/page.tsx:31   ROLE_KEYS                            LABEL  collapse (todo 8)
+web/app/(main)/teams/[id]/session/page.tsx:45 AGENT_ID_ROLE            LABEL  agentId->role hardcode; roleId source (todo 6)
+web/app/(main)/teams/[id]/session/page.tsx:53 ROLE_KEYS                LABEL  collapse (todo 8)
+web/app/(main)/teams/[id]/tasks/page.tsx:64 AGENT_ID_ROLE              LABEL  (todo 6)
+web/app/(main)/board/page.tsx:156 AGENT_ID_ROLE                        LABEL  (todo 6)
+web/app/(main)/board/page.tsx:168 ROLE_KEYS                            LABEL  collapse (todo 8)
+web/src/components/tasks/TaskDetailDrawer.tsx:96 AGENT_ID_ROLE         LABEL  (todo 6)
+web/src/components/tasks/TaskDetailDrawer.tsx:105 ROLE_KEYS            LABEL  collapse (todo 8)
+web/src/components/teams/TeamMembersPanel.tsx:51 AGENT_ID_ROLE         LABEL  (todo 6)
+web/src/components/teams/TeamMembersPanel.tsx:60 ROLE_KEYS             LABEL  collapse (todo 8)
+web/src/components/teams/TeamRightPanel.tsx:176 ROLE_KEYS              LABEL  collapse (todo 8)
+web/app/(main)/tasks/new/page.tsx:140 ROLE_KEYS                        LABEL  collapse (todo 8)
+web/app/(main)/tasks/new/page.tsx:213  a.role === role template match  LABEL  roleId source (todo 6)
+web/src/components/agents/AgentRolesTab.tsx:57 AgentOption.role        LABEL  roleId source (todo 6)
+
+Type plumbing (informational, migrates with its reader):
+  web/app/(main)/agents/page.tsx:88 AgentItem.role: string|null
+  web/app/(main)/teams/[id]/page.tsx:39 AgentItem.role
+  web/app/(main)/teams/new/page.tsx:36 role: string (AgentOption)
+  web/app/(main)/issues/page.tsx:151,429,644,730 role fields
+  web/src/components/tasks/issue-detail-modal.tsx:138, task-detail-types.ts:23
+  web/src/api/teams.ts:21 (TeamMemberDto.agent.role), :38 (TeamUserMemberDto.role=OUT), :104 (AddUserMemberPayload.role=OUT)
+  web/src/types/git-repos.ts:86 ApiAgent.role  (GET /agents item)
+  web/src/components/teams/TeamMembersPanel.tsx:75 AgentItem.role
+
+--------------------------------------------------------------------------------
+SECTION 5 — DRIFT vs the plan's line numbers (every one verified by reading)
+--------------------------------------------------------------------------------
+The plan's References block is approximate. Confirmed drift:
+
+  Plan says                              Actual (2026-09-19)
+  -------------------------------------  ------------------------------------------
+  agents.service resolveTemplateSource   private resolveTemplateSource()   :753-774
+    :727-748
+  agents.service buildSkeletonConfig     buildSkeletonConfig()            :780-799
+    :754-773
+  agents.service create :179-220         create()                         :190-231
+  agents.service clone  :230-296         clone()                          :241-307
+  worker-dispatcher isPlanRole :365      export function isPlanRole       :400
+  worker-dispatcher roleNeedsIssueDetail export function roleNeedsIssueDetail
+    :350                                   :385   (plan's own ":358 is drift"
+                                                  note is itself drift; both wrong)
+  worker-dispatcher PLAN_AGENT_ID :90     *** NO `PLAN_AGENT_ID` IN SOURCE ***
+                                          removed by plan `server-gate-removal-
+                                          tool-authority`; survives only in
+                                          server/dist (stale build). Real literals:
+                                          PLANNER_AGENT_ID  review-verdict.listener.ts:35
+                                          'a_plan' literal  plan-docs.service.ts:191
+                                          a_plan seed id    seed.ts / constants:102
+  worker-dispatcher isPlanRoleTarget      *** DOES NOT EXIST IN SOURCE ***
+    :1487-1500                            (removed with the a_plan exemption);
+                                          only server/dist/.../*.d.ts:174 declares it
+  worker-dispatcher dispatch             precedence expression            :2141-2148
+    :2094-2122                            (plan's ":2094-2112"/":2108-2112" drift)
+  worker-dispatcher agent-row select      agent.findUnique select          :2005-2016
+    ~:1980-1990
+  exec-policy policyKeyOf :821-827        private policyKeyOf              :938-944
+  exec-policy agentNameOf :829-838        private agentNameOf              :946-955
+  exec-policy constantRoleNameOf (n/a)    private constantRoleNameOf       :746-752
+  teams.service ROLE_LABELS (n/a)         const ROLE_LABELS                :35-41
+  teams.service defaultAlias (n/a)        private defaultAlias             :1383-1390
+  tasks.service ROLE_LABELS ~:1832        const ROLE_LABELS                :53-59
+  tasks.service effectivePlanMode ~:1809  effectivePlanMode                :1792
+  schema Agent.role :588 / :629           role String?                     :629
+                                          (the :588 reference is the UserRole
+                                           `role String` at :202 / unrelated)
+  web agents toAvatarRole ~:444           function toAvatarRole            :425
+                                          (call sites 444/1565/1644/1666-1668)
+  web agents colour helpers ~:577-583     ROLE_COLORS/ROLE_BGS/ROLE_BORDERS :567-575
+  web agents ROLE_KEYS ~:441              const ROLE_KEYS                  :405
+  web CreateAgentModal picker             CREATE_ROLE_OPTIONS              :419-422
+    ~:1709-1717/:1751-1761/:2400-2408     <select>                         :2448-2461
+                                          handleSubmit                     :2253-2266
+                                          createMutation                   :2934-2942
+                                          <CreateAgentModal onSubmit>      :3118-3124
+  web TeamMembersPanel ~:59-69            AGENT_ID_ROLE :51 / ROLE_KEYS :60
+  web teams/new ~:49-57                   agentIdForRoleKey role match     :213
+  web tokens.ts :8-26                     RoleKey :9 / roles :19-26
+
+Two factual corrections the plan must absorb:
+  (a) `PLAN_AGENT_ID` and `isPlanRoleTarget` are ALREADY GONE from source; the
+      plan's todo 2/9 task "re-point PLAN_AGENT_ID" and "remove isPlanRoleTarget"
+      are no-ops on source (only the stale server/dist still shows them).
+  (b) `roleNeedsIssueDetail` is :385, not :350 or :358.
+
+--------------------------------------------------------------------------------
+SECTION 6 — AGENT-SELECTION PRECEDENCE (normative, review fix B7)
+--------------------------------------------------------------------------------
+Source expression (verified): server/src/chat/worker-dispatcher.ts:2141-2148
+    const policyCandidateAgent: string | null = effectivePlanForPolicy
+      ? 'vteam-plan'
+      : resolvePolicyAgentCandidate(agentIdentity);
+    const resolvedAgentName: string | null =
+      policyCandidateAgent &&
+      workerSupportsAgentPolicies(worker, policyCandidateAgent)
+        ? policyCandidateAgent
+        : opencodeAgentName;
+Consumed at :2167 `...(resolvedAgentName ? { agent: resolvedAgentName } : {})`.
+
+Three sources can name "which opencode agent runs":
+  (1) TeamMember.agentId -> Agent row -> Agent.agentKey -> policy candidate
+      `vteam-<agentKey>`;
+  (2) TeamMember.opencodeAgentName (per-member explicit override, incl. third-
+      party external agents);
+  (3) the engine default (neither applies).
+
+THE 4 RULES (normative — both plans cite this statement):
+  Rule 1. If a policy candidate resolves (agentKey present and valid) AND the
+          worker advertises support for it (workerSupportsAgentPolicies) ->
+          the POLICY CANDIDATE WINS; opencodeAgentName is ignored for this
+          dispatch.
+  Rule 2. Else if TeamMember.opencodeAgentName is set -> IT WINS (covers
+          external agents and the gate-off case).
+  Rule 3. Else -> OMIT the `agent` key (engine default).
+  Rule 4. Post-`role`-removal fallback: resolvePolicyAgentCandidate currently
+          falls back to roleToAgentName(role) at :155. With `role` gone, an
+          agent with NO agentKey has NO policy candidate -> rules 2/3 apply
+          directly. The removal NARROWS the candidate set (no more role-derived
+          `vteam-<role>` name); that narrowing must NOT silently change any
+          currently-working seeded member -> todo 9's BEFORE/AFTER proof catches
+          it. No semantics beyond this narrowing change.
+
+Plan-3 agreement: web/app/(main)/teams/[id]/page.tsx:62-68 already declares
+  "(1) 策略候选优先（worker 支持时）→ (2) opencodeAgentName → (3) 引擎默认"
+citing this todo. The declaration above MATCHES it.
+
+PINNING TEST (committed): server/src/chat/worker-dispatcher.spec.ts,
+describe 'agent-selection precedence（4 条规范契约，todo 1 钉死）'.
+  rule 1: policy candidate wins when the worker supports it (opencodeAgentName ignored)
+  rule 2: opencodeAgentName wins otherwise
+  rule 3: neither -> `agent` key omitted
+  rule 4a (pure): resolvePolicyAgentCandidate({agentKey:null, role:null}) === null
+  rule 4b (dispatch): no agentKey + no role -> no candidate -> rule 2 fallback
+Pinned against EXISTING exported behaviour only; NO production seam was added.
+Run result (verbatim):
+  Test Suites: 1 passed, 1 total
+  Tests:       242 skipped, 5 passed, 247 total
+  Time:        2.873 s
+Full suite after the spec: 140 suites / 3201 tests, all pass.
+
+--------------------------------------------------------------------------------
+SECTION 7 — CREATE / CLONE CAPABILITY REPLACEMENT (3 paths, decided)
+--------------------------------------------------------------------------------
+Today (create): `resolveTemplateSource(tx, dto.role)` looks up `ep_<role>` by id,
+then falls back to `resolveConstantPolicySource('vteam-'+role)`; else the
+deny-by-default skeleton. Clone is identical except it first deep-copies the
+source's bound policy config.
+
+The `AgentRole` entity (plan 2) offers ONLY `key/name/description/type/
+defaultAgentId/rolePrompt/sortOrder` — it carries NO capability. Therefore the
+capability for a new agent MUST come from one of:
+
+  PATH 1 — explicit `policyId` supplied by the caller
+           -> bind it as-is (deep-copied into a new custom policy by
+              provisionCustomPolicy), exactly as `create()` does today at :196-205.
+           Precedence: HIGHEST (an explicit policy always wins).
+
+  PATH 2 — no `policyId`, but a chosen `AgentRole`
+           -> read `AgentRole.defaultAgentId` (the role's default Agent), take
+              THAT Agent's `policyId`, and deep-copy its ExecutionPolicy config as
+              the new custom policy. This mirrors today's `dto.role` branch but
+              sources the template from real Agent/AgentRole data instead of the
+              `ep_<role>` id convention.
+              `AgentRole.defaultAgentId` is nullable (agent-roles.service
+              validates existence, allows null) and may point to a template Agent
+              whose policyId is the builtin `ep_<key>`.
+           -> if the role has no defaultAgentId, or the default Agent has no
+              policyId, fall through to PATH 3.
+
+  PATH 3 — neither `policyId` nor a usable `AgentRole` default
+           -> `buildSkeletonConfig` (deny-by-default: edit:* deny, bash deny,
+              task deny, tools {}) — unchanged, `create()` :199 / `clone()` :267.
+
+Clone: unchanged shape — deep-copy the SOURCE's bound policy config; if the source
+has no policy, apply PATH 2/3 on the clone's target role (source.role is gone, so
+"target role" is the explicit policyId, or the chosen AgentRole, or skeleton).
+
+What `create()`'s `role: dto.role ?? null` (agents.service.ts:211) becomes:
+  REMOVED. The column is dropped (todo 7). `create()` no longer writes `role`.
+  The `ep_<role>` lookup in `resolveTemplateSource` is replaced by PATH 1/2/3.
+
+What the create-form picker (plan 1's `CreateAgentModal`) should post instead
+(web agents/page.tsx CREATE_ROLE_OPTIONS :419-422, <select> :2448-2461,
+handleSubmit :2253-2266, mutation :2934-2942 — todo 4 owns this):
+  - the picker selects an `AgentRole` (id) OR an explicit `policyId`;
+  - the payload carries `policyId?: string` and/or `agentRoleId?: string`;
+  - it MUST NOT post a `role` string (the column will not exist; the global
+    `whitelist:true` pipe would silently strip it and every new agent would fall
+    back to the skeleton — the exact defect plan 1 fixed).
+
+LABEL-vs-POLICY decision (destructive-edit guard — explicit earlier decision):
+  Changing ONLY the label MUST NOT auto-re-provision the policy. `update()` must
+  never rewrite `policyId` because a user picks a different `AgentRole`. The
+  label is identity; the policy is capability; editing one never rewrites the
+  other. (Consequence to document in todo 4: a user who changes the label keeps
+  the existing policy until they explicitly change it.)
+
+DTO decision (todo 5 owns the field shape; recorded here for agreement):
+  server `toAgentDto` returns `role` today (:627, :654) and several DTOs pass it
+  through. Recommendation: keep the field NAME `role` as the resolved LABEL
+  (`AgentRole.name`) for the seeded data so the rendered labels stay byte-identical
+  (todo 5's acceptance), and add `roleId` where the UI needs identity. Do NOT
+  silently drop a field the UI needs (todo 5's explicit rule). This todo does not
+  change any DTO.
+
+--------------------------------------------------------------------------------
+SECTION 8 — NOTEPAD APPENDS
+--------------------------------------------------------------------------------
+See .omo/notepads/agent-role-decommission/learnings.md and issues.md (appended,
+never overwritten).
+
+--------------------------------------------------------------------------------
+SECTION 9 — SCOPE FIDELITY
+--------------------------------------------------------------------------------
+Production files edited: NONE.
+Committed artifacts of this todo:
+  scripts/agent-role-consumer-manifest.txt   (the 184-key inventory)
+  scripts/check-agent-role-consumers.sh      (the checker)
+  server/src/chat/worker-dispatcher.spec.ts  (**spec only** — 5 precedence pins)
+  .omo/evidence/agent-role-decommission/task-1-consumer-map.txt   (this file)
+  .omo/notepads/agent-role-decommission/{learnings,issues}.md     (appended)
+Frozen baseline sha unchanged; `worker/**` untouched; no push.
+Production seam needed: NONE — the pin uses existing exported behaviour
+(`resolvePolicyAgentCandidate`, and the dispatch expression via the existing
+`WorkerDispatcher.dispatch` harness).
