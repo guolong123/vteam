@@ -413,6 +413,35 @@ function buildModelSeedRows(): ModelSeedRow[] {
 
 const TEMPLATE_DEFAULT_MODELS: Record<string, string> = {};
 
+/**
+ * 7 个内置 AgentRole 行（agent-role-entity todo 1）。
+ * 与 `src/common/constants/agent-role.constants.ts` 的 BUILTIN_AGENT_ROLES 逐字节一致
+ * （自包含镜像，理由见文件头）；key = 模板 role，id = `ar_<role>`，defaultAgentId = 模板 id。
+ * migration 已 INSERT 同批行（存量库 default_agent_id 已解析）；seed 负责：
+ *   - create-if-absent（不覆盖用户编辑）；
+ *   - 补齐全新库路径下 migration 时 agents 尚空而留 NULL 的 default_agent_id。
+ */
+const BUILTIN_AGENT_ROLES: readonly {
+  id: string;
+  key: string;
+  name: string;
+  defaultAgentId: string;
+  sortOrder: number;
+}[] = [
+  { id: 'ar_product', key: 'product', name: '产品经理', defaultAgentId: 'a_product', sortOrder: 1 },
+  { id: 'ar_project_manager', key: 'project_manager', name: '项目经理', defaultAgentId: 'a_project_manager', sortOrder: 2 },
+  { id: 'ar_architect', key: 'architect', name: '架构师', defaultAgentId: 'a_architect', sortOrder: 3 },
+  { id: 'ar_developer', key: 'developer', name: '开发者', defaultAgentId: 'a_developer', sortOrder: 4 },
+  { id: 'ar_tester', key: 'tester', name: '测试', defaultAgentId: 'a_tester', sortOrder: 5 },
+  { id: 'ar_plan', key: 'plan', name: '计划员', defaultAgentId: 'a_plan', sortOrder: 6 },
+  { id: 'ar_librarian', key: 'librarian', name: '知识管理员', defaultAgentId: 'a_librarian', sortOrder: 7 },
+];
+
+/** key → 内置角色行（成员绑定 roleId 用）。 */
+const BUILTIN_AGENT_ROLE_ID_BY_KEY: Record<string, string> = Object.fromEntries(
+  BUILTIN_AGENT_ROLES.map((r) => [r.key, r.id]),
+);
+
 function normalizeMemoryContent(content: string): string {
   return content.replace(/\r\n/g, '\n').trim();
 }
@@ -952,6 +981,28 @@ async function main() {
         defaultModelId: TEMPLATE_DEFAULT_MODELS[agent.id] ?? null,
         createdBy: adminUser.id,
       },
+    });
+  }
+
+  // 内置 AgentRole 行（agent-role-entity todo 1）：create-if-absent，不覆盖用户编辑；
+  // 另对 default_agent_id 为空的存量内置行补齐绑定（全新库路径：migrate deploy 先于 seed，
+  // 建表时 agents 尚空 → migration 的标量子查询解析为 NULL，此处补上；不覆盖用户已改的默认 Agent）。
+  for (const role of BUILTIN_AGENT_ROLES) {
+    await prisma.agentRole.upsert({
+      where: { id: role.id },
+      update: {},
+      create: {
+        id: role.id,
+        key: role.key,
+        name: role.name,
+        type: 'builtin',
+        defaultAgentId: role.defaultAgentId,
+        sortOrder: role.sortOrder,
+      },
+    });
+    await prisma.agentRole.updateMany({
+      where: { id: role.id, defaultAgentId: null },
+      data: { defaultAgentId: role.defaultAgentId },
     });
   }
 
@@ -2144,6 +2195,7 @@ version: 0.1.0
         alias,
         seq: 1,
         workDir,
+        roleId: BUILTIN_AGENT_ROLE_ID_BY_KEY[role] ?? null,
       },
     });
   }

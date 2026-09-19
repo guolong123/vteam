@@ -114,6 +114,42 @@ model Team {
   @@map("teams")
 }
 
+/// Agent 角色（全局可复用岗位；agent-role-entity 计划 Wave-1）。
+///
+/// ⚠️ 与 account-permission 的 `Role`（`schema.prisma` 顶部，`@@map("roles")`）无关：
+/// 本模型映射 `agent_roles`，主键前缀 `ar`（见 `src/common/constants/agent-role.constants.ts`
+/// 的 AGENT_ROLE_ID_PREFIX）。禁止把本模型命名为 `Role` 或映射到 `roles`。
+///
+/// 无任何能力字段：permission/tools/model/worker 属 ExecutionPolicy / Agent，不是角色属性。
+model AgentRole {
+  id          String   @id
+  /// machine-safe 唯一标识（`^[a-z][a-z0-9_-]{0,62}$`）：内置=模板 role（product/…），
+  /// 自定义由服务层校验；回填派生的自定义 key 见 migration 的确定性规则。
+  key         String   @unique(map: "uk_agent_roles_key")
+  name        String
+  description String?  @db.Text
+  /// 'builtin'（seed 的 7 个模板角色）| 'custom'（用户创建 / 回填派生）。
+  /// 与 Agent.type / ExecutionPolicy.type 同风格：String 承载，不引 Prisma enum（sqlite 测试兼容）。
+  type        String
+  /// 预填默认 Agent（可选）。删除被绑定的 Agent 时仅清空本列（SetNull），
+  /// 不阻塞 Agent 删除（review fix m8）。回填不设置本列，仅 7 个 builtin 行指向模板 Agent。
+  defaultAgentId String? @map("default_agent_id")
+  /// 角色指令（"这个岗位是什么"）。列级可空（todo 4 前 builtin 行暂空），
+  /// 但每个 builtin 行最终必须非空（todo 4 填充 role_prompt）。
+  rolePrompt  String?  @db.Text @map("role_prompt")
+  /// 稳定排序（列表展示；内置按 role 序 1..7，回填派生的自定义行沿用 100+）。
+  sortOrder   Int      @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  defaultAgent Agent?       @relation("AgentRoleDefaultAgent", fields: [defaultAgentId], references: [id], onDelete: SetNull, onUpdate: Restrict)
+  members      TeamMember[]
+
+  @@index([defaultAgentId], map: "idx_agent_roles_default_agent")
+  @@index([sortOrder], map: "idx_agent_roles_sort_order")
+  @@map("agent_roles")
+}
+
 model TeamMember {
   id             String   @id
   teamId         String   @map("team_id")
@@ -122,6 +158,9 @@ model TeamMember {
   seq            Int      @default(1)
   workDir        String?  @map("work_dir")
   overrideModelId String? @map("override_model_id")
+  /// 成员角色（agent_roles）。onDelete: Restrict —— 在用角色不可静默删除，
+  /// 必须先解绑成员再删角色（FK 报错即显式拦截，绝不静默置空）。
+  roleId         String?  @map("role_id")
   /// opencode 原生 agent 名（opencode.json 的 agent 节 key，如 build/plan/自定义名）。
   /// null = 不指定（prompt_async 不带 agent 字段，用 serve 默认 agent）——存量行 NULL 行为不变。
   /// 非 null 时 dispatch 下发 prompt_async 的 agent 字段，由 opencode 内核按该 agent 的
@@ -131,11 +170,13 @@ model TeamMember {
 
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  role         AgentRole?    @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   sessions     Session[]
   taskGroupInstances TaskGroupInstance[]
   chatChannels ChatChannel[]
   mainForTeams Team[]        @relation("TeamMainAgent")
 
+  @@index([roleId], map: "idx_team_members_role")
   @@unique([teamId, agentId, seq], map: "uk_team_members_team_agent_seq")
   @@map("team_members")
 }
@@ -608,6 +649,8 @@ model Agent {
 
   baseAgent         Agent?            @relation("AgentClone", fields: [baseAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   clones            Agent[]           @relation("AgentClone")
+  /// 以本 Agent 为默认 Agent 的角色（AgentRole.defaultAgentId，onDelete: SetNull）。
+  defaultForRoles   AgentRole[]       @relation("AgentRoleDefaultAgent")
   creator           User              @relation("AgentCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
   skills            AgentSkill[]
   teamMembers       TeamMember[]

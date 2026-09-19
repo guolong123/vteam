@@ -1,0 +1,118 @@
+# Evidence — agent-role-entity todo 1: AgentRole model + TeamMember.roleId + backfill migration
+
+Generated: 2026-09-19T06:28:13Z  host=darwin
+Plan: .omo/plans/agent-role-entity.md todo 1 (Wave-1 blocking)
+Commit target: feat(db): add agent_roles and team_members.role_id with backfill
+
+## Changed files
+- server/prisma/schema.prisma                 (model AgentRole @@map(agent_roles) + Agent.defaultForRoles + TeamMember.roleId)
+- server/prisma/migrations/20260919000007_add_agent_roles_and_member_role_id/migration.sql
+- server/src/common/constants/agent-role.constants.ts        (single source: prefix/7 builtins/fallback/derive)
+- server/src/common/constants/agent-role.constants.spec.ts   (unit)
+- server/src/prisma/agent-role.migration.spec.ts             (migration contract + 3-case replay)
+- server/prisma/seed.ts                       (7 builtin AgentRole upserts + member roleId)
+- server/src/prisma/seed.spec.ts              (mock + 2 new seed assertions)
+
+## Recorded decisions
+- id prefix: ar (AGENT_ROLE_ID_PREFIX). Builtin ids ar_<role>; derived custom ar_c_<md5(raw)[:16]>; fallback ar_general.
+- key must match AGENT_KEY_PATTERN ^[a-z][a-z0-9_-]{0,62}$.
+- AgentRole.defaultAgentId onDelete = SetNull (review fix m8). TeamMember.roleId onDelete = Restrict.
+- Table agent_roles (NOT roles). Model AgentRole (NOT Role). Agent.role untouched.
+- Backfill case (ii) derivation (identical in SQL + TS):
+    stem = COALESCE(NULLIF(LEFT(TRIM(BOTH '_' FROM REGEXP_REPLACE(LOWER(TRIM(role)),'[^a-z0-9]+','_')),32),''),'role')
+    key  = 'custom_' || stem || '_' || LEFT(MD5(role),8)
+    id   = 'ar_c_' || LEFT(MD5(role),16)     # MD5 over RAW role, not trimmed/lowered
+  Vector: role='analyst' -> key=custom_analyst_05d5c5df id=ar_c_05d5c5dfb743a5bd (md5=05d5c5dfb743a5bd8fd7494fdc9bdb00)
+
+## Pre-migration dump (mandatory restore artifact)
+  $ docker compose exec -T db sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --routines --triggers aiagents' > .omo/evidence/agent-role-entity/pre-migration-dump.sql
+  bytes=636352788  sha256=b956746d961a235c2899fda4e00b75ab35ed3a70d2abebfe98f8104486f87e14
+  (gitignored: .omo/evidence/**/*.sql — .gitignore:45)
+
+## Restore command (exact)
+  $ docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" aiagents' < .omo/evidence/agent-role-entity/pre-migration-dump.sql
+  Backfill is NOT reversible without this dump (it derives/creates custom role rows and writes role_id;
+  case ii key embeds MD5, case iii invents ar_general). No migrate-down / reverse SQL exists.
+
+## Pre-migration inventory (live dev DB aiagents @ db:3306, MYSQL_ROOT_PASSWORD=aiagents-root)
+  agents_total=8  role_null=1  role_notnull=7
+  agent.role breakdown: NULL=1, architect=1, developer=1, librarian=1, plan=1, product=1, project_manager=1, tester=1
+  members_total=28   members_with_null_role(from Agent.role)=0   agent_roles table existed=0
+  latest applied migration before: 20260919000006_backfill_builtin_policy_allowlists
+
+  NOTE: live data had NO case (ii) (non-builtin role) and NO case (iii) (NULL role) members.
+        Both were CONSTRUCTED deliberately:
+          - a_probe_analyst (role='analyst') + member tmm_probe_analyst  -> case (ii)
+          - a_probe_norole  (role=NULL)      + member tmm_probe_norole   -> case (iii)
+        then the migration was applied to the POPULATED db (not a fresh one).
+
+## migrate deploy output (in running server container)
+  $ docker cp server/prisma/migrations/20260919000007_... aiagents-compose-server:/app/prisma/migrations/20260919000007_...
+  $ docker cp server/prisma/schema.prisma aiagents-compose-server:/app/prisma/schema.prisma
+  $ docker exec -w /app aiagents-compose-server npx prisma migrate deploy --schema prisma/schema.prisma
+  60 migrations found in prisma/migrations
+  Applying migration `20260919000007_add_agent_roles_and_member_role_id`
+  The following migration(s) have been applied:
+    migrations/20260919000007_add_agent_roles_and_member_role_id/migration.sql
+  All migrations have been successfully applied.
+  exit 0
+
+## ACCEPTANCE: 0-null query
+  SELECT COUNT(*) AS null_role_members FROM team_members WHERE role_id IS NULL;
+  -> null_role_members = 0    (total_members = 30 incl. 2 probes; 28 base all linked)
+
+## agent_roles rows after migrate (id / key / type / default_agent_id / sort_order)
+  ar_product         product         builtin  a_product          1
+  ar_project_manager project_manager builtin  a_project_manager  2
+  ar_architect       architect       builtin  a_architect        3
+  ar_developer       developer       builtin  a_developer        4
+  ar_tester          tester          builtin  a_tester           5
+  ar_plan            plan            builtin  a_plan             6
+  ar_librarian       librarian       builtin  a_librarian        7
+  ar_general         general         custom   NULL             100
+  ar_c_05d5c5dfb743a5bd custom_analyst_05d5c5df custom NULL    200   <- derived by case (ii)
+
+## Per-case mapping proof (member / Agent.role / resolved key / type / verdict)
+  tmm_0000000001    product  product               builtin  case-i builtin
+  tmm_probe_analyst analyst  custom_analyst_05d5c5df custom  case-ii custom-derived
+  tmm_probe_norole  NULL     general               custom   case-iii fallback
+
+  Verdict tally over ALL members:
+    case-i builtin   = 28
+    case-ii custom   = 1
+    case-iii fallback= 1
+    MISMATCH         = 0
+
+## Grouped mapping (role_key / type / member count)
+  product 3, project_manager 4, architect 8, developer 3, tester 5, plan 4, librarian 1,
+  general 1, custom_analyst_05d5c5df 1  (= 30 members)
+
+## FK semantics proof (live, MySQL 8.4.11)
+1) team_members.role_id ON DELETE RESTRICT (in-use role cannot vanish):
+   START TRANSACTION; DELETE FROM agent_roles WHERE id='ar_product'; ROLLBACK;
+   -> ERROR 1451 (23000): Cannot delete or update a parent row: a foreign key constraint fails
+      (`aiagents`.`team_members`, CONSTRAINT `team_members_role_id_fkey` FOREIGN KEY (`role_id`)
+       REFERENCES `agent_roles` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT)
+2) agent_roles.default_agent_id ON DELETE SET NULL (m8):
+   UPDATE agent_roles SET default_agent_id='a_probe_default' WHERE id='ar_general';  -> before: a_probe_default
+   DELETE FROM agents WHERE id='a_probe_default';
+   -> after-agent-delete: ar_general.default_agent_id = NULL  (agent deletion NOT blocked)
+
+## Probe cleanup (migration-created builtin rows retained)
+  DELETE team_members WHERE team_id='tm_probe_ar'; DELETE agents IN (a_probe_analyst,a_probe_norole);
+  DELETE teams WHERE id='tm_probe_ar'; DELETE agent_roles WHERE id='ar_c_05d5c5dfb743a5bd' (unused after member removal).
+  post-cleanup: null_role_members = 0 ; members_total = 28 ; agent_roles = 8 (7 builtin + ar_general)
+
+## Static gates
+  $ cd server && ./node_modules/.bin/prisma validate --schema prisma/schema.prisma   -> "The schema at prisma/schema.prisma is valid"
+  $ cd server && npx tsc -p tsconfig.json --noEmit                                    -> exit 0
+  $ grep -c "^model Role " server/prisma/schema.prisma                                -> 1 (RBAC only)
+  $ grep -c "^model AgentRole " server/prisma/schema.prisma                           -> 1
+  pure LOC: constants 85 / constants.spec 53 / migration.spec 134 / migration.sql 65 (all < 250)
+
+## Test run
+  $ cd server && npx jest --runInBand
+  Test Suites: 136 passed, 136 total   (baseline @HEAD fe4a843: 134)
+  Tests:       3124 passed, 3124 total (baseline: 3101)
+  New: src/common/constants/agent-role.constants.spec.ts (7), src/prisma/agent-role.migration.spec.ts (14),
+       src/prisma/seed.spec.ts +2 assertions (44 -> 46).

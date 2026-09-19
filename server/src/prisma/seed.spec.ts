@@ -26,6 +26,11 @@ const mockPrisma = {
   },
   teamMember: { upsert: jest.fn().mockResolvedValue({}) },
   teamUserMember: { upsert: jest.fn().mockResolvedValue({}) },
+  // AgentRole seed（agent-role-entity todo 1）：mock 缺少该 key 时 seed 首次 role upsert 即抛 TypeError。
+  agentRole: {
+    upsert: jest.fn().mockResolvedValue({}),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+  },
   // 团队协作规约 team 记忆（30 篇转正）：seed 以固定 id 预置 charter 记忆行。
   memory: { upsert: jest.fn().mockResolvedValue({}) },
   $disconnect: jest.fn().mockResolvedValue(undefined),
@@ -40,6 +45,7 @@ import {
   ROLE_SERVER_GATED_TOOLS,
   VTEAM_MCP_TOOL_NAMES,
 } from '../common/constants/agent.constants';
+import { BUILTIN_AGENT_ROLES } from '../common/constants/agent-role.constants';
 import { computeMemoryContentHash } from '../memories/memory.constants';
 
 /** 模板 Agent id → 角色 ExecutionPolicy id（seed ROLE_POLICY_BINDINGS 的绑定产物）。 */
@@ -942,6 +948,52 @@ describe('seed（计划 skills + 评审子句）', () => {
     const librarian = memberCalls[6][0].create;
     expect(librarian.agentId).toBe('a_librarian');
     expect(librarian.alias).toBe('知识管理员-1');
+  });
+
+  it('7 个内置 AgentRole upsert：key/name/type=builtin/defaultAgentId/sortOrder 与 src 常量一致（agent-role-entity T1）', async () => {
+    await main();
+
+    const roleCalls = mockPrisma.agentRole.upsert.mock.calls;
+    expect(roleCalls).toHaveLength(7);
+    expect(roleCalls.map((call) => String(call[0].where.id))).toEqual(
+      BUILTIN_AGENT_ROLES.map((r) => r.id),
+    );
+    for (const role of BUILTIN_AGENT_ROLES) {
+      const call = roleCalls.find((c) => String(c[0].where.id) === role.id);
+      expect(call).toBeDefined();
+      expect(call?.[0].create).toMatchObject({
+        key: role.key,
+        name: role.name,
+        type: 'builtin',
+        defaultAgentId: role.defaultAgentId,
+        sortOrder: role.sortOrder,
+      });
+      // 补齐分支：仅对 defaultAgentId 为空的存量内置行绑定默认 Agent。
+      const patch = mockPrisma.agentRole.updateMany.mock.calls.find(
+        (c) => String(c[0].where.id) === role.id,
+      );
+      expect(patch?.[0].where).toMatchObject({ id: role.id, defaultAgentId: null });
+      expect(patch?.[0].data).toEqual({ defaultAgentId: role.defaultAgentId });
+    }
+  });
+
+  it('示例团队成员 create 分支绑定内置 roleId（agent-role-entity T1）', async () => {
+    await main();
+
+    const memberCalls = mockPrisma.teamMember.upsert.mock.calls;
+    const expectedByAgent: Record<string, string> = {
+      a_product: 'ar_product',
+      a_project_manager: 'ar_project_manager',
+      a_architect: 'ar_architect',
+      a_developer: 'ar_developer',
+      a_tester: 'ar_tester',
+      a_plan: 'ar_plan',
+      a_librarian: 'ar_librarian',
+    };
+    for (const call of memberCalls) {
+      const agentId = String(call[0].create.agentId);
+      expect(call[0].create.roleId).toBe(expectedByAgent[agentId]);
+    }
   });
 
   it('评审 skill 名不出现在非属角色的 prompt 中（无交叉污染，含计划员）', async () => {
