@@ -67,6 +67,7 @@ type EngineState = "loading" | "ready" | "unavailable";
 const EXTERNAL_AGENT_CAVEAT = "当引擎的 vteam 策略门生效时，该外部选择可能被策略候选 Agent 覆盖。";
 const EXTERNAL_AGENT_PRECEDENCE = "优先级：(1) 策略候选优先（worker 支持时）→ (2) opencodeAgentName → (3) 引擎默认";
 const EXTERNAL_AGENT_UNKNOWN_WARNING = "该外部 Agent 当前未被引擎上报（可能已下线或重命名）。";
+const EXTERNAL_AGENT_LIST_LOADING = "引擎 Agent 列表加载中…";
 const EXTERNAL_AGENT_LIST_UNAVAILABLE = "引擎 Agent 列表不可用（worker 离线或版本不支持），当前仅显示已保存值。";
 
 function MemberRow({ member, isMain, externalAgents, engineAgentNames, engineState, onSave, onRemove, onSetMain }: { member: TeamMemberDto; isMain: boolean; externalAgents: OpencodeAgentEntry[]; engineAgentNames: Set<string>; engineState: EngineState; onSave: (payload: { alias?: string; workDir?: string; opencodeAgentName?: string }) => void; onRemove: () => void; onSetMain: () => void }) {
@@ -132,8 +133,12 @@ function MemberRow({ member, isMain, externalAgents, engineAgentNames, engineSta
               <option key={a.name} value={a.name}>{a.name}</option>
             ))}
           </select>
-          <span style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}>
-            {engineState === "ready" ? `${externalAgents.length} 个外部 Agent（引擎上报，不含 vteam 策略 Agent）` : EXTERNAL_AGENT_LIST_UNAVAILABLE}
+          <span data-testid="member-external-agent-note" style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}>
+            {engineState === "ready"
+              ? `${externalAgents.length} 个外部 Agent（引擎上报，不含 vteam 策略 Agent）`
+              : engineState === "loading"
+                ? EXTERNAL_AGENT_LIST_LOADING
+                : EXTERNAL_AGENT_LIST_UNAVAILABLE}
           </span>
         </div>
         <div data-testid="member-external-agent-caveat" role="note" style={{ display: "flex", alignItems: "flex-start", gap: space.xs, padding: `3px 6px`, borderRadius: radius.sm, backgroundColor: "#FFFBEB", border: "1px solid #FDE68A", color: "#B45309", fontSize: fontSize.xs, fontWeight: 500, lineHeight: 1.5 }}>

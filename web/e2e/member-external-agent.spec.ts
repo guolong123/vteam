@@ -20,6 +20,8 @@ import {
  *    且该值仍作为当前选中项展示（绝不静默丢弃用户已存的选择）。
  * D. 受治理的 vteam 名字：引擎**上报过**它（只是不作为外部选项）→ 绝不谎报"未上报"，
  *    只标注「vteam 策略 Agent，非外部选项」。
+ * E. 三态互不混淆：loading（请求被延迟）只说"加载中"、绝不说"不可用/worker 离线"；
+ *    ready 说计数；unavailable（mock 500）只说离线、绝不说"加载中"。
  *
  * 清理纪律：全部写操作发生在**一次性团队**上（建 → 改 → 证据 → 删），
  * 种子团队 tm_0000000001 只做只读 before/after 快照（证明未被触碰）。
@@ -201,6 +203,13 @@ test.describe("Todo 3 · 成员外部 Agent 选择（设置面）", () => {
       await expect(reloadedRow.getByTestId("member-external-agent-select")).toHaveValue(chosen);
       await expect(reloadedRow.getByTestId("member-external-agent-caveat")).toContainText(CAVEAT);
       await expect(reloadedRow.getByTestId("member-external-agent-unknown")).toHaveCount(0);
+      // 证据必须落在 READY 态：计数文案可见，且不得是"加载中/不可用"
+      await expect(reloadedRow.getByTestId("member-external-agent-note")).toContainText(
+        "个外部 Agent（引擎上报",
+      );
+      await expect(reloadedRow.getByTestId("member-external-agent-note")).not.toContainText(
+        "不可用",
+      );
 
       await page.setViewportSize({ width: 1280, height: 900 });
       await save(process.env.T3_SCREENSHOT, page);
@@ -342,6 +351,92 @@ test.describe("Todo 3 · 成员外部 Agent 选择（设置面）", () => {
         member_id: memberId,
       });
     } finally {
+      const del = await request.delete(`${SERVER_URL}/api/v1/teams/${team.id}`, {
+        headers: authHeaders(token),
+      });
+      console.log(`[cleanup] throwaway team ${team.id} DELETE -> ${del.status()}`);
+    }
+  });
+
+  test("4. 三态互不混淆：加载中不得说「不可用」，不可用只说离线", async ({
+    page,
+    request,
+  }) => {
+    const token = await adminToken(request);
+    const created = await request.post(`${SERVER_URL}/api/v1/teams`, {
+      headers: authHeaders(token),
+      data: { name: `qa-t3-state-${RUN_TAG}`, members: [{ agentId: "a_developer" }] },
+    });
+    expect(created.status()).toBe(201);
+    const team = (await created.json()) as TeamDto;
+    const memberId = team.members[0].id;
+
+    let delayMs = 2500;
+    const delayedRoute = async (route: import("@playwright/test").Route) => {
+      try {
+        if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+        await route.continue();
+      } catch {
+        // 导航换页可能让请求先被中止（continue 无对象可续）——不是测试失败
+      }
+    };
+
+    try {
+      await loginAsAdmin(page);
+      await page.route("**/agents/opencode**", delayedRoute);
+
+      // Phase A：加载窗口（清单请求被人为延迟）→ 只能显示"加载中"
+      await page.goto(`/teams/${team.id}`);
+      await expect(page.getByTestId("team-detail-root")).toBeVisible({ timeout: 15_000 });
+      const row = page.locator(`[data-testid="member-row"][data-member-id="${memberId}"]`);
+      await expect(row).toBeVisible();
+      const note = row.getByTestId("member-external-agent-note");
+      await expect(note).toContainText("引擎 Agent 列表加载中");
+      await expect(note).not.toContainText("不可用");
+      await expect(note).not.toContainText("worker 离线");
+      await expect(row.getByTestId("member-external-agent-select")).toBeDisabled();
+
+      // Phase B：真实响应到达 → READY（计数文案），加载文案消失
+      delayMs = 0;
+      await expect(note).toContainText("个外部 Agent（引擎上报", { timeout: 20_000 });
+      await expect(note).not.toContainText("加载中");
+      await expect(note).not.toContainText("不可用");
+      await expect(row.getByTestId("member-external-agent-select")).toBeEnabled();
+
+      // Phase C：请求失败 → UNAVAILABLE（只在此态说离线），不得回退成"加载中"。
+      // query 未设 retry:false → 约 7s 默认退避重试后才进 error 态，故放宽超时。
+      await page.unroute("**/agents/opencode**", delayedRoute);
+      await page.route("**/agents/opencode**", (route) =>
+        route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ code: "INTERNAL_ERROR", message: "e2e-mocked-failure" }),
+        }),
+      );
+      await page.reload();
+      await expect(page.getByTestId("team-detail-root")).toBeVisible({ timeout: 15_000 });
+      const reloadedRow = page.locator(
+        `[data-testid="member-row"][data-member-id="${memberId}"]`,
+      );
+      const reloadedNote = reloadedRow.getByTestId("member-external-agent-note");
+      await expect(reloadedNote).toContainText("不可用", { timeout: 25_000 });
+      await expect(reloadedNote).toContainText("worker 离线");
+      await expect(reloadedNote).not.toContainText("加载中");
+      // 不可用态仍可编辑已保存值（选择器不在 loading 的 disabled 分支）
+      await expect(reloadedRow.getByTestId("member-external-agent-select")).toBeEnabled();
+
+      recordEvidence({
+        test: "three_states_distinct",
+        loading_note: "引擎 Agent 列表加载中…",
+        ready_note_contains: "个外部 Agent（引擎上报",
+        unavailable_note_contains: "worker 离线或版本不支持",
+        loading_window_never_claims_unavailable: true,
+        unavailable_never_claims_loading: true,
+        team_id: team.id,
+        member_id: memberId,
+      });
+    } finally {
+      await page.unroute("**/agents/opencode**").catch(() => {});
       const del = await request.delete(`${SERVER_URL}/api/v1/teams/${team.id}`, {
         headers: authHeaders(token),
       });

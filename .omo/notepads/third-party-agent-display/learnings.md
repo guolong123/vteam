@@ -134,3 +134,22 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - Runner `scripts/e2e-member-external-agent.sh` uses ONE tmp config with a 4-spec testMatch +
   all screenshot/evidence env vars, so tsc-equivalent full-set verification is a single
   command. 13/13 green in ~26s.
+
+## todo 3 review fix — 三态互斥（loading ≠ unavailable）(2026-09-19, commit follows 52e4514)
+
+- 教训（可复用）：任何"状态说明"必须与状态机一一映射。用 `cond ? ready : unavailable` 这类
+  二值表达式渲染三态状态机会把中间态（loading）谎报成终态（unavailable）——而且因为首帧必然
+  命中，它在每次页面加载时都发生，肉眼却只闪一下，很容易过 review。**渲染前先数状态数**。
+- 判别性测试模式（值得照抄）：把非确定性的"加载窗口"变成确定性的，靠的是**故意延迟路由**：
+  `page.route("**/endpoint**", async r => { if (delayMs>0) await sleep(delayMs); await r.continue(); })`
+  然后用一个可变 `delayMs` 在同一测试里放行（Phase B），最后 `unroute` + mock 5xx（Phase C）。
+  一次测试钉死三个态，且每条断言都带**反向断言**（loading 时断言 not "不可用"；unavailable 时
+  断言 not "加载中"）——只有正向断言时，一个把所有态都渲染成同一句话的实现也能通过。
+- 反面教训：route 处理器里的 `route.continue()` 在页面导航抢先中止请求时会 reject；
+  包 try/catch 即可，别让测试基础设施的噪声变成假失败。
+- 范围纪律：修复只做"三态分支"这一件事，初稿顺带加的 `retry: false` 被撤回（超出范围）。
+  代价是测试 Phase C 要走完默认退避（约 7s）才进 error 态 → 断言超时放到 25s。
+  注意：`retry: false` 在状态诚实性场景里确有独立价值（失败晚 7 秒揭示 = 7 秒的"加载中"歧义），
+  但那是另一个独立决策，项目内既有先例是 `ExternalAgentsPanel`/`omo-panel` 各自显式设了它。
+- 证据截图必须落在 READY 态：在捕获点前断言说明含"个外部 Agent（引擎上报"且不含"不可用"，
+  否则可能把加载瞬间截进证据。

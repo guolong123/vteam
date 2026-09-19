@@ -85,3 +85,25 @@ SAFE surfaces: `/teams/[id]` team detail page (`web/app/(main)/teams/[id]/page.t
   `shasum -a 256 .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json`
   = `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87` (unchanged);
   `git diff --stat -- server/ worker/` empty.
+
+## [orchestrator review of todo 3] loading 态被误标为 unavailable（已修）
+
+- 缺陷：`member-external-agent` 旁的说明用二值三元表达式，`engineState === "loading"` 落入
+  `EXTERNAL_AGENT_LIST_UNAVAILABLE`（"worker 离线或版本不支持"）。页面首帧即瞬时谎报复，
+  在一个主打诚实状态的特性里正好相反。orchestrator 独立复现（fresh load 时说明先显示"不可用"
+  再翻成计数文案）。
+- 修复：新增 `EXTERNAL_AGENT_LIST_LOADING = "引擎 Agent 列表加载中…"`，三态显式分支
+  （loading → 加载中；unavailable → 离线；ready → 计数），说明元素加 `data-testid="member-external-agent-note"`。
+  选择器仍仅在 loading 时 disabled；`（默认 / 不指定）`、loading option、caveat、unknown-warning、
+  M6 放置全部未动。
+- 修复范围严格限定（orchestrator 指示 "Keep everything else identical"）：初稿曾顺带给
+  `opencodeAgentsQuery` 加 `retry: false`（理由：worker 真离线时默认 3 次退避重试会让"加载中"
+  多停留约 7 秒），**已撤回**——那超出本次修复范围，且会改变失败路径的既有行为。
+- 新测试（`member-external-agent.spec.ts` 测试 4，三阶段判别）：
+  A. `page.route("**/agents/opencode**", delayed 2500ms)` 制造确定的加载窗口 →
+     断言说明含"加载中"、**不含"不可用"/"worker 离线"**、选择器 disabled；
+  B. `delayMs=0` 放行 → 断言计数文案出现、"加载中/不可用"消失、选择器 enabled；
+  C. `unroute` 后 mock 500 + reload → 断言说明含"不可用"/"worker 离线"、**不含"加载中"**、
+     选择器仍 enabled（可编辑已保存值）。query 未设 retry:false → 默认退避重试后才进 error 态，
+     故该断言超时放宽到 25s（实测约 5.7s 完成整个三阶段测试）。
+  route 处理器包 try/catch：页面导航可能先中止请求，`route.continue()` 因此抛错——不是测试失败。
