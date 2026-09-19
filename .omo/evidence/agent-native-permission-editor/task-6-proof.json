@@ -1,0 +1,156 @@
+[
+  {
+    "test": "options",
+    "offered": [
+      "",
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester"
+    ],
+    "labels": [
+      "无（默认骨架权限，后续可编辑）",
+      "产品经理（product）",
+      "项目经理（project_manager）",
+      "架构师（architect）",
+      "开发者（developer）",
+      "测试（tester）"
+    ],
+    "plan_offered": false,
+    "default_selected": ""
+  },
+  {
+    "test": "developer",
+    "request_body_role": "developer",
+    "agent": {
+      "id": "a_0000000022",
+      "role": "developer",
+      "policyId": "ep_0000000022"
+    },
+    "effectivePermission": {
+      "policyId": "ep_0000000022",
+      "policyName": "t6 开发者 t6-mu7nuhjo 策略",
+      "agentName": "vteam-t6-dev-t6-mu7nuhjo",
+      "permission": {
+        "edit": {
+          "*": "deny",
+          "**tasks/*/**": "allow"
+        },
+        "read": {
+          "*": "allow"
+        },
+        "bash": "allow",
+        "task": "deny",
+        "vteam_task_transition": "deny",
+        "vteam_question_confirm": "deny",
+        "vteam_team_add_member": "deny",
+        "vteam_plan_mode": "deny",
+        "vteam_plan_complete": "deny",
+        "vteam_task_create": "deny",
+        "vteam_skill_create": "deny",
+        "vteam_git_repos_list": "deny",
+        "vteam_hook_register": "deny",
+        "vteam_hook_cancel": "deny"
+      },
+      "tools": {
+        "browser": "allow",
+        "git_clone": "allow",
+        "git_diff": "allow",
+        "git_fetch": "allow",
+        "git_log": "allow",
+        "git_pull": "allow",
+        "git_push": "allow",
+        "git_status": "allow",
+        "vteam_channel_send": "allow",
+        "vteam_chat_history": "allow",
+        "vteam_doclib": "allow",
+        "vteam_group_post": "allow",
+        "vteam_issue_create": "allow",
+        "vteam_issue_get": "allow",
+        "vteam_issue_list": "allow",
+        "vteam_issue_transition": "allow",
+        "vteam_issue_update": "allow",
+        "vteam_memory_save": "allow",
+        "vteam_memory_search": "allow",
+        "vteam_memory_update": "allow",
+        "vteam_my_profile": "allow",
+        "vteam_notify_agent": "allow",
+        "vteam_read_file": "allow",
+        "vteam_submit_artifact": "allow",
+        "vteam_task_context": "allow",
+        "vteam_team_view": "allow",
+        "vteam_wecom_reply": "allow"
+      },
+      "bashDeny": [],
+      "correction": {
+        "handoff": {
+          "test": "vteam-tester",
+          "design": "vteam-architect",
+          "process": "vteam-project_manager",
+          "requirements": "vteam-product"
+        },
+        "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。",
+        "scopeSummary": "编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。"
+      },
+      "serverGated": []
+    },
+    "stored_policy": {
+      "id": "ep_0000000022",
+      "type": "custom",
+      "edit": {
+        "*": "deny",
+        "**tasks/*/**": "allow"
+      }
+    },
+    "inherited_not_skeleton": true
+  },
+  {
+    "test": "none",
+    "request_body_role_present": false,
+    "agent": {
+      "id": "a_0000000023",
+      "role": null,
+      "policyId": "ep_0000000023"
+    },
+    "effectivePermission": {
+      "policyId": "ep_0000000023",
+      "policyName": "t6 骨架 t6-mu7nuhjo 策略",
+      "agentName": "vteam-t6-none-t6-mu7nuhjo",
+      "permission": {
+        "edit": {
+          "*": "deny"
+        },
+        "read": {
+          "*": "allow"
+        },
+        "bash": "deny",
+        "task": "deny"
+      },
+      "tools": {},
+      "bashDeny": [],
+      "correction": {
+        "handoff": {},
+        "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。",
+        "scopeSummary": "t6 骨架 t6-mu7nuhjo"
+      },
+      "serverGated": []
+    },
+    "skeleton": {
+      "edit": {
+        "*": "deny"
+      },
+      "bash": "deny",
+      "tools": {}
+    }
+  },
+  {
+    "test": "roundtrip_reset",
+    "values": [
+      "developer",
+      "",
+      "tester",
+      "reopen:"
+    ]
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "mutation": {
+    "what": "CreateAgentModal.handleSubmit no longer sends `role` (line commented out)",
+    "file": "web/app/(main)/agents/page.tsx",
+    "line": 1707,
+    "rebuilt": "docker compose build web && docker compose up -d web (verified via container chunk grep)"
+  },
+  "expected": "Test 2 (role=developer inherits the developer capability set) FAILS",
+  "observed": {
+    "failed_test": "2. role=developer → 继承开发者能力集（非骨架）",
+    "failure_location": "web/e2e/create-agent-role.spec.ts:186",
+    "assertion": "expect(ep!.permission.edit?.['**tasks/*/**']).toBe('allow')",
+    "expected_value": "allow",
+    "received_value": "undefined",
+    "result": "1 failed, 3 passed (7.0s)",
+    "raw_log": ".omo/evidence/agent-native-permission-editor/task-6-mutation-proof.txt",
+    "failing_line": "> 186 |     expect(ep!.permission.edit?.[\"**tasks/*/**\"]).toBe(\"allow\");"
+  },
+  "restore": {
+    "method": "cp /tmp/vteam-task6/agents-page.mutation-baseline.tsx -> web/app/(main)/agents/page.tsx (no git checkout/restore)",
+    "sha256_before_mutation_and_after_restore": [
+      "7c4f4302aaa4088a3c4e5f9396ad37acadea05799cdc4e9415c8fc6eb824e035",
+      "7c4f4302aaa4088a3c4e5f9396ad37acadea05799cdc4e9415c8fc6eb824e035"
+    ],
+    "byte_identical": true
+  },
+  "post_restore_rerun": {
+    "command": "bash scripts/e2e-create-agent-role.sh",
+    "result": "4 passed; PASS playwright 4/4 green",
+    "log": ".omo/evidence/agent-native-permission-editor/e2e.txt"
+  }
+}

@@ -1,0 +1,25 @@
+[e2e] date=2026-09-19T00:39:56Z HEAD=32462e5a0938b4948a4b1295cdd6ac5cce1d3873
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+  ✓  1 e2e/create-agent-role.spec.ts:147:7 › Todo 6 · 新建 Agent 角色选择器 › 1. 选项集 = 「无」 + 五角色，plan 不提供 (1.6s)
+[cleanup] a_0000000022 (agent 200, policy ep_0000000022 200, re-GET 404)
+  ✓  2 e2e/create-agent-role.spec.ts:182:7 › Todo 6 · 新建 Agent 角色选择器 › 2. role=developer → 继承开发者能力集（非骨架） (2.0s)
+[cleanup] a_0000000023 (agent 200, policy ep_0000000023 200, re-GET 404)
+  ✓  3 e2e/create-agent-role.spec.ts:240:7 › Todo 6 · 新建 Agent 角色选择器 › 3. 「无」→ 骨架策略（deny-by-default） (1.8s)
+  ✓  4 e2e/create-agent-role.spec.ts:280:7 › Todo 6 · 新建 Agent 角色选择器 › 4. 下拉往返：developer → 无 → developer 重置有效 (1.2s)
+
+  4 passed (7.8s)
+----- end playwright raw -----
+[e2e] PASS playwright 4/4 green; screenshots present (role-picker / developer-panel / none-panel)
+[e2e] cleanup [cleanup] a_0000000022 (agent 200, policy ep_0000000022 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000023 (agent 200, policy ep_0000000023 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 选项集 = 「无」 + 五角色，plan 不提供
+[e2e] result passed	2. role=developer → 继承开发者能力集（非骨架）
+[e2e] result passed	3. 「无」→ 骨架策略（deny-by-default）
+[e2e] result passed	4. 下拉往返：developer → 无 → developer 重置有效
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt

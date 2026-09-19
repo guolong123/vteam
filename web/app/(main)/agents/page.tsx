@@ -42,6 +42,7 @@ import { type AvailableModel } from "@/src/types/models";
 import {
   type RoleKey,
   neutral,
+  roles,
   space,
   radius,
   fontSize,
@@ -391,6 +392,23 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 const ROLE_KEYS: readonly RoleKey[] = ["product", "project_manager", "architect", "developer", "tester", "plan"];
+
+/**
+ * 新建 Agent 的角色选择项（弹窗下拉）。
+ * 显式 `plan` 排除：`ep_plan` 的 `task:'allow'` 在 worker guard 里只对执行体名
+ * 恰为 `vteam-plan` 的 agent 生效（worker/src/role-guard/policy.ts:174），自定义
+ * agent 执行体名是 `vteam-<agentKey>` 永远拿不到该豁免 → 提供 plan 会名不符实。
+ * 用 `roles`（tokens.ts 唯一标签源）取 label，键集固定为 ROLE_KEYS 去掉 plan。
+ *
+ * CROSS-PLAN HANDOFF（review fix B2）：本选择器提交的是现有 `Agent.role` 字符串列。
+ * plan 4（agent-role-decommission）删除该列，届时必须把本选择器重指向
+ * `policyId` / `AgentRole.defaultAgentId`——否则本弹窗会静默提交一个已删除字段，
+ * 每个新建 Agent 都会掉回骨架策略。该交接同时登记在 plan 4 的 consumer map 与其 todo。
+ */
+const CREATE_ROLE_OPTIONS: readonly { key: RoleKey | null; label: string }[] = [
+  { key: null, label: "无（默认骨架权限，后续可编辑）" },
+  ...ROLE_KEYS.filter((k) => k !== "plan").map((k) => ({ key: k, label: `${roles[k].label}（${k}）` })),
+];
 
 /** 真实 role → AgentAvatar 可用 RoleKey（未知/自定义 → developer 兜底，对齐原型 custom 头像）。 */
 function toAvatarRole(role: string | null): RoleKey {
@@ -1637,13 +1655,14 @@ interface CreateAgentModalProps {
   submitting: boolean;
   error: string | null;
   onClose: () => void;
-  onSubmit: (payload: { name: string; prompt?: string; persona?: string | null; agentKey: string }) => void;
+  onSubmit: (payload: { name: string; prompt?: string; persona?: string | null; agentKey: string; role?: string }) => void;
 }
 
 function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: CreateAgentModalProps) {
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
   const [persona, setPersona] = useState<string | null>(null);
+  const [role, setRole] = useState<RoleKey | null>(null);
   const [agentKey, setAgentKey] = useState("");
   const [touchedKey, setTouchedKey] = useState(false);
 
@@ -1663,6 +1682,7 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
       setName("");
       setPrompt("");
       setPersona(null);
+      setRole(null);
       setAgentKey("");
       setTouchedKey(false);
     }
@@ -1682,6 +1702,9 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
       name: name.trim(),
       prompt: prompt.trim() ? prompt.trim() : undefined,
       persona: persona,
+      // 「无角色」发 undefined（不是 ''）：undefined 走 `dto.role ?? null` 的 nullish 分支，
+      // 库内 role 落 null + 后端建骨架策略；'' 会让 ?? 失效、把空串写进 agent.role 列。
+      role: role ?? undefined,
       agentKey: agentKey.trim(),
     });
   };
@@ -1861,6 +1884,28 @@ function CreateAgentModal({ open, submitting, error, onClose, onSubmit }: Create
                 </option>
               ))}
             </select>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            <label htmlFor="agent-role" style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>
+              角色
+            </label>
+            <select
+              id="agent-role"
+              data-testid="create-agent-role"
+              value={role ?? ""}
+              onChange={(e) => setRole((e.target.value || null) as RoleKey | null)}
+              disabled={submitting}
+              style={{ ...inputBase, cursor: "pointer" }}
+            >
+              {CREATE_ROLE_OPTIONS.map((opt) => (
+                <option key={opt.key ?? ""} value={opt.key ?? ""}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              选择角色将继承该角色的执行策略（权限/工具矩阵）；「无」使用最小骨架权限
+            </span>
           </div>
         </div>
 
@@ -2322,9 +2367,9 @@ export default function AgentConfigPage() {
     },
   });
 
-  // 新建：POST /agents（type=custom，必填 agentKey）→ 刷新列表并选中新建
+  // 新建：POST /agents（type=custom，必填 agentKey；role 命中 ep_<role> → 深拷贝模板策略）→ 刷新列表并选中新建
   const createMutation = useMutation({
-    mutationFn: (payload: { name: string; prompt?: string; persona?: string | null; agentKey: string }) =>
+    mutationFn: (payload: { name: string; prompt?: string; persona?: string | null; agentKey: string; role?: string }) =>
       api.post<AgentItem>("/agents", { ...payload, type: "custom" }),
     onSuccess: (created) => {
       setCreateOpen(false);

@@ -1,0 +1,13 @@
+# Todo 6 cleanup receipt — 2026-09-19T00:38:54Z
+# Residue source: mutation-proof runs where test 2 aborted before its in-test cleanup.
+DELETE agent a_0000000012 -> 200
+DELETE agent a_0000000014 -> 200
+DELETE agent a_0000000016 -> 200
+DELETE agent a_0000000018 -> 200
+DELETE policy ep_0000000012 -> 200
+DELETE policy ep_0000000014 -> 200
+DELETE policy ep_0000000016 -> 200
+DELETE policy ep_0000000018 -> 200
+--- verify zero residue ---
+t6 agents remaining: []
+t6 policies remaining: []
