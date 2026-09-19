@@ -8,8 +8,11 @@ import { Prisma } from '@prisma/client';
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   AGENT_ERRORS,
+  buildEditPermission,
+  buildReadPermission,
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
+  ROLE_POLICY_DENY_TEMPLATE,
 } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
@@ -1646,6 +1649,98 @@ describe('AgentsService', () => {
         {} as never,
       );
     }
+
+    /**
+     * ep_<role> 出厂 config：复算 seed.ts:906-920 的同一构造式，值源 `ROLE_BOUNDARIES`
+     * （src 单一事实来源；seed.ts 顶部镜像经 `src/prisma/seed.spec.ts` 逐项断言同步）。
+     * 测试据此派生期望值而非抄写字面量——实现/seed 若漂移，本测试随源一起变，
+     * 不会退化成实现输出的镜像。
+     */
+    function seedRolePolicyConfig(agentName: keyof typeof ROLE_BOUNDARIES) {
+      const boundary = ROLE_BOUNDARIES[agentName];
+      return {
+        permission: {
+          edit: buildEditPermission(boundary.writeGlobs),
+          read: buildReadPermission(),
+          bash: boundary.bashEffect,
+          // 与 seed.ts:900-905 一致：仅 vteam-plan 放行 task。
+          task: agentName === 'vteam-plan' ? 'allow' : 'deny',
+          ...Object.fromEntries(
+            boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+          ),
+        },
+        correction: {
+          scopeSummary: boundary.scopeSummary,
+          handoff: { ...boundary.handoffTo },
+          denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
+        },
+        tools: { ...boundary.toolAllows },
+      };
+    }
+
+    it('create role=developer 命中库内 ep_developer：装配策略的 permission/tools 逐字段等于该 config（角色继承真实生效，非骨架）', async () => {
+      const epDeveloperConfig = seedRolePolicyConfig('vteam-developer');
+      expect(Object.keys(epDeveloperConfig.tools).length).toBeGreaterThan(0);
+      prisma.executionPolicy.findUnique.mockImplementation(
+        async ({ where }: { where: { id: string } }) =>
+          where.id === 'ep_developer'
+            ? {
+                id: 'ep_developer',
+                name: '开发者',
+                description: ROLE_BOUNDARIES['vteam-developer'].scopeSummary,
+                type: 'template',
+                config: epDeveloperConfig,
+                ...stamp,
+              }
+            : null,
+      );
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      echoAgentCreate();
+
+      await service.create('u_admin', {
+        name: '外包开发者',
+        type: 'custom',
+        agentKey: 'role-inherit-dev',
+        role: 'developer',
+      });
+
+      expect(prisma.executionPolicy.findUnique).toHaveBeenCalledWith({
+        where: { id: 'ep_developer' },
+      });
+      const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
+      expect(policyData.config.permission).toEqual(epDeveloperConfig.permission);
+      expect(policyData.config.tools).toEqual(epDeveloperConfig.tools);
+      expect(policyData.config.tools).toEqual(
+        ROLE_BOUNDARIES['vteam-developer'].toolAllows,
+      );
+      expect(policyData.config.tools).not.toEqual({});
+      expect(policyData.config.permission.bash).toBe('allow');
+      expect(policyData.type).toBe('custom');
+      expect(policyData.id).not.toBe('ep_developer');
+    });
+
+    it('create 无 role：不查模板行、绑定 deny 骨架（角色继承的阴性对照，保证上例非偶然通过）', async () => {
+      prisma.executionPolicy.findUnique.mockResolvedValue(null);
+      prisma.$transaction.mockImplementation(async (cb) => cb(prisma));
+      echoAgentCreate();
+
+      await service.create('u_admin', {
+        name: '无角色分析师',
+        type: 'custom',
+        agentKey: 'role-less-analyst',
+      });
+
+      expect(prisma.executionPolicy.findUnique).not.toHaveBeenCalled();
+      const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
+      expect(policyData.config.permission).toEqual({
+        edit: { '*': 'deny' },
+        read: { '*': 'allow' },
+        bash: 'deny',
+        task: 'deny',
+      });
+      expect(policyData.config.tools).toEqual({});
+      expect(policyData.type).toBe('custom');
+    });
 
     it('clone 模板策略 agent：新 custom 策略 id 不同、tools 非空、真实 resolve 透出非空 tools', async () => {
       const templatePolicyRow = {

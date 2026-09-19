@@ -1,0 +1,62 @@
+{
+  "task": "todo-7: prove create-path role inheritance is real (not just the branch)",
+  "date": "2026-09-19",
+  "files_changed": ["server/src/agents/agents.service.spec.ts"],
+  "test_only": true,
+  "new_tests": [
+    {
+      "name": "create role=developer 命中库内 ep_developer：装配策略的 permission/tools 逐字段等于该 config（角色继承真实生效，非骨架）",
+      "asserts": [
+        "prisma.executionPolicy.findUnique called with { where: { id: 'ep_developer' } }",
+        "new custom policy config.permission === seed-derived ep_developer permission (buildEditPermission(writeGlobs)/read/bash/task/mcpDenies)",
+        "new custom policy config.tools === seed-derived ep_developer tools (ROLE_BOUNDARIES['vteam-developer'].toolAllows)",
+        "tools non-empty (anti empty-equals-empty), permission.bash === 'allow'",
+        "policy type 'custom', id !== 'ep_developer' (deep copy, not shared binding)"
+      ],
+      "expected_value_source": "seedRolePolicyConfig() re-derives seed.ts:906-920 from ROLE_BOUNDARIES (src single source of truth, mirrored byte-for-byte in seed.ts and asserted by src/prisma/seed.spec.ts). No hand-written expected blob."
+    },
+    {
+      "name": "create 无 role：不查模板行、绑定 deny 骨架（角色继承的阴性对照，保证上例非偶然通过）",
+      "asserts": [
+        "prisma.executionPolicy.findUnique NOT called (resolveTemplateSource early-returns on falsy role)",
+        "config.permission === { edit:{'*':'deny'}, read:{'*':'allow'}, bash:'deny', task:'deny' }",
+        "config.tools === {}",
+        "policy type 'custom'"
+      ]
+    }
+  ],
+  "acceptance_commands": [
+    {
+      "command": "cd server && npx jest --runInBand src/agents src/prisma",
+      "result": "4 suites passed, 146 tests passed",
+      "exit": 0
+    },
+    {
+      "command": "cd server && npx jest --runInBand",
+      "result": "133 suites passed, 3092 tests passed, 1 snapshot passed",
+      "exit": 0
+    },
+    {
+      "command": "cd server && npx tsc -p tsconfig.json --noEmit",
+      "result": "no errors",
+      "exit": 0
+    }
+  ],
+  "mutation_check": {
+    "target": "server/src/agents/agents.service.ts:187 — `resolveTemplateSource(tx, dto.role ?? null)`",
+    "mutation": "replace `dto.role ?? null` with `null` (neuter the role pass-through)",
+    "technique": "backup to /tmp/agents.service.ts.task7-backup, perl -0pi -e in-place edit, run test, restore with cp (NEVER git checkout/restore)",
+    "shasum_before": "d727358087e010394e5af3bbef33a8b71f92fc2828bab6b875aeac85c3de10ae",
+    "shasum_after_restore": "d727358087e010394e5af3bbef33a8b71f92fc2828bab6b875aeac85c3de10ae",
+    "restore_verified": "byte-identical (shasum equal); line 187 restored to `         const source = await this.resolveTemplateSource(tx, dto.role ?? null);`",
+    "mutation_result": "FAILS as required — the inheritance test is discriminating",
+    "raw_output": "expect(jest.fn()).toHaveBeenCalledWith(...expected)\n\n    Expected: {\"where\": {\"id\": \"ep_developer\"}}\n\n    Number of calls: 0\n\n      1705 |       });\n      1706 |\n    > 1707 |       expect(prisma.executionPolicy.findUnique).toHaveBeenCalledWith({\n           |                                                 ^\n      1708 |         where: { id: 'ep_developer' },\n      1709 |       });\n      1710 |       const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;\n\n      at Object.<anonymous> (agents/agents.service.spec.ts:1707:49)\n\nTest Suites: 1 failed, 1 total\nTests:       1 failed, 67 skipped, 68 total"
+  },
+  "frozen_specs_untouched": [
+    "policy-canonical.spec.ts",
+    "agent-policies.matrix.spec.ts",
+    "agent-policies-db-builtin.spec.ts"
+  ],
+  "buildSkeletonConfig_untouched": true,
+  "production_logic_untouched": true
+}
