@@ -1,0 +1,229 @@
+================================================================================
+task 9 — Backfill the 7 built-ins' agents.prompt to the post-split text
+plan: agent-role-entity | defect discovered by F3 REJECT | 2026-09-19
+================================================================================
+
+COMMIT : fix(db): backfill the split agent prompts on deployed databases
+MIGRATION : server/prisma/migrations/20260919000009_backfill_split_agent_prompts/migration.sql
+SPEC   : server/src/prisma/agent-prompt-backfill.migration.spec.ts
+PROBE  : server/scripts/t9-f3-check.ts
+
+================================================================================
+1. PRE-MIGRATION STATE (live populated DB, before any change)
+================================================================================
+
+$ docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --default-character-set=utf8mb4 aiagents \
+    -e "SELECT id, LOCATE(\"回执铁律\",prompt)>0 AS receipt, LOCATE(\"## 权限\",prompt)>0 AS perm,
+              LOCATE(\"# 角色：\",prompt)>0 AS identity, CHAR_LENGTH(prompt) len, SHA2(prompt,256) sha
+        FROM agents WHERE type=\"template\" ORDER BY id;"'
+
+id                   receipt perm identity len    sha256
+a_architect          1       1    1        1546   b43f463cdfe9021c6fcf2f344a0bea6ed9e804a51f83e2b4e7694a83a4fb45b0
+a_developer          1       1    1        1793   95af379744e72d75cbe8726cfd6e8ff45f48f3b0e41503c2222e5da40c8fb1ad
+a_librarian          0       1    1        1646   22bd899f8264cf32c655ab6a2b72690a23d63e7d8637992c6e1df3dea1d8e71a
+a_plan               0       1    1        2088   755c79ecbe833e2d9a1d238638daee24f89f46ee85397dc4c57299fe5c1cd7c2
+a_product            1       1    1        1732   d29275d5715fb981a19908599fd76472d6465d7738f0151811b6c239e4f550f1
+a_project_manager    0       1    1        2324   1d4a8929a53824e7cddbf2b2be8435c5f84a48adcda8fdcaa2e01f358942b4cc
+a_tester             1       1    1        1826   434d7954182eb13256b19c9324739d986cc6ff9cd375d75b2a9b54853d927181
+
+All 7 rows carried the pre-split markers (# 角色： + ## 职责 + ## 协同方式 + 团队协作规约),
+i.e. role identity + platform blocks were still inside `agents.prompt` — confirming the
+F3 REJECT root cause. These 7 SHA2 values are the recorded pre-split hashes embedded in the
+migration's guard predicate.
+
+F3's own reproduction (before the fix), 7/7 builtins duplicated:
+  a_architect  roleHeading=1 agentHeading=1 | identity=2 charter=1 receipt=1 <-- DUPLICATED
+  ... (all 7) ...                            | identity=2 ...               <-- DUPLICATED
+  BUILTINS WITH DUPLICATED BLOCKS: 7/7
+  sentence de-dup: 78 shared sentences across the 7 builtins.
+
+================================================================================
+2. GUARD PREDICATE (recorded verbatim; user edits preserved)
+================================================================================
+Each of the 7 UPDATEs is guarded by ALL of:
+
+  WHERE `id` = '<a_xxx>'
+    AND `type` = 'template'                                          -- never custom/clone
+    AND SHA2(`prompt`, 256) = '<recorded pre-split sha>'             -- byte-exact factory text
+    AND `prompt` LIKE '%# 角色：%'
+    AND `prompt` LIKE '%## 职责%'
+    AND `prompt` LIKE '%## 协同方式%'
+    AND `prompt` LIKE '%团队协作规约%';                               -- all four pre-split markers
+
+Rationale: (a) the SHA2 equality is the real user-edit guard — ANY single-character edit by a
+user changes SHA2 and the row is skipped; (b) the four LIKE markers are a defense-in-depth
+second signal that only ever exist in pre-split text (the post-split text contains NONE of
+them, asserted in the spec and by the generator); (c) `type='template'` protects custom/clone
+rows. A row that a user customized is therefore never touched.
+
+================================================================================
+3. MIGRATION OUTPUT (live populated DB)
+================================================================================
+
+$ docker cp server/prisma/migrations/20260919000009_backfill_split_agent_prompts \
+    aiagents-compose-server:/app/prisma/migrations/20260919000009_backfill_split_agent_prompts
+$ docker compose exec -T server sh -c 'cd /app && npx prisma migrate deploy'
+
+Applying migration `20260919000009_backfill_split_agent_prompts`
+The following migration(s) have been applied:
+  migrations/
+    └─ 20260919000009_backfill_split_agent_prompts/
+      └─ migration.sql
+All migrations have been successfully applied.
+
+_prisma_migrations row:
+  20260919000009_backfill_split_agent_prompts   finished 2026-09-19 09:19:50.672
+
+================================================================================
+4. POST-MIGRATION BYTE-COMPARE (seed.ts post-split == live agents.prompt, SHA2)
+================================================================================
+
+$ docker compose exec -T db sh -c 'mysql ... -e "SELECT id, LOCATE(\"# 角色：\",prompt) ident,
+    LOCATE(\"团队协作规约\",prompt) charter, LOCATE(\"## 工作方式\",prompt) workmode,
+    SHA2(prompt,256) sha FROM agents WHERE type=\"template\" ORDER BY id;"'
+
+id                   ident charter workmode len   sha256 (post-split)
+a_architect          0     0       54       361   36eb7427a616b544186bef6c12d4183cc5cc9096287b08951deb43d2b5e970d5
+a_developer          0     0       54       525   462e2cde778ba168e62fc6ca3046d205673ec685656694b128d20ba5d7d2a8b3
+a_librarian          0     0       54       335   ca10db4d1c125792603a79931a5f61f2322406b44abf91032068c3a2fcadb04a
+a_plan               0     0       98       782   63d5ac35cf1d93ee440833f2cd77b7aa9571c0d07083e64e5f0320bd5ad5a215
+a_product            0     0       54       415   16455a058ce52a1736407572b3ecc543ef482eb3b0d988280732048d801823f9
+a_project_manager    0     0       54       1207  b9bac2a93bf180f21da7abb2637aa7b995a29c8217ac1454dcfbc3083ddd2a0b
+a_tester             0     0       54       405   b2b0922a89b5c550ebd54705a3b25bf45fc6d639cfe90625cc7dc7794c41e9a3
+
+$ node /tmp/t9-byteeq.mjs   (seed.ts templateAgents[].prompt vs live DB, utf8)
+id                   seedChars liveChars byteEqual sha256(seed)
+a_architect                361       361      true 36eb7427a616b544
+a_developer                525       525      true 462e2cde778ba168
+a_librarian                335       335      true ca10db4d1c125792
+a_plan                     782       782      true 63d5ac35cf1d93ee
+a_product                  415       415      true 16455a058ce52a17
+a_project_manager         1207      1207      true b9bac2a93bf180f2
+a_tester                   405       405      true b2b0922a89b5c550
+
+ALL 7 BYTE-EQUAL (seed.ts post-split == live agents.prompt): true
+
+Static contract (`agent-prompt-backfill.migration.spec.ts`) also asserts the migration's
+embedded literal is byte-equal to the seed literal for all 7.
+
+================================================================================
+5. F3 RE-CHECK — duplication eliminated on the POPULATED DB (ACCEPTANCE FLIP)
+================================================================================
+
+Probe reproduces F3's method: real buildSystemInstructions(agent, { rolePrompt }) with the
+captured agent prompt + the bound AgentRole.rolePrompt; counts role/agent/platform blocks and
+sentence-de-dups the agent prompt against the role prompt.
+  $ cd server && npx ts-node -T scripts/t9-f3-check.ts /tmp/t9-live.json /tmp/t9-pre.json
+
+BEFORE (captured pre-split agents.prompt):
+  a_architect        shared=11 identity=2 charter=2 receipt=2 <-- DUPLICATED
+  a_developer        shared=8  identity=2 charter=2 receipt=2 <-- DUPLICATED
+  a_librarian        shared=12 identity=2 charter=2 receipt=1 <-- DUPLICATED
+  a_plan             shared=11 identity=2 charter=2 receipt=1 <-- DUPLICATED
+  a_product          shared=11 identity=2 charter=2 receipt=2 <-- DUPLICATED
+  a_project_manager  shared=14 identity=2 charter=2 receipt=1 <-- DUPLICATED
+  a_tester           shared=12 identity=2 charter=2 receipt=2 <-- DUPLICATED
+  BEFORE: 79 shared sentences | 7/7 builtins with duplicated blocks
+
+AFTER (live post-migration agents.prompt):
+  a_architect        shared=0  identity=1 charter=1 receipt=1 <-- CLEAN
+  a_developer        shared=0  identity=1 charter=1 receipt=1 <-- CLEAN
+  a_librarian        shared=0  identity=1 charter=1 receipt=1 <-- CLEAN
+  a_plan             shared=0  identity=1 charter=1 receipt=1 <-- CLEAN
+  a_product          shared=0  identity=1 charter=1 receipt=1 <-- CLEAN
+  a_project_manager  shared=0  identity=1 charter=1 receipt=1 <-- CLEAN
+  a_tester           shared=0  identity=1 charter=1 receipt=1 <-- CLEAN
+  AFTER: 0 shared sentences | 0/7 builtins with duplicated blocks
+
+Ordering (role < agent < charter < receipt) monotonic for all 7:
+  a_product          role=1127 < agent=1715 < charter=2459 < receipt=2798
+  a_plan             role=961  < agent=1604 < charter=2715 < receipt=3054
+  ... all 7 ordered=true ...
+Probe exit 0 (non-zero if any duplicate/shared sentence remains).
+rolePrompt byte-equal vs src constants: ALL 7 TRUE.
+
+=> Role + agent + platform now appear EXACTLY ONCE EACH, IN ORDER, with 0 shared sentences.
+
+================================================================================
+6. USER-EDIT PRESERVED (controlled scratch experiment, then dropped)
+================================================================================
+Scratch DB `t9_scratch` with three controlled rows (schema copied from live):
+  A) a_product       template  pristine PRE-SPLIT text (sha d29275d5...)
+  B) a_librarian     template  PRE-SPLIT text + user line
+                     "- 用户自定义补充：本团队知识管理员还负责周报汇总。"
+                     (sha 0aba376f... — differs from recorded pre-split sha)
+  C) a_custom_test   custom    pristine PRE-SPLIT text (sha d29275d5...)
+
+Apply the migration to t9_scratch:
+  A) a_product       -> UPGRADED to post-split (len 1732 -> 415, sha 16455a05..., markers gone)
+  B) a_librarian     -> UNTOUCHED  (len 1673, sha 0aba376f..., user line still present,
+                                    still carries pre-split markers)  <== user edit preserved
+  C) a_custom_test   -> UNTOUCHED  (len 1732, sha d29275d5..., type=custom)
+
+Post state:
+  id             type      len   presplit userline sha
+  a_custom_test  custom    1732  1        0        d29275d5715fb981...
+  a_librarian    template  1673  1        1        0aba376feed8cd6e...
+  a_product      template  415   0        0        16455a058ce52a17...
+Scratch DB dropped after the experiment (`DROP DATABASE t9_scratch`);
+`SHOW DATABASES` no longer lists t9_scratch / t9_deploy.
+
+================================================================================
+7. IDEMPOTENCY — second run changes 0 rows
+================================================================================
+(a) Prisma re-deploy on the isolated populated copy:
+      `npx prisma migrate deploy` -> "No pending migrations to apply."
+(b) Raw SQL re-run (bypassing Prisma's own ledger), `updated_at` fingerprint before/after:
+      run 1 fingerprint == run 2 fingerprint == run 3 fingerprint
+      => 0 rows changed (true no-op). The guard's SHA2 equality now fails for every row
+         (prompt is post-split) and the four LIKE markers no longer match.
+
+================================================================================
+8. ALSO PROVEN — isolated populated deploy (real `prisma migrate deploy` path)
+================================================================================
+To prove the pre-split -> post-split transition through the actual deploy path (not only the
+already-upgraded live DB), `/tmp/t9-schema.sql` (112 tables + _prisma_migrations) was restored
+into scratch `t9_deploy`, 7 pristine PRE-SPLIT agent rows inserted (each SHA2 verified against
+the recorded pre-split hash), plus:
+  - a_product_USEREDITED  (template, pre-split text with a user modification + appended line)
+  - a_custom_test         (custom, pre-split text)
+Then `docker compose exec -T -e DATABASE_URL=mysql://root:...@db:3306/t9_deploy server \
+  npx prisma migrate deploy`:
+  Applying migration `20260919000009_backfill_split_agent_prompts` ... All applied.
+Post state: 7 builtin rows post-split; a_product_USEREDITED and a_custom_test untouched.
+t9_deploy dropped after the experiment.
+
+================================================================================
+9. ROLLBACK PATH (recorded in the migration header)
+================================================================================
+The migration writes only `prompt` + `updated_at` for 7 rows; it touches no capability or
+permission field. Restore the pre-migration prompt text from an `agents` table backup:
+  mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --default-character-set=utf8mb4 aiagents agents \
+    > pre-agent-prompt-backfill-dump.sql
+  mysql -uroot -p"$MYSQL_ROOT_PASSWORD" --default-character-set=utf8mb4 aiagents \
+    < pre-agent-prompt-backfill-dump.sql
+Reference backup: .omo/evidence/agent-role-entity/pre-migration-dump.sql
+
+================================================================================
+10. GATES & UNCHANGED INVARIANTS
+================================================================================
+$ cd server && npx tsc -p tsconfig.json --noEmit            -> exit 0
+$ cd server && npx jest --runInBand                          -> 139 suites / 3186 tests passed
+                                                                (baseline 138/3179; +1 suite/+7 tests)
+$ node scripts/verify-instruction-parity.mjs                 -> exit 0 (0 lost, 0 duplicated, 0 unaccounted)
+$ shasum -a 256 .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+  3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87   (UNCHANGED)
+
+Unchanged by this task:
+  - server/prisma/seed.ts prompt TEXT (git diff --stat = empty; seed stays post-split for fresh installs)
+  - worker/** , permissions, /agent-policies, assembly logic, parity checker
+  - frozen policy baseline sha (above)
+
+================================================================================
+11. ARTIFACTS
+================================================================================
+  migration : server/prisma/migrations/20260919000009_backfill_split_agent_prompts/migration.sql
+  spec      : server/src/prisma/agent-prompt-backfill.migration.spec.ts (7 tests)
+  probe     : server/scripts/t9-f3-check.ts (reusable F3 duplication re-check)
+  raw probe outputs : /tmp/t9-f3-final.json, /tmp/t9-f3-check.json (ephemeral; re-derivable)
+================================================================================

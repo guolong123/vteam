@@ -269,3 +269,36 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Gates**: server 138 suites / 3179 tests green (baseline after todo 5 unchanged — this todo adds no
   server tests, only the repo-level checker); `npx tsc -p tsconfig.json --noEmit` exit 0.
   Evidence `.omo/evidence/agent-role-entity/task-8-proof.txt`.
+
+## todo 9 — agents.prompt backfill (F3 REJECT fix)
+
+- **The gap was a split-brain between two write paths**: todo 4 edited `seed.ts` (fresh installs) and
+  wrote migration `...00008` for `agent_roles.role_prompt`, but the **agent side had no data migration**.
+  `seed.ts`'s `agent.upsert` is intentionally `update: {}` (create-if-absent, to preserve user edits),
+  so on any deployed DB `agents.prompt` stayed pre-split while `AgentRole.rolePrompt` was populated →
+  assembly joined the role block on top of the still-pre-split agent text → duplication. Every gate
+  passed because `verify-instruction-parity.mjs` reads the **source** (`seed.ts` + constants), never
+  the live DB the dispatcher consumes. **Lesson: for any "seed edits a field that also has a migration"
+  change, ask "does a data migration rewrite existing rows?" for EACH field, and prove against a
+  populated DB, not just a fresh seed.**
+- **Guard against blind overwrite of a user-editable column**: record the exact pre-split factory
+  SHA2 per row and guard `UPDATE ... WHERE SHA2(prompt,256)='<pre-split>' AND prompt LIKE '%marker%'`.
+  The hash is the real user-edit guard (any edit changes it); the LIKE markers are defense-in-depth
+  and disappear after upgrade, giving free idempotency on the second run.
+- **Idempotency proof subtlety**: `npx prisma migrate deploy` says "No pending migrations" (its own
+  ledger), so it does NOT prove the SQL is a no-op. Also re-run the raw SQL and fingerprint
+  `updated_at` before/after to prove 0 rows changed.
+- **`docker compose exec ... mysql aiagents < file.sql` runs against the default DB on the connection,
+  not an argument** — an unqualified table name hits whichever DB the client defaulted to. To test on a
+  scratch DB, pass the DB as the positional arg to `mysql` (`mysql ... t9_scratch`), never rely on
+  `USE`-less SQL. (Cost: the first test run applied to live a step early — harmless here since the
+  migration is the intended live end-state and is idempotent, but a real footgun for destructive SQL.)
+- **`团队协作规约（全文见` count trap**: the charter heading line contains the bare substring
+  `团队协作规约` twice, so `count(assembled, '团队协作规约')` reports 2 for ONE intact block. Count the
+  heading `团队协作规约（全文见` (as F3 and `worker-dispatcher.spec.ts` do).
+- **Pre-split a_plan hash is revision-specific**: `a_plan`'s pre-split prompt embedded a runtime-derived
+  `planToolLine`; the live DB's value predates the current `toolAllows` set, so a reconstructed hash from
+  git does not match. Capture the live pre-migration bytes and record their SHA2, don't reconstruct.
+- **Gates**: `npx tsc -p tsconfig.json --noEmit` exit 0; `npx jest --runInBand` 139 suites / 3186 tests
+  (baseline 138/3179; +1 suite/+7 tests); parity checker exit 0; frozen policy sha unchanged.
+  Evidence `.omo/evidence/agent-role-entity/task-9-agent-prompt-backfill.txt`.
