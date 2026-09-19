@@ -1,0 +1,252 @@
+{
+  "plan": "agent-role-decommission",
+  "todo": 5,
+  "title": "[server] Migrate label consumers (teams aliases, tasks, platform-mcp, chat, triggers)",
+  "date": "2026-09-19",
+  "commit": "refactor(server): resolve labels from AgentRole, not Agent.role",
+
+  "decision": {
+    "D1_apiRoleField": {
+      "decision": "KEEP the field name `role` (no new fields); SOURCE it from `TeamMember.roleId → AgentRole.key` (machine key), NOT `AgentRole.name`",
+      "deviationFromTodo1": "Todo 1 §6 DTO recommendation suggested carrying `AgentRole.name` in the `role` field. REVERSED here, with reason.",
+      "reason": "The web consumes `.role` as a machine RoleKey, not as display text: `ROLE_KEYS.includes(role)` / `toAvatarRole(role)` / `roles[key]` colour lookup (web/app/(main)/agents/page.tsx:444,1565,1644,1666-1668; teams/[id]/session/page.tsx:310-331,367-368; TeamMembersPanel/message-input etc.). `AgentRole.name` is the human label (产品经理/开发者/计划员) which fails `ROLE_KEYS.includes(...)` (keys are product/developer/plan), so `toAvatarRole` would fall to its developer fallback and change the plan/architect avatar colours. `AgentRole.name` is used for the ALIAS label (D2), not for this field.",
+      "byteIdentity": "For seeded data: verified live `team_members.role_id IS NULL` = 0 rows (all 28 members bound), and every builtin `AgentRole.key` equals the old `agents.role` value (product/project_manager/architect/developer/tester/plan/librarian) — so `role` is byte-identical before/after on every seeded response.",
+      "nullContract": "Unbound member (`TeamMember.roleId` NULL) or missing role row → `role: null` (was also null for such rows before, since a NULL `agents.role` produced null)."
+    },
+    "D2_aliasLabel": {
+      "decision": "`defaultAlias` resolves the human label from `AgentRole.name` when the member is role-bound, else falls back to `agent.name` — the pre-migration fallback rule is unchanged.",
+      "byteIdentity": "For seeded data `AgentRole.name` === the old `ROLE_LABELS[role]` (产品经理/项目经理/架构师/开发者/测试/计划员/知识管理员), so aliases are byte-identical.",
+      "emptyLabelForbidden": "A missing mapping NEVER renders an empty label: `roleLabelOf(...) ?? agent.name` → `<agent.name>-<seq>`."
+    },
+    "D3_platformMcpCompatRole": {
+      "decision": "`resolveByAgent({policyId, role, agentKey})` keeps being passed the compat `role` argument, now sourced from `AgentRole.key` (not `profile.agent.role`).",
+      "reason": "`AgentPolicyInput.role` is documented inert (todo 3: `兼容字段：不参与解析`). Value-identical for seeded data → todo 3's `toHaveBeenCalledWith({policyId, role, agentKey})` assertions keep passing. Comment at the call site records that todo 8 owns its removal."
+    }
+  },
+
+  "apiShapeDecisions": [
+    {
+      "response": "GET /teams, GET /teams/:id → members[].agent.role",
+      "was": "Agent.role (label key string)",
+      "now": "KEPT — same field name, same meaning (machine role key), now `TeamMember.roleId → AgentRole.key`; null when unbound",
+      "verdict": "kept-with-same-meaning",
+      "codeComment": "server/src/teams/teams.service.ts toTeamDto"
+    },
+    {
+      "response": "GET /teams, GET /teams/:id → members[].roleId",
+      "was": "already present (plan 2)",
+      "now": "unchanged (identity source)",
+      "verdict": "kept"
+    },
+    {
+      "response": "GET /tasks, GET /tasks/:id → instances[].role",
+      "was": "Agent.role (label key string)",
+      "now": "KEPT — machine role key from `TeamMember.roleId → AgentRole.key`; null when unbound",
+      "verdict": "kept-with-same-meaning",
+      "codeComment": "server/src/tasks/tasks.service.ts toTaskDto"
+    },
+    {
+      "response": "GET /channels/:id → agent.role",
+      "was": "Agent.role via the channel's Agent relation",
+      "now": "KEPT — machine role key from the channel's `TeamMember.roleId → AgentRole.key` (channel.agentId is vestigial: live DB shows 14/14 agent-bound channels all have team_member_id); null when no member binding",
+      "verdict": "kept-with-same-meaning"
+    },
+    {
+      "response": "GET /channels/:id → agentMembers[].role",
+      "was": "Agent.role",
+      "now": "KEPT — machine role key from `TeamMember.roleId → AgentRole.key`",
+      "verdict": "kept-with-same-meaning"
+    },
+    {
+      "response": "MCP task_context → agentMembers[].role",
+      "was": "Agent.role",
+      "now": "KEPT — machine role key from `TeamMember.roleId → AgentRole.key`",
+      "verdict": "kept-with-same-meaning"
+    },
+    {
+      "response": "MCP team_view → members[].role",
+      "was": "Agent.role",
+      "now": "KEPT — machine role key from `TeamMember.roleId → AgentRole.key`",
+      "verdict": "kept-with-same-meaning"
+    },
+    {
+      "response": "MCP my_profile → role",
+      "was": "Agent.role",
+      "now": "KEPT — machine role key from `TeamMember.roleId → AgentRole.key` (also feeds `agentName: vteam-<key>`, byte-identical to the old `vteam-<role>`)",
+      "verdict": "kept-with-same-meaning"
+    },
+    {
+      "response": "GET /triggers → display.ownerLabel",
+      "was": "`<alias>（<Agent.role ?? agent.name>）`",
+      "now": "`<alias>（<AgentRole.key ?? agent.name>）` — same rendering rule, source re-pointed",
+      "verdict": "kept-with-same-meaning",
+      "codeComment": "server/src/timers/triggers.service.ts buildDisplay"
+    },
+    {
+      "response": "GET /agents, GET /agents/:id → role",
+      "was": "Agent.role",
+      "now": "OUT OF SCOPE — todo 4 owns agents.service/DTOs (already committed as a7f2173)",
+      "verdict": "n/a"
+    }
+  ],
+
+  "outOfScopeReadsUntouched": {
+    "reason": "D5 — USER/RBAC roles, not Agent roles. Left exactly as-is.",
+    "items": [
+      "server/src/teams/teams.service.ts addUserMember `dto.role?.trim() || 'member'` (TeamUserMember.role)",
+      "server/src/teams/teams.service.ts toTeamDto userMembers `role: u.role` (TeamUserMember.role)",
+      "server/src/tasks/tasks.service.ts `m.role === 'owner'` (TeamUserMember.role)",
+      "server/src/chat/chat.service.ts:527 `const role = info.role` (LLM message role)",
+      "server/src/timers/triggers.service.ts `user.role.permissions` + `include: {role:true}` (account RBAC Role)"
+    ]
+  },
+
+  "changedFiles": {
+    "new": [
+      "server/src/common/agent-role-label.ts — the single label-resolution seam: `roleKeyOf` (machine key from `AgentRole.key`) and `roleLabelOf` (display label from `AgentRole.name`, caller-supplied fallback). No duplicated per-module map remains."
+    ],
+    "production": [
+      "server/src/teams/teams.service.ts — ROLE_LABELS deleted; `defaultAlias(agent, seq, role?)` ← `roleLabelOf`; `resolveMemberBinding` now also resolves the `AgentRole` row (key/name) and `addMember`/`create` pass it into the alias; both team includes drop `agent.role` and add `role:{key,name}`; `toTeamDto` → `role: roleKeyOf(m)`",
+      "server/src/tasks/tasks.service.ts — ROLE_LABELS deleted; `defaultAlias(agent, seq, role?)` ← `roleLabelOf`; all 5 `teamMember` includes drop `agent.role` and add `role:{key,name}`; `createTeamMembers` resolves the role binding for the alias; `toTaskDto.instances[].role` → `roleKeyOf(m)`",
+      "server/src/chat/chat.service.ts — CHANNEL_TASK_SELECT teamMember gains `role:{key,name}`; `findOne` agentMembers go through new `toChannelAgentDto` (key-based); `toChannelDto.agent.role` → `roleKeyOf(row.teamMember)`",
+      "server/src/platform-mcp/platform-mcp.service.ts — task_context/team_view selects drop `agent.role` + add `role:{key,name}`; payloads use `roleKeyOf`; my_profile select drops `agent.role` + adds member `role`, passes `role: AgentRole.key` as the inert compat arg, payload `role` + `agentName` from the key; agent lookup in team_add_member drops the unused `role` select",
+      "server/src/timers/triggers.service.ts — session/teamMember batch selects drop `agent.role` + add `role:{key,name}`; `buildDisplay` ownerLabel `roleKeyOf(m) ?? m.agent?.name`"
+    ],
+    "specs": [
+      "server/src/teams/teams.service.spec.ts — fixtures updated to the role relation; addMember assertions updated; +2 NEW tests (seeded alias byte-identity across all 7 builtins; missing-mapping fallback)",
+      "server/src/tasks/tasks.service.spec.ts — memberRow/tmmRow fixtures carry the role relation; +1 NEW test (task-side label byte-identity + unbound fallback)",
+      "server/src/chat/chat.service.spec.ts — findOne fixture carries the role relation",
+      "server/src/platform-mcp/platform-mcp.service.spec.ts — task_context/team_view/my_profile fixtures carry the role relation",
+      "server/src/timers/triggers.service.spec.ts — enriched fixtures + select assertions updated"
+    ],
+    "checker": ["scripts/agent-role-consumer-manifest.txt — regenerated with the checker's own grep pipeline"]
+  },
+
+  "consumers": [
+    { "file": "server/src/teams/teams.service.ts", "was": "ROLE_LABELS[agent.role ?? ''] ?? agent.name (defaultAlias)", "now": "roleLabelOf({role}, agent.name) where role = AgentRole row from roleId → AgentRole.name" },
+    { "file": "server/src/teams/teams.service.ts", "was": "toTeamDto agent.role", "now": "roleKeyOf(m) → AgentRole.key" },
+    { "file": "server/src/tasks/tasks.service.ts", "was": "ROLE_LABELS[agent.role ?? ''] ?? agent.name (defaultAlias)", "now": "roleLabelOf({role}, agent.name) → AgentRole.name" },
+    { "file": "server/src/tasks/tasks.service.ts", "was": "toTaskDto instances[].role = m.agent.role", "now": "roleKeyOf(m) → AgentRole.key" },
+    { "file": "server/src/chat/chat.service.ts", "was": "toChannelDto agent.role = row.agent.role", "now": "roleKeyOf(row.teamMember) → AgentRole.key" },
+    { "file": "server/src/chat/chat.service.ts", "was": "findOne agentMembers = r.agent (with agent.role)", "now": "toChannelAgentDto(r) → {id,name,role: AgentRole.key}" },
+    { "file": "server/src/platform-mcp/platform-mcp.service.ts", "was": "task_context agentMembers[].role = r.agent.role", "now": "roleKeyOf(r) → AgentRole.key" },
+    { "file": "server/src/platform-mcp/platform-mcp.service.ts", "was": "team_view members[].role = r.agent.role", "now": "roleKeyOf(r) → AgentRole.key" },
+    { "file": "server/src/platform-mcp/platform-mcp.service.ts", "was": "my_profile resolveByAgent({role: profile.agent.role}) + payload role + agentName", "now": "role: AgentRole.key (inert compat arg) + payload role + agentName from the key" },
+    { "file": "server/src/timers/triggers.service.ts", "was": "ownerLabel `m.agent?.role ?? m.agent?.name`", "now": "`roleKeyOf(m) ?? m.agent?.name`" }
+  ],
+
+  "beforeAfter": {
+    "method": "Live compose stack (aiagents-compose-server, rebuilt with this commit's code — verified by grepping dist for `roleBindingOf`/`roleLabelOf` = present and `ROLE_LABELS` = absent). BEFORE captured on the pre-change build (dist marker absent), AFTER on the new build. Same seeded data, same DB.",
+    "memberAlias": {
+      "teamId": "tm_0000000001",
+      "memberId": "tmm_0000000001",
+      "roleId": "ar_product",
+      "before": "产品经理-1",
+      "after": "产品经理-1",
+      "identical": true
+    },
+    "taskLabel": {
+      "taskId": "t_0000000017",
+      "instanceId": "tmm_0000000003",
+      "before": { "alias": "架构师-1", "role": "architect", "name": "架构师" },
+      "after": { "alias": "架构师-1", "role": "architect", "name": "架构师" },
+      "identical": true
+    },
+    "channelAgent": {
+      "channelId": "c_0000000005",
+      "before": { "id": "a_developer", "role": "developer" },
+      "after": { "id": "a_developer", "role": "developer" },
+      "identical": true
+    },
+    "platformMcp": {
+      "my_profile": { "before": "role=product, agentName=vteam-product", "after": "role=product, agentName=vteam-product", "identical": true },
+      "task_context": { "before": "[architect, developer, librarian]", "after": "[architect, developer, librarian]", "identical": true },
+      "team_view": { "before": "[architect, developer, librarian]", "after": "[architect, developer, librarian]", "identical": true }
+    },
+    "triggersOwnerLabel": {
+      "before": "项目经理-1（project_manager）/ 计划员-1（plan）/ 产品经理-1（product）/ 测试-1（tester）/ 开发者-1（developer）",
+      "after": "项目经理-1（project_manager）/ 计划员-1（plan）/ 产品经理-1（product）/ 测试-1（tester）/ 开发者-1（developer）",
+      "identical": true
+    },
+    "fullArtifact": "/tmp/task5-beforeafter.json (identical: true)"
+  },
+
+  "fallback": {
+    "rule": "Unbound member (roleId NULL) or missing AgentRole row → alias label falls back to `agent.name` (`<agent.name>-<seq>`) and `role` is null. Never an empty/`-1` label.",
+    "liveProbe": {
+      "method": "POST /teams with a member carrying only agentId (no roleId); agent a_0000000001 (custom 'myagent', agents.role NULL)",
+      "response": "{ roleId: null, alias: 'myagent-1', agent: { id: 'a_0000000001', name: 'myagent', role: null } }",
+      "asserted": "alias === 'myagent-1' (not '' and not '-1'); role === null",
+      "cleanup": "DELETE /teams/tm_0000000030 → 200 (probe team removed)"
+    },
+    "unitTest": "server/src/teams/teams.service.spec.ts '角色映射缺失 → 回退 agent.name 的文档化兜底（空标签禁止，不抛错）' + server/src/tasks/tasks.service.spec.ts unbound member case"
+  },
+
+  "tests": {
+    "new": [
+      "server/src/teams/teams.service.spec.ts — '种子成员别名逐字节不变：roleId → AgentRole.name 与迁移前 ROLE_LABELS 同值（7 内置角色全断言）': asserts each of the 7 builtin seeded roles produces exactly the pre-migration alias (`产品经理-1`/`项目经理-1`/`架构师-1`/`开发者-1`/`测试-1`/`计划员-1`/`知识管理员-1`)",
+      "server/src/teams/teams.service.spec.ts — '角色映射缺失 → 回退 agent.name 的文档化兜底（空标签禁止，不抛错）'",
+      "server/src/tasks/tasks.service.spec.ts — '任务侧标签同源：种子成员别名取自 AgentRole.name（迁移前后逐字节），缺映射回退 agent.name'"
+    ],
+    "targeted": {
+      "command": "cd server && npx jest --runInBand src/teams src/tasks src/platform-mcp src/chat",
+      "result": "Test Suites: 37 passed, 37 total; Tests: 1276 passed, 1276 total"
+    },
+    "triggers": {
+      "command": "cd server && npx jest --runInBand src/timers",
+      "result": "Test Suites: 3 passed, 3 total; Tests: 66 passed, 66 total"
+    },
+    "fullServer": {
+      "command": "cd server && npx jest --runInBand",
+      "result": "Test Suites: 140 passed, 140 total; Tests: 3236 passed, 3236 total; Snapshots 1 passed",
+      "baseline": "140 suites / 3233 tests (the brief's stated baseline), +3 new tests in this todo"
+    },
+    "worker": {
+      "command": "cd worker && npx jest --runInBand",
+      "result": "Test Suites: 26 passed, 26 total; Tests: 688 passed, 688 total (unchanged)"
+    },
+    "webTypecheck": {
+      "command": "cd web && npx tsc --noEmit",
+      "result": "exit 0 (no web file changed; DTO types remain compatible)"
+    },
+    "serverTypecheck": {
+      "command": "cd server && npx tsc -p tsconfig.json --noEmit",
+      "result": "exit 0"
+    }
+  },
+
+  "checker": {
+    "command": "bash scripts/check-agent-role-consumers.sh",
+    "before": { "observed": 171, "unmapped": 0 },
+    "after": { "observed": 150, "unmapped": 0 },
+    "delta": "-21 keys net (38 removed: the eliminated `agent.role` selects/reads and the two deleted ROLE_LABELS maps; +17 added: the new `agent-role-label.ts` seam, the new role-relation reads/type lines, and line-shift rekeys). Regenerated with the checker's own grep pipeline (never hand-edited); all 17 added keys are recorded here, not hidden.",
+    "addedKeys": [
+      "server/src/common/agent-role-label.ts:5,24,32 (new seam)",
+      "server/src/chat/chat.service.ts:527 (pre-existing LLM message role, line-shifted)",
+      "server/src/platform-mcp/platform-mcp.service.ts:3749 (new compat-arg comment)",
+      "server/src/tasks/tasks.service.ts:220,223,1764 (TeamUserMember role + alias call with role binding)",
+      "server/src/teams/teams.service.ts:138,636,751,1417,1418,1466 (alias calls, TeamUserMember role, doc comment, roleKeyOf)",
+      "server/src/timers/triggers.service.ts:305,310,620 (account RBAC role + new ownerLabel read)"
+    ]
+  },
+
+  "frozenBaseline": {
+    "path": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json",
+    "sha256": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "unchanged": true
+  },
+
+  "scopeFidelity": {
+    "touched": "server/src/{teams,tasks,chat,platform-mcp,timers} + server/src/common/agent-role-label.ts (new) + their specs + the checker manifest + evidence/notepad",
+    "notTouched": [
+      "worker/**",
+      "execution-policy.service.ts (todo 3, already committed 41f37f5)",
+      "agents.service + DTOs (todo 4, already committed a7f2173)",
+      "web/** (todo 6)",
+      "prisma schema/migrations (todo 7)",
+      "helpers not deleted (todo 8) — ROLE_LABELS were re-sourced/removed only because they were the label map itself; roleToAgentName/isPlanRole/roleNeedsIssueDetail remain untouched",
+      "frozen baseline file (not modified)",
+      "plan-duty logic (todo 2) — not re-touched"
+    ]
+  }
+}

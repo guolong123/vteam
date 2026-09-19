@@ -144,3 +144,29 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Manifest regeneration (todo 2/3 precedent)**: 176 → 171 keys. The delta is exactly
   the removed write-path keys (3 writes + 1 `ep_<role>` read + 1 merged comment) plus the
   picker's replaced state key — verified key-by-key before regenerating, never hand-edited.
+
+## todo 5 — label consumers re-sourced from AgentRole
+
+- **Two different values hide behind one field name.** `Agent.role` was both the machine key
+  (web `ROLE_KEYS.includes(role)` / `toAvatarRole` / colour maps) and the seed of the display
+  label (`ROLE_LABELS[role]` → alias `<标签>-<seq>`). The migration therefore needs TWO
+  accessors, not one: `roleKeyOf` → `AgentRole.key` for the API `role` field, `roleLabelOf` →
+  `AgentRole.name` for the alias. Todo 1's recommendation (`role` = `AgentRole.name`) was
+  reversed for this exact reason — `.name` (产品经理) fails `ROLE_KEYS` (keys are `product`),
+  so avatars would silently fall to the developer fallback. Recorded in the evidence as a
+  documented deviation.
+- **`roleKeyOf(member)` reads the MEMBER's `role` relation, not the agent's.** Every payload
+  member is a team-member row; `m.role.{key,name}` is `AgentRole` (Prisma relation on
+  `TeamMember.roleId`). `m.agent` has no `role` field after this todo.
+- **Alias needs the binding at write time, not just at read time.** `defaultAlias` runs inside
+  `create()`/`addMember()` where the `AgentRole` row must already be known: `resolveMemberBinding`
+  already fetched it for the `roleId → defaultAgentId` prefill, so its return type now carries
+  `{key,name}` and the alias uses it with zero extra queries in the roleId path. The explicit-
+  `agentId` path adds one lookup by `roleId` (only when a `roleId` was supplied).
+- **The checker's `UNMAPPED` stays 0 while the count SHRINKS.** 171 → 150 keys (38 removed,
+  17 added). Removed keys = genuinely eliminated reads; added keys = the new seam module +
+  role-relation reads + line-shift rekeys. Regenerate with the checker's own pipeline; never
+  hand-edit the manifest.
+- **Behaviour proof must come from the RUNNING build, not the source.** Rebuild the server
+  container and grep `dist/` for a new marker (`roleBindingOf`) plus the absence of the old one
+  (`ROLE_LABELS`) before trusting an AFTER capture — otherwise the "after" is the old process.

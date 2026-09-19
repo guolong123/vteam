@@ -22,6 +22,7 @@ import {
   SESSION_STATUS,
 } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { roleKeyOf } from '../common/agent-role-label';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import {
@@ -1094,7 +1095,8 @@ export class PlatformMcpService implements OnModuleInit {
               alias: true,
               seq: true,
               agentId: true,
-              agent: { select: { id: true, name: true, role: true } },
+              agent: { select: { id: true, name: true } },
+              role: { select: { key: true, name: true } },
             },
           })
         : Promise.resolve([]),
@@ -1116,7 +1118,8 @@ export class PlatformMcpService implements OnModuleInit {
         alias: r.alias,
         agentId: r.agentId,
         name: r.agent.name,
-        role: r.agent.role,
+        // D1：`role` 字段名保留，值为成员绑定角色的机器键 `AgentRole.key`；未绑 → null。
+        role: roleKeyOf(r as { role?: { key: string; name: string } | null }),
         main: r.id === ctxMainId,
       })),
     };
@@ -3612,7 +3615,8 @@ export class PlatformMcpService implements OnModuleInit {
               agentId: true,
               alias: true,
               seq: true,
-              agent: { select: { role: true } },
+              agent: { select: { name: true } },
+              role: { select: { key: true, name: true } },
             },
           })
         : Promise.resolve([]),
@@ -3641,7 +3645,8 @@ export class PlatformMcpService implements OnModuleInit {
           id: r.id,
           agentId: r.agentId,
           alias: r.alias,
-          role: r.agent.role,
+          // D1：字段名保留，值为成员绑定角色的机器键 `AgentRole.key`；未绑 → null。
+          role: roleKeyOf(r as { role?: { key: string; name: string } | null }),
           seq: r.seq,
           main: r.id === viewMainId,
           sessionStatus: vs?.status ?? null,
@@ -3708,13 +3713,13 @@ export class PlatformMcpService implements OnModuleInit {
           select: {
             id: true,
             name: true,
-            role: true,
             prompt: true,
             defaultModelId: true,
             policyId: true,
             agentKey: true,
           },
         },
+        role: { select: { key: true, name: true } },
       },
     });
     if (!member || (profileTeamId && member.teamId !== profileTeamId)) {
@@ -3726,7 +3731,7 @@ export class PlatformMcpService implements OnModuleInit {
     const profile = member;
     const prompt = profile.agent.prompt;
     const truncated = prompt.length > 500;
-    const agentRole = profile.agent.role as string | null;
+    const agentRoleKey = roleKeyOf(profile);
     const agentKey = profile.agent.agentKey ?? null;
     const agentPolicyId =
       (profile.agent as { policyId?: string | null }).policyId ?? null;
@@ -3740,7 +3745,9 @@ export class PlatformMcpService implements OnModuleInit {
     try {
       const resolved = await this.executionPolicyService?.resolveByAgent({
         policyId: agentPolicyId,
-        role: agentRole,
+        // 兼容字段（todo 3 已声明不参与解析）：值改为成员绑定角色的机器键 `AgentRole.key`，
+        // 与旧 `agent.role` 对 seed 数据同值；删除归 todo 8。
+        role: agentRoleKey,
         agentKey,
       });
       effectivePermission = resolved
@@ -3760,13 +3767,14 @@ export class PlatformMcpService implements OnModuleInit {
       instanceId: profile.id,
       agentId: profile.agent.id,
       name: profile.agent.name,
-      role: profile.agent.role,
+      // D1：`role` 字段名保留，值为成员绑定角色的机器键 `AgentRole.key`；未绑 → null。
+      role: agentRoleKey,
       alias: profile.alias,
       seq: profile.seq,
       workDir: profile.workDir,
       defaultModelId: profile.agent.defaultModelId,
       effectivePermission,
-      agentName: agentRole ? `vteam-${agentRole}` : 'vteam-plan',
+      agentName: agentRoleKey ? `vteam-${agentRoleKey}` : 'vteam-plan',
       promptSummary: truncated ? prompt.slice(0, 500) : prompt,
       promptTruncated: truncated,
     };
@@ -3835,7 +3843,7 @@ export class PlatformMcpService implements OnModuleInit {
 
     const agentRow = await this.prisma.agent.findUnique({
       where: { id: args.agentId },
-      select: { id: true, name: true, role: true },
+      select: { id: true, name: true },
     });
     if (!agentRow) {
       throw new NotFoundException({

@@ -2041,7 +2041,8 @@ describe('ChatService', () => {
       prisma.teamMember.findMany.mockResolvedValue([
         {
           agentId: 'a_product',
-          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+          agent: { id: 'a_product', name: '产品经理' },
+          role: { key: 'product', name: '产品经理' },
         },
       ] as any);
 

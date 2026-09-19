@@ -12,6 +12,7 @@ import {
   MESSAGE_STATUS,
   SENDER_TYPE,
 } from '../common/constants/event.constants';
+import { roleKeyOf, roleLabelOf } from '../common/agent-role-label';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,14 +31,6 @@ const ID_PREFIX = {
   teamUserMember: 'tum',
   teamQueue: 'tq',
   channel: 'c',
-} as const;
-
-const ROLE_LABELS: Record<string, string> = {
-  product: '产品经理',
-  project_manager: '项目经理',
-  architect: '架构师',
-  developer: '开发者',
-  tester: '测试',
 } as const;
 
 const TEAM_ERRORS = {
@@ -132,7 +125,7 @@ export class TeamsService implements OnModuleInit {
       for (const item of resolvedMembers) {
         const agent = await tx.agent.findUnique({
           where: { id: item.agentId },
-          select: { id: true, name: true, role: true },
+          select: { id: true, name: true },
         });
         if (!agent) {
           throw new NotFoundException({
@@ -141,7 +134,8 @@ export class TeamsService implements OnModuleInit {
           });
         }
         const seq = await this.nextSeqForUpdate(tx, teamId, item.agentId);
-        const alias = item.alias?.trim() || this.defaultAlias(agent, seq);
+        const alias =
+          item.alias?.trim() || this.defaultAlias(agent, seq, item.role);
         const workDir = item.workDir?.trim() || this.defaultWorkDir(agent, seq);
         const memberId = await this.idGen.nextId(ID_PREFIX.teamMember);
         await tx.teamMember.create({
@@ -256,7 +250,8 @@ export class TeamsService implements OnModuleInit {
         include: {
           members: {
             include: {
-              agent: { select: { id: true, name: true, role: true } },
+              agent: { select: { id: true, name: true } },
+              role: { select: { key: true, name: true } },
             },
             orderBy: [{ seq: 'asc' }, { id: 'asc' }],
           },
@@ -285,7 +280,10 @@ export class TeamsService implements OnModuleInit {
       where: { id },
       include: {
         members: {
-          include: { agent: { select: { id: true, name: true, role: true } } },
+          include: {
+            agent: { select: { id: true, name: true } },
+            role: { select: { key: true, name: true } },
+          },
           orderBy: [{ agentId: 'asc' }, { seq: 'asc' }],
         },
         userMembers: { orderBy: { joinedAt: 'asc' } },
@@ -623,7 +621,7 @@ export class TeamsService implements OnModuleInit {
     const binding = await this.resolveMemberBinding(dto);
     const agent = await this.prisma.agent.findUnique({
       where: { id: binding.agentId },
-      select: { id: true, name: true, role: true },
+      select: { id: true, name: true },
     });
     if (!agent) {
       throw new NotFoundException({
@@ -634,7 +632,8 @@ export class TeamsService implements OnModuleInit {
 
     const member = await this.prisma.$transaction(async (tx) => {
       const seq = await this.nextSeqForUpdate(tx, teamId, binding.agentId);
-      const alias = dto.alias?.trim() || this.defaultAlias(agent, seq);
+      const alias =
+        dto.alias?.trim() || this.defaultAlias(agent, seq, binding.role);
       const workDir = dto.workDir?.trim() || this.defaultWorkDir(agent, seq);
       const created = await tx.teamMember.create({
         data: {
@@ -1317,13 +1316,24 @@ export class TeamsService implements OnModuleInit {
    */
   private async resolveMemberBinding<T extends { agentId?: string; roleId?: string }>(
     input: T,
-  ): Promise<T & { agentId: string; roleId: string | null }> {
+  ): Promise<
+    T & {
+      agentId: string;
+      roleId: string | null;
+      role: { key: string; name: string } | null;
+    }
+  > {
     const explicitAgentId = input.agentId?.trim() || null;
     const roleId = input.roleId?.trim() || null;
 
     if (explicitAgentId) {
       // 规则 1：显式 agentId 优先；roleId 仅在给出时随行持久化（不覆盖 agent 选择）。
-      return { ...input, agentId: explicitAgentId, roleId };
+      return {
+        ...input,
+        agentId: explicitAgentId,
+        roleId,
+        role: await this.roleBindingOf(roleId),
+      };
     }
 
     if (!roleId) {
@@ -1335,7 +1345,7 @@ export class TeamsService implements OnModuleInit {
 
     const role = await this.prisma.agentRole.findUnique({
       where: { id: roleId },
-      select: { id: true, defaultAgentId: true },
+      select: { id: true, key: true, name: true, defaultAgentId: true },
     });
     if (!role) {
       throw new NotFoundException({
@@ -1350,7 +1360,26 @@ export class TeamsService implements OnModuleInit {
       });
     }
     // 规则 2：只给 roleId → 用角色默认 Agent 预填。
-    return { ...input, agentId: role.defaultAgentId, roleId };
+    return {
+      ...input,
+      agentId: role.defaultAgentId,
+      roleId,
+      role: { key: role.key, name: role.name },
+    };
+  }
+
+  /** `roleId` → 角色标签（`AgentRole.key` + `name`）；null/未命中 → null（调用方回退 `agent.name`）。 */
+  private async roleBindingOf(
+    roleId: string | null,
+  ): Promise<{ key: string; name: string } | null> {
+    if (!roleId) {
+      return null;
+    }
+    const row = await this.prisma.agentRole.findUnique({
+      where: { id: roleId },
+      select: { key: true, name: true },
+    });
+    return row ? { key: row.key, name: row.name } : null;
   }
 
   private async nextSeqForUpdate(
@@ -1380,16 +1409,24 @@ export class TeamsService implements OnModuleInit {
     return (max ?? 0) + 1;
   }
 
+  /**
+   * 实例默认别名：`<角色中文名>-<seq>`（FR-08 别名默认规则）。
+   *
+   * 标签来源（agent-role-decommission todo 5）：`TeamMember.roleId → AgentRole.name`；
+   * 未绑角色/关联缺失 → 回退 `agent.name`（**绝不产出空标签**）。与迁移前
+   * `ROLE_LABELS[agent.role] ?? agent.name` 对 seed 数据逐字节一致（内置行
+   * `AgentRole.key === 旧 agents.role`，`name` 即原映射值）。
+   */
   private defaultAlias(
-    agent: { name: string; role: string | null },
+    agent: { name: string },
     seq: number,
+    role?: { key: string; name: string } | null,
   ): string {
-    const roleLabel = ROLE_LABELS[agent.role ?? ''] ?? agent.name;
-    return `${roleLabel}-${seq}`;
+    return `${roleLabelOf({ role }, agent.name)}-${seq}`;
   }
 
   private defaultWorkDir(
-    agent: { name: string; role: string | null; id?: string },
+    agent: { name: string; id?: string },
     seq: number,
   ): string {
     const base = sanitizeWorkDirName(agent.name ?? agent.id ?? 'agent');
@@ -1412,7 +1449,14 @@ export class TeamsService implements OnModuleInit {
       // 渲染/高亮当前选择；缺此字段会导致「切换后回显丢失」。
       opencodeAgentName: m.opencodeAgentName,
       agent: m.agent
-        ? { id: m.agent.id, name: m.agent.name, role: m.agent.role }
+        ? {
+            id: m.agent.id,
+            name: m.agent.name,
+            // D1（agent-role-decommission todo 5）：字段名保留 `role`，值改为成员绑定角色
+            // 的机器键 `AgentRole.key`（web 以 `ROLE_KEYS.includes(role)`/`toAvatarRole` 消费，
+            // 必须是 key 而非展示名 `AgentRole.name`，否则头像配色掉兜底）。未绑角色 → null。
+            role: roleKeyOf(m),
+          }
         : undefined,
       createdAt: m.createdAt,
     }));

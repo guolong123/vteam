@@ -85,3 +85,22 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **The plan's line numbers were stale again** (`create :190`, `clone :241`,
   `resolveTemplateSource :753`, web picker `<select> :2448`) — all confirmed by grep at
   edit time, and they had shifted once more by the time of the edits.
+
+## todo 5 — findings / gotchas
+
+- **`chat_channels.agent_id` is vestigial.** `toChannelDto` rendered `agent.role` from the
+  channel's Agent relation, but a live DB check showed 14/14 agent-bound channels all also have
+  `team_member_id` set (0 rows agent-bound without a member). The role value therefore comes
+  from `row.teamMember.role` (→ `AgentRole.key`), which is the semantically correct source and
+  byte-identical for every existing row. Old channels with a member but no `roleId` now render
+  `role: null` instead of the old agent label — flagged as a residual (no such rows exist today).
+- **Spec fixtures silently faked the new shape.** Mock rows returning
+  `agent: {role:'developer'}` passed nothing to the new code → `role` came back null and 8 tests
+  failed. Every teamMember fixture in the 5 touched specs now carries `role:{key,name}` (and
+  `agent` only `{id,name}`). The old `agent.role` in fixtures is gone; leaving it is now a lie.
+- **`prisma.agentRole.findUnique` in `addMember` with an explicit `agentId` is intentional.**
+  The old test asserted `not.toHaveBeenCalled()`; the new behaviour reads the role row for the
+  alias label only (does NOT resolve `defaultAgentId`), so the assertion became a `toHaveBeenCalledWith({key,name})`.
+- **D3 compat arg is inert but must stay value-identical.** `resolveByAgent({role})` is ignored by
+  todo 3's resolver; passing `AgentRole.key` (not `agent.role`) keeps todo 3's
+  `toHaveBeenCalledWith({policyId, role, agentKey})` assertions green. Removal is todo 8's.

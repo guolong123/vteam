@@ -1241,14 +1241,16 @@ describe('PlatformMcpService', () => {
           alias: '产品经理-1',
           seq: 1,
           agentId: 'ag_1',
-          agent: { id: 'ag_1', name: '产品', role: 'product' },
+          agent: { id: 'ag_1', name: '产品' },
+          role: { key: 'product', name: '产品经理' },
         },
         {
           id: 'tmm_2',
           alias: '架构师-1',
           seq: 1,
           agentId: 'ag_2',
-          agent: { id: 'ag_2', name: '架构', role: 'architect' },
+          agent: { id: 'ag_2', name: '架构' },
+          role: { key: 'architect', name: '架构师' },
         },
       ]);
 
@@ -4526,14 +4528,16 @@ describe('PlatformMcpService', () => {
             agentId: 'a_pm',
             alias: '项目经理-1',
             seq: 1,
-            agent: { role: 'project_manager' },
+            agent: { name: '项目经理' },
+            role: { key: 'project_manager', name: '项目经理' },
           },
           {
             id: 'tmm_dev',
             agentId: 'a_dev',
             alias: '开发者-1',
             seq: 1,
-            agent: { role: 'developer' },
+            agent: { name: '开发者' },
+            role: { key: 'developer', name: '开发者' },
           },
         ]);
         prisma.session.findMany.mockResolvedValue([
@@ -4631,11 +4635,11 @@ describe('PlatformMcpService', () => {
         agent: {
           id: senderAgentId,
           name: '开发者',
-          role: 'developer',
           prompt: longPrompt,
           defaultModelId: 'm_1',
           policyId: 'ep_developer',
         },
+        role: { key: 'developer', name: '开发者' },
         ...overrides,
       });
 
@@ -4747,7 +4751,7 @@ describe('PlatformMcpService', () => {
         expect(out).not.toHaveProperty('deprecated');
       });
 
-      it('role 为空 → agentName 回退 vteam-plan', async () => {
+      it('成员未绑角色 → role/agentName 回退（role null + vteam-plan）', async () => {
         allowWorker();
         allowPolicy();
         prisma.teamMember.findFirst.mockResolvedValue(
@@ -4755,11 +4759,11 @@ describe('PlatformMcpService', () => {
             agent: {
               id: senderAgentId,
               name: '未命名',
-              role: null,
               prompt: 'p',
               defaultModelId: null,
               policyId: null,
             },
+            role: null,
           }),
         );
 
@@ -4773,6 +4777,7 @@ describe('PlatformMcpService', () => {
           role: null,
           agentKey: null,
         });
+        expect(out.role).toBeNull();
         expect(out.agentName).toBe('vteam-plan');
       });
 
@@ -4784,12 +4789,12 @@ describe('PlatformMcpService', () => {
             agent: {
               id: senderAgentId,
               name: '数据分析师',
-              role: null,
               agentKey: 'data-analyst',
               prompt: 'p',
               defaultModelId: null,
               policyId: 'ep_0000000009',
             },
+            role: null,
           }),
         );
 

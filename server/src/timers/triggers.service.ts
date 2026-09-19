@@ -13,6 +13,7 @@ import {
   type TriggerSource,
 } from '../common/constants/trigger.constants';
 import { PrismaService } from '../prisma/prisma.service';
+import { roleKeyOf } from '../common/agent-role-label';
 import { TRIGGER_STATUS } from './trigger.service';
 import { QueryTriggersDto } from './dto/query-triggers.dto';
 
@@ -392,9 +393,12 @@ export class TriggersService {
       // 解析出的成员 id 合并进 memberIds 后再走 members 批量，ctx 保持扁平形状
       const sessions = await this.inIds<{
         id: string;
-        teamMember:
-          | { id: string; alias: string | null; agent: { name: string; role: string | null } | null }
-          | null;
+        teamMember: {
+          id: string;
+          alias: string | null;
+          agent: { name: string } | null;
+          role: { key: string; name: string } | null;
+        } | null;
       }>(
         'session',
         {
@@ -403,7 +407,8 @@ export class TriggersService {
             select: {
               id: true,
               alias: true,
-              agent: { select: { name: true, role: true } },
+              agent: { select: { name: true } },
+              role: { select: { key: true, name: true } },
             },
           },
         },
@@ -417,7 +422,21 @@ export class TriggersService {
           this.inIds<{ id: string; name: string }>('team', { id: true, name: true }, teamIds),
           this.inIds<{ id: string; type: string; team: { id: string; name: string } | null }>('chatChannel', { id: true, type: true, team: { select: { id: true, name: true } } }, channelIds),
           this.inIds<{ id: string; title: string; team: { id: string; name: string } | null }>('task', { id: true, title: true, team: { select: { id: true, name: true } } }, taskIds),
-          this.inIds<{ id: string; alias: string | null; agent: { name: string; role: string | null } | null }>('teamMember', { id: true, alias: true, agent: { select: { name: true, role: true } } }, memberIds),
+          this.inIds<{
+            id: string;
+            alias: string | null;
+            agent: { name: string } | null;
+            role: { key: string; name: string } | null;
+          }>(
+            'teamMember',
+            {
+              id: true,
+              alias: true,
+              agent: { select: { name: true } },
+              role: { select: { key: true, name: true } },
+            },
+            memberIds,
+          ),
           this.inIds<{ id: string; wakeText: string }>('hook', { id: true, wakeText: true }, hookIds),
           this.inIds<{ id: string; summary: string }>('messageReceipt', { id: true, summary: true }, receiptIds),
           this.inIds<{ id: string; title: string }>('issue', { id: true, title: true }, issueIds),
@@ -439,7 +458,8 @@ export class TriggersService {
         members: byId<{
           id: string;
           alias: string | null;
-          agent: { name: string; role: string | null } | null;
+          agent: { name: string } | null;
+          role: { key: string; name: string } | null;
         }>(members),
         sessions: byId<{ id: string; teamMemberId: string | null }>(
           sessions.map((s) => ({
@@ -515,7 +535,15 @@ export class TriggersService {
       teams: Map<string, { id: string; name: string }>;
       channels: Map<string, { id: string; type: string; team: { id: string; name: string } | null }>;
       tasks: Map<string, { id: string; title: string; team: { id: string; name: string } | null }>;
-      members: Map<string, { id: string; alias: string | null; agent: { name: string; role: string | null } | null }>;
+      members: Map<
+        string,
+        {
+          id: string;
+          alias: string | null;
+          agent: { name: string } | null;
+          role: { key: string; name: string } | null;
+        }
+      >;
       sessions: Map<string, { id: string; teamMemberId: string | null }>;
       hooks: Map<string, { id: string; wakeText: string }>;
       receipts: Map<string, { id: string; summary: string }>;
@@ -586,7 +614,9 @@ export class TriggersService {
       const m = ctx.members.get(ownerId);
       if (m) {
         const alias = m.alias ?? m.agent?.name ?? ownerId;
-        const role = m.agent?.role ?? m.agent?.name;
+        // 角色来源（agent-role-decommission todo 5）：成员绑定角色的机器键
+        // `AgentRole.key`；未绑 → 回退 agent.name（与旧 `agent.role ?? agent.name` 同规则）。
+        const role = roleKeyOf(m) ?? m.agent?.name;
         ownerLabel = role && alias !== role ? `${alias}（${role}）` : alias;
       } else {
         ownerLabel = `${ownerId}${DELETED_MARK}`;
@@ -615,7 +645,15 @@ export class TriggersService {
       hooks: Map<string, { id: string; wakeText: string }>;
       receipts: Map<string, { id: string; summary: string }>;
       issues: Map<string, { id: string; title: string }>;
-      members: Map<string, { id: string; alias: string | null; agent: { name: string; role: string | null } | null }>;
+      members: Map<
+        string,
+        {
+          id: string;
+          alias: string | null;
+          agent: { name: string } | null;
+          role: { key: string; name: string } | null;
+        }
+      >;
       sessions: Map<string, { id: string; teamMemberId: string | null }>;
     },
     task: { id: string; title: string } | null,

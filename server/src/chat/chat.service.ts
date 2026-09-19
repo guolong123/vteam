@@ -16,6 +16,7 @@ import {
 } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
+import { roleKeyOf } from '../common/agent-role-label';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
@@ -77,8 +78,10 @@ type ChannelRow = {
     agentId: string;
     alias: string | null;
     seq: number;
+    /** 成员绑定角色（`TeamMember.roleId → AgentRole`）；未绑 → null。 */
+    role?: { key: string; name: string } | null;
   } | null;
-  agent?: { id: string; name: string; role: string | null } | null;
+  agent?: { id: string; name: string } | null;
 };
 
 /** 消息行（messages 表；content/mentions 为 Json 列，附件三字段可空）。 */
@@ -116,8 +119,16 @@ const CHANNEL_TASK_SELECT = {
     },
   },
   team: { select: { id: true, name: true } },
-  teamMember: { select: { id: true, agentId: true, alias: true, seq: true } },
-  agent: { select: { id: true, name: true, role: true } },
+  teamMember: {
+    select: {
+      id: true,
+      agentId: true,
+      alias: true,
+      seq: true,
+      role: { select: { key: true, name: true } },
+    },
+  },
+  agent: { select: { id: true, name: true } },
 } as const;
 
 /**
@@ -316,12 +327,13 @@ export class ChatService {
         where: { teamId: channel.teamId },
         select: {
           agentId: true,
-          agent: { select: { id: true, name: true, role: true } },
+          agent: { select: { id: true, name: true } },
+          role: { select: { key: true, name: true } },
         },
       });
       return {
         ...this.toChannelDto(channel),
-        agentMembers: teamRows.map((r: any) => r.agent),
+        agentMembers: teamRows.map((r: any) => this.toChannelAgentDto(r)),
       };
     }
     // 存量任务频道（无 teamId）：经任务归属团队解析成员；无归属 → 空成员（任务实例快照表已删除）。
@@ -340,12 +352,13 @@ export class ChatService {
       where: { teamId: ownerTeamId },
       select: {
         agentId: true,
-        agent: { select: { id: true, name: true, role: true } },
+        agent: { select: { id: true, name: true } },
+        role: { select: { key: true, name: true } },
       },
     });
     return {
       ...this.toChannelDto(channel),
-      agentMembers: ownerRows.map((r: any) => r.agent),
+      agentMembers: ownerRows.map((r: any) => this.toChannelAgentDto(r)),
     };
   }
 
@@ -1876,11 +1889,28 @@ export class ChatService {
       team: (row as any).team
         ? { id: (row as any).team.id, name: (row as any).team.name }
         : undefined,
+      // D1（agent-role-decommission todo 5）：`role` 字段名保留，值为频道成员绑定角色的
+      // 机器键 `AgentRole.key`；频道无成员绑定（存量 task_group/无 teamMember 的频道）→ null。
       agent: row.agent
-        ? { id: row.agent.id, name: row.agent.name, role: row.agent.role }
+        ? {
+            id: row.agent.id,
+            name: row.agent.name,
+            role: roleKeyOf((row as any).teamMember),
+          }
         : undefined,
       createdAt: row.createdAt.toISOString(),
     };
+  }
+
+  /** agentMembers 元素：`{id,name,role}`，`role` = 绑定角色的机器键（`AgentRole.key`）。 */
+  private toChannelAgentDto(member: {
+    agent: { id: string; name: string } | null;
+    role?: { key: string; name: string } | null;
+  }) {
+    if (!member.agent) {
+      return null;
+    }
+    return { ...member.agent, role: roleKeyOf(member) };
   }
 
   /** 消息 DTO（09 篇 §2.4）：content/mentions 透传 Json；createdAt ISO8601；附件三字段透出（可空）。 */

@@ -315,6 +315,92 @@ describe('TeamsService', () => {
       expect(result.members[0].alias).toBe('产品经理-1');
     });
 
+    it('种子成员别名逐字节不变：roleId → AgentRole.name 与迁移前 ROLE_LABELS 同值（7 内置角色全断言）', async () => {
+      // 迁移前的标签映射快照（旧 `ROLE_LABELS`，todo 1 证据 §3）；种子成员的别名不得改变。
+      const PRE_MIGRATION_ROLE_LABELS: Record<string, string> = {
+        product: '产品经理',
+        project_manager: '项目经理',
+        architect: '架构师',
+        developer: '开发者',
+        tester: '测试',
+        plan: '计划员',
+        librarian: '知识管理员',
+      };
+      const seeded: Array<{ agentId: string; roleId: string; key: string }> = [
+        { agentId: 'a_product', roleId: 'ar_product', key: 'product' },
+        { agentId: 'a_project_manager', roleId: 'ar_project_manager', key: 'project_manager' },
+        { agentId: 'a_architect', roleId: 'ar_architect', key: 'architect' },
+        { agentId: 'a_developer', roleId: 'ar_developer', key: 'developer' },
+        { agentId: 'a_tester', roleId: 'ar_tester', key: 'tester' },
+        { agentId: 'a_plan', roleId: 'ar_plan', key: 'plan' },
+        { agentId: 'a_librarian', roleId: 'ar_librarian', key: 'librarian' },
+      ];
+      for (const [i, s] of seeded.entries()) {
+        prisma.team.findUnique.mockResolvedValue(null);
+        prisma.agentRole.findUnique.mockResolvedValueOnce({
+          key: s.key,
+          name: PRE_MIGRATION_ROLE_LABELS[s.key],
+          defaultAgentId: s.agentId,
+        });
+        idGen.nextId
+          .mockResolvedValueOnce('tm_0000000001')
+          .mockResolvedValueOnce(`tmm_${i}`);
+        const tx = mockCreateTx(teamRow());
+        prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+        prisma.team.findUnique
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(teamRow({ members: [teamMemberRow()] }));
+        await service.create(userId, {
+          name: `seeded-${s.key}`,
+          members: [{ agentId: s.agentId, roleId: s.roleId }],
+        } as any);
+        expect(tx.teamMember.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({
+              alias: `${PRE_MIGRATION_ROLE_LABELS[s.key]}-1`,
+            }),
+          }),
+        );
+      }
+    });
+
+    it('角色映射缺失 → 回退 agent.name 的文档化兜底（空标签禁止，不抛错）', async () => {
+      prisma.team.findUnique.mockResolvedValue(null);
+      // roleId 指向不存在的角色行 → roleBindingOf 返回 null。
+      prisma.agentRole.findUnique.mockResolvedValue(null);
+      idGen.nextId
+        .mockResolvedValueOnce('tm_0000000001')
+        .mockResolvedValueOnce('tmm_0000000001');
+      const tx = mockCreateTx(teamRow());
+      tx.agent.findUnique.mockResolvedValue({
+        id: 'a_custom',
+        name: '数据分析师',
+      });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.team.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(teamRow({ members: [teamMemberRow()] }));
+
+      await service.create(userId, {
+        name: 'missing-role',
+        members: [{ agentId: 'a_custom', roleId: 'ar_missing' }],
+      } as any);
+
+      expect(tx.teamMember.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            alias: '数据分析师-1',
+            roleId: 'ar_missing',
+          }),
+        }),
+      );
+      const createdAlias = (
+        tx.teamMember.create.mock.calls[0][0].data as { alias: string }
+      ).alias;
+      expect(createdAlias).not.toBe('-1');
+      expect(createdAlias.startsWith('-')).toBe(false);
+    });
+
     it('同 agent 多实例两行：两次 FOR UPDATE seq 1/2', async () => {
       prisma.team.findUnique.mockResolvedValue(null);
       idGen.nextId
@@ -826,12 +912,13 @@ describe('TeamsService', () => {
       prisma.team.findUnique.mockResolvedValue(teamRow());
       prisma.agentRole.findUnique.mockResolvedValue({
         id: 'ar_developer',
+        key: 'developer',
+        name: '开发者',
         defaultAgentId: 'a_developer',
       });
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_developer',
         name: '开发者',
-        role: 'developer',
       });
       idGen.nextId.mockResolvedValue('tmm_0000000003');
       const tx: any = {
@@ -855,17 +942,19 @@ describe('TeamsService', () => {
 
       expect(prisma.agentRole.findUnique).toHaveBeenCalledWith({
         where: { id: 'ar_developer' },
-        select: { id: true, defaultAgentId: true },
+        select: { id: true, key: true, name: true, defaultAgentId: true },
       });
       expect(prisma.agent.findUnique).toHaveBeenCalledWith({
         where: { id: 'a_developer' },
-        select: { id: true, name: true, role: true },
+        select: { id: true, name: true },
       });
       expect(tx.teamMember.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
             agentId: 'a_developer',
             roleId: 'ar_developer',
+            // D2：别名标签取自绑定角色的 `AgentRole.name`（与旧 ROLE_LABELS 同值）。
+            alias: '开发者-1',
           }),
         }),
       );
@@ -875,12 +964,13 @@ describe('TeamsService', () => {
       prisma.team.findUnique.mockResolvedValue(teamRow());
       prisma.agentRole.findUnique.mockResolvedValue({
         id: 'ar_developer',
+        key: 'developer',
+        name: '开发者',
         defaultAgentId: 'a_developer',
       });
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_tester',
         name: '测试',
-        role: 'tester',
       });
       idGen.nextId.mockResolvedValue('tmm_0000000004');
       const tx: any = {
@@ -903,8 +993,11 @@ describe('TeamsService', () => {
         roleId: 'ar_developer',
       } as any);
 
-      // 显式 agentId 优先：不解析角色默认值
-      expect(prisma.agentRole.findUnique).not.toHaveBeenCalled();
+      // 显式 agentId 优先：角色行仅作别名标签读取（key/name），不解析 defaultAgentId。
+      expect(prisma.agentRole.findUnique).toHaveBeenCalledWith({
+        where: { id: 'ar_developer' },
+        select: { key: true, name: true },
+      });
       expect(tx.teamMember.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({

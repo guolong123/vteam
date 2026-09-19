@@ -69,7 +69,11 @@ describe('TasksService', () => {
 
   const userId = 'u_admin';
 
-  /** 团队成员行（team_members + 模板 agent 关联，任务侧实例快照已删除，统一用 tmm_ 行）。 */
+  /**
+   * 团队成员行（team_members + 模板 agent 关联，任务侧实例快照已删除，统一用 tmm_ 行）。
+   * 角色标签来源（todo 5）：`roleId → AgentRole` 关联（`role: {key,name}`），
+   * `agent` 只带 id/name；未绑角色的夹具用 `role: null`。
+   */
   const memberRow = (
     agentId: string,
     overrides: Record<string, unknown> = {},
@@ -80,21 +84,24 @@ describe('TasksService', () => {
         agentId: 'a_product',
         alias: '产品经理-1',
         seq: 1,
-        agent: { id: 'a_product', name: '产品经理', role: 'product' },
+        agent: { id: 'a_product', name: '产品经理' },
+        role: { key: 'product', name: '产品经理' },
       },
       a_developer: {
         id: 'tmm_0000000002',
         agentId: 'a_developer',
         alias: '开发者-1',
         seq: 1,
-        agent: { id: 'a_developer', name: '开发者', role: 'developer' },
+        agent: { id: 'a_developer', name: '开发者' },
+        role: { key: 'developer', name: '开发者' },
       },
       a_tester: {
         id: 'tmm_0000000003',
         agentId: 'a_tester',
         alias: '测试-1',
         seq: 1,
-        agent: { id: 'a_tester', name: '测试', role: 'tester' },
+        agent: { id: 'a_tester', name: '测试' },
+        role: { key: 'tester', name: '测试' },
       },
     };
     return {
@@ -103,7 +110,8 @@ describe('TasksService', () => {
         agentId,
         alias: null,
         seq: 1,
-        agent: { id: agentId, name: agentId, role: null },
+        agent: { id: agentId, name: agentId },
+        role: null,
       }),
       ...overrides,
     };
@@ -137,21 +145,29 @@ describe('TasksService', () => {
     agentId: string,
     overrides: Record<string, unknown> = {},
   ) => {
-    const base: Record<string, { alias: string; name: string; role: string }> =
-      {
-        a_product: {
-          alias: '产品经理-1',
-          name: '产品经理',
-          role: 'product',
-        },
-        a_developer: {
-          alias: '开发者-1',
-          name: '开发者',
-          role: 'developer',
-        },
-        a_tester: { alias: '测试-1', name: '测试', role: 'tester' },
-      };
-    const b = base[agentId] ?? { alias: agentId, name: agentId, role: agentId };
+    const base: Record<
+      string,
+      { alias: string; name: string; role: { key: string; name: string } | null }
+    > = {
+      a_product: {
+        alias: '产品经理-1',
+        name: '产品经理',
+        role: { key: 'product', name: '产品经理' },
+      },
+      a_developer: {
+        alias: '开发者-1',
+        name: '开发者',
+        role: { key: 'developer', name: '开发者' },
+      },
+      a_tester: {
+        alias: '测试-1',
+        name: '测试',
+        role: { key: 'tester', name: '测试' },
+      },
+    };
+    const b =
+      base[agentId] ??
+      { alias: agentId, name: agentId, role: { key: agentId, name: agentId } };
     return {
       id,
       teamId: 'tm_0000000001',
@@ -159,7 +175,8 @@ describe('TasksService', () => {
       alias: b.alias,
       seq: 1,
       workDir: `/data/vteam-worker/${b.name}`,
-      agent: { id: agentId, name: b.name, role: b.role },
+      agent: { id: agentId, name: b.name },
+      role: b.role,
       ...overrides,
     };
   };
@@ -1046,6 +1063,43 @@ describe('TasksService', () => {
         orderBy: { createdAt: 'desc' },
         skip: 0,
         take: 20,
+      });
+    });
+
+    it('任务侧标签同源：种子成员别名取自 AgentRole.name（迁移前后逐字节），缺映射回退 agent.name', async () => {
+      prisma.$transaction.mockResolvedValue([
+        1,
+        [row({ legacySnapshots: [memberRow('a_product')] })],
+      ]);
+      // 迁移前的标签映射快照（旧 tasks `ROLE_LABELS`）；种子成员别名不得改变。
+      const PRE_MIGRATION_LABEL = '产品经理';
+      prisma.teamMember.findMany.mockResolvedValue([
+        tmmRow('tmm_0000000001', 'a_product', {
+          alias: null,
+          role: { key: 'product', name: PRE_MIGRATION_LABEL },
+        }),
+        tmmRow('tmm_0000000009', 'a_unbound', {
+          alias: null,
+          role: null,
+          agent: { id: 'a_unbound', name: '无所属' },
+        }),
+      ]);
+
+      const result = await service.findAll({ page: 1, pageSize: 20 });
+
+      const byId = new Map(
+        (result.items[0].instances as Array<{ id: string; alias: string; role: string | null }>).map(
+          (i) => [i.id, i],
+        ),
+      );
+      expect(byId.get('tmm_0000000001')).toMatchObject({
+        alias: `${PRE_MIGRATION_LABEL}-1`,
+        role: 'product',
+      });
+      // 缺映射（role 关联 null）→ 回退 agent.name，绝不产出空标签。
+      expect(byId.get('tmm_0000000009')).toMatchObject({
+        alias: '无所属-1',
+        role: null,
       });
     });
 

@@ -24,6 +24,7 @@ import {
 } from '../common/constants/task.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
+import { roleKeyOf, roleLabelOf } from '../common/agent-role-label';
 import { resyncIdPrefix } from '../common/id-resync';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -49,15 +50,6 @@ const ID_PREFIX = {
   teamQueue: 'tq',
 } as const;
 
-/** 角色中文名映射（seed 模板 agent.role → 中文名；未知角色回退 agent.name，FR-08 别名默认规则）。 */
-const ROLE_LABELS: Record<string, string> = {
-  product: '产品经理',
-  project_manager: '项目经理',
-  architect: '架构师',
-  developer: '开发者',
-  tester: '测试',
-} as const;
-
 /** 团队成员视图（team_members 行 + 模板 agent 关联，instances 唯一派生源）。 */
 type TeamMemberView = {
   id: string;
@@ -68,7 +60,9 @@ type TeamMemberView = {
   overrideModelId?: string | null;
   /** opencode 原生 agent 选择（null = 用 opencode 默认 agent）。 */
   opencodeAgentName?: string | null;
-  agent: { id: string; name: string; role: string | null };
+  agent: { id: string; name: string };
+  /** 成员绑定角色（`TeamMember.roleId → AgentRole`）；未绑 → null，标签回退 agent.name。 */
+  role?: { key: string; name: string } | null;
 };
 
 /** 任务行（实例派生源为归属团队的团队成员）。 */
@@ -354,7 +348,8 @@ export class TasksService implements OnModuleInit {
           const members: any[] = await tx.teamMember.findMany({
             where: { teamId },
             include: {
-              agent: { select: { id: true, name: true, role: true } },
+              agent: { select: { id: true, name: true } },
+              role: { select: { key: true, name: true } },
             },
           });
           if (!members || members.length === 0) {
@@ -806,7 +801,10 @@ export class TasksService implements OnModuleInit {
     const members: any[] =
       (await (this.prisma as any).teamMember.findMany({
         where: { teamId },
-        include: { agent: { select: { id: true, name: true, role: true } } },
+        include: {
+          agent: { select: { id: true, name: true } },
+          role: { select: { key: true, name: true } },
+        },
       })) ?? [];
 
     const addInstances = dto.addInstances ?? [];
@@ -1536,7 +1534,7 @@ export class TasksService implements OnModuleInit {
       ) {
         const mainMember = await (this.prisma as any).teamMember.findUnique({
           where: { id: privMainId },
-          include: { agent: { select: { id: true, name: true, role: true } } },
+          include: { agent: { select: { id: true, name: true } } },
         });
         mainAgentName =
           (mainMember as any)?.alias ??
@@ -1736,7 +1734,8 @@ export class TasksService implements OnModuleInit {
         ((await (this.prisma as any).teamMember.findMany({
           where: { teamId },
           include: {
-            agent: { select: { id: true, name: true, role: true } },
+            agent: { select: { id: true, name: true } },
+            role: { select: { key: true, name: true } },
           },
         })) as TeamMemberView[] | null) ?? [];
       if (members.length > 0) {
@@ -1762,11 +1761,13 @@ export class TasksService implements OnModuleInit {
         return {
           id: m.id,
           agentId: m.agentId,
-          alias: m.alias ?? this.defaultAlias(m.agent, m.seq),
+          alias: m.alias ?? this.defaultAlias(m.agent, m.seq, m.role),
           seq: m.seq,
           workDir: m.workDir ?? this.defaultAgentWorkDir(m.agent, m.seq),
           name: m.agent.name,
-          role: m.agent.role,
+          // D1（agent-role-decommission todo 5）：字段名保留 `role`，值为绑定角色的机器键
+          // `AgentRole.key`（web `ROLE_KEYS.includes`/`toRole` 消费；`AgentRole.name` 只用于别名）。
+          role: roleKeyOf(m),
           main: m.id === mainMemberId,
           enabled: true,
           overrideModelId: m.overrideModelId ?? null,
@@ -1807,13 +1808,18 @@ export class TasksService implements OnModuleInit {
     };
   }
 
-  /** 实例默认别名：`<角色中文名>-<seq>`；未知角色用 agent.name（FR-08 别名默认规则）。 */
+  /**
+   * 实例默认别名：`<角色中文名>-<seq>`（FR-08 别名默认规则）。
+   *
+   * 标签来源（agent-role-decommission todo 5）：`TeamMember.roleId → AgentRole.name`；
+   * 未绑角色/关联缺失 → 回退 `agent.name`（**绝不产出空标签**，验收的 failure 场景）。
+   */
   private defaultAlias(
-    agent: { name: string; role: string | null },
+    agent: { name: string },
     seq: number,
+    role?: { key: string; name: string } | null,
   ): string {
-    const roleLabel = ROLE_LABELS[agent.role ?? ''] ?? agent.name;
-    return `${roleLabel}-${seq}`;
+    return `${roleLabelOf({ role }, agent.name)}-${seq}`;
   }
 
   /**
@@ -1822,7 +1828,7 @@ export class TasksService implements OnModuleInit {
    * 避免路径穿越/非法字符导致目录不可用；同 agent 同任务多实例追加 `-<seq>` 防共享串数据。
    */
   private defaultAgentWorkDir(
-    agent: { name: string; role: string | null; id?: string },
+    agent: { name: string; id?: string },
     seq: number,
   ): string {
     const base = sanitizeWorkDirName(agent.name ?? agent.id ?? 'agent');
@@ -1845,7 +1851,7 @@ export class TasksService implements OnModuleInit {
     for (const item of agents) {
       const agent = await tx.agent.findUnique({
         where: { id: item.agentId },
-        select: { id: true, name: true, role: true },
+        select: { id: true, name: true },
       });
       if (!agent) {
         throw new NotFoundException({
@@ -1853,12 +1859,19 @@ export class TasksService implements OnModuleInit {
           message: `Agent ${item.agentId} 不存在`,
         });
       }
+      const roleBinding = item.roleId?.trim()
+        ? await tx.agentRole.findUnique({
+            where: { id: item.roleId.trim() },
+            select: { key: true, name: true },
+          })
+        : null;
       const max = await (tx as any).teamMember.aggregate({
         _max: { seq: true },
         where: { teamId, agentId: item.agentId },
       });
       const seq = (max._max.seq ?? 0) + 1;
-      const alias = item.alias?.trim() || this.defaultAlias(agent, seq);
+      const alias =
+        item.alias?.trim() || this.defaultAlias(agent, seq, roleBinding);
       const workDir =
         item.workDir?.trim() || this.defaultAgentWorkDir(agent, seq);
       const member = await (tx as any).teamMember.create({

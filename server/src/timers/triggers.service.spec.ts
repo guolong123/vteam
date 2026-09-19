@@ -383,7 +383,8 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
         {
           id: 'tmm_9',
           alias: '开发者-1',
-          agent: { name: '开发者', role: 'developer' },
+          agent: { name: '开发者' },
+          role: { key: 'developer', name: '开发者' },
         },
       ]);
       prisma.session.findMany.mockResolvedValue([
@@ -392,7 +393,8 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
           teamMember: {
             id: 'tmm_9',
             alias: '开发者-1',
-            agent: { name: '开发者', role: 'developer' },
+            agent: { name: '开发者' },
+            role: { key: 'developer', name: '开发者' },
           },
         },
       ]);
@@ -550,7 +552,8 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
             select: {
               id: true,
               alias: true,
-              agent: { select: { name: true, role: true } },
+              agent: { select: { name: true } },
+              role: { select: { key: true, name: true } },
             },
           },
         },
@@ -625,7 +628,8 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
           teamMember: {
             id: 'tmm_9',
             alias: null,
-            agent: { name: '开发者', role: 'developer' },
+            agent: { name: '开发者' },
+            role: { key: 'developer', name: '开发者' },
           },
         },
       ]);
@@ -633,7 +637,8 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
         {
           id: 'tmm_9',
           alias: null,
-          agent: { name: '开发者', role: 'developer' },
+          agent: { name: '开发者' },
+          role: { key: 'developer', name: '开发者' },
         },
       ]);
       prisma.trigger.count.mockResolvedValue(1);
@@ -680,7 +685,8 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
             select: {
               id: true,
               alias: true,
-              agent: { select: { name: true, role: true } },
+              agent: { select: { name: true } },
+              role: { select: { key: true, name: true } },
             },
           },
         },
