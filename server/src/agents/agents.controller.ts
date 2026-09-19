@@ -156,6 +156,7 @@ export class AgentsController {
   /**
    * opencode 原生 agent 列表（vteam 同步/展示/切换的数据源）。
    * GET /api/v1/agents/opencode?workerId=&directory= → {agents, workerId, degraded}
+   * 每条 entry 附 `governed`：vteam 是否治理该 agent（与 buildAgentPolicies 同源）。
    *
    * ⚠️ 路由声明必须早于 `@Get(':id')`：否则 "opencode" 会被 :id 通配捕获
    * （同一 controller 内路由按声明顺序匹配），导致请求落到 findOne 报 404。
@@ -167,7 +168,8 @@ export class AgentsController {
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.view')
   @ApiOperation({
-    summary: 'opencode 原生 agent 列表（透传 serve GET /agent）',
+    summary:
+      'opencode 原生 agent 列表（透传 serve GET /agent，附 governed 治理标记）',
   })
   listOpencodeAgents(
     @Query('workerId') workerId?: string,

@@ -79,12 +79,23 @@ type FallbackModelsResult = {
 export type AvailableModelsResult = LiveModelsResult | FallbackModelsResult;
 
 /**
+ * 引擎 agent 条目 + vteam 治理标记（additive：不改 `WorkerAgentInfo` 原字段）。
+ *
+ * `governed` 唯一来源 = `ExecutionPolicyService.buildAgentPolicies()` 产出的
+ * agent 名集合（与策略下发同一次调用同源）——**禁止**用
+ * `name.startsWith('vteam-')` 之类的独立推导，否则会漂移：一个名为
+ * `vteam-*` 但 `policyId` 为 null 的 agent 不在策略集合内，应判 `governed:false`。
+ */
+export type OpencodeAgentEntry = WorkerAgentInfo & { governed: boolean };
+
+/**
  * opencode 原生 agent 列表返回（GET /agents/opencode）。
  * degraded=true 表示未能取到真实清单（无在线 worker / worker 离线 / 旧版无端点），
  * agents 为空数组——前端据此提示"暂不可用"而非展示空列表误导用户。
+ * 条目在引擎元数据之上附 `governed`（vteam 是否治理该 agent），wire 形状向后兼容。
  */
 export interface OpencodeAgentsResult {
-  agents: WorkerAgentInfo[];
+  agents: OpencodeAgentEntry[];
   /** 实际取数的 worker id；降级且未选出 worker 时为 null。 */
   workerId: string | null;
   degraded: boolean;
@@ -530,8 +541,12 @@ export class AgentsService implements OnModuleInit {
    * - `directory` 必须与执行期 prompt_async 的 directory 同值：serve 按目录发现
    *   `opencode.json` 的 agent 节（per-directory 隔离，不需要重启 serve）。
    * - workerId 显式传入则用之；缺省经 assignWorker 选一个可用 worker。
-   * - 任一失败（无在线 worker / worker 离线 / 旧版无该端点）→ `{agents: [], degraded: true}`，
-   *   不抛错（列表类端点不阻断页面，对齐 getAvailableModels 的降级哲学）。
+   * - 每个条目附 `governed`：与策略下发**同源**（`buildAgentPolicies().agents` 的名字
+   *   集合），而非独立的 `vteam-` 前缀判断——后者会漂移（`vteam-*` 名但无
+   *   `policyId` 的 agent 不在策略集合内，必须判 false）。
+   * - 任一失败（无在线 worker / worker 离线 / 旧版无该端点 / 策略构建失败）→
+   *   `{agents: [], degraded: true}`，不抛错（列表类端点不阻断页面，对齐
+   *   getAvailableModels 的降级哲学）。
    */
   async listOpencodeAgents(opts: {
     workerId?: string;
@@ -559,7 +574,18 @@ export class AgentsService implements OnModuleInit {
       if (agents.length === 0) {
         return { agents: [], workerId, degraded: true };
       }
-      return { agents, workerId, degraded: false };
+      // 单一事实来源：与策略下发同一个 buildAgentPolicies() 调用派生治理集合，
+      // 保证 /agents/opencode 的 governed 与 /agent-policies 集合永不漂移。
+      const policies = await this.executionPolicyService.buildAgentPolicies();
+      const governedNames = new Set(policies.agents.map((a) => a.name));
+      return {
+        agents: agents.map((agent) => ({
+          ...agent,
+          governed: governedNames.has(agent.name),
+        })),
+        workerId,
+        degraded: false,
+      };
     } catch {
       return { agents: [], workerId: null, degraded: true };
     }

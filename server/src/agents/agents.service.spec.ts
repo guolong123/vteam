@@ -50,7 +50,10 @@ describe('AgentsService', () => {
     worker: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
-  let executionPolicyService: { resolveManyByAgents: jest.Mock };
+  let executionPolicyService: {
+    resolveManyByAgents: jest.Mock;
+    buildAgentPolicies: jest.Mock;
+  };
 
   const templateRows = [
     {
@@ -219,6 +222,20 @@ describe('AgentsService', () => {
             };
           }),
       ),
+      // governed 唯一来源（listOpencodeAgents）：默认仅内置集合，引擎原生命名
+      // （build/plan/prometheus 等）不在集合内 → governed:false；用例可覆盖。
+      buildAgentPolicies: jest.fn(async () => ({
+        agents: [
+          { name: 'vteam-plan', description: '', mode: 'all', permission: {} },
+          {
+            name: 'vteam-product',
+            description: '',
+            mode: 'primary',
+            permission: {},
+          },
+        ],
+        guard: { enabled: true as const, roles: {} },
+      })),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -1168,7 +1185,8 @@ describe('AgentsService', () => {
         undefined,
       );
       expect(result).toEqual({
-        agents,
+        // additive：governed 由 buildAgentPolicies() 同源派生（默认 mock 仅内置集合）
+        agents: agents.map((a) => ({ ...a, governed: false })),
         workerId: 'w_1',
         degraded: false,
       });
@@ -1224,6 +1242,115 @@ describe('AgentsService', () => {
 
       expect(result.degraded).toBe(true);
       expect(result.agents).toEqual([]);
+    });
+
+    it('governed 与同一次 buildAgentPolicies() 调用派生的集合逐条一致（单一事实来源，不可漂移）', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      workerClient.listAgents.mockResolvedValue([
+        { name: 'vteam-plan', mode: 'all', native: false },
+        { name: 'vteam-product', mode: 'primary', native: false },
+        { name: 'vteam-retired', mode: 'primary', native: false },
+        { name: 'build', mode: 'primary', native: true },
+        { name: 'prometheus', mode: 'primary', native: true },
+      ]);
+      const policyFixture = {
+        agents: [
+          { name: 'vteam-plan', description: '', mode: 'all', permission: {} },
+          {
+            name: 'vteam-product',
+            description: '',
+            mode: 'primary',
+            permission: {},
+          },
+        ],
+        guard: { enabled: true as const, roles: {} },
+      };
+      executionPolicyService.buildAgentPolicies.mockResolvedValue(
+        policyFixture,
+      );
+
+      const result = await service.listOpencodeAgents({});
+
+      // 期望值取自实现消费的同一份 buildAgentPolicies() 输出（非独立前缀推导）：
+      // 若实现改用 startsWith('vteam-') 等平行判断，集合外/集合内两向必有一项失败。
+      expect(executionPolicyService.buildAgentPolicies).toHaveBeenCalledTimes(
+        1,
+      );
+      const governedNames = new Set<string>(
+        policyFixture.agents.map((a) => a.name),
+      );
+      for (const entry of result.agents) {
+        expect(entry.governed).toBe(governedNames.has(entry.name));
+      }
+      expect(result.agents.map((a) => [a.name, a.governed])).toEqual([
+        ['vteam-plan', true],
+        ['vteam-product', true],
+        // vteam- 前缀但不在策略集合 → false（前缀推导会在此失败）
+        ['vteam-retired', false],
+        ['build', false],
+        ['prometheus', false],
+      ]);
+      // wire 形状 additive：引擎原字段原样保留
+      expect(result.agents[0]).toMatchObject({ mode: 'all', native: false });
+      expect(result).toMatchObject({ workerId: 'w_1', degraded: false });
+    });
+
+    it('外部名（prometheus）→ governed:false（即使引擎确实返回该 agent）', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      workerClient.listAgents.mockResolvedValue([
+        { name: 'prometheus', mode: 'primary', native: true },
+      ]);
+
+      const result = await service.listOpencodeAgents({});
+
+      expect(result.degraded).toBe(false);
+      expect(result.agents).toHaveLength(1);
+      expect(result.agents[0]).toMatchObject({
+        name: 'prometheus',
+        governed: false,
+      });
+    });
+
+    it('漂移用例：名为 vteam-* 但不在 buildAgentPolicies() 集合内（policyId 为 null）→ governed:false，禁止前缀匹配', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      workerClient.listAgents.mockResolvedValue([
+        { name: 'vteam-ghost', mode: 'primary', native: false },
+        { name: 'vteam-product', mode: 'primary', native: false },
+      ]);
+      executionPolicyService.buildAgentPolicies.mockResolvedValue({
+        agents: [
+          {
+            name: 'vteam-product',
+            description: '',
+            mode: 'primary',
+            permission: {},
+          },
+        ],
+        guard: { enabled: true as const, roles: {} },
+      });
+
+      const result = await service.listOpencodeAgents({});
+
+      const ghost = result.agents.find((a) => a.name === 'vteam-ghost');
+      expect(ghost).toBeDefined();
+      expect(ghost?.governed).toBe(false);
+      expect(
+        result.agents.find((a) => a.name === 'vteam-product')?.governed,
+      ).toBe(true);
+    });
+
+    it('buildAgentPolicies 抛错 → 整体降级 {agents: [], workerId: null, degraded: true}，不抛错', async () => {
+      workersService.assignWorker.mockResolvedValue('w_1');
+      workerClient.listAgents.mockResolvedValue([
+        { name: 'build', mode: 'primary', native: true },
+      ]);
+      executionPolicyService.buildAgentPolicies.mockRejectedValue(
+        new Error('db down'),
+      );
+
+      const result = await service.listOpencodeAgents({});
+
+      expect(result).toEqual({ agents: [], workerId: null, degraded: true });
     });
   });
 
@@ -1709,7 +1836,9 @@ describe('AgentsService', () => {
         where: { id: 'ep_developer' },
       });
       const policyData = prisma.executionPolicy.create.mock.calls[0][0].data;
-      expect(policyData.config.permission).toEqual(epDeveloperConfig.permission);
+      expect(policyData.config.permission).toEqual(
+        epDeveloperConfig.permission,
+      );
       expect(policyData.config.tools).toEqual(epDeveloperConfig.tools);
       expect(policyData.config.tools).toEqual(
         ROLE_BOUNDARIES['vteam-developer'].toolAllows,
