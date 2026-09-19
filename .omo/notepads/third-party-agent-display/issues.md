@@ -107,3 +107,21 @@ SAFE surfaces: `/teams/[id]` team detail page (`web/app/(main)/teams/[id]/page.t
      选择器仍 enabled（可编辑已保存值）。query 未设 retry:false → 默认退避重试后才进 error 态，
      故该断言超时放宽到 25s（实测约 5.7s 完成整个三阶段测试）。
   route 处理器包 try/catch：页面导航可能先中止请求，`route.continue()` 因此抛错——不是测试失败。
+
+## todo 5 — notes/observations
+
+- **`opencode agent list` truncates non-deterministically.** Observed on the live stack 2026-09-19:
+  5 runs → 24/24/21/16/24 entries (16-run lost every `vteam-*` name; 21-run lost 3). A second batch gave
+  23/19/24/24. Root cause not investigated (CLI output includes per-agent permission JSON; the parser
+  likely gives up on some run timing). Consequence: NEVER use this CLI as an assertion source for the
+  agent set — use serve `GET /agent` (direct HTTP) or the injected `opencode.json` keys instead.
+- **NC false-pass trap (fixed):** the first negative-control run exited 1 because `check.py` got the
+  display string where the externals-file path was expected (`FileNotFoundError`), which the script's
+  `rc != 0` assertion read as "leak detected". Fixed by correcting the arg order AND asserting the
+  detection reason (`result: LEAK` + `[LEAK]` slot line). If a future edit reorders those args, the
+  strengthened assertions fail loudly instead of silently passing.
+- `worker/src` has no per-task `opencode.json`/`roles.json`; only the work-root pair exists. The
+  `.vteam-role-guard/sessions/` mapping currently holds 1 entry (`vteam-tester`) — checked, no external.
+- No state was mutated by this proof: no reload-config, no restart, no compose recreate. Artifacts were
+  already fresh relative to worker start (worker StartedAt 2026-09-19T10:08:48Z; roles.json 10:08:49Z,
+  opencode.json 10:09:15Z). Live artifact shas re-verified byte-identical before/after the run.

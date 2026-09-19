@@ -1,0 +1,88 @@
+[e2e] date=2026-09-19T11:25:59Z HEAD=a7592a3b9c3bc25282d95a98dc499ff6ba4bb085
+[e2e] SERVER_URL=http://localhost:13000 WEB_URL=http://localhost:13001 WORKER_CONTAINER=aiagents-compose-worker EVIDENCE=/Users/mac/01work/git-project/vteam/.omo/evidence/third-party-agent-display/task-5-live.txt
+[e2e] stack healthy (server + web + worker container)
+[e2e] login OK (admin)
+[e2e] [A0] independent source (primary): opencode serve direct HTTP from INSIDE the worker container
+[e2e] [A0]   command: docker exec aiagents-compose-worker sh -c "curl -sS http://127.0.0.1:4000/agent?directory=/data/vteam-worker"
+[e2e] [A0]   why independent: container -> serve with NO vteam code in between; the endpoint path is server -> worker exec endpoint -> serve, so equality is a cross-path check, not self-grading
+[e2e] [A0]   servePort=4000 (source: ps aux | grep '[o]pencode serve'), workDir=/data/vteam-worker (worker env WORK_DIR)
+[e2e] [A0] independent source (secondary): injected opencode.json 'agent' keys (the file opencode itself consumes)
+[e2e] [A0] source REJECTED: 'opencode agent list' CLI — non-deterministic truncation observed 2026-09-19 on the SAME live stack (24/24/21/16/24 entries across 5 runs; 21-run missed vteam-product,vteam-project_manager,vteam-tester; 16-run missed all 8 vteam-* names). Not used as an assertion source (D1).
+[e2e] [A0] worker container StartedAt=2026-09-19T10:08:48.608855924Z workerId=w_compose_worker
+=== A. independent engine source & set comparison ===
+[A1] GET /api/v1/agents/opencode: workerId=w_compose_worker degraded=False count=24
+[A2] serve direct GET /agent?directory=/data/vteam-worker (port 4000): count=24
+[set] (a) governed     endpoint governed:true  == serve vteam-*          : n=8 extras=[] omissions=[]
+[set] (b) external     endpoint governed:false == serve non-vteam-*      : n=16 extras=[] omissions=[]
+[set] (c) visible-ext  endpoint !gov && !hidden == serve !vteam-* && !hidden: n=11 extras=[] omissions=[]
+[set] (d) policies     endpoint governed:true  == /agent-policies names : n=8 extras=[] omissions=[]
+[set] (#) sanity       endpoint all names       == serve all names      : n=24 extras=[] omissions=[]
+[drift] vteam-* names NOT governed: []
+[drift] non-vteam names governed:  []
+[A3] endpoint all count=24 governed=8 external=16 visible-external=11
+[A3] serve    all count=24 vteam-*=8 non-vteam-*=16 visible-non-vteam=11
+[A4] hidden names (serve): ["build", "compaction", "plan", "summary", "title"]
+[A5] secondary source check will compare opencode.json agent keys vs /agent-policies (section B/C)
+[e2e] PASS A (all set comparisons a/b/c/d match; no extras, no omissions)
+[e2e] === B. injected-artifact leak check (STRUCTURAL) ===
+[e2e] [B0] discovery: docker exec aiagents-compose-worker sh -c "find /data/vteam-worker -maxdepth 3 \( -name opencode.json -o -name roles.json \)"
+[e2e] [B0] found:
+[B0]   /data/vteam-worker/.vteam-role-guard/roles.json
+[B0]   /data/vteam-worker/opencode.json
+[e2e] [B0] files checked: 3 (2 canonical injected artifacts + 1 supplementary HOME model-credential config: /root/.config/opencode/opencode.json)
+[e2e] [B0] sha256 opencode.json = 9c5516ba827e013135cb0b9678157385c32a7120ffab17066d5f72e4c7009e01 (mtime: 2026-09-19 10:09:15.190009412 +0000)
+[e2e] [B0] sha256 roles.json    = eec7d2a888d9ef29e23bd94aea1ef26de50267188bfd9b85c0ad35dc729dc489 (mtime: 2026-09-19 10:08:49.330483294 +0000)
+[e2e] [B0] policy-set equality (freshness signal): comparing artifact keys vs /agent-policies names
+[B1] opencode.json agent keys (8) == /agent-policies governed names: True
+[B1] roles.json roles keys (8) == /agent-policies governed names: True
+[B1] guard session-mapping agent-name key set (roles.json keys) is exactly the governed set — external-name membership is asserted structurally in the leak check below
+[B1] roles.json enabled=True
+[e2e] [B2] external names (engine-derived, 16): ["Atlas - Plan Executor", "Metis - Plan Consultant", "Momus - Plan Critic", "Prometheus - Plan Builder", "Sisyphus - ultraworker", "Sisyphus-Junior", "build", "compaction", "explore", "general", "librarian", "multimodal-looker", "oracle", "plan", "summary", "title"]
+[check] /data/vteam-worker/opencode.json kind=opencode bytes=6085
+[check]   agent-name slot hits: 0
+[check]   non-slot hits: 0 (justified=0, unexplained=0)
+[check]   result: CLEAN (slotHits=0 unexplainedHits=0)
+[check] /data/vteam-worker/.vteam-role-guard/roles.json kind=roles bytes=14483
+[check]   agent-name slot hits: 0
+[check]   non-slot hits: 1 (justified=1, unexplained=0)
+[hit]     path=roles/vteam-project_manager/correction/handoff/plan kind=key value="vteam-plan" classification=handoff-task-type-mapping(justified)
+[check]   result: CLEAN (slotHits=0 unexplainedHits=0)
+[check] /root/.config/opencode/opencode.json kind=opencode-home bytes=1453
+[check]   note: no `agent` section present (agent-slot assertion is vacuously clean for this file)
+[check]   agent-name slot hits: 0
+[check]   non-slot hits: 0 (justified=0, unexplained=0)
+[check]   result: CLEAN (slotHits=0 unexplainedHits=0)
+[e2e] PASS B (structural leak check clean on 3 files; slotHits=0; unexplainedHits=0)
+[e2e] === B3. guard session->policy mappings ===
+[e2e] [B3] discovered session mapping files: 1
+[B3] ses_f4cd9d398ffelF4YnzPBt2m6cB.json: agent='vteam-tester' mapped-to-policy=True external=False dir=/data/vteam-worker/tasks/t_0000000007
+[B3] session mappings checked=1 violations=0 (external agent mapped or unmapped agent: [])
+[e2e] PASS B3 (all session mappings point at governed agents; no external mapping)
+[e2e] === C. negative control — the structural check MUST detect an injected external name ===
+[e2e] [C1] chosen real external name (from the engine list): plan (also a legitimate handoff mapping key — the control proves slot vs non-slot discrimination)
+[check] NC copy opencode.json kind=opencode bytes=6180
+[check]   agent-name slot hits: 1
+[LEAK]    slot=agent/plan kind=key value=null
+[check]   non-slot hits: 0 (justified=0, unexplained=0)
+[check]   result: LEAK (slotHits=1 unexplainedHits=0)
+[check] NC copy roles.json kind=roles bytes=14545
+[check]   agent-name slot hits: 1
+[LEAK]    slot=roles/plan kind=key value=null
+[check]   non-slot hits: 1 (justified=1, unexplained=0)
+[hit]     path=roles/vteam-project_manager/correction/handoff/plan kind=key value="vteam-plan" classification=handoff-task-type-mapping(justified)
+[check]   result: LEAK (slotHits=1 unexplainedHits=0)
+[e2e] [C3] both NC copies correctly DETECTED (exit 1 each + 'result: LEAK' + [LEAK] slot hit) — the structural check is discriminating
+9c5516ba827e013135cb0b9678157385c32a7120ffab17066d5f72e4c7009e01  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.s0YX4ojHfe/live/opencode.json
+9c5516ba827e013135cb0b9678157385c32a7120ffab17066d5f72e4c7009e01  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.s0YX4ojHfe/live/opencode.post.json
+eec7d2a888d9ef29e23bd94aea1ef26de50267188bfd9b85c0ad35dc729dc489  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.s0YX4ojHfe/live/roles.json
+eec7d2a888d9ef29e23bd94aea1ef26de50267188bfd9b85c0ad35dc729dc489  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.s0YX4ojHfe/live/roles.post.json
+[e2e] PASS C (NC detected in both artifacts; live artifacts byte-identical before/after; copies discarded)
+[e2e] === D. frozen baseline + worker/** untouched ===
+[e2e] [D1] .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+[e2e] [D1] sha256 actual=3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 expected=3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+[e2e] PASS D1 (frozen baseline sha unchanged)
+[e2e] PASS D2 (worker/** untouched: no tracked diff, no untracked files)
+[e2e] PASS E (stack still healthy: server + web + worker)
+[e2e] 
+[e2e] SUMMARY: (a)(b)(c)(d) set-equal (extras=[] omissions=[]); 3 artifacts checked, 0 agent-slot leak hits, 0 unexplained hits; negative control detected; frozen sha unchanged; worker/** untouched; stack healthy.
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/third-party-agent-display/task-5-live.txt

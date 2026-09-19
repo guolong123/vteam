@@ -153,3 +153,42 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   但那是另一个独立决策，项目内既有先例是 `ExternalAgentsPanel`/`omo-panel` 各自显式设了它。
 - 证据截图必须落在 READY 态：在捕获点前断言说明含"个外部 Agent（引擎上报"且不含"不可用"，
   否则可能把加载瞬间截进证据。
+
+## todo 5 — live-stack no-policy-leak proof (2026-09-19)
+
+- **Independent engine source (D1):** PRIMARY = direct HTTP to `opencode serve` from INSIDE the
+  worker container (`docker exec aiagents-compose-worker sh -c "curl -sS http://127.0.0.1:4000/agent?directory=/data/vteam-worker"`).
+  Path is container → serve with ZERO vteam code in between; the endpoint is server → worker exec
+  endpoint → serve, so equality is a cross-path check, not self-grading. Serve port resolved from
+  `ps aux | grep '[o]pencode serve'` (`--port 4000`), workDir from worker env `WORK_DIR`. SECONDARY =
+  the injected `opencode.json` `agent` keys (the file opencode itself consumes).
+- **`opencode agent list` CLI is UNUSABLE as an assertion source**: on the same live stack it returned
+  24/24/21/16/24 entries across 5 runs (later batch: 23/19/24/24). Truncation is recursive — a 16-entry
+  run dropped ALL 8 `vteam-*` names, a 21-entry run dropped 3. Any comparison against it would be flaky.
+  Rejected in the script + evidence with the observed counts.
+- **The leak-check trap (D3):** `roles.json` legitimately contains the string `"plan"` as a
+  `correction.handoff` task-type mapping KEY (`roles/vteam-project_manager/correction/handoff/plan`
+  → `"vteam-plan"`). A raw text grep for external names therefore produces a FALSE leak. Structure is
+  the only sound check: agent-name SLOTS are exactly depth-2 keys (`agent/<name>`, `roles/<name>`);
+  everything else must be classified, and the only allow-listed shape is a handoff mapping key whose
+  VALUE is a `vteam-*` name. Raw-text residue check catches hits the JSON walk cannot attribute.
+- **Negative-control correctness has two levels:** exit-nonzero is NOT proof of detection — the first
+  NC run exited 1 from a `FileNotFoundError` (display arg passed in the ext-path position) and would
+  have read as "detected". Assert `result: LEAK` + a `[LEAK]` slot line, not just `rc != 0`. (Same
+  family as the todo-3 review lesson: count the states, assert the reason.)
+- NC deliberate choice: external name `plan` (also the handoff key name) proves slot-vs-non-slot
+  discrimination in one artifact pair; both NC copies were detected with `slotHits=1` while the live
+  copy with the same name in the mapping position stays `CLEAN`/justified.
+- Artifact discovery: `find /data/vteam-worker -maxdepth 3 \( -name opencode.json -o -name roles.json \)`
+  found exactly the canonical pair — task dirs (`tasks/<id>/`) carry no per-task copies, so there is no
+  per-task escape surface. Supplementary: `/root/.config/opencode/opencode.json` (model-credential
+  provider section, no `agent` section) checked too → 3 files total, 0 slot hits.
+- `docker cp` of a directory (sessions/) copies contents into the target dir — for a per-file loop use
+  `docker exec ls -1 <dir>/*.json` + `docker cp` per file.
+- The whole proof is read-only: no reload/restart was needed (artifacts were fresh: opencode.json
+  10:09:15Z, roles.json 10:08:49Z vs worker StartedAt 10:08:48Z). There is no public per-worker
+  `reload-config` HTTP route — `broadcastCommand(reload-config)` fires internally from
+  skills/tools/mcp-servers/execution-policies services on resource change.
+- Run: `bash scripts/e2e-third-party-no-policy-leak.sh` → exit 0 twice (re-runnable); (a)-(d) set-equal,
+  extras/omissions empty both directions; 24 agents = 8 governed + 16 external, 11 visible-external;
+  frozen sha + worker clean; stack healthy at the end.

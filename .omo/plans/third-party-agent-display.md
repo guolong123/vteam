@@ -34,7 +34,7 @@ Your next move: run `$start-work third-party-agent-display` to execute, or ask f
 - No copying, overriding, or editing of an external agent's definition or instructions.
 - No third-party row in the `Agent` table (that was the rejected D4/D7 direction; the goal is D+C read-only).
 - No removal of `Agent.role` or any plan-1/2/4 change.
-- No change to the 7 built-ins' factory bytes (`before-agent-policies.json` sha `793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a`).
+- No change to the 7 built-ins' factory bytes (`before-agent-policies.json` sha `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87`). **Correction (orchestrator, 2026-09-19):** the plan originally cited `793093dc…`, which is STALE — the artifact was re-baselined by `server-gate-removal-tool-authority`, and the real on-disk sha is `3b8c5d4b…` (verified by `shasum -a 256` before execution). Same correction the prior plan required.
 - No A/B dual path, legacy shim, or "deprecated" annotations.
 
 ## Verification strategy
@@ -65,7 +65,7 @@ Your next move: run `$start-work third-party-agent-display` to execute, or ask f
 > Implementation + Test = ONE todo. Never separate.
 <!-- APPEND TASK BATCHES BELOW THIS LINE WITH edit/apply_patch - never rewrite the headers above. -->
 
-- [ ] 1. [server] Expose the external agent list with an explicit "vteam-governed" flag
+- [x] 1. [server] Expose the external agent list with an explicit "vteam-governed" flag
   What to do / Must NOT do: The engine list already reaches the server: `GET /agents/opencode` returns `{ agents, workerId, degraded }` where each item carries `name`, `description`, `mode` (`primary|subagent|all`), `native`, `hidden` (`WorkerAgentInfo`, `server/src/workers/worker.client.ts`). Extend the server response (or add a purpose-built endpoint) so each entry states whether vteam governs it.
   **Single-source requirement (review fix O9):** derive the `governed` flag by calling the SAME function that produces the policy set (`buildAgentPolicies()` / `agentNameOf` in `server/src/execution-policies/execution-policy.service.ts`) — NOT a second `name.startsWith('vteam-')` check, which can drift (e.g. a `vteam-*` agent with a null `policyId` is not in the policy set but would be mis-flagged governed). Include the readable instructions where the engine provides them (there is an existing `GET /agents/omo-agent-prompt` that reads a single agent's prompt — reuse or mirror it, do not duplicate the fetch logic).
   Must NOT hardcode the OmO agent names (the list must come from the engine). Must NOT emit any policy for an external name. Must NOT change the existing `/agents/opencode` consumers' contract in a breaking way.
@@ -75,7 +75,7 @@ Your next move: run `$start-work third-party-agent-display` to execute, or ask f
   QA scenarios (name the exact tool + invocation): happy — `curl -s .../api/v1/agents/opencode?workerId=...` returns the engine list with correct `governed` flags; failure — with the worker stopped, the endpoint returns `degraded:true` and an empty list, HTTP 200 (not 500). Evidence `.omo/evidence/third-party-agent-display/task-1-api.json`
   Commit: Y | `feat(agents): expose external agent list with a governed flag`
 
-- [ ] 2. [web] Display external agents read-only with the non-governance warning
+- [x] 2. [web] Display external agents read-only with the non-governance warning
   What to do / Must NOT do: In the agents page, render the external (non-governed) agents as a clearly separated group: name, description, mode, and their instructions in a read-only view. Every entry must carry a visible warning that vteam's permission rules do not apply to it. If an instructions lookup fails, show a clear "unavailable" state — never a blank that looks like "no instructions". Must NOT render any permission or tool editor for these agents. Must NOT imply they are under vteam policy. Must NOT edit their instructions.
   Parallelization: Wave 2 | Blocked by: 1 | Blocks: 4,5
   References: `web/app/(main)/agents/page.tsx` (the list + detail panel; the existing read-only prompt viewer pattern in `web/app/(main)/workers/[id]/omo-panel.tsx` is the closest precedent), `web/src/api/teams.ts` (API-client pattern), `server/src/agents/` (the endpoint from todo 1)
@@ -83,7 +83,7 @@ Your next move: run `$start-work third-party-agent-display` to execute, or ask f
   QA scenarios: happy — Playwright opens the page and sees an external entry with description + read-only instructions + the warning; failure — with instructions unavailable the entry shows the explicit unavailable message. Evidence `.omo/evidence/third-party-agent-display/task-2-display.png`
   Commit: Y | `feat(web): show external agents read-only with a governance warning`
 
-- [ ] 3. [web] Let a team member be pointed at an external agent (with the override caveat)
+- [x] 3. [web] Let a team member be pointed at an external agent (with the override caveat)
   What to do / Must NOT do: Make the per-member external-agent choice visible again in the member flows (the field already exists and the API already accepts it: `TeamMember.opencodeAgentName`, validated weakly in `server/src/teams/teams.service.ts`). Present it as an explicit "external agent" choice alongside the vteam agent, and state that when the engine's agent-policy gate is active the external selection may be overridden by the vteam policy candidate. **Cite the normative precedence declared by `agent-role-decommission` todo 1 (review fix B7)** — do NOT restate a different rule: (1) policy candidate wins when the worker supports it; (2) else `opencodeAgentName`; (3) else the engine default. Warn when the chosen external name is no longer reported by the engine.
   **KNOWN CONFLICT (review fix M6 — this todo must resolve it explicitly):** a prior decision removed the agent picker, and there is a regression spec that asserts it: `web/e2e/no-agent-picker.spec.ts` (header states "全页零 `<select>`"; it asserts `message-agent-select` is absent on the session page). Re-activating the choice WILL fail it. Name that spec and state the sanctioned resolution — recommended: the member-config surface (a settings/management panel), NOT the message input, may host the external-agent select, and the spec is updated to (a) still assert the **message input** stays picker-free and (b) allow the settings surface. Do NOT leave it "reconciled silently" and do NOT delete the spec without replacing its guarantee.
   Must NOT silently ignore or hide an overridden selection — the caveat must be visible. Must NOT change dispatch logic.
@@ -93,7 +93,7 @@ Your next move: run `$start-work third-party-agent-display` to execute, or ask f
   QA scenarios: happy — Playwright picks `prometheus` for a member via the settings surface and it persists with the caveat visible, and the updated `no-agent-picker` spec is green; failure — choosing an unknown name shows the "not reported by the engine" warning. Evidence `.omo/evidence/third-party-agent-display/task-3-member-picker.png`
   Commit: Y | `feat(teams): allow selecting an external agent for a member`
 
-- [ ] 4. [server] Prove nothing is emitted or enforced for external names
+- [x] 4. [server] Prove nothing is emitted or enforced for external names
   What to do / Must NOT do: Add discriminating tests asserting that (a) `buildAgentPolicies()` output contains no external name, and (b) the worker's guard `roles.json` contains no external name — i.e. an external agent is genuinely outside vteam enforcement, which is the honest claim the UI makes. Also assert the guard's pass-through behaviour for an unmapped agent is unchanged (the safety property at `worker/src/role-guard/policy.ts:134-138`). Must NOT weaken the pass-through (it is deliberate). Must NOT add an external name to the policy set to "make it work".
   Parallelization: Wave 3 | Blocked by: 3 | Blocks: 5
   References: `server/src/execution-policies/execution-policy.service.ts` (`buildAgentPolicies`), `server/src/execution-policies/agent-policies.matrix.spec.ts`, `worker/src/role-guard/policy.ts:134-138` (unmapped → allow), `worker/src/exec/exec-server.ts:1127-1131` (only `vteam-` names get a session mapping), `worker/src/resources/opencode-config-builder.ts:143-153` (unknown fields throw — why we must not inject external metadata)
@@ -101,7 +101,7 @@ Your next move: run `$start-work third-party-agent-display` to execute, or ask f
   QA scenarios: happy — the assertions pass; failure — adding a fake external entry to the policy set makes the test fail (mutation check, recorded). Evidence `.omo/evidence/third-party-agent-display/task-4-no-emission.json`
   Commit: Y | `test(policies): assert external agents receive no vteam policy`
 
-- [ ] 5. [proof] Live-stack: the list comes from the engine and nothing leaks into policy
+- [x] 5. [proof] Live-stack: the list comes from the engine and nothing leaks into policy
   What to do / Must NOT do: On the live stack, confirm the external list is populated from the engine (not a baked-in list) by checking the endpoint output against the engine's own agent list, and confirm the injected `opencode.json`/`roles.json` contain no external name. Restore nothing (this flow changes no state) but capture the artifacts. Must NOT modify the frozen baseline. Must NOT change the worker.
   Parallelization: Wave 3 | Blocked by: 1-4 | Blocks: F1-F4
   References: `.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json` (frozen baseline), the live worker work dir artifacts (`opencode.json`, `.vteam-role-guard/roles.json`), `server/src/agents/agents.controller.ts`
