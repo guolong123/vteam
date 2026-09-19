@@ -425,7 +425,7 @@ test.describe("Todo 3 · 原生 glob 规则表编辑器", () => {
     }
   });
 
-  test("6. bash 三态：当前值选中且可切换（state-only）", async ({ page, request }) => {
+  test("6. bash 三态：当前值选中且可切换（持久化）", async ({ page, request }) => {
     const token = await adminToken(request);
     const agent = await createAgent(request, token, "bash");
     try {
@@ -442,19 +442,33 @@ test.describe("Todo 3 · 原生 glob 规则表编辑器", () => {
       await expect(bash.locator('[data-effect="ask"]')).toHaveAttribute("aria-checked", "true");
       await bash.locator('[data-effect="allow"]').click();
       await expect(bash.locator('[data-effect="allow"]')).toHaveAttribute("aria-checked", "true");
-      // 无写盘（todo 4 之前 state-only）：刷新后仍是存储值 ask
+      // 契约变更（todo 4 拥有写盘）：原生编辑不再是 state-only——debounce(400ms) 后 PATCH 落盘，
+      // 刷新后仍是新值 allow。旧断言「刷新后仍为存储值 ask」随 todo 4 交付持久化而作废，非弱化测试。
+      const policyId = agent.effectivePermission!.policyId;
+      await expect
+        .poll(
+          async () => {
+            const res = await request.get(`${SERVER_URL}/api/v1/execution-policies/${policyId}`, {
+              headers: authHeaders(token),
+            });
+            const body = (await res.json()) as { config: { permission: Record<string, unknown> } };
+            return String(body.config.permission.bash);
+          },
+          { timeout: 10_000 },
+        )
+        .toBe("allow");
       await page.reload();
       await page.getByTestId("agent-config-root").waitFor({ timeout: 20_000 });
       await page.getByText(agent.name, { exact: false }).first().click();
       await expect(page.getByTestId("native-bash-effect")).toBeVisible({ timeout: 20_000 });
       await expect(
-        page.getByTestId("native-bash-effect").locator('[data-effect="ask"]'),
+        page.getByTestId("native-bash-effect").locator('[data-effect="allow"]'),
       ).toHaveAttribute("aria-checked", "true");
       recordEvidence({
         test: "bash_tristate",
         agent: agent.id,
         stored_ask_selected: true,
-        toggled_allow_state_only: true,
+        toggled_allow_persisted: true,
       });
     } finally {
       console.log(`[cleanup] ${await deleteAgent(request, token, agent)}`);

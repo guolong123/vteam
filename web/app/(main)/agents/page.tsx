@@ -12,9 +12,11 @@
  * - 权限区渲染 `effectivePermission`（ExecutionPolicy 解析：edit/read glob + bash/task +
  *   vteam_* MCP 工具 deny）；层② guard 工具行在策略已绑定时可切换 allow/ask/deny
  *   （PATCH /execution-policies/:policyId，template 与 custom/clone 同一路径）；
- *   层① 原生行（edit/read/bash/task）在策略已绑定时同样可编辑：edit/read 为 glob 规则表编辑器
- *   （草稿 state-only，写盘由 todo 4 的统一 policy mutation 承接）、bash 为三态分段、task 为只读
- *   （引擎仅对内置计划器 vteam-plan 放行）；未绑定策略时中性提示，不做历史回退。
+ *   层① 原生行（edit/read/bash/task）在策略已绑定时同样可编辑：edit/read 为 glob 规则表编辑器、
+ *   bash 为三态分段、task 为只读（引擎仅对内置计划器 vteam-plan 放行）；未绑定策略时中性提示，
+ *   不做历史回退。原生编辑与 MCP 工具切换共用同一 policy mutation：单一在途闸门（writePending）
+ *   使全部控件在任一写入期间禁用，载荷唯一来源为 configRef 权威配置（原生编辑 400ms debounce
+ *   后合并写出），因此一次写入不会覆盖另一次的内存态。
  * - MCP 工具按 `mcpServer` 分组（GET /mcp-servers + GET /tools?source=mcp&includeDisabled=true
  *   解析归属；匹配按工具 name/action 双键，vteam_ 前缀兼容裸名）；
  *   停用 server 的分组默认收起（aria-expanded 可展开），启用 server 默认展开。
@@ -634,7 +636,7 @@ function ruleErrorOf(rows: NativeRuleRow[], row: NativeRuleRow, index: number): 
  * emit 只在用户事件后触发（渲染期不发射）：种子/服务端值回读不落 draft。
  * 兜底警告仅 edit 行渲染：`isEditDenied` 只对 edit map 有 `*` 失配 fail-open 语义（read 无兜底概念，
  * `*:allow` 是 READ_TOOLS 的常态默认），对 read 恒亮「放开写入」警告是错误语义。
- * 写盘不在本组件内：草稿经 onChange 上抛父级 state，todo 4 的统一 policy mutation 负责落库。
+ * 写盘不在本组件内：编辑经 onChange 上抛父级，由父级统一的 policy mutation 落库（todo 4）。
  */
 function NativeRuleMapEditor({ name, value, seed, readOnly, pending, onChange }: {
   name: "edit" | "read";
@@ -886,21 +888,38 @@ interface EffectivePermissionSectionProps {
   loading: boolean;
 }
 
+/** policy config 全量载荷（PATCH /execution-policies/:policyId 的 `config` 形状，不新增键）。 */
+interface PolicyConfigPayload {
+  permission: Record<string, unknown>;
+  correction: Record<string, unknown>;
+  tools: Record<string, unknown>;
+}
+
+/** 原生编辑 debounce 窗口（规则表 onChange 每击键触发；远小于 Playwright 期望超时且用户不可感）。 */
+const NATIVE_DEBOUNCE_MS = 400;
+
 function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, loading }: EffectivePermissionSectionProps) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const queryClient = useQueryClient();
-  const [pendingKey, setPendingKey] = useState<string | null>(null);
   const [policyError, setPolicyError] = useState<string | null>(null);
-  // 原生 permission 草稿（state-only；todo 4 接入统一 policy mutation 后负责写盘）。
+  // 原生 permission 草稿（渲染用；写盘经 configRef + debounce 合并进统一 policy mutation）。
   const [draftNative, setDraftNative] = useState<Record<string, unknown>>({});
   const nativeValue = (key: string): unknown =>
     key in draftNative ? draftNative[key] : permission[key];
-  // edit/read 规则表草稿；bash 三态同理（task 为只读，无需草稿）。
-  const handleNativeChange = (key: string, next: Record<string, string>) =>
-    setDraftNative((prev) => ({ ...prev, [key]: next }));
-  // todo 4：接入统一 policy mutation 的写盘入口在此扩展（本 todo 仅 state-only）。
-  const handleNativeEffectChange = (key: string, next: ToolEffect) =>
-    setDraftNative((prev) => ({ ...prev, [key]: next }));
+
+  /**
+   * 客户端权威 config（permission/correction/tools），也是每次 PATCH 的唯一 payload 来源。
+   * 用 ref 而非闭包：连续两次写入时第二次必须建立在第一次结果之上（execution_policies 无
+   * version/CAS 列，服务端不做 CAS——见下方 mutation 的 ACCEPTED residual 注释）。
+   */
+  const configRef = useRef<PolicyConfigPayload | null>(null);
+  /** 单一在途闸门（替代 per-key 的 pendingKey）：任一写入在途 → 本节全部控件禁用。 */
+  const [writePending, setWritePending] = useState(false);
+  /** 与 writePending 同步的 ref：事件回调读取时不受 render 闭包滞后影响。 */
+  const writePendingRef = useRef(false);
+  /** 待发 debounce 句柄（原生编辑合并写盘；见 handleNativeChange）。 */
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // 可编辑判据 = 策略已绑定（PATCH /execution-policies/:policyId 的入参）：template 绑 ep_<role>
   // 行（服务端已放开），custom/clone 绑自有行；与 agent.type 无关。
   const editable = effective !== null;
@@ -911,6 +930,85 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
       ? (raw as Record<string, unknown>)
       : {};
   }, [effective]);
+
+  // 与 effective 同步：仅在「无写入在途 && 无待发 debounce」时同步——否则 refetch 回来的旧值
+  // 会打回本地草稿（原生编辑 400ms 窗口内、或写入 in-flight 时）。
+  useEffect(() => {
+    if (!effective || writePendingRef.current || debounceRef.current !== null) return;
+    configRef.current = {
+      permission: effective.permission,
+      correction: effective.correction,
+      tools: { ...guardTools },
+    };
+  }, [effective, guardTools]);
+
+  // 卸载清理：丢弃挂起的 debounce，避免 unmount 后写入已失效组件（agentId 切换重挂载安全）。
+  useEffect(
+    () => () => {
+      if (debounceRef.current !== null) clearTimeout(debounceRef.current);
+    },
+    [],
+  );
+
+  /** 当前权威 config；权威值缺失（首帧 effect 未跑）时以渲染值兜底。 */
+  const currentConfig = (): PolicyConfigPayload =>
+    configRef.current ?? {
+      permission,
+      correction: effective?.correction ?? {},
+      tools: { ...guardTools },
+    };
+
+  /** 取消挂起的 debounce（草稿已在 configRef 中，不丢数据）。 */
+  const flushNative = () => {
+    if (debounceRef.current !== null) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+  };
+
+  /** 统一写盘入口：先落权威 ref + 在途闸门，再发出全量 config PATCH。 */
+  const writeConfig = (next: PolicyConfigPayload) => {
+    configRef.current = next;
+    writePendingRef.current = true;
+    setWritePending(true);
+    policyMutation.mutate(next);
+  };
+
+  /**
+   * 原生编辑写盘（debounce）：规则表 onChange 每击键触发，直连 PATCH 会一字符一写。
+   * 草稿立即进入 configRef（后续工具切换读到最新的原生改动），400ms 静默后合并为一次写。
+   */
+  const handleNativeChange = (key: string, next: Record<string, string>) => {
+    setDraftNative((prev) => ({ ...prev, [key]: next }));
+    const cur = currentConfig();
+    const nextConfig: PolicyConfigPayload = {
+      ...cur,
+      permission: { ...cur.permission, [key]: next },
+    };
+    configRef.current = nextConfig;
+    flushNative();
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
+      writeConfig(configRef.current ?? nextConfig);
+    }, NATIVE_DEBOUNCE_MS);
+  };
+
+  /** bash 三态同规则表：写 permission.bash（立即进 ref，debounce 合并写出）。 */
+  const handleNativeEffectChange = (key: string, next: ToolEffect) => {
+    setDraftNative((prev) => ({ ...prev, [key]: next }));
+    const cur = currentConfig();
+    const nextConfig: PolicyConfigPayload = {
+      ...cur,
+      permission: { ...cur.permission, [key]: next },
+    };
+    configRef.current = nextConfig;
+    flushNative();
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
+      writeConfig(configRef.current ?? nextConfig);
+    }, NATIVE_DEBOUNCE_MS);
+  };
+
   /** 分组以 MCP server 目录为准：每个 server 列出其全部工具行，effect 取策略值，未列出→默认 deny。 */
   const groups = useMemo(() => {
     const byServerId = new Map<string, ApiTool[]>();
@@ -955,34 +1053,46 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
     return tool.name;
   };
 
-  /** 单工具切换：全量回写 { permission, correction, tools }（config 非部分合并）。 */
+  /**
+   * 统一策略写盘：原生编辑（edit/read/bash）与 MCP 工具切换唯一出口，全量回写
+   * `{ permission, correction, tools }`（config 非部分合并，payload 形状不变）。
+   * 载荷由调用方（writeConfig）从 configRef 权威配置构造，绝不读 render 闭包里的 effective
+   * ——连续两次写入时第二次必须建立在第一次结果之上。
+   *
+   * ACCEPTED RESIDUAL（review fix m4，明确记录而非隐式宣称已解决）：本节单一在途闸门只消除
+   * **单页内交错**（同一浏览器里原生编辑与工具切换互不覆盖）。execution_policies **无 version
+   * /CAS 列**，服务端不做条件写，因此**多客户端**竞争（两个浏览器、或直接打 API 的客户端同时
+   * PATCH 同一 policy）仍可能丢更新——last-write-wins 覆盖另一方的整份 config。本计划接受该
+   * 残余风险（不新增 version 列、不做 DB migration）；如需根治须引入服务端 CAS。
+   */
   const policyMutation = useMutation({
-    mutationFn: ({ key, next }: { key: string; next: ToolEffect }) => {
+    mutationFn: (next: PolicyConfigPayload) => {
       if (!effective) throw new Error("未绑定执行策略");
-      const nextTools: Record<string, unknown> = { ...guardTools, [key]: next };
-      return api.patch(`/execution-policies/${effective.policyId}`, {
-        config: { permission: effective.permission, correction: effective.correction, tools: nextTools },
-      });
+      return api.patch(`/execution-policies/${effective.policyId}`, { config: next });
     },
     onSuccess: () => {
       setPolicyError(null);
-      setPendingKey(null);
+      writePendingRef.current = false;
+      setWritePending(false);
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       queryClient.invalidateQueries({ queryKey: ["agent", agentId] });
     },
     onError: (err) => {
-      setPendingKey(null);
+      writePendingRef.current = false;
+      setWritePending(false);
       setPolicyError(isApiError(err) ? err.message : "保存权限失败，请稍后重试");
     },
   });
 
+  /** 单工具切换：取消挂起的原生 debounce（草稿已在 ref），在权威 config 上组合出下一份全量。 */
   const handleToolChange = (tool: ApiTool, next: ToolEffect) => {
-    if (!editable || !effective || pendingKey) return;
+    if (!editable || !effective || writePending) return;
     const current = normalizeToolEffect(effectOf(tool));
     if (current === next) return;
+    flushNative();
     setPolicyError(null);
-    setPendingKey(matrixKeyOf(tool));
-    policyMutation.mutate({ key: matrixKeyOf(tool), next });
+    const cur = currentConfig();
+    writeConfig({ ...cur, tools: { ...cur.tools, [matrixKeyOf(tool)]: next } });
   };
 
   /** MCP 分组区块：停用 server 默认收起，启用默认展开；目录未就绪时占位。 */
@@ -1081,7 +1191,6 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
                 tools.map((tool) => {
                   const effect = normalizeToolEffect(effectOf(tool));
                   const meta = toolEffectMeta[effect];
-                  const key = matrixKeyOf(tool);
                   return (
                     <div
                       key={tool.id}
@@ -1130,7 +1239,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
                           toolName={tool.name}
                           value={effect}
                           readOnly={!editable}
-                          pending={pendingKey === key}
+                          pending={writePending}
                           onChange={(next) => handleToolChange(tool, next)}
                         />
                       </span>
@@ -1243,7 +1352,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
                   value={value}
                   seed={key === "edit" ? EDIT_RULE_SEED : READ_RULE_SEED}
                   readOnly={!editable}
-                  pending={!!pendingKey}
+                  pending={writePending}
                   onChange={(next) => handleNativeChange(key, next)}
                 />
               ) : key === "bash" ? (
@@ -1252,7 +1361,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
                   toolName="bash"
                   value={typeof value === "string" && value in toolEffectMeta ? (value as ToolEffect) : "deny"}
                   readOnly={!editable}
-                  pending={!!pendingKey}
+                  pending={writePending}
                   onChange={(next) => handleNativeEffectChange("bash", next)}
                 />
               ) : (

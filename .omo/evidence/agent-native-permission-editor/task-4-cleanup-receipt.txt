@@ -1,0 +1,18 @@
+task-4 cleanup receipt (agent-native-permission-editor Todo 4)
+================================================================
+Checked via API (admin token) after the final green runs of both suites:
+  GET /agents?page=1&pageSize=200                -> agents named "t4 */t3 *" residue = 0
+  GET /execution-policies?page=1&pageSize=200    -> custom policies named "t4 */t3 *" residue = 0
+
+Per-test in-spec cleanup (each test's finally block) receipts from Playwright log:
+  a_0000000068..71 (todo-4 run 1):  deleted, policy deleted, re-GET 404
+  a_0000000077 (todo-3 run):        deleted, policy deleted, re-GET 404
+  a_0000000082..85 (mutation run):  deleted, policy deleted, re-GET 404
+  final green runs (todo-4 + todo-3): all [cleanup] lines show agent 200 / policy 200 / re-GET 404
+
+No QA agents or custom policies remain from this todo.
+
+Manual QA cleanup (task-4-manual-qa.png run, node + playwright/chrome):
+  a_0000000096 (qa qa4-*)            agent 200, policy ep_0000000096 200, re-GET 404
+  a_0000000097 (first manual attempt) agent 200, policy ep_0000000097 200, re-GET 404
+Final sweep: GET /agents?page=1&pageSize=200 filtered by name prefix {t4 ,t3 ,qa } -> []

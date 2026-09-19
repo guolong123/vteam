@@ -19,7 +19,7 @@
   },
   {
     "test": "absent_task",
-    "agent": "a_0000000056",
+    "agent": "a_0000000102",
     "stored_permission": {
       "edit": {
         "*": "deny"
@@ -31,7 +31,7 @@
   },
   {
     "test": "roundtrip_no_coercion",
-    "agent": "a_0000000057",
+    "agent": "a_0000000103",
     "stored": {
       "*": "deny",
       "x": "ask"
@@ -50,19 +50,19 @@
   },
   {
     "test": "catchall_warning",
-    "agent": "a_0000000058",
+    "agent": "a_0000000104",
     "warn_on_allow": true,
     "cleared_on_deny": true
   },
   {
     "test": "duplicate_rejected",
-    "agent": "a_0000000059",
+    "agent": "a_0000000105",
     "duplicate_error": true,
     "committed_after": "2"
   },
   {
     "test": "unknown_effect_preserved",
-    "agent": "a_0000000060",
+    "agent": "a_0000000106",
     "stored": "ask2",
     "rendered_unknown": "ask2",
     "tri_state_chips_intact": 4,
@@ -70,8 +70,8 @@
   },
   {
     "test": "bash_tristate",
-    "agent": "a_0000000061",
+    "agent": "a_0000000107",
     "stored_ask_selected": true,
-    "toggled_allow_state_only": true
+    "toggled_allow_persisted": true
   }
 ]

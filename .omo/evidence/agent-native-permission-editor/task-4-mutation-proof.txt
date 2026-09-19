@@ -1,0 +1,12 @@
+MUTATION: currentConfig() returns render-closure values (permission/effective.correction/guardTools)
+instead of configRef.current — i.e. the pre-todo-4 stale-closure payload source.
+
+RESULT (expected: test 1 red, others green):
+  ✘  1 policy-serialize.spec.ts:163 › 1. 无丢失更新 (11.6s)
+       Error: expect(received).toBe(expected)
+       Expected: "allow|deny"
+       Received: "deny|deny"      <- bash write clobbered back to deny by the second (stale) payload
+  ✓  2 单一在途闸门 (2.2s)
+  ✓  3 原生编辑持久化 (3.1s)
+  ✓  4 debounce 合并击键 burst (2.4s)
+  1 failed, 3 passed

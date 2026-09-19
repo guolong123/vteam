@@ -1,0 +1,28 @@
+[
+  {
+    "test": "inflight_gate_disables_all",
+    "agent": "a_0000000083",
+    "policy_id": "ep_0000000083",
+    "patched_tool": "vteam_chat_history",
+    "native_input_disabled": true,
+    "native_chips_disabled": true,
+    "bash_chips_disabled": true,
+    "all_mcp_selects_disabled": true,
+    "re_enabled_after_release": true
+  },
+  {
+    "test": "native_edit_persists",
+    "agent": "a_0000000084",
+    "policy_id": "ep_0000000084",
+    "stored_bash": "allow",
+    "reload_selected": "allow"
+  },
+  {
+    "test": "debounce_coalesces",
+    "agent": "a_0000000085",
+    "policy_id": "ep_0000000085",
+    "keystrokes": 3,
+    "patch_count": 1,
+    "stored_edit_abc": "deny"
+  }
+]

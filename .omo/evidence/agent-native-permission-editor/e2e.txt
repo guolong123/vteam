@@ -109,3 +109,303 @@ mysql: [Warning] Using a password on the command line interface can be insecure.
 [e2e] result passed	7. 未知 effect 原样保留（不归一化）
 [e2e] result passed	6. bash 三态：当前值选中且可切换（state-only）
 [e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 3 run 2026-09-19T01:51:06Z =====
+
+[e2e] date=2026-09-19T01:51:06Z HEAD=338f9d2816722522114e89fea08d416e71e98a46
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 7 tests using 1 worker
+
+  ✓  1 e2e/native-rule-editor.spec.ts:180:7 › Todo 3 · 原生 glob 规则表编辑器 › 1. 四行恒显 + 编辑器形态（模板 agent） (3.2s)
+[cleanup] a_0000000062 (agent 200, policy ep_0000000062 200, re-GET 404)
+  ✓  2 e2e/native-rule-editor.spec.ts:229:7 › Todo 3 · 原生 glob 规则表编辑器 › 2. absent task 仍渲染（只读 + note） (2.2s)
+[cleanup] a_0000000063 (agent 200, policy ep_0000000063 200, re-GET 404)
+  ✓  3 e2e/native-rule-editor.spec.ts:264:7 › Todo 3 · 原生 glob 规则表编辑器 › 3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask (1.9s)
+[cleanup] a_0000000064 (agent 200, policy ep_0000000064 200, re-GET 404)
+  ✓  4 e2e/native-rule-editor.spec.ts:330:7 › Todo 3 · 原生 glob 规则表编辑器 › 4. `*` 兜底警告：切 allow 即出现 (2.0s)
+[cleanup] a_0000000065 (agent 200, policy ep_0000000065 200, re-GET 404)
+  ✓  5 e2e/native-rule-editor.spec.ts:352:7 › Todo 3 · 原生 glob 规则表编辑器 › 5. 重复 glob 客户端拒绝（提交面不增长） (1.9s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000066 (agent 200, policy ep_0000000066 200, re-GET 404)
+  ✓  6 e2e/native-rule-editor.spec.ts:390:7 › Todo 3 · 原生 glob 规则表编辑器 › 7. 未知 effect 原样保留（不归一化） (2.2s)
+[cleanup] a_0000000067 (agent 200, policy ep_0000000067 200, re-GET 404)
+  ✓  7 e2e/native-rule-editor.spec.ts:428:7 › Todo 3 · 原生 glob 规则表编辑器 › 6. bash 三态：当前值选中且可切换（state-only） (1.9s)
+
+  7 passed (17.0s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000062 (agent 200, policy ep_0000000062 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000063 (agent 200, policy ep_0000000063 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000064 (agent 200, policy ep_0000000064 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000065 (agent 200, policy ep_0000000065 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000066 (agent 200, policy ep_0000000066 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000067 (agent 200, policy ep_0000000067 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 四行恒显 + 编辑器形态（模板 agent）
+[e2e] result passed	2. absent task 仍渲染（只读 + note）
+[e2e] result passed	3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask
+[e2e] result passed	4. `*` 兜底警告：切 allow 即出现
+[e2e] result passed	5. 重复 glob 客户端拒绝（提交面不增长）
+[e2e] result passed	7. 未知 effect 原样保留（不归一化）
+[e2e] result passed	6. bash 三态：当前值选中且可切换（state-only）
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 4 run 2026-09-19T02:13:35Z =====
+
+[e2e] date=2026-09-19T02:13:35Z HEAD=338f9d2816722522114e89fea08d416e71e98a46
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000068 (agent 200, policy ep_0000000068 200, re-GET 404)
+  ✓  1 e2e/policy-serialize.spec.ts:163:7 › Todo 4 · 策略写入串行化 › 1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见） (3.7s)
+[cleanup] a_0000000069 (agent 200, policy ep_0000000069 200, re-GET 404)
+  ✓  2 e2e/policy-serialize.spec.ts:235:7 › Todo 4 · 策略写入串行化 › 2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复 (1.6s)
+[cleanup] a_0000000070 (agent 200, policy ep_0000000070 200, re-GET 404)
+  ✓  3 e2e/policy-serialize.spec.ts:337:7 › Todo 4 · 策略写入串行化 › 3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow (2.6s)
+[cleanup] a_0000000071 (agent 200, policy ep_0000000071 200, re-GET 404)
+  ✓  4 e2e/policy-serialize.spec.ts:383:7 › Todo 4 · 策略写入串行化 › 4. debounce 合并击键 burst：一次 burst 仅一个 PATCH (2.2s)
+
+  4 passed (11.7s)
+----- end playwright raw -----
+[e2e] PASS playwright green; evidence json present
+[e2e] cleanup [cleanup] a_0000000068 (agent 200, policy ep_0000000068 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000069 (agent 200, policy ep_0000000069 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000070 (agent 200, policy ep_0000000070 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000071 (agent 200, policy ep_0000000071 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见）
+[e2e] result passed	2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复
+[e2e] result passed	3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow
+[e2e] result passed	4. debounce 合并击键 burst：一次 burst 仅一个 PATCH
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 3 run 2026-09-19T02:13:59Z =====
+
+[e2e] date=2026-09-19T02:13:59Z HEAD=338f9d2816722522114e89fea08d416e71e98a46
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 7 tests using 1 worker
+
+  ✓  1 e2e/native-rule-editor.spec.ts:180:7 › Todo 3 · 原生 glob 规则表编辑器 › 1. 四行恒显 + 编辑器形态（模板 agent） (1.5s)
+[cleanup] a_0000000072 (agent 200, policy ep_0000000072 200, re-GET 404)
+  ✓  2 e2e/native-rule-editor.spec.ts:229:7 › Todo 3 · 原生 glob 规则表编辑器 › 2. absent task 仍渲染（只读 + note） (1.3s)
+[cleanup] a_0000000073 (agent 200, policy ep_0000000073 200, re-GET 404)
+  ✓  3 e2e/native-rule-editor.spec.ts:264:7 › Todo 3 · 原生 glob 规则表编辑器 › 3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask (1.4s)
+[cleanup] a_0000000074 (agent 200, policy ep_0000000074 200, re-GET 404)
+  ✓  4 e2e/native-rule-editor.spec.ts:330:7 › Todo 3 · 原生 glob 规则表编辑器 › 4. `*` 兜底警告：切 allow 即出现 (1.3s)
+[cleanup] a_0000000075 (agent 200, policy ep_0000000075 200, re-GET 404)
+  ✓  5 e2e/native-rule-editor.spec.ts:352:7 › Todo 3 · 原生 glob 规则表编辑器 › 5. 重复 glob 客户端拒绝（提交面不增长） (1.3s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000076 (agent 200, policy ep_0000000076 200, re-GET 404)
+  ✓  6 e2e/native-rule-editor.spec.ts:390:7 › Todo 3 · 原生 glob 规则表编辑器 › 7. 未知 effect 原样保留（不归一化） (1.6s)
+[cleanup] a_0000000077 (agent 200, policy ep_0000000077 200, re-GET 404)
+  ✓  7 e2e/native-rule-editor.spec.ts:428:7 › Todo 3 · 原生 glob 规则表编辑器 › 6. bash 三态：当前值选中且可切换（持久化） (2.7s)
+
+  7 passed (12.2s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000072 (agent 200, policy ep_0000000072 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000073 (agent 200, policy ep_0000000073 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000074 (agent 200, policy ep_0000000074 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000075 (agent 200, policy ep_0000000075 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000076 (agent 200, policy ep_0000000076 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000077 (agent 200, policy ep_0000000077 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 四行恒显 + 编辑器形态（模板 agent）
+[e2e] result passed	2. absent task 仍渲染（只读 + note）
+[e2e] result passed	3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask
+[e2e] result passed	4. `*` 兜底警告：切 allow 即出现
+[e2e] result passed	5. 重复 glob 客户端拒绝（提交面不增长）
+[e2e] result passed	7. 未知 effect 原样保留（不归一化）
+[e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 4 run 2026-09-19T02:16:05Z =====
+
+[e2e] date=2026-09-19T02:16:05Z HEAD=338f9d2816722522114e89fea08d416e71e98a46
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000078 (agent 200, policy ep_0000000078 200, re-GET 404)
+  ✓  1 e2e/policy-serialize.spec.ts:163:7 › Todo 4 · 策略写入串行化 › 1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见） (3.4s)
+[cleanup] a_0000000079 (agent 200, policy ep_0000000079 200, re-GET 404)
+  ✓  2 e2e/policy-serialize.spec.ts:235:7 › Todo 4 · 策略写入串行化 › 2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复 (1.4s)
+[cleanup] a_0000000080 (agent 200, policy ep_0000000080 200, re-GET 404)
+  ✓  3 e2e/policy-serialize.spec.ts:337:7 › Todo 4 · 策略写入串行化 › 3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow (2.6s)
+[cleanup] a_0000000081 (agent 200, policy ep_0000000081 200, re-GET 404)
+  ✓  4 e2e/policy-serialize.spec.ts:383:7 › Todo 4 · 策略写入串行化 › 4. debounce 合并击键 burst：一次 burst 仅一个 PATCH (2.2s)
+
+  4 passed (11.6s)
+----- end playwright raw -----
+[e2e] PASS playwright green; evidence json present
+[e2e] cleanup [cleanup] a_0000000078 (agent 200, policy ep_0000000078 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000079 (agent 200, policy ep_0000000079 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000080 (agent 200, policy ep_0000000080 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000081 (agent 200, policy ep_0000000081 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见）
+[e2e] result passed	2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复
+[e2e] result passed	3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow
+[e2e] result passed	4. debounce 合并击键 burst：一次 burst 仅一个 PATCH
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 4 run 2026-09-19T02:20:32Z =====
+
+[e2e] date=2026-09-19T02:20:32Z HEAD=338f9d2816722522114e89fea08d416e71e98a46
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000086 (agent 200, policy ep_0000000086 200, re-GET 404)
+  ✓  1 e2e/policy-serialize.spec.ts:163:7 › Todo 4 · 策略写入串行化 › 1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见） (3.9s)
+[cleanup] a_0000000087 (agent 200, policy ep_0000000087 200, re-GET 404)
+  ✓  2 e2e/policy-serialize.spec.ts:235:7 › Todo 4 · 策略写入串行化 › 2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复 (1.4s)
+[cleanup] a_0000000088 (agent 200, policy ep_0000000088 200, re-GET 404)
+  ✓  3 e2e/policy-serialize.spec.ts:337:7 › Todo 4 · 策略写入串行化 › 3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow (2.8s)
+[cleanup] a_0000000089 (agent 200, policy ep_0000000089 200, re-GET 404)
+  ✓  4 e2e/policy-serialize.spec.ts:383:7 › Todo 4 · 策略写入串行化 › 4. debounce 合并击键 burst：一次 burst 仅一个 PATCH (2.4s)
+
+  4 passed (11.7s)
+----- end playwright raw -----
+[e2e] PASS playwright green; evidence json present
+[e2e] cleanup [cleanup] a_0000000086 (agent 200, policy ep_0000000086 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000087 (agent 200, policy ep_0000000087 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000088 (agent 200, policy ep_0000000088 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000089 (agent 200, policy ep_0000000089 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见）
+[e2e] result passed	2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复
+[e2e] result passed	3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow
+[e2e] result passed	4. debounce 合并击键 burst：一次 burst 仅一个 PATCH
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 3 run 2026-09-19T02:20:44Z =====
+
+[e2e] date=2026-09-19T02:20:44Z HEAD=338f9d2816722522114e89fea08d416e71e98a46
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 7 tests using 1 worker
+
+  ✓  1 e2e/native-rule-editor.spec.ts:180:7 › Todo 3 · 原生 glob 规则表编辑器 › 1. 四行恒显 + 编辑器形态（模板 agent） (1.4s)
+[cleanup] a_0000000090 (agent 200, policy ep_0000000090 200, re-GET 404)
+  ✓  2 e2e/native-rule-editor.spec.ts:229:7 › Todo 3 · 原生 glob 规则表编辑器 › 2. absent task 仍渲染（只读 + note） (1.5s)
+[cleanup] a_0000000091 (agent 200, policy ep_0000000091 200, re-GET 404)
+  ✓  3 e2e/native-rule-editor.spec.ts:264:7 › Todo 3 · 原生 glob 规则表编辑器 › 3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask (1.4s)
+[cleanup] a_0000000092 (agent 200, policy ep_0000000092 200, re-GET 404)
+  ✓  4 e2e/native-rule-editor.spec.ts:330:7 › Todo 3 · 原生 glob 规则表编辑器 › 4. `*` 兜底警告：切 allow 即出现 (1.4s)
+[cleanup] a_0000000093 (agent 200, policy ep_0000000093 200, re-GET 404)
+  ✓  5 e2e/native-rule-editor.spec.ts:352:7 › Todo 3 · 原生 glob 规则表编辑器 › 5. 重复 glob 客户端拒绝（提交面不增长） (1.2s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000094 (agent 200, policy ep_0000000094 200, re-GET 404)
+  ✓  6 e2e/native-rule-editor.spec.ts:390:7 › Todo 3 · 原生 glob 规则表编辑器 › 7. 未知 effect 原样保留（不归一化） (1.7s)
+[cleanup] a_0000000095 (agent 200, policy ep_0000000095 200, re-GET 404)
+  ✓  7 e2e/native-rule-editor.spec.ts:428:7 › Todo 3 · 原生 glob 规则表编辑器 › 6. bash 三态：当前值选中且可切换（持久化） (2.6s)
+
+  7 passed (11.7s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000090 (agent 200, policy ep_0000000090 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000091 (agent 200, policy ep_0000000091 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000092 (agent 200, policy ep_0000000092 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000093 (agent 200, policy ep_0000000093 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000094 (agent 200, policy ep_0000000094 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000095 (agent 200, policy ep_0000000095 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 四行恒显 + 编辑器形态（模板 agent）
+[e2e] result passed	2. absent task 仍渲染（只读 + note）
+[e2e] result passed	3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask
+[e2e] result passed	4. `*` 兜底警告：切 allow 即出现
+[e2e] result passed	5. 重复 glob 客户端拒绝（提交面不增长）
+[e2e] result passed	7. 未知 effect 原样保留（不归一化）
+[e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 4 run 2026-09-19T02:24:26Z =====
+
+[e2e] date=2026-09-19T02:24:26Z HEAD=338f9d2816722522114e89fea08d416e71e98a46
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+[cleanup] a_0000000098 (agent 200, policy ep_0000000098 200, re-GET 404)
+  ✓  1 e2e/policy-serialize.spec.ts:163:7 › Todo 4 · 策略写入串行化 › 1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见） (3.5s)
+[cleanup] a_0000000099 (agent 200, policy ep_0000000099 200, re-GET 404)
+  ✓  2 e2e/policy-serialize.spec.ts:235:7 › Todo 4 · 策略写入串行化 › 2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复 (1.6s)
+[cleanup] a_0000000100 (agent 200, policy ep_0000000100 200, re-GET 404)
+  ✓  3 e2e/policy-serialize.spec.ts:337:7 › Todo 4 · 策略写入串行化 › 3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow (2.7s)
+[cleanup] a_0000000101 (agent 200, policy ep_0000000101 200, re-GET 404)
+  ✓  4 e2e/policy-serialize.spec.ts:383:7 › Todo 4 · 策略写入串行化 › 4. debounce 合并击键 burst：一次 burst 仅一个 PATCH (2.3s)
+
+  4 passed (12.1s)
+----- end playwright raw -----
+[e2e] PASS playwright green; evidence json present
+[e2e] cleanup [cleanup] a_0000000098 (agent 200, policy ep_0000000098 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000099 (agent 200, policy ep_0000000099 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000100 (agent 200, policy ep_0000000100 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000101 (agent 200, policy ep_0000000101 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见）
+[e2e] result passed	2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复
+[e2e] result passed	3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow
+[e2e] result passed	4. debounce 合并击键 burst：一次 burst 仅一个 PATCH
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+===== todo 3 run 2026-09-19T02:24:39Z =====
+
+[e2e] date=2026-09-19T02:24:39Z HEAD=338f9d2816722522114e89fea08d416e71e98a46
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 7 tests using 1 worker
+
+  ✓  1 e2e/native-rule-editor.spec.ts:180:7 › Todo 3 · 原生 glob 规则表编辑器 › 1. 四行恒显 + 编辑器形态（模板 agent） (1.4s)
+[cleanup] a_0000000102 (agent 200, policy ep_0000000102 200, re-GET 404)
+  ✓  2 e2e/native-rule-editor.spec.ts:229:7 › Todo 3 · 原生 glob 规则表编辑器 › 2. absent task 仍渲染（只读 + note） (1.7s)
+[cleanup] a_0000000103 (agent 200, policy ep_0000000103 200, re-GET 404)
+  ✓  3 e2e/native-rule-editor.spec.ts:264:7 › Todo 3 · 原生 glob 规则表编辑器 › 3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask (1.5s)
+[cleanup] a_0000000104 (agent 200, policy ep_0000000104 200, re-GET 404)
+  ✓  4 e2e/native-rule-editor.spec.ts:330:7 › Todo 3 · 原生 glob 规则表编辑器 › 4. `*` 兜底警告：切 allow 即出现 (1.5s)
+[cleanup] a_0000000105 (agent 200, policy ep_0000000105 200, re-GET 404)
+  ✓  5 e2e/native-rule-editor.spec.ts:352:7 › Todo 3 · 原生 glob 规则表编辑器 › 5. 重复 glob 客户端拒绝（提交面不增长） (1.3s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000106 (agent 200, policy ep_0000000106 200, re-GET 404)
+  ✓  6 e2e/native-rule-editor.spec.ts:390:7 › Todo 3 · 原生 glob 规则表编辑器 › 7. 未知 effect 原样保留（不归一化） (1.8s)
+[cleanup] a_0000000107 (agent 200, policy ep_0000000107 200, re-GET 404)
+  ✓  7 e2e/native-rule-editor.spec.ts:428:7 › Todo 3 · 原生 glob 规则表编辑器 › 6. bash 三态：当前值选中且可切换（持久化） (2.4s)
+
+  7 passed (12.4s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000102 (agent 200, policy ep_0000000102 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000103 (agent 200, policy ep_0000000103 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000104 (agent 200, policy ep_0000000104 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000105 (agent 200, policy ep_0000000105 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000106 (agent 200, policy ep_0000000106 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000107 (agent 200, policy ep_0000000107 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 四行恒显 + 编辑器形态（模板 agent）
+[e2e] result passed	2. absent task 仍渲染（只读 + note）
+[e2e] result passed	3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask
+[e2e] result passed	4. `*` 兜底警告：切 allow 即出现
+[e2e] result passed	5. 重复 glob 客户端拒绝（提交面不增长）
+[e2e] result passed	7. 未知 effect 原样保留（不归一化）
+[e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt

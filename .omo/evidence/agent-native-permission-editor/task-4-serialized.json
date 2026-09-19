@@ -1,0 +1,39 @@
+[
+  {
+    "test": "no_lost_update",
+    "agent": "a_0000000098",
+    "policy_id": "ep_0000000098",
+    "stored_after": {
+      "bash": "allow",
+      "edit_src": "deny"
+    },
+    "patch_count": 1,
+    "reload_visible": true
+  },
+  {
+    "test": "inflight_gate_disables_all",
+    "agent": "a_0000000099",
+    "policy_id": "ep_0000000099",
+    "patched_tool": "vteam_chat_history",
+    "native_input_disabled": true,
+    "native_chips_disabled": true,
+    "bash_chips_disabled": true,
+    "all_mcp_selects_disabled": true,
+    "re_enabled_after_release": true
+  },
+  {
+    "test": "native_edit_persists",
+    "agent": "a_0000000100",
+    "policy_id": "ep_0000000100",
+    "stored_bash": "allow",
+    "reload_selected": "allow"
+  },
+  {
+    "test": "debounce_coalesces",
+    "agent": "a_0000000101",
+    "policy_id": "ep_0000000101",
+    "keystrokes": 3,
+    "patch_count": 1,
+    "stored_edit_abc": "deny"
+  }
+]
