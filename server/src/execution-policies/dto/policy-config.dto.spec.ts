@@ -84,7 +84,11 @@ describe('PolicyConfigDto.bashDeny 往返（全局 whitelist pipe）', () => {
     };
   }) {
     const idGen = { nextId: jest.fn().mockResolvedValue('ep_0000000042') };
-    return new ExecutionPolicyService(prisma as never, idGen as never);
+    return new ExecutionPolicyService(
+      prisma as never,
+      idGen as never,
+      { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
+    );
   }
 
   /** 经生产同款全局 pipe 后调用控制器 PATCH（等价 HTTP 入站校验 → 路由委托）。 */

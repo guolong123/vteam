@@ -26,6 +26,7 @@ describe('unified agent policy fallback (Todo 5)', () => {
         },
       } as never,
       {} as never,
+      { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
     );
   }
 

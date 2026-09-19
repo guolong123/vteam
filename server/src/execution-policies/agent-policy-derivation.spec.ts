@@ -56,6 +56,7 @@ describe('agent policy mode/task derivation (Todo 6)', () => {
           executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
         } as never,
         {} as never,
+        { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
       );
     }
 

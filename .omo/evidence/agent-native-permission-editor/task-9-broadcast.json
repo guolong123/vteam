@@ -1,0 +1,88 @@
+{
+  "task": "todo 9 [server] Broadcast reload-config when an execution policy changes",
+  "date": "2026-09-19",
+  "implemented": {
+    "module": "server/src/execution-policies/execution-policies.module.ts",
+    "module_change": "added plain import WorkersModule (no forwardRef needed — boot clean, 0 circular-dependency errors)",
+    "service": "server/src/execution-policies/execution-policy.service.ts",
+    "service_changes": [
+      "import { WORKER_COMMAND_TYPES, WorkersService } from '../workers/workers.service'",
+      "constructor gains REQUIRED 3rd param private readonly workersService: WorkersService (NOT @Optional — silent-no-op must fail loudly)",
+      "private readonly logger = new Logger(ExecutionPolicyService.name)",
+      "private broadcastReloadConfig(): broadcasts WORKER_COMMAND_TYPES.RELOAD_CONFIG with resourceVersion ISO string; logs worker count; try/catch swallows broadcast failure",
+      "update(): awaits broadcastReloadConfig() after successful prisma.executionPolicy.update, then returns updated row",
+      "create()/remove(): intentionally do NOT broadcast (scope fence)"
+    ],
+    "spec_sites_updated": [
+      "server/src/agents/agents.service.spec.ts",
+      "server/src/platform-mcp/platform-mcp.authority-matrix.spec.ts",
+      "server/src/execution-policies/dto/policy-config.dto.spec.ts",
+      "server/src/execution-policies/agent-policies-db-builtin.spec.ts",
+      "server/src/execution-policies/agent-policies.native-edit.spec.ts",
+      "server/src/execution-policies/execution-policy.service.spec.ts",
+      "server/src/execution-policies/agent-policies-db-driven.spec.ts",
+      "server/src/execution-policies/agent-policy-derivation.spec.ts",
+      "server/src/execution-policies/agent-policy-fallback.spec.ts",
+      "server/src/execution-policies/agent-policies.custom-agents.spec.ts",
+      "server/src/execution-policies/agent-policies.matrix.spec.ts (3 sites)",
+      "server/src/execution-policies/agent-policies.controller.spec.ts (13th site — Nest TestingModule provider, not a direct new; found only by running jest after tsc passed)"
+    ],
+    "stub_shape": "{ broadcastCommand: jest.fn().mockResolvedValue(0) } as never"
+  },
+  "forwardRef_needed": false,
+  "tests": {
+    "tsc": { "command": "cd server && npx tsc -p tsconfig.json --noEmit", "exit": 0 },
+    "jest": {
+      "command": "cd server && npx jest --runInBand",
+      "result": "134 suites passed / 134 total; 3101 tests passed / 3101 total; 1 snapshot passed",
+      "baseline": "133 suites / 3092 tests",
+      "new_tests": [
+        "A. update() calls workersService.broadcastCommand exactly once with { type: 'reload-config', resourceVersion: <string> } after successful write",
+        "B. broadcastCommand REJECTS -> update() still resolves and returns the updated row",
+        "C. create() does NOT broadcast (scope fence)"
+      ]
+    }
+  },
+  "live_probe": {
+    "stack": "docker compose (server http://localhost:13000, worker aiagents-compose-worker)",
+    "fix_build": "docker compose build server && docker compose up -d server — started clean, 0 circular-dependency errors",
+    "steps": [
+      "snapshot GET /api/v1/execution-policies/ep_product -> /tmp/t9-snapshot.json (sha256 018f391ec0dd2cfd190e6218056c288008e2af2f39538f3c8a381ab333500a1b)",
+      "PATCH ep_product adding edit rule '**t9-probe/**':'allow' -> HTTP 200",
+      "server log: '执行策略变更：已广播 reload-config 到 1 个 worker'",
+      "worker log: '收到命令 reload-config (resourceVersion=2026-09-19T03:15:41.718Z)' -> 'reload-config：资源重注入完成 (9 skills, 0 tools, 1 mcp servers)'",
+      "poll: t9-probe PRESENT in /data/vteam-worker/opencode.json AND .vteam-role-guard/roles.json at POLL 1",
+      "POST /api/v1/workers/w_compose_worker/restart -> HTTP 201 {command:'restart',queued:true}; artifact retained t9-probe (counts 1,1 across 12 polls)"
+    ],
+    "result": "PASS — policy PATCH reaches injected artifacts; artefact survives the restart endpoint afterwards"
+  },
+  "mutation_proof": {
+    "method": "cp execution-policy.service.ts -> /tmp/t9-policy-service.bak (sha c5f50430...); removed `await this.broadcastReloadConfig();` from update(); rebuilt + redeployed server",
+    "steps": [
+      "PATCH ep_product adding '**t9-mut/**':'allow' -> HTTP 200; server broadcast log count (window) = 0",
+      "artifact t9-mut before restart = 0",
+      "POST /api/v1/workers/w_compose_worker/restart -> HTTP 201",
+      "artifact t9-mut after restart = 0 in opencode.json AND roles.json (pre-fix broken behaviour reproduced)"
+    ],
+    "restore": {
+      "method": "cp /tmp/t9-policy-service.bak back; NEVER used git checkout/restore",
+      "sha_match": "c5f50430c92fe1572491affc8e0700140ba1e397c1644d1ae2db8b689b458bb2 == c5f50430c92fe1572491affc8e0700140ba1e397c1644d1ae2db8b689b458bb2",
+      "diff": "empty",
+      "rebuild": "docker compose build server && docker compose up -d server -> health 200, 0 circular deps"
+    },
+    "discriminating": true
+  },
+  "restore_ep_product": {
+    "patch": "PATCH ep_product with the exact snapshot name/description/config -> HTTP 200",
+    "server_log": "已广播 reload-config 到 1 个 worker (real fix active)",
+    "get_equality": "config equal to snapshot: true; name equal: true; description equal: true",
+    "artifacts": "t9-probe/t9-mut counts 0,0 in opencode.json and roles.json after restore broadcast"
+  },
+  "frozen_baseline_sha": {
+    "path": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json",
+    "expected": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "actual": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "unchanged": true
+  },
+  "worker_untouched": true
+}

@@ -42,6 +42,7 @@ describe('agent-policies db-backed builtins (Todo 3)', () => {
         executionPolicy,
       } as never,
       {} as never,
+      { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
     );
   }
 

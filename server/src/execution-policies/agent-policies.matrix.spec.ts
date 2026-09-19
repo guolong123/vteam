@@ -132,6 +132,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
         executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
       } as never,
       {} as never,
+      { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
     );
     const policies = await service.buildAgentPolicies();
     let assertions = 0;
@@ -170,6 +171,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
         executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
       } as never,
       {} as never,
+      { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
     );
     const policies = await service.buildAgentPolicies();
     expect(policies.agents).toHaveLength(7);
@@ -189,6 +191,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
         executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
       } as never,
       {} as never,
+      { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
     );
     let policies: Awaited<ReturnType<typeof service.buildAgentPolicies>>;
 

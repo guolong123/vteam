@@ -103,3 +103,40 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   → `cp` 回覆盖 + `shasum -a 256` 与原 sha 逐字节比对 -> 重新 build。**绝不 `git checkout --`**。
 - **截图证据**：fullPage 截图会从页顶开始，通知在折叠线下 → `scrollIntoViewIfNeeded()` 先把
   `[data-testid=policy-restart-notice]` 滚进视口再截，否则证据图里看不到本次交付物。
+
+---
+
+## [2026-09-19] todo 9 — policy PATCH must itself broadcast reload-config
+
+**The root cause the plan missed.** `POST /workers/:id/restart` ONLY runs `restartCoordinator`
+(serve restart + reRegister) — it NEVER calls `injector.injectAll()` (`worker/src/index.ts:769`
+vs `:861`). Only `reload-config` re-injects. `mcp-servers`/`skills`/`tools` services already
+broadcast it on change; `execution-policies` did not. So a policy PATCH never reached
+`opencode.json` / `.vteam-role-guard/roles.json` no matter how many times you hit restart.
+Fix: inject `WorkersService` (REQUIRED, not `@Optional`) into `ExecutionPolicyService` and
+broadcast after a successful `update()`.
+
+**Actions that worked (copy these):**
+- Module wiring: plain `imports: [... WorkersModule]` — NO `forwardRef` needed. Verified the
+  graph has no back-edge (`WorkersModule` deps Realtime/forwardRef(McpServers)/forwardRef(Models),
+  none import ExecutionPolicies). Boot logs: `ExecutionPoliciesModule dependencies initialized`,
+  0 circular errors. The task said "if Nest reports a circular-dependency error, THEN forwardRef" —
+  it did not, so plain import stands.
+- **tsc passing does NOT mean all spec construction sites are covered.** There is a 13th site that
+  is NOT a `new ExecutionPolicyService(...)`: `agent-policies.controller.spec.ts` builds the service
+  through a Nest `TestingModule` provider list. tsc exits 0; only `jest` surfaces
+  `Nest can't resolve dependencies of the ExecutionPolicyService (..., ?)`. Always run the full
+  jest suite after adding a required constructor dep — grep for `new X(` is insufficient.
+- **Discriminating mutation proof is cheap and decisive**: back the file up to `/tmp`, delete the
+  one `await this.broadcastReloadConfig();` line, rebuild+redeploy, PATCH a NEW marker
+  (`**t9-mut/**`), POST restart, observe count stays 0. Then `cp` back, compare `shasum -a 256`
+  (byte-identical), rebuild. Never `git checkout --`.
+- Use a FRESH marker per phase (`t9-probe` for the fix, `t9-mut` for the mutation, then clear both
+  on restore) so artifact counts are unambiguous and don't collide with prior runs' leftovers.
+- Restore via the API's own PATCH with the exact snapshot `name`/`description`/`config` — then assert
+  `config == snapshot`, `name == snapshot`, and that both markers are gone from both artifacts.
+- Frozen-sha gate is a plain `shasum -a 256 .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json`
+  — re-check it after ALL mutations/restores, not only at the end.
+
+**Baseline drift observed:** current full jest is 134 suites / 3101 tests (the native-edit spec +
+the 3 new tests), and `agent-policies.controller.spec.ts` was an unlisted 13th ctor site.

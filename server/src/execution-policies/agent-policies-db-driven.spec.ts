@@ -98,6 +98,7 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
         executionPolicy: { findMany, findUnique },
       } as never,
       {} as never,
+      { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
     );
     return { service, findMany, findUnique };
   }

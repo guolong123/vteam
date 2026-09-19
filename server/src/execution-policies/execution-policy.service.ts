@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
@@ -21,6 +22,10 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  WORKER_COMMAND_TYPES,
+  WorkersService,
+} from '../workers/workers.service';
 import { CreateExecutionPolicyDto } from './dto/create-execution-policy.dto';
 import { QueryExecutionPoliciesDto } from './dto/query-execution-policies.dto';
 import { UpdateExecutionPolicyDto } from './dto/update-execution-policy.dto';
@@ -484,9 +489,17 @@ export function resolveConstantPolicySource(
  */
 @Injectable()
 export class ExecutionPolicyService implements OnModuleInit {
+  private readonly logger = new Logger(ExecutionPolicyService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
+    /**
+     * 策略变更后广播 reload-config 的入口。
+     * **必填**（非 @Optional）：缺失注入须在启动期大声失败——本依赖存在的原因正是
+     * 修复一个静默 no-op（策略 PATCH 不刷新 worker 注入产物），可选依赖会让 bug 复活。
+     */
+    private readonly workersService: WorkersService,
   ) {}
 
   /** 进程启动对齐 ep_ 数字序号（命名 id ep_<role> 忽略，只统计 ep_<数字>）。 */
@@ -571,7 +584,7 @@ export class ExecutionPolicyService implements OnModuleInit {
     if (dto.config !== undefined) {
       this.assertValidConfig(dto.config);
     }
-    return this.prisma.executionPolicy.update({
+    const updated = await this.prisma.executionPolicy.update({
       where: { id },
       data: {
         ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
@@ -583,6 +596,25 @@ export class ExecutionPolicyService implements OnModuleInit {
           : {}),
       },
     });
+    // 仅 update 广播（本计划流程只 PATCH）；create/remove 不在范围内。
+    await this.broadcastReloadConfig();
+    return updated;
+  }
+
+  /** 策略变更落库成功后向全部在线 worker 广播 reload-config（对齐 skills/tools/mcp-servers）。 */
+  private async broadcastReloadConfig(): Promise<void> {
+    try {
+      const n = await this.workersService.broadcastCommand({
+        type: WORKER_COMMAND_TYPES.RELOAD_CONFIG,
+        resourceVersion: new Date().toISOString(),
+      });
+      if (n > 0) {
+        this.logger.log(`执行策略变更：已广播 reload-config 到 ${n} 个 worker`);
+      }
+    } catch (e) {
+      // 广播失败绝不影响写入结果（与 skills/tools 同策略）
+      this.logger.warn(`执行策略变更后广播 reload-config 失败: ${e}`);
+    }
   }
 
   /**

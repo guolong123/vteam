@@ -9,6 +9,7 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { WorkerOrJwtGuard } from '../workers/worker-or-jwt.guard';
+import { WorkersService } from '../workers/workers.service';
 import { AgentPoliciesController } from './agent-policies.controller';
 import { ExecutionPolicyService } from './execution-policy.service';
 
@@ -62,6 +63,11 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
           },
         },
         { provide: IdGeneratorService, useValue: { seed: jest.fn() } },
+        // update() 变更后广播入口（本 spec 只走 GET 读路径，stub 即可）
+        {
+          provide: WorkersService,
+          useValue: { broadcastCommand: jest.fn().mockResolvedValue(0) },
+        },
       ],
     }).compile();
 

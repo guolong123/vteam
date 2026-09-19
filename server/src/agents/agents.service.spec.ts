@@ -1647,6 +1647,7 @@ describe('AgentsService', () => {
           executionPolicy: { findMany: jest.fn().mockResolvedValue(rows) },
         } as never,
         {} as never,
+        { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
       );
     }
 

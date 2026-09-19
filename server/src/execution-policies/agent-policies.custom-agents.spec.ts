@@ -87,7 +87,11 @@ describe('agent-policies custom agents (Todo 2)', () => {
   }
 
   function serviceWith(prisma: unknown) {
-    return new ExecutionPolicyService(prisma as never, {} as never);
+    return new ExecutionPolicyService(
+      prisma as never,
+      {} as never,
+      { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
+    );
   }
 
   describe('内置字节一致（无自定义 agent）', () => {

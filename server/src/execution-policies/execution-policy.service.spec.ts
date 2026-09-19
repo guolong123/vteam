@@ -72,16 +72,25 @@ describe('ExecutionPolicyService（真实 service，FINDING-5）', () => {
     return { rows, findUnique, update, create, delete: del };
   }
 
-  function serviceWith(prisma: {
-    executionPolicy: {
-      findUnique: jest.Mock;
-      update: jest.Mock;
-      create: jest.Mock;
-      delete: jest.Mock;
-    };
-  }) {
+  function serviceWith(
+    prisma: {
+      executionPolicy: {
+        findUnique: jest.Mock;
+        update: jest.Mock;
+        create: jest.Mock;
+        delete: jest.Mock;
+      };
+    },
+    workersService: {
+      broadcastCommand: jest.Mock;
+    } = { broadcastCommand: jest.fn().mockResolvedValue(0) },
+  ) {
     const idGen = { nextId: jest.fn().mockResolvedValue('ep_0000000042') };
-    return new ExecutionPolicyService(prisma as never, idGen as never);
+    return new ExecutionPolicyService(
+      prisma as never,
+      idGen as never,
+      workersService as never,
+    );
   }
 
   describe('update()：template 可直接编辑（PATCH 放开）', () => {
@@ -403,6 +412,60 @@ describe('ExecutionPolicyService（真实 service，FINDING-5）', () => {
         permission: { edit: { '*': 'deny' }, read: { '*': 'allow' } },
         correction: { scopeSummary: 'scope' },
       });
+    });
+  });
+
+  describe('update() 广播 reload-config（todo 9）', () => {
+    it('A. 写入成功后恰好广播一次 reload-config', async () => {
+      const prisma = store([row()]);
+      const broadcastCommand = jest.fn().mockResolvedValue(3);
+      const service = serviceWith({ executionPolicy: prisma }, {
+        broadcastCommand,
+      });
+
+      await service.update('ep_product', { name: '产品经理-新' });
+
+      expect(broadcastCommand).toHaveBeenCalledTimes(1);
+      expect(broadcastCommand).toHaveBeenCalledWith({
+        type: 'reload-config',
+        resourceVersion: expect.any(String),
+      });
+    });
+
+    it('B. 广播 reject 不影响写入：update 仍 resolve 并返回更新行', async () => {
+      const prisma = store([row()]);
+      const broadcastCommand = jest
+        .fn()
+        .mockRejectedValue(new Error('no online worker'));
+      const service = serviceWith({ executionPolicy: prisma }, {
+        broadcastCommand,
+      });
+
+      const updated = await service.update('ep_product', {
+        name: '产品经理-新',
+      });
+
+      expect(updated.name).toBe('产品经理-新');
+      expect(prisma.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('C. create() 不广播（作用域栅栏）', async () => {
+      const prisma = store([]);
+      const broadcastCommand = jest.fn().mockResolvedValue(1);
+      const service = serviceWith({ executionPolicy: prisma }, {
+        broadcastCommand,
+      });
+
+      await service.create({
+        name: '自定义',
+        type: 'custom',
+        config: {
+          permission: { task: 'deny' },
+          correction: { scopeSummary: 's' },
+        },
+      });
+
+      expect(broadcastCommand).not.toHaveBeenCalled();
     });
   });
 });
