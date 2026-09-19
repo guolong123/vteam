@@ -12,6 +12,14 @@ import { test, expect, type Page } from "@playwright/test";
  * 4. 计划员可达（API，不触发真实 LLM 执行）：GET /teams/tm_0000000001
  *    成员含 tmm_0000000006（计划员-1）且成员行保留 opencodeAgentName 键。
  *
+ * M6 边界（third-party-agent-display Todo 3，review fix M6）：
+ * ---------------------------------------------------------------
+ * 保证被缩窄到它本来的范围：**会话页 / 消息输入区**永远零 picker（测试 1 原样保留）。
+ * 团队详情页（`/teams/[id]`，成员管理设置面）是外部 Agent 选择器的**唯一合法宿主**：
+ * third-party-agent-display Todo 3 恢复了 `member-external-agent-select`，位置是
+ * 设置面而非消息输入。测试 5 把这条边界钉成机器可检的断言（允许设置面，但仅此一处）。
+ * 不得对团队详情页断言零 `<select>`，也不得删除测试 1 的消息输入区保证。
+ *
  * 方法：POST 发送类一律拦截 mock；GET 消息列表 mock（种子 1 条 + 发送后回显
  * 探针）；其余 /api/v1/* route.fallback 走真实后端只读（含团队/成员/SSE）。
  * 运行（仓库根）：`bash scripts/e2e-no-agent-picker.sh`（独立 tmp config，
@@ -89,9 +97,11 @@ test.describe("no-agent-picker 选择器移除回归", () => {
     // 输入区存在（回归锚点：删的是选择器，不是整个输入块）
     await expect(page.getByTestId("message-input")).toBeVisible();
     await expect(page.getByTestId("message-input-send")).toBeVisible();
-    // 断言本体：残留 testid 与全页 <select> 均为零
+    // 断言本体：残留 testid 与全页 <select> 均为零（M6 保证被缩窄到会话页）
     await expect(page.getByTestId("message-agent-select")).toHaveCount(0);
     await expect(page.locator("select")).toHaveCount(0);
+    // 反向探针：外部 Agent 选择器不得出现在会话页任何位置（含成员面板）
+    await expect(page.getByTestId("member-external-agent-select")).toHaveCount(0);
   });
 
   test("2. @ 可用：候选含计划员-1，点击插入", async ({ page }) => {
@@ -156,5 +166,28 @@ test.describe("no-agent-picker 选择器移除回归", () => {
     // buildTeamMemberTrigger 按 (teamId, memberId) 定位成员（worker-dispatcher.ts:1290）：
     // 成员存在即触发链可达；opencodeAgentName 键保留即回退链载体未动。
     expect("opencodeAgentName" in member!).toBe(true);
+  });
+
+  // M6：设置面是外部 Agent 选择器的唯一合法宿主——边界显式化 + 机器可检。
+  test("5. 边界：设置面（团队详情页）允许 member-external-agent-select，会话页不渲染它", async ({
+    page,
+  }) => {
+    await loginAsAdmin(page);
+
+    // 设置面：团队详情页 IS the sanctioned host
+    await page.goto(`/teams/${TEAM_ID}`);
+    await expect(page.getByTestId("team-detail-root")).toBeVisible({ timeout: 15_000 });
+    const picker = page.getByTestId("member-external-agent-select");
+    await expect(picker.first()).toBeVisible({ timeout: 15_000 });
+    expect(await picker.count()).toBeGreaterThan(0);
+    // 该设置面的选择器必须来自引擎清单（非硬编码）：至少含一个 option
+    expect(await picker.first().locator("option").count()).toBeGreaterThan(1);
+
+    // 会话页：同一 testid 零出现（保证缩窄到消息输入区，不泄漏到会话路由）
+    await installMocks(page, { probeSent: false });
+    await page.goto(`/teams/${TEAM_ID}/session`);
+    await expect(page.getByTestId("team-session-root")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("member-external-agent-select")).toHaveCount(0);
+    await expect(page.locator("select")).toHaveCount(0);
   });
 });

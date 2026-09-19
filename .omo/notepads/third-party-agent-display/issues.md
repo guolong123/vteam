@@ -59,3 +59,29 @@ SAFE surfaces: `/teams/[id]` team detail page (`web/app/(main)/teams/[id]/page.t
   whether the auto-selected first external agent has a prompt — but it never accepts the error state.
   Test 2 forces the error state with `page.route` fulfill 500 and asserts the empty/`<pre>` states are
   absent (the "never a blank" guarantee).
+
+## todo 3 — notes/observations
+
+- **Plan's example name `prometheus` does not exist on this deployment.** `/agents/opencode`
+  reports `Prometheus - Plan Builder` (title-cased display name), not `prometheus`. Any spec
+  or doc that hardcodes `prometheus` (e.g. the todo-3 QA scenario text) would fail. The spec
+  resolves the name from the API at run time; production code never hardcodes it.
+- `docker compose up -d --build web` recreated web (and started `init` as a dependency, which
+  exited 0 idempotently). Seed data intact: team count 10, seed members 7, all
+  `opencode_agent_name` NULL. Never `--force-recreate`.
+- Server production code was NOT touched — no change was needed: `UpdateMemberDto`
+  (`server/src/teams/dto/add-member.dto.ts:66-73`) already accepts `opencodeAgentName`
+  (max 64) and `updateMember` (`teams.service.ts:878-887`) already normalizes `""` → null and
+  weak-validates via `warnIfOpencodeAgentUnknown` (`:919-941`, logs only, never throws).
+  `toTeamDto` (`:1413`) already returns the field. So no server test was added either — the
+  existing `teams.service.spec.ts` cases (`:1154-1265`, including the unknown-name write
+  path) already pin the server contract; adding a duplicate suite would be noise.
+- `no-agent-picker.spec.ts` test 4 is a pure API test; while running the M6 spec set, note the
+  Playwright `request` fixture resolves against `baseURL` OR the explicit `SERVER_URL` — the
+  existing spec uses the absolute URL, which kept working unchanged.
+- Evidence PNGs are gitignored (`.omo/evidence/**/*.png`) as in todos 1/2; the runner log
+  `task-3-e2e.txt`, `task-3-proof.json`, and both screenshots exist on disk.
+- Frozen baseline re-verified after the whole run:
+  `shasum -a 256 .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json`
+  = `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87` (unchanged);
+  `git diff --stat -- server/ worker/` empty.

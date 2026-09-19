@@ -16,6 +16,8 @@ export interface TeamMemberDto {
   seq: number;
   workDir: string;
   overrideModelId?: string | null;
+  /** opencode 原生 agent 名（null = 不指定，用引擎默认 agent）。 */
+  opencodeAgentName?: string | null;
   agent?: { id: string; name: string; role: string | null };
   createdAt?: string;
 }
@@ -91,6 +93,8 @@ export interface UpdateMemberPayload {
   alias?: string;
   workDir?: string;
   overrideModelId?: string | null;
+  /** opencode 原生 agent 名（空字符串/null = 清除选择，回引擎默认 agent）。 */
+  opencodeAgentName?: string | null;
   roleId?: string | null;
   agentId?: string;
 }

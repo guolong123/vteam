@@ -93,3 +93,44 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   + 11 visible external (the tab shows 11 rows). `general` returns `empty:true` (no engine prompt) →
   that path shows 该 agent 未定义自定义提示词; `Sisyphus - ultraworker` returns 33,304 chars / 716 lines.
 - `npx tsc --noEmit` clean; spec green 2/2 via tmp `.tpad.playwright.config.ts` against :13001.
+
+## todo 3 — 成员外部 Agent 选择（设置面）(2026-09-19)
+
+- Placement (orchestrator decision, honored): the select lives on the team DETAIL page
+  `web/app/(main)/teams/[id]/page.tsx` `MemberRow`. `TeamMembersPanel.tsx` (rendered on the
+  session page) got ZERO changes — its dead `OpencodeAgentItem`/`isSelectableOpencodeAgent`
+  exports were left alone. The session page stayed at whole-page zero `<select>`.
+- MemberRow became a 2-row column (identity+alias/workDir+save on row 1; external-agent
+  control on row 2, separated by a dashed border) — the only layout change needed; no
+  refactor of the 505-line page.
+- Live engine names are NOT the plan's example: the external set is 11 names
+  (`Sisyphus - ultraworker`, `Prometheus - Plan Builder`, `Atlas - Plan Executor`, …).
+  There is NO bare `prometheus`. The spec therefore fetches `/agents/opencode` first and
+  prefers `/prometheus/i` (matched `Prometheus - Plan Builder`) else the first external —
+  never a hardcoded name. The task brief's "playwright picks `prometheus`" is satisfied by
+  the real engine name that contains it.
+- Honesty refinement worth keeping: the "engine-unknown" warning must judge against the
+  engine's FULL list (incl. governed/hidden), not just the external subset. Otherwise a
+  member saved with `vteam-developer` (engine-reported, merely governed) would be falsely
+  labelled "未被引擎上报". Two distinct states: `unknownExternal` (full-list miss → warning)
+  and `currentNotInList` (external-subset miss but engine-reported → option annotated
+  `（当前，vteam 策略 Agent，非外部选项）`, no warning). Spec test 3 pins the negative
+  assertion so a future simplification back to external-subset-only turns red.
+- `engineState` is a 3-way (`loading` / `ready` / `unavailable`), not a boolean: while the
+  list loads or the worker is offline the warning MUST NOT fire (it would be a false claim).
+  Query uses `staleTime: 0` + `refetchOnMount: "always"` so the verdict is per-visit, never
+  stale-cache.
+- `UpdateMemberPayload` accepts the field; `AddMemberPayload` does NOT (server parity).
+  MemberRow always sends `opencodeAgentName` in the same PATCH as alias/workDir; empty string
+  = clear (server normalizes `""` → null).
+- Cleanup discipline: throwaway team per test (create → patch → assert → DELETE). Seed team
+  `tm_0000000001` was only read (before/after member-snapshot equality asserted in the spec
+  and recorded in `task-3-proof.json`). Final DB check: `select count(*) from team_members
+  where opencode_agent_name is not null` = 0, zero `qa-t3%`/`qa-t7%` teams left.
+- `no-agent-picker.spec.ts` M6 update is 3 small edits: header boundary paragraph, test 1
+  gained one `member-external-agent-select` count-0 probe (all original assertions intact),
+  and a NEW test 5 that visits the detail page (picker visible, >1 option) then the session
+  page (count 0). Nothing was deleted or weakened.
+- Runner `scripts/e2e-member-external-agent.sh` uses ONE tmp config with a 4-spec testMatch +
+  all screenshot/evidence env vars, so tsc-equivalent full-set verification is a single
+  command. 13/13 green in ~26s.
