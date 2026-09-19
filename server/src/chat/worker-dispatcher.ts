@@ -33,8 +33,12 @@ import {
   canonicalizeCorrection,
   ExecutionPolicyService,
   resolveConstantPolicySource,
+  type AgentToolState,
 } from '../execution-policies/execution-policy.service';
-import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
+import {
+  getOpencodeAgentDuty,
+  VTEAM_PLAN_AGENT_NAME,
+} from '../common/opencode-agent-duty';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
@@ -395,7 +399,10 @@ export function roleNeedsIssueDetail(role: string | null | undefined): boolean {
 
 /**
  * plan 角色判定（记忆段屏蔽用）——兼容大小写及中文“计划员”，写法参考 roleNeedsIssueDetail。
- * plan 的 toolAllows 无 vteam_memory_save，GLOBAL 内【记忆管理】2 行对其屏蔽。
+ *
+ * ⚠️ agent-role-decommission todo 2：本函数**已不再是任何生产分支的判定来源**
+ * （记忆/产出物段改由已解析策略 `tools` 驱动，见 `toolAllowed`）。保留仅供既有单测
+ * 引用，删除归 todo 8（届时一并删除引用它的 spec）。
  */
 export function isPlanRole(role: string | null | undefined): boolean {
   if (!role) {
@@ -406,6 +413,24 @@ export function isPlanRole(role: string | null | undefined): boolean {
     return true;
   }
   return r.includes('计划');
+}
+
+/**
+ * 已解析策略 `tools` 是否放行某工具（agent-role-decommission todo 2）：
+ * `allow`/`ask` 视为放行，`deny`/缺项视为不放行——与 worker guard 的
+ * `isToolAllowed` 同口径。**这是记忆段/产出物段屏蔽的唯一判据**：
+ * 指令里教了工具却被 guard 拒（或反过来）才是真实错误，故只认工具本身，
+ * 不认 duty/角色名。
+ */
+export function toolAllowed(
+  tools: Record<string, AgentToolState> | null | undefined,
+  name: string,
+): boolean {
+  if (!tools) {
+    return false;
+  }
+  const effect = tools[name];
+  return effect === 'allow' || effect === 'ask';
 }
 
 /**
@@ -492,18 +517,23 @@ export interface BuildSystemInstructionsOptions {
    */
   issueDetail?: boolean;
   /**
-   * plan 记忆段屏蔽用角色——dispatch 调用方按目标角色传入（agentIdentity.role）。
-   * isPlanRole 为真时不注入 GLOBAL 内【记忆管理】2 行（MEMORY_INSTRUCTION）；
-   * 缺省回退 agent.role；可选字段，存量调用不传行为不变（向后兼容）。
+   * 已解析策略 `tools`（allowlist）——记忆段/产出物段屏蔽的**唯一判据**
+   * （agent-role-decommission todo 2）。dispatch 调用方传入与边界段同一次解析的
+   * `tools`；`null/undefined` = 未知来源，**不屏蔽**（存量调用/未知自定义 agent 行为不变）。
+   *
+   * 屏蔽语义：`!toolAllowed(resolvedTools,'vteam_memory_save')` 时不注入 GLOBAL 内
+   * 【记忆管理】2 行；`vteam_submit_artifact` 同理控制产出物段。故意**不**按 duty/角色名
+   * 判定：同样持有该工具的“计划员”照常注入，同样缺该工具的非计划员照常屏蔽——指令
+   * 必须与实际工具可用性一致，否则教了会被 guard 拒。
    */
-  agentRole?: string | null;
+  resolvedTools?: Record<string, AgentToolState> | null;
   /**
    * 绑定的岗位角色指令（`AgentRole.rolePrompt`，"这个岗位是什么"）——todo 5 装配连接。
    *
    * **来源（唯一生产路径）**：团队成员维度分派（`dispatchForTeamTarget`）由
    * `TeamMember.roleId` → `AgentRole.rolePrompt` 连接而来（成员查询 `teamMember.findMany`
    * 已 include `role.rolePrompt`）。注意：agent 行上的 `Agent.role` 只是标签 key（供
-   * isPlanRole / 策略候选），**不是**角色绑定；角色绑定挂在 `TeamMember.roleId` 上。
+   * 策略候选），**不是**角色绑定；角色绑定挂在 `TeamMember.roleId` 上。
    * 直接调用本函数的其他路径（测试/工具）显式传 `opts.rolePrompt`；不传 = 不注入。
    *
    * 非空时在身份段之后、`【职责】` agent 段之前注入 `【岗位职责】${rolePrompt}` 块
@@ -556,17 +586,22 @@ export function buildSystemInstructions(
       `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的任务实例 id（${taskInstanceId}）。`
     : `【你的身份】你是本任务的 ${selfName}（实例 id: ${selfInstanceId}，角色: ${agent.role ?? ''}）。` +
       `调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（${selfInstanceId}）。`;
-  // plan 屏蔽记忆段：plan 的 toolAllows 无 memory_save，GLOBAL 内【记忆管理】
-  // 2 行（MEMORY_INSTRUCTION）不注入；其余角色照常注入完整 GLOBAL。
-  const effectiveRole = opts?.agentRole ?? agent.role;
-  const globalText = isPlanRole(effectiveRole)
+  // 记忆段屏蔽（agent-role-decommission todo 2）：判据 = 已解析策略 tools 是否放行
+  // vteam_memory_save，**不再按角色名/duty**。`resolvedTools` 缺省（null/undefined）
+  // 时不屏蔽——存量调用与未知自定义 agent 行为逐字节不变。
+  // 与「计划模式判定」是两条独立推导：这里回答“这个 agent 有没有这个工具”，
+  // 计划模式回答“这个 agent 是不是计划职责”，二者故意解耦（见 opencode-agent-duty）。
+  const resolvedTools = opts?.resolvedTools;
+  const suppressMemory =
+    resolvedTools != null && !toolAllowed(resolvedTools, 'vteam_memory_save');
+  const globalText = suppressMemory
     ? GLOBAL_BASE_LINES.join('\n\n')
     : GLOBAL_SYSTEM_INSTRUCTIONS;
   const blocks = [
     globalText,
     identityLine,
     // 岗位角色段来源：TeamMember.roleId → AgentRole.rolePrompt（非 agent 行的 Agent.role，
-    // 后者只是标签 key，供 isPlanRole/策略候选）。仅 rolePrompt 非空时注入；空串被下方
+    // 后者只是标签 key，供策略候选）。仅 rolePrompt 非空时注入；空串被下方
     // filter 剔除 → 无空【岗位职责】标题。顺序：岗位=框架，agent=细节，框架先行。
     opts?.rolePrompt ? `【岗位职责】${opts.rolePrompt}` : '',
     agent.prompt ? `【职责】${agent.prompt}` : '',
@@ -600,10 +635,13 @@ export function buildSystemInstructions(
   // 无任何 agent 名/角色分支——普遍性优先于按名条件注入。
   blocks.push(TEAM_COLLABORATION_CHARTER_INSTRUCTION);
   blocks.push(AGENT_RECEIPT_IRON_LAW_INSTRUCTION);
-  // plan 屏蔽产出物段：plan 的 toolAllows 无 vteam_submit_artifact（计划正文落盘
-  // `.opencode/plans/` 即交付，教了会被 guard 拒），与 MEMORY_INSTRUCTION 同机制；
-  // 其余角色照常注入（逐字节不变）。
-  if (!isPlanRole(effectiveRole)) {
+  // 产出物段屏蔽：与记忆段同判据（resolvedTools 是否放行 vteam_submit_artifact）——
+  // 计划正文落盘 `.opencode/plans/` 即交付，无该工具者教了会被 guard 拒。
+  // `resolvedTools` 缺省 → 不屏蔽（存量/未知调用者字节不变）。
+  const suppressArtifact =
+    resolvedTools != null &&
+    !toolAllowed(resolvedTools, 'vteam_submit_artifact');
+  if (!suppressArtifact) {
     blocks.push(ARTIFACT_SUBMISSION_INSTRUCTION);
   }
   // P1：issue 完整版仅显式开关时注入（dispatch 按目标角色传入；缺省一句版，字节兼容）。
@@ -2080,6 +2118,10 @@ export class WorkerDispatcher
     const memoryIndex = taskIdForPrompt
       ? await this.buildTeamMemoryIndex(teamId)
       : null;
+    // 策略解析一次、两用（agent-role-decommission todo 2）：correction → 边界段；
+    // tools → 记忆/产出物段屏蔽（`resolvedTools`）。两条推导共享同一次解析，不重复查。
+    const { correction, tools: resolvedTools } =
+      await this.resolveBoundaryAndTools(agentIdentity);
     const systemOpts: BuildSystemInstructionsOptions = {
       isMainAgent,
       mainAgentInstanceId: mainAgentMemberId,
@@ -2091,8 +2133,9 @@ export class WorkerDispatcher
       isWecomChannel: request.text.includes('[WeCom:'),
       // P1：issue 完整版仅 product/tester/developer 注入，其余角色只收 GLOBAL 一句版。
       issueDetail: roleNeedsIssueDetail(agentIdentity.role),
-      // plan 记忆段屏蔽：按目标角色传入，plan 跳过 GLOBAL 内【记忆管理】2 行。
-      agentRole: agentIdentity.role,
+      // 记忆/产出物段屏蔽：由已解析策略 tools 驱动（与上方 correction 同一次解析），
+      // 与 plan-mode 判定（下）故意解耦——工具可用性 ≠ 计划职责。
+      resolvedTools,
       // 岗位职责段来源（todo 5）：TeamMember.roleId → AgentRole.rolePrompt。
       // 分派目标的成员行由 teamMemberId 精确定位；行缺失/未绑角色/rolePrompt 空 → null
       // （不注入【岗位职责】，不抛错）。agent.role 是标签 key，不是此段来源。
@@ -2132,14 +2175,16 @@ export class WorkerDispatcher
       : null;
     // Todo 13 dispatch 优先级（.omo/plans/vteam-role-behavior-enforcement.md
     // Decision highlights 行 23）：绑定策略且 worker 能力位
-    // `enabled && names.includes(候选)` 真 → `agent = effectivePlan ? 'vteam-plan'
+    // `enabled && names.includes(候选)` 真 → `agent = effectivePlan ? VTEAM_PLAN_AGENT_NAME
     // : 'vteam-<agentKey|role>'`（目标 Agent 行经 resolvePolicyAgentCandidate 映射：
     // agentKey 优先，非法/缺席回退角色；缺席/未知 → 无候选，直接回退）；否则现状回退
     // （opencodeAgentName 有值则传，否则省略 agent 键，与引入前逐字节一致）。
     // 显式成员选择（TeamMember.opencodeAgentName）与 plan_mode agentName 均不能绕过
     // 此门：门真时一律用候选策略 agent 覆盖，门假时一律回退现状。
+    // 字面量来源收敛为职责注册表导出（agent-role-decommission todo 2）——值不变，
+    // 仅把散落字面量改为单一来源；worker guard 仍只认 `vteam-plan`，线格式字节不变。
     const policyCandidateAgent: string | null = effectivePlanForPolicy
-      ? 'vteam-plan'
+      ? VTEAM_PLAN_AGENT_NAME
       : resolvePolicyAgentCandidate(agentIdentity);
     const resolvedAgentName: string | null =
       policyCandidateAgent &&
@@ -2150,9 +2195,7 @@ export class WorkerDispatcher
     // 白名单读取常量）——内置角色走绑定策略（出厂 correction == 常量，输出逐字节一致），
     // 自定义 agent 的自定义 correction 同样注入。策略解析失败/无服务/无 correction →
     // 回退 `roleToAgentName` 常量派生，保证基线行为与引入前逐字节一致。
-    const boundarySection = renderBoundarySection(
-      await this.resolveBoundaryCorrection(agentIdentity),
-    );
+    const boundarySection = renderBoundarySection(correction);
     if (boundarySection) {
       systemOpts.boundarySection = boundarySection;
     }
@@ -3644,17 +3687,23 @@ export class WorkerDispatcher
   }
 
   /**
-   * 目标 Agent 边界 correction 解析（vteam-role-behavior-abstraction Todo 11）：
+   * 目标 Agent 的边界 correction 与 guard tools 的**同一次解析**
+   * （vteam-role-behavior-abstraction Todo 11；agent-role-decommission todo 2 合并）：
    * 优先其绑定策略（`resolveByAgent`，内置/自定义同路径）——解析成功即采用其 `correction`
-   * （DB 值胜出，含用户清空 `scopeSummary` 的场景 → `renderBoundarySection` 返回空串）；
-   * 策略缺席/无服务/解析异常 → 回退 `roleToAgentName` 常量派生（内置角色出厂态与按名
-   * 读取常量逐字节一致）；均无 → null。返回前经 `canonicalizeCorrection` 按角色
-   * `handoffTo` 声明序重排 handoff（DB MySQL JSON 键序与常量声明序不同，不重排会改变
-   * 渲染出的转交顺序）。
+   * （DB 值胜出，含用户清空 `scopeSummary` 的场景 → `renderBoundarySection` 返回空串）
+   * 与 `tools`；策略缺席/无服务/解析异常 → 回退 `roleToAgentName` 常量派生的
+   * `resolveConstantPolicySource`（内置角色出厂态与按名读取常量逐字节一致），其 tools
+   * 来自同一常量；均无 → `{ correction: null, tools: null }`。
+   *
+   * **一次解析两用**：boundarySection 与记忆/产出物段屏蔽（`resolvedTools`）必须来自
+   * 同一次策略解析，避免两次解析漂移（策略 DB 行/PATCH 竞态下两处结论不一致）。
+   * correction 返回前经 `canonicalizeCorrection` 按角色 `handoffTo` 声明序重排
+   * handoff（DB MySQL JSON 键序与常量声明序不同，不重排会改变渲染出的转交顺序）。
    */
-  private async resolveBoundaryCorrection(
-    agent: AgentIdentityInfo,
-  ): Promise<BoundaryCorrection | null> {
+  private async resolveBoundaryAndTools(agent: AgentIdentityInfo): Promise<{
+    correction: BoundaryCorrection | null;
+    tools: Record<string, AgentToolState> | null;
+  }> {
     const constantName = roleToAgentName(agent.role);
     if (this.executionPolicyService) {
       try {
@@ -3664,21 +3713,26 @@ export class WorkerDispatcher
           agentKey: agent.agentKey,
         });
         if (resolved) {
-          return canonicalizeCorrection(
-            resolved.correction,
-            constantName ?? resolved.agentName,
-          );
+          return {
+            correction: canonicalizeCorrection(
+              resolved.correction,
+              constantName ?? resolved.agentName,
+            ),
+            tools: resolved.tools,
+          };
         }
       } catch {
         // 策略解析异常不阻断分派 → 回退常量派生
       }
     }
     if (constantName) {
-      return (
-        resolveConstantPolicySource(constantName)?.config.correction ?? null
-      );
+      const constant = resolveConstantPolicySource(constantName);
+      return {
+        correction: constant?.config.correction ?? null,
+        tools: constant?.config.tools ?? null,
+      };
     }
-    return null;
+    return { correction: null, tools: null };
   }
 
   private async resolveAgentModelId(agentId: string): Promise<string | null> {

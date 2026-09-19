@@ -7,6 +7,7 @@ import {
 import { ReviewRoundService } from '../issues/review-round.service';
 import { computePlanHash, tryParseLedger } from '../issues/review-round-ledger';
 import { PrismaService } from '../prisma/prisma.service';
+import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import { WorkerClient, WorkerPlanFileInfo } from '../workers/worker.client';
 import { DEFAULT_TASK_WORK_DIR, taskDirOf } from './work-dir.util';
 
@@ -187,8 +188,15 @@ export class PlanDocsService {
     if (!hostIssueId) {
       return;
     }
+    const requester = await this.resolvePlanAgentId();
+    if (!requester) {
+      this.logger.warn(
+        `[plans] 修订门计划员身份未解析 task=${taskId}（fail-open 放行，不伪造身份）`,
+      );
+      return;
+    }
     try {
-      await this.gate.requestRevision(hostIssueId, 'a_plan');
+      await this.gate.requestRevision(hostIssueId, requester);
     } catch (err) {
       if (isRevisionRefusal(err)) {
         throw err;
@@ -196,6 +204,33 @@ export class PlanDocsService {
       this.logger.warn(
         `[plans] 修订门内部异常 task=${taskId} issue=${hostIssueId}（fail-open 放行）：${err instanceof Error ? err.message : String(err)}`,
       );
+    }
+  }
+
+  /**
+   * 解析计划职责 agent 的模板 id（agent-role-decommission todo 2）：
+   * `vteam-<agentKey ?? role>` 经职责注册表判定为 `plan` 的首个 Agent 行——不再硬编码
+   * `a_plan`。无匹配/读失败 → null（调用方按既有 fail-open 口径跳过门的咨询，不伪造身份）。
+   */
+  private async resolvePlanAgentId(): Promise<string | null> {
+    try {
+      const rows = (await this.prisma.agent.findMany({
+        select: { id: true, agentKey: true, role: true },
+      })) as Array<{
+        id: string;
+        agentKey?: string | null;
+        role?: string | null;
+      }>;
+      const planner = rows.find((row) => {
+        const name = row.agentKey ?? row.role ?? null;
+        return !!name && getOpencodeAgentDuty(`vteam-${name}`) === 'plan';
+      });
+      return typeof planner?.id === 'string' && planner.id ? planner.id : null;
+    } catch (err) {
+      this.logger.warn(
+        `[plans] 计划员 agent 解析失败（fail-open 跳过门咨询）：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
     }
   }
 

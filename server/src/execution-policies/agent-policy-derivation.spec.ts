@@ -4,10 +4,14 @@ import {
   ExecutionPolicyService,
   resolveTaskEffect,
 } from './execution-policy.service';
+import { loadAgentPoliciesBaseline } from './__fixtures__/policy-fixtures';
 
 /**
  * vteam-role-behavior-abstraction Todo 6 契约测试：`mode` 与 `permission.task`
  * 的派生权威各自唯一，且出厂状态下 task allow 恰好一个（vteam-plan）。
+ *
+ * agent-role-decommission todo 2：判据由散落的 `vteam-plan` 字面量改为职责注册表
+ * （`getOpencodeAgentDuty`），并新增「7 内置 mode/task 与冻结基线逐字节一致」的防漂移锁。
  */
 describe('agent policy mode/task derivation (Todo 6)', () => {
   const BUILTIN_ORDER: readonly VteamAgentName[] = [
@@ -21,17 +25,24 @@ describe('agent policy mode/task derivation (Todo 6)', () => {
   ];
 
   describe('deriveAgentMode（唯一规则）', () => {
-    it('仅 vteam-plan 为 all，其余（含自定义名）为 primary', () => {
+    it('计划职责为 all，其余（含自定义名）为 primary', () => {
       expect(deriveAgentMode('vteam-plan')).toBe('all');
       for (const name of BUILTIN_ORDER.filter((n) => n !== 'vteam-plan')) {
         expect(deriveAgentMode(name)).toBe('primary');
       }
       expect(deriveAgentMode('vteam-demo-agent')).toBe('primary');
     });
+
+    it('判据是职责（非 vteam 名）：裸 plan/prometheus 亦为 all，vteam-prometheus 否', () => {
+      expect(deriveAgentMode('plan')).toBe('all');
+      expect(deriveAgentMode('prometheus')).toBe('all');
+      expect(deriveAgentMode('vteam-prometheus')).toBe('primary');
+      expect(deriveAgentMode('vteam-plan')).toBe('all');
+    });
   });
 
   describe('resolveTaskEffect（唯一权威：DB 值合法则胜出，否则派生规则）', () => {
-    it('vteam-plan 无 DB 值 → allow；其余 → deny', () => {
+    it('计划职责无 DB 值 → allow；其余 → deny', () => {
       expect(resolveTaskEffect('vteam-plan')).toBe('allow');
       for (const name of BUILTIN_ORDER.filter((n) => n !== 'vteam-plan')) {
         expect(resolveTaskEffect(name)).toBe('deny');
@@ -90,6 +101,20 @@ describe('agent policy mode/task derivation (Todo 6)', () => {
         .filter(([, role]) => role.permission.task === 'allow')
         .map(([name]) => name);
       expect(taskViaRoles).toEqual(['vteam-plan']);
+    });
+
+    it('7 内置 mode/task 与冻结基线逐字节一致（防职责判据漂移）', async () => {
+      const baseline = loadAgentPoliciesBaseline();
+      const policies = await serviceWith().buildAgentPolicies();
+      expect(policies.agents).toHaveLength(baseline.agents.length);
+      for (const expected of baseline.agents) {
+        const actual = policies.agents.find((a) => a.name === expected.name);
+        expect(actual).toBeDefined();
+        expect(actual!.mode).toBe(expected.mode);
+        expect(actual!.permission.task).toBe(
+          (expected.permission as Record<string, unknown>).task,
+        );
+      }
     });
   });
 });

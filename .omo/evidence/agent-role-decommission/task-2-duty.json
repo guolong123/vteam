@@ -1,0 +1,219 @@
+{
+  "todo": 2,
+  "plan": ".omo/plans/agent-role-decommission.md",
+  "title": "Derive plan duties from the resolved policy tools (not a label)",
+  "date": "2026-09-19",
+  "commit": "refactor(dispatch): derive plan duties from policy tools, not agent names",
+  "changedFiles": [
+    "server/src/common/opencode-agent-duty.ts",
+    "server/src/execution-policies/execution-policy.service.ts",
+    "server/src/chat/worker-dispatcher.ts",
+    "server/src/chat/worker-dispatcher.spec.ts",
+    "server/src/execution-policies/agent-policy-derivation.spec.ts",
+    "server/src/issues/review-verdict.listener.ts",
+    "server/src/issues/review-verdict.listener.spec.ts",
+    "server/src/tasks/plan-docs.service.ts",
+    "server/src/tasks/plan-docs.service.spec.ts",
+    "scripts/agent-role-consumer-manifest.txt"
+  ],
+  "derivations": {
+    "separationComment": "Recorded in worker-dispatcher.ts at the two suppression branches and the BuildSystemInstructionsOptions.resolvedTools docstring: suppression answers 'does this agent hold the tool', plan-mode answers 'is this agent plan duty'; deliberately decoupled.",
+    "suppression": {
+      "source": "RESOLVED policy tools (ResolvedExecutionPolicy.tools) passed as BuildSystemInstructionsOptions.resolvedTools",
+      "rule": "suppress memory section iff resolvedTools != null && !toolAllowed(resolvedTools,'vteam_memory_save'); artifact section iff resolvedTools != null && !toolAllowed(resolvedTools,'vteam_submit_artifact')",
+      "toolAllowedSemantics": "allow/ask => allowed; deny/absent => not allowed (mirrors worker guard isToolAllowed)",
+      "nullSemantics": "resolvedTools null/undefined => DO NOT suppress (legacy/unknown callers byte-identical)",
+      "singleResolution": "resolveBoundaryCorrection refactored to resolveBoundaryAndTools returning {correction, tools}; dispatch resolves once and uses correction for the boundary section and tools for suppression",
+      "fallbackChain": "executionPolicyService.resolveByAgent({policyId,role,agentKey}) -> resolveConstantPolicySource(roleToAgentName(agent.role)) -> {correction:null, tools:null}",
+      "removed": "BuildSystemInstructionsOptions.agentRole; the `opts?.agentRole ?? agent.role` fallback read; both isPlanRole() suppression calls"
+    },
+    "planMode": {
+      "source": "registered duty of the BOUND opencode agent via server/src/common/opencode-agent-duty.ts",
+      "dispatchEffectivePlan": "explicit task.planMode OR (mainAgentMemberId ? getOpencodeAgentDuty(resolveMemberOpencodeAgentName(mainAgentMemberId))==='plan' : false)",
+      "taskEffectivePlanMode": "tasks.service.ts: (task.planMode) || getOpencodeAgentDuty(members.find(id===mainMemberId)?.opencodeAgentName ?? null)==='plan' (already duty-based; no name literal; unchanged)",
+      "agentRoleOptionRemoved": true
+    },
+    "gate": {
+      "threeLiterals": {
+        "dispatchCandidate": "server/src/chat/worker-dispatcher.ts:2176-2178 -> effectivePlanForPolicy ? VTEAM_PLAN_AGENT_NAME : resolvePolicyAgentCandidate(agentIdentity)",
+        "deriveAgentMode": "server/src/execution-policies/execution-policy.service.ts:326-328 -> getOpencodeAgentDuty(name)==='plan' ? 'all' : 'primary'",
+        "resolveTaskEffect": "server/src/execution-policies/execution-policy.service.ts:312-315 -> stored valid value wins, else getOpencodeAgentDuty(name)==='plan' ? 'allow':'deny'"
+      },
+      "singleSource": "server/src/common/opencode-agent-duty.ts -> export const VTEAM_PLAN_AGENT_NAME = 'vteam-plan'; PLAN_DUTY_AGENTS built from it (plus 'plan','prometheus')",
+      "wireBytes": "unchanged: the dispatch candidate value is still the literal string 'vteam-plan' (worker guard only maps the literal); only its SOURCE moved to the duty registry"
+    },
+    "D3_plannerMember": {
+      "file": "server/src/issues/review-verdict.listener.ts",
+      "old": "const PLANNER_AGENT_ID='a_plan'; teamMember.findFirst({where:{teamId,agentId:PLANNER_AGENT_ID}})",
+      "new": "teamMember.findMany({where:{teamId},orderBy:[{seq:'asc'},{id:'asc'}],select:{id:true,agent:{select:{agentKey:true,role:true}}}}) then .find(member => getOpencodeAgentDuty(`vteam-${member.agent.agentKey ?? member.agent.role}`)==='plan'); no match => null (fail-open, unchanged)"
+    },
+    "D4_planDocsRequester": {
+      "file": "server/src/tasks/plan-docs.service.ts",
+      "old": "this.gate.requestRevision(hostIssueId, 'a_plan')",
+      "new": "resolvePlanAgentId(): prisma.agent.findMany({select:{id,agentKey,role}}) then first whose `vteam-<agentKey ?? role>` has plan duty (or name===VTEAM_PLAN_AGENT_NAME) -> its id; unresolvable => warn + skip gate consult (fail-open, no forged identity)"
+    }
+  },
+  "intentionalSemanticChange": {
+    "description": "A resolved policy whose `tools` lacks `vteam_memory_save` / `vteam_submit_artifact` now suppresses the respective section even for a NON-planner, and an agent that holds them no longer has them suppressed even if it is a planner. This is the plan's stated intent ('suppress exactly when the allowlist lacks the tool'). Seeded members are covered by todo 9's BEFORE/AFTER proof.",
+    "seededSafety": "All 7 built-in toolAllows already lacked vteam_memory_save for vteam-plan only and held it for the other 6; artifact likewise. Suppression output for seeded members is unchanged."
+  },
+  "tests": [
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "记忆段屏蔽由已解析策略 tools 驱动：缺 vteam_memory_save → 不注入【记忆管理】2行",
+      "result": "pass",
+      "covers": "assembled-instruction suppression (plan tools suppress both sections; null does not)"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "指令屏蔽由 resolved tools 驱动 › (a) 计划员持有 vteam_memory_save → 仍注入【记忆管理】（判据是工具，不是 duty/角色名）",
+      "result": "pass",
+      "covers": "AC (a): planner WITH the tool still gets the memory section"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "指令屏蔽由 resolved tools 驱动 › (b) 缺 vteam_memory_save 的非计划员 → 屏蔽【记忆管理】",
+      "result": "pass",
+      "covers": "AC (b): non-planner lacking the tool does NOT get the section"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "指令屏蔽由 resolved tools 驱动 › (e) 产出物段：allow → 注入；缺项/deny → 屏蔽（双向）",
+      "result": "pass",
+      "covers": "AC (e): artifact suppression both directions"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "指令屏蔽由 resolved tools 驱动 › ask 视为放行（与 worker guard isToolAllowed 同口径）",
+      "result": "pass"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "指令屏蔽由 resolved tools 驱动 › resolvedTools null/undefined → 不屏蔽（存量调用字节不变）",
+      "result": "pass",
+      "covers": "null-safety / byte-compat"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "todo 2：dispatch 用 resolved policy tools 驱动记忆/产出物段（缺工具 → 屏蔽）",
+      "result": "pass",
+      "covers": "assembled-output via real dispatch() (single resolveByAgent call)"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "todo 2：dispatch 用 resolved policy tools 驱动（持有工具 → 两段照常注入，即使 role=plan）",
+      "result": "pass",
+      "covers": "assembled-output both directions through dispatch()"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "计划模式由绑定 agent 的职责派生：非 a_plan 名（prometheus）也命中 plan 职责",
+      "result": "pass",
+      "covers": "AC (c): non-a_plan bound agent carrying plan duty enters plan mode (assembled system contains 【计划编制】)"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "计划模式职责判据不误伤：vteam-prometheus（基底名不在注册表）→ 执行职责",
+      "result": "pass",
+      "covers": "AC (c) negative: no false-positive plan duty"
+    },
+    {
+      "file": "server/src/chat/worker-dispatcher.spec.ts",
+      "name": "product 有记忆段（tools 放行 memory_save/artifact，非计划员照常注入）",
+      "result": "pass",
+      "covers": "role='plan' but tools allow => still injected (semantic flip)"
+    },
+    {
+      "file": "server/src/execution-policies/agent-policy-derivation.spec.ts",
+      "name": "7 内置 mode/task 与冻结基线逐字节一致（防职责判据漂移）",
+      "result": "pass",
+      "covers": "AC (d): 7 built-ins' mode/task unchanged vs frozen baseline"
+    },
+    {
+      "file": "server/src/execution-policies/agent-policy-derivation.spec.ts",
+      "name": "deriveAgentMode（唯一规则）› 判据是职责（非 vteam 名）：裸 plan/prometheus 亦为 all，vteam-prometheus 否",
+      "result": "pass"
+    },
+    {
+      "file": "server/src/issues/review-verdict.listener.spec.ts",
+      "name": "计划员按职责解析：a_plan（agentKey=plan）成员仍被解析（todo 2）",
+      "result": "pass",
+      "covers": "D3 (a)"
+    },
+    {
+      "file": "server/src/issues/review-verdict.listener.spec.ts",
+      "name": "计划员按职责解析：非 a_plan 的成员但 agent 携带 plan 职责 → 被解析为计划员（todo 2）",
+      "result": "pass",
+      "covers": "D3 (b)"
+    },
+    {
+      "file": "server/src/issues/review-verdict.listener.spec.ts",
+      "name": "无计划职责成员 → plannerMemberId 空串（fail-open，不崩）",
+      "result": "pass"
+    },
+    {
+      "file": "server/src/tasks/plan-docs.service.spec.ts",
+      "name": "requester 按职责解析：非 a_plan 的计划员 agent → 传入其 id（todo 2）",
+      "result": "pass",
+      "covers": "D4"
+    },
+    {
+      "file": "server/src/tasks/plan-docs.service.spec.ts",
+      "name": "计划员 agent 不可解析 → 不咨询门（fail-open，不伪造身份）",
+      "result": "pass",
+      "covers": "D4 fail-safe"
+    }
+  ],
+  "mutationCheck": {
+    "injected": "worker-dispatcher.ts suppressMemory: `resolvedTools != null && !toolAllowed(...)` -> `isPlanRole(agent.role) || (resolvedTools != null && !toolAllowed(...))` (name-based OR restored)",
+    "failedTests": [
+      "指令屏蔽由 resolved tools 驱动 › (a) 计划员持有 vteam_memory_save → 仍注入【记忆管理】（判据是工具，不是 duty/角色名）",
+      "指令屏蔽由 resolved tools 驱动 › ask 视为放行（与 worker guard isToolAllowed 同口径）",
+      "指令屏蔽由 resolved tools 驱动 › resolvedTools null/undefined → 不屏蔽（存量调用字节不变）"
+    ],
+    "observed": "Tests: 3 failed, 251 skipped, 2 passed, 256 total",
+    "shaBefore": "6190ffe053f6ccbe9dfadb70b286a0945b20e81cd849ee514d9b268fe92754f0",
+    "shaRestored": "6190ffe053f6ccbe9dfadb70b286a0945b20e81cd849ee514d9b268fe92754f0",
+    "restored": true
+  },
+  "baselines": {
+    "before": {
+      "serverSuites": 140,
+      "serverTests": 3201,
+      "workerSuites": 26,
+      "workerTests": 688,
+      "frozenSha": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87"
+    },
+    "after": {
+      "serverTsc": "exit 0",
+      "serverSuites": 140,
+      "serverTests": 3217,
+      "workerSuites": 26,
+      "workerTests": 688,
+      "frozenSha": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+      "targetedJest": "src/chat src/execution-policies src/tasks: 36 suites / 971 tests pass"
+    }
+  },
+  "checker": {
+    "manifest": "scripts/agent-role-consumer-manifest.txt",
+    "observed": 178,
+    "unmapped": 0,
+    "manifestKeysBefore": 184,
+    "manifestKeysAfter": 178,
+    "netDelta": -6,
+    "perFileDelta": {
+      "server/src/chat/worker-dispatcher.ts": "-8 (44 -> 36: agentRole option + its agent.role read + resolveBoundaryCorrection role read removed; roleToAgentName/roleNeedsIssueDetail remain pending todo 8 deletion)",
+      "server/src/tasks/plan-docs.service.ts": "+2 (0 -> 2: new duty-resolution agentKey/role reads)",
+      "other files": "unchanged counts; absolute line numbers shifted, so raw file:line keys were regenerated"
+    },
+    "regenerated": "manifest regenerated with the checker's exact grep pipeline (no hiding: the reduction in worker-dispatcher consumers is the migration-progress signal; new plan-docs reads are recorded, not suppressed)"
+  },
+  "scopeFidelity": {
+    "workerTouched": false,
+    "agentPoliciesPayloadShapeChanged": false,
+    "agentRoleColumnOrSchemaChanged": false,
+    "isPlanRoleDeleted": false,
+    "isPlanRoleNote": "isPlanRole is no longer a production decision source (uncalled in server/src except its own definition); retained for todo 8 deletion, its spec refs recorded",
+    "newAgentRoleLikeLabel": false
+  }
+}

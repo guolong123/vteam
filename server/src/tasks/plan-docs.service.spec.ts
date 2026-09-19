@@ -36,6 +36,7 @@ describe('PlanDocsService', () => {
       session: { findFirst: jest.fn() },
       worker: { findUnique: jest.fn() },
       issue: { findMany: jest.fn() },
+      agent: { findMany: jest.fn() },
     };
     workerClient = { listPlanFiles: jest.fn(), writePlanFile: jest.fn() };
     rounds = { applyRoundUpdate: jest.fn() };
@@ -69,6 +70,10 @@ describe('PlanDocsService', () => {
       status: 'online',
       capabilities: { execBaseUrl: 'http://worker:4198' },
     });
+    // 计划职责 agent 行（todo 2：requester 由职责解析，不再是字面量 a_plan）。
+    prisma.agent.findMany.mockResolvedValue([
+      { id: 'a_plan', agentKey: 'plan', role: 'plan' },
+    ]);
   }
 
   describe('listPlanDocs', () => {
@@ -393,6 +398,43 @@ describe('PlanDocsService', () => {
 
       expect(gate.requestRevision).toHaveBeenCalledWith('is_7', 'a_plan');
       expect(workerClient.writePlanFile).toHaveBeenCalled();
+      expect(out.name).toBe('plan.md');
+    });
+
+    it('requester 按职责解析：非 a_plan 的计划员 agent → 传入其 id（todo 2）', async () => {
+      happyPath();
+      ledgerHost();
+      prisma.agent.findMany.mockResolvedValue([
+        { id: 'a_developer', agentKey: 'developer', role: 'developer' },
+        { id: 'a_my_planner', agentKey: 'plan', role: 'plan' },
+      ]);
+      workerClient.writePlanFile.mockResolvedValue({
+        name: 'plan.md',
+        updatedAt: '2026-03-02T00:00:00.000Z',
+      });
+
+      await service.writePlanDoc('t_1', { name: 'plan.md', content: '# x' });
+
+      expect(gate.requestRevision).toHaveBeenCalledWith('is_7', 'a_my_planner');
+    });
+
+    it('计划员 agent 不可解析 → 不咨询门（fail-open，不伪造身份）', async () => {
+      happyPath();
+      ledgerHost();
+      prisma.agent.findMany.mockResolvedValue([
+        { id: 'a_developer', agentKey: 'developer', role: 'developer' },
+      ]);
+      workerClient.writePlanFile.mockResolvedValue({
+        name: 'plan.md',
+        updatedAt: '2026-03-02T00:00:00.000Z',
+      });
+
+      const out = await service.writePlanDoc('t_1', {
+        name: 'plan.md',
+        content: '# x',
+      });
+
+      expect(gate.requestRevision).not.toHaveBeenCalled();
       expect(out.name).toBe('plan.md');
     });
 

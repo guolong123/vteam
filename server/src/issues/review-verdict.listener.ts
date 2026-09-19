@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeEvent, RealtimeService } from '../realtime/realtime.service';
 import { EVENT_TYPES } from '../common/constants/event.constants';
 import { tryParseLedger, VerdictInput } from './review-round-ledger';
+import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import {
   ConvergenceNotifyOpts,
   ReviewRoundGateService,
@@ -31,8 +32,20 @@ import {
 export const VERDICT_PATTERN = /VERDICT:\s*(APPROVE|REJECT)/i;
 export const VERDICT_VERSION_PATTERN = /@\s*v(\d+(?:\.\d+)?)/i;
 
-/** 计划员模板 agent id（团队内 a_plan 实例即计划员成员）。 */
-const PLANNER_AGENT_ID = 'a_plan';
+/**
+ * 计划员的 opencode 名（`vteam-<agentKey ?? role>`）是否属计划职责——供团队内定位
+ * 计划员成员（agent-role-decommission todo 2：不再硬编码 `a_plan` 模板 id）。
+ */
+function isPlanDutyMember(member: {
+  agent?: { agentKey?: string | null; role?: string | null } | null;
+}): boolean {
+  const agent = member.agent;
+  const name = agent?.agentKey ?? agent?.role ?? null;
+  if (!name) {
+    return false;
+  }
+  return getOpencodeAgentDuty(`vteam-${name}`) === 'plan';
+}
 
 @Injectable()
 export class ReviewVerdictListener implements OnModuleInit, OnModuleDestroy {
@@ -297,11 +310,17 @@ export class ReviewVerdictListener implements OnModuleInit, OnModuleDestroy {
     let pmMemberId: string | null = null;
     if (teamId) {
       try {
-        const planner = await (this.prisma as any).teamMember.findFirst({
-          where: { teamId, agentId: PLANNER_AGENT_ID },
+        const members = await (this.prisma as any).teamMember.findMany({
+          where: { teamId },
           orderBy: [{ seq: 'asc' }, { id: 'asc' }],
-          select: { id: true },
+          select: {
+            id: true,
+            agent: { select: { agentKey: true, role: true } },
+          },
         });
+        const planner = Array.isArray(members)
+          ? members.find(isPlanDutyMember)
+          : null;
         plannerMemberId =
           typeof planner?.id === 'string' && planner.id ? planner.id : null;
       } catch (err) {

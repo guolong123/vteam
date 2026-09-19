@@ -19,17 +19,27 @@
 export type OpencodeAgentDuty = 'plan' | 'execute';
 
 /**
+ * vteam 计划职责 agent 的 opencode 名（`vteam-plan` 的唯一数据来源）。
+ *
+ * 本常量是计划候选、`deriveAgentMode`、`resolveTaskEffect` 三处 `vteam-plan`
+ * 字面量的单一来源（agent-role-decommission todo 2）。**值不可变**：worker
+ * guard 只认这个字面名（`worker/src/role-guard/policy.ts`），改值即改线格式——
+ * 这里只把「散落的字面量」收敛为「职责注册表的一个导出」，不改变任何字节。
+ */
+export const VTEAM_PLAN_AGENT_NAME = 'vteam-plan';
+
+/**
  * 约定为计划职责的 agent 名（**小写基底名**，大小写不敏感）。
  *
  * - `plan`：opencode 原生 plan agent
  * - `prometheus`：OmO 的 "Prometheus - Plan Builder"（出计划）
- * - `vteam-plan`：vteam 角色策略 agent（计划职责；Todo 13 dispatch 能力位门选中后，
+ * - `VTEAM_PLAN_AGENT_NAME`（`vteam-plan`）：vteam 角色策略 agent（计划职责；
  *   其下发 payload 同 plan 职责处理，见 .omo/plans/vteam-role-behavior-enforcement.md）
  */
 const PLAN_DUTY_AGENTS: ReadonlySet<string> = new Set([
   'plan',
   'prometheus',
-  'vteam-plan',
+  VTEAM_PLAN_AGENT_NAME,
 ]);
 
 /** 约定为执行职责的 agent 名（小写基底名；列出仅为文档完备性，判定只认 PLAN 集）。 */

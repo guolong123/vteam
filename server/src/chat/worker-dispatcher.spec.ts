@@ -720,6 +720,94 @@ describe('WorkerDispatcher', () => {
       expect(execArgs.system).toContain('review→vteam-tester');
     });
 
+    it('todo 2：dispatch 用 resolved policy tools 驱动记忆/产出物段（缺工具 → 屏蔽）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_demo',
+        name: '示例助手',
+        role: 'plan',
+        prompt: '示例职责。',
+        agentKey: 'demo-agent',
+        policyId: 'ep_custom_demo',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const policyService = {
+        resolveByAgent: jest.fn().mockResolvedValue({
+          policyId: 'ep_custom_demo',
+          policyName: '示例策略',
+          agentName: 'vteam-demo-agent',
+          permission: {},
+          // 缺 memory_save + submit_artifact → 两段都屏蔽（与 role='plan' 无关，纯工具判定）
+          tools: { vteam_group_post: 'allow' },
+          bashDeny: [],
+          correction: { scopeSummary: '示例职责。', handoff: {} },
+          serverGated: [],
+        } as ResolvedExecutionPolicy),
+      };
+      const d = createDispatcher(policyService);
+      await d.dispatch({
+        ...request,
+        targets: [
+          {
+            agentId: 'a_demo',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      });
+
+      const system = (workerClient.execute.mock.calls[0][1] as {
+        system: string;
+      }).system;
+      expect(policyService.resolveByAgent).toHaveBeenCalledTimes(1);
+      expect(system).not.toContain('【记忆管理】');
+      expect(system).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+    });
+
+    it('todo 2：dispatch 用 resolved policy tools 驱动（持有工具 → 两段照常注入，即使 role=plan）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_demo',
+        name: '示例助手',
+        role: 'plan',
+        prompt: '示例职责。',
+        agentKey: 'demo-agent',
+        policyId: 'ep_custom_demo',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const policyService = {
+        resolveByAgent: jest.fn().mockResolvedValue({
+          policyId: 'ep_custom_demo',
+          policyName: '示例策略',
+          agentName: 'vteam-demo-agent',
+          permission: {},
+          tools: {
+            vteam_memory_save: 'allow',
+            vteam_submit_artifact: 'allow',
+          },
+          bashDeny: [],
+          correction: { scopeSummary: '示例职责。', handoff: {} },
+          serverGated: [],
+        } as ResolvedExecutionPolicy),
+      };
+      const d = createDispatcher(policyService);
+      await d.dispatch({
+        ...request,
+        targets: [
+          {
+            agentId: 'a_demo',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      });
+
+      const system = (workerClient.execute.mock.calls[0][1] as {
+        system: string;
+      }).system;
+      expect(policyService.resolveByAgent).toHaveBeenCalledTimes(1);
+      expect(system).toContain('【记忆管理】');
+      expect(system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+    });
+
     it('Todo 11：策略 correction 清空 scopeSummary → 不注入【职责边界】', async () => {
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_demo',
@@ -1629,7 +1717,7 @@ describe('WorkerDispatcher', () => {
       expect(empty).toBe(buildSystemInstructions(agent));
     });
 
-    it('plan 屏蔽记忆段：role=plan 不注入【记忆管理】2行（toolAllows 无 memory_save，防 guard 拒）', () => {
+    it('记忆段屏蔽由已解析策略 tools 驱动：缺 vteam_memory_save → 不注入【记忆管理】2行', () => {
       const plan: AgentIdentityInfo = {
         id: 'a_plan',
         name: '计划员',
@@ -1638,32 +1726,26 @@ describe('WorkerDispatcher', () => {
         persona: null,
         agentKey: null,
       };
-      expect(isPlanRole(plan.role)).toBe(true);
-      const s = buildSystemInstructions(plan);
+      // 出厂 plan 策略 tools 无 memory_save / submit_artifact → 两段都屏蔽。
+      const planTools = resolveConstantPolicySource('vteam-plan')!.config.tools;
+      const s = buildSystemInstructions(plan, { resolvedTools: planTools });
       expect(s).not.toContain(MEMORY_INSTRUCTION);
       expect(s).not.toContain('【记忆管理】');
       expect(s).not.toContain('vteam_memory_search');
       expect(s).not.toContain('vteam_memory_save');
       // 非记忆段不受影响
       expect(s).toContain('【持久化目录】');
-      // 产出物段 plan-aware：plan 无 submit_artifact（落盘即交付），同样跳过
+      // 产出物段同判据：缺 submit_artifact 同样跳过
       expect(s).not.toContain('【公开与归档】');
       expect(s).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
       expect(s).not.toContain('vteam_submit_artifact');
+      // resolvedTools 缺省 → 不屏蔽（存量/未知调用者行为逐字节不变）
+      expect(buildSystemInstructions(plan)).toContain('【记忆管理】');
     });
 
-    it('plan 角色判定兼容大小写及中文“计划员”（参考 roleNeedsIssueDetail 写法）', () => {
+    it('isPlanRole 保留纯判定（不再是屏蔽来源，删除归 todo 8）', () => {
       for (const role of ['plan', 'Plan', 'PLAN', '计划员', '计划']) {
         expect(isPlanRole(role)).toBe(true);
-        const s = buildSystemInstructions({
-          id: 'a_plan',
-          name: null,
-          role,
-          prompt: null,
-          persona: null,
-          agentKey: null,
-        });
-        expect(s).not.toContain('【记忆管理】');
       }
       for (const role of [
         'product',
@@ -1678,7 +1760,74 @@ describe('WorkerDispatcher', () => {
       }
     });
 
-    it('product 有记忆段（非 plan 照常注入，向后兼容）', () => {
+    describe('指令屏蔽由 resolved tools 驱动（todo 2：与 plan-mode 推导解耦）', () => {
+      const identity: AgentIdentityInfo = {
+        id: 'a_plan',
+        name: '计划员',
+        role: 'plan',
+        prompt: null,
+        persona: null,
+        agentKey: null,
+      };
+      const withTools = (tools: Record<string, 'allow' | 'ask' | 'deny'>) =>
+        buildSystemInstructions(identity, { resolvedTools: tools });
+
+      it('(a) 计划员持有 vteam_memory_save → 仍注入【记忆管理】（判据是工具，不是 duty/角色名）', () => {
+        const s = withTools({
+          vteam_memory_save: 'allow',
+          vteam_submit_artifact: 'allow',
+        });
+        expect(s).toContain(MEMORY_INSTRUCTION);
+        expect(s).toContain('【记忆管理】');
+        expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      });
+
+      it('(b) 缺 vteam_memory_save 的非计划员 → 屏蔽【记忆管理】', () => {
+        const s = buildSystemInstructions(
+          { ...identity, role: 'developer' },
+          { resolvedTools: { vteam_submit_artifact: 'allow' } },
+        );
+        expect(s).not.toContain('【记忆管理】');
+        expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      });
+
+      it('(e) 产出物段：allow → 注入；缺项/deny → 屏蔽（双向）', () => {
+        expect(
+          withTools({
+            vteam_memory_save: 'allow',
+            vteam_submit_artifact: 'allow',
+          }),
+        ).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+        expect(withTools({ vteam_memory_save: 'allow' })).not.toContain(
+          ARTIFACT_SUBMISSION_INSTRUCTION,
+        );
+        expect(
+          withTools({
+            vteam_memory_save: 'allow',
+            vteam_submit_artifact: 'deny',
+          }),
+        ).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      });
+
+      it('ask 视为放行（与 worker guard isToolAllowed 同口径）', () => {
+        const s = withTools({
+          vteam_memory_save: 'ask',
+          vteam_submit_artifact: 'ask',
+        });
+        expect(s).toContain('【记忆管理】');
+        expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      });
+
+      it('resolvedTools null/undefined → 不屏蔽（存量调用字节不变）', () => {
+        expect(withTools(undefined as never)).toContain('【记忆管理】');
+        expect(
+          buildSystemInstructions(identity, { resolvedTools: null }),
+        ).toContain('【记忆管理】');
+        expect(buildSystemInstructions(identity)).toContain('【记忆管理】');
+      });
+    });
+
+    it('product 有记忆段（tools 放行 memory_save/artifact，非计划员照常注入）', () => {
       const product: AgentIdentityInfo = {
         id: 'a_product',
         name: '产品经理',
@@ -1687,19 +1836,27 @@ describe('WorkerDispatcher', () => {
         persona: null,
         agentKey: null,
       };
-      const s = buildSystemInstructions(product);
+      const productTools =
+        resolveConstantPolicySource('vteam-product')!.config.tools;
+      const s = buildSystemInstructions(product, {
+        resolvedTools: productTools,
+      });
       expect(s).toContain(MEMORY_INSTRUCTION);
       expect(s).toContain('【记忆管理】');
+      expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
       // GLOBAL 导出值不变（MEMORY 拆分前后逐字一致）
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain(MEMORY_INSTRUCTION);
-      // opts.agentRole 显式覆盖：agent.role 非 plan 但 agentRole=plan → 仍屏蔽
-      expect(
-        buildSystemInstructions(product, { agentRole: 'plan' }),
-      ).not.toContain('【记忆管理】');
-      // agentRole 缺省回退 agent.role：plan agent 不传 opts 照样屏蔽
-      expect(
-        buildSystemInstructions({ ...product, role: 'plan' }),
-      ).not.toContain('【记忆管理】');
+      // 语义变更（todo 2）：判据换成工具——role='plan' 但 tools 放行 memory_save → 照常注入
+      const planByRole = buildSystemInstructions(
+        { ...product, role: 'plan' },
+        { resolvedTools: productTools },
+      );
+      expect(planByRole).toContain('【记忆管理】');
+      // 反之 role 非 plan 但 tools 缺该工具 → 屏蔽
+      const noTool = buildSystemInstructions(product, {
+        resolvedTools: { vteam_submit_artifact: 'allow' },
+      });
+      expect(noTool).not.toContain('【记忆管理】');
     });
 
     it('persistentWorkDir 注入：提示词含动态【运行时工作目录】段（实际解析路径）', () => {
@@ -1917,14 +2074,15 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain('【计划工作流】');
       // 既有段不受影响
       expect(s).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);
-      // plan-aware：plan 角色不注入该段（role 与 agentRole 覆盖两种路径）
-      const planS = buildSystemInstructions({ ...agent, role: 'plan' });
+      // plan-aware：缺 submit_artifact 的 tools → 不注入该段（判据是工具，非角色名）
+      const planTools = resolveConstantPolicySource('vteam-plan')!.config.tools;
+      const planS = buildSystemInstructions(
+        { ...agent, role: 'plan' },
+        { resolvedTools: planTools },
+      );
       expect(planS).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
       expect(planS).not.toContain('【公开与归档】');
       expect(planS).not.toContain('vteam_submit_artifact');
-      expect(
-        buildSystemInstructions(agent, { agentRole: 'plan' }),
-      ).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
     });
 
     it('短工具名批量改真实名：面向模型的自然语言指引无裸短名（协议/注释除外）', () => {
@@ -6809,6 +6967,43 @@ describe('WorkerDispatcher', () => {
       expect(system).not.toContain('plan_submit');
       expect(system).not.toContain('plan_review');
       expect(system).not.toContain('【计划工作流】');
+    });
+
+    it('计划模式由绑定 agent 的职责派生：非 a_plan 名（prometheus）也命中 plan 职责', async () => {
+      (prisma as any).team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_0000000001',
+      });
+      // 名字既非 a_plan 也非 vteam-plan，但职责注册表判定为 plan（todo 2：按职责不按名）
+      (prisma as any).teamMember.findFirst.mockImplementation(async (q: any) =>
+        q?.select?.opencodeAgentName !== undefined
+          ? { opencodeAgentName: 'Prometheus - Plan Builder' }
+          : { overrideModelId: null },
+      );
+      const d = createDispatcher();
+      await d.dispatch(
+        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+      );
+      expect(workerClient.execute.mock.calls[0][1].system).toContain(
+        '【计划编制】',
+      );
+    });
+
+    it('计划模式职责判据不误伤：vteam-prometheus（基底名不在注册表）→ 执行职责', async () => {
+      (prisma as any).team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_0000000001',
+      });
+      (prisma as any).teamMember.findFirst.mockImplementation(async (q: any) =>
+        q?.select?.opencodeAgentName !== undefined
+          ? { opencodeAgentName: 'vteam-prometheus' }
+          : { overrideModelId: null },
+      );
+      const d = createDispatcher();
+      await d.dispatch(
+        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+      );
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).not.toContain('【计划编制】');
+      expect(system).not.toContain('【计划评审】');
     });
 
     it('Todo9 memoryIndex：team+global 计数 + 最近条目进 system（任务级记忆已删除，prompt hint 富集）', async () => {

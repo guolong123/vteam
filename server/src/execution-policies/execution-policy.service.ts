@@ -21,6 +21,7 @@ import {
 } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
+import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   WORKER_COMMAND_TYPES,
@@ -284,8 +285,14 @@ export function canonicalizeCorrection(
 }
 
 /**
- * 层① `permission.task` 的**派生权威**（唯一规则）：仅 `vteam-plan` 放行 task
+ * 层① `permission.task` 的**派生权威**（唯一规则）：计划职责 agent 放行 task
  * （可扇出只读评审 subagent），其余角色 deny。
+ *
+ * 计划职责不再按名硬编码：`getOpencodeAgentDuty(name) === 'plan'` 是唯一判据
+ * （agent-role-decommission todo 2）。生产只向本函数传入 vteam 命名空间的 agent 名
+ * （`VteamAgentName` / `vteam-<agentKey>`），自定义 agentKey 为 `plan` 者已被
+ * `buildAgentPolicies` 的 `builtInNames` 排除；`vteam-prometheus` 规范化后基底名为
+ * `vteam-prometheus` ∉ 计划集。故 7 内置的 task 值与冻结基线逐字节一致。
  *
  * 解析优先级（Todo 6）：DB `config.permission.task` 为合法三态值时胜出，否则用本规则
  * 兜底——保证线上绝不出现 `task === undefined`；未来若新增 DB `mode`/`task` 字段，
@@ -298,15 +305,16 @@ export function resolveTaskEffect(
   if (storedTask === 'allow' || storedTask === 'ask' || storedTask === 'deny') {
     return storedTask;
   }
-  return name === 'vteam-plan' ? 'allow' : 'deny';
+  return getOpencodeAgentDuty(name) === 'plan' ? 'allow' : 'deny';
 }
 
 /**
- * opencode agent `mode` 的**派生权威**（唯一规则）：`vteam-plan` 为 `all`（可被调度），
- * 其余（含自定义）为 `primary`。Todo 6 把它集中为命名函数，便于未来 DB `mode` 字段替换。
+ * opencode agent `mode` 的**派生权威**（唯一规则）：计划职责 agent 为 `all`（可被调度），
+ * 其余（含自定义）为 `primary`。判据与 `resolveTaskEffect` 同源（职责注册表），
+ * 不再散落 `vteam-plan` 字面量（agent-role-decommission todo 2）。
  */
 export function deriveAgentMode(name: string): 'primary' | 'all' {
-  return name === 'vteam-plan' ? 'all' : 'primary';
+  return getOpencodeAgentDuty(name) === 'plan' ? 'all' : 'primary';
 }
 
 /**

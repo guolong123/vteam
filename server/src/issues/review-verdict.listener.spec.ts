@@ -46,7 +46,12 @@ const setup = (opts?: { withLedger?: boolean }) => {
       findUnique: jest.fn(async () => ({ mainAgentMemberId: PM })),
     },
     teamMember: {
-      findFirst: jest.fn(async () => ({ id: PLANNER })),
+      findMany: jest.fn(async () => [
+        {
+          id: PLANNER,
+          agent: { agentKey: 'plan', role: 'plan' },
+        },
+      ]),
     },
     chatChannel: {
       findUnique: jest.fn(async () => ({ taskId: TASK })),
@@ -213,7 +218,7 @@ describe('ReviewVerdictListener', () => {
 
   it('通知接线缺口（无计划员/PM）→ 仍转发尽力而为 opts + warn', async () => {
     const { gate, prisma, listener } = setup();
-    prisma.teamMember.findFirst.mockResolvedValueOnce(null);
+    prisma.teamMember.findMany.mockResolvedValueOnce([]);
     prisma.team.findUnique.mockResolvedValueOnce({ mainAgentMemberId: null });
     await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
     expect(gate.recordVerdict).toHaveBeenCalledTimes(1);
@@ -224,10 +229,64 @@ describe('ReviewVerdictListener', () => {
     );
   });
 
+  it('计划员按职责解析：a_plan（agentKey=plan）成员仍被解析（todo 2）', async () => {
+    const { gate, prisma, listener } = setup();
+    prisma.teamMember.findMany.mockResolvedValueOnce([
+      { id: 'tmm_other', agent: { agentKey: 'developer', role: 'developer' } },
+      { id: PLANNER, agent: { agentKey: 'plan', role: 'plan' } },
+    ]);
+    await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
+    expect(prisma.teamMember.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { teamId: TEAM },
+        select: {
+          id: true,
+          agent: { select: { agentKey: true, role: true } },
+        },
+      }),
+    );
+    expect(gate.recordVerdict).toHaveBeenCalledWith(
+      HOST_ISSUE,
+      expect.anything(),
+      expect.objectContaining({ plannerMemberId: PLANNER }),
+    );
+  });
+
+  it('计划员按职责解析：非 a_plan 的成员但 agent 携带 plan 职责 → 被解析为计划员（todo 2）', async () => {
+    const { gate, prisma, listener } = setup();
+    const otherPlanner = 'tmm_0000000099';
+    prisma.teamMember.findMany.mockResolvedValueOnce([
+      {
+        id: otherPlanner,
+        agent: { agentKey: 'plan', role: 'plan' },
+      },
+      { id: 'tmm_other', agent: { agentKey: 'developer', role: 'developer' } },
+    ]);
+    await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
+    expect(gate.recordVerdict).toHaveBeenCalledWith(
+      HOST_ISSUE,
+      expect.anything(),
+      expect.objectContaining({ plannerMemberId: otherPlanner }),
+    );
+  });
+
+  it('无计划职责成员 → plannerMemberId 空串（fail-open，不崩）', async () => {
+    const { gate, prisma, listener } = setup();
+    prisma.teamMember.findMany.mockResolvedValueOnce([
+      { id: 'tmm_other', agent: { agentKey: 'developer', role: 'developer' } },
+    ]);
+    await listener.handle(chatEvent(agentMessage('VERDICT: APPROVE @ v0.3')));
+    expect(gate.recordVerdict).toHaveBeenCalledWith(
+      HOST_ISSUE,
+      expect.anything(),
+      expect.objectContaining({ plannerMemberId: '' }),
+    );
+  });
+
   it('F2#4：通知接线读取失败 → warn 带根因 + 仍尽力而为转发（账本写优先）', async () => {
     const { gate, prisma, listener } = setup();
     prisma.task.findUnique.mockRejectedValueOnce(new Error('db 瞬断'));
-    prisma.teamMember.findFirst.mockRejectedValueOnce(new Error('db 瞬断'));
+    prisma.teamMember.findMany.mockRejectedValueOnce(new Error('db 瞬断'));
     const warn = jest
       .spyOn(
         (listener as unknown as { logger: { warn: jest.Mock } }).logger,
