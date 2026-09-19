@@ -1,0 +1,120 @@
+{
+  "plan": "agent-role-entity",
+  "todo": 5,
+  "title": "Join role + agent instructions at assembly, and update the system-prompt assertions",
+  "commit": "feat(dispatch): join role and agent instructions at assembly",
+  "generatedAt": "2026-09-19T08:15:00.000Z",
+
+  "roleSourcePerAssemblyPath": {
+    "memberScopedDispatch (PRODUCTION, dispatchForTeamTarget)": {
+      "source": "TeamMember.roleId -> AgentRole.rolePrompt",
+      "how": "teamMember.findMany({ where: { teamId }, include: { agent: {...}, role: { select: { rolePrompt: true } } } }); then systemOpts.rolePrompt = teamMemberRows.find(m => m.id === teamMemberId)?.role?.rolePrompt ?? null",
+      "note": "agent row's Agent.role is a LABEL KEY (isPlanRole / policy candidacy), NOT the role binding. roleId lives on TeamMember, not on the agent row.",
+      "degraded": "member row missing / roleId null / rolePrompt empty -> null -> no 【岗位职责】 block, no throw"
+    },
+    "directCalls (tests/tools)": {
+      "source": "explicit opts.rolePrompt argument",
+      "how": "BuildSystemInstructionsOptions.rolePrompt?: string | null (new, backward compatible)",
+      "note": "omitted -> no block (byte-identical to pre-change output)"
+    }
+  },
+
+  "orderImplemented": [
+    "globalText",
+    "identityLine",
+    "【岗位职责】${rolePrompt} (NEW, only when rolePrompt non-empty)",
+    "【职责】${agent.prompt}",
+    "persona",
+    "main-agent / non-main note",
+    "wecom",
+    "persistentWorkDir",
+    "boundarySection",
+    "MAIN_AGENT_INSTRUCTION (main)",
+    "team-mode reception",
+    "TEAM_COLLABORATION_CHARTER_INSTRUCTION + AGENT_RECEIPT_IRON_LAW_INSTRUCTION (todo 3 blocks)",
+    "ARTIFACT_SUBMISSION_INSTRUCTION (unless plan)",
+    "ISSUE_FULL_INSTRUCTION (if enabled)",
+    "PLAN_PRODUCE/PLAN_REVIEW (plan mode)",
+    "team roster",
+    "memoryIndex"
+  ],
+  "blockImplementation": {
+    "blocks[0] split": "globalText | identityLine | roleBlock | agentDutyBlock | persona | ... as separate array elements",
+    "join": "blocks.filter(b => b.length > 0).join('\n\\n')",
+    "byteIdentityRationale": "join separator is already '\\n\\n', so separate array elements are byte-identical to the previous string concatenation; empty entries filtered out, so no empty 【岗位职责】 heading.",
+    "platformBlockPosition": "already at step 12 (after character-level + main/team-mode blocks, before artifact/issue/plan) — verified by symbol; no adjustment needed"
+  },
+
+  "assembledOrderProof": {
+    "method": "ts-node direct call: buildSystemInstructions(agent, { rolePrompt })",
+    "indexOf": {
+      "role": 1122,
+      "agent": 1161,
+      "charter": 1497,
+      "receipt": 1833
+    },
+    "monotonic": true,
+    "withRole_hasRoleBlock": true,
+    "emptyRole_equals_noField": true,
+    "emptyRole_hasHeading": false,
+    "noAgentRow_hasRoleHeading": false,
+    "noAgentRow_hasDutyHeading": false
+  },
+
+  "noDuplicatedHeadings": {
+    "check": "grep -c '【职责】' server/prisma/seed.ts -> 0; grep -c '【职责】' server/src/common/constants/agent-role-prompts.constants.ts -> 0",
+    "result": "No prompt text contains 【职责】 or 【岗位职责】 headings, so role and agent parts cannot produce duplicated headings. All 7 builtin rolePrompts verified to not contain either heading."
+  },
+
+  "selfOracleReplacement": {
+    "location": "worker-dispatcher.spec.ts (was expect(execArgs.system).toBe(expected) with expected = buildSystemInstructions(...))",
+    "replacement": "explicit ordered indexOf assertions pinning global < identity < nonMain < charter < receipt < artifact, plus no-【职责】/no-【岗位职责】 absence checks",
+    "reason": "review fix M8 — both sides moved together, could never catch an assembly regression"
+  },
+
+  "newTests": [
+    "todo 5：rolePrompt 非空 → 【岗位职责】(角色) + 【职责】(agent) + 平台块各恰好一次，顺序 role→agent→platform",
+    "todo 5：rolePrompt 空串/null/缺省 → 无【岗位职责】标题（agent-only 装配，与无该字段逐字节一致）",
+    "todo 5：成员行 roleId→AgentRole.rolePrompt 连接 → system 注入【岗位职责】（真实来源，非 agent.role）",
+    "todo 5：成员行未绑角色（role=null）→ 无【岗位职责】，agent 段照常，不抛错"
+  ],
+  "updatedAssertions": [
+    "agent 行不存在 degraded path: added not.toContain('【岗位职责】')",
+    "Todo 4 unknown-role path: replaced self-oracle with ordered index assertions"
+  ],
+  "untouched": "~45 other buildSystemInstructions call sites unchanged; no assertion weakened or deleted",
+
+  "mutationCheck": {
+    "mutation": "opts?.rolePrompt ? `【岗位职责】${opts.rolePrompt}` : '' -> opts?.rolePrompt ? '' : ''",
+    "command": "npx jest --runInBand src/chat/worker-dispatcher.spec.ts",
+    "exit": 1,
+    "failedTests": [
+      "todo 5：成员行 roleId→AgentRole.rolePrompt 连接 → system 注入【岗位职责】（真实来源，非 agent.role）",
+      "todo 5：rolePrompt 非空 → 【岗位职责】(角色) + 【职责】(agent) + 平台块各恰好一次，顺序 role→agent→platform"
+    ],
+    "failingCount": "2 failed, 240 passed, 242 total",
+    "emptyPathStayedGreen": "todo 5 empty/absent tests passed (correct — they must not depend on the block being emitted)",
+    "restoredByteIdentical": true,
+    "restoreSha256": "82aa2c028b6e0e6c10025c55bc671b0f7f7dd6a9475745426742da58baefaf1e",
+    "restoreMethod": "cp /tmp backup + shasum compare (NOT git checkout/restore)"
+  },
+
+  "gates": {
+    "tsc": "cd server && npx tsc -p tsconfig.json --noEmit -> exit 0",
+    "jestChat": "cd server && npx jest --runInBand src/chat -> 13 suites / 472 tests passed",
+    "jestFull": "cd server && npx jest --runInBand -> 138 suites / 3179 tests passed (baseline ba5b3c4: 138/3175; +4 new tests)"
+  },
+
+  "acceptance": {
+    "roleBlockInjectedAtCorrectPosition": true,
+    "roleBlockOnlyWhenBindingAndNonEmpty": true,
+    "platformBlocksAtStep12": true,
+    "roleSourceStatedPerPath": true,
+    "degradedPathsPreserved": true,
+    "noDuplicatedHeadings": true,
+    "optionsFieldBackwardCompatible": true,
+    "selfOracleReplaced": true,
+    "otherAssertionsUntouched": true,
+    "mutationNonVacuous": true
+  }
+}

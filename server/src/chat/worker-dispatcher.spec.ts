@@ -491,6 +491,81 @@ describe('WorkerDispatcher', () => {
       expect(execArgs.system).toContain('selfInstanceId');
     });
 
+    it('todo 5：成员行 roleId→AgentRole.rolePrompt 连接 → system 注入【岗位职责】（真实来源，非 agent.role）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        prompt: '负责需求拆解。',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      const rolePrompt =
+        '# 角色：产品经理\n你是任务虚拟团队中的产品经理 Agent，负责定义问题与验收标准。';
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        {
+          id: 'tmm_0000000001',
+          agentId: 'a_product',
+          alias: '产品经理-1',
+          seq: 1,
+          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+          role: { rolePrompt },
+        },
+      ]);
+      (prisma as any).team.findUnique = jest
+        .fn()
+        .mockResolvedValue({ mainAgentMemberId: null });
+      const d = createDispatcher();
+      await d.dispatch(request);
+
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      const count = (haystack: string, needle: string): number =>
+        haystack.split(needle).length - 1;
+      // 岗位段来自 TeamMember.roleId 连接（agent.role 只是标签 key，无 rolePrompt）
+      expect(count(system, '【岗位职责】')).toBe(1);
+      expect(count(system, rolePrompt)).toBe(1);
+      expect(count(system, '【职责】负责需求拆解。')).toBe(1);
+      expect(system.indexOf('【岗位职责】')).toBeLessThan(
+        system.indexOf('【职责】'),
+      );
+      // 连接查询确实 include 了 role.rolePrompt
+      expect((prisma as any).teamMember.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          include: expect.objectContaining({
+            role: { select: { rolePrompt: true } },
+          }),
+        }),
+      );
+    });
+
+    it('todo 5：成员行未绑角色（role=null）→ 无【岗位职责】，agent 段照常，不抛错', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        prompt: '负责需求拆解。',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        {
+          id: 'tmm_0000000001',
+          agentId: 'a_product',
+          alias: '产品经理-1',
+          seq: 1,
+          agent: { id: 'a_product', name: '产品经理', role: 'product' },
+          role: null,
+        },
+      ]);
+      (prisma as any).team.findUnique = jest
+        .fn()
+        .mockResolvedValue({ mainAgentMemberId: null });
+      const d = createDispatcher();
+      await d.dispatch(request);
+
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).not.toContain('【岗位职责】');
+      expect(system).toContain('【职责】负责需求拆解。');
+    });
+
     it('agent 行不存在：buildSystemInstructions 降级注入 agentId（name 回退 id，无【职责】，不阻断 dispatch）', async () => {
       prisma.agent.findUnique.mockResolvedValue(null);
       const d = createDispatcher();
@@ -503,6 +578,7 @@ describe('WorkerDispatcher', () => {
         '你是本任务的 a_product（实例 id: tmm_0000000001，角色: ）',
       );
       expect(execArgs.system).not.toContain('【职责】');
+      expect(execArgs.system).not.toContain('【岗位职责】');
       expect(execArgs.system).toContain('selfInstanceId');
     });
 
@@ -570,26 +646,26 @@ describe('WorkerDispatcher', () => {
         system: string;
       };
       expect(execArgs.system).not.toContain('【职责边界】');
-      // 与"无 boundarySection"（预变更调用形态）构造的期望逐字节一致
-      const expected = buildSystemInstructions(
-        {
-          id: 'a_product',
-          name: null,
-          role: null,
-          prompt: null,
-          persona: null,
-          agentKey: null,
-        },
-        {
-          isMainAgent: false,
-          mainAgentInstanceId: null,
-          team: [],
-          selfInstanceId: 'tmm_0000000001',
-          selfAlias: null,
-          persistentWorkDir: `${workRoot}/tasks/${request.taskId}`,
-        },
+      // review fix M8：用显式有序 index 断言替代自证式 expected（buildSystemInstructions
+      // 生成 expected 与自身比较两侧同动，永远抓不到装配回归）。
+      const system = execArgs.system;
+      const iGlobal = system.indexOf(GLOBAL_SYSTEM_INSTRUCTIONS);
+      const iIdentity = system.indexOf(
+        '你是本任务的 a_product（实例 id: tmm_0000000001，角色: ）',
       );
-      expect(execArgs.system).toBe(expected);
+      const iNonMain = system.indexOf(NON_MAIN_AGENT_NOTE);
+      const iCharter = system.indexOf(TEAM_COLLABORATION_CHARTER_INSTRUCTION);
+      const iReceipt = system.indexOf(AGENT_RECEIPT_IRON_LAW_INSTRUCTION);
+      const iArtifact = system.indexOf(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(iGlobal).toBe(0);
+      expect(iIdentity).toBeGreaterThan(iGlobal);
+      expect(iNonMain).toBeGreaterThan(iIdentity);
+      expect(iCharter).toBeGreaterThan(iNonMain);
+      expect(iReceipt).toBeGreaterThan(iCharter);
+      expect(iArtifact).toBeGreaterThan(iReceipt);
+      // 无角色绑定 + 无 agent prompt → 两个职责标题都不出现（无空标题）
+      expect(system).not.toContain('【岗位职责】');
+      expect(system).not.toContain('【职责】');
     });
 
     it('Todo 11：自定义 agent 的策略 correction → system 注入【职责边界】（此前为空）', async () => {
@@ -1512,6 +1588,45 @@ describe('WorkerDispatcher', () => {
       );
       expect(GROUP_TRIGGER_INSTRUCTION).toContain('vteam_group_post');
       expect(GROUP_TRIGGER_INSTRUCTION).toContain('自动归档为产出物');
+    });
+
+    it('todo 5：rolePrompt 非空 → 【岗位职责】(角色) + 【职责】(agent) + 平台块各恰好一次，顺序 role→agent→platform', () => {
+      const rolePrompt =
+        '# 角色：产品经理\n你是任务虚拟团队中的产品经理 Agent，负责需求。';
+      const s = buildSystemInstructions(agent, { rolePrompt });
+      const count = (haystack: string, needle: string): number =>
+        haystack.split(needle).length - 1;
+      expect(count(s, '【岗位职责】')).toBe(1);
+      expect(count(s, rolePrompt)).toBe(1);
+      expect(count(s, '【职责】')).toBe(1);
+      expect(count(s, TEAM_COLLABORATION_CHARTER_INSTRUCTION)).toBe(1);
+      expect(count(s, AGENT_RECEIPT_IRON_LAW_INSTRUCTION)).toBe(1);
+      const iRole = s.indexOf('【岗位职责】');
+      const iAgent = s.indexOf('【职责】');
+      const iCharter = s.indexOf(TEAM_COLLABORATION_CHARTER_INSTRUCTION);
+      const iReceipt = s.indexOf(AGENT_RECEIPT_IRON_LAW_INSTRUCTION);
+      expect(iRole).toBeGreaterThan(0);
+      expect(iAgent).toBeGreaterThan(iRole);
+      expect(iCharter).toBeGreaterThan(iAgent);
+      expect(iReceipt).toBeGreaterThan(iCharter);
+      expect(s).toContain(`【岗位职责】${rolePrompt}`);
+      expect(s).toContain(`【职责】${agent.prompt}`);
+    });
+
+    it('todo 5：rolePrompt 空串/null/缺省 → 无【岗位职责】标题（agent-only 装配，与无该字段逐字节一致）', () => {
+      const withNull = buildSystemInstructions(agent, { rolePrompt: null });
+      const withUndefined = buildSystemInstructions(agent, {
+        rolePrompt: undefined,
+      });
+      expect(buildSystemInstructions(agent)).toBe(withNull);
+      expect(withNull).toBe(withUndefined);
+      for (const s of [withNull, withUndefined, buildSystemInstructions(agent)]) {
+        expect(s).not.toContain('【岗位职责】');
+        expect(s).toContain(`【职责】${agent.prompt}`);
+      }
+      const empty = buildSystemInstructions(agent, { rolePrompt: '' });
+      expect(empty).not.toContain('【岗位职责】');
+      expect(empty).toBe(buildSystemInstructions(agent));
     });
 
     it('plan 屏蔽记忆段：role=plan 不注入【记忆管理】2行（toolAllows 无 memory_save，防 guard 拒）', () => {

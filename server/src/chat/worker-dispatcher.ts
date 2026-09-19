@@ -497,6 +497,20 @@ export interface BuildSystemInstructionsOptions {
    * 缺省回退 agent.role；可选字段，存量调用不传行为不变（向后兼容）。
    */
   agentRole?: string | null;
+  /**
+   * 绑定的岗位角色指令（`AgentRole.rolePrompt`，"这个岗位是什么"）——todo 5 装配连接。
+   *
+   * **来源（唯一生产路径）**：团队成员维度分派（`dispatchForTeamTarget`）由
+   * `TeamMember.roleId` → `AgentRole.rolePrompt` 连接而来（成员查询 `teamMember.findMany`
+   * 已 include `role.rolePrompt`）。注意：agent 行上的 `Agent.role` 只是标签 key（供
+   * isPlanRole / 策略候选），**不是**角色绑定；角色绑定挂在 `TeamMember.roleId` 上。
+   * 直接调用本函数的其他路径（测试/工具）显式传 `opts.rolePrompt`；不传 = 不注入。
+   *
+   * 非空时在身份段之后、`【职责】` agent 段之前注入 `【岗位职责】${rolePrompt}` 块
+   * （岗位=框架，agent=细节，框架先行）；空串/null/缺省不注入（无空标题，存量调用
+   * 输出逐字节不变）。
+   */
+  rolePrompt?: string | null;
 }
 
 /**
@@ -549,10 +563,13 @@ export function buildSystemInstructions(
     ? GLOBAL_BASE_LINES.join('\n\n')
     : GLOBAL_SYSTEM_INSTRUCTIONS;
   const blocks = [
-    globalText +
-      '\n\n' +
-      identityLine +
-      (agent.prompt ? `\n\n【职责】${agent.prompt}` : ''),
+    globalText,
+    identityLine,
+    // 岗位角色段来源：TeamMember.roleId → AgentRole.rolePrompt（非 agent 行的 Agent.role，
+    // 后者只是标签 key，供 isPlanRole/策略候选）。仅 rolePrompt 非空时注入；空串被下方
+    // filter 剔除 → 无空【岗位职责】标题。顺序：岗位=框架，agent=细节，框架先行。
+    opts?.rolePrompt ? `【岗位职责】${opts.rolePrompt}` : '',
+    agent.prompt ? `【职责】${agent.prompt}` : '',
     agent.persona ? renderPersonaSection(agent.persona) : '',
     // P0 条件注入：主 Agent 追加【任务状态】+【托管模式】工具段；非主成员仅给协作指引
     // （不再教非主成员调用必 403 的 vteam_task_transition / vteam_question_confirm）。
@@ -2011,7 +2028,12 @@ export class WorkerDispatcher
       teamMemberRows =
         (await (this.prisma as any).teamMember.findMany({
           where: { teamId },
-          include: { agent: { select: { id: true, name: true, role: true } } },
+          include: {
+            agent: { select: { id: true, name: true, role: true } },
+            // 角色绑定来源（todo 5）：TeamMember.roleId → AgentRole.rolePrompt。
+            // 注意 roleId 在 TeamMember 上，不在 agent 行；agent.role 仅标签 key。
+            role: { select: { rolePrompt: true } },
+          },
         })) ?? [];
     } catch (lookupErr: unknown) {
       this.logger.warn(
@@ -2071,6 +2093,12 @@ export class WorkerDispatcher
       issueDetail: roleNeedsIssueDetail(agentIdentity.role),
       // plan 记忆段屏蔽：按目标角色传入，plan 跳过 GLOBAL 内【记忆管理】2 行。
       agentRole: agentIdentity.role,
+      // 岗位职责段来源（todo 5）：TeamMember.roleId → AgentRole.rolePrompt。
+      // 分派目标的成员行由 teamMemberId 精确定位；行缺失/未绑角色/rolePrompt 空 → null
+      // （不注入【岗位职责】，不抛错）。agent.role 是标签 key，不是此段来源。
+      rolePrompt:
+        teamMemberRows.find((m: any) => m.id === teamMemberId)?.role
+          ?.rolePrompt ?? null,
     };
     // Todo 13 策略 agent 候选的计划侧输入（与下发 system 的 taskPlanMode 同源，
     // 仅做只读镜像，不改变计划模式指令逻辑）。

@@ -204,3 +204,26 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   for the first key and failed for the rest.
 - **Suite**: server 138 suites / 3175 tests green (baseline 3169; +6 new: 3 seed.spec + 3 migration spec);
   `npx tsc -p tsconfig.json --noEmit` exit 0. Evidence `.omo/evidence/agent-role-entity/task-4-split.json`.
+
+## Todo 5 — assembly join (feat(dispatch): join role and agent instructions at assembly)
+
+- **`roleId` is on `TeamMember`, not the agent row — the agent row's `Agent.role` is only a label key**
+  (used by `isPlanRole` / policy candidacy). The production role binding is `TeamMember.roleId ->
+  AgentRole.rolePrompt`. Wired by adding `role: { select: { rolePrompt: true } }` to the existing
+  `teamMember.findMany` include at `worker-dispatcher.ts:~2031`, then
+  `systemOpts.rolePrompt = teamMemberRows.find(m => m.id === teamMemberId)?.role?.rolePrompt ?? null`.
+  There is exactly ONE production assembly call site (`dispatchForTeamTarget`), so no second path needed wiring.
+- **Splitting `blocks[0]` into separate array elements is byte-identical** because the join separator is
+  already `'\n\n'` and empty entries are removed by `.filter(b => b.length > 0)`. This makes the order
+  index-assertable while keeping all existing "byte-unchanged" tests green without modification — they are
+  the proof the refactor is output-neutral.
+- **Degraded paths held with no branch changes**: no role binding / empty `rolePrompt` -> `''` filtered out
+  (no empty `【岗位职责】` heading); non-existent agent row -> still `name←id`, no `【职责】`, no throw.
+- **No duplicated headings is structural**: neither `seed.ts` nor `agent-role-prompts.constants.ts` contains
+  the literal `【职责】` (or `【岗位职责】`), so a role prompt can never collide with the agent heading.
+- **Self-oracle at spec `:590` replaced** with ordered `indexOf` assertions
+  (global < identity < nonMain < charter < receipt < artifact). Mutation check (force role element to `''`)
+  fails exactly the 2 new role-presence tests (2 failed / 240 passed) and leaves the empty/absent tests green —
+  proving non-vacuous. Restored with `cp` from /tmp + `shasum` equality (never `git checkout --`).
+- **Suite**: server 138 suites / 3179 tests green (baseline 3175; +4 new); `npx tsc -p tsconfig.json --noEmit`
+  exit 0. Evidence `.omo/evidence/agent-role-entity/task-5-assembly.json`.
