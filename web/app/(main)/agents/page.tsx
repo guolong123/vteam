@@ -67,8 +67,13 @@ interface EffectivePermission {
   permission: Record<string, unknown>;
   /** 层② guard allowlist：tools 真实暴露名 → allow|ask（与 /agent-policies 同源；缺失时按空表处理） */
   tools?: Record<string, unknown>;
-  /** 层② bash 硬化清单（展示不消费，保留供一致性校验） */
-  bashDeny?: unknown;
+  /**
+   * 层② bash 硬化清单（服务端 `resolveBashDeny` 解析结果）。DTO 保证为 `string[]`：
+   * `config.bashDeny` 缺失时回退 `ROLE_BASH_DENY_PATTERNS` 常量（当前 `[]`），
+   * 故线上恒为数组、永不为 undefined。todo 11：编辑器整份 config 写回时必须携带
+   * 非空清单，否则 API 创建的策略会在保存时被静默丢弃。
+   */
+  bashDeny?: string[];
   /** 层② guard 纠正：scopeSummary/handoff/denyTemplate */
   correction: Record<string, unknown>;
 }
@@ -894,11 +899,17 @@ interface EffectivePermissionSectionProps {
   workers: ApiWorkerRow[];
 }
 
-/** policy config 全量载荷（PATCH /execution-policies/:policyId 的 `config` 形状，不新增键）。 */
+/** policy config 全量载荷（PATCH /execution-policies/:policyId 的 `config` 形状）。 */
 interface PolicyConfigPayload {
   permission: Record<string, unknown>;
   correction: Record<string, unknown>;
   tools: Record<string, unknown>;
+  /**
+   * 层② guard bash 拒绝模式（可选）。todo 2 将其加入服务端 DTO 正是为了整份 config
+   * 写回不丢字段；本编辑器整份 PATCH，故必须透传。仅在解析值非空时携带——空数组
+   * 代表「策略无自定义清单」，写入会凭空把键物化进落库 JSON。
+   */
+  bashDeny?: string[];
 }
 
 /** 原生编辑 debounce 窗口（规则表 onChange 每击键触发；远小于 Playwright 期望超时且用户不可感）。 */
@@ -945,10 +956,14 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
   // 会打回本地草稿（原生编辑 400ms 窗口内、或写入 in-flight 时）。
   useEffect(() => {
     if (!effective || writePendingRef.current || debounceRef.current !== null) return;
+    const bashDeny = effective.bashDeny;
     configRef.current = {
       permission: effective.permission,
       correction: effective.correction,
       tools: { ...guardTools },
+      // 服务端 resolveBashDeny 恒返回数组（缺失回退常量 []）——空数组必须省略，
+      // 否则每次保存都会把 bashDeny:[] 凭空物化进落库 JSON（负控断言 `'bashDeny' in config === false`）。
+      ...(Array.isArray(bashDeny) && bashDeny.length > 0 ? { bashDeny } : {}),
     };
   }, [effective, guardTools]);
 
@@ -961,12 +976,17 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
   );
 
   /** 当前权威 config；权威值缺失（首帧 effect 未跑）时以渲染值兜底。 */
-  const currentConfig = (): PolicyConfigPayload =>
-    configRef.current ?? {
+  const currentConfig = (): PolicyConfigPayload => {
+    if (configRef.current) return configRef.current;
+    const bashDeny = effective?.bashDeny;
+    return {
       permission,
       correction: effective?.correction ?? {},
       tools: { ...guardTools },
+      // 同 sync effect：解析值非空才携带（服务端恒返回数组，空数组=策略无自定义清单）。
+      ...(Array.isArray(bashDeny) && bashDeny.length > 0 ? { bashDeny } : {}),
     };
+  };
 
   /** 取消挂起的 debounce（草稿已在 configRef 中，不丢数据）。 */
   const flushNative = () => {

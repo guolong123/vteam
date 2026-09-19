@@ -1,0 +1,103 @@
+{
+  "task": "agent-native-permission-editor / todo 11 (F2 finding, MEDIUM)",
+  "title": "[web] Include bashDeny in the editor's whole-config payload (closes the data-loss todo 2 exists to prevent)",
+  "date": "2026-09-19T05:07:35Z",
+  "commit_message": "fix(web): preserve bashDeny through whole-config policy saves",
+  "defect": {
+    "summary": "The editor PATCHes the WHOLE policy config but its payload type was {permission, correction, tools}; EffectivePermission.bashDeny was declared but never read, so any save silently dropped config.bashDeny (introduced/guarded by todo 2 6b057f7).",
+    "live_before_after": "Orchestrator-verified live: a policy created with bashDeny:['rm -rf /'] stored fine; a PATCH with the EXACT editor payload shape dropped it. Cleaned up."
+  },
+  "implementation": {
+    "file": "web/app/(main)/agents/page.tsx",
+    "changes": [
+      "EffectivePermission.bashDeny widened/narrowed from `unknown` to `string[]` (server resolveBashDeny guarantees a string array)",
+      "PolicyConfigPayload gains optional `bashDeny?: string[]`",
+      "sync effect: conditional spread `...(Array.isArray(bashDeny) && bashDeny.length > 0 ? { bashDeny } : {})` — EMPTINESS check is required because the server ALWAYS materialises an array (`[]` fallback via ROLE_BASH_DENY_PATTERNS), never `undefined`; Array.isArray alone would inject bashDeny:[] into every save and fail the negative control",
+      "currentConfig() fallback: same conditional spread",
+      "both write paths (native debounce + tool toggle) build via `{...cur}` spreads → bashDeny preserved; verified by reading, and behaviourally by the test"
+    ],
+    "deliberate_deviation": "Todo 4's fence 'Must NOT change the payload shape' predates todo 2's field; todo 2's whole-config-preservation mandate supersedes it for this ONE key. The endpoint (PATCH /execution-policies/:id) and the `{config:{...}}` envelope are unchanged."
+  },
+  "empirical_finding_that_changed_the_spec": {
+    "observation": "GET /agents -> effectivePermission.bashDeny is ALWAYS present and is ALWAYS an array ([] when the stored config lacks the key) — resolveBashDeny(config.bashDeny) falls back to ROLE_BASH_DENY_PATTERNS (currently []) at execution-policy.service.ts:330-334.",
+    "implication": "The literal `Array.isArray(bashDeny)` presence check from the task text would always be true and would materialise `bashDeny: []` into every PATCH, violating the required negative control ('bashDeny' in config === false). The implemented discriminator is non-empty array."
+  },
+  "tests": {
+    "typecheck": {
+      "command": "cd web && npx tsc --noEmit",
+      "exit_code": 0
+    },
+    "new_playwright_test": {
+      "name": "5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得",
+      "file": "web/e2e/policy-serialize.spec.ts:445",
+      "green_result": [
+        {
+          "test": "bashdeny_survives_whole_config_save",
+          "agent_with_bashdeny": "a_0000000110",
+          "policy_with_bashdeny": "ep_0000000111",
+          "agent_without_bashdeny": "a_0000000111",
+          "policy_without_bashdeny": "ep_0000000112",
+          "bashDeny_after_ui_edit": [
+            "rm -rf /"
+          ],
+          "unrelated_edit": {
+            "edit_src_t11": "deny"
+          },
+          "negative_control_key_absent": true,
+          "negative_control_bash_after_ui_edit": "allow"
+        }
+      ]
+    },
+    "green_suites": {
+      "policy-serialize": {
+        "command": "bash scripts/e2e-policy-serialize.sh",
+        "exit_code": 0,
+        "tests": "5/5 passed (incl. new test 5)"
+      },
+      "native-rule-editor": {
+        "command": "bash scripts/e2e-native-rule-editor.sh",
+        "exit_code": 0,
+        "tests": "7/7 passed"
+      },
+      "policy-restart-notice": {
+        "command": "bash scripts/e2e-policy-restart-notice.sh",
+        "exit_code": 0,
+        "tests": "4/4 passed"
+      },
+      "create-agent-role": {
+        "command": "bash scripts/e2e-create-agent-role.sh",
+        "exit_code": 0,
+        "tests": "4/4 passed"
+      }
+    }
+  },
+  "mutation_check": {
+    "method": "Backed page.tsx up to /tmp/t11-page.tsx.fixed (sha 1e95db7a…), replaced ONLY the sync-effect conditional spread with a `// MUTATION t11` marker via python (asserting exact count==1), tsc exit 0, rebuilt web (docker compose build web && up -d web), re-ran scripts/e2e-policy-serialize.sh.",
+    "result": "DISCRIMINATING FAIL: test 5 fails with Expected `deny|[\"rm -rf /\"]` / Received `deny|undefined` (bashDeny dropped = pre-fix behaviour); the other 4 tests stay green.",
+    "raw_output": "----- playwright raw -----\n\nRunning 5 tests using 1 worker\n\n[cleanup] a_0000000100 (agent 200, policy ep_0000000101 200, re-GET 404)\n  ✓  1 e2e/policy-serialize.spec.ts:166:7 › Todo 4 · 策略写入串行化 › 1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见） (3.2s)\n[cleanup] a_0000000101 (agent 200, policy ep_0000000102 200, re-GET 404)\n  ✓  2 e2e/policy-serialize.spec.ts:238:7 › Todo 4 · 策略写入串行化 › 2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复 (1.4s)\n[cleanup] a_0000000102 (agent 200, policy ep_0000000103 200, re-GET 404)\n  ✓  3 e2e/policy-serialize.spec.ts:340:7 › Todo 4 · 策略写入串行化 › 3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow (2.7s)\n[cleanup] a_0000000103 (agent 200, policy ep_0000000104 200, re-GET 404)\n  ✓  4 e2e/policy-serialize.spec.ts:386:7 › Todo 4 · 策略写入串行化 › 4. debounce 合并击键 burst：一次 burst 仅一个 PATCH (2.4s)\n[cleanup] a_0000000104 (agent 200, policy ep_0000000105 200, re-GET 404)\n[cleanup] a_0000000105 (agent 200, policy ep_0000000106 200, re-GET 404)\n  ✘  5 e2e/policy-serialize.spec.ts:445:7 › Todo 4 · 策略写入串行化 › 5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得 (10.7s)\n\n\n  1) e2e/policy-serialize.spec.ts:445:7 › Todo 4 · 策略写入串行化 › 5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得 \n\n    Error: expect(received).toBe(expected) // Object.is equality\n\n    Expected: \"deny|[\\\"rm -rf /\\\"]\"\n    Received: \"deny|undefined\"\n\n    Call Log:\n    - Timeout 10000ms exceeded while waiting on the predicate\n\n      489 |           { timeout: 10_000 },\n      490 |         )\n    > 491 |         .toBe(`deny|${JSON.stringify(denyPattern)}`);\n          |          ^\n      492 |\n      493 |       // (b) 不带 bashDeny 的策略：同样经 UI 编辑，落库 JSON 不得出现该键\n      494 |       await openAgent(page, withoutDeny.name);\n        at /Volumes/SSD-Data/01work/git-project/vteam/web/e2e/policy-serialize.spec.ts:491:10\n\n    Error Context: test-results/policy-serialize-Todo-4-·--9519e--写回保留-bashDeny；无该字段的策略不凭空获得/error-context.md\n\n    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────\n    test-results/policy-serialize-Todo-4-·--9519e--写回保留-bashDeny；无该字段的策略不凭空获得/trace.zip\n    Usage:\n\n        npx playwright show-trace test-results/policy-serialize-Todo-4-·--9519e--写回保留-bashDeny；无该字段的策略不凭空获得/trace.zip\n\n    ────────────────────────────────────────────────────────────────────────────────────────────────\n\n  1 failed\n    e2e/policy-serialize.spec.ts:445:7 › Todo 4 · 策略写入串行化 › 5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得 \n  4 passed (21.6s)\n----- end playwright raw -----\n[e2e] FAIL ui reason=playwright run failed (raw above)\n",
+    "restore": {
+      "backup": "/tmp/t11-page.tsx.fixed",
+      "sha_before_mutation": "1e95db7aeb6e17e9e3e55a5dd52bef4a43b3d1879aebc894071184b598f1daa4",
+      "sha_after_restore": "1e95db7aeb6e17e9e3e55a5dd52bef4a43b3d1879aebc894071184b598f1daa4",
+      "byte_identical": true,
+      "method": "cp /tmp/t11-page.tsx.fixed web/app/(main)/agents/page.tsx (NEVER git checkout -- / git restore)",
+      "marker_absent": "grep -c 'MUTATION t11' == 0",
+      "post_restore": "docker compose build web && docker compose up -d web; test 5 re-run GREEN"
+    }
+  },
+  "frozen_baseline": {
+    "file": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json",
+    "sha256": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "expected": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "unchanged": true
+  },
+  "changed_files": [
+    "web/app/(main)/agents/page.tsx",
+    "web/e2e/policy-serialize.spec.ts"
+  ],
+  "evidence_artifacts": [
+    ".omo/evidence/agent-native-permission-editor/task-11-bashdeny-roundtrip.json",
+    ".omo/evidence/agent-native-permission-editor/task-11-manual-qa.png",
+    ".omo/evidence/agent-native-permission-editor/e2e.txt (mutation section + restored green re-run)"
+  ]
+}

@@ -1,0 +1,22 @@
+todo 11 — QA cleanup receipt (agent-native-permission-editor)
+================================================================
+date: 2026-09-19
+frozen baseline sha256 (.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json):
+  3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87  (UNCHANGED)
+
+Leftover QA agents (agentKey prefix t4-*/t11-*): count = 0
+  GET /api/v1/agents?page=1&pageSize=100 → no t4-*/t11-* agents remain.
+
+Custom policies after cleanup: total = 1
+  ep_0000000001 "myagent 策略" — PRE-EXISTING (createdAt 2026-09-17, referenced in
+  learnings.md as the custom agent vteam-myagent). NOT created by todo 11; left untouched.
+
+Every test in web/e2e/policy-serialize.spec.ts deletes its own agents + policies in a
+`finally` block; the per-test DELETE/re-GET receipts are in e2e.txt ([cleanup] lines), e.g.
+  [cleanup] a_0000000124 (agent 200, policy ep_0000000125 200, re-GET 404)
+  [cleanup] a_0000000125 (agent 200, policy ep_0000000126 200, re-GET 404)
+(re-GET 404 after DELETE = both agent and policy are gone).
+
+Mutation-proof discipline: backup /tmp/t11-page.tsx.fixed (sha 1e95db7aeb6e17e9e3e55a5dd52bef4a43b3d1879aebc894071184b598f1daa4);
+restore by `cp` (never `git checkout --` / `git restore`); restored sha identical to backup,
+`grep -c 'MUTATION t11' web/app/(main)/agents/page.tsx` == 0.

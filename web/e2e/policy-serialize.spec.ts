@@ -37,6 +37,7 @@ type StoredConfig = {
   permission: Record<string, unknown>;
   correction: Record<string, unknown>;
   tools: Record<string, unknown>;
+  bashDeny?: unknown;
 };
 
 function authHeaders(accessToken: string) {
@@ -77,6 +78,7 @@ async function patchPolicy(
   token: string,
   agent: ApiAgent,
   permission: Record<string, unknown>,
+  bashDeny?: string[],
 ) {
   const ep = agent.effectivePermission;
   expect(ep).not.toBeNull();
@@ -87,6 +89,7 @@ async function patchPolicy(
         permission,
         correction: ep!.correction,
         tools: ep!.tools ?? {},
+        ...(bashDeny !== undefined ? { bashDeny } : {}),
       },
     },
   });
@@ -429,6 +432,96 @@ test.describe("Todo 4 · 策略写入串行化", () => {
       });
     } finally {
       console.log(`[cleanup] ${await deleteAgent(request, token, agent)}`);
+    }
+  });
+
+  /**
+   * Todo 11（F2 发现的数据丢失）：编辑器整份 config PATCH 必须透传 `bashDeny`。
+   * 判别性核心：断言「服务端存储的 bashDeny 未被编辑器写盘抹掉」——修复前载荷类型只有
+   * `{permission, correction, tools}`，任何一次原生编辑都会把该键整份覆盖丢弃。
+   * 负控：无 bashDeny 的策略编辑后不得凭空获得该键（服务端解析值恒为数组，空数组必须在
+   * 载荷中省略，否则落库 JSON 会被物化出 `bashDeny: []`）。
+   */
+  test("5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得", async ({ page, request }) => {
+    const token = await adminToken(request);
+    const withDeny = await createAgent(request, token, "bashdeny");
+    const withoutDeny = await createAgent(request, token, "nobashdeny");
+    const denyPolicyId = withDeny.effectivePermission!.policyId;
+    const plainPolicyId = withoutDeny.effectivePermission!.policyId;
+    const denyPattern = ["rm -rf /"];
+    try {
+      // API 预置：一个带 bashDeny 的策略 + 一个不带（走编辑器默认骨架）的策略
+      await patchPolicy(
+        request,
+        token,
+        withDeny,
+        { edit: { "*": "deny" }, read: { "*": "allow" }, bash: "deny", task: "deny" },
+        denyPattern,
+      );
+      await patchPolicy(request, token, withoutDeny, {
+        edit: { "*": "deny" },
+        read: { "*": "allow" },
+        bash: "deny",
+        task: "deny",
+      });
+      const before = await storedConfig(request, token, denyPolicyId);
+      expect(before.bashDeny).toEqual(denyPattern);
+      const plainBefore = await storedConfig(request, token, plainPolicyId);
+      expect("bashDeny" in plainBefore).toBe(false);
+
+      await loginAsAdmin(page);
+
+      // (a) 带 bashDeny 的策略：通过真实 UI 编辑一个无关权限（新增 edit glob 规则）
+      await openAgent(page, withDeny.name);
+      const editEditor = editor(page, "edit");
+      await editEditor.getByTestId("native-rule-add").click();
+      await editEditor
+        .locator('[data-testid="native-rule-glob"]')
+        .last()
+        .pressSequentially("src/t11/**", { delay: 15 });
+      await expect(ruleRow(page, "edit", "src/t11/**")).toBeVisible();
+      await expect
+        .poll(
+          async () => {
+            const cfg = await storedConfig(request, token, denyPolicyId);
+            return `${String((cfg.permission.edit as Record<string, unknown>)["src/t11/**"])}|${JSON.stringify(cfg.bashDeny)}`;
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(`deny|${JSON.stringify(denyPattern)}`);
+
+      // (b) 不带 bashDeny 的策略：同样经 UI 编辑，落库 JSON 不得出现该键
+      await openAgent(page, withoutDeny.name);
+      await page.getByTestId("native-bash-effect").locator('[data-effect="allow"]').click();
+      await expect
+        .poll(
+          async () => String((await storedConfig(request, token, plainPolicyId)).permission.bash),
+          { timeout: 10_000 },
+        )
+        .toBe("allow");
+      const plainAfter = await storedConfig(request, token, plainPolicyId);
+      expect("bashDeny" in plainAfter).toBe(false);
+
+      const shot = process.env.T11_SCREENSHOT;
+      if (shot) {
+        mkdirSync(dirname(shot), { recursive: true });
+        await page.screenshot({ path: shot, fullPage: true });
+      }
+
+      recordEvidence({
+        test: "bashdeny_survives_whole_config_save",
+        agent_with_bashdeny: withDeny.id,
+        policy_with_bashdeny: denyPolicyId,
+        agent_without_bashdeny: withoutDeny.id,
+        policy_without_bashdeny: plainPolicyId,
+        bashDeny_after_ui_edit: (await storedConfig(request, token, denyPolicyId)).bashDeny,
+        unrelated_edit: { edit_src_t11: "deny" },
+        negative_control_key_absent: !("bashDeny" in plainAfter),
+        negative_control_bash_after_ui_edit: plainAfter.permission.bash,
+      });
+    } finally {
+      console.log(`[cleanup] ${await deleteAgent(request, token, withDeny)}`);
+      console.log(`[cleanup] ${await deleteAgent(request, token, withoutDeny)}`);
     }
   });
 });

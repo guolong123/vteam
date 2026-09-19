@@ -892,3 +892,129 @@ Running 4 tests using 1 worker
 [e2e] result passed	4. 下拉往返：developer → 无 → developer 重置有效
 [e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
 ----- end create-agent-role -----
+
+===== [t11] MUTATION CHECK (conditional bashDeny spread removed from sync effect; new test 5 FAILS, other 4 green) =====
+
+===== todo 4 run 2026-09-19T04:43:31Z =====
+
+[e2e] date=2026-09-19T04:43:31Z HEAD=82accdff36b8684947e6d7a0a0aa31e0ee3ebe59
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 5 tests using 1 worker
+
+[cleanup] a_0000000100 (agent 200, policy ep_0000000101 200, re-GET 404)
+  ✓  1 e2e/policy-serialize.spec.ts:166:7 › Todo 4 · 策略写入串行化 › 1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见） (3.2s)
+[cleanup] a_0000000101 (agent 200, policy ep_0000000102 200, re-GET 404)
+  ✓  2 e2e/policy-serialize.spec.ts:238:7 › Todo 4 · 策略写入串行化 › 2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复 (1.4s)
+[cleanup] a_0000000102 (agent 200, policy ep_0000000103 200, re-GET 404)
+  ✓  3 e2e/policy-serialize.spec.ts:340:7 › Todo 4 · 策略写入串行化 › 3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow (2.7s)
+[cleanup] a_0000000103 (agent 200, policy ep_0000000104 200, re-GET 404)
+  ✓  4 e2e/policy-serialize.spec.ts:386:7 › Todo 4 · 策略写入串行化 › 4. debounce 合并击键 burst：一次 burst 仅一个 PATCH (2.4s)
+[cleanup] a_0000000104 (agent 200, policy ep_0000000105 200, re-GET 404)
+[cleanup] a_0000000105 (agent 200, policy ep_0000000106 200, re-GET 404)
+  ✘  5 e2e/policy-serialize.spec.ts:445:7 › Todo 4 · 策略写入串行化 › 5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得 (10.7s)
+
+
+  1) e2e/policy-serialize.spec.ts:445:7 › Todo 4 · 策略写入串行化 › 5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得 
+
+    Error: expect(received).toBe(expected) // Object.is equality
+
+    Expected: "deny|[\"rm -rf /\"]"
+    Received: "deny|undefined"
+
+    Call Log:
+    - Timeout 10000ms exceeded while waiting on the predicate
+
+      489 |           { timeout: 10_000 },
+      490 |         )
+    > 491 |         .toBe(`deny|${JSON.stringify(denyPattern)}`);
+          |          ^
+      492 |
+      493 |       // (b) 不带 bashDeny 的策略：同样经 UI 编辑，落库 JSON 不得出现该键
+      494 |       await openAgent(page, withoutDeny.name);
+        at /Volumes/SSD-Data/01work/git-project/vteam/web/e2e/policy-serialize.spec.ts:491:10
+
+    Error Context: test-results/policy-serialize-Todo-4-·--9519e--写回保留-bashDeny；无该字段的策略不凭空获得/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/policy-serialize-Todo-4-·--9519e--写回保留-bashDeny；无该字段的策略不凭空获得/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/policy-serialize-Todo-4-·--9519e--写回保留-bashDeny；无该字段的策略不凭空获得/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    e2e/policy-serialize.spec.ts:445:7 › Todo 4 · 策略写入串行化 › 5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得 
+  4 passed (21.6s)
+----- end playwright raw -----
+[e2e] FAIL ui reason=playwright run failed (raw above)
+
+===== [t11] RESTORED (cp from /tmp backup, sha256-identical) → REBUILT → GREEN RE-RUN =====
+
+===== todo 4 run 2026-09-19T05:05:19Z =====
+
+[e2e] date=2026-09-19T05:05:19Z HEAD=82accdff36b8684947e6d7a0a0aa31e0ee3ebe59
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 5 tests using 1 worker
+
+[cleanup] a_0000000106 (agent 200, policy ep_0000000107 200, re-GET 404)
+  ✓  1 e2e/policy-serialize.spec.ts:166:7 › Todo 4 · 策略写入串行化 › 1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见） (3.6s)
+[cleanup] a_0000000107 (agent 200, policy ep_0000000108 200, re-GET 404)
+  ✓  2 e2e/policy-serialize.spec.ts:238:7 › Todo 4 · 策略写入串行化 › 2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复 (1.4s)
+[cleanup] a_0000000108 (agent 200, policy ep_0000000109 200, re-GET 404)
+  ✓  3 e2e/policy-serialize.spec.ts:340:7 › Todo 4 · 策略写入串行化 › 3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow (2.7s)
+[cleanup] a_0000000109 (agent 200, policy ep_0000000110 200, re-GET 404)
+  ✓  4 e2e/policy-serialize.spec.ts:386:7 › Todo 4 · 策略写入串行化 › 4. debounce 合并击键 burst：一次 burst 仅一个 PATCH (2.3s)
+[cleanup] a_0000000110 (agent 200, policy ep_0000000111 200, re-GET 404)
+[cleanup] a_0000000111 (agent 200, policy ep_0000000112 200, re-GET 404)
+  ✓  5 e2e/policy-serialize.spec.ts:445:7 › Todo 4 · 策略写入串行化 › 5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得 (3.8s)
+
+  5 passed (15.1s)
+----- end playwright raw -----
+[e2e] PASS playwright green; evidence json present
+[e2e] cleanup [cleanup] a_0000000106 (agent 200, policy ep_0000000107 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000107 (agent 200, policy ep_0000000108 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000108 (agent 200, policy ep_0000000109 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000109 (agent 200, policy ep_0000000110 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000110 (agent 200, policy ep_0000000111 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000111 (agent 200, policy ep_0000000112 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 无丢失更新：bash 切换 + 新增 edit 规则同存（服务端为准 + 刷新可见）
+[e2e] result passed	2. 单一在途闸门：PATCH 挂起期间全部控件禁用，释放后恢复
+[e2e] result passed	3. 原生编辑持久化：bash 切 allow 刷新后仍为 allow
+[e2e] result passed	4. debounce 合并击键 burst：一次 burst 仅一个 PATCH
+[e2e] result passed	5. 整份 config 写回保留 bashDeny；无该字段的策略不凭空获得
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+--- native-rule-editor (green) ---
+
+[e2e] date=2026-09-19T05:05:44Z HEAD=82accdff36b8684947e6d7a0a0aa31e0ee3ebe59
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+--- policy-restart-notice (green) ---
+
+[e2e] date=2026-09-19T05:05:57Z HEAD=82accdff36b8684947e6d7a0a0aa31e0ee3ebe59
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt
+
+--- create-agent-role (green; truncates shared log, section preserved here) ---
+
+[e2e] date=2026-09-19T05:06:10Z HEAD=82accdff36b8684947e6d7a0a0aa31e0ee3ebe59
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
+[e2e] stack healthy (web + server)
+[e2e] PASS playwright 4/4 green; screenshots present (role-picker / developer-panel / none-panel)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/e2e.txt

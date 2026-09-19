@@ -241,3 +241,54 @@ suites' sections). The append-only scripts (native-rule-editor, policy-serialize
 policy-restart-notice) are safe. Recovery: `git show HEAD:<path> > <path>` (read-only, NOT
 `git checkout --`), then re-append the current run; keep the clobbering suite's own section
 in a side file and paste it under the new run header.
+
+---
+
+## [2026-09-19] todo 11 — editor whole-config PATCH must carry `bashDeny` (F2 data-loss, closes todo 2's invariant)
+
+**The defect (F2, orchestrator-verified):** the editor's payload type was `{permission, correction,
+tools}` and `EffectivePermission.bashDeny` was declared but never read — so every save silently
+dropped `config.bashDeny` (the exact field todo 2 / `6b057f7` added to the DTO precisely to survive
+whole-config writes). Latent today (no seeded policy carries it, `ROLE_BASH_DENY_PATTERNS=[]`), but
+real data loss for API-created policies.
+
+**The trap the task text had wrong — verify the server BEFORE coding the presence check.** The brief
+said to include `bashDeny` "only when present" with `Array.isArray(bashDeny)` as the discriminator.
+Empirically (live `GET /agents`):
+`GET /agents → effectivePermission.bashDeny` is **ALWAYS present and ALWAYS an array** — `[]` when
+the stored config lacks the key — because `resolveBashDeny(config.bashDeny)` falls back to
+`ROLE_BASH_DENY_PATTERNS` (`execution-policy.service.ts:330-334`). `Array.isArray` is therefore
+always true and would have materialised `bashDeny: []` into EVERY PATCH, failing the mandated
+negative control (`'bashDeny' in config === false`). The correct discriminator is
+**`Array.isArray(x) && x.length > 0`**. General rule for this codebase: a *resolved* effective
+value ≠ the *stored* config value — never infer key-presence in the store from a resolved DTO.
+
+**Implementation (all in `web/app/(main)/agents/page.tsx`):**
+- `EffectivePermission.bashDeny`: `unknown` → `string[]` (server guarantees the type).
+- `PolicyConfigPayload` gains `bashDeny?: string[]`.
+- Sync effect + `currentConfig()` fallback: conditional spread
+  `...(Array.isArray(bashDeny) && bashDeny.length > 0 ? { bashDeny } : {})`.
+- Both write paths (native-debounce, tool-toggle) build `{...cur, …}` → extra keys survive; verified
+  by reading AND behaviourally (test 5).
+- **Deliberate deviation from todo 4's fence** "Must NOT change the payload shape": that fence
+  predates todo 2's field; todo 2's whole-config-preservation mandate supersedes it for this ONE key.
+  Endpoint and `{config:{…}}` envelope unchanged.
+
+**Mutation proof (discriminating, decisive):** removed ONLY the sync-effect conditional spread
+(python replace asserting count==1), rebuilt web, re-ran the suite → test 5 fails with
+`Expected: "deny|[\"rm -rf /\"]" / Received: "deny|undefined"` (the field dropped = pre-fix behaviour)
+while tests 1-4 stay green — proving the assertion is real and discriminates exactly this defect.
+Restore by `cp` from `/tmp` + `shasum -a 256` (byte-identical, `1e95db7a…`), marker grep == 0,
+rebuild, re-run green. Never `git checkout --`/`git restore`.
+
+**Playwright idiom that worked:** one test, two API-created policies (one with `bashDeny`, one
+without) on two QA agents; edit an UNRELATED permission through the real UI (add an `edit` glob /
+toggle bash), then poll the stored config with a single string compare
+`` `${edit}|${JSON.stringify(cfg.bashDeny)}` `` against
+`` `deny|${JSON.stringify(["rm -rf /"])}` `` for the positive case, and `expect("bashDeny" in cfg).toBe(false)`
+for the negative control. Cleanup both in one `finally`.
+
+**Evidence gotcha (re-confirmed):** `scripts/e2e-create-agent-role.sh:40` truncates the shared
+`e2e.txt`. Recover prior content with `git show HEAD:<path> > <path>` (read-only, NOT
+`git checkout --`) and re-append the run sections; keep each suite's own log in a side file before
+running the truncating suite.
