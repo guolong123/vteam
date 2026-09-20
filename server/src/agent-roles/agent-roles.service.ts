@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
@@ -19,6 +20,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateAgentRoleDto } from './dto/create-agent-role.dto';
 import { QueryAgentRolesDto } from './dto/query-agent-roles.dto';
 import { UpdateAgentRoleDto } from './dto/update-agent-role.dto';
+import { OpencodeAgentNameValidator } from './opencode-agent-name.validator';
 
 /** AgentRole 行（含关联，toAgentRoleDto 输入）。无任何能力字段。 */
 type AgentRoleRow = {
@@ -28,6 +30,7 @@ type AgentRoleRow = {
   description: string | null;
   type: string;
   defaultAgentId: string | null;
+  defaultOpencodeAgentName: string | null;
   rolePrompt: string | null;
   sortOrder: number;
   createdAt: Date;
@@ -43,6 +46,8 @@ type AgentRoleRow = {
  *   `defaultAgentId` 必须指向已存在的 Agent（否则 400 `AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND`）。
  * - update：内置角色允许编辑 name/description/rolePrompt/defaultAgentId，但改 `key` → 403
  *   `AGENT_ROLE_BUILTIN_READONLY`（镜像 agents 模块 `PERMISSION_AGENT_READONLY`）。
+ * - 默认 Agent 是**单一槽位**：`defaultAgentId`（内部）与 `defaultOpencodeAgentName`（外部引擎名）
+ *   至多一个非空（同时给 → 400 `AGENT_ROLE_DEFAULT_SLOT_CONFLICT`）；update 设置其一自动清空另一个。
  * - remove：`type='builtin'` → 403 `AGENT_ROLE_BUILTIN_READONLY`（行保留）；被团队成员引用
  *   （FK ON DELETE RESTRICT）→ 409 `AGENT_ROLE_IN_USE`，绝不静默删除。
  * - 响应仅含身份 + `rolePrompt` 文本，**绝不暴露能力字段**（permission/tools/model/worker）。
@@ -52,6 +57,7 @@ export class AgentRolesService implements OnModuleInit {
   constructor(
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
+    private readonly opencodeAgentNameValidator: OpencodeAgentNameValidator,
   ) {}
 
   /**
@@ -101,12 +107,19 @@ export class AgentRolesService implements OnModuleInit {
   /**
    * POST /agent-roles：创建自定义角色。
    * key 唯一（P2002 → 409）；defaultAgentId 须指向已存在 Agent（否则 400）。
-   * `key` 与 `defaultAgentId` 的存在性校验在同一路径，失败不留半装配行。
+   * `key`、槽位互斥与 `defaultAgentId` 的存在性校验在同一路径，失败不留半装配行。
    */
   async create(dto: CreateAgentRoleDto) {
     this.assertValidKey(dto.key);
-    if (dto.defaultAgentId !== undefined && dto.defaultAgentId !== null) {
-      await this.assertAgentExists(dto.defaultAgentId);
+    const internalAgentId = this.normalizeInternalSlot(dto.defaultAgentId);
+    const externalAgentName = this.normalizeExternalSlot(
+      dto.defaultOpencodeAgentName,
+    );
+    if (internalAgentId !== null && externalAgentName !== null) {
+      this.throwSlotConflict();
+    }
+    if (internalAgentId !== null) {
+      await this.assertAgentExists(internalAgentId);
     }
 
     try {
@@ -117,11 +130,18 @@ export class AgentRolesService implements OnModuleInit {
           name: dto.name.trim(),
           description: dto.description ?? null,
           type: AGENT_ROLE_TYPES.custom,
-          defaultAgentId: dto.defaultAgentId ?? null,
+          defaultAgentId: internalAgentId,
+          defaultOpencodeAgentName: externalAgentName,
           rolePrompt: dto.rolePrompt ?? null,
           sortOrder: dto.sortOrder ?? 0,
         },
       });
+      if (externalAgentName !== null) {
+        await this.opencodeAgentNameValidator.warnIfUnknown(
+          externalAgentName,
+          created.id,
+        );
+      }
       return this.toAgentRoleDto(created);
     } catch (e) {
       this.throwOnKeyConflict(e);
@@ -133,7 +153,14 @@ export class AgentRolesService implements OnModuleInit {
    * PATCH /agent-roles/:id：更新角色。
    * 内置角色（type=builtin）允许编辑 name/description/rolePrompt/defaultAgentId，
    * 但改 `key` → 403 `AGENT_ROLE_BUILTIN_READONLY`（type 不在 DTO，天然不可改）。
-   * `defaultAgentId` 显式传 null → 清除；传 id → 必须存在（否则 400）。
+   *
+   * 单一槽位语义（写入侧就是"至多一个"的强制点）：
+   *   - `defaultAgentId` 显式传 null → 清除；传 id → 必须存在（否则 400）。
+   *   - `defaultOpencodeAgentName` 显式传 null/空串 → 清除；传名 → 弱校验后落库。
+   *   - **设置其一自动清空另一个**（本次请求里同时给两个非空值 → 400
+   *     `AGENT_ROLE_DEFAULT_SLOT_CONFLICT`）。这是「恰好一个」的自然写法：
+   *     调用方无需记得先清空另一槽位，槽位切换（内部 ⇄ 外部）是原子动作。
+   *   - 两个字段都不传 → 现有槽位保持原样，不被触碰。
    */
   async update(id: string, dto: UpdateAgentRoleDto) {
     const role = await this.prisma.agentRole.findUnique({ where: { id } });
@@ -150,8 +177,35 @@ export class AgentRolesService implements OnModuleInit {
         });
       }
     }
-    if (dto.defaultAgentId !== undefined && dto.defaultAgentId !== null) {
-      await this.assertAgentExists(dto.defaultAgentId);
+
+    const internalProvided = dto.defaultAgentId !== undefined;
+    const externalProvided = dto.defaultOpencodeAgentName !== undefined;
+    const internalAgentId = this.normalizeInternalSlot(dto.defaultAgentId);
+    const externalAgentName = this.normalizeExternalSlot(
+      dto.defaultOpencodeAgentName,
+    );
+    if (internalAgentId !== null && externalAgentName !== null) {
+      this.throwSlotConflict();
+    }
+    if (internalAgentId !== null) {
+      await this.assertAgentExists(internalAgentId);
+    }
+
+    const slotData: {
+      defaultAgentId?: string | null;
+      defaultOpencodeAgentName?: string | null;
+    } = {};
+    if (internalProvided) {
+      slotData.defaultAgentId = internalAgentId;
+      if (internalAgentId !== null) {
+        slotData.defaultOpencodeAgentName = null;
+      }
+    }
+    if (externalProvided) {
+      slotData.defaultOpencodeAgentName = externalAgentName;
+      if (externalAgentName !== null) {
+        slotData.defaultAgentId = null;
+      }
     }
 
     try {
@@ -163,15 +217,19 @@ export class AgentRolesService implements OnModuleInit {
           ...(dto.description !== undefined
             ? { description: dto.description }
             : {}),
-          ...(dto.defaultAgentId !== undefined
-            ? { defaultAgentId: dto.defaultAgentId }
-            : {}),
+          ...slotData,
           ...(dto.rolePrompt !== undefined
             ? { rolePrompt: dto.rolePrompt }
             : {}),
           ...(dto.sortOrder !== undefined ? { sortOrder: dto.sortOrder } : {}),
         },
       });
+      if (externalAgentName !== null) {
+        await this.opencodeAgentNameValidator.warnIfUnknown(
+          externalAgentName,
+          id,
+        );
+      }
       return this.toAgentRoleDto(updated);
     } catch (e) {
       this.throwOnKeyConflict(e);
@@ -212,7 +270,7 @@ export class AgentRolesService implements OnModuleInit {
     }
   }
 
-  /** 响应映射：仅身份 + rolePrompt 文本，无任何能力字段。 */
+  /** 响应映射：仅身份 + rolePrompt 文本与单一默认 Agent 槽位，无任何能力字段。 */
   private toAgentRoleDto(role: AgentRoleRow) {
     return {
       id: role.id,
@@ -221,6 +279,7 @@ export class AgentRolesService implements OnModuleInit {
       description: role.description,
       type: role.type,
       defaultAgentId: role.defaultAgentId,
+      defaultOpencodeAgentName: role.defaultOpencodeAgentName,
       rolePrompt: role.rolePrompt,
       sortOrder: role.sortOrder,
       createdAt: role.createdAt,
@@ -234,6 +293,38 @@ export class AgentRolesService implements OnModuleInit {
       code: AGENT_ROLE_ERRORS.AGENT_ROLE_NOT_FOUND,
       message: `AgentRole ${id} 不存在`,
     });
+  }
+
+  /** 默认槽位冲突（两个字段同时非空）→ 400 AGENT_ROLE_DEFAULT_SLOT_CONFLICT。 */
+  private throwSlotConflict(): never {
+    throw new BadRequestException({
+      code: AGENT_ROLE_ERRORS.AGENT_ROLE_DEFAULT_SLOT_CONFLICT,
+      message:
+        '默认 Agent 槽位至多一个：defaultAgentId 与 defaultOpencodeAgentName 不能同时设置',
+    });
+  }
+
+  /** 内部槽位归一化：undefined / null / 空串 → null（未设置），否则原值。 */
+  private normalizeInternalSlot(value: string | null | undefined): string | null {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  /**
+   * 外部槽位归一化：undefined / null / 空串 → null（未设置），否则 **trim 后原样保留**
+   * （名字含空格与大写，如 `Prometheus - Plan Builder`；不规范化大小写/内部空白）。
+   */
+  private normalizeExternalSlot(
+    value: string | null | undefined,
+  ): string | null {
+    if (value === undefined || value === null) {
+      return null;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
   }
 
   /** defaultAgentId 存在性校验：指向不存在的 Agent → 400。 */

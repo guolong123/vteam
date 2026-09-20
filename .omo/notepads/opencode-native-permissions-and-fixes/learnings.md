@@ -53,3 +53,15 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `git_*`) are worker-injected custom tools with no platform-mcp `tools/call` surface — leave them alone.
 - The webui `tmp` dir `/var/folders/0y/.../T/opencode` is fine for scratch captures; keep raw
   artifacts under `.omo/evidence/<plan>/raw/` with sha256 in the evidence JSON.
+
+## [2026-09-20] Task 2: AgentRole 外部 Agent 槽位（single-slot）
+- 槽位形状：`defaultAgentId`（内部 FK）与新增 `defaultOpencodeAgentName`（外部引擎名）互斥，service 层强制。
+  - 代码：`AGENT_ROLE_DEFAULT_SLOT_CONFLICT`（400）。update 设置其一自动清空另一个（原子切换）；
+    两字段都不传 → 现有槽位不动。
+- `@MaxLength(128)` 依据：live `GET /agent?directory=` 23 个 agent，最长 `Prometheus - Plan Builder`（25）；
+  oh-my-openagent 4.19.4 `AGENT_DISPLAY_NAMES` 最长亦 25；因 display 名可由 `overrides[].displayName`
+  自定义（无固有上限），取 128（列宽 VARCHAR(128) 同值）。
+- 弱校验取数必须带 worker capabilities：`WorkerClient.listAgents(worker ?? {id})`，只传 `{id}` 会回落
+  localhost → 跨容器静默 `[]`（`agents.service#listOpencodeAgents` 已记录同坑）。镜像后 WARN 正常触发。
+- 7 内置角色行不受影响：迁移为 additive-only（单条 ADD COLUMN），live 校验 `default_agent_id` 逐行不变。
+- `/agent-policies` 输出逐字节不变（f698c24b…）；frozen baseline sha 3b8c5d4b… 未触碰。

@@ -131,9 +131,16 @@ model AgentRole {
   /// 'builtin'（seed 的 7 个模板角色）| 'custom'（用户创建 / 回填派生）。
   /// 与 Agent.type / ExecutionPolicy.type 同风格：String 承载，不引 Prisma enum（sqlite 测试兼容）。
   type        String
-  /// 预填默认 Agent（可选）。删除被绑定的 Agent 时仅清空本列（SetNull），
+  /// 预填默认 Agent（内部，可选）。删除被绑定的 Agent 时仅清空本列（SetNull），
   /// 不阻塞 Agent 删除（review fix m8）。回填不设置本列，仅 7 个 builtin 行指向模板 Agent。
+  ///
+  /// 与 `defaultOpencodeAgentName` **互斥**：一个角色至多绑定一个默认 Agent 槽位
+  /// （内部 id 或外部引擎名）。写入侧由 AgentRolesService 强制（两者同时非空 → 400
+  /// `AGENT_ROLE_DEFAULT_SLOT_CONFLICT`；设置其一自动清空另一个），二者皆空亦合法。
   defaultAgentId String? @map("default_agent_id")
+  /// 预填默认**外部引擎** Agent 名（opencode agent 名，如 `Prometheus - Plan Builder`；
+  /// 含空格/大写，原样保存不裁剪内容）。与 `defaultAgentId` 互斥，规则见上一字段注释。
+  defaultOpencodeAgentName String? @map("default_opencode_agent_name")
   /// 角色指令（"这个岗位是什么"）。列级可空（todo 4 前 builtin 行暂空），
   /// 但每个 builtin 行最终必须非空（todo 4 填充 role_prompt）。
   rolePrompt  String?  @db.Text @map("role_prompt")

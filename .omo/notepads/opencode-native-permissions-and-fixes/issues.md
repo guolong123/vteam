@@ -26,3 +26,11 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   assertion is a false-positive trap.
 - The **`_meta.progressToken`** in the envelope is easy to miss: without it the byte lengths are
   28 short. It is part of what makes the raw capture byte-exact.
+
+## [2026-09-20] Task 2 踩坑
+- apply 迁移到 live 时用 `docker cp` 把新迁移目录送进 `aiagents-compose-server` 再 `prisma migrate deploy`
+  （server 镜像是构建期 COPY 的，包含到那时为止的 migrations）；**不要** `docker compose up -d --force-recreate`
+  （会重跑 init → reseed）。server 重建用 `docker compose up -d --no-deps --build server`。
+- `teams.service#warnIfOpencodeAgentUnknown` 传 `{id}` 给 `listAgents` 是既有隐患（跨容器永不告警）；
+  本任务的新 validator 已按 `listOpencodeAgents` 的正确姿势带 capabilities，未去改 teams（超出 scope）。
+- write 工具对已存在文件不覆盖（返回 "File already exists"），需用 edit。

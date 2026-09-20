@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
+import { AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH } from '../common/constants/agent-role.constants';
 import { PermissionGuard } from '../common/guards/permission.guard';
 import { REQUIRE_PERMISSION_KEY } from '../common/decorators/require-permission.decorator';
 import { AgentRolesController } from './agent-roles.controller';
@@ -197,6 +198,60 @@ describe('AgentRolesController', () => {
     it('UpdateAgentRoleDto：defaultAgentId=null → 校验通过（显式清除）', async () => {
       expect(
         await errorsOf(UpdateAgentRoleDto, { defaultAgentId: null }),
+      ).toHaveLength(0);
+    });
+
+    it('CreateAgentRoleDto：外部引擎名（含空格/大写）→ 校验通过', async () => {
+      expect(
+        await errorsOf(CreateAgentRoleDto, {
+          name: '计划构建者',
+          key: 'plan-builder',
+          type: 'custom',
+          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+        }),
+      ).toHaveLength(0);
+    });
+
+    it('UpdateAgentRoleDto：外部引擎名与 null 均可（显式清除）', async () => {
+      expect(
+        await errorsOf(UpdateAgentRoleDto, {
+          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+        }),
+      ).toHaveLength(0);
+      expect(
+        await errorsOf(UpdateAgentRoleDto, { defaultOpencodeAgentName: null }),
+      ).toHaveLength(0);
+    });
+
+    it('外部引擎名超长（>128）→ 校验失败；恰为 128 → 通过', async () => {
+      const max = AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH;
+      expect(
+        await errorsOf(CreateAgentRoleDto, {
+          name: '超长名',
+          key: 'too-long',
+          type: 'custom',
+          defaultOpencodeAgentName: 'x'.repeat(max + 1),
+        }),
+      ).not.toHaveLength(0);
+      expect(
+        await errorsOf(CreateAgentRoleDto, {
+          name: '上限名',
+          key: 'at-limit',
+          type: 'custom',
+          defaultOpencodeAgentName: 'x'.repeat(max),
+        }),
+      ).toHaveLength(0);
+    });
+
+    it('两槽位同时给 → DTO 层不拦截（互斥是 service 层 400，DTO 无跨字段 @ValidateIf）', async () => {
+      expect(
+        await errorsOf(CreateAgentRoleDto, {
+          name: '冲突角色',
+          key: 'conflict-role',
+          type: 'custom',
+          defaultAgentId: 'a_developer',
+          defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+        }),
       ).toHaveLength(0);
     });
   });

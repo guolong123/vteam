@@ -72,12 +72,26 @@ export const AGENT_ROLE_ERRORS = {
   AGENT_ROLE_KEY_CONFLICT: 'AGENT_ROLE_KEY_CONFLICT',
   /** defaultAgentId 指向不存在的 Agent → 400。 */
   AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND: 'AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND',
+  /** 默认 Agent 槽位冲突（`defaultAgentId` 与 `defaultOpencodeAgentName` 同时非空）→ 400。 */
+  AGENT_ROLE_DEFAULT_SLOT_CONFLICT: 'AGENT_ROLE_DEFAULT_SLOT_CONFLICT',
   /** 角色被团队成员引用（FK ON DELETE RESTRICT）→ 409，不可静默删除。 */
   AGENT_ROLE_IN_USE: 'AGENT_ROLE_IN_USE',
 } as const;
 
 export type AgentRoleErrorCode =
   (typeof AGENT_ROLE_ERRORS)[keyof typeof AGENT_ROLE_ERRORS];
+
+/**
+ * `defaultOpencodeAgentName`（外部引擎 Agent 名）的 DTO 长度上限。
+ *
+ * 实测依据（2026-09-20，live worker `GET /agent?directory=/data/vteam-worker`）：
+ * 引擎返回 23 个 agent，最长名为 `Prometheus - Plan Builder`（25 字符）；
+ * oh-my-openagent 4.19.4 的 display-name 表（dist/index.js `AGENT_DISPLAY_NAMES`）
+ * 最长亦为 25。但 display 名可由用户 `overrides[].displayName` 自定义（无固有上限），
+ * 故不取「当前最长」，取 128 留足余量；同时与列宽 `VARCHAR(128)` 一致。
+ * 名字含空格/大写，仅限长、不做格式约束。
+ */
+export const AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH = 128 as const;
 
 /** 内置角色行定义（7 个模板角色；`defaultAgentId` 指向 seed 的模板 Agent）。 */
 export interface BuiltinAgentRole {

@@ -11,6 +11,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { AGENT_KEY_PATTERN } from '../../common/constants/agent.constants';
+import { AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH } from '../../common/constants/agent-role.constants';
 
 /**
  * POST /agent-roles 请求体（agent-role-entity todo 6）。
@@ -48,7 +49,8 @@ export class CreateAgentRoleDto {
 
   @ApiPropertyOptional({
     description:
-      '预填默认 Agent id（须为已存在的 Agent；null/缺省表示不预填）',
+      '预填默认 Agent id（内部；须为已存在的 Agent；null/缺省表示不预填）。' +
+      '与 defaultOpencodeAgentName 互斥：至多一个非空，同时给 → 400 AGENT_ROLE_DEFAULT_SLOT_CONFLICT',
     example: 'a_developer',
     nullable: true,
   })
@@ -56,6 +58,21 @@ export class CreateAgentRoleDto {
   @ValidateIf((o) => o.defaultAgentId !== null)
   @IsString()
   defaultAgentId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      '预填默认**外部引擎** Agent 名（opencode agent 名，如 `Prometheus - Plan Builder`；' +
+      `含空格/大写，最长 ${AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH} 字符；null/缺省表示不预填）。` +
+      '与 defaultAgentId 互斥：至多一个非空，同时给 → 400 AGENT_ROLE_DEFAULT_SLOT_CONFLICT',
+    example: 'Prometheus - Plan Builder',
+    nullable: true,
+    maxLength: AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH,
+  })
+  @IsOptional()
+  @ValidateIf((o) => o.defaultOpencodeAgentName !== null)
+  @IsString()
+  @MaxLength(AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH)
+  defaultOpencodeAgentName?: string | null;
 
   @ApiPropertyOptional({ description: '角色指令（"这个岗位是什么"）' })
   @IsOptional()

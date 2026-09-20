@@ -1,0 +1,215 @@
+{
+  "task": "task-2-role-external-binding",
+  "plan": "opencode-native-permissions-and-fixes",
+  "todo": 2,
+  "title": "Let an AgentRole point at an internal OR external agent (single slot)",
+  "timestamp": "2026-09-20T02:47:13.942Z",
+  "decisions": {
+    "slotShape": "nullable AgentRole.defaultOpencodeAgentName (engine name) + existing defaultAgentId FK; at most one non-empty",
+    "invariantCode": "AGENT_ROLE_DEFAULT_SLOT_CONFLICT (400)",
+    "updateSemantics": "setting one slot clears the other (atomic switch); omitting both fields leaves the current slot untouched",
+    "dtoMaxLengthSource": "live engine list longest = 25 chars; picked 128 because display names are user-overridable via omo overrides[].displayName (unbounded in principle); column VARCHAR(128) matches",
+    "errorCodeStyle": "AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND preserved; new code follows AGENT_ROLE_* style"
+  },
+  "liveEngineList": {
+    "source": "docker exec aiagents-compose-worker curl http://127.0.0.1:4000/agent?directory=/data/vteam-worker",
+    "alsoVia": "GET /api/v1/agents/opencode (Bearer)",
+    "count": 23,
+    "names": [
+      "Sisyphus - ultraworker",
+      "Prometheus - Plan Builder",
+      "Atlas - Plan Executor",
+      "Metis - Plan Consultant",
+      "Momus - Plan Critic",
+      "Sisyphus-Junior",
+      "build",
+      "compaction",
+      "explore",
+      "general",
+      "librarian",
+      "multimodal-looker",
+      "oracle",
+      "plan",
+      "summary",
+      "title",
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "longest": {
+      "name": "Prometheus - Plan Builder",
+      "length": 25
+    },
+    "omoDisplayNamesLongest": {
+      "name": "Prometheus - Plan Builder",
+      "length": 25,
+      "source": "oh-my-openagent@4.19.4 dist/index.js AGENT_DISPLAY_NAMES"
+    }
+  },
+  "schema": {
+    "file": "server/prisma/schema.prisma",
+    "column": "agent_roles.default_opencode_agent_name VARCHAR(128) NULL"
+  },
+  "migration": {
+    "file": "server/prisma/migrations/20260919000011_agent_role_external_agent/migration.sql",
+    "kind": "additive-only (single ALTER TABLE ADD COLUMN, nullable)",
+    "rollback": "ALTER TABLE agent_roles DROP COLUMN default_opencode_agent_name; (exact command documented in the migration header)",
+    "liveDeploy": "docker exec aiagents-compose-server npx prisma migrate deploy -> Applying 20260919000011_agent_role_external_agent; All migrations have been successfully applied (64 found)",
+    "idempotentRerun": "No pending migrations to apply."
+  },
+  "gates": {
+    "serverTsc": "exit 0 (npx tsc -p tsconfig.json --noEmit)",
+    "serverSuite": "143 suites / 3272 tests all pass (baseline 141/3250; +2 suites +22 tests)",
+    "targeted": "npx jest --runInBand src/agent-roles src/prisma -> 7 suites / 137 tests pass",
+    "workerSuite": "26 suites / 688 tests, unchanged",
+    "workerTsc": "exit 0",
+    "frozenBaseline": {
+      "path": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json",
+      "sha256": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+      "untouched": true
+    }
+  },
+  "agentPolicies": {
+    "beforeSha256": "f698c24b39b24beffd9baa9b03af62a00fd9d98e0e76bf6d8ceeb4dda10404be",
+    "afterSha256": "f698c24b39b24beffd9baa9b03af62a00fd9d98e0e76bf6d8ceeb4dda10404be",
+    "byteIdentical": true,
+    "note": "no capability field added to AgentRole; /agent-policies payload untouched"
+  },
+  "manualQA": {
+    "createExternal": {
+      "request": "POST /api/v1/agent-roles {name:\"QA 外部绑定角色\",key:\"qa-external-binding\",type:\"custom\",defaultOpencodeAgentName:\"Prometheus - Plan Builder\"}",
+      "status": 201,
+      "body": {
+        "id": "ar_0000000001",
+        "key": "qa-external-binding",
+        "name": "QA 外部绑定角色",
+        "description": null,
+        "type": "custom",
+        "defaultAgentId": null,
+        "defaultOpencodeAgentName": "Prometheus - Plan Builder",
+        "rolePrompt": null,
+        "sortOrder": 0,
+        "createdAt": "2026-09-20T02:42:19.590Z",
+        "updatedAt": "2026-09-20T02:42:19.590Z"
+      }
+    },
+    "patchExternalOnBuiltin": {
+      "request": "PATCH /api/v1/agent-roles/ar_developer {defaultOpencodeAgentName:\"Atlas - Plan Executor\"}",
+      "status": 200,
+      "result": {
+        "defaultAgentId": null,
+        "defaultOpencodeAgentName": "Atlas - Plan Executor"
+      },
+      "readBack": "GET 200 same values"
+    },
+    "bothSlotsCreate": {
+      "request": "POST {defaultAgentId:a_developer, defaultOpencodeAgentName:\"Momus - Plan Critic\"}",
+      "status": 400,
+      "body": {
+        "code": "AGENT_ROLE_DEFAULT_SLOT_CONFLICT",
+        "message": "默认 Agent 槽位至多一个：defaultAgentId 与 defaultOpencodeAgentName 不能同时设置"
+      }
+    },
+    "bothSlotsUpdate": {
+      "request": "PATCH {defaultAgentId:a_developer, defaultOpencodeAgentName:\"Momus - Plan Critic\"}",
+      "status": 400,
+      "body": {
+        "code": "AGENT_ROLE_DEFAULT_SLOT_CONFLICT",
+        "message": "默认 Agent 槽位至多一个：defaultAgentId 与 defaultOpencodeAgentName 不能同时设置"
+      }
+    },
+    "ghostInternalIdCreate": {
+      "request": "POST {defaultAgentId:a_ghost_does_not_exist}",
+      "status": 400,
+      "body": {
+        "code": "AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND",
+        "message": "defaultAgentId a_ghost_does_not_exist 指向的 Agent 不存在"
+      }
+    },
+    "ghostInternalIdUpdate": {
+      "request": "PATCH {defaultAgentId:a_ghost_does_not_exist}",
+      "status": 400,
+      "body": {
+        "code": "AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND",
+        "message": "defaultAgentId a_ghost_does_not_exist 指向的 Agent 不存在"
+      }
+    },
+    "weakValidation": {
+      "request": "PATCH {defaultOpencodeAgentName:\"No Such Engine Agent - QA\"}",
+      "status": 200,
+      "behavior": "non-blocking",
+      "log": "level:40 context:OpencodeAgentNameValidator msg:[agent-roles] defaultOpencodeAgentName=\"No Such Engine Agent - QA\"（role=ar_0000000001）不在 worker w_compose_worker 的 agent 清单中，仍按用户意图写入；执行期若不存在将由 opencode 报错"
+    },
+    "lengthAccept": {
+      "request": "POST 72-char external name",
+      "status": 201
+    },
+    "lengthReject": {
+      "request": "POST 129-char external name",
+      "status": 400,
+      "body": {
+        "message": [
+          "defaultOpencodeAgentName must be shorter than or equal to 128 characters"
+        ],
+        "error": "Bad Request",
+        "statusCode": 400
+      }
+    },
+    "cleanup": {
+      "restored": "PATCH ar_developer {defaultAgentId:a_developer} -> 200 {defaultAgentId:a_developer,defaultOpencodeAgentName:null}",
+      "deleted": [
+        "ar_0000000001",
+        "ar_0000000002"
+      ],
+      "finalRoleCount": 8,
+      "finalExtSet": 0
+    }
+  },
+  "builtinRolesBeforeAfter": [
+    [
+      "ar_product",
+      "a_product"
+    ],
+    [
+      "ar_project_manager",
+      "a_project_manager"
+    ],
+    [
+      "ar_architect",
+      "a_architect"
+    ],
+    [
+      "ar_developer",
+      "a_developer"
+    ],
+    [
+      "ar_tester",
+      "a_tester"
+    ],
+    [
+      "ar_plan",
+      "a_plan"
+    ],
+    [
+      "ar_librarian",
+      "a_librarian"
+    ]
+  ],
+  "filesChanged": [
+    "server/prisma/schema.prisma",
+    "server/prisma/migrations/20260919000011_agent_role_external_agent/migration.sql",
+    "server/src/common/constants/agent-role.constants.ts",
+    "server/src/agent-roles/dto/create-agent-role.dto.ts",
+    "server/src/agent-roles/dto/update-agent-role.dto.ts",
+    "server/src/agent-roles/agent-roles.service.ts",
+    "server/src/agent-roles/agent-roles.module.ts",
+    "server/src/agent-roles/opencode-agent-name.validator.ts",
+    "server/src/agent-roles/agent-roles.service.spec.ts",
+    "server/src/agent-roles/agent-roles.controller.spec.ts",
+    "server/src/prisma/agent-role-external-agent.migration.spec.ts"
+  ]
+}
