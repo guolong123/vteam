@@ -47,6 +47,7 @@ import {
   MAIN_AGENT_INSTRUCTION,
   MEMORY_INSTRUCTION,
   PENDING_INSTANCE_REF,
+  parseTimeoutMs,
   renderBoundarySection,
   resolvePolicyAgentCandidate,
   roleLabelOfAgentKey,
@@ -3988,7 +3989,7 @@ describe('WorkerDispatcher', () => {
   // 判死 watchdog（方案 A：首字超时 + 空闲判死）
   // ------------------------------------------------------------------
 
-  describe('判死 watchdog（首字超时 60s + 空闲判死 30min）', () => {
+  describe('判死 watchdog（首字超时 300s + 空闲判死 30min）', () => {
     const dispatchSetup = () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
@@ -4008,7 +4009,7 @@ describe('WorkerDispatcher', () => {
       prisma.artifact.findMany.mockResolvedValue([]);
     };
 
-    it('dispatch 后 60s 无事件回流 → emitError「无响应」+ 广播 agent.error（first_token_timeout）', async () => {
+    it('dispatch 后 300s 无事件回流 → emitError「无响应」+ 广播 agent.error（first_token_timeout）', async () => {
       jest.useFakeTimers();
       dispatchSetup();
       const d = createDispatcher();
@@ -4040,7 +4041,7 @@ describe('WorkerDispatcher', () => {
       jest.useRealTimers();
     });
 
-    it('60s 内收到 session.updated(running) → 首字 watchdog 清除，不再 emitError', async () => {
+    it('300s 内收到 session.updated(running) → 首字 watchdog 清除，不再 emitError', async () => {
       jest.useFakeTimers();
       dispatchSetup();
       const d = createDispatcher();
@@ -4550,7 +4551,7 @@ describe('WorkerDispatcher', () => {
       expect(() => createDispatcher()).not.toThrow();
     });
 
-    it('watchdog 注册即落 durable 行（kind 复用 session_idle_scan，due=注册+60s）', async () => {
+    it('watchdog 注册即落 durable 行（kind 复用 session_idle_scan，due=注册+首字超时）', async () => {
       const triggers = makeTriggers();
       const d = createDispatcherWithTriggers(triggers);
       const before = Date.now();
@@ -4854,7 +4855,7 @@ describe('WorkerDispatcher', () => {
       jest.useRealTimers();
     });
 
-    it('60s 无 step-finish：首字 watchdog emitError；迟到回流跳过落库', async () => {
+    it('首字超时无 step-finish：首字 watchdog emitError；迟到回流跳过落库', async () => {
       jest.useFakeTimers();
       pollSetup();
       const d = createDispatcher();
@@ -4941,7 +4942,7 @@ describe('WorkerDispatcher', () => {
       );
       // 失败态无回复落库
       expect(prisma.message.create).not.toHaveBeenCalled();
-      // watchdog 已清除——再推 60s 不重复 emitError（无双报错）
+      // watchdog 已清除——再推首字超时时长不重复 emitError（无双报错）
       await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
       await jest.advanceTimersByTimeAsync(0);
       expect(errors).toHaveLength(1);
@@ -5879,19 +5880,19 @@ describe('WorkerDispatcher', () => {
       expect(configured.dispatchTimeoutMs).toBe(30_000);
     });
 
-    it('判死超时默认值：首字 60s / 空闲 30min，env FIRST_TOKEN_TIMEOUT_MS / AGENT_IDLE_TIMEOUT_MS 可配', async () => {
-      expect(DEFAULT_FIRST_TOKEN_TIMEOUT_MS).toBe(60_000);
+    it('判死超时默认值：首字 300s / 空闲 30min，env FIRST_TOKEN_TIMEOUT_MS / AGENT_IDLE_TIMEOUT_MS 可配（STRING env 解析）', async () => {
+      expect(DEFAULT_FIRST_TOKEN_TIMEOUT_MS).toBe(300_000);
       expect(DEFAULT_AGENT_IDLE_TIMEOUT_MS).toBe(30 * 60_000);
       // 默认
       const d = createDispatcher();
       expect(d.firstTokenTimeoutMs).toBe(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
       expect(d.agentIdleTimeoutMs).toBe(DEFAULT_AGENT_IDLE_TIMEOUT_MS);
-      // env 可配 → 覆盖默认
+      // env 可配 → 覆盖默认（plain ConfigModule 读到的是 STRING）
       config.get.mockImplementation((key: string) =>
         key === 'FIRST_TOKEN_TIMEOUT_MS'
-          ? 10_000
+          ? '10000'
           : key === 'AGENT_IDLE_TIMEOUT_MS'
-            ? 5 * 60_000
+            ? String(5 * 60_000)
             : key === 'WORK_DIR'
               ? workRoot
               : undefined,
@@ -5899,6 +5900,76 @@ describe('WorkerDispatcher', () => {
       const configured = createDispatcher();
       expect(configured.firstTokenTimeoutMs).toBe(10_000);
       expect(configured.agentIdleTimeoutMs).toBe(5 * 60_000);
+    });
+
+    it('超时 env 解析：parse("0") → disabled；"300000" → 300000；未设/垃圾 → 300000；idle 同理', async () => {
+      // parse("300000") → 300000
+      config.get.mockImplementation((key: string) =>
+        key === 'FIRST_TOKEN_TIMEOUT_MS'
+          ? '300000'
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
+      expect(createDispatcher().firstTokenTimeoutMs).toBe(300_000);
+      // parse("0") → disabled 路径（watchdog 不注册）
+      config.get.mockImplementation((key: string) =>
+        key === 'FIRST_TOKEN_TIMEOUT_MS'
+          ? '0'
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
+      expect(createDispatcher().firstTokenTimeoutMs).toBe(0);
+      // 垃圾/空 → 回落默认 300000
+      for (const garbage of ['garbage', '', '   ', '-5', '12.5', '0x10']) {
+        config.get.mockImplementation((key: string) =>
+          key === 'FIRST_TOKEN_TIMEOUT_MS'
+            ? garbage
+            : key === 'WORK_DIR'
+              ? workRoot
+              : undefined,
+        );
+        expect(createDispatcher().firstTokenTimeoutMs).toBe(300_000);
+      }
+      // 未设 → 回落默认 300000
+      config.get.mockImplementation((key: string) =>
+        key === 'WORK_DIR' ? workRoot : undefined,
+      );
+      expect(createDispatcher().firstTokenTimeoutMs).toBe(300_000);
+      // idle 同理：STRING "0" → disabled；垃圾 → 默认 30min
+      config.get.mockImplementation((key: string) =>
+        key === 'AGENT_IDLE_TIMEOUT_MS'
+          ? '0'
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
+      expect(createDispatcher().agentIdleTimeoutMs).toBe(0);
+      config.get.mockImplementation((key: string) =>
+        key === 'AGENT_IDLE_TIMEOUT_MS'
+          ? 'oops'
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
+      expect(createDispatcher().agentIdleTimeoutMs).toBe(
+        DEFAULT_AGENT_IDLE_TIMEOUT_MS,
+      );
+    });
+
+    it('parseTimeoutMs 单元：数字/字符串/非法输入归一', () => {
+      expect(parseTimeoutMs('300000', 300_000)).toBe(300_000);
+      expect(parseTimeoutMs('0', 300_000)).toBe(0);
+      expect(parseTimeoutMs('  10000  ', 300_000)).toBe(10_000);
+      expect(parseTimeoutMs(10_000, 300_000)).toBe(10_000);
+      expect(parseTimeoutMs(undefined, 300_000)).toBe(300_000);
+      expect(parseTimeoutMs(null, 300_000)).toBe(300_000);
+      expect(parseTimeoutMs('', 300_000)).toBe(300_000);
+      expect(parseTimeoutMs('garbage', 300_000)).toBe(300_000);
+      expect(parseTimeoutMs('-5', 300_000)).toBe(300_000);
+      expect(parseTimeoutMs('12.5', 300_000)).toBe(300_000);
+      expect(parseTimeoutMs(NaN, 300_000)).toBe(300_000);
     });
   });
 

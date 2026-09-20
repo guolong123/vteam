@@ -437,7 +437,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     });
   });
 
-  it('判死链路：session.updated(running) 经 ingress 完整回流（ses_ → s_）→ 首字 watchdog 清除，60s 后不 emitError', async () => {
+  it('判死链路：session.updated(running) 经 ingress 完整回流（ses_ → s_）→ 首字 watchdog 清除，超时后不 emitError', async () => {
     jest.useFakeTimers();
     const errors: unknown[] = [];
     dispatcher.onError((e) => errors.push(e));
@@ -458,7 +458,9 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
       ),
     );
 
-    await jest.advanceTimersByTimeAsync(60_000 + 1000);
+    await jest.advanceTimersByTimeAsync(
+      dispatcher.firstTokenTimeoutMs + 1000,
+    );
     await jest.advanceTimersByTimeAsync(0);
     expect(errors).toHaveLength(0);
     expect(
@@ -469,13 +471,15 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     jest.useRealTimers();
   });
 
-  it('判死链路：dispatch 后 60s 无任何回流 → 首字 watchdog emitError + agent.error（回归基线）', async () => {
+  it('判死链路：dispatch 后首字超时无任何回流 → 首字 watchdog emitError + agent.error（回归基线）', async () => {
     jest.useFakeTimers();
     const errors: unknown[] = [];
     dispatcher.onError((e) => errors.push(e));
 
     await dispatcher.dispatch(request);
-    await jest.advanceTimersByTimeAsync(60_000 + 1000);
+    await jest.advanceTimersByTimeAsync(
+      dispatcher.firstTokenTimeoutMs + 1000,
+    );
     await jest.advanceTimersByTimeAsync(0);
 
     expect(errors).toEqual([

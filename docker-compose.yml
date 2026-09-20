@@ -68,8 +68,8 @@ services:
       # 模型 provider token 加密密钥（C4 AES-256-GCM，32 字节/64 hex）。
       # 必填校验：未设置即启动报错（拒绝公开默认值导致密钥泄露）。生成方式：openssl rand -hex 32
       MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:?MODEL_CREDENTIAL_KEY 未设置，请生成 32 字节随机密钥（openssl rand -hex 32）}
-      # 首字超时（server dispatcher watchdog）：0 表示禁用（按需求已禁杀死长任务，模型执行命令不中断）
-      FIRST_TOKEN_TIMEOUT_MS: "0"
+      # 首字超时（server dispatcher watchdog）：dispatch 后 300s 无首个事件回流则判无响应
+      FIRST_TOKEN_TIMEOUT_MS: "300000"
       AGENT_IDLE_TIMEOUT_MS: "0"
     depends_on:
       db:

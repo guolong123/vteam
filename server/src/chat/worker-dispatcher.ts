@@ -750,7 +750,7 @@ export const DISPATCH_TIMEOUT_MS = 120_000;
  * 「模型完全没响应」：emitError + agent.error 广播。只判「是否开始产出」，完成无时间上限
  * （长期任务由 worker 自行推进，完成经 task.completed 回流）。env FIRST_TOKEN_TIMEOUT_MS 可配。
  */
-export const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 60_000;
+export const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 300_000;
 
 /** 空闲判死：session 进入 running 后无任何输出活动（delta/agent.status/task.completed）超时 →
  *  判死（session 标 failed + agent.error）。env AGENT_IDLE_TIMEOUT_MS 可配。 */
@@ -758,6 +758,28 @@ export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 /** 空闲判死扫描周期（定期遍历 lastActivityAt，检查超时会话）。 */
 export const IDLE_SCAN_INTERVAL_MS = 60_000;
+
+/**
+ * 超时类 env 解析（plain ConfigModule 无 schema，读到的是 STRING）：
+ * 十进制整数；"0" → 0（disabled 路径保留）；空/垃圾/负数/非有限数 → fallback。
+ */
+export function parseTimeoutMs(raw: unknown, fallback: number): number {
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) {
+      return fallback;
+    }
+    const n = Math.trunc(raw);
+    return n >= 0 ? n : fallback;
+  }
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s || !/^\d+$/.test(s)) {
+      return fallback;
+    }
+    return Number.parseInt(s, 10);
+  }
+  return fallback;
+}
 
 /** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /data/vteam-worker）。
  *  任务级独立工作目录 = <根>/tasks/<taskId>（server 侧 mkdir -p 保证存在），
@@ -1218,7 +1240,7 @@ export class WorkerDispatcher
   /** 群聊历史注入上限（对齐 doclib 32KB 语义；公开字段便于测试覆盖）。 */
   public chatHistoryMaxBytes: number;
 
-  /** 待回流 watchdog：`<scope>:<agentId>` → 定时器（首字超时：默认 60s 无首个事件 emitError）。 */
+  /** 待回流 watchdog：`<scope>:<agentId>` → 定时器（首字超时：默认 300s 无首个事件 emitError）。 */
   private readonly pending = new Map<string, PendingDispatch>();
 
   /** sessionId → watchdog key 反查（ingress 活动事件回调按 sessionId 清除首字 watchdog）。 */
@@ -1312,7 +1334,7 @@ export class WorkerDispatcher
 
   /** F3 MINOR-3：回流超时 ms（env DISPATCH_TIMEOUT_MS，缺省 DISPATCH_TIMEOUT_MS=120s）。 */
   public dispatchTimeoutMs: number;
-  /** 首字超时 ms（env FIRST_TOKEN_TIMEOUT_MS，缺省 60s）：dispatch 后无首个事件回流 → emitError。 */
+  /** 首字超时 ms（env FIRST_TOKEN_TIMEOUT_MS，缺省 300s）：dispatch 后无首个事件回流 → emitError。 */
   public firstTokenTimeoutMs: number;
   /** 空闲判死 ms（env AGENT_IDLE_TIMEOUT_MS，缺省 30min）：running 后无输出活动超时 → 判死。 */
   public agentIdleTimeoutMs: number;
@@ -1368,18 +1390,19 @@ export class WorkerDispatcher
       typeof timeoutMs === 'number' && timeoutMs > 0
         ? timeoutMs
         : DISPATCH_TIMEOUT_MS;
-    // 首字超时（FIRST_TOKEN_TIMEOUT_MS，缺省 60s）——只判「dispatch 后是否开始产出」
-    const firstToken = config.get<number>('FIRST_TOKEN_TIMEOUT_MS');
-    this.firstTokenTimeoutMs =
-      typeof firstToken === 'number' && firstToken > 0
-        ? firstToken
-        : DEFAULT_FIRST_TOKEN_TIMEOUT_MS;
+    // 首字超时（FIRST_TOKEN_TIMEOUT_MS，缺省 300s）——只判「dispatch 后是否开始产出」
+    // plain ConfigModule 无 schema：读到的是 STRING，”300000“ 等需 parseTimeoutMs 解析
+    const firstToken = config.get('FIRST_TOKEN_TIMEOUT_MS');
+    this.firstTokenTimeoutMs = parseTimeoutMs(
+      firstToken,
+      DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+    );
     // 空闲判死（AGENT_IDLE_TIMEOUT_MS，缺省 30min）——running 后无输出活动超时判死
-    const idleTimeout = config.get<number>('AGENT_IDLE_TIMEOUT_MS');
-    this.agentIdleTimeoutMs =
-      typeof idleTimeout === 'number' && idleTimeout > 0
-        ? idleTimeout
-        : DEFAULT_AGENT_IDLE_TIMEOUT_MS;
+    const idleTimeout = config.get('AGENT_IDLE_TIMEOUT_MS');
+    this.agentIdleTimeoutMs = parseTimeoutMs(
+      idleTimeout,
+      DEFAULT_AGENT_IDLE_TIMEOUT_MS,
+    );
     // F3 MINOR-3：任务工作目录根（WORK_DIR），任务目录 = <根>/tasks/<taskId>
     const workDir = config.get<string>('WORK_DIR');
     this.taskWorkDirRoot =
@@ -4063,7 +4086,7 @@ export class WorkerDispatcher
 
   /**
    * ingress 活动事件通知处理（onSessionActivity 回调）：
-   * - 任意首个事件到达 → 清除首字 watchdog（模型已开始产出，不再等 60s 无响应）；
+   * - 任意首个事件到达 → 清除首字 watchdog（模型已开始产出，不再等首字超时无响应）；
    * - task.completed / session 进入非 running 态 → 本轮结束，退出空闲判死追踪；
    * - 其余活动事件（delta / agent.status / session.updated(running)）→ 刷新 lastActivityAt。
    */

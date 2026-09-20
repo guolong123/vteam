@@ -1,0 +1,41 @@
+task-12: parse first-token timeout env, default 300s
+=====================================================
+date: 2026-09-20
+scope: server/src/chat/worker-dispatcher.ts, server/src/chat/worker-dispatcher.spec.ts,
+       server/src/chat/worker-dispatcher.integration.spec.ts, docker-compose.yml
+MUST-NOT-DO respected: no worker/** web/** docs/** platform-mcp/**, no DISPATCH_TIMEOUT_MS /
+DOCLIB_* / WORK_DIR / WORKER_FIRST_TOKEN_TIMEOUT_MS changes, no wake-retry, no push,
+no .omo/plans/*.md edits.
+
+change
+------
+- worker-dispatcher.ts: new exported helper parseTimeoutMs(raw, fallback)
+  (decimal int; "0"->0 disabled; empty/garbage/negative/non-finite->fallback;
+  numbers accepted + truncated); used for BOTH FIRST_TOKEN_TIMEOUT_MS and
+  AGENT_IDLE_TIMEOUT_MS reads (old `typeof === 'number'` always failed on plain
+  ConfigModule STRING reads).
+- DEFAULT_FIRST_TOKEN_TIMEOUT_MS 60_000 -> 300_000; stale `60s` comments updated
+  (pending map, firstTokenTimeoutMs field, ctor comment, handleSessionActivity doc).
+  Line 741 DISPATCH_TIMEOUT_MS historical note (72s > 60s) left intact (not stale).
+- docker-compose.yml: FIRST_TOKEN_TIMEOUT_MS "0" -> "300000" + corrected comment.
+- specs: default test now asserts 300_000 + STRING env override ("10000"/String(...));
+  new parse test: "0"->disabled, "300000"->300000, garbage/empty/unset->300000,
+  idle "0"->0 + garbage->default; parseTimeoutMs unit cases.
+  stale spec titles updated (60s->300s/duration-agnostic); integration spec uses
+  dispatcher.firstTokenTimeoutMs+1000 instead of hardcoded 60_000.
+- failedSessions/durable-trigger semantics, testids/messages untouched.
+
+verification (raw)
+------------------
+$ cd server && npx tsc -p tsconfig.json --noEmit
+TSC_EXIT=0
+
+$ npx jest --runInBand src/chat
+Test Suites: 13 passed, 13 total
+Tests:       495 passed, 495 total
+(includes 2 new tests in worker-dispatcher.spec.ts:
+ '超时 env 解析：parse("0") → disabled；...' and 'parseTimeoutMs 单元：...')
+live log line confirms new default in effect:
+  agent a_product agent 无响应（300s 无事件回流），请稍后重试或检查 worker 状态
+
+mutations: none performed (no fixture files created; nothing to restore).

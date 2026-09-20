@@ -343,3 +343,17 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `PLATFORM_MCP_TOOL_NOT_PERMITTED`; C explicit teamId unchanged. Gates: `tsc` 0,
   `src/platform-mcp` 13 suites / 428 tests green. Evidence:
   `task-11-context-backfill.txt` + `task-11-raw/` (legs A/B/C).
+
+## [2026-09-20] task-12 — first-token timeout env parse + 300s default
+- **Root cause**: plain ConfigModule (no schema) returns STRINGS, so
+  `config.get<number>('FIRST_TOKEN_TIMEOUT_MS')` + `typeof === 'number'` always failed
+  → env (incl. compose `"0"`) was silently ignored and the 60s default always won.
+  Fix: exported `parseTimeoutMs(raw, fallback)` (decimal int; `"0"`→0 disabled;
+  empty/garbage/negative/non-finite→fallback), applied to BOTH first-token and idle reads.
+- **Default 60s → 300s** (`DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 300_000`); compose
+  `FIRST_TOKEN_TIMEOUT_MS: "300000"`. Stale `60s` comments/titles updated; the
+  DISPATCH_TIMEOUT_MS historical note (72s > 60s) is intentionally untouched.
+- **Spec pattern for env-string coverage**: `config.get` mock must return STRINGS
+  (`'10000'`), not numbers — a numeric mock would pass even with the old broken code.
+- Integration spec now advances `dispatcher.firstTokenTimeoutMs + 1000` instead of a
+  hardcoded `60_000`, so it survives future default changes.

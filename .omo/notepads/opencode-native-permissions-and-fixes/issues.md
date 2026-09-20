@@ -158,3 +158,11 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - All gates verified independently before closeout (`tsc` 0, 13 suites / 428 tests, live
   legs A/B/C); closeout job was notepad appends + exact-path commit only — no source,
   spec, evidence, rebuild, push, or DB touched.
+
+## [2026-09-20] task-12 踩坑
+- Working tree was already dirty (unrelated .omo/plans + evidence modifications from
+  other plans); commit staged ONLY the 4 task-12 files (+ 2 notepad appends +
+  1 evidence file) via explicit `git add <paths>` — never `git add -A`.
+- `parseTimeoutMs` unit test initially asserted a wrong expectation for float-like
+  input in my own draft; settled contract: only `^\d+$` strings parse, `'12.5'` →
+  fallback (decimal-int-only, per brief).
