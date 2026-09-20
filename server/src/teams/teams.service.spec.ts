@@ -223,6 +223,7 @@ describe('TeamsService', () => {
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
           roleId: null,
+          opencodeAgentName: null,
           alias: '开发者-1',
           seq: 1,
           workDir: '/data/vteam-worker/开发者',
@@ -234,6 +235,7 @@ describe('TeamsService', () => {
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
           roleId: null,
+          opencodeAgentName: null,
           alias: '开发者-2',
           seq: 2,
           workDir: '/data/vteam-worker/开发者-2',
@@ -457,6 +459,93 @@ describe('TeamsService', () => {
         'tm_0000000001',
         'a_product',
       );
+    });
+
+    it('createTeam 角色外部槽位：显式 agentId + defaultOpencodeAgentName → 成员行预填该外部名（规则 5）', async () => {
+      prisma.team.findUnique.mockResolvedValue(null);
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_external',
+        key: 'external',
+        name: '外部专家',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+      });
+      idGen.nextId
+        .mockResolvedValueOnce('tm_0000000001')
+        .mockResolvedValueOnce('tmm_0000000001');
+      const tx = mockCreateTx(teamRow());
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.team.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          teamRow({
+            members: [
+              teamMemberRow({
+                opencodeAgentName: 'Prometheus - Plan Builder',
+              }),
+            ],
+          }),
+        );
+
+      await service.create(userId, {
+        name: 'external-role',
+        members: [{ agentId: 'a_developer', roleId: 'ar_external' }],
+      } as any);
+
+      expect(prisma.agentRole.findUnique).toHaveBeenCalledWith({
+        where: { id: 'ar_external' },
+        select: {
+          id: true,
+          key: true,
+          name: true,
+          defaultAgentId: true,
+          defaultOpencodeAgentName: true,
+        },
+      });
+      expect(tx.teamMember.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            agentId: 'a_developer',
+            roleId: 'ar_external',
+            opencodeAgentName: 'Prometheus - Plan Builder',
+            alias: '外部专家-1',
+          }),
+        }),
+      );
+    });
+
+    it('createTeam 角色两槽位皆空（显式 agentId）→ 成员行 opencodeAgentName null（无回归）', async () => {
+      prisma.team.findUnique.mockResolvedValue(null);
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_plain',
+        key: 'plain',
+        name: '通用',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: null,
+      });
+      idGen.nextId
+        .mockResolvedValueOnce('tm_0000000001')
+        .mockResolvedValueOnce('tmm_0000000001');
+      const tx = mockCreateTx(teamRow());
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.team.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(teamRow({ members: [teamMemberRow()] }));
+
+      await service.create(userId, {
+        name: 'plain-role',
+        members: [{ agentId: 'a_developer', roleId: 'ar_plain' }],
+      } as any);
+
+      const created = (
+        tx.teamMember.create.mock.calls[0][0] as { data: Record<string, unknown> }
+      ).data;
+      expect(created).toMatchObject({
+        agentId: 'a_developer',
+        roleId: 'ar_plain',
+        opencodeAgentName: null,
+      });
+      expect(created.opencodeAgentName).toBeNull();
     });
   });
 
@@ -942,7 +1031,13 @@ describe('TeamsService', () => {
 
       expect(prisma.agentRole.findUnique).toHaveBeenCalledWith({
         where: { id: 'ar_developer' },
-        select: { id: true, key: true, name: true, defaultAgentId: true },
+        select: {
+          id: true,
+          key: true,
+          name: true,
+          defaultAgentId: true,
+          defaultOpencodeAgentName: true,
+        },
       });
       expect(prisma.agent.findUnique).toHaveBeenCalledWith({
         where: { id: 'a_developer' },
@@ -993,10 +1088,17 @@ describe('TeamsService', () => {
         roleId: 'ar_developer',
       } as any);
 
-      // 显式 agentId 优先：角色行仅作别名标签读取（key/name），不解析 defaultAgentId。
+      // 显式 agentId 优先：角色行的内部默认 Agent 不解析；外部槽位仍按规则 5 预填
+      // （角色未设 defaultOpencodeAgentName → null），角色行读取含默认槽位字段。
       expect(prisma.agentRole.findUnique).toHaveBeenCalledWith({
         where: { id: 'ar_developer' },
-        select: { key: true, name: true },
+        select: {
+          id: true,
+          key: true,
+          name: true,
+          defaultAgentId: true,
+          defaultOpencodeAgentName: true,
+        },
       });
       expect(tx.teamMember.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -1038,6 +1140,110 @@ describe('TeamsService', () => {
           code: 'ROLE_DEFAULT_AGENT_MISSING',
         });
       }
+    });
+
+    const mockAddMemberTx = (idGenValue: string) => {
+      const tx: any = {
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 0 }]),
+        teamMember: {
+          create: jest.fn().mockImplementation(({ data }: any) =>
+            Promise.resolve({ ...data }),
+          ),
+          aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
+        },
+        team: { update: jest.fn().mockResolvedValue({}) },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      idGen.nextId.mockResolvedValue(idGenValue);
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+      return tx;
+    };
+
+    it('addMember 角色外部槽位 → 成员行预填 defaultOpencodeAgentName（规则 5）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_external',
+        key: 'external',
+        name: '外部专家',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: 'Librarian',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_developer',
+        name: '开发者',
+      });
+      const tx = mockAddMemberTx('tmm_0000000005');
+
+      await service.addMember('tm_0000000001', {
+        agentId: 'a_developer',
+        roleId: 'ar_external',
+      } as any);
+
+      expect(tx.teamMember.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            agentId: 'a_developer',
+            roleId: 'ar_external',
+            opencodeAgentName: 'Librarian',
+          }),
+        }),
+      );
+    });
+
+    it('addMember 显式 opencodeAgentName 压过角色默认外部名（规则 5 镜像规则 1）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_external',
+        key: 'external',
+        name: '外部专家',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: 'Librarian',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_developer',
+        name: '开发者',
+      });
+      const tx = mockAddMemberTx('tmm_0000000006');
+
+      await service.addMember('tm_0000000001', {
+        agentId: 'a_developer',
+        roleId: 'ar_external',
+        opencodeAgentName: 'build',
+      } as any);
+
+      expect(tx.teamMember.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ opencodeAgentName: 'build' }),
+        }),
+      );
+    });
+
+    it('addMember 角色两槽位皆空 → 成员行 opencodeAgentName null（无回归）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_plain',
+        key: 'plain',
+        name: '通用',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: null,
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_developer',
+        name: '开发者',
+      });
+      const tx = mockAddMemberTx('tmm_0000000007');
+
+      await service.addMember('tm_0000000001', {
+        agentId: 'a_developer',
+        roleId: 'ar_plain',
+      } as any);
+
+      const created = (
+        tx.teamMember.create.mock.calls[0][0] as { data: Record<string, unknown> }
+      ).data;
+      expect(created.opencodeAgentName).toBeNull();
     });
 
     it('removeMember 联动 updatedAt/version', async () => {
@@ -1374,6 +1580,262 @@ describe('TeamsService', () => {
       );
       expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(result).toBeDefined();
+    });
+
+    it('roleId 重绑 + 成员外部值为空 → 用角色默认外部名预填（prefill）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest.fn().mockResolvedValue({
+        id: 'tmm_0000000001',
+        teamId: 'tm_0000000001',
+        agentId: 'a_developer',
+        opencodeAgentName: null,
+      });
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_external',
+        key: 'external',
+        name: '外部专家',
+        defaultAgentId: 'a_developer',
+        defaultOpencodeAgentName: 'Librarian',
+      });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        roleId: 'ar_external',
+      } as any);
+
+      expect(updateMock).toHaveBeenCalledWith({
+        where: { id: 'tmm_0000000001' },
+        data: {
+          agentId: 'a_developer',
+          roleId: 'ar_external',
+          opencodeAgentName: 'Librarian',
+        },
+      });
+    });
+
+    it('roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖（prefill ≠ override）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest.fn().mockResolvedValue({
+        id: 'tmm_0000000001',
+        teamId: 'tm_0000000001',
+        agentId: 'a_developer',
+        opencodeAgentName: 'build',
+      });
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_external',
+        key: 'external',
+        name: '外部专家',
+        defaultAgentId: 'a_developer',
+        defaultOpencodeAgentName: 'Librarian',
+      });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        roleId: 'ar_external',
+      } as any);
+
+      const written = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+      expect(written.data.agentId).toBe('a_developer');
+      expect(written.data.roleId).toBe('ar_external');
+      expect(written.data.opencodeAgentName).toBeUndefined();
+    });
+
+    it('roleId 重绑 + 本次显式 opencodeAgentName → 显式值胜出，角色默认不参与', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest.fn().mockResolvedValue({
+        id: 'tmm_0000000001',
+        teamId: 'tm_0000000001',
+        agentId: 'a_developer',
+        opencodeAgentName: 'build',
+      });
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_external',
+        key: 'external',
+        name: '外部专家',
+        defaultAgentId: 'a_developer',
+        defaultOpencodeAgentName: 'Librarian',
+      });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+      workersService.assignWorker.mockResolvedValue(null);
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        roleId: 'ar_external',
+        opencodeAgentName: 'plan',
+      } as any);
+
+      const written = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+      expect(written.data.opencodeAgentName).toBe('plan');
+    });
+
+    it('显式 agentId + roleId 重绑 → 外部槽位仍按角色默认预填（成员值为空时）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest.fn().mockResolvedValue({
+        id: 'tmm_0000000001',
+        teamId: 'tm_0000000001',
+        agentId: 'a_product',
+        opencodeAgentName: null,
+      });
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_external',
+        key: 'external',
+        name: '外部专家',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: 'Librarian',
+      });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_developer' });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        agentId: 'a_developer',
+        roleId: 'ar_external',
+      } as any);
+
+      expect(updateMock).toHaveBeenCalledWith({
+        where: { id: 'tmm_0000000001' },
+        data: {
+          agentId: 'a_developer',
+          roleId: 'ar_external',
+          opencodeAgentName: 'Librarian',
+        },
+      });
+    });
+
+    it('显式 agentId + roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest.fn().mockResolvedValue({
+        id: 'tmm_0000000001',
+        teamId: 'tm_0000000001',
+        agentId: 'a_product',
+        opencodeAgentName: 'build',
+      });
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_external',
+        key: 'external',
+        name: '外部专家',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: 'Librarian',
+      });
+      prisma.agent.findUnique.mockResolvedValue({ id: 'a_developer' });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        agentId: 'a_developer',
+        roleId: 'ar_external',
+      } as any);
+
+      const written = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+      expect(written.data.agentId).toBe('a_developer');
+      expect(written.data.opencodeAgentName).toBeUndefined();
+    });
+
+    it('仅改 alias（无 roleId/agentId）→ 不解析角色、不触碰 opencodeAgentName', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest.fn().mockResolvedValue({
+        id: 'tmm_0000000001',
+        teamId: 'tm_0000000001',
+        agentId: 'a_developer',
+        opencodeAgentName: null,
+      });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        alias: '新别名',
+      } as any);
+
+      expect(prisma.agentRole.findUnique).not.toHaveBeenCalled();
+      expect(updateMock).toHaveBeenCalledWith({
+        where: { id: 'tmm_0000000001' },
+        data: { alias: '新别名' },
+      });
+    });
+
+    it('角色两槽位皆空 + roleId 重绑 → opencodeAgentName 保持 null（无回归）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest.fn().mockResolvedValue({
+        id: 'tmm_0000000001',
+        teamId: 'tm_0000000001',
+        agentId: 'a_developer',
+        opencodeAgentName: null,
+      });
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_plain',
+        key: 'plain',
+        name: '通用',
+        defaultAgentId: 'a_developer',
+        defaultOpencodeAgentName: null,
+      });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: jest.fn().mockResolvedValue({}) },
+        }),
+      );
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(teamRow({ members: [], queues: [] }));
+
+      await service.updateMember('tm_0000000001', 'tmm_0000000001', {
+        roleId: 'ar_plain',
+      } as any);
+
+      const written = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+      expect(written.data.agentId).toBe('a_developer');
+      expect(written.data.opencodeAgentName).toBeUndefined();
     });
 
     it('团队不存在 → 404', async () => {

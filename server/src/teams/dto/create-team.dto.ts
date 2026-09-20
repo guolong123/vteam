@@ -21,7 +21,8 @@ export class TeamMemberInput {
 
   @ApiPropertyOptional({
     description:
-      '岗位角色 id（AgentRole）；给出且未显式给 agentId 时，用角色 defaultAgentId 预填 agentId',
+      '岗位角色 id（AgentRole）；给出且未显式给 agentId 时，用角色 defaultAgentId 预填 agentId；' +
+      '未显式给 opencodeAgentName 时，用角色 defaultOpencodeAgentName 预填成员外部 agent 槽位',
   })
   @IsOptional()
   @IsString()

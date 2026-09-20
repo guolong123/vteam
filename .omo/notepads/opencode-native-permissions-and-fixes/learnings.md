@@ -198,3 +198,39 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **e2e reuse:** the todo-3 spec (`native-rule-editor.spec.ts`) had two `native-task-note` assertions; both
   updated in the same commit (test 1 now asserts `native-task-effect` visible + note absent; test 2 asserts
   the absent-key row defaults to `deny`). No other spec referenced the note.
+
+## [2026-09-20] todo 7 SERVER slice — role external slot now actually reaches the member
+
+- **The gap was exactly one function.** `defaultOpencodeAgentName` (todo 2) had zero runtime
+  consumers: dispatch reads only `TeamMember.opencodeAgentName` (`worker-dispatcher.ts:3671-3687`),
+  and `resolveMemberBinding` resolved only the internal slot. Fix: `resolveMemberBinding` gained
+  **rule 5** (the mirror of rule 2) — `explicit opencodeAgentName > role.defaultOpencodeAgentName > null`
+  — and returns `opencodeAgentName: string | null`; `create`/`addMember` persist it on the member row.
+  `worker-dispatcher.ts` is byte-identical to HEAD (Scope OUT preserved: this is binding, not dispatch).
+- **Branch 1 (explicit `agentId` + `roleId`) needed the external prefill too**, not just branch 2.
+  A role that points at an *external* agent can never also hold `defaultAgentId` (todo 2 exclusivity),
+  so its members MUST pass an explicit `agentId` — i.e. the role's external choice only ever flows
+  through branch 1. The role row is now read once for both branches (label + both slots); the old
+  `roleBindingOf` helper is deleted (it was the only other reader and would have been a second query).
+- **`prefill ≠ override` lives in `updateMember`, not in the resolver.** The resolver is stateless and
+  cannot see the persisted member; the guard `dto.opencodeAgentName === undefined && !(member.opencodeAgentName?.trim())`
+  is what prevents clobbering. The explicit `opencodeAgentName` branch keeps its own path, so the
+  request-level precedence is: explicit request value > persisted member value > role default.
+- **Deleting `roleBindingOf` shifts 2 existing spec assertions.** The two `agentRole.findUnique` shape
+  assertions (`addMember 仅给 roleId` and `addMember 同时给 agentId 与 roleId`) now expect the full
+  select `{id,key,name,defaultAgentId,defaultOpencodeAgentName}`; the first `create()` test asserts
+  exact `teamMember.create` args (not `objectContaining`) so those two needed `opencodeAgentName: null`.
+  `tsc` catches the type-level consequence but NOT these mock-shape assertions — run `src/teams` early.
+- **`updateMember` reuses the resolver for the explicit-agentId + roleId branch** rather than
+  inlining a second slot lookup: `resolveMemberBinding({agentId, roleId})` returns the same
+  `opencodeAgentName` the other branches get, so rule 5 is computed in exactly one place.
+- **Mutation proof pattern that works here:** patch `teams.service.ts` in a python heredoc, run
+  `npx jest src/teams/teams.service.spec.ts` with `stderr=subprocess.STDOUT` (plain `2>&1 | grep`
+  missed the `✕` lines because jest prints failures on stderr), then assert the file reads back
+  byte-identical. All 4 mutations map 1:1 to acceptance criteria (a)-(d); the "no regression" (e)
+  cases are asserted as `opencodeAgentName === null` / `undefined` — note `undefined` means "not in
+  the update payload" for updateMember, `null` means "written null" for create.
+- **Full server suite: 145 suites / 3320 tests** (baseline 3308 + 12 new tests, all in `src/teams`).
+- Live e2e (role editor select → member resolves) is todo 10(e); this slice's acceptance gates were
+  `tsc --noEmit` + `jest --runInBand src/teams`, so no server restart / DB mutation was performed
+  (a server rebuild mid-parallel-web-slice would race the other todo-7 worker; nothing was left dirty).

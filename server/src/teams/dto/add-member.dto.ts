@@ -9,6 +9,8 @@ import { IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
  *
  * **优先级（与 service 的 resolveMemberBinding 同源，双处注释）**：
  *   显式 `agentId` 恒胜出；只给 `roleId` 时用 `AgentRole.defaultAgentId` 预填 agentId。
+ *   外部槽位对称：显式 `opencodeAgentName` 恒胜出；未显式给时用角色
+ *   `defaultOpencodeAgentName` 预填（成员当前值为空才预填，prefill ≠ override）。
  */
 export class AddMemberDto {
   @ApiPropertyOptional({
@@ -21,7 +23,8 @@ export class AddMemberDto {
 
   @ApiPropertyOptional({
     description:
-      '岗位角色 id（AgentRole）；给出且未显式给 agentId 时，用角色 defaultAgentId 预填 agentId',
+      '岗位角色 id（AgentRole）；给出且未显式给 agentId 时，用角色 defaultAgentId 预填 agentId；' +
+      '未显式给 opencodeAgentName 时，用角色 defaultOpencodeAgentName 预填外部 agent 槽位',
   })
   @IsOptional()
   @IsString()
@@ -74,7 +77,8 @@ export class UpdateMemberDto {
 
   @ApiPropertyOptional({
     description:
-      '岗位角色 id（null/空串清除绑定；给出且未显式给 agentId 时用角色 defaultAgentId 预填 agentId）',
+      '岗位角色 id（null/空串清除绑定；给出且未显式给 agentId 时用角色 defaultAgentId 预填 agentId；' +
+      '仅当本次未显式给 opencodeAgentName 且成员当前外部值为空时，用角色默认外部名预填，不覆盖已有值）',
     nullable: true,
   })
   @IsOptional()

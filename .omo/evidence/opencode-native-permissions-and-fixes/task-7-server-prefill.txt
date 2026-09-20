@@ -1,0 +1,98 @@
+# todo 7 SERVER SLICE — symmetric external-agent prefill (role slot -> member)
+# plan: .omo/plans/opencode-native-permissions-and-fixes.md todo 7 + ADDENDUM (Option A: prefill, not dispatch)
+# date: 2026-09-20T06:50:45Z
+# baseline before this slice: server 145 suites / 3308 tests (git HEAD b7b25e5)
+
+================================================================================
+[1] SCOPE — changed files (server slice). worker-dispatcher.ts must be untouched.
+================================================================================
+ M server/src/teams/dto/add-member.dto.ts
+ M server/src/teams/dto/create-team.dto.ts
+ M server/src/teams/teams.service.spec.ts
+ M server/src/teams/teams.service.ts
+
+  worker-dispatcher.ts vs HEAD:
+    byte-identical (UNTOUCHED)
+  web/ vs HEAD:
+    changed web files:        0
+
+================================================================================
+[2] GATE  cd server && npx tsc --noEmit
+================================================================================
+    tsc exit code: 0
+
+================================================================================
+[3] GATE  cd server && npx jest --runInBand src/teams
+================================================================================
+PASS src/teams/teams.service.spec.ts
+PASS src/teams/teams.controller.spec.ts
+PASS src/teams/seed.spec.ts
+
+Test Suites: 3 passed, 3 total
+Tests:       105 passed, 105 total
+Snapshots:   0 total
+Time:        3.169 s, estimated 5 s
+Ran all test suites matching /src\/teams/i.
+
+================================================================================
+[4] GATE  cd server && npx jest --runInBand   (FULL suite — new totals)
+================================================================================
+PASS src/chat/message-receipt.constants.spec.ts
+
+Test Suites: 145 passed, 145 total
+Tests:       3320 passed, 3320 total
+Snapshots:   1 passed, 1 total
+Time:        21.31 s, estimated 23 s
+Ran all test suites.
+
+================================================================================
+[5] MUTATION PROOF — every new acceptance test fails when its behaviour is reverted
+    (mutation applied to teams.service.ts, jest run, then file restored byte-exact)
+================================================================================
+Traceback (most recent call last):
+  File "<stdin>", line 20, in <module>
+TypeError: run() missing 1 required positional argument: 'expect'
+
+================================================================================
+[5] MUTATION PROOF — every new acceptance test fails when its behaviour is reverted
+    (mutation applied to teams.service.ts, jest run, then file restored byte-exact)
+================================================================================
+
+--- mutation: createTeam drops the role prefill
+    acceptance criterion exercised: (a)
+    ✕ createTeam 角色外部槽位：显式 agentId + defaultOpencodeAgentName → 成员行预填该外部名（规则 5） (2 ms)
+    Tests:       1 failed, 89 passed, 90 total
+
+--- mutation: addMember drops the role prefill
+    acceptance criterion exercised: (b)+(c)
+    ✕ addMember 角色外部槽位 → 成员行预填 defaultOpencodeAgentName（规则 5） (3 ms)
+    ✕ addMember 显式 opencodeAgentName 压过角色默认外部名（规则 5 镜像规则 1） (3 ms)
+    Tests:       2 failed, 88 passed, 90 total
+
+--- mutation: resolveMemberBinding: role default beats explicit (rule-1 mirror inverted)
+    acceptance criterion exercised: (c)
+    ✕ addMember 显式 opencodeAgentName 压过角色默认外部名（规则 5 镜像规则 1） (1 ms)
+    Tests:       1 failed, 89 passed, 90 total
+
+--- mutation: updateMember: prefill overrides an already-persisted member value
+    acceptance criterion exercised: (d)
+    ✕ roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖（prefill ≠ override） (2 ms)
+    ✕ 显式 agentId + roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖 (1 ms)
+    Tests:       2 failed, 88 passed, 90 total
+
+--- 4 mutations reverted; teams.service.ts byte-identical to pre-mutation: True
+--- no vacuous tests (every mutation produced >=1 failure): True
+
+================================================================================
+[6] ACCEPTANCE CRITERIA MAP
+================================================================================
+    (a) createTeam with a role whose external slot is set -> member row gets it   [createTeam test / mutation m1]
+    (b) addMember same                                                             [addMember test / mutation m2]
+    (c) explicit member opencodeAgentName beats the role slot                      [addMember explicit test / m2,m3]
+    (d) updateMember does NOT clobber an existing member value with a role default [updateMember tests / m4]
+    (e) role with neither slot set -> member opencodeAgentName null (no regression) [3 "no regression" tests]
+    resolveMemberBinding stays the single precedence decision point                [rules 1-5 doc-comment]
+    worker-dispatcher.ts untouched                                                 [section 1]
+    tsc 0 / teams jest green / full suite 145 suites 3320 tests                    [sections 2-4]
+    Live end-to-end proof (role editor select -> member resolves) is todo 10(e);
+    this slice proves resolver + persistence at the layer the todo specifies (tsc + src/teams jest).

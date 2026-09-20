@@ -144,6 +144,9 @@ export class TeamsService implements OnModuleInit {
             teamId,
             agentId: item.agentId,
             roleId: item.roleId ?? null,
+            // 外部槽位预填（规则 5，resolveMemberBinding）：角色绑定外部引擎 agent 时随角色来；
+            // 显式/角色都无 → null（存量行为不变）。
+            opencodeAgentName: item.opencodeAgentName ?? null,
             alias,
             seq,
             workDir,
@@ -641,6 +644,8 @@ export class TeamsService implements OnModuleInit {
           teamId,
           agentId: binding.agentId,
           roleId: binding.roleId,
+          // 外部槽位预填（规则 5，resolveMemberBinding）：显式成员值 > 角色默认外部名 > null。
+          opencodeAgentName: binding.opencodeAgentName,
           alias,
           seq,
           workDir,
@@ -846,6 +851,8 @@ export class TeamsService implements OnModuleInit {
     if (dto.workDir !== undefined) data.workDir = dto.workDir?.trim() || null;
     if (dto.overrideModelId !== undefined)
       data.overrideModelId = dto.overrideModelId?.trim() || null;
+    /** 角色重绑解析出的外部槽位默认值（规则 5）；仅在成员当前值为空时才应用（prefill ≠ override）。 */
+    let prefilledOpencodeAgentName: string | null = null;
     if (dto.agentId !== undefined || dto.roleId !== undefined) {
       // 同一优先级判定点（resolveMemberBinding）：显式 agentId 优先；只改 roleId 时用其默认
       // Agent 预填；roleId 显式清空（null/空串）仅解绑角色、agent 保持不变。
@@ -853,13 +860,23 @@ export class TeamsService implements OnModuleInit {
         dto.roleId === null || String(dto.roleId ?? '').trim() === '';
       if (dto.agentId?.trim()) {
         data.agentId = dto.agentId.trim();
-        if (!roleCleared) data.roleId = dto.roleId?.trim() || null;
+        if (!roleCleared) {
+          data.roleId = dto.roleId?.trim() || null;
+          // 角色重绑时解析其外部槽位（显式 agentId 只锁内部选择，不锁外部预填）。
+          prefilledOpencodeAgentName = (
+            await this.resolveMemberBinding({
+              agentId: data.agentId,
+              roleId: dto.roleId,
+            })
+          ).opencodeAgentName;
+        }
       } else if (roleCleared) {
         data.roleId = null;
       } else {
         const binding = await this.resolveMemberBinding({ roleId: dto.roleId });
         data.agentId = binding.agentId;
         data.roleId = binding.roleId;
+        prefilledOpencodeAgentName = binding.opencodeAgentName;
       }
       if (data.agentId && data.agentId !== member.agentId) {
         const nextAgent = await this.prisma.agent.findUnique({
@@ -883,6 +900,13 @@ export class TeamsService implements OnModuleInit {
       if (name) {
         await this.warnIfOpencodeAgentUnknown(name, data.agentId ?? member.agentId);
       }
+    } else if (
+      prefilledOpencodeAgentName &&
+      !(member.opencodeAgentName?.trim())
+    ) {
+      // 规则 5 预填（prefill ≠ override）：仅当本次未显式给 opencodeAgentName 且成员当前值为空
+      // 时写入；已持久化的成员值绝不被角色默认值覆盖。
+      data.opencodeAgentName = prefilledOpencodeAgentName;
     }
     if (Object.keys(data).length === 0) {
       return this.findOne(teamId);
@@ -1302,7 +1326,7 @@ export class TeamsService implements OnModuleInit {
   }
 
   /**
-   * 成员 ⇄ 角色绑定解析（唯一优先级判定点，agent-role-entity todo 7）。
+   * 成员 ⇄ 角色绑定解析（唯一优先级判定点，agent-role-entity todo 7 + opencode-native todo 7）。
    *
    * **优先级规则（全流程唯一事实来源）**：
    *   1. 显式 `agentId` **恒胜出**——用户明确选了 agent，就绝不被角色的默认值覆盖。
@@ -1311,20 +1335,59 @@ export class TeamsService implements OnModuleInit {
    *   3. `roleId` 指向的角色 `defaultAgentId` 为空 → 400 `ROLE_DEFAULT_AGENT_MISSING`
    *      （角色没有可预填的默认 Agent，无法只凭岗位定位 Agent）。
    *   4. 两者都缺 → 400 `MEMBER_AGENT_REQUIRED`（agent 必须可解析，向后兼容旧请求）。
+   *   5. **外部槽位对称预填**（规则 2 的镜像，opencode-native todo 7）：显式
+   *      `opencodeAgentName` **恒胜出**；未显式给时用 `AgentRole.defaultOpencodeAgentName`
+   *      预填 `TeamMember.opencodeAgentName`（角色绑定外部引擎 agent 时，成员随角色来）。
+   *      分支 1（显式 `agentId` + `roleId`）同样解析外部槽位——角色槽位互斥意味着
+   *      外部角色必然没有 `defaultAgentId`，其成员必须显式给 `agentId`，缺此解析会让角色的
+   *      外部选择落空。角色默认外部名是**附加**预填，永不替代 `agentId`。
+   *
+   * **调用侧契约（prefill ≠ override）**：`updateMember` 只在本次请求未显式给
+   * `opencodeAgentName` **且**成员当前值为空时，才把本方法解析出的外部名写入；
+   * 已持久化的非空成员值绝不被角色默认值覆盖（成员级显式选择优先于角色默认）。
    *
    * `roleId` 可选：只给 `agentId` 的存量请求走分支 1，行为与引入本表前逐字一致。
    */
-  private async resolveMemberBinding<T extends { agentId?: string; roleId?: string }>(
+  private async resolveMemberBinding<
+    T extends {
+      agentId?: string;
+      roleId?: string;
+      opencodeAgentName?: string | null;
+    },
+  >(
     input: T,
   ): Promise<
     T & {
       agentId: string;
       roleId: string | null;
       role: { key: string; name: string } | null;
+      opencodeAgentName: string | null;
     }
   > {
     const explicitAgentId = input.agentId?.trim() || null;
     const roleId = input.roleId?.trim() || null;
+    const explicitOpencodeAgentName = input.opencodeAgentName?.trim() || null;
+
+    // 角色行按需读取：分支 1 需要它做外部槽位预填（规则 5）与角色标签，分支 2 还需要
+    // defaultAgentId（规则 2）。双分支共用一次查询，不再单独查标签。
+    const role = roleId
+      ? await this.prisma.agentRole.findUnique({
+          where: { id: roleId },
+          select: {
+            id: true,
+            key: true,
+            name: true,
+            defaultAgentId: true,
+            defaultOpencodeAgentName: true,
+          },
+        })
+      : null;
+    const roleBinding = role ? { key: role.key, name: role.name } : null;
+    // 规则 5：显式 > 角色默认外部名；无 roleId/角色行缺失 → 保持显式值（否则 null）。
+    const resolvedOpencodeAgentName =
+      explicitOpencodeAgentName ||
+      role?.defaultOpencodeAgentName?.trim() ||
+      null;
 
     if (explicitAgentId) {
       // 规则 1：显式 agentId 优先；roleId 仅在给出时随行持久化（不覆盖 agent 选择）。
@@ -1332,7 +1395,8 @@ export class TeamsService implements OnModuleInit {
         ...input,
         agentId: explicitAgentId,
         roleId,
-        role: await this.roleBindingOf(roleId),
+        role: roleBinding,
+        opencodeAgentName: resolvedOpencodeAgentName,
       };
     }
 
@@ -1343,10 +1407,6 @@ export class TeamsService implements OnModuleInit {
       });
     }
 
-    const role = await this.prisma.agentRole.findUnique({
-      where: { id: roleId },
-      select: { id: true, key: true, name: true, defaultAgentId: true },
-    });
     if (!role) {
       throw new NotFoundException({
         code: TEAM_ERRORS.ROLE_NOT_FOUND,
@@ -1364,22 +1424,9 @@ export class TeamsService implements OnModuleInit {
       ...input,
       agentId: role.defaultAgentId,
       roleId,
-      role: { key: role.key, name: role.name },
+      role: roleBinding,
+      opencodeAgentName: resolvedOpencodeAgentName,
     };
-  }
-
-  /** `roleId` → 角色标签（`AgentRole.key` + `name`）；null/未命中 → null（调用方回退 `agent.name`）。 */
-  private async roleBindingOf(
-    roleId: string | null,
-  ): Promise<{ key: string; name: string } | null> {
-    if (!roleId) {
-      return null;
-    }
-    const row = await this.prisma.agentRole.findUnique({
-      where: { id: roleId },
-      select: { key: true, name: true },
-    });
-    return row ? { key: row.key, name: row.name } : null;
   }
 
   private async nextSeqForUpdate(
