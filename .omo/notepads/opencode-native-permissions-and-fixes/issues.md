@@ -74,3 +74,18 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   完整块抽取。
 - permission-matrix 的 4f/4g 是**环境夹具依赖**（需要 review-round ledger / 终态任务），
   本 DB 没有；已改为「缺夹具 → 显式 SKIP 并记录」，不再硬 FAIL（相应单测在 server spec 里）。
+
+## [2026-09-20] todo 6 踩坑
+
+- **`config.permission.task` is NOT validated by `assertValidConfig`** (unlike `bash`, which is checked
+  against `PERMISSION_EFFECTS`). The API will happily store `task: 'bogus'`. Consequence for this todo:
+  the UI is the *only* thing keeping an illegal task out, so (a) the control must never offer a fourth
+  option, (b) display must normalize a stored illegal value to `deny`, and (c) a click must write a legal
+  value through. If a future todo wants server-side symmetry, that is a `server/` change (not in scope
+  here — todo 6 MUST NOT touch `execution-policy.service.ts`).
+- **First screenshot missed the target.** `page.screenshot({fullPage: true})` captured the MCP tool list
+  because the content pane scrolls internally; `scrollIntoViewIfNeeded` on the task row is required.
+  The evidence file was replaced by re-running the harness (the artifact is regenerated, not hand-edited).
+- **Probe residue:** the recon step created a throwaway custom agent + policy (`a_0000000007`/`ep_0000000007`)
+  to exercise the invalid-value path before the spec existed. Both DELETEd (200/200, re-GET 404) at the end;
+  the 7 seed `ep_*` rows and the live `/agent-policies` payload are canonically equal to the frozen baseline.

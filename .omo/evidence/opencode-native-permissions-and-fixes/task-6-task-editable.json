@@ -1,0 +1,40 @@
+[
+  {
+    "test": "task_row_editable_seed_agent",
+    "agent": "产品经理",
+    "task_effects": [
+      "allow",
+      "ask",
+      "deny"
+    ],
+    "task_readonly": "false",
+    "old_note_present": false,
+    "new_note": "task 控制子 Agent 扇出（opencode 原生权限，引擎直接执行）；嵌套深度另由引擎 subagent_depth 约束。"
+  },
+  {
+    "test": "task_round_trip_and_restore",
+    "agent": "产品经理",
+    "policy_id": "ep_product",
+    "before_task": "deny",
+    "changed_to": "ask",
+    "control_after_reload": "ask",
+    "engine_agent_policies_after_change": "ask",
+    "restored_task": "deny",
+    "engine_agent_policies_restored": "deny",
+    "canonical_config_equal_after_restore": true,
+    "screenshot": "/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/task-6-task-editable.png"
+  },
+  {
+    "test": "illegal_value_never_shown_click_writes_through",
+    "agent": "a_0000000021",
+    "injected_stored": "bogus",
+    "rendered_effects": [
+      "allow",
+      "ask",
+      "deny"
+    ],
+    "rendered_checked": "deny",
+    "click_result_stored": "allow",
+    "server_error_surface_present_without_error": true
+  }
+]

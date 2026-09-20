@@ -1,0 +1,154 @@
+[
+  {
+    "test": "four_rows_template",
+    "keys": [
+      "edit",
+      "read",
+      "bash",
+      "task"
+    ],
+    "edit_readonly": "false",
+    "read_readonly": "false",
+    "bash_effects": [
+      "allow",
+      "ask",
+      "deny"
+    ],
+    "catchall_first": true,
+    "task_editable": true,
+    "task_note_removed": true
+  },
+  {
+    "test": "absent_task",
+    "agent": "a_0000000008",
+    "stored_permission": {
+      "edit": {
+        "*": "deny"
+      },
+      "bash": "deny"
+    },
+    "task_row_rendered": true,
+    "read_seed_effect": "allow"
+  },
+  {
+    "test": "roundtrip_no_coercion",
+    "agent": "a_0000000009",
+    "stored": {
+      "*": "deny",
+      "x": "ask"
+    },
+    "rows_before": [
+      "*",
+      "x"
+    ],
+    "x_effect_before": "ask",
+    "x_effect_after": "ask",
+    "rows_after": [
+      "*",
+      "x"
+    ],
+    "emitted": "{\"*\":\"deny\",\"x\":\"ask\"}"
+  },
+  {
+    "test": "catchall_warning",
+    "agent": "a_0000000010",
+    "warn_on_allow": true,
+    "cleared_on_deny": true
+  },
+  {
+    "test": "duplicate_rejected",
+    "agent": "a_0000000011",
+    "duplicate_error": true,
+    "committed_after": "2"
+  },
+  {
+    "test": "unknown_effect_preserved",
+    "agent": "a_0000000012",
+    "stored": "ask2",
+    "rendered_unknown": "ask2",
+    "tri_state_chips_intact": 4,
+    "emitted_after_edit": "{\"*\":\"deny\",\"legacy\":\"ask2\"}"
+  },
+  {
+    "test": "bash_tristate",
+    "agent": "a_0000000013",
+    "stored_ask_selected": true,
+    "toggled_allow_persisted": true
+  },
+  {
+    "test": "four_rows_template",
+    "keys": [
+      "edit",
+      "read",
+      "bash",
+      "task"
+    ],
+    "edit_readonly": "false",
+    "read_readonly": "false",
+    "bash_effects": [
+      "allow",
+      "ask",
+      "deny"
+    ],
+    "catchall_first": true,
+    "task_editable": true,
+    "task_note_removed": true
+  },
+  {
+    "test": "absent_task",
+    "agent": "a_0000000015",
+    "stored_permission": {
+      "edit": {
+        "*": "deny"
+      },
+      "bash": "deny"
+    },
+    "task_row_rendered": true,
+    "read_seed_effect": "allow"
+  },
+  {
+    "test": "roundtrip_no_coercion",
+    "agent": "a_0000000016",
+    "stored": {
+      "*": "deny",
+      "x": "ask"
+    },
+    "rows_before": [
+      "*",
+      "x"
+    ],
+    "x_effect_before": "ask",
+    "x_effect_after": "ask",
+    "rows_after": [
+      "*",
+      "x"
+    ],
+    "emitted": "{\"*\":\"deny\",\"x\":\"ask\"}"
+  },
+  {
+    "test": "catchall_warning",
+    "agent": "a_0000000017",
+    "warn_on_allow": true,
+    "cleared_on_deny": true
+  },
+  {
+    "test": "duplicate_rejected",
+    "agent": "a_0000000018",
+    "duplicate_error": true,
+    "committed_after": "2"
+  },
+  {
+    "test": "unknown_effect_preserved",
+    "agent": "a_0000000019",
+    "stored": "ask2",
+    "rendered_unknown": "ask2",
+    "tri_state_chips_intact": 4,
+    "emitted_after_edit": "{\"*\":\"deny\",\"legacy\":\"ask2\"}"
+  },
+  {
+    "test": "bash_tristate",
+    "agent": "a_0000000020",
+    "stored_ask_selected": true,
+    "toggled_allow_persisted": true
+  }
+]

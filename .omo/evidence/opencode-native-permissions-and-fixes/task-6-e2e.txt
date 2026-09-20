@@ -1,0 +1,117 @@
+
+===== todo 6 run 2026-09-20T06:07:07Z =====
+
+[e2e] date=2026-09-20T06:07:07Z HEAD=4a8294987b4d034dd7e6e77cbb07d389937ea8f4
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
+[e2e] stack healthy (web + server)
+[e2e] pre-run ep_product task=deny sha256=34ca9d38f5bda8eb0b162b093ff49330cb71b1a85b07f489429253aaeb761a48
+----- playwright raw -----
+
+Running 10 tests using 1 worker
+
+  ✓   1 e2e/native-rule-editor.spec.ts:181:7 › Todo 3 · 原生 glob 规则表编辑器 › 1. 四行恒显 + 编辑器形态（模板 agent） (2.1s)
+[cleanup] a_0000000008 (agent 200, policy ep_0000000008 200, re-GET 404)
+  ✓   2 e2e/native-rule-editor.spec.ts:234:7 › Todo 3 · 原生 glob 规则表编辑器 › 2. absent task 仍渲染（三态 + 缺省 deny） (1.7s)
+[cleanup] a_0000000009 (agent 200, policy ep_0000000009 200, re-GET 404)
+  ✓   3 e2e/native-rule-editor.spec.ts:273:7 › Todo 3 · 原生 glob 规则表编辑器 › 3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask (1.7s)
+[cleanup] a_0000000010 (agent 200, policy ep_0000000010 200, re-GET 404)
+  ✓   4 e2e/native-rule-editor.spec.ts:339:7 › Todo 3 · 原生 glob 规则表编辑器 › 4. `*` 兜底警告：切 allow 即出现 (1.6s)
+[cleanup] a_0000000011 (agent 200, policy ep_0000000011 200, re-GET 404)
+  ✓   5 e2e/native-rule-editor.spec.ts:361:7 › Todo 3 · 原生 glob 规则表编辑器 › 5. 重复 glob 客户端拒绝（提交面不增长） (1.6s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000012 (agent 200, policy ep_0000000012 200, re-GET 404)
+  ✓   6 e2e/native-rule-editor.spec.ts:399:7 › Todo 3 · 原生 glob 规则表编辑器 › 7. 未知 effect 原样保留（不归一化） (2.3s)
+[cleanup] a_0000000013 (agent 200, policy ep_0000000013 200, re-GET 404)
+  ✓   7 e2e/native-rule-editor.spec.ts:437:7 › Todo 3 · 原生 glob 规则表编辑器 › 6. bash 三态：当前值选中且可切换（持久化） (3.3s)
+  ✓   8 e2e/task-permission-editable.spec.ts:204:7 › Todo 6 · task 原生权限可编辑 › 1. task 行与 bash 同为可编辑三态；旧只读说明已移除 (1.7s)
+  ✓   9 e2e/task-permission-editable.spec.ts:253:7 › Todo 6 · task 原生权限可编辑 › 2. deny→ask→reload 真往返（控件 + /agent-policies 一致），末尾还原并逐字节校验 (5.5s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000014 (agent 200, policy ep_0000000014 200, re-GET 404)
+  ✓  10 e2e/task-permission-editable.spec.ts:314:7 › Todo 6 · task 原生权限可编辑 › 3. 控件仅暴露三档合法值；非法存量值不显示且点击必然写穿（非静默 no-op） (3.0s)
+
+  10 passed (31.4s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000008 (agent 200, policy ep_0000000008 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000009 (agent 200, policy ep_0000000009 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000010 (agent 200, policy ep_0000000010 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000011 (agent 200, policy ep_0000000011 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000012 (agent 200, policy ep_0000000012 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000013 (agent 200, policy ep_0000000013 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000014 (agent 200, policy ep_0000000014 200, re-GET 404)
+[e2e] restore: task before=deny after=deny canonical_equal=True
+[e2e] PASS seed policy restored (canonical config equal)
+[e2e] result passed	1. 四行恒显 + 编辑器形态（模板 agent）
+[e2e] result passed	2. absent task 仍渲染（三态 + 缺省 deny）
+[e2e] result passed	3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask
+[e2e] result passed	4. `*` 兜底警告：切 allow 即出现
+[e2e] result passed	5. 重复 glob 客户端拒绝（提交面不增长）
+[e2e] result passed	7. 未知 effect 原样保留（不归一化）
+[e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
+[e2e] result passed	1. task 行与 bash 同为可编辑三态；旧只读说明已移除
+[e2e] result passed	2. deny→ask→reload 真往返（控件 + /agent-policies 一致），末尾还原并逐字节校验
+[e2e] result passed	3. 控件仅暴露三档合法值；非法存量值不显示且点击必然写穿（非静默 no-op）
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/task-6-e2e.txt
+
+===== todo 6 run 2026-09-20T06:08:28Z =====
+
+[e2e] date=2026-09-20T06:08:28Z HEAD=4a8294987b4d034dd7e6e77cbb07d389937ea8f4
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
+[e2e] stack healthy (web + server)
+[e2e] pre-run ep_product task=deny sha256=8696f4af5d82322f185c162f35b7e6c6ba31122f4e5c7c5e195f7940e04565b7
+----- playwright raw -----
+
+Running 10 tests using 1 worker
+
+  ✓   1 e2e/native-rule-editor.spec.ts:181:7 › Todo 3 · 原生 glob 规则表编辑器 › 1. 四行恒显 + 编辑器形态（模板 agent） (2.4s)
+[cleanup] a_0000000015 (agent 200, policy ep_0000000015 200, re-GET 404)
+  ✓   2 e2e/native-rule-editor.spec.ts:234:7 › Todo 3 · 原生 glob 规则表编辑器 › 2. absent task 仍渲染（三态 + 缺省 deny） (1.8s)
+[cleanup] a_0000000016 (agent 200, policy ep_0000000016 200, re-GET 404)
+  ✓   3 e2e/native-rule-editor.spec.ts:273:7 › Todo 3 · 原生 glob 规则表编辑器 › 3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask (1.7s)
+[cleanup] a_0000000017 (agent 200, policy ep_0000000017 200, re-GET 404)
+  ✓   4 e2e/native-rule-editor.spec.ts:339:7 › Todo 3 · 原生 glob 规则表编辑器 › 4. `*` 兜底警告：切 allow 即出现 (1.6s)
+[cleanup] a_0000000018 (agent 200, policy ep_0000000018 200, re-GET 404)
+  ✓   5 e2e/native-rule-editor.spec.ts:361:7 › Todo 3 · 原生 glob 规则表编辑器 › 5. 重复 glob 客户端拒绝（提交面不增长） (2.1s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000019 (agent 200, policy ep_0000000019 200, re-GET 404)
+  ✓   6 e2e/native-rule-editor.spec.ts:399:7 › Todo 3 · 原生 glob 规则表编辑器 › 7. 未知 effect 原样保留（不归一化） (2.7s)
+[cleanup] a_0000000020 (agent 200, policy ep_0000000020 200, re-GET 404)
+  ✓   7 e2e/native-rule-editor.spec.ts:437:7 › Todo 3 · 原生 glob 规则表编辑器 › 6. bash 三态：当前值选中且可切换（持久化） (2.5s)
+  ✓   8 e2e/task-permission-editable.spec.ts:204:7 › Todo 6 · task 原生权限可编辑 › 1. task 行与 bash 同为可编辑三态；旧只读说明已移除 (2.1s)
+  ✓   9 e2e/task-permission-editable.spec.ts:253:7 › Todo 6 · task 原生权限可编辑 › 2. deny→ask→reload 真往返（控件 + /agent-policies 一致），末尾还原并逐字节校验 (4.9s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000021 (agent 200, policy ep_0000000021 200, re-GET 404)
+  ✓  10 e2e/task-permission-editable.spec.ts:314:7 › Todo 6 · task 原生权限可编辑 › 3. 控件仅暴露三档合法值；非法存量值不显示且点击必然写穿（非静默 no-op） (2.9s)
+
+  10 passed (26.3s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000015 (agent 200, policy ep_0000000015 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000016 (agent 200, policy ep_0000000016 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000017 (agent 200, policy ep_0000000017 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000018 (agent 200, policy ep_0000000018 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000019 (agent 200, policy ep_0000000019 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000020 (agent 200, policy ep_0000000020 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000021 (agent 200, policy ep_0000000021 200, re-GET 404)
+[e2e] restore: task before=deny after=deny canonical_equal=True
+[e2e] PASS seed policy restored (canonical config equal)
+[e2e] result passed	1. 四行恒显 + 编辑器形态（模板 agent）
+[e2e] result passed	2. absent task 仍渲染（三态 + 缺省 deny）
+[e2e] result passed	3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask
+[e2e] result passed	4. `*` 兜底警告：切 allow 即出现
+[e2e] result passed	5. 重复 glob 客户端拒绝（提交面不增长）
+[e2e] result passed	7. 未知 effect 原样保留（不归一化）
+[e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
+[e2e] result passed	1. task 行与 bash 同为可编辑三态；旧只读说明已移除
+[e2e] result passed	2. deny→ask→reload 真往返（控件 + /agent-policies 一致），末尾还原并逐字节校验
+[e2e] result passed	3. 控件仅暴露三档合法值；非法存量值不显示且点击必然写穿（非静默 no-op）
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/task-6-e2e.txt
+
+----- gates (todo 6) -----
+web tsc --noEmit: exit 0
+web eslint changed files: 0 errors (1 pre-existing warning at page.tsx, present before this change)
+server jest --runInBand src/execution-policies: 14 suites / 210 tests pass
+worker jest --runInBand: 23 suites / 572 tests pass (unchanged)
+docker compose up -d --build web: web recreated + healthy on :13001 (no --force-recreate)
+post-run: GET /agent-policies canonically equal to baseline-agent-policies.json (7 seed agents, task values unchanged)
+reset of the frozen artifact: none (baseline sha e795b0c8 unchanged)

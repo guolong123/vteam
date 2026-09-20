@@ -164,3 +164,37 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   probes were refused by the model before the engine's permission layer was reached.
   Confinement is asserted structurally from the injected config (the `edit` glob) plus the
   engine's own `evaluated permission=` log lines, not only from a probe's outcome.
+
+## [2026-09-20] todo 6 — `task` becomes editable (issue 1)
+
+- **The write path needed no new plumbing.** `task` reuses `handleNativeEffectChange(key,next)` verbatim
+  (400ms debounce → `writeConfig` → `PATCH /execution-policies/:policyId {config}`). The only new fact was
+  confirming that `assertValidConfig` validates `bash` but **not `task`** — so the control, not the server,
+  is what constrains `task` to `allow|ask|deny`. `resolveTaskEffect(name, stored)` honours a stored legal
+  value, so DB write → page read (`resolveByAgent`) and engine read (`buildAgentPolicies` → opencode.json)
+  agree. Verified live: `GET /agent-policies` returned `task: allow` for `vteam-product` while the control
+  showed allow, then both returned to `deny` after restore (see `task-6-task-editable.json`).
+- **Seed agents are the safest round-trip fixture** (no create/delete churn): `产品经理` → `ep_product`
+  (`task: deny`). The spec captures the full stored `config` before, flips deny→ask, reloads, then flips
+  back and compares the whole config **deep-canonically** (MySQL reorders JSON keys; `JSON.stringify`
+  byte-compare would false-fail). Also asserted against `GET /agent-policies` — the engine injection source
+  — not just the page, which is what makes the proof cover "the server would honour it".
+- **Screenshot scoping on this app:** `fullPage: true` is useless because the main area is an internal
+  scroll container — the first capture showed the MCP tool list instead of the native rows. Fix:
+  `row(page,"task").scrollIntoViewIfNeeded()` before `page.screenshot({fullPage:true})`.
+- **Dead code falls out of the change:** with all four native rows owning a control, the `EffectBadge`
+  branch was unreachable (`key` is the union `edit|read|bash|task`), so `EffectBadge` / `effectBadgeMeta` /
+  `unknownEffectMeta` / `PermissionEffectKey` were deleted rather than parked. Header comment that claimed
+  "task 为只读" and the old `native-task-note` claim were both replaced (a stale claim is a fail, not a
+  cosmetic issue).
+- **`--build web` recreates the `init` dependency too** (compose dependency graph), so a seed run happens;
+  it is idempotent and left all 7 `ep_*` rows byte-identical (verified canonical + frozen-baseline canonical
+  equality after the e2e). The recreate is not a `--force-recreate` and does not reseed destructively.
+- Negative proof technique that also satisfies "no silent no-op": inject an illegal stored value
+  (`task='bogus'`) via DB `JSON_SET`, assert the control normalizes the display to `deny` (never shows a
+  value the server cannot honour) and that clicking a legal chip writes through (`bogus` → `allow`).
+  Also asserted the row has no free-text input (`input,textarea,select` count 0) — the chip set IS the
+  constraint, so there is no path by which the UI could submit an illegal `task`.
+- **e2e reuse:** the todo-3 spec (`native-rule-editor.spec.ts`) had two `native-task-note` assertions; both
+  updated in the same commit (test 1 now asserts `native-task-effect` visible + note absent; test 2 asserts
+  the absent-key row defaults to `deny`). No other spec referenced the note.

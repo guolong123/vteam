@@ -13,7 +13,7 @@
  *   vteam_* MCP 工具 deny）；层② guard 工具行在策略已绑定时可切换 allow/ask/deny
  *   （PATCH /execution-policies/:policyId，template 与 custom/clone 同一路径）；
  *   层① 原生行（edit/read/bash/task）在策略已绑定时同样可编辑：edit/read 为 glob 规则表编辑器、
- *   bash 为三态分段、task 为只读（引擎仅对内置计划器 vteam-plan 放行）；未绑定策略时中性提示，
+ *   bash/task 为三态分段（task 控制子 Agent 扇出，opencode 原生权限直接执行）；未绑定策略时中性提示，
  *   不做历史回退。原生编辑与 MCP 工具切换共用同一 policy mutation：单一在途闸门（writePending）
  *   使全部控件在任一写入期间禁用，载荷唯一来源为 configRef 权威配置（原生编辑 400ms debounce
  *   后合并写出），因此一次写入不会覆盖另一次的内存态。
@@ -29,7 +29,7 @@
  * - is_0000000030：内置（template）agent 设置可编辑（后端已放开，agentId/type 不可改）；
  *   删除仍对 template 隐藏（后端 DELETE 403 PERMISSION_AGENT_READONLY 兜底），
  *   isTemplate 仅用于主题色展示，不再作为只读态。
- * - 页面内扩展 token（仿原型 :156-170）：effectBadgeMeta（allow/ask/deny 三态色，
+ * - 页面内扩展 token（仿原型 :156-170）：toolEffectMeta（allow/ask/deny 三态色，
  *   与 opencode PermissionV2 对齐），不写 tokens.ts 基线。
  * - 技能注入为全局机制（worker 级全局注入，不按 agent 绑定），前端移除绑定配置。
  * - 导航（NavTopBar/NavDock/CmdKPanel）由 AppShell 提供，本页仅渲染内容区。
@@ -238,64 +238,6 @@ function formatAgentKeyError(err: unknown): string {
     return err.message;
   }
   return "请求失败，请稍后重试";
-}
-
-/** 生效权限 effect 三态（与 opencode PermissionV2 对齐：allow/ask/deny）。 */
-type PermissionEffectKey = "allow" | "ask" | "deny";
-
-/** effect 语义与配色（只读徽章；allow 绿 / ask 琥珀 / deny 红）。 */
-const effectBadgeMeta: Record<
-  PermissionEffectKey,
-  { label: string; color: string; bg: string; border: string }
-> = {
-  allow: { label: "允许", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
-  ask: { label: "确认", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
-  deny: { label: "禁止", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
-};
-
-/** 未知 effect 值兜底徽章（中性灰，原值直显）。 */
-const unknownEffectMeta = { label: "", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" };
-
-/** 只读 effect 徽章（allow/ask/deny 三态色；未知值灰底直显）。 */
-function EffectBadge({ value }: { value: unknown }) {
-  const meta = typeof value === "string" && value in effectBadgeMeta
-    ? effectBadgeMeta[value as PermissionEffectKey]
-    : unknownEffectMeta;
-  const label = typeof value === "string" && value in effectBadgeMeta
-    ? (effectBadgeMeta[value as PermissionEffectKey].label)
-    : String(value);
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: space.xs,
-        padding: `1px ${space.sm + 2}px`,
-        borderRadius: radius.pill,
-        backgroundColor: meta.bg,
-        border: `1px solid ${meta.border}`,
-        color: meta.color,
-        fontSize: fontSize.sm,
-        fontWeight: 500,
-        lineHeight: 1.4,
-        whiteSpace: "nowrap",
-        flexShrink: 0,
-        fontFamily: fontFamily.body,
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 6,
-          height: 6,
-          borderRadius: "50%",
-          backgroundColor: meta.color,
-          flexShrink: 0,
-        }}
-      />
-      {label}
-    </span>
-  );
 }
 
 /** 三态分段控制（复刻 ce3edd1^ tool-effect-select 视觉；只读/保存中时 data-readonly，点击无操作）。 */
@@ -1018,7 +960,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
     }, NATIVE_DEBOUNCE_MS);
   };
 
-  /** bash 三态同规则表：写 permission.bash（立即进 ref，debounce 合并写出）。 */
+  /** bash/task 三态同规则表：写 permission.<key>（立即进 ref，debounce 合并写出）。 */
   const handleNativeEffectChange = (key: string, next: ToolEffect) => {
     setDraftNative((prev) => ({ ...prev, [key]: next }));
     const cur = currentConfig();
@@ -1363,7 +1305,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
         )}
       </div>
 
-      {/* 原生权限行：edit/read glob 规则表可编辑（草稿 state-only；todo 4 落库），bash 三态，task 只读。
+      {/* 原生权限行：edit/read glob 规则表可编辑（草稿 state-only；todo 4 落库），bash/task 三态。
           缺失键 seed（仅展示态）：edit→{'*':'deny'}（镜像 todo 1 服务端写入时注入的兜底）、
           read→{'*':'allow'}（worker READ_TOOLS 恒放行）、bash→'deny'、task→'deny'；
           seed 不 emit——用户未编辑该行前不会进入 draft。
@@ -1413,10 +1355,18 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
                   onChange={(next) => handleNativeEffectChange("bash", next)}
                 />
               ) : (
+                // 层① 原生三态：写 permission.task（服务端 resolveTaskEffect 以显式存储值胜出）。
                 <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                  <EffectBadge value={typeof value === "string" ? value : "deny"} />
-                  <span data-testid="native-task-note" style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-                    引擎仅对内置计划器 vteam-plan 放行 task；其他 Agent 的子任务由 guard 拒绝。
+                  <ToolEffectSelect
+                    testId="native-task-effect"
+                    toolName="task"
+                    value={typeof value === "string" && value in toolEffectMeta ? (value as ToolEffect) : "deny"}
+                    readOnly={!editable}
+                    pending={writePending}
+                    onChange={(next) => handleNativeEffectChange("task", next)}
+                  />
+                  <span data-testid="native-task-effect-note" style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+                    task 控制子 Agent 扇出（opencode 原生权限，引擎直接执行）；嵌套深度另由引擎 subagent_depth 约束。
                   </span>
                 </span>
               )}

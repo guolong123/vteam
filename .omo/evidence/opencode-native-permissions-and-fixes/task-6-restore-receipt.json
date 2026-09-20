@@ -1,0 +1,7 @@
+{
+  "after_sha256": "7ff4cf8bb25fbf8448455ba4544c82035845a15315772678980e68e633154e46",
+  "canonical_config_equal": true,
+  "task_after": "deny",
+  "task_before": "deny",
+  "tools_count": 27
+}

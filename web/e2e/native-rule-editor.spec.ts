@@ -10,7 +10,8 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
  *  - edit/read：glob 规则表编辑器（`*` 兜底行恒在且置首、锁定 glob；添加/删除规则；
  *    客户端镜像 server 校验：非空 / ≤256 / ≤64 / 无重复）；
  *  - bash：三态分段（native-bash-effect）；
- *  - task：只读 + 引擎限制说明（native-task-note）；
+ *  - task：三态分段（native-task-effect；opencode-native-permissions-and-fixes todo 6
+ *    把只读徽章 + guard 说明换成了与 bash 相同的可编辑控件，旧 native-task-note 已删）；
  *  - 缺失键（如 task absent）仍渲染四行。
  *
  * 判别性（MUST DO）：测试 3 用 `{ '*':'deny','x':'ask' }` 断言 `ask` 不被归一化，
@@ -205,8 +206,11 @@ test.describe("Todo 3 · 原生 glob 规则表编辑器", () => {
     await expect(firstRow.locator('[data-testid="native-catchall-glob"]')).toBeDisabled();
     await expect(firstRow.locator('[data-testid="native-rule-remove"]')).toHaveCount(0);
 
-    // task 只读 + 说明
-    await expect(row(page, "task").locator('[data-testid="native-task-note"]')).toBeVisible();
+    // task：与 bash 相同形态的可编辑三态（todo 6 起；旧只读说明已删）
+    const task = page.getByTestId("native-task-effect");
+    await expect(task).toBeVisible();
+    await expect(task).toHaveAttribute("data-readonly", "false");
+    await expect(page.getByTestId("native-task-note")).toHaveCount(0);
 
     // bash 三态齐备
     const effects = await bash.locator('[data-effect]').evaluateAll((els) =>
@@ -222,11 +226,12 @@ test.describe("Todo 3 · 原生 glob 规则表编辑器", () => {
       read_readonly: await readEditor.getAttribute("data-readonly"),
       bash_effects: effects,
       catchall_first: true,
-      task_note: true,
+      task_editable: true,
+      task_note_removed: true,
     });
   });
 
-  test("2. absent task 仍渲染（只读 + note）", async ({ page, request }) => {
+  test("2. absent task 仍渲染（三态 + 缺省 deny）", async ({ page, request }) => {
     const token = await adminToken(request);
     const agent = await createAgent(request, token, "absent");
     try {
@@ -238,7 +243,11 @@ test.describe("Todo 3 · 原生 glob 规则表编辑器", () => {
       await expect(page.locator('[data-testid="effective-permission-row"]')).toHaveCount(4);
       const taskRow = row(page, "task");
       await expect(taskRow).toBeVisible();
-      await expect(taskRow.locator('[data-testid="native-task-note"]')).toBeVisible();
+      // task 缺失 → 控件按 deny 显示（与服务端 resolveTaskEffect 的兜底一致）
+      await expect(page.getByTestId("native-task-effect")).toBeVisible();
+      await expect(
+        page.getByTestId("native-task-effect").locator('[data-effect="deny"]'),
+      ).toHaveAttribute("aria-checked", "true");
       await expect(page.getByTestId("native-bash-effect")).toBeVisible();
       // read 缺失 → seed {'*':'allow'} 展示
       const readFirst = editor(page, "read").locator('[data-testid="native-rule-row"]').first();
