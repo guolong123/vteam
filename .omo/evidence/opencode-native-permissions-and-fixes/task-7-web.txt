@@ -1,0 +1,172 @@
+# todo 7 WEB SLICE — one agent slot in the role editor; the member picker removed
+# plan: .omo/plans/opencode-native-permissions-and-fixes.md todo 7 + ADDENDUM (web slice)
+# date: 2026-09-20T07:23:22Z
+# HEAD: cd66ce85a799c3cbb91c9dcfee00c14685c8a5d1  (server slice cd66ce8; this slice does not touch server/**)
+
+================================================================================
+[1] SCOPE — changed/added/deleted files (web slice)
+================================================================================
+  RM scripts/e2e-member-external-agent.sh -> scripts/e2e-agent-surfaces.sh
+   M scripts/e2e-no-agent-picker.sh
+   M scripts/e2e-roles-members.sh
+   M web/app/(main)/teams/[id]/page.tsx
+  D  web/e2e/member-external-agent.spec.ts
+   M web/e2e/no-agent-picker.spec.ts
+   M web/e2e/roles-members.spec.ts
+   M web/src/api/agent-roles.ts
+   M web/src/components/agents/AgentRolesTab.tsx
+
+  server/** vs HEAD:  0 changed paths (0 = untouched)
+  worker/** vs HEAD:  0 changed paths (0 = untouched)
+
+================================================================================
+[2] GATE  cd web && npx tsc --noEmit
+================================================================================
+    tsc exit code: 0
+
+================================================================================
+[3] GATE  cd web && npx eslint <changed files>
+================================================================================
+    
+    /Volumes/SSD-Data/01work/git-project/vteam/web/src/components/agents/AgentRolesTab.tsx
+      173:9  warning  The 'roles' logical expression could make the dependencies of useEffect Hook (at line 217) change on every render. To fix this, wrap the initialization of 'roles' in its own useMemo() Hook  react-hooks/exhaustive-deps
+    
+    ✖ 1 problem (0 errors, 1 warning)
+    
+        eslint exit code: 0
+    NOTE: the single react-hooks/exhaustive-deps warning is PRE-EXISTING — the
+    original file (git show HEAD:...) emits the identical warning at the same
+    useEffect; verified side by side. 0 errors.
+
+================================================================================
+[4] GREP PROOF — removed plumbing is gone; no competing picker remains
+================================================================================
+  grep -nE 'member-external-agent|opencodeAgentName|engineState|externalAgents|OpencodeAgentEntry|EngineState|EXTERNAL_AGENT' 'web/app/(main)/teams/[id]/page.tsx':
+
+  grep -rn 'opencodeAgentName' web/src (outside api/teams.ts, where the member DTO keeps the column):
+
+  web/e2e/member-external-agent.spec.ts:  member-external-agent.spec.ts: No such file or directory (deleted)
+  scripts/e2e-member-external-agent.sh:   e2e-member-external-agent.sh: No such file or directory (git mv -> scripts/e2e-agent-surfaces.sh)
+  scripts/e2e-agent-surfaces.sh testMatch: testMatch: /(no-agent-picker|third-party-agents|roles-members)\.spec\.ts/,
+    -> member-external-agent dropped; (no-agent-picker|third-party-agents|roles-members) kept.
+
+================================================================================
+[5] LIVE STACK — health gates; rebuild = docker compose build web && docker compose up -d web
+================================================================================
+  web    http://localhost:13001/login          -> 200
+  server http://localhost:13000/api/v1/health  -> 200
+  (no --force-recreate anywhere: init/reseed avoided)
+
+================================================================================
+[6] RUN  bash scripts/e2e-roles-members.sh   -> 4/4 (incl. external<->internal round-trip)
+================================================================================
+  [e2e] date=2026-09-20T07:21:09Z HEAD=cd66ce85a799c3cbb91c9dcfee00c14685c8a5d1
+  [e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
+  [e2e] stack healthy (web + server)
+  [cleanup] custom role ar_0000000011 deleted (re-GET 404)
+  [cleanup] team tm_0000000007 DELETE -> 200
+  [cleanup] throwaway role ar_0000000012 DELETE -> 200
+  [e2e] PASS playwright 4/4 green; screenshot present (roles tab)
+  [e2e] cleanup [cleanup] custom role ar_0000000011 deleted (re-GET 404)
+  [e2e] cleanup [cleanup] team tm_0000000007 DELETE -> 200
+  [e2e] cleanup [cleanup] throwaway role ar_0000000012 DELETE -> 200
+  [e2e] result passed	1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除
+  [e2e] result passed	2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除
+  [e2e] result passed	3. 成员按岗位添加：预填 Agent → 覆盖后持久化
+  [e2e] result passed	4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空）
+  [e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/e2e.txt
+
+================================================================================
+[7] RUN  bash scripts/e2e-agent-surfaces.sh  -> 12/12 across the 3 surviving specs
+================================================================================
+  [e2e] date=2026-09-20T07:21:28Z HEAD=cd66ce85a799c3cbb91c9dcfee00c14685c8a5d1
+  [e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
+  [e2e] stack healthy (web + server)
+  [cleanup] custom role ar_0000000013 deleted (re-GET 404)
+  [cleanup] team tm_0000000008 DELETE -> 200
+  [cleanup] throwaway role ar_0000000014 DELETE -> 200
+  [e2e] result passed	1. 选择器消失：无 testid、无 select
+  [e2e] result passed	2. @ 可用：候选含计划员-1，点击插入
+  [e2e] result passed	3. 发送可用：探针渲染 + 输入清空 + 零 console 错误
+  [e2e] result passed	4. 计划员可达：团队成员含 tmm_0000000006 且保留 opencodeAgentName（无 LLM 执行）
+  [e2e] result passed	5. 边界：团队详情页零 member-external-agent*，会话页零 select
+  [e2e] result passed	1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除
+  [e2e] result passed	2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除
+  [e2e] result passed	3. 成员按岗位添加：预填 Agent → 覆盖后持久化
+  [e2e] result passed	4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空）
+  [e2e] result passed	1. 列表 + 逐条警告 + 只读提示词 + 零编辑控件
+  [e2e] result passed	2. 指令拉取失败 → 显式不可用态（绝不空白）
+  [e2e] cleanup [cleanup] custom role ar_0000000013 deleted (re-GET 404)
+  [e2e] cleanup [cleanup] team tm_0000000008 DELETE -> 200
+  [e2e] cleanup [cleanup] throwaway role ar_0000000014 DELETE -> 200
+  [e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/task-7-agent-surfaces-e2e.txt
+
+================================================================================
+[8] RUN  bash scripts/e2e-no-agent-picker.sh -> A1..A6 green (test 5 = picker-free boundary)
+================================================================================
+  [e2e] date=2026-09-20T07:13:43Z HEAD=cd66ce85a799c3cbb91c9dcfee00c14685c8a5d1 REMOVAL_HEAD=37a1b0c
+  [e2e] stack healthy (web + server)
+  [e2e] PASS A1 (selector gone: no message-agent-select, zero <select>)
+  [e2e] PASS A2 (@ shows candidates incl 计划员-1; click inserts mention)
+  [e2e] PASS A3 (mocked probe renders; input clears; 0 console errors)
+  [e2e] PASS A5 (team members contain tmm_0000000006; opencodeAgentName key kept; no LLM run)
+  [e2e] PASS A4 (37a1b0c touches zero server/worker files; opencodeAgentName column + policy-candidate-then-explicit fallback intact)
+  [e2e] PASS A6 (probe POST was route-mocked; real group channel c_0000000001 has zero probe residue)
+  [e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/task-7-no-agent-picker/e2e.txt
+
+================================================================================
+[9] ROUND-TRIP EVIDENCE (API-level, from task-7-proof.json)
+================================================================================
+  {"engine_external_count": 11, "external_name": "Sisyphus - ultraworker", "persisted_default_agent_id": null, "persisted_default_opencode_agent_name": "Sisyphus - ultraworker", "selected_after_reload": true, "test": "role_external_slot_roundtrip_external_leg"}
+  {"persisted_default_agent_id": "a_tester", "persisted_default_opencode_agent_name": null, "selected_after_reload": true, "switched_to_internal": "a_tester", "test": "role_external_slot_roundtrip_internal_leg"}
+  {"error_mentions_slot_conflict": true, "error_visible": true, "mocked_code": "AGENT_ROLE_DEFAULT_SLOT_CONFLICT", "mocked_status": 400, "persisted_state_unchanged_after_failed_save": true, "test": "slot_conflict_surface"}
+
+  external leg: engine-live name (filter !governed && !hidden) -> defaultOpencodeAgentName
+    persisted, defaultAgentId null, still selected after reload (data-slot=external).
+  internal leg: switch to a_tester -> defaultAgentId persisted, external slot cleared,
+    still selected after reload (data-slot=internal).
+  list-item honesty: the role item shows '<external>（外部）', never 未设置, and this is
+    asserted in the spec (toContainText(externalName) + not.toContainText('未设置')).
+  invariant: mocked 400 AGENT_ROLE_DEFAULT_SLOT_CONFLICT -> role-action-error visible with
+    槽位冲突 + 二选一, persisted state unchanged after the failed save.
+
+================================================================================
+[10] RESTORE / NO-RESIDUE — canonical role-list comparison (MySQL reorders JSON keys)
+================================================================================
+  GET /agent-roles?pageSize=100 BEFORE (pre-build snapshot) vs AFTER (all e2e):
+  python sort_keys canonical strings identical.
+  role rows: 8 (7 builtin + ar_general seed); teams rows: 1 (tm_0000000001);
+  tasks: 2; agents: 7 — i.e. every throwaway role/team created by the specs was deleted
+  in the spec finally blocks (cleanup receipts in [6]/[7]); no scratch rows left.
+
+================================================================================
+[11] GIT SHOW — server slice commit cd66ce8 (untouched by this slice)
+================================================================================
+  commit cd66ce85a799c3cbb91c9dcfee00c14685c8a5d1
+  Author: guolong <guolong@xishuhq.com>
+  Date:   Sun Sep 20 14:52:54 2026 +0800
+  
+      feat(teams): prefill the member external agent from the role slot
+      
+      The role's external-agent slot added by todo 2 was write/validate-only: dispatch reads TeamMember.opencodeAgentName (worker-dispatcher.ts:3671-3687) and resolveMemberBinding resolved only the internal defaultAgentId, so a role pointing at an external engine agent reached no member. Binding now mirrors the internal slot: resolveMemberBinding gains rule 5 - explicit member opencodeAgentName wins, else role.defaultOpencodeAgentName prefills, else null - and returns the resolved value for create/addMember to persist on the member row.
+      
+      The explicit-agentId branch needed the same resolution, not just the roleId-only branch: a role that binds an external agent can never also hold defaultAgentId (todo 2 keeps the slots mutually exclusive), so its members must pass an explicit agentId and the role's external choice only ever flows through that branch. The role row is now read once for both branches (label + both slots) and the private roleBindingOf helper is deleted rather than kept as a second query.
+      
+      Prefill never overrides: updateMember applies the resolved default only when the request did not set opencodeAgentName and the persisted member value is empty, so an existing member-level choice survives a role change. The request-level precedence is explicit request value > persisted member value > role default. worker-dispatcher.ts is untouched - dispatch precedence is out of scope, this is binding only.
+      
+
+================================================================================
+[12] EVIDENCE ARTIFACTS
+================================================================================
+  -rw-r--r--@   1 mac  staff    3737  9月 20 15:21 task-7-agent-surfaces-e2e.txt
+  -rw-r--r--@   1 mac  staff  149282  9月 20 15:21 task-7-external-agents-failure.png
+  -rw-r--r--@   1 mac  staff  258264  9月 20 15:21 task-7-external-agents.png
+  drwxr-xr-x@   4 mac  staff     128  9月 20 15:13 task-7-no-agent-picker
+  -rw-r--r--@   1 mac  staff    1563  9月 20 15:22 task-7-proof.json
+  -rw-r--r--@   1 mac  staff  157414  9月 20 15:21 task-7-role-agent-select.png
+  -rw-r--r--@   1 mac  staff  215991  9月 20 15:21 task-7-roles-and-members.png
+  -rw-r--r--@   1 mac  staff    5466  9月 20 14:51 task-7-server-prefill.txt
+  -rw-r--r--@   1 mac  staff   12451  9月 20 15:23 task-7-web.txt
+  task-7-role-agent-select.png = required screenshot: single select in the role editor
+  with the external agent chosen + the honest '11 个外部 Agent（引擎上报…）' note.
+  (scrollIntoViewIfNeeded + viewport screenshot: fullPage is unreliable here.)

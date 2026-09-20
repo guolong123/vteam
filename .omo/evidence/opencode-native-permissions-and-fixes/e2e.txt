@@ -1,0 +1,26 @@
+[e2e] date=2026-09-20T07:21:09Z HEAD=cd66ce85a799c3cbb91c9dcfee00c14685c8a5d1
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 4 tests using 1 worker
+
+  ✓  1 e2e/roles-members.spec.ts:128:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除 (2.6s)
+[cleanup] custom role ar_0000000011 deleted (re-GET 404)
+  ✓  2 e2e/roles-members.spec.ts:177:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除 (3.4s)
+[cleanup] team tm_0000000007 DELETE -> 200
+  ✓  3 e2e/roles-members.spec.ts:253:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 3. 成员按岗位添加：预填 Agent → 覆盖后持久化 (1.8s)
+[cleanup] throwaway role ar_0000000012 DELETE -> 200
+  ✓  4 e2e/roles-members.spec.ts:318:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空） (8.2s)
+
+  4 passed (17.6s)
+----- end playwright raw -----
+[e2e] PASS playwright 4/4 green; screenshot present (roles tab)
+[e2e] cleanup [cleanup] custom role ar_0000000011 deleted (re-GET 404)
+[e2e] cleanup [cleanup] team tm_0000000007 DELETE -> 200
+[e2e] cleanup [cleanup] throwaway role ar_0000000012 DELETE -> 200
+[e2e] result passed	1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除
+[e2e] result passed	2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除
+[e2e] result passed	3. 成员按岗位添加：预填 Agent → 覆盖后持久化
+[e2e] result passed	4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空）
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/e2e.txt

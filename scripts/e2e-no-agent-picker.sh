@@ -5,7 +5,8 @@
 # Proves against the compose stack (web :13001 + server :13000, seed team
 # tm_0000000001 with 计划员-1 tmm_0000000006):
 #   A1 selector gone: team session page has no agent <select> in/near the
-#      message input, no `message-agent-select` testid.
+#      message input, no `message-agent-select` testid; team DETAIL page has
+#      zero `member-external-agent*` testids (test 5 boundary, issue 3/todo 7).
 #   A2 @ works: typing @ shows member candidates incl 计划员-1; selecting
 #      one inserts the mention.
 #   A3 send works: probe send succeeds and renders; input clears; 0 console
@@ -21,7 +22,8 @@
 #   A6 cleanup: probe text absent from the real group channel after the run.
 #
 # Prerequisite (run once, per task MUST DO):
-#   docker compose build web && docker compose up -d --force-recreate web
+#   docker compose build web && docker compose up -d web
+#   (never --force-recreate: it re-runs init and reseeds the DB)
 # This script only VERIFIES (fails if the stack is down); it never modifies
 # product source (no server/ or worker/ writes) and never pushes.
 #
@@ -82,7 +84,7 @@ log "WEB_URL=$WEB_URL SERVER_URL=$SERVER_URL TEAM_ID=$TEAM_ID"
 
 # ---------------------------------------------------------------- pre: stack health (rebuild is a manual prerequisite)
 curl -sS -o /dev/null -w '%{http_code}' "$WEB_URL/login" 2>/dev/null | grep -q '^200$' \
-  || fail "pre" "web not healthy at $WEB_URL (run: docker compose build web && docker compose up -d --force-recreate web)"
+  || fail "pre" "web not healthy at $WEB_URL (run: docker compose build web && docker compose up -d web)"
 curl -sS -o /dev/null -w '%{http_code}' "$SERVER_URL/api/v1/health" 2>/dev/null | grep -q '^200$' \
   || fail "pre" "server not healthy at $SERVER_URL"
 log "stack healthy (web + server)"

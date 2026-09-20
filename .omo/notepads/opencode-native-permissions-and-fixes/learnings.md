@@ -234,3 +234,47 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - Live e2e (role editor select → member resolves) is todo 10(e); this slice's acceptance gates were
   `tsc --noEmit` + `jest --runInBand src/teams`, so no server restart / DB mutation was performed
   (a server rebuild mid-parallel-web-slice would race the other todo-7 worker; nothing was left dirty).
+
+## [2026-09-20] todo 7 WEB slice — one agent slot in the role editor; member picker removed
+
+- **Selector encoding beats parallel state.** The single `role-default-agent` control maps
+  `"" | internal:<agentId> | external:<name>` via two pure helpers (`slotValueOf` /
+  `applySlotValue`) and the XOR lives in exactly one place. A `data-slot="unset|internal|external"`
+  attribute mirrors the chosen family so the specs assert the slot *family*, not just the value.
+  Consequence: the existing `roles-members` test-2 assertions became
+  `selectOption("internal:a_developer")` / `toHaveValue("internal:a_tester")` (persistence
+  assertion unchanged) — a value-encoding change only.
+- **The honesty requirement split into two visible states.** (a) A saved external name that is
+  missing from the current list gets a synthetic `external:<name>` option with the *reason*
+  (引擎未上报 / 列表加载中 / 列表不可用) — never silently dropped, and the note text distinguishes
+  the three engine states. (b) `describeDefaultSlot()` makes the left list item say
+  `<name>（外部）` so an external binding can never read 未设置 (asserted in the spec).
+  Not a cosmetic thing: the old code's `?? "未设置"` was a false claim for exactly the roles this
+  todo creates.
+- **`role-action-error` ordering.** `isApiError` narrowing means the conflict branch is a second
+  `err.code` ternary; the copy names the invariant (内部与外部只能二选一). A single-select UI
+  cannot produce a double-non-null request, so the spec proves the surface with a route-mocked
+  400 (and asserts persisted state is unchanged after the failed save — no false success).
+- **Removal was grep-gated.** `useMemo` was imported only for the opencode-query derivations
+  (verified: the only other `useMemo` uses were those two), so the import went with them.
+  `agentsQuery` (add-member panel) stays. The session-page spec keeps its own guarantee via a
+  second file-scoped assertion instead of relying on the removed test's promise.
+- **Harness repurposed, not deleted: `git mv scripts/e2e-member-external-agent.sh
+  scripts/e2e-agent-surfaces.sh`.** `third-party-agents.spec.ts` had NO other runner (grep:
+  only this harness's testMatch matched it), so deleting the harness silently dropped that
+  coverage. New testMatch `(no-agent-picker|third-party-agents|roles-members)`, dead `T3_*` env
+  vars dropped; the run is 12/12 (5 + 2 + ... specs) plus roles-members 4/4.
+- **Screenshots: wait for the engine note before capturing.** The first
+  `task-7-role-agent-select.png` captured the *loading* state ("引擎 Agent 列表加载中…"), which
+  is honest but not the proof the brief wants; gating on `role-default-agent-note` containing
+  `个外部 Agent` before `scrollIntoViewIfNeeded()` + viewport screenshot fixed it. `fullPage:true`
+  remains unreliable (todo-6 lesson).
+- **Spec/notepad wiring for todo 9:** `web/e2e/member-external-agent.spec.ts` is DELETED (guarded
+  only the removed picker); its engine-state coverage for the settings surface moved into the
+  role editor (`role-default-agent` note) and `third-party-agents.spec.ts` keeps the external-tab
+  read-only contract. The external picker's live round-trip now lives in `roles-members.spec.ts`
+  test 4. `docs/test-cases/08-*.md` (todo 9) still references the deleted spec — update it to the
+  above.
+- **Canonical no-residue habit:** pre-build `GET /agent-roles?pageSize=100` captured as
+  `sorted(json.dumps(sort_keys=True))` strings; compared equal after every e2e run (8 seed rows),
+  `teams` 1 / `tasks` 2 / `agents` 7. All throwaway roles/teams were deleted in spec `finally`.

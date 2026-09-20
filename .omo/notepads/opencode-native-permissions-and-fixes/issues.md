@@ -89,3 +89,27 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Probe residue:** the recon step created a throwaway custom agent + policy (`a_0000000007`/`ep_0000000007`)
   to exercise the invalid-value path before the spec existed. Both DELETEd (200/200, re-GET 404) at the end;
   the 7 seed `ep_*` rows and the live `/agent-policies` payload are canonically equal to the frozen baseline.
+
+## [2026-09-20] Orchestrator — PLAN DEFECT found at todo 7 (auto-continuation turn)
+
+- **todo 7 was NOT done.** The prior session ended mid-deliberation: no commit, no `task-7-*` evidence,
+  no `task_sessions` entry; `member-external-agent-select` still at `teams/[id]/page.tsx:121`,
+  `role-default-agent` still internal-only at `AgentRolesTab.tsx:537-552`, `web/src/api/agent-roles.ts`
+  has no `defaultOpencodeAgentName`. The earlier "todos 6 and 7 dispatched and reported complete" note
+  was wrong about 7. Todo 6 WAS real (`b7b25e5`) and I re-verified it independently.
+- **Defect: the todo-2 external slot had ZERO runtime consumers.** `defaultOpencodeAgentName` is
+  write/validate-only (`agent-roles.service.ts:116,134,205,282`; DTOs; `opencode-agent-name.validator.ts`).
+  Dispatch reads only the member-level field (`worker-dispatcher.ts:3671-3687` → `:2193-2213`); the role is
+  loaded only for `rolePrompt` (`:2088-2089`). `resolveMemberBinding` (`teams.service.ts:1317-1366`) resolves
+  only the internal slot. So todo 7 as written would kill the external capability and make todo 10(e)
+  ("the member resolves to it") unprovable — while Scope OUT (`plan:56`) forbids a dispatch-precedence change.
+- **Resolution (orchestrator, recorded as todo 7 ADDENDUM): Option A — symmetric prefill.** Extend
+  `resolveMemberBinding` so the role prefills the member's external slot (`role.defaultOpencodeAgentName`
+  → `TeamMember.opencodeAgentName`) when the caller did not pass one; explicit member value still wins;
+  `worker-dispatcher.ts` untouched. This completes the pattern todo 2 began (mutually-exclusive prefill
+  slots) and touches member *binding*, not dispatch *precedence* → Scope OUT preserved. Todo 7 is now
+  server+web and executes as two file-disjoint slices (one commit each).
+- **Ordering:** todo 7 must land before todo 8 — both edit `AgentRolesTab.tsx` + `teams/[id]/page.tsx`.
+  Watch-out for todo 8: todo 7 REMOVES the member caveat amber in `teams/[id]/page.tsx`
+  (`member-external-agent-caveat:144`), so that spot of the todo-8 defect may no longer exist —
+  the todo-8 worker must verify and fix only what survives.

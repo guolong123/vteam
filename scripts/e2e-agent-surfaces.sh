@@ -1,22 +1,24 @@
 #!/usr/bin/env bash
 #
-# e2e: member external-agent picker on the SETTINGS surface (third-party-agent-display Todo 3).
+# e2e: agent-choice surfaces after issue 3 (opencode-native-permissions-and-fixes todo 7).
 #
 # Proves against the LIVE compose stack (web :13001 + server :13000):
-#   A. The team DETAIL page (/teams/[id]) hosts `member-external-agent-select`
-#      (settings surface), the option list comes from the engine's external set.
-#   B. Select → save → reload persists TeamMember.opencodeAgentName.
-#   C. The override caveat is visible verbatim.
-#   D. An engine-unknown name surfaces `member-external-agent-unknown`.
-#   E. no-agent-picker.spec.ts (UPDATED, M6) stays green: the SESSION page keeps
-#      whole-page zero <select>; the settings surface is the only sanctioned host.
-#   F. third-party-agents.spec.ts (Todo 2) + roles-members.spec.ts stay green.
+#   A. no-agent-picker.spec.ts — the SESSION page keeps whole-page zero <select>;
+#      the team DETAIL page renders zero `member-external-agent*` testids (the
+#      per-member picker was removed — the role editor owns the agent choice).
+#   B. third-party-agents.spec.ts — the /agents 「外部 Agent」 tab stays read-only
+#      and keeps proving the live engine list + warning + no-edit-controls contract.
+#   C. roles-members.spec.ts — the role editor offers our agents AND external
+#      engine agents in ONE `role-default-agent` control; the external⇄internal
+#      slot round-trip persists across reload; the slot invariant stays visible.
 #
 # Prerequisite: rebuild the compose web image after web source changes:
-#   docker compose up -d --build web
+#   docker compose build web && docker compose up -d web
+#   (never --force-recreate: it re-runs init and reseeds)
 #
 # Run (from repo root):
-#   bash scripts/e2e-member-external-agent.sh
+#   bash scripts/e2e-agent-surfaces.sh
+#   EVIDENCE_DIR=.omo/evidence/<plan> bash scripts/e2e-agent-surfaces.sh
 #
 set -euo pipefail
 
@@ -24,11 +26,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 WEB_URL="${WEB_URL:-http://localhost:13001}"
 SERVER_URL="${SERVER_URL:-http://localhost:13000}"
-EVIDENCE_DIR="${EVIDENCE_DIR:-.omo/evidence/third-party-agent-display}"
+EVIDENCE_DIR="${EVIDENCE_DIR:-.omo/evidence/opencode-native-permissions-and-fixes}"
 case "$EVIDENCE_DIR" in /*) ;; *) EVIDENCE_DIR="$REPO_ROOT/$EVIDENCE_DIR";; esac
 mkdir -p "$EVIDENCE_DIR"
 
-E2E_LOG="$EVIDENCE_DIR/task-3-e2e.txt"
+E2E_LOG="$EVIDENCE_DIR/task-7-agent-surfaces-e2e.txt"
 : >"$E2E_LOG"
 log()  { printf '[e2e] %s\n' "$*" | tee -a "$E2E_LOG"; }
 pass() { printf '[e2e] PASS %s\n' "$*" | tee -a "$E2E_LOG"; }
@@ -38,7 +40,7 @@ CLEANUP_FILES=""
 cleanup() {
   # shellcheck disable=SC2086
   rm -f $CLEANUP_FILES 2>/dev/null || true
-  rm -f "$REPO_ROOT/web/.t3.playwright.config.ts" "$REPO_ROOT/web/.t3.report.json" 2>/dev/null || true
+  rm -f "$REPO_ROOT/web/.tas.playwright.config.ts" "$REPO_ROOT/web/.tas.report.json" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -46,22 +48,22 @@ log "date=$(date -u +%FT%TZ) HEAD=$(git rev-parse HEAD)"
 log "WEB_URL=$WEB_URL SERVER_URL=$SERVER_URL EVIDENCE_DIR=$EVIDENCE_DIR"
 
 curl -sS -o /dev/null -w '%{http_code}' "$WEB_URL/login" 2>/dev/null | grep -q '^200$' \
-  || fail "pre" "web not healthy at $WEB_URL (run: docker compose up -d --build web)"
+  || fail "pre" "web not healthy at $WEB_URL (run: docker compose build web && docker compose up -d web)"
 curl -sS -o /dev/null -w '%{http_code}' "$SERVER_URL/api/v1/health" 2>/dev/null | grep -q '^200$' \
   || fail "pre" "server not healthy at $SERVER_URL"
 log "stack healthy (web + server)"
 
-cat >"$REPO_ROOT/web/.t3.playwright.config.ts" <<'EOF'
+cat >"$REPO_ROOT/web/.tas.playwright.config.ts" <<'EOF'
 import { defineConfig } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
-  testMatch: /(member-external-agent|no-agent-picker|third-party-agents|roles-members)\.spec\.ts/,
-  timeout: 120_000,
+  testMatch: /(no-agent-picker|third-party-agents|roles-members)\.spec\.ts/,
+  timeout: 180_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
   retries: 0,
-  reporter: [["list"], ["json", { outputFile: ".t3.report.json" }]],
+  reporter: [["list"], ["json", { outputFile: ".tas.report.json" }]],
   use: {
     baseURL: "http://localhost:13001",
     channel: "chrome",
@@ -71,16 +73,13 @@ export default defineConfig({
 EOF
 
 PW_OUT="$(mktemp)"; CLEANUP_FILES="$PW_OUT"
-rm -f "$EVIDENCE_DIR/task-3-proof.json"
 (cd "$REPO_ROOT/web" && \
-  T3_SCREENSHOT="$EVIDENCE_DIR/task-3-member-picker.png" \
-  T3_UNKNOWN_SCREENSHOT="$EVIDENCE_DIR/task-3-member-picker-unknown.png" \
-  T3_EVIDENCE_JSON="$EVIDENCE_DIR/task-3-proof.json" \
-  T2_SCREENSHOT="$EVIDENCE_DIR/task-2-display.png" \
-  T2_FAILURE_SCREENSHOT="$EVIDENCE_DIR/task-2-display-failure.png" \
+  T2_SCREENSHOT="$EVIDENCE_DIR/task-7-external-agents.png" \
+  T2_FAILURE_SCREENSHOT="$EVIDENCE_DIR/task-7-external-agents-failure.png" \
   T7_SCREENSHOT="$EVIDENCE_DIR/task-7-roles-and-members.png" \
+  T7_ROLE_AGENT_SCREENSHOT="$EVIDENCE_DIR/task-7-role-agent-select.png" \
   T7_EVIDENCE_JSON="$EVIDENCE_DIR/task-7-proof.json" \
-  npx playwright test --config .t3.playwright.config.ts) >"$PW_OUT" 2>&1 \
+  npx playwright test --config .tas.playwright.config.ts) >"$PW_OUT" 2>&1 \
   || fail "ui" "playwright run failed (raw follows)"
 {
   echo "----- playwright raw -----"
@@ -88,9 +87,7 @@ rm -f "$EVIDENCE_DIR/task-3-proof.json"
   echo "----- end playwright raw -----"
 } >>"$E2E_LOG"
 
-[[ -f "$EVIDENCE_DIR/task-3-member-picker.png" ]] || fail "evidence" "missing task-3-member-picker.png"
-
-python3 - "$REPO_ROOT/web/.t3.report.json" >>"$E2E_LOG" <<'EOF'
+python3 - "$REPO_ROOT/web/.tas.report.json" >>"$E2E_LOG" <<'EOF'
 import json,sys
 rep=json.load(open(sys.argv[1]))
 def walk(suites):

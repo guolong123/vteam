@@ -12,13 +12,15 @@ import { test, expect, type Page } from "@playwright/test";
  * 4. 计划员可达（API，不触发真实 LLM 执行）：GET /teams/tm_0000000001
  *    成员含 tmm_0000000006（计划员-1）且成员行保留 opencodeAgentName 键。
  *
- * M6 边界（third-party-agent-display Todo 3，review fix M6）：
- * ---------------------------------------------------------------
+ * M6 边界（third-party-agent-display Todo 3 提出；opencode-native-permissions-and-fixes todo 7 收窄）：
+ * ----------------------------------------------------------------------------------------------
  * 保证被缩窄到它本来的范围：**会话页 / 消息输入区**永远零 picker（测试 1 原样保留）。
- * 团队详情页（`/teams/[id]`，成员管理设置面）是外部 Agent 选择器的**唯一合法宿主**：
- * third-party-agent-display Todo 3 恢复了 `member-external-agent-select`，位置是
- * 设置面而非消息输入。测试 5 把这条边界钉成机器可检的断言（允许设置面，但仅此一处）。
- * 不得对团队详情页断言零 `<select>`，也不得删除测试 1 的消息输入区保证。
+ * todo 7（issue 3）把外部 Agent 的选择**收归角色编辑器**：团队详情页的成员行
+ * `member-external-agent*` 整体移除（设置面不再有任何 picker），选择器只剩一个合法宿主
+ * ——/agents 角色 Tab 的 `role-default-agent`（roles-members.spec.ts 守护其往返）。
+ * 测试 5 把这条边界钉成机器可检的断言：团队详情页 `member-external-agent*` 前缀计数为 0，
+ * 且会话页既有的零 <select> 保证不破。不得对团队详情页断言零 `<select>`（添加成员面板
+ * 仍有 Agent 下拉），也不得删除测试 1 的消息输入区保证。
  *
  * 方法：POST 发送类一律拦截 mock；GET 消息列表 mock（种子 1 条 + 发送后回显
  * 探针）；其余 /api/v1/* route.fallback 走真实后端只读（含团队/成员/SSE）。
@@ -100,7 +102,7 @@ test.describe("no-agent-picker 选择器移除回归", () => {
     // 断言本体：残留 testid 与全页 <select> 均为零（M6 保证被缩窄到会话页）
     await expect(page.getByTestId("message-agent-select")).toHaveCount(0);
     await expect(page.locator("select")).toHaveCount(0);
-    // 反向探针：外部 Agent 选择器不得出现在会话页任何位置（含成员面板）
+    // 反向探针：外部 Agent 选择器不得出现在会话页任何位置（成员面板已移除，仅剩角色编辑器）
     await expect(page.getByTestId("member-external-agent-select")).toHaveCount(0);
   });
 
@@ -168,25 +170,23 @@ test.describe("no-agent-picker 选择器移除回归", () => {
     expect("opencodeAgentName" in member!).toBe(true);
   });
 
-  // M6：设置面是外部 Agent 选择器的唯一合法宿主——边界显式化 + 机器可检。
-  test("5. 边界：设置面（团队详情页）允许 member-external-agent-select，会话页不渲染它", async ({
-    page,
-  }) => {
+  // M6（todo 7 收窄版）：成员设置面不再承载任何 picker——整个 `member-external-agent*`
+  // 前缀（select / note / caveat / unknown）在团队详情页必须为 0；会话页保证不破。
+  test("5. 边界：团队详情页零 member-external-agent*，会话页零 select", async ({ page }) => {
     await loginAsAdmin(page);
 
-    // 设置面：团队详情页 IS the sanctioned host
+    // 成员设置面：选择器已收归角色编辑器（/agents 角色 Tab），成员行不再有 picker。
     await page.goto(`/teams/${TEAM_ID}`);
     await expect(page.getByTestId("team-detail-root")).toBeVisible({ timeout: 15_000 });
-    const picker = page.getByTestId("member-external-agent-select");
-    await expect(picker.first()).toBeVisible({ timeout: 15_000 });
-    expect(await picker.count()).toBeGreaterThan(0);
-    // 该设置面的选择器必须来自引擎清单（非硬编码）：至少含一个 option
-    expect(await picker.first().locator("option").count()).toBeGreaterThan(1);
+    // 成员行本身仍在（删的是 picker，不是成员管理）
+    await expect(page.getByTestId("member-row").first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-testid^="member-external-agent"]')).toHaveCount(0);
 
-    // 会话页：同一 testid 零出现（保证缩窄到消息输入区，不泄漏到会话路由）
+    // 会话页：message-agent-select 与全页 <select> 仍为零（测试 1 保证的独立复核）
     await installMocks(page, { probeSent: false });
     await page.goto(`/teams/${TEAM_ID}/session`);
     await expect(page.getByTestId("team-session-root")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("message-agent-select")).toHaveCount(0);
     await expect(page.getByTestId("member-external-agent-select")).toHaveCount(0);
     await expect(page.locator("select")).toHaveCount(0);
   });

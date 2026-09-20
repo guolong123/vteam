@@ -10,7 +10,7 @@
  * - 删除团队（执行中任务时禁用；其余关联任务随团队级联删除，确认框列出任务）
  * - 添加成员：Agent 选择（复用角色卡片简化版 + 自定义）
  */
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -38,57 +38,14 @@ function toAvatarRole(role: string | null): RoleKey {
 
 interface AgentItem { id: string; name: string; role: string; type: string }
 
-/** GET /agents/opencode 条目（对齐服务端 WorkerAgentInfo + governed，同 agents 页 ExternalAgentsPanel）。 */
-interface OpencodeAgentEntry {
-  name: string;
-  description?: string;
-  mode: "primary" | "subagent" | "all";
-  native?: boolean;
-  hidden?: boolean;
-  governed: boolean;
-}
-
-interface OpencodeAgentsResponse {
-  agents: OpencodeAgentEntry[];
-  workerId: string | null;
-  degraded: boolean;
-}
-
-/** 引擎清单状态：loading=拉取中；unavailable=worker 离线/请求失败（不可判定"未上报"）。 */
-type EngineState = "loading" | "ready" | "unavailable";
-
-/**
- * 覆盖 caveat（逐字文案，产品要求可见且不得弱化）。
- * 优先级为规范性声明，来源 agent-role-decommission todo 1（review fix B7），
- * 落实于 server/src/chat/worker-dispatcher.ts:2141-2148：
- *   (1) 策略候选优先（workerSupportsAgentPolicies 为真时）→ (2) opencodeAgentName → (3) 引擎默认。
- * 即：策略门生效时该外部选择可能被策略候选覆盖；门不生效才按 opencodeAgentName 下发。
- */
-const EXTERNAL_AGENT_CAVEAT = "当引擎的 vteam 策略门生效时，该外部选择可能被策略候选 Agent 覆盖。";
-const EXTERNAL_AGENT_PRECEDENCE = "优先级：(1) 策略候选优先（worker 支持时）→ (2) opencodeAgentName → (3) 引擎默认";
-const EXTERNAL_AGENT_UNKNOWN_WARNING = "该外部 Agent 当前未被引擎上报（可能已下线或重命名）。";
-const EXTERNAL_AGENT_LIST_LOADING = "引擎 Agent 列表加载中…";
-const EXTERNAL_AGENT_LIST_UNAVAILABLE = "引擎 Agent 列表不可用（worker 离线或版本不支持），当前仅显示已保存值。";
-
-function MemberRow({ member, isMain, externalAgents, engineAgentNames, engineState, onSave, onRemove, onSetMain }: { member: TeamMemberDto; isMain: boolean; externalAgents: OpencodeAgentEntry[]; engineAgentNames: Set<string>; engineState: EngineState; onSave: (payload: { alias?: string; workDir?: string; opencodeAgentName?: string }) => void; onRemove: () => void; onSetMain: () => void }) {
+function MemberRow({ member, isMain, onSave, onRemove, onSetMain }: { member: TeamMemberDto; isMain: boolean; onSave: (payload: { alias?: string; workDir?: string }) => void; onRemove: () => void; onSetMain: () => void }) {
   const [alias, setAlias] = useState(member.alias);
   const [workDir, setWorkDir] = useState(member.workDir);
-  const [opencodeAgentName, setOpencodeAgentName] = useState(member.opencodeAgentName ?? "");
-  const savedExternalName = member.opencodeAgentName ?? "";
-  const dirty = alias !== member.alias || workDir !== member.workDir || opencodeAgentName !== savedExternalName;
+  const dirty = alias !== member.alias || workDir !== member.workDir;
   useEffect(() => {
     setAlias(member.alias);
     setWorkDir(member.workDir);
-    setOpencodeAgentName(member.opencodeAgentName ?? "");
-  }, [member.alias, member.workDir, member.opencodeAgentName]);
-  const engineReady = engineState === "ready";
-  const externalNameSet = new Set(externalAgents.map((a) => a.name));
-  // 「未上报」判定用引擎**全量**清单（含 governed/hidden）：受治理的 vteam agent 是被引擎
-  // 上报的，只是不作为外部选项——不得对它谎报"未上报"。
-  const unknownExternal = engineReady && savedExternalName !== "" && !engineAgentNames.has(savedExternalName);
-  const currentNotInList = opencodeAgentName !== "" && !externalNameSet.has(opencodeAgentName);
-  const currentReported = engineAgentNames.has(opencodeAgentName);
-  const selectId = `member-external-agent-${member.id}`;
+  }, [member.alias, member.workDir]);
   const roleKey = toAvatarRole(member.agent?.role ?? null);
   const theme = roles[roleKey];
   return (
@@ -107,50 +64,8 @@ function MemberRow({ member, isMain, externalAgents, engineAgentNames, engineSta
       </div>
       <input data-testid="member-alias-input" value={alias} onChange={(e) => setAlias(e.target.value)} placeholder="别名" aria-label="成员别名" style={{ width: 150, flexShrink: 0, padding: `6px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, color: neutral[800],fontFamily: fontFamily.body }} />
       <input data-testid="member-workdir-input" value={workDir} onChange={(e) => setWorkDir(e.target.value)} placeholder="/data/vteam-worker/…" aria-label="工作目录" style={{ flex: 1, minWidth: 0, padding: `6px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], fontSize: fontSize.xs, color: neutral[600],fontFamily: fontFamily.mono }} />
-      <button type="button" data-testid="member-save" disabled={!dirty} onClick={() => onSave({ alias: alias.trim() || undefined, workDir: workDir.trim() || undefined, opencodeAgentName })} style={{ padding: `6px ${space.md}px`, borderRadius: radius.sm, border: "none", backgroundColor: dirty ? "#0D9488" : neutral[100], color: dirty ? "#FFF" : neutral[400], fontSize: fontSize.xs, fontWeight: 600, cursor: dirty ? "pointer" : "default", fontFamily: fontFamily.body, flexShrink: 0 }}>保存</button>
+      <button type="button" data-testid="member-save" disabled={!dirty} onClick={() => onSave({ alias: alias.trim() || undefined, workDir: workDir.trim() || undefined })} style={{ padding: `6px ${space.md}px`, borderRadius: radius.sm, border: "none", backgroundColor: dirty ? "#0D9488" : neutral[100], color: dirty ? "#FFF" : neutral[400], fontSize: fontSize.xs, fontWeight: 600, cursor: dirty ? "pointer" : "default", fontFamily: fontFamily.body, flexShrink: 0 }}>保存</button>
       <button type="button" data-testid="member-remove" onClick={onRemove} title="移除成员" style={{ border: "none", background: "none", color: neutral[300], cursor: "pointer", padding: space.xs, fontSize: fontSize.sm, fontFamily: fontFamily.body, flexShrink: 0 }}>✕</button>
-      </div>
-
-      {/* 外部 Agent（opencode 原生）选择：仅本设置面（团队详情页）提供；
-          会话页 / 消息输入区保持零 picker（web/e2e/no-agent-picker.spec.ts 守护）。 */}
-      <div data-testid="member-external-agent" style={{ display: "flex", flexDirection: "column", gap: space.xs, paddingTop: space.xs, borderTop: `1px dashed ${neutral[200]}` }}>
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
-          <label htmlFor={selectId} style={{ fontSize: fontSize.xs, fontWeight: 600, color: neutral[600], whiteSpace: "nowrap" }}>外部 Agent</label>
-          <select
-            id={selectId}
-            data-testid="member-external-agent-select"
-            data-member-id={member.id}
-            aria-label="外部 Agent（引擎原生）"
-            value={opencodeAgentName}
-            disabled={engineState === "loading"}
-            onChange={(e) => setOpencodeAgentName(e.target.value)}
-            style={{ minWidth: 220, flexShrink: 0, padding: `6px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, color: neutral[800], fontFamily: fontFamily.body }}
-          >
-            <option value="">（默认 / 不指定）</option>
-            {currentNotInList && <option value={opencodeAgentName}>{opencodeAgentName}（当前{currentReported ? "，vteam 策略 Agent，非外部选项" : engineReady ? "，未上报" : ""}）</option>}
-            {engineState === "loading" && <option value="" disabled>引擎 Agent 列表加载中…</option>}
-            {externalAgents.map((a) => (
-              <option key={a.name} value={a.name}>{a.name}</option>
-            ))}
-          </select>
-          <span data-testid="member-external-agent-note" style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}>
-            {engineState === "ready"
-              ? `${externalAgents.length} 个外部 Agent（引擎上报，不含 vteam 策略 Agent）`
-              : engineState === "loading"
-                ? EXTERNAL_AGENT_LIST_LOADING
-                : EXTERNAL_AGENT_LIST_UNAVAILABLE}
-          </span>
-        </div>
-        <div data-testid="member-external-agent-caveat" role="note" style={{ display: "flex", alignItems: "flex-start", gap: space.xs, padding: `3px 6px`, borderRadius: radius.sm, backgroundColor: "#FFFBEB", border: "1px solid #FDE68A", color: "#B45309", fontSize: fontSize.xs, fontWeight: 500, lineHeight: 1.5 }}>
-          <span aria-hidden style={{ flexShrink: 0, fontWeight: 700 }}>!</span>
-          <span>{EXTERNAL_AGENT_CAVEAT}<span style={{ color: "#D97706", fontWeight: 600 }}> {EXTERNAL_AGENT_PRECEDENCE}</span></span>
-        </div>
-        {unknownExternal && (
-          <div data-testid="member-external-agent-unknown" role="alert" style={{ display: "flex", alignItems: "flex-start", gap: space.xs, padding: `3px 6px`, borderRadius: radius.sm, backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.22)", color: "#B91C1C", fontSize: fontSize.xs, fontWeight: 500, lineHeight: 1.5 }}>
-            <span aria-hidden style={{ flexShrink: 0, fontWeight: 700 }}>⚠</span>
-            <span>{EXTERNAL_AGENT_UNKNOWN_WARNING}</span>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -180,28 +95,6 @@ export default function TeamDetailPage() {
     queryFn: () => api.get<{ items: AgentItem[] }>("/agents"),
     enabled: showAddMember,
   });
-
-  // 外部 Agent 清单（引擎上报，非 vteam 治理）——设置面的选择器数据源。
-  // 每次进页面都刷新：成员当前值是否"未上报"必须依据当次引擎回答，不能用缓存陈旧判定。
-  const opencodeAgentsQuery = useQuery({
-    queryKey: ["opencode-agents"],
-    queryFn: () => api.get<OpencodeAgentsResponse>("/agents/opencode", { query: {} }),
-    staleTime: 0,
-    refetchOnMount: "always",
-  });
-  const externalAgents = useMemo(
-    () => (opencodeAgentsQuery.data?.agents ?? []).filter((a) => !a.governed && !a.hidden),
-    [opencodeAgentsQuery.data],
-  );
-  const engineAgentNames = useMemo(
-    () => new Set((opencodeAgentsQuery.data?.agents ?? []).map((a) => a.name)),
-    [opencodeAgentsQuery.data],
-  );
-  const engineState: EngineState = opencodeAgentsQuery.isPending
-    ? "loading"
-    : opencodeAgentsQuery.isError || (opencodeAgentsQuery.data?.degraded ?? false)
-      ? "unavailable"
-      : "ready";
 
   const team: TeamDto | undefined = teamQuery.data;
 
@@ -268,7 +161,7 @@ export default function TeamDetailPage() {
   };
 
   const updateMemberMutation = useMutation({
-    mutationFn: ({ memberId, payload }: { memberId: string; payload: { alias?: string; workDir?: string; opencodeAgentName?: string } }) =>
+    mutationFn: ({ memberId, payload }: { memberId: string; payload: { alias?: string; workDir?: string } }) =>
       teamsApi.updateMember(id, memberId, payload),
   });
   const removeMemberMutation = useMutation({
@@ -572,7 +465,7 @@ export default function TeamDetailPage() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
             {team.members.map((m) => (
-              <MemberRow key={m.id} member={m} isMain={team.mainAgentMemberId === m.id} externalAgents={externalAgents} engineAgentNames={engineAgentNames} engineState={engineState} onSave={(payload) => {
+              <MemberRow key={m.id} member={m} isMain={team.mainAgentMemberId === m.id} onSave={(payload) => {
                 setActionError(null);
                 updateMemberMutation.mutate({ memberId: m.id, payload }, {
                   onSuccess: () => queryClient.invalidateQueries({ queryKey: ["team", id] }),

@@ -1,0 +1,39 @@
+[e2e] date=2026-09-20T07:21:28Z HEAD=cd66ce85a799c3cbb91c9dcfee00c14685c8a5d1
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 11 tests using 1 worker
+
+  ✓   1 e2e/no-agent-picker.spec.ts:94:7 › no-agent-picker 选择器移除回归 › 1. 选择器消失：无 testid、无 select (1.7s)
+  ✓   2 e2e/no-agent-picker.spec.ts:109:7 › no-agent-picker 选择器移除回归 › 2. @ 可用：候选含计划员-1，点击插入 (1.7s)
+  ✓   3 e2e/no-agent-picker.spec.ts:124:7 › no-agent-picker 选择器移除回归 › 3. 发送可用：探针渲染 + 输入清空 + 零 console 错误 (1.5s)
+  ✓   4 e2e/no-agent-picker.spec.ts:150:7 › no-agent-picker 选择器移除回归 › 4. 计划员可达：团队成员含 tmm_0000000006 且保留 opencodeAgentName（无 LLM 执行） (213ms)
+  ✓   5 e2e/no-agent-picker.spec.ts:175:7 › no-agent-picker 选择器移除回归 › 5. 边界：团队详情页零 member-external-agent*，会话页零 select (2.3s)
+  ✓   6 e2e/roles-members.spec.ts:128:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除 (2.0s)
+[cleanup] custom role ar_0000000013 deleted (re-GET 404)
+  ✓   7 e2e/roles-members.spec.ts:177:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除 (3.1s)
+[cleanup] team tm_0000000008 DELETE -> 200
+  ✓   8 e2e/roles-members.spec.ts:253:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 3. 成员按岗位添加：预填 Agent → 覆盖后持久化 (2.7s)
+[cleanup] throwaway role ar_0000000014 DELETE -> 200
+  ✓   9 e2e/roles-members.spec.ts:318:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空） (6.2s)
+  ✓  10 e2e/third-party-agents.spec.ts:51:7 › Todo 2 · 外部 Agent 只读展示 › 1. 列表 + 逐条警告 + 只读提示词 + 零编辑控件 (3.8s)
+  ✓  11 e2e/third-party-agents.spec.ts:119:7 › Todo 2 · 外部 Agent 只读展示 › 2. 指令拉取失败 → 显式不可用态（绝不空白） (2.4s)
+
+  11 passed (28.8s)
+----- end playwright raw -----
+[e2e] result passed	1. 选择器消失：无 testid、无 select
+[e2e] result passed	2. @ 可用：候选含计划员-1，点击插入
+[e2e] result passed	3. 发送可用：探针渲染 + 输入清空 + 零 console 错误
+[e2e] result passed	4. 计划员可达：团队成员含 tmm_0000000006 且保留 opencodeAgentName（无 LLM 执行）
+[e2e] result passed	5. 边界：团队详情页零 member-external-agent*，会话页零 select
+[e2e] result passed	1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除
+[e2e] result passed	2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除
+[e2e] result passed	3. 成员按岗位添加：预填 Agent → 覆盖后持久化
+[e2e] result passed	4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空）
+[e2e] result passed	1. 列表 + 逐条警告 + 只读提示词 + 零编辑控件
+[e2e] result passed	2. 指令拉取失败 → 显式不可用态（绝不空白）
+[e2e] cleanup [cleanup] custom role ar_0000000013 deleted (re-GET 404)
+[e2e] cleanup [cleanup] team tm_0000000008 DELETE -> 200
+[e2e] cleanup [cleanup] throwaway role ar_0000000014 DELETE -> 200
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/task-7-agent-surfaces-e2e.txt

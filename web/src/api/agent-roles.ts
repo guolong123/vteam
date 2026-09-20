@@ -17,6 +17,8 @@ export interface AgentRoleDto {
   description: string | null;
   type: AgentRoleType | string;
   defaultAgentId: string | null;
+  /** 外部引擎（opencode）agent 名；与 defaultAgentId 互斥（二者至多一个非空）。 */
+  defaultOpencodeAgentName: string | null;
   rolePrompt: string | null;
   sortOrder: number;
   createdAt: string;
@@ -36,6 +38,7 @@ export interface CreateAgentRolePayload {
   type: "custom";
   description?: string;
   defaultAgentId?: string | null;
+  defaultOpencodeAgentName?: string | null;
   rolePrompt?: string;
   sortOrder?: number;
 }
@@ -44,6 +47,7 @@ export interface UpdateAgentRolePayload {
   name?: string;
   description?: string | null;
   defaultAgentId?: string | null;
+  defaultOpencodeAgentName?: string | null;
   rolePrompt?: string | null;
   sortOrder?: number;
 }

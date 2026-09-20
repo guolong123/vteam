@@ -10,6 +10,10 @@
 #   C. Adding a member by role alone pre-fills the role's default agent; switching
 #      the agent overrides it and the override persists (agentId=a_tester,
 #      roleId=ar_developer).
+#   D. The role editor's single `role-default-agent` control carries the mutually
+#      exclusive internal/external slot: picking a live engine external agent
+#      persists defaultOpencodeAgentName (defaultAgentId null) and survives
+#      reload; switching back to internal clears the external slot (a_tester).
 #
 # Prerequisite: rebuild the compose web + server images after source changes:
 #   docker compose build server web && docker compose up -d server web
@@ -86,7 +90,7 @@ rm -f "$EVIDENCE_DIR/task-7-proof.json"
 } >>"$E2E_LOG"
 
 [[ -f "$EVIDENCE_DIR/task-7-roles-and-members.png" ]] || fail "evidence" "missing screenshot task-7-roles-and-members.png"
-pass "playwright 3/3 green; screenshot present (roles tab)"
+pass "playwright 4/4 green; screenshot present (roles tab)"
 
 if grep -q '\[cleanup\]' "$PW_OUT"; then
   grep '\[cleanup\]' "$PW_OUT" | sed 's/^/[e2e] cleanup /' >>"$E2E_LOG"

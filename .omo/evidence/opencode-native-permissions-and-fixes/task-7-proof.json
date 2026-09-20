@@ -1,0 +1,57 @@
+[
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu9hmwvx",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000013 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000008",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  },
+  {
+    "test": "role_external_slot_roundtrip_external_leg",
+    "external_name": "Sisyphus - ultraworker",
+    "engine_external_count": 11,
+    "persisted_default_opencode_agent_name": "Sisyphus - ultraworker",
+    "persisted_default_agent_id": null,
+    "selected_after_reload": true
+  },
+  {
+    "test": "role_external_slot_roundtrip_internal_leg",
+    "switched_to_internal": "a_tester",
+    "persisted_default_agent_id": "a_tester",
+    "persisted_default_opencode_agent_name": null,
+    "selected_after_reload": true
+  },
+  {
+    "test": "slot_conflict_surface",
+    "mocked_status": 400,
+    "mocked_code": "AGENT_ROLE_DEFAULT_SLOT_CONFLICT",
+    "error_visible": true,
+    "error_mentions_slot_conflict": true,
+    "persisted_state_unchanged_after_failed_save": true
+  }
+]
