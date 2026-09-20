@@ -6,7 +6,7 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
  * agent-native-permission-editor Todo 5 · 策略写入后的传播提示与可选重启
  * =====================================================================================
  * 背景：策略 PATCH 落库后，server 广播 reload-config；在线 worker 收到即 injectAll()
- * 重写 opencode.json + .vteam-role-guard/roles.json，随后自动重启 serve（有活跃会话时
+ * 重写 opencode.json（无 guard 插件项；`.vteam-role-guard/roles.json` 已随拦截层删除），随后自动重启 serve（有活跃会话时
  * 挂起至会话结束）→ 通常十余秒自动生效，无需手动操作。离线 worker 在下次注册时 injectAll()
  * 应用。因此写盘成功 ≠ 立即生效，但**也不需要**用户手动重启才能生效。本 spec 断言四件事：
  *   1. 通知只在一次成功写盘后出现，且明说「自动生效」+ 真实传播规则

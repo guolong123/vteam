@@ -5,7 +5,7 @@
 # Proves against the LIVE compose stack (web :13001 + server :13000) that the
 # four native permission rows on the agents page are real controls:
 #   1. all four rows always render (incl. a missing `task` key); edit/read
-#      expose the glob rule editor, bash the tri-state, task is read-only + note;
+#      expose the glob rule editor, bash AND task the tri-state;
 #   2. a stored `{ '*':'deny', x:'ask' }` renders `ask` and re-emits `ask`
 #      across an add/remove edit cycle (never coerced), `*` stays first;
 #   3. switching `*` off `deny` surfaces the catch-all warning;

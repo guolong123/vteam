@@ -1,0 +1,174 @@
+task-9 suite refresh — raw evidence
+date=2026-09-20T08:52:45Z HEAD=2f425e1493332113c6ed1a03147bab3a0319ff2f
+
+===== doc state (live check) =====
+table-rows(sec2-6): 46 e2e-rows: 8 total: 54
+member-picker-host-stale : False
+readonly-task-stale : False
+guard-intercept-stale : False
+old-sha-as-current : False
+PLATFORM_MCP_TOOL_NOT_PERMITTED: 5
+AGENT_ROLE_DEFAULT_SLOT_CONFLICT: 3
+e795b0c8 refs: 3 | 3b8c5d4b refs(history): 3
+TC-MBR-007 picker-free kept: True
+
+===== index =====
+| 08-Agent角色实体化与role拆除.md | AgentRole 实体、原生权限、服务端工具门（用例编号为本文档内作用域） | TC-ROLE / TC-AROLE / TC-EXT / TC-MBR / TC-POL / TC-E2E | 31 | 23 | 54 |
+
+===== 1. e2e-no-agent-picker.sh =====
+[e2e] date=2026-09-20T08:40:24Z HEAD=2f425e1493332113c6ed1a03147bab3a0319ff2f REMOVAL_HEAD=37a1b0c
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 TEAM_ID=tm_0000000001
+[e2e] stack healthy (web + server)
+[e2e] playwright exit 0; parsing per-test results ...
+[e2e] PASS A1 (selector gone: no message-agent-select, zero <select>)
+[e2e] PASS A2 (@ shows candidates incl 计划员-1; click inserts mention)
+[e2e] PASS A3 (mocked probe renders; input clears; 0 console errors)
+[e2e] PASS A5 (team members contain tmm_0000000006; opencodeAgentName key kept; no LLM run)
+[e2e] removal stat (web + evidence only):
+[e2e] PASS A4 (37a1b0c touches zero server/worker files; opencodeAgentName column + policy-candidate-then-explicit fallback intact)
+[e2e] PASS A6 (probe POST was route-mocked; real group channel c_0000000001 has zero probe residue)
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/e2e.txt
+
+===== 2. e2e-roles-members.sh =====
+[e2e] date=2026-09-20T08:40:44Z HEAD=2f425e1493332113c6ed1a03147bab3a0319ff2f
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
+[e2e] stack healthy (web + server)
+[e2e] PASS playwright 4/4 green; screenshot present (roles tab)
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/e2e.txt
+
+===== 3. e2e-native-rule-editor.sh =====
+[e2e] date=2026-09-20T08:40:58Z HEAD=2f425e1493332113c6ed1a03147bab3a0319ff2f
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
+[e2e] stack healthy (web + server)
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/e2e.txt
+
+===== 4. e2e-role-boundaries.sh SCENARIOS=f (f+f2) =====
+[e2e] SERVER_URL=http://localhost:13000 TEAM_ID=tm_0000000001 WORKER_EXEC_URL=<unset> SCENARIOS=f
+[e2e] login seed-admin ...
+[e2e] login seed-admin as MEMBER_JWT (team owner; seed-member is not in tm_0000000001) ...
+[e2e] --- scenario (f): permission.task contract (only vteam-plan allow) ---
+agent-policies: 7 agents, exactly vteam-plan task=allow, others deny, no write key
+opencode.json: 7 agents, exactly vteam-plan task=allow, others deny
+[e2e] PASS f (task contract on /agent-policies + injected opencode.json)
+[e2e] --- scenario (f2): DB-driven builtin policy (edit ep_product -> worker reload) ---
+[e2e] baseline sha256 ok: e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+pre-edit: live 7 builtins == frozen baseline (canonical)
+[e2e] PASS f2a (pre-edit live 7 builtins byte-identical to frozen baseline)
+edit body: .omo/evidence/opencode-native-permissions-and-fixes/f2-edit-ep_product.json (tools=deny ask deny, permission.bash=deny)
+control-plane: vteam-product permission reflects DB edit (tools live in resolveByAgent, asserted by e2e-permission-matrix)
+[e2e] PASS f2b (control-plane /agent-policies reflects the DB edit; guard role = {permission})
+[e2e] reloading worker (restart) ...
+opencode.agent[vteam-product].permission.bash = 'deny' (want 'deny'): OK
+opencode.agent[vteam-plan] permission vs baseline agent[vteam-plan]: IDENTICAL
+opencode.agent[vteam-plan] vteam_ leak: []
+opencode.agent[vteam-architect] permission vs baseline agent[vteam-architect]: IDENTICAL
+opencode.agent[vteam-architect] vteam_ leak: []
+opencode.agent[vteam-developer] permission vs baseline agent[vteam-developer]: IDENTICAL
+opencode.agent[vteam-developer] vteam_ leak: []
+opencode.agent[vteam-tester] permission vs baseline agent[vteam-tester]: IDENTICAL
+opencode.agent[vteam-tester] vteam_ leak: []
+opencode.agent[vteam-project_manager] permission vs baseline agent[vteam-project_manager]: IDENTICAL
+opencode.agent[vteam-project_manager] vteam_ leak: []
+opencode.agent[vteam-librarian] permission vs baseline agent[vteam-librarian]: IDENTICAL
+opencode.agent[vteam-librarian] vteam_ leak: []
+opencode.plugin vteam-role-guard entries: []
+opencode top-level role-guard keys: []
+[e2e] PASS f2c (DB edit reached injected opencode.json; other 6 builtins byte-identical; no guard artifact)
+[e2e] cleanup: restoring ep_product original config ...
+[e2e] reloading worker after restore ...
+after-agent-policies.json sha256 = e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+before-agent-policies.json sha256 = e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+byte-identical = True
+[e2e] PASS f2d (post-restore after-agent-policies.json byte-identical to frozen baseline)
+[e2e] ALL SCENARIOS DONE: a/c/d/e/f/f2/g
+
+===== 5. e2e-native-edit-enforcement.sh =====
+[e2e] SERVER_URL=http://localhost:13000 EDIT_POLICY_ID=ep_product WORKER_WORK_DIR=/data/vteam-worker
+[e2e] EVIDENCE_DIR=.omo/evidence/opencode-native-permissions-and-fixes
+[e2e] --- (c) frozen-sha gate (start) ---
+[e2e] baseline sha256 = e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5 (frozen: e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5)
+[e2e] PASS c (frozen baseline sha256 matches at start)
+[e2e] login admin ...
+[e2e] pre-flight: injected artifact is free of the probe marker
+[e2e] --- (b) live round-trip: PATCH edit rule -> poll injected artifacts ---
+edit body: add permission.edit['**t8-enforce/**']='allow' (catch-all + existing globs preserved)
+[e2e] PASS b1 (PATCH accepted; edit rule stored)
+control-plane: /agent-policies reflects edit for vteam-product
+[e2e] PASS b2 (control-plane /agent-policies reflects the edit)
+[e2e] polling injected artifacts (budget 120s, interval 5s; NO restart) ...
+[e2e] poll #1: probe not yet present in injected opencode.json
+[e2e] probe landed after ~10s (iters=2)
+[e2e] PASS b3 (injected opencode.json carries the edited rule; auto-propagated, no restart)
+injected: probe present in opencode.json edit; permission native-only; no guard plugin entry
+[e2e] PASS b4 (injected opencode.json well-formed; native-only permission; no guard artifact)
+other 6 builtins byte-identical to frozen baseline (canonical)
+[e2e] PASS b5 (other 6 builtins byte-identical to frozen baseline)
+[e2e] restoring ep_product ...
+[e2e] polling for probe-absent (budget 120s) ...
+[e2e] poll #1: probe still present after restore
+restore: stored name/description/config == snapshot (canonical)
+post-restore: all 7 builtins byte-identical to frozen baseline
+[e2e] PASS b6 (restored; probe gone; stored config == snapshot; all 7 byte-identical to baseline)
+[e2e] --- (d) permission.write stripped and never emitted ---
+write-edit body: permission contains a 'write' key (must be stripped)
+stored: config.permission has NO 'write' key; equals snapshot permission
+/agent-policies: no 'write' key anywhere (worker would throw at opencode-config-builder.ts:111)
+[e2e] PASS d (permission.write stripped on store; never emitted by /agent-policies)
+[e2e] --- (e) M1: permission.edit ABSENT is stored with the catch-all ---
+m1-edit body: permission={ bash: 'deny' } (NO edit key)
+stored config.permission = {"bash": "deny", "edit": {"*": "deny"}}
+stored: permission.edit == {'*': 'deny'} (catch-all injected)
+[e2e] PASS e (edit ABSENT stored with the catch-all)
+[e2e] restoring ep_product after (e) ...
+[e2e] PASS e-restore (worker artifact settled; probe absent)
+[e2e] --- (c) frozen-sha gate (end) ---
+[e2e] baseline sha256 = e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5 (frozen: e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5)
+[e2e] PASS c (frozen baseline sha256 matches at end)
+[e2e] ALL ASSERTIONS PASSED: b (live round-trip + restore), c (frozen gate x2), d (write stripped/never emitted), e (M1 catch-all)
+[e2e] cleanup: restoring ep_product original config ...
+[e2e] cleanup: probe absent from injected artifact = yes (iters=1)
+[e2e] cleanup: all 7 builtins byte-identical to baseline = True
+[e2e] cleanup: baseline sha256 = e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+
+===== 6. STALE PROOF (old member picker assertion must FAIL) =====
+
+Running 1 test using 1 worker
+
+  ✘  1 .t9stale/stale.spec.ts:2:5 › stale: team detail member row hosts member-external-agent-select (11.8s)
+
+
+  1) .t9stale/stale.spec.ts:2:5 › stale: team detail member row hosts member-external-agent-select ─
+
+    Error: expect(locator).toHaveCount(expected) failed
+
+    Locator:  getByTestId('member-external-agent-select')
+    Expected: 1
+    Received: 0
+    Timeout:  10000ms
+
+    Call log:
+      - Expect "toHaveCount" with timeout 10000ms
+      - waiting for getByTestId('member-external-agent-select')
+        24 × locator resolved to 0 elements
+           - unexpected value "0"
+
+
+       9 |   await expect(page.getByTestId("team-detail-root")).toBeVisible({ timeout: 15_000 });
+      10 |   await expect(page.getByTestId("member-row").first()).toBeVisible({ timeout: 15_000 });
+    > 11 |   await expect(page.getByTestId("member-external-agent-select")).toHaveCount(1);
+         |                                                                  ^
+      12 | });
+      13 |
+        at /Volumes/SSD-Data/01work/git-project/vteam/web/.t9stale/stale.spec.ts:11:66
+
+    Error Context: test-results/stale-stale-team-detail-me-a04ed-ember-external-agent-select/error-context.md
+
+  1 failed
+    .t9stale/stale.spec.ts:2:5 › stale: team detail member row hosts member-external-agent-select ──
+
+===== DB residue check =====
+roles-after: 8
+teams-after: 1
+(before: roles 8, teams 1 — equal, no residue)

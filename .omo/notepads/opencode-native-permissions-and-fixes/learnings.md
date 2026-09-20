@@ -279,6 +279,25 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `sorted(json.dumps(sort_keys=True))` strings; compared equal after every e2e run (8 seed rows),
   `teams` 1 / `tasks` 2 / `agents` 7. All throwaway roles/teams were deleted in spec `finally`.
 
+## [2026-09-20] todo 9 — test-case doc refresh + suite re-green
+
+- **The 08 doc was untracked in git** (never committed; `git ls-files docs/test-cases/` lists only
+  00–07). Task 9 stages it with `git add` in the single todo-9 commit — no history to preserve,
+  so no `git mv` needed.
+- **Stale-proof pattern:** a throwaway `.t9stale/` spec asserting the removed
+  `member-external-agent-select` on the team-detail page FAILS live (count 0 ≠ 1), proving the
+  doc matches reality; scratch deleted immediately after (never committed).
+- **`e2e-role-boundaries.sh` SCENARIOS=f pitfall:** passing `WORK_DIR=/tmp/...` leaks into
+  `WORKER_WORK_DIR` (default `${WORK_DIR:-/data/vteam-worker}`), so f2's live `docker compose cp`
+  fetch reads a static copy and the 180s poll fails. Fix: pass `INJECTED_OPENCODE_JSON` (static
+  copy) for the f contract check and leave `WORK_DIR` unset so `WORKER_WORK_DIR` defaults to
+  the live container path. State restored canonically after both the failed and the green run
+  (live `/agent-policies` == frozen baseline `e795b0c8…`, injected `vteam-product` bash back
+  to `allow`).
+- **Counts that hold:** 08 doc = 54 cases (46 section tables + 8 E2E), 31正向/23反向,
+  41 P0 / 13 P1; index 00 adds the 08 row (31/23/54) with totals 202/218/420.
+  R1–R8 red lines now include R7 (server 403) + R8 (single slot).
+
 ## [2026-09-20] todo 8 — dark-mode role selection + external warning
 
 - **Shallow contract, not deep-vars.** The spec asserts ON the role-item/warning computed colours

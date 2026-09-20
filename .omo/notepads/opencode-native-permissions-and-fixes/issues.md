@@ -123,3 +123,19 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Spec skips the warning-colour branch when the engine has no external agents**
   (`empty`/`unavailable` → `test.skip`). Passing 2/2 therefore means the warning assertions ran
   (no skip observed); if a skip appears, the PNG still proves the dark role-item state.
+
+## [2026-09-20] todo 9 — suite-refresh notes
+
+- **08 doc was untracked, not modified** — the brief's "251 lines, ~50 cases" describes the
+  on-disk file, but it was never committed (00–07 are tracked, 08 is not). Staged via plain
+  `git add` in the todo-9 commit; nothing to `git mv`.
+- **f2 first attempt FAILED for an env reason, not a product bug**: `WORK_DIR=/tmp/...`
+  leaked into `WORKER_WORK_DIR`, so the live `docker compose cp` fetch read a static host copy
+  and the 180s poll timed out. Reran with `WORK_DIR` unset + `INJECTED_OPENCODE_JSON` for the
+  static f-contract check → full `ALL SCENARIOS DONE: a/c/d/e/f/f2/g`. No product code touched;
+  per the brief's MUST-NOT-DO this was recorded here, not "fixed" anywhere.
+- **Stale comment traps fixed in this todo** (docs/specs/harnesses only):
+  `scripts/e2e-native-rule-editor.sh` header still said "task is read-only + note";
+  `web/e2e/policy-restart-notice.spec.ts` header still named the deleted
+  `.vteam-role-guard/roles.json` as a live injection artifact. Both corrected to the shipped
+  arrangement; assertions themselves already matched reality.
