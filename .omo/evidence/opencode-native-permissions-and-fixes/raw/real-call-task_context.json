@@ -1,0 +1,9 @@
+{
+  "tool": "vteam_task_context",
+  "callID": "9Z4bELx1ARXg3cJYGQv4AAMWdlSyOr0J",
+  "args": {
+    "taskId": "t_0000000001"
+  },
+  "output": "{\"id\":\"t_0000000001\",\"title\":\"todo-9 fresh planner proof\",\"description\":\"clean-rebuild verification\",\"status\":\"in_progress\",\"mainAgentId\":\"a_project_manager\",\"mainAgentInstanceId\":\"tmm_0000000002\",\"backgroundDocs\":[],\"channelId\":\"c_0000000001\",\"pendingReceipts\":{\"pending\":0,\"total\":0},\"agentMembers\":[{\"id\":\"tmm_0000000003\",\"alias\":\"架构师-1\",\"agentId\":\"a_architect\",\"name\":\"架构师\",\"role\":\"architect\",\"main\":false},{\"id\":\"tmm_0000000004\",\"alias\":\"开发者-1\",\"agentId\":\"a_developer\",\"name\":\"开发者\",\"role\":\"developer\",\"main\":false},{\"id\":\"tmm_0000000007\",\"alias\":\"知识管理员-1\",\"agentId\":\"a_librarian\",\"name\":\"知识管理员\",\"role\":\"librarian\",\"main\":false},{\"id\":\"tmm_0000000006\",\"alias\":\"计划员-1\",\"agentId\":\"a_plan\",\"name\":\"计划员\",\"role\":\"plan\",\"main\":false},{\"id\":\"tmm_0000000001\",\"alias\":\"产品经理-1\",\"agentId\":\"a_product\",\"name\":\"产品经理\",\"role\":\"product\",\"main\":false},{\"id\":\"tmm_0000000002\",\"alias\":\"项目经理-1\",\"agentId\":\"a_project_manager\",\"name\":\"项目经理\",\"role\":\"project_manager\",\"main\":true},{\"id\":\"tmm_0000000005\",\"alias\":\"测试-1\",\"agentId\":\"a_tester\",\"name\":\"测试\",\"role\":\"tester\",\"main\":false}]}",
+  "status": "completed"
+}

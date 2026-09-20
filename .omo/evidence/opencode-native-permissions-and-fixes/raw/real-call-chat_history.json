@@ -1,0 +1,10 @@
+{
+  "tool": "vteam_chat_history",
+  "callID": "AFaCHnFhBrb0M3MGcbCNfMpQtMgdW4PH",
+  "args": {
+    "taskId": "t_0000000001",
+    "limit": 30
+  },
+  "output": "{\"items\":[{\"id\":\"m_0000000001\",\"senderType\":\"user\",\"senderId\":\"u_admin\",\"text\":\"@计划员 请为任务 t_0000000001 输出一份最少步骤的实施计划（只读分析，不要写文件）。【9(d) 探针】请在回复正文中原样包含标记 T9-LIVE-PLAN-OK 并以 T9-LIVE-END 结尾。\",\"attachmentUrl\":null,\"attachmentName\":null,\"attachmentType\":null,\"senderInstanceId\":null,\"createdAt\":\"2026-09-19T23:56:20.737Z\"}],\"truncated\":false,\"total\":1}",
+  "status": "completed"
+}

@@ -1,0 +1,629 @@
+[
+  {
+    "tool": "chat_history",
+    "ident": {
+      "selfInstanceId": "optional",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "doclib",
+    "ident": {
+      "taskId": "required"
+    },
+    "absent": [
+      "selfInstanceId",
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "task_context",
+    "ident": {
+      "taskId": "required"
+    },
+    "absent": [
+      "selfInstanceId",
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "group_post",
+    "ident": {
+      "selfInstanceId": "required",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "read_file",
+    "ident": {
+      "taskId": "required"
+    },
+    "absent": [
+      "selfInstanceId",
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "notify_agent",
+    "ident": {
+      "selfInstanceId": "required",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "submit_artifact",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "issue_create",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "issue_list",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "issue_get",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "issue_update",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "issue_transition",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "task_transition",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "question_confirm",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "memory_save",
+    "ident": {
+      "selfInstanceId": "required",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "memory_update",
+    "ident": {
+      "selfInstanceId": "required",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "memory_search",
+    "ident": {
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [
+      "selfInstanceId"
+    ],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "team_view",
+    "ident": {
+      "taskId": "required"
+    },
+    "absent": [
+      "selfInstanceId",
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "my_profile",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "team_add_member",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "plan_mode",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "plan_complete",
+    "ident": {
+      "selfInstanceId": "required",
+      "taskId": "required"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "channel_send",
+    "ident": {},
+    "absent": [
+      "selfInstanceId",
+      "teamId",
+      "taskId"
+    ],
+    "mechanism": "assertWorkerTask(NOT via resolveExecContext)",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "wecom_reply",
+    "ident": {
+      "selfInstanceId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [
+      "teamId"
+    ],
+    "mechanism": "assertWorkerTask",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "task_create",
+    "ident": {
+      "selfInstanceId": "required",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "skill_create",
+    "ident": {
+      "selfInstanceId": "required",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "git_repos_list",
+    "ident": {
+      "selfInstanceId": "required",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "hook_register",
+    "ident": {
+      "selfInstanceId": "required",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  },
+  {
+    "tool": "hook_cancel",
+    "ident": {
+      "selfInstanceId": "required",
+      "teamId": "optional",
+      "taskId": "optional"
+    },
+    "absent": [],
+    "mechanism": "resolveExecContext",
+    "allow": [],
+    "deny_listed": [
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-librarian",
+      "vteam-plan",
+      "vteam-product",
+      "vteam-project_manager",
+      "vteam-tester"
+    ],
+    "explicit_deny_perm": []
+  }
+]

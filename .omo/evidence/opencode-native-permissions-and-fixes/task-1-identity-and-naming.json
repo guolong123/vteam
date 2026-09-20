@@ -1,0 +1,1487 @@
+{
+  "task": "1",
+  "plan": "opencode-native-permissions-and-fixes",
+  "title": "Prove the MCP tool-call identity + tool-name mapping (foundation for server-side enforcement)",
+  "conclusion": {
+    "name_the_server_receives": "BARE registered name (e.g. \"doclib\")",
+    "name_the_model_sees": "vteam_<name> (e.g. \"vteam_doclib\")",
+    "lookup_key_for_todo_3": "`vteam_${receivedBareName}` (the ROLE_BOUNDARIES / VTEAM_MCP_TOOL_NAMES key form)",
+    "fail_closed_policy": "tools/call is fail-closed: unresolvable caller/role/matrix -> 403 + stable code (NOT the lenient pass-through of worker role-guard/policy.ts)"
+  },
+  "naming_assertion": {
+    "one_liner": "node -e \"const {VTEAM_MCP_TOOL_NAMES}=require('./dist/common/constants/agent.constants');const {buildPlatformMcpTools}=require('./dist/platform-mcp/platform-mcp.tools');const reg=buildPlatformMcpTools({}).map(t=>t.name);const bare=VTEAM_MCP_TOOL_NAMES.map(n=>n.replace(/^vteam_/,''));if(JSON.stringify([...reg].sort())!==JSON.stringify([...bare].sort()))throw new Error('naming contract broken');console.log('OK',reg.length,'bare names ==',VTEAM_MCP_TOOL_NAMES.length,'vteam_ keys')\"",
+    "spec": "server/src/platform-mcp/platform-mcp.tool-naming.spec.ts (3 assertions)",
+    "spec_result": "PASS 3/3",
+    "mutation_proof": "Renaming one registration `doclib` -> `vteam_doclib` in platform-mcp.tools.ts makes all 3 assertions FAIL; restoring returns PASS 3/3",
+    "set_equality_verified_live": {
+      "live_tools_list_names": [
+        "chat_history",
+        "doclib",
+        "task_context",
+        "group_post",
+        "read_file",
+        "notify_agent",
+        "submit_artifact",
+        "issue_create",
+        "issue_list",
+        "issue_get",
+        "issue_update",
+        "issue_transition",
+        "task_transition",
+        "question_confirm",
+        "memory_save",
+        "memory_update",
+        "memory_search",
+        "team_view",
+        "my_profile",
+        "team_add_member",
+        "plan_mode",
+        "plan_complete",
+        "channel_send",
+        "wecom_reply",
+        "task_create",
+        "skill_create",
+        "git_repos_list",
+        "hook_register",
+        "hook_cancel"
+      ],
+      "registered_names": [
+        "chat_history",
+        "doclib",
+        "task_context",
+        "group_post",
+        "read_file",
+        "notify_agent",
+        "submit_artifact",
+        "issue_create",
+        "issue_list",
+        "issue_get",
+        "issue_update",
+        "issue_transition",
+        "task_transition",
+        "question_confirm",
+        "memory_save",
+        "memory_update",
+        "memory_search",
+        "team_view",
+        "my_profile",
+        "team_add_member",
+        "plan_mode",
+        "plan_complete",
+        "channel_send",
+        "wecom_reply",
+        "task_create",
+        "skill_create",
+        "git_repos_list",
+        "hook_register",
+        "hook_cancel"
+      ],
+      "registered_equals_live": true,
+      "VTEAM_MCP_TOOL_NAMES_count": 29,
+      "registered_equals_stripped": true,
+      "all_registered_bare": true
+    }
+  },
+  "evidence_A_real_tools_call": {
+    "live_stack": {
+      "server": "http://localhost:13000/api/v1/platform-mcp",
+      "worker_id": "w_compose_worker",
+      "auth": "x-worker-token: <WORKER_TOKEN from docker-compose.yml> (redacted)",
+      "engine": "opencode/1.18.31 (from server access-log user-agent)"
+    },
+    "raw_capture_from_live_agent_session": {
+      "how": "opencode's own session DB (opencode.db -> part table, type='tool') filtered to the live run; each row is a real tool call made by a real agent session against the live server",
+      "server_recorded_content_length_matches_bare_envelope": [
+        {
+          "model_facing": "vteam_task_context",
+          "server_content_length": 145,
+          "bare_envelope_bytes": 145,
+          "prefixed_envelope_bytes": 151,
+          "delta_bare": 0,
+          "delta_prefixed": 6
+        },
+        {
+          "model_facing": "vteam_chat_history",
+          "server_content_length": 156,
+          "bare_envelope_bytes": 156,
+          "prefixed_envelope_bytes": 162,
+          "delta_bare": 0,
+          "delta_prefixed": 6
+        },
+        {
+          "model_facing": "vteam_doclib",
+          "server_content_length": 139,
+          "bare_envelope_bytes": 139,
+          "prefixed_envelope_bytes": 145,
+          "delta_bare": 0,
+          "delta_prefixed": 6
+        },
+        {
+          "model_facing": "vteam_group_post",
+          "server_content_length": 2383,
+          "bare_envelope_bytes": 2383,
+          "prefixed_envelope_bytes": 2389,
+          "delta_bare": 0,
+          "delta_prefixed": 6
+        },
+        {
+          "model_facing": "vteam_group_post",
+          "server_content_length": 2359,
+          "bare_envelope_bytes": 2359,
+          "prefixed_envelope_bytes": 2365,
+          "delta_bare": 0,
+          "delta_prefixed": 6
+        }
+      ],
+      "envelope": "{jsonrpc:\"2.0\",id:1,method:\"tools/call\",params:{name:<bare>,arguments:<args>,_meta:{progressToken:1}}}",
+      "envelope_source": "extracted verbatim from the opencode binary: `{jsonrpc:\"2.0\",id:1,method:\"tools/call\",params:{name:e,arguments:s}}` (schema literal id:1)"
+    },
+    "real_call_that_proves_the_name_reached_the_tool": {
+      "model_facing": "vteam_group_post",
+      "status": "error",
+      "input_selfInstanceId": "tmm_0000000006",
+      "server_error": "MCP error -32602: ✖ taskId 与 teamId 至少传一个（taskId 优先，无 taskId 时用 teamId 定位团队会话）\n  → at taskId",
+      "why_this_is_conclusive": "This zod refine message can only be produced AFTER `this.tools.find(t => t.name === name)` resolved the tool. A prefixed name never reaches zod -> it returns `Unknown tool: vteam_group_post`."
+    },
+    "server_log_line_showing_receipt": {
+      "method": "POST",
+      "url": "/api/v1/platform-mcp",
+      "user_agent": "opencode/1.18.31",
+      "x_worker_id": "w_compose_worker",
+      "content_length_matches_bare_bytes": true,
+      "raw_file": "raw/opencode-engine.log.txt (engine side), server access log lines reproduced in raw/server-platform-mcp-access.log.txt"
+    },
+    "differential_probe": {
+      "bare": {
+        "tool": "doclib",
+        "request_bytes": 139,
+        "http": 200,
+        "response": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"artifacts\\\":[]}\"}]}}"
+      },
+      "prefixed": {
+        "tool": "vteam_doclib",
+        "request_bytes": 145,
+        "http": 200,
+        "response": "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32602,\"message\":\"Unknown tool: vteam_doclib\"}}"
+      },
+      "byte_identical_output_check": {
+        "engine_recorded_output_for_that_real_call": "{\"artifacts\":[]}",
+        "server_output_for_replayed_bare_call": "{\"artifacts\":[]}",
+        "match": true
+      },
+      "raw_files": [
+        "raw/envelope-bare.request.json",
+        "raw/envelope-bare.response.json",
+        "raw/envelope-prefixed.request.json",
+        "raw/envelope-prefixed.response.json",
+        "raw/call-bare-team_view.request.json",
+        "raw/call-bare-team_view.response.json",
+        "raw/call-prefixed-vteam_team_view.request.json",
+        "raw/call-prefixed-vteam_team_view.response.json"
+      ]
+    },
+    "engine_permission_log_model_facing_names": {
+      "note": "opencode's own permission-evaluation log names the tool by its MODEL-FACING form",
+      "lines": [
+        "timestamp=2026-09-19T23:56:52.356Z level=INFO run=5b685365 message=evaluated permission=vteam_task_context pattern=* action.permission=* action.action=allow action.pattern=*",
+        "timestamp=2026-09-19T23:56:57.498Z level=INFO run=5b685365 message=evaluated permission=vteam_chat_history pattern=* action.permission=* action.action=allow action.pattern=*",
+        "timestamp=2026-09-19T23:56:57.510Z level=INFO run=5b685365 message=evaluated permission=vteam_doclib pattern=* action.permission=* action.action=allow action.pattern=*",
+        "timestamp=2026-09-19T23:57:14.958Z level=INFO run=5b685365 message=evaluated permission=vteam_group_post pattern=* action.permission=* action.action=allow action.pattern=*",
+        "timestamp=2026-09-19T23:57:23.503Z level=INFO run=5b685365 message=evaluated permission=vteam_group_post pattern=* action.permission=* action.action=allow action.pattern=*"
+      ]
+    }
+  },
+  "evidence_B_identity_table": {
+    "how": "tools/list from the live server (raw/toolslist.body) -> per-tool JSON Schema properties/required, cross-checked against the service call sites",
+    "legend": {
+      "required": "required:true in the JSON Schema",
+      "optional": "present in properties, not required",
+      "absent": "not in the schema at all"
+    },
+    "rows": [
+      {
+        "tool": "chat_history",
+        "ident": {
+          "selfInstanceId": "optional",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "doclib",
+        "ident": {
+          "taskId": "required"
+        },
+        "absent": [
+          "selfInstanceId",
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "task_context",
+        "ident": {
+          "taskId": "required"
+        },
+        "absent": [
+          "selfInstanceId",
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "group_post",
+        "ident": {
+          "selfInstanceId": "required",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "read_file",
+        "ident": {
+          "taskId": "required"
+        },
+        "absent": [
+          "selfInstanceId",
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "notify_agent",
+        "ident": {
+          "selfInstanceId": "required",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "submit_artifact",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "issue_create",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "issue_list",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "issue_get",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "issue_update",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "issue_transition",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "task_transition",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "question_confirm",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "memory_save",
+        "ident": {
+          "selfInstanceId": "required",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "memory_update",
+        "ident": {
+          "selfInstanceId": "required",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "memory_search",
+        "ident": {
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [
+          "selfInstanceId"
+        ],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "team_view",
+        "ident": {
+          "taskId": "required"
+        },
+        "absent": [
+          "selfInstanceId",
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "my_profile",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "team_add_member",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "plan_mode",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "plan_complete",
+        "ident": {
+          "selfInstanceId": "required",
+          "taskId": "required"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "channel_send",
+        "ident": {},
+        "absent": [
+          "selfInstanceId",
+          "teamId",
+          "taskId"
+        ],
+        "mechanism": "assertWorkerTask(NOT via resolveExecContext)",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "wecom_reply",
+        "ident": {
+          "selfInstanceId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [
+          "teamId"
+        ],
+        "mechanism": "assertWorkerTask",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "task_create",
+        "ident": {
+          "selfInstanceId": "required",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "skill_create",
+        "ident": {
+          "selfInstanceId": "required",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "git_repos_list",
+        "ident": {
+          "selfInstanceId": "required",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "hook_register",
+        "ident": {
+          "selfInstanceId": "required",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      },
+      {
+        "tool": "hook_cancel",
+        "ident": {
+          "selfInstanceId": "required",
+          "teamId": "optional",
+          "taskId": "optional"
+        },
+        "absent": [],
+        "mechanism": "resolveExecContext",
+        "allow": [],
+        "deny_listed": [
+          "vteam-architect",
+          "vteam-developer",
+          "vteam-librarian",
+          "vteam-plan",
+          "vteam-product",
+          "vteam-project_manager",
+          "vteam-tester"
+        ],
+        "explicit_deny_perm": []
+      }
+    ],
+    "tools_with_no_identity_at_all": [
+      "channel_send"
+    ],
+    "tools_without_selfInstanceId": [
+      "doclib",
+      "task_context",
+      "read_file",
+      "team_view",
+      "memory_search",
+      "channel_send"
+    ]
+  },
+  "evidence_C_resolution_chain_and_policy": {
+    "chain": [
+      "tools/call params.name (BARE) -> PlatformMcpController.toolsCall() resolves `this.tools.find(t => t.name === name)` (platform-mcp.controller.ts:172-212)",
+      "args.selfInstanceId/teamId/taskId -> PlatformMcpService.resolveExecContext(ctx, args) (platform-mcp.service.ts:5881)",
+      "  taskId path -> assertWorkerTask(ctx, taskId, selfInstanceId) (platform-mcp.service.ts:5807) -> ExecContext.callerId = session.teamMemberId ?? session.agentId",
+      "  teamId path -> assertWorkerTeam(ctx, teamId, selfInstanceId) (platform-mcp.service.ts:5914) -> ExecContext.callerId = session.teamMemberId",
+      "callerId (TeamMember.id, tmm_) -> TeamMember.agentId -> Agent.policyId / Agent.agentKey",
+      "Agent.policyId/agentKey -> ExecutionPolicyService.resolveByAgent({policyId, agentKey}) (execution-policy.service.ts:663)",
+      "  -> ResolvedExecutionPolicy.tools = guardForAgent(...) (execution-policy.service.ts:990)",
+      "       = canonicalizeTools(config.tools) [DB row wins] ?? ROLE_BOUNDARIES[<bounded name>].toolAllows [constant fallback] (execution-policy.service.ts:337-346, 400-438)",
+      "matrix key = `vteam_<action>` -> effect allow|ask|deny; value allow/ask => proceed, deny/absent => 403"
+    ],
+    "IMPORTANT_correction_to_the_brief": {
+      "brief_said": "member -> TeamMember.roleId -> AgentRole -> the role's `tools` allowlist",
+      "reality": "AgentRole carries NO capability fields (schema.prisma:124-151 doc-comment: '无任何能力字段：permission/tools/model/worker 属 ExecutionPolicy / Agent，不是角色属性'). The matrix is keyed off the AGENT (Agent.policyId / Agent.agentKey), NOT off TeamMember.roleId. TeamMember.roleId only supplies the prompt/label binding (rolePrompt / role name).",
+      "consequence_for_todo_3": "Resolve via Agent.policyId (+ agentKey fallback), i.e. exactly what buildAgentPolicies() and the worker injection consume. Do not add a roleId-keyed lookup."
+    },
+    "unresolvable_identity_policy": {
+      "rule": "FAIL-CLOSED: if the caller's role/tool matrix cannot be resolved to a definite allow/ask entry, refuse with 403 + a stable error code.",
+      "per_case": {
+        "no_x_worker_id_header": "already 403 MISSING_WORKER_ID today (assertWorkerTask:5816-5821) - keep, do not duplicate",
+        "worker_not_bound_to_task_team": "already 403 FORBIDDEN today (assertWorkerTask:5840-5844, assertWorkerTeam:5935-5943) - keep",
+        "selfInstanceId_missing_or_does_not_resolve_to_a_member": "403",
+        "tool_name_not_in_the_role_matrix": "403 (not listed == deny; matches filterToolsMatrix/isToolAllowed semantics)",
+        "resolveByAgent_returns_null": "403",
+        "resolution_throws": "403 (log; never fall through to allow)"
+      },
+      "justification": "The worker-side guard passes through on unresolvable identity (worker/src/role-guard/policy.ts:109-121, comments '绝不 fail-closed'; same in session-policy-map.ts). That leniency is safe THERE because it hooks the engine's own tool pipeline and the guarded tools (edit/bash/task) are ALSO guarded by the engine's native permission config (layer 1), so pass-through leaves real confinement intact. The server-side check has NO such backstop: today the only thing stopping a developer from calling e.g. task_transition is the emitted `vteam_*: deny` permission entry, which todo 4 stops emitting and todo 5 stops feeding. Passing through on the server too would leave those tools unguarded after the worker layer is deleted - exactly the failure this plan exists to prevent.",
+      "no_new_failure_mode_for_legitimate_callers": "Every in-band caller reaches a tool through a real session, so assertWorkerTask/assertWorkerTeam already resolve; all 7 live members carry a non-null role_id and template agents carry policy_id (verified in the live DB).",
+      "in_repo_precedent_for_the_strict_posture": "assertWorkerTeam returns 403 when the worker<->team binding is absent; assertWorkerTask 403s on a missing session. The new check is additive on the same posture."
+    },
+    "todays_vteam_matrix": {
+      "vteam-plan": {
+        "permission_native": {
+          "edit": {
+            "*": "deny",
+            "**.opencode/plans/**": "allow"
+          },
+          "read": {
+            "*": "allow"
+          },
+          "bash": "allow",
+          "task": "allow"
+        },
+        "permission_vteam_denies": [
+          "vteam_channel_send",
+          "vteam_git_repos_list",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_create",
+          "vteam_issue_get",
+          "vteam_issue_list",
+          "vteam_issue_transition",
+          "vteam_issue_update",
+          "vteam_memory_save",
+          "vteam_memory_update",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_submit_artifact",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member"
+        ],
+        "permission_vteam_non_deny": [],
+        "matrix_allows": [
+          "browser",
+          "vteam_chat_history",
+          "vteam_doclib",
+          "vteam_group_post",
+          "vteam_memory_search",
+          "vteam_my_profile",
+          "vteam_notify_agent",
+          "vteam_plan_complete",
+          "vteam_read_file",
+          "vteam_task_context",
+          "vteam_team_view",
+          "vteam_wecom_reply"
+        ],
+        "matrix_not_listed": [
+          "channel_send",
+          "chat_history",
+          "doclib",
+          "git_repos_list",
+          "group_post",
+          "hook_cancel",
+          "hook_register",
+          "issue_create",
+          "issue_get",
+          "issue_list",
+          "issue_transition",
+          "issue_update",
+          "memory_save",
+          "memory_search",
+          "memory_update",
+          "my_profile",
+          "notify_agent",
+          "plan_complete",
+          "plan_mode",
+          "question_confirm",
+          "read_file",
+          "skill_create",
+          "submit_artifact",
+          "task_context",
+          "task_create",
+          "task_transition",
+          "team_add_member",
+          "team_view",
+          "wecom_reply"
+        ]
+      },
+      "vteam-product": {
+        "permission_native": {
+          "edit": {
+            "*": "deny",
+            "**tasks/*/prototypes/**": "allow",
+            "**tasks/*/docs/**": "allow"
+          },
+          "read": {
+            "*": "allow"
+          },
+          "bash": "allow",
+          "task": "deny"
+        },
+        "permission_vteam_denies": [
+          "vteam_git_repos_list",
+          "vteam_plan_complete",
+          "vteam_skill_create"
+        ],
+        "permission_vteam_non_deny": [],
+        "matrix_allows": [
+          "browser",
+          "vteam_channel_send",
+          "vteam_chat_history",
+          "vteam_doclib",
+          "vteam_group_post",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_create",
+          "vteam_issue_get",
+          "vteam_issue_list",
+          "vteam_issue_transition",
+          "vteam_issue_update",
+          "vteam_memory_save",
+          "vteam_memory_search",
+          "vteam_memory_update",
+          "vteam_my_profile",
+          "vteam_notify_agent",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_read_file",
+          "vteam_submit_artifact",
+          "vteam_task_context",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member",
+          "vteam_team_view",
+          "vteam_wecom_reply"
+        ],
+        "matrix_not_listed": [
+          "channel_send",
+          "chat_history",
+          "doclib",
+          "git_repos_list",
+          "group_post",
+          "hook_cancel",
+          "hook_register",
+          "issue_create",
+          "issue_get",
+          "issue_list",
+          "issue_transition",
+          "issue_update",
+          "memory_save",
+          "memory_search",
+          "memory_update",
+          "my_profile",
+          "notify_agent",
+          "plan_complete",
+          "plan_mode",
+          "question_confirm",
+          "read_file",
+          "skill_create",
+          "submit_artifact",
+          "task_context",
+          "task_create",
+          "task_transition",
+          "team_add_member",
+          "team_view",
+          "wecom_reply"
+        ]
+      },
+      "vteam-architect": {
+        "permission_native": {
+          "edit": {
+            "*": "deny",
+            "**tasks/*/docs/**": "allow"
+          },
+          "read": {
+            "*": "allow"
+          },
+          "bash": "allow",
+          "task": "deny"
+        },
+        "permission_vteam_denies": [
+          "vteam_git_repos_list",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_transition",
+          "vteam_issue_update",
+          "vteam_plan_complete",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member"
+        ],
+        "permission_vteam_non_deny": [],
+        "matrix_allows": [
+          "browser",
+          "git_clone",
+          "git_diff",
+          "git_log",
+          "git_pull",
+          "git_status",
+          "vteam_channel_send",
+          "vteam_chat_history",
+          "vteam_doclib",
+          "vteam_group_post",
+          "vteam_issue_create",
+          "vteam_issue_get",
+          "vteam_issue_list",
+          "vteam_memory_save",
+          "vteam_memory_search",
+          "vteam_memory_update",
+          "vteam_my_profile",
+          "vteam_notify_agent",
+          "vteam_read_file",
+          "vteam_submit_artifact",
+          "vteam_task_context",
+          "vteam_team_view",
+          "vteam_wecom_reply"
+        ],
+        "matrix_not_listed": [
+          "channel_send",
+          "chat_history",
+          "doclib",
+          "git_repos_list",
+          "group_post",
+          "hook_cancel",
+          "hook_register",
+          "issue_create",
+          "issue_get",
+          "issue_list",
+          "issue_transition",
+          "issue_update",
+          "memory_save",
+          "memory_search",
+          "memory_update",
+          "my_profile",
+          "notify_agent",
+          "plan_complete",
+          "plan_mode",
+          "question_confirm",
+          "read_file",
+          "skill_create",
+          "submit_artifact",
+          "task_context",
+          "task_create",
+          "task_transition",
+          "team_add_member",
+          "team_view",
+          "wecom_reply"
+        ]
+      },
+      "vteam-developer": {
+        "permission_native": {
+          "edit": {
+            "*": "deny",
+            "**tasks/*/**": "allow"
+          },
+          "read": {
+            "*": "allow"
+          },
+          "bash": "allow",
+          "task": "deny"
+        },
+        "permission_vteam_denies": [
+          "vteam_git_repos_list",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_plan_complete",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member"
+        ],
+        "permission_vteam_non_deny": [],
+        "matrix_allows": [
+          "browser",
+          "git_clone",
+          "git_diff",
+          "git_fetch",
+          "git_log",
+          "git_pull",
+          "git_push",
+          "git_status",
+          "vteam_channel_send",
+          "vteam_chat_history",
+          "vteam_doclib",
+          "vteam_group_post",
+          "vteam_issue_create",
+          "vteam_issue_get",
+          "vteam_issue_list",
+          "vteam_issue_transition",
+          "vteam_issue_update",
+          "vteam_memory_save",
+          "vteam_memory_search",
+          "vteam_memory_update",
+          "vteam_my_profile",
+          "vteam_notify_agent",
+          "vteam_read_file",
+          "vteam_submit_artifact",
+          "vteam_task_context",
+          "vteam_team_view",
+          "vteam_wecom_reply"
+        ],
+        "matrix_not_listed": [
+          "channel_send",
+          "chat_history",
+          "doclib",
+          "git_repos_list",
+          "group_post",
+          "hook_cancel",
+          "hook_register",
+          "issue_create",
+          "issue_get",
+          "issue_list",
+          "issue_transition",
+          "issue_update",
+          "memory_save",
+          "memory_search",
+          "memory_update",
+          "my_profile",
+          "notify_agent",
+          "plan_complete",
+          "plan_mode",
+          "question_confirm",
+          "read_file",
+          "skill_create",
+          "submit_artifact",
+          "task_context",
+          "task_create",
+          "task_transition",
+          "team_add_member",
+          "team_view",
+          "wecom_reply"
+        ]
+      },
+      "vteam-tester": {
+        "permission_native": {
+          "edit": {
+            "*": "deny",
+            "**tasks/*/tests/**": "allow",
+            "**tasks/*/docs/**": "allow"
+          },
+          "read": {
+            "*": "allow"
+          },
+          "bash": "allow",
+          "task": "deny"
+        },
+        "permission_vteam_denies": [
+          "vteam_git_repos_list",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_update",
+          "vteam_plan_complete",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member"
+        ],
+        "permission_vteam_non_deny": [],
+        "matrix_allows": [
+          "browser",
+          "git_clone",
+          "git_diff",
+          "git_fetch",
+          "git_log",
+          "git_pull",
+          "git_status",
+          "vteam_channel_send",
+          "vteam_chat_history",
+          "vteam_doclib",
+          "vteam_group_post",
+          "vteam_issue_create",
+          "vteam_issue_get",
+          "vteam_issue_list",
+          "vteam_issue_transition",
+          "vteam_memory_save",
+          "vteam_memory_search",
+          "vteam_memory_update",
+          "vteam_my_profile",
+          "vteam_notify_agent",
+          "vteam_read_file",
+          "vteam_submit_artifact",
+          "vteam_task_context",
+          "vteam_team_view",
+          "vteam_wecom_reply"
+        ],
+        "matrix_not_listed": [
+          "channel_send",
+          "chat_history",
+          "doclib",
+          "git_repos_list",
+          "group_post",
+          "hook_cancel",
+          "hook_register",
+          "issue_create",
+          "issue_get",
+          "issue_list",
+          "issue_transition",
+          "issue_update",
+          "memory_save",
+          "memory_search",
+          "memory_update",
+          "my_profile",
+          "notify_agent",
+          "plan_complete",
+          "plan_mode",
+          "question_confirm",
+          "read_file",
+          "skill_create",
+          "submit_artifact",
+          "task_context",
+          "task_create",
+          "task_transition",
+          "team_add_member",
+          "team_view",
+          "wecom_reply"
+        ]
+      },
+      "vteam-project_manager": {
+        "permission_native": {
+          "edit": {
+            "*": "deny"
+          },
+          "read": {
+            "*": "allow"
+          },
+          "bash": "deny",
+          "task": "deny"
+        },
+        "permission_vteam_denies": [
+          "vteam_git_repos_list",
+          "vteam_submit_artifact"
+        ],
+        "permission_vteam_non_deny": [],
+        "matrix_allows": [
+          "vteam_channel_send",
+          "vteam_chat_history",
+          "vteam_doclib",
+          "vteam_group_post",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_create",
+          "vteam_issue_get",
+          "vteam_issue_list",
+          "vteam_issue_transition",
+          "vteam_issue_update",
+          "vteam_memory_save",
+          "vteam_memory_search",
+          "vteam_memory_update",
+          "vteam_my_profile",
+          "vteam_notify_agent",
+          "vteam_plan_complete",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_read_file",
+          "vteam_skill_create",
+          "vteam_task_context",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member",
+          "vteam_team_view",
+          "vteam_wecom_reply"
+        ],
+        "matrix_not_listed": [
+          "channel_send",
+          "chat_history",
+          "doclib",
+          "git_repos_list",
+          "group_post",
+          "hook_cancel",
+          "hook_register",
+          "issue_create",
+          "issue_get",
+          "issue_list",
+          "issue_transition",
+          "issue_update",
+          "memory_save",
+          "memory_search",
+          "memory_update",
+          "my_profile",
+          "notify_agent",
+          "plan_complete",
+          "plan_mode",
+          "question_confirm",
+          "read_file",
+          "skill_create",
+          "submit_artifact",
+          "task_context",
+          "task_create",
+          "task_transition",
+          "team_add_member",
+          "team_view",
+          "wecom_reply"
+        ]
+      },
+      "vteam-librarian": {
+        "permission_native": {
+          "edit": {
+            "*": "deny"
+          },
+          "read": {
+            "*": "allow"
+          },
+          "bash": "allow",
+          "task": "deny"
+        },
+        "permission_vteam_denies": [
+          "vteam_channel_send",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_create",
+          "vteam_issue_get",
+          "vteam_issue_list",
+          "vteam_issue_transition",
+          "vteam_issue_update",
+          "vteam_memory_save",
+          "vteam_memory_update",
+          "vteam_notify_agent",
+          "vteam_plan_complete",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_submit_artifact",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member",
+          "vteam_wecom_reply"
+        ],
+        "permission_vteam_non_deny": [],
+        "matrix_allows": [
+          "browser",
+          "git_clone",
+          "git_diff",
+          "git_fetch",
+          "git_log",
+          "git_pull",
+          "git_status",
+          "vteam_chat_history",
+          "vteam_doclib",
+          "vteam_git_repos_list",
+          "vteam_group_post",
+          "vteam_memory_search",
+          "vteam_my_profile",
+          "vteam_read_file",
+          "vteam_task_context",
+          "vteam_team_view"
+        ],
+        "matrix_not_listed": [
+          "channel_send",
+          "chat_history",
+          "doclib",
+          "git_repos_list",
+          "group_post",
+          "hook_cancel",
+          "hook_register",
+          "issue_create",
+          "issue_get",
+          "issue_list",
+          "issue_transition",
+          "issue_update",
+          "memory_save",
+          "memory_search",
+          "memory_update",
+          "my_profile",
+          "notify_agent",
+          "plan_complete",
+          "plan_mode",
+          "question_confirm",
+          "read_file",
+          "skill_create",
+          "submit_artifact",
+          "task_context",
+          "task_create",
+          "task_transition",
+          "team_add_member",
+          "team_view",
+          "wecom_reply"
+        ]
+      }
+    },
+    "scoping_note": "Non-`vteam_` keys in the matrices (browser, git_clone/pull/fetch/status/diff/log/push) are WORKER-INJECTED custom tools, not platform-mcp tools; they have no tools/call surface here and must be left untouched.",
+    "all_vteam_permission_entries_are_deny": true
+  },
+  "production_behaviour_unchanged": {
+    "code_changes": [
+      "server/src/platform-mcp/CONTRACT-tool-naming-and-identity.md (documentation only)",
+      "server/src/platform-mcp/platform-mcp.tool-naming.spec.ts (new test only)"
+    ],
+    "no_enforcement_added": true,
+    "note": "todo 3 owns the enforcement; todo 1 only pins names + identity."
+  },
+  "raw_artifact_sha256": {
+    "call-bare-team_view.headers": "3a8b66c0976521696392ca253edbdb66ef03b7415d908bfc2806a3f11419cbf9",
+    "call-bare-team_view.request.json": "738a79d485a713bb16cbb4a5eea00d9ad2607f7e3fdf96f12861233de6a25d25",
+    "call-bare-team_view.response.json": "c7445e4136114cf8eee577534df159801654ff7a0da080c96c3bcd9b1b6ae1c3",
+    "call-prefixed-vteam_team_view.request.json": "a95f106457ac6247e59b053e7cd761456418bf1691f2cd455bfffc07bd6372d4",
+    "call-prefixed-vteam_team_view.response.json": "bda48ca1e3da6f48d1ee452c94f3f993e56b090f947a3045cc3a41b896d8cf20",
+    "envelope-bare.headers": "53712c06e619ba7519154c89de582df341e6fe7365f37c637fc0bd772815cf19",
+    "envelope-bare.request.json": "80f1e71fd1f3878f3cbbf3ee867655f253b5099daf1a37061ce160cae159d017",
+    "envelope-bare.response.json": "54d6f83eecc7fe9c6b530bfba85c8352ce390c2402ee852d638c4ee20528dc82",
+    "envelope-prefixed.headers": "501df18c971eaf0b8b1c2f82ce2380c6c640a4f920312d6427c65f293bd3c0d7",
+    "envelope-prefixed.request.json": "4ecbed6dbf81c46c59b6607e5ef2c3b7d843393ef8ed78265f905e117478175a",
+    "envelope-prefixed.response.json": "cf3c35be6d1bbbd413ff79c832ce9d7aa9e10259d734564aa3418e355ff13cbd",
+    "live-agent-policies.json": "f698c24b39b24beffd9baa9b03af62a00fd9d98e0e76bf6d8ceeb4dda10404be",
+    "opencode-engine.log.txt": "6cbd00607915d215f37c50f077f034930000d68b4b336f649f81125c5b07ea92",
+    "part-vteam_group_post.json": "6d1494df84e6cb1b92ff19d67d812d5f4c6edbacb04199ada22d5f9874778c34",
+    "real-call-chat_history.json": "7fbc38b8e4f06c2e6a7a1d88e3dadb2d5c5f0f9ad76d7baa4562c34a9dc5423d",
+    "real-call-doclib.json": "e452c3c7072e87598fd27dc8dd91c77c148790cd52d741fc2779be95a530d4ba",
+    "real-call-task_context.json": "2834723153986cb4063c21b7d856847a76574a88ec1314c1f68218a3b5c8d8ac",
+    "replay-doclib-bare.request.json": "ee9295fdc902b27b9c8c184bfe683a97b6cf372b934b1f16416e29e51012dd7b",
+    "replay-doclib-bare.response.json": "c5c7321b3e14d97d21d73cb6e118fafcfa93f5f9a473919f239da793269409ca",
+    "server-platform-mcp-access.log.txt": "830d49738e6eecf137ecefc2b3a126f63df3f884e6f21e770d6b4c5d8d0eebb9",
+    "tool-identity-table.json": "30b73f7d0fda18971ac28d0b4d90feb3998372eb35387e9249fa37591a148497",
+    "toolslist.body": "0da7a1157b194ca375ede4a67eae2748b4192aad391e163aa9442052642ce389",
+    "toolslist.headers": "394eb19241910b3b7e0371d4a5bb2c4f915bfc1df0a066377de020012da803ac"
+  }
+}
