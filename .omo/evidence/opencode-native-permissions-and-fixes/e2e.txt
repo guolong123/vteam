@@ -1,26 +1,69 @@
-[e2e] date=2026-09-20T07:21:09Z HEAD=cd66ce85a799c3cbb91c9dcfee00c14685c8a5d1
+[e2e] date=2026-09-20T08:40:44Z HEAD=2f425e1493332113c6ed1a03147bab3a0319ff2f
 [e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
 [e2e] stack healthy (web + server)
 ----- playwright raw -----
 
 Running 4 tests using 1 worker
 
-  ✓  1 e2e/roles-members.spec.ts:128:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除 (2.6s)
-[cleanup] custom role ar_0000000011 deleted (re-GET 404)
-  ✓  2 e2e/roles-members.spec.ts:177:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除 (3.4s)
-[cleanup] team tm_0000000007 DELETE -> 200
-  ✓  3 e2e/roles-members.spec.ts:253:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 3. 成员按岗位添加：预填 Agent → 覆盖后持久化 (1.8s)
-[cleanup] throwaway role ar_0000000012 DELETE -> 200
-  ✓  4 e2e/roles-members.spec.ts:318:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空） (8.2s)
+  ✓  1 e2e/roles-members.spec.ts:132:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除 (1.8s)
+[cleanup] custom role ar_0000000017 deleted (re-GET 404)
+  ✓  2 e2e/roles-members.spec.ts:181:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除 (2.5s)
+[cleanup] team tm_0000000010 DELETE -> 200
+  ✓  3 e2e/roles-members.spec.ts:257:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 3. 成员按岗位添加：预填 Agent → 覆盖后持久化 (2.1s)
+[cleanup] throwaway role ar_0000000018 DELETE -> 200
+  ✓  4 e2e/roles-members.spec.ts:322:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空） (5.8s)
 
-  4 passed (17.6s)
+  4 passed (13.2s)
 ----- end playwright raw -----
 [e2e] PASS playwright 4/4 green; screenshot present (roles tab)
-[e2e] cleanup [cleanup] custom role ar_0000000011 deleted (re-GET 404)
-[e2e] cleanup [cleanup] team tm_0000000007 DELETE -> 200
-[e2e] cleanup [cleanup] throwaway role ar_0000000012 DELETE -> 200
+[e2e] cleanup [cleanup] custom role ar_0000000017 deleted (re-GET 404)
+[e2e] cleanup [cleanup] team tm_0000000010 DELETE -> 200
+[e2e] cleanup [cleanup] throwaway role ar_0000000018 DELETE -> 200
 [e2e] result passed	1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除
 [e2e] result passed	2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除
 [e2e] result passed	3. 成员按岗位添加：预填 Agent → 覆盖后持久化
 [e2e] result passed	4. 角色编辑器：外部 Agent 往返（外部→保存→reload；内部→保存→外部清空）
+[e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/e2e.txt
+
+===== todo 3 run 2026-09-20T08:40:58Z =====
+
+[e2e] date=2026-09-20T08:40:58Z HEAD=2f425e1493332113c6ed1a03147bab3a0319ff2f
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 7 tests using 1 worker
+
+  ✓  1 e2e/native-rule-editor.spec.ts:181:7 › Todo 3 · 原生 glob 规则表编辑器 › 1. 四行恒显 + 编辑器形态（模板 agent） (1.4s)
+[cleanup] a_0000000031 (agent 200, policy ep_0000000031 200, re-GET 404)
+  ✓  2 e2e/native-rule-editor.spec.ts:234:7 › Todo 3 · 原生 glob 规则表编辑器 › 2. absent task 仍渲染（三态 + 缺省 deny） (1.5s)
+[cleanup] a_0000000032 (agent 200, policy ep_0000000032 200, re-GET 404)
+  ✓  3 e2e/native-rule-editor.spec.ts:273:7 › Todo 3 · 原生 glob 规则表编辑器 › 3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask (1.5s)
+[cleanup] a_0000000033 (agent 200, policy ep_0000000033 200, re-GET 404)
+  ✓  4 e2e/native-rule-editor.spec.ts:339:7 › Todo 3 · 原生 glob 规则表编辑器 › 4. `*` 兜底警告：切 allow 即出现 (1.5s)
+[cleanup] a_0000000034 (agent 200, policy ep_0000000034 200, re-GET 404)
+  ✓  5 e2e/native-rule-editor.spec.ts:361:7 › Todo 3 · 原生 glob 规则表编辑器 › 5. 重复 glob 客户端拒绝（提交面不增长） (1.4s)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+[cleanup] a_0000000035 (agent 200, policy ep_0000000035 200, re-GET 404)
+  ✓  6 e2e/native-rule-editor.spec.ts:399:7 › Todo 3 · 原生 glob 规则表编辑器 › 7. 未知 effect 原样保留（不归一化） (2.7s)
+[cleanup] a_0000000036 (agent 200, policy ep_0000000036 200, re-GET 404)
+  ✓  7 e2e/native-rule-editor.spec.ts:437:7 › Todo 3 · 原生 glob 规则表编辑器 › 6. bash 三态：当前值选中且可切换（持久化） (2.9s)
+
+  7 passed (13.7s)
+----- end playwright raw -----
+[e2e] PASS playwright green; screenshot + json present
+[e2e] cleanup [cleanup] a_0000000031 (agent 200, policy ep_0000000031 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000032 (agent 200, policy ep_0000000032 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000033 (agent 200, policy ep_0000000033 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000034 (agent 200, policy ep_0000000034 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000035 (agent 200, policy ep_0000000035 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000036 (agent 200, policy ep_0000000036 200, re-GET 404)
+[e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
+[e2e] result passed	1. 四行恒显 + 编辑器形态（模板 agent）
+[e2e] result passed	2. absent task 仍渲染（三态 + 缺省 deny）
+[e2e] result passed	3. 往返不归一化：{ '*':'deny', x:'ask' } 编辑循环后 ask 仍 ask
+[e2e] result passed	4. `*` 兜底警告：切 allow 即出现
+[e2e] result passed	5. 重复 glob 客户端拒绝（提交面不增长）
+[e2e] result passed	7. 未知 effect 原样保留（不归一化）
+[e2e] result passed	6. bash 三态：当前值选中且可切换（持久化）
 [e2e] all assertions PASS; evidence: /Users/mac/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/e2e.txt

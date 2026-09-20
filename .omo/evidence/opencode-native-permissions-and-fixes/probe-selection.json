@@ -1,0 +1,1 @@
+{"member": "tmm_0000000001", "denyTool": "vteam_skill_create", "denyBare": "skill_create", "denyArgs": {"name": "e2e-probe", "description": "e2e", "content": "e2e"}, "cancelHolder": "tmm_0000000001"}

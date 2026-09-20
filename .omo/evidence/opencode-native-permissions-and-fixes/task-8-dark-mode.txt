@@ -27,4 +27,19 @@ SPEC_EXIT=0
 task-8-dark-mode.png: PNG image data, 1280 x 720 (142484 bytes at capture)
 
 --- post-commit git show --stat (appended after commit; commit NOT amended) ---
-(to be appended)
+commit 2f425e1493332113c6ed1a03147bab3a0319ff2f
+Author: guolong <guolong@xishuhq.com>
+Date:   Sun Sep 20 16:13:33 2026 +0800
+
+    fix(web): dark-mode colours for role selection and warnings
+
+ .../task-8-dark-mode.png                           | Bin 0 -> 142484 bytes
+ .../task-8-dark-mode.txt                           |  30 ++++
+ .../issues.md                                      |  10 ++
+ .../learnings.md                                   |  13 ++
+ web/app/(main)/agents/page.tsx                     |   4 +-
+ web/app/globals.css                                |  56 +++++++
+ web/e2e/dark-mode-role-warning.spec.ts             | 172 +++++++++++++++++++++
+ web/src/components/agents/AgentRolesTab.tsx        |  18 +--
+ web/src/components/agents/ExternalAgentsPanel.tsx  |   8 +-
+ 9 files changed, 296 insertions(+), 15 deletions(-)

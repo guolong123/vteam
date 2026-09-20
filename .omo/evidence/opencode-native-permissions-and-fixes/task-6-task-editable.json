@@ -26,7 +26,7 @@
   },
   {
     "test": "illegal_value_never_shown_click_writes_through",
-    "agent": "a_0000000021",
+    "agent": "a_0000000028",
     "injected_stored": "bogus",
     "rendered_effects": [
       "allow",

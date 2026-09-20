@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":13,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_TOOL_NOT_PERMITTED 工具 vteam_skill_create 未获授权：Agent（产品经理）的工具矩阵未授权（effect=未列入）（策略 ep_product），拒绝调用"}}

@@ -1,0 +1,15 @@
+opencode.agent[vteam-product].permission.bash = 'deny' (want 'deny'): OK
+opencode.agent[vteam-plan] permission vs baseline agent[vteam-plan]: IDENTICAL
+opencode.agent[vteam-plan] vteam_ leak: []
+opencode.agent[vteam-architect] permission vs baseline agent[vteam-architect]: IDENTICAL
+opencode.agent[vteam-architect] vteam_ leak: []
+opencode.agent[vteam-developer] permission vs baseline agent[vteam-developer]: IDENTICAL
+opencode.agent[vteam-developer] vteam_ leak: []
+opencode.agent[vteam-tester] permission vs baseline agent[vteam-tester]: IDENTICAL
+opencode.agent[vteam-tester] vteam_ leak: []
+opencode.agent[vteam-project_manager] permission vs baseline agent[vteam-project_manager]: IDENTICAL
+opencode.agent[vteam-project_manager] vteam_ leak: []
+opencode.agent[vteam-librarian] permission vs baseline agent[vteam-librarian]: IDENTICAL
+opencode.agent[vteam-librarian] vteam_ leak: []
+opencode.plugin vteam-role-guard entries: []
+opencode top-level role-guard keys: []
