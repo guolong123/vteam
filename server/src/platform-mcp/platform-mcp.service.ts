@@ -5929,6 +5929,39 @@ export class PlatformMcpService implements OnModuleInit {
       const exec = await this.resolveExecContext(ctx, args);
       return exec.callerId;
     }
+    return (await this.resolveSessionFallback(ctx, args)).callerId;
+  }
+
+  /**
+   * 双空上下文回填（task-11）：与 `resolveToolCallerId` 共用同一会话回退实现
+   * （`resolveSessionFallback`），单点 precedence，不做第二套绑定逻辑。
+   * 显式 taskId/teamId → `resolveExecContext` 全量校验（tm_ 误传 400、mismatch 403
+   * 原样）；双空 → 回填最近会话 ids 并随 callerId 一并返回，调用方（controller）
+   * 在 gate 与 handler 前合并入参。回填不到 → fail-closed 403
+   * `PLATFORM_MCP_TOOL_NOT_PERMITTED`。
+   * 已知启发式局限：同一 worker 并发多会话时最近会话回填可能误归属（与
+   * `channel_send` 既有取舍一致）；显式传参恒优先。
+   */
+  async resolveToolCallerWithContext(
+    ctx: PlatformMcpContext,
+    args: { taskId?: string; teamId?: string; selfInstanceId?: string },
+  ): Promise<{ callerId: string; taskId?: string; teamId?: string }> {
+    if (args.taskId || args.teamId) {
+      const exec = await this.resolveExecContext(ctx, args);
+      return { callerId: exec.callerId };
+    }
+    return this.resolveSessionFallback(ctx, args);
+  }
+
+  /**
+   * worker 最近会话回退（`resolveToolCallerId` 与 `resolveToolCallerWithContext`
+   * 共用）：precedence 为最近会话 taskId > teamId > teamMemberId（带既有
+   * anti-impersonation 校验）> fail-closed 403。
+   */
+  private async resolveSessionFallback(
+    ctx: PlatformMcpContext,
+    args: { selfInstanceId?: string },
+  ): Promise<{ callerId: string; taskId?: string; teamId?: string }> {
     const session = await this.prisma.session.findFirst({
       where: { workerId: ctx.workerId },
       orderBy: { createdAt: 'desc' },
@@ -5940,7 +5973,12 @@ export class PlatformMcpService implements OnModuleInit {
       },
     });
     if (session?.taskId) {
-      return this.assertWorkerTask(ctx, session.taskId, args.selfInstanceId);
+      const callerId = await this.assertWorkerTask(
+        ctx,
+        session.taskId,
+        args.selfInstanceId,
+      );
+      return { callerId, taskId: session.taskId };
     }
     if (session?.teamId) {
       const { memberId } = await this.assertWorkerTeam(
@@ -5948,7 +5986,7 @@ export class PlatformMcpService implements OnModuleInit {
         session.teamId,
         args.selfInstanceId,
       );
-      return memberId;
+      return { callerId: memberId, teamId: session.teamId };
     }
     if (session?.teamMemberId) {
       if (
@@ -5960,7 +5998,7 @@ export class PlatformMcpService implements OnModuleInit {
           message: `selfInstanceId 与该 worker 最近会话成员（${session.teamMemberId}）不一致，禁止冒充`,
         });
       }
-      return session.teamMemberId;
+      return { callerId: session.teamMemberId };
     }
     throw new ForbiddenException({
       code: PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,

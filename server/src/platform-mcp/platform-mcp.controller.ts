@@ -170,8 +170,10 @@ export class PlatformMcpController {
 
   /**
    * tools/call：校验工具名（未知 → -32602）→ zod.safeParse(arguments)（失败 →
-   * -32602 含 zod message）→ handler 调用（抛错 → -32603）。handler 结果经
-   * JSON.stringify 包成 text 内容（与 SDK 工具调用结果契约一致）。
+   * -32602 含 zod message）→ 双空上下文回填（task-11：taskId/teamId 双空时按
+   * worker 最近会话合并 ids，权限门与 handler 均见回填后参数）→ 权限门
+   * （-32003）→ handler 调用。handler 结果经 JSON.stringify 包成 text 内容
+   * （与 SDK 工具调用结果契约一致）。
    */
   private async toolsCall(
     id: unknown,
@@ -205,18 +207,22 @@ export class PlatformMcpController {
     }
 
     try {
+      const input = parsed.data as {
+        taskId?: string;
+        teamId?: string;
+        selfInstanceId?: string;
+      };
+      const resolved = await this.service.resolveToolCallerWithContext(
+        { workerId },
+        input,
+      );
+      if (!input.taskId && resolved.taskId) input.taskId = resolved.taskId;
+      if (!input.teamId && resolved.teamId) input.teamId = resolved.teamId;
       await this.toolPermission.assertToolAllowed(
-        await this.service.resolveToolCallerId(
-          { workerId },
-          parsed.data as {
-            taskId?: string;
-            teamId?: string;
-            selfInstanceId?: string;
-          },
-        ),
+        resolved.callerId,
         tool.name,
       );
-      const result = await tool.handler({ workerId }, parsed.data);
+      const result = await tool.handler({ workerId }, input);
       return this.result(id, {
         content: [{ type: 'text', text: JSON.stringify(result) }],
       });

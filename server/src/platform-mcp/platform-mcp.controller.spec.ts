@@ -21,6 +21,7 @@ describe('PlatformMcpController (HTTP)', () => {
   let toolPermission: { assertToolAllowed: jest.Mock };
   let service: {
     resolveToolCallerId: jest.Mock;
+    resolveToolCallerWithContext: jest.Mock;
     chatHistory: jest.Mock;
     doclib: jest.Mock;
     taskContext: jest.Mock;
@@ -57,6 +58,18 @@ describe('PlatformMcpController (HTTP)', () => {
   beforeEach(async () => {
     service = {
       resolveToolCallerId: jest.fn().mockResolvedValue('tmm_sender'),
+      resolveToolCallerWithContext: jest
+        .fn()
+        .mockImplementation(
+          async (
+            _ctx: unknown,
+            args: { taskId?: string; teamId?: string },
+          ) => ({
+            callerId: 'tmm_sender',
+            ...(args.taskId ? {} : {}),
+            ...(args.teamId ? {} : {}),
+          }),
+        ),
       chatHistory: jest.fn().mockResolvedValue([]),
       doclib: jest.fn().mockResolvedValue({ artifacts: [] }),
       taskContext: jest.fn().mockResolvedValue({}),
@@ -153,6 +166,13 @@ describe('PlatformMcpController (HTTP)', () => {
     service.resolveToolCallerId = jest
       .fn()
       .mockResolvedValue('tmm_sender') as never;
+    service.resolveToolCallerWithContext = jest
+      .fn()
+      .mockImplementation(
+        async (_ctx: unknown, args: { taskId?: string; teamId?: string }) => ({
+          callerId: 'tmm_sender',
+        }),
+      ) as never;
     toolPermission = {
       assertToolAllowed: jest.fn().mockResolvedValue(undefined),
     };
@@ -1104,7 +1124,12 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(service.chatHistory).not.toHaveBeenCalled();
     });
 
-    it('zod 校验失败（缺必填 taskId）→ 200 + error -32602（含 zod message）', async () => {
+    it('双空上下文不再 -32602：回填可解析 → handler 以回填 ids 执行', async () => {
+      service.resolveToolCallerWithContext.mockResolvedValue({
+        callerId: 'tmm_sender',
+        taskId: 't_backfilled',
+      });
+
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({
@@ -1115,10 +1140,61 @@ describe('PlatformMcpController (HTTP)', () => {
         })
         .expect(200);
 
-      expect(res.body.error.code).toBe(-32602);
-      expect(res.body.error.message).toEqual(expect.any(String));
-      expect(res.body.error.message).toContain('taskId');
+      expect(res.body.error).toBeUndefined();
+      expect(service.chatHistory).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        { taskId: 't_backfilled' },
+      );
+    });
+
+    it('双空上下文回填不到 → 403 PLATFORM_MCP_TOOL_NOT_PERMITTED（fail-closed，非 -32602）', async () => {
+      service.resolveToolCallerWithContext.mockRejectedValue(
+        new ForbiddenException({
+          code: 'PLATFORM_MCP_TOOL_NOT_PERMITTED',
+          message: '无法解析调用方身份',
+        }),
+      );
+
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 81,
+          method: 'tools/call',
+          params: { name: 'chat_history', arguments: {} },
+        })
+        .expect(200);
+
+      expect(res.body.error.code).toBe(-32003);
+      expect(res.body.error.message).toContain(
+        'PLATFORM_MCP_TOOL_NOT_PERMITTED',
+      );
       expect(service.chatHistory).not.toHaveBeenCalled();
+    });
+
+    it('显式 taskId 透传不变：回填不覆盖已传 ids（mutation：删合并行则回填测试失败）', async () => {
+      service.resolveToolCallerWithContext.mockResolvedValue({
+        callerId: 'tmm_sender',
+        taskId: 't_backfilled',
+      });
+
+      await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 82,
+          method: 'tools/call',
+          params: {
+            name: 'chat_history',
+            arguments: { taskId: 't_explicit' },
+          },
+        })
+        .expect(200);
+
+      expect(service.chatHistory).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        { taskId: 't_explicit' },
+      );
     });
 
     it('service 抛错（归属校验 403）→ 200 + error（含业务 message）', async () => {

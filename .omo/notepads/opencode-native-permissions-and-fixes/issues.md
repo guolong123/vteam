@@ -151,3 +151,10 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   (invalid action enum, proxy-blocked urllib), both resolved in the probe, not in product code.
   `git status -- server worker web scripts docs` shows only the pre-existing untracked
   prototype dirs → this commit is evidence + notepad only.
+
+## [2026-09-20] task-11 — dual-empty context backfill
+
+- Fix is outside the completed 14-todo plan; no `.omo/plans/*.md` change needed.
+- All gates verified independently before closeout (`tsc` 0, 13 suites / 428 tests, live
+  legs A/B/C); closeout job was notepad appends + exact-path commit only — no source,
+  spec, evidence, rebuild, push, or DB touched.

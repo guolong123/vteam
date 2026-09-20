@@ -330,3 +330,16 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `WORK_DIR` unset so `WORKER_WORK_DIR` defaults to the live container path (todo-9 lesson).
 - Evidence generator pattern: one `/tmp/t10gen.py` script reads every raw file and writes
   `task-10-live-proof.txt` — regenerate, never hand-edit (keeps every claim re-runnable).
+
+## [2026-09-20] task-11 — dual-empty context backfill
+
+- **Refines removed from the tool schema; backfill lives in `toolsCall`.**
+  `resolveToolCallerWithContext` + `resolveSessionFallback` give single-precedence backfill:
+  explicit taskId/teamId wins, else infer from the worker session, unresolvable → fail-closed
+  403 `PLATFORM_MCP_TOOL_NOT_PERMITTED` (never `-32602`).
+- **controller.spec rewritten around the backfill:** dual-empty proceeds via session fallback,
+  no-session → 403, explicit-teamId-wins mutation test (explicit value survives backfill).
+- **Live legs:** A dual-empty succeeds via session fallback; B no-session → 403
+  `PLATFORM_MCP_TOOL_NOT_PERMITTED`; C explicit teamId unchanged. Gates: `tsc` 0,
+  `src/platform-mcp` 13 suites / 428 tests green. Evidence:
+  `task-11-context-backfill.txt` + `task-11-raw/` (legs A/B/C).

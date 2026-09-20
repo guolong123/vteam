@@ -21,19 +21,23 @@ export interface PlatformMcpToolContext {
 
 /**
  * team-free-chat（todo-4）：任务/团队双上下文字段语义（5 个 team-free 工具共用）。
- * taskId 与 teamId 至少传一个（refine 在 zod 层保证，双空 → tools/call -32602）；
- * taskId 优先，无 taskId 时用 teamId 定位团队会话；两个维度之间无回退（mismatch → 403）。
+ * taskId 与 teamId 均可省略：双空时服务端按 `x-worker-id` 取该 worker 最近一次会话
+ * 回填（与 `channel_send` 同源；taskId 优先，无 taskId 时用 teamId 定位团队会话；
+ * 显式传参时两个维度之间无回退，mismatch → 403）；回填不到可解析身份 → 403
+ * `PLATFORM_MCP_TOOL_NOT_PERMITTED`（fail-closed）。
+ * 已知启发式局限：同一 worker 并发多会话时最近会话回填可能误归属（与 `channel_send`
+ * 既有取舍一致）；显式传参恒优先。
  * delivery-family 工具（doclib、task_context、submit_artifact、issue 系列、
  * task_transition、question_confirm、team_view、my_profile 等）保持 taskId 必填，不用此语义.
  */
 const OPTIONAL_TASK_ID_DESC =
-  '任务 ID（与 teamId 至少传一个；taskId 优先，无 taskId 时用 teamId 定位团队会话）';
+  '任务 ID（可选；缺省时服务端按 worker 最近会话回填，taskId 优先，无 taskId 时用 teamId 定位团队会话；回填不到 → 403）';
 const TEAM_ID_DESC =
-  '团队 ID（无 taskId 时用 teamId 定位团队会话；与 taskId 同传时 taskId 优先）';
+  '团队 ID（可选；缺省时服务端按 worker 最近会话回填；与 taskId 同传时 taskId 优先；回填不到 → 403）';
 
-/** 双上下文至少传一个（taskId 优先）。refine message 须含 'taskId'（controller.spec 断言）。 */
+/** 双上下文回填提示文案（历史 refine 已删除，双空不再 -32602，改为服务端会话回填）。 */
 const REQUIRE_TASK_OR_TEAM_MSG =
-  'taskId 与 teamId 至少传一个（taskId 优先，无 taskId 时用 teamId 定位团队会话）';
+  'taskId 与 teamId 均可省略（缺省时服务端按 worker 最近会话回填；回填不到 → 403）';
 
 /**
  * 工具注册项。inputSchema 统一按 ZodTypeAny 消费（tools/list 运行时按
@@ -82,10 +86,6 @@ const chatHistorySchema = z
       .max(100)
       .optional()
       .describe('返回条数上限（默认 20，最大 100）'),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   });
 
 type ChatHistoryArgs = z.infer<typeof chatHistorySchema>;
@@ -124,10 +124,6 @@ const groupPostSchema = z
       .string()
       .optional()
       .describe('产出物文件引用（与产出物声明 fileRef 一致时挂附件）'),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   });
 
 type GroupPostArgs = z.infer<typeof groupPostSchema>;
@@ -207,10 +203,6 @@ const notifyAgentSchema = z
       .describe(
         '回执超时分钟数（缺省 10，对齐被 @ 后 10 分钟回执规则；范围 1-1440，非法输入服务端回落缺省；仅 execution 派发记账并排平台自动催办 timer，review/nudge/wake 永不记账）',
       ),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   });
 
 type NotifyAgentArgs = z.infer<typeof notifyAgentSchema>;
@@ -386,10 +378,6 @@ export const memorySaveSchema = z
       .max(20)
       .optional()
       .describe('记忆标签（≤20 个，memory_search 按标签过滤命中）'),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   });
 
 type MemorySaveArgs = z.infer<typeof memorySaveSchema>;
@@ -419,10 +407,6 @@ export const memoryUpdateSchema = z
       .max(20)
       .optional()
       .describe('记忆标签（≤20 个，全量替换）'),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   })
   .refine(
     (d) =>
@@ -474,10 +458,6 @@ const memorySearchSchema = z
       .max(50)
       .optional()
       .describe('返回条数上限（默认 20，最多 50，按创建时间倒序）'),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   });
 
 type MemorySearchArgs = z.infer<typeof memorySearchSchema>;
@@ -698,10 +678,6 @@ const taskCreateSchema = z
       .string()
       .optional()
       .describe('优先级（high/medium/low，缺省 medium）'),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   });
 
 type TaskCreateArgs = z.infer<typeof taskCreateSchema>;
@@ -725,10 +701,6 @@ const skillCreateSchema = z
     name: z.string().min(1).describe('技能名（小写字母数字，中划线分段）'),
     description: z.string().optional().describe('技能描述（可选）'),
     content: z.string().min(1).describe('SKILL.md 全文（含 YAML frontmatter）'),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   });
 
 type SkillCreateArgs = z.infer<typeof skillCreateSchema>;
@@ -745,10 +717,6 @@ const gitReposListSchema = z
     selfInstanceId: z
       .string()
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   });
 
 type GitReposListArgs = z.infer<typeof gitReposListSchema>;
@@ -806,10 +774,6 @@ const hookRegisterSchema = z
       .optional()
       .describe('幂等注册键（缺省服务端组装；重复注册幂等直返既有行）'),
   })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
-  })
   .refine(
     (d) =>
       d.kind === 'all_idle' ||
@@ -849,10 +813,6 @@ const hookCancelSchema = z
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
     hookId: z.string().optional().describe('hook id（hks_ 前缀）'),
     dedupKey: z.string().optional().describe('注册幂等键（与 hookId 二选一）'),
-  })
-  .refine((d) => !!d.taskId || !!d.teamId, {
-    message: REQUIRE_TASK_OR_TEAM_MSG,
-    path: ['taskId'],
   })
   .refine((d) => !!d.hookId || !!d.dedupKey, {
     message: 'hookId 与 dedupKey 至少传一个',

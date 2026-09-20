@@ -464,4 +464,60 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       expect(loggerWarnSpy).toHaveBeenCalled();
     });
   });
+
+  describe('task-11 双空上下文回填（resolveToolCallerWithContext）', () => {
+    it('(a) 回填绑定最近会话的 taskId', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId: 't_latest',
+        teamId: 'tm_1',
+        teamMemberId: 'tmm_sender',
+        agentId: 'a_sender',
+      });
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_1',
+        agentId: 'a_sender',
+        teamMemberId: 'tmm_sender',
+      });
+
+      await expect(
+        service.resolveToolCallerWithContext(ctx, {}),
+      ).resolves.toMatchObject({
+        callerId: 'tmm_sender',
+        taskId: 't_latest',
+      });
+    });
+
+    it('(a2) 任务维缺失时回填绑定最近会话的 teamId', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId: null,
+        teamId: 'tm_latest',
+        teamMemberId: 'tmm_sender',
+        agentId: 'a_sender',
+      });
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_team',
+        teamMemberId: 'tmm_sender',
+      });
+
+      await expect(
+        service.resolveToolCallerWithContext(ctx, {}),
+      ).resolves.toMatchObject({
+        callerId: 'tmm_sender',
+        teamId: 'tm_latest',
+      });
+    });
+
+    it('(b) 无会话 → 403 PLATFORM_MCP_TOOL_NOT_PERMITTED', async () => {
+      prisma.session.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.resolveToolCallerWithContext(ctx, {}),
+      ).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: 'PLATFORM_MCP_TOOL_NOT_PERMITTED',
+        }),
+      });
+    });
+  });
 });

@@ -408,6 +408,7 @@ describe('platform tool permission gate (todo 3)', () => {
     let app: INestApplication;
     let service: {
       resolveToolCallerId: jest.Mock;
+      resolveToolCallerWithContext: jest.Mock;
       groupPost: jest.Mock;
       doclib: jest.Mock;
     };
@@ -434,6 +435,16 @@ describe('platform tool permission gate (todo 3)', () => {
     beforeEach(async () => {
       service = {
         resolveToolCallerId: jest.fn().mockResolvedValue('tmm_dev'),
+        resolveToolCallerWithContext: jest.fn().mockImplementation(
+          async (
+            _ctx: unknown,
+            args: { taskId?: string; teamId?: string },
+          ) => ({
+            callerId: 'tmm_dev',
+            ...(args.taskId ? { taskId: args.taskId } : {}),
+            ...(args.teamId ? { teamId: args.teamId } : {}),
+          }),
+        ),
         groupPost: jest
           .fn()
           .mockResolvedValue({ messageId: 'm_1', attachment: null }),
@@ -543,8 +554,8 @@ describe('platform tool permission gate (todo 3)', () => {
       expect(service.groupPost).not.toHaveBeenCalled();
     });
 
-    it('身份不可解析（resolveToolCallerId 抛 403）→ error 带稳定码，handler 不执行', async () => {
-      service.resolveToolCallerId.mockRejectedValue(
+    it('身份不可解析（resolveToolCallerWithContext 抛 403）→ error 带稳定码，handler 不执行', async () => {
+      service.resolveToolCallerWithContext.mockRejectedValue(
         new ForbiddenException({
           code: PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
           message: '无法解析调用方身份',

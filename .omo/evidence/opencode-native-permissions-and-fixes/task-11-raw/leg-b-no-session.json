@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":12,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_TOOL_NOT_PERMITTED 无法解析调用方身份（该 worker 无任务/团队会话或会话未绑定成员），按 fail-closed 策略拒绝调用"}}

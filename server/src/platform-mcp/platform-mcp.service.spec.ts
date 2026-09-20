@@ -6020,7 +6020,7 @@ describe('PlatformMcpService', () => {
       ).toBe(false);
     });
 
-    it('5 工具接受 teamId-only，拒绝双空', () => {
+    it('5 工具接受 teamId-only，双空亦通过 parse（回填由服务端会话完成）', () => {
       const tools = buildPlatformMcpTools(service);
       for (const name of [
         'chat_history',
@@ -6050,7 +6050,7 @@ describe('PlatformMcpService', () => {
         expect(schema.safeParse({ ...base, teamId: 'tm_1' }).success).toBe(
           true,
         );
-        expect(schema.safeParse(base).success).toBe(false);
+        expect(schema.safeParse(base).success).toBe(true);
       }
     });
 

@@ -1,0 +1,15 @@
+task-11 dual-empty context backfill — live proof (:13000)
+server image rebuilt from HEAD+task-11 (docker compose up -d --no-deps --build server)
+
+LEG A (dual-empty SUCCEEDS via session fallback):
+  POST /api/v1/platform-mcp tools/call memory_search arguments={} x-worker-id=w_compose_worker
+  worker latest session: team-only (team_id=tm_0000000001, team_member=tmm_*) -> backfilled teamId
+  response: 200 result.content[0].text = memory list (me_team_collab_charter) — full body in leg-a-dual-empty.json
+
+LEG B (dual-empty, NO session -> 403 fail-closed):
+  POST /api/v1/platform-mcp tools/call memory_search arguments={} x-worker-id=w_t11_nosess (throwaway worker, deleted after)
+  response: 200 + error.code=-32003 message~"[403] PLATFORM_MCP_TOOL_NOT_PERMITTED ..." — full body in leg-b-no-session.json
+
+SANITY (explicit teamId unchanged): leg-c-explicit-team.json starts with result (not error)
+
+MUTATION (c): removed taskId-merge line in controller -> controller.spec "回填可解析" FAILS (1 failed/29 skipped); restored byte-identical.

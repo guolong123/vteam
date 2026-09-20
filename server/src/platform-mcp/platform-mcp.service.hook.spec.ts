@@ -430,7 +430,7 @@ describe('PlatformMcpService hook_register/hook_cancel', () => {
       expect(parsed.success).toBe(false);
     });
 
-    it('双空上下文 / hookId+dedupKey 双空 schema 层直接拒绝', () => {
+    it('双空上下文 parse 通过（服务端会话回填）/ hookId+dedupKey 双空 schema 层直接拒绝', () => {
       expect(
         hookRegister.inputSchema.safeParse({
           selfInstanceId: owner,
@@ -438,7 +438,7 @@ describe('PlatformMcpService hook_register/hook_cancel', () => {
           wakeText: 'x',
           delayMs: 1000,
         }).success,
-      ).toBe(false);
+      ).toBe(true);
       expect(
         hookCancel.inputSchema.safeParse({
           taskId,
