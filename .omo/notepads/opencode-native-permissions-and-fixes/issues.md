@@ -166,3 +166,12 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - `parseTimeoutMs` unit test initially asserted a wrong expectation for float-like
   input in my own draft; settled contract: only `^\d+$` strings parse, `'12.5'` →
   fallback (decimal-int-only, per brief).
+
+## [2026-09-20] first-token wake-retry — 无产品缺陷遗留
+
+- 本次改动为既有首字 watchdog 的行为增强（静默 → 唤醒重试 ×3 → 耗尽失败），
+  `tsc` 0 + `src/chat` 13 套件 / 497 测试全绿；未发现新的产品缺陷。
+- 记录一条设计副作用（非缺陷）：durable「重启路径」唤醒后重武装、DB `lastActivityAt`
+  在唤醒时刻被刷新——若此窗口内发生进程重启，重启判定会因
+  `lastActivityAt > 原 dispatchedAt` 而跳过收割。该窗口由该会话后续的活跃事件或
+  空闲判死扫描兜底（30min），与原实现「重启后不重启收割即静默丢弃」相比不再更差。

@@ -746,11 +746,20 @@ export const DISPATCH_TIMEOUT_MS = 120_000;
 
 /**
  * 首字超时（方案 A watchdog 语义）：dispatch 调 worker 执行端点后，若 FIRST_TOKEN_TIMEOUT_MS
- * 内无任何事件回流（无 session.updated(running)/delta/task.completed/agent.status）→ 判
- * 「模型完全没响应」：emitError + agent.error 广播。只判「是否开始产出」，完成无时间上限
- * （长期任务由 worker 自行推进，完成经 task.completed 回流）。env FIRST_TOKEN_TIMEOUT_MS 可配。
+ * 内无任何事件回流（无 session.updated(running)/delta/task.completed/agent.status）→ 判一次
+ * 「静默」：经既有 tryAutoRestart 唤醒重试（最多 MAX_FIRST_TOKEN_WAKE_ATTEMPTS 次，每次重
+ * 武装一个全新 FIRST_TOKEN_TIMEOUT_MS 窗口）；唤醒耗尽仍无响应才 emitError + agent.error
+ * 广播「模型完全没响应」。只判「是否开始产出」，完成无时间上限（长期任务由 worker 自行推进，
+ * 完成经 task.completed 回流）。env FIRST_TOKEN_TIMEOUT_MS 可配。
  */
 export const DEFAULT_FIRST_TOKEN_TIMEOUT_MS = 300_000;
+
+/**
+ * 首字静默唤醒重试上限：每次 deadline 到期且持续静默 → wake 一次（同一【自动恢复】文案）
+ * 并重武装全新窗口；第 MAX 次唤醒后仍静默 → 走失败路径（pending 删除 + failedSessions
+ * 标记 + 注销 + emitError + agent.error）。
+ */
+export const MAX_FIRST_TOKEN_WAKE_ATTEMPTS = 3;
 
 /** 空闲判死：session 进入 running 后无任何输出活动（delta/agent.status/task.completed）超时 →
  *  判死（session 标 failed + agent.error）。env AGENT_IDLE_TIMEOUT_MS 可配。 */
@@ -958,6 +967,11 @@ interface PendingDispatch {
   /** 执行 worker id（首字超时注销活跃执行用）。 */
   workerId: string;
   timer: ReturnType<typeof setTimeout>;
+  /**
+   * 本轮注册时刻（ms epoch）：与 durable payload.dispatchedAt 同值，作为本轮世代号。
+   * durable handler 凭它识别「被重武装取代的旧行」——旧行迟到 firing 时不得收割新一轮。
+   */
+  dispatchedAt: number;
   /**
    * 首字 deadline 的 durable trigger 行 dedupKey（trigger-unification todo-9：
    * per-dispatch 唯一，首字到达/重注册时经 TriggerService.cancel 取消；
@@ -1240,7 +1254,7 @@ export class WorkerDispatcher
   /** 群聊历史注入上限（对齐 doclib 32KB 语义；公开字段便于测试覆盖）。 */
   public chatHistoryMaxBytes: number;
 
-  /** 待回流 watchdog：`<scope>:<agentId>` → 定时器（首字超时：默认 300s 无首个事件 emitError）。 */
+  /** 待回流 watchdog：`<scope>:<agentId>` → 定时器（首字超时：默认 300s 无首个事件 → 唤醒重试）。 */
   private readonly pending = new Map<string, PendingDispatch>();
 
   /** sessionId → watchdog key 反查（ingress 活动事件回调按 sessionId 清除首字 watchdog）。 */
@@ -1257,6 +1271,13 @@ export class WorkerDispatcher
   private readonly completedSessions = new Set<string>();
   /** F2 MINOR：watchdog/轮询已超时的会话（迟到回流跳过落库，防用户同时见错误+消息）。 */
   private readonly failedSessions = new Set<string>();
+
+  /**
+   * 首字静默唤醒计数（sessionId → 已发 wake 次数）：deadline 到期且持续静默 +1 并重武装；
+   * 任意会话活动（首字到达/完成）清 0；达到 MAX_FIRST_TOKEN_WAKE_ATTEMPTS 后仍静默 →
+   * 走失败路径。teardown 清空。
+   */
+  private readonly firstTokenWakeAttempts = new Map<string, number>();
 
   /**
    * 执行中注册表（workerId:scope → 活跃执行集合）：dispatch 调 worker execute 前登记，
@@ -1450,6 +1471,7 @@ export class WorkerDispatcher
     }
     this.pending.clear();
     this.pendingBySession.clear();
+    this.firstTokenWakeAttempts.clear();
     if (this.idleScanTimer) {
       clearInterval(this.idleScanTimer);
       this.idleScanTimer = null;
@@ -2317,6 +2339,8 @@ export class WorkerDispatcher
         this.logger.warn(`session ${sessionId} 已超时失败，迟到回流跳过落库`);
         return;
       }
+      // 本轮完成：唤醒重试计数复零（下一轮 dispatch 重新开始计算）。
+      this.firstTokenWakeAttempts.delete(sessionId);
     }
     // 团队唯一路径：落库 + 广播 + emitFinal（无 task/team 双实现）
     const settled = await this.handleTeamTaskCompleted(payload);
@@ -3828,11 +3852,13 @@ export class WorkerDispatcher
 
   /**
    * 首字超时 watchdog（方案 A 语义）：dispatch 调 worker 执行端点后，FIRST_TOKEN_TIMEOUT_MS
-   * 内无任何事件回流（无 session.updated/delta/task.completed/agent.status）→ emitError +
-   * 广播 agent.error（模型完全没响应）。收到首个事件（ingress activity 回调）即清除——只判
-   * 「是否开始产出」，完成无时间上限（长期任务由 worker 推进，完成经 task.completed 回流）。
-   * 同时记录 lastActivityAt 作为空闲判死追踪起点（活动事件刷新，超 AGENT_IDLE_TIMEOUT_MS
-   * 判死）。OBS-009：poll 已快速失败（failedSessions 已标记）时跳过注册。
+   * 内无任何事件回流（无 session.updated/delta/task.completed/agent.status）→ 视为一次静默：
+   * 经既有 tryAutoRestart（kind='wake'，【自动恢复】文案）唤醒并**重武装全新窗口**，最多
+   * MAX_FIRST_TOKEN_WAKE_ATTEMPTS 次；耗尽仍静默才走失败路径（emitError + 广播 agent.error）。
+   * 收到首个事件（ingress activity 回调）即清除并复零——只判「是否开始产出」，完成无时间上限
+   * （长期任务由 worker 推进，完成经 task.completed 回流）。同时记录 lastActivityAt 作为空闲
+   * 判死追踪起点（活动事件刷新，超 AGENT_IDLE_TIMEOUT_MS 判死）。OBS-009：poll 已快速失败
+   * （failedSessions 已标记）时跳过注册。
    */
   private startPendingWatchdog(
     scope: string,
@@ -3847,12 +3873,46 @@ export class WorkerDispatcher
     if (this.failedSessions.has(sessionId)) {
       return;
     }
+    const dispatchedAt = this.armFirstTokenWatchdog({
+      scope,
+      agentId,
+      sessionId,
+      workerId,
+      teamMemberId,
+    });
+    // 空闲判死追踪起点（活动事件经 handleSessionActivity 刷新）——内存 map +
+    // DB Session.lastActivityAt 双写（todo-7：重启后内存丢失，扫描凭 DB 列判死）。
+    this.lastActivityAt.set(sessionId, dispatchedAt);
+    void this.persistSessionActivity(sessionId, new Date(dispatchedAt));
+    this.startIdleScan();
+  }
+
+  /**
+   * 武装首字 deadline（注册与唤醒重试共用）：同键旧轮清理（timer + durable 行 best-effort
+   * 取消）→ 新 setTimeout（捕获本轮 sessionId，防旧 timer 收割新一轮）→ 注册 pending 映射
+   * → 落 durable 行（due = 本轮 dispatchedAt + firstTokenTimeoutMs）。返回本轮注册时刻，
+   * 调用方据此写 lastActivityAt——必须同值：durable 重启判定以
+   * `lastActivityAt > dispatchedAt` 表示首字已到，注册写出的时间戳与之相等才不算「已到」。
+   */
+  private armFirstTokenWatchdog(args: {
+    scope: string;
+    agentId: string;
+    sessionId: string;
+    workerId: string;
+    teamMemberId: string;
+  }): number {
+    const { scope, agentId, sessionId, workerId, teamMemberId } = args;
     const key = `${scope}:${agentId}`;
     const existing = this.pending.get(key);
     if (existing) {
       clearTimeout(existing.timer);
       this.pendingBySession.delete(existing.sessionId);
-      // 同键重注册：旧 durable deadline 一并取消（best-effort），防旧行误收割新一轮。
+      // 旧轮被取代：其唤醒计数一并作废（防静默旧会话计数悬挂）。
+      if (existing.sessionId !== sessionId) {
+        this.firstTokenWakeAttempts.delete(existing.sessionId);
+      }
+      // 同键重注册：旧 durable deadline 一并取消（best-effort），防旧行误收割新一轮
+      // （唤醒重试时本行即被取代的旧行；正 firing 的行 cancel 幂等兜底）。
       void this.cancelFirstTokenTrigger(existing.triggerDedupKey);
     }
     const dispatchedAt = Date.now();
@@ -3860,6 +3920,10 @@ export class WorkerDispatcher
       const current = this.pending.get(key);
       // 同键已被更新一轮（session 不同）→ 本 timer 是旧轮残留，不收割。
       if (!current || current.sessionId !== sessionId) {
+        return;
+      }
+      // 同会话重武装（唤醒重试）：本 timer 已被新 timer 取代 → 旧轮残留，不收割。
+      if (current.timer !== timer) {
         return;
       }
       this.reapFirstTokenDeadline({
@@ -3879,23 +3943,22 @@ export class WorkerDispatcher
       sessionId,
       workerId,
       timer,
+      dispatchedAt,
     };
     this.pending.set(key, entry);
     this.pendingBySession.set(sessionId, key);
-    // 空闲判死追踪起点（活动事件经 handleSessionActivity 刷新）——内存 map +
-    // DB Session.lastActivityAt 双写（todo-7：重启后内存丢失，扫描凭 DB 列判死）。
-    this.lastActivityAt.set(sessionId, dispatchedAt);
-    void this.persistSessionActivity(sessionId, new Date(dispatchedAt));
     // todo-9：同 deadline 经 TriggerService 落 durable 行（setTimeout 重启即丢，
     // 此行重启后仍到期触发 handleFirstTokenTrigger）。
     void this.scheduleFirstTokenTrigger(entry, key, dispatchedAt);
-    this.startIdleScan();
+    return dispatchedAt;
   }
 
   /**
    * 首字 deadline 收割（内存 timer 与 durable trigger 共用同一行为）：
-   * pending 删除 + failedSessions 标记 + 活跃执行注销 + 追踪退出 +
-   * emitError + 广播 agent.error（first_token_timeout）。
+   * 静默但唤醒次数未达上限 → 计数 +1、重武装全新窗口（内存 timer + durable 行）并经既有
+   * tryAutoRestart 唤醒（fire-and-forget，失败只记日志）；达到上限仍静默 → 失败路径：
+   * pending 删除 + failedSessions 标记 + 活跃执行注销 + 追踪退出 + emitError + 广播
+   * agent.error（first_token_timeout，文案声明唤醒次数耗尽）。
    */
   private reapFirstTokenDeadline(args: {
     key?: string;
@@ -3906,15 +3969,38 @@ export class WorkerDispatcher
     teamMemberId: string;
   }): void {
     const { key, scope, agentId, sessionId, workerId, teamMemberId } = args;
+    const attempts = this.firstTokenWakeAttempts.get(sessionId) ?? 0;
+    if (attempts < MAX_FIRST_TOKEN_WAKE_ATTEMPTS) {
+      this.firstTokenWakeAttempts.set(sessionId, attempts + 1);
+      const dispatchedAt = this.armFirstTokenWatchdog({
+        scope,
+        agentId,
+        sessionId,
+        workerId,
+        teamMemberId,
+      });
+      this.lastActivityAt.set(sessionId, dispatchedAt);
+      void this.persistSessionActivity(sessionId, new Date(dispatchedAt));
+      this.logger.warn(
+        `agent ${agentId} 首字静默（第 ${attempts + 1}/${MAX_FIRST_TOKEN_WAKE_ATTEMPTS} 次自动唤醒） session=${sessionId}`,
+      );
+      void this.attemptFirstTokenWake(sessionId).catch((err: unknown) =>
+        this.logger.error(
+          `首字静默唤醒失败 session=${sessionId}: ${this.describeError(err)}`,
+        ),
+      );
+      return;
+    }
     if (key !== undefined) {
       this.pending.delete(key);
     }
     this.pendingBySession.delete(sessionId);
+    this.firstTokenWakeAttempts.delete(sessionId);
     // F2 MINOR：超时标记失败会话——迟到的回流（ingress/轮询）跳过落库仅记日志
     this.failedSessions.add(sessionId);
     this.unregisterExecution(workerId, scope, teamMemberId);
     this.lastActivityAt.delete(sessionId);
-    const error = `agent 无响应（${this.firstTokenTimeoutMs / 1000}s 无事件回流），请稍后重试或检查 worker 状态`;
+    const error = `agent 无响应（${this.firstTokenTimeoutMs / 1000}s 无事件回流），已尝试 ${MAX_FIRST_TOKEN_WAKE_ATTEMPTS} 次自动唤醒仍未恢复，请稍后重试或检查 worker 状态`;
     this.logger.error(`agent ${agentId} ${error}`);
     this.emitError({ taskId: scope, agentId, error });
     void this.broadcastAgentError({
@@ -3925,6 +4011,28 @@ export class WorkerDispatcher
       errorType: 'first_token_timeout',
       message: error,
     });
+  }
+
+  /**
+   * 首字静默唤醒（fire-and-forget）：按平台会话主键解析归属任务/团队/成员（与空闲判死
+   * markSessionIdleDead 同一口径）后经既有 tryAutoRestart 走 dispatchAgentMention
+   * kind='wake'（【自动恢复】文案复用，不新增唤醒机制）。teamId/teamMemberId 不可解析 →
+   * 跳过唤醒（计数与重武装照常）；异常由调用方 catch 记日志，永不外抛。
+   */
+  private async attemptFirstTokenWake(sessionId: string): Promise<void> {
+    const row = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { taskId: true, teamId: true, teamMemberId: true },
+    });
+    const teamId = row?.teamId ?? null;
+    const teamMemberId = row?.teamMemberId ?? null;
+    if (!teamId || !teamMemberId) {
+      this.logger.warn(
+        `首字静默唤醒跳过：会话 ${sessionId} 无团队归属（重试计数与重武装照常）`,
+      );
+      return;
+    }
+    await this.tryAutoRestart(teamId, teamMemberId, row?.taskId ?? null);
   }
 
   /**
@@ -3964,9 +4072,14 @@ export class WorkerDispatcher
         payload,
         dedupKey,
       );
-      // 仅落库成功才挂载到内存条目（clear 路径凭此取消；调度失败则无行可取消）。
+      // 仅落库成功才挂载到内存条目（clear 路径凭此取消；调度失败则无行可取消）；
+      // 且仅挂载到同世代条目——唤醒重试的旧 schedule 迟到 resolve 不得覆盖新窗口的 key。
       const current = this.pending.get(key);
-      if (current && current.sessionId === entry.sessionId) {
+      if (
+        current &&
+        current.sessionId === entry.sessionId &&
+        current.dispatchedAt === dispatchedAt
+      ) {
         current.triggerDedupKey = dedupKey;
       }
     } catch (err) {
@@ -3996,11 +4109,13 @@ export class WorkerDispatcher
    * durable 首字 deadline 到期处理（TriggerService SESSION_IDLE_SCAN handler）。
    * - 非本载荷（reason 缺失/它用）→ no-op，{done:true}（同 kind 共存不互伤）。
    * - 已标记失败 → {done:true}（内存 timer 已收割，不重复广播）。
-   * - pendingBySession 仍命中（本进程等待首字中）→ 复刻内存超时行为收割；
-   *   条目会话漂移（同键新一轮）→ 旧行残留，跳过。
+   * - pendingBySession 仍命中（本进程等待首字中）→ 复刻内存 deadline 行为：
+   *   静默未达唤醒上限 → 唤醒 + 重武装（本行 one-shot 已消耗，新窗口由重武装注册新行）；
+   *   达到上限 → 失败路径。条目会话漂移（同键新一轮）→ 旧行残留，跳过。
    * - 命中缺席（重启后内存全空）→ DB 侧判定：行缺失/非 running → 跳过；
    *   lastActivityAt 已推进过 dispatchedAt（首字到过）→ 跳过，防误杀；
-   *   否则收割（failedSessions + 注销 + 广播），DB 异常时 fail-open 跳过。
+   *   否则同走 deadline 行为（唤醒重试，唤醒上限随内存；重启后从 0 起算），
+   *   DB 异常时 fail-open 跳过。
    */
   private async handleFirstTokenTrigger(
     trigger: TriggerFireContext,
@@ -4018,6 +4133,10 @@ export class WorkerDispatcher
     if (key !== undefined) {
       const current = this.pending.get(key);
       if (!current || current.sessionId !== sessionId) {
+        return { done: true };
+      }
+      // 世代号防御：本行是被重武装取代的旧行（迟到 firing）→ 不收割新一轮。
+      if (current.dispatchedAt !== dispatchedAt) {
         return { done: true };
       }
       clearTimeout(current.timer);
@@ -4086,7 +4205,7 @@ export class WorkerDispatcher
 
   /**
    * ingress 活动事件通知处理（onSessionActivity 回调）：
-   * - 任意首个事件到达 → 清除首字 watchdog（模型已开始产出，不再等首字超时无响应）；
+   * - 任意首个事件到达 → 清除首字 watchdog 并复零唤醒计数（模型已开始产出，不再等首字超时无响应）；
    * - task.completed / session 进入非 running 态 → 本轮结束，退出空闲判死追踪；
    * - 其余活动事件（delta / agent.status / session.updated(running)）→ 刷新 lastActivityAt。
    */
@@ -4261,6 +4380,7 @@ export class WorkerDispatcher
         data: { status: SESSION_STATUS.failed },
       });
       this.failedSessions.add(sessionId);
+      this.firstTokenWakeAttempts.delete(sessionId);
       this.lastActivityAt.delete(sessionId);
       // stop-first：best-effort 中止 worker 侧 stuck 执行，释放槽位并防止迟到完成
       // 事件写入已失败会话；中止失败只记 warn，永不阻断后续恢复链。
@@ -4540,6 +4660,7 @@ export class WorkerDispatcher
       clearTimeout(existing.timer);
       this.pending.delete(`${scope}:${agentId}`);
       this.pendingBySession.delete(existing.sessionId);
+      this.firstTokenWakeAttempts.delete(existing.sessionId);
       // 首字已到（或本轮结束）：durable deadline 同步取消，防到期误收割。
       void this.cancelFirstTokenTrigger(existing.triggerDedupKey);
     }
@@ -4547,6 +4668,7 @@ export class WorkerDispatcher
 
   /** 按平台 sessionId 清除首字 watchdog（ingress 活动事件回调路径，taskId/agentId 未知）。 */
   private clearPendingWatchdogBySession(sessionId: string): void {
+    this.firstTokenWakeAttempts.delete(sessionId);
     const key = this.pendingBySession.get(sessionId);
     if (!key) {
       return;

@@ -357,3 +357,31 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   (`'10000'`), not numbers — a numeric mock would pass even with the old broken code.
 - Integration spec now advances `dispatcher.firstTokenTimeoutMs + 1000` instead of a
   hardcoded `60_000`, so it survives future default changes.
+
+## [2026-09-20] first-token wake-retry — 首字静默改为唤醒重试
+
+- **静默 #1/#2/#3 各唤醒一次，耗尽才失败**：`reapFirstTokenDeadline` 先查
+  `firstTokenWakeAttempts`，未达 `MAX_FIRST_TOKEN_WAKE_ATTEMPTS=3` → 计数 +1、经既有
+  `tryAutoRestart`（kind='wake'【自动恢复】文案，团队频道经 resolveTeamChannel）唤醒、
+  经 `armFirstTokenWatchdog` 重武装全新 300s 窗口（内存 timer + durable 行新 dedupKey）；
+  第 4 次到期才走失败路径（pending 删除 + failedSessions + 注销 + emitError/agent.error，
+  文案含「已尝试 3 次自动唤醒仍未恢复」）。
+- **重武装的世代号是正确性核心**：`PendingDispatch.dispatchedAt` 与 durable payload 的
+  `dispatchedAt` 同值作世代号——durable handler 与旧 setTimeout 都凭它识别被取代的旧行，
+  否则迟到 firing 会提前收割新窗口。`scheduleFirstTokenTrigger` 的 dedupKey 挂载也须
+  同世代校验，防旧 schedule 迟到 resolve 覆盖新窗口 key。
+- **计数器生命周期**：`handleSessionActivity`（任意活动）与 `handleTaskCompleted`、
+  `clearPendingWatchdog` 复零；`onModuleDestroy` 清空。唤醒目标按
+  `session.findUnique({taskId,teamId,teamMemberId})` 解析（与 idle-forensics 同口径），
+  无团队归属 → 跳过唤醒但计数/重武装照常。
+- **测试必须按窗口推进**：旧断言单次 `advanceTimersByTimeAsync(300s)` 现在只够第 1 次
+  唤醒；新断言推进 `300s × (MAX+1)`，并在 dispatch/唤醒用例 mock
+  `task.findUnique(status:'in_progress')` + `chatChannel.findFirst` 让 tryAutoRestart 真走通，
+  或 spy `tryAutoRestart`（注意：spy 需在首个 300s 到期前安装）。
+- **突变验证**：把 `attempts < MAX` 临时改为 `attempts < 0` → 4 个新/改断言立即失败，
+  证明唤醒路径确被断言锁定（验证后已还原）。
+
+## [2026-09-20] first-token wake-retry — 坑
+
+- 证据文件用 `workdir=server` 执行重定向会落到 `server/.omo/...`；已移动到仓库根
+  `.omo/evidence/...` 并删除误建目录（MUST-NOT-DO 禁止 server/ 下新建文件）。

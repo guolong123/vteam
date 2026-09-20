@@ -35,7 +35,7 @@ import { WorkerClient } from '../workers/worker.client';
 import { WorkerEventDto } from '../workers/dto/worker-event.dto';
 import { WorkerEventIngress } from '../workers/worker-event.ingress';
 import { WorkersService } from '../workers/workers.service';
-import { WorkerDispatcher } from './worker-dispatcher';
+import { WorkerDispatcher, MAX_FIRST_TOKEN_WAKE_ATTEMPTS } from './worker-dispatcher';
 
 /** 构造 WorkerEventDto（协议形状与 DTO 字段一致，eventId 唯一防去重）。 */
 function event(
@@ -471,16 +471,17 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     jest.useRealTimers();
   });
 
-  it('判死链路：dispatch 后首字超时无任何回流 → 首字 watchdog emitError + agent.error（回归基线）', async () => {
+  it('判死链路：dispatch 后静默 4 个窗口（3 次唤醒耗尽）→ 首字 watchdog emitError + agent.error（回归基线）', async () => {
     jest.useFakeTimers();
     const errors: unknown[] = [];
     dispatcher.onError((e) => errors.push(e));
 
     await dispatcher.dispatch(request);
-    await jest.advanceTimersByTimeAsync(
-      dispatcher.firstTokenTimeoutMs + 1000,
-    );
-    await jest.advanceTimersByTimeAsync(0);
+    // 3 次唤醒窗口 + 1 个耗尽窗口；唤醒目标解析不到团队归属 → 跳过唤醒但计数照常
+    for (let window = 0; window < MAX_FIRST_TOKEN_WAKE_ATTEMPTS + 1; window++) {
+      await jest.advanceTimersByTimeAsync(dispatcher.firstTokenTimeoutMs);
+      await jest.advanceTimersByTimeAsync(0);
+    }
 
     expect(errors).toEqual([
       {

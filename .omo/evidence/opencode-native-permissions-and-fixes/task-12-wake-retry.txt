@@ -1,0 +1,22 @@
+=== task-12 wake-retry proof (2026-09-20T22:03:49+08:00) ===
+
+--- npx tsc -p tsconfig.json --noEmit ---
+TSC_EXIT=0
+
+--- npx jest --runInBand src/chat ---
+PASS src/chat/worker-dispatcher.spec.ts
+PASS src/chat/chat.controller.spec.ts
+PASS src/chat/receipt-nudge.handler.spec.ts
+PASS src/chat/chat.service.spec.ts
+PASS src/chat/worker-dispatcher.gate.spec.ts
+PASS src/chat/worker-dispatcher.integration.spec.ts
+PASS src/chat/worker-dispatcher.plan-hash.spec.ts
+PASS src/chat/worker-dispatcher.wecom.spec.ts
+PASS src/chat/review-round-timeout.handler.spec.ts
+PASS src/chat/message-receipts.service.spec.ts
+PASS src/chat/review-dispatch-triplet.spec.ts
+PASS src/chat/message-receipt.constants.spec.ts
+PASS src/chat/mention-throttle.spec.ts
+Test Suites: 13 passed, 13 total
+Tests:       497 passed, 497 total
+JEST_EXIT=0
