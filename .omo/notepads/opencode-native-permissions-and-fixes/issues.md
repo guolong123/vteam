@@ -59,3 +59,18 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - 真栈验证服务端门时，仍存活的 worker guard 会先拦下未授权工具，看不到服务端门的效果；
   必须用「只改 DB、不重启 worker」的差分（见 learnings）。
 - 拒绝对 `/agent-policies` 的 frozen baseline 做任何事（todo 4 已有新 baseline 文件）。
+
+## [2026-09-20] todo 5 踩坑
+
+- **任务中误伤过一次 DB（已修复）**：手工验证时用 `curl --data '{"config":{"permission":
+  {"bash":"deny"},"correction":{}}}'` 做了一次**截断式 PATCH**，把 `ep_product` 的
+  permission/tools/correction 覆盖成残缺形状。修复：用 harness 保存在
+  `EVIDENCE_DIR/f2-original-policy.json` 的完整快照 PATCH 回去，并逐字节验证
+  `live == frozen baseline`（`JSON.stringify` canonical 相等）+ tools 计数 27。
+  教训：对 execution-policies 的 PATCH 永远是「读原 config → 只改目标字段 → 整体回写」，
+  绝不手写最小 body。
+- **urllib 在本机会走代理返回 502**，而 curl 直连正常 —— 诊断时不要据此判定 server 挂了。
+- `grep -c` / `head -N` 片段做 `bash -n` 检查会误报（heredoc 被截断），定位语法错误要按
+  完整块抽取。
+- permission-matrix 的 4f/4g 是**环境夹具依赖**（需要 review-round ledger / 终态任务），
+  本 DB 没有；已改为「缺夹具 → 显式 SKIP 并记录」，不再硬 FAIL（相应单测在 server spec 里）。

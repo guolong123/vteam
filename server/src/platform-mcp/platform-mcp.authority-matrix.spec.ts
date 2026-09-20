@@ -3,8 +3,6 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   ROLE_BOUNDARIES,
-  VTEAM_BROWSER_TOOL_NAMES,
-  VTEAM_GIT_TOOL_NAMES,
   VTEAM_MCP_TOOL_NAMES,
   type VteamAgentName,
 } from '../common/constants/agent.constants';
@@ -23,36 +21,35 @@ import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { TasksService } from '../tasks/tasks.service';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 import {
-  evaluateToolCall,
-  type EvaluateToolCallParams,
-  type RolesDoc,
-} from '../../../worker/src/role-guard/policy';
+  PLATFORM_MCP_ERRORS,
+} from './platform-mcp.constants';
 import { PlatformMcpService } from './platform-mcp.service';
+import { PlatformToolPermissionService } from './platform-tool-permission.service';
 
 /**
- * Todo 9 中央可证伪证明：role×tool authority matrix。
+ * Todo 9 中央可证伪证明：role×tool authority matrix（2026-09-20 改造）。
  *
  * 三层证据，全部断言**判定值**（allow/deny），不读日志：
- * ① 259 格 worker-guard 矩阵：rolesDoc 来自真实 `ExecutionPolicyService.buildAgentPolicies()`
- *    （即 `/agent-policies` 下发的 guard 载荷），逐格喂给**真实 worker guard**
- *    `worker/src/role-guard/policy.ts::evaluateToolCall`，expect = `ROLE_BOUNDARIES[*].toolAllows`
- *    成员资格。负格（未授权）显式保留；空集守卫 + allow/deny 双非空防「空转假绿」。
+ * ① 29 工具 × 7 角色的**服务端工具权限门**矩阵（opencode-native-permissions-and-fixes
+ *    todo 3 落地后，`PlatformToolPermissionService.assertToolAllowed` 是平台工具唯一闸门；
+ *    原 259 格 worker-guard 矩阵随该层删除而改址）：逐格调用**真实生产门**，
+ *    成员 → Agent(`policyId`/`agentKey`) → 真实 `ExecutionPolicyService.resolveByAgent`
+ *    → `tools` 矩阵；expect = `ROLE_BOUNDARIES[*].toolAllows` 成员资格。负格（未授权）
+ *    显式保留；空集守卫 + allow/deny 双非空防「空转假绿」。
+ *    `git_*`/`browser` 非平台注册工具，无 `tools/call` 面，不进矩阵（见
+ *    `CONTRACT-tool-naming-and-identity.md` §5）。
  * ② 非主实例成功：真实 `PlatformMcpService.taskCreate` 与真实 `TasksService.transitionByAgent`
  *    在非主 selfInstanceId 下**不再**抛出 `TASK_STATUS_MAIN_AGENT_ONLY`（身份门已移除）。
  * ③ 主 Agent happy path：经真实 `PlatformMcpService` 依次 create→start→plan_mode→
  *    plan_complete→mark-pending-review，记录每步判定值。
  *
  * 产物 `.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json` 由本 spec 写入
- * （worker 矩阵 + 服务层断言）；live 真栈 happy path 由 `scripts/e2e-authority-matrix.sh`
+ * （服务端门矩阵 + 服务层断言）；live 真栈 happy path 由 `scripts/prove-authority-matrix.sh`
  * 运行本 spec 后合并写入同一文件（单一可复现命令）。
  */
 
 const ROLES = Object.keys(ROLE_BOUNDARIES).sort() as VteamAgentName[];
-const TOOLS: readonly string[] = [
-  ...VTEAM_MCP_TOOL_NAMES,
-  ...VTEAM_GIT_TOOL_NAMES,
-  ...VTEAM_BROWSER_TOOL_NAMES,
-];
+const PLATFORM_TOOLS: readonly string[] = [...VTEAM_MCP_TOOL_NAMES];
 const EVIDENCE_FILE = path.resolve(
   __dirname,
   '../../../.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json',
@@ -66,41 +63,105 @@ interface MatrixCell {
   message: string | null;
 }
 
-/** 真实 rolesDoc：server 发射的 guard 载荷（与 `/agent-policies` 同一构造路径）。 */
-async function buildRealRolesDoc(): Promise<RolesDoc> {
-  const svc = new ExecutionPolicyService(
+/** `vteam-product` → `tmm_product`：矩阵每一行对应一个可解析成员。 */
+function memberIdOf(agent: string): string {
+  return `tmm_${agent.slice('vteam-'.length)}`;
+}
+
+/**
+ * 真实生产门：真实 `ExecutionPolicyService` + 内存 policy 行 → 真实
+ * `PlatformToolPermissionService`；prisma 只 stub 成员→Agent 行（policyId/agentKey），
+ * 与运行时 `resolveToolCallerId` 供出的形状一致。
+ */
+function buildRealPermissionGate(rows: unknown[] = []): {
+  gate: PlatformToolPermissionService;
+  policyService: ExecutionPolicyService;
+  prisma: { teamMember: { findUnique: jest.Mock } };
+} {
+  const byId = new Map(
+    (rows as Array<{ id: string }>).map((row) => [row.id, row]),
+  );
+  const prisma = {
+    teamMember: {
+      findUnique: jest.fn(
+        async ({ where }: { where: { id: string } }) => {
+          const agentKey = where.id.startsWith('tmm_')
+            ? where.id.slice('tmm_'.length)
+            : null;
+          if (!agentKey) {
+            return null;
+          }
+          return {
+            agent: {
+              id: `a_${agentKey}`,
+              name: agentKey,
+              agentKey,
+              policyId: `ep_${agentKey}`,
+            },
+          };
+        },
+      ),
+    },
+  };
+  const policyService = new ExecutionPolicyService(
     {
       agent: { findMany: jest.fn().mockResolvedValue([]) },
-      executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
+      executionPolicy: {
+        // resolveByAgent reads by id (findUnique); rows absent → constant fallback.
+        findUnique: jest.fn(
+          async ({ where }: { where: { id: string } }) => byId.get(where.id) ?? null,
+        ),
+        findMany: jest.fn().mockResolvedValue(rows),
+      },
     } as never,
     {} as never,
     { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
   );
-  const policies = await svc.buildAgentPolicies();
   return {
-    enabled: policies.guard.enabled,
-    roles: policies.guard.roles,
-  } as unknown as RolesDoc;
+    gate: new PlatformToolPermissionService(
+      prisma as never,
+      policyService,
+    ),
+    policyService,
+    prisma,
+  };
 }
 
-/** 逐格评估：source-derived expect + 真实 guard actual。 */
-function evaluateMatrix(rolesDoc: RolesDoc): MatrixCell[] {
+/** 单格判定：真实门放行 = allow，403 = deny。 */
+async function decideCell(
+  gate: PlatformToolPermissionService,
+  agent: string,
+  tool: string,
+): Promise<{ action: 'allow' | 'deny'; message: string | null }> {
+  const bare = tool.replace(/^vteam_/, '');
+  try {
+    await gate.assertToolAllowed(memberIdOf(agent), bare);
+    return { action: 'allow', message: null };
+  } catch (err) {
+    const response = (err as { getResponse?: () => unknown }).getResponse?.();
+    const body =
+      response && typeof response === 'object'
+        ? (response as { message?: unknown }).message
+        : undefined;
+    return { action: 'deny', message: typeof body === 'string' ? body : null };
+  }
+}
+
+/** 逐格评估：source-derived expect + 真实服务端门 actual。 */
+async function evaluateMatrix(
+  gate: PlatformToolPermissionService,
+): Promise<MatrixCell[]> {
   const cells: MatrixCell[] = [];
   for (const agent of ROLES) {
     const allowed = new Set(Object.keys(ROLE_BOUNDARIES[agent].toolAllows));
-    for (const tool of TOOLS) {
-      const decision = evaluateToolCall({
-        rolesDoc,
-        session: { agent, dir: '/data/vteam-worker' },
-        tool,
-        args: {},
-      });
+    for (const tool of PLATFORM_TOOLS) {
+      const decision = await decideCell(gate, agent, tool);
       cells.push({
         agent,
         tool,
         expect: allowed.has(tool) ? 'allow' : 'deny',
         actual: decision.action,
-        message: decision.action === 'deny' ? decision.message : null,
+        message: decision.message,
       });
     }
   }
@@ -109,7 +170,7 @@ function evaluateMatrix(rolesDoc: RolesDoc): MatrixCell[] {
 
 /** 期望值非空且双向可判别：负格显式存在，杜绝「只断言 allow 格」。 */
 function assertDiscriminating(cells: MatrixCell[]): void {
-  const expectedCells = ROLES.length * TOOLS.length;
+  const expectedCells = ROLES.length * PLATFORM_TOOLS.length;
   expect(expectedCells).toBeGreaterThan(0);
   expect(cells).toHaveLength(expectedCells);
   const allow = cells.filter((c) => c.expect === 'allow').length;
@@ -222,10 +283,10 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
     });
   };
 
-  describe('① worker-guard 矩阵：每一 role×tool 格的实际判定 === source-derived 期望', () => {
-    it('259 格逐格匹配；allow/deny 双非空；负格显式存在；空转守卫记录迭代数', async () => {
-      const rolesDoc = await buildRealRolesDoc();
-      const cells = evaluateMatrix(rolesDoc);
+  describe('① 服务端工具权限门矩阵：每一 role×tool 格的实际判定 === source-derived 期望', () => {
+    it('203 格逐格匹配；allow/deny 双非空；负格显式存在；空转守卫记录迭代数', async () => {
+      const { gate } = buildRealPermissionGate();
+      const cells = await evaluateMatrix(gate);
       assertDiscriminating(cells);
 
       const mismatches = cells.filter((c) => c.actual !== c.expect);
@@ -234,7 +295,7 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       const allow = cells.filter((c) => c.expect === 'allow').length;
       const deny = cells.filter((c) => c.expect === 'deny').length;
       // 空转证明：矩阵大小必须是 roles×tools 的完整笛卡尔积，不是空集。
-      expect(cells.length).toBe(ROLES.length * TOOLS.length);
+      expect(cells.length).toBe(ROLES.length * PLATFORM_TOOLS.length);
       expect(cells.length).toBeGreaterThan(0);
       // 逐格断言（失败时给出精确坐标）——不得只断言 allow 格。
       for (const cell of cells) {
@@ -245,9 +306,11 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
 
       writeEvidence({
         matrix: {
+          source:
+            'PlatformToolPermissionService.assertToolAllowed (server-side gate, todo 3)',
           roles: ROLES,
-          tools: TOOLS,
-          expectedCellCount: ROLES.length * TOOLS.length,
+          tools: PLATFORM_TOOLS,
+          expectedCellCount: ROLES.length * PLATFORM_TOOLS.length,
           iteratedCellCount: cells.length,
           allowCellCount: allow,
           denyCellCount: deny,
@@ -259,22 +322,21 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       expect(deny).toBeGreaterThan(0);
     });
 
-    it('负对照：任何角色都未列入的 MCP 工具 → deny（不可只靠 allow 格）', async () => {
-      const rolesDoc = await buildRealRolesDoc();
+    it('负对照：任何角色都未列入的 MCP 工具 → deny + 稳定码（不可只靠 allow 格）', async () => {
+      const { gate } = buildRealPermissionGate();
       for (const agent of ROLES) {
-        const d = evaluateToolCall({
-          rolesDoc,
-          session: { agent, dir: '/data/vteam-worker' },
-          tool: 'vteam_member_remove',
-          args: {},
-        } as EvaluateToolCallParams);
-        expect(d.action).toBe('deny');
-        expect((d as { message: string }).message).toContain('越界拦截');
+        await expect(
+          gate.assertToolAllowed(memberIdOf(agent), 'member_remove'),
+        ).rejects.toMatchObject({
+          response: expect.objectContaining({
+            code: PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
+          }),
+        });
       }
     });
 
     it('具名负格：未授权角色对 formerly-gated 工具一律 deny（显式断言）', async () => {
-      const rolesDoc = await buildRealRolesDoc();
+      const { gate } = buildRealPermissionGate();
       const negatives: Array<[VteamAgentName, string]> = [
         ['vteam-architect', 'vteam_task_create'],
         ['vteam-architect', 'vteam_plan_mode'],
@@ -288,15 +350,54 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
         ['vteam-product', 'vteam_skill_create'],
       ];
       for (const [agent, tool] of negatives) {
-        expect(Object.prototype.hasOwnProperty.call(ROLE_BOUNDARIES[agent].toolAllows, tool)).toBe(false);
-        const d = evaluateToolCall({
-          rolesDoc,
-          session: { agent, dir: '/data/vteam-worker' },
-          tool,
-          args: {},
-        });
+        expect(
+          Object.prototype.hasOwnProperty.call(
+            ROLE_BOUNDARIES[agent].toolAllows,
+            tool,
+          ),
+        ).toBe(false);
+        const d = await decideCell(gate, agent, tool);
         expect(`${agent}/${tool}=${d.action}`).toBe(`${agent}/${tool}=deny`);
       }
+    });
+
+    it('矩阵可变更：同一成员改一条 DB tools 值即翻转判定（非 agent 名硬编码）', async () => {
+      const base = buildRealPermissionGate();
+      expect(
+        (await decideCell(base.gate, 'vteam-product', 'vteam_doclib')).action,
+      ).toBe('allow');
+      expect(
+        (await decideCell(base.gate, 'vteam-architect', 'vteam_doclib')).action,
+      ).toBe('allow');
+      // 只改 DB 行（内置名同样走 DB 路径）：product 的矩阵不再授权 doclib。
+      // 行缺失/空矩阵 → 常量回退，故显式写一条把 doclib 排除的 allowlist 行。
+      const edited = buildRealPermissionGate([
+        {
+          id: 'ep_product',
+          name: 'policy-product',
+          description: null,
+          type: 'template',
+          config: {
+            permission: {},
+            correction: {},
+            tools: { vteam_group_post: 'allow' },
+          },
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+        },
+      ]);
+      expect(
+        (await decideCell(edited.gate, 'vteam-product', 'vteam_doclib')).action,
+      ).toBe('deny');
+      // 负对照：同一 DB 行仍放行 group_post（证明翻转来自该行内容，非全局关闸）。
+      expect(
+        (await decideCell(edited.gate, 'vteam-product', 'vteam_group_post'))
+          .action,
+      ).toBe('allow');
+      // 未改行的角色不受影响。
+      expect(
+        (await decideCell(edited.gate, 'vteam-architect', 'vteam_doclib')).action,
+      ).toBe('allow');
     });
   });
 

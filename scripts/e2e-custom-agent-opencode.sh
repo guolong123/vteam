@@ -6,13 +6,16 @@
 #   1) create a custom execution policy with a distinctive three-state matrix
 #      (tools: vteam_group_post=deny, vteam_submit_artifact=allow)
 #   2) create a custom agent agentKey='demo-agent' bound to that policy
-#   3) GET /agent-policies contains vteam-demo-agent in BOTH agents and guard.roles
-#   4) guard enforcement: the worker's OWN guard decision function
-#      (worker dist role-guard/policy.js, the same code the injected
-#      vteam-role-guard.ts plugin snapshots) denies vteam_group_post with the
-#      correction message and allows vteam_submit_artifact (positive control)
-#   5) byte-identity regression: the 6 built-in agent definitions + guard roles
-#      are byte-identical (canonical JSON) to the F3-own baseline subset
+#   3) GET /agent-policies contains vteam-demo-agent in BOTH agents and guard.roles;
+#      guard.roles[*] is {permission} only (todo 5: tools/bashDeny/correction deleted)
+#   4) enforcement: the LIVE production gate (server dist platform-tool-permission
+#      .service.js assertToolAllowed, todo 3) denies vteam_group_post and allows
+#      vteam_submit_artifact for the custom agent — the worker role-guard plugin
+#      that used to decide this is deleted (opencode-native-permissions-and-fixes
+#      todo 5); the layer-1 native permission carries NO vteam_ keys and the task
+#      decision is the engine's own `permission.task`
+#   5) byte-identity regression: the 6 built-in agent definitions are byte-identical
+#      (canonical JSON) to the F3-own baseline subset
 #   6) cleanup: delete QA agent/policy, re-verify /agent-policies is baseline-clean
 #
 # Required env:
@@ -26,9 +29,9 @@
 #                 or absolute; created if missing)
 #   BASELINE_DIR  default .omo/evidence/role-enforcement/F3-own
 #   RESTART_WORKER  default true. When true, restart the worker service so its
-#                 start-only injector rewrites opencode.json + roles.json, then
-#                 assert vteam-demo-agent is injected. Set false to run the
-#                 offline-only proof (API + guard decision on control-plane data).
+#                 start-only injector rewrites opencode.json, then assert
+#                 vteam-demo-agent is injected. Set false to run the offline-only
+#                 proof (API + gate decision on control-plane data).
 #   RESTART_TIMEOUT_SEC  wait budget for the restarted worker to re-inject.
 #                 Default: 180
 #   RESTART_INTERVAL_SEC poll interval. Default: 5
@@ -48,6 +51,7 @@ SERVER_URL="${SERVER_URL:-http://localhost:13000}"
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-admin123}"
 AGENT_KEY="${AGENT_KEY:-demo-agent}"
+TEAM_ID="${TEAM_ID:-tm_0000000001}"
 AGENT_NAME="vteam-${AGENT_KEY}"
 POLICY_NAME="e2e-demo-agent policy"
 EVIDENCE_DIR="${EVIDENCE_DIR:-.omo/evidence/custom-agent-opencode}"
@@ -118,12 +122,22 @@ db_exec() {
     || true
 }
 
+# db_query <sql> : single-value query against the compose db (no header, no error noise).
+db_query() {
+  docker exec aiagents-compose-db mysql -uroot -paiagents-root -D aiagents -N -e "$1" 2>/dev/null \
+    || (cd "$REPO_ROOT" && docker compose exec -T db mysql -uroot -paiagents-root -D aiagents -N -e "$1" 2>/dev/null) \
+    || true
+}
+
 # ---------------------------------------------------------------- tracked QA rows (cleanup on EXIT)
 QA_AGENT_ID=""
 QA_POLICY_ID=""
 
 cleanup() {
   log "cleanup: removing QA rows (agent/policy) ..."
+  if [[ -n "${MEMBER_FIX_ID:-}" ]]; then
+    db_exec "DELETE FROM team_members WHERE id='${MEMBER_FIX_ID}';" >/dev/null 2>&1 || true
+  fi
   if [[ -n "${ADMIN_JWT:-}" ]]; then
     # Sweep agents by agentKey (covers leftovers from a killed previous run).
     local list tmp
@@ -247,104 +261,117 @@ assert want in names, "agents names=%r (want %s)" % (names, want)
 roles = (d.get("guard") or {}).get("roles") or {}
 assert want in roles, "guard.roles keys=%r (want %s)" % (sorted(roles), want)
 role = roles[want]
-assert isinstance(role.get("tools"), dict), "role tools not an object: %r" % (role,)
-assert role["tools"].get("vteam_group_post") == "deny", \
-  "vteam_group_post=%r (want deny)" % (role["tools"].get("vteam_group_post"),)
-assert role["tools"].get("vteam_submit_artifact") == "allow", \
-  "vteam_submit_artifact=%r (want allow)" % (role["tools"].get("vteam_submit_artifact"),)
+assert sorted(role) == ["permission"], \
+  "guard.roles[%s] keys=%r (want ['permission'] after todo 5)" % (want, sorted(role))
 entry = next(a for a in d["agents"] if a.get("name") == want)
 assert entry.get("mode") == "primary", "agent mode=%r" % (entry.get("mode"),)
-print("agent-policies: %s present in agents + guard.roles with deny/allow matrix" % want)
+perm = entry.get("permission") or {}
+leak = [k for k in perm if k.startswith("vteam_")]
+assert not leak, "agents[%s].permission carries vteam_ keys: %r" % (want, leak)
+assert "task" in perm and perm["task"] == "deny", "permission.task=%r (want deny)" % (perm.get("task"),)
+print("agent-policies: %s present in agents + guard.roles ({permission} only); native-only permission" % want)
 EOF
 then
   fail "3-agent-policies" "matrix assertion failed (raw: $POLICIES_OUT)"
 fi
-pass "3 (vteam-demo-agent in agents + guard.roles with matrix)"
+pass "3 (vteam-demo-agent in agents + guard.roles={permission}; native-only permission)"
 
-# ---------------------------------------------------------------- step 4: guard enforcement with the worker's OWN guard code
-log "--- step 4: guard decision via worker dist role-guard/policy.js ---"
-GUARD_OUT="$EVIDENCE_DIR/guard-decision.txt"
+# ---------------------------------------------------------------- step 4: enforcement via the LIVE server gate
+log "--- step 4: tool permission decision via the live server gate (todo 3) ---"
+GUARD_OUT="$EVIDENCE_DIR/gate-decision.txt"
 : >"$GUARD_OUT"
-# The injector writes roles.json as JSON.stringify({enabled, roles}) from this
-# exact /agent-policies payload, so feeding guard.roles['vteam-demo-agent']
-# through the worker's compiled evaluateToolCall IS the real decision path
-# (role-guard-plugin.ts ships this logic as an inline snapshot; parity is
-# locked by worker role-guard-plugin.spec.ts).
-if ! python3 - "$POLICIES_OUT" "$EVIDENCE_DIR/guard-roles-doc.json" "$AGENT_NAME" <<'EOF'
-import json,sys
-policies = json.load(open(sys.argv[1])); out = sys.argv[2]; want = sys.argv[3]
-roles = (policies.get("guard") or {}).get("roles") or {}
-json.dump({"enabled": True, "roles": {want: roles[want]}}, open(out, "w"), ensure_ascii=False)
-print("wrote %s with role %s" % (out, want))
+# The gate resolves the caller as a TEAM MEMBER (member -> Agent -> policyId), so the QA
+# agent needs an idempotent member row to be resolvable; the row is removed on EXIT.
+MEMBER_FIX_ID="tmm_t5qa_${AGENT_KEY//-/_}"
+db_exec "INSERT INTO team_members (id, team_id, agent_id, alias, seq)
+         SELECT '${MEMBER_FIX_ID}', '${TEAM_ID}', a.id, '${AGENT_KEY}-qa', 99
+         FROM agents a WHERE a.id='${QA_AGENT_ID}'
+           AND NOT EXISTS (SELECT 1 FROM team_members tm WHERE tm.id='${MEMBER_FIX_ID}');" >/dev/null
+MEMBER_OK="$(db_query "SELECT COUNT(*) FROM team_members WHERE id='${MEMBER_FIX_ID}';" | tr -d '\r\n ')"
+[[ "$MEMBER_OK" == "1" ]] || fail "4-gate" "could not bind a team member fixture for ${QA_AGENT_ID}"
+log "member fixture: ${MEMBER_FIX_ID} -> agent ${QA_AGENT_ID} (removed on EXIT)"
+# The custom agent's policy row carries tools {vteam_group_post: deny,
+# vteam_submit_artifact: allow}; the production gate resolves it through
+# Agent.policyId → ExecutionPolicyService.resolveByAgent → the matrix, so the
+# decision can only differ from the DB row if the gate is not reading it.
+GATE_JS="$(mktemp)"
+cat >"$GATE_JS" <<'EOF'
+const { PrismaClient } = require('@prisma/client');
+const { ExecutionPolicyService } = require('/app/dist/src/execution-policies/execution-policy.service.js');
+const { PlatformToolPermissionService } = require('/app/dist/src/platform-mcp/platform-tool-permission.service.js');
+(async () => {
+  const agentName = process.env.E2E_AGENT_NAME;
+  const prisma = new PrismaClient();
+  const policyService = Object.create(ExecutionPolicyService.prototype);
+  policyService.prisma = prisma;
+  const gate = new PlatformToolPermissionService(prisma, policyService);
+  const agent = await prisma.agent.findFirst({
+    where: { agentKey: process.env.E2E_AGENT_KEY },
+    select: { id: true, policyId: true, agentKey: true },
+  });
+  if (!agent) { console.error('agent not found: ' + process.env.E2E_AGENT_KEY); process.exit(1); }
+  const member = await prisma.teamMember.findFirst({
+    where: { agentId: agent.id },
+    select: { id: true },
+  });
+  if (!member) { console.error('no team member for agent ' + agent.id); process.exit(1); }
+  let failed = false;
+  for (const [tool, want] of [['group_post', 'deny'], ['submit_artifact', 'allow']]) {
+    let action = 'allow', message = null;
+    try {
+      await gate.assertToolAllowed(member.id, tool);
+    } catch (err) {
+      action = 'deny';
+      const r = (err && typeof err.getResponse === 'function') ? err.getResponse() : null;
+      message = r && typeof r === 'object' ? r.message : String(err.message || err);
+    }
+    console.log(tool + ' -> ' + JSON.stringify({ action, message }));
+    if (action !== want) { console.error('MISMATCH tool=' + tool + ' want=' + want + ' got=' + action); failed = true; }
+  }
+  await prisma.$disconnect();
+  if (failed) process.exit(1);
+})().catch((e) => { console.error(String(e && e.stack || e)); process.exit(1); });
 EOF
-then
-  fail "4-guard-offline" "could not extract guard role from $POLICIES_OUT"
+(cd "$REPO_ROOT" && docker compose cp "$GATE_JS" server:/app/e2e-gate-probe.js >/dev/null) \
+  || fail "4-gate" "docker compose cp gate probe into server failed"
+if ! (cd "$REPO_ROOT" && docker compose exec -T -e E2E_AGENT_NAME="$AGENT_NAME" -e E2E_AGENT_KEY="$AGENT_KEY" server node /app/e2e-gate-probe.js 2>&1 | tee "$GUARD_OUT"); then
+  fail "4-gate" "live server gate decision mismatch (raw: $GUARD_OUT)"
 fi
-if ! (cd "$REPO_ROOT" && docker compose cp "$EVIDENCE_DIR/guard-roles-doc.json" worker:/tmp/e2e-guard-roles.json >/dev/null); then
-  fail "4-guard-offline" "docker compose cp guard roles-doc into worker failed"
-fi
-if ! (cd "$REPO_ROOT" && docker compose exec -T worker node -e "
-const fs = require('fs');
-const {evaluateToolCall} = require('/app/dist/role-guard/policy.js');
-const rolesDoc = JSON.parse(fs.readFileSync('/tmp/e2e-guard-roles.json', 'utf8'));
-const agent = '$AGENT_NAME';
-let failed = false;
-for (const [tool, want] of [['vteam_group_post','deny'],['vteam_submit_artifact','allow']]) {
-  const d = evaluateToolCall({rolesDoc, session:{agent, dir:'/data/vteam-worker'}, tool, args:{}});
-  console.log(tool + ' -> ' + JSON.stringify(d));
-  if (d.action !== want) { console.error('MISMATCH tool=' + tool + ' want=' + want); failed = true; }
-  if (want === 'deny' && !/越界拦截/.test(d.message || '')) { console.error('deny message missing correction literal'); failed = true; }
-}
-if (failed) process.exit(1);
-" 2>&1 | tee "$GUARD_OUT"); then
-  fail "4-guard-offline" "worker guard decision mismatch (raw: $GUARD_OUT)"
-fi
-pass "4a (offline: worker guard code denies vteam_group_post, allows vteam_submit_artifact)"
+pass "4a (live gate: denies group_post, allows submit_artifact for the custom agent)"
 
-# ---------------------------------------------------------------- step 4b (live): restart worker, assert injected files contain the agent
+# ---------------------------------------------------------------- step 4b (live): restart worker, assert the injected file contains the agent
 INJECTED_OUT="$EVIDENCE_DIR/injected-opencode.json"
-ROLES_OUT="$EVIDENCE_DIR/roles.json"
 if [[ "$RESTART_WORKER" == "true" ]]; then
   log "--- step 4b: restart worker (injector runs at start only) and assert injection ---"
-  if (cd "$REPO_ROOT" && docker compose up -d --force-recreate worker >/dev/null 2>&1); then
-    log "worker recreating; polling roles.json for $AGENT_NAME ..."
+  if (cd "$REPO_ROOT" && docker compose restart worker >/dev/null 2>&1); then
+    log "worker restarting; polling injected opencode.json for $AGENT_NAME ..."
     deadline=$((SECONDS + RESTART_TIMEOUT_SEC))
     found=""
     while [[ $SECONDS -lt $deadline ]]; do
-      if (cd "$REPO_ROOT" && docker compose exec -T worker cat /data/vteam-worker/.vteam-role-guard/roles.json 2>/dev/null | grep -q "$AGENT_NAME"); then
+      if (cd "$REPO_ROOT" && docker compose exec -T worker cat /data/vteam-worker/opencode.json 2>/dev/null | grep -q "$AGENT_NAME"); then
         found="yes"
         break
       fi
       sleep "$RESTART_INTERVAL_SEC"
     done
-    [[ -n "$found" ]] || fail "4b-inject" "roles.json lacks $AGENT_NAME after ${RESTART_TIMEOUT_SEC}s"
+    [[ -n "$found" ]] || fail "4b-inject" "injected opencode.json lacks $AGENT_NAME after ${RESTART_TIMEOUT_SEC}s"
     (cd "$REPO_ROOT" && docker compose cp worker:/data/vteam-worker/opencode.json "$INJECTED_OUT" >/dev/null)
-    (cd "$REPO_ROOT" && docker compose cp worker:/data/vteam-worker/.vteam-role-guard/roles.json "$ROLES_OUT" >/dev/null)
     if ! python3 - "$INJECTED_OUT" "$AGENT_NAME" <<'EOF'
 import json,sys
 d = json.load(open(sys.argv[1])); want = sys.argv[2]
 agents = d.get("agent") or {}
 assert want in agents, "injected agent keys=%r (want %s)" % (sorted(agents), want)
-print("injected opencode.json agent section contains %s" % want)
+perm = agents[want].get("permission") or {}
+leak = [k for k in perm if k.startswith("vteam_")]
+assert not leak, "injected %s permission carries vteam_ keys: %r" % (want, leak)
+assert not any(isinstance(p, str) and "vteam-role-guard" in p for p in (d.get("plugin") or [])), \
+  "injected opencode.json still registers vteam-role-guard"
+print("injected opencode.json contains %s with native-only permission and no guard plugin" % want)
 EOF
     then
-      fail "4b-inject" "injected opencode.json lacks $AGENT_NAME (raw: $INJECTED_OUT)"
+      fail "4b-inject" "injected opencode.json lacks $AGENT_NAME or carries guard remnants (raw: $INJECTED_OUT)"
     fi
-    # Re-run the guard decision against the ACTUAL roles.json inside the worker.
-    if ! (cd "$REPO_ROOT" && docker compose exec -T worker node -e "
-const fs = require('fs');
-const {evaluateToolCall} = require('/app/dist/role-guard/policy.js');
-const rolesDoc = JSON.parse(fs.readFileSync('/data/vteam-worker/.vteam-role-guard/roles.json', 'utf8'));
-const agent = '$AGENT_NAME';
-const deny = evaluateToolCall({rolesDoc, session:{agent, dir:'/data/vteam-worker'}, tool:'vteam_group_post', args:{}});
-const allow = evaluateToolCall({rolesDoc, session:{agent, dir:'/data/vteam-worker'}, tool:'vteam_submit_artifact', args:{}});
-console.log('live-roles vteam_group_post -> ' + JSON.stringify(deny));
-console.log('live-roles vteam_submit_artifact -> ' + JSON.stringify(allow));
-if (deny.action !== 'deny' || !/越界拦截/.test(deny.message || '') || allow.action !== 'allow') process.exit(1);
-" 2>&1 | tee -a "$GUARD_OUT"); then
-      fail "4b-guard-live" "live roles.json guard decision mismatch (raw: $GUARD_OUT)"
-    fi
-    pass "4b (live: injected opencode.json + roles.json contain $AGENT_NAME; live guard denies/allow as expected)"
+    pass "4b (live: injected opencode.json contains $AGENT_NAME; native-only permission; no guard plugin)"
   else
     skip "4b-inject" "worker restart not feasible in this environment (offline proof 4a still holds)"
   fi
@@ -353,17 +380,31 @@ else
 fi
 
 # ---------------------------------------------------------------- step 5: byte-identity regression on the built-in subset
-log "--- step 5: built-in subset byte-identical to F3-own baseline ---"
+log "--- step 5: built-in subset byte-identical to the frozen baseline ---"
+# The F3-own artifact predates the native-only payload (todo 4) and the guard-extras
+# deletion (todo 5); the authoritative frozen artifact is the plan's baseline, and the
+# injected opencode.json subset is derived from it. BASELINE_DIR is kept as an override.
+BASELINE_POLICIES="${BASELINE_POLICIES:-$REPO_ROOT/.omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json}"
 BASELINE_OPENCODE="$BASELINE_DIR/injected-opencode.json"
-BASELINE_POLICIES="$BASELINE_DIR/agent-policies.json"
-[[ -f "$BASELINE_OPENCODE" ]] || fail "5-byte-identity" "baseline $BASELINE_OPENCODE not found"
 [[ -f "$BASELINE_POLICIES" ]] || fail "5-byte-identity" "baseline $BASELINE_POLICIES not found"
+# Derive the expected injected agent section from the frozen payload (native-only agents).
+BASELINE_OPENCODE="$EVIDENCE_DIR/baseline-injected-opencode.json"
+python3 - "$BASELINE_POLICIES" "$BASELINE_OPENCODE" <<'PYEOF2'
+import json, sys
+base = json.load(open(sys.argv[1])); out = sys.argv[2]
+want = ["vteam-plan", "vteam-product", "vteam-architect",
+        "vteam-developer", "vteam-tester", "vteam-project_manager"]
+section = {a["name"]: {"description": a["description"], "mode": a["mode"], "permission": a["permission"]}
+           for a in base["agents"] if a["name"] in want}
+json.dump({"agent": section}, open(out, "w"), ensure_ascii=False, indent=2)
+print("derived injected baseline section from %s (%d agents)" % (sys.argv[1], len(section)))
+PYEOF2
+[[ -f "$BASELINE_OPENCODE" ]] || fail "5-byte-identity" "baseline $BASELINE_OPENCODE not found"
 # Live sources: prefer worker-injected files when the restart path ran,
 # else fall back to control-plane /agent-policies (same bytes the injector writes).
 LIVE_OPENCODE="$INJECTED_OUT"
 [[ -f "$LIVE_OPENCODE" ]] || LIVE_OPENCODE=""
-LIVE_ROLES_SRC="$ROLES_OUT"
-[[ -f "$LIVE_ROLES_SRC" ]] || LIVE_ROLES_SRC="$POLICIES_OUT"
+LIVE_ROLES_SRC="$POLICIES_OUT"
 if ! python3 - "$BASELINE_OPENCODE" "$BASELINE_POLICIES" "${LIVE_OPENCODE:-__none__}" "$LIVE_ROLES_SRC" "$POLICIES_OUT" "$EVIDENCE_DIR/byte-identity.txt" <<'EOF'
 import json,sys
 base_oc, base_pol, live_oc, live_roles_src, live_pol, report = sys.argv[1:7]
@@ -375,12 +416,7 @@ def canon(o):
 base_oc_d = json.load(open(base_oc))
 base_pol_d = json.load(open(base_pol))
 live_pol_d = json.load(open(live_pol))
-live_roles = json.load(open(live_roles_src))
-# roles.json shape is {enabled, roles}; /agent-policies shape is {agents, guard:{roles}}.
-if "roles" in live_roles and "guard" not in live_roles:
-    live_roles = live_roles["roles"]
-else:
-    live_roles = (live_roles.get("guard") or {}).get("roles") or {}
+live_roles = (json.load(open(live_roles_src)).get("guard") or {}).get("roles") or {}
 base_roles = (base_pol_d.get("guard") or {}).get("roles") or {}
 live_agents_by_name = {a["name"]: a for a in (live_pol_d.get("agents") or [])}
 base_agents_by_name = {a["name"]: a for a in (base_pol_d.get("agents") or [])}
@@ -391,7 +427,7 @@ for name in BUILTINS:
     same = canon(live_agents_by_name[name]) == canon(base_agents_by_name[name])
     lines.append("agent-policies agents[%s]: %s" % (name, "IDENTICAL" if same else "MISMATCH"))
     ok = ok and same
-# (ii) guard roles identical to baseline file.
+# (ii) guard roles identical to baseline file ({permission} only after todo 5).
 for name in BUILTINS:
     same = canon(live_roles[name]) == canon(base_roles[name])
     lines.append("guard.roles[%s]: %s" % (name, "IDENTICAL" if same else "MISMATCH"))
@@ -408,10 +444,13 @@ if live_oc != "__none__":
         lines.append("injected agent[%s]: %s" % (name, "IDENTICAL" if same else "MISMATCH"))
         ok = ok and same
     # plugin/mcp skeleton must still be present (shape guard, not byte-compared).
-    assert "./.opencode/plugin/vteam-role-guard.ts" in (live_oc_d.get("plugin") or []), \
-      "injected plugin section lost the guard entry"
+    # todo 5: the guard plugin must NOT be registered; OmO must still be.
+    assert not any(isinstance(p, str) and "vteam-role-guard" in p for p in (live_oc_d.get("plugin") or [])), \
+      "injected plugin section still registers the deleted vteam-role-guard"
+    assert any(isinstance(p, str) and "oh-my-openagent" in p for p in (live_oc_d.get("plugin") or [])), \
+      "injected plugin section lost the OmO entry"
     assert "vteam" in (live_oc_d.get("mcp") or {}), "injected mcp section lost vteam"
-    lines.append("injected plugin+mcp skeleton: PRESENT")
+    lines.append("injected plugin+mcp skeleton: PRESENT (no guard entry)")
 else:
     lines.append("injected opencode.json: SKIPPED (no live file; RESTART_WORKER=false)")
 open(report, "w").write("\n".join(lines) + "\n")

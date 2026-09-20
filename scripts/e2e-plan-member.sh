@@ -10,16 +10,14 @@
 #   2) injection truth: worker restart re-injects opencode.json agent['vteam-plan']
 #      with mode='all', permission.task='allow', edit glob covering .opencode/plans/,
 #      NO edit rights outside; every built-in entry is byte-identical to the
-#      regenerated F3-own baseline (post server-gate-removal-tool-authority).
-#   3) guard gate: the worker's OWN guard code (dist/role-guard/policy.js
-#      evaluateToolCall, same code the injected plugin snapshots) decides
-#      (vteam-plan, task + subagent_type=vteam-plan) -> allow;
-#      (developer, task + vteam-plan) -> deny;
-#      (vteam-plan, task + vteam-developer) -> deny;
-#      (vteam-plan, task + missing args) -> deny;
-#      (vteam-plan, execute) -> deny;
-#      unmapped session -> pass-through (allow).
-#      Plus file-write scoping: .opencode/plans/x.md write -> allow, src/ -> deny.
+#      frozen baseline (opencode-native-permissions-and-fixes).
+#   3) native permission contract (todo 5 re-point): the injected opencode.json
+#      carries the engine's own permission config — vteam-plan permission.task
+#      is the ONLY allow (fans out read-only reviewers), every other built-in is
+#      deny; edit is plans-scoped for vteam-plan and '*':deny + role globs for the
+#      rest; no `vteam_*` key is emitted and no role-guard artifact is registered.
+#      (The hand-rolled `task` allow-list and the "禁套娃" depth rule are NOT
+#      ported: the engine's `permission.task` + native `subagent_depth` cover them.)
 #   4) live @-flow smoke (bounded, real group @ for the seed task — the production
 #      path: group mention → resolveMentions + task-mode @-mention session backfill
 #      → dispatcher.registerExecution → worker execute, so group_post is
@@ -34,7 +32,7 @@
 #      worker /execute — explicitly allowed trigger for a session-scoped probe):
 #      task with subagent_type='vteam-plan' for a trivial read-only probe -> must
 #      succeed and return; a nested spawn attempt must be blocked (deny/depth
-#      error, not success). Infra failure -> NEEDS-ATTENTION + guard+layer-1
+#      error, not success). Infra failure -> NEEDS-ATTENTION + native-permission
 #      fallback evidence (always collected).
 #   6) plan_review absence: tools/list has no plan_review; worker POST /review is
 #      gone (404/405, NOT 200); GET /agent-policies has no plan_review key;
@@ -52,7 +50,8 @@
 #   TEAM_ID       default tm_0000000001
 #   TASK_ID       default t_0000000001 (seed task; reused, never mutated)
 #   EVIDENCE_DIR  default .omo/evidence/plan-member
-#   BASELINE_INJECTED default .omo/evidence/role-enforcement/F3-own/injected-opencode.json
+#   BASELINE_INJECTED override the expected injected agent section (default: derived from
+#                 BASELINE_POLICIES_REF, the frozen native-only payload)
 #   BUILD_TIMEOUT_SEC    default 900  (server+worker rebuild; images may be stale)
 #   RESTART_TIMEOUT_SEC  default 240  (worker re-inject sentinel wait)
 #   LIVE_TIMEOUT_SEC     default 600  (each live smoke step, ~10 min bound)
@@ -81,13 +80,32 @@ TASK_ID="${TASK_ID:-t_0000000001}"
 PLAN_MEMBER_ID="${PLAN_MEMBER_ID:-tmm_0000000006}"
 PLAN_AGENT_ID="${PLAN_AGENT_ID:-a_plan}"
 EVIDENCE_DIR="${EVIDENCE_DIR:-.omo/evidence/plan-member}"
-BASELINE_INJECTED="${BASELINE_INJECTED:-.omo/evidence/role-enforcement/F3-own/injected-opencode.json}"
+# The historical F3-own artifact predates the native-only payload; the authoritative
+# frozen artifact is the plan's baseline, and the expected injected agent section is
+# derived from it (BASELINE_POLICIES_REF).
+BASELINE_POLICIES_REF="${BASELINE_POLICIES_REF:-.omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json}"
+BASELINE_INJECTED="${BASELINE_INJECTED:-}"
 BUILD_TIMEOUT_SEC="${BUILD_TIMEOUT_SEC:-900}"
 RESTART_TIMEOUT_SEC="${RESTART_TIMEOUT_SEC:-240}"
 LIVE_TIMEOUT_SEC="${LIVE_TIMEOUT_SEC:-600}"
 POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-10}"
 
 case "$EVIDENCE_DIR" in /*) ;; *) EVIDENCE_DIR="$REPO_ROOT/$EVIDENCE_DIR";; esac
+case "$BASELINE_POLICIES_REF" in /*) ;; *) BASELINE_POLICIES_REF="$REPO_ROOT/$BASELINE_POLICIES_REF";; esac
+if [[ -z "$BASELINE_INJECTED" ]]; then
+  BASELINE_INJECTED="$EVIDENCE_DIR/baseline-injected-opencode.json"
+  mkdir -p "$EVIDENCE_DIR"
+  python3 - "$BASELINE_POLICIES_REF" "$BASELINE_INJECTED" <<'PY'
+import json, sys
+base = json.load(open(sys.argv[1]))
+want = ["vteam-plan", "vteam-product", "vteam-architect",
+        "vteam-developer", "vteam-tester", "vteam-project_manager"]
+section = {a["name"]: {"description": a["description"], "mode": a["mode"], "permission": a["permission"]}
+           for a in base["agents"] if a["name"] in want}
+json.dump({"agent": section}, open(sys.argv[2], "w"), ensure_ascii=False, indent=2)
+print("derived injected baseline section from %s (%d agents)" % (sys.argv[1], len(section)))
+PY
+fi
 case "$BASELINE_INJECTED" in /*) ;; *) BASELINE_INJECTED="$REPO_ROOT/$BASELINE_INJECTED";; esac
 mkdir -p "$EVIDENCE_DIR"
 
@@ -337,19 +355,22 @@ grep -q 'Seed' "$SEED_OUT" || fail "0-seed" "seed output missing marker (raw: $S
 log "re-seed exit 0"
 
 log "--- step 0c: restart worker (injection happens at start only) + sentinel wait ---"
-docker compose up -d --force-recreate worker >/dev/null 2>&1 \
-  || fail "0-restart" "docker compose up -d --force-recreate worker failed"
+# restart (NOT --force-recreate, which re-runs the `init` dependency and can reseed
+# the DB) is sufficient to re-run the start-only injector.
+docker compose restart worker >/dev/null 2>&1 \
+  || fail "0-restart" "docker compose restart worker failed"
 deadline=$((SECONDS + RESTART_TIMEOUT_SEC))
 found=""
 while [[ $SECONDS -lt $deadline ]]; do
   SENTINEL="$(docker compose exec -T worker node -e "
 const fs = require('fs');
 try {
-  const {evaluateToolCall} = require('/app/dist/role-guard/policy.js');
-  const rolesDoc = JSON.parse(fs.readFileSync('/data/vteam-worker/.vteam-role-guard/roles.json', 'utf8'));
-  const hasPlan = !!(rolesDoc.roles && rolesDoc.roles['vteam-plan']);
-  const d = evaluateToolCall({rolesDoc, session:{agent:'vteam-plan', dir:'/data/vteam-worker'}, tool:'task', args:{subagent_type:'vteam-plan'}});
-  console.log((hasPlan ? 'hasPlan:' : 'noPlan:') + d.action);
+  const cfg = JSON.parse(fs.readFileSync('/data/vteam-worker/opencode.json', 'utf8'));
+  const plan = (cfg.agent || {})['vteam-plan'] || {};
+  const task = (plan.permission || {}).task;
+  const hasPlan = !!(cfg.agent || {})['vteam-plan'];
+  const guardLeft = JSON.stringify(cfg.plugin || []).includes('vteam-role-guard');
+  console.log((hasPlan ? 'hasPlan:' : 'noPlan:') + task + (guardLeft ? ':guardLeft' : ''));
 } catch (e) { console.log('error:' + e.message); }
 " 2>/dev/null | tr -d '\r\n ' || true)"
   if [[ "$SENTINEL" == "hasPlan:allow" ]]; then found="yes"; break; fi
@@ -462,10 +483,13 @@ log "--- step 2: injected opencode.json vteam-plan entry + 5-role byte parity --
 INJECTED_OUT="$EVIDENCE_DIR/injected-opencode.json"
 docker compose cp worker:/data/vteam-worker/opencode.json "$INJECTED_OUT" >/dev/null \
   || fail "2-inject" "docker compose cp worker opencode.json failed"
-docker compose exec -T worker cat /data/vteam-worker/.vteam-role-guard/roles.json >"$EVIDENCE_DIR/roles.json" 2>/dev/null \
-  || fail "2-inject" "could not snapshot live roles.json"
+# todo 5: the deleted guard layer's artifact must be absent from the live volume.
+docker compose exec -T worker test '!' -e /data/vteam-worker/.vteam-role-guard 2>/dev/null \
+  || fail "2-inject" "live worker still has .vteam-role-guard (deleted guard layer not purged)"
+docker compose exec -T worker sh -c 'grep -q vteam-role-guard /data/vteam-worker/opencode.json' 2>/dev/null \
+  && fail "2-inject" "injected opencode.json still registers vteam-role-guard"
 [[ -f "$BASELINE_INJECTED" ]] || fail "2-inject" "baseline $BASELINE_INJECTED missing"
-if ! python3 - "$INJECTED_OUT" "$BASELINE_INJECTED" "$EVIDENCE_DIR/injection-compare.txt" "$EVIDENCE_DIR/roles.json" <<'EOF'
+if ! python3 - "$INJECTED_OUT" "$BASELINE_INJECTED" "$EVIDENCE_DIR/injection-compare.txt" <<'EOF'
 import json,sys
 new = json.load(open(sys.argv[1])); base = json.load(open(sys.argv[2]))
 report = open(sys.argv[3], "w")
@@ -491,130 +515,85 @@ assert plans_hits, "vteam-plan edit allow globs miss plans dir: %r" % allows
 outside = [g for g in allows if ".opencode/plans" not in g]
 assert not outside, "vteam-plan edit allows paths OUTSIDE plans dir: %r" % outside
 rep("vteam-plan: mode=all task=allow edit=%r" % edit)
-# group_post is allowed via the guard tools allowlist, so (like every
-# guard-allowlisted tool) it must have NO layer-1 permission key; the allow
-# lives in roles.json guard tools (asserted below from live roles.json).
-assert "vteam_group_post" not in perm, \
-  "vteam-plan layer-1 must not carry vteam_group_post key (allowlist-complement design): %r" % perm
-rep("vteam-plan: no layer-1 vteam_group_post key (guard-allowlisted)")
-roles = json.load(open(sys.argv[4]))
-guard_by_role = {rn: ((r or {}).get("tools") or {}) for rn, r in (roles.get("roles") or {}).items()}
-guard_union = {t for tools in guard_by_role.values() for t in tools}
-rtools = guard_by_role.get("vteam-plan") or {}
-assert rtools.get("vteam_group_post") == "allow", \
-  "live roles.json guard tools vteam_group_post=%r (want allow)" % rtools.get("vteam_group_post")
-rep("live roles.json: vteam-plan guard tools vteam_group_post=allow")
-# F3-own/injected-opencode.json was regenerated for the
-# server-gate-removal-tool-authority re-baseline, so it now carries the new
-# tool-authority allowlists (layer-1 permission = mcpDenies complement; formerly
-# gated tools are granted per role). This helper keeps the structural invariant
-# that a baseline-only key is legitimate IFF it was deny-valued AND either moved
-# to this role's guard tools or vanished from both layers.
+# todo 5: the layer-1 permission is native-only; tool authorization lives in the
+# DB policy matrix consumed by the server gate, not in the injected config.
+leak = sorted(k for k in perm if k.startswith("vteam_"))
+assert not leak, "vteam-plan layer-1 still carries vteam_ keys: %r" % leak
+rep("vteam-plan: native-only layer-1 permission (no vteam_ keys)")
 def assert_split_aware_parity(name, nj, bj):
     assert nj.get("mode") == bj.get("mode"), \
       "%s mode changed: %r vs %r" % (name, nj.get("mode"), bj.get("mode"))
     assert nj.get("description") == bj.get("description"), \
       "%s description changed" % name
     np, bp = dict(nj.get("permission") or {}), dict(bj.get("permission") or {})
-    added = set(np) - set(bp)
-    assert not added, "%s has NEW layer-1 keys vs baseline: %r" % (name, sorted(added))
-    for k in set(np) & set(bp):
-        assert json.dumps(np[k], sort_keys=True) == json.dumps(bp[k], sort_keys=True), \
-          "%s key %r value changed: %r vs %r" % (name, k, np[k], bp[k])
-    gtools = guard_by_role.get(name) or {}
-    for k in set(bp) - set(np):
-        assert bp[k] == "deny", \
-          "%s removed key %r was not deny-valued in baseline: %r" % (name, k, bp[k])
-        assert k in gtools or k not in guard_union, \
-          "%s removed key %r neither in its guard tools nor denied platform-wide (union has it but role lacks it)" % (name, k)
-    rep("%s: parity ok (retained keys identical; %d baseline-only deny keys split-aware)" % (name, len(set(bp) - set(np))))
-# --- other five roles: split-aware parity (mode primary/task deny enforced) ---
+    assert np == bp, "%s layer-1 permission changed: %r vs %r" % (name, np, bp)
+    leak = sorted(k for k in np if k.startswith("vteam_"))
+    assert not leak, "%s layer-1 still carries vteam_ keys: %r" % (name, leak)
+    rep("%s: parity ok (native-only layer-1 identical to baseline)" % name)
+# --- other five roles: parity + mode/task enforcement ---
 for b in BUILTINS[1:]:
     assert na[b].get("mode") == "primary", "role %s mode=%r (want primary)" % (b, na[b].get("mode"))
     assert (na[b].get("permission") or {}).get("task") == "deny", "role %s task not deny" % b
     assert_split_aware_parity(b, na[b], ba[b])
-rep("other five roles parity ok (no new/changed keys; removals only guard-moved or platform-denied)")
-# --- every built-in entry byte-identical to the regenerated baseline ---
-# F3-own/injected-opencode.json was regenerated under the
-# server-gate-removal-tool-authority re-baseline, so it now carries the new
-# tool-authority allowlists and is expected to match live exactly. A drift here
-# is a real regression, not the old "vteam-plan is expected to differ" case.
+rep("other five roles parity ok (native-only layer-1 identical to baseline)")
 for b in BUILTINS:
     assert json.dumps(na[b], sort_keys=True, ensure_ascii=False) == \
       json.dumps(ba[b], sort_keys=True, ensure_ascii=False), \
-      "%s injected entry differs from the regenerated F3-own baseline" % b
-rep("all 6 built-ins byte-identical to the regenerated F3-own baseline")
+      "%s injected entry differs from the frozen baseline" % b
+rep("all 6 built-ins byte-identical to the frozen baseline")
 EOF
 then
   fail "2-inject" "injection assertions failed (raw: $INJECTED_OUT, report: $EVIDENCE_DIR/injection-compare.txt)"
 fi
-pass "2 (vteam-plan mode all/task allow/plans-scoped edit/group_post guard-only; all six built-ins byte-identical to the regenerated baseline)"
+pass "2 (vteam-plan mode all/task allow/plans-scoped edit/native-only permission; all seven built-ins byte-identical to the frozen baseline)"
 
-# ---------------------------------------------------------------- step 3: guard gate (worker's OWN guard code)
-log "--- step 3: guard decisions via worker dist role-guard/policy.js ---"
-GUARD_JS="$(mktmp)"
-GUARD_TASK="$TASK_ID"
-cat >"$GUARD_JS" <<EOF
-const fs = require('fs');
-const {evaluateToolCall} = require('/app/dist/role-guard/policy.js');
-const rolesDoc = JSON.parse(fs.readFileSync('/data/vteam-worker/.vteam-role-guard/roles.json', 'utf8'));
-const S = (agent) => ({agent, dir: '/data/vteam-worker'});
-const T = '$GUARD_TASK';
-const cases = [
-  {name: 'plan task+plan -> allow', session: S('vteam-plan'), tool: 'task', args: {subagent_type: 'vteam-plan'}},
-  {name: 'developer task+plan -> deny', session: S('vteam-developer'), tool: 'task', args: {subagent_type: 'vteam-plan'}},
-  {name: 'plan task+developer -> deny', session: S('vteam-plan'), tool: 'task', args: {subagent_type: 'vteam-developer'}},
-  {name: 'plan task+missing -> deny', session: S('vteam-plan'), tool: 'task', args: {}},
-  {name: 'plan task+nullargs -> deny', session: S('vteam-plan'), tool: 'task', args: null},
-  {name: 'plan execute -> deny', session: S('vteam-plan'), tool: 'execute', args: {}},
-  {name: 'unmapped session -> pass-through', session: {agent: 'ghost-no-such-agent', dir: '/data/vteam-worker'}, tool: 'task', args: {subagent_type: 'vteam-plan'}},
-  {name: 'null session -> pass-through', session: null, tool: 'task', args: {subagent_type: 'vteam-plan'}},
-  {name: 'plan write plans/x.md -> allow', session: S('vteam-plan'), tool: 'write', args: {filePath: '/data/vteam-worker/tasks/' + T + '/.opencode/plans/x.md'}},
-  {name: 'plan write plans/x.md (relative) -> allow', session: S('vteam-plan'), tool: 'write', args: {filePath: 'tasks/' + T + '/.opencode/plans/x.md'}},
-  {name: 'plan write src/app.ts -> deny', session: S('vteam-plan'), tool: 'write', args: {filePath: '/data/vteam-worker/tasks/' + T + '/src/app.ts'}},
-  {name: 'plan write src/app.ts (relative) -> deny', session: S('vteam-plan'), tool: 'write', args: {filePath: 'src/app.ts'}},
-];
-console.log(JSON.stringify(cases.map((c) => {
-  const d = evaluateToolCall({rolesDoc, session: c.session, tool: c.tool, args: c.args});
-  return {name: c.name, action: d.action, message: d.message || null};
-}), null, 2));
-EOF
-GUARD_REMOTE="/tmp/e2e-plan-member-guard.js"
-GUARD_OUT="$EVIDENCE_DIR/guard-decisions.json"
-docker compose cp "$GUARD_JS" worker:"$GUARD_REMOTE" >/dev/null \
-  || fail "3-guard" "docker compose cp guard script into worker failed"
-docker compose exec -T worker node "$GUARD_REMOTE" >"$GUARD_OUT" 2>/dev/null \
-  || fail "3-guard" "worker guard eval failed (raw: $GUARD_OUT)"
-log "guard raw: $GUARD_OUT"
-if ! python3 - "$GUARD_OUT" <<'EOF'
+# ---------------------------------------------------------------- step 3: native permission contract
+log "--- step 3: native permission contract on the injected + control-plane payload (todo 5) ---"
+# The deleted worker guard decided task/edit scoping by hand. Its job is now the
+# engine's own `permission` config: exactly vteam-plan carries task=allow; every
+# built-in carries the native keys only, with '*' deny on edit and the
+# role-scoped allow globs preserved. No `.vteam-role-guard` artifact may exist.
+CONTRACT_OUT="$EVIDENCE_DIR/native-permission-contract.json"
+if ! python3 - "$INJECTED_OUT" "$POLICIES_OUT" "$CONTRACT_OUT" <<'EOF'
 import json,sys
-rows = json.load(open(sys.argv[1]))
-by = {r["name"]: r for r in rows}
-want = {
-  "plan task+plan -> allow": "allow",
-  "developer task+plan -> deny": "deny",
-  "plan task+developer -> deny": "deny",
-  "plan task+missing -> deny": "deny",
-  "plan task+nullargs -> deny": "deny",
-  "plan execute -> deny": "deny",
-  "unmapped session -> pass-through": "allow",
-  "null session -> pass-through": "allow",
-  "plan write plans/x.md -> allow": "allow",
-  "plan write plans/x.md (relative) -> allow": "allow",
-  "plan write src/app.ts -> deny": "deny",
-  "plan write src/app.ts (relative) -> deny": "deny",
-}
-for name, action in want.items():
-    assert name in by, "missing case %r" % name
-    assert by[name]["action"] == action, "%s = %r (want %s)" % (name, by[name]["action"], action)
-for name in [k for k, v in want.items() if v == "deny"]:
-    assert by[name].get("message"), "%s deny lacks correction message" % name
-print("guard: 12/12 decisions as specified (task gate + edit scoping + pass-through)")
+oc=json.load(open(sys.argv[1])); pol=json.load(open(sys.argv[2])); out=sys.argv[3]
+BUILTINS=["vteam-plan","vteam-product","vteam-architect","vteam-developer","vteam-tester","vteam-project_manager","vteam-librarian"]
+agents=oc.get("agent") or {}
+report={"perTask":{}, "editScoping":{}, "plugin":oc.get("plugin") or [], "leaks":[]}
+for name in BUILTINS:
+    assert name in agents, "injected opencode.json lacks %s" % name
+    perm=agents[name].get("permission") or {}
+    report["perTask"][name]=perm.get("task")
+    edit=perm.get("edit") or {}
+    report["editScoping"][name]={"star":edit.get("*"),"allows":[g for g,v in edit.items() if g!="*" and v in ("allow","ask")]}
+    report["leaks"] += ["%s:%s" % (name,k) for k in perm if k.startswith("vteam_")]
+# task gate: exactly vteam-plan allow, everyone else deny (engine-native; the old
+# hand-rolled allow-list is not ported).
+assert report["perTask"]["vteam-plan"]=="allow", "vteam-plan task=%r" % report["perTask"]["vteam-plan"]
+others=[n for n in BUILTINS if n!="vteam-plan"]
+assert all(report["perTask"][n]=="deny" for n in others), "non-plan task not deny: %r" % report["perTask"]
+# edit scoping: '*' deny everywhere; vteam-plan's allows stay inside plans.
+for name in BUILTINS:
+    assert report["editScoping"][name]["star"]=="deny", "%s edit '*':%r" % (name, report["editScoping"][name]["star"])
+plan_allows=report["editScoping"]["vteam-plan"]["allows"]
+assert plan_allows and all(".opencode/plans" in g for g in plan_allows), \
+  "vteam-plan edit allows outside plans: %r" % plan_allows
+# no vteam_ leak and no guard plugin registration.
+assert not report["leaks"], "vteam_ leaks: %r" % report["leaks"]
+assert not any(isinstance(p,str) and "vteam-role-guard" in p for p in report["plugin"]), \
+  "guard plugin still registered: %r" % report["plugin"]
+# control-plane agrees on the task gate for the governed agents.
+pg={a["name"]:a for a in (pol.get("agents") or [])}
+for name in BUILTINS:
+    assert pg[name]["permission"].get("task")==report["perTask"][name], \
+      "control-plane task disagrees for %s" % name
+json.dump(report, open(out,"w"), ensure_ascii=False, indent=2)
+print("native contract: task allow only vteam-plan; edit '*':deny everywhere; plans-scoped for plan; 0 vteam_ leaks; no guard plugin")
 EOF
 then
-  fail "3-guard" "guard assertions failed (raw: $GUARD_OUT)"
+  fail "3-native" "native permission contract failed (raw: $CONTRACT_OUT)"
 fi
-pass "3 (guard gate: plan task+plan allow; others deny; execute deny; unmapped pass-through; plans-write allow / src-write deny)"
+pass "3 (native contract: task allow only vteam-plan; edit '*':deny + plans-scoped for plan; 0 leaks; no guard plugin)"
 
 # ---------------------------------------------------------------- live prep: snapshots + channel watermark
 log "--- live prep: task-dir snapshot + group watermark ---"
@@ -787,7 +766,7 @@ fi
 
 # ---------------------------------------------------------------- step 5: live subagent spawn smoke (own vteam-plan session)
 log "--- step 5: live subagent spawn + nesting-blocked (bounded ${LIVE_TIMEOUT_SEC}s) ---"
-LIVE5_PATH="guard-fallback"
+LIVE5_PATH="native-fallback"
 if [[ "$LIVE4_OK" == "yes" ]]; then
   PROMPT5="$(mktmp)"
   cat >"$PROMPT5" <<EOF
@@ -839,18 +818,16 @@ EOF
   fi
   fi
 else
-  needs_attention "5-live" "step 4 not live-ok; subagent spawn proven via guard+layer-1 fallback (see live-path.txt)"
+  needs_attention "5-live" "step 4 not live-ok; subagent spawn proven via native-permission fallback (see live-path.txt)"
 fi
 # Fallback evidence is ALWAYS recorded (deterministic part of the spawn contract).
 {
   echo "live path taken: $LIVE5_PATH"
-  echo "parent spawn gate (guard): vteam-plan task+subagent_type=vteam-plan -> allow (see guard-decisions.json)"
-  echo "parent spawn gate (layer-1): injected vteam-plan permission.task=allow (see injected-opencode.json)"
-  echo "nesting block (guard): vteam-plan task+missing/other-subagent -> deny; execute -> deny (see guard-decisions.json)"
-  echo "nesting block (layer-1/opencode native): subagent sessions derive stricter permissions; task self-deny at depth>=1 (opencode childToolDenies). Live nested attempt result: see serve-msg-5.json when path=live."
+  echo "parent spawn gate (engine-native): injected vteam-plan permission.task=allow (see injected-opencode.json; contract in native-permission-contract.json)"
+  echo "nesting block (engine-native): subagent sessions derive stricter permissions; task self-deny at depth>=1 (opencode childToolDenies). The hand-rolled \"禁套娃\" rule was NOT ported (opencode-native-permissions-and-fixes todo 5) — no worker guard exists to decide it. Live nested attempt result: see serve-msg-5.json when path=live."
 } >"$EVIDENCE_DIR/live-path.txt"
-if [[ "$LIVE5_PATH" == "guard-fallback" ]]; then
-  log "step 5 via guard+layer-1 fallback (documented in live-path.txt)"
+if [[ "$LIVE5_PATH" == "native-fallback" ]]; then
+  log "step 5 via native-permission fallback (documented in live-path.txt)"
 fi
 
 # ---------------------------------------------------------------- step 6: plan_review absence
@@ -927,8 +904,8 @@ if [[ -d "$(dirname "$NOTEPAD")" ]]; then
     echo ""
     echo "## e2e-plan-member.sh run ($(date -u +%FT%TZ)) HEAD=$BASELINE_HEAD"
     echo "- seed: a_plan(ep_plan)/tmm_0000000006 non-main/one instance per builtin template; /agents template; /teams 计划员."
-    echo "- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; all six built-ins byte-identical to the regenerated F3-own baseline."
-    echo "- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny)."
+    echo "- injection: vteam-plan mode=all task=allow plans-scoped edit, native-only permission; all seven built-ins byte-identical to the frozen baseline."
+    echo "- native permission contract: task allow only vteam-plan; edit '*':deny + plans-scoped for plan; 0 vteam_ leaks; no guard plugin (native-permission-contract.json)."
     echo "- live step4 (group @): ${LIVE4_OK:-infra-skipped}; live step5 path: $LIVE5_PATH."
     echo "- plan_review: tools/list clean; POST /review HTTP $REVIEW_CODE; /agent-policies clean; repo non-spec grep zero hits."
     echo "- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: $(cat "$NEEDS_FILE" 2>/dev/null | tr '\n' ';')"

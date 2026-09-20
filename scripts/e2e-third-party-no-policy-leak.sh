@@ -180,34 +180,37 @@ log "[B0] discovery: docker exec $WORKER_CONTAINER sh -c \"find $WORK_DIR -maxde
 log "[B0] found:"
 printf '%s\n' "$DISC" | sed 's/^/[B0]   /' | tee -a "$EVIDENCE_FILE"
 printf '%s\n' "$DISC" | grep -qx "$WORK_DIR/opencode.json" || fail "B0" "canonical $WORK_DIR/opencode.json missing"
-printf '%s\n' "$DISC" | grep -qx "$WORK_DIR/.vteam-role-guard/roles.json" || fail "B0" "canonical $WORK_DIR/.vteam-role-guard/roles.json missing"
+if printf '%s\n' "$DISC" | grep -q "$WORK_DIR/.vteam-role-guard/roles.json"; then
+  fail "B0" "deleted guard artifact $WORK_DIR/.vteam-role-guard/roles.json still present"
+fi
+docker exec "$WORKER_CONTAINER" test '!' -e "$WORK_DIR/.vteam-role-guard" 2>/dev/null \
+  || fail "B0" "$WORK_DIR/.vteam-role-guard still exists (deleted guard layer not purged)"
+if docker exec "$WORKER_CONTAINER" sh -c "grep -q vteam-role-guard '$WORK_DIR/opencode.json'" 2>/dev/null; then
+  fail "B0" "injected opencode.json still registers vteam-role-guard"
+fi
 
 mkdir -p "$TMP_DIR/live"
 docker cp "$WORKER_CONTAINER:$WORK_DIR/opencode.json" "$TMP_DIR/live/opencode.json" >/dev/null
-docker cp "$WORKER_CONTAINER:$WORK_DIR/.vteam-role-guard/roles.json" "$TMP_DIR/live/roles.json" >/dev/null
-CANON_COUNT=2
+CANON_COUNT=1
 EXTRA_LIST=""
 if docker exec "$WORKER_CONTAINER" sh -c 'test -f /root/.config/opencode/opencode.json' 2>/dev/null; then
   docker cp "$WORKER_CONTAINER:/root/.config/opencode/opencode.json" "$TMP_DIR/live/opencode-home.json" >/dev/null
   EXTRA_LIST="/root/.config/opencode/opencode.json"
-  CANON_COUNT=3
+  CANON_COUNT=2
 fi
-log "[B0] files checked: $CANON_COUNT (2 canonical injected artifacts${EXTRA_LIST:+ + 1 supplementary HOME model-credential config: $EXTRA_LIST})"
+log "[B0] files checked: $CANON_COUNT (1 canonical injected artifact${EXTRA_LIST:+ + 1 supplementary HOME model-credential config: $EXTRA_LIST})"
 log "[B0] sha256 opencode.json = $(shasum -a 256 "$TMP_DIR/live/opencode.json" | awk '{print $1}') (mtime: $(docker exec "$WORKER_CONTAINER" sh -c "stat -c '%y' '$WORK_DIR/opencode.json'" 2>/dev/null | tr -d '\r'))"
-log "[B0] sha256 roles.json    = $(shasum -a 256 "$TMP_DIR/live/roles.json" | awk '{print $1}') (mtime: $(docker exec "$WORKER_CONTAINER" sh -c "stat -c '%y' '$WORK_DIR/.vteam-role-guard/roles.json'" 2>/dev/null | tr -d '\r'))"
+log "[B0] guard artifacts (roles.json / session mappings) absent by construction (todo 5 deletion)"
 log "[B0] policy-set equality (freshness signal): comparing artifact keys vs /agent-policies names"
 
-python3 - "$TMP_DIR/endpoint.json" "$TMP_DIR/live/opencode.json" "$TMP_DIR/live/roles.json" <<'PY' | tee -a "$EVIDENCE_FILE"
+python3 - "$TMP_DIR/endpoint.json" "$TMP_DIR/live/opencode.json" <<'PY' | tee -a "$EVIDENCE_FILE"
 import json, sys
-ep = json.load(open(sys.argv[1])); oc = json.load(open(sys.argv[2])); rl = json.load(open(sys.argv[3]))
+ep = json.load(open(sys.argv[1])); oc = json.load(open(sys.argv[2]))
 policies = {a["name"] for a in ep["agents"] if a.get("governed")}
-oc_keys = set((oc.get("agent") or {}).keys()); role_keys = set((rl.get("roles") or {}).keys())
+oc_keys = set((oc.get("agent") or {}).keys())
 print(f"[B1] opencode.json agent keys ({len(oc_keys)}) == /agent-policies governed names: {oc_keys == policies}")
 if oc_keys != policies: print(f"[B1]   divergence: extra={sorted(oc_keys-policies)} missing={sorted(policies-oc_keys)} (stale injection? no state was mutated by this script)")
-print(f"[B1] roles.json roles keys ({len(role_keys)}) == /agent-policies governed names: {role_keys == policies}")
-if role_keys != policies: print(f"[B1]   divergence: extra={sorted(role_keys-policies)} missing={sorted(policies-role_keys)}")
-print(f"[B1] guard session-mapping agent-name key set (roles.json keys) is exactly the governed set — external-name membership is asserted structurally in the leak check below")
-print(f"[B1] roles.json enabled={rl.get('enabled')}")
+print("[B1] guard artifacts (roles.json / session mappings) absent by construction (todo 5 deletion)")
 PY
 
 # external name list is ENGINE-DERIVED at runtime (never hardcoded as source of truth)
@@ -319,98 +322,66 @@ check_artifact() { # <path> <kind> <display>
 
 check_artifact "$TMP_DIR/live/opencode.json" opencode "$WORK_DIR/opencode.json" \
   || fail "B-oc" "opencode.json has an agent-slot leak / unexplained hit"
-check_artifact "$TMP_DIR/live/roles.json" roles "$WORK_DIR/.vteam-role-guard/roles.json" \
-  || fail "B-roles" "roles.json has a roles-slot leak / unexplained hit"
 if [[ -f "$TMP_DIR/live/opencode-home.json" ]]; then
   check_artifact "$TMP_DIR/live/opencode-home.json" opencode-home "/root/.config/opencode/opencode.json" \
     || fail "B-home" "HOME opencode.json has an agent-slot leak / unexplained hit"
 fi
 pass "B (structural leak check clean on $CANON_COUNT files; slotHits=0; unexplainedHits=0)"
 
-# ---------------------------------------------------------------- B3: guard session mappings
-log "=== B3. guard session->policy mappings ==="
-SESS_DIR="$WORK_DIR/.vteam-role-guard/sessions"
-mkdir -p "$TMP_DIR/sessions"
-while IFS= read -r sf; do
-  [[ -n "$sf" ]] || continue
-  docker cp "$WORKER_CONTAINER:$sf" "$TMP_DIR/sessions/$(basename "$sf")" >/dev/null
-done < <(docker exec "$WORKER_CONTAINER" sh -c "ls -1 '$SESS_DIR'/*.json 2>/dev/null" | tr -d '\r' || true)
-SESS_COUNT="$(find "$TMP_DIR/sessions" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l | tr -d ' ')"
-log "[B3] discovered session mapping files: $SESS_COUNT"
-if ! python3 - "$TMP_DIR/sessions" "$TMP_DIR/externals.json" "$TMP_DIR/live/roles.json" <<'PY' | tee -a "$EVIDENCE_FILE"
-import json, os, sys
-sess_dir, ext_path, roles_path = sys.argv[1], sys.argv[2], sys.argv[3]
-ext = set(json.load(open(ext_path))); role_keys = set((json.load(open(roles_path)).get("roles") or {}).keys())
-bad = []
-files = sorted(f for f in os.listdir(sess_dir) if f.endswith(".json")) if os.path.isdir(sess_dir) else []
-for f in files:
-    d = json.load(open(os.path.join(sess_dir, f)))
-    agent = d.get("agent")
-    mapped = agent in role_keys
-    external = agent in ext
-    print(f"[B3] {f}: agent={agent!r} mapped-to-policy={mapped} external={external} dir={d.get('dir')}")
-    if external or not mapped:
-        bad.append(f)
-print(f"[B3] session mappings checked={len(files)} violations={len(bad)} (external agent mapped or unmapped agent: {bad})")
-sys.exit(1 if bad else 0)
-PY
-then
-  fail "B3" "session mapping contains an external or unmapped agent name"
-fi
-pass "B3 (all session mappings point at governed agents; no external mapping)"
+# ---------------------------------------------------------------- B3: guard session mappings GONE
+log "=== B3. guard session->policy mappings (deleted layer) ==="
+docker exec "$WORKER_CONTAINER" test '!' -e "$WORK_DIR/.vteam-role-guard/sessions" 2>/dev/null \
+  || fail "B3" "$WORK_DIR/.vteam-role-guard/sessions still exists (deleted guard layer not purged)"
+log "[B3] $WORK_DIR/.vteam-role-guard/sessions absent - the session->policy mapping mechanism is deleted (todo 5);"
+log "[B3] dispatch identity now flows through the session DB rows consumed by the server-side gate."
+pass "B3 (guard session-mapping artifact absent; no external mapping possible by construction)"
 
 # ---------------------------------------------------------------- C: negative control (D4)
-log "=== C. negative control — the structural check MUST detect an injected external name ==="
-# Prefer the external name 'plan' when present: it is ALSO a legitimate handoff
-# task-type mapping KEY (`correction.handoff.plan` -> "vteam-plan"), so it proves
-# the checker distinguishes a true agent-name slot from a justified non-slot hit.
+log "=== C. negative control - the structural check MUST detect an injected external name ==="
 NC_NAME="$(python3 -c 'import json,sys; e=json.load(open(sys.argv[1])); print("plan" if "plan" in e else sorted(e)[0])' "$TMP_DIR/externals.json")"
-log "[C1] chosen real external name (from the engine list): $(printf '%s' "$NC_NAME") (also a legitimate handoff mapping key — the control proves slot vs non-slot discrimination)"
+log "[C1] chosen real external name (engine-derived): $(printf '%s' "$NC_NAME")"
 mkdir -p "$TMP_DIR/nc"
-python3 - "$TMP_DIR/live/opencode.json" "$TMP_DIR/live/roles.json" "$TMP_DIR/nc" "$NC_NAME" <<'PY'
+python3 - "$TMP_DIR/live/opencode.json" "$TMP_DIR/nc" "$NC_NAME" <<'PY'
 import json, sys
-oc_path, roles_path, out_dir, name = sys.argv[1:5]
-oc = json.load(open(oc_path)); rl = json.load(open(roles_path))
+oc_path, out_dir, name = sys.argv[1:4]
+oc = json.load(open(oc_path))
 oc.setdefault("agent", {})[name] = {"mode": "primary", "description": "negative-control injection"}
-rl.setdefault("roles", {})[name] = {"permission": {}, "tools": {}}
 json.dump(oc, open(f"{out_dir}/opencode.json", "w"), ensure_ascii=False, indent=2)
-json.dump(rl, open(f"{out_dir}/roles.json", "w"), ensure_ascii=False, indent=2)
-print(f"[C2] injected {name!r} as a top-level key of opencode.json `agent` and roles.json `roles` (TMP COPIES ONLY)")
+print(f"[C2] injected {name!r} as a top-level key of opencode.json `agent` (TMP COPY ONLY)")
 PY
-NC_OC_RC=0; NC_ROLES_RC=0
+NC_OC_RC=0
 python3 "$TMP_DIR/check.py" "$TMP_DIR/nc/opencode.json" opencode "$TMP_DIR/externals.json" "NC copy opencode.json" >"$TMP_DIR/nc-oc.txt" 2>&1 || NC_OC_RC=$?
-python3 "$TMP_DIR/check.py" "$TMP_DIR/nc/roles.json" roles "$TMP_DIR/externals.json" "NC copy roles.json" >"$TMP_DIR/nc-roles.txt" 2>&1 || NC_ROLES_RC=$?
-cat "$TMP_DIR/nc-oc.txt" "$TMP_DIR/nc-roles.txt" | tee -a "$EVIDENCE_FILE"
+cat "$TMP_DIR/nc-oc.txt" | tee -a "$EVIDENCE_FILE"
 [[ "$NC_OC_RC" -ne 0 ]] || fail "C" "negative control NOT detected in opencode.json copy (check is not discriminating)"
-[[ "$NC_ROLES_RC" -ne 0 ]] || fail "C" "negative control NOT detected in roles.json copy (check is not discriminating)"
-grep -q 'result: LEAK' "$TMP_DIR/nc-oc.txt" || fail "C" "opencode.json NC exited non-zero for a non-detection reason (crash, not a leak)"
-grep -q 'result: LEAK' "$TMP_DIR/nc-roles.txt" || fail "C" "roles.json NC exited non-zero for a non-detection reason (crash, not a leak)"
-grep -q '\[LEAK\]' "$TMP_DIR/nc-oc.txt" || fail "C" "opencode.json NC did not report a [LEAK] slot hit"
-grep -q '\[LEAK\]' "$TMP_DIR/nc-roles.txt" || fail "C" "roles.json NC did not report a [LEAK] slot hit"
-log "[C3] both NC copies correctly DETECTED (exit 1 each + 'result: LEAK' + [LEAK] slot hit) — the structural check is discriminating"
+grep -q 'result: LEAK' "$TMP_DIR/nc-oc.txt" || fail "C" "NC exited non-zero for a non-detection reason (crash, not a leak)"
+grep -q '\[LEAK\]' "$TMP_DIR/nc-oc.txt" || fail "C" "NC did not report a [LEAK] slot hit"
+log "[C3] NC copy correctly DETECTED (exit 1 + 'result: LEAK' + [LEAK] slot hit) - the structural check is discriminating"
 
-# re-verify live artifacts are byte-identical after the control (they were never touched)
+# re-verify the live artifact is byte-identical after the control (it was never touched)
 docker cp "$WORKER_CONTAINER:$WORK_DIR/opencode.json" "$TMP_DIR/live/opencode.post.json" >/dev/null
-docker cp "$WORKER_CONTAINER:$WORK_DIR/.vteam-role-guard/roles.json" "$TMP_DIR/live/roles.post.json" >/dev/null
 shasum -a 256 "$TMP_DIR/live/opencode.json" "$TMP_DIR/live/opencode.post.json" | tee -a "$EVIDENCE_FILE"
-shasum -a 256 "$TMP_DIR/live/roles.json" "$TMP_DIR/live/roles.post.json" | tee -a "$EVIDENCE_FILE"
 cmp -s "$TMP_DIR/live/opencode.json" "$TMP_DIR/live/opencode.post.json" || fail "C4" "live opencode.json changed during the run"
-cmp -s "$TMP_DIR/live/roles.json" "$TMP_DIR/live/roles.post.json" || fail "C4" "live roles.json changed during the run"
-rm -rf "$TMP_DIR/nc" "$TMP_DIR/nc-oc.txt" "$TMP_DIR/nc-roles.txt"
-pass "C (NC detected in both artifacts; live artifacts byte-identical before/after; copies discarded)"
+rm -rf "$TMP_DIR/nc" "$TMP_DIR/nc-oc.txt"
+pass "C (NC detected; live artifact byte-identical before/after; copy discarded)"
 
-# ---------------------------------------------------------------- D: frozen baseline + worker untouched
-log "=== D. frozen baseline + worker/** untouched ==="
+# ---------------------------------------------------------------- D: frozen baseline + guard layer absence
+log "=== D. frozen baseline + role-guard layer absence ==="
 ACTUAL_SHA="$(shasum -a 256 "$FROZEN_BASELINE" | awk '{print $1}')"
 log "[D1] $FROZEN_BASELINE"
 log "[D1] sha256 actual=$ACTUAL_SHA expected=$FROZEN_SHA"
 [[ "$ACTUAL_SHA" == "$FROZEN_SHA" ]] || fail "D1" "frozen baseline sha changed"
 pass "D1 (frozen baseline sha unchanged)"
-WORKER_DIFF="$(git diff --stat -- worker/)"
-WORKER_UNTRACKED="$(git status --porcelain -- worker/)"
-[[ -z "$WORKER_DIFF" ]] || fail "D2" "worker/ has tracked modifications: $WORKER_DIFF"
-[[ -z "$WORKER_UNTRACKED" ]] || fail "D2" "worker/ has untracked/other changes: $WORKER_UNTRACKED"
-pass "D2 (worker/** untouched: no tracked diff, no untracked files)"
+# D2 asserts the deleted layer stays deleted: no role-guard reference survives in
+# worker/src outside the injector's one-time purge, the files are not resurrected as
+# shims, and the live worker volume carries no guard artifact.
+ROLE_GUARD_REFS="$(grep -rIln "role-guard" worker/src --include='*.ts' 2>/dev/null | grep -vE 'injector(\.spec)?\.ts$' || true)"
+[[ -z "$ROLE_GUARD_REFS" ]] \
+  || fail "D2" "worker/src still references role-guard outside the injector's one-time purge: $ROLE_GUARD_REFS"
+[[ ! -e worker/src/role-guard && ! -e worker/src/resources/role-guard-plugin.ts ]] \
+  || fail "D2" "deleted role-guard source files are back (resurrected shim?)"
+docker exec "$WORKER_CONTAINER" test '!' -e "$WORK_DIR/.vteam-role-guard" 2>/dev/null \
+  || fail "D2" "live worker volume still carries $WORK_DIR/.vteam-role-guard"
+pass "D2 (role-guard layer absent from worker/src and the live volume; no resurrected shim)"
 
 # ---------------------------------------------------------------- E: stack still healthy
 curl -sS -o /dev/null -w '%{http_code}' "$SERVER_URL/api/v1/health" 2>/dev/null | grep -q '^200$' \
@@ -421,5 +392,5 @@ docker ps --format '{{.Names}}' | grep -qx "$WORKER_CONTAINER" || fail "E" "work
 pass "E (stack still healthy: server + web + worker)"
 
 log ""
-log "SUMMARY: (a)(b)(c)(d) set-equal (extras=[] omissions=[]); $CANON_COUNT artifacts checked, 0 agent-slot leak hits, 0 unexplained hits; negative control detected; frozen sha unchanged; worker/** untouched; stack healthy."
+log "SUMMARY: (a)(b)(c)(d) set-equal (extras=[] omissions=[]); $CANON_COUNT artifacts checked, 0 agent-slot leak hits, 0 unexplained hits; negative control detected; frozen sha unchanged; role-guard layer absent (src + live volume); stack healthy."
 log "all assertions PASS; evidence: $EVIDENCE_FILE"

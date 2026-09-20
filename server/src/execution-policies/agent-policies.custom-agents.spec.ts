@@ -64,6 +64,8 @@ describe('agent-policies custom agents (Todo 2)', () => {
         return [
           name,
           {
+            // todo 5: guard role carries permission only (tools/bashDeny/correction
+            // were consumed solely by the deleted worker guard).
             permission: {
               edit: buildEditPermission(boundary.writeGlobs),
               read: buildReadPermission(),
@@ -72,13 +74,6 @@ describe('agent-policies custom agents (Todo 2)', () => {
               ...Object.fromEntries(
                 boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
               ),
-            },
-            tools: { ...boundary.toolAllows },
-            bashDeny: [...ROLE_BASH_DENY_PATTERNS],
-            correction: {
-              scopeSummary: boundary.scopeSummary,
-              handoff: { ...boundary.handoffTo },
-              denyTemplate: ROLE_POLICY_DENY_TEMPLATE,
             },
           },
         ];
@@ -126,21 +121,18 @@ describe('agent-policies custom agents (Todo 2)', () => {
             boundary.toolAllows,
             tool,
           );
+          // todo 5：guard.roles[*] 只留 permission；agents[] 永不发射平台键。
+          expect(agent.permission).not.toHaveProperty(tool);
           if (granted) {
-            expect(agent.permission).not.toHaveProperty(tool);
             expect(role.permission).not.toHaveProperty(tool);
-            expect(role.tools).toHaveProperty(tool, 'allow');
           } else {
-            // todo 4：deny 明细只留在 guard.roles[*].permission，agents[] 不发射平台键。
-            expect(agent.permission).not.toHaveProperty(tool);
             expect(role.permission).toHaveProperty(tool, 'deny');
-            expect(role.tools).not.toHaveProperty(tool);
           }
-          assertions += 4;
+          assertions += 3;
         }
       }
       expect(assertions).toBe(
-        policies.agents.length * FORMERLY_GATED_TOOLS.length * 4,
+        policies.agents.length * FORMERLY_GATED_TOOLS.length * 3,
       );
       expect(assertions).toBeGreaterThan(0);
     });
@@ -240,12 +232,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
 
       const role = policies.guard.roles['vteam-demo-agent'];
       expect(role).toBeDefined();
-      expect(role.tools).toEqual({
-        vteam_group_post: 'allow',
-        vteam_member_remove: 'deny',
-        vteam_task_context: 'ask',
-      });
-      expect(role.bashDeny).toEqual([...ROLE_BASH_DENY_PATTERNS]);
+      expect(Object.keys(role)).toEqual(['permission']);
 
       const def = policies.agents.find((a) => a.name === 'vteam-demo-agent');
       expect(def?.mode).toBe('primary');

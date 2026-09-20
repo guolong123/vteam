@@ -308,14 +308,14 @@ describe('mergeProviderSection（C6：只替换 provider 段，其余 key 保留
     const existing = JSON.stringify({
       $schema: 'https://opencode.ai/config.json',
       mcp: { vteam: { enabled: true } },
-      plugin: ['./.opencode/plugin/vteam-role-guard.ts'],
+      plugin: ['oh-my-openagent@latest'],
       provider: { old: { npm: 'x' } },
     });
     const merged = mergeProviderSection(existing, section);
     expect(merged).not.toBeNull();
     const parsed = JSON.parse(merged as string) as Record<string, unknown>;
     expect(parsed.mcp).toEqual({ vteam: { enabled: true } });
-    expect(parsed.plugin).toEqual(['./.opencode/plugin/vteam-role-guard.ts']);
+    expect(parsed.plugin).toEqual(['oh-my-openagent@latest']);
     expect(Object.keys(parsed.provider as object)).toEqual(['my-local']);
   });
 

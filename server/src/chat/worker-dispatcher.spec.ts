@@ -2243,13 +2243,20 @@ describe('WorkerDispatcher', () => {
       }
     });
 
-    it('Todo 11：/agent-policies 出厂 guard.roles[name].correction → boundary 与冻结基线逐字节一致', () => {
+    it('guard.roles[*] 不再携带 correction（todo 5 死载荷删除）；boundary 改走常量源且逐字节一致', () => {
+      // opencode-native-permissions-and-fixes todo 5: the worker guard that consumed
+      // `guard.roles[*].correction` is deleted, so the payload no longer emits it.
+      // The boundary text itself is still produced by the dispatcher from the DB
+      // policy row / constant source and must stay byte-identical to the baseline.
       const baseline = loadAgentPoliciesBaseline();
       const boundary = loadBoundaryBaseline();
       for (const [name, expected] of Object.entries(boundary.sections)) {
         const role = baseline.guard.roles[name];
         expect(role).toBeDefined();
-        expect(renderBoundarySection(role.correction)).toBe(expected);
+        expect(Object.keys(role)).toEqual(['permission']);
+        expect(role).not.toHaveProperty('correction');
+        const correction = resolveConstantPolicySource(name)?.config.correction;
+        expect(renderBoundarySection(correction)).toBe(expected);
       }
     });
 

@@ -114,3 +114,53 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `JSON_SET`/`JSON_REMOVE` 就地改。
 - `channel_send` 决策：无身份 → 最近会话解析 → 命中成员才做矩阵判定；不命中 403
   PLATFORM_MCP_TOOL_NOT_PERMITTED（不是静默放行）。
+
+## [2026-09-20] todo 5 — role-guard layer deleted; dead guard extras dropped
+
+- **The persisted volume is the real deployment risk.** Deleting the plugin source is NOT
+  enough: `<workDir>/.opencode-worker-inject.json` (guardRolesFile/guardSessionsDir/
+  guardPluginFile), `<workDir>/opencode.json` (`plugin` entry) and
+  `<workDir>/.vteam-role-guard/` all survive in the volume, so the next image would boot
+  opencode still pointed at a plugin file that no longer exists. `purgeLegacyGuardArtifacts()`
+  in the injector removes exactly those (both injection paths) and is asserted live on a
+  reused volume. Any future deleted-injection layer needs the same purge step.
+- **`resolveGuardTools` / `resolveBashDeny` are NOT dead after deleting the guard.**
+  They feed `resolveByAgent` → `ResolvedExecutionPolicy.tools`, which is the matrix the
+  LIVE server gate (todo 3) reads. Reference search before deletion: both stayed.
+  Same for `guardForAgent` / `canonicalizeTools` / `filterToolsMatrix` /
+  `canonicalizeCorrection` (the last is used by `worker-dispatcher.ts` for the DB-sourced
+  boundary injection, independent of the deleted payload).
+- **The payload's `guard.roles[*]` is now `{permission}` only** — `tools`/`bashDeny`/
+  `correction` were consumed ONLY by the deleted worker plugin. `permission` stays because
+  it is the historical byte-identity anchor and the agents-page/my_profile display source.
+- **Baseline transition:** `3d26b49f…` → `e795b0c8…` (todo-4 → todo-5 shot). Both harnesses'
+  `FROZEN_BASELINE_SHA256` defaults updated; the historical
+  `vteam-role-behavior-abstraction/before-agent-policies.json` (3b8c5d4b…) untouched and
+  still asserted by `e2e-third-party-no-policy-leak.sh` D1.
+- **Harness gotcha that cost a false FAIL:** `e2e-role-boundaries.sh` f2 polled the injected
+  file with a whole-file `grep '"bash": "deny"'` — but `vteam-project_manager`'s baseline
+  ALREADY has `bash: deny`, so the poll passed against the pre-restart container and the
+  comparison then read a stale file. Fix: poll the *edited role's own field* (a small python
+  reader) AND gate on `docker inspect .State.StartedAt > reload_requested_at`. Any
+  "did the restart land" poll must key on a value that is genuinely new.
+- **`--force-recreate` was also hiding in the f2 EXIT trap.** It re-runs the `init`
+  dependency → reseed. Replaced with `restart` (the brief forbids `--force-recreate`).
+  Same fix applied to `e2e-plan-member.sh` step 0c.
+- **The todo-3 gate runs BEFORE the retained checks**, so old probes that used a caller
+  lacking the tool now abort in the wrong place. The permission-matrix harness now derives
+  its probe member/tool FROM the live gate matrix (member must HOLD my_profile and
+  task_transition; the denied probe tool must be absent), and the hook-cancel probe
+  registers as MAIN (a hook_cancel holder) then cancels as a different holder. Both
+  throwaway sessions are inserted idempotently and deleted on EXIT.
+- **Offline gate probe technique (reusable):** `docker compose cp` a small JS file into the
+  server container and `node` it — it can `require('/app/dist/src/...')` the compiled
+  `PlatformToolPermissionService` / `ExecutionPolicyService` and drive the REAL gate with a
+  real PrismaClient. That is how permission-matrix step 1 now derives the 203-cell matrix
+  from the live production code path instead of the deleted worker guard.
+- `python3 -c` inside a `$( … <<'HEREDOC' … )` command substitution is fragile in these
+  scripts (the outer quoting breaks). Write the heredoc to a temp JSON file with a TOP-LEVEL
+  `python3 … <<'EOF'`, then read fields with short `python3 -c` calls.
+- The models' own refusal behaviour can mask a confinement probe: both out-of-bounds edit
+  probes were refused by the model before the engine's permission layer was reached.
+  Confinement is asserted structurally from the injected config (the `edit` glob) plus the
+  engine's own `evaluated permission=` log lines, not only from a probe's outcome.

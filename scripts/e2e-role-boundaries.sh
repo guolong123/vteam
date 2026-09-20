@@ -3,10 +3,10 @@
 # e2e: layered role enforcement boundaries (plan Todo 21).
 #
 # Covers scenarios a/c/d/e/f/f2/g against a LIVE stack (server + worker + opencode serve):
-#   a) product role edits out-of-scope path         -> layer-1 edit deny and/or guard correction
+#   a) product role edits out-of-scope path         -> layer-1 (native) edit deny
 #   c) bound-session ask flow via group @mention    -> permission question reply 200 (not 503)
 #   d) developer in-scope edit                      -> allowed (message arrives, no denial)
-#   e) project-manager dangerous bash               -> denied (layer-1 bash and/or guard)
+#   e) project-manager dangerous bash               -> denied (layer-1 native bash)
 #   f) task tool contract                           -> /agent-policies + injected opencode.json:
 #                                                      exactly vteam-plan task=allow, others deny
 #   f2) DB-driven builtin policy (plan Todo 15)     -> PATCH a builtin policy's tools/permission,
@@ -42,6 +42,7 @@
 #   ADMIN_JWT                override seed-admin JWT (else auto-login seed-admin/Admin@123456).
 #   EVIDENCE_DIR             where to stash raw JSON responses. Default: ./e2e-evidence (gitignored by caller).
 #   INJECTED_OPENCODE_JSON   override path of the worker-injected opencode.json for scenario (f).
+#                            Scenario (f2) additionally asserts `.vteam-role-guard/` is NOT written (todo 5).
 #                            Default: $WORK_DIR/opencode.json. In containerized deployments the
 #                            worker WORK_DIR lives inside the worker container; point this at a
 #                            local copy (e.g. via `docker cp worker:/data/vteam-worker/opencode.json`).
@@ -77,8 +78,9 @@ ADMIN_JWT="${ADMIN_JWT:-}"
 EVIDENCE_DIR="${EVIDENCE_DIR:-./e2e-evidence}"
 #
 # Scenario (f2) — DB-driven builtin policy proof (plan Todo 15) — knobs:
-#   BASELINE_POLICIES   frozen factory baseline (baseline-agent-policies.json, todo 4:
-#                       agents[].permission native-only). Default the repo evidence copy;
+#   BASELINE_POLICIES   frozen factory baseline (baseline-agent-policies.json, todo 5:
+#                       agents[].permission native-only + guard.roles[*] = {permission}).
+#                       Default the repo evidence copy;
 #                       its sha256 is checked against FROZEN_BASELINE_SHA256 before any
 #                       assertion so a tampered/stale baseline fails loudly.
 #   FROZEN_BASELINE_SHA256  expected sha256 of BASELINE_POLICIES.
@@ -87,7 +89,7 @@ EVIDENCE_DIR="${EVIDENCE_DIR:-./e2e-evidence}"
 #                       (WORK_DIR stays the host-visible contract for scenario f.)
 #   RESTART_TIMEOUT_SEC / RESTART_INTERVAL_SEC  worker-reload poll budget (default 180/5).
 BASELINE_POLICIES="${BASELINE_POLICIES:-}"
-FROZEN_BASELINE_SHA256="${FROZEN_BASELINE_SHA256:-3d26b49f5ccd81d546f69dbfda8bd7c2568803a6128063f936b9f57045c5d3ee}"
+FROZEN_BASELINE_SHA256="${FROZEN_BASELINE_SHA256:-e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5}"
 EDIT_POLICY_ID="${EDIT_POLICY_ID:-ep_product}"
 WORKER_WORK_DIR="${WORKER_WORK_DIR:-${WORK_DIR:-/data/vteam-worker}}"
 RESTART_TIMEOUT_SEC="${RESTART_TIMEOUT_SEC:-180}"
@@ -146,7 +148,9 @@ restore_edited_policy() {
     api PATCH "/execution-policies/$EDIT_POLICY_ID" "$ADMIN_JWT" "$RESTORE_CONFIG_FILE" \
       "$EVIDENCE_DIR/policy-restore.json" >/dev/null 2>&1 || true
     if [[ -n "${WORKER_RELOADED_FOR_F2:-}" ]] && have_docker; then
-      docker_compose up -d --force-recreate worker >/dev/null 2>&1 || true
+      # restart (NOT --force-recreate, which re-runs the `init` dependency and can
+      # reseed the DB) is sufficient to re-run the start-only injector.
+      docker_compose restart worker >/dev/null 2>&1 || true
     fi
   fi
   RESTORE_DONE="yes"
@@ -321,11 +325,9 @@ if want a || want d || want e || want g || want c; then
 fi
 
 # ---------------------------------------------------------------- expected substrings
-# Guard correction literal: worker/src/role-guard/policy.ts:267 (+ seed denyTemplate with
-# 职责/转交 suffix). Layer-1 (opencode native permission) denial surfaces in serve
-# messages with deny/denied wording (exact literal is serve-version dependent; the guard
-# literal above is the stable contract, Todo 17 spike left live serve text UNVERIFIED).
-GUARD_DENY='【越界拦截'
+# opencode-native-permissions-and-fixes todo 5: the hand-rolled guard is deleted, so the
+# only stable contract is the engine's own layer-1 (native `permission`) denial. Its exact
+# serve wording is version-dependent; match the deny family.
 NATIVE_DENY='[Dd]eny|[Dd]enied|not allowed|拒绝'
 
 # ---------------------------------------------------------------- scenario (a): product out-of-scope edit -> deny
@@ -337,7 +339,7 @@ log "scenario=a sid=$SID_A"
 read -r CODE_A OUT_A <<<"$(worker_execute 'vteam-product' "$TASK_DIR" "$SID_A" "$TASK_ID" 'a_product' '请直接修改文件 server/src/foo.ts，在文件末尾追加一行注释 // e2e-a，然后汇报完成。')"
 cp "$OUT_A" "$EVIDENCE_DIR/execute-a.json"; rm -f "$OUT_A"
 [[ "$CODE_A" == "202" ]] || inconclusive "a" "POST /execute HTTP $CODE_A (raw: $EVIDENCE_DIR/execute-a.json)"
-poll_serve_message "$SID_A" "$GUARD_DENY|$NATIVE_DENY" "a"
+poll_serve_message "$SID_A" "$NATIVE_DENY" "a"
 pass "a (product out-of-scope edit denied)"
 fi
 
@@ -354,7 +356,7 @@ cp "$OUT_D" "$EVIDENCE_DIR/execute-d.json"; rm -f "$OUT_D"
 # `text|part|...` pattern also matches the prompt echo envelope and would pass
 # vacuously even when the model never ran (observed 2026-09-13: cost=0/tokens=0).
 poll_serve_message "$SID_D" 'hello-e2e' "d"
-if grep -Eq "$GUARD_DENY|$NATIVE_DENY" "$EVIDENCE_DIR/serve-msg-d.json"; then
+if grep -Eq "$NATIVE_DENY" "$EVIDENCE_DIR/serve-msg-d.json"; then
   fail "d" "developer in-scope run hit denial markers (raw: $EVIDENCE_DIR/serve-msg-d.json)"
 fi
 pass "d (developer in-scope allowed)"
@@ -368,7 +370,7 @@ SID_E="$(serve_create_session)" || inconclusive "e" "POST {SERVE_BASE_URL}/sessi
 read -r CODE_E OUT_E <<<"$(worker_execute 'vteam-project_manager' "$TASK_DIR" "$SID_E" "$TASK_ID" 'a_project_manager' '请执行 rm -rf /tmp/vteam-e2e-marker-dir 并汇报结果。')"
 cp "$OUT_E" "$EVIDENCE_DIR/execute-e.json"; rm -f "$OUT_E"
 [[ "$CODE_E" == "202" ]] || inconclusive "e" "POST /execute HTTP $CODE_E (raw: $EVIDENCE_DIR/execute-e.json)"
-poll_serve_message "$SID_E" "$GUARD_DENY|$NATIVE_DENY" "e"
+poll_serve_message "$SID_E" "$NATIVE_DENY" "e"
 pass "e (project-manager dangerous bash denied)"
 fi
 
@@ -380,7 +382,7 @@ SID_G="$(serve_create_session)" || inconclusive "g" "POST {SERVE_BASE_URL}/sessi
 read -r CODE_G OUT_G <<<"$(worker_execute "$CLONE_AGENT" "$TASK_DIR" "$SID_G" "$TASK_ID" 'a_product_clone' '请直接修改文件 server/src/foo.ts，在文件末尾追加一行注释 // e2e-g，然后汇报完成。')"
 cp "$OUT_G" "$EVIDENCE_DIR/execute-g.json"; rm -f "$OUT_G"
 [[ "$CODE_G" == "202" ]] || inconclusive "g" "POST /execute HTTP $CODE_G (set CLONE_AGENT to an existing clone agent; raw: $EVIDENCE_DIR/execute-g.json)"
-poll_serve_message "$SID_G" "$GUARD_DENY|$NATIVE_DENY" "g"
+poll_serve_message "$SID_G" "$NATIVE_DENY" "g"
 pass "g (clone role still denied)"
 fi
 
@@ -611,86 +613,104 @@ d = json.load(open(sys.argv[1])); pid = sys.argv[2]
 role_name = "vteam-" + pid[len("ep_"):]
 role = (d.get("guard") or {}).get("roles", {}).get(role_name)
 assert role, "guard.roles lacks %s" % role_name
-assert role["tools"].get("vteam_group_post") == "deny", "control-plane tools not edited: %r" % role["tools"]
-assert role["tools"].get("vteam_memory_search") == "ask", "control-plane tools not edited: %r" % role["tools"]
+# todo 5: the payload carries permission only; the tool matrix that the DB edit
+# targets is consumed by resolveByAgent (server gate) and is asserted live by
+# scripts/e2e-permission-matrix.sh step 1, not re-emitted here.
+assert sorted(role) == ["permission"], "guard role keys=%r (want ['permission'])" % sorted(role)
 assert (role["permission"] or {}).get("bash") == "deny", "control-plane permission.bash not edited"
-print("control-plane: %s guard reflects DB edit" % role_name)
+agent = next(a for a in d.get("agents") or [] if a.get("name") == role_name)
+assert (agent.get("permission") or {}).get("bash") == "deny", "agents[] permission.bash not projected from the edit"
+print("control-plane: %s permission reflects DB edit (tools live in resolveByAgent, asserted by e2e-permission-matrix)" % role_name)
 EOF
 then
   fail "f2" "control-plane /agent-policies does not reflect the edit (DB read path dead?)"
 fi
-pass "f2b (control-plane /agent-policies reflects the DB edit)"
+pass "f2b (control-plane /agent-policies reflects the DB edit; guard role = {permission})"
 
 # Reload the worker so its start-only injector re-fetches /agent-policies.
 have_docker || inconclusive "f2" "docker unavailable; cannot reload the worker to prove injection"
 log "reloading worker (restart) ..."
+reload_requested_at="$(date -u +%FT%TZ)"
 reload_worker
 WORKER_RELOADED_FOR_F2="yes"
+
+# fetch_injected_opencode <out> : copy the worker-injected opencode.json to the host.
+fetch_injected_opencode() {
+  local out="$1"
+  docker_compose cp "worker:$WORKER_WORK_DIR/opencode.json" "$out" >/dev/null 2>&1 \
+    || docker_compose exec -T worker cat "$WORKER_WORK_DIR/opencode.json" >"$out"
+}
+# injected_role_bash <out> : print the edited role's permission.bash value.
+# Reads the edited role's field, not the whole file: the baseline already contains
+# `"bash": "deny"` for vteam-project_manager, so a file-wide grep would pass before
+# the restart finished injecting.
+injected_role_bash() {
+  fetch_injected_opencode "$1" || return 1
+  python3 - "$1" "$EDIT_POLICY_ID" <<'PY'
+import json,sys
+oc=json.load(open(sys.argv[1])); pid=sys.argv[2]
+name="vteam-"+pid[len("ep_"):]
+entry=(oc.get("agent") or {}).get(name) or {}
+print((entry.get("permission") or {}).get("bash") or "")
+PY
+}
+# wait_worker_restarted : true once the container has actually come up again, so a stale
+# pre-restart container cannot satisfy the poll below.
+wait_worker_restarted() {
+  local started
+  started="$(docker inspect aiagents-compose-worker --format '{{.State.StartedAt}}' 2>/dev/null || true)"
+  [[ -n "$started" && "$started" > "$reload_requested_at" ]]
+}
+
 deadline=$((SECONDS + RESTART_TIMEOUT_SEC))
 injected_ready=""
 while [[ $SECONDS -lt $deadline ]]; do
-  if docker_compose exec -T worker test -f "$WORKER_WORK_DIR/.vteam-role-guard/roles.json" 2>/dev/null; then
-    if docker_compose exec -T worker grep -q '"vteam_group_post": "deny"' "$WORKER_WORK_DIR/.vteam-role-guard/roles.json" 2>/dev/null; then
+  if wait_worker_restarted; then
+    if [[ "$(injected_role_bash "$EVIDENCE_DIR/f2-injected-opencode.json" || true)" == "deny" ]]; then
       injected_ready="yes"; break
     fi
   fi
   sleep "$RESTART_INTERVAL_SEC"
 done
-[[ -n "$injected_ready" ]] || fail "f2" "worker roles.json did not pick up the edit within ${RESTART_TIMEOUT_SEC}s"
+[[ -n "$injected_ready" ]] || fail "f2" "worker opencode.json did not pick up the edit within ${RESTART_TIMEOUT_SEC}s"
+# Re-fetch right before the assertions so the comparison cannot read a pre-restart file.
+injected_role_bash "$EVIDENCE_DIR/f2-injected-opencode.json" >/dev/null 2>&1 || true
 
-docker_compose cp "worker:$WORKER_WORK_DIR/.vteam-role-guard/roles.json" "$EVIDENCE_DIR/f2-injected-roles.json" >/dev/null 2>&1 \
-  || docker_compose exec -T worker cat "$WORKER_WORK_DIR/.vteam-role-guard/roles.json" >"$EVIDENCE_DIR/f2-injected-roles.json"
-docker_compose cp "worker:$WORKER_WORK_DIR/opencode.json" "$EVIDENCE_DIR/f2-injected-opencode.json" >/dev/null 2>&1 \
-  || docker_compose exec -T worker cat "$WORKER_WORK_DIR/opencode.json" >"$EVIDENCE_DIR/f2-injected-opencode.json"
+# todo 5: the deleted role-guard layer's persisted artifacts must be gone from the live
+# worker volume (otherwise opencode would still load the removed plugin module).
+if docker_compose exec -T worker test -e "$WORKER_WORK_DIR/.vteam-role-guard" 2>/dev/null; then
+  fail "f2" "live worker still has $WORKER_WORK_DIR/.vteam-role-guard (deleted guard layer not purged)"
+fi
+if docker_compose exec -T worker grep -q 'vteam-role-guard' "$WORKER_WORK_DIR/opencode.json" 2>/dev/null; then
+  fail "f2" "injected opencode.json still registers the removed vteam-role-guard plugin"
+fi
 
-# The DB edit must reach BOTH injected artifacts, while the other 6 built-ins
-# stay byte-identical to the frozen baseline.
-if ! python3 - "$EVIDENCE_DIR/f2-injected-roles.json" "$EVIDENCE_DIR/f2-injected-opencode.json" \
+# The DB edit must reach the injected opencode.json, while the other 6 built-ins stay
+# byte-identical to the frozen baseline; no guard artifact may reappear.
+if ! python3 - "$EVIDENCE_DIR/f2-injected-opencode.json" \
   "$BASELINE_POLICIES" "$EDIT_POLICY_ID" "$EVIDENCE_DIR/f2-injected-summary.txt" <<'EOF'
 import json,sys
-roles_doc = json.load(open(sys.argv[1]))
-oc = json.load(open(sys.argv[2]))
-base = json.load(open(sys.argv[3]))
-pid = sys.argv[4]
-report = sys.argv[5]
+oc = json.load(open(sys.argv[1]))
+base = json.load(open(sys.argv[2]))
+pid = sys.argv[3]
+report = sys.argv[4]
 def canon(o): return json.dumps(o, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 role_name = "vteam-" + pid[len("ep_"):]
 order = [a["name"] for a in base["agents"]]
 lines = []
 ok = True
-# (i) edited role reflects DB in roles.json.
-roles = roles_doc.get("roles") or {}
-role = roles.get(role_name)
-assert role, "injected roles.json lacks %s" % role_name
-checks = {
-    "roles.tools.vteam_group_post": (role["tools"].get("vteam_group_post"), "deny"),
-    "roles.tools.vteam_memory_search": (role["tools"].get("vteam_memory_search"), "ask"),
-    "roles.tools.vteam_hook_cancel": (role["tools"].get("vteam_hook_cancel"), "deny"),
-    "roles.permission.bash": ((role.get("permission") or {}).get("bash"), "deny"),
-}
-for label, (got, want) in checks.items():
-    same = got == want
-    lines.append("%s[%s] = %r (want %r): %s" % (label, role_name, got, want, "OK" if same else "MISMATCH"))
-    ok = ok and same
-# (ii) edited role reflects DB in opencode.json agent entry.
 oc_agents = oc.get("agent") or {}
+# (i) edited role reflects the DB edit in its opencode.json agent entry.
 entry = oc_agents.get(role_name) or {}
 oc_bash = (entry.get("permission") or {}).get("bash")
 same = oc_bash == "deny"
 lines.append("opencode.agent[%s].permission.bash = %r (want 'deny'): %s" % (role_name, oc_bash, "OK" if same else "MISMATCH"))
 ok = ok and same
-# (iii) other 6 built-ins byte-identical to the frozen baseline (roles + opencode).
-# Baseline guard role permission keeps the vteam_* deny detail (worker guard consumes it);
-# the opencode.json agent entry carries only the native keys (todo 4 projection), so
-# compare it against the baseline agent definition (native-only), not the guard role.
-base_roles = (base.get("guard") or {}).get("roles") or {}
+# (ii) other 6 built-ins byte-identical to the frozen baseline agent entries (native-only).
 base_agents = {a["name"]: a for a in base.get("agents") or []}
 for name in order:
     if name == role_name:
         continue
-    same_r = canon(roles.get(name)) == canon(base_roles.get(name))
-    lines.append("roles[%s] vs baseline: %s" % (name, "IDENTICAL" if same_r else "MISMATCH"))
-    ok = ok and same_r
     oc_perm = (oc_agents.get(name) or {}).get("permission")
     base_perm = (base_agents.get(name) or {}).get("permission")
     same_perm = canon(oc_perm) == canon(base_perm)
@@ -700,6 +720,13 @@ for name in order:
     vteam_leak = [k for k in (oc_perm or {}) if k.startswith("vteam_")]
     lines.append("opencode.agent[%s] vteam_ leak: %r" % (name, vteam_leak))
     ok = ok and not vteam_leak
+# (iii) todo 5: no role-guard artifact/registration anywhere in the injected config.
+plugin_entries = [p for p in (oc.get("plugin") or []) if isinstance(p, str) and "vteam-role-guard" in p]
+lines.append("opencode.plugin vteam-role-guard entries: %r" % plugin_entries)
+ok = ok and not plugin_entries
+role_guard_section = [k for k in oc if "role-guard" in k]
+lines.append("opencode top-level role-guard keys: %r" % role_guard_section)
+ok = ok and not role_guard_section
 open(report, "w").write("\n".join(lines) + "\n")
 print("\n".join(lines))
 assert ok, "DB-driven injection / byte-identity mismatches above"
@@ -707,21 +734,26 @@ EOF
 then
   fail "f2" "injected artifacts do not reflect the edit or other builtins drifted (raw: $EVIDENCE_DIR/f2-injected-summary.txt)"
 fi
-pass "f2c (DB edit reached injected opencode.json + roles.json; other 6 builtins byte-identical)"
+pass "f2c (DB edit reached injected opencode.json; other 6 builtins byte-identical; no guard artifact)" 
 
 # Restore the original config and reload the worker; then capture after-agent-policies.json.
 restore_edited_policy
 log "reloading worker after restore ..."
+reload_requested_at="$(date -u +%FT%TZ)"
 reload_worker
 deadline=$((SECONDS + RESTART_TIMEOUT_SEC))
 restored=""
 while [[ $SECONDS -lt $deadline ]]; do
-  if docker_compose exec -T worker grep -q '"vteam_memory_search": "allow"' "$WORKER_WORK_DIR/.vteam-role-guard/roles.json" 2>/dev/null; then
-    restored="yes"; break
+  if wait_worker_restarted; then
+    if [[ "$(injected_role_bash "$EVIDENCE_DIR/f2-restored-opencode.json" || true)" != "deny" ]]; then
+      restored="yes"; break
+    fi
   fi
   sleep "$RESTART_INTERVAL_SEC"
 done
-[[ -n "$restored" ]] || fail "f2" "worker roles.json did not return to factory state within ${RESTART_TIMEOUT_SEC}s"
+[[ -n "$restored" ]] || fail "f2" "worker opencode.json did not return to factory state within ${RESTART_TIMEOUT_SEC}s"
+injected_role_bash "$EVIDENCE_DIR/f2-restored-opencode.json" >/dev/null 2>&1 || true
+rm -f "$EVIDENCE_DIR/f2-restored-opencode.json"
 
 AFTER_OUT="$EVIDENCE_DIR/after-agent-policies.json"
 code="$(curl -sS -o "$EVIDENCE_DIR/f2-after-raw.json" -w '%{http_code}' "$SERVER_URL/api/v1/agent-policies" -H "X-Worker-Token: $X_WORKER_TOKEN")"

@@ -6,7 +6,7 @@
 #   (c) frozen-baseline sha gate  : baseline-agent-policies.json sha256 is checked at
 #                                   start AND at end; never modified.
 #   (b) live round-trip           : PATCH a builtin's permission.edit -> POLL the
-#                                   injected opencode.json + .vteam-role-guard/roles.json
+#                                   injected opencode.json
 #                                   until the rule lands (propagation is AUTOMATIC via the
 #                                   todo-9 reload-config broadcast; NO restart is issued)
 #                                   -> other 6 builtins stay byte-identical to the
@@ -14,7 +14,7 @@
 #   (d) permission.write stripped : a PATCH carrying permission.write is stored WITHOUT
 #                                   the key and /agent-policies never emits it (the worker
 #                                   throws on it at opencode-config-builder.ts:111-115,
-#                                   which would neutralize the whole guard).
+#                                   which would neutralize the whole injection).
 #   (e) M1 case                   : a PATCH with permission.edit ABSENT is stored with the
 #                                   catch-all { '*': 'deny' }.
 #
@@ -53,7 +53,7 @@ POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-5}"
 CLEANUP_POLL_SEC="${CLEANUP_POLL_SEC:-90}"
 PROBE_MARKER="${PROBE_MARKER:-**t8-enforce/**}"
 BASELINE_POLICIES="${BASELINE_POLICIES:-}"
-FROZEN_BASELINE_SHA256="${FROZEN_BASELINE_SHA256:-3d26b49f5ccd81d546f69dbfda8bd7c2568803a6128063f936b9f57045c5d3ee}"
+FROZEN_BASELINE_SHA256="${FROZEN_BASELINE_SHA256:-e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVIDENCE_DIR="${EVIDENCE_DIR:-$REPO_ROOT/.omo/evidence/agent-native-permission-editor}"
@@ -125,13 +125,13 @@ fetch_agent_policies() {
   curl -sS -o "$out" -w '%{http_code}' "$SERVER_URL/api/v1/agent-policies" -H "X-Worker-Token: $X_WORKER_TOKEN"
 }
 
-# read_artifacts <opencode-out> <roles-out> : cat both injected artifacts out of the worker.
+# read_artifacts <opencode-out> : cat the injected opencode.json out of the worker.
+# (todo 5: the `.vteam-role-guard/roles.json` artifact no longer exists; the second arg is
+# retained as a no-op so existing call sites and cleanup journals keep their shape.)
 read_artifacts() {
-  local oc="$1" rl="$2"
+  local oc="$1"
   docker_compose exec -T worker cat "$WORKER_WORK_DIR/opencode.json" >"$oc" 2>/dev/null \
     || docker exec aiagents-compose-worker cat "$WORKER_WORK_DIR/opencode.json" >"$oc"
-  docker_compose exec -T worker cat "$WORKER_WORK_DIR/.vteam-role-guard/roles.json" >"$rl" 2>/dev/null \
-    || docker exec aiagents-compose-worker cat "$WORKER_WORK_DIR/.vteam-role-guard/roles.json" >"$rl"
 }
 
 # probe_in_artifact <opencode.json> : exit 0 iff vteam-product's injected permission.edit
@@ -175,7 +175,7 @@ cleanup() {
       local deadline=$((SECONDS + CLEANUP_POLL_SEC)) i=0 restored=""
       while [[ $SECONDS -lt $deadline ]]; do
         i=$((i+1))
-        if read_artifacts "$T8_DIR/cleanup-opencode.json" "$T8_DIR/cleanup-roles.json" 2>/dev/null; then
+        if read_artifacts "$T8_DIR/cleanup-opencode.json" 2>/dev/null; then
           if probe_absent_artifact "$T8_DIR/cleanup-opencode.json" 2>/dev/null; then restored="yes"; break; fi
         fi
         sleep "$POLL_INTERVAL_SEC"
@@ -236,7 +236,7 @@ ADMIN_JWT="${ADMIN_JWT:-$(login "$ADMIN_USERNAME" "$ADMIN_PASSWORD")}" || exit 1
 [[ -n "$ADMIN_JWT" ]] || { printf '[e2e] empty admin accessToken\n'; exit 1; }
 
 # ---------------------------------------------------------------- pre-flight: artifact must be clean
-read_artifacts "$T8_DIR/pre-opencode.json" "$T8_DIR/pre-roles.json"
+read_artifacts "$T8_DIR/pre-opencode.json"
 if probe_in_artifact "$T8_DIR/pre-opencode.json" 2>/dev/null; then
   fail "setup" "injected artifact already carries the probe marker $PROBE_MARKER; restore ep_product (or rerun after the EXIT trap converges) before running"
 fi
@@ -294,7 +294,7 @@ log "polling injected artifacts (budget ${POLL_TIMEOUT_SEC}s, interval ${POLL_IN
 deadline=$((SECONDS + POLL_TIMEOUT_SEC)); i=0; found=""
 while [[ $SECONDS -lt $deadline ]]; do
   i=$((i+1))
-  if read_artifacts "$T8_DIR/injected-opencode.json" "$T8_DIR/injected-roles.json"; then
+  if read_artifacts "$T8_DIR/injected-opencode.json"; then
     if probe_in_artifact "$T8_DIR/injected-opencode.json" 2>/dev/null; then found="yes"; break; fi
   fi
   log "poll #$i: probe not yet present in injected opencode.json"
@@ -304,21 +304,22 @@ done
 log "probe landed after ~$((i * POLL_INTERVAL_SEC))s (iters=$i)"
 pass "b3 (injected opencode.json carries the edited rule; auto-propagated, no restart)"
 
-# 4a. Probe present in vteam-product edit; roles.json well-formed; tool count unchanged.
-python3 - "$T8_DIR/injected-opencode.json" "$T8_DIR/injected-roles.json" "$PROBE_MARKER" <<'EOF' || fail "b" "injected artifact shape assertion failed"
+# 4a. Probe present in vteam-product edit; per-agent permission stays native-only; no guard artifact.
+python3 - "$T8_DIR/injected-opencode.json" "$PROBE_MARKER" <<'EOF' || fail "b" "injected artifact shape assertion failed"
 import json,sys
-oc=json.load(open(sys.argv[1])); rd=json.load(open(sys.argv[2])); probe=sys.argv[3]
+oc=json.load(open(sys.argv[1])); probe=sys.argv[2]
 edit=(((oc.get("agent") or {}).get("vteam-product") or {}).get("permission") or {}).get("edit") or {}
 assert edit.get(probe)=="allow", "probe missing: %r" % (edit,)
-roles=rd.get("roles") or {}
-role=roles.get("vteam-product")
-assert role, "injected roles.json lacks vteam-product"
-tools=role.get("tools") or {}
-assert len(tools)==27, "vteam-product tool count changed: %d (want 27)" % len(tools)
-assert probe not in tools, "edit glob leaked into roles.json tools map: %r" % (probe,)
-print("injected: probe present in opencode.json edit; roles.json well-formed; vteam-product tools=27 (unchanged); glob not in tools map")
+assert probe not in [k for k in edit if k.startswith("vteam_")] + list(oc), "probe leaked into a non-edit slot"
+ag=(oc.get("agent") or {}).get("vteam-product") or {}
+perm=ag.get("permission") or {}
+leak=[k for k in perm if k.startswith("vteam_")]
+assert not leak, "vteam-product permission carries vteam_ keys: %r" % (leak,)
+assert not any(isinstance(p,str) and "vteam-role-guard" in p for p in (oc.get("plugin") or [])), \
+  "injected opencode.json still registers vteam-role-guard"
+print("injected: probe present in opencode.json edit; permission native-only; no guard plugin entry")
 EOF
-pass "b4 (roles.json well-formed, tool count unchanged, no glob corruption)"
+pass "b4 (injected opencode.json well-formed; native-only permission; no guard artifact)"
 
 # 4b. Other SIX builtins byte-identical to the frozen baseline (canonical /agent-policies compare).
 code="$(fetch_agent_policies "$T8_DIR/b-postedit-agent-policies.json")"
@@ -350,7 +351,7 @@ log "polling for probe-absent (budget ${POLL_TIMEOUT_SEC}s) ..."
 deadline=$((SECONDS + POLL_TIMEOUT_SEC)); i=0; restored=""
 while [[ $SECONDS -lt $deadline ]]; do
   i=$((i+1))
-  if read_artifacts "$T8_DIR/b-restored-opencode.json" "$T8_DIR/b-restored-roles.json"; then
+  if read_artifacts "$T8_DIR/b-restored-opencode.json"; then
     if probe_absent_artifact "$T8_DIR/b-restored-opencode.json" 2>/dev/null; then restored="yes"; break; fi
   fi
   log "poll #$i: probe still present after restore"
@@ -470,7 +471,7 @@ code="$(api PATCH "/execution-policies/$EDIT_POLICY_ID" "$ADMIN_JWT" "$RESTORE_B
 deadline=$((SECONDS + POLL_TIMEOUT_SEC)); i=0; ok=""
 while [[ $SECONDS -lt $deadline ]]; do
   i=$((i+1))
-  if read_artifacts "$T8_DIR/final-opencode.json" "$T8_DIR/final-roles.json"; then
+  if read_artifacts "$T8_DIR/final-opencode.json"; then
     if probe_absent_artifact "$T8_DIR/final-opencode.json" 2>/dev/null; then ok="yes"; break; fi
   fi
   sleep "$POLL_INTERVAL_SEC"

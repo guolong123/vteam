@@ -19,15 +19,16 @@ import {
 } from './execution-policy.service';
 
 /**
- * opencode-native-permissions-and-fixes Todo 4 契约测试：
+ * opencode-native-permissions-and-fixes Todo 4+5 契约测试：
  *
  * 1. `agents[].permission` 只含 opencode 原生键——**零 `vteam_` 前缀键**（可证伪：
  *    改回旧发射即红）；
  * 2. 原生键 `edit`/`read`/`bash`/`task` 的**值**与 todo 4 之前的冻结基线逐键一致
  *    （防"顺手改值"把 agent 放出任务目录）；
- * 3. `guard.roles[*]` 仍完整携带 `permission`/`tools`/`bashDeny`/`correction`
- *    （ordering hazard 显式回归闸门：worker guard 存活期内这三项 + permission 的
- *    `vteam_*` 键必须原样保留，todo 5 才删除）；
+ * 3. `guard.roles[*]` 恰为 `{permission}`：todo 5 已删除 worker role-guard 层，
+ *    `tools`/`bashDeny`/`correction` 三个**死载荷**不得再发射（可证伪：加回任一键即红）；
+ *    `permission` 保持完整（含 `vteam_*`），因为是服务端门 `resolveByAgent` 之外
+ *    唯一保留该矩阵的展示位，且历史基线逐字节一致仍成立；
  * 4. 新基线 artifact 的 sha256 与其内容自洽（文件即冻结证据）。
  */
 describe('agents[].permission native-only payload (todo 4)', () => {
@@ -99,53 +100,35 @@ describe('agents[].permission native-only payload (todo 4)', () => {
     ).toEqual([]);
   });
 
-  it('guard.roles[*] 仍完整：permission/tools/bashDeny/correction 四键齐全（ordering hazard 回归闸门）', async () => {
+  it('guard.roles[*] 恰为 {permission}：tools/bashDeny/correction 三个死载荷不再发射（todo 5 回归闸门）', async () => {
     const policies = await serviceWith().buildAgentPolicies();
-    const states = new Set(['allow', 'ask', 'deny']);
     for (const agent of policies.agents) {
       const role = policies.guard.roles[agent.name];
       expect(role).toBeDefined();
-      expect(Object.keys(role).sort()).toEqual([
-        'bashDeny',
-        'correction',
-        'permission',
-        'tools',
-      ]);
+      expect(Object.keys(role)).toEqual(['permission']);
+      expect(role).not.toHaveProperty('tools');
+      expect(role).not.toHaveProperty('bashDeny');
+      expect(role).not.toHaveProperty('correction');
       expect(Object.keys(role.permission).length).toBeGreaterThan(
         NATIVE_PERMISSION_KEYS.length,
       );
-      expect(Object.keys(role.tools).length).toBeGreaterThan(0);
-      for (const value of Object.values(role.tools)) {
-        expect(states.has(value as string)).toBe(true);
-      }
-      expect(Array.isArray(role.bashDeny)).toBe(true);
-      expect(Object.keys(role.correction)).toEqual([
-        'scopeSummary',
-        'handoff',
-        'denyTemplate',
-      ]);
     }
   });
 
-  it('guard.roles[*].permission 与历史基线逐字节一致（todo 4 不改 guard 侧）', async () => {
+  it('guard.roles[*].permission 与历史基线逐字节一致（todo 5 只删死载荷，不改 permission）', async () => {
     const policies = await serviceWith().buildAgentPolicies();
     for (const agent of policies.agents) {
       expect(policies.guard.roles[agent.name].permission).toEqual(
         historical.guard.roles[agent.name].permission,
       );
-      expect(policies.guard.roles[agent.name].tools).toEqual(
-        historical.guard.roles[agent.name].tools,
-      );
-      expect(policies.guard.roles[agent.name].bashDeny).toEqual(
-        historical.guard.roles[agent.name].bashDeny,
-      );
-      expect(policies.guard.roles[agent.name].correction).toEqual(
-        historical.guard.roles[agent.name].correction,
-      );
+      // 判別力自检：历史基线里这三个键确实存在（证明上面的缺省断言非恒真）。
+      expect(historical.guard.roles[agent.name]).toHaveProperty('tools');
+      expect(historical.guard.roles[agent.name]).toHaveProperty('bashDeny');
+      expect(historical.guard.roles[agent.name]).toHaveProperty('correction');
     }
   });
 
-  it('DB 路径同投影：绑定行携带出厂 config 时 agents[] 仍原生键，guard 仍完整', async () => {
+  it('DB 路径同投影：绑定行携带出厂 config 时 agents[] 仍原生键，guard 仍只留 permission', async () => {
     const rows = BUILTIN_ORDER.map((name) =>
       builtinPolicyRow(
         name,
@@ -157,6 +140,9 @@ describe('agents[].permission native-only payload (todo 4)', () => {
       expect(
         Object.keys(agent.permission).filter((k) => k.startsWith('vteam_')),
       ).toEqual([]);
+      expect(Object.keys(policies.guard.roles[agent.name])).toEqual([
+        'permission',
+      ]);
       expect(
         Object.keys(policies.guard.roles[agent.name].permission).filter((k) =>
           k.startsWith('vteam_'),
@@ -215,6 +201,7 @@ describe('agents[].permission native-only payload (todo 4)', () => {
     });
     expect(role.permission).toHaveProperty('vteam_group_post', 'deny');
     expect(role.permission).toHaveProperty('vteam_memory_search', 'ask');
+    expect(Object.keys(role)).toEqual(['permission']);
   });
 
   it('生产投影只保留原生键（单测投影函数本身，含未知键丢弃与键序）', () => {

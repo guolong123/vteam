@@ -1,5 +1,4 @@
 import {
-  ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
   type VteamAgentName,
 } from '../common/constants/agent.constants';
@@ -18,13 +17,17 @@ import { ExecutionPolicyService } from './execution-policy.service';
  *
  * 与 `agent-policies.matrix.spec.ts` / `agent-policies.custom-agents.spec.ts` 的关键区别：
  * 那两个 spec 把 `executionPolicy.findMany` mock 成 `[]`（恒走常量回退），因此**无法**
- * 证明 DB 读路径已接线。本 spec 让绑定行携带与常量**不同**的 `config.tools` /
- * `config.permission`，并断言它一路穿透到：
+ * 证明 DB 读路径已接线。本 spec 让绑定行携带与常量**不同**的 `config.permission` /
+ * `config.tools`，并断言它一路穿透到：
  *   - `buildAgentPolicies()` 的 `agents[]` 与 `guard.roles[]`（Todo 3 的 DB 读路径）；
- *   - `resolveByAgent()` / `resolveManyByAgents()` 的 guard payload（Todo 4 去掉短路后的路径）。
+ *   - `resolveByAgent()` / `resolveManyByAgents()` 的 `tools` / `permission`
+ *     （服务端工具权限门的判定来源，opencode-native-permissions-and-fixes todo 3）。
  *
- * 同时断言发射形状满足 worker `buildAgentDefinitions()` 的严格字段契约（字段集不可增减，
- * 否则 injector 抛错并整体中性化 guard），且未编辑的 6 个内置角色与冻结基线逐字节一致。
+ * 同时断言发射形状 `agents[]` 恰为 `{name,description,mode,permission}`（worker
+ * `buildAgentDefinitions()` 的严格字段契约，字段集不可增减，否则 injector 抛错并
+ * 整体中性化受管 agent）；`guard.roles[*]` 恰为 `{permission}`（todo 5：tools/
+ * bashDeny/correction 已随 worker guard 层删除），且未编辑的 6 个内置角色与冻结基线
+ * 逐字节一致。
  *
  * 变异检验（mutation check，见 task-15 evidence）：
  *   - 还原 Todo 3（`buildAgentPolicies()` 不读行、直接常量）→ 本 spec 的 DB 值断言失败；
@@ -108,7 +111,7 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
     return JSON.stringify(value);
   }
 
-  it('buildAgentPolicies(): DB 的 tools/permission 穿透到 agents[] 与 guard.roles[]，非法值丢弃', async () => {
+  it('buildAgentPolicies(): DB 的 permission 穿透到 agents[] 与 guard.roles[]（非法值剥离）', async () => {
     const { service, findMany } = serviceWith(mixedRows());
     const policies = await service.buildAgentPolicies();
 
@@ -119,11 +122,6 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
     const editedAgent = policies.agents.find((a) => a.name === EDITED);
     const editedRole = policies.guard.roles[EDITED];
 
-    // DB tools 胜出（canonical 序），且确实不同于常量 allowlist。
-    expect(editedRole.tools).toEqual(DB_TOOLS_CANONICAL);
-    expect(canon(editedRole.tools)).not.toBe(
-      canon(ROLE_BOUNDARIES[EDITED].toolAllows),
-    );
     // DB permission 胜出：bash 由 allow 变 deny，新增 channel_send deny。
     expect((editedRole.permission as { bash?: string }).bash).toBe('deny');
     expect(
@@ -155,7 +153,7 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
     }
   });
 
-  it('resolveByAgent(): 内置名的 guard payload 反映 DB tools/permission（Todo 4 短路已移除）', async () => {
+  it('resolveByAgent(): 内置名的 tools/permission 反映 DB 值（工具权限门判定来源）', async () => {
     const { service } = serviceWith(mixedRows());
     const resolved = await service.resolveByAgent({
       agentKey: 'product',
@@ -167,10 +165,9 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
     expect(resolved?.tools).toEqual(DB_TOOLS_CANONICAL);
     expect(resolved?.tools).not.toEqual(ROLE_BOUNDARIES[EDITED].toolAllows);
     expect((resolved?.permission as { bash?: string }).bash).toBe('deny');
-    expect(resolved?.bashDeny).toEqual([...ROLE_BASH_DENY_PATTERNS]);
   });
 
-  it('resolveManyByAgents(): 与单条解析同源，内置名的 guard payload 同样反映 DB 值', async () => {
+  it('resolveManyByAgents(): 与单条解析同源，内置名的 tools 同样反映 DB 值', async () => {
     const { service } = serviceWith(mixedRows());
     const [product, plan] = await service.resolveManyByAgents([
       { policyId: 'ep_product', agentKey: 'product' },
@@ -197,22 +194,9 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
       expect(agent.mode === 'primary' || agent.mode === 'all').toBe(true);
       expect(agent.permission).not.toHaveProperty('write');
     }
-    // guard role 恰为 {permission,tools,bashDeny,correction}；tools 三态、bashDeny string[]。
-    const states = new Set(['allow', 'ask', 'deny']);
+    // guard role 恰为 {permission}（todo 5：tools/bashDeny/correction 已随 worker guard 删除）。
     for (const role of Object.values(policies.guard.roles)) {
-      expect(Object.keys(role).sort()).toEqual([
-        'bashDeny',
-        'correction',
-        'permission',
-        'tools',
-      ]);
-      for (const value of Object.values(role.tools)) {
-        expect(states.has(value as string)).toBe(true);
-      }
-      for (const pattern of role.bashDeny) {
-        expect(typeof pattern).toBe('string');
-      }
-      expect(role.correction).not.toHaveProperty('write');
+      expect(Object.keys(role)).toEqual(['permission']);
     }
     expect(policies.guard.enabled).toBe(true);
   });
@@ -220,10 +204,12 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
   it('行全缺时回退常量（对照：无 DB 行 ≠ 编辑后的值，证明上方断言非空转）', async () => {
     const { service } = serviceWith([]);
     const policies = await service.buildAgentPolicies();
-    expect(policies.guard.roles[EDITED].tools).toEqual(
-      ROLE_BOUNDARIES[EDITED].toolAllows,
+    expect(policies.guard.roles[EDITED].permission).toEqual(
+      (baseline.guard.roles[EDITED] as { permission: unknown }).permission,
     );
-    expect(policies.guard.roles[EDITED].tools).not.toEqual(DB_TOOLS_CANONICAL);
+    expect(
+      (policies.guard.roles[EDITED].permission as { bash?: string }).bash,
+    ).toBe(ROLE_BOUNDARIES[EDITED].bashEffect);
     expect(canon(policies)).toBe(canon(baseline));
   });
 });

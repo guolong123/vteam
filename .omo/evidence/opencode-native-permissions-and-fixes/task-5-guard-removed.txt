@@ -1,0 +1,274 @@
+================================================================================
+task 5 — [worker] Delete the role-guard interception layer and its injection
+plan: opencode-native-permissions-and-fixes | captured: 2026-09-20T04:39:48Z
+commit: refactor(worker): remove the role-guard plugin and roles.json injection
+================================================================================
+
+################################################################################
+# 1. REFERENCE SEARCHES BEFORE EVERY DELETION
+################################################################################
+
+-- (1a) pre-deletion inventory: every guard reference in worker/src --
+  HEAD still has worker/src/role-guard/{policy,session-policy-map}.ts (+specs)  => deleted in this commit
+
+-- (1b) resolveGuardTools / resolveBashDeny — reference search (MUST NOT delete if still used) --
+server/src/execution-policies/dto/policy-config.dto.spec.ts:11: * `config.bashDeny` 都会被静默剥离；而 `resolveBashDeny`（service）与 `guardForAgent`
+server/src/execution-policies/execution-policy.service.ts:365:export function resolveGuardTools(
+server/src/execution-policies/execution-policy.service.ts:378:export function resolveBashDeny(bashDeny: unknown): string[] {
+server/src/execution-policies/execution-policy.service.ts:445:  const tools = resolveGuardTools(name, cfg.tools);
+server/src/execution-policies/execution-policy.service.ts:446:  const bashDeny = resolveBashDeny(cfg.bashDeny);
+server/src/execution-policies/execution-policy.service.ts:1024:      tools: resolveGuardTools(agentName, config.tools),
+server/src/execution-policies/execution-policy.service.ts:1025:      bashDeny: resolveBashDeny(config.bashDeny),
+
+  RESULT: STILL USED — kept. Both are called from inside execution-policy.service.ts:
+    :445-446   resolveBuiltinPolicy()   → ResolvedBuiltinPolicy.tools/.bashDeny
+    :1024-1025 guardForAgent()          → ResolvedExecutionPolicy.tools/.bashDeny
+  and ResolvedExecutionPolicy.tools is the matrix read by the LIVE server-side gate
+  (PlatformToolPermissionService.assertToolAllowed → resolveByAgent().tools, todo 3).
+  Deleting them would have broken server-side tool enforcement.
+
+-- (1c) guardForAgent / canonicalizeTools / filterToolsMatrix — reference search --
+server/src/platform-mcp/platform-tool-permission.service.ts:85:    // worker guard `isToolAllowed` / `filterToolsMatrix` 语义一致）。
+server/src/execution-policies/execution-policy.service.ts:253:export function filterToolsMatrix(
+server/src/execution-policies/execution-policy.service.ts:268:export function canonicalizeTools(
+server/src/execution-policies/execution-policy.service.ts:274:  return orderKeys(filterToolsMatrix(tools), preferred) as Record<
+server/src/execution-policies/execution-policy.service.ts:361: * 层② guard `tools` 的统一解析（唯一回退实现，`resolveBuiltinPolicy` 与 `guardForAgent` 共用）：
+server/src/execution-policies/execution-policy.service.ts:369:  const canonicalTools = canonicalizeTools(tools, agentName);
+server/src/execution-policies/execution-policy.service.ts:728:   * - DB 行存在 → 沿用既有解析（`config.permission`/`correction` + `guardForAgent`）；
+server/src/execution-policies/execution-policy.service.ts:771:    const guard = this.guardForAgent(agentName, config);
+server/src/execution-policies/execution-policy.service.ts:810:   *   `vteam-<agentKey>`（permission 取策略 config，其余经 `guardForAgent` 解析）。
+server/src/execution-policies/execution-policy.service.ts:912:   * `guardForAgent` 防御式过滤，非法条目丢弃）。
+server/src/execution-policies/execution-policy.service.ts:1006:  private guardForAgent(
+  RESULT: STILL USED (guardForAgent feeds resolveByAgent.tools; the canonicalizers are its helpers). Kept.
+
+-- (1d) canonicalizeCorrection — reference search --
+server/src/chat/worker-dispatcher.ts:33:  canonicalizeCorrection,
+server/src/chat/worker-dispatcher.ts:3720:   * correction 返回前经 `canonicalizeCorrection` 按角色 `handoffTo` 声明序重排
+server/src/chat/worker-dispatcher.ts:3738:            correction: canonicalizeCorrection(
+server/src/execution-policies/execution-policy.service.ts:312:export function canonicalizeCorrection(
+server/src/execution-policies/execution-policy.service.ts:407:  return canonicalizeCorrection(
+server/src/execution-policies/execution-policy.service.ts:449:    ? canonicalizeCorrection(cfg.correction, name)
+  RESULT: STILL USED by chat/worker-dispatcher.ts:3738 (dispatch boundary injection from the DB
+  policy row, NOT from the guard payload). Kept. (agent-policies.* specs assert only that the
+  payload no longer EMITS correction; the dispatcher still renders it from config.)
+
+-- (1e) script-level reference search --
+  grep -rln "role-guard\|roles.json\|evaluateToolCall" scripts/
+scripts/e2e-custom-agent-opencode.sh
+scripts/e2e-role-boundaries.sh
+scripts/e2e-native-edit-enforcement.sh
+scripts/e2e-third-party-no-policy-leak.sh
+scripts/e2e-permission-matrix.sh
+scripts/e2e-plan-member.sh
+  (all remaining hits are the absence assertions / exclusion comments introduced below)
+
+
+################################################################################
+# 2. DELETION INVENTORY
+################################################################################
+DELETED (files):
+  worker/src/role-guard/policy.ts                       (hand-rolled evaluateToolCall)
+  worker/src/role-guard/policy.spec.ts
+  worker/src/role-guard/session-policy-map.ts           (session->role mapping)
+  worker/src/role-guard/session-policy-map.spec.ts
+  worker/src/resources/role-guard-plugin.ts             (generated plugin body)
+  worker/src/resources/role-guard-plugin.spec.ts
+  => the whole worker/src/role-guard/ directory is gone; dist/ has no role-guard/.
+
+EDITED (guard wiring removed, file kept):
+  worker/src/exec/exec-server.ts
+    - dropped the '../role-guard/session-policy-map' import
+    - dropped trackGuardSession / untrackGuardSessions / resolveGuardWorkDir and all
+      four call sites (prompt-before mapping, session-recreate mapping, finally cleanup)
+    - dispatch/session lifecycle otherwise UNCHANGED (createSession / sendAndAwait /
+      event emission are byte-for-byte the same flow)
+  worker/src/resources/injector.ts
+    - dropped the renderRoleGuardPlugin import; dropped ROLE_GUARD_* path constants,
+      GUARD_PLUGIN_REL, ROLE_GUARD_ENTRY_RE
+    - dropped writeGuardRoles / ensureGuardSessionsDir / writeGuardPluginFile /
+      ensureGuardPluginEntry / removeStaleGuardPluginFile / removeGuardPluginEntry
+    - dropped the guardRolesFile / guardSessionsDir / guardPluginFile manifest keys and
+      their cleanup branches (cleanupByManifest now handles skills|tools|agentNames only)
+    - buildAgentDefinitions(agents, guard) -> buildAgentDefinitions(agents)
+    - ADDED purgeLegacyGuardArtifacts(): one-time removal of the persisted-volume
+      residue (see §5); runs on both the success and the neutralized injection paths
+  worker/src/resources/opencode-config-builder.ts
+    - dropped the `guard` parameter, AgentGuardRole / AgentPoliciesGuard types and
+      ROLE_ALLOWED_FIELDS / assertGuardRole; the native `agent` config emission is intact
+  worker/src/runtime/opencode-server.ts
+    - the --pure warning no longer claims "guard 未加载"; it now says external plugins do
+      not load while native permission.edit / agent config still apply
+  worker/src/exec/exec-server.spec.ts        (removed the Todo-19 session->policy describe)
+  worker/src/resources/injector.spec.ts      (guard artefacts replaced by absence +
+                                              legacy-purge assertions)
+  worker/src/resources/opencode-config-builder.spec.ts (guard cases removed)
+  worker/src/credentials/model-credential-injector.spec.ts (fixture plugin entry)
+  server/src/gates/gate-spec-registry.ts      (2 deleted worker gate specs -> 1 server spec)
+  server/src/gates/no-tighten-audit.spec.ts   (count 16 -> 15)
+
+SERVER PAYLOAD (same commit):
+  server/src/execution-policies/execution-policy.service.ts
+    - AgentGuardRole now carries `permission` ONLY
+    - buildAgentPolicies() no longer emits guard.roles[*].tools / .bashDeny / .correction
+      (builtin block AND custom block)
+    - `agents[]` emission unchanged from todo 4 (native-only projection)
+
+################################################################################
+# 3.REFERENCE SEARCHES — NO STILL-USED HELPER WAS DELETED
+################################################################################
+  resolveGuardTools(agentName, tools)  -> KEPT (still called at :445 inside
+      resolveBuiltinPolicy and :1024 inside guardForAgent). guardForAgent feeds
+      ResolvedExecutionPolicy.tools, which is the matrix the LIVE server-side gate
+      (PlatformToolPermissionService.assertToolAllowed, todo 3) reads through
+      resolveByAgent. Deleting it would have broken server-side enforcement.
+  resolveBashDeny(bashDeny)            -> KEPT (same two call sites; feeds
+      ResolvedExecutionPolicy.bashDeny used by the agents page / my_profile payload).
+  guardForAgent                        -> KEPT (resolveAgentWithFallback :771).
+  canonicalizeTools / filterToolsMatrix/canonicalizeCorrection -> KEPT (helpers /
+      worker-dispatcher.ts:3738 still canonicalises the DB correction for dispatch).
+  WORKER side: no exported helper was shared with anything outside the deleted layer
+      (the layer's only external consumers were exec-server.ts and injector.ts, both
+      rewritten in this commit).
+
+################################################################################
+# 4. INJECTOR SURGERY — LEGACY PURGE (why it is required)
+################################################################################
+  The worker works on a PERSISTED volume: <workDir>/.opencode-worker-inject.json still
+  listed guardRolesFile / guardSessionsDir / guardPluginFile, <workDir>/opencode.json
+  still had "./.opencode/plugin/vteam-role-guard.ts" in `plugin`, and
+  <workDir>/.vteam-role-guard/roles.json + sessions/ were on disk from the previous
+  image. Without a purge, the NEW image would start opencode with `plugin` pointing at
+  a file that no longer exists in any image layer, i.e. deleting the source would not
+  actually deactivate the layer on an existing deployment.
+  purgeLegacyGuardArtifacts() runs on BOTH the success and the neutralized path and
+  removes exactly: the .vteam-role-guard/ directory, the generated plugin file, any
+  `vteam-role-guard` entry in `plugin`, and the three stale manifest keys. It does NOT
+  touch user-authored plugin entries (OmO is preserved — asserted live below).
+
+################################################################################
+# 5. LIVE PROOF — PERSISTED VOLUME PURGED, LIVE SESSION END TO END
+################################################################################
+Rebuild: docker compose up -d --no-deps --build server worker   (no --force-recreate)
+The worker REUSED its existing volume, i.e. the exact upgrade scenario.
+
+5a. ARTIFACT-ABSENCE PROOF (live worker container, after the rebuild)
+  $ docker exec aiagents-compose-worker sh -c 'ls -la /data/vteam-worker/'
+    total 12
+    drwxr-xr-x 1 root root  170 Sep 20 04:38 .
+    drwxr-xr-x 1 root root   24 Sep 20 04:38 ..
+    lrwxrwxrwx 1 root root   59 .codegraph -> /root/.omo/codegraph/projects/vteam-worker-fca48c71badeefab
+    drwxr-xr-x 1 root root  126 .omo
+    drwxr-xr-x 1 root root  136 .opencode
+    -rw-r--r-- 1 root root  464 .opencode-worker-inject.json
+    drwxr-xr-x 1 root root   60 browser-profiles
+    -rw-r--r-- 1 root root 3475 opencode.json
+    drwxr-xr-x 1 root root   24 tasks
+  $ test -e /data/vteam-worker/.vteam-role-guard          -> ABSENT
+  $ test -e /data/vteam-worker/.opencode/plugin/vteam-role-guard.ts -> ABSENT
+  $ test -e /app/dist/role-guard                          -> ABSENT
+  $ test -e /app/dist/resources/role-guard-plugin.js      -> ABSENT
+
+  Injected opencode.json (live), verbatim keys:
+    "$schema", "mcp" (vteam remote), "agent" (7 native entries), "plugin"
+    "plugin": ["oh-my-openagent@latest"]      <- user plugin preserved, guard entry gone
+  Manifest (.opencode-worker-inject.json) keys after re-injection:
+    tools / skills / agentNames / mcpServers  — the three guard* keys are GONE.
+
+5b. PAYLOAD PROOF — guard extras no longer emitted
+  $ curl -sS /api/v1/agent-policies -H "X-Worker-Token: ..."   (HTTP 200)
+  guard.enabled = true
+  for every one of the 7 roles:  keys = ['permission']   (was bashDeny,correction,permission,tools)
+  agents[].permission: zero `vteam_` keys (todo 4 projection intact)
+  live 7-builtin subset vs .omo/evidence/opencode-native-permissions-and-fixes/
+  baseline-agent-policies.json -> canonical byte-identity TRUE.
+
+5c. NEW FROZEN BASELINE
+  file: .omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json
+  OLD sha256 (todo 4)  3d26b49f5ccd81d546f69dbfda8bd7c2568803a6128063f936b9f57045c5d3ee
+  NEW sha256 (todo 5)  e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+  Re-captured with .omo/evidence/opencode-native-permissions-and-fixes/capture-native-only-baseline.mjs
+  (now also asserts guard.roles[*] keys == ['permission']).
+  Harnesses updated: scripts/e2e-role-boundaries.sh (FROZEN_BASELINE_SHA256),
+                     scripts/e2e-native-edit-enforcement.sh (FROZEN_BASELINE_SHA256).
+  The historical .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+  was NOT touched (its sha is still asserted by scripts/e2e-third-party-no-policy-leak.sh D1,
+  which passed: actual=3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87).
+
+5d. LIVE SESSION — REAL DISPATCH, END TO END
+  Trigger (production path): login -> POST /channels/c_0000000001/messages with
+  mentions:[{type:'agent',agentId:'a_developer',instanceId:'tmm_0000000004'}]
+  Server response triggers: [{"agentId":"a_developer","instanceId":"tmm_0000000004",
+                              "sessionId":"s_0000000002","status":"dispatched"}]
+  Worker log (verbatim):
+    [v1-driver] sendMessage -> ses_f42e121caffebFn1HVA0FkkUHW model=ornith/ornith-1.5:35b
+                agent=vteam-developer (HTTP 204)
+    [exec] 执行完成 session=ses_f42e121caffebFn1HVA0FkkUHW taskId=t_0000000001
+           model=ornith/ornith-1.5:35b text=7 chars
+  Engine's own permission log (no guard in the chain):
+    evaluated permission=bash pattern=pwd action.action=allow
+    evaluated permission=bash pattern="printf 'T5-LIVE-OK'" action.action=allow
+    evaluated permission=vteam_group_post action.action=allow
+  Observable outcome:
+    - the agent wrote /data/vteam-worker/tasks/t_0000000001/src/t5-live-ok.txt
+      containing "T5-LIVE-OK"  (task-directory write succeeded natively)
+    - the agent called the platform tool and POSTED TO THE GROUP:
+      message m_0000000015 sender=a_developer sender_instance_id=tmm_0000000004
+      containing T5-POSTED + T5-DONE  (server accepted the call: permission + ownership OK)
+  => a live agent session runs end to end with the deleted layer absent.
+
+  NATIVE CONFINEMENT (the guard's old job, now the engine's):
+  Two out-of-scope probes asked the agent to write server/src/foo.ts.
+    - the model refused both times on its own (verbatim: "拒绝此请求。这属于越界操作 ...
+      我不会盲目执行未加说明的代码改动。")
+    - a direct forced-instruction probe was refused as well, and the file was verified
+      absent from BOTH /data/vteam-worker/server/src/foo.ts and the task dir.
+  The hand-rolled "禁套娃" task allow-list is NOT ported: the engine's own
+  `permission.task` (only vteam-plan allow) + native subagent_depth now govern it.
+
+5e. HARNESS RE-RUNS (live stack, all green)
+  scripts/e2e-role-boundaries.sh        SCENARIOS=f  -> PASS f, f2a, f2b, f2c, f2d
+      (f2 re-pointed: no roles.json; asserts the DB edit reaches the injected
+      opencode.json, the other 6 builtins are byte-identical to the new baseline, and
+      no guard artifact/registration exists. Post-restore after-agent-policies.json
+      sha256 == the frozen baseline sha.)
+  scripts/e2e-native-edit-enforcement.sh -> ALL ASSERTIONS PASSED (b/c/d/e), cleanup
+      probe-absent + all 7 builtins byte-identical; frozen sha matches at start and end.
+  scripts/e2e-permission-matrix.sh       -> PASS 0/1/2/3a/3a2/3b/4a/4b/4c/4d/4e/5
+      step 1 is now the LIVE server gate (7 roles x 29 tools = 203 cells, 127 allow /
+      76 deny, 0 mismatch); step 3a/3a2 prove identity-gate absence AND that the refusal
+      comes from the stable todo-3 permission code; 4f/4g SKIPPED with a recorded reason
+      (no review-round ledger / no terminal task on this DB — their own specs cover them).
+  scripts/e2e-third-party-no-policy-leak.sh -> PASS A, B, B3, C, D1, D2, E
+      D2 re-pointed from "worker/** untouched" (no longer true by design) to "the deleted
+      layer stays deleted" (no role-guard ref in worker/src outside the injector purge,
+      files not resurrected, live volume clean).
+  scripts/e2e-custom-agent-opencode.sh   -> PASS 1/2/3/4a/4b/5/6 (guard decision replaced
+      by the live server gate; guard.roles={permission}; baseline re-pointed).
+  scripts/e2e-plan-member.sh             -> step 3 re-pointed to the native permission
+      contract; the step-2 injection block was re-run against the live stack and passes
+      (native-only parity + all 6 builtins byte-identical to the frozen baseline).
+      The full script needs a rebuild+reseed run, so it was not executed end to end here.
+  scripts/e2e-create-agent-role.sh       -> comment-only reference updated (no behaviour).
+
+################################################################################
+# 6. GATES
+################################################################################
+  cd worker && npx tsc --noEmit                 -> 0 errors
+  cd worker && npx jest --runInBand             -> 23 suites / 572 tests, all pass
+        (baseline was 26 suites / 688 tests: 3 guard suites deleted, and the
+         exec-server/injector/opencode-config-builder guard cases were replaced
+         with assertions on the new arrangement)
+  cd server && npx tsc -p tsconfig.json --noEmit -> 0 errors
+  cd server && npx jest --runInBand              -> 145 suites / 3308 tests, all pass
+        (baseline 145 / 3309; the single delta is the worker-dispatcher case that
+         asserted the guard payload's correction — re-pointed to the dispatcher's
+         DB/constant source + the payload no longer carrying correction)
+  grep -rn "role-guard\|vteam-role-guard\|\.vteam-role-guard" worker/src
+        -> only injector.ts (the intentional one-time purge) and injector.spec.ts
+           (the absence assertions). No live interception code remains.
+
+################################################################################
+# 7. COMMIT
+################################################################################
+  refactor(worker): remove the role-guard plugin and roles.json injection
+  sha: aaac68b

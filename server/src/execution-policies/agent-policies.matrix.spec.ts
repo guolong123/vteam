@@ -229,19 +229,14 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       expect(agentNames).toEqual([...AGENT_NAMES].sort());
     });
 
-    it('guard.roles[name].tools === ROLE_BOUNDARIES[name].toolAllows', () => {
+    it('guard.roles[name] 恰为 {permission}（todo 5：tools/bashDeny/correction 已随 worker guard 删除）', () => {
       for (const agent of policies.agents) {
-        expect(policies.guard.roles[agent.name].tools).toEqual(
-          ROLE_BOUNDARIES[agent.name].toolAllows,
+        const role = policies.guard.roles[agent.name];
+        expect(Object.keys(role)).toEqual(['permission']);
+        expect(role.permission).toHaveProperty(
+          'edit',
+          buildEditPermission(ROLE_BOUNDARIES[agent.name].writeGlobs),
         );
-      }
-    });
-
-    it('guard.roles[name].bashDeny 包含全部 ROLE_BASH_DENY_PATTERNS', () => {
-      for (const agent of policies.agents) {
-        for (const pattern of ROLE_BASH_DENY_PATTERNS) {
-          expect(policies.guard.roles[agent.name].bashDeny).toContain(pattern);
-        }
       }
     });
 
@@ -297,10 +292,15 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       for (const glob of plansGlobs) {
         expect(edit[glob]).toBe('allow');
       }
-      expect(policies.guard.roles['vteam-plan'].tools).toHaveProperty(
+      expect(policies.guard.roles['vteam-plan'].permission).not.toHaveProperty(
         'vteam_group_post',
-        'allow',
       );
+      expect(
+        Object.prototype.hasOwnProperty.call(
+          ROLE_BOUNDARIES['vteam-plan'].toolAllows,
+          'vteam_group_post',
+        ),
+      ).toBe(true);
     });
   });
 });

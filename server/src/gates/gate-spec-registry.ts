@@ -79,12 +79,8 @@ export const GATE_SPEC_FILES: GateSpecEntry[] = [
     gates: ['toolAllows', 'bash-edit'],
   },
   {
-    file: 'worker/src/role-guard/policy.spec.ts',
-    gates: ['bash-edit', 'toolAllows'],
-  },
-  {
-    file: 'worker/src/resources/role-guard-plugin.spec.ts',
-    gates: ['bash-edit', 'toolAllows'],
+    file: 'server/src/platform-mcp/platform-mcp.tool-permission.spec.ts',
+    gates: ['toolAllows'],
   },
 ];
 

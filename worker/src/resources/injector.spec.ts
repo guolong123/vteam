@@ -2,7 +2,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
-  GUARD_PLUGIN_REL,
   InjectReport,
   readXExecution,
   ResourceInjector,
@@ -845,7 +844,7 @@ describe('ResourceInjector：从 slim fork 迁移到 OmO', () => {
   });
 });
 
-describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）', () => {
+describe('ResourceInjector：agent 策略注入（原生 agent 节，无 guard 制品）', () => {
   const POLICIES = {
     agents: [
       {
@@ -861,23 +860,6 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
         permission: { edit: { '*': 'deny' }, task: 'deny' },
       },
     ],
-    guard: {
-      enabled: true,
-      roles: {
-        'vteam-developer': {
-          permission: { edit: { '*': 'deny' }, task: 'deny' },
-          tools: { vteam_task_context: 'allow' },
-          bashDeny: ['rm'],
-          correction: { scopeSummary: 'dev scope' },
-        },
-        'vteam-tester': {
-          permission: { edit: { '*': 'deny' }, task: 'deny' },
-          tools: { vteam_task_context: 'allow' },
-          bashDeny: ['rm'],
-          correction: { scopeSummary: 'test scope' },
-        },
-      },
-    },
   };
 
   function routesWith(policies: unknown): Record<string, (url: URL) => unknown> {
@@ -904,7 +886,11 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
     };
   }
 
-  function injectorForPolicies(workDir: string, policies: unknown, fetchImpl?: jest.Mock): ResourceInjector {
+  function injectorForPolicies(
+    workDir: string,
+    policies: unknown,
+    fetchImpl?: jest.Mock,
+  ): ResourceInjector {
     return new ResourceInjector({
       serverUrl: 'http://localhost:3000',
       workerToken: 'tok',
@@ -924,25 +910,13 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
     );
   }
 
-  /** 模拟 Todo 18 已写入的 guard 插件残留（文件 + plugin 条目 + manifest 键）。 */
-  function seedGuardPluginRemnant(workDir: string): void {
-    const pluginAbs = path.join(workDir, GUARD_PLUGIN_REL);
-    fs.mkdirSync(path.dirname(pluginAbs), { recursive: true });
-    fs.writeFileSync(pluginAbs, '// vteam-role-guard remnant\n', 'utf8');
-    const cfg = readConfig(workDir);
-    cfg.plugin = [...(cfg.plugin as string[]), `./${GUARD_PLUGIN_REL}`];
-    fs.writeFileSync(path.join(workDir, 'opencode.json'), JSON.stringify(cfg, null, 2));
-    const manifestPath = path.join(workDir, '.opencode-worker-inject.json');
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-    manifest.guardPluginFile = GUARD_PLUGIN_REL;
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-  }
-
-  it('(a) 一次运行 opencode.json 含 mcp+plugin+agent 三节 + guard 两制品 + 报告', async () => {
+  it('(a) 一次运行：mcp + plugin + 原生 agent 三节，无 guard 制品写入', async () => {
     const workDir = workDirFor();
     fs.writeFileSync(
       path.join(workDir, 'opencode.json'),
-      JSON.stringify({ agent: { 'my-agent': { description: 'user', mode: 'primary', permission: {} } } }),
+      JSON.stringify({
+        agent: { 'my-agent': { description: 'user', mode: 'primary', permission: {} } },
+      }),
     );
     const fetchImpl = makeFetch(routesWith(POLICIES));
     const report = await injectorForPolicies(workDir, POLICIES, fetchImpl).injectAll();
@@ -953,8 +927,7 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
     });
     const cfg = readConfig(workDir);
     expect(cfg.mcp?.vteam).toBeDefined();
-    // Todo 18：guard 插件条目与 OmO 共存（guard 在前：ensureGuard 先于 injectOmo）
-    expect(cfg.plugin).toEqual(['./.opencode/plugin/vteam-role-guard.ts', 'oh-my-openagent@latest']);
+    expect(cfg.plugin).toEqual(['oh-my-openagent@latest']);
     expect(cfg.agent['vteam-developer']).toEqual({
       description: 'dev scope',
       mode: 'primary',
@@ -962,21 +935,16 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
     });
     expect(cfg.agent['vteam-tester']).toBeDefined();
     expect(cfg.agent['my-agent']).toBeDefined();
-
-    const roles = JSON.parse(
-      fs.readFileSync(path.join(workDir, '.vteam-role-guard', 'roles.json'), 'utf8'),
+    expect(fs.existsSync(path.join(workDir, '.vteam-role-guard'))).toBe(false);
+    expect(fs.existsSync(path.join(workDir, '.opencode', 'plugin', 'vteam-role-guard.ts'))).toBe(
+      false,
     );
-    expect(roles.enabled).toBe(true);
-    expect(Object.keys(roles.roles).sort()).toEqual(['vteam-developer', 'vteam-tester']);
-    expect(fs.existsSync(path.join(workDir, '.vteam-role-guard', 'sessions'))).toBe(true);
 
     const manifest = readManifest(workDir);
     expect(manifest.agentNames).toEqual(['vteam-developer', 'vteam-tester']);
-    expect(manifest.guardRolesFile).toBe('.vteam-role-guard/roles.json');
-    expect(manifest.guardSessionsDir).toBe('.vteam-role-guard/sessions');
-    // Todo 18：插件文件落盘 + manifest 登记正典路径
-    expect(fs.existsSync(path.join(workDir, GUARD_PLUGIN_REL))).toBe(true);
-    expect(manifest.guardPluginFile).toBe(GUARD_PLUGIN_REL);
+    expect(manifest.guardRolesFile).toBeUndefined();
+    expect(manifest.guardSessionsDir).toBeUndefined();
+    expect(manifest.guardPluginFile).toBeUndefined();
 
     const call = fetchImpl.mock.calls.find((c) =>
       String(c[0]).includes('/api/v1/agent-policies'),
@@ -993,45 +961,30 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
     const first = fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8');
     await injector.injectAll();
     expect(fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8')).toBe(first);
-    expect(readConfig(workDir).plugin).toEqual([
-      './.opencode/plugin/vteam-role-guard.ts',
-      'oh-my-openagent@latest',
-    ]);
+    expect(readConfig(workDir).plugin).toEqual(['oh-my-openagent@latest']);
     expect(readManifest(workDir).agentNames).toEqual(['vteam-developer', 'vteam-tester']);
   });
 
-  it('(c) 停用（空角色集）清理受管 agent/roles/sessions/插件残留，用户文件不受影响', async () => {
+  it('(c) 空 agent 集 → 中性化：受管 agent 键移除，用户文件与 plugin 条目不受影响', async () => {
     const workDir = workDirFor();
     await injectorForPolicies(workDir, POLICIES).injectAll();
-    seedGuardPluginRemnant(workDir);
     fs.mkdirSync(path.join(workDir, '.opencode', 'tools'), { recursive: true });
     fs.writeFileSync(path.join(workDir, '.opencode', 'tools', 'manual-tool.ts'), '// user\n', 'utf8');
 
-    const report = await injectorForPolicies(workDir, {
-      agents: [],
-      guard: { enabled: true, roles: {} },
-    }).injectAll();
+    const report = await injectorForPolicies(workDir, { agents: [] }).injectAll();
     expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
 
     const cfg = readConfig(workDir);
     expect(cfg.agent?.['vteam-developer']).toBeUndefined();
     expect(cfg.agent?.['vteam-tester']).toBeUndefined();
-    const rolesPath = path.join(workDir, '.vteam-role-guard', 'roles.json');
-    expect(!fs.existsSync(rolesPath) || JSON.parse(fs.readFileSync(rolesPath, 'utf8')).enabled === false).toBe(true);
-    expect(fs.existsSync(path.join(workDir, '.vteam-role-guard', 'sessions'))).toBe(false);
-    expect(fs.existsSync(path.join(workDir, GUARD_PLUGIN_REL))).toBe(false);
-    expect(JSON.stringify(cfg.plugin)).not.toContain('vteam-role-guard');
     expect(cfg.plugin).toEqual(['oh-my-openagent@latest']);
     expect(fs.existsSync(path.join(workDir, '.opencode', 'tools', 'manual-tool.ts'))).toBe(true);
-    const manifest = readManifest(workDir);
-    expect(manifest.agentNames).toEqual([]);
-    expect(manifest.guardPluginFile).toBeNull();
+    expect(readManifest(workDir).agentNames).toEqual([]);
   });
 
-  it('(d) 成功后再失败：roles.json.enabled=false + 插件移除，不 fail-closed', async () => {
+  it('(d) 拉取失败后再成功：agent 中性化 → 恢复，无 guard 残留', async () => {
     const workDir = workDirFor();
     await injectorForPolicies(workDir, POLICIES).injectAll();
-    seedGuardPluginRemnant(workDir);
 
     const okFetch = makeFetch(routesWith(POLICIES));
     const failingFetch = jest.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1043,13 +996,56 @@ describe('ResourceInjector：agent 策略 + guard 制品（Todo 15 单写者）'
     });
     const report = await injectorForPolicies(workDir, POLICIES, failingFetch).injectAll();
     expect(report.agentPolicies).toEqual({ enabled: false, names: [] });
-
-    const roles = JSON.parse(
-      fs.readFileSync(path.join(workDir, '.vteam-role-guard', 'roles.json'), 'utf8'),
-    );
-    expect(roles.enabled).toBe(false);
-    expect(fs.existsSync(path.join(workDir, GUARD_PLUGIN_REL))).toBe(false);
-    expect(JSON.stringify(readConfig(workDir).plugin)).not.toContain('vteam-role-guard');
     expect(readConfig(workDir).agent?.['vteam-developer']).toBeUndefined();
+
+    const again = await injectorForPolicies(workDir, POLICIES).injectAll();
+    expect(again.agentPolicies).toEqual({
+      enabled: true,
+      names: ['vteam-developer', 'vteam-tester'],
+    });
+    expect(fs.existsSync(path.join(workDir, '.vteam-role-guard'))).toBe(false);
+  });
+
+  it('(e) 持久卷残留被清除：roles.json/sessions/插件文件/plugin 条目/manifest 键', async () => {
+    const workDir = workDirFor();
+    const pluginRel = '.opencode/plugin/vteam-role-guard.ts';
+    fs.mkdirSync(path.join(workDir, '.opencode', 'plugin'), { recursive: true });
+    fs.writeFileSync(path.join(workDir, pluginRel), '// legacy guard\n', 'utf8');
+    fs.mkdirSync(path.join(workDir, '.vteam-role-guard', 'sessions'), { recursive: true });
+    fs.writeFileSync(
+      path.join(workDir, '.vteam-role-guard', 'roles.json'),
+      '{"enabled":true,"roles":{}}\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workDir, 'opencode.json'),
+      JSON.stringify({
+        plugin: [`./${pluginRel}`, 'oh-my-openagent@latest', './mine.js'],
+        agent: {},
+      }),
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(workDir, '.opencode-worker-inject.json'),
+      JSON.stringify({
+        agentNames: ['vteam-developer'],
+        guardRolesFile: '.vteam-role-guard/roles.json',
+        guardSessionsDir: '.vteam-role-guard/sessions',
+        guardPluginFile: pluginRel,
+      }),
+      'utf8',
+    );
+
+    await injectorForPolicies(workDir, POLICIES).injectAll();
+
+    expect(fs.existsSync(path.join(workDir, '.vteam-role-guard'))).toBe(false);
+    expect(fs.existsSync(path.join(workDir, pluginRel))).toBe(false);
+    const cfg = readConfig(workDir);
+    expect(cfg.plugin).toEqual(['oh-my-openagent@latest', './mine.js']);
+    const manifest = readManifest(workDir);
+    expect(manifest.guardRolesFile).toBeUndefined();
+    expect(manifest.guardSessionsDir).toBeUndefined();
+    expect(manifest.guardPluginFile).toBeUndefined();
+    expect(manifest.agentNames).toEqual(['vteam-developer', 'vteam-tester']);
   });
 });

@@ -85,9 +85,6 @@ export interface AgentPolicyDefinition {
 /** GET /agent-policies guard 单个角色条目（key = opencode agent 名）。 */
 export interface AgentGuardRole {
   permission: Record<string, unknown>;
-  tools: Record<string, AgentToolState>;
-  bashDeny: string[];
-  correction: Record<string, unknown>;
 }
 
 /** GET /agent-policies 响应体（opencode agent 定义 + guard 角色集）。 */
@@ -839,9 +836,6 @@ export class ExecutionPolicyService implements OnModuleInit {
       builtins.map(({ name, policy }) => {
         const role: AgentGuardRole = {
           permission: policy.permission,
-          tools: policy.tools,
-          bashDeny: policy.bashDeny,
-          correction: policy.correction,
         };
         return [name, role];
       }),
@@ -884,16 +878,10 @@ export class ExecutionPolicyService implements OnModuleInit {
         }
         const config = policy.config as unknown as {
           permission?: unknown;
-          correction?: unknown;
-          tools?: unknown;
         } | null;
         if (!isPlainObject(config?.permission)) {
           continue;
         }
-        const guard = this.guardForAgent(name, config);
-        const correction = isPlainObject(config?.correction)
-          ? (config.correction as Record<string, unknown>)
-          : {};
         const permission = canonicalizePermission(
           config.permission as Record<string, unknown>,
           name,
@@ -910,9 +898,6 @@ export class ExecutionPolicyService implements OnModuleInit {
         });
         roles[name] = {
           permission,
-          tools: guard.tools,
-          bashDeny: guard.bashDeny,
-          correction,
         };
         builtInNames.add(name);
       }

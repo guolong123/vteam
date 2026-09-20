@@ -105,8 +105,8 @@ export function factorySeedConfig(name: VteamAgentName) {
  * 常量派生的完整 `/agent-policies` 夹具（`{agents, guard:{enabled, roles}}`），
  * 期望输出由 `ROLE_BOUNDARIES` 独立推导、绝不内联字面量（防漂移）。
  *
- * `agents[].permission` 经原生键投影（todo 4）；`guard.roles[*].permission` 保持
- * 完整（含 `vteam_*`，worker guard 层仍消费）。
+ * `agents[].permission` 经原生键投影（todo 4）；`guard.roles[*]` 恰为 `{permission}`
+ * （todo 5：tools/bashDeny/correction 随 worker guard 层一并删除）。
  */
 export function builtinPoliciesFixture() {
   const agents = BUILTIN_ORDER.map((name) => {
@@ -125,9 +125,6 @@ export function builtinPoliciesFixture() {
         name,
         {
           permission: derived.permission,
-          tools: derived.tools,
-          bashDeny: derived.bashDeny,
-          correction: derived.correction,
         },
       ];
     }),

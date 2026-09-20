@@ -85,24 +85,23 @@ describe('agent-policies db-backed builtins (Todo 3)', () => {
       );
     });
 
-    it('DB 值真实胜出：绑定行 tools 与常量不同时输出反映 DB 值', async () => {
+    it('DB 值真实胜出：绑定行 permission 与常量不同时 guard 侧反映 DB 值', async () => {
       const config = factorySeedConfig('vteam-product');
       const executionPolicy = {
         findMany: jest.fn().mockResolvedValue([
           builtinPolicyRow('vteam-product', {
             ...config,
-            tools: { vteam_group_post: 'deny', vteam_memory_search: 'ask' },
+            permission: { ...config.permission, bash: 'deny' },
           }),
         ]),
       };
       const policies = await serviceWith(executionPolicy).buildAgentPolicies();
-      expect(policies.guard.roles['vteam-product'].tools).toEqual({
-        vteam_group_post: 'deny',
-        vteam_memory_search: 'ask',
-      });
-      expect(policies.guard.roles['vteam-product'].tools).not.toEqual(
-        ROLE_BOUNDARIES['vteam-product'].toolAllows,
-      );
+      expect(policies.guard.roles['vteam-product'].permission.bash).toBe('deny');
+      expect(
+        (policies.agents.find((a) => a.name === 'vteam-product')?.permission as
+          | Record<string, unknown>
+          | undefined)?.bash,
+      ).toBe('deny');
     });
   });
 
@@ -113,20 +112,26 @@ describe('agent-policies db-backed builtins (Todo 3)', () => {
       expect(JSON.stringify(policies)).toBe(JSON.stringify(baseline));
     });
 
-    it('绑定行存在但 config 残缺（缺 tools）→ tools 回退常量非空 allowlist', async () => {
-      const config = factorySeedConfig('vteam-tester');
+    it('绑定行存在但 config 残缺（缺 permission）→ guard permission 仍完整且无 vteam_ 泄漏到 agents[]', async () => {
       const executionPolicy = {
         findMany: jest.fn().mockResolvedValue([
-          builtinPolicyRow('vteam-tester', {
-            permission: config.permission,
-            correction: config.correction,
-          }),
+          builtinPolicyRow('vteam-tester', { correction: {} }),
         ]),
       };
       const policies = await serviceWith(executionPolicy).buildAgentPolicies();
       const role = policies.guard.roles['vteam-tester'];
-      expect(role.tools).toEqual(ROLE_BOUNDARIES['vteam-tester'].toolAllows);
-      expect(Object.keys(role.tools).length).toBeGreaterThan(0);
+      expect(Object.keys(role.permission).length).toBeGreaterThan(0);
+      // 常量回退：guard 侧 permission 与内置边界同源（含 mcpDenies）。
+      expect(role.permission).toEqual(
+        expect.objectContaining({ task: 'deny' }),
+      );
+      const agent = policies.agents.find((a) => a.name === 'vteam-tester');
+      expect(
+        Object.keys(agent?.permission ?? {}).filter((k) =>
+          k.startsWith('vteam_'),
+        ),
+      ).toEqual([]);
+      expect(ROLE_BOUNDARIES['vteam-tester'].toolAllows).toBeDefined();
     });
   });
 });

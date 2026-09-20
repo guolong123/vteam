@@ -7,7 +7,7 @@
 # execution policy:
 #   A. option set = 「无」 + product/project_manager/architect/developer/tester;
 #      `plan` is NOT offered (ep_plan's task:allow only applies to the literal
-#      `vteam-plan` opencode name — worker/src/role-guard/policy.ts:174).
+#      `vteam-plan` opencode name — registered in the seeded Agent row).
 #   B. creating with role=developer binds the developer capability set
 #      (edit['**tasks/*/**']=allow, bash=allow, non-empty tools), NOT the skeleton.
 #   C. creating with 「无」 binds the deny-by-default skeleton

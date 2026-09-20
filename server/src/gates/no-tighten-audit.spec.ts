@@ -2,11 +2,15 @@
  * no-tighten 机器检查（plan-finalize-actions todo 5，loosen-only 审计）。
  *
  * 红线规则：
- * 1. 清单完整性：GATE_SPEC_FILES 枚举的 16 个门禁单测文件必须全部存在，
+ * 1. 清单完整性：GATE_SPEC_FILES 枚举的 15 个门禁单测文件必须全部存在，
  *    删/改名任一文件即红（防审计范围被悄悄缩小）。
  * 2. 放行侧锁定：任一 allow→deny 翻转即红。只断言放行侧（fail-open 缺省、
  *    豁免、完整三元组必过），绝不断言拒绝侧收紧——本检查只松不紧。
  * 3. 本文件只增断言不改生产语义；收紧需求一律记独立提案，不在此实现。
+ *
+ * 2026-09-20：worker role-guard 层已删除（opencode-native-permissions-and-fixes todo 5），
+ * 其两个 worker 门禁文件清单项随之删除，改由服务端 `platform-mcp.tool-permission.spec.ts`
+ * 覆盖平台工具 allowlist 判定（toolAllows），总数 16 → 15。
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -23,9 +27,9 @@ import { GATE_SPEC_FILES } from './gate-spec-registry';
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 
 describe('no-tighten machine check（todo 5 loosen-only 审计）', () => {
-  describe('清单完整性：16 个门禁单测文件全部存在', () => {
-    it('清单共 16 项（删项即红）', () => {
-      expect(GATE_SPEC_FILES.length).toBe(16);
+  describe('清单完整性：15 个门禁单测文件全部存在', () => {
+    it('清单共 15 项（删项即红）', () => {
+      expect(GATE_SPEC_FILES.length).toBe(15);
     });
     for (const entry of GATE_SPEC_FILES) {
       it(`存在：${entry.file}`, () => {

@@ -360,13 +360,11 @@ export class OpencodeServer {
     // 带 --pure 时 omo 静默不生效。默认不加（让内置插件生效），需要"纯净基线"时用
     // OPENCODE_PURE=1 切回——保留该开关是为了能对照插件对 input tokens 的影响
     // （历史实测 --pure 约 1900 tokens，非 --pure 约 7601）。
-    // Todo 17：pure 下 guard 插件（含 vteam-role-guard）不加载——阻断级降级告警
-    // （原生 permission.edit 仍生效；bash/自定义工具无守卫、无纠正）。
+    // 原生 permission.edit 与 agent 节不依赖插件，--pure 下照常生效。
     if (this.isPureMode()) {
       args.push('--pure');
       this.options.logger?.warn(
-        '[opencode-server] guard 未加载/降级（--pure）：外部插件不加载，vteam-role-guard 无守卫；' +
-          '原生 permission.edit 仍生效，bash/自定义工具越界不受 guard 拦截',
+        '[opencode-server] --pure：外部插件不加载（omo 不生效）；原生 permission.edit / agent 节仍生效',
       );
     }
     const env: NodeJS.ProcessEnv = { ...process.env };

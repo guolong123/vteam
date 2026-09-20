@@ -157,7 +157,7 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
     }
   });
 
-  it('guard roles：tools == toolAllows，bashDeny 含硬化清单，correction 完整', async () => {
+  it('guard roles 恰为 {permission}（todo 5 删死载荷）：permission 完整且 task 派生正确', async () => {
     const res = await request(app.getHttpServer() as never)
       .get('/agent-policies')
       .set('x-worker-token', WORKER_TOKEN)
@@ -169,9 +169,9 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
           VteamAgentName,
           {
             permission: Record<string, unknown>;
-            tools: Record<string, string>;
-            bashDeny: string[];
-            correction: {
+            tools?: Record<string, string>;
+            bashDeny?: string[];
+            correction?: {
               scopeSummary: string;
               handoff: Record<string, string>;
               denyTemplate: string;
@@ -182,17 +182,17 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
     };
     for (const name of agentNames) {
       const role = guard.roles[name];
-      expect(role.tools).toEqual(ROLE_BOUNDARIES[name].toolAllows);
-      expect(role.bashDeny).toEqual(REQUIRED_BASH_DENY);
-      expect(role.correction.scopeSummary).toBe(
-        ROLE_BOUNDARIES[name].scopeSummary,
-      );
-      expect(role.correction.handoff).toEqual(ROLE_BOUNDARIES[name].handoffTo);
-      expect(typeof role.correction.denyTemplate).toBe('string');
+      expect(Object.keys(role)).toEqual(['permission']);
+      expect(role.tools).toBeUndefined();
+      expect(role.bashDeny).toBeUndefined();
+      expect(role.correction).toBeUndefined();
       expect(role.permission).not.toHaveProperty('write');
       expect(role.permission.task).toBe(
         name === 'vteam-plan' ? 'allow' : 'deny',
       );
+      // The tool matrix detail still exists for the server gate; it is resolved via
+      // resolveByAgent (DB config.tools ?? constant allowlist), not emitted here.
+      expect(ROLE_BOUNDARIES[name].toolAllows).toBeDefined();
     }
   });
 
