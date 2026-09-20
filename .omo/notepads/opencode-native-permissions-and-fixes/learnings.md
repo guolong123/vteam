@@ -65,3 +65,30 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   localhost → 跨容器静默 `[]`（`agents.service#listOpencodeAgents` 已记录同坑）。镜像后 WARN 正常触发。
 - 7 内置角色行不受影响：迁移为 additive-only（单条 ADD COLUMN），live 校验 `default_agent_id` 逐行不变。
 - `/agent-policies` 输出逐字节不变（f698c24b…）；frozen baseline sha 3b8c5d4b… 未触碰。
+
+## [2026-09-20] todo 4 — native-only permission payload
+
+- **Two emission sites, one projection helper.** `buildAgentPolicies()` emits `agents[]` twice
+  (builtin `AGENT_POLICIES_ORDER` loop + custom `vteam-<agentKey>` block). `projectNativePermission()`
+  is applied at both; `guard.roles[*]` is built from the **un-projected** canonical permission
+  (custom block reuses the same `permission` var for both — the projection must be applied only
+  at the `agents.push` site, NOT by reassigning the variable, or the guard loses its `vteam_*` detail).
+- **`resolveByAgent` deliberately left un-projected.** It feeds `Agent.effectivePermission` (agents
+  page policy editor) and dispatcher memory/artifact suppression (`guardForTools` reads `tools`, not
+  `permission`). Only the **opencode payload** (`/agent-policies` → injected `opencode.json`) needed
+  the native-only shape. Projecting it would have broken the policy editor round-trip for `vteam_*`.
+- **Baseline artifact is deterministic without a DB.** The new `baseline-agent-policies.json` is
+  captured from `buildAgentPolicies()` with an empty prisma stub (constant path) — key order is the
+  service's canonical order, so `JSON.stringify` byte-comparison works. The live payload is compared
+  **canonically** (`sort_keys`) because MySQL reorders JSON object keys on storage.
+- **f2c harness comparison had to switch sides.** `opencode.json` agent permission is now the
+  projected form while baseline `guard.roles[*].permission` is the full form — comparing them
+  directly would misreport; the fix compares opencode.json against baseline `agents[].permission`
+  and additionally asserts a zero `vteam_` leak.
+- **Live propagation is start-only for the injector.** The injector runs at worker start
+  (`injectAll()`), so a `docker compose restart worker` is what re-fetches `/agent-policies`;
+  `reload-config` broadcast only exists for policy PATCH. Server rebuild used
+  `docker compose up -d --no-deps --build server` — never `--force-recreate` (reseeds).
+- Frozen sha transition (authorized): `3b8c5d4b…` → `3d26b49f…`; the old artifact stays untouched
+  under `.omo/evidence/vteam-role-behavior-abstraction/` and is still asserted by
+  `e2e-third-party-no-policy-leak.sh` D1.

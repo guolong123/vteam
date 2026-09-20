@@ -131,6 +131,37 @@ const PERMISSION_KEY_ORDER: readonly string[] = [
   ...VTEAM_MCP_TOOL_NAMES,
 ];
 
+/**
+ * `agents[].permission` 允许发射的 opencode 原生键唯一集合
+ * （opencode 1.18.31 `PermissionConfig` 全集含 glob/grep/list 等 15 键，本平台只用这 4 个）。
+ * 投影而非新增：保守锚定当前真实使用的键，未来启用原生新键只需在此扩一项。
+ */
+export const NATIVE_PERMISSION_KEYS: readonly string[] = [
+  'edit',
+  'read',
+  'bash',
+  'task',
+] as const;
+
+/**
+ * `agents[].permission` 发射投影：只保留 {@link NATIVE_PERMISSION_KEYS}，丢弃 `vteam_*`
+ * 平台键（引擎只认原生键；平台工具权限改由服务端 platform-mcp 调用时裁决）。
+ *
+ * **仅投影 `agents[]`**：`guard.roles[*].permission` 保持完整，直到 worker guard 层删除
+ * （ordering hazard：worker `role-guard/policy.ts` 仍读取该矩阵）。
+ */
+export function projectNativePermission(
+  permission: Record<string, unknown>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of NATIVE_PERMISSION_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(permission, key)) {
+      out[key] = permission[key];
+    }
+  }
+  return out;
+}
+
 /** guard correction 固定键序。 */
 const CORRECTION_KEY_ORDER: readonly string[] = [
   'scopeSummary',
@@ -801,7 +832,7 @@ export class ExecutionPolicyService implements OnModuleInit {
         name,
         description: policy.description,
         mode: policy.mode,
-        permission: policy.permission,
+        permission: projectNativePermission(policy.permission),
       }),
     );
     const roles: Record<string, AgentGuardRole> = Object.fromEntries(
@@ -875,7 +906,7 @@ export class ExecutionPolicyService implements OnModuleInit {
               ? policy.description
               : custom.name,
           mode: deriveAgentMode(name),
-          permission,
+          permission: projectNativePermission(permission),
         });
         roles[name] = {
           permission,

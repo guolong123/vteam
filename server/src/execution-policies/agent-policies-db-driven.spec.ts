@@ -8,6 +8,7 @@ import {
   builtinPolicyRow,
   factorySeedConfig,
   loadAgentPoliciesBaseline,
+  projectNativePermission,
   reorderLikeMysql,
 } from './__fixtures__/policy-fixtures';
 import { ExecutionPolicyService } from './execution-policy.service';
@@ -131,8 +132,10 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
     expect(editedRole.permission).not.toEqual(
       (baseline.guard.roles[EDITED] as { permission: unknown }).permission,
     );
-    // agent 与 guard 的 permission 同源（同一份 policy.permission）。
-    expect(canon(editedAgent?.permission)).toBe(canon(editedRole.permission));
+    // agent 与 guard 同源：agents[] 是 guard permission 的原生键投影（todo 4）。
+    expect(canon(editedAgent?.permission)).toBe(
+      canon(projectNativePermission(editedRole.permission)),
+    );
   });
 
   it('buildAgentPolicies(): 未编辑的 6 个内置角色与冻结基线逐字节一致', async () => {

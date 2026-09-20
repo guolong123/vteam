@@ -6,6 +6,7 @@ import {
   ROLE_POLICY_DENY_TEMPLATE,
   ROLE_SERVER_GATED_TOOLS,
 } from '../common/constants/agent.constants';
+import { projectNativePermission } from './__fixtures__/policy-fixtures';
 import { ExecutionPolicyService } from './execution-policy.service';
 
 /**
@@ -46,7 +47,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
         name,
         description: boundary.scopeSummary,
         mode: (name === 'vteam-plan' ? 'all' : 'primary') as 'primary' | 'all',
-        permission: {
+        permission: projectNativePermission({
           edit: buildEditPermission(boundary.writeGlobs),
           read: buildReadPermission(),
           bash: boundary.bashEffect,
@@ -54,7 +55,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
           ...Object.fromEntries(
             boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
           ),
-        },
+        }),
       };
     });
     const roles = Object.fromEntries(
@@ -109,7 +110,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
       expect(policies).toMatchSnapshot();
     });
 
-    it('内置层① permission 对未授权 formerly-gated 工具显式 deny，对已授权则无 deny 键', async () => {
+    it('内置层① permission 对未授权 formerly-gated 工具显式 deny（guard 侧），agents[] 原生键投影', async () => {
       const service = serviceWith({
         agent: { findMany: jest.fn().mockResolvedValue([]) },
         executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
@@ -130,7 +131,8 @@ describe('agent-policies custom agents (Todo 2)', () => {
             expect(role.permission).not.toHaveProperty(tool);
             expect(role.tools).toHaveProperty(tool, 'allow');
           } else {
-            expect(agent.permission).toHaveProperty(tool, 'deny');
+            // todo 4：deny 明细只留在 guard.roles[*].permission，agents[] 不发射平台键。
+            expect(agent.permission).not.toHaveProperty(tool);
             expect(role.permission).toHaveProperty(tool, 'deny');
             expect(role.tools).not.toHaveProperty(tool);
           }
@@ -247,8 +249,13 @@ describe('agent-policies custom agents (Todo 2)', () => {
 
       const def = policies.agents.find((a) => a.name === 'vteam-demo-agent');
       expect(def?.mode).toBe('primary');
-      expect(def?.permission).toEqual(demoPolicy.config.permission);
+      expect(def?.permission).toEqual(
+        projectNativePermission(
+          demoPolicy.config.permission as Record<string, unknown>,
+        ),
+      );
       expect(def?.description).toBe('demo policy desc');
+      expect(role.permission).toEqual(demoPolicy.config.permission);
     });
 
     it('resolveByAgent 对自定义 agent 经 agentKey 命名并透出三态 tools（含 deny）', async () => {

@@ -1,0 +1,278 @@
+{
+  "task": "task-4-native-only-payload",
+  "plan": "opencode-native-permissions-and-fixes",
+  "todo": 4,
+  "title": "Stop emitting vteam_* keys in the opencode permission payload (native keys stay)",
+  "timestamp": "2026-09-20T03:40:13.789Z",
+  "scope": {
+    "changedFile": "server/src/execution-policies/execution-policy.service.ts",
+    "change": "NATIVE_PERMISSION_KEYS (edit/read/bash/task) + projectNativePermission() applied at the two agents[] emission sites in buildAgentPolicies() (builtin + custom)",
+    "notChanged": [
+      "agents[].mode",
+      "agents[].description",
+      "guard.enabled",
+      "guard.roles[*].permission",
+      "guard.roles[*].tools",
+      "guard.roles[*].bashDeny",
+      "guard.roles[*].correction",
+      "native permission values"
+    ],
+    "orderingHazard": "guard.roles[*].tools/bashDeny/correction + the vteam_* keys inside guard.roles[*].permission are deliberately KEPT: worker/src/role-guard/policy.ts:124 fail-closes (denies EVERY tool) when role.tools is not a plain object, and the guard stays alive until todo 5. Verified live: roles.json enabled=true, all 7 guard roles byte-identical to baseline."
+  },
+  "beforeAfterKeySets": {
+    "note": "agents[].permission: before = native 4 + role-specific vteam_* deny keys (104 keys total across the 7 builtins); after = native 4 only (28 keys total).",
+    "perBuiltin": {
+      "vteam-plan": {
+        "before": [
+          "bash",
+          "edit",
+          "read",
+          "task",
+          "vteam_channel_send",
+          "vteam_git_repos_list",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_create",
+          "vteam_issue_get",
+          "vteam_issue_list",
+          "vteam_issue_transition",
+          "vteam_issue_update",
+          "vteam_memory_save",
+          "vteam_memory_update",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_submit_artifact",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member"
+        ],
+        "after": [
+          "bash",
+          "edit",
+          "read",
+          "task"
+        ]
+      },
+      "vteam-product": {
+        "before": [
+          "bash",
+          "edit",
+          "read",
+          "task",
+          "vteam_git_repos_list",
+          "vteam_plan_complete",
+          "vteam_skill_create"
+        ],
+        "after": [
+          "bash",
+          "edit",
+          "read",
+          "task"
+        ]
+      },
+      "vteam-architect": {
+        "before": [
+          "bash",
+          "edit",
+          "read",
+          "task",
+          "vteam_git_repos_list",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_transition",
+          "vteam_issue_update",
+          "vteam_plan_complete",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member"
+        ],
+        "after": [
+          "bash",
+          "edit",
+          "read",
+          "task"
+        ]
+      },
+      "vteam-developer": {
+        "before": [
+          "bash",
+          "edit",
+          "read",
+          "task",
+          "vteam_git_repos_list",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_plan_complete",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member"
+        ],
+        "after": [
+          "bash",
+          "edit",
+          "read",
+          "task"
+        ]
+      },
+      "vteam-tester": {
+        "before": [
+          "bash",
+          "edit",
+          "read",
+          "task",
+          "vteam_git_repos_list",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_update",
+          "vteam_plan_complete",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member"
+        ],
+        "after": [
+          "bash",
+          "edit",
+          "read",
+          "task"
+        ]
+      },
+      "vteam-project_manager": {
+        "before": [
+          "bash",
+          "edit",
+          "read",
+          "task",
+          "vteam_git_repos_list",
+          "vteam_submit_artifact"
+        ],
+        "after": [
+          "bash",
+          "edit",
+          "read",
+          "task"
+        ]
+      },
+      "vteam-librarian": {
+        "before": [
+          "bash",
+          "edit",
+          "read",
+          "task",
+          "vteam_channel_send",
+          "vteam_hook_cancel",
+          "vteam_hook_register",
+          "vteam_issue_create",
+          "vteam_issue_get",
+          "vteam_issue_list",
+          "vteam_issue_transition",
+          "vteam_issue_update",
+          "vteam_memory_save",
+          "vteam_memory_update",
+          "vteam_notify_agent",
+          "vteam_plan_complete",
+          "vteam_plan_mode",
+          "vteam_question_confirm",
+          "vteam_skill_create",
+          "vteam_submit_artifact",
+          "vteam_task_create",
+          "vteam_task_transition",
+          "vteam_team_add_member",
+          "vteam_wecom_reply"
+        ],
+        "after": [
+          "bash",
+          "edit",
+          "read",
+          "task"
+        ]
+      }
+    },
+    "beforeTotalKeys": 104,
+    "afterTotalKeys": 28
+  },
+  "nativeValuesUnchanged": {
+    "assertion": "for all 7 builtins, edit/read/bash/task values equal the historical baseline (before-agent-policies.json, read-only)",
+    "result": "PASS (live + unit)",
+    "taskEffect": {
+      "vteam-plan": "allow",
+      "others": "deny"
+    }
+  },
+  "bashDenyTranslation": {
+    "ROLE_BASH_DENY_PATTERNS": "EMPTY (server/src/common/constants/agent.constants.ts:264 = [] as const)",
+    "statement": "There is nothing to translate into native bash:{pattern:deny}. If the list were non-empty the native form would be bash:{<pattern>: 'deny'}; inventing a translation for an empty list would be fabrication.",
+    "liveEvidence": "guard.roles[*].bashDeny == [] for all 7 builtins (both pre- and post-change baselines)"
+  },
+  "baseline": {
+    "oldArtifact": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json",
+    "oldSha256": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "newArtifact": ".omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json",
+    "newSha256": "3d26b49f5ccd81d546f69dbfda8bd7c2568803a6128063f936b9f57045c5d3ee",
+    "newArtifactCommitted": "yes (evidence file is tracked; .gitignore only excludes *.png/*.sql under .omo/evidence)",
+    "determinism": "captured from buildAgentPolicies() with empty prisma stub (constant path); live /agent-policies compared canonically (MySQL reorders JSON object keys)"
+  },
+  "harnessUpdates": [
+    {
+      "file": "scripts/e2e-role-boundaries.sh",
+      "changes": [
+        "default BASELINE_POLICIES -> .omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json",
+        "default FROZEN_BASELINE_SHA256 -> 3d26b49f...",
+        "f2c comparison: opencode.json agent permission now compared against baseline agents[].permission (native-only) instead of guard.roles[*].permission, plus explicit vteam_ leak check"
+      ]
+    },
+    {
+      "file": "scripts/e2e-native-edit-enforcement.sh",
+      "changes": [
+        "default BASELINE_POLICIES -> new artifact",
+        "default FROZEN_BASELINE_SHA256 -> 3d26b49f..."
+      ]
+    },
+    {
+      "file": "scripts/e2e-third-party-no-policy-leak.sh",
+      "changes": [
+        "NOT changed: it asserts the OLD historical artifact is untouched, which remains true and is the point of that scenario"
+      ]
+    }
+  ],
+  "shaTransition": {
+    "old": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "new": "3d26b49f5ccd81d546f69dbfda8bd7c2568803a6128063f936b9f57045c5d3ee",
+    "reason": "agents[].permission legitimately changes shape (native-only); guard.* is byte-identical"
+  },
+  "tests": {
+    "newSpec": "server/src/execution-policies/agent-policies.native-only-payload.spec.ts (zero vteam_ keys; native values == historical baseline; guard regression gate; DB + custom paths; projection unit test; artifact sha self-consistency)",
+    "repointedSpecs": [
+      "agent-policies.controller.spec.ts (inverted the vteam_-prefix assertion)",
+      "agent-policies.matrix.spec.ts (agents[] projection; guard keeps full matrix)",
+      "agent-policies.custom-agents.spec.ts (fixture projection; snapshot regenerated: 76 deletions)",
+      "agent-policies-db-driven.spec.ts + agent-policies.native-edit.spec.ts (agent vs guard cross-check via projection)",
+      "policy-fixtures.ts (loadAgentPoliciesBaseline -> new artifact; loadHistoricalAgentPoliciesBaseline added; projection helpers)"
+    ],
+    "executionPoliciesSuite": "14 suites / 211 tests PASS",
+    "fullServerSuite": "144 suites / 3288 tests PASS with todo-3's untracked spec excluded; 1 PRE-EXISTING failure in server/src/platform-mcp/platform-mcp.tool-permission.spec.ts (todo 3, untracked, in-flight PARALLEL work) — reproduced with this todo's service change stashed, therefore NOT caused by todo 4",
+    "workerSuite": "26 suites / 688 tests PASS (unchanged)"
+  },
+  "liveQA": {
+    "server": "docker compose up -d --no-deps --build server (NOT --force-recreate, which reseeds)",
+    "curl": "GET http://localhost:13000/api/v1/agent-policies with admin JWT and X-Worker-Token -> HTTP 200 both; 7 builtins; agents[].permission == {edit,read,bash,task}; zero vteam_ keys; native values == pre-change",
+    "injection": "docker compose restart worker -> injector logged '平台资源注入完成', NO neutralization/unknown-field warning; <workDir>/opencode.json agent entries native-only; <workDir>/.vteam-role-guard/roles.json enabled=true with guard roles byte-identical to baseline",
+    "configLoads": "opencode serve GET /agent?directory=/data/vteam-worker -> 23 agents, all 7 vteam-* present (the injected opencode.json loads; opencode-config-builder unknown-field assertion did not fire)"
+  },
+  "gates": {
+    "serverTsc": "exit 0",
+    "executionPoliciesJest": "pass",
+    "fullServerJest": "144/144 suites, 3288/3288 tests (excluding todo-3 in-flight spec)",
+    "workerJest": "26/688 unchanged",
+    "harnessSyntax": "bash -n OK for all three scripts"
+  }
+}

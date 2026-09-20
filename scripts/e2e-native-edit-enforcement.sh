@@ -3,7 +3,7 @@
 # e2e: native permission edits reach the worker (plan Todo 8 proof, parts b-e).
 #
 # Proves, against a LIVE stack (server + worker, no model/serve needed):
-#   (c) frozen-baseline sha gate  : before-agent-policies.json sha256 is checked at
+#   (c) frozen-baseline sha gate  : baseline-agent-policies.json sha256 is checked at
 #                                   start AND at end; never modified.
 #   (b) live round-trip           : PATCH a builtin's permission.edit -> POLL the
 #                                   injected opencode.json + .vteam-role-guard/roles.json
@@ -53,13 +53,13 @@ POLL_INTERVAL_SEC="${POLL_INTERVAL_SEC:-5}"
 CLEANUP_POLL_SEC="${CLEANUP_POLL_SEC:-90}"
 PROBE_MARKER="${PROBE_MARKER:-**t8-enforce/**}"
 BASELINE_POLICIES="${BASELINE_POLICIES:-}"
-FROZEN_BASELINE_SHA256="${FROZEN_BASELINE_SHA256:-3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87}"
+FROZEN_BASELINE_SHA256="${FROZEN_BASELINE_SHA256:-3d26b49f5ccd81d546f69dbfda8bd7c2568803a6128063f936b9f57045c5d3ee}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVIDENCE_DIR="${EVIDENCE_DIR:-$REPO_ROOT/.omo/evidence/agent-native-permission-editor}"
 T8_DIR="$EVIDENCE_DIR/task-8"
 if [[ -z "$BASELINE_POLICIES" ]]; then
-  BASELINE_POLICIES="$REPO_ROOT/.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json"
+  BASELINE_POLICIES="$REPO_ROOT/.omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json"
 fi
 mkdir -p "$T8_DIR"
 

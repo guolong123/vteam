@@ -17,7 +17,7 @@ import { ExecutionPolicyService } from './execution-policy.service';
  * GET /agent-policies 单测（Todo 12 证据）：
  * - happy：worker token（X-Worker-Token，走 WorkerOrJwtGuard worker 通道）
  *   → 200，7 个 agent 定义（vteam-plan + 5 vteam-<role> + vteam-librarian），`guard.roles` key 与
- *   `agents[].name` 完全一致，所有 MCP 键带 `vteam_` 前缀，无 `write` 键；
+ *   `agents[].name` 完全一致，`agents[].permission` 仅 opencode 原生键（todo 4），无 `write` 键；
  * - 未鉴权（无 token，用户 JWT 通道被 stub 为 401）→ 401；
  * - 错误 token → 401。
  */
@@ -149,10 +149,10 @@ describe('AgentPoliciesController (GET /agent-policies)', () => {
       );
       expect(permission.edit).toMatchObject({ '*': 'deny' });
       expect(permission.read).toMatchObject({ '*': 'allow' });
+      // todo 4 反转：agents[].permission 零 vteam_ 键（旧断言要求非原生键必带该前缀）。
       for (const key of Object.keys(permission)) {
-        if (!['edit', 'read', 'bash', 'task'].includes(key)) {
-          expect(key.startsWith('vteam_')).toBe(true);
-        }
+        expect(['edit', 'read', 'bash', 'task']).toContain(key);
+        expect(key.startsWith('vteam_')).toBe(false);
       }
     }
   });

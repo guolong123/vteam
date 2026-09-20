@@ -14,6 +14,7 @@ import {
 import {
   EVIDENCE_DIR,
   loadAgentPoliciesBaseline,
+  projectNativePermission,
 } from './__fixtures__/policy-fixtures';
 import { ExecutionPolicyService } from './execution-policy.service';
 
@@ -132,7 +133,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     }
   });
 
-  it('内置层① permission：未授权 formerly-gated 工具显式 deny，已授权者无 deny 键', async () => {
+  it('内置层① permission：未授权 formerly-gated 工具显式 deny（guard 侧），agents[] 原生键投影', async () => {
     const service = new ExecutionPolicyService(
       {
         agent: { findMany: jest.fn().mockResolvedValue([]) },
@@ -145,6 +146,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     let assertions = 0;
     for (const agent of policies.agents) {
       const boundary = ROLE_BOUNDARIES[agent.name];
+      const rolePermission = policies.guard.roles[agent.name].permission;
       for (const tool of FORMERLY_GATED_TOOLS) {
         const granted = Object.prototype.hasOwnProperty.call(
           boundary.toolAllows,
@@ -152,15 +154,11 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
         );
         if (granted) {
           expect(agent.permission).not.toHaveProperty(tool);
-          expect(
-            policies.guard.roles[agent.name].permission,
-          ).not.toHaveProperty(tool);
+          expect(rolePermission).not.toHaveProperty(tool);
         } else {
-          expect(agent.permission).toHaveProperty(tool, 'deny');
-          expect(policies.guard.roles[agent.name].permission).toHaveProperty(
-            tool,
-            'deny',
-          );
+          // todo 4：agents[] 只发射原生键——deny 明细留在 guard.roles[*].permission。
+          expect(agent.permission).not.toHaveProperty(tool);
+          expect(rolePermission).toHaveProperty(tool, 'deny');
         }
         assertions += 2;
       }
@@ -212,7 +210,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       expect(JSON.stringify(policies)).toBe(JSON.stringify(baseline));
     });
 
-    it('冻结基线文件 sha256 未变（3b8c5d4b…：字节身份闸门自身不可动）', () => {
+    it('冻结基线文件 sha256 未变（旧基线保持只读；历史字节身份闸门自身不可动）', () => {
       const file = join(EVIDENCE_DIR, 'before-agent-policies.json');
       const sha = createHash('sha256').update(readFileSync(file)).digest('hex');
       expect(sha).toBe(
@@ -247,7 +245,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       }
     });
 
-    it('agent/role permission 与层①派生 map 一致；仅 vteam-plan task allow、无 write', () => {
+    it('guard role permission 与层①派生 map 一致；agents[] 为原生键投影；仅 vteam-plan task allow、无 write', () => {
       for (const agent of policies.agents) {
         const boundary = ROLE_BOUNDARIES[agent.name];
         const expectedPermission = {
@@ -259,9 +257,13 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
             boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
           ),
         };
-        expect(agent.permission).toEqual(expectedPermission);
+        // guard.roles[*].permission 保持完整（含 vteam_* deny 明细，worker guard 层消费）。
         expect(policies.guard.roles[agent.name].permission).toEqual(
           expectedPermission,
+        );
+        // agents[] 只发射原生四键，值同派生 map（todo 4）。
+        expect(agent.permission).toEqual(
+          projectNativePermission(expectedPermission),
         );
         expect(agent.permission).not.toHaveProperty('write');
         expect(policies.guard.roles[agent.name].permission).not.toHaveProperty(

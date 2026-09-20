@@ -8,6 +8,7 @@ import {
   builtinPolicyRow,
   factorySeedConfig,
   loadAgentPoliciesBaseline,
+  projectNativePermission,
   reorderLikeMysql,
   storageRoundTrip,
 } from './__fixtures__/policy-fixtures';
@@ -130,8 +131,10 @@ describe('agent-policies native edit (Todo 8a proof)', () => {
     expect(editedRole.permission.edit).toEqual(DB_EDIT_CANONICAL);
     expect(canon(editedRole.permission.edit)).not.toBe(canon(FACTORY_EDIT));
 
-    // agent 与 guard 的 permission 同源（同一份 policy.permission）。
-    expect(canon(editedAgent?.permission)).toBe(canon(editedRole.permission));
+    // agent 与 guard 同源：agents[] 是 guard permission 的原生键投影（todo 4）。
+    expect(canon(editedAgent?.permission)).toBe(
+      canon(projectNativePermission(editedRole.permission)),
+    );
 
     // 新 glob 出现在发射结果里，且 docs 被收紧到 deny。
     const emitted = editedRole.permission.edit as Record<string, string>;

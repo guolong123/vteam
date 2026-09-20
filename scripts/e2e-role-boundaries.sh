@@ -77,17 +77,17 @@ ADMIN_JWT="${ADMIN_JWT:-}"
 EVIDENCE_DIR="${EVIDENCE_DIR:-./e2e-evidence}"
 #
 # Scenario (f2) — DB-driven builtin policy proof (plan Todo 15) — knobs:
-#   BASELINE_POLICIES   frozen factory baseline (before-agent-policies.json). Default the
-#                       repo evidence copy; its sha256 is checked against
-#                       FROZEN_BASELINE_SHA256 before any assertion so a tampered/stale
-#                       baseline fails loudly instead of silently "passing".
+#   BASELINE_POLICIES   frozen factory baseline (baseline-agent-policies.json, todo 4:
+#                       agents[].permission native-only). Default the repo evidence copy;
+#                       its sha256 is checked against FROZEN_BASELINE_SHA256 before any
+#                       assertion so a tampered/stale baseline fails loudly.
 #   FROZEN_BASELINE_SHA256  expected sha256 of BASELINE_POLICIES.
 #   EDIT_POLICY_ID      builtin policy row edited for the proof. Default ep_product.
 #   WORKER_WORK_DIR     worker work dir INSIDE the worker container. Default $WORK_DIR.
 #                       (WORK_DIR stays the host-visible contract for scenario f.)
 #   RESTART_TIMEOUT_SEC / RESTART_INTERVAL_SEC  worker-reload poll budget (default 180/5).
 BASELINE_POLICIES="${BASELINE_POLICIES:-}"
-FROZEN_BASELINE_SHA256="${FROZEN_BASELINE_SHA256:-3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87}"
+FROZEN_BASELINE_SHA256="${FROZEN_BASELINE_SHA256:-3d26b49f5ccd81d546f69dbfda8bd7c2568803a6128063f936b9f57045c5d3ee}"
 EDIT_POLICY_ID="${EDIT_POLICY_ID:-ep_product}"
 WORKER_WORK_DIR="${WORKER_WORK_DIR:-${WORK_DIR:-/data/vteam-worker}}"
 RESTART_TIMEOUT_SEC="${RESTART_TIMEOUT_SEC:-180}"
@@ -287,7 +287,7 @@ poll_questions_pending() { # $1 = taskId, $2 = scenario : prints question id or 
 # ---------------------------------------------------------------- preconditions
 [[ -n "$X_WORKER_TOKEN" ]] || { printf '[e2e] X_WORKER_TOKEN is required\n'; exit 2; }
 if want f && [[ -z "$BASELINE_POLICIES" ]]; then
-  BASELINE_POLICIES="$REPO_ROOT/.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json"
+  BASELINE_POLICIES="$REPO_ROOT/.omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json"
 fi
 needs_serve=""
 for _s in a c d e g; do want "$_s" && needs_serve="yes"; done
@@ -680,16 +680,26 @@ same = oc_bash == "deny"
 lines.append("opencode.agent[%s].permission.bash = %r (want 'deny'): %s" % (role_name, oc_bash, "OK" if same else "MISMATCH"))
 ok = ok and same
 # (iii) other 6 built-ins byte-identical to the frozen baseline (roles + opencode).
+# Baseline guard role permission keeps the vteam_* deny detail (worker guard consumes it);
+# the opencode.json agent entry carries only the native keys (todo 4 projection), so
+# compare it against the baseline agent definition (native-only), not the guard role.
 base_roles = (base.get("guard") or {}).get("roles") or {}
+base_agents = {a["name"]: a for a in base.get("agents") or []}
 for name in order:
     if name == role_name:
         continue
     same_r = canon(roles.get(name)) == canon(base_roles.get(name))
     lines.append("roles[%s] vs baseline: %s" % (name, "IDENTICAL" if same_r else "MISMATCH"))
     ok = ok and same_r
-    lines.append("opencode.agent[%s] permission vs baseline: %s" % (
-        name, "IDENTICAL" if canon((oc_agents.get(name) or {}).get("permission")) == canon((base_roles.get(name) or {}).get("permission")) else "MISMATCH"))
-    ok = ok and canon((oc_agents.get(name) or {}).get("permission")) == canon((base_roles.get(name) or {}).get("permission"))
+    oc_perm = (oc_agents.get(name) or {}).get("permission")
+    base_perm = (base_agents.get(name) or {}).get("permission")
+    same_perm = canon(oc_perm) == canon(base_perm)
+    lines.append("opencode.agent[%s] permission vs baseline agent[%s]: %s" % (
+        name, name, "IDENTICAL" if same_perm else "MISMATCH"))
+    ok = ok and same_perm
+    vteam_leak = [k for k in (oc_perm or {}) if k.startswith("vteam_")]
+    lines.append("opencode.agent[%s] vteam_ leak: %r" % (name, vteam_leak))
+    ok = ok and not vteam_leak
 open(report, "w").write("\n".join(lines) + "\n")
 print("\n".join(lines))
 assert ok, "DB-driven injection / byte-identity mismatches above"
