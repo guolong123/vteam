@@ -1,0 +1,30 @@
+opencode-native-permissions-and-fixes todo 8 · dark-mode role selection + warnings — raw evidence
+===============================================================================================
+date (UTC): 2026-09-20T08:09:53Z
+pre-run HEAD: 1d343873eaf039fd6f9649be4abdd7d7487c474d
+spec: web/e2e/dark-mode-role-warning.spec.ts
+screenshot: .omo/evidence/opencode-native-permissions-and-fixes/task-8-dark-mode.png (via T8_SCREENSHOT)
+config: throwaway web/.t8.playwright.config.ts (testMatch /dark-mode-role-warning\.spec\.ts/, channel chrome,
+        baseURL http://localhost:13001); web/playwright.config.ts untouched. Tmp config deleted after run.
+live stack: compose web :13001 already serving the change (no rebuild/restart; /login http=200 pre-run).
+
+--- web tsc ---
+$ cd web && npx tsc --noEmit
+TSC_EXIT=0
+(tsc stdout empty — no output)
+
+--- spec stdout (T8_SCREENSHOT=../.omo/evidence/opencode-native-permissions-and-fixes/task-8-dark-mode.png) ---
+
+Running 2 tests using 1 worker
+
+  ✓  1 e2e/dark-mode-role-warning.spec.ts:81:7 › Todo 8 · dark-mode role selection + warnings › dark 主题：选中 role-item 与警示块无浅色硬编码 (2.4s)
+  ✓  2 e2e/dark-mode-role-warning.spec.ts:129:7 › Todo 8 · dark-mode role selection + warnings › light 主题：同一位置等于原浅色 hex（无回归） (2.0s)
+
+  2 passed (5.5s)
+SPEC_EXIT=0
+
+--- screenshot ---
+task-8-dark-mode.png: PNG image data, 1280 x 720 (142484 bytes at capture)
+
+--- post-commit git show --stat (appended after commit; commit NOT amended) ---
+(to be appended)

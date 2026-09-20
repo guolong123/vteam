@@ -113,3 +113,13 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   Watch-out for todo 8: todo 7 REMOVES the member caveat amber in `teams/[id]/page.tsx`
   (`member-external-agent-caveat:144`), so that spot of the todo-8 defect may no longer exist —
   the todo-8 worker must verify and fix only what survives.
+
+## [2026-09-20] todo 8 — dark-mode close-out notes
+
+- **First spec run used the wrong cwd.** Running `npx playwright test --config
+  .t8.playwright.config.ts` from the repo root fails (`config does not exist`); the throwaway
+  config lives in `web/`, so run from `web/` with `T8_SCREENSHOT=../.omo/...` (or keep
+  `testDir: ./e2e` anchored to `web/`).
+- **Spec skips the warning-colour branch when the engine has no external agents**
+  (`empty`/`unavailable` → `test.skip`). Passing 2/2 therefore means the warning assertions ran
+  (no skip observed); if a skip appears, the PNG still proves the dark role-item state.

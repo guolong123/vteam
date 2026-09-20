@@ -807,7 +807,7 @@ function NativeRuleMapEditor({ name, value, seed, readOnly, pending, onChange }:
             borderRadius: radius.sm,
             backgroundColor: "rgba(245,158,11,0.10)",
             border: "1px solid rgba(245,158,11,0.28)",
-            color: "#B45309",
+            color: "var(--color-warning-text)",
             fontSize: fontSize.xs,
           }}
         >
@@ -1392,7 +1392,7 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
             backgroundColor: "rgba(245,158,11,0.10)",
             border: "1px solid rgba(245,158,11,0.28)",
             fontSize: fontSize.sm,
-            color: "#B45309",
+            color: "var(--color-warning-text)",
           }}
         >
           <span style={{ display: "flex", alignItems: "center", gap: space.xs, fontWeight: 600 }}>

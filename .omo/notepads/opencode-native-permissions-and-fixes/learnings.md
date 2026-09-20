@@ -278,3 +278,16 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Canonical no-residue habit:** pre-build `GET /agent-roles?pageSize=100` captured as
   `sorted(json.dumps(sort_keys=True))` strings; compared equal after every e2e run (8 seed rows),
   `teams` 1 / `tasks` 2 / `agents` 7. All throwaway roles/teams were deleted in spec `finally`.
+
+## [2026-09-20] todo 8 — dark-mode role selection + external warning
+
+- **Shallow contract, not deep-vars.** The spec asserts ON the role-item/warning computed colours
+  (dark ≠ light hex, light byte-equal to the old `#EFF6FF/#B45309/#FFFBEB/#FDE68A`), so any
+  refactor that preserves light output passes — per-role `--color-role-*-{color,bg,border}` +
+  `--color-warning-*` in `:root`/`.dark` is the shape chosen, light values byte-equal by intent.
+- **Spec theme goes through the app's own `theme-toggle`** (theme-store → `html.dark`), matching a
+  real user; assertions use `rgba(` alpha presence for the dark tint, not a fixed rgb.
+- **Screenshot flow that works:** `theme → tab → wait off loading → scrollIntoViewIfNeeded →
+  viewport screenshot`. `fullPage:true` stays unreliable (internal scroll container); PNG comes
+  from the `T8_SCREENSHOT` run itself (throwaway `.t8.playwright.config.ts`, baseURL
+  `http://localhost:13001`, deleted after the run).

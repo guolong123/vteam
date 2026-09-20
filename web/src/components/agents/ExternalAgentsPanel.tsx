@@ -53,11 +53,11 @@ export const EXTERNAL_INSTRUCTIONS_UNAVAILABLE_TEXT = "说明加载失败（暂�
 /** 指令请求成功但引擎无该 agent 的提示词。 */
 const EXTERNAL_INSTRUCTIONS_EMPTY_TEXT = "该 agent 未定义自定义提示词";
 
-/** 警示色（amber：与任务"待验收"同族，语义为"注意/不适用"，不用红色以免读成报错）。 */
+/** 警示色（amber：与任务"待验收"同族，语义为"注意/不适用"，不用红色以免读成报错；CSS 变量驱动，light/dark 跟随 globals.css）。 */
 const warning = {
-  text: "#B45309",
-  bg: "#FFFBEB",
-  border: "#FDE68A",
+  text: "var(--color-warning-text)",
+  bg: "var(--color-warning-bg)",
+  border: "var(--color-warning-border)",
 } as const;
 
 /** GET /agents/opencode 条目（对齐服务端 WorkerAgentInfo + governed）。 */

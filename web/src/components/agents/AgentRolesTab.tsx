@@ -34,16 +34,16 @@ import {
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** 岗位主题色（按 role key；未知 key 回退 general 中性色）。 */
+/** 岗位主题色（按 role key；CSS 变量驱动，light/dark 跟随 globals.css；未知 key 回退 general 中性色）。 */
 const roleTheme: Record<string, { color: string; bg: string; border: string }> = {
-  product: { color: "#2563EB", bg: "#EFF6FF", border: "#BFDBFE" },
-  project_manager: { color: "#0891B2", bg: "#ECFEFF", border: "#A5F3FC" },
-  architect: { color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
-  developer: { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  tester: { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  plan: { color: "#4F46E5", bg: "#EEF2FF", border: "#C7D2FE" },
-  librarian: { color: "#64748B", bg: "#F1F5F9", border: "#E2E8F0" },
-  general: { color: "#78716C", bg: "#FAFAF9", border: "#E7E5E4" },
+  product: { color: "var(--color-role-product-color)", bg: "var(--color-role-product-bg)", border: "var(--color-role-product-border)" },
+  project_manager: { color: "var(--color-role-project-manager-color)", bg: "var(--color-role-project-manager-bg)", border: "var(--color-role-project-manager-border)" },
+  architect: { color: "var(--color-role-architect-color)", bg: "var(--color-role-architect-bg)", border: "var(--color-role-architect-border)" },
+  developer: { color: "var(--color-role-developer-color)", bg: "var(--color-role-developer-bg)", border: "var(--color-role-developer-border)" },
+  tester: { color: "var(--color-role-tester-color)", bg: "var(--color-role-tester-bg)", border: "var(--color-role-tester-border)" },
+  plan: { color: "var(--color-role-plan-color)", bg: "var(--color-role-plan-bg)", border: "var(--color-role-plan-border)" },
+  librarian: { color: "var(--color-role-librarian-color)", bg: "var(--color-role-librarian-bg)", border: "var(--color-role-librarian-border)" },
+  general: { color: "var(--color-role-general-color)", bg: "var(--color-role-general-bg)", border: "var(--color-role-general-border)" },
 };
 const FALLBACK_THEME = roleTheme.general;
 

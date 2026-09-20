@@ -144,6 +144,35 @@ a {
   --color-mention-border: #99F6E4;
   --color-mention-accent: #0D9488;
   --color-mention-text: #0F766E;
+  /* 警示（amber：外部 agent 非治理警告 / 待验收同族；浅色=原硬编码值，深色=半透明跟随 surface） */
+  --color-warning-bg: #FFFBEB;
+  --color-warning-border: #FDE68A;
+  --color-warning-text: #B45309;
+  /* 岗位主题色（浅色=原 roleTheme 硬编码值；深色=半透明 tint + 提亮文字，保留各 role 色相） */
+  --color-role-product-color: #2563EB;
+  --color-role-product-bg: #EFF6FF;
+  --color-role-product-border: #BFDBFE;
+  --color-role-project-manager-color: #0891B2;
+  --color-role-project-manager-bg: #ECFEFF;
+  --color-role-project-manager-border: #A5F3FC;
+  --color-role-architect-color: #7C3AED;
+  --color-role-architect-bg: #F5F3FF;
+  --color-role-architect-border: #DDD6FE;
+  --color-role-developer-color: #059669;
+  --color-role-developer-bg: #ECFDF5;
+  --color-role-developer-border: #A7F3D0;
+  --color-role-tester-color: #D97706;
+  --color-role-tester-bg: #FFFBEB;
+  --color-role-tester-border: #FDE68A;
+  --color-role-plan-color: #4F46E5;
+  --color-role-plan-bg: #EEF2FF;
+  --color-role-plan-border: #C7D2FE;
+  --color-role-librarian-color: #64748B;
+  --color-role-librarian-bg: #F1F5F9;
+  --color-role-librarian-border: #E2E8F0;
+  --color-role-general-color: #78716C;
+  --color-role-general-bg: #FAFAF9;
+  --color-role-general-border: #E7E5E4;
   /* 分段选择器选中项：浅色=白，深色=提亮一档（surface #1e293b 上可见） */
   --color-segment-active: #ffffff;
 }
@@ -168,6 +197,33 @@ a {
   --color-mention-border: rgba(153, 246, 228, 0.35);
   --color-mention-accent: #5EEAD4;
   --color-mention-text: #99F6E4;
+  --color-warning-bg: rgba(245, 158, 11, 0.14);
+  --color-warning-border: rgba(253, 230, 138, 0.35);
+  --color-warning-text: #FBBF24;
+  --color-role-product-color: #93C5FD;
+  --color-role-product-bg: rgba(37, 99, 235, 0.18);
+  --color-role-product-border: rgba(191, 219, 254, 0.35);
+  --color-role-project-manager-color: #67E8F9;
+  --color-role-project-manager-bg: rgba(8, 145, 178, 0.18);
+  --color-role-project-manager-border: rgba(165, 243, 252, 0.35);
+  --color-role-architect-color: #C4B5FD;
+  --color-role-architect-bg: rgba(124, 58, 237, 0.20);
+  --color-role-architect-border: rgba(221, 214, 254, 0.35);
+  --color-role-developer-color: #6EE7B7;
+  --color-role-developer-bg: rgba(5, 150, 105, 0.18);
+  --color-role-developer-border: rgba(167, 243, 208, 0.35);
+  --color-role-tester-color: #FBBF24;
+  --color-role-tester-bg: rgba(245, 158, 11, 0.14);
+  --color-role-tester-border: rgba(253, 230, 138, 0.35);
+  --color-role-plan-color: #A5B4FC;
+  --color-role-plan-bg: rgba(79, 70, 229, 0.20);
+  --color-role-plan-border: rgba(199, 210, 254, 0.35);
+  --color-role-librarian-color: #CBD5E1;
+  --color-role-librarian-bg: rgba(100, 116, 139, 0.20);
+  --color-role-librarian-border: rgba(226, 232, 240, 0.30);
+  --color-role-general-color: #D6D3D1;
+  --color-role-general-bg: rgba(120, 113, 108, 0.20);
+  --color-role-general-border: rgba(231, 229, 228, 0.30);
   --color-segment-active: #334155;
 }
 
