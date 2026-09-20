@@ -5907,6 +5907,69 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
+   * 工具权限门（opencode-native-permissions-and-fixes todo 3）的调用方解析。
+   *
+   * **复用 `resolveExecContext`**（与各 handler / dispatcher 同一归属校验，不新增第二套
+   * 绑定逻辑）：传了 taskId/teamId 的工具走既有 task/team 维度解析（tm_ 误传 400、
+   * 跨任务/冒充 403 语义原样保留），返回 `ExecContext.callerId`（tmm_ 成员 id）。
+   *
+   * 仅有的补充路径：args **双空**（`channel_send` 无任何身份入参；`wecom_reply` /
+   * team-free 工具可缺省上下文）→ 复用「该 worker 最近一次会话」解析
+   * （与 `channelSend`/`wecomReply` 的回填同源：`SESSION.findFirst({workerId}) orderBy
+   * createdAt desc`），命中 taskId → `assertWorkerTask`；命中 teamId → `assertWorkerTeam`；
+   * 仅 teamMemberId → 校验 `selfInstanceId`（若传）后返回。**解析不到成员 → fail-closed
+   * 403 `PLATFORM_MCP_TOOL_NOT_PERMITTED`**（契约 §4：服务端是平台工具的唯一闸门，
+   * todos 4/5 后不得 pass-through）。
+   */
+  async resolveToolCallerId(
+    ctx: PlatformMcpContext,
+    args: { taskId?: string; teamId?: string; selfInstanceId?: string },
+  ): Promise<string> {
+    if (args.taskId || args.teamId) {
+      const exec = await this.resolveExecContext(ctx, args);
+      return exec.callerId;
+    }
+    const session = await this.prisma.session.findFirst({
+      where: { workerId: ctx.workerId },
+      orderBy: { createdAt: 'desc' },
+      select: {
+        taskId: true,
+        teamId: true,
+        teamMemberId: true,
+        agentId: true,
+      },
+    });
+    if (session?.taskId) {
+      return this.assertWorkerTask(ctx, session.taskId, args.selfInstanceId);
+    }
+    if (session?.teamId) {
+      const { memberId } = await this.assertWorkerTeam(
+        ctx,
+        session.teamId,
+        args.selfInstanceId,
+      );
+      return memberId;
+    }
+    if (session?.teamMemberId) {
+      if (
+        args.selfInstanceId !== undefined &&
+        args.selfInstanceId !== session.teamMemberId
+      ) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: `selfInstanceId 与该 worker 最近会话成员（${session.teamMemberId}）不一致，禁止冒充`,
+        });
+      }
+      return session.teamMemberId;
+    }
+    throw new ForbiddenException({
+      code: PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
+      message:
+        '无法解析调用方身份（该 worker 无任务/团队会话或会话未绑定成员），按 fail-closed 策略拒绝调用',
+    });
+  }
+
+  /**
    * 团队维度归属校验（team-free-chat）：该 worker 是否有该 teamId 的团队会话。
    * 团队模式 selfInstanceId 即团队成员 id（session.teamMemberId）；无会话或成员
    * 不一致 → 403（与 assertWorkerTask 同风格，维度内精确匹配，维度间无回退）。

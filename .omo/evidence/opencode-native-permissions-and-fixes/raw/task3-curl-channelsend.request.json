@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"channel_send","arguments":{"target":"nc_0001","text":"qa probe"},"_meta":{"progressToken":1}}}

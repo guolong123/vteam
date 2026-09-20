@@ -1,0 +1,1 @@
+{"status":"error","input":{"taskId":"t_0000000001","selfInstanceId":"tmm_0000000006","action":"start"},"error":"【越界拦截｜角色：vteam-plan】不能调用 vteam_task_transition。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。","time":{"start":1789876195811,"end":1789876195827}}

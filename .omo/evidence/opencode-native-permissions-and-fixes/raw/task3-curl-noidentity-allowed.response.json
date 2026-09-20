@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"content\":[{\"type\":\"text\",\"text\":\"发送失败: 无法解析当前任务上下文（请传 taskId）\"}],\"isError\":false}"}]}}

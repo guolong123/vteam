@@ -13,6 +13,7 @@ import { WorkersModule } from '../workers/workers.module';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
 import { PlatformMcpController } from './platform-mcp.controller';
 import { PlatformMcpService } from './platform-mcp.service';
+import { PlatformToolPermissionService } from './platform-tool-permission.service';
 import { ReviewRoundTimeoutHandler } from '../chat/review-round-timeout.handler';
 import { SkillsModule } from '../skills/skills.module';
 
@@ -44,6 +45,9 @@ import { SkillsModule } from '../skills/skills.module';
  * - ReviewRoundTimeoutHandler（review-round-open 超时消费者，文件落 chat 域、
  *   provider 注册在本模块）：本模块已 import IssuesModule（gate+rounds 导出）与
  *   TimersModule，无新增模块边（ChatModule 注册则需新增 IssuesModule 依赖）。
+ * - PlatformToolPermissionService（todo 3 工具权限门）：ExecutionPolicyService 由
+ *   ExecutionPoliciesModule（上方 import）导出；controller 在 handler 之前调用，
+ *   `tools/list` 不过滤（调用时拦截）。
  */
 @Module({
   imports: [
@@ -63,6 +67,11 @@ import { SkillsModule } from '../skills/skills.module';
     SkillsModule,
   ],
   controllers: [PlatformMcpController],
-  providers: [PlatformMcpService, WorkerTokenGuard, ReviewRoundTimeoutHandler],
+  providers: [
+    PlatformMcpService,
+    PlatformToolPermissionService,
+    WorkerTokenGuard,
+    ReviewRoundTimeoutHandler,
+  ],
 })
 export class PlatformMcpModule {}

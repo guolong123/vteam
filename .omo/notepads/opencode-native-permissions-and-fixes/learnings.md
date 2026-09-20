@@ -92,3 +92,25 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - Frozen sha transition (authorized): `3b8c5d4b…` → `3d26b49f…`; the old artifact stays untouched
   under `.omo/evidence/vteam-role-behavior-abstraction/` and is still asserted by
   `e2e-third-party-no-policy-leak.sh` D1.
+
+## [2026-09-20] Task 3: 服务端平台工具权限门（vteam_*）
+
+- 落点：`PlatformMcpController.toolsCall()` 在 zod parse 之后、`tool.handler` 之前调用
+  `PlatformToolPermissionService.assertToolAllowed(await service.resolveToolCallerId({workerId}, args), tool.name)`。
+  `tools/list` 不过滤（调用时拦截）。
+- 名称桥接唯一位置：`vteam_${receivedBareName}`（todo 1 契约）。收到的就是裸名，全程不 strip。
+- 稳定码 `PLATFORM_MCP_TOOL_NOT_PERMITTED`（与归属 403 `PLATFORM_MCP_FORBIDDEN` 机器可区分）；
+  JSON-RPC 层仍是 -32003 + `[403]` 前缀。
+- 身份解析复用：`resolveToolCallerId` 传了 taskId/teamId 就走既有 `resolveExecContext`
+  （错误码原样保留）；**双空**（channel_send / wecom_reply 缺省）走「worker 最近会话」
+  （`SESSION.findFirst({workerId}) orderBy createdAt desc`）——与 channelSend/wecomReply
+  自己的回填同源，不是第二套绑定逻辑；解析不到成员 → fail-closed 403。
+- fail-closed 与 worker guard 的 pass-through 是有意分道（todos 4/5 后服务端是唯一闸门），
+  理由记在 `CONTRACT-tool-naming-and-identity.md` §4。
+- 真栈差分技巧（证明服务端门独立生效，绕开仍存活的 worker guard）：只改 DB `execution_policies.config.tools`
+  而**不重启 worker** → 注入的 guard payload 仍是旧值（guard 放行），调用因此到达服务端并被服务端拒。
+  恢复用 `JSON_SET` 写回原值，`shasum` 与改动前逐字节相等（本次 `9bfa4867…`）。
+  注意 `LOAD_FILE` 在 mysql 容器里读不到 `docker cp` 进去的文件（secure_file_priv），要用
+  `JSON_SET`/`JSON_REMOVE` 就地改。
+- `channel_send` 决策：无身份 → 最近会话解析 → 命中成员才做矩阵判定；不命中 403
+  PLATFORM_MCP_TOOL_NOT_PERMITTED（不是静默放行）。

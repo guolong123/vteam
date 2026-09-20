@@ -29,6 +29,16 @@ export const PLATFORM_MCP_ERRORS = {
    * 硬拦（消息不落库不广播）。调用方凭 code 与通用 FORBIDDEN 区分。
    */
   NOTIFY_ROUTING_VIOLATION: 'PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION',
+  /**
+   * 平台工具权限门（opencode-native-permissions-and-fixes todo 3）：调用方绑定的
+   * ExecutionPolicy `tools` 矩阵未授权该工具（显式 deny 或未列入）→ 403。
+   *
+   * 与通用 FORBIDDEN 区分：那个表示 **归属** 校验失败（worker↔团队↔任务绑定、
+   * 实例冒充、DM 端点），本码表示 **能力** 拒绝。调用方（模型/审计）凭 code
+   * 即可机器判别「越权」与「不属于我」。fail-closed 语义与理由见
+   * `CONTRACT-tool-naming-and-identity.md` §4（身份/角色/矩阵不可解析一律本码 403）。
+   */
+  TOOL_NOT_PERMITTED: 'PLATFORM_MCP_TOOL_NOT_PERMITTED',
 } as const;
 
 export type PlatformMcpErrorCode =

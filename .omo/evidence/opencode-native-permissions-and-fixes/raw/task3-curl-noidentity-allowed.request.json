@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"wecom_reply","arguments":{"text":"qa probe"},"_meta":{"progressToken":1}}}

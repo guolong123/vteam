@@ -19,6 +19,7 @@ import {
   PLATFORM_MCP_SERVER_VERSION,
 } from './platform-mcp.constants';
 import { PlatformMcpService } from './platform-mcp.service';
+import { PlatformToolPermissionService } from './platform-tool-permission.service';
 import {
   buildPlatformMcpTools,
   zodObjectToJsonSchema,
@@ -58,7 +59,10 @@ const ERROR_INTERNAL_ERROR = -32603;
 export class PlatformMcpController {
   private readonly tools: readonly PlatformMcpTool[];
 
-  constructor(private readonly service: PlatformMcpService) {
+  constructor(
+    private readonly service: PlatformMcpService,
+    private readonly toolPermission: PlatformToolPermissionService,
+  ) {
     this.tools = buildPlatformMcpTools(service);
   }
 
@@ -201,6 +205,17 @@ export class PlatformMcpController {
     }
 
     try {
+      await this.toolPermission.assertToolAllowed(
+        await this.service.resolveToolCallerId(
+          { workerId },
+          parsed.data as {
+            taskId?: string;
+            teamId?: string;
+            selfInstanceId?: string;
+          },
+        ),
+        tool.name,
+      );
       const result = await tool.handler({ workerId }, parsed.data);
       return this.result(id, {
         content: [{ type: 'text', text: JSON.stringify(result) }],

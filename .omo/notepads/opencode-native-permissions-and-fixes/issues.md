@@ -48,3 +48,14 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **Old baseline artifact is not superseded in place.** `.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json`
   is still referenced by `scripts/e2e-third-party-no-policy-leak.sh` (asserts ITS sha is unchanged)
   and by the historical-value specs — do not delete or rewrite it.
+
+## [2026-09-20] Task 3 踩坑
+
+- 单测里给 `ExecutionPolicyService` 造 prisma mock 时，**要传测试自己改的那个 prisma 对象**：
+  先用 `realPolicyService(null)` 造内部 mock、再去 mutate 外层另一个 prisma 对象，会导致
+  `resolveByAgent` 走常量回退（内置名），"翻转矩阵"的断言其实没被读到（症状：deny 用例
+  "resolved instead of rejected"）。修法：`realPolicyService(policy, alternatePrisma?)`，
+  翻转测试把同一个 prisma 传进去。
+- 真栈验证服务端门时，仍存活的 worker guard 会先拦下未授权工具，看不到服务端门的效果；
+  必须用「只改 DB、不重启 worker」的差分（见 learnings）。
+- 拒绝对 `/agent-policies` 的 frozen baseline 做任何事（todo 4 已有新 baseline 文件）。

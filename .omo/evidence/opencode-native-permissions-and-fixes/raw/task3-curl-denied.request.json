@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"task_transition","arguments":{"taskId":"t_0000000001","selfInstanceId":"tmm_0000000006","action":"start"},"_meta":{"progressToken":1}}}

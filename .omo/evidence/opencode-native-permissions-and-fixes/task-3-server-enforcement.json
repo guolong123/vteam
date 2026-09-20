@@ -1,0 +1,171 @@
+{
+  "task": "3",
+  "plan": "opencode-native-permissions-and-fixes",
+  "title": "[server] Enforce vteam_* permission server-side in platform-mcp",
+  "status": "done",
+  "commit": "feat(mcp): enforce platform tool permission on the server",
+  "enforcement": {
+    "site": "server/src/platform-mcp/platform-mcp.controller.ts toolsCall() — after zod parse, BEFORE tool.handler, on the same resolved `tool` object (bare name) that `this.tools.find(t => t.name === name)` selected",
+    "shape": "await this.toolPermission.assertToolAllowed(await this.service.resolveToolCallerId({workerId}, parsed.data), tool.name)",
+    "gate_service": "server/src/platform-mcp/platform-tool-permission.service.ts (new, provider in PlatformMcpModule)",
+    "identity_resolution": "PlatformMcpService.resolveToolCallerId (new public method): args.taskId/args.teamId → existing resolveExecContext (reuses assertWorkerTask/assertWorkerTeam unchanged); both empty → most-recent-session fallback (SESSION.findFirst({workerId}) orderBy createdAt desc), exactly the channelSend/wecomReply backfill source; no resolvable member → 403",
+    "lookup_key_bridge": "vteam_${receivedBareName} — exactly once, in PlatformToolPermissionService.assertToolAllowed; no prefix strip anywhere (contract §1: the server receives the bare name)",
+    "matrix_source": "Agent.policyId / Agent.agentKey → ExecutionPolicyService.resolveByAgent({policyId, agentKey}) → ResolvedExecutionPolicy.tools (DB config.tools wins; constant ROLE_BOUNDARIES fallback for builtin-named rows missing the DB row). NOT keyed on TeamMember.roleId (AgentRole carries no capability fields)",
+    "effect_semantics": "allow / ask → proceed; deny / absent / any other value → 403 (not listed == deny, matching worker guard isToolAllowed / filterToolsMatrix)"
+  },
+  "stable_error_code": {
+    "code": "PLATFORM_MCP_TOOL_NOT_PERMITTED",
+    "constant": "PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED (server/src/platform-mcp/platform-mcp.constants.ts)",
+    "distinct_from": "PLATFORM_MCP_FORBIDDEN (ownership / worker↔team↔task binding / impersonation / DM 403s — unchanged codes), PLATFORM_MCP_MISSING_WORKER_ID",
+    "surface": "ForbiddenException({code,message}) → controller toErrorCode → JSON-RPC error -32003 (HTTP 200, JSON-RPC envelope), message prefixed [403] PLATFORM_MCP_TOOL_NOT_PERMITTED — machine-distinguishable from the ownership 403s"
+  },
+  "fail_closed_policy": {
+    "rule": "unresolvable caller / member / agent / policy / matrix / resolution throw → 403 + PLATFORM_MCP_TOOL_NOT_PERMITTED (never pass-through)",
+    "rationale": "deliberate divergence from worker/src/role-guard/policy.ts:109-121 pass-through, which is safe only because the engine's native permission config sits behind it; todos 4/5 remove that backstop (todo 4 landed: f50f89d emits native-only permission), so the server check is the sole guard for platform tools. Recorded in CONTRACT-tool-naming-and-identity.md §4.",
+    "policy_row_missing_builtin_name": "resolves, not crashes: existing resolveAgentWithFallback constant fallback (ROLE_BOUNDARIES[<bounded name>].toolAllows)",
+    "resolveByAgent_null": "403",
+    "resolution_throws": "logged (warn) + 403 — never falls through to allow"
+  },
+  "channel_send_decision": {
+    "case": "channel_send carries NO identity in its args ({target,text} only) and does not call resolveExecContext",
+    "decision": "resolveToolCallerId falls back to the worker's most-recent session (SESSION.findFirst({workerId}) orderBy createdAt desc) — the SAME source channelSend itself uses to derive its task (service.ts:5586-5598) — then verifies via assertWorkerTask(teamId) / assertWorkerTeam. Member resolved → the bound Agent's matrix decides. No member resolvable → 403 PLATFORM_MCP_TOOL_NOT_PERMITTED (fail-closed), NOT a silent allow.",
+    "live_receipts": {
+      "channel_send_as_plan_agent": "denied (vteam_channel_send absent from ep_plan.tools) → -32003 PLATFORM_MCP_TOOL_NOT_PERMITTED",
+      "wecom_reply_no_identity_ep_plan": "gate ALLOWED (vteam_wecom_reply is in ep_plan.tools) → handler ran and returned its own business text ('发送失败: 无法解析当前任务上下文（请传 taskId）') — proves the no-identity path resolves a caller and passes the gate when the matrix allows"
+    }
+  },
+  "scope_invariants": {
+    "tools_list_unfiltered": "live tools/list still returns all 29 bare names for every caller (receipt task3-curl-toolslist.response.json); the gate runs only at tools/call time",
+    "ownership_checks_untouched": "assertWorkerTask / assertWorkerTeam / DM checks unmodified; their 403 codes keep current values (live receipt: unknown worker → PLATFORM_MCP_FORBIDDEN unchanged)",
+    "non_platform_keys": "browser / git_* never enter the check (only registered platform-mcp tools are gated; they have no tools/call surface here)",
+    "no_agent_name_literal": "the only name-derived value is `vteam_${toolName}`; the agent is read from the member row and the decision from the resolved matrix — proven by the mutation-flip test and by the DB-mutation live probe",
+    "no_roleId_lookup": "resolveByAgent receives {policyId, agentKey} only (asserted in spec)"
+  },
+  "tests": {
+    "new_spec": "server/src/platform-mcp/platform-mcp.tool-permission.spec.ts (21 tests, 1 suite)",
+    "cases": {
+      "allowed_tool_proceeds": "① matrix allow → resolves; ③ real controller: group_post allow → JSON-RPC 200 + handler executed",
+      "ask_effect_proceeds": "① matrix ask → resolves (three-state parity with worker guard)",
+      "explicit_deny": "① deny → 403 + PLATFORM_MCP_TOOL_NOT_PERMITTED; ③ HTTP → -32003 + code, handler NOT called",
+      "absent_from_allowlist": "① key absent → 403 + code; ③ HTTP absent (doclib allowed, group_post absent) → -32003 + code",
+      "allowlist_driven_mutation_flip": "① same member/agent/policy row, mutate one tools value allow→deny→another key allow: decision follows the matrix (doclib allowed → denied → task_transition allowed), plus a negative control (plan_mode still denied in the same row)",
+      "resolveByAgent_args": "① spy asserts {policyId, agentKey} — no roleId",
+      "unresolvable_caller": "① member not found → 403; ② no-identity + no session → 403 TOOL_NOT_PERMITTED; no-identity + session without member → 403 TOOL_NOT_PERMITTED",
+      "resolveByAgent_null": "① custom agent with no policy row → 403",
+      "resolution_throws": "① resolveByAgent rejects → 403 (warn logged), never allow",
+      "ownership_paths_reused": "② task dimension → returns member id; task cross-task no session → unchanged PLATFORM_MCP_FORBIDDEN; team dimension → returns member id",
+      "ownership_code_unchanged_end_to_end": "③ handler's ownership ForbiddenException still surfaces PLATFORM_MCP_FORBIDDEN, not the new code",
+      "tools_list_unfiltered": "③ tools/list returns 29 names including task_transition"
+    },
+    "mutation_proof": {
+      "how": "temporarily replaced `if (effect !== 'allow' && effect !== 'ask')` with `if (false)` in platform-tool-permission.service.ts",
+      "result": "3 tests fail (explicit deny / absent / allowlist-flip) while allow/ask stay green; file restored byte-identical",
+      "meaning": "the deny/absent/flip assertions are genuinely coupled to the production check"
+    },
+    "flip_test_before_after": {
+      "before": "the flip test built its ExecutionPolicyService with an internal prisma mock that always returned null (realPolicyService(null)) while mutating a DIFFERENT outer prisma object → resolveByAgent took the builtin constant fallback (vteam-developer allows doclib) → 'denied' phase resolved instead of rejecting → 1 failure",
+      "fix": "realPolicyService gained an optional alternatePrisma parameter; the flip test now passes the SAME prisma mock it mutates, so mockResolvedValue actually steers resolveByAgent (no production change)",
+      "after": "9/9 in ① green, and the three-phase allow→deny→allow + negative-control assertions all hold"
+    }
+  },
+  "manual_qa": {
+    "surface": "POST http://localhost:13000/api/v1/platform-mcp with x-worker-token: compose-worker-token + x-worker-id, JSON-RPC tools/call (server container rebuilt to include this commit: docker compose up -d --no-deps --build server)",
+    "allowed_call": {
+      "tool": "doclib",
+      "caller": "w_compose_worker (most recent session = tmm_0000000006 / vteam-plan)",
+      "raw": "raw/task3-curl-allowed.request.json + .response.json",
+      "http": "HTTP/1.1 200 OK",
+      "response": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"artifacts\\\":[]}\"}]}}"
+    },
+    "denied_call": {
+      "tool": "task_transition",
+      "why": "vteam_task_transition is absent from ep_plan.tools (12 keys) — the plan agent's matrix",
+      "raw": "raw/task3-curl-denied.request.json + .response.json",
+      "http": "HTTP/1.1 200 OK",
+      "response": "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32003,\"message\":\"[403] PLATFORM_MCP_TOOL_NOT_PERMITTED 工具 vteam_task_transition 未获授权：Agent（计划员）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用\"}}"
+    },
+    "ownership_403_unchanged": {
+      "tool": "doclib",
+      "caller": "w_unauthorized (unknown worker)",
+      "raw": "raw/task3-curl-ownership.request.json + .response.json",
+      "response": "-32003 [403] PLATFORM_MCP_FORBIDDEN 该 worker 无此任务会话，禁止跨任务访问 (code unchanged)"
+    },
+    "tools_list_unfiltered": {
+      "raw": "raw/task3-curl-toolslist.request.json + .response.json",
+      "count": 29,
+      "includes": "task_transition",
+      "all_bare": true
+    },
+    "real_agent_session_calls": {
+      "how": "drove real dispatches via POST /channels/c_0000000001/messages @计划员-1 on the live stack; captured from the engine's own session DB (opencode.db part table, type=tool)",
+      "sequence": [
+        {
+          "tool": "vteam_task_transition",
+          "args": "{\"taskId\":\"t_0000000001\",\"selfInstanceId\":\"tmm_0000000006\",\"action\":\"start\"}",
+          "status": "error",
+          "error": "【越界拦截｜角色：vteam-plan】不能调用 vteam_task_transition。…（intercepted by the still-alive WORKER guard — todo 5 removes that layer; the server gate is its replacement backstop）",
+          "raw": "raw/task3-realcalls-guard-intercepted.state.json"
+        },
+        {
+          "tool": "vteam_group_post",
+          "args": "{\"selfInstanceId\":\"tmm_0000000006\",\"content\":\"server-gate-probe\",\"taskId\":\"t_0000000001\"}",
+          "status": "completed (allowed by ep_plan.tools)",
+          "raw": "raw/task3-realcalls-group-post-allowed.state.json"
+        },
+        {
+          "tool": "vteam_group_post",
+          "args": "{\"selfInstanceId\":\"tmm_0000000006\",\"content\":\"server-gate-probe\",\"taskId\":\"t_0000000001\"}",
+          "status": "error",
+          "error": "MCP error -32003: [403] PLATFORM_MCP_TOOL_NOT_PERMITTED 工具 vteam_group_post 未获授权：Agent（计划员）的工具矩阵未授权（effect=deny）（策略 ep_plan），拒绝调用",
+          "raw": "raw/task3-realcalls-server-denied.state.json",
+          "server_only_differential": "the guard payload was stale (still allowed) while only the DB matrix for ep_plan was mutated to deny vteam_group_post → the call reached the server and was denied THERE. tmp DB mutation was reverted byte-semantically: raw/task3-diff-ep_plan-{original,dbrestore,restored}.json (semantic_equal: true, 12 keys, group_post=allow)."
+        }
+      ]
+    }
+  },
+  "gates": {
+    "tsc": "cd server && npx tsc -p tsconfig.json --noEmit → 0",
+    "platform_mcp_suite": "npx jest --runInBand src/platform-mcp → 13 suites / 422 tests passed",
+    "full_server_suite": "npx jest --runInBand → 145 suites / 3309 tests passed (baseline after todo 4: 144 suites / 3288 tests; this todo adds 1 suite / 21 tests)",
+    "worker_suite": "cd worker && npx jest --runInBand → 26 suites / 688 tests passed (unchanged)",
+    "frozen_baseline_untouched": ".omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json clean in git status (todo 4 owns the new baseline elsewhere; both untouched)",
+    "live_server_rebuilt": "docker compose up -d --no-deps --build server (server image f2869fafe58b running; health ok)"
+  },
+  "files_changed": [
+    "server/src/platform-mcp/platform-tool-permission.service.ts (new)",
+    "server/src/platform-mcp/platform-mcp.service.ts (resolveToolCallerId added; nothing else)",
+    "server/src/platform-mcp/platform-mcp.controller.ts (gate call + DI)",
+    "server/src/platform-mcp/platform-mcp.module.ts (provider)",
+    "server/src/platform-mcp/platform-mcp.constants.ts (PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED)",
+    "server/src/platform-mcp/platform-mcp.controller.spec.ts (gate mock + resolveToolCallerId stub)",
+    "server/src/platform-mcp/platform-mcp.tool-permission.spec.ts (new spec, 21 tests)"
+  ],
+  "non_goals_respected": {
+    "no_execution_policies_changes": "server/src/execution-policies/** untouched (todo 4 landed there; only READ use of resolveByAgent)",
+    "no_worker_changes": "worker/** untouched (todo 5 owns the guard removal)",
+    "no_tools_list_filter": true,
+    "no_agent_name_literal": true,
+    "no_roleId_keyed_lookup": true,
+    "no_vteam_keys_in_payload": "todo 4 owns the payload; this todo only consumes the resolved matrix"
+  },
+  "raw_artifact_sha256": {
+    "task3-curl-allowed.request.json": "80f1e71fd1f3878f3cbbf3ee867655f253b5099daf1a37061ce160cae159d017",
+    "task3-curl-allowed.response.json": "54d6f83eecc7fe9c6b530bfba85c8352ce390c2402ee852d638c4ee20528dc82",
+    "task3-curl-denied.request.json": "809310a0a18e49fed07c14b18de13e1bb2e3b4b687f1b36a479aa5641483e741",
+    "task3-curl-denied.response.json": "17c07098bccbd0e4ef83e4567e0602da9842ee92c6f85b7d35946e6fa77a573e",
+    "task3-curl-channelsend.request.json": "1e063001d54dc895164d36d201c58bee1c47a1ac11332f72252fb0bafe708bf0",
+    "task3-curl-channelsend.response.json": "0f6e74e4ad1fa385c254650082f5a810808de74256e9b660b11a2bc7bad88a8d",
+    "task3-curl-noidentity-allowed.request.json": "0ec8d4de34141214e080d63206feb2bb8f9976292dcad13a3e6cbc4a4ff6d9c1",
+    "task3-curl-noidentity-allowed.response.json": "d27e935a1ac8521161f32ed707f1354aa73174782a736f55ec6dbf90600a6fa6",
+    "task3-curl-ownership.request.json": "80f1e71fd1f3878f3cbbf3ee867655f253b5099daf1a37061ce160cae159d017",
+    "task3-curl-ownership.response.json": "edc0a2b517cedcd424535b760bc4a496789000b3a1087e350ae9137d7c1dcc73",
+    "task3-curl-toolslist.request.json": "17b0e4fe8898d0f7b668dd1437d3078266e8d170bc490ebbb012e2bbbcd7b913",
+    "task3-curl-toolslist.response.json": "0da7a1157b194ca375ede4a67eae2748b4192aad391e163aa9442052642ce389",
+    "task3-realcalls-server-denied.state.json": "c08ffa6113ff8c9478c004d56eab5fd0dbb374d49bb58d70cd380118325b7275",
+    "task3-realcalls-guard-intercepted.state.json": "93f70b9a7ba13bebf99c81b0eb5370d280b395b749bbf0c025204772f43bcdf7",
+    "task3-realcalls-group-post-allowed.state.json": "b5cf18a191c9df2565198563fe62c9a057bcc64fc7643d4886639499aac9d3a6",
+    "task3-diff-ep_plan-original.json": "9bfa486797ed177513f2957ea10221f1c560d49b0c07cb5747c1101dd51ea30b",
+    "task3-diff-ep_plan-dbrestore.json": "31319e8f06f7571db27e54777b80938b7489ec13b7441060e029a075d07a848e",
+    "task3-diff-ep_plan-restored.json": "9bfa486797ed177513f2957ea10221f1c560d49b0c07cb5747c1101dd51ea30b"
+  }
+}

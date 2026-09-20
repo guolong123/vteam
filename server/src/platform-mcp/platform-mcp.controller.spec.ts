@@ -5,6 +5,7 @@ import * as request from 'supertest';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
 import { PlatformMcpController } from './platform-mcp.controller';
 import { PlatformMcpService } from './platform-mcp.service';
+import { PlatformToolPermissionService } from './platform-tool-permission.service';
 
 /**
  * POST /api/v1/platform-mcp 端点测试（阶段 1，经 HTTP 层验证）。
@@ -17,7 +18,9 @@ import { PlatformMcpService } from './platform-mcp.service';
  */
 describe('PlatformMcpController (HTTP)', () => {
   let app: INestApplication;
+  let toolPermission: { assertToolAllowed: jest.Mock };
   let service: {
+    resolveToolCallerId: jest.Mock;
     chatHistory: jest.Mock;
     doclib: jest.Mock;
     taskContext: jest.Mock;
@@ -53,6 +56,7 @@ describe('PlatformMcpController (HTTP)', () => {
 
   beforeEach(async () => {
     service = {
+      resolveToolCallerId: jest.fn().mockResolvedValue('tmm_sender'),
       chatHistory: jest.fn().mockResolvedValue([]),
       doclib: jest.fn().mockResolvedValue({ artifacts: [] }),
       taskContext: jest.fn().mockResolvedValue({}),
@@ -146,11 +150,20 @@ describe('PlatformMcpController (HTTP)', () => {
         status: 'cancelled',
       }),
     };
+    service.resolveToolCallerId = jest
+      .fn()
+      .mockResolvedValue('tmm_sender') as never;
+    toolPermission = {
+      assertToolAllowed: jest.fn().mockResolvedValue(undefined),
+    };
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       controllers: [PlatformMcpController],
       providers: [
         { provide: PlatformMcpService, useValue: service },
+        // 工具权限门（todo 3）：controller 在 handler 前调用；本 spec 聚焦 JSON-RPC
+        // 分发/透传，权限门默认放行，拒绝路径由其专属 spec 覆盖。
+        { provide: PlatformToolPermissionService, useValue: toolPermission },
         // guard 依赖 WORKER_TOKEN env；mock 返回 undefined → 落到默认 dev-worker-token
         { provide: ConfigService, useValue: { get: jest.fn(() => undefined) } },
         WorkerTokenGuard,
