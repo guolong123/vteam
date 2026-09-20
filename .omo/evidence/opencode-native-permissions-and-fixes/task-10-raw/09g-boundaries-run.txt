@@ -1,0 +1,30 @@
+[e2e] baseline sha256 ok: e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+pre-edit: live 7 builtins == frozen baseline (canonical)
+[e2e] PASS f2a (pre-edit live 7 builtins byte-identical to frozen baseline)
+edit body: .omo/evidence/opencode-native-permissions-and-fixes/task-10-raw/09g-boundaries/f2-edit-ep_product.json (tools=deny ask deny, permission.bash=deny)
+control-plane: vteam-product permission reflects DB edit (tools live in resolveByAgent, asserted by e2e-permission-matrix)
+[e2e] PASS f2b (control-plane /agent-policies reflects the DB edit; guard role = {permission})
+[e2e] reloading worker (restart) ...
+opencode.agent[vteam-product].permission.bash = 'deny' (want 'deny'): OK
+opencode.agent[vteam-plan] permission vs baseline agent[vteam-plan]: IDENTICAL
+opencode.agent[vteam-plan] vteam_ leak: []
+opencode.agent[vteam-architect] permission vs baseline agent[vteam-architect]: IDENTICAL
+opencode.agent[vteam-architect] vteam_ leak: []
+opencode.agent[vteam-developer] permission vs baseline agent[vteam-developer]: IDENTICAL
+opencode.agent[vteam-developer] vteam_ leak: []
+opencode.agent[vteam-tester] permission vs baseline agent[vteam-tester]: IDENTICAL
+opencode.agent[vteam-tester] vteam_ leak: []
+opencode.agent[vteam-project_manager] permission vs baseline agent[vteam-project_manager]: IDENTICAL
+opencode.agent[vteam-project_manager] vteam_ leak: []
+opencode.agent[vteam-librarian] permission vs baseline agent[vteam-librarian]: IDENTICAL
+opencode.agent[vteam-librarian] vteam_ leak: []
+opencode.plugin vteam-role-guard entries: []
+opencode top-level role-guard keys: []
+[e2e] PASS f2c (DB edit reached injected opencode.json; other 6 builtins byte-identical; no guard artifact)
+[e2e] cleanup: restoring ep_product original config ...
+[e2e] reloading worker after restore ...
+after-agent-policies.json sha256 = e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+before-agent-policies.json sha256 = e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+byte-identical = True
+[e2e] PASS f2d (post-restore after-agent-policies.json byte-identical to frozen baseline)
+[e2e] ALL SCENARIOS DONE: a/c/d/e/f/f2/g

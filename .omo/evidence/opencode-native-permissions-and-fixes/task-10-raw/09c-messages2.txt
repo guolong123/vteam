@@ -1,0 +1,4 @@
+msgs= 3
+m_0000000001 user u_admin @开发者-1 T10-PROBE: read tasks/t_0000000001 context then reply T10-DEV-ACK
+m_0000000003 user u_admin @开发者-1 T10-RETRY: reply T10-DEV-ACK2
+m_0000000005 agent a_developer T10-DEV-ACK2 收到，开发者-1在线。上下文已读取：任务 t10-live-proof（in_progress）。待产品经理/架构师下发需求与方案后开工。@用户

@@ -1,0 +1,2 @@
+-rw-------    1 root     root           252 Sep 19 10:09 /root/.local/share/opencode/auth.json
+600 252 /root/.local/share/opencode/auth.json

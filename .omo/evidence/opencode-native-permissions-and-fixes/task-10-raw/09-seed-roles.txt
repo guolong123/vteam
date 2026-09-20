@@ -1,0 +1,9 @@
+roles= 8
+ar_product product a_product None
+ar_project_manager project_manager a_project_manager None
+ar_architect architect a_architect None
+ar_developer developer a_developer None
+ar_tester tester a_tester None
+ar_plan plan a_plan None
+ar_librarian librarian a_librarian None
+ar_general general None None

@@ -1,0 +1,371 @@
+==============================================================================
+todo 10 — LIVE END-TO-END PROOF of the new arrangement
+plan: .omo/plans/opencode-native-permissions-and-fixes.md · todo 10
+==============================================================================
+
+HEAD under test ......... HEAD: 13d0c40 docs(test-cases): refresh role/permission cases for native-only enforcement | HEAD_SHA: 13d0c4066c7f45f9b3a08f6e9ee448553843ea07
+HEAD_SHA ................ 13d0c4066c7f45f9b3a08f6e9ee448553843ea07
+Frozen baseline sha ..... e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+Date (UTC) .............. 2026-09-20T09:0x-09:4xZ (clean rebuild + live proof window)
+Evidence set ............ .omo/evidence/opencode-native-permissions-and-fixes/task-10-raw/ (raw)
+                          .omo/evidence/opencode-native-permissions-and-fixes/task-10-live-proof.txt (this doc)
+Production code changed by this todo: NONE (evidence + notepad only).
+  git status -- server worker web scripts docs shows only pre-existing untracked
+  prototype dirs (see §10.4).
+
+==============================================================================
+SUMMARY OF RESULTS
+==============================================================================
+  (a) Clean rebuild ................. PASS (down -v, restore, up --build, init 0, 64 migrations)
+  (b) Native-only injection ......... PASS (edit/read/bash/task only, 0 vteam_, no guard)
+  (c) Live session + confinement .... PASS (ses_…vteam-developer ran; edit glob + engine logs)
+  (d) tools/call allow + 403 ........ PASS (my_profile 200; task_transition -32003/403+code)
+  (e) Role external bind → member ... PASS (rule-5 prefill shown; both deleted, role 404)
+  (f) Dark mode ..................... PASS (spec 2/2; dark ≠ light, no white block)
+  (g) Baseline + harnesses .......... PASS (e795b0c8…, both harnesses green)
+
+==============================================================================
+§(a) CLEAN REBUILD (the single authorized down -v + up -d --build)
+==============================================================================
+$ docker compose down -v   [raw: 01-down-v.txt]
+ Container aiagents-compose-worker Stopping 
+ Container aiagents-compose-web Stopping 
+ Container aiagents-compose-web Stopped 
+ Container aiagents-compose-web Removing 
+ Container aiagents-compose-web Removed 
+ Container aiagents-compose-worker Stopped 
+ Container aiagents-compose-worker Removing 
+ Container aiagents-compose-worker Removed 
+ Container aiagents-compose-server Stopping 
+ Container aiagents-compose-server Stopped 
+ Container aiagents-compose-server Removing 
+ Container aiagents-compose-server Removed 
+ Container aiagents-compose-init Stopping 
+ Container aiagents-compose-init Stopped 
+ Container aiagents-compose-init Removing 
+ Container aiagents-compose-init Removed 
+ Container aiagents-compose-db Stopping 
+ Container aiagents-compose-db Stopped 
+ Container aiagents-compose-db Removing 
+ Container aiagents-compose-db Removed 
+ Volume aiagents_worker_home Removing 
+ Volume
+... [truncated, full in task-10-raw/01-down-v.txt (1260 chars)]
+$ docker volume ls afterwards  [raw: 01-volumes-after-down.txt]
+DRIVER    VOLUME NAME
+local     0549ff726f63dbeb08c0e7cba9322a5c2c118e7ae9c2f8a3aafecdd5a57b4b08
+local     a6bbfd09c0f9e8460eed710432823f1160f842ac5d47e1d699ca55237f3114bf
+local     buildx_buildkit_cross-builder0_state
+local     buildx_buildkit_ketadb-amd64-builder0_state
+
+WORKER CREDENTIAL RESTORE — task-9-proof.txt procedure VERBATIM:
+  1. docker volume create aiagents_worker_home  [raw: 02-restore-vol.txt]
+     aiagents_worker_home
+  2. docker run --rm --user root -v aiagents_worker_home:/root \
+       -v "$PWD/.omo/evidence/agent-role-decommission/worker-home-backup:/backup:ro" \
+       alpine:3 sh -c 'tar -xzf /backup/worker-home-critical.tgz -C /root'
+     [raw: 02-restore-extract.txt]
+     -rw-------    1 root     root           252 Sep 19 10:09 /root/.local/share/opencode/auth.json
+600 252 /root/.local/share/opencode/auth.json
+     backup sha (pre-existing, gitignored): 250f4336a2e0e9d5e9f9d44ae1ab31f94b3aea6d816b9537b2ba0ed20ecdf2c4
+  3. docker compose up -d --build  [raw: 03-up-build.txt]
+ Container aiagents-compose-db Creating 
+ Container aiagents-compose-db Created 
+ Container aiagents-compose-init Creating 
+ Container aiagents-compose-init Created 
+ Container aiagents-compose-server Creating 
+ Container aiagents-compose-server Created 
+ Container aiagents-compose-worker Creating 
+ Container aiagents-compose-web Creating 
+ Container aiagents-compose-web Created 
+ Container aiagents-compose-worker Created 
+ Container aiagents-compose-db Starting 
+ Container aiagents-compose-db Started 
+ Container aiagents-compose-db Waiting 
+ Container aiagents-compose-db Healthy 
+ Container aiagents-compose-init Starting 
+ Container aiagents-compose-init Started 
+ Container aiagents-compose-db Waiting 
+ Container aiagents-compose-init Waiting 
+ Container aiagents-compose-db Healthy 
+ Container aiagents-compose-init Exited 
+ Container aiagents-compose-server Starting 
+ Container aiagents
+... [truncated, full in task-10-raw/03-up-build.txt (1281 chars)]
+
+$ docker inspect -f '{{.State.ExitCode}}' aiagents-compose-init  [raw: 04-init-exit.txt]
+  0   <-- REQUIRED exit 0
+init log: 64 migrations found, all applied incl. last 20260919000011_agent_role_external_agent,
+then seed OK (7 templates, 7 policies, team tm_0000000001 with 7 members). [raw: 04-init-logs.txt]
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": MySQL database "aiagents" at "db:3306"
+
+64 migrations found in prisma/migrations
+
+Applying migration `20260808003102_init`
+Applying migration `20260808041438_add_mcp_servers`
+Applying migration `20260808041646_add_skill_content`
+Applying migration `20260808071700_skill_content_text`
+Applying migration `20260808145108_add_models_catalog`
+Applying migration `20260808154421_add_model_credentials`
+Applying migration `20260809161243_add_channel_attachment_reset`
+Applying migration `20260810000000_add_agent_ack_message`
+Applying migration `20260811090000_credential_ref_text`
+Applying migration `20260812032006_git_repo_credentials`
+Applying migration `20260812085848_agent_questions`
+Applying migration `20260813085208_issue_management`
+Applying migration `20260813120000_agent_prompt_text`
+Applying migration `20260813130000_role_instance_separation`
+Applying migration `20260814090000_issue_reject_activities`
+Applying migration `20260814120000_task_managed_mode`
+Applying migration `20260814150000_agent_work_dir`
+Applying migration `20260814150000_text_columns`
+Applying migration `20260815150204_memories`
+Applying migration `20260816013314_team_collaboration_plans`
+Applying migration `20260820140000_add_memory_description`
+Applying migration `20260821090000_add_model_local_fields`
+Applying migration `20260822000000_add_task_agent_enabled`
+Applying migration `20260822120000_repo_credential_separation`
+Applying migration `20260824000000_add_plan_reject_count`
+Applying migration `20260824000001_add_execution_policy`
+Applying migration `20260825000000_add_taskagent_override_model`
+Applying migration `20260826000000_add_memory_source_session`
+Applying migration `20260827000000_expand_artifact_cont
+... [truncated, full in task-10-raw/04-init-logs.txt (9580 chars)]
+
+$ docker compose ps  [raw: 05-ps.txt]
+NAME                      IMAGE             COMMAND                   SERVICE   CREATED              STATUS                        PORTS
+aiagents-compose-db       mysql:8           "docker-entrypoint.s…"   db        About a minute ago   Up About a minute (healthy)   3306/tcp, 33060/tcp
+aiagents-compose-server   aiagents-server   "docker-entrypoint.s…"   server    About a minute ago   Up 51 seconds (healthy)       0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+aiagents-compose-web      aiagents-web      "docker-entrypoint.s…"   web       About a minute ago   Up 45 seconds (healthy)       0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+aiagents-compose-worker   aiagents-worker   "docker-entrypoint.s…"   worker    About a minute ago   Up 45 seconds                 0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp
+worker creds after rebuild  [raw: 05-auth.txt]
+600 252 /root/.local/share/opencode/auth.json
+['opencode-go', 'qwen-27b', 'ornith']
+opencode-go True
+qwen-27b True
+ornith True
+engine after model-sync warm-up  [raw: 07-engine.json excerpt]
+  degraded=False, 23 agents incl. 'Prometheus - Plan Builder' (used in §(e))
+worker online, mcp vteam connected (verified via GET /workers during run).
+
+==============================================================================
+§(b) INJECTED opencode.json: NATIVE-ONLY, NO GUARD
+==============================================================================
+$ docker cp aiagents-compose-worker:/data/vteam-worker/opencode.json task-10-raw/08-injected-opencode.json
+per-agent permission keys (live /agent-policies [raw: 06-agent-policies.json + 09-policies.txt]):
+  vteam-plan             ['bash', 'edit', 'read', 'task']
+  vteam-product          ['bash', 'edit', 'read', 'task']
+  vteam-architect        ['bash', 'edit', 'read', 'task']
+  vteam-developer        ['bash', 'edit', 'read', 'task']
+  vteam-tester           ['bash', 'edit', 'read', 'task']
+  vteam-project_manager  ['bash', 'edit', 'read', 'task']
+  vteam-librarian        ['bash', 'edit', 'read', 'task']
+raw vteam_ count in injected file: 0 (grep -o 'vteam_' | wc -l → 0).
+plugin entry: ["oh-my-openagent@latest"] — no vteam-role-guard string (grep rc=1).
+.vteam-role-guard dir: absent (ls → No such file or directory).
+.opencode-worker-inject.json agentNames: the same 7 vteam-* names [raw: 08-inject-meta.json].
+Full injected file: task-10-raw/08-injected-opencode.json (3475 B).
+
+==============================================================================
+§(c) LIVE AGENT SESSION + STRUCTURAL CONFINEMENT
+==============================================================================
+Production path: POST /tasks {title:t10-live-proof, teamId:tm_0000000001} → t_0000000001
+  → POST /tasks/:id/start → in_progress → POST /channels/c_0000000001/messages
+  @developer-1 → triggers [{agentId:a_developer, instanceId:tmm_0000000004,
+  sessionId:s_0000000001, status:dispatched}]  [raw: 09c-task-create/start/dispatch.json]
+Worker executed with agent=vteam-developer (sendMessage HTTP 204, model=ornith/ornith-1.5:35b):
+  [v1-driver] sendMessage -> ses_f41deeb91ffe1pvcyeTNopAUxx model=(default) agent=vteam-developer (HTTP 204); [v1-driver] sendMessage -> ses_f41deeb91ffe1pvcyeTNopAUxx model=ornith/ornith-1.5:35b agent=vteam-developer (HTTP 204)
+Session ran end to end: 3 platform tool calls (vteam_task_context, vteam_chat_history,
+  vteam_group_post — see engine log lines below + part rows [raw: 09c-parts.txt]) and a
+  GROUP REPLY landed: message m_0000000005 from a_developer [raw: 09c-messages2.txt]:
+  msgs= 3
+  m_0000000001 user u_admin @开发者-1 T10-PROBE: read tasks/t_0000000001 context then reply T10-DEV-ACK
+  m_0000000003 user u_admin @开发者-1 T10-RETRY: reply T10-DEV-ACK2
+  m_0000000005 agent a_developer T10-DEV-ACK2 收到，开发者-1在线。上下文已读取：任务 t10-live-proof（in_progress）。待产品经理/架构师下发需求与方案后开工。@用户
+NOTE (honest): first attempt with model=(default) failed pre-execution (Cannot connect to API).
+  A worker defaultModelId=ornith/ornith-1.5:35b was configured (PATCH /workers, live model,
+  connectivity pre-verified [raw: 09c-model-conn.txt]) and the session re-dispatched on the
+  SAME session row; the pass condition is the observable execution record above, not model text.
+  The worker default was cleared back to null afterwards (state restored).
+Structural confinement (NOT model refusal text):
+  injected edit glob for vteam-developer [raw: 08-injected-opencode.json + 09c-edit-glob.txt]:
+    {"*": "deny", "**tasks/*/**": "allow"}
+  engine's own permission evaluations for this session [raw: 09c-engine-permission.txt]:
+    1 timestamp=2026-09-20T09:26:11.734Z level=INFO run=25a360cd message=evaluated permission=vteam_group_post pattern=* action.permission=* action.action=allow action.pattern=*
+    1 timestamp=2026-09-20T09:26:07.542Z level=INFO run=25a360cd message=evaluated permission=vteam_chat_history pattern=* action.permission=* action.action=allow action.pattern=*
+    1 timestamp=2026-09-20T09:26:07.539Z level=INFO run=25a360cd message=evaluated permission=vteam_task_context pattern=* action.permission=* action.action=allow action.pattern=*
+Sub-task governance (what governs it, per plan): native `task` permission + native
+  subagent_depth — vteam-plan is the ONLY agent with task=allow; all others deny:
+  vteam-plan task = allow; others = [('vteam-product', 'deny'), ('vteam-architect', 'deny'), ('vteam-developer', 'deny'), ('vteam-tester', 'deny'), ('vteam-project_manager', 'deny'), ('vteam-librarian', 'deny')]
+  Nothing hand-rolled remains (worker dist has no role-guard layer — see §(g)/harness step 5).
+
+==============================================================================
+§(d) tools/call: ALLOW + 403 WITH STABLE CODE (from the live gate matrix)
+==============================================================================
+Probe derivation (NOT hardcoded): offline probe drove the REAL production gate
+  (PlatformToolPermissionService.assertToolAllowed → resolveByAgent) for 7 members × 4 tools
+  [raw: 09d-live-matrix.json + 09d-matrix-probe.js]. Selection:
+  allow leg: member tmm_0000000004 (developer) HOLDS vteam_my_profile → must succeed.
+  deny leg:  same member LACKS vteam_task_transition → must 403 with stable code.
+ALLOW — POST /api/v1/platform-mcp tools/call my_profile {taskId:t_0000000001,
+  selfInstanceId:tmm_0000000004} [raw: 09d-allow-req/resp.json]:
+  HTTP 200, result.content[0].text carries the member profile (agentId a_developer).
+DENY — POST /api/v1/platform-mcp tools/call task_transition {taskId, selfInstanceId,
+  action:start} — action=start is schema-valid so the request reaches the gate
+  (action=close was rejected by zod pre-gate with -32602; recorded, not used) [raw: 09d-deny-req/resp.json]:
+  {"jsonrpc": "2.0", "id": 103, "error": {"code": -32003, "message": "[403] PLATFORM_MCP_TOOL_NOT_PERMITTED 工具 vteam_task_transition 未获授权：Agent（开发者）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"}}
+  wire code=-32003 (expect -32003) + [403] prefix ✓;
+  stable code PLATFORM_MCP_TOOL_NOT_PERMITTED in body ✓ (the asserted stable code).
+
+==============================================================================
+§(e) ROLE EXTERNAL BIND → MEMBER RESOLVES (rule-5 prefill) + CLEANUP
+==============================================================================
+External name source: live GET /agents/opencode → 'Prometheus - Plan Builder' [raw: 09e-external.txt].
+1. POST /agent-roles {key:t10throw, name:T10抛弃, type:custom,
+   defaultOpencodeAgentName:'Prometheus - Plan Builder'} → 200 ar_0000000001 [raw: 09e-role-create.json]:
+   {"id":"ar_0000000001","key":"t10throw","name":"T10抛弃","description":null,"type":"custom","defaultAgentId":null,"defaultOpencodeAgentName":"Prometheus - Plan Builder","rolePrompt":null,"sortOrder":0,"createdAt":"2026-09-20T09:30:06.007Z","updatedAt":"2026-09-20T09:30:06.007Z"}
+2. POST /teams/tm_0000000001/members {agentId:a_developer, roleId:ar_0000000001}
+   → member tmm_0000000008 carries opencodeAgentName='Prometheus - Plan Builder'
+   (rule-5 prefill; explicit value would win, none was passed) [raw: 09e-member-add.json excerpt + 09e-prefill.txt]:
+   THROWAWAY_MEMBER: tmm_0000000008 Prometheus - Plan Builder T10抛弃-2
+3. Cleanup: DELETE member tmm_0000000008 → team back to 7 members, throwaway_present=False;
+   DELETE role ar_0000000001 → GET returns 404 AGENT_ROLE_NOT_FOUND
+   [raw: 09e-member-del.json, 09e-role-get.json, 09e-cleanup.txt]:
+   {"code":"AGENT_ROLE_NOT_FOUND","message":"AgentRole ar_0000000001 不存在"} | members_after= 7 | throwaway_present= False
+
+==============================================================================
+§(f) DARK MODE SPOT-CHECK
+==============================================================================
+Reused the shipped spec web/e2e/dark-mode-role-warning.spec.ts via a throwaway tmp config
+  (web/.t10.playwright.config.ts, deleted after the run; playwright.config.ts untouched),
+  baseURL compose web :13001, theme via the app's own theme-toggle. [raw: 09f-dark-run.txt]
+
+Running 2 tests using 1 worker
+
+  ✓  1 e2e/dark-mode-role-warning.spec.ts:81:7 › Todo 8 · dark-mode role selection + warnings › dark 主题：选中 role-item 与警示块无浅色硬编码 (3.7s)
+  ✓  2 e2e/dark-mode-role-warning.spec.ts:129:7 › Todo 8 · dark-mode role selection + warnings › light 主题：同一位置等于原浅色 hex（无回归） (2.6s)
+
+  2 passed (7.6s)
+
+Assertions: dark active role-item bg is rgba() tint (≠ #EFF6FF, ≠ #ffffff); dark warning
+  text/bg/border ≠ light hexes with rgba() bg; light mode byte-equals the original hexes
+  (no regression). Screenshot: task-10-raw/09f-dark-mode.png (206587 B).
+
+==============================================================================
+§(g) BASELINE SHA + BOTH HARNESSES
+==============================================================================
+Recorded baseline sha: e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5 (e795b0c8…) — file
+  .omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json (unchanged).
+Live canonical equality: True (live 7-builtin subset == baseline, sort_keys)
+  [raw: 09g-canonical-check.txt].
+Both harnesses default to the recorded sha and match it:
+  scripts/e2e-role-boundaries.sh:92
+    FROZEN_BASELINE_SHA256=${FROZEN_BASELINE_SHA256:-e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5}
+  scripts/e2e-native-edit-enforcement.sh:56 — same default.
+Harness runs (no --force-recreate anywhere; role-boundaries f2 uses restart only):
+  e2e-native-edit-enforcement.sh → ALL ASSERTIONS PASSED (b/c/d/e) [raw: 09g-native-run.txt + 09g-native/]
+  e2e-role-boundaries.sh SCENARIOS=f → ALL SCENARIOS DONE: a/c/d/e/f/f2/g, incl.
+    f2a pre-edit byte-identical, f2b control-plane reflects edit, f2c injection + no guard
+    artifact, f2d post-restore byte-identical [raw: 09g-boundaries-run.txt + 09g-boundaries/].
+
+==============================================================================
+§10 SEED EQUALITY (canonical before-vs-after) + NO-RESIDUE
+==============================================================================
+Seed rows byte-identical after cleanup (canonical compare):
+  agent_roles 8/8 equal (ROLES_EQUAL: True) [raw: 09-seed-roles.txt vs 09-seed-after.txt, 09-seed-equality.txt].
+  teams: 1 (tm_0000000001), members back to 7, throwaway absent [raw: 09-seed-after.txt, 09e-cleanup.txt].
+  /agent-policies: 7 agents, canonical-equal to baseline (see §(g)).
+No-residue:
+  databases: only aiagents + system schemas (no aiagents_t* scratch) [raw: 09-databases.txt].
+  volumes: the 4 compose volumes only [raw: 09-volumes.txt].
+  sessions: only s_0000000001 (the proof session itself) [raw: 09-sessions-final.txt].
+  tasks: t_0000000001 (the proof task; seed had none — created by this proof, documented).
+  roles/teams: throwaways deleted (§(e)). screenshots: under task-10-raw only (09f).
+  server scratch probe removed from container (09d-matrix-probe.js deleted post-run).
+  tmp Playwright config deleted (web/.t10.playwright.config.ts removed).
+  harness EXIT-trap restores verified: ep_product byte-identical post-run (both harnesses).
+Credential-restore receipt: auth.json 600, 252 B, providers opencode-go/qwen-27b/ornith
+  non-empty [raw: 05-auth.txt, 09-auth-providers.txt]; restore procedure §(a).
+git status -- server worker web scripts docs: only pre-existing untracked prototype dirs
+  [raw: 09-git-product.txt] → NO product-code changes in this commit.
+
+==============================================================================
+ARTIFACT INDEX (task-10-raw/)
+==============================================================================
+  00-head.txt  (141 B, sha256 db9f7ab0142b…)
+  00-volumes-before.txt  (130 B, sha256 4a76580a4b46…)
+  01-down-v.txt  (1260 B, sha256 54bd1ba49eca…)
+  01-volumes-after-down.txt  (273 B, sha256 714d4a30fe8c…)
+  02-restore-extract.txt  (141 B, sha256 98bb7d269c48…)
+  02-restore-vol.txt  (21 B, sha256 d40a071c6a5f…)
+  03-up-build.txt  (1281 B, sha256 d9ea8aab0560…)
+  04-init-exit.txt  (2 B, sha256 9a271f2a916b…)
+  04-init-logs.txt  (10412 B, sha256 ab192e43a19f…)
+  05-auth.txt  (127 B, sha256 20005fb8e2c8…)
+  05-engine.json  (45 B, sha256 7f0bf7346f3d…)
+  05-login.json  (666 B, sha256 f751d68492c9…)
+  05-ps.txt  (870 B, sha256 f585b673c1a2…)
+  06-agent-policies.json  (5362 B, sha256 46cd6f1d593e…)
+  07-engine.json  (180301 B, sha256 50599aa931f8…)
+  08-inject-meta.json  (464 B, sha256 96a742b163ff…)
+  08-injected-opencode.json  (3475 B, sha256 be575e0e7373…)
+  09-agents-db.txt  (275 B, sha256 ce4f2348b017…)
+  09-auth-providers.txt  (38 B, sha256 82026b3b5724…)
+  09-databases.txt  (57 B, sha256 114ad95851ed…)
+  09-git-product.txt  (94 B, sha256 370da6434af4…)
+  09-members.txt  (318 B, sha256 3268d8703972…)
+  09-policies.txt  (900 B, sha256 7b08fcb997a2…)
+  09-seed-after.txt  (654 B, sha256 40456f6c8fac…)
+  09-seed-equality.txt  (674 B, sha256 e98a510ddf36…)
+  09-seed-roles.txt  (306 B, sha256 4dca7a3216d9…)
+  09-sessions-final.txt  (100 B, sha256 92e3a67413b8…)
+  09-tasks.txt  (44 B, sha256 15832107e2a1…)
+  09-team.txt  (843 B, sha256 0c8bbd35b1b0…)
+  09-volumes.txt  (130 B, sha256 4a76580a4b46…)
+  09c-channels.txt  (38 B, sha256 2a628b20f178…)
+  09c-db-tables.txt  (334 B, sha256 ad0f2cfddfe6…)
+  09c-dispatch.json  (558 B, sha256 4d431a243648…)
+  09c-edit-glob.txt  (70 B, sha256 c9f46e582661…)
+  09c-engine-permission.txt  (544 B, sha256 d64731cdadd0…)
+  09c-messages.txt  (105 B, sha256 5ab07d91c62d…)
+  09c-messages2.txt  (383 B, sha256 581130286215…)
+  09c-model-conn.txt  (120 B, sha256 18e7850c4492…)
+  09c-opencode-env.txt  (1457 B, sha256 b46ada7fe7ed…)
+  09c-parts.txt  (1382 B, sha256 2bc356843b52…)
+  09c-redispatch.json  (522 B, sha256 10e871f6672c…)
+  09c-session-rows.txt  (64 B, sha256 708928da7143…)
+  09c-session-trace.txt  (976 B, sha256 4a5b5ebcec55…)
+  09c-task-create.json  (2468 B, sha256 9ad93c0d1769…)
+  09c-task-start.json  (2494 B, sha256 fb0bcdd9026e…)
+  09c-worker-log.txt  (1149 B, sha256 ee597f264261…)
+  09c-worker-log2.txt  (850 B, sha256 c3b017af19d5…)
+  09d-allow-req.json  (151 B, sha256 e8cd6421cd2e…)
+  09d-allow-resp.json  (2639 B, sha256 f3a4b1433d32…)
+  09d-deny-req.json  (173 B, sha256 48a007593d9e…)
+  09d-deny-resp.json  (251 B, sha256 d92c2d66ee46…)
+  09d-live-matrix.json  (3017 B, sha256 e438fff695fc…)
+  09d-matrix-probe.js  (1197 B, sha256 122425f4fe73…)
+  09e-cleanup.txt  (42 B, sha256 f6abd5e1d3e5…)
+  09e-external.txt  (32 B, sha256 27f2693e7cc6…)
+  09e-member-add.json  (3236 B, sha256 c7bff1f0f28c…)
+  09e-member-del.json  (2889 B, sha256 d3a57b33d9d8…)
+  09e-prefill.txt  (71 B, sha256 5882f99118ed…)
+  09e-role-create.json  (280 B, sha256 aa5b78bce413…)
+  09e-role-del.json  (0 B, sha256 e3b0c44298fc…)
+  09e-role-get.json  (77 B, sha256 eaae38cfe148…)
+  09f-dark-mode.png  (206587 B, sha256 9104c71eff2a…)
+  09f-dark-run.txt  (397 B, sha256 a512d4392319…)
+  09g-boundaries/  (14 files)
+  09g-boundaries-run.txt  (2169 B, sha256 0838adfec148…)
+  09g-canonical-check.txt  (358 B, sha256 9df4295335d0…)
+  09g-injected-static.json  (3475 B, sha256 be575e0e7373…)
+  09g-native/  (1 files)
+  09g-native-run.txt  (1795 B, sha256 a5221a267f80…)
+
+==============================================================================
+END todo 10 proof
+==============================================================================

@@ -1,0 +1,3 @@
+      1 timestamp=2026-09-20T09:26:11.734Z level=INFO run=25a360cd message=evaluated permission=vteam_group_post pattern=* action.permission=* action.action=allow action.pattern=*
+      1 timestamp=2026-09-20T09:26:07.542Z level=INFO run=25a360cd message=evaluated permission=vteam_chat_history pattern=* action.permission=* action.action=allow action.pattern=*
+      1 timestamp=2026-09-20T09:26:07.539Z level=INFO run=25a360cd message=evaluated permission=vteam_task_context pattern=* action.permission=* action.action=allow action.pattern=*

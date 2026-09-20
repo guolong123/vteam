@@ -139,3 +139,15 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `web/e2e/policy-restart-notice.spec.ts` header still named the deleted
   `.vteam-role-guard/roles.json` as a live injection artifact. Both corrected to the shipped
   arrangement; assertions themselves already matched reality.
+
+## [2026-09-20] todo 10 — issues (proof-only, no product changes)
+
+- **Seed ships agents + worker with no defaultModelId** (`Agent.defaultModelId=null`,
+  `worker.defaultModelId=null`); a fresh-stack dispatch runs `model=(default)` and fails before
+  any tool executes. Worked around per-run (explicit model, restored to null after). If dispatch
+  without a configured model should fail loudly instead of attempting `(default)`, that is a
+  `server/` change — out of scope here, recorded only.
+- **No product bug found during the proof.** The only anomalies were probe-shape issues
+  (invalid action enum, proxy-blocked urllib), both resolved in the probe, not in product code.
+  `git status -- server worker web scripts docs` shows only the pre-existing untracked
+  prototype dirs → this commit is evidence + notepad only.

@@ -1,0 +1,18 @@
+roles= 8
+ar_architect architect a_architect None
+ar_developer developer a_developer None
+ar_general general None None
+ar_librarian librarian a_librarian None
+ar_plan plan a_plan None
+ar_product product a_product None
+ar_project_manager project_manager a_project_manager None
+ar_tester tester a_tester None
+members= 7
+tmm_0000000001 产品经理-1 ar_product None
+tmm_0000000002 项目经理-1 ar_project_manager None
+tmm_0000000003 架构师-1 ar_architect None
+tmm_0000000004 开发者-1 ar_developer None
+tmm_0000000005 测试-1 ar_tester None
+tmm_0000000006 计划员-1 ar_plan None
+tmm_0000000007 知识管理员-1 ar_librarian None
+policy_agents= 7

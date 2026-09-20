@@ -1,0 +1,2 @@
+members_after= 7
+throwaway_present= False

@@ -1,0 +1,4 @@
+canonical-equal: True
+baseline sha: e795b0c8547637763d4515937525fc469bb32b33ae97bc3ab6652838705196b5
+vteam-plan task = allow (governs sub-task fan-out natively; others deny)
+others: [('vteam-product', 'deny'), ('vteam-architect', 'deny'), ('vteam-developer', 'deny'), ('vteam-tester', 'deny'), ('vteam-project_manager', 'deny'), ('vteam-librarian', 'deny')]

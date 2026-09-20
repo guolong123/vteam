@@ -1,0 +1,2 @@
+HEAD: 13d0c40 docs(test-cases): refresh role/permission cases for native-only enforcement
+HEAD_SHA: 13d0c4066c7f45f9b3a08f6e9ee448553843ea07

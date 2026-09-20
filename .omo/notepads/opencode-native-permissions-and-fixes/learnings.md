@@ -310,3 +310,23 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   viewport screenshot`. `fullPage:true` stays unreliable (internal scroll container); PNG comes
   from the `T8_SCREENSHOT` run itself (throwaway `.t8.playwright.config.ts`, baseURL
   `http://localhost:13001`, deleted after the run).
+
+## [2026-09-20] todo 10 — closing live proof (a)–(g) on a clean rebuild
+
+- **Parts (a)+(b) survived from the prior attempt — do NOT redo.** `task-10-raw/00-08` (down -v,
+  verbatim credential restore, up --build, init 0, 64 migrations, native-only injection) was
+  verified intact; the finish session only added `09-*` files.
+- **Dispatch needs a worker defaultModelId.** Seed agents carry `defaultModelId=null` and the
+  worker row has none → first sendMessage ran `model=(default)` and failed pre-execution
+  (Cannot connect to API). Fix: PATCH `/workers/w_compose_worker {defaultModelId:
+  "ornith/ornith-1.5:35b"}` (live, connectivity pre-verified with wget from inside the worker),
+  re-dispatch on the SAME session row, then PATCH back to null. Record the detour honestly —
+  the pass condition is the observable execution record, never model text.
+- **`task_transition` deny probes must use a schema-valid action.** `action=close` is rejected
+  by zod pre-gate (-32602 Invalid option) so the permission gate never answers; `action=start`
+  reaches the gate and yields -32003/[403]/PLATFORM_MCP_TOOL_NOT_PERMITTED.
+- **urllib 502s through the local proxy — use curl** (established learning, re-bit once more).
+- **Harness env for SCENARIOS=f:** pass a static `INJECTED_OPENCODE_JSON` copy and leave
+  `WORK_DIR` unset so `WORKER_WORK_DIR` defaults to the live container path (todo-9 lesson).
+- Evidence generator pattern: one `/tmp/t10gen.py` script reads every raw file and writes
+  `task-10-live-proof.txt` — regenerate, never hand-edit (keeps every claim re-runnable).

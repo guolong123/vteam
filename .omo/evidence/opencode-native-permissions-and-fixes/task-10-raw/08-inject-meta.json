@@ -1,0 +1,25 @@
+{
+  "tools": [],
+  "skills": [
+    "prototype-designer",
+    "plan-creation",
+    "plan-review-product",
+    "plan-review-architect",
+    "plan-review-developer",
+    "plan-review-tester",
+    "plan-review-project_manager",
+    "learning-mode"
+  ],
+  "agentNames": [
+    "vteam-plan",
+    "vteam-product",
+    "vteam-architect",
+    "vteam-developer",
+    "vteam-tester",
+    "vteam-project_manager",
+    "vteam-librarian"
+  ],
+  "mcpServers": [
+    "vteam"
+  ]
+}

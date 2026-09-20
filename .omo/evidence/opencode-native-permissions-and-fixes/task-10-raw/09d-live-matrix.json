@@ -1,0 +1,170 @@
+[
+ {
+  "member": "tmm_0000000003",
+  "agent": "architect",
+  "tool": "my_profile",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000003",
+  "agent": "architect",
+  "tool": "task_transition",
+  "decision": "deny"
+ },
+ {
+  "member": "tmm_0000000003",
+  "agent": "architect",
+  "tool": "group_post",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000003",
+  "agent": "architect",
+  "tool": "memory_save",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000004",
+  "agent": "developer",
+  "tool": "my_profile",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000004",
+  "agent": "developer",
+  "tool": "task_transition",
+  "decision": "deny"
+ },
+ {
+  "member": "tmm_0000000004",
+  "agent": "developer",
+  "tool": "group_post",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000004",
+  "agent": "developer",
+  "tool": "memory_save",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000007",
+  "agent": "librarian",
+  "tool": "my_profile",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000007",
+  "agent": "librarian",
+  "tool": "task_transition",
+  "decision": "deny"
+ },
+ {
+  "member": "tmm_0000000007",
+  "agent": "librarian",
+  "tool": "group_post",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000007",
+  "agent": "librarian",
+  "tool": "memory_save",
+  "decision": "deny"
+ },
+ {
+  "member": "tmm_0000000006",
+  "agent": "plan",
+  "tool": "my_profile",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000006",
+  "agent": "plan",
+  "tool": "task_transition",
+  "decision": "deny"
+ },
+ {
+  "member": "tmm_0000000006",
+  "agent": "plan",
+  "tool": "group_post",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000006",
+  "agent": "plan",
+  "tool": "memory_save",
+  "decision": "deny"
+ },
+ {
+  "member": "tmm_0000000001",
+  "agent": "product",
+  "tool": "my_profile",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000001",
+  "agent": "product",
+  "tool": "task_transition",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000001",
+  "agent": "product",
+  "tool": "group_post",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000001",
+  "agent": "product",
+  "tool": "memory_save",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000002",
+  "agent": "project_manager",
+  "tool": "my_profile",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000002",
+  "agent": "project_manager",
+  "tool": "task_transition",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000002",
+  "agent": "project_manager",
+  "tool": "group_post",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000002",
+  "agent": "project_manager",
+  "tool": "memory_save",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000005",
+  "agent": "tester",
+  "tool": "my_profile",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000005",
+  "agent": "tester",
+  "tool": "task_transition",
+  "decision": "deny"
+ },
+ {
+  "member": "tmm_0000000005",
+  "agent": "tester",
+  "tool": "group_post",
+  "decision": "allow"
+ },
+ {
+  "member": "tmm_0000000005",
+  "agent": "tester",
+  "tool": "memory_save",
+  "decision": "allow"
+ }
+]

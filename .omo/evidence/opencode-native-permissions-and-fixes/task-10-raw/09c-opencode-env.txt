@@ -1,0 +1,69 @@
+---
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "oh-my-openagent@latest"
+  ],
+  "provider": {
+    "qwen-27b": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "qwen-27b",
+      "options": {
+        "baseURL": "http://192.168.10.10:18020/v1"
+      },
+      "models": {
+        "qwen3.8-27b": {
+          "limit": {
+            "context": 262144,
+            "output": 16384
+          },
+          "reasoning": true,
+          "temperature": true,
+          "attachment": false,
+          "tool_call": true,
+          "modalities": {
+            "input": [
+              "text"
+            ],
+            "output": [
+              "text"
+            ]
+          },
+          "options": {
+            "reasoningEffort": "low"
+          }
+        }
+      }
+    },
+    "ornith": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "ornith",
+      "options": {
+        "baseURL": "http://192.168.10.10:11434/v1"
+      },
+      "models": {
+        "ornith-1.5:35b": {
+          "limit": {
+            "context": 262144,
+            "output": 65536
+          },
+          "reasoning": true,
+          "temperature": true,
+          "modalities": {
+            "input": [
+              "text",
+              "image"
+            ],
+            "output": [
+              "text",
+              "image"
+            ]
+          },
+          "options": {
+            "reasoningEffort": "low"
+          }
+        }
+      }
+    }
+  }
+}

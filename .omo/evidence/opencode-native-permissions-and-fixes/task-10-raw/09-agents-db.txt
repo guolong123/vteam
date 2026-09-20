@@ -1,0 +1,7 @@
+a_architect	???	architect	NULL	template
+a_developer	???	developer	NULL	template
+a_librarian	?????	librarian	NULL	template
+a_plan	???	plan	NULL	template
+a_product	????	product	NULL	template
+a_project_manager	????	project_manager	NULL	template
+a_tester	??	tester	NULL	template

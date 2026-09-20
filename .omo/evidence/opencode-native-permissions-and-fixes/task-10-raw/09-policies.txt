@@ -1,0 +1,8 @@
+agents= 7
+vteam-plan {'edit': {'*': 'deny', '**.opencode/plans/**': 'allow'}, 'read': {'*': 'allow'}, 'bash': 'allow', 'task': 'allow'}
+vteam-product {'edit': {'*': 'deny', '**tasks/*/prototypes/**': 'allow', '**tasks/*/docs/**': 'allow'}, 'read': {'*': 'allow'}, 'bash': 'allow', 'task': 'deny'}
+vteam-architect {'edit': {'*': 'deny', '**tasks/*/docs/**': 'allow'}, 'read': {'*': 'allow'}, 'bash': 'allow', 'task': 'deny'}
+vteam-developer {'edit': {'*': 'deny', '**tasks/*/**': 'allow'}, 'read': {'*': 'allow'}, 'bash': 'allow', 'task': 'deny'}
+vteam-tester {'edit': {'*': 'deny', '**tasks/*/tests/**': 'allow', '**tasks/*/docs/**': 'allow'}, 'read': {'*': 'allow'}, 'bash': 'allow', 'task': 'deny'}
+vteam-project_manager {'edit': {'*': 'deny'}, 'read': {'*': 'allow'}, 'bash': 'deny', 'task': 'deny'}
+vteam-librarian {'edit': {'*': 'deny'}, 'read': {'*': 'allow'}, 'bash': 'allow', 'task': 'deny'}

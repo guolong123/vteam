@@ -1,0 +1,5 @@
+vteam-developer edit glob:
+{
+ "*": "deny",
+ "**tasks/*/**": "allow"
+}

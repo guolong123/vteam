@@ -1,0 +1,4 @@
+local     aiagents_mysql_data
+local     aiagents_uploads_data
+local     aiagents_vteam_worker_data
+local     aiagents_worker_home

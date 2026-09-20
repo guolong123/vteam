@@ -1,0 +1,5 @@
+600 252 /root/.local/share/opencode/auth.json
+['opencode-go', 'qwen-27b', 'ornith']
+opencode-go True
+qwen-27b True
+ornith True

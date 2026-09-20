@@ -1,0 +1,223 @@
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Prisma schema loaded from prisma/schema.prisma
+Datasource "db": MySQL database "aiagents" at "db:3306"
+
+64 migrations found in prisma/migrations
+
+Applying migration `20260808003102_init`
+Applying migration `20260808041438_add_mcp_servers`
+Applying migration `20260808041646_add_skill_content`
+Applying migration `20260808071700_skill_content_text`
+Applying migration `20260808145108_add_models_catalog`
+Applying migration `20260808154421_add_model_credentials`
+Applying migration `20260809161243_add_channel_attachment_reset`
+Applying migration `20260810000000_add_agent_ack_message`
+Applying migration `20260811090000_credential_ref_text`
+Applying migration `20260812032006_git_repo_credentials`
+Applying migration `20260812085848_agent_questions`
+Applying migration `20260813085208_issue_management`
+Applying migration `20260813120000_agent_prompt_text`
+Applying migration `20260813130000_role_instance_separation`
+Applying migration `20260814090000_issue_reject_activities`
+Applying migration `20260814120000_task_managed_mode`
+Applying migration `20260814150000_agent_work_dir`
+Applying migration `20260814150000_text_columns`
+Applying migration `20260815150204_memories`
+Applying migration `20260816013314_team_collaboration_plans`
+Applying migration `20260820140000_add_memory_description`
+Applying migration `20260821090000_add_model_local_fields`
+Applying migration `20260822000000_add_task_agent_enabled`
+Applying migration `20260822120000_repo_credential_separation`
+Applying migration `20260824000000_add_plan_reject_count`
+Applying migration `20260824000001_add_execution_policy`
+Applying migration `20260825000000_add_taskagent_override_model`
+Applying migration `20260826000000_add_memory_source_session`
+Applying migration `20260827000000_expand_artifact_content`
+Applying migration `20260828000000_integration_channels`
+Applying migration `20260829000000_split_channels_notifications`
+Applying migration `20260901000000_team_refactor_expand`
+Applying migration `20260901000001_private_channel_team_member`
+Applying migration `20260901000002_add_task_reset_after_complete`
+Applying migration `20260901000003_add_team_main_agent`
+Applying migration `20260901000004_fix_team_group_unique`
+Applying migration `20260904000000_team_execution_context`
+Applying migration `20260907000000_drop_project_dimension`
+Applying migration `20260907000001_drop_task_agent_domain`
+Applying migration `20260908000000_add_team_member_override_model`
+Applying migration `20260908000001_team_channel_bindings`
+Applying migration `20260911000000_add_member_opencode_agent`
+Applying migration `20260912000000_add_task_plan_mode`
+Applying migration `20260913000000_drop_agent_tool_effects_permission_scope`
+Applying migration `20260914000000_add_agent_key`
+Applying migration `20260915000000_add_skill_versions`
+Applying migration `20260915000001_add_memory_content_hash`
+Applying migration `20260916000000_add_message_receipts`
+Applying migration `20260916000000_add_plan_confirm_columns`
+Applying migration `20260916000001_add_timers`
+Applying migration `20260917000000_add_plan_finalize_columns`
+Applying migration `20260918000000_add_plan_frozen_columns`
+Applying migration `20260919000000_add_artifact_category`
+Applying migration `20260919000001_rename_timers_to_triggers`
+Applying migration `20260919000002_session_last_activity_at`
+Applying migration `20260919000003_agent_hooks`
+Applying migration `20260919000004_hook_guardrails`
+Applying migration `20260919000005_reply_join_receipt_idx`
+Applying migration `20260919000006_backfill_builtin_policy_allowlists`
+Applying migration `20260919000007_add_agent_roles_and_member_role_id`
+Applying migration `20260919000008_populate_builtin_role_prompts`
+Applying migration `20260919000009_backfill_split_agent_prompts`
+Applying migration `20260919000010_drop_agents_role`
+Applying migration `20260919000011_agent_role_external_agent`
+
+The following migration(s) have been applied:
+
+migrations/
+  └─ 20260808003102_init/
+    └─ migration.sql
+  └─ 20260808041438_add_mcp_servers/
+    └─ migration.sql
+  └─ 20260808041646_add_skill_content/
+    └─ migration.sql
+  └─ 20260808071700_skill_content_text/
+    └─ migration.sql
+  └─ 20260808145108_add_models_catalog/
+    └─ migration.sql
+  └─ 20260808154421_add_model_credentials/
+    └─ migration.sql
+  └─ 20260809161243_add_channel_attachment_reset/
+    └─ migration.sql
+  └─ 20260810000000_add_agent_ack_message/
+    └─ migration.sql
+  └─ 20260811090000_credential_ref_text/
+    └─ migration.sql
+  └─ 20260812032006_git_repo_credentials/
+    └─ migration.sql
+  └─ 20260812085848_agent_questions/
+    └─ migration.sql
+  └─ 20260813085208_issue_management/
+    └─ migration.sql
+  └─ 20260813120000_agent_prompt_text/
+    └─ migration.sql
+  └─ 20260813130000_role_instance_separation/
+    └─ migration.sql
+  └─ 20260814090000_issue_reject_activities/
+    └─ migration.sql
+  └─ 20260814120000_task_managed_mode/
+    └─ migration.sql
+  └─ 20260814150000_agent_work_dir/
+    └─ migration.sql
+  └─ 20260814150000_text_columns/
+    └─ migration.sql
+  └─ 20260815150204_memories/
+    └─ migration.sql
+  └─ 20260816013314_team_collaboration_plans/
+    └─ migration.sql
+  └─ 20260820140000_add_memory_description/
+    └─ migration.sql
+  └─ 20260821090000_add_model_local_fields/
+    └─ migration.sql
+  └─ 20260822000000_add_task_agent_enabled/
+    └─ migration.sql
+  └─ 20260822120000_repo_credential_separation/
+    └─ migration.sql
+  └─ 20260824000000_add_plan_reject_count/
+    └─ migration.sql
+  └─ 20260824000001_add_execution_policy/
+    └─ migration.sql
+  └─ 20260825000000_add_taskagent_override_model/
+    └─ migration.sql
+  └─ 20260826000000_add_memory_source_session/
+    └─ migration.sql
+  └─ 20260827000000_expand_artifact_content/
+    └─ migration.sql
+  └─ 20260828000000_integration_channels/
+    └─ migration.sql
+  └─ 20260829000000_split_channels_notifications/
+    └─ migration.sql
+  └─ 20260901000000_team_refactor_expand/
+    └─ migration.sql
+  └─ 20260901000001_private_channel_team_member/
+    └─ migration.sql
+  └─ 20260901000002_add_task_reset_after_complete/
+    └─ migration.sql
+  └─ 20260901000003_add_team_main_agent/
+    └─ migration.sql
+  └─ 20260901000004_fix_team_group_unique/
+    └─ migration.sql
+  └─ 20260904000000_team_execution_context/
+    └─ migration.sql
+  └─ 20260907000000_drop_project_dimension/
+    └─ migration.sql
+  └─ 20260907000001_drop_task_agent_domain/
+    └─ migration.sql
+  └─ 20260908000000_add_team_member_override_model/
+    └─ migration.sql
+  └─ 20260908000001_team_channel_bindings/
+    └─ migration.sql
+  └─ 20260911000000_add_member_opencode_agent/
+    └─ migration.sql
+  └─ 20260912000000_add_task_plan_mode/
+    └─ migration.sql
+  └─ 20260913000000_drop_agent_tool_effects_permission_scope/
+    └─ migration.sql
+  └─ 20260914000000_add_agent_key/
+    └─ migration.sql
+  └─ 20260915000000_add_skill_versions/
+    └─ migration.sql
+  └─ 20260915000001_add_memory_content_hash/
+    └─ migration.sql
+  └─ 20260916000000_add_message_receipts/
+    └─ migration.sql
+  └─ 20260916000000_add_plan_confirm_columns/
+    └─ migration.sql
+  └─ 20260916000001_add_timers/
+    └─ migration.sql
+  └─ 20260917000000_add_plan_finalize_columns/
+    └─ migration.sql
+  └─ 20260918000000_add_plan_frozen_columns/
+    └─ migration.sql
+  └─ 20260919000000_add_artifact_category/
+    └─ migration.sql
+  └─ 20260919000001_rename_timers_to_triggers/
+    └─ migration.sql
+  └─ 20260919000002_session_last_activity_at/
+    └─ migration.sql
+  └─ 20260919000003_agent_hooks/
+    └─ migration.sql
+  └─ 20260919000004_hook_guardrails/
+    └─ migration.sql
+  └─ 20260919000005_reply_join_receipt_idx/
+    └─ migration.sql
+  └─ 20260919000006_backfill_builtin_policy_allowlists/
+    └─ migration.sql
+  └─ 20260919000007_add_agent_roles_and_member_role_id/
+    └─ migration.sql
+  └─ 20260919000008_populate_builtin_role_prompts/
+    └─ migration.sql
+  └─ 20260919000009_backfill_split_agent_prompts/
+    └─ migration.sql
+  └─ 20260919000010_drop_agents_role/
+    └─ migration.sql
+  └─ 20260919000011_agent_role_external_agent/
+    └─ migration.sql
+      
+All migrations have been successfully applied.
+npm notice
+npm notice New major version of npm available! 10.9.8 -> 12.0.2
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.0.2
+npm notice To update run: npm install -g npm@12.0.2
+npm notice
+Seed 完成：
+  - 角色：admin / member
+  - 用户：admin(u_admin) / seed-admin(u_seed_admin) / seed-member(u_seed_member)
+  - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+  - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+  - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+  - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+  - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+  - 模型目录：0 个模型（）
+  - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+  - 管理员密码：Admin@123456
+  - 初始 admin 账号：admin / admin123

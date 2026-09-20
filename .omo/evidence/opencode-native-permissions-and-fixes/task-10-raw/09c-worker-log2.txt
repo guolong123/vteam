@@ -1,0 +1,4 @@
+[v1-driver] sendMessage -> ses_f41deeb91ffe1pvcyeTNopAUxx model=(default) agent=vteam-developer (HTTP 204)
+[exec] 执行失败 session=ses_f41deeb91ffe1pvcyeTNopAUxx: [prompt-await] 会话 ses_f41deeb91ffe1pvcyeTNopAUxx 等待首字超时：模型调用报错：Cannot connect to API: Unable to connect. Is the computer able to access the url? (cause: Error: Unable to connect. Is the computer able to access the url?)
+[v1-driver] sendMessage -> ses_f41deeb91ffe1pvcyeTNopAUxx model=ornith/ornith-1.5:35b agent=vteam-developer (HTTP 204)
+[exec] 执行失败 session=ses_f41deeb91ffe1pvcyeTNopAUxx: [prompt-await] 会话 ses_f41deeb91ffe1pvcyeTNopAUxx 等待首字超时：模型调用报错：Cannot connect to API: Unable to connect. Is the computer able to access the url? (cause: Error: Unable to connect. Is the computer able to access the url?)

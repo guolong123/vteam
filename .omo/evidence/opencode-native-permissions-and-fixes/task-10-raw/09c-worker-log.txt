@@ -1,0 +1,9 @@
+[exec] 执行端点就绪: POST http://0.0.0.0:4198/execute
+[worker] 执行端点就绪: POST http://127.0.0.1:4198/execute
+[v1-driver] sendMessage -> ses_f41deeb91ffe1pvcyeTNopAUxx model=(default) agent=vteam-developer (HTTP 204)
+[exec] 执行失败 session=ses_f41deeb91ffe1pvcyeTNopAUxx: [prompt-await] 会话 ses_f41deeb91ffe1pvcyeTNopAUxx 等待首字超时：模型调用报错：Cannot connect to API: Unable to connect. Is the computer able to access the url? (cause: Error: Unable to connect. Is the computer able to access the url?)
+[v1-driver] listAgents -> 23 个 (directory=/data/vteam-worker)
+[exec] agents list -> 23 个 (directory=/data/vteam-worker)
+[v1-driver] sendMessage -> ses_f41deeb91ffe1pvcyeTNopAUxx model=(default) agent=vteam-developer (HTTP 204)
+[v1-driver] abort -> ses_f41deeb91ffe1pvcyeTNopAUxx (HTTP 200)
+[exec] 执行失败 session=ses_f41deeb91ffe1pvcyeTNopAUxx: [prompt-await] 会话 ses_f41deeb91ffe1pvcyeTNopAUxx 等待首字超时：模型调用报错：Cannot connect to API: Unable to connect. Is the computer able to access the url? (cause: Error: Unable to connect. Is the computer able to access the url?)
