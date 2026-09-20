@@ -1,0 +1,14 @@
+LIVE /agent-policies 7-builtin canonical subset == frozen baseline: True
+  live agent count = 7, builtin order = ['vteam-plan', 'vteam-product', 'vteam-architect', 'vteam-developer', 'vteam-tester', 'vteam-project_manager', 'vteam-librarian']
+after-agent-policies.json sha256  = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+before-agent-policies.json sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+byte-identical = True
+  injected roles.json[vteam-plan] IDENTICAL: True | injected opencode.json[vteam-plan] IDENTICAL: True
+  injected roles.json[vteam-product] IDENTICAL: True | injected opencode.json[vteam-product] IDENTICAL: True
+  injected roles.json[vteam-architect] IDENTICAL: True | injected opencode.json[vteam-architect] IDENTICAL: True
+  injected roles.json[vteam-developer] IDENTICAL: True | injected opencode.json[vteam-developer] IDENTICAL: True
+  injected roles.json[vteam-tester] IDENTICAL: True | injected opencode.json[vteam-tester] IDENTICAL: True
+  injected roles.json[vteam-project_manager] IDENTICAL: True | injected opencode.json[vteam-project_manager] IDENTICAL: True
+  injected roles.json[vteam-librarian] IDENTICAL: True | injected opencode.json[vteam-librarian] IDENTICAL: True
+injected roles.json enabled = True; injected agent names = ['vteam-architect', 'vteam-developer', 'vteam-librarian', 'vteam-plan', 'vteam-product', 'vteam-project_manager', 'vteam-tester']
+ALL injected 7-builtin entries byte-identical: roles=True opencode=True

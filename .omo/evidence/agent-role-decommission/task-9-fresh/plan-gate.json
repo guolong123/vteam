@@ -1,0 +1,192 @@
+{
+  "generatedAt": "2026-09-20T00:08:46.127Z",
+  "scratchDb": "aiagents_t9pg",
+  "D0_schema": {
+    "note": "the consumer this probe replaces no longer exists — selection cannot be role-based by construction",
+    "agentsRoleColumnCount": 0,
+    "expect": 0
+  },
+  "D1_policyCandidate": {
+    "note": "RESOLUTION FROM DATA ONLY: agentKey → vteam-<agentKey>. No Agent.role column exists to consult.",
+    "cases": [
+      {
+        "label": "seeded product template",
+        "input": {
+          "agentKey": "product"
+        },
+        "candidate": "vteam-product"
+      },
+      {
+        "label": "seeded plan template",
+        "input": {
+          "agentKey": "plan"
+        },
+        "candidate": "vteam-plan"
+      },
+      {
+        "label": "renamed binding (no key)",
+        "input": {
+          "agentKey": null
+        },
+        "candidate": null
+      },
+      {
+        "label": "renamed binding (key set)",
+        "input": {
+          "agentKey": "myagent"
+        },
+        "candidate": "vteam-myagent"
+      },
+      {
+        "label": "lookalike key",
+        "input": {
+          "agentKey": "nopolicy-t9"
+        },
+        "candidate": "vteam-nopolicy-t9"
+      }
+    ]
+  },
+  "D2_planDuty": {
+    "note": "plan duty comes from the registered duty of the BOUND opencode agent — a rename that keeps plan duty is still a planner; a `vteam-` prefix alone earns nothing",
+    "registry": [
+      "plan",
+      "prometheus",
+      "vteam-plan"
+    ],
+    "literal_vteam_plan": "plan",
+    "renamed_plan_duty": "plan",
+    "renamed_lookalike": "execute",
+    "custom_agent": "execute",
+    "renamedBindingEntersPlanMode": true,
+    "customBindingEntersPlanMode": false,
+    "planAgentNameConstant": "vteam-plan"
+  },
+  "D3a_renamedMainDuty": {
+    "note": "MAIN member renamed to a plan-duty agent (opencode name \"Prometheus - Plan Builder\"). The server derives taskPlanMode from getOpencodeAgentDuty(bound name) — no id/name literal — and injects the plan instruction set.",
+    "binding": {
+      "mainMemberId": "tmm_0000000002",
+      "opencodeAgentName_set": "Prometheus - Plan Builder",
+      "taskId": "t_0000000001"
+    },
+    "dutyResolved": "plan",
+    "dispatchError": null,
+    "emittedAgentField": "vteam-plan",
+    "planInstructionInjected": true,
+    "planReviewInjected": false,
+    "editPermGlobInjected": true,
+    "systemLength": 5762,
+    "boundedClaim": "SERVER gated + selected the renamed plan-duty binding (server-side only; fan-out NOT claimed)"
+  },
+  "D3b_renamedPlanMember": {
+    "note": "Plan member binding renamed; its Agent row keeps agentKey=plan. The policy candidate comes from agentKey (rule 4 narrowing), so the reserved literal vteam-plan is still emitted.",
+    "binding": {
+      "teamMemberId": "tmm_0000000006",
+      "agentId": "a_plan",
+      "agentKey": "plan",
+      "opencodeAgentName_set": "Prometheus - Plan Builder"
+    },
+    "dispatchError": null,
+    "emittedAgentField": "vteam-plan",
+    "planInstructionInjected": false,
+    "editPermGlobInjected": true,
+    "systemLength": 4177,
+    "boundedClaim": "SERVER selected the literal vteam-plan from agentKey for a RENAMED binding (not from the name)"
+  },
+  "D4_workerGuard": {
+    "note": "EXECUTED with the SHIPPED compiled worker guard (worker/dist/role-guard/policy.js) against the LIVE injected roles.json. This is the LIMITATION (plan O3 / review m3): tool `task` is allowed ONLY for the LITERAL agent name vteam-plan (policy.ts:172-182). Every other mapped role and every renamed binding is DENIED fan-out, so no end-to-end renamed-planner fan-out is claimed anywhere in this proof.",
+    "guardSource": "worker/dist/role-guard/policy.js (shipped build)",
+    "workerLiteral": "worker/src/role-guard/policy.ts:172-182 — task allowed iff agent === 'vteam-plan' AND args.subagent_type === 'vteam-plan'",
+    "rolesDocEnabled": true,
+    "mappedRoleNames": [
+      "vteam-plan",
+      "vteam-product",
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-tester",
+      "vteam-project_manager",
+      "vteam-librarian"
+    ],
+    "decisions": [
+      {
+        "label": "literal vteam-plan + subagent_type vteam-plan (the ONLY allow branch)",
+        "agent": "vteam-plan",
+        "args": {
+          "subagent_type": "vteam-plan"
+        },
+        "mapped": true,
+        "decision": {
+          "action": "allow"
+        }
+      },
+      {
+        "label": "renamed plan-duty binding + subagent_type vteam-plan  (RENAMED → DENY)",
+        "agent": "Prometheus - Plan Builder",
+        "args": {
+          "subagent_type": "vteam-plan"
+        },
+        "mapped": false,
+        "decision": {
+          "action": "allow"
+        }
+      },
+      {
+        "label": "mapped non-plan role vteam-developer + subagent_type vteam-plan (DENY)",
+        "agent": "vteam-developer",
+        "args": {
+          "subagent_type": "vteam-plan"
+        },
+        "mapped": true,
+        "decision": {
+          "action": "deny",
+          "message": "【越界拦截｜角色：vteam-developer】不能调用 task。职责：编码与实现说明：按需求/方案实现代码并给出实现说明与验证方式；不定义需求、不替代测试判定、不越权验收。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+        }
+      },
+      {
+        "label": "literal vteam-plan + subagent_type vteam-developer (DENY)",
+        "agent": "vteam-plan",
+        "args": {
+          "subagent_type": "vteam-developer"
+        },
+        "mapped": true,
+        "decision": {
+          "action": "deny",
+          "message": "【越界拦截｜角色：vteam-plan】不能调用 task。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+        }
+      },
+      {
+        "label": "unmapped session (pass-through, guard branch 2 — NOT the task exception)",
+        "agent": "vteam-myagent",
+        "args": {
+          "subagent_type": "vteam-plan"
+        },
+        "mapped": false,
+        "decision": {
+          "action": "allow"
+        }
+      }
+    ]
+  },
+  "D5_liveLiteralPlanner": {
+    "note": "live worker injection: the literal vteam-plan carries mode=all + permission.task=allow; the renamed name has no injected entry (only policy agents are injected).",
+    "agentNames": [
+      "vteam-plan",
+      "vteam-product",
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-tester",
+      "vteam-project_manager",
+      "vteam-librarian"
+    ],
+    "vteam_plan_entry": {
+      "mode": "all",
+      "task": "allow",
+      "edit": {
+        "*": "deny",
+        "**.opencode/plans/**": "allow"
+      }
+    },
+    "vteam_plan_mode_all": true,
+    "vteam_plan_task_allow": true,
+    "renamedEntryAbsent": true
+  }
+}

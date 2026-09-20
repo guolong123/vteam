@@ -1,0 +1,7 @@
+=== SHOW DATABASES (expect only aiagents + system) ===
+Database
+aiagents
+information_schema
+mysql
+performance_schema
+sys

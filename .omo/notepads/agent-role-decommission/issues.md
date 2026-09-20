@@ -185,3 +185,32 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **No `--force-recreate` was used** for the web rebuild; `docker compose up -d --build web` was
   sufficient and the built `agents/page.js` + `board/page.js` were grepped to confirm the literal
   array is gone from the bundle (0 hits each), i.e. the rebuild really shipped the collapse.
+
+## todo 9 — issues / gotchas (clean rebuild)
+
+- **The prior todo-9 attempt's failure was a stale predicate, not a real defect.** It queried
+  `agent_key <> role` after the column was gone → `ERROR 1054`. Its evidence directory
+  (`.omo/evidence/agent-role-decommission/task-9/`) is retained but superseded; the clean proof
+  is `task-9-proof.txt` + `task-9-fresh/`. Do not treat the old `part-a.txt` error line as a
+  migration failure.
+- **Fresh-DB model catalog is empty by design.** `seed 完成：模型目录：0 个模型`. Any upstream
+  check that expects the 7,900-row catalog must provision models first. Recorded here because the
+  live planner step is otherwise un-runnable on a wiped DB.
+- **Operator `POST /models` returned 409 for `ornith/ornith-1.5:35b`** because the worker's
+  registration-time model sync had already inserted it. The subsequent
+  `POST /models//credentials` 404'd on the empty id captured from the failed create — harmless
+  in this run (the credential row already existed and the model resolved), but a scripted setup
+  should re-read the catalog instead of assuming the create succeeds.
+- **Session rows do not pre-exist for all members on a fresh DB.** The seeded team has no
+  `sessions` rows at all; the first dispatch creates one. A server-side dispatch probe that
+  needs a member-scoped session must either let the real dispatch create it or insert one into
+  the SCRATCH copy — inserting into the live DB would mutate state the proof claims not to touch.
+- **Playwright probes must live under `web/` to resolve `@playwright/test`.** A config file
+  outside the package root fails with `Cannot find module '@playwright/test'` even when the
+  binary is invoked from `web/`. Copy the spec+config into `web/e2e-<tag>/` for the run and
+  remove them afterwards (they are probe-only, not committed).
+- **`a_librarian` avatar colour is the neutral `developer` fallback** (six-key palette). Recorded
+  as an explicit non-issue so later verification waves do not re-file it as a regression.
+- **The renamed-planner fan-out gap is a planned residual, not a new bug.** Worker guard
+  `policy.ts:172-182` keeps the `vteam-plan` literal; fixing it needs a `worker/**` change this
+  plan forbids. Any future "renamed planner can't spawn sub-agents" report is this known item.

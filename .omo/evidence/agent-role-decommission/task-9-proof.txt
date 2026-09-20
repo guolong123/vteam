@@ -1,0 +1,559 @@
+================================================================================
+todo 9 — CLEAN-REBUILD VERIFICATION (fresh chain + live behaviour preservation)
+plan: .omo/plans/agent-role-decommission.md  ·  todo 9 (RE-SCOPED by the orchestrator)
+================================================================================
+
+RE-SCOPE STATEMENT (authorized by the user, recorded verbatim in the plan):
+  The original todo 9 was a populated-DB BEFORE/AFTER upgrade matrix. The user
+  explicitly authorized wiping the data ("可以清理数据后再验证，避免老数据兼容问题，
+  docker-compose down -v") and explicitly declared old-data compatibility unnecessary
+  ("不需要考虑兼容"). This document therefore proves the TARGET STATE on a CLEAN
+  INSTALL. The populated-DB migration path was exercised earlier in this same plan
+  (todo 7 drop + its rollback run, evidence task-7-drop.txt / task-9/rollback.txt) and
+  is NOT re-run here; the fresh-chain no-op is stated explicitly in §3.9.
+
+HEAD under test ......... e06c9f1 "refactor: remove role-based helpers and duplicate role maps"
+Base (column drop) ...... 0ce61d4 "feat(db): drop agents.role after backfill"
+Frozen baseline sha ..... 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+                          (.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json)
+Evidence set ............ .omo/evidence/agent-role-decommission/task-9-fresh/  (this run)
+                          .omo/evidence/agent-role-decommission/task-9-proof.txt   (this doc)
+Date (UTC) .............. 2026-09-19T23:39Z .. 2026-09-20T00:12Z
+
+Production code changed by this todo: NONE. Proof-only.
+  $ git status --porcelain -- server/src server/prisma worker/src web/app web/src
+  (empty — see §6.4)
+
+
+================================================================================
+SUMMARY OF RESULTS
+================================================================================
+  1. Pre-flight ....................... PASS (HEAD e06c9f1, backups sha-recorded, ignored)
+  2. Wipe + rebuild ................... PASS (4 volumes dropped, worker creds restored first)
+  3. Fresh chain / init exit code ..... PASS (init ExitCode=0; 63/63 migrations; seed OK)
+  4. Target-state assertions .......... PASS (role column absent; 0 null policy_id; 7/7 templates;
+                                        AgentRole 7 builtins w/ default_agent_id; 0 null role_id)
+  5. /agent-policies byte-identity .... PASS (live subset == frozen baseline, sha identical)
+  6. Alias / agent-name / roleId ...... PASS (产品经理-1, vteam-product, roleId→AgentRole.key)
+  7. Live planner (literal vteam-plan)  PASS (executed on the fresh stack: text=2318 chars,
+                                        agent=vteam-plan, model=ornith/ornith-1.5:35b, group reply)
+  8. Server plan gate, renamed agent .. PASS (bounded claim; worker-literal limitation restated)
+  9. Gates ............................ PASS (tsc 0/0; jest 141/3250 + 26/688; consumer 136/0)
+ 10. Cleanup .......................... PASS (only `aiagents` + system schemas; backups intact)
+ 11. Worker credentials ............... PASS (auth.json 600, 3 providers, non-empty keys)
+
+
+================================================================================
+§1  PRE-FLIGHT  (evidence: task-9-fresh/preflight.txt)
+================================================================================
+$ git log --oneline -1
+e06c9f1 refactor: remove role-based helpers and duplicate role maps
+
+$ git status --short -- ':!.omo'
+ M .gitignore
+?? docs/agent-platform/prototypes/agent-manage/
+?? docs/agent-platform/prototypes/agent-role/
+?? e2e-evidence/
+(the pre-existing untracked prototype/e2e dirs are unrelated to this plan; the
+ .gitignore modification is the todo-9 credential-backup safety line, committed here.)
+
+Backups (taken BEFORE this todo; NOT re-taken, NOT committed):
+
+  fce32e58436b70443d89b03ffba53f4b4747c9ded44237349a4ef77d1ab5caa7
+    .omo/evidence/agent-role-decommission/pre-wipe-dump.sql          (636,707,481 B)
+  6c1c1032a4cc650123fe40b433ac0c2a804c0e4d8785a437730c5423b5d17586
+    .omo/evidence/agent-role-decommission/pre-migration-dump.sql     (636,417,952 B)
+  250f4336a2e0e9d5e9f9d44ae1ab31f94b3aea6d816b9537b2ba0ed20ecdf2c4
+    .omo/evidence/agent-role-decommission/worker-home-backup/worker-home-critical.tgz (34,520,259 B)
+  3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+    .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json (frozen baseline)
+
+Ignore proof (dumps/tgz must never be committed):
+  $ git check-ignore -v .omo/evidence/agent-role-decommission/pre-wipe-dump.sql
+  .gitignore:45:.omo/evidence/**/*.sql   .omo/evidence/agent-role-decommission/pre-wipe-dump.sql
+  $ git check-ignore -v .omo/evidence/agent-role-decommission/worker-home-backup/worker-home-critical.tgz
+  .gitignore:74:.omo/evidence/**/worker-home-backup/  .../worker-home-critical.tgz
+
+Docker volumes BEFORE (4 compose volumes present):
+  aiagents_mysql_data, aiagents_uploads_data, aiagents_vteam_worker_data, aiagents_worker_home
+
+Live DB counts BEFORE the wipe (the data being intentionally discarded):
+  agents_total=10 (template=7, custom=3) · agent_roles=8 · team_members=28 (null role_id=0)
+  tasks=18 · sessions=17 · models=7900 · model_credentials active=3
+
+
+================================================================================
+§2  WIPE + REBUILD
+================================================================================
+$ docker compose down -v
+  Removed: aiagents_vteam_worker_data, aiagents_mysql_data, aiagents_worker_home,
+           aiagents_uploads_data (4/4), network aiagents_aiagents-net.
+  Volumes remaining afterwards: only the two buildkit builder caches (unrelated).
+
+WORKER CREDENTIAL RESTORE — exact procedure (the model credentials MUST survive:
+without auth.json the stack cannot call a model):
+
+  1. $ docker volume create aiagents_worker_home
+  2. $ docker run --rm --user root -v aiagents_worker_home:/root \
+       -v "$PWD/.omo/evidence/agent-role-decommission/worker-home-backup:/backup:ro" \
+       alpine:3 sh -c 'tar -xzf /backup/worker-home-critical.tgz -C /root'
+     → restored 13 entries: .config/opencode/{opencode.json,tui.json,package*.json,.gitignore},
+       .local/share/opencode/{auth.json,opencode.db}, .keta-git-creds.json, .ssh/{known_hosts,known_hosts.old},
+       .npmrc
+     → modes preserved: auth.json 600 · .keta-git-creds.json 600 · .ssh/known_hosts 600 ·
+       .config/opencode/opencode.json 600
+  3. $ docker compose up -d --build     (compose then reuses the pre-populated volume;
+     the "volume already exists but was not created by Docker Compose" warning is expected)
+
+  Rationale for restore-BEFORE-start: the worker registers on boot and the server replays
+  all unrevoked credentials at registration (workers.service.ts replayModelCredentials).
+  Pre-populating HOME means the FIRST boot already has creds on disk; the running worker
+  then logs either "auth.json 已注入" (changed) or "凭据未变化，跳过注入与重启" (idempotent)
+  — both are healthy; nothing is lost either way.
+
+$ docker compose up -d --build   → rc=0
+  Images built: aiagents-server, aiagents-web, aiagents-worker
+  Containers: aiagents-compose-db (healthy) → aiagents-compose-init → server (healthy) → web (healthy) + worker
+
+
+================================================================================
+§3  FRESH CHAIN  (evidence: task-9-fresh/init-logs.txt)
+================================================================================
+  $ docker inspect -f '{{.State.ExitCode}}' aiagents-compose-init
+  0                                    <-- the REQUIRED exit code
+
+  init log highlights:
+    Prisma schema loaded from prisma/schema.prisma
+    Datasource "db": MySQL database "aiagents" at "db:3306"
+    63 migrations found in prisma/migrations
+    Applying migration `20260908003102_init` ... applying all 63 in order ...
+    Applying migration `20260919000010_drop_agents_role`      <-- the drop, LAST
+    All migrations have been successfully applied.
+    Seed 完成：
+      - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、
+        开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+      - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、
+        ep_tester、ep_plan、ep_librarian（type=template）
+      - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（主 Agent 为产品经理）
+      - 模型目录：0 个模型（）
+      - 初始 admin 账号：admin / admin123
+
+  NO `Unknown argument 'role'`, NO migration failure, NO seed error.
+
+  §3.9 NO-OP STATEMENT (explicit, not hidden):
+  On a fresh DB the drop migration `20260919000010_drop_agents_role` and its backfill
+  are a TWO-FOLD no-op:
+    (a) there are no `agent.role` VALUES to backfill — the `agents` table has ZERO rows
+        when `prisma migrate deploy` runs (seed executes AFTER all migrations, as the log
+        order proves: "All migrations have been successfully applied." precedes "Seed 完成");
+    (b) the policy backfill predicate (`agents.policy_id IS NULL AND type <> 'custom'`)
+        matches nothing for the same reason.
+  What the migration still DOES on a fresh DB is exactly its structural job: it creates
+  the `agent_roles` table (000007), then the final migration drops the `agents.role`
+  column that earlier migrations created. The seven templates are created afterwards by
+  the seed WITH `policy_id` already set (seed.ts passes `policyId` in `create`), which is
+  why §4.2 finds 0 null policy_ids without any backfill having run.
+  This is stated so the no-op is understood, not mistaken for "the backfill was tested".
+
+  OPERATOR-SIDE MODEL NOTE (affects §7 only, not the assertions): the fresh seed ships an
+  EMPTY model catalog by design (`STATIC_AVAILABLE_MODELS: readonly ... = []` in seed.ts,
+  "模型目录：0 个模型"). For the live planner proof the operator-shaped path was used:
+  POST /models + PATCH /models/providers/:id + the worker's registration-time model sync
+  (which auto-populated 7,827 executable models from the restored worker). No code changed.
+
+
+================================================================================
+§4  TARGET-STATE ASSERTIONS ON THE FRESH DB  (evidence: task-9-fresh/target-state.txt,
+    target-state-labels.txt)
+================================================================================
+
+§4.1 `SHOW COLUMNS FROM agents LIKE 'role'` → EMPTY
+  information_schema count for (agents, role) = 0
+  Full fresh `agents` columns: id, name, type, base_agent_id, prompt, default_model_id,
+  created_by, created_at, updated_at, worker_id, ack_message, persona, policy_id, agent_key
+  → there is no `role` column. (The `agent_key` column is UNI.)
+
+§4.2 `SELECT COUNT(*) FROM agents WHERE policy_id IS NULL` → 0
+  agents_with_null_policy = 0
+
+§4.3 Templates and their keys
+  NOTE ON THE PLAN'S ORIGINAL WORDING: the plan asked for
+  `COUNT(*) FROM agents WHERE type='template' AND agent_key <> role`. That predicate is
+  NOT QUERYABLE after the drop — `role` no longer exists (MySQL errors with
+  "Unknown column 'role'" — exactly the ERROR 1054 seen in the prior incomplete attempt).
+  The queryable, equivalent assertion used here is: the template set carries exactly the
+  7 known builtin keys and each template's policy is `ep_<key>`:
+
+    a_architect       architect        template  ep_architect       policy_is_ep_key=1
+    a_developer       developer        template  ep_developer       policy_is_ep_key=1
+    a_librarian       librarian        template  ep_librarian       policy_is_ep_key=1
+    a_plan            plan             template  ep_plan            policy_is_ep_key=1
+    a_product         product          template  ep_product         policy_is_ep_key=1
+    a_project_manager project_manager  template  ep_project_manager policy_is_ep_key=1
+    a_tester          tester           template  ep_tester          policy_is_ep_key=1
+
+    templates=7 · with_agent_key=7 · without_agent_key=0
+
+  This is the strongest post-drop form of "agent_key carried what role used to carry".
+
+§4.4 `SELECT COUNT(*) FROM agents` → 7
+  type=template 7, type=custom 0.
+  Fresh DB contains ONLY what the seed creates — the three custom agents that existed on
+  the wiped DB (a_0000000001/a_0000000002/a_0000000004) are intentionally gone. The plan's
+  "expect 7 templates + the 3 pre-existing customs?" guess is answered: NO — 7.
+
+§4.5 AgentRole rows present → 7 builtins, all with default_agent_id set
+    ar_product         product         产品经理        builtin  a_product         1
+    ar_project_manager project_manager 项目经理        builtin  a_project_manager 2
+    ar_architect       architect       架构师          builtin  a_architect       3
+    ar_developer       developer       开发者          builtin  a_developer       4
+    ar_tester          tester          测试            builtin  a_tester          5
+    ar_plan            plan            计划员          builtin  a_plan            6
+    ar_librarian       librarian       知识管理员      builtin  a_librarian       7
+    ar_general         general         通用            custom   (NULL)            100
+  agent_roles_total=8 · builtin=7 · null_default=1 (the `ar_general` fallback role, by design)
+
+§4.6 `SELECT COUNT(*), SUM(role_id IS NULL) FROM team_members` → 7, 0 NULLs
+    tmm_0000000001 产品经理-1    a_product         ar_product         product
+    tmm_0000000002 项目经理-1    a_project_manager ar_project_manager project_manager
+    tmm_0000000003 架构师-1      a_architect       ar_architect       architect
+    tmm_0000000004 开发者-1      a_developer       ar_developer       developer
+    tmm_0000000005 测试-1        a_tester          ar_tester          tester
+    tmm_0000000006 计划员-1      a_plan            ar_plan            plan
+    tmm_0000000007 知识管理员-1  a_librarian       ar_librarian       librarian
+  (labels read with --default-character-set=utf8mb4; the default latin1 client rendered
+   them as '????' in the first capture — recorded so the ?? is not mistaken for corruption)
+
+§4.7 Seeded team: tm_0000000001 "vteam开发团队", main_agent_member_id=tmm_0000000002,
+     reuse_session=1, managed_mode=0
+
+§4.8 Migrations: 63 applied, none rolled back. Last five:
+     20260919000006_backfill_builtin_policy_allowlists
+     20260919000007_add_agent_roles_and_member_role_id
+     20260919000008_populate_builtin_role_prompts
+     20260919000009_backfill_split_agent_prompts
+     20260919000010_drop_agents_role          <-- last applied
+     (Note: 20260919000008 is NOT a no-op even on a fresh DB — it UPDATEs the seven
+      `agent_roles` rows created by 000007 moments earlier; only the `agents.role`
+      backfill inside 000010 is vacuous on a fresh DB.)
+
+
+================================================================================
+§5  FRESH-STACK BEHAVIOUR: the 7 built-ins are byte-identical
+    (evidence: task-9-fresh/byte-identity.sh · run-byte-identity.txt · byte-identity.txt)
+================================================================================
+$ bash .omo/evidence/agent-role-decommission/task-9-fresh/byte-identity.sh
+  frozen file sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+  expected frozen sha = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+  git-dirty-lines = 0                       (frozen baseline untracked-unmodified)
+  GET /api/v1/agent-policies → HTTP 200, live agent count = 7
+
+  LIVE /agent-policies 7-builtin canonical subset == frozen baseline: True
+  after-agent-policies.json sha256  = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+  before-agent-policies.json sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+  byte-identical = True
+
+  live builtin order = ['vteam-plan','vteam-product','vteam-architect','vteam-developer',
+                        'vteam-tester','vteam-project_manager','vteam-librarian']
+
+  LIVE WORKER injected artifacts (docker cp from the running worker):
+    /data/vteam-worker/opencode.json            + .vteam-role-guard/roles.json
+    roles.json enabled = True; injected agent names = the same 7
+    injected roles.json[<each>] IDENTICAL: True   (7/7)
+    injected opencode.json[<each>] IDENTICAL: True (7/7, description+mode+permission)
+  ALL injected 7-builtin entries byte-identical: roles=True opencode=True
+  BYTE_IDENTITY_RC=0
+
+  ⇒ Removing `Agent.role` changed ZERO bytes of the emitted policy payload and ZERO bytes
+    of the worker's injected guard/config artifacts, for all seven built-ins.
+
+
+================================================================================
+§6  ALIAS / OPENCODE NAME / roleId RESOLUTION  (evidence: team-api-members.txt,
+    assembled-instructions.json)
+================================================================================
+§6.1 `GET /api/v1/teams/tm_0000000001` (admin/admin123 → JWT), members as served:
+
+  member           alias        agentId            roleId               agent.role
+  tmm_0000000001   产品经理-1    a_product          ar_product           product
+  tmm_0000000002   项目经理-1    a_project_manager  ar_project_manager   project_manager
+  tmm_0000000003   架构师-1      a_architect        ar_architect         architect
+  tmm_0000000004   开发者-1      a_developer        ar_developer         developer
+  tmm_0000000005   测试-1        a_tester           ar_tester            tester
+  tmm_0000000006   计划员-1      a_plan             ar_plan              plan
+  tmm_0000000007   知识管理员-1  a_librarian        ar_librarian         librarian
+
+  The plan's required alias `产品经理-1` is present and the member's Agent resolves an
+  opencode name of `vteam-product` (asserted structurally below, and executed live in §7).
+  Every member carries a `roleId` resolving to the right `AgentRole.key` (column 5).
+
+§6.2 Opencode name chain for the product member: Agent.agentKey='product' →
+     `resolvePolicyAgentCandidate({agentKey:'product'})` = 'vteam-product' and the worker
+     advertises support (`capabilities.agentPolicies.names` includes it) → rule 1 applies,
+     so the dispatch emits `agent: 'vteam-product'`. §7 executes this chain live.
+
+§6.3 ASSEMBLED INSTRUCTIONS for the seeded plan member (tmm_0000000006), produced by the
+     REAL `buildSystemInstructions` against the fresh DB (scratch copy, same data):
+
+  identity line:
+    【你的身份】你是本任务的 计划员-1（实例 id: tmm_0000000006，角色: plan）。调用 vteam MCP
+    工具时 selfInstanceId 参数必须填写你的实例 id（tmm_0000000006）。
+  → alias renders once (`计划员-1`), and the `角色:` value is the key-derived label `plan`
+    (the LABEL is `AgentRole.name`=计划员 for display; the assembled prompt intentionally
+    keeps the machine key, matching the pre-drop bytes — see todo 10's disposition).
+
+  roster line count = 7 (one per member), each `<alias>（实例 id: <tmm_>，角色: <key>）`,
+    with `tmm_0000000002` annotated `—— 主 Agent`. Rendered lines:
+      - 架构师-1（实例 id: tmm_0000000003，角色: architect）
+      - 开发者-1（实例 id: tmm_0000000004，角色: developer）
+      - 知识管理员-1（实例 id: tmm_0000000007，角色: librarian）
+      - 计划员-1（实例 id: tmm_0000000006，角色: plan）
+      - 产品经理-1（实例 id: tmm_0000000001，角色: product）
+      - 项目经理-1（实例 id: tmm_0000000002，角色: project_manager） —— 主 Agent
+      - 测试-1（实例 id: tmm_0000000005，角色: tester）
+
+  role/agent/platform sections render once each (charter block present once);
+  `角色: ` appears exactly 8 times in the whole assembly = 1 identity + 7 roster.
+
+§6.4 SUPPRESSION IS TOOL-DERIVED (the todo-2 decision), verified on fresh data:
+     plan member   → resolvedTools = {vteam_task_context, vteam_read_file, vteam_doclib,
+                     vteam_team_view, vteam_my_profile, vteam_chat_history,
+                     vteam_wecom_reply, vteam_group_post, vteam_notify_agent,
+                     vteam_memory_search, vteam_plan_complete, browser}
+                     → memorySectionPresent=False, artifactSectionPresent=False  (suppressed)
+     developer     → holds vteam_memory_save AND vteam_submit_artifact
+                     → memorySectionPresent=True, artifactSectionPresent=True, issueDetail=True
+     Same assembler, same call site, different policy data ⇒ the sections follow the TOOLS,
+     not the agent's name. (Contrast is in assembled-instructions.json `contrast_developer`.)
+
+
+================================================================================
+§7  LIVE PLANNER PATH, LITERAL `vteam-plan`, ON THE FRESH STACK
+    (evidence: live-planner.txt · planner-live-messages.txt · live-planner-evidence.txt)
+================================================================================
+Trigger: the PRODUCTION path — login → POST /tasks (teamId=tm_0000000001) → POST /tasks/:id/start
+→ POST /channels/:id/messages with `mentions:[{type:'agent',agentId:'a_plan',
+instanceId:'tmm_0000000006'}]` on the team_group channel c_0000000001.
+The server returned `triggers: [{"agentId":"a_plan","instanceId":"tmm_0000000006",
+"sessionId":"s_0000000001","status":"dispatched"}]`.
+
+Observable outcome (worker log, verbatim):
+  [v1-driver] sendMessage -> ses_f43e68793ffeI7MzMA7q1clzyw model=ornith/ornith-1.5:35b agent=vteam-plan (HTTP 204)
+  [exec] 执行完成 session=ses_f43e68793ffeI7MzMA7q1clzyw taskId=t_0000000001 model=ornith/ornith-1.5:35b text=2318 chars
+
+⇒ the server dispatched the LITERAL `vteam-plan`, the worker resolved a real model, and the
+  session ran to completion. The planner then used its platform tools (skill load,
+  vteam_task_context, vteam_chat_history, vteam_doclib, vteam_group_post) and POSTED A GROUP
+  REPLY: message m_0000000004, sender=a_plan, sender_instance_id=tmm_0000000006, status=sent,
+  addressed to 项目经理-1 and containing its read-only findings.
+
+NOTE ON THE PROBE MARKER (recorded honestly): the trigger text asked the model to echo
+`T9-LIVE-PLAN-OK`. The model *declined* to emit it, reasoning in its own output that echoing
+a "verification passed" token about an empty context would fabricate a result. That refusal
+is NOT treated as a pass. The pass condition used here is the OBSERVABLE execution evidence
+above (agent=vteam-plan, real tokens, tool calls, group reply), not any model-authored string.
+
+Role-guard mapping was active for this session only transiently (the worker removes the
+session policy when the execution ends: `.vteam-role-guard/sessions/` is empty afterwards) —
+the guard's decision logic is proven separately in §8/D4 by executing the shipped guard.
+
+BOUNDED CLAIM, stated once more: this proves the LIVE planner path works with the literal
+`vteam-plan`. It does NOT claim a renamed planner can fan out sub-agents (§8/D4).
+
+
+================================================================================
+§8  SERVER-SIDE PLAN GATE WITH A RENAMED PLAN-DUTY AGENT (bounded)
+    (evidence: plan-gate.json, from plan-gate.mjs against scratch DB `aiagents_t9pg`)
+================================================================================
+Scratch copy of the fresh DB (48 tables, dropped in §10). Renames confined to the copy.
+
+D0  Schema: `agents.role` column count in the scratch DB = 0
+    → role-based selection is impossible BY CONSTRUCTION (the consumer and the column are
+      both gone), which is why the probes below can only resolve by data.
+
+D1  `resolvePolicyAgentCandidate` (pure function, shipped source):
+      {agentKey:'product'}      → 'vteam-product'
+      {agentKey:'plan'}         → 'vteam-plan'
+      {agentKey:null}           → null          (rule 4 narrowing: no candidate)
+      {agentKey:'myagent'}      → 'vteam-myagent'
+      {agentKey:'nopolicy-t9'}  → 'vteam-nopolicy-t9'
+    Selection follows the KEY; there is no name/role input to consult.
+
+D2  Duty registry (`getOpencodeAgentDuty`), the gate's only name-ish input:
+      registry = ['plan','prometheus','vteam-plan']
+      'vteam-plan'                 → plan
+      'Prometheus - Plan Builder'  → plan      (RENAMED plan-duty agent)
+      'vteam-prometheus'           → execute   (lookalike earns nothing)
+      'vteam-myagent'              → execute
+      renamedBindingEntersPlanMode = true ; customBindingEntersPlanMode = false
+
+D3a RENAMED MAIN MEMBER (tmm_0000000002's opencode name set to 'Prometheus - Plan Builder'),
+    REAL `WorkerDispatcher.dispatch` executed against the scratch DB:
+      dutyResolved = plan
+      dispatchError = null
+      emittedAgentField = 'vteam-plan'
+      planInstructionInjected = true   (【计划编制】)
+      editPermGlobInjected    = true   (`.opencode/plans/`)
+      planReviewInjected      = false  (expected: review text is for non-main members)
+      systemLength = 5762
+    → the SERVER derived plan mode from the BOUND AGENT'S DUTY and injected the plan
+      instruction set for a RENAMED plan-duty binding. No agent id, no member id, no
+      `role` string was consulted.
+
+D3b RENAMED PLAN MEMBER (tmm_0000000006's opencode name renamed; its Agent row keeps
+    agentKey='plan'):
+      emittedAgentField = 'vteam-plan'
+      dispatchError = null
+    → the reserved strategy name comes from `agentKey` (rule 4), NOT from the binding's name.
+
+D4  THE LIMITATION — EXECUTED, not asserted from prose. The shipped compiled worker guard
+    (`worker/dist/role-guard/policy.js`) was run against the LIVE injected roles.json:
+
+      literal vteam-plan + subagent_type vteam-plan ........ allow   ← the ONLY task-allow branch
+      RENAMED plan-duty   + subagent_type vteam-plan ........ allow   [UNMAPPED → guard branch 2
+                                                                       pass-through; NOT the task
+                                                                       exception — see note]
+      mapped vteam-developer + subagent_type vteam-plan ..... deny    (mapped, non-plan role)
+      literal vteam-plan + subagent_type vteam-developer .... deny    (wrong subagent)
+      unmapped vteam-myagent + subagent_type vteam-plan ..... allow   (pass-through, branch 2)
+
+    NOTE (recorded to avoid overstating): the guard's step 2 returns allow when the session's
+    agent is not present in `roles` at all ("非角色会话，绝不 fail-closed"). The RENAMED
+    `Prometheus - Plan Builder` is not an injected policy name, so its `task` call is allowed
+    by PASS-THROUGH rather than by the task exception. The task exception itself
+    (`policy.ts:172-182`) is `agent === 'vteam-plan' && args.subagent_type === 'vteam-plan'`
+    and applies to nothing else. Consequently:
+
+    *** THE WORKER GUARD ALLOWS `task` ONLY FOR THE LITERAL `vteam-plan`. A RENAMED PLANNER
+        IS NOT PROVEN TO FAN OUT SUB-AGENTS, AND THIS DOCUMENT DOES NOT CLAIM IT. ***
+
+    Only the SERVER side stops hardcoding the name (candidate selection, mode/task derivation,
+    plan gate, instruction suppression). Making a renamed planner fan out requires a
+    `worker/**` change, which this plan explicitly forbids. (Review finding O3 / m3.)
+
+D5  Live injected config: `vteam-plan` carries mode=all + permission.task=allow and the edit
+    glob `*:deny` + `**.opencode/plans/**:allow`; the renamed name has NO injected entry
+    (only policy agents are injected). renamedEntryAbsent=true.
+
+
+================================================================================
+§9  PAGE-LEVEL UI CHECK  (evidence: /tmp/t9-pw2.txt, web/*.png under task-9-fresh)
+================================================================================
+Playwright against the FRESH stack (baseURL :13001, login seed-admin/Admin@123456):
+  4 passed (setup + 3 assertions), RC=0.
+
+  /agents — 7 rows, avatar `data-role` + computed colours from `web/src/theme/tokens.ts`:
+    a_product          data-role=product          bg=rgb(240, 253, 250) border=rgb(153, 246, 228)
+    a_project_manager  data-role=project_manager  bg=rgb(240, 249, 255) border=rgb(186, 230, 253)
+    a_architect        data-role=architect        bg=rgb(245, 243, 255) border=rgb(221, 214, 254)
+    a_developer        data-role=developer        bg=rgb(236, 253, 245) border=rgb(167, 243, 208)
+    a_tester           data-role=tester           bg=rgb(255, 251, 235) border=rgb(253, 230, 138)
+    a_plan             data-role=plan             bg=rgb(248, 250, 252) border=rgb(203, 213, 225)
+    a_librarian        data-role=developer        (neutral fallback — see below)
+  The six palette keys resolve to themselves; `librarian` is NOT a theme key and falls back
+  to `developer`. This is the PRE-EXISTING, documented fallback — byte-identical in the
+  todo-6 before/after logs (`task-6-beforeafter/before.txt:12`) and both todo-8 runs
+  (`task-8-before-run.txt:12`, `task-8-after-run.txt:12`). It is NOT a regression introduced
+  by the decommission; the initial probe assertion was over-strict and was corrected to pin
+  the documented behaviour.
+
+  /teams/tm_0000000001 — 7 member rows, each with a non-empty `data-role`
+    (architect/developer/developer/plan/product/project_manager/tester) and its alias badge;
+    the main member shows the `主 Agent` marker. No empty/null avatars.
+
+  Create-agent modal — the role picker lists AgentRole rows (live `/agent-roles`), i.e. the
+  picker no longer posts a dead `role` string:
+    无（默认骨架权限，后续可编辑）/ 产品经理（product）/ 项目经理（project_manager）/
+    架构师（architect）/ 开发者（developer）/ 测试（tester）
+
+Screenshots: t9-agents.png, t9-team-members.png (PNG files are gitignored per .gitignore:39).
+
+
+================================================================================
+§10  GATES + CLEANUP
+================================================================================
+§10.1 server tsc : `cd server && npx tsc -p tsconfig.json --noEmit` → RC=0
+§10.2 web tsc    : `cd web && npx tsc --noEmit`                  → RC=0
+§10.3 frozen sha : 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87 (unchanged)
+§10.4 no production source modified:
+      $ git status --porcelain -- server/src server/prisma worker/src web/app web/src
+      (empty)
+§10.5 server jest : 141 suites passed / 3250 tests passed / 1 snapshot   ← matches baseline
+§10.6 worker jest : 26 suites passed / 688 tests passed / 0 snapshots    ← matches baseline
+§10.7 consumer checker:
+      $ bash scripts/check-agent-role-consumers.sh
+      MANIFEST: scripts/agent-role-consumer-manifest.txt
+      OBSERVED: 136 keys (fresh grep)
+      UNMAPPED: 0
+      CONSUMER_RC=0
+§10.8 cleanup — no scratch DBs left:
+      $ SHOW DATABASES;
+      aiagents | information_schema | mysql | performance_schema | sys
+      (`aiagents_t9`, `aiagents_t9pg`, `aiagents_t9rb` dropped; the prior attempt's
+       `aiagents_t9` and todo-7's `aiagents_t9rb` are included in that drop.)
+      The Playwright probe spec/config were removed from `web/` after the run
+      (kept only as .txt/.ts copies under task-9-fresh/e2e for the record).
+§10.9 stack health: db healthy · server healthy · web healthy · worker up (online,
+      default_model=ornith/ornith-1.5:35b)
+§10.10 four compose volumes exist again (mysql_data, uploads_data, vteam_worker_data,
+      worker_home); no orphan scratch volumes.
+
+WORKER CREDENTIALS AFTER EVERYTHING (the restore survived the whole run):
+  $ stat -c "%a %s %n" /root/.local/share/opencode/auth.json
+  600 252 /root/.local/share/opencode/auth.json
+  providers = ['opencode-go','ornith','qwen-27b']   non-empty keys: True
+  git creds: .keta-git-creds.json 600 · .ssh/known_hosts 600 · .config/opencode/opencode.json 600
+  The worker's registration-time replay logged the credential command and the boot-time
+  injection was idempotent; the live planner in §7 called a real model through it.
+
+BACKUPS UNTOUCHED AT THE END:
+  pre-wipe-dump.sql          sha fce32e58436b70443d89b03ffba53f4b4747c9ded44237349a4ef77d1ab5caa7
+  worker-home-critical.tgz   sha 250f4336a2e0e9d5e9f9d44ae1ab31f94b3aea6d816b9537b2ba0ed20ecdf2c4
+  both still git-ignored (check-ignore output in §1).
+
+
+================================================================================
+§11  WHAT THIS PROOF DOES *NOT* CLAIM
+================================================================================
+  a) It does NOT claim a renamed planner can fan out sub-agents. The worker guard permits
+     `task` only for the literal `vteam-plan` (§8/D4). Server-side selection/gating of a
+     renamed plan-duty agent IS proven; the worker literal is documented as the residual.
+  b) It does NOT re-prove the populated-DB BACKFILL path. On a clean install the 000010
+     backfill is vacuous (§3.9). The populated path was proven in todo 7 (task-7-drop.txt)
+     and its rollback was exercised then; the user declared old-data compatibility
+     unnecessary, and the pre-wipe dump remains as the documented rollback artifact.
+  c) It does NOT assert any model-authored string as evidence. The live pass condition is
+     the observable execution record (§7); the model's own refusal to echo a marker is
+     documented rather than laundered into a pass.
+  d) It does NOT change production code, the frozen baseline, or `worker/**` — see §10.4.
+
+
+================================================================================
+ARTIFACT INDEX (all under .omo/evidence/agent-role-decommission/task-9-fresh/)
+================================================================================
+  preflight.txt              HEAD/status/backups/volumes/DB counts before the wipe
+  wipe.txt                   docker compose down -v output (4 volumes removed)
+  worker-home-restore.txt    the credential restore procedure + restored tree + modes
+  up-build.txt               docker compose up -d --build tail
+  init-logs.txt              FULL init log + `init ExitCode = 0`
+  target-state.txt           §4 SQL assertions (raw tables)
+  target-state-labels.txt    §4.6 utf8mb4 label capture
+  byte-identity.sh/.txt      §5 frozen-sha gate + per-builtin identity table
+  live-agent-policies.json   live GET /agent-policies (fresh stack)
+  live-injected-*.json       live worker opencode.json + roles.json
+  after-agent-policies.json  canonical 7-builtin subset (sha == frozen)
+  team-api-members.txt       §6.1 GET /teams member table
+  assembled.mjs/-instructions.json  §6.3/6.4 assembled identity+roster+suppression
+  live-planner.sh/.txt       §7 the production-path trigger script + log
+  planner-live-messages.txt  §7 full assistant/tool transcript
+  live-planner-evidence.txt  §7 worker-log + message-row + session-row extraction
+  plan-gate.mjs / plan-gate.json    §8 scratch-DB server-gate probes D0–D5
+  plan-gate.mjs emits against `aiagents_t9pg` (dropped in §10.8)
+  gates-tsc.txt / gates-tests.txt / gates-final.txt   §10 gate outputs
+  cleanup.txt                §10.8 SHOW DATABASES
+  e2e/*.ts, playwright.task-9.config.ts   the Playwright probe (kept for the record)
+  t9-agents.png, t9-team-members.png      §9 screenshots (gitignored)
+
+================================================================================
+END todo 9 proof
+================================================================================

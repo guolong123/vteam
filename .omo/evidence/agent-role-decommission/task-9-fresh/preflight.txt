@@ -1,0 +1,44 @@
+== PRE-WIPE RECORD (2026-09-19T23:39:03Z) ==
+-- HEAD --
+e06c9f1 refactor: remove role-based helpers and duplicate role maps
+0ce61d4 feat(db): drop agents.role after backfill
+65894c1 refactor(dispatch): stop reading Agent.role in the dispatcher
+-- git status (excluding .omo) --
+ M .gitignore
+?? docs/agent-platform/prototypes/agent-manage/
+?? docs/agent-platform/prototypes/agent-role/
+?? e2e-evidence/
+-- frozen baseline sha256 --
+3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87  .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+-- backups --
+fce32e58436b70443d89b03ffba53f4b4747c9ded44237349a4ef77d1ab5caa7  .omo/evidence/agent-role-decommission/pre-wipe-dump.sql
+6c1c1032a4cc650123fe40b433ac0c2a804c0e4d8785a437730c5423b5d17586  .omo/evidence/agent-role-decommission/pre-migration-dump.sql
+250f4336a2e0e9d5e9f9d44ae1ab31f94b3aea6d816b9537b2ba0ed20ecdf2c4  .omo/evidence/agent-role-decommission/worker-home-backup/worker-home-critical.tgz
+-- gitignore checks --
+.gitignore:45:.omo/evidence/**/*.sql	.omo/evidence/agent-role-decommission/pre-wipe-dump.sql
+.gitignore:74:.omo/evidence/**/worker-home-backup/	.omo/evidence/agent-role-decommission/worker-home-backup/worker-home-critical.tgz
+-- docker volumes (before) --
+0549ff726f63dbeb08c0e7cba9322a5c2c118e7ae9c2f8a3aafecdd5a57b4b08
+a6bbfd09c0f9e8460eed710432823f1160f842ac5d47e1d699ca55237f3114bf
+aiagents_mysql_data
+aiagents_uploads_data
+aiagents_vteam_worker_data
+aiagents_worker_home
+buildx_buildkit_cross-builder0_state
+buildx_buildkit_ketadb-amd64-builder0_state
+-- docker compose ps (before) --
+aiagents-compose-db db Up 6 hours (healthy)
+aiagents-compose-server server Up 5 hours (healthy)
+aiagents-compose-web web Up 5 hours (healthy)
+aiagents-compose-worker worker Up 6 hours
+-- live DB counts (before wipe) --
+agents_total	10
+agents_type_custom	3
+agents_type_template	7
+agent_roles	8
+team_members	28
+team_members_null_role	0
+tasks	18
+sessions	17
+models	7900
+model_credentials_active	3

@@ -1,0 +1,11 @@
+=== STEP 4b — seeded member alias + opencode name via the team API ===
+team: vteam开发团队 (id tm_0000000001 ) main = tmm_0000000002
+
+member                 alias          agentId            roleId               agent.role(=kept field, AgentRole.key)
+tmm_0000000003         架构师-1          a_architect        ar_architect         architect   
+tmm_0000000004         开发者-1          a_developer        ar_developer         developer   
+tmm_0000000007         知识管理员-1        a_librarian        ar_librarian         librarian   
+tmm_0000000006         计划员-1          a_plan             ar_plan              plan        
+tmm_0000000001         产品经理-1         a_product          ar_product           product     
+tmm_0000000002         项目经理-1         a_project_manager  ar_project_manager   project_manager
+tmm_0000000005         测试-1           a_tester           ar_tester            tester      

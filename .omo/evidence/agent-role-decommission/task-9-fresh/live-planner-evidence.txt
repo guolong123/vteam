@@ -1,0 +1,13 @@
+=== OBSERVABLE LIVE-PLANNER EVIDENCE (fresh stack) ===
+-- worker log (the dispatch actually executed) --
+[v1-driver] sendMessage -> ses_f43e68793ffeI7MzMA7q1clzyw model=ornith/ornith-1.5:35b agent=vteam-plan (HTTP 204)
+[exec] 执行完成 session=ses_f43e68793ffeI7MzMA7q1clzyw taskId=t_0000000001 model=ornith/ornith-1.5:35b text=2318 chars
+
+-- group message posted by the plan member (a_plan / tmm_0000000006) --
+sender=a_plan instance=tmm_0000000006 status=sent
+
+-- session row (dispatched, task-bound) --
+session=s_0000000001 member=tmm_0000000006 worker=w_compose_worker ref=ses_f43e68793ffeI7MzMA7q1clzyw status=idle
+
+-- assistant text (plan produced; probe marker deliberately declined by the LLM — recorded verbatim) --
+marker occurrences in transcript: 3

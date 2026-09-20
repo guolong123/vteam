@@ -1,0 +1,63 @@
+{
+  "generatedAt": "2026-09-20T00:09:44.903Z",
+  "scratchDb": "aiagents_t9pg",
+  "member": {
+    "teamMemberId": "tmm_0000000006",
+    "alias": "计划员-1",
+    "agentId": "a_plan",
+    "agentKey": "plan",
+    "roleId": "ar_plan",
+    "roleKey": "plan",
+    "roleLabel": "plan"
+  },
+  "resolvedTools": {
+    "vteam_task_context": "allow",
+    "vteam_read_file": "allow",
+    "vteam_doclib": "allow",
+    "vteam_team_view": "allow",
+    "vteam_my_profile": "allow",
+    "vteam_chat_history": "allow",
+    "vteam_wecom_reply": "allow",
+    "vteam_group_post": "allow",
+    "vteam_notify_agent": "allow",
+    "vteam_memory_search": "allow",
+    "vteam_plan_complete": "allow",
+    "browser": "allow"
+  },
+  "resolvedCorrectionScope": "计划职责：只读分析并产出实施计划；不写文件、不执行变更。",
+  "assertions": {
+    "identityLine": "【你的身份】你是本任务的 计划员-1（实例 id: tmm_0000000006，角色: plan）。调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（tmm_0000000006）。",
+    "identityRoleValue": "plan",
+    "identityRoleOccurrences": 8,
+    "rosterLineCount": 7,
+    "rosterLines": [
+      "- 架构师-1（实例 id: tmm_0000000003，角色: architect）",
+      "- 开发者-1（实例 id: tmm_0000000004，角色: developer）",
+      "- 知识管理员-1（实例 id: tmm_0000000007，角色: librarian）",
+      "- 计划员-1（实例 id: tmm_0000000006，角色: plan）",
+      "- 产品经理-1（实例 id: tmm_0000000001，角色: product）",
+      "- 项目经理-1（实例 id: tmm_0000000002，角色: project_manager） —— 主 Agent",
+      "- 测试-1（实例 id: tmm_0000000005，角色: tester）"
+    ],
+    "memorySectionPresent": false,
+    "artifactSectionPresent": false,
+    "charterPresent": true,
+    "planInstructionPresent": false,
+    "systemLength": 3822
+  },
+  "contrast_developer": {
+    "note": "same assembler, different agent: the developer policy HOLDS vteam_memory_save / vteam_submit_artifact, so the suppression predicate (resolvedTools lacks the tool) is false and both sections render.",
+    "member": {
+      "teamMemberId": "tmm_0000000004",
+      "alias": "开发者-1",
+      "agentId": "a_developer",
+      "agentKey": "developer"
+    },
+    "holdsMemorySave": true,
+    "holdsSubmitArtifact": true,
+    "memorySectionPresent": true,
+    "artifactSectionPresent": true,
+    "issueDetailPresent": true,
+    "systemLength": 3655
+  }
+}

@@ -1,0 +1,10 @@
+=== worker registration + credential replay (grep) ===
+aiagents-compose-worker  | [worker] 平台资源注入完成: 8 skills, 0 tools, 1 mcp servers
+
+=== /agent-policies (worker token) ===
+HTTP 200
+agents: ['vteam-plan', 'vteam-product', 'vteam-architect', 'vteam-developer', 'vteam-tester', 'vteam-project_manager', 'vteam-librarian']
+guard enabled: True
+guard roles: ['vteam-architect', 'vteam-developer', 'vteam-librarian', 'vteam-plan', 'vteam-product', 'vteam-project_manager', 'vteam-tester']
+
+=== DB worker row ===

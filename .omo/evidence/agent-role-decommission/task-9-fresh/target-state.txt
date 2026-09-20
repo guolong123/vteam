@@ -1,0 +1,138 @@
+################################################################################
+# todo 9 STEP 3 — TARGET-STATE ASSERTIONS ON THE FRESH DB (2026-09-19T23:49:39Z)
+################################################################################
+
+--- 3.1 SHOW COLUMNS FROM agents LIKE 'role' -> EXPECT EMPTY ---
+row_count(agents.role) = 0
+full agents columns:
++------------------+--------------+------+-----+----------------------+-------------------+
+| Field            | Type         | Null | Key | Default              | Extra             |
++------------------+--------------+------+-----+----------------------+-------------------+
+| id               | varchar(191) | NO   | PRI | NULL                 |                   |
+| name             | varchar(191) | NO   |     | NULL                 |                   |
+| type             | varchar(191) | NO   |     | NULL                 |                   |
+| base_agent_id    | varchar(191) | YES  | MUL | NULL                 |                   |
+| prompt           | text         | NO   |     | NULL                 |                   |
+| default_model_id | varchar(191) | YES  |     | NULL                 |                   |
+| created_by       | varchar(191) | NO   | MUL | NULL                 |                   |
+| created_at       | datetime(3)  | NO   |     | CURRENT_TIMESTAMP(3) | DEFAULT_GENERATED |
+| updated_at       | datetime(3)  | NO   |     | NULL                 |                   |
+| worker_id        | varchar(191) | YES  |     | NULL                 |                   |
+| ack_message      | varchar(191) | YES  |     | NULL                 |                   |
+| persona          | varchar(191) | YES  |     | NULL                 |                   |
+| policy_id        | varchar(191) | YES  |     | NULL                 |                   |
+| agent_key        | varchar(63)  | YES  | UNI | NULL                 |                   |
++------------------+--------------+------+-----+----------------------+-------------------+
+
+--- 3.2 SELECT COUNT(*) FROM agents WHERE policy_id IS NULL -> EXPECT 0 ---
++-------------------------+
+| agents_with_null_policy |
++-------------------------+
+|                       0 |
++-------------------------+
+
+--- 3.3 templates: every template has agent_key present, and agent_key equals its known builtin key (the literal 'agent_key = role' equality is NOT queryable after the drop; the concrete check is: template rows carry exactly the 7 known keys, policy_id = ep_<key>) ---
++-------------------+-----------------+----------+--------------------+------------------+
+| id                | agent_key       | type     | policy_id          | policy_is_ep_key |
++-------------------+-----------------+----------+--------------------+------------------+
+| a_architect       | architect       | template | ep_architect       |                1 |
+| a_developer       | developer       | template | ep_developer       |                1 |
+| a_librarian       | librarian       | template | ep_librarian       |                1 |
+| a_plan            | plan            | template | ep_plan            |                1 |
+| a_product         | product         | template | ep_product         |                1 |
+| a_project_manager | project_manager | template | ep_project_manager |                1 |
+| a_tester          | tester          | template | ep_tester          |                1 |
++-------------------+-----------------+----------+--------------------+------------------+
++-----------+----------------+-------------------+
+| templates | with_agent_key | without_agent_key |
++-----------+----------------+-------------------+
+|         7 |              7 |                 0 |
++-----------+----------------+-------------------+
+
+--- 3.4 SELECT COUNT(*) FROM agents -> fresh DB: only what seed creates (EXPECT 7 templates; NO customs) ---
++----------+---+
+| type     | n |
++----------+---+
+| template | 7 |
++----------+---+
++--------------+
+| agents_total |
++--------------+
+|            7 |
++--------------+
+
+--- 3.5 AgentRole rows present (EXPECT the 7 builtins with default_agent_id set) ---
++--------------------+-----------------+-------+---------+-------------------+------------+
+| id                 | key             | name  | type    | default_agent_id  | sort_order |
++--------------------+-----------------+-------+---------+-------------------+------------+
+| ar_product         | product         | ????  | builtin | a_product         |          1 |
+| ar_project_manager | project_manager | ????  | builtin | a_project_manager |          2 |
+| ar_architect       | architect       | ???   | builtin | a_architect       |          3 |
+| ar_developer       | developer       | ???   | builtin | a_developer       |          4 |
+| ar_tester          | tester          | ??    | builtin | a_tester          |          5 |
+| ar_plan            | plan            | ???   | builtin | a_plan            |          6 |
+| ar_librarian       | librarian       | ????? | builtin | a_librarian       |          7 |
+| ar_general         | general         | ??    | custom  | NULL              |        100 |
++--------------------+-----------------+-------+---------+-------------------+------------+
++-------------------+---------+--------------+
+| agent_roles_total | builtin | null_default |
++-------------------+---------+--------------+
+|                 8 |       7 |            1 |
++-------------------+---------+--------------+
+
+--- 3.6 team members: COUNT(*) and SUM(role_id IS NULL) -> EXPECT 0 nulls ---
++---------+--------------+
+| members | null_role_id |
++---------+--------------+
+|       7 |            0 |
++---------+--------------+
++----------------+---------+-------------------+--------------------+-----------------+---------------------+
+| id             | alias   | agent_id          | role_id            | role_key        | opencode_agent_name |
++----------------+---------+-------------------+--------------------+-----------------+---------------------+
+| tmm_0000000001 | ????-1  | a_product         | ar_product         | product         | NULL                |
+| tmm_0000000002 | ????-1  | a_project_manager | ar_project_manager | project_manager | NULL                |
+| tmm_0000000003 | ???-1   | a_architect       | ar_architect       | architect       | NULL                |
+| tmm_0000000004 | ???-1   | a_developer       | ar_developer       | developer       | NULL                |
+| tmm_0000000005 | ??-1    | a_tester          | ar_tester          | tester          | NULL                |
+| tmm_0000000006 | ???-1   | a_plan            | ar_plan            | plan            | NULL                |
+| tmm_0000000007 | ?????-1 | a_librarian       | ar_librarian       | librarian       | NULL                |
++----------------+---------+-------------------+--------------------+-----------------+---------------------+
+
+--- 3.7 seeded team ---
++---------------+-----------+----------------------+---------------+--------------+
+| id            | name      | main_agent_member_id | reuse_session | managed_mode |
++---------------+-----------+----------------------+---------------+--------------+
+| tm_0000000001 | vteam???? | tmm_0000000002       |             1 |            0 |
++---------------+-----------+----------------------+---------------+--------------+
+
+--- 3.8 migrations applied count / last 12 ---
++--------------------+
+| applied_migrations |
++--------------------+
+|                 63 |
++--------------------+
++---------------------------------------------------+-------------------------+
+| migration_name                                    | finished_at             |
++---------------------------------------------------+-------------------------+
+| 20260919000010_drop_agents_role                   | 2026-09-19 23:47:13.148 |
+| 20260919000009_backfill_split_agent_prompts       | 2026-09-19 23:47:13.071 |
+| 20260919000008_populate_builtin_role_prompts      | 2026-09-19 23:47:13.061 |
+| 20260919000007_add_agent_roles_and_member_role_id | 2026-09-19 23:47:13.017 |
+| 20260919000006_backfill_builtin_policy_allowlists | 2026-09-19 23:47:12.649 |
+| 20260919000005_reply_join_receipt_idx             | 2026-09-19 23:47:12.422 |
+| 20260919000004_hook_guardrails                    | 2026-09-19 23:47:12.342 |
+| 20260919000003_agent_hooks                        | 2026-09-19 23:47:12.199 |
+| 20260919000002_session_last_activity_at           | 2026-09-19 23:47:12.156 |
+| 20260919000001_rename_timers_to_triggers          | 2026-09-19 23:47:12.062 |
+| 20260919000000_add_artifact_category              | 2026-09-19 23:47:10.957 |
+| 20260918000000_add_plan_frozen_columns            | 2026-09-19 23:47:10.771 |
++---------------------------------------------------+-------------------------+
+
+--- 3.9 NO-OP STATEMENT: on a fresh DB the drop migration's backfill is a no-op because agents is EMPTY when migrate deploy runs (seed runs after) ---
+evidence: seed log line '模板 Agent：...（type=template）' appears AFTER 'All migrations have been successfully applied.'
+migration order proof (from init logs): 20260919000010_drop_agents_role is the LAST migration applied, and the drop migration's backfill targets rows that do not exist yet on a fresh DB:
++-------------------------------+
+| agents_rows_at_assertion_time |
++-------------------------------+
+|                             7 |
++-------------------------------+

@@ -320,3 +320,48 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   `dist/.../worker-dispatcher.d.ts` still declares `isPlanRole` and `isPlanRoleTarget` after the
   source is gone. Any "is this symbol really deleted" evidence MUST scope to `server/src`, and
   say so — a repo-wide grep hit in `dist` is an artifact, not a reference.
+
+## todo 9 — clean-rebuild verification findings
+
+- **`SHOW COLUMNS ... LIKE 'role'` is the RIGHT first assertion, and it is what the prior
+  attempt got wrong.** The previous run hit `ERROR 1054 Unknown column 'role'` because it
+  kept querying the plan's original `WHERE agent_key <> role` predicate AFTER the drop. Any
+  post-drop check must be re-expressed in terms of surviving columns (`agent_key`, `policy_id`,
+  `agent_roles.key`); the plan text itself says so ("adapt this check to what is actually
+  queryable post-drop, and say so") — do that, don't retry the dead predicate.
+- **A fresh-DB drop migration is a no-op for a subtle reason worth writing down.** The drop
+  (`20260919000010`) runs BEFORE the seed, so `agents` is empty and both the row backfill and
+  the `policy_id` guard match nothing. The seven templates instead get `policy_id` in their
+  `create` (seed.ts passes it directly). So "0 null policy_ids" on a fresh DB is NOT evidence
+  the backfill works — it is evidence the seed is correct. State the no-op explicitly; the
+  populated path was todo 7's job.
+- **The keep-the-worker-credentials requirement has an easy ordering trap.** `docker compose
+  down -v` deletes `aiagents_worker_home`. The safe order is: `down -v` → `docker volume
+  create aiagents_worker_home` → untar the backup into it via a throwaway `--user root`
+  container (preserving modes: auth.json/.keta-git-creds.json/known_hosts all 600) → only then
+  `up -d --build`. Restoring AFTER the stack is up also works but costs a restart and risks the
+  server's registration-time credential replay racing an empty HOME.
+- **Fresh seed deliberately ships ZERO models** (`STATIC_AVAILABLE_MODELS = []`). A live model
+  call therefore needs operator-shaped data setup (POST /models + credential + worker
+  `defaultModelId`), or the worker's registration-time `models/sync` (which auto-populated 7,827
+  rows here). Budget for this before promising a "live planner" step on a wiped DB — otherwise
+  the dispatch succeeds and then dies on `Cannot connect to API`.
+- **Not every reachable provider is actually reachable.** `qwen-27b` (192.168.10.10:18020)
+  returned `fetch failed` while `ornith` (192.168.10.10:11434) answered HTTP 200. Assert
+  reachability per-provider with a real prompt before choosing the probe model; a `/models`
+  200 is not proof the chat endpoint works.
+- **Do NOT use model-authored markers as pass conditions.** The planner correctly REFUSED to
+  echo the `T9-LIVE-PLAN-OK` token, reasoning that fabricating a "verification passed" string
+  over an empty context would be dishonest. The robust pass condition is the observable
+  execution record (dispatcher log line + tokens + tool calls + a group message row), which
+  cannot be produced by a stalled run. Marker-based probes fail in BOTH directions: a stalled
+  run with a chatty echo could "pass", and a working run that declines could "fail".
+- **`librarian` has no theme colour and falls back to `developer` — by design.** It is not in
+  `web/src/theme/tokens.ts` `roles` (6 keys). The fallback is byte-identical in the todo-6
+  before/after logs and both todo-8 runs; a naive "every seeded role must resolve its own key"
+  assertion will fail on a non-defect. Pin the documented fallback instead.
+- **The worker guard's `task` exception is NARROWER than "the plan agent may fan out".** The
+  allow branch is `agent === 'vteam-plan' && args.subagent_type === 'vteam-plan'`. A renamed
+  plan-duty agent's `task` call is allowed only by the UNMAPPED pass-through (guard step 2),
+  not by the exception — so a renamed planner is neither proven nor expected to fan out.
+  Record the distinction; "allow" alone is not the claim.

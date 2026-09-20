@@ -1,0 +1,26 @@
+=== 6.8 stack health ===
+aiagents-compose-db | db | Up 25 minutes (healthy)
+aiagents-compose-server | server | Up 25 minutes (healthy)
+aiagents-compose-web | web | Up 24 minutes (healthy)
+aiagents-compose-worker | worker | Up 24 minutes
+
+=== 6.9 worker still has model credentials (the restore must survive) ===
+600 252 /root/.local/share/opencode/auth.json
+providers: ['opencode-go', 'ornith', 'qwen-27b']
+non-empty keys: True
+
+=== 6.10 worker git creds + ssh (restored) ===
+600 8528 /root/.keta-git-creds.json
+600 1120 /root/.ssh/known_hosts
+600 1453 /root/.config/opencode/opencode.json
+
+=== 6.11 worker online + registered ===
+worker=w_compose_worker status=online default_model=ornith/ornith-1.5:35b
+
+=== 6.12 backups still intact + ignored (NOT staged) ===
+fce32e58436b70443d89b03ffba53f4b4747c9ded44237349a4ef77d1ab5caa7  .omo/evidence/agent-role-decommission/pre-wipe-dump.sql
+250f4336a2e0e9d5e9f9d44ae1ab31f94b3aea6d816b9537b2ba0ed20ecdf2c4  .omo/evidence/agent-role-decommission/worker-home-backup/worker-home-critical.tgz
+.gitignore:45:.omo/evidence/**/*.sql	.omo/evidence/agent-role-decommission/pre-wipe-dump.sql
+.gitignore:74:.omo/evidence/**/worker-home-backup/	.omo/evidence/agent-role-decommission/worker-home-backup/worker-home-critical.tgz
+?? .omo/evidence/agent-role-decommission/task-9-fresh/
+?? .omo/evidence/agent-role-decommission/task-9/

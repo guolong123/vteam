@@ -69,3 +69,7 @@ web/public/worker-src.tar.gz
 # deploy-k8s.sh 持久化的 4 个 secret（DB_PASSWORD / JWT / WORKER_TOKEN / MODEL_KEY），
 # 不入库；删除后下次 deploy 会重新生成（破坏现有登录态 / MySQL root / worker 注册）
 .deploy-secrets.env
+
+# todo-9 clean-rebuild safety backups (contain credentials)
+.omo/evidence/**/worker-home-backup/
+.omo/evidence/**/*.tgz

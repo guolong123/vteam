@@ -1,0 +1,15 @@
+################################################################################
+# todo 9 STEP 6 — GATES (2026-09-20T00:11:19Z)
+################################################################################
+
+--- 6.1 server tsc ---
+SERVER_TSC_RC=0
+
+--- 6.2 web tsc ---
+WEB_TSC_RC=0
+
+--- 6.3 frozen baseline sha (must be unchanged) ---
+3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87  .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json
+
+--- 6.4 working tree typescript unchanged (no production code edits) ---
+  (empty above = no production source modified)

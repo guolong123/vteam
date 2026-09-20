@@ -1,0 +1,231 @@
+=== compose ps ===
+aiagents-compose-db | db | Up 47 seconds (healthy) | exit=0
+aiagents-compose-init | init | Exited (0) 14 seconds ago | exit=0
+aiagents-compose-server | server | Up 14 seconds (healthy) | exit=0
+aiagents-compose-web | web | Up 8 seconds (healthy) | exit=0
+aiagents-compose-worker | worker | Up 8 seconds | exit=0
+
+=== init logs (full) ===
+aiagents-compose-init  | warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+aiagents-compose-init  | For more information, see: https://pris.ly/prisma-config
+aiagents-compose-init  | 
+aiagents-compose-init  | Prisma schema loaded from prisma/schema.prisma
+aiagents-compose-init  | Datasource "db": MySQL database "aiagents" at "db:3306"
+aiagents-compose-init  | 
+aiagents-compose-init  | 63 migrations found in prisma/migrations
+aiagents-compose-init  | 
+aiagents-compose-init  | Applying migration `20260808003102_init`
+aiagents-compose-init  | Applying migration `20260808041438_add_mcp_servers`
+aiagents-compose-init  | Applying migration `20260808041646_add_skill_content`
+aiagents-compose-init  | Applying migration `20260808071700_skill_content_text`
+aiagents-compose-init  | Applying migration `20260808145108_add_models_catalog`
+aiagents-compose-init  | Applying migration `20260808154421_add_model_credentials`
+aiagents-compose-init  | Applying migration `20260809161243_add_channel_attachment_reset`
+aiagents-compose-init  | Applying migration `20260810000000_add_agent_ack_message`
+aiagents-compose-init  | Applying migration `20260811090000_credential_ref_text`
+aiagents-compose-init  | Applying migration `20260812032006_git_repo_credentials`
+aiagents-compose-init  | Applying migration `20260812085848_agent_questions`
+aiagents-compose-init  | Applying migration `20260813085208_issue_management`
+aiagents-compose-init  | Applying migration `20260813120000_agent_prompt_text`
+aiagents-compose-init  | Applying migration `20260813130000_role_instance_separation`
+aiagents-compose-init  | Applying migration `20260814090000_issue_reject_activities`
+aiagents-compose-init  | Applying migration `20260814120000_task_managed_mode`
+aiagents-compose-init  | Applying migration `20260814150000_agent_work_dir`
+aiagents-compose-init  | Applying migration `20260814150000_text_columns`
+aiagents-compose-init  | Applying migration `20260815150204_memories`
+aiagents-compose-init  | Applying migration `20260816013314_team_collaboration_plans`
+aiagents-compose-init  | Applying migration `20260820140000_add_memory_description`
+aiagents-compose-init  | Applying migration `20260821090000_add_model_local_fields`
+aiagents-compose-init  | Applying migration `20260822000000_add_task_agent_enabled`
+aiagents-compose-init  | Applying migration `20260822120000_repo_credential_separation`
+aiagents-compose-init  | Applying migration `20260824000000_add_plan_reject_count`
+aiagents-compose-init  | Applying migration `20260824000001_add_execution_policy`
+aiagents-compose-init  | Applying migration `20260825000000_add_taskagent_override_model`
+aiagents-compose-init  | Applying migration `20260826000000_add_memory_source_session`
+aiagents-compose-init  | Applying migration `20260827000000_expand_artifact_content`
+aiagents-compose-init  | Applying migration `20260828000000_integration_channels`
+aiagents-compose-init  | Applying migration `20260829000000_split_channels_notifications`
+aiagents-compose-init  | Applying migration `20260901000000_team_refactor_expand`
+aiagents-compose-init  | Applying migration `20260901000001_private_channel_team_member`
+aiagents-compose-init  | Applying migration `20260901000002_add_task_reset_after_complete`
+aiagents-compose-init  | Applying migration `20260901000003_add_team_main_agent`
+aiagents-compose-init  | Applying migration `20260901000004_fix_team_group_unique`
+aiagents-compose-init  | Applying migration `20260904000000_team_execution_context`
+aiagents-compose-init  | Applying migration `20260907000000_drop_project_dimension`
+aiagents-compose-init  | Applying migration `20260907000001_drop_task_agent_domain`
+aiagents-compose-init  | Applying migration `20260908000000_add_team_member_override_model`
+aiagents-compose-init  | Applying migration `20260908000001_team_channel_bindings`
+aiagents-compose-init  | Applying migration `20260911000000_add_member_opencode_agent`
+aiagents-compose-init  | Applying migration `20260912000000_add_task_plan_mode`
+aiagents-compose-init  | Applying migration `20260913000000_drop_agent_tool_effects_permission_scope`
+aiagents-compose-init  | Applying migration `20260914000000_add_agent_key`
+aiagents-compose-init  | Applying migration `20260915000000_add_skill_versions`
+aiagents-compose-init  | Applying migration `20260915000001_add_memory_content_hash`
+aiagents-compose-init  | Applying migration `20260916000000_add_message_receipts`
+aiagents-compose-init  | Applying migration `20260916000000_add_plan_confirm_columns`
+aiagents-compose-init  | Applying migration `20260916000001_add_timers`
+aiagents-compose-init  | Applying migration `20260917000000_add_plan_finalize_columns`
+aiagents-compose-init  | Applying migration `20260918000000_add_plan_frozen_columns`
+aiagents-compose-init  | Applying migration `20260919000000_add_artifact_category`
+aiagents-compose-init  | Applying migration `20260919000001_rename_timers_to_triggers`
+aiagents-compose-init  | Applying migration `20260919000002_session_last_activity_at`
+aiagents-compose-init  | Applying migration `20260919000003_agent_hooks`
+aiagents-compose-init  | Applying migration `20260919000004_hook_guardrails`
+aiagents-compose-init  | Applying migration `20260919000005_reply_join_receipt_idx`
+aiagents-compose-init  | Applying migration `20260919000006_backfill_builtin_policy_allowlists`
+aiagents-compose-init  | Applying migration `20260919000007_add_agent_roles_and_member_role_id`
+aiagents-compose-init  | Applying migration `20260919000008_populate_builtin_role_prompts`
+aiagents-compose-init  | Applying migration `20260919000009_backfill_split_agent_prompts`
+aiagents-compose-init  | Applying migration `20260919000010_drop_agents_role`
+aiagents-compose-init  | 
+aiagents-compose-init  | The following migration(s) have been applied:
+aiagents-compose-init  | 
+aiagents-compose-init  | migrations/
+aiagents-compose-init  |   └─ 20260808003102_init/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260808041438_add_mcp_servers/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260808041646_add_skill_content/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260808071700_skill_content_text/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260808145108_add_models_catalog/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260808154421_add_model_credentials/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260809161243_add_channel_attachment_reset/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260810000000_add_agent_ack_message/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260811090000_credential_ref_text/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260812032006_git_repo_credentials/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260812085848_agent_questions/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260813085208_issue_management/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260813120000_agent_prompt_text/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260813130000_role_instance_separation/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260814090000_issue_reject_activities/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260814120000_task_managed_mode/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260814150000_agent_work_dir/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260814150000_text_columns/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260815150204_memories/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260816013314_team_collaboration_plans/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260820140000_add_memory_description/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260821090000_add_model_local_fields/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260822000000_add_task_agent_enabled/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260822120000_repo_credential_separation/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260824000000_add_plan_reject_count/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260824000001_add_execution_policy/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260825000000_add_taskagent_override_model/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260826000000_add_memory_source_session/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260827000000_expand_artifact_content/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260828000000_integration_channels/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260829000000_split_channels_notifications/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260901000000_team_refactor_expand/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260901000001_private_channel_team_member/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260901000002_add_task_reset_after_complete/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260901000003_add_team_main_agent/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260901000004_fix_team_group_unique/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260904000000_team_execution_context/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260907000000_drop_project_dimension/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260907000001_drop_task_agent_domain/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260908000000_add_team_member_override_model/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260908000001_team_channel_bindings/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260911000000_add_member_opencode_agent/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260912000000_add_task_plan_mode/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260913000000_drop_agent_tool_effects_permission_scope/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260914000000_add_agent_key/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260915000000_add_skill_versions/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260915000001_add_memory_content_hash/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260916000000_add_message_receipts/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260916000000_add_plan_confirm_columns/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260916000001_add_timers/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260917000000_add_plan_finalize_columns/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260918000000_add_plan_frozen_columns/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000000_add_artifact_category/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000001_rename_timers_to_triggers/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000002_session_last_activity_at/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000003_agent_hooks/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000004_hook_guardrails/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000005_reply_join_receipt_idx/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000006_backfill_builtin_policy_allowlists/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000007_add_agent_roles_and_member_role_id/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000008_populate_builtin_role_prompts/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000009_backfill_split_agent_prompts/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |   └─ 20260919000010_drop_agents_role/
+aiagents-compose-init  |     └─ migration.sql
+aiagents-compose-init  |       
+aiagents-compose-init  | All migrations have been successfully applied.
+aiagents-compose-init  | npm notice
+aiagents-compose-init  | npm notice New major version of npm available! 10.9.8 -> 12.0.2
+aiagents-compose-init  | npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.0.2
+aiagents-compose-init  | npm notice To update run: npm install -g npm@12.0.2
+aiagents-compose-init  | npm notice
+aiagents-compose-init  | Seed 完成：
+aiagents-compose-init  |   - 角色：admin / member
+aiagents-compose-init  |   - 用户：admin(u_admin) / seed-admin(u_seed_admin) / seed-member(u_seed_member)
+aiagents-compose-init  |   - 模板 Agent：产品经理(product)、项目经理(project_manager)、架构师(architect)、开发者(developer)、测试(tester)、计划员(plan)、知识管理员(librarian)（type=template）
+aiagents-compose-init  |   - 角色策略：ep_product、ep_project_manager、ep_architect、ep_developer、ep_tester、ep_plan、ep_librarian（type=template）
+aiagents-compose-init  |   - 内置工具：bash、read、edit、write、grep、glob（source=builtin）
+aiagents-compose-init  |   - MCP 工具：chat_history、doclib、task_context、group_post、read_file、notify_agent、submit_artifact、issue_create、issue_list、issue_get、issue_update、issue_transition、task_transition、question_confirm、memory_save、memory_search、team_view、my_profile、team_add_member、plan_mode、plan_complete、channel_send、wecom_reply、task_create、memory_update、skill_create、git_repos_list、hook_register、hook_cancel（source=mcp，mcpServer=vteam）
+aiagents-compose-init  |   - MCP Server：vteam（remote，http://server:3000/api/v1/platform-mcp）
+aiagents-compose-init  |   - 模型目录：0 个模型（）
+aiagents-compose-init  |   - 示例团队：vteam开发团队(tm_0000000001) 含 7 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）
+aiagents-compose-init  |   - 管理员密码：Admin@123456
+aiagents-compose-init  |   - 初始 admin 账号：admin / admin123
+
+=== init EXIT CODE ===
+init ExitCode = 0 (0 = success)

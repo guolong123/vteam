@@ -1,0 +1,27 @@
+--- 6.5 server jest (baseline 141 suites / 3250 tests) ---
+PASS src/common/opencode-agent-duty.spec.ts
+PASS src/common/constants/task.constants.spec.ts
+
+Test Suites: 141 passed, 141 total
+Tests:       3250 passed, 3250 total
+Snapshots:   1 passed, 1 total
+Time:        14.457 s, estimated 17 s
+Ran all test suites.
+SERVER_JEST_RC=
+
+--- 6.6 worker jest (baseline 26 suites / 688 tests) ---
+PASS src/protocol/contract.spec.ts
+PASS src/instance-tracker.spec.ts
+
+Test Suites: 26 passed, 26 total
+Tests:       688 passed, 688 total
+Snapshots:   0 total
+Time:        22.342 s, estimated 23 s
+Ran all test suites.
+WORKER_JEST_RC=
+
+--- 6.7 consumer checker ---
+MANIFEST: /Volumes/SSD-Data/01work/git-project/vteam/scripts/agent-role-consumer-manifest.txt
+OBSERVED: 136 keys (fresh grep)
+UNMAPPED: 0
+CONSUMER_RC=0

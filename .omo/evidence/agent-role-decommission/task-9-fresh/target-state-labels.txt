@@ -1,0 +1,33 @@
+--- 3.6b team members with labels (utf8mb4 charset, mysql client defaults latin1) ---
++----------------+-------------------+-------------------+--------------------+-----------------+
+| id             | alias             | agent_id          | role_id            | role_key        |
++----------------+-------------------+-------------------+--------------------+-----------------+
+| tmm_0000000001 | 产品经理-1        | a_product         | ar_product         | product         |
+| tmm_0000000002 | 项目经理-1        | a_project_manager | ar_project_manager | project_manager |
+| tmm_0000000003 | 架构师-1          | a_architect       | ar_architect       | architect       |
+| tmm_0000000004 | 开发者-1          | a_developer       | ar_developer       | developer       |
+| tmm_0000000005 | 测试-1            | a_tester          | ar_tester          | tester          |
+| tmm_0000000006 | 计划员-1          | a_plan            | ar_plan            | plan            |
+| tmm_0000000007 | 知识管理员-1      | a_librarian       | ar_librarian       | librarian       |
++----------------+-------------------+-------------------+--------------------+-----------------+
+
+--- agent_roles labels (utf8mb4) ---
++--------------------+-----------------+-----------------+---------+-------------------+
+| id                 | key             | name            | type    | default_agent_id  |
++--------------------+-----------------+-----------------+---------+-------------------+
+| ar_product         | product         | 产品经理        | builtin | a_product         |
+| ar_project_manager | project_manager | 项目经理        | builtin | a_project_manager |
+| ar_architect       | architect       | 架构师          | builtin | a_architect       |
+| ar_developer       | developer       | 开发者          | builtin | a_developer       |
+| ar_tester          | tester          | 测试            | builtin | a_tester          |
+| ar_plan            | plan            | 计划员          | builtin | a_plan            |
+| ar_librarian       | librarian       | 知识管理员      | builtin | a_librarian       |
+| ar_general         | general         | 通用            | custom  | NULL              |
++--------------------+-----------------+-----------------+---------+-------------------+
+
+--- teams label (utf8mb4) ---
++---------------+-------------------+----------------------+
+| id            | name              | main_agent_member_id |
++---------------+-------------------+----------------------+
+| tm_0000000001 | vteam开发团队     | tmm_0000000002       |
++---------------+-------------------+----------------------+

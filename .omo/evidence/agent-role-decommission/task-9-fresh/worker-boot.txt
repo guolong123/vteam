@@ -1,0 +1,26 @@
+=== worker logs (post-boot, tail 90) ===
+aiagents-compose-worker  | [worker] 启动中:
+aiagents-compose-worker  |   workerId            = w_compose_worker
+aiagents-compose-worker  |   workerName          = 342875fa5122
+aiagents-compose-worker  |   serverUrl           = http://server:3000
+aiagents-compose-worker  |   opencodeServePort   = 4000
+aiagents-compose-worker  |   opencodeServeAuth   = 无（serve 不设鉴权）
+aiagents-compose-worker  |   opencodeServeHost   = 0.0.0.0
+aiagents-compose-worker  |   workerAdvertiseHost = http://worker
+aiagents-compose-worker  |   heartbeatIntervalMs = 10000
+aiagents-compose-worker  |   workerMaxInstances  = 10
+aiagents-compose-worker  |   logLevel            = info
+aiagents-compose-worker  |   opencodeVersion     = 1.18.31
+aiagents-compose-worker  |   agentBrowser        = agent-browser 0.27.0
+aiagents-compose-worker  | [worker] git 工具族已注入: /data/vteam-worker/.opencode/tools/git.ts
+aiagents-compose-worker  | [worker] browser 工具已注入: /data/vteam-worker/.opencode/tools/browser.ts (agent-browser)
+aiagents-compose-worker  | [worker] 就绪（pid=1）。
+aiagents-compose-worker  | [worker] 平台资源注入完成: 8 skills, 0 tools, 1 mcp servers
+aiagents-compose-worker  | [worker] omo 模型种子已写入: build=opencode/big-pickle, plan=opencode/big-pickle, sisyphus=opencode/big-pickle, hephaestus=opencode/big-pickle, sisyphus-junior=opencode/big-pickle, OpenCode-Builder=opencode/big-pickle, prometheus=opencode/big-pickle, metis=opencode/big-pickle, momus=opencode/big-pickle, oracle=opencode/big-pickle, librarian=opencode/big-pickle, explore=opencode/big-pickle, multimodal-looker=opencode/big-pickle, atlas=opencode/big-pickle
+aiagents-compose-worker  | [opencode-server] 健康检查通过 (HTTP 200)
+aiagents-compose-worker  | [opencode-server] serve 就绪: http://127.0.0.1:4000 (pid=53)
+aiagents-compose-worker  | [v1-driver] baseUrl 更新: http://127.0.0.1:4000
+aiagents-compose-worker  | [worker] opencode serve 就绪: http://127.0.0.1:4000 (pid=53)
+aiagents-compose-worker  | [exec] 执行端点就绪: POST http://0.0.0.0:4198/execute
+aiagents-compose-worker  | [exec] 文件端点就绪: GET http://0.0.0.0:4198/file?path=<绝对路径>（X-Worker-Token 鉴权）
+aiagents-compose-worker  | [worker] 执行端点就绪: POST http://127.0.0.1:4198/execute

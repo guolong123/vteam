@@ -1,0 +1,28 @@
+Unable to find image 'alpine:3' locally
+3: Pulling from library/alpine
+Digest: sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+Status: Downloaded newer image for alpine:3
+--- restored tree ---
+/root
+/root/.config
+/root/.config/opencode
+/root/.config/opencode/.gitignore
+/root/.config/opencode/opencode.json
+/root/.config/opencode/package-lock.json
+/root/.config/opencode/package.json
+/root/.config/opencode/tui.json
+/root/.keta-git-creds.json
+/root/.local
+/root/.local/share
+/root/.local/share/opencode
+/root/.local/share/opencode/auth.json
+/root/.local/share/opencode/opencode.db
+/root/.npmrc
+/root/.ssh
+/root/.ssh/known_hosts
+/root/.ssh/known_hosts.old
+--- modes ---
+600 252 /root/.local/share/opencode/auth.json
+600 8528 /root/.keta-git-creds.json
+600 1120 /root/.ssh/known_hosts
+600 1453 /root/.config/opencode/opencode.json

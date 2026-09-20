@@ -1,0 +1,1 @@
+{"text": "@计划员 请为任务 t_0000000001 输出一份最少步骤的实施计划（只读分析，不要写文件）。【9(d) 探针】请在回复正文中原样包含标记 T9-LIVE-PLAN-OK 并以 T9-LIVE-END 结尾。", "taskId": "t_0000000001", "mentions": [{"type": "agent", "agentId": "a_plan", "instanceId": "tmm_0000000006"}]}
