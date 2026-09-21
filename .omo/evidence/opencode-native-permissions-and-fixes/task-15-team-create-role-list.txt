@@ -1,0 +1,210 @@
+================================================================================
+task-15 — 团队创建页由岗位列表 (/agent-roles) 驱动 — CLOSEOUT EVIDENCE
+plan: .omo/plans/opencode-native-permissions-and-fixes.md · task 15
+================================================================================
+
+DATE (local, Asia/Shanghai) ......... 2026-09-21 19:31:31 CST
+DATE (UTC) .......................... 2026-09-21T11:31:31Z
+HEAD ................................ 3b9249149961075cbd880c9b5b21d316a266d7d4
+HEAD subject ........................ feat(web): role-first member add surfaces
+Branch .............................. main
+Evidence file ....................... .omo/evidence/opencode-native-permissions-and-fixes/task-15-team-create-role-list.txt
+Production code changed ............. web/app/(main)/teams/new/page.tsx
+Spec (new) .......................... web/e2e/team-create-role-list.spec.ts
+
+CHANGE: the team-create page now renders ONE card per GET /agent-roles entry
+(builtin AND custom), bucketed by role.id; the hardcoded 6-role ROLE_ORDER list
+and the CustomAgentCard (/agents type!=template escape hatch) are REMOVED.
+
+================================================================================
+[1] GATE — cd web && npx tsc --noEmit
+================================================================================
+command: npx tsc --noEmit   (cwd: web/)
+result : exit code 0 (TypeScript clean; baseline before the edit was also 0)
+
+TSC_EXIT=0
+
+================================================================================
+[2] LIVE SPEC — cd web && npx playwright test --config .t15.playwright.config.ts
+================================================================================
+command : npx playwright test --config .t15.playwright.config.ts   (cwd: web/)
+stack   : live compose (web http://localhost:13001, server http://localhost:13000)
+result  : exit code 0
+
+--- RAW OUTPUT (verbatim) ------------------------------------------------------
+
+Running 2 tests using 1 worker
+
+[cleanup] team tm_0000000018 DELETE -> 200
+[cleanup] role ar_0000000026 DELETE -> 200
+  ✓  1 e2e/team-create-role-list.spec.ts:179:7 › task-15 · 团队创建页岗位列表（/agent-roles 单一来源） › (a+b) 岗位卡 = /agent-roles 全量；勾选自定义岗位建团 → roleId-only + agentId 预填 (2.2s)
+  ✓  2 e2e/team-create-role-list.spec.ts:247:7 › task-15 · 团队创建页岗位列表（/agent-roles 单一来源） › (c) 外部-only 岗位：提示 + 执行 Agent 槽位在场；未选执行 Agent 被守卫拦下（零请求） (1.3s)
+
+  2 passed (4.4s)
+PW_EXIT=0
+--- END RAW OUTPUT ------------------------------------------------------------
+
+What the spec proves (web/e2e/team-create-role-list.spec.ts):
+  (a) [data-testid="role-card"] count === GET /agent-roles total (11 live: 7 builtin
+      + sisyphus/prometheus/atlas/general custom) and > 6; every role key has its
+      own card ([data-role=<key>]), so custom roles are selectable on /teams/new.
+  (b) toggling a freshly created CUSTOM role card (defaultAgentId=a_tester):
+      - card title = role.name, subtitle = role.description,
+        role-binding[data-role-id] = role.id;
+      - POST /teams request body: members[0].roleId === role.id and
+        "agentId" in members[0] === false (role-only);
+      - GET /teams/:id read-back: member.agentId === role.defaultAgentId
+        ("a_tester", server rule 2 prefill); opencodeAgentName === null.
+  (c) external-only live role (defaultOpencodeAgentName, e.g. atlas): role-external-hint
+      + instance-executor-select appear; confirm without an executor is blocked by the
+      guard (team-create-error "外部绑定岗位...") with ZERO POST /teams emitted.
+
+================================================================================
+[3] IMAGE REBUILD — docker compose build web && docker compose up -d web
+================================================================================
+$ docker compose build web      (cwd: repo root; NEVER --force-recreate)
+#23 writing image sha256:b4efacfc1e560ef200c53915335ad628e0c9e844c4ce4282734e2805f0bbb082 done
+#23 naming to docker.io/library/aiagents-web done
+#23 DONE 0.4s
+
+#24 resolving provenance for metadata file
+#24 DONE 0.1s
+ Image aiagents-web Built 
+BUILD_EXIT=0
+
+$ docker compose up -d web
+ Container aiagents-compose-db Running 
+ Container aiagents-compose-server Running 
+ Container aiagents-compose-web Recreate 
+ Container aiagents-compose-web Recreated 
+ Container aiagents-compose-db Waiting 
+ Container aiagents-compose-db Healthy 
+ Container aiagents-compose-init Starting 
+ Container aiagents-compose-init Started 
+ Container aiagents-compose-db Waiting 
+ Container aiagents-compose-init Waiting 
+ Container aiagents-compose-db Healthy 
+ Container aiagents-compose-init Exited 
+ Container aiagents-compose-server Waiting 
+ Container aiagents-compose-server Healthy 
+ Container aiagents-compose-web Starting 
+ Container aiagents-compose-web Started 
+UP_EXIT=0
+
+================================================================================
+[4] SERVED BUNDLE PROOF (marker `岗位加载失败` is NEW and unique to this page)
+================================================================================
+$ docker exec aiagents-compose-web sh -c "grep -rl '岗位加载失败' /app/.next/static/chunks"
+/app/.next/static/chunks/app/(main)/teams/new/page-560ddff2b6154d2a.js
+
+$ docker exec aiagents-compose-web sh -c "ls /app/.next/static/chunks/app/\(main\)/teams/new/"
+page-560ddff2b6154d2a.js
+
+$ docker exec aiagents-compose-web sh -c "grep -o 'roles-retry' /app/.next/static/chunks/app/\(main\)/teams/new/page-*.js | head -1"
+roles-retry
+
+INTERPRETATION: the teams/new chunk is freshly built and carries the new marker
+(岗位加载失败 only exists in this page chunk), so the recreated container
+actually serves the role-list-driven page.
+
+================================================================================
+[5] LIVE RENDER — /teams/new card census (headless chrome, logged in as admin)
+================================================================================
+command: node web/.t15-shot.mjs   (throwaway, deleted; screenshot kept)
+{
+  "count": 11,
+  "cards": [
+    {
+      "key": "product",
+      "text": "P产品经理未启用内置角色：产品经理（需求分析与原型设计）。绑定：a_produc"
+    },
+    {
+      "key": "project_manager",
+      "text": "P项目经理未启用内置角色：项目经理（流程控制，不产出交付物）。绑定：a_proj"
+    },
+    {
+      "key": "architect",
+      "text": "A架构师未启用内置角色：架构师（技术方案与设计文档）。绑定：a_architec"
+    },
+    {
+      "key": "developer",
+      "text": "D开发者未启用内置角色：开发者（编码实现与缺陷修复）。绑定：a_develope"
+    },
+    {
+      "key": "tester",
+      "text": "T测试未启用内置角色：测试（用例设计与验证）。绑定：a_tester＋ 添加测试"
+    },
+    {
+      "key": "plan",
+      "text": "P计划员未启用内置角色：计划员（计划编制与修订）。绑定：a_plan＋ 添加计划"
+    },
+    {
+      "key": "librarian",
+      "text": "知知识管理员未启用内置角色：知识管理员（只读检索与问答）。绑定：a_librar"
+    },
+    {
+      "key": "sisyphus",
+      "text": "SSisyphus未启用omo 内置agent绑定：Sisyphus - ult"
+    },
+    {
+      "key": "prometheus",
+      "text": "PPrometheus未启用omo 内置agent绑定：Prometheus -"
+    },
+    {
+      "key": "atlas",
+      "text": "AAtlas未启用omo 内置agent绑定：Atlas - Plan Exec"
+    },
+    {
+      "key": "general",
+      "text": "通通用未启用通用角色（未分类）：存量成员的 Agent.role 为空时的回填兜"
+    }
+  ],
+  "screenshot": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/opencode-native-permissions-and-fixes/task-15-teams-new-role-cards.png"
+}
+SHOT_EXIT=0
+
+================================================================================
+[6] LIVE RESIDUE CHECK (post-run, live DB via server API :13000)
+================================================================================
+GET /api/v1/agent-roles -> roles count: 11
+GET /api/v1/teams       -> teams count: 2
+
+ROLE NAMES (id, key, type, defaultAgentId, defaultOpencodeAgentName):
+  ar_product         product          builtin a_product  None
+  ar_project_manager project_manager  builtin a_project_manager None
+  ar_architect       architect        builtin a_architect None
+  ar_developer       developer        builtin a_developer None
+  ar_tester          tester           builtin a_tester   None
+  ar_plan            plan             builtin a_plan     None
+  ar_librarian       librarian        builtin a_librarian None
+  ar_0000000001      sisyphus         custom  None       Sisyphus - ultraworker
+  ar_0000000002      prometheus       custom  None       Prometheus - Plan Builder
+  ar_0000000003      atlas            custom  None       Atlas - Plan Executor
+  ar_general         general          custom  None       None
+
+TEAM NAMES:
+  tm_0000000002    probe-role-only
+  tm_0000000001    vteam开发团队
+
+qa-t15 residue count: 0
+
+INTERPRETATION: the spec-created custom role (ar_0000000026) and team (tm_0000000018)
+were DELETE'd in the spec finally block (cleanup receipts in [2]); teams count stays 2
+(tm_0000000002 probe-role-only + tm_0000000001 seed, both pre-existing) and roles
+stay 11 — NO residue from this task.
+
+NOTE: tm_0000000002 / ar_0000000001..0003 / ar_general belong to OTHER workstreams
+and were neither created, modified, nor deleted here.
+
+================================================================================
+[7] WORKTREE / THROWAWAY FILES
+================================================================================
+$ git status --porcelain (scoped)
+ M web/app/(main)/teams/new/page.tsx
+?? .omo/evidence/opencode-native-permissions-and-fixes/task-15-team-create-role-list.txt
+?? web/e2e/team-create-role-list.spec.ts
+
+web/.t15.playwright.config.ts + web/.t15-shot.mjs are throwaway runner files;
+they are DELETED by this closeout and MUST NOT be committed (never `git add`ed).
+The screenshot .omo/evidence/opencode-native-permissions-and-fixes/task-15-teams-new-role-cards.png
+is the [5] artifact (untracked, referenced by this evidence file).

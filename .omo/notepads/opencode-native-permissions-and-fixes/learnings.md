@@ -404,3 +404,30 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
 - **External-only role → mandatory executor.** When a role is external-bound (`role.defaultOpencodeAgentName`, e.g. `Prometheus - Plan Builder`), the role option renders with a `（外部）` suffix and an "执行 Agent" executor slot appears. Confirm is GUARDED while the executor is unset (visible error, ZERO request emitted); once an internal executor Agent is chosen, server rule 5 persists `member.opencodeAgentName === <external role name>` AND `member.agentId === <executor>`. This survives reload (row re-renders; API read-back field-identical).
 - **Absorbed into concurrent commit `fdfeb1f`.** `web/app/(main)/teams/[id]/page.tsx` (66 lines) and `web/app/(main)/teams/[id]/session/page.tsx` (31 lines) were committed by the concurrent `feat(team): 主agent门禁 …` commit — their working-tree state is clean; the task-14 closeout stages NEITHER.
 - **Spec result.** `web/e2e/role-first-member-add.spec.ts` under throwaway config `web/.t14.playwright.config.ts` → **3 passed (6.8s)** on live compose (web :13001 / server :13000): (a) team-create role-only no-`agentId`; (a+b) detail-page role-only + external guard + executor → `opencodeAgentName` persisted after reload; (c) session page still zero `<select>` / zero `message-agent-select`. Cleanup DELETEd all `qa-t14-*` throwaways (team-then-role); live residue check = 0.
+
+## [2026-09-21] task-15 — team-create 改由 /agent-roles 单一来源（web）
+
+- **卡片来源＝岗位列表，bucket＝role.id**：`/teams/new` 删掉 `ROLE_ORDER`(6 硬编码) + `CustomAgentCard`
+  (`/agents` `type!=template` 的逃生口)，改为 `roleItems.map(...)`（内置 + 自定义同列）。`InstancesByRole`
+  由 `Partial<Record<RoleKey|"custom">>` 改为 `Record<string, InstanceDraft[]>`，每个自定义岗位天然各占一桶；
+  提交 member 恒带 `roleId`，仅外部-only 岗位附执行者 `agentId`（与 server 规则 2/5 对齐）。
+- **自定义 key 不能查 tokens.roles**：`roles[key]` 对 `sisyphus/atlas/general` 返回 undefined，且
+  `AgentAvatar` 的 `role` prop 是 `RoleKey`（TS 直接报错）。用 `(ROLE_KEYS as readonly string[]).includes(key)`
+  收窄；非内置走中性 palette + 同尺寸自绘 `<span data-testid="agent-avatar">`——既不崩，也不冒充
+  developer 绿（`AgentAvatar` 内部对非法 role 静默回落 developer，会给出错误角色语义）。
+- **默认 alias/workDir 基名＝`role.name`**：live 内置岗位 name 与 tokens label 逐字相同（产品经理/项目经理/…），
+  统一用 `role.name` 不改变既有默认值（`开发者-1` 仍是 `开发者-1`），自定义岗位自然得 `Sisyphus-1`。
+- **`allInstancesOf` = `Object.values(m).flat()`**：成员顺序＝勾选顺序（ROLE_ORDER 规范序已不存在）；
+  `mainAgentMemberId` 与 members 用同一数组下标计算，二者永远一致——顺序变化不是正确性问题。
+- **零既有 spec 依赖被删 testid**：`web/e2e` 对 role-card / custom-agent-item / add-custom-agent-btn 的引用为 0；
+  新增 `web/e2e/team-create-role-list.spec.ts` 用 `[data-testid="role-card"][data-role=<key>]` 定位自定义岗位卡。
+  live `/teams/new` DOM census = 11 卡（7 内置 + sisyphus/prometheus/atlas/general），截图见
+  `.omo/evidence/opencode-native-permissions-and-fixes/task-15-teams-new-role-cards.png`。
+- **bundle 标记要选唯一字面量**：`roles-loading` 在 agents/system-roles 页早已存在，用它证明「新 image 生效」
+  是弱证据；本页独有字面量 `岗位加载失败` grep `/app/.next/static/chunks` 才命中唯一 chunk
+  `app/(main)/teams/new/page-*.js`。`docker compose up -d web` 会连带跑 init（migrate deploy，退出即止），
+  实测数据未被重置（11 roles / 2 teams 不变）；依然不要 `--force-recreate`（会 reseed）。
+- **spec 形状**：建一张一次性自定义岗位（`defaultAgentId=a_tester`）→ 断言角色卡全量（count = /agent-roles 总数、
+  每个 key 一张、>6）→ 勾选该卡建团 → 断言 POST `/teams` body `members[0].roleId===role.id` 且无 `agentId`
+  → GET 回读 `agentId==="a_tester"`；第二例用 live 外部-only 岗位证明 hint + executor 槽位 + 守卫零请求。
+  finally 先删 team 后删 role（防 409 in-use）；residue=0。
