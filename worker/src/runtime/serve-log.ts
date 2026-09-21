@@ -26,8 +26,8 @@ export const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Fre
 const SERVE_ERROR_LEVEL_RE = /\blevel=ERROR\b/;
 /** 结构化错误门之二：显式错误字段（`error.error="AI_APICallError: …"` 等）。 */
 const SERVE_ERROR_FIELD_RE = /\berror\.(error|name|message|code)=/;
-/** serve 会话归属字段（`session.id=ses_…`）；用于剔除其它会话的历史错误（stale 隔离）。 */
-const SESSION_ID_RE = /session\.id=(\S+)/;
+/** serve 会话归属字段（`session.id=ses_…`；prompt_async 失败行用 `sessionID=ses_…` 无点形态）；用于剔除其它会话的历史错误（stale 隔离）。 */
+const SESSION_ID_RE = /session\.?id=(\S+)/i;
 /** 日志文件尾部读取上限（只读最近 64KB，避免把 100MB+ 日志整体载入内存）。 */
 export const SERVE_LOG_TAIL_BYTES = 64 * 1024;
 
@@ -60,6 +60,21 @@ export function lineBelongsToSession(line: string, sessionID?: string): boolean 
   }
   const match = SESSION_ID_RE.exec(line);
   return match === null || match[1] === sessionID;
+}
+
+/**
+ * 行是否明确归属指定会话（无归属字段 → false）。
+ * recentErrors（abort 快检数据源）专用严格版：无 session.id/sessionID 的行
+ * （如子 agent 的 share subscriber 失败行）不得通配到任意会话，否则一次子域
+ * 失败会秒杀所有在途会话的主 agent（线上实测：08:18 一行无归属行双杀 PM+architect）。
+ * recentLogTail（失败证据附原文）仍用宽松版；无 sessionID 参数时恒 true（全局尸检用）。
+ */
+export function lineBelongsToSessionStrict(line: string, sessionID?: string): boolean {
+  if (!sessionID) {
+    return true;
+  }
+  const match = SESSION_ID_RE.exec(line);
+  return match !== null && match[1] === sessionID;
 }
 
 /** 无条件接受（原始日志尾部用：不过滤内容，只按会话归属）。 */

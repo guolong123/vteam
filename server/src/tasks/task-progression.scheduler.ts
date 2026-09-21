@@ -9,13 +9,19 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WorkerDispatcher } from '../chat/worker-dispatcher';
-import { CHANNEL_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
+import {
+  CHANNEL_TYPE,
+  EVENT_TYPES,
+  MESSAGE_STATUS,
+  SENDER_TYPE,
+} from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
 import {
   TRIGGER_KIND,
   buildTriggerDedupKey,
 } from '../common/constants/trigger.constants';
 import { PrismaService } from '../prisma/prisma.service';
+import { IdGeneratorService } from '../common/id-generator';
 import { RealtimeEvent, RealtimeService } from '../realtime/realtime.service';
 import {
   TRIGGER_STATUS,
@@ -24,15 +30,17 @@ import {
 } from '../timers/trigger.service';
 
 /**
- * 巡检间隔 ms（env PROGRESSION_INTERVAL_MS，缺省 20min）。
+ * 巡检间隔 ms（env PROGRESSION_INTERVAL_MS，缺省 10min）。
  *
- * 2026-09-16 由 5min 上调：实测任务 in_progress 期间每 5min 一条巡检 + 模型故障时空转，
- * 单任务 12 轮把主 Agent 刷成消息风暴。20min 仍能发现卡点（远短于任务正常推进节奏），
- * 但把巡检自身的噪音降到 1/4。
+ * 2026-09-16 由 5min 上调至 20min（巡检风暴教训）；2026-09-21 回调至 10min：
+ * 看门狗只在"静默"时叫醒（活跃跳过不计轮次）+ 3 连静默自动置阻塞停嘴，
+ * 噪音有界，不再是无差别 12 连发。
  */
-export const DEFAULT_PROGRESSION_INTERVAL_MS = 20 * 60_000;
+export const DEFAULT_PROGRESSION_INTERVAL_MS = 10 * 60_000;
 /** 巡检轮次上限（env PROGRESSION_MAX_ROUNDS，缺省 6；达到后注销 + 告警防空转）。 */
 export const DEFAULT_PROGRESSION_MAX_ROUNDS = 6;
+/** 连续静默巡检上限：达到即自动置阻塞（blocked）并群公告，停嘴等人工。 */
+export const STALL_QUIET_STREAK_LIMIT = 3;
 /** 巡检扫描周期 ms（旧 setInterval 驱动已退役，见类注释；保留导出防外部引用 churn）。 */
 export const PROGRESSION_SCAN_INTERVAL_MS = 30_000;
 
@@ -49,12 +57,14 @@ export function buildProgressionDedupKey(taskId: string): string {
   return buildTriggerDedupKey(TRIGGER_KIND.PROGRESSION_PATROL, 'task', taskId);
 }
 
-/** 循环表条目：nextRunAt 下次触发时间戳、rounds 已巡检轮次、maxRounds 轮次上限。 */
+/** 循环表条目：nextRunAt 下次触发时间戳、rounds 已巡检轮次、maxRounds 轮次上限、quietStreak 连续静默轮次。 */
 interface ProgressionEntry {
   taskId: string;
   nextRunAt: number;
   rounds: number;
   maxRounds: number;
+  /** 连续静默轮次（叫醒后仍无进展则累加；观测到活跃清零；达 STALL_QUIET_STREAK_LIMIT 自动置阻塞）。 */
+  quietStreak: number;
 }
 
 /** 巡检消息 prompt（引导而非写死动作——主 Agent 经 MCP 工具自主决策）。 */
@@ -103,6 +113,11 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   /** realtime bus 订阅取消函数（托管确认请求路由）。 */
   private unsubscribe: (() => void) | null = null;
 
+  /** 停滞回调（TasksService 注册：连续静默达上限 → systemBlock 置阻塞）。 */
+  private readonly stallHandlers: Array<{
+    (taskId: string, reason: string): void;
+  }> = [];
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly realtime: RealtimeService,
@@ -119,6 +134,9 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     // todo-8：TriggerService 可选注入（缺席时仅内存循环工作，spec 旧用例零 provider 可编译）。
     @Optional()
     private readonly triggers?: TriggerService,
+    // IdGeneratorService 可选注入（停滞群公告落库用；缺席时跳过公告，巡检照常）。
+    @Optional()
+    private readonly idGen?: IdGeneratorService,
   ) {
     // env 经 ConfigService 返回字符串，Number() 归一（非法/缺省 → 默认值）
     const interval = Number(config.get('PROGRESSION_INTERVAL_MS'));
@@ -210,6 +228,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       nextRunAt: Date.now() + this.progressionIntervalMs,
       rounds: 0,
       maxRounds: this.maxRounds,
+      quietStreak: 0,
     });
     this.logger.log(
       `[progression] 注册巡检 taskId=${taskId}（interval=${this.progressionIntervalMs}ms, maxRounds=${this.maxRounds}）`,
@@ -218,12 +237,70 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * 巡检触发器持久化：periodic patrol 已退役（fan-out JOIN drain 取代）。
-   * 此方法保留为 no-op（历史幂等：pending 行已存在 → 直接保留），仅为避免
-   * 外部 caller 编译报错，保持签名不变。生产不再排任何 interval 行。
+   * 巡检触发器持久化：排 interval 行（intervalMs=巡检间隔、maxFires=轮次上限、
+   * guardKey=冷却否决），一任务一行（dedupKey 幂等，pending 行保留 fireCount）。
+   * 看门狗复活：静默任务靠 ticker 节拍叫醒；活跃任务被 guard/skip 放过不计轮次。
    */
-  private async persistPatrolTrigger(_taskId: string): Promise<void> {
-    return;
+  private async persistPatrolTrigger(taskId: string): Promise<void> {
+    if (!this.triggers) {
+      return;
+    }
+    // 一任务一行：pending 行保留（fireCount 不清零）；终态行先删后建，
+    // 否则基座按 dedupKey 幂等回旧行、resume 后巡检永不恢复。
+    const dedupKey = buildProgressionDedupKey(taskId);
+    try {
+      const existing = (await (this.prisma as any).trigger?.findUnique?.({
+        where: { dedupKey },
+      })) as { status?: string } | null | undefined;
+      if (existing) {
+        if (existing.status === TRIGGER_STATUS.PENDING) {
+          return;
+        }
+        try {
+          await (this.prisma as any).trigger?.delete?.({
+            where: { dedupKey },
+          });
+        } catch {}
+      }
+      await this.triggers.schedule(
+        TRIGGER_KIND.PROGRESSION_PATROL,
+        new Date(Date.now() + this.progressionIntervalMs),
+        { taskId },
+        dedupKey,
+        {
+          intervalMs: this.progressionIntervalMs,
+          maxFires: this.maxRounds,
+          guardKey: PROGRESSION_COOLDOWN_GUARD,
+        },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[progression] 巡检触发器排期失败 taskId=${taskId}（内存循环继续）: ${this.describeError(err)}`,
+      );
+    }
+  }
+
+  /**
+   * 注册停滞回调（TasksService：连续静默达上限 → systemBlock 置阻塞 + 群公告）。
+   * 回调异常被吞（fire-and-forget，不阻断巡检主流程）。
+   */
+  onStallDetected(
+    cb: (taskId: string, reason: string) => void,
+  ): void {
+    this.stallHandlers.push(cb);
+  }
+
+  /** 触发停滞回调（fire-and-forget，逐个 try/catch）。 */
+  private fireStallDetected(taskId: string, reason: string): void {
+    for (const cb of this.stallHandlers) {
+      try {
+        cb(taskId, reason);
+      } catch (err) {
+        this.logger.warn(
+          `[progression] 停滞回调失败 taskId=${taskId}（忽略）: ${this.describeError(err)}`,
+        );
+      }
+    }
   }
 
   /**
@@ -434,6 +511,9 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
           lastAt !== undefined &&
           Date.now() - lastAt < this.progressionIntervalMs
         ) {
+          // 观测到进展：静默计数清零（本轮不叫醒、不计轮次，忙有活干是好事）。
+          const progressing = this.loop.get(taskId);
+          if (progressing) progressing.quietStreak = 0;
           this.logger.warn(
             `[progression] taskId=${taskId} 主会话近期活跃，跳过本轮巡检`,
           );
@@ -444,6 +524,8 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       // fail-open：否决链路异常不阻断巡检（与旧 scan veto try{}catch{} 一致）。
     }
     await this.runPatrol(taskId, (task as any).title);
+    // 叫醒后记一次静默：下次 fire 若仍无进展继续累加；达上限 → 停滞回调
+    // （TasksService 置阻塞 + 群公告）并注销巡检，停嘴等人工。
     const firedRounds = (ctx.fireCount ?? 0) + 1;
     const entry = this.loop.get(taskId);
     if (entry) {
@@ -454,6 +536,21 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
         this.logger.warn(
           `[progression] taskId=${taskId} 巡检已达轮次上限（${entry.maxRounds}），注销防空转`,
         );
+        return;
+      }
+      // 叫醒后记一次静默：下次 fire 若仍无进展继续累加；达上限 → 停滞回调
+      // （TasksService 置阻塞 + 群公告）并注销巡检，停嘴等人工。
+      entry.quietStreak += 1;
+      if (entry.quietStreak >= STALL_QUIET_STREAK_LIMIT) {
+        this.logger.warn(
+          `[progression] taskId=${taskId} 连续 ${entry.quietStreak} 轮无进展，触发停滞处理`,
+        );
+        this.fireStallDetected(
+          taskId,
+          `看门狗：任务连续 ${entry.quietStreak} 轮巡检（约 ${Math.round((entry.quietStreak * this.progressionIntervalMs) / 60000)} 分钟）无任何进展，自动置阻塞。请人工确认卡点后恢复执行。`,
+        );
+        this.unregister(taskId);
+        return;
       }
     } else if (firedRounds >= this.maxRounds) {
       this.logger.warn(
@@ -470,6 +567,65 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     );
     await this.dispatchToMainAgent(taskId, text);
     this.logger.log(`[progression] 巡检消息已下发主 Agent taskId=${taskId}`);
+  }
+
+  /**
+   * 停滞群公告（TasksService.systemBlock 调用）：自动置阻塞后在团队群聊落 system 消息。
+   * idGen 缺席时跳过落库只记日志；频道缺失/异常吞错（状态已置阻塞，不影响）。
+   */
+  async postStallNoticeToTeamGroup(
+    teamId: string,
+    taskId: string,
+    taskTitle: string,
+    reason: string,
+  ): Promise<void> {
+    try {
+      const channel = await this.prisma.chatChannel.findFirst({
+        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+        select: { id: true },
+      });
+      if (!channel || !this.idGen) {
+        this.logger.warn(
+          `[progression] 停滞公告跳过 team=${teamId}（无群频道或无 idGen）`,
+        );
+        return;
+      }
+      const text =
+        `【任务停滞】任务 <${taskTitle}>（${taskId}）${reason}` +
+        `已自动置阻塞。请人工确认卡点，解决后恢复执行（task resume）。`;
+      const row = await this.prisma.message.create({
+        data: {
+          id: await this.idGen.nextId('m'),
+          channelId: (channel as { id: string }).id,
+          taskId,
+          senderType: SENDER_TYPE.system,
+          senderId: null,
+          content: { text, parts: [] },
+          mentions: null,
+          status: MESSAGE_STATUS.sent,
+        } as any,
+      });
+      await this.realtime.broadcast(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        {
+          message: {
+            id: (row as { id: string }).id,
+            channelId: (channel as { id: string }).id,
+            senderType: SENDER_TYPE.system,
+            senderId: null,
+            content: { text, parts: [] },
+            mentions: [],
+            status: MESSAGE_STATUS.sent,
+            createdAt: new Date().toISOString(),
+          },
+        },
+        { type: 'channel', id: (channel as { id: string }).id },
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[progression] 停滞公告失败 taskId=${taskId}（忽略）: ${this.describeError(err)}`,
+      );
+    }
   }
 
   /**

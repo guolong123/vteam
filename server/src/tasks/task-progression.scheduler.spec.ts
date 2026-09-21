@@ -4,6 +4,7 @@ import { WorkerDispatcher } from '../chat/worker-dispatcher';
 import { CHANNEL_TYPE } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
 import { TRIGGER_KIND } from '../common/constants/trigger.constants';
+import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { TriggerService } from '../timers/trigger.service';
@@ -19,10 +20,12 @@ describe('TaskProgressionScheduler', () => {
   let prisma: {
     task: { findUnique: jest.Mock; findMany: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
+    message: { create: jest.Mock };
     agentQuestion: { findUnique: jest.Mock };
     team: { findUnique: jest.Mock };
   };
-  let realtime: { subscribe: jest.Mock };
+  let realtime: { subscribe: jest.Mock; broadcast: jest.Mock };
+  let idGen: { nextId: jest.Mock };
   let workerDispatcher: {
     dispatchAgentMention: jest.Mock;
     isSessionPending: jest.Mock;
@@ -55,6 +58,7 @@ describe('TaskProgressionScheduler', () => {
     prisma = {
       task: { findUnique: jest.fn(), findMany: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
+      message: { create: jest.fn() },
       agentQuestion: { findUnique: jest.fn() },
       team: {
         findUnique: jest
@@ -62,7 +66,11 @@ describe('TaskProgressionScheduler', () => {
           .mockResolvedValue({ mainAgentMemberId: 'tmm_0000000001' }),
       },
     };
-    realtime = { subscribe: jest.fn(() => () => {}) };
+    idGen = { nextId: jest.fn().mockResolvedValue('m_0000000999') };
+    realtime = {
+      subscribe: jest.fn(() => () => {}),
+      broadcast: jest.fn().mockResolvedValue(undefined),
+    };
     workerDispatcher = {
       dispatchAgentMention: jest.fn().mockResolvedValue(undefined),
       isSessionPending: jest.fn().mockReturnValue(false),
@@ -83,6 +91,7 @@ describe('TaskProgressionScheduler', () => {
         { provide: WorkerDispatcher, useValue: workerDispatcher },
         { provide: TriggerService, useValue: triggers },
         { provide: ConfigService, useValue: config },
+        { provide: IdGeneratorService, useValue: idGen },
       ],
     }).compile();
     scheduler = module.get(TaskProgressionScheduler);
@@ -319,17 +328,22 @@ describe('TaskProgressionScheduler', () => {
   describe('trigger 持久化（todo-8：rounds≡fireCount，maxRounds≡maxFires）', () => {
     const flush = () => new Promise((r) => setImmediate(r));
 
-    it('register 不再排期周期巡检（periodic patrol 已退役，仅内存镜像）+ unregister 仍 cancel 旧行', async () => {
+    it('register 排期周期巡检（看门狗复活：interval 行 + guard + maxFires）+ unregister 仍 cancel 旧行', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
       allowMainMember();
       await scheduler.register('t_1');
-      // 退役契约：内存镜像仍注册，但不再排任何 interval 巡检行
+      // 复活契约：内存镜像注册 + 排 interval 巡检行
       expect(scheduler.isRegistered('t_1')).toBe(true);
-      expect(triggers.schedule).not.toHaveBeenCalled();
-      const intervalCalls = triggers.schedule.mock.calls.filter(
-        (call) => call[4]?.intervalMs !== undefined,
-      );
-      expect(intervalCalls).toHaveLength(0);
+      expect(triggers.schedule).toHaveBeenCalledTimes(1);
+      const [kind, dueAt, payload, dedupKey, opts] =
+        triggers.schedule.mock.calls[0];
+      expect(kind).toBe(TRIGGER_KIND.PROGRESSION_PATROL);
+      expect(dueAt.getTime()).toBeGreaterThan(Date.now());
+      expect(payload).toEqual({ taskId: 't_1' });
+      expect(dedupKey).toBe(buildProgressionDedupKey('t_1'));
+      expect(opts).toMatchObject({ guardKey: PROGRESSION_COOLDOWN_GUARD });
+      expect(opts.intervalMs).toBeGreaterThan(0);
+      expect(opts.maxFires).toBeGreaterThan(0);
       // unregister 仍 cancel 旧行（清扫遗留 pending 行）
       scheduler.unregister('t_1');
       await flush();
@@ -352,7 +366,7 @@ describe('TaskProgressionScheduler', () => {
       expect(scheduler.isRegistered('t_1')).toBe(true);
     });
 
-    it('register 数据修复：终态行 → 不删除不重建（退役 no-op，仅重建内存镜像）', async () => {
+    it('register 数据修复：终态行 → 先删后建（否则基座 dedup 回旧行 Resume 后巡检不恢复）', async () => {
       prisma.task.findUnique.mockResolvedValue(inProgressTask());
       allowMainMember();
       const del = jest.fn().mockResolvedValue({ id: 'tmr_1' });
@@ -363,8 +377,10 @@ describe('TaskProgressionScheduler', () => {
         delete: del,
       };
       await scheduler.register('t_1');
-      expect(del).not.toHaveBeenCalled();
-      expect(triggers.schedule).not.toHaveBeenCalled();
+      expect(del).toHaveBeenCalledWith({
+        where: { dedupKey: buildProgressionDedupKey('t_1') },
+      });
+      expect(triggers.schedule).toHaveBeenCalledTimes(1);
       expect(scheduler.isRegistered('t_1')).toBe(true);
     });
 
@@ -451,6 +467,93 @@ describe('TaskProgressionScheduler', () => {
       const out = await handler(fireCtx());
       expect(out).toBeUndefined();
       expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('连续 3 轮静默 → 触发停滞回调 + 注销巡检（看门狗自动置阻塞链路）', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      await scheduler.register('t_1');
+      const stalled: Array<{ taskId: string; reason: string }> = [];
+      scheduler.onStallDetected((taskId, reason) =>
+        stalled.push({ taskId, reason }),
+      );
+      const handler = await handlerOf();
+      // 主会话不存在 → 否决链跳过，每轮都叫醒（静默）
+      await handler(fireCtx({ fireCount: 0 }));
+      await handler(fireCtx({ fireCount: 1 }));
+      expect(stalled).toHaveLength(0);
+      expect(scheduler.isRegistered('t_1')).toBe(true);
+      await handler(fireCtx({ fireCount: 2 }));
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(3);
+      expect(stalled).toHaveLength(1);
+      expect(stalled[0].taskId).toBe('t_1');
+      expect(stalled[0].reason).toContain('看门狗');
+      expect(scheduler.isRegistered('t_1')).toBe(false);
+    });
+
+    it('中间观测到活跃 → 静默计数清零（有活干不算停滞）', async () => {      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      await scheduler.register('t_1');
+      const stalled: unknown[] = [];
+      scheduler.onStallDetected((taskId, reason) =>
+        stalled.push({ taskId, reason }),
+      );
+      const handler = await handlerOf();
+      // 两轮静默（streak=2）
+      await handler(fireCtx({ fireCount: 0 }));
+      await handler(fireCtx({ fireCount: 1 }));
+      // 一轮活跃 → 跳过叫醒且清零（主会话存在 + 近期有活动）
+      (prisma as any).session = {
+        findFirst: jest.fn().mockResolvedValue({ id: 's_main' }),
+      };
+      workerDispatcher.getLastActivityAt.mockReturnValue(Date.now());
+      await handler(fireCtx({ fireCount: 2 }));
+      // 再两轮静默 → streak 回到 2，仍不触发停滞（若不清零此时已是 4 轮连静默）
+      workerDispatcher.getLastActivityAt.mockReturnValue(undefined);
+      delete (prisma as any).session;
+      await handler(fireCtx({ fireCount: 3 }));
+      await handler(fireCtx({ fireCount: 4 }));
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(4);
+      expect(stalled).toHaveLength(0);
+      expect(scheduler.isRegistered('t_1')).toBe(true);
+    });
+  });
+
+  describe('postStallNoticeToTeamGroup（停滞群公告）', () => {
+    it('团队群频道存在 → 落 system 消息 + 广播', async () => {
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_group' });
+      prisma.message.create.mockResolvedValue({ id: 'm_0000000999' });
+
+      await scheduler.postStallNoticeToTeamGroup(
+        'tm_1',
+        't_1',
+        '巡检任务',
+        '看门狗：连续 3 轮无进展',
+      );
+
+      expect(prisma.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          channelId: 'c_group',
+          senderType: 'system',
+          status: 'sent',
+        }),
+      });
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        'chat.message.new',
+        expect.objectContaining({
+          message: expect.objectContaining({ channelId: 'c_group' }),
+        }),
+        { type: 'channel', id: 'c_group' },
+      );
+    });
+
+    it('无群频道 → 跳过不抛错', async () => {
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+
+      await expect(
+        scheduler.postStallNoticeToTeamGroup('tm_1', 't_1', '巡检任务', '卡住'),
+      ).resolves.toBeUndefined();
+      expect(prisma.message.create).not.toHaveBeenCalled();
     });
   });
 

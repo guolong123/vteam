@@ -179,6 +179,21 @@ export class TasksService implements OnModuleInit {
       ID_PREFIX.teamQueue,
       this.idGen,
     );
+    // 看门狗停滞回调：连续静默达上限 → 系统置阻塞 + 群公告（actor=system）。
+    // progression 为本类已注入依赖，无循环引用；spec mock 缺该方法时可选调用。
+    try {
+      (this.progression as unknown as {
+        onStallDetected?: (
+          cb: (taskId: string, reason: string) => void,
+        ) => void;
+      })?.onStallDetected?.((taskId, reason) => {
+        void this.systemBlock(taskId, reason).catch((err: unknown) =>
+          this.logger.error(
+            `停滞自动置阻塞失败 taskId=${taskId}: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+      });
+    } catch {}
   }
 
   /**
@@ -1170,6 +1185,18 @@ export class TasksService implements OnModuleInit {
               : '任务被驳回，请补齐产出后重新提交',
         };
       }
+      case 'block':
+        return {
+          eventType: 'block',
+          metadata: reason ? { reason } : undefined,
+          sysMessage: () =>
+            `任务已阻塞：${reason ?? ''}。请人工介入或等待卡点解除后恢复执行。`,
+        };
+      case 'resume':
+        return {
+          eventType: 'resume',
+          sysMessage: () => '任务阻塞解除，恢复执行',
+        };
       case 'archive': {
         let archiveTeamId: string | null = null;
         return {
@@ -1253,6 +1280,79 @@ export class TasksService implements OnModuleInit {
       userId,
       this.transitionOpts(id, 'reject', dto?.reason),
     );
+  }
+
+  /**
+   * 阻塞挂起（in_progress → blocked）：reason 必填（卡点不明不许挂），写 metadata。
+   * 阻塞不是终态：恢复走 resume；完成永远走验收（blocked 不可直达 completed）。
+   * 看门狗 3 次叫醒无推进会自动置阻塞（reason=系统超时判停）。
+   */
+  async block(id: string, userId: string, reason?: string) {
+    const text = (reason ?? '').trim();
+    if (!text) {
+      throw new BadRequestException({
+        code: TASK_ERRORS.TASK_BLOCK_REASON_REQUIRED,
+        message: '置阻塞必须写明原因（卡在哪里、缺什么、等谁）',
+      });
+    }
+    return this.transition(
+      id,
+      'block',
+      userId,
+      this.transitionOpts(id, 'block', text),
+    );
+  }
+
+  /** 阻塞恢复（blocked → in_progress）：卡点解除，回到执行，看门狗重新接管。 */
+  async resume(id: string, userId: string) {
+    return this.transition(
+      id,
+      'resume',
+      userId,
+      this.transitionOpts(id, 'resume'),
+    );
+  }
+
+  /**
+   * 系统自动置阻塞（看门狗停滞回调专用）：语义同 block，但 actor=system。
+   * 置阻塞成功后在团队群聊落群公告（transition 的 sysMessage 只进 task_group，
+   * 团队任务无 task_group 时用户不可见）。失败上抛由调用方记日志。
+   */
+  async systemBlock(id: string, reason: string) {
+    const text = (reason ?? '').trim() || '看门狗判定停滞';
+    const dto = await this.transition(id, 'block', 'system', {
+      ...this.transitionOpts(id, 'block', text),
+      actor: { type: ACTOR_TYPE.system, id: 'system' },
+    });
+    try {
+      const task = await this.prisma.task.findUnique({
+        where: { id },
+        select: { teamId: true, title: true },
+      });
+      const teamId = (task as any)?.teamId ?? null;
+      if (teamId && this.progression) {
+        await (
+          this.progression as unknown as {
+            postStallNoticeToTeamGroup?: (
+              teamId: string,
+              taskId: string,
+              taskTitle: string,
+              reason: string,
+            ) => Promise<void>;
+          }
+        )?.postStallNoticeToTeamGroup?.(
+          teamId,
+          id,
+          (task as any)?.title ?? id,
+          text,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `停滞群公告失败 taskId=${id}（状态已置阻塞，不影响）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return dto;
   }
 
   /** 归档（completed → archived，终态，13 篇 §4.5）：写 archivedAt，sessions 全部置 archived。 */

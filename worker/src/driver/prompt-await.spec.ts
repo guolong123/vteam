@@ -21,6 +21,7 @@ import {
   findFinish,
   CompletionTimeoutError,
   describeTimeoutReason,
+  extractServeError,
   MessageDeltaTracker,
 } from './prompt-await';
 import { V1Driver, ServeMessage, ServePart } from './v1-driver';
@@ -612,6 +613,115 @@ describe('awaitCompletion', () => {
     expect(err.message).not.toContain('level=INFO message=noise');
     expect(err.message).not.toContain('模型无任何输出');
   });
+
+  it('基线内陈旧错误行不触发快检（复用会话/文件回退旧行不秒杀新一轮）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return [asstMsg('a1', [{ id: 'p1', type: 'step-start' }])];
+      }
+      return [asstMsg('a1', [textPart('ok', 100), stepFinishPart()])];
+    });
+    // 上一轮失败的旧错误行（recentErrors 文件回退跨重启残留）——已在基线内
+    const staleLine =
+      'timestamp=2026-09-21T06:05:33.649Z level=ERROR run=0356f23f message="stream error" providerID=qwen-27b modelID=coldfusion-27b session.id=ses_1 small=false agent=vteam-tester mode=primary error.error="AI_APICallError: Headquarters mode"';
+    const onServeError = jest.fn(
+      (text: string) => /level=ERROR\b/.test(text) && /AI_APICallError/.test(text),
+    );
+
+    const result = await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      serveErrorReader: () => [staleLine],
+      onServeError,
+      baselineServeErrorLines: new Set([staleLine]),
+    });
+    expect(result.text).toBe('ok');
+    expect(abort).not.toHaveBeenCalled();
+    expect(onServeError).not.toHaveBeenCalled();
+  });
+
+  it('基线外新追加错误行仍触发快检（真错误不漏报，文案为完整提取文本）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
+    const staleLine = 'timestamp=t level=ERROR message="stream error" error.error="AI_APICallError: Old failure"';
+    const freshLine =
+      'timestamp=t2 level=ERROR run=x message="stream error" session.id=ses_1 error.error="AI_APICallError: Rate limit exceeded. Please try again later."';
+    let reads = 0;
+    const serveErrorReader = jest.fn(() => {
+      reads += 1;
+      // 首轮只有旧行（基线内），次轮新错误行追加
+      return reads === 1 ? [staleLine] : [staleLine, freshLine];
+    });
+    const onServeError = jest.fn(
+      (text: string) => /level=ERROR\b/.test(text) && /AI_APICallError/.test(text),
+    );
+
+    const promise = awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      serveErrorReader,
+      onServeError,
+      baselineServeErrorLines: new Set([staleLine]),
+    });
+    const err = (await promise.catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err.message).toContain('模型调用报错：Rate limit exceeded. Please try again later.');
+    expect(err.serveErrorText).toBe('Rate limit exceeded. Please try again later.');
+    expect(abort).toHaveBeenCalledWith('ses_1');
+  });
+
+  it('主循环持续追加新 parts（长 tool 循环，无 text/reasoning）→ 首字超时顺延，不误杀', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      // 每轮 20ms + poll 间隔：10 轮累计远超 100ms 超时——无顺延会在第 ~5 轮误杀
+      await new Promise((r) => setTimeout(r, 20));
+      if (calls < 10) {
+        const parts = Array.from({ length: calls }, (_, i) => ({
+          id: `pt_${i}`,
+          type: 'tool',
+          tool: 'vteam_group_post',
+        }));
+        return [asstMsg('a1', parts)];
+      }
+      return [asstMsg('a1', [textPart('done', 100), stepFinishPart()])];
+    });
+
+    const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 100, pollMs: 5 });
+    expect(result.text).toBe('done');
+    expect(abort).not.toHaveBeenCalled();
+    expect(calls).toBeGreaterThanOrEqual(10);
+  });
+
+  it('无任何新输出（静态空壳）→ 首字超时仍触发（顺延不掩护真 hang）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
+
+    const promise = awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 60, pollMs: 5 });
+    await expect(promise).rejects.toBeInstanceOf(CompletionTimeoutError);
+    expect(abort).toHaveBeenCalledWith('ses_1');
+  });
+});
+
+describe('extractServeError（转义引号）', () => {
+  it('error.error 值内转义引号完整捕获（线上 vLLM 400 行，不再截成 \\）', () => {
+    const line =
+      'timestamp=2026-09-21T06:05:33.649Z level=ERROR run=0356f23f message="stream error" providerID=qwen-27b modelID=coldfusion-27b session.id=ses_1 small=false agent=vteam-tester mode=primary error.error="AI_APICallError: \\"auto\\" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set"';
+    expect(extractServeError(line)).toBe(
+      '"auto" tool choice requires --enable-auto-tool-choice and --tool-call-parser to be set',
+    );
+  });
+
+  it('无转义的普通行行为不变', () => {
+    expect(
+      extractServeError(
+        'message="stream error" error.error="AI_APICallError: Rate limit exceeded. Please try again later."',
+      ),
+    ).toBe('Rate limit exceeded. Please try again later.');
+  });
 });
 
 describe('sendAndAwait', () => {
@@ -655,8 +765,7 @@ describe('sendAndAwait', () => {
     expect(result.parts).toEqual([textPart('本轮新回复', 200), stepFinishPart()]);
   });
 
-  it('buildResult parts 排除 user 消息（prompt 注入的 [群聊历史消息]/<doclib> 块不进入回复 parts）', async () => {
-    const { driver, getMessages, sendMessage } = mockDriver();
+  it('buildResult parts 排除 user 消息（prompt 注入的 [群聊历史消息]/<doclib> 块不进入回复 parts）', async () => {    const { driver, getMessages, sendMessage } = mockDriver();
     sendMessage.mockResolvedValue(undefined);
     getMessages
       .mockResolvedValueOnce([]) // 基线（空会话）
@@ -681,6 +790,54 @@ describe('sendAndAwait', () => {
     expect(partTexts).not.toContain('[群聊历史消息]');
     expect(partTexts).not.toContain('<doclib>');
     expect(result.parts).toContainEqual(textPart('正常回复', 100));
+  });
+
+  it('send 前快照 serve 错误基线：旧行不秒杀新一轮（线上陈旧秒杀根因）', async () => {
+    const { driver, getMessages, sendMessage, abort } = mockDriver();
+    sendMessage.mockResolvedValue(undefined);
+    getMessages
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
+    const staleLine =
+      'timestamp=2026-09-21T06:05:33.649Z level=ERROR run=0356f23f message="stream error" session.id=ses_1 error.error="AI_APICallError: Old failure"';
+    const serveErrorReader = jest.fn(() => [staleLine]);
+    const onServeError = jest.fn(
+      (text: string) => /level=ERROR\b/.test(text) && /AI_APICallError/.test(text),
+    );
+
+    const result = await sendAndAwait(
+      driver,
+      'ses_1',
+      { parts: [{ type: 'text', text: 'go' }] },
+      { firstTokenTimeoutMs: 1000, pollMs: 5, serveErrorReader, onServeError },
+    );
+    expect(result.text).toBe('ok');
+    expect(abort).not.toHaveBeenCalled();
+    expect(onServeError).not.toHaveBeenCalled();
+    expect(serveErrorReader).toHaveBeenCalledWith('ses_1');
+  });
+
+  it('serveErrorReader 快照失败不阻断执行（降级无基线）', async () => {
+    const { driver, getMessages, sendMessage } = mockDriver();
+    sendMessage.mockResolvedValue(undefined);
+    getMessages
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
+
+    const result = await sendAndAwait(
+      driver,
+      'ses_1',
+      { parts: [{ type: 'text', text: 'go' }] },
+      {
+        firstTokenTimeoutMs: 1000,
+        pollMs: 5,
+        serveErrorReader: () => {
+          throw new Error('log unreadable');
+        },
+        onServeError: () => false,
+      },
+    );
+    expect(result.text).toBe('ok');
   });
 });
 

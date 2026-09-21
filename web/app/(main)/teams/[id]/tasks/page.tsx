@@ -16,7 +16,7 @@ import { toRole } from "@/src/components/teams/TeamMembersPanel";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 import type { CSSProperties } from "react";
 
-type TaskApiStatus = "queued" | "pending" | "in_progress" | "pending_review" | "completed" | "archived";
+type TaskApiStatus = "queued" | "pending" | "in_progress" | "blocked" | "pending_review" | "completed" | "archived";
 
 interface TaskItem {
   id: string;
@@ -40,8 +40,9 @@ interface CountResponse {
   total: number;
 }
 
-const STATUS_BADGE_KEY: Partial<Record<TaskApiStatus, "进行中" | "待验收" | "已完成" | "已归档">> = {
+const STATUS_BADGE_KEY: Partial<Record<TaskApiStatus, "进行中" | "阻塞中" | "待验收" | "已完成" | "已归档">> = {
   in_progress: "进行中",
+  blocked: "阻塞中",
   pending_review: "待验收",
   completed: "已完成",
   archived: "已归档",
@@ -51,6 +52,7 @@ const STATUS_LABEL: Record<TaskApiStatus, string> = {
   queued: "排队中",
   pending: "待开始",
   in_progress: "进行中",
+  blocked: "阻塞中",
   pending_review: "待验收",
   completed: "已完成",
   archived: "已归档",
@@ -156,7 +158,7 @@ export default function TeamTasksPage() {
   });
 
   const items = data?.items ?? [];
-  const running = items.filter((t) => t.status === "in_progress" || t.status === "queued");
+  const running = items.filter((t) => t.status === "in_progress" || t.status === "queued" || t.status === "blocked");
   const done = items.filter((t) => t.status === "completed" || t.status === "archived");
 
   return (

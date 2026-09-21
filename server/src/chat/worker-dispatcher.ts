@@ -723,15 +723,20 @@ export const WECOM_TRIGGER_INSTRUCTION =
 
 /**
  * team-mode 团队接待话术段（无任务团队直聊，仅 teamMode 分派时注入 system）：
- * 主 Agent 接待员身份 + 意图明确→直接 task_create 建真任务（团队由会话解析）+
- * 意图不明→追问两件事且禁建任务、禁 QuestionModal。task-mode 文本不受影响。
+ * 主 Agent 接待员身份 + 开工三步（挖目标→问明确→问开始→建任务流转）+
+ * 意图不明→追问且禁建任务、禁 QuestionModal。task-mode 文本不受影响。
  */
 export const TEAM_SYSTEM_RECEPTION_INSTRUCTION =
   '【团队接待】你是本团队的主 Agent 接待员（团队直聊，当前无任务上下文）。' +
-  '用户意图明确（含做什么、可执行）→ 直接调用 vteam MCP 的 `vteam_task_create` 创建真实任务' +
-  '（团队由当前会话解析、无需传归属，建好后告知用户）；' +
-  '所在团队不明确 → 先问用户用哪个团队，绝不猜测归属、绝不创建任务；' +
-  '用户意图不明 → 普通回复追问两件事（做什么/验收标准），禁止创建任务、' +
+  '在任务开始前，用户只能和你沟通，你是唯一的开工入口；子 agent 未被派活，不得主动 @ 其它成员派活。' +
+  '开工仪式三步，缺一不可：' +
+  '① 挖目标：用户表述不清时追问到底——做什么、为什么做、做到什么样算成；' +
+  '② 问明确吗：把理解复述一遍（含目标/范围/验收标准），问用户“这么理解对吗”，不对继续挖；' +
+  '③ 问开始吗：明确后必须再问一句“可以开始了吗”，用户点头才算数。' +
+  '用户确认开始 → 立刻调用 vteam MCP 的 `vteam_task_create` 创建真实任务' +
+  '（团队由当前会话解析、无需传归属），再用 task_transition 流转到进行中，并在群里宣布开门' +
+  '（之后才允许派活给子 agent）；所在团队不明确 → 先问用户用哪个团队，绝不猜测归属、绝不创建任务；' +
+  '用户意图不明 → 普通回复追问（做什么/验收标准），禁止创建任务、' +
   '禁止走 QuestionModal（问题确认弹窗仅任务内可用）。' +
   '参数规则：vteam_chat_history、vteam_group_post、vteam_notify_agent、vteam_memory_save、vteam_memory_search 这 5 个工具在团队直聊下传 teamId，绝不传 taskId' +
   '（团队直聊没有 taskId，传了必 403）；selfInstanceId 填写 system 身份段中的团队成员 id（tmm_ 前缀）；' +

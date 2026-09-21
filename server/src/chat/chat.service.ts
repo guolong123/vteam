@@ -1135,6 +1135,85 @@ export class ChatService {
       }
     }
 
+    // 主 agent 门禁：团队当前任务非进行中 → 用户消息仅主成员目标放行，其余移除并系统提示。
+    // 无任务 / pending / blocked / 待验收等均关闭 fan-out：开工前只能和主 agent 沟通，
+    // 逼所有活走「建任务→流转到进行中→派发」正路（门禁需求）。DM 同理（对端非主即拦）。
+    // 被拦目标移出 dispatch（不改其余 triggers），消息本身仍保存；mainMemberId 缺失则
+    // fail-open（避免未配置主 agent 的团队被砖）并记 warn。
+    if (
+      senderType === SENDER_TYPE.user &&
+      channel.teamId &&
+      (isTeamGroup || isTeamPrivate)
+    ) {
+      try {
+        const gate = await this.checkMainAgentGate(channel.teamId);
+        if (gate && !gate.open && gate.mainMemberId) {
+          const kept: typeof triggers = [];
+          const droppedNames: string[] = [];
+          const members = (await (this.prisma as any).teamMember.findMany({
+            where: { teamId: channel.teamId },
+            select: { id: true, alias: true },
+          })) as Array<{ id: string; alias: string | null }>;
+          const nameOf = (instanceId: string | null | undefined) =>
+            members.find((m) => m.id === instanceId)?.alias ?? instanceId ?? '?';
+          for (const t of triggers) {
+            if (
+              (t as any).status === 'dispatched' &&
+              (t as any).instanceId !== gate.mainMemberId
+            ) {
+              droppedNames.push(nameOf((t as any).instanceId));
+              continue;
+            }
+            kept.push(t);
+          }
+          if (droppedNames.length > 0) {
+            triggers.length = 0;
+            triggers.push(...kept);
+            const mainName = nameOf(gate.mainMemberId);
+            const hintText =
+              `任务尚未开始，当前只能与主 agent（${mainName}）沟通。` +
+              `已跳过对 ${[...new Set(droppedNames)].join('、')} 的派发——` +
+              `请先让主 agent 创建任务并流转到进行中，再派活给子 agent。`;
+            try {
+              const hint = await this.prisma.message.create({
+                data: {
+                  id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+                  channelId,
+                  taskId: effectiveTaskId ?? null,
+                  senderType: SENDER_TYPE.system,
+                  senderId: null,
+                  content: { text: hintText, parts: [] } as Prisma.InputJsonValue,
+                  mentions: [] as Prisma.InputJsonValue,
+                  status: MESSAGE_STATUS.sent,
+                } as any,
+              });
+              await this.realtime.broadcast(
+                EVENT_TYPES.CHAT_MESSAGE_NEW,
+                { message: this.toMessageDto(hint as any) },
+                { type: 'channel', id: channelId },
+              );
+              await this.realtime.broadcast(
+                EVENT_TYPES.CHAT_MESSAGE_NEW,
+                { message: this.toMessageDto(hint as any) },
+                { type: 'team', id: channel.teamId } as any,
+              );
+            } catch {}
+            this.logger.log(
+              `team 主 agent 门禁拦截 team=${channel.teamId} 跳过=${droppedNames.join(',')}`,
+            );
+          }
+        } else if (gate && !gate.open && !gate.mainMemberId) {
+          this.logger.warn(
+            `team 主 agent 门禁：团队 ${channel.teamId} 未配置主 agent，fail-open 放行`,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `team 主 agent 门禁检查失败 team=${channel.teamId}（fail-open 放行）: ${(err as Error)?.message ?? err}`,
+        );
+      }
+    }
+
     // FIFO 排队拦截：team_group 频道下，queued 或非队首任务不应触发模型 dispatch
     // 最小修复：消息仍落库可见，但不触发 dispatcher；前端依 triggers 空提示“排队中”
     let shouldDispatch = true;
@@ -1719,10 +1798,39 @@ export class ChatService {
     return { channel: row, task: legacyTask };
   }
 
+  /**
+   * 主 agent 门禁判定：团队当前任务为进行中 → 开门（open=true），fan-out 随便派；
+   * 否则关门（open=false），仅 mainMemberId 目标可派。mainMemberId 缺失 → 返回
+   * open=false + mainMemberId=null（调用方 fail-open）。异常 → null（调用方 fail-open）。
+   */
+  private async checkMainAgentGate(
+    teamId: string,
+  ): Promise<{ open: boolean; mainMemberId: string | null } | null> {
+    try {
+      const team = await (this.prisma as any).team.findUnique({
+        where: { id: teamId },
+        select: { currentTaskId: true, mainAgentMemberId: true },
+      });
+      if (!team) return null;
+      const mainMemberId = (team as any).mainAgentMemberId ?? null;
+      const currentTaskId = (team as any).currentTaskId ?? null;
+      if (!currentTaskId) return { open: false, mainMemberId };
+      const taskRow = await (this.prisma as any).task.findUnique({
+        where: { id: currentTaskId },
+        select: { status: true },
+      });
+      return {
+        open: (taskRow as any)?.status === TASK_STATUS.in_progress,
+        mainMemberId,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   private async resolveMentions(
     key: string | { teamId?: string | null; taskId?: string | null },
-    mentions: MentionInput[],
-  ): Promise<{ mentionsStored: MentionInput[]; triggers: TriggerResult[] }> {
+    mentions: MentionInput[],  ): Promise<{ mentionsStored: MentionInput[]; triggers: TriggerResult[] }> {
     let teamId: string | null = null;
     let taskId: string | null = null;
     if (typeof key === 'string') {

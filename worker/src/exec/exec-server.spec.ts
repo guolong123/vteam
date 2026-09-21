@@ -456,13 +456,17 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     const serveLines = [
       'message="stream error" time="2026-01-01T00:00:00Z" error.error="AI_APICallError: Rate limit exceeded. Please try again later."',
     ];
+    // T17-stale：Rate limit 行在本轮运行中新追加（首 call=send 前基线快照时尚无，
+    // 之后轮询才出现）——send 前已存在的旧行会被基线隔离，不触发快检
+    let reads = 0;
+    const serveErrorReader = jest.fn(() => (reads++ === 0 ? [] : serveLines));
     const exec = new ExecServer({
       port: 0,
       driver,
       sender,
       firstTokenTimeoutMs: 1000,
       pollMs: 5,
-      serveErrorReader: () => serveLines,
+      serveErrorReader,
       logger: SILENT_LOGGER,
     });
     const bound = await exec.start();
@@ -493,8 +497,39 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
-  it('无模型错误可提取时：原始 serve 日志尾部进 agent.status error + logger.error（失败必带证据，非笼统文案）', async () => {
+  it('serve 日志仅子域 share subscriber 失败行 → 不提前 abort 主会话（主循环自恢复优先，线上 08:18 双杀根因）', async () => {
     const { driver, getMessages, abort } = mockDriver();
+    // 永无首字（仅 step-start），60ms 首字超时远大于单轮耗时——若快检误触发会首轮即失败；
+    // 正确行为：多轮轮询后走超时路径（abort 照常，但非秒杀，错误非子域文本）
+    getMessages.mockResolvedValue(STEP_START_ONLY);
+    const { sender, sent } = createSender();
+    const subscriberLine =
+      'timestamp=2026-09-21T08:18:15.258Z level=ERROR run=1879706f message="share subscriber failed" type=message.updated cause="Cause([Fail(ProviderModelNotFoundError: Model not found: opencode/gpt-5-nano.)])"';
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 60,
+      pollMs: 5,
+      serveErrorReader: () => [subscriberLine],
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 4);
+      // 多轮轮询（首轮未秒杀）后超时失败
+      expect(getMessages.mock.calls.length).toBeGreaterThan(2);
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      expect(String(terminal[2].payload.error)).toContain('等待首字超时');
+      expect(String(terminal[2].payload.error)).not.toContain('模型调用报错：Model not found');
+      expect(abort).toHaveBeenCalledWith('ses_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('无模型错误可提取时：原始 serve 日志尾部进 agent.status error + logger.error（失败必带证据，非笼统文案）', async () => {    const { driver, getMessages, abort } = mockDriver();
     getMessages.mockResolvedValue(STEP_START_ONLY);
     const { sender, sent } = createSender();
     const logged: string[] = [];

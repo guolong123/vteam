@@ -60,6 +60,15 @@ export interface AwaitCompletionOptions {
   serveLogReader?: (sessionID: string) => string[];
   /** 附进失败原因的原始日志行数上限；默认 20。 */
   serveLogTailLines?: number;
+  /**
+   * T17-stale 陈旧隔离：本轮运行开始前已存在的 serve 错误行基线（sendAndAwait 在
+   * sendMessage 前经 serveErrorReader 快照，语义对齐 P1 baselineIds）。
+   * 快检只触发基线之外**新追加**的行——复用会话/日志文件回退（recentErrors 读文件尾部，
+   * 跨 serve 重启不清）场景下，上一轮失败的旧错误行不再秒杀新一轮。线上实测根因：
+   * vLLM 400 错误行在文件残留 30 分钟，每轮首 poll 即 abort（`模型调用报错：\` 死循环）。
+   * 直接调 awaitCompletion（无基线）→ 首轮读到的行即可触发（保持原快检语义，存量单测不变）。
+   */
+  baselineServeErrorLines?: Set<string> | string[];
 }
 
 /** 会话完成聚合结果。 */
@@ -159,13 +168,19 @@ function extractMessageError(messages: ServeMessage[]): string | null {
  *   3. `message="..."`（如 "stream error"）
  *   4. 整行 trim（结构化字段全缺时的兜底）
  * 再去掉错误类型前缀（`AI_APICallError: ` / `APIError: ` 等），对齐前端展示习惯。
+ *
+ * ⚠️ 值内转义引号：serve 日志为类 logfmt，值内 `"` 转义为 `\"`
+ * （如 `error.error="AI_APICallError: \"auto\" tool choice requires ..."`）。
+ * 裸 `[^"]*` 会在第一个转义引号处截断（线上实测只剩 `\`），故用允许 `\\.` 转义对
+ * 的模式完整捕获后再反转义。
  */
-function extractServeError(line: string): string {
-  const errorValue = /error\.error="([^"]*)"/.exec(line)?.[1];
-  const causeValue = /cause="([^"]*)"/.exec(line)?.[1];
-  const messageValue = /message="([^"]*)"/.exec(line)?.[1];
+export function extractServeError(line: string): string {
+  const errorValue = /error\.error="((?:[^"\\]|\\.)*)"/.exec(line)?.[1];
+  const causeValue = /cause="((?:[^"\\]|\\.)*)"/.exec(line)?.[1];
+  const messageValue = /message="((?:[^"\\]|\\.)*)"/.exec(line)?.[1];
   const raw = (errorValue ?? causeValue ?? messageValue ?? line).trim();
-  const unwrapped = raw
+  const unescaped = raw.replace(/\\"/g, '"');
+  const unwrapped = unescaped
     .replace(/^Cause\(\[Fail\(/, '')
     .replace(/\)\]\)?$/, '')
     .trim();
@@ -364,6 +379,10 @@ function hasFirstToken(messages: ServeMessage[]): boolean {
  * abort + 抛 CompletionTimeoutError（带已收集文本）。首字（text 或 reasoning）出现后
  * **无完成超时**——持续轮询到 step-finish，长期任务（模型思考/长输出）不被误杀，判死由
  * 上层 server 空闲超时负责。
+ *
+ * 活性顺延：即使 text/reasoning 尚未出现，只要 serve 侧持续追加新 parts（主循环在
+ * 推进，如长 tool-calls 循环），首字 deadline 顺延——只有「无首字**且**无任何新输出」
+ * 满时限才 abort。纯 tool 循环被误杀是线上主 agent 中断的另一来源（与 T17 子域秒杀并列）。
  */
 export async function awaitCompletion(
   driver: V1Driver,
@@ -378,8 +397,12 @@ export async function awaitCompletion(
   let serveErrorText: string | null = null;
   /** 兜底证据：最近一次轮询读到的原始 serve 日志尾部（无模型错误可提取时附进原因） */
   let serveLogTail: string[] = [];
-  /** T17 去重：上次触发过 onServeError 的日志行（同一行不重复触发/抛错） */
-  let triggeredServeErrorLine: string | null = null;
+  /** T17 去重 + 陈旧隔离：基线（本轮开始前已存在，永不触发）与本轮已检查过的行。
+   * 同一行永不重复判定——新追加行才走 onServeError。 */
+  const seenServeErrorLines = new Set<string>(options.baselineServeErrorLines ?? []);
+  /** 主循环活性：已收集 parts 总数；增长即 serve 侧在追加输出（tool 调用/步骤推进），首字 deadline 顺延。 */
+  let collectedPartCount = 0;
+  let lastActivityAt = startedAt;
   const hasServeErrorDetection = serveErrorReader !== undefined && onServeError !== undefined;
 
   let finish: ServePart | undefined;
@@ -404,14 +427,15 @@ export async function awaitCompletion(
     // message.info.error，extractMessageError 检测不到；经 serveErrorReader 读最近错误日志，
     // onServeError 判定命中（匹配模型 API 错误关键词）→ 记录错误文本 → 提前 break（快速
     // abort + 抛 CompletionTimeoutError，文案用 serve 错误文本而非「模型无任何输出」）。
-    // 去重：同一错误行只触发一次（避免每轮重复 break/抛错）。
+    // 陈旧隔离：基线内（本轮开始前已存在）的行直接跳过——只有运行中新追加的行能触发，
+    // 否则上一轮的错误行会秒杀复用会话上的每一轮新派发。
     if (hasServeErrorDetection) {
       for (const line of serveErrorReader!(sessionID)) {
-        if (line === triggeredServeErrorLine) {
+        if (seenServeErrorLines.has(line)) {
           continue;
         }
+        seenServeErrorLines.add(line);
         if (onServeError!(line)) {
-          triggeredServeErrorLine = line;
           serveErrorText = extractServeError(line);
           break;
         }
@@ -430,9 +454,16 @@ export async function awaitCompletion(
     if (firstTokenAt === null && hasFirstToken(collected)) {
       firstTokenAt = Date.now();
     }
+    // 活性记录：本轮新 parts 计数增长 → 主循环在推进（tool 调用/step 追加），刷新活性。
+    // mergeMessages 按 id 去重替换，计数增长即真实新增输出；纯重 poll 不增长。
+    const partCount = collected.reduce((n, m) => n + (m.parts ?? []).length, 0);
+    if (partCount > collectedPartCount) {
+      collectedPartCount = partCount;
+      lastActivityAt = Date.now();
+    }
     // 首字（text 或 reasoning）出现后无完成超时（继续轮询，判死由上层负责）；
-    // 仅「时限内 text/reasoning 均未出现」才 abort；firstTokenTimeoutMs<=0 视为禁用
-    if (firstTokenTimeoutMs > 0 && firstTokenAt === null && Date.now() - startedAt >= firstTokenTimeoutMs) {
+    // 仅「时限内 text/reasoning 均未出现**且**无任何新输出」才 abort；firstTokenTimeoutMs<=0 视为禁用
+    if (firstTokenTimeoutMs > 0 && firstTokenAt === null && Date.now() - Math.max(startedAt, lastActivityAt) >= firstTokenTimeoutMs) {
       break;
     }
     await sleep(pollMs);
@@ -471,8 +502,19 @@ export async function sendAndAwait(
   } catch {
     baselineIds = undefined;
   }
+  // T17-stale：sendMessage 前快照 serve 错误行基线——快检只触发本轮新追加的行，
+  // 上一轮残留（日志文件回退跨重启不清）的旧错误行不再秒杀新一轮。快照失败 → 缺省
+  // （无基线，保持原快检语义不阻断执行）。
+  let baselineServeErrorLines: Set<string> | undefined;
+  if (options.serveErrorReader) {
+    try {
+      baselineServeErrorLines = new Set(options.serveErrorReader(sessionID));
+    } catch {
+      baselineServeErrorLines = undefined;
+    }
+  }
   await driver.sendMessage(sessionID, input);
-  return awaitCompletion(driver, sessionID, { ...options, baselineIds });
+  return awaitCompletion(driver, sessionID, { ...options, baselineIds, baselineServeErrorLines });
 }
 
 /**

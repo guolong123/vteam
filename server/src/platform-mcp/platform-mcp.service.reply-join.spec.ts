@@ -211,8 +211,11 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     loggerWarnSpy.mockRestore();
   });
 
-  it('answer+process: join 抑制（不派发执行 turn），仅持久化，不触发 drain，不唤醒主 Agent', async () => {
+  it('answer+process：join 抑制（不派发执行 turn）+ 同样 ack + drain 检查；未收敛不唤醒', async () => {
     jest.useFakeTimers();
+    jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
+    // 还有其它子未回：drain 检查后 pending>0 → 不唤醒
+    jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(2);
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
       type: 'answer',
@@ -222,6 +225,12 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     expect(result.reason).toBe('join-pending');
     expect(result.messageId).toBe('m_0000000200');
     expect(result.hint).toContain('drain');
+    // 进度汇报同样清账（旧逻辑仅 end 清账导致无 stage 汇报永不清账）
+    expect(receipts.ackPendingFor).toHaveBeenCalledWith({
+      fromInstanceId: mainInstanceId,
+      toInstanceId: sub1,
+      teamId,
+    });
     // 抑制分支：本次调用自身不在主 Agent 上开执行 turn（kind 非 wake 的派发为零）
     const executionCalls =
       workerDispatcher.dispatchAgentMention.mock.calls.filter(
@@ -233,7 +242,6 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
       (c: [{ kind: string }]) => c[0].kind === 'wake',
     );
     expect(wakeCalls.length).toBe(0);
-    expect(receipts.ackPendingFor).not.toHaveBeenCalled();
   });
 
   it('answer+end: join 抑制（不派发执行 turn）+ ackPendingFor + drain 检查，主 Agent 被唤醒一次', async () => {
@@ -493,8 +501,59 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     expect(wakeSpy).not.toHaveBeenCalled();
   });
 
-  it('fail-open: 团队无主成员 → join 抑制不生效，按普通派发并告警', async () => {
-    prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
+  it('主 agent 门禁：团队无进行中任务时主→子定向派活被拦（reason=no-active-task，未发布）', async () => {
+    // 团队无当前任务 → 关门（team.findUnique 缺 currentTaskId 即关）
+    prisma.team.findUnique.mockResolvedValue({
+      mainAgentMemberId: mainInstanceId,
+    });
+    const result = await service.notifyAgent(ctx, {
+      teamId,
+      selfInstanceId: mainInstanceId,
+      targetInstanceId: sub1,
+      content: '开工干活',
+      type: 'answer',
+    });
+
+    expect(result.triggered).toBe(false);
+    expect(result.reason).toBe('no-active-task');
+    expect(result.messageId).toBeNull();
+    expect(result.hint).toContain('vteam_task_create');
+    expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+  });
+
+  it('主 agent 门禁：子→主向上汇报永远放行（开门前也可回话）', async () => {
+    prisma.team.findUnique.mockResolvedValue({
+      mainAgentMemberId: mainInstanceId,
+    });
+    const result = await service.notifyAgent(ctx, {
+      teamId,
+      selfInstanceId: sub1,
+      targetInstanceId: mainInstanceId,
+      content: '收到，明白',
+      type: 'answer',
+    });
+
+    expect(result.reason).not.toBe('no-active-task');
+  });
+
+  it('主 agent 门禁：当前任务进行中 → 开门，主→子照常派发', async () => {
+    prisma.team.findUnique.mockResolvedValue({
+      mainAgentMemberId: mainInstanceId,
+      currentTaskId: 't_9',
+    });
+    prisma.task.findUnique.mockResolvedValue({ status: 'in_progress' });
+    const result = await service.notifyAgent(ctx, {
+      teamId,
+      selfInstanceId: mainInstanceId,
+      targetInstanceId: sub1,
+      content: '开工干活',
+      type: 'answer',
+    });
+
+    expect(result.reason).not.toBe('no-active-task');
+  });
+
+  it('fail-open: 团队无主成员 → join 抑制不生效，按普通派发并告警', async () => {    prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
     const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
 
     const result = await service.notifyAgent(ctx, {

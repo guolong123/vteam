@@ -131,6 +131,10 @@ const NOTIFY_DEDUP_SCAN_LIMIT = 20;
 const NOTIFY_NOT_PUBLISHED_HINT =
   '本次调用未在群聊发布任何消息：triggered:false 不是投递失败，请勿重发；请按 reason 处理（throttled 稍后按需重派，plan-gated 待计划放行，review-triplet 补齐三元组，duplicate/dedup 说明已有在途或已发送）。';
 
+/** 主 agent 门禁拦截提示：定向派活关闭时，逼主 agent 先建任务并流转到进行中。 */
+const NOTIFY_NO_ACTIVE_TASK_HINT =
+  '团队当前没有进行中的任务，定向派活已关闭：本次调用未发布。请先让主 agent 调用 vteam_task_create 创建真实任务并流转到进行中（task_transition），再派活给子 agent；子 agent 向上汇报（目标为主 agent）不受影响。';
+
 /**
  * join-pending（reply-join 抑制分支）的人读提示：与拦截不同，本次调用
  * 已落库已广播、回执照记，只是不在主 Agent 上开执行 turn。
@@ -264,6 +268,8 @@ export interface ReadFileResult {
  * - throttled：@ storm 节流拦截，未发布。
  * - plan-gated：计划门禁/哈希门禁拦截，未发布。
  * - review-triplet：评审三元组缺失拦截，未发布。
+ * - no-active-task：主 agent 门禁拦截（团队当前任务非进行中，定向派活关闭），未发布。
+ *   开门前只允许与主 agent 沟通；主 agent 须先建任务并流转到进行中。
  * - join-pending：子 Agent 回执（answer、目标为主 Agent）已落库记账，
  *   但抑制了本次调用在主 Agent 上的执行 turn（主 Agent 只由 fan-out
  *   drain 唤醒或 question/help 打断）。已发布，与其他拦截不同。
@@ -279,6 +285,7 @@ export type DispatchReason =
   | 'throttled'
   | 'plan-gated'
   | 'review-triplet'
+  | 'no-active-task'
   | 'join-pending';
 
 /**
@@ -1402,15 +1409,14 @@ export class PlatformMcpService implements OnModuleInit {
       issueId?: string;
       /**
        * 消息类型（reply-join 矩阵）：answer=执行答复/进度；question=子 Agent 反向提问；
-       * help=子 Agent 求助。缺省 answer。answer+stage=process 仅持久化不唤醒；
-       * answer+stage=end 清回执并检查 fan-out drain；question/help 立即唤醒
-       * 主 Agent（不计入 fan-out 计数）。
+       * help=子 Agent 求助。缺省 answer。answer（不限 stage）即清账 drain 检查；
+       * question/help 立即唤醒主 Agent（不计入 fan-out 计数）。
        */
       type?: string;
       /**
-       * 执行阶段（reply-join 矩阵）：process=执行进行中（仅持久化，不唤醒，计数不变）；
-       * end=已完工（answer 类时 ACK 回执并触发 fan-out drain 检查）。
-       * 缺省 process。
+       * 执行阶段（reply-join 矩阵）：process=执行进行中；end=已完工。
+       * 缺省 process。stage 只影响文案/归因强度，不再决定是否清账——任何 answer
+       * 都证明子 Agent 存活干活，计入收敛（旧逻辑仅 end 清账导致 drain 永不到）。
        */
       stage?: string;
       /**
@@ -1558,9 +1564,39 @@ export class PlatformMcpService implements OnModuleInit {
         issueBound: !!args.issueId,
       };
     }
+    // 主 agent 门禁：团队当前任务非进行中 → 定向派活关闭（目标非主即拦）。
+    // 开门前只允许与主 agent 沟通；子 agent 向上汇报（target=主）永远放行。
+    // 被拦返回 triggered:false + reason=no-active-task，主 agent 凭 hint 先建任务
+    // （vteam_task_create）并流转到进行中。内部 wake/nudge 不走本工具，不受影响。
+    // mainMemberId 缺失/判定异常 → fail-open 放行（避免未配置团队被砖）。
+    if (isTeam && exec.teamId) {
+      try {
+        const gateMain = await this.mainMemberOfTeam(exec.teamId);
+        if (gateMain && args.targetInstanceId !== gateMain) {
+          const gateOpen = await this.isTeamFanOutOpen(exec.teamId);
+          if (!gateOpen) {
+            this.logger.warn(
+              `[mcp] notify_agent 主 agent 门禁拦截 team=${exec.teamId} from=${args.selfInstanceId} to=${args.targetInstanceId}（未发布）`,
+            );
+            return {
+              messageId: null,
+              channelId: channel.id,
+              targetInstanceId: args.targetInstanceId,
+              triggered: false,
+              reason: 'no-active-task',
+              hint: NOTIFY_NO_ACTIVE_TASK_HINT,
+              issueBound: !!args.issueId,
+            };
+          }
+        }
+      } catch (err) {
+        this.logger.warn(
+          `[mcp] notify_agent 主 agent 门禁检查失败 team=${exec.teamId}（fail-open 放行）: ${(err as Error)?.message ?? err}`,
+        );
+      }
+    }
     if (args.issueId) {
-      const issueGate = await this.checkIssueDispatchAllowed(
-        args.issueId,
+      const issueGate = await this.checkIssueDispatchAllowed(        args.issueId,
         args.targetInstanceId,
       );
       if (!issueGate.allowed && !forceReason) {
@@ -1826,8 +1862,7 @@ export class PlatformMcpService implements OnModuleInit {
    *
    * | type | stage | behavior |
    * |---|---|---|
-   * | answer | process | 仅持久化；不唤醒；计数不变 |
-   * | answer | end | 持久化 + ACK 该子 Agent 待回执 → drain 检查 |
+   * | answer | any | 持久化 + ACK 该子 Agent 待回执 → drain 检查（不直接唤醒） |
    * | question | any | 立即唤醒主 Agent（interrupt）；不计入 fan-out |
    * | help | any | 立即唤醒主 Agent（interrupt）；不计入 fan-out |
    *
@@ -1862,11 +1897,11 @@ export class PlatformMcpService implements OnModuleInit {
       });
       return;
     }
-    // answer + end → ACK 该子 Agent 的待回执 + drain 检查
-    if (
-      input.notifyType === NOTIFY_TYPE.answer &&
-      input.notifyStage === NOTIFY_STAGE.end
-    ) {
+    // answer（不限 stage）→ ACK 该子 Agent 的待回执 + drain 检查。
+    // stage 只表强度（process=进行中/end=已完工），不决定清账：任何 answer 都证明
+    // 子 Agent 存活干活，计入收敛；唤醒仍只在 pending==0 全收敛时（fan-out 语义不变）。
+    // 旧逻辑仅 end 清账 → 无 stage 的完工汇报永不清账，drain 永不到，主 Agent 永久停放。
+    if (input.notifyType === NOTIFY_TYPE.answer) {
       await this.ackAndDrain({
         teamId: input.notifyTeamId,
         mainMemberId: input.mainMemberId,
@@ -1874,7 +1909,7 @@ export class PlatformMcpService implements OnModuleInit {
         text: input.text,
       });
     }
-    // answer + process → 仅持久化（已在调用方完成），无额外动作
+    // question/help 已在上方立即唤醒返回；answer 的持久化由调用方完成，此处无额外动作
   }
 
   /**
@@ -2090,8 +2125,27 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /** 团队主成员 id（team.mainAgentMemberId；无归属/未设置 → null）。 */
-  private async mainMemberOfTeam(teamId: string): Promise<string | null> {
+  /**
+   * 团队 fan-out 开门判定：当前任务为进行中 → true；无当前任务/其它状态 → false。
+   * 排队中任务不算开门（串行不被打破）。DB 异常直接上抛，调用方 catch 后 fail-open。
+   */
+  private async isTeamFanOutOpen(teamId: string): Promise<boolean> {
     const team = await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { currentTaskId: true },
+    });
+    const currentTaskId =
+      (team as { currentTaskId?: string | null } | null)?.currentTaskId ??
+      null;
+    if (!currentTaskId) return false;
+    const taskRow = await this.prisma.task.findUnique({
+      where: { id: currentTaskId },
+      select: { status: true },
+    });
+    return (taskRow as { status?: string } | null)?.status === 'in_progress';
+  }
+
+  private async mainMemberOfTeam(teamId: string): Promise<string | null> {    const team = await this.prisma.team.findUnique({
       where: { id: teamId },
       select: { mainAgentMemberId: true },
     });

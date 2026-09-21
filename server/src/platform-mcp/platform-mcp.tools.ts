@@ -313,14 +313,14 @@ const taskTransitionSchema = z.object({
     .string()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   action: z
-    .enum(['start', 'mark-pending-review', 'reject'])
+    .enum(['start', 'mark-pending-review', 'reject', 'block', 'resume'])
     .describe(
-      '状态流转动作：start 开始 / mark-pending-review 提交验收 / reject 驳回。accept 验收通过与 archive 归档仅人类用户可在管理界面操作，Agent 不可调用（调用将被拒绝）；任务就绪后请向用户报告等待人工验收',
+      '状态流转动作：start 开始 / mark-pending-review 提交验收 / reject 驳回 / block 置阻塞（in_progress→blocked，reason 必填写明卡点）/ resume 恢复执行（blocked→in_progress）。accept 验收通过与 archive 归档仅人类用户可在管理界面操作，Agent 不可调用（调用将被拒绝）；任务就绪后请向用户报告等待人工验收',
     ),
   reason: z
     .string()
     .optional()
-    .describe('驳回原因（action=reject 时写入任务事件 metadata）'),
+    .describe('原因（action=reject 时写入任务事件 metadata；action=block 时必填：卡在哪里、缺什么、等谁）'),
 });
 
 type TaskTransitionArgs = z.infer<typeof taskTransitionSchema>;
@@ -919,7 +919,7 @@ export function buildPlatformMcpTools(
     {
       name: 'task_transition',
       description:
-        '流转任务状态：start(pending→in_progress)/mark-pending-review(in_progress→pending_review)/reject(pending_review→in_progress，可附 reason)。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。accept 验收通过与 archive 归档仅人类用户可在管理界面操作，Agent 调用将被拒绝（任务就绪后请报告等待人工验收）。返回更新后的任务 DTO；非法迁移返回错误。',
+        '流转任务状态：start(pending→in_progress)/mark-pending-review(in_progress→pending_review)/reject(pending_review→in_progress，可附 reason)/block(in_progress→blocked，reason 必填：卡在哪里、缺什么、等谁)/resume(blocked→in_progress)。调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。accept 验收通过与 archive 归档仅人类用户可在管理界面操作，Agent 调用将被拒绝（任务就绪后请报告等待人工验收）。返回更新后的任务 DTO；非法迁移返回错误。',
       inputSchema: taskTransitionSchema,
       handler: (ctx, args) =>
         service.taskTransition(ctx, args as TaskTransitionArgs),

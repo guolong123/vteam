@@ -66,7 +66,7 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
     };
     chatChannel: { findFirst: jest.Mock };
   };
-  let timers: { registerHandler: jest.Mock };
+  let timers: { registerHandler: jest.Mock; schedule: jest.Mock };
   let receipts: MessageReceiptsService;
   let realtime: { broadcast: jest.Mock };
   let workerDispatcher: { dispatchAgentMention: jest.Mock };
@@ -105,6 +105,7 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
           registeredFn = fn;
         },
       ),
+      schedule: jest.fn(async () => ({ id: 'tmr_x' })),
     };
     realtime = { broadcast: jest.fn() };
     workerDispatcher = {
@@ -203,6 +204,17 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
         data: expect.objectContaining({ nudgeCount: { increment: 1 } }),
       }),
     );
+    // 到期补排：同 receipt 再排一次（:expiry 后缀键），到期 fire 走过期分支清账
+    expect(timers.schedule).toHaveBeenCalledTimes(1);
+    const [kind, dueAt, followPayload, dedupKey] = (
+      timers.schedule as jest.Mock
+    ).mock.calls[0] as [string, Date, Record<string, unknown>, string];
+    expect(kind).toBe(RECEIPT_NUDGE_KIND);
+    expect(dueAt.getTime()).toBeGreaterThan(
+      Date.now() + (RECEIPT_TIMEOUT_DEFAULT_MIN - 1) * 60 * 1000,
+    );
+    expect(followPayload).toMatchObject({ receiptId: 'mr_1', teamId: 'tm_1' });
+    expect(dedupKey).toBe('receipt_nudge:tm_1:mr_1:expiry');
   });
 
   it('pending + 已自动催办过 → expired + 升级通知 + 不分派 + 不排新 timer', async () => {
@@ -222,12 +234,12 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
         Promise.resolve({ id: 'mr_1', ...((data as object) ?? {}) }),
     );
     prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
-    const scheduleSpy = jest.fn();
 
     await handler.handle({ id: 'tmr_1', kind: RECEIPT_NUDGE_KIND, payload });
 
     expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
-    expect(scheduleSpy).not.toHaveBeenCalled();
+    // 过期分支不再补排（行已终态，无需到期 trigger）
+    expect(timers.schedule).not.toHaveBeenCalled();
     expect(prisma.messageReceipt.update).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'mr_1' },

@@ -28,7 +28,7 @@ import type { QuestionModalData } from "@/src/components/chat";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { TaskInfoEditModal } from "@/src/components/tasks/TaskInfoEditModal";
-import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem } from "@/src/components/teams/TeamMembersPanel";
+import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem, type AddInstancePayload } from "@/src/components/teams/TeamMembersPanel";
 import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
 import { TaskRightTabs, type PlanStepItem } from "@/src/components/teams/TeamRightPanel";
 import { useResizableWidth } from "@/src/hooks/use-resizable";
@@ -101,6 +101,7 @@ export default function TeamSessionPage() {
   // loading key 最后更新时间（与 loadingByAgent 同 key；staleness 兜底 + 正常删除都同步维护）。
   const loadingSeenRef = useRef<Record<string, number>>({});
   const [errorByAgent, setErrorByAgent] = useState<Record<string, string>>({});
+  const [errorTypeByAgent, setErrorTypeByAgent] = useState<Record<string, string>>({});
   const [sessionByAgent, setSessionByAgent] = useState<Record<string, string>>({});
   // DM Tab 未读红点（内存态，页面生命周期内有效；不持久化、不落 localStorage）：
   // key 为 Tab 键（instanceId ?? agentId），value 恒 true；切到该 Tab 时清除。
@@ -527,13 +528,20 @@ export default function TeamSessionPage() {
     const name = stateName(agentId);
     return phase === "operating" ? `${name} 操作中` : `${name} 思考中`;
   }, [loadingByAgent, stateName]);
-  const errorLabel = useMemo<{ kind: "retry" | "quota"; detail: string } | null>(() => {
+  const errorLabel = useMemo<{ kind: "retry" | "quota" | "failed"; detail: string } | null>(() => {
     const entries = Object.entries(errorByAgent);
     if (entries.length === 0) return null;
     const [agentId, detail] = entries[0];
     const name = stateName(agentId);
-    return { kind: "retry", detail: `${name} 处理失败：${detail}` };
-  }, [errorByAgent, stateName]);
+    const errorType = errorTypeByAgent[agentId];
+    const kind =
+      errorType === "quota_exceeded" || errorType === "auth_failed"
+        ? "quota"
+        : errorType === "model_busy"
+          ? "retry"
+          : "failed";
+    return { kind, detail: `${name} 处理失败：${detail}` };
+  }, [errorByAgent, errorTypeByAgent, stateName]);
   const sessionLabel = useMemo(() => {
     const entries = Object.entries(sessionByAgent).filter(
       ([agentId, status]) => (status === "active" || status === "running") && !(agentId in loadingByAgent),
@@ -655,7 +663,7 @@ export default function TeamSessionPage() {
       clearUnreadForStateKey(key);
     },
     onAgentError: (payload) => {
-      const p = payload as { sessionId?: string | null; error?: unknown; message?: unknown };
+      const p = payload as { sessionId?: string | null; error?: unknown; message?: unknown; errorType?: unknown };
       if (p.sessionId) {
         agentIdBySessionRef.current[p.sessionId] = payload.agentId;
         instanceIdBySessionRef.current[p.sessionId] = payload.instanceId ?? null;
@@ -663,6 +671,10 @@ export default function TeamSessionPage() {
       const detail = [p.error, p.message].map((x) => (typeof x === "string" && x.trim() ? x.trim() : null)).find(Boolean) ?? "agent error";
       const key = payload.instanceId ?? payload.agentId;
       setErrorByAgent((prev) => ({ ...prev, [key]: detail }));
+      if (typeof p.errorType === "string" && p.errorType) {
+        const errorType = p.errorType;
+        setErrorTypeByAgent((prev) => ({ ...prev, [key]: errorType }));
+      }
     },
     onAgentStatus: (payload: AgentStatusEvent) => {
       // team 域放行：taskId 为归因/ team: scope 串，不再按当前任务过滤；
@@ -969,9 +981,9 @@ export default function TeamSessionPage() {
     },
   });
   const addInstanceMutation = useMutation({
-    mutationFn: (payload: { agentId: string; roleId?: string; alias?: string }) =>
+    mutationFn: (payload: AddInstancePayload) =>
       api.post<TaskDetail>(`/tasks/${currentTaskId}/team`, {
-        addInstances: [{ agentId: payload.agentId, ...(payload.roleId ? { roleId: payload.roleId } : {}), ...(payload.alias ? { alias: payload.alias } : {}) }],
+        addInstances: [{ ...(payload.roleId ? { roleId: payload.roleId } : {}), ...(payload.agentId ? { agentId: payload.agentId } : {}), ...(payload.alias ? { alias: payload.alias } : {}) }],
         removeInstanceIds: [],
       }),
     onSuccess: (updated) => {
@@ -984,8 +996,9 @@ export default function TeamSessionPage() {
       setAddError(isApiError(err) ? err.message : "添加实例失败，请稍后重试");
     },
   });
-  const handleAddInstance = async (payload: { agentId: string; roleId?: string; alias?: string }): Promise<boolean> => {
+  const handleAddInstance = async (payload: AddInstancePayload): Promise<boolean> => {
     if (addInstanceMutation.isPending) return false;
+    if (!payload.roleId && !payload.agentId) return false;
     setAddError(null);
     return new Promise((resolve) => {
       addInstanceMutation.mutate(
@@ -1056,7 +1069,7 @@ export default function TeamSessionPage() {
   const nextCursor = isGroupTab
     ? (messagesQuery.data?.nextCursor ?? null)
     : (privateMessagesQuery.data?.nextCursor ?? null);
-  const teamEditable = !!currentTask && (currentTask.status === "pending" || currentTask.status === "in_progress");
+  const teamEditable = !!currentTask && (currentTask.status === "pending" || currentTask.status === "in_progress" || currentTask.status === "blocked");
 
   return (
     <div data-testid="team-session-root" style={{ flex: 1, minHeight: 0, height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", ...baseFont }}>

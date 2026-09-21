@@ -33,6 +33,7 @@ import {
   isAnyLine,
   isServeErrorLine,
   lineBelongsToSession,
+  lineBelongsToSessionStrict,
   readFileTailLines,
 } from './serve-log';
 import { getRandomFreePort, httpGetStatus, isPortFree } from './port-probe';
@@ -168,7 +169,7 @@ export class OpencodeServer {
     if (ring.length > 0) {
       return ring;
     }
-    return this.readLogFileErrors(sessionID, isAnyLine).slice(-limit);
+    return this.readLogFileErrors(sessionID, isAnyLine, false).slice(-limit);
   }
 
   /**
@@ -178,11 +179,13 @@ export class OpencodeServer {
    * abort + 抛错（错误文本透传前端），不再空等首字超时（120s+）。
    *
    * 过滤 = 关键词粗筛 + 结构化错误门（level=ERROR / error.* 字段）——正常 INFO 行不入选。
-   * 环形缓冲有匹配即返回；无匹配才回退日志文件（次级源，缺失静默降级）。
+   * 会话归属用严格版（无 session.id/sessionID 的行不通配）：子 agent 域失败行
+   * （如 share subscriber）不得触发其它（或本）会话主 agent 的 abort，主循环自恢复
+   * 优先。环形缓冲有匹配即返回；无匹配才回退日志文件（次级源，缺失静默降级）。
    */
   recentErrors(limit = 5, sessionID?: string): string[] {
     const ring = this.logs
-      .filter((line) => isServeErrorLine(line) && lineBelongsToSession(line, sessionID))
+      .filter((line) => isServeErrorLine(line) && lineBelongsToSessionStrict(line, sessionID))
       .slice(-limit);
     if (ring.length > 0) {
       return ring;
@@ -191,13 +194,18 @@ export class OpencodeServer {
   }
 
   /** 读日志文件尾部（次级错误源；仅匹配行 + 会话过滤）。文件缺失/不可读 → []。 */
-  private readLogFileErrors(sessionID: string | undefined, accept: (line: string) => boolean): string[] {
+  private readLogFileErrors(
+    sessionID: string | undefined,
+    accept: (line: string) => boolean,
+    strictSessionMatch = true,
+  ): string[] {
     const filePath = this.options.serveLogFilePath;
     if (!filePath) {
       return [];
     }
+    const belongs = strictSessionMatch ? lineBelongsToSessionStrict : lineBelongsToSession;
     return readFileTailLines(filePath).filter(
-      (line) => accept(line) && lineBelongsToSession(line, sessionID),
+      (line) => accept(line) && belongs(line, sessionID),
     );
   }
 

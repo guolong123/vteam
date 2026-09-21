@@ -466,6 +466,35 @@ describe('OpencodeServer', () => {
     expect(server.recentErrors(5, 'ses_mine').join('\n')).not.toContain('ses_old');
   });
 
+  it('recentErrors：无归属行不通配指定会话（子 agent share subscriber 失败不秒杀其它会话主 agent）', async () => {
+    const server = newServer({ port: 4199 });
+    await server.start();
+    fakeProc.stderr.emit(
+      'data',
+      Buffer.from(
+        'timestamp=2026-09-21T08:18:15.258Z level=ERROR run=1879706f message="share subscriber failed" type=message.updated cause="Cause([Fail(ProviderModelNotFoundError: Model not found: opencode/gpt-5-nano.)])"\n',
+      ),
+    );
+    // 指定会话查询 → 无归属行不得返回（线上 08:18 一行双杀 PM+architect 根因）
+    expect(server.recentErrors(5, 'ses_f3d6e26efffeyh8fJ5IcXav64f')).toHaveLength(0);
+    expect(server.recentErrors(5, 'ses_other')).toHaveLength(0);
+    // 无会话参数（全局尸检）→ 仍返回
+    expect(server.recentErrors()).toHaveLength(1);
+  });
+
+  it('recentErrors：sessionID=（无点形态，prompt_async 失败行）正确归属会话', async () => {
+    const server = newServer({ port: 4199 });
+    await server.start();
+    fakeProc.stderr.emit(
+      'data',
+      Buffer.from(
+        'timestamp=t level=ERROR run=x message="prompt_async failed" sessionID=ses_mine error.error="AI_APICallError: Rate limit exceeded."\n',
+      ),
+    );
+    expect(server.recentErrors(5, 'ses_mine')).toHaveLength(1);
+    expect(server.recentErrors(5, 'ses_other')).toHaveLength(0);
+  });
+
   it('recentLogTail：无会话过滤时返回原始尾部行（含非错误行，供失败原因附证据）', async () => {
     const server = newServer({ port: 4199 });
     await server.start();

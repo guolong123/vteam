@@ -8,7 +8,8 @@
  * - 队列预览（queue position/taskId/enqueuedAt）
  * - 成员列表（alias/workDir 行内编辑，增删改；多实例支持）
  * - 删除团队（执行中任务时禁用；其余关联任务随团队级联删除，确认框列出任务）
- * - 添加成员：Agent 选择（复用角色卡片简化版 + 自定义）
+ * - 添加成员：ROLE-first 岗位选择（来源 GET /agent-roles；role-only 提交，
+ *   仅外部绑定岗位需显式执行 Agent）
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useParams, useRouter } from "next/navigation";
@@ -16,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { teamsApi, type TeamDto, type TeamMemberDto, type TeamQueueDto } from "@/src/api/teams";
+import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import { UserMembersSection } from "./user-members";
 import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
 import {
@@ -78,7 +80,11 @@ export default function TeamDetailPage() {
   const [editName, setEditName] = useState("");
   const [editDesc, setEditDesc] = useState("");
   const [showAddMember, setShowAddMember] = useState(false);
+  const [selectedRoleId, setSelectedRoleId] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState("");
+  // 显式覆盖标记：仅用户在外部绑定分支手动点选执行 Agent 后为 true；
+  // 角色切换预填（defaultAgentId）不算覆盖——role-only 提交时不带 agentId。
+  const [agentTouched, setAgentTouched] = useState(false);
   const [addAlias, setAddAlias] = useState("");
   const [addWorkDir, setAddWorkDir] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -96,13 +102,28 @@ export default function TeamDetailPage() {
     enabled: showAddMember,
   });
 
+  // ROLE-first：岗位为添加成员的主选择器（唯一来源 GET /agent-roles，与面板同口径）。
+  const rolesQuery = useQuery({
+    queryKey: ["agent-roles"],
+    queryFn: () => agentRolesApi.list({ page: 1, pageSize: 100 }),
+    enabled: showAddMember,
+    retry: false,
+  });
+  const roleItems: AgentRoleDto[] = rolesQuery.data?.items ?? [];
+  const selectedRole: AgentRoleDto | undefined = roleItems.find((r) => r.id === selectedRoleId);
+  // 外部绑定岗位（仅 defaultOpencodeAgentName、无 defaultAgentId）需显式内部执行 Agent；
+  // 其余岗位 role-only 提交（服务端按规则 2/5 预填）。
+  const selectedIsExternalOnly = !!selectedRole && !selectedRole.defaultAgentId && !!selectedRole.defaultOpencodeAgentName;
+  const roleLabelOf = (r: AgentRoleDto): string =>
+    r.defaultAgentId ? `${r.name}` : r.defaultOpencodeAgentName ? `${r.name}（外部）` : r.name;
+
   const team: TeamDto | undefined = teamQuery.data;
 
   useEffect(() => {
     if (team) { setEditName(team.name); setEditDesc(team.description ?? ""); }
   }, [team]);
 
-  const RUNNING_TASK_STATUS = ["in_progress", "pending_review"];
+  const RUNNING_TASK_STATUS = ["in_progress", "blocked", "pending_review"];
   const hasRunningTask = !!team && RUNNING_TASK_STATUS.includes(team.currentTaskStatus ?? "");
   const hasTasks = !!team && (!!team.currentTaskId || team.queue.length > 0);
   const deletable = !!team && !hasRunningTask;
@@ -148,14 +169,21 @@ export default function TeamDetailPage() {
   };
 
   const addMutation = useMutation({
-    mutationFn: () => teamsApi.addMember(id, { agentId: selectedAgentId, alias: addAlias.trim() || undefined, workDir: addWorkDir.trim() || undefined }),
+    mutationFn: () => teamsApi.addMember(id, {
+      ...(selectedRoleId ? { roleId: selectedRoleId } : {}),
+      ...(agentTouched && selectedAgentId ? { agentId: selectedAgentId } : {}),
+      alias: addAlias.trim() || undefined,
+      workDir: addWorkDir.trim() || undefined,
+    }),
   });
   const handleAddMember = async () => {
-    if (!selectedAgentId) { setActionError("请选择 Agent"); return; }
+    // ROLE-first：岗位为主选择器；外部-only 岗位须显式配内部执行 Agent（否则服务端 400）。
+    if (!selectedRoleId) { setActionError("请选择岗位"); return; }
+    if (selectedIsExternalOnly && !(agentTouched && selectedAgentId)) { setActionError("外部绑定岗位需再选一个内部执行 Agent"); return; }
     setActionError(null);
     try {
       await addMutation.mutateAsync();
-      setShowAddMember(false); setSelectedAgentId(""); setAddAlias(""); setAddWorkDir("");
+      setShowAddMember(false); setSelectedRoleId(""); setAgentTouched(false); setSelectedAgentId(""); setAddAlias(""); setAddWorkDir("");
       queryClient.invalidateQueries({ queryKey: ["team", id] });
     } catch (err) { setActionError(isApiError(err) ? err.message : "添加失败"); }
   };
@@ -285,6 +313,9 @@ export default function TeamDetailPage() {
           } else if (effectiveStatus === "in_progress") {
             badgeLabel = "进行中";
             badgeStyle = { color: "#0D9488", backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.22)" };
+          } else if (effectiveStatus === "blocked") {
+            badgeLabel = "阻塞中";
+            badgeStyle = { color: "#B91C1C", backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)" };
           } else if (effectiveStatus === "pending_review") {
             badgeLabel = "待验收";
             badgeStyle = { color: "#D97706", backgroundColor: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.22)" };
@@ -439,14 +470,29 @@ export default function TeamDetailPage() {
           <div data-testid="add-member-panel" style={{ display: "flex", gap: space.md, alignItems: "flex-end", flexWrap: "wrap", padding: space.lg, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px dashed ${neutral[300]}` }}>
             <div style={{ display: "flex", gap: space.md, alignItems: "flex-end", flexWrap: "wrap" }}>
               <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: space.xs }}>
-                <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>选择 Agent</label>
-                <select data-testid="add-member-agent-select" value={selectedAgentId} onChange={(e) => setSelectedAgentId(e.target.value)} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
-                  <option value="">请选择</option>
-                  {(agentsQuery.data?.items ?? []).map((a) => (
-                    <option key={a.id} value={a.id}>{a.name} ({a.type === "template" && a.role ? a.role : a.type})</option>
+                <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>选择岗位</label>
+                <select data-testid="add-member-role-select" value={selectedRoleId} onChange={(e) => { setSelectedRoleId(e.target.value); setAgentTouched(false); setSelectedAgentId(""); }} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
+                  <option value="">请选择岗位</option>
+                  {roleItems.map((r) => (
+                    <option key={r.id} value={r.id}>{roleLabelOf(r)}</option>
                   ))}
                 </select>
+                {rolesQuery.isPending && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>岗位加载中…</span>}
+                {selectedIsExternalOnly && (
+                  <span data-testid="add-member-external-hint" style={{ fontSize: fontSize.xs, color: "#B45309" }}>外部绑定岗位：需在下方再选一个内部执行 Agent</span>
+                )}
               </div>
+              {selectedIsExternalOnly && (
+                <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: space.xs }}>
+                  <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>执行 Agent（外部岗位必填）</label>
+                  <select data-testid="add-member-agent-select" value={agentTouched ? selectedAgentId : ""} onChange={(e) => { setAgentTouched(true); setSelectedAgentId(e.target.value); }} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
+                    <option value="">请选择</option>
+                    {(agentsQuery.data?.items ?? []).map((a) => (
+                      <option key={a.id} value={a.id}>{a.name} ({a.type === "template" && a.role ? a.role : a.type})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: space.xs }}>
                 <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>别名（可选）</label>
                 <input data-testid="add-member-alias" value={addAlias} onChange={(e) => setAddAlias(e.target.value)} placeholder="默认 <角色名>-seq" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800],fontFamily: fontFamily.body }} />

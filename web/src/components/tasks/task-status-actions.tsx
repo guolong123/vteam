@@ -33,12 +33,13 @@ export type TaskApiStatus =
   | "queued"
   | "pending"
   | "in_progress"
+  | "blocked"
   | "pending_review"
   | "completed"
   | "archived";
 
 /** 可执行操作 key（对齐后端端点后缀）。 */
-type TaskAction = "start" | "mark-pending-review" | "accept" | "reject" | "archive";
+type TaskAction = "start" | "mark-pending-review" | "accept" | "reject" | "archive" | "block" | "resume";
 
 interface TaskStatusActionsProps {
   taskId: string;
@@ -49,7 +50,8 @@ interface TaskStatusActionsProps {
 const ACTION_SETS: Record<TaskApiStatus, TaskAction[] | null> = {
   queued: null,
   pending: ["start"],
-  in_progress: ["mark-pending-review"],
+  in_progress: ["mark-pending-review", "block"],
+  blocked: ["resume"],
   pending_review: ["accept", "reject"],
   completed: ["archive"],
   archived: null,
@@ -62,6 +64,8 @@ const ACTION_META: Record<TaskAction, { label: string; color: string; pendingLab
   accept: { label: "验收通过", color: "#059669", pendingLabel: "处理中…" },
   reject: { label: "驳回", color: "#D97706", pendingLabel: "驳回中…" },
   archive: { label: "归档", color: "#64748B", pendingLabel: "归档中…" },
+  block: { label: "置阻塞", color: "#B91C1C", pendingLabel: "置阻塞中…" },
+  resume: { label: "恢复执行", color: "#0D9488", pendingLabel: "恢复中…" },
 };
 
 /** 操作按钮（对齐 board 原「开始任务」按钮样式）。 */
@@ -85,6 +89,8 @@ function ActionButton({
         : action === "mark-pending-review" ? "task-submit-review"
         : action === "accept" ? "task-accept"
         : action === "reject" ? "task-reject"
+        : action === "block" ? "task-block"
+        : action === "resume" ? "task-resume"
         : "task-archive"
       }
       disabled={disabled}
@@ -124,6 +130,7 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
+  const [blockOpen, setBlockOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [forceTarget, setForceTarget] = useState<TaskAction | null>(null);
 
@@ -164,23 +171,24 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
     },
   });
 
-  // Esc 关闭驳回弹窗 / 强制确认弹窗（对齐 CreateProjectModal 模式）
+  // Esc 关闭驳回/阻塞弹窗 / 强制确认弹窗（对齐 CreateProjectModal 模式）
   useEffect(() => {
-    if (!rejectOpen && !forceTarget) return;
+    if (!rejectOpen && !blockOpen && !forceTarget) return;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setRejectOpen(false);
+        setBlockOpen(false);
         setForceTarget(null);
       }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [rejectOpen, forceTarget]);
+  }, [rejectOpen, blockOpen, forceTarget]);
 
-  // 每次打开驳回弹窗重置原因
+  // 每次打开驳回/阻塞弹窗重置原因
   useEffect(() => {
-    if (rejectOpen) setReason("");
-  }, [rejectOpen]);
+    if (rejectOpen || blockOpen) setReason("");
+  }, [rejectOpen, blockOpen]);
 
   const taskQuery = useQuery({
     queryKey: ["task", taskId],
@@ -232,12 +240,22 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
       setRejectOpen(true);
       return;
     }
+    if (action === "block") {
+      setBlockOpen(true);
+      return;
+    }
     actionMutation.mutate({ action });
   };
 
   const handleRejectConfirm = () => {
     setRejectOpen(false);
     actionMutation.mutate({ action: "reject", rejectReason: reason.trim() || undefined });
+  };
+
+  const handleBlockConfirm = () => {
+    if (!reason.trim()) return;
+    setBlockOpen(false);
+    actionMutation.mutate({ action: "block", rejectReason: reason.trim() });
   };
 
   const handleForceConfirm = () => {
@@ -565,6 +583,120 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
                 }}
               >
                 确认驳回
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* 置阻塞原因弹窗（原因必填，复用驳回弹窗形态；红色强调） */}
+      {blockOpen && (
+        <div
+          data-testid="block-modal"
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 40,
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            paddingTop: "8%",
+          }}
+        >
+          <div
+            aria-hidden
+            onClick={(e) => {
+              e.stopPropagation();
+              setBlockOpen(false);
+            }}
+            style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }}
+          />
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleBlockConfirm();
+            }}
+            noValidate
+            style={{
+              position: "relative",
+              width: 360,
+              maxWidth: "calc(100% - 32px)",
+              display: "flex",
+              flexDirection: "column",
+              gap: space.md,
+              padding: `${space.xl}px`,
+              borderRadius: radius.lg,
+              backgroundColor: "var(--color-surface)",
+              border: `1px solid ${neutral[200]}`,
+              boxShadow: shadow.lg,
+              ...baseFont,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900] }}>置阻塞</div>
+              <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
+                任务将挂起等待人工介入，原因必填（卡在哪里、缺什么、等谁），写入任务事件供团队可见
+              </div>
+            </div>
+            <textarea
+              data-testid="block-reason-input"
+              value={reason}
+              maxLength={512}
+              rows={3}
+              placeholder="填写阻塞原因（必填，最多 512 字）"
+              onChange={(e) => setReason(e.target.value)}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: `${space.md}px ${space.lg}px`,
+                borderRadius: radius.md,
+                border: `1px solid ${neutral[200]}`,
+                backgroundColor: "var(--color-surface)",
+                fontSize: fontSize.md,
+                color: neutral[800],
+
+                resize: "vertical",
+                fontFamily: fontFamily.body,
+              }}
+            />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+              <button
+                type="button"
+                data-testid="block-cancel"
+                onClick={() => setBlockOpen(false)}
+                style={{
+                  padding: `${space.sm}px ${space.lg}px`,
+                  borderRadius: radius.md,
+                  border: `1px solid ${neutral[200]}`,
+                  backgroundColor: "var(--color-surface)",
+                  color: neutral[600],
+                  fontSize: fontSize.md,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                data-testid="block-confirm"
+                disabled={pending || !reason.trim()}
+                style={{
+                  padding: `${space.sm}px ${space.lg}px`,
+                  borderRadius: radius.md,
+                  border: "none",
+                  backgroundColor: "#B91C1C",
+                  color: "#FFFFFF",
+                  fontSize: fontSize.md,
+                  fontWeight: 600,
+                  cursor: pending || !reason.trim() ? "default" : "pointer",
+                  opacity: pending || !reason.trim() ? 0.65 : 1,
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                确认置阻塞
               </button>
             </div>
           </form>

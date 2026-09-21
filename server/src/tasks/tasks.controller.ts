@@ -33,6 +33,7 @@ import { PlanCompleteDto } from './dto/plan-complete.dto';
 import { PlanConfirmDto } from './dto/plan-confirm.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
+import { BlockTaskDto } from './dto/block-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { UpdateInstanceDto } from './dto/update-instance.dto';
@@ -343,6 +344,34 @@ export class TasksController {
     @Body() dto: RejectTaskDto,
   ) {
     return this.tasksService.reject(id, user.id, dto);
+  }
+
+  /**
+   * 阻塞挂起（in_progress → blocked，reason 必填写明卡点）。
+   * POST /api/v1/tasks/:id/block
+   */
+  @Post('tasks/:id/block')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.edit')
+  @ApiOperation({ summary: '阻塞挂起（in_progress → blocked，原因必填）' })
+  block(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: BlockTaskDto,
+  ) {
+    return this.tasksService.block(id, user.id, dto?.reason);
+  }
+
+  /**
+   * 阻塞恢复（blocked → in_progress）。
+   * POST /api/v1/tasks/:id/resume
+   */
+  @Post('tasks/:id/resume')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.edit')
+  @ApiOperation({ summary: '阻塞恢复（blocked → in_progress）' })
+  resume(@CurrentUser() user: AuthenticatedUser, @Param('id') id: string) {
+    return this.tasksService.resume(id, user.id);
   }
 
   /**

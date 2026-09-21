@@ -34,6 +34,7 @@ type TaskApiStatus =
   | "queued"
   | "pending"
   | "in_progress"
+  | "blocked"
   | "pending_review"
   | "completed"
   | "archived";
@@ -81,6 +82,7 @@ const STATUS_LABEL: Record<TaskApiStatus, string> = {
   queued: "排队中",
   pending: "待开始",
   in_progress: "进行中",
+  blocked: "阻塞中",
   pending_review: "待验收",
   completed: "已完成",
   archived: "已归档",

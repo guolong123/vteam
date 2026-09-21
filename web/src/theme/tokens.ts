@@ -39,7 +39,7 @@ export const roleText: Record<RoleKey, string> = {
 };
 
 /* ---------------------------------- 任务状态 ---------------------------------- */
-export type StatusKey = "进行中" | "待验收" | "已完成" | "已归档";
+export type StatusKey = "进行中" | "阻塞中" | "待验收" | "已完成" | "已归档";
 
 export interface StatusTheme {
   color: string;
@@ -47,9 +47,10 @@ export interface StatusTheme {
   border: string;
 }
 
-/** 任务状态四色：进行中=青蓝 / 待验收=琥珀 / 已完成=绿 / 已归档=灰（深色下半透明） */
+/** 任务状态五色：进行中=青蓝 / 阻塞中=红 / 待验收=琥珀 / 已完成=绿 / 已归档=灰（深色下半透明） */
 export const statusColors: Record<StatusKey, StatusTheme> = {
   "进行中": { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
+  "阻塞中": { color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
   "待验收": { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
   "已完成": { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
   "已归档": { color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },

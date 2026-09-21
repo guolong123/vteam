@@ -204,6 +204,8 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
               <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>生成中</span>
             </span>
           </div>
+        ) : messageStatus === "failed" ? (
+          <MsgError kind="failed" detail={cleanBody} author={author} role={role} time={time} />
         ) : (
           <ChatBubble text={cleanBody} type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
         )

@@ -1114,11 +1114,15 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('error 文本含凭据/配额/繁忙特征 → errorType 分别推断 auth_failed/quota_exceeded/model_busy', async () => {
+    it('error 文本含凭据/配额/繁忙/缺模型特征 → errorType 分别推断 auth_failed/quota_exceeded/model_busy/model_not_found', async () => {
       for (const [error, errorType] of [
         ['模型调用报错：Invalid API key. (HTTP 401)', 'auth_failed'],
         ['余额不足，insufficient_quota', 'quota_exceeded'],
         ['模型繁忙 model_busy，稍后重试', 'model_busy'],
+        [
+          '模型调用报错：Model not found: opencode/gpt-5-nano. Did you mean: gpt-5-nano, gpt-5.4-nano?',
+          'model_not_found',
+        ],
       ] as const) {
         const e = event('w_1', `evw_${errorType}`, 'agent.status', {
           taskId: 't_1',
@@ -1245,6 +1249,58 @@ describe('WorkerEventIngress', () => {
       );
       expect(got).toHaveLength(1);
       expect(got[0]).toMatchObject({ taskId: 't_1', agentId: 'a_1' });
+    });
+
+    it('onAgentStatus 回调 sessionId 归一：ses_ 经 instanceRef 反查为平台主键（dispatcher 失败落库依赖）', async () => {
+      prisma.session.findFirst.mockResolvedValue({ id: 's_9' });
+      const got: AgentStatusPayload[] = [];
+      ingress.onAgentStatus((p) => got.push(p));
+      await ingress.handleEvent(
+        event('w_1', 'evw_9b', 'agent.status', {
+          taskId: 'team:tm_1',
+          agentId: 'a_1',
+          sessionId: 'ses_abc',
+          status: 'error',
+          error: '模型调用报错：boom',
+        }),
+      );
+      expect(prisma.session.findFirst).toHaveBeenCalledWith({
+        where: { instanceRef: 'ses_abc' },
+        select: { id: true },
+      });
+      expect(got).toHaveLength(1);
+      expect(got[0]).toMatchObject({ sessionId: 's_9' });
+    });
+
+    it('onAgentStatus 回调 sessionId 归一：s_ 直接透传（无反查开销）', async () => {
+      const got: AgentStatusPayload[] = [];
+      ingress.onAgentStatus((p) => got.push(p));
+      await ingress.handleEvent(
+        event('w_1', 'evw_9c', 'agent.status', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_7',
+          phase: 'operating',
+        }),
+      );
+      expect(prisma.session.findFirst).not.toHaveBeenCalled();
+      expect(got[0]).toMatchObject({ sessionId: 's_7' });
+    });
+
+    it('onAgentStatus 回调 sessionId 归一：反查失败保留原始 ses_（调用方兜底）', async () => {
+      prisma.session.findFirst.mockResolvedValue(null);
+      prisma.session.findMany.mockResolvedValue([]);
+      const got: AgentStatusPayload[] = [];
+      ingress.onAgentStatus((p) => got.push(p));
+      await ingress.handleEvent(
+        event('w_1', 'evw_9d', 'agent.status', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 'ses_missing',
+          phase: 'operating',
+        }),
+      );
+      expect(got[0]).toMatchObject({ sessionId: 'ses_missing' });
     });
 
     it('回调抛异常被吞，不影响事件处理结果', async () => {

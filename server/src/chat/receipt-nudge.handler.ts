@@ -177,6 +177,15 @@ export class ReceiptNudgeHandler implements OnModuleInit {
         kind: 'nudge',
       });
       await this.receipts.recordAutoNudge(row.id);
+      // 到期补排：trigger one-shot 语义下本次 fire 后永无第二次 fire，
+      // expireAfterAutoNudge 不可达 → 僵尸 pending 堆积（drain 永不到）。
+      // 补排同 receipt 的到期 trigger：到期再 fire 一次时 nudgeCount 已耗尽，
+      // 走过期分支清账 + settled hook 重查 drain。
+      await this.scheduleExpiryFollowUp({
+        teamId: row.teamId,
+        receiptId: row.id,
+        payload: payload as ReceiptNudgePayload,
+      });
       return { done: true };
     }
     await this.receipts.expireAfterAutoNudge(
@@ -198,6 +207,34 @@ export class ReceiptNudgeHandler implements OnModuleInit {
     return { done: true };
   }
 
+  /**
+   * 到期补排：催办后为同 receipt 再排一次到期 trigger（dedupKey 后缀 :expiry，
+   * 与首排键不冲突——schedule 按 key 幂等，已 fired 行也会挡同键重排）。
+   * 到期 fire 时 nudgeCount 已耗尽 → 走 expireAfterAutoNudge 清账并经 settled
+   * hook 重查 drain。排期失败只记 warn（不阻断本次催办已完成的主流程）。
+   */
+  private async scheduleExpiryFollowUp(input: {
+    teamId: string;
+    receiptId: string;
+    payload: ReceiptNudgePayload;
+  }): Promise<void> {
+    try {
+      await this.timers.schedule(
+        RECEIPT_NUDGE_KIND,
+        new Date(Date.now() + RECEIPT_TIMEOUT_DEFAULT_MIN * 60 * 1000),
+        input.payload,
+        buildTriggerDedupKey(
+          TRIGGER_KIND.RECEIPT_NUDGE,
+          input.teamId,
+          `${input.receiptId}:expiry`,
+        ),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `[receipt-nudge] 到期补排失败 receipt=${input.receiptId}（僵尸过期缺席）：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
   /**
    * 原派发消息是否已催办过（同 messageId 硬幂等）。
    *

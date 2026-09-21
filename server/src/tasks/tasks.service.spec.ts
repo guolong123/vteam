@@ -2272,6 +2272,110 @@ describe('TasksService', () => {
       expect(realtime.broadcast).not.toHaveBeenCalled();
     });
 
+    it('block：in_progress → blocked，reason 必填 + 写 metadata + 系统消息附原因', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'in_progress', version: 2 }))
+        .mockResolvedValue(row({ status: 'blocked', version: 3 }));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTransitionTx();
+
+      await service.block('t_0000000001', userId, '等后端联调接口');
+
+      expect(txModels.task.updateMany).toHaveBeenCalledWith({
+        where: { id: 't_0000000001', status: 'in_progress', version: 2 },
+        data: { status: 'blocked', version: { increment: 1 } },
+      });
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'block',
+          fromStatus: 'in_progress',
+          toStatus: 'blocked',
+          metadata: { reason: '等后端联调接口' },
+        }),
+      });
+      assertSysMessageCreated(
+        txModels,
+        'c_0000000001',
+        '任务已阻塞：等后端联调接口。请人工介入或等待卡点解除后恢复执行。',
+      );
+    });
+
+    it('block：reason 缺失/空白 → 400，不写库', async () => {
+      await expect(service.block('t_0000000001', userId, '')).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.block('t_0000000001', userId, '   ')).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(
+        service.block('t_0000000001', userId),
+      ).rejects.toThrow(BadRequestException);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('resume：blocked → in_progress + 系统消息恢复执行', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'blocked', version: 3 }))
+        .mockResolvedValue(row({ status: 'in_progress', version: 4 }));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTransitionTx();
+
+      await service.resume('t_0000000001', userId);
+
+      expect(txModels.task.updateMany).toHaveBeenCalledWith({
+        where: { id: 't_0000000001', status: 'blocked', version: 3 },
+        data: { status: 'in_progress', version: { increment: 1 } },
+      });
+      assertSysMessageCreated(
+        txModels,
+        'c_0000000001',
+        '任务阻塞解除，恢复执行',
+      );
+    });
+
+    it('blocked → accept 非法迁移 → 409（完成永远走验收，阻塞不可直达）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row({ status: 'blocked' }));
+
+      await assertInvalidTransition(
+        () => service.accept('t_0000000001', userId),
+        'pending_review',
+        'completed',
+        'blocked',
+      );
+    });
+
+    it('systemBlock：看门狗停滞回调专用，actor=system + 同 block 语义落库', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(
+          row({ status: 'in_progress', version: 2, teamId: null }),
+        )
+        .mockResolvedValue(row({ status: 'blocked', version: 3 }));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTransitionTx();
+
+      await service.systemBlock('t_0000000001', '看门狗：连续 3 轮无进展');
+
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          eventType: 'block',
+          fromStatus: 'in_progress',
+          toStatus: 'blocked',
+          actorType: 'system',
+          actorId: 'system',
+          metadata: { reason: '看门狗：连续 3 轮无进展' },
+        }),
+      });
+    });
+
     it('archive：completed → archived，写 archivedAt + sessions 全部置 archived + archive 事件 + 广播 + 系统消息「任务已归档，历史可回看。任务级记忆已随验收沉淀（未总结不影响归档）」', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(row({ status: 'completed', version: 7 }))

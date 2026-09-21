@@ -23,14 +23,15 @@ import { LoadingDots } from "./loading-indicator";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** 错误语义色：模型繁忙=琥珀（可重试）/ 余额不足=红（不可重试，需升级） */
+/** 错误语义色：模型繁忙=琥珀（可重试）/ 余额不足=红（不可重试，需升级）/ 执行失败=红（通用，如模型连不上/首字超时） */
 const errorTheme = {
   retry: { color: "#B45309", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
   quota: { color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  failed: { color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
 } as const;
 
 export interface MsgErrorProps {
-  kind: "retry" | "quota";
+  kind: "retry" | "quota" | "failed";
   detail: string;
   author?: string;
   role?: RoleKey;
@@ -95,6 +96,10 @@ export function MsgError({ kind, author, role, detail, attempt, time, style, cla
             <span style={{ fontSize: fontSize.xs, color: theme.color }}>
               APIError · isRetryable · 稍后自动重试
             </span>
+          </div>
+        ) : kind === "failed" ? (
+          <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.sm }}>
+            <span style={{ fontSize: fontSize.xs, color: theme.color }}>执行失败 · 可重新发送消息触发重试</span>
           </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginTop: space.sm }}>

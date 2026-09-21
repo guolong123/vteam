@@ -4,11 +4,12 @@
  */
 import type { RoleKey } from "@/src/theme/tokens";
 
-/** 后端六态（TASK_STATUS，含 queued）。 */
+/** 后端七态（TASK_STATUS，含 queued/blocked）。 */
 export type TaskApiStatus =
   | "queued"
   | "pending"
   | "in_progress"
+  | "blocked"
   | "pending_review"
   | "completed"
   | "archived";

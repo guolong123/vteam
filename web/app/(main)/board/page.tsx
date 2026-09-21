@@ -103,11 +103,12 @@ function renderStatusBadge(status: BoardStatus) {
 }
 
 /* ------------------------------ API 数据模型（T6 DTO / 09 篇 §3.4） ------------------------------ */
-/** 后端六态（TASK_STATUS，含 queued 排队）。 */
+/** 后端七态（TASK_STATUS，含 queued 排队、blocked 阻塞）。 */
 type TaskApiStatus =
   | "queued"
   | "pending"
   | "in_progress"
+  | "blocked"
   | "pending_review"
   | "completed"
   | "archived";
@@ -144,6 +145,7 @@ const STATUS_LABEL: Record<TaskApiStatus, BoardStatus> = {
   queued: "排队中",
   pending: "待开始",
   in_progress: "进行中",
+  blocked: "阻塞中",
   pending_review: "待验收",
   completed: "已完成",
   archived: "已归档",
@@ -182,6 +184,7 @@ const filters: StatusFilter[] = [
   { key: "排队中", label: "排队中", status: "queued" },
   { key: "待开始", label: "待开始", status: "pending" },
   { key: "进行中", label: "进行中", status: "in_progress" },
+  { key: "阻塞中", label: "阻塞中", status: "blocked" },
   { key: "待验收", label: "待验收", status: "pending_review" },
   { key: "已完成", label: "已完成", status: "completed" },
   { key: "已归档", label: "已归档", status: "archived" },

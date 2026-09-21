@@ -1380,10 +1380,15 @@ export class ExecServer {
         // Free usage 等不透传 message.info.error）；true=提前失败（abort + 抛错，
         // 错误文本经 CompletionTimeoutError 透传 agent.status error 事件）。结构化门
         // （level=ERROR / error.* 字段）杜绝正常 INFO 行误触发提前 abort。
-        onServeError: (text) => /level=ERROR\b|error\.(error|name|message|code)=/.test(text) &&
+        // T17-subagent：share subscriber 行是子 agent 域失败（主循环存活可自恢复），
+        // 永不触发 abort——只认顶层致命（prompt_async failed / process error /
+        // 本会话 stream error）。线上实测 08:18：一行子域 Model-not-found 秒杀
+        // PM+architect 两个健康主 agent（step=6，group_post 在途）。
+        onServeError: (text) => !/share subscriber/i.test(text) &&
+          (/level=ERROR\b|error\.(error|name|message|code)=/.test(text) &&
           /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i.test(
             text,
-          ),
+          )),
         onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
           void this.sendDelta(ctx, tracker, messages);
           // question/权限确认旁路检测：serve 侧 pending 时上送事件（不 abort，等用户）
