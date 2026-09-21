@@ -1473,7 +1473,7 @@
   "plan": "server-gate-removal-tool-authority",
   "todo": 9,
   "generatedBy": "server/src/platform-mcp/platform-mcp.authority-matrix.spec.ts (worker matrix + service-level proof)",
-  "generatedAt": "2026-09-20T11:41:04.536Z",
+  "generatedAt": "2026-09-21T12:18:23.449Z",
   "mainHappyPath": {
     "steps": [
       {
