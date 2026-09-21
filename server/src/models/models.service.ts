@@ -542,11 +542,50 @@ export class ModelsService implements OnModuleInit {
     ]);
     const deletedCredential =
       ((result[2] as { count?: number } | undefined)?.count ?? 0) > 0;
+    // Provider 删除后：剥离全部 worker capabilities.models 中该 provider 的
+    // 陈旧上报（`providerID/...`），否则 listProviders 的目录 UNION worker 上报
+    // 会把已删 provider 复活（models 行已空，但在线 worker 快照仍含该前缀）。
+    // 仅触碰被删 providerID；其他 provider 上报原样保留（D5 非删除语义不动）。
+    // worker 重启重注册后若再次上报该 provider，行会自然重现（符合预期）。
+    await this.stripProviderFromWorkerCapabilities(providerID);
     // C6：删除带 baseUrl 的 provider → 门控下发（worker 侧 opencode.json 收敛）
     if (hadBaseUrl) {
       await this.maybeDispatchAfterShapeChange(providerID);
     }
     return { providerID, deletedModels: rows.length, deletedCredential };
+  }
+
+  private async stripProviderFromWorkerCapabilities(
+    providerID: string,
+  ): Promise<void> {
+    const workers = await this.prisma.worker.findMany({
+      select: { id: true, capabilities: true },
+    });
+    for (const w of workers) {
+      const caps = (w.capabilities ?? {}) as Record<string, unknown>;
+      const models = (caps as { models?: unknown }).models;
+      if (!Array.isArray(models)) {
+        continue;
+      }
+      const kept = models.filter((raw) => {
+        if (typeof raw !== 'string' || !raw) {
+          return true;
+        }
+        return this.splitModelId(raw).providerID !== providerID;
+      });
+      if (kept.length === models.length) {
+        continue;
+      }
+      await this.prisma.worker.update({
+        where: { id: w.id },
+        data: {
+          capabilities: { ...caps, models: kept } as Prisma.InputJsonValue,
+        },
+      });
+      this.logger.log(
+        `provider ${providerID} 删除：已从 worker ${w.id} capabilities.models 剥离 ${models.length - kept.length} 条陈旧上报`,
+      );
+    }
   }
 
   /**

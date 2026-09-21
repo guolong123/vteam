@@ -1358,3 +1358,15 @@ Tags: wave1, channelId, task.completed, resolveChannel, group-chat-reflow, contr
 - **测试改动（spec 3 处）**：两个既有 `toEqual` 断言（基本聚合用例 + 吊销用例）补 `providerType:'cloud'`/`baseUrl:null`（元数据 mock 为空 → 兜底值）；**新增 1 回归用例**「全部目录行 enabled=false」：`groupBy` 返回 `[]` + worker 上报 `vllm/qwen3-27b` + `model.findMany` mock 返回停用行元数据 → 断言 `findMany` 调用**不含 where**、结果 `{providerType:'local', baseUrl:'http://vllm:8000/v1', modelCount:1(worker)}`。镜像 D5 worker-union 用例的 mock 风格。
 - **验证**：server `npx tsc --noEmit` 0 错误；`npx jest src/models/models.service.spec.ts` **74/74 全绿**（基线 73 + 新增 1）。
 - **未触碰**：`removeProvider`/`remove`/`syncLiveModels`/`updateProvider`（其 :470-479 的 listProviders 调用 + fallback 与新行为一致——fallback 对象本就显式带 providerType/baseUrl，无需改）、controller、前端。未跑 build/dev server。
+
+---
+
+## [2026-09-21] Task: removeProvider ghost-row fix (capabilities strip)
+
+- **用户反馈**：`DELETE /models/providers/:providerID` 后模型行已删，但 `GET /models/providers` 仍含该 provider。
+- **根因（已实证诊断）**：`listProviders()` 的 providerIds = 目录 groupBy(enabled) UNION 在线 worker `capabilities.models` 拆 providerID（D5）。`removeProvider()` 只删 model/availability/credential 三表，**从不动 `workers.capabilities.models` 快照** → 已删 provider 的 `providerID/...` 陈旧字符串仍在在线 worker 快照中 → union 复活该行（modelCount = worker 计数）。
+- **修复层选择**：server 侧 `removeProvider()` 内新增 `stripProviderFromWorkerCapabilities(providerID)`（事务后、dispatch 前调用）。读全量 worker `select:{id, capabilities}` → 每行 `models` 数组过滤掉 `splitModelId(raw).providerID === providerID` 的条目 → 仅 changed 行 `worker.update({capabilities: {...caps, models: kept}})` + logger 打点。**仅删被删 provider 前缀**（D5 非删除语义不动）；worker 重启重注册再上报该 provider 则自然重现（符合预期）。
+- **worker 侧 injector 无需改**：`mergeProviderSection` 本就是**整体替换** `provider` 段（section={} 时删 key），`dispatchCredentialState` 下发的 `getLocalProviderConfigs()` 全量查询已不含删除行 → C6 门控下发自然收敛 opencode.json，无 merge 残留。
+- **dispatch 门控保留原语义**：strip 无条件执行（无论 hadBaseUrl）；C6 `maybeDispatchAfterShapeChange` 仍仅 hadBaseUrl 时触发（不改）。
+- **spec 改动**：prisma worker mock 补 `update: jest.fn()`；removeProvider describe 新增 2 例：① strip 断言（两 worker 的 vllm 条目被剥、deepseek 保留，update 2 次；随后 listProviders mock 链断言 vllm 不再出现）；② 仅触碰被删 provider（无 vllm 条目 → update 未调用，D5 保留）。
+- **验证**：server `npx tsc --noEmit` 0 错误；`npx jest src/models/` **2 suites / 100 tests 全绿**。

@@ -44,6 +44,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
     };
     worker: {
       findMany: jest.Mock;
+      update: jest.Mock;
     };
     $transaction: jest.Mock;
   };
@@ -126,6 +127,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       },
       worker: {
         findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
       },
       $transaction: jest.fn(),
     };
@@ -959,6 +961,75 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         deletedModels: 1,
         deletedCredential: false,
       });
+    });
+
+    it('删除后剥离 worker capabilities.models 中该 provider 陈旧上报（listProviders 不再复活该行）', async () => {
+      prisma.model.findMany.mockResolvedValue([
+        { id: 'md_0000000001', baseUrl: null },
+      ]);
+      prisma.$transaction.mockResolvedValue([
+        { count: 0 },
+        { count: 1 },
+        { count: 0 },
+      ]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.worker.findMany.mockResolvedValue([
+        {
+          id: 'w_1',
+          capabilities: {
+            models: ['vllm/qwen3-27b', 'deepseek/deepseek-v4-pro'],
+          },
+        },
+        { id: 'w_2', capabilities: { models: ['vllm/other'] } },
+      ]);
+      prisma.worker.update.mockResolvedValue({});
+
+      await service.removeProvider('vllm');
+
+      expect(prisma.worker.update).toHaveBeenCalledTimes(2);
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_1' },
+        data: { capabilities: { models: ['deepseek/deepseek-v4-pro'] } },
+      });
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_2' },
+        data: { capabilities: { models: [] } },
+      });
+
+      // 剥离后 listProviders：vllm 不再出现（目录空 + 上报已清）
+      prisma.model.groupBy.mockResolvedValue([]);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.worker.findMany.mockResolvedValue([
+        { capabilities: { models: ['deepseek/deepseek-v4-pro'] } },
+      ]);
+      prisma.model.findMany.mockResolvedValue([]);
+
+      const providers = await service.listProviders();
+
+      expect(providers.map((r) => r.providerID)).toEqual(['deepseek']);
+    });
+
+    it('剥离仅触碰被删 provider（其他 provider 上报原样保留，D5 非删除语义不动）', async () => {
+      prisma.model.findMany.mockResolvedValue([
+        { id: 'md_0000000001', baseUrl: null },
+      ]);
+      prisma.$transaction.mockResolvedValue([
+        { count: 0 },
+        { count: 1 },
+        { count: 0 },
+      ]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.worker.findMany.mockResolvedValue([
+        {
+          id: 'w_1',
+          capabilities: { models: ['deepseek/deepseek-v4-pro'] },
+        },
+        { id: 'w_2', capabilities: null },
+      ]);
+
+      await service.removeProvider('vllm');
+
+      expect(prisma.worker.update).not.toHaveBeenCalled();
     });
   });
 
