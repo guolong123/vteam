@@ -98,9 +98,10 @@ export function toRoleKey(roleKey: string): RoleKey | null {
   return (ROLE_KEYS as readonly string[]).includes(roleKey) ? (roleKey as RoleKey) : null;
 }
 
-/** 添加实例提交载荷：roleId 随成员落库；agentId 为最终选择的 Agent（可被用户覆盖角色默认）。 */
+/** 添加实例提交载荷：ROLE-first——roleId 为主选择器提交键；agentId 仅在
+ * 显式覆盖（自定义 Agent / 外部绑定角色需内部执行器）时携带，服务端按规则 1/2/5 解析。 */
 export interface AddInstancePayload {
-  agentId: string;
+  agentId?: string;
   roleId?: string;
   alias?: string;
 }
@@ -145,6 +146,9 @@ export function TeamMembersPanel({
 }) {
   const [addOpen, setAddOpen] = useState(false);
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
+  // 显式覆盖 Agent：仅用户在"执行 Agent（显式覆盖）"下拉里手动点选后为 true；
+  // 角色预填（pickRole）不算覆盖——role-only 提交时不带 agentId，服务端按规则 2/5 预填。
+  const [agentTouched, setAgentTouched] = useState(false);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [alias, setAlias] = useState("");
 
@@ -226,6 +230,7 @@ export function TeamMembersPanel({
   const openPanel = () => {
     if (!teamEditable || adding) return;
     setSelectedRoleId(null);
+    setAgentTouched(false);
     setSelectedAgentId("");
     setAlias("");
     setAddOpen(true);
@@ -234,21 +239,29 @@ export function TeamMembersPanel({
     if (adding) return;
     setAddOpen(false);
   };
-  /** 选岗位：用角色 defaultAgentId 预填 Agent；用户仍可在下方下拉里切换（显式覆盖）。 */
   const pickRole = (role: AgentRoleDto) => {
     setSelectedRoleId(role.id);
-    setSelectedAgentId(role.defaultAgentId ?? "");
+    const keepCustomOverride = agentTouched && customAgents.some((a) => a.id === selectedAgentId);
+    if (!keepCustomOverride) {
+      setAgentTouched(false);
+      setSelectedAgentId(role.defaultAgentId ?? "");
+    }
   };
+  const selectedIsExternalOnly = !!selectedRole && !selectedRole.defaultAgentId && !!selectedRole.defaultOpencodeAgentName;
+  // ROLE-first：选中角色即提交就绪（role-only，服务端规则 2/5 预填）；
+  // 仅外部绑定角色（无 defaultAgentId）需用户显式点选执行 Agent（agentId + roleId 走规则 1+5）。
+  const canConfirm = !!selectedRoleId && (!selectedIsExternalOnly || (agentTouched && !!selectedAgentId)) && !adding;
   const confirmAdd = async () => {
-    if (!selectedAgentId || adding) return;
+    if (!canConfirm) return;
     const ok = await onAddInstance({
-      agentId: selectedAgentId,
       roleId: selectedRoleId ?? undefined,
+      ...(agentTouched && selectedAgentId ? { agentId: selectedAgentId } : {}),
       alias: alias.trim() || undefined,
     });
     if (ok) {
       setAddOpen(false);
       setSelectedRoleId(null);
+      setAgentTouched(false);
       setSelectedAgentId("");
       setAlias("");
     }
@@ -714,8 +727,8 @@ export function TeamMembersPanel({
             }}
           >
             <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>添加实例</div>
-            {/* 岗位选择：来源 /agent-roles（7 内置 + 自定义）；选中即用角色 defaultAgentId 预填 Agent */}
-            <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>选择岗位（Agent 随岗位预填，可在下方切换）</div>
+            {/* 岗位选择：主选择器，来源 /agent-roles；选中即提交就绪（role-only） */}
+            <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>选择岗位（以岗位提交，Agent 由岗位默认绑定）</div>
             <div style={{ display: "flex", flexDirection: "column", gap: space.xs }} role="radiogroup" aria-label="选择岗位">
               {rolesQuery.isPending && (
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>岗位加载中…</span>
@@ -724,6 +737,12 @@ export function TeamMembersPanel({
                 const roleKey = toRoleKey(role.key) ?? "developer";
                 const t = roles[roleKey] ?? roles.developer;
                 const selected = selectedRoleId === role.id;
+                const binding = role.defaultAgentId
+                  ? role.defaultAgentId
+                  : role.defaultOpencodeAgentName
+                    ? `${role.defaultOpencodeAgentName}（外部）`
+                    : "未设置";
+                const externalOnly = !role.defaultAgentId && !!role.defaultOpencodeAgentName;
                 return (
                   <button
                     key={role.id}
@@ -734,6 +753,7 @@ export function TeamMembersPanel({
                     data-role={role.key}
                     data-role-id={role.id}
                     data-default-agent={role.defaultAgentId ?? ""}
+                    data-default-external={role.defaultOpencodeAgentName ?? ""}
                     aria-label={`添加${role.name}实例`}
                     onClick={() => pickRole(role)}
                     style={{
@@ -750,8 +770,18 @@ export function TeamMembersPanel({
                     }}
                   >
                     <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: t.color, flexShrink: 0 }} />
-                    <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.md, color: neutral[700], fontWeight: selected ? 600 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {role.name}
+                    <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                      <span style={{ fontSize: fontSize.md, color: neutral[700], fontWeight: selected ? 600 : 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {role.name}
+                      </span>
+                      <span data-testid="add-instance-role-binding" style={{ fontSize: fontSize.xs, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {binding}
+                      </span>
+                      {externalOnly && selected && (
+                        <span data-testid="add-instance-external-hint" style={{ fontSize: fontSize.xs, color: "#B45309" }}>
+                          外部绑定岗位：需在下方再选一个内部执行 Agent
+                        </span>
+                      )}
                     </span>
                     {selected && (
                       <span aria-hidden style={{ color: t.color, fontSize: fontSize.sm, fontWeight: 700 }}>✓</span>
@@ -780,6 +810,7 @@ export function TeamMembersPanel({
                         aria-label={`添加自定义 Agent ${a.name}`}
                         onClick={() => {
                           setSelectedRoleId(null);
+                          setAgentTouched(true);
                           setSelectedAgentId(a.id);
                         }}
                         style={{
@@ -809,11 +840,12 @@ export function TeamMembersPanel({
                 </>
               )}
             </div>
-            {/* Agent 选择：由岗位 defaultAgentId 预填；用户可切换（显式选择优先于岗位默认） */}
+            {/* Agent 选择：仅显式覆盖入口（默认空=随岗位；用户点选后才随请求提交） */}
+            <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>执行 Agent（显式覆盖，可不选）</div>
             <select
               data-testid="add-instance-agent-select"
-              value={hasAgentInList ? selectedAgentId : ""}
-              onChange={(e) => setSelectedAgentId(e.target.value)}
+              value={agentTouched ? selectedAgentId : ""}
+              onChange={(e) => { setAgentTouched(true); setSelectedAgentId(e.target.value); }}
               disabled={adding || agentSelectOptions.length === 0}
               aria-label="选择 Agent"
               style={{
@@ -888,7 +920,7 @@ export function TeamMembersPanel({
                 type="button"
                 data-testid="add-instance-confirm"
                 onClick={confirmAdd}
-                disabled={!selectedAgentId || adding}
+                disabled={!canConfirm}
                 style={{
                   flex: 1,
                   padding: `${space.sm - 1}px ${space.md}px`,
@@ -898,8 +930,8 @@ export function TeamMembersPanel({
                   color: "#FFFFFF",
                   fontSize: fontSize.sm,
                   fontWeight: 500,
-                  cursor: !selectedAgentId || adding ? "default" : "pointer",
-                  opacity: !selectedAgentId || adding ? 0.5 : 1,
+                  cursor: !canConfirm || adding ? "default" : "pointer",
+                  opacity: !canConfirm || adding ? 0.5 : 1,
                   fontFamily: fontFamily.body,
                 }}
               >

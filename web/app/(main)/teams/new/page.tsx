@@ -4,7 +4,9 @@
  * 团队创建页（Task 11）
  * =============================================
  * - 复用 tasks/new 的 AgentSelectPanel 风格：RoleInstanceCard + CustomAgentCard 抽离为本地组件
- * - 提交 POST /teams { name, description, reuseSession, members: {agentId, alias?, workDir?}[] }
+ * - 提交 POST /teams { name, description, reuseSession, members: {roleId?, agentId?, alias?, workDir?}[] }
+ *   （ROLE-first：岗位卡来源实例只带 roleId（agentId 省略，服务端按规则 2/5 预填）；
+ *    自定义 Agent 卡为显式覆盖路径，仍带 agentId）
  * - reuseSession 开关（默认 true）
  * - 成员多实例：同一 agent 可重复，alias/workDir 行内可改
  * - 校验：团队名必填
@@ -81,11 +83,13 @@ function allInstancesOf(m: InstancesByRole): InstanceDraft[] {
 }
 
 function RoleInstanceCard({
-  role, instances, onToggleRole, onAddInstance, onRenameInstance, onWorkDirChange, onRemoveInstance,
+  role, roleId, bindingLabel, externalOnly, instances, executorOptions, onToggleRole, onAddInstance, onRenameInstance, onWorkDirChange, onRemoveInstance, onPickExecutor,
 }: {
-  role: RoleKey; instances: InstanceDraft[];
+  role: RoleKey; roleId?: string; bindingLabel: string; externalOnly: boolean;
+  instances: InstanceDraft[]; executorOptions: { id: string; name: string }[];
   onToggleRole: (r: RoleKey) => void; onAddInstance: (r: RoleKey) => void;
   onRenameInstance: (k: string, v: string) => void; onWorkDirChange: (k: string, v: string) => void; onRemoveInstance: (k: string) => void;
+  onPickExecutor: (k: string, agentId: string) => void;
 }) {
   const theme = roles[role] ?? roles.developer;
   const enabled = instances.length > 0;
@@ -99,21 +103,37 @@ function RoleInstanceCard({
             <span style={{ fontSize: fontSize.xs, color: neutral[400], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "1px 8px" }}>{enabled ? `${instances.length} 个实例` : "未启用"}</span>
           </div>
           <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{FIXED_DESC[role]}</div>
+          {/* ROLE-first：岗位绑定（与 AgentRolesTab.describeDefaultSlot 同约定：外部如实显示；data-role-id 供 e2e 断言 role-only 提交） */}
+          <div data-testid="role-binding" data-role-id={roleId ?? ""} style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>绑定：{bindingLabel}</div>
         </div>
         <span role="checkbox" aria-checked={enabled} data-testid="role-toggle" onClick={() => onToggleRole(role)} style={{ width: 20, height: 20, borderRadius: radius.sm, border: `1.5px solid ${enabled ? theme.color : neutral[300]}`, backgroundColor: enabled ? theme.color : "var(--color-surface)", display: "inline-flex", alignItems: "center", justifyContent: "center", color: "#FFF", fontSize: fontSize.sm, fontWeight: 700, flexShrink: 0, cursor: "pointer" }}>{enabled ? "✓" : ""}</span>
       </div>
       {enabled && (
         <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
           {instances.map((inst) => (
-            <div key={inst.key} data-testid="instance-row" data-instance-key={inst.key} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
+            <div key={inst.key} data-testid="instance-row" data-instance-key={inst.key} style={{ display: "flex", flexDirection: "column", gap: space.xs, padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
+              <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
               <span aria-hidden style={{ width: 8, height: 8, borderRadius: "50%", backgroundColor: theme.color, flexShrink: 0 }} />
               <input data-testid="instance-alias-input" value={inst.alias} aria-label={`${theme.label}别名`} onChange={(e) => onRenameInstance(inst.key, e.target.value)} style={{ flex: 1, minWidth: 0, border: "none",background: "transparent", fontSize: fontSize.md, fontWeight: 500, color: neutral[800], fontFamily: fontFamily.body, padding: `${space.xs}px 0` }} />
               <input data-testid="instance-workdir-input" value={inst.workDir} aria-label={`${theme.label}工作目录`} onChange={(e) => onWorkDirChange(inst.key, e.target.value)} placeholder="/data/vteam-worker/…" style={{ flex: 1, minWidth: 0, border: "none",background: "transparent", fontSize: fontSize.xs, color: neutral[500], fontFamily: fontFamily.mono, padding: `${space.xs}px 0` }} />
               <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>#{inst.seq}</span>
               <button type="button" data-testid="instance-remove" aria-label={`移除 ${inst.alias}`} onClick={() => onRemoveInstance(inst.key)} style={{ border: "none", background: "none", fontSize: fontSize.sm, color: neutral[400], cursor: "pointer", padding: space.xs, fontFamily: fontFamily.body }}>✕</button>
+              </div>
+              {/* 外部-only 岗位：该实例须显式指定内部执行 Agent（agentId + roleId 走规则 1+5） */}
+              {externalOnly && (
+                <select data-testid="instance-executor-select" aria-label={`${theme.label}执行 Agent（外部岗位必填）`} value={inst.agentId} onChange={(e) => onPickExecutor(inst.key, e.target.value)} style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${neutral[200]}`, borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px`, fontSize: fontSize.xs, color: neutral[600], background: neutral[50], fontFamily: fontFamily.body }}>
+                  <option value="">请选择执行 Agent</option>
+                  {executorOptions.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name}</option>
+                  ))}
+                </select>
+              )}
             </div>
           ))}
         </div>
+      )}
+      {externalOnly && enabled && (
+        <div data-testid="role-external-hint" style={{ fontSize: fontSize.xs, color: "#B45309" }}>外部绑定岗位：实例需再选一个内部执行 Agent</div>
       )}
       <button type="button" data-testid="add-instance-btn" onClick={() => onAddInstance(role)} style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: space.xs, padding: `${space.sm - 1}px ${space.md}px`, borderRadius: radius.md, border: `1.5px dashed ${theme.border}`, backgroundColor: "color-mix(in srgb, var(--color-surface) 70%, transparent)", color: theme.color, fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer", fontFamily: fontFamily.body }}><span aria-hidden>＋</span> 添加{theme.label}实例</button>
     </div>
@@ -206,12 +226,22 @@ export default function TeamNewPage() {
     () => new Map(roleItems.map((r) => [r.key, r])),
     [roleItems],
   );
-  /** 角色 key → Agent id：优先角色 defaultAgentId，其次 /agents 列表按 role 匹配（防角色未配默认）。 */
-  const agentIdForRoleKey = (role: RoleKey): string => {
-    const bound = roleByKey.get(role)?.defaultAgentId;
-    if (bound) return bound;
-    const fromDir = (agentsQuery.data?.items ?? []).find((a) => a.role === role && a.type === "template");
-    return fromDir?.id ?? "";
+  // ROLE-first 绑定视图：岗位卡展示其绑定（与 AgentRolesTab.describeDefaultSlot 同约定）；
+  // 外部-only 岗位（仅 defaultOpencodeAgentName）实例须显式指定内部执行 Agent。
+  const bindingOfKey = (role: RoleKey): { roleId?: string; label: string; externalOnly: boolean } => {
+    const r = roleByKey.get(role);
+    if (!r) return { label: "加载中…", externalOnly: false };
+    if (r.defaultAgentId) return { roleId: r.id, label: r.defaultAgentId, externalOnly: false };
+    if (r.defaultOpencodeAgentName) return { roleId: r.id, label: `${r.defaultOpencodeAgentName}（外部）`, externalOnly: true };
+    return { roleId: r.id, label: "未设置", externalOnly: false };
+  };
+  const executorOptions = useMemo(
+    () => (agentsQuery.data?.items ?? []).map((a) => ({ id: a.id, name: a.name })),
+    [agentsQuery.data],
+  );
+  const externalOnlyOfKey = (role: RoleKey): boolean => {
+    const r = roleByKey.get(role);
+    return !!r && !r.defaultAgentId && !!r.defaultOpencodeAgentName;
   };
 
   const handleToggleRole = (role: RoleKey) => {
@@ -222,14 +252,14 @@ export default function TeamNewPage() {
         if (mainAgentKey && removedKeys.has(mainAgentKey)) setMainAgentKey(null);
         return { ...prev, [role]: [] };
       }
-      return { ...prev, [role]: [{ key: nextKey(), agentId: agentIdForRoleKey(role), alias: defaultAliasOf(role, undefined, 1), workDir: defaultWorkDirOf(role, undefined, 1), seq: 1, roleKey: role, roleId: roleByKey.get(role)?.id }] };
+      return { ...prev, [role]: [{ key: nextKey(), agentId: "", alias: defaultAliasOf(role, undefined, 1), workDir: defaultWorkDirOf(role, undefined, 1), seq: 1, roleKey: role, roleId: roleByKey.get(role)?.id }] };
     });
   };
   const handleAddInstance = (role: RoleKey) => {
     setInstancesByRole((prev) => {
       const list = prev[role] ?? [];
       const seq = list.reduce((m, i) => Math.max(m, i.seq), 0) + 1;
-      return { ...prev, [role]: [...list, { key: nextKey(), agentId: agentIdForRoleKey(role), alias: defaultAliasOf(role, undefined, seq), workDir: defaultWorkDirOf(role, undefined, seq), seq, roleKey: role, roleId: roleByKey.get(role)?.id }] };
+      return { ...prev, [role]: [...list, { key: nextKey(), agentId: "", alias: defaultAliasOf(role, undefined, seq), workDir: defaultWorkDirOf(role, undefined, seq), seq, roleKey: role, roleId: roleByKey.get(role)?.id }] };
     });
   };
   const handleAddCustomAgent = (agent: AgentItem) => {
@@ -251,6 +281,12 @@ export default function TeamNewPage() {
       return { ...prev, [bucket]: (prev[bucket] ?? []).map((i) => i.key === key ? { ...i, workDir } : i) };
     });
   };
+  const handlePickExecutor = (key: string, agentId: string) => {
+    setInstancesByRole((prev) => {
+      const bucket = findRoleOf(prev, key); if (!bucket) return prev;
+      return { ...prev, [bucket]: (prev[bucket] ?? []).map((i) => i.key === key ? { ...i, agentId } : i) };
+    });
+  };
   const handleRemove = (key: string) => {
     if (mainAgentKey === key) setMainAgentKey(null);
     setInstancesByRole((prev) => {
@@ -262,8 +298,10 @@ export default function TeamNewPage() {
   const createMutation = useMutation({
     mutationFn: () => {
       const members = allInstances.map((inst) => ({
-        agentId: inst.agentId,
+        // ROLE-first：岗位来源实例提交 roleId（agentId 仅外部-only 岗位的显式执行者选择才带）；
+        // 自定义 Agent 实例（无 roleId）为显式覆盖路径，仍带 agentId。
         ...(inst.roleId ? { roleId: inst.roleId } : {}),
+        ...(inst.agentId ? { agentId: inst.agentId } : {}),
         ...(inst.alias !== defaultAliasOf(inst.roleKey ?? "custom", inst.agentName, inst.seq) ? { alias: inst.alias } : {}),
         ...(inst.workDir.trim() !== defaultWorkDirOf(inst.roleKey ?? "custom", inst.agentName, inst.seq) ? { workDir: inst.workDir.trim() } : {}),
       }));
@@ -278,6 +316,9 @@ export default function TeamNewPage() {
 
   const handleCreate = async () => {
     if (!name.trim()) { setNameError("请输入团队名称"); return; }
+    // 外部-only 岗位实例须已选内部执行 Agent，否则服务端报 ROLE_DEFAULT_AGENT_MISSING。
+    const missingExecutor = allInstances.some((i) => i.roleKey && i.roleId && externalOnlyOfKey(i.roleKey) && !i.agentId);
+    if (missingExecutor) { setCreateError("外部绑定岗位的实例需再选一个内部执行 Agent"); return; }
     setNameError(null); setCreateError(null);
     try {
       const res = await createMutation.mutateAsync();
@@ -341,9 +382,12 @@ export default function TeamNewPage() {
               </div>
             ) : (
               <>
-                {ROLE_ORDER.map((role) => (
-                  <RoleInstanceCard key={role} role={role} instances={instancesByRole[role] ?? []} onToggleRole={handleToggleRole} onAddInstance={handleAddInstance} onRenameInstance={handleRename} onWorkDirChange={handleWorkDir} onRemoveInstance={handleRemove} />
-                ))}
+                {ROLE_ORDER.map((role) => {
+                  const b = bindingOfKey(role);
+                  return (
+                    <RoleInstanceCard key={role} role={role} roleId={b.roleId} bindingLabel={b.label} externalOnly={b.externalOnly} instances={instancesByRole[role] ?? []} executorOptions={executorOptions} onToggleRole={handleToggleRole} onAddInstance={handleAddInstance} onRenameInstance={handleRename} onWorkDirChange={handleWorkDir} onRemoveInstance={handleRemove} onPickExecutor={handlePickExecutor} />
+                  );
+                })}
                 <CustomAgentCard agents={customAgents} instances={instancesByRole.custom ?? []} onAdd={handleAddCustomAgent} onRenameInstance={handleRename} onWorkDirChange={handleWorkDir} onRemoveInstance={handleRemove} />
               </>
             )}

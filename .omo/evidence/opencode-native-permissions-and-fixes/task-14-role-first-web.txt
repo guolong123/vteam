@@ -1,0 +1,120 @@
+================================================================================
+task-14 — ROLE-FIRST MEMBER ADD (web slice) — CLOSEOUT EVIDENCE
+plan: .omo/plans/opencode-native-permissions-and-fixes.md · task 14
+================================================================================
+
+DATE (local, Asia/Shanghai) ......... 2026-09-21
+HEAD ................................ fdfeb1f1e16d630a00998453fa0961d5529ddfaf
+HEAD subject ........................ feat(team): 主agent门禁 + 阻塞状态 + 看门狗 + 接待三步
+Branch .............................. main
+Evidence file ....................... .omo/evidence/opencode-native-permissions-and-fixes/task-14-role-first-web.txt
+Production code changed by closeout .. NONE (evidence + notepad + throwaway-config deletion only)
+
+NOTE: `web/app/(main)/teams/[id]/page.tsx` and
+      `web/app/(main)/teams/[id]/session/page.tsx` were ABSORBED into the
+      concurrent commit fdfeb1f. Their working-tree state is clean and is NOT
+      touched or staged by this closeout (see "absorbed files" section below).
+
+================================================================================
+[1] GATE — cd web && npx tsc --noEmit
+================================================================================
+command: npx tsc --noEmit   (cwd: web/)
+result : exit code 0
+         (no diagnostics emitted; TypeScript clean)
+
+  TSC_EXIT=0
+
+================================================================================
+[2] LIVE SPEC — cd web && npx playwright test --config .t14.playwright.config.ts
+================================================================================
+command : npx playwright test --config .t14.playwright.config.ts   (cwd: web/)
+stack   : live compose (web http://localhost:13001 -> HTTP 200, server :13000)
+exit    : 0
+
+--- RAW OUTPUT (verbatim re-run) ----------------------------------------------
+Running 3 tests using 1 worker
+
+[cleanup] team tm_0000000015 DELETE -> 200
+[cleanup] role ar_0000000022 DELETE -> 200
+  ✓  1 e2e/role-first-member-add.spec.ts:238:7 › task-14 · role-first member add › (a) 团队创建 role-only：成员 agentId = 角色 defaultAgentId（请求体无 agentId） (341ms)
+[cleanup] team tm_0000000016 DELETE -> 200
+[cleanup] role ar_0000000023 DELETE -> 200
+[cleanup] role ar_0000000024 DELETE -> 200
+  ✓  2 e2e/role-first-member-add.spec.ts:273:7 › task-14 · role-first member add › (a+b) 详情页添加成员：role-only 无 agentId；外部岗位守卫 → 执行 Agent → opencodeAgentName 持久化（reload） (3.4s)
+  ✓  3 e2e/role-first-member-add.spec.ts:394:7 › task-14 · role-first member add › (c) 会话页仍零 <select>、零 message-agent-select (1.7s)
+
+  3 passed (6.8s)
+PW_EXIT=0
+--- END RAW OUTPUT ------------------------------------------------------------
+
+Coverage proven by the 3 cases:
+  (a)   team-create role-only with NO `agentId` in the request body;
+        persisted member.agentId === role.defaultAgentId (server rule 2).
+  (a+b) detail-page add-member role-only + external-role guard
+        ("（外部）" option -> executor slot -> confirm blocked with zero request
+        when executor unset -> after picking internal executor the member
+        persists opencodeAgentName === external name (rule 5) and
+        agentId === executor); reload shows the row and API read-back matches.
+  (c)   session page /teams/tm_0000000001/session still has ZERO `<select>`
+        and ZERO `message-agent-select`.
+
+================================================================================
+[3] CLEANUP RECEIPTS (throwaway fixtures deleted by the spec's finally block)
+================================================================================
+[cleanup] team tm_0000000015 DELETE -> 200
+[cleanup] role ar_0000000022 DELETE -> 200
+[cleanup] team tm_0000000016 DELETE -> 200
+[cleanup] role ar_0000000023 DELETE -> 200
+[cleanup] role ar_0000000024 DELETE -> 200
+
+All throwaway teams/roles created by this spec use the `qa-t14-*` / run-tagged
+names and were DELETE'd (team first, then role, to avoid 409 in-use).
+
+================================================================================
+[4] LIVE RESIDUE CHECK (post-run, live DB via server API :13000)
+================================================================================
+GET /api/v1/agent-roles  -> roles count: 11
+GET /api/v1/teams        -> teams count: 2
+
+ROLE NAMES:
+   产品经理 (ar_product)
+   项目经理 (ar_project_manager)
+   架构师 (ar_architect)
+   开发者 (ar_developer)
+   测试 (ar_tester)
+   计划员 (ar_plan)
+   知识管理员 (ar_librarian)
+   Sisyphus (ar_0000000001)
+   Prometheus (ar_0000000002)
+   Atlas (ar_0000000003)
+   通用 (ar_general)
+
+TEAM NAMES:
+   probe-role-only (tm_0000000002)
+   vteam开发团队 (tm_0000000001)
+
+qa-t14 residue count: 0   <-- NO residue from this spec
+
+INTERPRETATION:
+  * `qa-t14-*` throwaways created by web/e2e/role-first-member-add.spec.ts are
+    GONE (count 0; live DB shows no trace of this spec's fixtures).
+  * `probe-role-only` (team tm_0000000002) and the roles `Sisyphus` /
+    `Prometheus` / `Atlas` (ar_0000000001..0003) belong to OTHER workstreams,
+    not to task-14. They are pre-existing live-stack fixtures and were NOT
+    created, modified, or deleted by this spec.
+
+================================================================================
+[5] ABSORBED FILES (NOT part of this closeout commit)
+================================================================================
+`git show --stat fdfeb1f` confirms both files landed in the concurrent commit:
+
+  web/app/(main)/teams/[id]/page.tsx          | 66 +++++++++++++++++++++++++--
+  web/app/(main)/teams/[id]/session/page.tsx  | 31 ++++++++++++----
+
+Working-tree state for both is clean; this closeout stages NEITHER.
+
+================================================================================
+[6] THROWAWAY CONFIG
+================================================================================
+`web/.t14.playwright.config.ts` is a throwaway runner config; it is DELETED by
+this closeout and must NOT be committed (never `git add`ed).
