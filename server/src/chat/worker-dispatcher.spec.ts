@@ -7694,12 +7694,12 @@ describe('WorkerDispatcher', () => {
         expect(execPayload().agent).toBe('vteam-product');
       });
 
-      it('门真时 plan_mode 显式选择不能绕过 → effectivePlan 下发 vteam-plan（不透传成员选择）', async () => {
+      it('plan 开关不再替换 agent：门真 + 计划开关真 → 仍下发绑定候选 vteam-product', async () => {
         capsWith(true, ['vteam-plan', 'vteam-product']);
         selectMemberAgent('build');
         const d = createDispatcher();
         await d.dispatch(withTask({ planMode: true }));
-        expect(execPayload().agent).toBe('vteam-plan');
+        expect(execPayload().agent).toBe('vteam-product');
       });
 
       it('能力位假 → 回退现状（显式选择透传 plan）', async () => {
@@ -7778,15 +7778,27 @@ describe('WorkerDispatcher', () => {
         expect(execPayload()).toEqual(fallback);
       });
 
-      it('effectivePlan 真 + 门真 → 下发 vteam-plan', async () => {
+      it('回归：plan 开关真 + 绑定候选不在能力位 → 回落成员显式绑定 build（旧行为会强制 vteam-plan）', async () => {
+        // 门其他条件为真且 names 含 vteam-plan，但成员绑定的 product 候选未被 worker 声明
+        // → 仍按成员绑定回退，计划开关无权把执行 agent 改写为 vteam-plan。
+        capsWith(true, ['vteam-plan']);
+        selectMemberAgent('build');
+        const d = createDispatcher();
+        await d.dispatch(withTask({ planMode: true }));
+        expect(execPayload().agent).toBe('build');
+      });
+
+      it('plan 开关真 + 能力位仅含 vteam-plan（不含绑定候选）→ 省略 agent 键，不被计划开关改写', async () => {
         capsWith(true, ['vteam-plan']);
         selectMemberAgent(null);
         const d = createDispatcher();
         await d.dispatch(withTask({ planMode: true }));
-        expect(execPayload().agent).toBe('vteam-plan');
+        expect(
+          Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
+        ).toBe(false);
       });
 
-      it('effectivePlan 真 + 门假 → 回退现状（无显式选择则省略 agent 键）', async () => {
+      it('plan 开关真 + 门假 → 回退现状（无显式选择则省略 agent 键）', async () => {
         capsWith(false, ['vteam-plan']);
         selectMemberAgent(null);
         const d = createDispatcher();
@@ -7864,13 +7876,13 @@ describe('WorkerDispatcher', () => {
         expect(execPayload().agent).toBe('vteam-product');
       });
 
-      it('(d) 计划职责 → 仍下发 vteam-plan（自定义 agent 不抢占计划位）', async () => {
+      it('(d) 执行 agent 取绑定候选而非 plan 开关：自定义 agent + 计划开关真 → 仍下发 vteam-demo-agent', async () => {
         mockAgentRow({ agentKey: 'demo-agent', role: null });
         capsWith(true, ['vteam-plan', 'vteam-demo-agent']);
         selectMemberAgent(null);
         const d = createDispatcher();
         await d.dispatch(withTask({ planMode: true }));
-        expect(execPayload().agent).toBe('vteam-plan');
+        expect(execPayload().agent).toBe('vteam-demo-agent');
       });
 
       it("(e) 非法 agentKey（'Bad-Key'）→ 不拼出 agent 名（即使能力位含该名也省略）", async () => {
@@ -7882,6 +7894,15 @@ describe('WorkerDispatcher', () => {
         expect(
           Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
         ).toBe(false);
+      });
+
+      it('(f) 绑定 agentKey=plan + 计划开关关 → 下发 vteam-plan（唯一来源是绑定，不是计划模式）', async () => {
+        mockAgentRow({ agentKey: 'plan', role: null });
+        capsWith(true, ['vteam-plan']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('vteam-plan');
       });
     });
 

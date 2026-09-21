@@ -35,10 +35,7 @@ import {
   resolveConstantPolicySource,
   type AgentToolState,
 } from '../execution-policies/execution-policy.service';
-import {
-  getOpencodeAgentDuty,
-  VTEAM_PLAN_AGENT_NAME,
-} from '../common/opencode-agent-duty';
+import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
@@ -2213,9 +2210,6 @@ export class WorkerDispatcher
         teamMemberRows.find((m: any) => m.id === teamMemberId)?.role
           ?.rolePrompt ?? null,
     };
-    // Todo 13 策略 agent 候选的计划侧输入（与下发 system 的 taskPlanMode 同源，
-    // 仅做只读镜像，不改变计划模式指令逻辑）。
-    let effectivePlanForPolicy = false;
     if (taskIdForPrompt) {
       if (memoryIndex) {
         systemOpts.memoryIndex = memoryIndex;
@@ -2234,7 +2228,6 @@ export class WorkerDispatcher
         effectivePlan = getOpencodeAgentDuty(mainAgentName) === 'plan';
       }
       systemOpts.taskPlanMode = effectivePlan;
-      effectivePlanForPolicy = effectivePlan;
     } else {
       systemOpts.teamMode = true;
       systemOpts.taskId = '';
@@ -2243,19 +2236,17 @@ export class WorkerDispatcher
     const opencodeAgentName = teamMemberId
       ? await this.resolveMemberOpencodeAgentName(teamMemberId)
       : null;
-    // Todo 13 dispatch 优先级（.omo/plans/vteam-role-behavior-enforcement.md
-    // Decision highlights 行 23）：绑定策略且 worker 能力位
-    // `enabled && names.includes(候选)` 真 → `agent = effectivePlan ? VTEAM_PLAN_AGENT_NAME
-    // : 'vteam-<agentKey>'`（目标 Agent 行经 resolvePolicyAgentCandidate 映射：
-    // todo 10 起只认 agentKey，非法/缺席 → 无候选，直接回退）；否则现状回退
-    // （opencodeAgentName 有值则传，否则省略 agent 键，与引入前逐字节一致）。
-    // 显式成员选择（TeamMember.opencodeAgentName）与 plan_mode agentName 均不能绕过
-    // 此门：门真时一律用候选策略 agent 覆盖，门假时一律回退现状。
-    // 字面量来源收敛为职责注册表导出（agent-role-decommission todo 2）——值不变，
-    // 仅把散落字面量改为单一来源；worker guard 仍只认 `vteam-plan`，线格式字节不变。
-    const policyCandidateAgent: string | null = effectivePlanForPolicy
-      ? VTEAM_PLAN_AGENT_NAME
-      : resolvePolicyAgentCandidate(agentIdentity);
+    // 执行 agent 恒由成员绑定唯一决定（本次收敛：计划模式不再替换执行 agent——是否
+    // "计划模式"是所绑定 agent 自身的属性，用户要用计划 agent 就直接绑定计划 agent，
+    // 平台不代选；`systemOpts.taskPlanMode` 只控计划指令注入，与本决策无关）。
+    // 决策式：目标 Agent 行经 resolvePolicyAgentCandidate 映射出内部候选
+    // `vteam-<agentKey>`（todo 10 起只认 agentKey，非法/缺席 → 无候选）；绑定策略且
+    // worker 能力位 `enabled && names.includes(候选)` 真 → `agent = 候选`，否则回退
+    // 成员显式绑定 opencodeAgentName（有值则传，否则省略 agent 键由引擎默认，与引入前
+    // 逐字节一致）。显式成员选择不能绕过能力位门：门真时一律用候选策略 agent 覆盖，
+    // 门假时一律回退现状。
+    const policyCandidateAgent: string | null =
+      resolvePolicyAgentCandidate(agentIdentity);
     const resolvedAgentName: string | null =
       policyCandidateAgent &&
       workerSupportsAgentPolicies(worker, policyCandidateAgent)

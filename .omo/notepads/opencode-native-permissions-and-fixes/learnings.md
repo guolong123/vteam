@@ -431,3 +431,32 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   每个 key 一张、>6）→ 勾选该卡建团 → 断言 POST `/teams` body `members[0].roleId===role.id` 且无 `agentId`
   → GET 回读 `agentId==="a_tester"`；第二例用 live 外部-only 岗位证明 hint + executor 槽位 + 守卫零请求。
   finally 先删 team 后删 role（防 409 in-use）；residue=0。
+
+## [2026-09-21] 平台强制 plan agent 移除 — 执行 agent 恒取成员绑定
+
+- **改了什么（单文件 + spec）**：`server/src/chat/worker-dispatcher.ts` 删除
+  `effectivePlanForPolicy` 镜像变量与 `agent = effectivePlan ? VTEAM_PLAN_AGENT_NAME :
+  resolvePolicyAgentCandidate(...)` 分支；`policyCandidateAgent` 现在无条件 =
+  `resolvePolicyAgentCandidate(agentIdentity)`（`vteam-<agentKey>`，仅受 worker 能力位门控）。
+  `VTEAM_PLAN_AGENT_NAME` import 随之删除（grep 确认该文件无其余引用；
+  `opencode-agent-duty.ts` 常量保留，platform-mcp `'vteam-plan'` 兜底与
+  tasks.service `effectivePlanMode` DTO 均按 brief 未触碰）。
+- **新优先级（代码不变式，未动能力位门/external-vs-internal 顺序）**：执行 agent 由成员绑定唯一决定——
+  能力位 `enabled && names.includes(vteam-<agentKey>)` 真 → 内部候选；否则回落成员显式绑定
+  `opencodeAgentName`；两者皆无 → 省略 agent 键（引擎默认）。`systemOpts.taskPlanMode`
+  与原 `getOpencodeAgentDuty(mainAgentName) === 'plan'` 启发式原样保留，只管计划指令注入。
+- **计划模式现在真由绑定表达**：要计划行为 = 成员/岗位绑定到 agentKey=plan（或职责为 plan 的
+  opencode 名）的 agent → 候选即 `vteam-plan`；平台不再凭 task.planMode 代选。
+- **spec 迁移（+2 净新增，273→275 个 `it(`）**：原「plan_mode → vteam-plan」3 个断言改为
+  「计划开关不影响 agent 选择」（候选命中→vteam-product / 候选未命中→回落 build / 省键），
+  新增「(f) agentKey=plan + planMode 关 → vteam-plan（绑定才是来源）」。
+- **突变验证（不污染工作树）**：把 `resolvePolicyAgentCandidate(agentIdentity)` 临时换成
+  `systemOpts.taskPlanMode === true ? 'vteam-plan' : ...`（旧行为），`-t "plan 开关真"` 下
+  恰 2 个新回归断言 ✕、门假用例仍 ✓；随后从 /tmp 备份还原，sha256 `eae15611…` 前后一致。
+- **命令与结果**（均 `cd server`）：
+  - `npx tsc --noEmit -p tsconfig.json` → exit 0
+  - `npx jest --runInBand src/chat` → 13 suites / 502 tests 全绿（基线 notepad 记的 497 是旧数字；
+    HEAD spec `it(` 计数 273 → 275 = 本次净 +2）
+  - `npx jest --runInBand src/tasks src/teams` → 13 suites / 422 tests 全绿
+- **坑**：bash 多行命令的 `workdir` 必须显式给 `server`，否则 jest 在仓库根找不到 config 而假红
+  （第一次突变跑出的 exit 1 其实是 "Could not find a config file"，不是断言失败）。
