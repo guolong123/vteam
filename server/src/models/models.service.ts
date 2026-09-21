@@ -533,13 +533,14 @@ export class ModelsService implements OnModuleInit {
       where: { providerID },
       select: { id: true, baseUrl: true },
     })) as { id: string; baseUrl?: string | null }[];
-    if (rows.length === 0) {
-      const credential = await this.prisma.modelCredential.findUnique({
-        where: { providerID },
-      });
+    const credential = await this.prisma.modelCredential.findUnique({
+      where: { providerID },
+      select: { id: true },
+    });
+    if (rows.length === 0 && !credential) {
       const mentioned =
         await this.providerMentionedInWorkerCapabilities(providerID);
-      if (!credential && !mentioned) {
+      if (!mentioned) {
         this.throwNotFound(providerID);
       }
     }

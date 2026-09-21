@@ -79,7 +79,7 @@ export class ModelsController {
    * DELETE /api/v1/models/providers/:providerID → 200 + {providerID, deletedModels, deletedCredential}
    *   物理删除该 provider 全部模型行 + WorkerModelAvailability + ModelCredential（若存在）；
    *   provider 全无痕迹（无模型行 ∧ 无凭据 ∧ worker caps 无提及）→ 404 MODEL_NOT_FOUND；
-   *   幽灵行可删（deletedModels:0）；
+   *   幽灵行（仅 worker caps 提及）可删 deletedModels:0；
    *   删除带 baseUrl 的行 → 触发 C6 门控下发。
    *   静态段 providers 声明在 :id 之前（对齐 @Get('providers') 顺序）。
    */

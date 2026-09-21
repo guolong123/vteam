@@ -905,10 +905,10 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       });
     });
 
-    it('provider 全无痕迹（无模型行 ∧ 无凭据 ∧ worker caps 无提及）→ 404（不查 transaction 不删）', async () => {
+    it('provider 全无痕迹（无模型行+无凭据+worker caps 无提及）→ 404 MODEL_NOT_FOUND（不删事务不删除）', async () => {
       prisma.model.findMany.mockResolvedValue([]);
       prisma.modelCredential.findUnique.mockResolvedValue(null);
-      prisma.worker.findMany.mockResolvedValue([{ capabilities: {} }]);
+      prisma.worker.findMany.mockResolvedValue([]);
 
       await expect(service.removeProvider('ghost')).rejects.toMatchObject({
         response: { code: MODEL_ERRORS.MODEL_NOT_FOUND },
@@ -918,11 +918,12 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       expect(prisma.worker.update).not.toHaveBeenCalled();
     });
 
-    it('幽灵行（0 模型行 + 无凭据 + worker caps 有提及）→ 删除成功 deletedModels:0 不再 404', async () => {
+    it('幽灵 provider（无模型行+无凭据，但 worker caps 提及）→ 不 404，剥离 worker caps 删除成功 deletedModels:0', async () => {
       prisma.model.findMany.mockResolvedValue([]);
       prisma.modelCredential.findUnique.mockResolvedValue(null);
       prisma.worker.findMany.mockResolvedValue([
-        { id: 'w_1', capabilities: { models: ['vllm/qwen3-27b'] } },
+        { id: 'w_1', capabilities: { models: ['qwen-27b/qwen3-27b'] } },
+        { id: 'w_2', capabilities: { models: ['deepseek/deepseek-v4-pro'] } },
       ]);
       prisma.$transaction.mockResolvedValue([
         { count: 0 },
@@ -931,14 +932,15 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       ]);
       prisma.worker.update.mockResolvedValue({});
 
-      const result = await service.removeProvider('vllm');
+      const result = await service.removeProvider('qwen-27b');
 
       expect(result).toEqual({
-        providerID: 'vllm',
+        providerID: 'qwen-27b',
         deletedModels: 0,
         deletedCredential: false,
       });
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.worker.update).toHaveBeenCalledTimes(1);
       expect(prisma.worker.update).toHaveBeenCalledWith({
         where: { id: 'w_1' },
         data: { capabilities: { models: [] } },
