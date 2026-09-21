@@ -513,11 +513,16 @@ export class ModelsService implements OnModuleInit {
   /**
    * DELETE /models/providers/:providerID：Provider 粒度物理删除（重建场景）。
    * 语义（对齐 remove(id) 的单模型删除，扩展到该 provider 全部模型行）：
-   * - 该 provider 无任何模型行 → 404 MODEL_NOT_FOUND（复用 updateProvider 语义，
-   *   不新增错误码；worker-only provider 无模型行不可删，与任务约定一致）；
+   * - 全无痕迹（无模型行 ∧ 无凭据 ∧ worker capabilities 无提及）→ 404 MODEL_NOT_FOUND
+   *   （不新增错误码；仅此时 404）；
+   * - 幽灵行（0 模型行 + 有 worker caps 提及）可删 → 200 + {providerID, deletedModels: 0,
+   *   deletedCredential}，事务后 stripProviderFromWorkerCapabilities 剥离陈旧上报，
+   *   listProviders 不再复活该行；
    * - 事务内先清 WorkerModelAvailability（FK onDelete Restrict）再删全部 model 行，
-   *   最后删该 provider 的 ModelCredential（若存在）；
-   * - 删除前只要任一模型行有 baseUrl → C6 门控下发（provider 配置段随之消失）。
+   *   最后删该 provider 的 ModelCredential（若存在）；ids 可能为空数组，
+   *   deleteMany({ where: { modelId: { in: [] } } }) 幂等安全；
+   * - 删除前只要任一模型行有 baseUrl → C6 门控下发（provider 配置段随之消失）；
+   *   幽灵行无 baseUrl 自然不触发。
    */
   async removeProvider(providerID: string): Promise<{
     providerID: string;
@@ -529,7 +534,14 @@ export class ModelsService implements OnModuleInit {
       select: { id: true, baseUrl: true },
     })) as { id: string; baseUrl?: string | null }[];
     if (rows.length === 0) {
-      this.throwNotFound(providerID);
+      const credential = await this.prisma.modelCredential.findUnique({
+        where: { providerID },
+      });
+      const mentioned =
+        await this.providerMentionedInWorkerCapabilities(providerID);
+      if (!credential && !mentioned) {
+        this.throwNotFound(providerID);
+      }
     }
     const ids = rows.map((r) => r.id);
     const hadBaseUrl = rows.some((r) => !!(r.baseUrl ?? '').trim());
@@ -553,6 +565,33 @@ export class ModelsService implements OnModuleInit {
       await this.maybeDispatchAfterShapeChange(providerID);
     }
     return { providerID, deletedModels: rows.length, deletedCredential };
+  }
+
+  /**
+   * 只读判定：任一 worker 的 capabilities.models 是否提及该 provider。
+   * 复用 splitModelId 拆分约定；非 string/空串跳过；不写库。
+   */
+  private async providerMentionedInWorkerCapabilities(
+    providerID: string,
+  ): Promise<boolean> {
+    const workers = await this.prisma.worker.findMany({
+      select: { capabilities: true },
+    });
+    for (const w of workers) {
+      const models = (w.capabilities as { models?: unknown } | null)?.models;
+      if (!Array.isArray(models)) {
+        continue;
+      }
+      for (const raw of models) {
+        if (typeof raw !== 'string' || !raw) {
+          continue;
+        }
+        if (this.splitModelId(raw).providerID === providerID) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   private async stripProviderFromWorkerCapabilities(

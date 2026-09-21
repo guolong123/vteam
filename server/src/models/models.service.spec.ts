@@ -905,14 +905,44 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       });
     });
 
-    it('provider 无模型行 → 404 MODEL_NOT_FOUND（不查凭据不删除）', async () => {
+    it('provider 全无痕迹（无模型行 ∧ 无凭据 ∧ worker caps 无提及）→ 404（不查 transaction 不删）', async () => {
       prisma.model.findMany.mockResolvedValue([]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.worker.findMany.mockResolvedValue([{ capabilities: {} }]);
 
       await expect(service.removeProvider('ghost')).rejects.toMatchObject({
         response: { code: MODEL_ERRORS.MODEL_NOT_FOUND },
       });
       expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(prisma.modelCredential.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.worker.update).not.toHaveBeenCalled();
+    });
+
+    it('幽灵行（0 模型行 + 无凭据 + worker caps 有提及）→ 删除成功 deletedModels:0 不再 404', async () => {
+      prisma.model.findMany.mockResolvedValue([]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+      prisma.worker.findMany.mockResolvedValue([
+        { id: 'w_1', capabilities: { models: ['vllm/qwen3-27b'] } },
+      ]);
+      prisma.$transaction.mockResolvedValue([
+        { count: 0 },
+        { count: 0 },
+        { count: 0 },
+      ]);
+      prisma.worker.update.mockResolvedValue({});
+
+      const result = await service.removeProvider('vllm');
+
+      expect(result).toEqual({
+        providerID: 'vllm',
+        deletedModels: 0,
+        deletedCredential: false,
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_1' },
+        data: { capabilities: { models: [] } },
+      });
     });
 
     it('全部模型行无 baseUrl → 不触发下发（仍物理删除）', async () => {
