@@ -35,7 +35,6 @@ import {
   resolveConstantPolicySource,
   type AgentToolState,
 } from '../execution-policies/execution-policy.service';
-import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
@@ -441,40 +440,6 @@ export function toolAllowed(
   return effect === 'allow' || effect === 'ask';
 }
 
-/**
- * 计划编制指令（仅主 Agent + 任务计划模式开启时注入）。
- *
- * 本任务的执行计划由计划成员（群聊 @计划员）起草与评审，主 Agent 只做编排：
- * 派起草（含任务简报）→ 收群聊摘要 → question 选评审视角 → 带视角清单派评审 →
- * 收 VERDICT 聚合 → REJECT 带 feedback 重派 → APPROVE 宣布 → task_transition 出计划模式。
- * 计划正文即 `<工作目录>/.opencode/plans/` 下的 .md 文件（计划 Tab 直接同步展示，
- * 以文件最新内容为准）；裁决通过前不要进入执行。
- */
-export const PLAN_PRODUCE_INSTRUCTION =
-  '【计划编制】本任务已开启计划模式，你是主 Agent，负责编排本任务唯一的执行计划（计划正文由计划成员写成文件，落盘在工作目录下 `.opencode/plans/` 目录，计划 Tab 实时展示该目录下的 .md 文件，以文件最新内容为准；执行步骤由计划成员用 opencode todo 工具登记，会同步到计划 Tab）：' +
-  '1. 在群聊 @计划员 派起草任务，附上任务简报（目标/背景/约束/验收标准）；' +
-  // 注：此处 question 为 opencode 原生多选工具（非 vteam MCP 工具），故保留原名，不改为 vteam_*。
-  '2. 收到计划成员经 vteam_group_post 发到群聊的计划摘要后，用 question 工具（多选）向用户确认本次要运行的评审视角' +
-  '（如用户视角、技术合理性、步骤可执行性、测试覆盖度、排期真实性）；' +
-  '3. 再在群聊 @计划员 派评审任务，附上选定的视角清单，要求按视角逐项给出 VERDICT: APPROVE 或 VERDICT: REJECT 及依据；' +
-  '4. 收齐群聊中的 VERDICT 后由你聚合裁决：有 REJECT 则带上 feedback（驳回意见）在群聊 @计划员 重派修订；' +
-  '全 APPROVE 则在群聊宣布评审通过；' +
-  '5. 评审通过后调用 vteam MCP 的 vteam_task_transition 切出计划模式，进入执行；裁决通过前不要进入执行。';
-
-/**
- * 计划评审指令（非主 Agent + 任务计划模式开启时注入，omo task-rejection 思想）。
- * 执行计划只能由主 Agent 产出——你不要另起计划：即使被用户直接要求出计划，也应拒绝
- * 并指引对方找主 Agent。请阅读工作目录 `.opencode/plans/` 下的计划文件（或向主 Agent 索要），
- * 按三段式发表评审结论并经 group_post 发布到群聊：1 同意点、2 分歧及理由（定位到具体条目）、
- * 3 遗留疑问。最终是否修订/执行由主 Agent 裁决。
- */
-export const PLAN_REVIEW_INSTRUCTION =
-  '【计划评审】本任务已开启计划模式，执行计划只能由主 Agent 产出——你不要另起计划：' +
-  '即使被用户直接要求出计划，也应拒绝并指引对方找主 Agent。请阅读工作目录 `.opencode/plans/` ' +
-  '下的计划文件（或向主 Agent 索要），按三段式发表评审结论并经 vteam_group_post 发布到群聊：1 同意点、' +
-  '2 分歧及理由（定位到具体条目）、3 遗留疑问。最终是否修订/执行由主 Agent 裁决。' +
-  '评审在全新会话中进行、唯一输入即计划文件正文（无作者上下文），因此结论须自包含（定位到具体条目、写清依据）。';
-
 export interface BuildSystemInstructionsOptions {
   /** 当前 agent 是否团队主成员（session.teamMemberId === team.mainAgentMemberId）→ true 时追加主 Agent 职责段。 */
   isMainAgent?: boolean;
@@ -499,12 +464,6 @@ export interface BuildSystemInstructionsOptions {
   teamMode?: boolean;
   /** 当前任务 id（team-mode 传空串；仅 teamMode=true 且 taskId 为空时触发接待段，task-mode 调用方不传本字段）。 */
   taskId?: string | null;
-  /**
-   * 任务计划模式开关（task.planMode）：true 时追加计划分流指令——主 Agent（isMainAgent）
-   * 收 PLAN_PRODUCE_INSTRUCTION（出唯一计划），其他成员收 PLAN_REVIEW_INSTRUCTION
-   * （只评审不起草，越界拒绝）；false/缺省不注入任何计划段（行为与引入前一致）。
-   */
-  taskPlanMode?: boolean;
   /**
    * 角色职责边界段（Todo 4）：调用方先由目标 Agent 的角色/opencode agent 名渲染
    * （renderBoundarySection）后传入；非空时追加【职责边界】段，空/缺省不注入
@@ -660,13 +619,6 @@ export function buildSystemInstructions(
   // P1：issue 完整版仅显式开关时注入（dispatch 按目标角色传入；缺省一句版，字节兼容）。
   if (opts?.issueDetail === true) {
     blocks.push(ISSUE_FULL_INSTRUCTION);
-  }
-  // 计划分流：仅任务计划模式开启时注入；主 Agent 出唯一计划，其他成员只评审不起草。
-  // taskPlanMode=false/缺省 → 不注入（字节级保持原行为）。
-  if (opts?.taskPlanMode === true) {
-    blocks.push(
-      opts?.isMainAgent ? PLAN_PRODUCE_INSTRUCTION : PLAN_REVIEW_INSTRUCTION,
-    );
   }
   if (opts?.team && opts.team.length > 0) {
     const teamLines = opts.team.map(
@@ -2200,8 +2152,7 @@ export class WorkerDispatcher
       // todo 10：判据改由 agentKey 提供（模板行 agentKey === role ⇒ 结果不变；
       // 自定义 agentKey 为小写 ASCII，永不命中中文子串检查 ⇒ 仍 false，与旧 null 一致）。
       issueDetail: roleNeedsIssueDetail(agentIdentity.agentKey),
-      // 记忆/产出物段屏蔽：由已解析策略 tools 驱动（与上方 correction 同一次解析），
-      // 与 plan-mode 判定（下）故意解耦——工具可用性 ≠ 计划职责。
+      // 记忆/产出物段屏蔽：由已解析策略 tools 驱动（与上方 correction 同一次解析）。
       resolvedTools,
       // 岗位职责段来源（todo 5）：TeamMember.roleId → AgentRole.rolePrompt。
       // 分派目标的成员行由 teamMemberId 精确定位；行缺失/未绑角色/rolePrompt 空 → null
@@ -2214,20 +2165,6 @@ export class WorkerDispatcher
       if (memoryIndex) {
         systemOpts.memoryIndex = memoryIndex;
       }
-      // 有效计划模式 = 显式开关 OR 主 Agent 职责约定（t_0000000010 实测教训：
-      // 用户下拉只写成员行时 task.planMode 保持 0，若只认开关则计划指令永不下发。
-      // 职责按约定映射（plan/prometheus→plan，其余→执行），UI 侧保持零附加逻辑。
-      // 显式开短路（省一次成员查询）；查询失败回退 false（不阻断分派）。
-      const explicitPlan =
-        request.taskContext?.planMode ??
-        (await this.resolveTaskPlanMode(taskIdForPrompt));
-      let effectivePlan = explicitPlan;
-      if (!effectivePlan && mainAgentMemberId) {
-        const mainAgentName =
-          await this.resolveMemberOpencodeAgentName(mainAgentMemberId);
-        effectivePlan = getOpencodeAgentDuty(mainAgentName) === 'plan';
-      }
-      systemOpts.taskPlanMode = effectivePlan;
     } else {
       systemOpts.teamMode = true;
       systemOpts.taskId = '';
@@ -2236,22 +2173,22 @@ export class WorkerDispatcher
     const opencodeAgentName = teamMemberId
       ? await this.resolveMemberOpencodeAgentName(teamMemberId)
       : null;
-    // 执行 agent 恒由成员绑定唯一决定（本次收敛：计划模式不再替换执行 agent——是否
-    // "计划模式"是所绑定 agent 自身的属性，用户要用计划 agent 就直接绑定计划 agent，
-    // 平台不代选；`systemOpts.taskPlanMode` 只控计划指令注入，与本决策无关）。
-    // 决策式：目标 Agent 行经 resolvePolicyAgentCandidate 映射出内部候选
-    // `vteam-<agentKey>`（todo 10 起只认 agentKey，非法/缺席 → 无候选）；绑定策略且
-    // worker 能力位 `enabled && names.includes(候选)` 真 → `agent = 候选`，否则回退
-    // 成员显式绑定 opencodeAgentName（有值则传，否则省略 agent 键由引擎默认，与引入前
-    // 逐字节一致）。显式成员选择不能绕过能力位门：门真时一律用候选策略 agent 覆盖，
-    // 门假时一律回退现状。
+    // 执行 agent 优先级：成员显式绑定的外部 agent（opencodeAgentName，含岗位外部槽位
+    // 预填）是用户的选择，无条件胜出；无外部绑定时才用内部策略候选——目标 Agent 行经
+    // resolvePolicyAgentCandidate 映射出 `vteam-<agentKey>`（todo 10 起只认 agentKey，
+    // 非法/缺席 → 无候选），且仍受 worker 能力位 `enabled && names.includes(候选)` 门控
+    // （能力位只门控内部候选，不门控外部绑定）；两者皆无 → 省略 agent 键，由引擎默认
+    // （与引入前逐字节一致）。
+    // 是否"计划模式"是所绑定 agent 自身的属性：用户要用计划 agent 就直接绑定计划 agent，
+    // 平台不代选、也不注入计划指令。
     const policyCandidateAgent: string | null =
       resolvePolicyAgentCandidate(agentIdentity);
     const resolvedAgentName: string | null =
-      policyCandidateAgent &&
+      opencodeAgentName ??
+      (policyCandidateAgent &&
       workerSupportsAgentPolicies(worker, policyCandidateAgent)
         ? policyCandidateAgent
-        : opencodeAgentName;
+        : null);
     // Todo 11：目标 Agent 的职责边界段由解析出的策略 correction 提供（不再按 agent 名
     // 白名单读取常量）——内置角色走绑定策略（出厂 correction == 常量，输出逐字节一致），
     // 自定义 agent 的自定义 correction 同样注入。策略解析失败/无服务/无 correction →
@@ -3726,26 +3663,6 @@ export class WorkerDispatcher
       return row?.opencodeAgentName ?? null;
     } catch {
       return null;
-    }
-  }
-
-  /**
-   * 任务计划模式开关（Task.planMode）。
-   * 容错：查询失败不阻断分派，回退 false（同 resolveMemberOpencodeAgentName 的增强特性容错）。
-   */
-  private async resolveTaskPlanMode(taskId: string): Promise<boolean> {
-    const repo = (this.prisma as any).task;
-    if (!repo || typeof repo.findUnique !== 'function') {
-      return false;
-    }
-    try {
-      const row = (await repo.findUnique({
-        where: { id: taskId },
-        select: { planMode: true },
-      })) as { planMode: boolean | null } | null;
-      return row?.planMode ?? false;
-    } catch {
-      return false;
     }
   }
 

@@ -60,8 +60,6 @@ import {
   WECOM_SYSTEM_INSTRUCTION,
   TEAM_COLLABORATION_CHARTER_INSTRUCTION,
   AGENT_RECEIPT_IRON_LAW_INSTRUCTION,
-  PLAN_PRODUCE_INSTRUCTION,
-  PLAN_REVIEW_INSTRUCTION,
   TEAM_GROUP_TRIGGER_INSTRUCTION,
   TEAM_SYSTEM_RECEPTION_INSTRUCTION,
   WECOM_TRIGGER_INSTRUCTION,
@@ -2280,70 +2278,15 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain('【职责】负责需求拆解与文档化。');
     });
 
-    it('计划关（缺省）：不注入任何计划段（字节级保持原行为）', () => {
+    it('计划指令已下线：buildSystemInstructions 任何调用都不含计划段（平台不再代控计划模式）', () => {
       const s = buildSystemInstructions(agent);
-      expect(s).not.toContain(PLAN_PRODUCE_INSTRUCTION);
-      expect(s).not.toContain(PLAN_REVIEW_INSTRUCTION);
-      expect(s).not.toContain('【计划编制】');
-      expect(s).not.toContain('【计划评审】');
-      const s2 = buildSystemInstructions(agent, { taskPlanMode: false });
-      expect(s2).not.toContain(PLAN_PRODUCE_INSTRUCTION);
-      expect(s2).not.toContain(PLAN_REVIEW_INSTRUCTION);
-      // 计划模式关闭时无新流程关键字泄漏，且与缺省调用逐字节一致
-      // （注：裸词 question 不断言——主 Agent【托管模式】段含 question_confirm）
-      expect(s2).toBe(s);
-      for (const kw of [
-        'plan-creation',
-        'vteam_plan_review',
-        '用 question 工具',
-      ]) {
-        expect(s).not.toContain(kw);
-        expect(s2).not.toContain(kw);
+      const mainS = buildSystemInstructions(agent, { isMainAgent: true });
+      for (const text of [s, mainS]) {
+        expect(text).not.toContain('【计划编制】');
+        expect(text).not.toContain('【计划评审】');
+        expect(text).not.toContain('plan-creation');
+        expect(text).not.toContain('vteam_plan_review');
       }
-    });
-
-    it('计划开+主 Agent：注入编排指令（@计划员起草→question选视角→@计划员评审→VERDICT聚合→task_transition）', () => {
-      const s = buildSystemInstructions(agent, {
-        isMainAgent: true,
-        taskPlanMode: true,
-      });
-      expect(s).toContain(PLAN_PRODUCE_INSTRUCTION);
-      expect(s).toContain('【计划编制】');
-      // 计划 Tab 同步的是任务目录下的 .md 文件，不再走 submit_artifact type:"plan"
-      expect(s).toContain('.opencode/plans/');
-      expect(s).not.toContain('type:"plan"');
-      expect(s).toContain('todo');
-      expect(s).not.toContain(PLAN_REVIEW_INSTRUCTION);
-      // 主 Agent 编排流：@计划员派起草（含任务简报）→ question 选评审视角 →
-      // @计划员带视角清单派评审 → VERDICT 聚合 → REJECT带feedback重派 → APPROVE宣布 → task_transition
-      expect(s).toContain('@计划员');
-      expect(s).toContain('任务简报');
-      expect(s).toContain('question');
-      expect(s).toContain('评审视角');
-      expect(s).toContain('VERDICT');
-      expect(s).toContain('REJECT');
-      expect(s).toContain('feedback');
-      expect(s).toContain('APPROVE');
-      expect(s).toContain('vteam_task_transition');
-      // 服务端扇出的 plan_review 工具已下线：编排指令不再引用
-      expect(s).not.toContain('vteam_plan_review');
-      expect(s).not.toContain('plan-creation');
-    });
-
-    it('计划开+非主 Agent：注入评审指令（含三段式与禁另起计划）', () => {
-      const s = buildSystemInstructions(agent, {
-        isMainAgent: false,
-        taskPlanMode: true,
-      });
-      expect(s).toContain(PLAN_REVIEW_INSTRUCTION);
-      expect(s).toContain('【计划评审】');
-      expect(s).toContain('不要另起计划');
-      expect(s).toContain('vteam_group_post');
-      expect(s).toContain('.opencode/plans/');
-      expect(s).not.toContain(PLAN_PRODUCE_INSTRUCTION);
-      // 评审在全新会话、输入仅计划文件，结论须自包含
-      expect(s).toContain('全新会话');
-      expect(s).toContain('自包含');
     });
 
     it('产出物提交引导：非 plan 恒注入 submit_artifact 用法；plan 跳过（无该工具，落盘即交付）', () => {
@@ -2377,8 +2320,6 @@ describe('WorkerDispatcher', () => {
         GROUP_TRIGGER_INSTRUCTION,
         TEAM_GROUP_TRIGGER_INSTRUCTION,
         WECOM_TRIGGER_INSTRUCTION,
-        PLAN_PRODUCE_INSTRUCTION,
-        PLAN_REVIEW_INSTRUCTION,
         MAIN_AGENT_INSTRUCTION,
       ]) {
         expect(text).not.toMatch(noBareShort);
@@ -2390,12 +2331,6 @@ describe('WorkerDispatcher', () => {
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('vteam_task_create');
       expect(WECOM_TRIGGER_INSTRUCTION).toContain('vteam_wecom_reply');
       expect(WECOM_TRIGGER_INSTRUCTION).toContain('vteam_group_post');
-      expect(PLAN_PRODUCE_INSTRUCTION).toContain('vteam_group_post');
-      expect(PLAN_PRODUCE_INSTRUCTION).toContain('vteam_task_transition');
-      // question 为 opencode 原生多选工具（非 vteam MCP），保留原名
-      expect(PLAN_PRODUCE_INSTRUCTION).toContain('question');
-      expect(PLAN_PRODUCE_INSTRUCTION).not.toContain('vteam_question');
-      expect(PLAN_REVIEW_INSTRUCTION).toContain('vteam_group_post');
       expect(MAIN_AGENT_INSTRUCTION).toContain('vteam_notify_agent');
       expect(MAIN_AGENT_INSTRUCTION).not.toContain('vteam_question_confirm');
     });
@@ -7488,32 +7423,13 @@ describe('WorkerDispatcher', () => {
       ).toBe(false);
     });
 
-    it('开关关但主 Agent 职责为 plan（如下拉选 plan）：仍注入编制指令（有效计划模式）', async () => {
-      (prisma as any).team.findUnique.mockResolvedValue({
-        mainAgentMemberId: 'tmm_0000000001',
-      });
-      // 主成员行选了 plan agent（task.planMode 保持 false：单控件零附加逻辑）
-      (prisma as any).teamMember.findFirst.mockImplementation(async (q: any) =>
-        q?.select?.opencodeAgentName !== undefined
-          ? { opencodeAgentName: 'plan' }
-          : { overrideModelId: null },
-      );
-      const d = createDispatcher();
-      await d.dispatch(
-        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
-      );
-      expect(workerClient.execute.mock.calls[0][1].system).toContain(
-        '【计划编制】',
-      );
-    });
-
-    it('开关关且主 Agent 为执行职责：不注入（默认安全）', async () => {
+    it('计划指令已下线：dispatch 的系统提示不含【计划编制】/【计划评审】', async () => {
       (prisma as any).team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_0000000001',
       });
       (prisma as any).teamMember.findFirst.mockImplementation(async (q: any) =>
         q?.select?.opencodeAgentName !== undefined
-          ? { opencodeAgentName: 'build' }
+          ? { opencodeAgentName: 'Prometheus - Plan Builder' }
           : { overrideModelId: null },
       );
       const d = createDispatcher();
@@ -7538,43 +7454,6 @@ describe('WorkerDispatcher', () => {
       expect(system).not.toContain('plan_submit');
       expect(system).not.toContain('plan_review');
       expect(system).not.toContain('【计划工作流】');
-    });
-
-    it('计划模式由绑定 agent 的职责派生：非 a_plan 名（prometheus）也命中 plan 职责', async () => {
-      (prisma as any).team.findUnique.mockResolvedValue({
-        mainAgentMemberId: 'tmm_0000000001',
-      });
-      // 名字既非 a_plan 也非 vteam-plan，但职责注册表判定为 plan（todo 2：按职责不按名）
-      (prisma as any).teamMember.findFirst.mockImplementation(async (q: any) =>
-        q?.select?.opencodeAgentName !== undefined
-          ? { opencodeAgentName: 'Prometheus - Plan Builder' }
-          : { overrideModelId: null },
-      );
-      const d = createDispatcher();
-      await d.dispatch(
-        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
-      );
-      expect(workerClient.execute.mock.calls[0][1].system).toContain(
-        '【计划编制】',
-      );
-    });
-
-    it('计划模式职责判据不误伤：vteam-prometheus（基底名不在注册表）→ 执行职责', async () => {
-      (prisma as any).team.findUnique.mockResolvedValue({
-        mainAgentMemberId: 'tmm_0000000001',
-      });
-      (prisma as any).teamMember.findFirst.mockImplementation(async (q: any) =>
-        q?.select?.opencodeAgentName !== undefined
-          ? { opencodeAgentName: 'vteam-prometheus' }
-          : { overrideModelId: null },
-      );
-      const d = createDispatcher();
-      await d.dispatch(
-        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
-      );
-      const system = workerClient.execute.mock.calls[0][1].system as string;
-      expect(system).not.toContain('【计划编制】');
-      expect(system).not.toContain('【计划评审】');
     });
 
     it('Todo9 memoryIndex：team+global 计数 + 最近条目进 system（任务级记忆已删除，prompt hint 富集）', async () => {
@@ -7618,7 +7497,7 @@ describe('WorkerDispatcher', () => {
       ).not.toContain('【可用记忆索引');
     });
 
-    it('Todo2 主门唯一来源 team.mainAgentMemberId；task 表只允许 planMode 单字段读取', async () => {
+    it('Todo2 主门唯一来源 team.mainAgentMemberId；dispatch 不再读取 task 表', async () => {
       (prisma as any).team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_0000000001',
       });
@@ -7629,30 +7508,11 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.execute.mock.calls[0][1].system).toContain(
         MAIN_AGENT_INSTRUCTION,
       );
-      // 计划模式开关是 task 表唯一的合法读取（select planMode 单字段，主门判定仍只看 team 表）
-      expect(prisma.task.findUnique).toHaveBeenCalledTimes(1);
-      expect(prisma.task.findUnique).toHaveBeenCalledWith(
-        expect.objectContaining({ select: { planMode: true } }),
-      );
-    });
-
-    it('taskContext 透传 planMode → 免 task 表读取（零读路径保留）', async () => {
-      (prisma as any).team.findUnique.mockResolvedValue({
-        mainAgentMemberId: 'tmm_0000000001',
-      });
-      const d = createDispatcher();
-      await d.dispatch(
-        teamRequest({
-          taskContext: { taskId: 't_0000000001', planMode: true },
-        }) as any,
-      );
-      expect(workerClient.execute.mock.calls[0][1].system).toContain(
-        '【计划编制】',
-      );
+      // 计划模式指令注入已下线 → dispatch 零 task 表读取（主门判定只看 team 表）
       expect(prisma.task.findUnique).not.toHaveBeenCalled();
     });
 
-    describe('Todo 13 dispatch 优先级：能力位+名称门控策略 agent（门真→候选，否则现状回退）', () => {
+    describe('Todo 13 dispatch 优先级：外部绑定 > 能力位门控的内部候选 > 省略（引擎默认）', () => {
       const capsWith = (enabled: boolean, names: string[]) => {
         prisma.worker.findUnique.mockResolvedValue({
           id: 'w_0000000001',
@@ -7686,20 +7546,20 @@ describe('WorkerDispatcher', () => {
         expect(execPayload().agent).toBe('vteam-product');
       });
 
-      it('门真时显式成员选择不能绕过 → 仍下发候选策略 agent（不透传成员选择）', async () => {
+      it('门真时成员显式外部绑定胜出 → 下发 opencodeAgentName（内部候选仅作回退）', async () => {
         capsWith(true, ['vteam-product', 'vteam-plan']);
         selectMemberAgent('plan');
         const d = createDispatcher();
         await d.dispatch(withTask());
-        expect(execPayload().agent).toBe('vteam-product');
+        expect(execPayload().agent).toBe('plan');
       });
 
-      it('plan 开关不再替换 agent：门真 + 计划开关真 → 仍下发绑定候选 vteam-product', async () => {
+      it('外部绑定 build + 门真 → 下发 build（绑定优先于内部候选）', async () => {
         capsWith(true, ['vteam-plan', 'vteam-product']);
         selectMemberAgent('build');
         const d = createDispatcher();
-        await d.dispatch(withTask({ planMode: true }));
-        expect(execPayload().agent).toBe('vteam-product');
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('build');
       });
 
       it('能力位假 → 回退现状（显式选择透传 plan）', async () => {
@@ -7778,31 +7638,30 @@ describe('WorkerDispatcher', () => {
         expect(execPayload()).toEqual(fallback);
       });
 
-      it('回归：plan 开关真 + 绑定候选不在能力位 → 回落成员显式绑定 build（旧行为会强制 vteam-plan）', async () => {
-        // 门其他条件为真且 names 含 vteam-plan，但成员绑定的 product 候选未被 worker 声明
-        // → 仍按成员绑定回退，计划开关无权把执行 agent 改写为 vteam-plan。
+      it('绑定候选不在能力位 + 外部绑定 build → 下发 build（外部绑定不依赖能力位）', async () => {
+        // names 含 vteam-plan 但不含绑定的 product 候选 → 内部候选未声明，外部绑定胜出。
         capsWith(true, ['vteam-plan']);
         selectMemberAgent('build');
         const d = createDispatcher();
-        await d.dispatch(withTask({ planMode: true }));
+        await d.dispatch(withTask());
         expect(execPayload().agent).toBe('build');
       });
 
-      it('plan 开关真 + 能力位仅含 vteam-plan（不含绑定候选）→ 省略 agent 键，不被计划开关改写', async () => {
+      it('绑定候选不在能力位 + 无外部绑定 → 省略 agent 键（内部候选受能力位门控）', async () => {
         capsWith(true, ['vteam-plan']);
         selectMemberAgent(null);
         const d = createDispatcher();
-        await d.dispatch(withTask({ planMode: true }));
+        await d.dispatch(withTask());
         expect(
           Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
         ).toBe(false);
       });
 
-      it('plan 开关真 + 门假 → 回退现状（无显式选择则省略 agent 键）', async () => {
+      it('门假 + 无外部绑定 → 省略 agent 键', async () => {
         capsWith(false, ['vteam-plan']);
         selectMemberAgent(null);
         const d = createDispatcher();
-        await d.dispatch(withTask({ planMode: true }));
+        await d.dispatch(withTask());
         expect(
           Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
         ).toBe(false);
@@ -7876,12 +7735,12 @@ describe('WorkerDispatcher', () => {
         expect(execPayload().agent).toBe('vteam-product');
       });
 
-      it('(d) 执行 agent 取绑定候选而非 plan 开关：自定义 agent + 计划开关真 → 仍下发 vteam-demo-agent', async () => {
+      it('(d) 无外部绑定时执行 agent 取内部候选：自定义 agent + 门真 → 仍下发 vteam-demo-agent', async () => {
         mockAgentRow({ agentKey: 'demo-agent', role: null });
         capsWith(true, ['vteam-plan', 'vteam-demo-agent']);
         selectMemberAgent(null);
         const d = createDispatcher();
-        await d.dispatch(withTask({ planMode: true }));
+        await d.dispatch(withTask());
         expect(execPayload().agent).toBe('vteam-demo-agent');
       });
 
@@ -7896,7 +7755,7 @@ describe('WorkerDispatcher', () => {
         ).toBe(false);
       });
 
-      it('(f) 绑定 agentKey=plan + 计划开关关 → 下发 vteam-plan（唯一来源是绑定，不是计划模式）', async () => {
+      it('(f) 无外部绑定 + agentKey=plan → 下发 vteam-plan（内部候选由绑定角色决定）', async () => {
         mockAgentRow({ agentKey: 'plan', role: null });
         capsWith(true, ['vteam-plan']);
         selectMemberAgent(null);
@@ -7906,10 +7765,11 @@ describe('WorkerDispatcher', () => {
       });
     });
 
-    // Normative agent-selection contract: rules (1)-(4) declared in
-    // .omo/evidence/agent-role-decommission/task-1-consumer-map.txt, source
-    // expression at worker-dispatcher.ts:2141-2148.
-    describe('agent-selection precedence（4 条规范契约，todo 1 钉死）', () => {
+    // agent-selection 新契约（本次变更，取代旧 4 条规范契约）：
+    // (1) 成员显式外部绑定 opencodeAgentName 恒胜出；
+    // (2) 无外部绑定时取内部策略候选 vteam-<agentKey>，须被 worker 能力位声明；
+    // (3) 两者皆无 → 省略 agent 键（引擎默认）。
+    describe('agent-selection precedence（3 条规范契约：外部绑定 > 内部候选 > 省略）', () => {
       const capsWith = (enabled: boolean, names: string[]) => {
         prisma.worker.findUnique.mockResolvedValue({
           id: 'w_0000000001',
@@ -7950,16 +7810,25 @@ describe('WorkerDispatcher', () => {
         expect(resolvePolicyAgentCandidate({ agentKey: null })).toBeNull();
       });
 
-      it('rule 1：策略候选解析且 worker 支持 → 候选胜出，opencodeAgentName 被忽略', async () => {
+      it('rule 1：成员外部绑定 "Sisyphus - ultraworker" 胜出——即使内部候选被 worker 支持', async () => {
         mockAgentRow({ agentKey: 'demo-agent', role: null });
         capsWith(true, ['vteam-demo-agent', 'vteam-plan']);
-        selectMemberAgent('plan');
+        selectMemberAgent('Sisyphus - ultraworker');
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(execPayload().agent).toBe('Sisyphus - ultraworker');
+      });
+
+      it('rule 2：无外部绑定 + 候选被 worker 支持 → 内部候选胜出', async () => {
+        mockAgentRow({ agentKey: 'demo-agent', role: null });
+        capsWith(true, ['vteam-demo-agent', 'vteam-plan']);
+        selectMemberAgent(null);
         const d = createDispatcher();
         await d.dispatch(withTask());
         expect(execPayload().agent).toBe('vteam-demo-agent');
       });
 
-      it('rule 2：候选未被 worker 支持 → opencodeAgentName 胜出', async () => {
+      it('rule 2b：外部绑定 + 候选未被 worker 支持 → 外部绑定胜出', async () => {
         mockAgentRow({ agentKey: 'demo-agent', role: null });
         capsWith(false, ['vteam-demo-agent']);
         selectMemberAgent('plan');
@@ -7968,7 +7837,7 @@ describe('WorkerDispatcher', () => {
         expect(execPayload().agent).toBe('plan');
       });
 
-      it('rule 3：无候选且无 opencodeAgentName → 省略 agent 键（引擎默认）', async () => {
+      it('rule 3：无外部绑定 + 候选未被 worker 支持 → 省略 agent 键（引擎默认）', async () => {
         mockAgentRow({ agentKey: 'demo-agent', role: null });
         capsWith(true, ['vteam-product']);
         selectMemberAgent(null);
@@ -7979,7 +7848,18 @@ describe('WorkerDispatcher', () => {
         ).toBe(false);
       });
 
-      it('rule 4 (dispatch)：agentKey 缺席 + 无 role → 无策略候选，直接回退 opencodeAgentName', async () => {
+      it('rule 3b：候选缺席（agentKey 空）+ 无外部绑定 → 省略 agent 键（引擎默认）', async () => {
+        mockAgentRow({ agentKey: null, role: null });
+        capsWith(true, ['vteam-product', 'vteam-plan']);
+        selectMemberAgent(null);
+        const d = createDispatcher();
+        await d.dispatch(withTask());
+        expect(
+          Object.prototype.hasOwnProperty.call(execPayload(), 'agent'),
+        ).toBe(false);
+      });
+
+      it('rule 3c：候选缺席（agentKey 空）+ 外部绑定 → 外部绑定胜出', async () => {
         mockAgentRow({ agentKey: null, role: null });
         capsWith(true, ['vteam-product', 'vteam-plan']);
         selectMemberAgent('plan');

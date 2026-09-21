@@ -174,10 +174,13 @@ describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 ag
     );
   });
 
-  it('计划提示词只指向 .opencode/plans/ 文件（不再教模型提交 type:"plan"）', () => {
+  it('平台不再注入计划指令（PLAN_PRODUCE/PLAN_REVIEW 常量已删除；不教模型提交 type:"plan"）', () => {
     const hits = grepSource(/type:\s*["']plan["']/);
     expect(hits).toEqual([]);
-    const produceHits = grepSource(/export const PLAN_PRODUCE_INSTRUCTION/);
-    expect(produceHits).toHaveLength(1);
+    // 计划行为改由所绑定 agent 自身的 prompt 表达：平台级计划指令常量必须缺席。
+    const produceHits = grepSource(
+      /\bPLAN_PRODUCE_INSTRUCTION\b|\bPLAN_REVIEW_INSTRUCTION\b/,
+    );
+    expect(produceHits).toEqual([]);
   });
 });

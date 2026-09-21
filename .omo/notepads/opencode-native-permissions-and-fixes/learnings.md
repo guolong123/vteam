@@ -460,3 +460,41 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   - `npx jest --runInBand src/tasks src/teams` → 13 suites / 422 tests 全绿
 - **坑**：bash 多行命令的 `workdir` 必须显式给 `server`，否则 jest 在仓库根找不到 config 而假红
   （第一次突变跑出的 exit 1 其实是 "Could not find a config file"，不是断言失败）。
+
+## [2026-09-21] 外部绑定优先（Change A）+ 平台计划指令注入下线（Change B）—— worker-dispatcher 单文件双改
+
+- **Change A 新优先级（bug 修复）**：`resolvedAgentName = opencodeAgentName ?? (候选 && workerSupportsAgentPolicies(worker, 候选) ? 候选 : null)`。
+  成员显式外部绑定（`TeamMember.opencodeAgentName`，含岗位外部槽位预填）**无条件胜出**；内部候选 `vteam-<agentKey>`
+  只在无外部绑定时使用，且仍受能力位 `enabled && names.includes(候选)` 门控（**能力位只门控内部候选，不门控外部绑定**）；
+  两者皆无 → 省略 `agent` 键（引擎默认）。旧行为（候选优先、外部仅兜底）造成「外部绑定岗位顺带选内置执行 agent ⇒ 外部名被忽略」。
+  `...(resolvedAgentName ? { agent: resolvedAgentName } : {})` 调用点未动。
+- **Change B：平台不再注入计划指令**。删除 `PLAN_PRODUCE_INSTRUCTION`/`PLAN_REVIEW_INSTRUCTION` 常量（含
+  `【计划编制】/【计划评审】`）、`BuildSystemInstructionsOptions.taskPlanMode` 字段与注入块、dispatch 的计划计算
+  （`request.taskContext?.planMode` / `resolveTaskPlanMode` / `getOpencodeAgentDuty(主成员绑定名)==='plan'` 启发式）、
+  私有方法 `resolveTaskPlanMode`、该文件的 `getOpencodeAgentDuty` import；`message-dispatcher.ts` 的
+  `taskContext.planMode` 透传字段同步删除。task-mode 结构保持：`if (taskIdForPrompt) { memoryIndex… } else { teamMode/taskId='' }`。
+  是否计划模式由所绑定 agent 自身 prompt 表达（用户指令），平台不代控。
+- **未动**：`platform-mcp/**` 的 plan_mode 工具/服务、`tasks/**` 的 Task.planMode 列与 DTO、`VTEAM_PLAN_AGENT_NAME` /
+  `opencode-agent-duty.ts`（其它消费方仍在：tasks.service / plan-docs.service / review-verdict.listener / execution-policy）、
+  prisma、web。
+- **越界 1 处（brief 的 MUST-NOT-DO 与 DoD 冲突，已最小化处理）**：`server/src/platform-mcp/plan-removal.guard.spec.ts:177-185`
+  原断言 `export const PLAN_PRODUCE_INSTRUCTION` 恰好命中 1 处——与 Change B（常量必须删除）直接互斥；不改则全量必红。
+  已改写为「PLAN_PRODUCE/PLAN_REVIEW 常量必须缺席」的反向防回流锁（保留 `type:"plan"` 零命中断言），未碰任何控制面代码。
+- **命令与结果（均 workdir=server）**：
+  - `npx tsc --noEmit -p tsconfig.json` → exit 0
+  - `npx jest --runInBand src/chat/worker-dispatcher.spec.ts` → 1 suite / 265 tests 全绿（净 -4 条 it：删 8 增 4）
+  - `npx jest --runInBand`（全量）→ 142 suites 过 / **3 suites 失败、5 tests 失败**；失败集与 HEAD 基线**逐一相同**：
+    `task.constants.spec.ts`×3（五态契约未含新 `blocked/block/resume`）、`platform-mcp.service.spec.ts` notify_agent
+    团队维度 triggered、`platform-mcp.service.review-dispatch.spec.ts` 三元组 reason。
+    **基线证明**：`git stash push` 这 4 个文件 → 同 3 套件仍 3 suites / 5 tests 失败（同 5 个测试名）→ `git stash pop` 还原。
+    ⇒ 与本改动零关联；且属 MUST-NOT-DO 的 platform-mcp/tasks 域，**未修**（按 notepad 先例：证明不是我们的，不在越界域修）。
+  - `npx jest --runInBand src/tasks src/teams` → 13 suites / 422 tests 全绿
+  - 突变验证（不污染工作树）：临时改回旧优先级（候选优先）→ `-t 'rule 1'` 恰 1 个新回归断言 ✕（收到
+    `vteam-demo-agent` 而非 `Sisyphus - ultraworker`）；/tmp 备份还原后 sha256 `e6de75bb…` 前后一致。
+- **spec 迁移**：删 4 类计划注入断言（buildSystemInstructions 3 例、dispatch 计划 3 例、taskContext planMode 免读表 1 例…），
+  新建 2 个「平台不再注入计划段」反向锁；agent-selection 契约由旧 4 条改为新 3 条（外部绑定 > 内部候选 > 省略），
+  rule 1 用 brief 指定外部名 `'Sisyphus - ultraworker'` 锁定 Change A；`Todo2` 主门用例改断言 dispatch 零 task 表读取。
+- **坑**：`git stash push -- <path>` 在 workdir=server 下 pathspec 必须相对 server 写（写 `server/src/...` 会
+  "did not match any file(s)" 静默失败，`&&` 链全跳过；当时 tail 到的 `/tmp/jest-baseline.log` 竟是 9/17 的陈旧文件，
+  差点误读 —— 每次用新的日志文件名）。`.omo/evidence/plan-review-execution-gates/task-9/probe.json` 与
+  `.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json` 会话中途变为 modified（非本次改动产生，未触碰）。
