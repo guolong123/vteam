@@ -2476,6 +2476,10 @@ export default function ProvidersTab() {
   const [addError, setAddError] = useState<string | null>(null);
   /* 删除凭据确认弹窗（target=providerID，非空即打开——OBS-003：删除不可恢复，需二次确认） */
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
+  /* 删除 Provider 确认弹窗（target=providerID，非空即打开——整 Provider 物理删除不可恢复） */
+  const [deleteProviderTarget, setDeleteProviderTarget] = useState<string | null>(
+    null
+  );
   /* 二级下钻：搜索关键字（provider id 大小写不敏感 contains 本地过滤）+ 展开态
    *（Record<providerID, true>，多行可同时展开，对齐 agents 页 collapsed map 模式） */
   const [keyword, setKeyword] = useState("");
@@ -2581,6 +2585,26 @@ export default function ProvidersTab() {
     },
     onError: (err) => {
       setProviderError(isApiError(err) ? err.message : "删除失败，请稍后重试");
+    },
+  });
+
+  /* 删除 Provider：DELETE /models/providers/:providerID
+   * 物理删除该 provider 全部模型行 + 凭据 + availability（重建场景）——
+   * 成功后双 invalidation：["model-providers"]（本页）+ ["models"]（目录 Tab）。 */
+  const deleteProviderMutation = useMutation({
+    mutationFn: (providerID: string) =>
+      api.delete<{ providerID: string; deletedModels: number; deletedCredential: boolean }>(
+        `/models/providers/${providerID}`
+      ),
+    onSuccess: () => {
+      setProviderError(null);
+      queryClient.invalidateQueries({ queryKey: ["model-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+    },
+    onError: (err) => {
+      setProviderError(
+        isApiError(err) ? err.message : "删除 Provider 失败，请稍后重试"
+      );
     },
   });
 
@@ -3156,10 +3180,10 @@ export default function ProvidersTab() {
                       {status === "configured" ? (fingerprint ?? "—") : "—"}
                     </span>
 
-                    {/* 操作：编辑配置 / 配置凭据 / 删除凭据（admin 专属；成员只读无操作） */}
+                    {/* 操作：编辑配置 / 配置凭据 / 删除凭据 / 删除 Provider（admin 专属；成员只读无操作） */}
                     <div
                       style={{
-                        width: 240,
+                        width: 320,
                         flexShrink: 0,
                         display: "flex",
                         justifyContent: "flex-end",
@@ -3193,6 +3217,15 @@ export default function ProvidersTab() {
                               disabled={revokeMutation.isPending}
                             />
                           )}
+                          <ActionButton
+                            testid="provider-delete-provider-button"
+                            label="删除Provider"
+                            onClick={() => {
+                              setProviderError(null);
+                              setDeleteProviderTarget(p.providerID);
+                            }}
+                            disabled={deleteProviderMutation.isPending}
+                          />
                         </>
                       )}
                     </div>
@@ -3393,6 +3426,26 @@ export default function ProvidersTab() {
         onConfirm={() => {
           if (revokeTarget) revokeMutation.mutate(revokeTarget);
           setRevokeTarget(null);
+        }}
+      />
+
+      {/* 删除 Provider 二次确认弹窗（整 Provider 物理删除不可恢复，确认后才 DELETE） */}
+      <ConfirmDialog
+        open={deleteProviderTarget !== null}
+        testid="provider-delete-provider-confirm"
+        title="删除 Provider"
+        description={
+          deleteProviderTarget
+            ? `确认删除 ${deleteProviderTarget}？该 Provider 下的全部模型与凭据将被永久删除，且不可恢复。`
+            : undefined
+        }
+        confirmLabel="确认删除"
+        pendingLabel="删除中…"
+        submitting={deleteProviderMutation.isPending}
+        onClose={() => setDeleteProviderTarget(null)}
+        onConfirm={() => {
+          if (deleteProviderTarget) deleteProviderMutation.mutate(deleteProviderTarget);
+          setDeleteProviderTarget(null);
         }}
       />
     </div>

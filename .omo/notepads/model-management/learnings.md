@@ -1319,3 +1319,42 @@ Tags: wave1, channelId, task.completed, resolveChannel, group-chat-reflow, contr
 - **验证**：server `./node_modules/.bin/tsc --noEmit` **0 错误**；`jest --runInBand src/chat/worker-dispatcher.spec.ts + integration.spec + ingress.spec` **72/72 + 49/49 全绿**；web `npx tsc --noEmit` **0 错误**。未改 worker/私聊渲染，未新增 npm 依赖，未 docker build。
 - **⚠️ 并行会话竞争（复现）**：本文件 `worker-event.ingress.ts` 与 `worker-dispatcher.integration.spec.ts` 存在并行会话改动（instanceRef 回写）——integration.spec :313 断言在我改动 resolveChannel 前后均为「HEAD 基线绿 + 工作区红」（HEAD 断言 `{id, taskId}`，工作区实际 `{id, taskId, type}`）；本次因我的改动是 select 变化的直接责任方，更新了该断言使其恢复全绿。
 - **Inherited wisdom**：①「两条路径行为必须一致」是流式+终态化双通道架构的核心不变量——任何 parts 过滤/转换逻辑都应提取为共享函数而非各自实现；② 前端「服务端已过滤 + 前端防御过滤」双保险是防御历史脏数据/残留的稳妥模式；③ `resolveChannel` 的 select 变更牵动所有 `toHaveBeenCalledWith({select})` 断言，改动前先 grep 全仓定位。
+
+---
+
+## [2026-09-21] Task: provider-delete
+
+- **目标**：Provider 粒度物理删除，支持删除 qwen-27b 所属 provider 后重建。新增 `DELETE /models/providers/:providerID` + 前端 Provider 行「删除Provider」按钮 + 二次确认弹窗。
+- **后端 service**（`models.service.ts`，插在 `remove(id)` 之后）：`removeProvider(providerID)` 严格镜像 `remove(id)` 单模型删除模式，扩展到 provider 全部模型行：
+  1. `model.findMany({where:{providerID}, select:{id:true, baseUrl:true}})`——零行 → `this.throwNotFound(providerID)`（复用 MODEL_NOT_FOUND，不新增错误码，对齐 updateProvider 404 语义；worker-only provider 不可删为有意约定）。
+  2. `hadBaseUrl = rows.some(r => !!(r.baseUrl ?? '').trim())`——任一模型行带 baseUrl 即需下发。
+  3. `$transaction([workerModelAvailability.deleteMany({modelId:{in:ids}}), model.deleteMany({where:{providerID}}), modelCredential.deleteMany({where:{providerID}})])`——**availability 必须先于 model 删**（FK onDelete Restrict，注意是 `{modelId:{in:ids}}` 而非单 id）。
+  4. `if (hadBaseUrl) await this.maybeDispatchAfterShapeChange(providerID)`。
+  5. 返回 `{providerID, deletedModels: rows.length, deletedCredential: (result[2].count ?? 0) > 0}`。
+- **⚠️ 事务返回元组下标取 count**：`$transaction([...])` 返回结果数组与入参数组一一对应；`deleteMany` 结果形如 `{count:n}`，故 `deletedCredential` 用 `result[2].count > 0` 判定，`deletedModels` 直接用 `rows.length`（findMany 已拿到权威行数，无需读 `result[1].count`）。
+- **controller 路由顺序**（关键）：`@Delete('providers/:providerID')` 插在 `revokeCredentialByProvider`（`providers/:providerID/credentials`，line 68-75）之后、`@Delete(':id')`（line 168）之前。NestJS 按声明顺序匹配——`providers/:providerID` 是两段路径，`providers/:providerID/credentials` 是三段，二者不会互相吞，但都必须在 `:id` 单段之前。测试断言 `Object.getOwnPropertyNames` 索引 `providers/:providerID` < `:id`。
+- **后端测试**（models.service.spec +4，controller.spec +2，共 97 全绿）：
+  - service：① 多行+baseUrl → 三个 deleteMany 参数正确 + dispatch 调用 + 返回 {2,true}；② 零行 → 404 且 `$transaction`/`deleteMany` 未调用；③ 全行无 baseUrl（含纯空白 `'   '`）→ 不 dispatch + {2,false}；④ 无凭据行 → {1,false}。
+  - controller：转发 removeProvider + PATH_METADATA 路由顺序断言。
+- **⚠️ dispatch 测试需 mock 两处**：`maybeDispatchAfterShapeChange` 先 `modelCredential.findUnique({where:{providerID},select:{revokedAt}})` 判活跃，命中后 `dispatchCredentialState` 再 `modelCredential.findMany({where:{revokedAt:null}})`。只 mock findUnique 不够——必须补 `findMany.mockResolvedValue([{providerID, credentialRef}])`，否则 dispatch 内部解密空数组，`dispatchModelCredentials` 不被调用（本次首个测试失败即此坑，已修）。
+- **前端**（`providers-tab.tsx`）：
+  - state `deleteProviderTarget: string | null`（非空即开弹窗）——与既有 `revokeTarget`（删凭据）**语义隔离**，两者都存 providerID 但触发不同破坏性操作。
+  - `deleteProviderMutation`：`api.delete('/models/providers/${providerID}')`，onSuccess 双 invalidate `["model-providers"]` + `["models"]`，onError 写 `providerError` 列表级错误条（复用 D6 banner，role=alert + 3s 自动消失）。
+  - 按钮 testid **`provider-delete-provider-button`**（label「删除Provider」），与既有 `provider-delete-button`（删凭据，label「删除」）**必须区分**——后者仅 `status==="configured"` 时渲染，前者无条件渲染（admin）。行操作容器 width 240→320 容纳第四个按钮。
+  - 确认弹窗复用 `ConfirmDialog`（`src/components/ui/confirm-dialog.tsx`，testid="provider-delete-provider-confirm"）：title「删除 Provider」、description 警告全部模型+凭据永久删除不可恢复、confirmLabel「确认删除」、pendingLabel「删除中…」。
+- **e2e testids 注册**：`testids.ts` 2.14 models-manage 条目新增 6 项：`provider-delete-provider-button` + `provider-delete-provider-confirm-{modal,confirm,cancel,mask}`。
+- **验证**：server `npx tsc --noEmit` 0 错误 + `jest` 两 spec **97/97 全绿**；web `npx tsc --noEmit` 0 错误。未跑 build/dev server（遵循环境纪律）。
+
+---
+
+## [2026-09-21] Task: listProviders-metadata-fix
+
+- **问题**：`ModelsService.listProviders()` 的 provider 元数据查询（`prisma.model.findMany`）带了 `where:{enabled:true}`——当某 provider 的**全部目录行**都是 `enabled:false`（典型：worker 上报/停用），该 provider 仍经 groupBy 之外的路径（在线 worker capabilities union）出现在列表，但元数据查询查不到任何行 → `meta` 为 undefined → 响应装配用条件展开 `...(meta?.baseUrl ? {...} : {})` **直接丢掉 key** → 前端 EditProviderModal `provider.baseUrl ?? ""` 得空串，URL 显示为空。
+- **修复（仅两处，最小 diff）**：
+  1. 元数据查询去掉 `where:{enabled:true}`（**保留 `as never` cast**——生成 client 类型滞后，与 C9 同）；`select` 不变。
+  2. 响应装配改为**恒设 key**：`providerType: meta?.providerType ?? 'cloud'`、`baseUrl: meta?.baseUrl ?? null`（替代两处条件展开）。
+- **modelCount 语义未动**：`groupBy where:{enabled:true}` 原样保留（C9 契约「enabled 模型数」），仅元数据查询解绑 enabled 过滤——两者互不影响，`Math.max(catalogCount, workerCount)` 不变。
+- **ProviderSummary 类型**：`server/src/models/models.service.ts:64-65` 与 `web/src/types/models.ts:86-87` 的 `providerType?/baseUrl?` 均为**可选**（`string | null`），恒设 key 兼容（可选类型接受必设值）。前端 `?? ""` 对 null 安全，故显式 `null` 渲染为空串（cloud 无 URL 正确）。
+- **测试改动（spec 3 处）**：两个既有 `toEqual` 断言（基本聚合用例 + 吊销用例）补 `providerType:'cloud'`/`baseUrl:null`（元数据 mock 为空 → 兜底值）；**新增 1 回归用例**「全部目录行 enabled=false」：`groupBy` 返回 `[]` + worker 上报 `vllm/qwen3-27b` + `model.findMany` mock 返回停用行元数据 → 断言 `findMany` 调用**不含 where**、结果 `{providerType:'local', baseUrl:'http://vllm:8000/v1', modelCount:1(worker)}`。镜像 D5 worker-union 用例的 mock 风格。
+- **验证**：server `npx tsc --noEmit` 0 错误；`npx jest src/models/models.service.spec.ts` **74/74 全绿**（基线 73 + 新增 1）。
+- **未触碰**：`removeProvider`/`remove`/`syncLiveModels`/`updateProvider`（其 :470-479 的 listProviders 调用 + fallback 与新行为一致——fallback 对象本就显式带 providerType/baseUrl，无需改）、controller、前端。未跑 build/dev server。

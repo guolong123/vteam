@@ -20,6 +20,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       update: jest.Mock;
       updateMany: jest.Mock;
       delete: jest.Mock;
+      deleteMany: jest.Mock;
       groupBy: jest.Mock;
     };
     modelCredential: {
@@ -27,6 +28,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       findMany: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
+      deleteMany: jest.Mock;
     };
     gitCredential: {
       findMany: jest.Mock;
@@ -100,6 +102,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         update: jest.fn(),
         updateMany: jest.fn(),
         delete: jest.fn(),
+        deleteMany: jest.fn(),
         groupBy: jest.fn(),
       },
       modelCredential: {
@@ -107,6 +110,7 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         findMany: jest.fn(),
         create: jest.fn(),
         update: jest.fn(),
+        deleteMany: jest.fn(),
       },
       gitCredential: {
         findMany: jest.fn().mockResolvedValue([]),
@@ -282,6 +286,8 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           configured: false,
           fingerprint: null,
           revokedAt: new Date('2026-08-01T00:00:00Z'),
+          providerType: 'cloud',
+          baseUrl: null,
         },
         {
           providerID: 'opencode-go',
@@ -289,6 +295,8 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           configured: true,
           fingerprint: 'sk-a****89xz',
           revokedAt: null,
+          providerType: 'cloud',
+          baseUrl: null,
         },
         {
           providerID: 'zhipu',
@@ -296,6 +304,8 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           configured: false,
           fingerprint: null,
           revokedAt: null,
+          providerType: 'cloud',
+          baseUrl: null,
         },
       ]);
     });
@@ -322,6 +332,8 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
           configured: false,
           fingerprint: null,
           revokedAt: new Date('2026-08-02T00:00:00Z'),
+          providerType: 'cloud',
+          baseUrl: null,
         },
       ]);
     });
@@ -379,6 +391,36 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
       );
       expect(result.find((r) => r.providerID === 'zhipu')?.modelCount).toBe(1);
       expect(result.find((r) => r.providerID === 'qwen')?.modelCount).toBe(1);
+    });
+
+    it('全部目录行 enabled=false：元数据查询不过滤 enabled → 仍返回 providerType/baseUrl（Edit 弹窗不空）', async () => {
+      // 目录侧：该 provider 无 enabled 行（groupBy 空）——provider 经在线 worker 上报进入列表。
+      prisma.model.groupBy.mockResolvedValue([]);
+      prisma.modelCredential.findMany.mockResolvedValue([]);
+      prisma.worker.findMany.mockResolvedValue([
+        { capabilities: { models: ['vllm/qwen3-27b'] } },
+      ]);
+      prisma.model.findMany.mockResolvedValue([
+        { providerID: 'vllm', providerType: 'local', baseUrl: 'http://vllm:8000/v1' },
+      ]);
+
+      const result = await service.listProviders();
+
+      // 关键：元数据查询不再带 where.enabled 过滤（停用行的 baseUrl 仍需回显）。
+      expect(prisma.model.findMany).toHaveBeenCalledWith({
+        select: { providerID: true, providerType: true, baseUrl: true },
+      });
+      expect(result).toEqual([
+        {
+          providerID: 'vllm',
+          modelCount: 1, // 目录 0 + worker 上报 1
+          configured: false,
+          fingerprint: null,
+          revokedAt: null,
+          providerType: 'local',
+          baseUrl: 'http://vllm:8000/v1',
+        },
+      ]);
     });
   });
 
@@ -819,6 +861,104 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         response: { code: MODEL_ERRORS.MODEL_NOT_FOUND },
       });
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('removeProvider（Provider 粒度物理删除：全部模型行 + 凭据 + availability）', () => {
+    it('删除全部模型行 + availability + 凭据，有 baseUrl → 触发 C6 门控下发', async () => {
+      prisma.model.findMany.mockResolvedValue([
+        { id: 'md_0000000001', baseUrl: 'http://vllm:8000/v1' },
+        { id: 'md_0000000002', baseUrl: null },
+      ]);
+      prisma.$transaction.mockResolvedValue([
+        { count: 3 },
+        { count: 2 },
+        { count: 1 },
+      ]);
+      prisma.modelCredential.findUnique.mockResolvedValue({ revokedAt: null });
+      prisma.modelCredential.findMany.mockResolvedValue([
+        { providerID: 'vllm', credentialRef: 'iv:tag:data' },
+      ]);
+
+      const result = await service.removeProvider('vllm');
+
+      expect(prisma.model.findMany).toHaveBeenCalledWith({
+        where: { providerID: 'vllm' },
+        select: { id: true, baseUrl: true },
+      });
+      expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
+        where: { modelId: { in: ['md_0000000001', 'md_0000000002'] } },
+      });
+      expect(prisma.model.deleteMany).toHaveBeenCalledWith({
+        where: { providerID: 'vllm' },
+      });
+      expect(prisma.modelCredential.deleteMany).toHaveBeenCalledWith({
+        where: { providerID: 'vllm' },
+      });
+      expect(workers.dispatchModelCredentials).toHaveBeenCalled();
+      expect(result).toEqual({
+        providerID: 'vllm',
+        deletedModels: 2,
+        deletedCredential: true,
+      });
+    });
+
+    it('provider 无模型行 → 404 MODEL_NOT_FOUND（不查凭据不删除）', async () => {
+      prisma.model.findMany.mockResolvedValue([]);
+
+      await expect(service.removeProvider('ghost')).rejects.toMatchObject({
+        response: { code: MODEL_ERRORS.MODEL_NOT_FOUND },
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(prisma.modelCredential.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('全部模型行无 baseUrl → 不触发下发（仍物理删除）', async () => {
+      prisma.model.findMany.mockResolvedValue([
+        { id: 'md_0000000001', baseUrl: null },
+        { id: 'md_0000000002', baseUrl: '   ' },
+      ]);
+      prisma.$transaction.mockResolvedValue([
+        { count: 0 },
+        { count: 2 },
+        { count: 0 },
+      ]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+
+      const result = await service.removeProvider('p');
+
+      expect(prisma.model.deleteMany).toHaveBeenCalledWith({
+        where: { providerID: 'p' },
+      });
+      expect(workers.dispatchModelCredentials).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        providerID: 'p',
+        deletedModels: 2,
+        deletedCredential: false,
+      });
+    });
+
+    it('无凭据行 → deletedCredential=false，模型仍删除', async () => {
+      prisma.model.findMany.mockResolvedValue([
+        { id: 'md_0000000001', baseUrl: null },
+      ]);
+      prisma.$transaction.mockResolvedValue([
+        { count: 0 },
+        { count: 1 },
+        { count: 0 },
+      ]);
+      prisma.modelCredential.findUnique.mockResolvedValue(null);
+
+      const result = await service.removeProvider('p');
+
+      expect(prisma.model.deleteMany).toHaveBeenCalledWith({
+        where: { providerID: 'p' },
+      });
+      expect(result).toEqual({
+        providerID: 'p',
+        deletedModels: 1,
+        deletedCredential: false,
+      });
     });
   });
 

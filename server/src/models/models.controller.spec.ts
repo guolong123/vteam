@@ -20,6 +20,7 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
     getCredential: jest.Mock;
     revokeCredential: jest.Mock;
     revokeCredentialByProvider: jest.Mock;
+    removeProvider: jest.Mock;
   };
 
   const view = {
@@ -53,6 +54,7 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
       getCredential: jest.fn(),
       revokeCredential: jest.fn(),
       revokeCredentialByProvider: jest.fn(),
+      removeProvider: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -290,6 +292,42 @@ describe('ModelsController（目录 CRUD + 凭据端点）', () => {
     expect(deleteProviderCredIdx).toBeGreaterThan(-1);
     expect(deleteIdIdx).toBeGreaterThan(-1);
     expect(deleteProviderCredIdx).toBeLessThan(deleteIdIdx);
+  });
+
+  it('DELETE /models/providers/:providerID 转发 removeProvider', async () => {
+    service.removeProvider.mockResolvedValue({
+      providerID: 'vllm',
+      deletedModels: 3,
+      deletedCredential: true,
+    });
+
+    const result = await controller.removeProvider('vllm');
+
+    expect(service.removeProvider).toHaveBeenCalledWith('vllm');
+    expect(result).toMatchObject({
+      providerID: 'vllm',
+      deletedModels: 3,
+      deletedCredential: true,
+    });
+  });
+
+  it('路由顺序：@Delete providers/:providerID 静态段在 :id 参数段之前声明', () => {
+    const pathOf = (method: string) =>
+      Reflect.getMetadata(
+        PATH_METADATA,
+        ModelsController.prototype[method],
+      ) as string;
+    const methodNames = Object.getOwnPropertyNames(
+      ModelsController.prototype,
+    ).filter((k) => k !== 'constructor');
+
+    const deleteProviderIdx = methodNames.findIndex(
+      (m) => pathOf(m) === 'providers/:providerID',
+    );
+    const deleteIdIdx = methodNames.findIndex((m) => pathOf(m) === ':id');
+    expect(deleteProviderIdx).toBeGreaterThan(-1);
+    expect(deleteIdIdx).toBeGreaterThan(-1);
+    expect(deleteProviderIdx).toBeLessThan(deleteIdIdx);
   });
 
   describe('DTO 校验（class-validator，当前契约：token 可选、不限 sk- 前缀）', () => {

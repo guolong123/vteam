@@ -75,6 +75,23 @@ export class ModelsController {
   }
 
   /**
+   * 按 provider 物理删除（整 Provider 重建场景，AdminGuard）。
+   * DELETE /api/v1/models/providers/:providerID → 200 + {providerID, deletedModels, deletedCredential}
+   *   物理删除该 provider 全部模型行 + WorkerModelAvailability + ModelCredential（若存在）；
+   *   provider 无模型行 → 404 MODEL_NOT_FOUND；
+   *   删除带 baseUrl 的行 → 触发 C6 门控下发。
+   *   静态段 providers 声明在 :id 之前（对齐 @Get('providers') 顺序）。
+   */
+  @Delete('providers/:providerID')
+  @UseGuards(AdminGuard)
+  @ApiOperation({
+    summary: '按 provider 物理删除（全部模型行 + 凭据 + 可用性，AdminGuard）',
+  })
+  removeProvider(@Param('providerID') providerID: string) {
+    return this.modelsService.removeProvider(providerID);
+  }
+
+  /**
    * 探测 OpenAI 兼容端点的模型元数据（C8 自动预填，AdminGuard）。
    * POST /api/v1/models/probe-endpoint {baseUrl} → 200 + {models:[{id, context?}]}
    *   context 来自 vLLM 的 max_model_len（OpenAI 官方端点无此字段 → 空返回）；

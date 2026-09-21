@@ -193,8 +193,10 @@ export class ModelsService implements OnModuleInit {
       }
     }
 
+    // 元数据查询刻意不过滤 enabled：即使该 provider 全部目录行被停用，Provider 页仍需
+    // 回显 providerType/baseUrl（Edit 弹窗不能空 URL）——modelCount 的 enabled 语义只由
+    // 上面的 groupBy 承担，两者互不影响。
     const providerMetaRowsRaw = (await this.prisma.model.findMany({
-      where: { enabled: true },
       select: { providerID: true, providerType: true, baseUrl: true },
     } as never)) as unknown;
     const providerMetaRows = Array.isArray(providerMetaRowsRaw)
@@ -234,8 +236,8 @@ export class ModelsService implements OnModuleInit {
           configured,
           fingerprint: configured ? (cred?.fingerprint ?? null) : null,
           revokedAt: cred?.revokedAt ?? null,
-          ...(meta?.providerType ? { providerType: meta.providerType } : {}),
-          ...(meta?.baseUrl ? { baseUrl: meta.baseUrl } : {}),
+          providerType: meta?.providerType ?? 'cloud',
+          baseUrl: meta?.baseUrl ?? null,
         };
       })
       .sort((a, b) => a.providerID.localeCompare(b.providerID));
@@ -506,6 +508,45 @@ export class ModelsService implements OnModuleInit {
       );
     }
     return result;
+  }
+
+  /**
+   * DELETE /models/providers/:providerID：Provider 粒度物理删除（重建场景）。
+   * 语义（对齐 remove(id) 的单模型删除，扩展到该 provider 全部模型行）：
+   * - 该 provider 无任何模型行 → 404 MODEL_NOT_FOUND（复用 updateProvider 语义，
+   *   不新增错误码；worker-only provider 无模型行不可删，与任务约定一致）；
+   * - 事务内先清 WorkerModelAvailability（FK onDelete Restrict）再删全部 model 行，
+   *   最后删该 provider 的 ModelCredential（若存在）；
+   * - 删除前只要任一模型行有 baseUrl → C6 门控下发（provider 配置段随之消失）。
+   */
+  async removeProvider(providerID: string): Promise<{
+    providerID: string;
+    deletedModels: number;
+    deletedCredential: boolean;
+  }> {
+    const rows = (await this.prisma.model.findMany({
+      where: { providerID },
+      select: { id: true, baseUrl: true },
+    })) as { id: string; baseUrl?: string | null }[];
+    if (rows.length === 0) {
+      this.throwNotFound(providerID);
+    }
+    const ids = rows.map((r) => r.id);
+    const hadBaseUrl = rows.some((r) => !!(r.baseUrl ?? '').trim());
+    const result = await this.prisma.$transaction([
+      this.prisma.workerModelAvailability.deleteMany({
+        where: { modelId: { in: ids } },
+      }),
+      this.prisma.model.deleteMany({ where: { providerID } }),
+      this.prisma.modelCredential.deleteMany({ where: { providerID } }),
+    ]);
+    const deletedCredential =
+      ((result[2] as { count?: number } | undefined)?.count ?? 0) > 0;
+    // C6：删除带 baseUrl 的 provider → 门控下发（worker 侧 opencode.json 收敛）
+    if (hadBaseUrl) {
+      await this.maybeDispatchAfterShapeChange(providerID);
+    }
+    return { providerID, deletedModels: rows.length, deletedCredential };
   }
 
   /**
