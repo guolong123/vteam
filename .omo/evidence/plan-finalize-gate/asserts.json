@@ -12,9 +12,16 @@
       "confirmBtn": 1
     },
     "draft": {
-      "badge": "修订中",
+      "badge": "草稿",
       "finalizeBtn": 0,
-      "confirmBtn": 0
+      "confirmBtn": 0,
+      "reviewPending": 0
+    },
+    "draft-empty": {
+      "badge": "草稿",
+      "finalizeBtn": 0,
+      "confirmBtn": 0,
+      "reviewPending": 1
     }
   }
 }

@@ -31,7 +31,6 @@
       "vteam_team_view",
       "vteam_my_profile",
       "vteam_team_add_member",
-      "vteam_plan_mode",
       "vteam_plan_complete",
       "vteam_channel_send",
       "vteam_wecom_reply",
@@ -41,10 +40,10 @@
       "vteam_hook_register",
       "vteam_hook_cancel"
     ],
-    "expectedCellCount": 203,
-    "iteratedCellCount": 203,
-    "allowCellCount": 127,
-    "denyCellCount": 76,
+    "expectedCellCount": 196,
+    "iteratedCellCount": 196,
+    "allowCellCount": 125,
+    "denyCellCount": 71,
     "allCellsMatch": true,
     "cells": [
       {
@@ -186,13 +185,6 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_team_add_member 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
-      },
-      {
-        "agent": "vteam-architect",
-        "tool": "vteam_plan_mode",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_plan_mode 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
       },
       {
         "agent": "vteam-architect",
@@ -392,13 +384,6 @@
       },
       {
         "agent": "vteam-developer",
-        "tool": "vteam_plan_mode",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_plan_mode 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
-      },
-      {
-        "agent": "vteam-developer",
         "tool": "vteam_plan_complete",
         "expect": "deny",
         "actual": "deny",
@@ -592,13 +577,6 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_team_add_member 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
-      },
-      {
-        "agent": "vteam-librarian",
-        "tool": "vteam_plan_mode",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_plan_mode 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
       },
       {
         "agent": "vteam-librarian",
@@ -798,13 +776,6 @@
       },
       {
         "agent": "vteam-plan",
-        "tool": "vteam_plan_mode",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_plan_mode 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
-      },
-      {
-        "agent": "vteam-plan",
         "tool": "vteam_plan_complete",
         "expect": "allow",
         "actual": "allow",
@@ -995,13 +966,6 @@
       {
         "agent": "vteam-product",
         "tool": "vteam_team_add_member",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
-      },
-      {
-        "agent": "vteam-product",
-        "tool": "vteam_plan_mode",
         "expect": "allow",
         "actual": "allow",
         "message": null
@@ -1204,13 +1168,6 @@
       },
       {
         "agent": "vteam-project_manager",
-        "tool": "vteam_plan_mode",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
-      },
-      {
-        "agent": "vteam-project_manager",
         "tool": "vteam_plan_complete",
         "expect": "allow",
         "actual": "allow",
@@ -1407,13 +1364,6 @@
       },
       {
         "agent": "vteam-tester",
-        "tool": "vteam_plan_mode",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_plan_mode 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
-      },
-      {
-        "agent": "vteam-tester",
         "tool": "vteam_plan_complete",
         "expect": "deny",
         "actual": "deny",
@@ -1473,7 +1423,7 @@
   "plan": "server-gate-removal-tool-authority",
   "todo": 9,
   "generatedBy": "server/src/platform-mcp/platform-mcp.authority-matrix.spec.ts (worker matrix + service-level proof)",
-  "generatedAt": "2026-09-21T12:18:23.449Z",
+  "generatedAt": "2026-09-21T12:42:48.931Z",
   "mainHappyPath": {
     "steps": [
       {
@@ -1491,15 +1441,6 @@
         "result": {
           "id": "t_happy",
           "status": "in_progress"
-        }
-      },
-      {
-        "step": "plan_mode",
-        "ok": true,
-        "result": {
-          "taskId": "t_happy",
-          "planMode": true,
-          "agentName": null
         }
       },
       {
