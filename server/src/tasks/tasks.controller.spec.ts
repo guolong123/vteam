@@ -567,11 +567,18 @@ describe('TasksController', () => {
           removeInstanceIds: [42],
         }),
       ).not.toHaveLength(0);
+      // agentId 与 roleId 至少其一在 service 层按规则 4 守卫（400 MEMBER_AGENT_REQUIRED），
+      // DTO 只校验形状：roleId-only 合法，空对象非法（两者都缺）。
       expect(
         await errorsOf(UpdateTeamDto, {
-          addInstances: [{ alias: '缺 agentId' }],
+          addInstances: [{ roleId: 'r_developer' }],
         }),
-      ).not.toHaveLength(0);
+      ).toHaveLength(0);
+      expect(
+        await errorsOf(UpdateTeamDto, {
+          addInstances: [{ alias: '仅别名也过形状校验' }],
+        }),
+      ).toHaveLength(0);
     });
 
     it('UploadPlanDocDto：合法 .md 通过（与 worker PLAN_DOC_NAME_RE 对齐）', async () => {

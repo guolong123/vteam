@@ -63,6 +63,8 @@ type TeamMemberView = {
   agent: { id: string; name: string };
   /** 成员绑定角色（`TeamMember.roleId → AgentRole`）；未绑 → null，标签回退 agent.name。 */
   role?: { key: string; name: string } | null;
+  /** 成员绑定角色 id（`TeamMember.roleId`）；未绑 → null。 */
+  roleId?: string | null;
 };
 
 /** 任务行（实例派生源为归属团队的团队成员）。 */
@@ -1838,6 +1840,87 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
+   * 成员 ⇄ 角色绑定解析（唯一优先级判定点的任务侧镜像）。
+   *
+   * 逐字复刻 `teams.service.ts:1328-1430 resolveMemberBinding` 规则 1–5（单一事实来源，
+   * 该方法是唯一可改判定点，此处只做镜像）：
+   *   1. 显式 `agentId` 恒胜出；2. `roleId`-only 用 `defaultAgentId` 预填；
+   *   3. 角色无默认 Agent → 400 `ROLE_DEFAULT_AGENT_MISSING`；
+   *   4. 两者都缺 → 400 `MEMBER_AGENT_REQUIRED`；
+   *   5. 显式 `opencodeAgentName` 恒胜出，否则用 `defaultOpencodeAgentName` 预填，否则 null。
+   * 错误码与 teams 域 `TEAM_ERRORS` 同值（跨域同名字符串，便于调用方统一断言）。
+   */
+  private async resolveTaskMemberBinding(input: {
+    agentId?: string;
+    roleId?: string;
+    opencodeAgentName?: string | null;
+  }): Promise<{
+    agentId: string;
+    roleId: string | null;
+    role: { key: string; name: string } | null;
+    opencodeAgentName: string | null;
+  }> {
+    const explicitAgentId = input.agentId?.trim() || null;
+    const roleId = input.roleId?.trim() || null;
+    const explicitOpencodeAgentName =
+      input.opencodeAgentName?.trim() || null;
+
+    const role = roleId
+      ? await (this.prisma as any).agentRole.findUnique({
+          where: { id: roleId },
+          select: {
+            id: true,
+            key: true,
+            name: true,
+            defaultAgentId: true,
+            defaultOpencodeAgentName: true,
+          },
+        })
+      : null;
+    const roleBinding = role ? { key: role.key, name: role.name } : null;
+    const resolvedOpencodeAgentName =
+      explicitOpencodeAgentName ||
+      role?.defaultOpencodeAgentName?.trim() ||
+      null;
+
+    if (explicitAgentId) {
+      return {
+        agentId: explicitAgentId,
+        roleId,
+        role: roleBinding,
+        opencodeAgentName: resolvedOpencodeAgentName,
+      };
+    }
+
+    if (!roleId) {
+      throw new BadRequestException({
+        code: 'MEMBER_AGENT_REQUIRED',
+        message:
+          '成员必须提供 agentId 或 roleId（给 roleId 时用角色默认 Agent 预填）',
+      });
+    }
+
+    if (!role) {
+      throw new NotFoundException({
+        code: 'ROLE_NOT_FOUND',
+        message: `AgentRole ${roleId} 不存在`,
+      });
+    }
+    if (!role.defaultAgentId) {
+      throw new BadRequestException({
+        code: 'ROLE_DEFAULT_AGENT_MISSING',
+        message: `角色 ${roleId} 未设置默认 Agent，请显式指定 agentId`,
+      });
+    }
+    return {
+      agentId: role.defaultAgentId,
+      roleId,
+      role: roleBinding,
+      opencodeAgentName: resolvedOpencodeAgentName,
+    };
+  }
+
+  /**
    * 事务内批量创建团队成员（updateTeam 专用）：
    * 每个实例写 team_members（seq = 该 teamId+agentId 已用最大 seq+1，防并发重号），
    * 不写 sessions 行；返回带模板 agent 关联的成员列表。
@@ -1845,41 +1928,43 @@ export class TasksService implements OnModuleInit {
   private async createTeamMembers(
     tx: Prisma.TransactionClient,
     teamId: string,
-    agents: { agentId: string; roleId?: string; alias?: string; workDir?: string }[],
+    agents: {
+      agentId?: string;
+      roleId?: string;
+      opencodeAgentName?: string | null;
+      alias?: string;
+      workDir?: string;
+    }[],
   ): Promise<TeamMemberView[]> {
     const created: TeamMemberView[] = [];
     for (const item of agents) {
+      const binding = await this.resolveTaskMemberBinding(item);
       const agent = await tx.agent.findUnique({
-        where: { id: item.agentId },
+        where: { id: binding.agentId },
         select: { id: true, name: true },
       });
       if (!agent) {
         throw new NotFoundException({
           code: TASK_ERRORS.AGENT_NOT_FOUND,
-          message: `Agent ${item.agentId} 不存在`,
+          message: `Agent ${binding.agentId} 不存在`,
         });
       }
-      const roleBinding = item.roleId?.trim()
-        ? await tx.agentRole.findUnique({
-            where: { id: item.roleId.trim() },
-            select: { key: true, name: true },
-          })
-        : null;
       const max = await (tx as any).teamMember.aggregate({
         _max: { seq: true },
-        where: { teamId, agentId: item.agentId },
+        where: { teamId, agentId: binding.agentId },
       });
       const seq = (max._max.seq ?? 0) + 1;
       const alias =
-        item.alias?.trim() || this.defaultAlias(agent, seq, roleBinding);
+        item.alias?.trim() || this.defaultAlias(agent, seq, binding.role);
       const workDir =
         item.workDir?.trim() || this.defaultAgentWorkDir(agent, seq);
       const member = await (tx as any).teamMember.create({
         data: {
           id: await this.idGen.nextId(ID_PREFIX.teamMember),
           teamId,
-          agentId: item.agentId,
-          roleId: item.roleId?.trim() || null,
+          agentId: binding.agentId,
+          roleId: binding.roleId,
+          opencodeAgentName: binding.opencodeAgentName,
           alias,
           seq,
           workDir,
@@ -1887,11 +1972,14 @@ export class TasksService implements OnModuleInit {
       });
       created.push({
         id: member.id,
-        agentId: item.agentId,
+        agentId: binding.agentId,
+        roleId: binding.roleId,
+        opencodeAgentName: binding.opencodeAgentName,
         alias,
         seq,
         workDir,
         agent,
+        role: binding.role,
       });
     }
     return created;

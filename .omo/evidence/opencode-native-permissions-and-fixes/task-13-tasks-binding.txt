@@ -1,0 +1,25 @@
+task-13 tasks binding unification — proof (2026-09-21)
+=====================================================
+tsc: exit 0 (npx tsc -p tsconfig.json --noEmit, server/)
+jest src/tasks src/teams: 13 suites passed, 413 tests passed, 0 failed
+  - incl. 6 new resolveTaskMemberBinding rule tests (service.spec.ts):
+    role-only prefill (rules 2+5), explicit agentId wins (1+5),
+    explicit opencodeAgentName wins (5), both-missing 400 (4),
+    dangling roleId 404 (2-pre), role-no-default 400 (3)
+  - controller.spec.ts UpdateTeamDto shape updated: roleId-only valid,
+    all-fields-optional at DTO layer (rule-4 guard lives in service)
+
+git diff --stat (4 production/spec files):
+ server/src/tasks/dto/update-team.dto.ts   |  17 ++-
+ server/src/tasks/tasks.controller.spec.ts |  11 +-
+ server/src/tasks/tasks.service.spec.ts    | 183 ++++++++++++++++++++++++++++++
+ server/src/tasks/tasks.service.ts         | 116 ++++++++++++++++---
+ 4 files changed, 309 insertions(+), 18 deletions(-)
+
+scope: server/src/tasks/* only; no teams/ prod, no worker/web/docs/plan changes.
+resolver: private resolveTaskMemberBinding mirrors teams.service.ts:1328-1430
+rules 1-5 line-for-line (private there too; TeamsService import would drag
+WorkerClient/WorkersService into tasks path — circular risk avoided by mirror
++ citation comment). Error codes cross-domain same-value strings.
+writer now persists opencodeAgentName + roleId; TeamMemberView push populated
+(roleId, opencodeAgentName, role) fixing write/read asymmetry vs toTaskDto.

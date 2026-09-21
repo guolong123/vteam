@@ -9,9 +9,13 @@ import {
 } from 'class-validator';
 
 export class TeamInstanceInput {
-  @ApiProperty({ description: '模板 Agent id' })
+  @ApiPropertyOptional({
+    description:
+      '模板 Agent id（与 roleId 至少其一；只给 roleId 时用角色默认 Agent 预填，规则见 teams.service resolveMemberBinding）',
+  })
+  @IsOptional()
   @IsString()
-  agentId: string;
+  agentId?: string;
 
   @ApiPropertyOptional({
     description:
@@ -25,6 +29,15 @@ export class TeamInstanceInput {
   @IsOptional()
   @IsString()
   alias?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'opencode 原生 agent 选择（显式值恒胜出；未给时用角色默认外部名预填，规则见 teams.service resolveMemberBinding 规则 5）',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  opencodeAgentName?: string;
 
   @ApiPropertyOptional({ description: '实例工作目录' })
   @IsOptional()

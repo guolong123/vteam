@@ -32,6 +32,7 @@ describe('TasksService', () => {
     taskEvent: { create: jest.Mock };
     message: { create: jest.Mock; findFirst: jest.Mock };
     agent: { findMany: jest.Mock; findUnique: jest.Mock };
+    agentRole: { findUnique: jest.Mock };
     session: {
       create: jest.Mock;
       updateMany: jest.Mock;
@@ -195,6 +196,7 @@ describe('TasksService', () => {
       taskEvent: { create: jest.fn() },
       message: { create: jest.fn(), findFirst: jest.fn() },
       agent: { findMany: jest.fn(), findUnique: jest.fn() },
+    agentRole: { findUnique: jest.fn().mockResolvedValue(null) }, // 绑定解析经外层 prisma 读角色（teams resolver 同），默认无角色行
       session: {
         create: jest.fn(),
         updateMany: jest.fn(),
@@ -3276,6 +3278,7 @@ describe('TasksService', () => {
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
           roleId: null,
+          opencodeAgentName: null,
           alias: '开发者-1',
           seq: 1,
           workDir: '/data/vteam-worker/开发者',
@@ -3356,6 +3359,7 @@ describe('TasksService', () => {
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
           roleId: null,
+          opencodeAgentName: null,
           alias: '开发者-2',
           seq: 2,
           workDir: '/data/vteam-worker/开发者-2',
@@ -3587,6 +3591,185 @@ describe('TasksService', () => {
         expect(e).toBeInstanceOf(NotFoundException);
         expect((e as NotFoundException).getResponse()).toMatchObject({
           code: TASK_ERRORS.AGENT_NOT_FOUND,
+        });
+      }
+      expect(txModels.teamMember.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('roleId-only：从角色默认 Agent/外部名预填 agentId + opencodeAgentName（规则 2+5）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
+        id: 'r_developer',
+        key: 'developer',
+        name: '开发者',
+        defaultAgentId: 'a_developer',
+        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+      });
+      idGen.nextId
+        .mockResolvedValueOnce('tmm_0000000003')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTeamTx();
+
+      await service.updateTeam(
+        't_0000000001',
+        { addInstances: [{ roleId: 'r_developer' }] },
+        userId,
+      );
+
+      expect(txModels.teamMember.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          teamId: 'tm_0000000001',
+          agentId: 'a_developer',
+          roleId: 'r_developer',
+          opencodeAgentName: 'Prometheus - Plan Builder',
+          alias: '开发者-1',
+        }),
+      });
+    });
+
+    it('显式 agentId 恒胜出：不被角色默认 Agent 覆盖，但外部槽位仍预填（规则 1+5）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
+        id: 'r_developer',
+        key: 'developer',
+        name: '开发者',
+        defaultAgentId: 'a_product',
+        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+      });
+      idGen.nextId
+        .mockResolvedValueOnce('tmm_0000000003')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTeamTx();
+
+      await service.updateTeam(
+        't_0000000001',
+        {
+          addInstances: [
+            { agentId: 'a_developer', roleId: 'r_developer' },
+          ],
+        },
+        userId,
+      );
+
+      expect(txModels.teamMember.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          agentId: 'a_developer',
+          roleId: 'r_developer',
+          opencodeAgentName: 'Prometheus - Plan Builder',
+        }),
+      });
+    });
+
+    it('显式 opencodeAgentName 恒胜出：覆盖角色默认外部名（规则 5）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
+        id: 'r_developer',
+        key: 'developer',
+        name: '开发者',
+        defaultAgentId: 'a_developer',
+        defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+      });
+      idGen.nextId
+        .mockResolvedValueOnce('tmm_0000000003')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTeamTx();
+
+      await service.updateTeam(
+        't_0000000001',
+        {
+          addInstances: [
+            {
+              roleId: 'r_developer',
+              opencodeAgentName: 'My Custom Agent',
+            },
+          ],
+        },
+        userId,
+      );
+
+      expect(txModels.teamMember.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          agentId: 'a_developer',
+          opencodeAgentName: 'My Custom Agent',
+        }),
+      });
+    });
+
+    it('agentId 与 roleId 都缺 → 400 MEMBER_AGENT_REQUIRED（规则 4）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      idGen.nextId.mockResolvedValueOnce('tmm_0000000003');
+      const txModels = mockTeamTx();
+
+      try {
+        await service.updateTeam(
+          't_0000000001',
+          { addInstances: [{}] },
+          userId,
+        );
+        fail('应抛出 BadRequestException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(BadRequestException);
+        expect((e as BadRequestException).getResponse()).toMatchObject({
+          code: 'MEMBER_AGENT_REQUIRED',
+        });
+      }
+      expect(txModels.teamMember.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('roleId 悬空（角色不存在）→ 404 ROLE_NOT_FOUND，不再静默保留（规则 2 前置）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue(null);
+      idGen.nextId.mockResolvedValueOnce('tmm_0000000003');
+      const txModels = mockTeamTx();
+
+      try {
+        await service.updateTeam(
+          't_0000000001',
+          { addInstances: [{ roleId: 'r_ghost' }] },
+          userId,
+        );
+        fail('应抛出 NotFoundException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(NotFoundException);
+        expect((e as NotFoundException).getResponse()).toMatchObject({
+          code: 'ROLE_NOT_FOUND',
+        });
+      }
+      expect(txModels.teamMember.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('roleId-only 但角色无默认 Agent → 400 ROLE_DEFAULT_AGENT_MISSING（规则 3）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
+        id: 'r_external',
+        key: 'external',
+        name: '外部角色',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: 'Some External',
+      });
+      idGen.nextId.mockResolvedValueOnce('tmm_0000000003');
+      const txModels = mockTeamTx();
+
+      try {
+        await service.updateTeam(
+          't_0000000001',
+          { addInstances: [{ roleId: 'r_external' }] },
+          userId,
+        );
+        fail('应抛出 BadRequestException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(BadRequestException);
+        expect((e as BadRequestException).getResponse()).toMatchObject({
+          code: 'ROLE_DEFAULT_AGENT_MISSING',
         });
       }
       expect(txModels.teamMember.create).not.toHaveBeenCalled();

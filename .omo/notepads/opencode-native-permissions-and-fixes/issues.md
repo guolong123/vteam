@@ -175,3 +175,64 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   在唤醒时刻被刷新——若此窗口内发生进程重启，重启判定会因
   `lastActivityAt > 原 dispatchedAt` 而跳过收割。该窗口由该会话后续的活跃事件或
   空闲判死扫描兜底（30min），与原实现「重启后不重启收割即静默丢弃」相比不再更差。
+
+## [2026-09-21] SERVER slice — team-create member selection map (role-based binding exploration, read-only)
+
+Exploration only; no production code touched. Single-precedence-point invariant + 3-path divergence matrix with file:lines.
+
+### Files mapped
+- `server/src/teams/teams.service.ts` — `create` (:86-240), `addMember` (:615-679), `updateMember` (:832-932), `resolveMemberBinding` (:1328-1430), `warnIfOpencodeAgentUnknown` (:942-964); `roleBindingOf` DELETED (only stale comment ref at spec:371; resolver now does single role query :1373-1384).
+- `server/src/teams/dto/create-team.dto.ts` — `TeamMemberInput` (:13-46), `CreateTeamDto` (:48-85).
+- `server/src/teams/dto/add-member.dto.ts` — `AddMemberDto` (:15-47), `UpdateMemberDto` (:49-96).
+- `server/src/teams/dto/update-team.dto.ts` — team-level update (name/desc/reuseSession/managedMode/mainAgentMemberId/version; no member binding).
+- `server/src/tasks/dto/update-team.dto.ts` — `TeamInstanceInput` (:11-34), `UpdateTeamDto` (:42-61).
+- `server/src/tasks/tasks.service.ts` — `TeamMemberView` (:54-66), `updateTeam` caller (:763-837), `createTeamMembers` (:1845-1898), `toTaskDto` read (:1778, :1793-1797).
+- `server/prisma/schema.prisma` — `AgentRole` (:124-158, slots :137-143), `TeamMember` (:160-189, external :171-175).
+- `server/src/agent-roles/agent-roles.service.ts` — slot conflict (:187-188, :298-305), auto-clear on update (:198-209).
+
+### resolveMemberBinding rules 1-5 (teams.service.ts:1331-1343 doc, enforced :1367-1429)
+1. Explicit `agentId` wins — :1392-1400 (never overwritten by role default; roleId only persisted alongside).
+2. `roleId`-only prefills `agentId` from `AgentRole.defaultAgentId` — :1422-1429.
+3. Role with empty `defaultAgentId` (roleId-only) → 400 `ROLE_DEFAULT_AGENT_MISSING` — :1416-1421.
+4. Both missing → 400 `MEMBER_AGENT_REQUIRED` — :1403-1408.
+5. External symmetric prefill (rule-2 mirror): explicit `opencodeAgentName` > `role.defaultOpencodeAgentName` > null — :1386-1390 (`explicit || role?.defaultOpencodeAgentName?.trim() || null`); branch-1 (explicit agentId+roleId) ALSO resolves external (:1341-1343, :1371-1372) because external roles can never hold `defaultAgentId` (mutual exclusion) so their members must pass explicit `agentId`.
+- `updateMember` never clobbers persisted value — :894-910: explicit `dto.opencodeAgentName !== undefined` branch writes (empty→null, non-empty→warn+write :898-902); ELSE only if `prefilled && !(member.opencodeAgentName?.trim())` (:903-906) writes role default (prefill ≠ override :907-909). Request-level precedence: explicit > persisted > role default.
+- Role row read once for both branches: `agentRole.findUnique where:{id} select:{id,key,name,defaultAgentId,defaultOpencodeAgentName}` :1373-1384.
+
+### Error codes (exact)
+- `MEMBER_AGENT_REQUIRED` (400 BadRequest) — teams.service.ts:1404-1407 (both agentId+roleId missing).
+- `ROLE_NOT_FOUND` (404 NotFound) — teams.service.ts:1410-1415 (`agentRole.findUnique` null on roleId-only path; branch-1 with bad roleId does NOT throw — persists dangling roleId with null label).
+- `ROLE_DEFAULT_AGENT_MISSING` (400) — teams.service.ts:1416-1421.
+- `AGENT_ROLE_DEFAULT_SLOT_CONFLICT` (400) — agent-roles.service.ts:298-305, thrown :187-188 (create+update both-non-null); update auto-clear :198-209 (set one clears other; both-absent leaves untouched). Defined in `AGENT_ROLE_ERRORS`.
+- Adjacent (not requested but on path): `AGENT_NOT_FOUND` (404, teams.service.ts:630-634 create-transaction :130-135 / updateMember :886-891; tasks.service.ts:1856-1861), `AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND` (400, agent-roles.service.ts:336-341).
+
+### DTO required vs optional
+- `TeamMemberInput` (create-team.dto.ts:13-46): ALL optional — `agentId?`, `roleId?`, `alias?`, `workDir?`. NO `opencodeAgentName` field declared (resolver still reads `input.opencodeAgentName` :1369 — extra key only flows via `as any`/unvalidated passthrough; spec uses `as any` for explicit-external cases). At-least-one enforced in service (rule 4), not by validators.
+- `AddMemberDto` (add-member.dto.ts:15-47): same shape — all optional, NO `opencodeAgentName` declared; header comment :7-13 documents external symmetry anyway; explicit-external tests cast `as any` (spec:1210-1214).
+- `UpdateMemberDto` (add-member.dto.ts:49-96): `alias?`, `workDir?`, `overrideModelId?`, `opencodeAgentName?: string|null` (:69-76, MaxLength 64), `roleId?: string|null` (:78-87, null/empty clears binding), `agentId?` (:89-95). ONLY DTO that officially carries the external slot.
+- `TeamInstanceInput` (tasks/dto/update-team.dto.ts:11-34): `agentId: string` REQUIRED (`@IsString()` no `@IsOptional`), `roleId?`, `alias?`, `workDir?`; NO `opencodeAgentName`.
+
+### Path-by-path difference matrix
+| dimension | teams.create (teams.service.ts) | teams.addMember (teams.service.ts) | tasks.createTeamMembers (tasks.service.ts) |
+|---|---|---|---|
+| entry DTO | `TeamMemberInput[]` (all-optional, no external field) create-team.dto.ts:13-46 | `AddMemberDto` (all-optional, no external field) add-member.dto.ts:15-47 | `TeamInstanceInput[]` (`agentId` REQUIRED) tasks/dto/update-team.dto.ts:11-34; called from `updateTeam` :837 |
+| via `resolveMemberBinding`? | YES — pre-transaction `Promise.all(members.map(resolve))` :101-103 | YES — single `await resolveMemberBinding(dto)` :623-624 | NO — bypasses entirely; inline logic :1851-1887 |
+| role lookup shape | full `{id,key,name,defaultAgentId,defaultOpencodeAgentName}` :1373-1384 | same full select | NARROW `{key,name}` only :1862-1867 (no default slots read; dangling roleId silently kept, no ROLE_NOT_FOUND/ROLE_DEFAULT_AGENT_MISSING) |
+| agent existence check | `tx.agent.findUnique select:{id,name}` per member INSIDE tx :126-135 → 404 AGENT_NOT_FOUND | `prisma.agent.findUnique` BEFORE tx :625-634 → 404 | `tx.agent.findUnique select:{id,name}` :1852-1861 → 404 `TASK_ERRORS.AGENT_NOT_FOUND` (same semantics, different error table) |
+| external prefill | YES rule 5 → `teamMember.create {opencodeAgentName: item.opencodeAgentName ?? null}` :147-149 | YES rule 5 → `create {opencodeAgentName: binding.opencodeAgentName}` :647-648 (already null-coalesced in resolver :1387-1390) | NONE — `teamMember.create` data :1877-1886 has NO `opencodeAgentName` key (relies on DB default null); input type :1848 has no external field |
+| persisted columns | id/teamId/agentId/roleId(`?? null`)/opencodeAgentName/alias/seq/workDir :141-154 | id/teamId/agentId/roleId/opencodeAgentName/alias/seq/workDir :641-653 | id/teamId/agentId/roleId(`?.trim()\|\|null`)/alias/seq/workDir :1877-1886 (no external, no overrideModelId) |
+| seq strategy | `nextSeqForUpdate` (SELECT MAX FOR UPDATE) :136 | same :637 | aggregate `_max` :1868-1872 (no FOR UPDATE) |
+| returned DTO | full team via `findOne` → `toTeamDto` includes `opencodeAgentName: m.opencodeAgentName` :1497 | same `findOne` :678 | `TeamMemberView` type HAS `opencodeAgentName?` :62 but `createTeamMembers` return push :1888-1895 OMITS it (+omits roleId/overrideModelId); read path `toTaskDto` DOES return `m.opencodeAgentName ?? null` :1778 |
+| `agentId` effectively required? | NO (roleId-only prefill allowed) | NO (same) | YES (DTO required + no prefill branch; missing → validation/undefined `findUnique`) |
+
+### Divergence flags (tasks.createTeamMembers)
+- Direct `agent.findUnique` :1852-1855, no resolver; role lookup limited to `{key,name}` :1865 (vs full 5-field select) — cannot prefill either slot.
+- No external prefill: neither reads `AgentRole.defaultOpencodeAgentName` nor writes `TeamMember.opencodeAgentName` (:1877-1886).
+- `agentId` effectively required: `TeamInstanceInput.agentId` non-optional (tasks/dto/update-team.dto.ts:12-14) + no rule-2/4 logic → role-only calls impossible.
+- `TeamMemberView.opencodeAgentName?` declared (:62) but never populated by the writer (:1888-1895); only the reader (`toTaskDto` :1778) surfaces it — write/read asymmetry to fix in implementation (writer should go through `resolveMemberBinding` or equivalent).
+
+### `warnIfOpencodeAgentUnknown` (teams.service.ts:942-964)
+- Weak check only: `assignWorker()` → null ⇒ silent return :947-950; `listAgents({id})` empty ⇒ return :951-954; name mismatch ⇒ `logger.warn` :955-960, NEVER throws; outer try/catch swallows all :961-963. Called ONLY from `updateMember` explicit branch :900-902 (create/addMember prefill paths do NOT warn).
+
+## [2026-09-21] server createTeamMembers unification — landed
+- `createTeamMembers` bypassed `resolveMemberBinding` (narrow `{key,name}` role read, agentId required, no external write). Fixed via private `resolveTaskMemberBinding` mirror (rules 1–5, same-value error codes); writer persists `roleId`+`opencodeAgentName`; view push populated. tsc 0; `src/tasks|src/teams` 13 suites / 413 green. Proof: `.omo/evidence/opencode-native-permissions-and-fixes/task-13-tasks-binding.txt`.
