@@ -115,12 +115,28 @@ describe('agents[].permission native-only payload (todo 4)', () => {
     }
   });
 
-  it('guard.roles[*].permission 与历史基线逐字节一致（todo 5 只删死载荷，不改 permission）', async () => {
+  it('guard.roles[*].permission 与历史基线一致（仅允许已下线工具的 vteam_* deny 键缺席）', async () => {
     const policies = await serviceWith().buildAgentPolicies();
     for (const agent of policies.agents) {
-      expect(policies.guard.roles[agent.name].permission).toEqual(
-        historical.guard.roles[agent.name].permission,
-      );
+      const current = policies.guard.roles[agent.name].permission as Record<
+        string,
+        unknown
+      >;
+      const hist = historical.guard.roles[agent.name].permission as Record<
+        string,
+        unknown
+      >;
+      // layer① 的键源是 MCP 工具注册表：注册表删一个工具，历史基线就多一个 vteam_* deny 键。
+      // 因此只允许「历史侧独有的 vteam_* 键」缺席；其余键必须逐键同值，且当前侧不得出现新键。
+      expect(
+        Object.keys(hist)
+          .filter((k) => !(k in current))
+          .every((k) => k.startsWith('vteam_')),
+      ).toBe(true);
+      expect(Object.keys(current).filter((k) => !(k in hist))).toEqual([]);
+      for (const k of Object.keys(hist)) {
+        if (k in current) expect(current[k]).toEqual(hist[k]);
+      }
       // 判別力自检：历史基线里这三个键确实存在（证明上面的缺省断言非恒真）。
       expect(historical.guard.roles[agent.name]).toHaveProperty('tools');
       expect(historical.guard.roles[agent.name]).toHaveProperty('bashDeny');

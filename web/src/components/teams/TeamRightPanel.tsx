@@ -1019,8 +1019,6 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
   const planSteps: PlanStepItem[] = planStepsQuery?.data?.steps ?? [];
   const planStepsDegraded: boolean = planStepsQuery?.data?.degraded ?? false;
   const planStepsPending: boolean = !!planStepsQuery?.isPending;
-  /** 任务计划模式开关（task.planMode；缺省 false=直接执行）。 */
-  const planModeOn: boolean = !!(task?.effectivePlanMode ?? task?.planMode);
   const waiting = (team?.queue ?? []).filter((q: TeamQueueDto) => q.taskStatus === "queued" || !q.taskStatus).length;
   const isCurrent = team?.currentTaskId === taskId;
   const teamScopeId: string = team?.id ?? "";
@@ -1035,7 +1033,6 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
     { label: "所属团队", value: team?.name ?? task?.teamId ?? null },
     { label: "创建人", value: task?.createdBy ?? null },
     { label: "创建时间", value: localDateTimeLabel(task?.createdAt) },
-    { label: "计划模式", value: planModeOn ? "已开启（先出计划后执行）" : "已关闭（直接执行）" },
   ].filter((r) => r.value);
 
   return (
@@ -1117,7 +1114,7 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂不可用（主 Agent 会话未建立或 worker 离线）</div>
               ) : planFiles.length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>
-                  {planModeOn ? "等待主 Agent 写入计划（.opencode/plans/）…" : "暂无计划文件（可上传，或让 agent 在计划模式下产出）"}
+                  暂无计划文件（可上传）
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>

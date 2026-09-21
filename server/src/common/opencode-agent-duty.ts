@@ -5,8 +5,8 @@
  * 但各 agent 的职责是既定约定，可与"计划/执行"一一对应：
  *   - 计划职责：plan（原生）、prometheus（OmO 约定）——只读分析、出计划
  *   - 执行职责：build（原生）、atlas（OmO 约定）——写文件、跑命令、交付
- * 未在表中的名字（含 null/空=跟随默认）一律按执行处理；显式的 task.planMode
- * 开关（plan_mode 工具 / PATCH）是另一条独立通道，两者取 OR（见 worker-dispatcher）。
+ * 未在表中的名字（含 null/空=跟随默认）一律按执行处理；是否进入计划由**所绑定
+ * agent 自身的 prompt** 表达，平台不再代控计划模式。
  *
  * 注：`orchestrator` 不属于本表——它是 oh-my-opencode-slim（第三方精简 fork）的
  * primary agent，不在 OmO（oh-my-openagent）的 14 个 agent 里。如需支持该 fork，
@@ -65,8 +65,7 @@ function baseAgentName(agentName: string): string {
 
 /**
  * 判定 agent 职责。null/空/未知名 → 'execute'（跟随默认=原生 build 语义；
- * 未知自定义计划 agent 请走显式的 task.planMode 开关，不要扩这张表——
- * 表只收双方确认过的约定，避免猜测）。
+ * 未知自定义计划 agent 不要扩这张表——表只收双方确认过的约定，避免猜测）。
  */
 export function getOpencodeAgentDuty(
   agentName: string | null | undefined,

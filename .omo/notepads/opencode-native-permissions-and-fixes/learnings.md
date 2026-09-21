@@ -498,3 +498,58 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   "did not match any file(s)" 静默失败，`&&` 链全跳过；当时 tail 到的 `/tmp/jest-baseline.log` 竟是 9/17 的陈旧文件，
   差点误读 —— 每次用新的日志文件名）。`.omo/evidence/plan-review-execution-gates/task-9/probe.json` 与
   `.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json` 会话中途变为 modified（非本次改动产生，未触碰）。
+
+## [2026-09-21] WEB slice — legacy task.planMode UI surface removed (platform stops touching plan mode)
+
+- **Removals (7 files, web only)**：
+  - `web/src/components/tasks/task-detail-types.ts`：删 `TaskDetail.planMode` / `effectivePlanMode` 两字段及注释。
+  - `web/src/components/teams/TeamRightPanel.tsx`：删 `planModeOn` 推导、配置 Tab「计划模式」行、计划文档空态三元（改为单串「暂无计划文件（可上传）」）；计划 Tab 的 `PlanStatusBlock`/文件列表/上传/执行步骤一律未动。
+  - `web/app/(main)/teams/[id]/session/page.tsx`：删 `approveSwitchError` state、`handleQuestionSubmit` 的 andSwitchToExecute 分支（含 `PATCH /tasks/:id {planMode:false}` 与主成员 `opencodeAgentName:""` 两步）、`showApproveAndSwitch` 计算、`approve-switch-error` 渲染块与 prop；答复路径收敛为 `questionReplyMutation.mutate(payload)`（普通批准/拒绝行为不变）。
+  - `web/src/components/chat/question-modal.tsx`：`QuestionModalProps` 删 `andSwitchToExecute`（payload 字段）与 `showApproveAndSwitch`（含两处按钮 `question-approve-and-switch`）。
+  - `web/e2e/plan-{finalize,archive,status}.spec.ts`：仅删 mock task 中两枚死键（`planMode:false` / `effectivePlanMode:false`），断言全未动。
+- **Grep 归零**：`grep -rIn -E 'planMode|effectivePlanMode|showApproveAndSwitch|andSwitchToExecute' web/ --exclude-dir=node_modules --exclude-dir=.next` → exit 1（零命中）。
+- **命令与结果（workdir=web）**：
+  - `npx tsc --noEmit` → exit 0
+  - `./node_modules/.bin/eslint <7 touched files>` → 0 errors / 3 warnings；用 `git show HEAD:...` 临时副本对照，三条 warning（TeamRightPanel 未用 TaskDetail/task、question-modal no-unused-expressions）HEAD 基线完全相同，非本次引入。
+  - plan 域 e2e（临时 config：`testDir ./e2e`、`baseURL http://localhost:3001`、`channel:'chrome'`、list reporter；跑完已删）：
+    - 先对 docker web `:13001`（镜像不含本次工作树改动）跑 → 10/10 失败，全部「navigated to /login」。
+    - 根因（环境，不是本次改动）：spec 未 mock `GET /api/v1/triggers`（`TeamRightPanel.useTaskTriggers`，spec 之后才加入）→ 命中真 server → 401 → `authStore` 模块级 401 handler `window.location.href='/login'`；本次 7 个文件不在镜像内，失败与改动无关。
+    - 改对工作树 dev server `npx next dev --turbopack -p 3001`（web 无 .env，middleware 代理目标缺省 localhost:3000 无监听 → 未 mock 调用是网络错误而非 401）：
+      `npx playwright test --config .t-plan-flag-removal.playwright.config.ts e2e/plan-status.spec.ts e2e/plan-archive.spec.ts e2e/plan-finalize.spec.ts --reporter=list` → **10 passed**（plan-status 5 + archive 1 + finalize 4）；dev server、临时 config、test-results/ 均已删除。
+  - 副作用（如实记录）：spec 运行重写了 `.omo/evidence/plan-review-execution-gates/task-12/asserts.json` 与 `.omo/evidence/plan-finalize-gate/asserts.json`——diff 为 badge「修订中」→「草稿」+ 新增 draft-empty 场景，说明工作树 spec 本就比已提交证据新；未回滚、未手改。
+- **将来跑这三个 spec 的正确姿势**：对 dev server 跑（或补 mock `/api/v1/triggers`）；对 docker 13001 镜像跑必假红（401 重定向），且镜像 ≠ 工作树，不能作验证手段。
+
+## [2026-09-21] legacy `task.planMode` 控制面从 server 全量下线（option a：平台不代控计划）—— schema / DTO / service / MCP / seed / spec / 冻结基线 / e2e 脚本
+
+- **删除清单（server）**：
+  - `prisma/schema.prisma` Task.planMode 列 + 其注释；新迁移 `20260921000001_drop_task_plan_mode`（仅 `ALTER TABLE tasks DROP COLUMN plan_mode`，中文注释说明列史与单向性）。
+  - DTO：`create-task.dto.ts` / `update-task.dto.ts` 的 planMode 字段（含 ApiPropertyOptional 描述）。
+  - `tasks.service.ts`：TaskRow.planMode 类型字段、create 写入、update 分支、toTaskDto 的 `planMode` + `effectivePlanMode`；随后 `getOpencodeAgentDuty` import 在本文件零消费方 → 一并删除（`plan-docs.service.ts:225` 仍在用，模块保留）。
+  - `platform-mcp.tools.ts`：planModeSchema / PlanModeArgs / `plan_mode` 注册（工具 29→28）。
+  - `platform-mcp.service.ts`：`planMode()` 方法与返回接口字段；`resolveTeamMainMemberId`（唯一调用方即 planMode，整段删除）；3 处 stale 注释（task_transition start 门、findTaskTeamGate 复用说明）。`PlanLifecycleService` 注入保留（autoEnsureRow/completePlan 仍在用）。
+  - `agent.constants.ts`：VTEAM_MCP_TOOL_NAMES + vteam-product / vteam-project_manager 两个 toolAllows 的 `vteam_plan_mode`；`worker-dispatcher.ts:665` 团队直聊任务上下文工具串同步去除。
+  - `common/opencode-agent-duty.ts` 两处「走显式 task.planMode 开关」注释改为「是否计划由所绑定 agent 自身 prompt 表达」。
+  - `seed.ts`（brief 只核了 camelCase —— 实际有 4 处 snake_case）：VTEAM_MCP_TOOL_NAMES 拷贝、2 个角色矩阵、tools 注册行 `plan_mode` 全删。
+- **迁移 scratch-DB 实证**（未碰 live DB；宿主 3306 未映射，改走容器内 prisma CLI）：
+  - `docker exec aiagents-compose-db mysql -uroot -paiagents-root -e "CREATE DATABASE vteam_mig_probe CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"`
+  - `docker cp server/prisma/migrations/20260921000001_drop_task_plan_mode aiagents-compose-server:/app/prisma/migrations/`（server 镜像已含截至 20260921000000 的迁移，只缺这一条）
+  - `docker exec -e DATABASE_URL='mysql://root:aiagents-root@db:3306/vteam_mig_probe' -w /app aiagents-compose-server npx prisma migrate deploy` → **All migrations successfully applied（66 条）**
+  - 断言：`information_schema` 中 tasks.plan_mode 列计数 = 0；`_prisma_migrations` 中 `20260912000000_add_task_plan_mode` 与 `20260921000001_drop_task_plan_mode` 均 finished=1；随后 `DROP DATABASE vteam_mig_probe` + 删除容器内拷贝（容器恢复原状）。
+- **冻结基线级联（本次最大的连带面）**：删 MCP 工具会改变 layer① permission 载荷（每个角色少一个 `vteam_*: deny` 键），6 个 execution-policies spec 立刻红，必须同步：
+  - `.omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json` 删 5 个 deny 键（plan/architect/developer/tester/librarian），sha256 `e795b0c8…` → **`22aaf9e1…`**；
+  - `scripts/e2e-role-boundaries.sh` 与 `scripts/e2e-native-edit-enforcement.sh` 的 `FROZEN_BASELINE_SHA256` 默认值同步更新；
+  - `agent-policies.native-only-payload.spec.ts` 的「guard.permission 与历史基线逐字节一致」放宽为「仅允许历史侧独有的 `vteam_*` 键缺席；其余键同值且当前侧不得新增」（历史基线本体未动）；
+  - `agent-policies.custom-agents.spec.ts.snap` 由 `jest -u` 重生成。
+  - 历史基线 `.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json` **绝对未动**（matrix spec 的 sha `3b8c5d4b…` 断言仍绿）。
+- **e2e 脚本连带修复**（否则再跑必挂）：`prove-authority-matrix.sh` 删 3c plan_mode 步并同步合并清单/requiredSteps（后续步号 3d→3c、3e→3d）；`e2e-permission-matrix.sh` 去掉 `SELECT … plan_mode` 列读取。保留 `absence-nonmain-plan_mode.json` 证据文件名——历史 evidence 文本引用该名，改名破坏可追溯性。
+- **命令与结果（均 workdir=server）**：
+  - `npx prisma validate` + `npx prisma generate` → 绿
+  - `npx tsc --noEmit -p tsconfig.json` → exit 0
+  - `npx jest --runInBand` → 145 suites：142 passed / **3 failed（5 tests）**，与 HEAD 基线逐一相同（notify_agent 团队维度、review-dispatch 三元组、task.constants 五态×3）→ **零新增失败**
+  - `npx jest --runInBand src/execution-policies` → 14 suites / 210 tests 全绿（基线级联后）
+  - 残留 grep：`server/src` 仅 `plan-removal.guard.spec.ts` benign 清单；`server/prisma` 仅历史迁移（add 20260912 / backfill 20260919）+ 本次 drop 迁移文件本身。
+- **坑**：
+  - 首轮 grep `server/src server/prisma` + `head -100` 截断漏掉了 `server/prisma/seed.ts` 的 snake_case 命中；零命中核验必须分开跑 `server/src` / `server/prisma` 且不得被 head 截断。
+  - Edit 工具对 ~130 行重复 spec 块报 JSON parse error（长 payload/反引号），且一次构造失误把块重复了一遍；恢复用 python3 按行号精确删区间 + sed 复核，比多次切割 edit 更稳。
+  - zsh 下 `echo ===` 触发 `= not found` 展开错误，改用 `echo '---'`。
+  - 「冻结基线 = 工具注册表投影」是硬约束：MCP 工具增删必须连带 baseline JSON + 两个脚本 sha 默认值 + 快照一起改，否则 execution-policies 6 套件必红。

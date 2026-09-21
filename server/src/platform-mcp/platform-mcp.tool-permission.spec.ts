@@ -189,8 +189,8 @@ describe('platform tool permission gate (todo 3)', () => {
 
       // 负对照：同一 agent、同一策略行内未列入的工具仍拒绝（翻转证明不曾放宽判定）。
       await expectDenied(
-        service.assertToolAllowed('tmm_dev', 'plan_mode'),
-        'vteam_plan_mode',
+        service.assertToolAllowed('tmm_dev', 'plan_complete'),
+        'vteam_plan_complete',
       );
     });
 
@@ -576,12 +576,12 @@ describe('platform tool permission gate (todo 3)', () => {
       expect(service.groupPost).not.toHaveBeenCalled();
     });
 
-    it('tools/list 全量不受权限影响（29 个工具，调用时才拦截）', async () => {
+    it('tools/list 全量不受权限影响（28 个工具，调用时才拦截）', async () => {
       const res = await mcpPost()
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
         .expect(200);
 
-      expect((res.body.result.tools as unknown[]).length).toBe(29);
+      expect((res.body.result.tools as unknown[]).length).toBe(28);
       expect(
         (res.body.result.tools as Array<{ name: string }>).map((t) => t.name),
       ).toContain('task_transition');

@@ -112,8 +112,6 @@ export default function TeamSessionPage() {
   const [addError, setAddError] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<QuestionModalData | null>(null);
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
-  /** 批准并切换失败时的显式报错（弹窗保持打开，不静默半吊子）。 */
-  const [approveSwitchError, setApproveSwitchError] = useState<string | null>(null);
   const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
   const [taskEditOpen, setTaskEditOpen] = useState(false);
   const [taskDetailOpen, setTaskDetailOpen] = useState(false);
@@ -804,53 +802,11 @@ export default function TeamSessionPage() {
       }
     },
   });
-  const handleQuestionSubmit = (payload: { answers?: string[][] | null; response?: "once" | "always" | "reject"; andSwitchToExecute?: boolean }) => {
+  const handleQuestionSubmit = (payload: { answers?: string[][] | null; response?: "once" | "always" | "reject" }) => {
     if (!pendingQuestion) return;
     setQuestionSubmitting(true);
-    setApproveSwitchError(null);
-    if (!payload.andSwitchToExecute) {
-      const { andSwitchToExecute: _drop, ...reply } = payload;
-      questionReplyMutation.mutate(reply);
-      return;
-    }
-    // 批准并切换到执行模式：先批准（reply 成功）→ 再关计划模式 → 主 Agent 回跟随默认。
-    // 任一步失败都明确报错、不静默：批准成功但切换失败时弹窗保持打开并显示错误。
-    const questionId = pendingQuestion.id;
-    const reply = (({ andSwitchToExecute: _drop, ...r }) => r)(payload);
-    const mainId = team?.mainAgentMemberId ?? null;
-    (async () => {
-      try {
-        await api.post(`/questions/${questionId}/reply`, reply);
-        if (!currentTaskId || !mainId) {
-          throw new Error("缺少任务或主 Agent，无法完成切换");
-        }
-        await api.patch<TaskDetail>(`/tasks/${currentTaskId}`, { planMode: false });
-        await api.patch(`/teams/${teamId}/members/${mainId}`, { opencodeAgentName: "" });
-        setPendingQuestion(null);
-        queryClient.invalidateQueries({ queryKey: ["questions"] });
-        if (currentTaskId) {
-          queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
-        }
-        queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      } catch (err) {
-        console.error("[TeamSession] approve and switch failed", { questionId, error: err });
-        setApproveSwitchError(isApiError(err) ? err.message : "切换失败，请重试或手动切换");
-      } finally {
-        setQuestionSubmitting(false);
-      }
-    })();
+    questionReplyMutation.mutate(payload);
   };
-
-  /**
-   * "批准并切换到执行模式"按钮展示条件：任务计划模式开 + 该 pending 项归属主 Agent。
-   * 归属判定用模板 agentId 比对（pendingQuestion.agentId 为模板 id，agentMembers 的 id 同义）；
-   * agentId 缺失时无法归因则不展示（宁缺毋滥，避免给错会话一切换）。
-   */
-  const showApproveAndSwitch = !!(currentTask?.effectivePlanMode ?? currentTask?.planMode) && !!pendingQuestion && (() => {
-    const main = agentMembers.find((m) => m.main);
-    if (!main || !pendingQuestion.agentId) return false;
-    return main.id === pendingQuestion.agentId;
-  })();
 
   /* ---------- 发送（群聊/私聊路由） ---------- */
   const targetChannelId = isGroupTab ? channelId : (activePrivateId ?? channelId);
@@ -1362,18 +1318,12 @@ export default function TeamSessionPage() {
         />
 
         {/* Agent 提问/权限确认弹窗 */}
-        {approveSwitchError && pendingQuestion && (
-          <div data-testid="approve-switch-error" role="alert" style={{ margin: `0 ${space.xl}px ${space.sm}px`, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: "1px solid rgba(220,38,38,0.35)", backgroundColor: "rgba(220,38,38,0.06)", color: "#DC2626", fontSize: fontSize.sm }}>
-            批准成功，但切换到执行模式失败：{approveSwitchError}
-          </div>
-        )}
         <QuestionModal
           open={!!pendingQuestion}
           question={pendingQuestion}
           submitting={questionSubmitting}
-          onClose={() => { setPendingQuestion(null); setApproveSwitchError(null); }}
+          onClose={() => setPendingQuestion(null)}
           onSubmit={handleQuestionSubmit}
-          showApproveAndSwitch={showApproveAndSwitch}
         />
       </div>
     </div>

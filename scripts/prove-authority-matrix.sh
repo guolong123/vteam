@@ -166,19 +166,7 @@ assert json.loads(d["result"]["content"][0]["text"])["status"]=="in_progress", d
   || fail "task_transition start did not reach in_progress"
 log "3b task_transition.start -> in_progress"
 
-# 3c. plan_mode (same-value no-op is not enough — assert the returned planMode)
-PLANMODE_OUT="$TMP/plan_mode.json"
-mcp_call "$PLANMODE_OUT" 3 plan_mode \
-  "$(python3 -c 'import json,sys; print(json.dumps({"taskId":sys.argv[1],"selfInstanceId":sys.argv[2],"enabled":True}))' "$TASK_ID" "$MAIN_MEMBER")"
-python3 -c 'import json,sys
-d=json.load(open(sys.argv[1]))
-if "error" in d: sys.exit("plan_mode error: %r" % d["error"])
-b=json.loads(d["result"]["content"][0]["text"])
-assert b["planMode"] is True, b' "$PLANMODE_OUT" \
-  || fail "plan_mode did not return planMode=true"
-log "3c plan_mode -> planMode=true"
-
-# 3d. plan_complete requires the plan row to be 'executing'. Seed that state through the DB
+# 3c. plan_complete requires the plan row to be 'executing'. Seed that state through the DB
 # to isolate the de-gated server path (the plan-status gate for dispatch is a separate todo).
 db_exec "UPDATE plans SET status='executing' WHERE task_id='${TASK_ID}';" >/dev/null
 PLAN_COMPLETE_OUT="$TMP/plan_complete.json"
@@ -190,9 +178,9 @@ if "error" in d: sys.exit("plan_complete error: %r" % d["error"])
 b=json.loads(d["result"]["content"][0]["text"])
 assert b["status"]=="completed", b' "$PLAN_COMPLETE_OUT" \
   || fail "plan_complete did not reach status=completed"
-log "3d plan_complete -> completed"
+log "3c plan_complete -> completed"
 
-# 3e. mark-pending-review
+# 3d. mark-pending-review
 PENDING_OUT="$TMP/pending_review.json"
 mcp_call "$PENDING_OUT" 5 task_transition \
   "$(python3 -c 'import json,sys; print(json.dumps({"taskId":sys.argv[1],"selfInstanceId":sys.argv[2],"action":"mark-pending-review"}))' "$TASK_ID" "$MAIN_MEMBER")"
@@ -203,7 +191,7 @@ assert json.loads(d["result"]["content"][0]["text"])["status"]=="pending_review"
   || fail "mark-pending-review did not reach pending_review"
 DB_STATUS="$(db_query "SELECT status FROM tasks WHERE id='${TASK_ID}';" | tr -d '\r\n ')"
 [[ "$DB_STATUS" == "pending_review" ]] || fail "DB truth: task status=$DB_STATUS (want pending_review)"
-log "3e mark-pending-review -> pending_review (DB truth=$DB_STATUS)"
+log "3d mark-pending-review -> pending_review (DB truth=$DB_STATUS)"
 
 # ---------------------------------------------------------------- step 4: merge live half into artifact
 log "--- step 4: merge live happy path into $EVIDENCE ---"
@@ -215,7 +203,6 @@ steps = []
 for step, fname in [
     ("task_create", "create.json"),
     ("task_transition.start", "start.json"),
-    ("plan_mode", "plan_mode.json"),
     ("plan_complete", "plan_complete.json"),
     ("task_transition.mark-pending-review", "pending_review.json"),
 ]:
@@ -227,7 +214,6 @@ base["liveHappyPath"] = {
     "requiredSteps": [
         "task_create",
         "task_transition.start",
-        "plan_mode",
         "plan_complete",
         "task_transition.mark-pending-review",
     ],

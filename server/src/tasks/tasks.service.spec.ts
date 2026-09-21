@@ -1183,9 +1183,9 @@ describe('TasksService', () => {
       });
     });
 
-    it('effectivePlanMode：开关关但主成员选 plan agent → true（职责约定兜底）', async () => {
+    it('legacy 计划模式开关已下线：任务 DTO 不含计划开关字段', async () => {
       prisma.task.findUnique.mockResolvedValue(
-        row({ teamId: 'tm_0000000001', planMode: false }),
+        row({ teamId: 'tm_0000000001' }),
       );
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
@@ -1199,27 +1199,10 @@ describe('TasksService', () => {
 
       const result = await service.findOne('t_0000000001');
 
-      expect(result.planMode).toBe(false);
-      expect(result.effectivePlanMode).toBe(true);
-    });
-
-    it('effectivePlanMode：开关关且主成员执行职责 → false（默认安全）', async () => {
-      prisma.task.findUnique.mockResolvedValue(
-        row({ teamId: 'tm_0000000001', planMode: false }),
+      // 主成员绑定 plan agent 也不再产出任何计划开关字段（职责约定通道已随开关一并下线）。
+      expect(Object.keys(result).filter((k) => /plan.?mode/i.test(k))).toEqual(
+        [],
       );
-      prisma.team.findUnique.mockResolvedValue({
-        id: 'tm_0000000001',
-        mainAgentMemberId: 'tmm_0000000001',
-      });
-      prisma.teamMember.findMany.mockResolvedValue([
-        tmmRow('tmm_0000000001', 'a_product', { opencodeAgentName: null }),
-        tmmRow('tmm_0000000002', 'a_developer'),
-      ]);
-      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
-
-      const result = await service.findOne('t_0000000001');
-
-      expect(result.effectivePlanMode).toBe(false);
     });
 
     it('instances 携带会话状态快照 sessionStatus/sessionId（团队会话行，切页回来不丢工作中）', async () => {

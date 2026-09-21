@@ -496,31 +496,6 @@ export const teamAddMemberSchema = z.object({
 
 type TeamAddMemberArgs = z.infer<typeof teamAddMemberSchema>;
 
-/**
- * plan_mode：切换任务计划模式开关。
- * enabled=true → 先出计划文件（工作目录 `.opencode/plans/*.md`，计划 Tab 直接同步展示），
- * 其他成员只评审不起草；
- * enabled=false → 直接执行。agentName 可选：同步指定主 Agent 的执行 agent
- * （如切到 'build'；空串=回跟随默认；不传=保持当前选择）。
- */
-export const planModeSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
-  selfInstanceId: z
-    .string()
-    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  enabled: z
-    .boolean()
-    .describe('计划模式开关（true=开启，false=关闭/切回直接执行）'),
-  agentName: z
-    .string()
-    .optional()
-    .describe(
-      '同步指定的主 Agent 执行 agent 名（如 build；空串=回跟随默认；不传=保持当前）',
-    ),
-});
-
-type PlanModeArgs = z.infer<typeof planModeSchema>;
-
 export const planCompleteSchema = z.object({
   taskId: z.string().describe('任务 ID'),
   selfInstanceId: z
@@ -976,13 +951,6 @@ export function buildPlatformMcpTools(
       inputSchema: teamAddMemberSchema,
       handler: (ctx, args) =>
         service.teamAddMember(ctx, args as TeamAddMemberArgs),
-    },
-    {
-      name: 'plan_mode',
-      description:
-        '切换任务计划模式开关：调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。enabled=true 开启（先出计划文档，其他成员只评审不起草）；enabled=false 关闭切回直接执行。agentName 可选同步指定主 Agent 的执行 agent（如 build；空串=回跟随默认；不传=保持当前）。返回 {taskId, planMode, agentName}。',
-      inputSchema: planModeSchema,
-      handler: (ctx, args) => service.planMode(ctx, args as PlanModeArgs),
     },
     {
       name: 'plan_complete',

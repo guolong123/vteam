@@ -63,7 +63,7 @@ describe('opencode agent 职责约定（计划/执行一对一映射）', () => 
     expect(listPlanDutyAgents()).not.toContain('orchestrator');
   });
 
-  it('null/空/未知名 → execute（默认安全：不改变现有行为；未知计划 agent 走显式 planMode 开关）', () => {
+  it('null/空/未知名 → execute（默认安全：不改变现有行为）', () => {
     expect(getOpencodeAgentDuty(null)).toBe('execute');
     expect(getOpencodeAgentDuty(undefined)).toBe('execute');
     expect(getOpencodeAgentDuty('  ')).toBe('execute');

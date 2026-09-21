@@ -51,13 +51,4 @@ export class CreateTaskDto {
   @IsOptional()
   @IsBoolean()
   resetAfterComplete?: boolean;
-
-  @ApiPropertyOptional({
-    description:
-      '计划模式（默认 false=直接执行；true=主 Agent 先出计划文档，其他成员只评审不起草）',
-    default: false,
-  })
-  @IsOptional()
-  @IsBoolean()
-  planMode?: boolean;
 }

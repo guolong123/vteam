@@ -2874,7 +2874,7 @@ export class PlatformMcpService implements OnModuleInit {
     }
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
     // 注：已删除旧自造 plan 域的 start 门禁（executionMode 列恒 direct）。
-    // 新计划模式（task.planMode）不拦截 start：计划评审通过后的执行确认走
+    // start 无平台侧计划门：是否先出计划由所绑定 agent 的 prompt 表达；执行确认走
     // opencode question/permission → QuestionModal 由用户明确批准（见 P4）。
     return this.tasksService.transitionByAgent(
       args.taskId,
@@ -2905,34 +2905,6 @@ export class PlatformMcpService implements OnModuleInit {
       answers: args.answers,
       response: args.response,
     });
-  }
-
-  /**
-   * 团队主成员解析（plan_mode 等「写团队主成员」目标解析，唯一回退点）：
-   * team.mainAgentMemberId 显式绑定优先返回；为 NULL 时回退首位成员（seq 升序，
-   * 对齐 chat.service buildMainAgentTrigger / worker-dispatcher resolveTeamMainMember；
-   * TeamMember 无软删字段，过滤域恒为 { teamId }）。空名册或查询失败 → null。
-   * 注意：此处不再充当身份门——调用方权限由 ROLE toolAllows 决定，无调用方据此 403；
-   * 返回值仅供「写入目标 / 归属判定」，缺失时调用方各自降级（不再拒绝授权调用）。
-   */
-  private async resolveTeamMainMemberId(
-    teamId: string,
-    explicitMainId: string | null,
-  ): Promise<string | null> {
-    if (explicitMainId) return explicitMainId;
-    try {
-      const first = await (this.prisma as any).teamMember.findFirst({
-        where: { teamId },
-        orderBy: [{ seq: 'asc' }, { id: 'asc' }],
-        select: { id: true },
-      });
-      return (first as { id: string } | null)?.id ?? null;
-    } catch (err) {
-      this.logger.warn(
-        `resolveTeamMainMemberId 回退查询失败 teamId=${teamId}：${(err as Error)?.message ?? err}`,
-      );
-      return null;
-    }
   }
 
   /**
@@ -3833,8 +3805,8 @@ export class PlatformMcpService implements OnModuleInit {
 
   /**
    * 任务团队归属解析：任务存在（404 否则）+ 所属团队主成员 id（tmm_；teamId 无团队
-   * 或团队无主成员 → 对应 null）。供 team_add_member（仅取 teamId）与 plan_mode
-   * （取 teamId + mainMemberId，缺口由 resolveTeamMainMemberId 回退）复用。
+   * 或团队无主成员 → 对应 null）。供 team_add_member（取 teamId + mainMemberId，
+   * 其中 mainMemberId 缺省为 null，仅作归属信息）复用。
    */
   private async findTaskTeamGate(taskId: string): Promise<{
     teamId: string | null;
@@ -3975,71 +3947,6 @@ export class PlatformMcpService implements OnModuleInit {
       taskId: args.taskId,
       agentId: args.agentId,
       alias,
-    };
-  }
-
-  /**
-   * plan_mode：切换任务计划模式开关。
-   * enabled=true → 计划员先出计划文档（写到工作目录 .opencode/plans/ 下），其他成员只评审
-   * 不起草；enabled=false → 直接执行。agentName 可选：同步指定**团队主成员**的执行 agent
-   * （显式名；空串=回跟随默认；不传=保持当前）。agent 名不做存在性强校验（弱校验告警，
-   * 执行期由 opencode 报错并经 agent.status error 回流，对齐 teams.updateMember 口径）。
-   * 身份门禁（原「仅主成员」403）已移除：调用权限由调用方 ROLE 的 toolAllows 决定；
-   * 写入目标恒为团队主成员（行为语义是「设置团队的计划执行 agent」，非「设置自己」）。
-   * 团队无主成员时经 resolveTeamMainMemberId 回退首位成员；空名册 → 无目标，
-   * 不写 member 行，只翻转 task.planMode 并回显保持态。
-   */
-  async planMode(
-    ctx: PlatformMcpContext,
-    args: {
-      taskId: string;
-      selfInstanceId: string;
-      enabled: boolean;
-      agentName?: string;
-    },
-  ): Promise<{
-    taskId: string;
-    planMode: boolean;
-    agentName: string | null;
-  }> {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-
-    const { teamId, mainMemberId } = await this.findTaskTeamGate(args.taskId);
-    // 无团队 → 无目标；有团队但无显式主成员 → seq 升序首位成员回退（与 task_create/
-    // skill_create 同一 helper 口径）。仍无目标（空名册）→ targetMemberId=null，跳过写行。
-    const targetMemberId = teamId
-      ? await this.resolveTeamMainMemberId(teamId, mainMemberId)
-      : null;
-
-    let agentName: string | null | undefined;
-    if (args.agentName !== undefined) {
-      // 空串 → null（回跟随默认）；非空 → 原值透传（弱校验：存在性由执行期裁决）
-      agentName = args.agentName?.trim() || null;
-      if (targetMemberId) {
-        await this.prisma.teamMember.update({
-          where: { id: targetMemberId },
-          data: { opencodeAgentName: agentName },
-        });
-      }
-    } else if (targetMemberId) {
-      const row = await this.prisma.teamMember.findUnique({
-        where: { id: targetMemberId },
-        select: { opencodeAgentName: true },
-      });
-      agentName = row?.opencodeAgentName ?? null;
-    }
-
-    const updated = await this.prisma.task.update({
-      where: { id: args.taskId },
-      data: { planMode: args.enabled },
-    });
-    this.logger.log(
-      `[plan-mode] 主 Agent 切换计划模式 task=${args.taskId} planMode=${updated.planMode} agent=${agentName ?? '(保持)'}`,
-    );
-    return {
-      taskId: args.taskId,
-      planMode: updated.planMode,
-      agentName: agentName ?? null,
     };
   }
 

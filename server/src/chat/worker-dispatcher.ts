@@ -662,7 +662,7 @@ export const TEAM_GROUP_TRIGGER_INSTRUCTION =
   '如需通知其他成员：调用 vteam_notify_agent；' +
   '需要群聊历史时调用 vteam_chat_history（传 teamId）。' +
   '团队直聊没有 taskId，禁止传递 taskId 参数（传了必 403）。' +
-  'vteam_my_profile、vteam_team_view、vteam_doclib、vteam_issue_*、vteam_plan_mode、vteam_task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 vteam_task_create 创建真实任务）。' +
+  'vteam_my_profile、vteam_team_view、vteam_doclib、vteam_issue_*、vteam_task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 vteam_task_create 创建真实任务）。' +
   '如需向群聊发送文件：直接调用 vteam_group_post 并携带 fileRef，文件将作为群聊附件。';
 
 export const WECOM_TRIGGER_INSTRUCTION =

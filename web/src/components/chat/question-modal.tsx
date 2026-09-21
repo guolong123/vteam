@@ -54,20 +54,11 @@ export interface QuestionModalProps {
   question: QuestionModalData | null;
   submitting?: boolean;
   onClose: () => void;
-  /** 提交回复（question: answers label 数组/null=拒绝；permission: response）。
-   * andSwitchToExecute=true 时调用方先批准、成功后再切到执行模式（planMode=false +
-   * 主 Agent 回跟随默认），任一步失败都必须明确报错（不能静默半吊子）。 */
+  /** 提交回复（question: answers label 数组/null=拒绝；permission: response）。 */
   onSubmit: (payload: {
     answers?: string[][] | null;
     response?: "once" | "always" | "reject";
-    andSwitchToExecute?: boolean;
   }) => void;
-  /**
-   * 是否展示"批准并切换到执行模式"主按钮（计划模式下开始执行类确认用）。
-   * 缺省 false（普通确认只有批准/拒绝）。展示时 permission 分支以 once 批准，
-   * question 分支以当前选项批准，再由调用方执行切换。
-   */
-  showApproveAndSwitch?: boolean;
 }
 
 /** 权限确认按钮（once/always/reject）。 */
@@ -83,7 +74,6 @@ export function QuestionModal({
   submitting = false,
   onClose,
   onSubmit,
-  showApproveAndSwitch = false,
 }: QuestionModalProps) {
   // question 多选/自定义输入的选择态（重开时重置）
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -340,29 +330,6 @@ export function QuestionModal({
                   {submitting ? "处理中…" : action.label}
                 </button>
               ))}
-              {showApproveAndSwitch && (
-                <button
-                  type="button"
-                  data-testid="question-approve-and-switch"
-                  onClick={() => onSubmit({ response: "once", andSwitchToExecute: true })}
-                  disabled={submitting}
-                  title="先批准本次执行，再关闭计划模式并将主 Agent 切回跟随默认"
-                  style={{
-                    padding: `${space.sm + 1}px ${space.lg}px`,
-                    borderRadius: radius.pill,
-                    border: "2px solid #059669",
-                    backgroundColor: "#FFFFFF",
-                    color: "#059669",
-                    fontSize: fontSize.md,
-                    fontWeight: 600,
-                    cursor: submitting ? "default" : "pointer",
-                    opacity: submitting ? 0.6 : 1,
-                    fontFamily: fontFamily.body,
-                  }}
-                >
-                  {submitting ? "处理中…" : "批准并切换到执行模式"}
-                </button>
-              )}
             </>
           ) : (
             <>
@@ -404,29 +371,6 @@ export function QuestionModal({
               >
                 {submitting ? "处理中…" : "确认"}
               </button>
-              {showApproveAndSwitch && (
-                <button
-                  type="button"
-                  data-testid="question-approve-and-switch"
-                  onClick={() => onSubmit({ answers: buildAnswers(), andSwitchToExecute: true })}
-                  disabled={submitting || !canSubmit}
-                  title="先批准，再关闭计划模式并将主 Agent 切回跟随默认"
-                  style={{
-                    padding: `${space.sm + 1}px ${space.lg}px`,
-                    borderRadius: radius.pill,
-                    border: "2px solid #059669",
-                    backgroundColor: "#FFFFFF",
-                    color: "#059669",
-                    fontSize: fontSize.md,
-                    fontWeight: 600,
-                    cursor: submitting || !canSubmit ? "default" : "pointer",
-                    opacity: submitting || !canSubmit ? 0.6 : 1,
-                    fontFamily: fontFamily.body,
-                  }}
-                >
-                  {submitting ? "处理中…" : "批准并切换到执行模式"}
-                </button>
-              )}
             </>
           )}
         </div>

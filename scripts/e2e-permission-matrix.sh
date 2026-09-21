@@ -468,18 +468,17 @@ NONMAIN_FIX_ID="s_t5matrix_${NONMAIN_CAPABLE_MEMBER}"
 MAIN_FIX_ID="s_t5matrix_${MAIN_MEMBER}"
 bind_session_for "$NONMAIN_CAPABLE_MEMBER" "non-main probe member"
 bind_session_for "$MAIN_MEMBER" "main member"
-TASK_ROW="$(db_query "SELECT CONCAT(id, ' ', status, ' ', plan_mode) FROM tasks WHERE team_id='${TEAM_ID}' ORDER BY id LIMIT 1;" | tr -d '\r')"
+TASK_ROW="$(db_query "SELECT CONCAT(id, ' ', status) FROM tasks WHERE team_id='${TEAM_ID}' ORDER BY id LIMIT 1;" | tr -d '\r')"
 TASK_ID="$(printf '%s' "$TASK_ROW" | awk '{print $1}')"
 TASK_STATUS="$(printf '%s' "$TASK_ROW" | awk '{print $2}')"
-TASK_PLANMODE="$(printf '%s' "$TASK_ROW" | awk '{print $3}')"
-[[ -n "$TASK_ID" && -n "$TASK_STATUS" && -n "$TASK_PLANMODE" ]] \
+[[ -n "$TASK_ID" && -n "$TASK_STATUS" ]] \
   || fail "3-absence" "no task row for team $TEAM_ID (got: $TASK_ROW)"
 # The non-main probes need a member whose role HOLDS my_profile (identity-absence probe,
 # step 3a) and vteam_task_transition (business-validation probe, step 3b); otherwise the
 # todo-3 permission gate correctly answers first and the identity assertion is vacuous.
 NONMAIN_MEMBER="$NONMAIN_CAPABLE_MEMBER"
 [[ -n "$NONMAIN_MEMBER" ]] || fail "3-absence" "no permission-capable non-main session for worker $WORKER_ID in team $TEAM_ID"
-log "main=$MAIN_MEMBER nonmain=$NONMAIN_MEMBER task=$TASK_ID status=$TASK_STATUS planMode=$TASK_PLANMODE"
+log "main=$MAIN_MEMBER nonmain=$NONMAIN_MEMBER task=$TASK_ID status=$TASK_STATUS"
 
 # 3a: non-main calls a tool its role DOES hold (my_profile) -> must NOT be refused by an
 # identity gate. This isolates "no identity/main-instance refusal" from the (legitimate)
@@ -508,7 +507,7 @@ then
 fi
 pass "3a (former identity gate ABSENT: non-main calls an allowlisted tool successfully)"
 
-# 3a2: non-main calls a tool its role does NOT hold (plan_mode) -> refused, and the
+# 3a2: non-main calls a tool its role does NOT hold -> refused, and the
 # refusal must be the todo-3 permission gate (stable code), not an identity rule.
 NONMAIN_DENY_OUT="$EVIDENCE_DIR/absence-nonmain-denied-tool.json"
 mcp_call "$NONMAIN_DENY_OUT" 13 "$NONMAIN_DENY_BARE" \

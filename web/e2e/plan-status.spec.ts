@@ -73,8 +73,6 @@ function taskJson(taskId: string) {
     teamId: "tm_0000000001",
     instances: [],
     mainAgentInstanceId: null,
-    planMode: false,
-    effectivePlanMode: false,
   };
 }
 

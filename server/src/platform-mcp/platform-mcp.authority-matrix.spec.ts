@@ -40,7 +40,7 @@ import { PlatformToolPermissionService } from './platform-tool-permission.servic
  *    `CONTRACT-tool-naming-and-identity.md` §5）。
  * ② 非主实例成功：真实 `PlatformMcpService.taskCreate` 与真实 `TasksService.transitionByAgent`
  *    在非主 selfInstanceId 下**不再**抛出 `TASK_STATUS_MAIN_AGENT_ONLY`（身份门已移除）。
- * ③ 主 Agent happy path：经真实 `PlatformMcpService` 依次 create→start→plan_mode→
+ * ③ 主 Agent happy path：经真实 `PlatformMcpService` 依次 create→start→
  *    plan_complete→mark-pending-review，记录每步判定值。
  *
  * 产物 `.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json` 由本 spec 写入
@@ -339,8 +339,6 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       const { gate } = buildRealPermissionGate();
       const negatives: Array<[VteamAgentName, string]> = [
         ['vteam-architect', 'vteam_task_create'],
-        ['vteam-architect', 'vteam_plan_mode'],
-        ['vteam-developer', 'vteam_plan_mode'],
         ['vteam-developer', 'vteam_task_create'],
         ['vteam-tester', 'vteam_task_transition'],
         ['vteam-librarian', 'vteam_skill_create'],
@@ -454,7 +452,7 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
   });
 
   describe('③ 主 Agent happy path（经真实 PlatformMcpService 方法，逐 step 记判定值）', () => {
-    it('create → start → plan_mode → plan_complete → mark-pending-review 全部成功', async () => {
+    it('create → start → plan_complete → mark-pending-review 全部成功', async () => {
       const steps: Array<{ step: string; ok: boolean; result: unknown }> = [];
 
       // 1) task_create
@@ -483,19 +481,7 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       });
       steps.push({ step: 'task_transition.start', ok: !!started, result: started });
 
-      // 3) plan_mode
-      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
-      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: mainId });
-      prisma.teamMember.findUnique.mockResolvedValue({ opencodeAgentName: null });
-      prisma.task.update.mockResolvedValue({ id: 't_happy', planMode: true });
-      const planMode = await service.planMode(ctx, {
-        taskId: 't_happy',
-        selfInstanceId: mainId,
-        enabled: true,
-      });
-      steps.push({ step: 'plan_mode', ok: planMode.planMode === true, result: planMode });
-
-      // 4) plan_complete
+      // 3) plan_complete
       planLifecycle.completePlan.mockResolvedValue({
         plan: { status: 'completed' },
         idempotent: false,
@@ -510,7 +496,7 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
         result: planComplete,
       });
 
-      // 5) mark-pending-review
+      // 4) mark-pending-review
       tasksService.transitionByAgent.mockResolvedValueOnce({
         id: 't_happy',
         status: 'pending_review',
@@ -531,7 +517,6 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       expect(steps.map((s) => s.step)).toEqual([
         'task_create',
         'task_transition.start',
-        'plan_mode',
         'plan_complete',
         'task_transition.mark-pending-review',
       ]);
@@ -561,7 +546,6 @@ function taskRow(overrides: Record<string, unknown> = {}): Record<string, unknow
     completedAt: null,
     archivedAt: null,
     resetAfterComplete: false,
-    planMode: false,
     version: 0,
     ...overrides,
   };

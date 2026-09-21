@@ -232,10 +232,6 @@ model Task {
   // @deprecated 2026-09：vteam 自造 plan 域已下线（改由 opencode 原生 agent 承担计划动作）。
   // 列保留但恒写 "direct"、业务层不再读取；随下次重建库删除。
   executionMode       String    @default("direct") @map("execution_mode")
-  /// 计划模式开关（2026-09 新计划域）：true=主 Agent 先出计划文档（submit_artifact type:plan），
-  /// 其他成员只评审不起草。开启路径：用户在输入框切计划开关 / 主 Agent 调 plan_mode MCP 工具。
-  /// 与已废弃的 executionMode 正交（该列恒 direct，不再表达语义）。
-  planMode            Boolean   @default(false) @map("plan_mode")
   backgroundDocs      Json?     @map("background_docs")
   /// 完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false，Todo7）
   resetAfterComplete  Boolean   @default(false) @map("reset_after_complete")

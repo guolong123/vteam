@@ -23,7 +23,6 @@ import {
   TASK_TRANSITIONS,
 } from '../common/constants/task.constants';
 import { IdGeneratorService } from '../common/id-generator';
-import { getOpencodeAgentDuty } from '../common/opencode-agent-duty';
 import { roleKeyOf, roleLabelOf } from '../common/agent-role-label';
 import { resyncIdPrefix } from '../common/id-resync';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
@@ -77,8 +76,6 @@ type TaskRow = {
   mainAgentId: string | null;
   mainAgentInstanceId: string | null;
   executionMode: string;
-  /** 计划模式开关（true=主 Agent 先出计划，其他成员只评审）。 */
-  planMode?: boolean | null;
   backgroundDocs: Prisma.JsonValue | null;
   resetAfterComplete?: boolean | null;
   teamId?: string | null;
@@ -400,7 +397,6 @@ export class TasksService implements OnModuleInit {
               backgroundDocs: (dto.backgroundDocs ??
                 []) as Prisma.InputJsonValue,
               resetAfterComplete: (dto as any).resetAfterComplete ?? false,
-              planMode: (dto as any).planMode ?? false,
               createdBy: opts.createdBy,
               version: 0,
             },
@@ -708,9 +704,6 @@ export class TasksService implements OnModuleInit {
     }
     if ((dto as any).resetAfterComplete !== undefined) {
       data.resetAfterComplete = (dto as any).resetAfterComplete;
-    }
-    if ((dto as any).planMode !== undefined) {
-      data.planMode = (dto as any).planMode;
     }
     // 主实例校验口径团队化：实例唯一来源为任务归属团队的团队成员（tmm_）。
     const teamIdOf = (task as any).teamId ?? null;
@@ -1446,8 +1439,7 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
-   * 团队主成员回退（transitionByAgent 门内联；正典实现见
-   * PlatformMcpService.resolveTeamMainMemberId，此处同语义内联以避免跨服务共享改动）：
+   * 团队主成员回退（transitionByAgent 门内联，与团队侧 resolveTeamMainMember 同语义）：
    * 显式绑定由调用方优先返回；为 NULL 时取首位成员（seq 升序）；空名册/查询失败 →
    * null（fail-closed，调用方保持 403，永不放行）。
    */
@@ -1891,12 +1883,6 @@ export class TasksService implements OnModuleInit {
       mainAgentId: task.mainAgentId,
       mainAgentInstanceId: task.mainAgentInstanceId ?? null,
       executionMode: task.executionMode ?? 'direct',
-      planMode: (task as any).planMode ?? false,
-      effectivePlanMode:
-        ((task as any).planMode ?? false) ||
-        getOpencodeAgentDuty(
-          members.find((m) => m.id === mainMemberId)?.opencodeAgentName ?? null,
-        ) === 'plan',
       backgroundDocs: task.backgroundDocs ?? [],
       teamId: (task as any).teamId ?? null,
       teamAgentIds: members.map((m) => m.agentId),

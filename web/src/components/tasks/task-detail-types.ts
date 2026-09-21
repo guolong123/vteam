@@ -41,13 +41,6 @@ export interface TaskDetail {
   mainAgentId: string | null;
   mainAgentInstanceId: string | null;
   managedMode: boolean;
-  /** 计划模式开关（task.planMode；true=主 Agent 先出计划，其他成员只评审）。 */
-  planMode?: boolean | null;
-  /**
-   * 有效计划模式（服务端唯一真相：planMode OR 主 Agent 职责约定为 plan）。
-   * 展示判断一律用它（缺省回退 planMode 兼容旧响应）。
-   */
-  effectivePlanMode?: boolean | null;
   backgroundDocs: unknown[];
   teamAgentIds: string[];
   instances: TaskInstance[];

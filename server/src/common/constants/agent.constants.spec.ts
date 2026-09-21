@@ -100,7 +100,6 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     'vteam_task_transition',
     'vteam_question_confirm',
     'vteam_task_create',
-    'vteam_plan_mode',
     'vteam_plan_complete',
     'vteam_team_add_member',
     'vteam_skill_create',
@@ -110,7 +109,6 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
   const GRANT_MATRIX: Record<string, readonly VteamAgentName[]> = {
     vteam_task_transition: ['vteam-product', 'vteam-project_manager'],
     vteam_task_create: ['vteam-product', 'vteam-project_manager'],
-    vteam_plan_mode: ['vteam-product', 'vteam-project_manager'],
     vteam_team_add_member: ['vteam-product', 'vteam-project_manager'],
     vteam_question_confirm: ['vteam-product', 'vteam-project_manager'],
     vteam_plan_complete: ['vteam-plan', 'vteam-project_manager'],
@@ -126,7 +124,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
   });
 
   it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 者（无 server-gated 例外），且全为 vteam_ 真实名', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(29);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(28);
     for (const mcp of VTEAM_MCP_TOOL_NAMES) expect(mcp).toMatch(/^vteam_/);
     for (const name of ROLE_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];

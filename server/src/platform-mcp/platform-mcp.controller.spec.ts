@@ -32,7 +32,6 @@ describe('PlatformMcpController (HTTP)', () => {
     teamView: jest.Mock;
     myProfile: jest.Mock;
     teamAddMember: jest.Mock;
-    planMode: jest.Mock;
     planComplete: jest.Mock;
     channelSend: jest.Mock;
     wecomReply: jest.Mock;
@@ -120,11 +119,6 @@ describe('PlatformMcpController (HTTP)', () => {
         taskId: 't_1',
         agentId: 'a_developer',
         alias: '开发者-1',
-      }),
-      planMode: jest.fn().mockResolvedValue({
-        taskId: 't_1',
-        planMode: true,
-        agentName: 'plan',
       }),
       planComplete: jest.fn().mockResolvedValue({
         taskId: 't_1',
@@ -257,7 +251,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 29 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search/memory_update + team_view/my_profile + team_add_member + plan_mode + plan_complete + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel；自造 plan 域 5 工具已下线，plan_mode 为新计划开关，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 28 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search/memory_update + team_view/my_profile + team_add_member + plan_complete + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -294,7 +288,6 @@ describe('PlatformMcpController (HTTP)', () => {
         'team_view',
         'my_profile',
         'team_add_member',
-        'plan_mode',
         'plan_complete',
         'channel_send',
         'wecom_reply',
@@ -430,16 +423,6 @@ describe('PlatformMcpController (HTTP)', () => {
       ]);
       expect(myProfile.inputSchema.properties.selfInstanceId).toEqual({
         type: 'string',
-      });
-      // plan_mode：taskId/selfInstanceId/enabled 必填，agentName 可选
-      const planMode = tools.find((t) => t.name === 'plan_mode')!;
-      expect(planMode.inputSchema.required).toEqual([
-        'taskId',
-        'selfInstanceId',
-        'enabled',
-      ]);
-      expect(planMode.inputSchema.properties.enabled).toEqual({
-        type: 'boolean',
       });
       // plan_complete：taskId/selfInstanceId 全必填
       const planComplete = tools.find((t) => t.name === 'plan_complete')!;
@@ -857,42 +840,6 @@ describe('PlatformMcpController (HTTP)', () => {
         taskId: 't_1',
         agentId: 'a_developer',
         alias: '开发者-1',
-      });
-    });
-
-    it('plan_mode → service.planMode 收到 taskId/selfInstanceId/enabled/agentName', async () => {
-      const res = await mcpPost()
-        .set('x-worker-id', 'w_0001')
-        .send({
-          jsonrpc: '2.0',
-          id: 17,
-          method: 'tools/call',
-          params: {
-            name: 'plan_mode',
-            arguments: {
-              taskId: 't_1',
-              selfInstanceId: 'ta_main',
-              enabled: true,
-              agentName: 'plan',
-            },
-          },
-        })
-        .expect(200);
-
-      expect(service.planMode).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
-        {
-          taskId: 't_1',
-          selfInstanceId: 'ta_main',
-          enabled: true,
-          agentName: 'plan',
-        },
-      );
-      const text = res.body.result.content[0].text as string;
-      expect(JSON.parse(text)).toEqual({
-        taskId: 't_1',
-        planMode: true,
-        agentName: 'plan',
       });
     });
 
