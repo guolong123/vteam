@@ -1,0 +1,258 @@
+[
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu89k1ul",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000001 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000032",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  },
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu89oeh4",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000002 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000036",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  },
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu89rzbj",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000003 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000040",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  },
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu8a0g1q",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000004 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000045",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  },
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu8a5cmo",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000005 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000050",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  },
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu8a7ygc",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000006 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000055",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  },
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu8b3tpo",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000007 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000060",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  },
+  {
+    "test": "tabs_and_builtins",
+    "tab_count": 2,
+    "builtin_count": 7,
+    "builtin_keys": [
+      "product",
+      "project_manager",
+      "architect",
+      "developer",
+      "tester",
+      "plan",
+      "librarian"
+    ],
+    "builtin_readonly_no_delete": true
+  },
+  {
+    "test": "custom_role_crud",
+    "role_key": "qa-t7-role-t7-mu8b7lu2",
+    "created_default_agent": "a_developer",
+    "edited_default_agent": "a_tester",
+    "persisted_after_reload": true,
+    "deleted": true,
+    "cleanup": "ar_0000000008 DELETE -> 404"
+  },
+  {
+    "test": "member_prefill_and_override",
+    "team_id": "tm_0000000068",
+    "prefilled_agent": "a_developer",
+    "overridden_agent": "a_tester",
+    "persisted_role_id": "ar_developer",
+    "override_persisted": true
+  }
+]

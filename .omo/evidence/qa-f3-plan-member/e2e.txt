@@ -1,0 +1,40 @@
+[e2e] SERVER_URL=http://localhost:13000 SERVE_BASE_URL=http://localhost:14000 TEAM_ID=tm_0000000001 TASK_ID=t_0000000001
+[e2e] baseline HEAD=30febded4824a1fdf63dc6d7175646004d59fd79 (recorded in baseline-git.txt)
+[e2e] --- step 0: rebuild server+worker images (plan code must be in the running dist) ---
+[e2e] images rebuilt; waiting for server health ...
+[e2e] server healthy
+[e2e] running server dist contains plan seed code (a_plan x3)
+[e2e] [32mPASS[0m 0 (images rebuilt, server healthy, dist fresh)
+[e2e] --- step 0b: re-seed (idempotent upserts, same command as compose init) ---
+[e2e] re-seed exit 0
+[e2e] --- step 0c: restart worker (injection happens at start only) + sentinel wait ---
+[e2e] worker re-injected; sentinel=hasPlan:allow
+[e2e] [32mPASS[0m 0 (re-seed + worker re-injected + serve back)
+[e2e] --- step 1: seed truth (DB + /agents + /teams) ---
+== agents a_plan ==
+a_plan	template	plan	plan	ep_plan
+== execution_policies ep_plan ==
+ep_plan	template
+== team member tmm_0000000006 ==
+tmm_0000000006	tm_0000000001	a_plan	计划员-1
+== teams main (must NOT be the plan member) ==
+tm_0000000001	tmm_0000000002
+== seed team member count ==
+7
+== builtin template agent count ==
+7
+[e2e] [32mPASS[0m 1a (DB: a_plan + ep_plan + tmm_0000000006 计划员 non-main)
+[e2e] login seed-admin for /agents + /teams ...
+[e2e] [32mPASS[0m 1b (/agents lists a_plan as template; /teams members include 计划员)
+[e2e] --- step 2: injected opencode.json vteam-plan entry + 5-role byte parity ---
+[e2e] [32mPASS[0m 2 (vteam-plan mode all/task allow/plans-scoped edit/group_post guard-only; all six built-ins byte-identical to the regenerated baseline)
+[e2e] --- step 3: guard decisions via worker dist role-guard/policy.js ---
+[e2e] guard raw: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/qa-f3-plan-member/guard-decisions.json
+[e2e] [32mPASS[0m 3 (guard gate: plan task+plan allow; others deny; execute deny; unmapped pass-through; plans-write allow / src-write deny)
+[e2e] --- live prep: task-dir snapshot + group watermark ---
+[e2e] group channel=c_0000000001
+[e2e] group watermark=m_0000002345
+[e2e] --- step 4: live group-@ plan-member dispatch (bounded 600s) ---
+[e2e] POST group @ -> HTTP 201 (raw: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/qa-f3-plan-member/group-trigger.json)
+[e2e] step4 post-trigger watermark=m_0000002356
+[e2e] [31mFAIL[0m step=4-live reason=contract violation: member replied in group but no plan file under .opencode/plans/ (raw group: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/qa-f3-plan-member/group-after-4.json trigger: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/qa-f3-plan-member/group-trigger.json)

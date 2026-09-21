@@ -1,0 +1,172 @@
+{
+  "generatedAt": "2026-09-19T23:22:28.075Z",
+  "D1_policyCandidate": {
+    "note": "server-side selection is agentKey-driven; the agent NAME/role is never consulted",
+    "cases": [
+      {
+        "label": "builtin product",
+        "input": {
+          "agentKey": "product"
+        },
+        "candidate": "vteam-product"
+      },
+      {
+        "label": "renamed myagent",
+        "input": {
+          "agentKey": "myagent"
+        },
+        "candidate": "vteam-myagent"
+      },
+      {
+        "label": "renamed nopolicy",
+        "input": {
+          "agentKey": "nopolicy-t9"
+        },
+        "candidate": "vteam-nopolicy-t9"
+      },
+      {
+        "label": "no key (archivist)",
+        "input": {
+          "agentKey": null
+        },
+        "candidate": null
+      },
+      {
+        "label": "legacy row shape with role only",
+        "input": {
+          "agentKey": null,
+          "role": "developer"
+        },
+        "candidate": null
+      }
+    ]
+  },
+  "D2_planDuty": {
+    "note": "plan duty comes from the registered duty of the BOUND opencode agent",
+    "registry": [
+      "plan",
+      "prometheus",
+      "vteam-plan"
+    ],
+    "literal_vteam_plan": "plan",
+    "renamed_plan_duty": "plan",
+    "renamed_lookalike_vteam_prometheus": "execute",
+    "custom_agent": "execute",
+    "renamedBindingEntersPlanMode": true,
+    "customBindingEntersPlanMode": false
+  },
+  "D3_realDispatch": {
+    "note": "REAL WorkerDispatcher.dispatch executed against the LIVE stack (worker capabilities read from the live workers row)",
+    "binding": {
+      "teamMemberId": "tmm_0000000002",
+      "opencodeAgentName_set": "Prometheus - Plan Builder",
+      "isMainMember": true,
+      "taskId": "t_0000000001"
+    },
+    "workerCapabilitiesAgentPolicies": {
+      "names": [
+        "vteam-plan",
+        "vteam-product",
+        "vteam-architect",
+        "vteam-developer",
+        "vteam-tester",
+        "vteam-project_manager",
+        "vteam-librarian",
+        "vteam-myagent"
+      ],
+      "enabled": true
+    },
+    "workerSupportsCandidate_vteam_plan": true,
+    "dispatchError": null,
+    "emittedAgentField": "vteam-plan",
+    "planInstructionInjected": true,
+    "planReviewInjected": false,
+    "editPermGlobInjected": true,
+    "systemLength": 6282,
+    "systemSha256": "3d4b28a5a2d7676c9bf8ab9a84bc6b3d94657e7840f052e3f62ec5d436d8ea24",
+    "boundedClaim": "SERVER selected the literal vteam-plan for the renamed plan-duty binding (server-side selection + gate proven; fan-out NOT claimed)"
+  },
+  "D4_workerGuard": {
+    "note": "executed with the SHIPPED worker/role-guard/policy.js against the LIVE injected roles.json",
+    "guardSource": "worker/dist/role-guard/policy.js",
+    "rolesDocEnabled": true,
+    "rolesInjected": [
+      "vteam-plan",
+      "vteam-product",
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-tester",
+      "vteam-project_manager",
+      "vteam-librarian",
+      "vteam-myagent"
+    ],
+    "decisions": [
+      {
+        "label": "literal vteam-plan + subagent_type vteam-plan",
+        "agent": "vteam-plan",
+        "args": {
+          "subagent_type": "vteam-plan"
+        },
+        "decision": {
+          "action": "allow"
+        }
+      },
+      {
+        "label": "renamed (Prometheus - Plan Builder) + subagent_type vteam-plan",
+        "agent": "Prometheus - Plan Builder",
+        "args": {
+          "subagent_type": "vteam-plan"
+        },
+        "decision": {
+          "action": "allow"
+        }
+      },
+      {
+        "label": "renamed vteam-myagent + subagent_type vteam-plan",
+        "agent": "vteam-myagent",
+        "args": {
+          "subagent_type": "vteam-plan"
+        },
+        "decision": {
+          "action": "deny",
+          "message": "【越界拦截｜角色：vteam-myagent】不能调用 task。职责：myagent。请把该工作转交 对应职责角色，或使用 vteam_notify_agent 定向通知。"
+        }
+      },
+      {
+        "label": "literal vteam-plan + subagent_type vteam-developer",
+        "agent": "vteam-plan",
+        "args": {
+          "subagent_type": "vteam-developer"
+        },
+        "decision": {
+          "action": "deny",
+          "message": "【越界拦截｜角色：vteam-plan】不能调用 task。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+        }
+      }
+    ]
+  },
+  "D5_liveLiteralPlanner": {
+    "note": "live worker injection: the literal vteam-plan carries mode=all + permission.task=allow",
+    "agentNames": [
+      "vteam-plan",
+      "vteam-product",
+      "vteam-architect",
+      "vteam-developer",
+      "vteam-tester",
+      "vteam-project_manager",
+      "vteam-librarian",
+      "vteam-myagent"
+    ],
+    "vteam_plan_entry": {
+      "mode": "all",
+      "task": "allow",
+      "edit": {
+        "*": "deny",
+        "**.opencode/plans/**": "allow"
+      }
+    },
+    "vteam_plan_mode_all": true,
+    "vteam_plan_task_allow": true,
+    "renamedEntryAbsent": true
+  }
+}

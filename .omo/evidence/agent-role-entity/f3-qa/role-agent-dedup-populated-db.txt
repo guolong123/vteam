@@ -1,0 +1,31 @@
+=== live DB: role_prompt vs agents.prompt overlap (sentence de-dup) ===
+template rows fetched: 7
+a_architect: agent_prompt_len=1581 role_prompt_len=461 shared_sentences=11 markers_in_agent_prompt=['# 角色：', '回执铁律', '## 协同方式', '## 职责']
+    SHARED: 你是任务虚拟团队中的架构师 Agent，负责技术方案与设计文档，不编写实现代码
+    SHARED: - 基于需求文档（产品经理产出）设计技术方案，输出设计文档（doc）：技术选型、架构分层、模块划分、关键流程、数据模型、风险与权衡
+    SHARED: - 方案评审结论（text）：候选方案的取舍理由、推荐方案与适用边界
+a_developer: agent_prompt_len=1830 role_prompt_len=483 shared_sentences=8 markers_in_agent_prompt=['# 角色：', '回执铁律', '## 协同方式', '## 职责']
+    SHARED: 你是任务虚拟团队中的开发者 Agent，负责编码实现、实现说明与缺陷修复
+    SHARED: - 编码实现：依据需求与设计文档（产品经理/架构师产出）实现代码，输出代码文件（file）
+    SHARED: - 实现说明（doc）：改动范围、关键实现、使用方式、验证方式（自测命令与结果），供测试者设计用例与执行验证
+a_librarian: agent_prompt_len=1675 role_prompt_len=609 shared_sentences=12 markers_in_agent_prompt=['# 角色：', '## 协同方式', '## 职责']
+    SHARED: # 角色：知识管理员
+    SHARED: 你是任务虚拟团队中的知识管理员 Agent，只回答已沉淀的私域知识
+    SHARED: - 只读问答：依据团队已沉淀知识回答提问，检索顺序为 vteam_memory_search → vteam_doclib → vteam_read_file 
+a_plan: agent_prompt_len=2128 role_prompt_len=648 shared_sentences=11 markers_in_agent_prompt=['# 角色：', '## 协同方式', '## 职责']
+    SHARED: 你是任务虚拟团队中的团队计划专员（计划员），群内可见、可被 @ 触发，Agent 管理中可见
+    SHARED: - 响应主 Agent 的 @ 派活起草计划：以 explore-first 方式并行探索（vteam_task_context / vteam_read_fi
+    SHARED: - 评审视角任务需要多视角并行评审时，可经 task 工具扇出只读评审子会话，子会话 subagent_type恒为vteam-plan
+a_product: agent_prompt_len=1770 role_prompt_len=594 shared_sentences=10 markers_in_agent_prompt=['# 角色：', '回执铁律', '## 协同方式', '## 职责']
+    SHARED: 你是任务虚拟团队中的产品经理 Agent，负责需求分析与原型设计
+    SHARED: - 需求分析：以产品视角澄清任务目标与业务背景，识别核心诉求与边界，将需求拆分为可执行、可验证的条目
+    SHARED: - 需求文档（doc 产出物）：背景与目标、用户场景、功能清单、非功能约束、验收标准
+a_project_manager: agent_prompt_len=2365 role_prompt_len=627 shared_sentences=14 markers_in_agent_prompt=['# 角色：', '## 协同方式', '## 职责']
+    SHARED: 你是任务虚拟团队中的项目经理 Agent，只负责流程控制，不产出具体交付物
+    SHARED: - 环节推进：按已确认的实施计划（计划员产出）推进环节流转，用 issue 跟踪每项状态
+    SHARED: 不自行拆解任务、不制定实施计划，缺失计划时 @计划员-1 补出
+a_tester: agent_prompt_len=1863 role_prompt_len=573 shared_sentences=12 markers_in_agent_prompt=['# 角色：', '回执铁律', '## 协同方式', '## 职责']
+    SHARED: 你是任务虚拟团队中的测试者 Agent，负责测试用例、测试计划、测试执行与测试报告
+    SHARED: - 测试计划与测试用例（doc 产出物）：基于需求验收标准（产品经理产出）与实现说明（开发者产出）设计用例——用例编号、前置条件、步骤、预期结果、优先级
+    SHARED: 覆盖验收标准全量条目
+TOTAL shared sentences across 7 builtins: 78

@@ -1,0 +1,34 @@
+{
+  "task": "2. [fix] removeProvider: 幽灵行（0 模型行+无凭据+worker caps 提及）可删（404 仅当 provider 全无痕迹）",
+  "plan": ".omo/plans/opencode-native-permissions-and-fixes.md",
+  "commit": {
+    "head": "909712b",
+    "subject": "fix(models): allow removing ghost provider resurrected by worker capabilities (404 only when provider leaves no trace) — 幽灵行（0 模型行+无凭据+worker caps 提及）可删 deletedModels:0",
+    "files": [
+      "server/src/models/models.controller.ts",
+      "server/src/models/models.service.spec.ts",
+      "server/src/models/models.service.ts"
+    ]
+  },
+  "phase1_static": {
+    "guard_after_fix": "rows.length===0 && !credential → providerMentionedInWorkerCapabilities(providerID) ? 继续删除 : throwNotFound(providerID)",
+    "404_condition_after_fix": "rows.length===0 ∧ !credential ∧ worker caps 无提及（provider 全无痕迹）",
+    "ghost_deletable_after_fix": "rows.length===0 ∧ !credential ∧ worker caps 提及 → 200 + {providerID, deletedModels:0, deletedCredential:false} + strip caps",
+    "credential_read_hoisted_before_guard": true
+  },
+  "phase2_automated": {
+    "tsc": { "command": "npx tsc --noEmit", "exit": 0 },
+    "jest_models": { "suite": "server/src/models/models.service.spec.ts", "run": "npx jest src/models/", "passed": "101 passed, 101 total", "ghost_test": "幽灵行（0 模型行+无凭据+worker caps 提及）→ 删除成功 deletedModels:0（不触发 worker caps 剥离）" }
+  },
+  "phase3_live_qa": {
+    "stack": "live docker compose（server :13000, db aiagents, web :13001, worker）",
+    "target": "ghost provider `qwen-27b`（live 复现：0 模型行 ∧ 无 model_credentials ∧ worker capabilities.models 提及）",
+    "before_fix": { "DELETE /api/v1/models/providers/qwen-27b": "404 MODEL_NOT_FOUND「模型 qwen-27b 不存在」" },
+    "after_fix_live": [
+      { "request": "DELETE /api/v1/models/providers/qwen-27b", "http": 200, "body": { "providerID": "qwen-27b", "deletedModels": 0, "deletedCredential": false } },
+      { "request": "DELETE /api/v1/models/providers/qwen-27b (再删)", "http": 404, "body": { "code": "MODEL_NOT_FOUND", "message": "模型 qwen-27b 不存在" } }
+    ],
+    "negative_control": "second DELETE 404 → provider 已剥离 caps 后不复活，无残迹即 404"
+  },
+  "evidence_captured_at": "2026-09-21T12:0x（live stack QA，见上 phase3_live_qa）"
+}

@@ -5,8 +5,8 @@
   },
   {
     "test": "notice_after_successful_save",
-    "agent": "a_0000000061",
-    "policy_id": "ep_0000000062",
+    "agent": "a_0000000158",
+    "policy_id": "ep_0000000159",
     "stored_bash": "allow",
     "notice_visible": true,
     "notice_says_auto_apply": true,
@@ -15,16 +15,16 @@
   },
   {
     "test": "no_auto_restart_on_save",
-    "agent": "a_0000000062",
-    "policy_id": "ep_0000000063",
+    "agent": "a_0000000159",
+    "policy_id": "ep_0000000160",
     "saves": 2,
     "restart_requests": 0,
     "action_still_offered": true
   },
   {
     "test": "restart_all_workers",
-    "agent": "a_0000000063",
-    "policy_id": "ep_0000000064",
+    "agent": "a_0000000160",
+    "policy_id": "ep_0000000161",
     "expected_worker_ids": [
       "w_compose_worker"
     ],
@@ -36,8 +36,8 @@
   },
   {
     "test": "zero_worker_empty_state",
-    "agent": "a_0000000064",
-    "policy_id": "ep_0000000065",
+    "agent": "a_0000000161",
+    "policy_id": "ep_0000000162",
     "workers_stubbed": [],
     "empty_state_visible": true,
     "action_button_absent": true

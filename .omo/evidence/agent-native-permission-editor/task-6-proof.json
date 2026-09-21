@@ -3,11 +3,11 @@
     "test": "options",
     "offered": [
       "",
-      "product",
-      "project_manager",
-      "architect",
-      "developer",
-      "tester"
+      "ar_product",
+      "ar_project_manager",
+      "ar_architect",
+      "ar_developer",
+      "ar_tester"
     ],
     "labels": [
       "无（默认骨架权限，后续可编辑）",
@@ -18,20 +18,21 @@
       "测试（tester）"
     ],
     "plan_offered": false,
+    "role_string_values_offered": false,
     "default_selected": ""
   },
   {
     "test": "developer",
-    "request_body_role": "developer",
+    "request_body_agentRoleId": "ar_developer",
+    "request_body_role_present": false,
     "agent": {
-      "id": "a_0000000022",
-      "role": "developer",
-      "policyId": "ep_0000000022"
+      "id": "a_0000000029",
+      "policyId": "ep_0000000029"
     },
     "effectivePermission": {
-      "policyId": "ep_0000000022",
-      "policyName": "t6 开发者 t6-mu7nuhjo 策略",
-      "agentName": "vteam-t6-dev-t6-mu7nuhjo",
+      "policyId": "ep_0000000029",
+      "policyName": "t4 开发者 t4-mu9ka09u 策略",
+      "agentName": "vteam-t4-dev-t4-mu9ka09u",
       "permission": {
         "edit": {
           "*": "deny",
@@ -96,7 +97,7 @@
       "serverGated": []
     },
     "stored_policy": {
-      "id": "ep_0000000022",
+      "id": "ep_0000000029",
       "type": "custom",
       "edit": {
         "*": "deny",
@@ -108,15 +109,15 @@
   {
     "test": "none",
     "request_body_role_present": false,
+    "request_body_agentRoleId_present": false,
     "agent": {
-      "id": "a_0000000023",
-      "role": null,
-      "policyId": "ep_0000000023"
+      "id": "a_0000000030",
+      "policyId": "ep_0000000030"
     },
     "effectivePermission": {
-      "policyId": "ep_0000000023",
-      "policyName": "t6 骨架 t6-mu7nuhjo 策略",
-      "agentName": "vteam-t6-none-t6-mu7nuhjo",
+      "policyId": "ep_0000000030",
+      "policyName": "t4 骨架 t4-mu9ka09u 策略",
+      "agentName": "vteam-t4-none-t4-mu9ka09u",
       "permission": {
         "edit": {
           "*": "deny"
@@ -132,7 +133,7 @@
       "correction": {
         "handoff": {},
         "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。",
-        "scopeSummary": "t6 骨架 t6-mu7nuhjo"
+        "scopeSummary": "t4 骨架 t4-mu9ka09u"
       },
       "serverGated": []
     },
@@ -147,9 +148,9 @@
   {
     "test": "roundtrip_reset",
     "values": [
-      "developer",
+      "ar_developer",
       "",
-      "tester",
+      "ar_tester",
       "reopen:"
     ]
   }

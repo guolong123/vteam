@@ -1,0 +1,29 @@
+== (e) rollback exercise on copy aiagents_t9rb ==
+dump sha256: 6c1c1032a4cc650123fe40b433ac0c2a804c0e4d8785a437730c5423b5d17586
+
+-- step 1: create scratch copy --
+created aiagents_t9rb
+
+-- step 2: restore the pre-drop dump (documented dump; the rollback artifact) --
+command: docker exec -i aiagents-compose-db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" aiagents_t9rb' < /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-role-decommission/pre-migration-dump.sql
+restored state: role_col=1 agents=10 applied_migrations=62
+
+-- step 3: full migration chain (drops the column) --
+63 migrations found in prisma/migrations
+Applying migration `20260919000010_drop_agents_role`
+post-migrate: role_col=0 (must be 0)
+
+-- step 4: the DOCUMENTED rollback command (migration.sql:42-44), adapted target only --
+documented: docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" aiagents' < <dump>
+executed  : cd /Volumes/SSD-Data/01work/git-project/vteam && docker compose exec -T db sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" aiagents_t9rb' < <dump>
+post-rollback: role_col=1 agents=10 applied_migrations=62
+
+-- step 5: pre-rollback state equality (the rollback must restore the pre-migration state) --
+role_col: restored=1 rollback=1
+agents:   restored=10 rollback=10
+migrations: restored=62 rollback=62
+
+ROLLBACK RESULT: PASS (role column returned; agent/migration counts back to the pre-migration values)
+
+-- step 6: drop the rollback copy --
+dropped aiagents_t9rb

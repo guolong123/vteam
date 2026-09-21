@@ -236,3 +236,42 @@ Exploration only; no production code touched. Single-precedence-point invariant 
 
 ## [2026-09-21] server createTeamMembers unification — landed
 - `createTeamMembers` bypassed `resolveMemberBinding` (narrow `{key,name}` role read, agentId required, no external write). Fixed via private `resolveTaskMemberBinding` mirror (rules 1–5, same-value error codes); writer persists `roleId`+`opencodeAgentName`; view push populated. tsc 0; `src/tasks|src/teams` 13 suites / 413 green. Proof: `.omo/evidence/opencode-native-permissions-and-fixes/task-13-tasks-binding.txt`.
+
+## [2026-09-21] 外部绑定到底生不生效 —— 取决于所挑内部 Agent 的 agentKey（未修，待用户定语义）
+**现象**（用户提问："外部绑定岗位的实例需再选一个内部执行 Agent，这是为什么？绑两个 agent 后面以谁的行为为准？"）
+
+**根因（三段拼出来，非设计意图）**
+1. `TeamMember.agentId` 是 NOT NULL 外键（schema.prisma TeamMember）——成员必须有内部 Agent（承载 prompt/策略/平台工具矩阵/模型/标签/快照/头像）。
+2. `AgentRole` 槽位互斥：`defaultAgentId` XOR `defaultOpencodeAgentName`。角色只绑外部名时无 `defaultAgentId`，服务端规则 3 抛 `ROLE_DEFAULT_AGENT_MISSING` → 前端只能要求手动补一个内部 Agent。
+
+**运行时优先级（worker-dispatcher.ts:2206-2213，已核实）**
+```
+policyCandidateAgent = effectivePlan ? 'vteam-plan' : `vteam-${member.agent.agentKey}`
+resolvedAgentName    = (policyCandidateAgent && workerSupportsAgentPolicies(worker, policyCandidateAgent))
+                        ? policyCandidateAgent
+                        : member.opencodeAgentName
+```
+闸门：`workers.service.ts:168-180` = `caps.agentPolicies.enabled===true && names.includes(candidate)`。
+
+**线上实测（决定性）**
+- DB `workers.capabilities.agentPolicies` = `{enabled:true, names:[vteam-plan,vteam-product,vteam-architect,vteam-developer,vteam-tester,vteam-project_manager,vteam-librarian]}` → **闸门开着**。
+- ⇒ 外部角色若挑**内置**内部 Agent（如 `a_developer`），候选 `vteam-developer` 命中 → 跑 `vteam-developer`，**外部名被完全忽略**。
+- ⇒ 仅当所挑内部 Agent 的 `agentKey` **不在那 7 个里**（自定义）→ 候选不命中 → 才回落到 `opencodeAgentName` → 外部 agent 才真正执行。
+- **即：外部绑定是否生效，取决于顺带挑的内部 Agent 是不是内置 —— 是 bug，不是规则。**
+
+**坑（工具层面）**：`GET /api/v1/workers` 的 `capabilities` 投影**不含** `agentPolicies`（易误判闸门关闭）；真值需查 DB：`docker exec aiagents-compose-db mysql -uroot -paiagents-root aiagents -N -e "SELECT JSON_EXTRACT(capabilities,'$.agentPolicies') FROM workers WHERE id='w_compose_worker';"`
+
+**待定（用户拍板，勿擅自改运行语义）**
+- A（推荐）外部优先：dispatch 改 `opencodeAgentName ?? policyCandidateAgent`；UI 不再要求手动挑执行 Agent。
+- B 真·单绑：`TeamMember.agentId` 可空；代价大（FK/快照/头像/prompt/平台工具矩阵；无 Agent 则矩阵缺失 → 该 agent 所有 `vteam_*` fail-closed 403）。
+- C 维持现状（内部优先+外部兜底），仅 UI 如实标注实际生效者。
+- 子问题：外部优先时，平台身份（平台工具权限矩阵/工单显示/头像）由谁提供？(a) 自动用团队主 Agent；(b) 保留手动选择但改名为"平台身份"；(c) 新增系统占位 Agent。**涉权限矩阵 → 不可由 agent 单方决定。**
+
+### 受影响面实测（决定依据）
+- `tm_0000000001 vteam开发团队`（7 成员）与 `tm_0000000002 probe-role-only`（1 成员）：**全部成员角色 roleExt 为空、memberExt 为空** → NOW(内部优先) 与 IF-A(外部优先) 结果**逐行相同**。
+- ⇒ 把 dispatch 改成"外部优先"对**现有线上数据零行为变化**；风险只存在于"未来新建的外部绑定角色"。改动可安全落地。
+
+### 工具坑：urllib 被环境代理拦成 502
+- `python3 urllib.request.urlopen(http://localhost:13000/...)` → **HTTP 502**；同 URL 用 `curl` → **200**。
+- 规律：curl OK，urllib（`User-Agent: Python-urllib/3.12`）被拦。**取数一律用 curl 落盘 /tmp，再用 python 解析**，不要用 urllib/py requests 直连。
+- 附带现象：`GET /api/v1/workers` 的 `capabilities` 投影**不含** `agentPolicies`（真值见上一节 DB 查询），勿据此判断闸门开闭。

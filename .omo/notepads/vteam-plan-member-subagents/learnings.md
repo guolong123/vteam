@@ -171,3 +171,51 @@ Baseline HEAD at start: `5ad2e2f docs(plan): mark plan-skills-rewrite F1-F4 comp
 - tsc-as-safety-net extras it forced: agents/page `ROLE_COLORS/ROLE_BGS/ROLE_BORDERS` (plan: #475569 / rgba(71,85,105,0.10/0.22)) + tools/register `ROLE_LABEL` (+= 计划员). No exhaustive role switch exists; no hardcoded-5 role counts (`slice(0,5)` hits are avatar-overflow caps, left alone); `roleOptionsOf`/`agentIdForRole`/`toRole`/`defaultAliasOf`/`defaultWorkDirOf` all pick up plan automatically via ROLE_KEYS/roles table.
 - Render verification by inspection: AgentAvatar/AgentBadge (`roles[x] ?? roles.developer`) and chat-bubble (`roles[role]` + `roleText[role!]`) now resolve plan directly. New-team buckets render from `ROLE_ORDER.map` with `ROLE_AGENT_ID[role]` toggle/add; add-instance rows render from `ROLE_KEYS.map` + `agentIdForRole` — both include plan.
 - QA: `cd web && npx tsc --noEmit` exit 0; eslint on 14 changed files: 0 errors, 8 warnings all pre-existing in untouched regions (`deleting` unused proven in HEAD via `git show`; img/useMemo/_drop/unused-imports far from edited hunks). Also updated stale "五类/五角色" wording (tokens comment, TeamMembersPanel comment, web/README count + table row).
+
+## e2e-plan-member.sh run (2026-09-18T16:53:25Z) HEAD=0dc2509c9ac2ecdb042183766e823986a7e87ab8
+- seed: a_plan(ep_plan)/tmm_0000000006 non-main/one instance per builtin template; /agents template; /teams 计划员.
+- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; other five split-aware parity vs F3-own baseline (baseline predates allowlist-split); plan diff limited to mode/task/plans-glob + deny removals.
+- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny).
+- live step4 (group @): infra-skipped; live step5 path: guard-fallback.
+- plan_review: tools/list clean; POST /review HTTP 404; /agent-policies clean; repo non-spec grep zero hits.
+- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: step=4-live reason=dispatch accepted but no file/reply within 600s (LLM/worker stall?) raw: trigger /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-trigger.json group /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-after-4.json;step=5-live reason=step 4 not live-ok; subagent spawn proven via guard+layer-1 fallback (see live-path.txt);
+
+## e2e-plan-member.sh run (2026-09-18T17:15:06Z) HEAD=0dc2509c9ac2ecdb042183766e823986a7e87ab8
+- seed: a_plan(ep_plan)/tmm_0000000006 non-main/one instance per builtin template; /agents template; /teams 计划员.
+- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; all six built-ins byte-identical to the regenerated F3-own baseline.
+- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny).
+- live step4 (group @): infra-skipped; live step5 path: guard-fallback.
+- plan_review: tools/list clean; POST /review HTTP 404; /agent-policies clean; repo non-spec grep zero hits.
+- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: step=4-live reason=dispatch accepted but no file/reply within 600s (LLM/worker stall?) raw: trigger /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-trigger.json group /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-after-4.json;step=5-live reason=step 4 not live-ok; subagent spawn proven via guard+layer-1 fallback (see live-path.txt);
+
+## e2e-plan-member.sh run (2026-09-18T17:32:45Z) HEAD=0dc2509c9ac2ecdb042183766e823986a7e87ab8
+- seed: a_plan(ep_plan)/tmm_0000000006 non-main/one instance per builtin template; /agents template; /teams 计划员.
+- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; all six built-ins byte-identical to the regenerated F3-own baseline.
+- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny).
+- live step4 (group @): infra-skipped; live step5 path: guard-fallback.
+- plan_review: tools/list clean; POST /review HTTP 404; /agent-policies clean; repo non-spec grep zero hits.
+- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: step=4-live reason=dispatch accepted but no file/reply within 600s (LLM/worker stall?) raw: trigger /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-trigger.json group /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-after-4.json;step=5-live reason=step 4 not live-ok; subagent spawn proven via guard+layer-1 fallback (see live-path.txt);
+
+## e2e-plan-member.sh run (2026-09-18T17:52:24Z) HEAD=0dc2509c9ac2ecdb042183766e823986a7e87ab8
+- seed: a_plan(ep_plan)/tmm_0000000006 non-main/one instance per builtin template; /agents template; /teams 计划员.
+- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; all six built-ins byte-identical to the regenerated F3-own baseline.
+- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny).
+- live step4 (group @): infra-skipped; live step5 path: guard-fallback.
+- plan_review: tools/list clean; POST /review HTTP 404; /agent-policies clean; repo non-spec grep zero hits.
+- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: step=4-live reason=dispatch accepted but no file/reply within 600s (LLM/worker stall?) raw: trigger /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-trigger.json group /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-after-4.json;step=5-live reason=step 4 not live-ok; subagent spawn proven via guard+layer-1 fallback (see live-path.txt);
+
+## e2e-plan-member.sh run (2026-09-18T18:12:34Z) HEAD=0dc2509c9ac2ecdb042183766e823986a7e87ab8
+- seed: a_plan(ep_plan)/tmm_0000000006 non-main/one instance per builtin template; /agents template; /teams 计划员.
+- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; all six built-ins byte-identical to the regenerated F3-own baseline.
+- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny).
+- live step4 (group @): infra-skipped; live step5 path: guard-fallback.
+- plan_review: tools/list clean; POST /review HTTP 404; /agent-policies clean; repo non-spec grep zero hits.
+- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: step=4-live reason=dispatch accepted but no file/reply within 600s (LLM/worker stall?) raw: trigger /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-trigger.json group /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/plan-member/group-after-4.json;step=5-live reason=step 4 not live-ok; subagent spawn proven via guard+layer-1 fallback (see live-path.txt);
+
+## e2e-plan-member.sh run (2026-09-18T19:53:53Z) HEAD=30febded4824a1fdf63dc6d7175646004d59fd79
+- seed: a_plan(ep_plan)/tmm_0000000006 non-main/one instance per builtin template; /agents template; /teams 计划员.
+- injection: vteam-plan mode=all task=allow plans-scoped edit group_post guard-only; all six built-ins byte-identical to the regenerated F3-own baseline.
+- guard: 12/12 (task gate allow-only plan+plan; execute deny; unmapped pass-through; plans-write allow / src-write deny).
+- live step4 (group @): infra-skipped; live step5 path: guard-fallback.
+- plan_review: tools/list clean; POST /review HTTP 404; /agent-policies clean; repo non-spec grep zero hits.
+- cleanup: plan file removed, task dir identical, serve sessions aborted. needs-attention: step=4-live reason=dispatch accepted but no file/reply within 600s (LLM/worker stall?) raw: trigger /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/qa-f3-plan-member-rerun/group-trigger.json group /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/qa-f3-plan-member-rerun/group-after-4.json;step=5-live reason=step 4 not live-ok; subagent spawn proven via guard+layer-1 fallback (see live-path.txt);

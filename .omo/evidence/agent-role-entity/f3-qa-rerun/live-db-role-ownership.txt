@@ -1,0 +1,8 @@
+role_key	agent_id	agent_has_role_first_line	role_has_identity	role_prompt_nonempty
+product	a_product	0	1	1
+project_manager	a_project_manager	0	1	1
+architect	a_architect	0	1	1
+developer	a_developer	0	1	1
+tester	a_tester	0	1	1
+plan	a_plan	0	1	1
+librarian	a_librarian	0	1	1

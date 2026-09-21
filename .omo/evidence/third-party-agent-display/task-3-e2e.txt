@@ -1,0 +1,52 @@
+[e2e] date=2026-09-19T11:33:42Z HEAD=36592437517e0c3dd3d14cce5c8de8550a821368
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/third-party-agent-display
+[e2e] stack healthy (web + server)
+----- playwright raw -----
+
+Running 14 tests using 1 worker
+
+[t3] engine external agents=11; chosen="Prometheus - Plan Builder"
+[cleanup] throwaway team tm_0000000064 DELETE -> 200
+  ✓   1 e2e/member-external-agent.spec.ts:138:7 › Todo 3 · 成员外部 Agent 选择（设置面） › 1. 选择外部 Agent → 保存 → reload 持久化 + 覆盖 caveat 可见 (2.7s)
+[cleanup] throwaway team tm_0000000065 DELETE -> 200
+  ✓   2 e2e/member-external-agent.spec.ts:244:7 › Todo 3 · 成员外部 Agent 选择（设置面） › 2. 引擎未上报的名字 → member-external-agent-unknown 警告 (1.7s)
+[cleanup] throwaway team tm_0000000066 DELETE -> 200
+  ✓   3 e2e/member-external-agent.spec.ts:305:7 › Todo 3 · 成员外部 Agent 选择（设置面） › 3. 受治理的 vteam 名字：不谎报未上报（只注明非外部选项） (1.5s)
+[cleanup] throwaway team tm_0000000067 DELETE -> 200
+  ✓   4 e2e/member-external-agent.spec.ts:361:7 › Todo 3 · 成员外部 Agent 选择（设置面） › 4. 三态互不混淆：加载中不得说「不可用」，不可用只说离线 (5.6s)
+  ✓   5 e2e/no-agent-picker.spec.ts:92:7 › no-agent-picker 选择器移除回归 › 1. 选择器消失：无 testid、无 select (1.0s)
+  ✓   6 e2e/no-agent-picker.spec.ts:107:7 › no-agent-picker 选择器移除回归 › 2. @ 可用：候选含计划员-1，点击插入 (1.2s)
+  ✓   7 e2e/no-agent-picker.spec.ts:122:7 › no-agent-picker 选择器移除回归 › 3. 发送可用：探针渲染 + 输入清空 + 零 console 错误 (1.6s)
+  ✓   8 e2e/no-agent-picker.spec.ts:148:7 › no-agent-picker 选择器移除回归 › 4. 计划员可达：团队成员含 tmm_0000000006 且保留 opencodeAgentName（无 LLM 执行） (79ms)
+  ✓   9 e2e/no-agent-picker.spec.ts:172:7 › no-agent-picker 选择器移除回归 › 5. 边界：设置面（团队详情页）允许 member-external-agent-select，会话页不渲染它 (1.4s)
+  ✓  10 e2e/roles-members.spec.ts:97:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除 (1.2s)
+[cleanup] custom role ar_0000000008 deleted (re-GET 404)
+  ✓  11 e2e/roles-members.spec.ts:146:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除 (2.0s)
+[cleanup] team tm_0000000068 DELETE -> 200
+  ✓  12 e2e/roles-members.spec.ts:222:7 › Todo 7 · 角色 Tab 与成员⇄角色 › 3. 成员按岗位添加：预填 Agent → 覆盖后持久化 (1.4s)
+  ✓  13 e2e/third-party-agents.spec.ts:51:7 › Todo 2 · 外部 Agent 只读展示 › 1. 列表 + 逐条警告 + 只读提示词 + 零编辑控件 (1.5s)
+  ✓  14 e2e/third-party-agents.spec.ts:119:7 › Todo 2 · 外部 Agent 只读展示 › 2. 指令拉取失败 → 显式不可用态（绝不空白） (1.3s)
+
+  14 passed (25.0s)
+----- end playwright raw -----
+[e2e] result passed	1. 选择外部 Agent → 保存 → reload 持久化 + 覆盖 caveat 可见
+[e2e] result passed	2. 引擎未上报的名字 → member-external-agent-unknown 警告
+[e2e] result passed	3. 受治理的 vteam 名字：不谎报未上报（只注明非外部选项）
+[e2e] result passed	4. 三态互不混淆：加载中不得说「不可用」，不可用只说离线
+[e2e] result passed	1. 选择器消失：无 testid、无 select
+[e2e] result passed	2. @ 可用：候选含计划员-1，点击插入
+[e2e] result passed	3. 发送可用：探针渲染 + 输入清空 + 零 console 错误
+[e2e] result passed	4. 计划员可达：团队成员含 tmm_0000000006 且保留 opencodeAgentName（无 LLM 执行）
+[e2e] result passed	5. 边界：设置面（团队详情页）允许 member-external-agent-select，会话页不渲染它
+[e2e] result passed	1. 两 Tab；角色 Tab 列出 7 内置带徽章；内置只读且无删除
+[e2e] result passed	2. 自定义角色：创建 → 改默认 Agent 持久化 → 删除
+[e2e] result passed	3. 成员按岗位添加：预填 Agent → 覆盖后持久化
+[e2e] result passed	1. 列表 + 逐条警告 + 只读提示词 + 零编辑控件
+[e2e] result passed	2. 指令拉取失败 → 显式不可用态（绝不空白）
+[e2e] cleanup [cleanup] throwaway team tm_0000000064 DELETE -> 200
+[e2e] cleanup [cleanup] throwaway team tm_0000000065 DELETE -> 200
+[e2e] cleanup [cleanup] throwaway team tm_0000000066 DELETE -> 200
+[e2e] cleanup [cleanup] throwaway team tm_0000000067 DELETE -> 200
+[e2e] cleanup [cleanup] custom role ar_0000000008 deleted (re-GET 404)
+[e2e] cleanup [cleanup] team tm_0000000068 DELETE -> 200
+[e2e] all assertions PASS; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/third-party-agent-display/task-3-e2e.txt

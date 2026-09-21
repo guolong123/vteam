@@ -35,7 +35,7 @@ Your next move: run `$start-work agent-role-entity` to execute, or ask for a hig
 - No capability fields on `AgentRole` (permission/tools/model/worker are NOT role properties).
 - No change to `execution_policies`, the `/agent-policies` payload, or `worker/**`.
 - No change to what any agent is permitted to do — the extraction moves instruction TEXT, never a permission value.
-- No change to the 7 built-ins' policy output: `before-agent-policies.json` sha stays `793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a` (that artifact contains no prompt text).
+- No change to the 7 built-ins' policy output: `before-agent-policies.json` sha stays `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87` (that artifact contains no prompt text — re-baselined by the prior plan `server-gate-removal-tool-authority`; verified 2026-09-19 before execution).
 - No table named `roles` and no model named `Role` (the account-permission `Role` owns those, `schema.prisma:68-80`).
 - No third-party agent integration (the display plan).
 - No A/B dual path, legacy shim, or "deprecated" annotations.
@@ -77,7 +77,7 @@ Your next move: run `$start-work agent-role-entity` to execute, or ask for a hig
 > Implementation + Test = ONE todo. Never separate.
 <!-- APPEND TASK BATCHES BELOW THIS LINE WITH edit/apply_patch - never rewrite the headers above. -->
 
-- [ ] 1. [db] Add the `AgentRole` model and `TeamMember.roleId` (+ migration with backfill)
+- [x] 1. [db] Add the `AgentRole` model and `TeamMember.roleId` (+ migration with backfill)
   What to do / Must NOT do: In `server/prisma/schema.prisma` add `model AgentRole` mapped to `agent_roles` with: `id` (follow the repo's id-prefix convention — pick and record a prefix), `key` (unique machine-safe identifier), `name`, `description`, `type` (`'builtin' | 'custom'`), `defaultAgentId` (optional FK to `Agent`), `rolePrompt` (the role instructions — text, nullable at the column level but every BUILTIN row must end non-empty), `sortOrder` (int, stable listing), timestamps. Add `TeamMember.roleId` (optional FK to `AgentRole`, `@map("role_id")`) with `onDelete: Restrict` (documented — an in-use role cannot vanish silently). **Also state `AgentRole.defaultAgentId`'s `onDelete` (review fix m8):** recommend `SetNull`, so deleting a bound agent clears the role's default rather than blocking agent deletion.
   Write the migration: create the table, add the column, seed the seven builtin roles (keys + names + `defaultAgentId` → the corresponding seeded template agents; `rolePrompt` may be empty at this step — todo 4 populates it), then **backfill** every existing `team_members` row.
   **Backfill rule (review fix M3 — the 0-null acceptance must be achievable):** resolve the role key from the referenced `Agent.role` value. Handle the three cases explicitly:
@@ -92,7 +92,7 @@ Your next move: run `$start-work agent-role-entity` to execute, or ask for a hig
   QA scenarios (name the exact tool + invocation): happy — apply the migration to a copy of the populated DB and assert 0 nulls + correct mapping for all three cases; failure — a member whose agent has a custom `role` value AND a member whose agent has a NULL role both still end non-null (cases ii/iii). Evidence `.omo/evidence/agent-role-entity/task-1-migration.txt`
   Commit: Y | `feat(db): add agent_roles and team_members.role_id with backfill`
 
-- [ ] 2. [docs] Classify every line of the 7 built-in prompts into role / agent / platform
+- [x] 2. [docs] Classify every line of the 7 built-in prompts into role / agent / platform
   What to do / Must NOT do: Read `server/prisma/seed.ts:539-854` (the 7 `templateAgents[].prompt` values) and produce a checked-in classification table: for EVERY line/section of every prompt, record exactly one destination — **role** (what the post is: identity, positioning, 职责, 边界声明), **agent** (how to work: permission usage, tool usage, 工作方式, 质量标准, 优先级), or **platform** (identical across all — the `团队协作规约` block ×7 and the `回执铁律` block ×4; see todo 3). Flag any line that is genuinely ambiguous with a proposed resolution.
   **Known duplication to resolve (review fix O6 — decide and record, chose the "pointer" option):** each prompt's `## 权限` section restates `ExecutionPolicy` in prose (e.g. "可写范围：仅…（层① permission.edit 路径 glob 强制）"). The prose and the policy can drift. **Decision:** keep a SHORT pointer ("权限边界以 ExecutionPolicy/【职责边界】为准，越界会被拒绝") and DROP the enumerated restatement of paths/effects, because the policy is the single source of truth and the editor (plan 1) now owns those values. Record this as a deliberate content change. Note: the parity check (todo 8) must therefore treat the dropped prose lines as **intentionally removed**, listed explicitly — not as "lost" lines.
   This todo produces the mapping only — no code changes. The mapping is the input to todos 3-5 and the anti-regression baseline for the parity check.
@@ -102,7 +102,7 @@ Your next move: run `$start-work agent-role-entity` to execute, or ask for a hig
   QA scenarios: happy — the classifier reports 0 unclassified lines; failure — an artificially unclassified line makes the check fail. Evidence `.omo/evidence/agent-role-entity/task-2-classification.txt`
   Commit: Y | `docs(agents): classify the 7 built-in prompts into role/agent/platform`
 
-- [ ] 3. [server] Extract the genuinely-universal platform block into one injected constant
+- [x] 3. [server] Extract the genuinely-universal platform block into one injected constant
   What to do / Must NOT do: **Corrected premise (review finding O1):** the blocks are NOT "7 identical copies". Verified in `server/prisma/seed.ts`:
   - `## 回执铁律` appears **4×** — `:581` (product), `:673` (architect), `:718` (developer), `:763` (tester), identical text.
   - `## 派发铁律` appears **1×** — `:626` (project_manager), DIFFERENT content.
@@ -120,7 +120,7 @@ Your next move: run `$start-work agent-role-entity` to execute, or ask for a hig
   QA scenarios: happy — counts match the universality decision above; failure — if a name-keyed conditional were introduced, the "all 7" assertion for `回执铁律` would fail. Evidence `.omo/evidence/agent-role-entity/task-3-platform-const.txt`
   Commit: Y | `refactor(prompts): lift the shared platform blocks into injected constants`
 
-- [ ] 4. [server] Split the role vs agent parts and re-point the seed prompts
+- [x] 4. [server] Split the role vs agent parts and re-point the seed prompts
   What to do / Must NOT do: Using todo 2's mapping, move the **role** lines into the builtin `AgentRole.rolePrompt` (created in todo 1) and keep the **agent** lines in `templateAgents[].prompt`. The role prompt answers "what is this post"; the agent prompt answers "how do I work with what I have". Do NOT duplicate a line into both. Do NOT move anything that expresses a permission/tool value — those stay described by (or point to) the policy. Keep each prompt coherent when read alone (a role prompt should read as a role definition; an agent prompt should read as an operator's brief).
   Parallelization: Wave 2 | Blocked by: 3 | Blocks: 5,8
   References: `server/prisma/seed.ts:539-854`, todo 2's classification artifact, `docs/agent-platform/16-内置Agent角色与提示词库.md` (the per-role four-direction prompts — the role-portion extract)
@@ -128,7 +128,7 @@ Your next move: run `$start-work agent-role-entity` to execute, or ask for a hig
   QA scenarios: happy — role and agent prompts are disjoint and each reads coherently; failure — the de-duplication check flags any shared sentence. Evidence `.omo/evidence/agent-role-entity/task-4-split.json`
   Commit: Y | `refactor(prompts): split role definitions from agent instructions`
 
-- [ ] 5. [server] Join role + agent instructions at assembly, and update the system-prompt assertions
+- [x] 5. [server] Join role + agent instructions at assembly, and update the system-prompt assertions
   What to do / Must NOT do: Change instruction assembly so the agent's system instructions contain the bound role's `rolePrompt` and the agent's own `prompt` **joined** (not one replacing the other), plus the two platform blocks from todo 3 — in the **exact order below (review fix M5 — this IS the decision; do not leave it to the implementer)**. Insert into the existing `blocks` array in `buildSystemInstructions` (`worker-dispatcher.ts:516-535`), which today starts with `globalText + identityLine + 【职责】${agent.prompt}`:
   1. `globalText` (unchanged)
   2. `identityLine` (unchanged)
@@ -156,7 +156,7 @@ Your next move: run `$start-work agent-role-entity` to execute, or ask for a hig
   QA scenarios: happy — assembled output contains all three parts, once each, and the degraded paths hold; failure — binding an agent to a role with an empty `rolePrompt` produces the agent-only assembly (no empty heading). Evidence `.omo/evidence/agent-role-entity/task-5-assembly.json`
   Commit: Y | `feat(dispatch): join role and agent instructions at assembly`
 
-- [ ] 6. [server] AgentRole CRUD module + seed
+- [x] 6. [server] AgentRole CRUD module + seed
   What to do / Must NOT do: Add an `agent-roles` module (controller/service/dto) with list/get/create/update/delete, guarded by the EXISTING permission matrix (`agents.view`/`agents.create`/`agents.edit`/`agents.delete` — reuse, do not invent new permission points). Builtin roles are protected from deletion like builtin template agents (403 + a stable code). Validate that `defaultAgentId` points at an existing agent. Expose `rolePrompt` as editable text. The seven builtin roles are seeded (todo 1 did the rows; this todo owns the API + the builtin protection). Must NOT expose capability fields. Must NOT change the `TeamMember` API here (todo 7).
   Parallelization: Wave 3 | Blocked by: 1 | Blocks: 7,8
   References: `server/src/agents/agents.controller.ts` + `agents.service.ts` (the module/permission/builtin-protection pattern to mirror), `server/src/common/decorators/require-permission.decorator.ts`, `server/prisma/seed.ts` (role seeding alongside the agents)
@@ -164,7 +164,7 @@ Your next move: run `$start-work agent-role-entity` to execute, or ask for a hig
   QA scenarios: happy — `curl -s .../api/v1/agent-roles` returns the 7 builtins; failure — deleting a builtin → 403. Evidence `.omo/evidence/agent-role-entity/task-6-api.json`
   Commit: Y | `feat(agent-roles): add global reusable role entity with builtin protection`
 
-- [ ] 7. [server+web] Link members to roles and add the Roles tab + member pre-fill
+- [x] 7. [server+web] Link members to roles and add the Roles tab + member pre-fill
   What to do / Must NOT do: (a) Extend the team-member DTOs/service so a member carries `roleId`; when `roleId` is given and `agentId` is not explicitly overridden, resolve `agentId` from `AgentRole.defaultAgentId`; when both are given the explicit `agentId` wins — document the precedence in code; keep `roleId` optional for backward compatibility. (b) Add a Roles tab inside `/agents` (Tab 1 Agent / Tab 2 角色) listing roles with a builtin badge and a detail form editing name/description/defaultAgentId/rolePrompt; create/clone/delete for custom roles; builtin roles read-only + no delete. **Note (review fix m2):** `web/app/(main)/agents/page.tsx` does NOT use `SegmentedTabs` today — you must ADD it (import from `@/src/components/ui`; existing users are `skills`, `git-repos`, `system/memories`, `system/triggers`, `integrations`). (c) Update the team member UI so picking a role pre-fills the agent, with the agent still switchable. Must NOT put permission/tool editors on the Roles tab (capability stays on the agent). Must NOT add a new nav item. Must NOT break the existing Agent tab or the alias/workDir/model-override behaviour.
   Parallelization: Wave 3 | Blocked by: 1,6 | Blocks: 8
   References: `server/src/teams/teams.service.ts` (addMember/updateMember + `defaultAlias`/`ROLE_LABELS` at `:35`, `:1292-1304`), `server/src/teams/dto/{add-member,update-member,create-team}.dto.ts`, `web/app/(main)/agents/page.tsx` (page; **`SegmentedTabs` is NOT imported here today — add it**), `web/src/components/ui/index.ts` (`SegmentedTabs`), `web/src/components/teams/TeamMembersPanel.tsx` (member picker; the duplicated `ROLE_KEYS`/`ROLE_AGENT_ID` at ~:59-69 should now come from the role API), `web/app/(main)/teams/new/page.tsx` (`ROLE_ORDER`/`FIXED_DESC`/`ROLE_AGENT_ID` at ~:41-57), `web/src/api/teams.ts`
@@ -172,20 +172,35 @@ Your next move: run `$start-work agent-role-entity` to execute, or ask for a hig
   QA scenarios: happy — Playwright adds `developer` by role and sees the developer default agent pre-filled, then overrides it and the override persists; failure — a builtin role shows no delete control. Evidence `.omo/evidence/agent-role-entity/task-7-roles-and-members.png`
   Commit: Y | `feat(roles): link members to roles and add the roles tab`
 
-- [ ] 8. [proof] Instruction parity + populated-DB migration + policy-byte regression
-  What to do / Must NOT do: The closing proof. (a) **Instruction parity**: assert every line from the pre-split prompts is present exactly once across role/agent/platform (no loss, no duplication), using todo 2's mapping as the oracle. (b) **Assembly**: capture a built-in agent's assembled system instructions and assert the three parts appear once each in the documented order. (c) **Migration**: run the full chain on a populated DB (existing `agent.role` values) and assert 0 null `role_id` + correct mapping + that the resolved dispatch agent per seeded member is unchanged. (d) **Policy bytes**: re-run the frozen-sha harness and confirm `793093dc5106a76a929f2e043dd5a53af35a2b902e2d929268f1665782abbc3a` is unchanged. (e) exercise the rollback once on a copy. Must NOT test the migration only on a fresh DB. Must NOT modify the frozen baseline. Must NOT weaken any assertion to reach green.
+- [x] 8. [proof] Instruction parity + populated-DB migration + policy-byte regression
+  What to do / Must NOT do: The closing proof. (a) **Instruction parity**: assert every line from the pre-split prompts is present exactly once across role/agent/platform (no loss, no duplication), using todo 2's mapping as the oracle. (b) **Assembly**: capture a built-in agent's assembled system instructions and assert the three parts appear once each in the documented order. (c) **Migration**: run the full chain on a populated DB (existing `agent.role` values) and assert 0 null `role_id` + correct mapping + that the resolved dispatch agent per seeded member is unchanged. (d) **Policy bytes**: re-run the frozen-sha harness and confirm `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87` is unchanged (re-baselined by the prior plan; the original `793093dc…` was stale). (e) exercise the rollback once on a copy. Must NOT test the migration only on a fresh DB. Must NOT modify the frozen baseline. Must NOT weaken any assertion to reach green.
   Parallelization: Wave 4 | Blocked by: 1-7 | Blocks: F1-F4
   References: todo 2's classification artifact, `.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json`, `scripts/e2e-role-boundaries.sh` (the sha gate + harness), `server/src/chat/worker-dispatcher.spec.ts`, `server/prisma/migrations/` (the new migration)
   Acceptance criteria (agent-executable): parity reports 0 lost and 0 duplicated lines; the assembly assertion passes; the populated-DB migration yields 0 unresolved members with unchanged dispatch resolution; the frozen sha is unchanged; the rollback is exercised and recorded.
   QA scenarios: happy — all five proofs pass with artifacts; failure — deleting one line from a role prompt makes the parity check report a loss (mutation check, recorded). Evidence `.omo/evidence/agent-role-entity/task-8-proof.txt`
   Commit: Y | `test(e2e): prove instruction parity and role migration`
 
+- [x] 9. [db] Backfill the 7 built-ins' `agents.prompt` to the post-split text (DISCOVERED by F3 — the split is not real on a deployed DB)
+  **The blocking defect (F3 REJECT, independently reproduced by the orchestrator).** Todo 4 split the prompts in `seed.ts` and added an idempotent data migration for `agent_roles.role_prompt` (the O7 fix) — but **no migration rewrites the existing `agents.prompt` rows**, and the agent upsert in `seed.ts` is `update: {}` (create-if-absent, deliberate). Consequence on ANY deployed DB: `agents.prompt` still holds the **pre-split** text (role identity + `## 职责` + `## 协同方式` + `团队协作规约` + `回执铁律`), and the new assembly (todo 5) joins `AgentRole.rolePrompt` **on top of it** → the role part and the platform blocks appear **twice**. Verified live: all 7 builtins showed `identity=2`, and sentence de-dup found 8–14 shared sentences per agent (`/` `.omo/evidence/agent-role-entity/f3-qa/`). This violates the plan's own Success criterion "assembled instructions contain role + agent + platform once each" and "no sentence appears in BOTH a role prompt and its agent prompt". Fresh installs are fine (seed create writes the split text) — the defect is upgrade/populated-DB only.
+  Required:
+  - An **idempotent data migration** that rewrites `agents.prompt` for the 7 builtin template agents to the SAME post-split text `seed.ts` writes (keep seed in sync for fresh installs; the migration is what fixes existing deployments — exactly the O7 pattern applied to the agent side).
+  - **PRESERVE USER EDITS:** `agents.prompt` is a user-editable field. Do NOT blind-overwrite. Guard the UPDATE so it only rewrites a row that still carries the pre-split factory text (e.g. the row still contains the role identity line AND BOTH platform markers / matches the recorded pre-split hash), and record the guard predicate. A row a user has customized must be left alone (record how you detect that).
+  - Prove it on the **POPULATED** DB (not a fresh seed): after the migration, dispatch/assemble a builtin and assert role + agent + platform blocks appear **exactly once each, in order**, and the sentence de-dup reports **0 shared sentences** — re-run F3's check.
+  - Record the rollback path for this migration.
+  Must NOT change the prompt TEXT the split produced (byte-equal to `seed.ts`). Must NOT clobber a user-edited prompt. Must NOT weaken the todo-8 parity checker. Must NOT touch permissions / `worker/**` / the assembly logic.
+  Parallelization: Wave 7 (discovered) | Blocked by: 4,5 | Blocks: F3 re-run
+  References: `server/prisma/seed.ts` (the post-split `templateAgents[].prompt`; the upsert with `update: {}`), `server/prisma/migrations/20260919000008_populate_builtin_role_prompts/migration.sql` (the O7 precedent + literal-embedding technique), `.omo/evidence/agent-role-entity/f3-qa/{VERDICT-REJECT.md,role-agent-dedup-populated-db.txt,assembled-all7-populated-db.txt}`, `server/src/common/constants/agent-role-prompts.constants.ts`
+  Acceptance criteria (agent-executable): on the populated DB, `agents.prompt` for the 7 builtins equals the post-split text (byte-compare against `seed.ts`); the assembled system for a builtin contains role/agent/platform once each in order; the sentence de-dup reports 0 shared sentences; a user-edited prompt (simulated on a scratch row) is NOT overwritten; the migration is re-runnable (2nd run = 0 rows changed); the frozen sha is unchanged.
+  QA scenarios: happy — migration applied to the populated DB de-duplicates the assembled output for all 7 builtins; failure — before the migration the assembled output duplicates the role part (the current live state, recorded).
+  Evidence `.omo/evidence/agent-role-entity/task-9-agent-prompt-backfill.txt`
+  Commit: Y | `fix(db): backfill the split agent prompts on deployed databases`
+
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit ok before declaring complete.
-- [ ] F1. Plan compliance audit
-- [ ] F2. Code quality review
-- [ ] F3. Real manual QA
-- [ ] F4. Scope fidelity
+- [x] F1. Plan compliance audit
+- [x] F2. Code quality review
+- [x] F3. Real manual QA
+- [x] F4. Scope fidelity
 
 ## Commit strategy
 - One commit per todo; prefix `feat|refactor|test|docs(<scope>): <summary>`.

@@ -1,0 +1,55 @@
+{
+  "generatedAt": "2026-09-20T00:21:51.247Z",
+  "liveRoles": [
+    "vteam-plan",
+    "vteam-product",
+    "vteam-architect",
+    "vteam-developer",
+    "vteam-tester",
+    "vteam-project_manager",
+    "vteam-librarian"
+  ],
+  "results": [
+    {
+      "label": "literal vteam-plan + subagent_type=vteam-plan",
+      "agent": "vteam-plan",
+      "tool": "task",
+      "decision": {
+        "action": "allow"
+      }
+    },
+    {
+      "label": "renamed prometheus + subagent_type=vteam-plan",
+      "agent": "prometheus",
+      "tool": "task",
+      "decision": {
+        "action": "allow"
+      }
+    },
+    {
+      "label": "renamed vteam-myplanner + subagent_type=vteam-plan",
+      "agent": "vteam-myplanner",
+      "tool": "task",
+      "decision": {
+        "action": "allow"
+      }
+    },
+    {
+      "label": "literal vteam-plan + other subagent",
+      "agent": "vteam-plan",
+      "tool": "task",
+      "decision": {
+        "action": "deny",
+        "message": "【越界拦截｜角色：vteam-plan】不能调用 task。职责：计划职责：只读分析并产出实施计划；不写文件、不执行变更。。请把该工作转交 vteam-product，或使用 vteam_notify_agent 定向通知。"
+      }
+    },
+    {
+      "label": "vteam-plan bash rm -rf",
+      "agent": "vteam-plan",
+      "tool": "bash",
+      "decision": {
+        "action": "allow"
+      }
+    }
+  ]
+}

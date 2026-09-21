@@ -1,0 +1,23 @@
+{
+  "teamId": "tm_0000000043",
+  "developerRoleId": "ar_developer",
+  "developerDefaultAgentId": "a_developer",
+  "testerDefaultAgentId": "a_tester",
+  "byRoleStatus": 201,
+  "byRoleMember": {
+    "id": "tmm_0000000076",
+    "alias": "f3rr-mu87k8ct-dev",
+    "agentId": "a_developer",
+    "roleId": "ar_developer"
+  },
+  "resolvedAgentMatchesRoleDefault": true,
+  "overrideStatus": 201,
+  "overrideMember": {
+    "id": "tmm_0000000077",
+    "alias": "f3rr-mu87k8ct-ovr",
+    "agentId": "a_tester",
+    "roleId": "ar_developer"
+  },
+  "explicitAgentWins": true,
+  "cleanupDeleteStatus": 200
+}

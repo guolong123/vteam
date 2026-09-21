@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":24,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_FORBIDDEN 仅主 Agent 可写入全局记忆，禁止普通成员写 global 级"}}

@@ -292,3 +292,32 @@ for the negative control. Cleanup both in one `finally`.
 `e2e.txt`. Recover prior content with `git show HEAD:<path> > <path>` (read-only, NOT
 `git checkout --`) and re-append the run sections; keep each suite's own log in a side file before
 running the truncating suite.
+
+## [2026-09-19] FINAL STATE — plan complete, wave APPROVED (re-run on the delivered tree)
+**Plan: 15/15 top-level checkboxes `[x]`. HEAD `fe4a843`. Nothing pushed.**
+
+Wave history (important, because the wave ran TWICE):
+- Wave 1 (4 gates, HEAD `69ec9b4`) returned all APPROVE but raised findings. Chasing them produced two further commits, so Wave 1's verdicts were **stale for the delivered tree**.
+- Wave 2 (3 fresh reviewers — the original sessions had expired; `task_id` resume failed with "Task not found for session") re-ran on HEAD `fe4a843` and returned **all APPROVE, zero blocking issues**:
+  - **F1+F4 (plan compliance + scope)**: both post-wave commits correct and mutation-proven; the three discovered todos (9 broadcast, 10 notice copy, 11 bashDeny) judged NECESSARY, not scope creep; the todo-11 fence deviation (`todo 4` said "must not change the payload shape"; todo 11 adds one optional `bashDeny` key the server DTO already whitelists) judged JUSTIFIED; all guardrails held; no leakage from the unexecuted follow-on role plans.
+  - **F2 (code quality)**: the `bashDeny` finding is closed on both write paths; test 5 is non-vacuous with a genuine negative control; the notice copy is accurate. Only non-blocking note: stale internal docblocks that still assert "restart required".
+  - **F3 (live manual QA)**: all 5 scripts exit 0; the corrected notice copy was re-measured live and now matches reality (auto-propagation ~3-10s, **0 manual restart requests**, serve PID changed); `bashDeny` survived a real UI edit with the negative control holding; the headline flow is green (role=developer → 27 tools vs the skeleton); 0 console errors; no stale-state on agent switch.
+
+**Final gates**: server tsc 0 / web tsc 0 / worker tsc 0; server jest **134 suites / 3101 tests**; worker jest **26 suites / 683 tests**; frozen baseline sha `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87` unchanged.
+
+**Process lessons worth keeping:**
+1. **Never leave a design fork open in a delegation prompt.** Two todos (6 and 3, first attempts) returned nothing because the subagent burned its budget deliberating "persist vs defer". Pre-deciding the design fixed both.
+2. **A temporary in-place mutation must be restored as the subagent's LAST action.** The todo-11 subagent was interrupted mid-mutation-proof and left `// MUTATION t11` live in the tree with a mutated web image running. Recovery: restore from the subagent's own `/tmp` backup via `cp` (never `git checkout --`), prove byte-identity against its recorded sha, then grep the marker and rebuild.
+3. **Re-run the wave when the tree changes after it.** Verdicts are pinned to a commit, not to "the work".
+
+---
+
+## 2026-09-21 skills page backend-first tool desc
+
+- **`||` + `??` cannot mix unparenthesized (SyntaxError).** `desc: backendDesc || VTEAM_TOOL_DESC[t.action] ?? schemaDesc` is a parse error, not a precedence subtlety. Final form: `desc: backendDesc || (VTEAM_TOOL_DESC[t.action] ?? schemaDesc)` — parens preserve the exact pre-existing fallback semantics for the old pair.
+- **`ApiTool.description` is required-but-nullable (`description: string | null`).** Single declaration site in this file (grep: only `skills/page.tsx:166`; `agents/page.tsx:130` is a separate local interface, untouched). No literal `ApiTool` construction sites — all rows come from `api.get<PageResponse<ApiTool>>`, so no mock/call-site updates needed; `tsc --noEmit` exit 0 confirms.
+- **Pre-deploy runtime guard:** `typeof t.description === 'string' ? t.description.trim() : ''` treats the not-yet-deployed absent field as null → local fallback, so the page never breaks before the backend ships.
+- **`funcDesc` (:955) needs no change:** `t.desc || (builtin ? VTEAM_TOOL_DESC[t.name] : undefined) || VTEAM_API_TOOL_DESC[t.id]` — `t.desc` already carries the backend value via `toMcpTool`; the chain only fires on empty `desc` and never re-derives from `action`/schema. Row-level generic text (:1026) stays the final fallback.
+- **`toBuiltinTool` got the same one-liner** (`backendDesc || \`调用标识 ${t.action}\``): identical symptom (hardcoded text shadowing the new backend column on builtin rows) + identical fix pattern, so in-scope per the task condition. `BuiltinToolRow` renders `t.desc` verbatim — no row change.
+- **e2e untouched:** `web/e2e/mcp-status.spec.ts` asserts only `data-status` tri-state, zero desc assertions → no spec update.
+- **Gates run:** `npx tsc --noEmit` (web/) exit 0; `npx eslint "app/(main)/skills/page.tsx"` exit 0, no warnings. Full Playwright suite NOT run (heavy, needs live stack; no desc assertion changed).

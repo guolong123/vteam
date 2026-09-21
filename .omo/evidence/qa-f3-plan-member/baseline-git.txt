@@ -1,0 +1,22 @@
+30febde docs(permissions): document worker-owned tool authority
+91eb32b test(permissions): mutation-prove both authority failure modes
+f8bbf47 test(permissions): prove the role-by-tool authority matrix
+58bc6f4 test(permissions): lock the retained server-side checks
+26b2e14 test(e2e): assert the tool-authority matrix, not the removed gates
+0dc2509 feat(permissions): move tool authority from server gates to the agent allowlist
+029bc2e docs(permissions): map the server-gate removal and the per-role grant matrix
+7d3b9b0 fix(web): redirect /system landing to its first sub-nav page
+ M .omo/boulder.json
+ M .omo/evidence/permission-matrix/retained-hook-cancel-cleanup.json
+ M .omo/evidence/permission-matrix/retained-hook-register.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/notepads/vteam-plan-member-subagents/learnings.md
+ M .omo/plans/server-gate-removal-tool-authority.md
+ M .omo/start-work/ledger.jsonl
+?? .omo/evidence/qa-f3-plan-member/
+?? .omo/evidence/qa-f3-role-boundaries/
+?? .omo/evidence/qa-f3/
+?? .omo/explainers/
+?? docs/agent-platform/prototypes/agent-manage/
+?? docs/agent-platform/prototypes/agent-role/

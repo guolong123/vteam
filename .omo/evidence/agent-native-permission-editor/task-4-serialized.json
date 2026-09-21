@@ -1,8 +1,8 @@
 [
   {
     "test": "no_lost_update",
-    "agent": "a_0000000098",
-    "policy_id": "ep_0000000098",
+    "agent": "a_0000000152",
+    "policy_id": "ep_0000000153",
     "stored_after": {
       "bash": "allow",
       "edit_src": "deny"
@@ -12,8 +12,8 @@
   },
   {
     "test": "inflight_gate_disables_all",
-    "agent": "a_0000000099",
-    "policy_id": "ep_0000000099",
+    "agent": "a_0000000153",
+    "policy_id": "ep_0000000154",
     "patched_tool": "vteam_chat_history",
     "native_input_disabled": true,
     "native_chips_disabled": true,
@@ -23,17 +23,32 @@
   },
   {
     "test": "native_edit_persists",
-    "agent": "a_0000000100",
-    "policy_id": "ep_0000000100",
+    "agent": "a_0000000154",
+    "policy_id": "ep_0000000155",
     "stored_bash": "allow",
     "reload_selected": "allow"
   },
   {
     "test": "debounce_coalesces",
-    "agent": "a_0000000101",
-    "policy_id": "ep_0000000101",
+    "agent": "a_0000000155",
+    "policy_id": "ep_0000000156",
     "keystrokes": 3,
     "patch_count": 1,
     "stored_edit_abc": "deny"
+  },
+  {
+    "test": "bashdeny_survives_whole_config_save",
+    "agent_with_bashdeny": "a_0000000156",
+    "policy_with_bashdeny": "ep_0000000157",
+    "agent_without_bashdeny": "a_0000000157",
+    "policy_without_bashdeny": "ep_0000000158",
+    "bashDeny_after_ui_edit": [
+      "rm -rf /"
+    ],
+    "unrelated_edit": {
+      "edit_src_t11": "deny"
+    },
+    "negative_control_key_absent": true,
+    "negative_control_bash_after_ui_edit": "allow"
   }
 ]

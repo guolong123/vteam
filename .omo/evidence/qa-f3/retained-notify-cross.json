@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":22,"error":{"code":-32003,"message":"[403] PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION 仅主 Agent（tmm_0000000002）可向其他成员派发；请先通知主 Agent 由其中转"}}

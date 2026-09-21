@@ -1,0 +1,650 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+
+/**
+ * F3 RE-RUN (independent final verification) — agent-native-permission-editor.
+ * ===========================================================================
+ * Re-checks LIVE, on the rebuilt web image (fe4a843), the two fixes that the
+ * previous F3 pass flagged, plus the headline user flow:
+ *   A. notice copy (todo 10): a real UI save renders a notice that ACCURATELY
+ *      describes auto-propagation (online auto re-inject ~10s, offline on next
+ *      register, active sessions defer the serve restart) — and the underlying
+ *      behaviour is re-measured: PATCH -> injected artifact updates AND serve
+ *      restarts with NO manual restart request.
+ *   B. bashDeny (todo 11): a policy created with bashDeny keeps the field across
+ *      a real UI whole-config save; a policy WITHOUT it gains no such key.
+ *   C. headline flow: role picker inheritance (developer vs none), UI edit
+ *      persistence across full reload, propagation into the worker artifact,
+ *      7 built-ins byte-identical to the frozen baseline; agent-switch
+ *      stale-state; console/page errors.
+ *
+ * This spec is standalone (not part of any suite); it is run via
+ * web/.f3r.playwright.config.ts from the F3 reviewer shell.
+ */
+
+const SERVER_URL = "http://localhost:13000";
+const WORKER = "aiagents-compose-worker";
+const OC_PATH = "/data/vteam-worker/opencode.json";
+const REPO_ROOT = process.cwd().replace(/\/web$/, "");
+const BASELINE = `${REPO_ROOT}/.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json`;
+const EVIDENCE = process.env.F3R_EVIDENCE_JSON ?? `${REPO_ROOT}/.omo/evidence/agent-native-permission-editor/task-f3-rerun.json`;
+const SCREENSHOT = process.env.F3R_SCREENSHOT ?? `${REPO_ROOT}/.omo/evidence/agent-native-permission-editor/task-f3-rerun-notice.png`;
+const FROZEN_SHA = "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87";
+const RUN_TAG = `f3r-${Date.now().toString(36)}`;
+
+type ApiAgent = {
+  id: string;
+  name: string;
+  agentKey: string | null;
+  policyId: string | null;
+  effectivePermission: {
+    policyId: string;
+    policyName: string;
+    agentName: string;
+    permission: Record<string, unknown>;
+    tools?: Record<string, unknown>;
+    bashDeny?: string[];
+    correction: Record<string, unknown>;
+  } | null;
+};
+
+function authHeaders(token: string) {
+  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+}
+
+async function adminToken(request: APIRequestContext): Promise<string> {
+  const login = await request.post(`${SERVER_URL}/api/v1/auth/login`, {
+    data: { username: "admin", password: "admin123" },
+  });
+  expect(login.ok()).toBeTruthy();
+  return ((await login.json()) as { accessToken: string }).accessToken;
+}
+
+async function createAgent(
+  request: APIRequestContext,
+  token: string,
+  suffix: string,
+  role?: string,
+): Promise<ApiAgent> {
+  const res = await request.post(`${SERVER_URL}/api/v1/agents`, {
+    headers: authHeaders(token),
+      data: {
+        name: `f3r ${suffix} ${RUN_TAG}`,
+        agentKey: `${RUN_TAG}-${suffix}`.toLowerCase().slice(0, 60),
+        type: "custom",
+        ...(role ? { role } : {}),
+      },
+  });
+  expect(res.status(), await res.text()).toBe(201);
+  return (await res.json()) as ApiAgent;
+}
+
+async function deleteAgent(request: APIRequestContext, token: string, agent: ApiAgent): Promise<string> {
+  const del = await request.delete(`${SERVER_URL}/api/v1/agents/${agent.id}`, { headers: authHeaders(token) });
+  const policyId = agent.effectivePermission?.policyId ?? agent.policyId;
+  const policyDel = policyId
+    ? await request.delete(`${SERVER_URL}/api/v1/execution-policies/${policyId}`, { headers: authHeaders(token) })
+    : null;
+  const gone = await request.get(`${SERVER_URL}/api/v1/agents/${agent.id}`, { headers: authHeaders(token) });
+  return `${agent.id} agent=${del.status()} policy=${policyId} ${policyDel?.status() ?? "n/a"} reGET=${gone.status()}`;
+}
+
+async function storedConfig(request: APIRequestContext, token: string, policyId: string): Promise<Record<string, unknown>> {
+  const res = await request.get(`${SERVER_URL}/api/v1/execution-policies/${policyId}`, { headers: authHeaders(token) });
+  expect(res.status(), await res.text()).toBe(200);
+  return ((await res.json()) as { config: Record<string, unknown> }).config;
+}
+
+async function loginAsAdmin(page: Page) {
+  await page.goto("/login");
+  await page.getByTestId("username").fill("admin");
+  await page.getByTestId("password").fill("admin123");
+  await page.getByTestId("login-button").click();
+  await expect(page).toHaveURL(/\/teams/, { timeout: 15_000 });
+}
+
+async function openAgent(page: Page, name: string) {
+  await page.goto("/agents");
+  await page.getByTestId("agent-config-root").waitFor({ timeout: 20_000 });
+  await page.getByTestId("agent-list-item").filter({ hasText: name }).first().click();
+  await expect(page.getByTestId("effective-permission-section")).toBeVisible({ timeout: 20_000 });
+}
+
+function editor(page: Page, name: "edit" | "read") {
+  return page.locator(`[data-testid="native-rule-editor"][data-native="${name}"]`);
+}
+
+function ruleRow(page: Page, name: "edit" | "read", glob: string) {
+  return editor(page, name).locator(`[data-testid="native-rule-row"][data-glob="${glob}"]`);
+}
+
+/** Add one edit glob through the REAL rule editor (unique rule, deny default). */
+async function addEditRule(page: Page, glob: string) {
+  const ed = editor(page, "edit");
+  await ed.getByTestId("native-rule-add").click();
+  await ed.locator('[data-testid="native-rule-glob"]').last().pressSequentially(glob, { delay: 12 });
+  await expect(ruleRow(page, "edit", glob)).toBeVisible({ timeout: 10_000 });
+}
+
+function readArtifact(): Record<string, unknown> | null {
+  try {
+    const raw = execFileSync("docker", ["exec", WORKER, "cat", OC_PATH], { encoding: "utf8" });
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function servePids(): string[] {
+  try {
+    const out = execFileSync("docker", ["exec", WORKER, "sh", "-c", "pgrep -f 'opencode serve' || true"], { encoding: "utf8" });
+    return out.split("\n").map((s) => s.trim()).filter(Boolean).sort();
+  } catch {
+    return [];
+  }
+}
+
+function baseline(): Record<string, unknown> {
+  return JSON.parse(readFileSync(BASELINE, "utf8")) as Record<string, unknown>;
+}
+
+type BaselineSubset = {
+  agents: { name: string }[];
+  guard: { enabled: boolean; roles: Record<string, unknown> };
+};
+
+function canonDeep(o: unknown): string {
+  if (Array.isArray(o)) return `[${o.map(canonDeep).join(",")}]`;
+  if (o && typeof o === "object") {
+    const rec = o as Record<string, unknown>;
+    return `{${Object.keys(rec)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonDeep(rec[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(o) ?? "null";
+}
+
+/** Compare live /agent-policies (7 built-ins only) with the frozen baseline subset. */
+function builtinDiff(
+  live: { agents: { name: string }[]; guard: { enabled: boolean; roles: Record<string, unknown> } },
+  base: BaselineSubset,
+): { equal: boolean; diffNames: string[] } {
+  const la = Object.fromEntries((live.agents ?? []).map((a) => [a.name, a]));
+  const lr = live.guard?.roles ?? {};
+  const order = base.agents.map((a) => a.name);
+  const subset = {
+    agents: order.map((n) => la[n]),
+    guard: { enabled: live.guard.enabled, roles: Object.fromEntries(order.map((n) => [n, lr[n]])) },
+  };
+  const equal = canonDeep(subset) === canonDeep(base);
+  const diffNames = equal
+    ? []
+    : order.filter(
+        (n) =>
+          canonDeep(la[n]) !== canonDeep(base.agents.find((x) => x.name === n)) ||
+          canonDeep(lr[n]) !== canonDeep((base.guard.roles ?? {})[n]),
+      );
+  return { equal, diffNames };
+}
+
+function record(entry: Record<string, unknown>) {
+  mkdirSync(dirname(EVIDENCE), { recursive: true });
+  let records: unknown[] = [];
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(EVIDENCE, "utf8"));
+    records = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    records = [];
+  }
+  records.push(entry);
+  writeFileSync(EVIDENCE, `${JSON.stringify(records, null, 2)}\n`);
+}
+
+async function poll<T>(
+  fn: () => Promise<T> | T,
+  done: (v: T) => boolean,
+  timeoutMs: number,
+  intervalMs = 2500,
+): Promise<{ ok: boolean; value?: T; iters: number; elapsedMs: number }> {
+  const t0 = Date.now();
+  let iters = 0;
+  let last: T | undefined;
+  while (Date.now() - t0 < timeoutMs) {
+    iters += 1;
+    try {
+      last = await fn();
+      if (done(last)) return { ok: true, value: last, iters, elapsedMs: Date.now() - t0 };
+    } catch {
+      /* retry */
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return { ok: false, value: last, iters, elapsedMs: Date.now() - t0 };
+}
+
+// ===========================================================================
+// Test 1 — headline flow: role inheritance, UI edit persistence, propagation,
+//           built-ins byte-identity.
+// ===========================================================================
+test("A1 headline: role inheritance (developer vs none) + UI edit persists + reaches worker + builtins byte-identical", async ({
+  page,
+  request,
+}) => {
+  const token = await adminToken(request);
+  const dev = await createAgent(request, token, "dev", "developer");
+  const none = await createAgent(request, token, "none");
+  const created: ApiAgent[] = [dev, none];
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (m) => {
+    if (m.type() === "error") consoleErrors.push(m.text());
+  });
+  page.on("pageerror", (e) => pageErrors.push(e.message));
+  try {
+    // ---- role=developer inherits the real developer capability set
+    const devPerm = dev.effectivePermission!.permission;
+    const devEdit = devPerm.edit as Record<string, unknown>;
+    const devTools = dev.effectivePermission!.tools ?? {};
+    expect(devEdit["**tasks/*/**"], JSON.stringify(devEdit)).toBe("allow");
+    expect(devEdit["*"]).toBe("deny");
+    expect(devPerm.bash).toBe("allow");
+    expect(Object.keys(devTools).length).toBeGreaterThan(20); // real set, not skeleton
+
+    const epDev = await request.get(`${SERVER_URL}/api/v1/execution-policies/ep_developer`, {
+      headers: authHeaders(token),
+    });
+    expect(epDev.status()).toBe(200);
+    const epDevCfg = ((await epDev.json()) as { config: { permission: unknown; tools: unknown } }).config;
+    expect(canonDeep(devPerm)).toBe(canonDeep(epDevCfg.permission));
+    expect(canonDeep(devTools)).toBe(canonDeep(epDevCfg.tools));
+
+    // ---- no role -> deny skeleton
+    const nonePerm = none.effectivePermission!.permission;
+    expect(JSON.stringify(nonePerm)).toBe(
+      JSON.stringify({ edit: { "*": "deny" }, read: { "*": "allow" }, bash: "deny", task: "deny" }),
+    );
+    expect(Object.keys(none.effectivePermission!.tools ?? {}).length).toBe(0);
+
+    // ---- UI edit (add edit glob) on the no-role agent; persists across FULL reload
+    await loginAsAdmin(page);
+    await openAgent(page, none.name);
+    const glob = `f3persist-${RUN_TAG}/**`;
+    await addEditRule(page, glob);
+    const policyId = none.effectivePermission!.policyId;
+    const stored1 = await poll(
+      async () => {
+        const cfg = await storedConfig(request, token, policyId);
+        return ((cfg.permission as Record<string, unknown>).edit ?? {}) as Record<string, unknown>;
+      },
+      (edit) => edit[glob] === "deny" && edit["*"] === "deny",
+      15_000,
+      500,
+    );
+    expect(stored1.ok, JSON.stringify(stored1.value)).toBe(true);
+
+    await page.reload();
+    await page.getByTestId("agent-config-root").waitFor({ timeout: 20_000 });
+    await page.getByTestId("agent-list-item").filter({ hasText: none.name }).first().click();
+    await expect(page.getByTestId("effective-permission-section")).toBeVisible({ timeout: 20_000 });
+    await expect(ruleRow(page, "edit", glob)).toBeVisible({ timeout: 15_000 });
+
+    // ---- the edit reaches the worker's injected artifact (auto, no restart)
+    const ocName = `vteam-${none.agentKey}`;
+    const prop = await poll(
+      () => {
+        const oc = readArtifact();
+        const entry = ((oc?.agent as Record<string, unknown>) ?? {})[ocName] as
+          | { permission?: { edit?: Record<string, unknown> } }
+          | undefined;
+        return entry?.permission?.edit ?? null;
+      },
+      (edit) => !!edit && edit[glob] === "deny" && edit["*"] === "deny",
+      120_000,
+      3000,
+    );
+    expect(prop.ok, `artifact never carried ${glob} for ${ocName}`).toBe(true);
+
+    // ---- built-ins byte-identical to frozen baseline (tolerate a concurrent
+    //      f1audit-style probe on ep_product only; anything else = drift)
+    const ap = await request.get(`${SERVER_URL}/api/v1/agent-policies`, {
+      headers: { "X-Worker-Token": "compose-worker-token" },
+    });
+    expect(ap.status()).toBe(200);
+    const live = (await ap.json()) as never;
+    const base = baseline() as unknown as BaselineSubset;
+    let diff = builtinDiff(live, base);
+    let concurrentProbe = false;
+    if (!diff.equal && diff.diffNames.length === 1 && diff.diffNames[0] === "vteam-product") {
+      // Identify a probe-only diff (concurrent F1 reviewer marker).
+      const liveRoles = (live as { guard: { roles: Record<string, { permission?: { edit?: Record<string, string> } }> } }).guard.roles;
+      const baseRoles = (base as unknown as { guard: { roles: Record<string, { permission?: { edit?: Record<string, string> } }> } }).guard.roles;
+      const liveEdit = liveRoles["vteam-product"]?.permission?.edit ?? {};
+      const baseEdit = baseRoles["vteam-product"]?.permission?.edit ?? {};
+      const extra = Object.keys(liveEdit).filter((k) => !(k in baseEdit));
+      const probeLike = extra.length > 0 && extra.every((k) => /f1|audit/i.test(k));
+      if (probeLike) {
+        concurrentProbe = true;
+        const wait = await poll(
+          async () => {
+            const r = await request.get(`${SERVER_URL}/api/v1/agent-policies`, {
+              headers: { "X-Worker-Token": "compose-worker-token" },
+            });
+            return builtinDiff((await r.json()) as never, base);
+          },
+          (d) => d.equal,
+          60_000,
+          3000,
+        );
+        diff = wait.value ?? diff;
+      }
+    }
+    record({
+      test: "A1_headline",
+      dev_agent: dev.id,
+      dev_policy: dev.effectivePermission!.policyId,
+      dev_edit_core: { star: devEdit["*"], tasks: devEdit["**tasks/*/**"] },
+      dev_bash: devPerm.bash,
+      dev_tools: Object.keys(devTools).length,
+      none_agent: none.id,
+      none_policy: policyId,
+      none_permission: nonePerm,
+      none_tools: 0,
+      ui_glob: glob,
+      ui_persist_reload: true,
+      artifact_agent: ocName,
+      artifact_propagation: { ok: prop.ok, iters: prop.iters, elapsedMs: prop.elapsedMs },
+      builtins_equal_baseline: diff.equal,
+      builtins_diff_names: diff.diffNames,
+      concurrent_f1_probe_tolerated: concurrentProbe,
+      console_errors: consoleErrors,
+      page_errors: pageErrors,
+      console_errors_401_only: consoleErrors.length > 0 && consoleErrors.every((e) => e.includes("401")),
+    });
+    expect(diff.equal, `builtins drifted: ${JSON.stringify(diff)}`).toBe(true);
+    // Pre-login 401s are the known, benign pattern (prior F3 log); anything else is a real error.
+    expect(pageErrors, `page errors: ${JSON.stringify(pageErrors)}`).toEqual([]);
+    const unexpectedConsole = consoleErrors.filter((e) => !e.includes("401"));
+    expect(unexpectedConsole, `console errors: ${JSON.stringify(unexpectedConsole)}`).toEqual([]);
+  } finally {
+    for (const a of created) {
+      console.log(`[cleanup] ${await deleteAgent(request, token, a)}`);
+    }
+  }
+});
+
+// ===========================================================================
+// Test 2 — corrected notice copy + re-measured auto-propagation (no restart).
+// ===========================================================================
+test("A2 notice: copy accurately describes auto-propagation; PATCH updates artifact + serve restarts without manual restart", async ({
+  page,
+  request,
+}) => {
+  const token = await adminToken(request);
+  const agent = await createAgent(request, token, "notice");
+  const policyId = agent.effectivePermission!.policyId;
+  const restartRequests: string[] = [];
+  await page.route("**/workers/*/restart", async (route) => {
+    restartRequests.push(route.request().url());
+    await route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ workerId: "stub", queued: true }) });
+  });
+  try {
+    await loginAsAdmin(page);
+    await openAgent(page, agent.name);
+    // Given: no notice before any write
+    await expect(page.getByTestId("policy-restart-notice")).toHaveCount(0);
+
+    const pidsBefore = servePids();
+    const glob = `f3notice-${RUN_TAG}/**`;
+    await addEditRule(page, glob);
+    const storedP = await poll(
+      async () => {
+        const cfg = await storedConfig(request, token, policyId);
+        return ((cfg.permission as Record<string, unknown>).edit ?? {}) as Record<string, unknown>;
+      },
+      (edit) => edit[glob] === "deny",
+      15_000,
+      500,
+    );
+    expect(storedP.ok).toBe(true);
+
+    // Then: the notice renders and its copy is factually accurate
+    const notice = page.getByTestId("policy-restart-notice");
+    await expect(notice).toBeVisible({ timeout: 10_000 });
+    const noticeText = (await notice.innerText()).replace(/\s+/g, " ");
+    const hintText = (await page.getByTestId("policy-restart-hint").innerText()).replace(/\s+/g, " ");
+    expect(noticeText).toContain("自动");
+    expect(noticeText).toContain("在线 worker");
+    expect(noticeText).toContain("离线 worker");
+    expect(noticeText).not.toContain("尚未生效");
+    expect(noticeText).not.toContain("重启后才会写入");
+    expect(noticeText).not.toContain("需重启");
+    expect(hintText).toContain("injectAll()");
+    expect(hintText).toContain("全局");
+    expect(hintText).toContain("活跃会话");
+    expect(hintText).toContain("挂起");
+    await page.screenshot({ path: SCREENSHOT, fullPage: true });
+
+    // And: the underlying propagation is real, automatic and re-measured
+    const ocName = `vteam-${agent.agentKey}`;
+    const t0 = Date.now();
+    const prop = await poll(
+      () => {
+        const oc = readArtifact();
+        const entry = ((oc?.agent as Record<string, unknown>) ?? {})[ocName] as
+          | { permission?: { edit?: Record<string, unknown> } }
+          | undefined;
+        return entry?.permission?.edit ?? null;
+      },
+      (edit) => !!edit && edit[glob] === "deny",
+      120_000,
+      3000,
+    );
+    const elapsedSec = Math.round((Date.now() - t0) / 100) / 10;
+    const pidPoll = await poll(() => servePids(), (pids) => JSON.stringify(pids) !== JSON.stringify(pidsBefore), 60_000, 3000);
+    const pidsAfter = pidPoll.value ?? servePids();
+
+    record({
+      test: "A2_notice_and_auto_propagation",
+      agent: agent.id,
+      policy_id: policyId,
+      notice_text: noticeText,
+      hint_text: hintText,
+      glob,
+      artifact_agent: ocName,
+      artifact_updated_within_sec: elapsedSec,
+      artifact_propagation: { ok: prop.ok, iters: prop.iters, elapsedMs: prop.elapsedMs },
+      serve_pids_before: pidsBefore,
+      serve_pids_after: pidsAfter,
+      serve_auto_restarted: pidPoll.ok,
+      manual_restart_requests: restartRequests,
+      screenshot: SCREENSHOT,
+    });
+    expect(prop.ok, "artifact did not refresh after UI save").toBe(true);
+    expect(pidPoll.ok, `serve PID did not change (before=${JSON.stringify(pidsBefore)} after=${JSON.stringify(pidsAfter)})`).toBe(true);
+    expect(restartRequests, `save must not auto-restart: ${JSON.stringify(restartRequests)}`).toEqual([]);
+  } finally {
+    console.log(`[cleanup] ${await deleteAgent(request, token, agent)}`);
+  }
+});
+
+// ===========================================================================
+// Test 3 — bashDeny survives a real UI whole-config save (+ negative control).
+// ===========================================================================
+test("A3 bashDeny: survives an unrelated UI edit; policy without it gains no key", async ({ page, request }) => {
+  const token = await adminToken(request);
+  const withDeny = await createAgent(request, token, "deny");
+  const withoutDeny = await createAgent(request, token, "nodeny");
+  const created: ApiAgent[] = [withDeny, withoutDeny];
+  const DENY = ["rm -rf /"];
+  try {
+    const p1 = withDeny.effectivePermission!.policyId;
+    const p2 = withoutDeny.effectivePermission!.policyId;
+    // Seed policy 1 via API with bashDeny + skeleton permission.
+    const seed1 = await request.patch(`${SERVER_URL}/api/v1/execution-policies/${p1}`, {
+      headers: authHeaders(token),
+      data: {
+        config: {
+          permission: { edit: { "*": "deny" }, read: { "*": "allow" }, bash: "deny", task: "deny" },
+          correction: withDeny.effectivePermission!.correction,
+          tools: {},
+          bashDeny: DENY,
+        },
+      },
+    });
+    expect(seed1.status(), await seed1.text()).toBe(200);
+    // Policy 2 stays without bashDeny.
+    const seed2 = await request.patch(`${SERVER_URL}/api/v1/execution-policies/${p2}`, {
+      headers: authHeaders(token),
+      data: {
+        config: {
+          permission: { edit: { "*": "deny" }, read: { "*": "allow" }, bash: "deny", task: "deny" },
+          correction: withoutDeny.effectivePermission!.correction,
+          tools: {},
+        },
+      },
+    });
+    expect(seed2.status(), await seed2.text()).toBe(200);
+
+    await loginAsAdmin(page);
+    // Edit an UNRELATED permission through the real UI (add an edit glob).
+    await openAgent(page, withDeny.name);
+    const g1 = `f3deny-${RUN_TAG}/**`;
+    await addEditRule(page, g1);
+    const s1 = await poll(
+      async () => storedConfig(request, token, p1),
+      (cfg) => (((cfg.permission as Record<string, unknown>).edit ?? {}) as Record<string, unknown>)[g1] === "deny",
+      15_000,
+      500,
+    );
+    expect(s1.ok).toBe(true);
+    const cfg1 = s1.value!;
+    const bashDenyAfter = cfg1.bashDeny;
+
+    // Negative control: policy without the field must not gain it.
+    await openAgent(page, withoutDeny.name);
+    const g2 = `f3none-${RUN_TAG}/**`;
+    await addEditRule(page, g2);
+    const s2 = await poll(
+      async () => storedConfig(request, token, p2),
+      (cfg) => (((cfg.permission as Record<string, unknown>).edit ?? {}) as Record<string, unknown>)[g2] === "deny",
+      15_000,
+      500,
+    );
+    expect(s2.ok).toBe(true);
+    const cfg2 = s2.value!;
+
+    record({
+      test: "A3_bashdeny_roundtrip",
+      with_deny_agent: withDeny.id,
+      with_deny_policy: p1,
+      seeded_bashDeny: DENY,
+      ui_edit_glob: g1,
+      bashDeny_after_ui_save: bashDenyAfter,
+      survived: JSON.stringify(bashDenyAfter) === JSON.stringify(DENY),
+      without_deny_agent: withoutDeny.id,
+      without_deny_policy: p2,
+      ui_edit_glob_2: g2,
+      negative_control_key_absent: !("bashDeny" in cfg2),
+      negative_control_bash: (cfg2.permission as Record<string, unknown>).bash,
+    });
+    expect(bashDenyAfter, "bashDeny was DROPPED by the UI save").toEqual(DENY);
+    expect("bashDeny" in cfg2, "negative control gained bashDeny").toBe(false);
+  } finally {
+    for (const a of created) {
+      console.log(`[cleanup] ${await deleteAgent(request, token, a)}`);
+    }
+  }
+});
+
+// ===========================================================================
+// Test 4 — agent-switch stale-state + cleanup broadcast + final byte-identity.
+// ===========================================================================
+test("A4 stale-state: switching agents never leaks rows or values; final builtins stay byte-identical", async ({
+  page,
+  request,
+}) => {
+  const token = await adminToken(request);
+  const a = await createAgent(request, token, "staleA");
+  const b = await createAgent(request, token, "staleB", "developer");
+  try {
+    await loginAsAdmin(page);
+    const globA = `f3stale-${RUN_TAG}/**`;
+    await openAgent(page, a.name);
+    await addEditRule(page, globA);
+    await poll(
+      async () => storedConfig(request, token, a.effectivePermission!.policyId),
+      (cfg) => (((cfg.permission as Record<string, unknown>).edit ?? {}) as Record<string, unknown>)[globA] === "deny",
+      15_000,
+      500,
+    );
+
+    // Switch to the developer agent: A's row must NOT be visible; bash=allow.
+    await openAgent(page, b.name);
+    await expect(ruleRow(page, "edit", globA)).toHaveCount(0);
+    await expect(
+      page.getByTestId("native-bash-effect").locator('[data-effect="allow"]'),
+    ).toHaveAttribute("aria-checked", "true", { timeout: 10_000 });
+    // Switch back: A's row is back; no developer leftovers.
+    await openAgent(page, a.name);
+    await expect(ruleRow(page, "edit", globA)).toBeVisible({ timeout: 10_000 });
+    await expect(
+      page.getByTestId("native-bash-effect").locator('[data-effect="deny"]'),
+    ).toHaveAttribute("aria-checked", "true", { timeout: 10_000 });
+    await page.screenshot({ path: SCREENSHOT.replace(/\.png$/, "-stale.png"), fullPage: true });
+    record({ test: "A4_stale_state", agent_a: a.id, agent_b: b.id, switch_clean: true });
+  } finally {
+    for (const agent of [a, b]) {
+      console.log(`[cleanup] ${await deleteAgent(request, token, agent)}`);
+    }
+  }
+
+  // Cleanup broadcast: worker only drops deleted custom agents on reload-config;
+  // an idempotent PATCH of a built-in triggers the same broadcast path.
+  const lib = await request.get(`${SERVER_URL}/api/v1/execution-policies/ep_librarian`, { headers: authHeaders(token) });
+  const libBody = (await lib.json()) as { name: string; description: string | null; config: unknown };
+  const idle = await request.patch(`${SERVER_URL}/api/v1/execution-policies/ep_librarian`, {
+    headers: authHeaders(token),
+    data: { name: libBody.name, description: libBody.description, config: libBody.config },
+  });
+  expect(idle.status(), await idle.text()).toBe(200);
+
+  const settled = await poll(
+    () => {
+      const oc = readArtifact();
+      return Object.keys((oc?.agent as Record<string, unknown>) ?? {}).filter((n) => n.includes(RUN_TAG));
+    },
+    (names) => names.length === 0,
+    120_000,
+    3000,
+  );
+  expect(settled.ok, `custom QA agents still injected: ${JSON.stringify(settled.value)}`).toBe(true);
+
+  // Final frozen-baseline checks.
+  const base = baseline() as unknown as BaselineSubset;
+  const final = await poll(
+    async () => {
+      const r = await request.get(`${SERVER_URL}/api/v1/agent-policies`, {
+        headers: { "X-Worker-Token": "compose-worker-token" },
+      });
+      return builtinDiff((await r.json()) as never, base);
+    },
+    (d) => d.equal,
+    60_000,
+    3000,
+  );
+  const sha = execFileSync("shasum", ["-a", "256", BASELINE], { encoding: "utf8" }).split(/\s+/)[0];
+  record({
+    test: "A4_final_baseline",
+    cleanup_broadcast: "ep_librarian idempotent PATCH",
+    artifact_settled: settled.ok,
+    builtins_equal_baseline: final.ok,
+    builtins_diff: final.ok ? [] : final.value?.diffNames,
+    baseline_sha256: sha,
+    cold_baseline_sha256: FROZEN_SHA,
+  });
+  expect(final.ok, `final builtins differ: ${JSON.stringify(final.value?.diffNames)}`).toBe(true);
+  expect(sha).toBe(FROZEN_SHA);
+});

@@ -1,0 +1,142 @@
+[
+  {
+    "test": "A2_notice_and_auto_propagation",
+    "agent": "a_0000000164",
+    "policy_id": "ep_0000000165",
+    "notice_text": "! 权限已保存。在线 worker 将自动重新注入并在约十几秒内生效；离线 worker 会在下次注册时应用。 策略是全局的，而 injectAll() 按 worker 执行：在线 worker 会自动重注入生效；离线 worker 在下次注册时应用；若 worker 有活跃会话，serve 重启会挂起至会话结束。 立即重启全部 worker",
+    "hint_text": "策略是全局的，而 injectAll() 按 worker 执行：在线 worker 会自动重注入生效；离线 worker 在下次注册时应用；若 worker 有活跃会话，serve 重启会挂起至会话结束。",
+    "glob": "f3notice-f3r-mu7yc07p/**",
+    "artifact_agent": "vteam-f3r-mu7yc07p-notice",
+    "artifact_updated_within_sec": 3.1,
+    "artifact_propagation": {
+      "ok": true,
+      "iters": 2,
+      "elapsedMs": 3125
+    },
+    "serve_pids_before": [
+      "15578",
+      "16070"
+    ],
+    "serve_pids_after": [
+      "16096",
+      "16116"
+    ],
+    "serve_auto_restarted": true,
+    "manual_restart_requests": [],
+    "screenshot": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/task-f3-rerun-notice.png"
+  },
+  {
+    "test": "A3_bashdeny_roundtrip",
+    "with_deny_agent": "a_0000000165",
+    "with_deny_policy": "ep_0000000166",
+    "seeded_bashDeny": [
+      "rm -rf /"
+    ],
+    "ui_edit_glob": "f3deny-f3r-mu7yc07p/**",
+    "bashDeny_after_ui_save": [
+      "rm -rf /"
+    ],
+    "survived": true,
+    "without_deny_agent": "a_0000000166",
+    "without_deny_policy": "ep_0000000167",
+    "ui_edit_glob_2": "f3none-f3r-mu7yc07p/**",
+    "negative_control_key_absent": true,
+    "negative_control_bash": "deny"
+  },
+  {
+    "test": "A1_headline",
+    "dev_agent": "a_0000000168",
+    "dev_policy": "ep_0000000169",
+    "dev_edit_core": {
+      "star": "deny",
+      "tasks": "allow"
+    },
+    "dev_bash": "allow",
+    "dev_tools": 27,
+    "none_agent": "a_0000000169",
+    "none_policy": "ep_0000000170",
+    "none_permission": {
+      "edit": {
+        "*": "deny"
+      },
+      "read": {
+        "*": "allow"
+      },
+      "bash": "deny",
+      "task": "deny"
+    },
+    "none_tools": 0,
+    "ui_glob": "f3persist-f3r-mu7ydxne/**",
+    "ui_persist_reload": true,
+    "artifact_agent": "vteam-f3r-mu7ydxne-none",
+    "artifact_propagation": {
+      "ok": true,
+      "iters": 2,
+      "elapsedMs": 3426
+    },
+    "builtins_equal_baseline": true,
+    "builtins_diff_names": [],
+    "concurrent_f1_probe_tolerated": false,
+    "console_errors": [],
+    "page_errors": [],
+    "console_errors_401_only": false
+  },
+  {
+    "test": "A2_notice_and_auto_propagation",
+    "agent": "a_0000000170",
+    "policy_id": "ep_0000000171",
+    "notice_text": "! 权限已保存。在线 worker 将自动重新注入并在约十几秒内生效；离线 worker 会在下次注册时应用。 策略是全局的，而 injectAll() 按 worker 执行：在线 worker 会自动重注入生效；离线 worker 在下次注册时应用；若 worker 有活跃会话，serve 重启会挂起至会话结束。 立即重启全部 worker",
+    "hint_text": "策略是全局的，而 injectAll() 按 worker 执行：在线 worker 会自动重注入生效；离线 worker 在下次注册时应用；若 worker 有活跃会话，serve 重启会挂起至会话结束。",
+    "glob": "f3notice-f3r-mu7ydxne/**",
+    "artifact_agent": "vteam-f3r-mu7ydxne-notice",
+    "artifact_updated_within_sec": 6.2,
+    "artifact_propagation": {
+      "ok": true,
+      "iters": 3,
+      "elapsedMs": 6248
+    },
+    "serve_pids_before": [
+      "16521",
+      "16565"
+    ],
+    "serve_pids_after": [
+      "16586"
+    ],
+    "serve_auto_restarted": true,
+    "manual_restart_requests": [],
+    "screenshot": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor/task-f3-rerun-notice.png"
+  },
+  {
+    "test": "A3_bashdeny_roundtrip",
+    "with_deny_agent": "a_0000000171",
+    "with_deny_policy": "ep_0000000172",
+    "seeded_bashDeny": [
+      "rm -rf /"
+    ],
+    "ui_edit_glob": "f3deny-f3r-mu7ydxne/**",
+    "bashDeny_after_ui_save": [
+      "rm -rf /"
+    ],
+    "survived": true,
+    "without_deny_agent": "a_0000000172",
+    "without_deny_policy": "ep_0000000173",
+    "ui_edit_glob_2": "f3none-f3r-mu7ydxne/**",
+    "negative_control_key_absent": true,
+    "negative_control_bash": "deny"
+  },
+  {
+    "test": "A4_stale_state",
+    "agent_a": "a_0000000173",
+    "agent_b": "a_0000000174",
+    "switch_clean": true
+  },
+  {
+    "test": "A4_final_baseline",
+    "cleanup_broadcast": "ep_librarian idempotent PATCH",
+    "artifact_settled": true,
+    "builtins_equal_baseline": true,
+    "builtins_diff": [],
+    "baseline_sha256": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87",
+    "cold_baseline_sha256": "3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87"
+  }
+]

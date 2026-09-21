@@ -1,0 +1,28 @@
+{
+  "generatedAt": "2026-09-20T00:23:33.469Z",
+  "globalFullContainsMemory": true,
+  "plan": {
+    "agentId": "a_plan",
+    "memberId": "tmm_0000000006",
+    "alias": "计划员-1",
+    "agentKey": "plan",
+    "memorySave": null,
+    "submitArtifact": null,
+    "memorySection": false,
+    "artifactSection": false,
+    "globalHeaderTextStartsWithBase": true,
+    "sysLen": 3341
+  },
+  "developer": {
+    "agentId": "a_developer",
+    "memberId": "tmm_0000000004",
+    "alias": "开发者-1",
+    "agentKey": "developer",
+    "memorySave": "allow",
+    "submitArtifact": "allow",
+    "memorySection": true,
+    "artifactSection": true,
+    "globalHeaderTextStartsWithBase": true,
+    "sysLen": 3212
+  }
+}

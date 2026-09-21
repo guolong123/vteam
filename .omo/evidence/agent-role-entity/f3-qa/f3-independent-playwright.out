@@ -1,0 +1,13 @@
+
+Running 1 test using 1 worker
+
+TABS=["Agent","角色"]
+BUILTIN_COUNT=7
+BUILTIN_KEYS=["product","project_manager","architect","developer","tester","plan","librarian"]
+CUSTOM_COUNT=2
+DELETE_BUTTONS_VISIBLE_WITH_BUILTIN_SELECTED=0
+BUILTIN_READONLY_NO_DELETE=true
+CONSOLE_ERRORS=[]
+  ✓  1 e2e/qa-f3-independent.spec.ts:17:5 › F3: roles tab, builtins, read-only, custom persists, console clean (1.8s)
+
+  1 passed (2.8s)

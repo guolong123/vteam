@@ -1,0 +1,10 @@
+       7 /tmp/qa-f3-all7.b64.tsv
+a_architect          roleHeading=1 agentHeading=1 | identity=2 charter=1 receipt=1 <-- DUPLICATED
+a_developer          roleHeading=1 agentHeading=1 | identity=2 charter=2 receipt=1 <-- DUPLICATED
+a_librarian          roleHeading=1 agentHeading=1 | identity=2 charter=1 receipt=1 <-- DUPLICATED
+a_plan               roleHeading=1 agentHeading=1 | identity=2 charter=1 receipt=1 <-- DUPLICATED
+a_product            roleHeading=1 agentHeading=1 | identity=2 charter=1 receipt=1 <-- DUPLICATED
+a_project_manager    roleHeading=1 agentHeading=1 | identity=2 charter=1 receipt=1 <-- DUPLICATED
+a_tester             roleHeading=1 agentHeading=1 | identity=2 charter=1 receipt=1 <-- DUPLICATED
+
+BUILTINS WITH DUPLICATED BLOCKS: 7/7

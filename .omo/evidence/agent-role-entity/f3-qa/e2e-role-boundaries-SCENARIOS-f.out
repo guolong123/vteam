@@ -1,0 +1,40 @@
+[e2e] SERVER_URL=http://localhost:13000 TEAM_ID=tm_0000000001 WORKER_EXEC_URL=<unset> SCENARIOS=f
+[e2e] login seed-admin ...
+[e2e] login seed-admin as MEMBER_JWT (team owner; seed-member is not in tm_0000000001) ...
+[e2e] --- scenario (f): permission.task contract (only vteam-plan allow) ---
+agent-policies: 8 agents, exactly vteam-plan task=allow, others deny, no write key
+opencode.json: 8 agents, exactly vteam-plan task=allow, others deny
+[e2e] PASS f (task contract on /agent-policies + injected opencode.json)
+[e2e] --- scenario (f2): DB-driven builtin policy (edit ep_product -> worker reload) ---
+[e2e] baseline sha256 ok: 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+pre-edit: live 7 builtins == frozen baseline (canonical)
+[e2e] PASS f2a (pre-edit live 7 builtins byte-identical to frozen baseline)
+edit body: ./e2e-evidence/f2-edit-ep_product.json (tools=deny ask deny, permission.bash=deny)
+control-plane: vteam-product guard reflects DB edit
+[e2e] PASS f2b (control-plane /agent-policies reflects the DB edit)
+[e2e] reloading worker (restart) ...
+roles.tools.vteam_group_post[vteam-product] = 'deny' (want 'deny'): OK
+roles.tools.vteam_memory_search[vteam-product] = 'ask' (want 'ask'): OK
+roles.tools.vteam_hook_cancel[vteam-product] = 'deny' (want 'deny'): OK
+roles.permission.bash[vteam-product] = 'deny' (want 'deny'): OK
+opencode.agent[vteam-product].permission.bash = 'deny' (want 'deny'): OK
+roles[vteam-plan] vs baseline: IDENTICAL
+opencode.agent[vteam-plan] permission vs baseline: IDENTICAL
+roles[vteam-architect] vs baseline: IDENTICAL
+opencode.agent[vteam-architect] permission vs baseline: IDENTICAL
+roles[vteam-developer] vs baseline: IDENTICAL
+opencode.agent[vteam-developer] permission vs baseline: IDENTICAL
+roles[vteam-tester] vs baseline: IDENTICAL
+opencode.agent[vteam-tester] permission vs baseline: IDENTICAL
+roles[vteam-project_manager] vs baseline: IDENTICAL
+opencode.agent[vteam-project_manager] permission vs baseline: IDENTICAL
+roles[vteam-librarian] vs baseline: IDENTICAL
+opencode.agent[vteam-librarian] permission vs baseline: IDENTICAL
+[e2e] PASS f2c (DB edit reached injected opencode.json + roles.json; other 6 builtins byte-identical)
+[e2e] cleanup: restoring ep_product original config ...
+[e2e] reloading worker after restore ...
+after-agent-policies.json sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+before-agent-policies.json sha256 = 3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87
+byte-identical = True
+[e2e] PASS f2d (post-restore after-agent-policies.json byte-identical to frozen baseline)
+[e2e] ALL SCENARIOS DONE: a/c/d/e/f/f2/g

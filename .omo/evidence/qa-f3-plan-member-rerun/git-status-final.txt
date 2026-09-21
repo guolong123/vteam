@@ -1,0 +1,23 @@
+ M .omo/boulder.json
+ M .omo/evidence/permission-matrix/retained-hook-cancel-cleanup.json
+ M .omo/evidence/permission-matrix/retained-hook-register.json
+ M .omo/evidence/plan-member/baseline-git.txt
+ M .omo/evidence/plan-member/e2e.txt
+ M .omo/evidence/plan-member/group-after-4.json
+ M .omo/evidence/plan-member/group-trigger.json
+ M .omo/evidence/plan-member/group-watermark-4.json
+ M .omo/evidence/plan-member/group-watermark.json
+ M .omo/evidence/plan-member/needs-attention.txt
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/notepads/vteam-plan-member-subagents/learnings.md
+ M .omo/plans/server-gate-removal-tool-authority.md
+ M .omo/start-work/ledger.jsonl
+?? .omo/evidence/qa-f3-plan-member-rerun/
+?? .omo/evidence/qa-f3-plan-member/
+?? .omo/evidence/qa-f3-role-boundaries/
+?? .omo/evidence/qa-f3/
+?? .omo/explainers/
+?? docs/agent-platform/prototypes/agent-manage/
+?? docs/agent-platform/prototypes/agent-role/
+?? e2e-evidence/

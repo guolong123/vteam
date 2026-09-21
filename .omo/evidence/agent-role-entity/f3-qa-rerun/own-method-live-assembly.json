@@ -1,0 +1,251 @@
+{
+  "a_product": {
+    "roleKey": "product",
+    "rawAgentPromptMarkers": {
+      "# 角色：": 0,
+      "## 职责": 0,
+      "## 协同方式": 0,
+      "团队协作规约（全文见": 0,
+      "回执必@派发人": 0
+    },
+    "assembledMarkerCounts": {
+      "# 角色：": 1,
+      "## 职责": 1,
+      "## 协同方式": 1,
+      "团队协作规约（全文见": 1,
+      "回执必@派发人": 1
+    },
+    "roleHeading": 1,
+    "agentHeading": 1,
+    "roleBodyCount": 1,
+    "agentBodyCount": 1,
+    "charterCount": 1,
+    "receiptCount": 1,
+    "sharedClauses": 0,
+    "order": {
+      "role": 1127,
+      "agent": 1715,
+      "charter": 2457,
+      "receipt": 2795
+    },
+    "ordered": true,
+    "agentPromptLen": 415,
+    "rolePromptLen": 580,
+    "assembledLen": 3162,
+    "OK": true
+  },
+  "a_project_manager": {
+    "roleKey": "project_manager",
+    "rawAgentPromptMarkers": {
+      "# 角色：": 0,
+      "## 职责": 0,
+      "## 协同方式": 0,
+      "团队协作规约（全文见": 0,
+      "回执必@派发人": 0
+    },
+    "assembledMarkerCounts": {
+      "# 角色：": 1,
+      "## 职责": 1,
+      "## 协同方式": 1,
+      "团队协作规约（全文见": 1,
+      "回执必@派发人": 1
+    },
+    "roleHeading": 1,
+    "agentHeading": 1,
+    "roleBodyCount": 1,
+    "agentBodyCount": 1,
+    "charterCount": 1,
+    "receiptCount": 1,
+    "sharedClauses": 0,
+    "order": {
+      "role": 1159,
+      "agent": 1780,
+      "charter": 3314,
+      "receipt": 3652
+    },
+    "ordered": true,
+    "agentPromptLen": 1207,
+    "rolePromptLen": 613,
+    "assembledLen": 4019,
+    "OK": true
+  },
+  "a_architect": {
+    "roleKey": "architect",
+    "rawAgentPromptMarkers": {
+      "# 角色：": 0,
+      "## 职责": 0,
+      "## 协同方式": 0,
+      "团队协作规约（全文见": 0,
+      "回执必@派发人": 0
+    },
+    "assembledMarkerCounts": {
+      "# 角色：": 1,
+      "## 职责": 1,
+      "## 协同方式": 1,
+      "团队协作规约（全文见": 1,
+      "回执必@派发人": 1
+    },
+    "roleHeading": 1,
+    "agentHeading": 1,
+    "roleBodyCount": 1,
+    "agentBodyCount": 1,
+    "charterCount": 1,
+    "receiptCount": 1,
+    "sharedClauses": 0,
+    "order": {
+      "role": 1135,
+      "agent": 1592,
+      "charter": 2280,
+      "receipt": 2618
+    },
+    "ordered": true,
+    "agentPromptLen": 361,
+    "rolePromptLen": 449,
+    "assembledLen": 2985,
+    "OK": true
+  },
+  "a_developer": {
+    "roleKey": "developer",
+    "rawAgentPromptMarkers": {
+      "# 角色：": 0,
+      "## 职责": 0,
+      "## 协同方式": 0,
+      "团队协作规约（全文见": 0,
+      "回执必@派发人": 0
+    },
+    "assembledMarkerCounts": {
+      "# 角色：": 1,
+      "## 职责": 1,
+      "## 协同方式": 1,
+      "团队协作规约（全文见": 1,
+      "回执必@派发人": 1
+    },
+    "roleHeading": 1,
+    "agentHeading": 1,
+    "roleBodyCount": 1,
+    "agentBodyCount": 1,
+    "charterCount": 1,
+    "receiptCount": 1,
+    "sharedClauses": 0,
+    "order": {
+      "role": 1135,
+      "agent": 1614,
+      "charter": 2466,
+      "receipt": 2804
+    },
+    "ordered": true,
+    "agentPromptLen": 525,
+    "rolePromptLen": 471,
+    "assembledLen": 3171,
+    "OK": true
+  },
+  "a_tester": {
+    "roleKey": "tester",
+    "rawAgentPromptMarkers": {
+      "# 角色：": 0,
+      "## 职责": 0,
+      "## 协同方式": 0,
+      "团队协作规约（全文见": 0,
+      "回执必@派发人": 0
+    },
+    "assembledMarkerCounts": {
+      "# 角色：": 1,
+      "## 职责": 1,
+      "## 协同方式": 1,
+      "团队协作规约（全文见": 1,
+      "回执必@派发人": 1
+    },
+    "roleHeading": 1,
+    "agentHeading": 1,
+    "roleBodyCount": 1,
+    "agentBodyCount": 1,
+    "charterCount": 1,
+    "receiptCount": 1,
+    "sharedClauses": 0,
+    "order": {
+      "role": 1123,
+      "agent": 1691,
+      "charter": 2423,
+      "receipt": 2761
+    },
+    "ordered": true,
+    "agentPromptLen": 405,
+    "rolePromptLen": 560,
+    "assembledLen": 3128,
+    "OK": true
+  },
+  "a_plan": {
+    "roleKey": "plan",
+    "rawAgentPromptMarkers": {
+      "# 角色：": 0,
+      "## 职责": 0,
+      "## 协同方式": 0,
+      "团队协作规约（全文见": 0,
+      "回执必@派发人": 0
+    },
+    "assembledMarkerCounts": {
+      "# 角色：": 1,
+      "## 职责": 1,
+      "## 协同方式": 1,
+      "团队协作规约（全文见": 1,
+      "回执必@派发人": 1
+    },
+    "roleHeading": 1,
+    "agentHeading": 1,
+    "roleBodyCount": 1,
+    "agentBodyCount": 1,
+    "charterCount": 1,
+    "receiptCount": 1,
+    "sharedClauses": 0,
+    "order": {
+      "role": 961,
+      "agent": 1604,
+      "charter": 2713,
+      "receipt": 3051
+    },
+    "ordered": true,
+    "agentPromptLen": 782,
+    "rolePromptLen": 635,
+    "assembledLen": 3284,
+    "OK": true
+  },
+  "a_librarian": {
+    "roleKey": "librarian",
+    "rawAgentPromptMarkers": {
+      "# 角色：": 0,
+      "## 职责": 0,
+      "## 协同方式": 0,
+      "团队协作规约（全文见": 0,
+      "回执必@派发人": 0
+    },
+    "assembledMarkerCounts": {
+      "# 角色：": 1,
+      "## 职责": 1,
+      "## 协同方式": 1,
+      "团队协作规约（全文见": 1,
+      "回执必@派发人": 1
+    },
+    "roleHeading": 1,
+    "agentHeading": 1,
+    "roleBodyCount": 1,
+    "agentBodyCount": 1,
+    "charterCount": 1,
+    "receiptCount": 1,
+    "sharedClauses": 0,
+    "order": {
+      "role": 1135,
+      "agent": 1740,
+      "charter": 2402,
+      "receipt": 2740
+    },
+    "ordered": true,
+    "agentPromptLen": 335,
+    "rolePromptLen": 597,
+    "assembledLen": 3107,
+    "OK": true
+  },
+  "__summary": {
+    "failures": 0,
+    "total": 7
+  }
+}

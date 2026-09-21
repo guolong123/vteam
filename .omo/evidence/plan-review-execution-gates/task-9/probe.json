@@ -1,6 +1,6 @@
 {
   "todo": 9,
-  "generatedAt": "2026-09-18T10:53:04.007Z",
+  "generatedAt": "2026-09-20T06:51:04.325Z",
   "baselineSeedSpecs": 30,
   "probes": {
     "nudge_no_dispatch": {
@@ -31,12 +31,7 @@
       "被催先报",
       "催办引原文"
     ],
-    "memberReceipt": [
-      "a_product",
-      "a_architect",
-      "a_developer",
-      "a_tester"
-    ],
+    "memberReceipt": "lifted-to-platform-constant",
     "planner": [
       "非收敛不修订",
       "教师 override 除外"

@@ -1,4 +1,4 @@
-[e2e] date=2026-09-19T11:25:59Z HEAD=a7592a3b9c3bc25282d95a98dc499ff6ba4bb085
+[e2e] date=2026-09-19T11:30:19Z HEAD=36592437517e0c3dd3d14cce5c8de8550a821368
 [e2e] SERVER_URL=http://localhost:13000 WEB_URL=http://localhost:13001 WORKER_CONTAINER=aiagents-compose-worker EVIDENCE=/Users/mac/01work/git-project/vteam/.omo/evidence/third-party-agent-display/task-5-live.txt
 [e2e] stack healthy (server + web + worker container)
 [e2e] login OK (admin)
@@ -72,10 +72,10 @@
 [hit]     path=roles/vteam-project_manager/correction/handoff/plan kind=key value="vteam-plan" classification=handoff-task-type-mapping(justified)
 [check]   result: LEAK (slotHits=1 unexplainedHits=0)
 [e2e] [C3] both NC copies correctly DETECTED (exit 1 each + 'result: LEAK' + [LEAK] slot hit) — the structural check is discriminating
-9c5516ba827e013135cb0b9678157385c32a7120ffab17066d5f72e4c7009e01  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.s0YX4ojHfe/live/opencode.json
-9c5516ba827e013135cb0b9678157385c32a7120ffab17066d5f72e4c7009e01  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.s0YX4ojHfe/live/opencode.post.json
-eec7d2a888d9ef29e23bd94aea1ef26de50267188bfd9b85c0ad35dc729dc489  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.s0YX4ojHfe/live/roles.json
-eec7d2a888d9ef29e23bd94aea1ef26de50267188bfd9b85c0ad35dc729dc489  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.s0YX4ojHfe/live/roles.post.json
+9c5516ba827e013135cb0b9678157385c32a7120ffab17066d5f72e4c7009e01  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.eyFOfG75zG/live/opencode.json
+9c5516ba827e013135cb0b9678157385c32a7120ffab17066d5f72e4c7009e01  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.eyFOfG75zG/live/opencode.post.json
+eec7d2a888d9ef29e23bd94aea1ef26de50267188bfd9b85c0ad35dc729dc489  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.eyFOfG75zG/live/roles.json
+eec7d2a888d9ef29e23bd94aea1ef26de50267188bfd9b85c0ad35dc729dc489  /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.eyFOfG75zG/live/roles.post.json
 [e2e] PASS C (NC detected in both artifacts; live artifacts byte-identical before/after; copies discarded)
 [e2e] === D. frozen baseline + worker/** untouched ===
 [e2e] [D1] .omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json

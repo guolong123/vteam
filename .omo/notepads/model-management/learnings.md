@@ -1370,3 +1370,12 @@ Tags: wave1, channelId, task.completed, resolveChannel, group-chat-reflow, contr
 - **dispatch 门控保留原语义**：strip 无条件执行（无论 hadBaseUrl）；C6 `maybeDispatchAfterShapeChange` 仍仅 hadBaseUrl 时触发（不改）。
 - **spec 改动**：prisma worker mock 补 `update: jest.fn()`；removeProvider describe 新增 2 例：① strip 断言（两 worker 的 vllm 条目被剥、deepseek 保留，update 2 次；随后 listProviders mock 链断言 vllm 不再出现）；② 仅触碰被删 provider（无 vllm 条目 → update 未调用，D5 保留）。
 - **验证**：server `npx tsc --noEmit` 0 错误；`npx jest src/models/` **2 suites / 100 tests 全绿**。
+
+---
+
+## [2026-09-21] Task: ghost provider 404 fix (removeProvider 全无痕迹才 404)
+
+- **根因**：`removeProvider` 开头 `rows.length === 0 → throwNotFound`，把靠 worker capabilities 快照复活的幽灵行挡在删除之外 → `DELETE /models/providers/qwen-27b` 404 删不掉。
+- **修复**：0 模型行时不再立即 404，改为查 `modelCredential.findUnique({where:{providerID}})` + 新增只读助手 `providerMentionedInWorkerCapabilities`（遍历 worker，`splitModelId(raw).providerID === providerID` 即提及）；仅 `无模型行 ∧ 无凭据 ∧ 无提及` 才 404。事务 3 deleteMany 顺序不变（空 ids 幂等安全），strip 照常剥离快照，hadBaseUrl 才下发（幽灵行无 baseUrl 不触发）。
+- **spec**：旧 404 用例改写为全无痕迹才 404（`worker.findMany→[{capabilities:{}}]` + 断言 transaction/strip 未调用）；新增幽灵用例（caps 含 `vllm/qwen3-27b` → resolve `{deletedModels:0, deletedCredential:false}` + `worker.update` 剥离）；既有用例逐条核对 mock（worker caps 不含被删 provider、凭据 mock 已齐）。
+- **验证**：server `npx tsc --noEmit` 0 错误；`npx jest src/models/` **2 suites / 101 tests 全绿**。commit e3b80b8（仅 3 文件），未部署（待用户验证真实复现）。

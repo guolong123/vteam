@@ -1,0 +1,49 @@
+# F3 — Real manual QA (independent re-run) — agent-role-decommission
+Plan: .omo/plans/agent-role-decommission.md
+Verifier: F3 (independent; re-derived every claim on the live fresh stack; own probes)
+Repo: /Volumes/SSD-Data/01work/git-project/vteam   HEAD: 26cfbe3 (proof-only; no code diff vs e06c9f1)
+Live stack: server :13000, web :13001, worker aiagents-compose-worker, db aiagents-compose-db
+DB was wiped/rebuild per user instruction; verification is TARGET-STATE on a fresh install.
+Verdict: APPROVE
+
+## Commands actually run (own methods)
+1. Schema/capability (docker exec mysql):
+   SHOW COLUMNS FROM agents LIKE 'role' → 0 rows;
+   SELECT COUNT(*) information_schema.columns role → 0;
+   agent_key varchar(63) UNI present; policy_id varchar(191) present;
+   SELECT COUNT(*) agents=7, SUM(policy_id IS NULL)=0, distinct agent_key=7;
+   agent_roles: 8 rows (7 builtin w/ default_agent_id + ar_general custom);
+   team_members=7, SUM(role_id IS NULL)=0.
+2. Auth: POST /api/v1/auth/login admin/admin123 → Bearer JWT; GET /api/v1/agent-policies.
+3. Byte gate: raw shas + canonical sha256 (sort_keys, compact, ensure_ascii=False) + field-level deep diff.
+4. Playwright (chrome, :13001): login, /agents, /teams/tm_0000000001 — DOM probes + screenshots + console/network.
+5. API: GET /teams/tm_0000000001, GET /agent-roles, GET /agents.
+6. Own live probe scripts (probe-*.mjs) executing SHIPPED server/worker code against the LIVE DB
+   (read-only): buildSystemInstructions + ExecutionPolicyService.resolveByAgent + evaluateToolCall.
+7. Live dispatch evidence: worker container log + server log for the existing fresh-stack planner run.
+
+## Key results
+- role column: ABSENT (0 / 0). agent_key + policy_id present.
+- 7 agents, 0 null policy_id, keys = product/project_manager/architect/developer/tester/plan/librarian.
+- /agent-policies live: 7 agents; canonical sha256 live == before == after == 7e300f9f…;
+  raw live shas differs only by minification (live minified vs baseline indent=2);
+  regenerating the canonical subset with baseline formatting reproduces sha 3b8c5d4b… exactly.
+  All 7 agents deep-equal field-by-field (name/description/mode/permission incl. tools/bashDeny/correction),
+  guard.roles keys+values deep-equal. NOTE: tools/bashDeny/correction live under guard.roles[<name>]
+  (agents[] carries name/description/mode/permission); both compared.
+- member roleId → AgentRole.key → vteam-<key>: all 7 correct (product→vteam-product … plan→vteam-plan).
+- Worker log on the fresh stack: `[v1-driver] sendMessage -> … agent=vteam-plan (HTTP 204)`.
+- Own live assembly: plan member (resolvedTools lacks vteam_memory_save/vteam_submit_artifact)
+  → memory+artifact sections ABSENT; developer (both allow) → BOTH PRESENT. Real prod code, live data.
+- Own guard execution with live guard.roles: literal `vteam-plan` + subagent_type=vteam-plan → allow;
+  MAPPED renamed planner (vteam-myplanner) → deny; unmapped name → pass-through (branch 2, documented).
+  worker/src/role-guard/policy.ts:172-182 literal is real; claim correctly bounded everywhere.
+- UI: /agents 7 template rows, avatar data-role correct (librarian → developer neutral fallback,
+  pre-existing + documented in task-6 NOTE.md); colours match tokens; 0 console errors post-auth
+  (only pre-auth 401 during login nav + Chromium DOM info). Team page 7 rows, aliases & roles correct,
+  main badge on 项目经理-1; team-page console 0 errors, API 200s. /agents UI itself prints the
+  bounded task note: "引擎仅对内置计划员 vteam-plan 放行 task，其他 Agent 的子任务由 guard 拒绝".
+- Cleanup: no scratch DBs (only aiagents+system); 4 expected volumes; all containers up/healthy;
+  root-level stray files removed; artifacts archived under F3-rerun/.
+
+Residue: none outside .omo evidence (plus .playwright-mcp/ gitignored capture dir, framework-standard).

@@ -1,0 +1,319 @@
+{
+  "rolePromptByteEqualVsConstants": {
+    "a_architect": true,
+    "a_developer": true,
+    "a_librarian": true,
+    "a_plan": true,
+    "a_product": true,
+    "a_project_manager": true,
+    "a_tester": true
+  },
+  "before": {
+    "label": "BEFORE (pre-split agents.prompt)",
+    "agents": [
+      {
+        "id": "a_architect",
+        "agentPromptLen": 1546,
+        "rolePromptLen": 449,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 2,
+          "charter": 2,
+          "receipt": 2
+        },
+        "order": {
+          "idxRole": 1135,
+          "idxAgent": 1592,
+          "idxCharter": 2573,
+          "idxReceipt": 2912,
+          "ordered": true
+        },
+        "sharedSentences": 11,
+        "duplicated": true
+      },
+      {
+        "id": "a_developer",
+        "agentPromptLen": 1793,
+        "rolePromptLen": 471,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 2,
+          "charter": 2,
+          "receipt": 2
+        },
+        "order": {
+          "idxRole": 1135,
+          "idxAgent": 1614,
+          "idxCharter": 2842,
+          "idxReceipt": 3181,
+          "ordered": true
+        },
+        "sharedSentences": 8,
+        "duplicated": true
+      },
+      {
+        "id": "a_librarian",
+        "agentPromptLen": 1646,
+        "rolePromptLen": 597,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 2,
+          "charter": 2,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 1135,
+          "idxAgent": 1740,
+          "idxCharter": 3056,
+          "idxReceipt": 4054,
+          "ordered": true
+        },
+        "sharedSentences": 12,
+        "duplicated": true
+      },
+      {
+        "id": "a_plan",
+        "agentPromptLen": 2088,
+        "rolePromptLen": 635,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 2,
+          "charter": 2,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 961,
+          "idxAgent": 1604,
+          "idxCharter": 2919,
+          "idxReceipt": 4360,
+          "ordered": true
+        },
+        "sharedSentences": 11,
+        "duplicated": true
+      },
+      {
+        "id": "a_product",
+        "agentPromptLen": 1732,
+        "rolePromptLen": 580,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 2,
+          "charter": 2,
+          "receipt": 2
+        },
+        "order": {
+          "idxRole": 1127,
+          "idxAgent": 1715,
+          "idxCharter": 2882,
+          "idxReceipt": 3221,
+          "ordered": true
+        },
+        "sharedSentences": 11,
+        "duplicated": true
+      },
+      {
+        "id": "a_project_manager",
+        "agentPromptLen": 2324,
+        "rolePromptLen": 613,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 2,
+          "charter": 2,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 1159,
+          "idxAgent": 1780,
+          "idxCharter": 3030,
+          "idxReceipt": 4772,
+          "ordered": true
+        },
+        "sharedSentences": 14,
+        "duplicated": true
+      },
+      {
+        "id": "a_tester",
+        "agentPromptLen": 1826,
+        "rolePromptLen": 560,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 2,
+          "charter": 2,
+          "receipt": 2
+        },
+        "order": {
+          "idxRole": 1123,
+          "idxAgent": 1691,
+          "idxCharter": 2952,
+          "idxReceipt": 3291,
+          "ordered": true
+        },
+        "sharedSentences": 12,
+        "duplicated": true
+      }
+    ],
+    "totalSharedSentences": 79,
+    "builtinsWithDuplicatedBlocks": 7
+  },
+  "after": {
+    "label": "AFTER (post-migration agents.prompt)",
+    "agents": [
+      {
+        "id": "a_architect",
+        "agentPromptLen": 361,
+        "rolePromptLen": 449,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 1,
+          "charter": 1,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 1135,
+          "idxAgent": 1592,
+          "idxCharter": 2282,
+          "idxReceipt": 2621,
+          "ordered": true
+        },
+        "sharedSentences": 0,
+        "duplicated": false
+      },
+      {
+        "id": "a_developer",
+        "agentPromptLen": 525,
+        "rolePromptLen": 471,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 1,
+          "charter": 1,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 1135,
+          "idxAgent": 1614,
+          "idxCharter": 2468,
+          "idxReceipt": 2807,
+          "ordered": true
+        },
+        "sharedSentences": 0,
+        "duplicated": false
+      },
+      {
+        "id": "a_librarian",
+        "agentPromptLen": 335,
+        "rolePromptLen": 597,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 1,
+          "charter": 1,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 1135,
+          "idxAgent": 1740,
+          "idxCharter": 2404,
+          "idxReceipt": 2743,
+          "ordered": true
+        },
+        "sharedSentences": 0,
+        "duplicated": false
+      },
+      {
+        "id": "a_plan",
+        "agentPromptLen": 782,
+        "rolePromptLen": 635,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 1,
+          "charter": 1,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 961,
+          "idxAgent": 1604,
+          "idxCharter": 2715,
+          "idxReceipt": 3054,
+          "ordered": true
+        },
+        "sharedSentences": 0,
+        "duplicated": false
+      },
+      {
+        "id": "a_product",
+        "agentPromptLen": 415,
+        "rolePromptLen": 580,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 1,
+          "charter": 1,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 1127,
+          "idxAgent": 1715,
+          "idxCharter": 2459,
+          "idxReceipt": 2798,
+          "ordered": true
+        },
+        "sharedSentences": 0,
+        "duplicated": false
+      },
+      {
+        "id": "a_project_manager",
+        "agentPromptLen": 1207,
+        "rolePromptLen": 613,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 1,
+          "charter": 1,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 1159,
+          "idxAgent": 1780,
+          "idxCharter": 3316,
+          "idxReceipt": 3655,
+          "ordered": true
+        },
+        "sharedSentences": 0,
+        "duplicated": false
+      },
+      {
+        "id": "a_tester",
+        "agentPromptLen": 405,
+        "rolePromptLen": 560,
+        "counts": {
+          "roleHeading": 1,
+          "agentHeading": 1,
+          "identity": 1,
+          "charter": 1,
+          "receipt": 1
+        },
+        "order": {
+          "idxRole": 1123,
+          "idxAgent": 1691,
+          "idxCharter": 2425,
+          "idxReceipt": 2764,
+          "ordered": true
+        },
+        "sharedSentences": 0,
+        "duplicated": false
+      }
+    ],
+    "totalSharedSentences": 0,
+    "builtinsWithDuplicatedBlocks": 0
+  }
+}

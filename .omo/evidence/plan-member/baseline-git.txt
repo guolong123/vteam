@@ -1,55 +1,30 @@
+30febde docs(permissions): document worker-owned tool authority
+91eb32b test(permissions): mutation-prove both authority failure modes
+f8bbf47 test(permissions): prove the role-by-tool authority matrix
+58bc6f4 test(permissions): lock the retained server-side checks
+26b2e14 test(e2e): assert the tool-authority matrix, not the removed gates
 0dc2509 feat(permissions): move tool authority from server gates to the agent allowlist
 029bc2e docs(permissions): map the server-gate removal and the per-role grant matrix
 7d3b9b0 fix(web): redirect /system landing to its first sub-nav page
-b8c5d32 chore(omo): 落盘 plans/drafts/evidence（模型能力配置 + 主 Agent 修复）
-58d8623 fix(agent): deterministic main-agent resolution + single main source
-d6d6062 feat(web): per-model capability editor with probe prefill
-1915483 feat(models): provider config edit + endpoint probe endpoints
-43d9a62 feat(worker): write per-model capabilities into opencode.json, self-heal probe
  M .omo/boulder.json
- M .omo/evidence/permission-matrix/e2e.txt
- M .omo/evidence/permission-matrix/injected-opencode.json
- M .omo/evidence/plan-member/agent-policies.json
- M .omo/evidence/plan-member/agents.json
+ M .omo/evidence/permission-matrix/retained-hook-cancel-cleanup.json
+ M .omo/evidence/permission-matrix/retained-hook-register.json
  M .omo/evidence/plan-member/baseline-git.txt
- M .omo/evidence/plan-member/channels.json
  M .omo/evidence/plan-member/e2e.txt
- M .omo/evidence/plan-member/git-status-final.txt
  M .omo/evidence/plan-member/group-after-4.json
  M .omo/evidence/plan-member/group-trigger.json
  M .omo/evidence/plan-member/group-watermark-4.json
  M .omo/evidence/plan-member/group-watermark.json
- M .omo/evidence/plan-member/injected-opencode.json
- M .omo/evidence/plan-member/injection-compare.txt
- M .omo/evidence/plan-member/live-path.txt
- M .omo/evidence/plan-member/plan-file-4.md
- M .omo/evidence/plan-member/roles.json
- M .omo/evidence/plan-member/seed-db.txt
- M .omo/evidence/plan-member/taskdir-before.txt
- M .omo/evidence/plan-member/taskdir-final.txt
- M .omo/evidence/plan-member/team.json
- M .omo/evidence/plan-member/tools-list.json
+ M .omo/evidence/plan-member/needs-attention.txt
  M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
  M .omo/notepads/vteam-plan-member-subagents/learnings.md
+ M .omo/plans/server-gate-removal-tool-authority.md
  M .omo/start-work/ledger.jsonl
- M scripts/e2e-permission-matrix.sh
- M scripts/e2e-plan-member.sh
-?? .omo/evidence/permission-matrix/absence-nonmain-plan_mode.json
-?? .omo/evidence/permission-matrix/absence-nonmain-task_transition.json
-?? .omo/evidence/permission-matrix/guard-matrix.json
-?? .omo/evidence/permission-matrix/retained-accept-archive-accept.json
-?? .omo/evidence/permission-matrix/retained-accept-archive-archive.json
-?? .omo/evidence/permission-matrix/retained-global-memory.json
-?? .omo/evidence/permission-matrix/retained-hook-cancel-cleanup.json
-?? .omo/evidence/permission-matrix/retained-hook-cancel.json
-?? .omo/evidence/permission-matrix/retained-hook-register.json
-?? .omo/evidence/permission-matrix/retained-notify-cross.json
-?? .omo/evidence/permission-matrix/retained-notify-self.json
-?? .omo/evidence/permission-matrix/retained-stale-hash.json
-?? .omo/evidence/permission-matrix/retained-terminal-task.json
-?? .omo/evidence/permission-matrix/roles-live.json
-?? .omo/evidence/permission-matrix/source-constants.json
-?? .omo/evidence/server-gate-removal-tool-authority/task-8-e2e.txt
+?? .omo/evidence/qa-f3-plan-member/
+?? .omo/evidence/qa-f3-role-boundaries/
+?? .omo/evidence/qa-f3/
 ?? .omo/explainers/
 ?? docs/agent-platform/prototypes/agent-manage/
 ?? docs/agent-platform/prototypes/agent-role/
+?? e2e-evidence/

@@ -1,0 +1,28 @@
+F3 re-review — user-edit protection + idempotency (scratch DB f3r2_scratch, dropped after)
+==========================================================================================
+Method: CREATE DATABASE f3r2_scratch; CREATE TABLE f3r2_scratch.agents LIKE aiagents.agents;
+4 controlled rows inserted; the migration's own 7 UPDATE statements executed VERBATIM
+(parsed from 20260919000009_backfill_split_agent_prompts/migration.sql with comment lines stripped).
+
+Fixture rows BEFORE:
+  A) a_product       template  pristine PRE-SPLIT text   len=1732  sha=d29275d5715fb981...
+  B) a_librarian     template  PRE-SPLIT + user line      len=1673  sha=0aba376feed8cd6e...
+                              ("- 用户自定义补充：本团队知识管理员还负责周报汇总。")
+  C) a_custom_test   custom    pristine PRE-SPLIT text   len=1732  sha=d29275d5715fb981...
+  D) a_architect     template  already POST-SPLIT text   len=361   sha=36eb7427a616b544...
+
+AFTER applying the migration's UPDATEs (verbatim), run 1:
+  id             type      len   presplit  userline  sha
+  a_architect    template  361   0         0         36eb7427a616b544...   UNTOUCHED (already upgraded)
+  a_custom_test  custom    1732  1         0         d29275d5715fb981...   UNTOUCHED (type=custom guard)
+  a_librarian    template  1673  1         1         0aba376feed8cd6e...   UNTOUCHED (user edit -> hash guard)
+  a_product      template  415   0         0         16455a058ce52a17...   UPGRADED to post-split
+
+=> user-edited prompt PRESERVED; custom row PRESERVED; only the pristine template row rewritten.
+
+Idempotency (run 2 and run 3):
+  run1 fingerprint == run2 fingerprint == run3 fingerprint  (id, updated_at, SHA2(prompt,256))
+  run 3 raw output: 7 x "Query OK, 0 rows affected"
+=> re-running the migration changes 0 rows.
+
+Cleanup: DROP DATABASE f3r2_scratch; SHOW DATABASES no longer lists it (only aiagents + system DBs).

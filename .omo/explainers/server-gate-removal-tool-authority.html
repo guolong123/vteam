@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>权限下放：现状 → 做完之后</title>
+<style>
+  :root{
+    --bg:#f6f7f9; --card:#ffffff; --ink:#16181d; --muted:#5c6470;
+    --line:#e3e6ea; --brand:#2f6df6; --brand-soft:#eaf1ff;
+    --red:#d93a3a; --red-soft:#fdecec; --green:#1f9d55; --green-soft:#e8f7ef;
+    --amber:#b7791f; --amber-soft:#fdf4e3; --violet:#7048e8; --violet-soft:#f0ebff;
+    --slate-soft:#eef1f5;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    line-height:1.75; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px 96px}
+  header.hero{
+    background:linear-gradient(150deg,#1b2a4a 0%,#24406f 55%,#2f6df6 130%);
+    color:#fff; padding:64px 0 56px; margin-bottom:44px;
+  }
+  header.hero .wrap{padding-bottom:0}
+  .kicker{
+    display:inline-block; font-size:12px; letter-spacing:.14em; text-transform:uppercase;
+    background:rgba(255,255,255,.16); padding:5px 12px; border-radius:999px; margin-bottom:20px;
+  }
+  header.hero h1{font-size:38px;line-height:1.25;margin:0 0 16px;font-weight:700;letter-spacing:-.5px}
+  header.hero p.lede{font-size:17px;opacity:.9;margin:0;max-width:760px}
+  .hero-meta{margin-top:26px;display:flex;gap:10px;flex-wrap:wrap}
+  .chip{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);
+        border-radius:8px;padding:7px 13px;font-size:13px}
+  section{margin-bottom:52px}
+  h2{
+    font-size:24px;margin:0 0 8px;font-weight:700;letter-spacing:-.3px;
+    display:flex;align-items:baseline;gap:12px;
+  }
+  h2 .num{
+    font-family:var(--mono);font-size:13px;font-weight:600;color:var(--brand);
+    background:var(--brand-soft);border-radius:6px;padding:3px 9px;flex:none;
+  }
+  h2 + p.sub{margin:0 0 22px;color:var(--muted);font-size:15px}
+  h3{font-size:17px;margin:30px 0 12px;font-weight:650}
+  .card{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:26px 28px;box-shadow:0 1px 2px rgba(16,24,40,.04);
+  }
+  .card + .card{margin-top:18px}
+  .callout{border-radius:12px;padding:18px 20px;margin:18px 0;border:1px solid}
+  .callout .t{font-weight:650;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+  .callout p{margin:0;font-size:14.5px}
+  .callout.warn{background:var(--amber-soft);border-color:#f2dfb4;color:#5c4708}
+  .callout.bad{background:var(--red-soft);border-color:#f7cdcd;color:#6b1a1a}
+  .callout.good{background:var(--green-soft);border-color:#c6ecd8;color:#0e5a31}
+  .callout.info{background:var(--brand-soft);border-color:#cfdefd;color:#123a86}
+  .b{display:inline-block;font-size:12px;font-weight:600;border-radius:6px;padding:2px 8px;
+     font-family:var(--mono);white-space:nowrap}
+  .b.rm{background:var(--red-soft);color:var(--red);border:1px solid #f2c9c9}
+  .b.keep{background:var(--green-soft);color:var(--green);border:1px solid #bfe6cf}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:#fff}
+  table{border-collapse:collapse;width:100%;font-size:14px;min-width:640px}
+  th,td{padding:11px 13px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  thead th{background:#f9fafb;font-weight:650;font-size:13px;color:#3d4652;white-space:nowrap}
+  tbody tr:last-child td{border-bottom:none}
+  td code,th code{font-family:var(--mono);font-size:12.5px;background:var(--slate-soft);
+                  padding:1px 5px;border-radius:4px}
+  .ctr{text-align:center}
+  .yes{color:var(--green);font-weight:700}
+  .no{color:var(--red);font-weight:700}
+  .dash{color:#c2c8d0}
+  .cell-before{background:#fcfcfd}
+  .cell-after{background:#fbfdff}
+  .scenario{
+    border:1px solid var(--line);border-radius:14px;background:#fff;
+    overflow:hidden;margin-bottom:20px;
+  }
+  .scenario .head{
+    padding:15px 22px;background:#f9fafb;border-bottom:1px solid var(--line);
+    font-weight:650;font-size:15.5px;display:flex;align-items:center;gap:10px;
+  }
+  .scenario .head .who{
+    font-family:var(--mono);font-size:12px;font-weight:600;color:#fff;
+    background:#4a5568;border-radius:5px;padding:2px 7px;
+  }
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:0}
+  @media(max-width:780px){.ba{grid-template-columns:1fr}}
+  .ba > div{padding:20px 22px}
+  .ba .before{border-right:1px solid var(--line);background:#fffafa}
+  .ba .after{background:#fbfefc}
+  @media(max-width:780px){.ba .before{border-right:none;border-bottom:1px solid var(--line)}}
+  .ba .label{
+    font-size:11.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+    margin-bottom:10px;display:flex;align-items:center;gap:7px;
+  }
+  .ba .before .label{color:var(--red)}
+  .ba .after .label{color:var(--green)}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .before .dot{background:var(--red)} .after .dot{background:var(--green)}
+  .ba p{margin:0 0 10px;font-size:14.5px}
+  .ba p:last-child{margin-bottom:0}
+  .err{
+    font-family:var(--mono);font-size:12.5px;background:#2b1c1c;color:#ffb4b4;
+    padding:9px 11px;border-radius:8px;display:block;margin-top:10px;
+    white-space:pre-wrap;word-break:break-word;line-height:1.6;
+  }
+  .ok{
+    font-family:var(--mono);font-size:12.5px;background:#12291c;color:#9be8bb;
+    padding:9px 11px;border-radius:8px;display:block;margin-top:10px;
+    white-space:pre-wrap;word-break:break-word;line-height:1.6;
+  }
+  .flow{background:#fff;border:1px solid var(--line);border-radius:14px;padding:8px;overflow-x:auto}
+  .flow svg{display:block;margin:0 auto;min-width:660px}
+  .flow-cap{font-size:13px;color:var(--muted);text-align:center;padding:10px 16px 6px}
+  .grid{display:grid;gap:16px}
+  .grid.two{grid-template-columns:1fr 1fr}
+  .grid.three{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:820px){.grid.two,.grid.three{grid-template-columns:1fr}}
+  .mini{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px}
+  .mini .h{font-weight:650;font-size:15px;margin-bottom:8px;display:flex;align-items:center;gap:9px}
+  .mini p{margin:0;font-size:14px;color:#3d4652}
+  .mini .ico{
+    width:28px;height:28px;border-radius:8px;display:grid;place-items:center;
+    font-size:14px;flex:none;font-weight:700;
+  }
+  .ico.g{background:var(--green-soft);color:var(--green)}
+  .ico.r{background:var(--red-soft);color:var(--red)}
+  .ico.a{background:var(--amber-soft);color:var(--amber)}
+  .ico.b{background:var(--brand-soft);color:var(--brand)}
+  ul.clean{margin:10px 0 0;padding-left:0;list-style:none}
+  ul.clean li{padding-left:24px;position:relative;margin-bottom:9px;font-size:14.5px}
+  ul.clean li::before{
+    content:"";position:absolute;left:6px;top:11px;width:6px;height:6px;
+    border-radius:50%;background:var(--brand);
+  }
+  footer{
+    text-align:center;color:var(--muted);font-size:13px;padding:34px 0 0;
+    border-top:1px solid var(--line);margin-top:20px;
+  }
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin-top:12px}
+  .legend span{display:flex;align-items:center;gap:6px}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="kicker">方案说明 · 先看再决定</span>
+    <h1>把"能不能做"的决定权，<br>从平台还给 Agent 自己</h1>
+    <p class="lede">
+      现在同一件事有两道锁：一道在 Agent 自己的工具权限上，另一道在平台服务端硬编码的身份规则里。
+      两道锁经常不一致，结果就是 Agent 被莫名卡住。这份文档说明"做完之后"你会看到什么。
+    </p>
+    <div class="hero-meta">
+      <span class="chip">计划：server-gate-removal-tool-authority</span>
+      <span class="chip">12 个实现任务 + 4 项终验</span>
+      <span class="chip">已通过双评审（4 轮）</span>
+      <span class="chip">尚未执行</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section>
+    <h2><span class="num">一句话</span>做完之后最直观的三件事</h2>
+    <p class="sub">如果你只想记住三件事，看这里就够。</p>
+    <div class="grid three">
+      <div class="mini">
+        <div class="h"><span class="ico g">1</span>开发能建 issue 了</div>
+        <p>现在开发/架构/计划员想开 issue 会被挡；做完后，只要角色的工具权限里有这项，就能开。产品、测试、项目经理本来就能。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico g">2</span>不再被"计划状态"冻住</div>
+        <p>现在计划没被人工点"开始执行"之前，谁都不能派活。做完后这个状态门取消，只在计划版本对不上时才拦。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico g">3</span>权限只有一处可配</div>
+        <p>以前要改两次（平台代码 + 角色权限）且经常只改一处。做完后只有一处：角色自己的工具权限表。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">现状</span>两道锁锁同一扇门</h2>
+    <p class="sub">这是问题的根源，也是"难用"的来源。</p>
+
+    <div class="flow">
+      <svg viewBox="0 0 960 330" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#8b95a5"/>
+          </marker>
+          <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#d93a3a"/>
+          </marker>
+        </defs>
+        <rect x="20" y="118" width="120" height="76" rx="12" fill="#f0ebff" stroke="#c9b8f7"/>
+        <text x="80" y="150" font-size="14" font-weight="650" fill="#4a2f9e" text-anchor="middle">Agent</text>
+        <text x="80" y="171" font-size="11.5" fill="#6b5bb5" text-anchor="middle">（如 开发-1）</text>
+        <line x1="140" y1="156" x2="196" y2="156" stroke="#8b95a5" stroke-width="2" marker-end="url(#ar)"/>
+        <rect x="200" y="108" width="180" height="96" rx="12" fill="#e8f7ef" stroke="#9dd8b8"/>
+        <text x="290" y="137" font-size="13.5" font-weight="650" fill="#0e5a31" text-anchor="middle">锁 ①　工具权限</text>
+        <text x="290" y="158" font-size="11.5" fill="#2f7d52" text-anchor="middle">区分角色的白名单</text>
+        <text x="290" y="177" font-size="11.5" fill="#2f7d52" text-anchor="middle">✅ 这一层是你要保留的</text>
+        <line x1="380" y1="156" x2="436" y2="156" stroke="#8b95a5" stroke-width="2" marker-end="url(#ar)"/>
+        <rect x="440" y="108" width="200" height="96" rx="12" fill="#fdecec" stroke="#f0b4b4"/>
+        <text x="540" y="137" font-size="13.5" font-weight="650" fill="#8c1f1f" text-anchor="middle">锁 ②　服务端身份门</text>
+        <text x="540" y="158" font-size="11.5" fill="#a33c3c" text-anchor="middle">硬编码"必须是你团队的主 Agent"</text>
+        <text x="540" y="177" font-size="11.5" fill="#a33c3c" text-anchor="middle">❌ 不可配置 · 要做掉的是它</text>
+        <line x1="640" y1="156" x2="696" y2="156" stroke="#8b95a5" stroke-width="2" marker-end="url(#ar)"/>
+        <rect x="700" y="118" width="150" height="76" rx="12" fill="#eaf1ff" stroke="#b9cffb"/>
+        <text x="775" y="150" font-size="14" font-weight="650" fill="#123a86" text-anchor="middle">动作发生</text>
+        <text x="775" y="171" font-size="11.5" fill="#3f6bc0" text-anchor="middle">建任务 / 流转 / 开 issue</text>
+        <path d="M540 204 L540 258" stroke="#d93a3a" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#ar2)"/>
+        <rect x="430" y="262" width="220" height="52" rx="10" fill="#fdecec" stroke="#f0b4b4"/>
+        <text x="540" y="285" font-size="13" font-weight="650" fill="#8c1f1f" text-anchor="middle">403　仅主 Agent 可操作</text>
+        <text x="540" y="303" font-size="11" fill="#a33c3c" text-anchor="middle">消息不落库 · 目标不被唤醒</text>
+        <text x="480" y="40" font-size="14.5" font-weight="650" fill="#16181d" text-anchor="middle">同一件事，被两道锁各自判断一次</text>
+        <text x="480" y="63" font-size="12.5" fill="#5c6470" text-anchor="middle">只要有一道不同意，Agent 就被挡住 —— 而第二道根本无法从界面上配置</text>
+      </svg>
+      <div class="flow-cap">现状：锁 ① 与锁 ② 互相独立，经常判出不同结果</div>
+    </div>
+
+    <div class="callout bad">
+      <div class="t">⚠ 最要命的不是"有门禁"，而是这两道锁没有一个统一的事实来源</div>
+      <p>
+        你在角色权限里给某个 Agent 开了权限，它仍然可能被服务端硬编码的规则拒绝；
+        反过来，某个 Agent 明明不具备某项职责，只要它刚好是团队主 Agent，反而能操作。
+        排查时看哪个都不对。
+      </p>
+    </div>
+
+    <h3>现状下被挡住的 7 项能力</h3>
+    <p class="sub" style="margin-bottom:14px">
+      服务端一共 <strong>7 个工具、11 处拒绝点</strong>（同一个工具可能在不同上下文各拦一次）。
+      它们现有的语义统一是"只有团队主 Agent 能做"。
+    </p>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th>工具</th><th>它让 Agent 做什么</th><th class="ctr">拒绝点数</th><th>现状：谁能用</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>task_create</code></td><td>创建任务</td><td class="ctr">2</td><td><span class="b rm">只有主 Agent</span></td></tr>
+          <tr><td><code>skill_create</code></td><td>沉淀技能</td><td class="ctr">3</td><td><span class="b rm">只有主 Agent</span></td></tr>
+          <tr><td><code>team_add_member</code></td><td>申请增员</td><td class="ctr">1</td><td><span class="b rm">只有主 Agent</span></td></tr>
+          <tr><td><code>plan_mode</code></td><td>切换计划模式</td><td class="ctr">1</td><td><span class="b rm">只有主 Agent</span></td></tr>
+          <tr><td><code>plan_complete</code></td><td>标记计划完工</td><td class="ctr">2</td><td><span class="b rm">只有主 Agent</span></td></tr>
+          <tr><td><code>task_transition</code></td><td>流转任务状态</td><td class="ctr">1</td><td><span class="b rm">只有主 Agent</span></td></tr>
+          <tr><td><code>question_confirm</code></td><td>确认托管请求</td><td class="ctr">1</td><td><span class="b rm">只有主 Agent</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>还有一项阻塞，来自"计划状态"</h3>
+    <p style="font-size:14.5px;margin:0 0 12px">
+      除了身份门，派发执行工作还要求计划状态必须是 <code>executing</code>。而计划要走到
+      <code>executing</code>，需要人工先做两次确认（定稿 → 确认开始执行）。
+      在此之前，任何 Agent 都无法派活。
+    </p>
+    <div class="flow">
+      <svg viewBox="0 0 960 150" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+        <defs>
+          <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#8b95a5"/>
+          </marker>
+        </defs>
+        <rect x="14" y="52" width="118" height="46" rx="10" fill="#eef1f5" stroke="#d5dbe3"/>
+        <text x="73" y="80" font-size="12.5" font-weight="600" fill="#5c6470" text-anchor="middle">draft 起草</text>
+        <line x1="132" y1="75" x2="160" y2="75" stroke="#8b95a5" stroke-width="2" marker-end="url(#ar3)"/>
+        <rect x="163" y="52" width="130" height="46" rx="10" fill="#fdf4e3" stroke="#ecd9ab"/>
+        <text x="228" y="80" font-size="12.5" font-weight="600" fill="#8a6415" text-anchor="middle">评审 N/N</text>
+        <line x1="293" y1="75" x2="321" y2="75" stroke="#8b95a5" stroke-width="2" marker-end="url(#ar3)"/>
+        <rect x="324" y="52" width="140" height="46" rx="10" fill="#fdf4e3" stroke="#ecd9ab"/>
+        <text x="394" y="73" font-size="12.5" font-weight="600" fill="#8a6415" text-anchor="middle">pending_final</text>
+        <text x="394" y="90" font-size="10.5" fill="#a3801f" text-anchor="middle">待定稿</text>
+        <line x1="464" y1="75" x2="492" y2="75" stroke="#8b95a5" stroke-width="2" marker-end="url(#ar3)"/>
+        <rect x="495" y="52" width="120" height="46" rx="10" fill="#eaf1ff" stroke="#b9cffb"/>
+        <text x="555" y="73" font-size="12.5" font-weight="600" fill="#123a86" text-anchor="middle">approved</text>
+        <text x="555" y="90" font-size="10.5" fill="#3f6bc0" text-anchor="middle">👤 人工定稿</text>
+        <line x1="615" y1="75" x2="643" y2="75" stroke="#8b95a5" stroke-width="2" marker-end="url(#ar3)"/>
+        <rect x="646" y="48" width="140" height="54" rx="10" fill="#e8f7ef" stroke="#9dd8b8"/>
+        <text x="716" y="71" font-size="12.5" font-weight="700" fill="#0e5a31" text-anchor="middle">executing</text>
+        <text x="716" y="89" font-size="10.5" fill="#2f7d52" text-anchor="middle">👤 人工确认执行</text>
+        <line x1="786" y1="75" x2="814" y2="75" stroke="#8b95a5" stroke-width="2" marker-end="url(#ar3)"/>
+        <rect x="817" y="52" width="128" height="46" rx="10" fill="#eaf1ff" stroke="#b9cffb"/>
+        <text x="881" y="80" font-size="12.5" font-weight="600" fill="#123a86" text-anchor="middle">✅ 可以派活</text>
+        <rect x="324" y="8" width="462" height="26" rx="8" fill="#fdecec" stroke="#f0b4b4"/>
+        <text x="555" y="26" font-size="12" font-weight="600" fill="#8c1f1f" text-anchor="middle">这段区间内：所有 Agent 都无法派发执行工作</text>
+      </svg>
+      <div class="flow-cap">现状：计划状态也是道门；两处人工确认之前，团队整体停摆</div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">做完之后</span>只剩一道锁，且可配置</h2>
+    <p class="sub">服务端不再判断"你是不是主 Agent"；它只判断"这个状态流转合不合法、参数对不对"。</p>
+
+    <div class="flow">
+      <svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+        <defs>
+          <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#8b95a5"/>
+          </marker>
+        </defs>
+        <rect x="20" y="104" width="120" height="76" rx="12" fill="#f0ebff" stroke="#c9b8f7"/>
+        <text x="80" y="136" font-size="14" font-weight="650" fill="#4a2f9e" text-anchor="middle">Agent</text>
+        <text x="80" y="157" font-size="11.5" fill="#6b5bb5" text-anchor="middle">（如 开发-1）</text>
+        <line x1="140" y1="142" x2="206" y2="142" stroke="#8b95a5" stroke-width="2" marker-end="url(#ag)"/>
+        <rect x="210" y="94" width="200" height="96" rx="12" fill="#e8f7ef" stroke="#9dd8b8" stroke-width="2"/>
+        <text x="310" y="123" font-size="13.5" font-weight="700" fill="#0e5a31" text-anchor="middle">唯一的锁：工具权限</text>
+        <text x="310" y="145" font-size="11.5" fill="#2f7d52" text-anchor="middle">按角色配置 · 界面可改</text>
+        <text x="310" y="164" font-size="11.5" fill="#2f7d52" text-anchor="middle">有权限就能做</text>
+        <line x1="410" y1="142" x2="476" y2="142" stroke="#8b95a5" stroke-width="2" marker-end="url(#ag)"/>
+        <rect x="480" y="94" width="200" height="96" rx="12" fill="#f9fafb" stroke="#dbe1e8"/>
+        <text x="580" y="121" font-size="13" font-weight="650" fill="#3d4652" text-anchor="middle">服务端只做两件事</text>
+        <text x="580" y="143" font-size="11.5" fill="#5c6470" text-anchor="middle">① 状态流转合法性</text>
+        <text x="580" y="162" font-size="11.5" fill="#5c6470" text-anchor="middle">② 参数校验</text>
+        <text x="580" y="181" font-size="11" fill="#8b95a5" text-anchor="middle">不判断"你是谁"</text>
+        <line x1="680" y1="142" x2="746" y2="142" stroke="#8b95a5" stroke-width="2" marker-end="url(#ag)"/>
+        <rect x="750" y="104" width="150" height="76" rx="12" fill="#eaf1ff" stroke="#b9cffb" stroke-width="2"/>
+        <text x="825" y="136" font-size="14" font-weight="650" fill="#123a86" text-anchor="middle">动作发生</text>
+        <text x="825" y="157" font-size="11.5" fill="#3f6bc0" text-anchor="middle">✅ 不再有身份 403</text>
+        <text x="480" y="40" font-size="14.5" font-weight="650" fill="#16181d" text-anchor="middle">一道锁 · 一个事实来源</text>
+        <text x="480" y="62" font-size="12.5" fill="#5c6470" text-anchor="middle">能不能做，完全由角色的工具权限表决定；界面改完即生效</text>
+        <rect x="480" y="228" width="420" height="50" rx="10" fill="#e8f7ef" stroke="#9dd8b8"/>
+        <text x="690" y="249" font-size="12" font-weight="600" fill="#0e5a31" text-anchor="middle">服务端仍然保留：状态终态保护 · 通知路由 · 验收/归档职守 · 计划版本校验</text>
+        <text x="690" y="267" font-size="11" fill="#2f7d52" text-anchor="middle">这些不是"权限门"，是流程规则与人为授权，继续有效</text>
+      </svg>
+      <div class="flow-cap">做完之后：授权回到 Agent 自身工具权限；服务端回归流程与参数</div>
+    </div>
+
+    <div class="callout good">
+      <div class="t">✓ 核心转变</div>
+      <p>
+        以前问"这个 Agent 能做什么？"要同时看两处，且以更严的那处为准。
+        做完之后只问一处：<strong>它的角色工具权限表里有没有这一项。</strong>
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">对照</span>角色能力表：现状 vs 做完之后</h2>
+    <p class="sub">
+      按角色分工授权：协调类角色拿到任务/计划/团队工具；开 issue 的能力按职责给到真正需要它的角色。
+    </p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>角色</th>
+            <th class="ctr">task_create<br><span style="font-weight:400;color:#8b95a5">建任务</span></th>
+            <th class="ctr">task_transition<br><span style="font-weight:400;color:#8b95a5">流转任务</span></th>
+            <th class="ctr">plan_mode<br><span style="font-weight:400;color:#8b95a5">计划模式</span></th>
+            <th class="ctr">plan_complete<br><span style="font-weight:400;color:#8b95a5">计划完工</span></th>
+            <th class="ctr">team_add_member<br><span style="font-weight:400;color:#8b95a5">申请增员</span></th>
+            <th class="ctr">question_confirm<br><span style="font-weight:400;color:#8b95a5">托管确认</span></th>
+            <th class="ctr">skill_create<br><span style="font-weight:400;color:#8b95a5">沉淀技能</span></th>
+            <th class="ctr">issue_create<br><span style="font-weight:400;color:#8b95a5">开 issue</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>产品经理</strong> <code>product</code></td>
+            <td class="ctr cell-before"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-before"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-before"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-before"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr cell-before"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-before"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-before"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr cell-before"><span class="yes">✓</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+          </tr>
+          <tr>
+            <td><strong>项目经理</strong> <code>project_manager</code></td>
+            <td class="ctr cell-after"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-after"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-after"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-after"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-after"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-after"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-after"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr cell-after"><span class="yes">✓</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+          </tr>
+          <tr>
+            <td><strong>计划员</strong> <code>plan</code></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+          </tr>
+          <tr>
+            <td><strong>开发</strong> <code>developer</code></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr" style="background:#f5f0ff"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+          </tr>
+          <tr>
+            <td><strong>架构</strong> <code>architect</code></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr" style="background:#f5f0ff"><span class="no">✕</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+          </tr>
+          <tr>
+            <td><strong>测试</strong> <code>tester</code></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="yes">✓</span> <span class="dash">→</span> <span class="yes">✓</span></td>
+          </tr>
+          <tr>
+            <td><strong>资料员</strong> <code>librarian</code></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+            <td class="ctr"><span class="no">✕</span> <span class="dash">→</span> <span class="no">✕</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="legend">
+      <span><span class="yes">✓</span> 可调用</span>
+      <span><span class="no">✕</span> 被拒绝</span>
+      <span>格式：<strong>现状</strong> <span class="dash">→</span> <strong>做完之后</strong></span>
+      <span style="color:var(--violet)">紫色底 = 净新增能力</span>
+    </div>
+    <div class="callout info" style="margin-top:18px">
+      <div class="t">说明</div>
+      <p>
+        "现状"一列中，7 个协调工具在工具权限层对<em>所有</em>角色都是放行的（平台故意留空、交给服务端判断），
+        因此实际能不能用完全取决于"你是不是团队主 Agent"。上表用 <span class="no">✕</span> 表示
+        "非主实例会被服务端 403"。
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">使用场景</span>四个真实卡点，前后对照</h2>
+    <p class="sub">这些是"功能很难用"最常见的四个具体场景。</p>
+
+    <div class="scenario">
+      <div class="head"><span class="who">开发-1</span>要为一个发现的技术债开 issue</div>
+      <div class="ba">
+        <div class="before">
+          <div class="label"><span class="dot"></span>现状</div>
+          <p>开发在写代码时发现一个必须记录的问题，调用开 issue 的工具 —— 被 Agent 自身工具权限拒绝，
+            因为"开发"角色的权限表里根本没有这一项。</p>
+          <span class="err">【越界拦截｜角色：vteam-developer】不能调用 vteam_issue_create。
+职责：编码与实现说明…。请把该工作转交 vteam-product，
+或使用 vteam_notify_agent 定向通知。</span>
+          <p style="margin-top:12px">结果是：开发必须先"通知主 Agent"，由主 Agent 代开。为一个 issue 绕一圈。</p>
+        </div>
+        <div class="after">
+          <div class="label"><span class="dot"></span>做完之后</div>
+          <p>开发的工具权限表里补上了 <code>issue_create</code>，直接开 issue，一次调用完成。</p>
+          <span class="ok">✅ issue 已创建（status: open）
+   创建者: 开发-1
+   指派给: 开发-1</span>
+          <p style="margin-top:12px">这是<strong>净新增能力</strong>（紫色格），由本次授权表显式决定。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="scenario">
+      <div class="head"><span class="who">任意 Agent</span>计划还没被人工确认，想派活</div>
+      <div class="ba">
+        <div class="before">
+          <div class="label"><span class="dot"></span>现状</div>
+          <p>计划产出了、也评审完了，但人类还没点"定稿 → 确认执行"。此时派发执行工作：
+            消息<strong>不落库、目标不被唤醒</strong>，看起来就像"什么都没发生"。</p>
+          <span class="err">triggered: false
+reason: plan-gated
+hint: 计划未放行：当前计划状态为 pending_final
+      （需 executing，请确认开始执行后再派发）</span>
+        </div>
+        <div class="after">
+          <div class="label"><span class="dot"></span>做完之后</div>
+          <p>计划状态不再是派发的前提条件。派发正常进行；只有当有人基于<strong>旧版计划</strong>派活时才会被拦。</p>
+          <span class="ok">✅ 派发成功（triggered: true）
+   计划 hash 校验保留：若携带的版本与冻结版不符 → 仍会拒绝，并同时给出期望/实际哈希</span>
+          <p style="margin-top:12px">保留的哈希校验防的是"拿旧计划干活"，与"计划有没有被确认"是两回事。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="scenario">
+      <div class="head"><span class="who">测试-1</span>想流转任务状态，但它不是主 Agent</div>
+      <div class="ba">
+        <div class="before">
+          <div class="label"><span class="dot"></span>现状</div>
+          <p>任务的推进需要流转状态，但只有主 Agent 能做。其它成员即便发现了阻塞，也无法推进。</p>
+          <span class="err">403 TASK_STATUS_MAIN_AGENT_ONLY
+仅主 Agent（tmm_0000000001）可流转任务状态</span>
+        </div>
+        <div class="after">
+          <div class="label"><span class="dot"></span>做完之后</div>
+          <p>能否流转由角色工具权限决定。产品经理与项目经理持有该工具，可直接流转；
+            非法状态流转（如从未开始直接跳到已完成）仍然被拒绝。</p>
+          <span class="ok">✅ 状态已从 pending → in_progress
+（状态机合法性校验保留：非法迁移返回 409）</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="scenario">
+      <div class="head"><span class="who">整个团队</span>"一个个被阻塞"</div>
+      <div class="ba">
+        <div class="before">
+          <div class="label"><span class="dot"></span>现状</div>
+          <p>三个原因叠加：</p>
+          <ul class="clean" style="margin-top:6px">
+            <li>计划状态未到 <code>executing</code> → 全体无法派活</li>
+            <li>非主成员之间不能直接通知（必须经主 Agent 中转）</li>
+            <li>同团队任务 FIFO 串行，一次只跑一个</li>
+          </ul>
+          <p style="margin-top:10px">观感就是"Agent 一个个卡住，推不动"。</p>
+        </div>
+        <div class="after">
+          <div class="label"><span class="dot"></span>做完之后</div>
+          <p>第 1 条解除（计划状态门取消）。第 2、3 条<strong>保留</strong> —— 它们不是权限，是协作协议：</p>
+          <ul class="clean" style="margin-top:6px">
+            <li>通知路由保留：防 @ 风暴与 ping-pong 失控</li>
+            <li>FIFO 串行保留：同团队任务排队是设计，不是缺陷</li>
+          </ul>
+          <p style="margin-top:10px">配上第 1 条的解除，团队在计划阶段就能正常推进，不再整体停摆。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">不变</span>继续保留的规则（不是权限门）</h2>
+    <p class="sub">
+      这些不是"某个 Agent 的身份检查"，而是流程规则、人为授权与资源归属。它们继续生效。
+    </p>
+    <div class="grid two">
+      <div class="mini">
+        <div class="h"><span class="ico g">✓</span>任务终态保护</div>
+        <p>任务已 <code>completed</code> / <code>archived</code> 后，不能往里面派执行工作。防止产生脏数据。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico g">✓</span>验收 / 归档只能人来点</div>
+        <p>任何 Agent 都不能验收或归档任务 —— 这是人对交付物的确认权，不是 Agent 的能力。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico g">✓</span>通知路由</div>
+        <p>不能通知自己；成员之间不直接互相派发，经主 Agent 中转。防 @ 风暴。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico g">✓</span>全局记忆写入范围</div>
+        <p>写"全队/全局"级记忆仍限主 Agent —— 这是共享资源的写入范围，不是能力。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico g">✓</span>计划版本（哈希）校验</div>
+        <p>只拆"计划状态"门，保留"计划版本对不上就拒绝"。防基于旧版计划执行。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico g">✓</span>流程状态机合法性</div>
+        <p>状态流转是否合法、参数是否合规、终态是否可改 —— 服务端继续校验。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">取舍</span>你需要知道并接受的几条</h2>
+    <p class="sub">这些是"权限即 Agent 自身工具权限"的必然结果，不是隐藏的意外。</p>
+
+    <div class="callout warn">
+      <div class="t">① 主 Agent 不再是"能力身份"</div>
+      <p>
+        权限跟<strong>角色</strong>走，不再跟"谁是主"走。团队的主成员仍然决定
+        <em>默认收信人</em>等协作行为，但它不再自动获得任务/计划/团队工具。
+        若某团队的主成员恰好是"开发""架构""测试"或"资料员"，它将不再能建任务、流转任务。
+        <br><br>
+        应对方式：换主成员，或给该角色加权限。这是本次设计<strong>有意为之</strong>的后果，会被测试固化下来。
+      </p>
+    </div>
+
+    <div class="callout warn">
+      <div class="t">② 计划模式 / 托管确认的身份门也一并拆除</div>
+      <p>
+        拆掉后有两点残留风险，已用新增校验兜住：
+        <br>· 非主成员调用"计划模式"时，改写的仍是<strong>团队主成员</strong>的执行配置；
+        <br>· "托管确认"新增两条完整性校验：<strong>确认者不能是自己发起的请求</strong>，且
+        <strong>请求必须属于自己所在的任务</strong>，堵住自我审批与跨任务确认。
+      </p>
+    </div>
+
+    <div class="callout warn">
+      <div class="t">③ 这次不动的两个节流/锁</div>
+      <p>
+        通知节流（3 次/60 秒）与 issue 锁（同执行人重复派发去重）本次<strong>保留</strong> ——
+        它们属于防失控与幂等，不是 Agent 身份权限。如果实测下来仍然影响使用，可以另外单独立项。
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">更大的蓝图</span>角色 / Agent / 能力：三层分离</h2>
+    <p class="sub">
+      上面几节讲的是"权限"这一层。但"角色"这个词现在同时扛着四件不相干的事 —— 这是更底层的混乱来源，
+      也是它必须跟"权限下放"一起想清楚的原因。
+    </p>
+
+    <h3>问题：一个"角色"词，扛了四件事</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th style="min-width:150px">它承担的</th><th>具体表现</th><th style="min-width:170px">本该属于</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>给人看的标签</strong></td>
+            <td>"产品经理""开发者"这些展示名称</td>
+            <td><span class="b keep">角色 · 岗位</span></td>
+          </tr>
+          <tr>
+            <td><strong>能做什么</strong></td>
+            <td>该不该能建任务 / 开 issue / 跑命令</td>
+            <td><span class="b new">Agent 的能力</span></td>
+          </tr>
+          <tr>
+            <td><strong>提示词内容</strong></td>
+            <td>"你是谁""你的边界在哪"整段文字</td>
+            <td><span class="b mut">角色 + Agent 各一半</span></td>
+          </tr>
+          <tr>
+            <td><strong>引擎侧的身份</strong></td>
+            <td><code>vteam-plan</code>、<code>a_plan</code> 这类硬编码名字</td>
+            <td><span class="b rm">应该消失</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout bad" style="margin-top:18px">
+      <div class="t">⚠ 后果</div>
+      <p>
+        改一段岗位描述，可能顺手改掉了它的能力；改能力，又可能影响一堆按名字写的特判。
+        于是系统里长出一批"只有叫这个名字的 Agent 才能做这件事"的硬编码 ——
+        <code>vteam-plan</code>、<code>a_plan</code>、按中文子串匹配角色…
+        本次计划拆掉了其中一部分（权限层），但<strong>角色这个词本身还没有被剥离</strong>。
+      </p>
+    </div>
+
+    <h3>目标：三层各归各位</h3>
+    <div class="flow">
+      <svg viewBox="0 0 960 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
+        <defs>
+          <marker id="al" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0 0 L10 5 L0 10 z" fill="#8b95a5"/>
+          </marker>
+        </defs>
+
+        <rect x="18" y="108" width="236" height="112" rx="12" fill="#e8f7ef" stroke="#9dd8b8" stroke-width="2"/>
+        <text x="136" y="136" font-size="15" font-weight="700" fill="#0e5a31" text-anchor="middle">角色　Role</text>
+        <text x="136" y="156" font-size="11.5" fill="#2f7d52" text-anchor="middle">"这是个什么岗位"</text>
+        <line x1="46" y1="170" x2="226" y2="170" stroke="#b9e3cd"/>
+        <text x="136" y="188" font-size="11" fill="#2f7d52" text-anchor="middle">岗位名称 · 岗位描述（提示词）</text>
+        <text x="136" y="205" font-size="11" fill="#2f7d52" text-anchor="middle">默认绑定哪个 Agent</text>
+
+        <line x1="254" y1="164" x2="308" y2="164" stroke="#8b95a5" stroke-width="2" marker-end="url(#al)"/>
+        <text x="281" y="152" font-size="10.5" fill="#8b95a5" text-anchor="middle">绑定</text>
+
+        <rect x="312" y="96" width="272" height="136" rx="12" fill="#f0ebff" stroke="#c9b8f7" stroke-width="2"/>
+        <text x="448" y="124" font-size="15" font-weight="700" fill="#4a2f9e" text-anchor="middle">Agent　可执行单元</text>
+        <text x="448" y="144" font-size="11.5" fill="#6b5bb5" text-anchor="middle">"用什么跑、以什么身份跑"</text>
+        <line x1="340" y1="158" x2="556" y2="158" stroke="#d8ccfb"/>
+        <text x="448" y="176" font-size="11" fill="#6b5bb5" text-anchor="middle">引擎绑定（模型 / 引擎侧 agent 名）</text>
+        <text x="448" y="193" font-size="11" fill="#6b5bb5" text-anchor="middle">操作者提示词（"我该怎么干"）</text>
+        <text x="448" y="210" font-size="11" fill="#6b5bb5" text-anchor="middle">→ 挂载能力清单</text>
+
+        <line x1="584" y1="164" x2="638" y2="164" stroke="#8b95a5" stroke-width="2" marker-end="url(#al)"/>
+        <text x="611" y="152" font-size="10.5" fill="#8b95a5" text-anchor="middle">挂载</text>
+
+        <rect x="642" y="108" width="300" height="112" rx="12" fill="#fdf4e3" stroke="#ecd9ab" stroke-width="2"/>
+        <text x="792" y="136" font-size="15" font-weight="700" fill="#8a6415" text-anchor="middle">能力　Capability</text>
+        <text x="792" y="156" font-size="11.5" fill="#a3801f" text-anchor="middle">"具体被允许做什么"</text>
+        <line x1="670" y1="170" x2="914" y2="170" stroke="#f0e0b8"/>
+        <text x="792" y="188" font-size="11" fill="#a3801f" text-anchor="middle">工具权限 · 路径边界 · 命令策略</text>
+        <text x="792" y="205" font-size="11" fill="#a3801f" text-anchor="middle">插件式挂载在 Agent 上（本次已落地）</text>
+
+        <text x="480" y="42" font-size="14.5" font-weight="650" fill="#16181d" text-anchor="middle">角色说"我是谁"，Agent 说"我怎么跑"，能力说"我准做什么"</text>
+        <text x="480" y="64" font-size="12.5" fill="#5c6470" text-anchor="middle">三者可独立修改：换岗位描述不动能力；调能力不动岗位</text>
+        <text x="480" y="262" font-size="12" font-weight="600" fill="#0e5a31" text-anchor="middle">硬编码的"叫这个名字才能做这件事"随之消失</text>
+        <text x="480" y="282" font-size="11" fill="#2f7d52" text-anchor="middle">引擎侧不再需要认识 vteam-plan / a_plan 这类业务名字</text>
+      </svg>
+      <div class="flow-cap">目标形态：角色（岗位）→ 绑定 Agent → Agent 挂载能力</div>
+    </div>
+
+    <h3>拆开之后：Agent 怎么分？</h3>
+    <p style="font-size:14.5px;margin:0 0 14px">
+      <b>注意：岗位数量和 Agent 数量是两回事。</b>岗位是标签（可以有很多），Agent 是<b>能力载体</b>。
+      下面这 5 个是<b>显示分组</b>，用来让界面好读 —— 不代表同组的能力相同。
+    </p>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th style="min-width:96px">分组</th><th style="min-width:220px">组内各 Agent 的真实写范围</th><th>对应岗位</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>只读</strong></td>
+            <td>无写权限</td>
+            <td>资料员</td>
+          </tr>
+          <tr>
+            <td><strong>计划</strong></td>
+            <td>仅 <code>.opencode/plans</code> 可写</td>
+            <td>计划员</td>
+          </tr>
+          <tr>
+            <td><strong>文档</strong></td>
+            <td>产品经理 = prototypes + docs<br>架构师 = 仅 docs<br>测试 = tests + docs</td>
+            <td>产品经理 · 架构师 · 测试</td>
+          </tr>
+          <tr>
+            <td><strong>协调</strong></td>
+            <td>无写权限 · <b>禁止执行命令</b></td>
+            <td>项目经理</td>
+          </tr>
+          <tr>
+            <td><strong>实现</strong></td>
+            <td>整个任务目录可写 · 含 git 操作</td>
+            <td>开发者</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warn" style="margin-top:18px">
+      <div class="t">为什么"文档"组里三个不能合并</div>
+      <p>
+        它们的<b>真实写范围并不相同</b>：产品经理能写 <code>prototypes</code>，架构师只能写 <code>docs</code>，
+        测试还要写 <code>tests</code>。若合并成一个 Agent，等于把三者的写范围取<b>并集</b> —— 架构师就能写
+        <code>prototypes</code> 和 <code>tests</code> 了，这是<b>扩权</b>。所以：
+        <b>Agent 仍是 7 个（能力各自准确），只是列表按 5 组显示。</b>
+      </p>
+    </div>
+
+    <h3>本次计划只完成了三分之一</h3>
+    <div class="grid two">
+      <div class="mini">
+        <div class="h"><span class="ico b">本次</span>把"能力"这一层理干净</div>
+        <p>
+          授权从服务端的硬编码身份规则，搬回 <strong>Agent 自身的工具权限</strong>。
+          这是三层里最要紧的地基 —— 必须先干净，才谈得上把角色拆出来。
+        </p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico a">后续</span>把"角色"这一层拆出来</div>
+        <p>
+          在本次建立的地基上，把"角色"从 Agent 身上剥离成独立实体，并按岗位重排提示词。
+          由后续四份计划依次完成。
+        </p>
+      </div>
+    </div>
+
+    <div class="callout info" style="margin-top:18px">
+      <div class="t">为什么本次必须排在最前</div>
+      <p>
+        后续四份计划都会改同一批文件（角色边界常量、Agent 策略产物、worker 权限守卫）。
+        如果先做角色拆分、再回头做权限下放，同一批文件要改两遍，且中间态难以验证。
+        先把权限层统一，后续四份在一个干净的地基上做角色拆分。
+      </p>
+    </div>
+
+    <h3>后续四份计划一览</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr><th class="ctr" style="min-width:52px">顺序</th><th style="min-width:230px">计划</th><th>它解决什么</th><th style="min-width:250px">你会看到</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="ctr"><span class="b mut">1</span></td>
+            <td><code>agent-native-permission-editor</code></td>
+            <td>新建的 Agent 不该只会"读"；权限要能在页面上改</td>
+            <td>新建 Agent 时可选岗位并继承其能力；四个基础权限行变成可编辑</td>
+          </tr>
+          <tr>
+            <td class="ctr"><span class="b mut">2</span></td>
+            <td><code>agent-role-entity</code></td>
+            <td>"角色"成为独立实体，不再只是 Agent 上的一个字符串</td>
+            <td>出现可管理的岗位列表；团队成员改为"角色 + Agent"二元绑定；提示词拆成 角色／Agent／平台 三段</td>
+          </tr>
+          <tr>
+            <td class="ctr"><span class="b mut">3</span></td>
+            <td><code>third-party-agent-display</code></td>
+            <td>外部（非 vteam）Agent 的可见性与诚实标注</td>
+            <td>外部 Agent 在团队里可见可选，明确标注"不受 vteam 权限约束"，只读展示</td>
+          </tr>
+          <tr>
+            <td class="ctr"><span class="b mut">4</span></td>
+            <td><code>agent-role-decommission</code></td>
+            <td>删掉 Agent 上遗留的旧"角色"字符串列</td>
+            <td>所有按名字/角色字符串的特判消失；岗位靠角色实体、能力靠策略、引擎名靠显式绑定</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout warn">
+      <div class="t">一句话总结</div>
+      <p>
+        <strong>本次（第五份）</strong>解决"<em>谁能做</em>"—— 把决定权交给 Agent 的工具权限。<br>
+        <strong>后续四份</strong>解决"<em>谁是谁</em>"—— 把角色从 Agent 身上剥成独立的岗位定义。<br>
+        合起来才是完整的"角色 / Agent / 能力"三层分离。
+      </p>
+    </div>
+
+    <h3>做完之后的页面长什么样</h3>
+    <p style="font-size:14.5px;margin:0 0 12px">
+      已在 md-docs 文档站新增原型 <code>agent-capability</code>（Agent 能力与权限），
+      页面即按"岗位 ① / 执行单元 ② / 能力 ③"三段排布，并带一张 7 岗位 × 8 关键工具的授权总览。
+      在文档站「原型」tab 或 <code>docs/agent-platform/prototypes/agent-capability/</code> 查看。
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="num">验收</span>怎么证明"真的生效了"</h2>
+    <p class="sub">不是靠"改完了"的口头结论，而是可执行的证据。</p>
+    <div class="grid two">
+      <div class="mini">
+        <div class="h"><span class="ico b">1</span>角色 × 工具 全矩阵</div>
+        <p>对 7 个角色 × 全部工具，逐格断言"允许/拒绝"，<strong>含拒绝格</strong>。既证明有权限的能用，也证明没权限的仍被拦。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico b">2</span>保留项逐条证明</div>
+        <p>终态保护、验收职守、通知路由、全局记忆范围、计划哈希 —— 每一条都有断言，附错误码。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico a">3</span>两种失效模式的变异测试</div>
+        <p>故意制造"人人全能"与"全员被拒"两种坏状态，确认测试会变红 —— 证明测试真的能发现问题。</p>
+      </div>
+      <div class="mini">
+        <div class="h"><span class="ico a">4</span>中间提交历史检查</div>
+        <p>断言提交历史里<strong>不存在</strong>"拆了服务端门禁但豁免还在"的全能中间态。</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">范围</span>这次做 / 这次不做</h2>
+    <div class="grid two">
+      <div class="card" style="border-color:#c6ecd8">
+        <h3 style="margin-top:0;color:var(--green)">✓ 这次做</h3>
+        <ul class="clean">
+          <li>拆掉 7 个工具、11 处服务端身份拒绝点</li>
+          <li>取消"计划状态必须 executing 才能派发"，保留计划哈希校验</li>
+          <li>把工具授权按角色写进权限表（含开 issue 的能力）</li>
+          <li>新增"托管确认"的两条完整性校验</li>
+          <li>回填数据库里的策略行，让改动真正在生产生效</li>
+          <li>更新会因此变红的冻结基线，并留下变更清单</li>
+        </ul>
+      </div>
+      <div class="card" style="border-color:#f2c9c9">
+        <h3 style="margin-top:0;color:var(--red)">✗ 这次不做</h3>
+        <ul class="clean">
+          <li>不动协作语义：通知路由、无 @ 默认收信人、主/非主提示词差异、回执收敛</li>
+          <li>不动终态任务保护与验收/归档职守</li>
+          <li>不动全局记忆写入范围与计划哈希校验</li>
+          <li>不动通知节流与 issue 去重锁</li>
+          <li>不做角色（Role）实体拆分 —— 那是后续四份计划的事，它们会建立在这份之上</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="callout info">
+      <div class="t">与后续计划的关系</div>
+      <p>
+        这份计划<strong>排在最前</strong>执行。之后那四份（权限编辑器、角色实体、三方 Agent 展示、角色下架）
+        都依赖它建立的权限层。先做这份可避免把同一批文件改两遍。
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    <p>
+      计划文件：<code style="font-family:var(--mono);font-size:12px">.omo/plans/server-gate-removal-tool-authority.md</code><br>
+      状态：已通过 momus + oracle 双评审（4 轮）· 尚未执行<br>
+      本说明为决策辅助材料，未改动任何产品代码
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,25 @@
+instruction parity check (post-split)
+  oracle   : .omo/evidence/agent-role-entity/task-2-classification.json
+  role     : server/src/common/constants/agent-role-prompts.constants.ts
+  agent    : server/prisma/seed.ts
+  platform : server/src/chat/worker-dispatcher.ts
+
+  pre-split lines by destination (oracle):
+    role=97 agent=92 platform=55 removed-intentionally=20 total=264
+  post-split live content:
+    role prompts=7 agent prompts=7 platform constant lines=9 (unique content 9)
+    platform oracle occurrences 55 collapse to 9 shared constant lines
+
+  LOST        : 0
+  DUPLICATED  : 0
+  UNACCOUNTED : 0
+  removed-intentionally still present in live content : 0
+  platform text still inside an agent/role prompt     : 0
+  canonical pointer missing                           : 0
+  role prompt byte-rebuild mismatches                 : 0
+  agent prompt byte-rebuild mismatches                : 0
+  platform content not in shared constant             : 0
+  documented additive pointer agents                  : plan
+  oracle removed-intentionally enumerated             : 20
+
+OK: 0 lost, 0 duplicated, 0 unaccounted — every pre-split line lands in exactly one destination.

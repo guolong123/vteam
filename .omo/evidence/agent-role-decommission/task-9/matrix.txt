@@ -1,0 +1,67 @@
+BEFORE=/tmp/vteam-pre/server (pre-drop DB: 29 members / 12 agents / 10 teams)
+AFTER =/Volumes/SSD-Data/01work/git-project/vteam/server (migrated DB: 29 members / 12 agents / 10 teams)
+
+== PER-MEMBER BEFORE -> AFTER (4 proof values + 2 migrated consumers) ==
+(the `seeded` column is YES for the 28 members restored from the pre-drop dump; the one NO row is the
+ inject.sql custom-role member, reported separately at the end)
+seeded | member | team | agent | role(before) | policyId | opencodeAgent | planDuty | issueDetail | memorySupp | artifactSupp | alias | all-identical
+NO | tm_0000000001|tmm_t9_analyst | a_0000000001 | analyst | ep_0000000001 | vteam-myagent -> vteam-myagent | execute -> execute | false -> false | true -> true | true -> true | myagent-1 -> analyst-1 (stored=null) | NO {"derivedAlias":false}
+YES | tm_0000000001|tmm_0000000003 | a_architect | architect | ep_architect | vteam-architect -> vteam-architect | execute -> execute | false -> false | false -> false | false -> false | 架构师-1 -> 架构师-1 (stored=架构师-1) | YES
+YES | tm_0000000001|tmm_0000000004 | a_developer | developer | ep_developer | vteam-developer -> vteam-developer | execute -> execute | true -> true | false -> false | false -> false | 开发者-1 -> 开发者-1 (stored=开发者-1) | YES
+YES | tm_0000000001|tmm_0000000007 | a_librarian | librarian | ep_librarian | vteam-librarian -> vteam-librarian | execute -> execute | false -> false | true -> true | true -> true | 知识管理员-1 -> 知识管理员-1 (stored=知识管理员-1) | YES
+YES | tm_0000000001|tmm_0000000006 | a_plan | plan | ep_plan | vteam-plan -> vteam-plan | plan -> plan | false -> false | true -> true | true -> true | 计划员-1 -> 计划员-1 (stored=计划员-1) | YES
+YES | tm_0000000001|tmm_0000000001 | a_product | product | ep_product | vteam-product -> vteam-product | execute -> execute | true -> true | false -> false | false -> false | 产品经理-1 -> 产品经理-1 (stored=产品经理-1) | YES
+YES | tm_0000000001|tmm_0000000002 | a_project_manager | project_manager | ep_project_manager | vteam-project_manager -> vteam-project_manager | execute -> execute | false -> false | false -> false | true -> true | 项目经理-1 -> 项目经理-1 (stored=项目经理-1) | YES
+YES | tm_0000000001|tmm_0000000005 | a_tester | tester | ep_tester | vteam-tester -> vteam-tester | execute -> execute | true -> true | false -> false | false -> false | 测试-1 -> 测试-1 (stored=测试-1) | YES
+YES | tm_0000000002|tmm_0000000012 | a_architect | architect | ep_architect | vteam-architect -> vteam-architect | execute -> execute | false -> false | false -> false | false -> false | 架构师-1 -> 架构师-1 (stored=架构师-1) | YES
+YES | tm_0000000002|tmm_0000000009 | a_developer | developer | ep_developer | vteam-developer -> vteam-developer | execute -> execute | true -> true | false -> false | false -> false | 开发者-1 -> 开发者-1 (stored=开发者-1) | YES
+YES | tm_0000000002|tmm_0000000011 | a_plan | plan | ep_plan | vteam-plan -> vteam-plan | plan -> plan | false -> false | true -> true | true -> true | 计划员-1 -> 计划员-1 (stored=计划员-1) | YES
+YES | tm_0000000002|tmm_0000000008 | a_project_manager | project_manager | ep_project_manager | vteam-project_manager -> vteam-project_manager | execute -> execute | false -> false | false -> false | true -> true | 项目经理-1 -> 项目经理-1 (stored=项目经理-1) | YES
+YES | tm_0000000002|tmm_0000000010 | a_tester | tester | ep_tester | vteam-tester -> vteam-tester | execute -> execute | true -> true | false -> false | false -> false | 测试-1 -> 测试-1 (stored=测试-1) | YES
+YES | tm_0000000002|tmm_0000000034 | a_tester | tester | ep_tester | vteam-tester -> vteam-tester | execute -> execute | true -> true | false -> false | false -> false | 测试-2 -> 测试-2 (stored=测试-2) | YES
+YES | tm_0000000006|tmm_0000000021 | a_plan | plan | ep_plan | vteam-plan -> vteam-plan | plan -> plan | false -> false | true -> true | true -> true | 计划员-1 -> 计划员-1 (stored=计划员-1) | YES
+YES | tm_0000000006|tmm_0000000018 | a_product | product | ep_product | vteam-product -> vteam-product | execute -> execute | true -> true | false -> false | false -> false | 产品经理-1 -> 产品经理-1 (stored=产品经理-1) | YES
+YES | tm_0000000006|tmm_0000000019 | a_project_manager | project_manager | ep_project_manager | vteam-project_manager -> vteam-project_manager | execute -> execute | false -> false | false -> false | true -> true | 项目经理-1 -> 项目经理-1 (stored=项目经理-1) | YES
+YES | tm_0000000006|tmm_0000000020 | a_tester | tester | ep_tester | vteam-tester -> vteam-tester | execute -> execute | true -> true | false -> false | false -> false | 测试-1 -> 测试-1 (stored=测试-1) | YES
+YES | tm_0000000008|tmm_0000000023 | a_architect | architect | ep_architect | vteam-architect -> vteam-architect | execute -> execute | false -> false | false -> false | false -> false | 架构师-1 -> 架构师-1 (stored=架构师-1) | YES
+YES | tm_0000000009|tmm_0000000024 | a_architect | architect | ep_architect | vteam-architect -> vteam-architect | execute -> execute | false -> false | false -> false | false -> false | 架构师-1 -> 架构师-1 (stored=架构师-1) | YES
+YES | tm_0000000010|tmm_0000000025 | a_architect | architect | ep_architect | vteam-architect -> vteam-architect | execute -> execute | false -> false | false -> false | false -> false | 架构师-1 -> 架构师-1 (stored=架构师-1) | YES
+YES | tm_0000000012|tmm_0000000027 | a_architect | architect | ep_architect | vteam-architect -> vteam-architect | execute -> execute | false -> false | false -> false | false -> false | 架构师-1 -> 架构师-1 (stored=架构师-1) | YES
+YES | tm_0000000013|tmm_0000000028 | a_architect | architect | ep_architect | vteam-architect -> vteam-architect | execute -> execute | false -> false | false -> false | false -> false | 架构师-1 -> 架构师-1 (stored=架构师-1) | YES
+YES | tm_0000000015|tmm_0000000030 | a_architect | architect | ep_architect | vteam-architect -> vteam-architect | execute -> execute | false -> false | false -> false | false -> false | 架构师-1 -> 架构师-1 (stored=架构师-1) | YES
+YES | tm_0000000029|tmm_0000000050 | a_developer | developer | ep_developer | vteam-developer -> vteam-developer | execute -> execute | true -> true | false -> false | false -> false | 开发者-1 -> 开发者-1 (stored=开发者-1) | YES
+YES | tm_0000000029|tmm_0000000051 | a_plan | plan | ep_plan | vteam-plan -> vteam-plan | plan -> plan | false -> false | true -> true | true -> true | 计划员-1 -> 计划员-1 (stored=计划员-1) | YES
+YES | tm_0000000029|tmm_0000000052 | a_product | product | ep_product | vteam-product -> vteam-product | execute -> execute | true -> true | false -> false | false -> false | 产品经理-1 -> 产品经理-1 (stored=产品经理-1) | YES
+YES | tm_0000000029|tmm_0000000048 | a_project_manager | project_manager | ep_project_manager | vteam-project_manager -> vteam-project_manager | execute -> execute | false -> false | false -> false | true -> true | 项目经理-1 -> 项目经理-1 (stored=项目经理-1) | YES
+YES | tm_0000000029|tmm_0000000049 | a_tester | tester | ep_tester | vteam-tester -> vteam-tester | execute -> execute | true -> true | false -> false | false -> false | 测试-1 -> 测试-1 (stored=测试-1) | YES
+
+== PER-AGENT ==
+a_0000000001 | myagent | analyst | ep_0000000001 | vteam-myagent -> vteam-myagent | execute -> execute | issueDetail false -> false | YES
+a_0000000002 | t4-dev-t4-mu8fnf18 | <null> | ep_0000000002 | vteam-t4-dev-t4-mu8fnf18 -> vteam-t4-dev-t4-mu8fnf18 | execute -> execute | issueDetail false -> false | YES
+a_0000000004 | t4-dev-t4-mu8fnzad | <null> | ep_0000000004 | vteam-t4-dev-t4-mu8fnzad -> vteam-t4-dev-t4-mu8fnzad | execute -> execute | issueDetail false -> false | YES
+a_t9_nokey | <null> | archivist | <null> | <none> -> <none> | execute -> execute | issueDetail false -> false | YES
+a_t9_nopolicy | nopolicy-t9 | <null> | <null> | vteam-nopolicy-t9 -> vteam-nopolicy-t9 | execute -> execute | issueDetail false -> false | YES
+a_architect | architect | architect | ep_architect | vteam-architect -> vteam-architect | execute -> execute | issueDetail false -> false | YES
+a_developer | developer | developer | ep_developer | vteam-developer -> vteam-developer | execute -> execute | issueDetail true -> true | YES
+a_librarian | librarian | librarian | ep_librarian | vteam-librarian -> vteam-librarian | execute -> execute | issueDetail false -> false | YES
+a_plan | plan | plan | ep_plan | vteam-plan -> vteam-plan | plan -> plan | issueDetail false -> false | YES
+a_product | product | product | ep_product | vteam-product -> vteam-product | execute -> execute | issueDetail true -> true | YES
+a_project_manager | project_manager | project_manager | ep_project_manager | vteam-project_manager -> vteam-project_manager | execute -> execute | issueDetail false -> false | YES
+a_tester | tester | tester | ep_tester | vteam-tester -> vteam-tester | execute -> execute | issueDetail true -> true | YES
+
+== PER-TEAM plan-mode decision (duty disjunct; identical expression both sides) ==
+tm_0000000001 | mainMember=tmm_0000000002 | mainAgentKey=project_manager | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+tm_0000000002 | mainMember=tmm_0000000008 | mainAgentKey=project_manager | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+tm_0000000006 | mainMember=tmm_0000000019 | mainAgentKey=project_manager | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+tm_0000000008 | mainMember=<null> | mainAgentKey=<null> | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+tm_0000000009 | mainMember=<null> | mainAgentKey=<null> | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+tm_0000000010 | mainMember=<null> | mainAgentKey=<null> | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+tm_0000000012 | mainMember=<null> | mainAgentKey=<null> | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+tm_0000000013 | mainMember=<null> | mainAgentKey=<null> | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+tm_0000000015 | mainMember=<null> | mainAgentKey=<null> | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+tm_0000000029 | mainMember=tmm_0000000048 | mainAgentKey=project_manager | opencodeAgent=<null> | mainDuty=execute | effectivePlanDisjunct=false | YES
+
+SUMMARY rows 28/29 identical | SEEDED members 28/28 identical (acceptance) | agents 12/12 | teams 10/10
+INJECTED-ROW tm_0000000001|tmm_t9_analyst: identical=false differs-on=derivedAlias
+stored-alias mismatches: NONE
+PROBLEMS: NONE

@@ -1,0 +1,112 @@
+{
+  "generatedAt": "2026-09-20T00:21:39.779Z",
+  "team": "tm_0000000001",
+  "members": [
+    {
+      "memberId": "tmm_0000000003",
+      "alias": "架构师-1",
+      "agentKey": "architect",
+      "roleKey": "architect",
+      "policyId": "ep_architect",
+      "resolvedTools_memorySave": "allow",
+      "resolvedTools_submitArtifact": "allow",
+      "memorySectionPresent": true,
+      "artifactSectionPresent": true,
+      "identityLine": "【你的身份】你是本任务的 架构师-1（实例 id: tmm_0000000003，角色: architect）。调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（tmm_0000000003）。",
+      "systemLength": 3384
+    },
+    {
+      "memberId": "tmm_0000000004",
+      "alias": "开发者-1",
+      "agentKey": "developer",
+      "roleKey": "developer",
+      "policyId": "ep_developer",
+      "resolvedTools_memorySave": "allow",
+      "resolvedTools_submitArtifact": "allow",
+      "memorySectionPresent": true,
+      "artifactSectionPresent": true,
+      "identityLine": "【你的身份】你是本任务的 开发者-1（实例 id: tmm_0000000004，角色: developer）。调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（tmm_0000000004）。",
+      "systemLength": 3569
+    },
+    {
+      "memberId": "tmm_0000000007",
+      "alias": "知识管理员-1",
+      "agentKey": "librarian",
+      "roleKey": "librarian",
+      "policyId": "ep_librarian",
+      "resolvedTools_memorySave": null,
+      "resolvedTools_submitArtifact": null,
+      "memorySectionPresent": false,
+      "artifactSectionPresent": false,
+      "identityLine": "【你的身份】你是本任务的 知识管理员-1（实例 id: tmm_0000000007，角色: librarian）。调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（tmm_0000000007）。",
+      "systemLength": 3220
+    },
+    {
+      "memberId": "tmm_0000000006",
+      "alias": "计划员-1",
+      "agentKey": "plan",
+      "roleKey": "plan",
+      "policyId": "ep_plan",
+      "resolvedTools_memorySave": null,
+      "resolvedTools_submitArtifact": null,
+      "memorySectionPresent": false,
+      "artifactSectionPresent": false,
+      "identityLine": "【你的身份】你是本任务的 计划员-1（实例 id: tmm_0000000006，角色: plan）。调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（tmm_0000000006）。",
+      "systemLength": 3698
+    },
+    {
+      "memberId": "tmm_0000000001",
+      "alias": "产品经理-1",
+      "agentKey": "product",
+      "roleKey": "product",
+      "policyId": "ep_product",
+      "resolvedTools_memorySave": "allow",
+      "resolvedTools_submitArtifact": "allow",
+      "memorySectionPresent": true,
+      "artifactSectionPresent": true,
+      "identityLine": "【你的身份】你是本任务的 产品经理-1（实例 id: tmm_0000000001，角色: product）。调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（tmm_0000000001）。",
+      "systemLength": 3578
+    },
+    {
+      "memberId": "tmm_0000000002",
+      "alias": "项目经理-1",
+      "agentKey": "project_manager",
+      "roleKey": "project_manager",
+      "policyId": "ep_project_manager",
+      "resolvedTools_memorySave": "allow",
+      "resolvedTools_submitArtifact": null,
+      "memorySectionPresent": true,
+      "artifactSectionPresent": false,
+      "identityLine": "【你的身份】你是本任务的 项目经理-1（实例 id: tmm_0000000002，角色: project_manager）。调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（tmm_0000000002）。",
+      "systemLength": 4270
+    },
+    {
+      "memberId": "tmm_0000000005",
+      "alias": "测试-1",
+      "agentKey": "tester",
+      "roleKey": "tester",
+      "policyId": "ep_tester",
+      "resolvedTools_memorySave": "allow",
+      "resolvedTools_submitArtifact": "allow",
+      "memorySectionPresent": true,
+      "artifactSectionPresent": true,
+      "identityLine": "【你的身份】你是本任务的 测试-1（实例 id: tmm_0000000005，角色: tester）。调用 vteam MCP 工具时 selfInstanceId 参数必须填写你的实例 id（tmm_0000000005）。",
+      "systemLength": 3554
+    }
+  ],
+  "workerGuard": {
+    "note": "shipped evaluateToolCall(); vteam-plan literal vs renamed planner, same policy tools",
+    "literal_plan_task": {
+      "action": "allow"
+    },
+    "renamed_plan_task": {
+      "action": "allow"
+    },
+    "renamed_vteam_agent_task": {
+      "action": "allow"
+    },
+    "duty_vteam_plan": "plan",
+    "duty_prometheus": "plan",
+    "duty_vteam_myplanner": "execute"
+  }
+}

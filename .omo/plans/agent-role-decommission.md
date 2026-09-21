@@ -153,7 +153,15 @@ Your next move: run `$start-work agent-role-decommission` to execute, or ask for
   QA scenarios: happy — the full suite still green after deletions; failure — an accidental deletion of a still-used helper fails the build (proving the reference check is real). Evidence `.omo/evidence/agent-role-decommission/task-8-cleanup.txt`
   Commit: Y | `refactor: remove role-based helpers and duplicate role maps`
 
-- [ ] 9. [proof] Populated-DB migration + live behaviour-preservation regression
+- [x] 9. [proof] Clean-rebuild verification: fresh chain + live behaviour preservation
+  **RE-SCOPED (orchestrator, 2026-09-20, at the user's explicit instruction: "可以清理数据后再验证，避免老数据兼容问题，docker-compose down -v").** The original populated-DB BEFORE/AFTER matrix proved upgrade-path compatibility, which the user has explicitly declared unnecessary ("不需要考虑兼容"). New scope — verify the TARGET STATE on a clean install:
+  (a) **Wipe + rebuild**: `docker compose down -v` (drops mysql_data, uploads_data, vteam_worker_data, worker_home), then `docker compose up -d --build`. A safety dump of the pre-wipe DB exists at `.omo/evidence/agent-role-decommission/pre-wipe-dump.sql` (sha256 `fce32e58436b70443d89b03ffba53f4b4747c9ded44237349a4ef77d1ab5caa7`); the prior pre-drop dump remains at `pre-migration-dump.sql`. Record both.
+  (b) **Fresh chain applies cleanly**: `init` runs `prisma migrate deploy` + seed and must succeed — every migration (incl. `20260919000010_drop_agents_role`) applied, seed exit 0, no `Unknown argument 'role'`. On a fresh DB the migration's backfill is a no-op (agents table is empty pre-seed) — state that explicitly so the no-op is understood, not hidden.
+  (c) **Target-state assertions on the fresh DB**: `agents.role` column ABSENT; every agent has `policy_id` non-null; templates have `agent_key = role`; `AgentRole` rows present (7 builtins incl. `defaultAgentId`); all team members have non-null `role_id`; `SELECT COUNT(*) FROM agents WHERE policy_id IS NULL` = 0.
+  (d) **Behaviour on the fresh stack**: `/agent-policies` 7 built-ins **byte-identical** to the frozen baseline (sha `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87`); a seeded member resolves the same alias label (`产品经理-1`) and opencode name (`vteam-product`); the live planner path works (literal `vteam-plan`); assembled instructions for a seeded member render (role/agent/platform once each, role label key-derived).
+  (e) **Server-side plan gate with a renamed plan-duty agent** (bounded claim): the SERVER selects/gates a plan-duty agent regardless of name; **explicitly state** the worker guard still allows `task` only for the literal `vteam-plan`, so do NOT claim an end-to-end renamed-planner fan-out (review fix m3).
+  Must NOT modify the frozen baseline. Must NOT leave scratch DBs/volumes behind. Evidence `.omo/evidence/agent-role-decommission/task-9-proof.txt`
+  Commit: Y | `test(e2e): prove role decommission on a clean rebuild`
   What to do / Must NOT do: The closing proof. (a) Run the full migration chain against a DB that HAS existing `agent.role` values, including at least one custom value, and assert every consumer resolves correctly; (b) capture BEFORE values (for each seeded member: resolved policy, resolved opencode agent name, plan-mode decision, alias label) and assert AFTER equality; (c) re-run the byte-identity harness and confirm the frozen sha is unchanged; (d) verify the **server-side** plan selection + gate decision for a renamed plan-duty agent, and run the LIVE planner proof with a literal `vteam-plan` agent — **do NOT claim a renamed planner can fan out sub-agents** (the worker guard keeps the `vteam-plan` literal; review fix m3); (e) execute the rollback once on a copy and record it. Must NOT test only on a fresh DB. Must NOT modify the frozen baseline. Must NOT state an end-to-end renamed-planner result the worker cannot produce.
   Parallelization: Wave 4 | Blocked by: 8 | Blocks: F1-F4
   References: `.omo/evidence/vteam-role-behavior-abstraction/before-agent-policies.json` (sha `3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87` — see the correction note in the guardrails section), `scripts/e2e-role-boundaries.sh` (the frozen-sha gate + scenario harness), `server/prisma/migrations/` (the new drop migration), the plan's own consumer map (todo 1), `worker/src/role-guard/policy.ts:189-199` (the worker literal that limits the claim)
@@ -178,10 +186,10 @@ Your next move: run `$start-work agent-role-decommission` to execute, or ask for
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit ok before declaring complete.
-- [ ] F1. Plan compliance audit
-- [ ] F2. Code quality review
-- [ ] F3. Real manual QA
-- [ ] F4. Scope fidelity
+- [x] F1. Plan compliance audit
+- [x] F2. Code quality review
+- [x] F3. Real manual QA
+- [x] F4. Scope fidelity
 
 ## Commit strategy
 - One commit per todo; prefix `feat|refactor|test|docs(<scope>): <summary>`.

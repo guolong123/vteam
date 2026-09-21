@@ -173,7 +173,7 @@ Your next move: run `$start-work server-gate-removal-tool-authority` to execute,
   QA scenarios: happy — both suites green with the new baselines and the recorded inversion list; failure — restoring an old assertion makes the suite red, and a deliberately regenerated baseline without updating the sha constant fails the e2e sha gate (both recorded). Evidence `.omo/evidence/server-gate-removal-tool-authority/task-7-rebaseline.txt`
   Commit: Y | `test(permissions): re-baseline the frozen permission artifacts`
 
-- [ ] 8. [e2e] Rewrite the permission e2e scripts and fix the pre-existing count inconsistency
+- [x] 8. [e2e] Rewrite the permission e2e scripts and fix the pre-existing count inconsistency
   What to do / Must NOT do: Rewrite the assertions in the permission e2e scripts so they assert the NEW behaviour instead of the removed gates: the role×tool allow/deny matrix from the worker guard, and the absence of the server identity refusals. **Cover all three scripts that touch the gate model, not two:** `scripts/e2e-permission-matrix.sh` (the live guard matrix + the server-gate assertions + the count assertion), `scripts/e2e-role-boundaries.sh` (the frozen-sha gate and the injected-artifact scenarios), and `scripts/e2e-plan-member.sh` (its parity logic asserts that baseline-only deny keys are "guard-moved or server-gated" — after the inversion, non-granted roles gain NEW layer-① deny keys for `task_create`/`plan_complete`/`skill_create` that are absent from its `F3-own` baseline, so `assert not added` fails; reconcile it with the regenerated baseline or update its expectation). Fix the pre-existing inconsistency where the gated-set assertion counts a different number than the source defines (the script asserts a smaller count than the constant actually has) — derive the expected value from the source rather than hard-code it, so it cannot drift again; if todo 4 removed the constant entirely, derive the expectation from the grant matrix in the constants instead. Keep the frozen-sha gate wired to the regenerated baseline from todo 7. Must NOT delete an e2e script. Must NOT weaken the sha gate. Must NOT leave a hard-coded gated-tool count anywhere.
   Parallelization: Wave 3 | Blocked by: 7 | Blocks: 9,10,11
   References: `scripts/e2e-permission-matrix.sh` (the live guard matrix, the server-gate assertions, the count assertion), `scripts/e2e-role-boundaries.sh` (the frozen-sha gate and the injected-artifact scenarios), `scripts/e2e-plan-member.sh` (the parity/"server-gated" expectation and its `.omo/evidence/role-enforcement/F3-own/` baseline), `worker/src/role-guard/policy.ts`, `server/src/common/constants/agent.constants.ts`
@@ -181,7 +181,7 @@ Your next move: run `$start-work server-gate-removal-tool-authority` to execute,
   QA scenarios: happy — all three scripts green with derived counts and the new matrix; failure — temporarily hard-coding a wrong count makes the script fail, and pointing the sha gate at the old baseline fails (both recorded). Evidence `.omo/evidence/server-gate-removal-tool-authority/task-8-e2e.txt`
   Commit: Y | `test(e2e): assert the tool-authority matrix, not the removed gates`
 
-- [ ] 9. [proof] Executable role×tool matrix: worker allow/deny and server no-longer-refuses
+- [x] 9. [proof] Executable role×tool matrix: worker allow/deny and server no-longer-refuses
   What to do / Must NOT do: Produce the central falsifiable proof of the whole plan as a single checked-in matrix. For every role × every tool in the grant matrix, assert (i) the worker guard's decision (`allow`/`deny`) matches the recorded expectation, and (ii) for the formerly main-only tools, a **non-main** team member's call no longer returns the server identity refusal. Include the negative cells explicitly (a role that must NOT hold a tool is denied), and exercise the main-Agent happy path end to end (create task → transition → plan mode → plan complete → mark pending review). Must NOT assert only the allow cells. Must NOT rely on a mocked worker guard for the server half — use the real evaluation path. Must NOT claim success from a log; assert the decision values.
   Parallelization: Wave 4 | Blocked by: 8 | Blocks: 12
   References: `worker/src/role-guard/policy.ts` (`evaluateToolCall`), `server/src/common/constants/agent.constants.ts` (the grant matrix), `server/src/platform-mcp/platform-mcp.service.ts` (the de-gated methods), `server/src/platform-mcp/platform-mcp.service.spec.ts`, `scripts/e2e-permission-matrix.sh`, `server/src/execution-policies/agent-policies.matrix.spec.ts`
@@ -189,7 +189,7 @@ Your next move: run `$start-work server-gate-removal-tool-authority` to execute,
   QA scenarios: happy — every cell matches and the happy path completes; failure — changing one role's granted tool in the fixtures makes exactly the corresponding cell fail (mutation check, recorded). Evidence `.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json`
   Commit: Y | `test(permissions): prove the role-by-tool authority matrix`
 
-- [ ] 10. [proof] Prove the retained checks still refuse, and that the new integrity checks hold
+- [x] 10. [proof] Prove the retained checks still refuse, and that the new integrity checks hold
   What to do / Must NOT do: Prove that every retained server-side check is untouched, each with its exact error code: notify routing (self-notify AND non-main→non-main both still refused), the terminal-task execution-dispatch refusal, the accept/archive refusal at both sites, the global-memory write scope, and **`hook_cancel`'s owner-or-main refusal** (`PLATFORM_MCP_ERRORS.FORBIDDEN`). Also assert the plan-revision hash check still refuses a stale hash (per todo 3), **including for a plan-role target** (the exemption was removed precisely so the hash runs there too). **Also prove the two new integrity checks added in todo 2 for `question_confirm`:** (i) an agent cannot confirm a request it raised itself, and (ii) an agent cannot confirm a request belonging to a different task/team — each asserted to be refused, with the new error/reason recorded. Must NOT assert a retained check by message text alone where a code exists. Must NOT convert a retained refusal into a warning. Must NOT leave the `question_confirm` self-approval / cross-task confirmation gap unproven.
   Parallelization: Wave 4 | Blocked by: 8 | Blocks: 12
   References: `server/src/platform-mcp/platform-mcp.service.ts` (routing, accept/archive, memory scope), `server/src/tasks/tasks.service.ts` (accept/archive), `server/src/chat/worker-dispatcher.ts` (terminal gate, hash check), `server/src/issues/plan-hash-gate.ts`, `server/src/platform-mcp/platform-mcp.service.spec.ts`, `server/src/chat/worker-dispatcher.gate.spec.ts`, `server/src/platform-mcp/platform-mcp.service.reply-join.spec.ts`
@@ -197,7 +197,7 @@ Your next move: run `$start-work server-gate-removal-tool-authority` to execute,
   QA scenarios: happy — every retained check plus the hash check and both integrity checks refuse as documented; failure — removing one retained check makes exactly its assertion fail (mutation check, recorded). Evidence `.omo/evidence/server-gate-removal-tool-authority/task-10-retained.json`
   Commit: Y | `test(permissions): lock the retained server-side checks`
 
-- [ ] 11. [proof] Record both failure-mode mutation checks
+- [x] 11. [proof] Record both failure-mode mutation checks
   What to do / Must NOT do: Demonstrate that the test suite can actually catch the two catastrophic failure modes, and record both experiments: (a) restore the `SERVER_GATED_SET` exemption while keeping the server gates removed, and show the "non-granted role is denied" assertion fails (the all-powerful mode); (b) remove the exemption without adding the per-role grants, and show the "granted role is allowed" assertion fails (the deny-all mode). Each experiment is reverted after recording, and the unreverted tree is proven identical to before. Must NOT leave either experiment in the tree. Must NOT record a mutation check without the failing assertion output.
   Parallelization: Wave 4 | Blocked by: 8 | Blocks: 12
   References: `server/src/common/constants/agent.constants.ts` (`defineBoundary`, `ROLE_BOUNDARIES`), `worker/src/role-guard/policy.ts`, `worker/src/role-guard/policy.spec.ts`, the task-9 matrix artifact, `server/src/execution-policies/agent-policies.matrix.spec.ts`
@@ -205,7 +205,7 @@ Your next move: run `$start-work server-gate-removal-tool-authority` to execute,
   QA scenarios: happy — both mutations are caught by the named assertions and the revert restores green; failure — a mutation that does NOT fail the suite is itself recorded as a gap and the missing assertion is added. Evidence `.omo/evidence/server-gate-removal-tool-authority/task-11-mutation.txt`
   Commit: Y | `test(permissions): mutation-prove both authority failure modes`
 
-- [ ] 12. [docs] Correct the permission documentation to the new invariant
+- [x] 12. [docs] Correct the permission documentation to the new invariant
   What to do / Must NOT do: Update the design docs that describe the permission model so they state the new invariant: the worker guard is the single source for tool permission; the server retains flow-state legality, topology routing, human-authority, and resource-scope checks; and list the retained checks with their codes. Remove or correct any statement that agents are restricted by a server-side identity gate. Record the grant matrix where the model is described. Must NOT document an aspirational behaviour that the code does not implement. Must NOT leave a doc claiming the plan-status gate still blocks dispatch. Must NOT touch unrelated docs.
   Parallelization: Wave 5 | Blocked by: 9,10,11 | Blocks: F1-F4
   References: `docs/agent-platform/` (the permission/role docs; the doc that describes the server gate and the `/agent-policies` contract), `server/src/common/constants/agent.constants.ts` (the grant matrix), `server/src/gates/gate-spec-registry.ts` (the retained gate inventory), `.omo/evidence/server-gate-removal-tool-authority/task-1-change-map.txt`
@@ -215,10 +215,10 @@ Your next move: run `$start-work server-gate-removal-tool-authority` to execute,
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit ok before declaring complete.
-- [ ] F1. Plan compliance audit
-- [ ] F2. Code quality review
-- [ ] F3. Real manual QA
-- [ ] F4. Scope fidelity
+- [x] F1. Plan compliance audit
+- [x] F2. Code quality review
+- [x] F3. Real manual QA
+- [x] F4. Scope fidelity
 
 ## Commit strategy
 - **Todos 2-7 are ONE commit.** They are the atomic authority flip: the constants+grants+worker change (4), the server gate removals (2,3), the DB backfill (5), the `serverGated` retirement (6), and the baseline regeneration (7) are mutually dependent and MUST land together. A proper subset leaves the tree all-powerful (server gates gone, exemption still live) or deny-all (exemption gone, grants missing) and red (frozen specs still pin the old bytes). The numbered todos are review units, not commits.

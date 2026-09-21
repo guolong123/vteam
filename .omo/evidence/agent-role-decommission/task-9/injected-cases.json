@@ -1,0 +1,7 @@
+{
+  "roleOf": {
+    "a_0000000001": "analyst",
+    "a_t9_nokey": "archivist"
+  },
+  "note": "injected by inject.sql; AFTER side cannot read the dropped column"
+}

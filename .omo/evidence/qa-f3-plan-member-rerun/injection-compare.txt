@@ -1,0 +1,10 @@
+vteam-plan: mode=all task=allow edit={'*': 'deny', '**.opencode/plans/**': 'allow'}
+vteam-plan: no layer-1 vteam_group_post key (guard-allowlisted)
+live roles.json: vteam-plan guard tools vteam_group_post=allow
+vteam-product: parity ok (retained keys identical; 0 baseline-only deny keys split-aware)
+vteam-architect: parity ok (retained keys identical; 0 baseline-only deny keys split-aware)
+vteam-developer: parity ok (retained keys identical; 0 baseline-only deny keys split-aware)
+vteam-tester: parity ok (retained keys identical; 0 baseline-only deny keys split-aware)
+vteam-project_manager: parity ok (retained keys identical; 0 baseline-only deny keys split-aware)
+other five roles parity ok (no new/changed keys; removals only guard-moved or platform-denied)
+all 6 built-ins byte-identical to the regenerated F3-own baseline

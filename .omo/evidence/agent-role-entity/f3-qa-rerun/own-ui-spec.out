@@ -1,0 +1,7 @@
+
+Running 1 test using 1 worker
+
+F3_UI_RECEIPT {"tabCount":2,"tabTexts":["Agent","角色"],"builtinCount":7,"builtinKeys":["architect","developer","librarian","plan","product","project_manager","tester"],"nameDisabled":true,"promptDisabled":true,"defaultAgentDisabled":true,"roleDeleteButtonCount":0,"roleSaveButtonCount":0,"builtinNoticeCount":1,"apiBuiltinCount":7,"apiBuiltinKeys":["architect","developer","librarian","plan","product","project_manager","tester"],"apiEmptyRolePrompts":0,"consoleErrors":[],"pageErrors":[]}
+  ✓  1 e2e/f3r2-own-ui.spec.ts:6:5 › F3 own QA: /agents — 2 tabs, 7 builtins, builtin read-only, no delete, no console errors (1.9s)
+
+  1 passed (4.1s)

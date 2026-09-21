@@ -1,0 +1,86 @@
+{
+  "a_architect": {
+    "agent": "a_architect",
+    "role": "architect",
+    "agent_prompt_len": 1546,
+    "role_prompt_len": 449,
+    "agent_has_role_identity": true,
+    "agent_has_receipt_iron_law": true,
+    "agent_has_charter": true,
+    "agent_has_duty_heading": true,
+    "agent_has_collab_heading": true,
+    "role_identity_prefix": "# 角色：架构师"
+  },
+  "a_developer": {
+    "agent": "a_developer",
+    "role": "developer",
+    "agent_prompt_len": 1793,
+    "role_prompt_len": 471,
+    "agent_has_role_identity": true,
+    "agent_has_receipt_iron_law": true,
+    "agent_has_charter": true,
+    "agent_has_duty_heading": true,
+    "agent_has_collab_heading": true,
+    "role_identity_prefix": "# 角色：开发者"
+  },
+  "a_librarian": {
+    "agent": "a_librarian",
+    "role": "librarian",
+    "agent_prompt_len": 1646,
+    "role_prompt_len": 597,
+    "agent_has_role_identity": true,
+    "agent_has_receipt_iron_law": false,
+    "agent_has_charter": true,
+    "agent_has_duty_heading": true,
+    "agent_has_collab_heading": true,
+    "role_identity_prefix": "# 角色：知识管理员"
+  },
+  "a_plan": {
+    "agent": "a_plan",
+    "role": "plan",
+    "agent_prompt_len": 2088,
+    "role_prompt_len": 635,
+    "agent_has_role_identity": true,
+    "agent_has_receipt_iron_law": false,
+    "agent_has_charter": true,
+    "agent_has_duty_heading": true,
+    "agent_has_collab_heading": true,
+    "role_identity_prefix": "# 角色：计划员"
+  },
+  "a_product": {
+    "agent": "a_product",
+    "role": "product",
+    "agent_prompt_len": 1732,
+    "role_prompt_len": 580,
+    "agent_has_role_identity": true,
+    "agent_has_receipt_iron_law": true,
+    "agent_has_charter": true,
+    "agent_has_duty_heading": true,
+    "agent_has_collab_heading": true,
+    "role_identity_prefix": "# 角色：产品经理"
+  },
+  "a_project_manager": {
+    "agent": "a_project_manager",
+    "role": "project_manager",
+    "agent_prompt_len": 2324,
+    "role_prompt_len": 613,
+    "agent_has_role_identity": true,
+    "agent_has_receipt_iron_law": false,
+    "agent_has_charter": true,
+    "agent_has_duty_heading": true,
+    "agent_has_collab_heading": true,
+    "role_identity_prefix": "# 角色：项目经理"
+  },
+  "a_tester": {
+    "agent": "a_tester",
+    "role": "tester",
+    "agent_prompt_len": 1826,
+    "role_prompt_len": 560,
+    "agent_has_role_identity": true,
+    "agent_has_receipt_iron_law": true,
+    "agent_has_charter": true,
+    "agent_has_duty_heading": true,
+    "agent_has_collab_heading": true,
+    "role_identity_prefix": "# 角色：测试"
+  }
+}
