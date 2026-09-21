@@ -553,3 +553,20 @@ _Auto-scaffolded by /start-work. Append new entries below - never overwrite._
   - Edit 工具对 ~130 行重复 spec 块报 JSON parse error（长 payload/反引号），且一次构造失误把块重复了一遍；恢复用 python3 按行号精确删区间 + sed 复核，比多次切割 edit 更稳。
   - zsh 下 `echo ===` 触发 `= not found` 展开错误，改用 `echo '---'`。
   - 「冻结基线 = 工具注册表投影」是硬约束：MCP 工具增删必须连带 baseline JSON + 两个脚本 sha 默认值 + 快照一起改，否则 execution-policies 6 套件必红。
+
+## [2026-09-21] 清理 `vteam_plan_mode` 持久化残留 — 数据清理迁移 `20260921000002_prune_plan_mode_registry`
+
+- **文件**：`server/prisma/migrations/20260921000002_prune_plan_mode_registry/migration.sql`（中文注释，单向不可逆，明示活计划域 plans/PlanTask/PlanLifecycleService/plan-docs/评审轮次/`vteam_plan_complete` 不受影响）。
+- **实测发现两条残留路径**（live `aiagents` 8 行策略中 7 行命中；顶层 section 仅 `tools`/`correction`/`permission`，`correction` 无该键）：
+  - `$.tools.vteam_plan_mode = "allow"` → `ep_product` / `ep_project_manager`
+  - `$.permission.vteam_plan_mode = "deny"` → `ep_architect` / `ep_developer` / `ep_librarian` / `ep_plan` / `ep_tester`
+- **三句 SQL**：`DELETE FROM tools WHERE name='vteam_plan_mode';` + 两条独立 `UPDATE ... SET config=JSON_REMOVE(config,path) WHERE JSON_CONTAINS_PATH(config,'one',path)`（守卫必不可少：`JSON_REMOVE` 路径缺失时返回 NULL 会把整列清空）。
+- **证明（scratch DB `vteam_probe_prune`，live `aiagents` 全程未触碰）**：
+  1. `npx prisma migrate deploy`（含新迁移，空表 no-op）+ `node dist/prisma/seed.js` → 7 策略行、0 残留。
+  2. 合成残留：`INSERT INTO tools(id,name,action,source,execution,enabled,updated_at) VALUES('tl_probe','vteam_plan_mode','x','mcp','sync',1,NOW(3))`；`JSON_SET` 给 `ep_product` 加 `$.tools.vteam_plan_mode`、给 `ep_project_manager` 加 `$.permission.vteam_plan_mode` → 三项断言各为 1。
+  3. `docker exec -i aiagents-compose-db mysql -uroot -paiagents-root vteam_probe_prune < <migration.sql>`（执行真实迁移文件）。
+  4. 断言结果：tools 命中 **0**；`$.tools` 路径 **0**；`$.permission` 路径 **0**；`config IS NULL` **0**；策略行数 **7**；`ep_product` 仍保有 `$.tools.vteam_doclib` + `$.permission.vteam_plan_complete`（活计划域未动）。
+  5. **守卫/可重入**：第二次执行同一文件 → `config IS NULL` 仍 0、行数仍 7（5 个无键行从未被清空）。
+- **清理**：`DROP DATABASE vteam_probe_prune`；`rm -rf` 容器内 `/app/prisma/migrations/20260921000002_prune_plan_mode_registry`（已确认容器仅剩 `...000001` + lock）。
+- **门禁**：`npx prisma validate` → exit 0；`npx tsc --noEmit -p tsconfig.json` → exit 0；`grep vteam_plan_mode server/src` 零命中。
+- **坑**：`JSON_SEARCH(config,'all','vteam_plan_mode')` 全行返回 NULL——它搜的是 **值** 不是 **键**；发现路径必须用 `JSON_CONTAINS_PATH`（按候选 section 逐条探测），不能靠 `JSON_SEARCH`。
