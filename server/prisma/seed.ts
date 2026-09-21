@@ -1022,6 +1022,7 @@ async function main() {
         id: `tl_builtin_${tool.action}`,
         name: tool.name,
         action: tool.action,
+        description: tool.description,
         source: 'builtin',
         execution: 'code',
         mcpServer: null,
@@ -1180,11 +1181,18 @@ async function main() {
   for (const t of vteamTools) {
     await prisma.tool.upsert({
       where: { action: t.action },
-      update: { mcpServer: 'vteam', source: 'mcp', execution: 'mcp', enabled: true },
+      update: {
+        mcpServer: 'vteam',
+        source: 'mcp',
+        execution: 'mcp',
+        description: t.description,
+        enabled: true,
+      },
       create: {
         id: `tl_vteam_${t.action}`,
         name: t.name,
         action: t.action,
+        description: t.description,
         source: 'mcp',
         execution: 'mcp',
         mcpServer: 'vteam',

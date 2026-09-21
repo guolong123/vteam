@@ -749,6 +749,7 @@ model Tool {
   source      String
   execution   String
   mcpServer   String?  @map("mcp_server")
+  description String?  @db.Text
   schema      Json?
   initCommand Json?    @map("init_command")
   enabled     Boolean  @default(true)

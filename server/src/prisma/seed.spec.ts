@@ -979,6 +979,31 @@ describe('seed（计划 skills + 评审子句）', () => {
     }
   });
 
+  it('seed Tool upsert 携带 description（后端权威文案：builtin/vteam 数组 description 落库）', async () => {
+    await main();
+
+    const toolCalls = mockPrisma.tool.upsert.mock.calls;
+    const bash = toolCalls.find((call) => call[0].where.action === 'bash');
+    expect(bash).toBeDefined();
+    expect(bash[0].create.description).toBe(
+      '执行 shell 命令（有副作用，默认需确认）',
+    );
+    const taskCreate = toolCalls.find(
+      (call) => call[0].where.action === 'task_create',
+    );
+    expect(taskCreate).toBeDefined();
+    expect(taskCreate[0].create.description).toBe(
+      '在团队会话无任务时创建任务（仅主 Agent 可调）',
+    );
+    expect(taskCreate[0].update.description).toBe(
+      '在团队会话无任务时创建任务（仅主 Agent 可调）',
+    );
+    for (const call of toolCalls) {
+      expect(typeof call[0].create.description).toBe('string');
+      expect(call[0].create.description.length).toBeGreaterThan(0);
+    }
+  });
+
   it('示例团队 7 成员：a_plan 第 6 位、a_librarian 末位 tmm_0000000007 别名知识管理员-1，非主 Agent（主 Agent 为项目经理）', async () => {
     await main();
 

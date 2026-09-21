@@ -790,6 +790,7 @@ describe('McpServersService', () => {
           source: 'mcp',
           execution: 'mcp',
           mcpServer: 'ketacli',
+          description: 'list aliases',
           schema: { type: 'object', properties: {} },
           enabled: true,
         },
@@ -881,15 +882,85 @@ describe('McpServersService', () => {
 
       expect(prisma.tool.update).toHaveBeenCalledWith({
         where: { id: 'tl_0000000001' },
-        data: { schema: { type: 'object' }, enabled: true },
+        data: { schema: { type: 'object' }, description: null, enabled: true },
       });
       expect(prisma.tool.update).toHaveBeenCalledWith({
         where: { id: 'tl_0000000002' },
-        data: { schema: { type: 'object' }, enabled: true },
+        data: { schema: { type: 'object' }, description: null, enabled: true },
       });
       expect(prisma.tool.create).not.toHaveBeenCalled();
       expect(result).toMatchObject({ created: 0, updated: 2, disabled: 0 });
       expect(workersService.broadcastCommand).toHaveBeenCalled();
+    });
+
+    it('resync 回填已有行 description（上游文案覆盖存量 NULL）', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      mockDiscovery([
+        {
+          name: 'task_create',
+          description: '在团队会话无任务时创建任务',
+          inputSchema: { type: 'object' },
+        },
+      ]);
+      prisma.tool.findUnique.mockResolvedValue({
+        id: 'tl_0000000010',
+        name: 'ketacli_task_create',
+        action: 'task_create',
+        mcpServer: 'ketacli',
+        description: null,
+        enabled: true,
+      });
+      prisma.tool.findMany.mockResolvedValue([]);
+      prisma.tool.update.mockResolvedValue({
+        id: 'tl_0000000010',
+        name: 'ketacli_task_create',
+        action: 'task_create',
+      });
+
+      const result = await service.syncTools('ms_0000000009');
+
+      expect(prisma.tool.update).toHaveBeenCalledWith({
+        where: { id: 'tl_0000000010' },
+        data: {
+          schema: { type: 'object' },
+          description: '在团队会话无任务时创建任务',
+          enabled: true,
+        },
+      });
+      expect(prisma.tool.create).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ created: 0, updated: 1, disabled: 0 });
+    });
+
+    it('发现项缺 description/非字符串 → 落库 NULL（非空串、不污染）', async () => {
+      prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
+      mockDiscovery([
+        { name: 'nodesc.tool', inputSchema: { type: 'object' } },
+        { name: 'baddesc.tool', description: 42, inputSchema: { type: 'object' } },
+      ]);
+      prisma.tool.findUnique.mockResolvedValue(null);
+      prisma.tool.findMany.mockResolvedValue([]);
+      idGen.nextId
+        .mockResolvedValueOnce('tl_0000000060')
+        .mockResolvedValueOnce('tl_0000000061');
+      prisma.tool.create.mockImplementation(({ data }: { data: object }) =>
+        Promise.resolve(data),
+      );
+
+      const result = await service.syncTools('ms_0000000009');
+
+      expect(prisma.tool.create).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          data: expect.objectContaining({ description: null }),
+        }),
+      );
+      expect(prisma.tool.create).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          data: expect.objectContaining({ description: null }),
+        }),
+      );
+      expect(result).toMatchObject({ created: 2, updated: 0 });
     });
 
     it('action 被他服务器占用 → skipped（action 冲突，不覆盖）', async () => {

@@ -170,6 +170,8 @@ interface ApiTool {
   source: "builtin" | "custom" | "mcp";
   execution: "code" | "cli" | "http" | "mcp";
   mcpServer: string | null;
+  /** GET /tools 行描述（后端新增；未部署前缺席 → 按 null 处理走本地回退） */
+  description: string | null;
   schema: Record<string, unknown> | null;
   initCommand: Array<Record<string, unknown>> | null;
   enabled: boolean;
@@ -304,11 +306,13 @@ function buildSkillMarkdown(
 const BUILTIN_ICON = "⬢";
 
 function toBuiltinTool(t: ApiTool): BuiltinTool {
+  // 与 toMcpTool 同口径：后端 description 优先，缺席/空走本地回退
+  const backendDesc = typeof t.description === "string" ? t.description.trim() : "";
   return {
     id: t.id,
     name: t.name,
     version: "v1",
-    desc: `调用标识 ${t.action}`,
+    desc: backendDesc || `调用标识 ${t.action}`,
     roles: [],
     enabled: t.enabled ? "启用" : "停用",
     icon: BUILTIN_ICON,
@@ -333,7 +337,7 @@ function toMcpTool(
   // T8c：展示 server 名取 GET /mcp-servers 反查结果（tool.mcpServer 存 server id，弱关联）；
   // 无记录时回退原始引用（用户输入的 server 名或 "mcp" 占位）
   const serverName = server?.name ?? t.mcpServer ?? "mcp";
-  // 描述优先级：内置 vteam 精选文案 > 同步的 swagger 摘要（schema.description，
+  // 描述优先级：后端 description（非空 trim）> 内置 vteam 精选文案 > 同步的 swagger 摘要（schema.description，
   // "METHOD /path" 式无摘要回退视为无描述）> 空（行内回退来源语义）
   const rawSchemaDesc = t.schema && typeof (t.schema as Record<string, unknown>).description === "string"
     ? ((t.schema as Record<string, unknown>).description as string).trim()
@@ -341,13 +345,15 @@ function toMcpTool(
   const schemaDesc = rawSchemaDesc && !/^(GET|POST|PUT|PATCH|DELETE)\s+\//.test(rawSchemaDesc)
     ? rawSchemaDesc
     : "";
+  // 后端未部署前 description 字段缺席 → typeof 守卫按空处理，走本地回退
+  const backendDesc = typeof t.description === "string" ? t.description.trim() : "";
   return {
     toolId: t.id,
     id: `${serverName}_${t.action}`,
     name: t.action,
     server: serverName,
     version: "v1",
-    desc: VTEAM_TOOL_DESC[t.action] ?? schemaDesc,
+    desc: backendDesc || (VTEAM_TOOL_DESC[t.action] ?? schemaDesc),
     roles: [],
     // T8c：server 类型/状态从 GET /mcp-servers 真实拉取（缺 server 记录 → remote/未连接兜底）
     type: server?.type ?? "remote",

@@ -8,7 +8,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 
 /**
  * 单个发现工具（仅物化需要的字段）。
- * description 仅透出调试，不落库（Tool 无 description 列，不污染 schema JSON）。
+ * description 随 Tool.description 列持久化（缺失时为 NULL），为 GET /tools 的后端权威文案。
  */
 export interface DiscoveredMcpTool {
   name: string;
