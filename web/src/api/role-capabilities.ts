@@ -2,7 +2,7 @@
  * 岗位业务能力点目录（web 端与服务端目录**逐字对照的副本**）
  * =============================================
  * 唯一来源：`server/src/common/constants/platform-capability.constants.ts`
- * （`PLATFORM_CAPABILITIES`：21 项覆盖 28 个 `vteam_*` 工具，键/中文名/工具/出厂拒绝
+ * （`PLATFORM_CAPABILITIES`：27 项覆盖 28 个 `vteam_*` 工具，键/中文名/工具/出厂拒绝
  * 全部逐字抄录，含顺序）。服务端目前**未**暴露目录接口（`GET /agent-roles` 只回矩阵，
  * 不回目录），故这里是副本；服务端目录接口就绪后应改为「接口优先、本清单离线回退」。
  *
@@ -47,10 +47,11 @@ export interface RoleCapability {
 }
 
 /**
- * 21 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
+ * 27 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
  * `PLATFORM_CAPABILITIES`（顺序一致；仅新增 UI 分组 `group` 字段）。
- * 出厂拒绝 10 项：task.create / task.transition / task.complete / team.add_member /
- * chat.channel_send / wecom.reply / question.confirm / issue.manage / skill.create / hook.manage。
+ * 出厂拒绝 14 项：task.create / task.transition / task.complete / team.add_member /
+ * chat.channel_send / wecom.reply / question.confirm / issue.create / issue.get /
+ * issue.list / issue.update / issue.transition / skill.create / hook.manage。
  */
 export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
   { key: "task.create", label: "创建任务", group: "task", tools: ["vteam_task_create"], factoryDefault: false },
@@ -68,14 +69,14 @@ export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
   { key: "doc.read", label: "读取产出物", group: "artifact", tools: ["vteam_doclib"], factoryDefault: true },
   { key: "doc.submit", label: "提交产出物", group: "artifact", tools: ["vteam_submit_artifact"], factoryDefault: true },
   { key: "file.read", label: "读取文件", group: "artifact", tools: ["vteam_read_file"], factoryDefault: true },
-  {
-    key: "issue.manage",
-    label: "需求缺陷管理",
-    group: "issue",
-    tools: ["vteam_issue_create", "vteam_issue_get", "vteam_issue_list", "vteam_issue_update", "vteam_issue_transition"],
-    factoryDefault: false,
-  },
-  { key: "memory.manage", label: "团队记忆", group: "memory", tools: ["vteam_memory_save", "vteam_memory_search", "vteam_memory_update"], factoryDefault: true },
+  { key: "issue.create", label: "创建需求/缺陷", group: "issue", tools: ["vteam_issue_create"], factoryDefault: false },
+  { key: "issue.get", label: "查看需求缺陷", group: "issue", tools: ["vteam_issue_get"], factoryDefault: false },
+  { key: "issue.list", label: "需求缺陷列表", group: "issue", tools: ["vteam_issue_list"], factoryDefault: false },
+  { key: "issue.update", label: "更新需求缺陷", group: "issue", tools: ["vteam_issue_update"], factoryDefault: false },
+  { key: "issue.transition", label: "流转需求缺陷", group: "issue", tools: ["vteam_issue_transition"], factoryDefault: false },
+  { key: "memory.save", label: "写入团队记忆", group: "memory", tools: ["vteam_memory_save"], factoryDefault: true },
+  { key: "memory.search", label: "检索团队记忆", group: "memory", tools: ["vteam_memory_search"], factoryDefault: true },
+  { key: "memory.update", label: "更新团队记忆", group: "memory", tools: ["vteam_memory_update"], factoryDefault: true },
   { key: "skill.create", label: "沉淀技能", group: "capability", tools: ["vteam_skill_create"], factoryDefault: false },
   { key: "my_profile", label: "查询自身", group: "capability", tools: ["vteam_my_profile"], factoryDefault: true },
   { key: "git.repos", label: "查看授权仓库", group: "capability", tools: ["vteam_git_repos_list"], factoryDefault: true },
