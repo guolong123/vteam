@@ -1,0 +1,79 @@
+$ cd server && npx jest --runInBand src/artifacts/artifacts.service.spec.ts
+
+PASS src/artifacts/artifacts.service.spec.ts
+  ArtifactsService
+    onModuleInit
+      ✓ seed art/artv 两个前缀：按库内最大序号对齐 id 生成器 (1 ms)
+    validateArtifactDeclaration（12 篇 §3.1 协议校验）
+      ✓ 合法 text：type+title+content 通过
+      ✓ 合法 doc/file：type+title+fileRef 通过
+      ✓ type 非法 / 缺 title / text 缺 content / doc 缺 fileRef → 拒绝 (8 ms)
+    append（归档链路，12 篇 §5）
+      ✓ text 新建 v1：create artifact(currentVersion=1) + version 1，contentRef=content，sha256 落库
+      ✓ 幂等去重：同 taskId+type+sha256 已存在 → status=duplicate，版本不增、不 create (1 ms)
+      ✓ 版本递增：同 taskId+type+title 已有产出物 → append currentVersion+1 + 新版本
+      ✓ doc/file 归档（P2）：content 非空 → 落盘 uploads（contentRef/filePath 指向可访问 URL）
+      ✓ doc/file 归档（P2）：content 为空 → 保留 fileRef 占位（无内容可落盘，不调 saveTextFile）
+      ✓ 非法声明 → 400 ARTIFACT_INVALID_DECLARATION（不落库） (1 ms)
+      ✓ 12 篇 §7：当前版本已验收（accepted_flag=true）→ 409 ARTIFACT_ACCEPTED_IMMUTABLE
+      ✓ 12 篇 §7：幂等优先——同 sha256 已归档（即使已验收）→ duplicate 不触发 409
+      ✓ 12 篇 §7：验收后（completed）append 新版本 → 任务退回 in_progress + task.status.changed 广播
+      ✓ 12 篇 §7：任务非 completed → append 正常归档不退回不广播 (1 ms)
+    restore（T5 append-as-new：历史版本复制为新当前版本）
+      ✓ restore-creates-new-version：复制 v1 内容为 v3（内容相同，changeNote=restore from v1）
+      ✓ restore-nonexistent-version：源版本不存在 → 404 ARTIFACT_VERSION_NOT_FOUND（不写库）
+      ✓ 产出物不存在 → 404 ARTIFACT_NOT_FOUND（不写库）
+      ✓ restore-locked：当前版本已验收 → 409 ARTIFACT_ACCEPTED_IMMUTABLE（不写库）
+    archiveFile（文件归档公共方法，POST /uploads 与 submit_artifact doc/file 共用）
+      ✓ 新建 v1：无幂等命中、无同 title file 产出物 → create artifact(currentVersion=1) + version 1（contentRef=storedUrl、filePath=fileRef 原文） (1 ms)
+      ✓ title 缺省 → 用 storedName 作为产出物标题
+      ✓ 幂等去重：同 taskId+type=file+sha256 已归档 → duplicate（版本不增、不写库）
+      ✓ 版本递增：同 taskId+type=file+title 已有产出物 → append currentVersion+1 + 新版本
+      ✓ accepted 锁定：当前版本已验收（acceptedFlag=true）→ 抛错且不产生写操作 (12 ms)
+    onArtifactSubmitted（消费 artifact.submitted 事件）
+      ✓ 非法声明 → {status: invalid} 回退普通消息，不抛错不落库
+      ✓ 合法声明 → 转 append 归档
+    findByTask（GET /tasks/:id/artifacts，12 篇 §6.1）
+      ✓ 分页 + type 筛选：按 currentVersion 聚合 acceptedFlag/authorAgentId
+      ✓ accepted 筛选：按当前版本 acceptedFlag 过滤（true/false） (1 ms)
+      ✓ 分页切片：pageSize 收敛与 slice 生效
+    findOne / findVersion（文档库查看，12 篇 §6.2）
+      ✓ findOne 命中：返回详情 + 版本列表（升序）
+      ✓ findOne 不存在 → 404 ARTIFACT_NOT_FOUND
+      ✓ findVersion 命中：返回指定版本 ArtifactVersionDto
+      ✓ findVersion 不存在 → 404 ARTIFACT_VERSION_NOT_FOUND
+      ✓ FILE-02：doc/file 版本（filePath 非空）→ 附加归一化 fileUrl/fileName/fileExt（size 缺省不读盘）
+      ✓ FILE-02：text 版本（filePath=null）→ 不附加 fileUrl 派生字段
+    category（docs-artifacts-merge T4：落库/过滤/透出）
+      ✓ validate：合法 category 通过；缺省/NULL 通过；未知字段仍忽略
+      ✓ validate：非法 category → {valid:false}（事件与 POST 双路径一致 400）
+      ✓ persist-on-create：append 新建行写入 category 并在列表项透出
+      ✓ persist-on-create：不传 category → NULL（未分类）
+      ✓ append-no-overwrite：命中已存在行只递增版本，不覆盖原 category (1 ms)
+      ✓ invalid-category-400：非法 category → 400 ARTIFACT_INVALID_DECLARATION（不落库）
+      ✓ event-path：onArtifactSubmitted 非法 category → {status:invalid} 不抛错不落库
+      ✓ filter-by-category：findByTask where 透传 category
+      ✓ expose-in-list：未设 category 的行透出 null
+      ✓ archiveFile：新建行写入 category；append 不覆盖原值 (1 ms)
+      ✓ category-计划：validate 通过且 append/archiveFile 落库成功
+      ✓ category-计划：非法 category 失败且 reason 含「计划」（错误文案已同步）
+      ✓ category-计划：findByTask 过滤只返回该类行
+      ✓ category-计划：不传 category → NULL（可选语义未破坏）
+    findByTeam（GET /teams/:id/artifacts，docs-artifacts-merge T5）
+      ✓ happy：跨任务聚合 + 每项带 taskName（一次 task 查询映射标题） (1 ms)
+      ✓ taskId 过滤：收窄到团队内单任务
+      ✓ type 过滤：where 透传 type
+      ✓ category 过滤：where 透传 category
+      ✓ accepted 过滤：按当前版本 acceptedFlag 过滤
+      ✓ combined：taskId + type + category + accepted 联合过滤
+      ✓ failure：未知团队 → 404 TEAM_NOT_FOUND（不查任务/产出物） (1 ms)
+      ✓ failure：非本团队 taskId → 空集（不泄露跨团队行）
+      ✓ empty：团队无任务 → 空分页（默认 page=1/pageSize=20）
+      ✓ empty：团队有任务但零产出物 → 空分页（不查版本表）
+      ✓ pagination：pageSize=1000 截断到 100（与任务端点同值）
+
+Test Suites: 1 passed, 1 total
+Tests:       59 passed, 59 total
+Snapshots:   0 total
+Time:        1.213 s, estimated 2 s
+Ran all test suites matching /src\/artifacts\/artifacts.service.spec.ts/i.

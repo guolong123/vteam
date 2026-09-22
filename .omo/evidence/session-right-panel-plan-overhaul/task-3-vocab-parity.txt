@@ -1,0 +1,2 @@
+$ diff <(sed -n "/ARTIFACT_CATEGORIES/,/] as const/p" server/src/artifacts/artifacts.constants.ts | grep -o "'[^']*'" | sort) <(grep -o "'[^']*'" web/src/lib/artifact-categories.ts | sort)
+(no diff output — parity OK, exit 0)
