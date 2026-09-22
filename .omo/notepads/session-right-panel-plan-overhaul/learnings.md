@@ -53,3 +53,10 @@ opencode/AI-SDK 的日志形态是 `message="stream error" error.error="AI_APICa
 只数 parts 会漏掉工具执行中：tool part 的 `state`（pending→running→completed）/`output`/`time` 会变
 但 part 数不变 → 长工具（> 首字超时）被误判「无输出」而 abort。
 **做法**：用 O(1) 标量投影做「内容指纹」（长度/状态/时间累加），**不要 JSON.stringify**（大 tool 输出会拖垮每轮 poll）。
+
+## L11 · 同一策略在两处实现时会漂移——改判据要 grep 全部同义判据
+`tryAutoRestart` 的「任务非 in_progress 跳过」与 `dispatchAgentMention` 的「终态门禁」是**同一策略的两份实现**：
+后者只挡 `completed/archived` 且**只对 kind=execution 生效**（注释明确 wake 豁免），
+前者却卡 `in_progress` —— 结果 `pending_review` 的卡死会话拿不到自动恢复。
+更微妙的是：dispatcher 的注释把前者引为「先例」，却自行采用了更宽口径，**老闸门没同步放宽**。
+**做法**：改任何"准入判据"前，先 grep 出所有同义判据，确认口径一致；否则会留下行为裂缝。
