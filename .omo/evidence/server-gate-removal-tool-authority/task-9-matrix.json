@@ -42,8 +42,8 @@
     ],
     "expectedCellCount": 196,
     "iteratedCellCount": 196,
-    "allowCellCount": 125,
-    "denyCellCount": 71,
+    "allowCellCount": 91,
+    "denyCellCount": 105,
     "allCellsMatch": true,
     "cells": [
       {
@@ -98,51 +98,51 @@
       {
         "agent": "vteam-architect",
         "tool": "vteam_issue_create",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_create 未获授权：岗位（architect）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_issue_list",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_list 未获授权：岗位（architect）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_issue_get",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_get 未获授权：岗位（architect）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_issue_update",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_update 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_issue_update 未获授权：岗位（architect）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_issue_transition",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_transition 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_issue_transition 未获授权：岗位（architect）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_task_transition",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_transition 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_task_transition 未获授权：岗位（architect）已拒绝能力点 task.transition，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_question_confirm",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_question_confirm 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_question_confirm 未获授权：岗位（architect）已拒绝能力点 question.confirm，拒绝调用"
       },
       {
         "agent": "vteam-architect",
@@ -184,63 +184,63 @@
         "tool": "vteam_team_add_member",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_team_add_member 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_team_add_member 未获授权：岗位（architect）已拒绝能力点 team.add_member，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_plan_complete",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_plan_complete 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_plan_complete 未获授权：岗位（architect）已拒绝能力点 task.complete，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_channel_send",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_channel_send 未获授权：岗位（architect）已拒绝能力点 chat.channel_send，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_wecom_reply",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_wecom_reply 未获授权：岗位（architect）已拒绝能力点 wecom.reply，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_task_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_create 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_task_create 未获授权：岗位（architect）已拒绝能力点 task.create，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_skill_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_skill_create 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_skill_create 未获授权：岗位（architect）已拒绝能力点 skill.create，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_git_repos_list",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_git_repos_list 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_hook_register",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_register 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_hook_register 未获授权：岗位（architect）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-architect",
         "tool": "vteam_hook_cancel",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_cancel 未获授权：Agent（architect）的工具矩阵未授权（effect=未列入）（策略 ep_architect），拒绝调用"
+        "message": "工具 vteam_hook_cancel 未获授权：岗位（architect）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-developer",
@@ -294,51 +294,51 @@
       {
         "agent": "vteam-developer",
         "tool": "vteam_issue_create",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_create 未获授权：岗位（developer）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_issue_list",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_list 未获授权：岗位（developer）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_issue_get",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_get 未获授权：岗位（developer）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_issue_update",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_update 未获授权：岗位（developer）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_issue_transition",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_transition 未获授权：岗位（developer）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_task_transition",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_transition 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
+        "message": "工具 vteam_task_transition 未获授权：岗位（developer）已拒绝能力点 task.transition，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_question_confirm",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_question_confirm 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
+        "message": "工具 vteam_question_confirm 未获授权：岗位（developer）已拒绝能力点 question.confirm，拒绝调用"
       },
       {
         "agent": "vteam-developer",
@@ -380,63 +380,63 @@
         "tool": "vteam_team_add_member",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_team_add_member 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
+        "message": "工具 vteam_team_add_member 未获授权：岗位（developer）已拒绝能力点 team.add_member，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_plan_complete",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_plan_complete 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
+        "message": "工具 vteam_plan_complete 未获授权：岗位（developer）已拒绝能力点 task.complete，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_channel_send",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_channel_send 未获授权：岗位（developer）已拒绝能力点 chat.channel_send，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_wecom_reply",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_wecom_reply 未获授权：岗位（developer）已拒绝能力点 wecom.reply，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_task_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_create 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
+        "message": "工具 vteam_task_create 未获授权：岗位（developer）已拒绝能力点 task.create，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_skill_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_skill_create 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
+        "message": "工具 vteam_skill_create 未获授权：岗位（developer）已拒绝能力点 skill.create，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_git_repos_list",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_git_repos_list 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_hook_register",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_register 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
+        "message": "工具 vteam_hook_register 未获授权：岗位（developer）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-developer",
         "tool": "vteam_hook_cancel",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_cancel 未获授权：Agent（developer）的工具矩阵未授权（effect=未列入）（策略 ep_developer），拒绝调用"
+        "message": "工具 vteam_hook_cancel 未获授权：岗位（developer）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
@@ -476,72 +476,72 @@
       {
         "agent": "vteam-librarian",
         "tool": "vteam_notify_agent",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_notify_agent 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_submit_artifact",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_submit_artifact 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_issue_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_create 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_issue_create 未获授权：岗位（librarian）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_issue_list",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_list 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_issue_list 未获授权：岗位（librarian）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_issue_get",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_get 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_issue_get 未获授权：岗位（librarian）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_issue_update",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_update 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_issue_update 未获授权：岗位（librarian）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_issue_transition",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_transition 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_issue_transition 未获授权：岗位（librarian）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_task_transition",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_transition 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_task_transition 未获授权：岗位（librarian）已拒绝能力点 task.transition，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_question_confirm",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_question_confirm 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_question_confirm 未获授权：岗位（librarian）已拒绝能力点 question.confirm，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_memory_save",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_memory_save 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-librarian",
@@ -553,9 +553,9 @@
       {
         "agent": "vteam-librarian",
         "tool": "vteam_memory_update",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_memory_update 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-librarian",
@@ -576,42 +576,42 @@
         "tool": "vteam_team_add_member",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_team_add_member 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_team_add_member 未获授权：岗位（librarian）已拒绝能力点 team.add_member，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_plan_complete",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_plan_complete 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_plan_complete 未获授权：岗位（librarian）已拒绝能力点 task.complete，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_channel_send",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_channel_send 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_channel_send 未获授权：岗位（librarian）已拒绝能力点 chat.channel_send，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_wecom_reply",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_wecom_reply 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_wecom_reply 未获授权：岗位（librarian）已拒绝能力点 wecom.reply，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_task_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_create 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_task_create 未获授权：岗位（librarian）已拒绝能力点 task.create，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_skill_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_skill_create 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_skill_create 未获授权：岗位（librarian）已拒绝能力点 skill.create，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
@@ -625,14 +625,14 @@
         "tool": "vteam_hook_register",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_register 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_hook_register 未获授权：岗位（librarian）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-librarian",
         "tool": "vteam_hook_cancel",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_cancel 未获授权：Agent（librarian）的工具矩阵未授权（effect=未列入）（策略 ep_librarian），拒绝调用"
+        "message": "工具 vteam_hook_cancel 未获授权：岗位（librarian）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-plan",
@@ -679,65 +679,65 @@
       {
         "agent": "vteam-plan",
         "tool": "vteam_submit_artifact",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_submit_artifact 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_issue_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_create 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_issue_create 未获授权：岗位（plan）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_issue_list",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_list 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_issue_list 未获授权：岗位（plan）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_issue_get",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_get 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_issue_get 未获授权：岗位（plan）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_issue_update",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_update 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_issue_update 未获授权：岗位（plan）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_issue_transition",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_transition 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_issue_transition 未获授权：岗位（plan）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_task_transition",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_transition 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_task_transition 未获授权：岗位（plan）已拒绝能力点 task.transition，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_question_confirm",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_question_confirm 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_question_confirm 未获授权：岗位（plan）已拒绝能力点 question.confirm，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_memory_save",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_memory_save 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-plan",
@@ -749,9 +749,9 @@
       {
         "agent": "vteam-plan",
         "tool": "vteam_memory_update",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_memory_update 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-plan",
@@ -772,63 +772,63 @@
         "tool": "vteam_team_add_member",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_team_add_member 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_team_add_member 未获授权：岗位（plan）已拒绝能力点 team.add_member，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_plan_complete",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_complete 未获授权：岗位（plan）已拒绝能力点 task.complete，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_channel_send",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_channel_send 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_channel_send 未获授权：岗位（plan）已拒绝能力点 chat.channel_send，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_wecom_reply",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_wecom_reply 未获授权：岗位（plan）已拒绝能力点 wecom.reply，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_task_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_create 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_task_create 未获授权：岗位（plan）已拒绝能力点 task.create，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_skill_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_skill_create 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_skill_create 未获授权：岗位（plan）已拒绝能力点 skill.create，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_git_repos_list",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_git_repos_list 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_hook_register",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_register 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_hook_register 未获授权：岗位（plan）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-plan",
         "tool": "vteam_hook_cancel",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_cancel 未获授权：Agent（plan）的工具矩阵未授权（effect=未列入）（策略 ep_plan），拒绝调用"
+        "message": "工具 vteam_hook_cancel 未获授权：岗位（plan）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-product",
@@ -882,51 +882,51 @@
       {
         "agent": "vteam-product",
         "tool": "vteam_issue_create",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_create 未获授权：岗位（product）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_issue_list",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_list 未获授权：岗位（product）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_issue_get",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_get 未获授权：岗位（product）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_issue_update",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_update 未获授权：岗位（product）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_issue_transition",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_transition 未获授权：岗位（product）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_task_transition",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_task_transition 未获授权：岗位（product）已拒绝能力点 task.transition，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_question_confirm",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_question_confirm 未获授权：岗位（product）已拒绝能力点 question.confirm，拒绝调用"
       },
       {
         "agent": "vteam-product",
@@ -966,65 +966,65 @@
       {
         "agent": "vteam-product",
         "tool": "vteam_team_add_member",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_team_add_member 未获授权：岗位（product）已拒绝能力点 team.add_member，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_plan_complete",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_plan_complete 未获授权：Agent（product）的工具矩阵未授权（effect=未列入）（策略 ep_product），拒绝调用"
+        "message": "工具 vteam_plan_complete 未获授权：岗位（product）已拒绝能力点 task.complete，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_channel_send",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_channel_send 未获授权：岗位（product）已拒绝能力点 chat.channel_send，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_wecom_reply",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_wecom_reply 未获授权：岗位（product）已拒绝能力点 wecom.reply，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_task_create",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_task_create 未获授权：岗位（product）已拒绝能力点 task.create，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_skill_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_skill_create 未获授权：Agent（product）的工具矩阵未授权（effect=未列入）（策略 ep_product），拒绝调用"
+        "message": "工具 vteam_skill_create 未获授权：岗位（product）已拒绝能力点 skill.create，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_git_repos_list",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_git_repos_list 未获授权：Agent（product）的工具矩阵未授权（effect=未列入）（策略 ep_product），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_hook_register",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_hook_register 未获授权：岗位（product）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-product",
         "tool": "vteam_hook_cancel",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_hook_cancel 未获授权：岗位（product）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
@@ -1071,58 +1071,58 @@
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_submit_artifact",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_submit_artifact 未获授权：Agent（project_manager）的工具矩阵未授权（effect=未列入）（策略 ep_project_manager），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_issue_create",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_create 未获授权：岗位（project_manager）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_issue_list",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_list 未获授权：岗位（project_manager）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_issue_get",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_get 未获授权：岗位（project_manager）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_issue_update",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_update 未获授权：岗位（project_manager）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_issue_transition",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_transition 未获授权：岗位（project_manager）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_task_transition",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_task_transition 未获授权：岗位（project_manager）已拒绝能力点 task.transition，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_question_confirm",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_question_confirm 未获授权：岗位（project_manager）已拒绝能力点 question.confirm，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
@@ -1162,65 +1162,65 @@
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_team_add_member",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_team_add_member 未获授权：岗位（project_manager）已拒绝能力点 team.add_member，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_plan_complete",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_complete 未获授权：岗位（project_manager）已拒绝能力点 task.complete，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_channel_send",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_channel_send 未获授权：岗位（project_manager）已拒绝能力点 chat.channel_send，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_wecom_reply",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_wecom_reply 未获授权：岗位（project_manager）已拒绝能力点 wecom.reply，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_task_create",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_task_create 未获授权：岗位（project_manager）已拒绝能力点 task.create，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_skill_create",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_skill_create 未获授权：岗位（project_manager）已拒绝能力点 skill.create，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_git_repos_list",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_git_repos_list 未获授权：Agent（project_manager）的工具矩阵未授权（effect=未列入）（策略 ep_project_manager），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_hook_register",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_hook_register 未获授权：岗位（project_manager）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_hook_cancel",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_hook_cancel 未获授权：岗位（project_manager）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-tester",
@@ -1274,51 +1274,51 @@
       {
         "agent": "vteam-tester",
         "tool": "vteam_issue_create",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_create 未获授权：岗位（tester）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_issue_list",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_list 未获授权：岗位（tester）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_issue_get",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_get 未获授权：岗位（tester）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_issue_update",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_issue_update 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "message": "工具 vteam_issue_update 未获授权：岗位（tester）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_issue_transition",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_issue_transition 未获授权：岗位（tester）已拒绝能力点 issue.manage，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_task_transition",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_transition 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "message": "工具 vteam_task_transition 未获授权：岗位（tester）已拒绝能力点 task.transition，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_question_confirm",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_question_confirm 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "message": "工具 vteam_question_confirm 未获授权：岗位（tester）已拒绝能力点 question.confirm，拒绝调用"
       },
       {
         "agent": "vteam-tester",
@@ -1360,70 +1360,70 @@
         "tool": "vteam_team_add_member",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_team_add_member 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "message": "工具 vteam_team_add_member 未获授权：岗位（tester）已拒绝能力点 team.add_member，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_plan_complete",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_plan_complete 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "message": "工具 vteam_plan_complete 未获授权：岗位（tester）已拒绝能力点 task.complete，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_channel_send",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_channel_send 未获授权：岗位（tester）已拒绝能力点 chat.channel_send，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_wecom_reply",
-        "expect": "allow",
-        "actual": "allow",
-        "message": null
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_wecom_reply 未获授权：岗位（tester）已拒绝能力点 wecom.reply，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_task_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_task_create 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "message": "工具 vteam_task_create 未获授权：岗位（tester）已拒绝能力点 task.create，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_skill_create",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_skill_create 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "message": "工具 vteam_skill_create 未获授权：岗位（tester）已拒绝能力点 skill.create，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_git_repos_list",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_git_repos_list 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_hook_register",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_register 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "message": "工具 vteam_hook_register 未获授权：岗位（tester）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
         "agent": "vteam-tester",
         "tool": "vteam_hook_cancel",
         "expect": "deny",
         "actual": "deny",
-        "message": "工具 vteam_hook_cancel 未获授权：Agent（tester）的工具矩阵未授权（effect=未列入）（策略 ep_tester），拒绝调用"
+        "message": "工具 vteam_hook_cancel 未获授权：岗位（tester）已拒绝能力点 hook.manage，拒绝调用"
       }
     ]
   },
   "plan": "server-gate-removal-tool-authority",
   "todo": 9,
   "generatedBy": "server/src/platform-mcp/platform-mcp.authority-matrix.spec.ts (worker matrix + service-level proof)",
-  "generatedAt": "2026-09-21T12:42:48.931Z",
+  "generatedAt": "2026-09-22T00:16:51.796Z",
   "mainHappyPath": {
     "steps": [
       {
