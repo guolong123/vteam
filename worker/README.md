@@ -7,6 +7,9 @@ vteam 的 worker 端：独立于 `server/`（NestJS）的 Node 进程，负责�
 - **会话执行**：通过 `V1Driver` 封装 opencode serve REST API（createSession / sendMessage / getMessages / abort / listModels），`prompt-await` 以 step-finish 轮询判定完成
 - **事件回流**：注册（`X-Worker-Token`）、定时心跳、事件上送（seq 单调递增 + 失败重试不阻塞），server 经 `worker-event.ingress` 消费
 - **执行端点**：`node:http` 提供 `/execute`（默认 4198），首字超时 abort（`WORKER_FIRST_TOKEN_TIMEOUT_MS`），空闲判死（`instance-tracker`）
+- **独立模式配置下推**：`POST /config/{skills,tools,mcp-servers,agent-policies,model-credentials,git-credentials,restart}`
+  （**仅 `WORKER_STANDALONE=true` 挂载**，无需控制面即可下推；声明式替换，写后返回 `restart: required`，
+  再调 `/config/restart` 生效。注册模式下返回 404 + 引导，避免与控制面拉取形成双事实源）
 - **凭证注入**：模型凭据下发后写入 opencode auth.json；git 经 `GIT_SSH_COMMAND` 注入 SSH 私钥
 - **MCP 客户端**：探测 server 的 `vteam` MCP 工具可用性（`mcp-status-probe`），注入自定义工具（`resources/custom-tool`）
 - **产出物抽取**：`artifact-extract` 从会话结果中识别并上报 `submit_artifact` 产出物

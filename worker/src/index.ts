@@ -911,6 +911,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     firstTokenTimeoutMs: config.workerFirstTokenTimeoutMs,
     serverBaseUrl: config.serverUrl,
     browserProfileRoot: config.workDir,
+    // 独立模式（WORKER_STANDALONE）下挂载 POST /config/* 本地配置下推；注册模式不挂载
+    standalone: config.standalone,
+    resourceInjector: injector,
     // GET /agents 未显式传 directory 时的回落值：与 serve cwd（config.workDir）一致，
     // 保证列出的 opencode agent 集合与实际执行时发现的集合相同
     workDir: config.workDir,

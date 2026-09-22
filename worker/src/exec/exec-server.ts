@@ -28,6 +28,13 @@ import {
   MessageDeltaTracker,
   sendAndAwait,
 } from '../driver/prompt-await';
+import { ResourceInjector } from '../resources/injector';
+import {
+  LOCAL_CONFIG_KINDS,
+  LocalConfigApplier,
+  LocalConfigError,
+  LocalConfigKind,
+} from './local-config';
 import {
   DriverModelRef,
   DriverRequestError,
@@ -219,6 +226,16 @@ export interface ExecServerOptions {
    * 已挂起等归零）。缺省不注入 = 保存后不重启（配置留待下次自然重启生效）。
    */
   restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
+  /**
+   * 独立模式（WORKER_STANDALONE）：挂载 POST /config/* 本地配置下推端点。
+   * 缺省 false = 不挂载（注册模式的配置一律走控制面下发，避免双事实源）。
+   */
+  standalone?: boolean;
+  /**
+   * 资源注入器（独立模式本地配置下推用）。standalone=true 时必须提供，
+   * 否则 /config/* 返回 503。
+   */
+  resourceInjector?: ResourceInjector;
 }
 
 /** 请求体解析失败（非 JSON / 缺字段）。 */
@@ -322,6 +339,10 @@ export class ExecServer {
   private readonly workDir: string;
   /** OmO 配置保存后的 serve 重启回调（缺省 undefined = 不重启）。 */
   private readonly restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
+  /** 独立模式：挂载 POST /config/* 本地配置下推（注册模式不挂载，避免双事实源）。 */
+  private readonly standalone: boolean;
+  /** 本地配置下推执行器（standalone=true 且注入 resourceInjector 时可用）。 */
+  private readonly localConfig?: LocalConfigApplier;
   private readonly logger: Logger;
   private server: http.Server | null = null;
 
@@ -340,6 +361,11 @@ export class ExecServer {
     this.workDir = options.workDir ?? '';
     this.restartServe = options.restartServe;
     this.logger = options.logger ?? console;
+    this.standalone = options.standalone ?? false;
+    this.localConfig =
+      this.standalone && options.resourceInjector
+        ? new LocalConfigApplier({ injector: options.resourceInjector, logger: this.logger })
+        : undefined;
   }
 
   /** 实际监听端口（start 成功后；未启动为 null）。 */
@@ -436,6 +462,10 @@ export class ExecServer {
     }
     if (url.pathname === '/omo-agent-prompt') {
       await this.handleOmoAgentPrompt(req, res, url);
+      return;
+    }
+    if (url.pathname.startsWith('/config/')) {
+      await this.handleConfigRoute(req, res, url.pathname.slice('/config/'.length));
       return;
     }
     sendJson(res, 404, { error: `未支持的路径: ${url.pathname}` });
@@ -667,6 +697,109 @@ export class ExecServer {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`[exec] omo-agent-prompt 失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
+  /**
+   * /config/<kind> 与 /config/restart（仅独立模式）：本地配置下推。
+   * 注册模式返回 404 + 引导（配置一律经控制面下发，避免双事实源）。
+   */
+  private async handleConfigRoute(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    kind: string,
+  ): Promise<void> {
+    if (!this.standalone) {
+      sendJson(res, 404, {
+        error:
+          '本地配置下推仅在独立模式可用（WORKER_STANDALONE=true）；注册模式请经控制面下发',
+      });
+      return;
+    }
+    if (kind === 'restart') {
+      await this.handleConfigRestart(req, res);
+      return;
+    }
+    if (!(LOCAL_CONFIG_KINDS as readonly string[]).includes(kind)) {
+      sendJson(res, 404, { error: `未知配置类别 /config/${kind}` });
+      return;
+    }
+    await this.handleLocalConfig(req, res, kind as LocalConfigKind);
+  }
+
+  private async handleLocalConfig(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    kind: LocalConfigKind,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    if (!this.localConfig) {
+      sendJson(res, 503, { error: '本地配置下推未启用（需独立模式 + 资源注入器）' });
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await readBody(req, this.maxBodyBytes);
+    } catch (err) {
+      await drainRequest(req);
+      sendJson(res, 413, { error: err instanceof Error ? err.message : '请求体过大' });
+      return;
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(raw || '{}');
+    } catch {
+      sendJson(res, 400, { error: '请求体必须是合法 JSON' });
+      return;
+    }
+    try {
+      const result = this.localConfig.apply(kind, body);
+      sendJson(res, 200, { ...result });
+    } catch (err) {
+      if (err instanceof LocalConfigError) {
+        sendJson(res, 400, { error: err.message });
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] /config/${kind} 写入失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
+  /** POST /config/restart：触发 serve 重启使已下推配置生效（复用 RestartCoordinator）。 */
+  private async handleConfigRestart(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    await drainRequest(req);
+    if (!this.restartServe) {
+      sendJson(res, 503, { error: '重启回调未注入，无法重启' });
+      return;
+    }
+    try {
+      const restart = await this.restartServe('exec /config/restart（本地配置下推）');
+      sendJson(res, 200, { restart });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] /config/restart 失败: ${message} (HTTP 502)`);
       sendJson(res, 502, { error: message });
     }
   }
