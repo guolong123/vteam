@@ -25,3 +25,8 @@ _Auto-scaffolded by /ulw-execute. Append new entries below - never overwrite._
 
 ## L5 · playwright 环境
 `web/playwright.config.ts` baseURL 硬编码 `:3001`（本地 dev，不自启 webServer）、`channel: chrome`。`pages`/`docs` 项目依赖 `setup`（seed-admin 真实登录 → `.auth/user.json`）。默认 `npm run test:e2e` 只跑 6/22 个 spec，16 个是**孤儿**（不在任何 project 内）。
+
+## L6 · 「保持共享组件不被修改」的约束会把问题挤到外层
+计划 T18 写了「只改外层容器布局，保持 `TaskStatusActions` 组件本身不被修改」。执行者照做，在外层套 `grid 1fr1fr`；
+但该组件根容器是 `flexDirection:column`（子按钮被 stretch 成全宽），整个竖排块只占第 1 列 → 按钮变成上下堆叠、各占半宽。
+**教训**：当视觉目标需要改变子组件内部排布时，"不许动子组件"的约束是错的；正确做法是给共享组件加**可选 prop**（默认值保持既有调用方行为），而不是在外层硬套布局。
