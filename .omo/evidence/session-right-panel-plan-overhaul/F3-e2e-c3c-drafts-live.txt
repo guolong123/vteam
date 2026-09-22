@@ -1,0 +1,18 @@
+# C3c 三目录扫描（含 .omo/drafts）真实链路验证
+# 执行时间: 2026-09-22T21:55:02+08:00
+
+## 前置：worker 镜像重建（原镜像 11:17 不含 .omo/drafts）
+docker compose build worker && docker compose up -d worker
+docker exec aiagents-compose-worker sh -c 'grep -n PLAN_DOCS_DIRS dist/exec/exec-server.js'
+  -> exports.PLAN_DOCS_DIRS = ['.omo/plans', '.opencode/plans', '.omo/drafts'];
+
+## 验证：往 .omo/drafts 放文件
+docker exec aiagents-compose-worker sh -c 'printf ... > /data/vteam-worker/tasks/t_0000000001/.omo/drafts/f3-drafts-qa.md'
+
+## GET /tasks/t_0000000001/plan-docs
+  -> degraded: False
+  -> files: ['f3-archive-qa.md', 'f3-drafts-qa.md']      <== .omo/drafts 文件被读出，三目录扫描生效
+
+## 清理
+  已删除 f3-drafts-qa.md 与 f3-archive-qa.md（worker 任务目录），移除空的 .omo/drafts 目录
+  注意：f3-archive-qa.md 作为「自动归档」的实测产出物仍保留在产出物库（type=file, category=计划）
