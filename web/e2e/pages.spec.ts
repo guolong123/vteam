@@ -453,12 +453,25 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(card.getByText(taskTitle).first()).toBeVisible();
     // ② 状态徽/编辑行
     await expect(card.getByRole("button", { name: "编辑" })).toBeVisible();
-    // ③ 主操作等宽行（任一状态操作按钮存在即证明操作区渲染）
-    await expect(
-      card.locator(
-        '[data-testid="task-accept"], [data-testid="task-reject"], [data-testid="start-task-button"], [data-testid="task-submit-review"], [data-testid="task-archive"], [data-testid="task-block"], [data-testid="task-resume"], [data-testid="enqueue-task-button"]',
-      ).first(),
-    ).toBeVisible();
+    // ③ 主操作等宽并排一行（row 布局回归守卫：pending_review → accept + reject 必须同排等宽）
+    const actionsRow = card.getByTestId("task-status-actions-row");
+    if ((await actionsRow.count()) > 0) {
+      const btns = actionsRow.locator("button");
+      await expect(btns).toHaveCount(2);
+      const b0 = await btns.nth(0).boundingBox();
+      const b1 = await btns.nth(1).boundingBox();
+      expect(b0 && b1).toBeTruthy();
+      expect(Math.abs(b0!.y - b1!.y)).toBeLessThan(2);
+      expect(Math.abs(b0!.width - b1!.width)).toBeLessThan(2);
+      expect(b0!.width).toBeGreaterThan(0);
+    } else {
+      // 单操作状态（start/resume/archive）：无并排容器，按钮整行即可
+      await expect(
+        card.locator(
+          '[data-testid="task-accept"], [data-testid="task-reject"], [data-testid="start-task-button"], [data-testid="task-submit-review"], [data-testid="task-archive"], [data-testid="task-block"], [data-testid="task-resume"], [data-testid="enqueue-task-button"]',
+        ).first(),
+      ).toBeVisible();
+    }
     // 状态卡内不含队列摘要行文案（队列卡是兄弟节点）
     await expect(card.getByText("暂无排队任务")).toHaveCount(0);
     await expect(card.getByText("当前执行中（队首）")).toHaveCount(0);

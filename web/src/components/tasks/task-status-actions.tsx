@@ -44,6 +44,11 @@ type TaskAction = "start" | "mark-pending-review" | "accept" | "reject" | "archi
 interface TaskStatusActionsProps {
   taskId: string;
   status: TaskApiStatus;
+  /**
+   * `column`（默认）竖向堆叠：看板卡片/详情抽屉依赖此形态，不可改默认值；
+   * `row` 等宽并排一行：会话页状态卡使用，仅操作数 ≥2 时生效。
+   */
+  layout?: "column" | "row";
 }
 
 /** 各状态可执行操作组（archived 终态返回 null 不渲染）。 */
@@ -126,7 +131,7 @@ function ActionButton({
  * 按任务状态渲染操作按钮组 + reject 原因弹窗。
  * 内部持有 mutation（onSettled 失效任务缓存），调用方无需感知请求细节。
  */
-export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
+export function TaskStatusActions({ taskId, status, layout = "column" }: TaskStatusActionsProps) {
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -264,6 +269,19 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
     actionMutation.mutate({ action: forceTarget, force: true });
   };
 
+  /** 主操作按钮节点（row 布局下会被包进等宽网格；column 布局下直接作为竖排子节点）。 */
+  const actionButtons = actions.map((action) => (
+    <ActionButton
+      key={action}
+      action={action}
+      pending={pending}
+      disabled={pending}
+      onClick={() => handleAction(action)}
+    />
+  ));
+  /** row 布局且操作数 ≥2 才分列；单操作整行（否则会出现半宽孤按钮）。 */
+  const useRowGrid = layout === "row" && actions.length > 1;
+
   return (
     <div
       style={{
@@ -275,15 +293,20 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
         ...baseFont,
       }}
     >
-      {actions.map((action) => (
-        <ActionButton
-          key={action}
-          action={action}
-          pending={pending}
-          disabled={pending}
-          onClick={() => handleAction(action)}
-        />
-      ))}
+      {useRowGrid ? (
+        <div
+          data-testid="task-status-actions-row"
+          style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${actions.length}, 1fr)`,
+            gap: space.sm,
+          }}
+        >
+          {actionButtons}
+        </div>
+      ) : (
+        actionButtons
+      )}
       {status === "pending" && teamId && (
         <button
           type="button"

@@ -1086,9 +1086,7 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
                 </span>
                 <button type="button" onClick={onEditTaskInfo} style={{ padding: `2px ${space.sm}px`, borderRadius: radius.sm, border: "none", background: "none", fontSize: fontSize.xs, color: neutral[400], cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0, fontFamily: fontFamily.body }}>编辑</button>
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.sm }}>
-                <TaskStatusActions taskId={taskId} status={task.status as TaskApiStatus} />
-              </div>
+              <TaskStatusActions taskId={taskId} status={task.status as TaskApiStatus} layout="row" />
               {statusMetaRows.length > 0 && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: space.sm, borderTop: `1px dashed ${neutral[200]}`, paddingTop: space.sm, fontSize: 11 }}>
                   {statusMetaRows.map((r) => (
