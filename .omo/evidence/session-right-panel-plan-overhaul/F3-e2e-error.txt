@@ -1,0 +1,6 @@
+CMD: cd web && npx playwright test --project=pages (error-state evidence extracted)
+TEST: e2e/pages.spec.ts:544 "T24 错误态分支（plan-docs-error + artifacts-error)"
+断言1: plan-docs 接口 500 -> [data-testid=plan-docs-error] 可见
+断言2: artifacts 接口 500 -> [data-testid=artifacts-error] 可见
+  ✓  22 [pages] › e2e/pages.spec.ts:544:7 › 18 页 testid 断言（seed-admin 登录态） › T24 错误态分支（plan-docs-error + artifacts-error） (1.9s)
+  24 passed (26.5s)

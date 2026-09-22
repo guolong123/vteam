@@ -1,0 +1,97 @@
+命令总览：见各条目内“命令”行（只读：git diff/show/status/grep/sed/npx jest；工作目录 /Volumes/SSD-Data/01work/git-project/vteam，分支 main，基线 b418103..HEAD）
+审计时间：2026-09-22 UTC｜审计人：Sisyphus-Junior（F1/F4 只读审计）｜基线说明：b418103..HEAD 实际 26 个 commit（fd07b87…3801fc6），任务书“13 个”与实际不符，但起止端点一致，不影响逐项核验
+
+==================== Scope IN（8 项）====================
+
+[C1] 右栏结构改版 —— PASS
+命令：grep -n "type TeamSubTab\|type TaskSubTab" web/src/components/teams/TeamRightPanel.tsx
+输出：186:type TeamSubTab = "overview" | "channels";（团队 2 子页 ✓）
+      746:type TaskSubTab = "status" | "plan" | "output" | "triggers";（任务 4 子页 ✓）
+命令：grep -n "userPickedTabRef\|main-tab-task" web/src/components/teams/TeamRightPanel.tsx
+输出：1360 userPickedTabRef 定义；1366 `if (hasTask && !userPickedTabRef.current) setActiveMainTab("task")`（有任务默认落任务 ✓，且用户手选后不再抢回）；1373/1377 main-tab-team/main-tab-task 双 Tab ✓
+命令：grep -c "暂无等待" → 0（状态卡队列摘要行已删 ✓）
+命令：grep -c "任务详情" → 0（产出页重复任务详情已删 ✓）
+命令：grep -c "成员（" → 0（团队成员卡已删 ✓）
+
+[C2] 计划 Tab 内容聚合 + 6 处 isError + 查询门 + plan-steps taskId —— PASS（计数口径见注）
+命令：grep -n "plan-status-block\|plan-doc-row-\|plan-artifact-row-\|plan-step-" web/src/components/teams/TeamRightPanel.tsx
+输出：566 plan-status-block；1164/1172 plan-artifact-row-；1180 plan-doc-row-；1224 plan-step-（3 卡 + 聚合区 ✓；来源徽标/本地文件+category=计划产出物由 54a1106 引入，本次仅断言 testid 存在）
+命令：grep -c 'data-testid="[a-z-]*-error"' → 9（注：基线 b418103 同命令 = 3，均为预存 queue-cancel-error/trigger-list-error/trigger-cancel-error；本次新增 6 = plan-checklist-error/channel-list-error/plan-docs-error/plan-steps-error/artifacts-error/issues-error，其中 channel-list-error 为团队子页合并附带。6 处列表 isError 要求达成 ✓）
+命令：grep -n "enabled: !!taskId" → 485（计划查询门仅依赖 taskId ✓）
+命令：grep -n "OR: \[{ taskId" server/src/tasks/plan-steps.service.ts → 59: OR: [{ taskId: taskId }, { taskId: null }]（会话定位补任务维度 ✓）
+
+[C3] 词表 5 位点含「计划」—— PASS
+命令：sed -n "/ARTIFACT_CATEGORIES/,/] as const/p" server/src/artifacts/artifacts.constants.ts
+输出：['需求','设计','实现','测试用例','测试报告','运维','计划','其他']（八类 ✓，「计划」第 7 位）
+命令：grep -n "运维/计划/其他" server/src/platform-mcp/platform-mcp.tools.ts server/src/platform-mcp/platform-mcp.service.ts server/src/artifacts/artifacts.service.ts
+输出：tools.ts:230 / service.ts:2788 / artifacts.service.ts:101（3 串 ✓）
+命令：grep -n "计划" web/src/lib/artifact-categories.ts → 14: '计划'（web 镜像 ✓）
+
+[C3b] 计划目录自动归档 —— PASS
+命令：grep -n "category: '计划'\|scanAndArchivePlanDocs" server/src/tasks/plan-archive.service.ts
+输出：37 scanAndArchivePlanDocs 定义；99 category: '计划'（归档落 category=计划 ✓，失败降级 warn 见该文件 try/catch）
+命令：grep -n "scanAndArchivePlanDocs" server/src/tasks/tasks.service.ts → 1260/1286（pending_review/accept 双触发点 ✓）
+命令：grep -rn "scanAndArchivePlanDocs" server/src/tasks/plan-docs.service.ts server/src/docs-site/ | wc -l → 0（读路径零写 ✓）
+
+[C3c] worker PLAN_DOCS_DIRS —— PASS
+命令：grep -n "PLAN_DOCS_DIRS\|PLAN_DOCS_DIR =" worker/src/exec/exec-server.ts
+输出：144 PLAN_DOCS_DIRS = ['.omo/plans', '.opencode/plans', '.omo/drafts']（三目录 ✓，.omo/drafts 末位 ✓）；146 PLAN_DOCS_DIR = PLAN_DOCS_DIRS[0]（旧常量语义未变 ✓）；1013/1022/1059 扫描与优先级注释一致
+
+[C3d] 角色/技能提示词零改动 —— PASS
+命令：git diff b418103..HEAD --stat -- server/prisma/seed.ts server/src/chat/worker-dispatcher.ts → 无输出 ✓
+
+[C4] P0×2 + P1×4 —— PASS
+命令：grep -n "reuseMutation.mutate" web/src/components/teams/TeamRightPanel.tsx → 366/367 均为 mutate(!reuseSession)（P0 完成后重置开关反值已修 ✓）
+命令：grep -c "slice(0, 5)" → 0（P0 产出/Issue 截断已除 ✓）
+6 处 isError：同 C2（基线 3→现 9，新增 6 ✓，P1 错误伪装空态已修）
+plan-steps taskId：同 C2（59 行 OR taskId ✓，P1 跨任务串数据已修；计划查询门 485 行 ✓，P1 永久 loading 已修）
+
+[C5] P2×3 —— PASS
+命令：grep -n "queue-empty" → 102 queue-empty，文案“暂无排队任务＋群聊按团队复用，历史跨任务可见”（队列空态 ✓）
+命令：grep -n "refetchInterval: (query)" → 487（10s）/813（30s），均为 error→false（触发器错误停轮询 ✓，错误态暂停轮询注释在 486 行）
+命令：grep -n "resetAfterComplete: Boolean" server/src/tasks/tasks.service.ts → 1921 toTaskDto 暴露（DTO 暴露 ✓，记忆区团队级/任务级区分由 518301a 完成）
+
+==================== Scope OUT（12 条）====================
+
+[O1] 零角色/技能提示词变更 —— PASS
+命令：git diff b418103..HEAD --stat -- server/prisma/seed.ts server/src/chat/worker-dispatcher.ts → 无输出 ✓（同 C3d）
+
+[O2] 未重建计划状态机 —— PASS
+命令：git diff b418103..HEAD --stat -- server/src/tasks/plan-lifecycle.service.ts server/src/issues/ → 无输出 ✓（流转/评审账本/冻结哈希语义未动）
+
+[O3] 未删评审闭环控件 —— PASS
+命令：grep -c "plan-checklist\|plan-doc-upload\|plan-status-block" → 4（566 plan-status-block；676 plan-checklist；684 plan-checklist-error；1117 plan-doc-upload，均 ≥1 ✓）
+
+[O4] category 仍可选 / ARTIFACT_TYPES 三态 / 未知字段忽略未改 —— PASS
+命令：grep -n "\.optional()" server/src/platform-mcp/platform-mcp.tools.ts → 56/57/60/66/72/78/87/97 行含 optional；category 位点：226-228 `category: z.enum(ARTIFACT_CATEGORIES).optional()` ✓
+命令：grep -n "ARTIFACT_TYPES" server/src/artifacts/artifacts.constants.ts → 6: ['text','doc','file'] 三态 ✓
+
+[O5] 零历史分类回填 —— PASS
+命令：git diff b418103..HEAD --name-only -- server/prisma/migrations/ → 无输出（无新增迁移 ✓，无 backfill 脚本）
+
+[O6] 无新 DB 表 / schema 未改 —— PASS
+命令：git diff b418103..HEAD --stat -- server/prisma/schema.prisma → 无输出 ✓
+
+[O7] PLAN_DOCS_DIR 未变 —— PASS
+命令：git diff b418103..HEAD -- worker/src/exec/exec-server.ts | grep -E "^[+-].*PLAN_DOCS_DIR = " → 无输出 ✓（注：无前缀 grep 会命中上下文行 146，属误报；严格前后缀过滤为空才是正确口径）
+
+[O8] 读路径零写 —— PASS
+命令：grep -rn "scanAndArchivePlanDocs" server/src/tasks/plan-docs.service.ts server/src/docs-site/ → 0 命中 ✓（同 C3b）
+
+[O9] 未动 realtime/RBAC/throttle/worker 执行引擎 —— PASS
+命令：git diff b418103..HEAD --stat -- server/src/realtime/ server/src/common/guards/ worker/src/runtime/ worker/src/driver/ → 无输出 ✓
+
+[O10] 未接回孤儿 spec、未改 playwright.config —— PASS
+命令：git diff b418103..HEAD --stat -- web/playwright.config.ts → 无输出 ✓（16 孤儿 spec 未接回，属计划内不做）
+
+[O11] 未改主题/无视觉重设计 —— PASS
+命令：git diff b418103..HEAD --stat -- web/src/theme/ web/app/globals.css → 无输出 ✓
+
+[O12] 执行步骤仍 opencode todo 只读透传 —— PASS
+命令：grep -n "listTodos" server/src/tasks/plan-steps.service.ts → 25 注释 + 84 workerClient.listTodos（只读透传，未加逼 agent 用 todo 的提示词 ✓）；提示词零改同 O1 ✓
+
+==================== FAIL 汇总 ====================
+任一 FAIL：无。F1 20 条（8 IN + 12 OUT）全部 PASS。
+预存债标注（非本次，不计 FAIL）：web/shot-omo3.tmp.cjs lint error、platform-mcp.tools.ts prettier error、docs-unified.spec.ts:377 线上任务名漂移——本次审计未触及这些文件/断言，不纳入结论。
+基线注记：任务书称 13 commit，实际 b418103..HEAD 为 26 commit（fd07b87…3801fc6）；起止端点一致，逐项核验不受影响。
+工作区干净：`git status --porcelain -- ':!.omo/evidence'` 输出与审计前一致（仅 .omo/boulder.json、.opencode/opencode.json 两处本地修改 + .omo/drafts/.omo/notepads/.omo/plans/.omo/ulw-execute/vteam-worker-sdk-0.1.0.tar.gz 等未跟踪项，无产品源码改动）。

@@ -1,0 +1,42 @@
+# F3-2 自动归档 真实链路 E2E（live，重建镜像后）
+# 执行时间: 2026-09-22T21:31:30+08:00
+
+## 前置：server 镜像重建（原镜像 10:02 早于本次代码提交）
+docker compose build server   # registry 首次 EOF 失败，重试成功
+docker compose up -d server
+docker exec aiagents-compose-server sh -c 'find dist -name "*plan-archive*"'
+  -> dist/src/tasks/plan-archive.service.js  (新代码已部署)
+docker exec aiagents-compose-server sh -c 'grep -c scanAndArchivePlanDocs dist/src/tasks/tasks.service.js'  -> 命中
+
+## 1) 基线 GET /tasks/t_0000000001/artifacts?category=计划
+  -> total: 0
+
+## 2) POST /tasks/t_0000000001/reject {reason:'F3 QA 自动归档往返'}
+  -> 201 status=in_progress
+
+## 3) POST /tasks/t_0000000001/plan-docs {name:'f3-archive-qa.md', content:...}
+  -> 201 {"name":"f3-archive-qa.md","updatedAt":"2026-09-22T13:30:26.887Z","directory":"/data/vteam-worker/tasks/t_0000000001"}
+
+## 4) POST /tasks/t_0000000001/mark-pending-review   (触发自动归档)
+  -> 201 status=pending_review
+
+## 5) sleep 4 && GET artifacts?category=计划
+  -> total: 1
+     - file | f3-archive-qa.md | v1 | category: 计划      <== 自动归档生效
+
+## 6) 幂等：再走 reject -> mark-pending-review（同内容，不重传）
+  -> total 仍 1、版本仍 v1  => sha256 去重生效
+
+## 7) 回归：三端点仍 200 且语义正常
+  -> /plan       {'status': 'draft'}
+  -> /plan-steps {'workerId': 'w_compose_worker', 'degraded': False}
+  -> /plan-docs  {'workerId': 'w_compose_worker', 'degraded': False}
+
+## 8) 测试数据恢复（reject 的 promoteNextInTx 副作用）
+  UPDATE teams SET current_task_id='t_0000000001' WHERE id='tm_0000000001';
+  UPDATE tasks SET status='queued' WHERE id IN ('t_0000000002','t_0000000003');
+  + 补回 team_queues 行并重排 position
+  -> current_task_id=t_0000000001 / t_0000000001=pending_review / queue=11 项 (1:t2,2:t3,3:t4,4:t5,5:t6)
+
+## 结论
+F3-2 自动归档真实链路 PASS（触发/落库/分类/幂等/降级/回归 全部实测通过）。

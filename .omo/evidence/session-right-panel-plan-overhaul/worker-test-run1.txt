@@ -1,0 +1,434 @@
+
+> worker@0.0.1 test
+> jest --runInBand
+
+PASS src/runtime/opencode-server.integration.spec.ts (12.149 s)
+  ● Console
+
+    console.info
+      [opencode-server] 随机空闲端口: 60336
+
+      at OpencodeServer.resolvePort (runtime/opencode-server.ts:310:28)
+
+    console.info
+      [opencode-server] 健康检查通过 (HTTP 200)
+
+      at OpencodeServer.waitForHealthy (runtime/opencode-server.ts:425:32)
+
+    console.info
+      [opencode-server] serve 就绪: http://127.0.0.1:60336 (pid=72649)
+
+      at OpencodeServer.start (runtime/opencode-server.ts:245:26)
+
+    console.warn
+      [opencode-server] 端口 42500 被占用，尝试 42501
+
+      316 |         return candidate;
+      317 |       }
+    > 318 |       this.options.logger?.warn(`[opencode-server] 端口 ${candidate} 被占用，尝试 ${candidate + 1}`);
+          |                            ^
+      319 |       candidate += 1;
+      320 |     }
+      321 |     throw new Error(
+
+      at OpencodeServer.resolvePort (runtime/opencode-server.ts:318:28)
+      at OpencodeServer.start (runtime/opencode-server.ts:227:18)
+      at Object.<anonymous> (runtime/opencode-server.integration.spec.ts:122:23)
+
+    console.info
+      [opencode-server] 健康检查通过 (HTTP 200)
+
+      at OpencodeServer.waitForHealthy (runtime/opencode-server.ts:425:32)
+
+    console.info
+      [opencode-server] serve 就绪: http://127.0.0.1:42501 (pid=72652)
+
+      at OpencodeServer.start (runtime/opencode-server.ts:245:26)
+
+    console.info
+      [opencode-server] 随机空闲端口: 60389
+
+      at OpencodeServer.resolvePort (runtime/opencode-server.ts:310:28)
+
+    console.info
+      [opencode-server] 健康检查通过 (HTTP 200)
+
+      at OpencodeServer.waitForHealthy (runtime/opencode-server.ts:425:32)
+
+    console.info
+      [opencode-server] serve 就绪: http://127.0.0.1:60389 (pid=72655)
+
+      at OpencodeServer.start (runtime/opencode-server.ts:245:26)
+
+PASS src/exec/exec-server.spec.ts
+PASS src/git/git-tools.spec.ts
+PASS src/driver/prompt-await.spec.ts
+PASS src/runtime/opencode-server.spec.ts
+PASS src/index.spec.ts
+PASS src/driver/v1-driver.spec.ts
+  ● Console
+
+    console.info
+      [v1-driver] createSession -> ses_abc123
+
+      at V1Driver.createSession (driver/v1-driver.ts:275:17)
+
+    console.info
+      [v1-driver] createSession -> ses_xyz
+
+      at V1Driver.createSession (driver/v1-driver.ts:275:17)
+
+    console.info
+      [v1-driver] createSession -> ses_legacy
+
+      at V1Driver.createSession (driver/v1-driver.ts:275:17)
+
+    console.info
+      [v1-driver] sendMessage -> ses_1 model=(default) agent=(default) (HTTP 204)
+
+      at V1Driver.sendMessage (driver/v1-driver.ts:307:17)
+
+    console.info
+      [v1-driver] sendMessage -> ses_1 model=opencode-go/deepseek-v4-flash agent=build (HTTP 200)
+
+      at V1Driver.sendMessage (driver/v1-driver.ts:307:17)
+
+    console.info
+      [v1-driver] listAgents -> 5 个
+
+      at V1Driver.listAgents (driver/v1-driver.ts:462:17)
+
+    console.info
+      [v1-driver] listAgents -> 0 个 (directory=/data/vteam-worker/tasks/t_1)
+
+      at V1Driver.listAgents (driver/v1-driver.ts:462:17)
+
+    console.info
+      [v1-driver] listAgents -> 1 个
+
+      at V1Driver.listAgents (driver/v1-driver.ts:462:17)
+
+    console.info
+      [v1-driver] listTodos -> 3 个 (session=ses_1)
+
+      at V1Driver.listTodos (driver/v1-driver.ts:491:17)
+
+    console.info
+      [v1-driver] listTodos -> 0 个 (session=ses_1)
+
+      at V1Driver.listTodos (driver/v1-driver.ts:491:17)
+
+    console.info
+      [v1-driver] listTodos -> 0 个 (session=ses_1)
+
+      at V1Driver.listTodos (driver/v1-driver.ts:491:17)
+
+    console.info
+      [v1-driver] listTodos -> 1 个 (session=ses_1)
+
+      at V1Driver.listTodos (driver/v1-driver.ts:491:17)
+
+    console.warn
+      [v1-driver] abort -> ses_1 (HTTP 200)
+
+      423 |       method: 'POST',
+      424 |     });
+    > 425 |     this.logger.warn(`[v1-driver] abort -> ${sessionID} (HTTP ${res.status})`);
+          |                 ^
+      426 |   }
+      427 |
+      428 |   /**
+
+      at V1Driver.abort (driver/v1-driver.ts:425:17)
+      at Object.<anonymous> (driver/v1-driver.spec.ts:266:5)
+
+    console.info
+      [v1-driver] baseUrl 更新: http://127.0.0.1:4299
+
+      at V1Driver.set baseUrl [as baseUrl] (driver/v1-driver.ts:249:17)
+
+    console.info
+      [v1-driver] baseUrl 更新: http://127.0.0.1:4199
+
+      at V1Driver.set baseUrl [as baseUrl] (driver/v1-driver.ts:249:17)
+
+    console.info
+      [v1-driver] createSession -> ses_1
+
+      at V1Driver.createSession (driver/v1-driver.ts:275:17)
+
+    console.info
+      [v1-driver] createSession -> ses_1
+
+      at V1Driver.createSession (driver/v1-driver.ts:275:17)
+
+    console.info
+      [v1-driver] baseUrl 更新: http://127.0.0.1:53001
+
+      at V1Driver.set baseUrl [as baseUrl] (driver/v1-driver.ts:249:17)
+
+    console.info
+      [v1-driver] createSession -> ses_2
+
+      at V1Driver.createSession (driver/v1-driver.ts:275:17)
+
+    console.info
+      [v1-driver] replyQuestion -> ses_1/que_1 (HTTP 200)
+
+      at V1Driver.replyQuestion (driver/v1-driver.ts:352:17)
+
+    console.info
+      [v1-driver] rejectQuestion -> ses_1/que_1 (HTTP 200)
+
+      at V1Driver.rejectQuestion (driver/v1-driver.ts:364:17)
+
+    console.info
+      [v1-driver] replyPermission -> ses_1/per_1=once (HTTP 200)
+
+      at V1Driver.replyPermission (driver/v1-driver.ts:417:17)
+
+PASS src/resources/injector.spec.ts
+PASS src/resources/custom-tool.spec.ts
+PASS src/exec/local-config.spec.ts
+PASS src/credentials/model-credential-injector.spec.ts
+  ● Console
+
+    console.warn
+      [model-credential-injector] limit 残缺已丢弃（opencode 要求 context+output 同时存在）: context=4096 output=undefined
+
+      150 |     out.limit = { context, output };
+      151 |   } else if (context || output) {
+    > 152 |     console.warn(
+          |             ^
+      153 |       `[model-credential-injector] limit 残缺已丢弃（opencode 要求 context+output 同时存在）: context=${String(caps.limit?.context)} output=${String(caps.limit?.output)}`,
+      154 |     );
+      155 |   }
+
+      at buildModelEntry (credentials/model-credential-injector.ts:152:13)
+      at buildProviderSection (credentials/model-credential-injector.ts:210:27)
+      at Object.<anonymous> (credentials/model-credential-injector.spec.ts:206:41)
+
+    console.warn
+      [model-credential-injector] limit 残缺已丢弃（opencode 要求 context+output 同时存在）: context=undefined output=1024
+
+      150 |     out.limit = { context, output };
+      151 |   } else if (context || output) {
+    > 152 |     console.warn(
+          |             ^
+      153 |       `[model-credential-injector] limit 残缺已丢弃（opencode 要求 context+output 同时存在）: context=${String(caps.limit?.context)} output=${String(caps.limit?.output)}`,
+      154 |     );
+      155 |   }
+
+      at buildModelEntry (credentials/model-credential-injector.ts:152:13)
+      at buildProviderSection (credentials/model-credential-injector.ts:210:27)
+      at Object.<anonymous> (credentials/model-credential-injector.spec.ts:206:41)
+
+    console.warn
+      [model-credential-injector] limit 残缺已丢弃（opencode 要求 context+output 同时存在）: context=-1 output=100
+
+      150 |     out.limit = { context, output };
+      151 |   } else if (context || output) {
+    > 152 |     console.warn(
+          |             ^
+      153 |       `[model-credential-injector] limit 残缺已丢弃（opencode 要求 context+output 同时存在）: context=${String(caps.limit?.context)} output=${String(caps.limit?.output)}`,
+      154 |     );
+      155 |   }
+
+      at buildModelEntry (credentials/model-credential-injector.ts:152:13)
+      at buildProviderSection (credentials/model-credential-injector.ts:210:27)
+      at Object.<anonymous> (credentials/model-credential-injector.spec.ts:224:41)
+
+    console.warn
+      [model-credential-injector] limit 残缺已丢弃（opencode 要求 context+output 同时存在）: context=100 output=undefined
+
+      150 |     out.limit = { context, output };
+      151 |   } else if (context || output) {
+    > 152 |     console.warn(
+          |             ^
+      153 |       `[model-credential-injector] limit 残缺已丢弃（opencode 要求 context+output 同时存在）: context=${String(caps.limit?.context)} output=${String(caps.limit?.output)}`,
+      154 |     );
+      155 |   }
+
+      at buildModelEntry (credentials/model-credential-injector.ts:152:13)
+      at buildProviderSection (credentials/model-credential-injector.ts:210:27)
+      at Object.<anonymous> (credentials/model-credential-injector.spec.ts:224:41)
+
+    console.warn
+      [model-credential-injector] opencode provider 配置无效跳过: provider= baseUrl=http://x models=1
+
+      217 |       Object.keys(models).length === 0
+      218 |     ) {
+    > 219 |       console.warn(
+          |               ^
+      220 |         `[model-credential-injector] opencode provider 配置无效跳过: provider=${providerID ?? '(空)'} baseUrl=${baseUrl ?? '(空)'} models=${Object.keys(models).length}`,
+      221 |       );
+      222 |       continue;
+
+      at buildProviderSection (credentials/model-credential-injector.ts:219:15)
+      at Object.<anonymous> (credentials/model-credential-injector.spec.ts:288:41)
+
+    console.warn
+      [model-credential-injector] opencode provider 配置无效跳过: provider=bad baseUrl=ftp://nope models=1
+
+      217 |       Object.keys(models).length === 0
+      218 |     ) {
+    > 219 |       console.warn(
+          |               ^
+      220 |         `[model-credential-injector] opencode provider 配置无效跳过: provider=${providerID ?? '(空)'} baseUrl=${baseUrl ?? '(空)'} models=${Object.keys(models).length}`,
+      221 |       );
+      222 |       continue;
+
+      at buildProviderSection (credentials/model-credential-injector.ts:219:15)
+      at Object.<anonymous> (credentials/model-credential-injector.spec.ts:288:41)
+
+    console.warn
+      [model-credential-injector] opencode provider 配置无效跳过: provider=no-models baseUrl=http://ok models=0
+
+      217 |       Object.keys(models).length === 0
+      218 |     ) {
+    > 219 |       console.warn(
+          |               ^
+      220 |         `[model-credential-injector] opencode provider 配置无效跳过: provider=${providerID ?? '(空)'} baseUrl=${baseUrl ?? '(空)'} models=${Object.keys(models).length}`,
+      221 |       );
+      222 |       continue;
+
+      at buildProviderSection (credentials/model-credential-injector.ts:219:15)
+      at Object.<anonymous> (credentials/model-credential-injector.spec.ts:288:41)
+
+    console.warn
+      [model-credential-injector] 现有 opencode.json 解析失败，重建（旧内容丢弃）
+
+      259 |       }
+      260 |     } catch {
+    > 261 |       console.warn(
+          |               ^
+      262 |         '[model-credential-injector] 现有 opencode.json 解析失败，重建（旧内容丢弃）',
+      263 |       );
+      264 |     }
+
+      at mergeProviderSection (credentials/model-credential-injector.ts:261:15)
+      at Object.<anonymous> (credentials/model-credential-injector.spec.ts:341:40)
+
+PASS src/client/registry-client.spec.ts
+PASS src/mcp-status/mcp-status-probe.spec.ts
+PASS src/git/git-credential-injector.spec.ts
+PASS src/exec/artifact-extract.spec.ts
+PASS src/client/event-client.spec.ts
+PASS src/restart/restart-coordinator.spec.ts
+  ● Console
+
+    console.info
+      [restart] 执行重启（reload-config）
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:90:19)
+
+    console.info
+      [restart] serve 重启完成: http://127.0.0.1:53001
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:92:19)
+
+    console.info
+      [restart] 重新注册完成（capabilities.baseUrl/port 已更新）
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:95:21)
+
+    console.warn
+      [restart] reload-config：2 个活跃会话，重启挂起（等会话归零后自动执行）
+
+      63 |     if (count > 0) {
+      64 |       this.pendingRestart = true;
+    > 65 |       this.logger.warn(
+         |                   ^
+      66 |         `[restart] ${reason}：${count} 个活跃会话，重启挂起（等会话归零后自动执行）`,
+      67 |       );
+      68 |       return 'pending';
+
+      at RestartCoordinator.requestRestart (restart/restart-coordinator.ts:65:19)
+      at Object.<anonymous> (restart/restart-coordinator.spec.ts:55:57)
+
+    console.info
+      [restart] 活跃会话已归零，执行挂起的重启
+
+      at RestartCoordinator.checkPending (restart/restart-coordinator.ts:78:19)
+
+    console.info
+      [restart] 执行重启（挂起重启（会话归零））
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:90:19)
+
+    console.info
+      [restart] serve 重启完成: http://127.0.0.1:53002
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:92:19)
+
+    console.info
+      [restart] 重新注册完成（capabilities.baseUrl/port 已更新）
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:95:21)
+
+    console.warn
+      [restart] reload-config：1 个活跃会话，重启挂起（等会话归零后自动执行）
+
+      63 |     if (count > 0) {
+      64 |       this.pendingRestart = true;
+    > 65 |       this.logger.warn(
+         |                   ^
+      66 |         `[restart] ${reason}：${count} 个活跃会话，重启挂起（等会话归零后自动执行）`,
+      67 |       );
+      68 |       return 'pending';
+
+      at RestartCoordinator.requestRestart (restart/restart-coordinator.ts:65:19)
+      at Object.<anonymous> (restart/restart-coordinator.spec.ts:83:23)
+
+    console.warn
+      [restart] reload-config：1 个活跃会话，重启挂起（等会话归零后自动执行）
+
+      63 |     if (count > 0) {
+      64 |       this.pendingRestart = true;
+    > 65 |       this.logger.warn(
+         |                   ^
+      66 |         `[restart] ${reason}：${count} 个活跃会话，重启挂起（等会话归零后自动执行）`,
+      67 |       );
+      68 |       return 'pending';
+
+      at RestartCoordinator.requestRestart (restart/restart-coordinator.ts:65:19)
+      at Object.<anonymous> (restart/restart-coordinator.spec.ts:84:23)
+
+    console.info
+      [restart] 活跃会话已归零，执行挂起的重启
+
+      at RestartCoordinator.checkPending (restart/restart-coordinator.ts:78:19)
+
+    console.info
+      [restart] 执行重启（挂起重启（会话归零））
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:90:19)
+
+    console.info
+      [restart] serve 重启完成: http://127.0.0.1:53003
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:92:19)
+
+    console.info
+      [restart] 执行重启（reload-config）
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:90:19)
+
+    console.info
+      [restart] serve 重启完成: http://127.0.0.1:53005
+
+      at RestartCoordinator.performRestart (restart/restart-coordinator.ts:92:19)
+
+PASS src/resources/opencode-config-builder.spec.ts
+PASS src/protocol/contract.spec.ts
+PASS src/browser/browser-tools.spec.ts
+PASS src/config.spec.ts
+PASS src/resources/omo-enabled.spec.ts
+PASS src/resources/omo-config.spec.ts
+PASS src/instance-tracker.spec.ts
+
+Test Suites: 24 passed, 24 total
+Tests:       605 passed, 605 total
+Snapshots:   0 total
+Time:        17.819 s, estimated 18 s
+Ran all test suites.

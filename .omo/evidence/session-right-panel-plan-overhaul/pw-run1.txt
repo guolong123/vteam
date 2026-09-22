@@ -1,0 +1,88 @@
+
+Running 41 tests using 1 worker
+
+  ✓   1 [setup] › e2e/auth.setup.ts:12:6 › 真实表单登录 seed-admin → storageState (1.3s)
+  ✓   2 [pages] › e2e/pages.spec.ts:24:7 › 18 页 testid 断言（seed-admin 登录态） › 2/17 team-list /teams（项目列表已拆除，主工作台） (855ms)
+  ✓   3 [pages] › e2e/pages.spec.ts:32:7 › 18 页 testid 断言（seed-admin 登录态） › 3/17 task-create /tasks/new?teamId=tm_0000000001（团队预选，直出 Agent 选项） (636ms)
+  ✓   4 [pages] › e2e/pages.spec.ts:43:7 › 18 页 testid 断言（seed-admin 登录态） › 4/17 task-board /board?teamId=tm_0000000001 (683ms)
+  ✓   5 [pages] › e2e/pages.spec.ts:52:7 › 18 页 testid 断言（seed-admin 登录态） › 4b/17 board-drawer 看板卡片开抽屉不进聊天 (1.3s)
+  ✓   6 [pages] › e2e/pages.spec.ts:77:7 › 18 页 testid 断言（seed-admin 登录态） › 5/17 agent-config /agents (706ms)
+  ✓   7 [pages] › e2e/pages.spec.ts:88:7 › 18 页 testid 断言（seed-admin 登录态） › 7b/17 team-session /teams/tm_0000000001/session（团队唯一聊天入口） (1.3s)
+  ✓   8 [pages] › e2e/pages.spec.ts:130:7 › 18 页 testid 断言（seed-admin 登录态） › team-session zero-task 零任务直聊（无选择器） (938ms)
+  ✓   9 [pages] › e2e/pages.spec.ts:177:7 › 18 页 testid 断言（seed-admin 登录态） › 8-10/17 导航变体（AppShell 融合导航承载） (724ms)
+  ✓  10 [pages] › e2e/pages.spec.ts:228:7 › 18 页 testid 断言（seed-admin 登录态） › 11/17 role-permission /roles (821ms)
+  ✓  11 [pages] › e2e/pages.spec.ts:239:7 › 18 页 testid 断言（seed-admin 登录态） › 12/17 skills-tools-manage /skills（双 Tab + 工具三子 Tab） (820ms)
+  ✓  12 [pages] › e2e/pages.spec.ts:260:7 › 18 页 testid 断言（seed-admin 登录态） › 13/17 task-detail /artifacts?teamId=tm_0000000001 → /docs 重定向（路由收敛 T10） (1.4s)
+  ✓  13 [pages] › e2e/pages.spec.ts:273:7 › 18 页 testid 断言（seed-admin 登录态） › 15/17 user-management /users (1.0s)
+  ✓  14 [pages] › e2e/pages.spec.ts:295:7 › 18 页 testid 断言（seed-admin 登录态） › 16/17 worker-install /workers/install（独立路由 · 3 步安装向导） (675ms)
+  ✓  15 [pages] › e2e/pages.spec.ts:322:7 › 18 页 testid 断言（seed-admin 登录态） › 17/18 worker-list /workers（列表 + 唯一安装入口） (809ms)
+  ✓  16 [pages] › e2e/pages.spec.ts:336:7 › 18 页 testid 断言（seed-admin 登录态） › 18/18 models-manage /models（模型管理：Provider 单一视图） (1.9s)
+  ✓  17 [pages] › e2e/pages.spec.ts:394:7 › 18 页 testid 断言（seed-admin 登录态） › 旧路由 /providers 重定向到 /models（单一入口兼容） (1.4s)
+  ✓  18 [pages] › e2e/pages.spec.ts:401:7 › 18 页 testid 断言（seed-admin 登录态） › T24 有任务主 Tab + 子页状态保留（站内进入会话页） (1.3s)
+  ✓  19 [pages] › e2e/pages.spec.ts:429:7 › 18 页 testid 断言（seed-admin 登录态） › T24 状态卡三层 + 队列空态（seed 任务 t_0000000001） (1.1s)
+  ✓  20 [pages] › e2e/pages.spec.ts:471:7 › 18 页 testid 断言（seed-admin 登录态） › T24 触发子页可达（空触发器） (981ms)
+  ✓  21 [pages] › e2e/pages.spec.ts:488:7 › 18 页 testid 断言（seed-admin 登录态） › T24 计划区两类来源 + 执行步骤行（全 mock） (1.1s)
+  ✓  22 [pages] › e2e/pages.spec.ts:544:7 › 18 页 testid 断言（seed-admin 登录态） › T24 错误态分支（plan-docs-error + artifacts-error） (1.8s)
+  ✓  23 [pages] › e2e/pages.spec.ts:569:7 › 18 页 testid 断言（seed-admin 登录态） › T24 产出物列表不截断（mock 7 条全渲染） (1.0s)
+  ✓  24 [pages] › e2e/pages.spec.ts:600:7 › 18 页 testid 断言（seed-admin 登录态） › /system 落地页重定向到第一个子导航（不再空转占位页） (795ms)
+  ✓  25 [docs] › e2e/docs-unified.spec.ts:242:7 › happy：选择器→chips→树→查看器→版本→删除→深链 › 选择器 + 树：任务预填 + 自家 10 行 (982ms)
+  ✓  26 [docs] › e2e/docs-unified.spec.ts:251:7 › happy：选择器→chips→树→查看器→版本→删除→深链 › chips：分类过滤 + data-active 契约 (1.1s)
+  ✓  27 [docs] › e2e/docs-unified.spec.ts:274:7 › happy：选择器→chips→树→查看器→版本→删除→深链 › 树→查看器：md 渲染 + ?doc= 回写 (900ms)
+  ✓  28 [docs] › e2e/docs-unified.spec.ts:286:7 › happy：选择器→chips→树→查看器→版本→删除→深链 › 版本查看器：v2 默认 + 切 v1 (1.2s)
+  ✓  29 [docs] › e2e/docs-unified.spec.ts:297:7 › happy：选择器→chips→树→查看器→版本→删除→深链 › 删除：UI 删 scratch 行 + API 404 (1.1s)
+  ✓  30 [docs] › e2e/docs-unified.spec.ts:318:7 › happy：选择器→chips→树→查看器→版本→删除→深链 › ?doc= 深链：直达查看器 (1.1s)
+  ✓  31 [docs] › e2e/docs-unified.spec.ts:334:7 › prototypes：徽标→tab→深链→团队级聚合（T16） › 徽标 + tab：原型非空 (915ms)
+  ✓  32 [docs] › e2e/docs-unified.spec.ts:353:7 › prototypes：徽标→tab→深链→团队级聚合（T16） › ?proto= 深链：直达选中 (696ms)
+  ✘  33 [docs] › e2e/docs-unified.spec.ts:366:7 › prototypes：徽标→tab→深链→团队级聚合（T16） › 团队级（task=all）：原型 tab 可用 + 跨任务列表 (11.2s)
+  ✓  34 [docs] › e2e/docs-unified.spec.ts:383:7 › prototypes：徽标→tab→深链→团队级聚合（T16） › 团队级（task=all）：?proto= 深链直达选中 (1.0s)
+  ✓  35 [docs] › e2e/docs-unified.spec.ts:398:7 › edge：txt/csv/json 预览 + pdf 沙箱 + docx 下载卡 + ghost › txt→<pre> 预览 + 下载兜底 (937ms)
+  ✓  36 [docs] › e2e/docs-unified.spec.ts:411:7 › edge：txt/csv/json 预览 + pdf 沙箱 + docx 下载卡 + ghost › pdf→沙箱 iframe（无 allow-scripts） (1.0s)
+  ✓  37 [docs] › e2e/docs-unified.spec.ts:429:7 › edge：txt/csv/json 预览 + pdf 沙箱 + docx 下载卡 + ghost › docx→下载卡 + 零 iframe (868ms)
+  ✓  38 [docs] › e2e/docs-unified.spec.ts:442:7 › edge：txt/csv/json 预览 + pdf 沙箱 + docx 下载卡 + ghost › ghost 不可访问引用→降级 (935ms)
+  ✓  39 [docs] › e2e/docs-unified.spec.ts:456:7 › failure：未知 doc + 无 teamId › 未知 ?doc= → 空态（不 404 不崩） (770ms)
+  ✓  40 [docs] › e2e/docs-unified.spec.ts:462:7 › failure：未知 doc + 无 teamId › 无 teamId → 团队选择器 → 可进站 (751ms)
+  ✓  41 [docs] › e2e/docs-unified.spec.ts:474:7 › XSS：脚本剥离 + 链接白名单 + 零执行 › text→md：script 零元素 + javascript: 零 href + 安全链接保留 (975ms)
+
+
+  1) [docs] › e2e/docs-unified.spec.ts:366:7 › prototypes：徽标→tab→深链→团队级聚合（T16） › 团队级（task=all）：原型 tab 可用 + 跨任务列表 
+
+    Error: expect(locator).toContainText(expected) failed
+
+    Locator: getByTestId('docs-prototype-panel')
+    Expected substring: "cliyard MCP 新增"
+    Received string:    "会话右侧面板改版t12qa-demo原型2 个原型 · 点击切换全部原型会话右侧面板改版流程走通测试：端到端验证建任务→计划→派活→执行→验收t12qa-demo流程走通测试：端到端验证建任务→计划→派活→执行→验收会话右侧面板改版prototype.vteam.local/session-right-panel-v2/index.tsxPC移动端prototype.vteam.local/session-right-panel-v2/index.tsx"
+    Timeout: 10000ms
+
+    Call log:
+      - Expect "toContainText" with timeout 10000ms
+      - waiting for getByTestId('docs-prototype-panel')
+        5 × locator resolved to <div class="flex-col md:flex-row" data-testid="docs-prototype-panel">…</div>
+          - unexpected value "会话右侧面板改版t12qa-demo原型2 个原型 · 点击切换全部原型会话右侧面板改版流程走通测试：端到端验证建任务→计划→派活→执行→验收t12qa-demo流程走通测试：端到端验证建任务→计划→派活→执行→验收会话右侧面板改版prototype.vteam.local/session-right-panel-v2/index.tsxPC移动端prototype.vteam.local/session-right-panel-v2/index.tsx编译原型「会话右侧面板改版」…"
+        19 × locator resolved to <div class="flex-col md:flex-row" data-testid="docs-prototype-panel">…</div>
+           - unexpected value "会话右侧面板改版t12qa-demo原型2 个原型 · 点击切换全部原型会话右侧面板改版流程走通测试：端到端验证建任务→计划→派活→执行→验收t12qa-demo流程走通测试：端到端验证建任务→计划→派活→执行→验收会话右侧面板改版prototype.vteam.local/session-right-panel-v2/index.tsxPC移动端prototype.vteam.local/session-right-panel-v2/index.tsx"
+
+
+      375 |     // beforeAll 在 t_0000000001 上播种了 t12qa-demo：团队聚合须含该条目及其任务名。
+      376 |     await expect(panel).toContainText("t12qa-demo");
+    > 377 |     await expect(panel).toContainText("cliyard MCP 新增");
+          |                         ^
+      378 |     // 旧「请先选择任务」死端已删：非空时无空态。
+      379 |     await expect(page.getByTestId("docs-proto-empty")).toHaveCount(0);
+      380 |     await expect(panel).not.toContainText("请先选择任务");
+        at /Volumes/SSD-Data/01work/git-project/vteam/web/e2e/docs-unified.spec.ts:377:25
+
+    Error Context: test-results/docs-unified-prototypes：徽标-2c61b-级（task-all）：原型-tab-可用-跨任务列表-docs/error-context.md
+
+    Error Context: test-results/docs-unified-prototypes：徽标-2c61b-级（task-all）：原型-tab-可用-跨任务列表-docs/error-context.md
+
+    attachment #3: trace (application/zip) ─────────────────────────────────────────────────────────
+    test-results/docs-unified-prototypes：徽标-2c61b-级（task-all）：原型-tab-可用-跨任务列表-docs/trace.zip
+    Usage:
+
+        npx playwright show-trace test-results/docs-unified-prototypes：徽标-2c61b-级（task-all）：原型-tab-可用-跨任务列表-docs/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [docs] › e2e/docs-unified.spec.ts:366:7 › prototypes：徽标→tab→深链→团队级聚合（T16） › 团队级（task=all）：原型 tab 可用 + 跨任务列表 
+  40 passed (56.3s)

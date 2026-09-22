@@ -1,0 +1,221 @@
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.ts
+    65:3   warning  'containsTeamWideMention' is defined but never used. Allowed unused vars must match /^_/u                                                                              @typescript-eslint/no-unused-vars
+  1633:62  error    Insert `⏎`                                                                                                                                                             prettier/prettier
+  2175:75  error    Delete `⏎·····`                                                                                                                                                        prettier/prettier
+  2185:75  error    Insert `⏎`                                                                                                                                                             prettier/prettier
+  3816:16  error    Replace `·select:·{·id:·true,·key:·true,·name:·true,·capabilities:·true·}` with `⏎··········select:·{·id:·true,·key:·true,·name:·true,·capabilities:·true·},⏎·······`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.tools.ts
+   39:7   warning  'REQUIRE_TASK_OR_TEAM_MSG' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                @typescript-eslint/no-unused-vars
+   54:28  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+   56:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   57:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+   58:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   59:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   60:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   61:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   62:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   63:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   64:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   65:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   66:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   67:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   68:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   69:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   70:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   71:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   72:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   73:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   74:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   75:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   76:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   77:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   78:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   79:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   80:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   81:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   82:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   83:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   84:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   85:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   86:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   87:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   88:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   89:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  115:26  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  117:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  118:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  119:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  120:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  121:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  122:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  123:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  124:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  125:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  126:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  127:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  147:28  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  149:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  150:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  151:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  152:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  153:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  154:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  155:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  156:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  157:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  158:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  159:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  160:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  161:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  162:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  163:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  164:7   error    Delete `··`                                                                                                                                                        prettier/prettier
+  165:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  166:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  167:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  168:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  169:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  170:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  171:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  172:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  173:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  174:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  175:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  176:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  177:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  178:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  179:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  180:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  181:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  182:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  183:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  184:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  185:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  186:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  187:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  188:7   error    Delete `··`                                                                                                                                                        prettier/prettier
+  189:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  190:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  191:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  192:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  193:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  194:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  195:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  196:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  197:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  198:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  199:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  200:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  201:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  202:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  203:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  204:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  205:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  206:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  323:15  error    Replace `'原因（action=reject·时写入任务事件·metadata；action=block·时必填：卡在哪里、缺什么、等谁）'` with `⏎······'原因（action=reject·时写入任务事件·metadata；action=block·时必填：卡在哪里、缺什么、等谁）',⏎····`  prettier/prettier
+  355:34  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  357:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  358:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  359:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  360:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  361:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  362:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  363:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  364:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  365:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  366:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  367:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  368:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  369:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  370:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  371:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  372:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  373:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  374:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  375:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  376:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  377:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  378:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  379:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  380:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  381:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  424:29  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  426:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  427:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  428:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  429:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  430:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  431:5   error    Replace `··.describe(⏎········'关键词过滤（content/description·包含即命中，多词空格分隔·AND）',⏎······` with `.describe('关键词过滤（content/description·包含即命中，多词空格分隔·AND）'`                prettier/prettier
+  434:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  435:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  436:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  437:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  438:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  439:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  440:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  441:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  442:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  443:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  444:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  445:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  446:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  447:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  448:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  449:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  450:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  451:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  452:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  453:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  454:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  455:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  456:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  457:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  458:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  459:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  460:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  461:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  641:27  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  643:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  644:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  645:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  646:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  647:1   error    Replace `······.describe(⏎········'调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入）',⏎······` with `····.describe('调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入）'`                              prettier/prettier
+  650:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  651:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  652:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  653:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  654:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  655:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  656:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  667:28  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  669:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  670:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  671:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  672:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  673:1   error    Replace `······.describe(⏎········'调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入）',⏎······` with `····.describe('调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入）'`                              prettier/prettier
+  676:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  677:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  678:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  679:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  688:29  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  690:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  691:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  692:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  693:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  694:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  695:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  712:17  error    Replace `'调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入；服务端以此作为·hook·所有者）'` with `⏎········'调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入；服务端以此作为·hook·所有者）',⏎······`                          prettier/prettier
+  725:17  error    Replace `⏎········'被唤醒成员·id（tmm_·前缀，须在当前团队；缺省为调用方自身）',⏎······` with `'被唤醒成员·id（tmm_·前缀，须在当前团队；缺省为调用方自身）'`                                                          prettier/prettier
+  754:31  error    Replace `⏎······(d.dueAt·!==·undefined·||·d.delayMs·!==·undefined)` with `·d.dueAt·!==·undefined·||·d.delayMs·!==·undefined`                                       prettier/prettier
+  763:27  error    Delete `⏎·····`                                                                                                                                                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/tasks.service.spec.ts
+   18:10  warning  'sanitizeWorkDirName' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  320:9   warning  'mockCreateTx' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  493:11  warning  'sCounter' is assigned a value but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+
+✖ 211 problems (206 errors, 5 warnings)
+  206 errors and 0 warnings potentially fixable with the `--fix` option.
+

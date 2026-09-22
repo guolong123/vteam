@@ -1,0 +1,33 @@
+命令总览（9 条逐条首行即完整命令；工作目录 /Volumes/SSD-Data/01work/git-project/vteam；基线 b418103..HEAD；只读审计；jest 由 server/ 下执行）
+审计时间：2026-09-22 UTC｜审计人：Sisyphus-Junior（F4 范围保真复核）
+
+[1] 命令：git diff b418103..HEAD --stat -- server/prisma/seed.ts server/src/chat/worker-dispatcher.ts
+输出：（空，无输出）→ PASS，提示词/seed 零变更
+
+[2] 命令：grep -rnE "type:[[:space:]]*[\"']plan[\"']" server/src
+输出：仅 1 命中 —— server/src/platform-mcp/plan-removal.guard.spec.ts:177 it('平台不再注入计划指令（PLAN_PRODUCE/PLAN_REVIEW 常量已删除；不教模型提交 type:"plan"）', …)（系守卫 spec 自身的标题断言串，预存设计，非生产代码）→ PASS，无生产代码命中
+
+[3] 命令：git diff b418103..HEAD -- worker/src/exec/exec-server.ts | grep -E "^[+-].*PLAN_DOCS_DIR = "
+输出：（空，无输出）→ PASS，PLAN_DOCS_DIR 未变（现值 PLAN_DOCS_DIRS[0]，见该文件 :146）
+
+[4] 命令：grep -c "toHaveCount(10)" web/e2e/docs-unified.spec.ts；grep -c 'category: "计划"' web/e2e/docs-unified.spec.ts；git diff b418103..HEAD -- web/e2e/docs-unified.spec.ts
+输出：toHaveCount(10) → 4（未变 ✓）；category: "计划" → 0（无新增计划 fixture ✓）；diff 仅 1 处注释行变更（-“分类覆盖七类 + NULL…”→+“…；`计划` 类由系统自动归档产生，e2e fixture 不预置该类行；…”）→ PASS
+
+[5] 命令：cd server && npx jest --runInBand src/platform-mcp/plan-removal.guard.spec.ts
+输出：Test Suites: 1 passed；Tests: 11 passed, 11 total；exit 0（用时 ~2s；11 项含：无 plan_* 工具注册、无 PLAN_STATUS/ERRORS 引用、无 PLAN_* 提示词常量、无 plan 表读写、as-any 绕过捕获、無 executionMode 门禁、归档引导段存在、类型三态收敛、不注入计划指令等）→ PASS，全绿
+
+[6] 命令：grep -n "ARTIFACT_TYPES = " server/src/artifacts/artifacts.constants.ts
+输出：6:export const ARTIFACT_TYPES = ['text', 'doc', 'file'] as const → PASS，三态未变
+
+[7] 命令：git diff b418103..HEAD --name-only -- server/prisma/migrations/
+输出：（空，无输出）→ PASS，无新增 DB 迁移
+
+[8] 命令：git diff b418103..HEAD -- server/src/chat/worker-dispatcher.ts
+输出：（空，无输出）→ PASS；ARTIFACT_SUBMISSION_INSTRUCTION（该文件 :415-417）文本未改，仍为“text/doc/file 三类…文件由控制面自动拉取归档”，不列举 category，符合“不得改动”要求
+
+[9] 命令：git status --porcelain -- server/src
+输出：（空，无输出）→ PASS，server/src 工作区干净（无 76 文件格式化越界残留；76 文件格式化事项本身属他轮遗留/预存，本轮未引入）
+
+==================== FAIL 汇总 ====================
+任一 FAIL：无。F4 9 条全部 PASS，零越界。
+`git status --porcelain -- ':!.omo/evidence'` 与审计前一致（仅 .omo/boulder.json、.opencode/opencode.json 本地修改 + 若干未跟踪 .omo/* 与 vteam-worker-sdk-0.1.0.tar.gz，无产品源码/测试/配置改动）。

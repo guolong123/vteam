@@ -1,0 +1,36 @@
+CMD: curl POST /api/v1/auth/login -> reject -> POST plan-docs -> POST mark-pending-review -> GET artifacts (BASE http://localhost:3000 fwd -> :13000 docker aiagents-compose-server)
+结论: BLOCKED / 未验证 —— 运行中 server 镜像早于本计划代码，自动归档不可能触发（详见根因）。
+
+== 步骤记录 ==
+1. 登录 admin/admin123 -> accessToken OK (221 chars)
+2. 任务 t_0000000001 初始 status=pending_review（与计划描述一致）
+3. 基线 GET /artifacts?category=计划 -> HTTP 400（该服务端版本不支持 category 查询参数；改用 limit=50 全量列表，含 category=计划 的条目数为 0）
+   全量基线: 7 条（art_0000000001~0000000007），无 f3 文件，无 category=计划
+4. POST /reject {"reason":"F3 QA 往返"} -> status=in_progress ✓（合法回到 in_progress）
+5. POST /plan-docs {"name":"f3-plan-qa.md","content":"# F3 QA 计划\n\n自动归档验证用。"} -> HTTP 201 ✓
+   {name:f3-plan-qa.md, directory:/data/vteam-worker/tasks/t_0000000001}
+6. POST /mark-pending-review -> status=pending_review ✓（状态恢复到初始值）
+7. +3s 后 GET /artifacts?limit=50 -> 仍 7 条，无 f3-plan-qa.md，无 category=计划
+8. +15s 后复查 -> 仍 7 条，无新增（排除异步延迟）
+9. 降级验证 GET /plan-docs -> 200 {files:[f3-plan-qa.md...], workerId:w_compose_worker, degraded:false} ✓
+   GET /plan-steps -> 200 {steps:[], workerId, degraded:false} ✓
+10. 幂等验证：因首次归档未发生，无 second-round 可比 -> 未验证
+
+== 根因（已实证）==
+- docker inspect: 镜像 aiagents-server Created=2026-09-22T10:02:49+08:00，容器 Started 09:52 UTC
+- git log: plan-archive.service.ts 首 commit d058e33 2026-09-22 20:00:49 +0800；
+  tasks.service.ts 触发点 commit 85d89b3 20:01:01 +0800 —— 均晚于镜像构建约 10 小时
+- docker exec 进容器实证: dist/src/tasks/ 下无 plan-archive 相关文件，
+  grep scanAndArchivePlanDocs dist/src/tasks/tasks.service.js 计数=0（TRIGGER_ABSENT）
+- docker logs --since 30m 无任何“归档/archive”日志（连 warn 兜底都没有，触发代码根本不存在）
+- 结论：线上 :13000 跑的是旧镜像，markPendingReview 内无 planArchive 调用；
+  需重建镜像+重启容器才能做真实链路验证 —— 但红线禁止重启/改配置，故标记 未验证，不伪造。
+- 逻辑层覆盖：server jest（含 plan-archive.service.spec.ts）8 suites / 257 tests 全过（见 F2-quality.txt 门禁3）
+
+== 残留 ==
+- t_0000000001 状态已恢复 pending_review（与开工前一致）
+- plan-docs 新增测试文件 f3-plan-qa.md（40B），无 artifacts 写入，无其它副作用
+
+== 幂等/降级 ==
+- 幂等：未验证（依赖归档先发生；单测层 archiveFile sha256 去重语义已覆盖）
+- 降级读路径：已验证（plan-docs/plan-steps 均 200 + degraded:false）
