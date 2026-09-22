@@ -9,12 +9,11 @@
  * - 成员列表（alias/workDir 行内编辑，增删改；多实例支持）
  * - 删除团队（执行中任务时禁用；其余关联任务随团队级联删除，确认框列出任务）
  * - 添加成员：ROLE-first 岗位选择（来源 GET /agent-roles；role-only 提交，
- *   仅外部绑定岗位需显式执行 Agent）
+ *   外部绑定岗位由服务端落到平台占位系统 Agent，前端不再索要执行 Agent）
  */
 import { useEffect, useState, type CSSProperties } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { teamsApi, type TeamDto, type TeamMemberDto, type TeamQueueDto } from "@/src/api/teams";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
@@ -36,9 +35,6 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 function toAvatarRole(role: string | null): RoleKey {
   return role && (ROLE_KEYS as readonly string[]).includes(role as RoleKey) ? (role as RoleKey) : "developer";
 }
-
-
-interface AgentItem { id: string; name: string; role: string; type: string }
 
 function MemberRow({ member, isMain, onSave, onRemove, onSetMain }: { member: TeamMemberDto; isMain: boolean; onSave: (payload: { alias?: string; workDir?: string }) => void; onRemove: () => void; onSetMain: () => void }) {
   const [alias, setAlias] = useState(member.alias);
@@ -81,10 +77,6 @@ export default function TeamDetailPage() {
   const [editDesc, setEditDesc] = useState("");
   const [showAddMember, setShowAddMember] = useState(false);
   const [selectedRoleId, setSelectedRoleId] = useState("");
-  const [selectedAgentId, setSelectedAgentId] = useState("");
-  // 显式覆盖标记：仅用户在外部绑定分支手动点选执行 Agent 后为 true；
-  // 角色切换预填（defaultAgentId）不算覆盖——role-only 提交时不带 agentId。
-  const [agentTouched, setAgentTouched] = useState(false);
   const [addAlias, setAddAlias] = useState("");
   const [addWorkDir, setAddWorkDir] = useState("");
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -96,12 +88,6 @@ export default function TeamDetailPage() {
     enabled: !!id,
   });
 
-  const agentsQuery = useQuery({
-    queryKey: ["agents"],
-    queryFn: () => api.get<{ items: AgentItem[] }>("/agents"),
-    enabled: showAddMember,
-  });
-
   // ROLE-first：岗位为添加成员的主选择器（唯一来源 GET /agent-roles，与面板同口径）。
   const rolesQuery = useQuery({
     queryKey: ["agent-roles"],
@@ -110,10 +96,6 @@ export default function TeamDetailPage() {
     retry: false,
   });
   const roleItems: AgentRoleDto[] = rolesQuery.data?.items ?? [];
-  const selectedRole: AgentRoleDto | undefined = roleItems.find((r) => r.id === selectedRoleId);
-  // 外部绑定岗位（仅 defaultOpencodeAgentName、无 defaultAgentId）需显式内部执行 Agent；
-  // 其余岗位 role-only 提交（服务端按规则 2/5 预填）。
-  const selectedIsExternalOnly = !!selectedRole && !selectedRole.defaultAgentId && !!selectedRole.defaultOpencodeAgentName;
   const roleLabelOf = (r: AgentRoleDto): string =>
     r.defaultAgentId ? `${r.name}` : r.defaultOpencodeAgentName ? `${r.name}（外部）` : r.name;
 
@@ -171,19 +153,16 @@ export default function TeamDetailPage() {
   const addMutation = useMutation({
     mutationFn: () => teamsApi.addMember(id, {
       ...(selectedRoleId ? { roleId: selectedRoleId } : {}),
-      ...(agentTouched && selectedAgentId ? { agentId: selectedAgentId } : {}),
       alias: addAlias.trim() || undefined,
       workDir: addWorkDir.trim() || undefined,
     }),
   });
   const handleAddMember = async () => {
-    // ROLE-first：岗位为主选择器；外部-only 岗位须显式配内部执行 Agent（否则服务端 400）。
     if (!selectedRoleId) { setActionError("请选择岗位"); return; }
-    if (selectedIsExternalOnly && !(agentTouched && selectedAgentId)) { setActionError("外部绑定岗位需再选一个内部执行 Agent"); return; }
     setActionError(null);
     try {
       await addMutation.mutateAsync();
-      setShowAddMember(false); setSelectedRoleId(""); setAgentTouched(false); setSelectedAgentId(""); setAddAlias(""); setAddWorkDir("");
+      setShowAddMember(false); setSelectedRoleId(""); setAddAlias(""); setAddWorkDir("");
       queryClient.invalidateQueries({ queryKey: ["team", id] });
     } catch (err) { setActionError(isApiError(err) ? err.message : "添加失败"); }
   };
@@ -471,28 +450,14 @@ export default function TeamDetailPage() {
             <div style={{ display: "flex", gap: space.md, alignItems: "flex-end", flexWrap: "wrap" }}>
               <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: space.xs }}>
                 <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>选择岗位</label>
-                <select data-testid="add-member-role-select" value={selectedRoleId} onChange={(e) => { setSelectedRoleId(e.target.value); setAgentTouched(false); setSelectedAgentId(""); }} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
+                <select data-testid="add-member-role-select" value={selectedRoleId} onChange={(e) => { setSelectedRoleId(e.target.value); }} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
                   <option value="">请选择岗位</option>
                   {roleItems.map((r) => (
                     <option key={r.id} value={r.id}>{roleLabelOf(r)}</option>
                   ))}
                 </select>
                 {rolesQuery.isPending && <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>岗位加载中…</span>}
-                {selectedIsExternalOnly && (
-                  <span data-testid="add-member-external-hint" style={{ fontSize: fontSize.xs, color: "#B45309" }}>外部绑定岗位：需在下方再选一个内部执行 Agent</span>
-                )}
               </div>
-              {selectedIsExternalOnly && (
-                <div style={{ flex: 1, minWidth: 200, display: "flex", flexDirection: "column", gap: space.xs }}>
-                  <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>执行 Agent（外部岗位必填）</label>
-                  <select data-testid="add-member-agent-select" value={agentTouched ? selectedAgentId : ""} onChange={(e) => { setAgentTouched(true); setSelectedAgentId(e.target.value); }} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800], fontFamily: fontFamily.body }}>
-                    <option value="">请选择</option>
-                    {(agentsQuery.data?.items ?? []).map((a) => (
-                      <option key={a.id} value={a.id}>{a.name} ({a.type === "template" && a.role ? a.role : a.type})</option>
-                    ))}
-                  </select>
-                </div>
-              )}
               <div style={{ flex: 1, minWidth: 160, display: "flex", flexDirection: "column", gap: space.xs }}>
                 <label style={{ fontSize: fontSize.sm, fontWeight: 500, color: neutral[600] }}>别名（可选）</label>
                 <input data-testid="add-member-alias" value={addAlias} onChange={(e) => setAddAlias(e.target.value)} placeholder="默认 <角色名>-seq" style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.md, color: neutral[800],fontFamily: fontFamily.body }} />

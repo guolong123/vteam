@@ -33,6 +33,31 @@ describe('TeamsService', () => {
     return map[id] ?? { name: id, role: null };
   };
 
+  /** 默认内置岗位行（Q5：成员必须绑定岗位；显式 agentId 的用例也须给出 roleId）。 */
+  const builtinRoleRows: Record<string, Record<string, unknown>> = {
+    ar_product: {
+      id: 'ar_product',
+      key: 'product',
+      name: '产品经理',
+      defaultAgentId: 'a_product',
+      defaultOpencodeAgentName: null,
+    },
+    ar_developer: {
+      id: 'ar_developer',
+      key: 'developer',
+      name: '开发者',
+      defaultAgentId: 'a_developer',
+      defaultOpencodeAgentName: null,
+    },
+    ar_tester: {
+      id: 'ar_tester',
+      key: 'tester',
+      name: '测试',
+      defaultAgentId: 'a_tester',
+      defaultOpencodeAgentName: null,
+    },
+  };
+
   const teamRow = (overrides: Record<string, unknown> = {}) => ({
     id: 'tm_0000000001',
     name: 'team-alpha',
@@ -93,6 +118,11 @@ describe('TeamsService', () => {
       $transaction: jest.fn(),
       $queryRawUnsafe: jest.fn(),
     };
+    // 默认按 id 返回内置岗位行；用例可用 mockResolvedValueOnce/ResolvedValue 覆盖。
+    prisma.agentRole.findUnique.mockImplementation(
+      async ({ where }: { where: { id: string } }) =>
+        builtinRoleRows[where.id] ?? null,
+    );
     idGen = { nextId: jest.fn(), seed: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
     // 默认：无在线 worker（assignWorker → null）→ opencodeAgentName 弱校验静默放行
@@ -203,7 +233,10 @@ describe('TeamsService', () => {
         name: ' team-alpha ',
         description: 'desc',
         reuseSession: true,
-        members: [{ agentId: 'a_developer' }, { agentId: 'a_developer' }],
+        members: [
+          { agentId: 'a_developer', roleId: 'ar_developer' },
+          { agentId: 'a_developer', roleId: 'ar_developer' },
+        ],
       } as any);
 
       expect(tx.team.create).toHaveBeenCalledWith({
@@ -222,7 +255,7 @@ describe('TeamsService', () => {
           id: 'tmm_0000000001',
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
-          roleId: null,
+          roleId: 'ar_developer',
           opencodeAgentName: null,
           alias: '开发者-1',
           seq: 1,
@@ -234,7 +267,7 @@ describe('TeamsService', () => {
           id: 'tmm_0000000002',
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
-          roleId: null,
+          roleId: 'ar_developer',
           opencodeAgentName: null,
           alias: '开发者-2',
           seq: 2,
@@ -276,7 +309,7 @@ describe('TeamsService', () => {
       await expect(
         service.create(userId, {
           name: 'new-team',
-          members: [{ agentId: 'ghost' }],
+          members: [{ agentId: 'ghost', roleId: 'ar_developer' }],
         } as any),
       ).rejects.toThrow(NotFoundException);
     });
@@ -301,7 +334,7 @@ describe('TeamsService', () => {
       );
       const result: any = await service.create(userId, {
         name: 'team-alias',
-        members: [{ agentId: 'a_product' }],
+        members: [{ agentId: 'a_product', roleId: 'ar_product' }],
       } as any);
       expect(tx.teamMember.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -366,41 +399,23 @@ describe('TeamsService', () => {
       }
     });
 
-    it('角色映射缺失 → 回退 agent.name 的文档化兜底（空标签禁止，不抛错）', async () => {
+    it('roleId 指向不存在的角色 → 404 ROLE_NOT_FOUND（Q5：不再静默回退无岗位成员）', async () => {
       prisma.team.findUnique.mockResolvedValue(null);
-      // roleId 指向不存在的角色行 → roleBindingOf 返回 null。
       prisma.agentRole.findUnique.mockResolvedValue(null);
-      idGen.nextId
-        .mockResolvedValueOnce('tm_0000000001')
-        .mockResolvedValueOnce('tmm_0000000001');
       const tx = mockCreateTx(teamRow());
       tx.agent.findUnique.mockResolvedValue({
         id: 'a_custom',
         name: '数据分析师',
       });
       prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
-      prisma.team.findUnique
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(teamRow({ members: [teamMemberRow()] }));
 
-      await service.create(userId, {
-        name: 'missing-role',
-        members: [{ agentId: 'a_custom', roleId: 'ar_missing' }],
-      } as any);
-
-      expect(tx.teamMember.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({
-            alias: '数据分析师-1',
-            roleId: 'ar_missing',
-          }),
-        }),
-      );
-      const createdAlias = (
-        tx.teamMember.create.mock.calls[0][0].data as { alias: string }
-      ).alias;
-      expect(createdAlias).not.toBe('-1');
-      expect(createdAlias.startsWith('-')).toBe(false);
+      await expect(
+        service.create(userId, {
+          name: 'missing-role',
+          members: [{ agentId: 'a_custom', roleId: 'ar_missing' }],
+        } as any),
+      ).rejects.toThrow(NotFoundException);
+      expect(tx.teamMember.create).not.toHaveBeenCalled();
     });
 
     it('同 agent 多实例两行：两次 FOR UPDATE seq 1/2', async () => {
@@ -427,7 +442,10 @@ describe('TeamsService', () => {
       );
       await service.create(userId, {
         name: 'multi',
-        members: [{ agentId: 'a_developer' }, { agentId: 'a_developer' }],
+        members: [
+          { agentId: 'a_developer', roleId: 'ar_developer' },
+          { agentId: 'a_developer', roleId: 'ar_developer' },
+        ],
       } as any);
       expect(tx.$queryRawUnsafe).toHaveBeenCalledTimes(2);
       expect(tx.teamMember.create).toHaveBeenNthCalledWith(
@@ -452,7 +470,7 @@ describe('TeamsService', () => {
         .mockResolvedValueOnce(teamRow({ members: [teamMemberRow()] }));
       await service.create(userId, {
         name: 'seq-lock',
-        members: [{ agentId: 'a_product' }],
+        members: [{ agentId: 'a_product', roleId: 'ar_product' }],
       } as any);
       expect(tx.$queryRawUnsafe).toHaveBeenCalledWith(
         'SELECT MAX(seq) as maxSeq FROM team_members WHERE team_id = ? AND agent_id = ? FOR UPDATE',
@@ -978,6 +996,7 @@ describe('TeamsService', () => {
 
       const result: any = await service.addMember('tm_0000000001', {
         agentId: 'a_product',
+        roleId: 'ar_product',
       } as any);
       expect(tx.$queryRawUnsafe).toHaveBeenCalled();
       expect(tx.teamMember.create).toHaveBeenCalledWith(
@@ -1110,7 +1129,7 @@ describe('TeamsService', () => {
       );
     });
 
-    it('addMember 两者都缺 → 400 MEMBER_AGENT_REQUIRED（roleId 仍可选，存量行为不变）', async () => {
+    it('addMember 缺 roleId → 400 MEMBER_ROLE_REQUIRED（Q5：不支持无岗位成员）', async () => {
       prisma.team.findUnique.mockResolvedValue(teamRow());
       await expect(
         service.addMember('tm_0000000001', {} as any),
@@ -1119,9 +1138,13 @@ describe('TeamsService', () => {
         await service.addMember('tm_0000000001', {} as any);
       } catch (e) {
         expect((e as BadRequestException).getResponse()).toMatchObject({
-          code: 'MEMBER_AGENT_REQUIRED',
+          code: 'MEMBER_ROLE_REQUIRED',
         });
       }
+      // 仅给 agentId（无 roleId）同样拒绝。
+      await expect(
+        service.addMember('tm_0000000001', { agentId: 'a_product' } as any),
+      ).rejects.toThrow(BadRequestException);
     });
 
     it('addMember 仅给 roleId 且角色无默认 Agent → 400 ROLE_DEFAULT_AGENT_MISSING', async () => {
@@ -1140,6 +1163,36 @@ describe('TeamsService', () => {
           code: 'ROLE_DEFAULT_AGENT_MISSING',
         });
       }
+    });
+
+    it('addMember 仅给 roleId 且角色外部绑定 → agentId = 平台占位系统 Agent（不再要求另选执行 Agent）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.agentRole.findUnique.mockResolvedValue({
+        id: 'ar_external',
+        key: 'external',
+        name: '外部专家',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: 'Librarian',
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_external',
+        name: '外部执行',
+      });
+      const tx = mockAddMemberTx('tmm_0000000007');
+
+      await service.addMember('tm_0000000001', {
+        roleId: 'ar_external',
+      } as any);
+
+      expect(tx.teamMember.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            agentId: 'a_external',
+            roleId: 'ar_external',
+            opencodeAgentName: 'Librarian',
+          }),
+        }),
+      );
     });
 
     const mockAddMemberTx = (idGenValue: string) => {
@@ -2168,7 +2221,10 @@ describe('TeamsService', () => {
       prisma.team.findUnique.mockResolvedValue(teamRow());
       prisma.agent.findUnique.mockResolvedValue(null);
       await expect(
-        service.addMember('tm_0000000001', { agentId: 'ghost' } as any),
+        service.addMember('tm_0000000001', {
+          agentId: 'ghost',
+          roleId: 'ar_developer',
+        } as any),
       ).rejects.toThrow(NotFoundException);
     });
     it('removeMember 团队不存在 → 404，成员不存在 → 404', async () => {
@@ -2244,7 +2300,7 @@ describe('TeamsService', () => {
         .mockResolvedValueOnce(teamRow({ members: [teamMemberRow()] }));
       await service.create(userId, {
         name: 'seq-null',
-        members: [{ agentId: 'a_product' }],
+        members: [{ agentId: 'a_product', roleId: 'ar_product' }],
       } as any);
       expect(tx.$queryRawUnsafe).toHaveBeenCalled();
       expect(tx.teamMember.aggregate).toHaveBeenCalled();
@@ -2315,7 +2371,10 @@ describe('TeamsService', () => {
       );
       const result: any = await service.create(userId, {
         name: 'team-main',
-        members: [{ agentId: 'a_product' }, { agentId: 'a_developer' }],
+        members: [
+          { agentId: 'a_product', roleId: 'ar_product' },
+          { agentId: 'a_developer', roleId: 'ar_developer' },
+        ],
         mainAgentMemberId: '0',
       } as any);
       expect(tx.team.update).toHaveBeenCalledWith({
@@ -2359,14 +2418,14 @@ describe('TeamsService', () => {
       await expect(
         service.create(userId, {
           name: 'team-bad-main',
-          members: [{ agentId: 'a_product' }],
+          members: [{ agentId: 'a_product', roleId: 'ar_product' }],
           mainAgentMemberId: '999',
         } as any),
       ).rejects.toThrow(BadRequestException);
       try {
         await service.create(userId, {
           name: 'team-bad-main2',
-          members: [{ agentId: 'a_product' }],
+          members: [{ agentId: 'a_product', roleId: 'ar_product' }],
           mainAgentMemberId: '999',
         } as any);
       } catch (e) {
@@ -2525,7 +2584,7 @@ describe('TeamsService', () => {
       );
       const result: any = await service.create(userId, {
         name: 'team-owner',
-        members: [{ agentId: 'a_product' }],
+        members: [{ agentId: 'a_product', roleId: 'ar_product' }],
       } as any);
       expect(tx.teamUserMember.create).toHaveBeenCalledTimes(1);
       expect(tx.teamUserMember.create).toHaveBeenCalledWith({

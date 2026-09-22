@@ -24,6 +24,7 @@ import {
 } from '../common/constants/task.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { roleKeyOf, roleLabelOf } from '../common/agent-role-label';
+import { EXTERNAL_SYSTEM_AGENT_ID } from '../common/constants/agent-role.constants';
 import { resyncIdPrefix } from '../common/id-resync';
 import { TEAM_MEMBERSHIP_ERRORS } from '../common/guards/team-membership.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -1857,7 +1858,14 @@ export class TasksService implements OnModuleInit {
           agentId: m.agentId,
           alias: m.alias ?? this.defaultAlias(m.agent, m.seq, m.role),
           seq: m.seq,
-          workDir: m.workDir ?? this.defaultAgentWorkDir(m.agent, m.seq),
+          workDir:
+            m.workDir ??
+            this.defaultAgentWorkDir(
+              m.agent,
+              m.seq,
+              m.role,
+              !!m.opencodeAgentName,
+            ),
           name: m.agent.name,
           // D1（agent-role-decommission todo 5）：字段名保留 `role`，值为绑定角色的机器键
           // `AgentRole.key`（web `ROLE_KEYS.includes`/`toRole` 消费；`AgentRole.name` 只用于别名）。
@@ -1914,12 +1922,19 @@ export class TasksService implements OnModuleInit {
    * is_0000000010：实例默认持久化工作目录 `/data/vteam-worker/<sanitize(agent.name)>`（统一持久化）。
    * agent 名称可能含中文/空格/斜杠等非 ASCII 字符，做 ASCII 化映射（非法字符 → `-`），
    * 避免路径穿越/非法字符导致目录不可用；同 agent 同任务多实例追加 `-<seq>` 防共享串数据。
+   *
+   * 外部绑定岗位（`externalBound`）：成员共用占位 Agent `a_external`，沿用 `agent.name` 会让
+   * 不同外部岗位落同一目录 → 优先取岗位名，与 `defaultAlias` 同口径（镜像 teams 域规则）。
    */
   private defaultAgentWorkDir(
     agent: { name: string; id?: string },
     seq: number,
+    role?: { key: string; name: string } | null,
+    externalBound = false,
   ): string {
-    const base = sanitizeWorkDirName(agent.name ?? agent.id ?? 'agent');
+    const base = sanitizeWorkDirName(
+      externalBound && role ? role.name : agent.name ?? agent.id ?? 'agent',
+    );
     return seq > 1
       ? `/data/vteam-worker/${base}-${seq}`
       : `/data/vteam-worker/${base}`;
@@ -1928,11 +1943,12 @@ export class TasksService implements OnModuleInit {
   /**
    * 成员 ⇄ 角色绑定解析（唯一优先级判定点的任务侧镜像）。
    *
-   * 逐字复刻 `teams.service.ts:1328-1430 resolveMemberBinding` 规则 1–5（单一事实来源，
+   * 逐字复刻 `teams.service.ts resolveMemberBinding` 规则 1–5（单一事实来源，
    * 该方法是唯一可改判定点，此处只做镜像）：
    *   1. 显式 `agentId` 恒胜出；2. `roleId`-only 用 `defaultAgentId` 预填；
-   *   3. 角色无默认 Agent → 400 `ROLE_DEFAULT_AGENT_MISSING`；
-   *   4. 两者都缺 → 400 `MEMBER_AGENT_REQUIRED`；
+   *   3. 角色无默认 Agent：外部绑定（`defaultOpencodeAgentName` 非空）→ 占位系统 Agent
+   *      `a_external`；两槽位皆空 → 400 `ROLE_DEFAULT_AGENT_MISSING`；
+   *   4. `roleId` 必填（Q5：平台不支持无岗位成员）→ 缺 roleId → 400 `MEMBER_ROLE_REQUIRED`；
    *   5. 显式 `opencodeAgentName` 恒胜出，否则用 `defaultOpencodeAgentName` 预填，否则 null。
    * 错误码与 teams 域 `TEAM_ERRORS` 同值（跨域同名字符串，便于调用方统一断言）。
    */
@@ -1951,22 +1967,34 @@ export class TasksService implements OnModuleInit {
     const explicitOpencodeAgentName =
       input.opencodeAgentName?.trim() || null;
 
-    const role = roleId
-      ? await (this.prisma as any).agentRole.findUnique({
-          where: { id: roleId },
-          select: {
-            id: true,
-            key: true,
-            name: true,
-            defaultAgentId: true,
-            defaultOpencodeAgentName: true,
-          },
-        })
-      : null;
-    const roleBinding = role ? { key: role.key, name: role.name } : null;
+    // 规则 4（Q5）：成员必须绑定岗位——缺 roleId 一律拒绝，不提供无岗位兼容路径。
+    if (!roleId) {
+      throw new BadRequestException({
+        code: 'MEMBER_ROLE_REQUIRED',
+        message: '成员必须绑定岗位（AgentRole）：请提供 roleId',
+      });
+    }
+
+    const role = await (this.prisma as any).agentRole.findUnique({
+      where: { id: roleId },
+      select: {
+        id: true,
+        key: true,
+        name: true,
+        defaultAgentId: true,
+        defaultOpencodeAgentName: true,
+      },
+    });
+    if (!role) {
+      throw new NotFoundException({
+        code: 'ROLE_NOT_FOUND',
+        message: `AgentRole ${roleId} 不存在`,
+      });
+    }
+    const roleBinding = { key: role.key, name: role.name };
     const resolvedOpencodeAgentName =
       explicitOpencodeAgentName ||
-      role?.defaultOpencodeAgentName?.trim() ||
+      role.defaultOpencodeAgentName?.trim() ||
       null;
 
     if (explicitAgentId) {
@@ -1978,21 +2006,16 @@ export class TasksService implements OnModuleInit {
       };
     }
 
-    if (!roleId) {
-      throw new BadRequestException({
-        code: 'MEMBER_AGENT_REQUIRED',
-        message:
-          '成员必须提供 agentId 或 roleId（给 roleId 时用角色默认 Agent 预填）',
-      });
-    }
-
-    if (!role) {
-      throw new NotFoundException({
-        code: 'ROLE_NOT_FOUND',
-        message: `AgentRole ${roleId} 不存在`,
-      });
-    }
     if (!role.defaultAgentId) {
+      // 规则 3：外部绑定岗位落占位 Agent；两槽位皆空的角色仍保持 ROLE_DEFAULT_AGENT_MISSING。
+      if (role.defaultOpencodeAgentName?.trim()) {
+        return {
+          agentId: EXTERNAL_SYSTEM_AGENT_ID,
+          roleId,
+          role: roleBinding,
+          opencodeAgentName: resolvedOpencodeAgentName,
+        };
+      }
       throw new BadRequestException({
         code: 'ROLE_DEFAULT_AGENT_MISSING',
         message: `角色 ${roleId} 未设置默认 Agent，请显式指定 agentId`,
@@ -2043,7 +2066,13 @@ export class TasksService implements OnModuleInit {
       const alias =
         item.alias?.trim() || this.defaultAlias(agent, seq, binding.role);
       const workDir =
-        item.workDir?.trim() || this.defaultAgentWorkDir(agent, seq);
+        item.workDir?.trim() ||
+        this.defaultAgentWorkDir(
+          agent,
+          seq,
+          binding.role,
+          !!binding.opencodeAgentName,
+        );
       const member = await (tx as any).teamMember.create({
         data: {
           id: await this.idGen.nextId(ID_PREFIX.teamMember),

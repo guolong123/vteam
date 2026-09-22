@@ -14,10 +14,10 @@ import {
  *      「添加成员」两条入口——落库 `agentId === 角色绑定的 defaultAgentId`
  *      （服务端规则 2 预填），且浏览器请求体**不含 agentId**（role-only）。
  *  (b) 外部绑定角色（`defaultOpencodeAgentName`，如 `Prometheus - Plan Builder`）：
- *      详情页岗位下拉可选中（选项文案带「（外部）」）→ 出现外部提示与「执行 Agent」
- *      槽位 → 未选执行 Agent 时确认被守卫拦下（错误可见、零请求发出）→ 选定内部
- *      执行 Agent 后成员落库 `opencodeAgentName === 外部名`（规则 5）且
- *      `agentId === 执行 Agent`；reload 后新增成员行仍可见、API 回读逐字段一致。
+ *      详情页岗位下拉可选中（选项文案带「（外部）」）→ **无**外部提示、**无**「执行 Agent」
+ *      槽位（平台不再要求再选一个内部执行 Agent）→ 直接 role-only 提交成功，成员落库
+ *      `agentId === 平台占位系统 Agent a_external` 且 `opencodeAgentName === 外部名`（规则 5）；
+ *      reload 后新增成员行仍可见、API 回读逐字段一致。
  *  (c) 会话页 `/teams/tm_0000000001/session` 仍零 `<select>`、零 `message-agent-select`
  *      （no-agent-picker 的会话页保证不破）。
  *
@@ -60,13 +60,6 @@ interface OpencodeAgentEntry {
   mode: string;
   governed: boolean;
   hidden?: boolean;
-}
-
-interface AgentItem {
-  id: string;
-  name: string;
-  role: string;
-  type: string;
 }
 
 function authHeaders(accessToken: string) {
@@ -151,23 +144,6 @@ async function engineExternal(
       .filter((a) => !a.governed && !a.hidden && a.mode !== "subagent")
       .map((a) => a.name),
   };
-}
-
-/** 执行 Agent 选择器里的内部模板 Agent（GET /agents 列表，供外部岗位必填槽位选值）。 */
-async function internalAgentId(
-  request: APIRequestContext,
-  token: string,
-  preferred = "a_developer",
-): Promise<string> {
-  const res = await request.get(`${SERVER_URL}/api/v1/agents`, {
-    headers: authHeaders(token),
-  });
-  expect(res.ok()).toBeTruthy();
-  const body = (await res.json()) as { items: AgentItem[] };
-  if (body.items.some((a) => a.id === preferred)) return preferred;
-  const first = body.items.find((a) => a.type === "template");
-  expect(first).toBeTruthy();
-  return first!.id;
 }
 
 /** 记录浏览器发出的 POST /teams/:id/members 请求体（role-first 断言的原始证据）。 */
@@ -270,7 +246,7 @@ test.describe("task-14 · role-first member add", () => {
     }
   });
 
-  test("(a+b) 详情页添加成员：role-only 无 agentId；外部岗位守卫 → 执行 Agent → opencodeAgentName 持久化（reload）", async ({
+  test("(a+b) 详情页添加成员：role-only 无 agentId；外部岗位不再要求执行 Agent → 落占位系统 Agent（reload）", async ({
     page,
     request,
   }) => {
@@ -283,7 +259,6 @@ test.describe("task-14 · role-first member add", () => {
     const externalName = names.includes(EXTERNAL_PREFERRED)
       ? EXTERNAL_PREFERRED
       : names[0];
-    const executorAgentId = await internalAgentId(request, token, "a_developer");
 
     const internalRole = await createRole(request, token, {
       name: `qa-t14-internal-${RUN_TAG}`,
@@ -340,7 +315,8 @@ test.describe("task-14 · role-first member add", () => {
       expect(memberA!.agentId).toBe("a_tester");
       expect(memberA!.opencodeAgentName ?? null).toBe(null);
 
-      // ---- (b) 外部绑定岗位：可选中（文案「（外部）」）→ 守卫 → 执行 Agent → opencodeAgentName ----
+      // ---- (b) 外部绑定岗位：可选中（文案「（外部）」）→ 无提示/无执行 Agent 槽位 →
+      //          role-only 提交成功 → 落占位系统 Agent + opencodeAgentName ----
       const aliasB = `qa-t14-external-${RUN_TAG}`;
       const roleOption = page.locator(
         `[data-testid="add-member-role-select"] option[value="${externalRole.id}"]`,
@@ -351,27 +327,19 @@ test.describe("task-14 · role-first member add", () => {
       await expect(roleOption).toContainText("（外部）");
       await page.getByTestId("add-member-role-select").selectOption(externalRole.id);
 
-      // 外部提示 + 执行 Agent 槽位出现；未选执行 Agent 时确认被守卫拦下（零请求）。
-      await expect(page.getByTestId("add-member-external-hint")).toBeVisible();
-      const executorSelect = page.getByTestId("add-member-agent-select");
-      await expect(executorSelect).toBeVisible();
+      // 移除「外部岗位必须另选执行 Agent」的要求后：提示与槽位均不存在。
+      await expect(page.getByTestId("add-member-external-hint")).toHaveCount(0);
+      await expect(page.getByTestId("add-member-agent-select")).toHaveCount(0);
       await page.getByTestId("add-member-alias").fill(aliasB);
       const postsBefore = posts.length;
-      await page.getByTestId("add-member-confirm").click();
-      await expect(page.getByTestId("team-action-error")).toBeVisible({ timeout: 10_000 });
-      await expect(page.getByTestId("team-action-error")).toContainText("外部绑定岗位");
-      expect(posts.length).toBe(postsBefore);
-
-      // 选定内部执行 Agent（agentId + roleId 走规则 1+5）→ 提交成功。
-      await executorSelect.selectOption(executorAgentId);
       await page.getByTestId("add-member-confirm").click();
       await expect(page.getByTestId("add-member-panel")).toHaveCount(0, { timeout: 15_000 });
       await expect.poll(() => posts.length, { timeout: 10_000 }).toBe(postsBefore + 1);
       const bodyB = posts[posts.length - 1].body;
       expect(bodyB.roleId).toBe(externalRole.id);
-      expect(bodyB.agentId).toBe(executorAgentId);
+      expect("agentId" in bodyB).toBe(false);
 
-      // reload：成员行可见；API 回读 opencodeAgentName = 外部引擎名，且 role/agent 一致。
+      // reload：成员行可见；API 回读 agentId = 平台占位系统 Agent、opencodeAgentName = 外部引擎名。
       const afterB = await getTeam(request, token, team.id);
       const memberB = afterB.members.find((m) => m.alias === aliasB);
       expect(memberB).toBeTruthy();
@@ -381,7 +349,7 @@ test.describe("task-14 · role-first member add", () => {
       await expect(rowB).toBeVisible({ timeout: 15_000 });
       await expect(rowB.getByTestId("member-alias-input")).toHaveValue(aliasB);
       expect(memberB!.roleId).toBe(externalRole.id);
-      expect(memberB!.agentId).toBe(executorAgentId);
+      expect(memberB!.agentId).toBe("a_external");
       expect(memberB!.opencodeAgentName).toBe(externalName);
     } finally {
       await cleanup(request, token, teamId ? [teamId] : [], [

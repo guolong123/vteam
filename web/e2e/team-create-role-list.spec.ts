@@ -15,9 +15,9 @@ import {
  *  (b) 勾选一张**自定义岗位**卡（defaultAgentId=a_tester）即可建团：POST /teams 请求体
  *      成员只带 roleId（无 agentId）→ 落库成员 roleId = 该岗位、agentId = 岗位绑定的
  *      defaultAgentId（服务端规则 2 预填）。
- *  (c) 外部-only 岗位（仅 defaultOpencodeAgentName）保持既有规则：勾选后出现
- *      role-external-hint + instance-executor-select；未选执行 Agent 时被守卫拦下
- *      （错误可见、零 POST /teams 发出）。
+ *  (c) 外部绑定岗位（仅 defaultOpencodeAgentName）不再要求另选内部执行 Agent：勾选后
+ *      卡片内**零** `<select>`（无执行 Agent 下拉）与外部提示；直接 roleId-only 建团成功，
+ *      落库成员 agentId = 平台占位系统 Agent `a_external`、opencodeAgentName = 岗位外部名。
  *
  * 一次性 team/role 全部在 finally 里 DELETE（先 team 后 role，防角色 in-use 409）；
  * 不留任何 fixture。运行：web 下临时 config（同 scripts/e2e-roles-members.sh 模式），
@@ -244,7 +244,7 @@ test.describe("task-15 · 团队创建页岗位列表（/agent-roles 单一来�
     }
   });
 
-  test("(c) 外部-only 岗位：提示 + 执行 Agent 槽位在场；未选执行 Agent 被守卫拦下（零请求）", async ({
+  test("(c) 外部绑定岗位：无执行 Agent 选择器/提示；roleId-only 建团成功（落占位系统 Agent）", async ({
     page,
     request,
   }) => {
@@ -253,22 +253,43 @@ test.describe("task-15 · 团队创建页岗位列表（/agent-roles 单一来�
     const external = roles.find(
       (r) => !r.defaultAgentId && !!r.defaultOpencodeAgentName,
     );
-    test.skip(!external, "live 岗位清单无外部-only 岗位（defaultOpencodeAgentName）");
+    test.skip(!external, "live 岗位清单无外部绑定岗位（defaultOpencodeAgentName）");
 
-    await loginAsAdmin(page);
-    const posts = recordTeamPosts(page);
-    await page.goto("/teams/new");
-    await expect(page.getByTestId("team-create-root")).toBeVisible({ timeout: 20_000 });
+    let teamId: string | null = null;
+    try {
+      await loginAsAdmin(page);
+      const posts = recordTeamPosts(page);
+      await page.goto("/teams/new");
+      await expect(page.getByTestId("team-create-root")).toBeVisible({ timeout: 20_000 });
 
-    const card = roleCard(page, external!);
-    await expect(card).toBeVisible({ timeout: 20_000 });
-    await card.getByTestId("role-toggle").click();
-    await expect(card.getByTestId("role-external-hint")).toBeVisible();
-    await expect(card.getByTestId("instance-executor-select")).toBeVisible();
+      const card = roleCard(page, external!);
+      await expect(card).toBeVisible({ timeout: 20_000 });
+      await card.getByTestId("role-toggle").click();
 
-    await page.getByTestId("team-name-input").fill(`qa-t15-external-${RUN_TAG}`);
-    await page.getByTestId("create-team-submit").click();
-    await expect(page.getByTestId("team-create-error")).toContainText("外部绑定岗位");
-    expect(posts).toHaveLength(0);
+      // 移除「外部岗位必须另选内部执行 Agent」的要求后：卡片内无任何执行 Agent 下拉。
+      await expect(card.locator("select")).toHaveCount(0);
+
+      const teamName = `qa-t15-external-${RUN_TAG}`;
+      await page.getByTestId("team-name-input").fill(teamName);
+      await page.getByTestId("create-team-submit").click();
+
+      await expect.poll(() => posts.length, { timeout: 15_000 }).toBe(1);
+      const members = posts[0].body.members as { roleId?: string; agentId?: string }[];
+      expect(members).toHaveLength(1);
+      expect(members[0].roleId).toBe(external!.id);
+      expect("agentId" in members[0]).toBe(false);
+
+      await expect(page).toHaveURL(/\/teams\/tm_[A-Za-z0-9]+/, { timeout: 20_000 });
+      teamId = new URL(page.url()).pathname.split("/").pop()!;
+
+      const reread = await getTeam(request, token, teamId);
+      const member = reread.members.find((m) => m.roleId === external!.id);
+      expect(member).toBeTruthy();
+      expect(member!.agentId).toBe("a_external");
+      expect(member!.opencodeAgentName).toBe(external!.defaultOpencodeAgentName);
+      expect(member!.alias.startsWith(external!.name)).toBe(true);
+    } finally {
+      await cleanup(request, token, teamId ? [teamId] : [], []);
+    }
   });
 });

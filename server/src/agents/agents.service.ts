@@ -142,12 +142,15 @@ export class AgentsService implements OnModuleInit {
 
   /**
    * GET /agents：type 过滤 + 分页（对齐 projects 的 {items, total, page, pageSize}）。
-   * type 缺省返回全部类型（含 custom）；分页 page 从 1 起、pageSize 默认 20 上限 100。
+   * type 缺省返回全部**用户可见** Agent（template/custom/clone，排除平台占位 `type='system'`）；
+   * 分页 page 从 1 起、pageSize 默认 20 上限 100。
    */
   async findAll(query: QueryAgentsDto = {}) {
     const page = this.normalizePage(query.page);
     const pageSize = this.normalizePageSize(query.pageSize);
-    const where = { type: query.type ? { equals: query.type } : undefined };
+    const where = query.type
+      ? { type: { equals: query.type } }
+      : { type: { not: 'system' } };
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.agent.count({ where }),

@@ -258,7 +258,7 @@ describe('AgentsService', () => {
   });
 
   describe('findAll（列表：type 过滤 + 分页 + 扩展字段）', () => {
-    it('无参返回全部 Agent，含扩展字段（skillIds/policyId/effectivePermission/baseAgentId/defaultModelId）', async () => {
+    it('无参返回全部用户可见 Agent，含扩展字段（skillIds/policyId/effectivePermission/baseAgentId/defaultModelId）', async () => {
       prisma.$transaction.mockResolvedValue([
         templateRows.length,
         templateRows,
@@ -346,16 +346,16 @@ describe('AgentsService', () => {
       expect(result.items[0].effectivePermission).toBeNull();
     });
 
-    it('无 type 时不过滤（where.type 为 undefined），skip/take 按缺省分页', async () => {
+    it('无 type 时排除系统占位行（where.type = not system），skip/take 按缺省分页', async () => {
       prisma.$transaction.mockResolvedValue([0, []]);
 
       await service.findAll();
 
       expect(prisma.agent.count).toHaveBeenCalledWith({
-        where: { type: undefined },
+        where: { type: { not: 'system' } },
       });
       expect(prisma.agent.findMany).toHaveBeenCalledWith({
-        where: { type: undefined },
+        where: { type: { not: 'system' } },
         include: { skills: true },
         orderBy: { createdAt: 'asc' },
         skip: 0,

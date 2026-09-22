@@ -196,7 +196,31 @@ describe('TasksService', () => {
       taskEvent: { create: jest.fn() },
       message: { create: jest.fn(), findFirst: jest.fn() },
       agent: { findMany: jest.fn(), findUnique: jest.fn() },
-    agentRole: { findUnique: jest.fn().mockResolvedValue(null) }, // 绑定解析经外层 prisma 读角色（teams resolver 同），默认无角色行
+    // 绑定解析经外层 prisma 读角色（teams resolver 同）：默认返回内置岗位行
+    // （Q5：成员必须绑定岗位；显式 agentId 的用例也须给出 roleId），用例可覆盖。
+    agentRole: {
+      findUnique: jest.fn().mockImplementation(
+        async ({ where }: { where: { id: string } }) =>
+          (
+            {
+              r_developer: {
+                id: 'r_developer',
+                key: 'developer',
+                name: '开发者',
+                defaultAgentId: 'a_developer',
+                defaultOpencodeAgentName: null,
+              },
+              r_product: {
+                id: 'r_product',
+                key: 'product',
+                name: '产品经理',
+                defaultAgentId: 'a_product',
+                defaultOpencodeAgentName: null,
+              },
+            } as Record<string, unknown>
+          )[where.id] ?? null,
+      ),
+    },
       session: {
         create: jest.fn(),
         updateMany: jest.fn(),
@@ -3355,7 +3379,7 @@ describe('TasksService', () => {
 
       const result = await service.updateTeam(
         't_0000000001',
-        { addInstances: [{ agentId: 'a_developer' }] },
+        { addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }] },
         userId,
       );
 
@@ -3364,7 +3388,7 @@ describe('TasksService', () => {
           id: 'tmm_0000000002',
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
-          roleId: null,
+          roleId: 'r_developer',
           opencodeAgentName: null,
           alias: '开发者-1',
           seq: 1,
@@ -3432,7 +3456,7 @@ describe('TasksService', () => {
 
       await service.updateTeam(
         't_0000000001',
-        { addInstances: [{ agentId: 'a_developer' }] },
+        { addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }] },
         userId,
       );
 
@@ -3445,7 +3469,7 @@ describe('TasksService', () => {
           id: 'tmm_0000000003',
           teamId: 'tm_0000000001',
           agentId: 'a_developer',
-          roleId: null,
+          roleId: 'r_developer',
           opencodeAgentName: null,
           alias: '开发者-2',
           seq: 2,
@@ -3487,7 +3511,7 @@ describe('TasksService', () => {
 
       await service.updateTeam(
         't_0000000001',
-        { addInstances: [{ agentId: 'a_developer' }] },
+        { addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }] },
         userId,
       );
 
@@ -3645,7 +3669,7 @@ describe('TasksService', () => {
       try {
         await service.updateTeam(
           't_0000000001',
-          { addInstances: [{ agentId: 'a_developer' }] },
+          { addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }] },
           userId,
         );
         fail('应抛出 ConflictException');
@@ -3670,7 +3694,7 @@ describe('TasksService', () => {
       try {
         await service.updateTeam(
           't_0000000001',
-          { addInstances: [{ agentId: 'ghost' }] },
+          { addInstances: [{ agentId: 'ghost', roleId: 'r_developer' }] },
           userId,
         );
         fail('应抛出 NotFoundException');
@@ -3786,7 +3810,7 @@ describe('TasksService', () => {
       });
     });
 
-    it('agentId 与 roleId 都缺 → 400 MEMBER_AGENT_REQUIRED（规则 4）', async () => {
+    it('缺 roleId → 400 MEMBER_ROLE_REQUIRED（Q5；仅给 agentId 同样拒绝）', async () => {
       prisma.task.findUnique.mockResolvedValue(row());
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
       idGen.nextId.mockResolvedValueOnce('tmm_0000000003');
@@ -3802,9 +3826,17 @@ describe('TasksService', () => {
       } catch (e) {
         expect(e).toBeInstanceOf(BadRequestException);
         expect((e as BadRequestException).getResponse()).toMatchObject({
-          code: 'MEMBER_AGENT_REQUIRED',
+          code: 'MEMBER_ROLE_REQUIRED',
         });
       }
+      // 仅给 agentId（无 roleId）同样拒绝。
+      await expect(
+        service.updateTeam(
+          't_0000000001',
+          { addInstances: [{ agentId: 'a_developer' }] },
+          userId,
+        ),
+      ).rejects.toThrow(BadRequestException);
       expect(txModels.teamMember.create).not.toHaveBeenCalled();
       expect(realtime.broadcast).not.toHaveBeenCalled();
     });
@@ -3833,7 +3865,7 @@ describe('TasksService', () => {
       expect(realtime.broadcast).not.toHaveBeenCalled();
     });
 
-    it('roleId-only 但角色无默认 Agent → 400 ROLE_DEFAULT_AGENT_MISSING（规则 3）', async () => {
+    it('roleId-only 外部绑定角色 → agentId = 平台占位系统 Agent（不再要求另选执行 Agent）', async () => {
       prisma.task.findUnique.mockResolvedValue(row());
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
       (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
@@ -3843,13 +3875,43 @@ describe('TasksService', () => {
         defaultAgentId: null,
         defaultOpencodeAgentName: 'Some External',
       });
+      idGen.nextId
+        .mockResolvedValueOnce('tmm_0000000003')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTeamTx();
+
+      await service.updateTeam(
+        't_0000000001',
+        { addInstances: [{ roleId: 'r_external' }] },
+        userId,
+      );
+
+      expect(txModels.teamMember.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          agentId: 'a_external',
+          roleId: 'r_external',
+          opencodeAgentName: 'Some External',
+        }),
+      });
+    });
+
+    it('roleId-only 但角色两槽位皆空 → 400 ROLE_DEFAULT_AGENT_MISSING（规则 3）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      (prisma.agentRole.findUnique as jest.Mock).mockResolvedValue({
+        id: 'r_general',
+        key: 'general',
+        name: '通用',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: null,
+      });
       idGen.nextId.mockResolvedValueOnce('tmm_0000000003');
       const txModels = mockTeamTx();
 
       try {
         await service.updateTeam(
           't_0000000001',
-          { addInstances: [{ roleId: 'r_external' }] },
+          { addInstances: [{ roleId: 'r_general' }] },
           userId,
         );
         fail('应抛出 BadRequestException');
@@ -3869,7 +3931,7 @@ describe('TasksService', () => {
       await expect(
         service.updateTeam(
           't_missing',
-          { addInstances: [{ agentId: 'a_developer' }] },
+          { addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }] },
           userId,
         ),
       ).rejects.toThrow(NotFoundException);
@@ -3895,7 +3957,7 @@ describe('TasksService', () => {
 
       await service.updateTeam(
         't_0000000001',
-        { addInstances: [{ agentId: 'a_developer' }] },
+        { addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }] },
         userId,
       );
 
@@ -3932,7 +3994,7 @@ describe('TasksService', () => {
 
       await service.updateTeam(
         't_0000000001',
-        { addInstances: [{ agentId: 'a_developer' }] },
+        { addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }] },
         undefined,
         { actorType: 'agent', actorId: 'tmm_main', confirmedBy: '主 Agent' },
       );

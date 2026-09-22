@@ -160,6 +160,24 @@ export const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
     ),
   );
 
+/**
+ * 外部绑定岗位成员的平台占位 Agent（系统行，2026-09-21）。
+ *
+ * `TeamMember.agentId` 为 NOT NULL 的 `agents.id` 外键，而外部绑定岗位
+ * （`defaultOpencodeAgentName` 非空、无内部默认 Agent）**不再**要求用户另选一个内部执行
+ * Agent —— 服务端 `resolveMemberBinding` 直接把成员落到这个固定占位行。它只作平台记账
+ * （别名 / 工作目录 / `execute({agentId})` 引用的外键落点），不承载任何能力：
+ * `agentKey` 与 `policyId` 均为 NULL，故 `buildAgentPolicies()` 的自定义块
+ * （要求两者非空）天然忽略它；成员的平台工具权限来自岗位 `AgentRole.capabilities`。
+ *
+ * 不写入 `AgentRole.defaultAgentId`：外部岗位的「外部槽位」语义由
+ * `defaultOpencodeAgentName` 表达，且该列与 `defaultAgentId` 互斥（设置其一自动清空另一个）。
+ */
+export const EXTERNAL_SYSTEM_AGENT_ID = 'a_external' as const;
+
+/** 占位 Agent 的展示名（仅列表/日志可读，不参与能力解析）。 */
+export const EXTERNAL_SYSTEM_AGENT_NAME = '外部执行' as const;
+
 /** key → 内置角色行（供 seed 成员绑定 `roleId` 使用）。 */
 export const BUILTIN_AGENT_ROLE_BY_KEY: Record<string, BuiltinAgentRole> =
   Object.fromEntries(BUILTIN_AGENT_ROLES.map((r) => [r.key, r]));

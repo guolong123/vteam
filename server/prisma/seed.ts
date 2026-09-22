@@ -651,6 +651,17 @@ const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
     ),
   );
 
+/**
+ * 外部绑定岗位成员的平台占位 Agent（与 `src/common/constants/agent-role.constants.ts` 的
+ * EXTERNAL_SYSTEM_AGENT_* 逐字节一致，自包含镜像见文件头）。`team_members.agent_id` NOT NULL，
+ * 外部绑定岗位成员不再要求用户另选执行 Agent → 服务端落到本占位行；`agent_key`/`policy_id`
+ * 均 NULL，不参与 `buildAgentPolicies` 与权限解析。
+ */
+const EXTERNAL_SYSTEM_AGENT_ID = 'a_external';
+const EXTERNAL_SYSTEM_AGENT_NAME = '外部执行';
+const EXTERNAL_SYSTEM_AGENT_PROMPT =
+  '平台占位执行身份：外部绑定岗位成员的成员行落点（无实际执行语义，执行由该岗位绑定的外部引擎 Agent 承担）。';
+
 /** key → 内置角色行（成员绑定 roleId 用）。 */
 const BUILTIN_AGENT_ROLE_ID_BY_KEY: Record<string, string> = Object.fromEntries(
   BUILTIN_AGENT_ROLES.map((r) => [r.key, r.id]),
@@ -1029,6 +1040,26 @@ async function main() {
       },
     });
   }
+
+  // 外部绑定岗位成员的平台占位 Agent（2026-09-21）：create-if-absent，不覆盖用户编辑。
+  // 存量库已由 migration 20260921000004 建行（本 upsert 对之为 no-op）；全新库 migrate 先于
+  // seed、users 尚空 → migration 跳过，由本行以 admin 为 created_by 落库。
+  await prisma.agent.upsert({
+    where: { id: EXTERNAL_SYSTEM_AGENT_ID },
+    update: {},
+    create: {
+      id: EXTERNAL_SYSTEM_AGENT_ID,
+      name: EXTERNAL_SYSTEM_AGENT_NAME,
+      type: 'system',
+      agentKey: null,
+      prompt: EXTERNAL_SYSTEM_AGENT_PROMPT,
+      baseAgentId: null,
+      defaultModelId: null,
+      persona: null,
+      policyId: null,
+      createdBy: adminUser.id,
+    },
+  });
 
   // 内置 AgentRole 行（agent-role-entity todo 1）：create-if-absent，不覆盖用户编辑；
   // 另对 default_agent_id 为空的存量内置行补齐绑定（全新库路径：migrate deploy 先于 seed，

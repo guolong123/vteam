@@ -52,6 +52,7 @@ import {
   EXTERNAL_AGENT_ROLE_CAPABILITIES,
   EXTERNAL_AGENT_ROLE_KEYS,
   EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST,
+  EXTERNAL_SYSTEM_AGENT_ID,
 } from '../common/constants/agent-role.constants';
 import {
   buildFactoryCapabilityMatrix,
@@ -218,6 +219,20 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       expect(call[0].create.type).toBe('template');
       expect(call[0].create.ackMessage).toBeUndefined();
     }
+  });
+
+  it('平台占位系统 Agent upsert：type=system、agentKey/policyId 为 null（外部绑定岗位成员落点）', async () => {
+    await main();
+
+    const call = mockPrisma.agent.upsert.mock.calls.find(
+      (c) => c[0].where.id === EXTERNAL_SYSTEM_AGENT_ID,
+    );
+    expect(call).toBeTruthy();
+    expect(call![0].create).toMatchObject({
+      type: 'system',
+      agentKey: null,
+      policyId: null,
+    });
   });
 
   it('已移除默认 ACK 文案（收到，正在处理… 机制已下线）', async () => {

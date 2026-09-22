@@ -99,7 +99,7 @@ export function toRoleKey(roleKey: string): RoleKey | null {
 }
 
 /** 添加实例提交载荷：ROLE-first——roleId 为主选择器提交键；agentId 仅在
- * 显式覆盖（自定义 Agent / 外部绑定角色需内部执行器）时携带，服务端按规则 1/2/5 解析。 */
+ * 用户**显式覆盖** Agent 时携带，服务端按规则 1/2/5 解析。 */
 export interface AddInstancePayload {
   agentId?: string;
   roleId?: string;
@@ -247,10 +247,9 @@ export function TeamMembersPanel({
       setSelectedAgentId(role.defaultAgentId ?? "");
     }
   };
-  const selectedIsExternalOnly = !!selectedRole && !selectedRole.defaultAgentId && !!selectedRole.defaultOpencodeAgentName;
-  // ROLE-first：选中角色即提交就绪（role-only，服务端规则 2/5 预填）；
-  // 仅外部绑定角色（无 defaultAgentId）需用户显式点选执行 Agent（agentId + roleId 走规则 1+5）。
-  const canConfirm = !!selectedRoleId && (!selectedIsExternalOnly || (agentTouched && !!selectedAgentId)) && !adding;
+  // ROLE-first：选中角色即提交就绪（role-only，服务端规则 2/5 预填；外部绑定岗位由服务端
+  // 落到平台占位系统 Agent，无需用户另选执行 Agent）。
+  const canConfirm = !!selectedRoleId && !adding;
   const confirmAdd = async () => {
     if (!canConfirm) return;
     const ok = await onAddInstance({
@@ -742,7 +741,6 @@ export function TeamMembersPanel({
                   : role.defaultOpencodeAgentName
                     ? `${role.defaultOpencodeAgentName}（外部）`
                     : "未设置";
-                const externalOnly = !role.defaultAgentId && !!role.defaultOpencodeAgentName;
                 return (
                   <button
                     key={role.id}
@@ -777,11 +775,6 @@ export function TeamMembersPanel({
                       <span data-testid="add-instance-role-binding" style={{ fontSize: fontSize.xs, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {binding}
                       </span>
-                      {externalOnly && selected && (
-                        <span data-testid="add-instance-external-hint" style={{ fontSize: fontSize.xs, color: "#B45309" }}>
-                          外部绑定岗位：需在下方再选一个内部执行 Agent
-                        </span>
-                      )}
                     </span>
                     {selected && (
                       <span aria-hidden style={{ color: t.color, fontSize: fontSize.sm, fontWeight: 700 }}>✓</span>
