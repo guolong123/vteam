@@ -351,8 +351,8 @@ function TeamSubTabs({ team, task, onToggleManagedMode, subTab: controlledSubTab
                   aria-label="完成后重置会话"
                   tabIndex={0}
                   disabled={reuseMutation.isPending}
-                  onClick={() => reuseMutation.mutate(reuseSession)}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); reuseMutation.mutate(reuseSession); } }}
+                  onClick={() => reuseMutation.mutate(!reuseSession)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); reuseMutation.mutate(!reuseSession); } }}
                   style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: !reuseSession ? "#0D9488" : neutral[300], position: "relative", cursor: reuseMutation.isPending ? "default" : "pointer", border: "none", padding: 0, flexShrink: 0, opacity: reuseMutation.isPending ? 0.6 : 1 }}
                 >
                   <span aria-hidden style={{ position: "absolute", top: 2, left: !reuseSession ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} />
