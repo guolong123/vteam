@@ -26,13 +26,13 @@
     "request_body_agentRoleId": "ar_developer",
     "request_body_role_present": false,
     "agent": {
-      "id": "a_0000000029",
-      "policyId": "ep_0000000029"
+      "id": "a_0000000001",
+      "policyId": "ep_0000000001"
     },
     "effectivePermission": {
-      "policyId": "ep_0000000029",
-      "policyName": "t4 开发者 t4-mu9ka09u 策略",
-      "agentName": "vteam-t4-dev-t4-mu9ka09u",
+      "policyId": "ep_0000000001",
+      "policyName": "t4 开发者 t4-muc0796u 策略",
+      "agentName": "vteam-t4-dev-t4-muc0796u",
       "permission": {
         "edit": {
           "*": "deny",
@@ -46,7 +46,6 @@
         "vteam_task_transition": "deny",
         "vteam_question_confirm": "deny",
         "vteam_team_add_member": "deny",
-        "vteam_plan_mode": "deny",
         "vteam_plan_complete": "deny",
         "vteam_task_create": "deny",
         "vteam_skill_create": "deny",
@@ -97,7 +96,7 @@
       "serverGated": []
     },
     "stored_policy": {
-      "id": "ep_0000000029",
+      "id": "ep_0000000001",
       "type": "custom",
       "edit": {
         "*": "deny",
@@ -111,13 +110,13 @@
     "request_body_role_present": false,
     "request_body_agentRoleId_present": false,
     "agent": {
-      "id": "a_0000000030",
-      "policyId": "ep_0000000030"
+      "id": "a_0000000002",
+      "policyId": "ep_0000000002"
     },
     "effectivePermission": {
-      "policyId": "ep_0000000030",
-      "policyName": "t4 骨架 t4-mu9ka09u 策略",
-      "agentName": "vteam-t4-none-t4-mu9ka09u",
+      "policyId": "ep_0000000002",
+      "policyName": "t4 骨架 t4-muc0796u 策略",
+      "agentName": "vteam-t4-none-t4-muc0796u",
       "permission": {
         "edit": {
           "*": "deny"
@@ -133,7 +132,7 @@
       "correction": {
         "handoff": {},
         "denyTemplate": "【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。",
-        "scopeSummary": "t4 骨架 t4-mu9ka09u"
+        "scopeSummary": "t4 骨架 t4-muc0796u"
       },
       "serverGated": []
     },

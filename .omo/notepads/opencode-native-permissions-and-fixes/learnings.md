@@ -1136,3 +1136,245 @@ Commands: `cd server && npx prisma validate && npx prisma generate && npx tsc --
 - 新 commit：`7301390` `5bfcc53` `815805b` `0549f55` `25e0ef7` + 本条 .omo commit；**未 push、未建分支**；
   除 .omo 三文件外工作树全净；stack 留跑：db/server/web healthy、init Exited(0)、worker running。
 - 未做（有意）：未修 815805b 正文末行重复片段（不 amend 规则）；未给 fresh 补外部 3 岗（见偏差①）。
+
+---
+## [2026-09-22] SLICE 6d — 内置岗位能力矩阵按角色定制 + 外部 3 岗 seed 预置（seed + migration 000008，server）
+
+**Status: implemented + verified（工作树未提交）。** 用户决策（原话）：「1 创建起来，项目经理角色默认所有vteam权限开放，其他角色也需要按照角色需要针对性开放，并内置为seed」。
+
+### 文件与改动
+- **src `agent-role.constants.ts`**：新增 **`BUILTIN_ROLE_CAPABILITY_MAPS`**（7 内置岗 × 21 键显式字面量，键序=目录序；头注释文档化派生规则 + 三方单一来源契约）——写库单一事实来源；新增 `ExternalAgentRole`/`EXTERNAL_AGENT_ROLES`（id=`ar_<key>`、name=`Sisyphus/Prometheus/Atlas`、外部槽位 `Sisyphus - ultraworker`/`Prometheus - Plan Builder`/`Atlas - Plan Executor`、sortOrder 8/9/10、一行式 rolePrompt `# 角色：…`）；`EXTERNAL_AGENT_ROLE_KEYS` 改由其派生（值不变，000006 契约仍绿）。
+- **派生规则（只收窄不放大）**：PM = **显式全 21 点 true**（覆盖，不派生——其 toolAllows 缺 submit_artifact/git_repos_list 亦全开）；其余 6 岗 = `ROLE_BOUNDARIES.toolAllows` 经 `buildCapabilityMatrixFromTools`（能力点全组工具放行才 true）。真值表：product 18/21、PM 21/21、architect 12、developer 13、tester 12、plan 10、librarian 8。
+- **seed（prisma/seed.ts，自包含镜像）**：新增 `builtinRoleCapabilityMap()`（同一规则：PM 全 true + capabilityMatrixFromTools 派生），替换内置循环与 NULL 补齐分支的 `factoryCapabilityMatrix()`；新增 **外部 3 岗 upsert（`where: {key}`、`update: {}` = create-if-absent ≙ INSERT…ON DUPLICATE no-op）**——重跑无重复、不覆盖运营者编辑，create 落 type=custom/外部槽位/defaultAgentId=NULL/8 工具矩阵/rolePrompt/sortOrder。`ar_general` 兜底仍出厂（factoryCapabilityMatrix 保留非死代码）。
+- **迁移 `20260921000008_per_role_capabilities`（新）**：7 条整列 `CAST('<21 键字面量>' AS JSON)`，逐条 `WHERE type='builtin' AND key='<单个内置 key>'`；字面量由 ts-node 从 BUILTIN_ROLE_CAPABILITY_MAPS 生成（零手抄）；头注释含 按角色/全 21 点 true/全组放行/JSON_SET 陷阱/外部 3 岗/单向迁移/BUILTIN_ROLE_CAPABILITY_MAPS 标记。**未改 000003–000007**（checksum ledger；000008 目录 mv 往返仅用于 scratch 升级演练）。
+- **specs**：`seed.spec.ts`（内置期望改 BUILTIN_ROLE_CAPABILITY_MAPS、upsert 调用按 where.id 过滤、**新增外部 3 岗 create-if-absent 形状测试**）；**新增 `agent-role-capabilities-per-role.migration.spec.ts`**（000008 契约：7 UPDATE、字面量≡TS 常量、PM 21 true、外部/general 不可命中、无 JSON_SET/OBJECT、头注释标记）；`agent-role.constants.spec.ts` 新增 4 测试（21 键目录序、**PM 全 21 true**、**非 PM ⊆ 派生集**、外部岗形状）；`platform-mcp.authority-matrix.spec.ts` fixture `factoryCapabilities()`→`builtinCapabilities()`（按岗矩阵，8 具名负格在按岗矩阵下仍全 deny——它们都落在各岗 false 能力点上）。
+- **组塌缩格（部分工具放行 ⇒ 能力点 false，需产品 review 的唯一判断点，共 4 格）**：architect×issue.manage（缺 issue_update/issue_transition）、tester×issue.manage（缺 issue_update）、plan×memory.manage（缺 memory_save/memory_update）、librarian×memory.manage（缺 memory_save/memory_update）。
+- **外部 3 岗保持 8 工具矩阵（8 true/13 false）= 有意设计**（第三方执行器最小权限）；`ar_general` 保持出厂（11/21）。
+
+### 命令与结果
+- `npx prisma validate` → 0；`npx prisma generate` → 0；`npx tsc --noEmit -p tsconfig.json` → 0（含删探针后终跑）。
+- `npx jest --runInBand`（全量，workdir=server）→ **149 suites：3 failed / 146 passed（5 failed / 3404 passed / 3409 total）**，失败逐一 == HEAD 基线（task.constants ×3、platform-mcp.service notify_agent ×1、review-dispatch ×1）⇒ **零新增失败**；新增 000008 契约 spec + 4 常量契约测试 + 1 外部岗 seed 测试全绿（149 = 基线 148 + 1；tests +10）。
+
+### Scratch-DB 双路径实证（宿主临时容器 `vteam-scratch-mysql` :13306，跑完 `docker rm -f`；live 只读 SELECT + 后述受控部署写入）
+探针 `server/tmp-probe-per-role.ts`（跑完即删，未入库；fresh/factory/per-role 三模式，norm 键序比对 + 21 键 + 无 NULL）：
+- **A. fresh**：`vteam_fresh8` → `migrate deploy`（72 全 applied 含 000008，ledger 72==目录 72）→ `ts-node prisma/seed.ts` → **PROBE PASS**：11 岗（7 内置==定制矩阵、PM 21/21、外部 3==8 工具+形状、general==出厂、0 NULL）。**seed 幂等**：第 2 遍后全表 TSV（-r raw 导出）与第 1 遍**逐字节一致**（无重复无变化）。**NULL 补齐**：置 ar_product.capabilities=NULL 重跑 seed → 再 PASS（按岗矩阵落回）。
+- **B. upgrade**：`vteam_upg8` 移出 000008 → deploy 至 000007 → 新 seed（建外部 3 岗）→ **upg-before PASS**（7 内置==出厂、外部==8 工具、general==出厂、11 岗、0 NULL）→ 归位 000008 → deploy → **upg-after PASS**（7 内置==定制矩阵、PM 21/21）；外部 3+general 行前后 TSV **diff 为空**（守卫未命中）；变化的物理行恰 7 条=7 内置的 capabilities。**迁移幂等**：手工重跑 000008 SQL → 全表 TSV 与跑后逐字节一致；两库 `capabilities IS NULL`=0。
+
+### live 部署（`docker compose build server && docker compose up -d --no-deps server web`，**未用 --force-recreate**）
+- **init 不会重跑**（已实证）：`--no-deps` 不拉起一次性 init 服务，inspect init 仍为上次（00:39）exited(0)；DB 仍 8 岗、`_prisma_migrations` 无 000008 行（applied008=0）⇒ 按 brief 执行 `docker compose run --rm --no-deps --entrypoint sh server -c "npx prisma migrate deploy && node dist/prisma/seed.js"` → exit 0。**若走完整 `docker compose up -d`（非 --no-deps）且 server 镜像已更新，init 会被重建并重跑 migrate+seed**（one-shot 服务 + service_completed_successfully 门）。
+- **live DB 断言（全过）**：roles=**11**、`capabilities IS NULL`=**0**、000008 finished；7 内置逐岗 norm 后 == `BUILTIN_ROLE_CAPABILITY_MAPS`、PM 21/21 true；外部 3 岗 type=custom、default_agent_id=NULL、槽位三名精确、sortOrder 8/9/10、rolePrompt 一行 `# 角色：`、caps 8/13；general==出厂。
+- **门禁**：插入临时 session `szz_gate_probe8`（worker=w_compose_worker、member=tmm_0000000003=architect、team=tm_0000000001），测毕 DELETE（sessions 复核=0、tasks=0、roles 无 probe/zz 行）。**ALLOW** `memory_search` → **HTTP 200** `{"result":{"content":[{"type":"text","text":"[]"}]}}`（门+handler 全通）；**DENY** `task_create`（带 selfInstanceId 过入参校验后触门）→ **-32003 `[403] PLATFORM_MCP_TOOL_NOT_PERMITTED 工具 vteam_task_create 未获授权：岗位（architect）已拒绝能力点 task.create`**。health 200、web 200、compose 全 healthy。
+
+### 坑（本 slice 新增）
+- **mysql 批量导出三连坑**：① 内置 role_prompt 含真实换行 + `-r`(raw) 不转义 ⇒ 一行一逻辑行被打散，按行 diff/切列全乱（**导 TSV 比对内置岗用默认 -B 转义模式**，或只对单行 prompt 的外部岗用 raw）；② 批量模式 NULL 输出**字面量字符串 `NULL`**（非空串），解析要 `s==='NULL'→null`；③ 宿主侧 `docker exec … mysql` 默认字符集把中文打成 `?`——**必须加 `--default-character-set=utf8mb4`**，否则 role_prompt 的 `# 角色：` 断言假红。
+- `platform-mcp` 的 DENY 格：入参校验（如 task_create 缺 selfInstanceId → -32602）**先于**能力门；测 deny 必须给齐业务入参，否则撞的是校验错不是门（ALLOW 无此问题因 memory_search 入参宽容）。
+- authority-matrix spec 全量 jest 会重写 `.omo/evidence/…/task-9-matrix.json`（allow/deny 计数随按岗矩阵变化，3404 passed 证据已含）；`plan-review-execution-gates/task-9/probe.json` 系并行 worker 遗留 modified，均未回滚（沿袭 6a/6c 记录）。
+- seed.ts（2400+ LOC）本 slice 净增 ~60 行（派生函数 + 外部岗 upsert）；继承超 250 LOC 文件，重构不在本 brief 范围（沿袭 6c 记录）。
+
+### 未验证 / 未触碰
+- 未跑 web e2e / `scripts/e2e-roles-members.sh`（已知 HEAD 陈旧红）；未动 `web/**`、能力目录键/标签、门禁逻辑、`buildAgentPolicies`/GET /agent-policies、引擎原生权限、migrations 000003–000007。
+- 无 commit/push/branch（orchestrator 事后提交）。
+
+---
+## [2026-09-22] SLICE (b) — 能力点目录拆分 21→27：issue.manage(5)+memory.manage(3) 拆为独立点（web）
+
+**Status: implemented + verified live（工作树未提交）。** 用户决策 (b)：组塌缩点（「点 = true iff ALL 其工具放行」
+导致部分放行岗位丢失读权限）拆开。并行 worker 落服务端同表；本 slice 只改 web 副本 + 验证，**未触碰 server/**。
+
+### 文件与改动
+- **`web/src/api/role-capabilities.ts`（唯一代码改动，129 pure LOC）**：`issue.manage`（1 点 5 工具）→
+  `issue.create`创建需求/缺陷 / `issue.get`查看需求缺陷 / `issue.list`需求缺陷列表 /
+  `issue.update`更新需求缺陷 / `issue.transition`流转需求缺陷（5 点，全 defaultDeny=true ⇒ factoryDefault=false）；
+  `memory.manage`（1 点 3 工具）→ `memory.save`写入团队记忆 / `memory.search`检索团队记忆 /
+  `memory.update`更新团队记忆（3 点，全 defaultDeny=false ⇒ factoryDefault=true）。
+  位置沿用原 issue.manage/memory.manage 槽位（file.read 之后、skill.create 之前）；其余 19 点
+  byte-identical。目录 **27 点覆盖 28 工具**（hook.manage 仍 2 工具成组）；出厂 **14 拒绝 / 13 允许**。
+  头注释两处 21→27、出厂拒绝清单 10→14 项逐名更新。
+- **`RoleCapabilityEditor.tsx` / `AgentRolesTab.tsx`：零改动**。grep `21`/`27`/硬编码行数 → 两文件
+  **0 命中**（「能力点」仅泛化文案；摘要 `权限点：N 允许 / M 拒绝` 由 `summarizeCapabilities()` 计算自动跟随）。
+  分组由 `ROLE_CAPABILITY_GROUPS`(8 组) × `cap.group` 过滤渲染，Issue 组自动 5 行、记忆组 3 行。
+- 分组表未动（任务/团队/协作/产出/Issue/记忆/能力/自动化 = 8 组）；`请确认` badge 本就已不在编辑器
+  （6b 后已删 hint），全页 grep 0。
+
+### 等价检查（ts-node 服务端常量 + 正则解析 web 副本，key-based；临时脚本已删）
+- 服务端文件前 ~13 分钟未落（期间轮询 `web=27 server=21 mismatches=10`，差额恰为 8 新键 vs 2 旧键，
+  19 共有键 label/tools/defaultDeny 全同）；09:43 worker 落地后终跑**逐字**：
+  ```
+  web entries=27 server entries=27 mismatches=0
+  labels 27/27 tools 27/27 defaultDeny 27/27
+  factory: deny=14 allow=13 totalTools=28
+  keyOrder identical=false
+  ```
+  exit=0。**keyOrder identical=false 为 6b 既有差异非本 slice 引入**：web 把 `question.confirm` 放 collab 组
+  （wecom.reply 后），服务端放 skill.create 后；web `git.repos` 在 `hook.manage` 前，服务端相反。
+  逐项（key/label/tools/defaultDeny）全同；拆分 8 键在两侧占同一槽位（file.read 后）。
+- 坑：`grep "issue.create"` 会假命中 `vteam_issue_create`（`.` 通配 `_`）——轮询服务端落地须用
+  `key: 'issue\.create'` 锚定。
+
+### Playwright（:13001，admin/admin123，脚本 /tmp/opencode/verify-role-cap-editor-27.cjs 已删；截图已删）
+- **存档岗（开发者，capabilities=旧 21 键 map）**：`data-source=stored`、「请确认」编辑器=0/整页=0、
+  rows=**29**、groups=**9**、toggles=58；分组 task4/team2/collab6/artifact3/**issue5**/**memory3**/capability3/
+  automation1/**extra2**——extra 组=目录外旧键 `issue.manage`+`memory.manage`（容错路径，保存原样带回；
+  服务端矩阵重写为 27 键后将归 27/8）。Issue 组 5 键、记忆组 3 键逐名断言 ✓。
+  单点切换：memory.update 允许→拒绝 ⇒ `changedRows=["memory.update:true->false"]` **onlyTarget=true**、
+  还原后整表与切换前逐字节相同（restored=true）、`roleMutations=[]`（零 POST/PATCH，纯 draft）。
+- **新建岗位草稿（出厂 27 键干净 map）**：`data-creating=true`、`data-source=factory-default`、
+  「请确认」=0/0、rows=**27**、groups=**8**、toggles=**54**、deniedRows=**14** / allowedRows=**13**
+  （= 出厂 14 拒绝/13 允许逐字验证）；分组 task4/team2/collab6/artifact3/**issue5**/**memory3**/capability3/automation1。
+  单点切换：issue.create 拒绝→允许 ⇒ changedRows 仅该行 **onlyTarget=true**；memory.search 同样只翻自身；
+  两点均还原（restored=true）；全程 `roleMutations=[]`。末扫整页「请确认」=**0**。总 `VERIFY PASS`。
+
+### Specs / tsc
+- `bash scripts/e2e-create-agent-role.sh` → **PASS 4/4**（cleanup receipts 齐；evidence 重写 `.omo/evidence/agent-native-permission-editor/` 为本轮产物）。
+- `npx playwright test --config .t8.playwright.config.ts`（临时 config 指 :13001，跑完已删）→
+  dark-mode-role-warning **2 passed (8.5s)**。
+- **无任何 spec 硬编码 21 行**（grep `toHaveCount(21)|rows=21|21 rows|21 项` e2e/ scripts/ src/ = 0）。
+- `cd web && npx tsc --noEmit` → **0**（改动后 + 清理临时文件后各跑一次，均 exit 0）。
+- web 镜像重建 `docker compose build web && docker compose up -d --no-deps web`（未 --force-recreate）；
+  容器内 grep `issue.create` 命中 ⇒ 镜像 == 工作树。
+
+### 收尾状态
+- 工作树我的改动仅 `web/src/api/role-capabilities.ts` + 本 notepad 追加；temp 脚本/config/截图全删
+  （`.omo/tmp/`、`web/.t8.playwright.config.ts`、/tmp verify 脚本与截图）。
+- 服务端文件 `platform-capability.constants.ts` 由并行 worker 改（M），我只读比对。
+- 遗留 modified（非本 slice 产生，沿袭记录）：`.omo/evidence/plan-review-execution-gates/task-9/probe.json`、
+  `server-gate-removal-tool-authority/task-9-matrix.json`（并行 worker）、`agent-native-permission-editor/`
+  两文件（本轮 create-agent-role e2e 正常重写产物）。
+- 未做（有意）：未保存任何岗位（纯 draft 验证，存档岗 29/9 的旧键待服务端矩阵迁移自然收敛）；
+  未 commit/push/branch。
+
+---
+## [2026-09-22] SLICE (b) — 拆分组能力点 issue.manage/memory.manage（21 → 27 点，消除组塌缩）
+
+**Status: implemented + verified（工作树未提交）。** 用户选项 (b)：拆组。Pinned 目录 27 点覆盖 28 工具，
+恰 `hook.manage` 仍成组（2 工具）；派生规则不变（能力点 = 其全部工具放行才 true——单工具点下
+退化为逐工具判定，不再塌缩）。
+
+### 文件与改动
+- **`platform-capability.constants.ts`**：`issue.manage` → `issue.create/get/list/update/transition`
+  （均 defaultDeny=true，label 创建需求/缺陷…流转需求缺陷）；`memory.manage` → `memory.save/search/update`
+  （均 defaultDeny=false）；issue 组连排、memory 组连排；`hook.manage` 原样保留。工厂默认因此变为
+  **14 deny / 13 allow**（原 10 deny − issue.manage + 5 issue 点）。头注释/`buildCapabilityMatrixFromTools`
+  注释同步（组塌缩示例改为「拆分后仅 hook.manage 可塌缩」）。
+- **`agent-role.constants.ts` `BUILTIN_ROLE_CAPABILITY_MAPS`**：7 岗 × 27 键重生成（键序 = 目录序）。
+  派生验证脚本（ts-node 临时，跑完删）：7 岗 map ≡ `buildCapabilityMatrixFromTools(ROLE_BOUNDARIES)`，
+  PM 全 27 true，无任何 true 超出派生集 ⇒ 未放宽任何 ROLE_BOUNDARIES。
+- **`prisma/seed.ts`**：镜像目录同步拆分（自包含，仍不 import src）；注释 21→27、000008→000009。
+  外部 3 岗矩阵自动变 **8 true / 19 false**（27 = 8+19）；`ar_general` 出厂自动变 **13/14**。
+- **迁移 `20260921000009_split_grouped_capabilities`（新）**：**11 条**整列 `CAST('<27 键字面量>' AS JSON)`
+  = 7 内置（守卫 type='builtin' AND key=单值）+ 外部 3 岗（守卫 key=单值，矩阵=8/19 最小权限不放宽）
+  + `ar_general`（守卫 key='general'，出厂 13/14）。字面量由 ts-node 从 TS 常量生成（零手抄）；
+  无 JSON_SET/JSON_REMOVE；常量右值幂等。**未改 000003–000008**（checksum ledger）。
+- **契约 specs**：新增 **`agent-role-capabilities-split-grouped.migration.spec.ts`**（000009 契约：
+  恰 11 UPDATE、每字面量 27 键且无退役组键、7 内置 ≡ BUILTIN maps、PM 全 27 true、外部 ≡ 8/19、
+  general ≡ 出厂 13/14、**四塌缩格断言**（architect/tester issue 读侧 true + 写侧兄弟 false、
+  plan/librarian memory.search true + save/update false）、范围守卫、无 JSON_* 函数）。
+  **替换/扩展旧契约**（不留 21 键形状断言）：删除 `…per-role.migration.spec.ts`（000008 契约，
+  其「字面量 ≡ TS 常量」已由 000009 spec 接棒）；`…factory-default…`（000007）改为结构契约
+  （1 UPDATE/守卫/无 JSON_*/字面量为合法布尔对象，头注注明出厂锁定移 000009）；
+  `…agent-role-capabilities…`（000006）等值断言改经 **SPLIT_SUCCESSORS AND 映射**
+  （冻结组键 issue.manage = 拆分 5 点的逻辑 AND——拆分只细化粒度不改语义）。
+- **coverage spec**：27 键 ↔ 28 工具、每工具恰一点、恰一个多工具点 `hook.manage`(2)、
+  `issue.manage/memory.manage` 已非合法键；保守映射测试改用 hook.manage + 单工具点退化断言。
+- **其余 fixtures**：`agent-role.constants.spec` 21→27；`seed.spec` 外部 13→19 false + 27 键；
+  `tool-permission.spec` 多工具测试改 hook.manage + 新增「拆分点互不影响」（issue.create=false 只拒创建）；
+  `worker-dispatcher.spec` memory.manage 夹具 → memory.save（段屏蔽判据键）；DTO 描述与
+  `CONTRACT-tool-naming-and-identity.md` 21→27、issue.manage→issue.create、出厂 14 deny 列表。
+
+### 逐岗 before/after 差集（true 计数 21→27 键；Δ 格 = 该岗实际放行工具恢复的授权）
+| 岗 | before | after | Δ true | 打开的格（false→true） | 说明 |
+|---|---|---|---|---|---|
+| product | 18/21 | **24/27** | +6 | 无新格（组本就 true） | 2 个 true 组键细化为 8 个 true 点（5 issue + 3 memory），语义不变 |
+| project_manager | 21/21 | **27/27** | +6 | 无（显式全开） | 全 27 点 true 覆盖保持 |
+| architect | 12/21 | **17/27** | +5 | **issue.create / issue.get / issue.list**（3 格，原 issue.manage 3/5 塌缩全丢） | issue.update/transition 仍 false（toolAllows 未含）；memory 3 点 true 同前 |
+| developer | 13/21 | **19/27** | +6 | 无新格（组本就 true） | 5 issue + 3 memory 全 true，语义不变 |
+| tester | 12/21 | **18/27** | +6 | **issue.create / issue.get / issue.list / issue.transition**（4 格，原 4/5 塌缩全丢） | issue.update 仍 false（toolAllows 未含）；memory 3 点 true 同前 |
+| plan | 10/21 | **11/27** | +1 | **memory.search**（1 格，原 1/3=仅检索被塌掉） | memory.save/update 仍 false；issue 5 点全 false（无 issue 工具） |
+| librarian | 8/21 | **9/27** | +1 | **memory.search**（1 格，其职责恰是只读检索，原被塌掉） | memory.save/update 仍 false；issue 5 点全 false |
+| sisyphus/prometheus/atlas | 8/21 | **8/27** | 0 | 无 | true 集不变（8 工具最小权限），false 13→19（退役组键细化为 5+3 个 false） |
+| general (出厂) | 11/21 | **13/27** | +2 | 无（issue 组出厂本 deny；memory 组出厂本 allow） | 出厂 10 deny → **14 deny**（−issue.manage +5 issue 点）；allow 11→13 |
+
+**四个原塌缩格全部打开**（DB JSON + 契约 spec 双重断言）：architect.issue.create/get/list=true、
+tester.issue.create/get/list/transition=true、plan.memory.search=true、librarian.memory.search=true；
+写侧兄弟（architect/tester issue.update、architect issue.transition、plan/librarian memory.save/update）
+保持 false（不越 ROLE_BOUNDARIES）。**无任何 true 超出 toolAllows**（派生脚本逐格验证）。
+
+### 命令与结果
+- `npx prisma validate` → valid；`npx prisma generate` → 0；`npx tsc --noEmit -p tsconfig.json` → **0**（部署后终跑复核）。
+- `npx jest --runInBand`（全量，workdir=server）→ **149 suites：3 failed / 146 passed（5 failed / 3409 passed / 3414 total）**，
+  失败逐一 == HEAD 基线（task.constants ×3、platform-mcp.service notify_agent ×1、review-dispatch ×1）⇒ **零新增失败**；
+  新 000009 契约 spec + coverage 27↔28 + 改造后的 000006/000007 契约全绿。
+
+### Scratch-DB 双路径实证（宿主临时容器 `vteam-scratch-mysql` :13306（mysql:8 = 8.4.11），跑完 `docker rm -f`）
+- **坑（新）**：`mysql:8`（8.4）**不认** `--default-authentication-plugin=mysql_native_password` 启动参数
+  （Entrypoint 直接 Aborting）——去掉该参数即可（caching_sha2_password 客户端 prisma/mysql 均支持）。
+- **A. fresh**（`vteam_fresh9`）：`migrate deploy`（含 000009，74 全 applied）→ `ts-node prisma/seed.ts` →
+  断言全过：**11 岗 × 恰 27 键、0 NULL、0 退役键（issue.manage/memory.manage 均无）**、
+  PM **27/0**、外部 3 岗 **8/19**、general **13/14**；真值计数 product 24/3、architect 17/10、
+  developer 19/8、tester 18/9、plan 11/16、librarian 9/18；四塌缩格 + 写侧兄弟逐格 JSON 断言全中。
+  **seed 幂等**：第 2 遍后 `mysqldump agent_roles` 与第 1 遍 **数据逐字节一致**（仅 dump 尾部
+  `Dump completed on` 时间戳行不同，`sed '$d'` 去尾后 cmp 相同）。
+- **B. upgrade**（`vteam_upg9`）：移出 000009 → deploy 至 000008 → 新 seed（外部 3 岗 create 落 27 键，
+  与 live 21 键态不符 ⇒ 手工把外部 3 岗回写为 000006 时代 21 键字面量，**before 快照 = 11 岗全 21 键**
+  忠实模拟 live 000008 态）→ 归位 000009 → deploy → 断言全过：11 岗全部 27 键、**0 键数异常、
+  0 NULL、0 退役键**、counts/四塌缩格与 fresh 一致。**迁移幂等**：手工重跑 000009 SQL →
+  重跑前后 `mysqldump agent_roles` **数据逐字节一致**（去时间尾行 cmp 相同）。容器已删，探针 SQL 已删。
+
+### live 部署（`docker compose build server && docker compose up -d --no-deps server web`，**未用 --force-recreate**）
+- server 以新镜像重建 → Healthy；web/db/worker 未动（web 仍 Up 37m）；init 仍为上次 exited(0)
+  （`--no-deps` 不拉起 init，符合既有实证）⇒ 按 brief 执行
+  `docker compose run --rm --no-deps --entrypoint sh server -c "npx prisma migrate deploy && node dist/prisma/seed.js"` → **exit 0**。
+- **live DB 断言（全过）**：`_prisma_migrations` 有 `20260921000009_split_grouped_capabilities`（finished 非空）；
+  **11 岗 × 27 键、0 NULL、0 键数异常、0 退役键**；counts 与 scratch 逐岗一致（PM 27/0、外部 8/19、
+  general 13/14）；四塌缩格 + 写侧兄弟逐格 JSON 全中。
+- **门禁探针**（临时 session `szz_gate_probe9`：worker=w_compose_worker、member=tmm_0000000003=architect、
+  team=tm_0000000001 + 临时 task `szz_probe_task9`（resolve 需真实 taskId，坑见下），测毕双删）：
+  - **ALLOW** `memory_search` → HTTP 200 真实返回团队记忆（基线放行保持）；
+  - **ALLOW** `issue_list` → HTTP 200 `result.content[0].text="[]"`（**原塌缩格经真实门放行**，拆分前
+    architect.issue.manage=false 必拒）；
+  - **DENY** `issue_update` → -32003 点名 **issue.update**（写侧兄弟仍 false，粒度精确）；
+  - **DENY** `issue_transition` → -32003 点名 **issue.transition**；
+  - **DENY** `task_create` → -32003 点名 task.create（基线拒绝保持）。
+  复核：sessions/tasks **probe 行 0**、issues=0、agent_roles 无 zz/probe 行；health 200、web 200。
+- **live sessions 旁注（非本 slice 残留，未动）**：探针期间现网另有 3 行 `s_000000000x`（id 生成器
+  顺序号、01:55/02:05 时间戳、含 worker_ingress 的 failed 行）——系并行 worker/现网活动产生，
+  非探针 id（`szz_`），按「不代人清理」原则保留。
+
+### 坑（本 slice 新增）
+- **zsh 多词变量不拆词**：`M="docker exec … mysql …"; $M -e …` 在 zsh 报 `command not found`
+  （SH_WORD_SPLIT 关闭）——批量 DB 探针改用 `docker exec … -e "source /tmp/x.sql"` 或直接展开命令，
+  勿依赖多词变量（bash 侧同理需显式 workdir 的坑沿袭旧记录）。
+- **门禁探针的调用序**：controller 先 `safeParse(inputSchema)` 再 `resolveToolCallerWithContext`
+  （校验 taskId 存在）**再** `assertToolAllowed`——issue_* 的 schema 要求 taskId，塞假 taskId 会在
+  resolve 阶段撞 -32004 任务不存在（**未进门**，不是门的判定）；要证门必须给真实 task 行。
+  -32602（schema）/-32004（resolve）/-32003（门）三码分层要分清。
+- `mysqldump` 幂等比对：dump 尾行 `-- Dump completed on <ts>` 必致 md5 不同——`sed '$d'` 去尾再 cmp。
+- mysql:8 (8.4) 镜像容器内**无 cmp/diff**——比对文件拉回宿主做。
+- 拆分组键后，**按能力点键名写死的测试夹具会静默失效**（default-allow：旧键 `memory.manage` 不在
+  目录 → 不再映射任何工具 → 夹具 `memory.manage:false` 屏蔽断言假绿/假红）——worker-dispatcher.spec
+  三处夹具已改 `memory.save`；此类夹具改目录时必须全仓 grep 旧键名。
+
+### 未验证 / 未触碰
+- 未跑 web e2e / Playwright（并行 worker 拥有 `web/**` 目录副本，其 `web/src/api/role-capabilities.ts`
+  的 M 态系对方改动，本 slice 未读未改）；未动 gate 逻辑/`buildAgentPolicies`/GET agent-policies/
+  引擎原生权限/migrations 000003–000008；无 commit/push/branch。
+
+## [2026-09-22] SLICE 7 wrap-up — 残留清理 + live 复核 + 原子提交（server+web 双 worker 交付收尾）
+
+### A. 残留清理（report vs delete）
+- `git status --untracked-files=all` 共 22 项，归属：**server worker** = server/prisma/seed.ts、create-agent-role.dto.ts、worker-dispatcher.spec.ts、agent-role.constants(.spec).ts、platform-capability.constants(.coverage.spec).ts、CONTRACT-tool-naming-and-identity.md、platform-mcp.authority-matrix/tool-permission.spec.ts、prisma/{factory-default,agent-role-capabilities,seed}.spec.ts、migrations `…000008`+`…000009`、新 spec `agent-role-capabilities-split-grouped.migration.spec.ts`；**web worker** = web/src/api/role-capabilities.ts、.omo/evidence/agent-native-permission-editor/{e2e.txt,task-6-proof.json}（e2e 4/4 重跑落盘）；**suite side-writes** = .omo/evidence/{plan-review-execution-gates/task-9/probe.json, server-gate-removal-tool-authority/task-9-matrix.json}（jest authority-matrix spec 写入，allow/deny 91/105→127/69 反映拆分后放行格恢复）；**双方共写** = 本 learnings.md。
+- **已删（明确临时件）**：`web/test-results/`（仅 `.last-run.json`，gitignored Playwright 残渣，09:37 web worker 跑 e2e 所留）；`.playwright-mcp/`（309 文件 ~13.7MB：page-*.yml/png、console-*.log、e2e-0[1-6]-*.png 等 8–9 月 MCP 截图转储，gitignored）。
+- **查无（显式报告）**：`server/tmp-verify-split.ts` **不存在**（web worker 报告的 server worker 临时文件已在其收尾时自删；全仓 `find tmp-* / tmp-verify / *.tmp / .t*.playwright.config.ts` = 0 命中，`.t8.playwright.config.ts` 仅存在于 dark-mode spec 注释里、磁盘无实体）。**未删（有意）**：`.omo/evidence/**/*.png`（已入库证据，非临时）、`server/coverage/`（gitignored 构建产物，非本 slice 所留且非 proof 性质， ambiguous → 保留报告）。
+- **live 数据残留**：UNION 探针（teams/agent_roles/sessions/messages/issues/agents × `probe%`/`zz-%`/`szz_%` 于 id/key/name）= **0 行**。
+
+### B. live 复核（全部 assert，非假设）
+- `docker compose ps`：db/server/web **healthy**、worker Up（no-healthcheck）、`init` **Exited (0)**；`workers` 表 `w_compose_worker` **online**（1 行）。
+- `_prisma_migrations`：磁盘 73 目录 == DB 73 行（双向 comm diff = 0/0），`finished_at IS NULL` = **0**，`…000008`+`…000009` 均 finished=1。
+- MySQL 11 岗（7 builtin + 外部 3 + general）× **JSON_LENGTH=27 全中**、`capabilities IS NULL`=**0**、退役键 `issue.manage`/`memory.manage` 命中=**0**；真值计数：PM **27/0**、外部 3 岗各 **8/19**、general **13/14**（product 24/3、architect 17/10、developer 19/8、tester 18/9、plan 11/16、librarian 9/18）。四塌缩格全开 + 写侧兄弟全关：architect issue.create/get/list=**true**（update/transition=false）、tester issue.create/get/list/transition=**true**（update=false）、plan.memory.search=**true**（save/update=false）、librarian.memory.search=**true**（save/update=false）。
+- Playwright（13001，admin/admin123，开 `developer` 岗编辑器）：**rows=27、groups=8**（task/team/collab/artifact/issue/memory/capability/automation）、toggles=54、**「请确认」=0**、data-source=stored、extra 行/组=0、deniedRows=8/allowedCount=19（=DB 19 true）。web worker 此前 29 行含陈旧 issue.manage 组的观察确系 000009 未达 live 前，现已不复现。
+- `GET /api/v1/health`（13000 与 13001 代理）= **200**；`POST /auth/login` admin/admin123 = **200**；`npx tsc --noEmit` server=**0**、web=**0**。LSP typescript server 未装（用户此前 declined，未再请求）。
+
+### C. 秘密扫描 + 原子提交（全部未 push、未建分支）
+- 秘密扫描（全 staged diff grep `password|secret|apiKey|sk-|PRIVATE KEY|[0-9a-f]{40,}`）：仅命中 e2e 头部 git SHA 与 notepad 散文里的 `mysql_native_password`/`caching_sha2_password` 插件名 — **无真实凭据**；`.env`/node_modules/dist/.next/*.log 均未入 staged（gitignore 生效）。
+- 分组说明：原 brief 3 组外**增一组** — `…000008_per_role_capabilities` 也是未跟踪文件（前一 slice 6d 的迁移落盘未提交），单独成提交以保持 ledger 顺序与提交语义（per-role 21 键决策 ≠ 本次 21→27 拆分）；其余按 brief。
+- **新 commit**：`7f5f9cb` feat(server): per-role builtin capability matrices（000008）；`3517c1d` refactor(capability): split issue and memory capability points（server 目录/派生/seed/000009/契约 specs/CONTRACT/DTO，15 files +977/−131）；`482ba68` feat(web): split issue/memory rows in the role capability editor（role-capabilities.ts，+13/−12）；+ 本条 .omo commit。**未 push、未建分支**；提交后 `git status --short` 空；stack 留跑健康（db/server/web healthy、init Exited(0)、worker online）。

@@ -1,22 +1,22 @@
-[e2e] date=2026-09-20T08:35:33Z HEAD=2f425e1493332113c6ed1a03147bab3a0319ff2f
+[e2e] date=2026-09-22T01:36:51Z HEAD=a1620214d7a4b9c04f75f82b9abe421ebf88f147
 [e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Users/mac/01work/git-project/vteam/.omo/evidence/agent-native-permission-editor
 [e2e] stack healthy (web + server)
 ----- playwright raw -----
 
 Running 4 tests using 1 worker
 
-  ✓  1 e2e/create-agent-role.spec.ts:166:7 › Todo 4 · 新建 Agent 岗位选择器（agentRoleId） › 1. 选项集来自 /agent-roles（ar_ id）；plan 不提供、旧 role 字符串不出现 (1.7s)
-[cleanup] a_0000000029 (agent 200, policy ep_0000000029 200, re-GET 404)
-  ✓  2 e2e/create-agent-role.spec.ts:213:7 › Todo 4 · 新建 Agent 岗位选择器（agentRoleId） › 2. 选中开发岗位 → 继承其默认 Agent 能力集（非骨架） (2.0s)
-[cleanup] a_0000000030 (agent 200, policy ep_0000000030 200, re-GET 404)
-  ✓  3 e2e/create-agent-role.spec.ts:276:7 › Todo 4 · 新建 Agent 岗位选择器（agentRoleId） › 3. 「无」→ 骨架策略（deny-by-default） (1.9s)
-  ✓  4 e2e/create-agent-role.spec.ts:319:7 › Todo 4 · 新建 Agent 岗位选择器（agentRoleId） › 4. 下拉往返：岗位 → 无 → 岗位 重置有效 (1.5s)
+  ✓  1 e2e/create-agent-role.spec.ts:166:7 › Todo 4 · 新建 Agent 岗位选择器（agentRoleId） › 1. 选项集来自 /agent-roles（ar_ id）；plan 不提供、旧 role 字符串不出现 (2.6s)
+[cleanup] a_0000000001 (agent 200, policy ep_0000000001 200, re-GET 404)
+  ✓  2 e2e/create-agent-role.spec.ts:213:7 › Todo 4 · 新建 Agent 岗位选择器（agentRoleId） › 2. 选中开发岗位 → 继承其默认 Agent 能力集（非骨架） (2.6s)
+[cleanup] a_0000000002 (agent 200, policy ep_0000000002 200, re-GET 404)
+  ✓  3 e2e/create-agent-role.spec.ts:276:7 › Todo 4 · 新建 Agent 岗位选择器（agentRoleId） › 3. 「无」→ 骨架策略（deny-by-default） (2.5s)
+  ✓  4 e2e/create-agent-role.spec.ts:319:7 › Todo 4 · 新建 Agent 岗位选择器（agentRoleId） › 4. 下拉往返：岗位 → 无 → 岗位 重置有效 (1.9s)
 
-  4 passed (7.9s)
+  4 passed (11.3s)
 ----- end playwright raw -----
 [e2e] PASS playwright 4/4 green; screenshots present (role-picker / developer-panel / none-panel)
-[e2e] cleanup [cleanup] a_0000000029 (agent 200, policy ep_0000000029 200, re-GET 404)
-[e2e] cleanup [cleanup] a_0000000030 (agent 200, policy ep_0000000030 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000001 (agent 200, policy ep_0000000001 200, re-GET 404)
+[e2e] cleanup [cleanup] a_0000000002 (agent 200, policy ep_0000000002 200, re-GET 404)
 [e2e] cleanup receipts (agent + policy DELETE + re-GET status) recorded above
 [e2e] result passed	1. 选项集来自 /agent-roles（ar_ id）；plan 不提供、旧 role 字符串不出现
 [e2e] result passed	2. 选中开发岗位 → 继承其默认 Agent 能力集（非骨架）
