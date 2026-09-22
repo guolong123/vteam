@@ -497,8 +497,9 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   const planQuery = useQuery({
     queryKey: ["task", taskId, "plan"],
     queryFn: () => api.get<PlanStatusResponse>(`/tasks/${taskId}/plan`),
-    enabled: !!taskId && isMember,
-    refetchInterval: 10_000,
+    enabled: !!taskId,
+    // 错误态暂停轮询：权限不足等失败交给 isError 分支呈现，不再无脑重试刷屏。
+    refetchInterval: (query) => (query.state.status === "error" ? false : 10_000),
   });
   const status: string | null = planQuery.data?.status ?? planQuery.data?.plan?.status ?? null;
   const badge = (status ? PLAN_STATUS_BADGE[status] : undefined) ?? PLAN_STATUS_UNKNOWN;

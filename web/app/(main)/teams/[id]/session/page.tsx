@@ -225,8 +225,8 @@ export default function TeamSessionPage() {
   const planDocsQuery = useQuery({
     queryKey: ["task", currentTaskId, "plan-docs"],
     queryFn: () => api.get<PlanDocsResponse>(`/tasks/${currentTaskId}/plan-docs`),
-    enabled: !!currentTaskId && !!user?.id,
-    refetchInterval: 10_000,
+    enabled: !!currentTaskId,
+    refetchInterval: (query) => (query.state.status === "error" ? false : 10_000),
   });
   /**
    * 上传计划文件：写进任务目录 `.opencode/plans/<name>`，agent 同目录可读——
@@ -250,8 +250,8 @@ export default function TeamSessionPage() {
   const planStepsQuery = useQuery({
     queryKey: ["task", currentTaskId, "plan-steps"],
     queryFn: () => api.get<{ steps: PlanStepItem[]; workerId: string | null; degraded: boolean }>(`/tasks/${currentTaskId}/plan-steps`),
-    enabled: !!currentTaskId && !!user?.id,
-    refetchInterval: 30_000,
+    enabled: !!currentTaskId,
+    refetchInterval: (query) => (query.state.status === "error" ? false : 30_000),
   });
   /**
    * 选择本地 .md 文件 → 读文本 → POST /tasks/:id/plan-docs（写进任务目录）。
