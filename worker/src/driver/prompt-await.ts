@@ -22,8 +22,8 @@ import { V1Driver, ServeMessage, ServePart, ServeTokens } from './v1-driver';
 export interface AwaitCompletionOptions {
   /**
    * 首字超时 ms（第一个非空 assistant 输出 part——text 或 reasoning——在此时限内未出现
-   * → abort + 抛 CompletionTimeoutError）；默认 120000（对齐 server FIRST_TOKEN_TIMEOUT_MS
-   * 语义）。reasoning 算作首字：模型开始思考即视为已响应，长时间思考不被误杀。
+   * → abort + 抛 CompletionTimeoutError）；默认 300000（对齐 server FIRST_TOKEN_TIMEOUT_MS
+   * = 300000）。reasoning 算作首字：模型开始思考即视为已响应，长时间思考不被误杀。
    * 首字出现后无完成超时（持续等待 step-finish，不 abort）。
    */
   firstTokenTimeoutMs?: number;
@@ -389,7 +389,7 @@ export async function awaitCompletion(
   sessionID: string,
   options: AwaitCompletionOptions = {},
 ): Promise<CompletionResult> {
-  const { firstTokenTimeoutMs = 120_000, pollMs = 500, onPoll, baselineIds, onServeError, serveErrorReader, serveLogReader, serveLogTailLines = 20 } = options;
+  const { firstTokenTimeoutMs = 300_000, pollMs = 500, onPoll, baselineIds, onServeError, serveErrorReader, serveLogReader, serveLogTailLines = 20 } = options;
   const startedAt = Date.now();
   let firstTokenAt: number | null = null;
   let collected: ServeMessage[] = [];
@@ -417,7 +417,7 @@ export async function awaitCompletion(
       break;
     }
     // T15：模型调用错误（info.error 非 Aborted）提前失败——serve 实测 APIError 消息
-    // parts=[]（首字永不出现，也无 step-finish），等满 firstTokenTimeoutMs(120s) 无意义；
+    // parts=[]（首字永不出现，也无 step-finish），等满 firstTokenTimeoutMs(300s) 无意义；
     // 立即走超时路径（abort + 抛 CompletionTimeoutError，文案带 info.error 详情）
     if (extractMessageError(collected) !== null) {
       break;

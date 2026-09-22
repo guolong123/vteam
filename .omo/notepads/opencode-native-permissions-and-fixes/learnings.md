@@ -1378,3 +1378,31 @@ tester.issue.create/get/list/transition=true、plan.memory.search=true、librari
 - 秘密扫描（全 staged diff grep `password|secret|apiKey|sk-|PRIVATE KEY|[0-9a-f]{40,}`）：仅命中 e2e 头部 git SHA 与 notepad 散文里的 `mysql_native_password`/`caching_sha2_password` 插件名 — **无真实凭据**；`.env`/node_modules/dist/.next/*.log 均未入 staged（gitignore 生效）。
 - 分组说明：原 brief 3 组外**增一组** — `…000008_per_role_capabilities` 也是未跟踪文件（前一 slice 6d 的迁移落盘未提交），单独成提交以保持 ledger 顺序与提交语义（per-role 21 键决策 ≠ 本次 21→27 拆分）；其余按 brief。
 - **新 commit**：`7f5f9cb` feat(server): per-role builtin capability matrices（000008）；`3517c1d` refactor(capability): split issue and memory capability points（server 目录/派生/seed/000009/契约 specs/CONTRACT/DTO，15 files +977/−131）；`482ba68` feat(web): split issue/memory rows in the role capability editor（role-capabilities.ts，+13/−12）；+ 本条 .omo commit。**未 push、未建分支**；提交后 `git status --short` 空；stack 留跑健康（db/server/web healthy、init Exited(0)、worker online）。
+
+## [2026-09-22] first-token timeout 对齐 300000（worker 侧提频 + 文档纠错）
+
+- **根因复盘**：用户实际报错来自 `worker/src/driver/prompt-await.ts:267`（`等待首字超时`）——worker 默认 120s 先 abort，
+  server 的 300s watchdog + 3 次唤醒兜底根本没机会介入。修复 = worker 默认/compose/chart 全部提到 300000，与 server
+  `FIRST_TOKEN_TIMEOUT_MS=300000` 对齐；**server 侧值未动**（MUST NOT，orchestrator 会单独问 owner）。
+- **改动点清单**（7 处值 + 3 处文档）：`docker-compose.yml:139`、`worker/src/config.ts`（注释+默认）、
+  `exec-server.ts`（注释+`?? 300_000`）、`prompt-await.ts`（注释+解构默认+行内 120s 注释）、
+  `index.spec.ts` fixture、`worker/README.md:79`、`worker/.env.example`、`chart/vteam/values.yaml` worker 段、
+  `docs/deployment.md:41/50`、根 `learnings.md:137`。
+- **chart 实况**：values.yaml 原本 server 与 worker 的 `firstTokenTimeoutMs` **都是 `"0"`**（0 = 禁用 watchdog，
+  parseTimeoutMs 语义）。按 brief 只改 worker → `"300000"`；**server chart 值仍是 `"0"` 未动**（属
+  FIRST_TOKEN_TIMEOUT_MS 范畴，MUST NOT）。已如实上报，等 owner 决策是否也改 chart server 值。
+- **两层设计如实入档**（docs/deployment.md env 表后新增引言块）：worker 层抓「模型无响应」（知情方，能 abort+上报），
+  server 层兜「worker 进程整体静默」（无事件回流）；两侧等值(300000)存在同时到期竞态，server 兜底要保持意义应
+  高于 worker 值 + 余量——只记录事实，不改 server 行为。
+- **learnings.md:137 纠错**：原文称 FIRST_TOKEN_TIMEOUT_MS env 字符串解析「既有问题未修」已过时——`parseTimeoutMs`
+  早已修复并被 spec `worker-dispatcher.spec.ts:6161`（STRING env 解析）锁定；已改写为「已修复 + spec 引用」，
+  未删该条目其它内容。
+- **无关的 120000/180000 保留未动**（grep 报告项）：mention-throttle DEFAULT_TASK_WINDOW_MS、DISPATCH_TIMEOUT_MS、
+  hook.service.spec dueAt、browser-tools spawnSync timeout、5 个 e2e 脚本 timeout、web/e2e perf setTimeout、
+  worker-dispatcher `ageMs < 120_000` 新鲜度门。
+- **门禁**（均 workdir 显式给）：worker `npm run build` exit 0；server `npx tsc --noEmit -p tsconfig.json` exit 0；
+  worker jest 23 suites/583 tests 全绿；server `npx jest --runInBand src/chat` 13 suites/501 tests 全绿（src/chat 全绿，
+  已知 pre-existing 失败集在其它 suite）。
+- **live 验证**（无 --force-recreate / down）：`docker compose build worker server` + `up -d --no-deps worker server`
+  → `printenv` worker=300000 / server=300000 / AGENT_IDLE=0；`GET /api/v1/health` 200；
+  `GET /api/v1/workers` worker `w_compose_worker` status=online、mcpStatus connected。

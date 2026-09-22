@@ -53,7 +53,8 @@ export interface WorkerConfig {
   workerExecPort: number;
   /**
    * T10：执行端点首字超时 ms（env WORKER_FIRST_TOKEN_TIMEOUT_MS，awaitCompletion
-   * 首字超时——时限内模型无输出即 abort）；默认 120000。首字出现后无完成超时。
+   * 首字超时——时限内模型无输出即 abort）；默认 300000（对齐 server FIRST_TOKEN_TIMEOUT_MS）。
+   * 首字出现后无完成超时。
    */
   workerFirstTokenTimeoutMs: number;
   /**
@@ -155,7 +156,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     workerFirstTokenTimeoutMs: parseNonNegativeInt(
       'WORKER_FIRST_TOKEN_TIMEOUT_MS',
       env.WORKER_FIRST_TOKEN_TIMEOUT_MS,
-      120000,
+      300000,
     ),
     workerMaxInstances: parsePositiveInt('WORKER_MAX_INSTANCES', env.WORKER_MAX_INSTANCES, 5),
   };

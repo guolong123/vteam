@@ -168,7 +168,7 @@ export interface ExecServerOptions {
   workerToken?: string;
   /**
    * 首字超时 ms（awaitCompletion 首字超时：时限内模型无输出 → abort + 上送 error）；
-   * 默认 120000（env WORKER_FIRST_TOKEN_TIMEOUT_MS 可配）。首字出现后无完成超时。
+   * 默认 300000（env WORKER_FIRST_TOKEN_TIMEOUT_MS 可配）。首字出现后无完成超时。
    */
   firstTokenTimeoutMs?: number;
   /** 完成判定轮询间隔 ms（透传 awaitCompletion；缺省其默认 500）。 */
@@ -330,7 +330,7 @@ export class ExecServer {
     this.driver = options.driver;
     this.sender = options.sender;
     this.workerToken = options.workerToken ?? '';
-    this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 120_000;
+    this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 300_000;
     this.pollMs = options.pollMs ?? 500;
     this.serveErrorReader = options.serveErrorReader;
     this.serveLogReader = options.serveLogReader;

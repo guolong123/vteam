@@ -38,7 +38,7 @@ vteam 提供两套部署方式，按环境选择：
 | `JWT_REFRESH_EXPIRES_IN` | server | `7d` | refresh token 时效 |
 | `WORKER_TOKEN` | server/worker | compose 默认值 | worker 注册/事件鉴权 token，两端必须一致 |
 | `MODEL_CREDENTIAL_KEY` | server | **必填**（未设置启动报错） | 模型凭据 AES-256-GCM 主密钥，32 字节，`openssl rand -hex 32` 生成 |
-| `FIRST_TOKEN_TIMEOUT_MS` | server | `180000` | dispatch 后首字超时 watchdog（180s ≥ worker 120s + 余量） |
+| `FIRST_TOKEN_TIMEOUT_MS` | server | `300000` | dispatch 后首字超时 watchdog：300s 无首个事件回流判一次「静默」→ 经 `tryAutoRestart` 自动唤醒重试，最多 `MAX_FIRST_TOKEN_WAKE_ATTEMPTS = 3` 次（每次重武装一个完整 300s 窗口），唤醒耗尽仍无响应才 emitError + agent.error |
 | `API_PROXY_TARGET` | web | `http://server:3000` | 运行时代理目标（middleware.ts 读取），compose 下为服务名 `server` |
 | `X_WORKER_TOKEN` | worker | 同 `WORKER_TOKEN` | worker 侧鉴权 |
 | `SERVER_URL` | worker | `http://server:3000` | 注册/心跳的 server 地址 |
@@ -47,8 +47,10 @@ vteam 提供两套部署方式，按环境选择：
 | `OPENCODE_SERVE_PORT` | worker | `4000` | serve 固定端口 |
 | `WORKER_ADVERTISE_HOST` | worker | `http://worker` | 上报给 server 的 baseUrl（compose 服务名） |
 | `WORKER_DEFAULT_MODEL` | worker | 空 | Agent 未配模型时的默认模型兜底 |
-| `WORKER_FIRST_TOKEN_TIMEOUT_MS` | worker | `180000` | worker 侧首字超时，与 server 对齐防竞态误杀 |
+| `WORKER_FIRST_TOKEN_TIMEOUT_MS` | worker | `300000` | worker 侧首字超时，**与 server `FIRST_TOKEN_TIMEOUT_MS`（300000）对齐**：worker 不再先于 server 兜底中止 |
 | `WORK_DIR` | worker | `/data/vteam-worker` | 持久化工作目录（serve cwd、.opencode 注入、git clone 仓库） |
+
+> **两层首字超时设计（worker ↔ server）**：worker 层（`WORKER_FIRST_TOKEN_TIMEOUT_MS`，默认 300000）负责捕获「模型无响应」——worker 直接观察 awaitCompletion 轮询，超时即 abort 并上报 `等待首字超时` 错误，是知情方；server 层（`FIRST_TOKEN_TIMEOUT_MS`，默认 300000）是「worker 进程整体静默」（无任何事件回流、连错误都发不出来）时的兜底 watchdog，超时先自动唤醒重试（最多 `MAX_FIRST_TOKEN_WAKE_ATTEMPTS = 3` 次，每次重武装完整 300s 窗口），耗尽才判失败。**两侧默认值目前相等（均 300000），同时到期存在竞态**：worker 通常先 abort 并上报（worker 知情、路径更短），server 兜底可能来不及介入。要让 server 兜底保持意义，`FIRST_TOKEN_TIMEOUT_MS` 应高于 `WORKER_FIRST_TOKEN_TIMEOUT_MS` 并留余量（例如 worker 300000 + 余量），本次仅对齐 worker 至 300000，server 值未改动。
 
 ### 2.3 卷
 

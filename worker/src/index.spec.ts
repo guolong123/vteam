@@ -45,7 +45,7 @@ const CONFIG: WorkerConfig = {
   opencodeServeHostname: '127.0.0.1',
   defaultModelId: '',
   workerExecPort: 4198,
-  workerFirstTokenTimeoutMs: 120000,
+  workerFirstTokenTimeoutMs: 300000,
   workerMaxInstances: 5,
 };
 
