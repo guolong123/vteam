@@ -1872,6 +1872,114 @@ describe('PlatformMcpService', () => {
         PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
       );
     });
+
+    describe('内容幂等（MCP 超时重发去重：同发送者同频道同文窗口内复用既有行）', () => {
+      it('窗口内同内容重发 → 回既有 messageId，零新行零广播（-32001 重发命中）', async () => {
+        allowWorker();
+        prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+        prisma.teamMember.findUnique.mockResolvedValue({
+          agentId: senderAgentId,
+        } as any);
+        prisma.message.findMany.mockResolvedValue([
+          {
+            id: 'm_0000000099',
+            content: { text: '结论：已完成', parts: [] },
+          },
+        ]);
+
+        const result = await service.groupPost(ctx, {
+          taskId,
+          content: '结论：已完成',
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(prisma.message.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              channelId,
+              senderInstanceId,
+            }),
+            take: 20,
+          }),
+        );
+        expect(result).toEqual({
+          messageId: 'm_0000000099',
+          channelId,
+          attachment: null,
+        });
+        expect(prisma.message.create).not.toHaveBeenCalled();
+        expect(realtime.broadcast).not.toHaveBeenCalled();
+      });
+
+      it('空白差异归一化后相同 → 同样命中（sha1 比对前已归一化）', async () => {
+        allowWorker();
+        prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+        prisma.teamMember.findUnique.mockResolvedValue({
+          agentId: senderAgentId,
+        } as any);
+        prisma.message.findMany.mockResolvedValue([
+          {
+            id: 'm_0000000099',
+            content: { text: '结论：已完成', parts: [] },
+          },
+        ]);
+
+        const result = await service.groupPost(ctx, {
+          taskId,
+          content: '  结论：已完成\n',
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(result.messageId).toBe('m_0000000099');
+        expect(prisma.message.create).not.toHaveBeenCalled();
+      });
+
+      it('正文不同 → 不 collapsed，正常落库广播', async () => {
+        allowWorker();
+        prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+        prisma.teamMember.findUnique.mockResolvedValue({
+          agentId: senderAgentId,
+        } as any);
+        idGen.nextId.mockResolvedValue('m_0000000100');
+        prisma.message.create.mockResolvedValue(createdMessage);
+        prisma.message.findMany.mockResolvedValue([
+          {
+            id: 'm_0000000099',
+            content: { text: '结论：进行中', parts: [] },
+          },
+        ]);
+
+        const result = await service.groupPost(ctx, {
+          taskId,
+          content: '结论：已完成',
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(result.messageId).toBe('m_0000000100');
+        expect(prisma.message.create).toHaveBeenCalled();
+        expect(realtime.broadcast).toHaveBeenCalled();
+      });
+
+      it('探针读错 → fail-open 继续落库（永不因探针失败阻断）', async () => {
+        allowWorker();
+        prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId });
+        prisma.teamMember.findUnique.mockResolvedValue({
+          agentId: senderAgentId,
+        } as any);
+        idGen.nextId.mockResolvedValue('m_0000000100');
+        prisma.message.create.mockResolvedValue(createdMessage);
+        prisma.message.findMany.mockRejectedValue(new Error('db down'));
+
+        const result = await service.groupPost(ctx, {
+          taskId,
+          content: '结论：已完成',
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(result.messageId).toBe('m_0000000100');
+        expect(prisma.message.create).toHaveBeenCalled();
+      });
+    });
   });
 
   describe('notify_agent', () => {

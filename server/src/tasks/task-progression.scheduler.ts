@@ -16,6 +16,7 @@ import {
   SENDER_TYPE,
 } from '../common/constants/event.constants';
 import { TASK_STATUS } from '../common/constants/task.constants';
+import { ISSUE_STATUS } from '../issues/issues.constants';
 import {
   TRIGGER_KIND,
   buildTriggerDedupKey,
@@ -41,6 +42,20 @@ export const DEFAULT_PROGRESSION_INTERVAL_MS = 10 * 60_000;
 export const DEFAULT_PROGRESSION_MAX_ROUNDS = 6;
 /** 连续静默巡检上限：达到即自动置阻塞（blocked）并群公告，停嘴等人工。 */
 export const STALL_QUIET_STREAK_LIMIT = 3;
+/**
+ * 停滞在途 issue 状态：命中即视为"有人在干活"，递延停滞检查不置阻塞。
+ * issue 状态机（issues.constants）只有 open/in_progress/resolved/closed/rejected
+ * 五态，无 pending_review——在途唯一对应 in_progress；open=尚未开工、
+ * resolved/closed/rejected=已完工，均不算在途（沿旧行为可置阻塞）。
+ */
+export const STALL_INFLIGHT_ISSUE_STATUSES = [
+  ISSUE_STATUS.in_progress,
+] as const;
+/**
+ * 停滞聊天活跃窗口 ms（env STALL_CHAT_ACTIVITY_WINDOW_MS，缺省 10min）：
+ * 任务分区（messages.task_id）内有新消息即视为在途，递延停滞检查。
+ */
+export const DEFAULT_STALL_CHAT_ACTIVITY_WINDOW_MS = 10 * 60_000;
 /** 巡检扫描周期 ms（旧 setInterval 驱动已退役，见类注释；保留导出防外部引用 churn）。 */
 export const PROGRESSION_SCAN_INTERVAL_MS = 30_000;
 
@@ -109,6 +124,8 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   public progressionIntervalMs: number;
   /** 巡检轮次上限（env PROGRESSION_MAX_ROUNDS，缺省 6；映射为触发器 maxFires 由基座强制）。 */
   public maxRounds: number;
+  /** 停滞聊天活跃窗口 ms（env STALL_CHAT_ACTIVITY_WINDOW_MS，缺省 10min；公开便于测试覆盖）。 */
+  public stallChatActivityWindowMs: number;
 
   /** realtime bus 订阅取消函数（托管确认请求路由）。 */
   private unsubscribe: (() => void) | null = null;
@@ -149,6 +166,11 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       Number.isFinite(rounds) && rounds > 0
         ? rounds
         : DEFAULT_PROGRESSION_MAX_ROUNDS;
+    const chatWindow = Number(config.get('STALL_CHAT_ACTIVITY_WINDOW_MS'));
+    this.stallChatActivityWindowMs =
+      Number.isFinite(chatWindow) && chatWindow > 0
+        ? chatWindow
+        : DEFAULT_STALL_CHAT_ACTIVITY_WINDOW_MS;
   }
 
   async onModuleInit(): Promise<void> {
@@ -542,6 +564,20 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       // （TasksService 置阻塞 + 群公告）并注销巡检，停嘴等人工。
       entry.quietStreak += 1;
       if (entry.quietStreak >= STALL_QUIET_STREAK_LIMIT) {
+        // 在途守卫（看门狗误置阻塞修复）：quietStreak 只统计"主会话静默"，
+        // 看不见 issue 粒度进展和其他成员会话。达上限前先查在途工作——
+        // 有 issue 仍 in_progress，或任务分区近期有聊天，即视为有人在干活：
+        // 不 fireStallDetected（不 systemBlock），记 deferred 日志，quietStreak
+        // 清零（与"主会话活跃清零"同语义：本轮观测到进展就不算停滞），巡检继续
+        // 不注销。 truly idle（无在途 issue 且无近期聊天）才沿旧行为置阻塞。
+        const inflight = await this.hasInflightWork(taskId);
+        if (inflight.inflight) {
+          this.logger.warn(
+            `[progression] taskId=${taskId} 停滞检查递延（${inflight.reason}），跳过自动置阻塞`,
+          );
+          entry.quietStreak = 0;
+          return;
+        }
         this.logger.warn(
           `[progression] taskId=${taskId} 连续 ${entry.quietStreak} 轮无进展，触发停滞处理`,
         );
@@ -559,9 +595,73 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * 在途工作检查（停滞置阻塞前置守卫）：返回 { inflight, reason }。
+   * ① issue 粒度：在途 = status ∈ STALL_INFLIGHT_ISSUE_STATUSES（即 in_progress）
+   *    且未软删；② 聊天粒度：messages.task_id 分区在 stallChatActivityWindowMs
+   *    内有新消息（覆盖非主会话成员的进展，主会话活跃已由上游否决链处理）。
+   * 直接经 prisma 查询（与 plan-lifecycle/tasks.service 的 prisma.issue 直查同模式，
+   * 不注入 IssuesService/ChatService，无循环依赖）。任一命中即在途。
+   * 查询异常或模型缺席 → 视为不在途（fail-closed 沿旧行为置阻塞：宁可误报，
+   * 不可漏报空转；异常记 warn 不阻断）。
+   */
+  private async hasInflightWork(
+    taskId: string,
+    now = Date.now(),
+  ): Promise<{ inflight: boolean; reason: string | null }> {
+    try {
+      const issueModel = (this.prisma as any).issue;
+      if (issueModel?.findFirst) {
+        const live = (await issueModel.findFirst({
+          where: {
+            taskId,
+            status: { in: [...STALL_INFLIGHT_ISSUE_STATUSES] },
+            deletedAt: null,
+          },
+          select: { id: true, status: true },
+        })) as { id: string; status: string } | null;
+        if (live) {
+          return {
+            inflight: true,
+            reason: `issue ${live.id} 仍在 ${live.status}`,
+          };
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[progression] 在途 issue 检查失败 taskId=${taskId}（按无在途继续）: ${this.describeError(err)}`,
+      );
+    }
+    try {
+      const messageModel = (this.prisma as any).message;
+      if (messageModel?.findFirst) {
+        const recent = (await messageModel.findFirst({
+          where: {
+            taskId,
+            createdAt: {
+              gte: new Date(now - this.stallChatActivityWindowMs),
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        })) as { id: string } | null;
+        if (recent) {
+          return {
+            inflight: true,
+            reason: `任务频道近 ${Math.round(this.stallChatActivityWindowMs / 60000)} 分钟内有新消息`,
+          };
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[progression] 在途聊天检查失败 taskId=${taskId}（按无在途继续）: ${this.describeError(err)}`,
+      );
+    }
+    return { inflight: false, reason: null };
+  }
+
   /** 单次巡检：构造巡检 prompt 并 dispatch 给主 Agent。 */
-  private async runPatrol(taskId: string, title?: string): Promise<void> {
-    const text = buildProgressionPrompt(
+  private async runPatrol(taskId: string, title?: string): Promise<void> {    const text = buildProgressionPrompt(
       title ?? taskId,
       TASK_STATUS.in_progress,
     );

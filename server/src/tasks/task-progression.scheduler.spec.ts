@@ -20,7 +20,8 @@ describe('TaskProgressionScheduler', () => {
   let prisma: {
     task: { findUnique: jest.Mock; findMany: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
-    message: { create: jest.Mock };
+    message: { create: jest.Mock; findFirst: jest.Mock };
+    issue: { findFirst: jest.Mock };
     agentQuestion: { findUnique: jest.Mock };
     team: { findUnique: jest.Mock };
   };
@@ -58,7 +59,8 @@ describe('TaskProgressionScheduler', () => {
     prisma = {
       task: { findUnique: jest.fn(), findMany: jest.fn() },
       chatChannel: { findFirst: jest.fn() },
-      message: { create: jest.fn() },
+      message: { create: jest.fn(), findFirst: jest.fn() },
+      issue: { findFirst: jest.fn() },
       agentQuestion: { findUnique: jest.fn() },
       team: {
         findUnique: jest
@@ -488,6 +490,85 @@ describe('TaskProgressionScheduler', () => {
       expect(stalled).toHaveLength(1);
       expect(stalled[0].taskId).toBe('t_1');
       expect(stalled[0].reason).toContain('看门狗');
+      expect(scheduler.isRegistered('t_1')).toBe(false);
+    });
+
+    it('静默达上限但有 issue in_progress → 递延不置阻塞（巡检继续，streak 清零）', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      await scheduler.register('t_1');
+      const stalled: Array<{ taskId: string; reason: string }> = [];
+      scheduler.onStallDetected((taskId, reason) =>
+        stalled.push({ taskId, reason }),
+      );
+      prisma.issue.findFirst.mockResolvedValue({
+        id: 'is_0000000001',
+        status: 'in_progress',
+      });
+      prisma.message.findFirst.mockResolvedValue(null);
+      const handler = await handlerOf();
+      await handler(fireCtx({ fireCount: 0 }));
+      await handler(fireCtx({ fireCount: 1 }));
+      await handler(fireCtx({ fireCount: 2 }));
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(3);
+      expect(stalled).toHaveLength(0);
+      expect(scheduler.isRegistered('t_1')).toBe(true);
+      expect((scheduler as any).loop.get('t_1').quietStreak).toBe(0);
+      expect(prisma.issue.findFirst).toHaveBeenCalledWith({
+        where: {
+          taskId: 't_1',
+          status: { in: ['in_progress'] },
+          deletedAt: null,
+        },
+        select: { id: true, status: true },
+      });
+    });
+
+    it('静默达上限但任务频道近期有聊天 → 递延不置阻塞', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      await scheduler.register('t_1');
+      const stalled: unknown[] = [];
+      scheduler.onStallDetected((taskId, reason) =>
+        stalled.push({ taskId, reason }),
+      );
+      prisma.issue.findFirst.mockResolvedValue(null);
+      prisma.message.findFirst.mockResolvedValue({ id: 'm_0000000001' });
+      const handler = await handlerOf();
+      await handler(fireCtx({ fireCount: 0 }));
+      await handler(fireCtx({ fireCount: 1 }));
+      await handler(fireCtx({ fireCount: 2 }));
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(3);
+      expect(stalled).toHaveLength(0);
+      expect(scheduler.isRegistered('t_1')).toBe(true);
+      expect(prisma.message.findFirst).toHaveBeenCalledWith({
+        where: {
+          taskId: 't_1',
+          createdAt: { gte: expect.any(Date) },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+    });
+
+    it('静默达上限且真正空闲（无在途 issue、无近期聊天）→ 置阻塞如前', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      await scheduler.register('t_1');
+      const stalled: Array<{ taskId: string; reason: string }> = [];
+      scheduler.onStallDetected((taskId, reason) =>
+        stalled.push({ taskId, reason }),
+      );
+      prisma.issue.findFirst.mockResolvedValue(null);
+      prisma.message.findFirst.mockResolvedValue(null);
+      const handler = await handlerOf();
+      await handler(fireCtx({ fireCount: 0 }));
+      await handler(fireCtx({ fireCount: 1 }));
+      expect(stalled).toHaveLength(0);
+      expect(scheduler.isRegistered('t_1')).toBe(true);
+      await handler(fireCtx({ fireCount: 2 }));
+      expect(stalled).toHaveLength(1);
+      expect(stalled[0].taskId).toBe('t_1');
       expect(scheduler.isRegistered('t_1')).toBe(false);
     });
 

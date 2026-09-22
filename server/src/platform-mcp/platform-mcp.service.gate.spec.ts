@@ -34,7 +34,7 @@ import {
  * - kind=wake（含内部 wake/round-notify）永不写回执行。
  * - DB 读错 → fail-open 放行 + warn 日志（永不静默转 fail-closed）。
  * issue 锁（issue.constants 五态机，assigneeInstanceId 为比较字段——与实现一致，无文档漂移）：
- * - open → 放行；in_progress + 同 assigneeInstanceId → reason=duplicate + origMessageId + messageId:null，不落库；
+ * - open → 放行；in_progress + 同 assigneeInstanceId → reason=duplicate + messageId/origMessageId=既有在途消息，不落库；
  *   换人 → 放行；resolved/closed/rejected → 作为新一轮放行。
  */
 describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
@@ -396,7 +396,7 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       expect(result.issueBound).toBe(true);
     });
 
-    it('in_progress + 同 assigneeInstanceId → reason=duplicate + origMessageId + messageId:null，不触发不落库', async () => {
+    it('in_progress + 同 assigneeInstanceId → reason=duplicate + messageId/origMessageId=既有消息，不触发不落库', async () => {
       prisma.issue.findUnique.mockResolvedValue({
         status: 'in_progress',
         assigneeInstanceId: 'tmm_tester',
@@ -413,10 +413,29 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       expect(result.triggered).toBe(false);
       expect(result.reason).toBe('duplicate');
       expect(result.origMessageId).toBe('m_0000000100');
-      expect(result.messageId).toBeNull();
+      expect(result.messageId).toBe('m_0000000100');
       expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
       expect(prisma.message.create).not.toHaveBeenCalled();
       expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('duplicate 无既有回执行 → messageId:null + 无 origMessageId（仍非静默吞，reason 可辨）', async () => {
+      prisma.issue.findUnique.mockResolvedValue({
+        status: 'in_progress',
+        assigneeInstanceId: 'tmm_tester',
+      });
+      prisma.messageReceipt.findFirst.mockResolvedValue(null);
+
+      const result = await service.notifyAgent(ctx, {
+        ...baseArgs,
+        issueId: 'is_0000000001',
+      });
+
+      expect(result.triggered).toBe(false);
+      expect(result.reason).toBe('duplicate');
+      expect(result.messageId).toBeNull();
+      expect(result.origMessageId).toBeUndefined();
+      expect(prisma.message.create).not.toHaveBeenCalled();
     });
 
     it('in_progress + 换人（assignee 不同）→ 放行新一轮', async () => {

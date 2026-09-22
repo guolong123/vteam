@@ -6,41 +6,39 @@ import {
 } from './message-receipt.constants';
 
 /**
- * plan-review-execution-gates Todo 1：message_receipts.dedupKey 输入规范。
- *
- * 规范：`from::to::(issueId ?? sha1(内容去空白后前64字符))`——括号必须显式
- * （`??` 优先级低于拼接，不加括号时 NULL 分支永不生效；永不 NULL，
- * MySQL 允许多 NULL 故该键必须永不 NULL）。
+ * is_5 起：`from::to::sha1(内容去空白后前64字符)`——issueId 永不参与组键
+ * （此前 issueId 非空时不同内容永远同键 → P2002 误判重复派发）。
  */
 describe('buildMessageReceiptDedupKey', () => {
-  it('NULL issueId + 两条不同内容 → 不同键（NULL 分支必须生效）', () => {
+  it('同 from/to/issue 不同内容 → 不同键（is_5 回归：禁止 issue 尾碰撞）', () => {
     const a = buildMessageReceiptDedupKey({
       fromInstanceId: 'ta_from',
       toInstanceId: 'ta_to',
-      issueId: null,
       content: '请评审第一版方案设计文档并给出结论',
     });
     const b = buildMessageReceiptDedupKey({
       fromInstanceId: 'ta_from',
       toInstanceId: 'ta_to',
-      issueId: null,
       content: '请修复登录页面的空指针崩溃问题',
     });
     expect(a).not.toBe(b);
   });
 
-  it('NULL issueId 的键永不为 NULL/空（MySQL 唯一索引多 NULL 陷阱）', () => {
-    const key = buildMessageReceiptDedupKey({
+  it('同 from/to/内容 → 同键（重派幂等命中）', () => {
+    const a = buildMessageReceiptDedupKey({
       fromInstanceId: 'ta_from',
       toInstanceId: 'ta_to',
-      issueId: null,
-      content: '  请  评审\n第一版方案\t',
+      content: '请执行该需求',
     });
-    expect(key).toBeTruthy();
-    expect(typeof key).toBe('string');
+    const b = buildMessageReceiptDedupKey({
+      fromInstanceId: 'ta_from',
+      toInstanceId: 'ta_to',
+      content: '请执行该需求',
+    });
+    expect(a).toBe(b);
   });
 
-  it('NULL issueId 时键尾 = sha1(去空白后前64字符)', () => {
+  it('键尾 = sha1(去空白后前64字符)', () => {
     const content = '  请  评审\n第一版方案\t';
     const stripped = content.replace(/\s+/g, '').slice(0, 64);
     const expected = createHash('sha1').update(stripped, 'utf8').digest('hex');
@@ -48,40 +46,30 @@ describe('buildMessageReceiptDedupKey', () => {
       buildMessageReceiptDedupKey({
         fromInstanceId: 'ta_from',
         toInstanceId: 'ta_to',
-        issueId: null,
         content,
       }),
     ).toBe(`ta_from::ta_to::${expected}`);
   });
 
-  it('有 issueId 时直接取 issueId 分支（与内容无关，同一事项幂等）', () => {
-    const a = buildMessageReceiptDedupKey({
+  it('键永不为 NULL/空（MySQL 唯一索引多 NULL 陷阱）', () => {
+    const key = buildMessageReceiptDedupKey({
       fromInstanceId: 'ta_from',
       toInstanceId: 'ta_to',
-      issueId: 'is_0000000001',
-      content: '内容 A',
+      content: '  请  评审\n第一版方案\t',
     });
-    const b = buildMessageReceiptDedupKey({
-      fromInstanceId: 'ta_from',
-      toInstanceId: 'ta_to',
-      issueId: 'is_0000000001',
-      content: '内容 B 完全不同',
-    });
-    expect(a).toBe('ta_from::ta_to::is_0000000001');
-    expect(a).toBe(b);
+    expect(key).toBeTruthy();
+    expect(typeof key).toBe('string');
   });
 
-  it('不同 from/to 即使同 issueId 也不同键', () => {
+  it('不同 from/to 即使同内容也不同键', () => {
     const a = buildMessageReceiptDedupKey({
       fromInstanceId: 'ta_a',
       toInstanceId: 'ta_b',
-      issueId: 'is_0000000001',
       content: 'x',
     });
     const b = buildMessageReceiptDedupKey({
       fromInstanceId: 'ta_a',
       toInstanceId: 'ta_c',
-      issueId: 'is_0000000001',
       content: 'x',
     });
     expect(a).not.toBe(b);

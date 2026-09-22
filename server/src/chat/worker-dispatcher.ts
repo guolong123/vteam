@@ -1003,6 +1003,51 @@ function isSilenceTriggerPayload(
 }
 
 /**
+ * 会话故障恢复的通用唤醒文案（无快照时的 legacy 回退，保持原字节）。
+ * 有快照时 tryAutoRestart 在本行之后追加【原始任务重放】段（见 buildWakeText）。
+ */
+export const FALLBACK_WAKE_TEXT =
+  '【自动恢复】检测到会话意外中断，已自动重试，请继续执行未完成的任务';
+
+/**
+ * 原始分派快照 TTL（ms）：dispatch 202 受理后内存暂存，超时视为过期（防泄漏）。
+ * 取 2h：覆盖空闲判死 30min + 静默窗口 600s×3 的全部恢复窗口；重启后内存丢失
+ * 即按无快照回退通用文案（见 tryAutoRestart）。
+ */
+export const DISPATCH_SNAPSHOT_TTL_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * 原始分派快照（is_7 会话故障吞原始 dispatch 修复）：
+ * dispatch fire-and-forget 202 受理后暂存原始 payload，会话故障恢复
+ * （tryAutoRestart 经 markSessionIdleDead / attemptSilenceWake 触发）时重放
+ * 快照文本而非仅通用唤醒语——/execute 立返后模型会话崩溃，原始任务不再丢失。
+ */
+export interface DispatchSnapshot {
+  /** 原始触发正文（request.text，未经 prompt 块拼装；重放时由分派链路重新拼装上下文）。 */
+  text: string;
+  /** 触发分派的用户消息主键（m_ 前缀）。 */
+  messageId: string;
+  /** 触发来源频道 id。 */
+  channelId: string;
+  /** 任务 id（团队直聊为空串）。 */
+  taskId: string;
+  teamId: string;
+  /** 目标成员 id（TeamMember.id，tmm_ 前缀）。 */
+  teamMemberId: string;
+  agentId: string;
+  /** 快照时刻（ms epoch，TTL 依据）。 */
+  createdAt: number;
+}
+
+/** 快照键（团队维度：同一成员的新一轮分派覆盖旧快照）。 */
+export function dispatchSnapshotKey(
+  teamId: string,
+  teamMemberId: string,
+): string {
+  return `team:${teamId}:member:${teamMemberId}`;
+}
+
+/**
  * 从文本定位 type 字段值并提取完整 JSON 对象：先找 `"type":"<value>"` 位置 → 向前
  * 回溯最近的 `{` → 向后深度配对 `}`（支持字段乱序/嵌套/多对象并存）。
  * 修复：旧正则 `\{[\s\S]*?"type"` 从第一个 `{` 开始匹配，多声明并存时（如 artifact +
@@ -1275,6 +1320,16 @@ export class WorkerDispatcher
   private readonly silentWakeAttempts = new Map<string, number>();
 
   /**
+   * 原始分派快照（is_7）：快照键 → 快照（dispatch 202 受理后暂存，恢复重放用）。
+   * 内存 Map + TTL（DISPATCH_SNAPSHOT_TTL_MS）：同 pending/lastActivityAt 等
+   * 恢复态一致——本包无 Redis/外部 store（package.json 无相关依赖），durable
+   * trigger 行只带 deadline 元数据不带全量 prompt；重启丢失即回退通用文案。
+   */
+  private readonly dispatchSnapshots = new Map<string, DispatchSnapshot>();
+  /** 平台 sessionId → 快照键（活动/完成事件按 sessionId 清除快照用）。 */
+  private readonly snapshotSessionIndex = new Map<string, string>();
+
+  /**
    * 执行中注册表（workerId:scope → 活跃执行集合）：dispatch 调 worker execute 前登记，
    * task.completed / agent.status error / watchdog 超时注销。platform-mcp 的落库类工具
    * （group_post / notify_agent / submit_artifact）经 assertWorkerTask 用本表校验
@@ -1467,6 +1522,8 @@ export class WorkerDispatcher
     this.pending.clear();
     this.pendingBySession.clear();
     this.silentWakeAttempts.clear();
+    this.dispatchSnapshots.clear();
+    this.snapshotSessionIndex.clear();
     if (this.idleScanTimer) {
       clearInterval(this.idleScanTimer);
       this.idleScanTimer = null;
@@ -2276,6 +2333,21 @@ export class WorkerDispatcher
       ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
       system: buildSystemInstructions(agentIdentity, systemOpts),
     });
+    // is_7：execute 202 受理后暂存原始分派快照（恢复重放用；wake 重放文本不覆盖）。
+    this.saveDispatchSnapshot({
+      text: request.text,
+      messageId: request.messageId,
+      channelId: request.channelId,
+      taskId: request.taskContext?.taskId ?? '',
+      teamId,
+      teamMemberId,
+      agentId: target.agentId,
+      createdAt: Date.now(),
+    });
+    this.snapshotSessionIndex.set(
+      sessionId,
+      dispatchSnapshotKey(teamId, teamMemberId),
+    );
 
     this.completedSessions.delete(sessionId);
     this.failedSessions.delete(sessionId);
@@ -2344,6 +2416,9 @@ export class WorkerDispatcher
     }
     // 团队唯一路径：落库 + 广播 + emitFinal（无 task/team 双实现）
     const settled = await this.handleTeamTaskCompleted(payload);
+    if (sessionId) {
+      this.clearDispatchSnapshotBySession(sessionId);
+    }
     const agentId = settled.agentId;
     const text = settled.text;
     const displayText = settled.displayText;
@@ -4344,6 +4419,7 @@ export class WorkerDispatcher
       (payload.type === 'agent.status' && payload.status === 'error');
     if (terminal) {
       this.clearPendingWatchdogBySession(sessionId);
+      this.clearDispatchSnapshotBySession(sessionId);
     } else {
       this.rearmSilenceWatchdogBySession(sessionId);
     }
@@ -4356,6 +4432,8 @@ export class WorkerDispatcher
       this.lastActivityAt.delete(sessionId);
       return;
     }
+    // is_7：首个非终态活动 = 会话存活/首字成功，快照使命达成（防重放循环）。
+    this.clearDispatchSnapshotBySession(sessionId);
     this.lastActivityAt.set(sessionId, Date.now());
     void this.persistSessionActivity(sessionId);
   }
@@ -4618,6 +4696,8 @@ export class WorkerDispatcher
    * tmm_ 直调 dispatchAgentMention；任务仅归因（进度门 + prompt 上下文）。
    * taskId 缺失（纯团队直聊）→ 失败已落库+广播，自动恢复需任务上下文，跳过；
    * 任务非 in_progress → 跳过；未知 channel → 跳过不抛错。
+   * is_7：唤醒文本优先重放原始分派快照（有快照 → 通用语 +【原始任务重放】段；
+   * 无/过期快照 → 通用语回退，字节与引入前一致）。
    */
   private async tryAutoRestart(
     teamId: string,
@@ -4635,10 +4715,64 @@ export class WorkerDispatcher
     await this.dispatchAgentMention({
       taskId,
       channelId: channel.id,
-      text: '【自动恢复】检测到会话意外中断，已自动重试，请继续执行未完成的任务',
+      text: this.buildWakeText(teamId, teamMemberId),
       targetInstanceId: teamMemberId,
       kind: 'wake',
     });
+  }
+
+  /**
+   * is_7 快照存取（与 pending/lastActivityAt 同内存语义）：
+   * save（dispatch 202 受理后）→ peek（恢复重放，只读不消费）→ clear（首字活动/
+   * 完成落库后，防重放循环）。wake 重放文本自身永不覆盖快照（以通用语开头即跳过）。
+   */
+  private saveDispatchSnapshot(snap: DispatchSnapshot): void {
+    if (!snap.teamId || !snap.teamMemberId || !snap.text) {
+      return;
+    }
+    if (snap.text.startsWith(FALLBACK_WAKE_TEXT)) {
+      return;
+    }
+    const key = dispatchSnapshotKey(snap.teamId, snap.teamMemberId);
+    this.dispatchSnapshots.set(key, { ...snap, createdAt: Date.now() });
+  }
+
+  private peekDispatchSnapshot(
+    teamId: string,
+    teamMemberId: string,
+  ): DispatchSnapshot | undefined {
+    const key = dispatchSnapshotKey(teamId, teamMemberId);
+    const snap = this.dispatchSnapshots.get(key);
+    if (!snap) {
+      return undefined;
+    }
+    if (Date.now() - snap.createdAt > DISPATCH_SNAPSHOT_TTL_MS) {
+      this.dispatchSnapshots.delete(key);
+      return undefined;
+    }
+    return snap;
+  }
+
+  private clearDispatchSnapshot(teamId: string, teamMemberId: string): void {
+    this.dispatchSnapshots.delete(
+      dispatchSnapshotKey(teamId, teamMemberId),
+    );
+  }
+
+  private clearDispatchSnapshotBySession(sessionId: string): void {
+    const key = this.snapshotSessionIndex.get(sessionId);
+    if (key !== undefined) {
+      this.dispatchSnapshots.delete(key);
+      this.snapshotSessionIndex.delete(sessionId);
+    }
+  }
+
+  private buildWakeText(teamId: string, teamMemberId: string): string {
+    const snap = this.peekDispatchSnapshot(teamId, teamMemberId);
+    if (!snap) {
+      return FALLBACK_WAKE_TEXT;
+    }
+    return `${FALLBACK_WAKE_TEXT}，继续执行以下原始任务：\n\n【原始任务重放】${snap.text}`;
   }
 
   // ------------------------------------------------------------------

@@ -31,9 +31,7 @@ export type MessageReceiptKind =
 export interface BuildMessageReceiptDedupKeyInput {
   fromInstanceId: string;
   toInstanceId: string;
-  /** 派发宿主 issue；null = 无宿主，走内容哈希分支 */
-  issueId: string | null;
-  /** 派发词原文（仅 issueId 为 null 时参与组键） */
+  /** 派发词原文（参与组键；issueId 已不再参与组键，见下）。 */
   content: string;
 }
 
@@ -45,18 +43,24 @@ export function normalizeReceiptContent(content: string): string {
 }
 
 /**
- * 去重键：`from::to::(issueId ?? sha1(内容去空白后前64字符))`。
+ * 去重键：`from::to::sha1(内容去空白后前64字符)`。
  *
- * 括号必须显式——`??` 优先级低于字符串拼接，不加括号时 NULL 分支永不生效；
+ * is_5 修复：此前尾部为 `(issueId ?? 内容哈希)`——issueId 非空时不同派发词
+ * 永远同键，`dedup_key` 唯一约束下 P2002，被误判为重复派发（连续误吞）。
+ * 现一律按内容哈希组键：同 (from,to,内容) 重派幂等命中；不同内容永不碰撞。
+ * issueId 仍按列落库（`issue_id` 审计/宿主字段），仅不再参与组键；历史兼容
+ * 不考虑（调用方显式确认），旧键形状直接废弃。
+ *
+ * 幂等窗口语义（`dedup_key` 列 @unique，库层永久唯一）：同键重派撞 P2002 →
+ * 既有 pending 行复用排期、非 pending 行跳过排期（本次消息本身仍已派发；
+ * 消息层另有 `NOTIFY_DEDUP_WINDOW_MS` 短窗口内容幂等回既有 messageId）。
  * 返回值永不 NULL（MySQL 唯一索引允许多 NULL，故该键必须永不 NULL）。
  */
 export function buildMessageReceiptDedupKey(
   input: BuildMessageReceiptDedupKeyInput,
 ): string {
-  const tail =
-    input.issueId ??
-    createHash('sha1')
-      .update(normalizeReceiptContent(input.content), 'utf8')
-      .digest('hex');
+  const tail = createHash('sha1')
+    .update(normalizeReceiptContent(input.content), 'utf8')
+    .digest('hex');
   return `${input.fromInstanceId}::${input.toInstanceId}::${tail}`;
 }

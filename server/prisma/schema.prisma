@@ -410,8 +410,8 @@ model Message {
 // 双库兼容——不声明 Prisma enum；id 列均为逻辑关联（不建 FK），不碰其他表）
 // ==================================================================
 
-// 待回执账本（一派发一账；dedupKey 输入规范 =
-// `from::to::(issueId ?? sha1(内容去空白后前64字符))`，括号必须显式，永不 NULL；
+// 待回执账本（一派发一账；dedupKey 输入规范（is_5 起）=
+// `from::to::sha1(内容去空白后前64字符)`，永不 NULL，issueId 不再参与组键；
 // kind=wake/round-notify 为保留位，永不写入，仅防未来误用）
 model MessageReceipt {
   id             String    @id // mr_ 前缀，服务层 IdGeneratorService 生成

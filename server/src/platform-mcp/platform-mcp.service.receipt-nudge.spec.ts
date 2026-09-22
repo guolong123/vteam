@@ -306,6 +306,32 @@ describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudg
     }
   });
 
+  it('is_5 回归：同 issue 不同内容 → 不同 dedupKey，两次均派发（禁止 issue 尾碰撞误吞）', async () => {
+    const first = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      issueId: 'is_0000000001',
+      content: '请评审第一版方案设计文档并给出结论',
+    });
+    const second = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      issueId: 'is_0000000001',
+      content: '请修复登录页面的空指针崩溃问题',
+    });
+
+    expect(first.triggered).toBe(true);
+    expect(first.reason).toBe('ok');
+    expect(second.triggered).toBe(true);
+    expect(second.reason).toBe('ok');
+    expect(prisma.messageReceipt.create).toHaveBeenCalledTimes(2);
+    const calls = prisma.messageReceipt.create.mock.calls.map(
+      (c) => (c[0] as { data: Record<string, unknown> }).data,
+    );
+    expect(calls[0].dedupKey).not.toBe(calls[1].dedupKey);
+    // issueId 仍按列落库（仅不参与组键）
+    expect(calls[0].issueId).toBe('is_0000000001');
+    expect(calls[1].issueId).toBe('is_0000000001');
+  });
+
   it('记账 P2002 去重命中 pending 行 → 复用既有 receipt 排期（fireAt 取既有 expiresAt）', async () => {
     const existingExpires = new Date(Date.now() + 5 * 60 * 1000);
     prisma.messageReceipt.create.mockRejectedValue({

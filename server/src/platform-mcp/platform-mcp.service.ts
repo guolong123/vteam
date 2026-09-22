@@ -126,6 +126,20 @@ const NOTIFY_DEDUP_WINDOW_MS = 60_000;
 /** 幂等比对单次最多回溯行数（窗口内同对重复发送量极小，20 行足量）。 */
 const NOTIFY_DEDUP_SCAN_LIMIT = 20;
 
+/**
+ * group_post 内容幂等窗口（fan-out 超时重发去重，04:40 incident）：
+ * 同发送者→同频道、归一化正文的 sha1 相同且落库时间在窗口内的既有行
+ * 视为 MCP 超时重发，直接复用其 messageId，不新建行、不重广播。
+ * 键形状与回执账本 dedupKey 对齐：(from, to/target, sha1(content), 短窗口)——
+ * group_post 为广播无显式目标，to 即频道（channelId 含任务/团队归属）；
+ * notify_agent 侧同理（text 内嵌 `@目标` 前缀，sha1(text) 即含目标）。
+ * 窗口取 5min：MCP 同步 JSON-RPC 超时（-32001）重发多在数十秒~数分钟内到达；
+ * 只防抖、不改变任何节流配额。无迁移：纯应用层短窗口探针。
+ */
+const GROUP_POST_DEDUP_WINDOW_MS = 5 * 60_000;
+/** group_post 幂等比对单次最多回溯行数（与 notify 侧同量级）。 */
+const GROUP_POST_DEDUP_SCAN_LIMIT = 20;
+
 /** 所有 triggered=false 拦截路径的统一人读提示：本次调用未发布，重发无用。 */
 const NOTIFY_NOT_PUBLISHED_HINT =
   '本次调用未在群聊发布任何消息：triggered:false 不是投递失败，请勿重发；请按 reason 处理（throttled 稍后按需重派，plan-gated 待计划放行，review-triplet 补齐三元组，duplicate/dedup 说明已有在途或已发送）。';
@@ -158,6 +172,13 @@ function extractNotifyText(content: unknown): string | null {
     return typeof text === 'string' ? text : null;
   }
   return null;
+}
+
+/** 归一化正文的 sha1（幂等键内容分量：与回执 dedupKey 的 sha1 分支同口径）。 */
+function sha1OfNormalizedText(text: string): string {
+  return createHash('sha1')
+    .update(normalizeNotifyText(text), 'utf8')
+    .digest('hex');
 }
 
 /** @ 前缀后的尾随标点：剥离后仍与目标名相等即视为已带 mention（如 `@测试，…`）。 */
@@ -293,8 +314,9 @@ export type DispatchReason =
  * - reason 与 triggered 恒成对：triggered=true → reason='ok'；
  *   false → 具体拦因，或 'join-pending'（子 Agent 回执抑制分支：
  *   消息已落库已广播，仅不在主 Agent 上开执行 turn）。
- * - messageId：成功/dedup 命中时为消息 id；其余拦截路径为 null（该次调用
- *   未落库，无行可指；notify-dedup 起由非空改为可空）。
+ * - messageId：成功/dedup 命中时为消息 id；duplicate 拦因时为既有在途消息 id
+ *   （= origMessageId，便于调用方确认“已送达”而非静默吞掉）；其余拦截路径为
+ *   null（该次调用未落库，无行可指；notify-dedup 起由非空改为可空）。
  * - issueBound：调用带 issueId 即 true；缺省 false（hint，不硬拦）。
  * - origMessageId：duplicate 拦因回显 issue 锁关联的原派发消息 id；
  *   dedup 命中时不写 origMessageId（messageId 本身即既有行）。
@@ -1179,6 +1201,24 @@ export class PlatformMcpService implements OnModuleInit {
       ? await this.ensureTeamGroupChannelByTeam(exec.teamId)
       : await this.ensureTeamGroupChannel(effTaskId as string);
     const instanceId = exec.callerId;
+    // 内容幂等探针（MCP -32001 超时重发去重）：窗口内同发送者→同频道已有
+    // 同 sha1(归一化正文) 行 → 复用既有 messageId，不新建行、不重广播。
+    // 读错 fail-open（继续正常落库）。附件/mentions 解析在命中时直接跳过。
+    const groupDedupHit = await this.findRecentIdenticalGroupPost(
+      channel.id,
+      instanceId,
+      args.content,
+    );
+    if (groupDedupHit) {
+      this.logger.warn(
+        `[mcp] group_post 内容幂等命中 from=${instanceId} channel=${channel.id} reuse=${groupDedupHit}（未新建行）`,
+      );
+      return {
+        messageId: groupDedupHit,
+        channelId: channel.id,
+        attachment: null,
+      };
+    }
     // fileRef 归档命中仅任务维度可用（按 taskId 查已归档产出物）；团队维度无归档可命中。
     const attachment =
       args.fileRef && !isTeam
@@ -1597,8 +1637,11 @@ export class PlatformMcpService implements OnModuleInit {
         this.logger.warn(
           `[mcp] notify_agent issue 锁拦截 issue=${args.issueId} to=${args.targetInstanceId}（未发布）`,
         );
+        // is_5：duplicate 必须回显既有在途消息 id（messageId = origMessageId），
+        // 调用方凭此确认“已送达”，禁止裸 reason:'duplicate' + messageId:null 静默吞派发。
+        const existingMessageId = issueGate.origMessageId ?? null;
         return {
-          messageId: null,
+          messageId: existingMessageId,
           channelId: channel.id,
           targetInstanceId: args.targetInstanceId,
           triggered: false,
@@ -2190,6 +2233,40 @@ export class PlatformMcpService implements OnModuleInit {
     }
   }
 
+  private async findRecentIdenticalGroupPost(
+    channelId: string,
+    senderInstanceId: string,
+    content: string,
+  ): Promise<string | null> {
+    try {
+      const since = new Date(Date.now() - GROUP_POST_DEDUP_WINDOW_MS);
+      const rows = await this.prisma.message.findMany({
+        where: {
+          channelId,
+          senderInstanceId,
+          createdAt: { gte: since },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: GROUP_POST_DEDUP_SCAN_LIMIT,
+        select: { id: true, content: true },
+      });
+      if (!Array.isArray(rows)) return null;
+      const wantHash = sha1OfNormalizedText(content ?? '');
+      for (const row of rows as Array<{ id: string; content: unknown }>) {
+        const got = extractNotifyText(row?.content);
+        if (got !== null && sha1OfNormalizedText(got) === wantHash) {
+          return row.id;
+        }
+      }
+      return null;
+    } catch {
+      this.logger.warn(
+        `[mcp] group_post 幂等探针读错，fail-open 继续落库 channel=${channelId}`,
+      );
+      return null;
+    }
+  }
+
   /**
    * issue 状态锁（todo4 精确语义，对照 issues.constants 五态机）：
    * open 可派；在途同人（in_progress + 同 assigneeInstanceId）拦并回显原派发消息；
@@ -2309,7 +2386,6 @@ export class PlatformMcpService implements OnModuleInit {
           dedupKey: buildMessageReceiptDedupKey({
             fromInstanceId: input.fromInstanceId,
             toInstanceId: input.toInstanceId,
-            issueId: input.issueId,
             content: input.content,
           }),
           issueId: input.issueId,
@@ -2516,7 +2592,6 @@ export class PlatformMcpService implements OnModuleInit {
       const dedupKey = buildMessageReceiptDedupKey({
         fromInstanceId: input.fromInstanceId,
         toInstanceId: input.toInstanceId,
-        issueId: input.issueId,
         content: input.content,
       });
       let receiptId: string;
