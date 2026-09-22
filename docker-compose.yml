@@ -68,8 +68,9 @@ services:
       # 模型 provider token 加密密钥（C4 AES-256-GCM，32 字节/64 hex）。
       # 必填校验：未设置即启动报错（拒绝公开默认值导致密钥泄露）。生成方式：openssl rand -hex 32
       MODEL_CREDENTIAL_KEY: ${MODEL_CREDENTIAL_KEY:?MODEL_CREDENTIAL_KEY 未设置，请生成 32 字节随机密钥（openssl rand -hex 32）}
-      # 首字超时（server dispatcher watchdog）：dispatch 后 300s 无首个事件回流则判无响应
-      FIRST_TOKEN_TIMEOUT_MS: "300000"
+      # 事件静默自愈窗口（滑动）：距最近一次回流事件 600s 无事件 → 自动唤醒重试（最多 3 次）；
+      # 600000 > worker 首字 300000 不抢跑；到期先查心跳，worker 已离线则立即失败不唤醒
+      SILENT_SESSION_WAKE_MS: "600000"
       AGENT_IDLE_TIMEOUT_MS: "0"
     depends_on:
       db:
@@ -135,8 +136,9 @@ services:
       WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}
       # 并发上限：worker 上报 capabilities.maxInstances，server 按此算剩余容量派单
       WORKER_MAX_INSTANCES: "10"
-      # 首字超时（worker awaitCompletion）：300s 内无首字输出即 abort 释放槽位，与 server
-      # FIRST_TOKEN_TIMEOUT_MS=300000 对齐（worker 不再先于 server 兜底中止）；0 表示禁用（别用，会堆积）
+      # 首字超时（worker awaitCompletion）：300s 内无首字输出即 abort 释放槽位——首字/模型
+      # 探测唯一归 worker；server 侧为 600s 滑动事件静默自愈（SILENT_SESSION_WAKE_MS）。
+      # 0 表示禁用（别用，会堆积）
       WORKER_FIRST_TOKEN_TIMEOUT_MS: "300000"
       # 持久化工作目录：serve cwd + .opencode/tools|skills 注入落点 + agent 工作区
       #（git clone 的仓库、任务文件）。改挂载卷路径，容器重建不丢（worker 启动时

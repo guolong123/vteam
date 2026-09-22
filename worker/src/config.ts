@@ -53,7 +53,8 @@ export interface WorkerConfig {
   workerExecPort: number;
   /**
    * T10：执行端点首字超时 ms（env WORKER_FIRST_TOKEN_TIMEOUT_MS，awaitCompletion
-   * 首字超时——时限内模型无输出即 abort）；默认 300000（对齐 server FIRST_TOKEN_TIMEOUT_MS）。
+   * 首字超时——时限内模型无输出即 abort）；默认 300000（首字/模型探测唯一归 worker，
+   * server 侧为 SILENT_SESSION_WAKE_MS=600000 滑动事件静默自愈，不抢跑）。
    * 首字出现后无完成超时。
    */
   workerFirstTokenTimeoutMs: number;

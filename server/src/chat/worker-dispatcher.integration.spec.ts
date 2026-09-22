@@ -35,7 +35,7 @@ import { WorkerClient } from '../workers/worker.client';
 import { WorkerEventDto } from '../workers/dto/worker-event.dto';
 import { WorkerEventIngress } from '../workers/worker-event.ingress';
 import { WorkersService } from '../workers/workers.service';
-import { WorkerDispatcher, MAX_FIRST_TOKEN_WAKE_ATTEMPTS } from './worker-dispatcher';
+import { WorkerDispatcher, MAX_SILENT_WAKE_ATTEMPTS } from './worker-dispatcher';
 
 /** 构造 WorkerEventDto（协议形状与 DTO 字段一致，eventId 唯一防去重）。 */
 function event(
@@ -437,14 +437,14 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     });
   });
 
-  it('判死链路：session.updated(running) 经 ingress 完整回流（ses_ → s_）→ 首字 watchdog 清除，超时后不 emitError', async () => {
+  it('判死链路：session.updated(running) 经 ingress 完整回流（ses_ → s_）→ 滑动重武装，窗口后仅唤醒不 emitError', async () => {
     jest.useFakeTimers();
     const errors: unknown[] = [];
     dispatcher.onError((e) => errors.push(e));
 
-    await dispatcher.dispatch(request); // 启动首字 watchdog（注册键 = 平台 s_ 主键）
+    await dispatcher.dispatch(request); // 启动静默 watchdog（注册键 = 平台 s_ 主键）
     // worker 回流 running（sessionId=ses_0001）→ ingress 反查 s_0000000001 → activity
-    // 通知 dispatcher → clearPendingWatchdogBySession(s_0000000001) 命中并清除
+    // 通知 dispatcher → rearmSilenceWatchdogBySession(s_0000000001) 滑动重武装
     await ingress.handleEvent(
       event(
         'session.updated',
@@ -459,7 +459,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     );
 
     await jest.advanceTimersByTimeAsync(
-      dispatcher.firstTokenTimeoutMs + 1000,
+      dispatcher.silentSessionWakeMs + 1000,
     );
     await jest.advanceTimersByTimeAsync(0);
     expect(errors).toHaveLength(0);
@@ -471,15 +471,15 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     jest.useRealTimers();
   });
 
-  it('判死链路：dispatch 后静默 4 个窗口（3 次唤醒耗尽）→ 首字 watchdog emitError + agent.error（回归基线）', async () => {
+  it('判死链路：dispatch 后静默 4 个窗口（3 次唤醒耗尽）→ 静默 watchdog emitError + agent.error（回归基线）', async () => {
     jest.useFakeTimers();
     const errors: unknown[] = [];
     dispatcher.onError((e) => errors.push(e));
 
     await dispatcher.dispatch(request);
     // 3 次唤醒窗口 + 1 个耗尽窗口；唤醒目标解析不到团队归属 → 跳过唤醒但计数照常
-    for (let window = 0; window < MAX_FIRST_TOKEN_WAKE_ATTEMPTS + 1; window++) {
-      await jest.advanceTimersByTimeAsync(dispatcher.firstTokenTimeoutMs);
+    for (let window = 0; window < MAX_SILENT_WAKE_ATTEMPTS + 1; window++) {
+      await jest.advanceTimersByTimeAsync(dispatcher.silentSessionWakeMs);
       await jest.advanceTimersByTimeAsync(0);
     }
 
@@ -497,7 +497,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
     expect(agentError?.[1]).toEqual(
       expect.objectContaining({
         level: 'retry',
-        errorType: 'first_token_timeout',
+        errorType: 'silent_session_timeout',
       }),
     );
     jest.useRealTimers();

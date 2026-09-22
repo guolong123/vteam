@@ -503,7 +503,7 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
           id: 'tmr_idle',
           kind: 'session_idle_scan',
           payload: {
-            reason: 'first-token',
+            reason: 'silent-session',
             sessionId: 's_14',
             teamMemberId: 'tmm_9',
             scope: 'team:tm_1',
@@ -518,7 +518,7 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
       );
       // 会话 → 成员解析（s_14→tmm_9→开发者-1），raw id 留括号
       expect(out.items[1].display.description).toBe(
-        '开发者-1 的会话首字超时看门狗 (s_14)',
+        '开发者-1 的会话事件静默看门狗 (s_14)',
       );
       expect(out.items[1].display.ownerLabel).toBe('开发者-1（developer）');
     });
@@ -531,7 +531,7 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
         triggerRow({
           kind: 'session_idle_scan',
           payload: {
-            reason: 'first-token',
+            reason: 'silent-session',
             sessionId: 's_14',
             scope: 'team:tm_1',
           },
@@ -541,7 +541,7 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
       const out = await svc.findAll({}, ADMIN);
 
       expect(out.items[0].display.description).toBe(
-        '开发者-1 的会话首字超时看门狗 (s_14)',
+        '开发者-1 的会话事件静默看门狗 (s_14)',
       );
       expect(prisma.session.findMany).toHaveBeenCalledTimes(1);
       expect(prisma.session.findMany).toHaveBeenCalledWith({
@@ -586,7 +586,7 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
       prisma.trigger.findMany.mockResolvedValue([
         triggerRow({
           kind: 'session_idle_scan',
-          payload: { reason: 'first-token', sessionId: 's_gone' },
+          payload: { reason: 'silent-session', sessionId: 's_gone' },
         }),
       ]);
 
@@ -594,7 +594,7 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
 
       expect(out.total).toBe(1);
       expect(out.items[0].display.description).toBe(
-        '会话 s_gone（已删除） 首字超时看门狗',
+        '会话 s_gone（已删除） 事件静默看门狗',
       );
     });
 
@@ -608,14 +608,14 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
       prisma.trigger.findMany.mockResolvedValue([
         triggerRow({
           kind: 'session_idle_scan',
-          payload: { reason: 'first-token', sessionId: 's_14' },
+          payload: { reason: 'silent-session', sessionId: 's_14' },
         }),
       ]);
 
       const out = await svc.findAll({}, ADMIN);
 
       expect(out.items[0].display.description).toBe(
-        '会话 s_14（已删除） 首字超时看门狗',
+        '会话 s_14（已删除） 事件静默看门狗',
       );
     });
 
@@ -645,14 +645,14 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
       prisma.trigger.findMany.mockResolvedValue([
         triggerRow({
           kind: 'session_idle_scan',
-          payload: { reason: 'first-token', sessionId: 's_14' },
+          payload: { reason: 'silent-session', sessionId: 's_14' },
         }),
       ]);
 
       const out = await svc.findAll({}, ADMIN);
 
       expect(out.items[0].display.description).toBe(
-        '开发者 的会话首字超时看门狗 (s_14)',
+        '开发者 的会话事件静默看门狗 (s_14)',
       );
     });
 
@@ -664,7 +664,7 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
         triggerRow({
           id: 'tmr_s1',
           kind: 'session_idle_scan',
-          payload: { reason: 'first-token', sessionId: 's_14' },
+          payload: { reason: 'silent-session', sessionId: 's_14' },
         }),
         triggerRow({
           id: 'tmr_s2',

@@ -698,7 +698,7 @@ export class TriggersService {
     }
     if (row.kind === TRIGGER_KIND.SESSION_IDLE_SCAN) {
       const sessionId = this.str(p['sessionId']);
-      const suffix = p['reason'] === 'first-token' ? '首字超时看门狗' : '空闲扫描';
+      const suffix = p['reason'] === 'silent-session' ? '事件静默看门狗' : '空闲扫描';
       if (sessionId) {
         // 会话 → 成员展示（owner join 同镜像：alias，回退 agent 名）；raw id 留括号可追查。
         // 会话/成员缺失 → 既有 `会话 <id>（已删除） <suffix>` 降级，列表永不 500。

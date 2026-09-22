@@ -33,10 +33,10 @@ import {
   DEFAULT_AGENT_IDLE_TIMEOUT_MS,
   DEFAULT_CHAT_HISTORY_MAX_BYTES,
   DEFAULT_DOCLIB_MAX_BYTES,
-  DEFAULT_FIRST_TOKEN_TIMEOUT_MS,
+  DEFAULT_SILENT_SESSION_WAKE_MS,
   DISPATCH_TIMEOUT_MS,
   IDLE_SCAN_INTERVAL_MS,
-  MAX_FIRST_TOKEN_WAKE_ATTEMPTS,
+  MAX_SILENT_WAKE_ATTEMPTS,
   escapeXml,
   extractArtifacts,
   extractGroupPost,
@@ -282,7 +282,7 @@ describe('WorkerDispatcher', () => {
       createDispatcher();
       expect(ingress.onTaskCompleted).toHaveBeenCalledTimes(1);
       expect(ingress.onAgentStatus).toHaveBeenCalledTimes(1);
-      // 判死 watchdog：ingress 活动事件通知回调（清除首字 watchdog + 刷新 idle 计时）
+      // 判死 watchdog：ingress 活动事件通知回调（滑动重武装静默窗口 + 刷新 idle 计时）
       expect(ingress.onSessionActivity).toHaveBeenCalledTimes(1);
     });
 
@@ -4124,10 +4124,10 @@ describe('WorkerDispatcher', () => {
   });
 
   // ------------------------------------------------------------------
-  // 判死 watchdog（方案 A：首字超时 + 空闲判死）
+  // 判死 watchdog（事件静默 600s 滑动自愈 + 空闲判死）
   // ------------------------------------------------------------------
 
-  describe('判死 watchdog（首字超时 300s + 空闲判死 30min）', () => {
+  describe('判死 watchdog（事件静默 600s + 空闲判死 30min）', () => {
     const dispatchSetup = () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
@@ -4147,7 +4147,7 @@ describe('WorkerDispatcher', () => {
       prisma.artifact.findMany.mockResolvedValue([]);
     };
 
-    it('dispatch 后静默 4×300s（3 次唤醒耗尽）→ emitError「无响应」+ 广播 agent.error（first_token_timeout）', async () => {
+    it('dispatch 后静默 4×600s（3 次唤醒耗尽）→ emitError「无响应（心跳正常）」+ 广播 agent.error（silent_session_timeout）', async () => {
       jest.useFakeTimers();
       dispatchSetup();
       prisma.task.findUnique.mockResolvedValue({
@@ -4165,18 +4165,18 @@ describe('WorkerDispatcher', () => {
       await d.dispatch(request);
       expect(errors).toHaveLength(0);
 
-      // 每个静默窗口到期即唤醒一次并重武装；3 次唤醒后第 4 个窗口到期才走失败路径
+      // 每个 600s 静默窗口到期即唤醒一次并重武装；3 次唤醒后第 4 个窗口到期才走失败路径
       for (
         let attempt = 0;
-        attempt < MAX_FIRST_TOKEN_WAKE_ATTEMPTS;
+        attempt < MAX_SILENT_WAKE_ATTEMPTS;
         attempt++
       ) {
-        await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
+        await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS);
         await jest.advanceTimersByTimeAsync(0);
         expect(wakeSpy).toHaveBeenCalledTimes(attempt + 1);
         expect(errors).toHaveLength(0);
       }
-      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS);
       await jest.advanceTimersByTimeAsync(0);
 
       expect(errors).toEqual([
@@ -4190,24 +4190,24 @@ describe('WorkerDispatcher', () => {
       expect(errors[0]).toEqual(
         expect.objectContaining({
           error: expect.stringMatching(
-            new RegExp(`${MAX_FIRST_TOKEN_WAKE_ATTEMPTS} 次自动唤醒`),
+            new RegExp(`${MAX_SILENT_WAKE_ATTEMPTS} 次自动唤醒`),
           ),
         }),
       );
-      expect(wakeSpy).toHaveBeenCalledTimes(MAX_FIRST_TOKEN_WAKE_ATTEMPTS);
+      expect(wakeSpy).toHaveBeenCalledTimes(MAX_SILENT_WAKE_ATTEMPTS);
       const agentError = realtime.broadcast.mock.calls.find(
         (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
       );
       expect(agentError?.[1]).toEqual(
         expect.objectContaining({
           level: 'retry',
-          errorType: 'first_token_timeout',
+          errorType: 'silent_session_timeout',
         }),
       );
       jest.useRealTimers();
     });
 
-    it('唤醒重试后活动到达：取消重试 + 计数复零（下次静默从第 1 次唤醒重新起算）', async () => {
+    it('唤醒重试后活动到达：滑动重武装保留 pending + 计数不清（完成/判败才清零）', async () => {
       jest.useFakeTimers();
       dispatchSetup();
       prisma.task.findUnique.mockResolvedValue({
@@ -4223,10 +4223,10 @@ describe('WorkerDispatcher', () => {
         .mockResolvedValue(undefined);
 
       await d.dispatch(request);
-      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS);
       await jest.advanceTimersByTimeAsync(0);
       expect(wakeSpy).toHaveBeenCalledTimes(1);
-      expect((d as any).firstTokenWakeAttempts.get('s_0000000001')).toBe(1);
+      expect((d as any).silentWakeAttempts.get('s_0000000001')).toBe(1);
 
       // 活动到达：取消 pending 重试并复零
       const activityCb = ingress.onSessionActivity.mock.calls[0][0];
@@ -4235,24 +4235,26 @@ describe('WorkerDispatcher', () => {
         sessionId: 's_0000000001',
         status: 'running',
       });
-      expect((d as any).isSessionPending('s_0000000001')).toBe(false);
-      expect((d as any).firstTokenWakeAttempts.has('s_0000000001')).toBe(false);
+      // 滑动语义：事件重武装（不清 pending），唤醒计数保留（清零仅在完成/判败/换会话）
+      expect((d as any).isSessionPending('s_0000000001')).toBe(true);
+      expect((d as any).silentWakeAttempts.get('s_0000000001')).toBe(1);
 
-      // 再次静默：第一个窗口到期即唤醒（计数从 0 重新起算），全程无失败报错
-      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
+      // 再次静默：窗口自事件重算，到期续第 2 次唤醒（计数续算），全程无失败报错
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS);
       await jest.advanceTimersByTimeAsync(0);
+      expect(wakeSpy).toHaveBeenCalledTimes(2);
       expect(errors).toHaveLength(0);
       jest.useRealTimers();
     });
 
-    it('300s 内收到 session.updated(running) → 首字 watchdog 清除，不再 emitError', async () => {
+    it('窗口内收到 session.updated(running) → 滑动重武装，不再 emitError', async () => {
       jest.useFakeTimers();
       dispatchSetup();
       const d = createDispatcher();
       const errors: unknown[] = [];
       d.onError((e) => errors.push(e));
 
-      await d.dispatch(request); // 启动首字 watchdog
+      await d.dispatch(request); // 启动静默 watchdog
       // ingress 活动回调：session.updated(running) 到达（模型已开始产出）
       const activityCb = ingress.onSessionActivity.mock.calls[0][0];
       activityCb({
@@ -4260,8 +4262,9 @@ describe('WorkerDispatcher', () => {
         sessionId: 's_0000000001',
         status: 'running',
       });
+      // 滑动语义：事件重武装窗口；到期只会唤醒（1 次 < 上限），不 emitError
       await jest.advanceTimersByTimeAsync(
-        DEFAULT_FIRST_TOKEN_TIMEOUT_MS + 1000,
+        DEFAULT_SILENT_SESSION_WAKE_MS + 1000,
       );
       await jest.advanceTimersByTimeAsync(0);
 
@@ -4269,7 +4272,7 @@ describe('WorkerDispatcher', () => {
       jest.useRealTimers();
     });
 
-    it('回流成功（task.completed）：清除首字 watchdog，不再 emitError', async () => {
+    it('回流成功（task.completed）：终态清除静默 watchdog，不再 emitError', async () => {
       jest.useFakeTimers();
       dispatchSetup();
       prisma.chatChannel.findFirst.mockResolvedValue({ id: request.channelId });
@@ -4290,7 +4293,7 @@ describe('WorkerDispatcher', () => {
       const activityCb = ingress.onSessionActivity.mock.calls[0][0];
       activityCb({ type: 'task.completed', sessionId: 's_0000000001' });
       await jest.advanceTimersByTimeAsync(
-        DEFAULT_FIRST_TOKEN_TIMEOUT_MS + 1000,
+        DEFAULT_SILENT_SESSION_WAKE_MS + 1000,
       );
 
       expect(errors).toHaveLength(0);
@@ -4446,9 +4449,9 @@ describe('WorkerDispatcher', () => {
       jest.spyOn(d as any, 'tryAutoRestart').mockResolvedValue(undefined);
 
       await d.dispatch(request);
-      // 3 次唤醒窗口 + 1 个耗尽窗口
+      // 3 次唤醒窗口 + 1 个耗尽窗口（每窗 600s）
       await jest.advanceTimersByTimeAsync(
-        DEFAULT_FIRST_TOKEN_TIMEOUT_MS * (MAX_FIRST_TOKEN_WAKE_ATTEMPTS + 1),
+        DEFAULT_SILENT_SESSION_WAKE_MS * (MAX_SILENT_WAKE_ATTEMPTS + 1),
       );
       await jest.advanceTimersByTimeAsync(0);
 
@@ -4458,6 +4461,187 @@ describe('WorkerDispatcher', () => {
       );
       expect(JSON.stringify(errors)).not.toContain('处理超时（120s');
       jest.useRealTimers();
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 事件静默自愈（SILENT_SESSION_WAKE_MS 滑动窗口 ×3 + 心跳快速失败）
+  // 三路径：worker 首字 300s · server 静默 600s 滑动 ×3 · 心跳 10s/30s
+  // ------------------------------------------------------------------
+
+  describe('事件静默自愈 SILENT_SESSION_WAKE_MS（滑动窗口 + 心跳快速失败）', () => {
+    const silenceSetup = () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_0000000001',
+        instanceRef: 'ses_0001',
+        teamId: 'tm_0000000001',
+        teamMemberId: 'tmm_0000000001',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: 'online',
+        capabilities: {},
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+      });
+      prisma.artifact.findMany.mockResolvedValue([]);
+    };
+
+    it('默认值锁定：窗口 600000 > worker 首字 300000（不抢跑）且唤醒上限 3', () => {
+      expect(DEFAULT_SILENT_SESSION_WAKE_MS).toBe(600_000);
+      expect(DEFAULT_SILENT_SESSION_WAKE_MS).toBeGreaterThan(300_000);
+      expect(MAX_SILENT_WAKE_ATTEMPTS).toBe(3);
+    });
+
+    it('窗口未满不唤醒：推进 DEFAULT_SILENT_SESSION_WAKE_MS - 1 → 0 次 wake、pending 保持', async () => {
+      jest.useFakeTimers();
+      silenceSetup();
+      const d = createDispatcher();
+      const wakeSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+      await d.dispatch(request);
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS - 1);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(wakeSpy).not.toHaveBeenCalled();
+      expect(d.isSessionPending('s_0000000001')).toBe(true);
+      jest.useRealTimers();
+    });
+
+    it('滑动窗口：事件在 T 重武装 → 直到 T + 600s 才唤醒（事件前已流逝时间不计入）', async () => {
+      jest.useFakeTimers();
+      silenceSetup();
+      const d = createDispatcher();
+      const wakeSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+      await d.dispatch(request);
+      // 消耗掉原窗口一半，然后事件到达（滑动重武装 → 计时从事件重新起算）
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS / 2);
+      const activityCb = ingress.onSessionActivity.mock.calls[0][0];
+      activityCb({ type: 'message.part.delta', sessionId: 's_0000000001' });
+      // 已越过原 dispatch 窗口（t0+600s），但距事件仅 599.999s → 滑动后仍未满窗
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS - 1);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(wakeSpy).not.toHaveBeenCalled();
+      // 事件后满 600s → 恰唤醒一次
+      await jest.advanceTimersByTimeAsync(2);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(wakeSpy).toHaveBeenCalledTimes(1);
+      jest.useRealTimers();
+    });
+
+    it('3 次唤醒耗尽 → 新失败文案（600s 无事件回流 + worker 心跳正常 + 已尝试 3 次）+ silent_session_timeout', async () => {
+      jest.useFakeTimers();
+      silenceSetup();
+      prisma.task.findUnique.mockResolvedValue({
+        id: request.taskId,
+        status: 'in_progress',
+      });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: request.channelId });
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+      const wakeSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+      await d.dispatch(request);
+      for (let i = 0; i < MAX_SILENT_WAKE_ATTEMPTS + 1; i++) {
+        await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS);
+        await jest.advanceTimersByTimeAsync(0);
+      }
+      expect(wakeSpy).toHaveBeenCalledTimes(MAX_SILENT_WAKE_ATTEMPTS);
+      expect(errors).toHaveLength(1);
+      expect((errors[0] as { error: string }).error).toMatch(
+        /无响应（600s 无事件回流，worker 心跳正常），已尝试 3 次自动唤醒仍未恢复/,
+      );
+      const agentError = realtime.broadcast.mock.calls.find(
+        (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
+      );
+      expect(agentError?.[1]).toEqual(
+        expect.objectContaining({ errorType: 'silent_session_timeout' }),
+      );
+      jest.useRealTimers();
+    });
+
+    it('worker 心跳已离线 → 到期立即失败，tryAutoRestart 不被调用', async () => {
+      jest.useFakeTimers();
+      silenceSetup();
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+      const wakeSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+      await d.dispatch(request);
+      // 到期前心跳判定 offline（HealthChecker 30s 语义下的状态翻转）
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: 'offline',
+      });
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(wakeSpy).not.toHaveBeenCalled();
+      expect(errors).toHaveLength(1);
+      expect((errors[0] as { error: string }).error).toMatch(/心跳已离线/);
+      expect((d as any).failedSessions.has('s_0000000001')).toBe(true);
+      expect((d as any).isSessionPending('s_0000000001')).toBe(false);
+      jest.useRealTimers();
+    });
+
+    it('不抢跑 worker 300s 首字窗口：推进 300000ms 时 server 零动作，满 600000ms 才唤醒', async () => {
+      jest.useFakeTimers();
+      silenceSetup();
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+      const wakeSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+      await d.dispatch(request);
+      await jest.advanceTimersByTimeAsync(300_000); // worker 自有首字窗口长度
+      await jest.advanceTimersByTimeAsync(0);
+      expect(wakeSpy).not.toHaveBeenCalled();
+      expect(errors).toHaveLength(0);
+      await jest.advanceTimersByTimeAsync(
+        DEFAULT_SILENT_SESSION_WAKE_MS - 300_000,
+      );
+      await jest.advanceTimersByTimeAsync(0);
+      expect(wakeSpy).toHaveBeenCalledTimes(1);
+      jest.useRealTimers();
+    });
+
+    it('grep 锁：src 内旧首字 watchdog 符号零命中（拼接构造 pattern，避免自匹配）', () => {
+      // 拼接字符串使本文件源码不含连续旧符号（否则锁扫描命中自身）
+      const patterns = [
+        new RegExp('(?<!WORKER_)' + 'FIRST_TOKEN' + '_TIMEOUT_MS'),
+        new RegExp('DEFAULT_' + 'FIRST_TOKEN' + '_TIMEOUT_MS'),
+        new RegExp('MAX_FIRST_' + 'TOKEN_WAKE_ATTEMPTS'),
+      ];
+      const srcRoot = path.resolve(__dirname, '..'); // server/src
+      const hits: string[] = [];
+      const walk = (dir: string): void => {
+        for (const name of fs.readdirSync(dir)) {
+          const full = path.join(dir, name);
+          if (fs.statSync(full).isDirectory()) {
+            walk(full);
+            continue;
+          }
+          if (!full.endsWith('.ts')) continue;
+          const text = fs.readFileSync(full, 'utf8');
+          for (const p of patterns) {
+            const matches = text.match(new RegExp(p.source, 'g'));
+            if (matches) {
+              hits.push(`${path.relative(srcRoot, full)} × ${matches.length} (${p})`);
+            }
+          }
+        }
+      };
+      walk(srcRoot);
+      expect(hits).toEqual([]);
     });
   });
 
@@ -4670,7 +4854,7 @@ describe('WorkerDispatcher', () => {
       });
     });
 
-    it('DB 侧检出 + 首字等待否决：pendingBySession 命中的会话不判死', async () => {
+    it('DB 侧检出 + 首事件等待否决：pending 且 activitySeen=false 的会话不判死', async () => {
       const d = createDispatcher();
       (d as any).startPendingWatchdog(
         'team:tm_0000000001',
@@ -4764,7 +4948,7 @@ describe('WorkerDispatcher', () => {
       expect(() => createDispatcher()).not.toThrow();
     });
 
-    it('watchdog 注册即落 durable 行（kind 复用 session_idle_scan，due=注册+首字超时）', async () => {
+    it('watchdog 注册即落 durable 行（kind 复用 session_idle_scan，due=注册+静默窗口）', async () => {
       const triggers = makeTriggers();
       const d = createDispatcherWithTriggers(triggers);
       const before = Date.now();
@@ -4774,10 +4958,11 @@ describe('WorkerDispatcher', () => {
       const [kind, dueAt, payload, dedupKey] = triggers.schedule.mock.calls[0];
       expect(kind).toBe(TRIGGER_KIND.SESSION_IDLE_SCAN);
       expect((dueAt as Date).getTime()).toBeGreaterThanOrEqual(
-        before + (d as any).firstTokenTimeoutMs,
+        before + (d as any).silentSessionWakeMs,
       );
       expect(payload).toMatchObject({
-        reason: 'first-token',
+        reason: 'silent-session',
+        dueAt: expect.any(Number),
         sessionId: 's_0000000001',
         workerId: 'w_0000000001',
         teamMemberId: 'tmm_0000000001',
@@ -4787,7 +4972,7 @@ describe('WorkerDispatcher', () => {
       expect((d as any).isSessionPending('s_0000000001')).toBe(true);
     });
 
-    it('首字到达清除内存 timer 的同时取消 durable 行（防误收割）', async () => {
+    it('终态清除内存 timer 的同时取消 durable 行（防误收割）', async () => {
       const triggers = makeTriggers();
       const d = createDispatcherWithTriggers(triggers);
       startWatchdog(d);
@@ -4812,9 +4997,13 @@ describe('WorkerDispatcher', () => {
       expect(triggers.schedule.mock.calls[1][3]).not.toBe(firstKey);
     });
 
-    it('handler：本进程等待首字中 → 复刻 deadline 行为（唤醒 + 重武装，未耗尽不失败）', async () => {
+    it('handler：本进程窗口到期（worker 在线）→ 复刻 deadline 行为（唤醒 + 重武装，未耗尽不失败）', async () => {
       const triggers = makeTriggers();
       const d = createDispatcherWithTriggers(triggers);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: 'online',
+      });
       prisma.session.findUnique.mockResolvedValue({
         taskId: request.taskId,
         teamId: 'tm_0000000001',
@@ -4841,13 +5030,17 @@ describe('WorkerDispatcher', () => {
         triggers.schedule.mock.calls[0][3],
       );
       expect(
-        (d as any).firstTokenWakeAttempts.get('s_0000000001'),
+        (d as any).silentWakeAttempts.get('s_0000000001'),
       ).toBe(1);
     });
 
-    it('handler：唤醒耗尽（第 4 次到期）→ 失败路径（failed 标记 + 注销 + 广播）', async () => {
+    it('handler：唤醒耗尽（第 4 次到期，worker 在线）→ 失败路径（failed 标记 + 注销 + 广播）', async () => {
       const triggers = makeTriggers();
       const d = createDispatcherWithTriggers(triggers);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: 'online',
+      });
       prisma.session.findUnique.mockResolvedValue({
         taskId: request.taskId,
         teamId: 'tm_0000000001',
@@ -4856,9 +5049,9 @@ describe('WorkerDispatcher', () => {
       startWatchdog(d);
       await new Promise((r) => setTimeout(r, 0));
       jest.spyOn(d as any, 'tryAutoRestart').mockResolvedValue(undefined);
-      (d as any).firstTokenWakeAttempts.set(
+      (d as any).silentWakeAttempts.set(
         's_0000000001',
-        MAX_FIRST_TOKEN_WAKE_ATTEMPTS,
+        MAX_SILENT_WAKE_ATTEMPTS,
       );
       const handler = triggers.registerHandler.mock.calls[0][1];
       const payload = triggers.schedule.mock.calls[0][2];
@@ -4868,16 +5061,20 @@ describe('WorkerDispatcher', () => {
       expect((d as any).isSessionPending('s_0000000001')).toBe(false);
       expect(realtime.broadcast).toHaveBeenCalledWith(
         EVENT_TYPES.AGENT_ERROR,
-        expect.objectContaining({ errorType: 'first_token_timeout' }),
+        expect.objectContaining({ errorType: 'silent_session_timeout' }),
         expect.anything(),
       );
     });
 
-    it('handler：重启后内存全空 + DB 行 stale → 照样唤醒重试（未耗尽不失败）', async () => {
+    it('handler：重启后内存全空 + DB 行超窗（>600s 无活动）→ 照样唤醒重试（未耗尽不失败）', async () => {
       const triggers = makeTriggers();
       const d = createDispatcherWithTriggers(triggers);
       const handler = triggers.registerHandler.mock.calls[0][1];
-      const dispatchedAt = Date.now() - 61_000;
+      const dispatchedAt = Date.now() - DEFAULT_SILENT_SESSION_WAKE_MS - 1_000;
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: 'online',
+      });
       prisma.session.findUnique.mockResolvedValue({
         status: 'running',
         lastActivityAt: new Date(dispatchedAt),
@@ -4898,7 +5095,7 @@ describe('WorkerDispatcher', () => {
         .mockResolvedValue(undefined);
       const out = await handler(
         fireCtx({
-          reason: 'first-token',
+          reason: 'silent-session',
           scope: 'team:tm_0000000001',
           agentId: 'a_product',
           sessionId: 's_restart_1',
@@ -4920,9 +5117,9 @@ describe('WorkerDispatcher', () => {
       );
       expect((d as any).failedSessions.has('s_restart_1')).toBe(false);
       // 重武装后再次命中该会话的 durable 行 → 累计到上限时失败
-      (d as any).firstTokenWakeAttempts.set(
+      (d as any).silentWakeAttempts.set(
         's_restart_1',
-        MAX_FIRST_TOKEN_WAKE_ATTEMPTS,
+        MAX_SILENT_WAKE_ATTEMPTS,
       );
       await new Promise((r) => setTimeout(r, 0));
       const rearmedPayload = triggers.schedule.mock.calls[0][2];
@@ -4930,12 +5127,12 @@ describe('WorkerDispatcher', () => {
       expect((d as any).failedSessions.has('s_restart_1')).toBe(true);
       expect(realtime.broadcast).toHaveBeenCalledWith(
         EVENT_TYPES.AGENT_ERROR,
-        expect.objectContaining({ errorType: 'first_token_timeout' }),
+        expect.objectContaining({ errorType: 'silent_session_timeout' }),
         expect.anything(),
       );
     });
 
-    it('handler：重启后首字已到（lastActivityAt 推进过 dispatchedAt）→ 不误杀', async () => {
+    it('handler：重启后事件在窗口内（lastActivityAt 新于 dispatchedAt 且未超窗）→ 顺延不误杀', async () => {
       const triggers = makeTriggers();
       const d = createDispatcherWithTriggers(triggers);
       const handler = triggers.registerHandler.mock.calls[0][1];
@@ -4946,7 +5143,7 @@ describe('WorkerDispatcher', () => {
       });
       const out = await handler(
         fireCtx({
-          reason: 'first-token',
+          reason: 'silent-session',
           scope: 'team:tm_0000000001',
           agentId: 'a_product',
           sessionId: 's_arrived_1',
@@ -4960,7 +5157,7 @@ describe('WorkerDispatcher', () => {
       expect(realtime.broadcast).not.toHaveBeenCalled();
     });
 
-    it('handler：非首字载荷（同 kind 它用）→ no-op；DB 异常 fail-open 不收割', async () => {
+    it('handler：非静默载荷（同 kind 它用）→ no-op；DB 异常 fail-open 不收割', async () => {
       const triggers = makeTriggers();
       const d = createDispatcherWithTriggers(triggers);
       const handler = triggers.registerHandler.mock.calls[0][1];
@@ -4972,7 +5169,7 @@ describe('WorkerDispatcher', () => {
       await expect(
         handler(
           fireCtx({
-            reason: 'first-token',
+            reason: 'silent-session',
             scope: 'team:tm_0000000001',
             agentId: 'a_product',
             sessionId: 's_dbdown_1',
@@ -5131,7 +5328,7 @@ describe('WorkerDispatcher', () => {
       jest.useRealTimers();
     });
 
-    it('首字超时无 step-finish：首字 watchdog emitError；迟到回流跳过落库', async () => {
+    it('静默超窗无 step-finish：静默 watchdog emitError；迟到回流跳过落库', async () => {
       jest.useFakeTimers();
       pollSetup();
       const d = createDispatcher();
@@ -5140,13 +5337,13 @@ describe('WorkerDispatcher', () => {
       jest.spyOn(d as any, 'tryAutoRestart').mockResolvedValue(undefined);
 
       await d.dispatch(request);
-      // 3 次唤醒窗口 + 1 个耗尽窗口
+      // 3 次唤醒窗口 + 1 个耗尽窗口（每窗 600s）
       await jest.advanceTimersByTimeAsync(
-        DEFAULT_FIRST_TOKEN_TIMEOUT_MS * (MAX_FIRST_TOKEN_WAKE_ATTEMPTS + 1),
+        DEFAULT_SILENT_SESSION_WAKE_MS * (MAX_SILENT_WAKE_ATTEMPTS + 1),
       );
       await jest.advanceTimersByTimeAsync(0);
 
-      // 首字 watchdog emitError（模型无响应）
+      // 静默 watchdog emitError（600s 无事件回流）
       expect(errors).toHaveLength(1);
       expect(errors[0]).toEqual(
         expect.objectContaining({ error: expect.stringMatching(/无响应/) }),
@@ -5220,8 +5417,8 @@ describe('WorkerDispatcher', () => {
       );
       // 失败态无回复落库
       expect(prisma.message.create).not.toHaveBeenCalled();
-      // watchdog 已清除——再推首字超时时长不重复 emitError（无双报错）
-      await jest.advanceTimersByTimeAsync(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
+      // watchdog 已清除——再推静默窗口时长不重复 emitError（无双报错）
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS);
       await jest.advanceTimersByTimeAsync(0);
       expect(errors).toHaveLength(1);
       jest.useRealTimers();
@@ -6158,16 +6355,16 @@ describe('WorkerDispatcher', () => {
       expect(configured.dispatchTimeoutMs).toBe(30_000);
     });
 
-    it('判死超时默认值：首字 300s / 空闲 30min，env FIRST_TOKEN_TIMEOUT_MS / AGENT_IDLE_TIMEOUT_MS 可配（STRING env 解析）', async () => {
-      expect(DEFAULT_FIRST_TOKEN_TIMEOUT_MS).toBe(300_000);
+    it('判死超时默认值：事件静默 600s / 空闲 30min，env SILENT_SESSION_WAKE_MS / AGENT_IDLE_TIMEOUT_MS 可配（STRING env 解析）', async () => {
+      expect(DEFAULT_SILENT_SESSION_WAKE_MS).toBe(600_000);
       expect(DEFAULT_AGENT_IDLE_TIMEOUT_MS).toBe(30 * 60_000);
       // 默认
       const d = createDispatcher();
-      expect(d.firstTokenTimeoutMs).toBe(DEFAULT_FIRST_TOKEN_TIMEOUT_MS);
+      expect(d.silentSessionWakeMs).toBe(DEFAULT_SILENT_SESSION_WAKE_MS);
       expect(d.agentIdleTimeoutMs).toBe(DEFAULT_AGENT_IDLE_TIMEOUT_MS);
       // env 可配 → 覆盖默认（plain ConfigModule 读到的是 STRING）
       config.get.mockImplementation((key: string) =>
-        key === 'FIRST_TOKEN_TIMEOUT_MS'
+        key === 'SILENT_SESSION_WAKE_MS'
           ? '10000'
           : key === 'AGENT_IDLE_TIMEOUT_MS'
             ? String(5 * 60_000)
@@ -6176,45 +6373,45 @@ describe('WorkerDispatcher', () => {
               : undefined,
       );
       const configured = createDispatcher();
-      expect(configured.firstTokenTimeoutMs).toBe(10_000);
+      expect(configured.silentSessionWakeMs).toBe(10_000);
       expect(configured.agentIdleTimeoutMs).toBe(5 * 60_000);
     });
 
-    it('超时 env 解析：parse("0") → disabled；"300000" → 300000；未设/垃圾 → 300000；idle 同理', async () => {
-      // parse("300000") → 300000
+    it('超时 env 解析：parse("0") → disabled；"600000" → 600000；未设/垃圾 → 600000；idle 同理', async () => {
+      // parse("600000") → 600000
       config.get.mockImplementation((key: string) =>
-        key === 'FIRST_TOKEN_TIMEOUT_MS'
-          ? '300000'
+        key === 'SILENT_SESSION_WAKE_MS'
+          ? '600000'
           : key === 'WORK_DIR'
             ? workRoot
             : undefined,
       );
-      expect(createDispatcher().firstTokenTimeoutMs).toBe(300_000);
+      expect(createDispatcher().silentSessionWakeMs).toBe(600_000);
       // parse("0") → disabled 路径（watchdog 不注册）
       config.get.mockImplementation((key: string) =>
-        key === 'FIRST_TOKEN_TIMEOUT_MS'
+        key === 'SILENT_SESSION_WAKE_MS'
           ? '0'
           : key === 'WORK_DIR'
             ? workRoot
             : undefined,
       );
-      expect(createDispatcher().firstTokenTimeoutMs).toBe(0);
-      // 垃圾/空 → 回落默认 300000
+      expect(createDispatcher().silentSessionWakeMs).toBe(0);
+      // 垃圾/空 → 回落默认 600000
       for (const garbage of ['garbage', '', '   ', '-5', '12.5', '0x10']) {
         config.get.mockImplementation((key: string) =>
-          key === 'FIRST_TOKEN_TIMEOUT_MS'
+          key === 'SILENT_SESSION_WAKE_MS'
             ? garbage
             : key === 'WORK_DIR'
               ? workRoot
               : undefined,
         );
-        expect(createDispatcher().firstTokenTimeoutMs).toBe(300_000);
+        expect(createDispatcher().silentSessionWakeMs).toBe(600_000);
       }
-      // 未设 → 回落默认 300000
+      // 未设 → 回落默认 600000
       config.get.mockImplementation((key: string) =>
         key === 'WORK_DIR' ? workRoot : undefined,
       );
-      expect(createDispatcher().firstTokenTimeoutMs).toBe(300_000);
+      expect(createDispatcher().silentSessionWakeMs).toBe(600_000);
       // idle 同理：STRING "0" → disabled；垃圾 → 默认 30min
       config.get.mockImplementation((key: string) =>
         key === 'AGENT_IDLE_TIMEOUT_MS'

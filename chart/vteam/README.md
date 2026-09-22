@@ -112,7 +112,7 @@ helm install vteam chart/vteam \
 | `web.image.proxyTarget` | `http://vteam-server:3000` | 运行时 env `API_PROXY_TARGET`（middleware 同源代理目标，deployment-web 注入） |
 | `db.enabled` | `true` | 内置 MySQL StatefulSet |
 | `db.external.url` | 空 | 外部 DATABASE_URL（`db.enabled=false` 时必填） |
-| `server.env.*` | 对齐 compose | NODE_ENV/PORT/JWT 时效/FIRST_TOKEN_TIMEOUT_MS |
+| `server.env.*` | 对齐 compose | NODE_ENV/PORT/JWT 时效/SILENT_SESSION_WAKE_MS |
 | `worker.env.*` | 对齐 compose | serve 端口/advertise/默认模型/WORK_DIR |
 | `worker.env.workerId` | 空（自动） | worker 唯一 id；空 = 自动按 pod 名生成（`w_<pod 名>`，downward API 注入，StatefulSet 多副本天然唯一）；显式设置时用该值（多副本下须自行保证唯一） |
 | `worker.resources` | requests 500m/1Gi，limits cpu 4 / memory 8Gi | worker 资源配额。默认副本数 1（`replicaCount.worker`）；opencode 执行引擎内存占用高，limit 8Gi 为推荐值（开发环境可用 values-dev 的小配额覆盖） |
@@ -182,7 +182,7 @@ kubectl delete pvc -l app.kubernetes.io/instance=vteam
 
 ## 与 docker-compose 的对齐点
 
-- env：DATABASE_URL / NODE_ENV / PORT / JWT_* / WORKER_TOKEN / MODEL_CREDENTIAL_KEY / FIRST_TOKEN_TIMEOUT_MS / X_WORKER_TOKEN / SERVER_URL / OPENCODE_SERVE_* / WORKER_ADVERTISE_HOST / WORKER_DEFAULT_MODEL / WORK_DIR 全部对齐 compose。
+- env：DATABASE_URL / NODE_ENV / PORT / JWT_* / WORKER_TOKEN / MODEL_CREDENTIAL_KEY / SILENT_SESSION_WAKE_MS / X_WORKER_TOKEN / SERVER_URL / OPENCODE_SERVE_* / WORKER_ADVERTISE_HOST / WORKER_DEFAULT_MODEL / WORK_DIR 全部对齐 compose。
 - PLATFORM_MCP_URL：仅 init Job 注入（seed 用），指向本 release 的 server Service（`http://<fullname>-server:3000/api/v1/platform-mcp`），避免 vteam MCP 仍注册 compose 的 `server:3000` 导致 worker 连接失败。
 - WORKER_ID：**不**在 ConfigMap 下发，由 worker StatefulSet 经 downward API 注入 pod 名（`w_<pod 名>`，pod 名 `<release>-worker-<ordinal>` 全局唯一）——多副本时每个 pod 唯一，避免共享同一 ID 相互覆盖注册；compose 单副本仍走 `w_<hostname>` 默认。
 - 探针：server `/api/v1/health`、web `fetch($HOSTNAME:3000)`，均为容器 node 内置 fetch（node:22-alpine 无 curl/wget）。

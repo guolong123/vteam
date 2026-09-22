@@ -20,7 +20,7 @@ data:
   PORT: {{ .Values.server.env.port | quote }}
   JWT_ACCESS_EXPIRES_IN: {{ .Values.server.env.jwtAccessExpiresIn | quote }}
   JWT_REFRESH_EXPIRES_IN: {{ .Values.server.env.jwtRefreshExpiresIn | quote }}
-  FIRST_TOKEN_TIMEOUT_MS: {{ .Values.server.env.firstTokenTimeoutMs | quote }}
+  SILENT_SESSION_WAKE_MS: {{ .Values.server.env.silentSessionWakeMs | quote }}
 
   # ---- worker ----
   SERVER_URL: {{ printf "http://%s:%d" (include "vteam.server.name" .) (int .Values.service.server.port) | quote }}

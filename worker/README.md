@@ -76,7 +76,7 @@ npm run dev            # tsx src/index.ts
 | `GIT_SSH_KEY_PATH` | 否 | 空 | SSH 私钥路径（git 凭证注入 `GIT_SSH_COMMAND`）；空 = 不注入 |
 | `WORKER_DEFAULT_MODEL` | 否 | 空 | worker 默认模型 id（随注册上报，分派兜底） |
 | `WORKER_EXEC_PORT` | 否 | `4198` | 执行端点端口（node:http POST /execute，与 serve 端口解耦） |
-| `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 否 | `300000` | 首字超时 ms（模型时限内无首字输出即 abort；首字出现后无完成超时）。与 server `FIRST_TOKEN_TIMEOUT_MS`（300000）对齐 |
+| `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 否 | `300000` | 首字超时 ms（模型时限内无首字输出即 abort；首字出现后无完成超时）。首字/模型探测唯一归 worker；server 侧为 `SILENT_SESSION_WAKE_MS=600000` 滑动事件静默自愈（>300s 不抢跑） |
 | `WORKER_MAX_INSTANCES` | 否 | `5` | worker 最大并发会话数（随注册上报，server 按 capacity 分派）；≤0/非法值兜底 5 |
 
 ## 集群外 worker 配置（内置 MCP + 可达地址三件套）
