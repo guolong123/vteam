@@ -2785,7 +2785,7 @@ export class PlatformMcpService implements OnModuleInit {
       throw new BadRequestException({
         code: PLATFORM_MCP_ERRORS.ARTIFACT_INVALID,
         message:
-          'category 须为需求/设计/实现/测试用例/测试报告/运维/其他其一，不传为未分类',
+          'category 须为需求/设计/实现/测试用例/测试报告/运维/计划/其他其一，不传为未分类',
       });
     }
 

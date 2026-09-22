@@ -227,7 +227,7 @@ const submitArtifactSchema = z.object({
     .enum(ARTIFACT_CATEGORIES)
     .optional()
     .describe(
-      '分类标签（可选）：需求/设计/实现/测试用例/测试报告/运维/其他其一；不传为未分类',
+      '分类标签（可选）：需求/设计/实现/测试用例/测试报告/运维/计划/其他其一；不传为未分类',
     ),
 });
 
