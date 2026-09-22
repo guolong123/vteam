@@ -129,18 +129,19 @@ export const MAX_FILE_FETCH_BYTES = 10 * 1024 * 1024;
 /**
  * 计划文档目录（按顺序探测，先命中者胜）。
  *
- * ⚠️ 两个位置都要看，原因与 OmO 配置文件同理（见 resources/omo-config.ts）：
+ * ⚠️ 三个位置都要看，原因与 OmO 配置文件同理（见 resources/omo-config.ts）：
  * OmO 把工作区元数据统一收进 `.omo/`，**当前版本实际把 agent 产出的计划写在
  * `.omo/plans/`**；而 `.opencode/plans/` 是 opencode 原生 plan agent 的约定位置
- * （也是 vteam 早期版本约定的位置）。
+ * （也是 vteam 早期版本约定的位置）；`.omo/drafts/` 是 OmO 原生规划工作流的
+ * 草稿目录（plan 模式先落草稿），从未被扫描会导致草稿计划不可见。
  *
  * 实测：装了 OmO 后，主 Agent 在计划模式下产出的文件落在 `<taskDir>/.omo/plans/plan.md`，
  * 只读 `.opencode/plans/` 会得到空列表——计划明明写出来了，页面却显示"暂无计划"。
  *
- * 读取时**两个目录都扫**（合并结果，按文件名去重），因此不论 agent 用哪个位置都能展示；
+ * 读取时**三个目录都扫**（合并结果，按文件名去重），因此不论 agent 用哪个位置都能展示；
  * 写入（用户上传）统一落 `PLAN_DOCS_DIR`（首个位置）。
  */
-export const PLAN_DOCS_DIRS = ['.omo/plans', '.opencode/plans'] as const;
+export const PLAN_DOCS_DIRS = ['.omo/plans', '.opencode/plans', '.omo/drafts'] as const;
 /** 计划文档写入位置（上传落点）：取探测列表首位。 */
 export const PLAN_DOCS_DIR = PLAN_DOCS_DIRS[0];
 /** 计划文档读取上限（单文件 256KB，超限截断 + truncated 标记，防大文件撑爆列表响应）。 */
@@ -1007,7 +1008,8 @@ export class ExecServer {
       return;
     }
     try {
-      // 两个候选目录都扫：OmO 把计划写在 .omo/plans/，原生 plan agent 用 .opencode/plans/。
+      // 三个候选目录都扫：OmO 把计划写在 .omo/plans/，原生 plan agent 用 .opencode/plans/，
+      // OmO 原生规划工作流的草稿落 .omo/drafts/。
       // 同名文件以**先命中的目录**为准（PLAN_DOCS_DIRS 顺序即优先级）。
       const seen = new Set<string>();
       const files: Array<{
