@@ -148,7 +148,11 @@ describe('TasksService', () => {
   ) => {
     const base: Record<
       string,
-      { alias: string; name: string; role: { key: string; name: string } | null }
+      {
+        alias: string;
+        name: string;
+        role: { key: string; name: string } | null;
+      }
     > = {
       a_product: {
         alias: '产品经理-1',
@@ -166,9 +170,11 @@ describe('TasksService', () => {
         role: { key: 'tester', name: '测试' },
       },
     };
-    const b =
-      base[agentId] ??
-      { alias: agentId, name: agentId, role: { key: agentId, name: agentId } };
+    const b = base[agentId] ?? {
+      alias: agentId,
+      name: agentId,
+      role: { key: agentId, name: agentId },
+    };
     return {
       id,
       teamId: 'tm_0000000001',
@@ -196,31 +202,31 @@ describe('TasksService', () => {
       taskEvent: { create: jest.fn() },
       message: { create: jest.fn(), findFirst: jest.fn() },
       agent: { findMany: jest.fn(), findUnique: jest.fn() },
-    // 绑定解析经外层 prisma 读角色（teams resolver 同）：默认返回内置岗位行
-    // （Q5：成员必须绑定岗位；显式 agentId 的用例也须给出 roleId），用例可覆盖。
-    agentRole: {
-      findUnique: jest.fn().mockImplementation(
-        async ({ where }: { where: { id: string } }) =>
-          (
-            {
-              r_developer: {
-                id: 'r_developer',
-                key: 'developer',
-                name: '开发者',
-                defaultAgentId: 'a_developer',
-                defaultOpencodeAgentName: null,
-              },
-              r_product: {
-                id: 'r_product',
-                key: 'product',
-                name: '产品经理',
-                defaultAgentId: 'a_product',
-                defaultOpencodeAgentName: null,
-              },
-            } as Record<string, unknown>
-          )[where.id] ?? null,
-      ),
-    },
+      // 绑定解析经外层 prisma 读角色（teams resolver 同）：默认返回内置岗位行
+      // （Q5：成员必须绑定岗位；显式 agentId 的用例也须给出 roleId），用例可覆盖。
+      agentRole: {
+        findUnique: jest.fn().mockImplementation(
+          async ({ where }: { where: { id: string } }) =>
+            (
+              ({
+                r_developer: {
+                  id: 'r_developer',
+                  key: 'developer',
+                  name: '开发者',
+                  defaultAgentId: 'a_developer',
+                  defaultOpencodeAgentName: null,
+                },
+                r_product: {
+                  id: 'r_product',
+                  key: 'product',
+                  name: '产品经理',
+                  defaultAgentId: 'a_product',
+                  defaultOpencodeAgentName: null,
+                },
+              }) as Record<string, unknown>
+            )[where.id] ?? null,
+        ),
+      },
       session: {
         create: jest.fn(),
         updateMany: jest.fn(),
@@ -1114,9 +1120,13 @@ describe('TasksService', () => {
       const result = await service.findAll({ page: 1, pageSize: 20 });
 
       const byId = new Map(
-        (result.items[0].instances as Array<{ id: string; alias: string; role: string | null }>).map(
-          (i) => [i.id, i],
-        ),
+        (
+          result.items[0].instances as Array<{
+            id: string;
+            alias: string;
+            role: string | null;
+          }>
+        ).map((i) => [i.id, i]),
       );
       expect(byId.get('tmm_0000000001')).toMatchObject({
         alias: `${PRE_MIGRATION_LABEL}-1`,
@@ -1288,7 +1298,9 @@ describe('TasksService', () => {
         resetAfterComplete: true,
       });
 
-      prisma.task.findUnique.mockResolvedValue(row({ teamId: 'tm_0000000001' }));
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001' }),
+      );
       const def = await service.findOne('t_0000000001');
       expect(def.resetAfterComplete).toBe(false);
     });
@@ -2334,12 +2346,12 @@ describe('TasksService', () => {
       await expect(service.block('t_0000000001', userId, '')).rejects.toThrow(
         BadRequestException,
       );
-      await expect(service.block('t_0000000001', userId, '   ')).rejects.toThrow(
+      await expect(
+        service.block('t_0000000001', userId, '   '),
+      ).rejects.toThrow(BadRequestException);
+      await expect(service.block('t_0000000001', userId)).rejects.toThrow(
         BadRequestException,
       );
-      await expect(
-        service.block('t_0000000001', userId),
-      ).rejects.toThrow(BadRequestException);
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
@@ -3778,9 +3790,7 @@ describe('TasksService', () => {
       await service.updateTeam(
         't_0000000001',
         {
-          addInstances: [
-            { agentId: 'a_developer', roleId: 'r_developer' },
-          ],
+          addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }],
         },
         userId,
       );

@@ -1,0 +1,26 @@
+cd server && npx eslint src/tasks/plan-steps.service.spec.ts src/tasks/tasks.service.ts src/tasks/tasks.service.spec.ts src/tasks/plan-archive.service.spec.ts
+
+fix 后复验（无 --fix）输出：0 errors，仅 3 条预存 unused-vars warning（tasks.service.spec.ts:18/320/493，非本次引入）：
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/tasks.service.spec.ts
+   18:10  warning  'sanitizeWorkDirName' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  320:9   warning  'mockCreateTx' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  493:11  warning  'sCounter' is assigned a value but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+
+✖ 3 problems (0 errors, 3 warnings)
+
+eslint-exit=0
+
+=== git diff --stat（4 文件） ===
+ server/src/tasks/plan-archive.service.spec.ts |  9 ++-
+ server/src/tasks/plan-steps.service.spec.ts   | 54 +++++++++-------
+ server/src/tasks/tasks.service.spec.ts        | 90 +++++++++++++++------------
+ server/src/tasks/tasks.service.ts             | 41 ++++++------
+ 4 files changed, 110 insertions(+), 84 deletions(-)
+
+=== git diff -w --stat（忽略空白后仍有行数，主因 prettier 重排换行 + 一处 ?? 加澄清括号，无逻辑变更；tsc+jester 全绿佐证） ===
+ server/src/tasks/plan-archive.service.spec.ts |  9 +++---
+ server/src/tasks/plan-steps.service.spec.ts   | 38 +++++++++++++++--------
+ server/src/tasks/tasks.service.spec.ts        | 44 ++++++++++++++++-----------
+ server/src/tasks/tasks.service.ts             | 19 +++++++-----
+ 4 files changed, 68 insertions(+), 42 deletions(-)

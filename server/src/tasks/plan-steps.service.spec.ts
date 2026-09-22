@@ -158,7 +158,9 @@ describe('PlanStepsService', () => {
       workerId: 'w_1',
       instanceRef: 'ses_1',
     });
-    workerClient.listTodos.mockResolvedValue([{ content: '本任务步骤', status: 'pending' }]);
+    workerClient.listTodos.mockResolvedValue([
+      { content: '本任务步骤', status: 'pending' },
+    ]);
 
     const out = await service.listPlanSteps('t_1');
 
@@ -196,33 +198,43 @@ describe('PlanStepsService', () => {
       capabilities: {},
     });
     workerClient.listTodos.mockImplementation((_w: unknown, ref: string) => {
-      if (ref === 'ses_t1') return Promise.resolve([{ content: 't1 步骤', status: 'pending' }]);
-      if (ref === 'ses_t2') return Promise.resolve([{ content: 't2 步骤', status: 'pending' }]);
+      if (ref === 'ses_t1')
+        return Promise.resolve([{ content: 't1 步骤', status: 'pending' }]);
+      if (ref === 'ses_t2')
+        return Promise.resolve([{ content: 't2 步骤', status: 'pending' }]);
       return Promise.resolve([]);
     });
 
     prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
-    prisma.session.findFirst.mockImplementation((args: {
-      where: { OR: Array<{ taskId: string | null }> };
-    }) => {
-      const ids = args.where.OR.map((c) => c.taskId);
-      if (ids.includes('t_1')) {
-        return Promise.resolve({ taskId: 't_1', workerId: 'w_1', instanceRef: 'ses_t1' });
-      }
-      return Promise.resolve(null);
-    });
+    prisma.session.findFirst.mockImplementation(
+      (args: { where: { OR: Array<{ taskId: string | null }> } }) => {
+        const ids = args.where.OR.map((c) => c.taskId);
+        if (ids.includes('t_1')) {
+          return Promise.resolve({
+            taskId: 't_1',
+            workerId: 'w_1',
+            instanceRef: 'ses_t1',
+          });
+        }
+        return Promise.resolve(null);
+      },
+    );
     const out1 = await service.listPlanSteps('t_1');
 
     prisma.task.findUnique.mockResolvedValue({ id: 't_2', teamId: 'tm_1' });
-    prisma.session.findFirst.mockImplementation((args: {
-      where: { OR: Array<{ taskId: string | null }> };
-    }) => {
-      const ids = args.where.OR.map((c) => c.taskId);
-      if (ids.includes('t_2')) {
-        return Promise.resolve({ taskId: 't_2', workerId: 'w_1', instanceRef: 'ses_t2' });
-      }
-      return Promise.resolve(null);
-    });
+    prisma.session.findFirst.mockImplementation(
+      (args: { where: { OR: Array<{ taskId: string | null }> } }) => {
+        const ids = args.where.OR.map((c) => c.taskId);
+        if (ids.includes('t_2')) {
+          return Promise.resolve({
+            taskId: 't_2',
+            workerId: 'w_1',
+            instanceRef: 'ses_t2',
+          });
+        }
+        return Promise.resolve(null);
+      },
+    );
     const out2 = await service.listPlanSteps('t_2');
 
     expect(out1).toEqual({

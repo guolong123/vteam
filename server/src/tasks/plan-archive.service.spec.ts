@@ -90,10 +90,7 @@ describe('PlanArchiveService', () => {
     // 定位/列表与读路径共用同一套入口
     expect(planDocs.taskDirectory).toHaveBeenCalledWith(taskId);
     expect(planDocs.locateWorkerForTask).toHaveBeenCalledWith(taskId);
-    expect(workerClient.listPlanFiles).toHaveBeenCalledWith(
-      worker,
-      directory,
-    );
+    expect(workerClient.listPlanFiles).toHaveBeenCalledWith(worker, directory);
   });
 
   it('happy-truncated：truncated 文件经 fetchFile 取原文后归档', async () => {
@@ -144,7 +141,9 @@ describe('PlanArchiveService', () => {
       planFile({ name: 'b.md', content: '# b' }),
     ]);
     artifactsService.archiveFile
-      .mockRejectedValueOnce(new Error('产出物「a.md」当前版本已验收锁定，不可追加'))
+      .mockRejectedValueOnce(
+        new Error('产出物「a.md」当前版本已验收锁定，不可追加'),
+      )
       .mockResolvedValueOnce({
         artifactId: 'art_0000000002',
         version: 1,

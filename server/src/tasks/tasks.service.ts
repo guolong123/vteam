@@ -188,11 +188,13 @@ export class TasksService implements OnModuleInit {
     // 看门狗停滞回调：连续静默达上限 → 系统置阻塞 + 群公告（actor=system）。
     // progression 为本类已注入依赖，无循环引用；spec mock 缺该方法时可选调用。
     try {
-      (this.progression as unknown as {
-        onStallDetected?: (
-          cb: (taskId: string, reason: string) => void,
-        ) => void;
-      })?.onStallDetected?.((taskId, reason) => {
+      (
+        this.progression as unknown as {
+          onStallDetected?: (
+            cb: (taskId: string, reason: string) => void,
+          ) => void;
+        }
+      )?.onStallDetected?.((taskId, reason) => {
         void this.systemBlock(taskId, reason).catch((err: unknown) =>
           this.logger.error(
             `停滞自动置阻塞失败 taskId=${taskId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1254,11 +1256,13 @@ export class TasksService implements OnModuleInit {
       userId,
       this.transitionOpts(id, 'mark-pending-review'),
     );
-    void this.planArchive?.scanAndArchivePlanDocs(id).catch((err: unknown) =>
-      this.logger.warn(
-        `计划自动归档触发失败 task=${id}（状态已落库，不影响）: ${err instanceof Error ? err.message : String(err)}`,
-      ),
-    );
+    void this.planArchive
+      ?.scanAndArchivePlanDocs(id)
+      .catch((err: unknown) =>
+        this.logger.warn(
+          `计划自动归档触发失败 task=${id}（状态已落库，不影响）: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
     return result;
   }
 
@@ -1278,11 +1282,13 @@ export class TasksService implements OnModuleInit {
         opts ? { ...opts, forcedBy: userId } : undefined,
       ),
     );
-    void this.planArchive?.scanAndArchivePlanDocs(id).catch((err: unknown) =>
-      this.logger.warn(
-        `计划自动归档触发失败 task=${id}（状态已落库，不影响）: ${err instanceof Error ? err.message : String(err)}`,
-      ),
-    );
+    void this.planArchive
+      ?.scanAndArchivePlanDocs(id)
+      .catch((err: unknown) =>
+        this.logger.warn(
+          `计划自动归档触发失败 task=${id}（状态已落库，不影响）: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
     return result;
   }
 
@@ -1954,7 +1960,7 @@ export class TasksService implements OnModuleInit {
     externalBound = false,
   ): string {
     const base = sanitizeWorkDirName(
-      externalBound && role ? role.name : agent.name ?? agent.id ?? 'agent',
+      externalBound && role ? role.name : (agent.name ?? agent.id ?? 'agent'),
     );
     return seq > 1
       ? `/data/vteam-worker/${base}-${seq}`
@@ -1985,8 +1991,7 @@ export class TasksService implements OnModuleInit {
   }> {
     const explicitAgentId = input.agentId?.trim() || null;
     const roleId = input.roleId?.trim() || null;
-    const explicitOpencodeAgentName =
-      input.opencodeAgentName?.trim() || null;
+    const explicitOpencodeAgentName = input.opencodeAgentName?.trim() || null;
 
     // 规则 4（Q5）：成员必须绑定岗位——缺 roleId 一律拒绝，不提供无岗位兼容路径。
     if (!roleId) {
