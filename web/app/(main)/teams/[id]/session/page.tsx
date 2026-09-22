@@ -205,6 +205,17 @@ export default function TeamSessionPage() {
     refetchInterval: 30_000,
   });
   /**
+   * 计划类产出物查询（计划 Tab 内容聚合区第二来源）：category=计划
+   * （Phase 3 自动归档落地，服务端 category 过滤已支持）。
+   * 与本地计划文件合并为统一列表，按更新时间倒序。
+   */
+  const planArtifactsQuery = useQuery({
+    queryKey: ["task", currentTaskId, "plan-artifacts"],
+    queryFn: () => api.get<ArtifactsResponse>(`/tasks/${currentTaskId}/artifacts`, { query: { category: "计划", pageSize: 50 } }),
+    enabled: !!currentTaskId,
+    refetchInterval: 30_000,
+  });
+  /**
    * 计划文档查询（计划 Tab 上半区）：读任务目录 `.opencode/plans/*.md` 的实时内容。
    *
    * 数据源是文件本身（agent 写的 / 用户上传的），vteam 不落库、不维护版本——正文随
@@ -1264,6 +1275,7 @@ export default function TeamSessionPage() {
             task={currentTask}
             taskId={currentTask?.id ?? ""}
             artifactsQuery={artifactsQuery}
+            planArtifactsQuery={planArtifactsQuery}
             planDocsQuery={planDocsQuery}
             planStepsQuery={planStepsQuery}
             issuesQuery={issuesQuery}

@@ -993,8 +993,18 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
   );
 }
 
-function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
-  team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; agents: any[];
+/** 计划类产出物列表项（服务端 toArtifactListItem 含 category/updatedAt；web 共享类型暂未收敛，此处局部扩展）。 */
+export interface PlanArtifactItem extends ArtifactItem {
+  category?: string | null;
+}
+
+/** 计划文档卡统一行：本地文件 | 计划类产出物（按更新时间倒序合并渲染）。 */
+export type PlanContentRow =
+  | { kind: "file"; key: string; updatedAt: string; file: PlanDocContent }
+  | { kind: "artifact"; key: string; updatedAt: string; artifact: PlanArtifactItem };
+
+function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
+  team: any; task: any; taskId: string; artifactsQuery: any; planArtifactsQuery?: any; issuesQuery: any; agents: any[];
   onEditTaskInfo: () => void; onOpenArtifacts: () => void; onOpenIssues: () => void;
   onOpenIssueDetail?: (issueId: string) => void; onOpenArtifactDoc?: (artifact: ArtifactItem) => void;
   /** 上传计划文件（写进任务目录 .opencode/plans/）；缺省则不显示上传入口。 */
@@ -1014,7 +1024,26 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
   const planFiles: PlanDocContent[] = planDocsQuery?.data?.files ?? [];
   const planDocsDegraded: boolean = planDocsQuery?.data?.degraded ?? false;
   const planDocsPending: boolean = !!planDocsQuery?.isPending;
-  const planDocTotal = planFiles.length;
+  /** 计划类产出物（category=计划，由会话页 planArtifactsQuery 提供，30s 轮询）。 */
+  const planArtifactItems: PlanArtifactItem[] = planArtifactsQuery?.data?.items ?? [];
+  const planArtifactsPending: boolean = !!planArtifactsQuery?.isPending;
+  /**
+   * 计划文档卡统一列表 = 本地计划文件 + 计划类产出物，按更新时间倒序。
+   * 文件用 files[].updatedAt，产出物用 items[].updatedAt；非法时间沉底。
+   */
+  const planContentRows: PlanContentRow[] = [
+    ...planFiles.map((f): PlanContentRow => ({ kind: "file", key: `file:${f.name}`, updatedAt: f.updatedAt, file: f })),
+    ...planArtifactItems.map((a): PlanContentRow => ({ kind: "artifact", key: `artifact:${a.id}`, updatedAt: a.updatedAt, artifact: a })),
+  ].sort((x, y) => {
+    const tx = new Date(x.updatedAt).getTime();
+    const ty = new Date(y.updatedAt).getTime();
+    if (Number.isFinite(tx) && Number.isFinite(ty)) return ty - tx;
+    if (Number.isFinite(ty)) return 1;
+    if (Number.isFinite(tx)) return -1;
+    return 0;
+  });
+  const planContentPending: boolean = planDocsPending || planArtifactsPending;
+  const planDocTotal = planContentRows.length;
   /** 执行步骤（opencode todo 只读透传；degraded 时 steps 为空并提示不可用）。 */
   const planSteps: PlanStepItem[] = planStepsQuery?.data?.steps ?? [];
   const planStepsDegraded: boolean = planStepsQuery?.data?.degraded ?? false;
@@ -1108,35 +1137,74 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
                   </button>
                 </span>
               </div>
-              {planDocsPending ? (
+              {planContentPending ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
-              ) : planDocsDegraded && planFiles.length === 0 ? (
+              ) : planDocsDegraded && planContentRows.length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂不可用（主 Agent 会话未建立或 worker 离线）</div>
-              ) : planFiles.length === 0 ? (
+              ) : planContentRows.length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>
-                  暂无计划文件（可上传）
+                  暂无计划内容
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                  {planFiles.map((f) => (
-                    <button
-                      key={f.name}
-                      type="button"
-                      data-testid={`plan-doc-row-${f.name}`}
-                      title="点击查看全文"
-                      onClick={() => setPlanDoc(f)}
-                      style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}
-                    >
-                      <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#0D9488", flexShrink: 0 }} />
-                      <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{f.name}</span>
-                        <span style={{ fontSize: 10, color: neutral[400] }}>
-                          {planDocUpdatedLabel(f.updatedAt)}{f.truncated ? " · 已截断" : ""}
+                  {planContentRows.map((row) => {
+                    if (row.kind === "artifact") {
+                      const a = row.artifact;
+                      const body = (
+                        <>
+                          <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#2563EB", flexShrink: 0 }} />
+                          <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                            <span style={{ display: "flex", alignItems: "center", gap: space.xs, minWidth: 0 }}>
+                              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{a.title ?? a.id}</span>
+                              <span style={{ fontSize: 10, color: "#1D4ED8", backgroundColor: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.22)", padding: "0 5px", borderRadius: radius.pill, fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>产出物 · v{a.currentVersion}</span>
+                            </span>
+                            <span style={{ fontSize: 10, color: neutral[400] }}>
+                              {planDocUpdatedLabel(a.updatedAt)}{a.acceptedFlag ? " · 已验收" : ""}
+                            </span>
+                          </span>
+                          {onOpenArtifactDoc && <span aria-hidden style={{ color: neutral[300], fontSize: fontSize.xs, flexShrink: 0 }}>›</span>}
+                        </>
+                      );
+                      const rowStyle = { display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box" as const, fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" };
+                      return onOpenArtifactDoc ? (
+                        <button
+                          key={row.key}
+                          type="button"
+                          data-testid={`plan-artifact-row-${a.id}`}
+                          title="在文档站中查看"
+                          onClick={() => onOpenArtifactDoc(a)}
+                          style={{ ...rowStyle, cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}
+                        >
+                          {body}
+                        </button>
+                      ) : (
+                        <div key={row.key} data-testid={`plan-artifact-row-${a.id}`} style={rowStyle}>{body}</div>
+                      );
+                    }
+                    const f = row.file;
+                    return (
+                      <button
+                        key={row.key}
+                        type="button"
+                        data-testid={`plan-doc-row-${f.name}`}
+                        title="点击查看全文"
+                        onClick={() => setPlanDoc(f)}
+                        style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}
+                      >
+                        <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#0D9488", flexShrink: 0 }} />
+                        <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                          <span style={{ display: "flex", alignItems: "center", gap: space.xs, minWidth: 0 }}>
+                            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{f.name}</span>
+                            <span style={{ fontSize: 10, color: "#0D9488", backgroundColor: "rgba(13,148,136,0.08)", border: "1px solid rgba(13,148,136,0.22)", padding: "0 5px", borderRadius: radius.pill, fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>本地文件</span>
+                          </span>
+                          <span style={{ fontSize: 10, color: neutral[400] }}>
+                            {planDocUpdatedLabel(f.updatedAt)}{f.truncated ? " · 已截断" : ""}
+                          </span>
                         </span>
-                      </span>
-                      <span aria-hidden style={{ color: neutral[300], fontSize: fontSize.xs, flexShrink: 0 }}>›</span>
-                    </button>
-                  ))}
+                        <span aria-hidden style={{ color: neutral[300], fontSize: fontSize.xs, flexShrink: 0 }}>›</span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1280,8 +1348,8 @@ function planDocUpdatedLabel(iso: string): string {
 /* ------------------------------------------------------------------ */
 /* 主组件：团队 / 任务 双 Tab                                           */
 /* ------------------------------------------------------------------ */
-export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onToggleManagedMode, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
-  team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; agents: any[];
+export function TaskRightTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onToggleManagedMode, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
+  team: any; task: any; taskId: string; artifactsQuery: any; planArtifactsQuery?: any; issuesQuery: any; agents: any[];
   onEditTaskInfo: () => void; onOpenArtifacts: () => void; onOpenIssues: () => void;
   onToggleManagedMode: (v: boolean) => void;
   onOpenIssueDetail?: (issueId: string) => void; onOpenArtifactDoc?: (artifact: ArtifactItem) => void;
@@ -1312,7 +1380,7 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
         {activeMainTab === "task" && hasTask && (
           <TaskSubTabs
             team={team} task={task} taskId={taskId}
-            artifactsQuery={artifactsQuery} issuesQuery={issuesQuery}
+            artifactsQuery={artifactsQuery} planArtifactsQuery={planArtifactsQuery} issuesQuery={issuesQuery}
             agents={agents} onEditTaskInfo={onEditTaskInfo} onOpenArtifacts={onOpenArtifacts}
             onOpenIssues={onOpenIssues}
             onOpenIssueDetail={onOpenIssueDetail} onOpenArtifactDoc={onOpenArtifactDoc}
