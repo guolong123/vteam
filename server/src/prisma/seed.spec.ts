@@ -48,7 +48,9 @@ import {
   VTEAM_MCP_TOOL_NAMES,
 } from '../common/constants/agent.constants';
 import {
+  BUILTIN_ROLE_CAPABILITY_MAPS,
   BUILTIN_AGENT_ROLES,
+  EXTERNAL_AGENT_ROLES,
   EXTERNAL_AGENT_ROLE_CAPABILITIES,
   EXTERNAL_AGENT_ROLE_KEYS,
   EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST,
@@ -1059,10 +1061,12 @@ describe('seed（计划 skills + 评审子句）', () => {
     expect(librarian.alias).toBe('知识管理员-1');
   });
 
-  it('7 个内置 AgentRole upsert：key/name/type=builtin/defaultAgentId/rolePrompt/sortOrder 与 src 常量一致（agent-role-entity T1+T4）', async () => {
+  it('7 个内置 AgentRole upsert：key/name/type=builtin/defaultAgentId/rolePrompt/sortOrder 与 src 常量一致，capabilities=按角色定制矩阵（agent-role-entity T1+T4）', async () => {
     await main();
 
-    const roleCalls = mockPrisma.agentRole.upsert.mock.calls;
+    const roleCalls = mockPrisma.agentRole.upsert.mock.calls.filter(
+      (call) => call[0].where.id !== undefined,
+    );
     expect(roleCalls).toHaveLength(7);
     expect(roleCalls.map((call) => String(call[0].where.id))).toEqual(
       BUILTIN_AGENT_ROLES.map((r) => r.id),
@@ -1070,14 +1074,14 @@ describe('seed（计划 skills + 评审子句）', () => {
     for (const role of BUILTIN_AGENT_ROLES) {
       const call = roleCalls.find((c) => String(c[0].where.id) === role.id);
       expect(call).toBeDefined();
-      const expectedCapabilities = buildFactoryCapabilityMatrix();
+      // capability model：出厂即落按角色定制矩阵（2026-09-22 用户决策「PM 全 27 点
+      // true、其余 6 岗按 ROLE_BOUNDARIES 全组放行派生」，存量库由 migration 000009 覆盖）。
+      const expectedCapabilities = BUILTIN_ROLE_CAPABILITY_MAPS[role.key];
       expect(call?.[0].create).toMatchObject({
         key: role.key,
         name: role.name,
         type: 'builtin',
         defaultAgentId: role.defaultAgentId,
-        // capability model：出厂即落目录出厂默认矩阵（default-allow + 10 敏感点拒绝；
-        // 2026-09-21 用户决策内置角色拉平到出厂默认，替换保守派生）。
         capabilities: expectedCapabilities,
         // todo 4：fresh install 的 role_prompt 正文与 src 单一来源逐字节一致。
         rolePrompt: BUILTIN_ROLE_PROMPTS[role.key],
@@ -1094,7 +1098,7 @@ describe('seed（计划 skills + 评审子句）', () => {
       expect(patches[0]?.[0].data).toEqual({
         defaultAgentId: role.defaultAgentId,
       });
-      // 补齐分支 2：仅对 capabilities 为 NULL 的存量内置行补齐出厂矩阵。
+      // 补齐分支 2：仅对 capabilities 为 NULL 的存量内置行补齐该岗定制矩阵。
       expect(patches[1]?.[0].where).toMatchObject({
         id: role.id,
         capabilities: { equals: Prisma.DbNull },
@@ -1102,6 +1106,42 @@ describe('seed（计划 skills + 评审子句）', () => {
       expect(patches[1]?.[0].data).toEqual({
         capabilities: expectedCapabilities,
       });
+    }
+  });
+
+  it('外部 3 岗预置：按 key create-if-absent（type=custom、外部槽位、8 工具矩阵、sortOrder 8..10、一行式 rolePrompt）', async () => {
+    await main();
+
+    const externalCalls = mockPrisma.agentRole.upsert.mock.calls.filter(
+      (call) => call[0].where.key !== undefined,
+    );
+    expect(externalCalls).toHaveLength(3);
+    expect(externalCalls.map((call) => String(call[0].where.key))).toEqual([
+      ...EXTERNAL_AGENT_ROLE_KEYS,
+    ]);
+    expect(EXTERNAL_AGENT_ROLES.map((r) => r.sortOrder)).toEqual([8, 9, 10]);
+    for (const role of EXTERNAL_AGENT_ROLES) {
+      const call = externalCalls.find((c) => c[0].where.key === role.key);
+      expect(call).toBeDefined();
+      // 幂等策略：update 空对象 = create-if-absent（≙ INSERT ... ON DUPLICATE no-op），
+      // 重跑 seed 不产生重复行、不覆盖运营者对既有行的编辑。
+      expect(Object.keys(call![0].update)).toEqual([]);
+      expect(call![0].create).toMatchObject({
+        id: role.id,
+        key: role.key,
+        name: role.name,
+        type: 'custom',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: role.defaultOpencodeAgentName,
+        capabilities: EXTERNAL_AGENT_ROLE_CAPABILITIES,
+        rolePrompt: role.rolePrompt,
+        sortOrder: role.sortOrder,
+      });
+      // 槽位互斥：外部槽位非空 ⇒ defaultAgentId 必须 null（已在 toMatchObject 断言）。
+      expect(call![0].create.defaultOpencodeAgentName.length).toBeGreaterThan(0);
+      // 一行式岗位定义，风格对齐内置 rolePrompt 的 `# 角色：` 身份行。
+      expect(String(call![0].create.rolePrompt)).toMatch(/^# 角色：/);
+      expect(String(call![0].create.rolePrompt)).not.toContain('\n');
     }
   });
 
@@ -1127,11 +1167,12 @@ describe('seed（计划 skills + 评审子句）', () => {
       key: { in: [...EXTERNAL_AGENT_ROLE_KEYS] },
       capabilities: { equals: Prisma.DbNull },
     });
-    // 8 协作/取证/产出能力点 true，其余 13 项显式 false（default-allow 下不可省）。
+    // 8 协作/取证/产出能力点 true，其余 19 项显式 false（default-allow 下不可省；27 键 = 8 + 19）。
+    expect(Object.keys(EXTERNAL_AGENT_ROLE_CAPABILITIES)).toHaveLength(27);
     expect(Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(Boolean)).toHaveLength(8);
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === false),
-    ).toHaveLength(13);
+    ).toHaveLength(19);
     expect(bind?.[0].data.capabilities['task.create']).toBe(false);
     expect(bind?.[0].data.capabilities['chat.post']).toBe(true);
     expect(EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST).toHaveLength(8);

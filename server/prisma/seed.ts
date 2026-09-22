@@ -99,22 +99,14 @@ const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
   { key: 'doc.read', tools: ['vteam_doclib'], defaultDeny: false },
   { key: 'doc.submit', tools: ['vteam_submit_artifact'], defaultDeny: false },
   { key: 'file.read', tools: ['vteam_read_file'], defaultDeny: false },
-  {
-    key: 'issue.manage',
-    tools: [
-      'vteam_issue_create',
-      'vteam_issue_get',
-      'vteam_issue_list',
-      'vteam_issue_update',
-      'vteam_issue_transition',
-    ],
-    defaultDeny: true,
-  },
-  {
-    key: 'memory.manage',
-    tools: ['vteam_memory_save', 'vteam_memory_search', 'vteam_memory_update'],
-    defaultDeny: false,
-  },
+  { key: 'issue.create', tools: ['vteam_issue_create'], defaultDeny: true },
+  { key: 'issue.get', tools: ['vteam_issue_get'], defaultDeny: true },
+  { key: 'issue.list', tools: ['vteam_issue_list'], defaultDeny: true },
+  { key: 'issue.update', tools: ['vteam_issue_update'], defaultDeny: true },
+  { key: 'issue.transition', tools: ['vteam_issue_transition'], defaultDeny: true },
+  { key: 'memory.save', tools: ['vteam_memory_save'], defaultDeny: false },
+  { key: 'memory.search', tools: ['vteam_memory_search'], defaultDeny: false },
+  { key: 'memory.update', tools: ['vteam_memory_update'], defaultDeny: false },
   { key: 'skill.create', tools: ['vteam_skill_create'], defaultDeny: true },
   { key: 'question.confirm', tools: ['vteam_question_confirm'], defaultDeny: true },
   { key: 'my_profile', tools: ['vteam_my_profile'], defaultDeny: false },
@@ -141,6 +133,23 @@ function capabilityMatrixFromTools(
 function factoryCapabilityMatrix(): Record<string, boolean> {
   return Object.fromEntries(
     PLATFORM_CAPABILITIES.map((c) => [c.key, !c.defaultDeny]),
+  );
+}
+
+/**
+ * 内置岗位能力矩阵（2026-09-22 用户决策「按角色针对性开放」；与 src
+ * `agent-role.constants.ts` 的 `BUILTIN_ROLE_CAPABILITY_MAPS` 同口径——seed.spec
+ * 逐岗断言落库值与该常量相等，改 src 表/边界必须同步此处，否则单测红）。
+ * 规则：project_manager 显式全 27 点 true（所有 vteam 权限开放，不按边界派生）；
+ * 其余 6 岗 = ROLE_BOUNDARIES toolAllows 全组放行才 true（capabilityMatrixFromTools，
+ * 只收窄不放大；issue/memory 各点拆分后均单工具，逐工具判定不塌缩）。
+ */
+function builtinRoleCapabilityMap(roleKey: string): Record<string, boolean> {
+  if (roleKey === 'project_manager') {
+    return Object.fromEntries(PLATFORM_CAPABILITIES.map((c) => [c.key, true]));
+  }
+  return capabilityMatrixFromTools(
+    ROLE_BOUNDARIES[`vteam-${roleKey}` as VteamAgentName].toolAllows,
   );
 }
 
@@ -627,11 +636,51 @@ const BUILTIN_AGENT_ROLES: readonly {
  * （自包含镜像，理由见文件头）。外部 Agent 不得创建任务/加成员/流转任务/创建技能/
  * 确认提问/驱动外发通道，只放行协作、取证与产出所需 8 个 `vteam_*` 工具（其余 deny）。
  */
-const EXTERNAL_AGENT_ROLE_KEYS: readonly string[] = [
-  'sisyphus',
-  'prometheus',
-  'atlas',
+/**
+ * 外部引擎岗位行（与 `src/common/constants/agent-role.constants.ts` 的
+ * EXTERNAL_AGENT_ROLES 逐字节一致，自包含镜像，理由见文件头）。2026-09-22 起 seed
+ * 预置到全新库（此前 fresh 不存在外部岗）：type=custom、外部槽位
+ * `defaultOpencodeAgentName`（与 defaultAgentId 互斥）、sortOrder 紧随内置 1..7。
+ */
+const EXTERNAL_AGENT_ROLES: readonly {
+  id: string;
+  key: string;
+  name: string;
+  defaultOpencodeAgentName: string;
+  sortOrder: number;
+  rolePrompt: string;
+}[] = [
+  {
+    id: 'ar_sisyphus',
+    key: 'sisyphus',
+    name: 'Sisyphus',
+    defaultOpencodeAgentName: 'Sisyphus - ultraworker',
+    sortOrder: 8,
+    rolePrompt:
+      '# 角色：Sisyphus——外部引擎执行者（Sisyphus - ultraworker）：受团队分工执行具体任务，只协作、取证与提交产出，不创建任务、不治理团队。',
+  },
+  {
+    id: 'ar_prometheus',
+    key: 'prometheus',
+    name: 'Prometheus',
+    defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+    sortOrder: 9,
+    rolePrompt:
+      '# 角色：Prometheus——外部计划构建者（Prometheus - Plan Builder）：受派起草与修订实施计划，不执行变更、不治理团队。',
+  },
+  {
+    id: 'ar_atlas',
+    key: 'atlas',
+    name: 'Atlas',
+    defaultOpencodeAgentName: 'Atlas - Plan Executor',
+    sortOrder: 10,
+    rolePrompt:
+      '# 角色：Atlas——外部计划执行者（Atlas - Plan Executor）：受派按计划执行任务并回执进展，不制定计划、不治理团队。',
+  },
 ];
+const EXTERNAL_AGENT_ROLE_KEYS: readonly string[] = EXTERNAL_AGENT_ROLES.map(
+  (r) => r.key,
+);
 const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
   'vteam_group_post',
   'vteam_chat_history',
@@ -1069,11 +1118,12 @@ async function main() {
   // 20260919000008_populate_builtin_role_prompts 的 UPDATE 补齐（review fix O7）——此处刻意
   // 不做 role_prompt 的 updateMany 回填，避免重跑 seed 覆盖用户编辑过的岗位说明。
   for (const role of BUILTIN_AGENT_ROLES) {
-    // 出厂能力矩阵 = 目录出厂默认（default-allow + 10 个 defaultDeny 敏感点预置拒绝）。
-    // 2026-09-21 用户决策「内置角色拉平到出厂默认」：替换此前按 ROLE_BOUNDARIES.toolAllows
-    // 的保守派生（migration 000006 口径）；存量库由 migration 20260921000007 覆盖拉平。
-    // 外部 3 岗仍走下方最小矩阵（capabilityMatrixFromTools），不受影响。
-    const capabilities = factoryCapabilityMatrix();
+    // 按角色定制能力矩阵（2026-09-22 用户决策「PM 全开、其余按角色针对性开放」）：
+    // PM 显式全 27 点 true，其余 6 岗按 ROLE_BOUNDARIES toolAllows 全组放行派生
+    // （builtinRoleCapabilityMap，同 src BUILTIN_ROLE_CAPABILITY_MAPS）；存量库由
+    // migration 20260921000009 覆盖为同一矩阵。外部 3 岗走下方最小矩阵，ar_general
+    // 走出厂兜底，均不在本循环内。
+    const capabilities = builtinRoleCapabilityMap(role.key);
     await prisma.agentRole.upsert({
       where: { id: role.id },
       update: {},
@@ -1092,10 +1142,33 @@ async function main() {
       where: { id: role.id, defaultAgentId: null },
       data: { defaultAgentId: role.defaultAgentId },
     });
-    // 出厂能力矩阵补齐：仅填 NULL，不覆盖管理员已改的矩阵。
+    // 定制矩阵补齐：仅填 NULL，不覆盖管理员已改的矩阵。
     await prisma.agentRole.updateMany({
       where: { id: role.id, capabilities: { equals: Prisma.DbNull } },
       data: { capabilities },
+    });
+  }
+
+  // 外部引擎岗位（sisyphus/prometheus/atlas）预置：fresh install 落行（2026-09-22 决策
+  // 「内置为 seed」——此前全新库不存在外部岗）。幂等策略 = 按唯一键 key 的
+  // create-if-absent upsert（update 空对象 ≙ INSERT ... ON DUPLICATE KEY UPDATE no-op）：
+  // 重跑不产生重复行，也绝不覆盖运营者对既有行的后续编辑（名称/排序/外部槽位/rolePrompt/
+  // 矩阵一概不动）；仅 capabilities 仍为 NULL 的存量行由随后的 updateMany 补 8 工具矩阵。
+  for (const role of EXTERNAL_AGENT_ROLES) {
+    await prisma.agentRole.upsert({
+      where: { key: role.key },
+      update: {},
+      create: {
+        id: role.id,
+        key: role.key,
+        name: role.name,
+        type: 'custom',
+        defaultAgentId: null,
+        defaultOpencodeAgentName: role.defaultOpencodeAgentName,
+        capabilities: EXTERNAL_AGENT_ROLE_CAPABILITIES,
+        rolePrompt: role.rolePrompt,
+        sortOrder: role.sortOrder,
+      },
     });
   }
 

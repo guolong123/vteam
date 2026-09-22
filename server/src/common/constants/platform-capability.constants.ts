@@ -6,7 +6,8 @@
  *   默认可调用（`tools/list` 全量）。
  * - 服务端只做**调用时**授权：把一次 `tools/call` 的**裸工具名**映射到一个**业务能力点**，
  *   再看岗位（`AgentRole.capabilities`）是否显式拒绝该能力点。能力点是**业务语义**命名
- *   （如 `task.create`），不是 MCP 工具名，一个能力点可覆盖多个工具（如 `issue.manage`）。
+ *   （如 `task.create`），不是 MCP 工具名；能力点可覆盖多个工具，但 2026-09-22 拆分组
+ *   能力点后仅 `hook.manage` 覆盖 2 个工具，其余均为单工具点（权限粒度精确到动作）。
  *
  * 语义（pinned contract，slice 6b 依此编码）：
  * - `AgentRole.capabilities` 形状为 `Record<string, boolean>`，键即本目录的 `key`。
@@ -34,7 +35,7 @@ export interface PlatformCapability {
   readonly defaultDeny: boolean;
 }
 
-/** 有序能力点目录（顺序即 UI 展示序；21 项覆盖 28 个 `vteam_*` 工具）。 */
+/** 有序能力点目录（顺序即 UI 展示序；27 项覆盖 28 个 `vteam_*` 工具——恰一项 `hook.manage` 覆盖 2 工具）。 */
 export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
   { key: 'task.create', label: '创建任务', tools: ['vteam_task_create'], defaultDeny: true },
   { key: 'task.transition', label: '流转任务状态', tools: ['vteam_task_transition'], defaultDeny: true },
@@ -50,24 +51,18 @@ export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
   { key: 'doc.read', label: '读取产出物', tools: ['vteam_doclib'], defaultDeny: false },
   { key: 'doc.submit', label: '提交产出物', tools: ['vteam_submit_artifact'], defaultDeny: false },
   { key: 'file.read', label: '读取文件', tools: ['vteam_read_file'], defaultDeny: false },
-  {
-    key: 'issue.manage',
-    label: '需求缺陷管理',
-    tools: [
-      'vteam_issue_create',
-      'vteam_issue_get',
-      'vteam_issue_list',
-      'vteam_issue_update',
-      'vteam_issue_transition',
-    ],
-    defaultDeny: true,
-  },
-  {
-    key: 'memory.manage',
-    label: '团队记忆',
-    tools: ['vteam_memory_save', 'vteam_memory_search', 'vteam_memory_update'],
-    defaultDeny: false,
-  },
+  // 需求缺陷 5 点（2026-09-22 拆分原组能力点 issue.manage，消除组塌缩：岗位只放行组内
+  // 部分工具时不再丢失已放行的点）。
+  { key: 'issue.create', label: '创建需求/缺陷', tools: ['vteam_issue_create'], defaultDeny: true },
+  { key: 'issue.get', label: '查看需求缺陷', tools: ['vteam_issue_get'], defaultDeny: true },
+  { key: 'issue.list', label: '需求缺陷列表', tools: ['vteam_issue_list'], defaultDeny: true },
+  { key: 'issue.update', label: '更新需求缺陷', tools: ['vteam_issue_update'], defaultDeny: true },
+  { key: 'issue.transition', label: '流转需求缺陷', tools: ['vteam_issue_transition'], defaultDeny: true },
+  // 团队记忆 3 点（同批拆分原组能力点 memory.manage：plan/librarian 只放行检索，
+  // 拆分后重获 memory.search，写入/更新点仍按各自 toolAllows 判定）。
+  { key: 'memory.save', label: '写入团队记忆', tools: ['vteam_memory_save'], defaultDeny: false },
+  { key: 'memory.search', label: '检索团队记忆', tools: ['vteam_memory_search'], defaultDeny: false },
+  { key: 'memory.update', label: '更新团队记忆', tools: ['vteam_memory_update'], defaultDeny: false },
   { key: 'skill.create', label: '沉淀技能', tools: ['vteam_skill_create'], defaultDeny: true },
   { key: 'question.confirm', label: '确认问答', tools: ['vteam_question_confirm'], defaultDeny: true },
   { key: 'my_profile', label: '查询自身', tools: ['vteam_my_profile'], defaultDeny: false },
@@ -123,10 +118,14 @@ export function buildFactoryCapabilityMatrix(): Record<string, boolean> {
 /**
  * 由「工具生效集合」（`Record<vteam_* , 'allow'|'ask'|'deny'|...>`）推导能力点矩阵。
  *
- * 判据为**全部成员工具均放行**才授予该能力点（保守方向）：能力点是二元开关，而一个能力点
- * 可覆盖多个工具；只有全组放行才能在不**放大**授权的前提下映射。成员工具部分放行时该能力点
- * 记为 `false`（`issue.manage` 对 architect/tester、`memory.manage` 对 plan/librarian 即此类），
- * 宁可少授也不越权（`AgentRole` 迁移/seed 的「不得因默认翻转而获得新权限」要求）。
+ * 判据为**全部成员工具均放行**才授予该能力点（保守方向，只收窄不放大授权）：能力点是二元
+ * 开关，一个能力点可覆盖多个工具；只有全组放行才能在不**放大**授权的前提下映射，成员工具
+ * 部分放行时该能力点记 `false`（宁可少授也不越权——`AgentRole` 迁移/seed 的「不得因默认
+ * 翻转而获得新权限」要求）。
+ *
+ * 2026-09-22 拆分组能力点后目录仅 `hook.manage` 覆盖 2 工具，issue/memory 各点均单工具
+ * ⇒ 本规则对单工具点退化为「该工具放行即授予」，不再产生组塌缩（原 issue.manage 对
+ * architect/tester、memory.manage 对 plan/librarian 的塌缩格由拆分消除）。
  */
 export function buildCapabilityMatrixFromTools(
   tools: Readonly<Record<string, unknown>> | null | undefined,

@@ -902,8 +902,8 @@ describe('WorkerDispatcher', () => {
           role: {
             id: 'ar_demo',
             key: 'demo-role',
-            // 显式拒绝 memory.manage/doc.submit → 两段都屏蔽（与 role='plan' 无关，纯能力点判定）
-            capabilities: { 'memory.manage': false, 'doc.submit': false },
+            // 显式拒绝 memory.save/doc.submit → 两段都屏蔽（与 role='plan' 无关，纯能力点判定）
+            capabilities: { 'memory.save': false, 'doc.submit': false },
             rolePrompt: null,
           },
         }),
@@ -959,8 +959,8 @@ describe('WorkerDispatcher', () => {
           role: {
             id: 'ar_demo',
             key: 'demo-role',
-            // 显式允许 memory.manage/doc.submit → 两段照常注入（即使 agent 的 role='plan'）。
-            capabilities: { 'memory.manage': true, 'doc.submit': true },
+            // 显式允许 memory.save/doc.submit → 两段照常注入（即使 agent 的 role='plan'）。
+            capabilities: { 'memory.save': true, 'doc.submit': true },
             rolePrompt: null,
           },
         }),
@@ -1078,7 +1078,7 @@ describe('WorkerDispatcher', () => {
           role: {
             id: 'ar_demo',
             key: 'demo-role',
-            capabilities: { 'memory.manage': true, 'doc.submit': true },
+            capabilities: { 'memory.save': true, 'doc.submit': true },
             rolePrompt: null,
           },
         }),

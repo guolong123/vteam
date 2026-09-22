@@ -78,7 +78,7 @@ export class CreateAgentRoleDto {
 
   @ApiPropertyOptional({
     description:
-      '业务能力点矩阵（键 ∈ 能力目录如 task.create/issue.manage，值 boolean；false=拒绝，缺失键=允许）。' +
+      '业务能力点矩阵（键 ∈ 能力目录如 task.create/issue.create，值 boolean；false=拒绝，缺失键=允许）。' +
       '缺省 = 出厂矩阵（默认放行 + 敏感能力点预置拒绝）。未知键 / 非 boolean → 400 AGENT_ROLE_CAPABILITY_KEY_INVALID',
     example: { 'task.create': false, 'chat.post': true },
   })

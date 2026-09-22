@@ -130,12 +130,57 @@ export const BUILTIN_AGENT_ROLES: readonly BuiltinAgentRole[] = [
  * 仅放行协作/取证/产出所需的 8 个 `vteam_*` 工具，其余能力点显式 `false`。
  * migration 在存量库按 key 写入本能力矩阵；seed 对已存在的 NULL 行补齐。
  */
-/** 外部岗位 key 清单（存量 live 数据；migration/seed 按 key 写入最小能力矩阵）。 */
-export const EXTERNAL_AGENT_ROLE_KEYS: readonly string[] = [
-  'sisyphus',
-  'prometheus',
-  'atlas',
-] as const;
+/**
+ * 外部引擎岗位行定义（2026-09-22 起由 seed 预置到全新库；存量行 create-if-absent 不覆盖）。
+ *
+ * 展示名 `name` 与历史 live 行一致（成员默认别名 `${role.name}-${seq}`，如 `Sisyphus-1`）；
+ * `defaultOpencodeAgentName` 为 opencode `GET /agent` 的真实 agent 名（含空格/大写，原样保存），
+ * 与 `defaultAgentId` 互斥（外部槽位）；`sortOrder` 紧随内置 1..7（8..10，`ar_general`=100 不冲突）；
+ * `rolePrompt` 一行式，风格对齐 `agent-role-prompts.constants.ts` 的 `# 角色：` 身份行。
+ */
+export interface ExternalAgentRole {
+  id: string;
+  key: string;
+  name: string;
+  defaultOpencodeAgentName: string;
+  sortOrder: number;
+  rolePrompt: string;
+}
+
+/** 外部引擎岗位 3 行（sisyphus / prometheus / atlas）。 */
+export const EXTERNAL_AGENT_ROLES: readonly ExternalAgentRole[] = [
+  {
+    id: 'ar_sisyphus',
+    key: 'sisyphus',
+    name: 'Sisyphus',
+    defaultOpencodeAgentName: 'Sisyphus - ultraworker',
+    sortOrder: 8,
+    rolePrompt:
+      '# 角色：Sisyphus——外部引擎执行者（Sisyphus - ultraworker）：受团队分工执行具体任务，只协作、取证与提交产出，不创建任务、不治理团队。',
+  },
+  {
+    id: 'ar_prometheus',
+    key: 'prometheus',
+    name: 'Prometheus',
+    defaultOpencodeAgentName: 'Prometheus - Plan Builder',
+    sortOrder: 9,
+    rolePrompt:
+      '# 角色：Prometheus——外部计划构建者（Prometheus - Plan Builder）：受派起草与修订实施计划，不执行变更、不治理团队。',
+  },
+  {
+    id: 'ar_atlas',
+    key: 'atlas',
+    name: 'Atlas',
+    defaultOpencodeAgentName: 'Atlas - Plan Executor',
+    sortOrder: 10,
+    rolePrompt:
+      '# 角色：Atlas——外部计划执行者（Atlas - Plan Executor）：受派按计划执行任务并回执进展，不制定计划、不治理团队。',
+  },
+];
+
+/** 外部岗位 key 清单（由 EXTERNAL_AGENT_ROLES 派生；migration/seed 按 key 写入最小能力矩阵）。 */
+export const EXTERNAL_AGENT_ROLE_KEYS: readonly string[] =
+  EXTERNAL_AGENT_ROLES.map((r) => r.key);
 
 /** 外部岗位允许的 `vteam_*` 工具全集（其余 deny）。 */
 export const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
@@ -181,6 +226,237 @@ export const EXTERNAL_SYSTEM_AGENT_NAME = '外部执行' as const;
 /** key → 内置角色行（供 seed 成员绑定 `roleId` 使用）。 */
 export const BUILTIN_AGENT_ROLE_BY_KEY: Record<string, BuiltinAgentRole> =
   Object.fromEntries(BUILTIN_AGENT_ROLES.map((r) => [r.key, r]));
+
+/**
+ * 7 个内置岗位的**业务能力点矩阵**（27 键全量，键序 = 目录序；2026-09-22 用户决策
+ * 「项目经理默认所有 vteam 权限开放，其他角色按角色需要针对性开放」；同日拆分组能力点
+ * `issue.manage`/`memory.manage` 消除组塌缩后重生成）——写库的**单一事实来源**：
+ * - migration `20260921000009_split_grouped_capabilities` 携带的整列 JSON 字面量由
+ *   `src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts` 逐键断言与本常量相等
+ *   （SQL↔TS 防漂移，同 000007/000008 契约形状）；
+ * - seed（`prisma/seed.ts` 自包含镜像、不 import src，见其文件头）按**同一派生规则**计算，
+ *   `src/prisma/seed.spec.ts` 逐岗断言落库值与本常量相等。
+ *
+ * 派生规则（只收窄、绝不放大授权；表为显式字面量便于 review，规则由契约 spec 锁定）：
+ * - `project_manager`：**显式覆盖为全 27 点 true**（用户决策「所有 vteam 权限开放」，
+ *   不按 ROLE_BOUNDARIES 派生——其 `toolAllows` 未含 `vteam_submit_artifact` /
+ *   `vteam_git_repos_list` 亦全开；⊆ 断言对 PM 不适用）；
+ * - 其余 6 岗：`ROLE_BOUNDARIES['vteam-<key>'].toolAllows` 经
+ *   `buildCapabilityMatrixFromTools`——能力点 = 其**全部**成员工具均放行才 `true`
+ *   （拆分后 issue/memory 各点均单工具，该规则退化为逐工具判定，不再产生组塌缩；
+ *   仍覆盖多工具的仅 `hook.manage`，全组放行才 true）。
+ *
+ * 不在本表（有意设计）：外部 3 岗保持 `EXTERNAL_AGENT_ROLE_CAPABILITIES`（8 工具最小矩阵）；
+ * `ar_general` 保持出厂矩阵（`buildFactoryCapabilityMatrix()`）。
+ */
+export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
+  string,
+  Record<string, boolean>
+> = {
+  product: {
+    'task.create': true,
+    'task.transition': true,
+    'task.complete': false,
+    'task.context': true,
+    'team.view': true,
+    'team.add_member': true,
+    'chat.post': true,
+    'chat.read': true,
+    'chat.notify': true,
+    'chat.channel_send': true,
+    'wecom.reply': true,
+    'doc.read': true,
+    'doc.submit': true,
+    'file.read': true,
+    'issue.create': true,
+    'issue.get': true,
+    'issue.list': true,
+    'issue.update': true,
+    'issue.transition': true,
+    'memory.save': true,
+    'memory.search': true,
+    'memory.update': true,
+    'skill.create': false,
+    'question.confirm': true,
+    my_profile: true,
+    'hook.manage': true,
+    'git.repos': false,
+  },
+  project_manager: {
+    'task.create': true,
+    'task.transition': true,
+    'task.complete': true,
+    'task.context': true,
+    'team.view': true,
+    'team.add_member': true,
+    'chat.post': true,
+    'chat.read': true,
+    'chat.notify': true,
+    'chat.channel_send': true,
+    'wecom.reply': true,
+    'doc.read': true,
+    'doc.submit': true,
+    'file.read': true,
+    'issue.create': true,
+    'issue.get': true,
+    'issue.list': true,
+    'issue.update': true,
+    'issue.transition': true,
+    'memory.save': true,
+    'memory.search': true,
+    'memory.update': true,
+    'skill.create': true,
+    'question.confirm': true,
+    my_profile: true,
+    'hook.manage': true,
+    'git.repos': true,
+  },
+  architect: {
+    'task.create': false,
+    'task.transition': false,
+    'task.complete': false,
+    'task.context': true,
+    'team.view': true,
+    'team.add_member': false,
+    'chat.post': true,
+    'chat.read': true,
+    'chat.notify': true,
+    'chat.channel_send': true,
+    'wecom.reply': true,
+    'doc.read': true,
+    'doc.submit': true,
+    'file.read': true,
+    'issue.create': true,
+    'issue.get': true,
+    'issue.list': true,
+    'issue.update': false,
+    'issue.transition': false,
+    'memory.save': true,
+    'memory.search': true,
+    'memory.update': true,
+    'skill.create': false,
+    'question.confirm': false,
+    my_profile: true,
+    'hook.manage': false,
+    'git.repos': false,
+  },
+  developer: {
+    'task.create': false,
+    'task.transition': false,
+    'task.complete': false,
+    'task.context': true,
+    'team.view': true,
+    'team.add_member': false,
+    'chat.post': true,
+    'chat.read': true,
+    'chat.notify': true,
+    'chat.channel_send': true,
+    'wecom.reply': true,
+    'doc.read': true,
+    'doc.submit': true,
+    'file.read': true,
+    'issue.create': true,
+    'issue.get': true,
+    'issue.list': true,
+    'issue.update': true,
+    'issue.transition': true,
+    'memory.save': true,
+    'memory.search': true,
+    'memory.update': true,
+    'skill.create': false,
+    'question.confirm': false,
+    my_profile: true,
+    'hook.manage': false,
+    'git.repos': false,
+  },
+  tester: {
+    'task.create': false,
+    'task.transition': false,
+    'task.complete': false,
+    'task.context': true,
+    'team.view': true,
+    'team.add_member': false,
+    'chat.post': true,
+    'chat.read': true,
+    'chat.notify': true,
+    'chat.channel_send': true,
+    'wecom.reply': true,
+    'doc.read': true,
+    'doc.submit': true,
+    'file.read': true,
+    'issue.create': true,
+    'issue.get': true,
+    'issue.list': true,
+    'issue.update': false,
+    'issue.transition': true,
+    'memory.save': true,
+    'memory.search': true,
+    'memory.update': true,
+    'skill.create': false,
+    'question.confirm': false,
+    my_profile: true,
+    'hook.manage': false,
+    'git.repos': false,
+  },
+  plan: {
+    'task.create': false,
+    'task.transition': false,
+    'task.complete': true,
+    'task.context': true,
+    'team.view': true,
+    'team.add_member': false,
+    'chat.post': true,
+    'chat.read': true,
+    'chat.notify': true,
+    'chat.channel_send': false,
+    'wecom.reply': true,
+    'doc.read': true,
+    'doc.submit': false,
+    'file.read': true,
+    'issue.create': false,
+    'issue.get': false,
+    'issue.list': false,
+    'issue.update': false,
+    'issue.transition': false,
+    'memory.save': false,
+    'memory.search': true,
+    'memory.update': false,
+    'skill.create': false,
+    'question.confirm': false,
+    my_profile: true,
+    'hook.manage': false,
+    'git.repos': false,
+  },
+  librarian: {
+    'task.create': false,
+    'task.transition': false,
+    'task.complete': false,
+    'task.context': true,
+    'team.view': true,
+    'team.add_member': false,
+    'chat.post': true,
+    'chat.read': true,
+    'chat.notify': false,
+    'chat.channel_send': false,
+    'wecom.reply': false,
+    'doc.read': true,
+    'doc.submit': false,
+    'file.read': true,
+    'issue.create': false,
+    'issue.get': false,
+    'issue.list': false,
+    'issue.update': false,
+    'issue.transition': false,
+    'memory.save': false,
+    'memory.search': true,
+    'memory.update': false,
+    'skill.create': false,
+    'question.confirm': false,
+    my_profile: true,
+    'hook.manage': false,
+    'git.repos': true,
+  },
+};
 
 /**
  * 回填兜底自定义角色（case iii：`Agent.role IS NULL` 的成员）。

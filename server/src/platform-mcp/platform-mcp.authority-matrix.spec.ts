@@ -20,10 +20,10 @@ import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { TasksService } from '../tasks/tasks.service';
 import {
-  buildFactoryCapabilityMatrix,
   capabilityKeyForTool,
   isCapabilityGranted,
 } from '../common/constants/platform-capability.constants';
+import { BUILTIN_ROLE_CAPABILITY_MAPS } from '../common/constants/agent-role.constants';
 import {
   PLATFORM_MCP_ERRORS,
 } from './platform-mcp.constants';
@@ -36,8 +36,9 @@ import { PlatformToolPermissionService } from './platform-tool-permission.servic
  * 三层证据，全部断言**判定值**（allow/deny），不读日志：
  * ① 28 工具 × 7 角色的**服务端工具权限门**矩阵（2026-09-21 capability model：
  *    `PlatformToolPermissionService.assertToolAllowed` 是平台工具唯一闸门）：逐格调用
- *    **真实生产门**，成员 → AgentRole(`capabilities`) → 业务能力点判定；expect 由
- *    目录出厂默认矩阵给出（与 seed/migration 同口径：内置角色拉平到出厂默认）。
+ *    **真实生产门**，成员 → AgentRole(`capabilities`) → 业务能力点判定； expect 由
+ *    岗位矩阵给出（与 seed/migration 同口径：`BUILTIN_ROLE_CAPABILITY_MAPS`，
+ *    2026-09-22 按角色定制——PM 全 27 点 true、其余按 ROLE_BOUNDARIES 全组放行派生）。
  *    负格（未授权）显式保留；空集守卫 + allow/deny 双非空防「空转假绿」。
  *    `git_*`/`browser` 非平台注册工具，无 `tools/call` 面，不进矩阵（见
  *    `CONTRACT-tool-naming-and-identity.md` §5）。
@@ -71,14 +72,19 @@ function memberIdOf(agent: string): string {
   return `tmm_${agent.slice('vteam-'.length)}`;
 }
 
-/** 内置角色出厂能力矩阵（目录出厂默认；2026-09-21 起 seed/migration 同口径拉平）。 */
-function factoryCapabilities(): Record<string, boolean> {
-  return buildFactoryCapabilityMatrix();
+/** 内置角色按岗位能力矩阵（与 seed/migration 同口径：BUILTIN_ROLE_CAPABILITY_MAPS，2026-09-22 按角色定制——PM 全开、其余按 ROLE_BOUNDARIES 派生）。 */
+function builtinCapabilities(agent: string): Record<string, boolean> {
+  const key = agent.slice('vteam-'.length);
+  const map = BUILTIN_ROLE_CAPABILITY_MAPS[key];
+  if (!map) {
+    throw new Error(`内置岗位缺少定制能力矩阵: ${key}`);
+  }
+  return { ...map };
 }
 
 /**
  * 真实生产门：真实 `PlatformToolPermissionService`；prisma 只 stub 成员→AgentRole 行
- * （key/capabilities，内置出厂矩阵），与运行时 `resolveToolCallerId` 供出的形状一致。
+ * （key/capabilities，内置按岗位定制矩阵），与运行时 `resolveToolCallerId` 供出的形状一致。
  * 可选 `overrides` 覆盖某角色的能力矩阵（证明矩阵可变更）。
  */
 function buildRealPermissionGate(
@@ -105,7 +111,7 @@ function buildRealPermissionGate(
             role: {
               id: `ar_${agentKey}`,
               key: agentKey,
-              capabilities: overrides[agent] ?? factoryCapabilities(),
+              capabilities: overrides[agent] ?? builtinCapabilities(agent),
             },
           };
         },
@@ -144,7 +150,7 @@ async function evaluateMatrix(
 ): Promise<MatrixCell[]> {
   const cells: MatrixCell[] = [];
   for (const agent of ROLES) {
-    const matrix = factoryCapabilities();
+    const matrix = builtinCapabilities(agent);
     for (const tool of PLATFORM_TOOLS) {
       const decision = await decideCell(gate, agent, tool);
       const capabilityKey = capabilityKeyForTool(tool);
@@ -360,8 +366,8 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       expect(
         (await decideCell(base.gate, 'vteam-architect', 'vteam_doclib')).action,
       ).toBe('allow');
-      // 只改 product 的 capabilities：doc.read 显式 false（其余保持出厂）。
-      const productCaps = factoryCapabilities();
+      // 只改 product 的 capabilities：doc.read 显式 false（其余保持该岗定制矩阵）。
+      const productCaps = builtinCapabilities('vteam-product');
       const edited = buildRealPermissionGate({
         'vteam-product': { ...productCaps, 'doc.read': false },
       });

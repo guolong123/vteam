@@ -105,22 +105,30 @@ describe('platform tool permission gate (capability model)', () => {
       );
     });
 
-    it('多工具能力点：组内任一工具共享同一判定（issue.manage=false → 5 个 issue 工具全拒）', async () => {
+    it('多工具能力点：组内任一工具共享同一判定（hook.manage=false → 注册与取消唤醒均拒）', async () => {
       const { service } = build({
-        member: memberRow({ capabilities: { 'issue.manage': false } }),
+        member: memberRow({ capabilities: { 'hook.manage': false } }),
       });
-      for (const tool of [
-        'issue_create',
-        'issue_get',
-        'issue_list',
-        'issue_update',
-        'issue_transition',
-      ]) {
+      for (const tool of ['hook_register', 'hook_cancel']) {
         await expectDenied(
           service.assertToolAllowed('tmm_dev', tool),
           `vteam_${tool}`,
         );
       }
+    });
+
+    it('拆分后的单工具点互不影响（issue.create=false 只拒创建，list/get 不受牵连）', async () => {
+      const { service } = build({
+        member: memberRow({ capabilities: { 'issue.create': false } }),
+      });
+      await expectDenied(
+        service.assertToolAllowed('tmm_dev', 'issue_create'),
+        'vteam_issue_create',
+      );
+      await expect(service.assertToolAllowed('tmm_dev', 'issue_list')).resolves
+        .toBeUndefined();
+      await expect(service.assertToolAllowed('tmm_dev', 'issue_get')).resolves
+        .toBeUndefined();
     });
 
     it('未知/已下线工具（映射不到能力点）→ 403（unknown 面 fail-closed）', async () => {

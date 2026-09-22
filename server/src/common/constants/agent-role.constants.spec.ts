@@ -1,8 +1,16 @@
+import { ROLE_BOUNDARIES, type VteamAgentName } from './agent.constants';
+import {
+  buildCapabilityMatrixFromTools,
+  PLATFORM_CAPABILITY_KEYS,
+} from './platform-capability.constants';
 import {
   AGENT_ROLE_ID_PREFIX,
   AGENT_ROLE_TYPES,
   BUILTIN_AGENT_ROLES,
   BUILTIN_AGENT_ROLE_BY_KEY,
+  BUILTIN_ROLE_CAPABILITY_MAPS,
+  EXTERNAL_AGENT_ROLES,
+  EXTERNAL_AGENT_ROLE_KEYS,
   FALLBACK_AGENT_ROLE,
   deriveCustomAgentRoleId,
   deriveCustomAgentRoleKey,
@@ -59,5 +67,67 @@ describe('agent-role.constants（agent_roles 单一事实来源）', () => {
   it('同值恒等（确定性）：重复派生同入参得同 id/key', () => {
     expect(deriveCustomAgentRoleId('analyst')).toBe(deriveCustomAgentRoleId('analyst'));
     expect(deriveCustomAgentRoleKey('analyst')).toBe(deriveCustomAgentRoleKey('analyst'));
+  });
+
+  it('BUILTIN_ROLE_CAPABILITY_MAPS 恰覆盖 7 内置岗 × 27 目录键（键序 = 目录序）', () => {
+    expect(Object.keys(BUILTIN_ROLE_CAPABILITY_MAPS).sort()).toEqual(
+      BUILTIN_AGENT_ROLES.map((r) => r.key).sort(),
+    );
+    for (const role of BUILTIN_AGENT_ROLES) {
+      expect(Object.keys(BUILTIN_ROLE_CAPABILITY_MAPS[role.key])).toEqual([
+        ...PLATFORM_CAPABILITY_KEYS,
+      ]);
+    }
+  });
+
+  it('契约：project_manager = 全 27 点 true（显式覆盖，不按 ROLE_BOUNDARIES 派生）', () => {
+    const pm = BUILTIN_ROLE_CAPABILITY_MAPS.project_manager;
+    expect(Object.keys(pm)).toHaveLength(27);
+    for (const key of PLATFORM_CAPABILITY_KEYS) {
+      expect(`${key}=${pm[key]}`).toBe(`${key}=true`);
+    }
+  });
+
+  it('契约：其余 6 内置岗矩阵 ⊆ ROLE_BOUNDARIES 全组放行派生集（只收窄，绝不超授权）', () => {
+    for (const role of BUILTIN_AGENT_ROLES) {
+      if (role.key === 'project_manager') continue;
+      const map = BUILTIN_ROLE_CAPABILITY_MAPS[role.key];
+      const derived = buildCapabilityMatrixFromTools(
+        ROLE_BOUNDARIES[`vteam-${role.key}` as VteamAgentName].toolAllows,
+      );
+      for (const key of PLATFORM_CAPABILITY_KEYS) {
+        if (map[key] === true) {
+          // true ⇒ 派生集也必须 true（子集方向）。
+          expect(`${role.key}.${key}=${derived[key]}`).toBe(
+            `${role.key}.${key}=true`,
+          );
+        }
+      }
+    }
+  });
+
+  it('外部 3 岗定义：key 清单/外部槽位/sortOrder 紧随内置 1..7/一行式 rolePrompt', () => {
+    expect(EXTERNAL_AGENT_ROLES.map((r) => r.key)).toEqual([
+      'sisyphus',
+      'prometheus',
+      'atlas',
+    ]);
+    expect([...EXTERNAL_AGENT_ROLE_KEYS]).toEqual([
+      'sisyphus',
+      'prometheus',
+      'atlas',
+    ]);
+    expect(EXTERNAL_AGENT_ROLES.map((r) => r.sortOrder)).toEqual([8, 9, 10]);
+    expect(new Set(EXTERNAL_AGENT_ROLES.map((r) => r.id)).size).toBe(3);
+    for (const role of EXTERNAL_AGENT_ROLES) {
+      expect(role.id).toBe(`ar_${role.key}`);
+      expect(role.name.length).toBeGreaterThan(0);
+      expect(role.defaultOpencodeAgentName.length).toBeGreaterThan(0);
+      expect(role.defaultOpencodeAgentName.length).toBeLessThanOrEqual(128);
+      expect(role.sortOrder).toBeGreaterThan(7);
+      expect(role.sortOrder).toBeLessThan(FALLBACK_AGENT_ROLE.sortOrder);
+      expect(role.rolePrompt.startsWith('# 角色：')).toBe(true);
+      expect(role.rolePrompt).not.toContain('\n');
+    }
   });
 });

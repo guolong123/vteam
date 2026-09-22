@@ -91,7 +91,7 @@ tools/call(name, args, ctx.workerId)
   caller → 403 `FORBIDDEN`; `selfInstanceId` mismatch → 403.
 - **Authority is the post (`AgentRole`), not the executor (`Agent`).** The matrix is
   now carried **directly on the role** as `capabilities` — a `Record<string, boolean>`
-  keyed by *business capability* (e.g. `task.create`, `issue.manage`), not by MCP tool
+  keyed by *business capability* (e.g. `task.create`, `issue.create`), not by MCP tool
   name. `Agent.policyId` still feeds the worker injector (`buildAgentPolicies`), the
   engine-native layer-① permission and template resolution — it is **not** the gate's
   authority. Rationale: **authority is the post, not the executor** — changing which
@@ -103,15 +103,18 @@ tools/call(name, args, ctx.workerId)
   allow. A role with `capabilities = null` is equivalent to `{}` ⇒ all allowed.
   The factory set (for roles created without an explicit matrix) pre-denies the
   sensitive points (`task.create`, `task.transition`, `task.complete`,
-  `team.add_member`, `chat.channel_send`, `wecom.reply`, `issue.manage`,
+  `team.add_member`, `chat.channel_send`, `wecom.reply`, `issue.create`,
+  `issue.get`, `issue.list`, `issue.update`, `issue.transition`,
   `skill.create`, `question.confirm`, `hook.manage`).
 - **Capability catalogue is the single source of truth**
-  (`common/constants/platform-capability.constants.ts`): 21 ordered entries, each
+  (`common/constants/platform-capability.constants.ts`): 27 ordered entries, each
   `{ key, label, tools[], defaultDeny }`. Every `VTEAM_MCP_TOOL_NAMES` tool (28)
   belongs to exactly one capability (coverage asserted by
-  `platform-capability.coverage.spec.ts`). A binary capability over a multi-tool
-  group is granted only when **all** member tools are allowed (conservative mapping
-  used by seed/migration).
+  `platform-capability.coverage.spec.ts`); exactly one entry (`hook.manage`) spans
+  2 tools — the former grouped points `issue.manage`/`memory.manage` were split
+  into per-tool points on 2026-09-22 (option (b)) to eliminate group collapse.
+  A binary capability over a multi-tool group is granted only when **all** member
+  tools are allowed (conservative mapping used by seed/migration).
 - `AgentRole.policyId` is **removed** (migration `20260921000006`); the role no longer
   references an `ExecutionPolicy`. `execution_policies` now serves only the
   engine-native layer.

@@ -29,18 +29,30 @@ describe('platform capability catalogue coverage', () => {
     expect(PLATFORM_CAPABILITY_KEYS).toEqual(keys);
   });
 
-  it('目录覆盖 VTEAM_MCP_TOOL_NAMES 全 28 项，且每项恰属一个能力点', () => {
+  it('目录覆盖 VTEAM_MCP_TOOL_NAMES 全 28 项，且每项恰属一个能力点（27 点 ↔ 28 工具）', () => {
+    expect(PLATFORM_CAPABILITIES).toHaveLength(27);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(28);
     const owner = new Map<string, string>();
+    let toolSum = 0;
     for (const capability of PLATFORM_CAPABILITIES) {
+      toolSum += capability.tools.length;
       for (const tool of capability.tools) {
         expect(owner.has(tool)).toBe(false);
         owner.set(tool, capability.key);
       }
     }
+    expect(toolSum).toBe(28);
     expect([...owner.keys()].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
     for (const tool of VTEAM_MCP_TOOL_NAMES) {
       expect(capabilityKeyForTool(tool)).toBe(owner.get(tool));
     }
+    // 拆分组能力点后恰一项仍覆盖多工具：hook.manage（hook_register + hook_cancel）。
+    const multiTool = PLATFORM_CAPABILITIES.filter((c) => c.tools.length > 1);
+    expect(multiTool.map((c) => c.key)).toEqual(['hook.manage']);
+    expect(multiTool[0]?.tools).toHaveLength(2);
+    // 已拆分的组键不再是合法能力点键。
+    expect(isPlatformCapabilityKey('issue.manage')).toBe(false);
+    expect(isPlatformCapabilityKey('memory.manage')).toBe(false);
   });
 
   it('未知工具映射为 null（unknown 面 fail-closed 的依据）', () => {
@@ -63,23 +75,29 @@ describe('platform capability catalogue coverage', () => {
     expect(isCapabilityGranted({ 'task.create': true }, 'task.create')).toBe(true);
   });
 
-  it('全组工具放行才授予能力点（保守映射，不放大授权）', () => {
-    const issueTools = PLATFORM_CAPABILITIES.find(
-      (c) => c.key === 'issue.manage',
+  it('全组工具放行才授予能力点（保守映射，不放大授权；现存唯一多工具点 hook.manage）', () => {
+    const hookTools = PLATFORM_CAPABILITIES.find(
+      (c) => c.key === 'hook.manage',
     )!.tools;
     const onlyFirst = buildCapabilityMatrixFromTools({
-      [issueTools[0]]: 'allow',
+      [hookTools[0] as string]: 'allow',
     });
-    expect(onlyFirst['issue.manage']).toBe(false);
+    expect(onlyFirst['hook.manage']).toBe(false);
     const all = buildCapabilityMatrixFromTools(
-      Object.fromEntries(issueTools.map((t) => [t, 'allow'])),
+      Object.fromEntries(hookTools.map((t) => [t, 'allow'])),
     );
-    expect(all['issue.manage']).toBe(true);
+    expect(all['hook.manage']).toBe(true);
     // ask 与 allow 同视为放行（与 worker guard 三态语义一致）。
     const asked = buildCapabilityMatrixFromTools(
-      Object.fromEntries(issueTools.map((t) => [t, 'ask'])),
+      Object.fromEntries(hookTools.map((t) => [t, 'ask'])),
     );
-    expect(asked['issue.manage']).toBe(true);
+    expect(asked['hook.manage']).toBe(true);
+    // 拆分后的单工具点退化为逐工具判定：该工具放行即授予，不存在组塌缩。
+    const single = buildCapabilityMatrixFromTools({
+      vteam_issue_create: 'allow',
+    });
+    expect(single['issue.create']).toBe(true);
+    expect(single['issue.get']).toBe(false);
   });
 
   it('能力矩阵 → 工具三态表：缺失键/true ⇒ allow，false ⇒ deny', () => {
@@ -96,7 +114,8 @@ describe('platform capability catalogue coverage', () => {
 
   it('isPlatformCapabilityKey：目录内 true，目录外 false', () => {
     expect(isPlatformCapabilityKey('task.create')).toBe(true);
-    expect(isPlatformCapabilityKey('issue.manage')).toBe(true);
+    expect(isPlatformCapabilityKey('issue.create')).toBe(true);
+    expect(isPlatformCapabilityKey('memory.search')).toBe(true);
     expect(isPlatformCapabilityKey('nope')).toBe(false);
     expect(isPlatformCapabilityKey('task.create.extra')).toBe(false);
   });
