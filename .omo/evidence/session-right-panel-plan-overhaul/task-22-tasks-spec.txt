@@ -1,0 +1,143 @@
+cd server && npx jest --runInBand src/tasks/tasks.service.spec.ts
+PASS src/tasks/tasks.service.spec.ts
+  TasksService
+    create（团队指派 + FIFO 串行，FOR UPDATE+version 双保险）
+      ✓ 空闲团队：创建 pending 任务，currentTaskId 指向新任务，快照成员零会话写，广播双事件 (6 ms)
+      ✓ 团队有主 Agent 时创建任务继承主实例（无设定则保持 null） (1 ms)
+      ✓ 忙时团队：创建 queued 任务，写入 TeamQueue position=MAX+1 FOR UPDATE，currentTaskId 不变 (1 ms)
+      ✓ 并发：version CAS 重试3次，最终仅一个 pending 其余 queued（模拟首试冲突后重试成功） (1 ms)
+      ✓ teamId 缺失 → 400 TEAM_REQUIRED (25 ms)
+      ✓ team 不存在 → 404 TEAM_NOT_FOUND (1 ms)
+      ✓ 非团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER (5 ms)
+      ✓ 团队成员为空 → 400 TASK_EMPTY_TEAM (1 ms)
+      ✓ 标题为空 → 400 (1 ms)
+    plans 兜底建行（todo2 autoEnsureRow 接入创建成功路径）
+      ✓ 创建成功后调用 autoEnsureRow(taskId) 一次 (2 ms)
+      ✓ autoEnsureRow 抛错→创建仍成功（只 warn，不阻断）
+    createByAgent（agent 建任务通道，去 pid，owner 回填 createdBy）
+      ✓ happy：owner 回填 createdBy，事件/broadcast actor 记 agent/调用实例 (1 ms)
+      ✓ teamId 缺失 → 400 TEAM_REQUIRED（不触达成员查询） (1 ms)
+      ✓ 团队无用户成员 → 400 TASK_EMPTY_TEAM (1 ms)
+    findAll（看板列表）
+      ✓ 返回 {items, total, page, pageSize}，items 含 teamAgentIds 与 instances（团队成员组装），created_at desc (1 ms)
+      ✓ 任务侧标签同源：种子成员别名取自 AgentRole.name（迁移前后逐字节），缺映射回退 agent.name (1 ms)
+      ✓ status 筛选透传（TASK_STATUS 五态）
+      ✓ teamId 传入 → 按 teamId 过滤（团队作用域） (1 ms)
+      ✓ pageSize 上限 100
+    findOne（详情）
+      ✓ 返回详情（含 teamAgentIds、instances、backgroundDocs；团队成员组装） (1 ms)
+      ✓ legacy 计划模式开关已下线：任务 DTO 不含计划开关字段 (1 ms)
+      ✓ instances 携带会话状态快照 sessionStatus/sessionId（团队会话行，切页回来不丢工作中）
+      ✓ 详情 DTO 暴露 resetAfterComplete：显式设置与入参一致，未设置缺省 false (1 ms)
+      ✓ 任务不存在 → 404 TASK_NOT_FOUND (1 ms)
+    update（PATCH 编辑）
+      ✓ mainAgentId 为团队内已选 Agent 时更新成功（同步映射到第一个实例）
+      ✓ mainAgentInstanceId 为团队内实例时更新成功（同步 mainAgentId） (1 ms)
+      ✓ mainAgentInstanceId 非团队内实例 → 400 MAIN_AGENT_NOT_IN_TEAM
+      ✓ mainAgentInstanceId 传 null → 清除主 Agent（mainAgentId 同步 null） (1 ms)
+      ✓ mainAgentId 非团队内已选 Agent → 400 MAIN_AGENT_NOT_IN_TEAM
+      ✓ 任务不存在 → 404 TASK_NOT_FOUND (1 ms)
+      ✓ backgroundDocs 更新生效（is_0000000011：PATCH 支持改背景文档，传 [] 清空）
+    五态状态迁移（迁移表驱动 + CAS 乐观锁）
+      ✓ start：pending → in_progress，CAS(where status+version) + version+1 + status_change 事件 + 广播 + 系统消息（群聊+私信主实例） (2 ms)
+      ✓ start：非前置状态（pending_review）→ 409 TASK_INVALID_TRANSITION (1 ms)
+      ✓ start：已处目标态（in_progress）→ 幂等 200，不写事件不广播
+      ✓ start：created 会话全部置 active（T4；where 限定 status=created，frozen 不误动） (1 ms)
+      ✓ start：团队为空 → 400 TASK_EMPTY_TEAM
+      ✓ start：主实例未确定 → 400 MAIN_AGENT_NOT_SET (1 ms)
+      ✓ start：绑定缺省 + 有成员 → 首位回退放行（不再 400 MAIN_AGENT_NOT_SET） (1 ms)
+      ✓ start：团队空闲 + 孤儿 pending → 认领队首后启动（取消排队死锁自愈）
+      ✓ start：团队忙碌且非队首 → 409 TEAM_NOT_QUEUE_HEAD（认领仅限空闲） (1 ms)
+      ✓ start：空闲认领并发冲突 → 409 VERSION_CONFLICT（可重试）
+      ✓ mark-pending-review：in_progress → pending_review，写 pendingReviewAt + 事件 + 广播 + 系统消息「任务已提交待验收」 (1 ms)
+      ✓ mark-pending-review：非前置状态（pending）→ 409 TASK_INVALID_TRANSITION (1 ms)
+      ✓ mark-pending-review：已处目标态（pending_review）→ 幂等 200
+      ✓ accept：pending_review → completed，写 completedAt + accept 事件 + 广播 + 系统消息「任务已验收完成，产出物基线已锁定」 (1 ms)
+      ✓ accept：锁定全部产出物当前版本基线（12 篇 §7，accepted_flag=true） (1 ms)
+      ✓ accept：主实例存在时私信主 Agent 记忆总结引导（senderType=system 落 private 频道 + 事务后广播）
+      ✓ accept：无团队主成员 → 正常完成，不解析 private 频道、不写私信、不报错 (1 ms)
+      ✓ accept：绑定缺省 + 有成员 → 私信回退主成员（解析 fallback 名） (1 ms)
+      ✓ accept：非前置状态（in_progress）→ 409 TASK_INVALID_TRANSITION (1 ms)
+      ✓ accept：已处目标态（completed）→ 幂等 200
+      ✓ reject：pending_review → in_progress，reason 写 metadata + 重置 pendingReviewAt + reject 事件 + 系统消息附驳回原因 (1 ms)
+      ✓ reject：非前置状态（completed）→ 409 TASK_INVALID_TRANSITION
+      ✓ reject：已处目标态（in_progress）→ 幂等 200 (1 ms)
+      ✓ block：in_progress → blocked，reason 必填 + 写 metadata + 系统消息附原因
+      ✓ block：reason 缺失/空白 → 400，不写库 (1 ms)
+      ✓ resume：blocked → in_progress + 系统消息恢复执行 (1 ms)
+      ✓ blocked → accept 非法迁移 → 409（完成永远走验收，阻塞不可直达）
+      ✓ systemBlock：看门狗停滞回调专用，actor=system + 同 block 语义落库 (1 ms)
+      ✓ archive：completed → archived，写 archivedAt + sessions 全部置 archived + archive 事件 + 广播 + 系统消息「任务已归档，历史可回看。任务级记忆已随验收沉淀（未总结不影响归档）」
+      ✓ archive：非前置状态（pending_review）→ 409 TASK_INVALID_TRANSITION (1 ms)
+      ✓ archive：已处目标态（archived）→ 幂等 200
+      ✓ 归档后（archived）任意状态迁移端点 → 409 TASK_INVALID_TRANSITION (1 ms)
+      ✓ CAS 并发：updateMany 影响 0 行 → 重读已处目标态 → 幂等 200，无重复 task_events (1 ms)
+      ✓ CAS 并发：两个并发 start → 一个成功一个重读幂等 200，无重复 task_events；成功方系统消息落库 (1 ms)
+      ✓ transitionByAgent：主实例 start → actor=agent 写入 task_events + TASK_STATUS_CHANGED 广播 + 系统消息照常
+      ✓ transitionByAgent：非主实例不再被身份门拒绝 → 触达状态机（原 403 已移除） (1 ms)
+      ✓ transitionByAgent：绑定缺省 + 首位成员（seq 升序回退）→ 放行
+      ✓ transitionByAgent：绑定缺省 + 非首位成员 → 放行（原回退 403 已移除） (1 ms)
+      ✓ transitionByAgent：空名册不再抛身份门码 TASK_STATUS_MAIN_AGENT_ONLY
+      ✓ transitionByAgent：任务不存在 → 404 TASK_NOT_FOUND (1 ms)
+      ✓ transitionByAgent：reject 的 reason 透传 metadata（actor=agent）
+      ✓ transitionByAgent：mark-pending-review 主实例成功（各 action 复用 transitionOpts） (1 ms)
+    完工门禁（agent 禁止 accept/archive + 用户预检 + force 审计）
+      ✓ transitionByAgent + accept → 403 TASK_AGENT_COMPLETION_FORBIDDEN（任务不变、无事件） (1 ms)
+      ✓ transitionByAgent + archive → 403 TASK_AGENT_COMPLETION_FORBIDDEN（任务不变、无事件）
+      ✓ transitionByAgent：start/mark-pending-review/reject 主实例仍放行（完工门禁回归） (1 ms)
+      ✓ 用户 accept：存在 open issue → 409 预检失败并点名 issue（任务不变）
+      ✓ 用户 accept：计划 executing → 409 预检失败并给出计划状态 (1 ms)
+      ✓ 用户 accept：计划 draft → 409 预检失败（非 completed 皆 blocker）
+      ✓ 用户 accept：计划 pending_final → 409 预检失败
+      ✓ 用户 accept：计划读取失败 → warn-and-continue（计划不构成 blocker） (1 ms)
+      ✓ 用户 accept：计划 completed + 终态 issues → 成功且 metadata 无强制标记
+      ✓ 用户 accept + force：未完成项仍成功，事件 metadata 记录强制审计 (1 ms)
+      ✓ 用户 accept + force：不绕过 from→to 合法性（错态仍 409 非法迁移）
+      ✓ 用户 archive：存在 open issue → 409 预检失败（任务不变） (1 ms)
+      ✓ 用户 archive + force：成功且事件 metadata 记录强制审计 (5 ms)
+      ✓ 用户 archive：全部完结 → 成功且 metadata 无强制标记 (1 ms)
+    updateTeam（团队调整，14 篇 §5.3 FR-02）
+      ✓ add 实例：写 team_members 零会话写 + 系统消息「{别名} 已加入团队」+ 广播 team.changed(add 含 instanceId/alias) (1 ms)
+      ✓ add 同 agent 第二个实例：seq = 已用最大 seq + 1（并发防重号） (1 ms)
+      ✓ add 实例：任务 in_progress 时亦零会话写（T4 衔接：会话归团队侧）
+      ✓ remove：按成员 id 删除成员行 + 会话冻结 frozen + 系统消息「{别名} 已移出团队，其会话已冻结」+ 广播 remove (1 ms)
+      ✓ remove 主成员 → 团队主成员清空（任务侧主标量同步 null） (1 ms)
+      ✓ remove 不在团队/已移除 → 幂等 200：无事务、无广播
+      ✓ 空请求（add/remove 皆无）→ 幂等返回当前任务 (1 ms)
+      ✓ 时间窗外（pending_review/completed/archived）→ 409 TASK_TEAM_NOT_ALLOWED
+      ✓ add 目标 Agent 不存在 → 404 AGENT_NOT_FOUND（事务回滚） (1 ms)
+      ✓ roleId-only：从角色默认 Agent/外部名预填 agentId + opencodeAgentName（规则 2+5）
+      ✓ 显式 agentId 恒胜出：不被角色默认 Agent 覆盖，但外部槽位仍预填（规则 1+5） (2 ms)
+      ✓ 显式 opencodeAgentName 恒胜出：覆盖角色默认外部名（规则 5）
+      ✓ 缺 roleId → 400 MEMBER_ROLE_REQUIRED（Q5；仅给 agentId 同样拒绝） (1 ms)
+      ✓ roleId 悬空（角色不存在）→ 404 ROLE_NOT_FOUND，不再静默保留（规则 2 前置） (1 ms)
+      ✓ roleId-only 外部绑定角色 → agentId = 平台占位系统 Agent（不再要求另选执行 Agent）
+      ✓ roleId-only 但角色两槽位皆空 → 400 ROLE_DEFAULT_AGENT_MISSING（规则 3） (1 ms)
+      ✓ 任务不存在 → 404 TASK_NOT_FOUND
+      ✓ add 实例：写 team_add task_event 审计（actorType/actorId=user/userId） (1 ms)
+      ✓ 确认门增员（opts actor/confirmedBy）→ 系统消息标注「经主 Agent 申请、<确认方> 确认」+ team_add 审计 actor=agent/主实例
+    T12 会话实例查询（Todo10：委托团队键查询）
+      ✓ getInstancesByTeamMember 委托返回成员全部实例 (1 ms)
+      ✓ getInstanceBySession 委托返回会话绑定实例（未绑定 → null）
+    queued 状态机扩展 queued 与自动拉起（promoteNext，含锁）
+      ✓ accept：事务内 FOR UPDATE 锁 team 行 promoteNext，队首 queued→pending，队列删除队首重排，广播 TEAM_QUEUE_CHANGED (1 ms)
+      ✓ archive：队列空则 currentTaskId=null，广播 idle (1 ms)
+      ✓ start：非队首 409 TEAM_NOT_QUEUE_HEAD（pending 但非 currentTaskId） (1 ms)
+      ✓ start：queued 非队首 409 TEAM_NOT_QUEUE_HEAD
+      ✓ start：队首 pending 可 start 成功 (1 ms)
+    会话记忆开关 reuseSession + resetAfterComplete（Todo7）
+      ✓ reuse=true 且未勾选 → accept 不重置会话，instanceRef 保留
+      ✓ reuse=false 或 resetAfterComplete=true → accept 事务内批量 reset + 系统消息分隔
+      ✓ archive 带 reset 同样触发批量 reset (1 ms)
+      ✓ reject 同样走 promoteNext：事务内闲置则 currentTaskId=null 广播 idle
+    补充覆盖：并发 version 冲突重试边界与 onModuleInit/空队首
+      ✓ 并发三试均 VERSION_CONFLICT → 抛最后一次错误 (1 ms)
+      ✓ onModuleInit 按最大 id 对齐 6 前缀 seed（任务实例快照表已删除，不再 seed ta_；pl_ 由 PlanLifecycleService 续号） (1 ms)
+      ✓ promoteNext 独立事务入口：队首晋升与 idle 双分支
+      ✓ create：MAX(position) NaN 不 finite → 回落 0，仍 queued position=1 (1 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       121 passed, 121 total
+Snapshots:   0 total
+Time:        2.271 s, estimated 3 s
+Ran all test suites matching /src\/tasks\/tasks.service.spec.ts/i.

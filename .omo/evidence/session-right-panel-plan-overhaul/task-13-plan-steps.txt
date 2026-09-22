@@ -1,0 +1,21 @@
+cd server && npx jest --runInBand src/tasks/plan-steps.service.spec.ts
+PASS src/tasks/plan-steps.service.spec.ts
+  PlanStepsService
+    ✓ 成功：定位主成员会话 → listTodos 透传 worker capabilities + ses id (4 ms)
+    ✓ 空 todo（agent 还没用 todo 工具）→ degraded=false + steps=[]（正常情况） (2 ms)
+    ✓ 任务无团队 → degraded（不抛错）
+    ✓ 团队无主 Agent → degraded (1 ms)
+    ✓ 主成员无会话（workerId/instanceRef 缺失）→ degraded
+    ✓ worker 离线（offline）→ degraded，不下发调用 (1 ms)
+    ✓ degraded 状态 worker 仍可下发（仅 offline 阻断，调度降权≠不可达）
+    ✓ DB 异常 → degraded（不冒泡到 HTTP 层） (1 ms)
+    ✓ 会话绑定本任务（taskId 一致）→ 正常取数
+    ✓ 同 team 两任务会话隔离：定位到别的任务绑定的会话 → degraded，不串数据
+    ✓ 各取各的：t_1 查到 t_1 会话走通，t_2 查到 t_2 会话走通 (1 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       11 passed, 11 total
+Snapshots:   0 total
+Time:        1.496 s, estimated 2 s
+Ran all test suites matching /src\/tasks\/plan-steps.service.spec.ts/i.
+EXIT:0

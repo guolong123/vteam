@@ -1,0 +1,16 @@
+CMD: cd server && npx jest --runInBand src/artifacts src/tasks/plan-docs.service.spec.ts src/tasks/plan-steps.service.spec.ts src/tasks/tasks.service.spec.ts src/tasks/plan-archive.service.spec.ts src/platform-mcp/plan-removal.guard.spec.ts
+PASS src/tasks/plan-docs.service.spec.ts
+PASS src/artifacts/artifacts.controller.spec.ts
+PASS src/artifacts/artifact-slug.spec.ts
+PASS src/tasks/tasks.service.spec.ts
+PASS src/tasks/plan-steps.service.spec.ts
+PASS src/platform-mcp/plan-removal.guard.spec.ts
+PASS src/artifacts/artifacts.service.spec.ts
+PASS src/tasks/plan-archive.service.spec.ts
+
+Test Suites: 8 passed, 8 total
+Tests:       257 passed, 257 total
+Snapshots:   0 total
+Time:        3.767 s, estimated 6 s
+Ran all test suites matching /src\/artifacts|src\/tasks\/plan-docs.service.spec.ts|src\/tasks\/plan-steps.service.spec.ts|src\/tasks\/tasks.service.spec.ts|src\/tasks\/plan-archive.service.spec.ts|src\/platform-mcp\/plan-removal.guard.spec.ts/i.
+EXIT=0

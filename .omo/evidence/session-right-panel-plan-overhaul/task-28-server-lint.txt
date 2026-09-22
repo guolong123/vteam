@@ -1,0 +1,161 @@
+CMD: npm run lint --prefix server
+
+> server@0.0.1 lint
+> eslint "{src,apps,libs,test}/**/*.ts" --fix
+
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/agent-roles.service.ts
+  6:3  warning  'Logger' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.controller.spec.ts
+  202:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  203:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  216:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  217:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.service.ts
+  349:15  warning  'updated' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/chat.service.spec.ts
+  2223:13  warning  'result' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.plan-hash.spec.ts
+  7:10  warning  'PlanLifecycleService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.spec.ts
+  10:10  warning  'ArtifactsService' is defined but never used. Allowed unused vars must match /^_/u         @typescript-eslint/no-unused-vars
+  22:10  warning  'SessionLifecycleService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  24:3   warning  'WorkerClient' is defined but never used. Allowed unused vars must match /^_/u             @typescript-eslint/no-unused-vars
+  27:10  warning  'WorkerEventIngress' is defined but never used. Allowed unused vars must match /^_/u       @typescript-eslint/no-unused-vars
+  28:10  warning  'WorkersService' is defined but never used. Allowed unused vars must match /^_/u           @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/docs-site.controller.spec.ts
+  3:10  warning  'PrismaService' is defined but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+  4:10  warning  'PrototypesService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/prototypes.service.spec.ts
+   47:9   warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  147:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  295:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.controller.spec.ts
+  40:9  warning  'REQUIRED_BASH_DENY' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.custom-agents.spec.ts
+  6:3  warning  'ROLE_POLICY_DENY_TEMPLATE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.matrix.spec.ts
+  7:3  warning  'ROLE_BASH_DENY_PATTERNS' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-credentials.service.ts
+  121:5  warning  'userId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-repos.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  4:3  warning  'NotFoundException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/dto/query-issues.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/issues.service.spec.ts
+  893:19  warning  'action' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/mcp-servers/mcp-servers.service.spec.ts
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/message-channels/adapters/wecom-aibot.adapter.ts
+  325:11  warning  'maybeAny' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/models/dto/set-model-credential.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/notifications/notification-channels.controller.ts
+  408:14  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.controller.spec.ts
+  166:31  warning  'args' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.gate.spec.ts
+  3:3  warning  'EVENT_TYPES' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  5:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+  4:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.spec.ts
+  126:7  warning  'plansService' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  134:9  warning  'allowPolicy' is assigned a value but never used. Allowed unused vars must match /^_/u   @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.ts
+  65:3  warning  'containsTeamWideMention' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.tools.ts
+  39:7  warning  'REQUIRE_TASK_OR_TEAM_MSG' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts
+  1530:16  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  1531:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/questions/questions.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/bind-message-channels.dto.ts
+  5:3  warning  'IsNotEmpty' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+  6:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  7:3  warning  'IsOptional' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/update-team.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/task-progression.scheduler.ts
+  8:3  warning  'forwardRef' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/tasks.service.spec.ts
+   18:10  warning  'sanitizeWorkDirName' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  320:9   warning  'mockCreateTx' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  493:11  warning  'sCounter' is assigned a value but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/dto/bind-team-channels.dto.ts
+  2:29  warning  'IsOptional' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/dto/create-team.dto.ts
+  4:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.spec.ts
+  616:13  warning  'callArgs' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.ts
+  109:11  warning  'team' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook-failure.listener.spec.ts
+  2:10  warning  'Prisma' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook.service.ts
+  1278:7  warning  'TRIGGER_ID_PREFIX_VALUE' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/dto/worker-dto.spec.ts
+  251:15  warning  'capabilities' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  256:15  warning  'load' is assigned a value but never used. Allowed unused vars must match /^_/u          @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-event.ingress.ts
+   18:3  warning  'extractConclusionParts' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  136:6  warning  'ActivityCallback' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  986:5  warning  'taskId' is defined but never used. Allowed unused args must match /^_/u                  @typescript-eslint/no-unused-vars
+  987:5  warning  'agentId' is defined but never used. Allowed unused args must match /^_/u                 @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-or-jwt.guard.ts
+  10:10  warning  'Request' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-token.guard.spec.ts
+  2:10  warning  'ConfigService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker.client.ts
+  231:5  warning  'model' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/workers.service.spec.ts
+  902:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 66 problems (0 errors, 66 warnings)
+
+EXIT=0

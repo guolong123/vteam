@@ -1,0 +1,3 @@
+grep -n "reuseMutation.mutate" web/src/components/teams/TeamRightPanel.tsx
+354:                  onClick={() => reuseMutation.mutate(!reuseSession)}
+355:                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); reuseMutation.mutate(!reuseSession); } }}
