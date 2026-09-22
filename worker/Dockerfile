@@ -40,18 +40,31 @@ RUN npm i -g "${OPENCODE_CLI_SPEC}" agent-browser bun && \
 # 安装器把插件注册进 $HOME/.config/opencode/opencode.json；真正的 opencode 运行时
 # 工作目录是 /data/vteam-worker，其 opencode.json 由 worker 注入器维护（含本插件条目）。
 ARG OMO_INSTALL_SPEC=oh-my-openagent@latest
-RUN bunx "${OMO_INSTALL_SPEC}" install --no-tui --platform=opencode --skip-auth \
-      --claude=no --openai=no --gemini=no --copilot=no --opencode-zen=no \
-      --zai-coding-plan=no --opencode-go=no --kimi-for-coding=no \
-      --bailian-coding-plan=no --minimax-cn-coding-plan=no --minimax-coding-plan=no \
-      --vercel-ai-gateway=no 2>&1 | tail -20 && \
-    test -f /root/.config/opencode/opencode.json && \
-    echo "omo plugin registered by installer:" && cat /root/.config/opencode/opencode.json && \
+# 交叉构建兜底：amd64 在 arm64 宿主经 qemu 模拟时 Bun 会 abort（qemu 已知限制），
+# 此时直接落盘与安装器等价的插件注册（opencode.json/tui.json 内容一致，运行期由
+# opencode 自行从 npm 解析该插件，与架构无关）。
+RUN set -e; \
+    if bunx "${OMO_INSTALL_SPEC}" install --no-tui --platform=opencode --skip-auth \
+         --claude=no --openai=no --gemini=no --copilot=no --opencode-zen=no \
+         --zai-coding-plan=no --opencode-go=no --kimi-for-coding=no \
+         --bailian-coding-plan=no --minimax-cn-coding-plan=no --minimax-coding-plan=no \
+         --vercel-ai-gateway=no > /tmp/omo-install.log 2>&1; then \
+      echo "omo installed via bunx installer"; tail -20 /tmp/omo-install.log; \
+    else \
+      echo "bunx installer failed (emulated build?) -> writing plugin registration directly"; \
+      mkdir -p /root/.config/opencode; \
+      printf '{\n  "plugin": [\n    "%s"\n  ]\n}\n' "${OMO_INSTALL_SPEC}" \
+        | tee /root/.config/opencode/opencode.json > /root/.config/opencode/tui.json; \
+    fi; \
+    test -f /root/.config/opencode/opencode.json; \
+    echo "omo plugin registered:"; cat /root/.config/opencode/opencode.json; \
+    OMO_VER="$(npm view "${OMO_INSTALL_SPEC}" version 2>/dev/null || true)"; \
+    if [ -z "${OMO_VER}" ]; then OMO_VER="$(bunx "${OMO_INSTALL_SPEC}" --version 2>/dev/null | tail -1 || true)"; fi; \
+    [ -n "${OMO_VER}" ] || OMO_VER=unknown; \
     # 能力标记：运行期据此判断"本镜像是否内置 OmO"，决定是否展示/允许开启开关。
     # 写在镜像里（不是数据卷）——没有内置 OmO 的镜像就不会有这个文件。
-    OMO_VER="$(bunx "${OMO_INSTALL_SPEC}" --version 2>/dev/null | tail -1 || echo unknown)" && \
     printf '{"bundled":true,"spec":"%s","version":"%s"}' "${OMO_INSTALL_SPEC}" "${OMO_VER}" \
-      > /opt/omo-bundled.json && \
+      > /opt/omo-bundled.json; \
     echo "omo capability marker: $(cat /opt/omo-bundled.json)"
 
 # 系统依赖：git 工具链 + Agent 常用命令 + Chrome 运行库
