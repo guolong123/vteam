@@ -98,7 +98,12 @@ export function TeamQueueCard({ team, taskId }: { team: TeamDto | null | undefin
             );
           })}
         </div>
-      ) : null}
+      ) : (
+        <div data-testid="queue-empty" style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.sm}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.sm, textAlign: "center", lineHeight: 1.6 }}>
+          暂无排队任务
+          <div style={{ fontSize: 10, marginTop: 2 }}>群聊按团队复用，历史跨任务可见</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -797,7 +802,8 @@ function useTaskTriggers(taskId: string, teamId: string) {
       ? api.get<TriggersResponse>("/triggers", { query: { taskId, page: 1, pageSize: 100 } })
       : api.get<TriggersResponse>("/triggers", { query: { teamId, page: 1, pageSize: 100 } }),
     enabled: !!(taskId || teamId),
-    refetchInterval: 30_000,
+    // 错误态暂停轮询：接口持续报错时不再每 30s 重打刷错误条；用户手动重试或查询重新成功后恢复。
+    refetchInterval: (query) => (query.state.status === "error" ? false : 30_000),
     retry: false,
   });
 }
