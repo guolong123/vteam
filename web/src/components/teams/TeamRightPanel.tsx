@@ -729,7 +729,7 @@ export interface PlanStepItem {
   priority?: string;
 }
 
-type TaskSubTab = "status" | "plan" | "config" | "output" | "triggers";
+type TaskSubTab = "status" | "plan" | "output" | "triggers";
 
 /** 任务优先级中文标签（对齐 tasks/new 与 teams/[id]/tasks 既有映射）。 */
 const TASK_PRIORITY_LABEL: Record<string, string> = {
@@ -1034,12 +1034,8 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
   const triggersQuery = useTaskTriggers(taskId, teamScopeId);
   const pendingTriggers = (triggersQuery.data?.items ?? []).filter((t) => t.status === "pending").length;
   const statusLabel = task ? (task.status === "queued" ? "排队中" : task.status === "pending" ? "待开始" : task.status === "in_progress" ? "进行中" : task.status === "pending_review" ? "待验收" : task.status === "completed" ? "已完成" : "已归档") : "";
-  const configRows = [
-    { label: "标题", value: task?.title },
-    { label: "描述", value: task?.description },
+  const statusMetaRows = [
     { label: "优先级", value: task?.priority ? (TASK_PRIORITY_LABEL[task.priority] ?? task.priority) : null },
-    { label: "状态", value: statusLabel || null },
-    { label: "所属团队", value: team?.name ?? task?.teamId ?? null },
     { label: "创建人", value: task?.createdBy ?? null },
     { label: "创建时间", value: localDateTimeLabel(task?.createdAt) },
   ].filter((r) => r.value);
@@ -1050,7 +1046,6 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
         {([
           { key: "status" as const, label: "状态", badge: waiting > 0 ? String(waiting) : null },
           { key: "plan" as const, label: "计划", badge: planDocTotal ? String(planDocTotal) : null },
-          { key: "config" as const, label: "配置", badge: null },
           { key: "output" as const, label: "产出", badge: artifactsQuery.data?.total ? String(artifactsQuery.data.total) : null },
           { key: "triggers" as const, label: "触发", badge: pendingTriggers > 0 ? String(pendingTriggers) : null },
         ]).map((tab) => (
@@ -1078,22 +1073,18 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
                 </div>
                 <button type="button" onClick={onEditTaskInfo} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>编辑</button>
               </div>
+              {statusMetaRows.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: space.sm, borderTop: `1px dashed ${neutral[200]}`, paddingTop: space.sm, fontSize: 11 }}>
+                  {statusMetaRows.map((r) => (
+                    <div key={r.label} style={{ minWidth: 0 }}>
+                      <div style={{ color: neutral[400] }}>{r.label}</div>
+                      <div style={{ marginTop: 2, color: neutral[700], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.value}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <TeamQueueCard team={team} taskId={taskId} />
-          </div>
-        )}
-        {subTab === "config" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>
-            <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>任务信息</div>
-            <div data-testid="task-config-fields" style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-              {configRows.map((r) => (
-                <div key={r.label} style={{ display: "flex", alignItems: "flex-start", gap: space.sm, fontSize: fontSize.xs }}>
-                  <span style={{ flexShrink: 0, width: 56, color: neutral[400] }}>{r.label}</span>
-                  <span style={{ flex: 1, minWidth: 0, color: neutral[700], whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{r.value}</span>
-                </div>
-              ))}
-            </div>
-            <button type="button" onClick={onEditTaskInfo} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>编辑任务信息</button>
           </div>
         )}
         {subTab === "plan" && (
