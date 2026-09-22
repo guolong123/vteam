@@ -65,7 +65,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       });
       await page.reload();
     }
-    await page.getByTestId("task-card").first().click();
+    await page.getByTestId("task-card").first().getByTestId("status-badge").first().click();
     await expect(page.getByTestId("task-detail-drawer")).toBeVisible();
     // 卡片点击不再跳转 /tasks/:id
     expect(page.url()).toContain("/board");
@@ -100,13 +100,31 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       await expect(page.getByTestId("chat-message-list")).toBeVisible();
       await page.getByTestId("dm-tab-group").click();
     }
-    // 右侧三 Tab（有进行中任务时渲染）
-    if ((await page.getByTestId("right-tab-status").count()) > 0) {
-      await expect(page.getByTestId("right-tab-config")).toBeVisible();
-      await expect(page.getByTestId("right-tab-output")).toBeVisible();
-      await page.getByTestId("right-tab-output").click();
-      await page.getByTestId("right-tab-status").click();
+    // 右栏新结构（Phase 7 改版）：一级 团队/任务 + 任务四子页（默认落任务见下方 T24 站内进入用例）
+    const panel = page.getByTestId("task-panel");
+    await expect(panel.getByRole("button", { name: "团队", exact: true })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "任务", exact: true })).toBeVisible();
+    // 任务 4 子页：状态/计划/产出/触发；「配置」不再出现
+    await panel.getByRole("button", { name: "任务", exact: true }).click();
+    await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
+    await expect(page.getByTestId("team-subtab-scroll")).toHaveCount(0);
+    // 任务 4 子页：状态/计划/产出/触发；「配置」不再出现
+    for (const name of ["状态", "计划", "产出", "触发"]) {
+      await expect(panel.getByRole("button", { name })).toContainText(name);
     }
+    await expect(page.getByTestId("task-subtab-triggers")).toBeVisible();
+    await expect(panel.getByRole("button", { name: "配置", exact: true })).toHaveCount(0);
+    // 团队 2 子页：切团队 Tab → 只有概览/渠道；设置/记忆/操作不再出现
+    await panel.getByRole("button", { name: "团队", exact: true }).click();
+    await expect(page.getByTestId("team-subtab-scroll")).toBeVisible();
+    await expect(panel.getByRole("button", { name: "概览" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "渠道" })).toBeVisible();
+    for (const name of ["设置", "记忆", "操作"]) {
+      await expect(panel.getByRole("button", { name, exact: true })).toHaveCount(0);
+    }
+    // 切回任务 Tab
+    await panel.getByRole("button", { name: "任务", exact: true }).click();
+    await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
   });
 
   test("team-session zero-task 零任务直聊（无选择器）", async ({ page, request }) => {
@@ -118,14 +136,16 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     // 全新零任务团队（创建者即 owner；后端建团队即建 team_group 频道，即完整直聊路径；
     // 不复用种子 tm_0000000002：其建于频道自动创建之前，无频道只会进 team-session-empty）
     let agentId = "a_product";
+    let roleId: string | undefined;
     const seed = await request.get("/api/v1/teams/tm_0000000001", { headers });
     if (seed.ok()) {
-      const members = (((await seed.json()) as { members: { agentId: string }[] }).members ?? []);
+      const members = (((await seed.json()) as { members: { agentId: string; roleId?: string }[] }).members ?? []);
       if (members[0]?.agentId) agentId = members[0].agentId;
+      if (members[0]?.roleId) roleId = members[0].roleId;
     }
     const created = await request.post("/api/v1/teams", {
       headers,
-      data: { name: `e2e-ZeroTask-${Date.now()}`, members: [{ agentId }] },
+      data: { name: `e2e-ZeroTask-${Date.now()}`, members: [{ agentId, ...(roleId ? { roleId } : {}) }] },
     });
     expect(created.ok()).toBeTruthy();
     const teamId = ((await created.json()) as { id: string }).id;
@@ -136,7 +156,9 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("team-session-empty")).toHaveCount(0);
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await expect(page.getByTestId("team-session-current-task")).toHaveCount(0);
-    await expect(page.getByTestId("team-right-empty")).toBeVisible();
+    // 改版后无 team-right-empty 空态：零任务团队右栏仅「团队」主 Tab（无任务 Tab）
+    await expect(page.getByTestId("task-panel").getByRole("button", { name: "任务", exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("team-subtab-scroll")).toBeVisible();
     await expect(page.getByTestId("chat-message-list")).toBeVisible();
     const sent = `e2e-zerotask-${Date.now()}`;
     await page.getByTestId("message-input").fill(sent);
@@ -219,15 +241,19 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expectNavShell(page);
     await expect(page.getByTestId("skills-tools-manage-root")).toBeVisible();
     await expect(page.getByTestId("manage-tabs")).toBeVisible();
-    await expect(page.getByTestId("search-input")).toBeVisible();
+    // 搜索框已随 478f620 技能页重构移除（等效工具条保留）：断言工具条存在
+    await expect(page.getByTestId("manage-toolbar")).toBeVisible();
     // 技能 Tab（初始）：skill-item 存在
     await expect(page.getByTestId("skill-item").first()).toBeVisible();
     // 工具 Tab：tool-subtabs + tool-item（内置）
     await page.getByTestId("manage-tab").filter({ hasText: /工具/ }).click();
     await expect(page.getByTestId("tool-subtabs")).toBeVisible();
     await expect(page.getByTestId("tool-item").first()).toBeVisible();
-    // MCP 子 Tab：mcp-tool-item 存在
+    // MCP 子 Tab：服务器列表 → 选中首个服务器 → 其工具列表（二级视图）
     await page.getByTestId("tool-subtab").filter({ hasText: /MCP|mcp/i }).click();
+    await expect(page.getByTestId("mcp-server-section")).toBeVisible();
+    await expect(page.getByTestId("mcp-server-item").first()).toBeVisible();
+    await page.getByTestId("mcp-server-item").first().click();
     await expect(page.getByTestId("mcp-tool-item").first()).toBeVisible();
   });
 
@@ -370,6 +396,197 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page).toHaveURL(/\/models$/);
     await expectNavShell(page);
     await expect(page.getByTestId("models-manage-root")).toBeVisible();
+  });
+
+  test("T24 有任务主 Tab + 子页状态保留（站内进入会话页）", async ({ page }) => {
+    const panel = page.getByTestId("task-panel");
+    await page.goto("/teams/tm_0000000001");
+    await expectNavShell(page);
+    await page.getByTestId("enter-team-session").first().click();
+    await expect(page).toHaveURL(/\/session/);
+    // 有任务：任务主 Tab 渲染
+    await expect(panel.getByRole("button", { name: "任务", exact: true })).toBeVisible();
+    await panel.getByRole("button", { name: "任务", exact: true }).click();
+    await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
+    // 子页状态保留：切到计划 → 切团队 → 切回任务后仍在计划
+    await panel.getByRole("button", { name: "计划" }).click();
+    await expect(page.getByTestId("plan-status-block")).toBeVisible();
+    await panel.getByRole("button", { name: "团队", exact: true }).click();
+    await expect(page.getByTestId("team-subtab-scroll")).toBeVisible();
+    await panel.getByRole("button", { name: "任务", exact: true }).click();
+    await expect(page.getByTestId("plan-status-block")).toBeVisible();
+    await expect(page.getByTestId("team-subtab-scroll")).toHaveCount(0);
+  });
+
+  test("T24 状态卡三层 + 队列空态（seed 任务 t_0000000001）", async ({ page, request }) => {
+    await page.route("**/api/v1/teams/tm_0000000001", async (r) => {
+      const res = await r.fetch();
+      const json = await res.json();
+      json.queue = [];
+      await r.fulfill({ response: res, json });
+    });
+    await page.goto("/teams/tm_0000000001/session");
+    await expectNavShell(page);
+    const scroll = page.getByTestId("task-subtab-scroll");
+    await page.getByTestId("task-panel").getByRole("button", { name: "任务", exact: true }).click();
+    await expect(scroll).toBeVisible();
+    const login = await request.post("/api/v1/auth/login", {
+      data: { username: "seed-admin", password: "Admin@123456" },
+    });
+    const { accessToken } = await login.json();
+    const taskRes = await request.get("/api/v1/tasks/t_0000000001", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const taskJson = await taskRes.json();
+    const taskTitle = ((taskJson.task ?? taskJson).title ?? "") as string;
+    expect(taskTitle).toBeTruthy();
+    const card = scroll.locator(":scope > div > div").first();
+    // ① 标题独占行
+    await expect(card.getByText(taskTitle).first()).toBeVisible();
+    // ② 状态徽/编辑行
+    await expect(card.getByRole("button", { name: "编辑" })).toBeVisible();
+    // ③ 主操作等宽行（任一状态操作按钮存在即证明操作区渲染）
+    await expect(
+      card.locator(
+        '[data-testid="task-accept"], [data-testid="task-reject"], [data-testid="start-task-button"], [data-testid="task-submit-review"], [data-testid="task-archive"], [data-testid="task-block"], [data-testid="task-resume"], [data-testid="enqueue-task-button"]',
+      ).first(),
+    ).toBeVisible();
+    // 状态卡内不含队列摘要行文案（队列卡是兄弟节点）
+    await expect(card.getByText("暂无排队任务")).toHaveCount(0);
+    await expect(card.getByText("当前执行中（队首）")).toHaveCount(0);
+    // 队列卡兄弟节点存在；种子团队队列为空 → queue-empty 可见
+    await expect(page.getByTestId("team-queue-card")).toBeVisible();
+    await expect(page.getByTestId("queue-empty")).toBeVisible();
+    await expect(page.getByTestId("queue-empty")).toContainText("暂无排队任务");
+  });
+
+  test("T24 触发子页可达（空触发器）", async ({ page }) => {
+    await page.route("**/api/v1/triggers*", (r) =>
+      r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100 }),
+      }),
+    );
+    const panel = page.getByTestId("task-panel");
+    await page.goto("/teams/tm_0000000001/session");
+    await panel.getByRole("button", { name: "任务", exact: true }).click();
+    await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
+    await panel.getByTestId("task-subtab-triggers").click();
+    await expect(page.getByTestId("trigger-empty")).toBeVisible();
+    await expect(page.getByTestId("trigger-empty")).toContainText("暂无触发器");
+  });
+
+  test("T24 计划区两类来源 + 执行步骤行（全 mock）", async ({ page }) => {
+    const now = new Date().toISOString();
+    await page.route("**/api/v1/tasks/*/plan-docs", (r) =>
+      r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          files: [{ name: "e2e-plan-a.md", updatedAt: now, content: "# e2e plan", truncated: false }],
+          workerId: "w1",
+          directory: "/tmp",
+          degraded: false,
+        }),
+      }),
+    );
+    await page.route("**/api/v1/tasks/*/artifacts*", (r) => {
+      const url = r.request().url();
+      const items = url.includes("category")
+        ? [{ id: "a_plan_1", title: "e2e计划产出", type: "text", currentVersion: 3, acceptedFlag: false, updatedAt: now }]
+        : [];
+      return r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ items, total: items.length, page: 1, pageSize: 50 }),
+      });
+    });
+    await page.route("**/api/v1/tasks/*/plan-steps", (r) =>
+      r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          steps: [
+            { content: "e2e步骤一", status: "in_progress" },
+            { content: "e2e步骤二", status: "pending" },
+          ],
+          workerId: "w1",
+          degraded: false,
+        }),
+      }),
+    );
+    const panel = page.getByTestId("task-panel");
+    await page.goto("/teams/tm_0000000001/session");
+    await panel.getByRole("button", { name: "任务", exact: true }).click();
+    await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
+    await panel.getByRole("button", { name: "计划" }).click();
+    await expect(page.getByTestId("plan-status-block")).toBeVisible();
+    // 本地文件来源行 + 来源徽标
+    await expect(page.getByTestId("plan-doc-row-e2e-plan-a.md")).toBeVisible();
+    await expect(page.getByTestId("plan-doc-row-e2e-plan-a.md")).toContainText("本地文件");
+    // 计划类产出物来源行 + 来源徽标（含版本）
+    await expect(page.getByTestId("plan-artifact-row-a_plan_1")).toBeVisible();
+    await expect(page.getByTestId("plan-artifact-row-a_plan_1")).toContainText("产出物 · v3");
+    // 执行步骤行两态
+    await expect(page.locator('[data-testid="plan-step-in_progress"]')).toContainText("e2e步骤一");
+    await expect(page.locator('[data-testid="plan-step-pending"]')).toContainText("e2e步骤二");
+  });
+
+  test("T24 错误态分支（plan-docs-error + artifacts-error）", async ({ page }) => {
+    await page.route("**/api/v1/tasks/*/plan-docs", (r) =>
+      r.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "INTERNAL", message: "e2e计划文档失败" }),
+      }),
+    );
+    await page.route("**/api/v1/tasks/*/artifacts*", (r) =>
+      r.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ code: "INTERNAL", message: "e2e产出物失败" }),
+      }),
+    );
+    const panel = page.getByTestId("task-panel");
+    await page.goto("/teams/tm_0000000001/session");
+    await panel.getByRole("button", { name: "任务", exact: true }).click();
+    await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
+    await panel.getByRole("button", { name: "计划" }).click();
+    await expect(page.getByTestId("plan-docs-error")).toBeVisible({ timeout: 20000 });
+    await panel.getByRole("button", { name: "产出" }).click();
+    await expect(page.getByTestId("artifacts-error")).toBeVisible({ timeout: 20000 });
+  });
+
+  test("T24 产出物列表不截断（mock 7 条全渲染）", async ({ page }) => {
+    const now = new Date().toISOString();
+    const seven = Array.from({ length: 7 }, (_, i) => ({
+      id: `a_out_${i + 1}`,
+      title: `e2e-out-${i + 1}`,
+      type: "text",
+      currentVersion: 1,
+      acceptedFlag: false,
+      updatedAt: now,
+    }));
+    await page.route("**/api/v1/tasks/*/artifacts*", (r) => {
+      const url = r.request().url();
+      const items = url.includes("category") ? [] : seven;
+      return r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ items, total: items.length, page: 1, pageSize: 50 }),
+      });
+    });
+    const panel = page.getByTestId("task-panel");
+    const scroll = page.getByTestId("task-subtab-scroll");
+    await page.goto("/teams/tm_0000000001/session");
+    await panel.getByRole("button", { name: "任务", exact: true }).click();
+    await expect(scroll).toBeVisible();
+    await panel.getByRole("button", { name: "产出" }).click();
+    for (let i = 1; i <= 7; i++) {
+      await expect(scroll.getByText(`e2e-out-${i}`, { exact: true })).toBeVisible();
+    }
+    await expect(scroll.getByText("7 个")).toBeVisible();
   });
 
   test("/system 落地页重定向到第一个子导航（不再空转占位页）", async ({ page }) => {
