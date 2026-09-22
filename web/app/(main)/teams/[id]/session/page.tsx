@@ -200,7 +200,7 @@ export default function TeamSessionPage() {
   /* ---------- 当前任务派生查询（三 Tab 数据源） ---------- */
   const artifactsQuery = useQuery({
     queryKey: ["task", currentTaskId, "artifacts"],
-    queryFn: () => api.get<ArtifactsResponse>(`/tasks/${currentTaskId}/artifacts`, { query: { pageSize: 10 } }),
+    queryFn: () => api.get<ArtifactsResponse>(`/tasks/${currentTaskId}/artifacts`, { query: { pageSize: 50 } }),
     enabled: !!currentTaskId && !!user?.id,
     refetchInterval: 30_000,
   });

@@ -1279,7 +1279,7 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无产出物</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                  {(artifactsQuery.data?.items ?? []).slice(0, 5).map((a: ArtifactItem) => {
+                  {(artifactsQuery.data?.items ?? []).map((a: ArtifactItem) => {
                     const typeTheme = ARTIFACT_TYPE_THEME[a.type] ?? ARTIFACT_TYPE_THEME.file;
                     const row = (
                       <>
@@ -1317,7 +1317,7 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无 Issue</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                  {(issuesQuery.data?.items ?? []).slice(0, 5).map((it: TaskIssueItem) => {
+                  {(issuesQuery.data?.items ?? []).map((it: TaskIssueItem) => {
                     const badge = ISSUE_STATUS_BADGE[it.status] ?? ISSUE_STATUS_BADGE.open;
                     const row = (
                       <>
