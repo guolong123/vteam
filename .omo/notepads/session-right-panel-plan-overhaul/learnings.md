@@ -41,3 +41,15 @@ opencode/AI-SDK 的日志形态是 `message="stream error" error.error="AI_APICa
 ## L8 · 错误类型复用时要检查文案前缀
 `CompletionTimeoutError` 被「真首字超时」与「serve 错误提前失败」两条路径共用，但文案恒带「等待首字超时」→
 把"会话仍在跑"误报成超时，误导排查方向。**多来源共用错误类型时，文案必须按来源分支**。
+
+## L9 · 关键词表要按用途拆分：「收集证据」与「判定致命」口径不同
+误杀复查时发现 `subscribe` 不能从关键词表删——`opencode-server.spec.ts:479` 断言 share-subscriber 行
+**仍须被 `recentErrors()` 收集**（全局尸检证据）。宽表既管收集又管 abort 是设计缺陷。
+**正确做法**：拆两张表——`SERVE_ERROR_KEYWORDS`（宽，收集/证据）与 `SERVE_FATAL_KEYWORDS`（严，abort 判据），
+判据只认具体原因（`AI_APICallError`/`Rate limit`/…），包装与泛化词（`stream error`/`subscribe`）只进证据。
+**改判据前先查 spec 是否依赖旧口径**，否则会破坏既有证据契约。
+
+## L10 · 活性判定不能只数「数量」，要数「内容变化」
+只数 parts 会漏掉工具执行中：tool part 的 `state`（pending→running→completed）/`output`/`time` 会变
+但 part 数不变 → 长工具（> 首字超时）被误判「无输出」而 abort。
+**做法**：用 O(1) 标量投影做「内容指纹」（长度/状态/时间累加），**不要 JSON.stringify**（大 tool 输出会拖垮每轮 poll）。
