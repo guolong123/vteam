@@ -746,7 +746,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       driver.baseUrl = baseUrl;
       return baseUrl;
     },
-    reRegister,
+    // 独立模式无控制面：不注入 reRegister（重启后无需重新注册，避免无谓重试阻塞重启）
+    ...(config.standalone ? {} : { reRegister }),
     logger: {
       info: (message: string) => console.log(`[worker] ${message}`),
       warn: (message: string) => console.warn(`[worker] ${message}`),
