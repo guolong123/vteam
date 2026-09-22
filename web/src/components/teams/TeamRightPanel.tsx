@@ -111,11 +111,13 @@ export function TeamQueueCard({ team, taskId }: { team: TeamDto | null | undefin
 /* ------------------------------------------------------------------ */
 /* 团队记忆卡片                                                         */
 /* ------------------------------------------------------------------ */
-export function TeamMemoryCard({ team, onToggleReuse, pending, error }: {
+export function TeamMemoryCard({ team, onToggleReuse, pending, error, taskResetAfterComplete }: {
   team: TeamDto | null | undefined;
   onToggleReuse?: (next: boolean) => void;
   pending?: boolean;
   error?: string | null;
+  /** 任务级覆盖（resetAfterComplete=true=本任务完成后强制重置，与团队级 reuseSession 语义相反；false/null 不展示）。 */
+  taskResetAfterComplete?: boolean | null;
 }) {
   if (!team) return null;
   const reuse = !!team.reuseSession;
@@ -149,6 +151,11 @@ export function TeamMemoryCard({ team, onToggleReuse, pending, error }: {
           >
             <span aria-hidden style={{ position: "absolute", top: 2, left: reuse ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} />
           </button>
+        </div>
+      )}
+      {taskResetAfterComplete === true && (
+        <div data-testid="task-reset-override" style={{ fontSize: fontSize.xs, color: "#D97706", lineHeight: 1.6, backgroundColor: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.22)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+          <span style={{ fontWeight: 600 }}>任务级：完成后重置（覆盖团队默认）</span>：本任务完成后强制开新会话；团队级「复用」指跨任务不重置，两者语义相反。
         </div>
       )}
       {error && <span role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>{error}</span>}
@@ -365,7 +372,7 @@ function TeamSubTabs({ team, task, onToggleManagedMode, subTab: controlledSubTab
               </div>
               {settingError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>{settingError}</div>}
               <div style={{ marginTop: space.sm }}>
-                <TeamMemoryCard team={team} />
+                <TeamMemoryCard team={team} taskResetAfterComplete={task?.resetAfterComplete ?? null} />
               </div>
             </div>
             <button type="button" onClick={() => window.location.href = `/tasks/new?teamId=${team?.id ?? ""}`} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>创建任务</button>
@@ -1369,7 +1376,7 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, planArtifact
       </div>
       {/* 内容区 */}
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        {activeMainTab === "team" && <TeamSubTabs team={team} onToggleManagedMode={onToggleManagedMode} subTab={teamSubTab} onSubTabChange={setTeamSubTab} />}
+        {activeMainTab === "team" && <TeamSubTabs team={team} task={task} onToggleManagedMode={onToggleManagedMode} subTab={teamSubTab} onSubTabChange={setTeamSubTab} />}
         {activeMainTab === "task" && hasTask && (
           <TaskSubTabs
             team={team} task={task} taskId={taskId}

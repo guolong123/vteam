@@ -1912,6 +1912,7 @@ export class TasksService implements OnModuleInit {
       mainAgentInstanceId: task.mainAgentInstanceId ?? null,
       executionMode: task.executionMode ?? 'direct',
       backgroundDocs: task.backgroundDocs ?? [],
+      resetAfterComplete: Boolean(task.resetAfterComplete),
       teamId: (task as any).teamId ?? null,
       teamAgentIds: members.map((m) => m.agentId),
       instances,

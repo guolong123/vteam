@@ -1273,6 +1273,26 @@ describe('TasksService', () => {
       }
     });
 
+    it('详情 DTO 暴露 resetAfterComplete：显式设置与入参一致，未设置缺省 false', async () => {
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+      });
+      prisma.teamMember.findMany.mockResolvedValue([]);
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001', resetAfterComplete: true }),
+      );
+      expect(await service.findOne('t_0000000001')).toMatchObject({
+        resetAfterComplete: true,
+      });
+
+      prisma.task.findUnique.mockResolvedValue(row({ teamId: 'tm_0000000001' }));
+      const def = await service.findOne('t_0000000001');
+      expect(def.resetAfterComplete).toBe(false);
+    });
+
     it('任务不存在 → 404 TASK_NOT_FOUND', async () => {
       prisma.task.findUnique.mockResolvedValue(null);
 
