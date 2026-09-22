@@ -57,7 +57,7 @@ the two namespaces exactly once:
 received bare name  →  `vteam_${name}`  →  role.tools[`vteam_${name}`]
 ```
 
-The map is a **bijection** over all 29 tools (asserted by
+The map is a **bijection** over all 28 registered tools (asserted by
 `platform-mcp.tool-naming.spec.ts`): `live tools/list names == registered names ==
 VTEAM_MCP_TOOL_NAMES stripped of the `vteam_` prefix`.
 
@@ -80,28 +80,57 @@ tools/call(name, args, ctx.workerId)
        └─ args.teamId → assertWorkerTeam(ctx, teamId, selfInstanceId)   service.ts:5914
                          → ExecContext{kind:'team', teamId, callerId}   // callerId = session.teamMemberId
   └─ callerId (tmm_ member id)
-       └─ TeamMember.id → TeamMember.roleId → AgentRole
-       └─ TeamMember.agentId → Agent.policyId / Agent.agentKey
-            └─ ExecutionPolicyService.resolveByAgent({policyId, agentKey})  execution-policy.service.ts:663
-                 → ResolvedExecutionPolicy.tools = guardForAgent(...)      service.ts:990
-                      = canonicalizeTools(config.tools)  (DB wins)
-                        ?? ROLE_BOUNDARIES[bounded-name].toolAllows      (constant fallback)
+       └─ TeamMember.id → TeamMember.roleId → AgentRole.capabilities   (role-owned matrix)
+            └─ bare name → `vteam_${name}` → capability key (platform-capability catalogue)
+                 └─ capabilities[capKey] === false  → 403
+                    capabilities[capKey] missing   → ALLOW   (default-allow)
 ```
 
 - `assertWorkerTask` already fails closed: no `x-worker-id` → 403
   `MISSING_WORKER_ID`; worker not bound to the task's team or no session for the
   caller → 403 `FORBIDDEN`; `selfInstanceId` mismatch → 403.
-- **The matrix keys come off `Agent` (`policyId`/`agentKey`), not `AgentRole`.**
-  `AgentRole` carries **no capability fields** (see the model doc-comment,
-  `schema.prisma:124-151`: “无任何能力字段：permission/tools/model/worker 属
-  ExecutionPolicy / Agent，不是角色属性”). `TeamMember.roleId` only carries the
-  *prompt/label* binding. Do not route the allowlist lookup through
-  `TeamMember.roleId`; route it through `Agent.policyId` (the DB row that
-  `/agent-policies` and the worker injection both consume).
+- **Authority is the post (`AgentRole`), not the executor (`Agent`).** The matrix is
+  now carried **directly on the role** as `capabilities` — a `Record<string, boolean>`
+  keyed by *business capability* (e.g. `task.create`, `issue.manage`), not by MCP tool
+  name. `Agent.policyId` still feeds the worker injector (`buildAgentPolicies`), the
+  engine-native layer-① permission and template resolution — it is **not** the gate's
+  authority. Rationale: **authority is the post, not the executor** — changing which
+  Agent fills a role must not silently change the platform tools that role may call.
+
+### 2.1 Capability model (2026-09-21)
+
+- **Default-allow.** `capabilities[capKey] === false` ⇒ deny; the key **absent** ⇒
+  allow. A role with `capabilities = null` is equivalent to `{}` ⇒ all allowed.
+  The factory set (for roles created without an explicit matrix) pre-denies the
+  sensitive points (`task.create`, `task.transition`, `task.complete`,
+  `team.add_member`, `chat.channel_send`, `wecom.reply`, `issue.manage`,
+  `skill.create`, `question.confirm`, `hook.manage`).
+- **Capability catalogue is the single source of truth**
+  (`common/constants/platform-capability.constants.ts`): 21 ordered entries, each
+  `{ key, label, tools[], defaultDeny }`. Every `VTEAM_MCP_TOOL_NAMES` tool (28)
+  belongs to exactly one capability (coverage asserted by
+  `platform-capability.coverage.spec.ts`). A binary capability over a multi-tool
+  group is granted only when **all** member tools are allowed (conservative mapping
+  used by seed/migration).
+- `AgentRole.policyId` is **removed** (migration `20260921000006`); the role no longer
+  references an `ExecutionPolicy`. `execution_policies` now serves only the
+  engine-native layer.
+- **Genericity (Q6).** The `edit`/`read`/`bash`/`task` engine-native permissions stay
+  agent-keyed and untouched; built-in tools and third-party MCPs are out of scope.
+  This gate is a vteam-platform-business-capability check, decoupled from the generic
+  MCP/agent mechanisms.
+
+### 2.2 Accepted bypass — `vteam-api` / `swagger-mcp` (Q3, explicit)
+
+This gate guards **only** the `vteam` platform MCP server (`POST /platform-mcp`).
+`vteam-api` and `swagger-mcp` are independent MCP servers at the same layer as any
+third-party MCP — their tools call the server over HTTP directly and **bypass this
+gate entirely**. That is **explicitly accepted**: this check is an **anti-mistake
+guard for agents**, **not a security boundary**. No gate is added there.
 
 ## 3. Per-tool identity table
 
-Full table (all 29 tools, with required/optional/absent per field) lives in the
+Full table (all 28 tools, with required/optional/absent per field) lives in the
 evidence file under `identity_table`. Summary of the cases todo 3 must handle:
 
 - **24 tools** require `selfInstanceId` → `assertWorkerTask`/`resolveExecContext`
@@ -130,9 +159,10 @@ Applied per case:
 | No `x-worker-id` | already 403 `MISSING_WORKER_ID` today — keep; do not add a second check |
 | Worker not bound to the task/team | already 403 `FORBIDDEN` — keep |
 | `selfInstanceId` missing (`channel_send`, `memory_search`, the 4 task-bound read tools, `wecom_reply`) | resolve via the existing session lookup; if no member resolves, **403** |
-| Tool name neither bare-registered nor present in the matrix | **403** (treat “not listed” = deny) — matches `filterToolsMatrix`/`isToolAllowed` semantics |
-| Member resolves but `Agent.policyId`/`agentKey` yields `null` from `resolveByAgent` | **403** |
-| Resolution throws | **403** (log, do not fall through to allow) |
+| Tool maps to **no capability** (unknown/retired tool) | **403** (unknown surface is fail-closed) |
+| Member resolves but `TeamMember.roleId IS NULL` | **403** (no post ⇒ no authority) |
+| Capability key present and explicitly `false` on the role | **403** |
+| Capability key **absent** from the role's matrix | **ALLOW** (default-allow — the one non-fail-closed branch, by design) |
 
 ### Justification — and the deliberate divergence from `role-guard/policy.ts`
 
@@ -147,32 +177,40 @@ pass-through leaves the real confinement intact.
 
 The server-side check has no such backstop. It is the **only** thing standing
 between a live caller and a platform tool such as `task_transition` or
-`question_confirm`; today the sole guard is the emitted `vteam_*: deny` entry in
-the opencode permission config, which todo 4 removes and todo 5 stops feeding.
-If the server also passed through on an unresolvable caller, removing the worker
-layer would leave those tools **unguarded** — exactly the failure this plan exists
-to prevent. Fail-closed is therefore required here, and it introduces no new
-failure mode for legitimate callers: every current in-band caller reaches a tool
-through a real session, so `assertWorkerTask`/`assertWorkerTeam` already resolve,
-and every resolvable member maps to an `Agent` with a matrix (all 7 live members
-carry a non-null `role_id` and template agents carry `policy_id`).
+`question_confirm`. If the server also passed through on an unresolvable caller,
+those tools would be **unguarded** — exactly the failure this plan exists to
+prevent. Fail-closed is therefore required for identity and unknown tools; the
+**only** deliberate allow-branch is the default-allow capability semantics
+(a missing capability key ⇒ allow), which is a product decision, not a leniency:
+the factory matrix pre-denies the ten sensitive capabilities, and builtin roles are
+seeded from their *current* effective allow-set so they never gain authority when
+the default flips. Every current in-band caller reaches a tool through a real
+session, so `assertWorkerTask`/`assertWorkerTeam` already resolve, and every
+resolvable member maps to a **role** with a capability matrix (all 8 live members
+carry a non-null `role_id`). Members without a role are **not supported** (Q5):
+`resolveMemberBinding` / `resolveTaskMemberBinding` reject a member input that
+yields no role with 400 `MEMBER_ROLE_REQUIRED`.
 
 **Precedent for the strict posture already exists in-repo:** `assertWorkerTeam`
 returns 403 when the worker↔team binding is absent (`service.ts:5935-5943`), and
 `assertWorkerTask` 403s on a missing session (`service.ts:5840-5844`). The
 server-side check is additive on top of the same posture, not a new philosophy.
 
-## 5. Today's `vteam_*` matrix (for todo 3's intended behaviour)
+## 5. The `vteam_*` matrix and the capability catalogue
 
-Captured live from `GET /api/v1/agent-policies` (raw in evidence
-`live_agent_policies`). Every `vteam_*` entry currently emitted in
-`permission` is `deny`; there is **no** `vteam_*` explicit `allow` anywhere
-(`tools` matrices carry the allows). For all 7 builtins:
-`permission` = `edit`/`read`/`bash`/`task` + the role's `mcpDenies` complement,
-and `guard.roles[<name>].tools` = the role's `toolAllows` (12–27 keys).
+The `vteam_<action>` form is still the **tool identity** carried by
+`VTEAM_MCP_TOOL_NAMES` and the engine-native agent-policy payloads
+(`GET /agent-policies`, `guard.roles[<name>].tools`). It is no longer the gate's
+storage form: the gate bridges bare name → `vteam_<action>` → **capability key**
+(via the catalogue), then reads `AgentRole.capabilities`.
+
+`execution_policies.config.tools` retains its `vteam_*` keys (they still feed the
+engine-native `GET /agent-policies` / `GET /agents` views); those keys are **dead
+for platform authority**. They are intentionally not pruned by migration
+`20260921000006` (pruning would change the engine-native views).
 
 Non-`vteam_` keys present in the `tools` matrices — `browser` and the `git_*`
 family (`git_clone/pull/fetch/status/diff/log/push`) — are **worker-injected
-custom tools, not ours**. Todo 3 must scope its check to the 29 registered
-platform tools and leave these keys untouched (they have no platform-mcp
-`tools/call` surface).
+custom tools, not ours**. The gate scopes its check to the registered platform
+tools and leaves these keys untouched (they have no platform-mcp `tools/call`
+surface).

@@ -1,5 +1,6 @@
 jest.mock('@prisma/client', () => ({
   PrismaClient: jest.fn().mockImplementation(() => mockPrisma),
+  Prisma: { DbNull: 'DbNull' },
 }));
 jest.mock('bcrypt', () => ({
   hash: jest.fn().mockResolvedValue('hashed-password'),
@@ -36,6 +37,7 @@ const mockPrisma = {
   $disconnect: jest.fn().mockResolvedValue(undefined),
 };
 
+import { Prisma } from '@prisma/client';
 import { main } from '../../prisma/seed';
 import {
   AGENT_KEY_PATTERN,
@@ -45,7 +47,15 @@ import {
   ROLE_SERVER_GATED_TOOLS,
   VTEAM_MCP_TOOL_NAMES,
 } from '../common/constants/agent.constants';
-import { BUILTIN_AGENT_ROLES } from '../common/constants/agent-role.constants';
+import {
+  BUILTIN_AGENT_ROLES,
+  EXTERNAL_AGENT_ROLE_CAPABILITIES,
+  EXTERNAL_AGENT_ROLE_KEYS,
+  EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST,
+} from '../common/constants/agent-role.constants';
+import {
+  buildFactoryCapabilityMatrix,
+} from '../common/constants/platform-capability.constants';
 import { BUILTIN_ROLE_PROMPTS } from '../common/constants/agent-role-prompts.constants';
 import { computeMemoryContentHash } from '../memories/memory.constants';
 
@@ -128,8 +138,10 @@ const BARE_MCP_NAMES = VTEAM_MCP_TOOL_NAMES.map((name) =>
 );
 
 const templateAgentCalls = () =>
-  mockPrisma.agent.upsert.mock.calls.filter((call) =>
-    String(call[0].where.id).startsWith('a_'),
+  mockPrisma.agent.upsert.mock.calls.filter(
+    (call) =>
+      String(call[0].where.id).startsWith('a_') &&
+      call[0].create?.type === 'template',
   );
 
 /** 模板 Agent id → 其 `create` 分支落库的 rolePrompt（agent_roles.role_prompt）。 */
@@ -196,8 +208,8 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
 
     const agentUpserts = mockPrisma.agent.upsert.mock.calls;
     const templateIds = agentUpserts
-      .map((call) => call[0].where.id)
-      .filter((id) => id.startsWith('a_'));
+      .filter((call) => call[0].create?.type === 'template')
+      .map((call) => call[0].where.id);
     expect(templateIds).toHaveLength(7);
     expect(templateIds).toContain('a_plan');
     expect(templateIds).toContain('a_librarian');
@@ -333,10 +345,16 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
   it('ExecutionPolicy upsert 先于模板 Agent upsert（绑定指向已存在策略行）', async () => {
     await main();
 
+    // 仅 7 个内置角色策略（ep_external 已随 capability model 移除），全部先于模板 Agent upsert。
     const policyOrder =
-      mockPrisma.executionPolicy.upsert.mock.invocationCallOrder.slice(-7);
-    const agentOrder =
-      mockPrisma.agent.upsert.mock.invocationCallOrder.slice(-7);
+      mockPrisma.executionPolicy.upsert.mock.invocationCallOrder;
+    const agentOrder = mockPrisma.agent.upsert.mock.calls
+      .map((call, i) => ({
+        type: call[0].create?.type,
+        order: mockPrisma.agent.upsert.mock.invocationCallOrder[i],
+      }))
+      .filter((c) => c.type === 'template')
+      .map((c) => c.order);
     expect(policyOrder).toHaveLength(7);
     expect(agentOrder).toHaveLength(7);
     expect(Math.max(...policyOrder)).toBeLessThan(Math.min(...agentOrder));
@@ -354,7 +372,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       expect(typeof call[0].create.prompt).toBe('string');
       expect((call[0].create.prompt as string).length).toBeGreaterThan(50);
     }
-    // 策略 upsert 同样为空：用户编辑过的 config/description 在重跑后保留。
+    // 策略 upsert 同样为空：用户编辑过的 config/description 在重跑后保留（仅 7 个内置策略）。
     const policyCalls = mockPrisma.executionPolicy.upsert.mock.calls;
     expect(policyCalls).toHaveLength(7);
     for (const call of policyCalls) {
@@ -1037,22 +1055,83 @@ describe('seed（计划 skills + 评审子句）', () => {
     for (const role of BUILTIN_AGENT_ROLES) {
       const call = roleCalls.find((c) => String(c[0].where.id) === role.id);
       expect(call).toBeDefined();
+      const expectedCapabilities = buildFactoryCapabilityMatrix();
       expect(call?.[0].create).toMatchObject({
         key: role.key,
         name: role.name,
         type: 'builtin',
         defaultAgentId: role.defaultAgentId,
+        // capability model：出厂即落目录出厂默认矩阵（default-allow + 10 敏感点拒绝；
+        // 2026-09-21 用户决策内置角色拉平到出厂默认，替换保守派生）。
+        capabilities: expectedCapabilities,
         // todo 4：fresh install 的 role_prompt 正文与 src 单一来源逐字节一致。
         rolePrompt: BUILTIN_ROLE_PROMPTS[role.key],
         sortOrder: role.sortOrder,
       });
-      // 补齐分支：仅对 defaultAgentId 为空的存量内置行绑定默认 Agent。
-      const patch = mockPrisma.agentRole.updateMany.mock.calls.find(
+      const patches = mockPrisma.agentRole.updateMany.mock.calls.filter(
         (c) => String(c[0].where.id) === role.id,
       );
-      expect(patch?.[0].where).toMatchObject({ id: role.id, defaultAgentId: null });
-      expect(patch?.[0].data).toEqual({ defaultAgentId: role.defaultAgentId });
+      // 补齐分支 1：仅对 defaultAgentId 为空的存量内置行绑定默认 Agent。
+      expect(patches[0]?.[0].where).toMatchObject({
+        id: role.id,
+        defaultAgentId: null,
+      });
+      expect(patches[0]?.[0].data).toEqual({
+        defaultAgentId: role.defaultAgentId,
+      });
+      // 补齐分支 2：仅对 capabilities 为 NULL 的存量内置行补齐出厂矩阵。
+      expect(patches[1]?.[0].where).toMatchObject({
+        id: role.id,
+        capabilities: { equals: Prisma.DbNull },
+      });
+      expect(patches[1]?.[0].data).toEqual({
+        capabilities: expectedCapabilities,
+      });
     }
+  });
+
+  it('不再 seed ep_external 策略（capability model 后岗位不再绑定 ExecutionPolicy）', async () => {
+    await main();
+
+    const ids = mockPrisma.executionPolicy.upsert.mock.calls.map((call) =>
+      String(call[0].where.id),
+    );
+    expect(ids).not.toContain('ep_external');
+  });
+
+  it('存量外部岗位补最小能力矩阵：仅 key 命中且 capabilities 为 NULL 的行', async () => {
+    await main();
+
+    const bind = mockPrisma.agentRole.updateMany.mock.calls.find(
+      (call) =>
+        JSON.stringify(call[0]?.data?.capabilities ?? null) ===
+        JSON.stringify(EXTERNAL_AGENT_ROLE_CAPABILITIES),
+    );
+    expect(bind).toBeDefined();
+    expect(bind?.[0].where).toMatchObject({
+      key: { in: [...EXTERNAL_AGENT_ROLE_KEYS] },
+      capabilities: { equals: Prisma.DbNull },
+    });
+    // 8 协作/取证/产出能力点 true，其余 13 项显式 false（default-allow 下不可省）。
+    expect(Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(Boolean)).toHaveLength(8);
+    expect(
+      Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === false),
+    ).toHaveLength(13);
+    expect(bind?.[0].data.capabilities['task.create']).toBe(false);
+    expect(bind?.[0].data.capabilities['chat.post']).toBe(true);
+    expect(EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST).toHaveLength(8);
+  });
+
+  it('兜底：任意 capabilities 仍为 NULL 的角色落出厂矩阵（保证无 NULL）', async () => {
+    await main();
+
+    const fallback = mockPrisma.agentRole.updateMany.mock.calls.find(
+      (call) => JSON.stringify(call[0]?.where) === JSON.stringify({ capabilities: { equals: Prisma.DbNull } }),
+    );
+    expect(fallback).toBeDefined();
+    expect(fallback?.[0].data).toEqual({
+      capabilities: buildFactoryCapabilityMatrix(),
+    });
   });
 
   it('7 个内置 rolePrompt 均非空、以角色身份行开头、且含 ## 职责（岗位定义非空）', async () => {
@@ -1181,8 +1260,8 @@ describe('seed（todo9 执行铁律与行为探针）', () => {
   const promptsById = async (): Promise<Map<string, string>> => {
     await main();
     const m = new Map<string, string>();
-    for (const call of mockPrisma.agent.upsert.mock.calls.filter((c) =>
-      String(c[0].where.id).startsWith('a_'),
+    for (const call of mockPrisma.agent.upsert.mock.calls.filter(
+      (c) => c[0].create?.type === 'template',
     )) {
       m.set(String(call[0].where.id), call[0].create.prompt as string);
     }

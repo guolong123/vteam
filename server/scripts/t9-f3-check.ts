@@ -60,7 +60,6 @@ function analyze(
         prompt: row.prompt,
         persona: null,
         agentKey: row.role,
-        policyId: null,
       },
       { rolePrompt: row.rolePrompt },
     );

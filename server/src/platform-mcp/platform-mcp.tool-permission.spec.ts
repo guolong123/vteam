@@ -5,7 +5,6 @@ import * as request from 'supertest';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { WorkerDispatcher } from '../chat/worker-dispatcher';
 import { IdGeneratorService } from '../common/id-generator';
-import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 import { GitReposService } from '../git-repos/git-repos.service';
 import { IssuesService } from '../issues/issues.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -20,78 +19,39 @@ import { PlatformMcpService } from './platform-mcp.service';
 import { PlatformToolPermissionService } from './platform-tool-permission.service';
 
 /**
- * 工具权限门（opencode-native-permissions-and-fixes todo 3）可证伪测试。
+ * 工具权限门（2026-09-21 role-owned capability model）可证伪测试。
  *
  * 三层：
- * ① 判定单元（真实 PlatformToolPermissionService + 真实 ExecutionPolicyService，
- *    后者喂真实 policy 行形状）：allow / ask 放行；显式 deny；未列入；矩阵可变更
- *    （同一 agent 改一条 `tools` 值即翻转判定 → 证明判定来自 allowlist，不是
- *    agent 名或角色名硬编码）；resolveByAgent 返回 null / 抛错 / 成员不可解析
- *    → 403 稳定码（fail-closed）。
+ * ① 判定单元（真实 PlatformToolPermissionService + 假 prisma 成员行）：能力点显式 false
+ *    ⇒ 403；能力点缺失 ⇒ 放行（**default-allow 证明**）；未知工具 ⇒ 403（unknown 面
+ *    fail-closed）；未绑角色 / 成员不可解析 ⇒ 403；翻转 roles.capabilities 一格即翻转判定。
  * ② 归属解析（真实 PlatformMcpService.resolveToolCallerId）：task/team 维度复用
  *    resolveExecContext 且错误码不变；无任何身份入参 → 最近会话解析；解析不到
  *    → 403 TOOL_NOT_PERMITTED（channel_send 决策）。
  * ③ HTTP 集成（真实 controller + 真实权限门）：拒绝 → JSON-RPC -32003 且带稳定码；
  *    放行 → handler 执行；tools/list 全量不受影响（调用时拦截）。
  */
-describe('platform tool permission gate (todo 3)', () => {
-  const memberRow = (agent: {
+describe('platform tool permission gate (capability model)', () => {
+  const memberRow = (role: {
     id?: string;
-    name?: string;
-    agentKey?: string | null;
-    policyId?: string | null;
+    key?: string;
+    capabilities?: Record<string, boolean> | null;
   }) => ({
-    agent: {
-      id: agent.id ?? 'a_developer',
-      name: agent.name ?? '开发者',
-      agentKey: agent.agentKey ?? 'developer',
-      policyId: agent.policyId ?? 'ep_developer',
+    role: {
+      id: role.id ?? 'ar_developer',
+      key: role.key ?? 'developer',
+      capabilities: role.capabilities ?? {},
     },
   });
 
-  const policyRow = (tools: Record<string, string> | undefined) => ({
-    id: 'ep_developer',
-    name: '开发者策略',
-    config: {
-      permission: { edit: { '*': 'deny' }, read: { '*': 'allow' }, bash: 'allow' },
-      correction: { scopeSummary: '开发者边界' },
-      ...(tools === undefined ? {} : { tools }),
-    },
-  });
-
-  /** 真实 ExecutionPolicyService（DB 行胜出） + 假 prisma 行。 */
-  function realPolicyService(
-    policy: unknown,
-    alternatePrisma?: { executionPolicy: { findUnique: jest.Mock } } | Record<string, any>,
-  ) {
-    return new ExecutionPolicyService(
-      (alternatePrisma ?? {
-        executionPolicy: {
-          findUnique: jest.fn().mockResolvedValue(policy),
-          findMany: jest
-            .fn()
-            .mockResolvedValue(policy === null ? [] : [policy]),
-        },
-      }) as never,
-      {} as never,
-      { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
-    );
-  }
-
-  function build(input: {
-    member: unknown;
-    policy?: unknown;
-    policyService?: ExecutionPolicyService;
-  }) {
+  function build(input: { member: unknown }) {
     const prisma = {
       teamMember: { findUnique: jest.fn().mockResolvedValue(input.member) },
     };
-    const policyService = input.policyService ?? realPolicyService(input.policy);
     const service = new PlatformToolPermissionService(
       prisma as unknown as PrismaService,
-      policyService,
     );
-    return { service, prisma, policyService };
+    return { service, prisma };
   }
 
   async function expectDenied(
@@ -107,31 +67,37 @@ describe('platform tool permission gate (todo 3)', () => {
     });
   }
 
-  describe('① 判定单元（allowlist 驱动，fail-closed）', () => {
-    it('矩阵 allow → 放行', async () => {
+  describe('① 判定单元（能力点驱动，default-allow + fail-closed）', () => {
+    it('能力点显式 true → 放行', async () => {
       const { service } = build({
-        member: memberRow({}),
-        policy: policyRow({ vteam_doclib: 'allow' }),
+        member: memberRow({ capabilities: { 'doc.read': true } }),
       });
       await expect(service.assertToolAllowed('tmm_dev', 'doclib')).resolves.toBe(
         undefined,
       );
     });
 
-    it('矩阵 ask → 放行（与 worker guard 三态语义一致）', async () => {
+    it('能力点缺失 → 放行（default-allow 的唯一证明）', async () => {
       const { service } = build({
-        member: memberRow({}),
-        policy: policyRow({ vteam_doclib: 'ask' }),
+        member: memberRow({ capabilities: { 'task.create': false } }),
       });
       await expect(service.assertToolAllowed('tmm_dev', 'doclib')).resolves.toBe(
         undefined,
       );
     });
 
-    it('矩阵显式 deny → 403 + PLATFORM_MCP_TOOL_NOT_PERMITTED', async () => {
+    it('capabilities 为 NULL → 等同空矩阵 → 全放行（default-allow）', async () => {
       const { service } = build({
-        member: memberRow({}),
-        policy: policyRow({ vteam_doclib: 'deny' }),
+        member: memberRow({ capabilities: null }),
+      });
+      await expect(
+        service.assertToolAllowed('tmm_dev', 'task_transition'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('能力点显式 false → 403 + PLATFORM_MCP_TOOL_NOT_PERMITTED', async () => {
+      const { service } = build({
+        member: memberRow({ capabilities: { 'doc.read': false } }),
       });
       await expectDenied(
         service.assertToolAllowed('tmm_dev', 'doclib'),
@@ -139,109 +105,92 @@ describe('platform tool permission gate (todo 3)', () => {
       );
     });
 
-    it('矩阵未列入（not listed == deny）→ 403 + 稳定码', async () => {
+    it('多工具能力点：组内任一工具共享同一判定（issue.manage=false → 5 个 issue 工具全拒）', async () => {
       const { service } = build({
-        member: memberRow({}),
-        policy: policyRow({ vteam_doclib: 'allow' }),
+        member: memberRow({ capabilities: { 'issue.manage': false } }),
+      });
+      for (const tool of [
+        'issue_create',
+        'issue_get',
+        'issue_list',
+        'issue_update',
+        'issue_transition',
+      ]) {
+        await expectDenied(
+          service.assertToolAllowed('tmm_dev', tool),
+          `vteam_${tool}`,
+        );
+      }
+    });
+
+    it('未知/已下线工具（映射不到能力点）→ 403（unknown 面 fail-closed）', async () => {
+      const { service } = build({
+        member: memberRow({ capabilities: {} }),
       });
       await expectDenied(
-        service.assertToolAllowed('tmm_dev', 'task_transition'),
-        'vteam_task_transition',
+        service.assertToolAllowed('tmm_dev', 'plan_mode'),
+        'vteam_plan_mode',
       );
     });
 
-    it('判定由 allowlist 驱动：同 agent 翻转一条值，决定随之翻转（非 agent 名硬编码）', async () => {
+    it('判定由岗位能力矩阵驱动：同角色翻转一格，决定随之翻转（非角色名硬编码）', async () => {
       const prisma = {
-        teamMember: {
-          findUnique: jest.fn().mockResolvedValue(memberRow({})),
-        },
-        executionPolicy: {
-          findUnique: jest.fn(),
-        },
+        teamMember: { findUnique: jest.fn() },
       };
-      const policy = realPolicyService(null, prisma);
       const service = new PlatformToolPermissionService(
         prisma as unknown as PrismaService,
-        policy,
       );
 
-      prisma.executionPolicy.findUnique.mockResolvedValue(
-        policyRow({ vteam_doclib: 'allow' }),
+      prisma.teamMember.findUnique.mockResolvedValue(
+        memberRow({ capabilities: { 'doc.read': true } }),
       );
       await expect(
         service.assertToolAllowed('tmm_dev', 'doclib'),
       ).resolves.toBeUndefined();
 
-      prisma.executionPolicy.findUnique.mockResolvedValue(
-        policyRow({ vteam_doclib: 'deny' }),
+      prisma.teamMember.findUnique.mockResolvedValue(
+        memberRow({ capabilities: { 'doc.read': false } }),
       );
       await expectDenied(
         service.assertToolAllowed('tmm_dev', 'doclib'),
         'vteam_doclib',
       );
 
-      prisma.executionPolicy.findUnique.mockResolvedValue(
-        policyRow({ vteam_doclib: 'deny', vteam_task_transition: 'allow' }),
+      // 负对照：同一岗位、同一矩阵内缺失的工具（default-allow）仍放行——
+      // 翻转证明不曾放宽判定方向（另见未知工具拒绝）。
+      prisma.teamMember.findUnique.mockResolvedValue(
+        memberRow({ capabilities: { 'doc.read': false } }),
       );
       await expect(
-        service.assertToolAllowed('tmm_dev', 'task_transition'),
-      ).resolves.toBeUndefined();
-
-      // 负对照：同一 agent、同一策略行内未列入的工具仍拒绝（翻转证明不曾放宽判定）。
-      await expectDenied(
         service.assertToolAllowed('tmm_dev', 'plan_complete'),
-        'vteam_plan_complete',
-      );
+      ).resolves.toBeUndefined();
     });
 
-    it('resolveByAgent 入参取自成员的 Agent（policyId/agentKey），不读 roleId', async () => {
-      const { service, policyService } = build({
-        member: memberRow({
-          agentKey: 'developer',
-          policyId: 'ep_developer',
-        }),
-        policy: policyRow({ vteam_doclib: 'allow' }),
+    it('select 只读 role.{id,key,capabilities}——绝不读 Agent（角色权威，执行者不参与）', async () => {
+      const { service, prisma } = build({
+        member: memberRow({ capabilities: {} }),
       });
-      const spy = jest.spyOn(policyService, 'resolveByAgent');
-
       await service.assertToolAllowed('tmm_dev', 'doclib');
-
-      expect(spy).toHaveBeenCalledWith({
-        policyId: 'ep_developer',
-        agentKey: 'developer',
+      expect(prisma.teamMember.findUnique).toHaveBeenCalledWith({
+        where: { id: 'tmm_dev' },
+        select: {
+          role: { select: { id: true, key: true, capabilities: true } },
+        },
       });
+    });
+
+    it('未绑角色（roleId NULL）→ 403（无岗位即无授权）', async () => {
+      const { service } = build({ member: { role: null } });
+      await expectDenied(
+        service.assertToolAllowed('tmm_dev', 'doclib'),
+        'vteam_doclib',
+      );
     });
 
     it('成员不可解析 → 403 稳定码（fail-closed）', async () => {
       const { service } = build({ member: null });
       await expectDenied(
         service.assertToolAllowed('tmm_ghost', 'doclib'),
-        'vteam_doclib',
-      );
-    });
-
-    it('策略不可解析（resolveByAgent → null）→ 403 稳定码', async () => {
-      const { service } = build({
-        member: memberRow({ agentKey: 'custom-x', policyId: 'ep_custom' }),
-        policy: null,
-      });
-      await expectDenied(
-        service.assertToolAllowed('tmm_dev', 'doclib'),
-        'vteam_doclib',
-      );
-    });
-
-    it('策略解析抛错 → 403 稳定码（绝不落到放行）', async () => {
-      const { service } = build({
-        member: memberRow({}),
-        policyService: {
-          resolveByAgent: jest
-            .fn()
-            .mockRejectedValue(new Error('db down')),
-        } as unknown as ExecutionPolicyService,
-      });
-      await expectDenied(
-        service.assertToolAllowed('tmm_dev', 'doclib'),
         'vteam_doclib',
       );
     });
@@ -281,10 +230,6 @@ describe('platform tool permission gate (todo 3)', () => {
           { provide: TasksService, useValue: { createByAgent: jest.fn() } },
           { provide: QuestionsService, useValue: { createByAgent: jest.fn() } },
           { provide: GitReposService, useValue: { findAll: jest.fn() } },
-          {
-            provide: ExecutionPolicyService,
-            useValue: { resolveByAgent: jest.fn() },
-          },
         ],
       }).compile();
       service = module.get(PlatformMcpService);
@@ -342,13 +287,6 @@ describe('platform tool permission gate (todo 3)', () => {
     });
 
     it('无身份入参（channel_send）→ 最近会话解析出成员 id', async () => {
-      prisma.session.findFirst.mockResolvedValue({
-        taskId,
-        teamId: 'tm_1',
-        teamMemberId: 'tmm_dev',
-        agentId: 'a_dev',
-      });
-      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
       prisma.session.findFirst
         .mockResolvedValueOnce({
           taskId,
@@ -361,6 +299,7 @@ describe('platform tool permission gate (todo 3)', () => {
           agentId: 'a_dev',
           teamMemberId: 'tmm_dev',
         });
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
 
       await expect(service.resolveToolCallerId(ctx, {})).resolves.toBe(
         'tmm_dev',
@@ -412,7 +351,6 @@ describe('platform tool permission gate (todo 3)', () => {
       groupPost: jest.Mock;
       doclib: jest.Mock;
     };
-    let policyPrisma: Record<string, any>;
     let memberPrisma: Record<string, any>;
 
     const mcpPost = () =>
@@ -451,11 +389,8 @@ describe('platform tool permission gate (todo 3)', () => {
         doclib: jest.fn().mockResolvedValue({ artifacts: [] }),
       };
       memberPrisma = { teamMember: { findUnique: jest.fn() } };
-      policyPrisma = { executionPolicy: { findUnique: jest.fn() } };
-      const policyService = realPolicyService(null, policyPrisma);
       const gate = new PlatformToolPermissionService(
         memberPrisma as unknown as PrismaService,
-        policyService,
       );
 
       const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -479,18 +414,14 @@ describe('platform tool permission gate (todo 3)', () => {
       await app.close();
     });
 
-    it('allow 工具 → JSON-RPC 200 + handler 执行', async () => {
+    it('allow 能力点 → JSON-RPC 200 + handler 执行', async () => {
       memberPrisma.teamMember.findUnique.mockResolvedValue({
-        agent: {
-          id: 'a_dev',
-          name: '开发者',
-          agentKey: 'developer',
-          policyId: 'ep_developer',
+        role: {
+          id: 'ar_developer',
+          key: 'developer',
+          capabilities: { 'chat.post': true },
         },
       });
-      policyPrisma.executionPolicy.findUnique.mockResolvedValue(
-        policyRow({ vteam_group_post: 'allow' }),
-      );
 
       const res = await toolsCall('group_post', {
         taskId: 't_1',
@@ -502,18 +433,14 @@ describe('platform tool permission gate (todo 3)', () => {
       expect(service.groupPost).toHaveBeenCalled();
     });
 
-    it('deny 工具 → JSON-RPC error -32003 + 稳定码 PLATFORM_MCP_TOOL_NOT_PERMITTED，handler 不执行', async () => {
+    it('能力点缺失（default-allow）→ 放行 + handler 执行', async () => {
       memberPrisma.teamMember.findUnique.mockResolvedValue({
-        agent: {
-          id: 'a_dev',
-          name: '开发者',
-          agentKey: 'developer',
-          policyId: 'ep_developer',
+        role: {
+          id: 'ar_developer',
+          key: 'developer',
+          capabilities: { 'doc.read': true },
         },
       });
-      policyPrisma.executionPolicy.findUnique.mockResolvedValue(
-        policyRow({ vteam_group_post: 'deny' }),
-      );
 
       const res = await toolsCall('group_post', {
         taskId: 't_1',
@@ -521,25 +448,18 @@ describe('platform tool permission gate (todo 3)', () => {
         content: '结论',
       }).expect(200);
 
-      expect(res.body.error.code).toBe(-32003);
-      expect(res.body.error.message).toContain(
-        PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
-      );
-      expect(service.groupPost).not.toHaveBeenCalled();
+      expect(res.body.result.content[0].text).toBeDefined();
+      expect(service.groupPost).toHaveBeenCalled();
     });
 
-    it('未列入矩阵 → 403 + 稳定码（not listed == deny）', async () => {
+    it('能力点显式 false → JSON-RPC error -32003 + 稳定码，handler 不执行', async () => {
       memberPrisma.teamMember.findUnique.mockResolvedValue({
-        agent: {
-          id: 'a_dev',
-          name: '开发者',
-          agentKey: 'developer',
-          policyId: 'ep_developer',
+        role: {
+          id: 'ar_developer',
+          key: 'developer',
+          capabilities: { 'chat.post': false },
         },
       });
-      policyPrisma.executionPolicy.findUnique.mockResolvedValue(
-        policyRow({ vteam_doclib: 'allow' }),
-      );
 
       const res = await toolsCall('group_post', {
         taskId: 't_1',
@@ -589,16 +509,12 @@ describe('platform tool permission gate (todo 3)', () => {
 
     it('既有归属 403（PLATFORM_MCP_FORBIDDEN）码不变：权限门在 handler 抛错时原样透出', async () => {
       memberPrisma.teamMember.findUnique.mockResolvedValue({
-        agent: {
-          id: 'a_dev',
-          name: '开发者',
-          agentKey: 'developer',
-          policyId: 'ep_developer',
+        role: {
+          id: 'ar_developer',
+          key: 'developer',
+          capabilities: { 'chat.post': true },
         },
       });
-      policyPrisma.executionPolicy.findUnique.mockResolvedValue(
-        policyRow({ vteam_group_post: 'allow' }),
-      );
       service.groupPost.mockRejectedValue(
         new ForbiddenException({
           code: PLATFORM_MCP_ERRORS.FORBIDDEN,

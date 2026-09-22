@@ -10,6 +10,7 @@ import {
   AGENT_ROLE_ERRORS,
   BUILTIN_AGENT_ROLES,
 } from '../common/constants/agent-role.constants';
+import { buildFactoryCapabilityMatrix } from '../common/constants/platform-capability.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgentRolesService } from './agent-roles.service';
@@ -31,6 +32,7 @@ describe('AgentRolesService', () => {
       delete: jest.Mock;
     };
     agent: { findUnique: jest.Mock };
+    executionPolicy: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
 
@@ -43,6 +45,7 @@ describe('AgentRolesService', () => {
     type: 'builtin',
     defaultAgentId: 'a_product',
     defaultOpencodeAgentName: null,
+    capabilities: { 'task.create': true, 'chat.post': true },
     rolePrompt: '你是产品经理。',
     sortOrder: 1,
     createdAt: now,
@@ -56,6 +59,7 @@ describe('AgentRolesService', () => {
     type: 'custom',
     defaultAgentId: null,
     defaultOpencodeAgentName: null,
+    capabilities: null,
     rolePrompt: '你是数据分析师。',
     sortOrder: 0,
     createdAt: now,
@@ -70,6 +74,7 @@ describe('AgentRolesService', () => {
     type: 'builtin',
     defaultAgentId: r.defaultAgentId,
     defaultOpencodeAgentName: null,
+    capabilities: {},
     rolePrompt: `role-prompt-${r.key}`,
     sortOrder: r.sortOrder,
     createdAt: new Date(`2026-09-19T00:00:0${i}Z`),
@@ -92,6 +97,7 @@ describe('AgentRolesService', () => {
         delete: jest.fn(),
       },
       agent: { findUnique: jest.fn() },
+      executionPolicy: { findUnique: jest.fn() },
       $transaction: jest.fn(),
     };
 
@@ -199,6 +205,7 @@ describe('AgentRolesService', () => {
           'type',
           'defaultAgentId',
           'defaultOpencodeAgentName',
+          'capabilities',
           'rolePrompt',
           'sortOrder',
           'createdAt',
@@ -332,6 +339,74 @@ describe('AgentRolesService', () => {
         },
       });
       expect(prisma.agentRole.create).not.toHaveBeenCalled();
+    });
+
+    it('capabilities 合法 → 键校验通过并落库（岗位能力点矩阵）', async () => {
+      const capabilities = { 'task.create': false, 'chat.post': true };
+      prisma.agentRole.create.mockResolvedValue({ ...customRow, capabilities });
+
+      const result = await service.create({
+        name: '数据分析师',
+        key: 'data-analyst',
+        type: 'custom',
+        capabilities,
+      });
+
+      expect(prisma.agentRole.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ capabilities }),
+        }),
+      );
+      expect(result).toMatchObject({ capabilities });
+    });
+
+    it('capabilities 含目录外键 → 400 AGENT_ROLE_CAPABILITY_KEY_INVALID（不落库）', async () => {
+      await expect(
+        service.create({
+          name: '数据分析师',
+          key: 'data-analyst',
+          type: 'custom',
+          capabilities: { 'task.create': true, nope: false },
+        }),
+      ).rejects.toMatchObject({
+        response: { code: AGENT_ROLE_ERRORS.AGENT_ROLE_CAPABILITY_KEY_INVALID },
+      });
+      expect(prisma.agentRole.create).not.toHaveBeenCalled();
+    });
+
+    it('capabilities 值非 boolean → 400 AGENT_ROLE_CAPABILITY_KEY_INVALID', async () => {
+      await expect(
+        service.create({
+          name: '数据分析师',
+          key: 'data-analyst',
+          type: 'custom',
+          capabilities: { 'task.create': 'deny' as unknown as boolean },
+        }),
+      ).rejects.toMatchObject({
+        response: { code: AGENT_ROLE_ERRORS.AGENT_ROLE_CAPABILITY_KEY_INVALID },
+      });
+      expect(prisma.agentRole.create).not.toHaveBeenCalled();
+    });
+
+    it('capabilities 缺省 → 出厂矩阵落库（敏感能力点预置拒绝）', async () => {
+      prisma.agentRole.create.mockResolvedValue({
+        ...customRow,
+        capabilities: buildFactoryCapabilityMatrix(),
+      });
+
+      await service.create({
+        name: '数据分析师',
+        key: 'data-analyst',
+        type: 'custom',
+      });
+
+      expect(prisma.agentRole.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            capabilities: buildFactoryCapabilityMatrix(),
+          }),
+        }),
+      );
     });
 
     it('外部引擎名创建：落库 defaultOpencodeAgentName、defaultAgentId=null、原样保存（含空格/大写）', async () => {
@@ -578,6 +653,57 @@ describe('AgentRolesService', () => {
         response: {
           code: AGENT_ROLE_ERRORS.AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND,
         },
+      });
+      expect(prisma.agentRole.update).not.toHaveBeenCalled();
+    });
+
+    it('capabilities 更新 → 键校验通过并整体替换落库', async () => {
+      const capabilities = { 'task.create': false, 'chat.post': true };
+      prisma.agentRole.findUnique.mockResolvedValue(customRow);
+      prisma.agentRole.update.mockResolvedValue({ ...customRow, capabilities });
+
+      const result = await service.update('ar_0000000001', { capabilities });
+
+      expect(prisma.agentRole.update).toHaveBeenCalledWith({
+        where: { id: 'ar_0000000001' },
+        data: { capabilities },
+      });
+      expect(result).toMatchObject({ capabilities });
+    });
+
+    it('capabilities 不传 → 不触碰现有矩阵（undefined 不落 data）', async () => {
+      prisma.agentRole.findUnique.mockResolvedValue(customRow);
+      prisma.agentRole.update.mockResolvedValue(customRow);
+
+      await service.update('ar_0000000001', { name: '新名字' });
+
+      expect(prisma.agentRole.update).toHaveBeenCalledWith({
+        where: { id: 'ar_0000000001' },
+        data: { name: '新名字' },
+      });
+    });
+
+    it('内置角色可编辑 capabilities（仅 key 只读，能力矩阵放开）', async () => {
+      const capabilities = { 'task.create': true };
+      prisma.agentRole.findUnique.mockResolvedValue(builtinRow);
+      prisma.agentRole.update.mockResolvedValue({ ...builtinRow, capabilities });
+
+      const result = await service.update('ar_product', { capabilities });
+
+      expect(prisma.agentRole.update).toHaveBeenCalledWith({
+        where: { id: 'ar_product' },
+        data: { capabilities },
+      });
+      expect(result).toMatchObject({ capabilities });
+    });
+
+    it('capabilities 含目录外键 → 400 AGENT_ROLE_CAPABILITY_KEY_INVALID（不落库）', async () => {
+      prisma.agentRole.findUnique.mockResolvedValue(customRow);
+
+      await expect(
+        service.update('ar_0000000001', { capabilities: { nope: true } }),
+      ).rejects.toMatchObject({
+        response: { code: AGENT_ROLE_ERRORS.AGENT_ROLE_CAPABILITY_KEY_INVALID },
       });
       expect(prisma.agentRole.update).not.toHaveBeenCalled();
     });

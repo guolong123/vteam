@@ -120,7 +120,10 @@ model Team {
 /// 本模型映射 `agent_roles`，主键前缀 `ar`（见 `src/common/constants/agent-role.constants.ts`
 /// 的 AGENT_ROLE_ID_PREFIX）。禁止把本模型命名为 `Role` 或映射到 `roles`。
 ///
-/// 无任何能力字段：permission/tools/model/worker 属 ExecutionPolicy / Agent，不是角色属性。
+/// 唯一能力字段是 `capabilities`（岗位的**业务能力点矩阵**）：它是服务端 `vteam_*` 调用
+/// 授权的权威来源（成员 `roleId` → `capabilities` → 能力点 `false` 则 403）。执行 Agent 的
+/// 引擎原生权限（permission/tools/model/worker）仍属 ExecutionPolicy / Agent，与岗位解耦
+/// （2026-09-21：`policyId` 间接层已移除）。
 model AgentRole {
   id          String   @id
   /// machine-safe 唯一标识（`^[a-z][a-z0-9_-]{0,62}$`）：内置=模板 role（product/…），
@@ -141,6 +144,14 @@ model AgentRole {
   /// 预填默认**外部引擎** Agent 名（opencode agent 名，如 `Prometheus - Plan Builder`；
   /// 含空格/大写，原样保存不裁剪内容）。与 `defaultAgentId` 互斥，规则见上一字段注释。
   defaultOpencodeAgentName String? @map("default_opencode_agent_name")
+  /// 岗位**业务能力点矩阵**（2026-09-21 role-owned capability model）：`Record<string, boolean>`，
+  /// 键为 `platform-capability.constants.ts` 目录的 capability key（如 `task.create`）。
+  /// **显式 `false` ⇒ 拒绝；缺失键 ⇒ 允许（default-allow）**。这是服务端 `vteam_*` 调用
+  /// 授权（`PlatformToolPermissionService.assertToolAllowed`）的**唯一权威来源**：
+  /// 成员 `roleId` → 本列 → 工具裸名映射能力点 → `false` 则 403。
+  /// 可空仅为兼容未写矩阵的行；`null` 等同 `{}`（全放行），故 migration/seed 保证出厂行非空。
+  /// 执行 Agent 的引擎原生权限（edit/read/bash/task）仍在 `Agent.policyId`，与本列无关。
+  capabilities Json?   @map("capabilities")
   /// 角色指令（"这个岗位是什么"）。列级可空（todo 4 前 builtin 行暂空），
   /// 但每个 builtin 行最终必须非空（todo 4 填充 role_prompt）。
   rolePrompt  String?  @db.Text @map("role_prompt")

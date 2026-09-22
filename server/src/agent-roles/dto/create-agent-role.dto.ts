@@ -3,6 +3,7 @@ import {
   IsIn,
   IsInt,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
   Matches,
@@ -14,9 +15,10 @@ import { AGENT_KEY_PATTERN } from '../../common/constants/agent.constants';
 import { AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH } from '../../common/constants/agent-role.constants';
 
 /**
- * POST /agent-roles 请求体（agent-role-entity todo 6）。
+ * POST /agent-roles 请求体（agent-role-entity todo 6；2026-09-21 capability model）。
  * 仅允许创建 `type='custom'`：内置角色由 seed/migration 维护（`type='builtin'`）。
- * 无任何能力字段（permission/tools/model/worker 属 ExecutionPolicy / Agent）。
+ * 唯一能力字段 `capabilities`（业务能力点矩阵，键 ∈ 能力目录、值 boolean；缺省 = 出厂矩阵）。
+ * 引擎原生权限（permission/tools/model/worker）属 ExecutionPolicy / Agent，不由本 DTO 传入。
  */
 export class CreateAgentRoleDto {
   @ApiProperty({ description: '角色名称', maxLength: 64 })
@@ -73,6 +75,16 @@ export class CreateAgentRoleDto {
   @IsString()
   @MaxLength(AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH)
   defaultOpencodeAgentName?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      '业务能力点矩阵（键 ∈ 能力目录如 task.create/issue.manage，值 boolean；false=拒绝，缺失键=允许）。' +
+      '缺省 = 出厂矩阵（默认放行 + 敏感能力点预置拒绝）。未知键 / 非 boolean → 400 AGENT_ROLE_CAPABILITY_KEY_INVALID',
+    example: { 'task.create': false, 'chat.post': true },
+  })
+  @IsOptional()
+  @IsObject()
+  capabilities?: Record<string, boolean>;
 
   @ApiPropertyOptional({ description: '角色指令（"这个岗位是什么"）' })
   @IsOptional()

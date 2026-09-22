@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { createHash } from 'node:crypto';
 
@@ -72,6 +72,76 @@ function defineBoundary(base: Omit<RoleBoundary, 'mcpDenies'>): RoleBoundary {
     ...base,
     mcpDenies: VTEAM_MCP_TOOL_NAMES.filter((name) => !allowed.has(name)),
   };
+}
+
+// ---------------------------------------------------------------------------
+// 业务能力点目录镜像（与 src/common/constants/platform-capability.constants.ts
+// 逐字节一致；label 不参与 seed 落库，故此处省略）。供岗位 `capabilities` 矩阵派生。
+// ---------------------------------------------------------------------------
+interface PlatformCapabilityMirror {
+  key: string;
+  tools: readonly string[];
+  defaultDeny: boolean;
+}
+
+const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
+  { key: 'task.create', tools: ['vteam_task_create'], defaultDeny: true },
+  { key: 'task.transition', tools: ['vteam_task_transition'], defaultDeny: true },
+  { key: 'task.complete', tools: ['vteam_plan_complete'], defaultDeny: true },
+  { key: 'task.context', tools: ['vteam_task_context'], defaultDeny: false },
+  { key: 'team.view', tools: ['vteam_team_view'], defaultDeny: false },
+  { key: 'team.add_member', tools: ['vteam_team_add_member'], defaultDeny: true },
+  { key: 'chat.post', tools: ['vteam_group_post'], defaultDeny: false },
+  { key: 'chat.read', tools: ['vteam_chat_history'], defaultDeny: false },
+  { key: 'chat.notify', tools: ['vteam_notify_agent'], defaultDeny: false },
+  { key: 'chat.channel_send', tools: ['vteam_channel_send'], defaultDeny: true },
+  { key: 'wecom.reply', tools: ['vteam_wecom_reply'], defaultDeny: true },
+  { key: 'doc.read', tools: ['vteam_doclib'], defaultDeny: false },
+  { key: 'doc.submit', tools: ['vteam_submit_artifact'], defaultDeny: false },
+  { key: 'file.read', tools: ['vteam_read_file'], defaultDeny: false },
+  {
+    key: 'issue.manage',
+    tools: [
+      'vteam_issue_create',
+      'vteam_issue_get',
+      'vteam_issue_list',
+      'vteam_issue_update',
+      'vteam_issue_transition',
+    ],
+    defaultDeny: true,
+  },
+  {
+    key: 'memory.manage',
+    tools: ['vteam_memory_save', 'vteam_memory_search', 'vteam_memory_update'],
+    defaultDeny: false,
+  },
+  { key: 'skill.create', tools: ['vteam_skill_create'], defaultDeny: true },
+  { key: 'question.confirm', tools: ['vteam_question_confirm'], defaultDeny: true },
+  { key: 'my_profile', tools: ['vteam_my_profile'], defaultDeny: false },
+  {
+    key: 'hook.manage',
+    tools: ['vteam_hook_register', 'vteam_hook_cancel'],
+    defaultDeny: true,
+  },
+  { key: 'git.repos', tools: ['vteam_git_repos_list'], defaultDeny: false },
+];
+
+function capabilityMatrixFromTools(
+  tools: Readonly<Record<string, unknown>>,
+): Record<string, boolean> {
+  const allowed = (name: string): boolean => {
+    const effect = tools[name];
+    return effect === 'allow' || effect === 'ask';
+  };
+  return Object.fromEntries(
+    PLATFORM_CAPABILITIES.map((c) => [c.key, c.tools.every(allowed)]),
+  );
+}
+
+function factoryCapabilityMatrix(): Record<string, boolean> {
+  return Object.fromEntries(
+    PLATFORM_CAPABILITIES.map((c) => [c.key, !c.defaultDeny]),
+  );
 }
 
 const ROLE_TASK_GLOB_BASE = '**tasks/*' as const;
@@ -551,6 +621,36 @@ const BUILTIN_AGENT_ROLES: readonly {
   { id: 'ar_librarian', key: 'librarian', name: '知识管理员', defaultAgentId: 'a_librarian', sortOrder: 7, rolePrompt: BUILTIN_ROLE_PROMPTS.librarian },
 ];
 
+/**
+ * 外部引擎岗位（`defaultOpencodeAgentName` 非空、无内部 Agent）的最小权限策略。
+ * 与 `src/common/constants/agent-role.constants.ts` 的 EXTERNAL_AGENT_ROLE_* 逐字节一致
+ * （自包含镜像，理由见文件头）。外部 Agent 不得创建任务/加成员/流转任务/创建技能/
+ * 确认提问/驱动外发通道，只放行协作、取证与产出所需 8 个 `vteam_*` 工具（其余 deny）。
+ */
+const EXTERNAL_AGENT_ROLE_KEYS: readonly string[] = [
+  'sisyphus',
+  'prometheus',
+  'atlas',
+];
+const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
+  'vteam_group_post',
+  'vteam_chat_history',
+  'vteam_doclib',
+  'vteam_submit_artifact',
+  'vteam_notify_agent',
+  'vteam_task_context',
+  'vteam_my_profile',
+  'vteam_team_view',
+];
+
+/** 外部岗位最小能力矩阵（default-allow 下必须显式拒绝未覆盖能力点）。 */
+const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
+  capabilityMatrixFromTools(
+    Object.fromEntries(
+      EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST.map((tool) => [tool, 'allow']),
+    ),
+  );
+
 /** key → 内置角色行（成员绑定 roleId 用）。 */
 const BUILTIN_AGENT_ROLE_ID_BY_KEY: Record<string, string> = Object.fromEntries(
   BUILTIN_AGENT_ROLES.map((r) => [r.key, r.id]),
@@ -906,6 +1006,9 @@ async function main() {
     });
   }
 
+  // 外部引擎岗位不再建 ExecutionPolicy（`ep_external` 随 capability model 移除）：其平台
+  // 工具权威改为 `AgentRole.capabilities` 的最小能力矩阵（下方 role 循环按 key 补齐）。
+
   // update 为空对象（create-if-absent）：模板 prompt、policyId 与 agentKey 均不再由重跑 seed 同步。
   // 内置模板的 prompt 已是页面可直接编辑的行为来源（策略同理，见上方 ExecutionPolicy 注释），
   // 故 re-seed 不再把平台默认升级推送到存量安装；出厂值仅首次 create 生效。
@@ -935,6 +1038,11 @@ async function main() {
   // 20260919000008_populate_builtin_role_prompts 的 UPDATE 补齐（review fix O7）——此处刻意
   // 不做 role_prompt 的 updateMany 回填，避免重跑 seed 覆盖用户编辑过的岗位说明。
   for (const role of BUILTIN_AGENT_ROLES) {
+    // 出厂能力矩阵 = 目录出厂默认（default-allow + 10 个 defaultDeny 敏感点预置拒绝）。
+    // 2026-09-21 用户决策「内置角色拉平到出厂默认」：替换此前按 ROLE_BOUNDARIES.toolAllows
+    // 的保守派生（migration 000006 口径）；存量库由 migration 20260921000007 覆盖拉平。
+    // 外部 3 岗仍走下方最小矩阵（capabilityMatrixFromTools），不受影响。
+    const capabilities = factoryCapabilityMatrix();
     await prisma.agentRole.upsert({
       where: { id: role.id },
       update: {},
@@ -944,6 +1052,7 @@ async function main() {
         name: role.name,
         type: 'builtin',
         defaultAgentId: role.defaultAgentId,
+        capabilities,
         rolePrompt: role.rolePrompt,
         sortOrder: role.sortOrder,
       },
@@ -952,7 +1061,27 @@ async function main() {
       where: { id: role.id, defaultAgentId: null },
       data: { defaultAgentId: role.defaultAgentId },
     });
+    // 出厂能力矩阵补齐：仅填 NULL，不覆盖管理员已改的矩阵。
+    await prisma.agentRole.updateMany({
+      where: { id: role.id, capabilities: { equals: Prisma.DbNull } },
+      data: { capabilities },
+    });
   }
+
+  // 存量外部岗位补最小能力矩阵（仅 key 命中且 capabilities 仍 NULL 的行）。
+  await prisma.agentRole.updateMany({
+    where: {
+      key: { in: [...EXTERNAL_AGENT_ROLE_KEYS] },
+      capabilities: { equals: Prisma.DbNull },
+    },
+    data: { capabilities: EXTERNAL_AGENT_ROLE_CAPABILITIES },
+  });
+
+  // 其余未写矩阵的角色（如 ar_general 及任意历史自定义行）落出厂矩阵，保证无 NULL。
+  await prisma.agentRole.updateMany({
+    where: { capabilities: { equals: Prisma.DbNull } },
+    data: { capabilities: factoryCapabilityMatrix() },
+  });
 
   // 预置模型目录（C1：STATIC_AVAILABLE_MODELS → models 表，防空目录回归；
   // CONF-01 后含 worker 实测 opencode/* 免费模型，共 34 个）。

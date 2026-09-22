@@ -14,6 +14,10 @@ import {
   AGENT_ROLE_ID_PREFIX,
   AGENT_ROLE_TYPES,
 } from '../common/constants/agent-role.constants';
+import {
+  buildFactoryCapabilityMatrix,
+  isPlatformCapabilityKey,
+} from '../common/constants/platform-capability.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
@@ -22,7 +26,7 @@ import { QueryAgentRolesDto } from './dto/query-agent-roles.dto';
 import { UpdateAgentRoleDto } from './dto/update-agent-role.dto';
 import { OpencodeAgentNameValidator } from './opencode-agent-name.validator';
 
-/** AgentRole 行（含关联，toAgentRoleDto 输入）。无任何能力字段。 */
+/** AgentRole 行（含关联，toAgentRoleDto 输入）。能力字段仅 `capabilities`（业务能力点矩阵）。 */
 type AgentRoleRow = {
   id: string;
   key: string;
@@ -31,6 +35,7 @@ type AgentRoleRow = {
   type: string;
   defaultAgentId: string | null;
   defaultOpencodeAgentName: string | null;
+  capabilities: Prisma.JsonValue | null;
   rolePrompt: string | null;
   sortOrder: number;
   createdAt: Date;
@@ -43,14 +48,17 @@ type AgentRoleRow = {
  * - 列表（type 过滤 + 分页，type/sortOrder 排序：builtin 在前）、详情
  *   （404 `AGENT_ROLE_NOT_FOUND`）
  * - create：仅 `type='custom'`；`key` 机器可读且唯一（冲突 → 409 `AGENT_ROLE_KEY_CONFLICT`）；
- *   `defaultAgentId` 必须指向已存在的 Agent（否则 400 `AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND`）。
- * - update：内置角色允许编辑 name/description/rolePrompt/defaultAgentId，但改 `key` → 403
- *   `AGENT_ROLE_BUILTIN_READONLY`（镜像 agents 模块 `PERMISSION_AGENT_READONLY`）。
+ *   `defaultAgentId` 必须指向已存在的 Agent（否则 400 `AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND`）；
+ *   `capabilities` 缺省为出厂矩阵（敏感能力点预置拒绝），显式给出时键须 ∈ 能力目录
+ *   （未知键 / 非 boolean → 400 `AGENT_ROLE_CAPABILITY_KEY_INVALID`）。
+ * - update：内置角色允许编辑 name/description/rolePrompt/defaultAgentId/**capabilities**，
+ *   但改 `key` → 403 `AGENT_ROLE_BUILTIN_READONLY`（镜像 agents 模块 `PERMISSION_AGENT_READONLY`）。
  * - 默认 Agent 是**单一槽位**：`defaultAgentId`（内部）与 `defaultOpencodeAgentName`（外部引擎名）
  *   至多一个非空（同时给 → 400 `AGENT_ROLE_DEFAULT_SLOT_CONFLICT`）；update 设置其一自动清空另一个。
  * - remove：`type='builtin'` → 403 `AGENT_ROLE_BUILTIN_READONLY`（行保留）；被团队成员引用
  *   （FK ON DELETE RESTRICT）→ 409 `AGENT_ROLE_IN_USE`，绝不静默删除。
- * - 响应仅含身份 + `rolePrompt` 文本，**绝不暴露能力字段**（permission/tools/model/worker）。
+ * - 响应仅含身份 + `rolePrompt` 文本 + `capabilities` **业务能力点矩阵**（引擎原生权限
+ *   permission/tools/model/worker 仍不出本服务）。
  */
 @Injectable()
 export class AgentRolesService implements OnModuleInit {
@@ -121,6 +129,11 @@ export class AgentRolesService implements OnModuleInit {
     if (internalAgentId !== null) {
       await this.assertAgentExists(internalAgentId);
     }
+    // 缺省出厂矩阵（Q1：默认放行 + 敏感点预置拒绝）；显式给出须键 ∈ 目录且值为 boolean。
+    const capabilities =
+      dto.capabilities === undefined
+        ? buildFactoryCapabilityMatrix()
+        : this.normalizeCapabilities(dto.capabilities);
 
     try {
       const created = await this.prisma.agentRole.create({
@@ -132,6 +145,7 @@ export class AgentRolesService implements OnModuleInit {
           type: AGENT_ROLE_TYPES.custom,
           defaultAgentId: internalAgentId,
           defaultOpencodeAgentName: externalAgentName,
+          capabilities: capabilities as Prisma.InputJsonValue,
           rolePrompt: dto.rolePrompt ?? null,
           sortOrder: dto.sortOrder ?? 0,
         },
@@ -190,7 +204,6 @@ export class AgentRolesService implements OnModuleInit {
     if (internalAgentId !== null) {
       await this.assertAgentExists(internalAgentId);
     }
-
     const slotData: {
       defaultAgentId?: string | null;
       defaultOpencodeAgentName?: string | null;
@@ -218,6 +231,13 @@ export class AgentRolesService implements OnModuleInit {
             ? { description: dto.description }
             : {}),
           ...slotData,
+          ...(dto.capabilities !== undefined
+            ? {
+                capabilities: this.normalizeCapabilities(
+                  dto.capabilities,
+                ) as Prisma.InputJsonValue,
+              }
+            : {}),
           ...(dto.rolePrompt !== undefined
             ? { rolePrompt: dto.rolePrompt }
             : {}),
@@ -280,6 +300,7 @@ export class AgentRolesService implements OnModuleInit {
       type: role.type,
       defaultAgentId: role.defaultAgentId,
       defaultOpencodeAgentName: role.defaultOpencodeAgentName,
+      capabilities: role.capabilities,
       rolePrompt: role.rolePrompt,
       sortOrder: role.sortOrder,
       createdAt: role.createdAt,
@@ -339,6 +360,37 @@ export class AgentRolesService implements OnModuleInit {
         message: `defaultAgentId ${agentId} 指向的 Agent 不存在`,
       });
     }
+  }
+
+  /**
+   * 能力点矩阵校验：键须 ∈ `PLATFORM_CAPABILITIES` 目录、值须为 boolean。
+   * 未知键 / 非法值 → 400 `AGENT_ROLE_CAPABILITY_KEY_INVALID`（不静默忽略，避免拼错键被放过）。
+   */
+  private normalizeCapabilities(
+    value: Record<string, unknown>,
+  ): Record<string, boolean> {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw this.invalidCapabilities('capabilities 须为对象（能力点键 → boolean）');
+    }
+    const result: Record<string, boolean> = {};
+    for (const [key, effect] of Object.entries(value)) {
+      if (!isPlatformCapabilityKey(key)) {
+        throw this.invalidCapabilities(`能力点键 ${key} 不在能力目录中`);
+      }
+      if (typeof effect !== 'boolean') {
+        throw this.invalidCapabilities(`能力点 ${key} 取值须为 boolean`);
+      }
+      result[key] = effect;
+    }
+    return result;
+  }
+
+  /** 400：AGENT_ROLE_CAPABILITY_KEY_INVALID。 */
+  private invalidCapabilities(message: string): BadRequestException {
+    return new BadRequestException({
+      code: AGENT_ROLE_ERRORS.AGENT_ROLE_CAPABILITY_KEY_INVALID,
+      message,
+    });
   }
 
   /** key 机器可读格式校验（缺缺失 / 不符 AGENT_KEY_PATTERN → 400）。 */

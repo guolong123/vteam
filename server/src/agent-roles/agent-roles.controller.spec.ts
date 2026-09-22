@@ -201,6 +201,20 @@ describe('AgentRolesController', () => {
       ).toHaveLength(0);
     });
 
+    it('CreateAgentRoleDto：policyId 可选（字符串/null 均通过；存在性校验在 service 层）', async () => {
+      expect(
+        await errorsOf(CreateAgentRoleDto, {
+          name: '数据分析师',
+          key: 'data-analyst',
+          type: 'custom',
+          policyId: 'ep_developer',
+        }),
+      ).toHaveLength(0);
+      expect(
+        await errorsOf(UpdateAgentRoleDto, { policyId: null }),
+      ).toHaveLength(0);
+    });
+
     it('CreateAgentRoleDto：外部引擎名（含空格/大写）→ 校验通过', async () => {
       expect(
         await errorsOf(CreateAgentRoleDto, {

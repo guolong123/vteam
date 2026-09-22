@@ -19,7 +19,11 @@ import { GitReposService } from '../git-repos/git-repos.service';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { TasksService } from '../tasks/tasks.service';
-import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
+import {
+  buildFactoryCapabilityMatrix,
+  capabilityKeyForTool,
+  isCapabilityGranted,
+} from '../common/constants/platform-capability.constants';
 import {
   PLATFORM_MCP_ERRORS,
 } from './platform-mcp.constants';
@@ -30,12 +34,11 @@ import { PlatformToolPermissionService } from './platform-tool-permission.servic
  * Todo 9 中央可证伪证明：role×tool authority matrix（2026-09-20 改造）。
  *
  * 三层证据，全部断言**判定值**（allow/deny），不读日志：
- * ① 29 工具 × 7 角色的**服务端工具权限门**矩阵（opencode-native-permissions-and-fixes
- *    todo 3 落地后，`PlatformToolPermissionService.assertToolAllowed` 是平台工具唯一闸门；
- *    原 259 格 worker-guard 矩阵随该层删除而改址）：逐格调用**真实生产门**，
- *    成员 → Agent(`policyId`/`agentKey`) → 真实 `ExecutionPolicyService.resolveByAgent`
- *    → `tools` 矩阵；expect = `ROLE_BOUNDARIES[*].toolAllows` 成员资格。负格（未授权）
- *    显式保留；空集守卫 + allow/deny 双非空防「空转假绿」。
+ * ① 28 工具 × 7 角色的**服务端工具权限门**矩阵（2026-09-21 capability model：
+ *    `PlatformToolPermissionService.assertToolAllowed` 是平台工具唯一闸门）：逐格调用
+ *    **真实生产门**，成员 → AgentRole(`capabilities`) → 业务能力点判定；expect 由
+ *    目录出厂默认矩阵给出（与 seed/migration 同口径：内置角色拉平到出厂默认）。
+ *    负格（未授权）显式保留；空集守卫 + allow/deny 双非空防「空转假绿」。
  *    `git_*`/`browser` 非平台注册工具，无 `tools/call` 面，不进矩阵（见
  *    `CONTRACT-tool-naming-and-identity.md` §5）。
  * ② 非主实例成功：真实 `PlatformMcpService.taskCreate` 与真实 `TasksService.transitionByAgent`
@@ -68,19 +71,22 @@ function memberIdOf(agent: string): string {
   return `tmm_${agent.slice('vteam-'.length)}`;
 }
 
+/** 内置角色出厂能力矩阵（目录出厂默认；2026-09-21 起 seed/migration 同口径拉平）。 */
+function factoryCapabilities(): Record<string, boolean> {
+  return buildFactoryCapabilityMatrix();
+}
+
 /**
- * 真实生产门：真实 `ExecutionPolicyService` + 内存 policy 行 → 真实
- * `PlatformToolPermissionService`；prisma 只 stub 成员→Agent 行（policyId/agentKey），
- * 与运行时 `resolveToolCallerId` 供出的形状一致。
+ * 真实生产门：真实 `PlatformToolPermissionService`；prisma 只 stub 成员→AgentRole 行
+ * （key/capabilities，内置出厂矩阵），与运行时 `resolveToolCallerId` 供出的形状一致。
+ * 可选 `overrides` 覆盖某角色的能力矩阵（证明矩阵可变更）。
  */
-function buildRealPermissionGate(rows: unknown[] = []): {
+function buildRealPermissionGate(
+  overrides: Record<string, Record<string, boolean>> = {},
+): {
   gate: PlatformToolPermissionService;
-  policyService: ExecutionPolicyService;
   prisma: { teamMember: { findUnique: jest.Mock } };
 } {
-  const byId = new Map(
-    (rows as Array<{ id: string }>).map((row) => [row.id, row]),
-  );
   const prisma = {
     teamMember: {
       findUnique: jest.fn(
@@ -91,38 +97,23 @@ function buildRealPermissionGate(rows: unknown[] = []): {
           if (!agentKey) {
             return null;
           }
+          const agent = `vteam-${agentKey}`;
+          if (!(agent in ROLE_BOUNDARIES)) {
+            return { role: null };
+          }
           return {
-            agent: {
-              id: `a_${agentKey}`,
-              name: agentKey,
-              agentKey,
-              policyId: `ep_${agentKey}`,
+            role: {
+              id: `ar_${agentKey}`,
+              key: agentKey,
+              capabilities: overrides[agent] ?? factoryCapabilities(),
             },
           };
         },
       ),
     },
   };
-  const policyService = new ExecutionPolicyService(
-    {
-      agent: { findMany: jest.fn().mockResolvedValue([]) },
-      executionPolicy: {
-        // resolveByAgent reads by id (findUnique); rows absent → constant fallback.
-        findUnique: jest.fn(
-          async ({ where }: { where: { id: string } }) => byId.get(where.id) ?? null,
-        ),
-        findMany: jest.fn().mockResolvedValue(rows),
-      },
-    } as never,
-    {} as never,
-    { broadcastCommand: jest.fn().mockResolvedValue(0) } as never,
-  );
   return {
-    gate: new PlatformToolPermissionService(
-      prisma as never,
-      policyService,
-    ),
-    policyService,
+    gate: new PlatformToolPermissionService(prisma as never),
     prisma,
   };
 }
@@ -153,13 +144,16 @@ async function evaluateMatrix(
 ): Promise<MatrixCell[]> {
   const cells: MatrixCell[] = [];
   for (const agent of ROLES) {
-    const allowed = new Set(Object.keys(ROLE_BOUNDARIES[agent].toolAllows));
+    const matrix = factoryCapabilities();
     for (const tool of PLATFORM_TOOLS) {
       const decision = await decideCell(gate, agent, tool);
+      const capabilityKey = capabilityKeyForTool(tool);
+      const expected =
+        capabilityKey === null ? 'deny' : isCapabilityGranted(matrix, capabilityKey);
       cells.push({
         agent,
         tool,
-        expect: allowed.has(tool) ? 'allow' : 'deny',
+        expect: expected ? 'allow' : 'deny',
         actual: decision.action,
         message: decision.message,
       });
@@ -266,7 +260,6 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
           useValue: { confirmByAgent: jest.fn(), createForPlatform: jest.fn() },
         },
         { provide: GitReposService, useValue: { findAll: jest.fn() } },
-        { provide: ExecutionPolicyService, useValue: { resolveByAgent: jest.fn() } },
         { provide: PlanLifecycleService, useValue: planLifecycle },
       ],
     }).compile();
@@ -284,7 +277,7 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
   };
 
   describe('① 服务端工具权限门矩阵：每一 role×tool 格的实际判定 === source-derived 期望', () => {
-    it('203 格逐格匹配；allow/deny 双非空；负格显式存在；空转守卫记录迭代数', async () => {
+    it('196 格逐格匹配；allow/deny 双非空；负格显式存在；空转守卫记录迭代数', async () => {
       const { gate } = buildRealPermissionGate();
       const cells = await evaluateMatrix(gate);
       assertDiscriminating(cells);
@@ -359,7 +352,7 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       }
     });
 
-    it('矩阵可变更：同一成员改一条 DB tools 值即翻转判定（非 agent 名硬编码）', async () => {
+    it('矩阵可变更：改岗位 capabilities 一格即翻转判定（非角色名硬编码）', async () => {
       const base = buildRealPermissionGate();
       expect(
         (await decideCell(base.gate, 'vteam-product', 'vteam_doclib')).action,
@@ -367,32 +360,20 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       expect(
         (await decideCell(base.gate, 'vteam-architect', 'vteam_doclib')).action,
       ).toBe('allow');
-      // 只改 DB 行（内置名同样走 DB 路径）：product 的矩阵不再授权 doclib。
-      // 行缺失/空矩阵 → 常量回退，故显式写一条把 doclib 排除的 allowlist 行。
-      const edited = buildRealPermissionGate([
-        {
-          id: 'ep_product',
-          name: 'policy-product',
-          description: null,
-          type: 'template',
-          config: {
-            permission: {},
-            correction: {},
-            tools: { vteam_group_post: 'allow' },
-          },
-          createdAt: new Date(0),
-          updatedAt: new Date(0),
-        },
-      ]);
+      // 只改 product 的 capabilities：doc.read 显式 false（其余保持出厂）。
+      const productCaps = factoryCapabilities();
+      const edited = buildRealPermissionGate({
+        'vteam-product': { ...productCaps, 'doc.read': false },
+      });
       expect(
         (await decideCell(edited.gate, 'vteam-product', 'vteam_doclib')).action,
       ).toBe('deny');
-      // 负对照：同一 DB 行仍放行 group_post（证明翻转来自该行内容，非全局关闸）。
+      // 负对照：同一矩阵仍放行 group_post（证明翻转来自该格，非全局关闸）。
       expect(
         (await decideCell(edited.gate, 'vteam-product', 'vteam_group_post'))
           .action,
       ).toBe('allow');
-      // 未改行的角色不受影响。
+      // 未改岗位的角色不受影响。
       expect(
         (await decideCell(edited.gate, 'vteam-architect', 'vteam_doclib')).action,
       ).toBe('allow');

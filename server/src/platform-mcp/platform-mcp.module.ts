@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { ArtifactsModule } from '../artifacts/artifacts.module';
-import { ExecutionPoliciesModule } from '../execution-policies/execution-policies.module';
 import { NotificationChannelsModule } from '../notifications/notification-channels.module';
 import { ChatModule } from '../chat/chat.module';
 import { GitReposModule } from '../git-repos/git-repos.module';
@@ -45,8 +44,9 @@ import { SkillsModule } from '../skills/skills.module';
  * - ReviewRoundTimeoutHandler（review-round-open 超时消费者，文件落 chat 域、
  *   provider 注册在本模块）：本模块已 import IssuesModule（gate+rounds 导出）与
  *   TimersModule，无新增模块边（ChatModule 注册则需新增 IssuesModule 依赖）。
- * - PlatformToolPermissionService（todo 3 工具权限门）：ExecutionPolicyService 由
- *   ExecutionPoliciesModule（上方 import）导出；controller 在 handler 之前调用，
+ * - PlatformToolPermissionService（工具权限门）：只依赖 PrismaService（全局 PrismaModule），
+ *   按 `AgentRole.capabilities`（岗位业务能力点矩阵）判定，不再依赖 ExecutionPolicyService
+ *   （2026-09-21 capability model 解耦）；controller 在 handler 之前调用，
  *   `tools/list` 不过滤（调用时拦截）。
  */
 @Module({
@@ -55,7 +55,6 @@ import { SkillsModule } from '../skills/skills.module';
     WorkersModule,
     ChatModule,
     ArtifactsModule,
-    ExecutionPoliciesModule,
     GitReposModule,
     IssuesModule,
     TasksModule,

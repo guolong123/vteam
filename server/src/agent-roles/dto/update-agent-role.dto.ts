@@ -2,6 +2,7 @@ import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsInt,
   IsNotEmpty,
+  IsObject,
   IsOptional,
   IsString,
   Matches,
@@ -13,9 +14,9 @@ import { AGENT_KEY_PATTERN } from '../../common/constants/agent.constants';
 import { AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH } from '../../common/constants/agent-role.constants';
 
 /**
- * PATCH /agent-roles/:id 请求体（agent-role-entity todo 6）。
+ * PATCH /agent-roles/:id 请求体（agent-role-entity todo 6；2026-09-21 capability model）。
  * 全字段可选。内置角色（`type='builtin'`）允许编辑 `name`/`description`/`rolePrompt`/
- * `defaultAgentId`（Roles tab 读取它们），但 `key` 不可改（service 层 403）；
+ * `defaultAgentId`/**`capabilities`**（角色编排页读取并编辑），但 `key` 不可改（service 层 403）；
  * `type` 不在 DTO，天然不可改（镜像 agents/policies 的 type 安全红线）。
  */
 export class UpdateAgentRoleDto {
@@ -68,6 +69,16 @@ export class UpdateAgentRoleDto {
   @IsString()
   @MaxLength(AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH)
   defaultOpencodeAgentName?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      '业务能力点矩阵（整体替换；键 ∈ 能力目录，值 boolean；false=拒绝，缺失键=允许；不传保持原值）。' +
+      '未知键 / 非 boolean → 400 AGENT_ROLE_CAPABILITY_KEY_INVALID',
+    example: { 'task.create': false, 'chat.post': true },
+  })
+  @IsOptional()
+  @IsObject()
+  capabilities?: Record<string, boolean>;
 
   @ApiPropertyOptional({ description: '角色指令（"这个岗位是什么"，可编辑文本）' })
   @IsOptional()

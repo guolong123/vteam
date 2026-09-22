@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { buildCapabilityMatrixFromTools } from './platform-capability.constants';
 
 /**
  * Agent 角色域（agent_roles）常量 —— 单一事实来源（agent-role-entity 计划 todo 1）。
@@ -12,7 +13,9 @@ import { createHash } from 'crypto';
  *   `ar_c_<md5(raw)[:16]>`（确定性，见 `deriveCustomAgentRoleKey`）。
  * - `key` 为 machine-safe 唯一标识，必须匹配 `AGENT_KEY_PATTERN`
  *   （`^[a-z][a-z0-9_-]{0,62}$`）。内置 key = 模板 Agent 的 `role` 值。
- * - 无任何能力字段：permission/tools/model/worker 属 ExecutionPolicy / Agent。
+ * - 唯一能力字段是 `capabilities`（岗位**业务能力点矩阵**，`Record<string, boolean>`；
+ *   缺失键 ⇒ 允许）——服务端 `vteam_*` 工具权限的权威来源（2026-09-21 capability model）。
+ *   引擎原生权限（permission/tools/model/worker）仍属 ExecutionPolicy / Agent，与岗位解耦。
  */
 
 /** Agent 角色主键前缀（`ar_<零填充序号>`；内置/迁移派生用命名 id）。 */
@@ -72,6 +75,8 @@ export const AGENT_ROLE_ERRORS = {
   AGENT_ROLE_KEY_CONFLICT: 'AGENT_ROLE_KEY_CONFLICT',
   /** defaultAgentId 指向不存在的 Agent → 400。 */
   AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND: 'AGENT_ROLE_DEFAULT_AGENT_NOT_FOUND',
+  /** capabilities 含目录外能力点键 / 非 boolean 值 → 400。 */
+  AGENT_ROLE_CAPABILITY_KEY_INVALID: 'AGENT_ROLE_CAPABILITY_KEY_INVALID',
   /** 默认 Agent 槽位冲突（`defaultAgentId` 与 `defaultOpencodeAgentName` 同时非空）→ 400。 */
   AGENT_ROLE_DEFAULT_SLOT_CONFLICT: 'AGENT_ROLE_DEFAULT_SLOT_CONFLICT',
   /** 角色被团队成员引用（FK ON DELETE RESTRICT）→ 409，不可静默删除。 */
@@ -116,6 +121,44 @@ export const BUILTIN_AGENT_ROLES: readonly BuiltinAgentRole[] = [
   { id: 'ar_plan', key: 'plan', name: '计划员', defaultAgentId: 'a_plan', sortOrder: 6 },
   { id: 'ar_librarian', key: 'librarian', name: '知识管理员', defaultAgentId: 'a_librarian', sortOrder: 7 },
 ];
+
+/**
+ * 外部引擎岗位（`defaultOpencodeAgentName` 非空、无内部 Agent）的最小能力集。
+ *
+ * 外部引擎 Agent（如 Sisyphus/Prometheus/Atlas）不是平台内受管 Agent：它们**不得**
+ * 创建任务、加成员、流转任务、创建技能、确认提问，也不得驱动 wecom/外发通道。
+ * 仅放行协作/取证/产出所需的 8 个 `vteam_*` 工具，其余能力点显式 `false`。
+ * migration 在存量库按 key 写入本能力矩阵；seed 对已存在的 NULL 行补齐。
+ */
+/** 外部岗位 key 清单（存量 live 数据；migration/seed 按 key 写入最小能力矩阵）。 */
+export const EXTERNAL_AGENT_ROLE_KEYS: readonly string[] = [
+  'sisyphus',
+  'prometheus',
+  'atlas',
+] as const;
+
+/** 外部岗位允许的 `vteam_*` 工具全集（其余 deny）。 */
+export const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
+  'vteam_group_post',
+  'vteam_chat_history',
+  'vteam_doclib',
+  'vteam_submit_artifact',
+  'vteam_notify_agent',
+  'vteam_task_context',
+  'vteam_my_profile',
+  'vteam_team_view',
+] as const;
+
+/**
+ * 外部岗位的最小能力矩阵（由 8 工具 allowlist 经目录映射；未覆盖能力点显式 `false`）。
+ * default-allow 语义下必须显式拒绝，否则外部岗位会因「缺失键 ⇒ 允许」获得全部能力。
+ */
+export const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
+  buildCapabilityMatrixFromTools(
+    Object.fromEntries(
+      EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST.map((tool) => [tool, 'allow']),
+    ),
+  );
 
 /** key → 内置角色行（供 seed 成员绑定 `roleId` 使用）。 */
 export const BUILTIN_AGENT_ROLE_BY_KEY: Record<string, BuiltinAgentRole> =
