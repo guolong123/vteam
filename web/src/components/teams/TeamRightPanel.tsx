@@ -1227,11 +1227,6 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
         {subTab === "output" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
             <div>
-              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>任务详情</div>
-              <div style={{ fontSize: fontSize.sm, color: neutral[700], backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{task.title}</div>
-              {task.description && <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[500], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, whiteSpace: "pre-wrap" }}>{task.description}</div>}
-            </div>
-            <div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm }}>
                 <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>产出物</span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{artifactsQuery.data?.total ?? 0} 个</span>
