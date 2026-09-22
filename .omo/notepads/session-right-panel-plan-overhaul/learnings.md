@@ -30,3 +30,14 @@ _Auto-scaffolded by /ulw-execute. Append new entries below - never overwrite._
 计划 T18 写了「只改外层容器布局，保持 `TaskStatusActions` 组件本身不被修改」。执行者照做，在外层套 `grid 1fr1fr`；
 但该组件根容器是 `flexDirection:column`（子按钮被 stretch 成全宽），整个竖排块只占第 1 列 → 按钮变成上下堆叠、各占半宽。
 **教训**：当视觉目标需要改变子组件内部排布时，"不许动子组件"的约束是错的；正确做法是给共享组件加**可选 prop**（默认值保持既有调用方行为），而不是在外层硬套布局。
+
+## L7 · `stream error` 是 AI-SDK 的**外层包装**，不是原因
+opencode/AI-SDK 的日志形态是 `message="stream error" error.error="AI_APICallError: <真实原因>"`。
+`message` 只是包装（瞬时流中断被内核重试后会话照常继续），**真实致命性在 `error.error` 里**。
+把包装文案列为致命关键词 → 每有一条瞬时 stream error 就 abort 一个健康会话
+（现象：`等待首字超时：模型调用报错：stream error`，而会话仍在跑）。
+**判据**：致命关键词只收具体原因（AI_APICallError / Rate limit / quota / Invalid API key / 429…）。
+
+## L8 · 错误类型复用时要检查文案前缀
+`CompletionTimeoutError` 被「真首字超时」与「serve 错误提前失败」两条路径共用，但文案恒带「等待首字超时」→
+把"会话仍在跑"误报成超时，误导排查方向。**多来源共用错误类型时，文案必须按来源分支**。
