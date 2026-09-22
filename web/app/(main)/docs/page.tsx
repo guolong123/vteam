@@ -5,7 +5,7 @@
  * =============================================
  * 路由：/docs?teamId=&taskId=&doc=（团队外壳；无 teamId 渲染团队选择器，不强制跳 /teams）。
  * - 团队/任务双选择：团队列表经 teamsApi.list，任务下拉经 GET /tasks?teamId=（board 页同模式）。
- * - 筛选 chips：分类（全部 + ARTIFACT_CATEGORIES 七类 + 未分类）/ 类型 / 验收，
+ * - 筛选 chips：分类（全部 + ARTIFACT_CATEGORIES 八类 + 未分类）/ 类型 / 验收，
  *   artifacts 页 pill 范式（data-active 契约保留）。
  * - 数据源只准三处：GET /teams/:id/artifacts（T5 聚合端点，单查询）+
  *   GET /artifacts/:id + GET /artifacts/:id/versions/:version。不做逐任务聚合。
@@ -807,7 +807,7 @@ export default function DocsUnifiedPage() {
     else refetch();
   };
 
-  // 分类 chips 选项：全部 + 七类（import 词表）+ 未分类（仅这两枚 UI 标签可驻留本文件）
+  // 分类 chips 选项：全部 + 八类（import 词表）+ 未分类（仅这两枚 UI 标签可驻留本文件）
   const categoryOptions = [
     { key: CATEGORY_ALL, label: ALL_LABEL },
     ...ARTIFACT_CATEGORIES.map((c) => ({ key: c, label: c })),
@@ -961,7 +961,7 @@ export default function DocsUnifiedPage() {
               ))}
             </select>
 
-            {/* 分类 chips（全部 + 七类 + 未分类） */}
+            {/* 分类 chips（全部 + 八类 + 未分类） */}
             <FilterPills
               testId="category-filter-option"
               options={categoryOptions}

@@ -12,7 +12,7 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
  *   text 含 XSS payload（category=测试报告）/ md（需求）/ txt（设计）/
  *   pdf（测试用例）/ docx（运维）/ text v1+v2（实现）/ text（其他）/
  *   text 无分类 NULL（删除用）/ ghost 缺失文件 / tsx 原型（设计）。
- * - 分类覆盖七类 + NULL（未分类 chip 用）；file 行 content 纯空白（防 append P2
+ * - 分类覆盖七类 + NULL（未分类 chip 用）；`计划` 类由系统自动归档产生，e2e fixture 不预置该类行；file 行 content 纯空白（防 append P2
  *   落盘覆盖 fileRef）；断言一律按 `t12qa-` 前缀过滤自家行（live 库 moving-target）。
  * - tsx 字节不走 uploads 白名单：`web/e2e/fixtures/t12qa-demo.tsx` 须事先
  *   `docker cp web/e2e/fixtures/t12qa-demo.tsx aiagents-compose-server:/app/uploads/`
