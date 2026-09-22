@@ -344,6 +344,34 @@ describe('awaitCompletion', () => {
     expect(getMessages).toHaveBeenCalledTimes(2);
   });
 
+  it('tool 执行中（part 数不变、仅 state/output 推进）→ 活性顺延，不误判首字超时', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      if (calls <= 20) {
+        // 单个长工具：part 数恒为 1，但 output 持续增长（工具执行中的真实形态）——
+        // 若活性只数 parts，则 60ms 时限内零增长 → 误判「无输出」abort 一个活着的会话
+        return [
+          asstMsg('a1', [
+            { id: 'tp1', type: 'tool', state: { status: 'running', output: `chunk-${calls}` } },
+          ]),
+        ];
+      }
+      return [
+        asstMsg('a1', [
+          { id: 'tp1', type: 'tool', state: { status: 'completed', output: 'done' } },
+          stepFinishPart(),
+        ]),
+      ];
+    });
+
+    const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 60, pollMs: 5 });
+    expect(result).toBeDefined();
+    expect(abort).not.toHaveBeenCalled();
+    expect(calls).toBeGreaterThan(10);
+  });
+
   it('reasoning + 最终 text 完成 → 正常完成（回归：思考后产出正文）', async () => {
     const { driver, getMessages, abort } = mockDriver();
     let calls = 0;

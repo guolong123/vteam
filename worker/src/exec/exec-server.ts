@@ -28,7 +28,7 @@ import {
   MessageDeltaTracker,
   sendAndAwait,
 } from '../driver/prompt-await';
-import { SERVE_ERROR_KEYWORDS } from '../runtime/serve-log';
+import { SERVE_FATAL_KEYWORDS } from '../runtime/serve-log';
 import { ResourceInjector } from '../resources/injector';
 import {
   LOCAL_CONFIG_KINDS,
@@ -1522,7 +1522,7 @@ export class ExecServer {
         // PM+architect 两个健康主 agent（step=6，group_post 在途）。
         onServeError: (text) => !/share subscriber/i.test(text) &&
           (/level=ERROR\b|error\.(error|name|message|code)=/.test(text) &&
-          SERVE_ERROR_KEYWORDS.test(text)),
+          SERVE_FATAL_KEYWORDS.test(text)),
         onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
           void this.sendDelta(ctx, tracker, messages);
           // question/权限确认旁路检测：serve 侧 pending 时上送事件（不 abort，等用户）

@@ -14,19 +14,32 @@ import * as os from 'os';
 import * as path from 'path';
 
 /**
- * serve 日志中的模型调用错误关键词（粗筛）。serve 对部分 APIError（Rate limit exceeded /
- * Free usage exceeded 等）不透传 message.info.error——worker 靠该关键词感知提前失败。
+ * serve 日志中的模型调用错误关键词（**收集/证据口径，宽**）。serve 对部分 APIError
+ * （Rate limit exceeded / Free usage exceeded 等）不透传 message.info.error——worker 靠该表
+ * 收集候选行，供失败证据与基线使用。
  *
  * ⚠️ 粗筛单独用会产生误报：实测 34,139 行日志中裸 `429` 命中 161 条 **INFO** 行
  * （`messageID=msg_0a429eb…` 里的数字碰巧命中）。故 `isServeErrorLine` 追加**结构化错误门**。
  *
- * ⚠️ 不含裸 `stream error`（2026-09-22 线上误杀根因）：它是 AI-SDK 的**通用外层包装文案**，
- * 真实原因在同行 `error.error="AI_APICallError: <原因>"` 里；瞬时流中断被内核重试后会话
- * 照常继续产出。把它当致命关键词 → 每有一条瞬时 stream error 就 abort 一个健康会话
- * （现象：`等待首字超时：模型调用报错：stream error`，而会话仍在跑）。
- * 致命性只由本表的具体原因关键词判定，包装文案不再单独触发。
+ * ⚠️ 本表**只决定"收集哪些行"**，不决定"是否 abort"——abort 判据是下方 SERVE_FATAL_KEYWORDS。
+ * 保持宽口径：`stream error`（外层包装）、裸 `429`、`subscribe`（子域 share subscriber 失败）
+ * 都收，供全局尸检；把宽表直接当 abort 判据会误杀健康会话（2026-09-22 线上事故）。
  */
-export const SERVE_ERROR_KEYWORDS = /AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i;
+export const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i;
+
+/**
+ * 致命关键词（**abort 判据专用，严**，2026-09-22 误杀复查后从宽表中拆出）。
+ * 只认**具体原因**，不认包装/泛化词——避免把仍在跑的会话 abort 掉：
+ * - 不含 `stream error`：AI-SDK 通用外层包装，真原因在同行 `error.error="AI_APICallError: …"`；
+ *   瞬时流中断被内核重试后会话照常继续产出（现象：`等待首字超时：模型调用报错：stream error`
+ *   而会话仍在跑）；
+ * - 不含 `subscribe`：唯一已知形态是子域 `share subscriber failed`，主循环存活可自恢复、
+ *   永不 abort（线上 08:18 一行双杀 PM+architect 根因），故它只该进证据、不该致命；
+ * - `429` 要求 HTTP 状态语义：结构化门只挡得住 INFO 行，`level=ERROR` 行里随机 id
+ *   （`messageID=msg_0a429eb…`）碰巧含 `429` 仍会中招。
+ */
+export const SERVE_FATAL_KEYWORDS =
+  /AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429\s+Too\s+Many\s+Requests|status(?:Code)?["'\s]*[:=]["'\s]*429\b/i;
 
 /** 结构化错误门之一：opencode 日志级别字段（真实模型错误恒为 ERROR）。 */
 const SERVE_ERROR_LEVEL_RE = /\blevel=ERROR\b/;

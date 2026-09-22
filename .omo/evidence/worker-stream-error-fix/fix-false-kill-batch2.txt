@@ -1,0 +1,21 @@
+# worker 误杀同类问题复查与修复（第二批）
+# 时间: 2026-09-22T22:44:06+08:00
+
+## 确认的三个问题
+A) 单个长工具被误判无输出 → 活性只看 part 数，tool 的 state/output/time 变化不计入；
+   长工具（>firstTokenTimeoutMs 无新 part）→ 误判「无输出」abort 活着的会话。
+B) 非子域 subscribe 行被当致命 → 宽表含 subscribe，而 onServeError 只排除 share subscriber。
+C) level=ERROR 行随机 id 含 429 被当致命 → 结构化门只挡 INFO 行，ERROR 行仍中招。
+
+## 修法（关键设计：拆两张表）
+发现 opencode-server.spec.ts:479 断言 share-subscriber 行仍须被 recentErrors 收集（全局尸检证据）
+→ 故 subscribe 不能从宽表删。改为拆表：
+  SERVE_ERROR_KEYWORDS（宽，收集/证据）：stream error | 429 | subscribe 都收
+  SERVE_FATAL_KEYWORDS（严，abort 判据）：只认具体原因 + 429 要求 HTTP 状态语义
+  exec-server onServeError 改用 SERVE_FATAL_KEYWORDS。
+A) prompt-await 活性判定由「只数 parts」升级为 activitySignature（消息数/part 数/文本长度/
+   消息时间/tool state.status/output 长度/tool 耗时，全部 O(1) 标量投影，不做 JSON.stringify）。
+
+## 验证
+worker typecheck 0；全量 24 suites / 609 tests 绿（连跑 2 次）；时序敏感 spec ×3 稳定；
+三个守卫逐个实证：还原旧行为 → FAIL，恢复 → PASS。

@@ -382,6 +382,42 @@ function hasFirstToken(messages: ServeMessage[]): boolean {
 }
 
 /**
+ * 会话活性指纹：任何「主循环在推进」的可见变化都改变它——消息数、part 数、文本长度、
+ * 消息时间、以及 tool part 的 state（status / output 长度 / 自身耗时）。
+ * 全部用 O(1) 标量投影（字符串取 .length，不做 JSON.stringify），避免每轮 poll 对大 tool 输出
+ * 做全量序列化。
+ */
+function activitySignature(messages: ServeMessage[]): string {
+  let parts = 0;
+  let scalar = 0;
+  for (const m of messages) {
+    const mt = m.info?.time;
+    scalar += (mt?.created ?? 0) + (mt?.completed ?? 0);
+    for (const p of m.parts ?? []) {
+      parts += 1;
+      scalar += (p.text ?? '').length + (p.id ?? '').length;
+      const t = p.time;
+      scalar += (t?.start ?? 0) + (t?.end ?? 0);
+      const state = (
+        p as {
+          state?: {
+            status?: unknown;
+            output?: unknown;
+            time?: { start?: number; end?: number };
+          };
+        }
+      ).state;
+      if (state !== undefined && state !== null && typeof state === 'object') {
+        scalar += typeof state.status === 'string' ? state.status.length : 0;
+        scalar += typeof state.output === 'string' ? state.output.length : 0;
+        scalar += (state.time?.start ?? 0) + (state.time?.end ?? 0);
+      }
+    }
+  }
+  return `${messages.length}:${parts}:${scalar}`;
+}
+
+/**
  * 轮询等待会话完成：默认 500ms 间隔 / 120s 首字超时。
  * 完成（step-finish）→ 返回聚合结果；首字超时（时限内无 text 也无 reasoning 输出）→
  * abort + 抛 CompletionTimeoutError（带已收集文本）。首字（text 或 reasoning）出现后
@@ -408,8 +444,8 @@ export async function awaitCompletion(
   /** T17 去重 + 陈旧隔离：基线（本轮开始前已存在，永不触发）与本轮已检查过的行。
    * 同一行永不重复判定——新追加行才走 onServeError。 */
   const seenServeErrorLines = new Set<string>(options.baselineServeErrorLines ?? []);
-  /** 主循环活性：已收集 parts 总数；增长即 serve 侧在追加输出（tool 调用/步骤推进），首字 deadline 顺延。 */
-  let collectedPartCount = 0;
+  /** 主循环活性指纹（见 activitySignature）：变化即 serve 侧在推进，首字 deadline 顺延。 */
+  let lastActivitySignature = '';
   let lastActivityAt = startedAt;
   const hasServeErrorDetection = serveErrorReader !== undefined && onServeError !== undefined;
 
@@ -462,11 +498,12 @@ export async function awaitCompletion(
     if (firstTokenAt === null && hasFirstToken(collected)) {
       firstTokenAt = Date.now();
     }
-    // 活性记录：本轮新 parts 计数增长 → 主循环在推进（tool 调用/step 追加），刷新活性。
-    // mergeMessages 按 id 去重替换，计数增长即真实新增输出；纯重 poll 不增长。
-    const partCount = collected.reduce((n, m) => n + (m.parts ?? []).length, 0);
-    if (partCount > collectedPartCount) {
-      collectedPartCount = partCount;
+    // 活性记录：指纹变化即主循环在推进（新增 part / 文本增长 / tool 状态与耗时推进 / 消息时间推进），
+    // 刷新活性。仅数 parts 会漏掉「工具执行中」——tool part 的 state/output/time 会变但 part 数不变，
+    // 单个长工具（> firstTokenTimeoutMs 且无新 part）会被误判「无输出」而 abort。
+    const signature = activitySignature(collected);
+    if (signature !== lastActivitySignature) {
+      lastActivitySignature = signature;
       lastActivityAt = Date.now();
     }
     // 首字（text 或 reasoning）出现后无完成超时（继续轮询，判死由上层负责）；

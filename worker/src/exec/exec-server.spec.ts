@@ -562,6 +562,66 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
+  it('serve 日志为非子域 subscribe 行（宽表收集但非致命）→ 不提前 abort 健康会话', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue(STEP_START_ONLY);
+    const { sender, sent } = createSender();
+    const subscribeLine =
+      'timestamp=2026-09-22T10:20:00.000Z level=ERROR run=def456 message="subscribe failed" session.id=ses_1';
+    let reads = 0;
+    const serveErrorReader = jest.fn(() => (reads++ === 0 ? [] : [subscribeLine]));
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 60,
+      pollMs: 5,
+      serveErrorReader,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 4);
+      expect(getMessages.mock.calls.length).toBeGreaterThan(2);
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      expect(String(terminal[2].payload.error)).toContain('等待首字超时');
+      expect(abort).toHaveBeenCalledWith('ses_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('serve 日志 ERROR 行随机 id 含 429（非 HTTP 状态语义）→ 不提前 abort 健康会话', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue(STEP_START_ONLY);
+    const { sender, sent } = createSender();
+    const idCollisionLine =
+      'timestamp=2026-09-22T10:22:00.000Z level=ERROR run=ghi789 message="tool execute failed" session.id=ses_1 messageID=msg_0a429eb46001rGylqWhDPAJKL6';
+    let reads = 0;
+    const serveErrorReader = jest.fn(() => (reads++ === 0 ? [] : [idCollisionLine]));
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 60,
+      pollMs: 5,
+      serveErrorReader,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 4);
+      expect(getMessages.mock.calls.length).toBeGreaterThan(2);
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      expect(String(terminal[2].payload.error)).toContain('等待首字超时');
+      expect(abort).toHaveBeenCalledWith('ses_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
   it('无模型错误可提取时：原始 serve 日志尾部进 agent.status error + logger.error（失败必带证据，非笼统文案）', async () => {    const { driver, getMessages, abort } = mockDriver();
     getMessages.mockResolvedValue(STEP_START_ONLY);
     const { sender, sent } = createSender();
