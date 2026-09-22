@@ -216,6 +216,10 @@ function ChannelBindingCard({
 
       {allQuery.isPending ? (
         <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>加载中…</div>
+      ) : allQuery.isError ? (
+        <div data-testid="channel-list-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+          {isApiError(allQuery.error) ? allQuery.error.message : "渠道列表加载失败"}
+        </div>
       ) : all.length === 0 ? (
         <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.sm}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.sm, textAlign: "center" }}>
           暂无可用渠道
@@ -690,7 +694,11 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
               共 {issues.length} 项 · 待处理 {issueCounts.open} · 进行中 {issueCounts.in_progress} · 已解决 {issueCounts.resolved} · 已关闭 {issueCounts.closed} · 已拒绝 {issueCounts.rejected}
             </span>
           </div>
-          {issues.length === 0 ? (
+          {issuesQuery?.isError ? (
+            <div data-testid="plan-checklist-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+              {isApiError(issuesQuery.error) ? issuesQuery.error.message : "执行清单加载失败"}
+            </div>
+          ) : issues.length === 0 ? (
             <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无 Issue（执行项将随派发自动出现）</div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
@@ -1139,6 +1147,10 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
               </div>
               {planContentPending ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
+              ) : planDocsQuery?.isError || planArtifactsQuery?.isError ? (
+                <div data-testid="plan-docs-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+                  {planDocsQuery?.isError && isApiError(planDocsQuery.error) ? planDocsQuery.error.message : planArtifactsQuery?.isError && isApiError(planArtifactsQuery.error) ? planArtifactsQuery.error.message : "计划文档加载失败"}
+                </div>
               ) : planDocsDegraded && planContentRows.length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂不可用（主 Agent 会话未建立或 worker 离线）</div>
               ) : planContentRows.length === 0 ? (
@@ -1215,6 +1227,10 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
               </div>
               {planStepsPending ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
+              ) : planStepsQuery?.isError ? (
+                <div data-testid="plan-steps-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+                  {isApiError(planStepsQuery.error) ? planStepsQuery.error.message : "执行步骤加载失败"}
+                </div>
               ) : planStepsDegraded && planSteps.length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂不可用（主 Agent 会话未建立或 worker 离线）</div>
               ) : planSteps.length === 0 ? (
@@ -1254,7 +1270,11 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
                 <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>产出物</span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{artifactsQuery.data?.total ?? 0} 个</span>
               </div>
-              {(artifactsQuery.data?.items ?? []).length === 0 ? (
+              {artifactsQuery.isError ? (
+                <div data-testid="artifacts-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+                  {isApiError(artifactsQuery.error) ? artifactsQuery.error.message : "产出物加载失败"}
+                </div>
+              ) : (artifactsQuery.data?.items ?? []).length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无产出物</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
@@ -1288,7 +1308,11 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
                 <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>待办 Issue</span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{issuesQuery.data?.total ?? 0} 个</span>
               </div>
-              {(issuesQuery.data?.items ?? []).length === 0 ? (
+              {issuesQuery.isError ? (
+                <div data-testid="issues-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+                  {isApiError(issuesQuery.error) ? issuesQuery.error.message : "Issue 列表加载失败"}
+                </div>
+              ) : (issuesQuery.data?.items ?? []).length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无 Issue</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
