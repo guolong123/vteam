@@ -4694,8 +4694,15 @@ export class WorkerDispatcher
   /**
    * 自动拉起（Todo10 团队化）：频道经 resolveTeamChannel 团队定位，目标为成员
    * tmm_ 直调 dispatchAgentMention；任务仅归因（进度门 + prompt 上下文）。
-   * taskId 缺失（纯团队直聊）→ 失败已落库+广播，自动恢复需任务上下文，跳过；
-   * 任务非 in_progress → 跳过；未知 channel → 跳过不抛错。
+   *
+   * 恢复门槛（2026-09-23 放宽，与 dispatchAgentMention 对 wake 的终态门禁同口径）：
+   * - **只挡终态**（completed/archived）——非终态一律允许恢复。原 `!== 'in_progress'`
+   *   会把 pending_review 这类「任务尚未结束」的卡死会话挡在自动恢复之外；
+   * - **taskId 可缺省**（纯团队直聊）——dispatchAgentMention 支持团队维度直传，且唤醒
+   *   文本（buildWakeText）/快照键（dispatchSnapshotKey）/频道定位（resolveTeamChannel）
+   *   都只依赖 teamId+teamMemberId，不需要任务上下文；
+   * - 未知 channel → 跳过不抛错（dispatch 必须有落点）。
+   *
    * is_7：唤醒文本优先重放原始分派快照（有快照 → 通用语 +【原始任务重放】段；
    * 无/过期快照 → 通用语回退，字节与引入前一致）。
    */
@@ -4704,16 +4711,19 @@ export class WorkerDispatcher
     teamMemberId: string,
     taskId: string | null,
   ): Promise<void> {
-    if (!taskId) return;
-    const task = await this.prisma.task.findUnique({
-      where: { id: taskId },
-      select: { status: true },
-    });
-    if (!task || task.status !== 'in_progress') return;
+    if (taskId) {
+      const task = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: { status: true },
+      });
+      if (!task) return;
+      if (task.status === 'completed' || task.status === 'archived') return;
+    }
     const channel = await this.resolveTeamChannel(teamId, teamMemberId);
     if (!channel) return;
     await this.dispatchAgentMention({
-      taskId,
+      taskId: taskId ?? null,
+      teamId,
       channelId: channel.id,
       text: this.buildWakeText(teamId, teamMemberId),
       targetInstanceId: teamMemberId,

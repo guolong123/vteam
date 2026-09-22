@@ -259,6 +259,86 @@ describe('WorkerDispatcher dispatch snapshot (is_7)', () => {
     expect(mentionSpy.mock.calls[0][0].text).toBe(FALLBACK_WAKE_TEXT);
   });
 
+  it('tryAutoRestart：pending_review（任务未结束）允许恢复——原 in_progress 前置已放宽', async () => {
+    const d = createDispatcher();
+    prisma.task.findUnique.mockResolvedValue({ status: 'pending_review' });
+    prisma.chatChannel.findFirst.mockResolvedValue({
+      id: 'c_0000000001',
+      type: 'team_group',
+    });
+    const mentionSpy = jest
+      .spyOn(d, 'dispatchAgentMention')
+      .mockResolvedValue('s_0000000001');
+
+    await (d as any).tryAutoRestart(
+      'tm_0000000001',
+      'tmm_0000000001',
+      't_0000000001',
+    );
+
+    expect(mentionSpy).toHaveBeenCalledTimes(1);
+    expect(mentionSpy.mock.calls[0][0].kind).toBe('wake');
+  });
+
+  it.each(['completed', 'archived'])(
+    'tryAutoRestart：终态 %s 不恢复（与 dispatchAgentMention 的 wake 终态门禁同口径）',
+    async (status) => {
+      const d = createDispatcher();
+      prisma.task.findUnique.mockResolvedValue({ status });
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: 'c_0000000001',
+        type: 'team_group',
+      });
+      const mentionSpy = jest
+        .spyOn(d, 'dispatchAgentMention')
+        .mockResolvedValue('s_0000000001');
+
+      await (d as any).tryAutoRestart(
+        'tm_0000000001',
+        'tmm_0000000001',
+        't_0000000001',
+      );
+
+      expect(mentionSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it('tryAutoRestart：无 taskId（纯团队直聊）走团队维度恢复，不查任务表', async () => {
+    const d = createDispatcher();
+    prisma.chatChannel.findFirst.mockResolvedValue({
+      id: 'c_0000000001',
+      type: 'team_group',
+    });
+    const mentionSpy = jest
+      .spyOn(d, 'dispatchAgentMention')
+      .mockResolvedValue('s_0000000001');
+
+    await (d as any).tryAutoRestart('tm_0000000001', 'tmm_0000000001', null);
+
+    expect(prisma.task.findUnique).not.toHaveBeenCalled();
+    expect(mentionSpy).toHaveBeenCalledTimes(1);
+    const arg = mentionSpy.mock.calls[0][0];
+    expect(arg.taskId).toBeNull();
+    expect(arg.teamId).toBe('tm_0000000001');
+    expect(arg.kind).toBe('wake');
+  });
+
+  it('tryAutoRestart：任务行不存在 → 跳过（不误唤醒）', async () => {
+    const d = createDispatcher();
+    prisma.task.findUnique.mockResolvedValue(null);
+    const mentionSpy = jest
+      .spyOn(d, 'dispatchAgentMention')
+      .mockResolvedValue('s_0000000001');
+
+    await (d as any).tryAutoRestart(
+      'tm_0000000001',
+      'tmm_0000000001',
+      't_0000000001',
+    );
+
+    expect(mentionSpy).not.toHaveBeenCalled();
+  });
+
   it('wake 重放文本自身不覆盖原始快照', async () => {
     const d = createDispatcher();
     (d as any).saveDispatchSnapshot({
