@@ -1,0 +1,16 @@
+$ cd server && npx jest --runInBand src/tasks/plan-archive.service.spec.ts
+$ cd server && npx jest --runInBand src/tasks/plan-archive.service.spec.ts
+$ cd server && npx jest --runInBand src/tasks/plan-archive.service.spec.ts
+PASS src/tasks/plan-archive.service.spec.ts
+  PlanArchiveService
+    ✓ happy：三处目录各 1 个 .md → archiveFile 调用 3 次、每次带 category:计划、返回 archived:3 (5 ms)
+    ✓ happy-truncated：truncated 文件经 fetchFile 取原文后归档
+    ✓ failure ①：同一内容重复调用 → duplicate 计 skipped、版本不涨 (1 ms)
+    ✓ failure ②：archiveFile 抛错（验收锁定）→ warn 降级、failed+1、不抛出 (1 ms)
+    ✓ failure ③：定位不到 worker → 返回全 0 且不抛错
+
+Test Suites: 1 passed, 1 total
+Tests:       5 passed, 5 total
+Snapshots:   0 total
+Time:        1.876 s
+Ran all test suites matching /src\/tasks\/plan-archive.service.spec.ts/i.

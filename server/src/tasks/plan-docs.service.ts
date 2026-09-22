@@ -251,7 +251,16 @@ export class PlanDocsService {
    *
    * ⚠️ 必须把 capabilities 一并取出：WorkerClient 的 exec base URL 由 capabilities 决定，
    * 只传 {id} 会静默回落到 localhost:4199（listOpencodeAgents 本地部署踩过同类 bug）。
+   *
+   * 公开包装：计划自动归档（PlanArchiveService）与读路径共用同一套定位，
+   * 行为一致（定位逻辑只此一处，不复制）。
    */
+  async locateWorkerForTask(taskId: string): Promise<{
+    worker: { id: string; capabilities: unknown };
+  } | null> {
+    return this.locateWorker(taskId);
+  }
+
   private async locateWorker(taskId: string): Promise<{
     worker: { id: string; capabilities: unknown };
   } | null> {

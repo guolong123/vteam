@@ -1,0 +1,2 @@
+$ cd server && npx tsc --noEmit -p tsconfig.json
+(empty output = tsc clean, exit 0)
