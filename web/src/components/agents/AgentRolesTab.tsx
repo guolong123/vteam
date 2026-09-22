@@ -4,25 +4,34 @@
  * AgentRole 岗位 Tab（agent-role-entity todo 7，挂载于 /agents 的 Tab 2「角色」）
  * =============================================
  * 唯一来源：docs/agent-platform/prototypes/agent-role/index.tsx（布局/文案/data-testid 对齐）。
- * - 左栏：岗位列表（7 内置 + 自定义），显示岗位名 / 内置-自定义徽章 / 默认 Agent / 职责摘要。
- * - 右栏：岗位详情编辑表单（name / description / 默认 Agent / rolePrompt）。
- * - 内置岗位（type=builtin）**只读 + 无删除入口**（后端 DELETE 403 AGENT_ROLE_BUILTIN_READONLY 兜底）；
- *   自定义岗位可编辑 / 克隆 / 删除。
- * - ⚠️ 能力（权限 / 工具 / 模型 / worker）**不在本 Tab**：它们属于 Agent，挂在 Tab 1。
- *   本组件只出现身份字段 + rolePrompt 文本，绝无 permission/tools 编辑器。
- * - 数据源：todo 6 的 /api/v1/agent-roles（唯一数据路径，不另起并行来源）；
+ * - 左栏：岗位列表（7 内置 + 自定义），显示岗位名 / 内置-自定义徽章 / 默认 Agent /
+ *   平台能力点摘要 / 职责摘要。
+ * - 右栏：岗位详情编辑表单（name / description / 默认 Agent / 平台能力点 / rolePrompt）。
+ * - 平台 `vteam_* MCP` 工具的调用授权归**岗位的业务能力点**（`capabilities`：
+ *   `{ 能力点 key: boolean }`；false=拒绝、缺失=允许、null=未保存按出厂默认展示），
+ *   由 RoleCapabilityEditor 直接编辑（分组 / 中文名 / 覆盖工具 / 二进制允许-拒绝）。
+ * - 内置岗位（type=builtin）：身份字段只读 + 无删除入口（后端 DELETE 403
+ *   AGENT_ROLE_BUILTIN_READONLY 兜底），但**能力点字段可编辑**（服务端仅放宽该字段，
+ *   PATCH 只携带 capabilities）；自定义岗位可编辑 / 克隆 / 删除。
+ * - ⚠️ 能力**载荷**（permission / tools / model / worker）仍不在本 Tab：它们属于 Agent，
+ *   挂在 Tab 1（引擎原生权限）。本组件绝无 permission/tools 编辑器。
+ * - 数据源：/api/v1/agent-roles（唯一数据路径，不另起并行来源）；
  *   默认 Agent 是**单一选择器**（issue 3/todo 7）：本平台 Agent 与引擎外部 Agent 同列，
  *   互斥写入 defaultAgentId XOR defaultOpencodeAgentName（服务端同样强制「至多一个」）。
+ *   能力点目录（key / 中文名 / 覆盖工具）见 `src/api/role-capabilities.ts`。
  */
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { ConfirmDialog } from "@/src/components/ui";
+import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
-  agentRolesApi,
-  type AgentRoleDto,
-} from "@/src/api/agent-roles";
+  factoryCapabilityMap,
+  normalizeCapabilities,
+  summarizeCapabilities,
+} from "@/src/api/role-capabilities";
+import { RoleCapabilityEditor } from "@/src/components/agents/RoleCapabilityEditor";
 import {
   neutral,
   space,
@@ -80,6 +89,10 @@ interface RoleDraft {
   description: string;
   defaultAgentId: string;
   defaultOpencodeAgentName: string;
+  /** 完整能力点 map（目录键恒在 + 目录外键保留）；保存时整份提交（自描述）。 */
+  capabilities: Record<string, boolean>;
+  /** true = 服务端 `capabilities === null`（从未保存）→ 当前 map 为出厂默认。 */
+  capabilitiesFromFactory: boolean;
   rolePrompt: string;
 }
 
@@ -89,16 +102,21 @@ const EMPTY_DRAFT: RoleDraft = {
   description: "",
   defaultAgentId: "",
   defaultOpencodeAgentName: "",
+  capabilities: factoryCapabilityMap(),
+  capabilitiesFromFactory: true,
   rolePrompt: "",
 };
 
 function draftOf(role: AgentRoleDto): RoleDraft {
+  const caps = normalizeCapabilities(role.capabilities);
   return {
     key: role.key,
     name: role.name,
     description: role.description ?? "",
     defaultAgentId: role.defaultAgentId ?? "",
     defaultOpencodeAgentName: role.defaultOpencodeAgentName ?? "",
+    capabilities: caps.map,
+    capabilitiesFromFactory: caps.fromFactory,
     rolePrompt: role.rolePrompt ?? "",
   };
 }
@@ -203,6 +221,9 @@ export function AgentRolesTab({
   const readOnly = creating ? false : isBuiltin;
   const canRemoveSelected = !!selected && !isBuiltin && canDelete;
   const canEditSelected = creating ? canCreate : !!selected && !isBuiltin && canEdit;
+  // 能力点独立于身份只读：内置岗位也可改能力点（服务端仅放宽该字段）；权限判据为 agents:edit。
+  const capabilitiesReadOnly = creating ? !canCreate : !canEdit;
+  const canSaveCapabilities = creating ? canCreate : !!selected && canEdit;
 
   // 已保存的外部名若不在本次引擎回答里（引擎降级/条目下线/加载中），仍作为选中项展示——绝不静默丢弃。
   const draftExternalName = draft.defaultOpencodeAgentName;
@@ -227,6 +248,8 @@ export function AgentRolesTab({
     mutationFn: async () => {
       const internal = draft.defaultAgentId || null;
       const external = draft.defaultOpencodeAgentName || null;
+      // 能力点整份提交（目录键恒在 + 目录外键保留）：存储值自描述，前端不依赖「缺失=允许」推断。
+      const capabilities = draft.capabilities;
       if (creating) {
         const created = await agentRolesApi.create({
           name: draft.name.trim(),
@@ -235,15 +258,22 @@ export function AgentRolesTab({
           description: draft.description.trim() || undefined,
           defaultAgentId: internal,
           defaultOpencodeAgentName: external,
+          capabilities,
           rolePrompt: draft.rolePrompt,
         });
         return created.id;
+      }
+      if (isBuiltin) {
+        // 内置岗位：仅能力点字段可写（服务端仅放宽该字段）；身份字段保持只读。
+        await agentRolesApi.update(selected!.id, { capabilities });
+        return selected!.id;
       }
       await agentRolesApi.update(selected!.id, {
         name: draft.name.trim(),
         description: draft.description.trim() || null,
         defaultAgentId: internal,
         defaultOpencodeAgentName: external,
+        capabilities,
         rolePrompt: draft.rolePrompt,
       });
       return selected!.id;
@@ -276,6 +306,8 @@ export function AgentRolesTab({
         description: source.description ?? undefined,
         defaultAgentId: source.defaultAgentId,
         defaultOpencodeAgentName: source.defaultOpencodeAgentName,
+        // 克隆沿用来源岗位的**生效**能力点（含 null→出厂默认的情况），存储值自描述。
+        capabilities: normalizeCapabilities(source.capabilities).map,
         rolePrompt: source.rolePrompt ?? undefined,
       }),
     onSuccess: (clone) => {
@@ -471,6 +503,17 @@ export function AgentRolesTab({
                   <span style={{ display: "block", fontSize: fontSize.xs, color: neutral[400], marginTop: space.xs }}>
                     默认 Agent：{describeDefaultSlot(role)}
                   </span>
+                  <span
+                    data-testid="role-item-capabilities"
+                    data-source={normalizeCapabilities(role.capabilities).fromFactory ? "factory-default" : "stored"}
+                    style={{ display: "block", fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}
+                  >
+                    {(() => {
+                      const caps = normalizeCapabilities(role.capabilities);
+                      const { allowed, denied } = summarizeCapabilities(caps.map);
+                      return `权限点：${allowed} 允许 / ${denied} 拒绝${caps.fromFactory ? "（出厂默认）" : ""}`;
+                    })()}
+                  </span>
                 </span>
               </button>
             );
@@ -578,7 +621,7 @@ export function AgentRolesTab({
                 }}
               >
                 <span aria-hidden style={{ fontWeight: 700 }}>i</span>
-                内置角色只读，不可编辑或删除。
+                内置角色：身份字段只读、不可删除；平台能力点可调整。
               </div>
             )}
 
@@ -668,6 +711,24 @@ export function AgentRolesTab({
             </div>
 
             <div style={{ display: "flex", flexDirection: "column" }}>
+              <span style={labelStyle}>平台能力点</span>
+              <RoleCapabilityEditor
+                value={draft.capabilities}
+                fromFactory={draft.capabilitiesFromFactory}
+                creating={creating}
+                readOnly={capabilitiesReadOnly}
+                pending={saveMutation.isPending}
+                onChange={(key, allowed) =>
+                  setDraft((d) => ({
+                    ...d,
+                    capabilities: { ...d.capabilities, [key]: allowed },
+                    capabilitiesFromFactory: false,
+                  }))
+                }
+              />
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column" }}>
               <label htmlFor="role-prompt" style={labelStyle}>岗位职责提示词</label>
               <textarea
                 id="role-prompt"
@@ -691,12 +752,15 @@ export function AgentRolesTab({
                   flex: 1,
                 }}
               >
-                能力（权限 / 工具 / 模型）属于 Agent，请到 Agent Tab 配置；岗位只定义「这是一个什么岗位」。
+                平台能力点（上方）决定本岗位成员调用平台工具（vteam_* MCP）的权限：缺省允许，
+                出厂预设拒绝的敏感点以「拒绝」档位显示，放开需手动切换；引擎原生权限（edit/read/bash/task）、
+                模型与技能属于 Agent，请到 Agent Tab 配置。
               </span>
               {!creating && !isBuiltin && canEditSelected && (
                 <button
                   type="button"
                   data-testid="role-save-button"
+                  data-scope="role"
                   onClick={() => saveMutation.mutate()}
                   disabled={saveMutation.isPending || !draft.name.trim()}
                   style={{
@@ -715,10 +779,34 @@ export function AgentRolesTab({
                   {saveMutation.isPending ? "保存中…" : "保存"}
                 </button>
               )}
+              {!creating && isBuiltin && canSaveCapabilities && (
+                <button
+                  type="button"
+                  data-testid="role-save-button"
+                  data-scope="capabilities"
+                  onClick={() => saveMutation.mutate()}
+                  disabled={saveMutation.isPending}
+                  style={{
+                    padding: `${space.sm}px ${space.lg}px`,
+                    borderRadius: radius.md,
+                    border: "none",
+                    backgroundColor: "#0D9488",
+                    color: "#FFFFFF",
+                    fontSize: fontSize.md,
+                    fontWeight: 500,
+                    cursor: saveMutation.isPending ? "default" : "pointer",
+                    opacity: saveMutation.isPending ? 0.6 : 1,
+                    fontFamily: fontFamily.body,
+                  }}
+                >
+                  {saveMutation.isPending ? "保存中…" : "保存能力点"}
+                </button>
+              )}
               {creating && (
                 <button
                   type="button"
                   data-testid="role-save-button"
+                  data-scope="create"
                   onClick={() => saveMutation.mutate()}
                   disabled={saveMutation.isPending || !draft.name.trim() || !draft.key.trim()}
                   style={{

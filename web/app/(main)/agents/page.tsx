@@ -12,6 +12,9 @@
  * - 权限区渲染 `effectivePermission`（ExecutionPolicy 解析：edit/read glob + bash/task +
  *   vteam_* MCP 工具 deny）；层② guard 工具行在策略已绑定时可切换 allow/ask/deny
  *   （PATCH /execution-policies/:policyId，template 与 custom/clone 同一路径）；
+ *   ⚠️ 平台工具（vteam_* MCP）的**调用授权**已归岗位（`AgentRole.capabilities` 业务能力点，
+ *   角色 Tab 直接编辑，`PlatformToolPermissionService.resolveByRole`）；本页策略只决定引擎原生权限
+ *   （edit/read/bash/task）与引擎侧工具矩阵，不随执行 Agent 变化。
  *   层① 原生行（edit/read/bash/task）在策略已绑定时同样可编辑：edit/read 为 glob 规则表编辑器、
  *   bash/task 为三态分段（task 控制子 Agent 扇出，opencode 原生权限直接执行）；未绑定策略时中性提示，
  *   不做历史回退。原生编辑与 MCP 工具切换共用同一 policy mutation：单一在途闸门（writePending）
@@ -1439,7 +1442,15 @@ function EffectivePermissionSection({ effective, agentId, mcpServers, mcpTools, 
         </div>
       )}
 
-      {/* MCP 工具分组（server 目录驱动）：停用 server 默认收起，启用默认展开 */}
+      {/* MCP 工具分组（server 目录驱动）：停用 server 默认收起，启用默认展开。
+          平台工具（vteam_*）调用授权以成员岗位绑定策略为准（角色 Tab）——见上方 scope note。 */}
+      <span
+        data-testid="effective-mcp-scope-note"
+        style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}
+      >
+        平台工具（vteam_* MCP）的调用授权以成员岗位的平台能力点为准（「角色」Tab 配置）；
+        本页工具开关不改变岗位授权。
+      </span>
       {renderMcpGroups()}
       {policyError && (
         <div
@@ -2118,7 +2129,9 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
         </div>
       </div>
 
-      {/* ④ 权限（执行策略生效权限：原生行只读 + MCP 按 server 分组三态可配，绑定策略即可编辑） */}
+      {/* ④ 引擎原生权限（执行策略 permission 层：edit/read/bash/task）。
+          平台工具（vteam_* MCP）的调用授权不在这里——由成员**岗位**的平台能力点
+          （AgentRole.capabilities）决定，见「角色」Tab。 */}
       <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
         <div
           style={{
@@ -2128,12 +2141,20 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
           }}
         >
           <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
-            权限
+            引擎原生权限
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
             {agent.effectivePermission ? "执行策略 · 可编辑" : "执行策略 · 未绑定"}
           </span>
         </div>
+        <span
+          data-testid="effective-permission-scope-note"
+          style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}
+        >
+          本策略决定引擎原生权限（edit / read / bash / task）与引擎侧工具矩阵；
+          平台工具（vteam_* MCP）的调用授权由成员岗位的平台能力点决定（「角色」Tab），
+          不随执行 Agent 变化。
+        </span>
         <EffectivePermissionSection
           effective={agent.effectivePermission ?? null}
           agentId={agent.id}
