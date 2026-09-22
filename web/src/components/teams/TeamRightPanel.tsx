@@ -171,7 +171,7 @@ const subTabStyle = (active: boolean): CSSProperties => ({
 /* ------------------------------------------------------------------ */
 /* 团队子 Tab                                                          */
 /* ------------------------------------------------------------------ */
-type TeamSubTab = "overview" | "settings" | "memory" | "channels" | "actions";
+type TeamSubTab = "overview" | "channels";
 
 /** 角色字符串 → RoleKey（团队成员的角色在 m.agent.role，非法值归一 developer） */
 function toRoleKey(role: string | null | undefined): RoleKey {
@@ -285,10 +285,7 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
       <div style={{ display: "flex", borderBottom: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], flexShrink: 0, overflowX: "auto" }}>
         {([
           { key: "overview" as const, label: "概览" },
-          { key: "settings" as const, label: "设置" },
-          { key: "memory" as const, label: "记忆" },
           { key: "channels" as const, label: "渠道" },
-          { key: "actions" as const, label: "操作" },
         ]).map((tab) => (
           <button key={tab.key} type="button" onClick={() => setSubTab(tab.key)} style={subTabStyle(subTab === tab.key)}>
             {tab.label}
@@ -319,29 +316,8 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
               )}
             </div>
             <div style={{ padding: `${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
-              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>成员（{members.length} 人）</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                {members.map((m: any) => {
-                  const rk = toRoleKey(m.agent?.role);
-                  return (
-                    <div key={m.id} style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-                      <AgentAvatar role={rk} size="sm" />
-                      <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.sm, color: neutral[700], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {m.alias ?? m.agent?.name ?? m.id}
-                      </span>
-                      <span style={{ fontSize: 10, color: neutral[400], flexShrink: 0 }}>{roles[rk]?.label ?? rk}</span>
-                      {m.enabled === false && <span style={{ fontSize: 10, color: "#D97706", flexShrink: 0 }}>已禁用</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
-        {subTab === "settings" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
-            <div style={{ padding: `${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>会话设置</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm, padding: `${space.xs}px 0` }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>托管模式</div>
                   <div style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}>{team?.managedMode ? "已开启：由主 Agent 自动响应群聊消息" : "已关闭：@ 消息由人工确认后再执行"}</div>
@@ -359,9 +335,7 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
                   <span aria-hidden style={{ position: "absolute", top: 2, left: (team?.managedMode ?? false) ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} />
                 </button>
               </div>
-            </div>
-            <div style={{ padding: `${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm, padding: `${space.xs}px 0` }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>完成后重置会话</div>
                   <div style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}>
@@ -382,12 +356,15 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
                   <span aria-hidden style={{ position: "absolute", top: 2, left: !reuseSession ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} />
                 </button>
               </div>
+              {settingError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>{settingError}</div>}
+              <div style={{ marginTop: space.sm }}>
+                <TeamMemoryCard team={team} />
+              </div>
             </div>
-            {settingError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>{settingError}</div>}
+            <button type="button" onClick={() => window.location.href = `/tasks/new?teamId=${team?.id ?? ""}`} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>创建任务</button>
+            <button type="button" onClick={() => window.location.href = `/teams/${team?.id ?? ""}/tasks`} style={{ fontSize: fontSize.xs, color: "#0D9488", background: "none", border: "none", cursor: "pointer", fontFamily: fontFamily.body, alignSelf: "flex-start" }}>历史任务 →</button>
+            <div style={{ fontSize: 10, color: neutral[400], textAlign: "center", lineHeight: 1.5 }}>成员管理在左侧面板</div>
           </div>
-        )}
-        {subTab === "memory" && (
-          <TeamMemoryCard team={team} onToggleReuse={(next: boolean) => reuseMutation.mutate(next)} pending={reuseMutation.isPending} error={settingError} />
         )}
         {subTab === "channels" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
@@ -405,12 +382,6 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
               hint="绑定后向该渠道发送任务通知"
               managePath="/integrations"
             />
-          </div>
-        )}
-        {subTab === "actions" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
-            <button type="button" onClick={() => window.location.href = `/tasks/new?teamId=${team?.id ?? ""}`} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>创建任务</button>
-            <button type="button" onClick={() => window.location.href = `/teams/${team?.id ?? ""}/tasks`} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>历史任务</button>
           </div>
         )}
       </div>
