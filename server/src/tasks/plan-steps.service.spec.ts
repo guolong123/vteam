@@ -35,6 +35,7 @@ describe('PlanStepsService', () => {
       mainAgentMemberId: 'tmm_main',
     });
     prisma.session.findFirst.mockResolvedValue({
+      taskId: null,
       workerId: 'w_1',
       instanceRef: 'ses_1',
     });
@@ -54,7 +55,11 @@ describe('PlanStepsService', () => {
 
     expect(prisma.session.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { teamId: 'tm_1', teamMemberId: 'tmm_main' },
+        where: {
+          teamId: 'tm_1',
+          teamMemberId: 'tmm_main',
+          OR: [{ taskId: 't_1' }, { taskId: null }],
+        },
       }),
     );
     // ⚠️ capabilities 回归断言（listOpencodeAgents 本地部署踩坑同类 bug）：
@@ -107,6 +112,7 @@ describe('PlanStepsService', () => {
     prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
     prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: 'tmm_main' });
     prisma.session.findFirst.mockResolvedValue({
+      taskId: null,
       workerId: 'w_1',
       instanceRef: 'ses_1',
     });
@@ -143,5 +149,91 @@ describe('PlanStepsService', () => {
     const out = await service.listPlanSteps('t_1');
 
     expect(out).toEqual({ steps: [], workerId: null, degraded: true });
+  });
+
+  it('会话绑定本任务（taskId 一致）→ 正常取数', async () => {
+    happyPath();
+    prisma.session.findFirst.mockResolvedValue({
+      taskId: 't_1',
+      workerId: 'w_1',
+      instanceRef: 'ses_1',
+    });
+    workerClient.listTodos.mockResolvedValue([{ content: '本任务步骤', status: 'pending' }]);
+
+    const out = await service.listPlanSteps('t_1');
+
+    expect(workerClient.listTodos).toHaveBeenCalled();
+    expect(out.degraded).toBe(false);
+    expect(out.steps).toHaveLength(1);
+  });
+
+  it('同 team 两任务会话隔离：定位到别的任务绑定的会话 → degraded，不串数据', async () => {
+    prisma.task.findUnique.mockResolvedValue({ id: 't_2', teamId: 'tm_1' });
+    prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: 'tmm_main' });
+    // where 已用 OR 过滤，此处模拟并发竞态下仍拿到 t_1 绑定会话的兜底路径。
+    prisma.session.findFirst.mockResolvedValue({
+      taskId: 't_1',
+      workerId: 'w_1',
+      instanceRef: 'ses_other',
+    });
+    prisma.worker.findUnique.mockResolvedValue({
+      id: 'w_1',
+      status: 'online',
+      capabilities: {},
+    });
+
+    const out = await service.listPlanSteps('t_2');
+
+    expect(out).toEqual({ steps: [], workerId: null, degraded: true });
+    expect(workerClient.listTodos).not.toHaveBeenCalled();
+  });
+
+  it('各取各的：t_1 查到 t_1 会话走通，t_2 查到 t_2 会话走通', async () => {
+    prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: 'tmm_main' });
+    prisma.worker.findUnique.mockResolvedValue({
+      id: 'w_1',
+      status: 'online',
+      capabilities: {},
+    });
+    workerClient.listTodos.mockImplementation((_w: unknown, ref: string) => {
+      if (ref === 'ses_t1') return Promise.resolve([{ content: 't1 步骤', status: 'pending' }]);
+      if (ref === 'ses_t2') return Promise.resolve([{ content: 't2 步骤', status: 'pending' }]);
+      return Promise.resolve([]);
+    });
+
+    prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+    prisma.session.findFirst.mockImplementation((args: {
+      where: { OR: Array<{ taskId: string | null }> };
+    }) => {
+      const ids = args.where.OR.map((c) => c.taskId);
+      if (ids.includes('t_1')) {
+        return Promise.resolve({ taskId: 't_1', workerId: 'w_1', instanceRef: 'ses_t1' });
+      }
+      return Promise.resolve(null);
+    });
+    const out1 = await service.listPlanSteps('t_1');
+
+    prisma.task.findUnique.mockResolvedValue({ id: 't_2', teamId: 'tm_1' });
+    prisma.session.findFirst.mockImplementation((args: {
+      where: { OR: Array<{ taskId: string | null }> };
+    }) => {
+      const ids = args.where.OR.map((c) => c.taskId);
+      if (ids.includes('t_2')) {
+        return Promise.resolve({ taskId: 't_2', workerId: 'w_1', instanceRef: 'ses_t2' });
+      }
+      return Promise.resolve(null);
+    });
+    const out2 = await service.listPlanSteps('t_2');
+
+    expect(out1).toEqual({
+      steps: [{ content: 't1 步骤', status: 'pending' }],
+      workerId: 'w_1',
+      degraded: false,
+    });
+    expect(out2).toEqual({
+      steps: [{ content: 't2 步骤', status: 'pending' }],
+      workerId: 'w_1',
+      degraded: false,
+    });
   });
 });

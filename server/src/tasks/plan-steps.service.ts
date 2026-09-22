@@ -19,7 +19,8 @@ export interface PlanStepsResult {
 /**
  * 计划步骤服务：任务 → 主 Agent 成员 session → opencode serve todo。
  *
- * 定位链：task.teamId → team.mainAgentMemberId → session（teamId + teamMemberId，
+ * 定位链：task.teamId → team.mainAgentMemberId → session（teamId + teamMemberId
+ * + taskId 维度：仅候选"本任务绑定"或"任务无关（team 共享，taskId=null）"的会话，
  * 取最近更新的一条，要求 workerId + instanceRef 非空）→ worker 行 capabilities →
  * WorkerClient.listTodos（→ worker GET /todos → serve GET /session/{id}/todo）。
  *
@@ -53,11 +54,20 @@ export class PlanStepsService {
         where: {
           teamId: task.teamId,
           teamMemberId: team.mainAgentMemberId,
+          // taskId 维度（Session.taskId 可空：新写路径恒 null，存量 task 绑定行才有值）：
+          // 候选限定为"本任务"或"任务无关（team 共享）"两类，绝不取到别的任务的会话。
+          OR: [{ taskId: taskId }, { taskId: null }],
         },
         orderBy: { updatedAt: 'desc' },
-        select: { workerId: true, instanceRef: true },
+        select: { taskId: true, workerId: true, instanceRef: true },
       });
-      if (!session?.workerId || !session?.instanceRef) {
+      // 会话显式绑定了别的任务（where 已过滤，此为并发竞态兜底）→ 降级，
+      // 绝不把其他任务的 todo 当本任务步骤返回。
+      if (
+        !session?.workerId ||
+        !session?.instanceRef ||
+        (session.taskId != null && session.taskId !== taskId)
+      ) {
         return { steps: [], workerId: null, degraded: true };
       }
       const worker = await this.prisma.worker.findUnique({
