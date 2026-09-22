@@ -148,8 +148,27 @@ describe('WorkerDispatcher', () => {
     ...overrides,
   });
 
+  /** 名册行（默认即 dispatch 目标 tmm_0000000001）：role 非空时提供岗位策略解析输入。 */
+  const memberRow = (overrides: Record<string, unknown> = {}) => ({
+    id: 'tmm_0000000001',
+    agentId: 'a_product',
+    alias: '产品经理-1',
+    seq: 1,
+    agent: { id: 'a_product', name: '产品经理', agentKey: 'product' },
+    role: null as
+      | {
+          id?: string | null;
+          key?: string | null;
+          capabilities?: Record<string, boolean> | null;
+          rolePrompt?: string | null;
+        }
+      | null,
+    ...overrides,
+  });
+
   type PolicyResolverStub = {
-    resolveByAgent: jest.Mock;
+    resolveByRole: jest.Mock;
+    resolveByAgent?: jest.Mock;
   };
 
   const createDispatcher = (policyService?: PolicyResolverStub) =>
@@ -540,7 +559,14 @@ describe('WorkerDispatcher', () => {
       expect((prisma as any).teamMember.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           include: expect.objectContaining({
-            role: { select: { rolePrompt: true } },
+            role: {
+              select: {
+                id: true,
+                key: true,
+                capabilities: true,
+                rolePrompt: true,
+              },
+            },
           }),
         }),
       );
@@ -799,18 +825,28 @@ describe('WorkerDispatcher', () => {
       expect(customSystem).not.toContain('vteam_issue_create');
     });
 
-    it('Todo 11：自定义 agent 的策略 correction → system 注入【职责边界】（此前为空）', async () => {
+    it('slice 3：岗位策略 correction → system 注入【职责边界】（解析键为 role.key，非 agentKey）', async () => {
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_demo',
         name: '示例助手',
         role: null,
         prompt: '示例职责。',
         agentKey: 'demo-agent',
-        policyId: 'ep_custom_demo',
+        policyId: 'ep_agent_deny',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        memberRow({
+          role: {
+            id: 'ar_demo',
+            key: 'demo-role',
+            capabilities: {},
+            rolePrompt: null,
+          },
+        }),
+      ]);
       const policyService = {
-        resolveByAgent: jest.fn().mockResolvedValue({
+        resolveByRole: jest.fn().mockResolvedValue({
           policyId: 'ep_custom_demo',
           policyName: '示例策略',
           agentName: 'vteam-demo-agent',
@@ -824,6 +860,7 @@ describe('WorkerDispatcher', () => {
           },
           serverGated: [],
         } as ResolvedExecutionPolicy),
+        resolveByAgent: jest.fn(),
       };
       const d = createDispatcher(policyService);
       await d.dispatch({
@@ -840,38 +877,49 @@ describe('WorkerDispatcher', () => {
       const execArgs = workerClient.execute.mock.calls[0][1] as {
         system: string;
       };
-      expect(policyService.resolveByAgent).toHaveBeenCalledWith({
-        policyId: 'ep_custom_demo',
-        agentKey: 'demo-agent',
+      expect(policyService.resolveByRole).toHaveBeenCalledWith({
+        roleKey: 'demo-role',
       });
+      expect(policyService.resolveByAgent).not.toHaveBeenCalled();
       expect(execArgs.system).toContain(
         '【职责边界】示例自定义职责：只做只读核对。',
       );
       expect(execArgs.system).toContain('review→vteam-tester');
     });
 
-    it('todo 2：dispatch 用 resolved policy tools 驱动记忆/产出物段（缺工具 → 屏蔽）', async () => {
+    it('todo 2：dispatch 用岗位策略 tools 驱动记忆/产出物段（缺工具 → 屏蔽）', async () => {
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_demo',
         name: '示例助手',
         role: 'plan',
         prompt: '示例职责。',
         agentKey: 'demo-agent',
-        policyId: 'ep_custom_demo',
+        policyId: 'ep_agent_deny',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        memberRow({
+          role: {
+            id: 'ar_demo',
+            key: 'demo-role',
+            // 显式拒绝 memory.manage/doc.submit → 两段都屏蔽（与 role='plan' 无关，纯能力点判定）
+            capabilities: { 'memory.manage': false, 'doc.submit': false },
+            rolePrompt: null,
+          },
+        }),
+      ]);
       const policyService = {
-        resolveByAgent: jest.fn().mockResolvedValue({
+        resolveByRole: jest.fn().mockResolvedValue({
           policyId: 'ep_custom_demo',
           policyName: '示例策略',
           agentName: 'vteam-demo-agent',
           permission: {},
-          // 缺 memory_save + submit_artifact → 两段都屏蔽（与 role='plan' 无关，纯工具判定）
           tools: { vteam_group_post: 'allow' },
           bashDeny: [],
           correction: { scopeSummary: '示例职责。', handoff: {} },
           serverGated: [],
         } as ResolvedExecutionPolicy),
+        resolveByAgent: jest.fn(),
       };
       const d = createDispatcher(policyService);
       await d.dispatch({
@@ -890,23 +938,35 @@ describe('WorkerDispatcher', () => {
           system: string;
         }
       ).system;
-      expect(policyService.resolveByAgent).toHaveBeenCalledTimes(1);
+      expect(policyService.resolveByRole).toHaveBeenCalledTimes(1);
+      expect(policyService.resolveByAgent).not.toHaveBeenCalled();
       expect(system).not.toContain('【记忆管理】');
       expect(system).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
     });
 
-    it('todo 2：dispatch 用 resolved policy tools 驱动（持有工具 → 两段照常注入，即使 role=plan）', async () => {
+    it('todo 2：dispatch 用岗位策略 tools 驱动（持有工具 → 两段照常注入，即使 role=plan）', async () => {
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_demo',
         name: '示例助手',
         role: 'plan',
         prompt: '示例职责。',
         agentKey: 'demo-agent',
-        policyId: 'ep_custom_demo',
+        policyId: 'ep_agent_deny',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        memberRow({
+          role: {
+            id: 'ar_demo',
+            key: 'demo-role',
+            // 显式允许 memory.manage/doc.submit → 两段照常注入（即使 agent 的 role='plan'）。
+            capabilities: { 'memory.manage': true, 'doc.submit': true },
+            rolePrompt: null,
+          },
+        }),
+      ]);
       const policyService = {
-        resolveByAgent: jest.fn().mockResolvedValue({
+        resolveByRole: jest.fn().mockResolvedValue({
           policyId: 'ep_custom_demo',
           policyName: '示例策略',
           agentName: 'vteam-demo-agent',
@@ -919,6 +979,7 @@ describe('WorkerDispatcher', () => {
           correction: { scopeSummary: '示例职责。', handoff: {} },
           serverGated: [],
         } as ResolvedExecutionPolicy),
+        resolveByAgent: jest.fn(),
       };
       const d = createDispatcher(policyService);
       await d.dispatch({
@@ -937,30 +998,40 @@ describe('WorkerDispatcher', () => {
           system: string;
         }
       ).system;
-      expect(policyService.resolveByAgent).toHaveBeenCalledTimes(1);
-      // todo 10：resolveByAgent 不再收 role 参数（D4；exact-object 断言已足够，
-      // 此处额外显式钉死键集合，防未来 refactor 把 role 加回去）
+      expect(policyService.resolveByRole).toHaveBeenCalledTimes(1);
+      // correction 仍只认岗位 roleKey（显式钉死键集合，防未来 refactor 把 agentKey 混回）。
       expect(
         Object.keys(
-          policyService.resolveByAgent.mock.calls[0][0] as object,
+          policyService.resolveByRole.mock.calls[0][0] as object,
         ).sort(),
-      ).toEqual(['agentKey', 'policyId']);
+      ).toEqual(['roleKey']);
+      expect(policyService.resolveByAgent).not.toHaveBeenCalled();
       expect(system).toContain('【记忆管理】');
       expect(system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
     });
 
-    it('Todo 11：策略 correction 清空 scopeSummary → 不注入【职责边界】', async () => {
+    it('slice 3：岗位策略 correction 清空 scopeSummary → 不注入【职责边界】', async () => {
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_demo',
         name: '示例助手',
         role: null,
         prompt: '示例职责。',
         agentKey: 'demo-agent',
-        policyId: 'ep_custom_demo',
+        policyId: 'ep_agent_deny',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        memberRow({
+          role: {
+            id: 'ar_demo',
+            key: 'demo-role',
+            capabilities: {},
+            rolePrompt: null,
+          },
+        }),
+      ]);
       const policyService = {
-        resolveByAgent: jest.fn().mockResolvedValue({
+        resolveByRole: jest.fn().mockResolvedValue({
           policyId: 'ep_custom_demo',
           policyName: '示例策略',
           agentName: 'vteam-demo-agent',
@@ -970,6 +1041,7 @@ describe('WorkerDispatcher', () => {
           correction: { scopeSummary: '', handoff: {} },
           serverGated: [],
         } as ResolvedExecutionPolicy),
+        resolveByAgent: jest.fn(),
       };
       const d = createDispatcher(policyService);
       await d.dispatch({
@@ -986,7 +1058,137 @@ describe('WorkerDispatcher', () => {
       const execArgs = workerClient.execute.mock.calls[0][1] as {
         system: string;
       };
+      expect(policyService.resolveByRole).toHaveBeenCalledTimes(1);
       expect(execArgs.system).not.toContain('【职责边界】');
+    });
+
+    it('slice 3 突变检测：岗位策略与执行 Agent 策略冲突 → 岗位决定 correction/tools（不读 Agent 策略）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_demo',
+        name: '示例助手',
+        role: null,
+        prompt: '示例职责。',
+        agentKey: 'demo-agent',
+        // 执行 Agent 策略：另一套 correction + 空 tools（若被读取 → 边界与屏蔽全错）
+        policyId: 'ep_agent_deny',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        memberRow({
+          role: {
+            id: 'ar_demo',
+            key: 'demo-role',
+            capabilities: { 'memory.manage': true, 'doc.submit': true },
+            rolePrompt: null,
+          },
+        }),
+      ]);
+      const policyService = {
+        resolveByRole: jest.fn().mockResolvedValue({
+          policyId: 'ep_role_ok',
+          policyName: '岗位策略',
+          agentName: 'vteam-demo-agent',
+          permission: {},
+          tools: {
+            vteam_memory_save: 'allow',
+            vteam_submit_artifact: 'allow',
+          },
+          bashDeny: [],
+          correction: { scopeSummary: '岗位边界：听岗位的。', handoff: {} },
+          serverGated: [],
+        } as ResolvedExecutionPolicy),
+        resolveByAgent: jest.fn().mockResolvedValue({
+          policyId: 'ep_agent_deny',
+          policyName: '执行者策略',
+          agentName: 'vteam-demo-agent',
+          permission: {},
+          tools: {},
+          bashDeny: [],
+          correction: { scopeSummary: '执行者边界：听执行者的。', handoff: {} },
+          serverGated: [],
+        } as ResolvedExecutionPolicy),
+      };
+      const d = createDispatcher(policyService);
+      await d.dispatch({
+        ...request,
+        targets: [
+          {
+            agentId: 'a_demo',
+            instanceId: 'tmm_0000000001',
+            sessionId: 's_0000000001',
+          },
+        ],
+      });
+
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(policyService.resolveByRole).toHaveBeenCalledWith({
+        roleKey: 'demo-role',
+      });
+      expect(policyService.resolveByAgent).not.toHaveBeenCalled();
+      expect(system).toContain('【职责边界】岗位边界：听岗位的。');
+      expect(system).not.toContain('执行者边界');
+      // 工具屏蔽同样取岗位能力矩阵：allow ⇒ 记忆/产出物两段照常注入（Agent 空 tools 会屏蔽）
+      expect(system).toContain('【记忆管理】');
+      expect(system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+    });
+
+    it('slice 3：岗位策略解析异常 → 不阻断分派，回退岗位常量边界', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        prompt: '负责需求拆解。',
+        agentKey: 'product',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      (prisma as any).teamMember.findMany = jest.fn().mockResolvedValue([
+        memberRow({
+          role: {
+            id: 'ar_product',
+            key: 'product',
+            capabilities: {},
+            rolePrompt: null,
+          },
+        }),
+      ]);
+      const policyService = {
+        resolveByRole: jest
+          .fn()
+          .mockRejectedValue(new Error('execution_policies 查询失败')),
+        resolveByAgent: jest.fn(),
+      };
+      const d = createDispatcher(policyService);
+      await d.dispatch(request);
+
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(policyService.resolveByRole).toHaveBeenCalledTimes(1);
+      expect(system).toContain(ROLE_BOUNDARIES['vteam-product'].scopeSummary);
+    });
+
+    it('slice 3：成员未绑角色 → 不读 Agent 策略，回退 agentKey 常量（存量路径）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+        prompt: '负责需求拆解。',
+        agentKey: 'product',
+        policyId: 'ep_agent_deny',
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+      });
+      (prisma as any).teamMember.findMany = jest
+        .fn()
+        .mockResolvedValue([memberRow({ role: null })]);
+      const policyService = {
+        resolveByRole: jest.fn(),
+        resolveByAgent: jest.fn(),
+      };
+      const d = createDispatcher(policyService);
+      await d.dispatch(request);
+
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(policyService.resolveByRole).not.toHaveBeenCalled();
+      expect(policyService.resolveByAgent).not.toHaveBeenCalled();
+      expect(system).toContain(ROLE_BOUNDARIES['vteam-product'].scopeSummary);
     });
 
     it('主成员目标：system 注入主 Agent 职责段 + 团队成员段（mainAgentMemberId 判定，TeamMember 组装）', async () => {

@@ -59,6 +59,18 @@ export interface AgentPolicyInput {
   agentKey?: string | null;
 }
 
+/**
+ * `resolveByRole` 的角色输入：只读 `roleKey`（取 `AgentRole.key`）。
+ *
+ * 2026-09-21 capability model：`AgentRole.policyId` 已删除，岗位的平台工具权威改为
+ * `AgentRole.capabilities`（业务能力点矩阵），本方法**不再**服务工具门禁；仅保留给
+ * dispatcher 解析**提示词边界段 correction**（prompt 关注点，非授权）。内置 7 名的
+ * roleKey 等于模板 `agentKey`，故 `vteam-<roleKey>` 命中 `ROLE_BOUNDARIES` 常量。
+ */
+export interface RolePolicyInput {
+  roleKey?: string | null;
+}
+
 export interface ResolvedExecutionPolicy {
   policyId: string;
   policyName: string;
@@ -701,6 +713,35 @@ export class ExecutionPolicyService implements OnModuleInit {
   }
 
   /**
+   * 按**角色（岗位）**解析其执行策略快照——**仅供 dispatcher 取提示词边界段
+   * `correction`**（prompt 关注点，非授权；2026-09-21 capability model 后 `AgentRole`
+   * 已无 `policyId`，平台工具门改读 `AgentRole.capabilities`，不再经本方法）。
+   *
+   * 与 `resolveByAgent` 同构，只是键换成角色：`roleKey` 命中内置 7 名
+   * （`vteam-<roleKey>` ∈ `ROLE_BOUNDARIES`）时取约定 id `ep_<roleKey>` 并读取该策略行
+   * （DB 可编辑的 correction 胜出），行缺失时回退常量派生；其余（外部/自定义角色）→ null
+   * ⇒ 调用方回退 `ROLE_BOUNDARIES` 常量（不命中即无边界段）。
+   *
+   * `tools` 仍随返回（与 `resolveByAgent` 共享解析链），但**平台授权不读它**——dispatcher
+   * 的工具屏蔽由 `AgentRole.capabilities` 推导。
+   */
+  async resolveByRole(
+    role: RolePolicyInput,
+  ): Promise<ResolvedExecutionPolicy | null> {
+    const agentInput: AgentPolicyInput = {
+      policyId: null,
+      agentKey: role.roleKey ?? null,
+    };
+    const policyId = this.policyKeyOf(agentInput);
+    const policy = policyId
+      ? await this.prisma.executionPolicy.findUnique({
+          where: { id: policyId },
+        })
+      : null;
+    return this.resolveAgentWithFallback(agentInput, policy, policyId);
+  }
+
+  /**
    * 批量按 agent 解析其绑定策略（GET /agents 列表用，避免 N+1）。
    * 语义与 `resolveByAgent` 完全一致（DB 行胜出、行缺失内置名回退常量），
    * 单次 `findMany` 拉取去重后的策略全集后内存映射。
@@ -1001,7 +1042,8 @@ export class ExecutionPolicyService implements OnModuleInit {
    * - 无 config 的未知名（非内置）保持旧语义 `{ tools: {}, bashDeny: [] }`（纯展示路径默认 deny）。
    *
    * 内置名不再短路返回常量：Todo 4 移除后，DB 对内置策略 `tools`/`bashDeny` 的编辑
-   * 才真正流经 `resolveByAgent`/`resolveManyByAgents` 与页面/my_profile。
+   * 才真正流经 `resolveByAgent`/`resolveManyByAgents`/`resolveByRole` 与页面/my_profile
+   * （2026-09-21 role-owned authority：my_profile 与 dispatcher 走 `resolveByRole`）。
    */
   private guardForAgent(
     agentName: string,

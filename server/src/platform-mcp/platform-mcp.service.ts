@@ -100,7 +100,6 @@ import {
   PLAN_LIFECYCLE_ERRORS,
   PlanLifecycleService,
 } from '../tasks/plan-lifecycle.service';
-import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 import { REVIEW_ROUND_TIMEOUT_MS } from '../issues/review-round-gate.service';
 import { ReviewRoundService } from '../issues/review-round.service';
 import { tryParseLedger } from '../issues/review-round-ledger';
@@ -400,11 +399,6 @@ export class PlatformMcpService implements OnModuleInit {
     private readonly outboundDispatcher: NotificationDispatcherService,
     @Optional()
     private readonly moduleRef?: ModuleRef,
-    // 生效策略解析（my_profile effectivePermission 唯一事实来源；缺省可空——
-    // 单测/旧装配未提供时回退 effectivePermission=null，不阻断其余字段）。
-    @Optional()
-    @Inject(ExecutionPolicyService)
-    private readonly executionPolicyService?: ExecutionPolicyService,
     // 技能沉淀（skill_create）：缺省可空——单测/旧装配未提供时调用抛 503
     // 而非启动期崩溃；生产装配由 PlatformMcpModule 提供。
     @Optional()
@@ -3684,11 +3678,11 @@ export class PlatformMcpService implements OnModuleInit {
 
   /**
    * my_profile：自身 Agent 配置视图（只读，vteam-team-collaboration Todo 3）。
-   * 返回生效权限 effectivePermission（唯一事实来源，经绑定 ExecutionPolicy 解析，
-   * 与 live enforcement 同源）+ 任务实例别名/序号/工作目录/默认模型；
-   * prompt 仅返回前 500 字符摘要（promptTruncated 标记），不暴露完整提示词。
+   * 返回生效能力点 effectivePermission（唯一事实来源 = `AgentRole.capabilities`，与 live
+   * enforcement `assertToolAllowed` 同源；缺失键 ⇒ 允许）+ 任务实例别名/序号/工作目录/
+   * 默认模型；prompt 仅返回前 500 字符摘要（promptTruncated 标记），不暴露完整提示词。
    * 1. 归属校验（selfInstanceId 必填，返回活跃成员 id）。
-   * 2. 团队成员（含 agent 关联）查自身配置；缺失或不在任务团队 → 404。
+   * 2. 团队成员（含 agent/role 关联）查自身配置；缺失或不在任务团队 → 404。
    */
   async myProfile(
     ctx: PlatformMcpContext,
@@ -3704,16 +3698,17 @@ export class PlatformMcpService implements OnModuleInit {
     workDir: string | null;
     defaultModelId: string | null;
     /**
-     * 生效权限（唯一事实来源）：经 ExecutionPolicyService.resolveByAgent 按
-     * agent 绑定策略解析（层① opencode 原生 permission + 层② guard correction），
-     * 与 live enforcement 同源。未绑定/策略缺失时为 null（调用方回退提示词边界）。
+     * **岗位（Role）**的生效能力点矩阵——平台 `vteam_*` 工具权威（唯一事实来源）：
+     * 直接取 `AgentRole.capabilities`，与 live enforcement（`assertToolAllowed`）同源。
+     * 形状 `Record<string, boolean>`（业务能力点键 → 是否允许）；**缺失键 ⇒ 允许**
+     * （default-allow），显式 `false` ⇒ 拒绝。未绑岗位时为 null（调用方回退提示词边界）。
+     * 2026-09-21 capability model：本字段不再取执行 Agent 的策略；引擎原生层
+     * （edit/read/bash/task）仍由 worker injector 的 `buildAgentPolicies` 注入，不在此。
      */
     effectivePermission: {
-      policyId: string;
-      policyName: string;
-      agentName: string;
-      permission: Record<string, unknown>;
-      correction: Record<string, unknown>;
+      roleId: string;
+      roleKey: string;
+      capabilities: Record<string, boolean>;
     } | null;
     /** 调用方 opencode agent 名（`vteam-<role>`，无 role 回退 `vteam-plan`）。 */
     agentName: string;
@@ -3741,11 +3736,9 @@ export class PlatformMcpService implements OnModuleInit {
             name: true,
             prompt: true,
             defaultModelId: true,
-            policyId: true,
-            agentKey: true,
           },
         },
-        role: { select: { key: true, name: true } },
+        role: { select: { id: true, key: true, name: true, capabilities: true } },
       },
     });
     if (!member || (profileTeamId && member.teamId !== profileTeamId)) {
@@ -3757,47 +3750,34 @@ export class PlatformMcpService implements OnModuleInit {
     const profile = member;
     const prompt = profile.agent.prompt;
     const truncated = prompt.length > 500;
-    const agentRoleKey = roleKeyOf(profile);
-    const agentKey = profile.agent.agentKey ?? null;
-    const agentPolicyId =
-      (profile.agent as { policyId?: string | null }).policyId ?? null;
-    let effectivePermission: {
-      policyId: string;
-      policyName: string;
-      agentName: string;
-      permission: Record<string, unknown>;
-      correction: Record<string, unknown>;
-    } | null = null;
-    try {
-      const resolved = await this.executionPolicyService?.resolveByAgent({
-        policyId: agentPolicyId,
-        agentKey,
-      });
-      effectivePermission = resolved
+    const roleKey = roleKeyOf(profile);
+    const roleCapabilities =
+      profile.role?.capabilities !== null &&
+      typeof profile.role?.capabilities === 'object' &&
+      !Array.isArray(profile.role.capabilities)
+        ? (profile.role.capabilities as Record<string, boolean>)
+        : null;
+    const effectivePermission =
+      profile.role && roleKey
         ? {
-            policyId: resolved.policyId,
-            policyName: resolved.policyName,
-            agentName: resolved.agentName,
-            permission: resolved.permission,
-            correction: resolved.correction,
+            roleId: profile.role.id,
+            roleKey,
+            capabilities: roleCapabilities ?? {},
           }
         : null;
-    } catch {
-      effectivePermission = null;
-    }
     return {
       taskId: args.taskId,
       instanceId: profile.id,
       agentId: profile.agent.id,
       name: profile.agent.name,
       // D1：`role` 字段名保留，值为成员绑定角色的机器键 `AgentRole.key`；未绑 → null。
-      role: agentRoleKey,
+      role: roleKey,
       alias: profile.alias,
       seq: profile.seq,
       workDir: profile.workDir,
       defaultModelId: profile.agent.defaultModelId,
       effectivePermission,
-      agentName: agentRoleKey ? `vteam-${agentRoleKey}` : 'vteam-plan',
+      agentName: roleKey ? `vteam-${roleKey}` : 'vteam-plan',
       promptSummary: truncated ? prompt.slice(0, 500) : prompt,
       promptTruncated: truncated,
     };

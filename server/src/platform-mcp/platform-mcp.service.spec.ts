@@ -125,11 +125,14 @@ describe('PlatformMcpService', () => {
   let gitReposService: { findAll: jest.Mock };
   let plansService: { assignReviewer: jest.Mock };
   let outboundDispatcher: { sendToChannelByIdOrName: jest.Mock };
-  let executionPolicyService: { resolveByAgent: jest.Mock };
+  let executionPolicyService: {
+    resolveByRole: jest.Mock;
+    resolveByAgent: jest.Mock;
+  };
   let receiptsService: { countPending: jest.Mock };
   let hookService: { cancelHook: jest.Mock; registerHook: jest.Mock };
   const allowPolicy = () => {
-    executionPolicyService.resolveByAgent.mockResolvedValue({
+    executionPolicyService.resolveByRole.mockResolvedValue({
       policyId: 'ep_developer',
       policyName: '开发者策略',
       agentName: 'vteam-developer',
@@ -262,7 +265,11 @@ describe('PlatformMcpService', () => {
     outboundDispatcher = {
       sendToChannelByIdOrName: jest.fn().mockResolvedValue(undefined),
     };
-    executionPolicyService = { resolveByAgent: jest.fn() };
+    executionPolicyService = {
+      resolveByRole: jest.fn(),
+      // slice 3 突变检测：resolveByAgent 保留为 spy（my_profile 不得再读执行 Agent 策略）。
+      resolveByAgent: jest.fn(),
+    };
     receiptsService = {
       countPending: jest.fn().mockResolvedValue({ pending: 0, total: 0 }),
     };
@@ -4625,6 +4632,7 @@ describe('PlatformMcpService', () => {
 
     describe('my_profile', () => {
       const longPrompt = 'x'.repeat(600);
+      const roleCapabilities = { 'chat.post': true, 'task.create': false };
       const agentRow = (overrides: Record<string, unknown> = {}) => ({
         id: senderInstanceId,
         teamId: 'tm_1',
@@ -4639,13 +4647,17 @@ describe('PlatformMcpService', () => {
           defaultModelId: 'm_1',
           policyId: 'ep_developer',
         },
-        role: { key: 'developer', name: '开发者' },
+        role: {
+          id: 'ar_developer',
+          key: 'developer',
+          name: '开发者',
+          capabilities: roleCapabilities,
+        },
         ...overrides,
       });
 
-      it('返回自身配置：角色/effectivePermission/模型 + prompt 摘要截断（前 500 字符）', async () => {
+      it('返回自身配置：角色/effectivePermission（岗位能力矩阵）/模型 + prompt 摘要截断（前 500 字符）', async () => {
         allowWorker();
-        allowPolicy();
         prisma.teamMember.findFirst.mockResolvedValue(agentRow() as any);
 
         const out = await service.myProfile(ctx, {
@@ -4662,10 +4674,11 @@ describe('PlatformMcpService', () => {
           expect.objectContaining({
             where: { id: senderInstanceId },
             select: expect.objectContaining({
-              agent: expect.objectContaining({
+              role: expect.objectContaining({
                 select: expect.objectContaining({
-                  prompt: true,
-                  policyId: true,
+                  id: true,
+                  key: true,
+                  capabilities: true,
                 }),
               }),
             }),
@@ -4678,10 +4691,9 @@ describe('PlatformMcpService', () => {
             }),
           }),
         );
-        expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
-          policyId: 'ep_developer',
-          agentKey: null,
-        });
+        // capability model：my_profile 不再读 ExecutionPolicy（岗位能力矩阵即权威）。
+        expect(executionPolicyService.resolveByRole).not.toHaveBeenCalled();
+        expect(executionPolicyService.resolveByAgent).not.toHaveBeenCalled();
         expect(out).toEqual({
           taskId,
           instanceId: senderInstanceId,
@@ -4693,11 +4705,9 @@ describe('PlatformMcpService', () => {
           workDir: '/data/vteam-worker/developer-1',
           defaultModelId: 'm_1',
           effectivePermission: {
-            policyId: 'ep_developer',
-            policyName: '开发者策略',
-            agentName: 'vteam-developer',
-            permission: { edit: 'allow', bash: 'ask' },
-            correction: { scopeSummary: '开发者边界' },
+            roleId: 'ar_developer',
+            roleKey: 'developer',
+            capabilities: roleCapabilities,
           },
           agentName: 'vteam-developer',
           promptSummary: 'x'.repeat(500),
@@ -4728,30 +4738,37 @@ describe('PlatformMcpService', () => {
         expect(out.promptTruncated).toBe(false);
       });
 
-      it('未绑定策略（resolveByAgent=null）→ effectivePermission=null，仅返回生效权限与基础配置', async () => {
+      it('岗位 capabilities 为 NULL → effectivePermission.capabilities = {}（default-allow 语义）', async () => {
         allowWorker();
-        executionPolicyService.resolveByAgent.mockResolvedValue(null);
-        prisma.teamMember.findFirst.mockResolvedValue(agentRow() as any);
+        prisma.teamMember.findFirst.mockResolvedValue(
+          agentRow({
+            role: {
+              id: 'ar_custom',
+              key: 'custom-x',
+              name: '自定义',
+              capabilities: null,
+            },
+          }),
+        );
 
         const out = await service.myProfile(ctx, {
           taskId,
           selfInstanceId: senderInstanceId,
         });
 
-        expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
-          policyId: 'ep_developer',
-          agentKey: null,
+        expect(out.effectivePermission).toEqual({
+          roleId: 'ar_custom',
+          roleKey: 'custom-x',
+          capabilities: {},
         });
-        expect(out.effectivePermission).toBeNull();
-        expect(out.agentName).toBe('vteam-developer');
+        expect(out.agentName).toBe('vteam-custom-x');
         expect(out).not.toHaveProperty('permissionScope');
         expect(out).not.toHaveProperty('toolEffects');
         expect(out).not.toHaveProperty('deprecated');
       });
 
-      it('成员未绑角色 → role/agentName 回退（role null + vteam-plan）', async () => {
+      it('成员未绑角色 → effectivePermission=null（不读 Agent 策略）；role/agentName 回退', async () => {
         allowWorker();
-        allowPolicy();
         prisma.teamMember.findFirst.mockResolvedValue(
           agentRow({
             agent: {
@@ -4759,7 +4776,7 @@ describe('PlatformMcpService', () => {
               name: '未命名',
               prompt: 'p',
               defaultModelId: null,
-              policyId: null,
+              policyId: 'ep_agent_deny',
             },
             role: null,
           }),
@@ -4770,17 +4787,15 @@ describe('PlatformMcpService', () => {
           selfInstanceId: senderInstanceId,
         });
 
-        expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
-          policyId: null,
-          agentKey: null,
-        });
+        expect(executionPolicyService.resolveByRole).not.toHaveBeenCalled();
+        expect(executionPolicyService.resolveByAgent).not.toHaveBeenCalled();
+        expect(out.effectivePermission).toBeNull();
         expect(out.role).toBeNull();
         expect(out.agentName).toBe('vteam-plan');
       });
 
-      it('自定义 agent 带 agentKey → resolveByAgent 透传 agentKey（解析名与 /agents 视图一致）', async () => {
+      it('自定义岗位 → effectivePermission 暴露岗位能力矩阵；执行 Agent 策略不参与', async () => {
         allowWorker();
-        allowPolicy();
         prisma.teamMember.findFirst.mockResolvedValue(
           agentRow({
             agent: {
@@ -4791,18 +4806,61 @@ describe('PlatformMcpService', () => {
               defaultModelId: null,
               policyId: 'ep_0000000009',
             },
-            role: null,
+            role: {
+              id: 'ar_c_data',
+              key: 'data-analyst',
+              name: '数据分析师',
+              capabilities: { 'doc.read': true, 'skill.create': false },
+            },
           }),
         );
 
-        await service.myProfile(ctx, {
+        const out = await service.myProfile(ctx, {
           taskId,
           selfInstanceId: senderInstanceId,
         });
 
-        expect(executionPolicyService.resolveByAgent).toHaveBeenCalledWith({
-          policyId: 'ep_0000000009',
-          agentKey: 'data-analyst',
+        expect(executionPolicyService.resolveByRole).not.toHaveBeenCalled();
+        expect(executionPolicyService.resolveByAgent).not.toHaveBeenCalled();
+        expect(out.effectivePermission).toEqual({
+          roleId: 'ar_c_data',
+          roleKey: 'data-analyst',
+          capabilities: { 'doc.read': true, 'skill.create': false },
+        });
+        expect(out.agentName).toBe('vteam-data-analyst');
+      });
+
+      it('突变检测：岗位能力矩阵与执行 Agent 策略冲突 → 岗位决定 effectivePermission', async () => {
+        allowWorker();
+        prisma.teamMember.findFirst.mockResolvedValue(
+          agentRow({
+            agent: {
+              id: senderAgentId,
+              name: '开发者',
+              prompt: 'p',
+              defaultModelId: null,
+              policyId: 'ep_agent_deny',
+            },
+            role: {
+              id: 'ar_developer',
+              key: 'developer',
+              name: '开发者',
+              capabilities: { 'task.create': true, 'chat.post': false },
+            },
+          }),
+        );
+
+        const out = await service.myProfile(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+        });
+
+        expect(executionPolicyService.resolveByRole).not.toHaveBeenCalled();
+        expect(executionPolicyService.resolveByAgent).not.toHaveBeenCalled();
+        expect(out.effectivePermission).toEqual({
+          roleId: 'ar_developer',
+          roleKey: 'developer',
+          capabilities: { 'task.create': true, 'chat.post': false },
         });
       });
 

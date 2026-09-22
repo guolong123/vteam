@@ -35,6 +35,7 @@ import {
   resolveConstantPolicySource,
   type AgentToolState,
 } from '../execution-policies/execution-policy.service';
+import { capabilityMatrixToToolStates } from '../common/constants/platform-capability.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { WORKER_STATUS } from '../workers/workers.constants';
@@ -361,8 +362,29 @@ export interface AgentIdentityInfo {
   persona: string | null;
   /** Agent machine-safe 标识（agents.agent_key；模板行 = role；存量自定义/克隆行为 null）。分派策略候选名即 `vteam-<agentKey>`。 */
   agentKey: string | null;
-  /** 绑定策略 id（agents.policy_id，可空）。边界段由该策略的 correction 提供（Todo 11）。 */
-  policyId?: string | null;
+}
+
+/**
+ * 分派目标成员绑定的**岗位权威**（2026-09-21 role-owned capability model：平台 `vteam_*`
+ * 工具权限属于岗位，不属于执行者）。
+ *
+ * 装配来源：`TeamMember.roleId → AgentRole`（dispatch 名册查询一次取回，与 rolePrompt 同源）。
+ * 记忆/产出物段屏蔽（tools）由 `capabilities`（业务能力点矩阵）推导；边界段（correction）
+ * 是 prompt 关注点，仍由 `resolveByRole`（roleKey → 内置策略行/常量）提供。
+ * `Agent.policyId` 只服务 worker injector 的原生层①（`buildAgentPolicies()` 不动）。
+ * 成员未绑角色（`roleId` NULL）→ 传 null：无岗位权威，回退 `agent.agentKey` 常量派生
+ * （存量兼容路径；live 数据 0 命中，平台工具门对未绑角色 fail-closed 403）。
+ */
+export interface MemberRoleAuthority {
+  /** 岗位 id（`AgentRole.id`；仅记账/调试，解析不使用）。 */
+  id: string | null;
+  /** 岗位机器键（`AgentRole.key`）：常量回退命名为 `vteam-<key>`，即 `resolveByRole.roleKey`。 */
+  key: string | null;
+  /**
+   * 岗位业务能力点矩阵（`AgentRole.capabilities`；键 ∈ 能力目录，缺失键 ⇒ 允许）。
+   * NULL 等同 `{}`（全放行）；仅驱动记忆/产出物段屏蔽，不做授权判定。
+   */
+  capabilities: Record<string, boolean> | null;
 }
 
 /** 团队成员信息（dispatch 时从 TeamMember→Agent 组装，注入全局上下文供 agent 判断与谁协作）。
@@ -2063,7 +2085,6 @@ export class WorkerDispatcher
         prompt: true,
         persona: true,
         agentKey: true,
-        policyId: true,
       },
     });
     const agentIdentity: AgentIdentityInfo = {
@@ -2075,7 +2096,6 @@ export class WorkerDispatcher
       prompt: agentRow?.prompt ?? null,
       persona: agentRow?.persona ?? null,
       agentKey: agentRow?.agentKey ?? null,
-      policyId: agentRow?.policyId ?? null,
     };
     let teamMemberRows: any[] = [];
     try {
@@ -2087,7 +2107,16 @@ export class WorkerDispatcher
             // 角色绑定来源（todo 5）：TeamMember.roleId → AgentRole.rolePrompt。
             // 注意 roleId 在 TeamMember 上，不在 agent 行；名册行的标签 key 由
             // agent.agentKey 派生（todo 10，不再读已删除的 agent.role 列）。
-            role: { select: { rolePrompt: true } },
+            // 2026-09-21 role-owned capability model：同一行还带出 key/capabilities，
+            // 作为目标成员的工具屏蔽输入——一次查询两用。
+            role: {
+              select: {
+                id: true,
+                key: true,
+                capabilities: true,
+                rolePrompt: true,
+              },
+            },
           },
         })) ?? [];
     } catch (lookupErr: unknown) {
@@ -2115,6 +2144,25 @@ export class WorkerDispatcher
       mainAgentMemberId !== null && teamMemberId === mainAgentMemberId;
     const selfAlias =
       team.find((m) => m.instanceId === teamMemberId)?.alias ?? null;
+    // 目标成员的岗位权威（与上方名册同一行，一次查找三用）：岗位职责段（rolePrompt）+
+    // 能力矩阵（capabilities，驱动工具屏蔽）+ 常量回退键（key）。成员行缺失/未绑角色
+    // → null ⇒ 回退 `agentKey` 常量派生，绝不阻断分派。
+    const selfRoleRow:
+      | {
+          id?: string | null;
+          key?: string | null;
+          capabilities?: Record<string, boolean> | null;
+          rolePrompt?: string | null;
+        }
+      | null =
+      teamMemberRows.find((m: any) => m.id === teamMemberId)?.role ?? null;
+    const selfRoleAuthority: MemberRoleAuthority | null = selfRoleRow
+      ? {
+          id: selfRoleRow.id ?? null,
+          key: selfRoleRow.key ?? null,
+          capabilities: selfRoleRow.capabilities ?? null,
+        }
+      : null;
     this.registerExecution(workerId, scope, teamMemberId);
     const cleanupChannel = await this.resolveTeamChannel(teamId, teamMemberId);
     if (cleanupChannel) {
@@ -2135,10 +2183,11 @@ export class WorkerDispatcher
     const memoryIndex = taskIdForPrompt
       ? await this.buildTeamMemoryIndex(teamId)
       : null;
-    // 策略解析一次、两用（agent-role-decommission todo 2）：correction → 边界段；
-    // tools → 记忆/产出物段屏蔽（`resolvedTools`）。两条推导共享同一次解析，不重复查。
+    // 策略解析一次、两用（agent-role-decommission todo 2；2026-09-21 role-owned）：岗位
+    // 绑定策略 → correction 边界段；tools → 记忆/产出物段屏蔽（`resolvedTools`）。两条
+    // 推导共享同一次解析，不重复查；未绑岗位/解析失败 → 常量回退，不阻断分派。
     const { correction, tools: resolvedTools } =
-      await this.resolveBoundaryAndTools(agentIdentity);
+      await this.resolveBoundaryAndTools(agentIdentity, selfRoleAuthority);
     const systemOpts: BuildSystemInstructionsOptions = {
       isMainAgent,
       mainAgentInstanceId: mainAgentMemberId,
@@ -2154,12 +2203,10 @@ export class WorkerDispatcher
       issueDetail: roleNeedsIssueDetail(agentIdentity.agentKey),
       // 记忆/产出物段屏蔽：由已解析策略 tools 驱动（与上方 correction 同一次解析）。
       resolvedTools,
-      // 岗位职责段来源（todo 5）：TeamMember.roleId → AgentRole.rolePrompt。
-      // 分派目标的成员行由 teamMemberId 精确定位；行缺失/未绑角色/rolePrompt 空 → null
-      // （不注入【岗位职责】，不抛错）。agent.role 是标签 key，不是此段来源。
-      rolePrompt:
-        teamMemberRows.find((m: any) => m.id === teamMemberId)?.role
-          ?.rolePrompt ?? null,
+      // 岗位职责段来源（todo 5）：TeamMember.roleId → AgentRole.rolePrompt（selfRoleRow
+      // 与岗位策略解析同一次查询）。行缺失/未绑角色/rolePrompt 空 → null（不注入
+      // 【岗位职责】，不抛错）。agent.role 是标签 key，不是此段来源。
+      rolePrompt: selfRoleRow?.rolePrompt ?? null,
     };
     if (taskIdForPrompt) {
       if (memoryIndex) {
@@ -2189,10 +2236,11 @@ export class WorkerDispatcher
       workerSupportsAgentPolicies(worker, policyCandidateAgent)
         ? policyCandidateAgent
         : null);
-    // Todo 11：目标 Agent 的职责边界段由解析出的策略 correction 提供（不再按 agent 名
-    // 白名单读取常量）——内置角色走绑定策略（出厂 correction == 常量，输出逐字节一致），
-    // 自定义 agent 的自定义 correction 同样注入。策略解析失败/无服务/无 correction →
-    // 回退 `agentKeyToVteamAgentName(agentKey)` 常量派生，保证基线行为与引入前逐字节一致。
+    // Todo 11（2026-09-21 起岗位权威）：目标成员的职责边界段由**岗位**绑定策略的 correction
+    // 提供（不再按 agent 名白名单读取常量，也不再读执行 Agent 的策略）——内置岗位走绑定
+    // 策略（出厂 correction == 常量，输出逐字节一致），自定义岗位的自定义 correction 同样注入。
+    // 岗位缺席（存量）/解析失败/无服务/无 correction → 回退 `vteam-<role.key ?? agentKey>`
+    // 常量派生，保证基线行为与引入前逐字节一致。
     const boundarySection = renderBoundarySection(correction);
     if (boundarySection) {
       systemOpts.boundarySection = boundarySection;
@@ -3667,31 +3715,34 @@ export class WorkerDispatcher
   }
 
   /**
-   * 目标 Agent 的边界 correction 与 guard tools 的**同一次解析**
-   * （vteam-role-behavior-abstraction Todo 11；agent-role-decommission todo 2 合并）：
-   * 优先其绑定策略（`resolveByAgent`，内置/自定义同路径）——解析成功即采用其 `correction`
-   * （DB 值胜出，含用户清空 `scopeSummary` 的场景 → `renderBoundarySection` 返回空串）
-   * 与 `tools`；策略缺席/无服务/解析异常 → 回退 `agentKeyToVteamAgentName` 常量派生的
-   * `resolveConstantPolicySource`（内置角色出厂态与按名读取常量逐字节一致），其 tools
-   * 来自同一常量；均无 → `{ correction: null, tools: null }`。
+   * 目标成员**岗位**的边界 correction 与工具屏蔽表（2026-09-21 capability model）。
    *
-   * **一次解析两用**：boundarySection 与记忆/产出物段屏蔽（`resolvedTools`）必须来自
-   * 同一次策略解析，避免两次解析漂移（策略 DB 行/PATCH 竞态下两处结论不一致）。
-   * correction 返回前经 `canonicalizeCorrection` 按角色 `handoffTo` 声明序重排
-   * handoff（DB MySQL JSON 键序与常量声明序不同，不重排会改变渲染出的转交顺序）。
+   * **两条通道分离**（有意）：
+   *  - `tools`（记忆/产出物段屏蔽）由 `AgentRole.capabilities`（业务能力点矩阵）推导：
+   *    缺失键 ⇒ 允许 ⇒ `'allow'`；显式 `false` ⇒ `'deny'`。未绑岗位 → null（不屏蔽）。
+   *  - `correction`（prompt 关注点，非授权）保持既有来源：`resolveByRole({roleKey})` 读
+   *    内置约定策略行 `ep_<roleKey>`（DB 可编辑值胜出），行缺失/外部自定义岗位 → 回退
+   *    `role.key`（未绑岗位回退 `agent.agentKey`）常量派生的 `resolveConstantPolicySource`；
+   *    均无 → null。correction 返回前经 `canonicalizeCorrection` 按角色 `handoffTo` 声明序
+   *    重排（DB MySQL JSON 键序与常量声明序不同，不重排会改变渲染出的转交顺序）。
    */
-  private async resolveBoundaryAndTools(agent: AgentIdentityInfo): Promise<{
+  private async resolveBoundaryAndTools(
+    agent: AgentIdentityInfo,
+    role: MemberRoleAuthority | null,
+  ): Promise<{
     correction: BoundaryCorrection | null;
     tools: Record<string, AgentToolState> | null;
   }> {
-    // todo 10：常量名由 `agentKey` 派生（模板行 agentKey === role ⇒ 与旧调用同值；
-    // 自定义 agentKey 不在 vteam 名空间 ⇒ null，与旧常量派生(null) 同值）。
-    const constantName = agentKeyToVteamAgentName(agent.agentKey);
-    if (this.executionPolicyService) {
+    // 常量名优先取岗位 key（内置 7 名 key === 模板 agentKey ⇒ 存量同值）；未绑岗位的
+    // 存量/单测路径回退 agentKey（与引入前逐字节一致）。
+    const constantName = agentKeyToVteamAgentName(role?.key ?? agent.agentKey);
+    const capabilityTools = role
+      ? capabilityMatrixToToolStates(role.capabilities ?? {})
+      : null;
+    if (this.executionPolicyService && role) {
       try {
-        const resolved = await this.executionPolicyService.resolveByAgent({
-          policyId: agent.policyId ?? null,
-          agentKey: agent.agentKey,
+        const resolved = await this.executionPolicyService.resolveByRole({
+          roleKey: role.key,
         });
         if (resolved) {
           return {
@@ -3699,7 +3750,7 @@ export class WorkerDispatcher
               resolved.correction,
               constantName ?? resolved.agentName,
             ),
-            tools: resolved.tools,
+            tools: capabilityTools,
           };
         }
       } catch {
@@ -3710,10 +3761,12 @@ export class WorkerDispatcher
       const constant = resolveConstantPolicySource(constantName);
       return {
         correction: constant?.config.correction ?? null,
-        tools: constant?.config.tools ?? null,
+        // 已绑岗位 → 能力矩阵推导（capability model）；未绑岗位（存量路径）→ 常量工具集
+        //（与引入 capability model 前逐字节一致，Q5 不再新增此类成员）。
+        tools: role ? capabilityTools : (constant?.config.tools ?? null),
       };
     }
-    return { correction: null, tools: null };
+    return { correction: null, tools: capabilityTools };
   }
 
   private async resolveAgentModelId(agentId: string): Promise<string | null> {

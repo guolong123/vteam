@@ -940,7 +940,7 @@ export function buildPlatformMcpTools(
     {
       name: 'my_profile',
       description:
-        '查询自身 Agent 配置（只读）：生效权限 effectivePermission（唯一事实来源，经 ExecutionPolicy 按绑定策略解析：policyId/policyName/agentName[vteam-<role>]/permission[opencode 原生]/correction[guard]，与 live enforcement 同源，自审计以此为准；未绑定策略时为 null）+ 任务实例别名/序号/工作目录/默认模型 defaultModelId，prompt 仅返回前 500 字符摘要（promptSummary + promptTruncated，不暴露完整提示词）。返回自身配置视图。',
+        '查询自身 Agent 配置（只读）：生效能力 effectivePermission（唯一事实来源 = 岗位 AgentRole.capabilities：roleId/roleKey/capabilities[业务能力点 → 是否允许，缺失键=允许]，与 live enforcement 同源，自审计以此为准；未绑定岗位时为 null）+ 任务实例别名/序号/工作目录/默认模型 defaultModelId，prompt 仅返回前 500 字符摘要（promptSummary + promptTruncated，不暴露完整提示词）。返回自身配置视图。',
       inputSchema: myProfileSchema,
       handler: (ctx, args) => service.myProfile(ctx, args as MyProfileArgs),
     },
