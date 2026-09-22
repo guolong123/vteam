@@ -1065,19 +1065,16 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
         {subTab === "status" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
             <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isCurrent ? "rgba(13,148,136,0.06)" : waiting > 0 ? "rgba(245,158,11,0.06)" : "var(--color-surface)", border: `1px solid ${isCurrent ? "rgba(13,148,136,0.14)" : waiting > 0 ? "rgba(245,158,11,0.14)" : neutral[200]}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, backgroundColor: task.status === "in_progress" ? "#10B981" : task.status === "queued" ? "#F59E0B" : task.status === "pending" ? "#0D9488" : neutral[300] }} />
-                <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={task.title}>{task.title}</span>
-                <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontSize: fontSize.xs, color: "#FFF", backgroundColor: task.status === "queued" ? "#F59E0B" : task.status === "in_progress" ? "#10B981" : "#0D9488", padding: "1px 6px", borderRadius: radius.pill }}>{statusLabel}</span>
+              <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={task.title}>{task.title}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+                <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, backgroundColor: task.status === "in_progress" ? "#10B981" : task.status === "queued" ? "#F59E0B" : task.status === "pending" ? "#0D9488" : neutral[300] }} />
+                  <span style={{ whiteSpace: "nowrap", fontSize: fontSize.xs, color: "#FFF", backgroundColor: task.status === "queued" ? "#F59E0B" : task.status === "in_progress" ? "#10B981" : "#0D9488", padding: "1px 6px", borderRadius: radius.pill }}>{statusLabel}</span>
+                </span>
+                <button type="button" onClick={onEditTaskInfo} style={{ padding: `2px ${space.sm}px`, borderRadius: radius.sm, border: "none", background: "none", fontSize: fontSize.xs, color: neutral[400], cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0, fontFamily: fontFamily.body }}>编辑</button>
               </div>
-              <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
-                {isCurrent ? "当前执行（队首）" : team?.currentTaskId ? `队首 ${team.currentTaskId.slice(0,8)}… 执行中` : "团队空闲"} · {waiting > 0 ? `等待中 ${waiting} 个` : "暂无等待"}
-              </div>
-              <div style={{ display: "flex", gap: space.sm, alignItems: "flex-start", flexWrap: "wrap" }}>
-                <div style={{ flex: "1 1 200px", minWidth: 0, display: "flex", flexDirection: "column" }}>
-                  <TaskStatusActions taskId={taskId} status={task.status as TaskApiStatus} />
-                </div>
-                <button type="button" onClick={onEditTaskInfo} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>编辑</button>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: space.sm }}>
+                <TaskStatusActions taskId={taskId} status={task.status as TaskApiStatus} />
               </div>
               {statusMetaRows.length > 0 && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: space.sm, borderTop: `1px dashed ${neutral[200]}`, paddingTop: space.sm, fontSize: 11 }}>
