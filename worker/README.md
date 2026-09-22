@@ -78,6 +78,7 @@ npm run dev            # tsx src/index.ts
 | `WORKER_EXEC_PORT` | 否 | `4198` | 执行端点端口（node:http POST /execute，与 serve 端口解耦） |
 | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 否 | `300000` | 首字超时 ms（模型时限内无首字输出即 abort；首字出现后无完成超时）。首字/模型探测唯一归 worker；server 侧为 `SILENT_SESSION_WAKE_MS=600000` 滑动事件静默自愈（>300s 不抢跑） |
 | `WORKER_MAX_INSTANCES` | 否 | `5` | worker 最大并发会话数（随注册上报，server 按 capacity 分派）；≤0/非法值兜底 5 |
+| `WORKER_STANDALONE` | 否 | `false` | 独立模式：`true` = 跳过控制面注册/心跳/资源拉取，serve + 执行端点（`:4198`）照常启动（无 `SERVER_URL` 可达也能起，供本地/SDK 直连执行）；`false`/缺省 = 现行注册模式。可选值：`true`/`false`/`1`/`0`/`yes`/`no`/`on`/`off` |
 
 ## 集群外 worker 配置（内置 MCP + 可达地址三件套）
 
