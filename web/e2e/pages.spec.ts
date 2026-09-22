@@ -404,8 +404,16 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expectNavShell(page);
     await page.getByTestId("enter-team-session").first().click();
     await expect(page).toHaveURL(/\/session/);
-    // 有任务：任务主 Tab 渲染
-    await expect(panel.getByRole("button", { name: "任务", exact: true })).toBeVisible();
+    // 有任务：默认落任务 Tab（T17：不点任务按钮，直接断言任务选中态 + 任务子页可见 + 团队子页隐藏）
+    await expect(panel.getByTestId("main-tab-task")).toBeVisible();
+    await expect(panel.getByTestId("main-tab-task")).toHaveAttribute("data-active", "true");
+    await expect(panel.getByTestId("main-tab-team")).toHaveAttribute("data-active", "false");
+    await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
+    await expect(page.getByTestId("team-subtab-scroll")).toHaveCount(0);
+    // 手动切到团队 → 不被抢回任务
+    await panel.getByTestId("main-tab-team").click();
+    await expect(page.getByTestId("team-subtab-scroll")).toBeVisible();
+    await expect(page.getByTestId("task-subtab-scroll")).toHaveCount(0);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
     // 子页状态保留：切到计划 → 切团队 → 切回任务后仍在计划

@@ -1357,19 +1357,24 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, planArtifact
   planDocsQuery?: any; planStepsQuery?: any;
 }) {
   const hasTask = !!task;
+  const userPickedTabRef = React.useRef(false);
   const [activeMainTab, setActiveMainTab] = React.useState<"team" | "task">(hasTask ? "task" : "team");
   const [teamSubTab, setTeamSubTab] = React.useState<TeamSubTab>("overview");
   const [taskSubTab, setTaskSubTab] = React.useState<TaskSubTab>("status");
+  // T17: task 异步到达（首渲染恒 null），hasTask 变 true 时自动落任务 Tab；用户手动点过则不再抢回
+  React.useEffect(() => {
+    if (hasTask && !userPickedTabRef.current) setActiveMainTab("task");
+  }, [hasTask]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       {/* 一级 Tab：团队 / 任务 */}
       <div style={{ display: "flex", borderBottom: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], flexShrink: 0 }}>
-        <button type="button" onClick={() => setActiveMainTab("team")} style={{ flex: 1, minWidth: 0, padding: `${space.sm}px ${space.md}px`, border: "none", borderBottom: `2px solid ${activeMainTab === "team" ? "#0D9488" : "transparent"}`, backgroundColor: activeMainTab === "team" ? "var(--color-surface)" : "transparent", color: activeMainTab === "team" ? "#0D9488" : neutral[500], fontSize: fontSize.sm, fontWeight: activeMainTab === "team" ? 600 : 400, cursor: "pointer", fontFamily: fontFamily.body, whiteSpace: "nowrap" }}>
+        <button type="button" data-testid="main-tab-team" data-active={activeMainTab === "team"} onClick={() => { userPickedTabRef.current = true; setActiveMainTab("team"); }} style={{ flex: 1, minWidth: 0, padding: `${space.sm}px ${space.md}px`, border: "none", borderBottom: `2px solid ${activeMainTab === "team" ? "#0D9488" : "transparent"}`, backgroundColor: activeMainTab === "team" ? "var(--color-surface)" : "transparent", color: activeMainTab === "team" ? "#0D9488" : neutral[500], fontSize: fontSize.sm, fontWeight: activeMainTab === "team" ? 600 : 400, cursor: "pointer", fontFamily: fontFamily.body, whiteSpace: "nowrap" }}>
           团队
         </button>
         {hasTask && (
-          <button type="button" onClick={() => setActiveMainTab("task")} style={{ flex: 1, minWidth: 0, padding: `${space.sm}px ${space.md}px`, border: "none", borderBottom: `2px solid ${activeMainTab === "task" ? "#0D9488" : "transparent"}`, backgroundColor: activeMainTab === "task" ? "var(--color-surface)" : "transparent", color: activeMainTab === "task" ? "#0D9488" : neutral[500], fontSize: fontSize.sm, fontWeight: activeMainTab === "task" ? 600 : 400, cursor: "pointer", fontFamily: fontFamily.body, whiteSpace: "nowrap" }}>
+          <button type="button" data-testid="main-tab-task" data-active={activeMainTab === "task"} onClick={() => { userPickedTabRef.current = true; setActiveMainTab("task"); }} style={{ flex: 1, minWidth: 0, padding: `${space.sm}px ${space.md}px`, border: "none", borderBottom: `2px solid ${activeMainTab === "task" ? "#0D9488" : "transparent"}`, backgroundColor: activeMainTab === "task" ? "var(--color-surface)" : "transparent", color: activeMainTab === "task" ? "#0D9488" : neutral[500], fontSize: fontSize.sm, fontWeight: activeMainTab === "task" ? 600 : 400, cursor: "pointer", fontFamily: fontFamily.body, whiteSpace: "nowrap" }}>
             任务
           </button>
         )}

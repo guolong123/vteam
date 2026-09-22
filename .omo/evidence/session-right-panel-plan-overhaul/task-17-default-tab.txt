@@ -1,0 +1,23 @@
+cd web && npx playwright test --project=pages
+
+result: 24 passed (25.6s), exit 0
+
+T24 用例（web/e2e/pages.spec.ts:401）新断言（默认选中任务 Tab，未点击前）：
+  panel.getByTestId("main-tab-task") toHaveAttribute data-active=true
+  panel.getByTestId("main-tab-team") toHaveAttribute data-active=false
+  task-subtab-scroll visible / team-subtab-scroll count=0
+手动切团队后 team-subtab-scroll visible、task-subtab-scroll count=0（effect 未抢回）；随后 计划→团队→任务仍停计划（子页保留）。
+
+组件改动 web/src/components/teams/TeamRightPanel.tsx：
+  const hasTask = !!task;
+  const userPickedTabRef = React.useRef(false);
+  const [activeMainTab, setActiveMainTab] = React.useState<"team" | "task">(hasTask ? "task" : "team");
+  const [teamSubTab, setTeamSubTab] = React.useState<TeamSubTab>("overview");
+  const [taskSubTab, setTaskSubTab] = React.useState<TaskSubTab>("status");
+  // T17: task 异步到达（首渲染恒 null），hasTask 变 true 时自动落任务 Tab；用户手动点过则不再抢回
+  React.useEffect(() => {
+    if (hasTask && !userPickedTabRef.current) setActiveMainTab("task");
+  }, [hasTask]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
