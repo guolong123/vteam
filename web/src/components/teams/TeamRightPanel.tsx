@@ -261,8 +261,10 @@ function ChannelBindingCard({
   );
 }
 
-function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: any; onToggleManagedMode: (v: boolean) => void }) {
-  const [subTab, setSubTab] = useState<TeamSubTab>("overview");
+function TeamSubTabs({ team, task, onToggleManagedMode, subTab: controlledSubTab, onSubTabChange }: { team: any; task?: any; onToggleManagedMode: (v: boolean) => void; subTab?: TeamSubTab; onSubTabChange?: (t: TeamSubTab) => void }) {
+  const [innerSubTab, setInnerSubTab] = useState<TeamSubTab>("overview");
+  const subTab = controlledSubTab ?? innerSubTab;
+  const setSubTab = onSubTabChange ?? setInnerSubTab;
   const queryClient = useQueryClient();
   const [settingError, setSettingError] = useState<string | null>(null);
 
@@ -983,7 +985,7 @@ export type PlanContentRow =
   | { kind: "file"; key: string; updatedAt: string; file: PlanDocContent }
   | { kind: "artifact"; key: string; updatedAt: string; artifact: PlanArtifactItem };
 
-function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
+function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery, subTab: controlledSub, onSubTabChange }: {
   team: any; task: any; taskId: string; artifactsQuery: any; planArtifactsQuery?: any; issuesQuery: any; agents: any[];
   onEditTaskInfo: () => void; onOpenArtifacts: () => void; onOpenIssues: () => void;
   onOpenIssueDetail?: (issueId: string) => void; onOpenArtifactDoc?: (artifact: ArtifactItem) => void;
@@ -993,8 +995,12 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
   planDocsQuery?: any;
   /** 执行步骤查询（GET /tasks/:id/plan-steps，由会话页提供，30s 轮询）。 */
   planStepsQuery?: any;
+  subTab?: TaskSubTab;
+  onSubTabChange?: (t: TaskSubTab) => void;
 }) {
-  const [subTab, setSubTab] = useState<TaskSubTab>("status");
+  const [innerSubTab, setInnerSubTab] = useState<TaskSubTab>("status");
+  const subTab = controlledSub ?? innerSubTab;
+  const setSubTab = onSubTabChange ?? setInnerSubTab;
   /** 计划文档 Modal 选中的文件（null=关闭；正文随列表已下发，打开即渲染）。 */
   const [planDoc, setPlanDoc] = useState<PlanDocContent | null>(null);
   /**
@@ -1345,8 +1351,10 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, planArtifact
   /** 计划文档/执行步骤查询（计划 Tab 用；会话页提供并轮询）。 */
   planDocsQuery?: any; planStepsQuery?: any;
 }) {
-  const [activeMainTab, setActiveMainTab] = React.useState<"team" | "task">("team");
   const hasTask = !!task;
+  const [activeMainTab, setActiveMainTab] = React.useState<"team" | "task">(hasTask ? "task" : "team");
+  const [teamSubTab, setTeamSubTab] = React.useState<TeamSubTab>("overview");
+  const [taskSubTab, setTaskSubTab] = React.useState<TaskSubTab>("status");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
@@ -1363,7 +1371,7 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, planArtifact
       </div>
       {/* 内容区 */}
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        {activeMainTab === "team" && <TeamSubTabs team={team} onToggleManagedMode={onToggleManagedMode} />}
+        {activeMainTab === "team" && <TeamSubTabs team={team} onToggleManagedMode={onToggleManagedMode} subTab={teamSubTab} onSubTabChange={setTeamSubTab} />}
         {activeMainTab === "task" && hasTask && (
           <TaskSubTabs
             team={team} task={task} taskId={taskId}
@@ -1373,6 +1381,7 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, planArtifact
             onOpenIssueDetail={onOpenIssueDetail} onOpenArtifactDoc={onOpenArtifactDoc}
             onUploadPlanDoc={onUploadPlanDoc}
             planDocsQuery={planDocsQuery} planStepsQuery={planStepsQuery}
+            subTab={taskSubTab} onSubTabChange={setTaskSubTab}
           />
         )}
       </div>
