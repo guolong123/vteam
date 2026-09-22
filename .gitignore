@@ -73,3 +73,7 @@ web/public/worker-src.tar.gz
 # todo-9 clean-rebuild safety backups (contain credentials)
 .omo/evidence/**/worker-home-backup/
 .omo/evidence/**/*.tgz
+
+# Python bytecode（SDK / 脚本运行产物，不入库）
+__pycache__/
+*.pyc
