@@ -2,10 +2,12 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
@@ -36,6 +38,7 @@ import { RejectTaskDto } from './dto/reject-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
+import { PlanArchiveService } from './plan-archive.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
 import { sanitizeWorkDirName } from './work-dir.util';
 
@@ -155,6 +158,11 @@ export class TasksService implements OnModuleInit {
     private readonly sessionLifecycle: SessionLifecycleService,
     private readonly progression: TaskProgressionScheduler,
     private readonly planLifecycle: PlanLifecycleService,
+    // 计划目录自动归档（Phase 3）：@Optional 缺省可空——单测/旧装配未提供时跳过扫描；
+    // 生产装配经本模块 providers 提供，无新增模块边。
+    @Optional()
+    @Inject(PlanArchiveService)
+    private readonly planArchive?: PlanArchiveService | null,
   ) {}
 
   /** 进程启动：按库内各前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过非数字 id，防主键冲突）。 */
@@ -1240,12 +1248,18 @@ export class TasksService implements OnModuleInit {
 
   /** 标记待验收（in_progress → pending_review，13 篇 §4.3）：写 pendingReviewAt。 */
   async markPendingReview(id: string, userId: string) {
-    return this.transition(
+    const result = await this.transition(
       id,
       'mark-pending-review',
       userId,
       this.transitionOpts(id, 'mark-pending-review'),
     );
+    void this.planArchive?.scanAndArchivePlanDocs(id).catch((err: unknown) =>
+      this.logger.warn(
+        `计划自动归档触发失败 task=${id}（状态已落库，不影响）: ${err instanceof Error ? err.message : String(err)}`,
+      ),
+    );
+    return result;
   }
 
   /**
@@ -1253,7 +1267,7 @@ export class TasksService implements OnModuleInit {
    * 12 篇 §7 验收联动：同事务锁定该任务全部产出物当前版本基线（accepted_flag=true）。
    */
   async accept(id: string, userId: string, opts?: CompletionForceOptions) {
-    return this.transition(
+    const result = await this.transition(
       id,
       'accept',
       userId,
@@ -1264,6 +1278,12 @@ export class TasksService implements OnModuleInit {
         opts ? { ...opts, forcedBy: userId } : undefined,
       ),
     );
+    void this.planArchive?.scanAndArchivePlanDocs(id).catch((err: unknown) =>
+      this.logger.warn(
+        `计划自动归档触发失败 task=${id}（状态已落库，不影响）: ${err instanceof Error ? err.message : String(err)}`,
+      ),
+    );
+    return result;
   }
 
   /** 验收驳回（pending_review → in_progress，13 篇 §4.4）：reason 写 metadata，重置 pendingReviewAt。 */

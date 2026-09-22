@@ -1,0 +1,2 @@
+$ grep -rn "scanAndArchivePlanDocs" server/src/tasks/plan-docs.service.ts server/src/docs-site/
+(no output = zero hits, read path clean)

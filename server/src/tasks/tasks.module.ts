@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { ArtifactsModule } from '../artifacts/artifacts.module';
 import { ChatModule } from '../chat/chat.module';
 import { IssuesModule } from '../issues/issues.module';
 import { MessageChannelsModule } from '../message-channels/message-channels.module';
@@ -12,6 +13,7 @@ import { TasksController } from './tasks.controller';
 import { MigrateController } from './migrate.controller';
 import { TaskChannelBindingsController } from './task-channel-bindings.controller';
 import { TasksService } from './tasks.service';
+import { PlanArchiveService } from './plan-archive.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
 import { PlanStepsService } from './plan-steps.service';
 import { PlanDocsService } from './plan-docs.service';
@@ -41,6 +43,7 @@ import { PlanReviewWiring } from './plan-review-wiring';
     ChatModule,
     IssuesModule,
     TimersModule,
+    ArtifactsModule,
     forwardRef(() => MessageChannelsModule),
   ],
   controllers: [
@@ -50,6 +53,7 @@ import { PlanReviewWiring } from './plan-review-wiring';
   ],
   providers: [
     TasksService,
+    PlanArchiveService,
     PlanLifecycleService,
     PlanStepsService,
     PlanDocsService,
