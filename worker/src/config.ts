@@ -65,6 +65,11 @@ export interface WorkerConfig {
    * 仍可调度新消息。配置为 ≤0 等非法值兜底默认值。
    */
   workerMaxInstances: number;
+  /**
+   * 独立模式（env WORKER_STANDALONE）：true = 跳过控制面注册/心跳/资源拉取，
+   * serve + 执行端点照常启动（无 SERVER_URL 可达也能起）。默认 false = 现行注册模式。
+   */
+  standalone: boolean;
 }
 
 /**
@@ -121,6 +126,21 @@ function parsePositiveInt(name: string, raw: string | undefined, fallback: numbe
   return value;
 }
 
+function parseBool(name: string, raw: string | undefined, fallback: boolean): boolean {
+  if (raw === undefined || raw.trim() === '') {
+    return fallback;
+  }
+  const value = raw.trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(value)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'off'].includes(value)) {
+    return false;
+  }
+  console.warn(`[config] ${name} 非法值 "${raw}"（须为 true/false/1/0/yes/no/on/off），回落默认 ${fallback}`);
+  return fallback;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   const workerToken = (env.X_WORKER_TOKEN ?? '').trim();
   if (!workerToken) {
@@ -160,5 +180,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
       300000,
     ),
     workerMaxInstances: parsePositiveInt('WORKER_MAX_INSTANCES', env.WORKER_MAX_INSTANCES, 5),
+    standalone: parseBool('WORKER_STANDALONE', env.WORKER_STANDALONE, false),
   };
 }

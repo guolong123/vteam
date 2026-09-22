@@ -101,6 +101,36 @@ describe('WORKER_ADVERTISE_HOST 显式标记（外部/跨机 worker 可达地址
   });
 });
 
+describe('WORKER_STANDALONE（独立模式：跳过注册/心跳/资源拉取）', () => {
+  it('缺省/空串：standalone=false（默认现行注册模式）', () => {
+    expect(loadConfig(BASE_ENV).standalone).toBe(false);
+    expect(loadConfig({ ...BASE_ENV, WORKER_STANDALONE: '' }).standalone).toBe(false);
+    expect(loadConfig({ ...BASE_ENV, WORKER_STANDALONE: '   ' }).standalone).toBe(false);
+  });
+
+  it('true 分支：true/1/yes/on（忽略大小写）→ standalone=true', () => {
+    for (const raw of ['true', 'TRUE', 'True', '1', 'yes', 'YES', 'on', 'On', ' true ']) {
+      expect(loadConfig({ ...BASE_ENV, WORKER_STANDALONE: raw }).standalone).toBe(true);
+    }
+  });
+
+  it('false 分支：false/0/no/off（忽略大小写）→ standalone=false', () => {
+    for (const raw of ['false', 'FALSE', '0', 'no', 'NO', 'off']) {
+      expect(loadConfig({ ...BASE_ENV, WORKER_STANDALONE: raw }).standalone).toBe(false);
+    }
+  });
+
+  it('非法值（如 maybe/2）：打 warn 回落默认 false（不抛错，误配不阻断启动）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(loadConfig({ ...BASE_ENV, WORKER_STANDALONE: 'maybe' }).standalone).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('WORKER_STANDALONE'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
 describe('detectLocalIPv4（自动探测本机非回环 IPv4）', () => {
   afterEach(() => {
     jest.clearAllMocks();

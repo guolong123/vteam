@@ -324,6 +324,7 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   workerId            = ${config.workerId}
   workerName          = ${config.workerName}
   serverUrl           = ${config.serverUrl}
+  standalone          = ${config.standalone ? 'true（跳过注册/心跳/资源拉取）' : 'false'}
   opencodeServePort   = ${config.opencodeServePort === 0 ? '0（OS 随机空闲端口）' : config.opencodeServePort}
   opencodeServeAuth   = ${config.serverPassword ? 'Basic Auth（已设 OPENCODE_SERVER_PASSWORD）' : '无（serve 不设鉴权）'}
   opencodeServeHost   = ${config.opencodeServeHostname}
@@ -965,7 +966,22 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
 
   // T4b：启动链——先注入平台资源（serve 启动前落盘，opencode 启动时才能扫描到），
   // 再拉起 serve；注入失败不阻断启动（后续心跳 reload-config 命令可重拉修复）。
+  // 独立模式（WORKER_STANDALONE=true）：跳过控制面资源注入（无 server 可达），
+  // 本地工具注入（git/browser，上方已执行）与 omo 种子保留；随后跳过注册/心跳。
   void (async () => {
+    if (config.standalone) {
+      console.log('[worker] 独立模式（WORKER_STANDALONE）：跳过控制面资源注入/注册/心跳');
+      try {
+        const seeded = seedOmoAgentModels(config.workDir);
+        if (seeded) {
+          console.log(
+            `[worker] omo 模型种子已写入: ${Object.entries(seeded).map(([k, v]) => `${k}=${v}`).join(', ')}`,
+          );
+        }
+      } catch (err) {
+        console.warn(`[worker] omo 模型种子写入失败（不阻断启动）: ${(err as Error).message}`);
+      }
+    } else {
     try {
       const report = await injector.injectAll();
       // T9：首次注入清单作为注册时上报的真实 skills/tools
@@ -989,6 +1005,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         `[worker] 平台资源注入失败（继续启动 serve，心跳命令可重拉）: ${(err as Error).message}`,
       );
     }
+    }
 
     try {
       const baseUrl = await serveServer.start();
@@ -1008,6 +1025,13 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         console.warn(
           `[worker] 执行端点启动失败（capabilities 不报 execPort）: ${(err as Error).message}`,
         );
+      }
+
+      if (config.standalone) {
+        console.log(
+          `[worker] 独立模式就绪: workerId=${config.workerId}, serve=${driver.baseUrl ?? '(未就绪)'}, execPort=${execPort ?? '(未绑定)'}（跳过注册/心跳）`,
+        );
+        return;
       }
 
       // T6 注册（X-Worker-Token）：失败指数退避重试（1s/2s/4s/8s...封顶 30s），

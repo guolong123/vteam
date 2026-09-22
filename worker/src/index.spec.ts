@@ -47,6 +47,7 @@ const CONFIG: WorkerConfig = {
   workerExecPort: 4198,
   workerFirstTokenTimeoutMs: 300000,
   workerMaxInstances: 5,
+  standalone: false,
 };
 
 describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
