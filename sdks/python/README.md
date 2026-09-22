@@ -2,6 +2,9 @@
 
 第三方服务用 Python 调用 vteam worker 执行任务的轻量 SDK。**零第三方依赖**（仅标准库），Python ≥ 3.10。
 
+> worker 全部 HTTP 接口速查（执行端点 / `/config/*` 本地配置下推 / 控制面契约）：见
+> [`WORKER_API.md`](WORKER_API.md)。
+
 ## 架构
 
 ```
@@ -169,7 +172,8 @@ with WorkerDirect("http://127.0.0.1:4198", token="dev-token") as worker:
 | `wait_for_event(predicate, timeout)` | 通用谓词等待 |
 | `events_for(task_id=None, type=None)` | 查询已收事件 |
 | `registered_workers()` | 已注册 worker 列表 |
-| `push_command(worker_id, cmd)` | 塞下行命令（如 reload-config） |
+| `push_command(worker_id, cmd, *, resource_version=None)` | 塞下行命令（reload-config / model-credentials / git-credentials / restart / shutdown） |
+| `set_resources(skills=, tools=, mcp_servers=, agent_policies=, replace_all=False)` | 动态更新资源 fixture（None = 该类别不变） |
 
 EventsServer 同时实现了资源拉取空端点（skills/tools/mcp-servers/agent-policies），
 worker 启动期 `injectAll` 不会报错；构造时传 `resources={...}` 可下发 fixture 落盘。
@@ -187,6 +191,39 @@ worker 启动期 `injectAll` 不会报错；构造时传 `resources={...}` 可�
 | `events` | 底层 EventsServer（wait_for_task 等） |
 
 独立进程：`python -m worker_sdk --port 13999 --token <tok> [--worker-exec-url URL]`
+
+### 资源与命令下发（WorkerService）
+
+| 方法 | 说明 |
+|------|------|
+| `set_resources(skills=, tools=, mcp_servers=, agent_policies=, replace_all=False)` | 更新资源 fixture（拉取式）；随后 `reload_config()` 让 worker 重拉落盘 |
+| `reload_config(worker_id=None)` | 触发 worker 重拉资源 + 重注入（无活跃会话时重启 serve 生效） |
+| `push_model_credentials(provider_keys, provider_configs=None, worker_id=None)` | 模型凭据/配置下发 → worker 写 `auth.json` + `opencode.json` provider 段 |
+| `push_git_credentials(credentials, worker_id=None)` | git 凭据下发 → worker 写 `$HOME/.keta-git-creds.json` |
+| `restart(worker_id=None)` / `shutdown(worker_id=None)` | 远程重启 / 优雅下线 |
+| `push_command(cmd, worker_id=None, resource_version=None)` | 通用下行命令（上述方法的底层，返回目标 workerId 列表） |
+
+`worker_id` 缺省 = 广播到全部已注册 worker（无注册则抛 `WorkerNotRegisteredError`）。
+元素可传 dataclass（`SkillRecord`/`ToolRecord`/`McpServerRecord`/`AgentPolicyRecord`/
+`ModelCredentialEntry`/`ModelProviderConfigEntry`/`GitCredentialEntry`）或等价 dict。
+`AgentPolicyRecord` 需 `description`，`mode ∈ {'primary','all'}`，`permission` 禁 `write` 键（SDK 构造时即校验）。
+
+```python
+with WorkerService(port=13999, token=TOKEN) as svc:
+    svc.wait_for_worker()
+    svc.set_resources(
+        skills=[SkillRecord(id="sk1", name="s1", content="# hi")],
+        mcp_servers=[McpServerRecord(id="ms1", name="m", type="remote", url="http://x/mcp")],
+    )
+    svc.reload_config()
+    svc.push_model_credentials(
+        [ModelCredentialEntry("p1", "sk-...")],
+        {"p1": ModelProviderConfigEntry("http://base/v1", ["m1"])},
+    )
+    svc.push_git_credentials([GitCredentialEntry("git@host:o/r.git", "KEY", "ssh_key", "fp")])
+```
+
+下发 API 仅 `WorkerService`（持有控制面）；`WorkerDirect` 直连模式无控制面，不适用。
 
 ### TaskResult
 
