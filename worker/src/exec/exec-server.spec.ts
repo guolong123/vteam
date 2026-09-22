@@ -1696,6 +1696,80 @@ describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
     }
   });
 
+  it('三目录各放一个 .md → 合并返回三个条目（含 .omo/drafts，正文内联）', async () => {
+    await seedPlan(workDir, 'a-opencode.md', '# opencode 计划');
+    const omoDir = join(workDir, '.omo', 'plans');
+    await fsp.mkdir(omoDir, { recursive: true });
+    await fsp.writeFile(join(omoDir, 'b-omo.md'), '# omo 计划', 'utf8');
+    const draftsDir = join(workDir, '.omo', 'drafts');
+    await fsp.mkdir(draftsDir, { recursive: true });
+    await fsp.writeFile(join(draftsDir, 'c-draft.md'), '# 草稿计划', 'utf8');
+
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.files).toHaveLength(3);
+      const byName = Object.fromEntries(
+        res.body.files.map((f: any) => [f.name, f]),
+      );
+      // .omo/drafts 下的文件出现在结果中
+      expect(Object.keys(byName).sort()).toEqual(['a-opencode.md', 'b-omo.md', 'c-draft.md']);
+      for (const f of res.body.files) {
+        expect(f).toEqual(
+          expect.objectContaining({
+            name: expect.any(String),
+            updatedAt: expect.any(String),
+            size: expect.any(Number),
+            content: expect.any(String),
+          }),
+        );
+      }
+      expect(byName['c-draft.md'].content).toBe('# 草稿计划');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('三目录均存在但无 .md → 200 {files: []} 不报错（空目录是常态）', async () => {
+    for (const rel of ['.omo/plans', '.opencode/plans', '.omo/drafts']) {
+      await fsp.mkdir(join(workDir, rel), { recursive: true });
+    }
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.files).toEqual([]);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('三目录同名 x.md 内容不同 → 首个命中目录（.omo/plans）胜出（优先级不回归）', async () => {
+    await seedPlan(workDir, 'x.md', 'opencode 内容');
+    const omoDir = join(workDir, '.omo', 'plans');
+    await fsp.mkdir(omoDir, { recursive: true });
+    await fsp.writeFile(join(omoDir, 'x.md'), 'omo 内容', 'utf8');
+    const draftsDir = join(workDir, '.omo', 'drafts');
+    await fsp.mkdir(draftsDir, { recursive: true });
+    await fsp.writeFile(join(draftsDir, 'x.md'), 'draft 内容', 'utf8');
+
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.files).toHaveLength(1);
+      expect(res.body.files[0].name).toBe('x.md');
+      // PLAN_DOCS_DIRS 顺序即优先级：.omo/plans > .opencode/plans > .omo/drafts
+      expect(res.body.files[0].content).toBe('omo 内容');
+    } finally {
+      await exec.stop();
+    }
+  });
+
   it('非 GET 方法 → 405', async () => {
     const exec = serverWith({ workDir });
     const bound = await exec.start();
