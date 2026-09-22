@@ -19,8 +19,14 @@ import * as path from 'path';
  *
  * ⚠️ 粗筛单独用会产生误报：实测 34,139 行日志中裸 `429` 命中 161 条 **INFO** 行
  * （`messageID=msg_0a429eb…` 里的数字碰巧命中）。故 `isServeErrorLine` 追加**结构化错误门**。
+ *
+ * ⚠️ 不含裸 `stream error`（2026-09-22 线上误杀根因）：它是 AI-SDK 的**通用外层包装文案**，
+ * 真实原因在同行 `error.error="AI_APICallError: <原因>"` 里；瞬时流中断被内核重试后会话
+ * 照常继续产出。把它当致命关键词 → 每有一条瞬时 stream error 就 abort 一个健康会话
+ * （现象：`等待首字超时：模型调用报错：stream error`，而会话仍在跑）。
+ * 致命性只由本表的具体原因关键词判定，包装文案不再单独触发。
  */
-export const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i;
+export const SERVE_ERROR_KEYWORDS = /AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i;
 
 /** 结构化错误门之一：opencode 日志级别字段（真实模型错误恒为 ERROR）。 */
 const SERVE_ERROR_LEVEL_RE = /\blevel=ERROR\b/;

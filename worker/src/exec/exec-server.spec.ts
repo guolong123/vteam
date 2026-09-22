@@ -529,6 +529,39 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
+  it('serve 日志仅裸 stream error 包装行（无具体原因）→ 不提前 abort 健康会话（AI-SDK 外层包装非致命）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    // 永无首字（仅 step-start），60ms 首字超时远大于单轮耗时——若快检误触发会首轮即失败；
+    // 正确行为：多轮轮询后走超时路径（abort 照常，但非秒杀，且文案是超时而非「模型调用报错」）
+    getMessages.mockResolvedValue(STEP_START_ONLY);
+    const { sender, sent } = createSender();
+    const streamErrorLine =
+      'timestamp=2026-09-22T10:17:00.000Z level=ERROR run=abc123 message="stream error" session.id=ses_1';
+    let reads = 0;
+    const serveErrorReader = jest.fn(() => (reads++ === 0 ? [] : [streamErrorLine]));
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 60,
+      pollMs: 5,
+      serveErrorReader,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 4);
+      expect(getMessages.mock.calls.length).toBeGreaterThan(2);
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      expect(String(terminal[2].payload.error)).toContain('等待首字超时');
+      expect(String(terminal[2].payload.error)).not.toContain('模型调用报错');
+      expect(abort).toHaveBeenCalledWith('ses_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
   it('无模型错误可提取时：原始 serve 日志尾部进 agent.status error + logger.error（失败必带证据，非笼统文案）', async () => {    const { driver, getMessages, abort } = mockDriver();
     getMessages.mockResolvedValue(STEP_START_ONLY);
     const { sender, sent } = createSender();

@@ -249,7 +249,12 @@ export function describeTimeoutReason(
   return '模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）';
 }
 
-/** 首字超时（firstTokenTimeoutMs 内未出现第一个非空 assistant 输出 part——text 或 reasoning），已 abort + 携带部分回复。 */
+/**
+ * 会话未完成即失败（已 abort + 携带部分回复）。两条来源共用本类型：
+ * - **首字超时**：firstTokenTimeoutMs 内未出现第一个非空 assistant 输出 part（text 或 reasoning）；
+ * - **serve 日志模型错误提前失败**：命中真实模型 API 错误关键词（`serveErrorText` 有值）——
+ *   非超时，文案以「模型调用失败」开头，避免把"会话仍在跑"误报成首字超时。
+ */
 export class CompletionTimeoutError extends Error {
   readonly sessionID: string;
   readonly result: CompletionResult;
@@ -263,8 +268,11 @@ export class CompletionTimeoutError extends Error {
     serveErrorText?: string,
     serveLogTail?: string[],
   ) {
+    const reason = describeTimeoutReason(messages ?? [], serveErrorText, serveLogTail);
     super(
-      `[prompt-await] 会话 ${sessionID} 等待首字超时：${describeTimeoutReason(messages ?? [], serveErrorText, serveLogTail)}`,
+      typeof serveErrorText === 'string' && serveErrorText.trim() !== ''
+        ? `[prompt-await] 会话 ${sessionID} 模型调用失败：${reason}`
+        : `[prompt-await] 会话 ${sessionID} 等待首字超时：${reason}`,
     );
     this.name = 'CompletionTimeoutError';
     this.sessionID = sessionID;
