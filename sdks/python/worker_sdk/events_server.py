@@ -24,7 +24,7 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from .exceptions import TaskTimeoutError, TokenError, WorkerNotRegisteredError
-from .models import TaskResult, WorkerEvent
+from .models import TaskResult, WorkerEvent, as_payload
 
 
 def _now_iso() -> str:
@@ -449,12 +449,48 @@ class EventsServer:
 
     # -- command queue (optional) ----------------------------------------
 
-    def push_command(self, worker_id: str, command: dict[str, Any]) -> None:
-        """往 worker 下一次心跳塞下行命令（如 reload-config）。"""
+    def push_command(
+        self,
+        worker_id: str,
+        command: dict[str, Any],
+        *,
+        resource_version: str | None = None,
+    ) -> None:
+        """往 worker 下一次心跳塞下行命令（reload-config / model-credentials / git-credentials 等）。"""
         cmd = dict(command)
-        cmd.setdefault("resourceVersion", _now_iso())
+        if resource_version is not None:
+            cmd["resourceVersion"] = resource_version
+        else:
+            cmd.setdefault("resourceVersion", _now_iso())
         with self._lock:
             self.command_queues.setdefault(worker_id, []).append(cmd)
+
+    def set_resources(
+        self,
+        *,
+        skills: list[Any] | None = None,
+        tools: list[Any] | None = None,
+        mcp_servers: list[Any] | None = None,
+        agent_policies: list[Any] | None = None,
+        replace_all: bool = False,
+    ) -> None:
+        """动态更新资源 fixture（None = 该类别不变；replace_all=True 先清空四类）。
+
+        元素可为 dict 或带 ``to_payload()`` 的 dataclass（如 SkillRecord/McpServerRecord）。
+        更新后需下发 reload-config 让 worker 重拉落盘。
+        """
+        mapping = {
+            "skills": skills,
+            "tools": tools,
+            "mcp-servers": mcp_servers,
+            "agent_policies": agent_policies,
+        }
+        if replace_all:
+            for key in self._resources:
+                self._resources[key] = []
+        for key, items in mapping.items():
+            if items is not None:
+                self._resources[key] = [as_payload(i) for i in items]
 
     def registered_workers(self) -> list[dict[str, Any]]:
         with self._lock:
