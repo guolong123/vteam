@@ -293,6 +293,9 @@ export const HOSTED_CONFIRM_INSTRUCTION =
 export const HOSTED_PLAN_SIGNOFF_INSTRUCTION =
   '【计划签署】托管模式（managedMode=on）下计划由你（主 Agent）代用户签署：定稿用 vteam_plan_finalize（pending_final→approved，托管模式额外允许 draft→approved），开始执行用 vteam_plan_confirm（approved→executing，托管模式额外允许 draft/pending_final 直推）。派发执行类工作前必须先 vteam_plan_confirm 把计划推进到 executing，否则计划会卡在 draft，且后续 vteam_plan_complete 必然报错（仅 executing 可完工）。托管模式未开启时这两个工具返回 403，此时须提示用户在计划 Tab 人工确认（确认定稿 / 确认开始执行）；若你岗位未被授予 task.complete 能力（工具返回未获授权），请 @项目经理 或 @计划员 执行。';
 
+export const HOSTED_PLAN_REVIEW_INSTRUCTION =
+  '【计划评审派发｜决定计划状态能否动】计划文档产出后，评审必须用 vteam_notify_agent 且 kind=review 派发（不带 issueId 即可绕开工单门），派发词必须带三元组：round=第几轮（首轮 1）、planVersion=版本（如 v1；已落盘的再带 planHash）、expected=评审人名单（如 架构师-1、产品经理-1）。缺任一项 reason=review-triplet 会拦截且不落库不广播。评审回执 N/N 收敛后平台自动把计划 draft→reviewing→pending_final，【计划 Tab】才会出现「确认定稿」按钮；⚠️ 只在群聊里口头说 VERDICT: APPROVE 不算收敛——没有三元组账本，状态永远停在草稿、按钮永远不出现，你和用户都会卡住。到 pending_final 后请提示用户点「确认定稿」→ approved → 再点「确认开始执行」→ executing。';
+
 /** 非主成员协作指引（替代【任务状态】/【托管模式】工具段，避免教非主成员调用必 403 的工具）。 */
 export const NON_MAIN_AGENT_NOTE =
   '【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。定向通知仅可直达主Agent，需触达其他成员时请主Agent中转，成员间直连调用将被拒绝。' +
@@ -606,7 +609,7 @@ export function buildSystemInstructions(
     // P0 条件注入：主 Agent 追加【任务状态】+【托管模式】工具段；非主成员仅给协作指引
     // （不再教非主成员调用必 403 的 vteam_task_transition / vteam_question_confirm）。
     opts?.isMainAgent
-      ? `${TASK_TRANSITION_INSTRUCTION}\n\n${HOSTED_CONFIRM_INSTRUCTION}\n\n${HOSTED_PLAN_SIGNOFF_INSTRUCTION}`
+      ? `${TASK_TRANSITION_INSTRUCTION}\n\n${HOSTED_CONFIRM_INSTRUCTION}\n\n${HOSTED_PLAN_REVIEW_INSTRUCTION}\n\n${HOSTED_PLAN_SIGNOFF_INSTRUCTION}`
       : NON_MAIN_AGENT_NOTE,
     // P0 条件注入：企微渠道才追加【企业微信】段，缺省不注入。
     opts?.isWecomChannel === true ? WECOM_SYSTEM_INSTRUCTION : '',
