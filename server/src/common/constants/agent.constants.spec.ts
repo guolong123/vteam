@@ -124,7 +124,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
   });
 
   it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 者（无 server-gated 例外），且全为 vteam_ 真实名', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(28);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(30);
     for (const mcp of VTEAM_MCP_TOOL_NAMES) expect(mcp).toMatch(/^vteam_/);
     for (const name of ROLE_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
@@ -308,6 +308,8 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_notify_agent: 'allow',
       vteam_memory_search: 'allow',
       vteam_plan_complete: 'allow',
+      vteam_plan_finalize: 'allow',
+      vteam_plan_confirm: 'allow',
       vteam_submit_artifact: 'allow',
       browser: 'allow',
     });

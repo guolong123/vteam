@@ -229,7 +229,7 @@ describe('agent_roles.capabilities 迁移契约（capability model）', () => {
     expect(agentModel).toMatch(/^\s*policyId\s+String\?\s+@map\("policy_id"\)\s*$/m);
   });
 
-  it('目录覆盖 28 工具（迁移按同目录硬编码，漂移即红）', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(28);
+  it('目录覆盖 30 工具（迁移按同目录硬编码，漂移即红）', () => {
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(30);
   });
 });

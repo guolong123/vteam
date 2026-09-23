@@ -961,6 +961,21 @@ export function buildPlatformMcpTools(
         service.planComplete(ctx, args as PlanCompleteArgs),
     },
     {
+      name: 'plan_finalize',
+      description:
+        '确认计划定稿（pending_final→approved；团队开启托管模式时额外允许 draft→approved）。仅团队主 Agent 在托管模式下可调用，否则报错（须由用户在计划 Tab 人工确认）。已 approved 幂等返回。返回 {taskId, status, idempotent, action}。',
+      inputSchema: planCompleteSchema,
+      handler: (ctx, args) =>
+        service.planFinalize(ctx, args as PlanCompleteArgs),
+    },
+    {
+      name: 'plan_confirm',
+      description:
+        '确认计划开始执行（approved→executing；团队开启托管模式时允许 draft/pending_final 直推执行，并同事务补定稿字段与冻结锚）。仅团队主 Agent 在托管模式下可调用，否则报错（须由用户在计划 Tab 人工确认）。已 executing 幂等返回。返回 {taskId, status, idempotent, action}。',
+      inputSchema: planCompleteSchema,
+      handler: (ctx, args) => service.planConfirm(ctx, args as PlanCompleteArgs),
+    },
+    {
       name: 'channel_send',
       description:
         'Agent-decided outbound notification: send text/markdown to a notification channel bound to the current task (webhook/wecom_group_robot). This is the SOLE way to trigger outbound webhook notifications — auto-push on task status/agent reply is disabled. Decide when to notify based on task context.',

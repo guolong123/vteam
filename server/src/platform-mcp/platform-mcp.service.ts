@@ -4040,6 +4040,116 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
+   * 托管模式计划签署门禁：团队 managedMode=on 且调用方为团队主 Agent 成员，
+   * 才允许由 Agent 代用户签署（否则 403 并指向计划 Tab 人工确认入口）。
+   */
+  private async assertManagedPlanSignOff(
+    taskId: string,
+    selfInstanceId: string,
+  ): Promise<void> {
+    const teamId = await this.teamIdOfTask(taskId);
+    const team = teamId
+      ? await this.prisma.team.findUnique({
+          where: { id: teamId },
+          select: { managedMode: true, mainAgentMemberId: true },
+        })
+      : null;
+    const row = team as {
+      managedMode?: boolean | null;
+      mainAgentMemberId?: string | null;
+    } | null;
+    if (row?.managedMode !== true) {
+      throw new ForbiddenException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_MANAGED_MODE_DISABLED,
+        message:
+          '当前团队未开启托管模式，计划签署须由用户在计划 Tab 人工确认（确认定稿 / 确认开始执行）。',
+      });
+    }
+    if (row.mainAgentMemberId !== selfInstanceId) {
+      throw new ForbiddenException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_MANAGED_MODE_MAIN_ONLY,
+        message: '托管模式下计划签署仅限团队主 Agent 调用。',
+      });
+    }
+  }
+
+  /**
+   * plan_finalize：确认定稿（pending_final→approved；托管模式额外允许 draft→approved）。
+   * 归属校验 → 托管模式主 Agent 门禁 → PlanLifecycleService.confirmPlan(action:'finalize')。
+   */
+  async planFinalize(
+    ctx: PlatformMcpContext,
+    args: { taskId: string; selfInstanceId: string },
+  ): Promise<{
+    taskId: string;
+    status: string;
+    idempotent: boolean;
+    action: string;
+  }> {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    if (!this.planLifecycle) {
+      throw new ServiceUnavailableException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
+        message: '计划服务未装配，暂不可确认定稿',
+      });
+    }
+    await this.assertManagedPlanSignOff(args.taskId, args.selfInstanceId);
+    const result = await this.planLifecycle.confirmPlan(args.taskId, {
+      userId: args.selfInstanceId,
+      userName: null,
+      action: 'finalize',
+      managed: true,
+    });
+    this.logger.log(
+      `[plan-finalize] 托管模式主 Agent 确认定稿 task=${args.taskId} status=${result.plan.status} idempotent=${result.idempotent}`,
+    );
+    return {
+      taskId: args.taskId,
+      status: result.plan.status,
+      idempotent: result.idempotent,
+      action: result.action,
+    };
+  }
+
+  /**
+   * plan_confirm：确认开始执行（approved→executing；托管模式允许 draft/pending_final 直推执行）。
+   * 归属校验 → 托管模式主 Agent 门禁 → PlanLifecycleService.confirmPlan(action:'confirm')。
+   */
+  async planConfirm(
+    ctx: PlatformMcpContext,
+    args: { taskId: string; selfInstanceId: string },
+  ): Promise<{
+    taskId: string;
+    status: string;
+    idempotent: boolean;
+    action: string;
+  }> {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    if (!this.planLifecycle) {
+      throw new ServiceUnavailableException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
+        message: '计划服务未装配，暂不可确认开始执行',
+      });
+    }
+    await this.assertManagedPlanSignOff(args.taskId, args.selfInstanceId);
+    const result = await this.planLifecycle.confirmPlan(args.taskId, {
+      userId: args.selfInstanceId,
+      userName: null,
+      action: 'confirm',
+      managed: true,
+    });
+    this.logger.log(
+      `[plan-confirm] 托管模式主 Agent 确认开始执行 task=${args.taskId} status=${result.plan.status} idempotent=${result.idempotent}`,
+    );
+    return {
+      taskId: args.taskId,
+      status: result.plan.status,
+      idempotent: result.idempotent,
+      action: result.action,
+    };
+  }
+
+  /**
    * wecom_reply：回复企业微信用户（仅当消息来自企微时使用）。
    * - 解析当前任务（taskId/selfInstanceId 可选，未传则从 worker 会话自动解析）→ 校验归属
    * - 查找任务所属团队绑定的 wecom_aibot 渠道 → 通过 WecomAibotAdapter 发送到企微（@发送者，群聊时@）

@@ -56,7 +56,7 @@ export interface RoleCapability {
 export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
   { key: "task.create", label: "创建任务", group: "task", tools: ["vteam_task_create"], factoryDefault: false },
   { key: "task.transition", label: "流转任务状态", group: "task", tools: ["vteam_task_transition"], factoryDefault: false },
-  { key: "task.complete", label: "完成任务", group: "task", tools: ["vteam_plan_complete"], factoryDefault: false },
+  { key: "task.complete", label: "完成/确认计划", group: "task", tools: ["vteam_plan_complete", "vteam_plan_finalize", "vteam_plan_confirm"], factoryDefault: false },
   { key: "task.context", label: "读取任务上下文", group: "task", tools: ["vteam_task_context"], factoryDefault: true },
   { key: "team.view", label: "查看团队", group: "team", tools: ["vteam_team_view"], factoryDefault: true },
   { key: "team.add_member", label: "添加团队成员", group: "team", tools: ["vteam_team_add_member"], factoryDefault: false },

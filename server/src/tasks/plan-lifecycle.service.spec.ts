@@ -420,6 +420,107 @@ describe('PlanLifecycleService', () => {
     });
   });
 
+  describe('托管模式签署（managed：主 Agent 代用户，允许跳过评审直推）', () => {
+    beforeEach(() => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      prisma.message.create.mockImplementation(({ data }: any) =>
+        Promise.resolve({ id: 'm_managed', ...data }),
+      );
+      prisma.plan.update.mockImplementation(({ data }: any) =>
+        Promise.resolve({ ...data }),
+      );
+    });
+
+    it('confirmPlan managed=true：draft 直推 executing，同事务补定稿字段与冻结锚', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'draft' });
+
+      const res = await service.confirmPlan('t_1', {
+        userId: 'tmm_main',
+        userName: null,
+        action: 'confirm',
+        managed: true,
+      });
+
+      expect(res).toMatchObject({
+        idempotent: false,
+        action: 'confirm',
+        plan: { status: 'executing' },
+      });
+      const data = prisma.plan.update.mock.calls[0][0].data;
+      expect(data).toMatchObject({
+        status: 'executing',
+        confirmedBy: 'tmm_main',
+        finalizedBy: 'tmm_main',
+      });
+      expect(data.confirmedAt).toBeInstanceOf(Date);
+      expect(data.finalizedAt).toBeInstanceOf(Date);
+      expect(data.frozenVersion).toBe('v0.1');
+      expect(data.frozenHash).toBe(computePlanHash('t_1:v0.1'));
+    });
+
+    it('confirmPlan managed=true：pending_final 同样直推 executing', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'pending_final' });
+
+      const res = await service.confirmPlan('t_1', {
+        userId: 'tmm_main',
+        userName: null,
+        action: 'confirm',
+        managed: true,
+      });
+
+      expect(res).toMatchObject({ idempotent: false, plan: { status: 'executing' } });
+    });
+
+    it('confirmPlan 未传 managed：draft 仍被人工签署门拦下（409，不写库）', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'draft' });
+
+      const err = await service
+        .confirmPlan('t_1', { userId: 'u_1', action: 'confirm' })
+        .catch((e) => e);
+
+      expect(err?.response?.code ?? err?.code).toBe(
+        PLAN_LIFECYCLE_ERRORS.PLAN_CONFIRM_WRONG_STATE,
+      );
+      expect(prisma.plan.update).not.toHaveBeenCalled();
+    });
+
+    it('finalizePlan managed=true：draft → approved（跳过评审，冻结锚回退口径）', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'draft' });
+
+      const res = await service.finalizePlan('t_1', {
+        userId: 'tmm_main',
+        userName: null,
+        managed: true,
+      });
+
+      expect(res).toMatchObject({
+        idempotent: false,
+        action: 'finalize',
+        plan: { status: 'approved' },
+      });
+      expect(prisma.plan.update.mock.calls[0][0].data).toMatchObject({
+        status: 'approved',
+        finalizedBy: 'tmm_main',
+        frozenVersion: 'v0.1',
+        frozenHash: computePlanHash('t_1:v0.1'),
+      });
+    });
+
+    it('finalizePlan 未传 managed：draft 仍 409（人工门不被静默放宽）', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'draft' });
+
+      const err = await service
+        .finalizePlan('t_1', { userId: 'u_1' })
+        .catch((e) => e);
+
+      expect(err?.response?.code ?? err?.code).toBe(
+        PLAN_LIFECYCLE_ERRORS.PLAN_FINALIZE_WRONG_STATE,
+      );
+      expect(prisma.plan.update).not.toHaveBeenCalled();
+    });
+  });
+
   describe('finalizePlan（定稿确认 pending_final→approved，用户显式定稿门）', () => {
     beforeEach(() => {
       prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });

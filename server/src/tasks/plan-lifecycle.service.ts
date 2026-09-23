@@ -69,6 +69,8 @@ export const PLAN_LIFECYCLE_ERRORS = {
   PLAN_COMPLETE_WRONG_STATE: 'PLAN_COMPLETE_WRONG_STATE',
   PLAN_COMPLETE_MAIN_ONLY: 'PLAN_COMPLETE_MAIN_ONLY',
   PLAN_COMPLETE_UNAVAILABLE: 'PLAN_COMPLETE_UNAVAILABLE',
+  PLAN_MANAGED_MODE_DISABLED: 'PLAN_MANAGED_MODE_DISABLED',
+  PLAN_MANAGED_MODE_MAIN_ONLY: 'PLAN_MANAGED_MODE_MAIN_ONLY',
 } as const;
 
 /** 计划文件仅展示提示（GET plan 真值源声明：状态一律读 DB，文件 divergence 时告警）。 */
@@ -283,6 +285,12 @@ export class PlanLifecycleService implements OnModuleInit {
       userName?: string | null;
       action?: PlanConfirmAction;
       reason?: string | null;
+      /**
+       * 托管模式（团队 managedMode=on）：由主 Agent 代用户签署，允许跳过评审直推——
+       * draft/pending_final/approved 一律可到 executing（缺定稿时同事务补冻结锚与定稿字段）。
+       * 缺省 false 时保持人工签署门语义（仅 approved→executing）。
+       */
+      managed?: boolean;
     },
   ): Promise<{ plan: Plan; idempotent: boolean; action: PlanConfirmAction }> {
     if (input.action === 'finalize') {
@@ -299,22 +307,39 @@ export class PlanLifecycleService implements OnModuleInit {
     if (row.status === PLAN_LIFECYCLE_STATUS.executing) {
       return { plan: row, idempotent: true, action: 'confirm' };
     }
-    if (row.status !== PLAN_LIFECYCLE_STATUS.approved) {
+    const managedJump =
+      input.managed === true &&
+      (row.status === PLAN_LIFECYCLE_STATUS.draft ||
+        row.status === PLAN_LIFECYCLE_STATUS.pending_final);
+    if (row.status !== PLAN_LIFECYCLE_STATUS.approved && !managedJump) {
       throw new ConflictException({
         code: PLAN_LIFECYCLE_ERRORS.PLAN_CONFIRM_WRONG_STATE,
         message: `计划未定稿待执行（当前 ${row.status}），不可确认开始`,
         details: { current: row.status },
       });
     }
+    const jumpAnchor = managedJump
+      ? resolveFrozenAnchor(taskId, await this.readTaskLedger(taskId))
+      : null;
     const plan = await this.transition(taskId, 'executing', {
       confirmedBy: actor,
       confirmedAt: new Date(),
       rejectReason: null,
+      ...(jumpAnchor
+        ? {
+            finalizedBy: actor,
+            finalizedAt: new Date(),
+            frozenVersion: jumpAnchor.version,
+            frozenHash: jumpAnchor.hash,
+          }
+        : {}),
     });
     await this.postPlanSystemMessage(
       taskId,
       task.teamId,
-      `计划已由 ${actor} 确认，开始执行（approved → executing）。PM 请续推 W2 执行任务。`,
+      input.managed === true
+        ? `计划已由 ${actor} 在托管模式下代用户签署（${row.status} → executing），开始执行。PM 请续推执行任务。`
+        : `计划已由 ${actor} 确认，开始执行（approved → executing）。PM 请续推 W2 执行任务。`,
     );
     return { plan, idempotent: false, action: 'confirm' };
   }
@@ -332,6 +357,8 @@ export class PlanLifecycleService implements OnModuleInit {
       userId: string;
       userName?: string | null;
       reason?: string | null;
+      /** 托管模式：主 Agent 代用户签署，额外允许 draft → approved（跳过评审）。 */
+      managed?: boolean;
     },
   ): Promise<{ plan: Plan; idempotent: boolean; action: PlanConfirmAction }> {
     const actor = displayName(input.userName, input.userId);
@@ -339,7 +366,12 @@ export class PlanLifecycleService implements OnModuleInit {
     if (row.status === PLAN_LIFECYCLE_STATUS.approved) {
       return { plan: row, idempotent: true, action: 'finalize' };
     }
-    if (row.status !== PLAN_LIFECYCLE_STATUS.pending_final) {
+    const managedDraftJump =
+      input.managed === true && row.status === PLAN_LIFECYCLE_STATUS.draft;
+    if (
+      row.status !== PLAN_LIFECYCLE_STATUS.pending_final &&
+      !managedDraftJump
+    ) {
       throw new ConflictException({
         code: PLAN_LIFECYCLE_ERRORS.PLAN_FINALIZE_WRONG_STATE,
         message: `计划未待定稿（当前 ${row.status}），不可确认定稿`,
@@ -360,7 +392,9 @@ export class PlanLifecycleService implements OnModuleInit {
     await this.postPlanSystemMessage(
       taskId,
       task.teamId,
-      `计划已由 ${actor} 确认定稿（pending_final → approved），冻结基线 ${anchor.version}（hash ${anchor.hash}）。开始执行另需用户确认，确认前不得派发执行类工作。`,
+      input.managed === true
+        ? `计划已由 ${actor} 在托管模式下代用户签署定稿（${row.status} → approved），冻结基线 ${anchor.version}（hash ${anchor.hash}）。`
+        : `计划已由 ${actor} 确认定稿（pending_final → approved），冻结基线 ${anchor.version}（hash ${anchor.hash}）。开始执行另需用户确认，确认前不得派发执行类工作。`,
     );
     await this.broadcastFinalizeNotice(taskId, task.teamId, anchor, actor);
     return { plan, idempotent: false, action: 'finalize' };

@@ -29,9 +29,9 @@ describe('platform capability catalogue coverage', () => {
     expect(PLATFORM_CAPABILITY_KEYS).toEqual(keys);
   });
 
-  it('目录覆盖 VTEAM_MCP_TOOL_NAMES 全 28 项，且每项恰属一个能力点（27 点 ↔ 28 工具）', () => {
+  it('目录覆盖 VTEAM_MCP_TOOL_NAMES 全 30 项，且每项恰属一个能力点（27 点 ↔ 30 工具）', () => {
     expect(PLATFORM_CAPABILITIES).toHaveLength(27);
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(28);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(30);
     const owner = new Map<string, string>();
     let toolSum = 0;
     for (const capability of PLATFORM_CAPABILITIES) {
@@ -41,15 +41,16 @@ describe('platform capability catalogue coverage', () => {
         owner.set(tool, capability.key);
       }
     }
-    expect(toolSum).toBe(28);
+    expect(toolSum).toBe(30);
     expect([...owner.keys()].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
     for (const tool of VTEAM_MCP_TOOL_NAMES) {
       expect(capabilityKeyForTool(tool)).toBe(owner.get(tool));
     }
-    // 拆分组能力点后恰一项仍覆盖多工具：hook.manage（hook_register + hook_cancel）。
+    // 拆分组能力点后仍覆盖多工具的：task.complete（完工/定稿/确认）+ hook.manage（register + cancel）。
     const multiTool = PLATFORM_CAPABILITIES.filter((c) => c.tools.length > 1);
-    expect(multiTool.map((c) => c.key)).toEqual(['hook.manage']);
-    expect(multiTool[0]?.tools).toHaveLength(2);
+    expect(multiTool.map((c) => c.key)).toEqual(['task.complete', 'hook.manage']);
+    expect(multiTool[0]?.tools).toHaveLength(3);
+    expect(multiTool[1]?.tools).toHaveLength(2);
     // 已拆分的组键不再是合法能力点键。
     expect(isPlatformCapabilityKey('issue.manage')).toBe(false);
     expect(isPlatformCapabilityKey('memory.manage')).toBe(false);

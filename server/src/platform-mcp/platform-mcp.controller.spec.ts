@@ -33,6 +33,8 @@ describe('PlatformMcpController (HTTP)', () => {
     myProfile: jest.Mock;
     teamAddMember: jest.Mock;
     planComplete: jest.Mock;
+    planFinalize: jest.Mock;
+    planConfirm: jest.Mock;
     channelSend: jest.Mock;
     wecomReply: jest.Mock;
     taskCreate: jest.Mock;
@@ -124,6 +126,18 @@ describe('PlatformMcpController (HTTP)', () => {
         taskId: 't_1',
         status: 'completed',
         idempotent: false,
+      }),
+      planFinalize: jest.fn().mockResolvedValue({
+        taskId: 't_1',
+        status: 'approved',
+        idempotent: false,
+        action: 'finalize',
+      }),
+      planConfirm: jest.fn().mockResolvedValue({
+        taskId: 't_1',
+        status: 'executing',
+        idempotent: false,
+        action: 'confirm',
       }),
       channelSend: jest.fn().mockResolvedValue({
         content: [{ type: 'text', text: '已发送至渠道 nc_0001: hi' }],
@@ -251,7 +265,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 28 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search/memory_update + team_view/my_profile + team_add_member + plan_complete + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 30 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search/memory_update + team_view/my_profile + team_add_member + plan_complete/plan_finalize/plan_confirm + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -289,6 +303,8 @@ describe('PlatformMcpController (HTTP)', () => {
         'my_profile',
         'team_add_member',
         'plan_complete',
+        'plan_finalize',
+        'plan_confirm',
         'channel_send',
         'wecom_reply',
         'task_create',
@@ -872,6 +888,60 @@ describe('PlatformMcpController (HTTP)', () => {
         taskId: 't_1',
         status: 'completed',
         idempotent: false,
+      });
+    });
+
+    it('plan_finalize → service.planFinalize 收到 taskId/selfInstanceId', async () => {
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 118,
+          method: 'tools/call',
+          params: {
+            name: 'plan_finalize',
+            arguments: { taskId: 't_1', selfInstanceId: 'ta_main' },
+          },
+        })
+        .expect(200);
+
+      expect(service.planFinalize).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        { taskId: 't_1', selfInstanceId: 'ta_main' },
+      );
+      const text = res.body.result.content[0].text as string;
+      expect(JSON.parse(text)).toEqual({
+        taskId: 't_1',
+        status: 'approved',
+        idempotent: false,
+        action: 'finalize',
+      });
+    });
+
+    it('plan_confirm → service.planConfirm 收到 taskId/selfInstanceId', async () => {
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 119,
+          method: 'tools/call',
+          params: {
+            name: 'plan_confirm',
+            arguments: { taskId: 't_1', selfInstanceId: 'ta_main' },
+          },
+        })
+        .expect(200);
+
+      expect(service.planConfirm).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        { taskId: 't_1', selfInstanceId: 'ta_main' },
+      );
+      const text = res.body.result.content[0].text as string;
+      expect(JSON.parse(text)).toEqual({
+        taskId: 't_1',
+        status: 'executing',
+        idempotent: false,
+        action: 'confirm',
       });
     });
 
