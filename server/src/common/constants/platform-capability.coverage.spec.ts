@@ -29,9 +29,9 @@ describe('platform capability catalogue coverage', () => {
     expect(PLATFORM_CAPABILITY_KEYS).toEqual(keys);
   });
 
-  it('目录覆盖 VTEAM_MCP_TOOL_NAMES 全 30 项，且每项恰属一个能力点（27 点 ↔ 30 工具）', () => {
-    expect(PLATFORM_CAPABILITIES).toHaveLength(27);
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(30);
+  it('目录覆盖 VTEAM_MCP_TOOL_NAMES 全 31 项，且每项恰属一个能力点（28 点 ↔ 31 工具）', () => {
+    expect(PLATFORM_CAPABILITIES).toHaveLength(28);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(31);
     const owner = new Map<string, string>();
     let toolSum = 0;
     for (const capability of PLATFORM_CAPABILITIES) {
@@ -41,7 +41,7 @@ describe('platform capability catalogue coverage', () => {
         owner.set(tool, capability.key);
       }
     }
-    expect(toolSum).toBe(30);
+    expect(toolSum).toBe(31);
     expect([...owner.keys()].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
     for (const tool of VTEAM_MCP_TOOL_NAMES) {
       expect(capabilityKeyForTool(tool)).toBe(owner.get(tool));

@@ -166,14 +166,14 @@ describe('agent_roles.capabilities 迁移契约（capability model）', () => {
     }
   });
 
-  it('外部岗位矩阵与 EXTERNAL_AGENT_ROLE_CAPABILITIES 语义等价（冻结字面量 8 true / 13 false）', () => {
+  it('外部岗位矩阵与 EXTERNAL_AGENT_ROLE_CAPABILITIES 语义等价（冻结字面量 8 true / 14 false）', () => {
     const literal = jsonLiteralAfter(
       "WHERE `capabilities` IS NULL AND `key` IN ('sisyphus', 'prometheus', 'atlas');",
       sql,
     );
     expectFrozenEqualsCurrent(literal, EXTERNAL_AGENT_ROLE_CAPABILITIES);
     expect(Object.values(literal).filter(Boolean)).toHaveLength(8);
-    expect(Object.values(literal).filter((v) => v === false)).toHaveLength(13);
+    expect(Object.values(literal).filter((v) => v === false)).toHaveLength(14);
     // 8 个 true 能力点恰覆盖外部 8 工具。
     const granted = Object.entries(literal)
       .filter(([, v]) => v)
@@ -229,7 +229,7 @@ describe('agent_roles.capabilities 迁移契约（capability model）', () => {
     expect(agentModel).toMatch(/^\s*policyId\s+String\?\s+@map\("policy_id"\)\s*$/m);
   });
 
-  it('目录覆盖 30 工具（迁移按同目录硬编码，漂移即红）', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(30);
+  it('目录覆盖 31 工具（迁移按同目录硬编码，漂移即红）', () => {
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(31);
   });
 });

@@ -69,7 +69,7 @@ describe('agent-role.constants（agent_roles 单一事实来源）', () => {
     expect(deriveCustomAgentRoleKey('analyst')).toBe(deriveCustomAgentRoleKey('analyst'));
   });
 
-  it('BUILTIN_ROLE_CAPABILITY_MAPS 恰覆盖 7 内置岗 × 27 目录键（键序 = 目录序）', () => {
+  it('BUILTIN_ROLE_CAPABILITY_MAPS 恰覆盖 7 内置岗 × 28 目录键（键序 = 目录序）', () => {
     expect(Object.keys(BUILTIN_ROLE_CAPABILITY_MAPS).sort()).toEqual(
       BUILTIN_AGENT_ROLES.map((r) => r.key).sort(),
     );
@@ -80,9 +80,9 @@ describe('agent-role.constants（agent_roles 单一事实来源）', () => {
     }
   });
 
-  it('契约：project_manager = 全 27 点 true（显式覆盖，不按 ROLE_BOUNDARIES 派生）', () => {
+  it('契约：project_manager = 全 28 点 true（显式覆盖，不按 ROLE_BOUNDARIES 派生）', () => {
     const pm = BUILTIN_ROLE_CAPABILITY_MAPS.project_manager;
-    expect(Object.keys(pm)).toHaveLength(27);
+    expect(Object.keys(pm)).toHaveLength(28);
     for (const key of PLATFORM_CAPABILITY_KEYS) {
       expect(`${key}=${pm[key]}`).toBe(`${key}=true`);
     }

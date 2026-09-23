@@ -39,36 +39,36 @@
 --    常量右值、不引用列自身 ⇒ 幂等（重跑零变化）。
 -- ---------------------------------------------------------------------------
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":true,"task.transition":true,"task.complete":false,"task.context":true,"team.view":true,"team.add_member":true,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":true,"memory.manage":true,"skill.create":false,"question.confirm":true,"my_profile":true,"hook.manage":true,"git.repos":false}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":true,"task.transition":true,"task.complete":false,"plan.steps":true,"task.context":true,"team.view":true,"team.add_member":true,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":true,"memory.manage":true,"skill.create":false,"question.confirm":true,"my_profile":true,"hook.manage":true,"git.repos":false}' AS JSON)
  WHERE `type` = 'builtin'
    AND `key` = 'product';
 
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":true,"task.transition":true,"task.complete":true,"task.context":true,"team.view":true,"team.add_member":true,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":true,"memory.manage":true,"skill.create":true,"question.confirm":true,"my_profile":true,"hook.manage":true,"git.repos":true}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":true,"task.transition":true,"task.complete":true,"plan.steps":true,"task.context":true,"team.view":true,"team.add_member":true,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":true,"memory.manage":true,"skill.create":true,"question.confirm":true,"my_profile":true,"hook.manage":true,"git.repos":true}' AS JSON)
  WHERE `type` = 'builtin'
    AND `key` = 'project_manager';
 
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":false,"memory.manage":true,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"plan.steps":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":false,"memory.manage":true,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
  WHERE `type` = 'builtin'
    AND `key` = 'architect';
 
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":true,"memory.manage":true,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"plan.steps":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":true,"memory.manage":true,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
  WHERE `type` = 'builtin'
    AND `key` = 'developer';
 
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":false,"memory.manage":true,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"plan.steps":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":true,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":false,"memory.manage":true,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
  WHERE `type` = 'builtin'
    AND `key` = 'tester';
 
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":false,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":false,"memory.manage":false,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":true,"plan.steps":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":false,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":false,"memory.manage":false,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
  WHERE `type` = 'builtin'
    AND `key` = 'plan';
 
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":false,"chat.channel_send":false,"wecom.reply":false,"doc.read":true,"doc.submit":false,"file.read":true,"issue.manage":false,"memory.manage":false,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":true}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"plan.steps":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":false,"chat.channel_send":false,"wecom.reply":false,"doc.read":true,"doc.submit":false,"file.read":true,"issue.manage":false,"memory.manage":false,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":true}' AS JSON)
  WHERE `type` = 'builtin'
    AND `key` = 'librarian';

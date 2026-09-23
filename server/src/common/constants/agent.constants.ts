@@ -138,6 +138,7 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_plan_complete',
   'vteam_plan_finalize',
   'vteam_plan_confirm',
+  'vteam_todo',
   'vteam_channel_send',
   'vteam_wecom_reply',
   'vteam_task_create',
@@ -318,6 +319,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_hook_register: 'allow',
       vteam_hook_cancel: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -358,6 +360,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -404,6 +407,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_log: 'allow',
       // push 写远端：guard 放行后仍需仓库 write 授权（工具内 pushGuard 校验），无授权照样拒绝
       git_push: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -447,6 +451,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -493,6 +498,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_channel_send: 'allow',
       vteam_hook_register: 'allow',
       vteam_hook_cancel: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -525,6 +531,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_plan_confirm: 'allow',
       vteam_submit_artifact: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -559,6 +566,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_diff: 'allow',
       git_log: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 };

@@ -20,7 +20,7 @@
  * `defaultDeny: true` 的能力点出厂为 `false`（敏感：创建/流转/加成员/外发/治理/技能/确认/唤醒），
  * 其余为 `true`。
  *
- * 目录与 `VTEAM_MCP_TOOL_NAMES`（`agent.constants.ts`，30 项）**一一覆盖**：
+ * 目录与 `VTEAM_MCP_TOOL_NAMES`（`agent.constants.ts`，31 项）**一一覆盖**：
  * 每个工具恰好属于一个能力点（`platform-capability.coverage.spec.ts` 断言，防漂移）。
  */
 
@@ -36,7 +36,7 @@ export interface PlatformCapability {
   readonly defaultDeny: boolean;
 }
 
-/** 有序能力点目录（顺序即 UI 展示序；27 项覆盖 30 个 `vteam_*` 工具——`hook.manage` 覆盖 2、`task.complete` 覆盖 3）。 */
+/** 有序能力点目录（顺序即 UI 展示序；28 项覆盖 31 个 `vteam_*` 工具——`hook.manage` 覆盖 2、`task.complete` 覆盖 3）。 */
 export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
   { key: 'task.create', label: '创建任务', tools: ['vteam_task_create'], defaultDeny: true },
   { key: 'task.transition', label: '流转任务状态', tools: ['vteam_task_transition'], defaultDeny: true },
@@ -45,6 +45,12 @@ export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
     label: '完成/确认计划',
     tools: ['vteam_plan_complete', 'vteam_plan_finalize', 'vteam_plan_confirm'],
     defaultDeny: true,
+  },
+  {
+    key: 'plan.steps',
+    label: '计划执行步骤',
+    tools: ['vteam_todo'],
+    defaultDeny: false,
   },
   { key: 'task.context', label: '读取任务上下文', tools: ['vteam_task_context'], defaultDeny: false },
   { key: 'team.view', label: '查看团队', tools: ['vteam_team_view'], defaultDeny: false },

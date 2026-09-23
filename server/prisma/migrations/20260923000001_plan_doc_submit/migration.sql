@@ -11,7 +11,7 @@
 -- 口径对齐 20260921000009（拆分后 27 键整列字面量）：只改 plan 一行、无条件覆盖 ——
 -- 已有库的 000009 早已执行过，本条是「已应用库」的唯一补丁路径。
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":false,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.create":false,"issue.get":false,"issue.list":false,"issue.update":false,"issue.transition":false,"memory.save":false,"memory.search":true,"memory.update":false,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":true,"plan.steps":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":false,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.create":false,"issue.get":false,"issue.list":false,"issue.update":false,"issue.transition":false,"memory.save":false,"memory.search":true,"memory.update":false,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
  WHERE `type` = 'builtin'
    AND `key` = 'plan';
 

@@ -24,7 +24,7 @@ import {
  *   2. 7 内置岗字面量逐键 ≡ `BUILTIN_ROLE_CAPABILITY_MAPS`（SQL↔TS 单一来源防漂移）；
  *   3. 外部 3 岗字面量逐键 ≡ `EXTERNAL_AGENT_ROLE_CAPABILITIES`（8 true / 19 false，
  *      最小权限不放宽）；`ar_general` 字面量 ≡ `buildFactoryCapabilityMatrix()`
- *      （13 allow / 14 deny）；
+ *      （14 allow / 14 deny）；
  *   4. `project_manager` 字面量 = 全 27 点 true（显式覆盖，不按边界派生）；
  *   5. 四个原组塌缩格在字面量中已打开：architect issue.create/get/list=true、
  *      tester issue.create/get/list/transition=true、plan/librarian memory.search=true，
@@ -109,8 +109,8 @@ describe('20260921000009 拆分组能力点（迁移契约）', () => {
     expect(rows).toHaveLength(11);
   });
 
-  it('每条字面量恰 27 键（= 目录键全集），且不含已拆分的组键 issue.manage/memory.manage', () => {
-    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(27);
+  it('每条字面量恰 28 键（= 目录键全集），且不含已拆分的组键 issue.manage/memory.manage', () => {
+    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(28);
     for (const { literal } of rows) {
       expect(Object.keys(literal)).toEqual([...PLATFORM_CAPABILITY_KEYS]);
       for (const retired of RETIRED_KEYS) {
@@ -138,16 +138,16 @@ describe('20260921000009 拆分组能力点（迁移契约）', () => {
     }
   });
 
-  it('project_manager 字面量 = 全 27 点 true（显式覆盖，不按边界派生）', () => {
+  it('project_manager 字面量 = 全 28 点 true（显式覆盖，不按边界派生）', () => {
     const pm = rows.find((r) => r.where.includes(`'project_manager'`));
     expect(pm).toBeDefined();
-    expect(Object.keys(pm!.literal)).toHaveLength(27);
+    expect(Object.keys(pm!.literal)).toHaveLength(28);
     expect(Object.values(pm!.literal).every((v) => v === true)).toBe(true);
   });
 
-  it('外部 3 岗字面量逐键 ≡ EXTERNAL_AGENT_ROLE_CAPABILITIES（8 true / 19 false，最小权限不放宽）', () => {
+  it('外部 3 岗字面量逐键 ≡ EXTERNAL_AGENT_ROLE_CAPABILITIES（8 true / 20 false，最小权限不放宽）', () => {
     expect(Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === true)).toHaveLength(8);
-    expect(Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === false)).toHaveLength(19);
+    expect(Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === false)).toHaveLength(20);
     for (const key of EXTERNAL_AGENT_ROLE_KEYS) {
       const row = rows.find((r) => r.where.includes(`\`key\` = '${key}'`));
       expect(row).toBeDefined();
@@ -156,9 +156,9 @@ describe('20260921000009 拆分组能力点（迁移契约）', () => {
     }
   });
 
-  it('ar_general 字面量 ≡ 出厂矩阵（13 allow / 14 deny）', () => {
+  it('ar_general 字面量 ≡ 出厂矩阵（14 allow / 14 deny）', () => {
     const factory = buildFactoryCapabilityMatrix();
-    expect(Object.values(factory).filter((v) => v === true)).toHaveLength(13);
+    expect(Object.values(factory).filter((v) => v === true)).toHaveLength(14);
     expect(Object.values(factory).filter((v) => v === false)).toHaveLength(14);
     const general = rows.find((r) => r.where.includes(`\`key\` = 'general'`));
     expect(general).toBeDefined();

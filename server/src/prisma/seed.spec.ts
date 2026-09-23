@@ -1167,12 +1167,12 @@ describe('seed（计划 skills + 评审子句）', () => {
       key: { in: [...EXTERNAL_AGENT_ROLE_KEYS] },
       capabilities: { equals: Prisma.DbNull },
     });
-    // 8 协作/取证/产出能力点 true，其余 19 项显式 false（default-allow 下不可省；27 键 = 8 + 19）。
-    expect(Object.keys(EXTERNAL_AGENT_ROLE_CAPABILITIES)).toHaveLength(27);
+    // 8 协作/取证/产出能力点 true，其余 20 项显式 false（default-allow 下不可省；28 键 = 8 + 20）。
+    expect(Object.keys(EXTERNAL_AGENT_ROLE_CAPABILITIES)).toHaveLength(28);
     expect(Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(Boolean)).toHaveLength(8);
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === false),
-    ).toHaveLength(19);
+    ).toHaveLength(20);
     expect(bind?.[0].data.capabilities['task.create']).toBe(false);
     expect(bind?.[0].data.capabilities['chat.post']).toBe(true);
     expect(EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST).toHaveLength(8);

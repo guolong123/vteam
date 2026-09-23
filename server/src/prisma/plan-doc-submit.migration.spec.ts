@@ -11,7 +11,7 @@ import { PLATFORM_CAPABILITY_KEYS } from '../common/constants/platform-capabilit
  *
  * 断言（与 000006/000009 契约同形状）：
  *   1. 范围守卫：恰 2 条语句，目标行分别锚定 `key='plan'`（岗位矩阵）与 `id='ep_plan'`（岗位策略）；
- *   2. plan 字面量逐键 ≡ `BUILTIN_ROLE_CAPABILITY_MAPS.plan`（27 键，doc.submit=true）；
+ *   2. plan 字面量逐键 ≡ `BUILTIN_ROLE_CAPABILITY_MAPS.plan`（28 键，doc.submit=true）；
  *   3. 岗位策略用 `JSON_SET` 追加单一键（不整列覆盖，避免抹掉 ep_plan 其余 12 键）；
  *   4. 幂等：右值恒为常量字面量、不引用列自身，重跑零变化。
  */
@@ -45,7 +45,7 @@ describe('20260923000001 计划员放开 doc.submit（迁移契约）', () => {
     expect((sql.match(/WHERE `id` = 'ep_plan'/g) ?? [])).toHaveLength(2);
   });
 
-  it('plan 字面量逐键 ≡ BUILTIN_ROLE_CAPABILITY_MAPS.plan（27 键，键序 = 目录序）', () => {
+  it('plan 字面量逐键 ≡ BUILTIN_ROLE_CAPABILITY_MAPS.plan（28 键，键序 = 目录序）', () => {
     const literal = jsonLiteralAfter("AND `key` = 'plan'");
     const expected = BUILTIN_ROLE_CAPABILITY_MAPS.plan;
     expect(Object.keys(literal)).toEqual([...PLATFORM_CAPABILITY_KEYS]);

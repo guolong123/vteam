@@ -29,6 +29,6 @@
 --    type='builtin' AND key IN（7 内置 key），外部岗 / ar_general 不在集合内）。
 -- ---------------------------------------------------------------------------
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":false,"wecom.reply":false,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":false,"memory.manage":true,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":true}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":false,"plan.steps":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":false,"wecom.reply":false,"doc.read":true,"doc.submit":true,"file.read":true,"issue.manage":false,"memory.manage":true,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":true}' AS JSON)
  WHERE `type` = 'builtin'
    AND `key` IN ('product', 'project_manager', 'architect', 'developer', 'tester', 'plan', 'librarian');
