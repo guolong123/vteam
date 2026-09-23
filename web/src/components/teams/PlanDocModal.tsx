@@ -1,5 +1,5 @@
 /**
- * PlanDocModal：计划文档弹窗（任务 Tab 下"计划"子 Tab 点击标题弹出）。
+ * PlanDocModal：计划文档弹窗（任务 Tab 下"计划"子 Tab 点击本地计划文件行弹出）。
  *
  * 纯展示组件（dumb modal）：**不发请求、不取数**。列表接口
  * `GET /tasks/:id/plan-docs` 已把正文随列表一次下发，本组件只负责渲染，
@@ -8,20 +8,15 @@
  * 正文走 `DocsMarkdown`（react-markdown + remark-gfm + Mermaid）——计划文件是 Markdown，
  * 直接 pre-wrap 会把 `#`/表格/列表原样显示出来。复用文档站同一渲染器，样式与行为一致。
  *
+ * 弹窗外壳（标题栏/Esc/遮罩）抽到 `DocModalShell`，与 ArtifactDocModal 共用。
+ *
  * 数据来源是任务目录 `.opencode/plans/*.md` 的真实文件内容——vteam 不自维护
  * 计划版本，故这里不再有 vN/版本列表的概念，只显示文件名与最后修改时间。
  */
 "use client";
-import { useEffect } from "react";
 import { DocsMarkdown } from "@/src/features/docs-site";
-import {
-  neutral,
-  space,
-  radius,
-  fontSize,
-  fontFamily,
-  shadow,
-} from "@/src/theme/tokens";
+import { DocModalShell } from "@/src/components/teams/DocModalShell";
+import { neutral, space, radius, fontSize } from "@/src/theme/tokens";
 
 export interface PlanDocContent {
   /** 文件名（等于弹窗标题）。 */
@@ -53,133 +48,42 @@ export function PlanDocModal({
   doc: PlanDocContent | null;
   onClose: () => void;
 }) {
-  useEffect(() => {
-    if (!doc) return;
-    const h = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", h);
-    return () => window.removeEventListener("keydown", h);
-  }, [doc, onClose]);
-
   if (!doc) return null;
 
   return (
-    <div
-      data-testid="plan-doc-modal"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 60,
-        backgroundColor: "rgba(0,0,0,0.35)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: space.xl,
-      }}
+    <DocModalShell
+      testid="plan-doc-modal"
+      title={doc.name}
+      subtitle={formatUpdatedAt(doc.updatedAt)}
+      subtitleTestid="plan-doc-modal-updated"
+      closeTestid="plan-doc-modal-close"
+      onClose={onClose}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "min(720px, 100%)",
-          maxHeight: "80vh",
-          display: "flex",
-          flexDirection: "column",
-          backgroundColor: "var(--color-surface)",
-          borderRadius: radius.md,
-          boxShadow: shadow.md,
-          overflow: "hidden",
-          fontFamily: fontFamily.body,
-        }}
-      >
+      {doc.content ? (
+        <div data-testid="plan-doc-modal-markdown">
+          {/* 首块标题在弹窗里不需要文档页那种 32px 上边距（内联样式需 !important 覆盖） */}
+          <style>{`[data-testid="plan-doc-modal-markdown"] > :first-child { margin-top: 0 !important; }`}</style>
+          <DocsMarkdown markdown={doc.content} />
+        </div>
+      ) : (
+        <span style={{ color: neutral[400] }}>（空文件）</span>
+      )}
+      {doc.truncated && (
         <div
+          data-testid="plan-doc-modal-truncated"
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: space.sm,
-            padding: `${space.sm}px ${space.md}px`,
-            borderBottom: `1px solid ${neutral[200]}`,
-            flexShrink: 0,
+            marginTop: space.md,
+            fontSize: fontSize.xs,
+            color: "#B45309",
+            backgroundColor: "rgba(245,158,11,0.10)",
+            border: "1px solid rgba(245,158,11,0.30)",
+            borderRadius: radius.md,
+            padding: `${space.xs}px ${space.sm}px`,
           }}
         >
-          <span
-            style={{
-              flex: 1,
-              minWidth: 0,
-              fontSize: fontSize.md,
-              fontWeight: 600,
-              color: neutral[800],
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {doc.name}
-          </span>
-          <span
-            data-testid="plan-doc-modal-updated"
-            style={{
-              flexShrink: 0,
-              fontSize: fontSize.xs,
-              color: neutral[400],
-            }}
-          >
-            {formatUpdatedAt(doc.updatedAt)}
-          </span>
-          <button
-            type="button"
-            data-testid="plan-doc-modal-close"
-            onClick={onClose}
-            aria-label="关闭"
-            style={{
-              border: "none",
-              background: "transparent",
-              color: neutral[400],
-              cursor: "pointer",
-              fontSize: fontSize.md,
-              lineHeight: 1,
-              padding: 4,
-            }}
-          >
-            ×
-          </button>
+          文件较大，此处仅显示前 256KB。完整内容见任务目录 .opencode/plans/{doc.name}
         </div>
-        <div
-          style={{
-            padding: `${space.md}px ${space.lg}px`,
-            overflowY: "auto",
-            fontSize: fontSize.sm,
-            color: neutral[700],
-          }}
-        >
-          {doc.content ? (
-            <div data-testid="plan-doc-modal-markdown">
-              {/* 首块标题在弹窗里不需要文档页那种 32px 上边距（内联样式需 !important 覆盖） */}
-              <style>{`[data-testid="plan-doc-modal-markdown"] > :first-child { margin-top: 0 !important; }`}</style>
-              <DocsMarkdown markdown={doc.content} />
-            </div>
-          ) : (
-            <span style={{ color: neutral[400] }}>（空文件）</span>
-          )}
-          {doc.truncated && (
-            <div
-              data-testid="plan-doc-modal-truncated"
-              style={{
-                marginTop: space.md,
-                fontSize: fontSize.xs,
-                color: "#B45309",
-                backgroundColor: "rgba(245,158,11,0.10)",
-                border: "1px solid rgba(245,158,11,0.30)",
-                borderRadius: radius.md,
-                padding: `${space.xs}px ${space.sm}px`,
-              }}
-            >
-              文件较大，此处仅显示前 256KB。完整内容见任务目录 .opencode/plans/{doc.name}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
+      )}
+    </DocModalShell>
   );
 }

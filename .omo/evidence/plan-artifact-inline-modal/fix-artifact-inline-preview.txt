@@ -1,0 +1,18 @@
+# 计划类产出物行改为内联弹窗预览（不再跳文档站）
+# 时间: 2026-09-23T09:25:19+08:00
+
+## 用户反馈
+「我点击还是跳转到文档站了呀」—— 点的是「产出物 · vN」行（计划类产出物），不是本地文件行。
+两行行为不同：本地文件行 → setPlanDoc 弹窗；产出物行 → onOpenArtifactDoc → router.push('/docs/...') 整页跳转。
+
+## 改动
+- 新增 DocModalShell：抽出两个文档弹窗共用的外壳（标题栏/Esc/遮罩/尺寸），PlanDocModal 一并改用它（testid 契约保留）；
+- 新增 ArtifactDocModal：按 GET /artifacts/:id/versions/:version 取当前版本载荷，交给文档站同一套富渲染 FilePreview
+  （text→Markdown、md→Markdown、pdf→沙箱、office→下载卡、图片→内联）——复用而非另造；
+- 计划产出物行 onClick 改为 setPlanArtifact(a)（内联弹窗）；头部保留「在文档站打开 →」入口，深链能力不丢；
+- 产出 tab 的产出物行**保持跳文档站不变**（那是列表→文档浏览的不同语义）。
+
+## 验证
+web tsc 0；4 文件 eslint 0 error；
+e2e 扩展用例实跑通过：点击产出物行 → artifact-doc-modal 可见、标题/版本 v3 正确、text 产出物 h1 渲染为 'artifact md'、
+**页面 pathname 仍为 /teams/tm_0000000001/session（未跳转）**；关闭后消失。

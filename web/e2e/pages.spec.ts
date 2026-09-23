@@ -585,6 +585,13 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
         body: JSON.stringify({ items, total: items.length, page: 1, pageSize: 50 }),
       });
     });
+    await page.route("**/api/v1/artifacts/*/versions/*", (r) =>
+      r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ contentRef: "# artifact md\n\n- ax\n" }),
+      }),
+    );
     await page.route("**/api/v1/tasks/*/plan-steps", (r) =>
       r.fulfill({
         status: 200,
@@ -625,6 +632,16 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(modal.getByTestId("plan-doc-modal-markdown")).not.toContainText("| A | B |");
     await modal.getByTestId("plan-doc-modal-close").click();
     await expect(modal).toHaveCount(0);
+    // 点击「产出物 · vN」行 → 内联弹窗预览（不再跳文档站）；text 产出物按 Markdown 渲染
+    await page.getByTestId("plan-artifact-row-a_plan_1").click();
+    const artModal = page.getByTestId("artifact-doc-modal");
+    await expect(artModal).toBeVisible();
+    await expect(artModal).toContainText("e2e计划产出");
+    await expect(artModal.getByTestId("artifact-doc-modal-version")).toHaveText("v3");
+    await expect(artModal.locator("h1")).toHaveText("artifact md");
+    expect(new URL(page.url()).pathname).toBe("/teams/tm_0000000001/session");
+    await artModal.getByTestId("artifact-doc-modal-close").click();
+    await expect(artModal).toHaveCount(0);
   });
 
   test("T24 错误态分支（plan-docs-error + artifacts-error）", async ({ page }) => {

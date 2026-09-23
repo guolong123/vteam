@@ -9,6 +9,7 @@ import { teamsApi, type TeamDto, type TeamQueueDto } from "@/src/api/teams";
 import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { PlanDocModal, type PlanDocContent } from "@/src/components/teams/PlanDocModal";
+import { ArtifactDocModal } from "@/src/components/teams/ArtifactDocModal";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -1005,6 +1006,8 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
   const setSubTab = onSubTabChange ?? setInnerSubTab;
   /** 计划文档 Modal 选中的文件（null=关闭；正文随列表已下发，打开即渲染）。 */
   const [planDoc, setPlanDoc] = useState<PlanDocContent | null>(null);
+  /** 计划类产出物弹窗（点击「产出物 · vN」行内联预览，不再跳文档站）。 */
+  const [planArtifact, setPlanArtifact] = useState<PlanArtifactItem | null>(null);
   /**
    * 计划文档列表：来自 `GET /tasks/:id/plan-docs`——任务目录 `.opencode/plans/*.md`
    * 的实时同步（agent 写的 / 用户上传的），vteam 不维护计划状态。
@@ -1140,23 +1143,21 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
                               {planDocUpdatedLabel(a.updatedAt)}{a.acceptedFlag ? " · 已验收" : ""}
                             </span>
                           </span>
-                          {onOpenArtifactDoc && <span aria-hidden style={{ color: neutral[300], fontSize: fontSize.xs, flexShrink: 0 }}>›</span>}
+                          <span aria-hidden style={{ color: neutral[300], fontSize: fontSize.xs, flexShrink: 0 }}>›</span>
                         </>
                       );
                       const rowStyle = { display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box" as const, fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" };
-                      return onOpenArtifactDoc ? (
+                      return (
                         <button
                           key={row.key}
                           type="button"
                           data-testid={`plan-artifact-row-${a.id}`}
-                          title="在文档站中查看"
-                          onClick={() => onOpenArtifactDoc(a)}
+                          title="点击查看内容"
+                          onClick={() => setPlanArtifact(a)}
                           style={{ ...rowStyle, cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}
                         >
                           {body}
                         </button>
-                      ) : (
-                        <div key={row.key} data-testid={`plan-artifact-row-${a.id}`} style={rowStyle}>{body}</div>
                       );
                     }
                     const f = row.file;
@@ -1307,6 +1308,11 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
       </div>
       {/* 计划文档弹窗：正文随列表已下发，纯展示不取数 */}
       <PlanDocModal doc={planDoc} onClose={() => setPlanDoc(null)} />
+      <ArtifactDocModal
+        artifact={planArtifact}
+        onOpenInDocs={onOpenArtifactDoc}
+        onClose={() => setPlanArtifact(null)}
+      />
     </div>
   );
 }
