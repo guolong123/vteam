@@ -564,16 +564,9 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   const showFinalize = status === "pending_final" && isMember;
   /** 确认按钮仅 approved + 成员上下文渲染（隐藏而非禁用）。 */
   const showConfirm = status === "approved" && isMember;
-  /** 执行清单仅 executing 态渲染（读 issue 聚合）。 */
-  const showChecklist = status === "executing";
   /** 人工逃生口：draft/reviewing + 成员上下文（评审链路走不通时仍能把计划推进）。 */
   const showSkipReview =
     (status === "draft" || status === "reviewing") && isMember;
-  const issueCounts: Record<string, number> = { open: 0, in_progress: 0, resolved: 0, closed: 0, rejected: 0 };
-  for (const it of issues) {
-    const st = (it as { status?: string })?.status;
-    if (st && st in issueCounts) issueCounts[st] += 1;
-  }
   const progressPct = expectedN > 0 ? Math.round((receivedN / expectedN) * 100) : 0;
   const serverFrozenHash = planQuery.data?.plan?.frozenHash;
   const frozenHash: string | null = (typeof serverFrozenHash === "string" && serverFrozenHash ? serverFrozenHash : null) ?? (ledger?.hash ? ledger.hash : null);
@@ -703,36 +696,6 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
         {finalizeError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{finalizeError}</div>}
         {skipError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{skipError}</div>}
       </div>
-      {showChecklist && (
-        <div data-testid="plan-checklist" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>执行清单</span>
-            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-              共 {issues.length} 项 · 待处理 {issueCounts.open} · 进行中 {issueCounts.in_progress} · 已解决 {issueCounts.resolved} · 已关闭 {issueCounts.closed} · 已拒绝 {issueCounts.rejected}
-            </span>
-          </div>
-          {issuesQuery?.isError ? (
-            <div data-testid="plan-checklist-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
-              {isApiError(issuesQuery.error) ? issuesQuery.error.message : "执行清单加载失败"}
-            </div>
-          ) : issues.length === 0 ? (
-            <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无 Issue（执行项将随派发自动出现）</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-              {issues.map((it: any) => {
-                const st = (it?.status ?? "open") as keyof typeof ISSUE_STATUS_BADGE;
-                const b = ISSUE_STATUS_BADGE[st] ?? ISSUE_STATUS_BADGE.open;
-                return (
-                  <div key={it?.id ?? it?.title} style={{ display: "flex", alignItems: "center", gap: space.sm, fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it?.title ?? it?.id}</span>
-                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontSize: 10, color: b.color, backgroundColor: b.bg, border: `1px solid ${b.border}`, borderRadius: radius.pill, padding: "0 6px", fontWeight: 600 }}>{b.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
       {/* 二次确认：复用 ConfirmDialog（非危险走青色确认），遮罩/Esc 关闭对齐既有模式 */}
       <ConfirmDialog
         open={finalizeOpen}
@@ -1383,6 +1346,11 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, i
 /** 执行步骤状态主题（对齐 serve todo status：pending/in_progress/completed/cancelled）。 */
 const PLAN_STEP_THEME: Record<string, { icon: string; color: string }> = {
   completed: { icon: "✓", color: "#10B981" },
+  // plan_tasks.status 词表（schema 契约）：done=完成、blocked=阻塞、skipped=跳过。
+  // 不识别会被兜底成 pending（画 ○ 未完成），导致「已完成步骤仍显示未完成」。
+  done: { icon: "✓", color: "#10B981" },
+  blocked: { icon: "⊘", color: "#DC2626" },
+  skipped: { icon: "−", color: neutral[300] },
   in_progress: { icon: "◐", color: "#0D9488" },
   cancelled: { icon: "✕", color: neutral[300] },
   pending: { icon: "○", color: neutral[400] },
