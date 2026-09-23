@@ -32,7 +32,11 @@ import {
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
 import { FileStorageService } from '../uploads/uploads.service';
-import { WorkerClient } from '../workers/worker.client';
+import { DEFAULT_TASK_WORK_DIR, taskDirOf } from '../tasks/work-dir.util';
+import {
+  WorkerClient,
+  WorkerUnavailableException,
+} from '../workers/worker.client';
 import { IssuesService } from '../issues/issues.service';
 import { IssueStatus, IssueTransitionAction } from '../issues/issues.constants';
 import {
@@ -2745,7 +2749,7 @@ export class PlatformMcpService implements OnModuleInit {
     if (args.fileRef.startsWith('/uploads/')) {
       return this.readFromArchive(target, args.fileRef, maxBytes);
     }
-    return this.fetchFromWorker(ctx, args.fileRef, maxBytes);
+    return this.fetchFromWorker(ctx, args.taskId, args.fileRef, maxBytes);
   }
 
   /**
@@ -5393,12 +5397,12 @@ export class PlatformMcpService implements OnModuleInit {
                 sendError = '执行该任务的 worker 不存在，无法拉取文件';
                 throw new Error(sendError);
               }
-              buffer = await this.workerClient.fetchFile(
+              buffer = await this.fetchWorkerFileFirstAvailable(
                 {
                   id: ctx.workerId,
-                  capabilities: workerRow.capabilities as any,
+                  capabilities: workerRow.capabilities,
                 },
-                mediaRef,
+                this.workerFileCandidates(taskId, mediaRef),
               );
             }
           } catch (e) {
@@ -5854,9 +5858,9 @@ export class PlatformMcpService implements OnModuleInit {
         message: '执行该任务的 worker 不存在，无法拉取文件',
       });
     }
-    const buffer = await this.workerClient.fetchFile(
+    const buffer = await this.fetchWorkerFileFirstAvailable(
       { id: ctx.workerId, capabilities: workerRow.capabilities },
-      fileRef,
+      this.workerFileCandidates(taskId, fileRef),
     );
 
     if (/\.tsx$/i.test(fileRef)) {
@@ -6562,9 +6566,9 @@ export class PlatformMcpService implements OnModuleInit {
         );
         return undefined;
       }
-      const buffer = await this.workerClient.fetchFile(
+      const buffer = await this.fetchWorkerFileFirstAvailable(
         { id: ctx.workerId, capabilities: workerRow.capabilities },
-        fileRef,
+        this.workerFileCandidates(taskId, fileRef),
       );
       const name = fileRef.split(/[\\/]/).pop() || 'attachment';
       const stored = await FileStorageService.saveBufferFile(buffer, name);
@@ -6624,8 +6628,63 @@ export class PlatformMcpService implements OnModuleInit {
    * WorkerUnavailableException（503）原样上抛（模型可见错误信息，区别于 group_post
    * 的降级不带附件——read_file 语义是读取失败必须让调用方知道）。
    */
+  /**
+   * 任务工作目录根（与 worker-dispatcher / plan-docs 同源）：env WORK_DIR，缺省
+   * DEFAULT_TASK_WORK_DIR。agent 的运行时 CWD = `<根>/tasks/<taskId>`（派发注入的
+   * directory），故相对 fileRef 以任务目录为准。
+   */
+  private taskWorkDirRoot(): string {
+    const fromEnv = process.env.WORK_DIR?.trim();
+    return fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_TASK_WORK_DIR;
+  }
+
+  /**
+   * fileRef → 候选绝对路径（按优先级）：
+   * - 绝对路径 → 原样（唯一候选）；
+   * - 相对路径 → `<任务目录>/<ref>`（agent 的 CWD，主用）→ `<根>/<ref>`（agent 常写成
+   *   `tasks/<taskId>/...` 的兜底形态）；重复候选去重。
+   * 文件是否存在只有 worker 知道，故「按序尝试」由取文件侧用「404 换下一个」实现。
+   */
+  private workerFileCandidates(taskId: string, fileRef: string): string[] {
+    const raw = String(fileRef ?? '').trim();
+    if (raw.startsWith('/')) {
+      return [raw];
+    }
+    const root = this.taskWorkDirRoot();
+    return [
+      ...new Set([`${taskDirOf(root, taskId)}/${raw}`, `${root}/${raw}`]),
+    ];
+  }
+
+  /**
+   * 按候选路径依次向 worker 取文件：仅 404（该路径不存在）换下一个候选；其余失败
+   * （401/413/网络/超时）立即上抛——不把「worker 真不可用」伪装成路径问题。
+   */
+  private async fetchWorkerFileFirstAvailable(
+    workerRef: Parameters<WorkerClient['fetchFile']>[0],
+    candidates: string[],
+  ): Promise<Buffer> {
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        return await this.workerClient.fetchFile(workerRef, candidate);
+      } catch (err) {
+        lastError = err;
+        const status =
+          err instanceof WorkerUnavailableException ? err.httpStatus : undefined;
+        if (status !== 404) {
+          throw err;
+        }
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`worker 文件拉取失败：${candidates.join(', ')}`);
+  }
+
   private async fetchFromWorker(
     ctx: PlatformMcpContext,
+    taskId: string,
     fileRef: string,
     maxBytes: number,
   ): Promise<ReadFileResult> {
@@ -6639,9 +6698,9 @@ export class PlatformMcpService implements OnModuleInit {
         message: '执行该任务的 worker 不存在，无法拉取文件',
       });
     }
-    const buffer = await this.workerClient.fetchFile(
+    const buffer = await this.fetchWorkerFileFirstAvailable(
       { id: ctx.workerId, capabilities: workerRow.capabilities },
-      fileRef,
+      this.workerFileCandidates(taskId, fileRef),
     );
     return this.toReadFileResult(buffer, fileRef, 'worker', maxBytes);
   }

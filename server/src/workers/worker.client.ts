@@ -18,17 +18,22 @@ export const WORKER_CLIENT_ERRORS = {
 /**
  * worker 离线/请求失败异常（503，携带 workerId）。
  * T10 分派失败路径据此识别是哪个 worker 不可用并 emitError。
+ *
+ * `httpStatus`：worker 有响应但非 2xx 时携带该状态码（网络失败/超时缺省 undefined）。
+ * 调用方据此区分「404 路径不存在，可换候选路径重试」与「worker 真不可用」。
  */
 export class WorkerUnavailableException extends ServiceUnavailableException {
   readonly workerId: string;
+  readonly httpStatus?: number;
 
-  constructor(workerId: string, detail: string) {
+  constructor(workerId: string, detail: string, httpStatus?: number) {
     super({
       code: WORKER_CLIENT_ERRORS.WORKER_UNAVAILABLE,
       message: `worker ${workerId} 不可用：${detail}`,
       workerId,
     });
     this.workerId = workerId;
+    this.httpStatus = httpStatus;
   }
 }
 
@@ -350,6 +355,7 @@ export class WorkerClient {
       throw new WorkerUnavailableException(
         worker.id,
         `file fetch HTTP ${res.status}`,
+        res.status,
       );
     }
     return Buffer.from(await res.arrayBuffer());
