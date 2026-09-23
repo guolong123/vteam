@@ -48,6 +48,7 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
     teamMember: { findFirst: jest.Mock; findUnique: jest.Mock };
     issue: { findUnique: jest.Mock; findMany: jest.Mock };
     messageReceipt: { create: jest.Mock; findFirst: jest.Mock };
+    issueActivity: { count: jest.Mock; create: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
   let realtime: { broadcast: jest.Mock };
@@ -87,6 +88,7 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       teamMember: { findFirst: jest.fn(), findUnique: jest.fn() },
       issue: { findUnique: jest.fn(), findMany: jest.fn() },
       messageReceipt: { create: jest.fn(), findFirst: jest.fn() },
+      issueActivity: { count: jest.fn().mockResolvedValue(0), create: jest.fn() },
     };
     idGen = { nextId: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
@@ -396,13 +398,14 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       expect(result.issueBound).toBe(true);
     });
 
-    it('in_progress + 同 assigneeInstanceId → reason=duplicate + messageId/origMessageId=既有消息，不触发不落库', async () => {
+    it('in_progress + 同 assignee + **回执在途(pending)** → reason=duplicate + 既有消息回显，不触发不落库', async () => {
       prisma.issue.findUnique.mockResolvedValue({
         status: 'in_progress',
         assigneeInstanceId: 'tmm_tester',
       });
       prisma.messageReceipt.findFirst.mockResolvedValue({
         messageId: 'm_0000000100',
+        status: 'pending',
       });
 
       const result = await service.notifyAgent(ctx, {
@@ -419,7 +422,7 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       expect(realtime.broadcast).not.toHaveBeenCalled();
     });
 
-    it('duplicate 无既有回执行 → messageId:null + 无 origMessageId（仍非静默吞，reason 可辨）', async () => {
+    it('in_progress + 同 assignee 但**无在途回执** → 放行重派（断死锁：曾被拦在写回执之前 → 永远 duplicate 且无人可解）', async () => {
       prisma.issue.findUnique.mockResolvedValue({
         status: 'in_progress',
         assigneeInstanceId: 'tmm_tester',
@@ -431,11 +434,55 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
         issueId: 'is_0000000001',
       });
 
+      expect(result.triggered).toBe(true);
+      expect(result.issueBound).toBe(true);
+      expect(prisma.message.create).toHaveBeenCalled();
+    });
+
+    it('in_progress + 同 assignee + 回执已 acked → 同样放行（仅 pending 才算在途）', async () => {
+      prisma.issue.findUnique.mockResolvedValue({
+        status: 'in_progress',
+        assigneeInstanceId: 'tmm_tester',
+      });
+      prisma.messageReceipt.findFirst.mockResolvedValue({
+        messageId: 'm_0000000100',
+        status: 'acked',
+      });
+
+      const result = await service.notifyAgent(ctx, {
+        ...baseArgs,
+        issueId: 'is_0000000001',
+      });
+
+      expect(result.triggered).toBe(true);
+    });
+
+    it('被 issue 门拦下 → 落 issue_activities(dispatch_blocked) 留痕（原先只 warn，平台无感知）', async () => {
+      prisma.issue.findUnique.mockResolvedValue({
+        status: 'in_progress',
+        assigneeInstanceId: 'tmm_tester',
+      });
+      prisma.messageReceipt.findFirst.mockResolvedValue({
+        messageId: 'm_0000000100',
+        status: 'pending',
+      });
+      prisma.issueActivity.count.mockResolvedValue(1); // 窗口内第 2 次 → 触发升级提示
+
+      const result = await service.notifyAgent(ctx, {
+        ...baseArgs,
+        issueId: 'is_0000000001',
+      });
+
       expect(result.triggered).toBe(false);
-      expect(result.reason).toBe('duplicate');
-      expect(result.messageId).toBeNull();
-      expect(result.origMessageId).toBeUndefined();
-      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(prisma.issueActivity.create).toHaveBeenCalledTimes(1);
+      expect(prisma.issueActivity.create.mock.calls[0][0].data).toMatchObject({
+        issueId: 'is_0000000001',
+        action: 'dispatch_blocked',
+        instanceId: expect.any(String),
+      });
+      // 第 2 次被拦 → 向频道发一条 system 升级提示
+      const created = prisma.message.create.mock.calls[0]?.[0]?.data;
+      expect(created?.senderType).toBe('system');
     });
 
     it('in_progress + 换人（assignee 不同）→ 放行新一轮', async () => {

@@ -1641,6 +1641,14 @@ export class PlatformMcpService implements OnModuleInit {
         this.logger.warn(
           `[mcp] notify_agent issue 锁拦截 issue=${args.issueId} to=${args.targetInstanceId}（未发布）`,
         );
+        // ③ 被拦必须留痕：写 issue_activities(action=dispatch_blocked)，窗口内第 2 次
+        // 触发一次 system 升级提示（原先只有一条 warn，平台无感知 → 死锁无人发现）。
+        await this.recordIssueGateBlock(
+          args.issueId,
+          args.targetInstanceId,
+          args.selfInstanceId,
+          channel.id,
+        );
         // is_5：duplicate 必须回显既有在途消息 id（messageId = origMessageId），
         // 调用方凭此确认“已送达”，禁止裸 reason:'duplicate' + messageId:null 静默吞派发。
         const existingMessageId = issueGate.origMessageId ?? null;
@@ -2277,6 +2285,15 @@ export class PlatformMcpService implements OnModuleInit {
    * 换人放行；终态（resolved/closed/rejected）视为新一轮放行。
    * 读错/未知 issue → fail-open 放行 + warn。
    */
+  /**
+   * issue 状态锁：仅在「issue 正被该 target 在做 **且 该 issue→target 的回执仍在途**」时拦。
+   *
+   * 为什么必须看回执在途（死锁修复）：原先只要 `in_progress + 同 assignee` 就拦，但派发是
+   * **在写回执之前**被拦的——于是「派发从未送达 → 无回执 → 目标永远不开工 → issue 永远
+   * in_progress → 锁永远不开」形成循环死锁（实测：主 Agent 连续 duplicate、无人干预不会自愈）。
+   * 改为「无在途回执（或回执已 acked/expired）即放行」后：已 acked 的再派会被内容 dedup 拦，
+   * 从未记上账的则获得一次重派机会——保住防重发语义的同时断掉死循环。
+   */
   private async checkIssueDispatchAllowed(
     issueId: string,
     targetInstanceId: string,
@@ -2294,26 +2311,101 @@ export class PlatformMcpService implements OnModuleInit {
       ) {
         return { allowed: true };
       }
-      let origMessageId: string | undefined;
-      try {
-        const prior = await this.prisma.messageReceipt.findFirst({
-          where: { issueId },
-          orderBy: { createdAt: 'desc' },
-          select: { messageId: true },
-        });
-        origMessageId = prior?.messageId ?? undefined;
-      } catch {
-        origMessageId = undefined;
+      const prior = await this.prisma.messageReceipt.findFirst({
+        where: { issueId, toInstanceId: targetInstanceId },
+        orderBy: { createdAt: 'desc' },
+        select: { messageId: true, status: true },
+      });
+      // 无回执 / 回执非 pending → 目标侧没有在途派发，放行（断死循环的关键）
+      if (!prior || prior.status !== 'pending') {
+        return { allowed: true };
       }
       return {
         allowed: false,
-        ...(origMessageId ? { origMessageId } : {}),
+        ...(prior.messageId ? { origMessageId: prior.messageId } : {}),
       };
     } catch (err) {
       this.logger.warn(
         `[mcp] issue 锁读取失败 issue=${issueId}，fail-open 放行：${err instanceof Error ? err.message : String(err)}`,
       );
       return { allowed: true };
+    }
+  }
+
+  /**
+   * issue 门拦截的留痕与升级（best-effort：任一步失败只 warn，绝不影响拦截语义与派发返回）。
+   *
+   * 为什么必须留痕：原先被拦只有一条 logger.warn，平台侧无任何可查痕迹 → 页面/看板不知道
+   * 「谁被拦、拦了多久」，也没有人会去解锁 → 死锁无人发现（与 ② 的循环死锁互为因果）。
+   *
+   * 升级规则（每 30 分钟窗口至多一次，防刷屏）：窗口内已有 ≥1 条 dispatch_blocked 时（即
+   * 这是窗口内第 2 次被拦）向该频道发一条 system 提示；第 3 次起计数 ≥2 不再触发。
+   */
+  private async recordIssueGateBlock(
+    issueId: string,
+    targetInstanceId: string,
+    callerInstanceId: string,
+    channelId: string,
+  ): Promise<void> {
+    const since = new Date(Date.now() - 30 * 60_000);
+    let blockedInWindow = 0;
+    try {
+      blockedInWindow = await this.prisma.issueActivity.count({
+        where: {
+          issueId,
+          action: 'dispatch_blocked',
+          createdAt: { gte: since },
+        },
+      });
+      await this.prisma.issueActivity.create({
+        data: {
+          id: await this.idGen.nextId('ia'),
+          issueId,
+          action: 'dispatch_blocked',
+          actorType: 'agent',
+          actorId: null,
+          instanceId: callerInstanceId,
+          metadata: {
+            reason: 'issue_gate',
+            targetInstanceId,
+            attemptedAt: new Date().toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] issue 锁留痕失败 issue=${issueId}：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    if (blockedInWindow >= 1) {
+      try {
+        const text =
+          `⚠️ 派发被工单门禁连续拦截（issue ${issueId} → ${targetInstanceId}，` +
+          `${blockedInWindow + 1} 次/30 分钟窗口）：工单处于「进行中」但该目标没有在途回执。` +
+          `请人工处理：① 用 force + forceReason 重派；② 或把 issue 打回 open 再派；` +
+          `③ 或在【计划 Tab】人工推进。`;
+        const message = await this.prisma.message.create({
+          data: {
+            id: await this.idGen.nextId('m'),
+            channelId,
+            senderType: SENDER_TYPE.system,
+            senderId: null,
+            content: { text, parts: [] } as Prisma.InputJsonValue,
+            mentions: null,
+            status: MESSAGE_STATUS.sent,
+          },
+        });
+        await this.realtime.broadcast(
+          EVENT_TYPES.CHAT_MESSAGE_NEW,
+          { message: this.toMessageDto(message) },
+          { type: 'channel', id: channelId },
+        );
+      } catch (err) {
+        this.logger.warn(
+          `[mcp] issue 锁升级提示发送失败 issue=${issueId}：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
