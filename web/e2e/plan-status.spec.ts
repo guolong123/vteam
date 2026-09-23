@@ -254,11 +254,11 @@ test.describe("todo12 会话计划 Tab 状态 UI（mock API）", () => {
     await page.getByTestId("plan-confirm-confirm").click();
     await expect(page.getByTestId("plan-status-badge")).toHaveText("执行中");
     await expect(page.getByTestId("plan-confirm-btn")).toHaveCount(0);
-    await expect(page.getByTestId("plan-checklist")).toBeVisible();
+    await expect(page.getByTestId("plan-checklist")).toHaveCount(0);
     asserts["approved"] = { badge: "待执行", confirmFlow: "modal→POST→executing", afterConfirm: "执行中" };
   });
 
-  test("executing 执行中蓝徽 + 执行清单聚合 issue 状态", async ({ page }) => {
+  test("executing 执行中蓝徽（执行清单已并入 Issue 子页，本卡不再渲染）", async ({ page }) => {
     scenario.planStatus = "executing";
     scenario.taskId = "t_plan_executing";
     scenario.noLedger = false;
@@ -268,15 +268,10 @@ test.describe("todo12 会话计划 Tab 状态 UI（mock API）", () => {
     const badge = page.getByTestId("plan-status-badge");
     await expect(badge).toHaveText("执行中");
     await expect(badge).toHaveCSS("color", "rgb(13, 148, 136)");
-    const checklist = page.getByTestId("plan-checklist");
-    await expect(checklist).toBeVisible();
-    await expect(checklist).toContainText("共 3 项 · 待处理 1 · 进行中 1 · 已解决 1 · 已关闭 0 · 已拒绝 0");
-    await expect(checklist).toContainText("评审派发 R1");
-    await expect(checklist).toContainText("开发实现");
-    await expect(checklist).toContainText("联调验证");
+    await expect(page.getByTestId("plan-checklist")).toHaveCount(0);
     await expect(page.getByTestId("plan-confirm-btn")).toHaveCount(0);
     await block.screenshot({ path: path.join(EVIDENCE_DIR, "plan-executing.png") });
-    asserts["executing"] = { badge: "执行中", checklistSummary: "共 3 项 · 待处理 1 · 进行中 1 · 已解决 1 · 已关闭 0 · 已拒绝 0" };
+    asserts["executing"] = { badge: "执行中", confirmBtn: 0, checklist: 0 };
   });
 
   test("completed 完成绿徽，无按钮无清单", async ({ page }) => {
