@@ -62,6 +62,6 @@ import { PlanReviewWiring } from './plan-review-wiring';
     TeamMembershipGuard,
     PermissionGuard,
   ],
-  exports: [TasksService, PlanLifecycleService],
+  exports: [TasksService, PlanLifecycleService, PlanStepsService],
 })
 export class TasksModule {}

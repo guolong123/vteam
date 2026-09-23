@@ -505,6 +505,46 @@ export const planCompleteSchema = z.object({
 
 type PlanCompleteArgs = z.infer<typeof planCompleteSchema>;
 
+export const vteamTodoSchema = z.object({
+  taskId: z.string().describe('任务 ID'),
+  action: z
+    .enum(['write', 'done', 'list'])
+    .describe(
+      '操作：write=按 seq 写入/覆盖步骤（幂等，同 planId+seq 覆盖）；done=把该步标记为完成；list=按 seq 升序列出步骤',
+    ),
+  seq: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      '步骤序号（从 1 起，planId+seq 唯一）。write 缺省自动取 max(seq)+1；done 必填（定位步骤）；list 可选（忽略）',
+    ),
+  title: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('步骤标题（action=write 必填）'),
+  content: z
+    .string()
+    .max(8000)
+    .optional()
+    .describe('步骤明细（可选，落 content JSON；验收标准/六要素可写在这里）'),
+  status: z
+    .enum(['pending', 'in_progress', 'done', 'blocked', 'skipped'])
+    .optional()
+    .describe('步骤状态（action=write 可选，缺省 pending；词表与 plan_tasks.status 一致）'),
+  assignee: z
+    .string()
+    .optional()
+    .describe('负责成员实例 id（tmm_ 前缀，可选；可经 vteam_team_view 查询）'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，由系统提示注入）'),
+});
+
+type VteamTodoArgs = z.infer<typeof vteamTodoSchema>;
+
 const channelSendSchema = z.object({
   // team-free-chat todo-4：channel_send 无 taskId 入参（任务上下文由服务端按 worker 会话
   // 自动解析），不在可选 5 工具之列，保持原样。
@@ -974,6 +1014,13 @@ export function buildPlatformMcpTools(
         '确认计划开始执行（approved→executing；团队开启托管模式时允许 draft/pending_final 直推执行，并同事务补定稿字段与冻结锚）。仅团队主 Agent 在托管模式下可调用，否则报错（须由用户在计划 Tab 人工确认）。已 executing 幂等返回。返回 {taskId, status, idempotent, action}。',
       inputSchema: planCompleteSchema,
       handler: (ctx, args) => service.planConfirm(ctx, args as PlanCompleteArgs),
+    },
+    {
+      name: 'todo',
+      description:
+        '计划执行步骤读写（计划 Tab「执行步骤」卡的唯一数据源，落库 plan_tasks 表，跨会话持久）。拆解后用 action=write 按 seq 1..n 写入步骤（含 assignee 负责成员），执行完成后用 action=done 把该步标记完成；action=list 按 seq 升序返回本任务全部步骤。只写 issues 不写这里，执行步骤卡永远是 0 项。write 幂等：同 planId+seq 覆盖；done 需 seq 定位，找不到返回 404。返回 {steps|seq,status,title}。',
+      inputSchema: vteamTodoSchema,
+      handler: (ctx, args) => service.vteamTodo(ctx, args as VteamTodoArgs),
     },
     {
       name: 'channel_send',

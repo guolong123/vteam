@@ -33,6 +33,7 @@ import { ArtifactsService } from '../artifacts/artifacts.service';
 import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
 import { FileStorageService } from '../uploads/uploads.service';
 import { DEFAULT_TASK_WORK_DIR, taskDirOf } from '../tasks/work-dir.util';
+import { PlanStepsService } from '../tasks/plan-steps.service';
 import {
   WorkerClient,
   WorkerUnavailableException,
@@ -454,6 +455,12 @@ export class PlatformMcpService implements OnModuleInit {
     @Optional()
     @Inject(HookService)
     private readonly hooks?: HookService,
+    // 执行步骤域（vteam_todo）：缺省可空——单测/旧装配未提供时写入类动作抛 503
+    // 而非启动期崩溃；生产装配经 TasksModule（已 import）提供，plan_tasks 读写
+    // 集中在该服务（见 plan-removal guard 的窄豁免）。
+    @Optional()
+    @Inject(PlanStepsService)
+    private readonly planSteps?: PlanStepsService,
   ) {}
 
   /**
@@ -4242,6 +4249,83 @@ export class PlatformMcpService implements OnModuleInit {
       status: result.plan.status,
       idempotent: result.idempotent,
       action: result.action,
+    };
+  }
+
+  /**
+   * vteam_todo：计划执行步骤读写（薄委托——plan_tasks 的读写全部集中在
+   * PlanStepsService，这样 plan-removal guard 只需窄豁免那一个文件）。
+   * 归属：assertWorkerTask（防跨任务/冒充）；契约见 PlanStepsService 文档：
+   * write 幂等（planId+seq upsert）、done 需 seq（miss → 404）、list 按 seq 升序。
+   */
+  async vteamTodo(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId: string;
+      action: 'write' | 'done' | 'list';
+      seq?: number;
+      title?: string;
+      content?: string;
+      status?: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped';
+      assignee?: string;
+      selfInstanceId: string;
+    },
+  ): Promise<{
+    action: string;
+    seq?: number;
+    title?: string;
+    status?: string;
+    assignee?: string | null;
+    steps?: unknown[];
+  }> {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    if (!this.planSteps) {
+      throw new ServiceUnavailableException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
+        message: '计划步骤服务未装配，暂不可使用 vteam_todo',
+      });
+    }
+
+    if (args.action === 'list') {
+      return { action: 'list', steps: await this.planSteps.listSteps(args.taskId) };
+    }
+
+    if (args.action === 'done') {
+      if (typeof args.seq !== 'number') {
+        throw new BadRequestException('action=done 必须提供 seq（按 planId+seq 定位步骤）');
+      }
+      const step = await this.planSteps.markDone(args.taskId, args.seq);
+      this.logger.log(
+        `[vteam_todo] 步骤完成 task=${args.taskId} seq=${step.seq} by=${args.selfInstanceId}`,
+      );
+      return {
+        action: 'done',
+        seq: step.seq,
+        title: step.title,
+        status: step.status,
+        assignee: step.assignee,
+      };
+    }
+
+    if (!args.title || !args.title.trim()) {
+      throw new BadRequestException('action=write 必须提供 title');
+    }
+    const step = await this.planSteps.writeStep(args.taskId, {
+      seq: args.seq,
+      title: args.title,
+      content: args.content,
+      status: args.status,
+      assignee: args.assignee,
+    });
+    this.logger.log(
+      `[vteam_todo] 步骤写入 task=${args.taskId} seq=${step.seq} status=${step.status} by=${args.selfInstanceId}`,
+    );
+    return {
+      action: 'write',
+      seq: step.seq,
+      title: step.title,
+      status: step.status,
+      assignee: step.assignee,
     };
   }
 

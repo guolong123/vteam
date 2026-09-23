@@ -56,6 +56,7 @@ describe('platform-mcp tool naming contract', () => {
       plan_complete: { selfInstanceId: REQUIRED, teamId: ABSENT, taskId: REQUIRED },
       plan_finalize: { selfInstanceId: REQUIRED, teamId: ABSENT, taskId: REQUIRED },
       plan_confirm: { selfInstanceId: REQUIRED, teamId: ABSENT, taskId: REQUIRED },
+      todo: { selfInstanceId: REQUIRED, teamId: ABSENT, taskId: REQUIRED },
       channel_send: { selfInstanceId: ABSENT, teamId: ABSENT, taskId: ABSENT },
       wecom_reply: { selfInstanceId: OPTIONAL, teamId: ABSENT, taskId: OPTIONAL },
       task_create: { selfInstanceId: REQUIRED, teamId: OPTIONAL, taskId: OPTIONAL },
