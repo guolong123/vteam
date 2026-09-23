@@ -411,7 +411,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'chat.channel_send': false,
     'wecom.reply': true,
     'doc.read': true,
-    'doc.submit': false,
+    'doc.submit': true,
     'file.read': true,
     'issue.create': false,
     'issue.get': false,

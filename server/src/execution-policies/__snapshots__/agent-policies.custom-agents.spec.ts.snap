@@ -220,7 +220,6 @@ exports[`agent-policies custom agents (Todo 2) 内置字节一致（无自定义
           "vteam_memory_update": "deny",
           "vteam_question_confirm": "deny",
           "vteam_skill_create": "deny",
-          "vteam_submit_artifact": "deny",
           "vteam_task_create": "deny",
           "vteam_task_transition": "deny",
           "vteam_team_add_member": "deny",

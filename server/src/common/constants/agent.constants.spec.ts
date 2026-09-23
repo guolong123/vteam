@@ -308,6 +308,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_notify_agent: 'allow',
       vteam_memory_search: 'allow',
       vteam_plan_complete: 'allow',
+      vteam_submit_artifact: 'allow',
       browser: 'allow',
     });
     expect(ROLE_BOUNDARIES['vteam-librarian'].toolAllows).toEqual({

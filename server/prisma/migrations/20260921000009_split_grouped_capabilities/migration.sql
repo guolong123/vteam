@@ -62,7 +62,7 @@ UPDATE `agent_roles`
    AND `key` = 'tester';
 
 UPDATE `agent_roles`
-   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":false,"wecom.reply":true,"doc.read":true,"doc.submit":false,"file.read":true,"issue.create":false,"issue.get":false,"issue.list":false,"issue.update":false,"issue.transition":false,"memory.save":false,"memory.search":true,"memory.update":false,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
+   SET `capabilities` = CAST('{"task.create":false,"task.transition":false,"task.complete":true,"task.context":true,"team.view":true,"team.add_member":false,"chat.post":true,"chat.read":true,"chat.notify":true,"chat.channel_send":false,"wecom.reply":true,"doc.read":true,"doc.submit":true,"file.read":true,"issue.create":false,"issue.get":false,"issue.list":false,"issue.update":false,"issue.transition":false,"memory.save":false,"memory.search":true,"memory.update":false,"skill.create":false,"question.confirm":false,"my_profile":true,"hook.manage":false,"git.repos":false}' AS JSON)
   WHERE `type` = 'builtin'
    AND `key` = 'plan';
 

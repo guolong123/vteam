@@ -652,10 +652,10 @@ describe('WorkerDispatcher', () => {
       expect(execArgs.system).not.toContain('vteam_memory_save');
       // 非记忆段不受影响
       expect(execArgs.system).toContain('【持久化目录】');
-      // 产出物段 plan-aware：plan 无 submit_artifact（落盘即交付），dispatch 同样跳过
-      expect(execArgs.system).not.toContain('【公开与归档】');
-      expect(execArgs.system).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
-      expect(execArgs.system).not.toContain('vteam_submit_artifact');
+      // 产出物段与记忆段同判据（工具驱动）：plan 已放开 submit_artifact（2026-09-23 决策）→ 注入
+      expect(execArgs.system).toContain('【公开与归档】');
+      expect(execArgs.system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(execArgs.system).toContain('vteam_submit_artifact');
     });
 
     it('Todo 4：角色已知的目标 Agent → system 注入【职责边界】+ 角色 scopeSummary', async () => {
@@ -2103,7 +2103,7 @@ describe('WorkerDispatcher', () => {
         persona: null,
         agentKey: null,
       };
-      // 出厂 plan 策略 tools 无 memory_save / submit_artifact → 两段都屏蔽。
+      // 出厂 plan 策略 tools 无 memory_save（仍成立）→ 记忆段屏蔽。
       const planTools = resolveConstantPolicySource('vteam-plan')!.config.tools;
       const s = buildSystemInstructions(plan, { resolvedTools: planTools });
       expect(s).not.toContain(MEMORY_INSTRUCTION);
@@ -2112,10 +2112,9 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain('vteam_memory_save');
       // 非记忆段不受影响
       expect(s).toContain('【持久化目录】');
-      // 产出物段同判据：缺 submit_artifact 同样跳过
-      expect(s).not.toContain('【公开与归档】');
-      expect(s).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
-      expect(s).not.toContain('vteam_submit_artifact');
+      // 产出物段同判据（工具驱动）：plan 已放开 submit_artifact（2026-09-23）→ 该段照常注入
+      expect(s).toContain('【公开与归档】');
+      expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
       // resolvedTools 缺省 → 不屏蔽（存量/未知调用者行为逐字节不变）
       expect(buildSystemInstructions(plan)).toContain('【记忆管理】');
     });
@@ -2504,15 +2503,17 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain('【计划工作流】');
       // 既有段不受影响
       expect(s).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);
-      // plan-aware：缺 submit_artifact 的 tools → 不注入该段（判据是工具，非角色名）
-      const planTools = resolveConstantPolicySource('vteam-plan')!.config.tools;
-      const planS = buildSystemInstructions(
-        { ...agent, role: 'plan' },
-        { resolvedTools: planTools },
+      // plan-aware：判据是工具、非角色名 —— 用仍缺 submit_artifact 的 librarian 锁这条机制
+      // （plan 自 2026-09-23 已放开，改用 librarian 才能继续验证「缺工具即不注入」）。
+      const libTools = resolveConstantPolicySource('vteam-librarian')!.config
+        .tools;
+      const libS = buildSystemInstructions(
+        { ...agent, role: 'librarian' },
+        { resolvedTools: libTools },
       );
-      expect(planS).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
-      expect(planS).not.toContain('【公开与归档】');
-      expect(planS).not.toContain('vteam_submit_artifact');
+      expect(libS).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(libS).not.toContain('【公开与归档】');
+      expect(libS).not.toContain('vteam_submit_artifact');
     });
 
     it('短工具名批量改真实名：面向模型的自然语言指引无裸短名（协议/注释除外）', () => {

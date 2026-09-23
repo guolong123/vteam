@@ -127,7 +127,6 @@
           },
           "bash": "allow",
           "task": "allow",
-          "vteam_submit_artifact": "deny",
           "vteam_issue_create": "deny",
           "vteam_issue_list": "deny",
           "vteam_issue_get": "deny",

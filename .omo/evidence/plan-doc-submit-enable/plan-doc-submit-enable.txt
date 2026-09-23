@@ -1,0 +1,23 @@
+# 放开 plan 岗位的 doc.submit（用户决策 2026-09-23）
+# 时间: 2026-09-23T10:22:52+08:00
+
+## 背景
+线上报 PLATFORM_MCP_TOOL_NOT_PERMITTED："工具 vteam_submit_artifact 未获授权：岗位（plan）已拒绝能力点 doc.submit"。
+核查：岗位能力点矩阵与岗位策略 tools 双重一致地拒绝 plan（非配置漂移）；平台也没在提示词里叫它提交（suppressArtifact 生效）；
+真因是 MCP tools/list 无法按岗位过滤（连接按 worker 鉴权、拿不到成员身份）→ 模型看得见却调不动。
+计划员在群聊里写「先试归档（预期 403，不重试）」—— 它想把《实施计划》归档进产出物库。用户决策：放开。
+
+## 改动（单一源 + 派生镜像 + 迁移链 + 活基线全同步）
+- 边界单一源：src/common/constants/agent.constants.ts 与 prisma/seed.ts 的 ROLE_BOUNDARIES['vteam-plan'].toolAllows 增 vteam_submit_artifact: allow；
+- 派生镜像：agent-role.constants.ts 的 BUILTIN_ROLE_CAPABILITY_MAPS.plan['doc.submit'] false→true；
+- 迁移链（spec 契约要求迁移字面量 ≡ 当前代码派生）：000006/000008/000009 的 plan 字面量 doc.submit→true；
+- 新迁移 20260923000001_plan_doc_submit：已应用库的唯一补丁路径（000009 早已执行过）+ ep_plan 策略 JSON_SET 追加该工具；
+- 活基线再生成（官方脚本 capture-native-only-baseline.mjs）：baseline-agent-policies.json 仅删 vteam-plan 的 submit_artifact deny 一行；新 sha256 033a1502…；
+- 快照更新（jest -u）：同样仅删该行；
+- spec 意向更新：matrix 自检（plan 现具该工具）、agent.constants 精确矩阵、worker-dispatcher 三处 plan-aware 断言（改用仍缺该工具的 librarian 继续锁机制）。
+
+## 验证
+server tsc 0；受改动影响的全部 spec 绿（含新迁移契约 4 条）；全量 server 仅剩 3 条【预存失败】(task.constants 五态×3 / platform-mcp 团队维度×2)。
+线上库已应用：plan.doc.submit false→true、ep_plan.tools.vteam_submit_artifact NULL→allow。
+端到端实证：以计划员 tmm_0000000006 调 MCP submit_artifact（故意缺参）→ 返回 zod 校验错误(-32602 at taskId/type/title)，
+证明**权限门已放行**（此前为 -32003 TOOL_NOT_PERMITTED）。

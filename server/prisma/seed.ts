@@ -423,6 +423,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_notify_agent: 'allow',
       vteam_memory_search: 'allow',
       vteam_plan_complete: 'allow',
+      vteam_submit_artifact: 'allow',
       browser: 'allow',
     },
   }),
