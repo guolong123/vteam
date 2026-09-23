@@ -118,6 +118,14 @@ export default function TeamSessionPage() {
   /** 计划文件上传：隐藏 input 触发（无原生控件样式依赖）+ 错误提示。 */
   const planUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [planUploadError, setPlanUploadError] = useState<string | null>(null);
+  // 会话操作反馈条（success=重置成功 / error=重置失败或找不到成员）；3s 自动消失（对齐 integrations/skills 页）。
+  const [notice, setNotice] = useState<{ kind: string; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 3000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const membersPanel = useResizableWidth({
     storageKey: "team-session-members-width",
@@ -902,14 +910,24 @@ export default function TeamSessionPage() {
   const toggleEnabledMutation = useMutation({
     mutationFn: ({ instanceId, enabled }: { instanceId: string; enabled: boolean }) =>
       api.patch<TaskDetail>(`/tasks/${currentTaskId}/instances/${instanceId}`, { enabled }),
-    onSuccess: (updated) => {
+    onSuccess: (updated, variables) => {
       queryClient.setQueryData<TaskDetail>(["task", currentTaskId], updated);
       queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      const name = agentMembers.find((a) => (a.instanceId ?? a.id) === variables.instanceId)?.name;
+      setNotice({ kind: "success", text: name ? `${variables.enabled ? "已启用" : "已禁用"}「${name}」` : `已切换「${variables.instanceId}」状态` });
     },
     onError: (err) => {
       console.error("[TeamSession] toggle instance failed", { teamId, taskId: currentTaskId, error: err });
+      setNotice({ kind: "error", text: isApiError(err) ? err.message : "切换成员状态失败，请稍后重试" });
     },
   });
+  const handleToggleEnabled = (instanceId: string, enabled: boolean) => {
+    if (toggleEnabledMutation.isPending && toggleEnabledMutation.variables?.instanceId === instanceId) return;
+    toggleEnabledMutation.mutate({ instanceId, enabled });
+  };
+  const togglePendingInstanceId = toggleEnabledMutation.isPending
+    ? (toggleEnabledMutation.variables?.instanceId ?? null)
+    : null;
   const instanceModelMutation = useMutation({
     mutationFn: ({ instanceId, modelId }: { instanceId: string; modelId: string | null }) =>
       api.patch(`/teams/${teamId}/members/${instanceId}`, { overrideModelId: modelId ?? null }),
@@ -926,27 +944,43 @@ export default function TeamSessionPage() {
     },
   });
   const resetSessionMutation = useMutation({
-    mutationFn: (instanceId: string) => {
-      // 实例 key → 团队成员 id（tmm_）：团队成员来源时 instanceId 本身即 tmm_；
-      // 任务实例来源时按 agentId+seq 匹配 team.members（与私聊建频道同规则）。
-      const member = agentMembers.find((a) => (a.instanceId ?? a.id) === instanceId);
-      const memberId = member?.instanceId?.startsWith("tmm_")
-        ? member.instanceId
-        : (team?.members.find((m) => m.agentId === member?.id && m.seq === member?.seq)?.id
-          ?? team?.members.find((m) => m.agentId === member?.id)?.id
-          ?? instanceId);
-      return api.post<{ teamId: string; memberId: string; session: unknown }>(
+    mutationFn: ({ memberId }: { instanceId: string; memberId: string }) =>
+      api.post<{ teamId: string; memberId: string; session: unknown }>(
         `/teams/${teamId}/members/${memberId}/reset-session`, {},
-      );
-    },
-    onSuccess: () => {
+      ),
+    onSuccess: (_data, variables) => {
+      const name = agentMembers.find((a) => (a.instanceId ?? a.id) === variables.instanceId)?.name;
+      setNotice({ kind: "success", text: name ? `已重置「${name}」的会话` : "已重置该成员的会话" });
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
       if (currentTaskId) queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
     },
     onError: (err) => {
       console.error("[TeamSession] reset session failed", { teamId, error: err });
+      setNotice({ kind: "error", text: isApiError(err) ? err.message : "重置会话失败，请稍后重试" });
     },
   });
+  // 实例 key → 团队成员 id（tmm_）：团队成员来源时 instanceId 本身即 tmm_；
+  // 任务实例来源时按 agentId+seq 匹配 team.members（与私聊建频道同规则）。
+  // 解析不到 tmm_ 返回 null——绝不回退把非 tmm_ id 当成员 id POST（会打到错误/404 路由）。
+  const resolveResetMemberId = (instanceId: string): string | null => {
+    const member = agentMembers.find((a) => (a.instanceId ?? a.id) === instanceId);
+    if (member?.instanceId?.startsWith("tmm_")) return member.instanceId;
+    const matched = team?.members.find((m) => m.agentId === member?.id && m.seq === member?.seq)
+      ?? team?.members.find((m) => m.agentId === member?.id);
+    return matched?.id?.startsWith("tmm_") ? matched.id : null;
+  };
+  const handleResetSession = (instanceId: string) => {
+    if (resetSessionMutation.isPending) return;
+    const memberId = resolveResetMemberId(instanceId);
+    if (!memberId) {
+      setNotice({ kind: "error", text: "找不到该成员，无法重置会话" });
+      return;
+    }
+    resetSessionMutation.mutate({ instanceId, memberId });
+  };
+  const resetPendingInstanceId = resetSessionMutation.isPending
+    ? (resetSessionMutation.variables?.instanceId ?? null)
+    : null;
   const addInstanceMutation = useMutation({
     mutationFn: (payload: AddInstancePayload) =>
       api.post<TaskDetail>(`/tasks/${currentTaskId}/team`, {
@@ -1068,6 +1102,17 @@ export default function TeamSessionPage() {
         </div>
       </header>
 
+      {notice && (
+        <div
+          role="status"
+          data-testid="session-notice"
+          data-kind={notice.kind}
+          style={{ flexShrink: 0, margin: `${space.sm}px ${space.xl}px 0`, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "#DC2626", fontSize: fontSize.sm }}
+        >
+          {notice.text}
+        </div>
+      )}
+
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", position: "relative" }}>
         {/* 左侧完整成员面板 */}
         <TeamMembersPanel
@@ -1081,8 +1126,10 @@ export default function TeamSessionPage() {
           addError={addError}
           onAddInstance={handleAddInstance}
           width={membersPanel.width}
-          onToggleEnabled={hasCurrentTask ? (instanceId: string, enabled: boolean) => toggleEnabledMutation.mutate({ instanceId, enabled }) : undefined}
-          onResetSession={hasCurrentTask ? (instanceId: string) => resetSessionMutation.mutate(instanceId) : undefined}
+          onToggleEnabled={hasCurrentTask ? handleToggleEnabled : undefined}
+          togglePendingInstanceId={togglePendingInstanceId}
+          onResetSession={hasCurrentTask ? handleResetSession : undefined}
+          resetPendingInstanceId={resetPendingInstanceId}
           onChangeModel={(instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId })}
           onSetMainAgent={(memberId: string) => { if (!setMainAgentMutation.isPending) setMainAgentMutation.mutate(memberId); }}
           onSelectMember={(instanceId) => handlePrivateTab(instanceId)}
