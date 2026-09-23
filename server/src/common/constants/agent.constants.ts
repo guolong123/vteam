@@ -272,9 +272,11 @@ export const ROLE_POLICY_DENY_TEMPLATE =
   '【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。' as const;
 
 /** 角色边界映射（key = opencode agent 名，值与 Permission matrix 严格一致）。
- * bash 策略：全部 doing 角色 bash allow（headless 会话 ask 无法确认），
- * 层②命令级硬化清单已下线（空），bash 仅受层① permission.bash 约束；
- * 仅流程协调角色 vteam-project_manager 保持 bash deny。 */
+ * bash 策略：全部角色 bash allow（headless 会话 ask 无法确认），
+ * 层②命令级硬化清单已下线（空），bash 仅受层① permission.bash 约束。
+ * 2026-09-23 起 vteam-project_manager 亦为 allow：实测 agent `permission.bash=deny`
+ * 会让 OpenCode 免费模型返回 403（单变量验证：同配置只翻该字段即由 403 变正常），
+ * 而它曾是唯一 deny 的角色，导致"只有项目经理派发失败"。 */
 export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
   'vteam-product': defineBoundary({
     scopeSummary:
@@ -461,7 +463,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_task_context: 'allow',
       vteam_group_post: 'allow',

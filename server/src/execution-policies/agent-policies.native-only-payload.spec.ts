@@ -79,8 +79,18 @@ describe('agents[].permission native-only payload (todo 4)', () => {
       const agent = policies.agents.find((a) => a.name === name);
       expect(agent).toBeDefined();
       const before = historicalAgentByName(name).permission;
-      for (const key of NATIVE_PERMISSION_KEYS) {
+      // 单点例外（2026-09-23）：PM 的 bash 由 deny → allow——实测 agent permission.bash=deny
+      // 会让 OpenCode 免费模型 403（单变量验证）。历史基线为只读 sha 锁定 artifact，不可改，
+      // 故此处对 PM 的 bash 跳过历史比对，并显式断言新值而非静默放过。
+      const isPm = name === 'vteam-project_manager';
+      const keys = isPm
+        ? NATIVE_PERMISSION_KEYS.filter((k) => k !== 'bash')
+        : NATIVE_PERMISSION_KEYS;
+      for (const key of keys) {
         expect(agent?.permission[key]).toEqual(before[key]);
+      }
+      if (isPm) {
+        expect(agent?.permission.bash).toBe('allow');
       }
     },
   );
@@ -126,16 +136,27 @@ describe('agents[].permission native-only payload (todo 4)', () => {
         string,
         unknown
       >;
-      // layer① 的键源是 MCP 工具注册表：注册表删一个工具，历史基线就多一个 vteam_* deny 键。
-      // 因此只允许「历史侧独有的 vteam_* 键」缺席；其余键必须逐键同值，且当前侧不得出现新键。
+      // layer① 的键源是 MCP 工具注册表：注册表删/增一个工具，两侧就各可能多/少一个 vteam_* deny 键。
+      // 因此只允许「单侧独有的 vteam_* 键」缺席或新增；其余键必须逐键同值。
       expect(
         Object.keys(hist)
           .filter((k) => !(k in current))
           .every((k) => k.startsWith('vteam_')),
       ).toBe(true);
-      expect(Object.keys(current).filter((k) => !(k in hist))).toEqual([]);
+      expect(
+        Object.keys(current)
+          .filter((k) => !(k in hist))
+          .every((k) => k.startsWith('vteam_')),
+      ).toBe(true);
       for (const k of Object.keys(hist)) {
-        if (k in current) expect(current[k]).toEqual(hist[k]);
+        if (!(k in current)) continue;
+        if (k === 'bash' && agent.name === 'vteam-project_manager') {
+          // 同上例外：PM bash deny→allow（OpenCode 免费模型 403 根因，历史基线只读），
+          // 显式断言新值。
+          expect(current[k]).toBe('allow');
+          continue;
+        }
+        expect(current[k]).toEqual(hist[k]);
       }
       // 判別力自检：历史基线里这三个键确实存在（证明上面的缺省断言非恒真）。
       expect(historical.guard.roles[agent.name]).toHaveProperty('tools');

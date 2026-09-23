@@ -272,7 +272,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     expect(ROLE_BOUNDARIES['vteam-architect'].bashEffect).toBe('allow');
     expect(ROLE_BOUNDARIES['vteam-developer'].bashEffect).toBe('allow');
     expect(ROLE_BOUNDARIES['vteam-tester'].bashEffect).toBe('allow');
-    expect(ROLE_BOUNDARIES['vteam-project_manager'].bashEffect).toBe('deny');
+    expect(ROLE_BOUNDARIES['vteam-project_manager'].bashEffect).toBe('allow');
     expect(ROLE_BOUNDARIES['vteam-plan'].bashEffect).toBe('allow');
     expect(ROLE_BOUNDARIES['vteam-librarian'].bashEffect).toBe('allow');
 

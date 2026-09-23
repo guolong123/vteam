@@ -369,7 +369,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_task_context: 'allow',
       vteam_group_post: 'allow',
