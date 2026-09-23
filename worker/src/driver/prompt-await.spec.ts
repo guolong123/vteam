@@ -344,6 +344,53 @@ describe('awaitCompletion', () => {
     expect(getMessages).toHaveBeenCalledTimes(2);
   });
 
+  it('空壳 reasoning（思考期 text 恒空、part 数不变）→ 算首字，不误判「模型无任何输出」（线上 ses_f339ae60 误杀回归）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      // 线上实证（opencode 1.18.32 + 免费 provider）：reasoning part 在思考开始时创建，
+      // 文本要等 step 结束才一次性落盘——期间 text 恒为 ''、part 数不变、无 step-finish。
+      // 若按「文本非空」判首字，这里会在 40ms 后 abort 一个一直在思考的会话（= 误杀）。
+      if (calls <= 30) {
+        return [
+          asstMsg('a1', [
+            { id: 'p1', type: 'step-start' },
+            { id: 'p2', type: 'reasoning', text: '', time: { start: 1000 } },
+          ]),
+        ];
+      }
+      return [
+        asstMsg('a1', [
+          { id: 'p1', type: 'step-start' },
+          { id: 'p2', type: 'reasoning', text: 'thinking done' },
+          stepFinishPart(),
+        ]),
+      ];
+    });
+
+    const result = await awaitCompletion(driver, 'ses_shell', {
+      firstTokenTimeoutMs: 40,
+      pollMs: 5,
+    });
+
+    expect(abort).not.toHaveBeenCalled();
+    expect(result.text).toBe('');
+    expect(getMessages).toHaveBeenCalledTimes(31);
+  });
+
+  it('连 reasoning part 都没有（只有 step-start）→ 仍判首字超时 + abort（真·模型无响应兜底不被放宽）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue([
+      asstMsg('a1', [{ id: 'p1', type: 'step-start' }]),
+    ]);
+
+    await expect(
+      awaitCompletion(driver, 'ses_noresp', { firstTokenTimeoutMs: 20, pollMs: 5 }),
+    ).rejects.toThrow(/等待首字超时/);
+    expect(abort).toHaveBeenCalledTimes(1);
+  });
+
   it('tool 执行中（part 数不变、仅 state/output 推进）→ 活性顺延，不误判首字超时', async () => {
     const { driver, getMessages, abort } = mockDriver();
     let calls = 0;
