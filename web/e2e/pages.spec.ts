@@ -426,7 +426,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("team-subtab-scroll")).toHaveCount(0);
   });
 
-  test("T24 状态卡三层 + 队列空态（seed 任务 t_0000000001）", async ({ page, request }) => {
+  test("T24 状态卡三层 + 队列空态（团队当前任务）", async ({ page, request }) => {
     await page.route("**/api/v1/teams/tm_0000000001", async (r) => {
       const res = await r.fetch();
       const json = await res.json();
@@ -442,7 +442,15 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       data: { username: "seed-admin", password: "Admin@123456" },
     });
     const { accessToken } = await login.json();
-    const taskRes = await request.get("/api/v1/tasks/t_0000000001", {
+    // 面板展示的是团队「当前任务」（队首随业务推进变化）→ 从团队接口取，不写死任务 id，
+    // 否则任务一被验收/推进，断言就会打在一个已不是队首的任务上而失败。
+    const teamRes = await request.get("/api/v1/teams/tm_0000000001", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const teamJson = await teamRes.json();
+    const currentTaskId = (teamJson?.currentTaskId ?? "") as string;
+    expect(currentTaskId).toBeTruthy();
+    const taskRes = await request.get(`/api/v1/tasks/${currentTaskId}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const taskJson = await taskRes.json();

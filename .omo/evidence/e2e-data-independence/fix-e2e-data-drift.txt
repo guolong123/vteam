@@ -1,0 +1,18 @@
+# e2e 去数据漂移（两条写死断言改运行时解析）
+# 时间: 2026-09-23T09:42:43+08:00
+
+## 问题（每次验证都稳定失败，属噪音）
+1) docs-unified.spec 团队级聚合用例：断言面板含任务名 'cliyard MCP 新增' —— 该任务已被改名 → 永久失败；
+2) pages.spec 状态卡用例：写死断言 t_0000000001 的标题出现在状态卡 —— 但面板展示的是团队**当前任务**（队首），任务被验收推进后必失败。
+
+## 改法（都改成运行时取值，不写死业务数据）
+1) docs-unified：新增 seededTaskTitle，beforeAll 用 GET /tasks/:id 解析当前标题并 fail-fast 断言非空，用例断言面板含该值；
+2) pages：改为 GET /teams/:id 取 currentTaskId → GET /tasks/:currentTaskId 取标题，用例名同步改为「团队当前任务」。
+
+## 验证
+web tsc 0；
+docs 套件 19 passed / 0 failed（原 1 failed 消除）；
+pages 套件 25 passed / 0 failed（原 1 failed 消除）。
+
+## 说明
+本次仅改 web/e2e/*（不进生产构建）→ 无需重建/重启镜像。

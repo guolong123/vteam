@@ -29,6 +29,8 @@ const TASK_ID = "t_0000000001";
 const SERVER = "http://localhost:13000";
 const TASK_URL = `/docs?teamId=${TEAM_ID}&taskId=${TASK_ID}`;
 const P = "t12qa-";
+/** 团队级原型断言用的任务标题：beforeAll 运行时解析——任务可被改名，写死即数据漂移。 */
+let seededTaskTitle = "";
 
 /** 自家树行（按标题前缀过滤，隔离 moving-target 邻居行）。 */
 function ownRows(page: import("@playwright/test").Page) {
@@ -80,6 +82,13 @@ test.beforeAll("T12 fixture seeding（删旧→直写 10 行）", async ({ playw
   const auth = await loginAsSeedAdmin(api);
   const headers = { Authorization: auth };
   const base = `${SERVER}/api/v1`;
+
+  // 运行时解析 TASK_ID 的当前标题（团队级聚合断言要用「任务名」，而任务名会被人改）。
+  const taskRes = await api.get(`${base}/tasks/${TASK_ID}`, { headers });
+  expect(taskRes.ok()).toBe(true);
+  const taskRow = await taskRes.json();
+  seededTaskTitle = String((taskRow?.task ?? taskRow)?.title ?? "");
+  expect(seededTaskTitle).toBeTruthy();
 
   // 幂等：先删残留 t12qa 行（复跑/中断残留不污染树计数）。
   const existing = await api.get(
@@ -382,9 +391,9 @@ test.describe("prototypes：徽标→tab→深链→团队级聚合（T16）", (
     await tab.click();
     const panel = page.getByTestId("docs-prototype-panel");
     await expect(panel).toBeVisible();
-    // beforeAll 在 t_0000000001 上播种了 t12qa-demo：团队聚合须含该条目及其任务名。
+    // beforeAll 在 t_0000000001 上播种了 t12qa-demo：团队聚合须含该条目及其任务名（运行时解析）。
     await expect(panel).toContainText("t12qa-demo");
-    await expect(panel).toContainText("cliyard MCP 新增");
+    await expect(panel).toContainText(seededTaskTitle);
     // 旧「请先选择任务」死端已删：非空时无空态。
     await expect(page.getByTestId("docs-proto-empty")).toHaveCount(0);
     await expect(panel).not.toContainText("请先选择任务");
