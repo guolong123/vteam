@@ -73,3 +73,17 @@ opencode/AI-SDK 的日志形态是 `message="stream error" error.error="AI_APICa
 ① 断言面板含某个任务名（任务会被改名）② 断言某个写死的任务 id 的标题出现在面板（面板展示的是团队**当前任务**，队首会随验收/推进变化）。
 **做法**：断言前先经 API **运行时解析**目标值（`GET /tasks/:id` / `GET /teams/:id` 的 currentTaskId），
 并对解析结果做 fail-fast 非空断言（避免解析失败时 `toContainText("")` 恒真而静默通过）。
+
+## L14 · 同一策略的 `tools` 与 `permission` 两个字段约定相反，改一个不够
+`execution_policies.config` 里同时有：
+- `tools` —— **只列放行**的工具（值为 `'allow'`）；未列 = 不放行；
+- `permission` —— **只列拒绝**的工具（值为 `'deny'`）；未列 = 放行。
+worker guard 的 `guard.roles[*].permission` 直接取 `config.permission`，而提示词抑制与能力点派生看 `config.tools`。
+**改一个角色的工具授权必须两个字段同时改**（本例：tools 增 `allow` + permission **删** `deny` 键，注意不是置 allow）。
+另外 seed 的 `upsert({ update: {} })` 有意不回滚存量行（保护运行时编辑）→ **存量库必须靠迁移补**。
+
+## L15 · 迁移链是「当前态快照」，能力点变更必须同步改历史迁移 + 活基线
+能力点矩阵的契约 spec 断言「**历史迁移的冻结字面量 ≡ 当前代码派生**」→ 改能力点必须同步：
+① 边界单一源（src + seed 双写）②派生矩阵常量 ③迁移链里该角色的字面量 ④活基线 JSON（有官方再生成脚本，勿手改）
+⑤快照（`jest -u`）⑥若干意向断言（旧的「plan 无该工具」断言改成「已具」，并把机制类断言改用仍缺该工具的角色继续锁）。
+漏任何一环都会留下自相矛盾的红灯。历史证据目录（`vteam-role-behavior-abstraction`）是**只读**的，不要改。
