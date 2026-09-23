@@ -33,7 +33,7 @@
  *   docs-loading / docs-error / docs-retry / docs-tab-bar / docs-tab-docs /
  *   docs-tab-protos / docs-proto-empty。
  */
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -46,6 +46,7 @@ import { ARTIFACT_CATEGORIES } from "@/src/lib/artifact-categories";
 import { docIdFor } from "@/src/lib/artifact-slug";
 import { useDeleteArtifact } from "@/src/features/docs-site/hooks";
 import { FilePreview } from "@/src/features/docs-site/file-preview";
+import { DocExportButtons } from "@/src/features/docs-site/doc-export-buttons";
 import { EmptyState, PageWindow } from "@/src/components/ui";
 import {
   roleText,
@@ -255,6 +256,9 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
   // 当前选中版本：缺省 = currentVersion（detail 返回后可用）；点击版本切换更新
   const [activeVersion, setActiveVersion] = useState<number | null>(null);
 
+  // PDF 截图目标（包裹 FilePreview，透明背景，不改变暗色观感；浅色仅在克隆上强制）
+  const captureRef = useRef<HTMLDivElement | null>(null);
+
   // 版本列表（版本切换 `‹ vN … ›` 数据源）
   const detailQuery = useQuery({
     queryKey: ["artifact-detail", artifactId],
@@ -319,7 +323,15 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
             {title}
           </span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: space.sm }}>
+          {versionQuery.data && (
+            <DocExportButtons
+              captureRef={captureRef}
+              type={type}
+              version={versionQuery.data}
+              title={title}
+            />
+          )}
           {/* 版本切换：‹ vN … ›，当前/选中版高亮 */}
           <div
             aria-label="版本切换"
@@ -412,7 +424,9 @@ function VersionViewer({ artifactId, type, title, onClose }: VersionViewerProps)
         ) : versionQuery.isPending ? (
           <span style={{ color: neutral[400] }}>加载中…</span>
         ) : versionQuery.data ? (
-          <FilePreview version={versionQuery.data} type={type} title={title} />
+          <div ref={captureRef} data-testid="docs-pdf-capture" style={{ background: "transparent" }}>
+            <FilePreview version={versionQuery.data} type={type} title={title} />
+          </div>
         ) : null}
       </div>
 
@@ -814,13 +828,26 @@ export default function DocsUnifiedPage() {
     { key: CATEGORY_UNCATEGORIZED, label: UNCATEGORIZED_LABEL },
   ];
 
+  /**
+   * 返回上一页：有应用内历史则 history back（从会话页/看板跳来的常规路径）；
+   * 直接打开或刷新（无应用内历史）时回落到会话页（有 teamId）或看板——避免 history back
+   * 把用户弹出应用。
+   */
+  const handleDocsBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) {
+      router.back();
+      return;
+    }
+    router.push(teamId ? `/teams/${teamId}/session` : "/board");
+  };
+
   return (
     <PageWindow
       testId="docs-shell"
       fluid
       style={{ backgroundColor: neutral[100], ...baseFont }}
     >
-      {/* 头部：团队名 + 文档站标题 */}
+      {/* 头部：团队名 + 文档站标题 + 返回 */}
       <div
         data-testid="docs-title"
         style={{
@@ -833,6 +860,29 @@ export default function DocsUnifiedPage() {
         <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>
           {teamId ? (teamName ? `${teamName} · 文档站` : "文档站") : "文档站"}
         </div>
+        <button
+          type="button"
+          data-testid="docs-back"
+          onClick={handleDocsBack}
+          title="返回上一页"
+          style={{
+            flexShrink: 0,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.xs}px ${space.md}px`,
+            borderRadius: radius.md,
+            border: `1px solid ${neutral[200]}`,
+            backgroundColor: "var(--color-surface)",
+            color: neutral[700],
+            fontSize: fontSize.sm,
+            cursor: "pointer",
+            fontFamily: fontFamily.body,
+            whiteSpace: "nowrap",
+          }}
+        >
+          ← 返回
+        </button>
       </div>
 
       {/* 无 teamId → 团队选择器（不强制跳 /teams） */}

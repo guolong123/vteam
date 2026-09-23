@@ -363,6 +363,16 @@ test.describe("prototypes：徽标→tab→深链→团队级聚合（T16）", (
     ).toBeVisible();
   });
 
+  test("返回按钮：从会话页进入文档站后可返回", async ({ page }) => {
+    await page.goto(`/teams/${TEAM_ID}/session`);
+    await page.goto(TASK_URL);
+    const back = page.getByTestId("docs-back");
+    await expect(back).toBeVisible();
+    await expect(back).toContainText("返回");
+    await back.click();
+    await expect(page).toHaveURL(/\/teams\//);
+  });
+
   test("团队级（task=all）：原型 tab 可用 + 跨任务列表", async ({ page }) => {
     // T16 起原型为团队级：task=all 下 tab 保持可用（旧 disabled 断言已随需求删除）。
     await page.goto(`/docs?teamId=${TEAM_ID}`);
