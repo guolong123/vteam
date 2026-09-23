@@ -15,7 +15,14 @@ UPDATE `agent_roles`
  WHERE `type` = 'builtin'
    AND `key` = 'plan';
 
--- 岗位策略同步：ep_plan 的 config.tools 增 vteam_submit_artifact（seed 侧同源改动）。
+-- 岗位策略同步（两个字段约定不同，都必须改）：
+--   config.tools      —— 只列**放行**的工具（值为 'allow'）→ JSON_SET 增该键；
+--   config.permission —— 只列**拒绝**的工具（值为 'deny'），放行的**不出现** → JSON_REMOVE 删该键
+--                        （guard.roles[*].permission 直接取本字段，留着 deny 会继续挡住调用）。
 UPDATE `execution_policies`
    SET `config` = JSON_SET(`config`, '$.tools.vteam_submit_artifact', 'allow')
+ WHERE `id` = 'ep_plan';
+
+UPDATE `execution_policies`
+   SET `config` = JSON_REMOVE(`config`, '$.permission.vteam_submit_artifact')
  WHERE `id` = 'ep_plan';

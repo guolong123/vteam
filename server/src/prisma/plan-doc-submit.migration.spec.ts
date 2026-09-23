@@ -38,11 +38,11 @@ function jsonLiteralAfter(anchor: string): Record<string, unknown> {
 }
 
 describe('20260923000001 计划员放开 doc.submit（迁移契约）', () => {
-  it('范围守卫：恰 2 条 UPDATE，分别锚定 plan 岗位行与 ep_plan 策略行', () => {
+  it('范围守卫：恰 3 条 UPDATE，分别锚定 plan 岗位行与 ep_plan 策略行', () => {
     const updates = sql.match(/^UPDATE /gm) ?? [];
-    expect(updates).toHaveLength(2);
+    expect(updates).toHaveLength(3);
     expect(sql).toContain("AND `key` = 'plan'");
-    expect(sql).toContain("WHERE `id` = 'ep_plan'");
+    expect((sql.match(/WHERE `id` = 'ep_plan'/g) ?? [])).toHaveLength(2);
   });
 
   it('plan 字面量逐键 ≡ BUILTIN_ROLE_CAPABILITY_MAPS.plan（27 键，键序 = 目录序）', () => {
@@ -54,20 +54,31 @@ describe('20260923000001 计划员放开 doc.submit（迁移契约）', () => {
     expect(literal['doc.submit']).toBe(true);
   });
 
-  it('岗位策略用 JSON_SET 追加单一键（不整列覆盖）', () => {
+  it('岗位策略两个字段都改：tools 增 allow；permission 删 deny（约定不同）', () => {
     expect(sql).toContain(
       "JSON_SET(`config`, '$.tools.vteam_submit_artifact', 'allow')",
     );
-    // 反向：不得出现整列 CAST 覆盖 ep_plan 的 config（会丢其余 12 键）。
+    // guard.roles[*].permission 直接取 config.permission：放行 = 键不存在，故删而非置 allow。
+    expect(sql).toContain(
+      "JSON_REMOVE(`config`, '$.permission.vteam_submit_artifact')",
+    );
+    // 反向：不得出现整列 CAST 覆盖 ep_plan 的 config（会丢 tools/permission 其余键）。
     expect(sql).not.toMatch(/SET `config` = CAST/);
   });
 
-  it('幂等：右值为常量字面量、不引用列自身', () => {
-    for (const stmt of sql.split(';')) {
-      if (!stmt.includes('UPDATE')) continue;
-      const setClause = stmt.split('SET')[1] ?? '';
-      expect(setClause).not.toMatch(/`capabilities`\s*[,)]/);
-      expect(setClause).not.toMatch(/`config`\s*[,)]/);
+  it('幂等：每条 UPDATE 的赋值都是常量字面量或 JSON_SET/JSON_REMOVE（重跑零变化）', () => {
+    const stmts = sql
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('--'))
+      .join('\n')
+      .split(';');
+    const updates = stmts.filter((s) => s.includes('UPDATE'));
+    expect(updates).toHaveLength(3);
+    for (const stmt of updates) {
+      expect(stmt).toMatch(/CAST\('\{.*?\}' AS JSON\)|JSON_(SET|REMOVE)\(/s);
+      expect(stmt).not.toMatch(
+        /SET\s+`(capabilities|config)`\s*=\s*`(capabilities|config)`/,
+      );
     }
   });
 });

@@ -21,3 +21,12 @@ server tsc 0；受改动影响的全部 spec 绿（含新迁移契约 4 条）�
 线上库已应用：plan.doc.submit false→true、ep_plan.tools.vteam_submit_artifact NULL→allow。
 端到端实证：以计划员 tmm_0000000006 调 MCP submit_artifact（故意缺参）→ 返回 zod 校验错误(-32602 at taskId/type/title)，
 证明**权限门已放行**（此前为 -32003 TOOL_NOT_PERMITTED）。
+
+## 补充修复（首次提交后验证发现）
+现象：/agent-policies 的 guard.roles[vteam-plan].permission.vteam_submit_artifact 仍为 deny。
+根因：**两个字段约定不同**——guard 取的是 `config.permission`（只列拒绝项，放行者不出现），
+      而我首次只改了 `config.tools`（只列放行项，值 'allow'）。seed 的 `update: {}` 又不回滚存量行，
+      故存量库一直保留旧的 permission.deny。
+修正：迁移增 `JSON_REMOVE(config, '$.permission.vteam_submit_artifact')`（放行 = 键不存在，不是置 allow）。
+      `mcpDenies` 由 defineBoundary 自动派生（VTEAM_MCP_TOOL_NAMES 减 toolAllows）→ fresh 安装随 toolAllows 自动正确。
+验证：DB permission 键已移除、tools=allow；/agent-policies guard 里该键 <absent = 放行>（对照 memory_save 仍 deny）。
