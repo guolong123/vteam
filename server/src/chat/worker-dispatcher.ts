@@ -290,6 +290,9 @@ export const TASK_TRANSITION_INSTRUCTION =
 export const HOSTED_CONFIRM_INSTRUCTION =
   '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息时，调用 vteam MCP 的 vteam_question_confirm 工具决策（参数细节查工具 schema）。仅主实例可调用 vteam_question_confirm。';
 
+export const HOSTED_PLAN_TODO_INSTRUCTION =
+  '【执行步骤｜计划 Tab 执行步骤卡的数据源】计划拆解后必须用 vteam_todo(action:"write", title, content?, assignee?, seq 按 1..n 缺省自增) 把步骤写入平台（落 plan_tasks，跨会话持久），完成自己负责的那一步时调 vteam_todo(action:"done", seq) 标记完成——只建 issues 不写 vteam_todo，执行步骤卡会永远是「暂无执行步骤」。步骤与 issue 的分工：步骤=有序执行序列（谁做第几步、完成态），issue=可流转的工作项。';
+
 export const HOSTED_PLAN_SIGNOFF_INSTRUCTION =
   '【计划签署】托管模式（managedMode=on）下计划由你（主 Agent）代用户签署：定稿用 vteam_plan_finalize（pending_final→approved，托管模式额外允许 draft→approved），开始执行用 vteam_plan_confirm（approved→executing，托管模式额外允许 draft/pending_final 直推）。派发执行类工作前必须先 vteam_plan_confirm 把计划推进到 executing，否则计划会卡在 draft，且后续 vteam_plan_complete 必然报错（仅 executing 可完工）。托管模式未开启时这两个工具返回 403，此时须提示用户在计划 Tab 人工确认（确认定稿 / 确认开始执行）；若你岗位未被授予 task.complete 能力（工具返回未获授权），请 @项目经理 或 @计划员 执行。';
 
@@ -301,7 +304,8 @@ export const NON_MAIN_AGENT_NOTE =
   '【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。定向通知仅可直达主Agent，需触达其他成员时请主Agent中转，成员间直连调用将被拒绝。' +
   '回执节奏：进度汇报用 vteam_notify_agent（type=answer, stage=process，不唤醒主Agent）；' +
   '完工必须传 stage=answer+end（清除回执，主Agent在所有派发完工后一次性唤醒）；' +
-  '遇阻塞/决策/依赖缺失用 type=question 或 help（立即中断唤醒主Agent，不计完工）。';
+  '遇阻塞/决策/依赖缺失用 type=question 或 help（立即中断唤醒主Agent，不计完工）。' +
+  '执行步骤：认领的任务步骤由主 Agent 用 vteam_todo 写入，你**自己完成时**调用 vteam_todo(action:"done", seq) 标记完成（计划 Tab 执行步骤卡据此显示进度）；先 vteam_todo(action:"list") 可查 seq。';
 
 /** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
 export const WECOM_SYSTEM_INSTRUCTION =
@@ -609,7 +613,7 @@ export function buildSystemInstructions(
     // P0 条件注入：主 Agent 追加【任务状态】+【托管模式】工具段；非主成员仅给协作指引
     // （不再教非主成员调用必 403 的 vteam_task_transition / vteam_question_confirm）。
     opts?.isMainAgent
-      ? `${TASK_TRANSITION_INSTRUCTION}\n\n${HOSTED_CONFIRM_INSTRUCTION}\n\n${HOSTED_PLAN_REVIEW_INSTRUCTION}\n\n${HOSTED_PLAN_SIGNOFF_INSTRUCTION}`
+      ? `${TASK_TRANSITION_INSTRUCTION}\n\n${HOSTED_CONFIRM_INSTRUCTION}\n\n${HOSTED_PLAN_TODO_INSTRUCTION}\n\n${HOSTED_PLAN_REVIEW_INSTRUCTION}\n\n${HOSTED_PLAN_SIGNOFF_INSTRUCTION}`
       : NON_MAIN_AGENT_NOTE,
     // P0 条件注入：企微渠道才追加【企业微信】段，缺省不注入。
     opts?.isWecomChannel === true ? WECOM_SYSTEM_INSTRUCTION : '',
