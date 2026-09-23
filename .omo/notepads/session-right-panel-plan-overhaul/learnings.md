@@ -60,3 +60,10 @@ opencode/AI-SDK 的日志形态是 `message="stream error" error.error="AI_APICa
 前者却卡 `in_progress` —— 结果 `pending_review` 的卡死会话拿不到自动恢复。
 更微妙的是：dispatcher 的注释把前者引为「先例」，却自行采用了更宽口径，**老闸门没同步放宽**。
 **做法**：改任何"准入判据"前，先 grep 出所有同义判据，确认口径一致；否则会留下行为裂缝。
+
+## L12 · 一次性触发器的 nextFireAt 恒为 NULL——回落 dueAt 会显示"过去的时间"
+`receipt_nudge` 等一次性触发器（`interval_ms = NULL`）`next_fire_at` 恒为 NULL，而 `due_at` 是
+「本该触发的时间」。前端 `nextFireAt ?? dueAt` 回落后，待触发行会显示一个**已过去的绝对时间戳**，
+既不是"下次触发时间"，也看不出"逾期未触发"。
+**做法**：回落 dueAt 时必须按 status 判语义——pending 且时刻已过 → 显式标注（如「应于 …」），
+否则用户会把过去时间误读成"已触发"。
