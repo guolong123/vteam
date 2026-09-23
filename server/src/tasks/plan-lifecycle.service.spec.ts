@@ -830,4 +830,78 @@ describe('PlanLifecycleService', () => {
       expect(idGen.seed).toHaveBeenCalledWith('pl', 7);
     });
   });
+
+  describe('skipReview：草稿态人工出口（评审链路走不通时的救活路径）', () => {
+    beforeEach(() => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      prisma.message.create.mockImplementation(({ data }: any) =>
+        Promise.resolve({ id: 'm_skip', ...data }),
+      );
+      prisma.plan.update.mockImplementation(({ data }: any) =>
+        Promise.resolve({ ...data }),
+      );
+    });
+
+    it('confirm + skipReview：draft 直接到 executing，补 finalized 字段与冻结锚，消息留痕', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'draft' });
+
+      const res = await service.confirmPlan('t_1', {
+        userId: 'u_1',
+        userName: '成员甲',
+        action: 'confirm',
+        skipReview: true,
+      });
+
+      expect(res).toMatchObject({
+        idempotent: false,
+        plan: { status: 'executing' },
+      });
+      const data = prisma.plan.update.mock.calls[0][0].data;
+      expect(data).toMatchObject({
+        status: 'executing',
+        confirmedBy: '成员甲',
+        finalizedBy: '成员甲',
+        frozenVersion: 'v0.1',
+      });
+      const msg = JSON.stringify(
+        prisma.message.create.mock.calls.map((c: any) => c[0].data.content),
+      );
+      expect(msg).toContain('人工跳过评审');
+    });
+
+    it('confirm + skipReview：reviewing 态同样放行（评审未收敛的人工推进）', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'reviewing' });
+
+      const res = await service.confirmPlan('t_1', {
+        userId: 'u_1',
+        action: 'confirm',
+        skipReview: true,
+      });
+
+      expect(res).toMatchObject({ plan: { status: 'executing' } });
+    });
+
+    it('finalize + skipReview：draft/reviewing → approved；其他态仍 409', async () => {
+      prisma.plan.findUnique.mockResolvedValue({ status: 'reviewing' });
+
+      const ok = await service.finalizePlan('t_1', {
+        userId: 'u_1',
+        skipReview: true,
+      });
+      expect(ok).toMatchObject({
+        idempotent: false,
+        plan: { status: 'approved' },
+      });
+
+      prisma.plan.findUnique.mockResolvedValue({ status: 'rejected' });
+      const err = await service
+        .finalizePlan('t_1', { userId: 'u_1', skipReview: true })
+        .catch((e) => e);
+      expect(err?.response?.code ?? err?.code).toBe(
+        PLAN_LIFECYCLE_ERRORS.PLAN_FINALIZE_WRONG_STATE,
+      );
+    });
+  });
+
 });

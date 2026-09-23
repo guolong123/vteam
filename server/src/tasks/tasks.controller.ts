@@ -421,6 +421,7 @@ export class TasksController {
       userName: user.username,
       action: dto.action ?? 'confirm',
       reason: dto.reason ?? null,
+      skipReview: dto.skipReview === true,
     });
   }
 

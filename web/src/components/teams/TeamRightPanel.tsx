@@ -478,6 +478,8 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [finalizeOpen, setFinalizeOpen] = useState(false);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [skipError, setSkipError] = useState<string | null>(null);
   /** 归档入口展开态（默认收起，点击可达旧轮次回执）。 */
   const [showArchive, setShowArchive] = useState(false);
 
@@ -509,6 +511,18 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
       queryClient.invalidateQueries({ queryKey: ["task", taskId, "plan"] });
     },
     onError: (err) => setFinalizeError(isApiError(err) ? err.message : "确认定稿失败"),
+  });
+
+  /** 草稿/评审中态的人工出口：跳过评审直接确认执行（后端 skipReview，需 tasks.edit 权限）。 */
+  const skipMutation = useMutation({
+    mutationFn: () =>
+      api.post(`/tasks/${taskId}/plan/confirm`, { action: "confirm", skipReview: true }),
+    onSuccess: () => {
+      setSkipError(null);
+      setSkipOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["task", taskId, "plan"] });
+    },
+    onError: (err) => setSkipError(isApiError(err) ? err.message : "跳过评审确认失败"),
   });
 
   /** 轮次账本：从 issue 描述机器段聚合，取最高轮次（同轮取回执最多者）。 */
@@ -552,6 +566,9 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   const showConfirm = status === "approved" && isMember;
   /** 执行清单仅 executing 态渲染（读 issue 聚合）。 */
   const showChecklist = status === "executing";
+  /** 人工逃生口：draft/reviewing + 成员上下文（评审链路走不通时仍能把计划推进）。 */
+  const showSkipReview =
+    (status === "draft" || status === "reviewing") && isMember;
   const issueCounts: Record<string, number> = { open: 0, in_progress: 0, resolved: 0, closed: 0, rejected: 0 };
   for (const it of issues) {
     const st = (it as { status?: string })?.status;
@@ -671,8 +688,20 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
             {confirmMutation.isPending ? "确认中…" : "确认开始执行"}
           </button>
         )}
+        {showSkipReview && (
+          <button
+            type="button"
+            data-testid="plan-skip-review-btn"
+            disabled={skipMutation.isPending}
+            onClick={() => { setSkipError(null); setSkipOpen(true); }}
+            style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid #0D9488`, backgroundColor: "rgba(13,148,136,0.08)", color: "#0D9488", fontSize: fontSize.sm, fontWeight: 600, cursor: skipMutation.isPending ? "default" : "pointer", opacity: skipMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}
+          >
+            {skipMutation.isPending ? "推进中…" : "跳过评审，直接确认执行"}
+          </button>
+        )}
         {confirmError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{confirmError}</div>}
         {finalizeError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{finalizeError}</div>}
+        {skipError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{skipError}</div>}
       </div>
       {showChecklist && (
         <div data-testid="plan-checklist" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
@@ -728,6 +757,18 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
         submitting={confirmMutation.isPending}
         onClose={() => { if (!confirmMutation.isPending) setConfirmOpen(false); }}
         onConfirm={() => confirmMutation.mutate()}
+      />
+      <ConfirmDialog
+        open={skipOpen}
+        testid="plan-skip-review"
+        danger={true}
+        title="跳过评审，直接确认执行"
+        description="评审尚未收敛时的人工出口：计划将跳过评审与定稿，直接从草稿/评审中进入执行态（→ executing），并留痕「人工跳过评审」。该操作不可撤销。"
+        confirmLabel="跳过并开始执行"
+        pendingLabel="推进中…"
+        submitting={skipMutation.isPending}
+        onClose={() => { if (!skipMutation.isPending) setSkipOpen(false); }}
+        onConfirm={() => skipMutation.mutate()}
       />
     </>
   );

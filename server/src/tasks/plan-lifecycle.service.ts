@@ -291,6 +291,12 @@ export class PlanLifecycleService implements OnModuleInit {
        * 缺省 false 时保持人工签署门语义（仅 approved→executing）。
        */
       managed?: boolean;
+      /**
+       * 人工跳过评审出口（需 tasks.edit 权限，由 REST 透传）：允许 draft/reviewing/pending_final
+       * 直接到 executing——评审链路走不通时的人工救活路径；系统消息留痕「人工跳过评审」。
+       * 与 managed 互不依赖（一个来自人、一个来自主 Agent），缺省 false 时两者均不放宽。
+       */
+      skipReview?: boolean;
     },
   ): Promise<{ plan: Plan; idempotent: boolean; action: PlanConfirmAction }> {
     if (input.action === 'finalize') {
@@ -311,16 +317,27 @@ export class PlanLifecycleService implements OnModuleInit {
       input.managed === true &&
       (row.status === PLAN_LIFECYCLE_STATUS.draft ||
         row.status === PLAN_LIFECYCLE_STATUS.pending_final);
-    if (row.status !== PLAN_LIFECYCLE_STATUS.approved && !managedJump) {
+    const skipJump =
+      input.skipReview === true &&
+      (row.status === PLAN_LIFECYCLE_STATUS.draft ||
+        row.status === PLAN_LIFECYCLE_STATUS.reviewing ||
+        row.status === PLAN_LIFECYCLE_STATUS.pending_final);
+    if (
+      row.status !== PLAN_LIFECYCLE_STATUS.approved &&
+      !managedJump &&
+      !skipJump
+    ) {
       throw new ConflictException({
         code: PLAN_LIFECYCLE_ERRORS.PLAN_CONFIRM_WRONG_STATE,
         message: `计划未定稿待执行（当前 ${row.status}），不可确认开始`,
         details: { current: row.status },
       });
     }
-    const jumpAnchor = managedJump
-      ? resolveFrozenAnchor(taskId, await this.readTaskLedger(taskId))
-      : null;
+    // 从非 approved 态直推 = 本次动作隐式完成了定稿，必须补齐 finalized 字段与冻结锚
+    const jumpAnchor =
+      row.status !== PLAN_LIFECYCLE_STATUS.approved
+        ? resolveFrozenAnchor(taskId, await this.readTaskLedger(taskId))
+        : null;
     const plan = await this.transition(taskId, 'executing', {
       confirmedBy: actor,
       confirmedAt: new Date(),
@@ -337,9 +354,11 @@ export class PlanLifecycleService implements OnModuleInit {
     await this.postPlanSystemMessage(
       taskId,
       task.teamId,
-      input.managed === true
-        ? `计划已由 ${actor} 在托管模式下代用户签署（${row.status} → executing），开始执行。PM 请续推执行任务。`
-        : `计划已由 ${actor} 确认，开始执行（approved → executing）。PM 请续推 W2 执行任务。`,
+      skipJump
+        ? `计划已由 ${actor} 【人工跳过评审】确认开始执行（${row.status} → executing），冻结基线 ${jumpAnchor?.version ?? '-'}（hash ${jumpAnchor?.hash ?? '-'}）。跳过评审属人工决策，已留痕。`
+        : input.managed === true
+          ? `计划已由 ${actor} 在托管模式下代用户签署（${row.status} → executing），开始执行。PM 请续推执行任务。`
+          : `计划已由 ${actor} 确认，开始执行（approved → executing）。PM 请续推 W2 执行任务。`,
     );
     return { plan, idempotent: false, action: 'confirm' };
   }
@@ -359,6 +378,8 @@ export class PlanLifecycleService implements OnModuleInit {
       reason?: string | null;
       /** 托管模式：主 Agent 代用户签署，额外允许 draft → approved（跳过评审）。 */
       managed?: boolean;
+      /** 人工跳过评审出口（需 tasks.edit）：额外允许 draft/reviewing → approved，消息留痕。 */
+      skipReview?: boolean;
     },
   ): Promise<{ plan: Plan; idempotent: boolean; action: PlanConfirmAction }> {
     const actor = displayName(input.userName, input.userId);
@@ -368,9 +389,14 @@ export class PlanLifecycleService implements OnModuleInit {
     }
     const managedDraftJump =
       input.managed === true && row.status === PLAN_LIFECYCLE_STATUS.draft;
+    const skipJump =
+      input.skipReview === true &&
+      (row.status === PLAN_LIFECYCLE_STATUS.draft ||
+        row.status === PLAN_LIFECYCLE_STATUS.reviewing);
     if (
       row.status !== PLAN_LIFECYCLE_STATUS.pending_final &&
-      !managedDraftJump
+      !managedDraftJump &&
+      !skipJump
     ) {
       throw new ConflictException({
         code: PLAN_LIFECYCLE_ERRORS.PLAN_FINALIZE_WRONG_STATE,
@@ -392,9 +418,11 @@ export class PlanLifecycleService implements OnModuleInit {
     await this.postPlanSystemMessage(
       taskId,
       task.teamId,
-      input.managed === true
-        ? `计划已由 ${actor} 在托管模式下代用户签署定稿（${row.status} → approved），冻结基线 ${anchor.version}（hash ${anchor.hash}）。`
-        : `计划已由 ${actor} 确认定稿（pending_final → approved），冻结基线 ${anchor.version}（hash ${anchor.hash}）。开始执行另需用户确认，确认前不得派发执行类工作。`,
+      skipJump
+        ? `计划已由 ${actor} 【人工跳过评审】确认定稿（${row.status} → approved），冻结基线 ${anchor.version}（hash ${anchor.hash}）。开始执行仍需用户确认。`
+        : input.managed === true
+          ? `计划已由 ${actor} 在托管模式下代用户签署定稿（${row.status} → approved），冻结基线 ${anchor.version}（hash ${anchor.hash}）。`
+          : `计划已由 ${actor} 确认定稿（pending_final → approved），冻结基线 ${anchor.version}（hash ${anchor.hash}）。开始执行另需用户确认，确认前不得派发执行类工作。`,
     );
     await this.broadcastFinalizeNotice(taskId, task.teamId, anchor, actor);
     return { plan, idempotent: false, action: 'finalize' };

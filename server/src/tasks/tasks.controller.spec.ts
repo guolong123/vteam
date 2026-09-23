@@ -678,6 +678,7 @@ describe('TasksController', () => {
         userName: '成员甲',
         action: 'reject',
         reason: '范围过大',
+        skipReview: false,
       });
       expect(out).toEqual(result);
     });
@@ -692,6 +693,7 @@ describe('TasksController', () => {
         userName: '成员甲',
         action: 'confirm',
         reason: null,
+        skipReview: false,
       });
     });
 
@@ -708,8 +710,27 @@ describe('TasksController', () => {
         userName: '成员甲',
         action: 'finalize',
         reason: null,
+        skipReview: false,
       });
       expect(out).toEqual(result);
+    });
+
+    it('POST tasks/:id/plan/confirm 转发 skipReview=true（草稿态人工出口）', async () => {
+      const result = { plan: { status: 'executing' }, idempotent: false };
+      planLifecycle.confirmPlan.mockResolvedValue(result);
+
+      await controller.confirmPlan(user, 't_1', {
+        action: 'confirm',
+        skipReview: true,
+      });
+
+      expect(planLifecycle.confirmPlan).toHaveBeenCalledWith('t_1', {
+        userId: 'u_1',
+        userName: '成员甲',
+        action: 'confirm',
+        reason: null,
+        skipReview: true,
+      });
     });
 
     it('PATCH tasks/:id/plan/complete 转发主实例（缺省用户 PM 路径）', async () => {
