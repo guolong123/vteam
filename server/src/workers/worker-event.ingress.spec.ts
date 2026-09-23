@@ -1726,6 +1726,73 @@ describe('WorkerEventIngress', () => {
       );
     });
 
+    it('团队会话 permission（payload.taskId 空）→ team scope + payload 补 team:<id>/teamId（前端可见性与 scope 过滤放行）', async () => {
+      prisma.session.findUnique.mockResolvedValueOnce({
+        taskId: null,
+        agentId: 'a_pm',
+        teamId: 'tm_9',
+      });
+      const e = event('w_1', 'evw_p9', 'session.permission', {
+        sessionId: 's_9',
+        permissionId: 'per_9',
+        type: 'external_directory',
+        pattern: '/root/.config/opencode/*',
+        title: 'external_directory',
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
+      // 行保持空 taskId（findAll 的 teamId 路径经 sessionId ∈ 团队会话命中）
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            requestId: 'per_9',
+            sessionId: 's_9',
+            taskId: '',
+            kind: 'permission',
+          }),
+        }),
+      );
+      // payload 补 team:<teamId> + 顶层 teamId；scope 发 team 域（否则 scope=all 可见性丢帧）
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({
+          taskId: 'team:tm_9',
+          teamId: 'tm_9',
+          question: expect.objectContaining({
+            taskId: 'team:tm_9',
+            kind: 'permission',
+            agentId: 'a_pm',
+          }),
+        }),
+        { type: 'team', id: 'tm_9' },
+      );
+    });
+
+    it('团队会话且团队 managedMode=true → managed 标记 + managedMode（主 Agent 确认路由激活）', async () => {
+      prisma.session.findUnique.mockResolvedValueOnce({
+        taskId: null,
+        agentId: 'a_pm',
+        teamId: 'tm_9',
+      });
+      prisma.team.findUnique.mockResolvedValue({ managedMode: true });
+      const e = event('w_1', 'evw_p10', 'session.question', {
+        sessionId: 's_9',
+        requestId: 'que_9',
+        questions: [{ question: '继续？', header: '确认', options: [] }],
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({
+          managed: true,
+          taskId: 'team:tm_9',
+          question: expect.objectContaining({ managedMode: true }),
+        }),
+        { type: 'team', id: 'tm_9' },
+      );
+    });
+
     it('requestId 已存在且 pending → 更新 content 不新建（幂等）；已终态 → 跳过不重复上报', async () => {
       prisma.agentQuestion.findUnique.mockResolvedValueOnce({
         id: 'aq_1',

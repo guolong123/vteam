@@ -301,6 +301,41 @@ describe('TaskProgressionScheduler', () => {
       expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
     });
 
+    it('team:<id> 域（团队会话无任务）→ 跳过 task 查表，按团队解析主成员并以 teamId 直传 dispatch', async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+      await scheduler.onModuleInit();
+      const listener = realtime.subscribe.mock.calls[0][0];
+      prisma.agentQuestion.findUnique.mockResolvedValue({
+        id: 'aq_9',
+        requestId: 'per_9',
+        kind: 'permission',
+        content: { title: 'external_directory', pattern: '/root/*' },
+        status: 'pending',
+        sessionId: null,
+      });
+      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: 'tmm_main' });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      prisma.task.findUnique.mockClear();
+
+      await listener({
+        type: 'agent.question',
+        payload: {
+          managed: true,
+          question: { taskId: 'team:tm_9', requestId: 'per_9' },
+          taskId: 'team:tm_9',
+          teamId: 'tm_9',
+        },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+      const call = workerDispatcher.dispatchAgentMention.mock.calls[0][0];
+      expect(call.taskId).toBeNull();
+      expect(call.teamId).toBe('tm_9');
+      expect(call.text).toContain('【托管确认】');
+    });
+
     it('resolved=true（收敛事件）不路由', async () => {
       prisma.task.findMany.mockResolvedValue([]);
       await scheduler.onModuleInit();

@@ -328,8 +328,8 @@ export class WorkerEventIngress {
         return this.handleGitOp(dto);
       case 'session.question':
       case 'session.permission':
-        // 模型提问/工具权限确认：AgentQuestion 落库 + emit AGENT_QUESTION（scope=task），
-        // 前端会话页弹窗；异常吞错不阻断（事件回流尽力而为）。
+        // 模型提问/工具权限确认：AgentQuestion 落库 + emit AGENT_QUESTION（scope=task/team，
+        // 团队会话发 team 域），前端会话页弹窗；异常吞错不阻断（事件回流尽力而为）。
         return this.handleAgentQuestion(dto)
           .catch((err: unknown) => {
             this.logger.error(
@@ -754,7 +754,8 @@ export class WorkerEventIngress {
    *   upsert 幂等：已存在且非 pending（已答复/拒绝）→ 跳过（不覆盖终态）；pending → 更新 content。
    * - sessionId 统一经 resolvePlatformSessionId 归一为平台主键（s_ 前缀）落库；taskId/agentId 缺失时
    *   从 Session 反查（worker 事件透传的 ses_ 会话 id 反查命中率更高，反查不到用 payload 值）。
-   * - emit AGENT_QUESTION（scope=task）：payload = AgentQuestion DTO + taskId/agentId，前端弹窗。
+   * - emit AGENT_QUESTION（scope=task/team；团队会话 payload 补 `team:<teamId>` 与顶层 teamId）：
+   *   payload = AgentQuestion DTO + taskId/agentId/teamId，前端弹窗。
    */
   private async handleAgentQuestion(dto: WorkerEventDto): Promise<boolean> {
     const raw = dto.payload as SessionQuestionPayload &
@@ -789,13 +790,17 @@ export class WorkerEventIngress {
     }
     let taskId = this.str(raw.taskId);
     let agentId = this.str(raw.agentId);
-    if (sessionId && (!taskId || !agentId)) {
+    // 团队域恒需解析：团队会话 payload.taskId 为空 → emit scope、managedMode、payload
+    // taskId 三处都依赖 session.teamId；任务态会话行为不变（scope 仍按 taskId 发 task 域）。
+    let teamId: string | null = null;
+    if (sessionId) {
       const session = await this.prisma.session.findUnique({
         where: { id: sessionId },
-        select: { taskId: true, agentId: true },
+        select: { taskId: true, agentId: true, teamId: true },
       });
       taskId = taskId ?? session?.taskId;
       agentId = agentId ?? session?.agentId;
+      teamId = session?.teamId ?? null;
     }
     const content: Prisma.InputJsonValue =
       kind === 'question'
@@ -843,9 +848,22 @@ export class WorkerEventIngress {
     // 托管模式检测：团队 managedMode=true → 请求改由主 Agent 确认（前端不弹窗）。
     // payload 带 managed 标记（TaskProgressionScheduler 订阅 realtime bus 据此 dispatch 给主 Agent），
     // question.managedMode 供 GET /questions 补拉路径前端过滤弹窗。
-    const managedMode = taskId
-      ? await this.teamManagedModeOfTask(taskId)
-      : false;
+    const managedMode = teamId
+      ? await this.teamManagedModeById(teamId)
+      : taskId
+        ? await this.teamManagedModeOfTask(taskId)
+        : false;
+    // 团队会话（payload.taskId 空）补 `team:<teamId>` 与顶层 teamId，且 scope 发 team 域：
+    // ① use-sse 的 team: 段按 payload.taskId==='team:<id>' 契约匹配（dispatcher 侧同形状），
+    //    缺它前端 scope 过滤必丢帧；② global 域经 payload.taskId 反查任务归属团队，空 taskId
+    //    → teamId=null → scope=all 可见性谓词（teamId 非空且可见）直接丢帧——两处均导致
+    //    团队会话权限/问题事件在浏览器端完全不展示（k8s 实测 pending per_* 行落库但前端无感）。
+    const payloadTaskId = taskId || (teamId ? `team:${teamId}` : null);
+    const scope: RealtimeScope = taskId
+      ? { type: 'task', id: taskId }
+      : teamId
+        ? { type: 'team', id: teamId }
+        : { type: 'global' };
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
@@ -853,7 +871,7 @@ export class WorkerEventIngress {
           id: row.id,
           requestId,
           sessionId: storeSessionId,
-          taskId: taskId ?? null,
+          taskId: payloadTaskId,
           agentId: agentId ?? null,
           kind,
           content,
@@ -861,11 +879,12 @@ export class WorkerEventIngress {
           managedMode,
         },
         ...(managedMode ? { managed: true } : {}),
-        taskId: taskId ?? null,
+        taskId: payloadTaskId,
+        teamId,
         agentId: agentId ?? null,
         sessionId: storeSessionId,
       },
-      this.scopeOf(taskId),
+      scope,
     );
     return true;
   }
@@ -916,6 +935,15 @@ export class WorkerEventIngress {
       });
       const teamId = (task as { teamId?: string | null } | null)?.teamId;
       if (!teamId) return false;
+      return await this.teamManagedModeById(teamId);
+    } catch {
+      return false;
+    }
+  }
+
+  /** 团队直接维度的托管开关（团队会话 payload.taskId 为空，经 session.teamId 走此路）。 */
+  private async teamManagedModeById(teamId: string): Promise<boolean> {
+    try {
       const team = await this.prisma.team.findUnique({
         where: { id: teamId },
         select: { managedMode: true },

@@ -764,11 +764,17 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     taskId: string,
     text: string,
   ): Promise<void> {
-    const taskMeta = await this.prisma.task.findUnique({
-      where: { id: taskId },
-      select: { teamId: true },
-    });
-    const teamId = (taskMeta as any)?.teamId ?? null;
+    // team:<id> 域：teamId 直传（dispatchAgentMention 内置 teamId 分支，跳过任务查表）
+    const teamScopedId = taskId.startsWith('team:')
+      ? taskId.slice('team:'.length)
+      : null;
+    const taskMeta = teamScopedId
+      ? null
+      : await this.prisma.task.findUnique({
+          where: { id: taskId },
+          select: { teamId: true },
+        });
+    const teamId = teamScopedId ?? (taskMeta as any)?.teamId ?? null;
     const mainMemberId = await this.mainMemberOfTask(teamId);
     if (!mainMemberId) {
       throw new Error(`任务 ${taskId} 无主成员，无法定向 dispatch`);
@@ -790,7 +796,8 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       throw new Error(`任务 ${taskId} 无可用频道，无法定向 dispatch`);
     }
     await this.workerDispatcher.dispatchAgentMention({
-      taskId,
+      taskId: teamScopedId ? null : taskId,
+      ...(teamScopedId ? { teamId: teamScopedId } : {}),
       channelId: channel.id,
       text,
       targetInstanceId: mainMemberId,
@@ -846,12 +853,19 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     if (!row || row.status !== 'pending') {
       return;
     }
-    const task = await this.prisma.task.findUnique({
-      where: { id: taskId },
-      select: { title: true, teamId: true },
-    });
+    // team:<id> 域（团队会话无任务，ingress 补的形态）：跳过 task 查表，直接按团队解析
+    // 主成员——自环检测与后续 dispatch 定向共用此 teamId。
+    const teamScopedId = taskId.startsWith('team:')
+      ? taskId.slice('team:'.length)
+      : null;
+    const task = teamScopedId
+      ? null
+      : await this.prisma.task.findUnique({
+          where: { id: taskId },
+          select: { title: true, teamId: true },
+        });
     const questionMainId = await this.mainMemberOfTask(
-      (task as any)?.teamId ?? null,
+      teamScopedId ?? (task as any)?.teamId ?? null,
     );
     if (questionMainId && row.sessionId) {
       const reqSession = await this.prisma.session

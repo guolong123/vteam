@@ -13,6 +13,7 @@ describe('QuestionsController（Agent 提问/权限确认端点）', () => {
     task: { findUnique: jest.Mock };
     teamUserMember: { findUnique: jest.Mock };
     agentQuestion: { findUnique: jest.Mock };
+    session: { findUnique: jest.Mock };
   };
 
   const guardsOf = (method: string) =>
@@ -31,6 +32,7 @@ describe('QuestionsController（Agent 提问/权限确认端点）', () => {
       agentQuestion: {
         findUnique: jest.fn().mockResolvedValue({ id: 'aq_1', taskId: null }),
       },
+      session: { findUnique: jest.fn().mockResolvedValue(null) },
     };
     const module: TestingModule = await Test.createTestingModule({
       controllers: [QuestionsController],
@@ -138,6 +140,37 @@ describe('QuestionsController（Agent 提问/权限确认端点）', () => {
       .catch((e: unknown) => e)) as { response?: { code?: string } };
     expect(err.response?.code).toBe('PERMISSION_TEAM_NOT_MEMBER');
     expect(service.reply).not.toHaveBeenCalled();
+  });
+
+  it('POST /questions/:id/reply 团队会话行（taskId 空）→ 经会话团队校验，非成员 403', async () => {
+    prisma.agentQuestion.findUnique.mockResolvedValue({
+      id: 'aq_1',
+      taskId: '',
+      sessionId: 's_9',
+    });
+    prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_9' });
+    prisma.teamUserMember.findUnique.mockResolvedValue(null);
+    const dto = { answers: [['继续']] } as ReplyQuestionDto;
+    const err = (await controller
+      .reply('aq_1', dto, { id: 'u_1' })
+      .catch((e: unknown) => e)) as { response?: { code?: string } };
+    expect(err.response?.code).toBe('PERMISSION_TEAM_NOT_MEMBER');
+    expect(service.reply).not.toHaveBeenCalled();
+  });
+
+  it('POST /questions/:id/reply 团队会话行 + 团队成员 → 校验通过转发', async () => {
+    prisma.agentQuestion.findUnique.mockResolvedValue({
+      id: 'aq_1',
+      taskId: '',
+      sessionId: 's_9',
+    });
+    prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_9' });
+    prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+    service.reply.mockResolvedValue({ id: 'aq_1', status: 'resolved' });
+    const dto = { answers: [['继续']] } as ReplyQuestionDto;
+    const result = await controller.reply('aq_1', dto, { id: 'u_1' });
+    expect(service.reply).toHaveBeenCalledWith('aq_1', dto, 'u_1');
+    expect(result).toEqual({ id: 'aq_1', status: 'resolved' });
   });
 
   it('POST /questions/:id/reply 挂 PermissionGuard + chats.edit（member 矩阵已预置）', () => {
