@@ -93,4 +93,45 @@ describe('resyncIdPrefix（域主键续号：只统计前缀下纯数字序号�
     // seed 到 17 → 下一个 id 应为 mc_0000000018
     expect(await idGen.nextId('mc')).toBe('mc_0000000018');
   });
+
+  it('P2021（表不存在，K8s 下 server 先于迁移就绪）→ fail-open 不抛，阻塞启动不再发生', async () => {
+    const findMany = jest
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error("The table `vteam`.`message_receipts` does not exist"), {
+          code: 'P2021',
+        }),
+      );
+    const model = { findMany } as unknown as ResyncIdModel;
+
+    await expect(resyncIdPrefix(model, 'mr', idGen)).resolves.toBeUndefined();
+  });
+
+  it('P2021 后表就绪 → 后台重试补 seed（3s 一次）', async () => {
+    jest.useFakeTimers();
+    try {
+      const findMany = jest
+        .fn()
+        .mockRejectedValueOnce(Object.assign(new Error('not exist'), { code: 'P2021' }))
+        .mockResolvedValueOnce([{ id: 'tl_0000000005' }]);
+      const model = { findMany } as unknown as ResyncIdModel;
+
+      await resyncIdPrefix(model, 'tl', idGen);
+      expect(findMany).toHaveBeenCalledTimes(1);
+
+      await jest.advanceTimersByTimeAsync(3000);
+
+      expect(findMany).toHaveBeenCalledTimes(2);
+      expect(await idGen.nextId('tl')).toBe('tl_0000000006');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('非 P2021 错误保持既有行为（向上抛）', async () => {
+    const findMany = jest.fn().mockRejectedValue(new Error('connection refused'));
+    const model = { findMany } as unknown as ResyncIdModel;
+
+    await expect(resyncIdPrefix(model, 'tl', idGen)).rejects.toThrow('connection refused');
+  });
 });
