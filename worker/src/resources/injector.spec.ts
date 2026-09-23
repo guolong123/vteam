@@ -7,7 +7,7 @@ import {
   ResourceInjector,
   schemaToArgs,
 } from './injector';
-import { OMO_AGENT_NAMES } from './omo-config';
+import { OMO_AGENT_NAMES, omoConfigUserPath } from './omo-config';
 
 /** 构造按 URL pathname 路由的 mock fetch（Response 最小形态）。 */
 function makeFetch(
@@ -672,92 +672,139 @@ describe('ResourceInjector：OmO 插件声明与 agent 模型配置', () => {
     });
   });
 
-  describe('agent→模型配置（位置与格式自适应）', () => {
-    it('无任何文件时：新建到新位置 .omo/omo.jsonc', async () => {
+  describe('agent→模型配置（落点：用户级 ~/.omo/omo.jsonc）', () => {
+    let omoDir: string;
+    let prevOmoDir: string | undefined;
+
+    beforeEach(() => {
+      omoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omo-dir-'));
+      prevOmoDir = process.env.OMO_CONFIG_DIR;
+      process.env.OMO_CONFIG_DIR = omoDir;
+    });
+
+    afterEach(() => {
+      if (prevOmoDir === undefined) delete process.env.OMO_CONFIG_DIR;
+      else process.env.OMO_CONFIG_DIR = prevOmoDir;
+    });
+
+    /** 用户级配置绝对路径（惰性读 $HOME，必须在 beforeEach 之后调用）。 */
+    const userCfgPath = (): string => omoConfigUserPath();
+    const readUserCfg = (): any => JSON.parse(fs.readFileSync(userCfgPath(), 'utf8'));
+
+    it('无任何文件时：新建到用户级 ~/.omo/omo.jsonc，工作目录不留配置', async () => {
       const workDir = workDirFor();
       const written = await injectorFor(workDir).writeOmoConfig({
         sisyphus: 'opencode/big-pickle',
       });
-      expect(written).toBe(path.join(workDir, '.omo', 'omo.jsonc'));
-      expect(readJson(workDir, '.omo/omo.jsonc')).toEqual({
+      expect(written).toBe(userCfgPath());
+      expect(readUserCfg()).toEqual({
         agents: { sisyphus: { model: 'opencode/big-pickle' } },
       });
+      expect(fs.existsSync(path.join(workDir, '.omo', 'omo.jsonc'))).toBe(false);
     });
 
-    it('新位置存在时写新位置（回归：曾误写 .opencode 那份→完全不生效）', async () => {
+    it('用户级已存在 → 写用户级，保留 [opencode] 段其他键与 _migrations', async () => {
       const workDir = workDirFor();
-      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
+      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
       fs.writeFileSync(
-        path.join(workDir, '.omo', 'omo.jsonc'),
+        userCfgPath(),
         JSON.stringify({ '[opencode]': { agents: {} }, _migrations: ['x'] }),
       );
-      const injector = injectorFor(workDir);
-      const written = await injector.writeOmoConfig({ atlas: 'opencode/big-pickle' });
-      expect(written).toBe(path.join(workDir, '.omo', 'omo.jsonc'));
-      // 写进 [opencode].agents，且保留 $schema/_migrations 等其他键
-      const cfg = readJson(workDir, '.omo/omo.jsonc');
-      expect(cfg['[opencode]'].agents.atlas).toEqual({ model: 'opencode/big-pickle' });
+      const written = await injectorFor(workDir).writeOmoConfig({
+        atlas: 'opencode/big-pickle',
+      });
+      expect(written).toBe(userCfgPath());
+      const cfg = readUserCfg();
+      expect(cfg['[opencode]'].agents.atlas).toEqual({
+        model: 'opencode/big-pickle',
+      });
       expect(cfg._migrations).toEqual(['x']);
     });
 
-    it('仅旧位置存在时写回旧位置（保持既有部署落点不变）', async () => {
-      const workDir = workDirFor();
-      fs.mkdirSync(path.join(workDir, '.opencode'), { recursive: true });
-      fs.writeFileSync(
-        path.join(workDir, '.opencode', 'oh-my-openagent.jsonc'),
-        JSON.stringify({ agents: {} }),
-      );
-      const written = await injectorFor(workDir).writeOmoConfig({ atlas: 'a/b' });
-      expect(written).toBe(
-        path.join(workDir, '.opencode', 'oh-my-openagent.jsonc'),
-      );
-    });
-
-    it('两份都存在时以新位置为准（实测：.omo/omo.jsonc 胜出）', async () => {
+    it('历史落点（工作目录 .omo/omo.jsonc）→ 迁移到用户级并删除旧文件', async () => {
       const workDir = workDirFor();
       fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
-      fs.mkdirSync(path.join(workDir, '.opencode'), { recursive: true });
       fs.writeFileSync(
         path.join(workDir, '.omo', 'omo.jsonc'),
-        JSON.stringify({ '[opencode]': { agents: { sisyphus: { model: 'new/win' } } } }),
-      );
-      fs.writeFileSync(
-        path.join(workDir, '.opencode', 'oh-my-openagent.jsonc'),
-        JSON.stringify({ agents: { sisyphus: { model: 'old/lose' } } }),
+        JSON.stringify({
+          '[opencode]': { agents: { sisyphus: { model: 'old/win' } } },
+        }),
       );
       const injector = injectorFor(workDir);
-      // 读要读生效的那份，而不是旧的
-      expect(injector.readOmoConfig()).toEqual({ sisyphus: 'new/win' });
+      expect(injector.readOmoConfig()).toEqual({ sisyphus: 'old/win' });
+
+      const written = await injector.writeOmoConfig({ atlas: 'a/b' });
+
+      expect(written).toBe(userCfgPath());
+      expect(fs.existsSync(path.join(workDir, '.omo', 'omo.jsonc'))).toBe(false);
+      expect(readUserCfg()['[opencode]'].agents.sisyphus).toEqual({
+        model: 'old/win',
+      });
+    });
+
+    it('更早的历史落点（工作目录 .opencode/oh-my-openagent.jsonc）同样迁移', async () => {
+      const workDir = workDirFor();
+      fs.mkdirSync(path.join(workDir, '.opencode'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workDir, '.opencode', 'oh-my-openagent.jsonc'),
+        JSON.stringify({ agents: { oracle: { model: 'a/b' } } }),
+      );
+      const injector = injectorFor(workDir);
+      expect(injector.readOmoConfig()).toEqual({ oracle: 'a/b' });
+
+      const written = await injector.writeOmoConfig({ atlas: 'a/b' });
+
+      expect(written).toBe(userCfgPath());
+      expect(
+        fs.existsSync(path.join(workDir, '.opencode', 'oh-my-openagent.jsonc')),
+      ).toBe(false);
+    });
+
+    it('用户级已存在时工作目录历史文件不干扰（不迁移、不覆盖）', async () => {
+      const workDir = workDirFor();
+      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
+      fs.writeFileSync(
+        userCfgPath(),
+        JSON.stringify({
+          '[opencode]': { agents: { sisyphus: { model: 'user/win' } } },
+        }),
+      );
+      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workDir, '.omo', 'omo.jsonc'),
+        JSON.stringify({ agents: { sisyphus: { model: 'stale/lose' } } }),
+      );
+      const injector = injectorFor(workDir);
+      expect(injector.readOmoConfig()).toEqual({ sisyphus: 'user/win' });
+
       await injector.writeOmoConfig({ atlas: 'a/b' });
-      // 旧文件不得被改动
-      expect(readJson(workDir, '.opencode/oh-my-openagent.jsonc').agents).toEqual({
-        sisyphus: { model: 'old/lose' },
+
+      expect(readUserCfg()['[opencode]'].agents.sisyphus).toEqual({
+        model: 'user/win',
       });
     });
 
     it('读旧格式（顶层 agents）与新格式（[opencode].agents）都认', async () => {
-      const legacy = workDirFor();
-      fs.mkdirSync(path.join(legacy, '.opencode'), { recursive: true });
+      const workDir = workDirFor();
+      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
       fs.writeFileSync(
-        path.join(legacy, '.opencode', 'oh-my-openagent.jsonc'),
+        userCfgPath(),
         JSON.stringify({ agents: { oracle: { model: 'a/b' } } }),
       );
-      expect(injectorFor(legacy).readOmoConfig()).toEqual({ oracle: 'a/b' });
+      expect(injectorFor(workDir).readOmoConfig()).toEqual({ oracle: 'a/b' });
 
-      const modern = workDirFor();
-      fs.mkdirSync(path.join(modern, '.omo'), { recursive: true });
       fs.writeFileSync(
-        path.join(modern, '.omo', 'omo.jsonc'),
+        userCfgPath(),
         JSON.stringify({ '[opencode]': { agents: { oracle: { model: 'c/d' } } } }),
       );
-      expect(injectorFor(modern).readOmoConfig()).toEqual({ oracle: 'c/d' });
+      expect(injectorFor(workDir).readOmoConfig()).toEqual({ oracle: 'c/d' });
     });
 
-    it('JSONC 注释与尾逗号可解析（新位置文件带 // 注释）', async () => {
+    it('JSONC 注释与尾逗号可解析', async () => {
       const workDir = workDirFor();
-      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
+      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
       fs.writeFileSync(
-        path.join(workDir, '.omo', 'omo.jsonc'),
+        userCfgPath(),
         `// OMO configuration\n{\n  "[opencode]": {\n    "agents": {\n      "sisyphus": { "model": "a/b" },\n    },\n  },\n}\n`,
       );
       expect(injectorFor(workDir).readOmoConfig()).toEqual({ sisyphus: 'a/b' });
@@ -768,31 +815,37 @@ describe('ResourceInjector：OmO 插件声明与 agent 模型配置', () => {
       const injector = injectorFor(workDir);
       await injector.writeOmoConfig({ sisyphus: 'a/one', atlas: 'a/two' });
       await injector.writeOmoConfig({ sisyphus: 'b/three' });
-      expect(injector.readOmoConfig()).toEqual({ sisyphus: 'b/three', atlas: 'a/two' });
+      expect(injector.readOmoConfig()).toEqual({
+        sisyphus: 'b/three',
+        atlas: 'a/two',
+      });
       await injector.writeOmoConfig({ sisyphus: '' });
       expect(injector.readOmoConfig()).toEqual({ atlas: 'a/two' });
     });
 
     it('保留 agent 的其他键（variant），只覆盖 model', async () => {
       const workDir = workDirFor();
-      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
+      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
       fs.writeFileSync(
-        path.join(workDir, '.omo', 'omo.jsonc'),
+        userCfgPath(),
         JSON.stringify({
-          '[opencode]': { agents: { sisyphus: { model: 'old/m', variant: 'high' } } },
+          '[opencode]': {
+            agents: { sisyphus: { model: 'old/m', variant: 'high' } },
+          },
         }),
       );
       await injectorFor(workDir).writeOmoConfig({ sisyphus: 'new/m' });
-      expect(
-        readJson(workDir, '.omo/omo.jsonc')['[opencode]'].agents.sisyphus,
-      ).toEqual({ model: 'new/m', variant: 'high' });
+      expect(readUserCfg()['[opencode]'].agents.sisyphus).toEqual({
+        model: 'new/m',
+        variant: 'high',
+      });
     });
 
     it('文件不存在/损坏 → readOmoConfig 返回空对象不抛错', () => {
       const workDir = workDirFor();
       expect(injectorFor(workDir).readOmoConfig()).toEqual({});
-      fs.mkdirSync(path.join(workDir, '.omo'), { recursive: true });
-      fs.writeFileSync(path.join(workDir, '.omo', 'omo.jsonc'), '{ broken');
+      fs.mkdirSync(path.dirname(userCfgPath()), { recursive: true });
+      fs.writeFileSync(userCfgPath(), '{ broken');
       expect(injectorFor(workDir).readOmoConfig()).toEqual({});
     });
 

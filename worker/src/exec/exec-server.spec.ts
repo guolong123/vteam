@@ -2180,13 +2180,22 @@ describe('ExecServer：POST /plan-file（计划文件直传端点）', () => {
 describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', () => {
   const TOKEN = 'tok';
   let workDir: string;
+  /** OmO 配置落点隔离目录（落点已从工作目录改为用户级 ~/.omo/omo.jsonc）。 */
+  let omoDir: string;
+  let prevOmoDir: string | undefined;
 
   beforeEach(async () => {
     workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-omo-'));
+    omoDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-omo-cfg-'));
+    prevOmoDir = process.env.OMO_CONFIG_DIR;
+    process.env.OMO_CONFIG_DIR = omoDir;
   });
 
   afterEach(async () => {
+    if (prevOmoDir === undefined) delete process.env.OMO_CONFIG_DIR;
+    else process.env.OMO_CONFIG_DIR = prevOmoDir;
     await fsp.rm(workDir, { recursive: true, force: true });
+    await fsp.rm(omoDir, { recursive: true, force: true });
   });
 
   function serverFor(opts: { workDir?: string | null; token?: string } = {}): ExecServer {
@@ -2269,15 +2278,15 @@ describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', 
         expect.arrayContaining(['sisyphus', 'prometheus', 'atlas']),
       );
       expect(res.body.available).toHaveLength(14);
-      // 透出生效文件路径：全新环境（无文件）→ 指向新位置
-      expect(res.body.configPath).toBe(join('.omo', 'omo.jsonc'));
+      // 透出生效文件路径：全新环境（无文件）→ 指向用户级落点
+      expect(res.body.configPath).toBe('~/.omo/omo.jsonc');
       expect(res.body.configKind).toBe('none');
     } finally {
       await exec.stop();
     }
   });
 
-  it('POST：写入后 GET 回读一致，且落到实际生效的 .omo/omo.jsonc', async () => {
+  it('POST：写入后 GET 回读一致，且落到用户级 ~/.omo/omo.jsonc（不写工作目录）', async () => {
     const exec = serverFor();
     const bound = await exec.start();
     try {
@@ -2294,10 +2303,13 @@ describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', 
       });
       const get = await req(bound, 'GET', undefined, TOKEN);
       expect(get.body.agents).toEqual(post.body.agents);
-      // OmO 优先读 .omo/omo.jsonc（实测：同时存在时它胜出），故写入必须落这里
+      // 写入必须落用户级落点（工作目录不得出现配置文件）
       const onDisk = JSON.parse(
-        await fsp.readFile(join(workDir, '.omo', 'omo.jsonc'), 'utf8'),
+        await fsp.readFile(join(omoDir, 'omo.jsonc'), 'utf8'),
       );
+      await expect(
+        fsp.stat(join(workDir, '.omo', 'omo.jsonc')),
+      ).rejects.toThrow();
       expect(onDisk.agents.sisyphus).toEqual({ model: 'opencode/big-pickle' });
     } finally {
       await exec.stop();
@@ -2374,7 +2386,7 @@ describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', 
       expect(res.body.restart).toBe('pending');
       // 配置已落盘（不因挂起而回滚）
       const onDisk = JSON.parse(
-        await fsp.readFile(join(workDir, '.omo', 'omo.jsonc'), 'utf8'),
+        await fsp.readFile(join(omoDir, 'omo.jsonc'), 'utf8'),
       );
       expect(onDisk.agents.atlas).toEqual({ model: 'a/b' });
     } finally {
@@ -2408,7 +2420,7 @@ describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', 
       expect(res.status).toBe(200);
       expect(res.body.restart).toBe('skipped');
       const onDisk = JSON.parse(
-        await fsp.readFile(join(workDir, '.omo', 'omo.jsonc'), 'utf8'),
+        await fsp.readFile(join(omoDir, 'omo.jsonc'), 'utf8'),
       );
       expect(onDisk.agents.sisyphus).toEqual({ model: 'a/b' });
     } finally {
