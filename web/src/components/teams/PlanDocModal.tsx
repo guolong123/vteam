@@ -5,11 +5,15 @@
  * `GET /tasks/:id/plan-docs` 已把正文随列表一次下发，本组件只负责渲染，
  * 因此打开弹窗是零延迟的，也不会出现"列表有、点开转圈"的不一致窗口。
  *
+ * 正文走 `DocsMarkdown`（react-markdown + remark-gfm + Mermaid）——计划文件是 Markdown，
+ * 直接 pre-wrap 会把 `#`/表格/列表原样显示出来。复用文档站同一渲染器，样式与行为一致。
+ *
  * 数据来源是任务目录 `.opencode/plans/*.md` 的真实文件内容——vteam 不自维护
  * 计划版本，故这里不再有 vN/版本列表的概念，只显示文件名与最后修改时间。
  */
 "use client";
 import { useEffect } from "react";
+import { DocsMarkdown } from "@/src/features/docs-site";
 import {
   neutral,
   space,
@@ -150,8 +154,10 @@ export function PlanDocModal({
           }}
         >
           {doc.content ? (
-            <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7, wordBreak: "break-word" }}>
-              {doc.content}
+            <div data-testid="plan-doc-modal-markdown">
+              {/* 首块标题在弹窗里不需要文档页那种 32px 上边距（内联样式需 !important 覆盖） */}
+              <style>{`[data-testid="plan-doc-modal-markdown"] > :first-child { margin-top: 0 !important; }`}</style>
+              <DocsMarkdown markdown={doc.content} />
             </div>
           ) : (
             <span style={{ color: neutral[400] }}>（空文件）</span>

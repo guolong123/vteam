@@ -553,14 +553,21 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(row.getByTestId("trigger-cancel")).toHaveCount(0);
   });
 
-  test("T24 计划区两类来源 + 执行步骤行（全 mock）", async ({ page }) => {
+  test("T24 计划区两类来源 + 执行步骤行 + 文档弹窗渲染 Markdown（全 mock）", async ({ page }) => {
     const now = new Date().toISOString();
     await page.route("**/api/v1/tasks/*/plan-docs", (r) =>
       r.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          files: [{ name: "e2e-plan-a.md", updatedAt: now, content: "# e2e plan", truncated: false }],
+          files: [
+            {
+              name: "e2e-plan-a.md",
+              updatedAt: now,
+              content: "# e2e plan\n\n- 项一\n- 项二\n\n| A | B |\n| - | - |\n| 1 | 2 |\n",
+              truncated: false,
+            },
+          ],
           workerId: "w1",
           directory: "/tmp",
           degraded: false,
@@ -607,6 +614,17 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     // 执行步骤行两态
     await expect(page.locator('[data-testid="plan-step-in_progress"]')).toContainText("e2e步骤一");
     await expect(page.locator('[data-testid="plan-step-pending"]')).toContainText("e2e步骤二");
+    // 点击计划文档 → 弹窗弹出，正文按 Markdown 渲染（标题/列表/表格 成元素，而非原样 # 文本）
+    await page.getByTestId("plan-doc-row-e2e-plan-a.md").click();
+    const modal = page.getByTestId("plan-doc-modal");
+    await expect(modal).toBeVisible();
+    await expect(modal.locator("h1")).toHaveText("e2e plan");
+    await expect(modal.locator("li")).toHaveCount(2);
+    await expect(modal.locator("table")).toBeVisible();
+    await expect(modal.getByTestId("plan-doc-modal-markdown")).not.toContainText("# e2e plan");
+    await expect(modal.getByTestId("plan-doc-modal-markdown")).not.toContainText("| A | B |");
+    await modal.getByTestId("plan-doc-modal-close").click();
+    await expect(modal).toHaveCount(0);
   });
 
   test("T24 错误态分支（plan-docs-error + artifacts-error）", async ({ page }) => {
