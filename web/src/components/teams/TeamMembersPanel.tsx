@@ -233,6 +233,36 @@ export function TeamMembersPanel({
     return map;
   }, [agentsDirQuery.data]);
 
+  // effectiveModel 可能是 `md_` 主键（agent.defaultModelId 的实际形态）——它不含 `/`，
+  // split("/").pop() 会原样吐出 md_ 编号；按 id 定向补查其名称后展示（与 Agent 页口径一致）。
+  const mdModelIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const v of templateModelByAgent.values()) {
+      if (v.startsWith("md_")) ids.add(v);
+    }
+    for (const a of agents) {
+      if (a.overrideModelId?.startsWith("md_")) ids.add(a.overrideModelId);
+    }
+    return [...ids];
+  }, [templateModelByAgent, agents]);
+  const mdModelsQuery = useQuery({
+    queryKey: ["model-by-id", mdModelIds],
+    queryFn: () =>
+      Promise.all(
+        mdModelIds.map((id) =>
+          api.get<{ id: string; name: string }>(`/models/${id}`),
+        ),
+      ),
+    enabled: mdModelIds.length > 0,
+    retry: false,
+  });
+  const modelLabel = (v: string): string => {
+    if (v.startsWith("md_")) {
+      return mdModelsQuery.data?.find((m) => m?.id === v)?.name ?? v;
+    }
+    return v.split("/").pop() ?? v;
+  };
+
   const openPanel = () => {
     if (!teamEditable || adding) return;
     setSelectedRoleId(null);
@@ -440,7 +470,9 @@ export function TeamMembersPanel({
                     setModelPicker(modelPicker === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
                     setOpenMenu(null);
                   }}
-                  title={effectiveModel || "跟随模板（点击设置模型）"}
+                  title={
+                    effectiveModel ? modelLabel(effectiveModel) : "跟随模板（点击设置模型）"
+                  }
                   style={{
                     marginTop: 4,
                     display: "inline-flex",
@@ -460,7 +492,7 @@ export function TeamMembersPanel({
                   }}
                 >
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {effectiveModel ? String(effectiveModel).split("/").pop() : "跟随模板"}
+                    {effectiveModel ? modelLabel(effectiveModel) : "跟随模板"}
                   </span>
                   <span style={{ fontSize: 8 }}>▼</span>
                 </button>

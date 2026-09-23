@@ -2810,15 +2810,37 @@ export default function AgentConfigPage() {
   const catalogByRef = useMemo(() => {
     const map = new Map<string, CatalogRow>();
     for (const r of catalogQuery.data?.items ?? []) {
+      map.set(r.id, r); // md_ 主键（agent.defaultModelId 形态）
       map.set(`${r.providerID}/${r.modelID}`, r);
       // 存量 defaultModelId 可能是不含 '/' 的旧自由字符串 → 裸 modelID 也纳入兼容校验
       map.set(r.modelID, r);
     }
     return map;
   }, [catalogQuery.data]);
+
+  // defaultModelId 是 md_ 主键，而目录只取首页（全量目录 8k+ 行）——首页未命中的按 id 定向补查，
+  // 否则「默认模型」会回落显示原始 md_ 编号。
+  const missingModelIds = useMemo(() => {
+    const seen = new Set<string>();
+    for (const a of agents) {
+      const id = a.defaultModelId;
+      if (typeof id === "string" && id.startsWith("md_") && !catalogByRef.has(id)) {
+        seen.add(id);
+      }
+    }
+    return [...seen];
+  }, [agents, catalogByRef]);
+  const missingModelsQuery = useQuery({
+    queryKey: ["model-by-id", missingModelIds],
+    queryFn: () =>
+      Promise.all(missingModelIds.map((id) => api.get<CatalogRow>(`/models/${id}`))),
+    enabled: missingModelIds.length > 0,
+  });
   const modelNameOf = useCallback(
-    (id: string) => catalogByRef.get(id)?.name,
-    [catalogByRef]
+    (id: string) =>
+      catalogByRef.get(id)?.name ??
+      missingModelsQuery.data?.find((r) => r?.id === id)?.name,
+    [catalogByRef, missingModelsQuery.data],
   );
 
   // worker 列表：GET /workers（首选 worker 选择数据源，在线优先展示）
