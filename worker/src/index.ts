@@ -699,17 +699,19 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       // C6：记录本次注册是否携带 models（探测降级 undefined = 未上报）——
       // reRegister 快路径据此决定是否必须全量重探。
       lastModelsReported = models !== undefined;
-      // 覆盖补注入：首次启动的 injectAll 在注册前执行，server 尚无本 worker 的
-      // capabilities.mcpUrl（注册才上报）→ 内置 vteam 地址不会被覆盖。注册成功
-      // （mcpUrl 已入库）后重拉 mcp-servers，使覆盖地址写入 opencode.json。
+      // 注册后**全量**重注入（injectAll 幂等：文件覆盖写、受管 agent 已中性化不重复）：
+      // ① mcpUrl 覆盖——首次 injectAll 在注册前执行，server 尚无本 worker 的
+      //    capabilities.mcpUrl（注册才上报）→ 内置 vteam 地址需注册后重拉才写入 opencode.json；
+      // ② 启动竞态自愈——server 未 Ready 时首拉 fetch failed，会缺 skills/agent 节点/MCP，
+      //    只补 injectMcp 覆盖不到 skills 与 agent 节点（k8s 实测 .opencode/skills 空、agent:[]）。
       try {
-        const mcpServers = await injector.injectMcp();
-        lastInjectReport = { ...lastInjectReport, mcpServers };
+        const report = await injector.injectAll();
+        lastInjectReport = report;
         console.log(
-          `[worker] 注册后 MCP 重注入完成: ${mcpServers.length} servers（内置 vteam 地址按 mcpUrl 覆盖）`,
+          `[worker] 注册后全量重注入完成: ${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers`,
         );
       } catch (err) {
-        console.warn(`[worker] 注册后 MCP 重注入失败: ${(err as Error).message}`);
+        console.warn(`[worker] 注册后重注入失败: ${(err as Error).message}`);
       }
     }
     return result;
