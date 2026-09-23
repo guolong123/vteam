@@ -824,13 +824,30 @@ const TRIGGER_STATUS_THEME: Record<string, { label: string; color: string }> = {
   failed: { label: "失败", color: "#DC2626" },
 };
 
-/** 触发时间短标签（nextFireAt 优先，无时间显示"—"）。 */
-function triggerFireLabel(t: TriggerItem): string {
+/**
+ * 触发时间人话标签（对齐原型「今天 02:00」形态）：今/明/昨 + HH:mm，更远用 M/D HH:mm。
+ * 一次性触发器（催办等）nextFireAt 恒为 null → 回落 dueAt；若该时刻已过而仍 pending，
+ * 前缀「应于」——否则过去的绝对时间戳会被误读成「已触发」。
+ */
+function triggerTimeLabel(t: TriggerItem): string {
   const iso = t.nextFireAt ?? t.dueAt;
   if (!iso) return "—";
   const ms = new Date(iso).getTime();
   if (!Number.isFinite(ms)) return "—";
-  return new Date(ms).toLocaleString("zh-CN");
+  const d = new Date(ms);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const dayStart = (x: Date): number =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((dayStart(d) - dayStart(new Date())) / 86_400_000);
+  const label =
+    dayDiff === 0
+      ? `今天 ${hm}`
+      : dayDiff === 1
+        ? `明天 ${hm}`
+        : dayDiff === -1
+          ? `昨天 ${hm}`
+          : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+  return t.status === "pending" && ms < Date.now() ? `应于 ${label}` : label;
 }
 
 /** 绝对时间短标签（无效/缺失返回 null，调用方跳过该行）。 */
@@ -862,26 +879,6 @@ function triggerTitleOf(t: TriggerItem): string {
   return TRIGGER_KIND_LABEL[t.kind] ?? "触发器";
 }
 
-/** 范围文案：display 优先（team · label），taskLabel 与 scopeLabel 重复时去重；缺 display 回退 scope 列。 */
-function triggerScopeText(t: TriggerItem): string | null {
-  const label = t.display?.scopeLabel ?? (t.scopeType && t.scopeId ? `${t.scopeType}/${t.scopeId}` : "全局");
-  const body = t.display?.taskLabel === label ? null : label;
-  if (!body) return t.display?.scopeTeam ?? null;
-  return t.display?.scopeTeam ? `${t.display.scopeTeam} · ${body}` : body;
-}
-
-/** 归属文案：display.ownerLabel 优先（"—" 视为缺失），缺 display 回退 owner 实例 id。 */
-function triggerOwnerText(t: TriggerItem): string | null {
-  const owner = t.display?.ownerLabel;
-  if (owner && owner !== "—") return owner;
-  return t.ownerInstanceId ?? null;
-}
-
-/** 任务文案：display.taskLabel（与范围重复与否由调用方按需展示）。 */
-function triggerTaskText(t: TriggerItem): string | null {
-  return t.display?.taskLabel ?? null;
-}
-
 /**
  * 触发 Tab 面板：当前任务/团队作用域的触发器只读列表。
  * 系统来源行只读（无取消按钮），Agent 来源行可经 ConfirmDialog 取消。
@@ -908,7 +905,7 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
     <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: space.sm }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>触发器</span>
-        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{triggersQuery.data?.total ?? items.length} 个</span>
+        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{items.filter((t) => t.status === "pending").length} 待触发</span>
       </div>
       {triggersQuery.isPending ? (
         <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
@@ -923,10 +920,6 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
           {items.map((t) => {
             const st = TRIGGER_STATUS_THEME[t.status] ?? { label: t.status, color: neutral[500] };
             const title = triggerTitleOf(t);
-            const kindLabel = TRIGGER_KIND_LABEL[t.kind] ?? t.kind;
-            const scopeText = triggerScopeText(t);
-            const ownerText = triggerOwnerText(t);
-            const taskText = triggerTaskText(t);
             return (
               <div
                 key={t.id}
@@ -935,37 +928,33 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
                 data-kind={t.kind}
                 data-source={t.source}
                 data-status={t.status}
-                style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}
+                style={{ display: "flex", flexDirection: "column", gap: space.xs, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}
               >
-                <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: st.color, flexShrink: 0 }} />
-                <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-                  <span style={{ display: "flex", alignItems: "baseline", gap: space.xs, minWidth: 0, fontWeight: 500 }}>
-                    <span data-testid="trigger-title" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
-                    <span aria-hidden style={{ color: neutral[300], flexShrink: 0 }}>·</span>
-                    <span style={{ color: st.color, flexShrink: 0, whiteSpace: "nowrap" }}>{st.label}</span>
-                  </span>
-                  <span style={{ fontSize: 10, color: neutral[400] }}>
-                    {triggerFireLabel(t)} · {t.source === "agent" ? "Agent" : "系统"} · 触发 {t.fireCount} 次 · 类型 {kindLabel}
-                    {scopeText && <> · 范围 <span data-testid="trigger-scope">{scopeText}</span></>}
-                    {ownerText && <> · 归属 <span data-testid="trigger-owner">{ownerText}</span></>}
-                    {taskText && <> · 任务 <span data-testid="trigger-task">{taskText}</span></>}
-                  </span>
-                  {t.skipReason && (
-                    <span data-testid="trigger-skip-reason" style={{ fontSize: 10, color: "#D97706", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>跳过原因：{t.skipReason}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
+                  <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: st.color, flexShrink: 0 }} />
+                  <span data-testid="trigger-title" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{title}</span>
+                  <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: st.color }}>{st.label}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: space.xs, paddingLeft: 15, fontSize: 10, color: neutral[400] }}>
+                  <span>{t.source === "agent" ? "Agent" : "系统"}</span>
+                  <span aria-hidden style={{ color: neutral[300] }}>·</span>
+                  <span data-testid="trigger-time" style={{ whiteSpace: "nowrap" }}>{triggerTimeLabel(t)}</span>
+                  {t.source === "agent" && (
+                    <button
+                      type="button"
+                      data-testid="trigger-cancel"
+                      data-trigger-id={t.id}
+                      disabled={cancelMutation.isPending}
+                      title="取消该触发器"
+                      onClick={() => { setCancelError(null); setConfirmId(t.id); }}
+                      style={{ marginLeft: "auto", padding: "2px 8px", borderRadius: radius.pill, border: "1px solid rgba(239,68,68,0.22)", backgroundColor: "rgba(239,68,68,0.06)", color: "#DC2626", fontSize: 10, fontWeight: 500, cursor: cancelMutation.isPending ? "default" : "pointer", opacity: cancelMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body, flexShrink: 0 }}
+                    >
+                      取消
+                    </button>
                   )}
-                </span>
-                {t.source === "agent" && (
-                  <button
-                    type="button"
-                    data-testid="trigger-cancel"
-                    data-trigger-id={t.id}
-                    disabled={cancelMutation.isPending}
-                    title="取消该触发器"
-                    onClick={() => { setCancelError(null); setConfirmId(t.id); }}
-                    style={{ padding: "2px 8px", borderRadius: radius.pill, border: "1px solid rgba(239,68,68,0.22)", backgroundColor: "rgba(239,68,68,0.06)", color: "#DC2626", fontSize: 10, fontWeight: 500, cursor: cancelMutation.isPending ? "default" : "pointer", opacity: cancelMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body, flexShrink: 0 }}
-                  >
-                    取消
-                  </button>
+                </div>
+                {t.skipReason && (
+                  <div data-testid="trigger-skip-reason" style={{ paddingLeft: 15, fontSize: 10, color: "#D97706", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>跳过原因：{t.skipReason}</div>
                 )}
               </div>
             );

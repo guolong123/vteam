@@ -498,6 +498,61 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("trigger-empty")).toContainText("暂无触发器");
   });
 
+  test("T24 触发行对齐原型：人话时间 + 精简元信息（系统行不可取消）", async ({
+    page,
+  }) => {
+    const today = new Date();
+    today.setHours(0, 1, 0, 0);
+    const dueIso = today.toISOString();
+    await page.route("**/api/v1/triggers*", (r) =>
+      r.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          items: [
+            {
+              id: "tmr_p1",
+              kind: "receipt_nudge",
+              status: "pending",
+              dueAt: dueIso,
+              nextFireAt: null,
+              scopeType: "team",
+              scopeId: "tm_0000000001",
+              ownerInstanceId: "tmm_0000000002",
+              fireCount: 0,
+              skipReason: null,
+              lastError: null,
+              attempts: 0,
+              createdAt: dueIso,
+              source: "system",
+              display: { description: "完工回执（第 4 次派发）" },
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 100,
+        }),
+      }),
+    );
+    const panel = page.getByTestId("task-panel");
+    await page.goto("/teams/tm_0000000001/session");
+    await panel.getByRole("button", { name: "任务", exact: true }).click();
+    await panel.getByTestId("task-subtab-triggers").click();
+    const row = page.getByTestId("trigger-row").first();
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId("trigger-title")).toContainText("完工回执");
+    await expect(row).toContainText("待触发");
+    // 时间：nextFireAt 为 null 且 dueAt 已过 → 「应于 今天 HH:mm」（不再是被误读的绝对时间戳）
+    await expect(row.getByTestId("trigger-time")).toContainText("应于 今天 00:01");
+    await expect(row).toContainText("系统");
+    // 精简：原型次行只留「来源 · 时间」，不再有 触发N次/类型/范围/归属/任务
+    await expect(row).not.toContainText("类型");
+    await expect(row).not.toContainText("归属");
+    await expect(row).not.toContainText("任务");
+    // 系统来源触发器只读（不因"对齐原型"而给出取消按钮）
+    await expect(row.getByTestId("trigger-cancel")).toHaveCount(0);
+  });
+
   test("T24 计划区两类来源 + 执行步骤行（全 mock）", async ({ page }) => {
     const now = new Date().toISOString();
     await page.route("**/api/v1/tasks/*/plan-docs", (r) =>
