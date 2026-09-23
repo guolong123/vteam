@@ -1,0 +1,23 @@
+# worker opencode serve Service（仅 opencodeIngress.enabled=true 时创建）
+# 暴露 worker 容器内部的 opencode web/serve 端口（与 headless service 的 serve 端口一致），
+# 供独立 Ingress 转发。headless service 不适合做 ingress 后端（逐 pod DNS，且集群里
+# 无共享 ClusterIP），故此处单列一个 ClusterIP。
+# ⚠️ opencode serve **无鉴权**：该入口等同于一个可执行任意命令、读写文件的 Web 终端，
+#    默认不创建（opencodeIngress.enabled=false）；开启时务必配合 whitelistSourceRange。
+{{- if .Values.opencodeIngress.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vteam.worker.name" . }}-serve
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "worker-serve") | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "vteam.matchLabels" (dict "context" . "component" "worker") | nindent 4 }}
+  ports:
+    - name: serve
+      port: {{ .Values.service.worker.port }}
+      targetPort: {{ .Values.worker.env.servePort }}
+      protocol: TCP
+{{- end }}
