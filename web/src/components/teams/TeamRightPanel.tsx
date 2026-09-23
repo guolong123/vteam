@@ -10,6 +10,7 @@ import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { PlanDocModal, type PlanDocContent } from "@/src/components/teams/PlanDocModal";
 import { ArtifactDocModal } from "@/src/components/teams/ArtifactDocModal";
+import { TriggerDetailModal } from "@/src/components/teams/TriggerDetailModal";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -889,6 +890,8 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
   const triggersQuery = useTaskTriggers(taskId, teamId);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  /** 详情弹窗当前展示的触发器（点行弹出；行内只留「来源 · 时间」，元信息收进弹窗）。 */
+  const [detailTrigger, setDetailTrigger] = useState<TriggerItem | null>(null);
   const cancelMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/triggers/${id}`),
     onSuccess: () => {
@@ -929,7 +932,17 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
                 data-kind={t.kind}
                 data-source={t.source}
                 data-status={t.status}
-                style={{ display: "flex", flexDirection: "column", gap: space.xs, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}
+                role="button"
+                tabIndex={0}
+                title="点击查看详情"
+                onClick={() => setDetailTrigger(t)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setDetailTrigger(t);
+                  }
+                }}
+                style={{ display: "flex", flexDirection: "column", gap: space.xs, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", cursor: "pointer" }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
                   <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: st.color, flexShrink: 0 }} />
@@ -947,7 +960,7 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
                       data-trigger-id={t.id}
                       disabled={cancelMutation.isPending}
                       title="取消该触发器"
-                      onClick={() => { setCancelError(null); setConfirmId(t.id); }}
+                      onClick={(e) => { e.stopPropagation(); setCancelError(null); setConfirmId(t.id); }}
                       style={{ marginLeft: "auto", padding: "2px 8px", borderRadius: radius.pill, border: "1px solid rgba(239,68,68,0.22)", backgroundColor: "rgba(239,68,68,0.06)", color: "#DC2626", fontSize: 10, fontWeight: 500, cursor: cancelMutation.isPending ? "default" : "pointer", opacity: cancelMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body, flexShrink: 0 }}
                     >
                       取消
@@ -963,6 +976,15 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
         </div>
       )}
       {cancelError && <div data-testid="trigger-cancel-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{cancelError}</div>}
+      <TriggerDetailModal
+        trigger={detailTrigger}
+        onCancel={(t) => {
+          setDetailTrigger(null);
+          setCancelError(null);
+          setConfirmId(t.id);
+        }}
+        onClose={() => setDetailTrigger(null)}
+      />
       <ConfirmDialog
         open={!!confirmItem}
         testid="trigger-cancel"

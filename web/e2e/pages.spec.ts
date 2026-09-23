@@ -533,7 +533,13 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
               attempts: 0,
               createdAt: dueIso,
               source: "system",
-              display: { description: "完工回执（第 4 次派发）" },
+              display: {
+                description: "完工回执（第 4 次派发）",
+                scopeLabel: "vteam开发团队",
+                scopeTeam: "vteam开发团队",
+                ownerLabel: "项目经理-1",
+                taskLabel: "e2e-BoardDrawer",
+              },
             },
           ],
           total: 1,
@@ -559,6 +565,21 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(row).not.toContainText("任务");
     // 系统来源触发器只读（不因"对齐原型"而给出取消按钮）
     await expect(row.getByTestId("trigger-cancel")).toHaveCount(0);
+    // 点击行 → 详情弹窗（行内精简掉的元信息收进弹窗）
+    await row.click();
+    const detail = page.getByTestId("trigger-detail-modal");
+    await expect(detail).toBeVisible();
+    await expect(detail.getByTestId("trigger-detail-status")).toHaveText("待触发");
+    await expect(detail.getByTestId("trigger-detail-body")).toContainText("催办");
+    await expect(detail.getByTestId("trigger-detail-body")).toContainText("系统");
+    await expect(detail.getByTestId("trigger-detail-body")).toContainText("vteam开发团队");
+    await expect(detail.getByTestId("trigger-detail-body")).toContainText("项目经理-1");
+    await expect(detail.getByTestId("trigger-detail-body")).toContainText("0 次");
+    await expect(detail.getByTestId("trigger-detail-body")).toContainText("tmr_p1");
+    // 系统来源：详情里同样无取消入口（与行内一致）
+    await expect(detail.getByTestId("trigger-detail-cancel")).toHaveCount(0);
+    await detail.getByTestId("trigger-detail-close").click();
+    await expect(detail).toHaveCount(0);
   });
 
   test("T24 计划区两类来源 + 执行步骤行 + 文档弹窗渲染 Markdown（全 mock）", async ({ page }) => {
