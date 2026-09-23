@@ -2273,4 +2273,53 @@ describe('WorkersService', () => {
       ).toBe(false);
     });
   });
+
+  describe('assignWorker（模型要求匹配，md_ 主键与 provider/model 双形态）', () => {
+    const workerRow = (over: Record<string, unknown> = {}) => ({
+      id: 'w_1',
+      status: WORKER_STATUS.ONLINE,
+      opencodeVersion: '1.18.32',
+      defaultModelId: null,
+      capabilities: { maxInstances: 10 },
+      load: { instances: 0 },
+      modelAvailabilities: [
+        {
+          modelId: 'md_9',
+          model: { enabled: true, providerID: 'opencode', modelID: 'm1' },
+        },
+      ],
+      ...over,
+    });
+
+    beforeEach(() => {
+      prisma.worker.findMany.mockResolvedValue([workerRow()]);
+    });
+
+    it('modelId 为 md_ 主键 → 命中（agents.defaultModelId 实际形态；曾致「无可用 worker」）', async () => {
+      await expect(service.assignWorker({ modelId: 'md_9' })).resolves.toBe('w_1');
+    });
+
+    it('modelId 为 provider/model 引用 → 命中（原口径保持）', async () => {
+      await expect(service.assignWorker({ modelId: 'opencode/m1' })).resolves.toBe('w_1');
+    });
+
+    it('模型不在该 worker 可用集 → 拒绝（null）', async () => {
+      await expect(service.assignWorker({ modelId: 'md_other' })).resolves.toBeNull();
+    });
+
+    it('可用性行 enabled=false → 不算可用（null）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        workerRow({
+          modelAvailabilities: [
+            {
+              modelId: 'md_9',
+              model: { enabled: false, providerID: 'opencode', modelID: 'm1' },
+            },
+          ],
+        }),
+      ]);
+      await expect(service.assignWorker({ modelId: 'opencode/m1' })).resolves.toBeNull();
+    });
+  });
+
 });

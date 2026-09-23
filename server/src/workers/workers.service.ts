@@ -788,10 +788,14 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     if (avail.length === 0) {
       return true;
     }
+    // modelId 允许两种形态：`md_` 主键（agents.defaultModelId 的实际形态，模型选择器
+    // 写入的就是它）与 `provider/model` 引用——只认后者时，一旦给 agent 设了默认模型，
+    // 派发就会因永不匹配而报「无可用 worker」。
     return avail.some(
       (a) =>
         a.model?.enabled !== false &&
-        `${a.model?.providerID}/${a.model?.modelID}` === modelId,
+        (a.modelId === modelId ||
+          `${a.model?.providerID}/${a.model?.modelID}` === modelId),
     );
   }
 
