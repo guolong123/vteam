@@ -298,15 +298,25 @@ export default function TeamSessionPage() {
   });
 
   /* ---------- 提问补拉 ---------- */
+  /* 团队会话的 pending 行 taskId=''（按会话归属团队），无当前任务时必须改传 teamId 查询，
+     否则纯团队聊天下刷新后弹窗无法恢复（SSE 仅实时一帧，断线/刷新即丢）。 */
   const questionsQuery = useQuery({
-    queryKey: ["questions", currentTaskId, "pending"],
-    queryFn: () => api.get<QuestionModalData[]>(`/questions`, { query: { taskId: currentTaskId!, status: "pending" } }),
-    enabled: !!currentTaskId && !!user?.id,
+    queryKey: ["questions", currentTaskId ?? teamId, "pending"],
+    queryFn: () =>
+      api.get<QuestionModalData[]>(`/questions`, {
+        query: currentTaskId
+          ? { taskId: currentTaskId, status: "pending" }
+          : { teamId, status: "pending" },
+      }),
+    enabled: (!!currentTaskId || !!teamId) && !!user?.id,
   });
   useEffect(() => {
     const pending = questionsQuery.data;
     if (!pending || pending.length === 0) return;
-    setPendingQuestion((prev) => prev ?? (pending[0]?.managedMode ? null : pending[0]));
+    // 取首个**非托管** pending（托管项由主 Agent 路由，前端不弹）——
+    // 盲取 [0] 会让托管项挡住后面可直接处理的权限/问题。
+    const actionable = pending.find((p) => !p.managedMode);
+    setPendingQuestion((prev) => prev ?? (actionable ?? null));
   }, [questionsQuery.data]);
 
   /* ---------- 成员（当前任务实例优先，成员管理回调挂当前任务） ---------- */
