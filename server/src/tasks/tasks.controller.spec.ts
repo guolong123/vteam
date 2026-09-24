@@ -1,5 +1,5 @@
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
-import { ServiceUnavailableException } from '@nestjs/common';
+import { ServiceUnavailableException, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
@@ -528,7 +528,7 @@ describe('TasksController', () => {
       ).toHaveLength(0);
     });
 
-    it('UpdateTaskDto：priority 枚举，title/description 可选，主实例/主 Agent 兼容', async () => {
+    it('UpdateTaskDto：priority 枚举，title/description 可选，主 Agent 标量已移除', async () => {
       expect(
         await errorsOf(UpdateTaskDto, { priority: 'urgent' }),
       ).not.toHaveLength(0);
@@ -537,10 +537,35 @@ describe('TasksController', () => {
           title: 'x',
           description: 'd',
           priority: 'low',
-          mainAgentInstanceId: 'tmm_1',
-          mainAgentId: 'a_1',
         }),
       ).toHaveLength(0);
+    });
+
+    it('UpdateTaskDto：全局 ValidationPipe 静默剥离陈旧 mainAgentId（当前 forbid=false）', async () => {
+      const pipe = new ValidationPipe({
+        whitelist: true,
+        transform: true,
+        forbidNonWhitelisted: false,
+      });
+      const out = (await pipe.transform(
+        { title: '仍可更新', mainAgentId: 'a_1' },
+        { type: 'body', metatype: UpdateTaskDto },
+      )) as UpdateTaskDto & { mainAgentId?: unknown };
+
+      expect(out.title).toBe('仍可更新');
+      expect(out).not.toHaveProperty('mainAgentId');
+
+      const strictPipe = new ValidationPipe({
+        whitelist: true,
+        transform: true,
+        forbidNonWhitelisted: true,
+      });
+      await expect(
+        strictPipe.transform(
+          { title: '仍可更新', mainAgentId: 'a_1' },
+          { type: 'body', metatype: UpdateTaskDto },
+        ),
+      ).rejects.toMatchObject({ status: 400 });
     });
 
     it('RejectTaskDto：reason 可选字符串', async () => {

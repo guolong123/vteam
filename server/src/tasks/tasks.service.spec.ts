@@ -595,11 +595,13 @@ describe('TasksService', () => {
           data: expect.objectContaining({
             teamId,
             status: 'pending',
-            mainAgentId: null,
-            mainAgentInstanceId: null,
           }),
         }),
       );
+      const createData = tx.task.create.mock.calls[0][0].data;
+      expect(createData).not.toHaveProperty('mainAgentId');
+      expect(createData).not.toHaveProperty('mainAgentInstanceId');
+      expect(createData).not.toHaveProperty('executionMode');
       expect(tx.team.updateMany).toHaveBeenCalledWith({
         where: { id: teamId, version: 0 },
         data: { currentTaskId: taskId, version: { increment: 1 } },
@@ -618,7 +620,7 @@ describe('TasksService', () => {
       );
     });
 
-    it('团队有主 Agent 时创建任务继承主实例（无设定则保持 null）', async () => {
+    it('团队有主 Agent 时创建任务不写入任务侧主标量', async () => {
       const taskId = 't_0000000003';
       const tx = setupTxIdle(taskId);
       tx.team.findUnique.mockResolvedValue({
@@ -639,12 +641,13 @@ describe('TasksService', () => {
 
       expect(tx.task.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({
-            mainAgentId: 'a_developer',
-            mainAgentInstanceId: 'tmm_0000000002',
-          }),
+          data: expect.objectContaining({ teamId }),
         }),
       );
+      const createData = tx.task.create.mock.calls[0][0].data;
+      expect(createData).not.toHaveProperty('mainAgentId');
+      expect(createData).not.toHaveProperty('mainAgentInstanceId');
+      expect(createData).not.toHaveProperty('executionMode');
     });
 
     it('忙时团队：创建 queued 任务，写入 TeamQueue position=MAX+1 FOR UPDATE，currentTaskId 不变', async () => {
@@ -1412,19 +1415,9 @@ describe('TasksService', () => {
   });
 
   describe('update（PATCH 编辑）', () => {
-    it('mainAgentId 为团队内已选 Agent 时更新成功（同步映射到第一个实例）', async () => {
+    it('已移除的 mainAgentId 不参与 PATCH 写入', async () => {
       prisma.task.findUnique.mockResolvedValue(row());
-      prisma.teamMember.findMany.mockResolvedValue([
-        memberRow('a_product'),
-        memberRow('a_developer'),
-      ]);
-      prisma.task.update.mockResolvedValue(
-        row({
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
-          title: '改名',
-        }),
-      );
+      prisma.task.update.mockResolvedValue(row({ title: '改名' }));
 
       const result = await service.update('t_0000000001', {
         title: '改名',
@@ -1433,104 +1426,71 @@ describe('TasksService', () => {
 
       expect(prisma.task.update).toHaveBeenCalledWith({
         where: { id: 't_0000000001' },
-        data: {
-          title: '改名',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
-        },
+        data: { title: '改名' },
       });
-      expect(result).toMatchObject({
-        title: '改名',
-        mainAgentMemberId: 'tmm_0000000001',
-      });
+      expect(result.title).toBe('改名');
     });
 
-    it('mainAgentInstanceId 为团队内实例时更新成功（同步 mainAgentId）', async () => {
+    it('已移除的 mainAgentInstanceId 不参与 PATCH 写入', async () => {
       prisma.task.findUnique.mockResolvedValue(row());
-      prisma.teamMember.findMany.mockResolvedValue([
-        memberRow('a_product'),
-        memberRow('a_developer'),
-      ]);
-      prisma.task.update.mockResolvedValue(
-        row({
-          mainAgentId: 'a_developer',
-          mainAgentInstanceId: 'tmm_0000000002',
-        }),
-      );
+      prisma.task.update.mockResolvedValue(row({ description: '新描述' }));
 
       const result = await service.update('t_0000000001', {
+        description: '新描述',
         mainAgentInstanceId: 'tmm_0000000002',
       } as any);
 
       expect(prisma.task.update).toHaveBeenCalledWith({
         where: { id: 't_0000000001' },
-        data: {
-          mainAgentInstanceId: 'tmm_0000000002',
-          mainAgentId: 'a_developer',
-        },
+        data: { description: '新描述' },
       });
-      expect(result).toMatchObject({ mainAgentMemberId: 'tmm_0000000001' });
+      expect(result.description).toBe('新描述');
     });
 
-    it('mainAgentInstanceId 非团队内实例 → 400 MAIN_AGENT_NOT_IN_TEAM', async () => {
+    it('已移除的 mainAgentInstanceId 不再触发团队内实例校验', async () => {
       prisma.task.findUnique.mockResolvedValue(row());
-      prisma.teamMember.findMany.mockResolvedValue([memberRow('a_product')]);
+      prisma.task.update.mockResolvedValue(row({ title: '仍可更新' }));
 
-      await expect(
-        service.update('t_0000000001', {
-          mainAgentInstanceId: 'tmm_ghost',
-        } as any),
-      ).rejects.toThrow(BadRequestException);
-      try {
-        await service.update('t_0000000001', {
-          mainAgentInstanceId: 'tmm_ghost',
-        } as any);
-        fail('应抛出 BadRequestException');
-      } catch (e) {
-        expect((e as BadRequestException).getResponse()).toMatchObject({
-          code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-        });
-      }
-      expect(prisma.task.update).not.toHaveBeenCalled();
+      const result = await service.update('t_0000000001', {
+        title: '仍可更新',
+        mainAgentInstanceId: 'tmm_ghost',
+      } as any);
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 't_0000000001' },
+        data: { title: '仍可更新' },
+      });
+      expect(result.title).toBe('仍可更新');
     });
 
-    it('mainAgentInstanceId 传 null → 清除主 Agent（mainAgentId 同步 null）', async () => {
+    it('已移除的 mainAgentInstanceId null 不再清空主标量', async () => {
       prisma.task.findUnique.mockResolvedValue(row());
-      prisma.task.update.mockResolvedValue(
-        row({ mainAgentId: null, mainAgentInstanceId: null }),
-      );
+      prisma.task.update.mockResolvedValue(row({ priority: 'low' }));
 
       await service.update('t_0000000001', {
+        priority: 'low',
         mainAgentInstanceId: null,
       } as any);
 
       expect(prisma.task.update).toHaveBeenCalledWith({
         where: { id: 't_0000000001' },
-        data: { mainAgentInstanceId: null, mainAgentId: null },
+        data: { priority: 'low' },
       });
     });
 
-    it('mainAgentId 非团队内已选 Agent → 400 MAIN_AGENT_NOT_IN_TEAM', async () => {
+    it('已移除的 mainAgentId 不再做兼容映射', async () => {
       prisma.task.findUnique.mockResolvedValue(row());
-      prisma.teamMember.findMany.mockResolvedValue([
-        memberRow('a_product'),
-        memberRow('a_developer'),
-      ]);
+      prisma.task.update.mockResolvedValue(row({ description: '仍可更新' }));
 
-      await expect(
-        service.update('t_0000000001', { mainAgentId: 'a_tester' } as any),
-      ).rejects.toThrow(BadRequestException);
-      try {
-        await service.update('t_0000000001', {
-          mainAgentId: 'a_tester',
-        } as any);
-        fail('应抛出 BadRequestException');
-      } catch (e) {
-        expect((e as BadRequestException).getResponse()).toMatchObject({
-          code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-        });
-      }
-      expect(prisma.task.update).not.toHaveBeenCalled();
+      await service.update('t_0000000001', {
+        description: '仍可更新',
+        mainAgentId: 'a_tester',
+      } as any);
+
+      expect(prisma.task.update).toHaveBeenCalledWith({
+        where: { id: 't_0000000001' },
+        data: { description: '仍可更新' },
+      });
     });
 
     it('任务不存在 → 404 TASK_NOT_FOUND', async () => {
@@ -3714,7 +3674,7 @@ describe('TasksService', () => {
       expect(result.teamAgentIds).toEqual(['a_product']);
     });
 
-    it('remove 主成员 → 团队主成员清空（任务侧主标量同步 null）', async () => {
+    it('remove 主成员 → 团队主成员清空且不再写任务侧主标量', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(
           row({
@@ -3741,9 +3701,10 @@ describe('TasksService', () => {
         userId,
       );
 
-      expect(txModels.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: { mainAgentId: null, mainAgentInstanceId: null },
+      expect(txModels.task.update).not.toHaveBeenCalled();
+      expect(txModels.team.update).toHaveBeenCalledWith({
+        where: { id: 'tm_0000000001' },
+        data: { mainAgentMemberId: null },
       });
       expect(result.mainAgentMemberId).toBeNull();
     });

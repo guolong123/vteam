@@ -385,48 +385,6 @@ export class TeamsService implements OnModuleInit {
     }
 
     const full = await this.findOne(id);
-    // 主 Agent 变更回填：同步全部未终态任务（含 in_progress）。
-    // 原实现刻意跳过 in_progress（怕干扰运行中会话路由），但标量停写会与
-    // team.mainAgentMemberId 不一致，而读标量的地方（会话页主徽章 / 任务动作门 / MCP 门）
-    // 会因此误判——实测表现为改主后旧主仍显示「主」（双主徽章）。运行时路由与鉴权
-    // 已全部改判 team.mainAgentMemberId，此处同步标量只为消除陈旧读源。
-    if ((dto as any).mainAgentMemberId !== undefined) {
-      try {
-        const mainId: string | null = (full as any).mainAgentMemberId ?? null;
-        const member = mainId
-          ? await this.prisma.teamMember.findUnique({ where: { id: mainId } })
-          : null;
-        const openTasks = await this.prisma.task.findMany({
-          where: {
-            teamId: id,
-            status: { in: ['pending', 'queued', 'in_progress'] },
-          },
-          select: { id: true },
-        });
-        for (const t of openTasks) {
-          if (!member) {
-            await this.prisma.task.update({
-              where: { id: t.id },
-              data: { mainAgentId: null, mainAgentInstanceId: null },
-            });
-            continue;
-          }
-          // 主门团队化：任务侧只记模板 agent（mainAgentId），实例口径恒为团队成员
-          // （mainAgentInstanceId 置空，运行时唯一主门为 team.mainAgentMemberId）。
-          await this.prisma.task.update({
-            where: { id: t.id },
-            data: {
-              mainAgentId: (member as any).agentId,
-              mainAgentInstanceId: null,
-            },
-          });
-        }
-      } catch (e) {
-        this.logger.warn(
-          `回填团队主 Agent 到待启动任务失败 teamId=${id}: ${(e as Error)?.message ?? e}`,
-        );
-      }
-    }
     await this.realtime.broadcast(
       EVENT_TYPES.TEAM_CHANGED,
       { teamId: id, action: 'update' },

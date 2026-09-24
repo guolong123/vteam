@@ -77,7 +77,6 @@ type TaskRow = {
   description: string | null;
   priority: string;
   status: string;
-  executionMode: string;
   backgroundDocs: Prisma.JsonValue | null;
   resetAfterComplete?: boolean | null;
   teamId?: string | null;
@@ -402,14 +401,6 @@ export class TasksService implements OnModuleInit {
             });
           }
 
-          // 主 Agent 继承团队设定：team.mainAgentMemberId 指向的成员即任务主实例；
-          // 无设定则保持 null（serverGated 工具届时按“未设置”拒绝，与旧行为一致）。
-          const mainMember =
-            (team as any)?.mainAgentMemberId != null
-              ? (members.find(
-                  (m: any) => m.id === (team as any).mainAgentMemberId,
-                ) ?? null)
-              : null;
           const created = await tx.task.create({
             data: {
               id: taskId,
@@ -418,11 +409,6 @@ export class TasksService implements OnModuleInit {
               priority: dto.priority ?? TASK_PRIORITY.medium,
               status,
               teamId,
-              mainAgentId: mainMember?.agentId ?? null,
-              mainAgentInstanceId: mainMember?.id ?? null,
-              // executionMode 列保留但已停用（vteam 自造 plan 域下线，改由 opencode agent 承担）；
-              // 不再从 DTO 取值，恒写 direct 以保持列非空默认语义。
-              executionMode: 'direct',
               backgroundDocs: (dto.backgroundDocs ??
                 []) as Prisma.InputJsonValue,
               resetAfterComplete: (dto as any).resetAfterComplete ?? false,
@@ -724,7 +710,7 @@ export class TasksService implements OnModuleInit {
     return this.toTaskDto(task);
   }
 
-  /** 编辑任务：mainAgentInstanceId 须为团队内实例；mainAgentId 兼容映射到该 agent 第一个实例（FR-08）。 */
+  /** 编辑任务：仅更新可编辑任务字段；主 Agent 身份由 Team.mainAgentMemberId 管理。 */
   async update(id: string, dto: UpdateTaskDto) {
     const task = await this.prisma.task.findUnique({
       where: { id },
@@ -752,49 +738,6 @@ export class TasksService implements OnModuleInit {
     if ((dto as any).resetAfterComplete !== undefined) {
       data.resetAfterComplete = (dto as any).resetAfterComplete;
     }
-    // 主实例校验口径团队化：实例唯一来源为任务归属团队的团队成员（tmm_）。
-    const teamIdOf = (task as any).teamId ?? null;
-    const memberRows: Array<{ id: string; agentId: string }> = teamIdOf
-      ? await (this.prisma as any).teamMember.findMany({
-          where: { teamId: teamIdOf },
-          select: { id: true, agentId: true },
-        })
-      : [];
-    const instances = memberRows ?? [];
-    if (dto.mainAgentInstanceId !== undefined) {
-      // 主实例：须为团队内实例，同步 mainAgentId 为其 agent（渲染兜底）
-      if (dto.mainAgentInstanceId !== null) {
-        const inst = instances.find((i) => i.id === dto.mainAgentInstanceId);
-        if (!inst) {
-          throw new BadRequestException({
-            code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-            message: '主 Agent 必须是团队内实例',
-          });
-        }
-        data.mainAgentInstanceId = inst.id;
-        data.mainAgentId = inst.agentId;
-      } else {
-        data.mainAgentInstanceId = null;
-        data.mainAgentId = null;
-      }
-    } else if (dto.mainAgentId !== undefined) {
-      // 兼容路径：mainAgentId 映射到该 agent 第一个实例
-      if (dto.mainAgentId !== null) {
-        const inst = instances.find((i) => i.agentId === dto.mainAgentId);
-        if (!inst) {
-          throw new BadRequestException({
-            code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-            message: '主 Agent 必须是团队内已选 Agent',
-          });
-        }
-        data.mainAgentId = inst.agentId;
-        data.mainAgentInstanceId = inst.id;
-      } else {
-        data.mainAgentId = null;
-        data.mainAgentInstanceId = null;
-      }
-    }
-
     const updated = await this.prisma.task.update({
       where: { id },
       data,
@@ -810,7 +753,7 @@ export class TasksService implements OnModuleInit {
    * addInstances：每个实例写 team_members（seq = 该 teamId+agentId 已用最大 seq+1，事务内防并发重号）；
    *              同 agent 可加多实例。
    * removeInstanceIds：按成员 id 删除 team_members 行 + 冻结该成员 session（status=frozen）；
-   *                    主成员被移除时清空 team.mainAgentMemberId（任务侧主标量同步置空）。
+   *                    主成员被移除时清空 team.mainAgentMemberId。
    *                    产出物保留（本版不动 artifacts）。
    * 群聊联动：团队群频道写 system 消息（10 篇 §8.3 文案）+ 广播 chat.message.new（T9 模式）。
    * 审计：team 变更写 task_event（team_add/team_remove，actorType/actorId=userId 或 opts 确认方）。
@@ -908,10 +851,6 @@ export class TasksService implements OnModuleInit {
           await tx.team.update({
             where: { id: teamId },
             data: { mainAgentMemberId: null },
-          });
-          await tx.task.update({
-            where: { id },
-            data: { mainAgentId: null, mainAgentInstanceId: null },
           });
         }
         const messages: SysMessageRow[] = [];
@@ -1957,7 +1896,6 @@ export class TasksService implements OnModuleInit {
       priority: task.priority,
       status: task.status,
       mainAgentMemberId: mainMemberId,
-      executionMode: task.executionMode ?? 'direct',
       backgroundDocs: task.backgroundDocs ?? [],
       resetAfterComplete: Boolean(task.resetAfterComplete),
       teamId: (task as any).teamId ?? null,

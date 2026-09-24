@@ -11,7 +11,6 @@ import { TASK_PRIORITY } from '../../common/constants/task.constants';
 
 /**
  * POST /tasks 请求体（仅 teamId 必填，指派全局团队）。
- * 移除 agents/mainAgentId/mainAgentInstanceId（不再由任务侧组建团队，改为快照 Team 成员）。
  */
 export class CreateTaskDto {
   @ApiProperty({ description: '任务标题（创建必填）', maxLength: 128 })

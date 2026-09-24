@@ -3043,7 +3043,6 @@ export class PlatformMcpService implements OnModuleInit {
       });
     }
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    // 注：已删除旧自造 plan 域的 start 门禁（executionMode 列恒 direct）。
     // start 无平台侧计划门：是否先出计划由所绑定 agent 的 prompt 表达；执行确认走
     // opencode question/permission → QuestionModal 由用户明确批准（见 P4）。
     return this.tasksService.transitionByAgent(
