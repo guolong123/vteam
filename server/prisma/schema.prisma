@@ -238,8 +238,6 @@ model Task {
   description         String?   @db.Text
   priority            String    @default("medium")
   status              String    @default("pending")
-  // @deprecated 不再读写：Todo 34 已移除 TS 侧写入与读路径回显；列保留待删，物理 DROP 见 W6 迁移（Todo 38）。
-  executionMode       String    @default("direct") @map("execution_mode")
   backgroundDocs      Json?     @map("background_docs")
   /// 完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false，Todo7）
   resetAfterComplete  Boolean   @default(false) @map("reset_after_complete")
@@ -277,8 +275,6 @@ model Task {
 // 团队成员 = 实例（同一模板 agent 在任务内可多实例，seq 服务端生成防并发重号）
 // session-unification Todo 6：TaskAgent 模型已删除（迁移 DROP TABLE task_agents）。
 // 反向关系同步删除：Task.taskAgents / Agent.taskAgents / Session.taskAgent。
-// 保留：tasks.main_agent_instance_id 纯字符串列（历史值已置空）；
-// 冻结：uk_sessions_task_agent 约束保留（Session 模型内注释，存量 task 会话行只删不回填）。
 model TaskEvent {
   id         String   @id
   taskId     String   @map("task_id")
@@ -303,11 +299,10 @@ model TaskEvent {
 model Session {
   id           String   @id
   taskId       String?  @map("task_id")
-  taskAgentId  String?  @map("task_agent_id") // 绑任务实例（每实例独立会话；team-mode 下可空）
   teamId       String?  @map("team_id") // team-mode 执行上下文（nullable 便于存量回填；业务层 team-mode 必填）
   agentId      String   @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
   teamMemberId String?  @map("team_member_id")
-  // team-mode 幂等键承载列（STORED 生成列：task_id 为空时 = team_id|team_member_id，其余为 NULL；DB 唯一索引仅约束 task-less 行，task 绑定行沿用 uk_sessions_task_agent）
+  // team-mode 幂等键承载列（STORED 生成列：task_id 为空时 = team_id|team_member_id，其余为 NULL；DB 唯一索引仅约束 task-less 行）
   // @db.VarChar(384)：对齐 20260904000000 迁移实际 DDL（VARCHAR(384) 生成列）；
   // 之前无长度声明（默认 191）与库漂移，导致 migrate dev 误提无关 ALTER（P3 skill 版本迁移前置修复，只对齐类型，不碰生成表达式）。
   teamMemberKey String?  @db.VarChar(384) @map("team_member_key")
@@ -326,13 +321,8 @@ model Session {
   team       Team?       @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent      Agent       @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   worker     Worker?     @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  // session-unification Todo 6：TaskAgent 模型已删，taskAgent 关系同步删除；
-  // task_agent_id 纯字符串列保留（历史残留只读，迁移不回填）；uk_sessions_task_agent 见下冻结注释。
   teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  // FROZEN (session-unification Todo 6)：uk_sessions_task_agent 约束保留冻结——存量 task 会话行只删不回填，
-  // 新写路径恒 taskId/taskAgentId=null（Todo 4/10 已收敛），本约束不再承载新语义，不得删除或复用。
-  @@unique([taskId, taskAgentId], map: "uk_sessions_task_agent")
   @@unique([teamMemberKey], map: "uk_sessions_team_member")
   @@index([teamId], map: "idx_sessions_team_id")
   // trigger-unification todo-7：空闲判死扫描谓词（status='running' AND last_activity_at < cutoff）。
@@ -351,7 +341,6 @@ model ChatChannel {
   teamMemberId String?   @map("team_member_id")
   taskId       String?   @map("task_id")
   agentId      String?   @map("agent_id") // 保留（角色渲染），不再是唯一键维度
-  taskAgentId  String?   @map("task_agent_id") // 私聊频道绑实例；task_group 频道两者均为 NULL（存量兼容)
   // team_group 单例保障：team_group_key 仅 team_group 且未删除时等于 teamId，其余为 NULL，配合唯一索引保证每 team 仅一条 team_group
   teamGroupKey String?   @map("team_group_key")
   // UX-09 会话管理（channel 级简化：置顶/已读为频道级标记，非用户粒度——演示平台可接受；
@@ -368,7 +357,6 @@ model ChatChannel {
   messages   Message[]
 
   @@unique([teamId, teamMemberId], map: "uk_channels_team_member")
-  @@unique([taskId, taskAgentId], map: "uk_channels_task_agent")
   @@unique([teamGroupKey], map: "uk_channels_team_group_single")
   @@index([teamId], map: "idx_chat_channels_team_id")
   @@index([teamId, type], map: "idx_chat_channels_team_type")
