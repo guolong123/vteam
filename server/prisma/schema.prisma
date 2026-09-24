@@ -238,8 +238,6 @@ model Task {
   description         String?   @db.Text
   priority            String    @default("medium")
   status              String    @default("pending")
-  mainAgentId         String?   @map("main_agent_id")
-  mainAgentInstanceId String?   @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护；session-unification 后停止写入，历史值由 Todo 6 迁移置空，列保留）
   // @deprecated 不再读写：Todo 34 已移除 TS 侧写入与读路径回显；列保留待删，物理 DROP 见 W6 迁移（Todo 38）。
   executionMode       String    @default("direct") @map("execution_mode")
   backgroundDocs      Json?     @map("background_docs")
@@ -255,7 +253,6 @@ model Task {
   archivedAt          DateTime? @map("archived_at")
 
   creator                  User                      @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  mainAgent                Agent?                    @relation("TaskMainAgent", fields: [mainAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   team                     Team?                     @relation("TaskTeam", fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   currentInTeams           Team[]                    @relation("TeamCurrentTask")
   queue                    TeamQueue?
@@ -671,7 +668,6 @@ model Agent {
   sessions          Session[]
   channels          ChatChannel[]
   authoredArtifacts ArtifactVersion[] @relation("ArtifactAuthor")
-  mainTasks         Task[]            @relation("TaskMainAgent")
   assignedIssues    Issue[]           @relation("IssueAssigneeAgent")
   createdIssues     Issue[]           @relation("IssueCreatorAgent")
 
