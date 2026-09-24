@@ -46,6 +46,8 @@ interface SharedConnection {
 
 const pool = new Map<string, SharedConnection>();
 
+const TEAM_SCOPE_WHITELISTED_EVENTS = ["team.queue.changed"] as const;
+
 /**
  * 前端 scope 过滤规则（原 URL scope 语义保留为过滤规则；连接 URL 恒 scope=all）。
  * - 缺省 / 空 / "all" → 放行所有事件
@@ -92,6 +94,9 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
     }
     if (scope.startsWith("team:")) {
       const id = scope.slice("team:".length);
+      if (TEAM_SCOPE_WHITELISTED_EVENTS.some((eventType) => eventType === ev.type)) {
+        return (ev.payload as { teamId?: string })?.teamId === id;
+      }
       if (isReceiptRoundPlanEvent(ev.type)) {
         return (ev.payload as { teamId?: string })?.teamId === id;
       }

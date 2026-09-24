@@ -54,6 +54,7 @@ function loadMatchesScope() {
   // matchesScope 依赖同文件 helpers（isReceiptRoundPlanEvent + 前缀表）：一并提取进 sandbox，
   // 测的仍是 shipped 文件本身，非拷贝。
   const helpers = [
+    extractBlock(src, "const TEAM_SCOPE_WHITELISTED_EVENTS"),
     extractBlock(src, "export const RECEIPT_ROUND_PLAN_PREFIXES"),
     extractBlock(src, "export function isReceiptRoundPlanEvent"),
     extractMatchesScope(src),
@@ -80,6 +81,12 @@ test("team: scope still passes agent.loading with bare taskId", () => {
 
 test("team: scope drops agent.loading for another team", () => {
   assert.equal(matchesScope(ev("agent.loading", { taskId: "team:tm_OTHER" }), "team:tm_0000000001"), false);
+});
+
+test("team: scope filters queue events by payload.teamId", () => {
+  assert.equal(matchesScope(ev("team.queue.changed", { teamId: "tm_0000000001" }), "team:tm_0000000001"), true);
+  assert.equal(matchesScope(ev("team.queue.changed", { teamId: "tm_OTHER" }), "team:tm_0000000001"), false);
+  assert.equal(matchesScope(ev("team.queue.changed", {}), "team:tm_0000000001"), false);
 });
 
 for (const type of ["agent.error", "agent.status", "agent.question"]) {
