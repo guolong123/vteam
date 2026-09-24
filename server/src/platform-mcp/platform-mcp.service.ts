@@ -2696,7 +2696,7 @@ export class PlatformMcpService implements OnModuleInit {
         content: input.content,
       });
       let receiptId: string;
-      let fireAt: Date;
+      let dueAt: Date;
       try {
         const created = (await this.prisma.messageReceipt.create({
           data: {
@@ -2715,7 +2715,7 @@ export class PlatformMcpService implements OnModuleInit {
           },
         })) as unknown as { id: string; expiresAt: Date };
         receiptId = created.id;
-        fireAt = new Date(created.expiresAt);
+        dueAt = new Date(created.expiresAt);
       } catch (err) {
         if ((err as { code?: string })?.code !== 'P2002') {
           throw err;
@@ -2746,7 +2746,7 @@ export class PlatformMcpService implements OnModuleInit {
           return;
         }
         receiptId = existing.id;
-        fireAt = new Date(existing.expiresAt);
+        dueAt = new Date(existing.expiresAt);
       }
       if (!this.timers) {
         this.logger.warn(
@@ -2767,7 +2767,7 @@ export class PlatformMcpService implements OnModuleInit {
       };
       await this.timers.schedule(
         RECEIPT_NUDGE_KIND,
-        fireAt,
+        dueAt,
         payload,
         buildTriggerDedupKey(
           TRIGGER_KIND.RECEIPT_NUDGE,

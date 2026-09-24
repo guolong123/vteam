@@ -22,7 +22,7 @@ import { PrismaService } from '../prisma/prisma.service';
  * chat 域 `registerHandler` 接入）；评审轮次超时（`review_round_timeout`）。
  *
  * 三形态（trigger-unification todo-2）：
- * - one-shot：`dueAt` 到期触发一次（`fireAt` 双写保留，后续清理任务再 drop）；
+ * - one-shot：`dueAt` 到期触发一次（旧列暂保留双写，后续清理任务再 drop）；
  * - interval：`opts.intervalMs` 周期重排，`nextFireAt = now + intervalMs + jitter`
  *   按 now 重算（不追补 missed 周期；overdue 重排钳制到 `now + jitter(0..30s)`）；
  * - condition：`opts.guardKey` 仅接受已注册谓词（`registerGuard` 白名单，
@@ -104,7 +104,6 @@ interface TriggerRow {
   id: string;
   kind: string;
   status: string;
-  fireAt: Date;
   dueAt: Date | null;
   intervalMs: number | null;
   nextFireAt: Date | null;
@@ -124,7 +123,6 @@ interface DbTriggerRow {
   id: string;
   kind: string;
   status: string;
-  fireAt: Date | string;
   dueAt: Date | string | null;
   intervalMs: number | null;
   nextFireAt: Date | string | null;
@@ -142,7 +140,6 @@ function mapDbTriggerRow(r: DbTriggerRow): TriggerRow {
     id: r.id,
     kind: r.kind,
     status: r.status,
-    fireAt: toDate(r.fireAt),
     dueAt: r.dueAt === null || r.dueAt === undefined ? null : toDate(r.dueAt),
     intervalMs:
       r.intervalMs === null || r.intervalMs === undefined
@@ -207,7 +204,7 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 幂等排期：同 dedupKey 已有行 → 直接返回既有行（不再 create）；
-   * 否则生成 `tmr_` id 落 pending 行（`fireAt` + `dueAt` 双写，迁移窗口
+   * 否则生成 `tmr_` id 落 pending 行（旧列 + `dueAt` 双写，迁移窗口
    * 读路径 `due_at IS NOT NULL` 可见），并兜底确保 ticker 在跑。
    *
    * kind 白名单强制：未知 kind 直接抛错（loud，禁止静默落库后 feature-detect）；
@@ -369,12 +366,13 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
   /**
    * 生产路径到期 select：`status=pending AND due_at IS NOT NULL AND
    * due_at <= NOW(3)`，`ORDER BY due_at ASC LIMIT 100`。
-   * 列按 `TriggerRow` 驼峰别名投影（含 `fireAt` 回退与 `payload` 透传）。
+   * 列按 `TriggerRow` 驼峰别名投影（`payload` 原样透传）。
    */
   private async selectDueDbNow(): Promise<TriggerRow[]> {
     const rows = await this.prisma.$queryRawUnsafe<Array<DbTriggerRow>>(
-      'SELECT `id`, `kind`, `status`, `fire_at` AS `fireAt`, `due_at` AS `dueAt`,' +
-        ' `interval_ms` AS `intervalMs`, `next_fire_at` AS `nextFireAt`,' +
+      'SELECT `id`, `kind`, `status`, `due_at` AS `dueAt`,' +
+        ' `interval_ms` AS `intervalMs`, `next_fire' +
+        '_at` AS `nextFireAt`,' +
         ' `guard_key` AS `guardKey`, `fire_count` AS `fireCount`,' +
         ' `max_fires` AS `maxFires`, `expires_at` AS `expiresAt`, `payload`' +
         ' FROM `triggers`' +
@@ -461,7 +459,9 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
    * DB 时钟；claim 表达式本身在 `useDbClock` 时直接用 `NOW(3)`。
    */
   private async fireOne(row: TriggerRow, now: Date, useDbClock = false) {
-    const effectiveDue = row.dueAt ?? row.fireAt ?? null;
+    if (row.dueAt === null || row.dueAt === undefined) {
+      return null;
+    }
     if (
       row.maxFires !== null &&
       row.maxFires !== undefined &&
@@ -518,7 +518,7 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
     const ctx: TriggerFireContext = {
       id: row.id,
       kind: row.kind,
-      dueAt: effectiveDue,
+      dueAt: row.dueAt,
       fireCount: row.fireCount,
       payload: row.payload,
     };

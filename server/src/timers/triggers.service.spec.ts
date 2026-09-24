@@ -48,7 +48,6 @@ function triggerRow(over: Record<string, unknown> = {}) {
     id: 'tmr_0000000001',
     kind: TRIGGER_KIND.RECEIPT_NUDGE,
     status: TRIGGER_STATUS.FIRED,
-    fireAt: new Date('2026-09-16T00:00:00.000Z'),
     dueAt: new Date('2026-09-16T00:00:00.000Z'),
     scopeType: null,
     scopeId: null,
@@ -124,6 +123,7 @@ describe('TriggersService（GET 列表 + DELETE 取消，mocked Prisma，无 DB�
       // payload/dedupKey 等执行细节不外泄
       expect(out.items[0]).not.toHaveProperty('payload');
       expect(out.items[0]).not.toHaveProperty('dedupKey');
+      expect(out.items[0]).not.toHaveProperty('fireAt');
       expect(prisma.trigger.findMany).toHaveBeenCalledWith(
         expect.objectContaining({ skip: 0, take: 5 }),
       );

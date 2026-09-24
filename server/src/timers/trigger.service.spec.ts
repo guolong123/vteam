@@ -55,7 +55,6 @@ function dueRow(over: Record<string, unknown> = {}) {
     id: 'tmr_0000000001',
     kind: 'test_kind',
     status: TRIGGER_STATUS.PENDING,
-    fireAt: PAST,
     dueAt: PAST,
     intervalMs: null,
     nextFireAt: null,
@@ -76,7 +75,7 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
   });
 
   describe('schedule', () => {
-    it('落 pending 行（tmr_ id + dedupKey + fireAt/payload 透传）', async () => {
+    it('落 pending 行（tmr_ id + dedupKey + dueAt/fireAt 双写 + payload 透传）', async () => {
       const { svc, prisma, idGen } = makeService();
       prisma.timer.findUnique.mockResolvedValue(null);
       prisma.timer.create.mockImplementation(async ({ data }: any) => ({
@@ -100,6 +99,7 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
           kind: 'receipt_nudge',
           status: TRIGGER_STATUS.PENDING,
           fireAt: FUTURE,
+          dueAt: FUTURE,
           payload: { hello: 'world' },
           dedupKey: 'test_kind:scope:1',
           attempts: 0,
@@ -196,15 +196,15 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
   });
 
   describe('fireDue', () => {
-    it('只取 due+pending 行并按 fireAt 升序触发（handler 按序调用）', async () => {
+    it('只取 due+pending 行并按 dueAt 升序触发（handler 按序调用）', async () => {
       const { svc, prisma } = makeService();
       const first = dueRow({
         id: 'tmr_0000000001',
-        fireAt: new Date('2026-09-14T00:00:00.000Z'),
+        dueAt: new Date('2026-09-14T00:00:00.000Z'),
       });
       const second = dueRow({
         id: 'tmr_0000000002',
-        fireAt: new Date('2026-09-15T00:00:00.000Z'),
+        dueAt: new Date('2026-09-15T00:00:00.000Z'),
         dedupKey: 'test_kind:scope:2',
       });
       prisma.timer.findMany.mockResolvedValue([first, second]);
@@ -236,6 +236,24 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
           attempts: { increment: 1 },
         },
       });
+      svc.onModuleDestroy();
+    });
+
+    it('due_at=NULL 即使旧 fire_at 已过期也不回退触发', async () => {
+      const { svc, prisma } = makeService();
+      prisma.timer.findMany.mockResolvedValue([
+        dueRow({ dueAt: null, fireAt: PAST }),
+      ]);
+      prisma.timer.updateMany.mockResolvedValue({ count: 1 });
+      const handler = jest.fn();
+      svc.registerHandler('test_kind', handler);
+
+      const out = await svc.fireDue(NOW);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(prisma.timer.updateMany).not.toHaveBeenCalled();
+      expect(prisma.timer.update).not.toHaveBeenCalled();
+      expect(out).toEqual([]);
       svc.onModuleDestroy();
     });
 
@@ -344,7 +362,7 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
     it('重启场景：onModuleInit 后无需 schedule()，过期 pending 行被 ticker 拾取 → fired', async () => {
       process.env.TIMER_SCAN_INTERVAL_MS = '30000';
       const { svc, prisma } = makeService();
-      const overdue = dueRow({ fireAt: PAST });
+      const overdue = dueRow({ dueAt: PAST });
       // resync 查询（where.id.startsWith）→ 空；fireDue 查询（where.status）→ 过期行
       prisma.timer.findMany.mockImplementation(async (args: any) => {
         if (args?.where?.id?.startsWith !== undefined) {
@@ -483,7 +501,7 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
     });
 
     it('逾期 one-shot 只触发一次（dueAt 远过去 → fired，不追补不重排）', async () => {
-      const { svc, prisma } = dueMocks({ dueAt: PAST, fireAt: PAST });
+      const { svc, prisma } = dueMocks({ dueAt: PAST });
       svc.registerHandler('test_kind', async () => undefined);
       await svc.fireDue(NOW);
       expect(prisma.timer.update).toHaveBeenCalledTimes(1);
@@ -638,6 +656,8 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
       expect(selectSql).toContain('NOW(3)');
       expect(selectSql).toContain('`due_at` IS NOT NULL');
       expect(selectSql).toContain('ORDER BY `due_at` ASC LIMIT 100');
+      expect(selectSql).toContain('`next_fire_at` AS `nextFireAt`');
+      expect(selectSql).not.toContain('`fire_at` AS `fireAt`');
       const claimSql = executeRaw.mock.calls[0][0] as string;
       expect(claimSql).toContain('NOW(3)');
       expect(claimSql).toContain('`due_at` IS NOT NULL');
@@ -675,7 +695,6 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
     it('DB 原生行（snake_case + 字符串日期）归一为 TriggerRow（ctx.dueAt 为 Date）', async () => {
       const raw = {
         ...dueRow(),
-        fireAt: '2026-09-15T00:00:00.000Z',
         dueAt: '2026-09-15T00:00:00.000Z',
         nextFireAt: null,
         expiresAt: null,
