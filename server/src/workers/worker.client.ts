@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -204,6 +205,7 @@ export interface ExecuteAttachment {
  */
 @Injectable()
 export class WorkerClient {
+  private readonly logger = new Logger(WorkerClient.name);
   /** baseUrl 回退值（env WORKER_BASE_URL，默认 http://localhost:4199）；公开字段便于测试覆盖。 */
   public baseUrlFallback: string;
   /** serve Basic Auth 密码（env SERVER_PASSWORD，默认空=不鉴权）；公开字段便于测试覆盖。 */
@@ -457,8 +459,18 @@ export class WorkerClient {
         providerID: m.providerID ?? '',
         modelID: m.id ?? '',
       }));
-    } catch {
+    } catch (err) {
       // 网络失败/旧版无 /api/model/空数据 → 降级 capabilities 声明（T11 动态化前占位）。
+      // 可观测性：记录 worker id + resolveBaseUrl 实际解析出的 URL，并在消息中区分
+      // 「worker 不可达/请求失败」与「worker 可达但返回空模型列表」。
+      const baseUrl = this.resolveBaseUrl(worker);
+      const reason = this.describeError(err);
+      const unreachable = reason !== 'empty model data';
+      this.logger.warn(
+        `listModels: worker ${worker.id}（${baseUrl}）` +
+          `${unreachable ? '不可达/请求失败' : '可达但返回空模型列表'}` +
+          `（${reason}），降级 capabilities 声明`,
+      );
       return this.modelsFromCapabilities(worker);
     }
   }
@@ -490,7 +502,11 @@ export class WorkerClient {
         agents?: WorkerAgentInfo[];
       };
       return Array.isArray(body.agents) ? body.agents : [];
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `listAgents: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
+          `不可达/请求失败（${this.describeError(err)}），降级返回 []（空≠worker 真无 agent）`,
+      );
       return [];
     }
   }
@@ -529,7 +545,11 @@ export class WorkerClient {
         todos?: WorkerTodoInfo[];
       };
       return Array.isArray(body.todos) ? body.todos : [];
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `listTodos: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
+          `不可达/请求失败（${this.describeError(err)} sessionId=${sessionId}），降级返回 []（空≠会话真无 todo）`,
+      );
       return [];
     }
   }
@@ -558,7 +578,11 @@ export class WorkerClient {
       }
       const body = (await res.json()) as { files?: WorkerPlanFileInfo[] };
       return Array.isArray(body.files) ? body.files : [];
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `listPlanFiles: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
+          `不可达/请求失败（${this.describeError(err)}），降级返回 []（空≠目录真无计划）`,
+      );
       return [];
     }
   }
@@ -681,7 +705,11 @@ export class WorkerClient {
             : undefined,
         degraded: false,
       };
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `getOmoConfig: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
+          `不可达/请求失败（${this.describeError(err)}），降级返回 degraded:true（空≠尚未配置覆盖）`,
+      );
       return { agents: {}, available: [], degraded: true };
     }
   }
