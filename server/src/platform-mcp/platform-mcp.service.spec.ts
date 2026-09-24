@@ -6766,7 +6766,7 @@ describe('PlatformMcpService', () => {
     const externalMessage = {
       id: 'm_external_1',
       content: { text: '[WeCom:Alice] hello' },
-      createdAt: new Date('2026-09-24T03:00:00.000Z'),
+      createdAt: new Date(Date.now() - 1_000),
     };
     const arrangeTeamChannel = (
       contextSession: Record<string, unknown> = {
@@ -6807,6 +6807,7 @@ describe('PlatformMcpService', () => {
         type: 'wecom_aibot',
       });
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_team_1' });
+      prisma.message.findMany.mockResolvedValue([externalMessage]);
       prisma.message.findFirst.mockImplementation(
         async (query: { where?: { senderType?: unknown } }) =>
           query.where?.senderType === SENDER_TYPE.external
@@ -7047,6 +7048,170 @@ describe('PlatformMcpService', () => {
       );
       expect(prisma.task.findUnique).not.toHaveBeenCalled();
       expect(prisma.teamMessageChannel.findMany).not.toHaveBeenCalled();
+    });
+
+    it('最新 external 没有活动 stream 时不调用 finishStream', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue(undefined);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(adapter.finishStream).not.toHaveBeenCalled();
+      expect(adapter.sendNewMessage).toHaveBeenCalledWith('mc_team_1', 'hello');
+    });
+
+    it('活动 stream 超出时间窗时不调用 finishStream', async () => {
+      const adapter = arrangeTeamChannel();
+      prisma.message.findMany.mockResolvedValue([
+        {
+          ...externalMessage,
+          createdAt: new Date(Date.now() - 11 * 60 * 1000),
+        },
+      ]);
+      adapter.getStream.mockReturnValue({
+        fromUserName: 'Alice',
+        chattype: 'group',
+      });
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(adapter.finishStream).not.toHaveBeenCalled();
+      expect(adapter.sendNewMessage).toHaveBeenCalledWith('mc_team_1', 'hello');
+    });
+
+    it('他人 processing 占位不被当前回复覆盖', async () => {
+      arrangeTeamChannel();
+      prisma.message.findFirst.mockImplementation(
+        async (query: {
+          where?: {
+            senderType?: unknown;
+            status?: unknown;
+            senderInstanceId?: unknown;
+          };
+        }) => {
+          if (query.where?.senderType === SENDER_TYPE.external) {
+            return externalMessage;
+          }
+          if (query.where?.status === MESSAGE_STATUS.processing) {
+            return query.where.senderInstanceId === senderInstanceId
+              ? null
+              : {
+                  id: 'm_other_processing',
+                  taskId: 't_other',
+                  senderInstanceId: 'tmm_other',
+                };
+          }
+          return null;
+        },
+      );
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(prisma.message.update).not.toHaveBeenCalled();
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ taskId: null }),
+        }),
+      );
+    });
+
+    it('当前成员 processing 占位更新时保留原有 taskId', async () => {
+      arrangeTeamChannel();
+      prisma.message.findFirst.mockImplementation(
+        async (query: {
+          where?: {
+            senderType?: unknown;
+            status?: unknown;
+          };
+        }) => {
+          if (query.where?.senderType === SENDER_TYPE.external) {
+            return externalMessage;
+          }
+          if (query.where?.status === MESSAGE_STATUS.processing) {
+            return {
+              id: 'm_owned_processing',
+              taskId: 't_owned',
+              senderInstanceId: senderInstanceId,
+            };
+          }
+          return null;
+        },
+      );
+      prisma.message.update.mockResolvedValue({
+        id: 'm_owned_processing',
+        taskId: 't_owned',
+        content: { text: '@Alice hello' },
+        status: MESSAGE_STATUS.sent,
+      });
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.messageId).toBe('m_owned_processing');
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_owned_processing' },
+        data: expect.not.objectContaining({ taskId: null }),
+      });
+    });
+
+    it('显式 legacy taskId 仍优先使用 session.teamId', async () => {
+      arrangeTeamChannel(
+        {
+          id: 's_legacy_priority',
+          taskId: 't_legacy_priority',
+          teamId: 'tm_session',
+          teamMemberId: senderInstanceId,
+          agentId: senderAgentId,
+        },
+        {
+          id: 's_auth_priority',
+          teamId: 'tm_session',
+          teamMemberId: senderInstanceId,
+          agentId: senderAgentId,
+        },
+      );
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_task_fallback' });
+
+      const result = await service.wecomReply(ctx, {
+        taskId: 't_legacy_priority',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(prisma.session.findFirst).toHaveBeenCalledWith({
+        where: { workerId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          taskId: true,
+          teamId: true,
+          teamMemberId: true,
+          agentId: true,
+        },
+      });
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      expect(prisma.teamMessageChannel.findMany).toHaveBeenCalledWith({
+        where: { teamId: 'tm_session' },
+        select: { messageChannelId: true },
+      });
     });
   });
 });
