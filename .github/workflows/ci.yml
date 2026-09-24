@@ -1,0 +1,65 @@
+# CI gate for server, worker, and web (Node 20).
+#
+# Why Playwright is excluded: the web Playwright suite needs a live full stack —
+# web/playwright.config.ts configures no `webServer` (the dev server is assumed
+# to already be running), targets baseURL http://localhost:3001, requires the
+# system `chrome` channel (not the Playwright-bundled browser), and writes its
+# JSON report into `.omo/evidence/` (a must-not-touch path). It therefore stays
+# a local gate (`npm run test:e2e` in web / `scripts/gate.sh --with-playwright`)
+# and must NOT be added to this workflow.
+#
+# Why no MySQL service container: server/test/setup-env.js forces
+# DATABASE_URL=file:./test.db (sqlite) unless already set, and the server e2e
+# suite is fully in-memory, so the test/build steps are self-contained.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint:check && npm test && npm run test:e2e && npm run build
+
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck && npm test && npm run build
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint:check && npm run build
