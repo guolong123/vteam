@@ -8,12 +8,12 @@
  * - 左侧完整成员面板（model chip/启用禁用/重置会话/添加实例/更多菜单，共享 TeamMembersPanel）
  * - 可拖拽面板（useResizableWidth 左 224 / 右 300 + ResizeHandle，宽度持久化）
  * - 弹窗：QuestionModal / IssueDetailModal / TaskInfoEditModal（评审与计划内联于右侧三 Tab，不再单独成区）
- * - 右侧 TaskRightTabs（状态/配置/产出三 Tab，team.currentTaskId 驱动；队列与记忆已在状态 Tab 内展示）
+ * - 右侧 TaskRightTabs（状态/配置/产出三 Tab，effectivePanelTaskId 驱动；队列与记忆已在状态 Tab 内展示）
  * - 实时：team: + channel:（群聊/私聊） + global（会话统一团队域后不再订阅 task:）
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -34,6 +34,7 @@ import { TaskRightTabs, type PlanStepItem } from "@/src/components/teams/TeamRig
 import { useResizableWidth } from "@/src/hooks/use-resizable";
 import type {
   TaskDetail,
+  TaskInstance,
   ArtifactItem,
   ArtifactsResponse,
 } from "@/src/components/tasks/task-detail-types";
@@ -41,6 +42,45 @@ import { docIdFor } from "@/src/components/tasks/task-detail-types";
 import { type RoleKey, ROLE_KEYS, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
+
+type SessionAgent = {
+  id: string;
+  instanceId: string;
+  name: string;
+  role: RoleKey;
+  seq: number;
+  main: boolean;
+  enabled: boolean | null;
+  overrideModelId: string | null;
+  opencodeAgentName: string | null;
+};
+
+function taskInstancesToSessionAgents(instances: TaskInstance[]): SessionAgent[] {
+  return instances.map((instance) => {
+    const role = instance.role && (ROLE_KEYS as readonly string[]).includes(instance.role)
+      ? (instance.role as RoleKey)
+      : toRole(instance.agentId) ?? "developer";
+    const opencodeAgentName =
+      "opencodeAgentName" in instance && typeof instance.opencodeAgentName === "string"
+        ? instance.opencodeAgentName
+        : null;
+    return {
+      id: instance.agentId,
+      instanceId: instance.id,
+      name: instance.alias ?? instance.name,
+      role,
+      seq: instance.seq,
+      main: instance.main,
+      enabled: instance.enabled ?? true,
+      overrideModelId: instance.overrideModelId ?? null,
+      opencodeAgentName,
+    };
+  });
+}
+
+function isTaskParam(value: string | null): value is string {
+  return value !== null && /^t_[A-Za-z0-9_-]+$/.test(value);
+}
 
 function toRole(agentId: string): RoleKey | null {
   const rest = agentId.startsWith("a_") ? agentId.slice(2) : agentId;
@@ -141,14 +181,43 @@ export default function TeamSessionPage() {
     enabled: !!teamId && !!user?.id,
   });
   const team: TeamDto | undefined = teamQuery.data;
-  const currentTaskId = team?.currentTaskId ?? null;
-
-  const currentTaskQuery = useQuery({
-    queryKey: ["task", currentTaskId],
-    queryFn: () => api.get<TaskDetail>(`/tasks/${currentTaskId}`),
-    enabled: !!currentTaskId && !!user?.id,
+  const queueHeadTaskId = team?.currentTaskId ?? null;
+  const queueHeadTaskQuery = useQuery({
+    queryKey: ["task", queueHeadTaskId],
+    queryFn: () => api.get<TaskDetail>(`/tasks/${queueHeadTaskId}`),
+    enabled: !!queueHeadTaskId && !!user?.id,
   });
-  const currentTask = currentTaskQuery.data ?? null;
+  const queueHeadTask = queueHeadTaskQuery.data ?? null;
+
+  const searchParams = useSearchParams();
+  const requestedTaskParam = searchParams.get("task");
+  const requestedTaskId = isTaskParam(requestedTaskParam) ? requestedTaskParam : null;
+  const requestedTaskQuery = useQuery({
+    queryKey: ["task", requestedTaskId],
+    queryFn: () => api.get<TaskDetail>(`/tasks/${requestedTaskId}`),
+    enabled: !!requestedTaskId && !!user?.id,
+  });
+  const requestedTaskBelongsToTeam = requestedTaskQuery.data?.teamId === teamId;
+  const effectivePanelTaskId =
+    requestedTaskId && requestedTaskQuery.isSuccess && requestedTaskBelongsToTeam
+      ? requestedTaskId
+      : queueHeadTaskId;
+  const panelTaskQuery = useQuery({
+    queryKey: ["task", effectivePanelTaskId],
+    queryFn: () => api.get<TaskDetail>(`/tasks/${effectivePanelTaskId}`),
+    enabled: !!effectivePanelTaskId && !!user?.id,
+  });
+  const panelTask = panelTaskQuery.data ?? null;
+  const taskParamError =
+    requestedTaskParam === null
+      ? null
+      : !isTaskParam(requestedTaskParam)
+        ? "任务参数无效，已显示队首任务"
+        : requestedTaskQuery.isError
+          ? "任务参数无效，已显示队首任务"
+          : requestedTaskQuery.isSuccess && !requestedTaskBelongsToTeam
+            ? "该任务不属于当前团队，已显示队首任务"
+            : null;
 
   /* ---------- 群聊频道 ---------- */
   const channelsQuery = useQuery({
@@ -199,9 +268,9 @@ export default function TeamSessionPage() {
 
   /* ---------- 当前任务派生查询（三 Tab 数据源） ---------- */
   const artifactsQuery = useQuery({
-    queryKey: ["task", currentTaskId, "artifacts"],
-    queryFn: () => api.get<ArtifactsResponse>(`/tasks/${currentTaskId}/artifacts`, { query: { pageSize: 10 } }),
-    enabled: !!currentTaskId && !!user?.id,
+    queryKey: ["task", effectivePanelTaskId, "artifacts"],
+    queryFn: () => api.get<ArtifactsResponse>(`/tasks/${effectivePanelTaskId}/artifacts`, { query: { pageSize: 10 } }),
+    enabled: !!effectivePanelTaskId && !!user?.id,
     refetchInterval: 30_000,
   });
   /**
@@ -212,9 +281,9 @@ export default function TeamSessionPage() {
    * worker 离线），与"目录为空"区分展示。
    */
   const planDocsQuery = useQuery({
-    queryKey: ["task", currentTaskId, "plan-docs"],
-    queryFn: () => api.get<PlanDocsResponse>(`/tasks/${currentTaskId}/plan-docs`),
-    enabled: !!currentTaskId && !!user?.id,
+    queryKey: ["task", effectivePanelTaskId, "plan-docs"],
+    queryFn: () => api.get<PlanDocsResponse>(`/tasks/${effectivePanelTaskId}/plan-docs`),
+    enabled: !!effectivePanelTaskId && !!user?.id,
     refetchInterval: 10_000,
   });
   /**
@@ -223,7 +292,7 @@ export default function TeamSessionPage() {
    */
   const uploadPlanDocMutation = useMutation({
     mutationFn: (input: { name: string; content: string }) =>
-      api.post(`/tasks/${currentTaskId}/plan-docs`, input),
+      api.post(`/tasks/${effectivePanelTaskId}/plan-docs`, input),
     onSuccess: () => {
       setPlanUploadError(null);
       void planDocsQuery.refetch();
@@ -237,9 +306,9 @@ export default function TeamSessionPage() {
    * degraded 时 steps 为空（主会话未建立/worker 离线），由 TaskSubTabs 展示"暂不可用"。
    */
   const planStepsQuery = useQuery({
-    queryKey: ["task", currentTaskId, "plan-steps"],
-    queryFn: () => api.get<{ steps: PlanStepItem[]; workerId: string | null; degraded: boolean }>(`/tasks/${currentTaskId}/plan-steps`),
-    enabled: !!currentTaskId && !!user?.id,
+    queryKey: ["task", effectivePanelTaskId, "plan-steps"],
+    queryFn: () => api.get<{ steps: PlanStepItem[]; workerId: string | null; degraded: boolean }>(`/tasks/${effectivePanelTaskId}/plan-steps`),
+    enabled: !!effectivePanelTaskId && !!user?.id,
     refetchInterval: 30_000,
   });
   /**
@@ -265,9 +334,9 @@ export default function TeamSessionPage() {
   );
 
   const issuesQuery = useQuery({
-    queryKey: ["task-issues", currentTaskId],
-    queryFn: () => api.get("/issues", { query: { taskId: currentTaskId!, page: 1, pageSize: 100 } }),
-    enabled: !!currentTaskId && !!user?.id,
+    queryKey: ["task-issues", effectivePanelTaskId],
+    queryFn: () => api.get("/issues", { query: { taskId: effectivePanelTaskId!, page: 1, pageSize: 100 } }),
+    enabled: !!effectivePanelTaskId && !!user?.id,
     refetchInterval: 30_000,
   });
 
@@ -280,9 +349,9 @@ export default function TeamSessionPage() {
 
   /* ---------- 提问补拉 ---------- */
   const questionsQuery = useQuery({
-    queryKey: ["questions", currentTaskId, "pending"],
-    queryFn: () => api.get<QuestionModalData[]>(`/questions`, { query: { taskId: currentTaskId!, status: "pending" } }),
-    enabled: !!currentTaskId && !!user?.id,
+    queryKey: ["questions", effectivePanelTaskId, "pending"],
+    queryFn: () => api.get<QuestionModalData[]>(`/questions`, { query: { taskId: effectivePanelTaskId!, status: "pending" } }),
+    enabled: !!effectivePanelTaskId && !!user?.id,
   });
   useEffect(() => {
     const pending = questionsQuery.data;
@@ -290,30 +359,9 @@ export default function TeamSessionPage() {
     setPendingQuestion((prev) => prev ?? (pending[0]?.managedMode ? null : pending[0]));
   }, [questionsQuery.data]);
 
-  /* ---------- 成员（当前任务实例优先，成员管理回调挂当前任务） ---------- */
-  const agentMembers = useMemo(() => {
-    const instances = currentTask?.instances ?? [];
-    if (instances.length > 0) {
-      return instances.map((inst) => {
-        const role = inst.role && (ROLE_KEYS as readonly string[]).includes(inst.role)
-          ? (inst.role as RoleKey)
-          : toRole(inst.agentId) ?? "developer";
-        return {
-          id: inst.agentId,
-          instanceId: inst.id,
-          name: inst.alias ?? inst.name,
-          role,
-          seq: inst.seq,
-          /* 主来源唯一：inst.main（服务端按 team.mainAgentMemberId 判定）。
-           * currentTask.mainAgentInstanceId 是已停写的历史标量，且 in_progress 任务的主变更
-           * 刻意不同步它——再叠加会导致双主徽章（实测踩坑）。 */
-          main: inst.main,
-          enabled: (inst as { enabled?: boolean | null }).enabled ?? true,
-          overrideModelId: (inst as { overrideModelId?: string | null }).overrideModelId ?? null,
-          opencodeAgentName: (inst as { opencodeAgentName?: string | null }).opencodeAgentName ?? null,
-        };
-      });
-    }
+  const teamAgentMembers = useMemo(() => {
+    const instances = queueHeadTask?.instances ?? [];
+    if (instances.length > 0) return taskInstancesToSessionAgents(instances);
     return (team?.members ?? []).map((m: TeamMemberDto) => {
       const role = m.agent?.role && (ROLE_KEYS as readonly string[]).includes(m.agent.role)
         ? (m.agent.role as RoleKey)
@@ -331,22 +379,27 @@ export default function TeamSessionPage() {
         opencodeAgentName: (m as { opencodeAgentName?: string | null }).opencodeAgentName ?? null,
       };
     });
-  }, [currentTask, team]);
+  }, [queueHeadTask, team]);
+
+  const panelAgentMembers = useMemo(() => {
+    const instances = panelTask?.instances ?? [];
+    return instances.length > 0 ? taskInstancesToSessionAgents(instances) : teamAgentMembers;
+  }, [panelTask, teamAgentMembers]);
 
   const agentMap = useMemo(() => {
     const map = new Map<string, { name: string; role: RoleKey }>();
-    for (const a of agentMembers) {
+    for (const a of teamAgentMembers) {
       if (!map.has(a.id)) map.set(a.id, { name: a.name, role: a.role });
     }
     return map;
-  }, [agentMembers]);
+  }, [teamAgentMembers]);
   const instanceNameById = useMemo(() => {
     const map = new Map<string, string>();
-    for (const a of agentMembers) {
+    for (const a of teamAgentMembers) {
       if (a.instanceId) map.set(a.instanceId, a.name);
     }
     return map;
-  }, [agentMembers]);
+  }, [teamAgentMembers]);
   // 团队成员 id（tmm_）→ 别名/角色：worker 回执消息 senderId 可能直接是 teamMemberId，
   // agentMap（agentId 维度）与 instanceNameById（任务实例维度）都命中不到时兜底
   const teamMemberById = useMemo(() => {
@@ -361,7 +414,7 @@ export default function TeamSessionPage() {
   }, [team]);
 
   // loading key 归一化（stuck-"操作中" 修复）：同一 agent 有三路 key 形式——任务实例 id
-  // （ta_，agentMembers.instanceId）、agentId（a_，agentMembers.id）、团队成员 id（tmm_，
+  // （ta_，teamAgentMembers.instanceId）、agentId（a_，teamAgentMembers.id）、团队成员 id（tmm_，
   // team.members.id）。起工事件（常带 bare agentId）与终结事件（agent 回复按 senderInstanceId、
   // status 带 instanceId）可能各执一端，精确单 key 删除会留下永久 "操作中"。
   // 约定：写固定 canonical（instanceId ?? agentId），删则展开全量移除；
@@ -371,7 +424,7 @@ export default function TeamSessionPage() {
       const seeds = [payload.instanceId, payload.agentId].filter((k): k is string => !!k);
       const out = new Set<string>(seeds);
       for (const key of seeds) {
-        for (const a of agentMembers) {
+        for (const a of teamAgentMembers) {
           if (a.id === key || (a.instanceId ?? a.id) === key) {
             out.add(a.id);
             out.add(a.instanceId ?? a.id);
@@ -386,7 +439,7 @@ export default function TeamSessionPage() {
       }
       return out;
     },
-    [agentMembers, team],
+    [teamAgentMembers, team],
   );
   // loading 全量删除（含 loadingSeenRef 同步清理；key 不存在时返回原引用，不触发重渲染）。
   const removeLoadingKeys = useCallback((keys: Iterable<string>) => {
@@ -430,7 +483,7 @@ export default function TeamSessionPage() {
     (stateKey: string) => {
       setUnreadByInstance((prev) => {
         const targets = new Set<string>([stateKey]);
-        for (const a of agentMembers) {
+        for (const a of teamAgentMembers) {
           if (a.id === stateKey) targets.add(a.instanceId ?? a.id);
         }
         let next: Record<string, true> | null = null;
@@ -443,7 +496,7 @@ export default function TeamSessionPage() {
         return next ?? prev;
       });
     },
-    [agentMembers],
+    [teamAgentMembers],
   );
 
   const handlePrivateTab = useCallback(
@@ -462,7 +515,7 @@ export default function TeamSessionPage() {
       }
       // 实例 id → 团队成员 id：任务实例（ta_）按 agentId+seq 匹配 team.members，
       // 团队成员来源时 id 本身即 tmm_ 可直接用
-      const member = agentMembers.find((a) => (a.instanceId ?? a.id) === instanceId);
+      const member = teamAgentMembers.find((a) => (a.instanceId ?? a.id) === instanceId);
       const directTmm = instanceId.startsWith("tmm_") ? instanceId : null;
       const matched = directTmm
         ?? team?.members.find((m) => m.agentId === member?.id && m.seq === member?.seq)?.id
@@ -482,29 +535,29 @@ export default function TeamSessionPage() {
         setDmError(isApiError(e) ? e.message : "发起私聊失败");
       }
     },
-    [privateChannelMap, teamId, team, agentMembers, user?.id],
+    [privateChannelMap, teamId, team, teamAgentMembers, user?.id],
   );
 
   const mentionable: MentionableAgent[] = useMemo(
     () =>
-      (isGroupTab ? agentMembers : [])
+      (isGroupTab ? teamAgentMembers : [])
         .filter((a) => (a as { enabled?: boolean | null }).enabled !== false)
         .map((a) => ({ id: a.id, agentId: a.id, instanceId: a.instanceId, name: a.name, role: a.role })),
-    [agentMembers, isGroupTab],
+    [teamAgentMembers, isGroupTab],
   );
   const issueModalAgents = useMemo(
     () =>
-      (currentTask?.instances ?? []).map((i) => ({
+      (panelTask?.instances ?? []).map((i) => ({
         id: i.id,
         name: i.alias ?? i.name,
         role: i.role,
       })),
-    [currentTask],
+    [panelTask],
   );
 
   const nameByStateKey = useMemo(() => {
     const map = new Map<string, string>();
-    for (const a of agentMembers) {
+    for (const a of teamAgentMembers) {
       map.set(a.instanceId ?? a.id, a.name);
       map.set(a.id, a.name);
     }
@@ -513,7 +566,7 @@ export default function TeamSessionPage() {
       map.set(m.id, m.alias ?? m.agent?.name ?? m.agentId);
     }
     return map;
-  }, [agentMembers, team]);
+  }, [teamAgentMembers, team]);
   const stateName = useCallback(
     (key: string) => nameByStateKey.get(key) ?? key,
     [nameByStateKey],
@@ -551,11 +604,11 @@ export default function TeamSessionPage() {
   /* ---------- 会话状态初始快照 ---------- */
   const sessionSeedRef = useRef(false);
   useEffect(() => {
-    if (!currentTask?.instances?.length || sessionSeedRef.current) return;
+    if (!queueHeadTask?.instances?.length || sessionSeedRef.current) return;
     sessionSeedRef.current = true;
     setSessionByAgent((prev) => {
       let next: Record<string, string> | null = null;
-      for (const inst of currentTask.instances) {
+      for (const inst of queueHeadTask.instances) {
         if (inst.sessionStatus && !(inst.id in prev)) {
           if (!next) next = { ...prev };
           next[inst.id] = inst.sessionStatus;
@@ -563,13 +616,13 @@ export default function TeamSessionPage() {
       }
       return next ?? prev;
     });
-    for (const inst of currentTask.instances) {
+    for (const inst of queueHeadTask.instances) {
       if (inst.sessionId) {
         agentIdBySessionRef.current[inst.sessionId] = inst.agentId;
         instanceIdBySessionRef.current[inst.sessionId] = inst.id;
       }
     }
-  }, [currentTask]);
+  }, [queueHeadTask]);
 
   /* ---------- 实时（team + channel + task + global） ---------- */
   // 初次加载/切换 Tab 时滚到底；加载更多（头部插入历史）不打断阅读位置
@@ -586,6 +639,22 @@ export default function TeamSessionPage() {
       setTimeout(() => { el.scrollTop = el.scrollHeight; }, 150);
     });
   }, [isGroupTab, channelId, activePrivateId, messagesQuery.data, privateMessagesQuery.data]);
+
+  const invalidateTaskCaches = useCallback((taskId: string) => {
+    queryClient.invalidateQueries({ queryKey: ["task", taskId], exact: true });
+    queryClient.invalidateQueries({ queryKey: ["task", taskId, "artifacts"], exact: true });
+    queryClient.invalidateQueries({ queryKey: ["task", taskId, "plan-docs"], exact: true });
+    queryClient.invalidateQueries({ queryKey: ["task", taskId, "plan-steps"], exact: true });
+    queryClient.invalidateQueries({ queryKey: ["task-issues", taskId], exact: true });
+    queryClient.invalidateQueries({ queryKey: ["questions", taskId, "pending"], exact: true });
+    queryClient.invalidateQueries({ queryKey: ["plans", taskId], exact: true });
+  }, [queryClient]);
+
+  const invalidateRouteTeamCaches = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["team", teamId], exact: true });
+    queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId], exact: true });
+  }, [queryClient, teamId]);
+
   useRealtimeEvents({
     // 会话统一团队域：只订阅 team: + channel:（群聊/私聊） + global，不再订阅 task:。
     // 回流载荷 taskId 恒 team scope 串/归因透传（LANE-A），守卫一律 team 域放行（见各回调）。
@@ -593,7 +662,7 @@ export default function TeamSessionPage() {
     enabled: !!teamId && !!user?.id,
     onMessage: (payload) => {
       if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-      if (currentTaskId) queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
+      if (effectivePanelTaskId) queryClient.invalidateQueries({ queryKey: ["plans", effectivePanelTaskId], exact: true });
       const m = payload.message;
       if (m.senderType === "agent" && m.senderId) {
         const senderInstanceId = (m as unknown as { senderInstanceId?: string }).senderInstanceId ?? null;
@@ -632,7 +701,7 @@ export default function TeamSessionPage() {
           }
           if (!instKey) {
             const senderInst = (m as unknown as { senderInstanceId?: string | null }).senderInstanceId ?? null;
-            const hit = agentMembers.find((a) =>
+            const hit = teamAgentMembers.find((a) =>
               (senderInst && (a.instanceId ?? a.id) === senderInst) ||
               a.id === m.senderId ||
               (a.instanceId ?? a.id) === m.senderId,
@@ -704,61 +773,57 @@ export default function TeamSessionPage() {
       }
     },
     onTeamChanged: (payload: any) => {
-      if (payload.teamId === teamId || payload.teamId == null) {
-        queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      }
-      if (currentTaskId && payload.taskId === currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      invalidateRouteTeamCaches();
+      if (effectivePanelTaskId && payload.taskId === effectivePanelTaskId) {
+        invalidateTaskCaches(effectivePanelTaskId);
       }
     },
     onTaskStatusChanged: (payload) => {
-      if (currentTaskId && payload.taskId === currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
-        queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      }
+      if (!effectivePanelTaskId || payload.taskId !== effectivePanelTaskId) return;
+      invalidateRouteTeamCaches();
+      invalidateTaskCaches(effectivePanelTaskId);
     },
     onArtifactSubmitted: (payload) => {
-      if (currentTaskId && payload.taskId === currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["task", currentTaskId, "artifacts"] });
+      if (effectivePanelTaskId && payload.taskId === effectivePanelTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["task", effectivePanelTaskId, "artifacts"], exact: true });
       }
     },
     onIssueChanged: (payload) => {
-      if (currentTaskId && payload.taskId === currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["task-issues", currentTaskId] });
-        queryClient.invalidateQueries({ queryKey: ["issues"] });
+      if (effectivePanelTaskId && payload.taskId === effectivePanelTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["task-issues", effectivePanelTaskId], exact: true });
       }
     },
     onReceiptAcked: (payload) => {
       if (payload.teamId !== teamId) return;
-      if (currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
+      if (effectivePanelTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", effectivePanelTaskId], exact: true });
       }
     },
     onReceiptExpired: (payload) => {
       if (payload.teamId !== teamId) return;
-      if (currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
+      if (effectivePanelTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", effectivePanelTaskId], exact: true });
       }
     },
     onRoundComplete: (payload) => {
       if (payload.teamId !== teamId) return;
-      if (currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
-        queryClient.invalidateQueries({ queryKey: ["task-issues", currentTaskId] });
+      if (effectivePanelTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", effectivePanelTaskId], exact: true });
+        queryClient.invalidateQueries({ queryKey: ["task-issues", effectivePanelTaskId], exact: true });
       }
     },
     onRoundStale: (payload) => {
       if (payload.teamId !== teamId) return;
-      if (currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
-        queryClient.invalidateQueries({ queryKey: ["task-issues", currentTaskId] });
+      if (effectivePanelTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", effectivePanelTaskId], exact: true });
+        queryClient.invalidateQueries({ queryKey: ["task-issues", effectivePanelTaskId], exact: true });
       }
     },
     onPlanStatusChanged: (payload) => {
       if (payload.teamId !== teamId) return;
-      if (currentTaskId && payload.taskId === currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["plans", currentTaskId] });
-        queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      if (effectivePanelTaskId && payload.taskId === effectivePanelTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["plans", effectivePanelTaskId], exact: true });
+        queryClient.invalidateQueries({ queryKey: ["task", effectivePanelTaskId], exact: true });
       }
     },
     onAgentQuestion: (payload: RealtimeQuestionEvent) => {
@@ -811,7 +876,7 @@ export default function TeamSessionPage() {
   /* ---------- 发送（群聊/私聊路由） ---------- */
   const targetChannelId = isGroupTab ? channelId : (activePrivateId ?? channelId);
   const privateMentionTarget = !isGroupTab && activePrivateId
-    ? agentMembers.find((a) => `private:${privateChannelMap.get(a.instanceId ?? a.id)}` === activeTab) ?? null
+    ? teamAgentMembers.find((a) => `private:${privateChannelMap.get(a.instanceId ?? a.id)}` === activeTab) ?? null
     : null;
   const sendMutation = useMutation({
     mutationFn: (payload: SendMessagePayload) =>
@@ -836,7 +901,7 @@ export default function TeamSessionPage() {
               attachmentType: payload.attachment.ext,
             }
           : {}),
-        ...(isGroupTab && currentTaskId ? { taskId: currentTaskId } : {}),
+        ...(isGroupTab && queueHeadTaskId ? { taskId: queueHeadTaskId } : {}),
       }),
     onSuccess: () => {
       setInput("");
@@ -855,7 +920,7 @@ export default function TeamSessionPage() {
     const inst = privateMentionTarget;
     if (inst && (inst as { enabled?: boolean | null }).enabled === false) return;
     for (const m of payload.mentions) {
-      const inst = agentMembers.find((a) => a.id === m.id && (m.instanceId ? a.instanceId === m.instanceId : true));
+      const inst = teamAgentMembers.find((a) => a.id === m.id && (m.instanceId ? a.instanceId === m.instanceId : true));
       if (inst && (inst as { enabled?: boolean | null }).enabled === false) return;
     }
     sendMutation.mutate(payload);
@@ -887,27 +952,27 @@ export default function TeamSessionPage() {
   }, [isGroupTab, messagesQuery, privateMessagesQuery, channelId, activePrivateId, loadingMore, queryClient, teamId]);
 
   /* ---------- 成员管理（挂当前任务实例维度；无当前任务时只读） ---------- */
-  const hasCurrentTask = !!currentTaskId;
+  const hasQueueHeadTask = !!queueHeadTaskId;
   const toggleEnabledMutation = useMutation({
     mutationFn: ({ instanceId, enabled }: { instanceId: string; enabled: boolean }) =>
-      api.patch<TaskDetail>(`/tasks/${currentTaskId}/instances/${instanceId}`, { enabled }),
+      api.patch<TaskDetail>(`/tasks/${queueHeadTaskId}/instances/${instanceId}`, { enabled }),
     onSuccess: (updated) => {
-      queryClient.setQueryData<TaskDetail>(["task", currentTaskId], updated);
-      queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      queryClient.setQueryData<TaskDetail>(["task", queueHeadTaskId], updated);
+      queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
     },
     onError: (err) => {
-      console.error("[TeamSession] toggle instance failed", { teamId, taskId: currentTaskId, error: err });
+      console.error("[TeamSession] toggle instance failed", { teamId, taskId: queueHeadTaskId, error: err });
     },
   });
   const instanceModelMutation = useMutation({
     mutationFn: ({ instanceId, modelId }: { instanceId: string; modelId: string | null }) =>
       api.patch(`/teams/${teamId}/members/${instanceId}`, { overrideModelId: modelId ?? null }),
     onSuccess: () => {
-      // 会话页 agentMembers 有任务实例时优先读 currentTask.instances（["task", currentTaskId]），
+      // 会话页 teamAgentMembers 有任务实例时优先读队首任务实例（["task", effectivePanelTaskId]），
       // 仅失效 team 缓存 UI 不刷新——需同时失效 task 缓存（成员模型覆盖展示断链修复）。
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      if (currentTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      if (queueHeadTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
       }
     },
     onError: (err) => {
@@ -918,7 +983,7 @@ export default function TeamSessionPage() {
     mutationFn: (instanceId: string) => {
       // 实例 key → 团队成员 id（tmm_）：团队成员来源时 instanceId 本身即 tmm_；
       // 任务实例来源时按 agentId+seq 匹配 team.members（与私聊建频道同规则）。
-      const member = agentMembers.find((a) => (a.instanceId ?? a.id) === instanceId);
+      const member = teamAgentMembers.find((a) => (a.instanceId ?? a.id) === instanceId);
       const memberId = member?.instanceId?.startsWith("tmm_")
         ? member.instanceId
         : (team?.members.find((m) => m.agentId === member?.id && m.seq === member?.seq)?.id
@@ -930,7 +995,7 @@ export default function TeamSessionPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      if (currentTaskId) queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      if (queueHeadTaskId) queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
     },
     onError: (err) => {
       console.error("[TeamSession] reset session failed", { teamId, error: err });
@@ -938,17 +1003,17 @@ export default function TeamSessionPage() {
   });
   const addInstanceMutation = useMutation({
     mutationFn: (payload: AddInstancePayload) =>
-      api.post<TaskDetail>(`/tasks/${currentTaskId}/team`, {
+      api.post<TaskDetail>(`/tasks/${queueHeadTaskId}/team`, {
         addInstances: [{ ...(payload.roleId ? { roleId: payload.roleId } : {}), ...(payload.agentId ? { agentId: payload.agentId } : {}), ...(payload.alias ? { alias: payload.alias } : {}) }],
         removeInstanceIds: [],
       }),
     onSuccess: (updated) => {
       setAddError(null);
-      queryClient.setQueryData<TaskDetail>(["task", currentTaskId], updated);
-      queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
+      queryClient.setQueryData<TaskDetail>(["task", queueHeadTaskId], updated);
+      queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
     },
     onError: (err) => {
-      console.error("[TeamSession] add instance failed", { teamId, taskId: currentTaskId, error: err });
+      console.error("[TeamSession] add instance failed", { teamId, taskId: queueHeadTaskId, error: err });
       setAddError(isApiError(err) ? err.message : "添加实例失败，请稍后重试");
     },
   });
@@ -1025,7 +1090,7 @@ export default function TeamSessionPage() {
   const nextCursor = isGroupTab
     ? (messagesQuery.data?.nextCursor ?? null)
     : (privateMessagesQuery.data?.nextCursor ?? null);
-  const teamEditable = !!currentTask && (currentTask.status === "pending" || currentTask.status === "in_progress" || currentTask.status === "blocked");
+  const teamEditable = !!queueHeadTask && (queueHeadTask.status === "pending" || queueHeadTask.status === "in_progress" || queueHeadTask.status === "blocked");
 
   return (
     <div data-testid="team-session-root" style={{ flex: 1, minHeight: 0, height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", ...baseFont }}>
@@ -1034,16 +1099,16 @@ export default function TeamSessionPage() {
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
             <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>{team.name} · 团队会话</span>
-            {currentTask ? (
+            {panelTask ? (
               <button
                 type="button"
                 data-testid="team-session-current-task"
-                data-task-id={currentTask.id}
+                data-task-id={panelTask.id}
                 onClick={() => setTaskDetailOpen(true)}
                 title="打开任务详情抽屉"
                 style={{ fontSize: fontSize.xs, color: "#0D9488", backgroundColor: "rgba(13,148,136,0.08)", border: "1px solid rgba(13,148,136,0.22)", padding: "1px 8px", borderRadius: radius.pill, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 240 }}
               >
-                {currentTask.title}
+                {panelTask.title}
               </button>
             ) : (
               <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>团队空闲</span>
@@ -1053,14 +1118,19 @@ export default function TeamSessionPage() {
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: space.sm }}>
           <button type="button" data-testid="team-session-refresh" aria-label="刷新会话" onClick={() => { queryClient.invalidateQueries({ queryKey: ["channel", channelId, "messages"] }); queryClient.invalidateQueries({ queryKey: ["channels", "team_group", teamId] }); queryClient.invalidateQueries({ queryKey: ["team", teamId] }); }} style={{ width: 32, height: 32, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[500], cursor: "pointer" }}>↻</button>
-          <div style={{ display: "flex" }}>{agentMembers.slice(0, 5).map((a, i) => (<span key={a.instanceId ?? a.id} style={{ marginLeft: i === 0 ? 0 : -8 }}><AgentAvatar role={a.role} size="sm" style={{ border: "2px solid #FFF" }} /></span>))}</div>
+          <div style={{ display: "flex" }}>{teamAgentMembers.slice(0, 5).map((a, i) => (<span key={a.instanceId ?? a.id} style={{ marginLeft: i === 0 ? 0 : -8 }}><AgentAvatar role={a.role} size="sm" style={{ border: "2px solid #FFF" }} /></span>))}</div>
         </div>
       </header>
+      {taskParamError && (
+        <div data-testid="session-task-param-error" role="alert" style={{ flexShrink: 0, padding: `${space.sm}px ${space.xl}px`, backgroundColor: "rgba(220,38,38,0.08)", borderBottom: "1px solid rgba(220,38,38,0.20)", color: "#B91C1C", fontSize: fontSize.sm }}>
+          {taskParamError}
+        </div>
+      )}
 
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", position: "relative" }}>
         {/* 左侧完整成员面板 */}
         <TeamMembersPanel
-          agents={agentMembers}
+          agents={teamAgentMembers}
           loadingAgentIds={loadingAgentIds}
           sessionStatusByAgent={sessionByAgent}
           teamEditable={teamEditable}
@@ -1070,8 +1140,8 @@ export default function TeamSessionPage() {
           addError={addError}
           onAddInstance={handleAddInstance}
           width={membersPanel.width}
-          onToggleEnabled={hasCurrentTask ? (instanceId: string, enabled: boolean) => toggleEnabledMutation.mutate({ instanceId, enabled }) : undefined}
-          onResetSession={hasCurrentTask ? (instanceId: string) => resetSessionMutation.mutate(instanceId) : undefined}
+          onToggleEnabled={hasQueueHeadTask ? (instanceId: string, enabled: boolean) => toggleEnabledMutation.mutate({ instanceId, enabled }) : undefined}
+          onResetSession={hasQueueHeadTask ? (instanceId: string) => resetSessionMutation.mutate(instanceId) : undefined}
           onChangeModel={(instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId })}
           onSetMainAgent={(memberId: string) => { if (!setMainAgentMutation.isPending) setMainAgentMutation.mutate(memberId); }}
           onSelectMember={(instanceId) => handlePrivateTab(instanceId)}
@@ -1096,7 +1166,7 @@ export default function TeamSessionPage() {
             >
               群聊
             </button>
-            {agentMembers.map((m) => {
+            {teamAgentMembers.map((m) => {
               const chanId = privateChannelMap.get(m.instanceId ?? m.id);
               const isActive = chanId ? activeTab === `private:${chanId}` : false;
               const instKey = m.instanceId ?? m.id;
@@ -1230,8 +1300,8 @@ export default function TeamSessionPage() {
               onSend={handleSend}
               mentionable={mentionable}
               sending={sendMutation.isPending}
-              taskId={currentTaskId ?? undefined}
-              placeholder={isGroupTab ? "输入消息，@ 成员或 @all 广播…" : `发送私聊给 ${agentMembers.find((m) => `private:${privateChannelMap.get(m.instanceId ?? m.id)}` === activeTab)?.name ?? "私聊对象"}…`}
+              taskId={queueHeadTaskId ?? undefined}
+              placeholder={isGroupTab ? "输入消息，@ 成员或 @all 广播…" : `发送私聊给 ${teamAgentMembers.find((m) => `private:${privateChannelMap.get(m.instanceId ?? m.id)}` === activeTab)?.name ?? "私聊对象"}…`}
             />
             <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[400] }}>按团队复用 · 群聊消息按当前任务分区归属 {team.name}</div>
           </div>
@@ -1261,19 +1331,19 @@ export default function TeamSessionPage() {
           )}
           <TaskRightTabs
             team={team}
-            task={currentTask}
-            taskId={currentTask?.id ?? ""}
+            task={panelTask}
+            taskId={panelTask?.id ?? ""}
             artifactsQuery={artifactsQuery}
             planDocsQuery={planDocsQuery}
             planStepsQuery={planStepsQuery}
             issuesQuery={issuesQuery}
-            agents={agentMembers}
+            agents={panelAgentMembers}
             onEditTaskInfo={() => setTaskEditOpen(true)}
             onOpenArtifacts={() => router.push(`/docs?teamId=${teamId}`)}
             onOpenIssues={() =>
               router.push(
-                currentTask?.id
-                  ? `/issues?teamId=${teamId}&taskId=${currentTask.id}`
+                panelTask?.id
+                  ? `/issues?teamId=${teamId}&taskId=${panelTask.id}`
                   : `/teams/${teamId}/tasks`,
               )
             }
@@ -1281,7 +1351,7 @@ export default function TeamSessionPage() {
             onOpenIssueDetail={(issueId: string) => setDetailIssueId(issueId)}
             onOpenArtifactDoc={(a: ArtifactItem) => {
               const items = (artifactsQuery.data?.items ?? []) as { id: string; title: string }[];
-              if (currentTask) router.push(`/docs/${currentTask.id}?doc=${docIdFor(a.title, a.id, items)}`);
+              if (panelTask) router.push(`/docs/${panelTask.id}?doc=${docIdFor(a.title, a.id, items)}`);
             }}
             onUploadPlanDoc={() => {
               setPlanUploadError(null);
@@ -1291,21 +1361,21 @@ export default function TeamSessionPage() {
         </div>
 
         {/* 任务信息编辑弹窗 */}
-        {currentTask ? (
+        {panelTask ? (
           <TaskInfoEditModal
-            task={currentTask}
+            task={panelTask}
             open={taskEditOpen}
             onClose={() => setTaskEditOpen(false)}
             onSaved={() => {
-              queryClient.invalidateQueries({ queryKey: ["task", currentTaskId] });
-              queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+              queryClient.invalidateQueries({ queryKey: ["task", effectivePanelTaskId], exact: true });
+              queryClient.invalidateQueries({ queryKey: ["team", teamId], exact: true });
             }}
           />
         ) : null}
 
         {/* 任务详情抽屉（替代已删除的 /tasks/:id 路由页） */}
-        {currentTask && taskDetailOpen ? (
-          <TaskDetailDrawer taskId={currentTask.id} onClose={() => setTaskDetailOpen(false)} />
+        {panelTask && taskDetailOpen ? (
+          <TaskDetailDrawer taskId={panelTask.id} onClose={() => setTaskDetailOpen(false)} />
         ) : null}
 
         {/* Issue 详情弹窗 */}
@@ -1314,7 +1384,7 @@ export default function TeamSessionPage() {
           open={!!detailIssueId}
           onClose={() => setDetailIssueId(null)}
           agents={issueModalAgents}
-          onChanged={() => queryClient.invalidateQueries({ queryKey: ["task-issues", currentTaskId] })}
+          onChanged={() => queryClient.invalidateQueries({ queryKey: ["task-issues", effectivePanelTaskId], exact: true })}
         />
 
         {/* Agent 提问/权限确认弹窗 */}
