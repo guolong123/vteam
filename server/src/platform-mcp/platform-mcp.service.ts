@@ -22,6 +22,7 @@ import {
   SESSION_STATUS,
 } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
+import { WECOM_OPERATOR_TTL_MS } from '../message-channels/adapters/wecom-aibot.adapter';
 import { roleKeyOf } from '../common/agent-role-label';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -140,6 +141,34 @@ const NOTIFY_NO_ACTIVE_TASK_HINT =
  */
 const JOIN_PENDING_HINT =
   '进度已记录（消息已落库广播、回执照记）：子 Agent 回执（answer）永不在主 Agent 上开执行 turn，主 Agent 只在 fan-out 收敛（drain）时被唤醒；需立即打断请用 type=question/help。';
+
+type WecomStreamInfo = {
+  readonly fromUserId?: string;
+  readonly fromUserName?: string;
+  readonly chattype?: string;
+};
+
+type WecomExternalMessage = {
+  readonly id: string;
+  readonly content?: unknown;
+  readonly createdAt?: Date | null;
+};
+
+function isWecomStreamInfo(value: unknown): value is WecomStreamInfo {
+  return typeof value === 'object' && value !== null;
+}
+
+function getWecomStreamReader(
+  adapter: unknown,
+): ((id: string) => WecomStreamInfo | undefined) | null {
+  if (typeof adapter !== 'object' || adapter === null) return null;
+  const getStream: unknown = Reflect.get(adapter, 'getStream');
+  if (typeof getStream !== 'function') return null;
+  return (id: string): WecomStreamInfo | undefined => {
+    const value: unknown = Reflect.apply(getStream, adapter, [id]);
+    return isWecomStreamInfo(value) ? value : undefined;
+  };
+}
 
 /**
  * 归一化待比对的派发正文：首尾去空白 + 内部连续空白折叠为单空格。
@@ -4083,29 +4112,27 @@ export class PlatformMcpService implements OnModuleInit {
     let teamId: string | null = args.teamId?.trim() || null;
     let legacyTaskId: string | null = args.taskId?.trim() || null;
     let selfInstanceId: string | null = args.selfInstanceId?.trim() || null;
-    if (!legacyTaskId || !selfInstanceId) {
-      try {
-        const sess = await (this.prisma as any).session.findFirst({
-          where: teamId
-            ? { workerId: ctx.workerId, teamId }
-            : { workerId: ctx.workerId },
-          orderBy: { createdAt: 'desc' },
-          select: {
-            taskId: true,
-            teamId: true,
-            teamMemberId: true,
-            agentId: true,
-          },
-        });
-        if (sess) {
-          if (!teamId) teamId = sess.teamId ?? null;
-          if (!legacyTaskId) legacyTaskId = sess.taskId ?? null;
-          if (!selfInstanceId) {
-            selfInstanceId = sess.teamMemberId ?? sess.agentId ?? null;
-          }
+    try {
+      const sess = await (this.prisma as any).session.findFirst({
+        where: teamId
+          ? { workerId: ctx.workerId, teamId }
+          : { workerId: ctx.workerId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          taskId: true,
+          teamId: true,
+          teamMemberId: true,
+          agentId: true,
+        },
+      });
+      if (sess) {
+        if (!teamId) teamId = sess.teamId ?? null;
+        if (!legacyTaskId) legacyTaskId = sess.taskId ?? null;
+        if (!selfInstanceId) {
+          selfInstanceId = sess.teamMemberId ?? sess.agentId ?? null;
         }
-      } catch {}
-    }
+      }
+    } catch {}
     if (!teamId && legacyTaskId) {
       try {
         const task = await this.prisma.task.findUnique({
@@ -4195,28 +4222,27 @@ export class PlatformMcpService implements OnModuleInit {
 
     let fromName: string | null = null;
     let chattype: string | null = null;
+    let activeExternal:
+      | (WecomExternalMessage & {
+          readonly stream: WecomStreamInfo;
+        })
+      | null = null;
     try {
       const pending = legacyTaskId
         ? (adapter as any).getPendingOperatorForTask?.(legacyTaskId)
         : null;
+      activeExternal = pending
+        ? null
+        : await this.findActiveTeamExternalMessage(teamId, adapter);
       if (pending) {
         fromName = pending.fromUserName ?? pending.fromUserId ?? null;
         chattype = pending.chattype ?? null;
-      } else {
-        const ext = await this.findLatestTeamExternalMessage(teamId);
-        if (ext) {
-          const streamInfo =
-            (adapter as any).getStream?.(ext.id) ??
-            (adapter as any).getPendingUser?.(ext.id);
-          if (streamInfo) {
-            fromName = streamInfo.fromUserName ?? streamInfo.fromUserId ?? null;
-            chattype = streamInfo.chattype ?? null;
-          } else {
-            const contentText = (ext.content as any)?.text ?? '';
-            const m = /\[WeCom:([^\]]+)\]/.exec(String(contentText));
-            if (m) fromName = m[1].trim();
-          }
-        }
+      } else if (activeExternal) {
+        fromName =
+          activeExternal.stream.fromUserName ??
+          activeExternal.stream.fromUserId ??
+          null;
+        chattype = activeExternal.stream.chattype ?? null;
       }
     } catch {}
 
@@ -4237,28 +4263,28 @@ export class PlatformMcpService implements OnModuleInit {
     let sendError: string | null = null;
     try {
       if (msgtype === 'text' || msgtype === 'markdown') {
-        if (typeof (adapter as any).finishStream === 'function') {
-          const ext = await this.findLatestTeamExternalMessage(teamId);
-          if (ext) {
-            try {
-              wecomSent = await (adapter as any).finishStream(
-                ext.id,
-                wecomText,
+        if (
+          activeExternal &&
+          typeof (adapter as any).finishStream === 'function'
+        ) {
+          try {
+            wecomSent = await (adapter as any).finishStream(
+              activeExternal.id,
+              wecomText,
+            );
+            if (wecomSent) {
+              this.logger.log(
+                `wecom_reply finishStream ok teamId=${teamId} internalMessageId=${activeExternal.id} stream replaced`,
               );
-              if (wecomSent) {
-                this.logger.log(
-                  `wecom_reply finishStream ok teamId=${teamId} internalMessageId=${ext.id} stream replaced`,
-                );
-              } else {
-                this.logger.log(
-                  `wecom_reply finishStream miss teamId=${teamId} internalMessageId=${ext.id} fallback to sendNewMessage`,
-                );
-              }
-            } catch (e) {
-              this.logger.warn(
-                `wecom_reply finishStream error teamId=${teamId}: ${(e as Error).message}`,
+            } else {
+              this.logger.log(
+                `wecom_reply finishStream miss teamId=${teamId} internalMessageId=${activeExternal.id} fallback to sendNewMessage`,
               );
             }
+          } catch (e) {
+            this.logger.warn(
+              `wecom_reply finishStream error teamId=${teamId}: ${(e as Error).message}`,
+            );
           }
         }
         if (
@@ -4848,7 +4874,7 @@ export class PlatformMcpService implements OnModuleInit {
         resolvedCard = cardObj;
         let internalId: string | null = null;
         try {
-          const ext = await this.findLatestTeamExternalMessage(teamId);
+          const ext = activeExternal;
           if (ext) internalId = ext.id;
         } catch {}
         // Prefer passive reply (carries replyStream context + req_id) for chattype single/group both work via frameHeaders; fallback to active sendMessage
@@ -5042,7 +5068,7 @@ export class PlatformMcpService implements OnModuleInit {
         resolvedCard = cardObj;
         let internalId: string | null = null;
         try {
-          const ext = await this.findLatestTeamExternalMessage(teamId);
+          const ext = activeExternal;
           if (ext) internalId = ext.id;
         } catch {}
         try {
@@ -5208,7 +5234,7 @@ export class PlatformMcpService implements OnModuleInit {
         // Send via passive reply first, fallback to active
         let internalId: string | null = null;
         try {
-          const ext = await this.findLatestTeamExternalMessage(teamId);
+          const ext = activeExternal;
           if (ext) internalId = ext.id;
         } catch {}
         if (internalId && typeof (adapter as any).replyMedia === 'function') {
@@ -5305,13 +5331,22 @@ export class PlatformMcpService implements OnModuleInit {
           teamId,
           instanceId,
         );
+        const placeholderOwnerWhere = {
+          senderId: senderAgentId,
+          senderInstanceId: instanceId,
+        };
+        const placeholderFreshAfter = new Date(
+          Date.now() - WECOM_OPERATOR_TTL_MS,
+        );
         let placeholder: { id: string } | null = null;
         try {
           placeholder = await (this.prisma as any).message.findFirst({
             where: {
+              ...placeholderOwnerWhere,
               channelId: groupCh.id,
               senderType: { in: [SENDER_TYPE.agent, SENDER_TYPE.system] },
               status: MESSAGE_STATUS.processing,
+              createdAt: { gte: placeholderFreshAfter },
             },
             orderBy: { createdAt: 'desc' },
             select: { id: true },
@@ -5330,18 +5365,13 @@ export class PlatformMcpService implements OnModuleInit {
             if (ext?.createdAt) {
               placeholder = await (this.prisma as any).message.findFirst({
                 where: {
+                  ...placeholderOwnerWhere,
                   channelId: groupCh.id,
                   senderType: { in: [SENDER_TYPE.agent, SENDER_TYPE.system] },
-                  createdAt: { gt: ext.createdAt },
-                },
-                orderBy: { createdAt: 'desc' },
-                select: { id: true },
-              });
-            } else {
-              placeholder = await (this.prisma as any).message.findFirst({
-                where: {
-                  channelId: groupCh.id,
-                  senderType: { in: [SENDER_TYPE.agent, SENDER_TYPE.system] },
+                  createdAt: {
+                    gt: ext.createdAt,
+                    gte: placeholderFreshAfter,
+                  },
                 },
                 orderBy: { createdAt: 'desc' },
                 select: { id: true },
@@ -5353,7 +5383,6 @@ export class PlatformMcpService implements OnModuleInit {
           const updated = await (this.prisma as any).message.update({
             where: { id: placeholder.id },
             data: {
-              taskId: null,
               content: mirrorContent as any,
               status: MESSAGE_STATUS.sent,
               senderId: senderAgentId,
@@ -5952,20 +5981,34 @@ export class PlatformMcpService implements OnModuleInit {
     return { memberId, sessionId: session.id };
   }
 
-  private async findLatestTeamExternalMessage(
+  private async findActiveTeamExternalMessage(
     teamId: string,
-  ): Promise<{ id: string; content?: unknown; createdAt?: Date } | null> {
+    adapter: unknown,
+  ): Promise<
+    (WecomExternalMessage & { readonly stream: WecomStreamInfo }) | null
+  > {
     try {
       const groupChannel = await this.findTeamGroupChannel(teamId);
-      if (!groupChannel) return null;
-      return (this.prisma as any).message.findFirst({
+      const getStream = getWecomStreamReader(adapter);
+      if (!groupChannel || !getStream) return null;
+      const candidates = (await (this.prisma as any).message.findMany({
         where: {
           channelId: groupChannel.id,
           senderType: SENDER_TYPE.external,
         },
         orderBy: { createdAt: 'desc' },
+        take: 20,
         select: { id: true, content: true, createdAt: true },
-      });
+      })) as WecomExternalMessage[];
+      const now = Date.now();
+      for (const candidate of candidates) {
+        if (!candidate.createdAt) continue;
+        const ageMs = now - candidate.createdAt.getTime();
+        if (ageMs < 0 || ageMs > WECOM_OPERATOR_TTL_MS) continue;
+        const stream = getStream(candidate.id);
+        if (stream) return { ...candidate, stream };
+      }
+      return null;
     } catch {
       return null;
     }
