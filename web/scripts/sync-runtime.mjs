@@ -13,7 +13,7 @@
  *
  * 触发：web/package.json 的 postinstall（自动）+ sync:runtime（手动）。
  */
-import { mkdirSync, copyFileSync, writeFileSync, readFileSync, statSync, existsSync } from "node:fs";
+import { mkdirSync, copyFileSync, writeFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -23,39 +23,8 @@ const webRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const vendorDir = join(webRoot, "public", "vendor");
 const esbuildDir = join(webRoot, "public", "esbuild");
-const sharedDir = join(webRoot, "src", "features", "docs-site", "proto-shared");
 mkdirSync(vendorDir, { recursive: true });
 mkdirSync(esbuildDir, { recursive: true });
-mkdirSync(sharedDir, { recursive: true });
-
-/* ---------------- 0. proto-shared 源码 map（浏览器端 esbuild bundle 输入） ---------------- */
-const sharedFiles = [
-  "index.ts",
-  "styles.ts",
-  "components.tsx",
-  "nav.tsx",
-  "ui.tsx",
-  "types.ts",
-];
-const sharedSources = {};
-for (const f of sharedFiles) {
-  const p = join(sharedDir, f);
-  if (existsSync(p)) {
-    sharedSources[f] = readFileSync(p, "utf8");
-  } else {
-    console.warn(`[sync-runtime] skip missing proto-shared source: ${f}`);
-  }
-}
-const sharedJson = JSON.stringify(sharedSources, null, 2)
-  .replace(/\u2028/g, "\\u2028")
-  .replace(/\u2029/g, "\\u2029");
-writeFileSync(
-  join(sharedDir, "sources.generated.ts"),
-  `// 由 scripts/sync-runtime.mjs 自动生成（postinstall / sync:runtime），勿手改。
-// 平台 proto-shared 各模块的源码文本，供原型 TSX 浏览器端编译（esbuild-wasm）时作为 bundle 输入。
-export const PROTO_SHARED_SOURCES: Record<string, string> = ${sharedJson};
-`,
-);
 
 /* ---------------- 1. React runtime bundle ---------------- */
 
@@ -104,5 +73,5 @@ const wasmOut = join(esbuildDir, "esbuild.wasm");
 copyFileSync(wasmPath, wasmOut);
 
 console.log(
-  `[sync-runtime] done → ${reactRuntimeOut} (${(statSync(reactRuntimeOut).size / 1024).toFixed(0)}KB), ${wasmOut}, ${join(sharedDir, "sources.generated.ts")}`,
+  `[sync-runtime] done → ${reactRuntimeOut} (${(statSync(reactRuntimeOut).size / 1024).toFixed(0)}KB), ${wasmOut}`,
 );
