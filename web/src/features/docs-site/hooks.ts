@@ -39,6 +39,7 @@ export function useDocContent(taskId: string, file: string, fileExt?: string, fi
       }
       const content = await api.get<string>(
         `/docs-site/${encodeURIComponent(taskId)}/prd/${encodeURIComponent(file)}`,
+        { parse: "text" },
       );
       return { kind: "markdown", content };
     },
@@ -130,6 +131,7 @@ export function usePrototypeSource(taskId: string, file: string) {
     queryFn: async () => {
       return api.get<string>(
         `/docs-site/${taskId}/prototypes/${encodeFile(file)}`,
+        { parse: "text" },
       );
     },
     enabled: !!taskId && !!file,

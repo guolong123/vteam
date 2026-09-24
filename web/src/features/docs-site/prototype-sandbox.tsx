@@ -68,7 +68,10 @@ function encodeFile(file: string): string {
 }
 
 async function fetchPrototypeSource(taskId: string, file: string): Promise<string> {
-  return api.get<string>(`/docs-site/${taskId}/prototypes/${encodeFile(file)}`);
+  return api.get<string>(
+    `/docs-site/${taskId}/prototypes/${encodeFile(file)}`,
+    { parse: "text" },
+  );
 }
 
 async function fetchRuntimeJs(): Promise<string> {

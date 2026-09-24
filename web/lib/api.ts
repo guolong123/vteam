@@ -40,6 +40,8 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
   body?: unknown;
   /** 查询参数，自动拼接为 URL query string。值为 undefined 的键会被忽略。 */
   query?: Record<string, string | number | boolean | undefined>;
+  /** 成功响应解析方式。默认 JSON；纯文本端点显式传 text。 */
+  parse?: "json" | "text";
 }
 
 /**
@@ -52,7 +54,7 @@ export async function request<T>(
   path: string,
   options: RequestOptions = {}
 ): Promise<T> {
-  const { body, query, headers, ...rest } = options;
+  const { body, query, headers, parse = "json", ...rest } = options;
 
   let url = `${API_BASE_URL}${path}`;
   if (query) {
@@ -133,6 +135,9 @@ export async function request<T>(
   // 空 body 按成功处理返回 undefined，避免 JSON.parse('') 抛错导致误判失败
   if (!text) {
     return undefined as T;
+  }
+  if (parse === "text") {
+    return text as T;
   }
   return JSON.parse(text) as T;
 }
