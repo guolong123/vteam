@@ -14,9 +14,11 @@ import { useSSE } from "@/hooks/use-sse";
 import { AgentAvatar, StatusBadge } from "@/src/components/ui";
 import { toRole } from "@/src/components/teams/TeamMembersPanel";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
+import type { TaskApiStatus } from "@/src/types/task-status";
+import { STATUS_LABEL } from "@/src/types/task-status";
 import type { CSSProperties } from "react";
 
-type TaskApiStatus = "queued" | "pending" | "in_progress" | "blocked" | "pending_review" | "completed" | "archived";
+/** 后端七态（唯一定义见 `@/src/types/task-status`，此处导入）。 */
 
 interface TaskItem {
   id: string;
@@ -48,15 +50,7 @@ const STATUS_BADGE_KEY: Partial<Record<TaskApiStatus, "进行中" | "阻塞中" 
   archived: "已归档",
 };
 
-const STATUS_LABEL: Record<TaskApiStatus, string> = {
-  queued: "排队中",
-  pending: "待开始",
-  in_progress: "进行中",
-  blocked: "阻塞中",
-  pending_review: "待验收",
-  completed: "已完成",
-  archived: "已归档",
-};
+/** 状态中文标签（唯一定义见 `@/src/types/task-status`，此处直接引用导入的 `STATUS_LABEL`）。 */
 
 const PRIORITY_LABEL: Record<string, { label: string; color: string }> = {
   high: { label: "高", color: "#DC2626" },

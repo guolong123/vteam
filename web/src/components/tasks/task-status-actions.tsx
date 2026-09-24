@@ -28,18 +28,10 @@ import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/them
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** 后端五态（TASK_STATUS，对齐 board / tasks 页局部类型）。 */
-export type TaskApiStatus =
-  | "queued"
-  | "pending"
-  | "in_progress"
-  | "blocked"
-  | "pending_review"
-  | "completed"
-  | "archived";
-
-/** 可执行操作 key（对齐后端端点后缀）。 */
-type TaskAction = "start" | "mark-pending-review" | "accept" | "reject" | "archive" | "block" | "resume";
+/** 后端七态与流转表唯一定义见 `@/src/types/task-status`；此处重导出类型供既有调用方兼容。 */
+export type { TaskApiStatus, TaskAction } from "@/src/types/task-status";
+import { ACTION_SETS } from "@/src/types/task-status";
+import type { TaskAction, TaskApiStatus } from "@/src/types/task-status";
 
 interface TaskStatusActionsProps {
   taskId: string;
@@ -51,16 +43,7 @@ interface TaskStatusActionsProps {
   layout?: "column" | "row";
 }
 
-/** 各状态可执行操作组（archived 终态返回 null 不渲染）。 */
-const ACTION_SETS: Record<TaskApiStatus, TaskAction[] | null> = {
-  queued: null,
-  pending: ["start"],
-  in_progress: ["mark-pending-review", "block"],
-  blocked: ["resume"],
-  pending_review: ["accept", "reject"],
-  completed: ["archive"],
-  archived: null,
-};
+/** 各状态可执行操作组（唯一定义见 `@/src/types/task-status`，此处直接引用导入的 `ACTION_SETS`）。 */
 
 /** 操作元信息：按钮文案 / 强调色 / pending 文案。颜色对齐既有状态语义（进行中蓝/完成绿/驳回琥珀/归档灰）。中性色用固定深灰（neutral token 在暗色下翻转会变浅，白字压不住）。 */
 const ACTION_META: Record<TaskAction, { label: string; color: string; pendingLabel: string }> = {

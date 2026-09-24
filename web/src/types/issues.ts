@@ -8,8 +8,9 @@
  * - IssuesResponse：GET /issues 分页响应（对齐 models/git-repos 的 findAll 模式）。
  */
 
-/** Issue 状态（ISSUE_STATUS：open/in_progress/resolved/closed/rejected，is_0000000013 增 rejected）。 */
-export type IssueStatus = "open" | "in_progress" | "resolved" | "closed" | "rejected";
+/** Issue 状态（唯一定义见 `./issue-status`，此处透传重导出供既有调用方兼容）。 */
+export type { IssueStatus } from "./issue-status";
+import type { IssueStatus } from "./issue-status";
 
 /** 操作记录条目（is_0000000013：IssueActivity 的 DTO，含操作人展示名）。 */
 export interface IssueActivityItem {
