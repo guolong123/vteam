@@ -72,14 +72,10 @@ export function buildProgressionDedupKey(taskId: string): string {
   return buildTriggerDedupKey(TRIGGER_KIND.PROGRESSION_PATROL, 'task', taskId);
 }
 
-/** 循环表条目：nextRunAt 下次触发时间戳、rounds 已巡检轮次、maxRounds 轮次上限、quietStreak 连续静默轮次。 */
-interface ProgressionEntry {
+/** 巡检触发器行 payload：taskId 归属任务；quietStreak 连续静默轮次（canonical 持久化，随行生灭，重启不丢）。 */
+interface ProgressionPatrolPayload {
   taskId: string;
-  nextRunAt: number;
-  rounds: number;
-  maxRounds: number;
-  /** 连续静默轮次（叫醒后仍无进展则累加；观测到活跃清零；达 STALL_QUIET_STREAK_LIMIT 自动置阻塞）。 */
-  quietStreak: number;
+  quietStreak?: number;
 }
 
 /** 巡检消息 prompt（引导而非写死动作——主 Agent 经 MCP 工具自主决策）。 */
@@ -99,16 +95,18 @@ export function buildProgressionPrompt(title: string, status: string): string {
  * 一任务一行，dedupKey=`progression_patrol:task:<taskId>`）：
  * - register(taskId)：任务进入 in_progress（start/reject）时排期（intervalMs=巡检间隔、
  *   maxFires=轮次上限、guardKey=冷却否决）；幂等：pending 行已存在 → 直接保留
- *   （fireCount 即 rounds 不清零——重启安全核心）。
+ *   （fireCount/quietStreak 不清零——重启安全核心）。
  * - unregister(taskId)：任务离开 in_progress 时 cancel 触发器（行留 cancelled 备查）。
  * - 轮次计数：rounds ≡ trigger.fireCount（基座每次触发后 +1 并落库，重启不丢）；
  *   maxRounds ≡ maxFires（基座 claim 前 + 触发后双重强制熄火，非内存计数）。
  * - 冷却否决：guard 谓词内仍查 `isSessionPending`/`getLastActivityAt`
  *  （否决 → 留 pending 待 ticker 下轮复核，不消耗轮次；谓词异常 → fail-open 放行）。
- * - 内存 `loop` 为 dual-write 镜像（decision 10 过渡期）：isRegistered/patrolNow/scan
- *   沿用；canonical 计数以 DB fireCount 为准。
+ * - 触发器行即唯一状态源：isRegistered 查 pending 行是否存在；patrolNow/scan 均派生
+ *   自触发器行；连续静默轮次 quietStreak 随行 payload 持久化（叫醒累加、观测活跃清零、
+ *   达 STALL_QUIET_STREAK_LIMIT 自动置阻塞）。
  * - 自主 setInterval 扫描已退役（与 trigger ticker 双驱动会重复下发 wake 消息）；
- *   scan() 保留为按需例程（spec/手工巡检），生产节拍唯一来自 trigger ticker。
+ *   scan() 保留为按需例程（spec/手工巡检：遍历 pending 触发器行派生到期巡检），
+ *   生产节拍唯一来自 trigger ticker。
  *
  * 功能 2（托管确认路由）：订阅 realtime bus 的 agent.question 事件，payload.managed=true 且
  * 未收敛（resolved≠true）→ dispatch 确认请求消息给主 Agent（question_confirm 决策指令）。
@@ -117,8 +115,29 @@ export function buildProgressionPrompt(title: string, status: string): string {
 export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TaskProgressionScheduler.name);
 
-  /** 内存循环表：taskId → 巡检条目（dual-write 镜像；canonical 计数为 trigger.fireCount）。 */
-  private readonly loop = new Map<string, ProgressionEntry>();
+  /**
+   * 巡检触发器行模型（prisma.trigger 经 unknown 中转，保持 as-any 计数不增；
+   * 缺席时 undefined，调用方 fail-open）。
+   */
+  private patrolTriggerRows():
+    | {
+        findUnique?: (args: unknown) => Promise<unknown>;
+        findMany?: (args: unknown) => Promise<unknown>;
+        update?: (args: unknown) => Promise<unknown>;
+        delete?: (args: unknown) => Promise<unknown>;
+      }
+    | undefined {
+    return (
+      this.prisma as unknown as {
+        trigger?: {
+          findUnique?: (args: unknown) => Promise<unknown>;
+          findMany?: (args: unknown) => Promise<unknown>;
+          update?: (args: unknown) => Promise<unknown>;
+          delete?: (args: unknown) => Promise<unknown>;
+        };
+      }
+    ).trigger;
+  }
 
   /** 巡检间隔 ms（env PROGRESSION_INTERVAL_MS，缺省 20min；公开便于测试覆盖）。 */
   public progressionIntervalMs: number;
@@ -217,15 +236,15 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       );
     } catch (err) {
       this.logger.warn(
-        `[progression] 触发器接线失败（内存循环继续）: ${this.describeError(err)}`,
+        `[progression] 触发器接线失败（按需 scan 巡检继续）: ${this.describeError(err)}`,
       );
     }
   }
 
   /**
-   * 任务进入 in_progress 时注册（start/reject）。幂等：重复注册重置内存计时；
-   * 触发器侧幂等：pending 行已存在 → 直接保留（fireCount 不清零）。
-   * 非 in_progress 或主 Agent 缺失 → 注销（防脏条目）。
+   * 任务进入 in_progress 时注册（start/reject）。幂等：触发器侧 pending 行已存在 →
+   * 直接保留（fireCount/quietStreak 不清零）。
+   * 非 in_progress 或主 Agent 缺失 → 不排期（防脏行）。
    */
   async register(taskId: string): Promise<void> {
     const task = await this.prisma.task.findUnique({
@@ -233,23 +252,14 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       select: { id: true, status: true, teamId: true },
     });
     if (!task || task.status !== TASK_STATUS.in_progress) {
-      this.loop.delete(taskId);
       return;
     }
     const mainMemberId = await this.mainMemberOfTask(
       (task as any).teamId ?? null,
     );
     if (!mainMemberId) {
-      this.loop.delete(taskId);
       return;
     }
-    this.loop.set(taskId, {
-      taskId,
-      nextRunAt: Date.now() + this.progressionIntervalMs,
-      rounds: 0,
-      maxRounds: this.maxRounds,
-      quietStreak: 0,
-    });
     this.logger.log(
       `[progression] 注册巡检 taskId=${taskId}（interval=${this.progressionIntervalMs}ms, maxRounds=${this.maxRounds}）`,
     );
@@ -269,7 +279,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     // 否则基座按 dedupKey 幂等回旧行、resume 后巡检永不恢复。
     const dedupKey = buildProgressionDedupKey(taskId);
     try {
-      const existing = (await (this.prisma as any).trigger?.findUnique?.({
+      const existing = (await this.patrolTriggerRows()?.findUnique?.({
         where: { dedupKey },
       })) as { status?: string } | null | undefined;
       if (existing) {
@@ -277,10 +287,12 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
           return;
         }
         try {
-          await (this.prisma as any).trigger?.delete?.({
+          await this.patrolTriggerRows()?.delete?.({
             where: { dedupKey },
           });
-        } catch {}
+        } catch {
+          // fail-open：终态行删除失败仅跳过重建，下次 register 重试。
+        }
       }
       await this.triggers.schedule(
         TRIGGER_KIND.PROGRESSION_PATROL,
@@ -295,7 +307,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       );
     } catch (err) {
       this.logger.warn(
-        `[progression] 巡检触发器排期失败 taskId=${taskId}（内存循环继续）: ${this.describeError(err)}`,
+        `[progression] 巡检触发器排期失败 taskId=${taskId}（下次 register 重试）: ${this.describeError(err)}`,
       );
     }
   }
@@ -323,12 +335,10 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 任务离开 in_progress（pending_review/completed/archived/rejected）时注销
-   * （内存条目同步删除 + 触发器 cancel，行留 cancelled 备查）。
+   * （触发器 cancel，行留 cancelled 备查）。
    */
   unregister(taskId: string): void {
-    if (this.loop.delete(taskId)) {
-      this.logger.log(`[progression] 注销巡检 taskId=${taskId}`);
-    }
+    this.logger.log(`[progression] 注销巡检 taskId=${taskId}`);
     void this.cancelPatrolTrigger(taskId);
   }
 
@@ -346,37 +356,70 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** 是否在巡检循环中（spec 断言用）。 */
-  isRegistered(taskId: string): boolean {
-    return this.loop.has(taskId);
-  }
-
-  /** 主动触发一次巡检（真实链路验证用）：跳过 nextRunAt 判定直接 dispatch + 轮次累计。 */
-  async patrolNow(taskId: string): Promise<void> {
-    const entry = this.loop.get(taskId);
-    if (!entry) {
-      return;
-    }
-    await this.runPatrol(taskId);
-    entry.rounds += 1;
-    entry.nextRunAt = Date.now() + this.progressionIntervalMs;
-    if (entry.rounds >= entry.maxRounds) {
-      this.loop.delete(taskId);
-      this.logger.warn(
-        `[progression] taskId=${taskId} 巡检已达轮次上限（${entry.maxRounds}），注销防空转`,
-      );
+  /**
+   * 是否在巡检中（canonical 派生：pending 巡检触发器行存在即在册；spec 断言用）。
+   */
+  async isRegistered(taskId: string): Promise<boolean> {
+    try {
+      const row = (await this.patrolTriggerRows()?.findUnique?.({
+        where: { dedupKey: buildProgressionDedupKey(taskId) },
+      })) as { status?: string } | null | undefined;
+      return row?.status === TRIGGER_STATUS.PENDING;
+    } catch {
+      return false;
     }
   }
 
   /**
-   * 按需巡检扫描（内存循环例程；生产节拍来自 trigger ticker，见类注释）。
-   * 语义与旧自主扫描一致：到期条目 → 冷却否决（isSessionPending/近期活跃则顺延，
-   * 不计轮次）→ dispatch + rounds++ → 达上限注销。
+   * 主动触发一次巡检（真实链路验证用）：无 pending 行 → no-op；
+   * 否则跳过到期判定直接 dispatch（轮次/上限由基座 maxFires 强制）。
    */
-  private async scan(): Promise<void> {
-    const now = Date.now();
-    for (const [taskId, entry] of [...this.loop]) {
-      if (entry.nextRunAt > now) {
+  async patrolNow(taskId: string): Promise<void> {
+    if (!(await this.isRegistered(taskId))) {
+      return;
+    }
+    await this.runPatrol(taskId);
+  }
+
+  /**
+   * 按需巡检扫描（canonical 派生：遍历 pending 巡检触发器行；生产节拍来自 trigger
+   * ticker，见类注释）。语义与旧扫描一致：到期行 → 冷却否决（isSessionPending/
+   * 近期活跃则跳过，不计轮次）→ dispatch；轮次计数与上限由基座 fireCount/maxFires
+   * 强制，scan 不记账。
+   */
+  private async scan(now = Date.now()): Promise<void> {
+    const rows = (await this.patrolTriggerRows()?.findMany?.({
+      where: {
+        kind: TRIGGER_KIND.PROGRESSION_PATROL,
+        status: TRIGGER_STATUS.PENDING,
+      },
+      select: {
+        dedupKey: true,
+        payload: true,
+        nextFireAt: true,
+      },
+    })) as
+      | Array<{
+          dedupKey: string;
+          payload?: unknown;
+          nextFireAt?: Date | string | null;
+        }>
+      | null
+      | undefined;
+    if (!Array.isArray(rows)) {
+      return;
+    }
+    for (const row of rows) {
+      const taskId = (
+        row.payload as ProgressionPatrolPayload | null | undefined
+      )?.taskId;
+      if (!taskId) {
+        continue;
+      }
+      const next = row.nextFireAt
+        ? new Date(row.nextFireAt).getTime()
+        : Number.NaN;
+      if (Number.isFinite(next) && (next as number) > now) {
         continue;
       }
       const task = await this.prisma.task.findUnique({
@@ -401,7 +444,6 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
         });
         if (mainSession) {
           if (this.workerDispatcher.isSessionPending(mainSession.id)) {
-            entry.nextRunAt = now + this.progressionIntervalMs;
             continue;
           }
           const lastAt = this.workerDispatcher.getLastActivityAt(
@@ -411,20 +453,13 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
             lastAt !== undefined &&
             now - lastAt < this.progressionIntervalMs
           ) {
-            entry.nextRunAt = lastAt + this.progressionIntervalMs;
             continue;
           }
         }
-      } catch {}
-      await this.runPatrol(taskId, task.title);
-      entry.rounds += 1;
-      entry.nextRunAt = now + this.progressionIntervalMs;
-      if (entry.rounds >= entry.maxRounds) {
-        this.loop.delete(taskId);
-        this.logger.warn(
-          `[progression] taskId=${taskId} 巡检已达轮次上限（${entry.maxRounds}），注销防空转`,
-        );
+      } catch {
+        // fail-open：否决链路异常不阻断巡检（与 guard fail-open 一致）。
       }
+      await this.runPatrol(taskId, task.title);
     }
   }
 
@@ -481,12 +516,12 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   /**
    * 巡检触发 handler（interval 行每次到期执行；基座负责重排 + fireCount++）。
    * - 任务已离场/无主成员/payload 缺 taskId → `{expire:true}`（基座落 cancelled，
-   *   内存镜像同步删除；重启后 stale 行自收敛）。
+   *   重启后 stale 行自收敛）。
    * - race 窗口否决（guard 通过后到 handler 执行间主会话变忙/变活跃）→ 跳过本次
    *   dispatch 但返回 void（基座仍计一次 fireCount——保守偏向防空转；guard 为主否决，
    *   此分支罕见）。
-   * - 正常 → runPatrol（与旧 scan 同一 prompt/同一 `kind:'wake'` 链路），内存镜像
-   *   rounds 同步为 fireCount+1（canonical 以 DB 为准）。
+   * - 正常 → runPatrol（与旧 scan 同一 prompt/同一 `kind:'wake'` 链路），静默计数
+   *   quietStreak 随行 payload 持久化（canonical 以 DB 为准）。
    */
   async handleProgressionFire(
     ctx: TriggerFireContext,
@@ -500,14 +535,12 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       select: { title: true, status: true, teamId: true },
     });
     if (!task || task.status !== TASK_STATUS.in_progress) {
-      this.loop.delete(taskId);
       return { expire: true };
     }
     const mainMemberId = await this.mainMemberOfTask(
       (task as any).teamId ?? null,
     );
     if (!mainMemberId) {
-      this.loop.delete(taskId);
       return { expire: true };
     }
     try {
@@ -528,8 +561,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
           Date.now() - lastAt < this.progressionIntervalMs
         ) {
           // 观测到进展：静默计数清零（本轮不叫醒、不计轮次，忙有活干是好事）。
-          const progressing = this.loop.get(taskId);
-          if (progressing) progressing.quietStreak = 0;
+          await this.writeQuietStreak(ctx.id, taskId, ctx.payload, 0);
           this.logger.warn(
             `[progression] taskId=${taskId} 主会话近期活跃，跳过本轮巡检`,
           );
@@ -542,49 +574,65 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     await this.runPatrol(taskId, (task as any).title);
     // 叫醒后记一次静默：下次 fire 若仍无进展继续累加；达上限 → 停滞回调
     // （TasksService 置阻塞 + 群公告）并注销巡检，停嘴等人工。
-    const firedRounds = (ctx.fireCount ?? 0) + 1;
-    const entry = this.loop.get(taskId);
-    if (entry) {
-      entry.rounds = firedRounds;
-      entry.nextRunAt = Date.now() + this.progressionIntervalMs;
-      if (entry.rounds >= entry.maxRounds) {
-        this.loop.delete(taskId);
+    const quietStreak = this.readQuietStreak(ctx.payload) + 1;
+    await this.writeQuietStreak(ctx.id, taskId, ctx.payload, quietStreak);
+    if (quietStreak >= STALL_QUIET_STREAK_LIMIT) {
+      // 在途守卫（看门狗误置阻塞修复）：quietStreak 只统计"主会话静默"，
+      // 看不见 issue 粒度进展和其他成员会话。达上限前先查在途工作——
+      // 有 issue 仍 in_progress，或任务分区近期有聊天，即视为有人在干活：
+      // 不 fireStallDetected（不 systemBlock），记 deferred 日志，quietStreak
+      // 清零（与"主会话活跃清零"同语义：本轮观测到进展就不算停滞），巡检继续
+      // 不注销。 truly idle（无在途 issue 且无近期聊天）才沿旧行为置阻塞。
+      const inflight = await this.hasInflightWork(taskId);
+      if (inflight.inflight) {
         this.logger.warn(
-          `[progression] taskId=${taskId} 巡检已达轮次上限（${entry.maxRounds}），注销防空转`,
+          `[progression] taskId=${taskId} 停滞检查递延（${inflight.reason}），跳过自动置阻塞`,
         );
+        await this.writeQuietStreak(ctx.id, taskId, ctx.payload, 0);
         return;
       }
-      // 叫醒后记一次静默：下次 fire 若仍无进展继续累加；达上限 → 停滞回调
-      // （TasksService 置阻塞 + 群公告）并注销巡检，停嘴等人工。
-      entry.quietStreak += 1;
-      if (entry.quietStreak >= STALL_QUIET_STREAK_LIMIT) {
-        // 在途守卫（看门狗误置阻塞修复）：quietStreak 只统计"主会话静默"，
-        // 看不见 issue 粒度进展和其他成员会话。达上限前先查在途工作——
-        // 有 issue 仍 in_progress，或任务分区近期有聊天，即视为有人在干活：
-        // 不 fireStallDetected（不 systemBlock），记 deferred 日志，quietStreak
-        // 清零（与"主会话活跃清零"同语义：本轮观测到进展就不算停滞），巡检继续
-        // 不注销。 truly idle（无在途 issue 且无近期聊天）才沿旧行为置阻塞。
-        const inflight = await this.hasInflightWork(taskId);
-        if (inflight.inflight) {
-          this.logger.warn(
-            `[progression] taskId=${taskId} 停滞检查递延（${inflight.reason}），跳过自动置阻塞`,
-          );
-          entry.quietStreak = 0;
-          return;
-        }
-        this.logger.warn(
-          `[progression] taskId=${taskId} 连续 ${entry.quietStreak} 轮无进展，触发停滞处理`,
-        );
-        this.fireStallDetected(
-          taskId,
-          `看门狗：任务连续 ${entry.quietStreak} 轮巡检（约 ${Math.round((entry.quietStreak * this.progressionIntervalMs) / 60000)} 分钟）无任何进展，自动置阻塞。请人工确认卡点后恢复执行。`,
-        );
-        this.unregister(taskId);
-        return;
-      }
-    } else if (firedRounds >= this.maxRounds) {
       this.logger.warn(
-        `[progression] taskId=${taskId} 巡检已达轮次上限（${this.maxRounds}），基座将取消触发器防空转`,
+        `[progression] taskId=${taskId} 连续 ${quietStreak} 轮无进展，触发停滞处理`,
+      );
+      this.fireStallDetected(
+        taskId,
+        `看门狗：任务连续 ${quietStreak} 轮巡检（约 ${Math.round((quietStreak * this.progressionIntervalMs) / 60000)} 分钟）无任何进展，自动置阻塞。请人工确认卡点后恢复执行。`,
+      );
+      this.unregister(taskId);
+      return;
+    }
+  }
+
+  /** 行 payload 中的连续静默轮次（缺失/非法 → 0）。 */
+  private readQuietStreak(payload: unknown): number {
+    const n = Number(
+      (payload as ProgressionPatrolPayload | null | undefined)?.quietStreak,
+    );
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  }
+
+  /**
+   * 连续静默轮次落库（canonical 随行 payload 持久化；行缺失/模型缺席/fail 时
+   * warn 吞错，巡检主流程不受影响）。
+   */
+  private async writeQuietStreak(
+    rowId: string,
+    taskId: string,
+    payload: unknown,
+    quietStreak: number,
+  ): Promise<void> {
+    try {
+      const base =
+        typeof payload === 'object' && payload !== null
+          ? (payload as Record<string, unknown>)
+          : {};
+      await this.patrolTriggerRows()?.update?.({
+        where: { id: rowId },
+        data: { payload: { ...base, taskId, quietStreak } },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[progression] 静默计数持久化失败 taskId=${taskId}（忽略）: ${this.describeError(err)}`,
       );
     }
   }
@@ -936,11 +984,11 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   /**
    * periodic patrol 退役清扫：取消库内所有 pending progression_patrol 触发器行。
    * fan-out JOIN drain 接管唤醒；旧 interval 行会重复下发 wake 消息。
-   * fail-open：DB 操作失败仅 warn，memory loop 照常。
+   * fail-open：DB 操作失败仅 warn。
    */
   private async cancelStalePatrolTriggers(): Promise<void> {
     try {
-      const stale = await (this.prisma as any).trigger?.findMany?.({
+      const stale = await this.patrolTriggerRows()?.findMany?.({
         where: {
           kind: TRIGGER_KIND.PROGRESSION_PATROL,
           status: TRIGGER_STATUS.PENDING,
@@ -950,7 +998,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       if (Array.isArray(stale)) {
         for (const row of stale) {
           try {
-            await (this.prisma as any).trigger.update({
+            await this.patrolTriggerRows()?.update?.({
               where: { dedupKey: row.dedupKey },
               data: { status: TRIGGER_STATUS.CANCELLED },
             });
@@ -975,8 +1023,8 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 进程启动数据修复：库内 in_progress 任务逐个 register。
-   * register 触发器侧幂等——pending 行保留 fireCount（rounds 重启不丢），
-   * 终态/缺失行重建；内存镜像重建为 rounds=0（canonical 以 DB fireCount 为准）。
+   * register 触发器侧幂等——pending 行保留 fireCount/quietStreak（重启不丢），
+   * 终态/缺失行重建。
    */
   private async restoreInProgressTasks(): Promise<void> {
     const rows = await this.prisma.task.findMany({
