@@ -309,11 +309,11 @@ model Session {
   workerId     String?  @map("worker_id")
   instanceRef  String?  @map("instance_ref")
   status       String   @default("created")
-  // trigger-unification todo-7：空闲判死 DB sidecar（ingress touchSessionActivity +
-  // dispatcher handleSessionActivity/watchdog 起点双写；scanIdleSessions 按
-  // status='running' AND (lastActivityAt < cutoff OR (lastActivityAt IS NULL
-  // AND updatedAt < cutoff)) 检出，重启后内存 map 为空仍可判死；NULL-activity 行
-  // 回退自身 updatedAt，不授予新 lease。内存 pending/active 否决保留（todo-21 前不删）。
+  // trigger-unification todo-7：空闲判死 DB sidecar（ingress 活动回写与 dispatcher
+  // watchdog 起点/活动事件回写同一列；scanIdleSessions 按 status='running' AND
+  // (lastActivityAt < cutoff OR (lastActivityAt IS NULL AND updatedAt < cutoff))
+  // 检出。活动列为 NULL 时回退自身 updatedAt，不授予新 lease；pending/active
+  // 否决仍独立保留。
   lastActivityAt DateTime? @map("last_activity_at")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
@@ -326,7 +326,7 @@ model Session {
 
   @@unique([teamMemberKey], map: "uk_sessions_team_member")
   @@index([teamId], map: "idx_sessions_team_id")
-  // trigger-unification todo-7：空闲判死扫描谓词（status='running' AND last_activity_at < cutoff）。
+  // trigger-unification todo-7：空闲判死扫描索引（status='running' AND last_activity_at < cutoff；NULL 行按 updatedAt 回退）。
   @@index([status, lastActivityAt], map: "idx_sessions_status_last_activity")
   @@map("sessions")
 }

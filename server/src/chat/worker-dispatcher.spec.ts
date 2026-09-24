@@ -4327,6 +4327,19 @@ describe('WorkerDispatcher', () => {
       });
       prisma.artifact.findMany.mockResolvedValue([]);
       const d = createDispatcher();
+      let staleReturned = false;
+      prisma.session.findMany.mockImplementation(
+        async (args: {
+          where?: { OR?: Array<{ lastActivityAt?: { lt?: Date } }> };
+        }) => {
+          const cutoff = args.where?.OR?.[0]?.lastActivityAt?.lt;
+          if (!staleReturned && cutoff && Date.now() > cutoff.getTime()) {
+            staleReturned = true;
+            return [{ id: 's_0000000001' }];
+          }
+          return [];
+        },
+      );
       const errors: unknown[] = [];
       d.onError((e) => errors.push(e));
 
@@ -4418,7 +4431,7 @@ describe('WorkerDispatcher', () => {
       await jest.advanceTimersByTimeAsync(IDLE_SCAN_INTERVAL_MS + 5000);
       await jest.advanceTimersByTimeAsync(0);
 
-      // todo-7 双写：activity 刷新会 update(lastActivityAt)，此处只断言无判死标记
+      // activity 刷新会 update(lastActivityAt)，此处只断言无判死标记
       const failedMarks = prisma.session.update.mock.calls.filter(
         (c: unknown[]) =>
           (c[0] as { data?: { status?: string } })?.data?.status === 'failed',
@@ -4786,7 +4799,7 @@ describe('WorkerDispatcher', () => {
     });
   });
 
-  describe('todo-7 双写 + DB 侧空闲检出（重启安全）', () => {
+  describe('todo-7 DB 活动回写 + DB 侧空闲检出（重启安全）', () => {
     const staleRow = (overrides: Record<string, unknown> = {}) => ({
       status: 'running',
       taskId: null,
@@ -4798,8 +4811,8 @@ describe('WorkerDispatcher', () => {
       ...overrides,
     });
 
-    it('activity 刷新双写 DB：handleSessionActivity → update(lastActivityAt)', async () => {
-      const d = createDispatcher();
+    it('activity 刷新 DB：handleSessionActivity → update(lastActivityAt)', async () => {
+      createDispatcher();
       const activityCb = ingress.onSessionActivity.mock.calls[0][0];
       activityCb({ type: 'message.part.delta', sessionId: 's_0000000001' });
 
@@ -4808,10 +4821,9 @@ describe('WorkerDispatcher', () => {
         where: { id: 's_0000000001' },
         data: { lastActivityAt: expect.any(Date) },
       });
-      expect(d.getLastActivityAt('s_0000000001')).toBeDefined();
     });
 
-    it('watchdog 起点双写 DB：startPendingWatchdog → update(lastActivityAt)', async () => {
+    it('watchdog 起点写 DB：startPendingWatchdog → update(lastActivityAt)', async () => {
       const d = createDispatcher();
 
       (d as any).startPendingWatchdog(
@@ -4827,7 +4839,6 @@ describe('WorkerDispatcher', () => {
         where: { id: 's_0000000001' },
         data: { lastActivityAt: expect.any(Date) },
       });
-      expect(d.getLastActivityAt('s_0000000001')).toBeDefined();
     });
 
     it('getSessionLastActivityAt：lastActivityAt 非空时优先，NULL 时回退 updatedAt', async () => {
@@ -4854,9 +4865,8 @@ describe('WorkerDispatcher', () => {
       ).resolves.toBeUndefined();
     });
 
-    it('DB 侧检出：内存 map 为空（重启后）但 DB 有 stale running → 判死', async () => {
+    it('DB 侧检出：DB 有 stale running → 判死', async () => {
       const d = createDispatcher();
-      expect(d.getLastActivityAt('s_stale_1')).toBeUndefined();
       prisma.session.findMany.mockResolvedValue([{ id: 's_stale_1' }]);
       prisma.session.findUnique.mockResolvedValue(staleRow());
       workerClient.getMessages.mockResolvedValue([]);
@@ -4969,7 +4979,7 @@ describe('WorkerDispatcher', () => {
       });
     });
 
-    it('DB 检出 fail-open：findMany 抛错 → 扫描不抛，内存侧照常', async () => {
+    it('DB 检出 fail-open：findMany 抛错 → 扫描不抛，继续返回', async () => {
       const d = createDispatcher();
       prisma.session.findMany.mockRejectedValueOnce(new Error('db down'));
 

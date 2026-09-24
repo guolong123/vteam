@@ -759,7 +759,7 @@ export const MAX_SILENT_WAKE_ATTEMPTS = 3;
  *  判死（session 标 failed + agent.error）。env AGENT_IDLE_TIMEOUT_MS 可配。 */
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
 
-/** 空闲判死扫描周期（定期遍历 lastActivityAt，检查超时会话）。 */
+/** 空闲判死扫描周期（定期执行 DB 侧扫描，检查超时会话）。 */
 export const IDLE_SCAN_INTERVAL_MS = 60_000;
 
 /**
@@ -1322,9 +1322,6 @@ export class WorkerDispatcher
   /** sessionId → watchdog key 反查（ingress 活动事件回调按 sessionId 滑动重武装/终态清除）。 */
   private readonly pendingBySession = new Map<string, string>();
 
-  /** sessionId → 最近一次输出活动时间戳（空闲判死依据，ingress 活动事件刷新）。 */
-  private readonly lastActivityAt = new Map<string, number>();
-
   /** 空闲判死扫描定时器（惰性启动：首个 dispatch 注册 watchdog 时）。 */
   private idleScanTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1343,8 +1340,8 @@ export class WorkerDispatcher
 
   /**
    * 原始分派快照（is_7）：快照键 → 快照（dispatch 202 受理后暂存，恢复重放用）。
-   * 内存 Map + TTL（DISPATCH_SNAPSHOT_TTL_MS）：同 pending/lastActivityAt 等
-   * 恢复态一致——本包无 Redis/外部 store（package.json 无相关依赖），durable
+   * 内存 Map + TTL（DISPATCH_SNAPSHOT_TTL_MS）：与 pending 等恢复态一致——本包
+   * 无 Redis/外部 store（package.json 无相关依赖），durable
    * trigger 行只带 deadline 元数据不带全量 prompt；重启丢失即回退通用文案。
    */
   private readonly dispatchSnapshots = new Map<string, DispatchSnapshot>();
@@ -1521,7 +1518,7 @@ export class WorkerDispatcher
       this.handleSessionActivity(payload);
     });
     // todo-7 重启安全：空闲扫描常驻启动（AGENT_IDLE_TIMEOUT_MS>0 时），重启后即便
-    // 零 dispatch（内存 map 全空），DB 侧检出仍能判死 stuck running 会话。
+    // 没有进程内 dispatch 状态，DB 侧检出仍能判死 stuck running 会话。
     this.startIdleScan();
     // todo-9 重启安全：静默 deadline 经 TriggerService 注册同 kind handler，
     // 重启后到期行仍能收割静默会话（内存 pending 全空时走 DB 侧判定）。
@@ -4000,7 +3997,7 @@ export class WorkerDispatcher
    *    server/src/workers/workers.constants.ts + workers.service.ts HealthChecker）：
    *    进程死亡的探活走这条路，本 watchdog 的 offline 快速失败依赖它。
    *
-   * 同时记录 lastActivityAt 作为空闲判死追踪起点（活动事件刷新，超 AGENT_IDLE_TIMEOUT_MS 判死）。
+   * 同时通过 DB 活动列记录空闲判死追踪起点（活动事件刷新，超 AGENT_IDLE_TIMEOUT_MS 判死）。
    * OBS-009：poll 已快速失败（failedSessions 已标记）时跳过注册。
    */
   private startPendingWatchdog(
@@ -4023,9 +4020,7 @@ export class WorkerDispatcher
       workerId,
       teamMemberId,
     });
-    // 空闲判死追踪起点（活动事件经 handleSessionActivity 刷新）——内存 map +
-    // DB Session.lastActivityAt 双写（todo-7：重启后内存丢失，扫描凭 DB 列判死）。
-    this.lastActivityAt.set(sessionId, dispatchedAt);
+    // 空闲判死追踪起点写入 DB（活动事件经 handleSessionActivity 刷新）。
     void this.persistSessionActivity(sessionId, new Date(dispatchedAt));
     this.startIdleScan();
   }
@@ -4033,7 +4028,7 @@ export class WorkerDispatcher
   /**
    * 武装静默 deadline（注册与唤醒重试共用）：同键旧轮清理（timer + durable 行 best-effort
    * 取消）→ 新 setTimeout（捕获本轮 sessionId，防旧 timer 收割新一轮）→ 注册 pending 映射
-   * → 落 durable 行（due = 本轮 deadlineAt）。返回本轮注册时刻，调用方据此写 lastActivityAt。
+   * → 落 durable 行（due = 本轮 deadlineAt）。返回本轮注册时刻，调用方据此写 DB 活动列。
    * 世代号 dispatchedAt 一经注册不再改写；事件滑动重武装只推 timer/deadlineAt（不落 DB 行）。
    */
   private armSilenceWatchdog(args: {
@@ -4151,7 +4146,7 @@ export class WorkerDispatcher
    *    **不**调 tryAutoRestart（离线 worker 唤醒无意义，探活归心跳路径）；
    * ② 在线且静默未达唤醒上限 → 计数 +1、重武装全新窗口（内存 timer + durable 行）
    *    并经既有 tryAutoRestart 唤醒（fire-and-forget，失败只记日志）；不刷新
-   *    lastActivityAt（唤醒≠活动，空闲判死只认真实事件）；
+   *    DB 活动列（唤醒≠活动，空闲判死只认真实事件）；
    * ③ 在线但达到上限仍静默 → 失败路径：pending 删除 + failedSessions 标记 +
    *    活跃执行注销 + 追踪退出 + emitError + 广播 agent.error
    *    （silent_session_timeout，文案声明心跳正常 + 唤醒次数耗尽）。
@@ -4182,7 +4177,6 @@ export class WorkerDispatcher
       // F2 MINOR：超时标记失败会话——迟到的回流（ingress/轮询）跳过落库仅记日志
       this.failedSessions.add(sessionId);
       this.unregisterExecution(workerId, scope, teamMemberId);
-      this.lastActivityAt.delete(sessionId);
       this.logger.error(`agent ${agentId} ${error}`);
       this.emitError({ taskId: scope, agentId, error });
       void this.broadcastAgentError({
@@ -4345,7 +4339,7 @@ export class WorkerDispatcher
    *     到当前 deadlineAt（不收割、不动内存 timer），{done:true}；
    *   · 否则窗口真到期 → 清 timer + reapSilenceDeadline（唤醒重试/失败）。
    * - 命中缺席（重启后内存全空）→ DB 侧判定：行缺失/非 running → 跳过；
-   *   base = max(dispatchedAt, lastActivityAt)，base + 窗口 > now → 窗口未到（活动把
+   *   base = max(dispatchedAt, DB 活动列)，base + 窗口 > now → 窗口未到（活动把
    *   窗口滑后过本行 due）→ 顺延 durable 行不收割；已到期 → 同走 reap（重启后唤醒
    *   上限从 0 起算），DB 异常时 fail-open 跳过。
    */
@@ -4469,7 +4463,7 @@ export class WorkerDispatcher
       });
     } catch (err) {
       this.logger.warn(
-        `session ${sessionId} lastActivityAt 回写失败（fail-open，内存计时不受影响）: ${this.describeError(err)}`,
+        `session ${sessionId} 活动时间回写失败（fail-open，DB 扫描继续）: ${this.describeError(err)}`,
       );
     }
   }
@@ -4481,7 +4475,7 @@ export class WorkerDispatcher
    * - 非终态事件（delta / agent.status 非 error / session.updated(running)）→
    *   **滑动重武装**：窗口推到 now + silentSessionWakeMs（只重置内存 timer/deadlineAt，
    *   不落 durable 行），activitySeen 置位（空闲判死不再否决）；唤醒计数不清；
-   * - 非终态同时刷新 lastActivityAt（空闲判死计时）。
+   * - 非终态同时刷新 DB 活动列（空闲判死计时）。
    */
   private handleSessionActivity(payload: SessionActivityPayload): void {
     const { sessionId } = payload;
@@ -4506,12 +4500,10 @@ export class WorkerDispatcher
         payload.status &&
         payload.status !== SESSION_STATUS.running)
     ) {
-      this.lastActivityAt.delete(sessionId);
       return;
     }
     // is_7：首个非终态活动 = 会话存活/首字成功，快照使命达成（防重放循环）。
     this.clearDispatchSnapshotBySession(sessionId);
-    this.lastActivityAt.set(sessionId, Date.now());
     void this.persistSessionActivity(sessionId);
   }
 
@@ -4532,15 +4524,13 @@ export class WorkerDispatcher
   }
 
   /**
-   * 空闲判死扫描：遍历 lastActivityAt，跳过仍等首事件（pending 且 activitySeen=false）
+   * 空闲判死扫描：从 DB 检出超时会话，跳过仍等首事件（pending 且 activitySeen=false）
    * 的会话——滑动窗口已接管其无事件检测；已见事件的会话即便 watchdog 仍挂着（滑动
    * 重武装不清 pending）也照常参与判死；超 AGENT_IDLE_TIMEOUT_MS 无活动 → 查
    * Session.status，仅 running 判死（failed + emitError + 广播 agent.error）；
    * 非 running（idle/完成/冻结）→ 退出追踪不判死（防误杀）。
-   * trigger-unification todo-7：追加 DB 侧检出（status='running' AND
-   * (lastActivityAt < cutoff OR (lastActivityAt IS NULL AND updatedAt < cutoff)))，
-   * 重启后内存 map 为空仍可判死；本进程内正处首字等待的会话
-   * （pending 且 activitySeen=false）一律否决，不判死。
+   * DB 侧谓词同时覆盖非空活动列与 NULL 活动列（NULL 回退 updatedAt）；本进程内
+   * 正处首字等待的会话（pending 且 activitySeen=false）一律否决，不判死。
    */
   private async scanIdleSessions(): Promise<void> {
     if (this.agentIdleTimeoutMs <= 0) {
@@ -4548,18 +4538,8 @@ export class WorkerDispatcher
     }
     const now = Date.now();
     const stale: string[] = [];
-    for (const [sessionId, lastAt] of this.lastActivityAt) {
-      if (this.isPendingFirstEventWait(sessionId)) {
-        continue;
-      }
-      if (now - lastAt <= this.agentIdleTimeoutMs) {
-        continue;
-      }
-      stale.push(sessionId);
-    }
-    // DB 侧检出：覆盖重启后内存 map 为空的场景；lastActivityAt 为 NULL 时回退到
-    // Session.updatedAt（@updatedAt，自动反映最后写入），避免新建/持久化失败的
-    // running 会话因 NULL 比较而永久逃逸。
+    // DB 侧检出：活动列为 NULL 时回退到 Session.updatedAt（@updatedAt，
+    // 自动反映最后写入），避免新建/持久化失败的 running 会话因 NULL 比较而永久逃逸。
     try {
       const cutoff = new Date(now - this.agentIdleTimeoutMs);
       const dbStale = await this.prisma.session.findMany({
@@ -4574,9 +4554,6 @@ export class WorkerDispatcher
         take: 100,
       });
       for (const row of dbStale ?? []) {
-        if (stale.includes(row.id)) {
-          continue;
-        }
         if (this.isPendingFirstEventWait(row.id)) {
           continue;
         }
@@ -4584,7 +4561,7 @@ export class WorkerDispatcher
       }
     } catch (err) {
       this.logger.warn(
-        `空闲判死 DB 检出失败（fail-open，仅内存侧继续）: ${this.describeError(err)}`,
+        `空闲判死 DB 检出失败（fail-open，扫描继续）: ${this.describeError(err)}`,
       );
     }
     for (const sessionId of stale) {
@@ -4607,9 +4584,8 @@ export class WorkerDispatcher
   }
 
   /**
-   * 读取会话的最近活动时间（epoch ms）。内存 Map 是 DISPATCH-scoped，而 DB 的
-   * last_activity_at 是 wall-clock SESSION-scoped；两者相似但不完全相同，冷却判断
-   * 可能因此略微更保守，但这更安全。
+   * 读取会话的最近活动时间（epoch ms）。DB 的 last_activity_at 是 wall-clock
+   * SESSION-scoped；NULL 时以 Session.updatedAt 回退，冷却判断保持保守。
    */
   public async getSessionLastActivityAt(
     sessionId: string,
@@ -4620,10 +4596,6 @@ export class WorkerDispatcher
     });
     const activityAt = row?.lastActivityAt ?? row?.updatedAt;
     return activityAt?.getTime();
-  }
-
-  public getLastActivityAt(sessionId: string): number | undefined {
-    return this.lastActivityAt.get(sessionId);
   }
 
   public isSessionPending(sessionId: string): boolean {
@@ -4645,11 +4617,9 @@ export class WorkerDispatcher
         },
       });
       if (!row) {
-        this.lastActivityAt.delete(sessionId);
         return;
       }
       if (row.status !== SESSION_STATUS.running) {
-        this.lastActivityAt.delete(sessionId);
         return;
       }
       // 内存否决（todo-7，Oracle 约束）：本进程仍登记该成员为活跃执行 → 正处轮中，
@@ -4711,7 +4681,6 @@ export class WorkerDispatcher
       this.failedSessions.add(sessionId);
       // 判败即解除静默 watchdog（滑动语义下 pending 在事件后仍挂着，不清会残留 timer/durable 行）。
       this.clearPendingWatchdogBySession(sessionId);
-      this.lastActivityAt.delete(sessionId);
       // stop-first：best-effort 中止 worker 侧 stuck 执行，释放槽位并防止迟到完成
       // 事件写入已失败会话；中止失败只记 warn，永不阻断后续恢复链。
       if (abortRef && abortInstanceRef) {
@@ -4839,7 +4808,7 @@ export class WorkerDispatcher
   }
 
   /**
-   * is_7 快照存取（与 pending/lastActivityAt 同内存语义）：
+   * is_7 快照存取（与 pending 同内存语义）：
    * save（dispatch 202 受理后）→ peek（恢复重放，只读不消费）→ clear（首字活动/
    * 完成落库后，防重放循环）。wake 重放文本自身永不覆盖快照（以通用语开头即跳过）。
    */
