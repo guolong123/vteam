@@ -743,6 +743,36 @@ describe('TasksService', () => {
       }
     });
 
+    it('createTaskInternal team channel ensure（Todo 24）：channel create 失败中止事务，任务行不提交、无后续广播', async () => {
+      const taskId = 't_0000000024';
+      const tx = setupTxIdle(taskId);
+      tx.chatChannel.findFirst = jest.fn().mockResolvedValue(null);
+      tx.chatChannel.create.mockRejectedValue(new Error('channel unavailable'));
+      await expect(
+        service.create(userId, { title: '通道失败', teamId }),
+      ).rejects.toThrow('channel unavailable');
+      // 同一事务内通道保障失败 → 事务函数抛错回滚：通道之后的写与广播均未发生
+      expect(tx.taskEvent.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('createTaskInternal team channel ensure（Todo 24）：legacy task_group 更新失败直接抛出，不被外层 catch 吞掉', async () => {
+      const taskId = 't_0000000025';
+      const tx = setupTxIdle(taskId);
+      tx.chatChannel.findFirst = jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'c_legacy', type: 'task_group' });
+      tx.chatChannel.update = jest
+        .fn()
+        .mockRejectedValue(new Error('legacy update unavailable'));
+      await expect(
+        service.create(userId, { title: 'legacy 更新失败', teamId }),
+      ).rejects.toThrow('legacy update unavailable');
+      expect(tx.taskEvent.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
     it('并发：version CAS 重试3次，最终仅一个 pending 其余 queued（模拟首试冲突后重试成功）', async () => {
       const taskId = 't_0000000003';
       prisma.teamUserMember.findUnique.mockResolvedValue({

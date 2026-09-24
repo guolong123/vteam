@@ -433,48 +433,57 @@ export class TasksService implements OnModuleInit {
             },
           });
 
-          try {
-            const txChat: any = (tx as any).chatChannel;
-            if (txChat?.findFirst) {
-              const existing: any = await txChat
-                .findFirst({
-                  where: {
+          // team channel ensure 与任务写同一原子单元：任一失败直接抛、
+          // 中止外层 $transaction 回滚任务行，禁止无通道半成品任务（Todo 24）。
+          // legacy task_group 分支保留（删除是 Todo 44 的职责）。
+          const txChat: any = (tx as any).chatChannel;
+          if (txChat?.findFirst) {
+            const existing: any = await txChat.findFirst({
+              where: {
+                teamId,
+                type: CHANNEL_TYPE.team_group,
+                deletedAt: null,
+              },
+            });
+            if (!existing) {
+              const legacy: any = await txChat.findFirst({
+                where: { teamId },
+              });
+              if (!legacy) {
+                try {
+                  await txChat.create({
+                    data: {
+                      id: await this.idGen.nextId(ID_PREFIX.channel),
+                      type: CHANNEL_TYPE.team_group,
+                      teamId,
+                      taskId: null,
+                    },
+                  });
+                } catch (err: any) {
+                  // 并发竞态唯一键冲突（team_group 单例）→ 回退查已存在，
+                  // 与 chat.service ensureTeamChannel 同 pattern；其余一律抛出。
+                  if (err?.code !== 'P2002') throw err;
+                  const raced: any = await txChat.findFirst({
+                    where: {
+                      teamId,
+                      type: CHANNEL_TYPE.team_group,
+                      deletedAt: null,
+                    },
+                  });
+                  if (!raced) throw err;
+                }
+              } else if (legacy.type === CHANNEL_TYPE.task_group) {
+                await txChat.update({
+                  where: { id: legacy.id },
+                  data: {
                     teamId,
                     type: CHANNEL_TYPE.team_group,
-                    deletedAt: null,
+                    taskId: null,
                   },
-                })
-                .catch(() => null);
-              if (!existing) {
-                const legacy: any = await txChat
-                  .findFirst({ where: { teamId } })
-                  .catch(() => null);
-                if (!legacy) {
-                  try {
-                    await txChat.create({
-                      data: {
-                        id: await this.idGen.nextId(ID_PREFIX.channel),
-                        type: CHANNEL_TYPE.team_group,
-                        teamId,
-                        taskId: null,
-                      },
-                    });
-                  } catch {}
-                } else if (legacy.type === CHANNEL_TYPE.task_group) {
-                  try {
-                    await txChat.update({
-                      where: { id: legacy.id },
-                      data: {
-                        teamId,
-                        type: CHANNEL_TYPE.team_group,
-                        taskId: null,
-                      },
-                    });
-                  } catch {}
-                }
+                });
               }
             }
-          } catch {}
+          }
 
           // FIFO + 版本双保险
           if (isIdle) {
