@@ -885,6 +885,10 @@ export function decodeXml(text: string): string {
 /** 模块级纯解析函数（extractArtifacts/extractJsonByType/extractAllJsonObjects）共用的 logger（类外无 this.logger）。 */
 const parseLogger = new Logger('WorkerDispatcher');
 
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * F3 MAJOR-2：从 agent 回复文本提取产出物声明（12 篇 §3.1 声明形状，兼容 §8.2 注入格式）：
  * ① `<artifact type title>正文</artifact>` 标签（§8.2 格式对称复用，text 类型取正文为 content）；
@@ -947,7 +951,7 @@ export function extractArtifacts(text: string): Array<Record<string, unknown>> {
     } catch (e) {
       // 同上：丢弃
       parseLogger.debug(
-        `artifact 声明 JSON 非法已跳过: ${(e as Error).message}`,
+        `artifact 声明 JSON 非法已跳过: ${formatErrorMessage(e)}`,
       );
     }
   }
@@ -1099,7 +1103,7 @@ export function extractJsonByType(
           >;
         } catch (e) {
           parseLogger.debug(
-            `extractJsonByType 回退 type=${typeValue} start=${start}: ${(e as Error).message}`,
+            `extractJsonByType 回退 type=${typeValue} start=${start}: ${formatErrorMessage(e)}`,
           );
           return null;
         }
@@ -1217,7 +1221,7 @@ function extractAllJsonObjects(
           } catch (e) {
             // 非合法 JSON：跳过
             parseLogger.debug(
-              `extractAllJsonObjects 跳过非合法 JSON pos=${start}: ${(e as Error).message}`,
+              `extractAllJsonObjects 跳过非合法 JSON pos=${start}: ${formatErrorMessage(e)}`,
             );
           }
           break;
@@ -2664,7 +2668,7 @@ export class WorkerDispatcher
                   }) as unknown as typeof adapter;
                 } catch (e) {
                   this.logger.debug(
-                    `wecom bridge: ModuleRef adapter lookup miss taskId=${payload.taskId}: ${(e as Error).message}`,
+                    `wecom bridge: ModuleRef adapter lookup miss taskId=${payload.taskId}: ${formatErrorMessage(e)}`,
                   );
                 }
                 if (!adapter) {
@@ -2674,7 +2678,7 @@ export class WorkerDispatcher
                       (g['__wecomAdapter'] as typeof adapter) ?? undefined;
                   } catch (e) {
                     this.logger.debug(
-                      `wecom bridge: global adapter lookup miss taskId=${payload.taskId}: ${(e as Error).message}`,
+                      `wecom bridge: global adapter lookup miss taskId=${payload.taskId}: ${formatErrorMessage(e)}`,
                     );
                   }
                 }
@@ -2713,7 +2717,7 @@ export class WorkerDispatcher
                     }
                   } catch (e) {
                     this.logger.warn(
-                      `wecom bridge: getPendingOperatorForTask failed taskId=${payload.taskId}, fall to stream path: ${(e as Error).message}`,
+                      `wecom bridge: getPendingOperatorForTask failed taskId=${payload.taskId}, fall to stream path: ${formatErrorMessage(e)}`,
                     );
                   }
                   if (!pendingFromCard) {
@@ -2731,7 +2735,7 @@ export class WorkerDispatcher
                       }
                     } catch (e) {
                       this.logger.warn(
-                        `wecom bridge: stream/pending-user lookup failed taskId=${payload.taskId} internalMessageId=${externalMsg.id}, fromName degrades to '': ${(e as Error).message}`,
+                        `wecom bridge: stream/pending-user lookup failed taskId=${payload.taskId} internalMessageId=${externalMsg.id}, fromName degrades to '': ${formatErrorMessage(e)}`,
                       );
                     }
                   }
@@ -2788,7 +2792,7 @@ export class WorkerDispatcher
                     }
                   } catch (e) {
                     this.logger.warn(
-                      `wecom bridge: post-card discardStream failed taskId=${payload.taskId} internalMessageId=${externalMsg.id} (best-effort): ${(e as Error).message}`,
+                      `wecom bridge: post-card discardStream failed taskId=${payload.taskId} internalMessageId=${externalMsg.id} (best-effort): ${formatErrorMessage(e)}`,
                     );
                   }
                   try {

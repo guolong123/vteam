@@ -94,6 +94,8 @@ describe('WorkerDispatcher', () => {
       updateMany: jest.Mock;
     };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
+    messageChannel: { findUnique: jest.Mock };
+    taskMessageChannel: { findMany: jest.Mock };
     task: { findUnique: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
@@ -214,6 +216,8 @@ describe('WorkerDispatcher', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       chatChannel: { findUnique: jest.fn(), findFirst: jest.fn() },
+      messageChannel: { findUnique: jest.fn().mockResolvedValue(null) },
+      taskMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
       // 主 Agent/团队成员注入：默认无 task 行 → isMainAgent=false + team=[]（既有断言
       // system 不含主 Agent/团队段，回归现状）；需要注入的用例单独 mockResolvedValue。
       task: { findUnique: jest.fn() },
@@ -6412,10 +6416,7 @@ describe('WorkerDispatcher', () => {
       });
       prisma.artifact.findMany.mockResolvedValue([]);
       const d = createDispatcher();
-      const dispatcherView = d as unknown as {
-        logger: { warn: (...args: unknown[]) => void };
-      };
-      const warnSpy = jest.spyOn(dispatcherView.logger, 'warn');
+      const warnSpy = jest.spyOn(d['logger'], 'warn');
       const mkdirSpy = jest
         .spyOn(fs.promises, 'mkdir')
         .mockRejectedValueOnce(new Error('EACCES boom') as never);
@@ -7024,7 +7025,10 @@ describe('WorkerDispatcher', () => {
   });
 
   describe('WeCom directed reply (group @user + mirror to team_group)', () => {
-    const basePayload = {
+    type CompletedPayload = Parameters<
+      WorkerDispatcher['handleTaskCompleted']
+    >[0];
+    const basePayload: CompletedPayload = {
       taskId: 't_0000000001',
       agentId: 'a_product',
       sessionId: 's_0000000001',
@@ -7042,12 +7046,12 @@ describe('WorkerDispatcher', () => {
         teamMemberId: 'tmm_1',
       });
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
-      (prisma as any).taskMessageChannel = {
+      prisma.taskMessageChannel = {
         findMany: jest
           .fn()
           .mockResolvedValue([{ messageChannelId: 'mc_wecom' }]),
       };
-      (prisma as any).messageChannel = {
+      prisma.messageChannel = {
         findUnique: jest.fn().mockImplementation((q: any) => {
           if (q?.where?.id === 'mc_wecom') {
             return Promise.resolve({ id: 'mc_wecom', type: 'wecom_aibot' });
@@ -7195,19 +7199,9 @@ describe('WorkerDispatcher', () => {
         chattype: 'group',
         fromUserName: 'GuoLong',
       });
-      (
-        prisma as unknown as {
-          messageChannel: { findUnique: jest.Mock };
-        }
-      ).messageChannel.findUnique.mockRejectedValue(new Error('db blip'));
-      const dispatcherView = d as unknown as {
-        logger: { warn: (...args: unknown[]) => void };
-      };
-      const warnSpy = jest.spyOn(dispatcherView.logger, 'warn');
-      type CompletedPayload = Parameters<
-        WorkerDispatcher['handleTaskCompleted']
-      >[0];
-      await d.handleTaskCompleted(basePayload as unknown as CompletedPayload);
+      prisma.messageChannel.findUnique.mockRejectedValue(new Error('db blip'));
+      const warnSpy = jest.spyOn(d['logger'], 'warn');
+      await d.handleTaskCompleted(basePayload);
       const warned = warnSpy.mock.calls.map((c) => String(c[0]));
       // Failure surfaced with the binding identity (not swallowed).
       expect(

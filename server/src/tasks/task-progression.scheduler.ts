@@ -116,27 +116,11 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TaskProgressionScheduler.name);
 
   /**
-   * 巡检触发器行模型（prisma.trigger 经 unknown 中转，保持 as-any 计数不增；
-   * 缺席时 undefined，调用方 fail-open）。
+   * 巡检触发器 delegate：直接使用 PrismaService 生成的真实类型。
+   * 调用点保留可选链，兼容旧测试替身缺少 delegate 时的 fail-open 语义。
    */
-  private patrolTriggerRows():
-    | {
-        findUnique?: (args: unknown) => Promise<unknown>;
-        findMany?: (args: unknown) => Promise<unknown>;
-        update?: (args: unknown) => Promise<unknown>;
-        delete?: (args: unknown) => Promise<unknown>;
-      }
-    | undefined {
-    return (
-      this.prisma as unknown as {
-        trigger?: {
-          findUnique?: (args: unknown) => Promise<unknown>;
-          findMany?: (args: unknown) => Promise<unknown>;
-          update?: (args: unknown) => Promise<unknown>;
-          delete?: (args: unknown) => Promise<unknown>;
-        };
-      }
-    ).trigger;
+  private patrolTriggerRows(): PrismaService['trigger'] {
+    return this.prisma.trigger;
   }
 
   /** 巡检间隔 ms（env PROGRESSION_INTERVAL_MS，缺省 20min；公开便于测试覆盖）。 */
@@ -365,7 +349,10 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
         where: { dedupKey: buildProgressionDedupKey(taskId) },
       })) as { status?: string } | null | undefined;
       return row?.status === TRIGGER_STATUS.PENDING;
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `[progression] 巡检状态查询失败 taskId=${taskId}（按未注册处理）: ${this.describeError(err)}`,
+      );
       return false;
     }
   }

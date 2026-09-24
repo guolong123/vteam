@@ -66,6 +66,8 @@ describe('TasksService', () => {
   let sessionLifecycle: {
     getInstancesByTeamMember: jest.Mock;
     getInstanceBySession: jest.Mock;
+    resetTeamSessionsInTx: jest.Mock;
+    resetTeamSessions: jest.Mock;
   };
 
   const userId = 'u_admin';
@@ -272,13 +274,9 @@ describe('TasksService', () => {
     sessionLifecycle = {
       getInstancesByTeamMember: jest.fn().mockResolvedValue([]),
       getInstanceBySession: jest.fn().mockResolvedValue(null),
-    } as any;
-    (sessionLifecycle as any).resetTeamSessionsInTx = jest
-      .fn()
-      .mockResolvedValue(2);
-    (sessionLifecycle as any).resetTeamSessions = jest
-      .fn()
-      .mockResolvedValue(2);
+      resetTeamSessionsInTx: jest.fn().mockResolvedValue(2),
+      resetTeamSessions: jest.fn().mockResolvedValue(2),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -761,13 +759,24 @@ describe('TasksService', () => {
       expect(realtime.broadcast).not.toHaveBeenCalled();
     });
 
-    it('createTaskInternal team channel ensure：团队无 team_group 时直接创建，不复用其他频道类型', async () => {
+    it('createTaskInternal team channel ensure：已有其他类型频道时仍创建独立 team_group', async () => {
       const taskId = 't_0000000025';
       const tx = setupTxIdle(taskId);
-      tx.chatChannel.findFirst = jest.fn().mockResolvedValue(null);
+      // 旧实现会在这第二次宽查询中看到 private 频道并跳过创建；当前实现只认
+      // team_group 查询，因此仍必须为团队创建唯一的 team_group。
+      tx.chatChannel.findFirst = jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'c_private',
+          type: CHANNEL_TYPE.private,
+          teamId,
+          taskId: null,
+        });
 
       await service.create(userId, { title: '团队新群', teamId });
 
+      expect(tx.chatChannel.findFirst).toHaveBeenCalledTimes(1);
       expect(tx.chatChannel.findFirst).toHaveBeenCalledWith({
         where: {
           teamId,
@@ -4673,9 +4682,7 @@ describe('TasksService', () => {
       };
       tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
       prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
-      const resetInTx = (
-        sessionLifecycle as unknown as { resetTeamSessionsInTx: jest.Mock }
-      ).resetTeamSessionsInTx;
+      const resetInTx = sessionLifecycle.resetTeamSessionsInTx;
       resetInTx.mockClear();
 
       // 查询失败必须上浮：旧代码吞错后 needReset 保持 false，accept 静默成功且不 reset
