@@ -118,7 +118,6 @@ async function repairHookSide(
         id,
         kind: TRIGGER_KIND.HOOK_FIRE as string,
         status: TRIGGER_STATUS.PENDING,
-        fireAt: due,
         dueAt: due,
         payload: { hookId: hook.id },
         dedupKey,

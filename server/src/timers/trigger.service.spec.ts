@@ -75,7 +75,7 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
   });
 
   describe('schedule', () => {
-    it('落 pending 行（tmr_ id + dedupKey + dueAt/fireAt 双写 + payload 透传）', async () => {
+    it('落 pending 行（tmr_ id + dedupKey + dueAt 单写 + payload 透传）', async () => {
       const { svc, prisma, idGen } = makeService();
       prisma.timer.findUnique.mockResolvedValue(null);
       prisma.timer.create.mockImplementation(async ({ data }: any) => ({
@@ -98,13 +98,14 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
           id: 'tmr_0000000001',
           kind: 'receipt_nudge',
           status: TRIGGER_STATUS.PENDING,
-          fireAt: FUTURE,
           dueAt: FUTURE,
           payload: { hello: 'world' },
           dedupKey: 'test_kind:scope:1',
           attempts: 0,
         }),
       });
+      expect(prisma.timer.create.mock.calls[0][0].data.fireAt).toBeUndefined();
+      expect(prisma.timer.create.mock.calls[0][0].data.dueAt).toBe(FUTURE);
       expect(out).toMatchObject({ id: 'tmr_0000000001' });
       svc.onModuleDestroy();
     });
@@ -536,6 +537,7 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
       await svc.fireDue(NOW);
       const data = prisma.timer.update.mock.calls[0][0].data;
       expect(data.status).toBe(TRIGGER_STATUS.PENDING);
+      expect(data.fireAt).toBeUndefined();
       expect((data.dueAt as Date).getTime()).toBeGreaterThanOrEqual(
         NOW.getTime(),
       );
@@ -551,6 +553,7 @@ describe('TriggerService（通用定时器基础设施，mocked PrismaService，
       await svc.fireDue(NOW);
       const data = prisma.timer.update.mock.calls[0][0].data;
       expect(data.status).toBe(TRIGGER_STATUS.PENDING);
+      expect(data.fireAt).toBeUndefined();
       expect((data.dueAt as Date).getTime()).toBeGreaterThanOrEqual(
         NOW.getTime() + 60_000,
       );

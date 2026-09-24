@@ -293,6 +293,7 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       expect(fireData['id']).toMatch(/^tmr_/);
       expect(fireData['kind']).toBe('hook_fire');
       expect(fireData['dueAt']).toBe(dueAt);
+      expect(fireData['fireAt']).toBeUndefined();
       expect(fireData['payload']).toEqual({ hookId: hookData['id'] });
       expect(fireData['dedupKey']).toBe(
         buildHookFireDedupKey(hookData['id'] as string),
@@ -329,6 +330,7 @@ describe('HookService（agent-hook 域，todo-11）', () => {
         unknown
       >;
       expect(fireData['dueAt']).toBe(expiresAt);
+      expect(fireData['fireAt']).toBeUndefined();
     });
 
     it('重复 dedupKey → 幂等直返既有行（事务不跑）', async () => {

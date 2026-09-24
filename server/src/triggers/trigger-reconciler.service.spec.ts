@@ -105,6 +105,8 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
     expect(created.data.dedupKey).toBe(buildHookFireDedupKey(hook.id));
     expect(created.data.payload).toEqual({ hookId: hook.id });
     expect(created.data.status).toBe('pending');
+    expect(created.data.dueAt).toEqual(hook.dueAt);
+    expect(created.data.fireAt).toBeUndefined();
     expect(realtime.emit).toHaveBeenCalledWith(
       TRIGGER_RECONCILE_EVENT_TYPE,
       expect.objectContaining({ direction: 'A', hookId: hook.id }),

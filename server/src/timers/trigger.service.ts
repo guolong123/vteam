@@ -22,7 +22,7 @@ import { PrismaService } from '../prisma/prisma.service';
  * chat 域 `registerHandler` 接入）；评审轮次超时（`review_round_timeout`）。
  *
  * 三形态（trigger-unification todo-2）：
- * - one-shot：`dueAt` 到期触发一次（旧列暂保留双写，后续清理任务再 drop）；
+ * - one-shot：`dueAt` 到期触发一次（唯一到期时刻）；
  * - interval：`opts.intervalMs` 周期重排，`nextFireAt = now + intervalMs + jitter`
  *   按 now 重算（不追补 missed 周期；overdue 重排钳制到 `now + jitter(0..30s)`）；
  * - condition：`opts.guardKey` 仅接受已注册谓词（`registerGuard` 白名单，
@@ -204,8 +204,8 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 幂等排期：同 dedupKey 已有行 → 直接返回既有行（不再 create）；
-   * 否则生成 `tmr_` id 落 pending 行（旧列 + `dueAt` 双写，迁移窗口
-   * 读路径 `due_at IS NOT NULL` 可见），并兜底确保 ticker 在跑。
+   * 否则生成 `tmr_` id 落 pending 行（单写 `dueAt`，读路径
+   * `due_at IS NOT NULL` 可见），并兜底确保 ticker 在跑。
    *
    * kind 白名单强制：未知 kind 直接抛错（loud，禁止静默落库后 feature-detect）；
    * guardKey 未注册同样直接抛错。
@@ -241,7 +241,6 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
           id,
           kind: kind as TriggerKind as string,
           status: TRIGGER_STATUS.PENDING,
-          fireAt: dueAt,
           dueAt,
           payload,
           dedupKey,
@@ -598,7 +597,6 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
         where: { id: row.id },
         data: {
           status: TRIGGER_STATUS.PENDING,
-          fireAt: next,
           dueAt: next,
           nextFireAt: next,
           fireCount: { increment: 1 },
@@ -635,7 +633,6 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
         where: { id: row.id },
         data: {
           status: TRIGGER_STATUS.PENDING,
-          fireAt: next,
           dueAt: next,
           nextFireAt: next,
           fireCount: { increment: 1 },

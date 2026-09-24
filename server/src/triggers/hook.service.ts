@@ -417,7 +417,6 @@ export class HookService implements OnModuleInit {
             id: fireId,
             kind: TRIGGER_KIND.HOOK_FIRE as string,
             status: TRIGGER_STATUS.PENDING,
-            fireAt: fireDue,
             dueAt: fireDue,
             payload: { hookId },
             dedupKey: fireDedup,

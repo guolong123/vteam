@@ -438,7 +438,7 @@ model MessageReceipt {
 // 永不 NULL（nullable unique 在部分 DB 下破坏幂等）；调用方显式传 key。
 //
 // 三形态（todo-2 trigger-unification）：
-// - one-shot：`dueAt` 到期触发一次（历史 `fireAt` 双写保留，后续清理任务再 drop）；
+// - one-shot：`dueAt` 到期触发一次（唯一到期时刻）；
 // - interval：`intervalMs` + `nextFireAt` 周期重排（按 now 重算，不追补 missed 周期）；
 // - condition：`guardKey` 仅接受已注册谓词（registerGuard 白名单，非任意字符串）。
 // ==================================================================
@@ -447,8 +447,7 @@ model Trigger {
   id              String    @id // tmr_ 前缀冻结，服务层 IdGeneratorService 生成
   kind            String // handler 注册键（TRIGGER_KIND 白名单，服务层强制）
   status          String    @default("pending") // pending|firing|fired|cancelled|failed
-  fireAt          DateTime  @map("fire_at") // 历史列：双写保留，清理前勿删
-  dueAt           DateTime? @map("due_at") // one-shot 到期时刻（读路径唯一真相）
+  dueAt           DateTime  @map("due_at") // one-shot 到期时刻（读路径唯一真相）
   scopeType       String?   @map("scope_type") // 归属域（如 team/issue，可空）
   scopeId         String?   @map("scope_id") // 归属 id（可空）
   ownerInstanceId String?   @map("owner_instance_id") // 拥有实例（可空）
@@ -467,7 +466,6 @@ model Trigger {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  @@index([status, fireAt], map: "idx_timers_status_fire_at")
   @@index([status, dueAt], map: "idx_triggers_status_due_at")
   @@map("triggers")
 }
