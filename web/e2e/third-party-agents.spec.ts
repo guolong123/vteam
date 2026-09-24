@@ -41,86 +41,6 @@ async function openExternalTab(page: Page) {
   await expect(page.getByTestId("external-agents-root")).toBeVisible({ timeout: 15_000 });
 }
 
-async function waitForExternalWorker(page: Page): Promise<boolean> {
-  let ready = false;
-  try {
-    await expect
-      .poll(
-        () =>
-          page.evaluate(async () => {
-            const raw = localStorage.getItem("agent-platform-auth");
-            if (!raw) return false;
-            const auth = JSON.parse(raw) as { state?: { token?: string } };
-            const token = auth.state?.token;
-            if (!token) return false;
-            const headers = { Authorization: `Bearer ${token}` };
-            const listResponse = await fetch("/api/v1/agents/opencode", { headers });
-            if (!listResponse.ok) return false;
-            const list = (await listResponse.json()) as {
-              degraded?: boolean;
-              agents?: { name: string; governed?: boolean; hidden?: boolean }[];
-            };
-            const first = list.agents?.find((agent) => !agent.governed && !agent.hidden);
-            if (!first || list.degraded) return false;
-            const promptResponse = await fetch(
-              `/api/v1/agents/omo-agent-prompt?name=${encodeURIComponent(first.name)}`,
-              { headers },
-            );
-            return promptResponse.ok;
-          }),
-        { timeout: 60_000 },
-      )
-      .toBe(true);
-    ready = true;
-  } catch (error) {
-    if (!(error instanceof Error)) throw error;
-    return false;
-  }
-  return ready;
-}
-
-async function waitForExternalList(page: Page): Promise<boolean> {
-  let ready = false;
-  try {
-    await expect
-      .poll(
-        async () => {
-          ready = await page.evaluate(async () => {
-            try {
-              const raw = localStorage.getItem("agent-platform-auth");
-              if (!raw) return false;
-              const auth = JSON.parse(raw) as { state?: { token?: string } };
-              const token = auth.state?.token;
-              if (!token) return false;
-              const listResponse = await fetch("/api/v1/agents/opencode", {
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              if (!listResponse.ok) return false;
-              const list = (await listResponse.json()) as {
-                degraded?: boolean;
-                agents?: { governed?: boolean; hidden?: boolean }[];
-              };
-              return (
-                list.degraded !== true &&
-                (list.agents ?? []).some((agent) => !agent.governed && !agent.hidden)
-              );
-            } catch (error) {
-              if (!(error instanceof Error)) throw error;
-              return false;
-            }
-          });
-          return ready;
-        },
-        { timeout: 30_000 },
-      )
-      .toBe(true);
-  } catch (error) {
-    if (!(error instanceof Error)) throw error;
-    return false;
-  }
-  return ready;
-}
-
 async function waitForExternalPanel(page: Page): Promise<boolean> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     let ready = false;
@@ -150,38 +70,6 @@ async function waitForExternalPanel(page: Page): Promise<boolean> {
   return false;
 }
 
-async function waitForPromptResult(page: Page): Promise<boolean> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    let ready = false;
-    try {
-      await expect
-        .poll(
-          async () => {
-            ready =
-              (await page.getByTestId("external-agent-instructions-unavailable").count()) === 0 &&
-              ((await page.getByTestId("external-agent-instructions").count()) > 0 ||
-                (await page.getByTestId("external-agent-instructions-empty").count()) > 0);
-            return ready;
-          },
-          { timeout: 10_000 },
-        )
-        .toBe(true);
-    } catch (error) {
-      if (!(error instanceof Error)) throw error;
-    }
-    if (ready) return true;
-    if (attempt === 2) break;
-    await page.reload();
-    await expect(page.getByTestId("agent-config-root")).toBeVisible({ timeout: 20_000 });
-    await page.getByTestId("manage-tab").filter({ hasText: "外部 Agent" }).click();
-    await expect(page.getByTestId("external-agents-root")).toBeVisible({ timeout: 15_000 });
-    const items = page.getByTestId("external-agent-item");
-    await expect(items.first()).toBeVisible({ timeout: 20_000 });
-    await items.first().click();
-  }
-  return false;
-}
-
 async function save(path: string | undefined, page: Page) {
   if (!path) return;
   mkdirSync(dirname(path), { recursive: true });
@@ -190,16 +78,8 @@ async function save(path: string | undefined, page: Page) {
 
 test.describe("Todo 2 · 外部 Agent 只读展示", () => {
   test("1. 列表 + 逐条警告 + 只读提示词 + 零编辑控件", async ({ page }) => {
-    test.setTimeout(150_000);
     await loginAsAdmin(page);
-    if (!(await waitForExternalWorker(page))) {
-      test.skip(true, "外部 worker 在 60 秒 bounded readiness 内不可用");
-      return;
-    }
     await openExternalTab(page);
-    if (!(await waitForExternalPanel(page))) {
-      throw new Error("外部 Agent 列表在 bounded panel readiness 内未恢复");
-    }
 
     // A. 列表渲染（引擎实时返回，非硬编码）；不可用/空态不得出现
     await expect(page.getByTestId("external-agents-loading")).toHaveCount(0, { timeout: 20_000 });
@@ -222,9 +102,6 @@ test.describe("Todo 2 · 外部 Agent 只读展示", () => {
 
     // B. 选中第一条 → 只读 <pre> 提示词可见（真实拉取，非 mock）
     await items.first().click();
-    if (!(await waitForPromptResult(page))) {
-      throw new Error("外部 Agent 提示词在 bounded readiness 内未恢复");
-    }
     await expect(items.first()).toHaveAttribute("data-active", "true");
     const detail = page.getByTestId("external-agent-detail");
     await expect(detail).toBeVisible();
@@ -269,7 +146,6 @@ test.describe("Todo 2 · 外部 Agent 只读展示", () => {
   });
 
   test("2. 指令拉取失败 → 显式不可用态（绝不空白）", async ({ page }) => {
-    test.setTimeout(120_000);
     // 在页面加载前拦截：任何 omo-agent-prompt 请求都回 500
     let hits = 0;
     await page.route("**/agents/omo-agent-prompt**", async (route) => {
@@ -282,10 +158,6 @@ test.describe("Todo 2 · 外部 Agent 只读展示", () => {
     });
 
     await loginAsAdmin(page);
-    if (!(await waitForExternalList(page))) {
-      test.skip(true, "外部 Agent 列表在 bounded readiness 内不可用");
-      return;
-    }
     await openExternalTab(page);
     if (!(await waitForExternalPanel(page))) {
       test.skip(true, "外部 Agent 列表在 bounded panel readiness 内不可用");

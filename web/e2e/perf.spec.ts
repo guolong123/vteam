@@ -10,17 +10,82 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
  * 硬门限与本页真实模型调用轮询的 90s timeout 对齐
  * 环境：web 3001（/api/v1 rewrites → server 3000）+ storageState（seed-admin）
  */
-const CHANNEL_ID = "c_0000000001"; // T8 性能验收任务群聊频道
 const TEAM_ID = "tm_0000000001";
 const AGENT_ID = "a_product";
 const FIRST_TOKEN_TARGET_MS = 15_000;
 const FIRST_TOKEN_HARD_GATE_MS = 90_000;
 
-async function ensurePerfTask(request: APIRequestContext, token: string): Promise<string> {
-  const headers = { Authorization: `Bearer ${token}` };
+type PerfTeam = { currentTaskId: string | null };
+type PerfChannel = {
+  id: string;
+  type: string;
+  teamId?: string | null;
+  teamMemberId?: string | null;
+  agentId?: string | null;
+};
+type PerfChannelList = { items: PerfChannel[]; total: number };
+type PerfContext = { taskId: string; channelId: string };
+
+function authHeaders(token: string) {
+  return { Authorization: `Bearer ${token}` };
+}
+
+/**
+ * Resolve the live private team-session channel used by the first-token probe.
+ * The team-session page opens a member's private tab through the idempotent
+ * POST /dm-channels endpoint; the returned channel is where team-session
+ * replies are stored after session unification.
+ */
+async function resolveTeamSessionChannel(
+  request: APIRequestContext,
+  token: string,
+): Promise<string> {
+  const response = await request.post("/api/v1/dm-channels", {
+    headers: authHeaders(token),
+    data: { teamId: TEAM_ID, agentId: AGENT_ID },
+  });
+  expect(response.status(), "团队私聊频道解析应成功").toBe(201);
+  const channel = (await response.json()) as PerfChannel;
+  expect(channel.id, "团队私聊频道应有 id").toBeTruthy();
+  expect(channel.type, "首字探针必须使用当前团队私聊会话").toBe("private");
+  expect(channel.teamId, "团队私聊频道应归属当前团队").toBe(TEAM_ID);
+  expect(channel.agentId, "团队私聊频道应对应目标平台 Agent").toBe(AGENT_ID);
+  return channel.id;
+}
+
+/**
+ * Resolve the group channel with the same fallback order as the team-session
+ * page's `/channels?teamId=...` query. This is intentionally only for the
+ * transport-only SSE benchmark; the first-token benchmark uses the private
+ * team-session channel above.
+ */
+async function resolveTeamGroupChannel(
+  request: APIRequestContext,
+  token: string,
+): Promise<string> {
+  const response = await request.get(
+    `/api/v1/channels?teamId=${encodeURIComponent(TEAM_ID)}`,
+    { headers: authHeaders(token) },
+  );
+  expect(response.ok(), "团队群聊频道解析应成功").toBeTruthy();
+  const payload = (await response.json()) as PerfChannelList;
+  const items = payload.items ?? [];
+  const channel =
+    items.find((item) => item.type === "team_group" && (item.teamId ?? null) === TEAM_ID) ??
+    (items.length === 1 ? items[0] : undefined) ??
+    items.find((item) => (item.teamId ?? null) === TEAM_ID) ??
+    items[0];
+  if (!channel) {
+    throw new Error(`团队 ${TEAM_ID} 没有可访问的聊天频道`);
+  }
+  return channel.id;
+}
+
+async function ensurePerfTask(request: APIRequestContext, token: string): Promise<PerfContext> {
+  const headers = authHeaders(token);
   const teamResponse = await request.get(`/api/v1/teams/${TEAM_ID}`, { headers });
   expect(teamResponse.ok()).toBeTruthy();
-  const team = (await teamResponse.json()) as { currentTaskId: string | null };
+  const team = (await teamResponse.json()) as PerfTeam;
   let taskId = team.currentTaskId;
 
   if (!taskId) {
@@ -40,7 +105,7 @@ async function ensurePerfTask(request: APIRequestContext, token: string): Promis
     const started = await request.post(`/api/v1/tasks/${taskId}/start`, { headers });
     expect(started.ok()).toBeTruthy();
   }
-  return taskId;
+  return { taskId, channelId: await resolveTeamSessionChannel(request, token) };
 }
 
 async function readToken(page: import("@playwright/test").Page): Promise<string> {
@@ -142,12 +207,13 @@ test.describe("性能 E2E", () => {
     expect(t1.loadMs).toBeLessThan(15_000);
   });
 
-  test("群聊 SSE 计时（无 @ 消息，零模型调用，3 采样中位数）", async ({ page }) => {
+  test("群聊 SSE 计时（无 @ 消息，零模型调用，3 采样中位数）", async ({ page, request }) => {
     const token = await readToken(page);
+    const channelId = await resolveTeamGroupChannel(request, token);
     const samples: number[] = [];
     for (let i = 0; i < 3; i++) {
       samples.push(
-        await sseRoundtrip(page, CHANNEL_ID, token, `[qa/perf] 群聊 SSE 采样 ${i + 1}（无 @）`),
+        await sseRoundtrip(page, channelId, token, `[qa/perf] 群聊 SSE 采样 ${i + 1}（无 @）`),
       );
     }
     const median = [...samples].sort((a, b) => a - b)[1];
@@ -161,7 +227,7 @@ test.describe("性能 E2E", () => {
   test("首字计时 @a_product（1 次真实 opencode 调用，双线记录不阻断）", async ({ page, request }) => {
     test.setTimeout(120_000);
     const token = await readToken(page);
-    const taskId = await ensurePerfTask(request, token);
+    const { taskId, channelId } = await ensurePerfTask(request, token);
     const elapsed = await page.evaluate(
       async ({ channelId, token, agentId, taskId, timeout }) => {
         const t0 = Date.now();
@@ -192,7 +258,7 @@ test.describe("性能 E2E", () => {
         }
         return -1;
       },
-      { channelId: CHANNEL_ID, token, agentId: AGENT_ID, taskId, timeout: FIRST_TOKEN_HARD_GATE_MS },
+      { channelId, token, agentId: AGENT_ID, taskId, timeout: FIRST_TOKEN_HARD_GATE_MS },
     );
     const observed =
       elapsed < 0
@@ -200,10 +266,9 @@ test.describe("性能 E2E", () => {
         : `${elapsed}ms`;
     test.info().annotations.push({
       type: "perf",
-      description: `firstToken=${observed}（目标线 ${FIRST_TOKEN_TARGET_MS}ms / 观测上限 ${FIRST_TOKEN_HARD_GATE_MS}ms；只记录不阻断）`,
+      description: `firstToken=${observed}（目标线 ${FIRST_TOKEN_TARGET_MS}ms / 观测上限 ${FIRST_TOKEN_HARD_GATE_MS}ms）`,
     });
-    // 只测量不设门限：本用例打真实 LLM，首字耗时由模型行为主导（本机实测 9s~90s+，且偶发观测上限内无回复），
-    // 任何固定阈值都会随机翻红而与本仓库回归无关；测试标题与文件头注释原本都写明「不阻断」。无回复记为 -1
-    // 并写入 annotation，而非抛错。代价：套件不再对首字延迟或可用性设门限，只能从 annotation 观测。
+    // 只对「无回复」设门禁，延迟本身不设：观测上限内拿不到任何回复是真实故障，延迟数值只记录。
+    expect(elapsed, `首字 ${observed}：${FIRST_TOKEN_HARD_GATE_MS}ms 内未取到任何回复`).toBeGreaterThan(0);
   });
 });

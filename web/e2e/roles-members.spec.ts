@@ -45,12 +45,6 @@ interface OpencodeAgentEntry {
   governed: boolean;
 }
 
-interface ExternalWorkerProbe {
-  names: string[];
-  degraded: boolean;
-  ready: boolean;
-}
-
 interface TeamMember {
   id: string;
   agentId: string;
@@ -118,35 +112,6 @@ async function openRolesTab(page: Page) {
   await expect(page.getByTestId("agent-role-root")).toBeVisible({ timeout: 15_000 });
 }
 
-async function waitForRoleEngineList(page: Page): Promise<boolean> {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    let ready = false;
-    try {
-      await expect
-        .poll(
-          async () => {
-            const note = page.getByTestId("role-default-agent-note");
-            ready =
-              (await note.count()) > 0 &&
-              ((await note.textContent()) ?? "").includes("个外部 Agent");
-            return ready;
-          },
-          { timeout: 8_000 },
-        )
-        .toBe(true);
-    } catch (error) {
-      if (!(error instanceof Error)) throw error;
-    }
-    if (ready) return true;
-    if (attempt === 2) break;
-    await page.reload();
-    await expect(page.getByTestId("agent-config-root")).toBeVisible({ timeout: 20_000 });
-    await page.getByTestId("manage-tab").filter({ hasText: "角色" }).click();
-    await expect(page.getByTestId("agent-role-root")).toBeVisible({ timeout: 15_000 });
-  }
-  return false;
-}
-
 /** 引擎实时外部清单（!governed && !hidden），非硬编码；degraded/空 → 调用方 skip。 */
 async function engineExternal(
   request: APIRequestContext,
@@ -175,66 +140,6 @@ async function engineExternal(
     }
     if (!last.degraded && last.names.length > 0) return last;
     if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-  return last;
-}
-
-/**
- * 页面上下文的外部 worker readiness：必须同时拿到非降级清单、真实外部条目，
- * 以及该条目的 prompt 成功响应。200 但 degraded/空清单不算 ready。
- */
-async function waitForExternalWorker(page: Page): Promise<ExternalWorkerProbe> {
-  let last: ExternalWorkerProbe = { names: [], degraded: true, ready: false };
-  try {
-    await expect
-      .poll(
-        async () => {
-          last = await page.evaluate(async () => {
-            const unavailable: ExternalWorkerProbe = {
-              names: [],
-              degraded: true,
-              ready: false,
-            };
-            try {
-              const raw = localStorage.getItem("agent-platform-auth");
-              if (!raw) return unavailable;
-              const auth = JSON.parse(raw) as { state?: { token?: string } };
-              const token = auth.state?.token;
-              if (!token) return unavailable;
-              const headers = { Authorization: `Bearer ${token}` };
-              const listResponse = await fetch("/api/v1/agents/opencode", { headers });
-              if (!listResponse.ok) return unavailable;
-              const list = (await listResponse.json()) as {
-                degraded?: boolean;
-                agents?: { name: string; governed?: boolean; hidden?: boolean }[];
-              };
-              const names = (list.agents ?? [])
-                .filter((agent) => !agent.governed && !agent.hidden)
-                .map((agent) => agent.name);
-              const probe: ExternalWorkerProbe = {
-                names,
-                degraded: list.degraded === true,
-                ready: false,
-              };
-              if (probe.degraded || names.length === 0) return probe;
-              const promptResponse = await fetch(
-                `/api/v1/agents/omo-agent-prompt?name=${encodeURIComponent(names[0])}`,
-                { headers },
-              );
-              return { ...probe, ready: promptResponse.ok };
-            } catch (error) {
-              if (!(error instanceof Error)) throw error;
-              return unavailable;
-            }
-          });
-          return last.ready;
-        },
-        { timeout: 30_000 },
-      )
-      .toBe(true);
-  } catch (error) {
-    if (!(error instanceof Error)) throw error;
-    return last;
   }
   return last;
 }
@@ -436,27 +341,18 @@ test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
     page,
     request,
   }) => {
-    // API 退避、页面 worker readiness、角色列表 readiness 与后续真实 UI 往返均需留余量。
     test.setTimeout(120_000);
     const token = await adminToken(request);
-    const { names: probedNames, degraded: probedDegraded } = await engineExternal(request, token);
-
-    await loginAsAdmin(page);
-    const workerProbe = await waitForExternalWorker(page);
-    const names = workerProbe.ready ? workerProbe.names : probedNames;
-    const degraded = !workerProbe.ready || workerProbe.degraded;
+    const { names, degraded } = await engineExternal(request, token);
     test.skip(
       degraded || names.length === 0,
-      `GET /agents/opencode 不可用（degraded=${degraded}，外部条目=${names.length}，页面 readiness=${workerProbe.ready}，API degraded=${probedDegraded}）——无外部 Agent 可测`,
+      `GET /agents/opencode 不可用（degraded=${degraded}，外部条目=${names.length}）——无外部 Agent 可测`,
     );
     const externalName = names[0];
     const roleKey = `qa-t7-ext-${RUN_TAG}`;
 
+    await loginAsAdmin(page);
     await openRolesTab(page);
-    if (!(await waitForRoleEngineList(page))) {
-      test.skip(true, "角色编辑器外部 Agent 列表在 bounded readiness 内不可用");
-      return;
-    }
 
     await page.getByTestId("role-create-button").click();
     await page.getByTestId("role-key-input").fill(roleKey);
@@ -508,9 +404,6 @@ test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
 
       // 证据：选择器可见且选中外部项（先滚到主区域滚动容器内再截图）
       await page.setViewportSize({ width: 1280, height: 900 });
-      if (!(await waitForRoleEngineList(page))) {
-        test.skip(true, "角色编辑器外部 Agent 列表在 bounded readiness 内未恢复");
-      }
       await expect(page.getByTestId("role-default-agent-note")).toContainText("个外部 Agent", {
         timeout: 20_000,
       });

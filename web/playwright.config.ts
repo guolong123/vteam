@@ -35,6 +35,13 @@ export default defineConfig({
   },
   projects: [
     { name: "setup", testMatch: /auth\.setup\.ts/ },
+    {
+      // web/lib 的纯单元 spec。web 没有别的受检测试运行器，挂进 Playwright 才会真的被执行；
+    // @playwright/test 本就是已声明的 devDependency，且这些 spec 不碰浏览器。
+      name: "lib-unit",
+      testDir: "./lib",
+      testMatch: /.*\.spec\.ts$/,
+    },
     { name: "login", testMatch: /login\.spec\.ts/, dependencies: ["setup"] },
     {
       name: "pages",
