@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "lint:check": "eslint .",
     "test:e2e": "playwright test",
     "sync:runtime": "node scripts/sync-runtime.mjs",
     "postinstall": "node scripts/sync-runtime.mjs"
