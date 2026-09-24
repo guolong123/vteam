@@ -240,8 +240,8 @@ model Task {
   status              String    @default("pending")
   mainAgentId         String?   @map("main_agent_id")
   mainAgentInstanceId String?   @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护；session-unification 后停止写入，历史值由 Todo 6 迁移置空，列保留）
-  // @deprecated 2026-09：vteam 自造 plan 域已下线（改由 opencode 原生 agent 承担计划动作）。
-  // 列保留但恒写 "direct"、业务层不再读取；随下次重建库删除。
+  // @deprecated 2026-09-24 订正：上条"plan 域已下线"已过时——plans/plan_tasks 均为 live 表（见 Plan 模型注释）。
+  // executionMode 列保留、创建时恒写 "direct"，读路径仍透传回显；删除见 todo 39。
   executionMode       String    @default("direct") @map("execution_mode")
   backgroundDocs      Json?     @map("background_docs")
   /// 完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false，Todo7）
@@ -268,8 +268,8 @@ model Task {
   taskGroupInstances       TaskGroupInstance[]
   issues                   Issue[]
   memories                 Memory[]
-  // @deprecated 2026-09：vteam 自造 plan 域下线，业务层不再读写；关系保留仅为 schema 合法性
-  // （Plan 表空置保留，见 Plan 模型注释）。
+  // 2026-09-24 订正：上条"plan 域下线"已过时——plans/plan_tasks 均为 live 表，业务层经
+  // PlanLifecycleService/PlanStepsService 读写；关系保留（见 Plan 模型注释）。
   plan                     Plan?
   messageChannelLinks      TaskMessageChannel[]
   notificationChannelLinks TaskNotificationChannel[]
@@ -960,9 +960,10 @@ model RealtimeEvent {
 
 // 任务执行计划（一任务一计划，taskId 唯一；status 字符串枚举：
 // draft/reviewing/pending_final/approved/rejected/executing/completed，draft 为预留态）
-// @deprecated 2026-09：vteam 自造计划域（plan/planTask）已整体下线——计划动作改由 opencode
-// 原生 agent（built-in `plan` 或自定义 agent）在其内核内完成，vteam 只传递 agent 名。
-// 两表保留空置（不读不写、无外部引用），避免破坏性 DROP 迁移；随下次重建库删除。
+// 2026-09-24 订正：上条"整体下线/保留空置"已过时——两表均为 live 表（2026-09-23 决策复活，
+// 见 plan-steps.service.ts 头注释：opencode todos 会话级易失，plan_tasks 为 durable 跨会话存储）。
+// plan_tasks 是唯一 choke 点，经 PlanStepsService 由 `vteam_todo` MCP 工具写入；
+// opencode-todos 链已退役。两表勿 DROP。
 model Plan {
   id                 String   @id // pl_ 前缀，服务层 IdGeneratorService 生成
   taskId             String   @unique @map("task_id") // 一任务一计划
