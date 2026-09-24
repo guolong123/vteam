@@ -191,7 +191,9 @@ describe('WorkerDispatcher', () => {
         findUnique: jest.fn(),
         // FR-13：dispatchAgentMention 查目标 agent 会话（uk_sessions_task_agent）
         findFirst: jest.fn(),
-        // todo-7：空闲扫描 DB 侧检出（status=running AND lastActivityAt<cutoff）；默认无
+        // todo-7：空闲扫描 DB 侧检出（status=running AND
+        // (lastActivityAt<cutoff OR (lastActivityAt IS NULL AND updatedAt<cutoff)))；
+        // 默认无
         findMany: jest.fn().mockResolvedValue([]),
         // 空闲判死路径（scanIdleSessions）会 update(status=failed)；默认未触发
         update: jest.fn().mockResolvedValue({ id: 's_0000000001' }),
@@ -4828,6 +4830,30 @@ describe('WorkerDispatcher', () => {
       expect(d.getLastActivityAt('s_0000000001')).toBeDefined();
     });
 
+    it('getSessionLastActivityAt：lastActivityAt 非空时优先，NULL 时回退 updatedAt', async () => {
+      const d = createDispatcher();
+      const activityAt = new Date('2026-09-24T10:00:00.000Z');
+      const updatedAt = new Date('2026-09-24T09:00:00.000Z');
+      prisma.session.findUnique.mockResolvedValueOnce({
+        lastActivityAt: activityAt,
+        updatedAt,
+      });
+      await expect(d.getSessionLastActivityAt('s_activity_1')).resolves.toBe(
+        activityAt.getTime(),
+      );
+      prisma.session.findUnique.mockResolvedValueOnce({
+        lastActivityAt: null,
+        updatedAt,
+      });
+      await expect(
+        d.getSessionLastActivityAt('s_null_activity_1'),
+      ).resolves.toBe(updatedAt.getTime());
+      prisma.session.findUnique.mockResolvedValueOnce(null);
+      await expect(
+        d.getSessionLastActivityAt('s_missing_1'),
+      ).resolves.toBeUndefined();
+    });
+
     it('DB 侧检出：内存 map 为空（重启后）但 DB 有 stale running → 判死', async () => {
       const d = createDispatcher();
       expect(d.getLastActivityAt('s_stale_1')).toBeUndefined();
@@ -4841,12 +4867,68 @@ describe('WorkerDispatcher', () => {
         expect.objectContaining({
           where: {
             status: 'running',
-            lastActivityAt: { lt: expect.any(Date) },
+            OR: [
+              { lastActivityAt: { lt: expect.any(Date) } },
+              { lastActivityAt: null, updatedAt: { lt: expect.any(Date) } },
+            ],
           },
         }),
       );
       expect(prisma.session.update).toHaveBeenCalledWith({
         where: { id: 's_stale_1' },
+        data: { status: 'failed' },
+      });
+    });
+
+    it('DB 侧检出覆盖 NULL lastActivityAt：running + 旧 updatedAt 仍被返回并判死', async () => {
+      const d = createDispatcher();
+      const oldUpdatedAt = new Date('2020-01-01T00:00:00.000Z');
+      const nullActivitySession = {
+        id: 's_null_1',
+        status: 'running',
+        lastActivityAt: null,
+        updatedAt: oldUpdatedAt,
+      };
+      prisma.session.findMany.mockImplementation(
+        async (args: {
+          where?: { status?: string; OR?: Array<Record<string, unknown>> };
+        }) => {
+          const nullBranch = args.where?.OR?.[1];
+          const fallback = nullBranch?.updatedAt;
+          const cutoff =
+            typeof fallback === 'object' &&
+            fallback !== null &&
+            'lt' in fallback
+              ? (fallback as { lt: Date }).lt
+              : undefined;
+          const matches =
+            args.where?.status === nullActivitySession.status &&
+            nullBranch?.lastActivityAt === null &&
+            cutoff !== undefined &&
+            nullActivitySession.updatedAt < cutoff;
+          return matches ? [{ id: nullActivitySession.id }] : [];
+        },
+      );
+      prisma.session.findUnique.mockResolvedValue(
+        staleRow(nullActivitySession),
+      );
+      workerClient.getMessages.mockResolvedValue([]);
+
+      await (d as any).scanIdleSessions();
+
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            status: 'running',
+            OR: [
+              { lastActivityAt: { lt: expect.any(Date) } },
+              { lastActivityAt: null, updatedAt: { lt: expect.any(Date) } },
+            ],
+          },
+        }),
+      );
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_null_1' },
         data: { status: 'failed' },
       });
     });

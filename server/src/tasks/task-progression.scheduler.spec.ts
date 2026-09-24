@@ -36,7 +36,7 @@ describe('TaskProgressionScheduler', () => {
   let workerDispatcher: {
     dispatchAgentMention: jest.Mock;
     isSessionPending: jest.Mock;
-    getLastActivityAt: jest.Mock;
+    getSessionLastActivityAt: jest.Mock;
   };
   let triggers: {
     schedule: jest.Mock;
@@ -172,7 +172,7 @@ describe('TaskProgressionScheduler', () => {
     workerDispatcher = {
       dispatchAgentMention: jest.fn().mockResolvedValue(undefined),
       isSessionPending: jest.fn().mockReturnValue(false),
-      getLastActivityAt: jest.fn().mockReturnValue(undefined),
+      getSessionLastActivityAt: jest.fn().mockResolvedValue(undefined),
     };
     triggers = {
       schedule: jest.fn(
@@ -760,11 +760,11 @@ describe('TaskProgressionScheduler', () => {
       (prisma as any).session = {
         findFirst: jest.fn().mockResolvedValue({ id: 's_main' }),
       };
-      workerDispatcher.getLastActivityAt.mockReturnValue(Date.now());
+      workerDispatcher.getSessionLastActivityAt.mockResolvedValue(Date.now());
       await handler(liveFireCtx({ fireCount: 2 }));
       expect(rows[buildProgressionDedupKey('t_1')].payload.quietStreak).toBe(0);
       // 再两轮静默 → streak 回到 2，仍不触发停滞（若不清零此时已是 4 轮连静默）
-      workerDispatcher.getLastActivityAt.mockReturnValue(undefined);
+      workerDispatcher.getSessionLastActivityAt.mockResolvedValue(undefined);
       delete (prisma as any).session;
       await handler(liveFireCtx({ fireCount: 3 }));
       await handler(liveFireCtx({ fireCount: 4 }));
@@ -844,7 +844,7 @@ describe('TaskProgressionScheduler', () => {
         findFirst: jest.fn().mockResolvedValue({ id: 's_main' }),
       };
       workerDispatcher.isSessionPending.mockReturnValue(false);
-      workerDispatcher.getLastActivityAt.mockReturnValue(Date.now());
+      workerDispatcher.getSessionLastActivityAt.mockResolvedValue(Date.now());
       await expect(guard(guardCtx())).resolves.toBe(false);
     });
 

@@ -99,7 +99,7 @@ export function buildProgressionPrompt(title: string, status: string): string {
  * - unregister(taskId)：任务离开 in_progress 时 cancel 触发器（行留 cancelled 备查）。
  * - 轮次计数：rounds ≡ trigger.fireCount（基座每次触发后 +1 并落库，重启不丢）；
  *   maxRounds ≡ maxFires（基座 claim 前 + 触发后双重强制熄火，非内存计数）。
- * - 冷却否决：guard 谓词内仍查 `isSessionPending`/`getLastActivityAt`
+ * - 冷却否决：guard 谓词内仍查 `isSessionPending`/`getSessionLastActivityAt`
  *  （否决 → 留 pending 待 ticker 下轮复核，不消耗轮次；谓词异常 → fail-open 放行）。
  * - 触发器行即唯一状态源：isRegistered 查 pending 行是否存在；patrolNow/scan 均派生
  *   自触发器行；连续静默轮次 quietStreak 随行 payload 持久化（叫醒累加、观测活跃清零、
@@ -446,7 +446,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
           if (this.workerDispatcher.isSessionPending(mainSession.id)) {
             continue;
           }
-          const lastAt = this.workerDispatcher.getLastActivityAt(
+          const lastAt = await this.workerDispatcher.getSessionLastActivityAt(
             mainSession.id,
           );
           if (
@@ -500,7 +500,9 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       if (this.workerDispatcher.isSessionPending(mainSession.id)) {
         return false;
       }
-      const lastAt = this.workerDispatcher.getLastActivityAt(mainSession.id);
+      const lastAt = await this.workerDispatcher.getSessionLastActivityAt(
+        mainSession.id,
+      );
       if (
         lastAt !== undefined &&
         Date.now() - lastAt < this.progressionIntervalMs
@@ -555,7 +557,9 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
           );
           return;
         }
-        const lastAt = this.workerDispatcher.getLastActivityAt(mainSession.id);
+        const lastAt = await this.workerDispatcher.getSessionLastActivityAt(
+          mainSession.id,
+        );
         if (
           lastAt !== undefined &&
           Date.now() - lastAt < this.progressionIntervalMs

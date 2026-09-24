@@ -4537,8 +4537,9 @@ export class WorkerDispatcher
    * 重武装不清 pending）也照常参与判死；超 AGENT_IDLE_TIMEOUT_MS 无活动 → 查
    * Session.status，仅 running 判死（failed + emitError + 广播 agent.error）；
    * 非 running（idle/完成/冻结）→ 退出追踪不判死（防误杀）。
-   * trigger-unification todo-7：追加 DB 侧检出（status='running' AND lastActivityAt <
-   * now - idleTimeout），重启后内存 map 为空仍可判死；本进程内正处首字等待的会话
+   * trigger-unification todo-7：追加 DB 侧检出（status='running' AND
+   * (lastActivityAt < cutoff OR (lastActivityAt IS NULL AND updatedAt < cutoff)))，
+   * 重启后内存 map 为空仍可判死；本进程内正处首字等待的会话
    * （pending 且 activitySeen=false）一律否决，不判死。
    */
   private async scanIdleSessions(): Promise<void> {
@@ -4556,13 +4557,18 @@ export class WorkerDispatcher
       }
       stale.push(sessionId);
     }
-    // DB 侧检出：覆盖重启后内存 map 为空的场景（NULL 行不命中 lt，不误杀迁移前存量）。
+    // DB 侧检出：覆盖重启后内存 map 为空的场景；lastActivityAt 为 NULL 时回退到
+    // Session.updatedAt（@updatedAt，自动反映最后写入），避免新建/持久化失败的
+    // running 会话因 NULL 比较而永久逃逸。
     try {
       const cutoff = new Date(now - this.agentIdleTimeoutMs);
       const dbStale = await this.prisma.session.findMany({
         where: {
           status: SESSION_STATUS.running,
-          lastActivityAt: { lt: cutoff },
+          OR: [
+            { lastActivityAt: { lt: cutoff } },
+            { lastActivityAt: null, updatedAt: { lt: cutoff } },
+          ],
         },
         select: { id: true },
         take: 100,
@@ -4598,6 +4604,22 @@ export class WorkerDispatcher
       entry.sessionId === sessionId &&
       !entry.activitySeen
     );
+  }
+
+  /**
+   * 读取会话的最近活动时间（epoch ms）。内存 Map 是 DISPATCH-scoped，而 DB 的
+   * last_activity_at 是 wall-clock SESSION-scoped；两者相似但不完全相同，冷却判断
+   * 可能因此略微更保守，但这更安全。
+   */
+  public async getSessionLastActivityAt(
+    sessionId: string,
+  ): Promise<number | undefined> {
+    const row = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { lastActivityAt: true, updatedAt: true },
+    });
+    const activityAt = row?.lastActivityAt ?? row?.updatedAt;
+    return activityAt?.getTime();
   }
 
   public getLastActivityAt(sessionId: string): number | undefined {

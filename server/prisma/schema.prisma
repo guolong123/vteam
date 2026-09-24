@@ -311,8 +311,9 @@ model Session {
   status       String   @default("created")
   // trigger-unification todo-7：空闲判死 DB sidecar（ingress touchSessionActivity +
   // dispatcher handleSessionActivity/watchdog 起点双写；scanIdleSessions 按
-  // status='running' AND lastActivityAt < cutoff 检出，重启后内存 map 为空仍可判死；
-  // NULL = 迁移前存量行（不命中 lt 比较，不误杀）。内存 pending/active 否决保留（todo-21 前不删）。
+  // status='running' AND (lastActivityAt < cutoff OR (lastActivityAt IS NULL
+  // AND updatedAt < cutoff)) 检出，重启后内存 map 为空仍可判死；NULL-activity 行
+  // 回退自身 updatedAt，不授予新 lease。内存 pending/active 否决保留（todo-21 前不删）。
   lastActivityAt DateTime? @map("last_activity_at")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
