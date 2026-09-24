@@ -7003,6 +7003,52 @@ describe('WorkerDispatcher', () => {
       );
     });
 
+    it('dedup read failure suppresses the second mirror within the 120s window', async () => {
+      const { d, mockAdapter } = setupWecomBridge({
+        chattype: 'group',
+        fromUserName: 'GuoLong',
+      });
+      let dedupReadCount = 0;
+      prisma.message.findFirst.mockImplementation((q: any) => {
+        if (q?.where?.status === MESSAGE_STATUS.processing) {
+          return Promise.resolve(null);
+        }
+        if (q?.where?.senderType === SENDER_TYPE.external) {
+          return Promise.resolve({
+            id: 'm_ext_1',
+            content: { text: '[WeCom:GuoLong] hi' },
+          });
+        }
+        if (
+          q?.where?.channelId === 'c_group' &&
+          q?.where?.senderType === SENDER_TYPE.agent
+        ) {
+          dedupReadCount += 1;
+          if (dedupReadCount === 1) {
+            return Promise.resolve(null);
+          }
+          return Promise.reject(new Error('mirror dedup read unavailable'));
+        }
+        return Promise.resolve(null);
+      });
+
+      await d.handleTaskCompleted({
+        ...basePayload,
+        sessionId: 's_dedup_1',
+      });
+      await d.handleTaskCompleted({
+        ...basePayload,
+        sessionId: 's_dedup_2',
+      });
+
+      const mirrorWrites = prisma.message.create.mock.calls.filter(
+        ([q]) => q?.data?.content?.text === '@GuoLong model reply text',
+      );
+      expect(dedupReadCount).toBe(2);
+      expect(mirrorWrites).toHaveLength(1);
+      expect(mockAdapter.finishStream).toHaveBeenCalledTimes(2);
+    });
+
     it('wecom binding lookup rejection surfaces failure instead of counting zero wecom channels', async () => {
       const { d, mockAdapter } = setupWecomBridge({
         chattype: 'group',

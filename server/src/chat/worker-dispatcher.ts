@@ -2760,7 +2760,15 @@ export class WorkerDispatcher
                       this.logger.log(
                         `wecom bridge: consumed pending operator for taskId=${payload.taskId}`,
                       );
-                    } catch {}
+                    } catch (e) {
+                      // Fail closed: the pending operator may still be present when
+                      // consume fails. Do not send it now; a later dispatch can retry
+                      // the consume and send it at most once.
+                      this.logger.warn(
+                        `wecom bridge: consume pending operator failed taskId=${payload.taskId}: ${this.describeError(e)}`,
+                      );
+                      throw e;
+                    }
                   }
                 }
                 if (pendingFromCard) {
@@ -2982,7 +2990,15 @@ export class WorkerDispatcher
                           }
                         }
                       }
-                    } catch {}
+                    } catch (e) {
+                      // Fail closed: without a successful dedup read, the 120s
+                      // cooldown cannot be proven; suppress this mirror and let a
+                      // later dispatch retry the read.
+                      this.logger.warn(
+                        `wecom bridge: mirror dedup read failed taskId=${payload.taskId}: ${this.describeError(e)}`,
+                      );
+                      throw e;
+                    }
                     if (skipMirror) {
                     } else {
                       const prismaAny2 = this.prisma as unknown as {
