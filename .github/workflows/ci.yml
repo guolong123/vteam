@@ -33,6 +33,17 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
       - run: npm run lint:check && npm test && npm run test:e2e && npm run build
+      # Bare-catch regression guard (tech-debt-remediation Todo 21): fail if
+      # the bare `catch {` count in src/ (excluding *.spec.ts) exceeds the
+      # post-Wave-3 baseline recorded as BARE_CATCH_BASELINE in
+      # scripts/gate.sh. Threshold may only be lowered, never raised, in a
+      # separate explicit change.
+      - name: bare-catch regression guard
+        run: |
+          baseline=175
+          count=$( { grep -rn --include='*.ts' -E 'catch[[:space:]]*\{' src || true; } | grep -v '\.spec\.ts' | wc -l | tr -d ' ' )
+          echo "bare-catch count: ${count} (baseline ${baseline})"
+          if [ "${count}" -gt "${baseline}" ]; then echo "FAIL: bare-catch count ${count} exceeded baseline ${baseline}"; exit 1; fi
 
   worker:
     runs-on: ubuntu-latest

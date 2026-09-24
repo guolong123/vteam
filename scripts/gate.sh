@@ -64,6 +64,23 @@ run() {
   fi
 }
 
+# Bare-catch regression guard (tech-debt-remediation Todo 21).
+# Baseline post-Wave-3 count of bare `catch {` / `catch {}` occurrences in
+# server/src (excluding *.spec.ts — tests legitimately use bare catches).
+# A bare-catch-with-log still counts as bare (it is syntactically bare).
+# This threshold may only be lowered, never raised, in a separate explicit
+# change. Mirrored as a step in .github/workflows/ci.yml (`server` job).
+BARE_CATCH_BASELINE=175
+
+echo "+ [server bare-catch guard] (count bare 'catch {' in server/src, excluding *.spec.ts)"
+BARE_CATCH_COUNT="$( { grep -rn --include='*.ts' -E 'catch[[:space:]]*\{' "$SERVER_DIR/src" || true; } | grep -v '\.spec\.ts' | wc -l | tr -d ' ' )"
+echo "bare-catch count: ${BARE_CATCH_COUNT} (baseline ${BARE_CATCH_BASELINE})"
+if [ "${BARE_CATCH_COUNT}" -gt "${BARE_CATCH_BASELINE}" ]; then
+  echo "FAIL: server bare-catch guard (count ${BARE_CATCH_COUNT} exceeded baseline ${BARE_CATCH_BASELINE})" >&2
+  exit 1
+fi
+echo "ok: server bare-catch guard (exit 0)"
+
 run "server npx prisma generate" "$SERVER_DIR" npx prisma generate
 run "server npm run ${LINT_CHECK}" "$SERVER_DIR" npm run "${LINT_CHECK}"
 run "server npm test" "$SERVER_DIR" npm test
