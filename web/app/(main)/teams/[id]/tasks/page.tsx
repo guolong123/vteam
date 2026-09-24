@@ -12,6 +12,7 @@ import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useSSE } from "@/hooks/use-sse";
 import { AgentAvatar, StatusBadge } from "@/src/components/ui";
+import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { toRole } from "@/src/components/teams/TeamMembersPanel";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 import type { CSSProperties } from "react";
@@ -158,7 +159,9 @@ export default function TeamTasksPage() {
   });
 
   const items = data?.items ?? [];
+  const pending = items.filter((t) => t.status === "pending");
   const running = items.filter((t) => t.status === "in_progress" || t.status === "queued" || t.status === "blocked");
+  const pendingReview = items.filter((t) => t.status === "pending_review");
   const done = items.filter((t) => t.status === "completed" || t.status === "archived");
 
   return (
@@ -167,8 +170,8 @@ export default function TeamTasksPage() {
         <div style={{ fontSize: fontSize.xxl, fontWeight: 700, color: neutral[900], fontFamily: fontFamily.display }}>
           历史任务
         </div>
-        <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
-          {items.length} 个任务 · {running.length} 进行中 / {done.length} 已完成
+        <div data-testid="team-task-count-summary" style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
+          {items.length} 个任务 · {running.length} 进行中 / {pendingReview.length} 待验收 / {done.length} 已完成 / {pending.length} 待开始
         </div>
       </div>
 
@@ -257,6 +260,11 @@ export default function TeamTasksPage() {
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: space.xs, flexShrink: 0 }}>
                     <TaskStatusBadge status={task.status} />
+                    {task.status === "pending_review" && (
+                      <div data-testid="task-list-status-actions" data-task-id={task.id}>
+                        <TaskStatusActions taskId={task.id} status={task.status} />
+                      </div>
+                    )}
                     <span style={{ fontSize: fontSize.xs, color: neutral[400], fontFamily: fontFamily.mono }}>
                       {task.id.slice(0, 8)}…
                     </span>

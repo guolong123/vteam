@@ -4,7 +4,7 @@
 /**
  * 任务状态流转操作按钮组（OBS-010 修复）
  * =============================================
- * 看板卡片（board/page.tsx）与任务详情面板（tasks/[id]/page.tsx）共用。
+ * 看板卡片（board/page.tsx）与团队会话右侧任务面板共用。
  * 按五态渲染可执行操作，调用后端五态端点（tasks.controller.ts:103-154）：
  * - pending        → 开始任务（POST /tasks/:id/start）
  * - in_progress    → 提交验收（POST /tasks/:id/mark-pending-review）
