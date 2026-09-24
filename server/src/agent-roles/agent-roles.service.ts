@@ -73,7 +73,11 @@ export class AgentRolesService implements OnModuleInit {
    * 内置命名 id（`ar_product`）与迁移派生 id（`ar_c_<hash>`）不参与续号。
    */
   async onModuleInit(): Promise<void> {
-    await resyncIdPrefix(this.prisma.agentRole, AGENT_ROLE_ID_PREFIX, this.idGen);
+    await resyncIdPrefix(
+      this.prisma.agentRole,
+      AGENT_ROLE_ID_PREFIX,
+      this.idGen,
+    );
   }
 
   /**
@@ -326,7 +330,9 @@ export class AgentRolesService implements OnModuleInit {
   }
 
   /** 内部槽位归一化：undefined / null / 空串 → null（未设置），否则原值。 */
-  private normalizeInternalSlot(value: string | null | undefined): string | null {
+  private normalizeInternalSlot(
+    value: string | null | undefined,
+  ): string | null {
     if (value === undefined || value === null) {
       return null;
     }
@@ -370,7 +376,9 @@ export class AgentRolesService implements OnModuleInit {
     value: Record<string, unknown>,
   ): Record<string, boolean> {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      throw this.invalidCapabilities('capabilities 须为对象（能力点键 → boolean）');
+      throw this.invalidCapabilities(
+        'capabilities 须为对象（能力点键 → boolean）',
+      );
     }
     const result: Record<string, boolean> = {};
     for (const [key, effect] of Object.entries(value)) {

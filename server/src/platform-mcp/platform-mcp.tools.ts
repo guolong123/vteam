@@ -51,42 +51,41 @@ export interface PlatformMcpTool {
   handler: (ctx: PlatformMcpToolContext, args: unknown) => Promise<unknown>;
 }
 
-const chatHistorySchema = z
-  .object({
-    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
-    teamId: z.string().optional().describe(TEAM_ID_DESC),
-    teamMemberId: z
-      .string()
-      .optional()
-      .describe(
-        'DM 对端成员 id（tmm_ 前缀）：传即进 DM 模式，仅同团队且调用方为该私聊端点时可读（带审计），否则 403',
-      ),
-    selfInstanceId: z
-      .string()
-      .optional()
-      .describe(
-        '调用方成员 id（tmm_ 前缀）：DM 模式必填（实例级归属绑定，缺失/冒充 403）；群聊模式可选（传即按实例精确绑定）',
-      ),
-    sinceId: z
-      .string()
-      .optional()
-      .describe(
-        '游标：仅返回 id 大于该值的消息（正序续拉；不传游标默认取最近分页）',
-      ),
-    beforeId: z
-      .string()
-      .optional()
-      .describe(
-        '游标：仅返回 id 小于该值的消息（倒序翻页；与 sinceId 同传时 beforeId 决定倒序）',
-      ),
-    limit: z
-      .number()
-      .int()
-      .positive()
-      .max(100)
-      .optional()
-      .describe('返回条数上限（默认 20，最大 100）'),
-  });
+const chatHistorySchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  teamMemberId: z
+    .string()
+    .optional()
+    .describe(
+      'DM 对端成员 id（tmm_ 前缀）：传即进 DM 模式，仅同团队且调用方为该私聊端点时可读（带审计），否则 403',
+    ),
+  selfInstanceId: z
+    .string()
+    .optional()
+    .describe(
+      '调用方成员 id（tmm_ 前缀）：DM 模式必填（实例级归属绑定，缺失/冒充 403）；群聊模式可选（传即按实例精确绑定）',
+    ),
+  sinceId: z
+    .string()
+    .optional()
+    .describe(
+      '游标：仅返回 id 大于该值的消息（正序续拉；不传游标默认取最近分页）',
+    ),
+  beforeId: z
+    .string()
+    .optional()
+    .describe(
+      '游标：仅返回 id 小于该值的消息（倒序翻页；与 sinceId 同传时 beforeId 决定倒序）',
+    ),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(100)
+    .optional()
+    .describe('返回条数上限（默认 20，最大 100）'),
+});
 
 type ChatHistoryArgs = z.infer<typeof chatHistorySchema>;
 
@@ -112,19 +111,18 @@ const taskContextSchema = z.object({
 
 type TaskContextArgs = z.infer<typeof taskContextSchema>;
 
-const groupPostSchema = z
-  .object({
-    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
-    teamId: z.string().optional().describe(TEAM_ID_DESC),
-    selfInstanceId: z
-      .string()
-      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-    content: z.string().describe('要发布到群聊的内容'),
-    fileRef: z
-      .string()
-      .optional()
-      .describe('产出物文件引用（与产出物声明 fileRef 一致时挂附件）'),
-  });
+const groupPostSchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  content: z.string().describe('要发布到群聊的内容'),
+  fileRef: z
+    .string()
+    .optional()
+    .describe('产出物文件引用（与产出物声明 fileRef 一致时挂附件）'),
+});
 
 type GroupPostArgs = z.infer<typeof groupPostSchema>;
 
@@ -144,66 +142,65 @@ const readFileSchema = z.object({
 
 type ReadFileArgs = z.infer<typeof readFileSchema>;
 
-const notifyAgentSchema = z
-  .object({
-    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
-    teamId: z.string().optional().describe(TEAM_ID_DESC),
-    selfInstanceId: z
-      .string()
-      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-    targetInstanceId: z
-      .string()
-      .describe(
-        '目标成员 id（tmm_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）。路由规则：主 Agent 可通知任何人，任何人可通知主 Agent；非主成员之间互通知（含通知自己）会被 403 拒绝，请先通知主 Agent 由其中转',
-      ),
-    content: z.string().describe('要发送给目标实例的消息内容'),
-    issueId: z
-      .string()
-      .optional()
-      .describe(
-        '派活归属 issue id（is_ 前缀，可选；缺省不硬拦，返回 issueBound:false 提醒；传则 issueBound:true 并透传执行链路）',
-      ),
-    type: z
-      .enum(Object.values(NOTIFY_TYPE) as [string, ...string[]])
-      .optional()
-      .describe(
-        '消息类型（缺省 answer）：answer=执行答复/进度；question=子 Agent 反向提问；help=子 Agent 求助。answer+stage=process 仅持久化不唤醒；answer+stage=end 清回执并检查 fan-out drain；question/help 立即唤醒主 Agent（不计入 fan-out 计数）。子 Agent 回执（answer、目标为主 Agent，任意 stage/kind）永不在主 Agent 上开执行 turn（本次调用 suppressed，返回 triggered:false+reason=join-pending，消息已落库广播、回执照记，主 Agent 只在 fan-out 收敛 drain 时被唤醒）；question/help 照常触发执行并立即打断唤醒',
-      ),
-    stage: z
-      .enum(Object.values(NOTIFY_STAGE) as [string, ...string[]])
-      .optional()
-      .describe(
-        '执行阶段（缺省 process）：process=执行进行中（仅持久化，不唤醒，计数不变）；end=已完工（answer 类时 ACK 回执并触发 fan-out drain 检查；question/help 类同 process）。子 Agent 发往主 Agent 的 answer（任意 stage）均被 join 抑制：不触发主 Agent 执行，返回 triggered:false+reason=join-pending，主 Agent 的 turn 只来自 drain 唤醒',
-      ),
-    kind: z
-      .enum(['execution', 'review', 'nudge', 'wake'])
-      .optional()
-      .describe(
-        '执行分类（缺省 execution：任务维度下要求计划已确认进入 executing，否则 reason=plan-gated 被拦（不落库不广播）；review/nudge/wake 豁免门禁；review 派发词须带三元组 round + planVersion(+hash) + expected 名单，否则 reason=review-triplet 被拦（不落库不广播）；内部唤醒传 wake 且永不记账）',
-      ),
-    force: z
-      .preprocess((v) => v === true || v === 'true', z.boolean())
-      .optional()
-      .describe(
-        '强行绕过计划门禁/issue 锁（须同时给非空 forceReason 留审计行，否则仍被拦）',
-      ),
-    forceReason: z
-      .string()
-      .optional()
-      .describe('force 绕过的审计原因（落回执行 forceReason 列）'),
-    planHash: z
-      .string()
-      .optional()
-      .describe(
-        '调用方携带的计划哈希（planVersion.hash sha1-8 口径；执行认哈希：与冻结正式版哈希不一致即 reason=plan-gated 被拦并提示两边短哈希；缺省不查哈希）',
-      ),
-    receiptTimeoutMin: z
-      .number()
-      .optional()
-      .describe(
-        '回执超时分钟数（缺省 10，对齐被 @ 后 10 分钟回执规则；范围 1-1440，非法输入服务端回落缺省；仅 execution 派发记账并排平台自动催办 timer，review/nudge/wake 永不记账）',
-      ),
-  });
+const notifyAgentSchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  targetInstanceId: z
+    .string()
+    .describe(
+      '目标成员 id（tmm_ 前缀，见 task_context agentMembers / 团队提示，@ 定向触发目标）。路由规则：主 Agent 可通知任何人，任何人可通知主 Agent；非主成员之间互通知（含通知自己）会被 403 拒绝，请先通知主 Agent 由其中转',
+    ),
+  content: z.string().describe('要发送给目标实例的消息内容'),
+  issueId: z
+    .string()
+    .optional()
+    .describe(
+      '派活归属 issue id（is_ 前缀，可选；缺省不硬拦，返回 issueBound:false 提醒；传则 issueBound:true 并透传执行链路）',
+    ),
+  type: z
+    .enum(Object.values(NOTIFY_TYPE) as [string, ...string[]])
+    .optional()
+    .describe(
+      '消息类型（缺省 answer）：answer=执行答复/进度；question=子 Agent 反向提问；help=子 Agent 求助。answer+stage=process 仅持久化不唤醒；answer+stage=end 清回执并检查 fan-out drain；question/help 立即唤醒主 Agent（不计入 fan-out 计数）。子 Agent 回执（answer、目标为主 Agent，任意 stage/kind）永不在主 Agent 上开执行 turn（本次调用 suppressed，返回 triggered:false+reason=join-pending，消息已落库广播、回执照记，主 Agent 只在 fan-out 收敛 drain 时被唤醒）；question/help 照常触发执行并立即打断唤醒',
+    ),
+  stage: z
+    .enum(Object.values(NOTIFY_STAGE) as [string, ...string[]])
+    .optional()
+    .describe(
+      '执行阶段（缺省 process）：process=执行进行中（仅持久化，不唤醒，计数不变）；end=已完工（answer 类时 ACK 回执并触发 fan-out drain 检查；question/help 类同 process）。子 Agent 发往主 Agent 的 answer（任意 stage）均被 join 抑制：不触发主 Agent 执行，返回 triggered:false+reason=join-pending，主 Agent 的 turn 只来自 drain 唤醒',
+    ),
+  kind: z
+    .enum(['execution', 'review', 'nudge', 'wake'])
+    .optional()
+    .describe(
+      '执行分类（缺省 execution：任务维度下要求计划已确认进入 executing，否则 reason=plan-gated 被拦（不落库不广播）；review/nudge/wake 豁免门禁；review 派发词须带三元组 round + planVersion(+hash) + expected 名单，否则 reason=review-triplet 被拦（不落库不广播）；内部唤醒传 wake 且永不记账）',
+    ),
+  force: z
+    .preprocess((v) => v === true || v === 'true', z.boolean())
+    .optional()
+    .describe(
+      '强行绕过计划门禁/issue 锁（须同时给非空 forceReason 留审计行，否则仍被拦）',
+    ),
+  forceReason: z
+    .string()
+    .optional()
+    .describe('force 绕过的审计原因（落回执行 forceReason 列）'),
+  planHash: z
+    .string()
+    .optional()
+    .describe(
+      '调用方携带的计划哈希（planVersion.hash sha1-8 口径；执行认哈希：与冻结正式版哈希不一致即 reason=plan-gated 被拦并提示两边短哈希；缺省不查哈希）',
+    ),
+  receiptTimeoutMin: z
+    .number()
+    .optional()
+    .describe(
+      '回执超时分钟数（缺省 10，对齐被 @ 后 10 分钟回执规则；范围 1-1440，非法输入服务端回落缺省；仅 execution 派发记账并排平台自动催办 timer，review/nudge/wake 永不记账）',
+    ),
+});
 
 type NotifyAgentArgs = z.infer<typeof notifyAgentSchema>;
 
@@ -320,7 +317,9 @@ const taskTransitionSchema = z.object({
   reason: z
     .string()
     .optional()
-    .describe('原因（action=reject 时写入任务事件 metadata；action=block 时必填：卡在哪里、缺什么、等谁）'),
+    .describe(
+      '原因（action=reject 时写入任务事件 metadata；action=block 时必填：卡在哪里、缺什么、等谁）',
+    ),
 });
 
 type TaskTransitionArgs = z.infer<typeof taskTransitionSchema>;
@@ -352,33 +351,32 @@ const questionConfirmSchema = z.object({
 
 type QuestionConfirmArgs = z.infer<typeof questionConfirmSchema>;
 
-export const memorySaveSchema = z
-  .object({
-    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
-    teamId: z.string().optional().describe(TEAM_ID_DESC),
-    selfInstanceId: z
-      .string()
-      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-    level: z
-      .enum(['team', 'global'])
-      .describe(
-        '记忆级别：team=团队级（写入当前任务所属团队，跨任务共享）/ global=全局（global 级仅主 Agent 可写）',
-      ),
-    content: z.string().min(1).max(20000).describe('记忆内容（1~20000 字符）'),
-    description: z
-      .string()
-      .min(1)
-      .max(255)
-      .optional()
-      .describe(
-        '记忆摘要（1~255 字符，模型携带，用于列表首屏/索引，按需拉正文）',
-      ),
-    tags: z
-      .array(z.string())
-      .max(20)
-      .optional()
-      .describe('记忆标签（≤20 个，memory_search 按标签过滤命中）'),
-  });
+export const memorySaveSchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  level: z
+    .enum(['team', 'global'])
+    .describe(
+      '记忆级别：team=团队级（写入当前任务所属团队，跨任务共享）/ global=全局（global 级仅主 Agent 可写）',
+    ),
+  content: z.string().min(1).max(20000).describe('记忆内容（1~20000 字符）'),
+  description: z
+    .string()
+    .min(1)
+    .max(255)
+    .optional()
+    .describe(
+      '记忆摘要（1~255 字符，模型携带，用于列表首屏/索引，按需拉正文）',
+    ),
+  tags: z
+    .array(z.string())
+    .max(20)
+    .optional()
+    .describe('记忆标签（≤20 个，memory_search 按标签过滤命中）'),
+});
 
 type MemorySaveArgs = z.infer<typeof memorySaveSchema>;
 
@@ -421,44 +419,41 @@ export const memoryUpdateSchema = z
 
 type MemoryUpdateArgs = z.infer<typeof memoryUpdateSchema>;
 
-const memorySearchSchema = z
-  .object({
-    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
-    teamId: z.string().optional().describe(TEAM_ID_DESC),
-    query: z
-      .string()
-      .optional()
-      .describe(
-        '关键词过滤（content/description 包含即命中，多词空格分隔 AND）',
-      ),
-    level: z
-      .enum(['team', 'global'])
-      .optional()
-      .describe('级别过滤（缺省聚合当前任务可见的 team+global 两级）'),
-    tags: z
-      .array(z.string())
-      .optional()
-      .describe('标签过滤（记忆 tags 须包含全部给定标签）'),
-    sourceInstanceId: z
-      .string()
-      .optional()
-      .describe('来源成员过滤（tmm_ 前缀，只看某团队成员沉淀的记忆）'),
-    sourceAgentId: z
-      .string()
-      .optional()
-      .describe('来源 Agent 过滤（a_ 前缀，只看某 Agent 模板沉淀的全部记忆）'),
-    sessionId: z
-      .string()
-      .optional()
-      .describe('会话过滤（s_ 前缀，只看某次会话沉淀的记忆）'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(50)
-      .optional()
-      .describe('返回条数上限（默认 20，最多 50，按创建时间倒序）'),
-  });
+const memorySearchSchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  query: z
+    .string()
+    .optional()
+    .describe('关键词过滤（content/description 包含即命中，多词空格分隔 AND）'),
+  level: z
+    .enum(['team', 'global'])
+    .optional()
+    .describe('级别过滤（缺省聚合当前任务可见的 team+global 两级）'),
+  tags: z
+    .array(z.string())
+    .optional()
+    .describe('标签过滤（记忆 tags 须包含全部给定标签）'),
+  sourceInstanceId: z
+    .string()
+    .optional()
+    .describe('来源成员过滤（tmm_ 前缀，只看某团队成员沉淀的记忆）'),
+  sourceAgentId: z
+    .string()
+    .optional()
+    .describe('来源 Agent 过滤（a_ 前缀，只看某 Agent 模板沉淀的全部记忆）'),
+  sessionId: z
+    .string()
+    .optional()
+    .describe('会话过滤（s_ 前缀，只看某次会话沉淀的记忆）'),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .optional()
+    .describe('返回条数上限（默认 20，最多 50，按创建时间倒序）'),
+});
 
 type MemorySearchArgs = z.infer<typeof memorySearchSchema>;
 
@@ -533,7 +528,9 @@ export const vteamTodoSchema = z.object({
   status: z
     .enum(['pending', 'in_progress', 'done', 'blocked', 'skipped'])
     .optional()
-    .describe('步骤状态（action=write 可选，缺省 pending；词表与 plan_tasks.status 一致）'),
+    .describe(
+      '步骤状态（action=write 可选，缺省 pending；词表与 plan_tasks.status 一致）',
+    ),
   assignee: z
     .string()
     .optional()
@@ -678,22 +675,19 @@ type WecomReplyArgs = z.infer<typeof wecomReplySchema>;
  * team-free-chat todo-4：task_create（团队会话无任务时建任务）。
  * 团队由服务端按会话上下文解析（不接收入参，归属即团队，无项目维度）。
  */
-const taskCreateSchema = z
-  .object({
-    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
-    teamId: z.string().optional().describe(TEAM_ID_DESC),
-    selfInstanceId: z
-      .string()
-      .describe(
-        '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）',
-      ),
-    title: z.string().min(1).max(128).describe('任务标题（必填）'),
-    description: z.string().optional().describe('任务描述（可选）'),
-    priority: z
-      .string()
-      .optional()
-      .describe('优先级（high/medium/low，缺省 medium）'),
-  });
+const taskCreateSchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  title: z.string().min(1).max(128).describe('任务标题（必填）'),
+  description: z.string().optional().describe('任务描述（可选）'),
+  priority: z
+    .string()
+    .optional()
+    .describe('优先级（high/medium/low，缺省 medium）'),
+});
 
 type TaskCreateArgs = z.infer<typeof taskCreateSchema>;
 
@@ -704,19 +698,16 @@ type TaskCreateArgs = z.infer<typeof taskCreateSchema>;
  * content 为 SKILL.md 全文（含 frontmatter，service 先 parse 400 再调
  * SkillsService.create，file 适配由 service 合成）。
  */
-const skillCreateSchema = z
-  .object({
-    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
-    teamId: z.string().optional().describe(TEAM_ID_DESC),
-    selfInstanceId: z
-      .string()
-      .describe(
-        '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）',
-      ),
-    name: z.string().min(1).describe('技能名（小写字母数字，中划线分段）'),
-    description: z.string().optional().describe('技能描述（可选）'),
-    content: z.string().min(1).describe('SKILL.md 全文（含 YAML frontmatter）'),
-  });
+const skillCreateSchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  name: z.string().min(1).describe('技能名（小写字母数字，中划线分段）'),
+  description: z.string().optional().describe('技能描述（可选）'),
+  content: z.string().min(1).describe('SKILL.md 全文（含 YAML frontmatter）'),
+});
 
 type SkillCreateArgs = z.infer<typeof skillCreateSchema>;
 
@@ -725,14 +716,13 @@ type SkillCreateArgs = z.infer<typeof skillCreateSchema>;
  * task_create 式双上下文 + selfInstanceId（resolveExecContext 归属 + 冒充 403）；
  * 仅返回调用方模板 Agent 持有未吊销授权的行，脱敏（无凭证 key，repoUrl 敏感）。
  */
-const gitReposListSchema = z
-  .object({
-    taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
-    teamId: z.string().optional().describe(TEAM_ID_DESC),
-    selfInstanceId: z
-      .string()
-      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  });
+const gitReposListSchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+});
 
 type GitReposListArgs = z.infer<typeof gitReposListSchema>;
 
@@ -749,7 +739,9 @@ const hookRegisterSchema = z
     teamId: z.string().optional().describe(TEAM_ID_DESC),
     selfInstanceId: z
       .string()
-      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；服务端以此作为 hook 所有者）'),
+      .describe(
+        '调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入；服务端以此作为 hook 所有者）',
+      ),
     kind: z
       .enum(['time', 'all_idle'])
       .describe(
@@ -762,9 +754,7 @@ const hookRegisterSchema = z
     targetInstanceId: z
       .string()
       .optional()
-      .describe(
-        '被唤醒成员 id（tmm_ 前缀，须在当前团队；缺省为调用方自身）',
-      ),
+      .describe('被唤醒成员 id（tmm_ 前缀，须在当前团队；缺省为调用方自身）'),
     dueAt: z
       .string()
       .optional()
@@ -791,8 +781,7 @@ const hookRegisterSchema = z
   })
   .refine(
     (d) =>
-      d.kind === 'all_idle' ||
-      (d.dueAt !== undefined || d.delayMs !== undefined),
+      d.kind === 'all_idle' || d.dueAt !== undefined || d.delayMs !== undefined,
     {
       message: 'time hook 必须带 dueAt 或 delayMs（到期唤醒时刻）',
       path: ['dueAt'],
@@ -800,8 +789,7 @@ const hookRegisterSchema = z
   )
   .refine(
     (d) =>
-      d.kind === 'time' ||
-      (d.dueAt === undefined && d.delayMs === undefined),
+      d.kind === 'time' || (d.dueAt === undefined && d.delayMs === undefined),
     {
       message: 'all_idle hook 不接受 dueAt/delayMs（静默由全局 poll 评估）',
       path: ['dueAt'],
@@ -1013,7 +1001,8 @@ export function buildPlatformMcpTools(
       description:
         '确认计划开始执行（approved→executing；团队开启托管模式时允许 draft/pending_final 直推执行，并同事务补定稿字段与冻结锚）。仅团队主 Agent 在托管模式下可调用，否则报错（须由用户在计划 Tab 人工确认）。已 executing 幂等返回。返回 {taskId, status, idempotent, action}。',
       inputSchema: planCompleteSchema,
-      handler: (ctx, args) => service.planConfirm(ctx, args as PlanCompleteArgs),
+      handler: (ctx, args) =>
+        service.planConfirm(ctx, args as PlanCompleteArgs),
     },
     {
       name: 'todo',

@@ -28,7 +28,13 @@ export const GATE_SPEC_FILES: GateSpecEntry[] = [
   },
   {
     file: 'server/src/platform-mcp/platform-mcp.service.gate.spec.ts',
-    gates: ['execution-gate', 'plan-hash', 'issue-lock', 'force', 'a_plan-exemption-removed'],
+    gates: [
+      'execution-gate',
+      'plan-hash',
+      'issue-lock',
+      'force',
+      'a_plan-exemption-removed',
+    ],
   },
   {
     file: 'server/src/issues/review-round-gate.service.spec.ts',

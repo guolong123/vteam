@@ -313,7 +313,9 @@ describe('TaskProgressionScheduler', () => {
         status: 'pending',
         sessionId: null,
       });
-      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: 'tmm_main' });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+      });
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
       prisma.task.findUnique.mockClear();
 
@@ -607,7 +609,8 @@ describe('TaskProgressionScheduler', () => {
       expect(scheduler.isRegistered('t_1')).toBe(false);
     });
 
-    it('中间观测到活跃 → 静默计数清零（有活干不算停滞）', async () => {      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+    it('中间观测到活跃 → 静默计数清零（有活干不算停滞）', async () => {
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
       allowMainMember();
       await scheduler.register('t_1');
       const stalled: unknown[] = [];

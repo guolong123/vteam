@@ -199,8 +199,9 @@ describe('WorkerDispatcher dispatch snapshot (is_7)', () => {
 
     await d.dispatch(request);
 
-    expect((d as any).peekDispatchSnapshot('tm_0000000001', 'tmm_0000000001'))
-      .toBeUndefined();
+    expect(
+      (d as any).peekDispatchSnapshot('tm_0000000001', 'tmm_0000000001'),
+    ).toBeUndefined();
   });
 
   it('tryAutoRestart 有快照时重放原始任务（通用语 + 原始文本）', async () => {
@@ -382,8 +383,9 @@ describe('WorkerDispatcher dispatch snapshot (is_7)', () => {
       status: 'running',
     });
 
-    expect((d as any).peekDispatchSnapshot('tm_0000000001', 'tmm_0000000001'))
-      .toBeUndefined();
+    expect(
+      (d as any).peekDispatchSnapshot('tm_0000000001', 'tmm_0000000001'),
+    ).toBeUndefined();
   });
 
   it('task.completed 落库成功后清除快照', async () => {
@@ -419,8 +421,9 @@ describe('WorkerDispatcher dispatch snapshot (is_7)', () => {
       text: '已完成',
     });
 
-    expect((d as any).peekDispatchSnapshot('tm_0000000001', 'tmm_0000000001'))
-      .toBeUndefined();
+    expect(
+      (d as any).peekDispatchSnapshot('tm_0000000001', 'tmm_0000000001'),
+    ).toBeUndefined();
   });
 
   it('过期快照视为无快照（回退通用语）', async () => {

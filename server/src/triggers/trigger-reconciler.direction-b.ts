@@ -23,12 +23,17 @@ export async function reconcileDirectionB(
   let rows: TriggerRowLike[];
   try {
     rows = (await ctx.prisma.trigger.findMany({
-      where: { kind: TRIGGER_KIND.HOOK_FIRE as string, status: TRIGGER_STATUS.FIRED },
+      where: {
+        kind: TRIGGER_KIND.HOOK_FIRE as string,
+        status: TRIGGER_STATUS.FIRED,
+      },
       orderBy: { dueAt: 'asc' },
       take: TRIGGER_RECONCILE_BATCH_LIMIT,
     })) as unknown as TriggerRowLike[];
   } catch (err) {
-    ctx.logger.error(`[reconcile] 方向B trigger 查询失败: ${describeReconcileError(err)}`);
+    ctx.logger.error(
+      `[reconcile] 方向B trigger 查询失败: ${describeReconcileError(err)}`,
+    );
     return 0;
   }
   let repaired = 0;
@@ -66,16 +71,22 @@ async function repairFiredSide(
   }
   const expired = now.getTime() >= hook.expiresAt.getTime();
   if (expired) {
-    return claimExpireHook(ctx, hook, 'B', 'hook 已过期（reconcile 方向B 结算，只标不删）');
+    return claimExpireHook(
+      ctx,
+      hook,
+      'B',
+      'hook 已过期（reconcile 方向B 结算，只标不删）',
+    );
   }
   const claimed = await ctx.prisma.hook.updateMany({
     where: { id: hook.id, status: HOOK_STATUS.PENDING },
     data: {
       status: HOOK_STATUS.FIRED,
-      lastError: `配套 fire 行已 fired 但 hook 仍 pending（reconcile 补结算，trigger=${row.id}）`.slice(
-        0,
-        191,
-      ),
+      lastError:
+        `配套 fire 行已 fired 但 hook 仍 pending（reconcile 补结算，trigger=${row.id}）`.slice(
+          0,
+          191,
+        ),
     },
   });
   if (claimed.count !== 1) {

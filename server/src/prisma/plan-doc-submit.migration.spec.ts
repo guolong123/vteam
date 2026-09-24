@@ -33,7 +33,8 @@ function jsonLiteralAfter(anchor: string): Record<string, unknown> {
   const stmt = statements.find((s) => s.includes(anchor));
   if (!stmt) throw new Error(`[plan-doc-submit] 未找到锚点语句：${anchor}`);
   const match = /CAST\('(\{.*?\})' AS JSON\)/s.exec(stmt);
-  if (!match) throw new Error(`[plan-doc-submit] 锚点语句缺 CAST 字面量：${anchor}`);
+  if (!match)
+    throw new Error(`[plan-doc-submit] 锚点语句缺 CAST 字面量：${anchor}`);
   return JSON.parse(match[1]) as Record<string, unknown>;
 }
 
@@ -42,7 +43,7 @@ describe('20260923000001 计划员放开 doc.submit（迁移契约）', () => {
     const updates = sql.match(/^UPDATE /gm) ?? [];
     expect(updates).toHaveLength(3);
     expect(sql).toContain("AND `key` = 'plan'");
-    expect((sql.match(/WHERE `id` = 'ep_plan'/g) ?? [])).toHaveLength(2);
+    expect(sql.match(/WHERE `id` = 'ep_plan'/g) ?? []).toHaveLength(2);
   });
 
   it('plan 字面量逐键 ≡ BUILTIN_ROLE_CAPABILITY_MAPS.plan（28 键，键序 = 目录序）', () => {

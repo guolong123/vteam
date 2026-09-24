@@ -19,10 +19,7 @@ import { ExecutionPolicyService } from '../execution-policies/execution-policy.s
 import { SkillsService } from '../skills/skills.service';
 import { GitReposService } from '../git-repos/git-repos.service';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
-import {
-  createLedger,
-  embedLedger,
-} from '../issues/review-round-ledger';
+import { createLedger, embedLedger } from '../issues/review-round-ledger';
 
 /**
  * plan-review-execution-gates Todo 4：执行 kind 分类 + 计划门禁 + issue 锁。
@@ -88,7 +85,10 @@ describe('PlatformMcpService notifyAgent 门禁矩阵（todo4）', () => {
       teamMember: { findFirst: jest.fn(), findUnique: jest.fn() },
       issue: { findUnique: jest.fn(), findMany: jest.fn() },
       messageReceipt: { create: jest.fn(), findFirst: jest.fn() },
-      issueActivity: { count: jest.fn().mockResolvedValue(0), create: jest.fn() },
+      issueActivity: {
+        count: jest.fn().mockResolvedValue(0),
+        create: jest.fn(),
+      },
     };
     idGen = { nextId: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };

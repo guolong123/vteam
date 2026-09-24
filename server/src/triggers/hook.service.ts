@@ -1,11 +1,15 @@
-import { Injectable, Logger, OnModuleInit, Optional, Inject } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  Optional,
+  Inject,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Prisma } from '@prisma/client';
 import { IdGeneratorService } from '../common/id-generator';
 import { EVENT_TYPES } from '../common/constants/event.constants';
-import {
-  TRIGGER_KIND,
-} from '../common/constants/trigger.constants';
+import { TRIGGER_KIND } from '../common/constants/trigger.constants';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -192,7 +196,8 @@ export class HookService implements OnModuleInit {
     private readonly triggers: TriggerService,
     private readonly dispatcher: WorkerDispatcher,
     config: ConfigService,
-    @Optional() @Inject(RealtimeService)
+    @Optional()
+    @Inject(RealtimeService)
     private readonly realtime?: RealtimeService,
   ) {
     // env 经 ConfigService 返回字符串，Number() 归一（非法/缺省 → 默认值；
@@ -234,9 +239,8 @@ export class HookService implements OnModuleInit {
     // 先自助对齐（seed 只升不降，与 TriggerService 侧重复调用安全）。
     await resyncIdPrefix(this.prisma.trigger, TRIGGER_ID_PREFIX, this.idGen);
     try {
-      this.triggers.registerHandler(
-        TRIGGER_KIND.HOOK_FIRE,
-        (ctx) => this.handleHookFire(ctx),
+      this.triggers.registerHandler(TRIGGER_KIND.HOOK_FIRE, (ctx) =>
+        this.handleHookFire(ctx),
       );
       this.triggers.registerHandler(TRIGGER_KIND.HOOK_POLL, () =>
         this.handleHookPoll(),
@@ -383,9 +387,7 @@ export class HookService implements OnModuleInit {
     // time：fire 行 dueAt=到期时刻；all_idle：fire 行 dueAt=expiresAt（纯到期
     // 兜底——handler 内 kind 分流，poll 拥有唤醒权，见 handleHookFire）。
     const fireDue =
-      input.kind === HOOK_KIND.TIME
-        ? (input.dueAt as Date)
-        : input.expiresAt;
+      input.kind === HOOK_KIND.TIME ? (input.dueAt as Date) : input.expiresAt;
     const fireDedup = buildHookFireDedupKey(hookId);
     try {
       const created = await this.prisma.$transaction(async (tx) => {
@@ -399,10 +401,7 @@ export class HookService implements OnModuleInit {
             wakeText,
             target: input.target as unknown as object,
             status: HOOK_STATUS.PENDING,
-            dueAt:
-              input.kind === HOOK_KIND.TIME
-                ? (input.dueAt as Date)
-                : null,
+            dueAt: input.kind === HOOK_KIND.TIME ? (input.dueAt as Date) : null,
             graceMs,
             expiresAt: input.expiresAt,
             dedupKey: input.dedupKey,
@@ -463,7 +462,9 @@ export class HookService implements OnModuleInit {
       })) as unknown as HookRow | null;
     }
     if (!hook) {
-      throw new Error(`hook ${idOrDedupKey} 不存在（HOOK_NOT_FOUND 位见 todo-12）`);
+      throw new Error(
+        `hook ${idOrDedupKey} 不存在（HOOK_NOT_FOUND 位见 todo-12）`,
+      );
     }
     if (hook.status !== HOOK_STATUS.PENDING) {
       return hook;
@@ -515,9 +516,7 @@ export class HookService implements OnModuleInit {
   async handleHookFire(ctx: TriggerFireContext): Promise<TriggerOutcome> {
     const payload = (ctx?.payload ?? {}) as { hookId?: unknown };
     if (typeof payload.hookId !== 'string' || !payload.hookId) {
-      this.logger.warn(
-        `[hook] fire ${ctx?.id} 缺 hookId（跳过，不重排）`,
-      );
+      this.logger.warn(`[hook] fire ${ctx?.id} 缺 hookId（跳过，不重排）`);
       return { done: true };
     }
     const hook = (await this.prisma.hook.findUnique({
@@ -528,7 +527,11 @@ export class HookService implements OnModuleInit {
     }
     const now = new Date();
     if (now.getTime() >= hook.expiresAt.getTime()) {
-      await this.settleHook(hook.id, HOOK_STATUS.EXPIRED, 'hook 已过期（fire 时结算）');
+      await this.settleHook(
+        hook.id,
+        HOOK_STATUS.EXPIRED,
+        'hook 已过期（fire 时结算）',
+      );
       return { done: true };
     }
     if (hook.kind === HOOK_KIND.ALL_IDLE) {
@@ -574,7 +577,10 @@ export class HookService implements OnModuleInit {
         );
         return { done: true };
       }
-      if (now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT >= hook.expiresAt.getTime()) {
+      if (
+        now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT >=
+        hook.expiresAt.getTime()
+      ) {
         await this.settleHook(
           hook.id,
           HOOK_STATUS.EXPIRED,
@@ -582,7 +588,9 @@ export class HookService implements OnModuleInit {
         );
         return { done: true };
       }
-      return { rescheduleAt: new Date(now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT) };
+      return {
+        rescheduleAt: new Date(now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT),
+      };
     }
     let wakeSessionId: string | undefined;
     try {
@@ -597,14 +605,23 @@ export class HookService implements OnModuleInit {
         hook,
       );
       if (retries >= this.busyMaxRetries) {
-        await this.settleHook(hook.id, HOOK_STATUS.EXPIRED, `${reason}（重试满 ${this.busyMaxRetries} 次）`);
+        await this.settleHook(
+          hook.id,
+          HOOK_STATUS.EXPIRED,
+          `${reason}（重试满 ${this.busyMaxRetries} 次）`,
+        );
         return { done: true };
       }
-      if (now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT >= hook.expiresAt.getTime()) {
+      if (
+        now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT >=
+        hook.expiresAt.getTime()
+      ) {
         await this.settleHook(hook.id, HOOK_STATUS.EXPIRED, reason);
         return { done: true };
       }
-      return { rescheduleAt: new Date(now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT) };
+      return {
+        rescheduleAt: new Date(now.getTime() + HOOK_BUSY_RETRY_MS_DEFAULT),
+      };
     }
     await this.markFired(hook.id, wakeSessionId);
     return { done: true };
@@ -635,7 +652,11 @@ export class HookService implements OnModuleInit {
         break;
       }
       if (now.getTime() >= hook.expiresAt.getTime()) {
-        await this.settleHook(hook.id, HOOK_STATUS.EXPIRED, 'hook 已过期（poll 时结算）');
+        await this.settleHook(
+          hook.id,
+          HOOK_STATUS.EXPIRED,
+          'hook 已过期（poll 时结算）',
+        );
         continue;
       }
       let quiet: boolean;
@@ -699,10 +720,11 @@ export class HookService implements OnModuleInit {
         await this.prisma.hook.update({
           where: { id: hook.id },
           data: {
-            lastError: `wake 分派失败（留 pending 待下轮）：${describeHookError(err)}`.slice(
-              0,
-              191,
-            ),
+            lastError:
+              `wake 分派失败（留 pending 待下轮）：${describeHookError(err)}`.slice(
+                0,
+                191,
+              ),
           },
         });
         continue;
@@ -768,7 +790,10 @@ export class HookService implements OnModuleInit {
   private async resolveWakeTarget(hook: HookRow): Promise<WakeResolution> {
     const target = parseHookTarget(hook.target);
     if (!target) {
-      return { ok: false, reason: 'target 非法（缺 channelId/targetInstanceId）' };
+      return {
+        ok: false,
+        reason: 'target 非法（缺 channelId/targetInstanceId）',
+      };
     }
     let taskTeamId: string | null = null;
     if (target.taskId) {
@@ -842,7 +867,11 @@ export class HookService implements OnModuleInit {
     const session = (await this.prisma.session.findFirst({
       where: { teamId: target.teamId, teamMemberId: target.targetInstanceId },
       select: { id: true, status: true, workerId: true },
-    })) as unknown as { id: string; status: string; workerId: string | null } | null;
+    })) as unknown as {
+      id: string;
+      status: string;
+      workerId: string | null;
+    } | null;
     if (!session) {
       return null;
     }
@@ -992,7 +1021,10 @@ export class HookService implements OnModuleInit {
       if (!hook) {
         return false;
       }
-      const text = (input.reason || 'wake 执行失败（未携带原因）').slice(0, 191);
+      const text = (input.reason || 'wake 执行失败（未携带原因）').slice(
+        0,
+        191,
+      );
       // 认领：lastError 仍为 NULL 才写（并发/重复事件败者静默）。
       const claimed = await this.prisma.hook.updateMany({
         where: { id: hook.id, status: HOOK_STATUS.FIRED, lastError: null },
@@ -1005,16 +1037,12 @@ export class HookService implements OnModuleInit {
         where: { dedupKey: buildHookFireDedupKey(hook.id) },
         data: { lastError: text, skipReason: text },
       });
-      await this.emitTriggerLifecycle(
-        TRIGGER_WAKE_FAILED_EVENT_TYPE,
-        hook,
-        {
-          status: HOOK_STATUS.FIRED,
-          wakeSessionId: sessionId,
-          lastError: text,
-          skipReason: text,
-        },
-      );
+      await this.emitTriggerLifecycle(TRIGGER_WAKE_FAILED_EVENT_TYPE, hook, {
+        status: HOOK_STATUS.FIRED,
+        wakeSessionId: sessionId,
+        lastError: text,
+        skipReason: text,
+      });
       return true;
     } catch (err) {
       this.logger.warn(
@@ -1236,14 +1264,17 @@ export class HookService implements OnModuleInit {
 }
 
 /** hook 归属 → realtime scope（team/task 直标，其余 global；SSE 订阅与 DB 行同口径）。 */
-function hookScopeOf(hook: { scopeType: string; scopeId: string }): RealtimeScope {
+function hookScopeOf(hook: {
+  scopeType: string;
+  scopeId: string;
+}): RealtimeScope {
   if (hook.scopeType === 'team' || hook.scopeType === 'task') {
     return { type: hook.scopeType, id: hook.scopeId };
   }
   return { type: 'global' };
 }
 
-  /** `tmr_` 前缀常量复用（fire 行 id 经同一 IdGeneratorService 生成）。 */
+/** `tmr_` 前缀常量复用（fire 行 id 经同一 IdGeneratorService 生成）。 */
 const TRIGGER_ID_PREFIX_VALUE = 'tmr';
 
 /** hook.target JSON 窄化（非法 → null，调用方标 expired）。 */
@@ -1259,10 +1290,8 @@ export function parseHookTarget(target: unknown): HookTarget | null {
     return null;
   }
   return {
-    taskId:
-      typeof t['taskId'] === 'string' && t['taskId'] ? t['taskId'] : null,
-    teamId:
-      typeof t['teamId'] === 'string' && t['teamId'] ? t['teamId'] : null,
+    taskId: typeof t['taskId'] === 'string' && t['taskId'] ? t['taskId'] : null,
+    teamId: typeof t['teamId'] === 'string' && t['teamId'] ? t['teamId'] : null,
     channelId: t['channelId'],
     targetInstanceId: t['targetInstanceId'],
     wakeSessionId:
@@ -1299,10 +1328,16 @@ function normalizeWakeText(text: string): string {
  * 短文本（< HOOK_WAKE_SIMILAR_MIN_LEN）永不判相似——"ok"/"wake" 类短词
  * 在合法新任务里太常见，判了即误伤。
  */
-function wakeTextsSimilar(ancestorText: string, inputNormalized: string): boolean {
+function wakeTextsSimilar(
+  ancestorText: string,
+  inputNormalized: string,
+): boolean {
   const a = normalizeWakeText(ancestorText);
   const b = inputNormalized;
-  if (a.length < HOOK_WAKE_SIMILAR_MIN_LEN || b.length < HOOK_WAKE_SIMILAR_MIN_LEN) {
+  if (
+    a.length < HOOK_WAKE_SIMILAR_MIN_LEN ||
+    b.length < HOOK_WAKE_SIMILAR_MIN_LEN
+  ) {
     return false;
   }
   return a === b || a.includes(b) || b.includes(a);

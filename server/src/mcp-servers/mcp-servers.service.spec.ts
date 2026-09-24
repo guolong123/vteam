@@ -935,7 +935,11 @@ describe('McpServersService', () => {
       prisma.mcpServer.findUnique.mockResolvedValue(ketacliRow);
       mockDiscovery([
         { name: 'nodesc.tool', inputSchema: { type: 'object' } },
-        { name: 'baddesc.tool', description: 42, inputSchema: { type: 'object' } },
+        {
+          name: 'baddesc.tool',
+          description: 42,
+          inputSchema: { type: 'object' },
+        },
       ]);
       prisma.tool.findUnique.mockResolvedValue(null);
       prisma.tool.findMany.mockResolvedValue([]);

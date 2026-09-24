@@ -128,7 +128,7 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
     prisma.task.findUnique.mockImplementation(
       (args: { where: { id?: string } }) => {
         if (args.where.id === taskId) {
-          return Promise.resolve({ teamId: 'tm_1' });
+          return Promise.resolve({ teamId: 'tm_1', status: 'in_progress' });
         }
         return Promise.resolve(null);
       },
@@ -147,6 +147,7 @@ describe('PlatformMcpService notifyAgent 评审三元组门（todo8）', () => {
     prisma.teamMember.findUnique.mockResolvedValue({ agentId: 'a_sender' });
     prisma.team.findUnique.mockResolvedValue({
       mainAgentMemberId: senderInstanceId,
+      currentTaskId: taskId,
     });
     prisma.message.create.mockResolvedValue(createdMessage);
     prisma.message.findMany.mockResolvedValue([]);

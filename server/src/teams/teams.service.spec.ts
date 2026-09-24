@@ -363,7 +363,11 @@ describe('TeamsService', () => {
       };
       const seeded: Array<{ agentId: string; roleId: string; key: string }> = [
         { agentId: 'a_product', roleId: 'ar_product', key: 'product' },
-        { agentId: 'a_project_manager', roleId: 'ar_project_manager', key: 'project_manager' },
+        {
+          agentId: 'a_project_manager',
+          roleId: 'ar_project_manager',
+          key: 'project_manager',
+        },
         { agentId: 'a_architect', roleId: 'ar_architect', key: 'architect' },
         { agentId: 'a_developer', roleId: 'ar_developer', key: 'developer' },
         { agentId: 'a_tester', roleId: 'ar_tester', key: 'tester' },
@@ -493,17 +497,15 @@ describe('TeamsService', () => {
         .mockResolvedValueOnce('tmm_0000000001');
       const tx = mockCreateTx(teamRow());
       prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
-      prisma.team.findUnique
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(
-          teamRow({
-            members: [
-              teamMemberRow({
-                opencodeAgentName: 'Prometheus - Plan Builder',
-              }),
-            ],
-          }),
-        );
+      prisma.team.findUnique.mockResolvedValueOnce(null).mockResolvedValueOnce(
+        teamRow({
+          members: [
+            teamMemberRow({
+              opencodeAgentName: 'Prometheus - Plan Builder',
+            }),
+          ],
+        }),
+      );
 
       await service.create(userId, {
         name: 'external-role',
@@ -556,7 +558,9 @@ describe('TeamsService', () => {
       } as any);
 
       const created = (
-        tx.teamMember.create.mock.calls[0][0] as { data: Record<string, unknown> }
+        tx.teamMember.create.mock.calls[0][0] as {
+          data: Record<string, unknown>;
+        }
       ).data;
       expect(created).toMatchObject({
         agentId: 'a_developer',
@@ -1032,9 +1036,11 @@ describe('TeamsService', () => {
       const tx: any = {
         $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 0 }]),
         teamMember: {
-          create: jest.fn().mockImplementation(({ data }: any) =>
-            Promise.resolve({ ...data }),
-          ),
+          create: jest
+            .fn()
+            .mockImplementation(({ data }: any) =>
+              Promise.resolve({ ...data }),
+            ),
           aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
         },
         team: { update: jest.fn().mockResolvedValue({}) },
@@ -1090,9 +1096,11 @@ describe('TeamsService', () => {
       const tx: any = {
         $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 0 }]),
         teamMember: {
-          create: jest.fn().mockImplementation(({ data }: any) =>
-            Promise.resolve({ ...data }),
-          ),
+          create: jest
+            .fn()
+            .mockImplementation(({ data }: any) =>
+              Promise.resolve({ ...data }),
+            ),
           aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
         },
         team: { update: jest.fn().mockResolvedValue({}) },
@@ -1157,7 +1165,9 @@ describe('TeamsService', () => {
         service.addMember('tm_0000000001', { roleId: 'ar_general' } as any),
       ).rejects.toThrow(BadRequestException);
       try {
-        await service.addMember('tm_0000000001', { roleId: 'ar_general' } as any);
+        await service.addMember('tm_0000000001', {
+          roleId: 'ar_general',
+        } as any);
       } catch (e) {
         expect((e as BadRequestException).getResponse()).toMatchObject({
           code: 'ROLE_DEFAULT_AGENT_MISSING',
@@ -1199,9 +1209,11 @@ describe('TeamsService', () => {
       const tx: any = {
         $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 0 }]),
         teamMember: {
-          create: jest.fn().mockImplementation(({ data }: any) =>
-            Promise.resolve({ ...data }),
-          ),
+          create: jest
+            .fn()
+            .mockImplementation(({ data }: any) =>
+              Promise.resolve({ ...data }),
+            ),
           aggregate: jest.fn().mockResolvedValue({ _max: { seq: 0 } }),
         },
         team: { update: jest.fn().mockResolvedValue({}) },
@@ -1294,7 +1306,9 @@ describe('TeamsService', () => {
       } as any);
 
       const created = (
-        tx.teamMember.create.mock.calls[0][0] as { data: Record<string, unknown> }
+        tx.teamMember.create.mock.calls[0][0] as {
+          data: Record<string, unknown>;
+        }
       ).data;
       expect(created.opencodeAgentName).toBeNull();
     });
@@ -1705,7 +1719,9 @@ describe('TeamsService', () => {
         roleId: 'ar_external',
       } as any);
 
-      const written = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+      const written = updateMock.mock.calls[0][0] as {
+        data: Record<string, unknown>;
+      };
       expect(written.data.agentId).toBe('a_developer');
       expect(written.data.roleId).toBe('ar_external');
       expect(written.data.opencodeAgentName).toBeUndefined();
@@ -1743,7 +1759,9 @@ describe('TeamsService', () => {
         opencodeAgentName: 'plan',
       } as any);
 
-      const written = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+      const written = updateMock.mock.calls[0][0] as {
+        data: Record<string, unknown>;
+      };
       expect(written.data.opencodeAgentName).toBe('plan');
     });
 
@@ -1821,7 +1839,9 @@ describe('TeamsService', () => {
         roleId: 'ar_external',
       } as any);
 
-      const written = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+      const written = updateMock.mock.calls[0][0] as {
+        data: Record<string, unknown>;
+      };
       expect(written.data.agentId).toBe('a_developer');
       expect(written.data.opencodeAgentName).toBeUndefined();
     });
@@ -1886,7 +1906,9 @@ describe('TeamsService', () => {
         roleId: 'ar_plain',
       } as any);
 
-      const written = updateMock.mock.calls[0][0] as { data: Record<string, unknown> };
+      const written = updateMock.mock.calls[0][0] as {
+        data: Record<string, unknown>;
+      };
       expect(written.data.agentId).toBe('a_developer');
       expect(written.data.opencodeAgentName).toBeUndefined();
     });

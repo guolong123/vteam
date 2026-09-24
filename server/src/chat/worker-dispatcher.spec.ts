@@ -155,14 +155,12 @@ describe('WorkerDispatcher', () => {
     alias: '产品经理-1',
     seq: 1,
     agent: { id: 'a_product', name: '产品经理', agentKey: 'product' },
-    role: null as
-      | {
-          id?: string | null;
-          key?: string | null;
-          capabilities?: Record<string, boolean> | null;
-          rolePrompt?: string | null;
-        }
-      | null,
+    role: null as {
+      id?: string | null;
+      key?: string | null;
+      capabilities?: Record<string, boolean> | null;
+      rolePrompt?: string | null;
+    } | null,
     ...overrides,
   });
 
@@ -2505,8 +2503,8 @@ describe('WorkerDispatcher', () => {
       expect(s).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);
       // plan-aware：判据是工具、非角色名 —— 用仍缺 submit_artifact 的 librarian 锁这条机制
       // （plan 自 2026-09-23 已放开，改用 librarian 才能继续验证「缺工具即不注入」）。
-      const libTools = resolveConstantPolicySource('vteam-librarian')!.config
-        .tools;
+      const libTools =
+        resolveConstantPolicySource('vteam-librarian')!.config.tools;
       const libS = buildSystemInstructions(
         { ...agent, role: 'librarian' },
         { resolvedTools: libTools },
@@ -4167,11 +4165,7 @@ describe('WorkerDispatcher', () => {
       expect(errors).toHaveLength(0);
 
       // 每个 600s 静默窗口到期即唤醒一次并重武装；3 次唤醒后第 4 个窗口到期才走失败路径
-      for (
-        let attempt = 0;
-        attempt < MAX_SILENT_WAKE_ATTEMPTS;
-        attempt++
-      ) {
+      for (let attempt = 0; attempt < MAX_SILENT_WAKE_ATTEMPTS; attempt++) {
         await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS);
         await jest.advanceTimersByTimeAsync(0);
         expect(wakeSpy).toHaveBeenCalledTimes(attempt + 1);
@@ -4636,7 +4630,9 @@ describe('WorkerDispatcher', () => {
           for (const p of patterns) {
             const matches = text.match(new RegExp(p.source, 'g'));
             if (matches) {
-              hits.push(`${path.relative(srcRoot, full)} × ${matches.length} (${p})`);
+              hits.push(
+                `${path.relative(srcRoot, full)} × ${matches.length} (${p})`,
+              );
             }
           }
         }
@@ -5030,9 +5026,7 @@ describe('WorkerDispatcher', () => {
       expect(triggers.schedule.mock.calls[1][3]).not.toBe(
         triggers.schedule.mock.calls[0][3],
       );
-      expect(
-        (d as any).silentWakeAttempts.get('s_0000000001'),
-      ).toBe(1);
+      expect((d as any).silentWakeAttempts.get('s_0000000001')).toBe(1);
     });
 
     it('handler：唤醒耗尽（第 4 次到期，worker 在线）→ 失败路径（failed 标记 + 注销 + 广播）', async () => {

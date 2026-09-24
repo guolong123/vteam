@@ -94,7 +94,8 @@ describe('agent-policies 零发射：外部/引擎 agent 名绝不进入策略�
 
   /** 外部引擎名（含大小写不敏感/空白规范化变体）在给定名单中零出现。 */
   function expectNoExternalEmission(names: readonly string[]): void {
-    const normalize = (value: string) => value.toLowerCase().replace(/\s+/g, '');
+    const normalize = (value: string) =>
+      value.toLowerCase().replace(/\s+/g, '');
     const normalizedNames = names.map(normalize);
     for (const external of EXTERNAL_ENGINE_NAMES) {
       expect(names).not.toContain(external);

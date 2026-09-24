@@ -75,9 +75,7 @@ describe('agent_roles 外部 Agent 槽位迁移契约（todo 2）', () => {
     const agentRoleModel =
       schema.match(/^model AgentRole \{[\s\S]*?^\}/m)?.[0] ?? '';
     expect(agentRoleModel).toContain('defaultOpencodeAgentName String?');
-    expect(agentRoleModel).toContain(
-      '@map("default_opencode_agent_name")',
-    );
+    expect(agentRoleModel).toContain('@map("default_opencode_agent_name")');
   });
 
   it('schema：不变式声明在 model AgentRole 注释中（互斥 + 400 code）', () => {

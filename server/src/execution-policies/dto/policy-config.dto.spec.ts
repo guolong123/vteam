@@ -56,7 +56,13 @@ describe('PolicyConfigDto.bashDeny 往返（全局 whitelist pipe）', () => {
       Promise.resolve(rows.find((r) => r.id === where.id) ?? null),
     );
     const update = jest.fn(
-      ({ where, data }: { where: { id: string }; data: Partial<PolicyRow> }) => {
+      ({
+        where,
+        data,
+      }: {
+        where: { id: string };
+        data: Partial<PolicyRow>;
+      }) => {
         const idx = rows.findIndex((r) => r.id === where.id);
         if (idx < 0) throw new Error(`missing ${where.id}`);
         rows[idx] = { ...rows[idx], ...data };
@@ -180,6 +186,8 @@ describe('PolicyConfigDto.bashDeny 往返（全局 whitelist pipe）', () => {
     expect(Object.prototype.hasOwnProperty.call(storedConfig, 'bashDeny')).toBe(
       false,
     );
-    expect((patched.config as Record<string, unknown>).bashDeny).toBeUndefined();
+    expect(
+      (patched.config as Record<string, unknown>).bashDeny,
+    ).toBeUndefined();
   });
 });

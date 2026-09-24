@@ -155,7 +155,9 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
         assertions += 2;
       }
     }
-    expect(assertions).toBe(FORMERLY_GATED_TOOLS.length * ROLE_NAMES.length * 2);
+    expect(assertions).toBe(
+      FORMERLY_GATED_TOOLS.length * ROLE_NAMES.length * 2,
+    );
     expect(assertions).toBeGreaterThan(0);
   });
 

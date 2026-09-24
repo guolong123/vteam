@@ -218,10 +218,7 @@ export class PlatformMcpController {
       );
       if (!input.taskId && resolved.taskId) input.taskId = resolved.taskId;
       if (!input.teamId && resolved.teamId) input.teamId = resolved.teamId;
-      await this.toolPermission.assertToolAllowed(
-        resolved.callerId,
-        tool.name,
-      );
+      await this.toolPermission.assertToolAllowed(resolved.callerId, tool.name);
       const result = await tool.handler({ workerId }, input);
       return this.result(id, {
         content: [{ type: 'text', text: JSON.stringify(result) }],

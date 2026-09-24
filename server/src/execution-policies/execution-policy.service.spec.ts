@@ -344,20 +344,23 @@ describe('ExecutionPolicyService（真实 service，FINDING-5）', () => {
       ['非对象 read', { read: 'allow' }],
       ['超长 glob（>256）', { edit: { '*': 'deny', x: 'a'.repeat(257) } }],
       ['bash 非法值', { bash: 'sometimes', edit: { '*': 'deny' } }],
-    ])('拒绝 %s → 400 POLICY_CONFIG_INVALID 且不落库', async (_label, permission) => {
-      const prisma = store([row()]);
-      const service = serviceWith({ executionPolicy: prisma });
-      const before = prisma.rows[0].config;
+    ])(
+      '拒绝 %s → 400 POLICY_CONFIG_INVALID 且不落库',
+      async (_label, permission) => {
+        const prisma = store([row()]);
+        const service = serviceWith({ executionPolicy: prisma });
+        const before = prisma.rows[0].config;
 
-      await expect(
-        service.update('ep_product', { config: configWith(permission) }),
-      ).rejects.toMatchObject({
-        response: { code: 'POLICY_CONFIG_INVALID' },
-      });
+        await expect(
+          service.update('ep_product', { config: configWith(permission) }),
+        ).rejects.toMatchObject({
+          response: { code: 'POLICY_CONFIG_INVALID' },
+        });
 
-      expect(prisma.update).not.toHaveBeenCalled();
-      expect(prisma.rows[0].config).toBe(before);
-    });
+        expect(prisma.update).not.toHaveBeenCalled();
+        expect(prisma.rows[0].config).toBe(before);
+      },
+    );
 
     it('拒绝 65 条规则（>64 上限）→ 400 且不落库', async () => {
       const prisma = store([row()]);
@@ -419,9 +422,12 @@ describe('ExecutionPolicyService（真实 service，FINDING-5）', () => {
     it('A. 写入成功后恰好广播一次 reload-config', async () => {
       const prisma = store([row()]);
       const broadcastCommand = jest.fn().mockResolvedValue(3);
-      const service = serviceWith({ executionPolicy: prisma }, {
-        broadcastCommand,
-      });
+      const service = serviceWith(
+        { executionPolicy: prisma },
+        {
+          broadcastCommand,
+        },
+      );
 
       await service.update('ep_product', { name: '产品经理-新' });
 
@@ -437,9 +443,12 @@ describe('ExecutionPolicyService（真实 service，FINDING-5）', () => {
       const broadcastCommand = jest
         .fn()
         .mockRejectedValue(new Error('no online worker'));
-      const service = serviceWith({ executionPolicy: prisma }, {
-        broadcastCommand,
-      });
+      const service = serviceWith(
+        { executionPolicy: prisma },
+        {
+          broadcastCommand,
+        },
+      );
 
       const updated = await service.update('ep_product', {
         name: '产品经理-新',
@@ -452,9 +461,12 @@ describe('ExecutionPolicyService（真实 service，FINDING-5）', () => {
     it('C. create() 不广播（作用域栅栏）', async () => {
       const prisma = store([]);
       const broadcastCommand = jest.fn().mockResolvedValue(1);
-      const service = serviceWith({ executionPolicy: prisma }, {
-        broadcastCommand,
-      });
+      const service = serviceWith(
+        { executionPolicy: prisma },
+        {
+          broadcastCommand,
+        },
+      );
 
       await service.create({
         name: '自定义',

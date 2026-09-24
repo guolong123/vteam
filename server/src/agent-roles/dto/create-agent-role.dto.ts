@@ -28,7 +28,8 @@ export class CreateAgentRoleDto {
   name: string;
 
   @ApiProperty({
-    description: 'machine-safe 唯一标识（小写字母开头，仅含小写字母/数字/_/-，最长 63 字符）',
+    description:
+      'machine-safe 唯一标识（小写字母开头，仅含小写字母/数字/_/-，最长 63 字符）',
     example: 'data-analyst',
   })
   @IsString()
@@ -91,7 +92,11 @@ export class CreateAgentRoleDto {
   @IsString()
   rolePrompt?: string;
 
-  @ApiPropertyOptional({ description: '展示排序（越小越前）', default: 0, minimum: 0 })
+  @ApiPropertyOptional({
+    description: '展示排序（越小越前）',
+    default: 0,
+    minimum: 0,
+  })
   @IsOptional()
   @IsInt()
   @Min(0)

@@ -1155,7 +1155,9 @@ export class ChatService {
             select: { id: true, alias: true },
           })) as Array<{ id: string; alias: string | null }>;
           const nameOf = (instanceId: string | null | undefined) =>
-            members.find((m) => m.id === instanceId)?.alias ?? instanceId ?? '?';
+            members.find((m) => m.id === instanceId)?.alias ??
+            instanceId ??
+            '?';
           for (const t of triggers) {
             if (
               (t as any).status === 'dispatched' &&
@@ -1182,7 +1184,10 @@ export class ChatService {
                   taskId: effectiveTaskId ?? null,
                   senderType: SENDER_TYPE.system,
                   senderId: null,
-                  content: { text: hintText, parts: [] } as Prisma.InputJsonValue,
+                  content: {
+                    text: hintText,
+                    parts: [],
+                  } as Prisma.InputJsonValue,
                   mentions: [] as Prisma.InputJsonValue,
                   status: MESSAGE_STATUS.sent,
                 } as any,
@@ -1830,7 +1835,8 @@ export class ChatService {
 
   private async resolveMentions(
     key: string | { teamId?: string | null; taskId?: string | null },
-    mentions: MentionInput[],  ): Promise<{ mentionsStored: MentionInput[]; triggers: TriggerResult[] }> {
+    mentions: MentionInput[],
+  ): Promise<{ mentionsStored: MentionInput[]; triggers: TriggerResult[] }> {
     let teamId: string | null = null;
     let taskId: string | null = null;
     if (typeof key === 'string') {

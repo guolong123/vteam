@@ -334,7 +334,11 @@ describe('AgentsController', () => {
 
     it('CloneAgentDto：agentRoleId 保留；陈旧 role 剥离', async () => {
       const out = (await whitelistPipe.transform(
-        { agentKey: 'copy-agent', agentRoleId: 'ar_developer', role: 'developer' },
+        {
+          agentKey: 'copy-agent',
+          agentRoleId: 'ar_developer',
+          role: 'developer',
+        },
         { type: 'body', metatype: CloneAgentDto },
       )) as CloneAgentDto & { role?: string };
 

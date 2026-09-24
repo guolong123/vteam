@@ -385,10 +385,23 @@ function hasFirstToken(messages: ServeMessage[]): boolean {
   return false;
 }
 
+function hashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  }
+  return h;
+}
+
+function sampleHash(s: string): number {
+  if (s.length <= 128) return hashStr(s);
+  return hashStr(`${s.slice(0, 64)}\n${s.slice(-64)}`) + s.length;
+}
+
 /**
  * 会话活性指纹：任何「主循环在推进」的可见变化都改变它——消息数、part 数、文本长度、
  * 消息时间、以及 tool part 的 state（status / output 长度 / 自身耗时）。
- * 全部用 O(1) 标量投影（字符串取 .length，不做 JSON.stringify），避免每轮 poll 对大 tool 输出
+ * 全部用 O(1) 标量投影（字符串取有界采样哈希，不做 JSON.stringify），避免每轮 poll 对大 tool 输出
  * 做全量序列化。
  */
 function activitySignature(messages: ServeMessage[]): string {
@@ -399,7 +412,7 @@ function activitySignature(messages: ServeMessage[]): string {
     scalar += (mt?.created ?? 0) + (mt?.completed ?? 0);
     for (const p of m.parts ?? []) {
       parts += 1;
-      scalar += (p.text ?? '').length + (p.id ?? '').length;
+      scalar += sampleHash(p.text ?? '') + (p.id ?? '').length;
       // part 类型也计入：空壳 reasoning（思考期 text 恒空）与 text/tool 的切换同样是
       // 「主循环在推进」的可见变化，不能只看文本长度。
       scalar += (p.type ?? '').length;
@@ -416,7 +429,7 @@ function activitySignature(messages: ServeMessage[]): string {
       ).state;
       if (state !== undefined && state !== null && typeof state === 'object') {
         scalar += typeof state.status === 'string' ? state.status.length : 0;
-        scalar += typeof state.output === 'string' ? state.output.length : 0;
+        scalar += typeof state.output === 'string' ? sampleHash(state.output) : 0;
         scalar += (state.time?.start ?? 0) + (state.time?.end ?? 0);
       }
     }

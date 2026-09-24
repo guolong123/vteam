@@ -70,7 +70,10 @@ function extractUpdates(sql: string): UpdateRow[] {
     /SET `capabilities` = CAST\('(\{[^']+\})' AS JSON\)\s+WHERE([^;]+);/g;
   const out: UpdateRow[] = [];
   for (const m of sql.matchAll(re)) {
-    out.push({ literal: JSON.parse(m[1] as string), where: (m[2] as string).trim() });
+    out.push({
+      literal: JSON.parse(m[1] as string),
+      where: (m[2] as string).trim(),
+    });
   }
   return out;
 }
@@ -123,7 +126,9 @@ describe('20260921000009 拆分组能力点（迁移契约）', () => {
   });
 
   it('7 内置岗字面量逐键 ≡ BUILTIN_ROLE_CAPABILITY_MAPS（键序 = 目录序，SQL↔TS 单一来源防漂移）', () => {
-    const builtins = rows.filter((r) => r.where.includes(`\`type\` = 'builtin'`));
+    const builtins = rows.filter((r) =>
+      r.where.includes(`\`type\` = 'builtin'`),
+    );
     expect(builtins).toHaveLength(7);
     const keys = builtins.map((r) => {
       const m = r.where.match(/AND `key` = '([a-z_]+)'/);
@@ -146,8 +151,14 @@ describe('20260921000009 拆分组能力点（迁移契约）', () => {
   });
 
   it('外部 3 岗字面量逐键 ≡ EXTERNAL_AGENT_ROLE_CAPABILITIES（8 true / 20 false，最小权限不放宽）', () => {
-    expect(Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === true)).toHaveLength(8);
-    expect(Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === false)).toHaveLength(20);
+    expect(
+      Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === true),
+    ).toHaveLength(8);
+    expect(
+      Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(
+        (v) => v === false,
+      ),
+    ).toHaveLength(20);
     for (const key of EXTERNAL_AGENT_ROLE_KEYS) {
       const row = rows.find((r) => r.where.includes(`\`key\` = '${key}'`));
       expect(row).toBeDefined();
@@ -179,15 +190,24 @@ describe('20260921000009 拆分组能力点（迁移契约）', () => {
       expect(`${k}=${architect[k]}`).toBe(`${k}=false`);
     }
     const tester = literalOf('tester');
-    for (const k of ['issue.create', 'issue.get', 'issue.list', 'issue.transition']) {
+    for (const k of [
+      'issue.create',
+      'issue.get',
+      'issue.list',
+      'issue.transition',
+    ]) {
       expect(`${k}=${tester[k]}`).toBe(`${k}=true`);
     }
     expect(`issue.update=${tester['issue.update']}`).toBe('issue.update=false');
     for (const roleKey of ['plan', 'librarian']) {
       const role = literalOf(roleKey);
-      expect(`memory.search=${role['memory.search']}`).toBe('memory.search=true');
+      expect(`memory.search=${role['memory.search']}`).toBe(
+        'memory.search=true',
+      );
       expect(`memory.save=${role['memory.save']}`).toBe('memory.save=false');
-      expect(`memory.update=${role['memory.update']}`).toBe('memory.update=false');
+      expect(`memory.update=${role['memory.update']}`).toBe(
+        'memory.update=false',
+      );
     }
   });
 

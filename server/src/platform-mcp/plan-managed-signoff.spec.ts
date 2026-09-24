@@ -176,7 +176,11 @@ describe('PlatformMcpService 托管模式计划签署门', () => {
       action: 'confirm',
       managed: true,
     });
-    expect(res).toMatchObject({ taskId, status: 'executing', action: 'confirm' });
+    expect(res).toMatchObject({
+      taskId,
+      status: 'executing',
+      action: 'confirm',
+    });
   });
 
   it('计划服务未装配 → 503 PLAN_COMPLETE_UNAVAILABLE（不静默成功）', async () => {

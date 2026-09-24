@@ -65,7 +65,9 @@ describe('agents[].permission native-only payload (todo 4)', () => {
       expect(offenders).toEqual([]);
       expect([...keys].sort()).toEqual([...NATIVE_PERMISSION_KEYS].sort());
       // agent 与 guard 的 permission 在 todo 4 后**不同源**：guard 仍保留 vteam_*。
-      const guardKeys = Object.keys(policies.guard.roles[agent.name].permission);
+      const guardKeys = Object.keys(
+        policies.guard.roles[agent.name].permission,
+      );
       expect(guardKeys).not.toEqual(keys);
       scanned += keys.length;
     }
@@ -104,9 +106,9 @@ describe('agents[].permission native-only payload (todo 4)', () => {
     // 判别力自检：若把历史 agents[].permission 投影后，vteam_ 键为 0——证明上面的
     // "零 vteam_" 断言能真正区分两种形态（而非恒真）。
     expect(
-      Object.keys(
-        projectNativePermission(product.permission),
-      ).filter((k) => k.startsWith('vteam_')),
+      Object.keys(projectNativePermission(product.permission)).filter((k) =>
+        k.startsWith('vteam_'),
+      ),
     ).toEqual([]);
   });
 

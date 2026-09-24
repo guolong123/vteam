@@ -13,7 +13,11 @@ import {
   HOOK_STATUS,
   HOOK_WAKE_TEXT_MAX,
 } from './hook.constants';
-import { HookService, parseHookTarget, RegisterHookInput } from './hook.service';
+import {
+  HookService,
+  parseHookTarget,
+  RegisterHookInput,
+} from './hook.service';
 
 describe('hook.constants（dedup/前缀/唤醒词组装）', () => {
   it('fire dedup 形状 hook_fire:hook:<hookId>（todo-3 可回查）', () => {
@@ -96,7 +100,9 @@ describe('HookService（agent-hook 域，todo-11）', () => {
     ...over,
   });
 
-  const timeInput = (over: Partial<RegisterHookInput> = {}): RegisterHookInput => ({
+  const timeInput = (
+    over: Partial<RegisterHookInput> = {},
+  ): RegisterHookInput => ({
     scopeType: 'team',
     scopeId: 'tm_1',
     ownerInstanceId: 'tmm_1',
@@ -147,16 +153,19 @@ describe('HookService（agent-hook 域，todo-11）', () => {
         update: jest.fn(async ({ data }: { data: unknown }) => data),
         updateMany: jest.fn(async () => ({ count: 0 })),
       },
-    trigger: {
-      findUnique: jest.fn().mockResolvedValue(null),
-      findMany: jest.fn().mockResolvedValue([]),
-      create: jest.fn(),
-      delete: jest.fn(),
-      updateMany: jest.fn(async () => ({ count: 0 })),
-    },
+      trigger: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn(),
+        delete: jest.fn(),
+        updateMany: jest.fn(async () => ({ count: 0 })),
+      },
       task: { findUnique: jest.fn() },
       teamMember: { findUnique: jest.fn() },
-      session: { findMany: jest.fn().mockResolvedValue([]), findFirst: jest.fn() },
+      session: {
+        findMany: jest.fn().mockResolvedValue([]),
+        findFirst: jest.fn(),
+      },
       $transaction: jest.fn(async (cb: unknown) =>
         (cb as (tx: unknown) => Promise<unknown>)({
           hook: { create: txHookCreate },
@@ -195,12 +204,15 @@ describe('HookService（agent-hook 域，todo-11）', () => {
   });
 
   describe('registerHook 输入白名单（loud 拒绝）', () => {
-    it.each([['timer'], ['event'], ['']])('未知 kind %p → 抛错不落库', async (kind) => {
-      await expect(svc.registerHook(timeInput({ kind }))).rejects.toThrow(
-        'unknown hook kind',
-      );
-      expect(prisma.$transaction).not.toHaveBeenCalled();
-    });
+    it.each([['timer'], ['event'], ['']])(
+      '未知 kind %p → 抛错不落库',
+      async (kind) => {
+        await expect(svc.registerHook(timeInput({ kind }))).rejects.toThrow(
+          'unknown hook kind',
+        );
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      },
+    );
 
     it('time 缺 dueAt → 抛错', async () => {
       await expect(
@@ -229,9 +241,9 @@ describe('HookService（agent-hook 域，todo-11）', () => {
     });
 
     it('空 wakeText → 抛错', async () => {
-      await expect(svc.registerHook(timeInput({ wakeText: '' }))).rejects.toThrow(
-        'wakeText 必填',
-      );
+      await expect(
+        svc.registerHook(timeInput({ wakeText: '' })),
+      ).rejects.toThrow('wakeText 必填');
     });
 
     it(`wakeText 超 ${HOOK_WAKE_TEXT_MAX} 字 → 截断落库（非拒绝）`, async () => {
@@ -266,12 +278,18 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       expect(txHookCreate).toHaveBeenCalledTimes(1);
       expect(txTriggerCreate).toHaveBeenCalledTimes(1);
 
-      const hookData = txHookCreate.mock.calls[0][0].data as Record<string, unknown>;
+      const hookData = txHookCreate.mock.calls[0][0].data as Record<
+        string,
+        unknown
+      >;
       expect(hookData['id']).toMatch(/^hks_/);
       expect(hookData['status']).toBe(HOOK_STATUS.PENDING);
       expect(hookData['dueAt']).toBe(dueAt);
 
-      const fireData = txTriggerCreate.mock.calls[0][0].data as Record<string, unknown>;
+      const fireData = txTriggerCreate.mock.calls[0][0].data as Record<
+        string,
+        unknown
+      >;
       expect(fireData['id']).toMatch(/^tmr_/);
       expect(fireData['kind']).toBe('hook_fire');
       expect(fireData['dueAt']).toBe(dueAt);
@@ -299,11 +317,17 @@ describe('HookService（agent-hook 域，todo-11）', () => {
         dedupKey: 'hook:team:quiet-1',
       });
 
-      const hookData = txHookCreate.mock.calls[0][0].data as Record<string, unknown>;
+      const hookData = txHookCreate.mock.calls[0][0].data as Record<
+        string,
+        unknown
+      >;
       expect(hookData['kind']).toBe(HOOK_KIND.ALL_IDLE);
       expect(hookData['dueAt']).toBeNull();
       expect(hookData['graceMs']).toBe(HOOK_ALL_IDLE_GRACE_MS_DEFAULT);
-      const fireData = txTriggerCreate.mock.calls[0][0].data as Record<string, unknown>;
+      const fireData = txTriggerCreate.mock.calls[0][0].data as Record<
+        string,
+        unknown
+      >;
       expect(fireData['dueAt']).toBe(expiresAt);
     });
 
@@ -343,11 +367,13 @@ describe('HookService（agent-hook 域，todo-11）', () => {
           targetInstanceId: 'tmm_1',
         },
       });
-      prisma.hook.findUnique.mockImplementation(async ({ where }: { where: Record<string, string> }) => {
-        if (where['dedupKey']) return null;
-        if (where['id'] === 'hks_0000000007') return parent;
-        return null;
-      });
+      prisma.hook.findUnique.mockImplementation(
+        async ({ where }: { where: Record<string, string> }) => {
+          if (where['dedupKey']) return null;
+          if (where['id'] === 'hks_0000000007') return parent;
+          return null;
+        },
+      );
       await svc.registerHook(
         timeInput({
           dedupKey: 'hook:team:child-1',
@@ -360,7 +386,10 @@ describe('HookService（agent-hook 域，todo-11）', () => {
           },
         }),
       );
-      const data = txHookCreate.mock.calls[0][0].data as Record<string, unknown>;
+      const data = txHookCreate.mock.calls[0][0].data as Record<
+        string,
+        unknown
+      >;
       expect(data['parentHookId']).toBe('hks_0000000007');
       // 父链 rootTaskId=t_origin 被继承，而非本次 target 的 t_new
       expect(data['rootTaskId']).toBe('t_origin');
@@ -368,7 +397,10 @@ describe('HookService（agent-hook 域，todo-11）', () => {
 
     it('首 hook 无 parent：rootTaskId 取 target.taskId', async () => {
       await svc.registerHook(timeInput());
-      const data = txHookCreate.mock.calls[0][0].data as Record<string, unknown>;
+      const data = txHookCreate.mock.calls[0][0].data as Record<
+        string,
+        unknown
+      >;
       expect(data['parentHookId']).toBeNull();
       expect(data['rootTaskId']).toBe('t_1');
     });
@@ -389,7 +421,10 @@ describe('HookService（agent-hook 域，todo-11）', () => {
 
       expect(out).toEqual({ done: true });
       expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
-      const call = dispatcher.dispatchAgentMention.mock.calls[0][0] as Record<string, unknown>;
+      const call = dispatcher.dispatchAgentMention.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
       expect(call['kind']).toBe('wake');
       expect(call['taskId']).toBe('t_1');
       expect(call['targetInstanceId']).toBe('tmm_1');
@@ -408,7 +443,9 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       prisma.hook.findUnique.mockResolvedValueOnce(
         hookRow({ status: HOOK_STATUS.CANCELLED }),
       );
-      await expect(svc.handleHookFire(fireCtx('hks_0000000001'))).resolves.toEqual({
+      await expect(
+        svc.handleHookFire(fireCtx('hks_0000000001')),
+      ).resolves.toEqual({
         done: true,
       });
       expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
@@ -418,7 +455,9 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       prisma.hook.findUnique.mockResolvedValue(
         hookRow({ expiresAt: new Date(Date.now() - 1000) }),
       );
-      await expect(svc.handleHookFire(fireCtx('hks_0000000001'))).resolves.toEqual({
+      await expect(
+        svc.handleHookFire(fireCtx('hks_0000000001')),
+      ).resolves.toEqual({
         done: true,
       });
       expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
@@ -433,27 +472,34 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       ['任务删除', { task: null }],
       ['成员删除', { member: null }],
       ['会话重置缺失', { session: null }],
-    ])('stale_state：%s → expired（永不抛，永不静默消失）', async (_label, fix) => {
-      prisma.hook.findUnique.mockResolvedValue(hookRow());
-      prisma.task.findUnique.mockResolvedValue(
-        'task' in fix ? fix.task : { status: 'in_progress', teamId: 'tm_1' },
-      );
-      prisma.teamMember.findUnique.mockResolvedValue(
-        'member' in fix ? fix.member : { id: 'tmm_1', teamId: 'tm_1' },
-      );
-      prisma.session.findFirst.mockResolvedValue(
-        'session' in fix ? fix.session : { id: 's_1', status: 'idle', workerId: null },
-      );
-      await expect(svc.handleHookFire(fireCtx('hks_0000000001'))).resolves.toEqual({
-        done: true,
-      });
-      expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
-      const update = prisma.hook.update.mock.calls[0][0] as {
-        data: Record<string, unknown>;
-      };
-      expect(update.data['status']).toBe(HOOK_STATUS.EXPIRED);
-      expect(update.data['lastError']).toBeTruthy();
-    });
+    ])(
+      'stale_state：%s → expired（永不抛，永不静默消失）',
+      async (_label, fix) => {
+        prisma.hook.findUnique.mockResolvedValue(hookRow());
+        prisma.task.findUnique.mockResolvedValue(
+          'task' in fix ? fix.task : { status: 'in_progress', teamId: 'tm_1' },
+        );
+        prisma.teamMember.findUnique.mockResolvedValue(
+          'member' in fix ? fix.member : { id: 'tmm_1', teamId: 'tm_1' },
+        );
+        prisma.session.findFirst.mockResolvedValue(
+          'session' in fix
+            ? fix.session
+            : { id: 's_1', status: 'idle', workerId: null },
+        );
+        await expect(
+          svc.handleHookFire(fireCtx('hks_0000000001')),
+        ).resolves.toEqual({
+          done: true,
+        });
+        expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+        const update = prisma.hook.update.mock.calls[0][0] as {
+          data: Record<string, unknown>;
+        };
+        expect(update.data['status']).toBe(HOOK_STATUS.EXPIRED);
+        expect(update.data['lastError']).toBeTruthy();
+      },
+    );
 
     it('busy（首字等待中）→ 否决：不分派 + skipReason 落库 + 重排（非 expired）', async () => {
       prisma.hook.findUnique.mockResolvedValue(hookRow());
@@ -465,11 +511,13 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
       expect(out).toHaveProperty('rescheduleAt');
       const skipWrite = prisma.hook.update.mock.calls.find(
-        ([args]: [{ data: Record<string, unknown> }]) => 'skipReason' in args.data,
+        ([args]: [{ data: Record<string, unknown> }]) =>
+          'skipReason' in args.data,
       );
       expect(skipWrite).toBeTruthy();
       expect(
-        (skipWrite as unknown as [{ data: { skipReason: string } }])[0].data.skipReason,
+        (skipWrite as unknown as [{ data: { skipReason: string } }])[0].data
+          .skipReason,
       ).toMatch(/veto/);
     });
 
@@ -494,7 +542,9 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       prisma.hook.findUnique.mockResolvedValue(
         hookRow({ kind: HOOK_KIND.ALL_IDLE, dueAt: null }),
       );
-      await expect(svc.handleHookFire(fireCtx('hks_0000000001'))).resolves.toEqual({
+      await expect(
+        svc.handleHookFire(fireCtx('hks_0000000001')),
+      ).resolves.toEqual({
         done: true,
       });
       expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
@@ -527,7 +577,10 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       });
 
     it('scope 静默 + 目标完好 + 空闲 → 唤醒且同 tick 至多 ONE 个', async () => {
-      const second = quietHook({ id: 'hks_0000000002', dedupKey: 'hook:team:q2' });
+      const second = quietHook({
+        id: 'hks_0000000002',
+        dedupKey: 'hook:team:q2',
+      });
       prisma.hook.findMany.mockResolvedValue([quietHook(), second]);
       // scope 零 running：最近活动 1h 前，grace=1s → 静默
       prisma.session.findMany.mockResolvedValue([
@@ -539,7 +592,10 @@ describe('HookService（agent-hook 域，todo-11）', () => {
 
       expect(out).toEqual({ done: true });
       expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
-      const call = dispatcher.dispatchAgentMention.mock.calls[0][0] as Record<string, unknown>;
+      const call = dispatcher.dispatchAgentMention.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
       expect(call['kind']).toBe('wake');
       expect(call['text']).toMatch(/^\[hook:all_idle hks_0000000001\] /);
       // 首个落 fired，第二个留 pending（排队等下轮）
@@ -584,7 +640,10 @@ describe('HookService（agent-hook 域，todo-11）', () => {
     });
 
     it('否决：首个 mid-turn（activeExecutions 命中）→ skipReason 落库并继续，第二个被唤醒', async () => {
-      const second = quietHook({ id: 'hks_0000000002', dedupKey: 'hook:team:q2' });
+      const second = quietHook({
+        id: 'hks_0000000002',
+        dedupKey: 'hook:team:q2',
+      });
       prisma.hook.findMany.mockResolvedValue([quietHook(), second]);
       prisma.session.findMany.mockResolvedValue([
         { status: 'idle', lastActivityAt: new Date(Date.now() - 3600_000) },
@@ -604,10 +663,14 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       await svc.handleHookPoll();
 
       expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
-      const call = dispatcher.dispatchAgentMention.mock.calls[0][0] as Record<string, unknown>;
+      const call = dispatcher.dispatchAgentMention.mock.calls[0][0] as Record<
+        string,
+        unknown
+      >;
       expect(call['text']).toMatch(/hks_0000000002/);
       const skipWrite = prisma.hook.update.mock.calls.find(
-        ([args]: [{ data: Record<string, unknown> }]) => 'skipReason' in args.data,
+        ([args]: [{ data: Record<string, unknown> }]) =>
+          'skipReason' in args.data,
       );
       expect(skipWrite).toBeTruthy();
       expect(
@@ -616,16 +679,29 @@ describe('HookService（agent-hook 域，todo-11）', () => {
     });
 
     it('目标失效（任务归档）→ expired 并继续扫下一个', async () => {
-      const second = quietHook({ id: 'hks_0000000002', dedupKey: 'hook:team:q2' });
+      const second = quietHook({
+        id: 'hks_0000000002',
+        dedupKey: 'hook:team:q2',
+      });
       prisma.hook.findMany.mockResolvedValue([quietHook(), second]);
       prisma.session.findMany.mockResolvedValue([]);
       prisma.task.findUnique.mockResolvedValueOnce({
         status: 'archived',
         teamId: 'tm_1',
       });
-      prisma.task.findUnique.mockResolvedValue({ status: 'in_progress', teamId: 'tm_1' });
-      prisma.teamMember.findUnique.mockResolvedValue({ id: 'tmm_1', teamId: 'tm_1' });
-      prisma.session.findFirst.mockResolvedValue({ id: 's_2', status: 'idle', workerId: null });
+      prisma.task.findUnique.mockResolvedValue({
+        status: 'in_progress',
+        teamId: 'tm_1',
+      });
+      prisma.teamMember.findUnique.mockResolvedValue({
+        id: 'tmm_1',
+        teamId: 'tm_1',
+      });
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_2',
+        status: 'idle',
+        workerId: null,
+      });
 
       await svc.handleHookPoll();
 
@@ -687,7 +763,9 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       prisma.hook.update.mockResolvedValueOnce(hookRow());
       mockTargetOk();
 
-      await expect(svc.handleHookFire(fireCtx('hks_0000000001'))).resolves.toEqual({
+      await expect(
+        svc.handleHookFire(fireCtx('hks_0000000001')),
+      ).resolves.toEqual({
         done: true,
       });
       expect(realtime.emit).toHaveBeenCalledWith(
@@ -713,7 +791,8 @@ describe('HookService（agent-hook 域，todo-11）', () => {
 
       expect(out).toHaveProperty('rescheduleAt');
       const skipWrite = prisma.hook.update.mock.calls.find(
-        ([args]: [{ data: Record<string, unknown> }]) => 'skipReason' in args.data,
+        ([args]: [{ data: Record<string, unknown> }]) =>
+          'skipReason' in args.data,
       );
       expect(skipWrite).toBeTruthy();
       expect(realtime.emit).toHaveBeenCalledWith(
@@ -738,7 +817,8 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       await svc.handleHookFire(fireCtx('hks_0000000001'));
       expect(realtime.emit).toHaveBeenCalledTimes(1);
       const skipWrites = prisma.hook.update.mock.calls.filter(
-        ([args]: [{ data: Record<string, unknown> }]) => 'skipReason' in args.data,
+        ([args]: [{ data: Record<string, unknown> }]) =>
+          'skipReason' in args.data,
       );
       expect(skipWrites).toHaveLength(2);
     });
@@ -748,7 +828,9 @@ describe('HookService（agent-hook 域，todo-11）', () => {
         hookRow({ expiresAt: new Date(Date.now() - 1000) }),
       );
 
-      await expect(svc.handleHookFire(fireCtx('hks_0000000001'))).resolves.toEqual({
+      await expect(
+        svc.handleHookFire(fireCtx('hks_0000000001')),
+      ).resolves.toEqual({
         done: true,
       });
       expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
@@ -770,10 +852,19 @@ describe('HookService（agent-hook 域，todo-11）', () => {
     it('目标非法（任务删除）→ trigger.expired + skipReason 落库', async () => {
       prisma.hook.findUnique.mockResolvedValue(hookRow());
       prisma.task.findUnique.mockResolvedValue(null);
-      prisma.teamMember.findUnique.mockResolvedValue({ id: 'tmm_1', teamId: 'tm_1' });
-      prisma.session.findFirst.mockResolvedValue({ id: 's_1', status: 'idle', workerId: null });
+      prisma.teamMember.findUnique.mockResolvedValue({
+        id: 'tmm_1',
+        teamId: 'tm_1',
+      });
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_1',
+        status: 'idle',
+        workerId: null,
+      });
 
-      await expect(svc.handleHookFire(fireCtx('hks_0000000001'))).resolves.toEqual({
+      await expect(
+        svc.handleHookFire(fireCtx('hks_0000000001')),
+      ).resolves.toEqual({
         done: true,
       });
       const settled = prisma.hook.update.mock.calls[0][0] as {
@@ -792,7 +883,9 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       prisma.hook.findUnique.mockResolvedValue(
         hookRow({ status: HOOK_STATUS.FIRED }),
       );
-      await expect(svc.handleHookFire(fireCtx('hks_0000000001'))).resolves.toEqual({
+      await expect(
+        svc.handleHookFire(fireCtx('hks_0000000001')),
+      ).resolves.toEqual({
         done: true,
       });
       expect(realtime.emit).not.toHaveBeenCalled();
@@ -816,7 +909,9 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       mockTargetOk();
       realtime.emit.mockRejectedValueOnce(new Error('db down'));
 
-      await expect(svc.handleHookFire(fireCtx('hks_0000000001'))).resolves.toEqual({
+      await expect(
+        svc.handleHookFire(fireCtx('hks_0000000001')),
+      ).resolves.toEqual({
         done: true,
       });
       expect(prisma.hook.update).toHaveBeenCalledWith({
@@ -858,9 +953,7 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       const kinds = triggers.registerHandler.mock.calls.map(
         ([kind]: [string]) => kind,
       );
-      expect(kinds).toEqual(
-        expect.arrayContaining(['hook_fire', 'hook_poll']),
-      );
+      expect(kinds).toEqual(expect.arrayContaining(['hook_fire', 'hook_poll']));
       expect(triggers.schedule).toHaveBeenCalledWith(
         'hook_poll',
         expect.any(Date),
@@ -937,7 +1030,11 @@ describe('HookService（agent-hook 域，todo-11）', () => {
           ownerInstanceId: 'tmm_1',
           kind: HOOK_KIND.ALL_IDLE,
           wakeText: 'stale hook',
-          target: { teamId: 'tm_1', channelId: 'c_1', targetInstanceId: 'tmm_1' },
+          target: {
+            teamId: 'tm_1',
+            channelId: 'c_1',
+            targetInstanceId: 'tmm_1',
+          },
           expiresAt: new Date(Date.now() - 1000),
           dedupKey: 'hook:team:stale-1',
         }),
@@ -966,7 +1063,10 @@ describe('HookService（agent-hook 域，todo-11）', () => {
           dedupKey: 'hook:team:ttl-ok',
         }),
       );
-      const data = txHookCreate.mock.calls[0][0].data as Record<string, unknown>;
+      const data = txHookCreate.mock.calls[0][0].data as Record<
+        string,
+        unknown
+      >;
       expect(data['busyRetries']).toBe(0);
     });
 
@@ -1124,7 +1224,10 @@ describe('HookService（agent-hook 域，todo-11）', () => {
           wakeText: 'brand new reminder for the new task only',
         }),
       );
-      const data = txHookCreate.mock.calls[0][0].data as Record<string, unknown>;
+      const data = txHookCreate.mock.calls[0][0].data as Record<
+        string,
+        unknown
+      >;
       expect(data['rootTaskId']).toBe('t_new');
     });
 
@@ -1245,7 +1348,8 @@ describe('HookService（agent-hook 域，todo-11）', () => {
 
       expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
       const skipWrite = prisma.hook.update.mock.calls.find(
-        ([args]: [{ data: Record<string, unknown> }]) => 'skipReason' in args.data,
+        ([args]: [{ data: Record<string, unknown> }]) =>
+          'skipReason' in args.data,
       );
       expect(skipWrite).toBeTruthy();
       const last = prisma.hook.update.mock.calls.at(-1)[0] as {
@@ -1271,13 +1375,15 @@ describe('HookService（agent-hook 域，todo-11）', () => {
       await svc.handleHookFire(fireCtx('hks_0000000001'));
 
       const targetWrite = prisma.hook.update.mock.calls.find(
-        ([args]: [{ data: Record<string, unknown> }]) =>
-          'target' in args.data,
+        ([args]: [{ data: Record<string, unknown> }]) => 'target' in args.data,
       );
       expect(targetWrite).toBeTruthy();
       expect(
-        (targetWrite as unknown as [{ data: { target: Record<string, unknown> } }])[0]
-          .data.target,
+        (
+          targetWrite as unknown as [
+            { data: { target: Record<string, unknown> } },
+          ]
+        )[0].data.target,
       ).toEqual({
         taskId: 't_1',
         teamId: 'tm_1',
@@ -1297,8 +1403,7 @@ describe('HookService（agent-hook 域，todo-11）', () => {
 
       expect(out).toEqual({ done: true });
       const targetWrite = prisma.hook.update.mock.calls.find(
-        ([args]: [{ data: Record<string, unknown> }]) =>
-          'target' in args.data,
+        ([args]: [{ data: Record<string, unknown> }]) => 'target' in args.data,
       );
       expect(targetWrite).toBeUndefined();
       expect(prisma.hook.update).toHaveBeenCalledWith({
@@ -1323,14 +1428,15 @@ describe('HookService（agent-hook 域，todo-11）', () => {
         targetInstanceId: 'tmm_1',
         wakeSessionId: 's_1',
       });
-      expect(parseHookTarget({ channelId: 'c_1', targetInstanceId: 't' }))
-        .toEqual({
-          taskId: null,
-          teamId: null,
-          channelId: 'c_1',
-          targetInstanceId: 't',
-          wakeSessionId: null,
-        });
+      expect(
+        parseHookTarget({ channelId: 'c_1', targetInstanceId: 't' }),
+      ).toEqual({
+        taskId: null,
+        teamId: null,
+        channelId: 'c_1',
+        targetInstanceId: 't',
+        wakeSessionId: null,
+      });
       expect(
         parseHookTarget({
           channelId: 'c_1',
@@ -1366,11 +1472,17 @@ describe('HookService（agent-hook 域，todo-11）', () => {
           status: HOOK_STATUS.FIRED,
           lastError: null,
         },
-        data: { lastError: 'Rate limit exceeded', skipReason: 'Rate limit exceeded' },
+        data: {
+          lastError: 'Rate limit exceeded',
+          skipReason: 'Rate limit exceeded',
+        },
       });
       expect(prisma.trigger.updateMany).toHaveBeenCalledWith({
         where: { dedupKey: buildHookFireDedupKey('hks_0000000001') },
-        data: { lastError: 'Rate limit exceeded', skipReason: 'Rate limit exceeded' },
+        data: {
+          lastError: 'Rate limit exceeded',
+          skipReason: 'Rate limit exceeded',
+        },
       });
       expect(realtime.emit).toHaveBeenCalledWith(
         'trigger.wake.failed',

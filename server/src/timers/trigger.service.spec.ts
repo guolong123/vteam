@@ -393,9 +393,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       await svc.onModuleInit();
 
       expect(spy).not.toHaveBeenCalled();
-      expect(
-        (svc as unknown as { scanTimer: unknown }).scanTimer,
-      ).toBeNull();
+      expect((svc as unknown as { scanTimer: unknown }).scanTimer).toBeNull();
       svc.onModuleDestroy();
     });
 
@@ -410,7 +408,12 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
 
       prisma.timer.findUnique.mockResolvedValue(null);
       prisma.timer.create.mockImplementation(async ({ data }: any) => data);
-      await svc.schedule('receipt_nudge', FUTURE, { hello: 'world' }, 'test_kind:scope:1');
+      await svc.schedule(
+        'receipt_nudge',
+        FUTURE,
+        { hello: 'world' },
+        'test_kind:scope:1',
+      );
 
       expect(spy).toHaveBeenCalledTimes(1);
       svc.onModuleDestroy();

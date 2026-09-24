@@ -20,10 +20,7 @@ import { SkillsService } from '../skills/skills.service';
 import { GitReposService } from '../git-repos/git-repos.service';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
 import { RECEIPT_NUDGE_KIND } from '../chat/receipt-nudge.handler';
-import {
-  createLedger,
-  embedLedger,
-} from '../issues/review-round-ledger';
+import { createLedger, embedLedger } from '../issues/review-round-ledger';
 
 describe('PlatformMcpService notifyAgent 回执自动催办排期（receipt-nudge-consumer）', () => {
   let service: PlatformMcpService;

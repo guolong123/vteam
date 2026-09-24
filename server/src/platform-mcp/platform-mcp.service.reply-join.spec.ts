@@ -139,8 +139,7 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
 
     prisma.task.findUnique.mockImplementation(
       (args: { where: { id?: string } }) => {
-        if (args.where.id === taskId)
-          return Promise.resolve({ teamId });
+        if (args.where.id === taskId) return Promise.resolve({ teamId });
         return Promise.resolve(null);
       },
     );
@@ -248,7 +247,12 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     jest.useFakeTimers();
     jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
     jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(0);
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
@@ -272,7 +276,12 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
   });
 
   it('question: 正常执行派发 + 立即唤醒主 Agent，不计入 fan-out 计数', async () => {
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
@@ -294,7 +303,12 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
   });
 
   it('help: 正常执行派发 + 立即唤醒主 Agent，不计入 fan-out 计数', async () => {
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
@@ -317,7 +331,12 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     jest.useFakeTimers();
     jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
     jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(0);
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
@@ -338,10 +357,27 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     jest.useFakeTimers();
     jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
     jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(0);
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
-    const r1 = await service.notifyAgent(ctx, { ...baseArgs, selfInstanceId: sub1, targetInstanceId: mainInstanceId, type: 'answer', stage: 'end' });
-    const r2 = await service.notifyAgent(ctx, { ...baseArgs, selfInstanceId: sub2, targetInstanceId: mainInstanceId, type: 'answer', stage: 'end' });
+    const r1 = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      selfInstanceId: sub1,
+      targetInstanceId: mainInstanceId,
+      type: 'answer',
+      stage: 'end',
+    });
+    const r2 = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      selfInstanceId: sub2,
+      targetInstanceId: mainInstanceId,
+      type: 'answer',
+      stage: 'end',
+    });
     expect(r1.triggered).toBe(false);
     expect(r1.reason).toBe('join-pending');
     expect(r2.triggered).toBe(false);
@@ -357,10 +393,23 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     jest.useFakeTimers();
     jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(0);
     jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(0);
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
-    const r1 = await service.notifyAgent(ctx, { ...baseArgs, type: 'answer', stage: 'end' });
-    const r2 = await service.notifyAgent(ctx, { ...baseArgs, type: 'answer', stage: 'end' });
+    const r1 = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      type: 'answer',
+      stage: 'end',
+    });
+    const r2 = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      type: 'answer',
+      stage: 'end',
+    });
     expect(r1.reason).toBe('join-pending');
     expect(r2.reason).toBe('join-pending');
 
@@ -392,9 +441,18 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
         });
       },
     );
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
-    const busyResult = await service.notifyAgent(ctx, { ...baseArgs, type: 'answer', stage: 'end' });
+    const busyResult = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      type: 'answer',
+      stage: 'end',
+    });
     expect(busyResult.triggered).toBe(false);
     expect(busyResult.reason).toBe('join-pending');
 
@@ -406,9 +464,18 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     jest.useFakeTimers();
     jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
     jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(1);
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
-    const pendingResult = await service.notifyAgent(ctx, { ...baseArgs, type: 'answer', stage: 'end' });
+    const pendingResult = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      type: 'answer',
+      stage: 'end',
+    });
     expect(pendingResult.triggered).toBe(false);
     expect(pendingResult.reason).toBe('join-pending');
 
@@ -420,7 +487,12 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     jest.useFakeTimers();
     jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
     jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(1);
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
@@ -440,7 +512,12 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     jest.useFakeTimers();
     jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
     jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(0);
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
@@ -460,7 +537,12 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     jest.useFakeTimers();
     jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
     jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(0);
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
     await service.notifyAgent(ctx, {
       ...baseArgs,
@@ -482,7 +564,12 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
   it('regression: MAIN 自己上报 answer/end → 跳过矩阵（无 ack、无唤醒），但主→子派发照常', async () => {
     jest.useFakeTimers();
     const ackSpy = jest.spyOn(receipts, 'ackPendingFor');
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,
@@ -553,8 +640,14 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     expect(result.reason).not.toBe('no-active-task');
   });
 
-  it('fail-open: 团队无主成员 → join 抑制不生效，按普通派发并告警', async () => {    prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
-    const wakeSpy = jest.spyOn(service as unknown as { wakeMainAgent: jest.Mock }, 'wakeMainAgent').mockResolvedValue(undefined);
+  it('fail-open: 团队无主成员 → join 抑制不生效，按普通派发并告警', async () => {
+    prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
 
     const result = await service.notifyAgent(ctx, {
       ...baseArgs,

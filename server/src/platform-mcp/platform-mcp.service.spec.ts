@@ -2040,6 +2040,11 @@ describe('PlatformMcpService', () => {
       );
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: senderInstanceId,
+        currentTaskId: taskId,
+      });
+      prisma.task.findUnique.mockResolvedValue({
+        teamId: 'tm_1',
+        status: 'in_progress',
       });
     };
 
@@ -2121,8 +2126,11 @@ describe('PlatformMcpService', () => {
         selfInstanceId: senderInstanceId,
       });
 
-      // 团队路径跳过任务查表（零任务团队无 task 可查）
-      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      // 团队路径不做任务维度归属查表；唯一 task 查表是主 agent 门禁的开门状态探针。
+      expect(prisma.task.findUnique).toHaveBeenCalledWith({
+        where: { id: taskId },
+        select: { status: true },
+      });
       expect(prisma.message.create).toHaveBeenCalled();
       expect(realtime.broadcast).toHaveBeenCalled();
       expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledWith({
@@ -6589,7 +6597,9 @@ describe('PlatformMcpService', () => {
 
     it('notify_agent self-notify → 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（不落库不触发）', async () => {
       allowWorker();
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId } as never);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: channelId,
+      } as never);
       prisma.teamMember.findFirst.mockResolvedValue({
         agentId: 'a_sender',
         alias: null,
@@ -6612,7 +6622,9 @@ describe('PlatformMcpService', () => {
 
     it('notify_agent 非主→非主 → 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（不落库不广播不触发）', async () => {
       allowWorker();
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: channelId } as never);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: channelId,
+      } as never);
       prisma.teamMember.findFirst.mockResolvedValue({
         agentId: 'a_tester',
         alias: null,

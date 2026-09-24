@@ -204,7 +204,10 @@ function throwConfigInvalid(message: string): never {
  * edit/read glob 映射逐键校验：键须为非空字符串且 ≤256 字符（含 symbol 键拒绝），
  * 值为三态；规则条数 ≤64。
  */
-function assertPermissionRuleMap(map: Record<string, unknown>, label: string): void {
+function assertPermissionRuleMap(
+  map: Record<string, unknown>,
+  label: string,
+): void {
   const keys = Reflect.ownKeys(map);
   if (keys.length > MAX_PERMISSION_RULES) {
     throwConfigInvalid(`${label} 规则条数超过 ${MAX_PERMISSION_RULES}`);

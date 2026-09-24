@@ -96,11 +96,14 @@ describe('agent-policies db-backed builtins (Todo 3)', () => {
         ]),
       };
       const policies = await serviceWith(executionPolicy).buildAgentPolicies();
-      expect(policies.guard.roles['vteam-product'].permission.bash).toBe('deny');
+      expect(policies.guard.roles['vteam-product'].permission.bash).toBe(
+        'deny',
+      );
       expect(
-        (policies.agents.find((a) => a.name === 'vteam-product')?.permission as
-          | Record<string, unknown>
-          | undefined)?.bash,
+        (
+          policies.agents.find((a) => a.name === 'vteam-product')
+            ?.permission as Record<string, unknown> | undefined
+        )?.bash,
       ).toBe('deny');
     });
   });
@@ -114,9 +117,11 @@ describe('agent-policies db-backed builtins (Todo 3)', () => {
 
     it('绑定行存在但 config 残缺（缺 permission）→ guard permission 仍完整且无 vteam_ 泄漏到 agents[]', async () => {
       const executionPolicy = {
-        findMany: jest.fn().mockResolvedValue([
-          builtinPolicyRow('vteam-tester', { correction: {} }),
-        ]),
+        findMany: jest
+          .fn()
+          .mockResolvedValue([
+            builtinPolicyRow('vteam-tester', { correction: {} }),
+          ]),
       };
       const policies = await serviceWith(executionPolicy).buildAgentPolicies();
       const role = policies.guard.roles['vteam-tester'];

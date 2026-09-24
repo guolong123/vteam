@@ -87,7 +87,10 @@ export class MessageReceiptsService implements OnModuleInit {
   }
 
   /** 触发并行执行 settled hook（fire-and-forget，never throw into caller）。 */
-  private fireSettledHook(row: { fromInstanceId: string; teamId: string }): void {
+  private fireSettledHook(row: {
+    fromInstanceId: string;
+    teamId: string;
+  }): void {
     if (!this.settledHook) return;
     void Promise.resolve(this.settledHook(row)).catch((err: unknown) => {
       this.logger.warn(

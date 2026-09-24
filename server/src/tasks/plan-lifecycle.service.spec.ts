@@ -469,7 +469,10 @@ describe('PlanLifecycleService', () => {
         managed: true,
       });
 
-      expect(res).toMatchObject({ idempotent: false, plan: { status: 'executing' } });
+      expect(res).toMatchObject({
+        idempotent: false,
+        plan: { status: 'executing' },
+      });
     });
 
     it('confirmPlan 未传 managed：draft 仍被人工签署门拦下（409，不写库）', async () => {
@@ -903,5 +906,4 @@ describe('PlanLifecycleService', () => {
       );
     });
   });
-
 });

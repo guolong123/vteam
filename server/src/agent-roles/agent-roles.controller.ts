@@ -55,7 +55,9 @@ export class AgentRolesController {
   @Get(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('agents.view')
-  @ApiOperation({ summary: 'AgentRole 详情（不存在 → 404 AGENT_ROLE_NOT_FOUND）' })
+  @ApiOperation({
+    summary: 'AgentRole 详情（不存在 → 404 AGENT_ROLE_NOT_FOUND）',
+  })
   findOne(@Param('id') id: string) {
     return this.agentRolesService.findOne(id);
   }

@@ -102,7 +102,10 @@ describe('PlanStepsService（plan_tasks 执行步骤）', () => {
         stepRow({ seq: 4, status: 'pending', content: { text: 'AC1' } }),
       );
 
-      const res = await service.writeStep(TASK, { title: '汇总回执', content: 'AC1' });
+      const res = await service.writeStep(TASK, {
+        title: '汇总回执',
+        content: 'AC1',
+      });
 
       expect(planLifecycle.autoEnsureRow).toHaveBeenCalledWith(TASK);
       const arg = prisma.planTask.upsert.mock.calls[0][0];
@@ -123,7 +126,11 @@ describe('PlanStepsService（plan_tasks 执行步骤）', () => {
 
     it('指定 seq → 同键 upsert（幂等覆盖），status/assignee 透传', async () => {
       prisma.planTask.upsert.mockResolvedValue(
-        stepRow({ seq: 2, status: 'in_progress', assigneeInstanceId: 'tmm_dev' }),
+        stepRow({
+          seq: 2,
+          status: 'in_progress',
+          assigneeInstanceId: 'tmm_dev',
+        }),
       );
 
       const res = await service.writeStep(TASK, {
@@ -153,10 +160,10 @@ describe('PlanStepsService（plan_tasks 执行步骤）', () => {
   describe('markDone（MCP done）', () => {
     it('命中 → status 置 done 并返回 view', async () => {
       prisma.plan.findUnique.mockResolvedValue({ id: 'pl_0000000001' });
-      prisma.planTask.findUnique.mockResolvedValue(stepRow({ status: 'pending' }));
-      prisma.planTask.update.mockResolvedValue(
-        stepRow({ status: 'done' }),
+      prisma.planTask.findUnique.mockResolvedValue(
+        stepRow({ status: 'pending' }),
       );
+      prisma.planTask.update.mockResolvedValue(stepRow({ status: 'done' }));
 
       const res = await service.markDone(TASK, 1);
 
@@ -178,9 +185,9 @@ describe('PlanStepsService（plan_tasks 执行步骤）', () => {
       prisma.planTask.findUnique.mockResolvedValue(null);
       const noStep = await service.markDone(TASK, 99).catch((e) => e);
       expect(noStep).toBeInstanceOf(NotFoundException);
-      expect(
-        (noStep as { response?: { code?: string } }).response?.code,
-      ).toBe('PLATFORM_MCP_PLAN_STEP_NOT_FOUND');
+      expect((noStep as { response?: { code?: string } }).response?.code).toBe(
+        'PLATFORM_MCP_PLAN_STEP_NOT_FOUND',
+      );
       expect(prisma.planTask.update).not.toHaveBeenCalled();
     });
   });

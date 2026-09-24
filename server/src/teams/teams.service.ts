@@ -643,7 +643,12 @@ export class TeamsService implements OnModuleInit {
         dto.alias?.trim() || this.defaultAlias(agent, seq, binding.role);
       const workDir =
         dto.workDir?.trim() ||
-        this.defaultWorkDir(agent, seq, binding.role, !!binding.opencodeAgentName);
+        this.defaultWorkDir(
+          agent,
+          seq,
+          binding.role,
+          !!binding.opencodeAgentName,
+        );
       const created = await tx.teamMember.create({
         data: {
           id: await this.idGen.nextId(ID_PREFIX.teamMember),
@@ -908,11 +913,14 @@ export class TeamsService implements OnModuleInit {
       const name = dto.opencodeAgentName?.trim() || null;
       data.opencodeAgentName = name;
       if (name) {
-        await this.warnIfOpencodeAgentUnknown(name, data.agentId ?? member.agentId);
+        await this.warnIfOpencodeAgentUnknown(
+          name,
+          data.agentId ?? member.agentId,
+        );
       }
     } else if (
       prefilledOpencodeAgentName &&
-      !(member.opencodeAgentName?.trim())
+      !member.opencodeAgentName?.trim()
     ) {
       // 规则 5 预填（prefill ≠ override）：仅当本次未显式给 opencodeAgentName 且成员当前值为空
       // 时写入；已持久化的成员值绝不被角色默认值覆盖。
@@ -1455,7 +1463,8 @@ export class TeamsService implements OnModuleInit {
     tx: any,
     teamId: string,
     agentId: string,
-  ): Promise<number> {    // row-level lock: SELECT MAX(seq) FOR UPDATE inside transaction
+  ): Promise<number> {
+    // row-level lock: SELECT MAX(seq) FOR UPDATE inside transaction
     const rows: Array<{ maxSeq: number | null }> = await tx.$queryRawUnsafe(
       'SELECT MAX(seq) as maxSeq FROM team_members WHERE team_id = ? AND agent_id = ? FOR UPDATE',
       teamId,
@@ -1508,7 +1517,7 @@ export class TeamsService implements OnModuleInit {
     externalBound = false,
   ): string {
     const base = sanitizeWorkDirName(
-      externalBound && role ? role.name : agent.name ?? agent.id ?? 'agent',
+      externalBound && role ? role.name : (agent.name ?? agent.id ?? 'agent'),
     );
     return seq > 1
       ? `/data/vteam-worker/${base}-${seq}`

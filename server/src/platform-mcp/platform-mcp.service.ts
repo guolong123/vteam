@@ -1641,7 +1641,8 @@ export class PlatformMcpService implements OnModuleInit {
       }
     }
     if (args.issueId) {
-      const issueGate = await this.checkIssueDispatchAllowed(        args.issueId,
+      const issueGate = await this.checkIssueDispatchAllowed(
+        args.issueId,
         args.targetInstanceId,
       );
       if (!issueGate.allowed && !forceReason) {
@@ -2191,8 +2192,7 @@ export class PlatformMcpService implements OnModuleInit {
       select: { currentTaskId: true },
     });
     const currentTaskId =
-      (team as { currentTaskId?: string | null } | null)?.currentTaskId ??
-      null;
+      (team as { currentTaskId?: string | null } | null)?.currentTaskId ?? null;
     if (!currentTaskId) return false;
     const taskRow = await this.prisma.task.findUnique({
       where: { id: currentTaskId },
@@ -2201,7 +2201,8 @@ export class PlatformMcpService implements OnModuleInit {
     return (taskRow as { status?: string } | null)?.status === 'in_progress';
   }
 
-  private async mainMemberOfTeam(teamId: string): Promise<string | null> {    const team = await this.prisma.team.findUnique({
+  private async mainMemberOfTeam(teamId: string): Promise<string | null> {
+    const team = await this.prisma.team.findUnique({
       where: { id: teamId },
       select: { mainAgentMemberId: true },
     });
@@ -3916,7 +3917,9 @@ export class PlatformMcpService implements OnModuleInit {
             defaultModelId: true,
           },
         },
-        role: { select: { id: true, key: true, name: true, capabilities: true } },
+        role: {
+          select: { id: true, key: true, name: true, capabilities: true },
+        },
       },
     });
     if (!member || (profileTeamId && member.teamId !== profileTeamId)) {
@@ -4287,12 +4290,17 @@ export class PlatformMcpService implements OnModuleInit {
     }
 
     if (args.action === 'list') {
-      return { action: 'list', steps: await this.planSteps.listSteps(args.taskId) };
+      return {
+        action: 'list',
+        steps: await this.planSteps.listSteps(args.taskId),
+      };
     }
 
     if (args.action === 'done') {
       if (typeof args.seq !== 'number') {
-        throw new BadRequestException('action=done 必须提供 seq（按 planId+seq 定位步骤）');
+        throw new BadRequestException(
+          'action=done 必须提供 seq（按 planId+seq 定位步骤）',
+        );
       }
       const step = await this.planSteps.markDone(args.taskId, args.seq);
       this.logger.log(
@@ -6847,7 +6855,9 @@ export class PlatformMcpService implements OnModuleInit {
       } catch (err) {
         lastError = err;
         const status =
-          err instanceof WorkerUnavailableException ? err.httpStatus : undefined;
+          err instanceof WorkerUnavailableException
+            ? err.httpStatus
+            : undefined;
         if (status !== 404) {
           throw err;
         }

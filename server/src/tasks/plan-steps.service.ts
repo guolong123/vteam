@@ -46,11 +46,7 @@ export interface PlanStepsResult {
 }
 
 export type PlanStepStatus =
-  | 'pending'
-  | 'in_progress'
-  | 'done'
-  | 'blocked'
-  | 'skipped';
+  'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped';
 
 @Injectable()
 export class PlanStepsService implements OnModuleInit {

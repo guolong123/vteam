@@ -39,12 +39,16 @@ const ORDER = [
 /** 拆分前出厂正文的 SHA2(prompt, 256)（迁移写入时从存量库录制；见迁移头）。 */
 const PRESPLIT_SHA: Record<string, string> = {
   a_product: 'd29275d5715fb981a19908599fd76472d6465d7738f0151811b6c239e4f550f1',
-  a_project_manager: '1d4a8929a53824e7cddbf2b2be8435c5f84a48adcda8fdcaa2e01f358942b4cc',
-  a_architect: 'b43f463cdfe9021c6fcf2f344a0bea6ed9e804a51f83e2b4e7694a83a4fb45b0',
-  a_developer: '95af379744e72d75cbe8726cfd6e8ff45f48f3b0e41503c2222e5da40c8fb1ad',
+  a_project_manager:
+    '1d4a8929a53824e7cddbf2b2be8435c5f84a48adcda8fdcaa2e01f358942b4cc',
+  a_architect:
+    'b43f463cdfe9021c6fcf2f344a0bea6ed9e804a51f83e2b4e7694a83a4fb45b0',
+  a_developer:
+    '95af379744e72d75cbe8726cfd6e8ff45f48f3b0e41503c2222e5da40c8fb1ad',
   a_tester: '434d7954182eb13256b19c9324739d986cc6ff9cd375d75b2a9b54853d927181',
   a_plan: '755c79ecbe833e2d9a1d238638daee24f89f46ee85397dc4c57299fe5c1cd7c2',
-  a_librarian: '22bd899f8264cf32c655ab6a2b72690a23d63e7d8637992c6e1df3dea1d8e71a',
+  a_librarian:
+    '22bd899f8264cf32c655ab6a2b72690a23d63e7d8637992c6e1df3dea1d8e71a',
 };
 
 /** 拆分后正文绝不含的四个结构标记（guard (b) 用；也是「行已升级」的判据）。 */
@@ -147,7 +151,9 @@ describe('agents.prompt 回填迁移契约（agent-role-entity todo 9）', () =>
   });
 
   it('SET 目标仅 prompt 与 updated_at（不触碰能力/权限字段）', () => {
-    const setAssignments = [...sql.matchAll(/UPDATE `agents` SET ([\s\S]*?)WHERE/g)];
+    const setAssignments = [
+      ...sql.matchAll(/UPDATE `agents` SET ([\s\S]*?)WHERE/g),
+    ];
     expect(setAssignments).toHaveLength(7);
     for (const m of setAssignments) {
       const targets = [...m[1].matchAll(/`([a-z_]+)`\s*=/g)].map((x) => x[1]);

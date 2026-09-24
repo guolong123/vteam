@@ -111,8 +111,7 @@ describe('unified agent policy fallback (Todo 5)', () => {
     const agents = new AgentsService(
       {
         agentRole: {
-          findUnique: () =>
-            Promise.resolve({ defaultAgentId: 'a_developer' }),
+          findUnique: () => Promise.resolve({ defaultAgentId: 'a_developer' }),
         },
         agent: {
           findUnique: () =>

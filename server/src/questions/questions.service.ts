@@ -619,10 +619,7 @@ export class QuestionsService {
     );
     // 收敛帧 payload 口径同 reply（团队会话行 taskId 空 → 补 team:<teamId>，
     // 否则前端 team: 段过滤丢帧、过期收敛页签无感）。
-    const expireTeamId = await this.teamIdOf(
-      updated.taskId,
-      updated.sessionId,
-    );
+    const expireTeamId = await this.teamIdOf(updated.taskId, updated.sessionId);
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
@@ -631,16 +628,13 @@ export class QuestionsService {
           await this.managedModeOf(updated.taskId, updated.sessionId),
         ),
         taskId:
-          updated.taskId ||
-          (expireTeamId ? `team:${expireTeamId}` : null),
+          updated.taskId || (expireTeamId ? `team:${expireTeamId}` : null),
         teamId: expireTeamId,
         agentId: updated.agentId,
         sessionId: updated.sessionId,
         resolved: true,
       },
-      expireTeamId
-        ? { type: 'team', id: expireTeamId }
-        : { type: 'global' },
+      expireTeamId ? { type: 'team', id: expireTeamId } : { type: 'global' },
     );
   }
 
@@ -791,9 +785,7 @@ export class QuestionsService {
         sessionId: updated.sessionId,
         resolved: true,
       },
-      confirmTeamId
-        ? { type: 'team', id: confirmTeamId }
-        : { type: 'global' },
+      confirmTeamId ? { type: 'team', id: confirmTeamId } : { type: 'global' },
     );
     return this.toDto(updated, managedMode);
   }

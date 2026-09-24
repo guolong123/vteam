@@ -35,7 +35,10 @@ import { WorkerClient } from '../workers/worker.client';
 import { WorkerEventDto } from '../workers/dto/worker-event.dto';
 import { WorkerEventIngress } from '../workers/worker-event.ingress';
 import { WorkersService } from '../workers/workers.service';
-import { WorkerDispatcher, MAX_SILENT_WAKE_ATTEMPTS } from './worker-dispatcher';
+import {
+  WorkerDispatcher,
+  MAX_SILENT_WAKE_ATTEMPTS,
+} from './worker-dispatcher';
 
 /** 构造 WorkerEventDto（协议形状与 DTO 字段一致，eventId 唯一防去重）。 */
 function event(
@@ -458,9 +461,7 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
       ),
     );
 
-    await jest.advanceTimersByTimeAsync(
-      dispatcher.silentSessionWakeMs + 1000,
-    );
+    await jest.advanceTimersByTimeAsync(dispatcher.silentSessionWakeMs + 1000);
     await jest.advanceTimersByTimeAsync(0);
     expect(errors).toHaveLength(0);
     expect(

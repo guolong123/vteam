@@ -61,8 +61,12 @@ describe('agent_roles 迁移 + 三态回填契约', () => {
     });
 
     it('team_members.role_id 列 + 索引 + FK，且 FK 为 ON DELETE RESTRICT', () => {
-      expect(sql).toContain('ALTER TABLE `team_members` ADD COLUMN `role_id` VARCHAR(191) NULL');
-      expect(sql).toContain('CREATE INDEX `idx_team_members_role` ON `team_members`(`role_id`)');
+      expect(sql).toContain(
+        'ALTER TABLE `team_members` ADD COLUMN `role_id` VARCHAR(191) NULL',
+      );
+      expect(sql).toContain(
+        'CREATE INDEX `idx_team_members_role` ON `team_members`(`role_id`)',
+      );
       expect(sql).toMatch(
         /team_members_role_id_fkey` FOREIGN KEY \(`role_id`\) REFERENCES `agent_roles`\(`id`\) ON DELETE RESTRICT/,
       );
@@ -84,9 +88,13 @@ describe('agent_roles 迁移 + 三态回填契约', () => {
         expect(row).toContain(`'${role.key}'`);
         expect(row).toContain(`'${role.name}'`);
         expect(row).toContain("'builtin'");
-        expect(row).toMatch(new RegExp(`NULL, ${role.sortOrder}, NOW\\(3\\), NOW\\(3\\)\\)`));
+        expect(row).toMatch(
+          new RegExp(`NULL, ${role.sortOrder}, NOW\\(3\\), NOW\\(3\\)\\)`),
+        );
       }
-      expect(sql).toMatch(/\(SELECT `id` FROM `agents` WHERE `id` = 'a_product'\)/);
+      expect(sql).toMatch(
+        /\(SELECT `id` FROM `agents` WHERE `id` = 'a_product'\)/,
+      );
     });
 
     it('INSERT 兜底行 general / 通用（case iii 目标）', () => {
@@ -117,17 +125,27 @@ describe('agent_roles 迁移 + 三态回填契约', () => {
 
     it('schema：model AgentRole @@map("agent_roles") + TeamMember.roleId FK 语义 + Agent.role 已 drop', () => {
       const schema = fs.readFileSync(SCHEMA, 'utf8');
-      expect(schema).toMatch(/model AgentRole \{[\s\S]*?@@map\("agent_roles"\)/);
+      expect(schema).toMatch(
+        /model AgentRole \{[\s\S]*?@@map\("agent_roles"\)/,
+      );
       // RBAC Role 仍恰有一个（本轮不得引入第二个 model Role / @@map("roles")）。
       // 用行首锚定排除注释里引用的 `@@map("roles")` 说明文字。
       expect((schema.match(/^model Role /gm) ?? []).length).toBe(1);
       expect((schema.match(/^\s*@@map\("roles"\)\s*$/gm) ?? []).length).toBe(1);
-      expect((schema.match(/^\s*@@map\("agent_roles"\)\s*$/gm) ?? []).length).toBe(1);
+      expect(
+        (schema.match(/^\s*@@map\("agent_roles"\)\s*$/gm) ?? []).length,
+      ).toBe(1);
       // TeamMember.roleId + onDelete: Restrict 关系行。
-      expect(schema).toMatch(/model TeamMember \{[\s\S]*?roleId\s+String\?\s+@map\("role_id"\)/);
-      expect(schema).toMatch(/role\s+AgentRole\?\s+@relation\(fields: \[roleId\][\s\S]*?onDelete: Restrict/);
+      expect(schema).toMatch(
+        /model TeamMember \{[\s\S]*?roleId\s+String\?\s+@map\("role_id"\)/,
+      );
+      expect(schema).toMatch(
+        /role\s+AgentRole\?\s+@relation\(fields: \[roleId\][\s\S]*?onDelete: Restrict/,
+      );
       // defaultAgentId 关系 onDelete: SetNull。
-      expect(schema).toMatch(/defaultAgent\s+Agent\?\s+@relation\("AgentRoleDefaultAgent"[\s\S]*?onDelete: SetNull/);
+      expect(schema).toMatch(
+        /defaultAgent\s+Agent\?\s+@relation\("AgentRoleDefaultAgent"[\s\S]*?onDelete: SetNull/,
+      );
       // Agent.role 已在 contract 阶段被 drop（agent-role-decommission todo 7：
       // 迁移 20260919000010 `ALTER TABLE agents DROP COLUMN role`）。
       const agentModel = schema.match(/^model Agent \{[\s\S]*?^\}/m)?.[0] ?? '';
@@ -159,14 +177,25 @@ describe('agent_roles 迁移 + 三态回填契约', () => {
     });
 
     it('三态全非空：任意 role（含 NULL）解析结果均非空，0-null 可达成', () => {
-      const members: (string | null)[] = ['product', 'tester', 'analyst', 'myagent', null, 'plan'];
+      const members: (string | null)[] = [
+        'product',
+        'tester',
+        'analyst',
+        'myagent',
+        null,
+        'plan',
+      ];
       const ids = members.map(resolveBackfillRoleId);
       expect(ids).toHaveLength(members.length);
-      expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
+      expect(ids.every((id) => typeof id === 'string' && id.length > 0)).toBe(
+        true,
+      );
     });
 
     it('every builtin has a defaultAgentId（7 行 defaultAgentId 已设）', () => {
-      expect(BUILTIN_AGENT_ROLES.filter((r) => !r.defaultAgentId)).toHaveLength(0);
+      expect(BUILTIN_AGENT_ROLES.filter((r) => !r.defaultAgentId)).toHaveLength(
+        0,
+      );
       expect(BUILTIN_KEYS).toHaveLength(7);
     });
   });

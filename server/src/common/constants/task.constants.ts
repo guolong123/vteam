@@ -71,7 +71,8 @@ export const TASK_ERRORS = {
   /** transitionByAgent：仅主 Agent 实例可流转任务状态（MCP 工具路径，403）。 */
   TASK_STATUS_MAIN_AGENT_ONLY: 'TASK_STATUS_MAIN_AGENT_ONLY',
   /** block 置阻塞必须写明原因（400，卡点不明不许挂）。 */
-  TASK_BLOCK_REASON_REQUIRED: 'TASK_BLOCK_REASON_REQUIRED',  /** transitionByAgent：accept/archive 仅人类用户可执行，Agent 调用直接拒绝（403，fail-closed）。 */
+  TASK_BLOCK_REASON_REQUIRED:
+    'TASK_BLOCK_REASON_REQUIRED' /** transitionByAgent：accept/archive 仅人类用户可执行，Agent 调用直接拒绝（403，fail-closed）。 */,
   TASK_AGENT_COMPLETION_FORBIDDEN: 'TASK_AGENT_COMPLETION_FORBIDDEN',
   /** accept/archive 用户路径完工预检未通过（409，message 枚举未完成项，force=true 可强制通过）。 */
   TASK_COMPLETION_PREFLIGHT_FAILED: 'TASK_COMPLETION_PREFLIGHT_FAILED',

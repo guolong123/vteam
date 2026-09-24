@@ -209,13 +209,11 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
       return;
     }
     try {
-      this.triggers.registerGuard(
-        PROGRESSION_COOLDOWN_GUARD,
-        (ctx) => this.progressionCooldownGuard(ctx),
+      this.triggers.registerGuard(PROGRESSION_COOLDOWN_GUARD, (ctx) =>
+        this.progressionCooldownGuard(ctx),
       );
-      this.triggers.registerHandler(
-        TRIGGER_KIND.PROGRESSION_PATROL,
-        (ctx) => this.handleProgressionFire(ctx),
+      this.triggers.registerHandler(TRIGGER_KIND.PROGRESSION_PATROL, (ctx) =>
+        this.handleProgressionFire(ctx),
       );
     } catch (err) {
       this.logger.warn(
@@ -306,9 +304,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
    * 注册停滞回调（TasksService：连续静默达上限 → systemBlock 置阻塞 + 群公告）。
    * 回调异常被吞（fire-and-forget，不阻断巡检主流程）。
    */
-  onStallDetected(
-    cb: (taskId: string, reason: string) => void,
-  ): void {
+  onStallDetected(cb: (taskId: string, reason: string) => void): void {
     this.stallHandlers.push(cb);
   }
 
@@ -526,9 +522,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
           );
           return;
         }
-        const lastAt = this.workerDispatcher.getLastActivityAt(
-          mainSession.id,
-        );
+        const lastAt = this.workerDispatcher.getLastActivityAt(mainSession.id);
         if (
           lastAt !== undefined &&
           Date.now() - lastAt < this.progressionIntervalMs
@@ -661,7 +655,8 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   /** 单次巡检：构造巡检 prompt 并 dispatch 给主 Agent。 */
-  private async runPatrol(taskId: string, title?: string): Promise<void> {    const text = buildProgressionPrompt(
+  private async runPatrol(taskId: string, title?: string): Promise<void> {
+    const text = buildProgressionPrompt(
       title ?? taskId,
       TASK_STATUS.in_progress,
     );

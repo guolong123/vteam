@@ -38,8 +38,18 @@ export interface PlatformCapability {
 
 /** 有序能力点目录（顺序即 UI 展示序；28 项覆盖 31 个 `vteam_*` 工具——`hook.manage` 覆盖 2、`task.complete` 覆盖 3）。 */
 export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
-  { key: 'task.create', label: '创建任务', tools: ['vteam_task_create'], defaultDeny: true },
-  { key: 'task.transition', label: '流转任务状态', tools: ['vteam_task_transition'], defaultDeny: true },
+  {
+    key: 'task.create',
+    label: '创建任务',
+    tools: ['vteam_task_create'],
+    defaultDeny: true,
+  },
+  {
+    key: 'task.transition',
+    label: '流转任务状态',
+    tools: ['vteam_task_transition'],
+    defaultDeny: true,
+  },
   {
     key: 'task.complete',
     label: '完成/确认计划',
@@ -52,39 +62,154 @@ export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
     tools: ['vteam_todo'],
     defaultDeny: false,
   },
-  { key: 'task.context', label: '读取任务上下文', tools: ['vteam_task_context'], defaultDeny: false },
-  { key: 'team.view', label: '查看团队', tools: ['vteam_team_view'], defaultDeny: false },
-  { key: 'team.add_member', label: '添加团队成员', tools: ['vteam_team_add_member'], defaultDeny: true },
-  { key: 'chat.post', label: '群聊发言', tools: ['vteam_group_post'], defaultDeny: false },
-  { key: 'chat.read', label: '读取会话', tools: ['vteam_chat_history'], defaultDeny: false },
-  { key: 'chat.notify', label: '通知成员', tools: ['vteam_notify_agent'], defaultDeny: false },
-  { key: 'chat.channel_send', label: '渠道推送', tools: ['vteam_channel_send'], defaultDeny: true },
-  { key: 'wecom.reply', label: '回复企业微信', tools: ['vteam_wecom_reply'], defaultDeny: true },
-  { key: 'doc.read', label: '读取产出物', tools: ['vteam_doclib'], defaultDeny: false },
-  { key: 'doc.submit', label: '提交产出物', tools: ['vteam_submit_artifact'], defaultDeny: false },
-  { key: 'file.read', label: '读取文件', tools: ['vteam_read_file'], defaultDeny: false },
+  {
+    key: 'task.context',
+    label: '读取任务上下文',
+    tools: ['vteam_task_context'],
+    defaultDeny: false,
+  },
+  {
+    key: 'team.view',
+    label: '查看团队',
+    tools: ['vteam_team_view'],
+    defaultDeny: false,
+  },
+  {
+    key: 'team.add_member',
+    label: '添加团队成员',
+    tools: ['vteam_team_add_member'],
+    defaultDeny: true,
+  },
+  {
+    key: 'chat.post',
+    label: '群聊发言',
+    tools: ['vteam_group_post'],
+    defaultDeny: false,
+  },
+  {
+    key: 'chat.read',
+    label: '读取会话',
+    tools: ['vteam_chat_history'],
+    defaultDeny: false,
+  },
+  {
+    key: 'chat.notify',
+    label: '通知成员',
+    tools: ['vteam_notify_agent'],
+    defaultDeny: false,
+  },
+  {
+    key: 'chat.channel_send',
+    label: '渠道推送',
+    tools: ['vteam_channel_send'],
+    defaultDeny: true,
+  },
+  {
+    key: 'wecom.reply',
+    label: '回复企业微信',
+    tools: ['vteam_wecom_reply'],
+    defaultDeny: true,
+  },
+  {
+    key: 'doc.read',
+    label: '读取产出物',
+    tools: ['vteam_doclib'],
+    defaultDeny: false,
+  },
+  {
+    key: 'doc.submit',
+    label: '提交产出物',
+    tools: ['vteam_submit_artifact'],
+    defaultDeny: false,
+  },
+  {
+    key: 'file.read',
+    label: '读取文件',
+    tools: ['vteam_read_file'],
+    defaultDeny: false,
+  },
   // 需求缺陷 5 点（2026-09-22 拆分原组能力点 issue.manage，消除组塌缩：岗位只放行组内
   // 部分工具时不再丢失已放行的点）。
-  { key: 'issue.create', label: '创建需求/缺陷', tools: ['vteam_issue_create'], defaultDeny: true },
-  { key: 'issue.get', label: '查看需求缺陷', tools: ['vteam_issue_get'], defaultDeny: true },
-  { key: 'issue.list', label: '需求缺陷列表', tools: ['vteam_issue_list'], defaultDeny: true },
-  { key: 'issue.update', label: '更新需求缺陷', tools: ['vteam_issue_update'], defaultDeny: true },
-  { key: 'issue.transition', label: '流转需求缺陷', tools: ['vteam_issue_transition'], defaultDeny: true },
+  {
+    key: 'issue.create',
+    label: '创建需求/缺陷',
+    tools: ['vteam_issue_create'],
+    defaultDeny: true,
+  },
+  {
+    key: 'issue.get',
+    label: '查看需求缺陷',
+    tools: ['vteam_issue_get'],
+    defaultDeny: true,
+  },
+  {
+    key: 'issue.list',
+    label: '需求缺陷列表',
+    tools: ['vteam_issue_list'],
+    defaultDeny: true,
+  },
+  {
+    key: 'issue.update',
+    label: '更新需求缺陷',
+    tools: ['vteam_issue_update'],
+    defaultDeny: true,
+  },
+  {
+    key: 'issue.transition',
+    label: '流转需求缺陷',
+    tools: ['vteam_issue_transition'],
+    defaultDeny: true,
+  },
   // 团队记忆 3 点（同批拆分原组能力点 memory.manage：plan/librarian 只放行检索，
   // 拆分后重获 memory.search，写入/更新点仍按各自 toolAllows 判定）。
-  { key: 'memory.save', label: '写入团队记忆', tools: ['vteam_memory_save'], defaultDeny: false },
-  { key: 'memory.search', label: '检索团队记忆', tools: ['vteam_memory_search'], defaultDeny: false },
-  { key: 'memory.update', label: '更新团队记忆', tools: ['vteam_memory_update'], defaultDeny: false },
-  { key: 'skill.create', label: '沉淀技能', tools: ['vteam_skill_create'], defaultDeny: true },
-  { key: 'question.confirm', label: '确认问答', tools: ['vteam_question_confirm'], defaultDeny: true },
-  { key: 'my_profile', label: '查询自身', tools: ['vteam_my_profile'], defaultDeny: false },
+  {
+    key: 'memory.save',
+    label: '写入团队记忆',
+    tools: ['vteam_memory_save'],
+    defaultDeny: false,
+  },
+  {
+    key: 'memory.search',
+    label: '检索团队记忆',
+    tools: ['vteam_memory_search'],
+    defaultDeny: false,
+  },
+  {
+    key: 'memory.update',
+    label: '更新团队记忆',
+    tools: ['vteam_memory_update'],
+    defaultDeny: false,
+  },
+  {
+    key: 'skill.create',
+    label: '沉淀技能',
+    tools: ['vteam_skill_create'],
+    defaultDeny: true,
+  },
+  {
+    key: 'question.confirm',
+    label: '确认问答',
+    tools: ['vteam_question_confirm'],
+    defaultDeny: true,
+  },
+  {
+    key: 'my_profile',
+    label: '查询自身',
+    tools: ['vteam_my_profile'],
+    defaultDeny: false,
+  },
   {
     key: 'hook.manage',
     label: '注册/取消唤醒',
     tools: ['vteam_hook_register', 'vteam_hook_cancel'],
     defaultDeny: true,
   },
-  { key: 'git.repos', label: '查看授权仓库', tools: ['vteam_git_repos_list'], defaultDeny: false },
+  {
+    key: 'git.repos',
+    label: '查看授权仓库',
+    tools: ['vteam_git_repos_list'],
+    defaultDeny: false,
+  },
 ];
 
 /** 能力点键全集（有序；DTO 校验与 UI 消费方用）。 */
@@ -163,8 +288,7 @@ export function capabilityMatrixToToolStates(
   return Object.fromEntries(
     PLATFORM_CAPABILITIES.flatMap((c) =>
       c.tools.map(
-        (tool) =>
-          [tool, matrix[c.key] === false ? 'deny' : 'allow'] as const,
+        (tool) => [tool, matrix[c.key] === false ? 'deny' : 'allow'] as const,
       ),
     ),
   );

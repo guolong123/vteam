@@ -1,6 +1,4 @@
-import {
-  VTEAM_MCP_TOOL_NAMES,
-} from './agent.constants';
+import { VTEAM_MCP_TOOL_NAMES } from './agent.constants';
 import {
   buildCapabilityMatrixFromTools,
   buildFactoryCapabilityMatrix,
@@ -48,7 +46,10 @@ describe('platform capability catalogue coverage', () => {
     }
     // 拆分组能力点后仍覆盖多工具的：task.complete（完工/定稿/确认）+ hook.manage（register + cancel）。
     const multiTool = PLATFORM_CAPABILITIES.filter((c) => c.tools.length > 1);
-    expect(multiTool.map((c) => c.key)).toEqual(['task.complete', 'hook.manage']);
+    expect(multiTool.map((c) => c.key)).toEqual([
+      'task.complete',
+      'hook.manage',
+    ]);
     expect(multiTool[0]?.tools).toHaveLength(3);
     expect(multiTool[1]?.tools).toHaveLength(2);
     // 已拆分的组键不再是合法能力点键。
@@ -73,7 +74,9 @@ describe('platform capability catalogue coverage', () => {
     expect(isCapabilityGranted({ 'task.create': false }, 'task.create')).toBe(
       false,
     );
-    expect(isCapabilityGranted({ 'task.create': true }, 'task.create')).toBe(true);
+    expect(isCapabilityGranted({ 'task.create': true }, 'task.create')).toBe(
+      true,
+    );
   });
 
   it('全组工具放行才授予能力点（保守映射，不放大授权；现存唯一多工具点 hook.manage）', () => {

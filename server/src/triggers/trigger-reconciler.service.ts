@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
@@ -53,7 +58,9 @@ export class TriggerReconcilerService implements OnModuleInit, OnModuleDestroy {
         `[reconcile] 启动自愈完成方向A=${counts.directionA} 方向B=${counts.directionB} 耗时=${Date.now() - started}ms`,
       );
     } catch (err) {
-      this.logger.error(`[reconcile] 启动自愈失败（周期继续，不阻断启动）: ${describeReconcileError(err)}`);
+      this.logger.error(
+        `[reconcile] 启动自愈失败（周期继续，不阻断启动）: ${describeReconcileError(err)}`,
+      );
     }
     this.ensureInterval();
   }
@@ -88,7 +95,9 @@ export class TriggerReconcilerService implements OnModuleInit, OnModuleDestroy {
     }
     this.reconcileTimer = setInterval(() => {
       void this.reconcileOnce(new Date()).catch((err: unknown) =>
-        this.logger.error(`[reconcile] 周期自愈失败: ${describeReconcileError(err)}`),
+        this.logger.error(
+          `[reconcile] 周期自愈失败: ${describeReconcileError(err)}`,
+        ),
       );
     }, this.reconcileIntervalMs());
     this.reconcileTimer.unref?.();

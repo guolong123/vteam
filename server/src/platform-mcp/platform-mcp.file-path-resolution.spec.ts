@@ -8,7 +8,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { QuestionsService } from '../questions/questions.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { TasksService } from '../tasks/tasks.service';
-import { WorkerClient, WorkerUnavailableException } from '../workers/worker.client';
+import {
+  WorkerClient,
+  WorkerUnavailableException,
+} from '../workers/worker.client';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { PlatformMcpService } from './platform-mcp.service';
 
@@ -108,7 +111,9 @@ describe('PlatformMcpService worker 取文件路径解析', () => {
   it('任务目录 404 → 自动换 <根>/<ref> 候选（agent 常写的 tasks/<taskId>/… 形态）', async () => {
     allowWorkerAs(memberId);
     fetchFile
-      .mockRejectedValueOnce(new WorkerUnavailableException(workerId, 'file fetch HTTP 404', 404))
+      .mockRejectedValueOnce(
+        new WorkerUnavailableException(workerId, 'file fetch HTTP 404', 404),
+      )
       .mockResolvedValueOnce(Buffer.from('svg'));
 
     await service.readFile(ctx, {

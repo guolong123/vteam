@@ -77,9 +77,7 @@ export interface TriggerFireContext {
 }
 
 export type TriggerOutcome =
-  | { done: true }
-  | { rescheduleAt: Date }
-  | { expire: true };
+  { done: true } | { rescheduleAt: Date } | { expire: true };
 
 export type TriggerHandler = (
   trigger: TriggerFireContext,
@@ -394,8 +392,8 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
    */
   private async claimRowDbNow(id: string): Promise<number> {
     const n = await this.prisma.$executeRawUnsafe(
-      'UPDATE `triggers` SET `status` = \'firing\'' +
-        ' WHERE `id` = ? AND `status` = \'pending\'' +
+      "UPDATE `triggers` SET `status` = 'firing'" +
+        " WHERE `id` = ? AND `status` = 'pending'" +
         ' AND `due_at` IS NOT NULL AND `due_at` <= NOW(3)',
       id,
     );
@@ -473,14 +471,16 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
         where: { id: row.id },
         data: {
           status: TRIGGER_STATUS.CANCELLED,
-          lastError: `maxFires reached (${row.fireCount}/${row.maxFires})`.slice(
-            0,
-            191,
-          ),
+          lastError:
+            `maxFires reached (${row.fireCount}/${row.maxFires})`.slice(0, 191),
         },
       });
     }
-    if (row.expiresAt !== null && row.expiresAt !== undefined && now >= row.expiresAt) {
+    if (
+      row.expiresAt !== null &&
+      row.expiresAt !== undefined &&
+      now >= row.expiresAt
+    ) {
       return await this.prisma.trigger.update({
         where: { id: row.id },
         data: {

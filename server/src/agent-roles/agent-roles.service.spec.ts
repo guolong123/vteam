@@ -686,7 +686,10 @@ describe('AgentRolesService', () => {
     it('内置角色可编辑 capabilities（仅 key 只读，能力矩阵放开）', async () => {
       const capabilities = { 'task.create': true };
       prisma.agentRole.findUnique.mockResolvedValue(builtinRow);
-      prisma.agentRole.update.mockResolvedValue({ ...builtinRow, capabilities });
+      prisma.agentRole.update.mockResolvedValue({
+        ...builtinRow,
+        capabilities,
+      });
 
       const result = await service.update('ar_product', { capabilities });
 

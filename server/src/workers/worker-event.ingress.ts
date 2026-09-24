@@ -404,7 +404,7 @@ export class WorkerEventIngress {
 
   /** agent.status：status=error/带 error → emit agent.error；否则 emit agent.loading（phase 透传）。 */
   private async handleAgentStatus(dto: WorkerEventDto): Promise<void> {
-    const payload = dto.payload as AgentStatusPayload;    // 团队实例语义：反查会话成员 id（teamMemberId），emit 载荷带 instanceId——
+    const payload = dto.payload as AgentStatusPayload; // 团队实例语义：反查会话成员 id（teamMemberId），emit 载荷带 instanceId——
     // 同 agent 多实例各自 loading，前端按实例消费不再全体 loading。
     const platformSessionId = await this.resolvePlatformSessionId(
       this.str(payload.sessionId),

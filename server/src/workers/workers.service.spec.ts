@@ -2296,15 +2296,21 @@ describe('WorkersService', () => {
     });
 
     it('modelId 为 md_ 主键 → 命中（agents.defaultModelId 实际形态；曾致「无可用 worker」）', async () => {
-      await expect(service.assignWorker({ modelId: 'md_9' })).resolves.toBe('w_1');
+      await expect(service.assignWorker({ modelId: 'md_9' })).resolves.toBe(
+        'w_1',
+      );
     });
 
     it('modelId 为 provider/model 引用 → 命中（原口径保持）', async () => {
-      await expect(service.assignWorker({ modelId: 'opencode/m1' })).resolves.toBe('w_1');
+      await expect(
+        service.assignWorker({ modelId: 'opencode/m1' }),
+      ).resolves.toBe('w_1');
     });
 
     it('模型不在该 worker 可用集 → 拒绝（null）', async () => {
-      await expect(service.assignWorker({ modelId: 'md_other' })).resolves.toBeNull();
+      await expect(
+        service.assignWorker({ modelId: 'md_other' }),
+      ).resolves.toBeNull();
     });
 
     it('可用性行 enabled=false → 不算可用（null）', async () => {
@@ -2318,8 +2324,9 @@ describe('WorkersService', () => {
           ],
         }),
       ]);
-      await expect(service.assignWorker({ modelId: 'opencode/m1' })).resolves.toBeNull();
+      await expect(
+        service.assignWorker({ modelId: 'opencode/m1' }),
+      ).resolves.toBeNull();
     });
   });
-
 });

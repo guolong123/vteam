@@ -108,9 +108,7 @@ export class TriggersService {
     ]);
     const displays = await this.enrichDisplays(rows as Trigger[]);
     return {
-      items: (rows as Trigger[]).map((row, i) =>
-        this.toItem(row, displays[i]),
-      ),
+      items: (rows as Trigger[]).map((row, i) => this.toItem(row, displays[i])),
       total,
       page,
       pageSize,
@@ -258,9 +256,7 @@ export class TriggersService {
       }
     }
     const payload = row.payload as
-      | { teamId?: unknown; taskId?: unknown }
-      | null
-      | undefined;
+      { teamId?: unknown; taskId?: unknown } | null | undefined;
     if (payload && typeof payload.teamId === 'string' && payload.teamId) {
       return payload.teamId;
     }
@@ -276,10 +272,7 @@ export class TriggersService {
     return null;
   }
 
-  private async isTeamMember(
-    teamId: string,
-    userId: string,
-  ): Promise<boolean> {
+  private async isTeamMember(teamId: string, userId: string): Promise<boolean> {
     const hit = await this.prisma.teamUserMember.findUnique({
       where: { teamId_userId: { teamId, userId } },
       select: { id: true },
@@ -375,12 +368,17 @@ export class TriggersService {
             else channelIds.add(v);
           }
         }
-        for (const key of ['toInstanceId', 'fromInstanceId', 'teamMemberId'] as const) {
+        for (const key of [
+          'toInstanceId',
+          'fromInstanceId',
+          'teamMemberId',
+        ] as const) {
           const v = p[key];
           if (typeof v === 'string' && v) memberIds.add(v);
         }
         const sessionId = p['sessionId'];
-        if (typeof sessionId === 'string' && sessionId) sessionIds.add(sessionId);
+        if (typeof sessionId === 'string' && sessionId)
+          sessionIds.add(sessionId);
         const hookId = p['hookId'];
         if (typeof hookId === 'string' && hookId) hookIds.add(hookId);
         const receiptId = p['receiptId'];
@@ -419,9 +417,37 @@ export class TriggersService {
       }
       const [teams, channels, tasks, members, hooks, receipts, issues] =
         await Promise.all([
-          this.inIds<{ id: string; name: string }>('team', { id: true, name: true }, teamIds),
-          this.inIds<{ id: string; type: string; team: { id: string; name: string } | null }>('chatChannel', { id: true, type: true, team: { select: { id: true, name: true } } }, channelIds),
-          this.inIds<{ id: string; title: string; team: { id: string; name: string } | null }>('task', { id: true, title: true, team: { select: { id: true, name: true } } }, taskIds),
+          this.inIds<{ id: string; name: string }>(
+            'team',
+            { id: true, name: true },
+            teamIds,
+          ),
+          this.inIds<{
+            id: string;
+            type: string;
+            team: { id: string; name: string } | null;
+          }>(
+            'chatChannel',
+            {
+              id: true,
+              type: true,
+              team: { select: { id: true, name: true } },
+            },
+            channelIds,
+          ),
+          this.inIds<{
+            id: string;
+            title: string;
+            team: { id: string; name: string } | null;
+          }>(
+            'task',
+            {
+              id: true,
+              title: true,
+              team: { select: { id: true, name: true } },
+            },
+            taskIds,
+          ),
           this.inIds<{
             id: string;
             alias: string | null;
@@ -437,9 +463,21 @@ export class TriggersService {
             },
             memberIds,
           ),
-          this.inIds<{ id: string; wakeText: string }>('hook', { id: true, wakeText: true }, hookIds),
-          this.inIds<{ id: string; summary: string }>('messageReceipt', { id: true, summary: true }, receiptIds),
-          this.inIds<{ id: string; title: string }>('issue', { id: true, title: true }, issueIds),
+          this.inIds<{ id: string; wakeText: string }>(
+            'hook',
+            { id: true, wakeText: true },
+            hookIds,
+          ),
+          this.inIds<{ id: string; summary: string }>(
+            'messageReceipt',
+            { id: true, summary: true },
+            receiptIds,
+          ),
+          this.inIds<{ id: string; title: string }>(
+            'issue',
+            { id: true, title: true },
+            issueIds,
+          ),
         ]);
       const byId = <T extends { id: string }>(list: T[]): Map<string, T> =>
         new Map(list.map((e) => [e.id, e]));
@@ -485,12 +523,19 @@ export class TriggersService {
   ): Promise<T[]> {
     if (ids.size === 0) return [];
     try {
-      const table = (this.prisma as unknown as Record<string, { findMany?: (args: unknown) => Promise<T[]> } | undefined>)[delegate];
+      const table = (
+        this.prisma as unknown as Record<
+          string,
+          { findMany?: (args: unknown) => Promise<T[]> } | undefined
+        >
+      )[delegate];
       if (!table?.findMany) return [];
-      return (await table.findMany({
-        where: { id: { in: [...ids] } },
-        select,
-      })) ?? [];
+      return (
+        (await table.findMany({
+          where: { id: { in: [...ids] } },
+          select,
+        })) ?? []
+      );
     } catch {
       return [];
     }
@@ -533,8 +578,14 @@ export class TriggersService {
     p: Record<string, unknown>,
     ctx: {
       teams: Map<string, { id: string; name: string }>;
-      channels: Map<string, { id: string; type: string; team: { id: string; name: string } | null }>;
-      tasks: Map<string, { id: string; title: string; team: { id: string; name: string } | null }>;
+      channels: Map<
+        string,
+        { id: string; type: string; team: { id: string; name: string } | null }
+      >;
+      tasks: Map<
+        string,
+        { id: string; title: string; team: { id: string; name: string } | null }
+      >;
       members: Map<
         string,
         {
@@ -698,7 +749,8 @@ export class TriggersService {
     }
     if (row.kind === TRIGGER_KIND.SESSION_IDLE_SCAN) {
       const sessionId = this.str(p['sessionId']);
-      const suffix = p['reason'] === 'silent-session' ? '事件静默看门狗' : '空闲扫描';
+      const suffix =
+        p['reason'] === 'silent-session' ? '事件静默看门狗' : '空闲扫描';
       if (sessionId) {
         // 会话 → 成员展示（owner join 同镜像：alias，回退 agent 名）；raw id 留括号可追查。
         // 会话/成员缺失 → 既有 `会话 <id>（已删除） <suffix>` 降级，列表永不 500。

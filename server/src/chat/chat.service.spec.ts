@@ -301,7 +301,8 @@ describe('ChatService', () => {
       ]);
     });
 
-    it('多目标 @（{type:all} 展开全部）→ 触发多目标分派', async () => {      allowAccess();
+    it('多目标 @（{type:all} 展开全部）→ 触发多目标分派', async () => {
+      allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: null },
         { agentId: 'a_architect', removedAt: null },
@@ -323,8 +324,18 @@ describe('ChatService', () => {
     it('主 agent 门禁：无进行中任务时用户@子agent被拦，仅主目标放行+系统提示', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
-        { id: 'tmm_main', agentId: 'a_product', alias: '产品-1', removedAt: null },
-        { id: 'tmm_dev', agentId: 'a_developer', alias: '开发-1', removedAt: null },
+        {
+          id: 'tmm_main',
+          agentId: 'a_product',
+          alias: '产品-1',
+          removedAt: null,
+        },
+        {
+          id: 'tmm_dev',
+          agentId: 'a_developer',
+          alias: '开发-1',
+          removedAt: null,
+        },
       ]);
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
@@ -338,7 +349,9 @@ describe('ChatService', () => {
 
       const result = await service.createMessage(channelId, userId, {
         text: '@开发-1 干活',
-        mentions: [{ type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' }],
+        mentions: [
+          { type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' },
+        ],
       } as any);
 
       // 子目标被移除：dispatch 空目标；用户消息 + 系统提示共落库两次
@@ -356,7 +369,12 @@ describe('ChatService', () => {
     it('主 agent 门禁：@主agent本人放行（无进行中任务也不拦）', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
-        { id: 'tmm_main', agentId: 'a_product', alias: '产品-1', removedAt: null },
+        {
+          id: 'tmm_main',
+          agentId: 'a_product',
+          alias: '产品-1',
+          removedAt: null,
+        },
       ]);
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
@@ -370,7 +388,9 @@ describe('ChatService', () => {
 
       const result = await service.createMessage(channelId, userId, {
         text: '@产品-1 在吗',
-        mentions: [{ type: 'agent', agentId: 'a_product', instanceId: 'tmm_main' }],
+        mentions: [
+          { type: 'agent', agentId: 'a_product', instanceId: 'tmm_main' },
+        ],
       } as any);
 
       expect(result.triggers).toHaveLength(1);
@@ -380,8 +400,18 @@ describe('ChatService', () => {
     it('主 agent 门禁：当前任务进行中 → 开门，子目标照常派发', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
-        { id: 'tmm_main', agentId: 'a_product', alias: '产品-1', removedAt: null },
-        { id: 'tmm_dev', agentId: 'a_developer', alias: '开发-1', removedAt: null },
+        {
+          id: 'tmm_main',
+          agentId: 'a_product',
+          alias: '产品-1',
+          removedAt: null,
+        },
+        {
+          id: 'tmm_dev',
+          agentId: 'a_developer',
+          alias: '开发-1',
+          removedAt: null,
+        },
       ]);
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
@@ -400,7 +430,9 @@ describe('ChatService', () => {
 
       const result = await service.createMessage(channelId, userId, {
         text: '@开发-1 干活',
-        mentions: [{ type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' }],
+        mentions: [
+          { type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' },
+        ],
       } as any);
 
       expect(result.triggers).toHaveLength(1);

@@ -2233,14 +2233,12 @@ export class WorkerDispatcher
     // 目标成员的岗位权威（与上方名册同一行，一次查找三用）：岗位职责段（rolePrompt）+
     // 能力矩阵（capabilities，驱动工具屏蔽）+ 常量回退键（key）。成员行缺失/未绑角色
     // → null ⇒ 回退 `agentKey` 常量派生，绝不阻断分派。
-    const selfRoleRow:
-      | {
-          id?: string | null;
-          key?: string | null;
-          capabilities?: Record<string, boolean> | null;
-          rolePrompt?: string | null;
-        }
-      | null =
+    const selfRoleRow: {
+      id?: string | null;
+      key?: string | null;
+      capabilities?: Record<string, boolean> | null;
+      rolePrompt?: string | null;
+    } | null =
       teamMemberRows.find((m: any) => m.id === teamMemberId)?.role ?? null;
     const selfRoleAuthority: MemberRoleAuthority | null = selfRoleRow
       ? {
@@ -4144,7 +4142,10 @@ export class WorkerDispatcher
       );
       workerLookupFailed = true;
     }
-    if (!workerLookupFailed && (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE)) {
+    if (
+      !workerLookupFailed &&
+      (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE)
+    ) {
       fail(
         `agent 无响应（${this.silentSessionWakeMs / 1000}s 无事件回流，worker 心跳已离线），不再唤醒直接失败，请检查 worker 状态`,
       );
@@ -4526,7 +4527,11 @@ export class WorkerDispatcher
       return false;
     }
     const entry = this.pending.get(key);
-    return entry !== undefined && entry.sessionId === sessionId && !entry.activitySeen;
+    return (
+      entry !== undefined &&
+      entry.sessionId === sessionId &&
+      !entry.activitySeen
+    );
   }
 
   public getLastActivityAt(sessionId: string): number | undefined {
@@ -4774,9 +4779,7 @@ export class WorkerDispatcher
   }
 
   private clearDispatchSnapshot(teamId: string, teamMemberId: string): void {
-    this.dispatchSnapshots.delete(
-      dispatchSnapshotKey(teamId, teamMemberId),
-    );
+    this.dispatchSnapshots.delete(dispatchSnapshotKey(teamId, teamMemberId));
   }
 
   private clearDispatchSnapshotBySession(sessionId: string): void {

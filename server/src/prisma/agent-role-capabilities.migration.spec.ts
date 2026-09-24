@@ -57,7 +57,10 @@ const BUILTIN_KEYS = [
   'librarian',
 ] as const;
 
-function jsonLiteralAfter(prefix: string, sql: string): Record<string, boolean> {
+function jsonLiteralAfter(
+  prefix: string,
+  sql: string,
+): Record<string, boolean> {
   const idx = sql.indexOf(prefix);
   if (idx < 0) {
     throw new Error(`迁移缺少字面量锚点: ${prefix}`);
@@ -73,7 +76,13 @@ function jsonLiteralAfter(prefix: string, sql: string): Record<string, boolean> 
  * （原「全组放行才 true」规则 = 拆分后逐点值的合取，拆分只细化粒度不改语义）。
  */
 const SPLIT_SUCCESSORS: Record<string, readonly string[]> = {
-  'issue.manage': ['issue.create', 'issue.get', 'issue.list', 'issue.update', 'issue.transition'],
+  'issue.manage': [
+    'issue.create',
+    'issue.get',
+    'issue.list',
+    'issue.update',
+    'issue.transition',
+  ],
   'memory.manage': ['memory.save', 'memory.search', 'memory.update'],
 };
 
@@ -98,7 +107,9 @@ function expectFrozenEqualsCurrent(
   current: Readonly<Record<string, boolean>>,
 ): void {
   for (const [key, value] of Object.entries(frozen)) {
-    expect(`${key}=${value}`).toBe(`${key}=${expectedForFrozenKey(key, current)}`);
+    expect(`${key}=${value}`).toBe(
+      `${key}=${expectedForFrozenKey(key, current)}`,
+    );
   }
 }
 
@@ -124,18 +135,20 @@ describe('agent_roles.capabilities 迁移契约（capability model）', () => {
   it('DDL：恰一条 ADD COLUMN capabilities JSON NULL', () => {
     const addColumns = ddl.match(/ADD COLUMN/g) ?? [];
     expect(addColumns).toHaveLength(1);
-    expect(ddl).toMatch(/ALTER TABLE `agent_roles` ADD COLUMN `capabilities` JSON NULL;/);
+    expect(ddl).toMatch(
+      /ALTER TABLE `agent_roles` ADD COLUMN `capabilities` JSON NULL;/,
+    );
   });
 
   it('内置派生走临时表物化（避免 UPDATE 自引用）+ config.tools OBJECT 守卫', () => {
     expect(sql).toContain('CREATE TEMPORARY TABLE `tmp_agent_role_tools`');
-    expect(sql).toMatch(
-      /JSON_TYPE\(`p`\.`config` -> '\$\.tools'\) = 'OBJECT'/,
-    );
+    expect(sql).toMatch(/JSON_TYPE\(`p`\.`config` -> '\$\.tools'\) = 'OBJECT'/);
     expect(sql).toMatch(
       /INNER JOIN `tmp_agent_role_tools` AS `t` ON `t`\.`role_id` = `r`\.`id`/,
     );
-    expect(sql).toContain('DROP TEMPORARY TABLE IF EXISTS `tmp_agent_role_tools`');
+    expect(sql).toContain(
+      'DROP TEMPORARY TABLE IF EXISTS `tmp_agent_role_tools`',
+    );
   });
 
   it('每个能力点表达式产出 JSON true/false（NULL 值为 null 的陷阱已规避）', () => {
@@ -144,13 +157,17 @@ describe('agent_roles.capabilities 迁移契约（capability model）', () => {
       sql.indexOf('SET `r`.`capabilities` = JSON_OBJECT('),
       sql.indexOf('WHERE `r`.`capabilities` IS NULL;'),
     );
-    const keys = [...derivation.matchAll(/^\s*'([a-z][a-z0-9_.]*)',\s*$/gm)].map(
-      (m) => m[1] as string,
-    );
+    const keys = [
+      ...derivation.matchAll(/^\s*'([a-z][a-z0-9_.]*)',\s*$/gm),
+    ].map((m) => m[1] as string);
     expect(keys.length).toBeGreaterThanOrEqual(21);
     expect(new Set(keys).size).toBe(keys.length);
-    expect((derivation.match(/CAST\('true' AS JSON\)/g) ?? []).length).toBeGreaterThanOrEqual(keys.length);
-    expect((derivation.match(/CAST\('false' AS JSON\)/g) ?? []).length).toBeGreaterThanOrEqual(keys.length);
+    expect(
+      (derivation.match(/CAST\('true' AS JSON\)/g) ?? []).length,
+    ).toBeGreaterThanOrEqual(keys.length);
+    expect(
+      (derivation.match(/CAST\('false' AS JSON\)/g) ?? []).length,
+    ).toBeGreaterThanOrEqual(keys.length);
   });
 
   it('内置常量回退矩阵（7 key）与 ROLE_BOUNDARIES 代码派生语义等价（组键 = 拆分成员 AND）', () => {
@@ -181,9 +198,7 @@ describe('agent_roles.capabilities 迁移契约（capability model）', () => {
       .sort();
     const fromTools = [
       ...new Set(
-        EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST.map((t) =>
-          capabilityKeyForTool(t),
-        ),
+        EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST.map((t) => capabilityKeyForTool(t)),
       ),
     ].sort();
     expect(granted).toEqual(fromTools);
@@ -208,7 +223,9 @@ describe('agent_roles.capabilities 迁移契约（capability model）', () => {
   });
 
   it('删除 policy 间接层：DROP INDEX + DROP COLUMN policy_id', () => {
-    expect(sql).toMatch(/DROP INDEX `idx_agent_roles_policy` ON `agent_roles`;/);
+    expect(sql).toMatch(
+      /DROP INDEX `idx_agent_roles_policy` ON `agent_roles`;/,
+    );
     expect(sql).toMatch(/ALTER TABLE `agent_roles` DROP COLUMN `policy_id`;/);
   });
 
@@ -220,13 +237,18 @@ describe('agent_roles.capabilities 迁移契约（capability model）', () => {
 
   it('schema：AgentRole 含 capabilities（无 policyId）；Agent 仍含 policyId', () => {
     const schema = fs.readFileSync(SCHEMA, 'utf8');
-    const roleModel = schema.match(/^model AgentRole \{[\s\S]*?^\}/m)?.[0] ?? '';
-    expect(roleModel).toMatch(/^\s*capabilities Json\?\s+@map\("capabilities"\)\s*$/m);
+    const roleModel =
+      schema.match(/^model AgentRole \{[\s\S]*?^\}/m)?.[0] ?? '';
+    expect(roleModel).toMatch(
+      /^\s*capabilities Json\?\s+@map\("capabilities"\)\s*$/m,
+    );
     expect(roleModel).not.toMatch(/^\s*policyId\s/m);
     expect(roleModel).not.toMatch(/idx_agent_roles_policy/);
 
     const agentModel = schema.match(/^model Agent \{[\s\S]*?^\}/m)?.[0] ?? '';
-    expect(agentModel).toMatch(/^\s*policyId\s+String\?\s+@map\("policy_id"\)\s*$/m);
+    expect(agentModel).toMatch(
+      /^\s*policyId\s+String\?\s+@map\("policy_id"\)\s*$/m,
+    );
   });
 
   it('目录覆盖 31 工具（迁移按同目录硬编码，漂移即红）', () => {

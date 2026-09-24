@@ -169,31 +169,33 @@ describe('AgentsService', () => {
         update: jest.fn(),
         delete: jest.fn(),
       },
-    agentSkill: { create: jest.fn(), deleteMany: jest.fn() },
-    // 岗位（AgentRole）只作能力模板选择器：resolveTemplateSource 读 defaultAgentId，
-    // 默认无岗位行；用例按需覆盖为 { defaultAgentId }。
-    agentRole: { findUnique: jest.fn().mockResolvedValue(null) },
-    // 策略装配（clone/create 恒建 custom 策略）：默认库内无模板行，
-    // defaultAgent 的 agentKey 命中内置边界时走 ROLE_BOUNDARIES 派生回退；create 回显 data 行。
-    executionPolicy: {
-      findUnique: jest.fn().mockResolvedValue(null),
-      create: jest
-        .fn()
-        .mockImplementation(
-          async ({ data }: { data: Record<string, unknown> }) => ({
-            ...data,
-            createdAt: new Date('2026-09-14T00:00:00Z'),
-            updatedAt: new Date('2026-09-14T00:00:00Z'),
-          }),
-        ),
-    },
+      agentSkill: { create: jest.fn(), deleteMany: jest.fn() },
+      // 岗位（AgentRole）只作能力模板选择器：resolveTemplateSource 读 defaultAgentId，
+      // 默认无岗位行；用例按需覆盖为 { defaultAgentId }。
+      agentRole: { findUnique: jest.fn().mockResolvedValue(null) },
+      // 策略装配（clone/create 恒建 custom 策略）：默认库内无模板行，
+      // defaultAgent 的 agentKey 命中内置边界时走 ROLE_BOUNDARIES 派生回退；create 回显 data 行。
+      executionPolicy: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest
+          .fn()
+          .mockImplementation(
+            async ({ data }: { data: Record<string, unknown> }) => ({
+              ...data,
+              createdAt: new Date('2026-09-14T00:00:00Z'),
+              updatedAt: new Date('2026-09-14T00:00:00Z'),
+            }),
+          ),
+      },
       // listOpencodeAgents / getAvailableModels 需读 worker.capabilities 解析 exec 基址
       worker: { findUnique: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
     };
     executionPolicyService = {
       resolveManyByAgents: jest.fn(
-        async (agents: { policyId?: string | null; agentKey?: string | null }[]) =>
+        async (
+          agents: { policyId?: string | null; agentKey?: string | null }[],
+        ) =>
           agents.map((a) => {
             const key = a.policyId ?? null;
             if (

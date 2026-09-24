@@ -706,7 +706,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         managedMode: true,
       });
       prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
-      prisma.session.findUnique.mockResolvedValue({ teamMemberId: 'tmm_sender' });
+      prisma.session.findUnique.mockResolvedValue({
+        teamMemberId: 'tmm_sender',
+      });
       prisma.agentQuestion.update.mockResolvedValue(
         platformRow({ status: 'resolved', answers: [['确认']] }),
       );
@@ -728,7 +730,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         teamId: 'tm_1',
       });
       prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
-      prisma.session.findUnique.mockResolvedValue({ teamMemberId: 'tmm_other' });
+      prisma.session.findUnique.mockResolvedValue({
+        teamMemberId: 'tmm_other',
+      });
 
       const err = await service
         .confirmByAgent({
