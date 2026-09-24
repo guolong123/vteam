@@ -262,10 +262,10 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('已移除频道类型来源 → 拒绝 message.part.delta，不查私聊、不落库、不广播', async () => {
+    it('非 private/team_group 来源 → 拒绝 message.part.delta，不查私聊、不落库、不广播', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
-        id: 'c_removed',
-        type: 'task_group',
+        id: 'c_unsupported',
+        type: 'broadcast',
       });
 
       expect(
@@ -274,7 +274,7 @@ describe('WorkerEventIngress', () => {
             taskId: 't_1',
             agentId: 'a_1',
             sessionId: 's_1',
-            channelId: 'c_removed',
+            channelId: 'c_unsupported',
             parts: [{ type: 'text', text: '不应写入', synthetic: false }],
           }),
         ),
