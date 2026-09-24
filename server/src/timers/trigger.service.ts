@@ -756,25 +756,3 @@ function describeError(err: unknown): string {
   }
   return String(err);
 }
-
-// ==================================================================
-// 兼容别名（todo-2 改名过渡；消费者迁移归 todo-5/6，届时再移除）。
-// TimerService 与 TriggerService 是同一引用，DI token 一致，零模块改动。
-// ==================================================================
-
-/** @deprecated 用 TriggerService（同引用，DI token 一致）。 */
-export type TimerService = TriggerService;
-/** @deprecated 用 TriggerService（同引用，DI token 一致）。 */
-export const TimerService = TriggerService;
-/** @deprecated 用 TRIGGER_STATUS。 */
-export const TIMER_STATUS = TRIGGER_STATUS;
-/** @deprecated 用 TRIGGER_ID_PREFIX（tmr_ 冻结）。 */
-export const TIMER_ID_PREFIX = TRIGGER_ID_PREFIX;
-/** @deprecated 用 TRIGGER_SCAN_INTERVAL_MS_DEFAULT。 */
-export const TIMER_SCAN_INTERVAL_MS_DEFAULT = TRIGGER_SCAN_INTERVAL_MS_DEFAULT;
-/** @deprecated 用 TriggerFireContext。 */
-export type TimerFireContext = TriggerFireContext;
-/** @deprecated 用 TriggerHandler。 */
-export type TimerHandler = TriggerHandler;
-/** @deprecated 用 TriggerDedupKey。 */
-export type TimerDedupKey = TriggerDedupKey;

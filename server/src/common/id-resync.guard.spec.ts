@@ -5,7 +5,7 @@ import * as path from 'path';
  * 防回归守卫：IdGeneratorService 前缀必须有启动期 resync 对齐。
  *
  * 背景（2026-09-16 线上事故）：`tmr_` 前缀缺 resync，服务重启后计数器归零，
- * `TimerService.schedule()` 的 create 撞既有主键 P2002；而调用方把 P2002
+ * `TriggerService.schedule()` 的 create 撞既有主键 P2002；而调用方把 P2002
  * 误判为「去重冲突」静默跳过 → 自动催办 timer 全部消失、永不触发。
  * 同一类 bug 本会话已复发三次（pl_ / mr_ / tmr_），故以源码级断言固化：
  * **凡 `nextId(<prefix>)` 的生成点，必须有对应 `resyncIdPrefix(..., <prefix>, ...)`。**

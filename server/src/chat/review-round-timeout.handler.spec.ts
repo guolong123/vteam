@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../prisma/prisma.service';
-import { TimerService } from '../timers/trigger.service';
+import { TriggerService } from '../timers/trigger.service';
 import { ReviewRoundGateService } from '../issues/review-round-gate.service';
 import { createLedger, embedLedger } from '../issues/review-round-ledger';
 import {
@@ -41,7 +41,7 @@ describe('ReviewRoundTimeoutHandler（超时→stale 消费者）', () => {
       providers: [
         ReviewRoundTimeoutHandler,
         { provide: PrismaService, useValue: prisma },
-        { provide: TimerService, useValue: timers },
+        { provide: TriggerService, useValue: timers },
         { provide: ReviewRoundGateService, useValue: gate },
       ],
     }).compile();
@@ -146,7 +146,7 @@ describe('ReviewRoundTimeoutHandler（超时→stale 消费者）', () => {
     expect(gate.checkTimeout).not.toHaveBeenCalled();
   });
 
-  it('gate 抛错 → handle 不抛（warn 吞掉，timer 行由 TimerService 记 failed）', async () => {
+  it('gate 抛错 → handle 不抛（warn 吞掉，timer 行由 TriggerService 记 failed）', async () => {
     prisma.issue.findUnique.mockResolvedValue({
       id: issueId,
       description: ledgerDescription('collecting'),
@@ -167,7 +167,7 @@ describe('ReviewRoundTimeoutHandler（超时→stale 消费者）', () => {
       providers: [
         ReviewRoundTimeoutHandler,
         { provide: PrismaService, useValue: prisma },
-        { provide: TimerService, useValue: timers },
+        { provide: TriggerService, useValue: timers },
       ],
     }).compile();
     const bareHandler = bare.get(ReviewRoundTimeoutHandler);

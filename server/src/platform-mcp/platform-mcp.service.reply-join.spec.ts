@@ -7,7 +7,7 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { TimerService } from '../timers/trigger.service';
+import { TriggerService } from '../timers/trigger.service';
 import { WorkerDispatcher } from '../chat/worker-dispatcher';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { WorkerClient } from '../workers/worker.client';
@@ -120,7 +120,7 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
         { provide: SkillsService, useValue: {} },
         { provide: GitReposService, useValue: { findAll: jest.fn() } },
         { provide: PlanLifecycleService, useValue: planLifecycle },
-        { provide: TimerService, useValue: timers },
+        { provide: TriggerService, useValue: timers },
         {
           provide: MessageReceiptsService,
           useValue: receiptsSvc,

@@ -2646,7 +2646,7 @@ export class PlatformMcpService implements OnModuleInit {
     try {
       if (!this.timers) {
         this.logger.warn(
-          `[mcp] review-round 超时 timer 跳过 issue=${input.issueId} R${input.round}（TimerService 未装配，不阻断派发）`,
+          `[mcp] review-round 超时 timer 跳过 issue=${input.issueId} R${input.round}（TriggerService 未装配，不阻断派发）`,
         );
         return;
       }
@@ -2753,7 +2753,7 @@ export class PlatformMcpService implements OnModuleInit {
       }
       if (!this.timers) {
         this.logger.warn(
-          `[mcp] receipt-nudge TimerService 未装配 receipt=${receiptId}（记账已落库，自动催办缺席）`,
+          `[mcp] receipt-nudge TriggerService 未装配 receipt=${receiptId}（记账已落库，自动催办缺席）`,
         );
         return;
       }

@@ -15,7 +15,7 @@ import { ExecutionPolicyService } from '../execution-policies/execution-policy.s
 import { SkillsService } from '../skills/skills.service';
 import { GitReposService } from '../git-repos/git-repos.service';
 import { PlanLifecycleService } from '../tasks/plan-lifecycle.service';
-import { TimerService } from '../timers/trigger.service';
+import { TriggerService } from '../timers/trigger.service';
 import { REVIEW_ROUND_TIMEOUT_MS } from '../issues/review-round-gate.service';
 import { ReviewRoundService } from '../issues/review-round.service';
 import {
@@ -116,7 +116,8 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
         useValue: { getStatus: jest.fn(), autoEnsureRow: jest.fn() },
       },
     ];
-    if (withTimers) providers.push({ provide: TimerService, useValue: timers });
+    if (withTimers)
+      providers.push({ provide: TriggerService, useValue: timers });
     if (withRounds)
       providers.push({ provide: ReviewRoundService, useValue: rounds });
 
@@ -248,7 +249,7 @@ describe('PlatformMcpService notifyAgent review-round-open（开轮 sidecar）',
     expect(prisma.message.create).not.toHaveBeenCalled();
   });
 
-  it('TimerService 缺席 → 账本照写，派发仍 triggered:true（best-effort sidecar）', async () => {
+  it('TriggerService 缺席 → 账本照写，派发仍 triggered:true（best-effort sidecar）', async () => {
     await buildModule({ withTimers: false });
 
     const result = await service.notifyAgent(ctx, {
