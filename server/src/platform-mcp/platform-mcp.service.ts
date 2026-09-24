@@ -3966,14 +3966,15 @@ export class PlatformMcpService implements OnModuleInit {
 
   /**
    * wecom_reply：回复企业微信用户（仅当消息来自企微时使用）。
-   * - 解析当前任务（taskId/selfInstanceId 可选，未传则从 worker 会话自动解析）→ 校验归属
-   * - 查找任务所属团队绑定的 wecom_aibot 渠道 → 通过 WecomAibotAdapter 发送到企微（@发送者，群聊时@）
-   * - 同时镜像到任务群聊（@发送者 前缀），确保两端可见
+   * - 解析当前团队（teamId/selfInstanceId 可选，未传则从 worker 会话自动解析）→ 校验归属
+   * - 查找团队绑定的 wecom_aibot 渠道 → 通过 WecomAibotAdapter 发送到企微（@发送者，群聊时@）
+   * - 同时镜像到团队群聊（@发送者 前缀），确保两端可见
    * - 成功/失败均返回 isError:false 的 content 文本，不中断 agent 会话
    */
   async wecomReply(
     ctx: PlatformMcpContext,
     args: {
+      teamId?: string;
       taskId?: string;
       selfInstanceId?: string;
       msgtype?: string;
@@ -4079,39 +4080,47 @@ export class PlatformMcpService implements OnModuleInit {
       }
     }
 
-    let taskId: string | null = args.taskId?.trim() || null;
+    let teamId: string | null = args.teamId?.trim() || null;
+    let legacyTaskId: string | null = args.taskId?.trim() || null;
     let selfInstanceId: string | null = args.selfInstanceId?.trim() || null;
-    if (!taskId || !selfInstanceId) {
+    if (!legacyTaskId || !selfInstanceId) {
       try {
         const sess = await (this.prisma as any).session.findFirst({
-          where: { workerId: ctx.workerId },
+          where: teamId
+            ? { workerId: ctx.workerId, teamId }
+            : { workerId: ctx.workerId },
           orderBy: { createdAt: 'desc' },
-          select: { taskId: true, teamMemberId: true, agentId: true },
+          select: {
+            taskId: true,
+            teamId: true,
+            teamMemberId: true,
+            agentId: true,
+          },
         });
         if (sess) {
-          if (!taskId) taskId = sess.taskId ?? null;
-          if (!selfInstanceId)
+          if (!teamId) teamId = sess.teamId ?? null;
+          if (!legacyTaskId) legacyTaskId = sess.taskId ?? null;
+          if (!selfInstanceId) {
             selfInstanceId = sess.teamMemberId ?? sess.agentId ?? null;
+          }
         }
       } catch {}
     }
-    if (!taskId) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: '发送失败: 无法解析当前任务上下文（请传 taskId）',
-          },
-        ],
-        isError: false,
-      };
+    if (!teamId && legacyTaskId) {
+      try {
+        const task = await this.prisma.task.findUnique({
+          where: { id: legacyTaskId },
+          select: { teamId: true },
+        });
+        teamId = task?.teamId ?? null;
+      } catch {}
     }
-    if (!selfInstanceId) {
+    if (!teamId) {
       return {
         content: [
           {
             type: 'text',
-            text: '发送失败: 无法解析实例身份（请传 selfInstanceId）',
+            text: '发送失败: 无法解析团队上下文（请传 teamId）',
           },
         ],
         isError: false,
@@ -4119,7 +4128,12 @@ export class PlatformMcpService implements OnModuleInit {
     }
     let instanceId: string;
     try {
-      instanceId = await this.assertWorkerTask(ctx, taskId, selfInstanceId);
+      const auth = await this.assertWorkerTeam(
+        ctx,
+        teamId,
+        selfInstanceId ?? undefined,
+      );
+      instanceId = auth.memberId;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {
@@ -4127,34 +4141,25 @@ export class PlatformMcpService implements OnModuleInit {
         isError: false,
       };
     }
+    const replyScopeId = teamId;
 
     let wecomChannelId: string | null = null;
     try {
-      // 渠道绑定已迁移到团队：从 task 找到 team，再查团队绑定的 wecom 渠道
-      const task = await (this.prisma as any).task.findUnique({
-        where: { id: taskId },
-        select: { teamId: true },
+      const bindings = await (this.prisma as any).teamMessageChannel.findMany({
+        where: { teamId },
+        select: { messageChannelId: true },
       });
-      const teamId = task?.teamId ?? null;
-      if (teamId) {
-        const bindings = await (this.prisma as any).teamMessageChannel.findMany(
-          {
-            where: { teamId },
-            select: { messageChannelId: true },
-          },
-        );
-        for (const b of bindings as Array<{ messageChannelId: string }>) {
-          try {
-            const ch = await (this.prisma as any).messageChannel.findUnique({
-              where: { id: b.messageChannelId },
-              select: { id: true, type: true },
-            });
-            if (ch && ch.type === 'wecom_aibot') {
-              wecomChannelId = ch.id;
-              break;
-            }
-          } catch {}
-        }
+      for (const b of bindings as Array<{ messageChannelId: string }>) {
+        try {
+          const ch = await (this.prisma as any).messageChannel.findUnique({
+            where: { id: b.messageChannelId },
+            select: { id: true, type: true },
+          });
+          if (ch && ch.type === 'wecom_aibot') {
+            wecomChannelId = ch.id;
+            break;
+          }
+        } catch {}
       }
     } catch {}
     if (!wecomChannelId) {
@@ -4191,34 +4196,25 @@ export class PlatformMcpService implements OnModuleInit {
     let fromName: string | null = null;
     let chattype: string | null = null;
     try {
-      const pending = (adapter as any).getPendingOperatorForTask?.(taskId);
+      const pending = legacyTaskId
+        ? (adapter as any).getPendingOperatorForTask?.(legacyTaskId)
+        : null;
       if (pending) {
         fromName = pending.fromUserName ?? pending.fromUserId ?? null;
         chattype = pending.chattype ?? null;
       } else {
-        const groupCh = await this.prisma.chatChannel.findFirst({
-          where: { taskId, type: CHANNEL_TYPE.task_group },
-          select: { id: true },
-        });
-        if (groupCh) {
-          const ext = await (this.prisma as any).message.findFirst({
-            where: { channelId: groupCh.id, senderType: SENDER_TYPE.external },
-            orderBy: { createdAt: 'desc' },
-            select: { id: true, content: true },
-          });
-          if (ext) {
-            const streamInfo =
-              (adapter as any).getStream?.(ext.id) ??
-              (adapter as any).getPendingUser?.(ext.id);
-            if (streamInfo) {
-              fromName =
-                streamInfo.fromUserName ?? streamInfo.fromUserId ?? null;
-              chattype = streamInfo.chattype ?? null;
-            } else {
-              const contentText = (ext.content as any)?.text ?? '';
-              const m = /\[WeCom:([^\]]+)\]/.exec(String(contentText));
-              if (m) fromName = m[1].trim();
-            }
+        const ext = await this.findLatestTeamExternalMessage(teamId);
+        if (ext) {
+          const streamInfo =
+            (adapter as any).getStream?.(ext.id) ??
+            (adapter as any).getPendingUser?.(ext.id);
+          if (streamInfo) {
+            fromName = streamInfo.fromUserName ?? streamInfo.fromUserId ?? null;
+            chattype = streamInfo.chattype ?? null;
+          } else {
+            const contentText = (ext.content as any)?.text ?? '';
+            const m = /\[WeCom:([^\]]+)\]/.exec(String(contentText));
+            if (m) fromName = m[1].trim();
           }
         }
       }
@@ -4242,39 +4238,26 @@ export class PlatformMcpService implements OnModuleInit {
     try {
       if (msgtype === 'text' || msgtype === 'markdown') {
         if (typeof (adapter as any).finishStream === 'function') {
-          const groupCh = await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
-          if (groupCh) {
-            const ext = await (this.prisma as any).message.findFirst({
-              where: {
-                channelId: groupCh.id,
-                senderType: SENDER_TYPE.external,
-              },
-              orderBy: { createdAt: 'desc' },
-              select: { id: true },
-            });
-            if (ext) {
-              try {
-                wecomSent = await (adapter as any).finishStream(
-                  ext.id,
-                  wecomText,
+          const ext = await this.findLatestTeamExternalMessage(teamId);
+          if (ext) {
+            try {
+              wecomSent = await (adapter as any).finishStream(
+                ext.id,
+                wecomText,
+              );
+              if (wecomSent) {
+                this.logger.log(
+                  `wecom_reply finishStream ok teamId=${teamId} internalMessageId=${ext.id} stream replaced`,
                 );
-                if (wecomSent) {
-                  this.logger.log(
-                    `wecom_reply finishStream ok taskId=${taskId} internalMessageId=${ext.id} stream replaced`,
-                  );
-                } else {
-                  this.logger.log(
-                    `wecom_reply finishStream miss taskId=${taskId} internalMessageId=${ext.id} fallback to sendNewMessage`,
-                  );
-                }
-              } catch (e) {
-                this.logger.warn(
-                  `wecom_reply finishStream error taskId=${taskId}: ${(e as Error).message}`,
+              } else {
+                this.logger.log(
+                  `wecom_reply finishStream miss teamId=${teamId} internalMessageId=${ext.id} fallback to sendNewMessage`,
                 );
               }
+            } catch (e) {
+              this.logger.warn(
+                `wecom_reply finishStream error teamId=${teamId}: ${(e as Error).message}`,
+              );
             }
           }
         }
@@ -4309,7 +4292,7 @@ export class PlatformMcpService implements OnModuleInit {
         } catch (e) {
           sendError = `card JSON 解析失败: ${(e as Error).message}`;
           this.logger.warn(
-            `wecom_reply template_card JSON parse failed taskId=${taskId} err=${(e as Error).message} raw=${String(resolvedCard).slice(0, 800)}`,
+            `wecom_reply template_card JSON parse failed teamId=${teamId} err=${(e as Error).message} raw=${String(resolvedCard).slice(0, 800)}`,
           );
           throw new Error(sendError);
         }
@@ -4321,7 +4304,7 @@ export class PlatformMcpService implements OnModuleInit {
           typeof cardObj.template_card === 'object'
         ) {
           this.logger.log(
-            `wecom_reply template_card unwrap template_card wrapper taskId=${taskId}`,
+            `wecom_reply template_card unwrap template_card wrapper teamId=${teamId}`,
           );
           cardObj = cardObj.template_card;
         }
@@ -4334,7 +4317,7 @@ export class PlatformMcpService implements OnModuleInit {
           cardObj.card.card_type
         ) {
           this.logger.log(
-            `wecom_reply template_card unwrap card wrapper taskId=${taskId}`,
+            `wecom_reply template_card unwrap card wrapper teamId=${teamId}`,
           );
           cardObj = cardObj.card;
         }
@@ -4353,13 +4336,13 @@ export class PlatformMcpService implements OnModuleInit {
           sendError =
             'card.card_type 必填（如 text_notice / button_interaction / vote_interaction / news_notice）';
           this.logger.warn(
-            `wecom_reply template_card missing card_type taskId=${taskId} card=${JSON.stringify(cardObj).slice(0, 1200)}`,
+            `wecom_reply template_card missing card_type teamId=${teamId} card=${JSON.stringify(cardObj).slice(0, 1200)}`,
           );
           throw new Error(sendError);
         }
         if (!validCardTypes.includes(cardObj.card_type)) {
           this.logger.warn(
-            `wecom_reply template_card unknown card_type=${cardObj.card_type} taskId=${taskId}`,
+            `wecom_reply template_card unknown card_type=${cardObj.card_type} teamId=${teamId}`,
           );
         }
         // Only card_type + main_title are required; icon_url/pic_url/image_url/card_image etc are all optional (no image required to send card)
@@ -4371,7 +4354,7 @@ export class PlatformMcpService implements OnModuleInit {
               desc: rawText.slice(0, 512),
             };
             this.logger.log(
-              `wecom_reply template_card auto-filled main_title from text taskId=${taskId} card_type=${cardObj.card_type}`,
+              `wecom_reply template_card auto-filled main_title from text teamId=${teamId} card_type=${cardObj.card_type}`,
             );
           } else if (
             [
@@ -4385,7 +4368,7 @@ export class PlatformMcpService implements OnModuleInit {
             sendError =
               'card.main_title 必填（card_type 已提供但 main_title 缺失，image/pic_url 等均为可选）';
             this.logger.warn(
-              `wecom_reply template_card missing main_title taskId=${taskId} card_type=${cardObj.card_type} card=${JSON.stringify(cardObj).slice(0, 800)}`,
+              `wecom_reply template_card missing main_title teamId=${teamId} card_type=${cardObj.card_type} card=${JSON.stringify(cardObj).slice(0, 800)}`,
             );
             throw new Error(sendError);
           }
@@ -4403,20 +4386,20 @@ export class PlatformMcpService implements OnModuleInit {
           );
         };
         if (!cardObj.task_id) {
-          cardObj.task_id = genUniqueTaskId(taskId);
+          cardObj.task_id = genUniqueTaskId(replyScopeId);
         } else {
           // Provided task_id must also be unique per send; sanitize and ensure uniqueness to avoid 42014
           const provided = String(cardObj.task_id).trim();
           const sanitizedProvided =
             provided.replace(/[^a-zA-Z0-9_\-@]/g, '_').slice(0, 64) ||
-            genUniqueTaskId(taskId);
+            genUniqueTaskId(replyScopeId);
           // If provided equals base sanitized (reused t_0000000014), make it unique
-          const baseSanitized = taskId.replace(/[^a-zA-Z0-9_\-@]/g, '_');
+          const baseSanitized = replyScopeId.replace(/[^a-zA-Z0-9_\-@]/g, '_');
           if (
             sanitizedProvided === baseSanitized ||
-            sanitizedProvided === taskId
+            sanitizedProvided === replyScopeId
           ) {
-            cardObj.task_id = genUniqueTaskId(taskId);
+            cardObj.task_id = genUniqueTaskId(replyScopeId);
           } else {
             // Ensure length <64 and unique suffix to avoid collision when same LLM value reused
             const suffix = `_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
@@ -4454,13 +4437,13 @@ export class PlatformMcpService implements OnModuleInit {
         if ('card_style' in cardObj) {
           delete cardObj.card_style;
           this.logger.log(
-            `wecom_reply template_card stripped invalid card_style taskId=${taskId}`,
+            `wecom_reply template_card stripped invalid card_style teamId=${teamId}`,
           );
         }
         if (!cardObj.source || typeof cardObj.source !== 'object') {
           cardObj.source = { desc: 'vteam', desc_color: 0 };
           this.logger.log(
-            `wecom_reply template_card auto-filled source taskId=${taskId} card_type=${cardObj.card_type}`,
+            `wecom_reply template_card auto-filled source teamId=${teamId} card_type=${cardObj.card_type}`,
           );
         } else {
           const sc: any = cardObj.source;
@@ -4493,14 +4476,14 @@ export class PlatformMcpService implements OnModuleInit {
             }
             cardObj.card_action = { type: 1, url: PLACEHOLDER_URL };
             this.logger.log(
-              `wecom_reply template_card auto-filled card_action type=1 url=${PLACEHOLDER_URL} for ${cardObj.card_type} taskId=${taskId} (42045 fix)`,
+              `wecom_reply template_card auto-filled card_action type=1 url=${PLACEHOLDER_URL} for ${cardObj.card_type} teamId=${teamId} (42045 fix)`,
             );
           } else {
             // Valid type exists but ensure required field present
             if (ca.type === 1 && (!ca.url || !String(ca.url).trim())) {
               ca.url = PLACEHOLDER_URL;
               this.logger.log(
-                `wecom_reply template_card patched card_action url placeholder taskId=${taskId}`,
+                `wecom_reply template_card patched card_action url placeholder teamId=${teamId}`,
               );
             }
           }
@@ -4511,14 +4494,14 @@ export class PlatformMcpService implements OnModuleInit {
             if (![0, 1, 2].includes(ca.type)) {
               delete cardObj.card_action;
               this.logger.log(
-                `wecom_reply template_card stripped invalid card_action type=${ca.type} for interactive ${cardObj.card_type} taskId=${taskId}`,
+                `wecom_reply template_card stripped invalid card_action type=${ca.type} for interactive ${cardObj.card_type} teamId=${teamId}`,
               );
             } else if (ca.type === 1 && (!ca.url || !String(ca.url).trim())) {
               // Instead of downgrading to type 0, auto-fill url to avoid 42028-like handling? For card_action fallback to delete
               // Prefer delete to avoid accidental 42045; but type 1 without url would be invalid anywhere, so patch
               ca.url = PLACEHOLDER_URL;
               this.logger.log(
-                `wecom_reply template_card patched interactive card_action url placeholder taskId=${taskId}`,
+                `wecom_reply template_card patched interactive card_action url placeholder teamId=${teamId}`,
               );
             } else if (
               ca.type === 2 &&
@@ -4526,7 +4509,7 @@ export class PlatformMcpService implements OnModuleInit {
             ) {
               delete cardObj.card_action;
               this.logger.log(
-                `wecom_reply template_card stripped invalid card_action appid missing for interactive ${cardObj.card_type} taskId=${taskId}`,
+                `wecom_reply template_card stripped invalid card_action appid missing for interactive ${cardObj.card_type} teamId=${teamId}`,
               );
             }
           }
@@ -4570,7 +4553,7 @@ export class PlatformMcpService implements OnModuleInit {
               btn.url = PLACEHOLDER_URL;
               patched++;
               this.logger.log(
-                `wecom_reply template_card patched button_list[${i}] missing url -> placeholder taskId=${taskId}`,
+                `wecom_reply template_card patched button_list[${i}] missing url -> placeholder teamId=${teamId}`,
               );
             }
             // If type is present but not 0/1/2, normalize to absent (key-based button)
@@ -4599,7 +4582,7 @@ export class PlatformMcpService implements OnModuleInit {
           }
           if (patched)
             this.logger.log(
-              `wecom_reply template_card patched ${patched} button_list items taskId=${taskId} card_type=${cardObj.card_type}`,
+              `wecom_reply template_card patched ${patched} button_list items teamId=${teamId} card_type=${cardObj.card_type}`,
             );
         }
         // jump_list and horizontal_content_list similar per-item url fixes (type 1 needs url, type 2 needs appid)
@@ -4613,7 +4596,7 @@ export class PlatformMcpService implements OnModuleInit {
               if (item.type === 1 && (!item.url || !String(item.url).trim())) {
                 item.url = PLACEHOLDER_URL;
                 this.logger.log(
-                  `wecom_reply template_card patched ${listKey} type1 missing url -> placeholder taskId=${taskId}`,
+                  `wecom_reply template_card patched ${listKey} type1 missing url -> placeholder teamId=${teamId}`,
                 );
               }
               if (
@@ -4625,7 +4608,7 @@ export class PlatformMcpService implements OnModuleInit {
                 item.url = PLACEHOLDER_URL;
                 delete item.appid;
                 this.logger.log(
-                  `wecom_reply template_card patched ${listKey} type2 missing appid -> fallback type1 taskId=${taskId}`,
+                  `wecom_reply template_card patched ${listKey} type2 missing appid -> fallback type1 teamId=${teamId}`,
                 );
               }
             }
@@ -4637,14 +4620,14 @@ export class PlatformMcpService implements OnModuleInit {
           if (qa.type === 1 && (!qa.url || !String(qa.url).trim())) {
             qa.url = PLACEHOLDER_URL;
             this.logger.log(
-              `wecom_reply template_card patched quote_area missing url taskId=${taskId}`,
+              `wecom_reply template_card patched quote_area missing url teamId=${teamId}`,
             );
           }
           if (qa.type === 2 && (!qa.appid || !String(qa.appid).trim())) {
             qa.type = 0;
             delete qa.appid;
             this.logger.log(
-              `wecom_reply template_card patched quote_area type2 missing appid -> type0 taskId=${taskId}`,
+              `wecom_reply template_card patched quote_area type2 missing appid -> type0 teamId=${teamId}`,
             );
           }
         }
@@ -4658,7 +4641,7 @@ export class PlatformMcpService implements OnModuleInit {
           ) {
             cardObj.card_image = { url: PLACEHOLDER_URL };
             this.logger.log(
-              `wecom_reply template_card auto-filled card_image placeholder for news_notice taskId=${taskId} (42044 fix)`,
+              `wecom_reply template_card auto-filled card_image placeholder for news_notice teamId=${teamId} (42044 fix)`,
             );
           } else if (
             typeof ci.url === 'string' &&
@@ -4666,7 +4649,7 @@ export class PlatformMcpService implements OnModuleInit {
           ) {
             ci.url = PLACEHOLDER_URL;
             this.logger.log(
-              `wecom_reply template_card patched card_image url placeholder for news_notice taskId=${taskId}`,
+              `wecom_reply template_card patched card_image url placeholder for news_notice teamId=${teamId}`,
             );
           }
           if (
@@ -4687,7 +4670,7 @@ export class PlatformMcpService implements OnModuleInit {
               image_url: PLACEHOLDER_URL,
             };
             this.logger.log(
-              `wecom_reply template_card auto-filled image_text_area for news_notice taskId=${taskId}`,
+              `wecom_reply template_card auto-filled image_text_area for news_notice teamId=${teamId}`,
             );
           }
         }
@@ -4725,10 +4708,10 @@ export class PlatformMcpService implements OnModuleInit {
               (cardObj as any).vote_title ??
               (cardObj as any).question_key ??
               cardObj.main_title?.title ??
-              String(taskId).slice(0, 32);
+              String(replyScopeId).slice(0, 32);
             const questionKey =
               String(questionKeyRaw).slice(0, 1024) ||
-              String(taskId).slice(0, 1024);
+              String(replyScopeId).slice(0, 1024);
             const titleRaw =
               (cardObj as any).vote_title ??
               cb?.title ??
@@ -4805,7 +4788,7 @@ export class PlatformMcpService implements OnModuleInit {
                 (cardObj.submit_button as any).text = '提交';
             }
             this.logger.log(
-              `wecom_reply template_card normalized vote_interaction taskId=${taskId} question_key=${questionKey} options=${mapped.length} (42037 fix)`,
+              `wecom_reply template_card normalized vote_interaction teamId=${teamId} question_key=${questionKey} options=${mapped.length} (42037 fix)`,
             );
           } else if (
             !cb ||
@@ -4815,7 +4798,7 @@ export class PlatformMcpService implements OnModuleInit {
             const questionKey = String(
               (cardObj as any).vote_title ??
                 cardObj.main_title?.title ??
-                String(taskId).slice(0, 32),
+                String(replyScopeId).slice(0, 32),
             ).slice(0, 1024);
             const mapped = [
               { id: `${questionKey}:选项1`.slice(0, 128), text: '选项1' },
@@ -4833,7 +4816,7 @@ export class PlatformMcpService implements OnModuleInit {
             if ('vote_list' in cardObj) delete (cardObj as any).vote_list;
             if ('vote_title' in cardObj) delete (cardObj as any).vote_title;
             this.logger.log(
-              `wecom_reply template_card fabricated vote_interaction options taskId=${taskId} (42037 fix)`,
+              `wecom_reply template_card fabricated vote_interaction options teamId=${teamId} (42037 fix)`,
             );
           }
         }
@@ -4860,26 +4843,13 @@ export class PlatformMcpService implements OnModuleInit {
         }
         // Log normalized card for debugging (slice to avoid oversized)
         this.logger.log(
-          `wecom_reply template_card normalized taskId=${taskId} card_type=${cardObj.card_type} task_id=${cardObj.task_id} card=${JSON.stringify(cardObj).slice(0, 2000)}`,
+          `wecom_reply template_card normalized teamId=${teamId} card_type=${cardObj.card_type} task_id=${cardObj.task_id} card=${JSON.stringify(cardObj).slice(0, 2000)}`,
         );
         resolvedCard = cardObj;
         let internalId: string | null = null;
         try {
-          const groupCh = await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
-          if (groupCh) {
-            const ext = await (this.prisma as any).message.findFirst({
-              where: {
-                channelId: groupCh.id,
-                senderType: SENDER_TYPE.external,
-              },
-              orderBy: { createdAt: 'desc' },
-              select: { id: true },
-            });
-            if (ext) internalId = ext.id;
-          }
+          const ext = await this.findLatestTeamExternalMessage(teamId);
+          if (ext) internalId = ext.id;
         } catch {}
         // Prefer passive reply (carries replyStream context + req_id) for chattype single/group both work via frameHeaders; fallback to active sendMessage
         try {
@@ -4888,7 +4858,7 @@ export class PlatformMcpService implements OnModuleInit {
             typeof (adapter as any).replyTemplateCard === 'function'
           ) {
             this.logger.log(
-              `wecom_reply trying replyTemplateCard internalId=${internalId} chattype=${chattype ?? 'unknown'} taskId=${taskId}`,
+              `wecom_reply trying replyTemplateCard internalId=${internalId} chattype=${chattype ?? 'unknown'} teamId=${teamId}`,
             );
             wecomSent = await (adapter as any).replyTemplateCard(
               internalId,
@@ -4901,7 +4871,7 @@ export class PlatformMcpService implements OnModuleInit {
           }
         } catch (e) {
           this.logger.warn(
-            `wecom_reply replyTemplateCard threw taskId=${taskId} card=${JSON.stringify(cardObj).slice(0, 800)} err=${(e as Error).message} stack=${(e as Error).stack?.slice(0, 600) ?? ''}`,
+            `wecom_reply replyTemplateCard threw teamId=${teamId} card=${JSON.stringify(cardObj).slice(0, 800)} err=${(e as Error).message} stack=${(e as Error).stack?.slice(0, 600) ?? ''}`,
           );
         }
         if (
@@ -4910,7 +4880,7 @@ export class PlatformMcpService implements OnModuleInit {
         ) {
           try {
             this.logger.log(
-              `wecom_reply trying sendTemplateCard channel=${wecomChannelId} chatId hint resolved via adapter taskId=${taskId}`,
+              `wecom_reply trying sendTemplateCard channel=${wecomChannelId} chatId hint resolved via adapter teamId=${teamId}`,
             );
             wecomSent = await (adapter as any).sendTemplateCard(
               wecomChannelId,
@@ -4918,13 +4888,13 @@ export class PlatformMcpService implements OnModuleInit {
             );
           } catch (e) {
             this.logger.warn(
-              `wecom_reply sendTemplateCard threw taskId=${taskId} card=${JSON.stringify(cardObj).slice(0, 800)} err=${(e as Error).message}`,
+              `wecom_reply sendTemplateCard threw teamId=${teamId} card=${JSON.stringify(cardObj).slice(0, 800)} err=${(e as Error).message}`,
             );
           }
         }
         if (!wecomSent) {
           this.logger.warn(
-            `wecom_reply template_card both methods failed taskId=${taskId} card_type=${cardObj.card_type} internalId=${internalId ?? 'null'} channel=${wecomChannelId} card=${JSON.stringify(cardObj).slice(0, 2000)}`,
+            `wecom_reply template_card both methods failed teamId=${teamId} card_type=${cardObj.card_type} internalId=${internalId ?? 'null'} channel=${wecomChannelId} card=${JSON.stringify(cardObj).slice(0, 2000)}`,
           );
         }
         mirrorContent = {
@@ -4971,7 +4941,8 @@ export class PlatformMcpService implements OnModuleInit {
           throw new Error(sendError);
         }
         const sanitizedTaskId = (() => {
-          const s = taskId.replace(/[^a-zA-Z0-9_\-@]/g, '_') || 't_default';
+          const s =
+            replyScopeId.replace(/[^a-zA-Z0-9_\-@]/g, '_') || 't_default';
           const suffix = `_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
           return `${s.slice(0, Math.max(1, 64 - suffix.length))}${suffix}`.slice(
             0,
@@ -5066,26 +5037,13 @@ export class PlatformMcpService implements OnModuleInit {
           }
         }
         this.logger.log(
-          `wecom_reply mpnews normalized taskId=${taskId} articles=${normalized.length} hasPic=${normalized.some((a) => !!a.picurl)} card=${JSON.stringify(cardObj).slice(0, 2000)}`,
+          `wecom_reply mpnews normalized teamId=${teamId} articles=${normalized.length} hasPic=${normalized.some((a) => !!a.picurl)} card=${JSON.stringify(cardObj).slice(0, 2000)}`,
         );
         resolvedCard = cardObj;
         let internalId: string | null = null;
         try {
-          const groupCh = await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
-          if (groupCh) {
-            const ext = await (this.prisma as any).message.findFirst({
-              where: {
-                channelId: groupCh.id,
-                senderType: SENDER_TYPE.external,
-              },
-              orderBy: { createdAt: 'desc' },
-              select: { id: true },
-            });
-            if (ext) internalId = ext.id;
-          }
+          const ext = await this.findLatestTeamExternalMessage(teamId);
+          if (ext) internalId = ext.id;
         } catch {}
         try {
           if (
@@ -5093,7 +5051,7 @@ export class PlatformMcpService implements OnModuleInit {
             typeof (adapter as any).replyTemplateCard === 'function'
           ) {
             this.logger.log(
-              `wecom_reply mpnews trying replyTemplateCard internalId=${internalId} taskId=${taskId}`,
+              `wecom_reply mpnews trying replyTemplateCard internalId=${internalId} teamId=${teamId}`,
             );
             wecomSent = await (adapter as any).replyTemplateCard(
               internalId,
@@ -5106,7 +5064,7 @@ export class PlatformMcpService implements OnModuleInit {
           }
         } catch (e) {
           this.logger.warn(
-            `wecom_reply mpnews replyTemplateCard threw taskId=${taskId} err=${(e as Error).message}`,
+            `wecom_reply mpnews replyTemplateCard threw teamId=${teamId} err=${(e as Error).message}`,
           );
         }
         if (
@@ -5115,7 +5073,7 @@ export class PlatformMcpService implements OnModuleInit {
         ) {
           try {
             this.logger.log(
-              `wecom_reply mpnews trying sendTemplateCard channel=${wecomChannelId} taskId=${taskId}`,
+              `wecom_reply mpnews trying sendTemplateCard channel=${wecomChannelId} teamId=${teamId}`,
             );
             wecomSent = await (adapter as any).sendTemplateCard(
               wecomChannelId,
@@ -5123,13 +5081,13 @@ export class PlatformMcpService implements OnModuleInit {
             );
           } catch (e) {
             this.logger.warn(
-              `wecom_reply mpnews sendTemplateCard threw taskId=${taskId} err=${(e as Error).message}`,
+              `wecom_reply mpnews sendTemplateCard threw teamId=${teamId} err=${(e as Error).message}`,
             );
           }
         }
         if (!wecomSent) {
           this.logger.warn(
-            `wecom_reply mpnews both methods failed taskId=${taskId} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`,
+            `wecom_reply mpnews both methods failed teamId=${teamId} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`,
           );
         }
         mirrorContent = {
@@ -5154,7 +5112,7 @@ export class PlatformMcpService implements OnModuleInit {
           let buffer: Buffer | null = null;
           // Try artifactId / archive path first, then /uploads direct, then worker fetch
           try {
-            if (mediaRef.startsWith('art_')) {
+            if (legacyTaskId && mediaRef.startsWith('art_')) {
               const artifactId = mediaRef
                 .split('@')[0]
                 .split('/')[0]
@@ -5162,7 +5120,7 @@ export class PlatformMcpService implements OnModuleInit {
               const direct = await (
                 this.prisma as any
               ).artifactVersion.findFirst({
-                where: { artifactId, artifact: { taskId } },
+                where: { artifactId, artifact: { taskId: legacyTaskId } },
                 orderBy: { version: 'desc' },
                 select: { contentRef: true },
               });
@@ -5174,28 +5132,34 @@ export class PlatformMcpService implements OnModuleInit {
             }
             if (!buffer) {
               const target = FileStorageService.normalizeFileRef(mediaRef);
-              const versions = await (
-                this.prisma as any
-              ).artifactVersion.findMany({
-                where: { artifact: { taskId }, filePath: { not: null } },
-                orderBy: { createdAt: 'desc' },
-                select: { contentRef: true, filePath: true },
-              });
-              const hit = (
-                versions as Array<{
-                  contentRef: string;
-                  filePath: string | null;
-                }>
-              ).find(
-                (v) =>
-                  v.filePath !== null &&
-                  FileStorageService.normalizeFileRef(v.filePath) === target,
-              );
-              if (hit) {
-                buffer = await FileStorageService.readUploadedFile(
-                  hit.contentRef,
+              if (legacyTaskId) {
+                const versions = await (
+                  this.prisma as any
+                ).artifactVersion.findMany({
+                  where: {
+                    artifact: { taskId: legacyTaskId },
+                    filePath: { not: null },
+                  },
+                  orderBy: { createdAt: 'desc' },
+                  select: { contentRef: true, filePath: true },
+                });
+                const hit = (
+                  versions as Array<{
+                    contentRef: string;
+                    filePath: string | null;
+                  }>
+                ).find(
+                  (v) =>
+                    v.filePath !== null &&
+                    FileStorageService.normalizeFileRef(v.filePath) === target,
                 );
-              } else if (mediaRef.startsWith('/uploads/')) {
+                if (hit) {
+                  buffer = await FileStorageService.readUploadedFile(
+                    hit.contentRef,
+                  );
+                }
+              }
+              if (!buffer && mediaRef.startsWith('/uploads/')) {
                 buffer = await FileStorageService.readUploadedFile(target);
               }
             }
@@ -5219,7 +5183,7 @@ export class PlatformMcpService implements OnModuleInit {
           } catch (e) {
             if (!sendError) sendError = (e as Error).message ?? String(e);
             this.logger.warn(
-              `wecom_reply image fetch failed media=${mediaRef} taskId=${taskId} err=${sendError}`,
+              `wecom_reply image fetch failed media=${mediaRef} teamId=${teamId} err=${sendError}`,
             );
             throw new Error(sendError);
           }
@@ -5244,21 +5208,8 @@ export class PlatformMcpService implements OnModuleInit {
         // Send via passive reply first, fallback to active
         let internalId: string | null = null;
         try {
-          const groupCh = await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
-          if (groupCh) {
-            const ext = await (this.prisma as any).message.findFirst({
-              where: {
-                channelId: groupCh.id,
-                senderType: SENDER_TYPE.external,
-              },
-              orderBy: { createdAt: 'desc' },
-              select: { id: true },
-            });
-            if (ext) internalId = ext.id;
-          }
+          const ext = await this.findLatestTeamExternalMessage(teamId);
+          if (ext) internalId = ext.id;
         } catch {}
         if (internalId && typeof (adapter as any).replyMedia === 'function') {
           wecomSent = await (adapter as any).replyMedia(
@@ -5284,7 +5235,7 @@ export class PlatformMcpService implements OnModuleInit {
         if (!wecomSent) {
           sendError = '图片发送失败（replyMedia/sendMediaMessage 均失败）';
           this.logger.warn(
-            `wecom_reply image both methods failed taskId=${taskId} mediaId=${mediaIdToSend} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`,
+            `wecom_reply image both methods failed teamId=${teamId} mediaId=${mediaIdToSend} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`,
           );
           throw new Error(sendError);
         }
@@ -5300,7 +5251,7 @@ export class PlatformMcpService implements OnModuleInit {
       const msg = (e as Error).message ?? String(e);
       if (!sendError) sendError = msg;
       this.logger.warn(
-        `wecom_reply send failed taskId=${taskId} msgtype=${msgtype} err=${msg} stack=${(e as Error).stack?.slice(0, 800) ?? ''} card=${JSON.stringify(resolvedCard ?? args.card).slice(0, 1200)}`,
+        `wecom_reply send failed teamId=${teamId} msgtype=${msgtype} err=${msg} stack=${(e as Error).stack?.slice(0, 800) ?? ''} card=${JSON.stringify(resolvedCard ?? args.card).slice(0, 1200)}`,
       );
       if (!mirrorContent) {
         mirrorContent = {
@@ -5318,7 +5269,7 @@ export class PlatformMcpService implements OnModuleInit {
         ? ` card=${JSON.stringify(resolvedCard).slice(0, 600)}`
         : '';
       this.logger.warn(
-        `wecom_reply wecom send failed taskId=${taskId} channel=${wecomChannelId} msgtype=${msgtype}${detail}${cardPreview}`,
+        `wecom_reply wecom send failed teamId=${teamId} channel=${wecomChannelId} msgtype=${msgtype}${detail}${cardPreview}`,
       );
       if (!mirrorContent) {
         mirrorContent = {
@@ -5337,23 +5288,23 @@ export class PlatformMcpService implements OnModuleInit {
       mirrorContent = { text: mirrorText, msgtype, parts: [] };
     }
     try {
-      (adapter as any).consumePendingOperatorForTask?.(taskId);
+      if (legacyTaskId) {
+        (adapter as any).consumePendingOperatorForTask?.(legacyTaskId);
+      }
     } catch {}
 
     let mirrorMessageId: string | null = null;
     let groupChannelId: string | null = null;
     try {
-      const groupCh = await this.prisma.chatChannel.findFirst({
-        where: { taskId, type: CHANNEL_TYPE.task_group },
-        select: { id: true },
-      });
+      const groupCh =
+        (await this.findTeamGroupChannel(teamId)) ??
+        (await this.ensureTeamGroupChannelByTeam(teamId));
       if (groupCh) {
         groupChannelId = groupCh.id;
-        const senderAgentId = await this.resolveSenderAgentId(
-          taskId,
+        const senderAgentId = await this.resolveTeamSenderAgentId(
+          teamId,
           instanceId,
         );
-        // Lookup placeholder in task_group to UPDATE instead of CREATE (fix duplicate: placeholder + new mirror -> only one).
         let placeholder: { id: string } | null = null;
         try {
           placeholder = await (this.prisma as any).message.findFirst({
@@ -5402,6 +5353,7 @@ export class PlatformMcpService implements OnModuleInit {
           const updated = await (this.prisma as any).message.update({
             where: { id: placeholder.id },
             data: {
+              taskId: null,
               content: mirrorContent as any,
               status: MESSAGE_STATUS.sent,
               senderId: senderAgentId,
@@ -5415,13 +5367,14 @@ export class PlatformMcpService implements OnModuleInit {
             { type: 'channel', id: groupCh.id },
           );
           this.logger.log(
-            `wecom_reply placeholder updated taskId=${taskId} placeholderId=${placeholder.id} -> mirrorTextLen=${(mirrorContent.text ?? '').length} msgtype=${msgtype}`,
+            `wecom_reply placeholder updated teamId=${teamId} placeholderId=${placeholder.id} -> mirrorTextLen=${(mirrorContent.text ?? '').length} msgtype=${msgtype}`,
           );
         } else {
           const msg = await (this.prisma as any).message.create({
             data: {
               id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
               channelId: groupCh.id,
+              taskId: null,
               senderType: SENDER_TYPE.agent,
               senderId: senderAgentId,
               senderInstanceId: instanceId,
@@ -5447,7 +5400,7 @@ export class PlatformMcpService implements OnModuleInit {
         content: [
           {
             type: 'text',
-            text: `已回复企微用户${fromName ? ` @${fromName}` : ''} 并同步到任务群聊。重要：回复已完成，请直接结束本轮，不要再输出任何总结或重复回复（不要生成 final answer）。`,
+            text: `已回复企微用户${fromName ? ` @${fromName}` : ''} 并同步到团队群聊。重要：回复已完成，请直接结束本轮，不要再输出任何总结或重复回复（不要生成 final answer）。`,
           },
         ],
         isError: false,
@@ -5472,7 +5425,7 @@ export class PlatformMcpService implements OnModuleInit {
       content: [
         {
           type: 'text',
-          text: `已同步到任务群聊（企微发送失败，请检查 WeCom 通道绑定与在线状态）。${failDetail}重要：回复已同步，请直接结束本轮，不要再输出重复回复。`.trim(),
+          text: `已同步到团队群聊（企微发送失败，请检查 WeCom 通道绑定与在线状态）。${failDetail}重要：回复已同步，请直接结束本轮，不要再输出重复回复。`.trim(),
         },
       ],
       isError: false,
@@ -5997,6 +5950,25 @@ export class PlatformMcpService implements OnModuleInit {
       });
     }
     return { memberId, sessionId: session.id };
+  }
+
+  private async findLatestTeamExternalMessage(
+    teamId: string,
+  ): Promise<{ id: string; content?: unknown; createdAt?: Date } | null> {
+    try {
+      const groupChannel = await this.findTeamGroupChannel(teamId);
+      if (!groupChannel) return null;
+      return (this.prisma as any).message.findFirst({
+        where: {
+          channelId: groupChannel.id,
+          senderType: SENDER_TYPE.external,
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, content: true, createdAt: true },
+      });
+    } catch {
+      return null;
+    }
   }
 
   /**
