@@ -477,8 +477,8 @@ export interface BuildSystemInstructionsOptions {
   isMainAgent?: boolean;
   /** 任务团队成员（实例 id/别名/序号 + 模板 agent id/名称/角色）；空/缺省则不注入【团队成员】段。 */
   team?: TeamMemberInfo[];
-  /** 任务主实例 id（用于团队成员段中标注主实例成员；无主实例时为 null）。 */
-  mainAgentInstanceId?: string | null;
+  /** 团队主成员 id（用于团队成员段中标注主成员；无主成员时为 null）。 */
+  mainAgentMemberId?: string | null;
   /** 当前 agent 的实例身份（TeamMember.id，tmm_ 前缀）；缺省（存量会话未绑实例）回退 agent.id 保持兼容。 */
   selfInstanceId?: string;
   /** 任务实例 id（TeamMember.id，tmm_ 前缀）：团队会话按团队成员（tmm_）调度时，
@@ -546,7 +546,7 @@ export interface BuildSystemInstructionsOptions {
 
 /**
  * 主 Agent 动态职责段（dispatch 时仅注入被选为主 Agent 的成员）：模板 prompt 不再写死
- * "主 Agent"职责（见 seed.ts），改由运行时按 Task.mainAgentId 判定后动态下发——
+ * "主 Agent"职责（见 seed.ts），改由运行时按 team.mainAgentMemberId 判定后动态下发——
  * 牵头分工、协调产出衔接、群聊进度提示、必要时 @ 成员协调、可汇总验收材料。
  * 语义对齐 FR-08（推进/进度同步）、FR-11（@ 触发响应）、FR-13（成员互 @ 协调，不超 3 轮）。
  */
@@ -656,7 +656,7 @@ export function buildSystemInstructions(
     const teamLines = opts.team.map(
       (m) =>
         `- ${m.alias ?? m.name ?? m.id}（实例 id: ${m.instanceId}，角色: ${m.role ?? ''}）` +
-        (m.instanceId === opts.mainAgentInstanceId ? ' —— 主 Agent' : ''),
+        (m.instanceId === opts.mainAgentMemberId ? ' —— 主 Agent' : ''),
     );
     blocks.push(
       `【团队成员】本次任务的团队成员（据此判断与谁协作、@ 谁）：\n${teamLines.join('\n')}`,
@@ -2292,7 +2292,7 @@ export class WorkerDispatcher
       await this.resolveBoundaryAndTools(agentIdentity, selfRoleAuthority);
     const systemOpts: BuildSystemInstructionsOptions = {
       isMainAgent,
-      mainAgentInstanceId: mainAgentMemberId,
+      mainAgentMemberId,
       team,
       selfInstanceId: teamMemberId,
       selfAlias,

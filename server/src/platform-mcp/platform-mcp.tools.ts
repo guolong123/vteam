@@ -850,7 +850,7 @@ export function buildPlatformMcpTools(
     {
       name: 'task_context',
       description:
-        '查询任务概览（标题/描述/状态/主 Agent/背景文档）与团队实例成员列表（agentMembers 含实例 id/别名/模板 agent/角色/主标注）。返回 {id, title, description, status, mainAgentId, mainAgentInstanceId, backgroundDocs, channelId, agentMembers}。',
+        '查询任务概览（标题/描述/状态/主 Agent/背景文档）与团队实例成员列表（agentMembers 含实例 id/别名/模板 agent/角色/主标注）。mainAgentMemberId 来自任务所属 Team.mainAgentMemberId，并与 agentMembers[].main 保持一致。返回 {id, title, description, status, mainAgentMemberId, backgroundDocs, channelId, pendingReceipts, agentMembers}。',
       inputSchema: taskContextSchema,
       handler: (ctx, args) => service.taskContext(ctx, args as TaskContextArgs),
     },

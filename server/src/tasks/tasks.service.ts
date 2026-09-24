@@ -77,8 +77,6 @@ type TaskRow = {
   description: string | null;
   priority: string;
   status: string;
-  mainAgentId: string | null;
-  mainAgentInstanceId: string | null;
   executionMode: string;
   backgroundDocs: Prisma.JsonValue | null;
   resetAfterComplete?: boolean | null;
@@ -1135,8 +1133,8 @@ export class TasksService implements OnModuleInit {
             });
           },
           // 10 篇 §8.1：群聊系统消息含主实例名（FR-07/08）
-          sysMessage: ({ task, mainAgentName }) =>
-            `任务已开始，主 Agent：${mainAgentName ?? task.mainAgentId ?? '未设置'}`,
+          sysMessage: ({ mainAgentName }) =>
+            `任务已开始，主 Agent：${mainAgentName ?? '未设置'}`,
           // 13 篇 §4.2：私信主实例的启动消息（含任务目标、团队分工、背景文档）
           privateMessage: ({ task }) => {
             const docs = Array.isArray(task.backgroundDocs)
@@ -1882,8 +1880,7 @@ export class TasksService implements OnModuleInit {
    * 任务 DTO（Todo11 团队化）：instances 自团队成员组装
    * [{id(tmm_), agentId, alias, seq, name, role, main}]，按 (agentId, seq) 稳定排序；
    * main = team.mainAgentMemberId；sessionStatus/sessionId 取团队会话行；
-   * 无任务侧实例字段、无任务实例表读取。
-   * mainAgentId/mainAgentInstanceId 标量保留（历史值由 Todo 6 迁移置空，列保留）。
+   * 无任务侧实例字段、无任务实例表读取；主成员身份仅来自 Team.mainAgentMemberId。
    */
   private async toTaskDto(task: TaskRow) {
     const teamId = (task as any).teamId ?? null;
@@ -1959,8 +1956,7 @@ export class TasksService implements OnModuleInit {
       description: task.description,
       priority: task.priority,
       status: task.status,
-      mainAgentId: task.mainAgentId,
-      mainAgentInstanceId: task.mainAgentInstanceId ?? null,
+      mainAgentMemberId: mainMemberId,
       executionMode: task.executionMode ?? 'direct',
       backgroundDocs: task.backgroundDocs ?? [],
       resetAfterComplete: Boolean(task.resetAfterComplete),

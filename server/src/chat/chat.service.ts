@@ -69,8 +69,6 @@ type ChannelRow = {
     title: string;
     status: string;
     teamId?: string | null;
-    mainAgentInstanceId?: string | null;
-    mainAgentId?: string | null;
   } | null;
   team?: { id: string; name: string } | null;
   teamMember?: {
@@ -114,8 +112,6 @@ const CHANNEL_TASK_SELECT = {
       title: true,
       status: true,
       teamId: true,
-      mainAgentInstanceId: true,
-      mainAgentId: true,
     },
   },
   team: { select: { id: true, name: true } },
@@ -786,8 +782,6 @@ export class ChatService {
       id?: string;
       status: string;
       teamId?: string | null;
-      mainAgentInstanceId?: string | null;
-      mainAgentId?: string | null;
     };
     if (senderType === SENDER_TYPE.external) {
       const row = await this.prisma.chatChannel.findUnique({
@@ -811,8 +805,6 @@ export class ChatService {
               id: true,
               status: true,
               teamId: true,
-              mainAgentInstanceId: true,
-              mainAgentId: true,
             },
           });
           if (t) task = t;
@@ -1649,8 +1641,6 @@ export class ChatService {
       id?: string;
       status: string;
       teamId?: string | null;
-      mainAgentInstanceId?: string | null;
-      mainAgentId?: string | null;
     };
   }> {
     const channel = await this.prisma.chatChannel.findUnique({
@@ -1683,8 +1673,6 @@ export class ChatService {
             id: true,
             status: true,
             teamId: true,
-            mainAgentInstanceId: true,
-            mainAgentId: true,
           },
         });
       } else if (row.taskId) {
@@ -1704,8 +1692,6 @@ export class ChatService {
               id: true,
               status: true,
               teamId: true,
-              mainAgentInstanceId: true,
-              mainAgentId: true,
             },
           });
         }
@@ -1719,8 +1705,6 @@ export class ChatService {
               id: true,
               status: true,
               teamId: true,
-              mainAgentInstanceId: true,
-              mainAgentId: true,
             },
           });
         }

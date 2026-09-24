@@ -151,7 +151,7 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
 /**
  * 主实例专属（server-gated）MCP 工具真实名——**已废弃，语义移交给 worker guard allowlist**。
  *
- * 历史：本清单曾标记由 platform-mcp 服务端按 `task.mainAgentInstanceId` /
+ * 历史：本清单曾标记由 platform-mcp 服务端按任务侧历史主标量或
  * `team.mainAgentMemberId` 权威判定（401/403）、guard 层② pass-through 的工具；
  * 该清单既不进 `toolAllows`（guard 白名单），也不进 `mcpDenies`（层① deny）。
  *

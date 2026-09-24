@@ -38,8 +38,7 @@ interface TaskDetail {
   title: string;
   description: string | null;
   status: TaskApiStatus;
-  mainAgentId: string | null;
-  mainAgentInstanceId?: string | null;
+  mainAgentMemberId: string | null;
   teamAgentIds: string[];
   teamId?: string | null;
   createdAt: string;
@@ -268,7 +267,7 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
             <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
               <span style={{ fontSize: fontSize.sm, color: neutral[500] }}>主 Agent：</span>
               <span data-testid="task-drawer-main-agent" style={{ fontSize: fontSize.sm, color: neutral[800] }}>
-                {task.mainAgentId ?? "未指定"}
+                {task.mainAgentMemberId ?? "未指定"}
               </span>
             </div>
 

@@ -1288,7 +1288,7 @@ describe('TasksService', () => {
         id: 't_0000000001',
         title: '任务标题',
         status: 'pending',
-        mainAgentInstanceId: 'tmm_0000000001',
+        mainAgentMemberId: 'tmm_0000000001',
         teamAgentIds: ['a_product', 'a_developer'],
       });
       // main 标记 = 团队主成员（team.mainAgentMemberId）
@@ -1441,8 +1441,7 @@ describe('TasksService', () => {
       });
       expect(result).toMatchObject({
         title: '改名',
-        mainAgentId: 'a_product',
-        mainAgentInstanceId: 'tmm_0000000001',
+        mainAgentMemberId: 'tmm_0000000001',
       });
     });
 
@@ -1470,7 +1469,7 @@ describe('TasksService', () => {
           mainAgentId: 'a_developer',
         },
       });
-      expect(result).toMatchObject({ mainAgentInstanceId: 'tmm_0000000002' });
+      expect(result).toMatchObject({ mainAgentMemberId: 'tmm_0000000001' });
     });
 
     it('mainAgentInstanceId 非团队内实例 → 400 MAIN_AGENT_NOT_IN_TEAM', async () => {
@@ -3729,6 +3728,9 @@ describe('TasksService', () => {
       prisma.teamMember.findMany.mockResolvedValue([
         tmmRow('tmm_0000000001', 'a_product'),
       ]);
+      (prisma.team.findUnique as jest.Mock)
+        .mockResolvedValueOnce({ mainAgentMemberId: 'tmm_0000000001' })
+        .mockResolvedValue({ mainAgentMemberId: null });
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
       idGen.nextId.mockResolvedValueOnce('m_0000000001');
       const txModels = mockTeamTx();
@@ -3743,8 +3745,7 @@ describe('TasksService', () => {
         where: { id: 't_0000000001' },
         data: { mainAgentId: null, mainAgentInstanceId: null },
       });
-      expect(result.mainAgentId).toBeNull();
-      expect(result.mainAgentInstanceId).toBeNull();
+      expect(result.mainAgentMemberId).toBeNull();
     });
 
     it('remove 不在团队/已移除 → 幂等 200：无事务、无广播', async () => {

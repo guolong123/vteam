@@ -114,7 +114,7 @@ interface TaskItem {
   description: string | null;
   priority: string;
   status: TaskApiStatus;
-  mainAgentId: string | null;
+  mainAgentMemberId: string | null;
   backgroundDocs: unknown[];
   teamAgentIds: string[];
   teamId?: string | null;

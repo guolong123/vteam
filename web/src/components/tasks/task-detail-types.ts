@@ -32,8 +32,7 @@ export interface TaskDetail {
   description: string | null;
   priority: string;
   status: TaskApiStatus;
-  mainAgentId: string | null;
-  mainAgentInstanceId: string | null;
+  mainAgentMemberId: string | null;
   managedMode: boolean;
   backgroundDocs: unknown[];
   teamAgentIds: string[];

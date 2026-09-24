@@ -1233,8 +1233,6 @@ describe('PlatformMcpService', () => {
         title: '需求分析',
         description: '描述',
         status: 'in_progress',
-        mainAgentId: 'ag_1',
-        mainAgentInstanceId: 'tmm_1',
         backgroundDocs: [{ name: '背景.md' }],
         teamId: 'tm_1',
       });
@@ -1271,8 +1269,7 @@ describe('PlatformMcpService', () => {
         title: '需求分析',
         description: '描述',
         status: 'in_progress',
-        mainAgentId: 'ag_1',
-        mainAgentInstanceId: 'tmm_1',
+        mainAgentMemberId: 'tmm_1',
         backgroundDocs: [{ name: '背景.md' }],
         channelId,
         pendingReceipts: { pending: 0, total: 0 },
@@ -1314,8 +1311,6 @@ describe('PlatformMcpService', () => {
         title: '需求分析',
         description: '描述',
         status: 'in_progress',
-        mainAgentId: 'ag_1',
-        mainAgentInstanceId: 'tmm_1',
         backgroundDocs: [],
         teamId: 'tm_1',
       });

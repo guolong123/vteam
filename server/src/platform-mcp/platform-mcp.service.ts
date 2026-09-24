@@ -1083,7 +1083,7 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * task_context：任务概览（title/description/status/mainAgentId/backgroundDocs）
+   * task_context：任务概览（title/description/status/mainAgentMemberId/backgroundDocs）
    * + 群聊频道 id + 团队 agentMembers（团队成员列表，实例形状
    * {id: 成员 id, alias, agentId, name, role, main}，main 按 team.mainAgentMemberId 判定）。
    */
@@ -1096,8 +1096,6 @@ export class PlatformMcpService implements OnModuleInit {
         title: true,
         description: true,
         status: true,
-        mainAgentId: true,
-        mainAgentInstanceId: true,
         backgroundDocs: true,
         teamId: true,
       },
@@ -1142,8 +1140,7 @@ export class PlatformMcpService implements OnModuleInit {
       title: task.title,
       description: task.description,
       status: task.status,
-      mainAgentId: task.mainAgentId,
-      mainAgentInstanceId: task.mainAgentInstanceId,
+      mainAgentMemberId: ctxMainId,
       backgroundDocs: task.backgroundDocs ?? [],
       channelId: channel?.id ?? null,
       pendingReceipts,
@@ -1523,7 +1520,7 @@ export class PlatformMcpService implements OnModuleInit {
     // 主 Agent 路由门（落库前硬拦：本块之后才 create message + broadcast）。
     // 主 Agent 可通知任何人；任何人可通知主 Agent；非主成员之间互通知
     // （含 self-notify）一律 403，被拦方请先通知主 Agent 由其中转。
-    // 主身份唯一依据 team.mainAgentMemberId（task.mainAgentInstanceId 已停写，不读）。
+    // 主身份唯一依据 team.mainAgentMemberId。
     if (args.selfInstanceId === args.targetInstanceId) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
@@ -3087,7 +3084,7 @@ export class PlatformMcpService implements OnModuleInit {
    * 身份门禁（原「是否主 Agent」403）已移除：调用方身份由 resolveExecContext
    * （assertWorkerTask/Team，防冒充/跨任务）先行校验，建任务资格由调用方 ROLE 的
    * toolAllows 授权；任务维度目标团队取 task.teamId，团队维度取 exec.teamId。
-   * task.mainAgentInstanceId 已停写不再读（读它会因 in_progress 任务改主未同步而误判）。
+   * 主 Agent 身份仅按 team.mainAgentMemberId 判定，不读取任务侧历史主标量。
    * 成功路径经 TasksService.createByAgent（attribution createdBy = 团队用户成员
    * owner 回填；永不直调 create，其按调用方 userId 的团队成员校验会 403 agent）。
    */
@@ -3107,7 +3104,7 @@ export class PlatformMcpService implements OnModuleInit {
     if (exec.kind === 'task') {
       const task = await this.prisma.task.findUnique({
         where: { id: exec.taskId },
-        select: { id: true, teamId: true, mainAgentInstanceId: true },
+        select: { id: true, teamId: true },
       });
       if (!task) {
         throw new NotFoundException({
@@ -3118,7 +3115,7 @@ export class PlatformMcpService implements OnModuleInit {
       // task_create 不再做「是否主 Agent」的身份门禁：调用方身份由
       // resolveExecContext（assertWorkerTask，防冒充/跨任务）先行校验，团队成员资格
       // 由调用方 ROLE 的 toolAllows 授权，建任务目标团队只依据 task.teamId。
-      // task.mainAgentInstanceId 是已停写的历史标量，此处不再读取。
+      // 任务上下文只用于取得 teamId；主 Agent 身份仍由 team.mainAgentMemberId 判定。
       if (!task.teamId) {
         throw new BadRequestException(
           '当前任务未绑定团队，无法解析建任务目标团队',
@@ -3170,7 +3167,7 @@ export class PlatformMcpService implements OnModuleInit {
     if (exec.kind === 'task') {
       const task = await this.prisma.task.findUnique({
         where: { id: exec.taskId },
-        select: { id: true, teamId: true, mainAgentInstanceId: true },
+        select: { id: true, teamId: true },
       });
       if (!task) {
         throw new NotFoundException({
@@ -3377,7 +3374,7 @@ export class PlatformMcpService implements OnModuleInit {
 
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { teamId: true, mainAgentInstanceId: true },
+      select: { teamId: true },
     });
     if (!task) {
       throw new NotFoundException({

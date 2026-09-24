@@ -1898,7 +1898,7 @@ describe('WorkerDispatcher', () => {
     it('带团队：注入【团队成员】段（实例别名/实例 id/角色 + 主实例标注按 instanceId），非主实例无标注', () => {
       const s = buildSystemInstructions(agent, {
         team,
-        mainAgentInstanceId: 'ta_architect_1',
+        mainAgentMemberId: 'ta_architect_1',
       });
       expect(s).toContain('【团队成员】');
       expect(s).toContain('产品经理-1（实例 id: ta_product_1，角色: product）');
@@ -1911,10 +1911,10 @@ describe('WorkerDispatcher', () => {
       );
     });
 
-    it('带团队但主实例为 null（任务未确定主实例）：团队成员段无任何标注', () => {
+    it('带团队但主成员为 null（团队未确定主成员）：团队成员段无任何标注', () => {
       const s = buildSystemInstructions(agent, {
         team,
-        mainAgentInstanceId: null,
+        mainAgentMemberId: null,
       });
       expect(s).toContain('【团队成员】');
       expect(s).not.toContain(' —— 主 Agent');
@@ -7575,7 +7575,7 @@ describe('WorkerDispatcher', () => {
       ];
       const out = buildSystemInstructions(agent, {
         isMainAgent: true,
-        mainAgentInstanceId: 'tmm_0000000001',
+        mainAgentMemberId: 'tmm_0000000001',
         team,
         selfInstanceId: 'tmm_0000000001',
         selfAlias: '产品经理-1',
