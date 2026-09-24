@@ -882,6 +882,9 @@ export function decodeXml(text: string): string {
     .replace(/&apos;/g, "'");
 }
 
+/** 模块级纯解析函数（extractArtifacts/extractJsonByType/extractAllJsonObjects）共用的 logger（类外无 this.logger）。 */
+const parseLogger = new Logger('WorkerDispatcher');
+
 /**
  * F3 MAJOR-2：从 agent 回复文本提取产出物声明（12 篇 §3.1 声明形状，兼容 §8.2 注入格式）：
  * ① `<artifact type title>正文</artifact>` 标签（§8.2 格式对称复用，text 类型取正文为 content）；
@@ -941,8 +944,11 @@ export function extractArtifacts(text: string): Array<Record<string, unknown>> {
       ) {
         push(parsed);
       }
-    } catch {
+    } catch (e) {
       // 同上：丢弃
+      parseLogger.debug(
+        `artifact 声明 JSON 非法已跳过: ${(e as Error).message}`,
+      );
     }
   }
   return out;
@@ -1091,7 +1097,10 @@ export function extractJsonByType(
             string,
             unknown
           >;
-        } catch {
+        } catch (e) {
+          parseLogger.debug(
+            `extractJsonByType 回退 type=${typeValue} start=${start}: ${(e as Error).message}`,
+          );
           return null;
         }
       }
@@ -1205,8 +1214,11 @@ function extractAllJsonObjects(
                 unknown
               >,
             });
-          } catch {
+          } catch (e) {
             // 非合法 JSON：跳过
+            parseLogger.debug(
+              `extractAllJsonObjects 跳过非合法 JSON pos=${start}: ${(e as Error).message}`,
+            );
           }
           break;
         }
@@ -1715,7 +1727,10 @@ export class WorkerDispatcher
     try {
       planLifecycle =
         this.moduleRef?.get(PlanLifecycleService, { strict: false }) ?? null;
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `门禁 PlanLifecycleService 未装配 task=${taskId}，fail-open 放行：${this.describeError(err)}`,
+      );
       planLifecycle = null;
     }
     if (!planLifecycle) {
@@ -1924,7 +1939,10 @@ export class WorkerDispatcher
         return memoryIndex;
       }
       return null;
-    } catch {
+    } catch (err) {
+      this.logger.debug(
+        `记忆索引构建失败 team=${teamId}，返回 null：${this.describeError(err)}`,
+      );
       return null;
     }
   }
@@ -2637,13 +2655,21 @@ export class WorkerDispatcher
                   adapter = this.moduleRef?.get(WecomAibotAdapter, {
                     strict: false,
                   }) as unknown as typeof adapter;
-                } catch {}
+                } catch (e) {
+                  this.logger.debug(
+                    `wecom bridge: ModuleRef adapter lookup miss taskId=${payload.taskId}: ${(e as Error).message}`,
+                  );
+                }
                 if (!adapter) {
                   try {
                     const g = globalThis as unknown as Record<string, unknown>;
                     adapter =
                       (g['__wecomAdapter'] as typeof adapter) ?? undefined;
-                  } catch {}
+                  } catch (e) {
+                    this.logger.debug(
+                      `wecom bridge: global adapter lookup miss taskId=${payload.taskId}: ${(e as Error).message}`,
+                    );
+                  }
                 }
                 if (!adapter) {
                   this.logger.warn(
@@ -2678,7 +2704,11 @@ export class WorkerDispatcher
                         `wecom bridge: using card pending operator taskId=${payload.taskId} fromUserId=${(cardOp as any).fromUserId} fromUserName=${(cardOp as any).fromUserName} chattype=${(cardOp as any).chattype ?? ''}`,
                       );
                     }
-                  } catch {}
+                  } catch (e) {
+                    this.logger.warn(
+                      `wecom bridge: getPendingOperatorForTask failed taskId=${payload.taskId}, fall to stream path: ${(e as Error).message}`,
+                    );
+                  }
                   if (!pendingFromCard) {
                     try {
                       pendingInfo =
@@ -2692,7 +2722,11 @@ export class WorkerDispatcher
                           externalMsg.id,
                         );
                       }
-                    } catch {}
+                    } catch (e) {
+                      this.logger.warn(
+                        `wecom bridge: stream/pending-user lookup failed taskId=${payload.taskId} internalMessageId=${externalMsg.id}, fromName degrades to '': ${(e as Error).message}`,
+                      );
+                    }
                   }
                   const fromName =
                     pendingInfo?.fromUserName || pendingInfo?.fromUserId || '';
@@ -2737,7 +2771,11 @@ export class WorkerDispatcher
                         `wecom bridge: post-card discarded placeholder stream internalMessageId=${externalMsg.id} taskId=${payload.taskId}`,
                       );
                     }
-                  } catch {}
+                  } catch (e) {
+                    this.logger.warn(
+                      `wecom bridge: post-card discardStream failed taskId=${payload.taskId} internalMessageId=${externalMsg.id} (best-effort): ${(e as Error).message}`,
+                    );
+                  }
                   try {
                     const pcAdapter: any = adapter;
                     const canNew =
@@ -3783,8 +3821,11 @@ export class WorkerDispatcher
         select: { overrideModelId: true },
       })) as { overrideModelId: string | null } | null;
       return row?.overrideModelId ?? null;
-    } catch {
+    } catch (err) {
       // 覆盖查询失败不阻断分派：回退 agent 默认模型（增强特性容错）
+      this.logger.warn(
+        `成员覆盖模型查询失败 teamMemberId=${teamMemberId}，回退 agent 默认模型：${this.describeError(err)}`,
+      );
       return null;
     }
   }
@@ -3811,7 +3852,10 @@ export class WorkerDispatcher
         select: { opencodeAgentName: true },
       })) as { opencodeAgentName: string | null } | null;
       return row?.opencodeAgentName ?? null;
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `成员 opencode agent 名查询失败 teamMemberId=${teamMemberId}，回退 null：${this.describeError(err)}`,
+      );
       return null;
     }
   }
@@ -3855,8 +3899,11 @@ export class WorkerDispatcher
             tools: capabilityTools,
           };
         }
-      } catch {
+      } catch (err) {
         // 策略解析异常不阻断分派 → 回退常量派生
+        this.logger.warn(
+          `岗位策略解析失败 role=${role.key}，回退常量派生：${this.describeError(err)}`,
+        );
       }
     }
     if (constantName) {
@@ -4610,7 +4657,11 @@ export class WorkerDispatcher
               forensicsType = inferErrorType(errText);
             }
           }
-        } catch {}
+        } catch (err) {
+          this.logger.debug(
+            `session ${sessionId} 错误尸检失败 worker=${row.workerId}，沿用默认错误类型：${this.describeError(err)}`,
+          );
+        }
       }
       await this.prisma.session.update({
         where: { id: sessionId },
