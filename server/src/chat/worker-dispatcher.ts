@@ -10,7 +10,10 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
-import { WecomAibotAdapter } from '../message-channels/adapters/wecom-aibot.adapter';
+import {
+  WECOM_OPERATOR_TTL_MS,
+  WecomAibotAdapter,
+} from '../message-channels/adapters/wecom-aibot.adapter';
 import { Prisma } from '@prisma/client';
 import { validateArtifactDeclaration } from '../artifacts/artifacts.service';
 import { ArtifactsService } from '../artifacts/artifacts.service';
@@ -83,6 +86,19 @@ import {
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
+
+type WecomBridgeExternalMessage = {
+  readonly id: string;
+  readonly content?: unknown;
+  readonly createdAt?: Date | null;
+};
+
+function getWecomBridgeStream(adapter: unknown, id: string): unknown {
+  if (typeof adapter !== 'object' || adapter === null) return undefined;
+  const getStream: unknown = Reflect.get(adapter, 'getStream');
+  if (typeof getStream !== 'function') return undefined;
+  return Reflect.apply(getStream, adapter, [id]);
+}
 
 /** 首次 bind 的 instanceRef 占位（opencode 会话尚未创建；第二次 bind 写入真实 sessionId）。 */
 export const PENDING_INSTANCE_REF = 'pending';
@@ -299,7 +315,7 @@ export const NON_MAIN_AGENT_NOTE =
 
 /** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
 export const WECOM_SYSTEM_INSTRUCTION =
-  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到（任务/团队）群聊，确保用户在企微端收到回复。';
+  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到团队群聊，确保用户在企微端收到回复。';
 
 /**
  * 平台级共享块（agent-role-entity 计划 todo 3）：原在 seed 的 7 个 prompt 内各抄一份，
@@ -690,7 +706,7 @@ export const TEAM_GROUP_TRIGGER_INSTRUCTION =
 
 export const WECOM_TRIGGER_INSTRUCTION =
   '【企微消息】此消息来自企业微信用户 via WeCom，请务必使用 vteam_wecom_reply 工具回复，不要使用 vteam_group_post，以确保用户在企微端收到@回复。' +
-  '回复会同时同步到（任务/团队）群聊。' +
+  '回复会同时同步到团队群聊。' +
   '（互斥优先级：wecom 优先——已注入本指令时不再注入 GROUP_TRIGGER_INSTRUCTION，见 dispatch 组装处。）';
 
 /**
@@ -1803,6 +1819,39 @@ export class WorkerDispatcher
     });
   }
 
+  private async findActiveWecomBridgeMessage(
+    channelId: string,
+    fallback: WecomBridgeExternalMessage | null,
+    adapter: unknown,
+  ): Promise<WecomBridgeExternalMessage | null> {
+    const candidates: WecomBridgeExternalMessage[] = [];
+    if (fallback) candidates.push(fallback);
+    try {
+      const rows = await (this.prisma as any).message.findMany({
+        where: {
+          channelId,
+          senderType: SENDER_TYPE.external,
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 20,
+        select: { id: true, content: true, createdAt: true },
+      });
+      if (Array.isArray(rows)) candidates.push(...rows);
+    } catch {}
+    const seen = new Set<string>();
+    const now = Date.now();
+    for (const candidate of candidates) {
+      if (seen.has(candidate.id)) continue;
+      seen.add(candidate.id);
+      if (!candidate.createdAt) continue;
+      const ageMs = now - candidate.createdAt.getTime();
+      if (ageMs < 0 || ageMs > WECOM_OPERATOR_TTL_MS) continue;
+      const stream = getWecomBridgeStream(adapter, candidate.id);
+      if (typeof stream === 'object' && stream !== null) return candidate;
+    }
+    return null;
+  }
+
   /**
    * 团队记忆索引（prompt hint 富集专用，session-unification Todo 9 起仅
    * team+global 两域，任务级记忆已删除）：计数 + 最近 5 条 description 行拼成
@@ -2345,6 +2394,7 @@ export class WorkerDispatcher
     }
     // 团队唯一路径：落库 + 广播 + emitFinal（无 task/team 双实现）
     const settled = await this.handleTeamTaskCompleted(payload);
+    const executionTeamId = settled.teamId;
     const agentId = settled.agentId;
     const text = settled.text;
     const displayText = settled.displayText;
@@ -2356,7 +2406,7 @@ export class WorkerDispatcher
     // （落库 + 广播 + emitFinal 已由上游 handleTeamTaskCompleted 完成；以下仅产出物归档 + wecom 桥接）
 
     try {
-      if (payload.taskId) {
+      if (payload.taskId && executionTeamId) {
         let derivedText = (payload.text ?? displayText ?? '').trim();
         if (
           !derivedText &&
@@ -2394,25 +2444,35 @@ export class WorkerDispatcher
           );
         } else {
           const prismaAny = this.prisma as unknown as Record<string, unknown>;
-          if (
-            !prismaAny.taskMessageChannel ||
-            typeof (prismaAny.taskMessageChannel as { findMany?: unknown })
-              .findMany !== 'function'
-          ) {
-            this.logger.warn(
-              `wecom bridge: skip taskId=${payload.taskId} no taskMessageChannel model (test mock)`,
-            );
-          } else {
-            const bindings = await (
-              prismaAny.taskMessageChannel as {
-                findMany: (
+          const teamMessageChannel = prismaAny.teamMessageChannel as
+            | {
+                findMany?: (
                   q: unknown,
                 ) => Promise<Array<{ messageChannelId: string }>>;
               }
-            ).findMany({
-              where: { taskId: payload.taskId },
-              select: { messageChannelId: true },
-            });
+            | undefined;
+          const taskMessageChannel = prismaAny.taskMessageChannel as
+            | {
+                findMany?: (
+                  q: unknown,
+                ) => Promise<Array<{ messageChannelId: string }>>;
+              }
+            | undefined;
+          const bindingModel = teamMessageChannel ?? taskMessageChannel;
+          if (!bindingModel || typeof bindingModel.findMany !== 'function') {
+            this.logger.warn(
+              `wecom bridge: skip taskId=${payload.taskId} teamId=${executionTeamId} no message-channel binding model`,
+            );
+          } else {
+            const bindings = teamMessageChannel
+              ? await teamMessageChannel.findMany({
+                  where: { teamId: executionTeamId },
+                  select: { messageChannelId: true },
+                })
+              : await taskMessageChannel.findMany({
+                  where: { taskId: payload.taskId },
+                  select: { messageChannelId: true },
+                });
             let wecomChannelsCount = 0;
             const wecomChannelIds: string[] = [];
             for (const b of bindings) {
@@ -2436,15 +2496,15 @@ export class WorkerDispatcher
               } catch {}
             }
             this.logger.log(
-              `wecom bridge: taskId=${payload.taskId}, bindings=${bindings.length}, found wecom channels=${wecomChannelsCount}`,
+              `wecom bridge: taskId=${payload.taskId}, teamId=${executionTeamId}, bindings=${bindings.length}, found wecom channels=${wecomChannelsCount}`,
             );
             if (bindings.length === 0) {
               this.logger.warn(
-                `wecom bridge: no bindings for taskId=${payload.taskId}`,
+                `wecom bridge: no bindings for taskId=${payload.taskId} teamId=${executionTeamId}`,
               );
             } else if (wecomChannelsCount === 0) {
               this.logger.warn(
-                `wecom bridge: no wecom channels among bindings taskId=${payload.taskId} bindings=${JSON.stringify(bindings.map((b) => b.messageChannelId))}`,
+                `wecom bridge: no wecom channels among bindings taskId=${payload.taskId} teamId=${executionTeamId} bindings=${JSON.stringify(bindings.map((b) => b.messageChannelId))}`,
               );
             }
             const wecomMirroredIds = new Set<string>();
@@ -2475,31 +2535,41 @@ export class WorkerDispatcher
                   );
                   continue;
                 }
-                const groupChatChannel = await (
+                const chatChannelModel = (
                   this.prisma as unknown as {
                     chatChannel: {
                       findFirst: (q: unknown) => Promise<{ id: string } | null>;
                     };
                   }
-                ).chatChannel.findFirst({
-                  where: {
-                    taskId: payload.taskId,
-                    type: CHANNEL_TYPE.task_group,
-                  },
-                  select: { id: true },
-                });
+                ).chatChannel;
+                const groupChatChannel =
+                  (await chatChannelModel.findFirst({
+                    where: {
+                      teamId: executionTeamId,
+                      type: CHANNEL_TYPE.team_group,
+                      deletedAt: null,
+                    },
+                    select: { id: true },
+                  })) ??
+                  (await chatChannelModel.findFirst({
+                    where: {
+                      taskId: payload.taskId,
+                      type: CHANNEL_TYPE.task_group,
+                    },
+                    select: { id: true },
+                  }));
                 if (!groupChatChannel) {
                   this.logger.warn(
                     `wecom bridge: no groupChannel for taskId=${payload.taskId}`,
                   );
                   continue;
                 }
-                const externalMsg = await (
+                let externalMsg = (await (
                   this.prisma as unknown as {
                     message: {
                       findFirst: (
                         q: unknown,
-                      ) => Promise<{ id: string; content?: unknown } | null>;
+                      ) => Promise<WecomBridgeExternalMessage | null>;
                     };
                   }
                 ).message.findFirst({
@@ -2508,24 +2578,8 @@ export class WorkerDispatcher
                     senderType: SENDER_TYPE.external,
                   },
                   orderBy: { createdAt: 'desc' },
-                });
-                const extContent = (
-                  externalMsg as unknown as { content?: { text?: string } }
-                )?.content;
-                const extTextLen =
-                  typeof extContent?.text === 'string'
-                    ? extContent.text.length
-                    : ((extContent as unknown as string | undefined)?.length ??
-                      0);
-                this.logger.log(
-                  `wecom bridge: externalMsg id=${(externalMsg as unknown as { id?: string })?.id ?? 'null'} textLen=${extTextLen} groupChannelId=${groupChatChannel.id}`,
-                );
-                if (!externalMsg) {
-                  this.logger.warn(
-                    `wecom bridge: externalMsg not found groupChannelId=${groupChatChannel.id} taskId=${payload.taskId}`,
-                  );
-                  continue;
-                }
+                  select: { id: true, content: true, createdAt: true },
+                })) as WecomBridgeExternalMessage | null;
                 let ok = false;
                 let adapter:
                   | {
@@ -2571,6 +2625,32 @@ export class WorkerDispatcher
                   this.logger.warn(
                     `wecom bridge: adapter missing finishStream taskId=${payload.taskId} adapterType=${(adapter as unknown as { type?: string }).type}`,
                   );
+                }
+                const activeExternalMsg =
+                  await this.findActiveWecomBridgeMessage(
+                    groupChatChannel.id,
+                    externalMsg,
+                    adapter,
+                  );
+                if (activeExternalMsg) {
+                  externalMsg = activeExternalMsg;
+                }
+                const extContent = (
+                  externalMsg as unknown as { content?: { text?: string } }
+                )?.content;
+                const extTextLen =
+                  typeof extContent?.text === 'string'
+                    ? extContent.text.length
+                    : ((extContent as unknown as string | undefined)?.length ??
+                      0);
+                this.logger.log(
+                  `wecom bridge: externalMsg id=${externalMsg?.id ?? 'null'} textLen=${extTextLen} groupChannelId=${groupChatChannel.id} activeStream=${!!activeExternalMsg}`,
+                );
+                if (!externalMsg) {
+                  this.logger.warn(
+                    `wecom bridge: externalMsg not found groupChannelId=${groupChatChannel.id} taskId=${payload.taskId}`,
+                  );
+                  continue;
                 }
                 let directedWecomText = textToSend;
                 let mirrorText = textToSend;
@@ -2710,7 +2790,11 @@ export class WorkerDispatcher
                   this.logger.log(
                     `wecom simple: finishStream taskId=${payload.taskId} internalMessageId=${externalMsg.id}`,
                   );
-                  if (adapter && typeof adapter.finishStream === 'function') {
+                  if (
+                    activeExternalMsg &&
+                    adapter &&
+                    typeof adapter.finishStream === 'function'
+                  ) {
                     try {
                       this.logger.log(
                         `wecom bridge: finishStream called with internalMessageId=${externalMsg.id} textLen=${directedWecomText.length} channelId=${ch.id}`,
@@ -2804,6 +2888,10 @@ export class WorkerDispatcher
                         where: {
                           channelId: groupChatChannel.id,
                           senderType: SENDER_TYPE.agent,
+                          ...(executionRef
+                            ? { senderInstanceId: executionRef }
+                            : {}),
+                          ...(agentId ? { senderId: agentId } : {}),
                         },
                         orderBy: { createdAt: 'desc' },
                       });
@@ -2866,7 +2954,7 @@ export class WorkerDispatcher
                         data: {
                           id: mirrorId,
                           channelId: groupChatChannel.id,
-                          taskId,
+                          taskId: null,
                           senderType: SENDER_TYPE.agent,
                           senderId: agentId,
                           senderInstanceId: executionRef ?? null,
@@ -2888,13 +2976,13 @@ export class WorkerDispatcher
                         { type: 'channel', id: groupChatChannel.id },
                       );
                       this.logger.log(
-                        `wecom bridge: mirrored to task_group channel=${groupChatChannel.id} mirrorId=${mirrorId} textLen=${mirrorText.length}`,
+                        `wecom bridge: mirrored to team_group channel=${groupChatChannel.id} mirrorId=${mirrorId} textLen=${mirrorText.length}`,
                       );
                     }
                   }
                 } catch (mirrorErr) {
                   this.logger.warn(
-                    `wecom bridge: mirror to task_group failed: ${(mirrorErr as Error).message}`,
+                    `wecom bridge: mirror to team_group failed: ${(mirrorErr as Error).message}`,
                   );
                 }
               } catch (innerErr) {
@@ -3003,6 +3091,7 @@ export class WorkerDispatcher
   private async handleTeamTaskCompleted(
     payload: TaskCompletedPayload,
   ): Promise<{
+    teamId: string | null;
     agentId: string | null;
     teamMemberId: string | null;
     text: string;
@@ -3021,22 +3110,24 @@ export class WorkerDispatcher
       agentId = agentId ?? session?.agentId ?? null;
       teamId = session?.teamId ?? null;
       teamMemberId = session?.teamMemberId ?? null;
-    } else if (taskId && agentId) {
+    }
+    if (!teamId && taskId) {
       const task = await (this.prisma as any).task.findUnique({
         where: { id: taskId },
         select: { teamId: true },
       });
       teamId = task?.teamId ?? null;
-      if (teamId) {
-        const member = await (this.prisma as any).teamMember?.findFirst?.({
-          where: { teamId, agentId },
-          select: { id: true },
-        });
-        teamMemberId = member?.id ?? null;
-      }
+    }
+    if (!teamMemberId && teamId && agentId) {
+      const member = await (this.prisma as any).teamMember?.findFirst?.({
+        where: { teamId, agentId },
+        select: { id: true },
+      });
+      teamMemberId = member?.id ?? null;
     }
     const text = payload.text ?? '';
     const unsettled = {
+      teamId,
       agentId,
       teamMemberId,
       text,
@@ -3156,9 +3247,9 @@ export class WorkerDispatcher
         agentId,
         error: `回复落库失败: ${this.describeError(err)}`,
       });
-      return { agentId, teamMemberId, text, displayText, finalParts };
+      return { teamId, agentId, teamMemberId, text, displayText, finalParts };
     }
-    return { agentId, teamMemberId, text, displayText, finalParts };
+    return { teamId, agentId, teamMemberId, text, displayText, finalParts };
   }
 
   /** P3：合并多来源产出物声明（worker 上送 + 回复文本提取），按声明形状去重防重复归档。 */

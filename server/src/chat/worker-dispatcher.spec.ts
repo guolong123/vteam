@@ -2042,9 +2042,9 @@ describe('WorkerDispatcher', () => {
       expect(TASK_TRANSITION_INSTRUCTION).toContain('等待人工验收');
       expect(HOSTED_CONFIRM_INSTRUCTION).toContain('vteam_question_confirm');
       expect(HOSTED_CONFIRM_INSTRUCTION).toContain('仅主实例可调用');
-      expect(WECOM_SYSTEM_INSTRUCTION).toContain('同步到（任务/团队）群聊');
+      expect(WECOM_SYSTEM_INSTRUCTION).toContain('同步到团队群聊');
       expect(WECOM_SYSTEM_INSTRUCTION).not.toContain('同步到任务群聊');
-      expect(WECOM_TRIGGER_INSTRUCTION).toContain('同步到（任务/团队）群聊');
+      expect(WECOM_TRIGGER_INSTRUCTION).toContain('同步到团队群聊');
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('vteam_wecom_reply');
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('传 teamId');
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).not.toContain(
@@ -6911,6 +6911,7 @@ describe('WorkerDispatcher', () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
         agentId: 'a_product',
+        teamId: 'tm_0000000001',
         teamMemberId: 'tmm_1',
       });
       (prisma as any).taskMessageChannel = {
@@ -6926,12 +6927,26 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve(null);
         }),
       };
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_group' } as any);
+      prisma.chatChannel.findFirst.mockImplementation((query: any) => {
+        if (query.where?.teamMemberId) {
+          return Promise.resolve(null);
+        }
+        return Promise.resolve({
+          id: 'c_group',
+          type: CHANNEL_TYPE.team_group,
+        } as any);
+      });
       prisma.chatChannel.findUnique.mockResolvedValue(null);
-      prisma.message.findFirst.mockResolvedValue({
-        id: 'm_ext_1',
-        content: { text: '[WeCom:GuoLong] hi' },
-      } as any);
+      prisma.message.findFirst.mockImplementation((query: any) => {
+        if (query.where?.senderType === SENDER_TYPE.external) {
+          return Promise.resolve({
+            id: 'm_ext_1',
+            content: { text: '[WeCom:GuoLong] hi' },
+            createdAt: new Date(),
+          } as any);
+        }
+        return Promise.resolve(null);
+      });
       prisma.message.create.mockResolvedValue({
         id: 'm_mirror_1',
         channelId: 'c_group',
