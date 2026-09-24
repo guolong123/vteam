@@ -73,8 +73,8 @@ function taskJson(taskId: string) {
     status: "in_progress",
     priority: "medium",
     teamId: "tm_0000000001",
+    mainAgentMemberId: "tmm_0000000001",
     instances: [],
-    mainAgentInstanceId: null,
   };
 }
 

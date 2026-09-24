@@ -3674,7 +3674,6 @@ describe('PlatformMcpService', () => {
     const taskTeamId = 'tm_0000000001';
     const taskRow = (overrides: Record<string, unknown> = {}) => ({
       teamId: taskTeamId,
-      mainAgentInstanceId: senderInstanceId,
       ...overrides,
     });
 
@@ -5702,13 +5701,12 @@ describe('PlatformMcpService', () => {
     });
   });
 
-  describe('team-free-chat todo-4：task_create 主门（remove-project-dimension Todo 7 去 pid）', () => {
+  describe('team-free-chat todo-4：task_create 团队归属', () => {
     it('非主实例（任务维度）不再被身份门拒绝 → 触达 createByAgent（原 403 已移除）', async () => {
       allowWorker();
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: 'tmm_other',
       });
       tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
 
@@ -5725,12 +5723,11 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('任务维度主 Agent → 成功，teamId 取任务所属团队', async () => {
+    it('任务归属团队主成员 → 成功，teamId 取任务所属团队', async () => {
       allowWorker();
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: null,
       });
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: senderInstanceId,
@@ -5750,34 +5747,11 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('任务维度陈旧标量不参与判定：团队主为准（标量停写，读它会误 403）', async () => {
-      allowWorker();
-      // 标量指向 tmm_other（陈旧值），但团队主是 senderInstanceId → 仍放行
-      prisma.task.findUnique.mockResolvedValue({
-        id: taskId,
-        teamId: 'tm_1',
-        mainAgentInstanceId: 'tmm_other',
-      });
-      prisma.team.findUnique.mockResolvedValue({
-        mainAgentMemberId: senderInstanceId,
-      });
-      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
-
-      const result = await service.taskCreate(ctx, {
-        taskId,
-        selfInstanceId: senderInstanceId,
-        title: '新任务',
-      });
-      expect(result).toEqual({ id: 't_new' });
-      expect(tasksService.createByAgent).toHaveBeenCalled();
-    });
-
-    it('任务维度任务主为空 + 团队绑定已设 → 绑定成员放行（不再死锁）', async () => {
+    it('任务归属团队主成员已设 → 绑定成员放行（不再死锁）', async () => {
       allowWorkerAs('tmm_main');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: null,
       });
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_main',
@@ -5799,12 +5773,11 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('任务维度任务主为空 + 团队绑定已设 → 非绑定成员不再被拒（触达 createByAgent）', async () => {
+    it('任务归属团队主成员已设 → 非绑定成员不再被拒（触达 createByAgent）', async () => {
       allowWorkerAs('tmm_other');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: null,
       });
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_main',
@@ -5824,12 +5797,11 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('任务维度任务主为空 + 团队绑定缺省 → 首位成员回退放行', async () => {
+    it('任务归属团队主成员缺省 → 首位成员回退放行', async () => {
       allowWorkerAs('tmm_first');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: null,
       });
       prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
@@ -5849,12 +5821,11 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('任务维度任务主为空 + 团队绑定缺省 → 非首位不再被拒（触达 createByAgent）', async () => {
+    it('任务归属团队主成员缺省 → 非首位不再被拒（触达 createByAgent）', async () => {
       allowWorkerAs('tmm_other');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: null,
       });
       prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
@@ -6140,7 +6111,7 @@ describe('PlatformMcpService', () => {
     });
   });
 
-  describe('learning-mode P2：skill_create（仅主 Agent，默认停用）', () => {
+  describe('learning-mode P2：skill_create 归属与文件创建', () => {
     const skillContent =
       '---\nname: git-ops\ndescription: Git ops\n---\n# Git Ops\nbody\n';
     const skillArgs = {
@@ -6154,14 +6125,13 @@ describe('PlatformMcpService', () => {
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: null,
       });
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: senderInstanceId,
       });
     };
 
-    it('任务维度主 Agent → 成功，file 适配合成后调 SkillsService.create', async () => {
+    it('任务归属团队主成员 → 成功，file 适配合成后调 SkillsService.create', async () => {
       allowMainTask();
       skillsService.create.mockResolvedValue({
         id: 'sk_0000000001',
@@ -6215,7 +6185,6 @@ describe('PlatformMcpService', () => {
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: 'tmm_other',
       });
       skillsService.create.mockResolvedValue({
         id: 'sk_0000000001',
@@ -6229,35 +6198,11 @@ describe('PlatformMcpService', () => {
       expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('任务维度陈旧标量不参与判定：团队主为准（标量停写，读它会误 403）', async () => {
-      allowWorker();
-      // 标量指向 tmm_other（陈旧值），但团队主是 senderInstanceId → 仍放行
-      prisma.task.findUnique.mockResolvedValue({
-        id: taskId,
-        teamId: 'tm_1',
-        mainAgentInstanceId: 'tmm_other',
-      });
-      prisma.team.findUnique.mockResolvedValue({
-        mainAgentMemberId: senderInstanceId,
-      });
-      skillsService.create.mockResolvedValue({
-        id: 'sk_0000000001',
-        name: 'git-ops',
-        enabled: false,
-      });
-
-      const result = await service.skillCreate(ctx, { ...skillArgs });
-
-      expect(result).toMatchObject({ name: 'git-ops' });
-      expect(skillsService.create).toHaveBeenCalled();
-    });
-
-    it('任务维度任务主为空 + 团队绑定已设 → 绑定成员放行（不再死锁）', async () => {
+    it('任务归属团队主成员已设 → 绑定成员放行（不再死锁）', async () => {
       allowWorkerAs('tmm_main');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: null,
       });
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_main',
@@ -6281,12 +6226,11 @@ describe('PlatformMcpService', () => {
       expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('任务维度任务主为空 + 团队绑定已设 → 非绑定成员不再被拒（触达 create）', async () => {
+    it('任务归属团队主成员已设 → 非绑定成员不再被拒（触达 create）', async () => {
       allowWorkerAs('tmm_other');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: null,
       });
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_main',
@@ -6308,12 +6252,11 @@ describe('PlatformMcpService', () => {
       expect(skillsService.create).toHaveBeenCalledTimes(1);
     });
 
-    it('任务维度任务主为空 + 团队绑定缺省 → 首位成员回退放行', async () => {
+    it('任务归属团队主成员缺省 → 首位成员回退放行', async () => {
       allowWorkerAs('tmm_first');
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         teamId: 'tm_1',
-        mainAgentInstanceId: null,
       });
       prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });

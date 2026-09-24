@@ -536,8 +536,6 @@ function taskRow(
     description: null,
     priority: 'medium',
     status: 'pending',
-    mainAgentId: 'a_pm',
-    mainAgentInstanceId: 'tmm_main',
     managedMode: false,
     executionMode: 'direct',
     backgroundDocs: null,

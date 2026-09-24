@@ -7177,7 +7177,6 @@ describe('WorkerDispatcher', () => {
           if (select?.teamId) {
             return Promise.resolve({
               teamId: 'tm_0000000001',
-              mainAgentInstanceId: 'tmm_0000000001',
               executionMode: 'direct',
             });
           }
@@ -7269,7 +7268,6 @@ describe('WorkerDispatcher', () => {
       (prisma as any).task = {
         findUnique: jest.fn().mockResolvedValue({
           teamId: 'tm_0000000001',
-          mainAgentInstanceId: 'tmm_0000000001',
           executionMode: 'direct',
         }),
       };
@@ -7381,7 +7379,6 @@ describe('WorkerDispatcher', () => {
       (prisma as any).task = {
         findUnique: jest.fn().mockResolvedValue({
           teamId: 'tm_0000000001',
-          mainAgentInstanceId: null,
           executionMode: 'direct',
         }),
       };

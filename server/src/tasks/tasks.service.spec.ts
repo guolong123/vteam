@@ -124,8 +124,6 @@ describe('TasksService', () => {
     description: null,
     priority: 'medium',
     status: 'pending',
-    mainAgentId: null,
-    mainAgentInstanceId: null,
     managedMode: false,
     executionMode: 'direct',
     backgroundDocs: null,
@@ -599,8 +597,6 @@ describe('TasksService', () => {
         }),
       );
       const createData = tx.task.create.mock.calls[0][0].data;
-      expect(createData).not.toHaveProperty('mainAgentId');
-      expect(createData).not.toHaveProperty('mainAgentInstanceId');
       expect(createData).not.toHaveProperty('executionMode');
       expect(tx.team.updateMany).toHaveBeenCalledWith({
         where: { id: teamId, version: 0 },
@@ -620,7 +616,7 @@ describe('TasksService', () => {
       );
     });
 
-    it('团队有主 Agent 时创建任务不写入任务侧主标量', async () => {
+    it('团队主成员变化时创建任务返回团队派生身份', async () => {
       const taskId = 't_0000000003';
       const tx = setupTxIdle(taskId);
       tx.team.findUnique.mockResolvedValue({
@@ -630,6 +626,10 @@ describe('TasksService', () => {
         reuseSession: true,
         mainAgentMemberId: 'tmm_0000000002',
       } as any);
+      prisma.team.findUnique.mockResolvedValue({
+        id: teamId,
+        mainAgentMemberId: 'tmm_0000000002',
+      });
       idGen.nextId
         .mockResolvedValueOnce(taskId)
         .mockResolvedValueOnce('c_0000000001')
@@ -637,16 +637,18 @@ describe('TasksService', () => {
         .mockResolvedValueOnce('tmm_0000000002')
         .mockResolvedValueOnce('te_0000000001');
 
-      await service.create(userId, { title: '继承主 Agent', teamId } as any);
+      const result = await service.create(userId, {
+        title: '继承主 Agent',
+        teamId,
+      } as any);
 
+      expect(result.mainAgentMemberId).toBe('tmm_0000000002');
       expect(tx.task.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ teamId }),
         }),
       );
       const createData = tx.task.create.mock.calls[0][0].data;
-      expect(createData).not.toHaveProperty('mainAgentId');
-      expect(createData).not.toHaveProperty('mainAgentInstanceId');
       expect(createData).not.toHaveProperty('executionMode');
     });
 
@@ -1271,7 +1273,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           teamId: 'tm_0000000001',
-          mainAgentInstanceId: 'tmm_0000000001',
           backgroundDocs: [{ name: '需求文档.pdf' }],
         }),
       );
@@ -1415,84 +1416,6 @@ describe('TasksService', () => {
   });
 
   describe('update（PATCH 编辑）', () => {
-    it('已移除的 mainAgentId 不参与 PATCH 写入', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.task.update.mockResolvedValue(row({ title: '改名' }));
-
-      const result = await service.update('t_0000000001', {
-        title: '改名',
-        mainAgentId: 'a_product',
-      } as any);
-
-      expect(prisma.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: { title: '改名' },
-      });
-      expect(result.title).toBe('改名');
-    });
-
-    it('已移除的 mainAgentInstanceId 不参与 PATCH 写入', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.task.update.mockResolvedValue(row({ description: '新描述' }));
-
-      const result = await service.update('t_0000000001', {
-        description: '新描述',
-        mainAgentInstanceId: 'tmm_0000000002',
-      } as any);
-
-      expect(prisma.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: { description: '新描述' },
-      });
-      expect(result.description).toBe('新描述');
-    });
-
-    it('已移除的 mainAgentInstanceId 不再触发团队内实例校验', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.task.update.mockResolvedValue(row({ title: '仍可更新' }));
-
-      const result = await service.update('t_0000000001', {
-        title: '仍可更新',
-        mainAgentInstanceId: 'tmm_ghost',
-      } as any);
-
-      expect(prisma.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: { title: '仍可更新' },
-      });
-      expect(result.title).toBe('仍可更新');
-    });
-
-    it('已移除的 mainAgentInstanceId null 不再清空主标量', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.task.update.mockResolvedValue(row({ priority: 'low' }));
-
-      await service.update('t_0000000001', {
-        priority: 'low',
-        mainAgentInstanceId: null,
-      } as any);
-
-      expect(prisma.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: { priority: 'low' },
-      });
-    });
-
-    it('已移除的 mainAgentId 不再做兼容映射', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.task.update.mockResolvedValue(row({ description: '仍可更新' }));
-
-      await service.update('t_0000000001', {
-        description: '仍可更新',
-        mainAgentId: 'a_tester',
-      } as any);
-
-      expect(prisma.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: { description: '仍可更新' },
-      });
-    });
-
     it('任务不存在 → 404 TASK_NOT_FOUND', async () => {
       prisma.task.findUnique.mockResolvedValue(null);
 
@@ -1526,16 +1449,12 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 3,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 4,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
             startedAt: new Date(),
           }),
         );
@@ -1642,8 +1561,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           status: 'pending_review',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
         }),
       );
 
@@ -1661,8 +1578,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           status: 'in_progress',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
         }),
       );
 
@@ -1679,16 +1594,12 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 0,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
             startedAt: new Date(),
           }),
         );
@@ -1711,8 +1622,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           status: 'pending',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
           legacySnapshots: [],
         }),
       );
@@ -1729,8 +1638,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           status: 'pending',
-          mainAgentId: null,
-          mainAgentInstanceId: null,
         }),
       );
       prisma.team.findUnique.mockResolvedValue({
@@ -1754,16 +1661,12 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 3,
-            mainAgentId: null,
-            mainAgentInstanceId: null,
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 4,
-            mainAgentId: null,
-            mainAgentInstanceId: null,
             startedAt: new Date(),
           }),
         );
@@ -1816,8 +1719,6 @@ describe('TasksService', () => {
             status: 'pending',
             version: 3,
             teamId: 'tm_1',
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -1825,8 +1726,6 @@ describe('TasksService', () => {
             status: 'in_progress',
             version: 4,
             teamId: 'tm_1',
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
             startedAt: new Date(),
           }),
         );
@@ -1876,8 +1775,6 @@ describe('TasksService', () => {
         row({
           status: 'pending',
           teamId: 'tm_1',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
         }),
       );
       (prisma.team.findUnique as jest.Mock).mockResolvedValue({
@@ -1904,8 +1801,6 @@ describe('TasksService', () => {
         row({
           status: 'pending',
           teamId: 'tm_1',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
         }),
       );
       (prisma.team.findUnique as jest.Mock).mockResolvedValue({
@@ -2094,8 +1989,6 @@ describe('TasksService', () => {
           row({
             status: 'pending_review',
             version: 4,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -2103,8 +1996,6 @@ describe('TasksService', () => {
             status: 'completed',
             version: 5,
             completedAt: new Date(),
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         );
       prisma.chatChannel.findFirst
@@ -2568,16 +2459,12 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 0,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         );
       const txModels = {
@@ -2608,32 +2495,24 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 0,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValueOnce(
           row({
             status: 'in_progress',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValueOnce(
           row({
             status: 'pending',
             version: 0,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         );
       // 每次 start 均先查 group 频道再查 private 频道（两个并发 start 共 4 次）
@@ -2717,16 +2596,12 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 3,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 4,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
             startedAt: new Date(),
           }),
         );
@@ -2795,8 +2670,6 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -2837,8 +2710,6 @@ describe('TasksService', () => {
           row({
             status: 'in_progress',
             version: 5,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_first',
           }),
         )
         .mockResolvedValue(
@@ -2886,8 +2757,6 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_first',
           }),
         )
         .mockResolvedValue(
@@ -2964,8 +2833,6 @@ describe('TasksService', () => {
           row({
             status: 'pending_review',
             version: 2,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -3011,8 +2878,6 @@ describe('TasksService', () => {
           row({
             status: 'in_progress',
             version: 5,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -3674,17 +3539,8 @@ describe('TasksService', () => {
       expect(result.teamAgentIds).toEqual(['a_product']);
     });
 
-    it('remove 主成员 → 团队主成员清空且不再写任务侧主标量', async () => {
-      prisma.task.findUnique
-        .mockResolvedValueOnce(
-          row({
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
-          }),
-        )
-        .mockResolvedValue(
-          row({ mainAgentId: null, mainAgentInstanceId: null }),
-        );
+    it('remove 主成员 → 团队主成员清空', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
       prisma.teamMember.findMany.mockResolvedValue([
         tmmRow('tmm_0000000001', 'a_product'),
       ]);
@@ -4394,8 +4250,6 @@ describe('TasksService', () => {
           status: 'pending',
           version: 0,
           teamId,
-          mainAgentInstanceId: 'tmm_0000000001',
-          mainAgentId: 'a_product',
         } as any),
       );
       (prisma as any).team = {
@@ -4454,8 +4308,6 @@ describe('TasksService', () => {
             status: 'pending',
             version: 0,
             teamId,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           } as any),
         )
         .mockResolvedValue(
@@ -4464,8 +4316,6 @@ describe('TasksService', () => {
             status: 'in_progress',
             version: 1,
             teamId,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           } as any),
         );
       (prisma as any).team = {

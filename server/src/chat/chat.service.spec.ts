@@ -137,15 +137,11 @@ describe('ChatService', () => {
         id: taskId,
         status: 'pending',
         teamId: (row as any).teamId,
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         status: 'pending',
         teamId: (row as any).teamId,
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       (prisma as any).teamMember.findMany.mockResolvedValue([]);
     }
@@ -623,7 +619,7 @@ describe('ChatService', () => {
     });
 
     describe('T8 群聊无 @ 自动路由主实例', () => {
-      // 主实例配置齐全的任务频道行（mock task 含 mainAgentInstanceId/mainAgentId）
+      // 团队主成员配置齐全的任务频道行（主身份来自 Team.mainAgentMemberId）
       const mainChannel = (type: string = CHANNEL_TYPE.task_group) =>
         channelRow({
           type,
@@ -632,8 +628,6 @@ describe('ChatService', () => {
             title: '任务标题',
             status: 'pending',
             teamId: 'tm_0000000001',
-            mainAgentInstanceId: 'ti_pm',
-            mainAgentId: 'a_project_manager',
           },
         });
       // 通用主实例触发 mock：团队行 + 主实例行 + 会话 + ACK
@@ -780,7 +774,7 @@ describe('ChatService', () => {
         );
       });
 
-      it('Todo5：mainAgentMemberId 缺省 → 首位成员（seq 升序，任务 mainAgentId 不再读取）', async () => {
+      it('Todo5：团队主成员缺省 → 首位成员（seq 升序）', async () => {
         allowAccess(
           channelRow({
             task: {
@@ -788,8 +782,6 @@ describe('ChatService', () => {
               title: '任务标题',
               status: 'pending',
               teamId: 'tm_0000000001',
-              mainAgentInstanceId: null,
-              mainAgentId: 'a_developer',
             },
           }),
         );
@@ -3200,8 +3192,6 @@ describe('ChatService', () => {
         id: 't_0000000003',
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
 
       const result = await service.createMessage(channelId, userId, {
@@ -3242,15 +3232,11 @@ describe('ChatService', () => {
         id: taskId,
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       (prisma as any).teamUserMember.findUnique.mockResolvedValue({
         id: 'tum_1',
@@ -3490,15 +3476,11 @@ describe('ChatService', () => {
         id: taskId,
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       (prisma as any).teamUserMember.findUnique.mockResolvedValue({
         id: 'tum_1',
@@ -3571,8 +3553,6 @@ describe('ChatService', () => {
         id: 't_archived',
         status: 'archived',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       (prisma as any).teamUserMember.findUnique.mockResolvedValue({
         id: 'tum_1',
