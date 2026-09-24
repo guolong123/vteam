@@ -61,5 +61,49 @@ export default defineConfig({
       dependencies: ["setup"],
     },
     { name: "guard", testMatch: /guard\.spec\.ts/ },
+    {
+      // 策略写入者：每次写 execution_policy 都会广播 reload-config，触发 worker 重启约 30s。
+      name: "self-login",
+      testMatch: [
+        /create-agent-role\.spec\.ts/,
+        /native-rule-editor\.spec\.ts/,
+        /no-agent-picker\.spec\.ts/,
+        /policy-restart-notice\.spec\.ts/,
+        /policy-serialize\.spec\.ts/,
+        /role-first-member-add\.spec\.ts/,
+        /task-permission-editable\.spec\.ts/,
+        /team-create-role-list\.spec\.ts/,
+      ],
+    },
+    {
+      // 依赖活引擎 Agent 清单的 spec 必须在上面那批之后跑：等 worker 的重启窗口过去再取清单。
+      // workers=1 时 Playwright 按声明顺序执行项目，所以顺序本身就是这里的隔离手段。
+      name: "engine-dependent",
+      testMatch: [
+        /dark-mode-role-warning\.spec\.ts/,
+        /roles-members\.spec\.ts/,
+        /third-party-agents\.spec\.ts/,
+      ],
+    },
+    {
+      name: "mock-api",
+      testMatch: [
+        /plan-archive\.spec\.ts/,
+        /plan-finalize\.spec\.ts/,
+        /plan-status\.spec\.ts/,
+      ],
+    },
+    {
+      name: "mcp-status",
+      testMatch: /mcp-status\.spec\.ts/,
+      use: { storageState: ".auth/user.json" },
+      dependencies: ["setup"],
+    },
+    {
+      name: "session-unification",
+      testMatch: /session-unification\.spec\.ts/,
+      use: { storageState: ".auth/user.json" },
+      dependencies: ["setup"],
+    },
   ],
 });

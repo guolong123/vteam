@@ -152,7 +152,7 @@ async function installMocks(page: Page, taskSessions: [string | null, string | n
 }
 
 test.describe("Todo12 团队会话团队化", () => {
-  test.use({ storageState: "/Users/mac/01work/git-project/vteam/web/.auth/user.json" });
+  test.use({ storageState: path.join(process.cwd(), ".auth", "user.json") });
 
   test.beforeAll(() => {
     fs.mkdirSync(EVIDENCE_DIR, { recursive: true });

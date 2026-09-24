@@ -129,6 +129,27 @@ function issuesJson() {
 
 async function mockSessionApis(page: import("@playwright/test").Page) {
   await page.route("**/api/v1/events*", (route) => route.abort());
+  await page.route((url) => url.pathname === "/api/v1/teams", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [teamJson()], total: 1, page: 1, pageSize: 12 }),
+    }),
+  );
+  await page.route("**/api/v1/agent-roles**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100 }),
+    }),
+  );
+  await page.route("**/api/v1/triggers**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0, page: 1, pageSize: 100 }),
+    }),
+  );
   await page.route("**/api/v1/teams/tm_0000000001", (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(teamJson()) });

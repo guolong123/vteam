@@ -63,6 +63,70 @@ async function openExternalTab(page: Page) {
   await expect(page.getByTestId("external-agents-root")).toBeVisible({ timeout: 15_000 });
 }
 
+async function waitForExternalWorker(page: Page): Promise<boolean> {
+  let ready = false;
+  try {
+    await expect
+      .poll(
+        async () => {
+          ready = await page.evaluate(async () => {
+            try {
+              const raw = localStorage.getItem("agent-platform-auth");
+              if (!raw) return false;
+              const auth = JSON.parse(raw) as { state?: { token?: string } };
+              const token = auth.state?.token;
+              if (!token) return false;
+              const listResponse = await fetch("/api/v1/agents/opencode", {
+                headers: { Authorization: `Bearer ${token}` },
+              });
+              if (!listResponse.ok) return false;
+              const list = (await listResponse.json()) as {
+                degraded?: boolean;
+                agents?: { governed?: boolean; hidden?: boolean }[];
+              };
+              return (
+                list.degraded !== true &&
+                (list.agents ?? []).some((agent) => !agent.governed && !agent.hidden)
+              );
+            } catch (error) {
+              if (!(error instanceof Error)) throw error;
+              return false;
+            }
+          });
+          return ready;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    return false;
+  }
+  return ready;
+}
+
+async function waitForExternalPanel(page: Page): Promise<boolean> {
+  let ready = false;
+  try {
+    await expect
+      .poll(
+        async () => {
+          ready =
+            (await page.getByTestId("external-agent-item").count()) > 0 &&
+            (await page.getByTestId("external-agents-unavailable").count()) === 0 &&
+            (await page.getByTestId("external-agents-empty").count()) === 0;
+          return ready;
+        },
+        { timeout: 20_000 },
+      )
+      .toBe(true);
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    return false;
+  }
+  return ready;
+}
+
 async function computed(page: Page, selector: string, props: string[]) {
   return page.evaluate(
     (arg: { sel: string; ps: string[] }) => {
@@ -79,7 +143,12 @@ async function computed(page: Page, selector: string, props: string[]) {
 
 test.describe("Todo 8 · dark-mode role selection + warnings", () => {
   test("dark 主题：选中 role-item 与警示块无浅色硬编码", async ({ page }) => {
+    test.setTimeout(75_000);
     await loginAsAdmin(page);
+    if (!(await waitForExternalWorker(page))) {
+      test.skip(true, "外部 worker 在 30 秒 bounded readiness 内不可用");
+      return;
+    }
     await setTheme(page, "dark");
     await openRolesTab(page);
 
@@ -97,13 +166,11 @@ test.describe("Todo 8 · dark-mode role selection + warnings", () => {
     await expect(page.getByTestId("external-agents-loading")).toHaveCount(0, {
       timeout: 20_000,
     });
-    const warning = page.getByTestId("external-agent-item-warning").first();
-    const empty = page.getByTestId("external-agents-empty");
-    const unavailable = page.getByTestId("external-agents-unavailable");
-    if ((await empty.count()) > 0 || (await unavailable.count()) > 0) {
-      test.skip(true, "引擎无外部 agent 可断言（empty/unavailable），跳过警告色断言");
+    if (!(await waitForExternalPanel(page))) {
+      test.skip(true, "外部列表在 20 秒 bounded panel readiness 内不可用");
       return;
     }
+    const warning = page.getByTestId("external-agent-item-warning").first();
     await expect(warning).toBeVisible({ timeout: 15_000 });
     const w = await warning.evaluate((el) => {
       const cs = getComputedStyle(el);
@@ -127,7 +194,12 @@ test.describe("Todo 8 · dark-mode role selection + warnings", () => {
   });
 
   test("light 主题：同一位置等于原浅色 hex（无回归）", async ({ page }) => {
+    test.setTimeout(75_000);
     await loginAsAdmin(page);
+    if (!(await waitForExternalWorker(page))) {
+      test.skip(true, "外部 worker 在 30 秒 bounded readiness 内不可用");
+      return;
+    }
     await setTheme(page, "light");
     await openRolesTab(page);
 
@@ -145,10 +217,8 @@ test.describe("Todo 8 · dark-mode role selection + warnings", () => {
     await expect(page.getByTestId("external-agents-loading")).toHaveCount(0, {
       timeout: 20_000,
     });
-    const empty = page.getByTestId("external-agents-empty");
-    const unavailable = page.getByTestId("external-agents-unavailable");
-    if ((await empty.count()) > 0 || (await unavailable.count()) > 0) {
-      test.skip(true, "引擎无外部 agent 可断言（empty/unavailable），跳过警告色断言");
+    if (!(await waitForExternalPanel(page))) {
+      test.skip(true, "外部列表在 20 秒 bounded panel readiness 内不可用");
       return;
     }
     const warning = page.getByTestId("external-agent-item-warning").first();

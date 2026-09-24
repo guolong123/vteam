@@ -10,7 +10,41 @@ import { NAV_SHELL_TESTIDS, PAGE_SMOKE } from "./reference/testids";
  * - 条件渲染区块（skills 工具 Tab / tool-register 执行形态）按可达性分态断言
  * - 登录态：storageState（auth.setup.ts 真实表单登录 seed-admin）
  */
+const PAGES_TEAM_ID = "tm_0000000001";
+
+async function ensurePagesTask(request: import("@playwright/test").APIRequestContext) {
+  const login = await request.post("/api/v1/auth/login", {
+    data: { username: "seed-admin", password: "Admin@123456" },
+  });
+  expect(login.ok()).toBeTruthy();
+  const { accessToken } = (await login.json()) as { accessToken: string };
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  const teamResponse = await request.get(`/api/v1/teams/${PAGES_TEAM_ID}`, { headers });
+  expect(teamResponse.ok()).toBeTruthy();
+  const team = (await teamResponse.json()) as { currentTaskId: string | null };
+  let taskId = team.currentTaskId;
+  if (!taskId) {
+    const created = await request.post("/api/v1/tasks", {
+      headers,
+      data: { teamId: PAGES_TEAM_ID, title: "e2e-BoardDrawer", priority: "medium" },
+    });
+    expect(created.status()).toBe(201);
+    taskId = ((await created.json()) as { id: string }).id;
+  }
+  const taskResponse = await request.get(`/api/v1/tasks/${taskId}`, { headers });
+  expect(taskResponse.ok()).toBeTruthy();
+  const task = (await taskResponse.json()) as { status: string };
+  if (task.status !== "in_progress") {
+    expect(task.status).toBe("pending");
+    const started = await request.post(`/api/v1/tasks/${taskId}/start`, { headers });
+    expect(started.ok()).toBeTruthy();
+  }
+}
+
 test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
+  test.beforeAll(async ({ request }) => {
+    await ensurePagesTask(request);
+  });
   /** 融合导航核心元素（nav-hybrid 终态心智：NavTopBar + NavDock + CmdKPanel） */
   const NAV_CORE = ["app-shell", "rail-bar", "topbar", "cmdk-trigger"];
 
@@ -509,9 +543,12 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
   test("T24 触发行对齐原型：人话时间 + 精简元信息（系统行不可取消）", async ({
     page,
   }) => {
-    const today = new Date();
-    today.setHours(0, 1, 0, 0);
-    const dueIso = today.toISOString();
+    const now = new Date();
+    const due = new Date(now);
+    due.setHours(0, 1, 0, 0);
+    if (due.getTime() >= now.getTime()) due.setDate(due.getDate() - 1);
+    const dueDayLabel = due.toDateString() === now.toDateString() ? "今天" : "昨天";
+    const dueIso = due.toISOString();
     await page.route("**/api/v1/triggers*", (r) =>
       r.fulfill({
         status: 200,
@@ -556,8 +593,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(row).toBeVisible();
     await expect(row.getByTestId("trigger-title")).toContainText("完工回执");
     await expect(row).toContainText("待触发");
-    // 时间：nextFireAt 为 null 且 dueAt 已过 → 「应于 今天 HH:mm」（不再是被误读的绝对时间戳）
-    await expect(row.getByTestId("trigger-time")).toContainText("应于 今天 00:01");
+    // 时间：nextFireAt 为 null 且 dueAt 已过 → 「应于 今天/昨天 HH:mm」（不再是被误读的绝对时间戳）
+    await expect(row.getByTestId("trigger-time")).toContainText(`应于 ${dueDayLabel} 00:01`);
     await expect(row).toContainText("系统");
     // 精简：原型次行只留「来源 · 时间」，不再有 触发N次/类型/范围/归属/任务
     await expect(row).not.toContainText("类型");

@@ -130,20 +130,33 @@ async function engineExternal(
   request: APIRequestContext,
   token: string,
 ): Promise<{ names: string[]; degraded: boolean }> {
-  const res = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
-    headers: authHeaders(token),
-  });
-  expect(res.ok()).toBeTruthy();
-  const body = (await res.json()) as {
-    agents: OpencodeAgentEntry[];
-    degraded?: boolean;
-  };
-  return {
-    degraded: !!body.degraded,
-    names: body.agents
-      .filter((a) => !a.governed && !a.hidden && a.mode !== "subagent")
-      .map((a) => a.name),
-  };
+  let last = { names: [] as string[], degraded: true };
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const res = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
+        headers: authHeaders(token),
+        timeout: 2_000,
+      });
+      if (res.ok()) {
+        const body = (await res.json()) as {
+          agents: OpencodeAgentEntry[];
+          degraded?: boolean;
+        };
+        last = {
+          degraded: !!body.degraded,
+          names: body.agents
+            .filter((a) => !a.governed && !a.hidden && a.mode !== "subagent")
+            .map((a) => a.name),
+        };
+      }
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      last = { names: [], degraded: true };
+    }
+    if (!last.degraded && last.names.length > 0) return last;
+    if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  return last;
 }
 
 /** 记录浏览器发出的 POST /teams/:id/members 请求体（role-first 断言的原始证据）。 */
@@ -250,6 +263,7 @@ test.describe("task-14 · role-first member add", () => {
     page,
     request,
   }) => {
+    test.setTimeout(60_000);
     const token = await adminToken(request);
     const { names, degraded } = await engineExternal(request, token);
     test.skip(

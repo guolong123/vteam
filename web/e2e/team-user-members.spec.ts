@@ -28,12 +28,19 @@ test.describe("team-user-members 团队用户成员管理", () => {
     let agentId = "a_product";
     const seed = await request.get("/api/v1/teams/tm_0000000001", { headers });
     if (seed.ok()) {
-      const members = (((await seed.json()) as { members: { agentId: string }[] }).members ?? []);
+      const members = (((await seed.json()) as { members: { agentId: string; roleId?: string }[] }).members ?? []);
       if (members[0]?.agentId) agentId = members[0].agentId;
     }
+    // roleId became mandatory in the team-member API; resolve the matching live role
+    // instead of coupling this fixture to a seed id.
+    const rolesResponse = await request.get("/api/v1/agent-roles?pageSize=100", { headers });
+    expect(rolesResponse.ok()).toBeTruthy();
+    const roles = ((await rolesResponse.json()) as { items: { id: string; defaultAgentId: string | null }[] }).items ?? [];
+    const roleId = roles.find((role) => role.defaultAgentId === agentId)?.id;
+    expect(roleId).toBeTruthy();
     const created = await request.post("/api/v1/teams", {
       headers,
-      data: { name: `e2e-UserMembers-${Date.now()}`, members: [{ agentId }] },
+      data: { name: `e2e-UserMembers-${Date.now()}`, members: [{ agentId, roleId }] },
     });
     expect(created.ok()).toBeTruthy();
     const teamId = ((await created.json()) as { id: string }).id;
