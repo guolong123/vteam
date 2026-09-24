@@ -396,10 +396,10 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.getMessages).not.toHaveBeenCalled();
     });
 
-    it('群聊触发（task_group）：单触发器走任务段 + 任务版群聊指令，任务经 taskContext 进 execute', async () => {
+    it('群聊触发（team_group）：单触发器走任务段 + 任务版群聊指令，任务经 taskContext 进 execute', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       const d = createDispatcher();
       await d.dispatch(request);
@@ -433,7 +433,7 @@ describe('WorkerDispatcher', () => {
     it('单触发器：任务模式走任务段 + 任务版指令，团队直聊走团队段 + TEAM 版指令（无双触发器）', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       const d = createDispatcher();
       await d.dispatch(request);
@@ -449,7 +449,7 @@ describe('WorkerDispatcher', () => {
     it('P0 互斥（wecom 优先）：企微触发 → prompt 注入企微指令且不注入 GROUP 指令，system 注入企微段', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       const d = createDispatcher();
       await d.dispatch({
@@ -469,7 +469,7 @@ describe('WorkerDispatcher', () => {
     it('P0 默认不注入企微：非企微群聊触发 → prompt 注入 GROUP 指令，system 无企微段', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       const d = createDispatcher();
       await d.dispatch(request);
@@ -3736,11 +3736,11 @@ describe('WorkerDispatcher', () => {
       expect(prisma.session.findUnique).not.toHaveBeenCalled();
     });
 
-    it('F3 缺陷①：task_group 终态化（groupFallback）→ 正文独白不落群聊，跳过落库', async () => {
+    it('F3 缺陷①：team_group 终态化（groupFallback）→ 正文独白不落群聊，跳过落库', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue(null);
       prisma.chatChannel.findFirst.mockResolvedValue({
         id: request.channelId,
-        type: CHANNEL_TYPE.task_group,
+        type: CHANNEL_TYPE.team_group,
       });
       prisma.message.create.mockResolvedValue(messageRow());
       const d = createDispatcher();
@@ -3800,8 +3800,8 @@ describe('WorkerDispatcher', () => {
         ],
       });
 
-      // 一团队一群复用下 resolveChannel 回退 team_group：与 task_group 同语义，
-      // 正文独白不落群聊（结论经 group_post 工具直发），仅幂等标记 + emitFinal
+      // 一团队一群复用下 resolveChannel 回退 team_group：正文独白不落群聊
+      // （结论经 group_post 工具直发），仅幂等标记 + emitFinal
       expect(prisma.message.create).not.toHaveBeenCalled();
       expect(finals).toHaveLength(1);
     });
@@ -5465,20 +5465,20 @@ describe('WorkerDispatcher', () => {
     it('群聊触发：回复含 group_post 声明 → 仅落 private 独白（剥离标签），群聊不转发（工具直发）', async () => {
       jest.useFakeTimers();
       pollSetup();
-      // 群聊频道（request.channelId）type=task_group；DM 频道（c_dm）type=private
+      // 群聊频道（request.channelId）type=team_group；DM 频道（c_dm）type=private
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: request.channelId, type: 'task_group' });
+        return Promise.resolve({ id: request.channelId, type: 'team_group' });
       });
       workerClient.getMessages
         .mockResolvedValueOnce([
@@ -5562,14 +5562,14 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: request.channelId, type: 'task_group' });
+        return Promise.resolve({ id: request.channelId, type: 'team_group' });
       });
       workerClient.getMessages.mockResolvedValue([
         {
@@ -5604,7 +5604,7 @@ describe('WorkerDispatcher', () => {
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
-      // 群聊触发（来源 task_group）→ 未声明也不兜底转发；正文独白仅落 private
+      // 群聊触发（来源 team_group）→ 未声明也不兜底转发；正文独白仅落 private
       const creates = prisma.message.create.mock.calls.map(
         (c: any) => c[0].data.channelId,
       );
@@ -5624,7 +5624,7 @@ describe('WorkerDispatcher', () => {
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: request.channelId, type: 'task_group' });
+        return Promise.resolve({ id: request.channelId, type: 'team_group' });
       });
       workerClient.getMessages.mockResolvedValue([
         {
@@ -5670,20 +5670,20 @@ describe('WorkerDispatcher', () => {
     it('群聊触发：parts 含 group_post 工具调用且 completed → 跳过 forwardToGroup（防双通道双发）', async () => {
       jest.useFakeTimers();
       pollSetup();
-      // resolveChannel：DM 反查命中 private 独白频道；groupTrigger：来源频道 type=task_group
+      // resolveChannel：DM 反查命中 private 独白频道；groupTrigger：来源频道 type=team_group
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: 'c_group', type: 'task_group' });
+        return Promise.resolve({ id: 'c_group', type: 'team_group' });
       });
       prisma.message.create.mockResolvedValue(messageRow());
       const d = createDispatcher();
@@ -5726,14 +5726,14 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: 'c_group', type: 'task_group' });
+        return Promise.resolve({ id: 'c_group', type: 'team_group' });
       });
       prisma.message.create.mockResolvedValue(messageRow());
       const d = createDispatcher();
@@ -5772,14 +5772,14 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: 'c_group', type: 'task_group' });
+        return Promise.resolve({ id: 'c_group', type: 'team_group' });
       });
       prisma.message.create.mockResolvedValue(messageRow());
       const d = createDispatcher();
@@ -5812,13 +5812,13 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       workerClient.getMessages.mockResolvedValue([
         {
@@ -6931,7 +6931,7 @@ describe('WorkerDispatcher', () => {
     });
   });
 
-  describe('WeCom directed reply (group @user + mirror to task_group)', () => {
+  describe('WeCom directed reply (group @user + mirror to team_group)', () => {
     const basePayload = {
       taskId: 't_0000000001',
       agentId: 'a_product',
@@ -6949,6 +6949,7 @@ describe('WorkerDispatcher', () => {
         agentId: 'a_product',
         teamMemberId: 'tmm_1',
       });
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
       (prisma as any).taskMessageChannel = {
         findMany: jest
           .fn()

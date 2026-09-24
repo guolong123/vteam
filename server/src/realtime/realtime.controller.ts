@@ -173,7 +173,7 @@ export class RealtimeController {
    * - 缺省/空 → [{ type: 'global' }]
    * - 逗号分隔多 scope（如 `channel:c1,task:t1,team:tm_1,global`），空段忽略
    * - 任一段非法 → 400（复用单 scope 错误消息格式）
-   * - 双订阅过渡期兼容：task: 与 team: 可共存（如 task:t_1,team:tm_1），不复用 task_group
+   * - 双订阅过渡期兼容：task: 与 team: 可共存（如 task:t_1,team:tm_1）
    */
   private parseScope(raw?: string): RealtimeScope[] {
     if (raw === undefined || raw === null || raw === '') {

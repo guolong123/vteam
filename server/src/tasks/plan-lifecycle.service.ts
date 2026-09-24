@@ -716,21 +716,16 @@ export class PlanLifecycleService implements OnModuleInit {
     text: string,
   ): Promise<void> {
     try {
-      const channel =
-        (await this.prisma.chatChannel.findFirst({
-          where: { taskId, type: CHANNEL_TYPE.task_group },
-          select: { id: true },
-        })) ??
-        (teamId
-          ? await this.prisma.chatChannel.findFirst({
-              where: {
-                teamId,
-                type: CHANNEL_TYPE.team_group,
-                deletedAt: null,
-              },
-              select: { id: true },
-            })
-          : null);
+      const channel = teamId
+        ? await this.prisma.chatChannel.findFirst({
+            where: {
+              teamId,
+              type: CHANNEL_TYPE.team_group,
+              deletedAt: null,
+            },
+            select: { id: true },
+          })
+        : null;
       if (!channel) {
         this.logger.warn(
           `[plans] 系统消息无落库频道 task=${taskId}（翻转已落库）：${text}`,

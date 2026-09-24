@@ -96,19 +96,19 @@ describe('WorkerDispatcher wecom bridge (diagnostic)', () => {
       chatChannel: {
         findUnique: jest.fn().mockResolvedValue({
           id: groupChannelId,
-          type: CHANNEL_TYPE.task_group,
+          type: CHANNEL_TYPE.team_group,
         }),
         findFirst: jest.fn().mockImplementation((q: any) => {
           if (
-            q?.where?.taskId === taskId &&
-            q?.where?.type === CHANNEL_TYPE.task_group
+            q?.where?.teamId === 'tm_1' &&
+            q?.where?.type === CHANNEL_TYPE.team_group
           ) {
             return Promise.resolve({ id: groupChannelId });
           }
           if (q?.where?.id === groupChannelId)
             return Promise.resolve({
               id: groupChannelId,
-              type: CHANNEL_TYPE.task_group,
+              type: CHANNEL_TYPE.team_group,
             });
           return Promise.resolve({
             id: groupChannelId,
@@ -116,7 +116,7 @@ describe('WorkerDispatcher wecom bridge (diagnostic)', () => {
           });
         }),
       },
-      task: { findUnique: jest.fn().mockResolvedValue(null) },
+      task: { findUnique: jest.fn().mockResolvedValue({ teamId: 'tm_1' }) },
       artifact: { findMany: jest.fn().mockResolvedValue([]) },
       artifactVersion: { findMany: jest.fn().mockResolvedValue([]) },
       worker: { findUnique: jest.fn().mockResolvedValue(null) },

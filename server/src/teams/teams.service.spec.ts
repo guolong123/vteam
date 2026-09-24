@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { IdGeneratorService } from '../common/id-generator';
-import { EVENT_TYPES } from '../common/constants/event.constants';
+import { CHANNEL_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { TeamsService } from './teams.service';
@@ -926,7 +926,7 @@ describe('TeamsService', () => {
       const updOrder = (tx.session.updateMany as jest.Mock).mock
         .invocationCallOrder[0];
       expect(delOrder).toBeLessThan(updOrder);
-      // task_group_instances 无生成列，双生 updateMany 原样保留
+      // 旧会话实例关联无生成列，双生 updateMany 原样保留
       expect(tx.taskGroupInstance.updateMany).toHaveBeenCalledWith({
         where: { taskId: { in: ['t_0000000001', 't_0000000002'] } },
         data: { taskId: null },
@@ -1448,6 +1448,53 @@ describe('TeamsService', () => {
         expect.any(Object),
       );
       expect(result.reset).toBe(2);
+    });
+
+    it('team_group 缺失：仍重置会话，但不回退其他频道类型且不写群消息', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findMany = jest
+        .fn()
+        .mockResolvedValue([{ id: 'tmm_0000000001' }]);
+      prisma.session = {
+        count: jest.fn().mockResolvedValue(1),
+        findMany: jest.fn(),
+        deleteMany: jest.fn(),
+        create: jest.fn(),
+      };
+      prisma.chatChannel = {
+        findFirst: jest.fn().mockResolvedValue(null),
+      };
+      const tx = {
+        session: {
+          findMany: jest.fn().mockResolvedValue([
+            {
+              id: 's_1',
+              taskId: null,
+              agentId: 'a_product',
+              teamMemberId: 'tmm_0000000001',
+              workerId: null,
+              instanceRef: null,
+            },
+          ]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+          create: jest.fn().mockResolvedValue({}),
+        },
+        taskGroupInstance: { updateMany: jest.fn() },
+        message: { create: jest.fn() },
+      };
+      prisma.$transaction.mockImplementation(
+        async (fn: (value: typeof tx) => unknown) => fn(tx),
+      );
+
+      const result = await service.resetSessions('tm_0000000001');
+
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledTimes(1);
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: { teamId: 'tm_0000000001', type: CHANNEL_TYPE.team_group },
+        select: { id: true },
+      });
+      expect(tx.message.create).not.toHaveBeenCalled();
+      expect(result.reset).toBe(1);
     });
 
     it('幂等：无会话需重置 → reset 0，不写消息', async () => {

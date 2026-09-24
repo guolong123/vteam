@@ -1,7 +1,7 @@
 /**
  * 消息 content.parts 过滤工具（F3 QA 缺陷①共享修复）
  * =============================================
- * 群聊（task_group）只允许结论性 text part（reasoning/tool 等过程片段不落库不广播）；
+ * 群聊（team_group）只允许结论性 text part（reasoning/tool 等过程片段不落库不广播）；
  * 私聊（private）保留全量 parts（前端折叠卡片展示 reasoning/tool）。
  *
  * 两条回流路径必须共用同一套过滤，保证行为一致（缺陷根源：delta 路径过滤、

@@ -506,7 +506,7 @@ export class PlatformMcpService implements OnModuleInit {
     }
     const channel =
       exec.kind === 'task'
-        ? await this.findTaskGroupChannel(exec.taskId)
+        ? await this.findGroupChannelForTask(exec.taskId)
         : await this.findTeamGroupChannel(exec.teamId);
     if (!channel) {
       throw new NotFoundException({
@@ -790,7 +790,7 @@ export class PlatformMcpService implements OnModuleInit {
     const channel =
       exec.kind === 'team'
         ? await this.findTeamGroupChannel(exec.teamId)
-        : await this.findTaskGroupChannel(exec.taskId);
+        : await this.findGroupChannelForTask(exec.taskId);
     if (!channel) {
       throw new NotFoundException({
         code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
@@ -1117,7 +1117,7 @@ export class PlatformMcpService implements OnModuleInit {
       (ctxTeam as { mainAgentMemberId?: string | null } | null)
         ?.mainAgentMemberId ?? null;
     const [channel, agentRows] = await Promise.all([
-      this.findTaskGroupChannel(args.taskId),
+      this.findGroupChannelForTask(args.taskId),
       ctxTeamId
         ? this.prisma.teamMember.findMany({
             where: { teamId: ctxTeamId },
@@ -1486,7 +1486,7 @@ export class PlatformMcpService implements OnModuleInit {
     const effTaskId: string | null = isTeam ? null : exec.taskId;
     const channel = isTeam
       ? await this.findTeamGroupChannel(exec.teamId)
-      : await this.findTaskGroupChannel(effTaskId as string);
+      : await this.findGroupChannelForTask(effTaskId as string);
     if (!channel) {
       throw new NotFoundException({
         code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
@@ -4565,10 +4565,7 @@ export class PlatformMcpService implements OnModuleInit {
         fromName = pending.fromUserName ?? pending.fromUserId ?? null;
         chattype = pending.chattype ?? null;
       } else {
-        const groupCh = await this.prisma.chatChannel.findFirst({
-          where: { taskId, type: CHANNEL_TYPE.task_group },
-          select: { id: true },
-        });
+        const groupCh = await this.findGroupChannelForTask(taskId);
         if (groupCh) {
           const ext = await (this.prisma as any).message.findFirst({
             where: { channelId: groupCh.id, senderType: SENDER_TYPE.external },
@@ -4611,10 +4608,7 @@ export class PlatformMcpService implements OnModuleInit {
     try {
       if (msgtype === 'text' || msgtype === 'markdown') {
         if (typeof (adapter as any).finishStream === 'function') {
-          const groupCh = await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
+          const groupCh = await this.findGroupChannelForTask(taskId);
           if (groupCh) {
             const ext = await (this.prisma as any).message.findFirst({
               where: {
@@ -5234,10 +5228,7 @@ export class PlatformMcpService implements OnModuleInit {
         resolvedCard = cardObj;
         let internalId: string | null = null;
         try {
-          const groupCh = await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
+          const groupCh = await this.findGroupChannelForTask(taskId);
           if (groupCh) {
             const ext = await (this.prisma as any).message.findFirst({
               where: {
@@ -5440,10 +5431,7 @@ export class PlatformMcpService implements OnModuleInit {
         resolvedCard = cardObj;
         let internalId: string | null = null;
         try {
-          const groupCh = await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
+          const groupCh = await this.findGroupChannelForTask(taskId);
           if (groupCh) {
             const ext = await (this.prisma as any).message.findFirst({
               where: {
@@ -5613,10 +5601,7 @@ export class PlatformMcpService implements OnModuleInit {
         // Send via passive reply first, fallback to active
         let internalId: string | null = null;
         try {
-          const groupCh = await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
+          const groupCh = await this.findGroupChannelForTask(taskId);
           if (groupCh) {
             const ext = await (this.prisma as any).message.findFirst({
               where: {
@@ -5712,17 +5697,14 @@ export class PlatformMcpService implements OnModuleInit {
     let mirrorMessageId: string | null = null;
     let groupChannelId: string | null = null;
     try {
-      const groupCh = await this.prisma.chatChannel.findFirst({
-        where: { taskId, type: CHANNEL_TYPE.task_group },
-        select: { id: true },
-      });
+      const groupCh = await this.findGroupChannelForTask(taskId);
       if (groupCh) {
         groupChannelId = groupCh.id;
         const senderAgentId = await this.resolveSenderAgentId(
           taskId,
           instanceId,
         );
-        // Lookup placeholder in task_group to UPDATE instead of CREATE (fix duplicate: placeholder + new mirror -> only one).
+        // Lookup placeholder in team_group to UPDATE instead of CREATE (fix duplicate: placeholder + new mirror -> only one).
         let placeholder: { id: string } | null = null;
         try {
           placeholder = await (this.prisma as any).message.findFirst({
@@ -6383,25 +6365,17 @@ export class PlatformMcpService implements OnModuleInit {
     return member?.agentId ?? instanceId;
   }
 
-  private async findTaskGroupChannel(
+  private async findGroupChannelForTask(
     taskId: string,
   ): Promise<{ id: string } | null> {
-    try {
-      const task = await this.prisma.task.findUnique({
-        where: { id: taskId },
-        select: { teamId: true },
-      });
-      const teamId = (task as any)?.teamId ?? null;
-      if (teamId) {
-        const ch = await this.prisma.chatChannel.findFirst({
-          where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
-          select: { id: true },
-        });
-        if (ch) return ch;
-      }
-    } catch {}
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { teamId: true },
+    });
+    const teamId = (task as any)?.teamId ?? null;
+    if (!teamId) return null;
     return this.prisma.chatChannel.findFirst({
-      where: { taskId, type: CHANNEL_TYPE.task_group },
+      where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
       select: { id: true },
     });
   }
@@ -6528,7 +6502,7 @@ export class PlatformMcpService implements OnModuleInit {
   private async ensureTeamGroupChannel(
     taskId: string,
   ): Promise<{ id: string }> {
-    const found = await this.findTaskGroupChannel(taskId);
+    const found = await this.findGroupChannelForTask(taskId);
     if (found) return found;
     try {
       const task = await this.prisma.task.findUnique({

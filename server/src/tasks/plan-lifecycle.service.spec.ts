@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { MessageReceiptsService } from '../chat/message-receipts.service';
 import { IdGeneratorService } from '../common/id-generator';
+import { CHANNEL_TYPE } from '../common/constants/event.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { computePlanHash } from '../issues/review-round-ledger';
@@ -352,6 +353,14 @@ describe('PlanLifecycleService', () => {
         taskId: 't_1',
         from: 'approved',
         to: 'executing',
+      });
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId: 'tm_1',
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+        select: { id: true },
       });
       expect(prisma.message.create).toHaveBeenCalledTimes(1);
       const msgData = prisma.message.create.mock.calls[0][0].data;

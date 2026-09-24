@@ -2112,8 +2112,7 @@ export class WorkerDispatcher
       select: { type: true },
     });
     if (
-      (sourceChannel?.type === CHANNEL_TYPE.team_group ||
-        sourceChannel?.type === CHANNEL_TYPE.task_group) &&
+      sourceChannel?.type === CHANNEL_TYPE.team_group &&
       !request.text.includes('[WeCom:')
     ) {
       // 互斥优先级 wecom 优先：企微消息走 wecom_reply 单通道，不再叠加群聊指令
@@ -2585,19 +2584,20 @@ export class WorkerDispatcher
                   );
                   continue;
                 }
-                const groupChatChannel = await (
-                  this.prisma as unknown as {
-                    chatChannel: {
-                      findFirst: (q: unknown) => Promise<{ id: string } | null>;
-                    };
-                  }
-                ).chatChannel.findFirst({
-                  where: {
-                    taskId: payload.taskId,
-                    type: CHANNEL_TYPE.task_group,
-                  },
-                  select: { id: true },
+                const task = await this.prisma.task.findUnique({
+                  where: { id: payload.taskId },
+                  select: { teamId: true },
                 });
+                const groupChatChannel = task?.teamId
+                  ? await this.prisma.chatChannel.findFirst({
+                      where: {
+                        teamId: task.teamId,
+                        type: CHANNEL_TYPE.team_group,
+                        deletedAt: null,
+                      },
+                      select: { id: true },
+                    })
+                  : null;
                 if (!groupChatChannel) {
                   this.logger.warn(
                     `wecom bridge: no groupChannel for taskId=${payload.taskId}`,
@@ -3034,13 +3034,13 @@ export class WorkerDispatcher
                         { type: 'channel', id: groupChatChannel.id },
                       );
                       this.logger.log(
-                        `wecom bridge: mirrored to task_group channel=${groupChatChannel.id} mirrorId=${mirrorId} textLen=${mirrorText.length}`,
+                        `wecom bridge: mirrored to team_group channel=${groupChatChannel.id} mirrorId=${mirrorId} textLen=${mirrorText.length}`,
                       );
                     }
                   }
                 } catch (mirrorErr) {
                   this.logger.warn(
-                    `wecom bridge: mirror to task_group failed: ${(mirrorErr as Error).message}`,
+                    `wecom bridge: mirror to team_group failed: ${(mirrorErr as Error).message}`,
                   );
                 }
               } catch (innerErr) {
@@ -3217,12 +3217,9 @@ export class WorkerDispatcher
       });
       return unsettled;
     }
-    // 群聊回退（team_group；存量 task_group 防御）时正文独白不落群聊（结论经
-    // group_post 工具直发），仅幂等标记 + emitFinal 收尾
-    if (
-      channel.type === CHANNEL_TYPE.team_group ||
-      channel.type === CHANNEL_TYPE.task_group
-    ) {
+    // 群聊回退（team_group）时正文独白不落群聊（结论经 group_post 工具直发），
+    // 仅幂等标记 + emitFinal 收尾
+    if (channel.type === CHANNEL_TYPE.team_group) {
       if (sessionId) {
         this.completedSessions.add(sessionId);
       }
@@ -3779,15 +3776,11 @@ export class WorkerDispatcher
         select: { teamId: true },
       });
       const teamId = task?.teamId ?? null;
-      const group = teamId
-        ? await this.prisma.chatChannel.findFirst({
-            where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
-            select: { id: true },
-          })
-        : await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
+      if (!teamId) return;
+      const group = await this.prisma.chatChannel.findFirst({
+        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+        select: { id: true },
+      });
       if (!group || group.id === mainChannelId) {
         return;
       }

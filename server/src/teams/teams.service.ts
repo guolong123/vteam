@@ -975,17 +975,7 @@ export class TeamsService implements OnModuleInit {
         select: { id: true },
       })
       .catch(() => null);
-    // fallback: task_group 旧频道（过渡兼容）
-    let channelId: string | null = teamChannel?.id ?? null;
-    if (!channelId) {
-      try {
-        const fallback = await (this.prisma as any).chatChannel.findFirst({
-          where: { teamId },
-          select: { id: true },
-        });
-        channelId = fallback?.id ?? null;
-      } catch {}
-    }
+    const channelId: string | null = teamChannel?.id ?? null;
 
     let resetCount = 0;
     let sysMsg: any = null;

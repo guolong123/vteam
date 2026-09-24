@@ -129,7 +129,7 @@ type TransitionOptions = {
   preflight?: (task: TaskRow) => void | Promise<void>;
   /** 事务内副作用（仅 archive：sessions 全部置 archived）。 */
   afterCommit?: (tx: Prisma.TransactionClient) => Promise<void>;
-  /** 群聊系统消息文案（10 篇 §8.1，落库 task_group 频道 senderType=system）；不传则不生成。 */
+  /** 群聊系统消息文案（10 篇 §8.1，落库 team_group 频道 senderType=system）；不传则不生成。 */
   sysMessage?: (ctx: SysMessageCtx) => string;
   /** start/accept 私信主 Agent 的提示文案（13 篇 §4.2 + 记忆管理 mem-trigger，落库主 Agent private 频道）；不传则只写群聊。 */
   privateMessage?: (ctx: SysMessageCtx) => string;
@@ -419,7 +419,6 @@ export class TasksService implements OnModuleInit {
 
           // team channel ensure 与任务写同一原子单元：任一失败直接抛、
           // 中止外层 $transaction 回滚任务行，禁止无通道半成品任务（Todo 24）。
-          // legacy task_group 分支保留（删除是 Todo 44 的职责）。
           const txChat: any = (tx as any).chatChannel;
           if (txChat?.findFirst) {
             const existing: any = await txChat.findFirst({
@@ -430,41 +429,27 @@ export class TasksService implements OnModuleInit {
               },
             });
             if (!existing) {
-              const legacy: any = await txChat.findFirst({
-                where: { teamId },
-              });
-              if (!legacy) {
-                try {
-                  await txChat.create({
-                    data: {
-                      id: await this.idGen.nextId(ID_PREFIX.channel),
-                      type: CHANNEL_TYPE.team_group,
-                      teamId,
-                      taskId: null,
-                    },
-                  });
-                } catch (err: any) {
-                  // 并发竞态唯一键冲突（team_group 单例）→ 回退查已存在，
-                  // 与 chat.service ensureTeamChannel 同 pattern；其余一律抛出。
-                  if (err?.code !== 'P2002') throw err;
-                  const raced: any = await txChat.findFirst({
-                    where: {
-                      teamId,
-                      type: CHANNEL_TYPE.team_group,
-                      deletedAt: null,
-                    },
-                  });
-                  if (!raced) throw err;
-                }
-              } else if (legacy.type === CHANNEL_TYPE.task_group) {
-                await txChat.update({
-                  where: { id: legacy.id },
+              try {
+                await txChat.create({
                   data: {
-                    teamId,
+                    id: await this.idGen.nextId(ID_PREFIX.channel),
                     type: CHANNEL_TYPE.team_group,
+                    teamId,
                     taskId: null,
                   },
                 });
+              } catch (err: any) {
+                // 并发竞态唯一键冲突（team_group 单例）→ 回退查已存在，
+                // 与 chat.service ensureTeamChannel 同 pattern；其余一律抛出。
+                if (err?.code !== 'P2002') throw err;
+                const raced: any = await txChat.findFirst({
+                  where: {
+                    teamId,
+                    type: CHANNEL_TYPE.team_group,
+                    deletedAt: null,
+                  },
+                });
+                if (!raced) throw err;
               }
             }
           }
@@ -822,15 +807,10 @@ export class TasksService implements OnModuleInit {
       where: { id: teamId },
       select: { mainAgentMemberId: true },
     });
-    const channel =
-      (await this.prisma.chatChannel.findFirst({
-        where: { taskId: id, type: CHANNEL_TYPE.task_group },
-        select: { id: true },
-      })) ??
-      (await this.prisma.chatChannel.findFirst({
-        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
-        select: { id: true },
-      }));
+    const channel = await this.prisma.chatChannel.findFirst({
+      where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+      select: { id: true },
+    });
 
     const { sysMessages, created } = await this.prisma.$transaction(
       async (tx) => {
@@ -1310,8 +1290,8 @@ export class TasksService implements OnModuleInit {
 
   /**
    * 系统自动置阻塞（看门狗停滞回调专用）：语义同 block，但 actor=system。
-   * 置阻塞成功后在团队群聊落群公告（transition 的 sysMessage 只进 task_group，
-   * 团队任务无 task_group 时用户不可见）。失败上抛由调用方记日志。
+   * 置阻塞成功后在团队群聊落群公告（transition 的 sysMessage 只进 team_group，
+   * 团队任务无 team_group 时用户不可见）。失败上抛由调用方记日志。
    */
   async systemBlock(id: string, reason: string) {
     const text = (reason ?? '').trim() || '看门狗判定停滞';
@@ -1604,11 +1584,18 @@ export class TasksService implements OnModuleInit {
     }
     await opts.preflight?.(task);
 
-    // 系统消息落库目标：任务群聊频道（task_group，10 篇 §8.1；T8 updateTeam 同模式）
-    const channel = await this.prisma.chatChannel.findFirst({
-      where: { taskId: id, type: CHANNEL_TYPE.task_group },
-      select: { id: true },
-    });
+    // 系统消息落库目标：团队群聊频道（team_group，10 篇 §8.1；T8 updateTeam 同模式）
+    const taskTeamId = (task as any).teamId as string | null | undefined;
+    const channel = taskTeamId
+      ? await this.prisma.chatChannel.findFirst({
+          where: {
+            teamId: taskTeamId,
+            type: CHANNEL_TYPE.team_group,
+            deletedAt: null,
+          },
+          select: { id: true },
+        })
+      : null;
     // start/accept 私信主成员（13 篇 §4.2；记忆管理 mem-trigger：accept 同路径私信引导记忆总结）：
     // 解析主成员别名 + private 频道（按 teamMemberId；绑定缺省时回退首位成员，空名册/无团队则跳过）
     let mainAgentName: string | undefined;

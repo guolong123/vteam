@@ -504,6 +504,33 @@ describe('MessageInboundService', () => {
       expect(res.results[0].ok).toBe(true);
     });
 
+    it('permission action forwards selection to the task team group', async () => {
+      prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
+      prisma.agentQuestion.findUnique.mockResolvedValue(pendingPermission);
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: groupChannelId });
+
+      const res = await service.submitInbound(channelId, [
+        { kind: 'card_action', aqId: 'aq_0000000001', action: 'approve' },
+      ]);
+
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId,
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+      });
+      expect(chatService.createMessage).toHaveBeenCalledWith(
+        groupChannelId,
+        '__external__',
+        expect.objectContaining({
+          text: expect.stringContaining('选择了: approve'),
+        }),
+        { senderType: SENDER_TYPE.external, senderId: null },
+      );
+      expect(res.results[0].ok).toBe(true);
+    });
+
     it('permission reject calls reply with reject', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
       prisma.agentQuestion.findUnique.mockResolvedValue(pendingPermission);

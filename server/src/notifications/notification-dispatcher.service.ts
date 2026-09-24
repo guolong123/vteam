@@ -363,7 +363,7 @@ export class NotificationDispatcherService
     }
 
     // Private channel DB guard: if the message's channel is a private DM, skip notification entirely.
-    // This is the authoritative check — vteam ChatChannel.type is 'private' vs 'task_group'.
+    // This is the authoritative check — vteam ChatChannel.type is 'private' vs 'team_group'.
     const channelIdCandidate: string | null =
       (typeof message.channelId === 'string' ? message.channelId : null) ??
       (typeof payloadRaw.channelId === 'string'

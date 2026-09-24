@@ -262,7 +262,31 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('群聊触发 delta（来源=task_group）→ 落成员 team 私聊频道全量 parts（任务只归因，不参与定位）', async () => {
+    it('已移除频道类型来源 → 拒绝 message.part.delta，不查私聊、不落库、不广播', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_removed',
+        type: 'task_group',
+      });
+
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(45, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_removed',
+            parts: [{ type: 'text', text: '不应写入', synthetic: false }],
+          }),
+        ),
+      ).toBe(true);
+
+      expect(prisma.chatChannel.findFirst).not.toHaveBeenCalled();
+      expect(prisma.message.findFirst).not.toHaveBeenCalled();
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(realtime.emit).not.toHaveBeenCalled();
+    });
+
+    it('群聊触发 delta（来源=team_group）→ 落成员 team 私聊频道全量 parts（任务只归因，不参与定位）', async () => {
       prisma.session.findUnique.mockResolvedValue({
         agentId: 'a_1',
         teamId: 'tm_1',
@@ -270,7 +294,7 @@ describe('WorkerEventIngress', () => {
       });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
@@ -345,7 +369,7 @@ describe('WorkerEventIngress', () => {
       // 来源频道=群聊；该 agent 无 private 频道（taskId_agentId 反查 null）
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
 
@@ -376,7 +400,7 @@ describe('WorkerEventIngress', () => {
       });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
@@ -519,7 +543,7 @@ describe('WorkerEventIngress', () => {
       });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
@@ -646,7 +670,7 @@ describe('WorkerEventIngress', () => {
       });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {

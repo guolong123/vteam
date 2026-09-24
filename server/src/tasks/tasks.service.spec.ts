@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { IdGeneratorService } from '../common/id-generator';
-import { EVENT_TYPES } from '../common/constants/event.constants';
+import { CHANNEL_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { TASK_ERRORS } from '../common/constants/task.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -378,7 +378,7 @@ describe('TasksService', () => {
     return txModels;
   };
 
-  /** 状态机系统消息落库断言：任务群聊频道（task_group）写入 senderType=system 的精确文案。 */
+  /** 状态机系统消息落库断言：任务群聊频道（team_group）写入 senderType=system 的精确文案。 */
   const assertSysMessageCreated = (
     tx: { message: { create: jest.Mock } },
     channelId: string,
@@ -761,21 +761,28 @@ describe('TasksService', () => {
       expect(realtime.broadcast).not.toHaveBeenCalled();
     });
 
-    it('createTaskInternal team channel ensure（Todo 24）：legacy task_group 更新失败直接抛出，不被外层 catch 吞掉', async () => {
+    it('createTaskInternal team channel ensure：团队无 team_group 时直接创建，不复用其他频道类型', async () => {
       const taskId = 't_0000000025';
       const tx = setupTxIdle(taskId);
-      tx.chatChannel.findFirst = jest
-        .fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 'c_legacy', type: 'task_group' });
-      tx.chatChannel.update = jest
-        .fn()
-        .mockRejectedValue(new Error('legacy update unavailable'));
-      await expect(
-        service.create(userId, { title: 'legacy 更新失败', teamId }),
-      ).rejects.toThrow('legacy update unavailable');
-      expect(tx.taskEvent.create).not.toHaveBeenCalled();
-      expect(realtime.broadcast).not.toHaveBeenCalled();
+      tx.chatChannel.findFirst = jest.fn().mockResolvedValue(null);
+
+      await service.create(userId, { title: '团队新群', teamId });
+
+      expect(tx.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId,
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+      });
+      expect(tx.chatChannel.create).toHaveBeenCalledWith({
+        data: {
+          id: 'c_0000000001',
+          type: CHANNEL_TYPE.team_group,
+          teamId,
+          taskId: null,
+        },
+      });
     });
 
     it('并发：version CAS 重试3次，最终仅一个 pending 其余 queued（模拟首试冲突后重试成功）', async () => {
@@ -1459,7 +1466,7 @@ describe('TasksService', () => {
           }),
         );
       prisma.chatChannel.findFirst
-        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // team_group 频道
         .mockResolvedValueOnce({ id: 'c_0000000002' }); // 主成员 private 频道
       prisma.teamMember.findUnique.mockResolvedValue({
         id: 'tmm_0000000001',
@@ -1498,6 +1505,15 @@ describe('TasksService', () => {
       expect(txModels.session.updateMany).toHaveBeenCalledWith({
         where: { taskId: 't_0000000001', status: 'created' },
         data: { status: 'active' },
+      });
+      // 群聊系统消息只解析任务归属团队的 team_group
+      expect(prisma.chatChannel.findFirst).toHaveBeenNthCalledWith(1, {
+        where: {
+          teamId: 'tm_0000000001',
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+        select: { id: true },
       });
       // 私信定位按成员：private 频道查找 where 含 teamMemberId=主成员
       expect(prisma.chatChannel.findFirst).toHaveBeenNthCalledWith(2, {
@@ -1849,7 +1865,7 @@ describe('TasksService', () => {
           toStatus: 'pending_review',
         }),
       });
-      // 系统消息落库：task_group 频道 senderType=system（10 篇 §8.1）
+      // 系统消息落库：team_group 频道 senderType=system（10 篇 §8.1）
       assertSysMessageCreated(txModels, 'c_0000000001', '任务已提交待验收');
       expect(realtime.broadcast).toHaveBeenCalledWith(
         EVENT_TYPES.TASK_STATUS_CHANGED,
@@ -1999,7 +2015,7 @@ describe('TasksService', () => {
           }),
         );
       prisma.chatChannel.findFirst
-        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // team_group 频道
         .mockResolvedValueOnce({ id: 'c_0000000002' }); // 主成员 private 频道
       prisma.teamMember.findUnique.mockResolvedValue({
         id: 'tmm_0000000001',
@@ -2082,7 +2098,7 @@ describe('TasksService', () => {
 
       const result = await service.accept('t_0000000001', userId);
 
-      // 仅解析 task_group 频道一次（回退无成员，不查 private）
+      // 仅解析 team_group 频道一次（回退无成员，不查 private）
       expect(prisma.chatChannel.findFirst).toHaveBeenCalledTimes(1);
       // 仅一条群聊系统消息，无私信落库
       expect(txModels.message.create).toHaveBeenCalledTimes(1);
@@ -2108,7 +2124,7 @@ describe('TasksService', () => {
       } as any);
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
       prisma.chatChannel.findFirst
-        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // team_group 频道
         .mockResolvedValueOnce({ id: 'c_0000000002' }); // 回退主成员 private 频道
       prisma.teamMember.findUnique.mockResolvedValue({
         id: 'tmm_first',
@@ -2606,7 +2622,7 @@ describe('TasksService', () => {
           }),
         );
       prisma.chatChannel.findFirst
-        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // team_group 频道
         .mockResolvedValueOnce({ id: 'c_0000000002' }); // 主成员 private 频道
       prisma.teamMember.findUnique.mockResolvedValue({
         id: 'tmm_0000000001',
@@ -3328,6 +3344,14 @@ describe('TasksService', () => {
         userId,
       );
 
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId: 'tm_0000000001',
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
       expect(txModels.teamMember.create).toHaveBeenCalledWith({
         data: {
           id: 'tmm_0000000002',

@@ -605,7 +605,7 @@ describe('PlatformMcpService', () => {
       );
     });
 
-    it('任务无群聊频道 → 404 PLATFORM_MCP_CHANNEL_NOT_FOUND', async () => {
+    it('任务无 team_group 频道 → 404 PLATFORM_MCP_CHANNEL_NOT_FOUND（不回退任务频道）', async () => {
       allowWorker();
       prisma.chatChannel.findFirst.mockResolvedValue(null);
       await expectCode(
@@ -613,6 +613,7 @@ describe('PlatformMcpService', () => {
         NotFoundException,
         PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
       );
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledTimes(1);
     });
   });
 

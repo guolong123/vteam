@@ -175,8 +175,8 @@ type MessageRow = {
  * - worker.heartbeat → 忽略（心跳走单独端点 POST /workers/:id/heartbeat）
  * - instance.created → 仅日志确认（TaskGroupInstance 已在 T12 bindSessionToWorker 时落库）
  * - session.updated → 更新 Session.status + emit `session.updated`（RealtimeService 先落库后广播）
- * - message.part.delta → 流式中间态累积落库（processing 消息，private 全量 parts /
- *   task_group 仅结论 text）+ emit `message.part.delta`（scope=channel）
+ * - message.part.delta → 流式中间态累积落库（processing 消息，private / team_group
+ *   来源均写目标私聊频道的全量 parts）+ emit `message.part.delta`（scope=channel）
  * - agent.status → emit `agent.loading` / `agent.error`（映射 phase/status/error）+ onAgentStatus 回调
  * - task.completed → 最高优先级：解析 payload → onTaskCompleted 回调（T10 注册做
  *   落库+广播+emitFinal）；Ingress 自身不 emit task.completed
@@ -535,6 +535,15 @@ export class WorkerEventIngress {
       );
       return true;
     }
+    if (
+      source.type !== CHANNEL_TYPE.private &&
+      source.type !== CHANNEL_TYPE.team_group
+    ) {
+      this.logger.debug(
+        `[ingress] message.part.delta 拒绝非 private/team_group 来源 type=${source.type} channel=${sourceChannelId}`,
+      );
+      return true;
+    }
     // payload.agentId 缺失 → 经 sessionId（平台主键）反查 Session.agentId（定位流式消息归属）
     if (!agentId && sessionId) {
       const session = await this.prisma.session.findUnique({
@@ -543,7 +552,7 @@ export class WorkerEventIngress {
       });
       agentId = session?.agentId;
     }
-    // 群聊触发（来源 task_group/team_group）→ 处理过程落该成员的 team 私聊频道
+    // 群聊触发（来源 team_group）→ 处理过程落该成员的 team 私聊频道
     // （内心独白）；私聊触发来源本就是 private，反查结果一致。反查失败回退来源
     // 频道（兼容无私聊场景）。Todo 7 team-only：任务只作归因数据，不再按任务查
     // 私聊频道；同成员多任务/多实例按 teamMemberId 精确匹配各自私聊频道。
@@ -559,14 +568,10 @@ export class WorkerEventIngress {
           })
         : null;
     // 群聊回复只经 MCP group_post 工具直发：群聊触发的流式处理过程仅落该 agent 的
-    // private 会话频道（内心独白）；任务未创建该 agent private 频道（如仅 task_group
-    // 一个频道）→ 跳过落库，不把流式中间态写进群聊（曾致群聊每人 3 条：
+    // private 会话频道（内心独白）；任务未创建该 agent private 频道（仅群频道）
+    // → 跳过落库，不把流式中间态写进群聊（曾致群聊每人 3 条：
     // ACK / 流式处理过程 / 工具直发）。私聊来源或有 private 频道时行为不变。
-    if (
-      (source.type === CHANNEL_TYPE.task_group ||
-        source.type === CHANNEL_TYPE.team_group) &&
-      privateTarget === null
-    ) {
+    if (source.type === CHANNEL_TYPE.team_group && privateTarget === null) {
       this.logger.debug(
         `[ingress] message.part.delta 群聊触发且无 private 频道，跳过落库（taskId=${taskId} teamId=${teamIdOfSession} agentId=${agentId ?? '-'})`,
       );
