@@ -52,7 +52,7 @@ export class TeamInstanceInput {
  * removeInstanceIds 按实例 id 移除。两字段均可选，至少提供其一才有实际变更；
  * 全部幂等分支（remove 目标不存在/已移除）时返回当前任务（200 幂等，与状态迁移一致）。
  */
-export class UpdateTeamDto {
+export class UpdateTaskTeamDto {
   @ApiPropertyOptional({
     description: '新增实例列表（agentId 可重复，服务端生成 seq）',
     type: [TeamInstanceInput],

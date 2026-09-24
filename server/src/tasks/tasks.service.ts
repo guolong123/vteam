@@ -36,7 +36,7 @@ import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
-import { UpdateTeamDto } from './dto/update-team.dto';
+import { UpdateTaskTeamDto } from './dto/update-team.dto';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
 import { PlanArchiveService } from './plan-archive.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
@@ -783,7 +783,7 @@ export class TasksService implements OnModuleInit {
    */
   async updateTeam(
     id: string,
-    dto: UpdateTeamDto,
+    dto: UpdateTaskTeamDto,
     userId?: string,
     opts?: {
       /** 审计 actorType/actorId（MCP 确认门传 agent/主实例；缺省回退 user/userId）。 */
