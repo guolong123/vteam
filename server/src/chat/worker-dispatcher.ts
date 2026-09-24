@@ -299,7 +299,7 @@ export const NON_MAIN_AGENT_NOTE =
 
 /** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
 export const WECOM_SYSTEM_INSTRUCTION =
-  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到任务群聊，确保用户在企微端收到回复。';
+  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到（任务/团队）群聊，确保用户在企微端收到回复。';
 
 /**
  * 平台级共享块（agent-role-entity 计划 todo 3）：原在 seed 的 7 个 prompt 内各抄一份，
@@ -683,13 +683,14 @@ export const TEAM_GROUP_TRIGGER_INSTRUCTION =
   '群聊只会显示你通过 vteam_group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
   '如需通知其他成员：调用 vteam_notify_agent；' +
   '需要群聊历史时调用 vteam_chat_history（传 teamId）。' +
-  '团队直聊没有 taskId，禁止传递 taskId 参数（传了必 403）。' +
+  '收到企业微信消息时调用 vteam_wecom_reply 并传 teamId；' +
+  '团队直聊没有 taskId，其他团队工具不要传 taskId。' +
   'vteam_my_profile、vteam_team_view、vteam_doclib、vteam_issue_*、vteam_task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 vteam_task_create 创建真实任务）。' +
   '如需向群聊发送文件：直接调用 vteam_group_post 并携带 fileRef，文件将作为群聊附件。';
 
 export const WECOM_TRIGGER_INSTRUCTION =
   '【企微消息】此消息来自企业微信用户 via WeCom，请务必使用 vteam_wecom_reply 工具回复，不要使用 vteam_group_post，以确保用户在企微端收到@回复。' +
-  '回复会同时同步到任务群聊。' +
+  '回复会同时同步到（任务/团队）群聊。' +
   '（互斥优先级：wecom 优先——已注入本指令时不再注入 GROUP_TRIGGER_INSTRUCTION，见 dispatch 组装处。）';
 
 /**
@@ -709,7 +710,7 @@ export const TEAM_SYSTEM_RECEPTION_INSTRUCTION =
   '（之后才允许派活给子 agent）；所在团队不明确 → 先问用户用哪个团队，绝不猜测归属、绝不创建任务；' +
   '用户意图不明 → 普通回复追问（做什么/验收标准），禁止创建任务、' +
   '禁止走 QuestionModal（问题确认弹窗仅任务内可用）。' +
-  '参数规则：vteam_chat_history、vteam_group_post、vteam_notify_agent、vteam_memory_save、vteam_memory_search 这 5 个工具在团队直聊下传 teamId，绝不传 taskId' +
+  '参数规则：vteam_chat_history、vteam_group_post、vteam_notify_agent、vteam_wecom_reply、vteam_memory_save、vteam_memory_search 这 6 个工具在团队直聊下传 teamId，绝不传 taskId' +
   '（团队直聊没有 taskId，传了必 403）；selfInstanceId 填写 system 身份段中的团队成员 id（tmm_ 前缀）；' +
   'vteam_my_profile、vteam_team_view 与 delivery 相关工具需要任务上下文，团队直聊下不可用（如需任务，先 vteam_task_create 建任务）。';
 

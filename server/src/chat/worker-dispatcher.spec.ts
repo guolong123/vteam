@@ -2042,7 +2042,14 @@ describe('WorkerDispatcher', () => {
       expect(TASK_TRANSITION_INSTRUCTION).toContain('等待人工验收');
       expect(HOSTED_CONFIRM_INSTRUCTION).toContain('vteam_question_confirm');
       expect(HOSTED_CONFIRM_INSTRUCTION).toContain('仅主实例可调用');
-      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('禁止传递 taskId 参数');
+      expect(WECOM_SYSTEM_INSTRUCTION).toContain('同步到（任务/团队）群聊');
+      expect(WECOM_SYSTEM_INSTRUCTION).not.toContain('同步到任务群聊');
+      expect(WECOM_TRIGGER_INSTRUCTION).toContain('同步到（任务/团队）群聊');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('vteam_wecom_reply');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('传 teamId');
+      expect(TEAM_GROUP_TRIGGER_INSTRUCTION).not.toContain(
+        '禁止传递 taskId 参数',
+      );
       expect(TEAM_GROUP_TRIGGER_INSTRUCTION).toContain('tmm_ 前缀');
       expect(ARTIFACT_SUBMISSION_INSTRUCTION).toContain(
         'vteam_submit_artifact',
@@ -8418,13 +8425,15 @@ describe('WorkerDispatcher', () => {
       ).toBeNull();
     });
 
-    it('team_group 触发：prompt 注入 TEAM 指令（含 teamId 传参与 taskId 禁令），不含任务版 GROUP_TRIGGER', async () => {
+    it('team_group 触发：prompt 注入 TEAM 指令（含 wecom_reply teamId 与 taskId 禁令），不含任务版 GROUP_TRIGGER', async () => {
       const d = createDispatcher();
       await d.dispatch(teamRequest() as any);
       const prompt = workerClient.execute.mock.calls[0][1].prompt[0]
         .text as string;
       expect(prompt).toContain(TEAM_GROUP_TRIGGER_INSTRUCTION);
-      expect(prompt).toContain('禁止传递 taskId 参数');
+      expect(prompt).toContain('vteam_wecom_reply');
+      expect(prompt).toContain('其他团队工具不要传 taskId');
+      expect(prompt).not.toContain('禁止传递 taskId 参数');
       expect(prompt).not.toContain(GROUP_TRIGGER_INSTRUCTION);
       expect(prompt).not.toContain(
         'vteam_chat_history / vteam_doclib / vteam_task_context',
@@ -8490,11 +8499,12 @@ describe('WorkerDispatcher', () => {
       expect(prompt).toContain('【团队上下文】');
     });
 
-    it('team-mode system 参数规则：5 个 team-free 工具传 teamId、禁 taskId，selfInstanceId 为 tmm_ 成员 id', async () => {
+    it('team-mode system 参数规则：6 个 team-free 工具传 teamId、禁 taskId，selfInstanceId 为 tmm_ 成员 id', async () => {
       const d = createDispatcher();
       await d.dispatch(teamRequest() as any);
       const system = workerClient.execute.mock.calls[0][1].system as string;
       expect(system).toContain(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
+      expect(system).toContain('vteam_wecom_reply');
       expect(system).toContain('绝不传 taskId');
       expect(system).toContain('tmm_ 前缀');
     });
