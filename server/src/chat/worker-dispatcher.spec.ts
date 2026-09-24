@@ -6301,6 +6301,54 @@ describe('WorkerDispatcher', () => {
       expect(fs.existsSync(expectedDir)).toBe(true);
     });
 
+    it('Todo28 任务目录 mkdir 失败 → warn 记录（含 dir）而非静默吞掉，dispatch 仍 best-effort 继续', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_0000000001',
+        instanceRef: 'ses_0001',
+        teamId: 'tm_0000000001',
+        teamMemberId: 'tmm_0000000001',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: {},
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        defaultModelId: null,
+      });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      const d = createDispatcher();
+      const dispatcherView = d as unknown as {
+        logger: { warn: (...args: unknown[]) => void };
+      };
+      const warnSpy = jest.spyOn(dispatcherView.logger, 'warn');
+      const mkdirSpy = jest
+        .spyOn(fs.promises, 'mkdir')
+        .mockRejectedValueOnce(new Error('EACCES boom') as never);
+      const expectedDir = path.join(workRoot, 'tasks', 't_0000000001');
+
+      await d.dispatch(request);
+
+      // (a) 失败被记录：warn 含 dir（删掉 log 即失败，非空转断言）。
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(
+        warned.some(
+          (m) => m.includes('工作目录创建失败') && m.includes(expectedDir),
+        ),
+      ).toBe(true);
+      // (b) 非静默成功：mkdir 真失败（目录不存在），但 dispatch 仍 best-effort
+      // 按原路径继续（同 ensureTeamWorkDir 语义），而非报成功或改路径。
+      expect(fs.existsSync(expectedDir)).toBe(false);
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        directory: string;
+      };
+      expect(execArgs.directory).toBe(expectedDir);
+      warnSpy.mockRestore();
+      mkdirSpy.mockRestore();
+    });
+
     it('Todo3 任务实例 work_dir 不再读取：ta_ 快照忽略，directory 用 tasks/<taskId>', async () => {
       const workDir = path.join(workRoot, 'worker', '产品经理');
       prisma.session.findUnique.mockResolvedValue({

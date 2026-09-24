@@ -4943,7 +4943,11 @@ export class WorkerDispatcher
     const dir = taskDirOf(this.taskWorkDirRoot, taskId);
     try {
       await fs.mkdir(dir, { recursive: true });
-    } catch {}
+    } catch (err) {
+      this.logger.warn(
+        `任务工作目录创建失败 dir=${dir}（best-effort，仍返回路径）: ${(err as Error)?.message ?? err}`,
+      );
+    }
     return dir;
   }
 
