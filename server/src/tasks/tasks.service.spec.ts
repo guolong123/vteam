@@ -684,6 +684,29 @@ describe('TasksService', () => {
       );
     });
 
+    it('createTaskInternal team-row lock（site :348）：非 sqlite 引擎通用锁失败直接抛出，不走无锁 findUnique 降级', async () => {
+      const prevDbType = process.env.DB_TYPE;
+      const prevDbUrl = process.env.DATABASE_URL;
+      process.env.DB_TYPE = 'mysql';
+      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
+      try {
+        const taskId = 't_0000000009';
+        const tx = setupTxIdle(taskId);
+        const lockFailure = new Error('lock wait timeout exceeded');
+        tx.$queryRawUnsafe.mockRejectedValue(lockFailure);
+        await expect(
+          service.create(userId, { title: '锁失败', teamId }),
+        ).rejects.toThrow('lock wait timeout exceeded');
+        expect(tx.team.findUnique).not.toHaveBeenCalled();
+        expect(tx.task.create).not.toHaveBeenCalled();
+      } finally {
+        if (prevDbType === undefined) delete process.env.DB_TYPE;
+        else process.env.DB_TYPE = prevDbType;
+        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = prevDbUrl;
+      }
+    });
+
     it('并发：version CAS 重试3次，最终仅一个 pending 其余 queued（模拟首试冲突后重试成功）', async () => {
       const taskId = 't_0000000003';
       prisma.teamUserMember.findUnique.mockResolvedValue({
@@ -4177,6 +4200,45 @@ describe('TasksService', () => {
         }),
         { type: 'team', id: teamId },
       );
+    });
+
+    it('promoteNextInTx team-row lock（site :590）：非 sqlite 引擎通用锁失败直接抛出，不走无锁 findUnique 降级', async () => {
+      const prevDbType = process.env.DB_TYPE;
+      const prevDbUrl = process.env.DATABASE_URL;
+      process.env.DB_TYPE = 'mysql';
+      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
+      try {
+        const lockFailure = new Error('connection reset by peer');
+        const tx: any = {
+          team: {
+            findUnique: jest.fn().mockResolvedValue({
+              id: teamId,
+              version: 2,
+              currentTaskId: 't_0000000001',
+            }),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          },
+          teamQueue: {
+            findFirst: jest.fn().mockResolvedValue(null),
+            findMany: jest.fn().mockResolvedValue([]),
+            deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+            update: jest.fn(),
+          },
+          task: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+          $queryRawUnsafe: jest.fn().mockRejectedValue(lockFailure),
+        };
+        prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+        await expect(service.promoteNext(teamId)).rejects.toThrow(
+          'connection reset by peer',
+        );
+        expect(tx.team.findUnique).not.toHaveBeenCalled();
+        expect(tx.team.updateMany).not.toHaveBeenCalled();
+      } finally {
+        if (prevDbType === undefined) delete process.env.DB_TYPE;
+        else process.env.DB_TYPE = prevDbType;
+        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = prevDbUrl;
+      }
     });
 
     it('archive：队列空则 currentTaskId=null，广播 idle', async () => {

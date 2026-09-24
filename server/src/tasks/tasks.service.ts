@@ -165,6 +165,18 @@ export class TasksService implements OnModuleInit {
     private readonly planArchive?: PlanArchiveService | null,
   ) {}
 
+  /**
+   * 行锁可用性判定（Todo 22）：sqlite 不支持 SELECT ... FOR UPDATE，
+   * 仅在该引擎上允许降级为无锁读；支持行锁的引擎上锁查询失败必须抛出，
+   * 否则静默无锁读会打开 double-promote 竞态。
+   */
+  private isRowLockUnsupportedEngine(): boolean {
+    const dbType = (process.env.DB_TYPE ?? '').toLowerCase();
+    if (dbType.includes('sqlite')) return true;
+    const url = (process.env.DATABASE_URL ?? '').toLowerCase();
+    return url.startsWith('file:') || url.endsWith('.db');
+  }
+
   /** 进程启动：按库内各前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过非数字 id，防主键冲突）。 */
   async onModuleInit(): Promise<void> {
     await resyncIdPrefix(this.prisma.task, ID_PREFIX.task, this.idGen);
@@ -333,7 +345,10 @@ export class TasksService implements OnModuleInit {
             } else {
               team = await tx.team.findUnique({ where: { id: teamId } });
             }
-          } catch {
+          } catch (err) {
+            // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出，
+            // 否则静默降级会丢失行锁、打开 double-promote 竞态（Todo 22）。
+            if (!this.isRowLockUnsupportedEngine()) throw err;
             team = await tx.team.findUnique({ where: { id: teamId } });
           }
           if (!team) {
@@ -572,7 +587,10 @@ export class TasksService implements OnModuleInit {
         ? await tx.team.findUnique({ where: { id: teamId } })
         : await tx.team.findUnique({ where: { id: teamId } });
       if (team && rows?.[0]) team.version = rows[0].version;
-    } catch {
+    } catch (err) {
+      // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出，
+      // 否则静默降级会丢失行锁、打开 double-promote 竞态（Todo 22）。
+      if (!this.isRowLockUnsupportedEngine()) throw err;
       team = await tx.team.findUnique({ where: { id: teamId } });
     }
     if (!team) return;
