@@ -10,7 +10,6 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { WorkersModule } from '../workers/workers.module';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
 import { TasksController } from './tasks.controller';
-import { MigrateController } from './migrate.controller';
 import { TaskChannelBindingsController } from './task-channel-bindings.controller';
 import { TasksService } from './tasks.service';
 import { PlanArchiveService } from './plan-archive.service';
@@ -46,11 +45,7 @@ import { PlanReviewWiring } from './plan-review-wiring';
     ArtifactsModule,
     forwardRef(() => MessageChannelsModule),
   ],
-  controllers: [
-    TasksController,
-    MigrateController,
-    TaskChannelBindingsController,
-  ],
+  controllers: [TasksController, TaskChannelBindingsController],
   providers: [
     TasksService,
     PlanArchiveService,
