@@ -2533,7 +2533,17 @@ export class WorkerDispatcher
                   wecomChannelsCount++;
                   wecomChannelIds.push(c.id);
                 }
-              } catch {}
+              } catch (e) {
+                // Fail closed: an unresolved binding may still be a wecom
+                // channel — count it so the summary below does not misreport
+                // "no wecom channels", and let the per-binding path below
+                // re-resolve it instead of skipping it as absent-and-fine.
+                wecomChannelsCount++;
+                wecomChannelIds.push(b.messageChannelId);
+                this.logger.warn(
+                  `wecom bridge: channel lookup failed bindingsId=${b.messageChannelId} taskId=${payload.taskId}: ${this.describeError(e)}`,
+                );
+              }
             }
             this.logger.log(
               `wecom bridge: taskId=${payload.taskId}, bindings=${bindings.length}, found wecom channels=${wecomChannelsCount}`,

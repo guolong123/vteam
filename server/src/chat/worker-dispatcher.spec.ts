@@ -7002,6 +7002,40 @@ describe('WorkerDispatcher', () => {
         }),
       );
     });
+
+    it('wecom binding lookup rejection surfaces failure instead of counting zero wecom channels', async () => {
+      const { d, mockAdapter } = setupWecomBridge({
+        chattype: 'group',
+        fromUserName: 'GuoLong',
+      });
+      (
+        prisma as unknown as {
+          messageChannel: { findUnique: jest.Mock };
+        }
+      ).messageChannel.findUnique.mockRejectedValue(new Error('db blip'));
+      const dispatcherView = d as unknown as {
+        logger: { warn: (...args: unknown[]) => void };
+      };
+      const warnSpy = jest.spyOn(dispatcherView.logger, 'warn');
+      type CompletedPayload = Parameters<
+        WorkerDispatcher['handleTaskCompleted']
+      >[0];
+      await d.handleTaskCompleted(basePayload as unknown as CompletedPayload);
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]));
+      // Failure surfaced with the binding identity (not swallowed).
+      expect(
+        warned.some(
+          (m) => m.includes('mc_wecom') && m.includes('lookup failed'),
+        ),
+      ).toBe(true);
+      // Not treated as absent-and-fine: must not conclude "no wecom channels".
+      expect(
+        warned.some((m) => m.includes('no wecom channels among bindings')),
+      ).toBe(false);
+      // Dispatch path does not proceed as though the channel resolved.
+      expect(mockAdapter.finishStream).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
   });
 
   // ------------------------------------------------------------------
