@@ -55,7 +55,11 @@ describe('platform-mcp tool naming contract', () => {
       team_add_member: { selfInstanceId: REQUIRED, teamId: ABSENT, taskId: REQUIRED },
       plan_complete: { selfInstanceId: REQUIRED, teamId: ABSENT, taskId: REQUIRED },
       channel_send: { selfInstanceId: ABSENT, teamId: ABSENT, taskId: ABSENT },
-      wecom_reply: { selfInstanceId: OPTIONAL, teamId: ABSENT, taskId: OPTIONAL },
+      wecom_reply: {
+        selfInstanceId: OPTIONAL,
+        teamId: OPTIONAL,
+        taskId: ABSENT,
+      },
       task_create: { selfInstanceId: REQUIRED, teamId: OPTIONAL, taskId: OPTIONAL },
       skill_create: { selfInstanceId: REQUIRED, teamId: OPTIONAL, taskId: OPTIONAL },
       git_repos_list: { selfInstanceId: REQUIRED, teamId: OPTIONAL, taskId: OPTIONAL },
@@ -76,5 +80,32 @@ describe('platform-mcp tool naming contract', () => {
     }
 
     expect(observed).toEqual(expected);
+  });
+
+  it('wecom_reply 接受 teamId 并兼容剥离旧 taskId', () => {
+    const tool = buildPlatformMcpTools(service).find(
+      (candidate) => candidate.name === 'wecom_reply',
+    );
+    expect(tool).toBeDefined();
+
+    const parsedTeam = tool?.inputSchema.safeParse({
+      teamId: 'tm_1',
+      text: 'x',
+    });
+    expect(parsedTeam).toMatchObject({
+      success: true,
+      data: { teamId: 'tm_1' },
+    });
+    expect(parsedTeam).not.toMatchObject({ data: { taskId: 't_1' } });
+
+    const parsedLegacy = tool?.inputSchema.safeParse({
+      taskId: 't_1',
+      text: 'legacy',
+    });
+    expect(parsedLegacy).toMatchObject({
+      success: true,
+      data: { text: 'legacy' },
+    });
+    expect(parsedLegacy).not.toMatchObject({ data: { taskId: 't_1' } });
   });
 });
