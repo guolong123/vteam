@@ -240,8 +240,7 @@ model Task {
   status              String    @default("pending")
   mainAgentId         String?   @map("main_agent_id")
   mainAgentInstanceId String?   @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护；session-unification 后停止写入，历史值由 Todo 6 迁移置空，列保留）
-  // @deprecated 2026-09-24 订正：上条"plan 域已下线"已过时——plans/plan_tasks 均为 live 表（见 Plan 模型注释）。
-  // executionMode 列保留、创建时恒写 "direct"，读路径仍透传回显；删除见 todo 39。
+  // @deprecated 不再读写：Todo 34 已移除 TS 侧写入与读路径回显；列保留待删，物理 DROP 见 W6 迁移（Todo 38）。
   executionMode       String    @default("direct") @map("execution_mode")
   backgroundDocs      Json?     @map("background_docs")
   /// 完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false，Todo7）
