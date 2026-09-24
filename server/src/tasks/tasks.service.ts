@@ -201,7 +201,11 @@ export class TasksService implements OnModuleInit {
           ),
         );
       });
-    } catch {}
+    } catch (err: unknown) {
+      this.logger.warn(
+        `停滞回调注册失败（progression 未提供 onStallDetected，不影响启动）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -615,8 +619,11 @@ export class TasksService implements OnModuleInit {
             });
           }
         }
-      } catch {
+      } catch (err: unknown) {
         // sqlite fallback 无碍，position 仍可用 MAX+1 保持 FIFO
+        this.logger.warn(
+          `队列 position 重排失败 teamId=${teamId}（无碍，仍可用 MAX+1 保持 FIFO）: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
       await this.realtime.broadcast(
         EVENT_TYPES.TEAM_QUEUE_CHANGED,
@@ -1601,7 +1608,11 @@ export class TasksService implements OnModuleInit {
               },
               { type: 'team', id: (task as any).teamId } as any,
             );
-          } catch {}
+          } catch (err: unknown) {
+            this.logger.warn(
+              `认领广播失败 taskId=${id} teamId=${teamHead.id}（DB 已提交，仅广播丢失）: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         } else {
           throw new ConflictException({
             code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
