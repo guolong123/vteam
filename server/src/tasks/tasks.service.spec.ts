@@ -4307,6 +4307,53 @@ describe('TasksService', () => {
       }
     });
 
+    it('promoteNextInTx team-queue lock（site :607）：非 sqlite 引擎队首锁查询失败直接抛出，不走无锁 findFirst 降级', async () => {
+      const prevDbType = process.env.DB_TYPE;
+      const prevDbUrl = process.env.DATABASE_URL;
+      process.env.DB_TYPE = 'mysql';
+      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
+      try {
+        const lockFailure = new Error('queue lock wait timeout exceeded');
+        const tx: any = {
+          team: {
+            findUnique: jest.fn().mockResolvedValue({
+              id: teamId,
+              version: 2,
+              currentTaskId: 't_0000000001',
+            }),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          },
+          teamQueue: {
+            findFirst: jest
+              .fn()
+              .mockResolvedValue({ taskId: 't_0000000002', position: 1 }),
+            findMany: jest.fn().mockResolvedValue([]),
+            deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+            update: jest.fn(),
+          },
+          task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          // 首个锁查询（team 行锁）成功，第二个锁查询（队首锁）失败
+          $queryRawUnsafe: jest
+            .fn()
+            .mockResolvedValueOnce([{ id: teamId, version: 2 }])
+            .mockRejectedValue(lockFailure),
+        };
+        prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+        // 锁失败必须上浮：旧代码会吞错走无锁 findFirst 并静默晋升队首
+        await expect(service.promoteNext(teamId)).rejects.toThrow(
+          'queue lock wait timeout exceeded',
+        );
+        expect(tx.teamQueue.findFirst).not.toHaveBeenCalled();
+        expect(tx.team.updateMany).not.toHaveBeenCalled();
+        expect(tx.task.updateMany).not.toHaveBeenCalled();
+      } finally {
+        if (prevDbType === undefined) delete process.env.DB_TYPE;
+        else process.env.DB_TYPE = prevDbType;
+        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = prevDbUrl;
+      }
+    });
+
     it('archive：队列空则 currentTaskId=null，广播 idle', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(
@@ -4721,6 +4768,85 @@ describe('TasksService', () => {
       expect(
         (sessionLifecycle as any).resetTeamSessionsInTx,
       ).toHaveBeenCalledWith(expect.any(Object), teamId);
+    });
+
+    it('accept 记忆开关 team 查询失败（site :1781）：lookup reject 直接上浮，不吞错跳过 reset（needReset 不得静默为 false）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(
+          row({
+            id: 't_0000000001',
+            status: 'pending_review',
+            version: 4,
+            teamId,
+            resetAfterComplete: false,
+          }),
+        )
+        .mockResolvedValue(
+          row({
+            id: 't_0000000001',
+            status: 'completed',
+            version: 5,
+            teamId,
+          }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      planLifecycle.getStatus.mockResolvedValue(null);
+      idGen.nextId.mockResolvedValue('te_0000000001');
+      const lookupFailure = new Error('team lookup unavailable');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({}) },
+        session: {
+          updateMany: jest.fn().mockResolvedValue({}),
+          findMany: jest.fn(),
+          deleteMany: jest.fn(),
+          create: jest.fn(),
+        },
+        message: {
+          create: jest.fn().mockImplementation(({ data }: any) => ({
+            id: data.id,
+            channelId: data.channelId,
+            senderType: data.senderType,
+            content: data.content,
+            mentions: data.mentions,
+            status: data.status,
+            createdAt: new Date(),
+          })),
+        },
+        artifact: { findMany: jest.fn().mockResolvedValue([]) },
+        artifactVersion: { updateMany: jest.fn() },
+        plan: { update: jest.fn() },
+        team: {
+          // promoteNext 事务内回退读成功一次，随后的记忆开关查询失败
+          findUnique: jest
+            .fn()
+            .mockResolvedValueOnce({
+              id: teamId,
+              version: 2,
+              currentTaskId: 't_0000000001',
+            })
+            .mockRejectedValue(lookupFailure),
+        },
+        teamQueue: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn(),
+          update: jest.fn(),
+        },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      const resetInTx = (
+        sessionLifecycle as unknown as { resetTeamSessionsInTx: jest.Mock }
+      ).resetTeamSessionsInTx;
+      resetInTx.mockClear();
+
+      // 查询失败必须上浮：旧代码吞错后 needReset 保持 false，accept 静默成功且不 reset
+      await expect(service.accept('t_0000000001', userId)).rejects.toThrow(
+        'team lookup unavailable',
+      );
+      expect(resetInTx).not.toHaveBeenCalled();
     });
 
     it('reject 同样走 promoteNext：事务内闲置则 currentTaskId=null 广播 idle', async () => {

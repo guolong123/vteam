@@ -616,7 +616,10 @@ export class TasksService implements OnModuleInit {
           where: { teamId },
           orderBy: { position: 'asc' },
         });
-    } catch {
+    } catch (err) {
+      // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出，
+      // 否则静默降级会丢失队首锁、打开 double-promote 竞态（Todo 25）。
+      if (!this.isRowLockUnsupportedEngine()) throw err;
       next = await tx.teamQueue.findFirst({
         where: { teamId },
         orderBy: { position: 'asc' },
@@ -1778,15 +1781,18 @@ export class TasksService implements OnModuleInit {
         (task as any).teamId
       ) {
         const teamIdForReset = (task as any).teamId as string;
+        // Todo7 记忆开关 + Todo 25：team 行缺失（null）保持 needReset=false；
+        // 查询失败直接向上抛出（不吞错），否则脏会话被静默复用。
+        // reuseSession / resetAfterComplete 业务规则本身不变。
         let needReset = false;
-        try {
-          const teamRow = await (tx as any).team.findUnique({
-            where: { id: teamIdForReset },
-            select: { reuseSession: true },
-          });
+        const teamRow = await (tx as any).team.findUnique({
+          where: { id: teamIdForReset },
+          select: { reuseSession: true },
+        });
+        if (teamRow) {
           const taskReset = Boolean((task as any).resetAfterComplete);
-          needReset = !!teamRow && (!teamRow.reuseSession || taskReset);
-        } catch {}
+          needReset = !teamRow.reuseSession || taskReset;
+        }
         if (needReset) {
           await this.sessionLifecycle.resetTeamSessionsInTx(
             tx as unknown as Prisma.TransactionClient,
