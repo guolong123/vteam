@@ -707,6 +707,42 @@ describe('TasksService', () => {
       }
     });
 
+    it('createTaskInternal FIFO position（site :364）：非 sqlite 引擎锁查询与 aggregate 双失败时直接抛出，不伪造 position = 1', async () => {
+      const prevDbType = process.env.DB_TYPE;
+      const prevDbUrl = process.env.DATABASE_URL;
+      process.env.DB_TYPE = 'mysql';
+      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
+      try {
+        const taskId = 't_0000000023';
+        const tx = setupTxBusy(taskId, 5);
+        const lockFailure = new Error('lock wait timeout exceeded');
+        tx.$queryRawUnsafe
+          .mockResolvedValueOnce([
+            {
+              id: teamId,
+              version: 1,
+              currentTaskId: 't_0000000009',
+              reuseSession: 1,
+              mainAgentMemberId: null,
+            },
+          ])
+          .mockRejectedValue(lockFailure);
+        tx.teamQueue.aggregate.mockRejectedValue(
+          new Error('aggregate unavailable'),
+        );
+        await expect(
+          service.create(userId, { title: '双失败', teamId }),
+        ).rejects.toThrow('lock wait timeout exceeded');
+        expect(tx.task.create).not.toHaveBeenCalled();
+        expect(tx.teamQueue.create).not.toHaveBeenCalled();
+      } finally {
+        if (prevDbType === undefined) delete process.env.DB_TYPE;
+        else process.env.DB_TYPE = prevDbType;
+        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = prevDbUrl;
+      }
+    });
+
     it('并发：version CAS 重试3次，最终仅一个 pending 其余 queued（模拟首试冲突后重试成功）', async () => {
       const taskId = 't_0000000003';
       prisma.teamUserMember.findUnique.mockResolvedValue({

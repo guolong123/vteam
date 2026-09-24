@@ -372,16 +372,17 @@ export class TasksService implements OnModuleInit {
               const v = qRows?.[0]?.maxPos;
               maxPos = typeof v === 'number' ? v : v != null ? Number(v) : 0;
               if (!Number.isFinite(maxPos)) maxPos = 0;
-            } catch {
-              try {
-                const agg = await tx.teamQueue.aggregate({
-                  _max: { position: true },
-                  where: { teamId },
-                });
-                maxPos = agg._max.position ?? 0;
-              } catch {
-                maxPos = 0;
-              }
+            } catch (err) {
+              // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁 aggregate；支持行锁的引擎上
+              // 锁查询失败必须直接抛出——双失败时禁止 maxPos = 0 伪造 position = 1，
+              // 否则静默破坏 FIFO 队列顺序（Todo 23）。aggregate 自身失败一律向上抛出，
+              // 位置永不虚构。
+              if (!this.isRowLockUnsupportedEngine()) throw err;
+              const agg = await tx.teamQueue.aggregate({
+                _max: { position: true },
+                where: { teamId },
+              });
+              maxPos = agg._max.position ?? 0;
             }
           }
 
