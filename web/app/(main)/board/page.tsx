@@ -6,7 +6,7 @@
  * 唯一来源：docs/agent-platform/prototypes/task-board/index.tsx。
  * - 状态筛选条（全部/待开始/进行中/待验收/已完成/已归档，FR-03 五态）+ 任务卡片网格；
  *   数据源：GET /api/v1/tasks?teamId=&status=&page=&pageSize= → TanStack Query，
- *   teamId 取 URL ?teamId=，缺失且已登录 → 提示后重定向 /teams（团队为唯一工作台入口）。
+ *   teamId 取 URL ?teamId=，缺失时展示团队选择（团队为唯一工作台入口）。
  * - 卡片：标题 / 状态徽章 / 参与 Agent 头像 / 产出物数量；「待开始」卡片带「开始任务」
  *   按钮（FR-18/19）：点击真实调用 POST /api/v1/tasks/:id/start（T7），乐观更新 + 失败提示；
  *   启动中/失败时展示「开始前检查」提示（data-testid=start-task-hint）。
@@ -170,7 +170,7 @@ function toRoles(agentIds: string[]): RoleKey[] {
   return roles;
 }
 
-/* ------------------------------ 团队上下文：URL ?teamId= 必填，无 teamId 重定向 /teams ------------------------------ */
+/* ------------------------------ 团队上下文：URL ?teamId= 必填，缺失时展示团队选择 ------------------------------ */
 
 /* ------------------------------ 状态筛选（默认「全部」激活，点击切换 query 重新 fetch） ------------------------------ */
 interface StatusFilter {
@@ -368,23 +368,37 @@ export default function TaskBoardPage() {
   const queryClient = useQueryClient();
   const router = useRouter();
 
-  // teamId：URL ?teamId= 必填；无 teamId 且已登录 → 重定向 /teams（effect 内读 window，避免 SSR 水合不一致）
+  // teamId：URL ?teamId= 必填；缺失时展示团队选择（effect 内读 window，避免 SSR 水合不一致）
   const [teamId, setTeamId] = useState<string | null>(null);
-  const [redirecting, setRedirecting] = useState(false);
+  const [urlResolved, setUrlResolved] = useState(false);
   const [activeKey, setActiveKey] = useState("all");
   // 抽屉详情：当前选中的任务 id（null = 关闭）；看板点击卡片只开抽屉，不跳 /tasks/:id
   const [drawerTaskId, setDrawerTaskId] = useState<string | null>(null);
 
   useEffect(() => {
-    const urlTeamId = new URLSearchParams(window.location.search).get("teamId");
-    if (urlTeamId) {
-      setTeamId(urlTeamId);
-    } else if (userId) {
-      setRedirecting(true);
-      const t = setTimeout(() => router.replace("/teams"), 1500);
-      return () => clearTimeout(t);
-    }
-  }, [userId, router]);
+    const syncTeamFromUrl = () => {
+      setTeamId(new URLSearchParams(window.location.search).get("teamId"));
+      setUrlResolved(true);
+    };
+    syncTeamFromUrl();
+    window.addEventListener("popstate", syncTeamFromUrl);
+    return () => window.removeEventListener("popstate", syncTeamFromUrl);
+  }, []);
+
+  const teamOptionsQuery = useQuery({
+    queryKey: ["board-team-options"],
+    queryFn: () => teamsApi.list({ page: 1, pageSize: 100 }),
+    enabled: !!userId && urlResolved && !teamId,
+  });
+  const teamOptions = teamOptionsQuery.data?.items;
+  const showTeamSelection = !!userId && urlResolved && !teamId;
+
+  useEffect(() => {
+    if (!showTeamSelection || !teamOptions || teamOptions.length !== 1) return;
+    const onlyTeam = teamOptions[0];
+    setTeamId(onlyTeam.id);
+    router.replace(`/board?teamId=${encodeURIComponent(onlyTeam.id)}`);
+  }, [router, showTeamSelection, teamOptions]);
 
   const activeFilter = filters.find((f) => f.key === activeKey) ?? filters[0];
   // queryKey 含 status 依赖：点击筛选 → key 变化 → 重新 fetch（不传 status=全部）
@@ -444,11 +458,51 @@ export default function TaskBoardPage() {
         ...baseFont,
       }}
     >
-      {redirecting && (
-        <div data-testid="team-redirect-hint" style={{ padding: `${space.md}px ${space.xl}px`, backgroundColor: "rgba(13,148,136,0.08)", color: "#0D9488", fontSize: fontSize.sm }}>
-          未指定团队，正在返回团队列表，请从团队进入看板…
+      {showTeamSelection ? (
+        <div
+          data-testid="board-team-selection"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: "auto",
+            padding: space.xl,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: space.lg,
+            textAlign: "center",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            <div style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[800] }}>选择团队</div>
+            <div style={{ fontSize: fontSize.sm, color: neutral[500] }}>任务看板需要团队上下文，请选择要查看的团队。</div>
+          </div>
+          {teamOptionsQuery.isPending ? (
+            <div data-testid="board-team-options-loading" style={{ fontSize: fontSize.md, color: neutral[400] }}>加载团队中…</div>
+          ) : teamOptionsQuery.isError ? (
+            <div data-testid="board-team-options-error" role="alert" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: space.md }}>
+              <div style={{ fontSize: fontSize.md, color: "#DC2626" }}>{isApiError(teamOptionsQuery.error) ? teamOptionsQuery.error.message : "加载团队失败"}</div>
+              <button type="button" data-testid="board-team-options-retry" onClick={() => teamOptionsQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], cursor: "pointer", fontFamily: fontFamily.body }}>重试</button>
+            </div>
+          ) : (teamOptions?.length ?? 0) === 0 ? (
+            <div data-testid="board-team-empty" style={{ width: "100%", maxWidth: 520 }}>
+              <EmptyState title="还没有团队" description="创建团队后即可查看任务看板" icon={<span aria-hidden>▣</span>} action={<button type="button" data-testid="board-create-team-button" onClick={() => router.push("/teams/new")} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.pill, border: "none", backgroundColor: "#0D9488", color: "#FFF", cursor: "pointer", fontFamily: fontFamily.body }}>新建团队</button>} />
+            </div>
+          ) : (
+            <div data-testid="board-team-options" style={{ width: "100%", maxWidth: 720, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: space.md }}>
+              {(teamOptions ?? []).map((team) => (
+                <button key={team.id} type="button" data-testid="board-team-option" data-team-id={team.id}                   onClick={() => {
+                    setTeamId(team.id);
+                    router.push(`/board?teamId=${encodeURIComponent(team.id)}`);
+                  }} style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: space.xs, padding: space.lg, borderRadius: radius.lg, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[800], textAlign: "left", cursor: "pointer", fontFamily: fontFamily.body }}>
+                  <span style={{ fontSize: fontSize.md, fontWeight: 600 }}>{team.name}</span>
+                  <span style={{ fontSize: fontSize.sm, color: neutral[500] }}>{team.members.length} 成员 · {team.queue.length} 排队</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+      ) : null}
       {/* 看板标题：?teamId= 命中团队名时显示「{团队名} · 任务看板」，否则保持固定标题 */}
       <div
         data-testid="board-title"
@@ -517,6 +571,8 @@ export default function TaskBoardPage() {
         )}
       </div>
 
+      {!showTeamSelection ? (
+        <>
       {/* 状态筛选条 */}
       <div
         data-testid="status-filter"
@@ -656,6 +712,8 @@ export default function TaskBoardPage() {
           ))
         )}
       </div>
+        </>
+      ) : null}
       <TaskDetailDrawer
         taskId={drawerTaskId}
         onClose={() => setDrawerTaskId(null)}
