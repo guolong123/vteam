@@ -150,11 +150,31 @@ describe('platform-mcp tool naming contract', () => {
         teamId: OPTIONAL,
         taskId: ABSENT,
       },
-      task_create: { selfInstanceId: REQUIRED, teamId: OPTIONAL, taskId: OPTIONAL },
-      skill_create: { selfInstanceId: REQUIRED, teamId: OPTIONAL, taskId: OPTIONAL },
-      git_repos_list: { selfInstanceId: REQUIRED, teamId: OPTIONAL, taskId: OPTIONAL },
-      hook_register: { selfInstanceId: REQUIRED, teamId: OPTIONAL, taskId: OPTIONAL },
-      hook_cancel: { selfInstanceId: REQUIRED, teamId: OPTIONAL, taskId: OPTIONAL },
+      task_create: {
+        selfInstanceId: REQUIRED,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
+      },
+      skill_create: {
+        selfInstanceId: REQUIRED,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
+      },
+      git_repos_list: {
+        selfInstanceId: REQUIRED,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
+      },
+      hook_register: {
+        selfInstanceId: REQUIRED,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
+      },
+      hook_cancel: {
+        selfInstanceId: REQUIRED,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
+      },
     };
 
     const observed: Record<string, Record<string, string>> = {};

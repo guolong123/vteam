@@ -7184,6 +7184,7 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve({
             id: 'm_ext_1',
             content: { text: '[WeCom:GuoLong] hi' },
+            createdAt: new Date(),
           });
         }
         if (

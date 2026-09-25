@@ -5560,8 +5560,7 @@ export class PlatformMcpService implements OnModuleInit {
             }
             if (!buffer) {
               if (!legacyTaskId) {
-                sendError =
-                  '无法解析当前任务上下文，请传 taskId 后再拉取图片';
+                sendError = '无法解析当前任务上下文，请传 taskId 后再拉取图片';
                 throw new Error(sendError);
               }
               const workerRow = await this.prisma.worker.findUnique({
