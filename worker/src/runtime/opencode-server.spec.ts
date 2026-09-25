@@ -80,7 +80,10 @@ beforeEach(() => {
   jest.clearAllMocks();
   // OPENCODE_PURE 默认不设 → spawn 不带 --pure（让内置插件 omo 生效）。
   // 显式清空避免宿主环境变量泄漏进用例断言（case 里按需临时设置）。
+  // OPENCODE_SERVER_PASSWORD 同理：spawn 继承整个 process.env，宿主导出该变量时
+  // （连真实 serve 是常规操作）会污染「为空时不注入」这条断言。
   delete process.env.OPENCODE_PURE;
+  delete process.env.OPENCODE_SERVER_PASSWORD;
   netBehaviors = [];
   httpBehavior = 'ok';
   killSpy = jest

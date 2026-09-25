@@ -80,6 +80,11 @@ server:
     ## server 事件静默自愈窗口 ms（滑动，对齐 compose SILENT_SESSION_WAKE_MS=600000）
     silentSessionWakeMs: "600000"
     agentIdleTimeoutMs: "0"
+  ## initContainer 等待数据库 TCP 就绪的最长秒数。server 的 RealtimeService.onModuleInit
+  ## 连不上库会直接退出，删 namespace 重建时 MySQL 尚未 ready 会导致反复重启。
+  dbWait:
+    timeoutSeconds: 180
+    pollIntervalSeconds: 2
   resources:
     requests:
       cpu: 200m
