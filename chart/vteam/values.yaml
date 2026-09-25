@@ -80,11 +80,12 @@ server:
     ## server 事件静默自愈窗口 ms（滑动，对齐 compose SILENT_SESSION_WAKE_MS=600000）
     silentSessionWakeMs: "600000"
     agentIdleTimeoutMs: "0"
-  ## initContainer 等待数据库 TCP 就绪的最长秒数。server 的 RealtimeService.onModuleInit
-  ## 连不上库会直接退出，删 namespace 重建时 MySQL 尚未 ready 会导致反复重启。
-  dbWait:
-    timeoutSeconds: 180
-    pollIntervalSeconds: 2
+  ## initContainer 等待数据库「schema 就绪」的最长秒数。判据是 prisma migrate status
+  ## 报 up to date——只探 TCP 不够：MySQL 端口可连时迁移可能尚未跑完，server 会以
+  ## P2021（表不存在）退出并反复重启。
+  schemaWait:
+    timeoutSeconds: 300
+    pollIntervalSeconds: 3
   resources:
     requests:
       cpu: 200m
