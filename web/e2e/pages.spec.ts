@@ -370,6 +370,41 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("cmdk-panel")).not.toBeVisible();
   });
 
+  // 面板底部的「↑↓ 选择 / ↵ 打开」此前是空头支票：data-active 恒为 false，
+  // 无任何方向键/回车处理器，条目只能点击。此处锁住键盘导航契约。
+  test("命令面板键盘导航：↑↓ 移动光标、↵ 打开", async ({ page }) => {
+    await page.goto("/teams");
+    await page.getByTestId("cmdk-trigger").click();
+    await expect(page.getByTestId("cmdk-panel")).toBeVisible();
+
+    const items = page.getByTestId("cmdk-item");
+    const selected = page.locator('[data-testid="cmdk-item"][data-active="true"]');
+    // 任意时刻有且只有一项处于高亮
+    await expect(selected).toHaveCount(1);
+    await expect(items.first()).toHaveAttribute("data-active", "true");
+
+    // ↓ 移到第二项
+    await page.keyboard.press("ArrowDown");
+    await expect(items.nth(1)).toHaveAttribute("data-active", "true");
+    await expect(items.first()).toHaveAttribute("data-active", "false");
+    await expect(selected).toHaveCount(1);
+
+    // ↑ 回到首项
+    await page.keyboard.press("ArrowUp");
+    await expect(items.first()).toHaveAttribute("data-active", "true");
+
+    // 首项再 ↑ 循环到末项。末项不是「系统管理」——过滤列表含「操作」组，
+    // 其唯一项「新建任务」排在「导航」组之后，故末项是它（→ /tasks/new）。
+    const total = await items.count();
+    await page.keyboard.press("ArrowUp");
+    await expect(items.nth(total - 1)).toHaveAttribute("data-active", "true");
+
+    // ↵ 打开光标所在项
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(/\/tasks\/new/);
+    await expect(page.getByTestId("cmdk-panel")).not.toBeVisible();
+  });
+
   test("11/17 role-permission /roles", async ({ page }) => {
     await page.goto("/roles");
     // Todo 17：/roles 重定向至 /system/roles（旧书签兼容）
