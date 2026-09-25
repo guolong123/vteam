@@ -9,7 +9,7 @@
  * 宿主容器需 position: relative。
  */
 import { useEffect, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
 import { NAV_ITEMS } from "./nav-dock";
@@ -24,7 +24,7 @@ export interface CmdKItem {
   group: string;
   label: string;
   icon: string;
-  /** 是否高亮（模拟键盘选中态） */
+  /** 静态高亮（如「当前所在页」），与键盘光标叠加。键盘光标本身不再依赖此字段。 */
   active?: boolean;
 }
 
@@ -183,10 +183,16 @@ export function CmdKPanel({
 }: CmdKPanelProps) {
   // 搜索关键词（受控）：输入后按 label/group 过滤，清空恢复全部
   const [query, setQuery] = useState("");
+  // 键盘光标（filteredItems 下标）。data-active 原本就是为它设计的，但此前没有任何
+  // 调用方给 CmdKItem.active 赋值，故底部的「↑↓ 选择 / ↵ 打开」提示一直落空。
+  const [cursor, setCursor] = useState(0);
 
-  // 重新打开时重置搜索词：面板每次打开都展示全部命令
+  // 重新打开时重置搜索词与光标：面板每次打开都展示全部命令，光标停在首项
   useEffect(() => {
-    if (open) setQuery("");
+    if (open) {
+      setQuery("");
+      setCursor(0);
+    }
   }, [open]);
 
   // Esc 键关闭：open 时才挂监听，卸载/关闭时清理
@@ -201,8 +207,6 @@ export function CmdKPanel({
 
   const panelRef = useFocusTrap<HTMLDivElement>(open, onClose ?? (() => {}));
 
-  if (!open) return null;
-
   // 过滤：大小写不敏感，按 label/group includes 匹配；空串时保留全部
   const q = query.trim().toLowerCase();
   const filteredItems = items.filter(
@@ -212,6 +216,37 @@ export function CmdKPanel({
       item.group.toLowerCase().includes(q),
   );
 
+  // 输入会缩短列表，光标下标须夹紧，否则可能指向已不存在的项
+  const cursorIndex = filteredItems.length > 0 ? Math.min(cursor, filteredItems.length - 1) : -1;
+  // 以 label 匹配光标项而非在分组渲染中累计下标：分组各自累计会每组从 0 重新计数，
+  // 导致每组首项都被判为光标位。label 作匹配键与既有 key={item.label} 同源。
+  const cursorLabel = cursorIndex >= 0 ? filteredItems[cursorIndex].label : null;
+
+  // 光标移动后把选中项滚进视口；nearest 只在必要时滚动，不带动整页
+  useEffect(() => {
+    if (!open) return;
+    panelRef.current
+      ?.querySelector<HTMLElement>('.navcmdk-item[data-active="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [open, cursorIndex, query]);
+
+  // ↑↓ 循环移动光标，↵ 打开当前项。监听挂在搜索框上：面板打开时焦点恒在此，
+  // 挂在 window 会抢走输入框内的方向键（文本编辑需要）。
+  const handleKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (filteredItems.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setCursor((i) => (i + 1) % filteredItems.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setCursor((i) => (i - 1 + filteredItems.length) % filteredItems.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const item = filteredItems[cursorIndex];
+      if (item && onSelect) onSelect(item.label);
+    }
+  };
+
   // 按 group 保序分组
   const groups: { group: string; items: CmdKItem[] }[] = [];
   for (const item of filteredItems) {
@@ -219,6 +254,8 @@ export function CmdKPanel({
     if (g) g.items.push(item);
     else groups.push({ group: item.group, items: [item] });
   }
+
+  if (!open) return null;
 
   return (
     <div
@@ -251,6 +288,7 @@ export function CmdKPanel({
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
             placeholder="搜索或输入命令…"
             aria-label="搜索命令"
             style={{
@@ -337,7 +375,11 @@ export function CmdKPanel({
                   key={item.label}
                   type="button"
                   data-testid="cmdk-item"
-                  data-active={item.active ? "true" : "false"}
+                  data-active={
+                    item.label === cursorLabel || item.active === true
+                      ? "true"
+                      : "false"
+                  }
                   className="navcmdk-item"
                   onClick={onSelect ? () => onSelect(item.label) : undefined}
                 >
