@@ -72,18 +72,18 @@ describe('platform tool permission gate (capability model)', () => {
       const { service } = build({
         member: memberRow({ capabilities: { 'doc.read': true } }),
       });
-      await expect(service.assertToolAllowed('tmm_dev', 'doclib')).resolves.toBe(
-        undefined,
-      );
+      await expect(
+        service.assertToolAllowed('tmm_dev', 'doclib'),
+      ).resolves.toBe(undefined);
     });
 
     it('能力点缺失 → 放行（default-allow 的唯一证明）', async () => {
       const { service } = build({
         member: memberRow({ capabilities: { 'task.create': false } }),
       });
-      await expect(service.assertToolAllowed('tmm_dev', 'doclib')).resolves.toBe(
-        undefined,
-      );
+      await expect(
+        service.assertToolAllowed('tmm_dev', 'doclib'),
+      ).resolves.toBe(undefined);
     });
 
     it('capabilities 为 NULL → 等同空矩阵 → 全放行（default-allow）', async () => {
@@ -125,10 +125,12 @@ describe('platform tool permission gate (capability model)', () => {
         service.assertToolAllowed('tmm_dev', 'issue_create'),
         'vteam_issue_create',
       );
-      await expect(service.assertToolAllowed('tmm_dev', 'issue_list')).resolves
-        .toBeUndefined();
-      await expect(service.assertToolAllowed('tmm_dev', 'issue_get')).resolves
-        .toBeUndefined();
+      await expect(
+        service.assertToolAllowed('tmm_dev', 'issue_list'),
+      ).resolves.toBeUndefined();
+      await expect(
+        service.assertToolAllowed('tmm_dev', 'issue_get'),
+      ).resolves.toBeUndefined();
     });
 
     it('未知/已下线工具（映射不到能力点）→ 403（unknown 面 fail-closed）', async () => {
@@ -381,16 +383,18 @@ describe('platform tool permission gate (capability model)', () => {
     beforeEach(async () => {
       service = {
         resolveToolCallerId: jest.fn().mockResolvedValue('tmm_dev'),
-        resolveToolCallerWithContext: jest.fn().mockImplementation(
-          async (
-            _ctx: unknown,
-            args: { taskId?: string; teamId?: string },
-          ) => ({
-            callerId: 'tmm_dev',
-            ...(args.taskId ? { taskId: args.taskId } : {}),
-            ...(args.teamId ? { teamId: args.teamId } : {}),
-          }),
-        ),
+        resolveToolCallerWithContext: jest
+          .fn()
+          .mockImplementation(
+            async (
+              _ctx: unknown,
+              args: { taskId?: string; teamId?: string },
+            ) => ({
+              callerId: 'tmm_dev',
+              ...(args.taskId ? { taskId: args.taskId } : {}),
+              ...(args.teamId ? { teamId: args.teamId } : {}),
+            }),
+          ),
         groupPost: jest
           .fn()
           .mockResolvedValue({ messageId: 'm_1', attachment: null }),
@@ -504,12 +508,12 @@ describe('platform tool permission gate (capability model)', () => {
       expect(service.groupPost).not.toHaveBeenCalled();
     });
 
-    it('tools/list 全量不受权限影响（28 个工具，调用时才拦截）', async () => {
+    it('tools/list 全量不受权限影响（31 个工具，调用时才拦截）', async () => {
       const res = await mcpPost()
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
         .expect(200);
 
-      expect((res.body.result.tools as unknown[]).length).toBe(28);
+      expect((res.body.result.tools as unknown[]).length).toBe(31);
       expect(
         (res.body.result.tools as Array<{ name: string }>).map((t) => t.name),
       ).toContain('task_transition');

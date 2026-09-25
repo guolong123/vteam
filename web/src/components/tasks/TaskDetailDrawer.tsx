@@ -30,22 +30,15 @@ import {
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-type TaskApiStatus =
-  | "queued"
-  | "pending"
-  | "in_progress"
-  | "blocked"
-  | "pending_review"
-  | "completed"
-  | "archived";
+import type { TaskApiStatus } from "@/src/types/task-status";
+import { STATUS_LABEL } from "@/src/types/task-status";
 
 interface TaskDetail {
   id: string;
   title: string;
   description: string | null;
   status: TaskApiStatus;
-  mainAgentId: string | null;
-  mainAgentInstanceId?: string | null;
+  mainAgentMemberId: string | null;
   teamAgentIds: string[];
   teamId?: string | null;
   createdAt: string;
@@ -78,15 +71,7 @@ interface IssuesResponse {
   total: number;
 }
 
-const STATUS_LABEL: Record<TaskApiStatus, string> = {
-  queued: "排队中",
-  pending: "待开始",
-  in_progress: "进行中",
-  blocked: "阻塞中",
-  pending_review: "待验收",
-  completed: "已完成",
-  archived: "已归档",
-};
+/** 状态中文标签（唯一定义见 `@/src/types/task-status`，此处直接引用导入的 `STATUS_LABEL`）。 */
 
 const ISSUE_LABEL: Record<IssueItem["status"], string> = {
   open: "待处理",
@@ -282,7 +267,7 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
             <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
               <span style={{ fontSize: fontSize.sm, color: neutral[500] }}>主 Agent：</span>
               <span data-testid="task-drawer-main-agent" style={{ fontSize: fontSize.sm, color: neutral[800] }}>
-                {task.mainAgentId ?? "未指定"}
+                {task.mainAgentMemberId ?? "未指定"}
               </span>
             </div>
 

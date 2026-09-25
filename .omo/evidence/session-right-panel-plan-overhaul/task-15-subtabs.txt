@@ -1,0 +1,4 @@
+grep -n "settings\|memory\|actions" web/src/components/teams/TeamRightPanel.tsx
+10:import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
+119:    <div data-testid="team-memory-card" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
+exit: 0

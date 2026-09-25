@@ -11,8 +11,11 @@
 # 用法：
 #   scripts/deploy-k8s.sh                            # git SHA tag + 默认参数
 #   scripts/deploy-k8s.sh --tag v1.2.3              # 指定 tag
-#   scripts/deploy-k8s.sh --registry REGISTRY       # 自定义 registry
-#   scripts/deploy-k8s.sh --namespace staging       # 自定义 ns
+#   scripts/deploy-k8s.sh --registry docker-hosted.ketaops.cc/xishuhq
+#                                                    # 镜像推到该路径 → .../xishuhq/vteam-{server,web,worker}
+#   scripts/deploy-k8s.sh --namespace staging       # 自定义 ns（不存在则自动创建）
+#   scripts/deploy-k8s.sh --platform linux/amd64    # 目标架构（默认 linux/amd64）
+#   scripts/deploy-k8s.sh --platform native         # 用本机架构（不加 --platform）
 #   scripts/deploy-k8s.sh --release vteam-prod      # 自定义 release 名
 #   scripts/deploy-k8s.sh --no-build                # 跳过 docker build（镜像已存在）
 #   scripts/deploy-k8s.sh --no-push                 # 跳过 docker push（已 push）
@@ -23,10 +26,12 @@
 # 环境变量（覆盖默认值）：
 #   DOCKER_REGISTRY     默认 docker-hosted.ketaops.cc/ketaops
 #   VTNAMESPACE         默认 vteam
+#   DOCKER_PLATFORM     默认 linux/amd64（native = 本机架构）
 #   VTEAM_RELEASE       默认 vteam
 #   INGRESS_ENABLED     默认 true（false 关闭 ingress）
 #   INGRESS_HOST        默认 vteam.ketaops.cc
 #   INGRESS_CLASS       默认 nginx
+#   OPENCODE_INGRESS_ENABLED 默认 true（false 关闭 worker opencode 独立 ingress）
 #   VTNAM_BUILD_DIR     默认 /tmp/vteam-build
 #
 # 前置：
@@ -76,10 +81,16 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 REGISTRY="${DOCKER_REGISTRY:-docker-hosted.ketaops.cc/ketaops}"
 NAMESPACE="${VTNAMESPACE:-vteam}"
+# 目标架构（默认 linux/amd64：发布目标是 amd64 集群；arm64 开发机上 docker build
+# 会按本机架构产出 arm64 → 必须显式指定。传 native 则不加 --platform（用本机架构）。
+PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 RELEASE="${VTEAM_RELEASE:-vteam}"
 INGRESS_ENABLED="${INGRESS_ENABLED:-true}"
 INGRESS_HOST="${INGRESS_HOST:-vteam.ketaops.cc}"
 INGRESS_CLASS="${INGRESS_CLASS:-nginx}"
+## worker 内部 opencode web 的独立 Ingress（chart 默认关闭；本集群按需开启，
+## 置 false 可关闭——注意 opencode serve 无鉴权，公网暴露务必配合 whitelist）
+OPENCODE_INGRESS_ENABLED="${OPENCODE_INGRESS_ENABLED:-true}"
 
 SECRETS_FILE="$REPO_ROOT/.deploy-secrets.env"
 LOG_DIR="${VTNAM_BUILD_DIR:-/tmp/vteam-build}"
@@ -103,6 +114,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tag)            TAG="$2"; shift 2;;
+    --platform)       PLATFORM="$2"; shift 2;;
     --registry)       REGISTRY="$2"; shift 2;;
     --namespace)      NAMESPACE="$2"; shift 2;;
     --release)        RELEASE="$2"; shift 2;;
@@ -274,8 +286,12 @@ IMAGE_WORKER="$REGISTRY/vteam-worker:$TAG"
 
 build_one() {
   local dockerfile="$1" context="$2" image="$3" name="$4"
-  log "building $name → $image"
-  if DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "$image" "$context" \
+  local -a plat_args=()
+  if [[ -n "$PLATFORM" && "$PLATFORM" != "native" ]]; then
+    plat_args=(--platform "$PLATFORM")
+  fi
+  log "building $name → $image${plat_args[*]:+ (platform=${plat_args[1]})}"
+  if DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "$image" "${plat_args[@]}" "$context" \
        >"$LOG_DIR/build-$name.log" 2>&1; then
     local size
     size=$(docker images --format '{{.Size}}' "$image" 2>/dev/null | head -1)
@@ -326,7 +342,14 @@ fi
 
 # ============================================================
 # 5. helm upgrade（强制显式 4 个 secret，绕过 chart bug）
+# init Job 是平凡 Job（非 helm-hook），spec.template 不可变：换镜像 tag 时 helm
+# patch 必报 "field is immutable" → upgrade 前先删旧 Job（chart 重建；migrate
+# deploy 已应用 no-op、seed 幂等 upsert 不重复，见文件头背景）。
 # ============================================================
+if kubectl get job "${RELEASE}-init" -n "$NAMESPACE" >/dev/null 2>&1; then
+  log "删除旧 init Job (${RELEASE}-init，spec.template 不可变，升级需重建)..."
+  kubectl delete job "${RELEASE}-init" -n "$NAMESPACE" --ignore-not-found=true
+fi
 hdr "5/6 helm upgrade ($RELEASE in $NAMESPACE)"
 
 # 拆分 image = repository / tag
@@ -351,6 +374,7 @@ HELM_ARGS=(
   --set "ingress.enabled=$INGRESS_ENABLED"
   --set "ingress.host=$INGRESS_HOST"
   --set "ingress.className=$INGRESS_CLASS"
+  --set "opencodeIngress.enabled=$OPENCODE_INGRESS_ENABLED"
 )
 
 if [[ $DRY_RUN -eq 1 ]]; then

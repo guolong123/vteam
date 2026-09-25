@@ -1,0 +1,21 @@
+# worker 误杀修复：裸 stream error 被当致命模型错误
+# 时间: 2026-09-22T22:32:00+08:00
+
+## 现象（用户报告）
+[v1-driver] abort -> ses_... ; [exec] 执行失败: 等待首字超时：模型调用报错：stream error
+但会话仍在跑，被终止。
+
+## 根因（三条）
+1) worker/src/runtime/serve-log.ts SERVE_ERROR_KEYWORDS 含裸 `stream error`——它是 AI-SDK 通用外层包装
+   （真原因在同行 error.error="AI_APICallError: <原因>"）；瞬时流中断被内核重试后会话照常继续。
+2) worker/src/exec/exec-server.ts 内联重复了同一份关键词正则（双源，易漂移）。
+3) prompt-await.ts CompletionTimeoutError 文案恒为「等待首字超时」，即使走的是 serve 错误提前失败路径 → 误导。
+
+## 修法
+1) 从 SERVE_ERROR_KEYWORDS 移除裸 stream error（致命性只由具体原因关键词判定）；
+2) exec-server 改为 import 同一常量（单源）；
+3) 错误文案区分：serveErrorText 有值 → 「模型调用失败：」，否则「等待首字超时：」。
+
+## 验证
+worker typecheck exit 0；全量 24 suites / 606 tests 全绿；
+守卫有效性实证：临时还原旧关键词 → 新用例 FAIL（getMessages 仅 1 次 = 首轮即 abort，复现 bug）；恢复修复 → PASS。

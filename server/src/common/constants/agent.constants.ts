@@ -136,6 +136,9 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_my_profile',
   'vteam_team_add_member',
   'vteam_plan_complete',
+  'vteam_plan_finalize',
+  'vteam_plan_confirm',
+  'vteam_todo',
   'vteam_channel_send',
   'vteam_wecom_reply',
   'vteam_task_create',
@@ -148,7 +151,7 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
 /**
  * 主实例专属（server-gated）MCP 工具真实名——**已废弃，语义移交给 worker guard allowlist**。
  *
- * 历史：本清单曾标记由 platform-mcp 服务端按 `task.mainAgentInstanceId` /
+ * 历史：本清单曾标记由 platform-mcp 服务端按任务侧历史主标量或
  * `team.mainAgentMemberId` 权威判定（401/403）、guard 层② pass-through 的工具；
  * 该清单既不进 `toolAllows`（guard 白名单），也不进 `mcpDenies`（层① deny）。
  *
@@ -270,9 +273,11 @@ export const ROLE_POLICY_DENY_TEMPLATE =
   '【越界拦截｜角色：{role}】不能调用 <tool>。职责：<scopeSummary>。请把该工作转交 {handoffTarget}，或使用 vteam_notify_agent 定向通知。' as const;
 
 /** 角色边界映射（key = opencode agent 名，值与 Permission matrix 严格一致）。
- * bash 策略：全部 doing 角色 bash allow（headless 会话 ask 无法确认），
- * 层②命令级硬化清单已下线（空），bash 仅受层① permission.bash 约束；
- * 仅流程协调角色 vteam-project_manager 保持 bash deny。 */
+ * bash 策略：全部角色 bash allow（headless 会话 ask 无法确认），
+ * 层②命令级硬化清单已下线（空），bash 仅受层① permission.bash 约束。
+ * 2026-09-23 起 vteam-project_manager 亦为 allow：实测 agent `permission.bash=deny`
+ * 会让 OpenCode 免费模型返回 403（单变量验证：同配置只翻该字段即由 403 变正常），
+ * 而它曾是唯一 deny 的角色，导致"只有项目经理派发失败"。 */
 export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
   'vteam-product': defineBoundary({
     scopeSummary:
@@ -314,6 +319,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_hook_register: 'allow',
       vteam_hook_cancel: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -354,6 +360,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -400,6 +407,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_log: 'allow',
       // push 写远端：guard 放行后仍需仓库 write 授权（工具内 pushGuard 校验），无授权照样拒绝
       git_push: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -443,6 +451,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -459,7 +468,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_task_context: 'allow',
       vteam_group_post: 'allow',
@@ -472,6 +481,8 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_task_create: 'allow',
       vteam_task_transition: 'allow',
       vteam_plan_complete: 'allow',
+      vteam_plan_finalize: 'allow',
+      vteam_plan_confirm: 'allow',
       vteam_team_add_member: 'allow',
       vteam_question_confirm: 'allow',
       vteam_skill_create: 'allow',
@@ -487,6 +498,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_channel_send: 'allow',
       vteam_hook_register: 'allow',
       vteam_hook_cancel: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -515,7 +527,11 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_notify_agent: 'allow',
       vteam_memory_search: 'allow',
       vteam_plan_complete: 'allow',
+      vteam_plan_finalize: 'allow',
+      vteam_plan_confirm: 'allow',
+      vteam_submit_artifact: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -550,6 +566,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_diff: 'allow',
       git_log: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 };

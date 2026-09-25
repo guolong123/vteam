@@ -1,0 +1,17 @@
+curl -sS -H "Authorization: Bearer <token>" "http://localhost:13000/api/v1/docs-site/t_0000000001/prototypes/session-right-panel-v2/index.tsx" | grep -c "grid-cols-2"
+---output---
+3
+---cmd: curl -sS -o /dev/null -w "%{http_code}" http://localhost:13001/docs/t_0000000001
+---output---
+200
+---cmd: GET /prototypes (meta 解析)
+---output---
+{"items":[{"id":"session-right-panel-v2","metaId":"session-right-panel-v2","name":"会话右侧面板改版","file":"session-right-panel-v2/index.tsx","artifactId":"art_0000000007"}]}
+---cmd: 产出物注册响应 (POST /tasks/t_0000000001/artifacts)
+---output---
+{"status":"duplicate","artifact":{"id":"art_0000000007","taskId":"t_0000000001","type":"file","title":"会话右侧面板改版","category":"设计","currentVersion":1,"acceptedFlag":false,"authorAgentId":null,"createdAt":"2026-09-22T05:46:05.629Z","updatedAt":"2026-09-22T05:46:05.629Z","fileUrl":"/uploads/session-right-panel-v2.tsx"}}
+---说明: duplicate 为预期(空 body 撞 sha256);原型按 contentRef 实时读盘,docker cp 覆盖即生效,见容器自检---
+---cmd: docker exec aiagents-compose-server grep -c "grid-cols-2" /app/uploads/session-right-panel-v2.tsx
+---output---
+3
+1

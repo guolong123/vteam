@@ -22,12 +22,20 @@ from .exceptions import (
     WorkerNotRegisteredError,
 )
 from .models import (
+    AgentPolicyRecord,
     ExecuteAccepted,
     ExecutionConfig,
+    GitCredentialEntry,
+    McpServerRecord,
+    ModelCredentialEntry,
+    ModelProviderConfigEntry,
     ModelRef,
+    ProviderModelEntry,
     QuestionReply,
     PermissionReply,
+    SkillRecord,
     TaskResult,
+    ToolRecord,
 )
 from .service import WorkerDirect, WorkerService
 from .waiter import execute_and_wait
@@ -45,6 +53,14 @@ __all__ = [
     "QuestionReply",
     "PermissionReply",
     "TaskResult",
+    "SkillRecord",
+    "ToolRecord",
+    "McpServerRecord",
+    "AgentPolicyRecord",
+    "ModelCredentialEntry",
+    "ProviderModelEntry",
+    "ModelProviderConfigEntry",
+    "GitCredentialEntry",
     "WorkerError",
     "ExecuteError",
     "TokenError",

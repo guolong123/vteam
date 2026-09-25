@@ -9,10 +9,10 @@
  * 文本聚合：按 messageID 分组 → 过滤 type=text（排除 synthetic 合成文本，工具
  * 调用占位非模型输出）→ 按 part.time.start 时间戳排序 → 串接（D2 多段拼接规则）。
  *
- * 超时：**首字超时**（第一个非空 assistant 输出 part——text 或 reasoning——在
- * firstTokenTimeoutMs 内未出现 → 调 abort + 抛 CompletionTimeoutError，携带已收集文本）。
- * reasoning 产出即模型已响应（serve 实测先 reasoning 后 text，思考/标题生成可达 115s+），
- * 算作首字，长时间思考不被误杀。首字出现后**无完成超时**（长期任务持续轮询到 step-finish，
+ * 超时：**首字超时**（时限内既无非空 text part、也无 reasoning part → 调 abort +
+ * 抛 CompletionTimeoutError，携带已收集文本）。reasoning part **存在即算已响应**
+ * （opencode 实测先建 reasoning 空壳、思考结束才一次性写入文本，故不能要求文本非空），
+ * 长时间纯思考不被误杀。首字出现后**无完成超时**（长期任务持续轮询到 step-finish，
  * 判死由上层 server AGENT_IDLE_TIMEOUT_MS 负责，worker 只管「有活动就继续」）——只有
  * 「模型完全没响应」才报错。
  */
@@ -21,9 +21,9 @@ import { V1Driver, ServeMessage, ServePart, ServeTokens } from './v1-driver';
 
 export interface AwaitCompletionOptions {
   /**
-   * 首字超时 ms（第一个非空 assistant 输出 part——text 或 reasoning——在此时限内未出现
-   * → abort + 抛 CompletionTimeoutError）；默认 300000（对齐 server FIRST_TOKEN_TIMEOUT_MS
-   * = 300000）。reasoning 算作首字：模型开始思考即视为已响应，长时间思考不被误杀。
+   * 首字超时 ms（时限内既无非空 text part、也无 reasoning part → abort + 抛
+   * CompletionTimeoutError）；默认 300000（对齐 server FIRST_TOKEN_TIMEOUT_MS = 300000）。
+   * reasoning part 存在即算已响应（空壳也算：思考期 opencode 不落文本），长时间思考不被误杀。
    * 首字出现后无完成超时（持续等待 step-finish，不 abort）。
    */
   firstTokenTimeoutMs?: number;
@@ -249,7 +249,12 @@ export function describeTimeoutReason(
   return '模型无任何输出（可能模型凭据缺失/模型不可用/serve 异常）';
 }
 
-/** 首字超时（firstTokenTimeoutMs 内未出现第一个非空 assistant 输出 part——text 或 reasoning），已 abort + 携带部分回复。 */
+/**
+ * 会话未完成即失败（已 abort + 携带部分回复）。两条来源共用本类型：
+ * - **首字超时**：firstTokenTimeoutMs 内未出现第一个非空 assistant 输出 part（text 或 reasoning）；
+ * - **serve 日志模型错误提前失败**：命中真实模型 API 错误关键词（`serveErrorText` 有值）——
+ *   非超时，文案以「模型调用失败」开头，避免把"会话仍在跑"误报成首字超时。
+ */
 export class CompletionTimeoutError extends Error {
   readonly sessionID: string;
   readonly result: CompletionResult;
@@ -263,8 +268,11 @@ export class CompletionTimeoutError extends Error {
     serveErrorText?: string,
     serveLogTail?: string[],
   ) {
+    const reason = describeTimeoutReason(messages ?? [], serveErrorText, serveLogTail);
     super(
-      `[prompt-await] 会话 ${sessionID} 等待首字超时：${describeTimeoutReason(messages ?? [], serveErrorText, serveLogTail)}`,
+      typeof serveErrorText === 'string' && serveErrorText.trim() !== ''
+        ? `[prompt-await] 会话 ${sessionID} 模型调用失败：${reason}`
+        : `[prompt-await] 会话 ${sessionID} 等待首字超时：${reason}`,
     );
     this.name = 'CompletionTimeoutError';
     this.sessionID = sessionID;
@@ -350,11 +358,15 @@ function buildResult(messages: ServeMessage[]): CompletionResult {
 }
 
 /**
- * 首字判定：存在任一非空（trim 后非空）assistant 输出 part（text 或 reasoning）即视为已响应。
+ * 首字判定：存在任一 assistant 输出 part（非空 text，或**任意** reasoning）即视为已响应。
  * - text：排除 synthetic 合成文本（工具调用占位，非模型输出）
- * - reasoning：模型思考内容。serve 实测模型先产出 reasoning part 后才产出 text——
- *   reasoning 产出即证明模型已开始响应（长时间思考/标题生成可达 115s+），算作首字，
- *   避免「还在思考就被判首字超时 abort」的误杀。
+ * - reasoning：模型思考内容。**part 存在即算首字，不要求文本非空**——opencode 实测
+ *   （1.18.32 + 免费 provider，线上 ses_f339ae60）：reasoning part 在思考开始时创建，
+ *   但其文本要等 step 结束才**一次性**落盘，思考期间 `text` 恒为空字符串
+ *   （opencode 事件表实证：同一 part 仅 2 条事件——`textLen=0` 创建 → 结束时长文写入；
+ *   期间 5 分钟零更新）。若要求「文本非空」，长时间纯思考会被误判「模型无任何输出」
+ *   而 abort 误杀（模型其实一直在干活）。part 存在 = opencode 已收到模型的思考内容。
+ *   代价：思考开始后即无完成超时，判死交给上层 server 的静默/空闲 watchdog。
  */
 function hasFirstToken(messages: ServeMessage[]): boolean {
   for (const m of messages) {
@@ -365,7 +377,7 @@ function hasFirstToken(messages: ServeMessage[]): boolean {
       if (p.type === 'text' && !p.synthetic && (p.text ?? '').trim() !== '') {
         return true;
       }
-      if (p.type === 'reasoning' && !p.synthetic && (p.text ?? '').trim() !== '') {
+      if (p.type === 'reasoning' && !p.synthetic) {
         return true;
       }
     }
@@ -373,14 +385,66 @@ function hasFirstToken(messages: ServeMessage[]): boolean {
   return false;
 }
 
+function hashStr(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (Math.imul(h, 31) + s.charCodeAt(i)) | 0;
+  }
+  return h;
+}
+
+function sampleHash(s: string): number {
+  if (s.length <= 128) return hashStr(s);
+  return hashStr(`${s.slice(0, 64)}\n${s.slice(-64)}`) + s.length;
+}
+
 /**
- * 轮询等待会话完成：默认 500ms 间隔 / 120s 首字超时。
- * 完成（step-finish）→ 返回聚合结果；首字超时（时限内无 text 也无 reasoning 输出）→
- * abort + 抛 CompletionTimeoutError（带已收集文本）。首字（text 或 reasoning）出现后
- * **无完成超时**——持续轮询到 step-finish，长期任务（模型思考/长输出）不被误杀，判死由
- * 上层 server 空闲超时负责。
+ * 会话活性指纹：任何「主循环在推进」的可见变化都改变它——消息数、part 数、文本长度、
+ * 消息时间、以及 tool part 的 state（status / output 长度 / 自身耗时）。
+ * 全部用 O(1) 标量投影（字符串取有界采样哈希，不做 JSON.stringify），避免每轮 poll 对大 tool 输出
+ * 做全量序列化。
+ */
+function activitySignature(messages: ServeMessage[]): string {
+  let parts = 0;
+  let scalar = 0;
+  for (const m of messages) {
+    const mt = m.info?.time;
+    scalar += (mt?.created ?? 0) + (mt?.completed ?? 0);
+    for (const p of m.parts ?? []) {
+      parts += 1;
+      scalar += sampleHash(p.text ?? '') + (p.id ?? '').length;
+      // part 类型也计入：空壳 reasoning（思考期 text 恒空）与 text/tool 的切换同样是
+      // 「主循环在推进」的可见变化，不能只看文本长度。
+      scalar += (p.type ?? '').length;
+      const t = p.time;
+      scalar += (t?.start ?? 0) + (t?.end ?? 0);
+      const state = (
+        p as {
+          state?: {
+            status?: unknown;
+            output?: unknown;
+            time?: { start?: number; end?: number };
+          };
+        }
+      ).state;
+      if (state !== undefined && state !== null && typeof state === 'object') {
+        scalar += typeof state.status === 'string' ? state.status.length : 0;
+        scalar += typeof state.output === 'string' ? sampleHash(state.output) : 0;
+        scalar += (state.time?.start ?? 0) + (state.time?.end ?? 0);
+      }
+    }
+  }
+  return `${messages.length}:${parts}:${scalar}`;
+}
+
+/**
+ * 轮询等待会话完成：默认 500ms 间隔 / 300s 首字超时。
+ * 完成（step-finish）→ 返回聚合结果；首字超时（时限内既无 text 也无 reasoning part）→
+ * abort + 抛 CompletionTimeoutError（带已收集文本）。首字（非空 text 或 reasoning part）
+ * 出现后 **无完成超时**——持续轮询到 step-finish，长期任务（模型思考/长输出）不被误杀，
+ * 判死由上层 server 空闲超时负责。
  *
- * 活性顺延：即使 text/reasoning 尚未出现，只要 serve 侧持续追加新 parts（主循环在
+ * 活性顺延：即使 text/reasoning 尚未出现，只要 serve 侧持续追加/推进 parts（主循环在
  * 推进，如长 tool-calls 循环），首字 deadline 顺延——只有「无首字**且**无任何新输出」
  * 满时限才 abort。纯 tool 循环被误杀是线上主 agent 中断的另一来源（与 T17 子域秒杀并列）。
  */
@@ -400,8 +464,8 @@ export async function awaitCompletion(
   /** T17 去重 + 陈旧隔离：基线（本轮开始前已存在，永不触发）与本轮已检查过的行。
    * 同一行永不重复判定——新追加行才走 onServeError。 */
   const seenServeErrorLines = new Set<string>(options.baselineServeErrorLines ?? []);
-  /** 主循环活性：已收集 parts 总数；增长即 serve 侧在追加输出（tool 调用/步骤推进），首字 deadline 顺延。 */
-  let collectedPartCount = 0;
+  /** 主循环活性指纹（见 activitySignature）：变化即 serve 侧在推进，首字 deadline 顺延。 */
+  let lastActivitySignature = '';
   let lastActivityAt = startedAt;
   const hasServeErrorDetection = serveErrorReader !== undefined && onServeError !== undefined;
 
@@ -454,11 +518,12 @@ export async function awaitCompletion(
     if (firstTokenAt === null && hasFirstToken(collected)) {
       firstTokenAt = Date.now();
     }
-    // 活性记录：本轮新 parts 计数增长 → 主循环在推进（tool 调用/step 追加），刷新活性。
-    // mergeMessages 按 id 去重替换，计数增长即真实新增输出；纯重 poll 不增长。
-    const partCount = collected.reduce((n, m) => n + (m.parts ?? []).length, 0);
-    if (partCount > collectedPartCount) {
-      collectedPartCount = partCount;
+    // 活性记录：指纹变化即主循环在推进（新增 part / 文本增长 / tool 状态与耗时推进 / 消息时间推进），
+    // 刷新活性。仅数 parts 会漏掉「工具执行中」——tool part 的 state/output/time 会变但 part 数不变，
+    // 单个长工具（> firstTokenTimeoutMs 且无新 part）会被误判「无输出」而 abort。
+    const signature = activitySignature(collected);
+    if (signature !== lastActivitySignature) {
+      lastActivitySignature = signature;
       lastActivityAt = Date.now();
     }
     // 首字（text 或 reasoning）出现后无完成超时（继续轮询，判死由上层负责）；

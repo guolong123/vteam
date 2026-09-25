@@ -1,0 +1,3 @@
+$ grep -rnE <type-plan-pattern> server/src  # expect zero hits except guard spec self-assertion
+$ grep -rnE "type:[[:space:]]*["]plan["]" server/src  # 期望零命中，或仅 guard spec 自身断言串
+src/platform-mcp/plan-removal.guard.spec.ts:177:  it('平台不再注入计划指令（PLAN_PRODUCE/PLAN_REVIEW 常量已删除；不教模型提交 type:"plan"）', () => {

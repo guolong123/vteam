@@ -56,9 +56,7 @@ import {
   EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST,
   EXTERNAL_SYSTEM_AGENT_ID,
 } from '../common/constants/agent-role.constants';
-import {
-  buildFactoryCapabilityMatrix,
-} from '../common/constants/platform-capability.constants';
+import { buildFactoryCapabilityMatrix } from '../common/constants/platform-capability.constants';
 import { BUILTIN_ROLE_PROMPTS } from '../common/constants/agent-role-prompts.constants';
 import { computeMemoryContentHash } from '../memories/memory.constants';
 
@@ -967,10 +965,7 @@ describe('seed（计划 skills + 评审子句）', () => {
 
     expect(VTEAM_MCP_TOOL_NAMES).toContain('vteam_plan_complete');
     expect(ROLE_SERVER_GATED_TOOLS).toEqual([]);
-    for (const name of [
-      'vteam-project_manager',
-      'vteam-plan',
-    ] as const) {
+    for (const name of ['vteam-project_manager', 'vteam-plan'] as const) {
       expect(ROLE_BOUNDARIES[name].toolAllows).toHaveProperty(
         'vteam_plan_complete',
         'allow',
@@ -1138,7 +1133,9 @@ describe('seed（计划 skills + 评审子句）', () => {
         sortOrder: role.sortOrder,
       });
       // 槽位互斥：外部槽位非空 ⇒ defaultAgentId 必须 null（已在 toMatchObject 断言）。
-      expect(call![0].create.defaultOpencodeAgentName.length).toBeGreaterThan(0);
+      expect(call![0].create.defaultOpencodeAgentName.length).toBeGreaterThan(
+        0,
+      );
       // 一行式岗位定义，风格对齐内置 rolePrompt 的 `# 角色：` 身份行。
       expect(String(call![0].create.rolePrompt)).toMatch(/^# 角色：/);
       expect(String(call![0].create.rolePrompt)).not.toContain('\n');
@@ -1167,12 +1164,16 @@ describe('seed（计划 skills + 评审子句）', () => {
       key: { in: [...EXTERNAL_AGENT_ROLE_KEYS] },
       capabilities: { equals: Prisma.DbNull },
     });
-    // 8 协作/取证/产出能力点 true，其余 19 项显式 false（default-allow 下不可省；27 键 = 8 + 19）。
-    expect(Object.keys(EXTERNAL_AGENT_ROLE_CAPABILITIES)).toHaveLength(27);
-    expect(Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(Boolean)).toHaveLength(8);
+    // 8 协作/取证/产出能力点 true，其余 20 项显式 false（default-allow 下不可省；28 键 = 8 + 20）。
+    expect(Object.keys(EXTERNAL_AGENT_ROLE_CAPABILITIES)).toHaveLength(28);
     expect(
-      Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === false),
-    ).toHaveLength(19);
+      Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(Boolean),
+    ).toHaveLength(8);
+    expect(
+      Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(
+        (v) => v === false,
+      ),
+    ).toHaveLength(20);
     expect(bind?.[0].data.capabilities['task.create']).toBe(false);
     expect(bind?.[0].data.capabilities['chat.post']).toBe(true);
     expect(EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST).toHaveLength(8);
@@ -1182,7 +1183,9 @@ describe('seed（计划 skills + 评审子句）', () => {
     await main();
 
     const fallback = mockPrisma.agentRole.updateMany.mock.calls.find(
-      (call) => JSON.stringify(call[0]?.where) === JSON.stringify({ capabilities: { equals: Prisma.DbNull } }),
+      (call) =>
+        JSON.stringify(call[0]?.where) ===
+        JSON.stringify({ capabilities: { equals: Prisma.DbNull } }),
     );
     expect(fallback).toBeDefined();
     expect(fallback?.[0].data).toEqual({

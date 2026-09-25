@@ -35,7 +35,7 @@ import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
 import { BlockTaskDto } from './dto/block-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
-import { UpdateTeamDto } from './dto/update-team.dto';
+import { UpdateTaskTeamDto } from './dto/update-team.dto';
 import { UpdateInstanceDto } from './dto/update-instance.dto';
 import { TasksService } from './tasks.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
@@ -259,7 +259,7 @@ export class TasksController {
   updateTeam(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
-    @Body() dto: UpdateTeamDto,
+    @Body() dto: UpdateTaskTeamDto,
   ) {
     return this.tasksService.updateTeam(id, dto, user.id);
   }
@@ -421,6 +421,7 @@ export class TasksController {
       userName: user.username,
       action: dto.action ?? 'confirm',
       reason: dto.reason ?? null,
+      skipReview: dto.skipReview === true,
     });
   }
 

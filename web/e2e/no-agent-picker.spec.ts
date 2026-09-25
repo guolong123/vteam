@@ -9,8 +9,8 @@ import { test, expect, type Page } from "@playwright/test";
  * 2. `@` 提及可用：输入 `@` 弹出候选（含计划员-1），点击插入 `@名称 `。
  * 3. 发送可用：POST /channels/:id/messages 走 mock fulfill（探针永不落库，
  *    共享频道零残留），消息渲染 + 输入清空 + console/pageerror 零错误。
- * 4. 计划员可达（API，不触发真实 LLM 执行）：GET /teams/tm_0000000001
- *    成员含 tmm_0000000006（计划员-1）且成员行保留 opencodeAgentName 键。
+ * 4. 计划员可达（API，不触发真实 LLM 执行）：GET /teams/<resolved>
+ *    成员含运行时解析的计划员成员且成员行保留 opencodeAgentName 键。
  *
  * M6 边界（third-party-agent-display Todo 3 提出；opencode-native-permissions-and-fixes todo 7 收窄）：
  * ----------------------------------------------------------------------------------------------
@@ -28,8 +28,9 @@ import { test, expect, type Page } from "@playwright/test";
  * 不碰 playwright.config.ts；baseURL 指向 compose web :13001）。
  */
 
-const TEAM_ID = "tm_0000000001";
-const PLAN_MEMBER_ID = "tmm_0000000006";
+const SEED_TEAM_NAME = "vteam开发团队";
+let TEAM_ID = "";
+let PLAN_MEMBER_ID = "";
 const SERVER_URL = "http://localhost:13000";
 const PROBE_TEXT = "e2e-no-agent-picker probe (mocked, never persisted)";
 
@@ -90,6 +91,35 @@ async function loginAsAdmin(page: Page) {
   await expect(page).toHaveURL(/\/teams/, { timeout: 15_000 });
 }
 
+type SeedTeam = {
+  id: string;
+  name: string;
+  members?: Array<{ id: string; alias: string; role?: { key: string } | null }>;
+};
+
+test.beforeAll(async ({ request }) => {
+  const login = await request.post(`${SERVER_URL}/api/v1/auth/login`, {
+    data: { username: "admin", password: "admin123" },
+  });
+  expect(login.ok()).toBeTruthy();
+  const { accessToken } = (await login.json()) as { accessToken: string };
+  const response = await request.get(`${SERVER_URL}/api/v1/teams?page=1&pageSize=100`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  expect(response.ok()).toBeTruthy();
+  const payload = (await response.json()) as { items?: SeedTeam[] };
+  const seedTeam = payload.items?.find((team) => team.name === SEED_TEAM_NAME);
+  expect(seedTeam).toBeDefined();
+  const planMember = seedTeam?.members?.find(
+    (member) => member.role?.key === "plan" || member.alias.includes("计划员"),
+  );
+  expect(planMember).toBeDefined();
+  TEAM_ID = seedTeam?.id ?? "";
+  PLAN_MEMBER_ID = planMember?.id ?? "";
+  expect(TEAM_ID).toBeTruthy();
+  expect(PLAN_MEMBER_ID).toBeTruthy();
+});
+
 test.describe("no-agent-picker 选择器移除回归", () => {
   test("1. 选择器消失：无 testid、无 select", async ({ page }) => {
     await loginAsAdmin(page);
@@ -147,7 +177,7 @@ test.describe("no-agent-picker 选择器移除回归", () => {
     expect(errors).toEqual([]);
   });
 
-  test("4. 计划员可达：团队成员含 tmm_0000000006 且保留 opencodeAgentName（无 LLM 执行）", async ({
+  test("4. 计划员可达：团队成员含运行时计划员且保留 opencodeAgentName（无 LLM 执行）", async ({
     request,
   }) => {
     const login = await request.post(`${SERVER_URL}/api/v1/auth/login`, {

@@ -276,6 +276,7 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 | GET | `/omo-config` | `X-Worker-Token` | `200` | 读 OmO agent→模型配置（降级 `degraded:true`） |
 | POST | `/omo-config` | `X-Worker-Token` | `200` | 写 OmO 配置（写路径，失败抛错） |
 | GET | `/omo-agent-prompt?name=` | `X-Worker-Token` | `200` | 单 agent 系统提示词全文 |
+| POST | `/config/*` | `X-Worker-Token` | `200` | **独立模式本地配置下推**（仅 `WORKER_STANDALONE=true`，见 §6.3） |
 
 ### 6.1 `POST /execute` 请求体（`ExecuteOptions`）
 
@@ -315,6 +316,42 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 ```
 
 ---
+
+### 6.3 独立模式本地配置下推（`/config/*`）
+
+**仅独立模式挂载**（`WORKER_STANDALONE=true`）：外部系统无需注册/心跳，直接经执行端点写 worker 配置。
+注册模式下这些路径返回 `404` + 引导（配置一律经通道③拉取 / 通道①命令下发，避免双事实源）。
+
+**语义：声明式替换**——每类资源本次请求即完整集合（传空数组清空）；写后**不自动重启**，
+响应 `restart: "required"`（技能/工具/mcp/agent/模型凭据）或 `"not-required"`（git 凭据，写盘即生效）；
+需要生效时再调 `POST /config/restart`。
+
+| 方法 | 路径 | 请求体 | 落点 |
+|------|------|--------|------|
+| POST | `/config/skills` | `{skills:[{name,content}]}` | `<WORK_DIR>/.opencode/skills/<name>/SKILL.md` |
+| POST | `/config/tools` | `{tools:[{action,execution,name?,schema?}]}` | `<WORK_DIR>/.opencode/tools/<action>.ts` |
+| POST | `/config/mcp-servers` | `{mcpServers:[{name,type,url?\|command?}]}` | `<WORK_DIR>/opencode.json` 的 `mcp` 节 |
+| POST | `/config/agent-policies` | `{agents:[{name,description,mode,permission}]}` | `<WORK_DIR>/opencode.json` 的 `agent` 节 |
+| POST | `/config/model-credentials` | `{providerKeys:[{providerID,key}],providerConfigs?}` | `$HOME/.local/share/opencode/auth.json` + `$HOME/.config/opencode/opencode.json` provider 段 |
+| POST | `/config/git-credentials` | `{credentials:[{repoUrl,key,authType?,fingerprint?,permission?}]}` | `$HOME/.keta-git-creds.json`（600） |
+| POST | `/config/restart` | 无 | 触发 serve 重启（复用 RestartCoordinator，不打断活跃会话） |
+
+约束（worker 侧校验，非法 → `400`）：技能名仅字母数字开头（防路径穿越）；工具需 `execution` + schema `x-execution`；
+agent 需 `description` 且 `mode ∈ {'primary','all'}`、`permission` 禁 `write` 键；mcp `type ∈ {local,remote}`。
+
+```bash
+# 下推技能（独立模式 worker，execPort 默认 4198）
+curl -X POST -H 'X-Worker-Token: <token>' -H 'Content-Type: application/json' \
+  -d '{"skills":[{"name":"my-skill","content":"# My Skill\n"}]}' \
+  http://<worker>:4198/config/skills
+# → {"written":{"skills":["my-skill"]},"restart":"required"}
+
+curl -X POST -H 'X-Worker-Token: <token>' http://<worker>:4198/config/restart
+# → {"restart":"executed"}
+```
+
+⚠️ 安全：这些端点写入明文凭据（auth.json / git-creds），必须 `X-Worker-Token`；
+执行端点绑 `0.0.0.0`，暴露到非可信网络等于开放配置写入口 —— 部署时应网络隔离或仅内网可达。
 
 ## 7. 通道⑤：Server → Worker serve 代理（`capabilities.baseUrl:port`）
 

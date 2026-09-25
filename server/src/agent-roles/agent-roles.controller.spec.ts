@@ -62,7 +62,11 @@ describe('AgentRolesController', () => {
       pageSize: 20,
     });
 
-    const query: QueryAgentRolesDto = { type: 'builtin', page: 1, pageSize: 20 };
+    const query: QueryAgentRolesDto = {
+      type: 'builtin',
+      page: 1,
+      pageSize: 20,
+    };
     const result = await controller.findAll(query);
 
     expect(service.findAll).toHaveBeenCalledWith(query);
@@ -75,7 +79,10 @@ describe('AgentRolesController', () => {
     const result = await controller.findOne('ar_product');
 
     expect(service.findOne).toHaveBeenCalledWith('ar_product');
-    expect(result).toMatchObject({ id: 'ar_product', defaultAgentId: 'a_product' });
+    expect(result).toMatchObject({
+      id: 'ar_product',
+      defaultAgentId: 'a_product',
+    });
   });
 
   it('POST /agent-roles 转发 create', async () => {
@@ -94,7 +101,10 @@ describe('AgentRolesController', () => {
 
   it('PATCH /agent-roles/:id 转发 update', async () => {
     const dto: UpdateAgentRoleDto = { rolePrompt: '新指令' };
-    service.update.mockResolvedValue({ id: 'ar_product', rolePrompt: '新指令' });
+    service.update.mockResolvedValue({
+      id: 'ar_product',
+      rolePrompt: '新指令',
+    });
 
     const result = await controller.update('ar_product', dto);
 

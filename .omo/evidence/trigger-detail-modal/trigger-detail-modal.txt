@@ -1,0 +1,19 @@
+# 触发行可点击 → 详情弹窗
+# 时间: 2026-09-23T10:59:08+08:00
+
+## 需求
+右侧「触发」Tab 的行可点击，弹出显示详情信息。
+
+## 设计（正好化解上一轮的对齐张力）
+上一轮为对齐原型把行精简成「来源 · 时间」两行，删掉的元信息（类型/范围/归属/任务/次数/跳过原因/错误）现在收进弹窗。
+服务端 toItem 白名单即列表字段、无详情端点 → 弹窗零额外请求（打开即渲染）。
+
+## 实现
+- 新增 TriggerDetailModal（复用 DocModalShell 外壳：Esc/遮罩/头部一致）；
+- 行 div 加 role=button/tabIndex/onClick/onKeyDown（Enter/Space）+ cursor:pointer；
+- 行内「取消」按钮 onClick 加 stopPropagation（避免点取消同时弹详情）；
+- 详情内 Agent 来源渲染「取消该触发器」，走既有 ConfirmDialog；系统来源只读（不渲染，与行内一致）。
+
+## 验证
+web tsc 0；两文件 eslint 0 error；
+e2e 扩展用例通过：点击行 → trigger-detail-modal 可见、状态「待触发」、正文含 催办/系统/vteam开发团队/项目经理-1/0 次/tmr_p1，且系统来源无取消入口；关闭后消失。

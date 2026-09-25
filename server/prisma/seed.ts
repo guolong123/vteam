@@ -57,6 +57,9 @@ const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_my_profile',
   'vteam_team_add_member',
   'vteam_plan_complete',
+  'vteam_plan_finalize',
+  'vteam_plan_confirm',
+  'vteam_todo',
   'vteam_channel_send',
   'vteam_wecom_reply',
   'vteam_task_create',
@@ -87,7 +90,12 @@ interface PlatformCapabilityMirror {
 const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
   { key: 'task.create', tools: ['vteam_task_create'], defaultDeny: true },
   { key: 'task.transition', tools: ['vteam_task_transition'], defaultDeny: true },
-  { key: 'task.complete', tools: ['vteam_plan_complete'], defaultDeny: true },
+  {
+    key: 'task.complete',
+    tools: ['vteam_plan_complete', 'vteam_plan_finalize', 'vteam_plan_confirm'],
+    defaultDeny: true,
+  },
+  { key: 'plan.steps', tools: ['vteam_todo'], defaultDeny: false },
   { key: 'task.context', tools: ['vteam_task_context'], defaultDeny: false },
   { key: 'team.view', tools: ['vteam_team_view'], defaultDeny: false },
   { key: 'team.add_member', tools: ['vteam_team_add_member'], defaultDeny: true },
@@ -222,6 +230,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_hook_register: 'allow',
       vteam_hook_cancel: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -262,6 +271,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -308,6 +318,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_log: 'allow',
       // push 写远端：guard 放行后仍需仓库 write 授权（工具内 pushGuard 校验），无授权照样拒绝
       git_push: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -351,6 +362,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -367,7 +379,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
     },
     writeGlobs: [],
     readGlobs: ['*'],
-    bashEffect: 'deny',
+    bashEffect: 'allow',
     toolAllows: {
       vteam_task_context: 'allow',
       vteam_group_post: 'allow',
@@ -380,6 +392,8 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_task_create: 'allow',
       vteam_task_transition: 'allow',
       vteam_plan_complete: 'allow',
+      vteam_plan_finalize: 'allow',
+      vteam_plan_confirm: 'allow',
       vteam_team_add_member: 'allow',
       vteam_question_confirm: 'allow',
       vteam_skill_create: 'allow',
@@ -395,6 +409,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_channel_send: 'allow',
       vteam_hook_register: 'allow',
       vteam_hook_cancel: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -423,7 +438,11 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_notify_agent: 'allow',
       vteam_memory_search: 'allow',
       vteam_plan_complete: 'allow',
+      vteam_plan_finalize: 'allow',
+      vteam_plan_confirm: 'allow',
+      vteam_submit_artifact: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 
@@ -458,6 +477,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_diff: 'allow',
       git_log: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     },
   }),
 };

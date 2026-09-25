@@ -403,7 +403,11 @@ describe('ModelsService（模型凭据：加密存储/脱敏查询/软吊销）'
         { capabilities: { models: ['vllm/qwen3-27b'] } },
       ]);
       prisma.model.findMany.mockResolvedValue([
-        { providerID: 'vllm', providerType: 'local', baseUrl: 'http://vllm:8000/v1' },
+        {
+          providerID: 'vllm',
+          providerType: 'local',
+          baseUrl: 'http://vllm:8000/v1',
+        },
       ]);
 
       const result = await service.listProviders();

@@ -29,18 +29,10 @@ describe('trigger.constants（kind 白名单 + dedup 组装）', () => {
       buildTriggerDedupKey(TRIGGER_KIND.RECEIPT_NUDGE, 'tm_1', 'mr_0000000001'),
     ).toBe('receipt_nudge:tm_1:mr_0000000001');
     expect(
-      buildTriggerDedupKey(
-        TRIGGER_KIND.REVIEW_ROUND_TIMEOUT,
-        'is_1',
-        3,
-      ),
+      buildTriggerDedupKey(TRIGGER_KIND.REVIEW_ROUND_TIMEOUT, 'is_1', 3),
     ).toBe(buildReviewRoundTimeoutDedupKey('is_1', 3));
     expect(
-      buildTriggerDedupKey(
-        TRIGGER_KIND.REVIEW_ROUND_TIMEOUT,
-        'is_1',
-        3,
-      ),
+      buildTriggerDedupKey(TRIGGER_KIND.REVIEW_ROUND_TIMEOUT, 'is_1', 3),
     ).toBe('review_round_timeout:is_1:3');
   });
 

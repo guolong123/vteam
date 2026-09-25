@@ -4,15 +4,9 @@
  */
 import type { RoleKey } from "@/src/theme/tokens";
 
-/** 后端七态（TASK_STATUS，含 queued/blocked）。 */
-export type TaskApiStatus =
-  | "queued"
-  | "pending"
-  | "in_progress"
-  | "blocked"
-  | "pending_review"
-  | "completed"
-  | "archived";
+/** 后端七态（唯一定义见 `@/src/types/task-status`，此处透传重导出供既有调用方兼容）。 */
+export type { TaskApiStatus } from "@/src/types/task-status";
+import type { TaskApiStatus } from "@/src/types/task-status";
 
 /** 任务实例（T5 角色/实例分离：toTaskDto.instances 条目，main=主实例）。 */
 export interface TaskInstance {
@@ -38,8 +32,7 @@ export interface TaskDetail {
   description: string | null;
   priority: string;
   status: TaskApiStatus;
-  mainAgentId: string | null;
-  mainAgentInstanceId: string | null;
+  mainAgentMemberId: string | null;
   managedMode: boolean;
   backgroundDocs: unknown[];
   teamAgentIds: string[];

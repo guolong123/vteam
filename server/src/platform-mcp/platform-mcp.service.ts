@@ -33,7 +33,12 @@ import {
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
 import { FileStorageService } from '../uploads/uploads.service';
-import { WorkerClient } from '../workers/worker.client';
+import { DEFAULT_TASK_WORK_DIR, taskDirOf } from '../tasks/work-dir.util';
+import { PlanStepsService } from '../tasks/plan-steps.service';
+import {
+  WorkerClient,
+  WorkerUnavailableException,
+} from '../workers/worker.client';
 import { IssuesService } from '../issues/issues.service';
 import { IssueStatus, IssueTransitionAction } from '../issues/issues.constants';
 import {
@@ -127,6 +132,20 @@ const NOTIFY_DEDUP_WINDOW_MS = 60_000;
 /** 幂等比对单次最多回溯行数（窗口内同对重复发送量极小，20 行足量）。 */
 const NOTIFY_DEDUP_SCAN_LIMIT = 20;
 
+/**
+ * group_post 内容幂等窗口（fan-out 超时重发去重，04:40 incident）：
+ * 同发送者→同频道、归一化正文的 sha1 相同且落库时间在窗口内的既有行
+ * 视为 MCP 超时重发，直接复用其 messageId，不新建行、不重广播。
+ * 键形状与回执账本 dedupKey 对齐：(from, to/target, sha1(content), 短窗口)——
+ * group_post 为广播无显式目标，to 即频道（channelId 含任务/团队归属）；
+ * notify_agent 侧同理（text 内嵌 `@目标` 前缀，sha1(text) 即含目标）。
+ * 窗口取 5min：MCP 同步 JSON-RPC 超时（-32001）重发多在数十秒~数分钟内到达；
+ * 只防抖、不改变任何节流配额。无迁移：纯应用层短窗口探针。
+ */
+const GROUP_POST_DEDUP_WINDOW_MS = 5 * 60_000;
+/** group_post 幂等比对单次最多回溯行数（与 notify 侧同量级）。 */
+const GROUP_POST_DEDUP_SCAN_LIMIT = 20;
+
 /** 所有 triggered=false 拦截路径的统一人读提示：本次调用未发布，重发无用。 */
 const NOTIFY_NOT_PUBLISHED_HINT =
   '本次调用未在群聊发布任何消息：triggered:false 不是投递失败，请勿重发；请按 reason 处理（throttled 稍后按需重派，plan-gated 待计划放行，review-triplet 补齐三元组，duplicate/dedup 说明已有在途或已发送）。';
@@ -187,6 +206,13 @@ function extractNotifyText(content: unknown): string | null {
     return typeof text === 'string' ? text : null;
   }
   return null;
+}
+
+/** 归一化正文的 sha1（幂等键内容分量：与回执 dedupKey 的 sha1 分支同口径）。 */
+function sha1OfNormalizedText(text: string): string {
+  return createHash('sha1')
+    .update(normalizeNotifyText(text), 'utf8')
+    .digest('hex');
 }
 
 /** @ 前缀后的尾随标点：剥离后仍与目标名相等即视为已带 mention（如 `@测试，…`）。 */
@@ -322,8 +348,9 @@ export type DispatchReason =
  * - reason 与 triggered 恒成对：triggered=true → reason='ok'；
  *   false → 具体拦因，或 'join-pending'（子 Agent 回执抑制分支：
  *   消息已落库已广播，仅不在主 Agent 上开执行 turn）。
- * - messageId：成功/dedup 命中时为消息 id；其余拦截路径为 null（该次调用
- *   未落库，无行可指；notify-dedup 起由非空改为可空）。
+ * - messageId：成功/dedup 命中时为消息 id；duplicate 拦因时为既有在途消息 id
+ *   （= origMessageId，便于调用方确认“已送达”而非静默吞掉）；其余拦截路径为
+ *   null（该次调用未落库，无行可指；notify-dedup 起由非空改为可空）。
  * - issueBound：调用带 issueId 即 true；缺省 false（hint，不硬拦）。
  * - origMessageId：duplicate 拦因回显 issue 锁关联的原派发消息 id；
  *   dedup 命中时不写 origMessageId（messageId 本身即既有行）。
@@ -457,6 +484,12 @@ export class PlatformMcpService implements OnModuleInit {
     @Optional()
     @Inject(HookService)
     private readonly hooks?: HookService,
+    // 执行步骤域（vteam_todo）：缺省可空——单测/旧装配未提供时写入类动作抛 503
+    // 而非启动期崩溃；生产装配经 TasksModule（已 import）提供，plan_tasks 读写
+    // 集中在该服务（见 plan-removal guard 的窄豁免）。
+    @Optional()
+    @Inject(PlanStepsService)
+    private readonly planSteps?: PlanStepsService,
   ) {}
 
   /**
@@ -502,7 +535,7 @@ export class PlatformMcpService implements OnModuleInit {
     }
     const channel =
       exec.kind === 'task'
-        ? await this.findTaskGroupChannel(exec.taskId)
+        ? await this.findGroupChannelForTask(exec.taskId)
         : await this.findTeamGroupChannel(exec.teamId);
     if (!channel) {
       throw new NotFoundException({
@@ -786,7 +819,7 @@ export class PlatformMcpService implements OnModuleInit {
     const channel =
       exec.kind === 'team'
         ? await this.findTeamGroupChannel(exec.teamId)
-        : await this.findTaskGroupChannel(exec.taskId);
+        : await this.findGroupChannelForTask(exec.taskId);
     if (!channel) {
       throw new NotFoundException({
         code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
@@ -1079,7 +1112,7 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * task_context：任务概览（title/description/status/mainAgentId/backgroundDocs）
+   * task_context：任务概览（title/description/status/mainAgentMemberId/backgroundDocs）
    * + 群聊频道 id + 团队 agentMembers（团队成员列表，实例形状
    * {id: 成员 id, alias, agentId, name, role, main}，main 按 team.mainAgentMemberId 判定）。
    */
@@ -1092,8 +1125,6 @@ export class PlatformMcpService implements OnModuleInit {
         title: true,
         description: true,
         status: true,
-        mainAgentId: true,
-        mainAgentInstanceId: true,
         backgroundDocs: true,
         teamId: true,
       },
@@ -1115,7 +1146,7 @@ export class PlatformMcpService implements OnModuleInit {
       (ctxTeam as { mainAgentMemberId?: string | null } | null)
         ?.mainAgentMemberId ?? null;
     const [channel, agentRows] = await Promise.all([
-      this.findTaskGroupChannel(args.taskId),
+      this.findGroupChannelForTask(args.taskId),
       ctxTeamId
         ? this.prisma.teamMember.findMany({
             where: { teamId: ctxTeamId },
@@ -1138,8 +1169,7 @@ export class PlatformMcpService implements OnModuleInit {
       title: task.title,
       description: task.description,
       status: task.status,
-      mainAgentId: task.mainAgentId,
-      mainAgentInstanceId: task.mainAgentInstanceId,
+      mainAgentMemberId: ctxMainId,
       backgroundDocs: task.backgroundDocs ?? [],
       channelId: channel?.id ?? null,
       pendingReceipts,
@@ -1208,6 +1238,24 @@ export class PlatformMcpService implements OnModuleInit {
       ? await this.ensureTeamGroupChannelByTeam(exec.teamId)
       : await this.ensureTeamGroupChannel(effTaskId as string);
     const instanceId = exec.callerId;
+    // 内容幂等探针（MCP -32001 超时重发去重）：窗口内同发送者→同频道已有
+    // 同 sha1(归一化正文) 行 → 复用既有 messageId，不新建行、不重广播。
+    // 读错 fail-open（继续正常落库）。附件/mentions 解析在命中时直接跳过。
+    const groupDedupHit = await this.findRecentIdenticalGroupPost(
+      channel.id,
+      instanceId,
+      args.content,
+    );
+    if (groupDedupHit) {
+      this.logger.warn(
+        `[mcp] group_post 内容幂等命中 from=${instanceId} channel=${channel.id} reuse=${groupDedupHit}（未新建行）`,
+      );
+      return {
+        messageId: groupDedupHit,
+        channelId: channel.id,
+        attachment: null,
+      };
+    }
     // fileRef 归档命中仅任务维度可用（按 taskId 查已归档产出物）；团队维度无归档可命中。
     const attachment =
       args.fileRef && !isTeam
@@ -1467,7 +1515,7 @@ export class PlatformMcpService implements OnModuleInit {
     const effTaskId: string | null = isTeam ? null : exec.taskId;
     const channel = isTeam
       ? await this.findTeamGroupChannel(exec.teamId)
-      : await this.findTaskGroupChannel(effTaskId as string);
+      : await this.findGroupChannelForTask(effTaskId as string);
     if (!channel) {
       throw new NotFoundException({
         code: PLATFORM_MCP_ERRORS.CHANNEL_NOT_FOUND,
@@ -1501,7 +1549,7 @@ export class PlatformMcpService implements OnModuleInit {
     // 主 Agent 路由门（落库前硬拦：本块之后才 create message + broadcast）。
     // 主 Agent 可通知任何人；任何人可通知主 Agent；非主成员之间互通知
     // （含 self-notify）一律 403，被拦方请先通知主 Agent 由其中转。
-    // 主身份唯一依据 team.mainAgentMemberId（task.mainAgentInstanceId 已停写，不读）。
+    // 主身份唯一依据 team.mainAgentMemberId。
     if (args.selfInstanceId === args.targetInstanceId) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.NOTIFY_ROUTING_VIOLATION,
@@ -1619,15 +1667,27 @@ export class PlatformMcpService implements OnModuleInit {
       }
     }
     if (args.issueId) {
-      const issueGate = await this.checkIssueDispatchAllowed(        args.issueId,
+      const issueGate = await this.checkIssueDispatchAllowed(
+        args.issueId,
         args.targetInstanceId,
       );
       if (!issueGate.allowed && !forceReason) {
         this.logger.warn(
           `[mcp] notify_agent issue 锁拦截 issue=${args.issueId} to=${args.targetInstanceId}（未发布）`,
         );
+        // ③ 被拦必须留痕：写 issue_activities(action=dispatch_blocked)，窗口内第 2 次
+        // 触发一次 system 升级提示（原先只有一条 warn，平台无感知 → 死锁无人发现）。
+        await this.recordIssueGateBlock(
+          args.issueId,
+          args.targetInstanceId,
+          args.selfInstanceId,
+          channel.id,
+        );
+        // is_5：duplicate 必须回显既有在途消息 id（messageId = origMessageId），
+        // 调用方凭此确认“已送达”，禁止裸 reason:'duplicate' + messageId:null 静默吞派发。
+        const existingMessageId = issueGate.origMessageId ?? null;
         return {
-          messageId: null,
+          messageId: existingMessageId,
           channelId: channel.id,
           targetInstanceId: args.targetInstanceId,
           triggered: false,
@@ -2158,8 +2218,7 @@ export class PlatformMcpService implements OnModuleInit {
       select: { currentTaskId: true },
     });
     const currentTaskId =
-      (team as { currentTaskId?: string | null } | null)?.currentTaskId ??
-      null;
+      (team as { currentTaskId?: string | null } | null)?.currentTaskId ?? null;
     if (!currentTaskId) return false;
     const taskRow = await this.prisma.task.findUnique({
       where: { id: currentTaskId },
@@ -2168,7 +2227,8 @@ export class PlatformMcpService implements OnModuleInit {
     return (taskRow as { status?: string } | null)?.status === 'in_progress';
   }
 
-  private async mainMemberOfTeam(teamId: string): Promise<string | null> {    const team = await this.prisma.team.findUnique({
+  private async mainMemberOfTeam(teamId: string): Promise<string | null> {
+    const team = await this.prisma.team.findUnique({
       where: { id: teamId },
       select: { mainAgentMemberId: true },
     });
@@ -2219,11 +2279,54 @@ export class PlatformMcpService implements OnModuleInit {
     }
   }
 
+  private async findRecentIdenticalGroupPost(
+    channelId: string,
+    senderInstanceId: string,
+    content: string,
+  ): Promise<string | null> {
+    try {
+      const since = new Date(Date.now() - GROUP_POST_DEDUP_WINDOW_MS);
+      const rows = await this.prisma.message.findMany({
+        where: {
+          channelId,
+          senderInstanceId,
+          createdAt: { gte: since },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: GROUP_POST_DEDUP_SCAN_LIMIT,
+        select: { id: true, content: true },
+      });
+      if (!Array.isArray(rows)) return null;
+      const wantHash = sha1OfNormalizedText(content ?? '');
+      for (const row of rows as Array<{ id: string; content: unknown }>) {
+        const got = extractNotifyText(row?.content);
+        if (got !== null && sha1OfNormalizedText(got) === wantHash) {
+          return row.id;
+        }
+      }
+      return null;
+    } catch {
+      this.logger.warn(
+        `[mcp] group_post 幂等探针读错，fail-open 继续落库 channel=${channelId}`,
+      );
+      return null;
+    }
+  }
+
   /**
    * issue 状态锁（todo4 精确语义，对照 issues.constants 五态机）：
    * open 可派；在途同人（in_progress + 同 assigneeInstanceId）拦并回显原派发消息；
    * 换人放行；终态（resolved/closed/rejected）视为新一轮放行。
    * 读错/未知 issue → fail-open 放行 + warn。
+   */
+  /**
+   * issue 状态锁：仅在「issue 正被该 target 在做 **且 该 issue→target 的回执仍在途**」时拦。
+   *
+   * 为什么必须看回执在途（死锁修复）：原先只要 `in_progress + 同 assignee` 就拦，但派发是
+   * **在写回执之前**被拦的——于是「派发从未送达 → 无回执 → 目标永远不开工 → issue 永远
+   * in_progress → 锁永远不开」形成循环死锁（实测：主 Agent 连续 duplicate、无人干预不会自愈）。
+   * 改为「无在途回执（或回执已 acked/expired）即放行」后：已 acked 的再派会被内容 dedup 拦，
+   * 从未记上账的则获得一次重派机会——保住防重发语义的同时断掉死循环。
    */
   private async checkIssueDispatchAllowed(
     issueId: string,
@@ -2242,26 +2345,101 @@ export class PlatformMcpService implements OnModuleInit {
       ) {
         return { allowed: true };
       }
-      let origMessageId: string | undefined;
-      try {
-        const prior = await this.prisma.messageReceipt.findFirst({
-          where: { issueId },
-          orderBy: { createdAt: 'desc' },
-          select: { messageId: true },
-        });
-        origMessageId = prior?.messageId ?? undefined;
-      } catch {
-        origMessageId = undefined;
+      const prior = await this.prisma.messageReceipt.findFirst({
+        where: { issueId, toInstanceId: targetInstanceId },
+        orderBy: { createdAt: 'desc' },
+        select: { messageId: true, status: true },
+      });
+      // 无回执 / 回执非 pending → 目标侧没有在途派发，放行（断死循环的关键）
+      if (!prior || prior.status !== 'pending') {
+        return { allowed: true };
       }
       return {
         allowed: false,
-        ...(origMessageId ? { origMessageId } : {}),
+        ...(prior.messageId ? { origMessageId: prior.messageId } : {}),
       };
     } catch (err) {
       this.logger.warn(
         `[mcp] issue 锁读取失败 issue=${issueId}，fail-open 放行：${err instanceof Error ? err.message : String(err)}`,
       );
       return { allowed: true };
+    }
+  }
+
+  /**
+   * issue 门拦截的留痕与升级（best-effort：任一步失败只 warn，绝不影响拦截语义与派发返回）。
+   *
+   * 为什么必须留痕：原先被拦只有一条 logger.warn，平台侧无任何可查痕迹 → 页面/看板不知道
+   * 「谁被拦、拦了多久」，也没有人会去解锁 → 死锁无人发现（与 ② 的循环死锁互为因果）。
+   *
+   * 升级规则（每 30 分钟窗口至多一次，防刷屏）：窗口内已有 ≥1 条 dispatch_blocked 时（即
+   * 这是窗口内第 2 次被拦）向该频道发一条 system 提示；第 3 次起计数 ≥2 不再触发。
+   */
+  private async recordIssueGateBlock(
+    issueId: string,
+    targetInstanceId: string,
+    callerInstanceId: string,
+    channelId: string,
+  ): Promise<void> {
+    const since = new Date(Date.now() - 30 * 60_000);
+    let blockedInWindow = 0;
+    try {
+      blockedInWindow = await this.prisma.issueActivity.count({
+        where: {
+          issueId,
+          action: 'dispatch_blocked',
+          createdAt: { gte: since },
+        },
+      });
+      await this.prisma.issueActivity.create({
+        data: {
+          id: await this.idGen.nextId('ia'),
+          issueId,
+          action: 'dispatch_blocked',
+          actorType: 'agent',
+          actorId: null,
+          instanceId: callerInstanceId,
+          metadata: {
+            reason: 'issue_gate',
+            targetInstanceId,
+            attemptedAt: new Date().toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `[mcp] issue 锁留痕失败 issue=${issueId}：${err instanceof Error ? err.message : String(err)}`,
+      );
+      return;
+    }
+    if (blockedInWindow >= 1) {
+      try {
+        const text =
+          `⚠️ 派发被工单门禁连续拦截（issue ${issueId} → ${targetInstanceId}，` +
+          `${blockedInWindow + 1} 次/30 分钟窗口）：工单处于「进行中」但该目标没有在途回执。` +
+          `请人工处理：① 用 force + forceReason 重派；② 或把 issue 打回 open 再派；` +
+          `③ 或在【计划 Tab】人工推进。`;
+        const message = await this.prisma.message.create({
+          data: {
+            id: await this.idGen.nextId('m'),
+            channelId,
+            senderType: SENDER_TYPE.system,
+            senderId: null,
+            content: { text, parts: [] } as Prisma.InputJsonValue,
+            mentions: null,
+            status: MESSAGE_STATUS.sent,
+          },
+        });
+        await this.realtime.broadcast(
+          EVENT_TYPES.CHAT_MESSAGE_NEW,
+          { message: this.toMessageDto(message) },
+          { type: 'channel', id: channelId },
+        );
+      } catch (err) {
+        this.logger.warn(
+          `[mcp] issue 锁升级提示发送失败 issue=${issueId}：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 
@@ -2338,7 +2516,6 @@ export class PlatformMcpService implements OnModuleInit {
           dedupKey: buildMessageReceiptDedupKey({
             fromInstanceId: input.fromInstanceId,
             toInstanceId: input.toInstanceId,
-            issueId: input.issueId,
             content: input.content,
           }),
           issueId: input.issueId,
@@ -2495,7 +2672,7 @@ export class PlatformMcpService implements OnModuleInit {
     try {
       if (!this.timers) {
         this.logger.warn(
-          `[mcp] review-round 超时 timer 跳过 issue=${input.issueId} R${input.round}（TimerService 未装配，不阻断派发）`,
+          `[mcp] review-round 超时 timer 跳过 issue=${input.issueId} R${input.round}（TriggerService 未装配，不阻断派发）`,
         );
         return;
       }
@@ -2545,11 +2722,10 @@ export class PlatformMcpService implements OnModuleInit {
       const dedupKey = buildMessageReceiptDedupKey({
         fromInstanceId: input.fromInstanceId,
         toInstanceId: input.toInstanceId,
-        issueId: input.issueId,
         content: input.content,
       });
       let receiptId: string;
-      let fireAt: Date;
+      let dueAt: Date;
       try {
         const created = (await this.prisma.messageReceipt.create({
           data: {
@@ -2568,7 +2744,7 @@ export class PlatformMcpService implements OnModuleInit {
           },
         })) as unknown as { id: string; expiresAt: Date };
         receiptId = created.id;
-        fireAt = new Date(created.expiresAt);
+        dueAt = new Date(created.expiresAt);
       } catch (err) {
         if ((err as { code?: string })?.code !== 'P2002') {
           throw err;
@@ -2599,11 +2775,11 @@ export class PlatformMcpService implements OnModuleInit {
           return;
         }
         receiptId = existing.id;
-        fireAt = new Date(existing.expiresAt);
+        dueAt = new Date(existing.expiresAt);
       }
       if (!this.timers) {
         this.logger.warn(
-          `[mcp] receipt-nudge TimerService 未装配 receipt=${receiptId}（记账已落库，自动催办缺席）`,
+          `[mcp] receipt-nudge TriggerService 未装配 receipt=${receiptId}（记账已落库，自动催办缺席）`,
         );
         return;
       }
@@ -2620,7 +2796,7 @@ export class PlatformMcpService implements OnModuleInit {
       };
       await this.timers.schedule(
         RECEIPT_NUDGE_KIND,
-        fireAt,
+        dueAt,
         payload,
         buildTriggerDedupKey(
           TRIGGER_KIND.RECEIPT_NUDGE,
@@ -2699,7 +2875,7 @@ export class PlatformMcpService implements OnModuleInit {
     if (args.fileRef.startsWith('/uploads/')) {
       return this.readFromArchive(target, args.fileRef, maxBytes);
     }
-    return this.fetchFromWorker(ctx, args.fileRef, maxBytes);
+    return this.fetchFromWorker(ctx, args.taskId, args.fileRef, maxBytes);
   }
 
   /**
@@ -2739,7 +2915,7 @@ export class PlatformMcpService implements OnModuleInit {
       throw new BadRequestException({
         code: PLATFORM_MCP_ERRORS.ARTIFACT_INVALID,
         message:
-          'category 须为需求/设计/实现/测试用例/测试报告/运维/其他其一，不传为未分类',
+          'category 须为需求/设计/实现/测试用例/测试报告/运维/计划/其他其一，不传为未分类',
       });
     }
 
@@ -2896,7 +3072,6 @@ export class PlatformMcpService implements OnModuleInit {
       });
     }
     await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
-    // 注：已删除旧自造 plan 域的 start 门禁（executionMode 列恒 direct）。
     // start 无平台侧计划门：是否先出计划由所绑定 agent 的 prompt 表达；执行确认走
     // opencode question/permission → QuestionModal 由用户明确批准（见 P4）。
     return this.tasksService.transitionByAgent(
@@ -2937,7 +3112,7 @@ export class PlatformMcpService implements OnModuleInit {
    * 身份门禁（原「是否主 Agent」403）已移除：调用方身份由 resolveExecContext
    * （assertWorkerTask/Team，防冒充/跨任务）先行校验，建任务资格由调用方 ROLE 的
    * toolAllows 授权；任务维度目标团队取 task.teamId，团队维度取 exec.teamId。
-   * task.mainAgentInstanceId 已停写不再读（读它会因 in_progress 任务改主未同步而误判）。
+   * 主 Agent 身份仅按 team.mainAgentMemberId 判定，不读取任务侧历史主标量。
    * 成功路径经 TasksService.createByAgent（attribution createdBy = 团队用户成员
    * owner 回填；永不直调 create，其按调用方 userId 的团队成员校验会 403 agent）。
    */
@@ -2957,7 +3132,7 @@ export class PlatformMcpService implements OnModuleInit {
     if (exec.kind === 'task') {
       const task = await this.prisma.task.findUnique({
         where: { id: exec.taskId },
-        select: { id: true, teamId: true, mainAgentInstanceId: true },
+        select: { id: true, teamId: true },
       });
       if (!task) {
         throw new NotFoundException({
@@ -2968,7 +3143,7 @@ export class PlatformMcpService implements OnModuleInit {
       // task_create 不再做「是否主 Agent」的身份门禁：调用方身份由
       // resolveExecContext（assertWorkerTask，防冒充/跨任务）先行校验，团队成员资格
       // 由调用方 ROLE 的 toolAllows 授权，建任务目标团队只依据 task.teamId。
-      // task.mainAgentInstanceId 是已停写的历史标量，此处不再读取。
+      // 任务上下文只用于取得 teamId；主 Agent 身份仍由 team.mainAgentMemberId 判定。
       if (!task.teamId) {
         throw new BadRequestException(
           '当前任务未绑定团队，无法解析建任务目标团队',
@@ -3020,7 +3195,7 @@ export class PlatformMcpService implements OnModuleInit {
     if (exec.kind === 'task') {
       const task = await this.prisma.task.findUnique({
         where: { id: exec.taskId },
-        select: { id: true, teamId: true, mainAgentInstanceId: true },
+        select: { id: true, teamId: true },
       });
       if (!task) {
         throw new NotFoundException({
@@ -3227,7 +3402,7 @@ export class PlatformMcpService implements OnModuleInit {
 
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { teamId: true, mainAgentInstanceId: true },
+      select: { teamId: true },
     });
     if (!task) {
       throw new NotFoundException({
@@ -3767,7 +3942,9 @@ export class PlatformMcpService implements OnModuleInit {
             defaultModelId: true,
           },
         },
-        role: { select: { id: true, key: true, name: true, capabilities: true } },
+        role: {
+          select: { id: true, key: true, name: true, capabilities: true },
+        },
       },
     });
     if (!member || (profileTeamId && member.teamId !== profileTeamId)) {
@@ -3990,6 +4167,198 @@ export class PlatformMcpService implements OnModuleInit {
       taskId: args.taskId,
       status: result.plan.status,
       idempotent: result.idempotent,
+    };
+  }
+
+  /**
+   * 托管模式计划签署门禁：团队 managedMode=on 且调用方为团队主 Agent 成员，
+   * 才允许由 Agent 代用户签署（否则 403 并指向计划 Tab 人工确认入口）。
+   */
+  private async assertManagedPlanSignOff(
+    taskId: string,
+    selfInstanceId: string,
+  ): Promise<void> {
+    const teamId = await this.teamIdOfTask(taskId);
+    const team = teamId
+      ? await this.prisma.team.findUnique({
+          where: { id: teamId },
+          select: { managedMode: true, mainAgentMemberId: true },
+        })
+      : null;
+    const row = team as {
+      managedMode?: boolean | null;
+      mainAgentMemberId?: string | null;
+    } | null;
+    if (row?.managedMode !== true) {
+      throw new ForbiddenException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_MANAGED_MODE_DISABLED,
+        message:
+          '当前团队未开启托管模式，计划签署须由用户在计划 Tab 人工确认（确认定稿 / 确认开始执行）。',
+      });
+    }
+    if (row.mainAgentMemberId !== selfInstanceId) {
+      throw new ForbiddenException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_MANAGED_MODE_MAIN_ONLY,
+        message: '托管模式下计划签署仅限团队主 Agent 调用。',
+      });
+    }
+  }
+
+  /**
+   * plan_finalize：确认定稿（pending_final→approved；托管模式额外允许 draft→approved）。
+   * 归属校验 → 托管模式主 Agent 门禁 → PlanLifecycleService.confirmPlan(action:'finalize')。
+   */
+  async planFinalize(
+    ctx: PlatformMcpContext,
+    args: { taskId: string; selfInstanceId: string },
+  ): Promise<{
+    taskId: string;
+    status: string;
+    idempotent: boolean;
+    action: string;
+  }> {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    if (!this.planLifecycle) {
+      throw new ServiceUnavailableException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
+        message: '计划服务未装配，暂不可确认定稿',
+      });
+    }
+    await this.assertManagedPlanSignOff(args.taskId, args.selfInstanceId);
+    const result = await this.planLifecycle.confirmPlan(args.taskId, {
+      userId: args.selfInstanceId,
+      userName: null,
+      action: 'finalize',
+      managed: true,
+    });
+    this.logger.log(
+      `[plan-finalize] 托管模式主 Agent 确认定稿 task=${args.taskId} status=${result.plan.status} idempotent=${result.idempotent}`,
+    );
+    return {
+      taskId: args.taskId,
+      status: result.plan.status,
+      idempotent: result.idempotent,
+      action: result.action,
+    };
+  }
+
+  /**
+   * plan_confirm：确认开始执行（approved→executing；托管模式允许 draft/pending_final 直推执行）。
+   * 归属校验 → 托管模式主 Agent 门禁 → PlanLifecycleService.confirmPlan(action:'confirm')。
+   */
+  async planConfirm(
+    ctx: PlatformMcpContext,
+    args: { taskId: string; selfInstanceId: string },
+  ): Promise<{
+    taskId: string;
+    status: string;
+    idempotent: boolean;
+    action: string;
+  }> {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    if (!this.planLifecycle) {
+      throw new ServiceUnavailableException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
+        message: '计划服务未装配，暂不可确认开始执行',
+      });
+    }
+    await this.assertManagedPlanSignOff(args.taskId, args.selfInstanceId);
+    const result = await this.planLifecycle.confirmPlan(args.taskId, {
+      userId: args.selfInstanceId,
+      userName: null,
+      action: 'confirm',
+      managed: true,
+    });
+    this.logger.log(
+      `[plan-confirm] 托管模式主 Agent 确认开始执行 task=${args.taskId} status=${result.plan.status} idempotent=${result.idempotent}`,
+    );
+    return {
+      taskId: args.taskId,
+      status: result.plan.status,
+      idempotent: result.idempotent,
+      action: result.action,
+    };
+  }
+
+  /**
+   * vteam_todo：计划执行步骤读写（薄委托——plan_tasks 的读写全部集中在
+   * PlanStepsService，这样 plan-removal guard 只需窄豁免那一个文件）。
+   * 归属：assertWorkerTask（防跨任务/冒充）；契约见 PlanStepsService 文档：
+   * write 幂等（planId+seq upsert）、done 需 seq（miss → 404）、list 按 seq 升序。
+   */
+  async vteamTodo(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId: string;
+      action: 'write' | 'done' | 'list';
+      seq?: number;
+      title?: string;
+      content?: string;
+      status?: 'pending' | 'in_progress' | 'done' | 'blocked' | 'skipped';
+      assignee?: string;
+      selfInstanceId: string;
+    },
+  ): Promise<{
+    action: string;
+    seq?: number;
+    title?: string;
+    status?: string;
+    assignee?: string | null;
+    steps?: unknown[];
+  }> {
+    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    if (!this.planSteps) {
+      throw new ServiceUnavailableException({
+        code: PLAN_LIFECYCLE_ERRORS.PLAN_COMPLETE_UNAVAILABLE,
+        message: '计划步骤服务未装配，暂不可使用 vteam_todo',
+      });
+    }
+
+    if (args.action === 'list') {
+      return {
+        action: 'list',
+        steps: await this.planSteps.listSteps(args.taskId),
+      };
+    }
+
+    if (args.action === 'done') {
+      if (typeof args.seq !== 'number') {
+        throw new BadRequestException(
+          'action=done 必须提供 seq（按 planId+seq 定位步骤）',
+        );
+      }
+      const step = await this.planSteps.markDone(args.taskId, args.seq);
+      this.logger.log(
+        `[vteam_todo] 步骤完成 task=${args.taskId} seq=${step.seq} by=${args.selfInstanceId}`,
+      );
+      return {
+        action: 'done',
+        seq: step.seq,
+        title: step.title,
+        status: step.status,
+        assignee: step.assignee,
+      };
+    }
+
+    if (!args.title || !args.title.trim()) {
+      throw new BadRequestException('action=write 必须提供 title');
+    }
+    const step = await this.planSteps.writeStep(args.taskId, {
+      seq: args.seq,
+      title: args.title,
+      content: args.content,
+      status: args.status,
+      assignee: args.assignee,
+    });
+    this.logger.log(
+      `[vteam_todo] 步骤写入 task=${args.taskId} seq=${step.seq} status=${step.status} by=${args.selfInstanceId}`,
+    );
+    return {
+      action: 'write',
+      seq: step.seq,
+      title: step.title,
+      status: step.status,
+      assignee: step.assignee,
     };
   }
 
@@ -5190,6 +5559,10 @@ export class PlatformMcpService implements OnModuleInit {
               }
             }
             if (!buffer) {
+              if (!legacyTaskId) {
+                sendError = '无法解析当前任务上下文，请传 taskId 后再拉取图片';
+                throw new Error(sendError);
+              }
               const workerRow = await this.prisma.worker.findUnique({
                 where: { id: ctx.workerId },
                 select: { capabilities: true },
@@ -5198,12 +5571,12 @@ export class PlatformMcpService implements OnModuleInit {
                 sendError = '执行该任务的 worker 不存在，无法拉取文件';
                 throw new Error(sendError);
               }
-              buffer = await this.workerClient.fetchFile(
+              buffer = await this.fetchWorkerFileFirstAvailable(
                 {
                   id: ctx.workerId,
-                  capabilities: workerRow.capabilities as any,
+                  capabilities: workerRow.capabilities,
                 },
-                mediaRef,
+                this.workerFileCandidates(legacyTaskId, mediaRef),
               );
             }
           } catch (e) {
@@ -5651,9 +6024,9 @@ export class PlatformMcpService implements OnModuleInit {
         message: '执行该任务的 worker 不存在，无法拉取文件',
       });
     }
-    const buffer = await this.workerClient.fetchFile(
+    const buffer = await this.fetchWorkerFileFirstAvailable(
       { id: ctx.workerId, capabilities: workerRow.capabilities },
-      fileRef,
+      this.workerFileCandidates(taskId, fileRef),
     );
 
     if (/\.tsx$/i.test(fileRef)) {
@@ -6029,25 +6402,17 @@ export class PlatformMcpService implements OnModuleInit {
     return member?.agentId ?? instanceId;
   }
 
-  private async findTaskGroupChannel(
+  private async findGroupChannelForTask(
     taskId: string,
   ): Promise<{ id: string } | null> {
-    try {
-      const task = await this.prisma.task.findUnique({
-        where: { id: taskId },
-        select: { teamId: true },
-      });
-      const teamId = (task as any)?.teamId ?? null;
-      if (teamId) {
-        const ch = await this.prisma.chatChannel.findFirst({
-          where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
-          select: { id: true },
-        });
-        if (ch) return ch;
-      }
-    } catch {}
+    const task = await this.prisma.task.findUnique({
+      where: { id: taskId },
+      select: { teamId: true },
+    });
+    const teamId = (task as any)?.teamId ?? null;
+    if (!teamId) return null;
     return this.prisma.chatChannel.findFirst({
-      where: { taskId, type: CHANNEL_TYPE.task_group },
+      where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
       select: { id: true },
     });
   }
@@ -6174,7 +6539,7 @@ export class PlatformMcpService implements OnModuleInit {
   private async ensureTeamGroupChannel(
     taskId: string,
   ): Promise<{ id: string }> {
-    const found = await this.findTaskGroupChannel(taskId);
+    const found = await this.findGroupChannelForTask(taskId);
     if (found) return found;
     try {
       const task = await this.prisma.task.findUnique({
@@ -6392,9 +6757,9 @@ export class PlatformMcpService implements OnModuleInit {
         );
         return undefined;
       }
-      const buffer = await this.workerClient.fetchFile(
+      const buffer = await this.fetchWorkerFileFirstAvailable(
         { id: ctx.workerId, capabilities: workerRow.capabilities },
-        fileRef,
+        this.workerFileCandidates(taskId, fileRef),
       );
       const name = fileRef.split(/[\\/]/).pop() || 'attachment';
       const stored = await FileStorageService.saveBufferFile(buffer, name);
@@ -6454,8 +6819,65 @@ export class PlatformMcpService implements OnModuleInit {
    * WorkerUnavailableException（503）原样上抛（模型可见错误信息，区别于 group_post
    * 的降级不带附件——read_file 语义是读取失败必须让调用方知道）。
    */
+  /**
+   * 任务工作目录根（与 worker-dispatcher / plan-docs 同源）：env WORK_DIR，缺省
+   * DEFAULT_TASK_WORK_DIR。agent 的运行时 CWD = `<根>/tasks/<taskId>`（派发注入的
+   * directory），故相对 fileRef 以任务目录为准。
+   */
+  private taskWorkDirRoot(): string {
+    const fromEnv = process.env.WORK_DIR?.trim();
+    return fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_TASK_WORK_DIR;
+  }
+
+  /**
+   * fileRef → 候选绝对路径（按优先级）：
+   * - 绝对路径 → 原样（唯一候选）；
+   * - 相对路径 → `<任务目录>/<ref>`（agent 的 CWD，主用）→ `<根>/<ref>`（agent 常写成
+   *   `tasks/<taskId>/...` 的兜底形态）；重复候选去重。
+   * 文件是否存在只有 worker 知道，故「按序尝试」由取文件侧用「404 换下一个」实现。
+   */
+  private workerFileCandidates(taskId: string, fileRef: string): string[] {
+    const raw = String(fileRef ?? '').trim();
+    if (raw.startsWith('/')) {
+      return [raw];
+    }
+    const root = this.taskWorkDirRoot();
+    return [
+      ...new Set([`${taskDirOf(root, taskId)}/${raw}`, `${root}/${raw}`]),
+    ];
+  }
+
+  /**
+   * 按候选路径依次向 worker 取文件：仅 404（该路径不存在）换下一个候选；其余失败
+   * （401/413/网络/超时）立即上抛——不把「worker 真不可用」伪装成路径问题。
+   */
+  private async fetchWorkerFileFirstAvailable(
+    workerRef: Parameters<WorkerClient['fetchFile']>[0],
+    candidates: string[],
+  ): Promise<Buffer> {
+    let lastError: unknown;
+    for (const candidate of candidates) {
+      try {
+        return await this.workerClient.fetchFile(workerRef, candidate);
+      } catch (err) {
+        lastError = err;
+        const status =
+          err instanceof WorkerUnavailableException
+            ? err.httpStatus
+            : undefined;
+        if (status !== 404) {
+          throw err;
+        }
+      }
+    }
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`worker 文件拉取失败：${candidates.join(', ')}`);
+  }
+
   private async fetchFromWorker(
     ctx: PlatformMcpContext,
+    taskId: string,
     fileRef: string,
     maxBytes: number,
   ): Promise<ReadFileResult> {
@@ -6469,9 +6891,9 @@ export class PlatformMcpService implements OnModuleInit {
         message: '执行该任务的 worker 不存在，无法拉取文件',
       });
     }
-    const buffer = await this.workerClient.fetchFile(
+    const buffer = await this.fetchWorkerFileFirstAvailable(
       { id: ctx.workerId, capabilities: workerRow.capabilities },
-      fileRef,
+      this.workerFileCandidates(taskId, fileRef),
     );
     return this.toReadFileResult(buffer, fileRef, 'worker', maxBytes);
   }

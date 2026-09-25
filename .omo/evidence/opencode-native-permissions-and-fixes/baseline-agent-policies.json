@@ -93,7 +93,7 @@
         "read": {
           "*": "allow"
         },
-        "bash": "deny",
+        "bash": "allow",
         "task": "deny"
       }
     },
@@ -127,7 +127,6 @@
           },
           "bash": "allow",
           "task": "allow",
-          "vteam_submit_artifact": "deny",
           "vteam_issue_create": "deny",
           "vteam_issue_list": "deny",
           "vteam_issue_get": "deny",
@@ -159,6 +158,8 @@
           "bash": "allow",
           "task": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_skill_create": "deny",
           "vteam_git_repos_list": "deny"
         }
@@ -180,6 +181,8 @@
           "vteam_question_confirm": "deny",
           "vteam_team_add_member": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_task_create": "deny",
           "vteam_skill_create": "deny",
           "vteam_git_repos_list": "deny",
@@ -202,6 +205,8 @@
           "vteam_question_confirm": "deny",
           "vteam_team_add_member": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_task_create": "deny",
           "vteam_skill_create": "deny",
           "vteam_git_repos_list": "deny",
@@ -226,6 +231,8 @@
           "vteam_question_confirm": "deny",
           "vteam_team_add_member": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_task_create": "deny",
           "vteam_skill_create": "deny",
           "vteam_git_repos_list": "deny",
@@ -241,7 +248,7 @@
           "read": {
             "*": "allow"
           },
-          "bash": "deny",
+          "bash": "allow",
           "task": "deny",
           "vteam_submit_artifact": "deny",
           "vteam_git_repos_list": "deny"
@@ -270,6 +277,8 @@
           "vteam_memory_update": "deny",
           "vteam_team_add_member": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_channel_send": "deny",
           "vteam_wecom_reply": "deny",
           "vteam_task_create": "deny",

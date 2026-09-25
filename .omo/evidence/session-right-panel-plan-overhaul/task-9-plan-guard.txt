@@ -1,0 +1,22 @@
+$ cd server && npx jest --runInBand src/platform-mcp/plan-removal.guard.spec.ts
+$ cd server && npx jest --runInBand src/platform-mcp/plan-removal.guard.spec.ts
+$ cd server && npx jest --runInBand src/platform-mcp/plan-removal.guard.spec.ts
+PASS src/platform-mcp/plan-removal.guard.spec.ts
+  防回流：vteam 自造 plan 域已下线（改由 opencode 原生 agent 承担）
+    ✓ plans 模块目录不存在（plans.service / plans.controller / plan.constants 等） (1 ms)
+    ✓ 不存在对已删除 plan 模块/常量的 import (12 ms)
+    ✓ 不存在 plan_* MCP 工具注册（工具名应已全部移除） (12 ms)
+    ✓ 不存在 PLAN_STATUS / PLAN_TASK_STATUS / PLAN_ERRORS 引用 (11 ms)
+    ✓ 不存在已删除的 PLAN_* 提示词常量引用（能力/工作流/评审清单） (20 ms)
+    ✓ 不存在 plan 表读写（prisma.plan / prisma.planTask，含 as any 转型绕过） (13 ms)
+    ✓ 守卫模式能捕获 as any 转型绕过写法（合成行回归，不碰生产源码）
+    ✓ 不存在 executionMode 的服务端门禁/切换逻辑（updateExecutionMode） (12 ms)
+    ✓ 产出物提交引导段存在（计划文档/交付物统一走 submit_artifact 的提示词锚点） (11 ms)
+    ✓ 产出物类型收敛为三态（text/doc/file）：submit_artifact 不再接受 plan
+    ✓ 平台不再注入计划指令（PLAN_PRODUCE/PLAN_REVIEW 常量已删除；不教模型提交 type:"plan"） (23 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       11 passed, 11 total
+Snapshots:   0 total
+Time:        1.355 s, estimated 2 s
+Ran all test suites matching /src\/platform-mcp\/plan-removal.guard.spec.ts/i.

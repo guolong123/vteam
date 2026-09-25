@@ -22,7 +22,7 @@ import { PrismaService } from '../prisma/prisma.service';
  * chat 域 `registerHandler` 接入）；评审轮次超时（`review_round_timeout`）。
  *
  * 三形态（trigger-unification todo-2）：
- * - one-shot：`dueAt` 到期触发一次（`fireAt` 双写保留，后续清理任务再 drop）；
+ * - one-shot：`dueAt` 到期触发一次（唯一到期时刻）；
  * - interval：`opts.intervalMs` 周期重排，`nextFireAt = now + intervalMs + jitter`
  *   按 now 重算（不追补 missed 周期；overdue 重排钳制到 `now + jitter(0..30s)`）；
  * - condition：`opts.guardKey` 仅接受已注册谓词（`registerGuard` 白名单，
@@ -77,9 +77,7 @@ export interface TriggerFireContext {
 }
 
 export type TriggerOutcome =
-  | { done: true }
-  | { rescheduleAt: Date }
-  | { expire: true };
+  { done: true } | { rescheduleAt: Date } | { expire: true };
 
 export type TriggerHandler = (
   trigger: TriggerFireContext,
@@ -106,7 +104,6 @@ interface TriggerRow {
   id: string;
   kind: string;
   status: string;
-  fireAt: Date;
   dueAt: Date | null;
   intervalMs: number | null;
   nextFireAt: Date | null;
@@ -126,7 +123,6 @@ interface DbTriggerRow {
   id: string;
   kind: string;
   status: string;
-  fireAt: Date | string;
   dueAt: Date | string | null;
   intervalMs: number | null;
   nextFireAt: Date | string | null;
@@ -144,7 +140,6 @@ function mapDbTriggerRow(r: DbTriggerRow): TriggerRow {
     id: r.id,
     kind: r.kind,
     status: r.status,
-    fireAt: toDate(r.fireAt),
     dueAt: r.dueAt === null || r.dueAt === undefined ? null : toDate(r.dueAt),
     intervalMs:
       r.intervalMs === null || r.intervalMs === undefined
@@ -209,8 +204,8 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 幂等排期：同 dedupKey 已有行 → 直接返回既有行（不再 create）；
-   * 否则生成 `tmr_` id 落 pending 行（`fireAt` + `dueAt` 双写，迁移窗口
-   * 读路径 `due_at IS NOT NULL` 可见），并兜底确保 ticker 在跑。
+   * 否则生成 `tmr_` id 落 pending 行（单写 `dueAt`，读路径
+   * `due_at IS NOT NULL` 可见），并兜底确保 ticker 在跑。
    *
    * kind 白名单强制：未知 kind 直接抛错（loud，禁止静默落库后 feature-detect）；
    * guardKey 未注册同样直接抛错。
@@ -246,7 +241,6 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
           id,
           kind: kind as TriggerKind as string,
           status: TRIGGER_STATUS.PENDING,
-          fireAt: dueAt,
           dueAt,
           payload,
           dedupKey,
@@ -371,12 +365,13 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
   /**
    * 生产路径到期 select：`status=pending AND due_at IS NOT NULL AND
    * due_at <= NOW(3)`，`ORDER BY due_at ASC LIMIT 100`。
-   * 列按 `TriggerRow` 驼峰别名投影（含 `fireAt` 回退与 `payload` 透传）。
+   * 列按 `TriggerRow` 驼峰别名投影（`payload` 原样透传）。
    */
   private async selectDueDbNow(): Promise<TriggerRow[]> {
     const rows = await this.prisma.$queryRawUnsafe<Array<DbTriggerRow>>(
-      'SELECT `id`, `kind`, `status`, `fire_at` AS `fireAt`, `due_at` AS `dueAt`,' +
-        ' `interval_ms` AS `intervalMs`, `next_fire_at` AS `nextFireAt`,' +
+      'SELECT `id`, `kind`, `status`, `due_at` AS `dueAt`,' +
+        ' `interval_ms` AS `intervalMs`, `next_fire' +
+        '_at` AS `nextFireAt`,' +
         ' `guard_key` AS `guardKey`, `fire_count` AS `fireCount`,' +
         ' `max_fires` AS `maxFires`, `expires_at` AS `expiresAt`, `payload`' +
         ' FROM `triggers`' +
@@ -394,8 +389,8 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
    */
   private async claimRowDbNow(id: string): Promise<number> {
     const n = await this.prisma.$executeRawUnsafe(
-      'UPDATE `triggers` SET `status` = \'firing\'' +
-        ' WHERE `id` = ? AND `status` = \'pending\'' +
+      "UPDATE `triggers` SET `status` = 'firing'" +
+        " WHERE `id` = ? AND `status` = 'pending'" +
         ' AND `due_at` IS NOT NULL AND `due_at` <= NOW(3)',
       id,
     );
@@ -463,7 +458,9 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
    * DB 时钟；claim 表达式本身在 `useDbClock` 时直接用 `NOW(3)`。
    */
   private async fireOne(row: TriggerRow, now: Date, useDbClock = false) {
-    const effectiveDue = row.dueAt ?? row.fireAt ?? null;
+    if (row.dueAt === null || row.dueAt === undefined) {
+      return null;
+    }
     if (
       row.maxFires !== null &&
       row.maxFires !== undefined &&
@@ -473,14 +470,16 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
         where: { id: row.id },
         data: {
           status: TRIGGER_STATUS.CANCELLED,
-          lastError: `maxFires reached (${row.fireCount}/${row.maxFires})`.slice(
-            0,
-            191,
-          ),
+          lastError:
+            `maxFires reached (${row.fireCount}/${row.maxFires})`.slice(0, 191),
         },
       });
     }
-    if (row.expiresAt !== null && row.expiresAt !== undefined && now >= row.expiresAt) {
+    if (
+      row.expiresAt !== null &&
+      row.expiresAt !== undefined &&
+      now >= row.expiresAt
+    ) {
       return await this.prisma.trigger.update({
         where: { id: row.id },
         data: {
@@ -518,7 +517,7 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
     const ctx: TriggerFireContext = {
       id: row.id,
       kind: row.kind,
-      dueAt: effectiveDue,
+      dueAt: row.dueAt,
       fireCount: row.fireCount,
       payload: row.payload,
     };
@@ -598,7 +597,6 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
         where: { id: row.id },
         data: {
           status: TRIGGER_STATUS.PENDING,
-          fireAt: next,
           dueAt: next,
           nextFireAt: next,
           fireCount: { increment: 1 },
@@ -635,7 +633,6 @@ export class TriggerService implements OnModuleInit, OnModuleDestroy {
         where: { id: row.id },
         data: {
           status: TRIGGER_STATUS.PENDING,
-          fireAt: next,
           dueAt: next,
           nextFireAt: next,
           fireCount: { increment: 1 },
@@ -756,25 +753,3 @@ function describeError(err: unknown): string {
   }
   return String(err);
 }
-
-// ==================================================================
-// 兼容别名（todo-2 改名过渡；消费者迁移归 todo-5/6，届时再移除）。
-// TimerService 与 TriggerService 是同一引用，DI token 一致，零模块改动。
-// ==================================================================
-
-/** @deprecated 用 TriggerService（同引用，DI token 一致）。 */
-export type TimerService = TriggerService;
-/** @deprecated 用 TriggerService（同引用，DI token 一致）。 */
-export const TimerService = TriggerService;
-/** @deprecated 用 TRIGGER_STATUS。 */
-export const TIMER_STATUS = TRIGGER_STATUS;
-/** @deprecated 用 TRIGGER_ID_PREFIX（tmr_ 冻结）。 */
-export const TIMER_ID_PREFIX = TRIGGER_ID_PREFIX;
-/** @deprecated 用 TRIGGER_SCAN_INTERVAL_MS_DEFAULT。 */
-export const TIMER_SCAN_INTERVAL_MS_DEFAULT = TRIGGER_SCAN_INTERVAL_MS_DEFAULT;
-/** @deprecated 用 TriggerFireContext。 */
-export type TimerFireContext = TriggerFireContext;
-/** @deprecated 用 TriggerHandler。 */
-export type TimerHandler = TriggerHandler;
-/** @deprecated 用 TriggerDedupKey。 */
-export type TimerDedupKey = TriggerDedupKey;

@@ -329,8 +329,8 @@ export class McpServersService implements OnModuleInit {
    * 物化规则（单行失败记 skipped，不中断整批）：
    * - action = 远端名小写 + 非法字符转 '-'（非法 → skipped）；
    *   name = `${server.name}_${远端名}`
-    * - action 已存在且归属本服务器（mcpServer 为本 server id 或 name）→ 更新
-    *   {schema, description, enabled: true}（updated++，description 缺失时回填 NULL）；归属他服务器 → skipped（action 冲突）
+   * - action 已存在且归属本服务器（mcpServer 为本 server id 或 name）→ 更新
+   *   {schema, description, enabled: true}（updated++，description 缺失时回填 NULL）；归属他服务器 → skipped（action 冲突）
    * - 不存在 → 创建 {source/execution: mcp/mcp, mcpServer: server.name}（created++）
    * - 本服务器名下 action 不在发现集合的存量行 → enabled=false（disabled++）
    * 仅 created+updated+disabled > 0 时广播 reload-config。

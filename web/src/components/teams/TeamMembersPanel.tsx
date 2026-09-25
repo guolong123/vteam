@@ -119,7 +119,9 @@ export function TeamMembersPanel({
   onAddInstance,
   width,
   onToggleEnabled,
+  togglePendingInstanceId,
   onResetSession,
+  resetPendingInstanceId,
   onChangeModel,
   onSetMainAgent,
   onSelectMember,
@@ -137,7 +139,11 @@ export function TeamMembersPanel({
   onAddInstance: (payload: AddInstancePayload) => Promise<boolean>;
   width?: number;
   onToggleEnabled?: (instanceId: string, enabled: boolean) => void;
+  /** 正在切换启用/禁用状态的实例 key（instanceId ?? id）：该项菜单显示「切换中…」并禁用，防重复提交。 */
+  togglePendingInstanceId?: string | null;
   onResetSession?: (instanceId: string) => void;
+  /** 正在重置会话的实例 key（instanceId ?? id）：该项菜单显示「重置中…」并禁用，防重复提交。 */
+  resetPendingInstanceId?: string | null;
   onChangeModel?: (instanceId: string, modelId: string | null) => void;
   onSetMainAgent?: (memberId: string) => void;
   onSelectMember?: (instanceId: string, agentId: string) => void;
@@ -227,6 +233,36 @@ export function TeamMembersPanel({
     return map;
   }, [agentsDirQuery.data]);
 
+  // effectiveModel 可能是 `md_` 主键（agent.defaultModelId 的实际形态）——它不含 `/`，
+  // split("/").pop() 会原样吐出 md_ 编号；按 id 定向补查其名称后展示（与 Agent 页口径一致）。
+  const mdModelIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const v of templateModelByAgent.values()) {
+      if (v.startsWith("md_")) ids.add(v);
+    }
+    for (const a of agents) {
+      if (a.overrideModelId?.startsWith("md_")) ids.add(a.overrideModelId);
+    }
+    return [...ids];
+  }, [templateModelByAgent, agents]);
+  const mdModelsQuery = useQuery({
+    queryKey: ["model-by-id", mdModelIds],
+    queryFn: () =>
+      Promise.all(
+        mdModelIds.map((id) =>
+          api.get<{ id: string; name: string }>(`/models/${id}`),
+        ),
+      ),
+    enabled: mdModelIds.length > 0,
+    retry: false,
+  });
+  const modelLabel = (v: string): string => {
+    if (v.startsWith("md_")) {
+      return mdModelsQuery.data?.find((m) => m?.id === v)?.name ?? v;
+    }
+    return v.split("/").pop() ?? v;
+  };
+
   const openPanel = () => {
     if (!teamEditable || adding) return;
     setSelectedRoleId(null);
@@ -310,6 +346,8 @@ export function TeamMembersPanel({
                   : "就绪";
           // 实际生效模型：实例覆盖优先，否则模板默认；都没有才回退"跟随模板"
           const effectiveModel = a.overrideModelId ?? templateModelByAgent.get(a.id) ?? null;
+          const resetPending = resetPendingInstanceId === (a.instanceId ?? a.id);
+          const togglePending = togglePendingInstanceId === (a.instanceId ?? a.id);
           return (
             <React.Fragment key={a.instanceId ?? a.id}>
               <div
@@ -432,7 +470,9 @@ export function TeamMembersPanel({
                     setModelPicker(modelPicker === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
                     setOpenMenu(null);
                   }}
-                  title={effectiveModel || "跟随模板（点击设置模型）"}
+                  title={
+                    effectiveModel ? modelLabel(effectiveModel) : "跟随模板（点击设置模型）"
+                  }
                   style={{
                     marginTop: 4,
                     display: "inline-flex",
@@ -452,7 +492,7 @@ export function TeamMembersPanel({
                   }}
                 >
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {effectiveModel ? String(effectiveModel).split("/").pop() : "跟随模板"}
+                    {effectiveModel ? modelLabel(effectiveModel) : "跟随模板"}
                   </span>
                   <span style={{ fontSize: 8 }}>▼</span>
                 </button>
@@ -534,18 +574,21 @@ export function TeamMembersPanel({
                         onToggleEnabled?.(a.instanceId ?? a.id, a.enabled === false ? true : false);
                         setOpenMenu(null);
                       }}
+                      disabled={!onToggleEnabled || togglePending}
+                      title={!onToggleEnabled ? "请先选择任务后再操作" : togglePending ? "切换中…" : undefined}
                       style={{
                         textAlign: "left",
                         padding: `6px 8px`,
                         borderRadius: radius.sm,
                         border: "none",
                         background: "transparent",
-                        cursor: "pointer",
+                        cursor: !onToggleEnabled || togglePending ? "not-allowed" : "pointer",
                         fontSize: fontSize.sm,
                         color: neutral[700],
+                        opacity: !onToggleEnabled || togglePending ? 0.5 : 1,
                       }}
                     >
-                      {a.enabled === false ? "启用" : "禁用"}
+                      {togglePending ? "切换中…" : a.enabled === false ? "启用" : "禁用"}
                     </button>
                     <button
                       type="button"
@@ -554,18 +597,21 @@ export function TeamMembersPanel({
                         onResetSession?.(a.instanceId ?? a.id);
                         setOpenMenu(null);
                       }}
+                      disabled={!onResetSession || resetPending}
+                      title={!onResetSession ? "请先选择任务后再重置会话" : resetPending ? "重置中…" : undefined}
                       style={{
                         textAlign: "left",
                         padding: `6px 8px`,
                         borderRadius: radius.sm,
                         border: "none",
                         background: "transparent",
-                        cursor: "pointer",
+                        cursor: !onResetSession || resetPending ? "not-allowed" : "pointer",
                         fontSize: fontSize.sm,
                         color: neutral[700],
+                        opacity: !onResetSession || resetPending ? 0.5 : 1,
                       }}
                     >
-                      重置会话
+                      {resetPending ? "重置中…" : "重置会话"}
                     </button>
                     <button
                       type="button"

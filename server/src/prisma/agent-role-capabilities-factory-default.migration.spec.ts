@@ -1,95 +1,113 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import {
+  BUILTIN_AGENT_ROLES,
+  BUILTIN_ROLE_CAPABILITY_MAPS,
+  EXTERNAL_AGENT_ROLE_KEYS,
+} from '../common/constants/agent-role.constants';
+import {
+  PLATFORM_CAPABILITY_KEYS,
+  buildFactoryCapabilityMatrix,
+} from '../common/constants/platform-capability.constants';
 
 /**
- * 迁移契约：`20260921000007_builtin_role_capabilities_factory_default`。
+ * Current-schema contract for historical migration
+ * `20260921000007_builtin_role_capabilities_factory_default`.
  *
- * 用户决策「内置角色拉平到出厂默认」：把 7 个内置岗位的 `capabilities` 从
- * 000006 的保守派生整体覆盖为目录出厂默认矩阵。
- *
- * 注（2026-09-22 组能力点拆分）：本迁移 SQL 由 checksum ledger 冻结（21 点时代字面量），
- * 不再与已演进为 27 点的 `buildFactoryCapabilityMatrix()` 做逐键相等断言；**当前**出厂
- * 矩阵（13 allow / 14 deny）与 TS 常量的锁定由 `agent-role-capabilities-split-grouped.
- * migration.spec.ts`（000009，ar_general 行）承担。本 spec 只保留 000007 的结构契约：
- *
- *   1. 恰一条 UPDATE；右值为整列 CAST 字面量（不引用列自身 ⇒ 幂等）；
- *   2. 范围守卫只命中 7 个内置 key（type='builtin'），外部 3 岗 / ar_general 不在集合；
- *   3. 不使用 JSON_SET/JSON_REMOVE（MySQL 对不存在路径返回 NULL 会置空整列的陷阱，
- *      在整列 CAST 字面量覆盖下不适用），写入值恒非 NULL。
- * 真库 fresh/upgrade 双路径演练记录在 notepad（scratch DB 证明）。
+ * That migration used a single data UPDATE to replace the seven builtin
+ * capability matrices.  The active baseline is intentionally DDL-only, so the
+ * durable equivalent is the current role matrix source: seven builtin keys,
+ * the complete boolean capability catalog, and no accidental inclusion of the
+ * three external roles or the general fallback role.
  */
-const MIGRATION = path.resolve(
+
+const BASELINE = path.resolve(
   __dirname,
   '..',
   '..',
   'prisma',
   'migrations',
-  '20260921000007_builtin_role_capabilities_factory_default',
+  '20260925000000_squashed_baseline',
   'migration.sql',
 );
+const SCHEMA = path.resolve(__dirname, '..', '..', 'prisma', 'schema.prisma');
 
-const BUILTIN_KEYS = [
-  'product',
-  'project_manager',
-  'architect',
-  'developer',
-  'tester',
-  'plan',
-  'librarian',
-] as const;
-
-const EXTERNAL_KEYS = ['sisyphus', 'prometheus', 'atlas'] as const;
-
-describe('20260921000007 内置岗位拉平到出厂默认（迁移契约）', () => {
-  const sql = fs.readFileSync(MIGRATION, 'utf8');
-  const executable = sql
+function executableSql(sql: string): string {
+  return sql
     .split('\n')
-    .filter((l) => !l.trimStart().startsWith('--'))
-    .join('\n');
-
-  it('头注释声明 出厂默认 / JSON_SET 陷阱 / 外部岗不触碰 / 单向迁移', () => {
-    for (const marker of [
-      '出厂默认',
-      'JSON_SET',
-      'JSON_CONTAINS_PATH',
-      '外部 3 岗',
-      '单向迁移',
-    ]) {
-      expect(sql).toContain(marker);
-    }
-  });
-
-  it('恰一条 UPDATE 覆盖 capabilities；右值为 CAST 字面量（不引用列自身 ⇒ 幂等）', () => {
-    const updates = executable.match(/SET `capabilities` =/g) ?? [];
-    expect(updates).toHaveLength(1);
-    expect(executable).toMatch(
-      /SET `capabilities` = CAST\('\{[^']+\}' AS JSON\)/,
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .replace(/\s+CHARACTER SET\s+\S+\s+COLLATE\s+\S+/gi, '')
+    .replace(/\bDEFAULT NULL\b/gi, 'NULL')
+    .replace(/\bUNIQUE KEY\b/gi, 'UNIQUE INDEX')
+    .replace(/^(\s*)KEY\s+/gim, '$1INDEX ')
+    .replace(/(INDEX\s+`[^`]+`)\s+\(/g, '$1(')
+    .replace(/REFERENCES\s+(`[^`]+`)\s+\(/g, 'REFERENCES $1(')
+    .replace(/\b(varchar|text|json|datetime|tinyint|int|bigint)\b/gi, (type) =>
+      type.toUpperCase(),
     );
-    expect(executable).not.toMatch(/JSON_SET|JSON_REMOVE/);
+}
+
+function tableDefinition(sql: string, table: string): string {
+  const start = sql.indexOf(`CREATE TABLE \`${table}\``);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = sql.indexOf('\n) ', start);
+  expect(end).toBeGreaterThan(start);
+  return sql.slice(start, end);
+}
+
+const BUILTIN_KEYS = BUILTIN_AGENT_ROLES.map((role) => role.key);
+const FACTORY_MATRIX = buildFactoryCapabilityMatrix();
+
+describe('agent_roles builtin capability current-schema contract (historical 20260921000007)', () => {
+  const sql = fs.readFileSync(BASELINE, 'utf8');
+  const executable = executableSql(sql);
+  const roles = tableDefinition(executable, 'agent_roles');
+
+  it('baseline records the squash provenance instead of pointing at a removed migration file', () => {
+    expect(sql).toContain('由原有 81 个 Prisma 迁移压缩而来');
+    expect(sql).toContain('legacy-migrations/');
+    expect(sql).toContain('完整数据库基线');
   });
 
-  it('覆盖字面量为合法布尔对象（内容为拆分前历史快照，当前出厂锁定见 000009 契约 spec）', () => {
-    const literal = executable.match(/CAST\('(\{[^']+\})' AS JSON\)/);
-    expect(literal).not.toBeNull();
-    const parsed = JSON.parse(literal?.[1] ?? '{}') as Record<string, boolean>;
-    expect(Object.keys(parsed).length).toBeGreaterThan(0);
-    for (const value of Object.values(parsed)) {
-      expect(typeof value).toBe('boolean');
+  it('current schema stores a nullable JSON capability matrix and the builtin discriminator', () => {
+    expect(roles).toMatch(/`type`\s+VARCHAR\(191\) NOT NULL/);
+    expect(roles).toMatch(/`capabilities`\s+JSON NULL/);
+    expect(roles).toContain('UNIQUE INDEX `uk_agent_roles_key`(`key`)');
+  });
+
+  it('capability source covers exactly the seven builtin role keys with boolean values', () => {
+    expect(Object.keys(BUILTIN_ROLE_CAPABILITY_MAPS)).toEqual(BUILTIN_KEYS);
+    for (const key of BUILTIN_KEYS) {
+      const matrix = BUILTIN_ROLE_CAPABILITY_MAPS[key];
+      expect(Object.keys(matrix)).toEqual([...PLATFORM_CAPABILITY_KEYS]);
+      expect(
+        Object.values(matrix).every((value) => typeof value === 'boolean'),
+      ).toBe(true);
     }
   });
 
-  it('范围守卫：type=builtin 且 key IN 恰 7 内置 key；外部岗 / general 不可命中', () => {
-    expect(executable).toMatch(/WHERE `type` = 'builtin'/);
-    const inList = executable.match(/AND `key` IN \(([^)]+)\)/);
-    expect(inList).not.toBeNull();
-    const keys = (inList?.[1] ?? '')
-      .split(',')
-      .map((k) => k.trim().replace(/^'|'$/g, ''));
-    expect(keys).toEqual([...BUILTIN_KEYS]);
-    for (const external of EXTERNAL_KEYS) {
-      expect(keys).not.toContain(external);
-      expect(executable).not.toContain(`'${external}'`);
+  it('builtin scope does not absorb external or general fallback roles', () => {
+    for (const key of [...EXTERNAL_AGENT_ROLE_KEYS, 'general']) {
+      expect(BUILTIN_KEYS).not.toContain(key);
+      expect(BUILTIN_ROLE_CAPABILITY_MAPS[key]).toBeUndefined();
     }
-    expect(keys).not.toContain('general');
+    expect(Object.keys(FACTORY_MATRIX)).toEqual([...PLATFORM_CAPABILITY_KEYS]);
+  });
+
+  it('baseline contains no historical capability UPDATE or JSON mutation to reapply', () => {
+    // The baseline is the final DDL.  Reapplying the archived data migration
+    // would be both unnecessary and unsafe after a fresh seed.
+    expect(executable).not.toMatch(/^\s*(UPDATE|INSERT|DELETE)\s/m);
+    expect(executable).not.toMatch(/JSON_(SET|REMOVE)\(/);
+  });
+
+  it('Prisma schema agrees with the baseline capability ownership boundary', () => {
+    const schema = fs.readFileSync(SCHEMA, 'utf8');
+    const roleModel =
+      schema.match(/^model AgentRole \{[\s\S]*?^\}/m)?.[0] ?? '';
+    expect(roleModel).toMatch(/capabilities Json\?\s+@map\("capabilities"\)/);
+    expect(roleModel).not.toMatch(/^\s*policyId\s/m);
+    expect(roleModel).toContain('@@map("agent_roles")');
   });
 });

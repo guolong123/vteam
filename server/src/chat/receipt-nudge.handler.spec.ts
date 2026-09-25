@@ -3,7 +3,7 @@ import { EVENT_TYPES } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { TimerService } from '../timers/trigger.service';
+import { TriggerService } from '../timers/trigger.service';
 import { MessageReceiptsService } from './message-receipts.service';
 import {
   buildAutoNudgeText,
@@ -117,7 +117,7 @@ describe('ReceiptNudgeHandler（平台回执自动催办，chat 域注册）', (
         ReceiptNudgeHandler,
         MessageReceiptsService,
         { provide: PrismaService, useValue: prisma },
-        { provide: TimerService, useValue: timers },
+        { provide: TriggerService, useValue: timers },
         { provide: RealtimeService, useValue: realtime },
         { provide: WorkerDispatcher, useValue: workerDispatcher },
         { provide: IdGeneratorService, useValue: { nextId: jest.fn() } },

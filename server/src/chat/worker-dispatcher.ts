@@ -306,12 +306,22 @@ export const TASK_TRANSITION_INSTRUCTION =
 export const HOSTED_CONFIRM_INSTRUCTION =
   '【托管模式】若当前任务开启托管（任务设置 managedMode=on），团队成员的 question/permission 请求不再弹窗给用户，改由主 Agent 确认：收到【托管确认】消息时，调用 vteam MCP 的 vteam_question_confirm 工具决策（参数细节查工具 schema）。仅主实例可调用 vteam_question_confirm。';
 
+export const HOSTED_PLAN_TODO_INSTRUCTION =
+  '【执行步骤｜计划 Tab 执行步骤卡的数据源】计划拆解后必须用 vteam_todo(action:"write", title, content?, assignee?, seq 按 1..n 缺省自增) 把步骤写入平台（落 plan_tasks，跨会话持久），完成自己负责的那一步时调 vteam_todo(action:"done", seq) 标记完成——只建 issues 不写 vteam_todo，执行步骤卡会永远是「暂无执行步骤」。步骤与 issue 的分工：步骤=有序执行序列（谁做第几步、完成态），issue=可流转的工作项。';
+
+export const HOSTED_PLAN_SIGNOFF_INSTRUCTION =
+  '【计划签署】托管模式（managedMode=on）下计划由你（主 Agent）代用户签署：定稿用 vteam_plan_finalize（pending_final→approved，托管模式额外允许 draft→approved），开始执行用 vteam_plan_confirm（approved→executing，托管模式额外允许 draft/pending_final 直推）。派发执行类工作前必须先 vteam_plan_confirm 把计划推进到 executing，否则计划会卡在 draft，且后续 vteam_plan_complete 必然报错（仅 executing 可完工）。托管模式未开启时这两个工具返回 403，此时须提示用户在计划 Tab 人工确认（确认定稿 / 确认开始执行）；若你岗位未被授予 task.complete 能力（工具返回未获授权），请 @项目经理 或 @计划员 执行。';
+
+export const HOSTED_PLAN_REVIEW_INSTRUCTION =
+  '【计划评审派发｜决定计划状态能否动】计划文档产出后，评审必须用 vteam_notify_agent 且 kind=review 派发（不带 issueId 即可绕开工单门），派发词必须带三元组：round=第几轮（首轮 1）、planVersion=版本（如 v1；已落盘的再带 planHash）、expected=评审人名单（如 架构师-1、产品经理-1）。缺任一项 reason=review-triplet 会拦截且不落库不广播。评审回执 N/N 收敛后平台自动把计划 draft→reviewing→pending_final，【计划 Tab】才会出现「确认定稿」按钮；⚠️ 只在群聊里口头说 VERDICT: APPROVE 不算收敛——没有三元组账本，状态永远停在草稿、按钮永远不出现，你和用户都会卡住。到 pending_final 后请提示用户点「确认定稿」→ approved → 再点「确认开始执行」→ executing。';
+
 /** 非主成员协作指引（替代【任务状态】/【托管模式】工具段，避免教非主成员调用必 403 的工具）。 */
 export const NON_MAIN_AGENT_NOTE =
   '【协作说明】状态流转/托管确认由主Agent操作，有事@主Agent（相关工具 vteam_task_transition / vteam_question_confirm 仅主实例可调，误调返回 403）。定向通知仅可直达主Agent，需触达其他成员时请主Agent中转，成员间直连调用将被拒绝。' +
   '回执节奏：进度汇报用 vteam_notify_agent（type=answer, stage=process，不唤醒主Agent）；' +
   '完工必须传 stage=answer+end（清除回执，主Agent在所有派发完工后一次性唤醒）；' +
-  '遇阻塞/决策/依赖缺失用 type=question 或 help（立即中断唤醒主Agent，不计完工）。';
+  '遇阻塞/决策/依赖缺失用 type=question 或 help（立即中断唤醒主Agent，不计完工）。' +
+  '执行步骤：认领的任务步骤由主 Agent 用 vteam_todo 写入，你**自己完成时**调用 vteam_todo(action:"done", seq) 标记完成（计划 Tab 执行步骤卡据此显示进度）；先 vteam_todo(action:"list") 可查 seq。';
 
 /** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
 export const WECOM_SYSTEM_INSTRUCTION =
@@ -483,8 +493,8 @@ export interface BuildSystemInstructionsOptions {
   isMainAgent?: boolean;
   /** 任务团队成员（实例 id/别名/序号 + 模板 agent id/名称/角色）；空/缺省则不注入【团队成员】段。 */
   team?: TeamMemberInfo[];
-  /** 任务主实例 id（用于团队成员段中标注主实例成员；无主实例时为 null）。 */
-  mainAgentInstanceId?: string | null;
+  /** 团队主成员 id（用于团队成员段中标注主成员；无主成员时为 null）。 */
+  mainAgentMemberId?: string | null;
   /** 当前 agent 的实例身份（TeamMember.id，tmm_ 前缀）；缺省（存量会话未绑实例）回退 agent.id 保持兼容。 */
   selfInstanceId?: string;
   /** 任务实例 id（TeamMember.id，tmm_ 前缀）：团队会话按团队成员（tmm_）调度时，
@@ -552,7 +562,7 @@ export interface BuildSystemInstructionsOptions {
 
 /**
  * 主 Agent 动态职责段（dispatch 时仅注入被选为主 Agent 的成员）：模板 prompt 不再写死
- * "主 Agent"职责（见 seed.ts），改由运行时按 Task.mainAgentId 判定后动态下发——
+ * "主 Agent"职责（见 seed.ts），改由运行时按 team.mainAgentMemberId 判定后动态下发——
  * 牵头分工、协调产出衔接、群聊进度提示、必要时 @ 成员协调、可汇总验收材料。
  * 语义对齐 FR-08（推进/进度同步）、FR-11（@ 触发响应）、FR-13（成员互 @ 协调，不超 3 轮）。
  */
@@ -619,7 +629,7 @@ export function buildSystemInstructions(
     // P0 条件注入：主 Agent 追加【任务状态】+【托管模式】工具段；非主成员仅给协作指引
     // （不再教非主成员调用必 403 的 vteam_task_transition / vteam_question_confirm）。
     opts?.isMainAgent
-      ? `${TASK_TRANSITION_INSTRUCTION}\n\n${HOSTED_CONFIRM_INSTRUCTION}`
+      ? `${TASK_TRANSITION_INSTRUCTION}\n\n${HOSTED_CONFIRM_INSTRUCTION}\n\n${HOSTED_PLAN_TODO_INSTRUCTION}\n\n${HOSTED_PLAN_REVIEW_INSTRUCTION}\n\n${HOSTED_PLAN_SIGNOFF_INSTRUCTION}`
       : NON_MAIN_AGENT_NOTE,
     // P0 条件注入：企微渠道才追加【企业微信】段，缺省不注入。
     opts?.isWecomChannel === true ? WECOM_SYSTEM_INSTRUCTION : '',
@@ -662,7 +672,7 @@ export function buildSystemInstructions(
     const teamLines = opts.team.map(
       (m) =>
         `- ${m.alias ?? m.name ?? m.id}（实例 id: ${m.instanceId}，角色: ${m.role ?? ''}）` +
-        (m.instanceId === opts.mainAgentInstanceId ? ' —— 主 Agent' : ''),
+        (m.instanceId === opts.mainAgentMemberId ? ' —— 主 Agent' : ''),
     );
     blocks.push(
       `【团队成员】本次任务的团队成员（据此判断与谁协作、@ 谁）：\n${teamLines.join('\n')}`,
@@ -766,7 +776,7 @@ export const MAX_SILENT_WAKE_ATTEMPTS = 3;
  *  判死（session 标 failed + agent.error）。env AGENT_IDLE_TIMEOUT_MS 可配。 */
 export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
 
-/** 空闲判死扫描周期（定期遍历 lastActivityAt，检查超时会话）。 */
+/** 空闲判死扫描周期（定期执行 DB 侧扫描，检查超时会话）。 */
 export const IDLE_SCAN_INTERVAL_MS = 60_000;
 
 /**
@@ -889,6 +899,13 @@ export function decodeXml(text: string): string {
     .replace(/&apos;/g, "'");
 }
 
+/** 模块级纯解析函数（extractArtifacts/extractJsonByType/extractAllJsonObjects）共用的 logger（类外无 this.logger）。 */
+const parseLogger = new Logger('WorkerDispatcher');
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * F3 MAJOR-2：从 agent 回复文本提取产出物声明（12 篇 §3.1 声明形状，兼容 §8.2 注入格式）：
  * ① `<artifact type title>正文</artifact>` 标签（§8.2 格式对称复用，text 类型取正文为 content）；
@@ -948,8 +965,11 @@ export function extractArtifacts(text: string): Array<Record<string, unknown>> {
       ) {
         push(parsed);
       }
-    } catch {
+    } catch (e) {
       // 同上：丢弃
+      parseLogger.debug(
+        `artifact 声明 JSON 非法已跳过: ${formatErrorMessage(e)}`,
+      );
     }
   }
   return out;
@@ -1020,6 +1040,51 @@ function isSilenceTriggerPayload(
 }
 
 /**
+ * 会话故障恢复的通用唤醒文案（无快照时的 legacy 回退，保持原字节）。
+ * 有快照时 tryAutoRestart 在本行之后追加【原始任务重放】段（见 buildWakeText）。
+ */
+export const FALLBACK_WAKE_TEXT =
+  '【自动恢复】检测到会话意外中断，已自动重试，请继续执行未完成的任务';
+
+/**
+ * 原始分派快照 TTL（ms）：dispatch 202 受理后内存暂存，超时视为过期（防泄漏）。
+ * 取 2h：覆盖空闲判死 30min + 静默窗口 600s×3 的全部恢复窗口；重启后内存丢失
+ * 即按无快照回退通用文案（见 tryAutoRestart）。
+ */
+export const DISPATCH_SNAPSHOT_TTL_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * 原始分派快照（is_7 会话故障吞原始 dispatch 修复）：
+ * dispatch fire-and-forget 202 受理后暂存原始 payload，会话故障恢复
+ * （tryAutoRestart 经 markSessionIdleDead / attemptSilenceWake 触发）时重放
+ * 快照文本而非仅通用唤醒语——/execute 立返后模型会话崩溃，原始任务不再丢失。
+ */
+export interface DispatchSnapshot {
+  /** 原始触发正文（request.text，未经 prompt 块拼装；重放时由分派链路重新拼装上下文）。 */
+  text: string;
+  /** 触发分派的用户消息主键（m_ 前缀）。 */
+  messageId: string;
+  /** 触发来源频道 id。 */
+  channelId: string;
+  /** 任务 id（团队直聊为空串）。 */
+  taskId: string;
+  teamId: string;
+  /** 目标成员 id（TeamMember.id，tmm_ 前缀）。 */
+  teamMemberId: string;
+  agentId: string;
+  /** 快照时刻（ms epoch，TTL 依据）。 */
+  createdAt: number;
+}
+
+/** 快照键（团队维度：同一成员的新一轮分派覆盖旧快照）。 */
+export function dispatchSnapshotKey(
+  teamId: string,
+  teamMemberId: string,
+): string {
+  return `team:${teamId}:member:${teamMemberId}`;
+}
+
+/**
  * 从文本定位 type 字段值并提取完整 JSON 对象：先找 `"type":"<value>"` 位置 → 向前
  * 回溯最近的 `{` → 向后深度配对 `}`（支持字段乱序/嵌套/多对象并存）。
  * 修复：旧正则 `\{[\s\S]*?"type"` 从第一个 `{` 开始匹配，多声明并存时（如 artifact +
@@ -1053,7 +1118,10 @@ export function extractJsonByType(
             string,
             unknown
           >;
-        } catch {
+        } catch (e) {
+          parseLogger.debug(
+            `extractJsonByType 回退 type=${typeValue} start=${start}: ${formatErrorMessage(e)}`,
+          );
           return null;
         }
       }
@@ -1167,8 +1235,11 @@ function extractAllJsonObjects(
                 unknown
               >,
             });
-          } catch {
+          } catch (e) {
             // 非合法 JSON：跳过
+            parseLogger.debug(
+              `extractAllJsonObjects 跳过非合法 JSON pos=${start}: ${formatErrorMessage(e)}`,
+            );
           }
           break;
         }
@@ -1272,9 +1343,6 @@ export class WorkerDispatcher
   /** sessionId → watchdog key 反查（ingress 活动事件回调按 sessionId 滑动重武装/终态清除）。 */
   private readonly pendingBySession = new Map<string, string>();
 
-  /** sessionId → 最近一次输出活动时间戳（空闲判死依据，ingress 活动事件刷新）。 */
-  private readonly lastActivityAt = new Map<string, number>();
-
   /** 空闲判死扫描定时器（惰性启动：首个 dispatch 注册 watchdog 时）。 */
   private idleScanTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -1290,6 +1358,16 @@ export class WorkerDispatcher
    * MAX_SILENT_WAKE_ATTEMPTS 后仍静默 → 走失败路径。teardown 清空。
    */
   private readonly silentWakeAttempts = new Map<string, number>();
+
+  /**
+   * 原始分派快照（is_7）：快照键 → 快照（dispatch 202 受理后暂存，恢复重放用）。
+   * 内存 Map + TTL（DISPATCH_SNAPSHOT_TTL_MS）：与 pending 等恢复态一致——本包
+   * 无 Redis/外部 store（package.json 无相关依赖），durable
+   * trigger 行只带 deadline 元数据不带全量 prompt；重启丢失即回退通用文案。
+   */
+  private readonly dispatchSnapshots = new Map<string, DispatchSnapshot>();
+  /** 平台 sessionId → 快照键（活动/完成事件按 sessionId 清除快照用）。 */
+  private readonly snapshotSessionIndex = new Map<string, string>();
 
   /**
    * 执行中注册表（workerId:scope → 活跃执行集合）：dispatch 调 worker execute 前登记，
@@ -1461,7 +1539,7 @@ export class WorkerDispatcher
       this.handleSessionActivity(payload);
     });
     // todo-7 重启安全：空闲扫描常驻启动（AGENT_IDLE_TIMEOUT_MS>0 时），重启后即便
-    // 零 dispatch（内存 map 全空），DB 侧检出仍能判死 stuck running 会话。
+    // 没有进程内 dispatch 状态，DB 侧检出仍能判死 stuck running 会话。
     this.startIdleScan();
     // todo-9 重启安全：静默 deadline 经 TriggerService 注册同 kind handler，
     // 重启后到期行仍能收割静默会话（内存 pending 全空时走 DB 侧判定）。
@@ -1484,6 +1562,8 @@ export class WorkerDispatcher
     this.pending.clear();
     this.pendingBySession.clear();
     this.silentWakeAttempts.clear();
+    this.dispatchSnapshots.clear();
+    this.snapshotSessionIndex.clear();
     if (this.idleScanTimer) {
       clearInterval(this.idleScanTimer);
       this.idleScanTimer = null;
@@ -1665,7 +1745,10 @@ export class WorkerDispatcher
     try {
       planLifecycle =
         this.moduleRef?.get(PlanLifecycleService, { strict: false }) ?? null;
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `门禁 PlanLifecycleService 未装配 task=${taskId}，fail-open 放行：${this.describeError(err)}`,
+      );
       planLifecycle = null;
     }
     if (!planLifecycle) {
@@ -1907,7 +1990,10 @@ export class WorkerDispatcher
         return memoryIndex;
       }
       return null;
-    } catch {
+    } catch (err) {
+      this.logger.debug(
+        `记忆索引构建失败 team=${teamId}，返回 null：${this.describeError(err)}`,
+      );
       return null;
     }
   }
@@ -2077,8 +2163,7 @@ export class WorkerDispatcher
       select: { type: true },
     });
     if (
-      (sourceChannel?.type === CHANNEL_TYPE.team_group ||
-        sourceChannel?.type === CHANNEL_TYPE.task_group) &&
+      sourceChannel?.type === CHANNEL_TYPE.team_group &&
       !request.text.includes('[WeCom:')
     ) {
       // 互斥优先级 wecom 优先：企微消息走 wecom_reply 单通道，不再叠加群聊指令
@@ -2216,14 +2301,12 @@ export class WorkerDispatcher
     // 目标成员的岗位权威（与上方名册同一行，一次查找三用）：岗位职责段（rolePrompt）+
     // 能力矩阵（capabilities，驱动工具屏蔽）+ 常量回退键（key）。成员行缺失/未绑角色
     // → null ⇒ 回退 `agentKey` 常量派生，绝不阻断分派。
-    const selfRoleRow:
-      | {
-          id?: string | null;
-          key?: string | null;
-          capabilities?: Record<string, boolean> | null;
-          rolePrompt?: string | null;
-        }
-      | null =
+    const selfRoleRow: {
+      id?: string | null;
+      key?: string | null;
+      capabilities?: Record<string, boolean> | null;
+      rolePrompt?: string | null;
+    } | null =
       teamMemberRows.find((m: any) => m.id === teamMemberId)?.role ?? null;
     const selfRoleAuthority: MemberRoleAuthority | null = selfRoleRow
       ? {
@@ -2259,7 +2342,7 @@ export class WorkerDispatcher
       await this.resolveBoundaryAndTools(agentIdentity, selfRoleAuthority);
     const systemOpts: BuildSystemInstructionsOptions = {
       isMainAgent,
-      mainAgentInstanceId: mainAgentMemberId,
+      mainAgentMemberId,
       team,
       selfInstanceId: teamMemberId,
       selfAlias,
@@ -2326,6 +2409,21 @@ export class WorkerDispatcher
       ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
       system: buildSystemInstructions(agentIdentity, systemOpts),
     });
+    // is_7：execute 202 受理后暂存原始分派快照（恢复重放用；wake 重放文本不覆盖）。
+    this.saveDispatchSnapshot({
+      text: request.text,
+      messageId: request.messageId,
+      channelId: request.channelId,
+      taskId: request.taskContext?.taskId ?? '',
+      teamId,
+      teamMemberId,
+      agentId: target.agentId,
+      createdAt: Date.now(),
+    });
+    this.snapshotSessionIndex.set(
+      sessionId,
+      dispatchSnapshotKey(teamId, teamMemberId),
+    );
 
     this.completedSessions.delete(sessionId);
     this.failedSessions.delete(sessionId);
@@ -2395,6 +2493,9 @@ export class WorkerDispatcher
     // 团队唯一路径：落库 + 广播 + emitFinal（无 task/team 双实现）
     const settled = await this.handleTeamTaskCompleted(payload);
     const executionTeamId = settled.teamId;
+    if (sessionId) {
+      this.clearDispatchSnapshotBySession(sessionId);
+    }
     const agentId = settled.agentId;
     const text = settled.text;
     const displayText = settled.displayText;
@@ -2493,7 +2594,17 @@ export class WorkerDispatcher
                   wecomChannelsCount++;
                   wecomChannelIds.push(c.id);
                 }
-              } catch {}
+              } catch (e) {
+                // Fail closed: an unresolved binding may still be a wecom
+                // channel — count it so the summary below does not misreport
+                // "no wecom channels", and let the per-binding path below
+                // re-resolve it instead of skipping it as absent-and-fine.
+                wecomChannelsCount++;
+                wecomChannelIds.push(b.messageChannelId);
+                this.logger.warn(
+                  `wecom bridge: channel lookup failed bindingsId=${b.messageChannelId} taskId=${payload.taskId}: ${this.describeError(e)}`,
+                );
+              }
             }
             this.logger.log(
               `wecom bridge: taskId=${payload.taskId}, teamId=${executionTeamId}, bindings=${bindings.length}, found wecom channels=${wecomChannelsCount}`,
@@ -2535,29 +2646,18 @@ export class WorkerDispatcher
                   );
                   continue;
                 }
-                const chatChannelModel = (
-                  this.prisma as unknown as {
-                    chatChannel: {
-                      findFirst: (q: unknown) => Promise<{ id: string } | null>;
-                    };
-                  }
-                ).chatChannel;
-                const groupChatChannel =
-                  (await chatChannelModel.findFirst({
-                    where: {
-                      teamId: executionTeamId,
-                      type: CHANNEL_TYPE.team_group,
-                      deletedAt: null,
-                    },
-                    select: { id: true },
-                  })) ??
-                  (await chatChannelModel.findFirst({
-                    where: {
-                      taskId: payload.taskId,
-                      type: CHANNEL_TYPE.task_group,
-                    },
-                    select: { id: true },
-                  }));
+                // 无 task_group 回落：task_group 频道已由迁移
+                // 20260924000004_merge_task_group_channels 清除，CHANNEL_TYPE 亦无该值。
+                const groupChatChannel = executionTeamId
+                  ? await this.prisma.chatChannel.findFirst({
+                      where: {
+                        teamId: executionTeamId,
+                        type: CHANNEL_TYPE.team_group,
+                        deletedAt: null,
+                      },
+                      select: { id: true },
+                    })
+                  : null;
                 if (!groupChatChannel) {
                   this.logger.warn(
                     `wecom bridge: no groupChannel for taskId=${payload.taskId}`,
@@ -2609,13 +2709,21 @@ export class WorkerDispatcher
                   adapter = this.moduleRef?.get(WecomAibotAdapter, {
                     strict: false,
                   }) as unknown as typeof adapter;
-                } catch {}
+                } catch (e) {
+                  this.logger.debug(
+                    `wecom bridge: ModuleRef adapter lookup miss taskId=${payload.taskId}: ${formatErrorMessage(e)}`,
+                  );
+                }
                 if (!adapter) {
                   try {
                     const g = globalThis as unknown as Record<string, unknown>;
                     adapter =
                       (g['__wecomAdapter'] as typeof adapter) ?? undefined;
-                  } catch {}
+                  } catch (e) {
+                    this.logger.debug(
+                      `wecom bridge: global adapter lookup miss taskId=${payload.taskId}: ${formatErrorMessage(e)}`,
+                    );
+                  }
                 }
                 if (!adapter) {
                   this.logger.warn(
@@ -2676,7 +2784,11 @@ export class WorkerDispatcher
                         `wecom bridge: using card pending operator taskId=${payload.taskId} fromUserId=${(cardOp as any).fromUserId} fromUserName=${(cardOp as any).fromUserName} chattype=${(cardOp as any).chattype ?? ''}`,
                       );
                     }
-                  } catch {}
+                  } catch (e) {
+                    this.logger.warn(
+                      `wecom bridge: getPendingOperatorForTask failed taskId=${payload.taskId}, fall to stream path: ${formatErrorMessage(e)}`,
+                    );
+                  }
                   if (!pendingFromCard) {
                     try {
                       pendingInfo =
@@ -2690,7 +2802,11 @@ export class WorkerDispatcher
                           externalMsg.id,
                         );
                       }
-                    } catch {}
+                    } catch (e) {
+                      this.logger.warn(
+                        `wecom bridge: stream/pending-user lookup failed taskId=${payload.taskId} internalMessageId=${externalMsg.id}, fromName degrades to '': ${formatErrorMessage(e)}`,
+                      );
+                    }
                   }
                   const fromName =
                     pendingInfo?.fromUserName || pendingInfo?.fromUserId || '';
@@ -2714,7 +2830,15 @@ export class WorkerDispatcher
                       this.logger.log(
                         `wecom bridge: consumed pending operator for taskId=${payload.taskId}`,
                       );
-                    } catch {}
+                    } catch (e) {
+                      // Fail closed: the pending operator may still be present when
+                      // consume fails. Do not send it now; a later dispatch can retry
+                      // the consume and send it at most once.
+                      this.logger.warn(
+                        `wecom bridge: consume pending operator failed taskId=${payload.taskId}: ${this.describeError(e)}`,
+                      );
+                      throw e;
+                    }
                   }
                 }
                 if (pendingFromCard) {
@@ -2735,7 +2859,11 @@ export class WorkerDispatcher
                         `wecom bridge: post-card discarded placeholder stream internalMessageId=${externalMsg.id} taskId=${payload.taskId}`,
                       );
                     }
-                  } catch {}
+                  } catch (e) {
+                    this.logger.warn(
+                      `wecom bridge: post-card discardStream failed taskId=${payload.taskId} internalMessageId=${externalMsg.id} (best-effort): ${formatErrorMessage(e)}`,
+                    );
+                  }
                   try {
                     const pcAdapter: any = adapter;
                     const canNew =
@@ -2940,7 +3068,15 @@ export class WorkerDispatcher
                           }
                         }
                       }
-                    } catch {}
+                    } catch (e) {
+                      // Fail closed: without a successful dedup read, the 120s
+                      // cooldown cannot be proven; suppress this mirror and let a
+                      // later dispatch retry the read.
+                      this.logger.warn(
+                        `wecom bridge: mirror dedup read failed taskId=${payload.taskId}: ${this.describeError(e)}`,
+                      );
+                      throw e;
+                    }
                     if (skipMirror) {
                     } else {
                       const prismaAny2 = this.prisma as unknown as {
@@ -3162,12 +3298,9 @@ export class WorkerDispatcher
       });
       return unsettled;
     }
-    // 群聊回退（team_group；存量 task_group 防御）时正文独白不落群聊（结论经
-    // group_post 工具直发），仅幂等标记 + emitFinal 收尾
-    if (
-      channel.type === CHANNEL_TYPE.team_group ||
-      channel.type === CHANNEL_TYPE.task_group
-    ) {
+    // 群聊回退（team_group）时正文独白不落群聊（结论经 group_post 工具直发），
+    // 仅幂等标记 + emitFinal 收尾
+    if (channel.type === CHANNEL_TYPE.team_group) {
       if (sessionId) {
         this.completedSessions.add(sessionId);
       }
@@ -3724,15 +3857,11 @@ export class WorkerDispatcher
         select: { teamId: true },
       });
       const teamId = task?.teamId ?? null;
-      const group = teamId
-        ? await this.prisma.chatChannel.findFirst({
-            where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
-            select: { id: true },
-          })
-        : await this.prisma.chatChannel.findFirst({
-            where: { taskId, type: CHANNEL_TYPE.task_group },
-            select: { id: true },
-          });
+      if (!teamId) return;
+      const group = await this.prisma.chatChannel.findFirst({
+        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+        select: { id: true },
+      });
       if (!group || group.id === mainChannelId) {
         return;
       }
@@ -3792,8 +3921,11 @@ export class WorkerDispatcher
         select: { overrideModelId: true },
       })) as { overrideModelId: string | null } | null;
       return row?.overrideModelId ?? null;
-    } catch {
+    } catch (err) {
       // 覆盖查询失败不阻断分派：回退 agent 默认模型（增强特性容错）
+      this.logger.warn(
+        `成员覆盖模型查询失败 teamMemberId=${teamMemberId}，回退 agent 默认模型：${this.describeError(err)}`,
+      );
       return null;
     }
   }
@@ -3820,7 +3952,10 @@ export class WorkerDispatcher
         select: { opencodeAgentName: true },
       })) as { opencodeAgentName: string | null } | null;
       return row?.opencodeAgentName ?? null;
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `成员 opencode agent 名查询失败 teamMemberId=${teamMemberId}，回退 null：${this.describeError(err)}`,
+      );
       return null;
     }
   }
@@ -3864,8 +3999,11 @@ export class WorkerDispatcher
             tools: capabilityTools,
           };
         }
-      } catch {
+      } catch (err) {
         // 策略解析异常不阻断分派 → 回退常量派生
+        this.logger.warn(
+          `岗位策略解析失败 role=${role.key}，回退常量派生：${this.describeError(err)}`,
+        );
       }
     }
     if (constantName) {
@@ -3943,7 +4081,7 @@ export class WorkerDispatcher
    *    server/src/workers/workers.constants.ts + workers.service.ts HealthChecker）：
    *    进程死亡的探活走这条路，本 watchdog 的 offline 快速失败依赖它。
    *
-   * 同时记录 lastActivityAt 作为空闲判死追踪起点（活动事件刷新，超 AGENT_IDLE_TIMEOUT_MS 判死）。
+   * 同时通过 DB 活动列记录空闲判死追踪起点（活动事件刷新，超 AGENT_IDLE_TIMEOUT_MS 判死）。
    * OBS-009：poll 已快速失败（failedSessions 已标记）时跳过注册。
    */
   private startPendingWatchdog(
@@ -3966,9 +4104,7 @@ export class WorkerDispatcher
       workerId,
       teamMemberId,
     });
-    // 空闲判死追踪起点（活动事件经 handleSessionActivity 刷新）——内存 map +
-    // DB Session.lastActivityAt 双写（todo-7：重启后内存丢失，扫描凭 DB 列判死）。
-    this.lastActivityAt.set(sessionId, dispatchedAt);
+    // 空闲判死追踪起点写入 DB（活动事件经 handleSessionActivity 刷新）。
     void this.persistSessionActivity(sessionId, new Date(dispatchedAt));
     this.startIdleScan();
   }
@@ -3976,7 +4112,7 @@ export class WorkerDispatcher
   /**
    * 武装静默 deadline（注册与唤醒重试共用）：同键旧轮清理（timer + durable 行 best-effort
    * 取消）→ 新 setTimeout（捕获本轮 sessionId，防旧 timer 收割新一轮）→ 注册 pending 映射
-   * → 落 durable 行（due = 本轮 deadlineAt）。返回本轮注册时刻，调用方据此写 lastActivityAt。
+   * → 落 durable 行（due = 本轮 deadlineAt）。返回本轮注册时刻，调用方据此写 DB 活动列。
    * 世代号 dispatchedAt 一经注册不再改写；事件滑动重武装只推 timer/deadlineAt（不落 DB 行）。
    */
   private armSilenceWatchdog(args: {
@@ -4094,7 +4230,7 @@ export class WorkerDispatcher
    *    **不**调 tryAutoRestart（离线 worker 唤醒无意义，探活归心跳路径）；
    * ② 在线且静默未达唤醒上限 → 计数 +1、重武装全新窗口（内存 timer + durable 行）
    *    并经既有 tryAutoRestart 唤醒（fire-and-forget，失败只记日志）；不刷新
-   *    lastActivityAt（唤醒≠活动，空闲判死只认真实事件）；
+   *    DB 活动列（唤醒≠活动，空闲判死只认真实事件）；
    * ③ 在线但达到上限仍静默 → 失败路径：pending 删除 + failedSessions 标记 +
    *    活跃执行注销 + 追踪退出 + emitError + 广播 agent.error
    *    （silent_session_timeout，文案声明心跳正常 + 唤醒次数耗尽）。
@@ -4125,7 +4261,6 @@ export class WorkerDispatcher
       // F2 MINOR：超时标记失败会话——迟到的回流（ingress/轮询）跳过落库仅记日志
       this.failedSessions.add(sessionId);
       this.unregisterExecution(workerId, scope, teamMemberId);
-      this.lastActivityAt.delete(sessionId);
       this.logger.error(`agent ${agentId} ${error}`);
       this.emitError({ taskId: scope, agentId, error });
       void this.broadcastAgentError({
@@ -4151,7 +4286,10 @@ export class WorkerDispatcher
       );
       workerLookupFailed = true;
     }
-    if (!workerLookupFailed && (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE)) {
+    if (
+      !workerLookupFailed &&
+      (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE)
+    ) {
       fail(
         `agent 无响应（${this.silentSessionWakeMs / 1000}s 无事件回流，worker 心跳已离线），不再唤醒直接失败，请检查 worker 状态`,
       );
@@ -4285,7 +4423,7 @@ export class WorkerDispatcher
    *     到当前 deadlineAt（不收割、不动内存 timer），{done:true}；
    *   · 否则窗口真到期 → 清 timer + reapSilenceDeadline（唤醒重试/失败）。
    * - 命中缺席（重启后内存全空）→ DB 侧判定：行缺失/非 running → 跳过；
-   *   base = max(dispatchedAt, lastActivityAt)，base + 窗口 > now → 窗口未到（活动把
+   *   base = max(dispatchedAt, DB 活动列)，base + 窗口 > now → 窗口未到（活动把
    *   窗口滑后过本行 due）→ 顺延 durable 行不收割；已到期 → 同走 reap（重启后唤醒
    *   上限从 0 起算），DB 异常时 fail-open 跳过。
    */
@@ -4409,7 +4547,7 @@ export class WorkerDispatcher
       });
     } catch (err) {
       this.logger.warn(
-        `session ${sessionId} lastActivityAt 回写失败（fail-open，内存计时不受影响）: ${this.describeError(err)}`,
+        `session ${sessionId} 活动时间回写失败（fail-open，DB 扫描继续）: ${this.describeError(err)}`,
       );
     }
   }
@@ -4421,7 +4559,7 @@ export class WorkerDispatcher
    * - 非终态事件（delta / agent.status 非 error / session.updated(running)）→
    *   **滑动重武装**：窗口推到 now + silentSessionWakeMs（只重置内存 timer/deadlineAt，
    *   不落 durable 行），activitySeen 置位（空闲判死不再否决）；唤醒计数不清；
-   * - 非终态同时刷新 lastActivityAt（空闲判死计时）。
+   * - 非终态同时刷新 DB 活动列（空闲判死计时）。
    */
   private handleSessionActivity(payload: SessionActivityPayload): void {
     const { sessionId } = payload;
@@ -4436,6 +4574,7 @@ export class WorkerDispatcher
       (payload.type === 'agent.status' && payload.status === 'error');
     if (terminal) {
       this.clearPendingWatchdogBySession(sessionId);
+      this.clearDispatchSnapshotBySession(sessionId);
     } else {
       this.rearmSilenceWatchdogBySession(sessionId);
     }
@@ -4445,10 +4584,10 @@ export class WorkerDispatcher
         payload.status &&
         payload.status !== SESSION_STATUS.running)
     ) {
-      this.lastActivityAt.delete(sessionId);
       return;
     }
-    this.lastActivityAt.set(sessionId, Date.now());
+    // is_7：首个非终态活动 = 会话存活/首字成功，快照使命达成（防重放循环）。
+    this.clearDispatchSnapshotBySession(sessionId);
     void this.persistSessionActivity(sessionId);
   }
 
@@ -4469,14 +4608,13 @@ export class WorkerDispatcher
   }
 
   /**
-   * 空闲判死扫描：遍历 lastActivityAt，跳过仍等首事件（pending 且 activitySeen=false）
+   * 空闲判死扫描：从 DB 检出超时会话，跳过仍等首事件（pending 且 activitySeen=false）
    * 的会话——滑动窗口已接管其无事件检测；已见事件的会话即便 watchdog 仍挂着（滑动
    * 重武装不清 pending）也照常参与判死；超 AGENT_IDLE_TIMEOUT_MS 无活动 → 查
    * Session.status，仅 running 判死（failed + emitError + 广播 agent.error）；
    * 非 running（idle/完成/冻结）→ 退出追踪不判死（防误杀）。
-   * trigger-unification todo-7：追加 DB 侧检出（status='running' AND lastActivityAt <
-   * now - idleTimeout），重启后内存 map 为空仍可判死；本进程内正处首字等待的会话
-   * （pending 且 activitySeen=false）一律否决，不判死。
+   * DB 侧谓词同时覆盖非空活动列与 NULL 活动列（NULL 回退 updatedAt）；本进程内
+   * 正处首字等待的会话（pending 且 activitySeen=false）一律否决，不判死。
    */
   private async scanIdleSessions(): Promise<void> {
     if (this.agentIdleTimeoutMs <= 0) {
@@ -4484,30 +4622,22 @@ export class WorkerDispatcher
     }
     const now = Date.now();
     const stale: string[] = [];
-    for (const [sessionId, lastAt] of this.lastActivityAt) {
-      if (this.isPendingFirstEventWait(sessionId)) {
-        continue;
-      }
-      if (now - lastAt <= this.agentIdleTimeoutMs) {
-        continue;
-      }
-      stale.push(sessionId);
-    }
-    // DB 侧检出：覆盖重启后内存 map 为空的场景（NULL 行不命中 lt，不误杀迁移前存量）。
+    // DB 侧检出：活动列为 NULL 时回退到 Session.updatedAt（@updatedAt，
+    // 自动反映最后写入），避免新建/持久化失败的 running 会话因 NULL 比较而永久逃逸。
     try {
       const cutoff = new Date(now - this.agentIdleTimeoutMs);
       const dbStale = await this.prisma.session.findMany({
         where: {
           status: SESSION_STATUS.running,
-          lastActivityAt: { lt: cutoff },
+          OR: [
+            { lastActivityAt: { lt: cutoff } },
+            { lastActivityAt: null, updatedAt: { lt: cutoff } },
+          ],
         },
         select: { id: true },
         take: 100,
       });
       for (const row of dbStale ?? []) {
-        if (stale.includes(row.id)) {
-          continue;
-        }
         if (this.isPendingFirstEventWait(row.id)) {
           continue;
         }
@@ -4515,7 +4645,7 @@ export class WorkerDispatcher
       }
     } catch (err) {
       this.logger.warn(
-        `空闲判死 DB 检出失败（fail-open，仅内存侧继续）: ${this.describeError(err)}`,
+        `空闲判死 DB 检出失败（fail-open，扫描继续）: ${this.describeError(err)}`,
       );
     }
     for (const sessionId of stale) {
@@ -4530,11 +4660,26 @@ export class WorkerDispatcher
       return false;
     }
     const entry = this.pending.get(key);
-    return entry !== undefined && entry.sessionId === sessionId && !entry.activitySeen;
+    return (
+      entry !== undefined &&
+      entry.sessionId === sessionId &&
+      !entry.activitySeen
+    );
   }
 
-  public getLastActivityAt(sessionId: string): number | undefined {
-    return this.lastActivityAt.get(sessionId);
+  /**
+   * 读取会话的最近活动时间（epoch ms）。DB 的 last_activity_at 是 wall-clock
+   * SESSION-scoped；NULL 时以 Session.updatedAt 回退，冷却判断保持保守。
+   */
+  public async getSessionLastActivityAt(
+    sessionId: string,
+  ): Promise<number | undefined> {
+    const row = await this.prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { lastActivityAt: true, updatedAt: true },
+    });
+    const activityAt = row?.lastActivityAt ?? row?.updatedAt;
+    return activityAt?.getTime();
   }
 
   public isSessionPending(sessionId: string): boolean {
@@ -4556,11 +4701,9 @@ export class WorkerDispatcher
         },
       });
       if (!row) {
-        this.lastActivityAt.delete(sessionId);
         return;
       }
       if (row.status !== SESSION_STATUS.running) {
-        this.lastActivityAt.delete(sessionId);
         return;
       }
       // 内存否决（todo-7，Oracle 约束）：本进程仍登记该成员为活跃执行 → 正处轮中，
@@ -4609,7 +4752,11 @@ export class WorkerDispatcher
               forensicsType = inferErrorType(errText);
             }
           }
-        } catch {}
+        } catch (err) {
+          this.logger.debug(
+            `session ${sessionId} 错误尸检失败 worker=${row.workerId}，沿用默认错误类型：${this.describeError(err)}`,
+          );
+        }
       }
       await this.prisma.session.update({
         where: { id: sessionId },
@@ -4618,7 +4765,6 @@ export class WorkerDispatcher
       this.failedSessions.add(sessionId);
       // 判败即解除静默 watchdog（滑动语义下 pending 在事件后仍挂着，不清会残留 timer/durable 行）。
       this.clearPendingWatchdogBySession(sessionId);
-      this.lastActivityAt.delete(sessionId);
       // stop-first：best-effort 中止 worker 侧 stuck 执行，释放槽位并防止迟到完成
       // 事件写入已失败会话；中止失败只记 warn，永不阻断后续恢复链。
       if (abortRef && abortInstanceRef) {
@@ -4708,29 +4854,93 @@ export class WorkerDispatcher
   /**
    * 自动拉起（Todo10 团队化）：频道经 resolveTeamChannel 团队定位，目标为成员
    * tmm_ 直调 dispatchAgentMention；任务仅归因（进度门 + prompt 上下文）。
-   * taskId 缺失（纯团队直聊）→ 失败已落库+广播，自动恢复需任务上下文，跳过；
-   * 任务非 in_progress → 跳过；未知 channel → 跳过不抛错。
+   *
+   * 恢复门槛（2026-09-23 放宽，与 dispatchAgentMention 对 wake 的终态门禁同口径）：
+   * - **只挡终态**（completed/archived）——非终态一律允许恢复。原 `!== 'in_progress'`
+   *   会把 pending_review 这类「任务尚未结束」的卡死会话挡在自动恢复之外；
+   * - **taskId 可缺省**（纯团队直聊）——dispatchAgentMention 支持团队维度直传，且唤醒
+   *   文本（buildWakeText）/快照键（dispatchSnapshotKey）/频道定位（resolveTeamChannel）
+   *   都只依赖 teamId+teamMemberId，不需要任务上下文；
+   * - 未知 channel → 跳过不抛错（dispatch 必须有落点）。
+   *
+   * is_7：唤醒文本优先重放原始分派快照（有快照 → 通用语 +【原始任务重放】段；
+   * 无/过期快照 → 通用语回退，字节与引入前一致）。
    */
   private async tryAutoRestart(
     teamId: string,
     teamMemberId: string,
     taskId: string | null,
   ): Promise<void> {
-    if (!taskId) return;
-    const task = await this.prisma.task.findUnique({
-      where: { id: taskId },
-      select: { status: true },
-    });
-    if (!task || task.status !== 'in_progress') return;
+    if (taskId) {
+      const task = await this.prisma.task.findUnique({
+        where: { id: taskId },
+        select: { status: true },
+      });
+      if (!task) return;
+      if (task.status === 'completed' || task.status === 'archived') return;
+    }
     const channel = await this.resolveTeamChannel(teamId, teamMemberId);
     if (!channel) return;
     await this.dispatchAgentMention({
-      taskId,
+      taskId: taskId ?? null,
+      teamId,
       channelId: channel.id,
-      text: '【自动恢复】检测到会话意外中断，已自动重试，请继续执行未完成的任务',
+      text: this.buildWakeText(teamId, teamMemberId),
       targetInstanceId: teamMemberId,
       kind: 'wake',
     });
+  }
+
+  /**
+   * is_7 快照存取（与 pending 同内存语义）：
+   * save（dispatch 202 受理后）→ peek（恢复重放，只读不消费）→ clear（首字活动/
+   * 完成落库后，防重放循环）。wake 重放文本自身永不覆盖快照（以通用语开头即跳过）。
+   */
+  private saveDispatchSnapshot(snap: DispatchSnapshot): void {
+    if (!snap.teamId || !snap.teamMemberId || !snap.text) {
+      return;
+    }
+    if (snap.text.startsWith(FALLBACK_WAKE_TEXT)) {
+      return;
+    }
+    const key = dispatchSnapshotKey(snap.teamId, snap.teamMemberId);
+    this.dispatchSnapshots.set(key, { ...snap, createdAt: Date.now() });
+  }
+
+  private peekDispatchSnapshot(
+    teamId: string,
+    teamMemberId: string,
+  ): DispatchSnapshot | undefined {
+    const key = dispatchSnapshotKey(teamId, teamMemberId);
+    const snap = this.dispatchSnapshots.get(key);
+    if (!snap) {
+      return undefined;
+    }
+    if (Date.now() - snap.createdAt > DISPATCH_SNAPSHOT_TTL_MS) {
+      this.dispatchSnapshots.delete(key);
+      return undefined;
+    }
+    return snap;
+  }
+
+  private clearDispatchSnapshot(teamId: string, teamMemberId: string): void {
+    this.dispatchSnapshots.delete(dispatchSnapshotKey(teamId, teamMemberId));
+  }
+
+  private clearDispatchSnapshotBySession(sessionId: string): void {
+    const key = this.snapshotSessionIndex.get(sessionId);
+    if (key !== undefined) {
+      this.dispatchSnapshots.delete(key);
+      this.snapshotSessionIndex.delete(sessionId);
+    }
+  }
+
+  private buildWakeText(teamId: string, teamMemberId: string): string {
+    const snap = this.peekDispatchSnapshot(teamId, teamMemberId);
+    if (!snap) {
+      return FALLBACK_WAKE_TEXT;
+    }
+    return `${FALLBACK_WAKE_TEXT}，继续执行以下原始任务：\n\n【原始任务重放】${snap.text}`;
   }
 
   // ------------------------------------------------------------------
@@ -4801,7 +5011,11 @@ export class WorkerDispatcher
     const dir = taskDirOf(this.taskWorkDirRoot, taskId);
     try {
       await fs.mkdir(dir, { recursive: true });
-    } catch {}
+    } catch (err) {
+      this.logger.warn(
+        `任务工作目录创建失败 dir=${dir}（best-effort，仍返回路径）: ${(err as Error)?.message ?? err}`,
+      );
+    }
     return dir;
   }
 

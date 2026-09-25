@@ -69,8 +69,6 @@ type ChannelRow = {
     title: string;
     status: string;
     teamId?: string | null;
-    mainAgentInstanceId?: string | null;
-    mainAgentId?: string | null;
   } | null;
   team?: { id: string; name: string } | null;
   teamMember?: {
@@ -114,8 +112,6 @@ const CHANNEL_TASK_SELECT = {
       title: true,
       status: true,
       teamId: true,
-      mainAgentInstanceId: true,
-      mainAgentId: true,
     },
   },
   team: { select: { id: true, name: true } },
@@ -135,7 +131,7 @@ const CHANNEL_TASK_SELECT = {
  * 群聊模块（09 篇 §3.5 Chat；10 篇 消息/频道/触发机制）。
  *
  * 端点：
- * - GET    /channels?type=           调用者可访问频道列表（task_group + private）
+ * - GET    /channels?type=           调用者可访问频道列表（team_group + private）
  * - GET    /channels/:id             频道信息（类型/关联任务/成员 Agent）
  * - GET    /channels/:id/messages    历史游标分页（09 篇 §2.2/§6）
  * - POST   /channels/:id/messages    发消息 8 步流程（09 篇 §5.1）
@@ -197,12 +193,6 @@ export class ChatService {
     teamId?: string,
     taskId?: string,
   ) {
-    if (type === CHANNEL_TYPE.task_group) {
-      throw new BadRequestException({
-        code: CHAT_ERRORS.CHANNEL_TYPE_DEPRECATED,
-        message: 'task_group 已废弃，请使用 team_group',
-      });
-    }
     if (
       type !== undefined &&
       type !== CHANNEL_TYPE.team_group &&
@@ -405,7 +395,7 @@ export class ChatService {
    * `GET /session/{id}/message` 拉会话消息，转换后与 DB 合并返回
    * `{items, source:'session'}`（items 时间正序，无游标——前端游标参数忽略）；
    * 未绑定 / worker 不可用 → 回退平台 messages 表（`{items, nextCursor, source:'db'}`，
-   * 复用 findMessages 首页语义）。群聊（task_group）不支持 → 400
+   * 复用 findMessages 首页语义）。群聊（team_group）不支持 → 400
    * SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）。
    */
   async getSessionHistory(channelId: string, userId: string) {
@@ -786,8 +776,6 @@ export class ChatService {
       id?: string;
       status: string;
       teamId?: string | null;
-      mainAgentInstanceId?: string | null;
-      mainAgentId?: string | null;
     };
     if (senderType === SENDER_TYPE.external) {
       const row = await this.prisma.chatChannel.findUnique({
@@ -811,8 +799,6 @@ export class ChatService {
               id: true,
               status: true,
               teamId: true,
-              mainAgentInstanceId: true,
-              mainAgentId: true,
             },
           });
           if (t) task = t;
@@ -874,8 +860,7 @@ export class ChatService {
     );
 
     const isTeamGroup = channel.type === CHANNEL_TYPE.team_group;
-    const isTaskGroup = channel.type === CHANNEL_TYPE.task_group;
-    if ((isTeamGroup || isTaskGroup) && triggers.length === 0) {
+    if (isTeamGroup && triggers.length === 0) {
       const triggerTaskId = effectiveTaskId ?? (channel as any).taskId;
       // team-only 主回退：任务上下文经团队主成员门（mainAgentMemberId→首位）定位团队会话；
       // 零任务团队直聊沿用分派器即建即得路径（语义不变）。
@@ -1060,8 +1045,8 @@ export class ChatService {
       );
     }
 
-    // 群触发 DM 镜像（dm-mirror）：team_group/task_group（同一 createMessage
-    // 主路径，task_group 共享码道故一并覆盖）来源的用户消息，为每个回答该消息
+    // 群触发 DM 镜像（dm-mirror）：team_group（同一 createMessage 主路径）
+    // 来源的用户消息，为每个回答该消息
     // 的 agent 在其私聊频道落一条触发消息的逐字拷贝，使 DM 呈现完整 Q&A 上下文
     // （前端按 content parts 原样渲染）。
     // - 显式 @agent：与 trigger 按 agentId 1:1 配对消费。
@@ -1075,7 +1060,7 @@ export class ChatService {
     //   函数），每目标恰好一次。
     // - DM 无任务分区语义：镜像 taskId 置空（与私聊直发一致，历史跨任务保留）。
     if (
-      (isTeamGroup || isTaskGroup) &&
+      isTeamGroup &&
       senderType === SENDER_TYPE.user &&
       channel.teamId &&
       triggers.length > 0
@@ -1155,7 +1140,9 @@ export class ChatService {
             select: { id: true, alias: true },
           })) as Array<{ id: string; alias: string | null }>;
           const nameOf = (instanceId: string | null | undefined) =>
-            members.find((m) => m.id === instanceId)?.alias ?? instanceId ?? '?';
+            members.find((m) => m.id === instanceId)?.alias ??
+            instanceId ??
+            '?';
           for (const t of triggers) {
             if (
               (t as any).status === 'dispatched' &&
@@ -1182,7 +1169,10 @@ export class ChatService {
                   taskId: effectiveTaskId ?? null,
                   senderType: SENDER_TYPE.system,
                   senderId: null,
-                  content: { text: hintText, parts: [] } as Prisma.InputJsonValue,
+                  content: {
+                    text: hintText,
+                    parts: [],
+                  } as Prisma.InputJsonValue,
                   mentions: [] as Prisma.InputJsonValue,
                   status: MESSAGE_STATUS.sent,
                 } as any,
@@ -1219,7 +1209,7 @@ export class ChatService {
     let shouldDispatch = true;
     let queueHint: { position: number; currentTaskId: string | null } | null =
       null;
-    if (channel.teamId && effectiveTaskId && (isTeamGroup || isTaskGroup)) {
+    if (channel.teamId && effectiveTaskId && isTeamGroup) {
       // 优先用 task.status 判定 queued；其次校验队首一致性（防 pending 双头脏数据）
       if (task.status === TASK_STATUS.queued) {
         shouldDispatch = false;
@@ -1644,8 +1634,6 @@ export class ChatService {
       id?: string;
       status: string;
       teamId?: string | null;
-      mainAgentInstanceId?: string | null;
-      mainAgentId?: string | null;
     };
   }> {
     const channel = await this.prisma.chatChannel.findUnique({
@@ -1678,8 +1666,6 @@ export class ChatService {
             id: true,
             status: true,
             teamId: true,
-            mainAgentInstanceId: true,
-            mainAgentId: true,
           },
         });
       } else if (row.taskId) {
@@ -1699,8 +1685,6 @@ export class ChatService {
               id: true,
               status: true,
               teamId: true,
-              mainAgentInstanceId: true,
-              mainAgentId: true,
             },
           });
         }
@@ -1714,8 +1698,6 @@ export class ChatService {
               id: true,
               status: true,
               teamId: true,
-              mainAgentInstanceId: true,
-              mainAgentId: true,
             },
           });
         }
@@ -1766,36 +1748,10 @@ export class ChatService {
         } as any,
       };
     }
-    const legacyTask = (row as any).task;
-    if (!legacyTask) {
-      throw new NotFoundException({
-        code: CHAT_ERRORS.CHANNEL_NOT_FOUND,
-        message: '频道不存在',
-      });
-    }
-    // 旧 task_group 频道：任务有 teamId 归属时走团队成员校验，
-    // 无归属时 fail closed（project_members 表已拆除，无回退链）。
-    const legacyTeamId =
-      (legacyTask.teamId as string | null | undefined) ?? null;
-    if (!legacyTeamId) {
-      throw new ForbiddenException({
-        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该团队成员',
-      });
-    }
-    const teamMember = await (this.prisma as any).teamUserMember.findUnique({
-      where: {
-        teamId_userId: { teamId: legacyTeamId, userId },
-      },
-      select: { id: true },
+    throw new NotFoundException({
+      code: CHAT_ERRORS.CHANNEL_NOT_FOUND,
+      message: '频道不存在',
     });
-    if (!teamMember) {
-      throw new ForbiddenException({
-        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该团队成员',
-      });
-    }
-    return { channel: row, task: legacyTask };
   }
 
   /**
@@ -1830,7 +1786,8 @@ export class ChatService {
 
   private async resolveMentions(
     key: string | { teamId?: string | null; taskId?: string | null },
-    mentions: MentionInput[],  ): Promise<{ mentionsStored: MentionInput[]; triggers: TriggerResult[] }> {
+    mentions: MentionInput[],
+  ): Promise<{ mentionsStored: MentionInput[]; triggers: TriggerResult[] }> {
     let teamId: string | null = null;
     let taskId: string | null = null;
     if (typeof key === 'string') {
@@ -1998,7 +1955,7 @@ export class ChatService {
         ? { id: (row as any).team.id, name: (row as any).team.name }
         : undefined,
       // D1（agent-role-decommission todo 5）：`role` 字段名保留，值为频道成员绑定角色的
-      // 机器键 `AgentRole.key`；频道无成员绑定（存量 task_group/无 teamMember 的频道）→ null。
+      // 机器键 `AgentRole.key`；频道无成员绑定 → null。
       agent: row.agent
         ? {
             id: row.agent.id,

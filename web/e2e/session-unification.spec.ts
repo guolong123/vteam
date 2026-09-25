@@ -71,8 +71,7 @@ function taskFixture(sessionStatuses: [string | null, string | null, string | nu
     description: null,
     priority: "P1",
     status: "in_progress",
-    mainAgentId: "a_developer",
-    mainAgentInstanceId: "ta_1",
+    mainAgentMemberId: "tmm_1",
     managedMode: false,
     backgroundDocs: [],
     teamAgentIds: ["a_developer", "a_tester", "a_architect"],
@@ -153,7 +152,7 @@ async function installMocks(page: Page, taskSessions: [string | null, string | n
 }
 
 test.describe("Todo12 团队会话团队化", () => {
-  test.use({ storageState: "/Users/mac/01work/git-project/vteam/web/.auth/user.json" });
+  test.use({ storageState: path.join(process.cwd(), ".auth", "user.json") });
 
   test.beforeAll(() => {
     fs.mkdirSync(EVIDENCE_DIR, { recursive: true });

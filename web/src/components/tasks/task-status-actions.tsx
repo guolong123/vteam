@@ -28,34 +28,22 @@ import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/them
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** 后端五态（TASK_STATUS，对齐 board / tasks 页局部类型）。 */
-export type TaskApiStatus =
-  | "queued"
-  | "pending"
-  | "in_progress"
-  | "blocked"
-  | "pending_review"
-  | "completed"
-  | "archived";
-
-/** 可执行操作 key（对齐后端端点后缀）。 */
-type TaskAction = "start" | "mark-pending-review" | "accept" | "reject" | "archive" | "block" | "resume";
+/** 后端七态与流转表唯一定义见 `@/src/types/task-status`；此处重导出类型供既有调用方兼容。 */
+export type { TaskApiStatus, TaskAction } from "@/src/types/task-status";
+import { ACTION_SETS } from "@/src/types/task-status";
+import type { TaskAction, TaskApiStatus } from "@/src/types/task-status";
 
 interface TaskStatusActionsProps {
   taskId: string;
   status: TaskApiStatus;
+  /**
+   * `column`（默认）竖向堆叠：看板卡片/详情抽屉依赖此形态，不可改默认值；
+   * `row` 等宽并排一行：会话页状态卡使用，仅操作数 ≥2 时生效。
+   */
+  layout?: "column" | "row";
 }
 
-/** 各状态可执行操作组（archived 终态返回 null 不渲染）。 */
-const ACTION_SETS: Record<TaskApiStatus, TaskAction[] | null> = {
-  queued: null,
-  pending: ["start"],
-  in_progress: ["mark-pending-review", "block"],
-  blocked: ["resume"],
-  pending_review: ["accept", "reject"],
-  completed: ["archive"],
-  archived: null,
-};
+/** 各状态可执行操作组（唯一定义见 `@/src/types/task-status`，此处直接引用导入的 `ACTION_SETS`）。 */
 
 /** 操作元信息：按钮文案 / 强调色 / pending 文案。颜色对齐既有状态语义（进行中蓝/完成绿/驳回琥珀/归档灰）。中性色用固定深灰（neutral token 在暗色下翻转会变浅，白字压不住）。 */
 const ACTION_META: Record<TaskAction, { label: string; color: string; pendingLabel: string }> = {
@@ -126,7 +114,7 @@ function ActionButton({
  * 按任务状态渲染操作按钮组 + reject 原因弹窗。
  * 内部持有 mutation（onSettled 失效任务缓存），调用方无需感知请求细节。
  */
-export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
+export function TaskStatusActions({ taskId, status, layout = "column" }: TaskStatusActionsProps) {
   const queryClient = useQueryClient();
   const [actionError, setActionError] = useState<string | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -200,9 +188,7 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
   const teamSize: number = Array.isArray(taskDetail?.instances)
     ? taskDetail.instances.length
     : 0;
-  // 主 Agent 判定唯一依据 instances[].main（服务端按 team.mainAgentMemberId 算）；
-  // task.mainAgentInstanceId/mainAgentId 是已停写的历史标量，in_progress 任务的主变更
-  // 刻意不同步它——读标量会误判「未设主」。
+  // 主 Agent 判定唯一依据 instances[].main（服务端按 team.mainAgentMemberId 算）。
   const hasMainAgent: boolean = Array.isArray(taskDetail?.instances)
     ? taskDetail.instances.some((i: { main?: boolean }) => i.main === true)
     : false;
@@ -264,6 +250,19 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
     actionMutation.mutate({ action: forceTarget, force: true });
   };
 
+  /** 主操作按钮节点（row 布局下会被包进等宽网格；column 布局下直接作为竖排子节点）。 */
+  const actionButtons = actions.map((action) => (
+    <ActionButton
+      key={action}
+      action={action}
+      pending={pending}
+      disabled={pending}
+      onClick={() => handleAction(action)}
+    />
+  ));
+  /** row 布局且操作数 ≥2 才分列；单操作整行（否则会出现半宽孤按钮）。 */
+  const useRowGrid = layout === "row" && actions.length > 1;
+
   return (
     <div
       style={{
@@ -275,15 +274,20 @@ export function TaskStatusActions({ taskId, status }: TaskStatusActionsProps) {
         ...baseFont,
       }}
     >
-      {actions.map((action) => (
-        <ActionButton
-          key={action}
-          action={action}
-          pending={pending}
-          disabled={pending}
-          onClick={() => handleAction(action)}
-        />
-      ))}
+      {useRowGrid ? (
+        <div
+          data-testid="task-status-actions-row"
+          style={{
+            display: "grid",
+            gridTemplateColumns: `repeat(${actions.length}, 1fr)`,
+            gap: space.sm,
+          }}
+        >
+          {actionButtons}
+        </div>
+      ) : (
+        actionButtons
+      )}
       {status === "pending" && teamId && (
         <button
           type="button"

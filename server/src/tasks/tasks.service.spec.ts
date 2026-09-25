@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { IdGeneratorService } from '../common/id-generator';
-import { EVENT_TYPES } from '../common/constants/event.constants';
+import { CHANNEL_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { TASK_ERRORS } from '../common/constants/task.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -66,6 +66,8 @@ describe('TasksService', () => {
   let sessionLifecycle: {
     getInstancesByTeamMember: jest.Mock;
     getInstanceBySession: jest.Mock;
+    resetTeamSessionsInTx: jest.Mock;
+    resetTeamSessions: jest.Mock;
   };
 
   const userId = 'u_admin';
@@ -124,8 +126,6 @@ describe('TasksService', () => {
     description: null,
     priority: 'medium',
     status: 'pending',
-    mainAgentId: null,
-    mainAgentInstanceId: null,
     managedMode: false,
     executionMode: 'direct',
     backgroundDocs: null,
@@ -148,7 +148,11 @@ describe('TasksService', () => {
   ) => {
     const base: Record<
       string,
-      { alias: string; name: string; role: { key: string; name: string } | null }
+      {
+        alias: string;
+        name: string;
+        role: { key: string; name: string } | null;
+      }
     > = {
       a_product: {
         alias: '产品经理-1',
@@ -166,9 +170,11 @@ describe('TasksService', () => {
         role: { key: 'tester', name: '测试' },
       },
     };
-    const b =
-      base[agentId] ??
-      { alias: agentId, name: agentId, role: { key: agentId, name: agentId } };
+    const b = base[agentId] ?? {
+      alias: agentId,
+      name: agentId,
+      role: { key: agentId, name: agentId },
+    };
     return {
       id,
       teamId: 'tm_0000000001',
@@ -196,31 +202,31 @@ describe('TasksService', () => {
       taskEvent: { create: jest.fn() },
       message: { create: jest.fn(), findFirst: jest.fn() },
       agent: { findMany: jest.fn(), findUnique: jest.fn() },
-    // 绑定解析经外层 prisma 读角色（teams resolver 同）：默认返回内置岗位行
-    // （Q5：成员必须绑定岗位；显式 agentId 的用例也须给出 roleId），用例可覆盖。
-    agentRole: {
-      findUnique: jest.fn().mockImplementation(
-        async ({ where }: { where: { id: string } }) =>
-          (
-            {
-              r_developer: {
-                id: 'r_developer',
-                key: 'developer',
-                name: '开发者',
-                defaultAgentId: 'a_developer',
-                defaultOpencodeAgentName: null,
-              },
-              r_product: {
-                id: 'r_product',
-                key: 'product',
-                name: '产品经理',
-                defaultAgentId: 'a_product',
-                defaultOpencodeAgentName: null,
-              },
-            } as Record<string, unknown>
-          )[where.id] ?? null,
-      ),
-    },
+      // 绑定解析经外层 prisma 读角色（teams resolver 同）：默认返回内置岗位行
+      // （Q5：成员必须绑定岗位；显式 agentId 的用例也须给出 roleId），用例可覆盖。
+      agentRole: {
+        findUnique: jest.fn().mockImplementation(
+          async ({ where }: { where: { id: string } }) =>
+            (
+              ({
+                r_developer: {
+                  id: 'r_developer',
+                  key: 'developer',
+                  name: '开发者',
+                  defaultAgentId: 'a_developer',
+                  defaultOpencodeAgentName: null,
+                },
+                r_product: {
+                  id: 'r_product',
+                  key: 'product',
+                  name: '产品经理',
+                  defaultAgentId: 'a_product',
+                  defaultOpencodeAgentName: null,
+                },
+              }) as Record<string, unknown>
+            )[where.id] ?? null,
+        ),
+      },
       session: {
         create: jest.fn(),
         updateMany: jest.fn(),
@@ -268,13 +274,9 @@ describe('TasksService', () => {
     sessionLifecycle = {
       getInstancesByTeamMember: jest.fn().mockResolvedValue([]),
       getInstanceBySession: jest.fn().mockResolvedValue(null),
-    } as any;
-    (sessionLifecycle as any).resetTeamSessionsInTx = jest
-      .fn()
-      .mockResolvedValue(2);
-    (sessionLifecycle as any).resetTeamSessions = jest
-      .fn()
-      .mockResolvedValue(2);
+      resetTeamSessionsInTx: jest.fn().mockResolvedValue(2),
+      resetTeamSessions: jest.fn().mockResolvedValue(2),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -374,7 +376,7 @@ describe('TasksService', () => {
     return txModels;
   };
 
-  /** 状态机系统消息落库断言：任务群聊频道（task_group）写入 senderType=system 的精确文案。 */
+  /** 状态机系统消息落库断言：任务群聊频道（team_group）写入 senderType=system 的精确文案。 */
   const assertSysMessageCreated = (
     tx: { message: { create: jest.Mock } },
     channelId: string,
@@ -589,11 +591,11 @@ describe('TasksService', () => {
           data: expect.objectContaining({
             teamId,
             status: 'pending',
-            mainAgentId: null,
-            mainAgentInstanceId: null,
           }),
         }),
       );
+      const createData = tx.task.create.mock.calls[0][0].data;
+      expect(createData).not.toHaveProperty('executionMode');
       expect(tx.team.updateMany).toHaveBeenCalledWith({
         where: { id: teamId, version: 0 },
         data: { currentTaskId: taskId, version: { increment: 1 } },
@@ -612,7 +614,7 @@ describe('TasksService', () => {
       );
     });
 
-    it('团队有主 Agent 时创建任务继承主实例（无设定则保持 null）', async () => {
+    it('团队主成员变化时创建任务返回团队派生身份', async () => {
       const taskId = 't_0000000003';
       const tx = setupTxIdle(taskId);
       tx.team.findUnique.mockResolvedValue({
@@ -622,6 +624,10 @@ describe('TasksService', () => {
         reuseSession: true,
         mainAgentMemberId: 'tmm_0000000002',
       } as any);
+      prisma.team.findUnique.mockResolvedValue({
+        id: teamId,
+        mainAgentMemberId: 'tmm_0000000002',
+      });
       idGen.nextId
         .mockResolvedValueOnce(taskId)
         .mockResolvedValueOnce('c_0000000001')
@@ -629,16 +635,19 @@ describe('TasksService', () => {
         .mockResolvedValueOnce('tmm_0000000002')
         .mockResolvedValueOnce('te_0000000001');
 
-      await service.create(userId, { title: '继承主 Agent', teamId } as any);
+      const result = await service.create(userId, {
+        title: '继承主 Agent',
+        teamId,
+      } as any);
 
+      expect(result.mainAgentMemberId).toBe('tmm_0000000002');
       expect(tx.task.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({
-            mainAgentId: 'a_developer',
-            mainAgentInstanceId: 'tmm_0000000002',
-          }),
+          data: expect.objectContaining({ teamId }),
         }),
       );
+      const createData = tx.task.create.mock.calls[0][0].data;
+      expect(createData).not.toHaveProperty('executionMode');
     });
 
     it('忙时团队：创建 queued 任务，写入 TeamQueue position=MAX+1 FOR UPDATE，currentTaskId 不变', async () => {
@@ -676,6 +685,113 @@ describe('TasksService', () => {
         expect.objectContaining({ position: 2, status: 'queued' }),
         { type: 'team', id: teamId },
       );
+    });
+
+    it('createTaskInternal team-row lock（site :348）：非 sqlite 引擎通用锁失败直接抛出，不走无锁 findUnique 降级', async () => {
+      const prevDbType = process.env.DB_TYPE;
+      const prevDbUrl = process.env.DATABASE_URL;
+      process.env.DB_TYPE = 'mysql';
+      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
+      try {
+        const taskId = 't_0000000009';
+        const tx = setupTxIdle(taskId);
+        const lockFailure = new Error('lock wait timeout exceeded');
+        tx.$queryRawUnsafe.mockRejectedValue(lockFailure);
+        await expect(
+          service.create(userId, { title: '锁失败', teamId }),
+        ).rejects.toThrow('lock wait timeout exceeded');
+        expect(tx.team.findUnique).not.toHaveBeenCalled();
+        expect(tx.task.create).not.toHaveBeenCalled();
+      } finally {
+        if (prevDbType === undefined) delete process.env.DB_TYPE;
+        else process.env.DB_TYPE = prevDbType;
+        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = prevDbUrl;
+      }
+    });
+
+    it('createTaskInternal FIFO position（site :364）：非 sqlite 引擎锁查询与 aggregate 双失败时直接抛出，不伪造 position = 1', async () => {
+      const prevDbType = process.env.DB_TYPE;
+      const prevDbUrl = process.env.DATABASE_URL;
+      process.env.DB_TYPE = 'mysql';
+      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
+      try {
+        const taskId = 't_0000000023';
+        const tx = setupTxBusy(taskId, 5);
+        const lockFailure = new Error('lock wait timeout exceeded');
+        tx.$queryRawUnsafe
+          .mockResolvedValueOnce([
+            {
+              id: teamId,
+              version: 1,
+              currentTaskId: 't_0000000009',
+              reuseSession: 1,
+              mainAgentMemberId: null,
+            },
+          ])
+          .mockRejectedValue(lockFailure);
+        tx.teamQueue.aggregate.mockRejectedValue(
+          new Error('aggregate unavailable'),
+        );
+        await expect(
+          service.create(userId, { title: '双失败', teamId }),
+        ).rejects.toThrow('lock wait timeout exceeded');
+        expect(tx.task.create).not.toHaveBeenCalled();
+        expect(tx.teamQueue.create).not.toHaveBeenCalled();
+      } finally {
+        if (prevDbType === undefined) delete process.env.DB_TYPE;
+        else process.env.DB_TYPE = prevDbType;
+        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = prevDbUrl;
+      }
+    });
+
+    it('createTaskInternal team channel ensure（Todo 24）：channel create 失败中止事务，任务行不提交、无后续广播', async () => {
+      const taskId = 't_0000000024';
+      const tx = setupTxIdle(taskId);
+      tx.chatChannel.findFirst = jest.fn().mockResolvedValue(null);
+      tx.chatChannel.create.mockRejectedValue(new Error('channel unavailable'));
+      await expect(
+        service.create(userId, { title: '通道失败', teamId }),
+      ).rejects.toThrow('channel unavailable');
+      // 同一事务内通道保障失败 → 事务函数抛错回滚：通道之后的写与广播均未发生
+      expect(tx.taskEvent.create).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('createTaskInternal team channel ensure：已有其他类型频道时仍创建独立 team_group', async () => {
+      const taskId = 't_0000000025';
+      const tx = setupTxIdle(taskId);
+      // 旧实现会在这第二次宽查询中看到 private 频道并跳过创建；当前实现只认
+      // team_group 查询，因此仍必须为团队创建唯一的 team_group。
+      tx.chatChannel.findFirst = jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'c_private',
+          type: CHANNEL_TYPE.private,
+          teamId,
+          taskId: null,
+        });
+
+      await service.create(userId, { title: '团队新群', teamId });
+
+      expect(tx.chatChannel.findFirst).toHaveBeenCalledTimes(1);
+      expect(tx.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId,
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+      });
+      expect(tx.chatChannel.create).toHaveBeenCalledWith({
+        data: {
+          id: 'c_0000000001',
+          type: CHANNEL_TYPE.team_group,
+          teamId,
+          taskId: null,
+        },
+      });
     });
 
     it('并发：version CAS 重试3次，最终仅一个 pending 其余 queued（模拟首试冲突后重试成功）', async () => {
@@ -1114,9 +1230,13 @@ describe('TasksService', () => {
       const result = await service.findAll({ page: 1, pageSize: 20 });
 
       const byId = new Map(
-        (result.items[0].instances as Array<{ id: string; alias: string; role: string | null }>).map(
-          (i) => [i.id, i],
-        ),
+        (
+          result.items[0].instances as Array<{
+            id: string;
+            alias: string;
+            role: string | null;
+          }>
+        ).map((i) => [i.id, i]),
       );
       expect(byId.get('tmm_0000000001')).toMatchObject({
         alias: `${PRE_MIGRATION_LABEL}-1`,
@@ -1169,7 +1289,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           teamId: 'tm_0000000001',
-          mainAgentInstanceId: 'tmm_0000000001',
           backgroundDocs: [{ name: '需求文档.pdf' }],
         }),
       );
@@ -1189,7 +1308,7 @@ describe('TasksService', () => {
         id: 't_0000000001',
         title: '任务标题',
         status: 'pending',
-        mainAgentInstanceId: 'tmm_0000000001',
+        mainAgentMemberId: 'tmm_0000000001',
         teamAgentIds: ['a_product', 'a_developer'],
       });
       // main 标记 = 团队主成员（team.mainAgentMemberId）
@@ -1273,6 +1392,28 @@ describe('TasksService', () => {
       }
     });
 
+    it('详情 DTO 暴露 resetAfterComplete：显式设置与入参一致，未设置缺省 false', async () => {
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+      });
+      prisma.teamMember.findMany.mockResolvedValue([]);
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001', resetAfterComplete: true }),
+      );
+      expect(await service.findOne('t_0000000001')).toMatchObject({
+        resetAfterComplete: true,
+      });
+
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001' }),
+      );
+      const def = await service.findOne('t_0000000001');
+      expect(def.resetAfterComplete).toBe(false);
+    });
+
     it('任务不存在 → 404 TASK_NOT_FOUND', async () => {
       prisma.task.findUnique.mockResolvedValue(null);
 
@@ -1291,128 +1432,6 @@ describe('TasksService', () => {
   });
 
   describe('update（PATCH 编辑）', () => {
-    it('mainAgentId 为团队内已选 Agent 时更新成功（同步映射到第一个实例）', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.teamMember.findMany.mockResolvedValue([
-        memberRow('a_product'),
-        memberRow('a_developer'),
-      ]);
-      prisma.task.update.mockResolvedValue(
-        row({
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
-          title: '改名',
-        }),
-      );
-
-      const result = await service.update('t_0000000001', {
-        title: '改名',
-        mainAgentId: 'a_product',
-      } as any);
-
-      expect(prisma.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: {
-          title: '改名',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
-        },
-      });
-      expect(result).toMatchObject({
-        title: '改名',
-        mainAgentId: 'a_product',
-        mainAgentInstanceId: 'tmm_0000000001',
-      });
-    });
-
-    it('mainAgentInstanceId 为团队内实例时更新成功（同步 mainAgentId）', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.teamMember.findMany.mockResolvedValue([
-        memberRow('a_product'),
-        memberRow('a_developer'),
-      ]);
-      prisma.task.update.mockResolvedValue(
-        row({
-          mainAgentId: 'a_developer',
-          mainAgentInstanceId: 'tmm_0000000002',
-        }),
-      );
-
-      const result = await service.update('t_0000000001', {
-        mainAgentInstanceId: 'tmm_0000000002',
-      } as any);
-
-      expect(prisma.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: {
-          mainAgentInstanceId: 'tmm_0000000002',
-          mainAgentId: 'a_developer',
-        },
-      });
-      expect(result).toMatchObject({ mainAgentInstanceId: 'tmm_0000000002' });
-    });
-
-    it('mainAgentInstanceId 非团队内实例 → 400 MAIN_AGENT_NOT_IN_TEAM', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.teamMember.findMany.mockResolvedValue([memberRow('a_product')]);
-
-      await expect(
-        service.update('t_0000000001', {
-          mainAgentInstanceId: 'tmm_ghost',
-        } as any),
-      ).rejects.toThrow(BadRequestException);
-      try {
-        await service.update('t_0000000001', {
-          mainAgentInstanceId: 'tmm_ghost',
-        } as any);
-        fail('应抛出 BadRequestException');
-      } catch (e) {
-        expect((e as BadRequestException).getResponse()).toMatchObject({
-          code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-        });
-      }
-      expect(prisma.task.update).not.toHaveBeenCalled();
-    });
-
-    it('mainAgentInstanceId 传 null → 清除主 Agent（mainAgentId 同步 null）', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.task.update.mockResolvedValue(
-        row({ mainAgentId: null, mainAgentInstanceId: null }),
-      );
-
-      await service.update('t_0000000001', {
-        mainAgentInstanceId: null,
-      } as any);
-
-      expect(prisma.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: { mainAgentInstanceId: null, mainAgentId: null },
-      });
-    });
-
-    it('mainAgentId 非团队内已选 Agent → 400 MAIN_AGENT_NOT_IN_TEAM', async () => {
-      prisma.task.findUnique.mockResolvedValue(row());
-      prisma.teamMember.findMany.mockResolvedValue([
-        memberRow('a_product'),
-        memberRow('a_developer'),
-      ]);
-
-      await expect(
-        service.update('t_0000000001', { mainAgentId: 'a_tester' } as any),
-      ).rejects.toThrow(BadRequestException);
-      try {
-        await service.update('t_0000000001', {
-          mainAgentId: 'a_tester',
-        } as any);
-        fail('应抛出 BadRequestException');
-      } catch (e) {
-        expect((e as BadRequestException).getResponse()).toMatchObject({
-          code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-        });
-      }
-      expect(prisma.task.update).not.toHaveBeenCalled();
-    });
-
     it('任务不存在 → 404 TASK_NOT_FOUND', async () => {
       prisma.task.findUnique.mockResolvedValue(null);
 
@@ -1446,21 +1465,17 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 3,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 4,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
             startedAt: new Date(),
           }),
         );
       prisma.chatChannel.findFirst
-        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // team_group 频道
         .mockResolvedValueOnce({ id: 'c_0000000002' }); // 主成员 private 频道
       prisma.teamMember.findUnique.mockResolvedValue({
         id: 'tmm_0000000001',
@@ -1499,6 +1514,15 @@ describe('TasksService', () => {
       expect(txModels.session.updateMany).toHaveBeenCalledWith({
         where: { taskId: 't_0000000001', status: 'created' },
         data: { status: 'active' },
+      });
+      // 群聊系统消息只解析任务归属团队的 team_group
+      expect(prisma.chatChannel.findFirst).toHaveBeenNthCalledWith(1, {
+        where: {
+          teamId: 'tm_0000000001',
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+        select: { id: true },
       });
       // 私信定位按成员：private 频道查找 where 含 teamMemberId=主成员
       expect(prisma.chatChannel.findFirst).toHaveBeenNthCalledWith(2, {
@@ -1562,8 +1586,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           status: 'pending_review',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
         }),
       );
 
@@ -1581,8 +1603,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           status: 'in_progress',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
         }),
       );
 
@@ -1599,16 +1619,12 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 0,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
             startedAt: new Date(),
           }),
         );
@@ -1631,8 +1647,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           status: 'pending',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
           legacySnapshots: [],
         }),
       );
@@ -1649,8 +1663,6 @@ describe('TasksService', () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           status: 'pending',
-          mainAgentId: null,
-          mainAgentInstanceId: null,
         }),
       );
       prisma.team.findUnique.mockResolvedValue({
@@ -1674,16 +1686,12 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 3,
-            mainAgentId: null,
-            mainAgentInstanceId: null,
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 4,
-            mainAgentId: null,
-            mainAgentInstanceId: null,
             startedAt: new Date(),
           }),
         );
@@ -1736,8 +1744,6 @@ describe('TasksService', () => {
             status: 'pending',
             version: 3,
             teamId: 'tm_1',
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -1745,8 +1751,6 @@ describe('TasksService', () => {
             status: 'in_progress',
             version: 4,
             teamId: 'tm_1',
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
             startedAt: new Date(),
           }),
         );
@@ -1796,8 +1800,6 @@ describe('TasksService', () => {
         row({
           status: 'pending',
           teamId: 'tm_1',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
         }),
       );
       (prisma.team.findUnique as jest.Mock).mockResolvedValue({
@@ -1824,8 +1826,6 @@ describe('TasksService', () => {
         row({
           status: 'pending',
           teamId: 'tm_1',
-          mainAgentId: 'a_product',
-          mainAgentInstanceId: 'tmm_0000000001',
         }),
       );
       (prisma.team.findUnique as jest.Mock).mockResolvedValue({
@@ -1874,7 +1874,7 @@ describe('TasksService', () => {
           toStatus: 'pending_review',
         }),
       });
-      // 系统消息落库：task_group 频道 senderType=system（10 篇 §8.1）
+      // 系统消息落库：team_group 频道 senderType=system（10 篇 §8.1）
       assertSysMessageCreated(txModels, 'c_0000000001', '任务已提交待验收');
       expect(realtime.broadcast).toHaveBeenCalledWith(
         EVENT_TYPES.TASK_STATUS_CHANGED,
@@ -2014,8 +2014,6 @@ describe('TasksService', () => {
           row({
             status: 'pending_review',
             version: 4,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -2023,12 +2021,10 @@ describe('TasksService', () => {
             status: 'completed',
             version: 5,
             completedAt: new Date(),
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         );
       prisma.chatChannel.findFirst
-        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // team_group 频道
         .mockResolvedValueOnce({ id: 'c_0000000002' }); // 主成员 private 频道
       prisma.teamMember.findUnique.mockResolvedValue({
         id: 'tmm_0000000001',
@@ -2111,7 +2107,7 @@ describe('TasksService', () => {
 
       const result = await service.accept('t_0000000001', userId);
 
-      // 仅解析 task_group 频道一次（回退无成员，不查 private）
+      // 仅解析 team_group 频道一次（回退无成员，不查 private）
       expect(prisma.chatChannel.findFirst).toHaveBeenCalledTimes(1);
       // 仅一条群聊系统消息，无私信落库
       expect(txModels.message.create).toHaveBeenCalledTimes(1);
@@ -2137,7 +2133,7 @@ describe('TasksService', () => {
       } as any);
       prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_first' });
       prisma.chatChannel.findFirst
-        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // team_group 频道
         .mockResolvedValueOnce({ id: 'c_0000000002' }); // 回退主成员 private 频道
       prisma.teamMember.findUnique.mockResolvedValue({
         id: 'tmm_first',
@@ -2314,12 +2310,12 @@ describe('TasksService', () => {
       await expect(service.block('t_0000000001', userId, '')).rejects.toThrow(
         BadRequestException,
       );
-      await expect(service.block('t_0000000001', userId, '   ')).rejects.toThrow(
+      await expect(
+        service.block('t_0000000001', userId, '   '),
+      ).rejects.toThrow(BadRequestException);
+      await expect(service.block('t_0000000001', userId)).rejects.toThrow(
         BadRequestException,
       );
-      await expect(
-        service.block('t_0000000001', userId),
-      ).rejects.toThrow(BadRequestException);
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
@@ -2488,16 +2484,12 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 0,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         );
       const txModels = {
@@ -2528,32 +2520,24 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 0,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValueOnce(
           row({
             status: 'in_progress',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValueOnce(
           row({
             status: 'pending',
             version: 0,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         );
       // 每次 start 均先查 group 频道再查 private 频道（两个并发 start 共 4 次）
@@ -2637,21 +2621,17 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 3,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
           row({
             status: 'in_progress',
             version: 4,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
             startedAt: new Date(),
           }),
         );
       prisma.chatChannel.findFirst
-        .mockResolvedValueOnce({ id: 'c_0000000001' }) // task_group 频道
+        .mockResolvedValueOnce({ id: 'c_0000000001' }) // team_group 频道
         .mockResolvedValueOnce({ id: 'c_0000000002' }); // 主成员 private 频道
       prisma.teamMember.findUnique.mockResolvedValue({
         id: 'tmm_0000000001',
@@ -2715,8 +2695,6 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -2757,8 +2735,6 @@ describe('TasksService', () => {
           row({
             status: 'in_progress',
             version: 5,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_first',
           }),
         )
         .mockResolvedValue(
@@ -2806,8 +2782,6 @@ describe('TasksService', () => {
           row({
             status: 'pending',
             version: 1,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_first',
           }),
         )
         .mockResolvedValue(
@@ -2884,8 +2858,6 @@ describe('TasksService', () => {
           row({
             status: 'pending_review',
             version: 2,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -2931,8 +2903,6 @@ describe('TasksService', () => {
           row({
             status: 'in_progress',
             version: 5,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           }),
         )
         .mockResolvedValue(
@@ -3383,6 +3353,14 @@ describe('TasksService', () => {
         userId,
       );
 
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId: 'tm_0000000001',
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
       expect(txModels.teamMember.create).toHaveBeenCalledWith({
         data: {
           id: 'tmm_0000000002',
@@ -3594,20 +3572,14 @@ describe('TasksService', () => {
       expect(result.teamAgentIds).toEqual(['a_product']);
     });
 
-    it('remove 主成员 → 团队主成员清空（任务侧主标量同步 null）', async () => {
-      prisma.task.findUnique
-        .mockResolvedValueOnce(
-          row({
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
-          }),
-        )
-        .mockResolvedValue(
-          row({ mainAgentId: null, mainAgentInstanceId: null }),
-        );
+    it('remove 主成员 → 团队主成员清空', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
       prisma.teamMember.findMany.mockResolvedValue([
         tmmRow('tmm_0000000001', 'a_product'),
       ]);
+      (prisma.team.findUnique as jest.Mock)
+        .mockResolvedValueOnce({ mainAgentMemberId: 'tmm_0000000001' })
+        .mockResolvedValue({ mainAgentMemberId: null });
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
       idGen.nextId.mockResolvedValueOnce('m_0000000001');
       const txModels = mockTeamTx();
@@ -3618,12 +3590,12 @@ describe('TasksService', () => {
         userId,
       );
 
-      expect(txModels.task.update).toHaveBeenCalledWith({
-        where: { id: 't_0000000001' },
-        data: { mainAgentId: null, mainAgentInstanceId: null },
+      expect(txModels.task.update).not.toHaveBeenCalled();
+      expect(txModels.team.update).toHaveBeenCalledWith({
+        where: { id: 'tm_0000000001' },
+        data: { mainAgentMemberId: null },
       });
-      expect(result.mainAgentId).toBeNull();
-      expect(result.mainAgentInstanceId).toBeNull();
+      expect(result.mainAgentMemberId).toBeNull();
     });
 
     it('remove 不在团队/已移除 → 幂等 200：无事务、无广播', async () => {
@@ -3758,9 +3730,7 @@ describe('TasksService', () => {
       await service.updateTeam(
         't_0000000001',
         {
-          addInstances: [
-            { agentId: 'a_developer', roleId: 'r_developer' },
-          ],
+          addInstances: [{ agentId: 'a_developer', roleId: 'r_developer' }],
         },
         userId,
       );
@@ -4149,6 +4119,92 @@ describe('TasksService', () => {
       );
     });
 
+    it('promoteNextInTx team-row lock（site :590）：非 sqlite 引擎通用锁失败直接抛出，不走无锁 findUnique 降级', async () => {
+      const prevDbType = process.env.DB_TYPE;
+      const prevDbUrl = process.env.DATABASE_URL;
+      process.env.DB_TYPE = 'mysql';
+      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
+      try {
+        const lockFailure = new Error('connection reset by peer');
+        const tx: any = {
+          team: {
+            findUnique: jest.fn().mockResolvedValue({
+              id: teamId,
+              version: 2,
+              currentTaskId: 't_0000000001',
+            }),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          },
+          teamQueue: {
+            findFirst: jest.fn().mockResolvedValue(null),
+            findMany: jest.fn().mockResolvedValue([]),
+            deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+            update: jest.fn(),
+          },
+          task: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+          $queryRawUnsafe: jest.fn().mockRejectedValue(lockFailure),
+        };
+        prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+        await expect(service.promoteNext(teamId)).rejects.toThrow(
+          'connection reset by peer',
+        );
+        expect(tx.team.findUnique).not.toHaveBeenCalled();
+        expect(tx.team.updateMany).not.toHaveBeenCalled();
+      } finally {
+        if (prevDbType === undefined) delete process.env.DB_TYPE;
+        else process.env.DB_TYPE = prevDbType;
+        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = prevDbUrl;
+      }
+    });
+
+    it('promoteNextInTx team-queue lock（site :607）：非 sqlite 引擎队首锁查询失败直接抛出，不走无锁 findFirst 降级', async () => {
+      const prevDbType = process.env.DB_TYPE;
+      const prevDbUrl = process.env.DATABASE_URL;
+      process.env.DB_TYPE = 'mysql';
+      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
+      try {
+        const lockFailure = new Error('queue lock wait timeout exceeded');
+        const tx: any = {
+          team: {
+            findUnique: jest.fn().mockResolvedValue({
+              id: teamId,
+              version: 2,
+              currentTaskId: 't_0000000001',
+            }),
+            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+          },
+          teamQueue: {
+            findFirst: jest
+              .fn()
+              .mockResolvedValue({ taskId: 't_0000000002', position: 1 }),
+            findMany: jest.fn().mockResolvedValue([]),
+            deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+            update: jest.fn(),
+          },
+          task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+          // 首个锁查询（team 行锁）成功，第二个锁查询（队首锁）失败
+          $queryRawUnsafe: jest
+            .fn()
+            .mockResolvedValueOnce([{ id: teamId, version: 2 }])
+            .mockRejectedValue(lockFailure),
+        };
+        prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+        // 锁失败必须上浮：旧代码会吞错走无锁 findFirst 并静默晋升队首
+        await expect(service.promoteNext(teamId)).rejects.toThrow(
+          'queue lock wait timeout exceeded',
+        );
+        expect(tx.teamQueue.findFirst).not.toHaveBeenCalled();
+        expect(tx.team.updateMany).not.toHaveBeenCalled();
+        expect(tx.task.updateMany).not.toHaveBeenCalled();
+      } finally {
+        if (prevDbType === undefined) delete process.env.DB_TYPE;
+        else process.env.DB_TYPE = prevDbType;
+        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
+        else process.env.DATABASE_URL = prevDbUrl;
+      }
+    });
+
     it('archive：队列空则 currentTaskId=null，广播 idle', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(
@@ -4227,8 +4283,6 @@ describe('TasksService', () => {
           status: 'pending',
           version: 0,
           teamId,
-          mainAgentInstanceId: 'tmm_0000000001',
-          mainAgentId: 'a_product',
         } as any),
       );
       (prisma as any).team = {
@@ -4287,8 +4341,6 @@ describe('TasksService', () => {
             status: 'pending',
             version: 0,
             teamId,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           } as any),
         )
         .mockResolvedValue(
@@ -4297,8 +4349,6 @@ describe('TasksService', () => {
             status: 'in_progress',
             version: 1,
             teamId,
-            mainAgentId: 'a_product',
-            mainAgentInstanceId: 'tmm_0000000001',
           } as any),
         );
       (prisma as any).team = {
@@ -4563,6 +4613,83 @@ describe('TasksService', () => {
       expect(
         (sessionLifecycle as any).resetTeamSessionsInTx,
       ).toHaveBeenCalledWith(expect.any(Object), teamId);
+    });
+
+    it('accept 记忆开关 team 查询失败（site :1781）：lookup reject 直接上浮，不吞错跳过 reset（needReset 不得静默为 false）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(
+          row({
+            id: 't_0000000001',
+            status: 'pending_review',
+            version: 4,
+            teamId,
+            resetAfterComplete: false,
+          }),
+        )
+        .mockResolvedValue(
+          row({
+            id: 't_0000000001',
+            status: 'completed',
+            version: 5,
+            teamId,
+          }),
+        );
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      planLifecycle.getStatus.mockResolvedValue(null);
+      idGen.nextId.mockResolvedValue('te_0000000001');
+      const lookupFailure = new Error('team lookup unavailable');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({}) },
+        session: {
+          updateMany: jest.fn().mockResolvedValue({}),
+          findMany: jest.fn(),
+          deleteMany: jest.fn(),
+          create: jest.fn(),
+        },
+        message: {
+          create: jest.fn().mockImplementation(({ data }: any) => ({
+            id: data.id,
+            channelId: data.channelId,
+            senderType: data.senderType,
+            content: data.content,
+            mentions: data.mentions,
+            status: data.status,
+            createdAt: new Date(),
+          })),
+        },
+        artifact: { findMany: jest.fn().mockResolvedValue([]) },
+        artifactVersion: { updateMany: jest.fn() },
+        plan: { update: jest.fn() },
+        team: {
+          // promoteNext 事务内回退读成功一次，随后的记忆开关查询失败
+          findUnique: jest
+            .fn()
+            .mockResolvedValueOnce({
+              id: teamId,
+              version: 2,
+              currentTaskId: 't_0000000001',
+            })
+            .mockRejectedValue(lookupFailure),
+        },
+        teamQueue: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn(),
+          update: jest.fn(),
+        },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      const resetInTx = sessionLifecycle.resetTeamSessionsInTx;
+      resetInTx.mockClear();
+
+      // 查询失败必须上浮：旧代码吞错后 needReset 保持 false，accept 静默成功且不 reset
+      await expect(service.accept('t_0000000001', userId)).rejects.toThrow(
+        'team lookup unavailable',
+      );
+      expect(resetInTx).not.toHaveBeenCalled();
     });
 
     it('reject 同样走 promoteNext：事务内闲置则 currentTaskId=null 广播 idle', async () => {

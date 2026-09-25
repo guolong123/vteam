@@ -1,90 +1,112 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH } from '../common/constants/agent-role.constants';
+import {
+  AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH,
+  EXTERNAL_AGENT_ROLES,
+} from '../common/constants/agent-role.constants';
 
 /**
- * todo 2 迁移契约（`20260919000011_agent_role_external_agent`）。
+ * Current-schema contract for historical migration
+ * `20260919000011_agent_role_external_agent`.
  *
- * 本迁移是**加法-only**（新增可空列），与 `20260919000010_drop_agents_role` 的单向
- * contract 不同：可逆，回滚即 DROP COLUMN，命令写在头注释里。
- *
- * jest 基座不连真库（populated-DB 的 `migrate deploy` 证明记录在本计划证据文件）。
- * 本 spec 锁定结构契约：
- *   1. 头注释声明不变式（至多一个槽位非空）、弱校验语义、精确回滚命令；
- *   2. 只有一条 `ALTER TABLE agent_roles ADD COLUMN ... NULL`，无 UPDATE/INSERT/DELETE
- *      （无数据迁移，7 个 builtin 行不被触碰）；
- *   3. schema.prisma 的 model AgentRole 含该列且可空，列宽与 DTO 上限一致。
+ * The archived migration was an additive nullable column with no data DML.
+ * The active baseline therefore keeps the column/index/FK shape, while the
+ * current constants and schema carry the service-level slot invariant. The
+ * archived migration deliberately chose VARCHAR(128), so the baseline retains
+ * that deliberate native width even though Prisma's unannotated String default
+ * would otherwise be VARCHAR(191); the DTO's matching 128-character validation
+ * remains the write contract and is checked independently below.
  */
-const MIGRATION = path.resolve(
+
+const BASELINE = path.resolve(
   __dirname,
   '..',
   '..',
   'prisma',
   'migrations',
-  '20260919000011_agent_role_external_agent',
+  '20260925000000_squashed_baseline',
   'migration.sql',
 );
 const SCHEMA = path.resolve(__dirname, '..', '..', 'prisma', 'schema.prisma');
 
-describe('agent_roles 外部 Agent 槽位迁移契约（todo 2）', () => {
-  const sql = fs.readFileSync(MIGRATION, 'utf8');
-  /** 去注释后的可执行 SQL（头注释含 ALTER/DROP 字样，语句计数须只看代码行）。 */
-  const ddl = sql
+function executableSql(sql: string): string {
+  return sql
     .split('\n')
-    .filter((l) => !l.trimStart().startsWith('--'))
+    .filter((line) => !line.trimStart().startsWith('--'))
     .join('\n')
-    .trim();
+    .replace(/\s+CHARACTER SET\s+\S+\s+COLLATE\s+\S+/gi, '')
+    .replace(/\bDEFAULT NULL\b/gi, 'NULL')
+    .replace(/\bUNIQUE KEY\b/gi, 'UNIQUE INDEX')
+    .replace(/^(\s*)KEY\s+/gim, '$1INDEX ')
+    .replace(/(INDEX\s+`[^`]+`)\s+\(/g, '$1(')
+    .replace(/REFERENCES\s+(`[^`]+`)\s+\(/g, 'REFERENCES $1(')
+    .replace(/\b(varchar|text|json|datetime|tinyint|int|bigint)\b/gi, (type) =>
+      type.toUpperCase(),
+    );
+}
 
-  it('头注释声明不变式 + 弱校验语义 + 精确回滚命令', () => {
-    for (const marker of [
-      '至多一个',
-      'AGENT_ROLE_DEFAULT_SLOT_CONFLICT',
-      '弱校验',
-      'warnIfOpencodeAgentUnknown',
-      '回滚',
-      'DROP COLUMN',
-    ]) {
-      expect(sql).toContain(marker);
+function tableDefinition(sql: string, table: string): string {
+  const start = sql.indexOf(`CREATE TABLE \`${table}\``);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = sql.indexOf('\n) ', start);
+  expect(end).toBeGreaterThan(start);
+  return sql.slice(start, end);
+}
+
+describe('agent_roles external-agent slot current-schema contract (historical 20260919000011)', () => {
+  const sql = fs.readFileSync(BASELINE, 'utf8');
+  const executable = executableSql(sql);
+  const roles = tableDefinition(executable, 'agent_roles');
+
+  it('baseline records the single-baseline squash and archive provenance', () => {
+    expect(sql).toContain('由原有 81 个 Prisma 迁移压缩而来');
+    expect(sql).toContain('legacy-migrations/');
+    expect(sql).toContain('完整数据库基线');
+  });
+
+  it('external slot remains a nullable column in the final agent_roles table', () => {
+    expect(roles).toMatch(
+      /`default_opencode_agent_name`\s+VARCHAR\(128\) NULL/,
+    );
+    expect(roles).toContain('`default_agent_id` VARCHAR(191) NULL');
+  });
+
+  it('baseline has no data migration or uniqueness rule for the service-level slot invariant', () => {
+    expect(executable).not.toMatch(/^\s*(UPDATE|INSERT|DELETE)\s/m);
+    expect(roles).not.toMatch(
+      /UNIQUE[^\n]*default_(agent_id|opencode_agent_name)/,
+    );
+  });
+
+  it('schema maps the external slot and documents the at-most-one invariant', () => {
+    const schema = fs.readFileSync(SCHEMA, 'utf8');
+    const roleModel =
+      schema.match(/^model AgentRole \{[\s\S]*?^\}/m)?.[0] ?? '';
+    expect(roleModel).toContain('defaultOpencodeAgentName String?');
+    expect(roleModel).toContain('@map("default_opencode_agent_name")');
+    expect(roleModel).toContain('互斥');
+    expect(roleModel).toContain('AGENT_ROLE_DEFAULT_SLOT_CONFLICT');
+  });
+
+  it('all seeded external slot values obey the DTO length contract', () => {
+    expect(AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH).toBe(128);
+    expect(EXTERNAL_AGENT_ROLES).toHaveLength(3);
+    for (const role of EXTERNAL_AGENT_ROLES) {
+      expect(role.defaultOpencodeAgentName.length).toBeLessThanOrEqual(
+        AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH,
+      );
+      expect(role.defaultOpencodeAgentName.length).toBeGreaterThan(0);
+      expect(role.rolePrompt).toMatch(/^# 角色：/);
     }
-    expect(sql).toMatch(
-      /ALTER TABLE `agent_roles` DROP COLUMN `default_opencode_agent_name`/,
-    );
-    expect(sql).toMatch(/mysql -uroot -p"\$MYSQL_ROOT_PASSWORD" aiagents/);
   });
 
-  it('加法-only：恰一条 ADD COLUMN、可空、无数据迁移语句', () => {
-    const statements = ddl
-      .split(';')
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0);
-    expect(statements).toHaveLength(1);
-    expect(statements[0]).toMatch(
-      /^ALTER TABLE `agent_roles`\s+ADD COLUMN `default_opencode_agent_name` VARCHAR\(\d+\) NULL$/,
+  it('the current schema keeps the internal FK and external display slot as distinct columns', () => {
+    expect(roles).toMatch(/`default_agent_id`\s+VARCHAR\(191\) NULL/);
+    expect(roles).toMatch(
+      /`default_opencode_agent_name`\s+VARCHAR\(128\) NULL/,
     );
-    expect(ddl).not.toMatch(/\bUPDATE\b|\bINSERT\b|\bDELETE\b|\bDROP\b/);
-  });
-
-  it('列宽与 DTO 上限一致（单一事实来源：AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH）', () => {
-    expect(ddl).toContain(
-      `VARCHAR(${AGENT_ROLE_OPENCODE_AGENT_NAME_MAX_LENGTH})`,
+    expect(roles.indexOf('`default_agent_id`')).toBeLessThan(
+      roles.indexOf('`default_opencode_agent_name`'),
     );
-  });
-
-  it('schema：model AgentRole 含 defaultOpencodeAgentName，可空且映射列名一致', () => {
-    const schema = fs.readFileSync(SCHEMA, 'utf8');
-    const agentRoleModel =
-      schema.match(/^model AgentRole \{[\s\S]*?^\}/m)?.[0] ?? '';
-    expect(agentRoleModel).toContain('defaultOpencodeAgentName String?');
-    expect(agentRoleModel).toContain(
-      '@map("default_opencode_agent_name")',
-    );
-  });
-
-  it('schema：不变式声明在 model AgentRole 注释中（互斥 + 400 code）', () => {
-    const schema = fs.readFileSync(SCHEMA, 'utf8');
-    const agentRoleModel =
-      schema.match(/^model AgentRole \{[\s\S]*?^\}/m)?.[0] ?? '';
-    expect(agentRoleModel).toContain('互斥');
-    expect(agentRoleModel).toContain('AGENT_ROLE_DEFAULT_SLOT_CONFLICT');
   });
 });

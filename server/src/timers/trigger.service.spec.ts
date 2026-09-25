@@ -4,7 +4,7 @@ process.env.TIMER_SCAN_INTERVAL_MS = '0';
 
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
-import { TIMER_STATUS, TimerService } from './trigger.service';
+import { TRIGGER_STATUS, TriggerService } from './trigger.service';
 
 type PrismaMock = {
   timer: {
@@ -39,7 +39,7 @@ function makeIdGen() {
 function makeService(prisma?: PrismaMock) {
   const p = prisma ?? makePrisma();
   const idGen = makeIdGen();
-  const svc = new TimerService(
+  const svc = new TriggerService(
     p as unknown as PrismaService,
     idGen as unknown as IdGeneratorService,
   );
@@ -54,8 +54,7 @@ function dueRow(over: Record<string, unknown> = {}) {
   return {
     id: 'tmr_0000000001',
     kind: 'test_kind',
-    status: TIMER_STATUS.PENDING,
-    fireAt: PAST,
+    status: TRIGGER_STATUS.PENDING,
     dueAt: PAST,
     intervalMs: null,
     nextFireAt: null,
@@ -70,13 +69,13 @@ function dueRow(over: Record<string, unknown> = {}) {
   };
 }
 
-describe('TimerService（通用定时器基础设施，mocked PrismaService，无 DB）', () => {
+describe('TriggerService（通用定时器基础设施，mocked PrismaService，无 DB）', () => {
   afterEach(() => {
     jest.restoreAllMocks();
   });
 
   describe('schedule', () => {
-    it('落 pending 行（tmr_ id + dedupKey + fireAt/payload 透传）', async () => {
+    it('落 pending 行（tmr_ id + dedupKey + dueAt 单写 + payload 透传）', async () => {
       const { svc, prisma, idGen } = makeService();
       prisma.timer.findUnique.mockResolvedValue(null);
       prisma.timer.create.mockImplementation(async ({ data }: any) => ({
@@ -98,20 +97,22 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
         data: expect.objectContaining({
           id: 'tmr_0000000001',
           kind: 'receipt_nudge',
-          status: TIMER_STATUS.PENDING,
-          fireAt: FUTURE,
+          status: TRIGGER_STATUS.PENDING,
+          dueAt: FUTURE,
           payload: { hello: 'world' },
           dedupKey: 'test_kind:scope:1',
           attempts: 0,
         }),
       });
+      expect(prisma.timer.create.mock.calls[0][0].data.fireAt).toBeUndefined();
+      expect(prisma.timer.create.mock.calls[0][0].data.dueAt).toBe(FUTURE);
       expect(out).toMatchObject({ id: 'tmr_0000000001' });
       svc.onModuleDestroy();
     });
 
     it('dedup 命中 → 返回既有行且不再 create（幂等重排）', async () => {
       const { svc, prisma } = makeService();
-      const existing = dueRow({ status: TIMER_STATUS.PENDING });
+      const existing = dueRow({ status: TRIGGER_STATUS.PENDING });
       prisma.timer.findUnique.mockResolvedValue(existing);
 
       const out = await svc.schedule(
@@ -131,7 +132,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
 
     it('并发竞态 create 撞 P2002 → 回读返回胜者行（幂等仍成立）', async () => {
       const { svc, prisma } = makeService();
-      const winner = dueRow({ status: TIMER_STATUS.PENDING });
+      const winner = dueRow({ status: TRIGGER_STATUS.PENDING });
       prisma.timer.findUnique
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(winner);
@@ -160,14 +161,14 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
     it('按 id 取消 → status=cancelled', async () => {
       const { svc, prisma } = makeService();
       prisma.timer.update.mockResolvedValue(
-        dueRow({ status: TIMER_STATUS.CANCELLED }),
+        dueRow({ status: TRIGGER_STATUS.CANCELLED }),
       );
 
       await svc.cancel('tmr_0000000001');
 
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
-        data: { status: TIMER_STATUS.CANCELLED },
+        data: { status: TRIGGER_STATUS.CANCELLED },
       });
       svc.onModuleDestroy();
     });
@@ -179,32 +180,32 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       });
       prisma.timer.update
         .mockRejectedValueOnce(notFound)
-        .mockResolvedValueOnce(dueRow({ status: TIMER_STATUS.CANCELLED }));
+        .mockResolvedValueOnce(dueRow({ status: TRIGGER_STATUS.CANCELLED }));
 
       await svc.cancel('test_kind:scope:1');
 
       expect(prisma.timer.update).toHaveBeenNthCalledWith(1, {
         where: { id: 'test_kind:scope:1' },
-        data: { status: TIMER_STATUS.CANCELLED },
+        data: { status: TRIGGER_STATUS.CANCELLED },
       });
       expect(prisma.timer.update).toHaveBeenNthCalledWith(2, {
         where: { dedupKey: 'test_kind:scope:1' },
-        data: { status: TIMER_STATUS.CANCELLED },
+        data: { status: TRIGGER_STATUS.CANCELLED },
       });
       svc.onModuleDestroy();
     });
   });
 
   describe('fireDue', () => {
-    it('只取 due+pending 行并按 fireAt 升序触发（handler 按序调用）', async () => {
+    it('只取 due+pending 行并按 dueAt 升序触发（handler 按序调用）', async () => {
       const { svc, prisma } = makeService();
       const first = dueRow({
         id: 'tmr_0000000001',
-        fireAt: new Date('2026-09-14T00:00:00.000Z'),
+        dueAt: new Date('2026-09-14T00:00:00.000Z'),
       });
       const second = dueRow({
         id: 'tmr_0000000002',
-        fireAt: new Date('2026-09-15T00:00:00.000Z'),
+        dueAt: new Date('2026-09-15T00:00:00.000Z'),
         dedupKey: 'test_kind:scope:2',
       });
       prisma.timer.findMany.mockResolvedValue([first, second]);
@@ -219,7 +220,10 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
 
       // 查询口径：pending + due_at IS NOT NULL + dueAt<=now（cancelled/未来/NULL 行天然排除）+ dueAt 升序 + LIMIT 100
       expect(prisma.timer.findMany).toHaveBeenCalledWith({
-        where: { status: TIMER_STATUS.PENDING, dueAt: { not: null, lte: NOW } },
+        where: {
+          status: TRIGGER_STATUS.PENDING,
+          dueAt: { not: null, lte: NOW },
+        },
         orderBy: { dueAt: 'asc' },
         take: 100,
       });
@@ -228,11 +232,29 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.FIRED,
+          status: TRIGGER_STATUS.FIRED,
           fireCount: { increment: 1 },
           attempts: { increment: 1 },
         },
       });
+      svc.onModuleDestroy();
+    });
+
+    it('due_at=NULL 即使旧 fire_at 已过期也不回退触发', async () => {
+      const { svc, prisma } = makeService();
+      prisma.timer.findMany.mockResolvedValue([
+        dueRow({ dueAt: null, fireAt: PAST }),
+      ]);
+      prisma.timer.updateMany.mockResolvedValue({ count: 1 });
+      const handler = jest.fn();
+      svc.registerHandler('test_kind', handler);
+
+      const out = await svc.fireDue(NOW);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(prisma.timer.updateMany).not.toHaveBeenCalled();
+      expect(prisma.timer.update).not.toHaveBeenCalled();
+      expect(out).toEqual([]);
       svc.onModuleDestroy();
     });
 
@@ -265,7 +287,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.FAILED,
+          status: TRIGGER_STATUS.FAILED,
           lastError: 'boom-nudge-failed',
           attempts: { increment: 1 },
         },
@@ -287,7 +309,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.FAILED,
+          status: TRIGGER_STATUS.FAILED,
           lastError: 'no handler for kind receipt_nudge',
           attempts: { increment: 1 },
         },
@@ -304,7 +326,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       await svc.fireDue(NOW);
 
       const where = prisma.timer.findMany.mock.calls[0][0].where;
-      expect(where.status).toBe(TIMER_STATUS.PENDING);
+      expect(where.status).toBe(TRIGGER_STATUS.PENDING);
       expect(handler).not.toHaveBeenCalled();
       svc.onModuleDestroy();
     });
@@ -341,7 +363,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
     it('重启场景：onModuleInit 后无需 schedule()，过期 pending 行被 ticker 拾取 → fired', async () => {
       process.env.TIMER_SCAN_INTERVAL_MS = '30000';
       const { svc, prisma } = makeService();
-      const overdue = dueRow({ fireAt: PAST });
+      const overdue = dueRow({ dueAt: PAST });
       // resync 查询（where.id.startsWith）→ 空；fireDue 查询（where.status）→ 过期行
       prisma.timer.findMany.mockImplementation(async (args: any) => {
         if (args?.where?.id?.startsWith !== undefined) {
@@ -366,15 +388,15 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.updateMany).toHaveBeenCalledWith({
         where: {
           id: 'tmr_0000000001',
-          status: TIMER_STATUS.PENDING,
+          status: TRIGGER_STATUS.PENDING,
           dueAt: { not: null, lte: NOW },
         },
-        data: { status: TIMER_STATUS.FIRING },
+        data: { status: TRIGGER_STATUS.FIRING },
       });
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.FIRED,
+          status: TRIGGER_STATUS.FIRED,
           fireCount: { increment: 1 },
           attempts: { increment: 1 },
         },
@@ -393,9 +415,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       await svc.onModuleInit();
 
       expect(spy).not.toHaveBeenCalled();
-      expect(
-        (svc as unknown as { scanTimer: unknown }).scanTimer,
-      ).toBeNull();
+      expect((svc as unknown as { scanTimer: unknown }).scanTimer).toBeNull();
       svc.onModuleDestroy();
     });
 
@@ -410,7 +430,12 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
 
       prisma.timer.findUnique.mockResolvedValue(null);
       prisma.timer.create.mockImplementation(async ({ data }: any) => data);
-      await svc.schedule('receipt_nudge', FUTURE, { hello: 'world' }, 'test_kind:scope:1');
+      await svc.schedule(
+        'receipt_nudge',
+        FUTURE,
+        { hello: 'world' },
+        'test_kind:scope:1',
+      );
 
       expect(spy).toHaveBeenCalledTimes(1);
       svc.onModuleDestroy();
@@ -453,7 +478,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.FIRED,
+          status: TRIGGER_STATUS.FIRED,
           fireCount: { increment: 1 },
           attempts: { increment: 1 },
         },
@@ -468,7 +493,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.FIRED,
+          status: TRIGGER_STATUS.FIRED,
           fireCount: { increment: 1 },
           attempts: { increment: 1 },
         },
@@ -477,12 +502,12 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
     });
 
     it('逾期 one-shot 只触发一次（dueAt 远过去 → fired，不追补不重排）', async () => {
-      const { svc, prisma } = dueMocks({ dueAt: PAST, fireAt: PAST });
+      const { svc, prisma } = dueMocks({ dueAt: PAST });
       svc.registerHandler('test_kind', async () => undefined);
       await svc.fireDue(NOW);
       expect(prisma.timer.update).toHaveBeenCalledTimes(1);
       const data = prisma.timer.update.mock.calls[0][0].data;
-      expect(data.status).toBe(TIMER_STATUS.FIRED);
+      expect(data.status).toBe(TRIGGER_STATUS.FIRED);
       expect(data.dueAt).toBeUndefined();
       expect(data.nextFireAt).toBeUndefined();
       svc.onModuleDestroy();
@@ -495,7 +520,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.CANCELLED,
+          status: TRIGGER_STATUS.CANCELLED,
           lastError: 'expired by handler',
           fireCount: { increment: 1 },
           attempts: { increment: 1 },
@@ -511,7 +536,8 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       }));
       await svc.fireDue(NOW);
       const data = prisma.timer.update.mock.calls[0][0].data;
-      expect(data.status).toBe(TIMER_STATUS.PENDING);
+      expect(data.status).toBe(TRIGGER_STATUS.PENDING);
+      expect(data.fireAt).toBeUndefined();
       expect((data.dueAt as Date).getTime()).toBeGreaterThanOrEqual(
         NOW.getTime(),
       );
@@ -526,7 +552,8 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       svc.registerHandler('test_kind', async () => undefined);
       await svc.fireDue(NOW);
       const data = prisma.timer.update.mock.calls[0][0].data;
-      expect(data.status).toBe(TIMER_STATUS.PENDING);
+      expect(data.status).toBe(TRIGGER_STATUS.PENDING);
+      expect(data.fireAt).toBeUndefined();
       expect((data.dueAt as Date).getTime()).toBeGreaterThanOrEqual(
         NOW.getTime() + 60_000,
       );
@@ -546,7 +573,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.CANCELLED,
+          status: TRIGGER_STATUS.CANCELLED,
           lastError: 'maxFires reached (3/3)',
         },
       });
@@ -561,7 +588,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(handler).not.toHaveBeenCalled();
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
-        data: { status: TIMER_STATUS.CANCELLED, lastError: 'expired' },
+        data: { status: TRIGGER_STATUS.CANCELLED, lastError: 'expired' },
       });
       svc.onModuleDestroy();
     });
@@ -576,7 +603,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.PENDING,
+          status: TRIGGER_STATUS.PENDING,
           skipReason: 'guard g1 not satisfied',
         },
       });
@@ -632,6 +659,8 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(selectSql).toContain('NOW(3)');
       expect(selectSql).toContain('`due_at` IS NOT NULL');
       expect(selectSql).toContain('ORDER BY `due_at` ASC LIMIT 100');
+      expect(selectSql).toContain('`next_fire_at` AS `nextFireAt`');
+      expect(selectSql).not.toContain('`fire_at` AS `fireAt`');
       const claimSql = executeRaw.mock.calls[0][0] as string;
       expect(claimSql).toContain('NOW(3)');
       expect(claimSql).toContain('`due_at` IS NOT NULL');
@@ -644,7 +673,7 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
       expect(prisma.timer.update).toHaveBeenCalledWith({
         where: { id: 'tmr_0000000001' },
         data: {
-          status: TIMER_STATUS.FIRED,
+          status: TRIGGER_STATUS.FIRED,
           fireCount: { increment: 1 },
           attempts: { increment: 1 },
         },
@@ -669,7 +698,6 @@ describe('TimerService（通用定时器基础设施，mocked PrismaService，�
     it('DB 原生行（snake_case + 字符串日期）归一为 TriggerRow（ctx.dueAt 为 Date）', async () => {
       const raw = {
         ...dueRow(),
-        fireAt: '2026-09-15T00:00:00.000Z',
         dueAt: '2026-09-15T00:00:00.000Z',
         nextFireAt: null,
         expiresAt: null,

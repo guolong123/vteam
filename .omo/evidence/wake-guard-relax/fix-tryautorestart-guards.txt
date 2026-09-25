@@ -1,0 +1,22 @@
+# 自动恢复门槛放宽（tryAutoRestart）
+# 时间: 2026-09-23T07:19:21+08:00
+
+## 背景
+用户质疑 tryAutoRestart 的三道门槛，核查后确认：只有第3条（channel）是结构性必需。
+
+## 三个条件的核查结论
+1) taskId 必须存在 —— 多余。dispatchAgentMention 支持团队维度直传（taskId 缺省时必填 teamId，跳过任务查表）；
+   且 buildWakeText / dispatchSnapshotKey(team:..:member:..) / resolveTeamChannel 都只依赖 teamId+teamMemberId。
+2) 状态必须 in_progress —— 多余且与 dispatcher 自身策略冲突。dispatchAgentMention 的终态门禁只对 kind=execution 生效，
+   注释明确「review/nudge/wake 豁免」；tryAutoRestart 的 in_progress 前置被 dispatcher 注释引为「先例」却未同步放宽。
+3) channel 可解析 —— 必需。dispatchAgentMention 的 channelId 为必填，唤醒消息必须有落点。
+
+## 改法
+- 只挡终态（completed/archived），与 dispatchAgentMention 对 wake 的终态门禁同口径；非终态（含 pending_review）一律允许恢复；
+- taskId 可缺省：无 taskId 走团队维度（dispatchAgentMention 收到 taskId:null + teamId）；
+- 任务行不存在仍跳过（保守）。
+
+## 验证
+server tsc 0；chat 全套 14 suites / 521 tests 绿；snapshot spec 13/13；
+守卫实证：还原旧门槛 → pending_review 与 无taskId 两条 FAIL，终态/任务不存在两条两边都过（符合预期）；恢复 → 13/13 绿。
+全量 server：3 suites / 5 tests 失败 —— 经 git stash 隔离验证为【预存失败】，与本改动无关。

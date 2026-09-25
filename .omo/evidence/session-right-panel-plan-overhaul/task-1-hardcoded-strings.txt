@@ -1,0 +1,4 @@
+$ grep -c "计划" server/src/platform-mcp/platform-mcp.tools.ts server/src/platform-mcp/platform-mcp.service.ts server/src/artifacts/artifacts.service.ts
+server/src/platform-mcp/platform-mcp.tools.ts:5
+server/src/platform-mcp/platform-mcp.service.ts:21
+server/src/artifacts/artifacts.service.ts:1

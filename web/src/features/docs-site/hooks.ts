@@ -1,6 +1,6 @@
 "use client";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, getAuthToken, API_BASE_URL } from "@/lib/api";
+import { api } from "@/lib/api";
 import type { DocDef, PrototypeListItem } from "./types";
 
 /** 团队级原型条目（冻结契约：GET /api/v1/teams/:id/prototypes，T16）。 */
@@ -37,11 +37,11 @@ export function useDocContent(taskId: string, file: string, fileExt?: string, fi
       if (fileExt && fileUrl) {
         return { kind: "file", fileUrl, fileExt };
       }
-      const token = getAuthToken();
-      const url = `${API_BASE_URL}/docs-site/${encodeURIComponent(taskId)}/prd/${encodeURIComponent(file)}`;
-      const res = await fetch(url, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return { kind: "markdown", content: await res.text() };
+      const content = await api.get<string>(
+        `/docs-site/${encodeURIComponent(taskId)}/prd/${encodeURIComponent(file)}`,
+        { parse: "text" },
+      );
+      return { kind: "markdown", content };
     },
     enabled: !!taskId && !!file,
     retry: false,
@@ -129,12 +129,10 @@ export function usePrototypeSource(taskId: string, file: string) {
   return useQuery({
     queryKey: ["proto-source", taskId, file],
     queryFn: async () => {
-      const token = getAuthToken();
-      const res = await fetch(`${API_BASE_URL}/docs-site/${taskId}/prototypes/${encodeFile(file)}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.text();
+      return api.get<string>(
+        `/docs-site/${taskId}/prototypes/${encodeFile(file)}`,
+        { parse: "text" },
+      );
     },
     enabled: !!taskId && !!file,
     retry: false,

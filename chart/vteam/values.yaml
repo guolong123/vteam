@@ -260,9 +260,35 @@ ingress:
   annotations:
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    ## SSE 必需：nginx→upstream 默认 HTTP/1.0，不支持 chunked 传输，
+    ## text/event-stream 会表现为「连响应头都收不到、字节数为 0」（实测直连 200+3754 字节、
+    ## 经 ingress 0 字节）。升到 1.1 后按分块透传，事件实时推送。
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
   tls:
     enabled: false
     secretName: ""         # 空 → 用 <fullname>-tls（需 cert-manager 签发注解）
+
+## ---------------------------------------------------------------------------
+## worker 内部 opencode serve 的独立 Ingress（web 终端调试入口）
+## ---------------------------------------------------------------------------
+## ⚠️ 安全：opencode serve **无鉴权** —— 该入口等同于「可执行任意命令、读写任意文件的
+##    Web 终端」。默认关闭；仅在受控环境开启，并强烈建议同时设置
+##    whitelistSourceRange（如 "10.0.0.0/8,203.0.113.7/32"）限源。
+##
+## host 默认 opencode.<ingress.host>（独立 host：nginx-ingress 的注解按 host 生效，
+## 与主 ingress 混用同 host 会互相污染；opencode web 是 SPA，独立 host 也无需 rewrite）。
+opencodeIngress:
+  enabled: false
+  host: ""                 # 空 → opencode.<ingress.host>（需 DNS/hosts 指向该集群）
+  whitelistSourceRange: "" # 空 = 不限源（公网暴露前务必设置）
+  ## SSE/流式（opencode web 的事件流、工具输出流）：与主 ingress 同口径 + HTTP/1.1
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+  tls:
+    enabled: false
+    secretName: ""         # 空 → 用 <fullname>-opencode-tls
 
 ## ---------------------------------------------------------------------------
 ## serviceAccount（init Job 等可选）

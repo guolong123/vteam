@@ -18,7 +18,9 @@ export class QueryTriggersDto {
   @IsString()
   scopeType?: string;
 
-  @ApiPropertyOptional({ description: '归属 id 过滤（精确匹配，SQL 注入无关：参数化查询）' })
+  @ApiPropertyOptional({
+    description: '归属 id 过滤（精确匹配，SQL 注入无关：参数化查询）',
+  })
   @IsOptional()
   @IsString()
   scopeId?: string;
@@ -37,7 +39,8 @@ export class QueryTriggersDto {
   teamId?: string;
 
   @ApiPropertyOptional({
-    description: '状态过滤（pending|firing|fired|cancelled|failed），非法值 400',
+    description:
+      '状态过滤（pending|firing|fired|cancelled|failed），非法值 400',
     enum: Object.values(TRIGGER_STATUS),
   })
   @IsOptional()
@@ -63,7 +66,11 @@ export class QueryTriggersDto {
   @Min(1)
   page?: number;
 
-  @ApiPropertyOptional({ description: '每页条数（1..100）', default: 20, minimum: 1 })
+  @ApiPropertyOptional({
+    description: '每页条数（1..100）',
+    default: 20,
+    minimum: 1,
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()

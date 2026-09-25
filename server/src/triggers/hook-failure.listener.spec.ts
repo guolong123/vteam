@@ -6,7 +6,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeEvent, RealtimeService } from '../realtime/realtime.service';
 import { TriggerService } from '../timers/trigger.service';
 import { HookFailureListener } from './hook-failure.listener';
-import { buildHookFireDedupKey, HOOK_STATUS, TRIGGER_WAKE_FAILED_EVENT_TYPE } from './hook.constants';
+import {
+  buildHookFireDedupKey,
+  HOOK_STATUS,
+  TRIGGER_WAKE_FAILED_EVENT_TYPE,
+} from './hook.constants';
 import { HookService } from './hook.service';
 
 /**
@@ -44,7 +48,10 @@ const makeHookService = (
   m: ReturnType<typeof makePrisma>,
   realtime: { emit: jest.Mock },
 ) => {
-  const idGen = { nextId: jest.fn(async (p: string) => `${p}_1`), seed: jest.fn() };
+  const idGen = {
+    nextId: jest.fn(async (p: string) => `${p}_1`),
+    seed: jest.fn(),
+  };
   const triggers = {
     registerHandler: jest.fn(),
     schedule: jest.fn(async () => ({})),
@@ -104,8 +111,7 @@ describe('HookFailureListener（wake 执行失败记录）', () => {
     m.triggerUpdateMany.mockResolvedValue({ count: 1 });
     const spy = jest.spyOn(hooks, 'recordWakeFailure');
 
-    const realReason =
-      '执行失败：[prompt-await] 等待首字超时：模型无任何输出';
+    const realReason = '执行失败：[prompt-await] 等待首字超时：模型无任何输出';
 
     await listener.handle(
       agentErrorEvent({ sessionId: 's_0000000018', error: realReason }),
@@ -116,7 +122,11 @@ describe('HookFailureListener（wake 执行失败记录）', () => {
       reason: realReason,
     });
     expect(m.hookUpdateMany).toHaveBeenCalledWith({
-      where: { id: 'hks_0000000001', status: HOOK_STATUS.FIRED, lastError: null },
+      where: {
+        id: 'hks_0000000001',
+        status: HOOK_STATUS.FIRED,
+        lastError: null,
+      },
       data: { lastError: realReason, skipReason: realReason },
     });
     expect(m.triggerUpdateMany).toHaveBeenCalledWith({
@@ -142,7 +152,11 @@ describe('HookFailureListener（wake 执行失败记录）', () => {
     const spied = jest.spyOn(hooks, 'recordWakeFailure');
 
     await listener.handle(
-      agentErrorEvent({ sessionId: 's_1', message: 'Rate limit exceeded', error: 'x' }),
+      agentErrorEvent({
+        sessionId: 's_1',
+        message: 'Rate limit exceeded',
+        error: 'x',
+      }),
     );
 
     expect(spied).toHaveBeenCalledWith({
@@ -249,7 +263,9 @@ describe('HookFailureListener（wake 执行失败记录）', () => {
     // findFirst 带 status=fired + wakeSessionId 谓词：查无 → null
     m.store.hook = null;
 
-    await listener.handle(agentErrorEvent({ sessionId: 's_rotated', error: 'x' }));
+    await listener.handle(
+      agentErrorEvent({ sessionId: 's_rotated', error: 'x' }),
+    );
 
     expect(m.hookFindFirst).toHaveBeenCalledWith({
       where: {

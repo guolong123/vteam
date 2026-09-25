@@ -82,7 +82,6 @@ describe('event.constants（Phase 2 事件与消息契约，09 篇 §4.2 / 10 �
 
   it('CHANNEL_TYPE 两类频道', () => {
     expect(CHANNEL_TYPE).toEqual({
-      task_group: 'task_group',
       team_group: 'team_group',
       private: 'private',
     });

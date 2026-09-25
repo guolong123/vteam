@@ -94,6 +94,8 @@ describe('WorkerDispatcher', () => {
       updateMany: jest.Mock;
     };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
+    messageChannel: { findUnique: jest.Mock };
+    taskMessageChannel: { findMany: jest.Mock };
     task: { findUnique: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
@@ -155,14 +157,12 @@ describe('WorkerDispatcher', () => {
     alias: '产品经理-1',
     seq: 1,
     agent: { id: 'a_product', name: '产品经理', agentKey: 'product' },
-    role: null as
-      | {
-          id?: string | null;
-          key?: string | null;
-          capabilities?: Record<string, boolean> | null;
-          rolePrompt?: string | null;
-        }
-      | null,
+    role: null as {
+      id?: string | null;
+      key?: string | null;
+      capabilities?: Record<string, boolean> | null;
+      rolePrompt?: string | null;
+    } | null,
     ...overrides,
   });
 
@@ -193,7 +193,9 @@ describe('WorkerDispatcher', () => {
         findUnique: jest.fn(),
         // FR-13：dispatchAgentMention 查目标 agent 会话（uk_sessions_task_agent）
         findFirst: jest.fn(),
-        // todo-7：空闲扫描 DB 侧检出（status=running AND lastActivityAt<cutoff）；默认无
+        // todo-7：空闲扫描 DB 侧检出（status=running AND
+        // (lastActivityAt<cutoff OR (lastActivityAt IS NULL AND updatedAt<cutoff)))；
+        // 默认无
         findMany: jest.fn().mockResolvedValue([]),
         // 空闲判死路径（scanIdleSessions）会 update(status=failed)；默认未触发
         update: jest.fn().mockResolvedValue({ id: 's_0000000001' }),
@@ -214,6 +216,8 @@ describe('WorkerDispatcher', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       chatChannel: { findUnique: jest.fn(), findFirst: jest.fn() },
+      messageChannel: { findUnique: jest.fn().mockResolvedValue(null) },
+      taskMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
       // 主 Agent/团队成员注入：默认无 task 行 → isMainAgent=false + team=[]（既有断言
       // system 不含主 Agent/团队段，回归现状）；需要注入的用例单独 mockResolvedValue。
       task: { findUnique: jest.fn() },
@@ -398,10 +402,10 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.getMessages).not.toHaveBeenCalled();
     });
 
-    it('群聊触发（task_group）：单触发器走任务段 + 任务版群聊指令，任务经 taskContext 进 execute', async () => {
+    it('群聊触发（team_group）：单触发器走任务段 + 任务版群聊指令，任务经 taskContext 进 execute', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       const d = createDispatcher();
       await d.dispatch(request);
@@ -435,7 +439,7 @@ describe('WorkerDispatcher', () => {
     it('单触发器：任务模式走任务段 + 任务版指令，团队直聊走团队段 + TEAM 版指令（无双触发器）', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       const d = createDispatcher();
       await d.dispatch(request);
@@ -451,7 +455,7 @@ describe('WorkerDispatcher', () => {
     it('P0 互斥（wecom 优先）：企微触发 → prompt 注入企微指令且不注入 GROUP 指令，system 注入企微段', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       const d = createDispatcher();
       await d.dispatch({
@@ -471,7 +475,7 @@ describe('WorkerDispatcher', () => {
     it('P0 默认不注入企微：非企微群聊触发 → prompt 注入 GROUP 指令，system 无企微段', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       const d = createDispatcher();
       await d.dispatch(request);
@@ -652,10 +656,10 @@ describe('WorkerDispatcher', () => {
       expect(execArgs.system).not.toContain('vteam_memory_save');
       // 非记忆段不受影响
       expect(execArgs.system).toContain('【持久化目录】');
-      // 产出物段 plan-aware：plan 无 submit_artifact（落盘即交付），dispatch 同样跳过
-      expect(execArgs.system).not.toContain('【公开与归档】');
-      expect(execArgs.system).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
-      expect(execArgs.system).not.toContain('vteam_submit_artifact');
+      // 产出物段与记忆段同判据（工具驱动）：plan 已放开 submit_artifact（2026-09-23 决策）→ 注入
+      expect(execArgs.system).toContain('【公开与归档】');
+      expect(execArgs.system).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(execArgs.system).toContain('vteam_submit_artifact');
     });
 
     it('Todo 4：角色已知的目标 Agent → system 注入【职责边界】+ 角色 scopeSummary', async () => {
@@ -1900,7 +1904,7 @@ describe('WorkerDispatcher', () => {
     it('带团队：注入【团队成员】段（实例别名/实例 id/角色 + 主实例标注按 instanceId），非主实例无标注', () => {
       const s = buildSystemInstructions(agent, {
         team,
-        mainAgentInstanceId: 'ta_architect_1',
+        mainAgentMemberId: 'ta_architect_1',
       });
       expect(s).toContain('【团队成员】');
       expect(s).toContain('产品经理-1（实例 id: ta_product_1，角色: product）');
@@ -1913,10 +1917,10 @@ describe('WorkerDispatcher', () => {
       );
     });
 
-    it('带团队但主实例为 null（任务未确定主实例）：团队成员段无任何标注', () => {
+    it('带团队但主成员为 null（团队未确定主成员）：团队成员段无任何标注', () => {
       const s = buildSystemInstructions(agent, {
         team,
-        mainAgentInstanceId: null,
+        mainAgentMemberId: null,
       });
       expect(s).toContain('【团队成员】');
       expect(s).not.toContain(' —— 主 Agent');
@@ -2110,7 +2114,7 @@ describe('WorkerDispatcher', () => {
         persona: null,
         agentKey: null,
       };
-      // 出厂 plan 策略 tools 无 memory_save / submit_artifact → 两段都屏蔽。
+      // 出厂 plan 策略 tools 无 memory_save（仍成立）→ 记忆段屏蔽。
       const planTools = resolveConstantPolicySource('vteam-plan')!.config.tools;
       const s = buildSystemInstructions(plan, { resolvedTools: planTools });
       expect(s).not.toContain(MEMORY_INSTRUCTION);
@@ -2119,10 +2123,9 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain('vteam_memory_save');
       // 非记忆段不受影响
       expect(s).toContain('【持久化目录】');
-      // 产出物段同判据：缺 submit_artifact 同样跳过
-      expect(s).not.toContain('【公开与归档】');
-      expect(s).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
-      expect(s).not.toContain('vteam_submit_artifact');
+      // 产出物段同判据（工具驱动）：plan 已放开 submit_artifact（2026-09-23）→ 该段照常注入
+      expect(s).toContain('【公开与归档】');
+      expect(s).toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
       // resolvedTools 缺省 → 不屏蔽（存量/未知调用者行为逐字节不变）
       expect(buildSystemInstructions(plan)).toContain('【记忆管理】');
     });
@@ -2511,15 +2514,17 @@ describe('WorkerDispatcher', () => {
       expect(s).not.toContain('【计划工作流】');
       // 既有段不受影响
       expect(s).toContain(GLOBAL_SYSTEM_INSTRUCTIONS);
-      // plan-aware：缺 submit_artifact 的 tools → 不注入该段（判据是工具，非角色名）
-      const planTools = resolveConstantPolicySource('vteam-plan')!.config.tools;
-      const planS = buildSystemInstructions(
-        { ...agent, role: 'plan' },
-        { resolvedTools: planTools },
+      // plan-aware：判据是工具、非角色名 —— 用仍缺 submit_artifact 的 librarian 锁这条机制
+      // （plan 自 2026-09-23 已放开，改用 librarian 才能继续验证「缺工具即不注入」）。
+      const libTools =
+        resolveConstantPolicySource('vteam-librarian')!.config.tools;
+      const libS = buildSystemInstructions(
+        { ...agent, role: 'librarian' },
+        { resolvedTools: libTools },
       );
-      expect(planS).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
-      expect(planS).not.toContain('【公开与归档】');
-      expect(planS).not.toContain('vteam_submit_artifact');
+      expect(libS).not.toContain(ARTIFACT_SUBMISSION_INSTRUCTION);
+      expect(libS).not.toContain('【公开与归档】');
+      expect(libS).not.toContain('vteam_submit_artifact');
     });
 
     it('短工具名批量改真实名：面向模型的自然语言指引无裸短名（协议/注释除外）', () => {
@@ -3744,11 +3749,11 @@ describe('WorkerDispatcher', () => {
       expect(prisma.session.findUnique).not.toHaveBeenCalled();
     });
 
-    it('F3 缺陷①：task_group 终态化（groupFallback）→ 正文独白不落群聊，跳过落库', async () => {
+    it('F3 缺陷①：team_group 终态化（groupFallback）→ 正文独白不落群聊，跳过落库', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue(null);
       prisma.chatChannel.findFirst.mockResolvedValue({
         id: request.channelId,
-        type: CHANNEL_TYPE.task_group,
+        type: CHANNEL_TYPE.team_group,
       });
       prisma.message.create.mockResolvedValue(messageRow());
       const d = createDispatcher();
@@ -3808,8 +3813,8 @@ describe('WorkerDispatcher', () => {
         ],
       });
 
-      // 一团队一群复用下 resolveChannel 回退 team_group：与 task_group 同语义，
-      // 正文独白不落群聊（结论经 group_post 工具直发），仅幂等标记 + emitFinal
+      // 一团队一群复用下 resolveChannel 回退 team_group：正文独白不落群聊
+      // （结论经 group_post 工具直发），仅幂等标记 + emitFinal
       expect(prisma.message.create).not.toHaveBeenCalled();
       expect(finals).toHaveLength(1);
     });
@@ -4173,11 +4178,7 @@ describe('WorkerDispatcher', () => {
       expect(errors).toHaveLength(0);
 
       // 每个 600s 静默窗口到期即唤醒一次并重武装；3 次唤醒后第 4 个窗口到期才走失败路径
-      for (
-        let attempt = 0;
-        attempt < MAX_SILENT_WAKE_ATTEMPTS;
-        attempt++
-      ) {
+      for (let attempt = 0; attempt < MAX_SILENT_WAKE_ATTEMPTS; attempt++) {
         await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS);
         await jest.advanceTimersByTimeAsync(0);
         expect(wakeSpy).toHaveBeenCalledTimes(attempt + 1);
@@ -4337,6 +4338,19 @@ describe('WorkerDispatcher', () => {
       });
       prisma.artifact.findMany.mockResolvedValue([]);
       const d = createDispatcher();
+      let staleReturned = false;
+      prisma.session.findMany.mockImplementation(
+        async (args: {
+          where?: { OR?: Array<{ lastActivityAt?: { lt?: Date } }> };
+        }) => {
+          const cutoff = args.where?.OR?.[0]?.lastActivityAt?.lt;
+          if (!staleReturned && cutoff && Date.now() > cutoff.getTime()) {
+            staleReturned = true;
+            return [{ id: 's_0000000001' }];
+          }
+          return [];
+        },
+      );
       const errors: unknown[] = [];
       d.onError((e) => errors.push(e));
 
@@ -4428,7 +4442,7 @@ describe('WorkerDispatcher', () => {
       await jest.advanceTimersByTimeAsync(IDLE_SCAN_INTERVAL_MS + 5000);
       await jest.advanceTimersByTimeAsync(0);
 
-      // todo-7 双写：activity 刷新会 update(lastActivityAt)，此处只断言无判死标记
+      // activity 刷新会 update(lastActivityAt)，此处只断言无判死标记
       const failedMarks = prisma.session.update.mock.calls.filter(
         (c: unknown[]) =>
           (c[0] as { data?: { status?: string } })?.data?.status === 'failed',
@@ -4642,7 +4656,9 @@ describe('WorkerDispatcher', () => {
           for (const p of patterns) {
             const matches = text.match(new RegExp(p.source, 'g'));
             if (matches) {
-              hits.push(`${path.relative(srcRoot, full)} × ${matches.length} (${p})`);
+              hits.push(
+                `${path.relative(srcRoot, full)} × ${matches.length} (${p})`,
+              );
             }
           }
         }
@@ -4794,7 +4810,7 @@ describe('WorkerDispatcher', () => {
     });
   });
 
-  describe('todo-7 双写 + DB 侧空闲检出（重启安全）', () => {
+  describe('todo-7 DB 活动回写 + DB 侧空闲检出（重启安全）', () => {
     const staleRow = (overrides: Record<string, unknown> = {}) => ({
       status: 'running',
       taskId: null,
@@ -4806,8 +4822,8 @@ describe('WorkerDispatcher', () => {
       ...overrides,
     });
 
-    it('activity 刷新双写 DB：handleSessionActivity → update(lastActivityAt)', async () => {
-      const d = createDispatcher();
+    it('activity 刷新 DB：handleSessionActivity → update(lastActivityAt)', async () => {
+      createDispatcher();
       const activityCb = ingress.onSessionActivity.mock.calls[0][0];
       activityCb({ type: 'message.part.delta', sessionId: 's_0000000001' });
 
@@ -4816,10 +4832,9 @@ describe('WorkerDispatcher', () => {
         where: { id: 's_0000000001' },
         data: { lastActivityAt: expect.any(Date) },
       });
-      expect(d.getLastActivityAt('s_0000000001')).toBeDefined();
     });
 
-    it('watchdog 起点双写 DB：startPendingWatchdog → update(lastActivityAt)', async () => {
+    it('watchdog 起点写 DB：startPendingWatchdog → update(lastActivityAt)', async () => {
       const d = createDispatcher();
 
       (d as any).startPendingWatchdog(
@@ -4835,12 +4850,34 @@ describe('WorkerDispatcher', () => {
         where: { id: 's_0000000001' },
         data: { lastActivityAt: expect.any(Date) },
       });
-      expect(d.getLastActivityAt('s_0000000001')).toBeDefined();
     });
 
-    it('DB 侧检出：内存 map 为空（重启后）但 DB 有 stale running → 判死', async () => {
+    it('getSessionLastActivityAt：lastActivityAt 非空时优先，NULL 时回退 updatedAt', async () => {
       const d = createDispatcher();
-      expect(d.getLastActivityAt('s_stale_1')).toBeUndefined();
+      const activityAt = new Date('2026-09-24T10:00:00.000Z');
+      const updatedAt = new Date('2026-09-24T09:00:00.000Z');
+      prisma.session.findUnique.mockResolvedValueOnce({
+        lastActivityAt: activityAt,
+        updatedAt,
+      });
+      await expect(d.getSessionLastActivityAt('s_activity_1')).resolves.toBe(
+        activityAt.getTime(),
+      );
+      prisma.session.findUnique.mockResolvedValueOnce({
+        lastActivityAt: null,
+        updatedAt,
+      });
+      await expect(
+        d.getSessionLastActivityAt('s_null_activity_1'),
+      ).resolves.toBe(updatedAt.getTime());
+      prisma.session.findUnique.mockResolvedValueOnce(null);
+      await expect(
+        d.getSessionLastActivityAt('s_missing_1'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('DB 侧检出：DB 有 stale running → 判死', async () => {
+      const d = createDispatcher();
       prisma.session.findMany.mockResolvedValue([{ id: 's_stale_1' }]);
       prisma.session.findUnique.mockResolvedValue(staleRow());
       workerClient.getMessages.mockResolvedValue([]);
@@ -4851,12 +4888,68 @@ describe('WorkerDispatcher', () => {
         expect.objectContaining({
           where: {
             status: 'running',
-            lastActivityAt: { lt: expect.any(Date) },
+            OR: [
+              { lastActivityAt: { lt: expect.any(Date) } },
+              { lastActivityAt: null, updatedAt: { lt: expect.any(Date) } },
+            ],
           },
         }),
       );
       expect(prisma.session.update).toHaveBeenCalledWith({
         where: { id: 's_stale_1' },
+        data: { status: 'failed' },
+      });
+    });
+
+    it('DB 侧检出覆盖 NULL lastActivityAt：running + 旧 updatedAt 仍被返回并判死', async () => {
+      const d = createDispatcher();
+      const oldUpdatedAt = new Date('2020-01-01T00:00:00.000Z');
+      const nullActivitySession = {
+        id: 's_null_1',
+        status: 'running',
+        lastActivityAt: null,
+        updatedAt: oldUpdatedAt,
+      };
+      prisma.session.findMany.mockImplementation(
+        async (args: {
+          where?: { status?: string; OR?: Array<Record<string, unknown>> };
+        }) => {
+          const nullBranch = args.where?.OR?.[1];
+          const fallback = nullBranch?.updatedAt;
+          const cutoff =
+            typeof fallback === 'object' &&
+            fallback !== null &&
+            'lt' in fallback
+              ? (fallback as { lt: Date }).lt
+              : undefined;
+          const matches =
+            args.where?.status === nullActivitySession.status &&
+            nullBranch?.lastActivityAt === null &&
+            cutoff !== undefined &&
+            nullActivitySession.updatedAt < cutoff;
+          return matches ? [{ id: nullActivitySession.id }] : [];
+        },
+      );
+      prisma.session.findUnique.mockResolvedValue(
+        staleRow(nullActivitySession),
+      );
+      workerClient.getMessages.mockResolvedValue([]);
+
+      await (d as any).scanIdleSessions();
+
+      expect(prisma.session.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            status: 'running',
+            OR: [
+              { lastActivityAt: { lt: expect.any(Date) } },
+              { lastActivityAt: null, updatedAt: { lt: expect.any(Date) } },
+            ],
+          },
+        }),
+      );
+      expect(prisma.session.update).toHaveBeenCalledWith({
+        where: { id: 's_null_1' },
         data: { status: 'failed' },
       });
     });
@@ -4897,7 +4990,7 @@ describe('WorkerDispatcher', () => {
       });
     });
 
-    it('DB 检出 fail-open：findMany 抛错 → 扫描不抛，内存侧照常', async () => {
+    it('DB 检出 fail-open：findMany 抛错 → 扫描不抛，继续返回', async () => {
       const d = createDispatcher();
       prisma.session.findMany.mockRejectedValueOnce(new Error('db down'));
 
@@ -5036,9 +5129,7 @@ describe('WorkerDispatcher', () => {
       expect(triggers.schedule.mock.calls[1][3]).not.toBe(
         triggers.schedule.mock.calls[0][3],
       );
-      expect(
-        (d as any).silentWakeAttempts.get('s_0000000001'),
-      ).toBe(1);
+      expect((d as any).silentWakeAttempts.get('s_0000000001')).toBe(1);
     });
 
     it('handler：唤醒耗尽（第 4 次到期，worker 在线）→ 失败路径（failed 标记 + 注销 + 广播）', async () => {
@@ -5477,20 +5568,20 @@ describe('WorkerDispatcher', () => {
     it('群聊触发：回复含 group_post 声明 → 仅落 private 独白（剥离标签），群聊不转发（工具直发）', async () => {
       jest.useFakeTimers();
       pollSetup();
-      // 群聊频道（request.channelId）type=task_group；DM 频道（c_dm）type=private
+      // 群聊频道（request.channelId）type=team_group；DM 频道（c_dm）type=private
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: request.channelId, type: 'task_group' });
+        return Promise.resolve({ id: request.channelId, type: 'team_group' });
       });
       workerClient.getMessages
         .mockResolvedValueOnce([
@@ -5574,14 +5665,14 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: request.channelId, type: 'task_group' });
+        return Promise.resolve({ id: request.channelId, type: 'team_group' });
       });
       workerClient.getMessages.mockResolvedValue([
         {
@@ -5616,7 +5707,7 @@ describe('WorkerDispatcher', () => {
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
-      // 群聊触发（来源 task_group）→ 未声明也不兜底转发；正文独白仅落 private
+      // 群聊触发（来源 team_group）→ 未声明也不兜底转发；正文独白仅落 private
       const creates = prisma.message.create.mock.calls.map(
         (c: any) => c[0].data.channelId,
       );
@@ -5636,7 +5727,7 @@ describe('WorkerDispatcher', () => {
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: request.channelId, type: 'task_group' });
+        return Promise.resolve({ id: request.channelId, type: 'team_group' });
       });
       workerClient.getMessages.mockResolvedValue([
         {
@@ -5682,20 +5773,20 @@ describe('WorkerDispatcher', () => {
     it('群聊触发：parts 含 group_post 工具调用且 completed → 跳过 forwardToGroup（防双通道双发）', async () => {
       jest.useFakeTimers();
       pollSetup();
-      // resolveChannel：DM 反查命中 private 独白频道；groupTrigger：来源频道 type=task_group
+      // resolveChannel：DM 反查命中 private 独白频道；groupTrigger：来源频道 type=team_group
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: 'c_group', type: 'task_group' });
+        return Promise.resolve({ id: 'c_group', type: 'team_group' });
       });
       prisma.message.create.mockResolvedValue(messageRow());
       const d = createDispatcher();
@@ -5738,14 +5829,14 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: 'c_group', type: 'task_group' });
+        return Promise.resolve({ id: 'c_group', type: 'team_group' });
       });
       prisma.message.create.mockResolvedValue(messageRow());
       const d = createDispatcher();
@@ -5784,14 +5875,14 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
         if ((where as any)?.teamMemberId)
           return Promise.resolve({ id: 'c_dm', type: 'private' });
-        return Promise.resolve({ id: 'c_group', type: 'task_group' });
+        return Promise.resolve({ id: 'c_group', type: 'team_group' });
       });
       prisma.message.create.mockResolvedValue(messageRow());
       const d = createDispatcher();
@@ -5824,13 +5915,13 @@ describe('WorkerDispatcher', () => {
           return Promise.resolve({
             id: where.id,
             taskId: request.taskId,
-            type: 'task_group',
+            type: 'team_group',
           });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockResolvedValue({
         id: request.channelId,
-        type: 'task_group',
+        type: 'team_group',
       });
       workerClient.getMessages.mockResolvedValue([
         {
@@ -6311,6 +6402,51 @@ describe('WorkerDispatcher', () => {
       const expectedDir = path.join(workRoot, 'tasks', 't_0000000001');
       expect(execArgs.directory).toBe(expectedDir);
       expect(fs.existsSync(expectedDir)).toBe(true);
+    });
+
+    it('Todo28 任务目录 mkdir 失败 → warn 记录（含 dir）而非静默吞掉，dispatch 仍 best-effort 继续', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_0000000001',
+        instanceRef: 'ses_0001',
+        teamId: 'tm_0000000001',
+        teamMemberId: 'tmm_0000000001',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: {},
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        defaultModelId: null,
+      });
+      prisma.artifact.findMany.mockResolvedValue([]);
+      const d = createDispatcher();
+      const warnSpy = jest.spyOn(d['logger'], 'warn');
+      const mkdirSpy = jest
+        .spyOn(fs.promises, 'mkdir')
+        .mockRejectedValueOnce(new Error('EACCES boom') as never);
+      const expectedDir = path.join(workRoot, 'tasks', 't_0000000001');
+
+      await d.dispatch(request);
+
+      // (a) 失败被记录：warn 含 dir（删掉 log 即失败，非空转断言）。
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(
+        warned.some(
+          (m) => m.includes('工作目录创建失败') && m.includes(expectedDir),
+        ),
+      ).toBe(true);
+      // (b) 非静默成功：mkdir 真失败（目录不存在），但 dispatch 仍 best-effort
+      // 按原路径继续（同 ensureTeamWorkDir 语义），而非报成功或改路径。
+      expect(fs.existsSync(expectedDir)).toBe(false);
+      const execArgs = workerClient.execute.mock.calls[0][1] as {
+        directory: string;
+      };
+      expect(execArgs.directory).toBe(expectedDir);
+      warnSpy.mockRestore();
+      mkdirSpy.mockRestore();
     });
 
     it('Todo3 任务实例 work_dir 不再读取：ta_ 快照忽略，directory 用 tasks/<taskId>', async () => {
@@ -6895,8 +7031,11 @@ describe('WorkerDispatcher', () => {
     });
   });
 
-  describe('WeCom directed reply (group @user + mirror to task_group)', () => {
-    const basePayload = {
+  describe('WeCom directed reply (group @user + mirror to team_group)', () => {
+    type CompletedPayload = Parameters<
+      WorkerDispatcher['handleTaskCompleted']
+    >[0];
+    const basePayload: CompletedPayload = {
       taskId: 't_0000000001',
       agentId: 'a_product',
       sessionId: 's_0000000001',
@@ -6914,12 +7053,13 @@ describe('WorkerDispatcher', () => {
         teamId: 'tm_0000000001',
         teamMemberId: 'tmm_1',
       });
-      (prisma as any).taskMessageChannel = {
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
+      prisma.taskMessageChannel = {
         findMany: jest
           .fn()
           .mockResolvedValue([{ messageChannelId: 'mc_wecom' }]),
       };
-      (prisma as any).messageChannel = {
+      prisma.messageChannel = {
         findUnique: jest.fn().mockImplementation((q: any) => {
           if (q?.where?.id === 'mc_wecom') {
             return Promise.resolve({ id: 'mc_wecom', type: 'wecom_aibot' });
@@ -7029,6 +7169,77 @@ describe('WorkerDispatcher', () => {
         }),
       );
     });
+
+    it('dedup read failure suppresses the second mirror within the 120s window', async () => {
+      const { d, mockAdapter } = setupWecomBridge({
+        chattype: 'group',
+        fromUserName: 'GuoLong',
+      });
+      let dedupReadCount = 0;
+      prisma.message.findFirst.mockImplementation((q: any) => {
+        if (q?.where?.status === MESSAGE_STATUS.processing) {
+          return Promise.resolve(null);
+        }
+        if (q?.where?.senderType === SENDER_TYPE.external) {
+          return Promise.resolve({
+            id: 'm_ext_1',
+            content: { text: '[WeCom:GuoLong] hi' },
+            createdAt: new Date(),
+          });
+        }
+        if (
+          q?.where?.channelId === 'c_group' &&
+          q?.where?.senderType === SENDER_TYPE.agent
+        ) {
+          dedupReadCount += 1;
+          if (dedupReadCount === 1) {
+            return Promise.resolve(null);
+          }
+          return Promise.reject(new Error('mirror dedup read unavailable'));
+        }
+        return Promise.resolve(null);
+      });
+
+      await d.handleTaskCompleted({
+        ...basePayload,
+        sessionId: 's_dedup_1',
+      });
+      await d.handleTaskCompleted({
+        ...basePayload,
+        sessionId: 's_dedup_2',
+      });
+
+      const mirrorWrites = prisma.message.create.mock.calls.filter(
+        ([q]) => q?.data?.content?.text === '@GuoLong model reply text',
+      );
+      expect(dedupReadCount).toBe(2);
+      expect(mirrorWrites).toHaveLength(1);
+      expect(mockAdapter.finishStream).toHaveBeenCalledTimes(2);
+    });
+
+    it('wecom binding lookup rejection surfaces failure instead of counting zero wecom channels', async () => {
+      const { d, mockAdapter } = setupWecomBridge({
+        chattype: 'group',
+        fromUserName: 'GuoLong',
+      });
+      prisma.messageChannel.findUnique.mockRejectedValue(new Error('db blip'));
+      const warnSpy = jest.spyOn(d['logger'], 'warn');
+      await d.handleTaskCompleted(basePayload);
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]));
+      // Failure surfaced with the binding identity (not swallowed).
+      expect(
+        warned.some(
+          (m) => m.includes('mc_wecom') && m.includes('lookup failed'),
+        ),
+      ).toBe(true);
+      // Not treated as absent-and-fine: must not conclude "no wecom channels".
+      expect(
+        warned.some((m) => m.includes('no wecom channels among bindings')),
+      ).toBe(false);
+      // Dispatch path does not proceed as though the channel resolved.
+      expect(mockAdapter.finishStream).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
   });
 
   // ------------------------------------------------------------------
@@ -7076,7 +7287,6 @@ describe('WorkerDispatcher', () => {
           if (select?.teamId) {
             return Promise.resolve({
               teamId: 'tm_0000000001',
-              mainAgentInstanceId: 'tmm_0000000001',
               executionMode: 'direct',
             });
           }
@@ -7168,7 +7378,6 @@ describe('WorkerDispatcher', () => {
       (prisma as any).task = {
         findUnique: jest.fn().mockResolvedValue({
           teamId: 'tm_0000000001',
-          mainAgentInstanceId: 'tmm_0000000001',
           executionMode: 'direct',
         }),
       };
@@ -7280,7 +7489,6 @@ describe('WorkerDispatcher', () => {
       (prisma as any).task = {
         findUnique: jest.fn().mockResolvedValue({
           teamId: 'tm_0000000001',
-          mainAgentInstanceId: null,
           executionMode: 'direct',
         }),
       };
@@ -7474,7 +7682,7 @@ describe('WorkerDispatcher', () => {
       ];
       const out = buildSystemInstructions(agent, {
         isMainAgent: true,
-        mainAgentInstanceId: 'tmm_0000000001',
+        mainAgentMemberId: 'tmm_0000000001',
         team,
         selfInstanceId: 'tmm_0000000001',
         selfAlias: '产品经理-1',

@@ -27,7 +27,8 @@ export const AGENT_ROLE_TYPES = {
   custom: 'custom',
 } as const;
 
-export type AgentRoleType = (typeof AGENT_ROLE_TYPES)[keyof typeof AGENT_ROLE_TYPES];
+export type AgentRoleType =
+  (typeof AGENT_ROLE_TYPES)[keyof typeof AGENT_ROLE_TYPES];
 
 /**
  * 迁移回填（migration 20260919000007）的确定性 key 派生规则，与 SQL 表达式**逐字节一致**：
@@ -113,13 +114,55 @@ export interface BuiltinAgentRole {
  * （key = 模板 `role`，defaultAgentId = 模板 `id`）。migration 与 seed 均引用本清单口径。
  */
 export const BUILTIN_AGENT_ROLES: readonly BuiltinAgentRole[] = [
-  { id: 'ar_product', key: 'product', name: '产品经理', defaultAgentId: 'a_product', sortOrder: 1 },
-  { id: 'ar_project_manager', key: 'project_manager', name: '项目经理', defaultAgentId: 'a_project_manager', sortOrder: 2 },
-  { id: 'ar_architect', key: 'architect', name: '架构师', defaultAgentId: 'a_architect', sortOrder: 3 },
-  { id: 'ar_developer', key: 'developer', name: '开发者', defaultAgentId: 'a_developer', sortOrder: 4 },
-  { id: 'ar_tester', key: 'tester', name: '测试', defaultAgentId: 'a_tester', sortOrder: 5 },
-  { id: 'ar_plan', key: 'plan', name: '计划员', defaultAgentId: 'a_plan', sortOrder: 6 },
-  { id: 'ar_librarian', key: 'librarian', name: '知识管理员', defaultAgentId: 'a_librarian', sortOrder: 7 },
+  {
+    id: 'ar_product',
+    key: 'product',
+    name: '产品经理',
+    defaultAgentId: 'a_product',
+    sortOrder: 1,
+  },
+  {
+    id: 'ar_project_manager',
+    key: 'project_manager',
+    name: '项目经理',
+    defaultAgentId: 'a_project_manager',
+    sortOrder: 2,
+  },
+  {
+    id: 'ar_architect',
+    key: 'architect',
+    name: '架构师',
+    defaultAgentId: 'a_architect',
+    sortOrder: 3,
+  },
+  {
+    id: 'ar_developer',
+    key: 'developer',
+    name: '开发者',
+    defaultAgentId: 'a_developer',
+    sortOrder: 4,
+  },
+  {
+    id: 'ar_tester',
+    key: 'tester',
+    name: '测试',
+    defaultAgentId: 'a_tester',
+    sortOrder: 5,
+  },
+  {
+    id: 'ar_plan',
+    key: 'plan',
+    name: '计划员',
+    defaultAgentId: 'a_plan',
+    sortOrder: 6,
+  },
+  {
+    id: 'ar_librarian',
+    key: 'librarian',
+    name: '知识管理员',
+    defaultAgentId: 'a_librarian',
+    sortOrder: 7,
+  },
 ];
 
 /**
@@ -257,6 +300,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'task.create': true,
     'task.transition': true,
     'task.complete': false,
+    'plan.steps': true,
     'task.context': true,
     'team.view': true,
     'team.add_member': true,
@@ -286,6 +330,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'task.create': true,
     'task.transition': true,
     'task.complete': true,
+    'plan.steps': true,
     'task.context': true,
     'team.view': true,
     'team.add_member': true,
@@ -315,6 +360,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'task.create': false,
     'task.transition': false,
     'task.complete': false,
+    'plan.steps': true,
     'task.context': true,
     'team.view': true,
     'team.add_member': false,
@@ -344,6 +390,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'task.create': false,
     'task.transition': false,
     'task.complete': false,
+    'plan.steps': true,
     'task.context': true,
     'team.view': true,
     'team.add_member': false,
@@ -373,6 +420,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'task.create': false,
     'task.transition': false,
     'task.complete': false,
+    'plan.steps': true,
     'task.context': true,
     'team.view': true,
     'team.add_member': false,
@@ -402,6 +450,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'task.create': false,
     'task.transition': false,
     'task.complete': true,
+    'plan.steps': true,
     'task.context': true,
     'team.view': true,
     'team.add_member': false,
@@ -411,7 +460,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'chat.channel_send': false,
     'wecom.reply': true,
     'doc.read': true,
-    'doc.submit': false,
+    'doc.submit': true,
     'file.read': true,
     'issue.create': false,
     'issue.get': false,
@@ -431,6 +480,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'task.create': false,
     'task.transition': false,
     'task.complete': false,
+    'plan.steps': true,
     'task.context': true,
     'team.view': true,
     'team.add_member': false,

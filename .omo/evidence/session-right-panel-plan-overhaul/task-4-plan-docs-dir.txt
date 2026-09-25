@@ -1,0 +1,2 @@
+grep -n "PLAN_DOCS_DIR = " worker/src/exec/exec-server.ts
+146:export const PLAN_DOCS_DIR = PLAN_DOCS_DIRS[0];

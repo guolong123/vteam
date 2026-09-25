@@ -9,6 +9,8 @@ import { teamsApi, type TeamDto, type TeamQueueDto } from "@/src/api/teams";
 import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { PlanDocModal, type PlanDocContent } from "@/src/components/teams/PlanDocModal";
+import { ArtifactDocModal } from "@/src/components/teams/ArtifactDocModal";
+import { TriggerDetailModal } from "@/src/components/teams/TriggerDetailModal";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -98,7 +100,12 @@ export function TeamQueueCard({ team, taskId }: { team: TeamDto | null | undefin
             );
           })}
         </div>
-      ) : null}
+      ) : (
+        <div data-testid="queue-empty" style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.sm}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.sm, textAlign: "center", lineHeight: 1.6 }}>
+          暂无排队任务
+          <div style={{ fontSize: 10, marginTop: 2 }}>群聊按团队复用，历史跨任务可见</div>
+        </div>
+      )}
     </div>
   );
 }
@@ -106,11 +113,13 @@ export function TeamQueueCard({ team, taskId }: { team: TeamDto | null | undefin
 /* ------------------------------------------------------------------ */
 /* 团队记忆卡片                                                         */
 /* ------------------------------------------------------------------ */
-export function TeamMemoryCard({ team, onToggleReuse, pending, error }: {
+export function TeamMemoryCard({ team, onToggleReuse, pending, error, taskResetAfterComplete }: {
   team: TeamDto | null | undefined;
   onToggleReuse?: (next: boolean) => void;
   pending?: boolean;
   error?: string | null;
+  /** 任务级覆盖（resetAfterComplete=true=本任务完成后强制重置，与团队级 reuseSession 语义相反；false/null 不展示）。 */
+  taskResetAfterComplete?: boolean | null;
 }) {
   if (!team) return null;
   const reuse = !!team.reuseSession;
@@ -146,6 +155,11 @@ export function TeamMemoryCard({ team, onToggleReuse, pending, error }: {
           </button>
         </div>
       )}
+      {taskResetAfterComplete === true && (
+        <div data-testid="task-reset-override" style={{ fontSize: fontSize.xs, color: "#D97706", lineHeight: 1.6, backgroundColor: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.22)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+          <span style={{ fontWeight: 600 }}>任务级：完成后重置（覆盖团队默认）</span>：本任务完成后强制开新会话；团队级「复用」指跨任务不重置，两者语义相反。
+        </div>
+      )}
       {error && <span role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>{error}</span>}
     </div>
   );
@@ -171,7 +185,7 @@ const subTabStyle = (active: boolean): CSSProperties => ({
 /* ------------------------------------------------------------------ */
 /* 团队子 Tab                                                          */
 /* ------------------------------------------------------------------ */
-type TeamSubTab = "overview" | "settings" | "memory" | "channels" | "actions";
+type TeamSubTab = "overview" | "channels";
 
 /** 角色字符串 → RoleKey（团队成员的角色在 m.agent.role，非法值归一 developer） */
 function toRoleKey(role: string | null | undefined): RoleKey {
@@ -216,6 +230,10 @@ function ChannelBindingCard({
 
       {allQuery.isPending ? (
         <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>加载中…</div>
+      ) : allQuery.isError ? (
+        <div data-testid="channel-list-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+          {isApiError(allQuery.error) ? allQuery.error.message : "渠道列表加载失败"}
+        </div>
       ) : all.length === 0 ? (
         <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.sm}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.sm, textAlign: "center" }}>
           暂无可用渠道
@@ -257,8 +275,10 @@ function ChannelBindingCard({
   );
 }
 
-function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: any; onToggleManagedMode: (v: boolean) => void }) {
-  const [subTab, setSubTab] = useState<TeamSubTab>("overview");
+function TeamSubTabs({ team, task, onToggleManagedMode, subTab: controlledSubTab, onSubTabChange }: { team: any; task?: any; onToggleManagedMode: (v: boolean) => void; subTab?: TeamSubTab; onSubTabChange?: (t: TeamSubTab) => void }) {
+  const [innerSubTab, setInnerSubTab] = useState<TeamSubTab>("overview");
+  const subTab = controlledSubTab ?? innerSubTab;
+  const setSubTab = onSubTabChange ?? setInnerSubTab;
   const queryClient = useQueryClient();
   const [settingError, setSettingError] = useState<string | null>(null);
 
@@ -281,10 +301,7 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
       <div style={{ display: "flex", borderBottom: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], flexShrink: 0, overflowX: "auto" }}>
         {([
           { key: "overview" as const, label: "概览" },
-          { key: "settings" as const, label: "设置" },
-          { key: "memory" as const, label: "记忆" },
           { key: "channels" as const, label: "渠道" },
-          { key: "actions" as const, label: "操作" },
         ]).map((tab) => (
           <button key={tab.key} type="button" onClick={() => setSubTab(tab.key)} style={subTabStyle(subTab === tab.key)}>
             {tab.label}
@@ -315,29 +332,8 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
               )}
             </div>
             <div style={{ padding: `${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
-              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>成员（{members.length} 人）</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                {members.map((m: any) => {
-                  const rk = toRoleKey(m.agent?.role);
-                  return (
-                    <div key={m.id} style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-                      <AgentAvatar role={rk} size="sm" />
-                      <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.sm, color: neutral[700], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {m.alias ?? m.agent?.name ?? m.id}
-                      </span>
-                      <span style={{ fontSize: 10, color: neutral[400], flexShrink: 0 }}>{roles[rk]?.label ?? rk}</span>
-                      {m.enabled === false && <span style={{ fontSize: 10, color: "#D97706", flexShrink: 0 }}>已禁用</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
-        {subTab === "settings" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
-            <div style={{ padding: `${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>会话设置</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm, padding: `${space.xs}px 0` }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>托管模式</div>
                   <div style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}>{team?.managedMode ? "已开启：由主 Agent 自动响应群聊消息" : "已关闭：@ 消息由人工确认后再执行"}</div>
@@ -355,9 +351,7 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
                   <span aria-hidden style={{ position: "absolute", top: 2, left: (team?.managedMode ?? false) ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} />
                 </button>
               </div>
-            </div>
-            <div style={{ padding: `${space.md}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}` }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm, padding: `${space.xs}px 0` }}>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>完成后重置会话</div>
                   <div style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5 }}>
@@ -371,19 +365,22 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
                   aria-label="完成后重置会话"
                   tabIndex={0}
                   disabled={reuseMutation.isPending}
-                  onClick={() => reuseMutation.mutate(reuseSession)}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); reuseMutation.mutate(reuseSession); } }}
+                  onClick={() => reuseMutation.mutate(!reuseSession)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); reuseMutation.mutate(!reuseSession); } }}
                   style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: !reuseSession ? "#0D9488" : neutral[300], position: "relative", cursor: reuseMutation.isPending ? "default" : "pointer", border: "none", padding: 0, flexShrink: 0, opacity: reuseMutation.isPending ? 0.6 : 1 }}
                 >
                   <span aria-hidden style={{ position: "absolute", top: 2, left: !reuseSession ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} />
                 </button>
               </div>
+              {settingError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>{settingError}</div>}
+              <div style={{ marginTop: space.sm }}>
+                <TeamMemoryCard team={team} taskResetAfterComplete={task?.resetAfterComplete ?? null} />
+              </div>
             </div>
-            {settingError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626" }}>{settingError}</div>}
+            <button type="button" onClick={() => window.location.href = `/tasks/new?teamId=${team?.id ?? ""}`} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, fontWeight: 600, cursor: "pointer", fontFamily: fontFamily.body }}>创建任务</button>
+            <button type="button" onClick={() => window.location.href = `/teams/${team?.id ?? ""}/tasks`} style={{ fontSize: fontSize.xs, color: "#0D9488", background: "none", border: "none", cursor: "pointer", fontFamily: fontFamily.body, alignSelf: "flex-start" }}>历史任务 →</button>
+            <div style={{ fontSize: 10, color: neutral[400], textAlign: "center", lineHeight: 1.5 }}>成员管理在左侧面板</div>
           </div>
-        )}
-        {subTab === "memory" && (
-          <TeamMemoryCard team={team} onToggleReuse={(next: boolean) => reuseMutation.mutate(next)} pending={reuseMutation.isPending} error={settingError} />
         )}
         {subTab === "channels" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
@@ -401,12 +398,6 @@ function TeamSubTabs({ team, task, onToggleManagedMode }: { team: any; task?: an
               hint="绑定后向该渠道发送任务通知"
               managePath="/integrations"
             />
-          </div>
-        )}
-        {subTab === "actions" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
-            <button type="button" onClick={() => window.location.href = `/tasks/new?teamId=${team?.id ?? ""}`} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFF", fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>创建任务</button>
-            <button type="button" onClick={() => window.location.href = `/teams/${team?.id ?? ""}/tasks`} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[700], fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>历史任务</button>
           </div>
         )}
       </div>
@@ -487,14 +478,17 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [finalizeOpen, setFinalizeOpen] = useState(false);
   const [finalizeError, setFinalizeError] = useState<string | null>(null);
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [skipError, setSkipError] = useState<string | null>(null);
   /** 归档入口展开态（默认收起，点击可达旧轮次回执）。 */
   const [showArchive, setShowArchive] = useState(false);
 
   const planQuery = useQuery({
     queryKey: ["task", taskId, "plan"],
     queryFn: () => api.get<PlanStatusResponse>(`/tasks/${taskId}/plan`),
-    enabled: !!taskId && isMember,
-    refetchInterval: 10_000,
+    enabled: !!taskId,
+    // 错误态暂停轮询：权限不足等失败交给 isError 分支呈现，不再无脑重试刷屏。
+    refetchInterval: (query) => (query.state.status === "error" ? false : 10_000),
   });
   const status: string | null = planQuery.data?.status ?? planQuery.data?.plan?.status ?? null;
   const badge = (status ? PLAN_STATUS_BADGE[status] : undefined) ?? PLAN_STATUS_UNKNOWN;
@@ -517,6 +511,18 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
       queryClient.invalidateQueries({ queryKey: ["task", taskId, "plan"] });
     },
     onError: (err) => setFinalizeError(isApiError(err) ? err.message : "确认定稿失败"),
+  });
+
+  /** 草稿/评审中态的人工出口：跳过评审直接确认执行（后端 skipReview，需 tasks.edit 权限）。 */
+  const skipMutation = useMutation({
+    mutationFn: () =>
+      api.post(`/tasks/${taskId}/plan/confirm`, { action: "confirm", skipReview: true }),
+    onSuccess: () => {
+      setSkipError(null);
+      setSkipOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["task", taskId, "plan"] });
+    },
+    onError: (err) => setSkipError(isApiError(err) ? err.message : "跳过评审确认失败"),
   });
 
   /** 轮次账本：从 issue 描述机器段聚合，取最高轮次（同轮取回执最多者）。 */
@@ -558,13 +564,9 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
   const showFinalize = status === "pending_final" && isMember;
   /** 确认按钮仅 approved + 成员上下文渲染（隐藏而非禁用）。 */
   const showConfirm = status === "approved" && isMember;
-  /** 执行清单仅 executing 态渲染（读 issue 聚合）。 */
-  const showChecklist = status === "executing";
-  const issueCounts: Record<string, number> = { open: 0, in_progress: 0, resolved: 0, closed: 0, rejected: 0 };
-  for (const it of issues) {
-    const st = (it as { status?: string })?.status;
-    if (st && st in issueCounts) issueCounts[st] += 1;
-  }
+  /** 人工逃生口：draft/reviewing + 成员上下文（评审链路走不通时仍能把计划推进）。 */
+  const showSkipReview =
+    (status === "draft" || status === "reviewing") && isMember;
   const progressPct = expectedN > 0 ? Math.round((receivedN / expectedN) * 100) : 0;
   const serverFrozenHash = planQuery.data?.plan?.frozenHash;
   const frozenHash: string | null = (typeof serverFrozenHash === "string" && serverFrozenHash ? serverFrozenHash : null) ?? (ledger?.hash ? ledger.hash : null);
@@ -679,35 +681,21 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
             {confirmMutation.isPending ? "确认中…" : "确认开始执行"}
           </button>
         )}
+        {showSkipReview && (
+          <button
+            type="button"
+            data-testid="plan-skip-review-btn"
+            disabled={skipMutation.isPending}
+            onClick={() => { setSkipError(null); setSkipOpen(true); }}
+            style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid #0D9488`, backgroundColor: "rgba(13,148,136,0.08)", color: "#0D9488", fontSize: fontSize.sm, fontWeight: 600, cursor: skipMutation.isPending ? "default" : "pointer", opacity: skipMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body }}
+          >
+            {skipMutation.isPending ? "推进中…" : "跳过评审，直接确认执行"}
+          </button>
+        )}
         {confirmError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{confirmError}</div>}
         {finalizeError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{finalizeError}</div>}
+        {skipError && <div role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{skipError}</div>}
       </div>
-      {showChecklist && (
-        <div data-testid="plan-checklist" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, display: "flex", flexDirection: "column", gap: space.sm }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>执行清单</span>
-            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-              共 {issues.length} 项 · 待处理 {issueCounts.open} · 进行中 {issueCounts.in_progress} · 已解决 {issueCounts.resolved} · 已关闭 {issueCounts.closed} · 已拒绝 {issueCounts.rejected}
-            </span>
-          </div>
-          {issues.length === 0 ? (
-            <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无 Issue（执行项将随派发自动出现）</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-              {issues.map((it: any) => {
-                const st = (it?.status ?? "open") as keyof typeof ISSUE_STATUS_BADGE;
-                const b = ISSUE_STATUS_BADGE[st] ?? ISSUE_STATUS_BADGE.open;
-                return (
-                  <div key={it?.id ?? it?.title} style={{ display: "flex", alignItems: "center", gap: space.sm, fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it?.title ?? it?.id}</span>
-                    <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontSize: 10, color: b.color, backgroundColor: b.bg, border: `1px solid ${b.border}`, borderRadius: radius.pill, padding: "0 6px", fontWeight: 600 }}>{b.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
       {/* 二次确认：复用 ConfirmDialog（非危险走青色确认），遮罩/Esc 关闭对齐既有模式 */}
       <ConfirmDialog
         open={finalizeOpen}
@@ -733,6 +721,18 @@ function PlanStatusBlock({ taskId, team, agents, issuesQuery }: {
         onClose={() => { if (!confirmMutation.isPending) setConfirmOpen(false); }}
         onConfirm={() => confirmMutation.mutate()}
       />
+      <ConfirmDialog
+        open={skipOpen}
+        testid="plan-skip-review"
+        danger={true}
+        title="跳过评审，直接确认执行"
+        description="评审尚未收敛时的人工出口：计划将跳过评审与定稿，直接从草稿/评审中进入执行态（→ executing），并留痕「人工跳过评审」。该操作不可撤销。"
+        confirmLabel="跳过并开始执行"
+        pendingLabel="推进中…"
+        submitting={skipMutation.isPending}
+        onClose={() => { if (!skipMutation.isPending) setSkipOpen(false); }}
+        onConfirm={() => skipMutation.mutate()}
+      />
     </>
   );
 }
@@ -749,7 +749,7 @@ export interface PlanStepItem {
   priority?: string;
 }
 
-type TaskSubTab = "status" | "plan" | "config" | "output" | "triggers";
+type TaskSubTab = "status" | "plan" | "output" | "triggers";
 
 /** 任务优先级中文标签（对齐 tasks/new 与 teams/[id]/tasks 既有映射）。 */
 const TASK_PRIORITY_LABEL: Record<string, string> = {
@@ -815,7 +815,8 @@ function useTaskTriggers(taskId: string, teamId: string) {
       ? api.get<TriggersResponse>("/triggers", { query: { taskId, page: 1, pageSize: 100 } })
       : api.get<TriggersResponse>("/triggers", { query: { teamId, page: 1, pageSize: 100 } }),
     enabled: !!(taskId || teamId),
-    refetchInterval: 30_000,
+    // 错误态暂停轮询：接口持续报错时不再每 30s 重打刷错误条；用户手动重试或查询重新成功后恢复。
+    refetchInterval: (query) => (query.state.status === "error" ? false : 30_000),
     retry: false,
   });
 }
@@ -829,13 +830,30 @@ const TRIGGER_STATUS_THEME: Record<string, { label: string; color: string }> = {
   failed: { label: "失败", color: "#DC2626" },
 };
 
-/** 触发时间短标签（nextFireAt 优先，无时间显示"—"）。 */
-function triggerFireLabel(t: TriggerItem): string {
+/**
+ * 触发时间人话标签（对齐原型「今天 02:00」形态）：今/明/昨 + HH:mm，更远用 M/D HH:mm。
+ * 一次性触发器（催办等）nextFireAt 恒为 null → 回落 dueAt；若该时刻已过而仍 pending，
+ * 前缀「应于」——否则过去的绝对时间戳会被误读成「已触发」。
+ */
+function triggerTimeLabel(t: TriggerItem): string {
   const iso = t.nextFireAt ?? t.dueAt;
   if (!iso) return "—";
   const ms = new Date(iso).getTime();
   if (!Number.isFinite(ms)) return "—";
-  return new Date(ms).toLocaleString("zh-CN");
+  const d = new Date(ms);
+  const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const dayStart = (x: Date): number =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const dayDiff = Math.round((dayStart(d) - dayStart(new Date())) / 86_400_000);
+  const label =
+    dayDiff === 0
+      ? `今天 ${hm}`
+      : dayDiff === 1
+        ? `明天 ${hm}`
+        : dayDiff === -1
+          ? `昨天 ${hm}`
+          : `${d.getMonth() + 1}/${d.getDate()} ${hm}`;
+  return t.status === "pending" && ms < Date.now() ? `应于 ${label}` : label;
 }
 
 /** 绝对时间短标签（无效/缺失返回 null，调用方跳过该行）。 */
@@ -867,26 +885,6 @@ function triggerTitleOf(t: TriggerItem): string {
   return TRIGGER_KIND_LABEL[t.kind] ?? "触发器";
 }
 
-/** 范围文案：display 优先（team · label），taskLabel 与 scopeLabel 重复时去重；缺 display 回退 scope 列。 */
-function triggerScopeText(t: TriggerItem): string | null {
-  const label = t.display?.scopeLabel ?? (t.scopeType && t.scopeId ? `${t.scopeType}/${t.scopeId}` : "全局");
-  const body = t.display?.taskLabel === label ? null : label;
-  if (!body) return t.display?.scopeTeam ?? null;
-  return t.display?.scopeTeam ? `${t.display.scopeTeam} · ${body}` : body;
-}
-
-/** 归属文案：display.ownerLabel 优先（"—" 视为缺失），缺 display 回退 owner 实例 id。 */
-function triggerOwnerText(t: TriggerItem): string | null {
-  const owner = t.display?.ownerLabel;
-  if (owner && owner !== "—") return owner;
-  return t.ownerInstanceId ?? null;
-}
-
-/** 任务文案：display.taskLabel（与范围重复与否由调用方按需展示）。 */
-function triggerTaskText(t: TriggerItem): string | null {
-  return t.display?.taskLabel ?? null;
-}
-
 /**
  * 触发 Tab 面板：当前任务/团队作用域的触发器只读列表。
  * 系统来源行只读（无取消按钮），Agent 来源行可经 ConfirmDialog 取消。
@@ -896,6 +894,8 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
   const triggersQuery = useTaskTriggers(taskId, teamId);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  /** 详情弹窗当前展示的触发器（点行弹出；行内只留「来源 · 时间」，元信息收进弹窗）。 */
+  const [detailTrigger, setDetailTrigger] = useState<TriggerItem | null>(null);
   const cancelMutation = useMutation({
     mutationFn: (id: string) => api.delete(`/triggers/${id}`),
     onSuccess: () => {
@@ -913,7 +913,7 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
     <div style={{ position: "relative", display: "flex", flexDirection: "column", gap: space.sm }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>触发器</span>
-        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{triggersQuery.data?.total ?? items.length} 个</span>
+        <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{items.filter((t) => t.status === "pending").length} 待触发</span>
       </div>
       {triggersQuery.isPending ? (
         <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
@@ -928,10 +928,6 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
           {items.map((t) => {
             const st = TRIGGER_STATUS_THEME[t.status] ?? { label: t.status, color: neutral[500] };
             const title = triggerTitleOf(t);
-            const kindLabel = TRIGGER_KIND_LABEL[t.kind] ?? t.kind;
-            const scopeText = triggerScopeText(t);
-            const ownerText = triggerOwnerText(t);
-            const taskText = triggerTaskText(t);
             return (
               <div
                 key={t.id}
@@ -940,37 +936,43 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
                 data-kind={t.kind}
                 data-source={t.source}
                 data-status={t.status}
-                style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}
+                role="button"
+                tabIndex={0}
+                title="点击查看详情"
+                onClick={() => setDetailTrigger(t)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setDetailTrigger(t);
+                  }
+                }}
+                style={{ display: "flex", flexDirection: "column", gap: space.xs, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", cursor: "pointer" }}
               >
-                <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: st.color, flexShrink: 0 }} />
-                <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-                  <span style={{ display: "flex", alignItems: "baseline", gap: space.xs, minWidth: 0, fontWeight: 500 }}>
-                    <span data-testid="trigger-title" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
-                    <span aria-hidden style={{ color: neutral[300], flexShrink: 0 }}>·</span>
-                    <span style={{ color: st.color, flexShrink: 0, whiteSpace: "nowrap" }}>{st.label}</span>
-                  </span>
-                  <span style={{ fontSize: 10, color: neutral[400] }}>
-                    {triggerFireLabel(t)} · {t.source === "agent" ? "Agent" : "系统"} · 触发 {t.fireCount} 次 · 类型 {kindLabel}
-                    {scopeText && <> · 范围 <span data-testid="trigger-scope">{scopeText}</span></>}
-                    {ownerText && <> · 归属 <span data-testid="trigger-owner">{ownerText}</span></>}
-                    {taskText && <> · 任务 <span data-testid="trigger-task">{taskText}</span></>}
-                  </span>
-                  {t.skipReason && (
-                    <span data-testid="trigger-skip-reason" style={{ fontSize: 10, color: "#D97706", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>跳过原因：{t.skipReason}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
+                  <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: st.color, flexShrink: 0 }} />
+                  <span data-testid="trigger-title" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{title}</span>
+                  <span style={{ flexShrink: 0, whiteSpace: "nowrap", color: st.color }}>{st.label}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: space.xs, paddingLeft: 15, fontSize: 10, color: neutral[400] }}>
+                  <span>{t.source === "agent" ? "Agent" : "系统"}</span>
+                  <span aria-hidden style={{ color: neutral[300] }}>·</span>
+                  <span data-testid="trigger-time" style={{ whiteSpace: "nowrap" }}>{triggerTimeLabel(t)}</span>
+                  {t.source === "agent" && (
+                    <button
+                      type="button"
+                      data-testid="trigger-cancel"
+                      data-trigger-id={t.id}
+                      disabled={cancelMutation.isPending}
+                      title="取消该触发器"
+                      onClick={(e) => { e.stopPropagation(); setCancelError(null); setConfirmId(t.id); }}
+                      style={{ marginLeft: "auto", padding: "2px 8px", borderRadius: radius.pill, border: "1px solid rgba(239,68,68,0.22)", backgroundColor: "rgba(239,68,68,0.06)", color: "#DC2626", fontSize: 10, fontWeight: 500, cursor: cancelMutation.isPending ? "default" : "pointer", opacity: cancelMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body, flexShrink: 0 }}
+                    >
+                      取消
+                    </button>
                   )}
-                </span>
-                {t.source === "agent" && (
-                  <button
-                    type="button"
-                    data-testid="trigger-cancel"
-                    data-trigger-id={t.id}
-                    disabled={cancelMutation.isPending}
-                    title="取消该触发器"
-                    onClick={() => { setCancelError(null); setConfirmId(t.id); }}
-                    style={{ padding: "2px 8px", borderRadius: radius.pill, border: "1px solid rgba(239,68,68,0.22)", backgroundColor: "rgba(239,68,68,0.06)", color: "#DC2626", fontSize: 10, fontWeight: 500, cursor: cancelMutation.isPending ? "default" : "pointer", opacity: cancelMutation.isPending ? 0.6 : 1, fontFamily: fontFamily.body, flexShrink: 0 }}
-                  >
-                    取消
-                  </button>
+                </div>
+                {t.skipReason && (
+                  <div data-testid="trigger-skip-reason" style={{ paddingLeft: 15, fontSize: 10, color: "#D97706", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>跳过原因：{t.skipReason}</div>
                 )}
               </div>
             );
@@ -978,6 +980,15 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
         </div>
       )}
       {cancelError && <div data-testid="trigger-cancel-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.sm, padding: `${space.xs}px ${space.sm}px` }}>{cancelError}</div>}
+      <TriggerDetailModal
+        trigger={detailTrigger}
+        onCancel={(t) => {
+          setDetailTrigger(null);
+          setCancelError(null);
+          setConfirmId(t.id);
+        }}
+        onClose={() => setDetailTrigger(null)}
+      />
       <ConfirmDialog
         open={!!confirmItem}
         testid="trigger-cancel"
@@ -993,8 +1004,18 @@ function TaskTriggersBlock({ taskId, teamId }: { taskId: string; teamId: string 
   );
 }
 
-function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
-  team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; agents: any[];
+/** 计划类产出物列表项（服务端 toArtifactListItem 含 category/updatedAt；web 共享类型暂未收敛，此处局部扩展）。 */
+export interface PlanArtifactItem extends ArtifactItem {
+  category?: string | null;
+}
+
+/** 计划文档卡统一行：本地文件 | 计划类产出物（按更新时间倒序合并渲染）。 */
+export type PlanContentRow =
+  | { kind: "file"; key: string; updatedAt: string; file: PlanDocContent }
+  | { kind: "artifact"; key: string; updatedAt: string; artifact: PlanArtifactItem };
+
+function TaskSubTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery, subTab: controlledSub, onSubTabChange }: {
+  team: any; task: any; taskId: string; artifactsQuery: any; planArtifactsQuery?: any; issuesQuery: any; agents: any[];
   onEditTaskInfo: () => void; onOpenArtifacts: () => void; onOpenIssues: () => void;
   onOpenIssueDetail?: (issueId: string) => void; onOpenArtifactDoc?: (artifact: ArtifactItem) => void;
   /** 上传计划文件（写进任务目录 .opencode/plans/）；缺省则不显示上传入口。 */
@@ -1003,10 +1024,16 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
   planDocsQuery?: any;
   /** 执行步骤查询（GET /tasks/:id/plan-steps，由会话页提供，30s 轮询）。 */
   planStepsQuery?: any;
+  subTab?: TaskSubTab;
+  onSubTabChange?: (t: TaskSubTab) => void;
 }) {
-  const [subTab, setSubTab] = useState<TaskSubTab>("status");
+  const [innerSubTab, setInnerSubTab] = useState<TaskSubTab>("status");
+  const subTab = controlledSub ?? innerSubTab;
+  const setSubTab = onSubTabChange ?? setInnerSubTab;
   /** 计划文档 Modal 选中的文件（null=关闭；正文随列表已下发，打开即渲染）。 */
   const [planDoc, setPlanDoc] = useState<PlanDocContent | null>(null);
+  /** 计划类产出物弹窗（点击「产出物 · vN」行内联预览，不再跳文档站）。 */
+  const [planArtifact, setPlanArtifact] = useState<PlanArtifactItem | null>(null);
   /**
    * 计划文档列表：来自 `GET /tasks/:id/plan-docs`——任务目录 `.opencode/plans/*.md`
    * 的实时同步（agent 写的 / 用户上传的），vteam 不维护计划状态。
@@ -1014,7 +1041,26 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
   const planFiles: PlanDocContent[] = planDocsQuery?.data?.files ?? [];
   const planDocsDegraded: boolean = planDocsQuery?.data?.degraded ?? false;
   const planDocsPending: boolean = !!planDocsQuery?.isPending;
-  const planDocTotal = planFiles.length;
+  /** 计划类产出物（category=计划，由会话页 planArtifactsQuery 提供，30s 轮询）。 */
+  const planArtifactItems: PlanArtifactItem[] = planArtifactsQuery?.data?.items ?? [];
+  const planArtifactsPending: boolean = !!planArtifactsQuery?.isPending;
+  /**
+   * 计划文档卡统一列表 = 本地计划文件 + 计划类产出物，按更新时间倒序。
+   * 文件用 files[].updatedAt，产出物用 items[].updatedAt；非法时间沉底。
+   */
+  const planContentRows: PlanContentRow[] = [
+    ...planFiles.map((f): PlanContentRow => ({ kind: "file", key: `file:${f.name}`, updatedAt: f.updatedAt, file: f })),
+    ...planArtifactItems.map((a): PlanContentRow => ({ kind: "artifact", key: `artifact:${a.id}`, updatedAt: a.updatedAt, artifact: a })),
+  ].sort((x, y) => {
+    const tx = new Date(x.updatedAt).getTime();
+    const ty = new Date(y.updatedAt).getTime();
+    if (Number.isFinite(tx) && Number.isFinite(ty)) return ty - tx;
+    if (Number.isFinite(ty)) return 1;
+    if (Number.isFinite(tx)) return -1;
+    return 0;
+  });
+  const planContentPending: boolean = planDocsPending || planArtifactsPending;
+  const planDocTotal = planContentRows.length;
   /** 执行步骤（opencode todo 只读透传；degraded 时 steps 为空并提示不可用）。 */
   const planSteps: PlanStepItem[] = planStepsQuery?.data?.steps ?? [];
   const planStepsDegraded: boolean = planStepsQuery?.data?.degraded ?? false;
@@ -1025,12 +1071,8 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
   const triggersQuery = useTaskTriggers(taskId, teamScopeId);
   const pendingTriggers = (triggersQuery.data?.items ?? []).filter((t) => t.status === "pending").length;
   const statusLabel = task ? (task.status === "queued" ? "排队中" : task.status === "pending" ? "待开始" : task.status === "in_progress" ? "进行中" : task.status === "pending_review" ? "待验收" : task.status === "completed" ? "已完成" : "已归档") : "";
-  const configRows = [
-    { label: "标题", value: task?.title },
-    { label: "描述", value: task?.description },
+  const statusMetaRows = [
     { label: "优先级", value: task?.priority ? (TASK_PRIORITY_LABEL[task.priority] ?? task.priority) : null },
-    { label: "状态", value: statusLabel || null },
-    { label: "所属团队", value: team?.name ?? task?.teamId ?? null },
     { label: "创建人", value: task?.createdBy ?? null },
     { label: "创建时间", value: localDateTimeLabel(task?.createdAt) },
   ].filter((r) => r.value);
@@ -1041,7 +1083,6 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
         {([
           { key: "status" as const, label: "状态", badge: waiting > 0 ? String(waiting) : null },
           { key: "plan" as const, label: "计划", badge: planDocTotal ? String(planDocTotal) : null },
-          { key: "config" as const, label: "配置", badge: null },
           { key: "output" as const, label: "产出", badge: artifactsQuery.data?.total ? String(artifactsQuery.data.total) : null },
           { key: "triggers" as const, label: "触发", badge: pendingTriggers > 0 ? String(pendingTriggers) : null },
         ]).map((tab) => (
@@ -1055,36 +1096,27 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
         {subTab === "status" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
             <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: isCurrent ? "rgba(13,148,136,0.06)" : waiting > 0 ? "rgba(245,158,11,0.06)" : "var(--color-surface)", border: `1px solid ${isCurrent ? "rgba(13,148,136,0.14)" : waiting > 0 ? "rgba(245,158,11,0.14)" : neutral[200]}` }}>
-              <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-                <span style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, backgroundColor: task.status === "in_progress" ? "#10B981" : task.status === "queued" ? "#F59E0B" : task.status === "pending" ? "#0D9488" : neutral[300] }} />
-                <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.sm, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={task.title}>{task.title}</span>
-                <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontSize: fontSize.xs, color: "#FFF", backgroundColor: task.status === "queued" ? "#F59E0B" : task.status === "in_progress" ? "#10B981" : "#0D9488", padding: "1px 6px", borderRadius: radius.pill }}>{statusLabel}</span>
+              <div style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={task.title}>{task.title}</div>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: space.sm }}>
+                <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, backgroundColor: task.status === "in_progress" ? "#10B981" : task.status === "queued" ? "#F59E0B" : task.status === "pending" ? "#0D9488" : neutral[300] }} />
+                  <span style={{ whiteSpace: "nowrap", fontSize: fontSize.xs, color: "#FFF", backgroundColor: task.status === "queued" ? "#F59E0B" : task.status === "in_progress" ? "#10B981" : "#0D9488", padding: "1px 6px", borderRadius: radius.pill }}>{statusLabel}</span>
+                </span>
+                <button type="button" onClick={onEditTaskInfo} style={{ padding: `2px ${space.sm}px`, borderRadius: radius.sm, border: "none", background: "none", fontSize: fontSize.xs, color: neutral[400], cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0, fontFamily: fontFamily.body }}>编辑</button>
               </div>
-              <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>
-                {isCurrent ? "当前执行（队首）" : team?.currentTaskId ? `队首 ${team.currentTaskId.slice(0,8)}… 执行中` : "团队空闲"} · {waiting > 0 ? `等待中 ${waiting} 个` : "暂无等待"}
-              </div>
-              <div style={{ display: "flex", gap: space.sm, alignItems: "flex-start", flexWrap: "wrap" }}>
-                <div style={{ flex: "1 1 200px", minWidth: 0, display: "flex", flexDirection: "column" }}>
-                  <TaskStatusActions taskId={taskId} status={task.status as TaskApiStatus} />
+              <TaskStatusActions taskId={taskId} status={task.status as TaskApiStatus} layout="row" />
+              {statusMetaRows.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: space.sm, borderTop: `1px dashed ${neutral[200]}`, paddingTop: space.sm, fontSize: 11 }}>
+                  {statusMetaRows.map((r) => (
+                    <div key={r.label} style={{ minWidth: 0 }}>
+                      <div style={{ color: neutral[400] }}>{r.label}</div>
+                      <div style={{ marginTop: 2, color: neutral[700], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.value}</div>
+                    </div>
+                  ))}
                 </div>
-                <button type="button" onClick={onEditTaskInfo} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0 }}>编辑</button>
-              </div>
+              )}
             </div>
             <TeamQueueCard team={team} taskId={taskId} />
-          </div>
-        )}
-        {subTab === "config" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" }}>
-            <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>任务信息</div>
-            <div data-testid="task-config-fields" style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-              {configRows.map((r) => (
-                <div key={r.label} style={{ display: "flex", alignItems: "flex-start", gap: space.sm, fontSize: fontSize.xs }}>
-                  <span style={{ flexShrink: 0, width: 56, color: neutral[400] }}>{r.label}</span>
-                  <span style={{ flex: 1, minWidth: 0, color: neutral[700], whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{r.value}</span>
-                </div>
-              ))}
-            </div>
-            <button type="button" onClick={onEditTaskInfo} style={{ padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", fontSize: fontSize.sm, cursor: "pointer", fontFamily: fontFamily.body }}>编辑任务信息</button>
           </div>
         )}
         {subTab === "plan" && (
@@ -1108,35 +1140,76 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
                   </button>
                 </span>
               </div>
-              {planDocsPending ? (
+              {planContentPending ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
-              ) : planDocsDegraded && planFiles.length === 0 ? (
+              ) : planDocsQuery?.isError || planArtifactsQuery?.isError ? (
+                <div data-testid="plan-docs-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+                  {planDocsQuery?.isError && isApiError(planDocsQuery.error) ? planDocsQuery.error.message : planArtifactsQuery?.isError && isApiError(planArtifactsQuery.error) ? planArtifactsQuery.error.message : "计划文档加载失败"}
+                </div>
+              ) : planDocsDegraded && planContentRows.length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂不可用（主 Agent 会话未建立或 worker 离线）</div>
-              ) : planFiles.length === 0 ? (
+              ) : planContentRows.length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>
-                  暂无计划文件（可上传）
+                  暂无计划内容
                 </div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                  {planFiles.map((f) => (
-                    <button
-                      key={f.name}
-                      type="button"
-                      data-testid={`plan-doc-row-${f.name}`}
-                      title="点击查看全文"
-                      onClick={() => setPlanDoc(f)}
-                      style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}
-                    >
-                      <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#0D9488", flexShrink: 0 }} />
-                      <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{f.name}</span>
-                        <span style={{ fontSize: 10, color: neutral[400] }}>
-                          {planDocUpdatedLabel(f.updatedAt)}{f.truncated ? " · 已截断" : ""}
+                  {planContentRows.map((row) => {
+                    if (row.kind === "artifact") {
+                      const a = row.artifact;
+                      const body = (
+                        <>
+                          <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#2563EB", flexShrink: 0 }} />
+                          <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                            <span style={{ display: "flex", alignItems: "center", gap: space.xs, minWidth: 0 }}>
+                              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{a.title ?? a.id}</span>
+                              <span style={{ fontSize: 10, color: "#1D4ED8", backgroundColor: "rgba(37,99,235,0.08)", border: "1px solid rgba(37,99,235,0.22)", padding: "0 5px", borderRadius: radius.pill, fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>产出物 · v{a.currentVersion}</span>
+                            </span>
+                            <span style={{ fontSize: 10, color: neutral[400] }}>
+                              {planDocUpdatedLabel(a.updatedAt)}{a.acceptedFlag ? " · 已验收" : ""}
+                            </span>
+                          </span>
+                          <span aria-hidden style={{ color: neutral[300], fontSize: fontSize.xs, flexShrink: 0 }}>›</span>
+                        </>
+                      );
+                      const rowStyle = { display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box" as const, fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)" };
+                      return (
+                        <button
+                          key={row.key}
+                          type="button"
+                          data-testid={`plan-artifact-row-${a.id}`}
+                          title="点击查看内容"
+                          onClick={() => setPlanArtifact(a)}
+                          style={{ ...rowStyle, cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}
+                        >
+                          {body}
+                        </button>
+                      );
+                    }
+                    const f = row.file;
+                    return (
+                      <button
+                        key={row.key}
+                        type="button"
+                        data-testid={`plan-doc-row-${f.name}`}
+                        title="点击查看全文"
+                        onClick={() => setPlanDoc(f)}
+                        style={{ display: "flex", alignItems: "center", gap: space.sm, width: "100%", boxSizing: "border-box", fontSize: fontSize.sm, color: neutral[700], padding: `${space.xs}px ${space.sm}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, backgroundColor: "var(--color-surface)", cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body }}
+                      >
+                        <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: "#0D9488", flexShrink: 0 }} />
+                        <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                          <span style={{ display: "flex", alignItems: "center", gap: space.xs, minWidth: 0 }}>
+                            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>{f.name}</span>
+                            <span style={{ fontSize: 10, color: "#0D9488", backgroundColor: "rgba(13,148,136,0.08)", border: "1px solid rgba(13,148,136,0.22)", padding: "0 5px", borderRadius: radius.pill, fontWeight: 600, flexShrink: 0, whiteSpace: "nowrap" }}>本地文件</span>
+                          </span>
+                          <span style={{ fontSize: 10, color: neutral[400] }}>
+                            {planDocUpdatedLabel(f.updatedAt)}{f.truncated ? " · 已截断" : ""}
+                          </span>
                         </span>
-                      </span>
-                      <span aria-hidden style={{ color: neutral[300], fontSize: fontSize.xs, flexShrink: 0 }}>›</span>
-                    </button>
-                  ))}
+                        <span aria-hidden style={{ color: neutral[300], fontSize: fontSize.xs, flexShrink: 0 }}>›</span>
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -1147,6 +1220,10 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
               </div>
               {planStepsPending ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px solid ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>加载中…</div>
+              ) : planStepsQuery?.isError ? (
+                <div data-testid="plan-steps-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+                  {isApiError(planStepsQuery.error) ? planStepsQuery.error.message : "执行步骤加载失败"}
+                </div>
               ) : planStepsDegraded && planSteps.length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂不可用（主 Agent 会话未建立或 worker 离线）</div>
               ) : planSteps.length === 0 ? (
@@ -1177,20 +1254,19 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
         {subTab === "output" && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
             <div>
-              <div style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], marginBottom: space.sm }}>任务详情</div>
-              <div style={{ fontSize: fontSize.sm, color: neutral[700], backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>{task.title}</div>
-              {task.description && <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[500], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.md, padding: `${space.sm}px ${space.md}px`, whiteSpace: "pre-wrap" }}>{task.description}</div>}
-            </div>
-            <div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: space.sm }}>
                 <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>产出物</span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{artifactsQuery.data?.total ?? 0} 个</span>
               </div>
-              {(artifactsQuery.data?.items ?? []).length === 0 ? (
+              {artifactsQuery.isError ? (
+                <div data-testid="artifacts-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+                  {isApiError(artifactsQuery.error) ? artifactsQuery.error.message : "产出物加载失败"}
+                </div>
+              ) : (artifactsQuery.data?.items ?? []).length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无产出物</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                  {(artifactsQuery.data?.items ?? []).slice(0, 5).map((a: ArtifactItem) => {
+                  {(artifactsQuery.data?.items ?? []).map((a: ArtifactItem) => {
                     const typeTheme = ARTIFACT_TYPE_THEME[a.type] ?? ARTIFACT_TYPE_THEME.file;
                     const row = (
                       <>
@@ -1220,11 +1296,15 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
                 <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>待办 Issue</span>
                 <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{issuesQuery.data?.total ?? 0} 个</span>
               </div>
-              {(issuesQuery.data?.items ?? []).length === 0 ? (
+              {issuesQuery.isError ? (
+                <div data-testid="issues-error" role="alert" style={{ fontSize: fontSize.xs, color: "#DC2626", backgroundColor: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.14)", borderRadius: radius.md, padding: `${space.sm}px ${space.md}px` }}>
+                  {isApiError(issuesQuery.error) ? issuesQuery.error.message : "Issue 列表加载失败"}
+                </div>
+              ) : (issuesQuery.data?.items ?? []).length === 0 ? (
                 <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, textAlign: "center" }}>暂无 Issue</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                  {(issuesQuery.data?.items ?? []).slice(0, 5).map((it: TaskIssueItem) => {
+                  {(issuesQuery.data?.items ?? []).map((it: TaskIssueItem) => {
                     const badge = ISSUE_STATUS_BADGE[it.status] ?? ISSUE_STATUS_BADGE.open;
                     const row = (
                       <>
@@ -1254,6 +1334,11 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
       </div>
       {/* 计划文档弹窗：正文随列表已下发，纯展示不取数 */}
       <PlanDocModal doc={planDoc} onClose={() => setPlanDoc(null)} />
+      <ArtifactDocModal
+        artifact={planArtifact}
+        onOpenInDocs={onOpenArtifactDoc}
+        onClose={() => setPlanArtifact(null)}
+      />
     </div>
   );
 }
@@ -1261,6 +1346,11 @@ function TaskSubTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, 
 /** 执行步骤状态主题（对齐 serve todo status：pending/in_progress/completed/cancelled）。 */
 const PLAN_STEP_THEME: Record<string, { icon: string; color: string }> = {
   completed: { icon: "✓", color: "#10B981" },
+  // plan_tasks.status 词表（schema 契约）：done=完成、blocked=阻塞、skipped=跳过。
+  // 不识别会被兜底成 pending（画 ○ 未完成），导致「已完成步骤仍显示未完成」。
+  done: { icon: "✓", color: "#10B981" },
+  blocked: { icon: "⊘", color: "#DC2626" },
+  skipped: { icon: "−", color: neutral[300] },
   in_progress: { icon: "◐", color: "#0D9488" },
   cancelled: { icon: "✕", color: neutral[300] },
   pending: { icon: "○", color: neutral[400] },
@@ -1280,8 +1370,8 @@ function planDocUpdatedLabel(iso: string): string {
 /* ------------------------------------------------------------------ */
 /* 主组件：团队 / 任务 双 Tab                                           */
 /* ------------------------------------------------------------------ */
-export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onToggleManagedMode, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
-  team: any; task: any; taskId: string; artifactsQuery: any; issuesQuery: any; agents: any[];
+export function TaskRightTabs({ team, task, taskId, artifactsQuery, planArtifactsQuery, issuesQuery, agents, onEditTaskInfo, onOpenArtifacts, onOpenIssues, onToggleManagedMode, onOpenIssueDetail, onOpenArtifactDoc, onUploadPlanDoc, planDocsQuery, planStepsQuery }: {
+  team: any; task: any; taskId: string; artifactsQuery: any; planArtifactsQuery?: any; issuesQuery: any; agents: any[];
   onEditTaskInfo: () => void; onOpenArtifacts: () => void; onOpenIssues: () => void;
   onToggleManagedMode: (v: boolean) => void;
   onOpenIssueDetail?: (issueId: string) => void; onOpenArtifactDoc?: (artifact: ArtifactItem) => void;
@@ -1290,34 +1380,42 @@ export function TaskRightTabs({ team, task, taskId, artifactsQuery, issuesQuery,
   /** 计划文档/执行步骤查询（计划 Tab 用；会话页提供并轮询）。 */
   planDocsQuery?: any; planStepsQuery?: any;
 }) {
-  const [activeMainTab, setActiveMainTab] = React.useState<"team" | "task">("team");
   const hasTask = !!task;
+  const userPickedTabRef = React.useRef(false);
+  const [activeMainTab, setActiveMainTab] = React.useState<"team" | "task">(hasTask ? "task" : "team");
+  const [teamSubTab, setTeamSubTab] = React.useState<TeamSubTab>("overview");
+  const [taskSubTab, setTaskSubTab] = React.useState<TaskSubTab>("status");
+  // T17: task 异步到达（首渲染恒 null），hasTask 变 true 时自动落任务 Tab；用户手动点过则不再抢回
+  React.useEffect(() => {
+    if (hasTask && !userPickedTabRef.current) setActiveMainTab("task");
+  }, [hasTask]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       {/* 一级 Tab：团队 / 任务 */}
       <div style={{ display: "flex", borderBottom: `1px solid ${neutral[200]}`, backgroundColor: neutral[50], flexShrink: 0 }}>
-        <button type="button" onClick={() => setActiveMainTab("team")} style={{ flex: 1, minWidth: 0, padding: `${space.sm}px ${space.md}px`, border: "none", borderBottom: `2px solid ${activeMainTab === "team" ? "#0D9488" : "transparent"}`, backgroundColor: activeMainTab === "team" ? "var(--color-surface)" : "transparent", color: activeMainTab === "team" ? "#0D9488" : neutral[500], fontSize: fontSize.sm, fontWeight: activeMainTab === "team" ? 600 : 400, cursor: "pointer", fontFamily: fontFamily.body, whiteSpace: "nowrap" }}>
+        <button type="button" data-testid="main-tab-team" data-active={activeMainTab === "team"} onClick={() => { userPickedTabRef.current = true; setActiveMainTab("team"); }} style={{ flex: 1, minWidth: 0, padding: `${space.sm}px ${space.md}px`, border: "none", borderBottom: `2px solid ${activeMainTab === "team" ? "#0D9488" : "transparent"}`, backgroundColor: activeMainTab === "team" ? "var(--color-surface)" : "transparent", color: activeMainTab === "team" ? "#0D9488" : neutral[500], fontSize: fontSize.sm, fontWeight: activeMainTab === "team" ? 600 : 400, cursor: "pointer", fontFamily: fontFamily.body, whiteSpace: "nowrap" }}>
           团队
         </button>
         {hasTask && (
-          <button type="button" onClick={() => setActiveMainTab("task")} style={{ flex: 1, minWidth: 0, padding: `${space.sm}px ${space.md}px`, border: "none", borderBottom: `2px solid ${activeMainTab === "task" ? "#0D9488" : "transparent"}`, backgroundColor: activeMainTab === "task" ? "var(--color-surface)" : "transparent", color: activeMainTab === "task" ? "#0D9488" : neutral[500], fontSize: fontSize.sm, fontWeight: activeMainTab === "task" ? 600 : 400, cursor: "pointer", fontFamily: fontFamily.body, whiteSpace: "nowrap" }}>
+          <button type="button" data-testid="main-tab-task" data-active={activeMainTab === "task"} onClick={() => { userPickedTabRef.current = true; setActiveMainTab("task"); }} style={{ flex: 1, minWidth: 0, padding: `${space.sm}px ${space.md}px`, border: "none", borderBottom: `2px solid ${activeMainTab === "task" ? "#0D9488" : "transparent"}`, backgroundColor: activeMainTab === "task" ? "var(--color-surface)" : "transparent", color: activeMainTab === "task" ? "#0D9488" : neutral[500], fontSize: fontSize.sm, fontWeight: activeMainTab === "task" ? 600 : 400, cursor: "pointer", fontFamily: fontFamily.body, whiteSpace: "nowrap" }}>
             任务
           </button>
         )}
       </div>
       {/* 内容区 */}
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
-        {activeMainTab === "team" && <TeamSubTabs team={team} onToggleManagedMode={onToggleManagedMode} />}
+        {activeMainTab === "team" && <TeamSubTabs team={team} task={task} onToggleManagedMode={onToggleManagedMode} subTab={teamSubTab} onSubTabChange={setTeamSubTab} />}
         {activeMainTab === "task" && hasTask && (
           <TaskSubTabs
             team={team} task={task} taskId={taskId}
-            artifactsQuery={artifactsQuery} issuesQuery={issuesQuery}
+            artifactsQuery={artifactsQuery} planArtifactsQuery={planArtifactsQuery} issuesQuery={issuesQuery}
             agents={agents} onEditTaskInfo={onEditTaskInfo} onOpenArtifacts={onOpenArtifacts}
             onOpenIssues={onOpenIssues}
             onOpenIssueDetail={onOpenIssueDetail} onOpenArtifactDoc={onOpenArtifactDoc}
             onUploadPlanDoc={onUploadPlanDoc}
             planDocsQuery={planDocsQuery} planStepsQuery={planStepsQuery}
+            subTab={taskSubTab} onSubTabChange={setTaskSubTab}
           />
         )}
       </div>

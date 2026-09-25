@@ -14,7 +14,6 @@ import { TriggersService } from './triggers.service';
  * /system/triggers 与团队会话触发 Tab 底座；owner/admin 复核在
  * TriggersService 内逐行执行）+ 编程式 TriggerService.schedule/
  * registerHandler/fireDue（消费者接入不变）。
- * TimerService 与 TriggerService 同引用，旧 token 注入零改动继续工作。
  * 自愈：TriggerReconcilerService（trigger-unification todo-3，启动即跑 +
  * 15min 周期，hook↔trigger 孤儿双向修复；仅依赖 Prisma/IdGen/Realtime，
  * 不依赖 HookService，无循环依赖）。
@@ -26,6 +25,3 @@ import { TriggersService } from './triggers.service';
   exports: [TriggerService],
 })
 export class TimersModule {}
-
-// 旧名重导出：按 token 注入的旧消费者（@Inject(TimerService)）类型位可用。
-export { TimerService } from './trigger.service';

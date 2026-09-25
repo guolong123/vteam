@@ -1,4 +1,5 @@
 import { Module, forwardRef } from '@nestjs/common';
+import { ArtifactsModule } from '../artifacts/artifacts.module';
 import { ChatModule } from '../chat/chat.module';
 import { IssuesModule } from '../issues/issues.module';
 import { MessageChannelsModule } from '../message-channels/message-channels.module';
@@ -9,9 +10,9 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { WorkersModule } from '../workers/workers.module';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
 import { TasksController } from './tasks.controller';
-import { MigrateController } from './migrate.controller';
 import { TaskChannelBindingsController } from './task-channel-bindings.controller';
 import { TasksService } from './tasks.service';
+import { PlanArchiveService } from './plan-archive.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
 import { PlanStepsService } from './plan-steps.service';
 import { PlanDocsService } from './plan-docs.service';
@@ -41,15 +42,13 @@ import { PlanReviewWiring } from './plan-review-wiring';
     ChatModule,
     IssuesModule,
     TimersModule,
+    ArtifactsModule,
     forwardRef(() => MessageChannelsModule),
   ],
-  controllers: [
-    TasksController,
-    MigrateController,
-    TaskChannelBindingsController,
-  ],
+  controllers: [TasksController, TaskChannelBindingsController],
   providers: [
     TasksService,
+    PlanArchiveService,
     PlanLifecycleService,
     PlanStepsService,
     PlanDocsService,
@@ -58,6 +57,6 @@ import { PlanReviewWiring } from './plan-review-wiring';
     TeamMembershipGuard,
     PermissionGuard,
   ],
-  exports: [TasksService, PlanLifecycleService],
+  exports: [TasksService, PlanLifecycleService, PlanStepsService],
 })
 export class TasksModule {}

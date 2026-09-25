@@ -2,10 +2,12 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
@@ -34,8 +36,9 @@ import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
-import { UpdateTeamDto } from './dto/update-team.dto';
+import { UpdateTaskTeamDto } from './dto/update-team.dto';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
+import { PlanArchiveService } from './plan-archive.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
 import { sanitizeWorkDirName } from './work-dir.util';
 
@@ -74,9 +77,6 @@ type TaskRow = {
   description: string | null;
   priority: string;
   status: string;
-  mainAgentId: string | null;
-  mainAgentInstanceId: string | null;
-  executionMode: string;
   backgroundDocs: Prisma.JsonValue | null;
   resetAfterComplete?: boolean | null;
   teamId?: string | null;
@@ -129,7 +129,7 @@ type TransitionOptions = {
   preflight?: (task: TaskRow) => void | Promise<void>;
   /** 事务内副作用（仅 archive：sessions 全部置 archived）。 */
   afterCommit?: (tx: Prisma.TransactionClient) => Promise<void>;
-  /** 群聊系统消息文案（10 篇 §8.1，落库 task_group 频道 senderType=system）；不传则不生成。 */
+  /** 群聊系统消息文案（10 篇 §8.1，落库 team_group 频道 senderType=system）；不传则不生成。 */
   sysMessage?: (ctx: SysMessageCtx) => string;
   /** start/accept 私信主 Agent 的提示文案（13 篇 §4.2 + 记忆管理 mem-trigger，落库主 Agent private 频道）；不传则只写群聊。 */
   privateMessage?: (ctx: SysMessageCtx) => string;
@@ -155,7 +155,24 @@ export class TasksService implements OnModuleInit {
     private readonly sessionLifecycle: SessionLifecycleService,
     private readonly progression: TaskProgressionScheduler,
     private readonly planLifecycle: PlanLifecycleService,
+    // 计划目录自动归档（Phase 3）：@Optional 缺省可空——单测/旧装配未提供时跳过扫描；
+    // 生产装配经本模块 providers 提供，无新增模块边。
+    @Optional()
+    @Inject(PlanArchiveService)
+    private readonly planArchive?: PlanArchiveService | null,
   ) {}
+
+  /**
+   * 行锁可用性判定（Todo 22）：sqlite 不支持 SELECT ... FOR UPDATE，
+   * 仅在该引擎上允许降级为无锁读；支持行锁的引擎上锁查询失败必须抛出，
+   * 否则静默无锁读会打开 double-promote 竞态。
+   */
+  private isRowLockUnsupportedEngine(): boolean {
+    const dbType = (process.env.DB_TYPE ?? '').toLowerCase();
+    if (dbType.includes('sqlite')) return true;
+    const url = (process.env.DATABASE_URL ?? '').toLowerCase();
+    return url.startsWith('file:') || url.endsWith('.db');
+  }
 
   /** 进程启动：按库内各前缀纯数字序号最大值对齐 id 生成器（resyncIdPrefix 跳过非数字 id，防主键冲突）。 */
   async onModuleInit(): Promise<void> {
@@ -180,18 +197,24 @@ export class TasksService implements OnModuleInit {
     // 看门狗停滞回调：连续静默达上限 → 系统置阻塞 + 群公告（actor=system）。
     // progression 为本类已注入依赖，无循环引用；spec mock 缺该方法时可选调用。
     try {
-      (this.progression as unknown as {
-        onStallDetected?: (
-          cb: (taskId: string, reason: string) => void,
-        ) => void;
-      })?.onStallDetected?.((taskId, reason) => {
+      (
+        this.progression as unknown as {
+          onStallDetected?: (
+            cb: (taskId: string, reason: string) => void,
+          ) => void;
+        }
+      )?.onStallDetected?.((taskId, reason) => {
         void this.systemBlock(taskId, reason).catch((err: unknown) =>
           this.logger.error(
             `停滞自动置阻塞失败 taskId=${taskId}: ${err instanceof Error ? err.message : String(err)}`,
           ),
         );
       });
-    } catch {}
+    } catch (err: unknown) {
+      this.logger.warn(
+        `停滞回调注册失败（progression 未提供 onStallDetected，不影响启动）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -319,7 +342,10 @@ export class TasksService implements OnModuleInit {
             } else {
               team = await tx.team.findUnique({ where: { id: teamId } });
             }
-          } catch {
+          } catch (err) {
+            // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出，
+            // 否则静默降级会丢失行锁、打开 double-promote 竞态（Todo 22）。
+            if (!this.isRowLockUnsupportedEngine()) throw err;
             team = await tx.team.findUnique({ where: { id: teamId } });
           }
           if (!team) {
@@ -343,16 +369,17 @@ export class TasksService implements OnModuleInit {
               const v = qRows?.[0]?.maxPos;
               maxPos = typeof v === 'number' ? v : v != null ? Number(v) : 0;
               if (!Number.isFinite(maxPos)) maxPos = 0;
-            } catch {
-              try {
-                const agg = await tx.teamQueue.aggregate({
-                  _max: { position: true },
-                  where: { teamId },
-                });
-                maxPos = agg._max.position ?? 0;
-              } catch {
-                maxPos = 0;
-              }
+            } catch (err) {
+              // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁 aggregate；支持行锁的引擎上
+              // 锁查询失败必须直接抛出——双失败时禁止 maxPos = 0 伪造 position = 1，
+              // 否则静默破坏 FIFO 队列顺序（Todo 23）。aggregate 自身失败一律向上抛出，
+              // 位置永不虚构。
+              if (!this.isRowLockUnsupportedEngine()) throw err;
+              const agg = await tx.teamQueue.aggregate({
+                _max: { position: true },
+                where: { teamId },
+              });
+              maxPos = agg._max.position ?? 0;
             }
           }
 
@@ -374,14 +401,6 @@ export class TasksService implements OnModuleInit {
             });
           }
 
-          // 主 Agent 继承团队设定：team.mainAgentMemberId 指向的成员即任务主实例；
-          // 无设定则保持 null（serverGated 工具届时按“未设置”拒绝，与旧行为一致）。
-          const mainMember =
-            (team as any)?.mainAgentMemberId != null
-              ? (members.find(
-                  (m: any) => m.id === (team as any).mainAgentMemberId,
-                ) ?? null)
-              : null;
           const created = await tx.task.create({
             data: {
               id: taskId,
@@ -390,11 +409,6 @@ export class TasksService implements OnModuleInit {
               priority: dto.priority ?? TASK_PRIORITY.medium,
               status,
               teamId,
-              mainAgentId: mainMember?.agentId ?? null,
-              mainAgentInstanceId: mainMember?.id ?? null,
-              // executionMode 列保留但已停用（vteam 自造 plan 域下线，改由 opencode agent 承担）；
-              // 不再从 DTO 取值，恒写 direct 以保持列非空默认语义。
-              executionMode: 'direct',
               backgroundDocs: (dto.backgroundDocs ??
                 []) as Prisma.InputJsonValue,
               resetAfterComplete: (dto as any).resetAfterComplete ?? false,
@@ -403,48 +417,42 @@ export class TasksService implements OnModuleInit {
             },
           });
 
-          try {
-            const txChat: any = (tx as any).chatChannel;
-            if (txChat?.findFirst) {
-              const existing: any = await txChat
-                .findFirst({
+          // team channel ensure 与任务写同一原子单元：任一失败直接抛、
+          // 中止外层 $transaction 回滚任务行，禁止无通道半成品任务（Todo 24）。
+          const txChat: any = (tx as any).chatChannel;
+          if (txChat?.findFirst) {
+            const existing: any = await txChat.findFirst({
+              where: {
+                teamId,
+                type: CHANNEL_TYPE.team_group,
+                deletedAt: null,
+              },
+            });
+            if (!existing) {
+              try {
+                await txChat.create({
+                  data: {
+                    id: await this.idGen.nextId(ID_PREFIX.channel),
+                    type: CHANNEL_TYPE.team_group,
+                    teamId,
+                    taskId: null,
+                  },
+                });
+              } catch (err: any) {
+                // 并发竞态唯一键冲突（team_group 单例）→ 回退查已存在，
+                // 与 chat.service ensureTeamChannel 同 pattern；其余一律抛出。
+                if (err?.code !== 'P2002') throw err;
+                const raced: any = await txChat.findFirst({
                   where: {
                     teamId,
                     type: CHANNEL_TYPE.team_group,
                     deletedAt: null,
                   },
-                })
-                .catch(() => null);
-              if (!existing) {
-                const legacy: any = await txChat
-                  .findFirst({ where: { teamId } })
-                  .catch(() => null);
-                if (!legacy) {
-                  try {
-                    await txChat.create({
-                      data: {
-                        id: await this.idGen.nextId(ID_PREFIX.channel),
-                        type: CHANNEL_TYPE.team_group,
-                        teamId,
-                        taskId: null,
-                      },
-                    });
-                  } catch {}
-                } else if (legacy.type === CHANNEL_TYPE.task_group) {
-                  try {
-                    await txChat.update({
-                      where: { id: legacy.id },
-                      data: {
-                        teamId,
-                        type: CHANNEL_TYPE.team_group,
-                        taskId: null,
-                      },
-                    });
-                  } catch {}
-                }
+                });
+                if (!raced) throw err;
               }
             }
-          } catch {}
+          }
 
           // FIFO + 版本双保险
           if (isIdle) {
@@ -558,7 +566,10 @@ export class TasksService implements OnModuleInit {
         ? await tx.team.findUnique({ where: { id: teamId } })
         : await tx.team.findUnique({ where: { id: teamId } });
       if (team && rows?.[0]) team.version = rows[0].version;
-    } catch {
+    } catch (err) {
+      // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出，
+      // 否则静默降级会丢失行锁、打开 double-promote 竞态（Todo 22）。
+      if (!this.isRowLockUnsupportedEngine()) throw err;
       team = await tx.team.findUnique({ where: { id: teamId } });
     }
     if (!team) return;
@@ -574,7 +585,10 @@ export class TasksService implements OnModuleInit {
           where: { teamId },
           orderBy: { position: 'asc' },
         });
-    } catch {
+    } catch (err) {
+      // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出，
+      // 否则静默降级会丢失队首锁、打开 double-promote 竞态（Todo 25）。
+      if (!this.isRowLockUnsupportedEngine()) throw err;
       next = await tx.teamQueue.findFirst({
         where: { teamId },
         orderBy: { position: 'asc' },
@@ -605,8 +619,11 @@ export class TasksService implements OnModuleInit {
             });
           }
         }
-      } catch {
+      } catch (err: unknown) {
         // sqlite fallback 无碍，position 仍可用 MAX+1 保持 FIFO
+        this.logger.warn(
+          `队列 position 重排失败 teamId=${teamId}（无碍，仍可用 MAX+1 保持 FIFO）: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
       await this.realtime.broadcast(
         EVENT_TYPES.TEAM_QUEUE_CHANGED,
@@ -678,7 +695,7 @@ export class TasksService implements OnModuleInit {
     return this.toTaskDto(task);
   }
 
-  /** 编辑任务：mainAgentInstanceId 须为团队内实例；mainAgentId 兼容映射到该 agent 第一个实例（FR-08）。 */
+  /** 编辑任务：仅更新可编辑任务字段；主 Agent 身份由 Team.mainAgentMemberId 管理。 */
   async update(id: string, dto: UpdateTaskDto) {
     const task = await this.prisma.task.findUnique({
       where: { id },
@@ -706,49 +723,6 @@ export class TasksService implements OnModuleInit {
     if ((dto as any).resetAfterComplete !== undefined) {
       data.resetAfterComplete = (dto as any).resetAfterComplete;
     }
-    // 主实例校验口径团队化：实例唯一来源为任务归属团队的团队成员（tmm_）。
-    const teamIdOf = (task as any).teamId ?? null;
-    const memberRows: Array<{ id: string; agentId: string }> = teamIdOf
-      ? await (this.prisma as any).teamMember.findMany({
-          where: { teamId: teamIdOf },
-          select: { id: true, agentId: true },
-        })
-      : [];
-    const instances = memberRows ?? [];
-    if (dto.mainAgentInstanceId !== undefined) {
-      // 主实例：须为团队内实例，同步 mainAgentId 为其 agent（渲染兜底）
-      if (dto.mainAgentInstanceId !== null) {
-        const inst = instances.find((i) => i.id === dto.mainAgentInstanceId);
-        if (!inst) {
-          throw new BadRequestException({
-            code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-            message: '主 Agent 必须是团队内实例',
-          });
-        }
-        data.mainAgentInstanceId = inst.id;
-        data.mainAgentId = inst.agentId;
-      } else {
-        data.mainAgentInstanceId = null;
-        data.mainAgentId = null;
-      }
-    } else if (dto.mainAgentId !== undefined) {
-      // 兼容路径：mainAgentId 映射到该 agent 第一个实例
-      if (dto.mainAgentId !== null) {
-        const inst = instances.find((i) => i.agentId === dto.mainAgentId);
-        if (!inst) {
-          throw new BadRequestException({
-            code: TASK_ERRORS.MAIN_AGENT_NOT_IN_TEAM,
-            message: '主 Agent 必须是团队内已选 Agent',
-          });
-        }
-        data.mainAgentId = inst.agentId;
-        data.mainAgentInstanceId = inst.id;
-      } else {
-        data.mainAgentId = null;
-        data.mainAgentInstanceId = null;
-      }
-    }
-
     const updated = await this.prisma.task.update({
       where: { id },
       data,
@@ -764,7 +738,7 @@ export class TasksService implements OnModuleInit {
    * addInstances：每个实例写 team_members（seq = 该 teamId+agentId 已用最大 seq+1，事务内防并发重号）；
    *              同 agent 可加多实例。
    * removeInstanceIds：按成员 id 删除 team_members 行 + 冻结该成员 session（status=frozen）；
-   *                    主成员被移除时清空 team.mainAgentMemberId（任务侧主标量同步置空）。
+   *                    主成员被移除时清空 team.mainAgentMemberId。
    *                    产出物保留（本版不动 artifacts）。
    * 群聊联动：团队群频道写 system 消息（10 篇 §8.3 文案）+ 广播 chat.message.new（T9 模式）。
    * 审计：team 变更写 task_event（team_add/team_remove，actorType/actorId=userId 或 opts 确认方）。
@@ -773,7 +747,7 @@ export class TasksService implements OnModuleInit {
    */
   async updateTeam(
     id: string,
-    dto: UpdateTeamDto,
+    dto: UpdateTaskTeamDto,
     userId?: string,
     opts?: {
       /** 审计 actorType/actorId（MCP 确认门传 agent/主实例；缺省回退 user/userId）。 */
@@ -833,15 +807,10 @@ export class TasksService implements OnModuleInit {
       where: { id: teamId },
       select: { mainAgentMemberId: true },
     });
-    const channel =
-      (await this.prisma.chatChannel.findFirst({
-        where: { taskId: id, type: CHANNEL_TYPE.task_group },
-        select: { id: true },
-      })) ??
-      (await this.prisma.chatChannel.findFirst({
-        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
-        select: { id: true },
-      }));
+    const channel = await this.prisma.chatChannel.findFirst({
+      where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+      select: { id: true },
+    });
 
     const { sysMessages, created } = await this.prisma.$transaction(
       async (tx) => {
@@ -862,10 +831,6 @@ export class TasksService implements OnModuleInit {
           await tx.team.update({
             where: { id: teamId },
             data: { mainAgentMemberId: null },
-          });
-          await tx.task.update({
-            where: { id },
-            data: { mainAgentId: null, mainAgentInstanceId: null },
           });
         }
         const messages: SysMessageRow[] = [];
@@ -1087,8 +1052,8 @@ export class TasksService implements OnModuleInit {
             });
           },
           // 10 篇 §8.1：群聊系统消息含主实例名（FR-07/08）
-          sysMessage: ({ task, mainAgentName }) =>
-            `任务已开始，主 Agent：${mainAgentName ?? task.mainAgentId ?? '未设置'}`,
+          sysMessage: ({ mainAgentName }) =>
+            `任务已开始，主 Agent：${mainAgentName ?? '未设置'}`,
           // 13 篇 §4.2：私信主实例的启动消息（含任务目标、团队分工、背景文档）
           privateMessage: ({ task }) => {
             const docs = Array.isArray(task.backgroundDocs)
@@ -1240,12 +1205,20 @@ export class TasksService implements OnModuleInit {
 
   /** 标记待验收（in_progress → pending_review，13 篇 §4.3）：写 pendingReviewAt。 */
   async markPendingReview(id: string, userId: string) {
-    return this.transition(
+    const result = await this.transition(
       id,
       'mark-pending-review',
       userId,
       this.transitionOpts(id, 'mark-pending-review'),
     );
+    void this.planArchive
+      ?.scanAndArchivePlanDocs(id)
+      .catch((err: unknown) =>
+        this.logger.warn(
+          `计划自动归档触发失败 task=${id}（状态已落库，不影响）: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    return result;
   }
 
   /**
@@ -1253,7 +1226,7 @@ export class TasksService implements OnModuleInit {
    * 12 篇 §7 验收联动：同事务锁定该任务全部产出物当前版本基线（accepted_flag=true）。
    */
   async accept(id: string, userId: string, opts?: CompletionForceOptions) {
-    return this.transition(
+    const result = await this.transition(
       id,
       'accept',
       userId,
@@ -1264,6 +1237,14 @@ export class TasksService implements OnModuleInit {
         opts ? { ...opts, forcedBy: userId } : undefined,
       ),
     );
+    void this.planArchive
+      ?.scanAndArchivePlanDocs(id)
+      .catch((err: unknown) =>
+        this.logger.warn(
+          `计划自动归档触发失败 task=${id}（状态已落库，不影响）: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    return result;
   }
 
   /** 验收驳回（pending_review → in_progress，13 篇 §4.4）：reason 写 metadata，重置 pendingReviewAt。 */
@@ -1309,8 +1290,8 @@ export class TasksService implements OnModuleInit {
 
   /**
    * 系统自动置阻塞（看门狗停滞回调专用）：语义同 block，但 actor=system。
-   * 置阻塞成功后在团队群聊落群公告（transition 的 sysMessage 只进 task_group，
-   * 团队任务无 task_group 时用户不可见）。失败上抛由调用方记日志。
+   * 置阻塞成功后在团队群聊落群公告（transition 的 sysMessage 只进 team_group，
+   * 团队任务无 team_group 时用户不可见）。失败上抛由调用方记日志。
    */
   async systemBlock(id: string, reason: string) {
     const text = (reason ?? '').trim() || '看门狗判定停滞';
@@ -1575,7 +1556,11 @@ export class TasksService implements OnModuleInit {
               },
               { type: 'team', id: (task as any).teamId } as any,
             );
-          } catch {}
+          } catch (err: unknown) {
+            this.logger.warn(
+              `认领广播失败 taskId=${id} teamId=${teamHead.id}（DB 已提交，仅广播丢失）: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
         } else {
           throw new ConflictException({
             code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
@@ -1599,11 +1584,18 @@ export class TasksService implements OnModuleInit {
     }
     await opts.preflight?.(task);
 
-    // 系统消息落库目标：任务群聊频道（task_group，10 篇 §8.1；T8 updateTeam 同模式）
-    const channel = await this.prisma.chatChannel.findFirst({
-      where: { taskId: id, type: CHANNEL_TYPE.task_group },
-      select: { id: true },
-    });
+    // 系统消息落库目标：团队群聊频道（team_group，10 篇 §8.1；T8 updateTeam 同模式）
+    const taskTeamId = (task as any).teamId as string | null | undefined;
+    const channel = taskTeamId
+      ? await this.prisma.chatChannel.findFirst({
+          where: {
+            teamId: taskTeamId,
+            type: CHANNEL_TYPE.team_group,
+            deletedAt: null,
+          },
+          select: { id: true },
+        })
+      : null;
     // start/accept 私信主成员（13 篇 §4.2；记忆管理 mem-trigger：accept 同路径私信引导记忆总结）：
     // 解析主成员别名 + private 频道（按 teamMemberId；绑定缺省时回退首位成员，空名册/无团队则跳过）
     let mainAgentName: string | undefined;
@@ -1713,15 +1705,18 @@ export class TasksService implements OnModuleInit {
         (task as any).teamId
       ) {
         const teamIdForReset = (task as any).teamId as string;
+        // Todo7 记忆开关 + Todo 25：team 行缺失（null）保持 needReset=false；
+        // 查询失败直接向上抛出（不吞错），否则脏会话被静默复用。
+        // reuseSession / resetAfterComplete 业务规则本身不变。
         let needReset = false;
-        try {
-          const teamRow = await (tx as any).team.findUnique({
-            where: { id: teamIdForReset },
-            select: { reuseSession: true },
-          });
+        const teamRow = await (tx as any).team.findUnique({
+          where: { id: teamIdForReset },
+          select: { reuseSession: true },
+        });
+        if (teamRow) {
           const taskReset = Boolean((task as any).resetAfterComplete);
-          needReset = !!teamRow && (!teamRow.reuseSession || taskReset);
-        } catch {}
+          needReset = !teamRow.reuseSession || taskReset;
+        }
         if (needReset) {
           await this.sessionLifecycle.resetTeamSessionsInTx(
             tx as unknown as Prisma.TransactionClient,
@@ -1811,8 +1806,7 @@ export class TasksService implements OnModuleInit {
    * 任务 DTO（Todo11 团队化）：instances 自团队成员组装
    * [{id(tmm_), agentId, alias, seq, name, role, main}]，按 (agentId, seq) 稳定排序；
    * main = team.mainAgentMemberId；sessionStatus/sessionId 取团队会话行；
-   * 无任务侧实例字段、无任务实例表读取。
-   * mainAgentId/mainAgentInstanceId 标量保留（历史值由 Todo 6 迁移置空，列保留）。
+   * 无任务侧实例字段、无任务实例表读取；主成员身份仅来自 Team.mainAgentMemberId。
    */
   private async toTaskDto(task: TaskRow) {
     const teamId = (task as any).teamId ?? null;
@@ -1888,10 +1882,9 @@ export class TasksService implements OnModuleInit {
       description: task.description,
       priority: task.priority,
       status: task.status,
-      mainAgentId: task.mainAgentId,
-      mainAgentInstanceId: task.mainAgentInstanceId ?? null,
-      executionMode: task.executionMode ?? 'direct',
+      mainAgentMemberId: mainMemberId,
       backgroundDocs: task.backgroundDocs ?? [],
+      resetAfterComplete: Boolean(task.resetAfterComplete),
       teamId: (task as any).teamId ?? null,
       teamAgentIds: members.map((m) => m.agentId),
       instances,
@@ -1933,7 +1926,7 @@ export class TasksService implements OnModuleInit {
     externalBound = false,
   ): string {
     const base = sanitizeWorkDirName(
-      externalBound && role ? role.name : agent.name ?? agent.id ?? 'agent',
+      externalBound && role ? role.name : (agent.name ?? agent.id ?? 'agent'),
     );
     return seq > 1
       ? `/data/vteam-worker/${base}-${seq}`
@@ -1964,8 +1957,7 @@ export class TasksService implements OnModuleInit {
   }> {
     const explicitAgentId = input.agentId?.trim() || null;
     const roleId = input.roleId?.trim() || null;
-    const explicitOpencodeAgentName =
-      input.opencodeAgentName?.trim() || null;
+    const explicitOpencodeAgentName = input.opencodeAgentName?.trim() || null;
 
     // 规则 4（Q5）：成员必须绑定岗位——缺 roleId 一律拒绝，不提供无岗位兼容路径。
     if (!roleId) {

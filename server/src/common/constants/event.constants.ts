@@ -11,7 +11,7 @@ export const EVENT_TYPES = {
   AGENT_ERROR: 'agent.error',
   TASK_STATUS_CHANGED: 'task.status.changed',
   TEAM_CHANGED: 'team.changed',
-  // team 域事件（team scope，team_group 频道隔离，不复用 task_group）
+  // team 域事件（team scope，team_group 频道隔离）
   TEAM_CREATED: 'team.created',
   TEAM_UPDATED: 'team.updated',
   TEAM_DELETED: 'team.deleted',
@@ -67,7 +67,6 @@ export type MessageStatus =
   (typeof MESSAGE_STATUS)[keyof typeof MESSAGE_STATUS];
 
 export const CHANNEL_TYPE = {
-  task_group: 'task_group',
   team_group: 'team_group',
   private: 'private',
 } as const;

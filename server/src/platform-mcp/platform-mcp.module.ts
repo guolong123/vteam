@@ -36,7 +36,8 @@ import { SkillsModule } from '../skills/skills.module';
  *   ArtifactsModule 仅依赖 RealtimeModule，无环。
  * - IssuesModule 导出 IssuesService（issue_* 工具经其做 agent 团队校验与 issue CRUD/状态机）；
  *   IssuesModule 仅依赖 RealtimeModule，无环。
- * - TasksModule 导出 TasksService（task_transition 工具经其做主实例校验与五态状态机流转）；
+ * - TasksModule 导出 TasksService（task_transition 工具经其做主实例校验与五态状态机流转）
+ *   与 PlanStepsService（vteam_todo 工具经其读写 plan_tasks 执行步骤）；
  *   TasksModule imports RealtimeModule/WorkersModule，不反向依赖本模块，无环。
  * - QuestionsModule 导出 QuestionsService（question_confirm 工具经其做主实例校验与
  *   question/permission 确认转发）；QuestionsModule imports RealtimeModule/WorkersModule，

@@ -18,7 +18,8 @@ export const TRIGGER_RECONCILE_BATCH_LIMIT = 500;
 
 /** 周期缺省 15min（Oracle：boot-only 会漏 boot 间孤儿）；env 覆盖，0=停周期但启动 pass 照跑。 */
 export const TRIGGER_RECONCILE_INTERVAL_MS_DEFAULT = 15 * 60_000;
-export const TRIGGER_RECONCILE_INTERVAL_MS_ENV = 'TRIGGER_RECONCILE_INTERVAL_MS';
+export const TRIGGER_RECONCILE_INTERVAL_MS_ENV =
+  'TRIGGER_RECONCILE_INTERVAL_MS';
 
 export interface HookRowLike {
   id: string;

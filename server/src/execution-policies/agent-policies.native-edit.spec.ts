@@ -56,9 +56,7 @@ describe('agent-policies native edit (Todo 8a proof)', () => {
   };
 
   /** 出厂（常量）edit，用于证明 DB_EDIT 确实偏离。 */
-  const FACTORY_EDIT = buildEditPermission(
-    ROLE_BOUNDARIES[EDITED].writeGlobs,
-  );
+  const FACTORY_EDIT = buildEditPermission(ROLE_BOUNDARIES[EDITED].writeGlobs);
 
   /** DB 编辑后的 product config：仅 permission.edit 偏离，其余字段保持出厂。 */
   function editedProductConfig() {
@@ -91,7 +89,8 @@ describe('agent-policies native edit (Todo 8a proof)', () => {
       .fn()
       .mockImplementation(({ where }: { where: { id: string } }) =>
         Promise.resolve(
-          (rows as Array<{ id: string }>).find((r) => r.id === where.id) ?? null,
+          (rows as Array<{ id: string }>).find((r) => r.id === where.id) ??
+            null,
         ),
       );
     const service = new ExecutionPolicyService(

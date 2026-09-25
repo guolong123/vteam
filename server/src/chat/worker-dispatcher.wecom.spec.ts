@@ -97,19 +97,19 @@ describe('WorkerDispatcher wecom bridge (diagnostic)', () => {
       chatChannel: {
         findUnique: jest.fn().mockResolvedValue({
           id: groupChannelId,
-          type: CHANNEL_TYPE.task_group,
+          type: CHANNEL_TYPE.team_group,
         }),
         findFirst: jest.fn().mockImplementation((q: any) => {
           if (
-            q?.where?.taskId === taskId &&
-            q?.where?.type === CHANNEL_TYPE.task_group
+            q?.where?.teamId === 'tm_1' &&
+            q?.where?.type === CHANNEL_TYPE.team_group
           ) {
             return Promise.resolve({ id: groupChannelId });
           }
           if (q?.where?.id === groupChannelId)
             return Promise.resolve({
               id: groupChannelId,
-              type: CHANNEL_TYPE.task_group,
+              type: CHANNEL_TYPE.team_group,
             });
           return Promise.resolve({
             id: groupChannelId,
@@ -332,6 +332,51 @@ describe('WorkerDispatcher wecom bridge (diagnostic)', () => {
           content: expect.objectContaining({ text: expectedMirrorText }),
         }),
       }),
+    );
+  });
+
+  it('operator consume failure is retried across dispatches and sends the operator once', async () => {
+    const pendingOperator = {
+      fromUserId: 'GuoLong',
+      fromUserName: 'GuoLong',
+      chattype: 'group',
+      channelId: wecomChannelId,
+    };
+    wecomAdapter.getPendingOperatorForTask = jest
+      .fn()
+      .mockReturnValue(pendingOperator);
+    wecomAdapter.consumePendingOperatorForTask = jest
+      .fn()
+      .mockImplementationOnce(() => {
+        throw new Error('operator consume unavailable');
+      })
+      .mockReturnValue(pendingOperator);
+    wecomAdapter.discardStream = jest.fn().mockReturnValue(true);
+    wecomAdapter.sendNewMessage = jest.fn().mockResolvedValue(true);
+    wecomAdapter.getStream = jest.fn().mockReturnValue(undefined);
+    wecomAdapter.getPendingUser = jest.fn().mockReturnValue(undefined);
+    const d = createDispatcher();
+
+    await d.handleTaskCompleted({
+      taskId,
+      sessionId: 's_operator_1',
+      agentId: 'a_dev',
+      text: 'operator reply first attempt',
+      parts: [],
+    });
+    await d.handleTaskCompleted({
+      taskId,
+      sessionId: 's_operator_2',
+      agentId: 'a_dev',
+      text: 'operator reply first attempt',
+      parts: [],
+    });
+
+    expect(wecomAdapter.consumePendingOperatorForTask).toHaveBeenCalledTimes(2);
+    expect(wecomAdapter.sendNewMessage).toHaveBeenCalledTimes(1);
+    expect(wecomAdapter.sendNewMessage).toHaveBeenCalledWith(
+      wecomChannelId,
+      '@GuoLong operator reply first attempt',
     );
   });
 

@@ -16,6 +16,11 @@ test("skills 页 MCP 子 Tab 显示真实三态（T8c）", async ({ page }) => {
   await page.getByRole("button", { name: /工具/ }).first().click();
   await page.getByRole("button", { name: /MCP 工具/ }).click();
 
+  // MCP 子 Tab 先展示 server 列表；进入 vteam server 后才渲染其工具行。
+  const server = page.getByTestId("mcp-server-item").filter({ hasText: "vteam" }).first();
+  await expect(server).toBeVisible({ timeout: 15_000 });
+  await server.click();
+
   // 等 MCP 工具行出现
   const item = page.getByTestId("mcp-tool-item").first();
   await expect(item).toBeVisible({ timeout: 15_000 });

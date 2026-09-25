@@ -37,7 +37,6 @@ export interface DispatchRequest {
   taskContext?: {
     taskId: string;
     overrideModelId?: string;
-    executionMode?: string;
   };
   /** 用户消息正文。 */
   text: string;

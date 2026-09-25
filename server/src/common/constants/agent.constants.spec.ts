@@ -124,7 +124,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
   });
 
   it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 者（无 server-gated 例外），且全为 vteam_ 真实名', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(28);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(31);
     for (const mcp of VTEAM_MCP_TOOL_NAMES) expect(mcp).toMatch(/^vteam_/);
     for (const name of ROLE_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
@@ -155,7 +155,9 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
         assertions += 2;
       }
     }
-    expect(assertions).toBe(FORMERLY_GATED_TOOLS.length * ROLE_NAMES.length * 2);
+    expect(assertions).toBe(
+      FORMERLY_GATED_TOOLS.length * ROLE_NAMES.length * 2,
+    );
     expect(assertions).toBeGreaterThan(0);
   });
 
@@ -272,7 +274,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     expect(ROLE_BOUNDARIES['vteam-architect'].bashEffect).toBe('allow');
     expect(ROLE_BOUNDARIES['vteam-developer'].bashEffect).toBe('allow');
     expect(ROLE_BOUNDARIES['vteam-tester'].bashEffect).toBe('allow');
-    expect(ROLE_BOUNDARIES['vteam-project_manager'].bashEffect).toBe('deny');
+    expect(ROLE_BOUNDARIES['vteam-project_manager'].bashEffect).toBe('allow');
     expect(ROLE_BOUNDARIES['vteam-plan'].bashEffect).toBe('allow');
     expect(ROLE_BOUNDARIES['vteam-librarian'].bashEffect).toBe('allow');
 
@@ -308,6 +310,10 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_notify_agent: 'allow',
       vteam_memory_search: 'allow',
       vteam_plan_complete: 'allow',
+      vteam_plan_finalize: 'allow',
+      vteam_plan_confirm: 'allow',
+      vteam_todo: 'allow',
+      vteam_submit_artifact: 'allow',
       browser: 'allow',
     });
     expect(ROLE_BOUNDARIES['vteam-librarian'].toolAllows).toEqual({
@@ -327,6 +333,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       git_diff: 'allow',
       git_log: 'allow',
       browser: 'allow',
+      vteam_todo: 'allow',
     });
     // 反转旧断言：formerly-gated 工具按授权矩阵进/不进 toolAllows（不再一律不进）。
     for (const name of ROLE_NAMES) {

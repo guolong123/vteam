@@ -1,0 +1,19 @@
+# 状态卡主操作按钮布局修复（用户反馈「按钮样式」）
+# 执行时间: 2026-09-22T22:08:28+08:00
+
+## 现象
+验收通过/驳回 两按钮被堆成上下两行、各占半宽（截图）；原型要求等宽并排一行（grid-cols-2）。
+
+## 根因
+P5/T18(a2d38db) 在状态卡外层套了 grid 1fr1fr，但 TaskStatusActions 根容器是 flexDirection:column（按钮被拉伸全宽），
+整个竖排块落进第 1 列 → 按钮各占 50% 且上下堆叠。
+约束来自我的计划 T18「保持 TaskStatusActions 组件本身不被修改」——该约束是本缺陷的直接原因。
+
+## 修法（向后兼容）
+task-status-actions.tsx 新增可选 prop layout?: 'column'|'row'（默认 column，看板卡片/详情抽屉形态不变）；
+row 且操作数>=2 时把按钮包进 data-testid=task-status-actions-row 的等宽 grid。
+TeamRightPanel 状态卡改为 <TaskStatusActions layout="row"/>，移除外层冗余 grid。
+
+## 验证
+web tsc exit 0；两文件 eslint 0 error；
+pages e2e 全量 24 passed（含新增同行断言：两按钮 y 差<2px 且宽度差<2px）

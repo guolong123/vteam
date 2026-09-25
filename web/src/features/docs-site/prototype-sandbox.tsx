@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { getAuthToken, API_BASE_URL } from "@/lib/api";
+import { api } from "@/lib/api";
 import type { DeviceType } from "./types";
 import { neutral, surface, border, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
 
@@ -68,10 +68,10 @@ function encodeFile(file: string): string {
 }
 
 async function fetchPrototypeSource(taskId: string, file: string): Promise<string> {
-  const token = getAuthToken();
-  const res = await fetch(`${API_BASE_URL}/docs-site/${taskId}/prototypes/${encodeFile(file)}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.text();
+  return api.get<string>(
+    `/docs-site/${taskId}/prototypes/${encodeFile(file)}`,
+    { parse: "text" },
+  );
 }
 
 async function fetchRuntimeJs(): Promise<string> {

@@ -1,0 +1,16 @@
+# 计划文档弹窗渲染 Markdown
+# 时间: 2026-09-23T09:17:50+08:00
+
+## 现状与诉求
+点击计划文件行**已经**会弹 PlanDocModal（TeamRightPanel:1169 → :1309），但正文是 whiteSpace:pre-wrap 的纯文本 →
+Markdown 源（# 标题 / - 列表 / 表格）原样显示。诉求：弹窗内按 Markdown 渲染。
+
+## 改动
+- PlanDocModal 正文改用文档站同一渲染器 DocsMarkdown（react-markdown + remark-gfm + MermaidBlock），零新增依赖；
+- 加 data-testid=plan-doc-modal-markdown 便于断言；
+- 弹窗首块标题不需要文档页那种 32px 上边距 → 用一条 scoped CSS（!important 覆盖内联 margin）清零。
+
+## 验证
+web tsc 0；PlanDocModal eslint 干净；
+e2e 扩展用例实跑通过：mock 计划文件含 # 标题 / 列表 / 表格 → 点击行后断言
+  modal h1 文本 = 'e2e plan'、li 计数 2、table 可见，且正文**不含** '# e2e plan' 与 '| A | B |'（证明是渲染而非原样）；关闭后 modal 消失。

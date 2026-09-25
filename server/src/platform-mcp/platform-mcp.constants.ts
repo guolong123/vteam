@@ -39,6 +39,8 @@ export const PLATFORM_MCP_ERRORS = {
    * `CONTRACT-tool-naming-and-identity.md` §4（身份/角色/矩阵不可解析一律本码 403）。
    */
   TOOL_NOT_PERMITTED: 'PLATFORM_MCP_TOOL_NOT_PERMITTED',
+  /** vteam_todo action=done：planId+seq 定位不到步骤 → 404。 */
+  PLAN_STEP_NOT_FOUND: 'PLATFORM_MCP_PLAN_STEP_NOT_FOUND',
 } as const;
 
 export type PlatformMcpErrorCode =

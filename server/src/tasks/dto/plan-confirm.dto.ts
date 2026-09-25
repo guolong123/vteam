@@ -1,5 +1,11 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsIn,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 /**
  * POST /tasks/:id/plan/confirm 请求体（todo11 用户确认门 + 定稿门 + todo4 修订重评）。
@@ -27,4 +33,15 @@ export class PlanConfirmDto {
   @IsString()
   @MaxLength(512)
   reason?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '人工跳过评审（action=finalize/confirm 时有效，需 tasks.edit）。' +
+      'true：允许把 draft/reviewing 直接推进（finalize→approved 或 confirm→executing），' +
+      '缺定稿时同事务补 finalizedBy/finalizedAt 与冻结锚，系统消息留痕「人工跳过评审」。' +
+      '用于评审链路走不通时的人工出口；缺省 false 保持严格前置态（非 approved/pending_final 报 409）。',
+  })
+  @IsOptional()
+  @IsBoolean()
+  skipReview?: boolean;
 }

@@ -20,10 +20,7 @@ describe('TriggersController（GET /triggers + DELETE /triggers/:id，service �
       'triggers',
     );
     expect(
-      Reflect.getMetadata(
-        PATH_METADATA,
-        TriggersController.prototype.findAll,
-      ),
+      Reflect.getMetadata(PATH_METADATA, TriggersController.prototype.findAll),
     ).toBe('/');
     expect(
       Reflect.getMetadata(PATH_METADATA, TriggersController.prototype.remove),
@@ -57,9 +54,9 @@ describe('TriggersController（GET /triggers + DELETE /triggers/:id，service �
     await expect(
       controller.findAll({} as never, {} as never),
     ).rejects.toMatchObject({ status: 401 });
-    await expect(
-      controller.remove('tmr_1', {} as never),
-    ).rejects.toMatchObject({ status: 401 });
+    await expect(controller.remove('tmr_1', {} as never)).rejects.toMatchObject(
+      { status: 401 },
+    );
     expect(service.findAll).not.toHaveBeenCalled();
     expect(service.cancelForUser).not.toHaveBeenCalled();
   });

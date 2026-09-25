@@ -63,19 +63,24 @@ export interface InjectReport {
   agentPolicies: { enabled: boolean; names: string[] };
 }
 
-/** 控制面资源记录最小形态（来自 GET /skills、/tools、/mcp-servers）。 */
-interface SkillRecord {
+/** 控制面资源记录最小形态（来自 GET /skills、/tools、/mcp-servers；本地写入亦复用）。 */
+export interface SkillRecord {
   id: string;
   name: string;
 }
-interface ToolRecord {
+/** 本地写入用的技能记录（name + SKILL.md 全文）。 */
+export interface ResolvedSkill {
+  name: string;
+  content: string;
+}
+export interface ToolRecord {
   id: string;
   action: string;
   name: string;
   execution: string;
   schema: Record<string, unknown> | null;
 }
-interface McpServerRecord {
+export interface McpServerRecord {
   id: string;
   name: string;
   type: string;
@@ -189,10 +194,10 @@ export class ResourceInjector {
     return data;
   }
 
-  /** 注入启用技能：<workDir>/.opencode/skills/<name>/SKILL.md。返回注入的 skill 名。 */
+  /** 注入启用技能（控制面拉取）：GET /skills → 逐个拉 content → applySkills。 */
   async injectSkills(): Promise<string[]> {
     const skills = await this.fetchAll<SkillRecord>('/skills', { enabled: 'true' });
-    const names: string[] = [];
+    const resolved: ResolvedSkill[] = [];
     for (const skill of skills) {
       try {
         const content = await this.fetchSkillContent(skill.id);
@@ -200,28 +205,47 @@ export class ResourceInjector {
           this.logger?.warn?.(`[inject] 技能 ${skill.id} content 拉取失败，跳过`);
           continue;
         }
-        const skillDir = path.join(this.workDir, '.opencode', 'skills', skill.name);
-        fs.mkdirSync(skillDir, { recursive: true });
-        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content, 'utf8');
-        names.push(skill.name);
+        resolved.push({ name: skill.name, content });
       } catch (err) {
         this.logger?.warn?.(
           `[inject] 技能 ${skill.id}（${skill.name}）注入失败: ${(err as Error).message}`,
         );
       }
     }
+    return this.applySkills(resolved);
+  }
+
+  /**
+   * 本地写入技能（不经控制面）：<workDir>/.opencode/skills/<name>/SKILL.md。
+   * 声明式替换——manifest 记录的上次写入、本次不在集合中的技能目录会被删除（传空数组即清空）。
+   */
+  applySkills(skills: ResolvedSkill[]): string[] {
+    const names: string[] = [];
+    for (const skill of skills) {
+      const skillDir = path.join(this.workDir, '.opencode', 'skills', skill.name);
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), skill.content, 'utf8');
+      names.push(skill.name);
+    }
     this.cleanupByManifest('skills', names);
     return names;
   }
 
-  /** 注入启用工具：<workDir>/.opencode/tools/<action>.ts。返回注入的 action 列表（mcp 型除外）。 */
+  /** 注入启用工具（控制面拉取）：GET /tools → applyTools。 */
   async injectTools(): Promise<string[]> {
-    const tools = await this.fetchAll<ToolRecord>('/tools', { enabled: 'true' });
+    return this.applyTools(await this.fetchAll<ToolRecord>('/tools', { enabled: 'true' }));
+  }
+
+  /**
+   * 本地写入工具（不经控制面）：<workDir>/.opencode/tools/<action>.ts。
+   * 声明式替换（manifest 记录的上次文件清理）；mcp 型工具跳过（由 mcp-servers 配置节承载）。
+   */
+  applyTools(tools: ToolRecord[]): string[] {
     const writtenFiles: string[] = [];
     const actions: string[] = [];
     for (const tool of tools) {
       if (tool.execution === 'mcp') {
-        // MCP 工具不渲染为自定义工具文件——由 T8b 经 mcp-servers 配置节注入
+        // MCP 工具不渲染为自定义工具文件——由 mcp-servers 配置节注入
         continue;
       }
       const def = this.buildToolDef(tool);
@@ -255,6 +279,14 @@ export class ResourceInjector {
     const servers = await this.fetchAll<McpServerRecord>('/mcp-servers', {
       enabled: 'true',
     });
+    return this.applyMcpServers(servers);
+  }
+
+  /**
+   * 本地写入 MCP 服务器（不经控制面）：只改 opencode.json 的 mcp 节，agent 节原样保留。
+   * 声明式替换（manifest 记录的上次 mcp 名清理；用户手写条目保留）。
+   */
+  applyMcpServers(servers: McpServerRecord[]): string[] {
     const configPath = path.join(this.workDir, 'opencode.json');
     const config = this.readConfig(configPath);
     const manifest = this.readManifest();
@@ -263,6 +295,39 @@ export class ResourceInjector {
     this.writeConfig(configPath, config);
     this.writeManifest({ ...manifest, mcpServers: names });
     return names;
+  }
+
+  /**
+   * 本地写入 agent 策略（不经控制面）：只改 opencode.json 的 agent 节，mcp 节原样保留。
+   * policies=null → 中性化（移除受管 agent 键）；定义非法 → 同样中性化并打 warn
+   * （调用方如需 400 语义应先用 buildAgentDefinitions 预校验）。
+   */
+  applyAgentPolicies(
+    policies: AgentPoliciesResponse | null,
+  ): { enabled: boolean; names: string[] } {
+    const configPath = path.join(this.workDir, 'opencode.json');
+    const config = this.readConfig(configPath);
+    const manifest = this.readManifest();
+    const mcpNames = manifest.mcpServers ?? [];
+    if (policies === null) {
+      return this.writeNeutralized(config, configPath, mcpNames).agentPolicies;
+    }
+    let agentNames: string[];
+    try {
+      const section = buildAgentDefinitions(policies.agents);
+      agentNames = Object.keys(section);
+      config.agent = { ...this.readAgentSection(config), ...section };
+    } catch (err) {
+      this.logger?.warn?.(
+        `[inject] agent 定义构造失败，中性化受管 agent：${(err as Error).message}`,
+      );
+      return this.writeNeutralized(config, configPath, mcpNames).agentPolicies;
+    }
+    this.cleanupByManifest('agentNames', agentNames, config);
+    this.purgeLegacyGuardArtifacts(config);
+    this.injectOmoPlugin(config);
+    this.writeConfig(configPath, config);
+    return { enabled: true, names: agentNames };
   }
 
   /**
@@ -283,6 +348,14 @@ export class ResourceInjector {
     const servers = await this.fetchAll<McpServerRecord>('/mcp-servers', {
       enabled: 'true',
     });
+    return this.applyMcpAndAgents(servers, policies);
+  }
+
+  /** 本地写入 MCP + agent 配置（不经控制面）：单次 read-modify-write <workDir>/opencode.json。 */
+  async applyMcpAndAgents(
+    servers: McpServerRecord[],
+    policies: AgentPoliciesResponse | null,
+  ): Promise<{ mcpServers: string[]; agentPolicies: { enabled: boolean; names: string[] } }> {
     const configPath = path.join(this.workDir, 'opencode.json');
     const config = this.readConfig(configPath);
     const manifest = this.readManifest();

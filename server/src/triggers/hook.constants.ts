@@ -202,14 +202,9 @@ export function buildHookWakeText(
 }
 
 /** env 字符串数字归一（非法/非正/缺省 → 默认值；ConfigService 不做 coerce，见 todo-7 教训）。 */
-export function resolveHookMs(
-  raw: unknown,
-  fallback: number,
-): number {
+export function resolveHookMs(raw: unknown, fallback: number): number {
   const n = typeof raw === 'string' ? Number(raw) : (raw as number);
-  return typeof n === 'number' && Number.isFinite(n) && n > 0
-    ? n
-    : fallback;
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 /** env 计数归一（正整数；非法/小数/缺省 → 默认值；与 resolveHookMs 同因）。 */

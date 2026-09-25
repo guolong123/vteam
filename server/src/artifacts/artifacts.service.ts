@@ -98,7 +98,7 @@ export function validateArtifactDeclaration(input: {
     return {
       valid: false,
       reason:
-        '非法声明：category 须为需求/设计/实现/测试用例/测试报告/运维/其他其一',
+        '非法声明：category 须为需求/设计/实现/测试用例/测试报告/运维/计划/其他其一',
     };
   }
   return { valid: true };

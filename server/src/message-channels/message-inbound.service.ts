@@ -385,7 +385,7 @@ export class MessageInboundService implements MessageHost {
       if (cmd.kind === 'card_action') {
         const aqId = (cmd as any).aqId;
         const action = (cmd as any).action;
-        // Helper to forward selection to task_group chat so model sees it
+        // Helper to forward selection to the task's team group so the model sees it
         const forwardSelectionToChat = async (
           taskIdForChat: string | null | undefined,
           opIdForChat: string | undefined,
@@ -393,14 +393,29 @@ export class MessageInboundService implements MessageHost {
         ) => {
           if (!taskIdForChat || !this.chatService) return;
           try {
+            const task = await this.prisma.task.findUnique({
+              where: { id: taskIdForChat },
+              select: { teamId: true },
+            });
+            const taskTeamId = task?.teamId ?? null;
+            if (!taskTeamId) {
+              this.logger.warn(
+                `card_action forward miss team group taskId=${taskIdForChat}`,
+              );
+              return;
+            }
             const groupChannel = await (
               this.prisma as any
             ).chatChannel.findFirst({
-              where: { taskId: taskIdForChat, type: CHANNEL_TYPE.task_group },
+              where: {
+                teamId: taskTeamId,
+                type: CHANNEL_TYPE.team_group,
+                deletedAt: null,
+              },
             });
             if (!groupChannel) {
               this.logger.warn(
-                `card_action forward miss task_group taskId=${taskIdForChat}`,
+                `card_action forward miss team group taskId=${taskIdForChat}`,
               );
               return;
             }

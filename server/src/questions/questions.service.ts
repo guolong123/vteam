@@ -275,19 +275,28 @@ export class QuestionsService {
     answers?: string[][] | null;
     response?: PermissionResponse;
   }): Promise<AgentQuestionDto> {
-    const task = await this.prisma.task.findUnique({
-      where: { id: input.taskId },
-      select: { teamId: true },
-    });
-    if (!task) {
-      throw new NotFoundException({
-        code: TASK_ERRORS.TASK_NOT_FOUND,
-        message: '任务不存在',
+    // team:<id> 域（团队会话，worker 行 taskId 为空）：跳过任务查表直接按团队校验；
+    // 任务形态保持原语义（task 查不存在 → TASK_NOT_FOUND）。
+    const teamScopedId = input.taskId.startsWith('team:')
+      ? input.taskId.slice('team:'.length)
+      : null;
+    let teamId: string | null = teamScopedId;
+    if (!teamScopedId) {
+      const task = await this.prisma.task.findUnique({
+        where: { id: input.taskId },
+        select: { teamId: true },
       });
+      if (!task) {
+        throw new NotFoundException({
+          code: TASK_ERRORS.TASK_NOT_FOUND,
+          message: '任务不存在',
+        });
+      }
+      teamId = task.teamId;
     }
-    const team = task.teamId
+    const team = teamId
       ? await this.prisma.team.findUnique({
-          where: { id: task.teamId },
+          where: { id: teamId },
           select: { id: true },
         })
       : null;
@@ -306,8 +315,28 @@ export class QuestionsService {
         message: `AgentQuestion requestId ${input.requestId} 不存在`,
       });
     }
-    // 完整性校验 2：跨任务确认拒绝（请求须属于调用方任务）。
-    if (row.taskId !== input.taskId) {
+    // 完整性校验 2：跨任务/跨团队确认拒绝（请求须属于调用方任务或团队）。
+    // 团队形态：worker 行 taskId 空 → 经会话所属团队比对；平台自建行存有
+    // team:<id> → 直接比对（两形态均精确，不放宽）。
+    if (teamScopedId) {
+      const sessionTeamId = row.sessionId
+        ? ((
+            await this.prisma.session.findUnique({
+              where: { id: row.sessionId },
+              select: { teamId: true },
+            })
+          )?.teamId ?? null)
+        : null;
+      const belongs = row.taskId
+        ? row.taskId === input.taskId
+        : sessionTeamId === teamScopedId;
+      if (!belongs) {
+        throw new ForbiddenException({
+          code: QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,
+          message: `请求 ${input.requestId} 归属团队与调用方 ${input.taskId} 不一致，禁止跨团队确认`,
+        });
+      }
+    } else if (row.taskId !== input.taskId) {
       throw new ForbiddenException({
         code: QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,
         message: `请求 ${input.requestId} 归属任务 ${row.taskId}，与调用方任务 ${input.taskId} 不一致，禁止跨任务确认`,
@@ -462,16 +491,21 @@ export class QuestionsService {
       updated.taskId,
       updated.sessionId,
     );
+    // 收敛帧 payload 口径同 ingress：团队会话行 taskId 空 → 补 team:<teamId> + 顶层
+    // teamId，否则 use-sse team: 段匹配不过，其他页签弹窗不关闭。
+    const teamId = await this.teamIdOf(updated.taskId, updated.sessionId);
+    const payloadTaskId = updated.taskId || (teamId ? `team:${teamId}` : null);
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
         question: this.toDto(updated, managedMode),
-        taskId: updated.taskId,
+        taskId: payloadTaskId,
+        teamId,
         agentId: updated.agentId,
         sessionId: updated.sessionId,
         resolved: true,
       },
-      await this.scopeOf(updated.taskId, updated.sessionId),
+      teamId ? { type: 'team', id: teamId } : { type: 'global' },
     );
     return this.toDto(updated, managedMode);
   }
@@ -583,6 +617,9 @@ export class QuestionsService {
     this.logger.warn(
       `[questions] ${row.id} 僵尸/超期 pending 已终态（expired）：${reason}`,
     );
+    // 收敛帧 payload 口径同 reply（团队会话行 taskId 空 → 补 team:<teamId>，
+    // 否则前端 team: 段过滤丢帧、过期收敛页签无感）。
+    const expireTeamId = await this.teamIdOf(updated.taskId, updated.sessionId);
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
@@ -590,12 +627,14 @@ export class QuestionsService {
           updated,
           await this.managedModeOf(updated.taskId, updated.sessionId),
         ),
-        taskId: updated.taskId,
+        taskId:
+          updated.taskId || (expireTeamId ? `team:${expireTeamId}` : null),
+        teamId: expireTeamId,
         agentId: updated.agentId,
         sessionId: updated.sessionId,
         resolved: true,
       },
-      await this.scopeOf(updated.taskId, updated.sessionId),
+      expireTeamId ? { type: 'team', id: expireTeamId } : { type: 'global' },
     );
   }
 
@@ -730,16 +769,23 @@ export class QuestionsService {
       updated.taskId,
       updated.sessionId,
     );
+    // 收敛帧 payload 口径同 ingress（团队会话行补 team:<teamId>，见 reply 处注释）。
+    const confirmTeamId = await this.teamIdOf(
+      updated.taskId,
+      updated.sessionId,
+    );
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
         question: this.toDto(updated, managedMode),
-        taskId: updated.taskId,
+        taskId:
+          updated.taskId || (confirmTeamId ? `team:${confirmTeamId}` : null),
+        teamId: confirmTeamId,
         agentId: updated.agentId,
         sessionId: updated.sessionId,
         resolved: true,
       },
-      await this.scopeOf(updated.taskId, updated.sessionId),
+      confirmTeamId ? { type: 'team', id: confirmTeamId } : { type: 'global' },
     );
     return this.toDto(updated, managedMode);
   }

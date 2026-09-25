@@ -7,20 +7,20 @@
  *
  * ── 配置落点（实测确认，勿凭直觉改） ─────────────────────────────────────
  *
- * OmO 会按以下顺序查找配置，**先命中者胜**：
+ * OmO 支持两个 scope 的配置（源码实证：`resolveUserOmoConfigPath()` =
+ * `join(homedir, ".omo", "omo.jsonc")` 为 **user** scope；`detectOmoJsonPath(dir)` =
+ * `<dir>/.omo/omo.jsonc` 为 **project** scope；OmO 自身的迁移也以 user 路径为目标）：
  *
- *   1. `<workDir>/.omo/omo.jsonc`                    ← 当前生效（迁移后的新位置）
- *   2. `<workDir>/.opencode/oh-my-openagent.jsonc`   ← 旧位置，仅当上面不存在时接管
+ *   1. `~/.omo/omo.jsonc`                          ← 本平台唯一写入落点（user 级，全局生效）
+ *   2. `<workDir>/.omo/omo.jsonc`                  ← 历史落点（project 级），仅兼容读取
+ *   3. `<workDir>/.opencode/oh-my-openagent.jsonc` ← 更早落点，仅兼容读取
  *
- * 两者都能被 OmO 读取；同时存在时 `.omo/omo.jsonc` 胜出，旧文件变成"死配置"。
- * 实证方法（两份设成不同值、重启、看实际使用的模型）：
- *   - 只改 .omo/omo.jsonc        → 生效（另一份不动）
- *   - 只改 .opencode/…jsonc，.omo 存在 → **不生效**
- *   - 移走 .omo/omo.jsonc 后再改 .opencode/…jsonc → 生效
+ * **不得写工作目录**：工作目录是 agent 的作业区（可能是被 git 跟踪的仓库），把平台配置
+ * 写进去会污染作业区、并随作业被提交。
  *
- * 所以本模块的读写**优先落在 `.omo/omo.jsonc`**；若它不存在而旧文件存在，
- * 则写回旧文件（保持既有部署的落点不变，避免凭空多出一份）。
- * 两份都不存在时（全新环境）按新位置创建。
+ * 因此本模块读写**一律落在 `~/.omo/omo.jsonc`**；若它不存在而工作目录里还有历史文件，
+ * 则把历史文件**迁移**过去（移动后删除旧文件——旧 project 文件残留可能仍被 OmO 读取，
+ * 形成「写了不生效」的幽灵配置）。全新环境直接按 user 路径创建。
  *
  * ── 格式差异 ────────────────────────────────────────────────────────────
  *
@@ -35,11 +35,23 @@
  * （JSONC 是 JSON 超集，OmO 能正常解析）。
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
-/** 新位置（当前生效）：`<workDir>/.omo/omo.jsonc`。 */
-export const OMO_CONFIG_REL_NEW = path.join('.omo', 'omo.jsonc');
-/** 旧位置（仅在无新文件时接管）：`<workDir>/.opencode/oh-my-openagent.jsonc`。 */
+/** 用户级配置路径（**唯一写入落点**）：`~/.omo/omo.jsonc`（OmO user scope，全局生效）。
+ *  `OMO_CONFIG_DIR` 可覆盖 `.omo` 所在目录（单测隔离用，也便于非标准 HOME 部署）；
+ *  惰性求值不缓存，故运行期改该环境变量即时生效。 */
+export function omoConfigUserPath(): string {
+  const override = process.env.OMO_CONFIG_DIR?.trim();
+  const dir =
+    override && override.length > 0 ? override : path.join(os.homedir(), '.omo');
+  return path.join(dir, 'omo.jsonc');
+}
+/** 用户级路径的展示形态（日志/前端提示用）。 */
+export const OMO_CONFIG_USER_DISPLAY = '~/.omo/omo.jsonc';
+/** 历史落点（工作目录内，仅兼容读取 + 迁移源）：`<workDir>/.omo/omo.jsonc`。 */
+export const OMO_CONFIG_REL_PROJECT = path.join('.omo', 'omo.jsonc');
+/** 更早的历史落点（同上）：`<workDir>/.opencode/oh-my-openagent.jsonc`。 */
 export const OMO_CONFIG_REL_LEGACY = path.join('.opencode', 'oh-my-openagent.jsonc');
 /** 新格式的平台分段键。 */
 const PLATFORM_SECTION = '[opencode]';
@@ -146,28 +158,66 @@ function isFile(p: string): boolean {
 }
 
 /**
- * 解析实际生效的配置文件路径。
+ * 解析实际生效的配置文件路径（**永远指向用户级 `~/.omo/omo.jsonc`**）。
  *
- * 规则（对齐 OmO 的查找顺序）：`.omo/omo.jsonc` 存在则用它；否则若旧文件存在则用旧的；
- * 两者都不存在 → 返回新位置（供创建）。
+ * 规则：用户级文件存在 → 用它；否则若工作目录里还有历史文件（`.omo/omo.jsonc` 或
+ * `.opencode/oh-my-openagent.jsonc`）→ **迁移**到用户级后用它（移动 + 删旧，见
+ * migrateToUserPath）；都没有 → 返回用户级路径（供创建）。
+ *
+ * `kind` 语义沿用旧枚举以免破坏调用方：`new`=用户级已存在；`legacy`=由历史落点迁移而来；
+ * `none`=全新（待创建）。`relPath` 恒为用户级展示形态 `~/.omo/omo.jsonc`。
  */
 export function resolveOmoConfigPath(workDir: string): {
   /** 用于读写的绝对路径。 */
   absPath: string;
-  /** 相对 workDir 的路径（用于展示/日志）。 */
+  /** 展示用路径（日志/前端提示）。 */
   relPath: string;
   /** 命中的位置类型，便于前端提示"当前生效文件"。 */
   kind: 'new' | 'legacy' | 'none';
 } {
-  const newAbs = path.join(workDir, OMO_CONFIG_REL_NEW);
-  if (isFile(newAbs)) {
-    return { absPath: newAbs, relPath: OMO_CONFIG_REL_NEW, kind: 'new' };
+  if (isFile(omoConfigUserPath())) {
+    return {
+      absPath: omoConfigUserPath(),
+      relPath: OMO_CONFIG_USER_DISPLAY,
+      kind: 'new',
+    };
   }
-  const legacyAbs = path.join(workDir, OMO_CONFIG_REL_LEGACY);
-  if (isFile(legacyAbs)) {
-    return { absPath: legacyAbs, relPath: OMO_CONFIG_REL_LEGACY, kind: 'legacy' };
+  for (const rel of [OMO_CONFIG_REL_PROJECT, OMO_CONFIG_REL_LEGACY]) {
+    const abs = path.join(workDir, rel);
+    if (isFile(abs)) {
+      return {
+        absPath: migrateToUserPath(abs),
+        relPath: OMO_CONFIG_USER_DISPLAY,
+        kind: 'legacy',
+      };
+    }
   }
-  return { absPath: newAbs, relPath: OMO_CONFIG_REL_NEW, kind: 'none' };
+  return {
+    absPath: omoConfigUserPath(),
+    relPath: OMO_CONFIG_USER_DISPLAY,
+    kind: 'none',
+  };
+}
+
+/**
+ * 一次性迁移：把历史落点（工作目录内）的配置搬到 `~/.omo/omo.jsonc` 并**删除旧文件**。
+ * 必须删旧——旧 project 文件残留可能仍被 OmO 读取，形成「写了不生效」的幽灵配置。
+ * 跨文件系统 rename 会 EXDEV，故回落 copy+unlink；迁移失败（权限/IO）→ 返回旧路径
+ * 继续可用（不阻断本次调用，下次再试）。
+ */
+function migrateToUserPath(fromAbs: string): string {
+  try {
+    fs.mkdirSync(path.dirname(omoConfigUserPath()), { recursive: true });
+    try {
+      fs.renameSync(fromAbs, omoConfigUserPath());
+    } catch {
+      fs.copyFileSync(fromAbs, omoConfigUserPath());
+      fs.unlinkSync(fromAbs);
+    }
+    return omoConfigUserPath();
+  } catch {
+    return fromAbs;
+  }
 }
 
 /** 从配置对象里取出该文件形态下的 agents 容器所在的对象。 */

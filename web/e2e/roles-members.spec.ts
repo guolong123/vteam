@@ -112,20 +112,36 @@ async function openRolesTab(page: Page) {
   await expect(page.getByTestId("agent-role-root")).toBeVisible({ timeout: 15_000 });
 }
 
-/** 引擎实时外部清单（!governed && !hidden），非硬编码；degraded/空 → 调用方 skip。 */
+/** 引擎实时外部清单（!governed && !hidden），非硬编码；持续不可用时由测试硬失败。 */
 async function engineExternal(
   request: APIRequestContext,
   token: string,
 ): Promise<{ names: string[]; degraded: boolean }> {
-  const res = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
-    headers: authHeaders(token),
-  });
-  expect(res.ok()).toBeTruthy();
-  const body = (await res.json()) as { agents: OpencodeAgentEntry[]; degraded: boolean };
-  return {
-    names: body.agents.filter((a) => !a.governed && !a.hidden).map((a) => a.name),
-    degraded: body.degraded,
-  };
+  let last = { names: [] as string[], degraded: true };
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      const res = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
+        headers: authHeaders(token),
+        timeout: 5_000,
+      });
+      if (res.ok()) {
+        const body = (await res.json()) as {
+          agents: OpencodeAgentEntry[];
+          degraded?: boolean;
+        };
+        last = {
+          names: body.agents.filter((a) => !a.governed && !a.hidden).map((a) => a.name),
+          degraded: body.degraded === true,
+        };
+      }
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      last = { names: [], degraded: true };
+    }
+    if (!last.degraded && last.names.length > 0) return last;
+    if (attempt < 29) await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  return last;
 }
 
 test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
@@ -162,7 +178,9 @@ test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
     await firstBuiltin.click();
     await expect(page.getByTestId("role-builtin-notice")).toBeVisible();
     await expect(page.getByTestId("role-delete-button")).toHaveCount(0);
-    await expect(page.getByTestId("role-save-button")).toHaveCount(0);
+    // 内置身份字段只读，但能力点矩阵仍可保存；不能把整个保存控件误判为不存在。
+    await expect(page.locator('[data-testid="role-save-button"][data-scope="role"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="role-save-button"][data-scope="capabilities"]')).toBeVisible();
 
     const builtinBadge = firstBuiltin.getByTestId("role-type-badge");
     await expect(builtinBadge).toContainText("内置");
@@ -278,11 +296,11 @@ test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
       await page.getByTestId("add-instance-entry").click();
       await expect(page.getByTestId("add-instance-panel")).toBeVisible();
 
-      // 选 developer 岗位 → 自动预填 developer 默认 Agent（a_developer）
-      await page
-        .locator('[data-testid="add-instance-role"][data-role="developer"]')
-        .click();
-      await expect(page.getByTestId("add-instance-agent-select")).toHaveValue("a_developer");
+      // 选 developer 岗位 → 默认绑定由 role.defaultAgentId 提供；显式覆盖下拉初始留空。
+      const developerRole = page.locator('[data-testid="add-instance-role"][data-role="developer"]');
+      await developerRole.click();
+      await expect(developerRole).toHaveAttribute("data-default-agent", "a_developer");
+      await expect(page.getByTestId("add-instance-agent-select")).toHaveValue("");
 
       // 覆盖：切到 tester（岗位仍是 developer，Agent 显式覆盖）
       await page.getByTestId("add-instance-agent-select").selectOption("a_tester");
@@ -323,12 +341,11 @@ test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
     page,
     request,
   }) => {
+    test.setTimeout(240_000);
     const token = await adminToken(request);
     const { names, degraded } = await engineExternal(request, token);
-    test.skip(
-      degraded || names.length === 0,
-      `GET /agents/opencode 不可用（degraded=${degraded}，外部条目=${names.length}）——无外部 Agent 可测`,
-    );
+    expect(degraded, "worker catalog 在 readiness 窗口内应可用").toBe(false);
+    expect(names.length, "worker catalog 应包含外部 Agent").toBeGreaterThan(0);
     const externalName = names[0];
     const roleKey = `qa-t7-ext-${RUN_TAG}`;
 

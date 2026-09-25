@@ -1,0 +1,14 @@
+CMD: curl <base>/api/v1/tasks/t_0000000001/{plan,plan-steps,plan-docs} with admin Bearer token
+BASE: http://localhost:3000 (fwd -> :13000 docker, image 2026-09-22T10:02+08:00, PREDATES plan-archive feature)
+=== GET /api/v1/tasks/t_0000000001/plan ===
+{"plan":{"id":"pl_0000000001","taskId":"t_0000000001","title":"流程走通测试：端到端验证建任务→计划→派活→执行→验收","summary":null,"scopeIn":null,"scopeOut":null,"status":"draft","createdBy":"u_admin","reviewerInstanceId":null,"rejectCount":0,"confirmedBy":null,"confirmedAt":null,"rejectReason":null,"finalizedBy":null,"finalizedAt":null,"frozenVersion":null,"frozenHash":null,"createdAt":"2026-09-22T02:17:33.247Z","updatedAt":"2026-09-22T02:17:33.247Z"},"status":"draft","source":"db","fileDocs":{"displayOnly":true,"count":1,"degraded":false},"warning":"计划文件仅展示用，状态以数据库 plans.status 为准"}
+HTTP:200
+
+=== GET /api/v1/tasks/t_0000000001/plan-steps ===
+{"steps":[],"workerId":"w_compose_worker","degraded":false}
+HTTP:200
+
+=== GET /api/v1/tasks/t_0000000001/plan-docs ===
+{"files":[{"name":"f3-plan-qa.md","updatedAt":"2026-09-22T13:09:49.573Z","size":40,"content":"# F3 QA 计划\n\n自动归档验证用。","truncated":false}],"workerId":"w_compose_worker","directory":"/data/vteam-worker/tasks/t_0000000001","degraded":false}
+HTTP:200
+

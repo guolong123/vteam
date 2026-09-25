@@ -529,6 +529,99 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
+  it('serve 日志仅裸 stream error 包装行（无具体原因）→ 不提前 abort 健康会话（AI-SDK 外层包装非致命）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    // 永无首字（仅 step-start），60ms 首字超时远大于单轮耗时——若快检误触发会首轮即失败；
+    // 正确行为：多轮轮询后走超时路径（abort 照常，但非秒杀，且文案是超时而非「模型调用报错」）
+    getMessages.mockResolvedValue(STEP_START_ONLY);
+    const { sender, sent } = createSender();
+    const streamErrorLine =
+      'timestamp=2026-09-22T10:17:00.000Z level=ERROR run=abc123 message="stream error" session.id=ses_1';
+    let reads = 0;
+    const serveErrorReader = jest.fn(() => (reads++ === 0 ? [] : [streamErrorLine]));
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 60,
+      pollMs: 5,
+      serveErrorReader,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 4);
+      expect(getMessages.mock.calls.length).toBeGreaterThan(2);
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      expect(String(terminal[2].payload.error)).toContain('等待首字超时');
+      expect(String(terminal[2].payload.error)).not.toContain('模型调用报错');
+      expect(abort).toHaveBeenCalledWith('ses_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('serve 日志为非子域 subscribe 行（宽表收集但非致命）→ 不提前 abort 健康会话', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue(STEP_START_ONLY);
+    const { sender, sent } = createSender();
+    const subscribeLine =
+      'timestamp=2026-09-22T10:20:00.000Z level=ERROR run=def456 message="subscribe failed" session.id=ses_1';
+    let reads = 0;
+    const serveErrorReader = jest.fn(() => (reads++ === 0 ? [] : [subscribeLine]));
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 60,
+      pollMs: 5,
+      serveErrorReader,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 4);
+      expect(getMessages.mock.calls.length).toBeGreaterThan(2);
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      expect(String(terminal[2].payload.error)).toContain('等待首字超时');
+      expect(abort).toHaveBeenCalledWith('ses_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('serve 日志 ERROR 行随机 id 含 429（非 HTTP 状态语义）→ 不提前 abort 健康会话', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue(STEP_START_ONLY);
+    const { sender, sent } = createSender();
+    const idCollisionLine =
+      'timestamp=2026-09-22T10:22:00.000Z level=ERROR run=ghi789 message="tool execute failed" session.id=ses_1 messageID=msg_0a429eb46001rGylqWhDPAJKL6';
+    let reads = 0;
+    const serveErrorReader = jest.fn(() => (reads++ === 0 ? [] : [idCollisionLine]));
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 60,
+      pollMs: 5,
+      serveErrorReader,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 4);
+      expect(getMessages.mock.calls.length).toBeGreaterThan(2);
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      expect(String(terminal[2].payload.error)).toContain('等待首字超时');
+      expect(abort).toHaveBeenCalledWith('ses_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
   it('无模型错误可提取时：原始 serve 日志尾部进 agent.status error + logger.error（失败必带证据，非笼统文案）', async () => {    const { driver, getMessages, abort } = mockDriver();
     getMessages.mockResolvedValue(STEP_START_ONLY);
     const { sender, sent } = createSender();
@@ -1696,6 +1789,80 @@ describe('ExecServer：GET /plan-files（计划文件同步端点）', () => {
     }
   });
 
+  it('三目录各放一个 .md → 合并返回三个条目（含 .omo/drafts，正文内联）', async () => {
+    await seedPlan(workDir, 'a-opencode.md', '# opencode 计划');
+    const omoDir = join(workDir, '.omo', 'plans');
+    await fsp.mkdir(omoDir, { recursive: true });
+    await fsp.writeFile(join(omoDir, 'b-omo.md'), '# omo 计划', 'utf8');
+    const draftsDir = join(workDir, '.omo', 'drafts');
+    await fsp.mkdir(draftsDir, { recursive: true });
+    await fsp.writeFile(join(draftsDir, 'c-draft.md'), '# 草稿计划', 'utf8');
+
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.files).toHaveLength(3);
+      const byName = Object.fromEntries(
+        res.body.files.map((f: any) => [f.name, f]),
+      );
+      // .omo/drafts 下的文件出现在结果中
+      expect(Object.keys(byName).sort()).toEqual(['a-opencode.md', 'b-omo.md', 'c-draft.md']);
+      for (const f of res.body.files) {
+        expect(f).toEqual(
+          expect.objectContaining({
+            name: expect.any(String),
+            updatedAt: expect.any(String),
+            size: expect.any(Number),
+            content: expect.any(String),
+          }),
+        );
+      }
+      expect(byName['c-draft.md'].content).toBe('# 草稿计划');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('三目录均存在但无 .md → 200 {files: []} 不报错（空目录是常态）', async () => {
+    for (const rel of ['.omo/plans', '.opencode/plans', '.omo/drafts']) {
+      await fsp.mkdir(join(workDir, rel), { recursive: true });
+    }
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.files).toEqual([]);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('三目录同名 x.md 内容不同 → 首个命中目录（.omo/plans）胜出（优先级不回归）', async () => {
+    await seedPlan(workDir, 'x.md', 'opencode 内容');
+    const omoDir = join(workDir, '.omo', 'plans');
+    await fsp.mkdir(omoDir, { recursive: true });
+    await fsp.writeFile(join(omoDir, 'x.md'), 'omo 内容', 'utf8');
+    const draftsDir = join(workDir, '.omo', 'drafts');
+    await fsp.mkdir(draftsDir, { recursive: true });
+    await fsp.writeFile(join(draftsDir, 'x.md'), 'draft 内容', 'utf8');
+
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await getPlanFiles(bound, { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body.files).toHaveLength(1);
+      expect(res.body.files[0].name).toBe('x.md');
+      // PLAN_DOCS_DIRS 顺序即优先级：.omo/plans > .opencode/plans > .omo/drafts
+      expect(res.body.files[0].content).toBe('omo 内容');
+    } finally {
+      await exec.stop();
+    }
+  });
+
   it('非 GET 方法 → 405', async () => {
     const exec = serverWith({ workDir });
     const bound = await exec.start();
@@ -2013,13 +2180,22 @@ describe('ExecServer：POST /plan-file（计划文件直传端点）', () => {
 describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', () => {
   const TOKEN = 'tok';
   let workDir: string;
+  /** OmO 配置落点隔离目录（落点已从工作目录改为用户级 ~/.omo/omo.jsonc）。 */
+  let omoDir: string;
+  let prevOmoDir: string | undefined;
 
   beforeEach(async () => {
     workDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-omo-'));
+    omoDir = await fsp.mkdtemp(join(os.tmpdir(), 'vteam-omo-cfg-'));
+    prevOmoDir = process.env.OMO_CONFIG_DIR;
+    process.env.OMO_CONFIG_DIR = omoDir;
   });
 
   afterEach(async () => {
+    if (prevOmoDir === undefined) delete process.env.OMO_CONFIG_DIR;
+    else process.env.OMO_CONFIG_DIR = prevOmoDir;
     await fsp.rm(workDir, { recursive: true, force: true });
+    await fsp.rm(omoDir, { recursive: true, force: true });
   });
 
   function serverFor(opts: { workDir?: string | null; token?: string } = {}): ExecServer {
@@ -2102,15 +2278,15 @@ describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', 
         expect.arrayContaining(['sisyphus', 'prometheus', 'atlas']),
       );
       expect(res.body.available).toHaveLength(14);
-      // 透出生效文件路径：全新环境（无文件）→ 指向新位置
-      expect(res.body.configPath).toBe(join('.omo', 'omo.jsonc'));
+      // 透出生效文件路径：全新环境（无文件）→ 指向用户级落点
+      expect(res.body.configPath).toBe('~/.omo/omo.jsonc');
       expect(res.body.configKind).toBe('none');
     } finally {
       await exec.stop();
     }
   });
 
-  it('POST：写入后 GET 回读一致，且落到实际生效的 .omo/omo.jsonc', async () => {
+  it('POST：写入后 GET 回读一致，且落到用户级 ~/.omo/omo.jsonc（不写工作目录）', async () => {
     const exec = serverFor();
     const bound = await exec.start();
     try {
@@ -2127,10 +2303,13 @@ describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', 
       });
       const get = await req(bound, 'GET', undefined, TOKEN);
       expect(get.body.agents).toEqual(post.body.agents);
-      // OmO 优先读 .omo/omo.jsonc（实测：同时存在时它胜出），故写入必须落这里
+      // 写入必须落用户级落点（工作目录不得出现配置文件）
       const onDisk = JSON.parse(
-        await fsp.readFile(join(workDir, '.omo', 'omo.jsonc'), 'utf8'),
+        await fsp.readFile(join(omoDir, 'omo.jsonc'), 'utf8'),
       );
+      await expect(
+        fsp.stat(join(workDir, '.omo', 'omo.jsonc')),
+      ).rejects.toThrow();
       expect(onDisk.agents.sisyphus).toEqual({ model: 'opencode/big-pickle' });
     } finally {
       await exec.stop();
@@ -2207,7 +2386,7 @@ describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', 
       expect(res.body.restart).toBe('pending');
       // 配置已落盘（不因挂起而回滚）
       const onDisk = JSON.parse(
-        await fsp.readFile(join(workDir, '.omo', 'omo.jsonc'), 'utf8'),
+        await fsp.readFile(join(omoDir, 'omo.jsonc'), 'utf8'),
       );
       expect(onDisk.agents.atlas).toEqual({ model: 'a/b' });
     } finally {
@@ -2241,7 +2420,7 @@ describe('ExecServer：GET/POST /omo-config（OmO agent 模型配置读写）', 
       expect(res.status).toBe(200);
       expect(res.body.restart).toBe('skipped');
       const onDisk = JSON.parse(
-        await fsp.readFile(join(workDir, '.omo', 'omo.jsonc'), 'utf8'),
+        await fsp.readFile(join(omoDir, 'omo.jsonc'), 'utf8'),
       );
       expect(onDisk.agents.sisyphus).toEqual({ model: 'a/b' });
     } finally {

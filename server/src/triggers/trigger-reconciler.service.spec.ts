@@ -1,7 +1,11 @@
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { HOOK_KIND, HOOK_STATUS, buildHookFireDedupKey } from './hook.constants';
+import {
+  HOOK_KIND,
+  HOOK_STATUS,
+  buildHookFireDedupKey,
+} from './hook.constants';
 import {
   TRIGGER_RECONCILE_BATCH_LIMIT,
   TRIGGER_RECONCILE_EVENT_TYPE,
@@ -45,8 +49,16 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
 
   beforeEach(() => {
     prisma = {
-      hook: { findMany: jest.fn(), findUnique: jest.fn(), updateMany: jest.fn() },
-      trigger: { findMany: jest.fn(), create: jest.fn(), deleteMany: jest.fn() },
+      hook: {
+        findMany: jest.fn(),
+        findUnique: jest.fn(),
+        updateMany: jest.fn(),
+      },
+      trigger: {
+        findMany: jest.fn(),
+        create: jest.fn(),
+        deleteMany: jest.fn(),
+      },
     };
     idGen = { nextId: jest.fn(async () => 'tmr_0000000099'), seed: jest.fn() };
     realtime = { emit: jest.fn(async () => ({})) };
@@ -71,7 +83,9 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
     const hook = hookRow();
     prisma.hook.findMany.mockResolvedValue([hook]);
     prisma.trigger.findMany.mockImplementation(async (args: unknown) => {
-      const where = (args as { where: { dedupKey?: { in?: string[] }; kind?: string } }).where;
+      const where = (
+        args as { where: { dedupKey?: { in?: string[] }; kind?: string } }
+      ).where;
       if (where.dedupKey?.in) {
         return [fireRow({ status: 'failed', lastError: 'boom' })];
       }
@@ -91,6 +105,8 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
     expect(created.data.dedupKey).toBe(buildHookFireDedupKey(hook.id));
     expect(created.data.payload).toEqual({ hookId: hook.id });
     expect(created.data.status).toBe('pending');
+    expect(created.data.dueAt).toEqual(hook.dueAt);
+    expect(created.data.fireAt).toBeUndefined();
     expect(realtime.emit).toHaveBeenCalledWith(
       TRIGGER_RECONCILE_EVENT_TYPE,
       expect.objectContaining({ direction: 'A', hookId: hook.id }),
@@ -130,14 +146,28 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
 
   it('方向A：pending/firing/fired 行皆健康跳过（fired 归方向B）', async () => {
     const hook = hookRow();
-    prisma.hook.findMany.mockResolvedValue([hook, hookRow({ id: 'hks_0000000002' }), hookRow({ id: 'hks_0000000003' })]);
+    prisma.hook.findMany.mockResolvedValue([
+      hook,
+      hookRow({ id: 'hks_0000000002' }),
+      hookRow({ id: 'hks_0000000003' }),
+    ]);
     prisma.trigger.findMany.mockImplementation(async (args: unknown) => {
       const where = (args as { where: { dedupKey?: { in?: string[] } } }).where;
       if (!where.dedupKey?.in) return [];
       return [
         fireRow({ status: 'pending' }),
-        fireRow({ id: 'tmr_0000000002', status: 'firing', dedupKey: buildHookFireDedupKey('hks_0000000002'), payload: { hookId: 'hks_0000000002' } }),
-        fireRow({ id: 'tmr_0000000003', status: 'fired', dedupKey: buildHookFireDedupKey('hks_0000000003'), payload: { hookId: 'hks_0000000003' } }),
+        fireRow({
+          id: 'tmr_0000000002',
+          status: 'firing',
+          dedupKey: buildHookFireDedupKey('hks_0000000002'),
+          payload: { hookId: 'hks_0000000002' },
+        }),
+        fireRow({
+          id: 'tmr_0000000003',
+          status: 'fired',
+          dedupKey: buildHookFireDedupKey('hks_0000000003'),
+          payload: { hookId: 'hks_0000000003' },
+        }),
       ];
     });
 
@@ -171,7 +201,8 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
   it('方向B：fired 行 + pending time hook → hook 补结算 fired + 事件', async () => {
     const row = fireRow({ status: 'fired' });
     prisma.trigger.findMany.mockImplementation(async (args: unknown) => {
-      const where = (args as { where: { kind?: string; dedupKey?: unknown } }).where;
+      const where = (args as { where: { kind?: string; dedupKey?: unknown } })
+        .where;
       return where.kind ? [row] : [];
     });
     prisma.hook.findUnique.mockResolvedValue(hookRow());
@@ -193,10 +224,13 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
   it('方向B：all_idle 的 fired+pending 系正常态（poll 拥有唤醒权），跳过', async () => {
     const row = fireRow({ status: 'fired' });
     prisma.trigger.findMany.mockImplementation(async (args: unknown) => {
-      const where = (args as { where: { kind?: string; dedupKey?: unknown } }).where;
+      const where = (args as { where: { kind?: string; dedupKey?: unknown } })
+        .where;
       return where.kind ? [row] : [];
     });
-    prisma.hook.findUnique.mockResolvedValue(hookRow({ kind: HOOK_KIND.ALL_IDLE }));
+    prisma.hook.findUnique.mockResolvedValue(
+      hookRow({ kind: HOOK_KIND.ALL_IDLE }),
+    );
 
     const counts = await svc.reconcileOnce(new Date());
 
@@ -207,11 +241,16 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
 
   it('方向B：hook 已终态/缺失/payload 无 hookId 皆跳过', async () => {
     prisma.trigger.findMany.mockImplementation(async (args: unknown) => {
-      const where = (args as { where: { kind?: string; dedupKey?: unknown } }).where;
+      const where = (args as { where: { kind?: string; dedupKey?: unknown } })
+        .where;
       return where.kind
         ? [
             fireRow({ id: 'tmr_a', payload: { hookId: 'hks_a' } }),
-            fireRow({ id: 'tmr_b', payload: { hookId: 'hks_b' }, dedupKey: 'hook_fire:hook:hks_b' }),
+            fireRow({
+              id: 'tmr_b',
+              payload: { hookId: 'hks_b' },
+              dedupKey: 'hook_fire:hook:hks_b',
+            }),
             fireRow({ id: 'tmr_c', payload: {} }),
           ]
         : [];
@@ -243,7 +282,9 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
     prisma.trigger.create.mockClear();
     realtime.emit.mockClear();
     prisma.trigger.findMany.mockImplementation(async (args: unknown) => {
-      const where = (args as { where: { dedupKey?: { in?: string[] }; kind?: string } }).where;
+      const where = (
+        args as { where: { dedupKey?: { in?: string[] }; kind?: string } }
+      ).where;
       if (where.dedupKey?.in) return [fireRow({ status: 'pending' })];
       return [];
     });
@@ -268,9 +309,18 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
     const hookA = hookRow({ id: 'hks_0000000001' });
     prisma.hook.findMany.mockResolvedValue([hookA]);
     prisma.trigger.findMany.mockImplementation(async (args: unknown) => {
-      const where = (args as { where: { dedupKey?: { in?: string[] }; kind?: string } }).where;
+      const where = (
+        args as { where: { dedupKey?: { in?: string[] }; kind?: string } }
+      ).where;
       if (where.dedupKey?.in) return [fireRow({ status: 'failed' })];
-      return [fireRow({ id: 'tmr_b', status: 'fired', dedupKey: 'hook_fire:hook:hks_b', payload: { hookId: 'hks_b' } })];
+      return [
+        fireRow({
+          id: 'tmr_b',
+          status: 'fired',
+          dedupKey: 'hook_fire:hook:hks_b',
+          payload: { hookId: 'hks_b' },
+        }),
+      ];
     });
     prisma.trigger.deleteMany.mockResolvedValue({ count: 0 });
     prisma.hook.findUnique.mockResolvedValue(hookRow({ id: 'hks_b' }));
@@ -323,12 +373,15 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
     try {
       await svc.onModuleInit();
     } finally {
-      (global as unknown as { setInterval: unknown }).setInterval = realSetInterval;
+      (global as unknown as { setInterval: unknown }).setInterval =
+        realSetInterval;
     }
 
     expect(reconcileSpy).toHaveBeenCalledTimes(1);
     expect(order).toEqual(['reconcile', 'interval']);
-    expect((svc as unknown as { reconcileTimer: unknown }).reconcileTimer).not.toBeNull();
+    expect(
+      (svc as unknown as { reconcileTimer: unknown }).reconcileTimer,
+    ).not.toBeNull();
   });
 
   it('周期缺省 15min；env=0 停周期但启动 pass 照跑', async () => {
@@ -339,6 +392,8 @@ describe('TriggerReconcilerService（hook↔trigger 自愈，todo-3）', () => {
     process.env.TRIGGER_RECONCILE_INTERVAL_MS = '0';
     await svc.onModuleInit();
     expect(reconcileSpy).toHaveBeenCalledTimes(1);
-    expect((svc as unknown as { reconcileTimer: unknown }).reconcileTimer).toBeNull();
+    expect(
+      (svc as unknown as { reconcileTimer: unknown }).reconcileTimer,
+    ).toBeNull();
   });
 });

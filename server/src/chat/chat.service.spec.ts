@@ -1,6 +1,5 @@
 import {
   BadRequestException,
-  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -93,12 +92,12 @@ describe('ChatService', () => {
     };
     return { ...base, ...overrides };
   };
-  const taskGroupRow = (overrides: Record<string, unknown> = {}) =>
+  const taskScopedTeamRow = (overrides: Record<string, unknown> = {}) =>
     channelRow({
-      type: CHANNEL_TYPE.task_group,
-      teamId: null,
+      type: CHANNEL_TYPE.team_group,
+      teamId: 'tm_0000000001',
       taskId,
-      team: null,
+      team: { id: 'tm_0000000001', name: '团队' },
       task: {
         id: taskId,
         title: '任务标题',
@@ -137,15 +136,11 @@ describe('ChatService', () => {
         id: taskId,
         status: 'pending',
         teamId: (row as any).teamId,
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         status: 'pending',
         teamId: (row as any).teamId,
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       (prisma as any).teamMember.findMany.mockResolvedValue([]);
     }
@@ -301,7 +296,8 @@ describe('ChatService', () => {
       ]);
     });
 
-    it('多目标 @（{type:all} 展开全部）→ 触发多目标分派', async () => {      allowAccess();
+    it('多目标 @（{type:all} 展开全部）→ 触发多目标分派', async () => {
+      allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: null },
         { agentId: 'a_architect', removedAt: null },
@@ -323,8 +319,18 @@ describe('ChatService', () => {
     it('主 agent 门禁：无进行中任务时用户@子agent被拦，仅主目标放行+系统提示', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
-        { id: 'tmm_main', agentId: 'a_product', alias: '产品-1', removedAt: null },
-        { id: 'tmm_dev', agentId: 'a_developer', alias: '开发-1', removedAt: null },
+        {
+          id: 'tmm_main',
+          agentId: 'a_product',
+          alias: '产品-1',
+          removedAt: null,
+        },
+        {
+          id: 'tmm_dev',
+          agentId: 'a_developer',
+          alias: '开发-1',
+          removedAt: null,
+        },
       ]);
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
@@ -338,7 +344,9 @@ describe('ChatService', () => {
 
       const result = await service.createMessage(channelId, userId, {
         text: '@开发-1 干活',
-        mentions: [{ type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' }],
+        mentions: [
+          { type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' },
+        ],
       } as any);
 
       // 子目标被移除：dispatch 空目标；用户消息 + 系统提示共落库两次
@@ -356,7 +364,12 @@ describe('ChatService', () => {
     it('主 agent 门禁：@主agent本人放行（无进行中任务也不拦）', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
-        { id: 'tmm_main', agentId: 'a_product', alias: '产品-1', removedAt: null },
+        {
+          id: 'tmm_main',
+          agentId: 'a_product',
+          alias: '产品-1',
+          removedAt: null,
+        },
       ]);
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
@@ -370,7 +383,9 @@ describe('ChatService', () => {
 
       const result = await service.createMessage(channelId, userId, {
         text: '@产品-1 在吗',
-        mentions: [{ type: 'agent', agentId: 'a_product', instanceId: 'tmm_main' }],
+        mentions: [
+          { type: 'agent', agentId: 'a_product', instanceId: 'tmm_main' },
+        ],
       } as any);
 
       expect(result.triggers).toHaveLength(1);
@@ -380,8 +395,18 @@ describe('ChatService', () => {
     it('主 agent 门禁：当前任务进行中 → 开门，子目标照常派发', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([
-        { id: 'tmm_main', agentId: 'a_product', alias: '产品-1', removedAt: null },
-        { id: 'tmm_dev', agentId: 'a_developer', alias: '开发-1', removedAt: null },
+        {
+          id: 'tmm_main',
+          agentId: 'a_product',
+          alias: '产品-1',
+          removedAt: null,
+        },
+        {
+          id: 'tmm_dev',
+          agentId: 'a_developer',
+          alias: '开发-1',
+          removedAt: null,
+        },
       ]);
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_0000000001',
@@ -400,14 +425,16 @@ describe('ChatService', () => {
 
       const result = await service.createMessage(channelId, userId, {
         text: '@开发-1 干活',
-        mentions: [{ type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' }],
+        mentions: [
+          { type: 'agent', agentId: 'a_developer', instanceId: 'tmm_dev' },
+        ],
       } as any);
 
       expect(result.triggers).toHaveLength(1);
       expect(prisma.message.create).toHaveBeenCalledTimes(1);
     });
 
-    it('无 mentions 且任务无主实例（task_group）→ 不触发：triggers 空、dispatcher 空目标、仅广播用户消息', async () => {
+    it('无 mentions 且任务无主实例（team_group）→ 不触发：triggers 空、dispatcher 空目标、仅广播用户消息', async () => {
       allowAccess();
       (prisma as any).teamMember.findMany.mockResolvedValue([]);
       idGen.nextId.mockResolvedValue('m_0000000001');
@@ -487,9 +514,9 @@ describe('ChatService', () => {
       });
     });
 
-    it('归档任务频道发消息 → legacy task_group 保持 409 TASK_ARCHIVED（不落库不广播）', async () => {
+    it('team_group 任务上下文已归档 → 降级团队直聊并落库（taskId 空）', async () => {
       allowAccess(
-        taskGroupRow({
+        taskScopedTeamRow({
           task: {
             id: taskId,
             title: 'x',
@@ -498,20 +525,18 @@ describe('ChatService', () => {
           },
         }),
       );
+      idGen.nextId.mockResolvedValue('m_0000000001');
+      prisma.message.create.mockResolvedValue(messageRow());
 
-      await expect(
-        service.createMessage(channelId, userId, { text: 'hi' } as any),
-      ).rejects.toThrow(ConflictException);
-      try {
-        await service.createMessage(channelId, userId, { text: 'hi' } as any);
-        fail('应抛出 ConflictException');
-      } catch (e) {
-        expect((e as ConflictException).getResponse()).toMatchObject({
-          code: CHAT_ERRORS.TASK_ARCHIVED,
-        });
-      }
-      expect(prisma.message.create).not.toHaveBeenCalled();
-      expect(realtime.broadcast).not.toHaveBeenCalled();
+      const result = await service.createMessage(channelId, userId, {
+        text: 'hi',
+      } as any);
+
+      expect(result.message).toMatchObject({ id: 'm_0000000001', channelId });
+      expect(prisma.message.create).toHaveBeenCalledWith({
+        data: expect.not.objectContaining({ taskId: expect.anything() }),
+      });
+      expect(realtime.broadcast).toHaveBeenCalled();
     });
 
     it('频道不存在 → 404 CHANNEL_NOT_FOUND', async () => {
@@ -591,17 +616,16 @@ describe('ChatService', () => {
     });
 
     describe('T8 群聊无 @ 自动路由主实例', () => {
-      // 主实例配置齐全的任务频道行（mock task 含 mainAgentInstanceId/mainAgentId）
-      const mainChannel = (type: string = CHANNEL_TYPE.task_group) =>
+      // 团队主成员配置齐全的任务频道行（主身份来自 Team.mainAgentMemberId）
+      const mainChannel = (type: string = CHANNEL_TYPE.team_group) =>
         channelRow({
           type,
+          teamId: 'tm_0000000001',
           task: {
             id: taskId,
             title: '任务标题',
             status: 'pending',
             teamId: 'tm_0000000001',
-            mainAgentInstanceId: 'ti_pm',
-            mainAgentId: 'a_project_manager',
           },
         });
       // 通用主实例触发 mock：团队行 + 主实例行 + 会话 + ACK
@@ -633,7 +657,7 @@ describe('ChatService', () => {
         prisma.message.create.mockResolvedValue(messageRow());
       };
 
-      it('task_group 无 @ → 主实例 trigger（dispatched）', async () => {
+      it('team_group 无 @ → 主实例 trigger（dispatched）', async () => {
         allowAccess(mainChannel());
         mockMainDispatched({
           team: [
@@ -731,7 +755,7 @@ describe('ChatService', () => {
         expect((prisma as any).teamMember.findFirst).not.toHaveBeenCalled();
       });
 
-      it('private 频道无 @ → 不触发（仅 task_group 路由主实例）', async () => {
+      it('private 频道无 @ → 不触发（仅 team_group 路由主实例）', async () => {
         allowAccess(mainChannel(CHANNEL_TYPE.private));
         (prisma as any).teamMember.findMany.mockResolvedValue([]);
         idGen.nextId.mockResolvedValue('m_1');
@@ -748,7 +772,7 @@ describe('ChatService', () => {
         );
       });
 
-      it('Todo5：mainAgentMemberId 缺省 → 首位成员（seq 升序，任务 mainAgentId 不再读取）', async () => {
+      it('Todo5：团队主成员缺省 → 首位成员（seq 升序）', async () => {
         allowAccess(
           channelRow({
             task: {
@@ -756,8 +780,6 @@ describe('ChatService', () => {
               title: '任务标题',
               status: 'pending',
               teamId: 'tm_0000000001',
-              mainAgentInstanceId: null,
-              mainAgentId: 'a_developer',
             },
           }),
         );
@@ -1046,18 +1068,20 @@ describe('ChatService', () => {
   });
 
   describe('getSessionHistory（私聊历史 = serve 会话完整历史，含思考/工具）', () => {
-    /** 私聊频道（默认 channelRow 为 task_group，override type/agentId/teamMemberId）。 */
+    /** 私聊频道（绑定团队成员）。 */
     const privateChannel = (overrides: Record<string, unknown> = {}) =>
       channelRow({
         type: CHANNEL_TYPE.private,
+        teamId: 'tm_0000000001',
         agentId: 'a_product',
         teamMemberId: 'tmm_1',
         ...overrides,
       });
-    /** 存量私聊频道（无 teamMemberId）：team-only 下回退平台表，不查会话。 */
-    const legacyTaskChannel = (overrides: Record<string, unknown> = {}) =>
+    /** 私聊频道未绑定 teamMemberId：回退平台表，不查会话。 */
+    const unboundMemberChannel = (overrides: Record<string, unknown> = {}) =>
       channelRow({
         type: CHANNEL_TYPE.private,
+        teamId: 'tm_0000000001',
         agentId: 'a_product',
         teamMemberId: null,
         ...overrides,
@@ -1268,8 +1292,8 @@ describe('ChatService', () => {
       expect(workerClient.getMessages).not.toHaveBeenCalled();
     });
 
-    it('Todo5：无 teamMemberId（存量任务锚定频道）→ 回退平台表，不查会话', async () => {
-      allowAccess(legacyTaskChannel());
+    it('private 无 teamMemberId → 回退平台表，不查会话', async () => {
+      allowAccess(unboundMemberChannel());
       prisma.message.findMany.mockResolvedValue([]);
 
       const result = await service.getSessionHistory(channelId, userId);
@@ -1313,7 +1337,7 @@ describe('ChatService', () => {
       expect(result.items).toHaveLength(2);
     });
 
-    it('非 private（task_group）→ 400 SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）', async () => {
+    it('非 private（team_group）→ 400 SESSION_HISTORY_NOT_SUPPORTED（群聊保持平台表）', async () => {
       allowAccess();
 
       try {
@@ -1444,7 +1468,7 @@ describe('ChatService', () => {
       });
 
     it('dispatched + 有回复：返回 {agentId, status:dispatched, replyMessageId}', async () => {
-      allowAccess(taskGroupRow());
+      allowAccess(taskScopedTeamRow());
       prisma.message.findUnique.mockResolvedValue(triggerMessage());
       (prisma as any).teamMember.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: null },
@@ -1479,7 +1503,7 @@ describe('ChatService', () => {
     });
 
     it('no_session：无会话 → status no_session、无 replyMessageId（不判为已分派）', async () => {
-      allowAccess(taskGroupRow());
+      allowAccess(taskScopedTeamRow());
       prisma.message.findUnique.mockResolvedValue(triggerMessage());
       (prisma as any).teamMember.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: null },
@@ -1500,7 +1524,7 @@ describe('ChatService', () => {
     });
 
     it('agent_removed：已移除 → status agent_removed、不查会话', async () => {
-      allowAccess(taskGroupRow());
+      allowAccess(taskScopedTeamRow());
       prisma.message.findUnique.mockResolvedValue(triggerMessage());
       (prisma as any).teamMember.findMany.mockResolvedValue([
         { agentId: 'a_product', removedAt: new Date('2026-08-01T00:00:00Z') },
@@ -1577,7 +1601,7 @@ describe('ChatService', () => {
     });
 
     it('{type:all} mentions → 展开为团队全部未移除 Agent', async () => {
-      allowAccess(taskGroupRow());
+      allowAccess(taskScopedTeamRow());
       prisma.message.findUnique.mockResolvedValue(
         triggerMessage({ mentions: [{ type: 'all' }] }),
       );
@@ -1807,8 +1831,8 @@ describe('ChatService', () => {
         ...overrides,
       });
 
-    it('存量任务频道轮询：经任务归属 teamId 反查团队成员 + 团队会话直查', async () => {
-      allowAccess(taskGroupRow());
+    it('带任务上下文的 team_group 轮询：经任务归属 teamId 反查团队成员 + 团队会话直查', async () => {
+      allowAccess(taskScopedTeamRow());
       prisma.message.findUnique.mockResolvedValue(triggerMessage());
       (prisma as any).teamMember.findMany.mockResolvedValue([
         { id: 'tmm_1', agentId: 'a_product', removedAt: null },
@@ -1838,8 +1862,8 @@ describe('ChatService', () => {
       });
     });
 
-    it('存量任务频道发消息：@ 经任务归属团队解析，无任务侧快照', async () => {
-      allowAccess(taskGroupRow());
+    it('带任务上下文的 team_group 发消息：@ 经任务归属团队解析，无任务侧快照', async () => {
+      allowAccess(taskScopedTeamRow());
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_0000000001' });
       (prisma as any).teamMember.findMany.mockResolvedValue([
         { id: 'tmm_1', agentId: 'a_product', removedAt: null },
@@ -1925,20 +1949,6 @@ describe('ChatService', () => {
       } catch (e) {
         expect((e as BadRequestException).getResponse()).toMatchObject({
           code: CHAT_ERRORS.CHANNEL_TYPE_INVALID,
-        });
-      }
-    });
-
-    it('task_group 已废弃 → 400 CHANNEL_TYPE_DEPRECATED', async () => {
-      await expect(
-        service.findAccessibleChannels(userId, 'task_group'),
-      ).rejects.toThrow(BadRequestException);
-      try {
-        await service.findAccessibleChannels(userId, 'task_group');
-        fail('应抛出 BadRequestException');
-      } catch (e) {
-        expect((e as BadRequestException).getResponse()).toMatchObject({
-          code: CHAT_ERRORS.CHANNEL_TYPE_DEPRECATED,
         });
       }
     });
@@ -2102,22 +2112,22 @@ describe('ChatService', () => {
       expect((prisma as any).projectMember).toBeUndefined();
     });
 
-    it('旧频道任务无 teamId 归属 → 403（fail closed，不查 project_members）', async () => {
+    it('无 teamId 的频道 → 404 CHANNEL_NOT_FOUND（team-only，不走旧任务回退）', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue(
-        taskGroupRow({
-          task: { id: taskId, title: 'x', status: 'pending' },
-        }),
+        channelRow({ teamId: null, team: null, task: null }),
       );
+
+      await expect(
+        service.findMessages(channelId, userId, {} as any),
+      ).rejects.toThrow(NotFoundException);
       try {
         await service.findMessages(channelId, userId, {} as any);
-        fail('应抛出 ForbiddenException');
+        fail('应抛出 NotFoundException');
       } catch (e) {
-        expect(e).toBeInstanceOf(ForbiddenException);
-        expect((e as ForbiddenException).getResponse()).toMatchObject({
-          code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+        expect((e as NotFoundException).getResponse()).toMatchObject({
+          code: CHAT_ERRORS.CHANNEL_NOT_FOUND,
         });
       }
-      expect((prisma as any).projectMember).toBeUndefined();
     });
   });
 
@@ -3168,8 +3178,6 @@ describe('ChatService', () => {
         id: 't_0000000003',
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
 
       const result = await service.createMessage(channelId, userId, {
@@ -3210,15 +3218,11 @@ describe('ChatService', () => {
         id: taskId,
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       (prisma as any).teamUserMember.findUnique.mockResolvedValue({
         id: 'tum_1',
@@ -3458,15 +3462,11 @@ describe('ChatService', () => {
         id: taskId,
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       prisma.task.findUnique.mockResolvedValue({
         id: taskId,
         status: 'pending',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       (prisma as any).teamUserMember.findUnique.mockResolvedValue({
         id: 'tum_1',
@@ -3539,8 +3539,6 @@ describe('ChatService', () => {
         id: 't_archived',
         status: 'archived',
         teamId: 'tm_0000000001',
-        mainAgentInstanceId: null,
-        mainAgentId: null,
       } as any);
       (prisma as any).teamUserMember.findUnique.mockResolvedValue({
         id: 'tum_1',

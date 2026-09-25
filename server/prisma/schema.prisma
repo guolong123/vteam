@@ -238,11 +238,6 @@ model Task {
   description         String?   @db.Text
   priority            String    @default("medium")
   status              String    @default("pending")
-  mainAgentId         String?   @map("main_agent_id")
-  mainAgentInstanceId String?   @map("main_agent_instance_id") // 主 Agent 实例（决策依据，T2 起维护；session-unification 后停止写入，历史值由 Todo 6 迁移置空，列保留）
-  // @deprecated 2026-09：vteam 自造 plan 域已下线（改由 opencode 原生 agent 承担计划动作）。
-  // 列保留但恒写 "direct"、业务层不再读取；随下次重建库删除。
-  executionMode       String    @default("direct") @map("execution_mode")
   backgroundDocs      Json?     @map("background_docs")
   /// 完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false，Todo7）
   resetAfterComplete  Boolean   @default(false) @map("reset_after_complete")
@@ -256,7 +251,6 @@ model Task {
   archivedAt          DateTime? @map("archived_at")
 
   creator                  User                      @relation("TaskCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  mainAgent                Agent?                    @relation("TaskMainAgent", fields: [mainAgentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   team                     Team?                     @relation("TaskTeam", fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   currentInTeams           Team[]                    @relation("TeamCurrentTask")
   queue                    TeamQueue?
@@ -268,8 +262,8 @@ model Task {
   taskGroupInstances       TaskGroupInstance[]
   issues                   Issue[]
   memories                 Memory[]
-  // @deprecated 2026-09：vteam 自造 plan 域下线，业务层不再读写；关系保留仅为 schema 合法性
-  // （Plan 表空置保留，见 Plan 模型注释）。
+  // 2026-09-24 订正：上条"plan 域下线"已过时——plans/plan_tasks 均为 live 表，业务层经
+  // PlanLifecycleService/PlanStepsService 读写；关系保留（见 Plan 模型注释）。
   plan                     Plan?
   messageChannelLinks      TaskMessageChannel[]
   notificationChannelLinks TaskNotificationChannel[]
@@ -281,8 +275,6 @@ model Task {
 // 团队成员 = 实例（同一模板 agent 在任务内可多实例，seq 服务端生成防并发重号）
 // session-unification Todo 6：TaskAgent 模型已删除（迁移 DROP TABLE task_agents）。
 // 反向关系同步删除：Task.taskAgents / Agent.taskAgents / Session.taskAgent。
-// 保留：tasks.main_agent_instance_id 纯字符串列（历史值已置空）；
-// 冻结：uk_sessions_task_agent 约束保留（Session 模型内注释，存量 task 会话行只删不回填）。
 model TaskEvent {
   id         String   @id
   taskId     String   @map("task_id")
@@ -307,21 +299,21 @@ model TaskEvent {
 model Session {
   id           String   @id
   taskId       String?  @map("task_id")
-  taskAgentId  String?  @map("task_agent_id") // 绑任务实例（每实例独立会话；team-mode 下可空）
   teamId       String?  @map("team_id") // team-mode 执行上下文（nullable 便于存量回填；业务层 team-mode 必填）
   agentId      String   @map("agent_id") // 保留（角色渲染/模型解析），不再是唯一键维度
   teamMemberId String?  @map("team_member_id")
-  // team-mode 幂等键承载列（STORED 生成列：task_id 为空时 = team_id|team_member_id，其余为 NULL；DB 唯一索引仅约束 task-less 行，task 绑定行沿用 uk_sessions_task_agent）
+  // team-mode 幂等键承载列（STORED 生成列：task_id 为空时 = team_id|team_member_id，其余为 NULL；DB 唯一索引仅约束 task-less 行）
   // @db.VarChar(384)：对齐 20260904000000 迁移实际 DDL（VARCHAR(384) 生成列）；
   // 之前无长度声明（默认 191）与库漂移，导致 migrate dev 误提无关 ALTER（P3 skill 版本迁移前置修复，只对齐类型，不碰生成表达式）。
   teamMemberKey String?  @db.VarChar(384) @map("team_member_key")
   workerId     String?  @map("worker_id")
   instanceRef  String?  @map("instance_ref")
   status       String   @default("created")
-  // trigger-unification todo-7：空闲判死 DB sidecar（ingress touchSessionActivity +
-  // dispatcher handleSessionActivity/watchdog 起点双写；scanIdleSessions 按
-  // status='running' AND lastActivityAt < cutoff 检出，重启后内存 map 为空仍可判死；
-  // NULL = 迁移前存量行（不命中 lt 比较，不误杀）。内存 pending/active 否决保留（todo-21 前不删）。
+  // trigger-unification todo-7：空闲判死 DB sidecar（ingress 活动回写与 dispatcher
+  // watchdog 起点/活动事件回写同一列；scanIdleSessions 按 status='running' AND
+  // (lastActivityAt < cutoff OR (lastActivityAt IS NULL AND updatedAt < cutoff))
+  // 检出。活动列为 NULL 时回退自身 updatedAt，不授予新 lease；pending/active
+  // 否决仍独立保留。
   lastActivityAt DateTime? @map("last_activity_at")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
@@ -330,16 +322,11 @@ model Session {
   team       Team?       @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   agent      Agent       @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   worker     Worker?     @relation(fields: [workerId], references: [id], onDelete: Restrict, onUpdate: Restrict)
-  // session-unification Todo 6：TaskAgent 模型已删，taskAgent 关系同步删除；
-  // task_agent_id 纯字符串列保留（历史残留只读，迁移不回填）；uk_sessions_task_agent 见下冻结注释。
   teamMember TeamMember? @relation(fields: [teamMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
-  // FROZEN (session-unification Todo 6)：uk_sessions_task_agent 约束保留冻结——存量 task 会话行只删不回填，
-  // 新写路径恒 taskId/taskAgentId=null（Todo 4/10 已收敛），本约束不再承载新语义，不得删除或复用。
-  @@unique([taskId, taskAgentId], map: "uk_sessions_task_agent")
   @@unique([teamMemberKey], map: "uk_sessions_team_member")
   @@index([teamId], map: "idx_sessions_team_id")
-  // trigger-unification todo-7：空闲判死扫描谓词（status='running' AND last_activity_at < cutoff）。
+  // trigger-unification todo-7：空闲判死扫描索引（status='running' AND last_activity_at < cutoff；NULL 行按 updatedAt 回退）。
   @@index([status, lastActivityAt], map: "idx_sessions_status_last_activity")
   @@map("sessions")
 }
@@ -355,7 +342,6 @@ model ChatChannel {
   teamMemberId String?   @map("team_member_id")
   taskId       String?   @map("task_id")
   agentId      String?   @map("agent_id") // 保留（角色渲染），不再是唯一键维度
-  taskAgentId  String?   @map("task_agent_id") // 私聊频道绑实例；task_group 频道两者均为 NULL（存量兼容)
   // team_group 单例保障：team_group_key 仅 team_group 且未删除时等于 teamId，其余为 NULL，配合唯一索引保证每 team 仅一条 team_group
   teamGroupKey String?   @map("team_group_key")
   // UX-09 会话管理（channel 级简化：置顶/已读为频道级标记，非用户粒度——演示平台可接受；
@@ -372,7 +358,6 @@ model ChatChannel {
   messages   Message[]
 
   @@unique([teamId, teamMemberId], map: "uk_channels_team_member")
-  @@unique([taskId, taskAgentId], map: "uk_channels_task_agent")
   @@unique([teamGroupKey], map: "uk_channels_team_group_single")
   @@index([teamId], map: "idx_chat_channels_team_id")
   @@index([teamId, type], map: "idx_chat_channels_team_type")
@@ -410,8 +395,8 @@ model Message {
 // 双库兼容——不声明 Prisma enum；id 列均为逻辑关联（不建 FK），不碰其他表）
 // ==================================================================
 
-// 待回执账本（一派发一账；dedupKey 输入规范 =
-// `from::to::(issueId ?? sha1(内容去空白后前64字符))`，括号必须显式，永不 NULL；
+// 待回执账本（一派发一账；dedupKey 输入规范（is_5 起）=
+// `from::to::sha1(内容去空白后前64字符)`，永不 NULL，issueId 不再参与组键；
 // kind=wake/round-notify 为保留位，永不写入，仅防未来误用）
 model MessageReceipt {
   id             String    @id // mr_ 前缀，服务层 IdGeneratorService 生成
@@ -454,7 +439,7 @@ model MessageReceipt {
 // 永不 NULL（nullable unique 在部分 DB 下破坏幂等）；调用方显式传 key。
 //
 // 三形态（todo-2 trigger-unification）：
-// - one-shot：`dueAt` 到期触发一次（历史 `fireAt` 双写保留，后续清理任务再 drop）；
+// - one-shot：`dueAt` 到期触发一次（唯一到期时刻）；
 // - interval：`intervalMs` + `nextFireAt` 周期重排（按 now 重算，不追补 missed 周期）；
 // - condition：`guardKey` 仅接受已注册谓词（registerGuard 白名单，非任意字符串）。
 // ==================================================================
@@ -463,8 +448,7 @@ model Trigger {
   id              String    @id // tmr_ 前缀冻结，服务层 IdGeneratorService 生成
   kind            String // handler 注册键（TRIGGER_KIND 白名单，服务层强制）
   status          String    @default("pending") // pending|firing|fired|cancelled|failed
-  fireAt          DateTime  @map("fire_at") // 历史列：双写保留，清理前勿删
-  dueAt           DateTime? @map("due_at") // one-shot 到期时刻（读路径唯一真相）
+  dueAt           DateTime  @map("due_at") // one-shot 到期时刻（读路径唯一真相）
   scopeType       String?   @map("scope_type") // 归属域（如 team/issue，可空）
   scopeId         String?   @map("scope_id") // 归属 id（可空）
   ownerInstanceId String?   @map("owner_instance_id") // 拥有实例（可空）
@@ -483,7 +467,6 @@ model Trigger {
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
-  @@index([status, fireAt], map: "idx_timers_status_fire_at")
   @@index([status, dueAt], map: "idx_triggers_status_due_at")
   @@map("triggers")
 }
@@ -672,7 +655,6 @@ model Agent {
   sessions          Session[]
   channels          ChatChannel[]
   authoredArtifacts ArtifactVersion[] @relation("ArtifactAuthor")
-  mainTasks         Task[]            @relation("TaskMainAgent")
   assignedIssues    Issue[]           @relation("IssueAssigneeAgent")
   createdIssues     Issue[]           @relation("IssueCreatorAgent")
 
@@ -960,9 +942,10 @@ model RealtimeEvent {
 
 // 任务执行计划（一任务一计划，taskId 唯一；status 字符串枚举：
 // draft/reviewing/pending_final/approved/rejected/executing/completed，draft 为预留态）
-// @deprecated 2026-09：vteam 自造计划域（plan/planTask）已整体下线——计划动作改由 opencode
-// 原生 agent（built-in `plan` 或自定义 agent）在其内核内完成，vteam 只传递 agent 名。
-// 两表保留空置（不读不写、无外部引用），避免破坏性 DROP 迁移；随下次重建库删除。
+// 2026-09-24 订正：上条"整体下线/保留空置"已过时——两表均为 live 表（2026-09-23 决策复活，
+// 见 plan-steps.service.ts 头注释：opencode todos 会话级易失，plan_tasks 为 durable 跨会话存储）。
+// plan_tasks 是唯一 choke 点，经 PlanStepsService 由 `vteam_todo` MCP 工具写入；
+// opencode-todos 链已退役。两表勿 DROP。
 model Plan {
   id                 String   @id // pl_ 前缀，服务层 IdGeneratorService 生成
   taskId             String   @unique @map("task_id") // 一任务一计划

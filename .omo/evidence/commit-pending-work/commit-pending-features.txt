@@ -1,0 +1,22 @@
+# 补提交工作区未提交的两个功能
+# 时间: 2026-09-23T10:03:32+08:00
+
+## 背景与我的失误
+70784ea（补返回按钮）时我 git add 了 web/app/(main)/docs/page.tsx，而该文件当时已含用户未提交的 doc-export 改动
+（DocExportButtons import / captureRef / docs-pdf-capture 包裹）→ 被顺带提交，且该 commit 引用的 doc-export-buttons.tsx 当时尚未跟踪。
+本次补齐剩余文件，使 tip 自洽。
+
+## 提交 1：文档导出
+web/src/features/docs-site/doc-export.ts (232 行，新)
+web/src/features/docs-site/doc-export-buttons.tsx (172 行，新)
+web/package.json + package-lock.json（html2canvas-pro ^2.4.4 / jspdf ^4.2.1）
+（docs/page.tsx 的接线部分已在 70784ea）
+
+## 提交 2：成员操作反馈与防重复提交
+web/app/(main)/teams/[id]/session/page.tsx（notice 提示条 + toggleEnabled 防重复 + pending instanceId）
+web/src/components/teams/TeamMembersPanel.tsx（pending props / 切换中… / 禁用与降透明度）
+
+## 验证
+web tsc 0；涉及文件 eslint 0 error（TeamMembersPanel 1 条警告在未改动的 roleItems 上，预存）；
+工作区带这两块改动时：docs 19 passed / pages 25 passed 全绿（等于已回归验证）。
+e2e 目前对这两块**无专门覆盖**（需另行补）。

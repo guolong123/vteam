@@ -36,9 +36,15 @@ export class OpencodeAgentNameValidator {
         where: { id: workerId },
         select: { id: true, capabilities: true },
       });
-      const agents = await this.workerClient.listAgents(
-        worker ?? { id: workerId },
-      );
+      if (!worker) {
+        this.logger.warn(
+          `[agent-roles] worker ${workerId} 行缺失，无法解析执行端点，跳过 agent 名弱校验 ` +
+            `defaultOpencodeAgentName="${agentName}"（role=${roleId}）；仍按用户意图写入`,
+        );
+        return;
+      }
+      // listAgents 自带降级日志（worker id + 解析出的 URL + 不可达/空区分），此处不再静默吞错
+      const agents = await this.workerClient.listAgents(worker);
       if (agents.length === 0) {
         return;
       }
@@ -48,8 +54,11 @@ export class OpencodeAgentNameValidator {
             `仍按用户意图写入；执行期若不存在将由 opencode 报错`,
         );
       }
-    } catch {
-      // 弱校验：任何异常都不影响写入
+    } catch (err) {
+      this.logger.warn(
+        `[agent-roles] agent 名弱校验失败，放行写入 ` +
+          `defaultOpencodeAgentName="${agentName}"（role=${roleId}）：${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 }

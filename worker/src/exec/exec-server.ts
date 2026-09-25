@@ -28,6 +28,14 @@ import {
   MessageDeltaTracker,
   sendAndAwait,
 } from '../driver/prompt-await';
+import { SERVE_FATAL_KEYWORDS } from '../runtime/serve-log';
+import { ResourceInjector } from '../resources/injector';
+import {
+  LOCAL_CONFIG_KINDS,
+  LocalConfigApplier,
+  LocalConfigError,
+  LocalConfigKind,
+} from './local-config';
 import {
   DriverModelRef,
   DriverRequestError,
@@ -122,18 +130,19 @@ export const MAX_FILE_FETCH_BYTES = 10 * 1024 * 1024;
 /**
  * 计划文档目录（按顺序探测，先命中者胜）。
  *
- * ⚠️ 两个位置都要看，原因与 OmO 配置文件同理（见 resources/omo-config.ts）：
+ * ⚠️ 三个位置都要看，原因与 OmO 配置文件同理（见 resources/omo-config.ts）：
  * OmO 把工作区元数据统一收进 `.omo/`，**当前版本实际把 agent 产出的计划写在
  * `.omo/plans/`**；而 `.opencode/plans/` 是 opencode 原生 plan agent 的约定位置
- * （也是 vteam 早期版本约定的位置）。
+ * （也是 vteam 早期版本约定的位置）；`.omo/drafts/` 是 OmO 原生规划工作流的
+ * 草稿目录（plan 模式先落草稿），从未被扫描会导致草稿计划不可见。
  *
  * 实测：装了 OmO 后，主 Agent 在计划模式下产出的文件落在 `<taskDir>/.omo/plans/plan.md`，
  * 只读 `.opencode/plans/` 会得到空列表——计划明明写出来了，页面却显示"暂无计划"。
  *
- * 读取时**两个目录都扫**（合并结果，按文件名去重），因此不论 agent 用哪个位置都能展示；
+ * 读取时**三个目录都扫**（合并结果，按文件名去重），因此不论 agent 用哪个位置都能展示；
  * 写入（用户上传）统一落 `PLAN_DOCS_DIR`（首个位置）。
  */
-export const PLAN_DOCS_DIRS = ['.omo/plans', '.opencode/plans'] as const;
+export const PLAN_DOCS_DIRS = ['.omo/plans', '.opencode/plans', '.omo/drafts'] as const;
 /** 计划文档写入位置（上传落点）：取探测列表首位。 */
 export const PLAN_DOCS_DIR = PLAN_DOCS_DIRS[0];
 /** 计划文档读取上限（单文件 256KB，超限截断 + truncated 标记，防大文件撑爆列表响应）。 */
@@ -219,6 +228,16 @@ export interface ExecServerOptions {
    * 已挂起等归零）。缺省不注入 = 保存后不重启（配置留待下次自然重启生效）。
    */
   restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
+  /**
+   * 独立模式（WORKER_STANDALONE）：挂载 POST /config/* 本地配置下推端点。
+   * 缺省 false = 不挂载（注册模式的配置一律走控制面下发，避免双事实源）。
+   */
+  standalone?: boolean;
+  /**
+   * 资源注入器（独立模式本地配置下推用）。standalone=true 时必须提供，
+   * 否则 /config/* 返回 503。
+   */
+  resourceInjector?: ResourceInjector;
 }
 
 /** 请求体解析失败（非 JSON / 缺字段）。 */
@@ -322,6 +341,10 @@ export class ExecServer {
   private readonly workDir: string;
   /** OmO 配置保存后的 serve 重启回调（缺省 undefined = 不重启）。 */
   private readonly restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
+  /** 独立模式：挂载 POST /config/* 本地配置下推（注册模式不挂载，避免双事实源）。 */
+  private readonly standalone: boolean;
+  /** 本地配置下推执行器（standalone=true 且注入 resourceInjector 时可用）。 */
+  private readonly localConfig?: LocalConfigApplier;
   private readonly logger: Logger;
   private server: http.Server | null = null;
 
@@ -340,6 +363,11 @@ export class ExecServer {
     this.workDir = options.workDir ?? '';
     this.restartServe = options.restartServe;
     this.logger = options.logger ?? console;
+    this.standalone = options.standalone ?? false;
+    this.localConfig =
+      this.standalone && options.resourceInjector
+        ? new LocalConfigApplier({ injector: options.resourceInjector, logger: this.logger })
+        : undefined;
   }
 
   /** 实际监听端口（start 成功后；未启动为 null）。 */
@@ -436,6 +464,10 @@ export class ExecServer {
     }
     if (url.pathname === '/omo-agent-prompt') {
       await this.handleOmoAgentPrompt(req, res, url);
+      return;
+    }
+    if (url.pathname.startsWith('/config/')) {
+      await this.handleConfigRoute(req, res, url.pathname.slice('/config/'.length));
       return;
     }
     sendJson(res, 404, { error: `未支持的路径: ${url.pathname}` });
@@ -671,6 +703,109 @@ export class ExecServer {
     }
   }
 
+  /**
+   * /config/<kind> 与 /config/restart（仅独立模式）：本地配置下推。
+   * 注册模式返回 404 + 引导（配置一律经控制面下发，避免双事实源）。
+   */
+  private async handleConfigRoute(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    kind: string,
+  ): Promise<void> {
+    if (!this.standalone) {
+      sendJson(res, 404, {
+        error:
+          '本地配置下推仅在独立模式可用（WORKER_STANDALONE=true）；注册模式请经控制面下发',
+      });
+      return;
+    }
+    if (kind === 'restart') {
+      await this.handleConfigRestart(req, res);
+      return;
+    }
+    if (!(LOCAL_CONFIG_KINDS as readonly string[]).includes(kind)) {
+      sendJson(res, 404, { error: `未知配置类别 /config/${kind}` });
+      return;
+    }
+    await this.handleLocalConfig(req, res, kind as LocalConfigKind);
+  }
+
+  private async handleLocalConfig(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    kind: LocalConfigKind,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    if (!this.localConfig) {
+      sendJson(res, 503, { error: '本地配置下推未启用（需独立模式 + 资源注入器）' });
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await readBody(req, this.maxBodyBytes);
+    } catch (err) {
+      await drainRequest(req);
+      sendJson(res, 413, { error: err instanceof Error ? err.message : '请求体过大' });
+      return;
+    }
+    let body: unknown;
+    try {
+      body = JSON.parse(raw || '{}');
+    } catch {
+      sendJson(res, 400, { error: '请求体必须是合法 JSON' });
+      return;
+    }
+    try {
+      const result = this.localConfig.apply(kind, body);
+      sendJson(res, 200, { ...result });
+    } catch (err) {
+      if (err instanceof LocalConfigError) {
+        sendJson(res, 400, { error: err.message });
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] /config/${kind} 写入失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
+  /** POST /config/restart：触发 serve 重启使已下推配置生效（复用 RestartCoordinator）。 */
+  private async handleConfigRestart(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    await drainRequest(req);
+    if (!this.restartServe) {
+      sendJson(res, 503, { error: '重启回调未注入，无法重启' });
+      return;
+    }
+    try {
+      const restart = await this.restartServe('exec /config/restart（本地配置下推）');
+      sendJson(res, 200, { restart });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] /config/restart 失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
   /** POST /execute：校验 prompt → 202 {accepted:true} → fire-and-forget 驱动 serve。 */
   private async handleExecute(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (req.method !== 'POST') {
@@ -874,7 +1009,8 @@ export class ExecServer {
       return;
     }
     try {
-      // 两个候选目录都扫：OmO 把计划写在 .omo/plans/，原生 plan agent 用 .opencode/plans/。
+      // 三个候选目录都扫：OmO 把计划写在 .omo/plans/，原生 plan agent 用 .opencode/plans/，
+      // OmO 原生规划工作流的草稿落 .omo/drafts/。
       // 同名文件以**先命中的目录**为准（PLAN_DOCS_DIRS 顺序即优先级）。
       const seen = new Set<string>();
       const files: Array<{
@@ -1386,9 +1522,7 @@ export class ExecServer {
         // PM+architect 两个健康主 agent（step=6，group_post 在途）。
         onServeError: (text) => !/share subscriber/i.test(text) &&
           (/level=ERROR\b|error\.(error|name|message|code)=/.test(text) &&
-          /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i.test(
-            text,
-          )),
+          SERVE_FATAL_KEYWORDS.test(text)),
         onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
           void this.sendDelta(ctx, tracker, messages);
           // question/权限确认旁路检测：serve 侧 pending 时上送事件（不 abort，等用户）

@@ -1,0 +1,1011 @@
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/agent-roles.controller.spec.ts
+  65:40  error  Replace `·type:·'builtin',·page:·1,·pageSize:·20` with `⏎······type:·'builtin',⏎······page:·1,⏎······pageSize:·20,⏎···`          prettier/prettier
+  78:35  error  Replace `·id:·'ar_product',·defaultAgentId:·'a_product'` with `⏎······id:·'ar_product',⏎······defaultAgentId:·'a_product',⏎···`  prettier/prettier
+  97:39  error  Replace `·id:·'ar_product',·rolePrompt:·'新指令'` with `⏎······id:·'ar_product',⏎······rolePrompt:·'新指令',⏎···`                      prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/agent-roles.controller.ts
+  58:18  error  Replace `·summary:·'AgentRole·详情（不存在·→·404·AGENT_ROLE_NOT_FOUND）'` with `⏎····summary:·'AgentRole·详情（不存在·→·404·AGENT_ROLE_NOT_FOUND）',⏎·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/agent-roles.service.spec.ts
+  689:50  error  Replace `·...builtinRow,·capabilities` with `⏎········...builtinRow,⏎········capabilities,⏎·····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/agent-roles.service.ts
+    6:3   warning  'Logger' is defined but never used. Allowed unused vars must match /^_/u                                                                                   @typescript-eslint/no-unused-vars
+   76:26  error    Replace `this.prisma.agentRole,·AGENT_ROLE_ID_PREFIX,·this.idGen` with `⏎······this.prisma.agentRole,⏎······AGENT_ROLE_ID_PREFIX,⏎······this.idGen,⏎····`  prettier/prettier
+  329:33  error    Replace `value:·string·|·null·|·undefined` with `⏎····value:·string·|·null·|·undefined,⏎··`                                                                prettier/prettier
+  373:38  error    Replace `'capabilities·须为对象（能力点键·→·boolean）'` with `⏎········'capabilities·须为对象（能力点键·→·boolean）',⏎······`                                                  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/dto/create-agent-role.dto.ts
+  31:17  error  Insert `⏎·····`                                                                                                                        prettier/prettier
+  94:25  error  Replace `·description:·'展示排序（越小越前）',·default:·0,·minimum:·0` with `⏎····description:·'展示排序（越小越前）',⏎····default:·0,⏎····minimum:·0,⏎·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/dto/query-agent-roles.dto.ts
+  17:25  error  Replace `·description:·'页码（从·1·起）',·default:·1,·minimum:·1` with `⏎····description:·'页码（从·1·起）',⏎····default:·1,⏎····minimum:·1,⏎·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/dto/update-agent-role.dto.ts
+  31:17  error  Insert `⏎·····`                                                                                      prettier/prettier
+  83:25  error  Replace `·description:·'角色指令（"这个岗位是什么"，可编辑文本）'` with `⏎····description:·'角色指令（"这个岗位是什么"，可编辑文本）',⏎·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.controller.spec.ts
+  202:18  warning  A `require()` style import is forbidden                                                                                                                                                                  @typescript-eslint/no-require-imports
+  203:17  warning  A `require()` style import is forbidden                                                                                                                                                                  @typescript-eslint/no-require-imports
+  216:18  warning  A `require()` style import is forbidden                                                                                                                                                                  @typescript-eslint/no-require-imports
+  217:17  warning  A `require()` style import is forbidden                                                                                                                                                                  @typescript-eslint/no-require-imports
+  337:10  error    Replace `·agentKey:·'copy-agent',·agentRoleId:·'ar_developer',·role:·'developer'` with `⏎··········agentKey:·'copy-agent',⏎··········agentRoleId:·'ar_developer',⏎··········role:·'developer',⏎·······`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.service.spec.ts
+  172:5   error  Insert `··`                                                                                                                                                              prettier/prettier
+  173:1   error  Insert `··`                                                                                                                                                              prettier/prettier
+  174:5   error  Insert `··`                                                                                                                                                              prettier/prettier
+  175:1   error  Insert `··`                                                                                                                                                              prettier/prettier
+  176:5   error  Insert `··`                                                                                                                                                              prettier/prettier
+  177:1   error  Insert `··`                                                                                                                                                              prettier/prettier
+  178:5   error  Insert `··`                                                                                                                                                              prettier/prettier
+  179:1   error  Replace `······` with `········`                                                                                                                                         prettier/prettier
+  180:7   error  Insert `··`                                                                                                                                                              prettier/prettier
+  181:9   error  Insert `··`                                                                                                                                                              prettier/prettier
+  182:1   error  Insert `··`                                                                                                                                                              prettier/prettier
+  183:11  error  Insert `··`                                                                                                                                                              prettier/prettier
+  184:1   error  Insert `··`                                                                                                                                                              prettier/prettier
+  185:13  error  Insert `··`                                                                                                                                                              prettier/prettier
+  186:1   error  Replace `············` with `··············`                                                                                                                             prettier/prettier
+  187:11  error  Insert `··`                                                                                                                                                              prettier/prettier
+  188:9   error  Insert `··`                                                                                                                                                              prettier/prettier
+  189:1   error  Insert `··`                                                                                                                                                              prettier/prettier
+  196:16  error  Replace `agents:·{·policyId?:·string·|·null;·agentKey?:·string·|·null·}[]` with `⏎··········agents:·{·policyId?:·string·|·null;·agentKey?:·string·|·null·}[],⏎········`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.service.ts
+  349:15  warning  'updated' is assigned a value but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  806:51  error    Replace `⏎··············?·stored.description⏎·············` with `·?·stored.description`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/chat.service.spec.ts
+   304:56  error    Insert `⏎`                                                                                                                                                                                                       prettier/prettier
+   326:10  error    Replace `·id:·'tmm_main',·agentId:·'a_product',·alias:·'产品-1',·removedAt:·null` with `⏎··········id:·'tmm_main',⏎··········agentId:·'a_product',⏎··········alias:·'产品-1',⏎··········removedAt:·null,⏎·······`    prettier/prettier
+   327:10  error    Replace `·id:·'tmm_dev',·agentId:·'a_developer',·alias:·'开发-1',·removedAt:·null` with `⏎··········id:·'tmm_dev',⏎··········agentId:·'a_developer',⏎··········alias:·'开发-1',⏎··········removedAt:·null,⏎·······`  prettier/prettier
+   341:20  error    Replace `{·type:·'agent',·agentId:·'a_developer',·instanceId:·'tmm_dev'·}` with `⏎··········{·type:·'agent',·agentId:·'a_developer',·instanceId:·'tmm_dev'·},⏎········`                                          prettier/prettier
+   359:10  error    Replace `·id:·'tmm_main',·agentId:·'a_product',·alias:·'产品-1',·removedAt:·null` with `⏎··········id:·'tmm_main',⏎··········agentId:·'a_product',⏎··········alias:·'产品-1',⏎··········removedAt:·null,⏎·······`    prettier/prettier
+   373:20  error    Replace `{·type:·'agent',·agentId:·'a_product',·instanceId:·'tmm_main'·}` with `⏎··········{·type:·'agent',·agentId:·'a_product',·instanceId:·'tmm_main'·},⏎········`                                            prettier/prettier
+   383:10  error    Replace `·id:·'tmm_main',·agentId:·'a_product',·alias:·'产品-1',·removedAt:·null` with `⏎··········id:·'tmm_main',⏎··········agentId:·'a_product',⏎··········alias:·'产品-1',⏎··········removedAt:·null,⏎·······`    prettier/prettier
+   384:10  error    Replace `·id:·'tmm_dev',·agentId:·'a_developer',·alias:·'开发-1',·removedAt:·null` with `⏎··········id:·'tmm_dev',⏎··········agentId:·'a_developer',⏎··········alias:·'开发-1',⏎··········removedAt:·null,⏎·······`  prettier/prettier
+   403:20  error    Replace `{·type:·'agent',·agentId:·'a_developer',·instanceId:·'tmm_dev'·}` with `⏎··········{·type:·'agent',·agentId:·'a_developer',·instanceId:·'tmm_dev'·},⏎········`                                          prettier/prettier
+  2191:13  warning  'result' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/chat.service.ts
+  1158:63  error  Replace `·instanceId·??` with `⏎············instanceId·??⏎···········`                                                             prettier/prettier
+  1185:29  error  Replace `·text:·hintText,·parts:·[]` with `⏎····················text:·hintText,⏎····················parts:·[],⏎·················`  prettier/prettier
+  1833:30  error  Insert `⏎`                                                                                                                         prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/message-receipts.service.ts
+  90:33  error  Replace `·fromInstanceId:·string;·teamId:·string` with `⏎····fromInstanceId:·string;⏎····teamId:·string;⏎·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.integration.spec.ts
+   38:9   error  Replace `·WorkerDispatcher,·MAX_SILENT_WAKE_ATTEMPTS·` with `⏎··WorkerDispatcher,⏎··MAX_SILENT_WAKE_ATTEMPTS,⏎`  prettier/prettier
+  461:41  error  Replace `⏎······dispatcher.silentSessionWakeMs·+·1000,⏎····` with `dispatcher.silentSessionWakeMs·+·1000`        prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.plan-hash.spec.ts
+  7:10  warning  'PlanLifecycleService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.snapshot.spec.ts
+  202:12  error  Replace `(d·as·any).peekDispatchSnapshot('tm_0000000001',·'tmm_0000000001'))` with `⏎······(d·as·any).peekDispatchSnapshot('tm_0000000001',·'tmm_0000000001'),`  prettier/prettier
+  203:5   error  Replace `··` with `)`                                                                                                                                            prettier/prettier
+  305:12  error  Replace `(d·as·any).peekDispatchSnapshot('tm_0000000001',·'tmm_0000000001'))` with `⏎······(d·as·any).peekDispatchSnapshot('tm_0000000001',·'tmm_0000000001'),`  prettier/prettier
+  306:5   error  Replace `··` with `)`                                                                                                                                            prettier/prettier
+  342:12  error  Replace `(d·as·any).peekDispatchSnapshot('tm_0000000001',·'tmm_0000000001'))` with `⏎······(d·as·any).peekDispatchSnapshot('tm_0000000001',·'tmm_0000000001'),`  prettier/prettier
+  343:5   error  Replace `··` with `)`                                                                                                                                            prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.spec.ts
+    10:10  warning  'ArtifactsService' is defined but never used. Allowed unused vars must match /^_/u                                                                                              @typescript-eslint/no-unused-vars
+    22:10  warning  'SessionLifecycleService' is defined but never used. Allowed unused vars must match /^_/u                                                                                       @typescript-eslint/no-unused-vars
+    24:3   warning  'WorkerClient' is defined but never used. Allowed unused vars must match /^_/u                                                                                                  @typescript-eslint/no-unused-vars
+    27:10  warning  'WorkerEventIngress' is defined but never used. Allowed unused vars must match /^_/u                                                                                            @typescript-eslint/no-unused-vars
+    28:10  warning  'WorkersService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                @typescript-eslint/no-unused-vars
+   158:18  error    Delete `⏎······|`                                                                                                                                                               prettier/prettier
+   160:1   error    Replace `··········` with `······`                                                                                                                                              prettier/prettier
+   161:1   error    Replace `··········` with `······`                                                                                                                                              prettier/prettier
+   162:1   error    Replace `··········` with `······`                                                                                                                                              prettier/prettier
+   163:7   error    Delete `····`                                                                                                                                                                   prettier/prettier
+   164:5   error    Replace `····}⏎·····` with `}`                                                                                                                                                  prettier/prettier
+  4169:12  error    Replace `⏎········let·attempt·=·0;⏎········attempt·<·MAX_SILENT_WAKE_ATTEMPTS;⏎········attempt++⏎······` with `let·attempt·=·0;·attempt·<·MAX_SILENT_WAKE_ATTEMPTS;·attempt++`  prettier/prettier
+  4638:25  error    Replace ``${path.relative(srcRoot,·full)}·×·${matches.length}·(${p})`` with `⏎················`${path.relative(srcRoot,·full)}·×·${matches.length}·(${p})`,⏎··············`     prettier/prettier
+  5032:14  error    Replace `⏎········(d·as·any).silentWakeAttempts.get('s_0000000001'),⏎······` with `(d·as·any).silentWakeAttempts.get('s_0000000001')`                                           prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.ts
+  2226:23  error  Delete `⏎······|`                                                                                                                                                                                       prettier/prettier
+  2228:1   error  Replace `··········` with `······`                                                                                                                                                                      prettier/prettier
+  2229:1   error  Replace `··········` with `······`                                                                                                                                                                      prettier/prettier
+  2230:1   error  Replace `··········` with `······`                                                                                                                                                                      prettier/prettier
+  2231:7   error  Delete `····`                                                                                                                                                                                           prettier/prettier
+  2232:5   error  Replace `····}⏎·····` with `}`                                                                                                                                                                          prettier/prettier
+  4137:9   error  Replace `!workerLookupFailed·&&·(!workerRow·||·workerRow.status·===·WORKER_STATUS.OFFLINE)` with `⏎······!workerLookupFailed·&&⏎······(!workerRow·||·workerRow.status·===·WORKER_STATUS.OFFLINE)⏎····`  prettier/prettier
+  4519:12  error  Replace `entry·!==·undefined·&&·entry.sessionId·===·sessionId·&&·!entry.activitySeen` with `(⏎······entry·!==·undefined·&&⏎······entry.sessionId·===·sessionId·&&⏎······!entry.activitySeen⏎····)`      prettier/prettier
+  4757:35  error  Replace `⏎······dispatchSnapshotKey(teamId,·teamMemberId),⏎····` with `dispatchSnapshotKey(teamId,·teamMemberId)`                                                                                       prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/constants/agent-role.constants.spec.ts
+  29:66  error  Replace `1,·2,·3,·4,·5,·6,·7` with `⏎······1,·2,·3,·4,·5,·6,·7,⏎····`                                                    prettier/prettier
+  53:63  error  Replace `deriveCustomAgentRoleKey('··Data-Analyst··')` with `⏎······deriveCustomAgentRoleKey('··Data-Analyst··'),⏎····`  prettier/prettier
+  58:58  error  Replace `deriveCustomAgentRoleKey('analyst')` with `⏎······deriveCustomAgentRoleKey('analyst'),⏎····`                    prettier/prettier
+  68:53  error  Replace `deriveCustomAgentRoleId('analyst')` with `⏎······deriveCustomAgentRoleId('analyst'),⏎····`                      prettier/prettier
+  69:54  error  Replace `deriveCustomAgentRoleKey('analyst')` with `⏎······deriveCustomAgentRoleKey('analyst'),⏎····`                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/constants/agent-role.constants.ts
+   30:28  error  Insert `⏎·`                                                                                                                                                                                                                                                                    prettier/prettier
+  116:4   error  Replace `·id:·'ar_product',·key:·'product',·name:·'产品经理',·defaultAgentId:·'a_product',·sortOrder:·1` with `⏎····id:·'ar_product',⏎····key:·'product',⏎····name:·'产品经理',⏎····defaultAgentId:·'a_product',⏎····sortOrder:·1,⏎·`                                                  prettier/prettier
+  117:4   error  Replace `·id:·'ar_project_manager',·key:·'project_manager',·name:·'项目经理',·defaultAgentId:·'a_project_manager',·sortOrder:·2` with `⏎····id:·'ar_project_manager',⏎····key:·'project_manager',⏎····name:·'项目经理',⏎····defaultAgentId:·'a_project_manager',⏎····sortOrder:·2,⏎·`  prettier/prettier
+  118:4   error  Replace `·id:·'ar_architect',·key:·'architect',·name:·'架构师',·defaultAgentId:·'a_architect',·sortOrder:·3` with `⏎····id:·'ar_architect',⏎····key:·'architect',⏎····name:·'架构师',⏎····defaultAgentId:·'a_architect',⏎····sortOrder:·3,⏎·`                                        prettier/prettier
+  119:4   error  Replace `·id:·'ar_developer',·key:·'developer',·name:·'开发者',·defaultAgentId:·'a_developer',·sortOrder:·4` with `⏎····id:·'ar_developer',⏎····key:·'developer',⏎····name:·'开发者',⏎····defaultAgentId:·'a_developer',⏎····sortOrder:·4,⏎·`                                        prettier/prettier
+  120:4   error  Replace `·id:·'ar_tester',·key:·'tester',·name:·'测试',·defaultAgentId:·'a_tester',·sortOrder:·5` with `⏎····id:·'ar_tester',⏎····key:·'tester',⏎····name:·'测试',⏎····defaultAgentId:·'a_tester',⏎····sortOrder:·5,⏎·`                                                            prettier/prettier
+  121:4   error  Replace `·id:·'ar_plan',·key:·'plan',·name:·'计划员',·defaultAgentId:·'a_plan',·sortOrder:·6` with `⏎····id:·'ar_plan',⏎····key:·'plan',⏎····name:·'计划员',⏎····defaultAgentId:·'a_plan',⏎····sortOrder:·6,⏎·`                                                                      prettier/prettier
+  122:4   error  Replace `·id:·'ar_librarian',·key:·'librarian',·name:·'知识管理员',·defaultAgentId:·'a_librarian',·sortOrder:·7` with `⏎····id:·'ar_librarian',⏎····key:·'librarian',⏎····name:·'知识管理员',⏎····defaultAgentId:·'a_librarian',⏎····sortOrder:·7,⏎·`                                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/constants/agent.constants.spec.ts
+  158:29  error  Replace `FORMERLY_GATED_TOOLS.length·*·ROLE_NAMES.length·*·2` with `⏎······FORMERLY_GATED_TOOLS.length·*·ROLE_NAMES.length·*·2,⏎····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/constants/platform-capability.constants.ts
+   40:4   error  Replace `·key:·'task.create',·label:·'创建任务',·tools:·['vteam_task_create'],·defaultDeny:·true` with `⏎····key:·'task.create',⏎····label:·'创建任务',⏎····tools:·['vteam_task_create'],⏎····defaultDeny:·true,⏎·`                          prettier/prettier
+   41:4   error  Replace `·key:·'task.transition',·label:·'流转任务状态',·tools:·['vteam_task_transition'],·defaultDeny:·true` with `⏎····key:·'task.transition',⏎····label:·'流转任务状态',⏎····tools:·['vteam_task_transition'],⏎····defaultDeny:·true,⏎·`      prettier/prettier
+   42:4   error  Replace `·key:·'task.complete',·label:·'完成任务',·tools:·['vteam_plan_complete'],·defaultDeny:·true` with `⏎····key:·'task.complete',⏎····label:·'完成任务',⏎····tools:·['vteam_plan_complete'],⏎····defaultDeny:·true,⏎·`                  prettier/prettier
+   43:4   error  Replace `·key:·'task.context',·label:·'读取任务上下文',·tools:·['vteam_task_context'],·defaultDeny:·false` with `⏎····key:·'task.context',⏎····label:·'读取任务上下文',⏎····tools:·['vteam_task_context'],⏎····defaultDeny:·false,⏎·`              prettier/prettier
+   44:4   error  Replace `·key:·'team.view',·label:·'查看团队',·tools:·['vteam_team_view'],·defaultDeny:·false` with `⏎····key:·'team.view',⏎····label:·'查看团队',⏎····tools:·['vteam_team_view'],⏎····defaultDeny:·false,⏎·`                                prettier/prettier
+   45:4   error  Replace `·key:·'team.add_member',·label:·'添加团队成员',·tools:·['vteam_team_add_member'],·defaultDeny:·true` with `⏎····key:·'team.add_member',⏎····label:·'添加团队成员',⏎····tools:·['vteam_team_add_member'],⏎····defaultDeny:·true,⏎·`      prettier/prettier
+   46:4   error  Replace `·key:·'chat.post',·label:·'群聊发言',·tools:·['vteam_group_post'],·defaultDeny:·false` with `⏎····key:·'chat.post',⏎····label:·'群聊发言',⏎····tools:·['vteam_group_post'],⏎····defaultDeny:·false,⏎·`                              prettier/prettier
+   47:4   error  Replace `·key:·'chat.read',·label:·'读取会话',·tools:·['vteam_chat_history'],·defaultDeny:·false` with `⏎····key:·'chat.read',⏎····label:·'读取会话',⏎····tools:·['vteam_chat_history'],⏎····defaultDeny:·false,⏎·`                          prettier/prettier
+   48:4   error  Replace `·key:·'chat.notify',·label:·'通知成员',·tools:·['vteam_notify_agent'],·defaultDeny:·false` with `⏎····key:·'chat.notify',⏎····label:·'通知成员',⏎····tools:·['vteam_notify_agent'],⏎····defaultDeny:·false,⏎·`                      prettier/prettier
+   49:4   error  Replace `·key:·'chat.channel_send',·label:·'渠道推送',·tools:·['vteam_channel_send'],·defaultDeny:·true` with `⏎····key:·'chat.channel_send',⏎····label:·'渠道推送',⏎····tools:·['vteam_channel_send'],⏎····defaultDeny:·true,⏎·`            prettier/prettier
+   50:4   error  Replace `·key:·'wecom.reply',·label:·'回复企业微信',·tools:·['vteam_wecom_reply'],·defaultDeny:·true` with `⏎····key:·'wecom.reply',⏎····label:·'回复企业微信',⏎····tools:·['vteam_wecom_reply'],⏎····defaultDeny:·true,⏎·`                      prettier/prettier
+   51:4   error  Replace `·key:·'doc.read',·label:·'读取产出物',·tools:·['vteam_doclib'],·defaultDeny:·false` with `⏎····key:·'doc.read',⏎····label:·'读取产出物',⏎····tools:·['vteam_doclib'],⏎····defaultDeny:·false,⏎·`                                      prettier/prettier
+   52:4   error  Replace `·key:·'doc.submit',·label:·'提交产出物',·tools:·['vteam_submit_artifact'],·defaultDeny:·false` with `⏎····key:·'doc.submit',⏎····label:·'提交产出物',⏎····tools:·['vteam_submit_artifact'],⏎····defaultDeny:·false,⏎·`                prettier/prettier
+   53:4   error  Replace `·key:·'file.read',·label:·'读取文件',·tools:·['vteam_read_file'],·defaultDeny:·false` with `⏎····key:·'file.read',⏎····label:·'读取文件',⏎····tools:·['vteam_read_file'],⏎····defaultDeny:·false,⏎·`                                prettier/prettier
+   56:4   error  Replace `·key:·'issue.create',·label:·'创建需求/缺陷',·tools:·['vteam_issue_create'],·defaultDeny:·true` with `⏎····key:·'issue.create',⏎····label:·'创建需求/缺陷',⏎····tools:·['vteam_issue_create'],⏎····defaultDeny:·true,⏎·`                prettier/prettier
+   57:4   error  Replace `·key:·'issue.get',·label:·'查看需求缺陷',·tools:·['vteam_issue_get'],·defaultDeny:·true` with `⏎····key:·'issue.get',⏎····label:·'查看需求缺陷',⏎····tools:·['vteam_issue_get'],⏎····defaultDeny:·true,⏎·`                              prettier/prettier
+   58:4   error  Replace `·key:·'issue.list',·label:·'需求缺陷列表',·tools:·['vteam_issue_list'],·defaultDeny:·true` with `⏎····key:·'issue.list',⏎····label:·'需求缺陷列表',⏎····tools:·['vteam_issue_list'],⏎····defaultDeny:·true,⏎·`                          prettier/prettier
+   59:4   error  Replace `·key:·'issue.update',·label:·'更新需求缺陷',·tools:·['vteam_issue_update'],·defaultDeny:·true` with `⏎····key:·'issue.update',⏎····label:·'更新需求缺陷',⏎····tools:·['vteam_issue_update'],⏎····defaultDeny:·true,⏎·`                  prettier/prettier
+   60:4   error  Replace `·key:·'issue.transition',·label:·'流转需求缺陷',·tools:·['vteam_issue_transition'],·defaultDeny:·true` with `⏎····key:·'issue.transition',⏎····label:·'流转需求缺陷',⏎····tools:·['vteam_issue_transition'],⏎····defaultDeny:·true,⏎·`  prettier/prettier
+   63:4   error  Replace `·key:·'memory.save',·label:·'写入团队记忆',·tools:·['vteam_memory_save'],·defaultDeny:·false` with `⏎····key:·'memory.save',⏎····label:·'写入团队记忆',⏎····tools:·['vteam_memory_save'],⏎····defaultDeny:·false,⏎·`                    prettier/prettier
+   64:4   error  Replace `·key:·'memory.search',·label:·'检索团队记忆',·tools:·['vteam_memory_search'],·defaultDeny:·false` with `⏎····key:·'memory.search',⏎····label:·'检索团队记忆',⏎····tools:·['vteam_memory_search'],⏎····defaultDeny:·false,⏎·`            prettier/prettier
+   65:4   error  Replace `·key:·'memory.update',·label:·'更新团队记忆',·tools:·['vteam_memory_update'],·defaultDeny:·false` with `⏎····key:·'memory.update',⏎····label:·'更新团队记忆',⏎····tools:·['vteam_memory_update'],⏎····defaultDeny:·false,⏎·`            prettier/prettier
+   66:4   error  Replace `·key:·'skill.create',·label:·'沉淀技能',·tools:·['vteam_skill_create'],·defaultDeny:·true` with `⏎····key:·'skill.create',⏎····label:·'沉淀技能',⏎····tools:·['vteam_skill_create'],⏎····defaultDeny:·true,⏎·`                      prettier/prettier
+   67:4   error  Replace `·key:·'question.confirm',·label:·'确认问答',·tools:·['vteam_question_confirm'],·defaultDeny:·true` with `⏎····key:·'question.confirm',⏎····label:·'确认问答',⏎····tools:·['vteam_question_confirm'],⏎····defaultDeny:·true,⏎·`      prettier/prettier
+   68:4   error  Replace `·key:·'my_profile',·label:·'查询自身',·tools:·['vteam_my_profile'],·defaultDeny:·false` with `⏎····key:·'my_profile',⏎····label:·'查询自身',⏎····tools:·['vteam_my_profile'],⏎····defaultDeny:·false,⏎·`                            prettier/prettier
+   75:4   error  Replace `·key:·'git.repos',·label:·'查看授权仓库',·tools:·['vteam_git_repos_list'],·defaultDeny:·false` with `⏎····key:·'git.repos',⏎····label:·'查看授权仓库',⏎····tools:·['vteam_git_repos_list'],⏎····defaultDeny:·false,⏎·`                  prettier/prettier
+  154:18  error  Delete `⏎·········`                                                                                                                                                                                                                  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/constants/platform-capability.coverage.spec.ts
+   1:9   error  Replace `⏎··VTEAM_MCP_TOOL_NAMES,⏎` with `·VTEAM_MCP_TOOL_NAMES·`  prettier/prettier
+  75:78  error  Replace `true` with `⏎······true,⏎····`                            prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/constants/task.constants.ts
+  74:30  error  Replace `·'TASK_BLOCK_REASON_REQUIRED',··/**·transitionByAgent：accept/archive·仅人类用户可执行，Agent·调用直接拒绝（403，fail-closed）。·*/` with `⏎····'TASK_BLOCK_REASON_REQUIRED'·/**·transitionByAgent：accept/archive·仅人类用户可执行，Agent·调用直接拒绝（403，fail-closed）。·*/,`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/constants/trigger.constants.spec.ts
+  32:28  error  Replace `⏎········TRIGGER_KIND.REVIEW_ROUND_TIMEOUT,⏎········'is_1',⏎········3,⏎······` with `TRIGGER_KIND.REVIEW_ROUND_TIMEOUT,·'is_1',·3`  prettier/prettier
+  39:28  error  Replace `⏎········TRIGGER_KIND.REVIEW_ROUND_TIMEOUT,⏎········'is_1',⏎········3,⏎······` with `TRIGGER_KIND.REVIEW_ROUND_TIMEOUT,·'is_1',·3`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/docs-site.controller.spec.ts
+  3:10  warning  'PrismaService' is defined but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+  4:10  warning  'PrototypesService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/prototypes.service.spec.ts
+   47:9   warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  147:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  295:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies-db-builtin.spec.ts
+   99:74  error  Replace `'deny'` with `⏎········'deny',⏎······`                                                                                                                                                                                                                                                prettier/prettier
+  101:10  error  Replace `policies.agents.find((a)·=>·a.name·===·'vteam-product')?.permission·as⏎··········|·Record<string,·unknown>⏎··········|·undefined` with `⏎··········policies.agents.find((a)·=>·a.name·===·'vteam-product')⏎············?.permission·as·Record<string,·unknown>·|·undefined⏎········`  prettier/prettier
+  117:23  error  Replace `.fn()` with `⏎··········.fn()⏎··········`                                                                                                                                                                                                                                             prettier/prettier
+  118:1   error  Insert `··`                                                                                                                                                                                                                                                                                    prettier/prettier
+  119:1   error  Insert `··`                                                                                                                                                                                                                                                                                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.controller.spec.ts
+  40:9  warning  'REQUIRED_BASH_DENY' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.custom-agents.spec.ts
+  6:3  warning  'ROLE_POLICY_DENY_TEMPLATE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.matrix.spec.ts
+  7:3  warning  'ROLE_BASH_DENY_PATTERNS' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.native-edit.spec.ts
+  59:44  error  Replace `⏎····ROLE_BOUNDARIES[EDITED].writeGlobs,⏎··` with `ROLE_BOUNDARIES[EDITED].writeGlobs`  prettier/prettier
+  94:76  error  Insert `⏎···········`                                                                            prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.native-only-payload.spec.ts
+  68:37  error  Replace `policies.guard.roles[agent.name].permission` with `⏎········policies.guard.roles[agent.name].permission,⏎······`                                                                                              prettier/prettier
+  97:19  error  Replace `⏎········projectNativePermission(product.permission),⏎······).filter((k)·=>·k.startsWith('vteam_')` with `projectNativePermission(product.permission)).filter((k)·=>⏎········k.startsWith('vteam_'),⏎······`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.no-external-emission.spec.ts
+  97:41  error  Insert `⏎·····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policy-fallback.spec.ts
+  114:28  error  Delete `⏎···········`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/dto/policy-config.dto.spec.ts
+   59:9   error  Replace `·where,·data·}:·{·where:·{·id:·string·};·data:·Partial<PolicyRow>` with `⏎········where,⏎········data,⏎······}:·{⏎········where:·{·id:·string·};⏎········data:·Partial<PolicyRow>;⏎·····`  prettier/prettier
+  183:12  error  Replace `(patched.config·as·Record<string,·unknown>).bashDeny` with `⏎······(patched.config·as·Record<string,·unknown>).bashDeny,⏎····`                                                             prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/execution-policy.service.spec.ts
+  347:8   error  Replace `'拒绝·%s·→·400·POLICY_CONFIG_INVALID·且不落库',` with `⏎······'拒绝·%s·→·400·POLICY_CONFIG_INVALID·且不落库',⏎·····`  prettier/prettier
+  348:7   error  Insert `··`                                                                                                        prettier/prettier
+  349:1   error  Replace `······` with `········`                                                                                   prettier/prettier
+  350:7   error  Insert `··`                                                                                                        prettier/prettier
+  352:1   error  Insert `··`                                                                                                        prettier/prettier
+  353:9   error  Insert `··`                                                                                                        prettier/prettier
+  354:7   error  Insert `··`                                                                                                        prettier/prettier
+  355:1   error  Replace `········` with `··········`                                                                               prettier/prettier
+  356:7   error  Insert `··`                                                                                                        prettier/prettier
+  358:1   error  Insert `··`                                                                                                        prettier/prettier
+  359:7   error  Insert `··`                                                                                                        prettier/prettier
+  360:5   error  Replace `}` with `··},⏎····`                                                                                       prettier/prettier
+  422:35  error  Replace `{·executionPolicy:·prisma·},` with `⏎········{·executionPolicy:·prisma·},⏎·······`                        prettier/prettier
+  423:1   error  Insert `··`                                                                                                        prettier/prettier
+  424:7   error  Replace `}` with `··},⏎······`                                                                                     prettier/prettier
+  440:35  error  Replace `{·executionPolicy:·prisma·},` with `⏎········{·executionPolicy:·prisma·},⏎·······`                        prettier/prettier
+  441:1   error  Insert `··`                                                                                                        prettier/prettier
+  442:7   error  Replace `}` with `··},⏎······`                                                                                     prettier/prettier
+  455:35  error  Replace `{·executionPolicy:·prisma·},` with `⏎········{·executionPolicy:·prisma·},⏎·······`                        prettier/prettier
+  456:1   error  Insert `··`                                                                                                        prettier/prettier
+  457:7   error  Replace `}` with `··},⏎······`                                                                                     prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/execution-policy.service.ts
+  207:34  error  Replace `map:·Record<string,·unknown>,·label:·string` with `⏎··map:·Record<string,·unknown>,⏎··label:·string,⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/gates/gate-spec-registry.ts
+  31:13  error  Replace `'execution-gate',·'plan-hash',·'issue-lock',·'force',·'a_plan-exemption-removed'` with `⏎······'execution-gate',⏎······'plan-hash',⏎······'issue-lock',⏎······'force',⏎······'a_plan-exemption-removed',⏎····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-credentials.service.ts
+  121:5  warning  'userId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-repos.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  4:3  warning  'NotFoundException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/dto/query-issues.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/issues.service.spec.ts
+  893:19  warning  'action' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/mcp-servers/mcp-servers.service.spec.ts
+    3:3   warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                      @typescript-eslint/no-unused-vars
+  938:10  error    Replace `·name:·'baddesc.tool',·description:·42,·inputSchema:·{·type:·'object'·}` with `⏎··········name:·'baddesc.tool',⏎··········description:·42,⏎··········inputSchema:·{·type:·'object'·},⏎·······`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/mcp-servers/mcp-servers.service.ts
+  332:4  error  Delete `·`  prettier/prettier
+  333:1  error  Delete `·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/message-channels/adapters/wecom-aibot.adapter.ts
+  325:11  warning  'maybeAny' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/models/dto/set-model-credential.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/models/models.service.spec.ts
+  406:10  error  Replace `·providerID:·'vllm',·providerType:·'local',·baseUrl:·'http://vllm:8000/v1'` with `⏎··········providerID:·'vllm',⏎··········providerType:·'local',⏎··········baseUrl:·'http://vllm:8000/v1',⏎·······`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/notifications/notification-channels.controller.ts
+  408:14  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.authority-matrix.spec.ts
+   27:9   error  Replace `⏎··PLATFORM_MCP_ERRORS,⏎` with `·PLATFORM_MCP_ERRORS·`                                                                                                                prettier/prettier
+   98:27  error  Delete `⏎········`                                                                                                                                                             prettier/prettier
+  100:1   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  101:11  error  Delete `··`                                                                                                                                                                    prettier/prettier
+  102:1   error  Replace `············` with `··········`                                                                                                                                       prettier/prettier
+  103:1   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  104:11  error  Delete `··`                                                                                                                                                                    prettier/prettier
+  105:1   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  106:9   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  107:1   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  108:1   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  109:9   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  110:1   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  111:11  error  Delete `··`                                                                                                                                                                    prettier/prettier
+  112:1   error  Replace `··············` with `············`                                                                                                                                   prettier/prettier
+  113:13  error  Delete `··`                                                                                                                                                                    prettier/prettier
+  114:1   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  115:1   error  Replace `············` with `··········`                                                                                                                                       prettier/prettier
+  116:1   error  Delete `··`                                                                                                                                                                    prettier/prettier
+  117:7   error  Replace `··},⏎······` with `}`                                                                                                                                                 prettier/prettier
+  158:31  error  Replace `·?·'deny'` with `⏎··········?·'deny'⏎·········`                                                                                                                       prettier/prettier
+  384:75  error  Insert `⏎··········`                                                                                                                                                           prettier/prettier
+  392:53  error  Replace `·id:·'t_new',·teamId:·'tm_1'` with `⏎········id:·'t_new',⏎········teamId:·'tm_1',⏎·····`                                                                              prettier/prettier
+  414:29  error  Replace `·...taskRow({·status:·'in_progress',·version:·2·})` with `⏎··········...taskRow({·status:·'in_progress',·version:·2·}),⏎·······`                                      prettier/prettier
+  429:56  error  Replace `taskId,·nonMainId,·'start'` with `⏎········taskId,⏎········nonMainId,⏎········'start',⏎······`                                                                        prettier/prettier
+  469:19  error  Replace `·step:·'task_transition.start',·ok:·!!started,·result:·started` with `⏎········step:·'task_transition.start',⏎········ok:·!!started,⏎········result:·started,⏎·····`  prettier/prettier
+  502:22  error  Replace `·mainHappyPath:·{·steps,·allStepsOk:·steps.every((s)·=>·s.ok)·}` with `⏎········mainHappyPath:·{·steps,·allStepsOk:·steps.every((s)·=>·s.ok)·},⏎·····`                prettier/prettier
+  516:18  error  Replace `overrides:·Record<string,·unknown>·=·{}` with `⏎··overrides:·Record<string,·unknown>·=·{},⏎`                                                                          prettier/prettier
+  602:75  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                       prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.controller.spec.ts
+  166:31  warning  'args' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.controller.ts
+  221:51  error  Replace `⏎········resolved.callerId,⏎········tool.name,⏎······` with `resolved.callerId,·tool.name`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.gate.spec.ts
+   3:3  warning  'EVENT_TYPES' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   5:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  22:9  error    Replace `⏎··createLedger,⏎··embedLedger,⏎` with `·createLedger,·embedLedger·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+  4:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.receipt-nudge.spec.ts
+  23:9  error  Replace `⏎··createLedger,⏎··embedLedger,⏎` with `·createLedger,·embedLedger·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.reply-join.spec.ts
+  142:38  error  Delete `⏎·········`                                                                                                                                                                                                                                        prettier/prettier
+  251:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  275:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  297:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  320:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  341:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  343:48  error  Replace `·...baseArgs,·selfInstanceId:·sub1,·targetInstanceId:·mainInstanceId,·type:·'answer',·stage:·'end'` with `⏎······...baseArgs,⏎······selfInstanceId:·sub1,⏎······targetInstanceId:·mainInstanceId,⏎······type:·'answer',⏎······stage:·'end',⏎···`  prettier/prettier
+  344:48  error  Replace `·...baseArgs,·selfInstanceId:·sub2,·targetInstanceId:·mainInstanceId,·type:·'answer',·stage:·'end'` with `⏎······...baseArgs,⏎······selfInstanceId:·sub2,⏎······targetInstanceId:·mainInstanceId,⏎······type:·'answer',⏎······stage:·'end',⏎···`  prettier/prettier
+  360:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  362:48  error  Replace `·...baseArgs,·type:·'answer',·stage:·'end'` with `⏎······...baseArgs,⏎······type:·'answer',⏎······stage:·'end',⏎···`                                                                                                                              prettier/prettier
+  363:48  error  Replace `·...baseArgs,·type:·'answer',·stage:·'end'` with `⏎······...baseArgs,⏎······type:·'answer',⏎······stage:·'end',⏎···`                                                                                                                              prettier/prettier
+  395:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  397:56  error  Replace `·...baseArgs,·type:·'answer',·stage:·'end'` with `⏎······...baseArgs,⏎······type:·'answer',⏎······stage:·'end',⏎···`                                                                                                                              prettier/prettier
+  409:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  411:59  error  Replace `·...baseArgs,·type:·'answer',·stage:·'end'` with `⏎······...baseArgs,⏎······type:·'answer',⏎······stage:·'end',⏎···`                                                                                                                              prettier/prettier
+  423:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  443:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  463:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  485:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+  556:62  error  Insert `⏎`                                                                                                                                                                                                                                                 prettier/prettier
+  557:25  error  Replace `.spyOn(service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},·'wakeMainAgent')` with `⏎······.spyOn(⏎········service·as·unknown·as·{·wakeMainAgent:·jest.Mock·},⏎········'wakeMainAgent',⏎······)⏎······`                                            prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.spec.ts
+   126:7   warning  'plansService' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   134:9   warning  'allowPolicy' is assigned a value but never used. Allowed unused vars must match /^_/u   @typescript-eslint/no-unused-vars
+  6592:55  error    Replace `·id:·channelId` with `⏎········id:·channelId,⏎·····`                            prettier/prettier
+  6615:55  error    Replace `·id:·channelId` with `⏎········id:·channelId,⏎·····`                            prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.ts
+    65:3   warning  'containsTeamWideMention' is defined but never used. Allowed unused vars must match /^_/u                                                                              @typescript-eslint/no-unused-vars
+  1633:62  error    Insert `⏎`                                                                                                                                                             prettier/prettier
+  2175:75  error    Delete `⏎·····`                                                                                                                                                        prettier/prettier
+  2185:75  error    Insert `⏎`                                                                                                                                                             prettier/prettier
+  3816:16  error    Replace `·select:·{·id:·true,·key:·true,·name:·true,·capabilities:·true·}` with `⏎··········select:·{·id:·true,·key:·true,·name:·true,·capabilities:·true·},⏎·······`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.tool-naming.spec.ts
+   2:9   error  Replace `·buildPlatformMcpTools,·zodObjectToJsonSchema·` with `⏎··buildPlatformMcpTools,⏎··zodObjectToJsonSchema,⏎`                                                          prettier/prettier
+  20:55  error  Replace `·n.replace(/^vteam_/,·'')` with `⏎······n.replace(/^vteam_/,·''),⏎····`                                                                                             prettier/prettier
+  23:12  error  Replace `registered.every((n)·=>·VTEAM_MCP_TOOL_NAMES.includes(`vteam_${n}`))` with `⏎······registered.every((n)·=>·VTEAM_MCP_TOOL_NAMES.includes(`vteam_${n}`)),⏎····`      prettier/prettier
+  24:53  error  Replace `VTEAM_MCP_TOOL_NAMES.length` with `⏎······VTEAM_MCP_TOOL_NAMES.length,⏎····`                                                                                        prettier/prettier
+  28:75  error  Replace `false` with `⏎······false,⏎····`                                                                                                                                    prettier/prettier
+  36:22  error  Replace `·selfInstanceId:·OPTIONAL,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·OPTIONAL,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  38:22  error  Replace `·selfInstanceId:·ABSENT,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·ABSENT,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`          prettier/prettier
+  39:20  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  41:22  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  42:25  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  43:22  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  44:20  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  46:22  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  47:26  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  48:25  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  49:26  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  50:21  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  51:23  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  52:23  error  Replace `·selfInstanceId:·ABSENT,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·ABSENT,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`      prettier/prettier
+  54:20  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  55:25  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  56:23  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·ABSENT,·taskId:·REQUIRED` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·ABSENT,⏎········taskId:·REQUIRED,⏎·····`      prettier/prettier
+  58:21  error  Replace `·selfInstanceId:·OPTIONAL,·teamId:·ABSENT,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·OPTIONAL,⏎········teamId:·ABSENT,⏎········taskId:·OPTIONAL,⏎·····`      prettier/prettier
+  59:21  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  60:22  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  61:24  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  62:23  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  63:21  error  Replace `·selfInstanceId:·REQUIRED,·teamId:·OPTIONAL,·taskId:·OPTIONAL` with `⏎········selfInstanceId:·REQUIRED,⏎········teamId:·OPTIONAL,⏎········taskId:·OPTIONAL,⏎·····`  prettier/prettier
+  73:31  error  Replace `·?·ABSENT·:·requiredSet.has(key)·?·REQUIRED` with `⏎············?·ABSENT⏎············:·requiredSet.has(key)⏎··············?·REQUIRED⏎·············`                 prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.tool-permission.spec.ts
+   75:20  error  Replace `service.assertToolAllowed('tmm_dev',·'doclib')).resolves.toBe(⏎········undefined,⏎······` with `⏎········service.assertToolAllowed('tmm_dev',·'doclib'),⏎······).resolves.toBe(undefined`  prettier/prettier
+   84:20  error  Replace `service.assertToolAllowed('tmm_dev',·'doclib')).resolves.toBe(⏎········undefined,⏎······` with `⏎········service.assertToolAllowed('tmm_dev',·'doclib'),⏎······).resolves.toBe(undefined`  prettier/prettier
+  128:20  error  Replace `service.assertToolAllowed('tmm_dev',·'issue_list')).resolves⏎········` with `⏎········service.assertToolAllowed('tmm_dev',·'issue_list'),⏎······).resolves`                                prettier/prettier
+  130:20  error  Replace `service.assertToolAllowed('tmm_dev',·'issue_get')).resolves⏎········` with `⏎········service.assertToolAllowed('tmm_dev',·'issue_get'),⏎······).resolves`                                  prettier/prettier
+  384:43  error  Replace `.fn()` with `⏎··········.fn()⏎··········`                                                                                                                                                  prettier/prettier
+  385:11  error  Insert `··`                                                                                                                                                                                         prettier/prettier
+  386:1   error  Replace `············` with `··············`                                                                                                                                                        prettier/prettier
+  387:1   error  Insert `··`                                                                                                                                                                                         prettier/prettier
+  388:1   error  Insert `··`                                                                                                                                                                                         prettier/prettier
+  389:13  error  Insert `··`                                                                                                                                                                                         prettier/prettier
+  390:1   error  Insert `··`                                                                                                                                                                                         prettier/prettier
+  391:1   error  Replace `············` with `··············`                                                                                                                                                        prettier/prettier
+  392:11  error  Insert `··`                                                                                                                                                                                         prettier/prettier
+  393:1   error  Insert `··`                                                                                                                                                                                         prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.tools.ts
+   39:7   warning  'REQUIRE_TASK_OR_TEAM_MSG' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                @typescript-eslint/no-unused-vars
+   54:28  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+   56:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   57:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+   58:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   59:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   60:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   61:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   62:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   63:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   64:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   65:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   66:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   67:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   68:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   69:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   70:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   71:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   72:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   73:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   74:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   75:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   76:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   77:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   78:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   79:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   80:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   81:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   82:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   83:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   84:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   85:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   86:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   87:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+   88:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+   89:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  115:26  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  117:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  118:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  119:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  120:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  121:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  122:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  123:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  124:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  125:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  126:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  127:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  147:28  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  149:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  150:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  151:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  152:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  153:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  154:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  155:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  156:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  157:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  158:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  159:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  160:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  161:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  162:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  163:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  164:7   error    Delete `··`                                                                                                                                                        prettier/prettier
+  165:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  166:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  167:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  168:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  169:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  170:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  171:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  172:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  173:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  174:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  175:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  176:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  177:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  178:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  179:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  180:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  181:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  182:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  183:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  184:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  185:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  186:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  187:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  188:7   error    Delete `··`                                                                                                                                                        prettier/prettier
+  189:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  190:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  191:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  192:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  193:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  194:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  195:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  196:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  197:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  198:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  199:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  200:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  201:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  202:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  203:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  204:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  205:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  206:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  323:15  error    Replace `'原因（action=reject·时写入任务事件·metadata；action=block·时必填：卡在哪里、缺什么、等谁）'` with `⏎······'原因（action=reject·时写入任务事件·metadata；action=block·时必填：卡在哪里、缺什么、等谁）',⏎····`  prettier/prettier
+  355:34  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  357:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  358:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  359:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  360:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  361:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  362:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  363:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  364:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  365:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  366:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  367:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  368:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  369:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  370:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  371:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  372:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  373:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  374:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  375:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  376:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  377:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  378:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  379:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  380:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  381:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  424:29  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  426:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  427:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  428:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  429:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  430:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  431:5   error    Replace `··.describe(⏎········'关键词过滤（content/description·包含即命中，多词空格分隔·AND）',⏎······` with `.describe('关键词过滤（content/description·包含即命中，多词空格分隔·AND）'`                prettier/prettier
+  434:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  435:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  436:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  437:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  438:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  439:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  440:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  441:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  442:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  443:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  444:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  445:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  446:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  447:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  448:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  449:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  450:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  451:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  452:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  453:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  454:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  455:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  456:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  457:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  458:1   error    Replace `······` with `····`                                                                                                                                       prettier/prettier
+  459:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  460:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  461:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  641:27  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  643:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  644:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  645:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  646:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  647:1   error    Replace `······.describe(⏎········'调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入）',⏎······` with `····.describe('调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入）'`                              prettier/prettier
+  650:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  651:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  652:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  653:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  654:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  655:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  656:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  667:28  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  669:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  670:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  671:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  672:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  673:1   error    Replace `······.describe(⏎········'调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入）',⏎······` with `····.describe('调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入）'`                              prettier/prettier
+  676:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  677:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  678:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  679:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  688:29  error    Delete `⏎··`                                                                                                                                                       prettier/prettier
+  690:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  691:3   error    Delete `··`                                                                                                                                                        prettier/prettier
+  692:1   error    Replace `····` with `··`                                                                                                                                           prettier/prettier
+  693:5   error    Delete `··`                                                                                                                                                        prettier/prettier
+  694:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  695:1   error    Delete `··`                                                                                                                                                        prettier/prettier
+  712:17  error    Replace `'调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入；服务端以此作为·hook·所有者）'` with `⏎········'调用方成员·id（tmm_·前缀，你的成员身份，由系统提示注入；服务端以此作为·hook·所有者）',⏎······`                          prettier/prettier
+  725:17  error    Replace `⏎········'被唤醒成员·id（tmm_·前缀，须在当前团队；缺省为调用方自身）',⏎······` with `'被唤醒成员·id（tmm_·前缀，须在当前团队；缺省为调用方自身）'`                                                          prettier/prettier
+  754:31  error    Replace `⏎······(d.dueAt·!==·undefined·||·d.delayMs·!==·undefined)` with `·d.dueAt·!==·undefined·||·d.delayMs·!==·undefined`                                       prettier/prettier
+  763:27  error    Delete `⏎·····`                                                                                                                                                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/agent-prompt-backfill.migration.spec.ts
+   42:21  error  Insert `⏎···`                                                                                                                                  prettier/prettier
+   43:15  error  Insert `⏎···`                                                                                                                                  prettier/prettier
+   44:15  error  Insert `⏎···`                                                                                                                                  prettier/prettier
+   47:15  error  Insert `⏎···`                                                                                                                                  prettier/prettier
+  150:29  error  Replace `...sql.matchAll(/UPDATE·`agents`·SET·([\s\S]*?)WHERE/g)` with `⏎······...sql.matchAll(/UPDATE·`agents`·SET·([\s\S]*?)WHERE/g),⏎····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts
+   73:15  error  Replace `·literal:·JSON.parse(m[1]·as·string),·where:·(m[2]·as·string).trim()` with `⏎······literal:·JSON.parse(m[1]·as·string),⏎······where:·(m[2]·as·string).trim(),⏎···`                           prettier/prettier
+  126:40  error  Replace `·r.where.includes(`\`type\`·=·'builtin'`)` with `⏎······r.where.includes(`\`type\`·=·'builtin'`),⏎····`                                                                                      prettier/prettier
+  149:12  error  Replace `Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v)·=>·v·===·true)` with `⏎······Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v)·=>·v·===·true),⏎····`                     prettier/prettier
+  150:12  error  Replace `Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v)·=>·v·===·false)` with `⏎······Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(⏎········(v)·=>·v·===·false,⏎······),⏎····`  prettier/prettier
+  182:22  error  Replace `'issue.create',·'issue.get',·'issue.list',·'issue.transition'` with `⏎······'issue.create',⏎······'issue.get',⏎······'issue.list',⏎······'issue.transition',⏎····`                           prettier/prettier
+  188:61  error  Replace `'memory.search=true'` with `⏎········'memory.search=true',⏎······`                                                                                                                           prettier/prettier
+  190:61  error  Replace `'memory.update=false'` with `⏎········'memory.update=false',⏎······`                                                                                                                         prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/agent-role-capabilities.migration.spec.ts
+   60:27  error  Replace `prefix:·string,·sql:·string` with `⏎··prefix:·string,⏎··sql:·string,⏎`                                                                                                                                       prettier/prettier
+   76:20  error  Replace `'issue.create',·'issue.get',·'issue.list',·'issue.update',·'issue.transition'` with `⏎····'issue.create',⏎····'issue.get',⏎····'issue.list',⏎····'issue.update',⏎····'issue.transition',⏎··`                 prettier/prettier
+  101:36  error  Replace ``${key}=${expectedForFrozenKey(key,·current)}`` with `⏎······`${key}=${expectedForFrozenKey(key,·current)}`,⏎····`                                                                                           prettier/prettier
+  127:25  error  Replace `/ALTER·TABLE·`agent_roles`·ADD·COLUMN·`capabilities`·JSON·NULL;/` with `⏎······/ALTER·TABLE·`agent_roles`·ADD·COLUMN·`capabilities`·JSON·NULL;/,⏎····`                                                       prettier/prettier
+  132:25  error  Replace `⏎······/JSON_TYPE\(`p`\.`config`·->·'\$\.tools'\)·=·'OBJECT'/,⏎····` with `/JSON_TYPE\(`p`\.`config`·->·'\$\.tools'\)·=·'OBJECT'/`                                                                           prettier/prettier
+  138:27  error  Replace `'DROP·TEMPORARY·TABLE·IF·EXISTS·`tmp_agent_role_tools`'` with `⏎······'DROP·TEMPORARY·TABLE·IF·EXISTS·`tmp_agent_role_tools`',⏎····`                                                                         prettier/prettier
+  147:19  error  Replace `...derivation.matchAll(/^\s*'([a-z][a-z0-9_.]*)',\s*$/gm)].map(⏎······(m)·=>·m[1]·as·string,⏎····` with `⏎······...derivation.matchAll(/^\s*'([a-z][a-z0-9_.]*)',\s*$/gm),⏎····].map((m)·=>·m[1]·as·string`  prettier/prettier
+  152:12  error  Replace `(derivation.match(/CAST\('true'·AS·JSON\)/g)·??·[]).length` with `⏎······(derivation.match(/CAST\('true'·AS·JSON\)/g)·??·[]).length,⏎····`                                                                   prettier/prettier
+  153:12  error  Replace `(derivation.match(/CAST\('false'·AS·JSON\)/g)·??·[]).length` with `⏎······(derivation.match(/CAST\('false'·AS·JSON\)/g)·??·[]).length,⏎····`                                                                 prettier/prettier
+  184:54  error  Replace `⏎··········capabilityKeyForTool(t),⏎········` with `·capabilityKeyForTool(t)`                                                                                                                                prettier/prettier
+  211:25  error  Replace `/DROP·INDEX·`idx_agent_roles_policy`·ON·`agent_roles`;/` with `⏎······/DROP·INDEX·`idx_agent_roles_policy`·ON·`agent_roles`;/,⏎····`                                                                         prettier/prettier
+  223:22  error  Insert `⏎·····`                                                                                                                                                                                                       prettier/prettier
+  224:31  error  Replace `/^\s*capabilities·Json\?\s+@map\("capabilities"\)\s*$/m` with `⏎······/^\s*capabilities·Json\?\s+@map\("capabilities"\)\s*$/m,⏎····`                                                                         prettier/prettier
+  229:32  error  Replace `/^\s*policyId\s+String\?\s+@map\("policy_id"\)\s*$/m` with `⏎······/^\s*policyId\s+String\?\s+@map\("policy_id"\)\s*$/m,⏎····`                                                                               prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/agent-role-external-agent.migration.spec.ts
+  78:38  error  Replace `⏎······'@map("default_opencode_agent_name")',⏎····` with `'@map("default_opencode_agent_name")'`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/agent-role.migration.spec.ts
+   64:29  error  Replace `'ALTER·TABLE·`team_members`·ADD·COLUMN·`role_id`·VARCHAR(191)·NULL'` with `⏎········'ALTER·TABLE·`team_members`·ADD·COLUMN·`role_id`·VARCHAR(191)·NULL',⏎······`                                        prettier/prettier
+   65:29  error  Replace `'CREATE·INDEX·`idx_team_members_role`·ON·`team_members`(`role_id`)'` with `⏎········'CREATE·INDEX·`idx_team_members_role`·ON·`team_members`(`role_id`)',⏎······`                                        prettier/prettier
+   87:29  error  Replace `new·RegExp(`NULL,·${role.sortOrder},·NOW\\(3\\),·NOW\\(3\\)\\)`)` with `⏎··········new·RegExp(`NULL,·${role.sortOrder},·NOW\\(3\\),·NOW\\(3\\)\\)`),⏎········`                                          prettier/prettier
+   89:27  error  Replace `/\(SELECT·`id`·FROM·`agents`·WHERE·`id`·=·'a_product'\)/` with `⏎········/\(SELECT·`id`·FROM·`agents`·WHERE·`id`·=·'a_product'\)/,⏎······`                                                              prettier/prettier
+  120:30  error  Replace `/model·AgentRole·\{[\s\S]*?@@map\("agent_roles"\)/` with `⏎········/model·AgentRole·\{[\s\S]*?@@map\("agent_roles"\)/,⏎······`                                                                          prettier/prettier
+  125:14  error  Replace `(schema.match(/^\s*@@map\("agent_roles"\)\s*$/gm)·??·[]).length` with `⏎········(schema.match(/^\s*@@map\("agent_roles"\)\s*$/gm)·??·[]).length,⏎······`                                                prettier/prettier
+  127:30  error  Replace `/model·TeamMember·\{[\s\S]*?roleId\s+String\?\s+@map\("role_id"\)/` with `⏎········/model·TeamMember·\{[\s\S]*?roleId\s+String\?\s+@map\("role_id"\)/,⏎······`                                          prettier/prettier
+  128:30  error  Replace `/role\s+AgentRole\?\s+@relation\(fields:·\[roleId\][\s\S]*?onDelete:·Restrict/` with `⏎········/role\s+AgentRole\?\s+@relation\(fields:·\[roleId\][\s\S]*?onDelete:·Restrict/,⏎······`                  prettier/prettier
+  130:30  error  Replace `/defaultAgent\s+Agent\?\s+@relation\("AgentRoleDefaultAgent"[\s\S]*?onDelete:·SetNull/` with `⏎········/defaultAgent\s+Agent\?\s+@relation\("AgentRoleDefaultAgent"[\s\S]*?onDelete:·SetNull/,⏎······`  prettier/prettier
+  162:43  error  Replace `'product',·'tester',·'analyst',·'myagent',·null,·'plan'` with `⏎········'product',⏎········'tester',⏎········'analyst',⏎········'myagent',⏎········null,⏎········'plan',⏎······`                        prettier/prettier
+  165:79  error  Replace `true` with `⏎········true,⏎······`                                                                                                                                                                      prettier/prettier
+  169:81  error  Replace `0` with `⏎········0,⏎······`                                                                                                                                                                            prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts
+    59:9   error    Replace `⏎··buildFactoryCapabilityMatrix,⏎` with `·buildFactoryCapabilityMatrix·`                                                                              prettier/prettier
+   970:25  error    Replace `⏎······'vteam-project_manager',⏎······'vteam-plan',⏎····` with `'vteam-project_manager',·'vteam-plan'`                                                prettier/prettier
+  1141:79  error    Replace `0` with `⏎········0,⏎······`                                                                                                                          prettier/prettier
+  1172:12  error    Replace `Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(Boolean)` with `⏎······Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(Boolean),⏎····`  prettier/prettier
+  1174:62  error    Replace `(v)·=>·v·===·false` with `⏎········(v)·=>·v·===·false,⏎······`                                                                                        prettier/prettier
+  1185:16  error    Replace `·JSON.stringify(call[0]?.where)·===` with `⏎········JSON.stringify(call[0]?.where)·===⏎·······`                                                       prettier/prettier
+  1527:16  warning  A `require()` style import is forbidden                                                                                                                        @typescript-eslint/no-require-imports
+  1528:18  warning  A `require()` style import is forbidden                                                                                                                        @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/questions/questions.service.spec.ts
+    2:3   warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  709:52  error    Replace `·teamMemberId:·'tmm_sender'` with `⏎········teamMemberId:·'tmm_sender',⏎·····`  prettier/prettier
+  731:52  error    Replace `·teamMemberId:·'tmm_other'` with `⏎········teamMemberId:·'tmm_other',⏎·····`    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/bind-message-channels.dto.ts
+  5:3  warning  'IsNotEmpty' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+  6:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  7:3  warning  'IsOptional' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/update-team.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/task-progression.scheduler.spec.ts
+  575:50  error  Insert `⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/task-progression.scheduler.ts
+    8:3   warning  'forwardRef' is defined but never used. Allowed unused vars must match /^_/u                                                   @typescript-eslint/no-unused-vars
+  212:35  error    Replace `⏎········PROGRESSION_COOLDOWN_GUARD,⏎········(ctx)·=>` with `PROGRESSION_COOLDOWN_GUARD,·(ctx)·=>⏎·······`            prettier/prettier
+  216:37  error    Replace `⏎········TRIGGER_KIND.PROGRESSION_PATROL,⏎········(ctx)·=>` with `TRIGGER_KIND.PROGRESSION_PATROL,·(ctx)·=>⏎·······`  prettier/prettier
+  309:19  error    Replace `⏎····cb:·(taskId:·string,·reason:·string)·=>·void,⏎··` with `cb:·(taskId:·string,·reason:·string)·=>·void`            prettier/prettier
+  529:64  error    Replace `⏎··········mainSession.id,⏎········` with `mainSession.id`                                                            prettier/prettier
+  664:75  error    Insert `⏎`                                                                                                                     prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/tasks.service.spec.ts
+   18:10  warning  'sanitizeWorkDirName' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  320:9   warning  'mockCreateTx' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  493:11  warning  'sCounter' is assigned a value but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/dto/bind-team-channels.dto.ts
+  2:29  warning  'IsOptional' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/dto/create-team.dto.ts
+  4:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.spec.ts
+   366:10  error    Replace `·agentId:·'a_project_manager',·roleId:·'ar_project_manager',·key:·'project_manager'` with `⏎··········agentId:·'a_project_manager',⏎··········roleId:·'ar_project_manager',⏎··········key:·'project_manager',⏎·······`  prettier/prettier
+   496:29  error    Replace `⏎········.mockResolvedValueOnce(null)⏎········` with `.mockResolvedValueOnce(null)`                                                                                                                                     prettier/prettier
+   499:9   error    Delete `··`                                                                                                                                                                                                                      prettier/prettier
+   500:1   error    Delete `··`                                                                                                                                                                                                                      prettier/prettier
+   501:13  error    Delete `··`                                                                                                                                                                                                                      prettier/prettier
+   502:1   error    Delete `··`                                                                                                                                                                                                                      prettier/prettier
+   503:13  error    Delete `··`                                                                                                                                                                                                                      prettier/prettier
+   504:1   error    Delete `··`                                                                                                                                                                                                                      prettier/prettier
+   505:9   error    Delete `··`                                                                                                                                                                                                                      prettier/prettier
+   506:1   error    Delete `··`                                                                                                                                                                                                                      prettier/prettier
+   559:51  error    Replace `·data:·Record<string,·unknown>` with `⏎··········data:·Record<string,·unknown>;⏎·······`                                                                                                                                prettier/prettier
+   612:13  warning  'callArgs' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                              @typescript-eslint/no-unused-vars
+  1035:23  error    Replace `.fn()` with `⏎············.fn()⏎············`                                                                                                                                                                           prettier/prettier
+  1036:13  error    Insert `··`                                                                                                                                                                                                                      prettier/prettier
+  1037:1   error    Insert `··`                                                                                                                                                                                                                      prettier/prettier
+  1093:23  error    Replace `.fn()` with `⏎············.fn()⏎············`                                                                                                                                                                           prettier/prettier
+  1094:13  error    Insert `··`                                                                                                                                                                                                                      prettier/prettier
+  1095:1   error    Insert `··`                                                                                                                                                                                                                      prettier/prettier
+  1160:51  error    Replace `·roleId:·'ar_general'` with `⏎··········roleId:·'ar_general',⏎·······`                                                                                                                                                  prettier/prettier
+  1202:23  error    Replace `.fn()` with `⏎············.fn()⏎············`                                                                                                                                                                           prettier/prettier
+  1203:13  error    Insert `··`                                                                                                                                                                                                                      prettier/prettier
+  1204:1   error    Insert `··`                                                                                                                                                                                                                      prettier/prettier
+  1297:51  error    Replace `·data:·Record<string,·unknown>` with `⏎··········data:·Record<string,·unknown>;⏎·······`                                                                                                                                prettier/prettier
+  1708:55  error    Replace `·data:·Record<string,·unknown>` with `⏎········data:·Record<string,·unknown>;⏎·····`                                                                                                                                    prettier/prettier
+  1746:55  error    Replace `·data:·Record<string,·unknown>` with `⏎········data:·Record<string,·unknown>;⏎·····`                                                                                                                                    prettier/prettier
+  1824:55  error    Replace `·data:·Record<string,·unknown>` with `⏎········data:·Record<string,·unknown>;⏎·····`                                                                                                                                    prettier/prettier
+  1889:55  error    Replace `·data:·Record<string,·unknown>` with `⏎········data:·Record<string,·unknown>;⏎·····`                                                                                                                                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.ts
+   109:11  warning  'team' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                  @typescript-eslint/no-unused-vars
+   646:29  error    Replace `agent,·seq,·binding.role,·!!binding.opencodeAgentName` with `⏎··········agent,⏎··········seq,⏎··········binding.role,⏎··········!!binding.opencodeAgentName,⏎········`  prettier/prettier
+   911:47  error    Replace `name,·data.agentId·??·member.agentId` with `⏎··········name,⏎··········data.agentId·??·member.agentId,⏎········`                                                        prettier/prettier
+   915:8   error    Replace `(member.opencodeAgentName?.trim()` with `member.opencodeAgentName?.trim(`                                                                                               prettier/prettier
+  1458:23  error    Insert `⏎`                                                                                                                                                                       prettier/prettier
+  1511:43  error    Replace `agent.name·??·agent.id·??·'agent'` with `(agent.name·??·agent.id·??·'agent')`                                                                                           prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/timers/dto/query-triggers.dto.ts
+  21:25  error  Replace `·description:·'归属·id·过滤（精确匹配，SQL·注入无关：参数化查询）'` with `⏎····description:·'归属·id·过滤（精确匹配，SQL·注入无关：参数化查询）',⏎·`                          prettier/prettier
+  40:17  error  Insert `⏎·····`                                                                                                                              prettier/prettier
+  66:25  error  Replace `·description:·'每页条数（1..100）',·default:·20,·minimum:·1` with `⏎····description:·'每页条数（1..100）',⏎····default:·20,⏎····minimum:·1,⏎·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/timers/trigger.service.spec.ts
+  396:14  error  Replace `⏎········(svc·as·unknown·as·{·scanTimer:·unknown·}).scanTimer,⏎······` with `(svc·as·unknown·as·{·scanTimer:·unknown·}).scanTimer`                                                  prettier/prettier
+  413:26  error  Replace `'receipt_nudge',·FUTURE,·{·hello:·'world'·},·'test_kind:scope:1'` with `⏎········'receipt_nudge',⏎········FUTURE,⏎········{·hello:·'world'·},⏎········'test_kind:scope:1',⏎······`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/timers/trigger.service.ts
+   80:3   error  Replace `|·{·done:·true·}⏎··|·{·rescheduleAt:·Date·}⏎·` with `{·done:·true·}·|·{·rescheduleAt:·Date·}`                                                                                                     prettier/prettier
+  397:7   error  Replace `'UPDATE·`triggers`·SET·`status`·=·\'firing\''` with `"UPDATE·`triggers`·SET·`status`·=·'firing'"`                                                                                                 prettier/prettier
+  398:9   error  Replace `'·WHERE·`id`·=·?·AND·`status`·=·\'pending\''` with `"·WHERE·`id`·=·?·AND·`status`·=·'pending'"`                                                                                                   prettier/prettier
+  476:21  error  Replace `·`maxFires·reached·(${row.fireCount}/${row.maxFires})`.slice(⏎············0,⏎············191,⏎··········` with `⏎············`maxFires·reached·(${row.fireCount}/${row.maxFires})`.slice(0,·191`  prettier/prettier
+  483:9   error  Replace `row.expiresAt·!==·null·&&·row.expiresAt·!==·undefined·&&·now·>=·row.expiresAt` with `⏎······row.expiresAt·!==·null·&&⏎······row.expiresAt·!==·undefined·&&⏎······now·>=·row.expiresAt⏎····`       prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/timers/triggers.controller.spec.ts
+  23:27  error  Replace `⏎········PATH_METADATA,⏎········TriggersController.prototype.findAll,⏎······` with `PATH_METADATA,·TriggersController.prototype.findAll`                                                         prettier/prettier
+  60:18  error  Replace `⏎······controller.remove('tmr_1',·{}·as·never),⏎····).rejects.toMatchObject({·status:·401·}` with `controller.remove('tmr_1',·{}·as·never)).rejects.toMatchObject(⏎······{·status:·401·},⏎····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/timers/triggers.service.ts
+  111:49  error  Replace `⏎········this.toItem(row,·displays[i]),⏎······` with `·this.toItem(row,·displays[i])`                                                                                                                                                                                                                                                                                                                                                                                                                           prettier/prettier
+  261:7   error  Replace `|·{·teamId?:·unknown;·taskId?:·unknown·}⏎······|·null⏎·····` with `{·teamId?:·unknown;·taskId?:·unknown·}·|·null`                                                                                                                                                                                                                                                                                                                                                                                               prettier/prettier
+  279:30  error  Replace `⏎····teamId:·string,⏎····userId:·string,⏎··` with `teamId:·string,·userId:·string`                                                                                                                                                                                                                                                                                                                                                                                                                              prettier/prettier
+  378:28  error  Replace `'toInstanceId',·'fromInstanceId',·'teamMemberId'` with `⏎··········'toInstanceId',⏎··········'fromInstanceId',⏎··········'teamMemberId',⏎········`                                                                                                                                                                                                                                                                                                                                                              prettier/prettier
+  383:56  error  Insert `⏎·········`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      prettier/prettier
+  422:52  error  Replace `'team',·{·id:·true,·name:·true·},·teamIds` with `⏎············'team',⏎············{·id:·true,·name:·true·},⏎············teamIds,⏎··········`                                                                                                                                                                                                                                                                                                                                                                    prettier/prettier
+  423:23  error  Replace `·id:·string;·type:·string;·team:·{·id:·string;·name:·string·}·|·null·}>('chatChannel',·{·id:·true,·type:·true,·team:·{·select:·{·id:·true,·name:·true·}·}·},·channelIds` with `⏎············id:·string;⏎············type:·string;⏎············team:·{·id:·string;·name:·string·}·|·null;⏎··········}>(⏎············'chatChannel',⏎············{⏎··············id:·true,⏎··············type:·true,⏎··············team:·{·select:·{·id:·true,·name:·true·}·},⏎············},⏎············channelIds,⏎··········`  prettier/prettier
+  424:23  error  Replace `·id:·string;·title:·string;·team:·{·id:·string;·name:·string·}·|·null·}>('task',·{·id:·true,·title:·true,·team:·{·select:·{·id:·true,·name:·true·}·}·},·taskIds` with `⏎············id:·string;⏎············title:·string;⏎············team:·{·id:·string;·name:·string·}·|·null;⏎··········}>(⏎············'task',⏎············{⏎··············id:·true,⏎··············title:·true,⏎··············team:·{·select:·{·id:·true,·name:·true·}·},⏎············},⏎············taskIds,⏎··········`                  prettier/prettier
+  440:56  error  Replace `'hook',·{·id:·true,·wakeText:·true·},·hookIds` with `⏎············'hook',⏎············{·id:·true,·wakeText:·true·},⏎············hookIds,⏎··········`                                                                                                                                                                                                                                                                                                                                                            prettier/prettier
+  441:55  error  Replace `'messageReceipt',·{·id:·true,·summary:·true·},·receiptIds` with `⏎············'messageReceipt',⏎············{·id:·true,·summary:·true·},⏎············receiptIds,⏎··········`                                                                                                                                                                                                                                                                                                                                    prettier/prettier
+  442:53  error  Replace `'issue',·{·id:·true,·title:·true·},·issueIds` with `⏎············'issue',⏎············{·id:·true,·title:·true·},⏎············issueIds,⏎··········`                                                                                                                                                                                                                                                                                                                                                              prettier/prettier
+  488:22  error  Replace `this.prisma·as·unknown·as·Record<string,·{·findMany?:·(args:·unknown)·=>·Promise<T[]>·}·|·undefined>` with `⏎········this.prisma·as·unknown·as·Record<⏎··········string,⏎··········{·findMany?:·(args:·unknown)·=>·Promise<T[]>·}·|·undefined⏎········>⏎······`                                                                                                                                                                                                                                                 prettier/prettier
+  490:15  error  Insert `⏎········(`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      prettier/prettier
+  491:1   error  Insert `··`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              prettier/prettier
+  492:9   error  Insert `··`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              prettier/prettier
+  493:1   error  Replace `······}))·??·[]` with `········}))·??·[]⏎······)`                                                                                                                                                                                                                                                                                                                                                                                                                                                               prettier/prettier
+  536:21  error  Replace `string,·{·id:·string;·type:·string;·team:·{·id:·string;·name:·string·}·|·null·}` with `⏎········string,⏎········{·id:·string;·type:·string;·team:·{·id:·string;·name:·string·}·|·null·}⏎······`                                                                                                                                                                                                                                                                                                                 prettier/prettier
+  537:18  error  Replace `string,·{·id:·string;·title:·string;·team:·{·id:·string;·name:·string·}·|·null·}` with `⏎········string,⏎········{·id:·string;·title:·string;·team:·{·id:·string;·name:·string·}·|·null·}⏎······`                                                                                                                                                                                                                                                                                                               prettier/prettier
+  701:21  error  Insert `⏎·······`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook-failure.listener.spec.ts
+    2:10  warning  'Prisma' is defined but never used. Allowed unused vars must match /^_/u                                                                                                             @typescript-eslint/no-unused-vars
+    9:9   error    Replace `·buildHookFireDedupKey,·HOOK_STATUS,·TRIGGER_WAKE_FAILED_EVENT_TYPE·` with `⏎··buildHookFireDedupKey,⏎··HOOK_STATUS,⏎··TRIGGER_WAKE_FAILED_EVENT_TYPE,⏎`                    prettier/prettier
+   47:18  error    Replace `·nextId:·jest.fn(async·(p:·string)·=>·`${p}_1`),·seed:·jest.fn()` with `⏎····nextId:·jest.fn(async·(p:·string)·=>·`${p}_1`),⏎····seed:·jest.fn(),⏎·`                        prettier/prettier
+  107:23  error    Delete `⏎·····`                                                                                                                                                                      prettier/prettier
+  119:15  error    Replace `·id:·'hks_0000000001',·status:·HOOK_STATUS.FIRED,·lastError:·null` with `⏎········id:·'hks_0000000001',⏎········status:·HOOK_STATUS.FIRED,⏎········lastError:·null,⏎·····`  prettier/prettier
+  145:24  error    Replace `·sessionId:·'s_1',·message:·'Rate·limit·exceeded',·error:·'x'` with `⏎········sessionId:·'s_1',⏎········message:·'Rate·limit·exceeded',⏎········error:·'x',⏎·····`          prettier/prettier
+  252:27  error    Replace `agentErrorEvent({·sessionId:·'s_rotated',·error:·'x'·})` with `⏎······agentErrorEvent({·sessionId:·'s_rotated',·error:·'x'·}),⏎····`                                        prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook.constants.ts
+  205:31  error  Replace `⏎··raw:·unknown,⏎··fallback:·number,⏎` with `raw:·unknown,·fallback:·number`  prettier/prettier
+  210:62  error  Replace `⏎····?·n⏎···` with `·?·n`                                                     prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook.service.spec.ts
+    16:9   error  Replace `·HookService,·parseHookTarget,·RegisterHookInput·` with `⏎··HookService,⏎··parseHookTarget,⏎··RegisterHookInput,⏎`                                                                                   prettier/prettier
+    99:22  error  Replace `over:·Partial<RegisterHookInput>·=·{}` with `⏎····over:·Partial<RegisterHookInput>·=·{},⏎··`                                                                                                         prettier/prettier
+   150:5   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   151:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   152:1   error  Replace `······` with `········`                                                                                                                                                                              prettier/prettier
+   153:7   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   154:1   error  Replace `······` with `········`                                                                                                                                                                              prettier/prettier
+   155:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   156:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   159:17  error  Replace `·findMany:·jest.fn().mockResolvedValue([]),·findFirst:·jest.fn()` with `⏎········findMany:·jest.fn().mockResolvedValue([]),⏎········findFirst:·jest.fn(),⏎·····`                                     prettier/prettier
+   198:43  error  Replace `'未知·kind·%p·→·抛错不落库',` with `⏎······'未知·kind·%p·→·抛错不落库',⏎·····`                                                                                                                                     prettier/prettier
+   199:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   200:9   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   201:7   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   202:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   203:5   error  Replace `}` with `··},⏎····`                                                                                                                                                                                  prettier/prettier
+   232:20  error  Replace `svc.registerHook(timeInput({·wakeText:·''·}))).rejects.toThrow(⏎········'wakeText·必填',⏎······` with `⏎········svc.registerHook(timeInput({·wakeText:·''·})),⏎······).rejects.toThrow('wakeText·必填'`  prettier/prettier
+   269:69  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+   274:72  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+   302:69  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+   306:72  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+   346:49  error  Insert `⏎········`                                                                                                                                                                                            prettier/prettier
+   347:9   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   348:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   349:9   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   350:7   error  Replace `}` with `··},⏎······`                                                                                                                                                                                prettier/prettier
+   363:65  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+   371:65  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+   392:79  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+   411:20  error  Replace `svc.handleHookFire(fireCtx('hks_0000000001'))` with `⏎········svc.handleHookFire(fireCtx('hks_0000000001')),⏎······`                                                                                 prettier/prettier
+   421:20  error  Replace `svc.handleHookFire(fireCtx('hks_0000000001'))` with `⏎········svc.handleHookFire(fireCtx('hks_0000000001')),⏎······`                                                                                 prettier/prettier
+   436:8   error  Replace `'stale_state：%s·→·expired（永不抛，永不静默消失）',` with `⏎······'stale_state：%s·→·expired（永不抛，永不静默消失）',⏎·····`                                                                                                 prettier/prettier
+   437:1   error  Replace `······` with `········`                                                                                                                                                                              prettier/prettier
+   438:7   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   439:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   440:7   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   441:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   442:9   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   443:7   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   444:1   error  Replace `······` with `········`                                                                                                                                                                              prettier/prettier
+   445:9   error  Replace `'session'·in·fix·?·fix.session` with `··'session'·in·fix⏎············?·fix.session⏎···········`                                                                                                      prettier/prettier
+   446:7   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   447:1   error  Replace `······await·expect(svc.handleHookFire(fireCtx('hks_0000000001'))` with `········await·expect(⏎··········svc.handleHookFire(fireCtx('hks_0000000001')),⏎········`                                     prettier/prettier
+   448:9   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   449:1   error  Replace `······` with `········`                                                                                                                                                                              prettier/prettier
+   450:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   451:7   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   452:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   453:7   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   454:1   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   455:7   error  Insert `··`                                                                                                                                                                                                   prettier/prettier
+   456:5   error  Replace `}` with `··},⏎····`                                                                                                                                                                                  prettier/prettier
+   468:57  error  Insert `⏎·········`                                                                                                                                                                                           prettier/prettier
+   472:77  error  Insert `⏎··········`                                                                                                                                                                                          prettier/prettier
+   497:20  error  Replace `svc.handleHookFire(fireCtx('hks_0000000001'))` with `⏎········svc.handleHookFire(fireCtx('hks_0000000001')),⏎······`                                                                                 prettier/prettier
+   530:33  error  Replace `·id:·'hks_0000000002',·dedupKey:·'hook:team:q2'` with `⏎········id:·'hks_0000000002',⏎········dedupKey:·'hook:team:q2',⏎·····`                                                                       prettier/prettier
+   542:79  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+   587:33  error  Replace `·id:·'hks_0000000002',·dedupKey:·'hook:team:q2'` with `⏎········id:·'hks_0000000002',⏎········dedupKey:·'hook:team:q2',⏎·····`                                                                       prettier/prettier
+   607:79  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+   610:57  error  Insert `⏎·········`                                                                                                                                                                                           prettier/prettier
+   619:33  error  Replace `·id:·'hks_0000000002',·dedupKey:·'hook:team:q2'` with `⏎········id:·'hks_0000000002',⏎········dedupKey:·'hook:team:q2',⏎·····`                                                                       prettier/prettier
+   626:49  error  Replace `·status:·'in_progress',·teamId:·'tm_1'` with `⏎········status:·'in_progress',⏎········teamId:·'tm_1',⏎·····`                                                                                         prettier/prettier
+   627:55  error  Replace `·id:·'tmm_1',·teamId:·'tm_1'` with `⏎········id:·'tmm_1',⏎········teamId:·'tm_1',⏎·····`                                                                                                             prettier/prettier
+   628:51  error  Replace `·id:·'s_2',·status:·'idle',·workerId:·null` with `⏎········id:·'s_2',⏎········status:·'idle',⏎········workerId:·null,⏎·····`                                                                         prettier/prettier
+   690:20  error  Replace `svc.handleHookFire(fireCtx('hks_0000000001'))` with `⏎········svc.handleHookFire(fireCtx('hks_0000000001')),⏎······`                                                                                 prettier/prettier
+   716:57  error  Insert `⏎·········`                                                                                                                                                                                           prettier/prettier
+   741:57  error  Insert `⏎·········`                                                                                                                                                                                           prettier/prettier
+   751:20  error  Replace `svc.handleHookFire(fireCtx('hks_0000000001'))` with `⏎········svc.handleHookFire(fireCtx('hks_0000000001')),⏎······`                                                                                 prettier/prettier
+   773:55  error  Replace `·id:·'tmm_1',·teamId:·'tm_1'` with `⏎········id:·'tmm_1',⏎········teamId:·'tm_1',⏎·····`                                                                                                             prettier/prettier
+   774:51  error  Replace `·id:·'s_1',·status:·'idle',·workerId:·null` with `⏎········id:·'s_1',⏎········status:·'idle',⏎········workerId:·null,⏎·····`                                                                         prettier/prettier
+   776:20  error  Replace `svc.handleHookFire(fireCtx('hks_0000000001'))` with `⏎········svc.handleHookFire(fireCtx('hks_0000000001')),⏎······`                                                                                 prettier/prettier
+   795:20  error  Replace `svc.handleHookFire(fireCtx('hks_0000000001'))` with `⏎········svc.handleHookFire(fireCtx('hks_0000000001')),⏎······`                                                                                 prettier/prettier
+   819:20  error  Replace `svc.handleHookFire(fireCtx('hks_0000000001'))` with `⏎········svc.handleHookFire(fireCtx('hks_0000000001')),⏎······`                                                                                 prettier/prettier
+   861:29  error  Replace `⏎········expect.arrayContaining(['hook_fire',·'hook_poll']),⏎······` with `expect.arrayContaining(['hook_fire',·'hook_poll'])`                                                                       prettier/prettier
+   940:20  error  Replace `·teamId:·'tm_1',·channelId:·'c_1',·targetInstanceId:·'tmm_1'` with `⏎············teamId:·'tm_1',⏎············channelId:·'c_1',⏎············targetInstanceId:·'tmm_1',⏎·········`                     prettier/prettier
+   969:65  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+  1127:65  error  Replace `string,·unknown` with `⏎········string,⏎········unknown⏎······`                                                                                                                                      prettier/prettier
+  1248:57  error  Insert `⏎·········`                                                                                                                                                                                           prettier/prettier
+  1274:57  error  Delete `⏎·········`                                                                                                                                                                                           prettier/prettier
+  1279:10  error  Replace `targetWrite·as·unknown·as·[{·data:·{·target:·Record<string,·unknown>·}·}])[0]` with `⏎··········targetWrite·as·unknown·as·[⏎············{·data:·{·target:·Record<string,·unknown>·}·},`              prettier/prettier
+  1280:11  error  Insert `]⏎········)[0]`                                                                                                                                                                                       prettier/prettier
+  1300:57  error  Delete `⏎·········`                                                                                                                                                                                           prettier/prettier
+  1326:14  error  Replace `parseHookTarget({·channelId:·'c_1',·targetInstanceId:·'t'·}))` with `⏎········parseHookTarget({·channelId:·'c_1',·targetInstanceId:·'t'·}),`                                                         prettier/prettier
+  1327:7   error  Replace `··` with `)`                                                                                                                                                                                         prettier/prettier
+  1328:9   error  Delete `··`                                                                                                                                                                                                   prettier/prettier
+  1329:1   error  Delete `··`                                                                                                                                                                                                   prettier/prettier
+  1330:1   error  Delete `··`                                                                                                                                                                                                   prettier/prettier
+  1331:9   error  Delete `··`                                                                                                                                                                                                   prettier/prettier
+  1332:9   error  Delete `··`                                                                                                                                                                                                   prettier/prettier
+  1333:1   error  Delete `··`                                                                                                                                                                                                   prettier/prettier
+  1369:16  error  Replace `·lastError:·'Rate·limit·exceeded',·skipReason:·'Rate·limit·exceeded'` with `⏎··········lastError:·'Rate·limit·exceeded',⏎··········skipReason:·'Rate·limit·exceeded',⏎·······`                       prettier/prettier
+  1373:16  error  Replace `·lastError:·'Rate·limit·exceeded',·skipReason:·'Rate·limit·exceeded'` with `⏎··········lastError:·'Rate·limit·exceeded',⏎··········skipReason:·'Rate·limit·exceeded',⏎·······`                       prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook.service.ts
+     1:9   error    Replace `·Injectable,·Logger,·OnModuleInit,·Optional,·Inject·` with `⏎··Injectable,⏎··Logger,⏎··OnModuleInit,⏎··Optional,⏎··Inject,⏎`                                                                      prettier/prettier
+     6:9   error    Replace `⏎··TRIGGER_KIND,⏎` with `·TRIGGER_KIND·`                                                                                                                                                          prettier/prettier
+   195:16  error    Insert `⏎···`                                                                                                                                                                                              prettier/prettier
+   237:37  error    Replace `⏎········TRIGGER_KIND.HOOK_FIRE,⏎········(ctx)·=>` with `TRIGGER_KIND.HOOK_FIRE,·(ctx)·=>⏎·······`                                                                                                prettier/prettier
+   386:36  error    Replace `⏎········?·(input.dueAt·as·Date)⏎·······` with `·?·(input.dueAt·as·Date)`                                                                                                                         prettier/prettier
+   402:19  error    Replace `⏎··············input.kind·===·HOOK_KIND.TIME⏎················?·(input.dueAt·as·Date)⏎···············` with `·input.kind·===·HOOK_KIND.TIME·?·(input.dueAt·as·Date)`                               prettier/prettier
+   466:23  error    Replace ``hook·${idOrDedupKey}·不存在（HOOK_NOT_FOUND·位见·todo-12）`` with `⏎········`hook·${idOrDedupKey}·不存在（HOOK_NOT_FOUND·位见·todo-12）`,⏎······`                                                              prettier/prettier
+   518:24  error    Replace `⏎········`[hook]·fire·${ctx?.id}·缺·hookId（跳过，不重排）`,⏎······` with ``[hook]·fire·${ctx?.id}·缺·hookId（跳过，不重排）``                                                                                      prettier/prettier
+   531:29  error    Replace `hook.id,·HOOK_STATUS.EXPIRED,·'hook·已过期（fire·时结算）'` with `⏎········hook.id,⏎········HOOK_STATUS.EXPIRED,⏎········'hook·已过期（fire·时结算）',⏎······`                                                    prettier/prettier
+   577:11  error    Replace `now.getTime()·+·HOOK_BUSY_RETRY_MS_DEFAULT·>=·hook.expiresAt.getTime()` with `⏎········now.getTime()·+·HOOK_BUSY_RETRY_MS_DEFAULT·>=⏎········hook.expiresAt.getTime()⏎······`                     prettier/prettier
+   585:15  error    Replace `·rescheduleAt:·new·Date(now.getTime()·+·HOOK_BUSY_RETRY_MS_DEFAULT)` with `⏎········rescheduleAt:·new·Date(now.getTime()·+·HOOK_BUSY_RETRY_MS_DEFAULT),⏎·····`                                    prettier/prettier
+   600:31  error    Replace `hook.id,·HOOK_STATUS.EXPIRED,·`${reason}（重试满·${this.busyMaxRetries}·次）`` with `⏎··········hook.id,⏎··········HOOK_STATUS.EXPIRED,⏎··········`${reason}（重试满·${this.busyMaxRetries}·次）`,⏎········`  prettier/prettier
+   603:11  error    Replace `now.getTime()·+·HOOK_BUSY_RETRY_MS_DEFAULT·>=·hook.expiresAt.getTime()` with `⏎········now.getTime()·+·HOOK_BUSY_RETRY_MS_DEFAULT·>=⏎········hook.expiresAt.getTime()⏎······`                     prettier/prettier
+   607:15  error    Replace `·rescheduleAt:·new·Date(now.getTime()·+·HOOK_BUSY_RETRY_MS_DEFAULT)` with `⏎········rescheduleAt:·new·Date(now.getTime()·+·HOOK_BUSY_RETRY_MS_DEFAULT),⏎·····`                                    prettier/prettier
+   638:31  error    Replace `hook.id,·HOOK_STATUS.EXPIRED,·'hook·已过期（poll·时结算）'` with `⏎··········hook.id,⏎··········HOOK_STATUS.EXPIRED,⏎··········'hook·已过期（poll·时结算）',⏎········`                                            prettier/prettier
+   702:23  error    Insert `⏎·············`                                                                                                                                                                                    prettier/prettier
+   703:1   error    Replace `··············` with `················`                                                                                                                                                           prettier/prettier
+   704:1   error    Insert `··`                                                                                                                                                                                                prettier/prettier
+   705:1   error    Insert `··`                                                                                                                                                                                                prettier/prettier
+   771:15  error    Replace `·ok:·false,·reason:·'target·非法（缺·channelId/targetInstanceId）'` with `⏎········ok:·false,⏎········reason:·'target·非法（缺·channelId/targetInstanceId）',⏎·····`                                        prettier/prettier
+   845:24  error    Replace `·id:·string;·status:·string;·workerId:·string·|·null` with `⏎······id:·string;⏎······status:·string;⏎······workerId:·string·|·null;⏎···`                                                          prettier/prettier
+   995:63  error    Replace `0,·191` with `⏎········0,⏎········191,⏎······`                                                                                                                                                    prettier/prettier
+  1008:39  error    Replace `⏎········TRIGGER_WAKE_FAILED_EVENT_TYPE,⏎········hook,⏎·······` with `TRIGGER_WAKE_FAILED_EVENT_TYPE,·hook,`                                                                                      prettier/prettier
+  1012:1   error    Replace `··········` with `········`                                                                                                                                                                       prettier/prettier
+  1013:1   error    Delete `··`                                                                                                                                                                                                prettier/prettier
+  1014:9   error    Delete `··`                                                                                                                                                                                                prettier/prettier
+  1015:1   error    Replace `··········` with `········`                                                                                                                                                                       prettier/prettier
+  1016:7   error    Replace `··},⏎······` with `}`                                                                                                                                                                             prettier/prettier
+  1239:29  error    Replace `·scopeType:·string;·scopeId:·string·` with `⏎··scopeType:·string;⏎··scopeId:·string;⏎`                                                                                                            prettier/prettier
+  1246:1   error    Delete `··`                                                                                                                                                                                                prettier/prettier
+  1247:7   warning  'TRIGGER_ID_PREFIX_VALUE' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                         @typescript-eslint/no-unused-vars
+  1262:12  error    Delete `⏎·····`                                                                                                                                                                                            prettier/prettier
+  1264:12  error    Delete `⏎·····`                                                                                                                                                                                            prettier/prettier
+  1302:27  error    Replace `ancestorText:·string,·inputNormalized:·string` with `⏎··ancestorText:·string,⏎··inputNormalized:·string,⏎`                                                                                        prettier/prettier
+  1305:7   error    Replace `a.length·<·HOOK_WAKE_SIMILAR_MIN_LEN·||·b.length·<·HOOK_WAKE_SIMILAR_MIN_LEN` with `⏎····a.length·<·HOOK_WAKE_SIMILAR_MIN_LEN·||⏎····b.length·<·HOOK_WAKE_SIMILAR_MIN_LEN⏎··`                     prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/trigger-reconciler.direction-a.ts
+  37:22  error  Replace ``[reconcile]·方向A·hook·查询失败:·${describeReconcileError(err)}`` with `⏎······`[reconcile]·方向A·hook·查询失败:·${describeReconcileError(err)}`,⏎····`                                                                                                                    prettier/prettier
+  50:22  error  Replace ``[reconcile]·方向A·trigger·回查失败:·${describeReconcileError(err)}`` with `⏎······`[reconcile]·方向A·trigger·回查失败:·${describeReconcileError(err)}`,⏎····`                                                                                                              prettier/prettier
+  57:11  error  Replace `await·repairHookSide(ctx,·hook,·byDedup.get(buildHookFireDedupKey(hook.id))·??·null,·now)` with `⏎········await·repairHookSide(⏎··········ctx,⏎··········hook,⏎··········byDedup.get(buildHookFireDedupKey(hook.id))·??·null,⏎··········now,⏎········)⏎······`  prettier/prettier
+  76:28  error  Replace `ctx,·hook,·'A',·'hook·已过期（reconcile·结算，只标不删）'` with `⏎······ctx,⏎······hook,⏎······'A',⏎······'hook·已过期（reconcile·结算，只标不删）',⏎····`                                                                                                                              prettier/prettier
+  93:14  error  Replace `·hook.kind·===·HOOK_KIND.TIME·?·(hook.dueAt·??·hook.expiresAt)` with `⏎····hook.kind·===·HOOK_KIND.TIME⏎······?·(hook.dueAt·??·hook.expiresAt)⏎·····`                                                                                                           prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/trigger-reconciler.direction-b.ts
+  26:15  error  Replace `·kind:·TRIGGER_KIND.HOOK_FIRE·as·string,·status:·TRIGGER_STATUS.FIRED` with `⏎········kind:·TRIGGER_KIND.HOOK_FIRE·as·string,⏎········status:·TRIGGER_STATUS.FIRED,⏎·····`  prettier/prettier
+  31:22  error  Replace ``[reconcile]·方向B·trigger·查询失败:·${describeReconcileError(err)}`` with `⏎······`[reconcile]·方向B·trigger·查询失败:·${describeReconcileError(err)}`,⏎····`                          prettier/prettier
+  69:28  error  Replace `ctx,·hook,·'B',·'hook·已过期（reconcile·方向B·结算，只标不删）'` with `⏎······ctx,⏎······hook,⏎······'B',⏎······'hook·已过期（reconcile·方向B·结算，只标不删）',⏎····`                                  prettier/prettier
+  75:17  error  Insert `⏎·······`                                                                                                                                                                    prettier/prettier
+  76:9   error  Insert `··`                                                                                                                                                                          prettier/prettier
+  77:1   error  Insert `··`                                                                                                                                                                          prettier/prettier
+  78:1   error  Insert `··`                                                                                                                                                                          prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/trigger-reconciler.service.spec.ts
+    4:9   error  Replace `·HOOK_KIND,·HOOK_STATUS,·buildHookFireDedupKey·` with `⏎··HOOK_KIND,⏎··HOOK_STATUS,⏎··buildHookFireDedupKey,⏎`                                                                                                                                                                                                                prettier/prettier
+   48:14  error  Replace `·findMany:·jest.fn(),·findUnique:·jest.fn(),·updateMany:·jest.fn()` with `⏎········findMany:·jest.fn(),⏎········findUnique:·jest.fn(),⏎········updateMany:·jest.fn(),⏎·····`                                                                                                                                                  prettier/prettier
+   49:17  error  Replace `·findMany:·jest.fn(),·create:·jest.fn(),·deleteMany:·jest.fn()` with `⏎········findMany:·jest.fn(),⏎········create:·jest.fn(),⏎········deleteMany:·jest.fn(),⏎·····`                                                                                                                                                          prettier/prettier
+   74:22  error  Replace `args·as·{·where:·{·dedupKey?:·{·in?:·string[]·};·kind?:·string·}·}` with `⏎········args·as·{·where:·{·dedupKey?:·{·in?:·string[]·};·kind?:·string·}·}⏎······`                                                                                                                                                                 prettier/prettier
+  133:45  error  Replace `hook,·hookRow({·id:·'hks_0000000002'·}),·hookRow({·id:·'hks_0000000003'·})` with `⏎······hook,⏎······hookRow({·id:·'hks_0000000002'·}),⏎······hookRow({·id:·'hks_0000000003'·}),⏎····`                                                                                                                                        prettier/prettier
+  139:18  error  Replace `·id:·'tmr_0000000002',·status:·'firing',·dedupKey:·buildHookFireDedupKey('hks_0000000002'),·payload:·{·hookId:·'hks_0000000002'·}` with `⏎··········id:·'tmr_0000000002',⏎··········status:·'firing',⏎··········dedupKey:·buildHookFireDedupKey('hks_0000000002'),⏎··········payload:·{·hookId:·'hks_0000000002'·},⏎·······`  prettier/prettier
+  140:18  error  Replace `·id:·'tmr_0000000003',·status:·'fired',·dedupKey:·buildHookFireDedupKey('hks_0000000003'),·payload:·{·hookId:·'hks_0000000003'·}` with `⏎··········id:·'tmr_0000000003',⏎··········status:·'fired',⏎··········dedupKey:·buildHookFireDedupKey('hks_0000000003'),⏎··········payload:·{·hookId:·'hks_0000000003'·},⏎·······`    prettier/prettier
+  174:79  error  Insert `⏎········`                                                                                                                                                                                                                                                                                                                     prettier/prettier
+  196:79  error  Insert `⏎········`                                                                                                                                                                                                                                                                                                                     prettier/prettier
+  199:46  error  Replace `hookRow({·kind:·HOOK_KIND.ALL_IDLE·})` with `⏎······hookRow({·kind:·HOOK_KIND.ALL_IDLE·}),⏎····`                                                                                                                                                                                                                              prettier/prettier
+  210:79  error  Insert `⏎········`                                                                                                                                                                                                                                                                                                                     prettier/prettier
+  214:22  error  Replace `·id:·'tmr_b',·payload:·{·hookId:·'hks_b'·},·dedupKey:·'hook_fire:hook:hks_b'` with `⏎··············id:·'tmr_b',⏎··············payload:·{·hookId:·'hks_b'·},⏎··············dedupKey:·'hook_fire:hook:hks_b',⏎···········`                                                                                                      prettier/prettier
+  246:22  error  Replace `args·as·{·where:·{·dedupKey?:·{·in?:·string[]·};·kind?:·string·}·}` with `⏎········args·as·{·where:·{·dedupKey?:·{·in?:·string[]·};·kind?:·string·}·}⏎······`                                                                                                                                                                 prettier/prettier
+  271:22  error  Replace `args·as·{·where:·{·dedupKey?:·{·in?:·string[]·};·kind?:·string·}·}` with `⏎········args·as·{·where:·{·dedupKey?:·{·in?:·string[]·};·kind?:·string·}·}⏎······`                                                                                                                                                                 prettier/prettier
+  273:15  error  Replace `fireRow({·id:·'tmr_b',·status:·'fired',·dedupKey:·'hook_fire:hook:hks_b',·payload:·{·hookId:·'hks_b'·}·})` with `⏎········fireRow({⏎··········id:·'tmr_b',⏎··········status:·'fired',⏎··········dedupKey:·'hook_fire:hook:hks_b',⏎··········payload:·{·hookId:·'hks_b'·},⏎········}),⏎······`                                 prettier/prettier
+  326:68  error  Insert `⏎·······`                                                                                                                                                                                                                                                                                                                      prettier/prettier
+  331:12  error  Replace `(svc·as·unknown·as·{·reconcileTimer:·unknown·}).reconcileTimer` with `⏎······(svc·as·unknown·as·{·reconcileTimer:·unknown·}).reconcileTimer,⏎····`                                                                                                                                                                            prettier/prettier
+  342:12  error  Replace `(svc·as·unknown·as·{·reconcileTimer:·unknown·}).reconcileTimer` with `⏎······(svc·as·unknown·as·{·reconcileTimer:·unknown·}).reconcileTimer,⏎····`                                                                                                                                                                            prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/trigger-reconciler.service.ts
+   1:9   error  Replace `·Injectable,·Logger,·OnModuleDestroy,·OnModuleInit·` with `⏎··Injectable,⏎··Logger,⏎··OnModuleDestroy,⏎··OnModuleInit,⏎`                                    prettier/prettier
+  56:25  error  Replace ``[reconcile]·启动自愈失败（周期继续，不阻断启动）:·${describeReconcileError(err)}`` with `⏎········`[reconcile]·启动自愈失败（周期继续，不阻断启动）:·${describeReconcileError(err)}`,⏎······`  prettier/prettier
+  91:27  error  Replace ``[reconcile]·周期自愈失败:·${describeReconcileError(err)}`` with `⏎··········`[reconcile]·周期自愈失败:·${describeReconcileError(err)}`,⏎········`                      prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/trigger-reconciler.support.ts
+  21:49  error  Insert `⏎·`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/dto/worker-dto.spec.ts
+  251:15  warning  'capabilities' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  256:15  warning  'load' is assigned a value but never used. Allowed unused vars must match /^_/u          @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-event.ingress.ts
+   18:3   warning  'extractConclusionParts' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  136:6   warning  'ActivityCallback' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  407:56  error    Delete `···`                                                                              prettier/prettier
+  986:5   warning  'taskId' is defined but never used. Allowed unused args must match /^_/u                  @typescript-eslint/no-unused-vars
+  987:5   warning  'agentId' is defined but never used. Allowed unused args must match /^_/u                 @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-or-jwt.guard.ts
+  10:10  warning  'Request' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-token.guard.spec.ts
+  2:10  warning  'ConfigService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker.client.ts
+  231:5  warning  'model' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/workers.service.spec.ts
+  902:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 813 problems (747 errors, 66 warnings)
+  747 errors and 0 warnings potentially fixable with the `--fix` option.
+

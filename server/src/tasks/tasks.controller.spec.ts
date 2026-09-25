@@ -15,7 +15,7 @@ import { QueryTasksDto } from './dto/query-tasks.dto';
 import { RejectTaskDto } from './dto/reject-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
 import { UploadPlanDocDto } from './dto/upload-plan-doc.dto';
-import { UpdateTeamDto } from './dto/update-team.dto';
+import { UpdateTaskTeamDto } from './dto/update-team.dto';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
@@ -472,7 +472,7 @@ describe('TasksController', () => {
       const out = await controller.updateTeam(
         { id: 'u_admin', username: 'admin', roleId: 'r_admin' },
         't_1',
-        dto as UpdateTeamDto,
+        dto as UpdateTaskTeamDto,
       );
 
       expect(service.updateTeam).toHaveBeenCalledWith('t_1', dto, 'u_admin');
@@ -528,7 +528,7 @@ describe('TasksController', () => {
       ).toHaveLength(0);
     });
 
-    it('UpdateTaskDto：priority 枚举，title/description 可选，主实例/主 Agent 兼容', async () => {
+    it('UpdateTaskDto：priority 枚举，title/description 可选', async () => {
       expect(
         await errorsOf(UpdateTaskDto, { priority: 'urgent' }),
       ).not.toHaveLength(0);
@@ -537,8 +537,6 @@ describe('TasksController', () => {
           title: 'x',
           description: 'd',
           priority: 'low',
-          mainAgentInstanceId: 'tmm_1',
-          mainAgentId: 'a_1',
         }),
       ).toHaveLength(0);
     });
@@ -551,31 +549,31 @@ describe('TasksController', () => {
       expect(await errorsOf(RejectTaskDto, { reason: 42 })).not.toHaveLength(0);
     });
 
-    it('UpdateTeamDto：addInstances/removeInstanceIds 可选实例形状', async () => {
-      expect(await errorsOf(UpdateTeamDto, {})).toHaveLength(0);
+    it('UpdateTaskTeamDto：addInstances/removeInstanceIds 可选实例形状', async () => {
+      expect(await errorsOf(UpdateTaskTeamDto, {})).toHaveLength(0);
       expect(
-        await errorsOf(UpdateTeamDto, {
+        await errorsOf(UpdateTaskTeamDto, {
           addInstances: [{ agentId: 'a_1', alias: '开发者-2' }],
           removeInstanceIds: ['tmm_1', 'tmm_2'],
         }),
       ).toHaveLength(0);
       expect(
-        await errorsOf(UpdateTeamDto, { addInstances: 'a_1' }),
+        await errorsOf(UpdateTaskTeamDto, { addInstances: 'a_1' }),
       ).not.toHaveLength(0);
       expect(
-        await errorsOf(UpdateTeamDto, {
+        await errorsOf(UpdateTaskTeamDto, {
           removeInstanceIds: [42],
         }),
       ).not.toHaveLength(0);
       // agentId 与 roleId 至少其一在 service 层按规则 4 守卫（400 MEMBER_AGENT_REQUIRED），
       // DTO 只校验形状：roleId-only 合法，空对象非法（两者都缺）。
       expect(
-        await errorsOf(UpdateTeamDto, {
+        await errorsOf(UpdateTaskTeamDto, {
           addInstances: [{ roleId: 'r_developer' }],
         }),
       ).toHaveLength(0);
       expect(
-        await errorsOf(UpdateTeamDto, {
+        await errorsOf(UpdateTaskTeamDto, {
           addInstances: [{ alias: '仅别名也过形状校验' }],
         }),
       ).toHaveLength(0);
@@ -678,6 +676,7 @@ describe('TasksController', () => {
         userName: '成员甲',
         action: 'reject',
         reason: '范围过大',
+        skipReview: false,
       });
       expect(out).toEqual(result);
     });
@@ -692,6 +691,7 @@ describe('TasksController', () => {
         userName: '成员甲',
         action: 'confirm',
         reason: null,
+        skipReview: false,
       });
     });
 
@@ -708,8 +708,27 @@ describe('TasksController', () => {
         userName: '成员甲',
         action: 'finalize',
         reason: null,
+        skipReview: false,
       });
       expect(out).toEqual(result);
+    });
+
+    it('POST tasks/:id/plan/confirm 转发 skipReview=true（草稿态人工出口）', async () => {
+      const result = { plan: { status: 'executing' }, idempotent: false };
+      planLifecycle.confirmPlan.mockResolvedValue(result);
+
+      await controller.confirmPlan(user, 't_1', {
+        action: 'confirm',
+        skipReview: true,
+      });
+
+      expect(planLifecycle.confirmPlan).toHaveBeenCalledWith('t_1', {
+        userId: 'u_1',
+        userName: '成员甲',
+        action: 'confirm',
+        reason: null,
+        skipReview: true,
+      });
     });
 
     it('PATCH tasks/:id/plan/complete 转发主实例（缺省用户 PM 路径）', async () => {

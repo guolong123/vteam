@@ -1,0 +1,53 @@
+F2 代码质量复审：8 门禁 × 2 次运行（server 无 --fix；产物：eslint-run1/2.txt, eslint-ours.txt, jest-run1/2.txt, worker-typecheck-run1/2.txt, worker-test-run1/2.txt, web-tsc-run1/2.txt, web-lint-run1/2.txt, pw-run1/2.txt 同目录）
+日期：2026-09-22；分支 main；:3001 next dev 与 :13000（docker 旧镜像）运行中，未重启。
+
+== 门禁1：cd server && npx tsc --noEmit -p tsconfig.json ==
+run1 EXIT 0（无输出） / run2 EXIT 0（无输出） → 一致 PASS
+
+== 门禁2：cd server && npx eslint "{src,apps,libs,test}/**/*.ts"（无 --fix）==
+run1 EXIT 1：813 problems（747 errors, 66 warnings）
+run2 EXIT 1：813 problems（747 errors, 66 warnings）→ 计数一致（预存 prettier 债，非回归）
+我们改的 13 文件（git diff b418103 -- server/）单文件 error 数（当前 vs b418103 基线 --stdin）：
+  artifacts.constants.ts 0 vs 0 ✓ / artifacts.service.spec.ts 0 vs 0 ✓ / artifacts.service.ts 0 vs 0 ✓
+  platform-mcp.service.ts 4 vs 4 ✓（持平） / platform-mcp.tools.ts 202 vs 202 ✓（持平）
+  plan-archive.service.spec.ts 0（NEW）✓ / plan-archive.service.ts 0（NEW）✓
+  plan-docs.service.ts 0 vs 0 ✓ / plan-steps.service.spec.ts 0 vs 0 ✓（要求 0）
+  plan-steps.service.ts 0 vs 0 ✓ / tasks.module.ts 0 vs 0 ✓
+  tasks.service.spec.ts 0 vs 33 ✓（下降，要求 0） / tasks.service.ts 0 vs 7 ✓（下降，要求 0）
+  → 4 个要求文件均为 0 error，其余无一增加。判定：PASS（预存债）
+工作区校验：git status --porcelain -- server/src 为空（eslint 未改写任何文件）✓
+
+== 门禁3：server jest（artifacts + 4 plan spec + plan-removal.guard）==
+run1 EXIT 0：Test Suites 8 passed / Tests 257 passed
+run2 EXIT 0：Test Suites 8 passed / Tests 257 passed → 一致 PASS
+
+== 门禁4：cd worker && npm run typecheck == run1 EXIT 0 / run2 EXIT 0 → PASS
+== 门禁5：cd worker && npm run test ==
+run1 EXIT 0：24 suites / 605 tests passed；run2 EXIT 0：24 suites / 605 tests → 一致 PASS
+== 门禁6：cd web && npx tsc --noEmit == run1 EXIT 0 / run2 EXIT 0 → PASS
+
+== 门禁7：npm run lint --prefix web ==
+run1 EXIT 1：728 problems（1 error, 727 warnings）；唯一 error = web/shot-omo3.tmp.cjs:1:22 require-import（git check-ignore 证实 .gitignore:55 *.tmp.cjs 忽略，预存垃圾）
+run2 EXIT 1：728 problems（1 error, 727 warnings）；同一 error 同一文件 → 一致
+我们改的 4 产品文件（docs/page.tsx, session/page.tsx, TeamRightPanel.tsx, artifact-categories.ts）：0 error（TeamRightPanel 仅 1 warning 'TaskDetail' unused，预存）→ PASS（预存归因）
+
+== 门禁8：cd web && npx playwright test --project=pages --project=docs ==
+run1 EXIT 1：40 passed, 1 failed → docs-unified.spec.ts:377 toContainText("cliyard MCP 新增")，线上任务已改名（数据漂移，预存）
+run2 EXIT 1：39 passed, 2 failed → (a) 同一 docs:377 漂移；(b) 新增 pages.spec.ts:429（见下）
+两次不一致 → 按标准判“不一致”，但根因已查明（非产品 flaky，见下）→ 不计本次回归
+
+== run2 新增失败 pages:429 根因（已实证，非回归）==
+T24 状态卡测试取 team.currentTaskId 对应任务的首卡。F3-2 的 POST /reject（t_0000000001 回 in_progress 必经步骤）
+触发旧服务端 reject.afterCommit → promoteNextInTx（容器 dist tasks.service.js:863，仓库新代码 tasks.service.ts:1184 同样保留，属设计行为）：
+  队首 tq_0000000001（t_0000000002）被出队 → team.currentTaskId: t_0000000001 → t_0000000002，
+  t_0000000002: queued → pending；后续 mark-pending-review 为纯 transition，不恢复 current。
+证据：docker logs（21:09 reject → 21:10 mark-pending-review → 21:13 run2 建任务）；team.currentTaskId 现为 t_0000000002；
+  run1/F3-1 的 :429 均 PASS（当时 current 仍是 t_0000000001）。
+我们的 diff 未动 queue/currentTaskId 逻辑（git diff b418103 无 teams/ 文件）→ 非本次回归。
+遗留状态差（无法经公开 API 恢复：enqueue 仅 pending 可排、cancelQueue 仅 queued 可取消，而 t_0000000001=pending_review、t_0000000002=pending）：
+  team.currentTaskId=t_0000000002；t_0000000002 queued→pending（已出队）；t_0000000001 状态已恢复 pending_review；plan-docs +f3-plan-qa.md。
+  恢复需 DB 层：UPDATE teams SET current_task_id='t_0000000001' + 补回 team_queues 行（t_0000000002, position 1），或重跑 seed。请父任务定夺。
+
+== F2 总判定 ==
+门禁 1/3/4/5/6 PASS（两次一致）；门禁 2/7 PASS（预存债归因，两次一致）；门禁 8 条件 PASS（1 个预存漂移 + 1 个已根因的环境状态差，无产品回归；两次计数不一致原因已查明并记录）。
+无 flaky（两次差异均有确定性根因）。

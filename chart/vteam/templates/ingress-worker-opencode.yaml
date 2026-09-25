@@ -1,0 +1,53 @@
+# worker opencode serve Ingress（仅 opencodeIngress.enabled=true 时创建）
+#
+# 独立 host（默认 opencode.<ingress.host>）—— **不与主 ingress 共用 host**：nginx-ingress
+# 的 rewrite-target 等注解按「同 host 的 server 块」生效，混在一条 host 上会互相污染；
+# opencode 的 web 是 SPA，走独立 host 也就不需要 rewrite 规则。
+#
+# ⚠️ 安全：opencode serve 无鉴权（等同可执行任意命令的 Web 终端），仅建议在受控环境开启，
+# 并配合 opencodeIngress.whitelistSourceRange 限源。
+#
+# SSE/流式：opencode web 同样使用长连接（事件流/工具输出流），复用主 ingress 的
+# proxy-buffering=off + proxy-read-timeout=3600，并补 proxy-http-version=1.1
+# （保持 Connection 复用，部分流式端点要求 HTTP/1.1）。
+{{- if .Values.opencodeIngress.enabled }}
+{{- $host := .Values.opencodeIngress.host | default (printf "opencode.%s" .Values.ingress.host) }}
+{{- $whitelist := .Values.opencodeIngress.whitelistSourceRange | default "" }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "vteam.fullname" . }}-opencode
+  labels:
+    {{- include "vteam.labels" (dict "context" . "component" "ingress-opencode") | nindent 4 }}
+  annotations:
+    {{- with .Values.opencodeIngress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- if $whitelist }}
+    nginx.ingress.kubernetes.io/whitelist-source-range: {{ $whitelist | quote }}
+    {{- end }}
+    {{- if and .Values.opencodeIngress.tls.enabled .Values.opencodeIngress.tls.secretName }}
+    kubernetes.io/tls-acme: "true"
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className | quote }}
+  {{- end }}
+  {{- if .Values.opencodeIngress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ $host | quote }}
+      secretName: {{ .Values.opencodeIngress.tls.secretName | default (printf "%s-opencode-tls" (include "vteam.fullname" .)) | quote }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "vteam.worker.name" . }}-serve
+                port:
+                  number: {{ .Values.service.worker.port }}
+{{- end }}

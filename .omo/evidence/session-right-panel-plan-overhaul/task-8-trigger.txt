@@ -1,0 +1,11 @@
+$ cd server && npx jest --runInBand src/tasks/tasks.service.spec.ts src/tasks/plan-archive.service.spec.ts
+$ cd server && npx jest --runInBand src/tasks/tasks.service.spec.ts src/tasks/plan-archive.service.spec.ts
+$ cd server && npx jest --runInBand src/tasks/tasks.service.spec.ts src/tasks/plan-archive.service.spec.ts
+PASS src/tasks/tasks.service.spec.ts
+PASS src/tasks/plan-archive.service.spec.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       125 passed, 125 total
+Snapshots:   0 total
+Time:        2.754 s
+Ran all test suites matching /src\/tasks\/tasks.service.spec.ts|src\/tasks\/plan-archive.service.spec.ts/i.

@@ -262,7 +262,31 @@ describe('WorkerEventIngress', () => {
       );
     });
 
-    it('群聊触发 delta（来源=task_group）→ 落成员 team 私聊频道全量 parts（任务只归因，不参与定位）', async () => {
+    it('非 private/team_group 来源 → 拒绝 message.part.delta，不查私聊、不落库、不广播', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_unsupported',
+        type: 'broadcast',
+      });
+
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(45, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_unsupported',
+            parts: [{ type: 'text', text: '不应写入', synthetic: false }],
+          }),
+        ),
+      ).toBe(true);
+
+      expect(prisma.chatChannel.findFirst).not.toHaveBeenCalled();
+      expect(prisma.message.findFirst).not.toHaveBeenCalled();
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(realtime.emit).not.toHaveBeenCalled();
+    });
+
+    it('群聊触发 delta（来源=team_group）→ 落成员 team 私聊频道全量 parts（任务只归因，不参与定位）', async () => {
       prisma.session.findUnique.mockResolvedValue({
         agentId: 'a_1',
         teamId: 'tm_1',
@@ -270,7 +294,7 @@ describe('WorkerEventIngress', () => {
       });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
@@ -345,7 +369,7 @@ describe('WorkerEventIngress', () => {
       // 来源频道=群聊；该 agent 无 private 频道（taskId_agentId 反查 null）
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
 
@@ -376,7 +400,7 @@ describe('WorkerEventIngress', () => {
       });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
@@ -519,7 +543,7 @@ describe('WorkerEventIngress', () => {
       });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
@@ -646,7 +670,7 @@ describe('WorkerEventIngress', () => {
       });
       prisma.chatChannel.findUnique.mockImplementation(({ where }: any) => {
         if (where?.id)
-          return Promise.resolve({ id: 'c_group', type: 'task_group' });
+          return Promise.resolve({ id: 'c_group', type: 'team_group' });
         return Promise.resolve(null);
       });
       prisma.chatChannel.findFirst.mockImplementation(({ where }: any) => {
@@ -1723,6 +1747,73 @@ describe('WorkerEventIngress', () => {
             content: { title: 'bash', pattern: '/data/*', type: 'bash' },
           }),
         }),
+      );
+    });
+
+    it('团队会话 permission（payload.taskId 空）→ team scope + payload 补 team:<id>/teamId（前端可见性与 scope 过滤放行）', async () => {
+      prisma.session.findUnique.mockResolvedValueOnce({
+        taskId: null,
+        agentId: 'a_pm',
+        teamId: 'tm_9',
+      });
+      const e = event('w_1', 'evw_p9', 'session.permission', {
+        sessionId: 's_9',
+        permissionId: 'per_9',
+        type: 'external_directory',
+        pattern: '/root/.config/opencode/*',
+        title: 'external_directory',
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
+      // 行保持空 taskId（findAll 的 teamId 路径经 sessionId ∈ 团队会话命中）
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            requestId: 'per_9',
+            sessionId: 's_9',
+            taskId: '',
+            kind: 'permission',
+          }),
+        }),
+      );
+      // payload 补 team:<teamId> + 顶层 teamId；scope 发 team 域（否则 scope=all 可见性丢帧）
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({
+          taskId: 'team:tm_9',
+          teamId: 'tm_9',
+          question: expect.objectContaining({
+            taskId: 'team:tm_9',
+            kind: 'permission',
+            agentId: 'a_pm',
+          }),
+        }),
+        { type: 'team', id: 'tm_9' },
+      );
+    });
+
+    it('团队会话且团队 managedMode=true → managed 标记 + managedMode（主 Agent 确认路由激活）', async () => {
+      prisma.session.findUnique.mockResolvedValueOnce({
+        taskId: null,
+        agentId: 'a_pm',
+        teamId: 'tm_9',
+      });
+      prisma.team.findUnique.mockResolvedValue({ managedMode: true });
+      const e = event('w_1', 'evw_p10', 'session.question', {
+        sessionId: 's_9',
+        requestId: 'que_9',
+        questions: [{ question: '继续？', header: '确认', options: [] }],
+      });
+
+      expect(await ingress.handleEvent(e)).toBe(true);
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({
+          managed: true,
+          taskId: 'team:tm_9',
+          question: expect.objectContaining({ managedMode: true }),
+        }),
+        { type: 'team', id: 'tm_9' },
       );
     });
 

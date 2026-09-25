@@ -32,6 +32,8 @@
       "vteam_my_profile",
       "vteam_team_add_member",
       "vteam_plan_complete",
+      "vteam_plan_finalize",
+      "vteam_plan_confirm",
       "vteam_channel_send",
       "vteam_wecom_reply",
       "vteam_task_create",
@@ -40,10 +42,10 @@
       "vteam_hook_register",
       "vteam_hook_cancel"
     ],
-    "expectedCellCount": 196,
-    "iteratedCellCount": 196,
-    "allowCellCount": 127,
-    "denyCellCount": 69,
+    "expectedCellCount": 210,
+    "iteratedCellCount": 210,
+    "allowCellCount": 132,
+    "denyCellCount": 78,
     "allCellsMatch": true,
     "cells": [
       {
@@ -192,6 +194,20 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_plan_complete 未获授权：岗位（architect）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_plan_finalize",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_finalize 未获授权：岗位（architect）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_plan_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_confirm 未获授权：岗位（architect）已拒绝能力点 task.complete，拒绝调用"
       },
       {
         "agent": "vteam-architect",
@@ -391,6 +407,20 @@
       },
       {
         "agent": "vteam-developer",
+        "tool": "vteam_plan_finalize",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_finalize 未获授权：岗位（developer）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_plan_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_confirm 未获授权：岗位（developer）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-developer",
         "tool": "vteam_channel_send",
         "expect": "allow",
         "actual": "allow",
@@ -587,6 +617,20 @@
       },
       {
         "agent": "vteam-librarian",
+        "tool": "vteam_plan_finalize",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_finalize 未获授权：岗位（librarian）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_plan_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_confirm 未获授权：岗位（librarian）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-librarian",
         "tool": "vteam_channel_send",
         "expect": "deny",
         "actual": "deny",
@@ -679,9 +723,9 @@
       {
         "agent": "vteam-plan",
         "tool": "vteam_submit_artifact",
-        "expect": "deny",
-        "actual": "deny",
-        "message": "工具 vteam_submit_artifact 未获授权：岗位（plan）已拒绝能力点 doc.submit，拒绝调用"
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-plan",
@@ -777,6 +821,20 @@
       {
         "agent": "vteam-plan",
         "tool": "vteam_plan_complete",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_plan_finalize",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_plan_confirm",
         "expect": "allow",
         "actual": "allow",
         "message": null
@@ -979,6 +1037,20 @@
       },
       {
         "agent": "vteam-product",
+        "tool": "vteam_plan_finalize",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_finalize 未获授权：岗位（product）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_plan_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_confirm 未获授权：岗位（product）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-product",
         "tool": "vteam_channel_send",
         "expect": "allow",
         "actual": "allow",
@@ -1169,6 +1241,20 @@
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_plan_complete",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_plan_finalize",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_plan_confirm",
         "expect": "allow",
         "actual": "allow",
         "message": null
@@ -1371,6 +1457,20 @@
       },
       {
         "agent": "vteam-tester",
+        "tool": "vteam_plan_finalize",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_finalize 未获授权：岗位（tester）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_plan_confirm",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_plan_confirm 未获授权：岗位（tester）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-tester",
         "tool": "vteam_channel_send",
         "expect": "allow",
         "actual": "allow",
@@ -1423,7 +1523,7 @@
   "plan": "server-gate-removal-tool-authority",
   "todo": 9,
   "generatedBy": "server/src/platform-mcp/platform-mcp.authority-matrix.spec.ts (worker matrix + service-level proof)",
-  "generatedAt": "2026-09-22T01:54:41.179Z",
+  "generatedAt": "2026-09-23T07:50:03.288Z",
   "mainHappyPath": {
     "steps": [
       {

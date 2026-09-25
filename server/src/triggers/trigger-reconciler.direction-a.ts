@@ -34,7 +34,9 @@ export async function reconcileDirectionA(
       take: TRIGGER_RECONCILE_BATCH_LIMIT,
     })) as unknown as HookRowLike[];
   } catch (err) {
-    ctx.logger.error(`[reconcile] 方向A hook 查询失败: ${describeReconcileError(err)}`);
+    ctx.logger.error(
+      `[reconcile] 方向A hook 查询失败: ${describeReconcileError(err)}`,
+    );
     return 0;
   }
   if (!hooks || hooks.length === 0) {
@@ -47,14 +49,23 @@ export async function reconcileDirectionA(
       where: { dedupKey: { in: dedupKeys } },
     })) as unknown as TriggerRowLike[];
   } catch (err) {
-    ctx.logger.error(`[reconcile] 方向A trigger 回查失败: ${describeReconcileError(err)}`);
+    ctx.logger.error(
+      `[reconcile] 方向A trigger 回查失败: ${describeReconcileError(err)}`,
+    );
     return 0;
   }
   const byDedup = new Map((fireRows ?? []).map((r) => [r.dedupKey, r]));
   let repaired = 0;
   for (const hook of hooks) {
     try {
-      if (await repairHookSide(ctx, hook, byDedup.get(buildHookFireDedupKey(hook.id)) ?? null, now)) {
+      if (
+        await repairHookSide(
+          ctx,
+          hook,
+          byDedup.get(buildHookFireDedupKey(hook.id)) ?? null,
+          now,
+        )
+      ) {
         repaired += 1;
       }
     } catch (err) {
@@ -73,7 +84,12 @@ async function repairHookSide(
   now: Date,
 ): Promise<boolean> {
   if (now.getTime() >= hook.expiresAt.getTime()) {
-    return claimExpireHook(ctx, hook, 'A', 'hook 已过期（reconcile 结算，只标不删）');
+    return claimExpireHook(
+      ctx,
+      hook,
+      'A',
+      'hook 已过期（reconcile 结算，只标不删）',
+    );
   }
   if (fireRow) {
     if (
@@ -90,7 +106,10 @@ async function repairHookSide(
       return false;
     }
   }
-  const due = hook.kind === HOOK_KIND.TIME ? (hook.dueAt ?? hook.expiresAt) : hook.expiresAt;
+  const due =
+    hook.kind === HOOK_KIND.TIME
+      ? (hook.dueAt ?? hook.expiresAt)
+      : hook.expiresAt;
   const dedupKey = buildHookFireDedupKey(hook.id);
   const id = await ctx.idGen.nextId(TRIGGER_ID_PREFIX);
   try {
@@ -99,7 +118,6 @@ async function repairHookSide(
         id,
         kind: TRIGGER_KIND.HOOK_FIRE as string,
         status: TRIGGER_STATUS.PENDING,
-        fireAt: due,
         dueAt: due,
         payload: { hookId: hook.id },
         dedupKey,

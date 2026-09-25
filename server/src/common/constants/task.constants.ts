@@ -62,7 +62,7 @@ export const TASK_ERRORS = {
   MAIN_AGENT_NOT_IN_TEAM: 'MAIN_AGENT_NOT_IN_TEAM',
   /** start 前置校验：task_agents 至少 1 名未 removed Agent（13 篇 §4.2）。 */
   TASK_EMPTY_TEAM: 'TASK_EMPTY_TEAM',
-  /** start 前置校验：多 Agent 任务 mainAgentId 未确定（13 篇 §4.2 FR-07/08）。 */
+  /** start 前置校验：多 Agent 任务未确定 Team.mainAgentMemberId（13 篇 §4.2 FR-07/08）。 */
   MAIN_AGENT_NOT_SET: 'MAIN_AGENT_NOT_SET',
   /** team 调整时间窗：仅 pending/in_progress 合法（14 篇 §5.3，13 篇 §7.4）。 */
   TASK_TEAM_NOT_ALLOWED: 'TASK_TEAM_NOT_ALLOWED',
@@ -71,7 +71,8 @@ export const TASK_ERRORS = {
   /** transitionByAgent：仅主 Agent 实例可流转任务状态（MCP 工具路径，403）。 */
   TASK_STATUS_MAIN_AGENT_ONLY: 'TASK_STATUS_MAIN_AGENT_ONLY',
   /** block 置阻塞必须写明原因（400，卡点不明不许挂）。 */
-  TASK_BLOCK_REASON_REQUIRED: 'TASK_BLOCK_REASON_REQUIRED',  /** transitionByAgent：accept/archive 仅人类用户可执行，Agent 调用直接拒绝（403，fail-closed）。 */
+  TASK_BLOCK_REASON_REQUIRED:
+    'TASK_BLOCK_REASON_REQUIRED' /** transitionByAgent：accept/archive 仅人类用户可执行，Agent 调用直接拒绝（403，fail-closed）。 */,
   TASK_AGENT_COMPLETION_FORBIDDEN: 'TASK_AGENT_COMPLETION_FORBIDDEN',
   /** accept/archive 用户路径完工预检未通过（409，message 枚举未完成项，force=true 可强制通过）。 */
   TASK_COMPLETION_PREFLIGHT_FAILED: 'TASK_COMPLETION_PREFLIGHT_FAILED',

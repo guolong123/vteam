@@ -47,7 +47,7 @@ export interface RoleCapability {
 }
 
 /**
- * 27 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
+ * 28 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
  * `PLATFORM_CAPABILITIES`（顺序一致；仅新增 UI 分组 `group` 字段）。
  * 出厂拒绝 14 项：task.create / task.transition / task.complete / team.add_member /
  * chat.channel_send / wecom.reply / question.confirm / issue.create / issue.get /
@@ -56,7 +56,8 @@ export interface RoleCapability {
 export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
   { key: "task.create", label: "创建任务", group: "task", tools: ["vteam_task_create"], factoryDefault: false },
   { key: "task.transition", label: "流转任务状态", group: "task", tools: ["vteam_task_transition"], factoryDefault: false },
-  { key: "task.complete", label: "完成任务", group: "task", tools: ["vteam_plan_complete"], factoryDefault: false },
+  { key: "task.complete", label: "完成/确认计划", group: "task", tools: ["vteam_plan_complete", "vteam_plan_finalize", "vteam_plan_confirm"], factoryDefault: false },
+  { key: "plan.steps", label: "计划执行步骤", group: "task", tools: ["vteam_todo"], factoryDefault: true },
   { key: "task.context", label: "读取任务上下文", group: "task", tools: ["vteam_task_context"], factoryDefault: true },
   { key: "team.view", label: "查看团队", group: "team", tools: ["vteam_team_view"], factoryDefault: true },
   { key: "team.add_member", label: "添加团队成员", group: "team", tools: ["vteam_team_add_member"], factoryDefault: false },

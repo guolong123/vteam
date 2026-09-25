@@ -2,6 +2,13 @@
  * index.ts 注册能力组装测试（T3 D2：baseUrl 上报 + T4c：重启后重新注册数据源）。
  * 仅测 buildCapabilities/buildRegisterOptions 纯函数；main() 由 require.main 守卫隔离，import 不触发 worker 启动。
  */
+// agent-browser 可用性探测是 spawnSync('agent-browser', ['--version'])——随宿主环境变化
+// （本机装了 agent-browser 的机器上恒 true → tools 变 8 个 → 断言炸）。固定为 false，
+// 保持本套件「未注入时 skills/tools 只有内置项」的确定性口径。
+jest.mock('./browser/browser-tools', () => {
+  const actual: Record<string, unknown> = jest.requireActual('./browser/browser-tools');
+  return { ...actual, isAgentBrowserAvailable: () => false };
+});
 import { WorkerConfig } from './config';
 import { GIT_TOOLS } from './git/git-tools';
 import {

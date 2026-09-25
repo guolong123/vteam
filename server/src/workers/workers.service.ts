@@ -788,10 +788,14 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     if (avail.length === 0) {
       return true;
     }
+    // modelId 允许两种形态：`md_` 主键（agents.defaultModelId 的实际形态，模型选择器
+    // 写入的就是它）与 `provider/model` 引用——只认后者时，一旦给 agent 设了默认模型，
+    // 派发就会因永不匹配而报「无可用 worker」。
     return avail.some(
       (a) =>
         a.model?.enabled !== false &&
-        `${a.model?.providerID}/${a.model?.modelID}` === modelId,
+        (a.modelId === modelId ||
+          `${a.model?.providerID}/${a.model?.modelID}` === modelId),
     );
   }
 
@@ -1059,7 +1063,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * - 非 offline（online/degraded）→ 409 WORKER_ONLINE_NOT_REMOVABLE（防运行中误删，
    *   先经 shutdown/下线后再删）；
    * - offline → 事务内清理全部 workerId 外键引用（schema onDelete: Restrict，不依赖
-   *   DB 级联）后物理删除：worker_model_availabilities 硬删、task_group_instances 硬删
+   *   DB 级联）后物理删除：worker_model_availabilities 硬删、worker 会话实例关联硬删
    *   （软删 removedAt 不解除 FK Restrict，必须删行）、sessions.workerId/instanceRef 置空、
    *   agents.workerId 置空（软绑定"首选 worker"）；成功同步清理该 worker 的
    *   workerMcpStatus/pendingCommands 内存态。

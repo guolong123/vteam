@@ -803,9 +803,7 @@ export class AgentsService implements OnModuleInit {
         return {
           config: stored.config as unknown,
           description:
-            typeof stored.description === 'string'
-              ? stored.description
-              : null,
+            typeof stored.description === 'string' ? stored.description : null,
         };
       }
     }

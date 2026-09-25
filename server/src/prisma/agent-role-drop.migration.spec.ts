@@ -1,104 +1,112 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import {
+  BUILTIN_AGENT_ROLES,
+  FALLBACK_AGENT_ROLE,
+} from '../common/constants/agent-role.constants';
 
 /**
- * agent-role-decommission todo 7 迁移契约（`20260919000010_drop_agents_role`）。
+ * Current-schema contract for historical migration
+ * `20260919000010_drop_agents_role`.
  *
- * 本迁移是**单向 contract 阶段**（删列无反向 SQL，回滚=恢复 pre-migration dump）。
- * jest 基座不连真库（真库 populated-DB 迁移证明 + 回滚演练记录在
- * `.omo/evidence/agent-role-decommission/task-7-drop.txt`）。本 spec 锁定结构契约：
- *   1. 迁移头注释声明列的历史用途、四个用途的替换去向、精确回滚命令与 dump 路径；
- *   2. 回填谓词**显式收窄**（review fix m6）：两条 JOIN 均要求目标策略行存在 + `policy_id IS NULL`；
- *   3. 孤儿守卫在 DROP 之前（非 custom 行 policy_id 仍 NULL → 迁移失败，DROP 不执行）；
- *   4. custom 有意无策略清单 SELECT 在 DROP 之前（DROP 后 role 列不可达）；
- *   5. `ALTER TABLE agents DROP COLUMN role` 恰一条且位于文件末尾；
- *   6. schema.prisma 的 model Agent 不再含 `role String?`。
+ * The archived migration performed a one-time backfill and then dropped
+ * `agents.role`.  That historical UPDATE/DROP sequence is intentionally not
+ * replayed by the single baseline.  The equivalent final-state contract is
+ * that role ownership lives on `team_members.role_id`/`agent_roles`, while
+ * `agents` retains its independent `agent_key` and execution `policy_id`.
  */
-const MIGRATION = path.resolve(
+
+const BASELINE = path.resolve(
   __dirname,
   '..',
   '..',
   'prisma',
   'migrations',
-  '20260919000010_drop_agents_role',
+  '20260925000000_squashed_baseline',
   'migration.sql',
 );
 const SCHEMA = path.resolve(__dirname, '..', '..', 'prisma', 'schema.prisma');
 
-describe('agents.role drop 迁移契约（todo 7）', () => {
-  const sql = fs.readFileSync(MIGRATION, 'utf8');
-  /** 去注释后的可执行 SQL（头注释含 DROP/DROP COLUMN 字样，语句计数须只看代码行）。 */
-  const ddl = sql
+function executableSql(sql: string): string {
+  return sql
     .split('\n')
-    .filter((l) => !l.trimStart().startsWith('--'))
-    .join('\n');
-
-  it('头注释声明四用途历史 + 替换去向 + 精确回滚命令与 dump 路径', () => {
-    for (const marker of [
-      '岗位标签',
-      'ep_<role>',
-      'vteam-<role>',
-      '计划职责判定',
-      'AgentRole',
-      'policyId',
-      'agentKey',
-      'DROP COLUMN',
-    ]) {
-      expect(sql).toContain(marker);
-    }
-    expect(sql).toContain('pre-migration-dump.sql');
-    expect(sql).toMatch(/mysqldump -uroot -p"\$MYSQL_ROOT_PASSWORD"/);
-    expect(sql).toMatch(/mysql -uroot -p"\$MYSQL_ROOT_PASSWORD" aiagents/);
-    expect(sql).toContain(
-      '.omo/evidence/agent-role-decommission/pre-migration-dump.sql',
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .replace(/\s+CHARACTER SET\s+\S+\s+COLLATE\s+\S+/gi, '')
+    .replace(/\bDEFAULT NULL\b/gi, 'NULL')
+    .replace(/\bUNIQUE KEY\b/gi, 'UNIQUE INDEX')
+    .replace(/^(\s*)KEY\s+/gim, '$1INDEX ')
+    .replace(/(INDEX\s+`[^`]+`)\s+\(/g, '$1(')
+    .replace(/REFERENCES\s+(`[^`]+`)\s+\(/g, 'REFERENCES $1(')
+    .replace(/\b(varchar|text|json|datetime|tinyint|int|bigint)\b/gi, (type) =>
+      type.toUpperCase(),
     );
-    expect(sql).toContain('单向');
+}
+
+function tableDefinition(sql: string, table: string): string {
+  const start = sql.indexOf(`CREATE TABLE \`${table}\``);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = sql.indexOf('\n) ', start);
+  expect(end).toBeGreaterThan(start);
+  return sql.slice(start, end);
+}
+
+describe('agents.role removal current-schema contract (historical 20260919000010)', () => {
+  const sql = fs.readFileSync(BASELINE, 'utf8');
+  const executable = executableSql(sql);
+  const agents = tableDefinition(executable, 'agents');
+  const teamMembers = tableDefinition(executable, 'team_members');
+  const roles = tableDefinition(executable, 'agent_roles');
+
+  it('baseline retains the squash audit header and final schema as the migration source', () => {
+    expect(sql).toContain('由原有 81 个 Prisma 迁移压缩而来');
+    expect(sql).toContain('legacy-migrations/');
+    expect(sql).toContain('完整数据库基线');
   });
 
-  it('回填 a1：旧 ep_<role> 回退——JOIN 到真实存在的策略行 + 仅 NULL 行', () => {
-    expect(sql).toMatch(
-      /UPDATE `agents` AS `a`[\s\S]*?INNER JOIN `execution_policies` AS `p` ON `p`\.`id` = CONCAT\('ep_', `a`\.`role`\)[\s\S]*?WHERE `a`\.`policy_id` IS NULL[\s\S]*?AND `a`\.`role` IS NOT NULL/,
-    );
+  it('agents has the replacement identity fields and no legacy role column', () => {
+    expect(agents).toMatch(/`agent_key`\s+VARCHAR\(63\) NULL/);
+    expect(agents).toMatch(/`policy_id`\s+VARCHAR\(191\) NULL/);
+    expect(agents).not.toMatch(/`role`\s+VARCHAR/);
   });
 
-  it('回填 a2：ep_<agentKey> 键路径——同样收窄到真实策略行 + 仅 NULL 行', () => {
-    expect(sql).toMatch(
-      /INNER JOIN `execution_policies` AS `p` ON `p`\.`id` = CONCAT\('ep_', `a`\.`agent_key`\)[\s\S]*?WHERE `a`\.`policy_id` IS NULL[\s\S]*?AND `a`\.`agent_key` IS NOT NULL/,
-    );
-  });
-
-  it('孤儿守卫在 DROP 之前：非 custom 且 policy_id 仍 NULL → INSERT NULL 报错，DROP 不执行', () => {
-    const guardAt = sql.indexOf('_drop_agents_role_orphan_guard');
-    const dropAt = sql.indexOf('ALTER TABLE `agents` DROP COLUMN `role`');
-    expect(guardAt).toBeGreaterThanOrEqual(0);
-    expect(dropAt).toBeGreaterThan(guardAt);
-    expect(sql).toMatch(
-      /WHERE `policy_id` IS NULL AND `type` <> 'custom' LIMIT 1/,
-    );
-  });
-
-  it('custom 清单 SELECT 在 DROP 之前（「有意无策略」绝不静默）', () => {
-    const listAt = sql.indexOf(
-      "WHERE `type` = 'custom' AND `policy_id` IS NULL",
-    );
-    const dropAt = sql.indexOf('ALTER TABLE `agents` DROP COLUMN `role`');
-    expect(listAt).toBeGreaterThanOrEqual(0);
-    expect(dropAt).toBeGreaterThan(listAt);
-  });
-
-  it('DROP COLUMN 恰一条、无其它 DDL（不与无关 schema 变更混装）', () => {
-    expect(ddl.match(/DROP COLUMN/g) ?? []).toHaveLength(1);
-    expect(ddl.match(/ALTER TABLE/g) ?? []).toHaveLength(1);
-    const dropAt = ddl.indexOf('ALTER TABLE `agents` DROP COLUMN `role`');
-    expect(ddl.slice(dropAt).trim()).toBe(
-      'ALTER TABLE `agents` DROP COLUMN `role`;',
+  it('team_members carries the nullable role relationship and its index', () => {
+    expect(teamMembers).toMatch(/`role_id`\s+VARCHAR\(191\) NULL/);
+    expect(teamMembers).toContain('INDEX `idx_team_members_role`(`role_id`)');
+    expect(executable).toMatch(
+      /team_members_role_id_fkey` FOREIGN KEY \(`role_id`\) REFERENCES `agent_roles`\(`id`\) ON DELETE RESTRICT/,
     );
   });
 
-  it('schema：model Agent 不再含 role 列（contract 已落地）', () => {
+  it('the role table keeps default-agent ownership separate from the agent row', () => {
+    expect(roles).toMatch(/`default_agent_id`\s+VARCHAR\(191\) NULL/);
+    expect(executable).toMatch(
+      /agent_roles_default_agent_id_fkey` FOREIGN KEY \(`default_agent_id`\) REFERENCES `agents`\(`id`\) ON DELETE SET NULL/,
+    );
+    expect(roles).not.toMatch(/`policy_id`\s/);
+  });
+
+  it('the final schema exposes exactly one agent-role model and no second RBAC model', () => {
     const schema = fs.readFileSync(SCHEMA, 'utf8');
-    const agentModel = schema.match(/^model Agent \{[\s\S]*?^\}/m)?.[0] ?? '';
-    expect(agentModel).not.toMatch(/^\s*role\s+String\?\s*$/m);
-    expect(agentModel).toContain('agentKey');
+    expect((schema.match(/^model AgentRole /gm) ?? []).length).toBe(1);
+    expect((schema.match(/^model Role /gm) ?? []).length).toBe(1);
+    expect(schema).toMatch(/model AgentRole \{[\s\S]*?@@map\("agent_roles"\)/);
+    expect(schema).toMatch(/model Role \{[\s\S]*?@@map\("roles"\)/);
+  });
+
+  it('builtin and fallback role identifiers still provide a non-null resolution target', () => {
+    expect(BUILTIN_AGENT_ROLES).toHaveLength(7);
+    expect(FALLBACK_AGENT_ROLE.id).toBe('ar_general');
+    expect(FALLBACK_AGENT_ROLE.key).toBe('general');
+    for (const role of BUILTIN_AGENT_ROLES) {
+      expect(role.id).toMatch(/^ar_[a-z_]+$/);
+      expect(role.defaultAgentId).toMatch(/^a_[a-z_]+$/);
+    }
+  });
+
+  it('baseline does not reintroduce the removed role column through executable DDL', () => {
+    expect(executable).not.toMatch(/ALTER TABLE `agents`[^\n]*`role`/);
+    expect(executable).not.toMatch(/UPDATE `agents`[^\n]*`role`/);
+    expect(executable).not.toMatch(/INSERT INTO `agents`[^\n]*`role`/);
   });
 });

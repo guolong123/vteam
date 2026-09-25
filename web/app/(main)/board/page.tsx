@@ -34,6 +34,8 @@ import { teamsApi } from "@/src/api/teams";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { AgentAvatar, EmptyState, StatusBadge } from "@/src/components/ui";
+import type { TaskApiStatus } from "@/src/types/task-status";
+import { STATUS_LABEL } from "@/src/types/task-status";
 import {
   type RoleKey,
   type StatusKey,
@@ -103,15 +105,7 @@ function renderStatusBadge(status: BoardStatus) {
 }
 
 /* ------------------------------ API 数据模型（T6 DTO / 09 篇 §3.4） ------------------------------ */
-/** 后端七态（TASK_STATUS，含 queued 排队、blocked 阻塞）。 */
-type TaskApiStatus =
-  | "queued"
-  | "pending"
-  | "in_progress"
-  | "blocked"
-  | "pending_review"
-  | "completed"
-  | "archived";
+/** 后端七态与中文标签唯一定义见 `@/src/types/task-status`（顶部导入），此处直接引用。 */
 
 /** GET /tasks?teamId= 条目（对齐 TasksService.toTaskDto）。 */
 interface TaskItem {
@@ -120,7 +114,7 @@ interface TaskItem {
   description: string | null;
   priority: string;
   status: TaskApiStatus;
-  mainAgentId: string | null;
+  mainAgentMemberId: string | null;
   backgroundDocs: unknown[];
   teamAgentIds: string[];
   teamId?: string | null;
@@ -140,19 +134,12 @@ interface TasksResponse {
   pageSize: number;
 }
 
-/** API 状态 → 看板中文状态（对齐原型筛选条文案，queued 排队中）。 */
-const STATUS_LABEL: Record<TaskApiStatus, BoardStatus> = {
-  queued: "排队中",
-  pending: "待开始",
-  in_progress: "进行中",
-  blocked: "阻塞中",
-  pending_review: "待验收",
-  completed: "已完成",
-  archived: "已归档",
-};
+/** API 状态 → 看板中文状态（唯一定义见 `@/src/types/task-status`；此处复用并收窄为看板 `BoardStatus`）。 */
+const BOARD_STATUS_LABEL: Record<TaskApiStatus, BoardStatus> =
+  STATUS_LABEL as Record<TaskApiStatus, BoardStatus>;
 
 function toBoardStatus(status: string): BoardStatus {
-  return STATUS_LABEL[status as TaskApiStatus] ?? "待开始";
+  return BOARD_STATUS_LABEL[status as TaskApiStatus] ?? "待开始";
 }
 
 /** 产出物数量（Phase 2 无产出物端点，0 为真实兜底值，对齐 project-list 页 EMPTY_TASK_COUNT 模式）。 */

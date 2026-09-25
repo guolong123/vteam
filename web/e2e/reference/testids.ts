@@ -227,7 +227,6 @@ export const PAGES: PageTestidRef[] = [
       "plan-finalize-modal",
       "plan-finalize-cancel",
       "plan-finalize-confirm",
-      "plan-checklist",
     ],
   },
   {

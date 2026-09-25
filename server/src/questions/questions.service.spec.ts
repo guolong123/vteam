@@ -706,7 +706,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         managedMode: true,
       });
       prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
-      prisma.session.findUnique.mockResolvedValue({ teamMemberId: 'tmm_sender' });
+      prisma.session.findUnique.mockResolvedValue({
+        teamMemberId: 'tmm_sender',
+      });
       prisma.agentQuestion.update.mockResolvedValue(
         platformRow({ status: 'resolved', answers: [['确认']] }),
       );
@@ -728,7 +730,9 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         teamId: 'tm_1',
       });
       prisma.agentQuestion.findUnique.mockResolvedValue(platformRow());
-      prisma.session.findUnique.mockResolvedValue({ teamMemberId: 'tmm_other' });
+      prisma.session.findUnique.mockResolvedValue({
+        teamMemberId: 'tmm_other',
+      });
 
       const err = await service
         .confirmByAgent({
@@ -770,6 +774,62 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
           () => null,
           (e: unknown) => e,
         );
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as ForbiddenException).getResponse()).toMatchObject({
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,
+      });
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+    });
+
+    it('confirmByAgent team:<id> 形态（团队会话行 taskId 空）→ 会话团队归属校验通过 + 收敛帧补 team 形态', async () => {
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_9',
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_9' });
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        platformRow({ taskId: '', sessionId: 's_9' }),
+      );
+      prisma.agentQuestion.update.mockResolvedValue(
+        platformRow({ taskId: '', sessionId: 's_9', status: 'resolved' }),
+      );
+
+      const result = await service.confirmByAgent({
+        taskId: 'team:tm_9',
+        instanceId: 'tmm_main',
+        requestId: 'que_platform_0000000001',
+        kind: 'question',
+        answers: [['确认']],
+      });
+
+      expect(result.status).toBe('resolved');
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({ resolved: true, taskId: 'team:tm_9' }),
+        { type: 'team', id: 'tm_9' },
+      );
+    });
+
+    it('confirmByAgent team:<id> 形态但行会话归属他团队 → 403 CROSS_TASK_FORBIDDEN', async () => {
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_9' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_other' });
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        platformRow({ taskId: '', sessionId: 's_9' }),
+      );
+
+      const err = await service
+        .confirmByAgent({
+          taskId: 'team:tm_9',
+          instanceId: 'tmm_main',
+          requestId: 'que_platform_0000000001',
+          kind: 'question',
+          answers: [['确认']],
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+
       expect(err).toBeInstanceOf(ForbiddenException);
       expect((err as ForbiddenException).getResponse()).toMatchObject({
         code: QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,

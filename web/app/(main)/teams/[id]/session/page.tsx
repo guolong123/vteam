@@ -158,6 +158,14 @@ export default function TeamSessionPage() {
   /** 计划文件上传：隐藏 input 触发（无原生控件样式依赖）+ 错误提示。 */
   const planUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [planUploadError, setPlanUploadError] = useState<string | null>(null);
+  // 会话操作反馈条（success=重置成功 / error=重置失败或找不到成员）；3s 自动消失（对齐 integrations/skills 页）。
+  const [notice, setNotice] = useState<{ kind: string; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 3000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const membersPanel = useResizableWidth({
     storageKey: "team-session-members-width",
@@ -269,8 +277,19 @@ export default function TeamSessionPage() {
   /* ---------- 当前任务派生查询（三 Tab 数据源） ---------- */
   const artifactsQuery = useQuery({
     queryKey: ["task", effectivePanelTaskId, "artifacts"],
-    queryFn: () => api.get<ArtifactsResponse>(`/tasks/${effectivePanelTaskId}/artifacts`, { query: { pageSize: 10 } }),
+    queryFn: () => api.get<ArtifactsResponse>(`/tasks/${effectivePanelTaskId}/artifacts`, { query: { pageSize: 50 } }),
     enabled: !!effectivePanelTaskId && !!user?.id,
+    refetchInterval: 30_000,
+  });
+  /**
+   * 计划类产出物查询（计划 Tab 内容聚合区第二来源）：category=计划
+   * （Phase 3 自动归档落地，服务端 category 过滤已支持）。
+   * 与本地计划文件合并为统一列表，按更新时间倒序。
+   */
+  const planArtifactsQuery = useQuery({
+    queryKey: ["task", effectivePanelTaskId, "plan-artifacts"],
+    queryFn: () => api.get<ArtifactsResponse>(`/tasks/${effectivePanelTaskId}/artifacts`, { query: { category: "计划", pageSize: 50 } }),
+    enabled: !!effectivePanelTaskId,
     refetchInterval: 30_000,
   });
   /**
@@ -283,8 +302,8 @@ export default function TeamSessionPage() {
   const planDocsQuery = useQuery({
     queryKey: ["task", effectivePanelTaskId, "plan-docs"],
     queryFn: () => api.get<PlanDocsResponse>(`/tasks/${effectivePanelTaskId}/plan-docs`),
-    enabled: !!effectivePanelTaskId && !!user?.id,
-    refetchInterval: 10_000,
+    enabled: !!effectivePanelTaskId,
+    refetchInterval: (query) => (query.state.status === "error" ? false : 10_000),
   });
   /**
    * 上传计划文件：写进任务目录 `.opencode/plans/<name>`，agent 同目录可读——
@@ -308,8 +327,8 @@ export default function TeamSessionPage() {
   const planStepsQuery = useQuery({
     queryKey: ["task", effectivePanelTaskId, "plan-steps"],
     queryFn: () => api.get<{ steps: PlanStepItem[]; workerId: string | null; degraded: boolean }>(`/tasks/${effectivePanelTaskId}/plan-steps`),
-    enabled: !!effectivePanelTaskId && !!user?.id,
-    refetchInterval: 30_000,
+    enabled: !!effectivePanelTaskId,
+    refetchInterval: (query) => (query.state.status === "error" ? false : 30_000),
   });
   /**
    * 选择本地 .md 文件 → 读文本 → POST /tasks/:id/plan-docs（写进任务目录）。
@@ -348,15 +367,25 @@ export default function TeamSessionPage() {
   });
 
   /* ---------- 提问补拉 ---------- */
+  /* 团队会话的 pending 行 taskId=''（按会话归属团队），无当前任务时必须改传 teamId 查询，
+     否则纯团队聊天下刷新后弹窗无法恢复（SSE 仅实时一帧，断线/刷新即丢）。 */
   const questionsQuery = useQuery({
-    queryKey: ["questions", effectivePanelTaskId, "pending"],
-    queryFn: () => api.get<QuestionModalData[]>(`/questions`, { query: { taskId: effectivePanelTaskId!, status: "pending" } }),
-    enabled: !!effectivePanelTaskId && !!user?.id,
+    queryKey: ["questions", effectivePanelTaskId ?? teamId, "pending"],
+    queryFn: () =>
+      api.get<QuestionModalData[]>(`/questions`, {
+        query: effectivePanelTaskId
+          ? { taskId: effectivePanelTaskId, status: "pending" }
+          : { teamId, status: "pending" },
+      }),
+    enabled: (!!effectivePanelTaskId || !!teamId) && !!user?.id,
   });
   useEffect(() => {
     const pending = questionsQuery.data;
     if (!pending || pending.length === 0) return;
-    setPendingQuestion((prev) => prev ?? (pending[0]?.managedMode ? null : pending[0]));
+    // 取首个**非托管** pending（托管项由主 Agent 路由，前端不弹）——
+    // 盲取 [0] 会让托管项挡住后面可直接处理的权限/问题。
+    const actionable = pending.find((p) => !p.managedMode);
+    setPendingQuestion((prev) => prev ?? (actionable ?? null));
   }, [questionsQuery.data]);
 
   const teamAgentMembers = useMemo(() => {
@@ -956,14 +985,24 @@ export default function TeamSessionPage() {
   const toggleEnabledMutation = useMutation({
     mutationFn: ({ instanceId, enabled }: { instanceId: string; enabled: boolean }) =>
       api.patch<TaskDetail>(`/tasks/${queueHeadTaskId}/instances/${instanceId}`, { enabled }),
-    onSuccess: (updated) => {
+    onSuccess: (updated, variables) => {
       queryClient.setQueryData<TaskDetail>(["task", queueHeadTaskId], updated);
       queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
+      const name = teamAgentMembers.find((a) => (a.instanceId ?? a.id) === variables.instanceId)?.name;
+      setNotice({ kind: "success", text: name ? `${variables.enabled ? "已启用" : "已禁用"}「${name}」` : `已切换「${variables.instanceId}」状态` });
     },
     onError: (err) => {
       console.error("[TeamSession] toggle instance failed", { teamId, taskId: queueHeadTaskId, error: err });
+      setNotice({ kind: "error", text: isApiError(err) ? err.message : "切换成员状态失败，请稍后重试" });
     },
   });
+  const handleToggleEnabled = (instanceId: string, enabled: boolean) => {
+    if (toggleEnabledMutation.isPending && toggleEnabledMutation.variables?.instanceId === instanceId) return;
+    toggleEnabledMutation.mutate({ instanceId, enabled });
+  };
+  const togglePendingInstanceId = toggleEnabledMutation.isPending
+    ? (toggleEnabledMutation.variables?.instanceId ?? null)
+    : null;
   const instanceModelMutation = useMutation({
     mutationFn: ({ instanceId, modelId }: { instanceId: string; modelId: string | null }) =>
       api.patch(`/teams/${teamId}/members/${instanceId}`, { overrideModelId: modelId ?? null }),
@@ -980,27 +1019,43 @@ export default function TeamSessionPage() {
     },
   });
   const resetSessionMutation = useMutation({
-    mutationFn: (instanceId: string) => {
-      // 实例 key → 团队成员 id（tmm_）：团队成员来源时 instanceId 本身即 tmm_；
-      // 任务实例来源时按 agentId+seq 匹配 team.members（与私聊建频道同规则）。
-      const member = teamAgentMembers.find((a) => (a.instanceId ?? a.id) === instanceId);
-      const memberId = member?.instanceId?.startsWith("tmm_")
-        ? member.instanceId
-        : (team?.members.find((m) => m.agentId === member?.id && m.seq === member?.seq)?.id
-          ?? team?.members.find((m) => m.agentId === member?.id)?.id
-          ?? instanceId);
-      return api.post<{ teamId: string; memberId: string; session: unknown }>(
+    mutationFn: ({ memberId }: { instanceId: string; memberId: string }) =>
+      api.post<{ teamId: string; memberId: string; session: unknown }>(
         `/teams/${teamId}/members/${memberId}/reset-session`, {},
-      );
-    },
-    onSuccess: () => {
+      ),
+    onSuccess: (_data, variables) => {
+      const name = teamAgentMembers.find((a) => (a.instanceId ?? a.id) === variables.instanceId)?.name;
+      setNotice({ kind: "success", text: name ? `已重置「${name}」的会话` : "已重置该成员的会话" });
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
       if (queueHeadTaskId) queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
     },
     onError: (err) => {
       console.error("[TeamSession] reset session failed", { teamId, error: err });
+      setNotice({ kind: "error", text: isApiError(err) ? err.message : "重置会话失败，请稍后重试" });
     },
   });
+  // 实例 key → 团队成员 id（tmm_）：团队成员来源时 instanceId 本身即 tmm_；
+  // 任务实例来源时按 agentId+seq 匹配 team.members（与私聊建频道同规则）。
+  // 解析不到 tmm_ 返回 null——绝不回退把非 tmm_ id 当成员 id POST（会打到错误/404 路由）。
+  const resolveResetMemberId = (instanceId: string): string | null => {
+    const member = teamAgentMembers.find((a) => (a.instanceId ?? a.id) === instanceId);
+    if (member?.instanceId?.startsWith("tmm_")) return member.instanceId;
+    const matched = team?.members.find((m) => m.agentId === member?.id && m.seq === member?.seq)
+      ?? team?.members.find((m) => m.agentId === member?.id);
+    return matched?.id?.startsWith("tmm_") ? matched.id : null;
+  };
+  const handleResetSession = (instanceId: string) => {
+    if (resetSessionMutation.isPending) return;
+    const memberId = resolveResetMemberId(instanceId);
+    if (!memberId) {
+      setNotice({ kind: "error", text: "找不到该成员，无法重置会话" });
+      return;
+    }
+    resetSessionMutation.mutate({ instanceId, memberId });
+  };
+  const resetPendingInstanceId = resetSessionMutation.isPending
+    ? (resetSessionMutation.variables?.instanceId ?? null)
+    : null;
   const addInstanceMutation = useMutation({
     mutationFn: (payload: AddInstancePayload) =>
       api.post<TaskDetail>(`/tasks/${queueHeadTaskId}/team`, {
@@ -1127,6 +1182,17 @@ export default function TeamSessionPage() {
         </div>
       )}
 
+      {notice && (
+        <div
+          role="status"
+          data-testid="session-notice"
+          data-kind={notice.kind}
+          style={{ flexShrink: 0, margin: `${space.sm}px ${space.xl}px 0`, padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: notice.kind === "success" ? "rgba(16,185,129,0.10)" : "rgba(239,68,68,0.10)", border: "1px solid rgba(16,185,129,0.28)", color: notice.kind === "success" ? "#065F46" : "#DC2626", fontSize: fontSize.sm }}
+        >
+          {notice.text}
+        </div>
+      )}
+
       <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", position: "relative" }}>
         {/* 左侧完整成员面板 */}
         <TeamMembersPanel
@@ -1140,8 +1206,10 @@ export default function TeamSessionPage() {
           addError={addError}
           onAddInstance={handleAddInstance}
           width={membersPanel.width}
-          onToggleEnabled={hasQueueHeadTask ? (instanceId: string, enabled: boolean) => toggleEnabledMutation.mutate({ instanceId, enabled }) : undefined}
-          onResetSession={hasQueueHeadTask ? (instanceId: string) => resetSessionMutation.mutate(instanceId) : undefined}
+          onToggleEnabled={hasQueueHeadTask ? handleToggleEnabled : undefined}
+          togglePendingInstanceId={togglePendingInstanceId}
+          onResetSession={hasQueueHeadTask ? handleResetSession : undefined}
+          resetPendingInstanceId={resetPendingInstanceId}
           onChangeModel={(instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId })}
           onSetMainAgent={(memberId: string) => { if (!setMainAgentMutation.isPending) setMainAgentMutation.mutate(memberId); }}
           onSelectMember={(instanceId) => handlePrivateTab(instanceId)}
@@ -1334,6 +1402,7 @@ export default function TeamSessionPage() {
             task={panelTask}
             taskId={panelTask?.id ?? ""}
             artifactsQuery={artifactsQuery}
+            planArtifactsQuery={planArtifactsQuery}
             planDocsQuery={planDocsQuery}
             planStepsQuery={planStepsQuery}
             issuesQuery={issuesQuery}

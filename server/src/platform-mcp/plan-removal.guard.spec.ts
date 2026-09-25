@@ -103,10 +103,17 @@ describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 ag
 
   it('不存在 plan 表读写（prisma.plan / prisma.planTask，含 as any 转型绕过）', () => {
     const hits = grepSource(PLAN_TABLE_ACCESS);
-    // 窄豁免（todo2 plans 复活）：仅 tasks/plan-lifecycle.service.ts 可读写 plans 表
-    // （唯一 choke 点）；planTask 仍全禁——豁免文件内出现即红。
+    // 窄豁免①（todo2 plans 复活）：仅 tasks/plan-lifecycle.service.ts 可读写 plans 表。
+    // 窄豁免②（2026-09-23 vteam_todo 复活 plan_tasks，用户决策后放开）：仅
+    //   tasks/plan-steps.service.ts 可读写 plan/planTask——结构化执行步骤必须平台持久化：
+    //   opencode 的 todo 是会话级（换会话/重置即丢、跨成员不可见），且平台注入的工具清单
+    //   里根本没有 todo 写入工具（tools 表 0 条）→ 执行步骤功能无法由 opencode 承担，
+    //   故按文件头约定（删除/放宽断言即设计评审触发点）在此评审后放开该单一 choke 点；
+    //   plan-lifecycle 侧维持 planTask 全禁（计划生命周期不该碰执行步骤）。
     const nonExempt = hits.filter(
-      (h) => !h.startsWith('tasks/plan-lifecycle.service.ts:'),
+      (h) =>
+        !h.startsWith('tasks/plan-lifecycle.service.ts:') &&
+        !h.startsWith('tasks/plan-steps.service.ts:'),
     );
     expect(nonExempt).toEqual([]);
     const exemptPlanTask = hits.filter(
@@ -115,11 +122,13 @@ describe('防回流：vteam 自造 plan 域已下线（改由 opencode 原生 ag
         PLAN_TASK_ACCESS.test(h),
     );
     expect(exemptPlanTask).toEqual([]);
-    // 豁免有效性：豁免文件必须真实持有 plans 表读写，否则豁免无意义。
-    const exemptHits = hits.filter((h) =>
-      h.startsWith('tasks/plan-lifecycle.service.ts:'),
-    );
-    expect(exemptHits.length).toBeGreaterThan(0);
+    // 豁免有效性：两处豁免都必须真实持有 plan 表读写，否则豁免无意义。
+    expect(
+      hits.filter((h) => h.startsWith('tasks/plan-lifecycle.service.ts:')),
+    ).not.toEqual([]);
+    expect(
+      hits.filter((h) => h.startsWith('tasks/plan-steps.service.ts:')),
+    ).not.toEqual([]);
   });
 
   it('守卫模式能捕获 as any 转型绕过写法（合成行回归，不碰生产源码）', () => {

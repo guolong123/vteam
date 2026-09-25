@@ -79,10 +79,20 @@ export class QuestionsController {
     if (user?.id) {
       const row = await (this.prisma as any).agentQuestion.findUnique({
         where: { id },
-        select: { taskId: true },
+        select: { taskId: true, sessionId: true },
       });
       if (row?.taskId) {
         await this.assertTaskMember(row.taskId, user.id);
+      } else if (row?.sessionId) {
+        // 团队会话行（taskId 空）：回退按会话所属团队校验成员资格——否则只剩通用
+        // guard，团队问题回复等于无归属鉴权。ses_ 存量行反查不到会话 → 维持原行为。
+        const sess = await (this.prisma as any).session.findUnique({
+          where: { id: row.sessionId },
+          select: { teamId: true },
+        });
+        if (sess?.teamId) {
+          await this.assertTeamMember(sess.teamId, user.id);
+        }
       }
     }
     return this.questionsService.reply(id, dto, user?.id);
@@ -103,16 +113,7 @@ export class QuestionsController {
         message: '任务不存在',
       });
     }
-    const member = await (this.prisma as any).teamUserMember.findUnique({
-      where: { teamId_userId: { teamId: task.teamId, userId } },
-      select: { id: true },
-    });
-    if (!member) {
-      throw new ForbiddenException({
-        code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
-        message: '您不是该团队成员',
-      });
-    }
+    await this.assertTeamMember(task.teamId, userId);
   }
 
   /** 团队路径成员校验（GET /questions teamId 过滤用）：调用者是该团队成员（403 否则）。 */

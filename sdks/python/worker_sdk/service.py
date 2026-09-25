@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from .client import DEFAULT_EXEC_PORT, WorkerClient
 from .events_server import EventsServer
 from .exceptions import ServiceRequiredError, WorkerNotRegisteredError
-from .models import ExecuteAccepted, TaskResult
+from .models import ExecuteAccepted, TaskResult, as_payload
 from .waiter import execute_and_wait as _execute_and_wait
 
 
@@ -177,6 +177,111 @@ class WorkerService:
             timeout=timeout,
             **execute_kwargs,
         )
+
+
+    # -- 资源与命令下发 ---------------------------------------------------
+
+    def set_resources(
+        self,
+        *,
+        skills: list[Any] | None = None,
+        tools: list[Any] | None = None,
+        mcp_servers: list[Any] | None = None,
+        agent_policies: list[Any] | None = None,
+        replace_all: bool = False,
+    ) -> None:
+        """更新控制面资源 fixture（None = 该类别不变）；随后 reload_config() 让 worker 重拉落盘。"""
+        self.events.set_resources(
+            skills=skills,
+            tools=tools,
+            mcp_servers=mcp_servers,
+            agent_policies=agent_policies,
+            replace_all=replace_all,
+        )
+
+    def push_command(
+        self,
+        command: dict[str, Any],
+        *,
+        worker_id: str | None = None,
+        resource_version: str | None = None,
+    ) -> list[str]:
+        """向指定 worker（缺省=全部已注册）下发一条下行命令，返回目标 workerId 列表。"""
+        targets = self._command_targets(worker_id)
+        for wid in targets:
+            self.events.push_command(wid, command, resource_version=resource_version)
+        return targets
+
+    def reload_config(
+        self, *, worker_id: str | None = None, resource_version: str | None = None
+    ) -> list[str]:
+        """触发 worker 重拉资源并重注入（无活跃会话时重启 serve 生效）。"""
+        return self.push_command(
+            {"type": "reload-config"}, worker_id=worker_id, resource_version=resource_version
+        )
+
+    def push_model_credentials(
+        self,
+        provider_keys: list[Any],
+        provider_configs: dict[str, Any] | None = None,
+        *,
+        worker_id: str | None = None,
+        resource_version: str | None = None,
+    ) -> list[str]:
+        """下发模型凭据/配置（worker 写 auth.json + opencode.json provider 段）。"""
+        payload: dict[str, Any] = {"providerKeys": [as_payload(k) for k in provider_keys]}
+        if provider_configs is not None:
+            payload["providerConfigs"] = {
+                pid: as_payload(cfg) for pid, cfg in provider_configs.items()
+            }
+        return self.push_command(
+            {"type": "model-credentials", "payload": payload},
+            worker_id=worker_id,
+            resource_version=resource_version,
+        )
+
+    def push_git_credentials(
+        self,
+        credentials: list[Any],
+        *,
+        worker_id: str | None = None,
+        resource_version: str | None = None,
+    ) -> list[str]:
+        """下发 git 仓库凭据（worker 写 .keta-git-creds.json）。"""
+        payload = {"credentials": [as_payload(c) for c in credentials]}
+        return self.push_command(
+            {"type": "git-credentials", "payload": payload},
+            worker_id=worker_id,
+            resource_version=resource_version,
+        )
+
+    def restart(
+        self, *, worker_id: str | None = None, resource_version: str | None = None
+    ) -> list[str]:
+        """下发远程重启命令（无活跃会话立即重启 serve）。"""
+        return self.push_command(
+            {"type": "restart"}, worker_id=worker_id, resource_version=resource_version
+        )
+
+    def shutdown(
+        self, *, worker_id: str | None = None, resource_version: str | None = None
+    ) -> list[str]:
+        """下发远程下线命令（worker 优雅退出）。"""
+        return self.push_command(
+            {"type": "shutdown"}, worker_id=worker_id, resource_version=resource_version
+        )
+
+    def _command_targets(self, worker_id: str | None) -> list[str]:
+        if worker_id:
+            return [worker_id]
+        ids = [
+            w["workerId"]
+            for w in self.registered_workers()
+            if isinstance(w.get("workerId"), str) and w["workerId"]
+        ]
+        if not ids:
+            raise WorkerNotRegisteredError("尚无已注册 worker，无法下发命令")
+        return ids
 
 
 class WorkerDirect:

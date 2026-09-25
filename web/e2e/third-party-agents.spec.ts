@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 
 /**
  * third-party-agent-display Todo 2 · 外部 Agent 只读展示 + 非治理警告
@@ -22,6 +22,7 @@ import { test, expect, type Page } from "@playwright/test";
  * （独立 tmp config，不碰 playwright.config.ts；baseURL 指向 compose web :13001）
  */
 
+const SERVER_URL = "http://localhost:13000";
 const WARNING = "此 Agent 来自外部（非 vteam 内置），不受 vteam 权限规则管辖。";
 const UNAVAILABLE = "说明加载失败（暂不可用）";
 
@@ -41,6 +42,62 @@ async function openExternalTab(page: Page) {
   await expect(page.getByTestId("external-agents-root")).toBeVisible({ timeout: 15_000 });
 }
 
+async function waitForWorkerCatalog(request: APIRequestContext): Promise<void> {
+  const login = await request.post(`${SERVER_URL}/api/v1/auth/login`, {
+    data: { username: "admin", password: "admin123" },
+  });
+  expect(login.ok()).toBeTruthy();
+  const { accessToken } = (await login.json()) as { accessToken: string };
+  for (let attempt = 0; attempt < 45; attempt += 1) {
+    try {
+      const response = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        timeout: 5_000,
+      });
+      if (response.ok()) {
+        const body = (await response.json()) as {
+          agents?: unknown[];
+          degraded?: boolean;
+        };
+        if (body.degraded !== true && (body.agents?.length ?? 0) > 0) return;
+      }
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  throw new Error("worker catalog 在 90 秒 readiness 窗口内不可用");
+}
+
+async function waitForExternalPanel(page: Page): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let ready = false;
+    try {
+      await expect
+        .poll(
+          async () => {
+            ready =
+              (await page.getByTestId("external-agent-item").count()) > 0 &&
+              (await page.getByTestId("external-agents-unavailable").count()) === 0 &&
+              (await page.getByTestId("external-agents-empty").count()) === 0;
+            return ready;
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(true);
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+    }
+    if (ready) return true;
+    if (attempt === 2) break;
+    await page.reload();
+    await expect(page.getByTestId("agent-config-root")).toBeVisible({ timeout: 20_000 });
+    await page.getByTestId("manage-tab").filter({ hasText: "外部 Agent" }).click();
+    await expect(page.getByTestId("external-agents-root")).toBeVisible({ timeout: 15_000 });
+  }
+  return false;
+}
+
 async function save(path: string | undefined, page: Page) {
   if (!path) return;
   mkdirSync(dirname(path), { recursive: true });
@@ -48,9 +105,12 @@ async function save(path: string | undefined, page: Page) {
 }
 
 test.describe("Todo 2 · 外部 Agent 只读展示", () => {
-  test("1. 列表 + 逐条警告 + 只读提示词 + 零编辑控件", async ({ page }) => {
+  test("1. 列表 + 逐条警告 + 只读提示词 + 零编辑控件", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    await waitForWorkerCatalog(request);
     await loginAsAdmin(page);
     await openExternalTab(page);
+    expect(await waitForExternalPanel(page), "外部 Agent 列表应在就绪窗口内可用").toBe(true);
 
     // A. 列表渲染（引擎实时返回，非硬编码）；不可用/空态不得出现
     await expect(page.getByTestId("external-agents-loading")).toHaveCount(0, { timeout: 20_000 });
@@ -116,7 +176,9 @@ test.describe("Todo 2 · 外部 Agent 只读展示", () => {
     await save(process.env.T2_SCREENSHOT, page);
   });
 
-  test("2. 指令拉取失败 → 显式不可用态（绝不空白）", async ({ page }) => {
+  test("2. 指令拉取失败 → 显式不可用态（绝不空白）", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    await waitForWorkerCatalog(request);
     // 在页面加载前拦截：任何 omo-agent-prompt 请求都回 500
     let hits = 0;
     await page.route("**/agents/omo-agent-prompt**", async (route) => {
@@ -130,6 +192,7 @@ test.describe("Todo 2 · 外部 Agent 只读展示", () => {
 
     await loginAsAdmin(page);
     await openExternalTab(page);
+    expect(await waitForExternalPanel(page), "外部 Agent 列表应在就绪窗口内可用").toBe(true);
 
     await expect(page.getByTestId("external-agent-item").first()).toBeVisible({ timeout: 20_000 });
     // 自动选中第一条即触发指令请求 → 失败分支必须显式可见

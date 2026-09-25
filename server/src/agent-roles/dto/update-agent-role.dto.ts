@@ -28,7 +28,8 @@ export class UpdateAgentRoleDto {
   name?: string;
 
   @ApiPropertyOptional({
-    description: 'machine-safe 唯一标识（仅 custom 可改；内置角色改 key → 403）',
+    description:
+      'machine-safe 唯一标识（仅 custom 可改；内置角色改 key → 403）',
     example: 'data-analyst',
   })
   @IsOptional()
@@ -80,7 +81,9 @@ export class UpdateAgentRoleDto {
   @IsObject()
   capabilities?: Record<string, boolean>;
 
-  @ApiPropertyOptional({ description: '角色指令（"这个岗位是什么"，可编辑文本）' })
+  @ApiPropertyOptional({
+    description: '角色指令（"这个岗位是什么"，可编辑文本）',
+  })
   @IsOptional()
   @IsString()
   rolePrompt?: string;

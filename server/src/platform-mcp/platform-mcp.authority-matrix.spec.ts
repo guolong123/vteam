@@ -24,9 +24,7 @@ import {
   isCapabilityGranted,
 } from '../common/constants/platform-capability.constants';
 import { BUILTIN_ROLE_CAPABILITY_MAPS } from '../common/constants/agent-role.constants';
-import {
-  PLATFORM_MCP_ERRORS,
-} from './platform-mcp.constants';
+import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
 import { PlatformMcpService } from './platform-mcp.service';
 import { PlatformToolPermissionService } from './platform-tool-permission.service';
 
@@ -95,27 +93,25 @@ function buildRealPermissionGate(
 } {
   const prisma = {
     teamMember: {
-      findUnique: jest.fn(
-        async ({ where }: { where: { id: string } }) => {
-          const agentKey = where.id.startsWith('tmm_')
-            ? where.id.slice('tmm_'.length)
-            : null;
-          if (!agentKey) {
-            return null;
-          }
-          const agent = `vteam-${agentKey}`;
-          if (!(agent in ROLE_BOUNDARIES)) {
-            return { role: null };
-          }
-          return {
-            role: {
-              id: `ar_${agentKey}`,
-              key: agentKey,
-              capabilities: overrides[agent] ?? builtinCapabilities(agent),
-            },
-          };
-        },
-      ),
+      findUnique: jest.fn(async ({ where }: { where: { id: string } }) => {
+        const agentKey = where.id.startsWith('tmm_')
+          ? where.id.slice('tmm_'.length)
+          : null;
+        if (!agentKey) {
+          return null;
+        }
+        const agent = `vteam-${agentKey}`;
+        if (!(agent in ROLE_BOUNDARIES)) {
+          return { role: null };
+        }
+        return {
+          role: {
+            id: `ar_${agentKey}`,
+            key: agentKey,
+            capabilities: overrides[agent] ?? builtinCapabilities(agent),
+          },
+        };
+      }),
     },
   };
   return {
@@ -155,7 +151,9 @@ async function evaluateMatrix(
       const decision = await decideCell(gate, agent, tool);
       const capabilityKey = capabilityKeyForTool(tool);
       const expected =
-        capabilityKey === null ? 'deny' : isCapabilityGranted(matrix, capabilityKey);
+        capabilityKey === null
+          ? 'deny'
+          : isCapabilityGranted(matrix, capabilityKey);
       cells.push({
         agent,
         tool,
@@ -381,7 +379,8 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       ).toBe('allow');
       // 未改岗位的角色不受影响。
       expect(
-        (await decideCell(edited.gate, 'vteam-architect', 'vteam_doclib')).action,
+        (await decideCell(edited.gate, 'vteam-architect', 'vteam_doclib'))
+          .action,
       ).toBe('allow');
     });
   });
@@ -389,7 +388,10 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
   describe('② 非主实例成功：真实服务层不再返回身份拒绝', () => {
     it('非主 task_create 触达 createByAgent（无 TASK_STATUS_MAIN_AGENT_ONLY）', async () => {
       allowWorkerAs(nonMainId);
-      tasksService.createByAgent.mockResolvedValue({ id: 't_new', teamId: 'tm_1' });
+      tasksService.createByAgent.mockResolvedValue({
+        id: 't_new',
+        teamId: 'tm_1',
+      });
 
       const result = await service.taskCreate(ctx, {
         taskId,
@@ -411,7 +413,9 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
         .mockResolvedValueOnce({
           ...taskRow({ status: 'pending', version: 1 }),
         })
-        .mockResolvedValue({ ...taskRow({ status: 'in_progress', version: 2 }) });
+        .mockResolvedValue({
+          ...taskRow({ status: 'in_progress', version: 2 }),
+        });
       prisma.team.findUnique.mockResolvedValue({
         id: 'tm_1',
         mainAgentMemberId: mainId,
@@ -426,7 +430,11 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
       });
       const tx = mockTransitionTx(prisma);
 
-      const result = await realTasks.transitionByAgent(taskId, nonMainId, 'start');
+      const result = await realTasks.transitionByAgent(
+        taskId,
+        nonMainId,
+        'start',
+      );
 
       expect(result.status).toBe('in_progress');
       expect(prisma.$transaction).toHaveBeenCalled();
@@ -466,7 +474,11 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
         selfInstanceId: mainId,
         action: 'start',
       });
-      steps.push({ step: 'task_transition.start', ok: !!started, result: started });
+      steps.push({
+        step: 'task_transition.start',
+        ok: !!started,
+        result: started,
+      });
 
       // 3) plan_complete
       planLifecycle.completePlan.mockResolvedValue({
@@ -499,7 +511,9 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
         result: pendingReview,
       });
 
-      writeEvidence({ mainHappyPath: { steps, allStepsOk: steps.every((s) => s.ok) } });
+      writeEvidence({
+        mainHappyPath: { steps, allStepsOk: steps.every((s) => s.ok) },
+      });
       expect(steps.every((s) => s.ok)).toBe(true);
       expect(steps.map((s) => s.step)).toEqual([
         'task_create',
@@ -513,15 +527,15 @@ describe('role×tool authority matrix (server-gate-removal-tool-authority todo 9
 
 /* ------------------------------------------------------------------ helpers */
 
-function taskRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function taskRow(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     id: 't_0000000001',
     title: '任务标题',
     description: null,
     priority: 'medium',
     status: 'pending',
-    mainAgentId: 'a_pm',
-    mainAgentInstanceId: 'tmm_main',
     managedMode: false,
     executionMode: 'direct',
     backgroundDocs: null,
@@ -599,7 +613,10 @@ function writeEvidence(patch: Record<string, unknown>): void {
   let base: Record<string, unknown> = {};
   if (fs.existsSync(EVIDENCE_FILE)) {
     try {
-      base = JSON.parse(fs.readFileSync(EVIDENCE_FILE, 'utf8')) as Record<string, unknown>;
+      base = JSON.parse(fs.readFileSync(EVIDENCE_FILE, 'utf8')) as Record<
+        string,
+        unknown
+      >;
     } catch {
       base = {};
     }
