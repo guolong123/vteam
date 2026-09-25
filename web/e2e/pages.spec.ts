@@ -1,5 +1,4 @@
-import { test, expect } from "@playwright/test";
-import { NAV_SHELL_TESTIDS, PAGE_SMOKE } from "./reference/testids";
+import { test, expect, type APIRequestContext } from "@playwright/test";
 
 /**
  * 18 页 data-testid 断言（Phase 5 T9 + C6）
@@ -9,41 +8,84 @@ import { NAV_SHELL_TESTIDS, PAGE_SMOKE } from "./reference/testids";
  * - 每页断言：root + 代表性 3-5 testid（PAGE_SMOKE）+ 数据行存在性（seed 数据事实）
  * - 条件渲染区块（skills 工具 Tab / tool-register 执行形态）按可达性分态断言
  * - 登录态：storageState（auth.setup.ts 真实表单登录 seed-admin）
+ *
+ * 页面 smoke fixture 每次从 seed 团队解析成员，创建一个临时团队和 pending 任务，
+ * 结束时通过 API 删除临时团队；不读取或复用旧运行遗留的 currentTaskId。
  */
-const PAGES_TEAM_ID = "tm_0000000001";
 
-async function ensurePagesTask(request: import("@playwright/test").APIRequestContext) {
+const SEED_TEAM_NAME = "vteam开发团队";
+const PAGES_TASK_TITLE = "e2e-BoardDrawer";
+let PAGES_TEAM_ID = "";
+let PAGES_TEAM_NAME = "";
+let PAGES_OWNER_MEMBER_ID = "";
+
+type SeedMember = { agentId: string; roleId?: string | null };
+type SeedTeam = { id: string; name: string; members?: SeedMember[] };
+type SeedTeamList = { items?: SeedTeam[] };
+
+async function seedAdminHeaders(request: APIRequestContext): Promise<{ Authorization: string }> {
   const login = await request.post("/api/v1/auth/login", {
     data: { username: "seed-admin", password: "Admin@123456" },
   });
   expect(login.ok()).toBeTruthy();
   const { accessToken } = (await login.json()) as { accessToken: string };
-  const headers = { Authorization: `Bearer ${accessToken}` };
-  const teamResponse = await request.get(`/api/v1/teams/${PAGES_TEAM_ID}`, { headers });
-  expect(teamResponse.ok()).toBeTruthy();
-  const team = (await teamResponse.json()) as { currentTaskId: string | null };
-  let taskId = team.currentTaskId;
-  if (!taskId) {
-    const created = await request.post("/api/v1/tasks", {
-      headers,
-      data: { teamId: PAGES_TEAM_ID, title: "e2e-BoardDrawer", priority: "medium" },
-    });
-    expect(created.status()).toBe(201);
-    taskId = ((await created.json()) as { id: string }).id;
-  }
-  const taskResponse = await request.get(`/api/v1/tasks/${taskId}`, { headers });
-  expect(taskResponse.ok()).toBeTruthy();
-  const task = (await taskResponse.json()) as { status: string };
-  if (task.status !== "in_progress") {
-    expect(task.status).toBe("pending");
-    const started = await request.post(`/api/v1/tasks/${taskId}/start`, { headers });
-    expect(started.ok()).toBeTruthy();
-  }
+  return { Authorization: `Bearer ${accessToken}` };
+}
+
+async function createPagesFixture(request: APIRequestContext): Promise<void> {
+  const headers = await seedAdminHeaders(request);
+  const teamsResponse = await request.get("/api/v1/teams?page=1&pageSize=100", { headers });
+  expect(teamsResponse.ok()).toBeTruthy();
+  const teams = (await teamsResponse.json()) as SeedTeamList;
+  const seedTeam = teams.items?.find((team) => team.name === SEED_TEAM_NAME);
+  expect(seedTeam).toBeDefined();
+  const members = seedTeam?.members ?? [];
+  expect(members).toHaveLength(7);
+
+  const teamResponse = await request.post("/api/v1/teams", {
+    headers,
+    data: {
+      name: `e2e-Pages-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      members: members.map((member) => ({
+        agentId: member.agentId,
+        ...(member.roleId ? { roleId: member.roleId } : {}),
+      })),
+    },
+  });
+  expect(teamResponse.status()).toBe(201);
+  const team = (await teamResponse.json()) as {
+    id?: string;
+    name?: string;
+    members?: Array<{ id?: string }>;
+  };
+  expect(team.id).toBeTruthy();
+  PAGES_TEAM_ID = team.id ?? "";
+  PAGES_TEAM_NAME = team.name ?? "";
+  PAGES_OWNER_MEMBER_ID = team.members?.[0]?.id ?? "";
+  expect(PAGES_OWNER_MEMBER_ID).toBeTruthy();
+
+  const taskResponse = await request.post("/api/v1/tasks", {
+    headers,
+    data: { teamId: PAGES_TEAM_ID, title: PAGES_TASK_TITLE, priority: "medium" },
+  });
+  expect(taskResponse.status()).toBe(201);
+  const task = (await taskResponse.json()) as { id?: string };
+  expect(task.id).toBeTruthy();
+}
+
+async function deletePagesFixture(request: APIRequestContext): Promise<void> {
+  if (!PAGES_TEAM_ID) return;
+  const headers = await seedAdminHeaders(request);
+  const response = await request.delete(`/api/v1/teams/${PAGES_TEAM_ID}`, { headers });
+  expect(response.ok()).toBeTruthy();
 }
 
 test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
   test.beforeAll(async ({ request }) => {
-    await ensurePagesTask(request);
+    await createPagesFixture(request);
+  });
+  test.afterAll(async ({ request }) => {
+    await deletePagesFixture(request);
   });
   /** 融合导航核心元素（nav-hybrid 终态心智：NavTopBar + NavDock + CmdKPanel） */
   const NAV_CORE = ["app-shell", "rail-bar", "topbar", "cmdk-trigger"];
@@ -63,8 +105,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("create-team-button")).toBeVisible();
   });
 
-  test("3/17 task-create /tasks/new?teamId=tm_0000000001（团队预选，直出 Agent 选项）", async ({ page }) => {
-    await page.goto("/tasks/new?teamId=tm_0000000001");
+  test("3/17 task-create /tasks/new（团队预选，直出 Agent 选项）", async ({ page }) => {
+    await page.goto(`/tasks/new?teamId=${PAGES_TEAM_ID}`);
     await expectNavShell(page);
     await expect(page.getByTestId("task-create-root")).toBeVisible();
     await expect(page.getByTestId("task-title")).toBeVisible();
@@ -74,8 +116,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("create-task-button")).toBeVisible();
   });
 
-  test("4/17 task-board /board?teamId=tm_0000000001", async ({ page }) => {
-    await page.goto("/board?teamId=tm_0000000001");
+  test("4/17 task-board /board（团队任务看板）", async ({ page }) => {
+    await page.goto(`/board?teamId=${PAGES_TEAM_ID}`);
     await expectNavShell(page);
     await expect(page.getByTestId("task-board-root")).toBeVisible();
     await expect(page.getByTestId("status-filter")).toBeVisible();
@@ -86,7 +128,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
   test("4b/17 board-drawer 看板卡片开抽屉不进聊天", async ({ page, request }) => {
     // 空库时自建一个看板任务夹具（Bearer 同 7/17 原因）
     const cards = page.getByTestId("task-card");
-    await page.goto("/board?teamId=tm_0000000001");
+    await page.goto(`/board?teamId=${PAGES_TEAM_ID}`);
     await expectNavShell(page);
     if ((await cards.count()) === 0) {
       const login = await request.post("/api/v1/auth/login", {
@@ -95,7 +137,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       const { accessToken } = await login.json();
       await request.post("/api/v1/tasks", {
         headers: { Authorization: `Bearer ${accessToken}` },
-        data: { teamId: "tm_0000000001", title: "e2e-BoardDrawer", priority: "medium" },
+        data: { teamId: PAGES_TEAM_ID, title: PAGES_TASK_TITLE, priority: "medium" },
       });
       await page.reload();
     }
@@ -119,8 +161,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("persona-select").first()).toBeEnabled();
   });
 
-  test("7b/17 team-session /teams/tm_0000000001/session（团队唯一聊天入口）", async ({ page }) => {
-    await page.goto("/teams/tm_0000000001/session");
+  test("7b/17 team-session /teams/<resolved>/session（团队唯一聊天入口）", async ({ page }) => {
+    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
     await expectNavShell(page);
     await expect(page.getByTestId("team-session-root")).toBeVisible();
     await expect(page.getByTestId("members-panel")).toBeVisible();
@@ -168,15 +210,13 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     const { accessToken } = await login.json();
     const headers = { Authorization: `Bearer ${accessToken}` };
     // 全新零任务团队（创建者即 owner；后端建团队即建 team_group 频道，即完整直聊路径；
-    // 不复用种子 tm_0000000002：其建于频道自动创建之前，无频道只会进 team-session-empty）
-    let agentId = "a_product";
-    let roleId: string | undefined;
-    const seed = await request.get("/api/v1/teams/tm_0000000001", { headers });
-    if (seed.ok()) {
-      const members = (((await seed.json()) as { members: { agentId: string; roleId?: string }[] }).members ?? []);
-      if (members[0]?.agentId) agentId = members[0].agentId;
-      if (members[0]?.roleId) roleId = members[0].roleId;
-    }
+    let agentId = "";
+    const seed = await request.get(`/api/v1/teams/${PAGES_TEAM_ID}`, { headers });
+    expect(seed.ok()).toBeTruthy();
+    const members = (((await seed.json()) as { members: { agentId: string; roleId?: string }[] }).members ?? []);
+    agentId = members[0]?.agentId ?? "";
+    const roleId = members[0]?.roleId;
+    expect(agentId).toBeTruthy();
     const created = await request.post("/api/v1/teams", {
       headers,
       data: { name: `e2e-ZeroTask-${Date.now()}`, members: [{ agentId, ...(roleId ? { roleId } : {}) }] },
@@ -291,10 +331,10 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("mcp-tool-item").first()).toBeVisible();
   });
 
-  test("13/17 task-detail /artifacts?teamId=tm_0000000001 → /docs 重定向（路由收敛 T10）", async ({ page }) => {
-    await page.goto("/artifacts?teamId=tm_0000000001&type=text");
+  test("13/17 task-detail /artifacts（团队文档路由收敛 T10）", async ({ page }) => {
+    await page.goto(`/artifacts?teamId=${PAGES_TEAM_ID}&type=text`);
     // 瘦重定向页：全量透传 searchParams，落地 /docs 且参数保留
-    await expect(page).toHaveURL(/\/docs\?.*teamId=tm_0000000001/);
+    await expect(page).toHaveURL(new RegExp(`/docs\\?.*teamId=${PAGES_TEAM_ID}`));
     await expect(page).toHaveURL(/type=text/);
     await expectNavShell(page);
     // 统一文档站渲染：teamId 生效（团队选择器不出现，直出筛选栏 + 文档树）
@@ -434,7 +474,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
 
   test("T24 有任务主 Tab + 子页状态保留（站内进入会话页）", async ({ page }) => {
     const panel = page.getByTestId("task-panel");
-    await page.goto("/teams/tm_0000000001");
+    await page.goto(`/teams/${PAGES_TEAM_ID}`);
     await expectNavShell(page);
     await page.getByTestId("enter-team-session").first().click();
     await expect(page).toHaveURL(/\/session/);
@@ -461,13 +501,13 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
   });
 
   test("T24 状态卡三层 + 队列空态（团队当前任务）", async ({ page, request }) => {
-    await page.route("**/api/v1/teams/tm_0000000001", async (r) => {
+    await page.route(`**/api/v1/teams/${PAGES_TEAM_ID}`, async (r) => {
       const res = await r.fetch();
       const json = await res.json();
       json.queue = [];
       await r.fulfill({ response: res, json });
     });
-    await page.goto("/teams/tm_0000000001/session");
+    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
     await expectNavShell(page);
     const scroll = page.getByTestId("task-subtab-scroll");
     await page.getByTestId("task-panel").getByRole("button", { name: "任务", exact: true }).click();
@@ -478,7 +518,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     const { accessToken } = await login.json();
     // 面板展示的是团队「当前任务」（队首随业务推进变化）→ 从团队接口取，不写死任务 id，
     // 否则任务一被验收/推进，断言就会打在一个已不是队首的任务上而失败。
-    const teamRes = await request.get("/api/v1/teams/tm_0000000001", {
+    const teamRes = await request.get(`/api/v1/teams/${PAGES_TEAM_ID}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const teamJson = await teamRes.json();
@@ -532,7 +572,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       }),
     );
     const panel = page.getByTestId("task-panel");
-    await page.goto("/teams/tm_0000000001/session");
+    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
     await panel.getByTestId("task-subtab-triggers").click();
@@ -562,8 +602,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
               dueAt: dueIso,
               nextFireAt: null,
               scopeType: "team",
-              scopeId: "tm_0000000001",
-              ownerInstanceId: "tmm_0000000002",
+              scopeId: PAGES_TEAM_ID,
+              ownerInstanceId: PAGES_OWNER_MEMBER_ID,
               fireCount: 0,
               skipReason: null,
               lastError: null,
@@ -572,8 +612,8 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
               source: "system",
               display: {
                 description: "完工回执（第 4 次派发）",
-                scopeLabel: "vteam开发团队",
-                scopeTeam: "vteam开发团队",
+                scopeLabel: PAGES_TEAM_NAME,
+                scopeTeam: PAGES_TEAM_NAME,
                 ownerLabel: "项目经理-1",
                 taskLabel: "e2e-BoardDrawer",
               },
@@ -586,7 +626,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       }),
     );
     const panel = page.getByTestId("task-panel");
-    await page.goto("/teams/tm_0000000001/session");
+    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await panel.getByTestId("task-subtab-triggers").click();
     const row = page.getByTestId("trigger-row").first();
@@ -609,7 +649,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(detail.getByTestId("trigger-detail-status")).toHaveText("待触发");
     await expect(detail.getByTestId("trigger-detail-body")).toContainText("催办");
     await expect(detail.getByTestId("trigger-detail-body")).toContainText("系统");
-    await expect(detail.getByTestId("trigger-detail-body")).toContainText("vteam开发团队");
+    await expect(detail.getByTestId("trigger-detail-body")).toContainText(PAGES_TEAM_NAME);
     await expect(detail.getByTestId("trigger-detail-body")).toContainText("项目经理-1");
     await expect(detail.getByTestId("trigger-detail-body")).toContainText("0 次");
     await expect(detail.getByTestId("trigger-detail-body")).toContainText("tmr_p1");
@@ -673,7 +713,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       }),
     );
     const panel = page.getByTestId("task-panel");
-    await page.goto("/teams/tm_0000000001/session");
+    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
     await panel.getByRole("button", { name: "计划" }).click();
@@ -705,7 +745,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(artModal).toContainText("e2e计划产出");
     await expect(artModal.getByTestId("artifact-doc-modal-version")).toHaveText("v3");
     await expect(artModal.locator("h1")).toHaveText("artifact md");
-    expect(new URL(page.url()).pathname).toBe("/teams/tm_0000000001/session");
+    expect(new URL(page.url()).pathname).toBe(`/teams/${PAGES_TEAM_ID}/session`);
     await artModal.getByTestId("artifact-doc-modal-close").click();
     await expect(artModal).toHaveCount(0);
   });
@@ -726,7 +766,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       }),
     );
     const panel = page.getByTestId("task-panel");
-    await page.goto("/teams/tm_0000000001/session");
+    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await expect(page.getByTestId("task-subtab-scroll")).toBeVisible();
     await panel.getByRole("button", { name: "计划" }).click();
@@ -756,7 +796,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     });
     const panel = page.getByTestId("task-panel");
     const scroll = page.getByTestId("task-subtab-scroll");
-    await page.goto("/teams/tm_0000000001/session");
+    await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
     await panel.getByRole("button", { name: "任务", exact: true }).click();
     await expect(scroll).toBeVisible();
     await panel.getByRole("button", { name: "产出" }).click();

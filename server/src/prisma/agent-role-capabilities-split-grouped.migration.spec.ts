@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  BUILTIN_AGENT_ROLES,
   BUILTIN_ROLE_CAPABILITY_MAPS,
   EXTERNAL_AGENT_ROLE_CAPABILITIES,
   EXTERNAL_AGENT_ROLE_KEYS,
@@ -11,217 +12,157 @@ import {
 } from '../common/constants/platform-capability.constants';
 
 /**
- * 迁移契约：`20260921000009_split_grouped_capabilities`（组能力点拆分，选项 (b)）。
+ * Current-schema contract for historical migration
+ * `20260921000009_split_grouped_capabilities`.
  *
- * 背景：能力目录 21 → 27 点——`issue.manage` 拆 5 点、`memory.manage` 拆 3 点，
- * 消除「全部成员工具放行才 true」派生在岗位只放行组内部分工具时的组塌缩
- * （architect/tester × issue、plan/librarian × memory 共 4 格）。`hook.manage`
- * 保持成组（27 点覆盖 28 工具，恰一项覆盖 2 工具）。
- *
- * 关键证明（与 000007/000008 契约同形状，逐字面量锁 TS 常量）：
- *   1. 恰 11 条 UPDATE = 7 内置岗 + 外部 3 岗 + ar_general，每字面量恰 27 键
- *      且不含 `issue.manage`/`memory.manage`；
- *   2. 7 内置岗字面量逐键 ≡ `BUILTIN_ROLE_CAPABILITY_MAPS`（SQL↔TS 单一来源防漂移）；
- *   3. 外部 3 岗字面量逐键 ≡ `EXTERNAL_AGENT_ROLE_CAPABILITIES`（8 true / 19 false，
- *      最小权限不放宽）；`ar_general` 字面量 ≡ `buildFactoryCapabilityMatrix()`
- *      （14 allow / 14 deny）；
- *   4. `project_manager` 字面量 = 全 27 点 true（显式覆盖，不按边界派生）；
- *   5. 四个原组塌缩格在字面量中已打开：architect issue.create/get/list=true、
- *      tester issue.create/get/list/transition=true、plan/librarian memory.search=true，
- *      且写侧兄弟格（issue.update/transition、memory.save/update）保持按边界 false；
- *   6. 范围守卫：内置行 type='builtin' AND key=单值；外部/general 行 key=单值
- *      （key 全表唯一）；无 `key` IN ( 批量守卫；
- *   7. 不使用 JSON_SET/JSON_REMOVE/JSON_OBJECT（不存在路径返回 NULL 置空整列的陷阱
- *      在整列 CAST 字面量覆盖下不适用），写入值恒非 NULL；
- *   8. 幂等：SET 右值为常量字面量、不引用列自身，重跑零变化。
- * 真库 fresh/upgrade 双路径演练记录在 notepad（scratch DB 证明）。
+ * The archived migration carried eleven literal UPDATEs.  A squashed baseline
+ * cannot retain those one-off statements, but it must retain the resulting
+ * schema and the current matrix source must retain the post-split semantics.
+ * These tests therefore assert the final 28-key matrices, including the cells
+ * that the old grouped keys used to collapse.
  */
-const MIGRATION = path.resolve(
+
+const BASELINE = path.resolve(
   __dirname,
   '..',
   '..',
   'prisma',
   'migrations',
-  '20260921000009_split_grouped_capabilities',
+  '20260925000000_squashed_baseline',
   'migration.sql',
 );
 
-const BUILTIN_KEYS = [
-  'product',
-  'project_manager',
-  'architect',
-  'developer',
-  'tester',
-  'plan',
-  'librarian',
-] as const;
-
+const BUILTIN_KEYS = BUILTIN_AGENT_ROLES.map((role) => role.key);
 const RETIRED_KEYS = ['issue.manage', 'memory.manage'] as const;
 
-interface UpdateRow {
-  literal: Record<string, boolean>;
-  /** WHERE 子句原文（守卫断言用）。 */
-  where: string;
-}
-
-/** 逐条提取「整列 CAST 字面量 + WHERE 守卫」（11 条：7 内置 + 3 外部 + general）。 */
-function extractUpdates(sql: string): UpdateRow[] {
-  const re =
-    /SET `capabilities` = CAST\('(\{[^']+\})' AS JSON\)\s+WHERE([^;]+);/g;
-  const out: UpdateRow[] = [];
-  for (const m of sql.matchAll(re)) {
-    out.push({
-      literal: JSON.parse(m[1] as string),
-      where: (m[2] as string).trim(),
-    });
-  }
-  return out;
-}
-
-function builtinWhere(key: string): string {
-  return `\`type\` = 'builtin'\n   AND \`key\` = '${key}'`;
-}
-
-describe('20260921000009 拆分组能力点（迁移契约）', () => {
-  const sql = fs.readFileSync(MIGRATION, 'utf8');
-  const executable = sql
+function executableSql(sql: string): string {
+  return sql
     .split('\n')
-    .filter((l) => !l.trimStart().startsWith('--'))
-    .join('\n');
-  const rows = extractUpdates(executable);
-
-  it('头注释声明 拆分/组塌缩/27 点/hook.manage 成组/JSON_SET 陷阱/外部岗最小矩阵/单向迁移/单一来源常量', () => {
-    for (const marker of [
-      '拆分',
-      '组塌缩',
-      '27',
-      'hook.manage',
-      'JSON_SET',
-      '外部 3 岗',
-      '单向迁移',
-      'BUILTIN_ROLE_CAPABILITY_MAPS',
-      'EXTERNAL_AGENT_ROLE_CAPABILITIES',
-    ]) {
-      expect(sql).toContain(marker);
-    }
-  });
-
-  it('恰 11 条 UPDATE；右值为 CAST 字面量（不引用列自身 ⇒ 幂等）；无 JSON_SET/JSON_REMOVE/JSON_OBJECT', () => {
-    expect(executable.match(/SET `capabilities` =/g) ?? []).toHaveLength(11);
-    expect(executable).not.toMatch(/JSON_SET|JSON_REMOVE|JSON_OBJECT/);
-    expect(rows).toHaveLength(11);
-  });
-
-  it('每条字面量恰 28 键（= 目录键全集），且不含已拆分的组键 issue.manage/memory.manage', () => {
-    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(28);
-    for (const { literal } of rows) {
-      expect(Object.keys(literal)).toEqual([...PLATFORM_CAPABILITY_KEYS]);
-      for (const retired of RETIRED_KEYS) {
-        expect(Object.keys(literal)).not.toContain(retired);
-      }
-      for (const value of Object.values(literal)) {
-        expect(typeof value).toBe('boolean');
-      }
-    }
-  });
-
-  it('7 内置岗字面量逐键 ≡ BUILTIN_ROLE_CAPABILITY_MAPS（键序 = 目录序，SQL↔TS 单一来源防漂移）', () => {
-    const builtins = rows.filter((r) =>
-      r.where.includes(`\`type\` = 'builtin'`),
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .replace(/\s+CHARACTER SET\s+\S+\s+COLLATE\s+\S+/gi, '')
+    .replace(/\bDEFAULT NULL\b/gi, 'NULL')
+    .replace(/\bUNIQUE KEY\b/gi, 'UNIQUE INDEX')
+    .replace(/^(\s*)KEY\s+/gim, '$1INDEX ')
+    .replace(/(INDEX\s+`[^`]+`)\s+\(/g, '$1(')
+    .replace(/REFERENCES\s+(`[^`]+`)\s+\(/g, 'REFERENCES $1(')
+    .replace(/\b(varchar|text|json|datetime|tinyint|int|bigint)\b/gi, (type) =>
+      type.toUpperCase(),
     );
-    expect(builtins).toHaveLength(7);
-    const keys = builtins.map((r) => {
-      const m = r.where.match(/AND `key` = '([a-z_]+)'/);
-      expect(m).not.toBeNull();
-      return m?.[1] as string;
-    });
-    expect(keys).toEqual([...BUILTIN_KEYS]);
-    for (const key of keys) {
-      expect(rows.find((r) => r.where.includes(`'${key}'`))?.literal).toEqual(
-        BUILTIN_ROLE_CAPABILITY_MAPS[key],
-      );
+}
+
+function tableDefinition(sql: string, table: string): string {
+  const start = sql.indexOf(`CREATE TABLE \`${table}\``);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = sql.indexOf('\n) ', start);
+  expect(end).toBeGreaterThan(start);
+  return sql.slice(start, end);
+}
+
+function expectBooleanCatalog(matrix: Readonly<Record<string, boolean>>): void {
+  expect(Object.keys(matrix)).toEqual([...PLATFORM_CAPABILITY_KEYS]);
+  for (const retired of RETIRED_KEYS) {
+    expect(Object.keys(matrix)).not.toContain(retired);
+  }
+  expect(
+    Object.values(matrix).every((value) => typeof value === 'boolean'),
+  ).toBe(true);
+}
+
+describe('agent capability split current-schema contract (historical 20260921000009)', () => {
+  const sql = fs.readFileSync(BASELINE, 'utf8');
+  const executable = executableSql(sql);
+  const roles = tableDefinition(executable, 'agent_roles');
+
+  it('baseline retains the split-era schema and squash audit header', () => {
+    expect(sql).toContain('由原有 81 个 Prisma 迁移压缩而来');
+    expect(sql).toContain('legacy-migrations/');
+    expect(roles).toMatch(/`capabilities`\s+JSON NULL/);
+  });
+
+  it('the current capability catalog is the complete 28-key post-split catalog', () => {
+    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(28);
+    expect(new Set(PLATFORM_CAPABILITY_KEYS).size).toBe(28);
+    for (const retired of RETIRED_KEYS) {
+      expect(PLATFORM_CAPABILITY_KEYS).not.toContain(retired);
     }
   });
 
-  it('project_manager 字面量 = 全 28 点 true（显式覆盖，不按边界派生）', () => {
-    const pm = rows.find((r) => r.where.includes(`'project_manager'`));
-    expect(pm).toBeDefined();
-    expect(Object.keys(pm!.literal)).toHaveLength(28);
-    expect(Object.values(pm!.literal).every((v) => v === true)).toBe(true);
+  it('all seven builtin matrices have the complete catalog and boolean values', () => {
+    expect(Object.keys(BUILTIN_ROLE_CAPABILITY_MAPS)).toEqual(BUILTIN_KEYS);
+    for (const key of BUILTIN_KEYS) {
+      expectBooleanCatalog(BUILTIN_ROLE_CAPABILITY_MAPS[key]);
+    }
   });
 
-  it('外部 3 岗字面量逐键 ≡ EXTERNAL_AGENT_ROLE_CAPABILITIES（8 true / 20 false，最小权限不放宽）', () => {
+  it('project_manager remains explicitly fully authorized', () => {
+    const matrix = BUILTIN_ROLE_CAPABILITY_MAPS.project_manager;
+    expect(Object.keys(matrix)).toHaveLength(28);
+    expect(Object.values(matrix).every((value) => value === true)).toBe(true);
+  });
+
+  it('external roles retain the explicit least-privilege matrix', () => {
     expect(
-      Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v === true),
+      Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((value) => value),
     ).toHaveLength(8);
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(
-        (v) => v === false,
+        (value) => value === false,
       ),
     ).toHaveLength(20);
+    expectBooleanCatalog(EXTERNAL_AGENT_ROLE_CAPABILITIES);
+    expect(EXTERNAL_AGENT_ROLE_KEYS).toEqual([
+      'sisyphus',
+      'prometheus',
+      'atlas',
+    ]);
     for (const key of EXTERNAL_AGENT_ROLE_KEYS) {
-      const row = rows.find((r) => r.where.includes(`\`key\` = '${key}'`));
-      expect(row).toBeDefined();
-      expect(row!.literal).toEqual(EXTERNAL_AGENT_ROLE_CAPABILITIES);
-      expect(row!.where).not.toContain('type');
+      expect(BUILTIN_ROLE_CAPABILITY_MAPS[key]).toBeUndefined();
     }
   });
 
-  it('ar_general 字面量 ≡ 出厂矩阵（14 allow / 14 deny）', () => {
+  it('ar_general-equivalent factory matrix remains balanced at 14 allow and 14 deny', () => {
     const factory = buildFactoryCapabilityMatrix();
-    expect(Object.values(factory).filter((v) => v === true)).toHaveLength(14);
-    expect(Object.values(factory).filter((v) => v === false)).toHaveLength(14);
-    const general = rows.find((r) => r.where.includes(`\`key\` = 'general'`));
-    expect(general).toBeDefined();
-    expect(general!.literal).toEqual(factory);
+    expect(
+      Object.values(factory).filter((value) => value === true),
+    ).toHaveLength(14);
+    expect(
+      Object.values(factory).filter((value) => value === false),
+    ).toHaveLength(14);
+    expectBooleanCatalog(factory);
   });
 
-  it('四个原组塌缩格已打开，且写侧兄弟格保持按边界 false', () => {
-    const literalOf = (key: string): Record<string, boolean> => {
-      const row = rows.find((r) => r.where.includes(`'${key}'`));
-      expect(row).toBeDefined();
-      return row!.literal;
-    };
-    const architect = literalOf('architect');
-    for (const k of ['issue.create', 'issue.get', 'issue.list']) {
-      expect(`${k}=${architect[k]}`).toBe(`${k}=true`);
+  it('the four formerly collapsed issue/memory cells are open with write-side siblings still denied', () => {
+    const architect = BUILTIN_ROLE_CAPABILITY_MAPS.architect;
+    for (const key of ['issue.create', 'issue.get', 'issue.list']) {
+      expect(architect[key]).toBe(true);
     }
-    for (const k of ['issue.update', 'issue.transition']) {
-      expect(`${k}=${architect[k]}`).toBe(`${k}=false`);
+    for (const key of ['issue.update', 'issue.transition']) {
+      expect(architect[key]).toBe(false);
     }
-    const tester = literalOf('tester');
-    for (const k of [
+
+    const tester = BUILTIN_ROLE_CAPABILITY_MAPS.tester;
+    for (const key of [
       'issue.create',
       'issue.get',
       'issue.list',
       'issue.transition',
     ]) {
-      expect(`${k}=${tester[k]}`).toBe(`${k}=true`);
+      expect(tester[key]).toBe(true);
     }
-    expect(`issue.update=${tester['issue.update']}`).toBe('issue.update=false');
+    expect(tester['issue.update']).toBe(false);
+
     for (const roleKey of ['plan', 'librarian']) {
-      const role = literalOf(roleKey);
-      expect(`memory.search=${role['memory.search']}`).toBe(
-        'memory.search=true',
-      );
-      expect(`memory.save=${role['memory.save']}`).toBe('memory.save=false');
-      expect(`memory.update=${role['memory.update']}`).toBe(
-        'memory.update=false',
-      );
+      const role = BUILTIN_ROLE_CAPABILITY_MAPS[roleKey];
+      expect(role['memory.search']).toBe(true);
+      expect(role['memory.save']).toBe(false);
+      expect(role['memory.update']).toBe(false);
     }
   });
 
-  it('范围守卫：内置行 type=builtin AND key=单值；外部/general 行 key=单值；无 key IN ( 批量守卫', () => {
-    for (const key of BUILTIN_KEYS) {
-      expect(executable).toContain(builtinWhere(key));
-    }
-    for (const key of [...EXTERNAL_AGENT_ROLE_KEYS, 'general']) {
-      expect(executable).toContain(`WHERE \`key\` = '${key}';`);
-    }
-    expect(executable).not.toContain('`key` IN (');
-    // 外部/general 守卫不含 type 条件（key 全表唯一即可单行命中）。
-    const nonBuiltins = rows.filter((r) => !r.where.includes('type'));
-    expect(nonBuiltins).toHaveLength(4);
-    expect(rows.filter((r) => r.where.includes('type'))).toHaveLength(7);
+  it('baseline has no retired grouped-key literals or one-off capability DML', () => {
+    expect(executable).not.toMatch(/issue\.manage|memory\.manage/);
+    expect(executable).not.toMatch(/^\s*(UPDATE|INSERT|DELETE)\s/m);
+    expect(executable).not.toMatch(/JSON_(SET|REMOVE|OBJECT)\(/);
   });
 });

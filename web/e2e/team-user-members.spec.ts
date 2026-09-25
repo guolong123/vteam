@@ -25,12 +25,15 @@ test.describe("team-user-members 团队用户成员管理", () => {
     const targetUserId = target.id as string;
 
     // 新建临时团队（创建者即 owner；成员至少 1 个 Agent 实例以满足建团队约束）
-    let agentId = "a_product";
-    const seed = await request.get("/api/v1/teams/tm_0000000001", { headers });
-    if (seed.ok()) {
-      const members = (((await seed.json()) as { members: { agentId: string; roleId?: string }[] }).members ?? []);
-      if (members[0]?.agentId) agentId = members[0].agentId;
-    }
+    const teamsResponse = await request.get("/api/v1/teams?name=vteam开发团队&pageSize=100", { headers });
+    expect(teamsResponse.ok()).toBeTruthy();
+    const teams = ((await teamsResponse.json()) as {
+      items: { id: string; members?: { agentId: string }[] }[];
+    }).items ?? [];
+    const seedTeam = teams[0];
+    expect(seedTeam).toBeTruthy();
+    const agentId = seedTeam?.members?.[0]?.agentId;
+    expect(agentId).toBeTruthy();
     // roleId became mandatory in the team-member API; resolve the matching live role
     // instead of coupling this fixture to a seed id.
     const rolesResponse = await request.get("/api/v1/agent-roles?pageSize=100", { headers });

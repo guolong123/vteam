@@ -18,7 +18,7 @@ import {
  *      槽位（平台不再要求再选一个内部执行 Agent）→ 直接 role-only 提交成功，成员落库
  *      `agentId === 平台占位系统 Agent a_external` 且 `opencodeAgentName === 外部名`（规则 5）；
  *      reload 后新增成员行仍可见、API 回读逐字段一致。
- *  (c) 会话页 `/teams/tm_0000000001/session` 仍零 `<select>`、零 `message-agent-select`
+ *  (c) 会话页 `/teams/<resolved>/session` 仍零 `<select>`、零 `message-agent-select`
  *      （no-agent-picker 的会话页保证不破）。
  *
  * 一次性 team/role 全部在 finally 里 DELETE（先 team 后 role，防角色 in-use 409）；
@@ -27,7 +27,7 @@ import {
  */
 
 const SERVER_URL = "http://localhost:13000";
-const SEED_TEAM_ID = "tm_0000000001";
+const SEED_TEAM_NAME = "vteam开发团队";
 const RUN_TAG = `t14-${Date.now().toString(36)}`;
 /** 任务要求举例的外部引擎名；实时清单里存在则用精确名，否则取首个可选项。 */
 const EXTERNAL_PREFERRED = "Prometheus - Plan Builder";
@@ -107,6 +107,20 @@ async function getTeam(
   return (await res.json()) as TeamDto;
 }
 
+async function resolveSeedTeamId(
+  request: APIRequestContext,
+  token: string,
+): Promise<string> {
+  const response = await request.get(`${SERVER_URL}/api/v1/teams?page=1&pageSize=100`, {
+    headers: authHeaders(token),
+  });
+  expect(response.ok()).toBeTruthy();
+  const payload = (await response.json()) as { items?: Array<{ id: string; name: string }> };
+  const seedTeam = payload.items?.find((team) => team.name === SEED_TEAM_NAME);
+  expect(seedTeam).toBeDefined();
+  return seedTeam?.id ?? "";
+}
+
 async function createRole(
   request: APIRequestContext,
   token: string,
@@ -131,11 +145,11 @@ async function engineExternal(
   token: string,
 ): Promise<{ names: string[]; degraded: boolean }> {
   let last = { names: [] as string[], degraded: true };
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
       const res = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
         headers: authHeaders(token),
-        timeout: 2_000,
+        timeout: 5_000,
       });
       if (res.ok()) {
         const body = (await res.json()) as {
@@ -154,7 +168,7 @@ async function engineExternal(
       last = { names: [], degraded: true };
     }
     if (!last.degraded && last.names.length > 0) return last;
-    if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1_000));
+    if (attempt < 29) await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   return last;
 }
@@ -263,13 +277,11 @@ test.describe("task-14 · role-first member add", () => {
     page,
     request,
   }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(240_000);
     const token = await adminToken(request);
     const { names, degraded } = await engineExternal(request, token);
-    test.skip(
-      degraded || names.length === 0,
-      `GET /agents/opencode 不可用（degraded=${degraded}，外部条目=${names.length}）——无外部 Agent 可测`,
-    );
+    expect(degraded, "worker catalog 在 readiness 窗口内应可用").toBe(false);
+    expect(names.length, "worker catalog 应包含外部 Agent").toBeGreaterThan(0);
     const externalName = names.includes(EXTERNAL_PREFERRED)
       ? EXTERNAL_PREFERRED
       : names[0];
@@ -373,9 +385,11 @@ test.describe("task-14 · role-first member add", () => {
     }
   });
 
-  test("(c) 会话页仍零 <select>、零 message-agent-select", async ({ page }) => {
+  test("(c) 会话页仍零 <select>、零 message-agent-select", async ({ page, request }) => {
     await loginAsAdmin(page);
-    await page.goto(`/teams/${SEED_TEAM_ID}/session`);
+    const token = await adminToken(request);
+    const seedTeamId = await resolveSeedTeamId(request, token);
+    await page.goto(`/teams/${seedTeamId}/session`);
     await expect(page.getByTestId("team-session-root")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId("message-agent-select")).toHaveCount(0);
     await expect(page.getByTestId("member-external-agent-select")).toHaveCount(0);

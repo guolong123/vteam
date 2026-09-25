@@ -84,8 +84,10 @@ export default defineConfig({
     },
     {
       // 依赖活引擎 Agent 清单的 spec 必须在上面那批之后跑：等 worker 的重启窗口过去再取清单。
-      // workers=1 时 Playwright 按声明顺序执行项目，所以顺序本身就是这里的隔离手段。
+      // workers=1 时 Playwright 按声明顺序执行项目；显式 dependency 也固定了
+      // self-login teardown 的 policy-storm barrier 必须先完成。
       name: "engine-dependent",
+      dependencies: ["self-login"],
       testMatch: [
         /dark-mode-role-warning\.spec\.ts/,
         /roles-members\.spec\.ts/,

@@ -112,17 +112,17 @@ async function openRolesTab(page: Page) {
   await expect(page.getByTestId("agent-role-root")).toBeVisible({ timeout: 15_000 });
 }
 
-/** 引擎实时外部清单（!governed && !hidden），非硬编码；degraded/空 → 调用方 skip。 */
+/** 引擎实时外部清单（!governed && !hidden），非硬编码；持续不可用时由测试硬失败。 */
 async function engineExternal(
   request: APIRequestContext,
   token: string,
 ): Promise<{ names: string[]; degraded: boolean }> {
   let last = { names: [] as string[], degraded: true };
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
     try {
       const res = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
         headers: authHeaders(token),
-        timeout: 2_000,
+        timeout: 5_000,
       });
       if (res.ok()) {
         const body = (await res.json()) as {
@@ -139,7 +139,7 @@ async function engineExternal(
       last = { names: [], degraded: true };
     }
     if (!last.degraded && last.names.length > 0) return last;
-    if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1_000));
+    if (attempt < 29) await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   return last;
 }
@@ -341,13 +341,11 @@ test.describe("Todo 7 · 角色 Tab 与成员⇄角色", () => {
     page,
     request,
   }) => {
-    test.setTimeout(120_000);
+    test.setTimeout(240_000);
     const token = await adminToken(request);
     const { names, degraded } = await engineExternal(request, token);
-    test.skip(
-      degraded || names.length === 0,
-      `GET /agents/opencode 不可用（degraded=${degraded}，外部条目=${names.length}）——无外部 Agent 可测`,
-    );
+    expect(degraded, "worker catalog 在 readiness 窗口内应可用").toBe(false);
+    expect(names.length, "worker catalog 应包含外部 Agent").toBeGreaterThan(0);
     const externalName = names[0];
     const roleKey = `qa-t7-ext-${RUN_TAG}`;
 

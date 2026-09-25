@@ -5,17 +5,23 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
  * =============================================
  * 1. 页面加载性能：performance.timing（domContentLoaded / load），dev 模式采样记录
  * 2. 群聊 SSE 计时：SSE 建立 → POST 无 @ 消息 → chat.message.new 到达（中位数，零模型调用）
- * 3. 首字（1 次真实 opencode 调用）：@a_product → 轮询 trigger-results 精确关联回复
+ * 3. 首字（1 次真实 opencode 调用）：@product Agent → 轮询 trigger-results 精确关联回复
  * 阈值对齐 T8：groupChat 通过线 1000ms；firstToken 记录目标线 15000ms（不阻断），
  * 硬门限与本页真实模型调用轮询的 90s timeout 对齐
  * 环境：web 3001（/api/v1 rewrites → server 3000）+ storageState（seed-admin）
  */
-const TEAM_ID = "tm_0000000001";
-const AGENT_ID = "a_product";
+const SERVER_URL = "http://localhost:13000";
+const SEED_TEAM_NAME = "vteam开发团队";
 const FIRST_TOKEN_TARGET_MS = 15_000;
 const FIRST_TOKEN_HARD_GATE_MS = 90_000;
+let TEAM_ID = "";
+let AGENT_ID = "";
+let TASK_ID = "";
 
-type PerfTeam = { currentTaskId: string | null };
+type SeedMember = { agentId: string; roleId?: string | null };
+type SeedTeam = { id: string; name: string; members?: SeedMember[] };
+type SeedTeamList = { items?: SeedTeam[] };
+type AgentList = { items?: Array<{ id: string; agentKey?: string | null }> };
 type PerfChannel = {
   id: string;
   type: string;
@@ -28,6 +34,91 @@ type PerfContext = { taskId: string; channelId: string };
 
 function authHeaders(token: string) {
   return { Authorization: `Bearer ${token}` };
+}
+
+async function waitForWorkerReady(
+  request: APIRequestContext,
+  token: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 45; attempt += 1) {
+    try {
+      const response = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
+        headers: authHeaders(token),
+        timeout: 5_000,
+      });
+      if (response.ok()) {
+        const body = (await response.json()) as {
+          agents?: unknown[];
+          degraded?: boolean;
+        };
+        if (body.degraded !== true && (body.agents?.length ?? 0) > 0) return;
+      }
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  throw new Error("worker catalog 在 90 秒 readiness 窗口内不可用");
+}
+
+async function createPerfFixture(request: APIRequestContext): Promise<void> {
+  const login = await request.post("/api/v1/auth/login", {
+    data: { username: "seed-admin", password: "Admin@123456" },
+  });
+  expect(login.ok()).toBeTruthy();
+  const { accessToken } = (await login.json()) as { accessToken: string };
+  const headers = authHeaders(accessToken);
+  const teamsResponse = await request.get("/api/v1/teams?page=1&pageSize=100", { headers });
+  expect(teamsResponse.ok()).toBeTruthy();
+  const teams = (await teamsResponse.json()) as SeedTeamList;
+  const seedTeam = teams.items?.find((team) => team.name === SEED_TEAM_NAME);
+  expect(seedTeam).toBeDefined();
+  const members = seedTeam?.members ?? [];
+  expect(members).toHaveLength(7);
+
+  const agentsResponse = await request.get("/api/v1/agents?type=template&page=1&pageSize=100", { headers });
+  expect(agentsResponse.ok()).toBeTruthy();
+  const agents = (await agentsResponse.json()) as AgentList;
+  const productAgent = agents.items?.find((agent) => agent.agentKey === "product");
+  expect(productAgent).toBeDefined();
+  AGENT_ID = productAgent?.id ?? "";
+
+  const teamResponse = await request.post("/api/v1/teams", {
+    headers,
+    data: {
+      name: `e2e-Perf-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      members: members.map((member) => ({
+        agentId: member.agentId,
+        ...(member.roleId ? { roleId: member.roleId } : {}),
+      })),
+    },
+  });
+  expect(teamResponse.status()).toBe(201);
+  const team = (await teamResponse.json()) as { id?: string };
+  expect(team.id).toBeTruthy();
+  TEAM_ID = team.id ?? "";
+
+  const taskResponse = await request.post("/api/v1/tasks", {
+    headers,
+    data: { title: `e2e-perf-task-${Date.now()}`, teamId: TEAM_ID },
+  });
+  expect(taskResponse.status()).toBe(201);
+  const task = (await taskResponse.json()) as { id?: string };
+  expect(task.id).toBeTruthy();
+  TASK_ID = task.id ?? "";
+}
+
+async function deletePerfFixture(request: APIRequestContext): Promise<void> {
+  if (!TEAM_ID) return;
+  const login = await request.post("/api/v1/auth/login", {
+    data: { username: "seed-admin", password: "Admin@123456" },
+  });
+  expect(login.ok()).toBeTruthy();
+  const { accessToken } = (await login.json()) as { accessToken: string };
+  const response = await request.delete(`/api/v1/teams/${TEAM_ID}`, {
+    headers: authHeaders(accessToken),
+  });
+  expect(response.ok()).toBeTruthy();
 }
 
 /**
@@ -82,30 +173,8 @@ async function resolveTeamGroupChannel(
 }
 
 async function ensurePerfTask(request: APIRequestContext, token: string): Promise<PerfContext> {
-  const headers = authHeaders(token);
-  const teamResponse = await request.get(`/api/v1/teams/${TEAM_ID}`, { headers });
-  expect(teamResponse.ok()).toBeTruthy();
-  const team = (await teamResponse.json()) as PerfTeam;
-  let taskId = team.currentTaskId;
-
-  if (!taskId) {
-    const created = await request.post("/api/v1/tasks", {
-      headers,
-      data: { title: `e2e-perf-task-${Date.now()}`, teamId: TEAM_ID },
-    });
-    expect(created.status()).toBe(201);
-    taskId = ((await created.json()) as { id: string }).id;
-  }
-
-  const taskResponse = await request.get(`/api/v1/tasks/${taskId}`, { headers });
-  expect(taskResponse.ok()).toBeTruthy();
-  const task = (await taskResponse.json()) as { status: string };
-  if (task.status !== "in_progress") {
-    expect(task.status).toBe("pending");
-    const started = await request.post(`/api/v1/tasks/${taskId}/start`, { headers });
-    expect(started.ok()).toBeTruthy();
-  }
-  return { taskId, channelId: await resolveTeamSessionChannel(request, token) };
+  expect(TASK_ID).toBeTruthy();
+  return { taskId: TASK_ID, channelId: await resolveTeamSessionChannel(request, token) };
 }
 
 async function readToken(page: import("@playwright/test").Page): Promise<string> {
@@ -188,6 +257,13 @@ async function sseRoundtrip(
 }
 
 test.describe("性能 E2E", () => {
+  test.beforeAll(async ({ request }) => {
+    await createPerfFixture(request);
+  });
+  test.afterAll(async ({ request }) => {
+    await deletePerfFixture(request);
+  });
+
   test("页面加载性能（/login 与 /teams）", async ({ page }) => {
     // warmup：dev 首编译不计入
     await page.goto("/login");
@@ -224,9 +300,10 @@ test.describe("性能 E2E", () => {
     expect(median, `群聊 SSE 中位数 ${median}ms 应 ≤ 1000ms`).toBeLessThanOrEqual(1000);
   });
 
-  test("首字计时 @a_product（1 次真实 opencode 调用，双线记录不阻断）", async ({ page, request }) => {
-    test.setTimeout(120_000);
+  test("首字计时 @product Agent（1 次真实 opencode 调用，双线记录不阻断）", async ({ page, request }) => {
+    test.setTimeout(210_000);
     const token = await readToken(page);
+    await waitForWorkerReady(request, token);
     const { taskId, channelId } = await ensurePerfTask(request, token);
     const elapsed = await page.evaluate(
       async ({ channelId, token, agentId, taskId, timeout }) => {

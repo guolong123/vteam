@@ -4,6 +4,7 @@ import {
   type APIRequestContext,
   type Page,
 } from "@playwright/test";
+import { waitForWorkerCatalogSettled } from "./worker-readiness";
 
 /**
  * opencode-native-permissions-and-fixes · task-15 · 团队创建页岗位列表（web 切片）
@@ -253,7 +254,7 @@ test.describe("task-15 · 团队创建页岗位列表（/agent-roles 单一来�
     const external = roles.find(
       (r) => !r.defaultAgentId && !!r.defaultOpencodeAgentName,
     );
-    test.skip(!external, "live 岗位清单无外部绑定岗位（defaultOpencodeAgentName）");
+    expect(external, "live 岗位清单必须包含外部绑定岗位").toBeTruthy();
 
     let teamId: string | null = null;
     try {
@@ -291,5 +292,14 @@ test.describe("task-15 · 团队创建页岗位列表（/agent-roles 单一来�
     } finally {
       await cleanup(request, token, teamId ? [teamId] : [], []);
     }
+  });
+
+  // This file is deliberately the last self-login project file in
+  // playwright.config.ts. Its teardown is the policy-storm barrier: all
+  // execution-policy writers have completed before the engine-dependent
+  // project is allowed to start.
+  test.afterAll("等待 worker catalogue 稳定后再进入 engine-dependent", async ({ request }, testInfo) => {
+    testInfo.setTimeout(900_000);
+    await waitForWorkerCatalogSettled(request);
   });
 });

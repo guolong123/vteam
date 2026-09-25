@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 
 /**
  * opencode-native-permissions-and-fixes todo 8 · dark-mode role selection + warnings
@@ -23,6 +23,7 @@ import { test, expect, type Page } from "@playwright/test";
  */
 
 // 浅色变量 = 原硬编码 hex（逐字节相等，无回归的证明锚点）。
+const SERVER_URL = "http://localhost:13000";
 const LIGHT = {
   roleProductBg: "rgb(239, 246, 255)", // #EFF6FF
   warningText: "rgb(180, 83, 9)", // #B45309
@@ -63,6 +64,41 @@ async function openExternalTab(page: Page) {
   await expect(page.getByTestId("external-agents-root")).toBeVisible({ timeout: 15_000 });
 }
 
+async function waitForStableWorkerCatalog(request: APIRequestContext): Promise<void> {
+  const login = await request.post(`${SERVER_URL}/api/v1/auth/login`, {
+    data: { username: "admin", password: "admin123" },
+  });
+  expect(login.ok()).toBeTruthy();
+  const { accessToken } = (await login.json()) as { accessToken: string };
+  let consecutive = 0;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    try {
+      const response = await request.get(`${SERVER_URL}/api/v1/agents/opencode`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        timeout: 5_000,
+      });
+      if (response.ok()) {
+        const body = (await response.json()) as {
+          agents?: unknown[];
+          degraded?: boolean;
+        };
+        consecutive =
+          body.degraded !== true && (body.agents?.length ?? 0) > 0
+            ? consecutive + 1
+            : 0;
+        if (consecutive >= 10) return;
+      } else {
+        consecutive = 0;
+      }
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      consecutive = 0;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  throw new Error("worker catalog 未在 240 秒稳定窗口内就绪");
+}
+
 async function waitForExternalPanel(page: Page): Promise<boolean> {
   let ready = false;
   try {
@@ -75,7 +111,7 @@ async function waitForExternalPanel(page: Page): Promise<boolean> {
             (await page.getByTestId("external-agents-empty").count()) === 0;
           return ready;
         },
-        { timeout: 20_000 },
+        { timeout: 90_000 },
       )
       .toBe(true);
   } catch (error) {
@@ -85,10 +121,11 @@ async function waitForExternalPanel(page: Page): Promise<boolean> {
   return ready;
 }
 
-async function skipIfExternalPanelUnavailable(page: Page): Promise<void> {
-  if (!(await waitForExternalPanel(page))) {
-    test.skip(true, "外部列表在 20 秒 bounded panel readiness 内不可用");
-  }
+async function expectExternalPanelReady(page: Page): Promise<void> {
+  expect(
+    await waitForExternalPanel(page),
+    "外部 Agent 面板在 readiness 窗口内应可用",
+  ).toBe(true);
 }
 
 async function computed(page: Page, selector: string, props: string[]) {
@@ -106,7 +143,9 @@ async function computed(page: Page, selector: string, props: string[]) {
 }
 
 test.describe("Todo 8 · dark-mode role selection + warnings", () => {
-  test("dark 主题：选中 role-item 与警示块无浅色硬编码", async ({ page }) => {
+  test("dark 主题：选中 role-item 与警示块无浅色硬编码", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    await waitForStableWorkerCatalog(request);
     await loginAsAdmin(page);
     await setTheme(page, "dark");
     await openRolesTab(page);
@@ -125,7 +164,7 @@ test.describe("Todo 8 · dark-mode role selection + warnings", () => {
     await expect(page.getByTestId("external-agents-loading")).toHaveCount(0, {
       timeout: 20_000,
     });
-    await skipIfExternalPanelUnavailable(page);
+    await expectExternalPanelReady(page);
     const warning = page.getByTestId("external-agent-item-warning").first();
     await expect(warning).toBeVisible({ timeout: 15_000 });
     const w = await warning.evaluate((el) => {
@@ -149,7 +188,9 @@ test.describe("Todo 8 · dark-mode role selection + warnings", () => {
     }
   });
 
-  test("light 主题：同一位置等于原浅色 hex（无回归）", async ({ page }) => {
+  test("light 主题：同一位置等于原浅色 hex（无回归）", async ({ page, request }) => {
+    test.setTimeout(300_000);
+    await waitForStableWorkerCatalog(request);
     await loginAsAdmin(page);
     await setTheme(page, "light");
     await openRolesTab(page);
@@ -168,7 +209,7 @@ test.describe("Todo 8 · dark-mode role selection + warnings", () => {
     await expect(page.getByTestId("external-agents-loading")).toHaveCount(0, {
       timeout: 20_000,
     });
-    await skipIfExternalPanelUnavailable(page);
+    await expectExternalPanelReady(page);
     const warning = page.getByTestId("external-agent-item-warning").first();
     await expect(warning).toBeVisible({ timeout: 15_000 });
     const w = await warning.evaluate((el) => {

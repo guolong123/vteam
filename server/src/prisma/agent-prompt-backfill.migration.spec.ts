@@ -2,26 +2,24 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 /**
- * todo 9 数据迁移 (`20260919000009_backfill_split_agent_prompts`) 契约。
+ * Current-schema contract for the historical
+ * `20260919000009_backfill_split_agent_prompts` migration.
  *
- * F3 REJECT：todo 4 只回填了 `agent_roles.role_prompt`，存量 `agents.prompt` 仍是拆分前正文
- * （`agent upsert update: {}` 刻意不覆盖用户编辑）→ 装配把岗位定义叠加一遍、重复。
- * 本迁移把 7 个内置模板行的 `agents.prompt` 升级到与 `seed.ts` 拆分后正文逐字节一致。
- *
- * 静态契约（jest 不连真库；真库 before/after 证明见
- * `.omo/evidence/agent-role-entity/task-9-agent-prompt-backfill.txt`）：
- *   1. 恰 7 条 `UPDATE agents SET prompt = ...`，逐行 `type='template'` + 拆分前 SHA2 + 四个标记守卫；
- *   2. 迁移写入字面量与 `seed.ts` 的 `templateAgents[].prompt` **逐字节相等**；
- *   3. 迁移正文自身不含任何拆分前标记（guard 标记不可能命中已升级行）；
- *   4. SET 目标仅 `prompt` 与 `updated_at`（不触碰能力/权限字段）。
+ * The original migration updated already-existing `agents` rows with a
+ * deliberately narrow SHA/marker guard.  The squashed baseline is a schema
+ * deployment artifact, so those one-off UPDATE statements are no longer an
+ * executable file.  The equivalent current contract is the baseline column
+ * shape plus the seed-owned prompt matrix: a fresh install and an upgraded
+ * install must expose the same seven complete template prompts.
  */
-const MIGRATION = path.resolve(
+
+const BASELINE = path.resolve(
   __dirname,
   '..',
   '..',
   'prisma',
   'migrations',
-  '20260919000009_backfill_split_agent_prompts',
+  '20260925000000_squashed_baseline',
   'migration.sql',
 );
 const SEED = path.resolve(__dirname, '..', '..', 'prisma', 'seed.ts');
@@ -36,25 +34,35 @@ const ORDER = [
   'a_librarian',
 ] as const;
 
-/** 拆分前出厂正文的 SHA2(prompt, 256)（迁移写入时从存量库录制；见迁移头）。 */
-const PRESPLIT_SHA: Record<string, string> = {
-  a_product: 'd29275d5715fb981a19908599fd76472d6465d7738f0151811b6c239e4f550f1',
-  a_project_manager:
-    '1d4a8929a53824e7cddbf2b2be8435c5f84a48adcda8fdcaa2e01f358942b4cc',
-  a_architect:
-    'b43f463cdfe9021c6fcf2f344a0bea6ed9e804a51f83e2b4e7694a83a4fb45b0',
-  a_developer:
-    '95af379744e72d75cbe8726cfd6e8ff45f48f3b0e41503c2222e5da40c8fb1ad',
-  a_tester: '434d7954182eb13256b19c9324739d986cc6ff9cd375d75b2a9b54853d927181',
-  a_plan: '755c79ecbe833e2d9a1d238638daee24f89f46ee85397dc4c57299fe5c1cd7c2',
-  a_librarian:
-    '22bd899f8264cf32c655ab6a2b72690a23d63e7d8637992c6e1df3dea1d8e71a',
-};
-
-/** 拆分后正文绝不含的四个结构标记（guard (b) 用；也是「行已升级」的判据）。 */
+/** The split prompt must not contain any of the old, pre-split sections. */
 const PRESPLIT_MARKERS = ['# 角色：', '## 职责', '## 协同方式', '团队协作规约'];
 
-/** 从 seed.ts 的 `const templateAgents = [...]` 字面量抽出 7 个 id→prompt（不执行 TS）。 */
+/** Read a table definition from the active single baseline. */
+function tableDefinition(sql: string, table: string): string {
+  const start = sql.indexOf(`CREATE TABLE \`${table}\``);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = sql.indexOf('\n) ', start);
+  expect(end).toBeGreaterThan(start);
+  return sql.slice(start, end);
+}
+
+function executableSql(sql: string): string {
+  return sql
+    .split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .replace(/\s+CHARACTER SET\s+\S+\s+COLLATE\s+\S+/gi, '')
+    .replace(/\bDEFAULT NULL\b/gi, 'NULL')
+    .replace(/\bUNIQUE KEY\b/gi, 'UNIQUE INDEX')
+    .replace(/^(\s*)KEY\s+/gim, '$1INDEX ')
+    .replace(/(INDEX\s+`[^`]+`)\s+\(/g, '$1(')
+    .replace(/REFERENCES\s+(`[^`]+`)\s+\(/g, 'REFERENCES $1(')
+    .replace(/\b(varchar|text|json|datetime|tinyint|int|bigint)\b/gi, (type) =>
+      type.toUpperCase(),
+    );
+}
+
+/** Extract the seven template-agent prompt literals from seed.ts. */
 function seedAgentPrompts(): Map<string, string> {
   const src = fs.readFileSync(SEED, 'utf8');
   const marker = 'const templateAgents = [';
@@ -78,93 +86,56 @@ function seedAgentPrompts(): Map<string, string> {
     id: string;
     prompt: string;
   }[];
-  return new Map(arr.map((a) => [a.id, a.prompt]));
+  return new Map(arr.map((agent) => [agent.id, agent.prompt]));
 }
 
-/** 抽出 `WHERE id = '<k>'` 那条 UPDATE 写入的 prompt 字面量（按语句切分）。 */
-function unescapeSqlString(literal: string): string {
-  return literal.replace(/''/g, "'").replace(/\\n/g, '\n');
-}
-
-function extractPromptLiteral(sql: string, id: string): string {
-  const statement = sql
-    .split(';')
-    .find(
-      (s) =>
-        s.includes('UPDATE `agents` SET `prompt`') &&
-        s.includes(`WHERE \`id\` = '${id}'`),
-    );
-  expect(statement).toBeDefined();
-  const m = statement!.match(/SET `prompt` = '((?:[^']|'')*)'/);
-  expect(m).not.toBeNull();
-  return unescapeSqlString(m![1]);
-}
-
-describe('agents.prompt 回填迁移契约（agent-role-entity todo 9）', () => {
-  const sql = fs.readFileSync(MIGRATION, 'utf8');
+describe('agents.prompt current-schema contract (historical 20260919000009)', () => {
+  const sql = fs.readFileSync(BASELINE, 'utf8');
+  const executable = executableSql(sql);
+  const agentsTable = tableDefinition(executable, 'agents');
   const seedPrompts = seedAgentPrompts();
 
-  it('seed 恰 7 个模板 Agent，id 与迁移覆盖集一致', () => {
+  it('baseline records the single-baseline squash and the immutable migration archive', () => {
+    expect(sql).toContain('由原有 81 个 Prisma 迁移压缩而来');
+    expect(sql).toContain(
+      '.omo/evidence/tech-debt-remediation/legacy-migrations/',
+    );
+    expect(sql).toContain('完整数据库基线');
+  });
+
+  it('baseline exposes the required agents.prompt column and no legacy role column', () => {
+    expect(agentsTable).toMatch(/`prompt`\s+TEXT NOT NULL/);
+    expect(agentsTable).toContain('`agent_key`');
+    expect(agentsTable).toContain('`policy_id`');
+    expect(agentsTable).not.toMatch(/`role`\s+VARCHAR/);
+  });
+
+  it('seed owns exactly the seven template-agent ids covered by the historical backfill', () => {
     expect([...seedPrompts.keys()].sort()).toEqual([...ORDER].sort());
+    expect(seedPrompts.size).toBe(7);
   });
 
-  it('恰 7 条 UPDATE agents SET prompt', () => {
-    const updates = sql.match(/UPDATE `agents` SET `prompt`/g) ?? [];
-    expect(updates).toHaveLength(7);
+  it('fresh-install prompts are complete, post-split values rather than historical fragments', () => {
     for (const id of ORDER) {
-      expect(sql).toContain(`WHERE \`id\` = '${id}'`);
-    }
-  });
-
-  it('守卫：逐行 type=template + 拆分前 SHA2 + 四个标记（绝不盲写）', () => {
-    for (const id of ORDER) {
-      const statement = sql
-        .split(';')
-        .find((s) => s.includes(`WHERE \`id\` = '${id}'`));
-      expect(statement).toBeDefined();
-      expect(statement).toContain("AND `type` = 'template'");
-      expect(statement).toContain(
-        `AND SHA2(\`prompt\`, 256) = '${PRESPLIT_SHA[id]}'`,
-      );
-      for (const marker of PRESPLIT_MARKERS) {
-        expect(statement).toContain(`AND \`prompt\` LIKE '%${marker}%'`);
-      }
-    }
-  });
-
-  it('迁移正文与 seed.ts 拆分后 prompt 逐字节相等（fresh install == 存量升级）', () => {
-    for (const id of ORDER) {
-      const fromMigration = extractPromptLiteral(sql, id);
-      expect(fromMigration).toBe(seedPrompts.get(id));
-      expect(fromMigration.length).toBeGreaterThan(100);
-      expect(fromMigration).toContain('## 工作方式');
-    }
-  });
-
-  it('seed 拆分后正文不含任何拆分前标记（守卫标记与升级后状态互斥）', () => {
-    for (const id of ORDER) {
-      const prompt = seedPrompts.get(id) as string;
+      const prompt = seedPrompts.get(id);
+      expect(prompt).toBeDefined();
+      expect(prompt?.length).toBeGreaterThan(100);
+      expect(prompt).toContain('## 工作方式');
       for (const marker of PRESPLIT_MARKERS) {
         expect(prompt).not.toContain(marker);
       }
     }
   });
 
-  it('SET 目标仅 prompt 与 updated_at（不触碰能力/权限字段）', () => {
-    const setAssignments = [
-      ...sql.matchAll(/UPDATE `agents` SET ([\s\S]*?)WHERE/g),
-    ];
-    expect(setAssignments).toHaveLength(7);
-    for (const m of setAssignments) {
-      const targets = [...m[1].matchAll(/`([a-z_]+)`\s*=/g)].map((x) => x[1]);
-      expect(targets).toEqual(['prompt', 'updated_at']);
-    }
+  it('all seven seed prompts are independent, deterministic source values', () => {
+    const prompts = ORDER.map((id) => seedPrompts.get(id));
+    expect(new Set(prompts).size).toBe(ORDER.length);
+    expect(prompts.every((prompt) => typeof prompt === 'string')).toBe(true);
   });
 
-  it('声明回滚路径（迁移前 agents 备份 + 还原命令）', () => {
-    expect(sql).toContain('回滚');
-    expect(sql).toMatch(/mysqldump -uroot -p"\$MYSQL_ROOT_PASSWORD"/);
-    expect(sql).toMatch(/mysql -uroot -p"\$MYSQL_ROOT_PASSWORD"/);
-    expect(sql).toContain('pre-agent-prompt-backfill-dump.sql');
+  it('the active baseline remains a schema deployment, while historical row DML is archived', () => {
+    // ALTER TABLE is expected for foreign keys; one-off data migration DML is not.
+    expect(executable).not.toMatch(/^\s*(UPDATE|INSERT|DELETE)\s/m);
+    expect(executable).not.toMatch(/JSON_(SET|REMOVE)\(/);
   });
 });
