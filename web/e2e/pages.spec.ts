@@ -248,6 +248,77 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await request.delete(`/api/v1/teams/${teamId}`, { headers });
   });
 
+  test("team detail exposes task board and history task entry points", async ({ page }) => {
+    const teamId = "tm_0000000001";
+    await page.goto(`/teams/${teamId}`);
+
+    const boardLink = page.getByTestId("team-task-board-link");
+    const historyLink = page.getByTestId("team-task-history-link");
+    await expect(boardLink).toBeVisible();
+    await expect(historyLink).toBeVisible();
+
+    await boardLink.click();
+    await expect(page).toHaveURL(new RegExp(`/board\\?teamId=${teamId}`));
+
+    await page.goBack();
+    await expect(historyLink).toBeVisible();
+    await historyLink.click();
+    await expect(page).toHaveURL(new RegExp(`/teams/${teamId}/tasks`));
+  });
+
+  test("board without teamId shows explicit team selection", async ({ page }) => {
+    await page.goto("/board");
+    const selection = page.getByTestId("board-team-selection");
+    await page.waitForFunction(() => {
+      const url = new URL(window.location.href);
+      return url.searchParams.has("teamId") || document.querySelector('[data-testid="board-team-options"], [data-testid="board-team-empty"]') !== null;
+    });
+    const options = page.getByTestId("board-team-option");
+    if ((await options.count()) > 0) {
+      await expect(selection).toBeVisible();
+      await options.first().click();
+      await expect(page).toHaveURL(/\/board\?teamId=/);
+    } else if (await page.getByTestId("board-team-empty").count()) {
+      await expect(selection).toBeVisible();
+      await expect(page.getByTestId("board-team-empty")).toBeVisible();
+    } else {
+      await expect(page).toHaveURL(/\/board\?teamId=/);
+    }
+  });
+
+  test("team history count summary and pending_review row actions", async ({ page }) => {
+    const teamId = "tm_0000000001";
+    await page.goto(`/teams/${teamId}/tasks`);
+
+    const items = page.getByTestId("task-list-item");
+    await expect(items.first()).toBeVisible();
+    const summary = page.getByTestId("team-task-count-summary");
+    await expect(summary).toBeVisible();
+    const statuses = await items.locator('[data-testid="status-badge"]').evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("data-status") ?? ""),
+    );
+    const count = (labels: string[]) => statuses.filter((status) => labels.includes(status)).length;
+    expect(count(["待验收"])).toBeGreaterThan(0);
+    const expected = `${statuses.length} 个任务 · ${count(["进行中", "阻塞中", "排队中"])} 进行中 / ${count(["待验收"])} 待验收 / ${count(["已完成", "已归档"])} 已完成 / ${count(["待开始"])} 待开始`;
+    await expect(summary).toHaveText(expected);
+    const pendingReviewItem = items.filter({ has: page.locator('[data-testid="status-badge"][data-status="待验收"]') }).first();
+    await expect(pendingReviewItem).toBeVisible();
+    await expect(pendingReviewItem.getByTestId("task-accept")).toBeVisible();
+    await expect(pendingReviewItem.getByTestId("task-reject")).toBeVisible();
+  });
+
+  test("session task parameter selects a non-head task and guards invalid input", async ({ page }) => {
+    await page.goto("/teams/tm_0000000001/session?task=t_0000000002");
+    const selectedTask = page.getByTestId("team-session-current-task");
+    await expect(selectedTask).toHaveAttribute("data-task-id", "t_0000000002");
+    await page.getByRole("button", { name: "任务", exact: true }).click();
+    await expect(page.getByTestId("task-accept")).toBeVisible();
+    await expect(page.getByTestId("task-reject")).toBeVisible();
+
+    await page.goto("/teams/tm_0000000001/session?task=invalid-task");
+    await expect(page.getByTestId("session-task-param-error")).toContainText("任务参数无效");
+  });
+
   test("8-10/17 导航变体（AppShell 融合导航承载）", async ({ page }) => {
     // nav-cmdk / nav-hybrid / nav-rail 三变体无独立路由，融合导航为终态——
     // 命令面板（nav-cmdk 核心）与 Dock 面板（nav-rail 核心）在登录页后全站可用

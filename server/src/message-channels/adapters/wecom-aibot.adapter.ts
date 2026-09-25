@@ -11,6 +11,8 @@ import {
   INTEGRATIONS_ERRORS,
 } from '../message-channel.constants';
 
+export const WECOM_OPERATOR_TTL_MS = 10 * 60 * 1000;
+
 /**
  * WeCom AiBot adapter — WS inbound + outbound question card.
  * Inbound: WS message.text + template_card_event handling.
@@ -67,7 +69,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       at: number;
     }
   >();
-  private readonly QUESTION_OPERATOR_TTL_MS = 10 * 60 * 1000;
+  private readonly QUESTION_OPERATOR_TTL_MS = WECOM_OPERATOR_TTL_MS;
 
   /** Also map by aqId for direct lookup before taskId is resolved */
   private readonly aqOperatorMap = new Map<

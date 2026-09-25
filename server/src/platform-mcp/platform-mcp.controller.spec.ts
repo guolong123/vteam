@@ -144,7 +144,10 @@ describe('PlatformMcpController (HTTP)', () => {
       }),
       wecomReply: jest.fn().mockResolvedValue({
         content: [
-          { type: 'text', text: '已回复企微用户 @张三 并同步到任务群聊' },
+          {
+            type: 'text',
+            text: '已回复企微用户 @张三 并同步到（任务/团队）群聊',
+          },
         ],
       }),
       taskCreate: jest.fn().mockResolvedValue({ id: 't_new' }),
@@ -321,6 +324,13 @@ describe('PlatformMcpController (HTTP)', () => {
           expect(tool.inputSchema).toMatchObject({
             type: 'object',
             properties: expect.objectContaining({ target: { type: 'string' } }),
+          });
+          continue;
+        }
+        if (tool.name === 'wecom_reply') {
+          expect(tool.inputSchema).toMatchObject({
+            type: 'object',
+            properties: expect.objectContaining({ teamId: { type: 'string' } }),
           });
           continue;
         }
@@ -598,6 +608,79 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(service.chatHistory).toHaveBeenCalledWith(
         { workerId: 'w_0001' },
         { taskId: 't_1', sinceId: 'm_10', limit: 20 },
+      );
+    });
+
+    it('wecom_reply teamId → 团队门校验后 handler 收到 teamId', async () => {
+      service.resolveToolCallerWithContext.mockResolvedValue({
+        callerId: 'tmm_sender',
+      });
+      service.wecomReply.mockResolvedValue({
+        content: [{ type: 'text', text: '已回复企微用户' }],
+      });
+
+      await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 31,
+          method: 'tools/call',
+          params: {
+            name: 'wecom_reply',
+            arguments: {
+              teamId: 'tm_1',
+              selfInstanceId: 'tmm_sender',
+              text: 'hello',
+            },
+          },
+        })
+        .expect(200);
+
+      expect(service.resolveToolCallerWithContext).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        {
+          teamId: 'tm_1',
+          selfInstanceId: 'tmm_sender',
+          text: 'hello',
+        },
+      );
+      expect(service.wecomReply).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        {
+          teamId: 'tm_1',
+          selfInstanceId: 'tmm_sender',
+          text: 'hello',
+        },
+      );
+    });
+
+    it('wecom_reply 旧 taskId 参数被剥离且不再返回旧 400 文案', async () => {
+      service.wecomReply.mockResolvedValue({
+        content: [
+          { type: 'text', text: '发送失败: 无法解析团队上下文（请传 teamId）' },
+        ],
+      });
+
+      const res = await mcpPost()
+        .set('x-worker-id', 'w_0001')
+        .send({
+          jsonrpc: '2.0',
+          id: 32,
+          method: 'tools/call',
+          params: {
+            name: 'wecom_reply',
+            arguments: { taskId: 'tm_1', text: 'legacy' },
+          },
+        })
+        .expect(200);
+
+      const payload = JSON.parse(res.body.result.content[0].text as string);
+      expect(payload.content[0].text).not.toContain(
+        '团队会话请传 teamId，不要传 taskId',
+      );
+      expect(service.wecomReply).toHaveBeenCalledWith(
+        { workerId: 'w_0001' },
+        { text: 'legacy' },
       );
     });
 

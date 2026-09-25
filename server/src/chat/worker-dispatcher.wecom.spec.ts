@@ -67,6 +67,7 @@ describe('WorkerDispatcher wecom bridge (diagnostic)', () => {
             return Promise.resolve({
               id: externalMsgId,
               content: { text: 'hi' },
+              createdAt: new Date(),
             });
           }
           if (
@@ -185,6 +186,7 @@ describe('WorkerDispatcher wecom bridge (diagnostic)', () => {
   });
 
   it('finishStream called with externalMsg.id when text present', async () => {
+    wecomAdapter.getStream.mockReturnValue({ chattype: 'single' });
     const d = createDispatcher();
     await d.handleTaskCompleted({
       taskId,
@@ -200,6 +202,7 @@ describe('WorkerDispatcher wecom bridge (diagnostic)', () => {
   });
 
   it('text derived from parts when payload.text empty', async () => {
+    wecomAdapter.getStream.mockReturnValue({ chattype: 'single' });
     const d = createDispatcher();
     await d.handleTaskCompleted({
       taskId,
@@ -215,6 +218,7 @@ describe('WorkerDispatcher wecom bridge (diagnostic)', () => {
   });
 
   it('fallback called when finishStream miss', async () => {
+    wecomAdapter.getStream.mockReturnValue({ chattype: 'single' });
     wecomAdapter.finishStream.mockResolvedValue(false);
     const d = createDispatcher();
     await d.handleTaskCompleted({
@@ -427,5 +431,79 @@ describe('WorkerDispatcher wecom bridge (diagnostic)', () => {
       expect.stringContaining('fallback after card'),
     );
     expect(wecomAdapter.finishStream).not.toHaveBeenCalled();
+  });
+
+  it('task bridge uses team_group correlation and skips duplicate team mirror', async () => {
+    const teamId = 'tm_1';
+    const teamChannelId = 'c_team_group';
+    const teamExternalId = 'm_external_team';
+    prisma.session.findUnique.mockResolvedValue({
+      agentId: 'a_dev',
+      teamId,
+      teamMemberId: 'tmm_1',
+    });
+    prisma.teamMessageChannel = {
+      findMany: jest
+        .fn()
+        .mockResolvedValue([{ messageChannelId: wecomChannelId }]),
+    };
+    prisma.taskMessageChannel.findMany.mockResolvedValue([]);
+    prisma.chatChannel.findFirst.mockImplementation((query: any) => {
+      if (
+        query.where?.teamId === teamId &&
+        query.where?.type === CHANNEL_TYPE.team_group
+      ) {
+        return Promise.resolve({ id: teamChannelId });
+      }
+      return Promise.resolve(null);
+    });
+    prisma.message.findMany.mockResolvedValue([
+      {
+        id: teamExternalId,
+        content: { text: '[WeCom:Alice] hello' },
+        createdAt: new Date(),
+      },
+    ]);
+    prisma.message.findFirst.mockImplementation((query: any) => {
+      if (
+        query.where?.channelId === teamChannelId &&
+        query.where?.senderType === SENDER_TYPE.agent
+      ) {
+        return Promise.resolve({
+          id: 'm_team_mirror',
+          content: { text: '@Alice hello' },
+          createdAt: new Date(),
+        });
+      }
+      return Promise.resolve(null);
+    });
+    wecomAdapter.getStream.mockReturnValue({
+      fromUserName: 'Alice',
+      chattype: 'group',
+    });
+
+    const d = createDispatcher();
+    await d.handleTaskCompleted({
+      taskId,
+      sessionId: 's_1',
+      agentId: 'a_dev',
+      text: 'hello',
+      parts: [],
+    });
+
+    expect(prisma.teamMessageChannel.findMany).toHaveBeenCalledWith({
+      where: { teamId },
+      select: { messageChannelId: true },
+    });
+    expect(prisma.taskMessageChannel.findMany).not.toHaveBeenCalled();
+    expect(wecomAdapter.finishStream).toHaveBeenCalledWith(
+      teamExternalId,
+      '@Alice hello',
+    );
+    expect(prisma.message.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ channelId: teamChannelId }),
+      }),
+    );
   });
 });

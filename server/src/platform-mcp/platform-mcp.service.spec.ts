@@ -46,8 +46,16 @@ describe('PlatformMcpService', () => {
   let service: PlatformMcpService;
   let prisma: {
     session: { findFirst: jest.Mock; findMany: jest.Mock };
-    chatChannel: { findFirst: jest.Mock };
-    message: { findMany: jest.Mock; create: jest.Mock; count: jest.Mock };
+    chatChannel: { findFirst: jest.Mock; create: jest.Mock };
+    message: {
+      findMany: jest.Mock;
+      findFirst: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+      count: jest.Mock;
+    };
+    teamMessageChannel: { findMany: jest.Mock };
+    messageChannel: { findUnique: jest.Mock };
     artifact: {
       findMany: jest.Mock;
       findFirst: jest.Mock;
@@ -179,8 +187,19 @@ describe('PlatformMcpService', () => {
   beforeEach(async () => {
     prisma = {
       session: { findFirst: jest.fn(), findMany: jest.fn() },
-      chatChannel: { findFirst: jest.fn() },
-      message: { findMany: jest.fn(), create: jest.fn(), count: jest.fn() },
+      chatChannel: {
+        findFirst: jest.fn(),
+        create: jest.fn().mockRejectedValue(new Error('not configured')),
+      },
+      message: {
+        findMany: jest.fn(),
+        findFirst: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
+        count: jest.fn(),
+      },
+      teamMessageChannel: { findMany: jest.fn() },
+      messageChannel: { findUnique: jest.fn() },
       artifact: {
         findMany: jest.fn(),
         findFirst: jest.fn(),
@@ -6796,6 +6815,462 @@ describe('PlatformMcpService', () => {
       expect(questionsService.confirmByAgent).toHaveBeenCalledWith(
         expect.objectContaining({ taskId, instanceId: senderInstanceId }),
       );
+    });
+  });
+
+  describe('wecom_reply 团队维度', () => {
+    const globalWithAdapter = globalThis as typeof globalThis & {
+      __wecomAdapter?: unknown;
+    };
+    const externalMessage = {
+      id: 'm_external_1',
+      content: { text: '[WeCom:Alice] hello' },
+      createdAt: new Date(Date.now() - 1_000),
+    };
+    const arrangeTeamChannel = (
+      contextSession: Record<string, unknown> = {
+        id: 's_team_1',
+        teamId: 'tm_1',
+        teamMemberId: senderInstanceId,
+        agentId: senderAgentId,
+      },
+      authSession: Record<string, unknown> = {
+        id: 's_team_1',
+        teamId: 'tm_1',
+        teamMemberId: senderInstanceId,
+        agentId: senderAgentId,
+      },
+    ) => {
+      const adapter = {
+        sendNewMessage: jest.fn().mockResolvedValue(true),
+        sendFallbackMessage: jest.fn().mockResolvedValue(true),
+        finishStream: jest.fn().mockResolvedValue(true),
+        getStream: jest.fn().mockReturnValue({
+          fromUserName: 'Alice',
+          chattype: 'group',
+        }),
+        getPendingUser: jest.fn().mockReturnValue(undefined),
+        getPendingOperatorForTask: jest.fn(),
+        consumePendingOperatorForTask: jest.fn(),
+      };
+      globalWithAdapter.__wecomAdapter = adapter;
+      prisma.session.findFirst.mockReset();
+      prisma.session.findFirst
+        .mockResolvedValueOnce(contextSession)
+        .mockResolvedValue(authSession);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([
+        { messageChannelId: 'mc_team_1' },
+      ]);
+      prisma.messageChannel.findUnique.mockResolvedValue({
+        id: 'mc_team_1',
+        type: 'wecom_aibot',
+      });
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_team_1' });
+      prisma.message.findMany.mockResolvedValue([externalMessage]);
+      prisma.message.findFirst.mockImplementation(
+        async (query: { where?: { senderType?: unknown } }) =>
+          query.where?.senderType === SENDER_TYPE.external
+            ? externalMessage
+            : null,
+      );
+      prisma.message.create.mockResolvedValue({
+        id: 'm_team_1',
+        channelId: 'c_team_1',
+        taskId: null,
+        senderType: SENDER_TYPE.agent,
+        senderId: senderAgentId,
+        senderInstanceId: senderInstanceId,
+        content: { text: '@Alice hello', parts: [] },
+        mentions: null,
+        attachmentUrl: null,
+        attachmentName: null,
+        attachmentType: null,
+        status: MESSAGE_STATUS.sent,
+        createdAt: new Date('2026-09-24T03:01:00.000Z'),
+      });
+      prisma.teamMember.findFirst.mockResolvedValue({
+        agentId: senderAgentId,
+      });
+      idGen.nextId.mockResolvedValue('m_team_1');
+      return adapter;
+    };
+
+    afterEach(() => {
+      delete globalWithAdapter.__wecomAdapter;
+    });
+
+    it('teamId 直传走 assertWorkerTeam、team_group 外部消息 stream 回退并镜像', async () => {
+      const adapter = arrangeTeamChannel();
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result).toMatchObject({
+        wecomSent: true,
+        messageId: 'm_team_1',
+        channelId: 'c_team_1',
+      });
+      expect(result.content[0].text).toContain('团队群聊');
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      expect(prisma.session.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId: 'tm_1',
+          workerId,
+          teamMemberId: senderInstanceId,
+        },
+        select: { id: true, teamMemberId: true },
+      });
+      expect(prisma.teamMessageChannel.findMany).toHaveBeenCalledWith({
+        where: { teamId: 'tm_1' },
+        select: { messageChannelId: true },
+      });
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: {
+          teamId: 'tm_1',
+          type: CHANNEL_TYPE.team_group,
+          deletedAt: null,
+        },
+        select: { id: true },
+      });
+      expect(adapter.getPendingOperatorForTask).not.toHaveBeenCalled();
+      expect(adapter.getStream).toHaveBeenCalledWith('m_external_1');
+      expect(adapter.finishStream).toHaveBeenCalledWith(
+        'm_external_1',
+        '@Alice hello',
+      );
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            channelId: 'c_team_1',
+            taskId: null,
+          }),
+        }),
+      );
+    });
+
+    it('team_group 缺失时镜像路径懒创建团队频道', async () => {
+      arrangeTeamChannel();
+      prisma.chatChannel.findFirst.mockReset().mockResolvedValue(null);
+      prisma.chatChannel.create.mockResolvedValue({ id: 'c_team_new' });
+      idGen.nextId.mockImplementation(async (prefix: string) =>
+        prefix === 'c' ? 'c_team_new' : 'm_team_new',
+      );
+      prisma.message.create.mockResolvedValue({
+        id: 'm_team_new',
+        channelId: 'c_team_new',
+        taskId: null,
+        senderType: SENDER_TYPE.agent,
+        senderId: senderAgentId,
+        senderInstanceId: senderInstanceId,
+        content: { text: 'hello', parts: [] },
+        mentions: null,
+        attachmentUrl: null,
+        attachmentName: null,
+        attachmentType: null,
+        status: MESSAGE_STATUS.sent,
+        createdAt: new Date('2026-09-24T03:02:00.000Z'),
+      });
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.channelId).toBe('c_team_new');
+      expect(prisma.chatChannel.create).toHaveBeenCalledWith({
+        data: {
+          id: 'c_team_new',
+          type: CHANNEL_TYPE.team_group,
+          teamId: 'tm_1',
+          taskId: null,
+        },
+        select: { id: true },
+      });
+    });
+
+    it('session 带 taskId 时 pending operator 按任务锚点 best-effort', async () => {
+      const adapter = arrangeTeamChannel(
+        {
+          id: 's_task_1',
+          taskId: 't_task_1',
+          teamId: 'tm_1',
+          teamMemberId: senderInstanceId,
+          agentId: senderAgentId,
+        },
+        {
+          id: 's_task_1',
+          teamId: 'tm_1',
+          teamMemberId: senderInstanceId,
+          agentId: senderAgentId,
+        },
+      );
+      adapter.getPendingOperatorForTask.mockReturnValue({
+        fromUserName: 'Bob',
+        chattype: 'single',
+      });
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(adapter.getPendingOperatorForTask).toHaveBeenCalledWith(
+        't_task_1',
+      );
+      expect(adapter.getStream).not.toHaveBeenCalled();
+      expect(adapter.consumePendingOperatorForTask).toHaveBeenCalledWith(
+        't_task_1',
+      );
+    });
+
+    it('当前团队未绑定企微渠道时返回既有未绑定文案', async () => {
+      arrangeTeamChannel();
+      prisma.teamMessageChannel.findMany.mockResolvedValue([]);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.content[0].text).toBe(
+        '发送失败: 当前团队未绑定企业微信渠道',
+      );
+      expect(prisma.messageChannel.findUnique).not.toHaveBeenCalled();
+      expect(prisma.message.create).not.toHaveBeenCalled();
+    });
+
+    it('无 teamId 时从 session.teamId 回填并完成团队投递', async () => {
+      arrangeTeamChannel();
+
+      const result = await service.wecomReply(ctx, { text: 'hello' });
+
+      expect(result.wecomSent).toBe(true);
+      expect(result.channelId).toBe('c_team_1');
+      expect(prisma.session.findFirst).toHaveBeenNthCalledWith(1, {
+        where: { workerId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          taskId: true,
+          teamId: true,
+          teamMemberId: true,
+          agentId: true,
+        },
+      });
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('session 只有 taskId 时回退 task.teamId', async () => {
+      arrangeTeamChannel(
+        {
+          id: 's_legacy_1',
+          taskId: 't_legacy_1',
+          teamId: null,
+          teamMemberId: senderInstanceId,
+          agentId: senderAgentId,
+        },
+        {
+          id: 's_team_1',
+          teamId: 'tm_1',
+          teamMemberId: senderInstanceId,
+          agentId: senderAgentId,
+        },
+      );
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+
+      const result = await service.wecomReply(ctx, { text: 'hello' });
+
+      expect(result.wecomSent).toBe(true);
+      expect(prisma.task.findUnique).toHaveBeenCalledWith({
+        where: { id: 't_legacy_1' },
+        select: { teamId: true },
+      });
+    });
+
+    it('无团队上下文返回新错误文案，不触达旧 taskId 门', async () => {
+      prisma.session.findFirst.mockResolvedValue(null);
+
+      const result = await service.wecomReply(ctx, { text: 'hello' });
+
+      expect(result.content[0].text).toBe(
+        '发送失败: 无法解析团队上下文（请传 teamId）',
+      );
+      expect(result.content[0].text).not.toContain('请传 taskId');
+      expect(result.content[0].text).not.toContain(
+        '团队会话请传 teamId，不要传 taskId',
+      );
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      expect(prisma.teamMessageChannel.findMany).not.toHaveBeenCalled();
+    });
+
+    it('最新 external 没有活动 stream 时不调用 finishStream', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue(undefined);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(adapter.finishStream).not.toHaveBeenCalled();
+      expect(adapter.sendNewMessage).toHaveBeenCalledWith('mc_team_1', 'hello');
+    });
+
+    it('活动 stream 超出时间窗时不调用 finishStream', async () => {
+      const adapter = arrangeTeamChannel();
+      prisma.message.findMany.mockResolvedValue([
+        {
+          ...externalMessage,
+          createdAt: new Date(Date.now() - 11 * 60 * 1000),
+        },
+      ]);
+      adapter.getStream.mockReturnValue({
+        fromUserName: 'Alice',
+        chattype: 'group',
+      });
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(adapter.finishStream).not.toHaveBeenCalled();
+      expect(adapter.sendNewMessage).toHaveBeenCalledWith('mc_team_1', 'hello');
+    });
+
+    it('他人 processing 占位不被当前回复覆盖', async () => {
+      arrangeTeamChannel();
+      prisma.message.findFirst.mockImplementation(
+        async (query: {
+          where?: {
+            senderType?: unknown;
+            status?: unknown;
+            senderInstanceId?: unknown;
+          };
+        }) => {
+          if (query.where?.senderType === SENDER_TYPE.external) {
+            return externalMessage;
+          }
+          if (query.where?.status === MESSAGE_STATUS.processing) {
+            return query.where.senderInstanceId === senderInstanceId
+              ? null
+              : {
+                  id: 'm_other_processing',
+                  taskId: 't_other',
+                  senderInstanceId: 'tmm_other',
+                };
+          }
+          return null;
+        },
+      );
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(prisma.message.update).not.toHaveBeenCalled();
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ taskId: null }),
+        }),
+      );
+    });
+
+    it('当前成员 processing 占位更新时保留原有 taskId', async () => {
+      arrangeTeamChannel();
+      prisma.message.findFirst.mockImplementation(
+        async (query: {
+          where?: {
+            senderType?: unknown;
+            status?: unknown;
+          };
+        }) => {
+          if (query.where?.senderType === SENDER_TYPE.external) {
+            return externalMessage;
+          }
+          if (query.where?.status === MESSAGE_STATUS.processing) {
+            return {
+              id: 'm_owned_processing',
+              taskId: 't_owned',
+              senderInstanceId: senderInstanceId,
+            };
+          }
+          return null;
+        },
+      );
+      prisma.message.update.mockResolvedValue({
+        id: 'm_owned_processing',
+        taskId: 't_owned',
+        content: { text: '@Alice hello' },
+        status: MESSAGE_STATUS.sent,
+      });
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.messageId).toBe('m_owned_processing');
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_owned_processing' },
+        data: expect.not.objectContaining({ taskId: null }),
+      });
+    });
+
+    it('显式 legacy taskId 仍优先使用 session.teamId', async () => {
+      arrangeTeamChannel(
+        {
+          id: 's_legacy_priority',
+          taskId: 't_legacy_priority',
+          teamId: 'tm_session',
+          teamMemberId: senderInstanceId,
+          agentId: senderAgentId,
+        },
+        {
+          id: 's_auth_priority',
+          teamId: 'tm_session',
+          teamMemberId: senderInstanceId,
+          agentId: senderAgentId,
+        },
+      );
+      prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_task_fallback' });
+
+      const result = await service.wecomReply(ctx, {
+        taskId: 't_legacy_priority',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(prisma.session.findFirst).toHaveBeenCalledWith({
+        where: { workerId },
+        orderBy: { createdAt: 'desc' },
+        select: {
+          taskId: true,
+          teamId: true,
+          teamMemberId: true,
+          agentId: true,
+        },
+      });
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      expect(prisma.teamMessageChannel.findMany).toHaveBeenCalledWith({
+        where: { teamId: 'tm_session' },
+        select: { messageChannelId: true },
+      });
     });
   });
 });
