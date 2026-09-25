@@ -1,11 +1,20 @@
 # Tech-Debt Rollback Runbook (W6–W9 DDL waves)
 
+> **Migrations were squashed on 2026-09-25.** `server/prisma/migrations/` now
+> contains exactly one baseline,
+> `20260925000000_squashed_baseline/migration.sql`. The 81 original migrations —
+> including the two cited below — are archived **outside git** at
+> `.omo/evidence/tech-debt-remediation/legacy-migrations/`.
+> See `docs/migration-baseline.md` for how to baseline an existing database and
+> for the archive's durability risk.
+
 > This is the ONLY recovery path for the four one-way DDL waves. The repo has
 > NO down-migrations anywhere under `server/prisma/migrations/` — the stated
-> rollback in `server/prisma/migrations/20260907000001_drop_task_agent_domain/migration.sql:20`
-> and `server/prisma/migrations/20260919000010_drop_agents_role/migration.sql:35-42`
-> is dump-restore. Todos 32/39/43/47 take the preflight dump; todos 36/38/42/44
-> are the one-way DDL steps that depend on it.
+> rollback in `20260907000001_drop_task_agent_domain/migration.sql:20`
+> and `20260919000010_drop_agents_role/migration.sql:35-42`
+> (now at `.omo/evidence/tech-debt-remediation/legacy-migrations/<name>/migration.sql`,
+> same line numbers) is dump-restore. Todos 32/39/43/47 take the preflight dump;
+> todos 36/38/42/44 are the one-way DDL steps that depend on it.
 
 ## 1. Rollback trigger (green gate)
 
@@ -68,10 +77,15 @@ bash scripts/gate.sh
 ```
 
 - The migration files themselves document this same contract inline (not by
-  reference): `20260907000001_drop_task_agent_domain/migration.sql:1-40`
+  reference). Pre-squash those were
+  `20260907000001_drop_task_agent_domain/migration.sql:1-40`
   ("生产先有本迁移前 mysqldump 备份") and
   `20260919000010_drop_agents_role/migration.sql:35-42`
-  ("回滚 = 恢复迁移前全库 dump" + literal dump/restore commands).
+  ("回滚 = 恢复迁移前全库 dump" + literal dump/restore commands). After the
+  2026-09-25 squash they live at
+  `.omo/evidence/tech-debt-remediation/legacy-migrations/<name>/migration.sql`
+  (line numbers unchanged). **That archive is not in git** — if it is gone, the
+  inline contracts these notes point at are gone with it.
 
 ## 4. Helm rollback (K8s release recovery)
 
