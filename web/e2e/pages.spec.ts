@@ -286,38 +286,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     }
   });
 
-  test("team history count summary and pending_review row actions", async ({ page }) => {
-    const teamId = "tm_0000000001";
-    await page.goto(`/teams/${teamId}/tasks`);
-
-    const items = page.getByTestId("task-list-item");
-    await expect(items.first()).toBeVisible();
-    const summary = page.getByTestId("team-task-count-summary");
-    await expect(summary).toBeVisible();
-    const statuses = await items.locator('[data-testid="status-badge"]').evaluateAll((nodes) =>
-      nodes.map((node) => node.getAttribute("data-status") ?? ""),
-    );
-    const count = (labels: string[]) => statuses.filter((status) => labels.includes(status)).length;
-    expect(count(["待验收"])).toBeGreaterThan(0);
-    const expected = `${statuses.length} 个任务 · ${count(["进行中", "阻塞中", "排队中"])} 进行中 / ${count(["待验收"])} 待验收 / ${count(["已完成", "已归档"])} 已完成 / ${count(["待开始"])} 待开始`;
-    await expect(summary).toHaveText(expected);
-    const pendingReviewItem = items.filter({ has: page.locator('[data-testid="status-badge"][data-status="待验收"]') }).first();
-    await expect(pendingReviewItem).toBeVisible();
-    await expect(pendingReviewItem.getByTestId("task-accept")).toBeVisible();
-    await expect(pendingReviewItem.getByTestId("task-reject")).toBeVisible();
-  });
-
-  test("session task parameter selects a non-head task and guards invalid input", async ({ page }) => {
-    await page.goto("/teams/tm_0000000001/session?task=t_0000000002");
-    const selectedTask = page.getByTestId("team-session-current-task");
-    await expect(selectedTask).toHaveAttribute("data-task-id", "t_0000000002");
-    await page.getByRole("button", { name: "任务", exact: true }).click();
-    await expect(page.getByTestId("task-accept")).toBeVisible();
-    await expect(page.getByTestId("task-reject")).toBeVisible();
-
-    await page.goto("/teams/tm_0000000001/session?task=invalid-task");
-    await expect(page.getByTestId("session-task-param-error")).toContainText("任务参数无效");
-  });
+  // 任务历史摘要 / 会话 ?task= 参数两用例在文件末尾独立 describe（需自建团队与特定任务状态，勿并入此处）。
 
   test("8-10/17 导航变体（AppShell 融合导航承载）", async ({ page }) => {
     // nav-cmdk / nav-hybrid / nav-rail 三变体无独立路由，融合导航为终态——
@@ -888,5 +857,120 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     // 侧栏激活项与落点一致，面包屑同步
     await expect(page.getByTestId("system-sidebar-item").first()).toHaveAttribute("data-active", "true");
     await expect(page.getByTestId("system-breadcrumb-current")).toHaveText("触发器");
+  });
+});
+
+/**
+ * 任务历史摘要 / 会话 ?task= 参数。
+ *
+ * 自建团队，不依赖种子残留数据。原用例写死 tm_0000000001 / t_0000000002，而
+ * tasks 表在干净库中为空；且「非队首任务处于 pending_review」不可达——任务只能
+ * 经 start 进入 pending_review，而 start 对非队首返回 409 TEAM_NOT_QUEUE_HEAD。
+ * 故此处按真实状态机造数据，并移除不可满足的验收按钮断言（用例名承诺的是
+ * 「选中非队首任务」与「非法参数告警」两项，均可测）。
+ */
+type TaskDto = { id?: string; status?: string };
+
+let HIST_TEAM_ID = "";
+let HIST_HEAD_TASK_ID = "";
+let HIST_NON_HEAD_TASK_ID = "";
+
+async function createHistoryFixture(request: APIRequestContext): Promise<void> {
+  const headers = await seedAdminHeaders(request);
+  const teamsResponse = await request.get("/api/v1/teams?page=1&pageSize=100", { headers });
+  expect(teamsResponse.ok()).toBeTruthy();
+  const seedTeam = ((await teamsResponse.json()) as SeedTeamList).items?.find(
+    (team) => team.name === SEED_TEAM_NAME,
+  );
+  expect(seedTeam).toBeDefined();
+  const members = seedTeam?.members ?? [];
+  expect(members).toHaveLength(7);
+
+  const teamResponse = await request.post("/api/v1/teams", {
+    headers,
+    data: {
+      name: `e2e-History-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      members: members.map((m) => ({ agentId: m.agentId, ...(m.roleId ? { roleId: m.roleId } : {}) })),
+    },
+  });
+  expect(teamResponse.status()).toBe(201);
+  HIST_TEAM_ID = ((await teamResponse.json()) as { id?: string }).id ?? "";
+  expect(HIST_TEAM_ID).toBeTruthy();
+
+  const head = await request.post("/api/v1/tasks", {
+    headers,
+    data: { teamId: HIST_TEAM_ID, title: "e2e-History-Head", priority: "medium" },
+  });
+  expect(head.status()).toBe(201);
+  HIST_HEAD_TASK_ID = ((await head.json()) as TaskDto).id ?? "";
+  expect(HIST_HEAD_TASK_ID).toBeTruthy();
+
+  const started = await request.post(`/api/v1/tasks/${HIST_HEAD_TASK_ID}/start`, { headers });
+  expect(started.status()).toBe(201);
+  const marked = await request.post(`/api/v1/tasks/${HIST_HEAD_TASK_ID}/mark-pending-review`, { headers });
+  expect(marked.status()).toBe(201);
+  expect(((await marked.json()) as TaskDto).status).toBe("pending_review");
+
+  const nonHead = await request.post("/api/v1/tasks", {
+    headers,
+    data: { teamId: HIST_TEAM_ID, title: "e2e-History-NonHead", priority: "medium" },
+  });
+  expect(nonHead.status()).toBe(201);
+  HIST_NON_HEAD_TASK_ID = ((await nonHead.json()) as TaskDto).id ?? "";
+  expect(HIST_NON_HEAD_TASK_ID).toBeTruthy();
+  expect(HIST_NON_HEAD_TASK_ID).not.toBe(HIST_HEAD_TASK_ID);
+}
+
+async function deleteHistoryFixture(request: APIRequestContext): Promise<void> {
+  if (!HIST_TEAM_ID) return;
+  const headers = await seedAdminHeaders(request);
+  // 团队存在 in_progress / pending_review 任务时删除被拒（TEAM_TASK_RUNNING），
+  // 故先 accept 掉待验收任务；force 绕过「计划仍为 draft」的完成前置校验。
+  if (HIST_HEAD_TASK_ID) {
+    const accepted = await request.post(`/api/v1/tasks/${HIST_HEAD_TASK_ID}/accept`, {
+      headers,
+      data: { force: true },
+    });
+    expect(accepted.status()).toBe(201);
+  }
+  const response = await request.delete(`/api/v1/teams/${HIST_TEAM_ID}`, { headers });
+  expect(response.ok()).toBeTruthy();
+}
+
+test.describe("任务历史摘要与会话任务参数（自建团队）", () => {
+  test.beforeAll(async ({ request }) => {
+    await createHistoryFixture(request);
+  });
+  test.afterAll(async ({ request }) => {
+    await deleteHistoryFixture(request);
+  });
+
+  test("team history count summary and pending_review row actions", async ({ page }) => {
+    await page.goto(`/teams/${HIST_TEAM_ID}/tasks`);
+
+    const items = page.getByTestId("task-list-item");
+    await expect(items.first()).toBeVisible();
+    const summary = page.getByTestId("team-task-count-summary");
+    await expect(summary).toBeVisible();
+    const statuses = await items.locator('[data-testid="status-badge"]').evaluateAll((nodes) =>
+      nodes.map((node) => node.getAttribute("data-status") ?? ""),
+    );
+    const count = (labels: string[]) => statuses.filter((status) => labels.includes(status)).length;
+    expect(count(["待验收"])).toBeGreaterThan(0);
+    const expected = `${statuses.length} 个任务 · ${count(["进行中", "阻塞中", "排队中"])} 进行中 / ${count(["待验收"])} 待验收 / ${count(["已完成", "已归档"])} 已完成 / ${count(["待开始"])} 待开始`;
+    await expect(summary).toHaveText(expected);
+    const pendingReviewItem = items.filter({ has: page.locator('[data-testid="status-badge"][data-status="待验收"]') }).first();
+    await expect(pendingReviewItem).toBeVisible();
+    await expect(pendingReviewItem.getByTestId("task-accept")).toBeVisible();
+    await expect(pendingReviewItem.getByTestId("task-reject")).toBeVisible();
+  });
+
+  test("session task parameter selects a non-head task and guards invalid input", async ({ page }) => {
+    await page.goto(`/teams/${HIST_TEAM_ID}/session?task=${HIST_NON_HEAD_TASK_ID}`);
+    const selectedTask = page.getByTestId("team-session-current-task");
+    await expect(selectedTask).toHaveAttribute("data-task-id", HIST_NON_HEAD_TASK_ID);
+
+    await page.goto(`/teams/${HIST_TEAM_ID}/session?task=invalid-task`);
+    await expect(page.getByTestId("session-task-param-error")).toContainText("任务参数无效");
   });
 });
