@@ -36,6 +36,54 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # 等数据库 TCP 就绪。RealtimeService.onModuleInit 连不上库会直接退出，而删
+      # namespace 重建时 MySQL 尚未 ready，server 会连续重启（实测 4 次）。
+      # 目标地址从 ConfigMap 的 DATABASE_URL 运行时解析，与 server 自身取值同源；
+      # 不在此处重复拼装，避免产生第二份可能漂移的真相。复用 server 镜像，不引入新镜像。
+      initContainers:
+        - name: wait-for-db
+          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy | default .Values.image.pullPolicy }}
+          command:
+            - node
+            - -e
+            - |
+              const net = require('net');
+              const target = new URL(process.env.DATABASE_URL);
+              const host = target.hostname;
+              const port = Number(target.port || 3306);
+              const deadline = Date.now() + Number(process.env.DB_WAIT_TIMEOUT_SECONDS) * 1000;
+              const pollMs = Number(process.env.DB_WAIT_POLL_SECONDS) * 1000;
+              const attempt = () =>
+                new Promise((resolve) => {
+                  const socket = net.connect({ host, port });
+                  const fail = () => { socket.destroy(); resolve(false); };
+                  socket.setTimeout(2000);
+                  socket.once('connect', () => { socket.destroy(); resolve(true); });
+                  socket.once('error', fail);
+                  socket.once('timeout', fail);
+                });
+              (async () => {
+                for (;;) {
+                  if (await attempt()) {
+                    console.log(`db reachable at ${host}:${port}`);
+                    process.exit(0);
+                  }
+                  if (Date.now() > deadline) {
+                    console.error(`db not reachable at ${host}:${port} within ${process.env.DB_WAIT_TIMEOUT_SECONDS}s`);
+                    process.exit(1);
+                  }
+                  await new Promise((r) => setTimeout(r, pollMs));
+                }
+              })();
+          envFrom:
+            - configMapRef:
+                name: {{ include "vteam.config.name" . }}
+          env:
+            - name: DB_WAIT_TIMEOUT_SECONDS
+              value: {{ .Values.server.dbWait.timeoutSeconds | default 180 | quote }}
+            - name: DB_WAIT_POLL_SECONDS
+              value: {{ .Values.server.dbWait.pollIntervalSeconds | default 2 | quote }}
       containers:
         - name: server
           image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}

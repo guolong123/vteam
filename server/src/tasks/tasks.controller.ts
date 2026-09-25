@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Param,
@@ -391,6 +392,19 @@ export class TasksController {
       force: dto?.force === true,
       forceReason: dto?.reason,
     });
+  }
+
+  /**
+   * 删除任务（硬删）。DELETE /api/v1/tasks/:id
+   * 与 archive 不同：archive 只把状态推到终态、任务行仍在；本端点物理删除任务行
+   * 及其任务级子表数据。in_progress / pending_review 拒绝（409 TASK_DELETE_BLOCKED）。
+   */
+  @Delete('tasks/:id')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('tasks.edit')
+  @ApiOperation({ summary: '删除任务（硬删；执行中/待验收拒绝）' })
+  remove(@Param('id') id: string) {
+    return this.tasksService.remove(id);
   }
 
   /**

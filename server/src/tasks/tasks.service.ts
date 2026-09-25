@@ -1346,6 +1346,117 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
+   * 删除任务（硬删）。此前无此入口，e2e 造的数据只能靠删团队级联回收：13 张表外键
+   * 引用 tasks（其中 teams.current_task_id 为可空指针），而任务无法单独删，导致
+   * 非团队级 fixture 无路清理。
+   *
+   * 顺序取自 teams.service.remove 的任务级联（依赖 → 被依赖），另加两处单任务
+   * 场景独有的处理：teams.currentTaskId 必须置空（否则留下指向已删任务的悬空指针），
+   * chat_channels 只解绑不删——私聊频道按 [teamId, teamMemberId] 唯一，是团队级
+   * 长期资源，删掉会连带毁掉该团队全部成员私聊。
+   */
+  async remove(id: string): Promise<{ deleted: true; id: string }> {
+    const task = await this.prisma.task.findUnique({
+      where: { id },
+      select: { id: true, teamId: true, status: true },
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: TASK_ERRORS.TASK_NOT_FOUND,
+        message: '任务不存在',
+      });
+    }
+    if (task.status === 'in_progress' || task.status === 'pending_review') {
+      throw new ConflictException({
+        code: TASK_ERRORS.TASK_DELETE_BLOCKED,
+        message: '任务执行中或待验收，不可删除',
+        details: { taskId: id, status: task.status },
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.taskMessageChannel.deleteMany({ where: { taskId: id } });
+      await tx.taskNotificationChannel.deleteMany({ where: { taskId: id } });
+      await tx.taskEvent.deleteMany({ where: { taskId: id } });
+
+      const planIds = (
+        await tx.plan.findMany({ where: { taskId: id }, select: { id: true } })
+      ).map((p) => p.id);
+      if (planIds.length > 0) {
+        await tx.planTask.deleteMany({ where: { planId: { in: planIds } } });
+      }
+      await tx.plan.deleteMany({ where: { taskId: id } });
+
+      const issueIds = (
+        await tx.issue.findMany({ where: { taskId: id }, select: { id: true } })
+      ).map((i) => i.id);
+      if (issueIds.length > 0) {
+        await tx.issueActivity.deleteMany({
+          where: { issueId: { in: issueIds } },
+        });
+      }
+      await tx.issue.deleteMany({ where: { taskId: id } });
+
+      const artifactIds = (
+        await tx.artifact.findMany({
+          where: { taskId: id },
+          select: { id: true },
+        })
+      ).map((a) => a.id);
+      if (artifactIds.length > 0) {
+        await tx.artifactVersion.deleteMany({
+          where: { artifactId: { in: artifactIds } },
+        });
+      }
+      await tx.artifact.deleteMany({ where: { taskId: id } });
+      await tx.memory.deleteMany({ where: { taskId: id } });
+      await tx.agentQuestion.deleteMany({ where: { taskId: id } });
+      await tx.message.deleteMany({ where: { taskId: id } });
+
+      // 私聊频道是团队级长期资源，仅解绑 taskId，不删频道。
+      const channelIds = (
+        await tx.chatChannel.findMany({
+          where: { taskId: id },
+          select: { id: true },
+        })
+      ).map((c) => c.id);
+      if (channelIds.length > 0) {
+        await tx.message.deleteMany({
+          where: { channelId: { in: channelIds } },
+        });
+      }
+      await tx.chatChannel.updateMany({
+        where: { taskId: id },
+        data: { taskId: null },
+      });
+
+      // sessions.team_member_key 为 task_id NULL 时物化的生成列（唯一）：先删本团队
+      // 任务会话（否则置空后与既有团队级会话键冲突 P2002），再解绑他团队残留行。
+      if (task.teamId) {
+        await tx.session.deleteMany({
+          where: { taskId: id, teamId: task.teamId },
+        });
+      }
+      await tx.session.updateMany({
+        where: { taskId: id },
+        data: { taskId: null },
+      });
+      await tx.taskGroupInstance.updateMany({
+        where: { taskId: id },
+        data: { taskId: null },
+      });
+      await tx.teamQueue.deleteMany({ where: { taskId: id } });
+      await tx.team.updateMany({
+        where: { currentTaskId: id },
+        data: { currentTaskId: null },
+      });
+      await tx.task.delete({ where: { id } });
+    });
+
+    return { deleted: true, id };
+  }
+
+  /**
    * 完工预检（accept/archive 用户路径共用）：
    * 计划有行则必须 completed（executing=仍在执行，其余=未执行完；无行=任务无计划，不拦截）；
    * issue 仅 open/in_progress 算未完结（resolved/closed 为完结，rejected 为已决不再处理）。
