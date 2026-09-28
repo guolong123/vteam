@@ -4,13 +4,13 @@
  * 从 docs/agent-platform/prototypes/group-chat/index.tsx 迁移：
  * - 卡片含工具名 + 输入/输出摘要 + 状态徽章（运行中/成功/失败，失败=ToolStateError）
  * - 失败时边框/输出文字用错误语义色（errorTheme.quota 红色系）
- * data-testid=msg-tool，token 引用统一走 src/theme/tokens.ts。
+ * data-testid=msg-tool；身份（B1）：头像/作者/时间统一由 MsgParts 共享身份栏渲染，
+ * 本卡片只留工具名、I/O 摘录与运行状态。token 引用统一走 src/theme/tokens.ts。
  */
 "use client";
 import { useState } from "react";
 import type { CSSProperties } from "react";
 import {
-  type RoleKey,
   neutral,
   space,
   radius,
@@ -18,7 +18,6 @@ import {
   fontFamily,
   shadow,
 } from "@/src/theme/tokens";
-import { AgentAvatar } from "@/src/components/ui";
 import { LoadingDots } from "./loading-indicator";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -34,19 +33,16 @@ const toolStatus: Record<
 };
 
 export interface MsgToolProps {
-  author: string;
-  role: RoleKey;
   name: string;
   status: "running" | "success" | "failed";
   input: string;
   output: string;
-  time?: string;
   style?: CSSProperties;
   className?: string;
 }
 
-/** 工具调用消息（tool part）：单行概要（名称 + 输入摘要 + 状态 + 时间）+ 点击展开完整输入/输出 */
-export function MsgTool({ author, role, name, status, input, output, time, style, className }: MsgToolProps) {
+/** 工具调用消息（tool part）：单行概要（名称 + 输入摘要 + 状态）+ 点击展开完整输入/输出 */
+export function MsgTool({ name, status, input, output, style, className }: MsgToolProps) {
   const st = toolStatus[status];
   const failed = status === "failed";
   const [open, setOpen] = useState(false);
@@ -66,7 +62,6 @@ export function MsgTool({ author, role, name, status, input, output, time, style
         ...style,
       }}
     >
-      <AgentAvatar role={role} size="sm" dot={false} style={{ marginTop: 2 }} />
       <button
         type="button"
         aria-expanded={open}
@@ -125,15 +120,13 @@ export function MsgTool({ author, role, name, status, input, output, time, style
             {status === "running" && <LoadingDots color={st.color} />}
             {st.label}
           </span>
-          {time && (
-            <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>{time}</span>
-          )}
           <span style={{ flexShrink: 0, fontSize: fontSize.xs, color: neutral[400] }} aria-hidden>
             {open ? "▾" : "▸"}
           </span>
         </div>
         {open && (
           <div
+            data-testid="msg-tool-io"
             style={{
               display: "flex",
               flexDirection: "column",
@@ -155,10 +148,6 @@ export function MsgTool({ author, role, name, status, input, output, time, style
               <span style={{ wordBreak: "break-word", color: failed ? "#B91C1C" : neutral[600] }}>
                 {output}
               </span>
-            </div>
-            <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-              {author}
-              {time ? ` · ${time}` : ""}
             </div>
           </div>
         )}

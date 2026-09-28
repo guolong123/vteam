@@ -15,27 +15,33 @@ export interface RoleTheme {
   border: string;
 }
 
-/** 六类 Agent 角色的语义色（产品=青蓝 / 项目经理=蓝 / 架构=紫 / 开发=绿 / 测试=橙 / 计划员= slate 灰，深色下半透明跟随 surface） */
+/**
+ * 六类 Agent 角色的语义色（产品=青蓝 / 项目经理=蓝 / 架构=紫 / 开发=绿 / 测试=橙 / 计划员= indigo）
+ * =============================================
+ * 角色色**唯一来源**是 `app/globals.css` 的 `:root` / `.dark` 变量对
+ * （`--color-role-<kebab-role>-{color,bg,border}`）；此处只存 `var()` 引用，
+ * 不复制 hex —— 否则深色下会锁死浅色不透明值（B10 角色色主题化）。
+ */
 export const roles: Record<RoleKey, RoleTheme> = {
-  product: { label: "产品经理", color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
-  project_manager: { label: "项目经理", color: "#0284C7", bg: "#F0F9FF", border: "#BAE6FD" },
-  architect: { label: "架构师", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
-  developer: { label: "开发者", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
-  tester: { label: "测试", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
-  plan: { label: "计划员", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
+  product: { label: "产品经理", color: "var(--color-role-product-color)", bg: "var(--color-role-product-bg)", border: "var(--color-role-product-border)" },
+  project_manager: { label: "项目经理", color: "var(--color-role-project-manager-color)", bg: "var(--color-role-project-manager-bg)", border: "var(--color-role-project-manager-border)" },
+  architect: { label: "架构师", color: "var(--color-role-architect-color)", bg: "var(--color-role-architect-bg)", border: "var(--color-role-architect-border)" },
+  developer: { label: "开发者", color: "var(--color-role-developer-color)", bg: "var(--color-role-developer-bg)", border: "var(--color-role-developer-border)" },
+  tester: { label: "测试", color: "var(--color-role-tester-color)", bg: "var(--color-role-tester-bg)", border: "var(--color-role-tester-border)" },
+  plan: { label: "计划员", color: "var(--color-role-plan-color)", bg: "var(--color-role-plan-bg)", border: "var(--color-role-plan-border)" },
 };
 
 /** 全部 RoleKey（键序 = `roles` 声明序），由 `roles` 派生以保证与色板永不漂移。 */
 export const ROLE_KEYS: readonly RoleKey[] = Object.keys(roles) as RoleKey[];
 
-/** 角色对应导航/面板上的强调色（深一档，用于文字） */
+/** 角色对应导航/面板上的强调色：与 `roles.color` 同源同变量（`--color-role-*-color`），不维护第二套深色 hex */
 export const roleText: Record<RoleKey, string> = {
-  product: "#0F766E",
-  project_manager: "#0369A1",
-  architect: "#6D28D9",
-  developer: "#047857",
-  tester: "#B45309",
-  plan: "#334155",
+  product: "var(--color-role-product-color)",
+  project_manager: "var(--color-role-project-manager-color)",
+  architect: "var(--color-role-architect-color)",
+  developer: "var(--color-role-developer-color)",
+  tester: "var(--color-role-tester-color)",
+  plan: "var(--color-role-plan-color)",
 };
 
 /* ---------------------------------- 任务状态 ---------------------------------- */
@@ -97,6 +103,22 @@ export const fontSize = {
   lg: 15,
   xl: 18,
   xxl: 22,
+} as const;
+
+/**
+ * 消息作用域三级字号（chat-ux-hierarchy-and-streaming A4）：
+ * 正文 14 / 身份 12 / 元信息 11，只作用于聊天消息渲染。
+ * 刻意独立于全局 `fontSize`——`fontSize.md` 保持 13，消息密度不牵动全站字号。
+ */
+export const messageFontSize = {
+  body: 14,
+  identity: 12,
+  meta: 11,
+} as const;
+
+/** 消息身份名字重：semibold（正文与元信息为 400，形成 400/600/400 层级） */
+export const messageFontWeight = {
+  identity: 600,
 } as const;
 
 /* ---------------------------------- 字体 ---------------------------------- */

@@ -19,6 +19,8 @@ export { MsgError } from "./msg-error";
 export type { MsgErrorProps } from "./msg-error";
 export { MsgAborted } from "./msg-aborted";
 export type { MsgAbortedProps } from "./msg-aborted";
+export { MsgUnknownPart, safePartType, summarizeUnknownPart } from "./msg-unknown-part";
+export type { MsgUnknownPartProps } from "./msg-unknown-part";
 export { MsgParts } from "./msg-parts";
 export type { MsgPartsProps, PartShape } from "./msg-parts";
 export { QuestionModal } from "./question-modal";

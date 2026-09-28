@@ -14,6 +14,8 @@ export type { AgentBadgeProps } from "./agent-badge";
 export { ChatBubble, AttachmentCard } from "./chat-bubble";
 export type { ChatBubbleProps, ChatMessageType, ChatBubbleAttachment } from "./chat-bubble";
 export { Markdown } from "./markdown";
+export { MessageIdentity } from "./message-identity";
+export type { MessageIdentityProps } from "./message-identity";
 export { MessageInput } from "./message-input";
 export type {
   MessageInputProps,
