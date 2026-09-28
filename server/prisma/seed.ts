@@ -90,7 +90,11 @@ interface PlatformCapabilityMirror {
 
 const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
   { key: 'task.create', tools: ['vteam_task_create'], defaultDeny: true },
-  { key: 'task.transition', tools: ['vteam_task_transition'], defaultDeny: true },
+  {
+    key: 'task.transition',
+    tools: ['vteam_task_transition'],
+    defaultDeny: true,
+  },
   {
     key: 'task.complete',
     tools: ['vteam_plan_complete', 'vteam_plan_finalize', 'vteam_plan_confirm'],
@@ -99,11 +103,19 @@ const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
   { key: 'plan.steps', tools: ['vteam_todo'], defaultDeny: false },
   { key: 'task.context', tools: ['vteam_task_context'], defaultDeny: false },
   { key: 'team.view', tools: ['vteam_team_view'], defaultDeny: false },
-  { key: 'team.add_member', tools: ['vteam_team_add_member'], defaultDeny: true },
+  {
+    key: 'team.add_member',
+    tools: ['vteam_team_add_member'],
+    defaultDeny: true,
+  },
   { key: 'chat.post', tools: ['vteam_group_post'], defaultDeny: false },
   { key: 'chat.read', tools: ['vteam_chat_history'], defaultDeny: false },
   { key: 'chat.notify', tools: ['vteam_notify_agent'], defaultDeny: false },
-  { key: 'chat.channel_send', tools: ['vteam_channel_send'], defaultDeny: true },
+  {
+    key: 'chat.channel_send',
+    tools: ['vteam_channel_send'],
+    defaultDeny: true,
+  },
   { key: 'wecom.reply', tools: ['vteam_wecom_reply'], defaultDeny: true },
   { key: 'doc.read', tools: ['vteam_doclib'], defaultDeny: false },
   { key: 'doc.submit', tools: ['vteam_submit_artifact'], defaultDeny: false },
@@ -112,12 +124,20 @@ const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
   { key: 'issue.get', tools: ['vteam_issue_get'], defaultDeny: true },
   { key: 'issue.list', tools: ['vteam_issue_list'], defaultDeny: true },
   { key: 'issue.update', tools: ['vteam_issue_update'], defaultDeny: true },
-  { key: 'issue.transition', tools: ['vteam_issue_transition'], defaultDeny: true },
+  {
+    key: 'issue.transition',
+    tools: ['vteam_issue_transition'],
+    defaultDeny: true,
+  },
   { key: 'memory.save', tools: ['vteam_memory_save'], defaultDeny: false },
   { key: 'memory.search', tools: ['vteam_memory_search'], defaultDeny: false },
   { key: 'memory.update', tools: ['vteam_memory_update'], defaultDeny: false },
   { key: 'skill.create', tools: ['vteam_skill_create'], defaultDeny: true },
-  { key: 'question.confirm', tools: ['vteam_question_confirm'], defaultDeny: true },
+  {
+    key: 'question.confirm',
+    tools: ['vteam_question_confirm'],
+    defaultDeny: true,
+  },
   { key: 'my_profile', tools: ['vteam_my_profile'], defaultDeny: false },
   {
     key: 'hook.manage',
@@ -181,7 +201,9 @@ function planDirGlob(): string {
   return '**.opencode/plans/**';
 }
 
-function buildEditPermission(writeGlobs: readonly string[]): Record<string, 'allow' | 'deny'> {
+function buildEditPermission(
+  writeGlobs: readonly string[],
+): Record<string, 'allow' | 'deny'> {
   return {
     '*': 'deny',
     ...Object.fromEntries(writeGlobs.map((glob) => [glob, 'allow' as const])),
@@ -654,13 +676,62 @@ const BUILTIN_AGENT_ROLES: readonly {
   sortOrder: number;
   rolePrompt: string;
 }[] = [
-  { id: 'ar_product', key: 'product', name: '产品经理', defaultAgentId: 'a_product', sortOrder: 1, rolePrompt: BUILTIN_ROLE_PROMPTS.product },
-  { id: 'ar_project_manager', key: 'project_manager', name: '项目经理', defaultAgentId: 'a_project_manager', sortOrder: 2, rolePrompt: BUILTIN_ROLE_PROMPTS.project_manager },
-  { id: 'ar_architect', key: 'architect', name: '架构师', defaultAgentId: 'a_architect', sortOrder: 3, rolePrompt: BUILTIN_ROLE_PROMPTS.architect },
-  { id: 'ar_developer', key: 'developer', name: '开发者', defaultAgentId: 'a_developer', sortOrder: 4, rolePrompt: BUILTIN_ROLE_PROMPTS.developer },
-  { id: 'ar_tester', key: 'tester', name: '测试', defaultAgentId: 'a_tester', sortOrder: 5, rolePrompt: BUILTIN_ROLE_PROMPTS.tester },
-  { id: 'ar_plan', key: 'plan', name: '计划员', defaultAgentId: 'a_plan', sortOrder: 6, rolePrompt: BUILTIN_ROLE_PROMPTS.plan },
-  { id: 'ar_librarian', key: 'librarian', name: '知识管理员', defaultAgentId: 'a_librarian', sortOrder: 7, rolePrompt: BUILTIN_ROLE_PROMPTS.librarian },
+  {
+    id: 'ar_product',
+    key: 'product',
+    name: '产品经理',
+    defaultAgentId: 'a_product',
+    sortOrder: 1,
+    rolePrompt: BUILTIN_ROLE_PROMPTS.product,
+  },
+  {
+    id: 'ar_project_manager',
+    key: 'project_manager',
+    name: '项目经理',
+    defaultAgentId: 'a_project_manager',
+    sortOrder: 2,
+    rolePrompt: BUILTIN_ROLE_PROMPTS.project_manager,
+  },
+  {
+    id: 'ar_architect',
+    key: 'architect',
+    name: '架构师',
+    defaultAgentId: 'a_architect',
+    sortOrder: 3,
+    rolePrompt: BUILTIN_ROLE_PROMPTS.architect,
+  },
+  {
+    id: 'ar_developer',
+    key: 'developer',
+    name: '开发者',
+    defaultAgentId: 'a_developer',
+    sortOrder: 4,
+    rolePrompt: BUILTIN_ROLE_PROMPTS.developer,
+  },
+  {
+    id: 'ar_tester',
+    key: 'tester',
+    name: '测试',
+    defaultAgentId: 'a_tester',
+    sortOrder: 5,
+    rolePrompt: BUILTIN_ROLE_PROMPTS.tester,
+  },
+  {
+    id: 'ar_plan',
+    key: 'plan',
+    name: '计划员',
+    defaultAgentId: 'a_plan',
+    sortOrder: 6,
+    rolePrompt: BUILTIN_ROLE_PROMPTS.plan,
+  },
+  {
+    id: 'ar_librarian',
+    key: 'librarian',
+    name: '知识管理员',
+    defaultAgentId: 'a_librarian',
+    sortOrder: 7,
+    rolePrompt: BUILTIN_ROLE_PROMPTS.librarian,
+  },
 ];
 
 /**
@@ -755,7 +826,9 @@ function normalizeMemoryContent(content: string): string {
 }
 
 function computeMemoryContentHash(content: string): string {
-  return createHash('sha256').update(normalizeMemoryContent(content), 'utf8').digest('hex');
+  return createHash('sha256')
+    .update(normalizeMemoryContent(content), 'utf8')
+    .digest('hex');
 }
 
 /**
@@ -765,7 +838,7 @@ function computeMemoryContentHash(content: string): string {
  * 生成：
  *   - 平台角色：admin / member
  *   - 用户：seed-admin（owner）、seed-member（未加入示例团队，用于验证成员可见性）
-   *   - 团队：示例全局团队 tm_0000000001（含 5 角色 + 计划员 + 知识管理员各 1 实例 + owner 行）
+ *   - 团队：示例全局团队 tm_0000000001（含 5 角色 + 计划员 + 知识管理员各 1 实例 + owner 行）
  */
 const prisma = new PrismaClient();
 
@@ -793,7 +866,13 @@ async function main() {
     artifacts: { view: true, create: true },
     chats: { view: true, create: true, edit: true, delete: false },
     skills: { view: true, create: false, edit: false },
-    tasks: { view: true, create: true, edit: true, review: true, delete: false },
+    tasks: {
+      view: true,
+      create: true,
+      edit: true,
+      review: true,
+      delete: false,
+    },
     workers: { view: true, edit: false },
     channels: { view: true, manage: false },
     teams: { view: true, create: true, edit: true, delete: false },
@@ -1044,7 +1123,10 @@ async function main() {
     { policyId: string; agentName: keyof typeof ROLE_BOUNDARIES }
   > = {
     product: { policyId: 'ep_product', agentName: 'vteam-product' },
-    project_manager: { policyId: 'ep_project_manager', agentName: 'vteam-project_manager' },
+    project_manager: {
+      policyId: 'ep_project_manager',
+      agentName: 'vteam-project_manager',
+    },
     architect: { policyId: 'ep_architect', agentName: 'vteam-architect' },
     developer: { policyId: 'ep_developer', agentName: 'vteam-developer' },
     tester: { policyId: 'ep_tester', agentName: 'vteam-tester' },
@@ -1063,7 +1145,8 @@ async function main() {
   for (const agent of templateAgents) {
     const { policyId, agentName } = resolvePolicyBinding(agent.agentKey);
     const boundary = ROLE_BOUNDARIES[agentName];
-    const boundaryTaskEffect = (boundary as unknown as { taskEffect?: unknown }).taskEffect;
+    const boundaryTaskEffect = (boundary as unknown as { taskEffect?: unknown })
+      .taskEffect;
     const taskEffect =
       boundaryTaskEffect === 'allow' || boundaryTaskEffect === 'deny'
         ? boundaryTaskEffect
@@ -1076,7 +1159,9 @@ async function main() {
         read: buildReadPermission(),
         bash: boundary.bashEffect,
         task: taskEffect,
-        ...Object.fromEntries(boundary.mcpDenies.map((tool: string) => [tool, 'deny' as const])),
+        ...Object.fromEntries(
+          boundary.mcpDenies.map((tool: string) => [tool, 'deny' as const]),
+        ),
       },
       correction: {
         scopeSummary: boundary.scopeSummary,
@@ -1239,7 +1324,10 @@ async function main() {
     'qwen3.6-plus',
   ];
   const legacyModels = await prisma.model.findMany({
-    where: { providerID: 'opencode', modelID: { in: LEGACY_UNPREFIXED_MODEL_IDS } },
+    where: {
+      providerID: 'opencode',
+      modelID: { in: LEGACY_UNPREFIXED_MODEL_IDS },
+    },
     select: { id: true },
   });
   if (legacyModels.length > 0) {
@@ -1257,7 +1345,12 @@ async function main() {
   const modelRows = buildModelSeedRows();
   for (const row of modelRows) {
     await prisma.model.upsert({
-      where: { providerID_modelID: { providerID: row.providerID, modelID: row.modelID } },
+      where: {
+        providerID_modelID: {
+          providerID: row.providerID,
+          modelID: row.modelID,
+        },
+      },
       update: {},
       create: row,
     });
@@ -1270,7 +1363,11 @@ async function main() {
   // source=builtin 走 seed（POST /tools 只产 custom/mcp，见 tools.service.create）；
   // action 列 @unique 即权限点（FR-48），内置工具注册即进入权限命名空间，默认 enabled=true。
   const builtinTools = [
-    { name: 'Bash 命令', action: 'bash', description: '执行 shell 命令（有副作用，默认需确认）' },
+    {
+      name: 'Bash 命令',
+      action: 'bash',
+      description: '执行 shell 命令（有副作用，默认需确认）',
+    },
     { name: '读取文件', action: 'read', description: '读取文件内容' },
     { name: '编辑文件', action: 'edit', description: '局部编辑已有文件' },
     { name: '写入文件', action: 'write', description: '创建/覆盖文件' },
@@ -1322,14 +1419,18 @@ async function main() {
           where: { id: legacyServer.id },
           data: { name: 'vteam', url: platformMcpUrl },
         });
-        console.log(`  - 迁移 MCP Server：keta-platform → vteam（id=${legacyServer.id}）`);
+        console.log(
+          `  - 迁移 MCP Server：keta-platform → vteam（id=${legacyServer.id}）`,
+        );
       } else {
         // vteam 已存在（防 name 唯一约束冲突）→ 仅停用旧行，不 rename
         await prisma.mcpServer.update({
           where: { id: legacyServer.id },
           data: { enabled: false },
         });
-        console.log(`  - vteam 已存在，旧行 keta-platform（id=${legacyServer.id}）已停用`);
+        console.log(
+          `  - vteam 已存在，旧行 keta-platform（id=${legacyServer.id}）已停用`,
+        );
       }
     }
 
@@ -1340,14 +1441,22 @@ async function main() {
     for (const lt of legacyTools) {
       await prisma.tool.update({
         where: { id: lt.id },
-        data: { name: lt.name.replace('keta-platform_', 'vteam_'), mcpServer: 'vteam' },
+        data: {
+          name: lt.name.replace('keta-platform_', 'vteam_'),
+          mcpServer: 'vteam',
+        },
       });
     }
     if (legacyTools.length > 0) {
-      console.log(`  - 迁移 MCP 工具：${legacyTools.length} 条（keta-platform_* → vteam_*）`);
+      console.log(
+        `  - 迁移 MCP 工具：${legacyTools.length} 条（keta-platform_* → vteam_*）`,
+      );
     }
   } catch (e) {
-    console.warn('  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：', e);
+    console.warn(
+      '  - 警告：keta-platform → vteam 存量迁移失败（不阻断 seed）：',
+      e,
+    );
   }
 
   await prisma.mcpServer.upsert({
@@ -1411,35 +1520,152 @@ async function main() {
   // action 为 platform-mcp 端点 tools/list 的 tool 名（命名 <server>_<action>），
   // source=mcp + execution=mcp + mcpServer 对齐 tools.service 的 source 推导逻辑。
   const vteamTools = [
-    { action: 'chat_history', name: 'vteam_chat_history', description: '查询任务群聊历史消息（按需拉取）' },
-    { action: 'doclib', name: 'vteam_doclib', description: '查询任务产出物文档库' },
-    { action: 'task_context', name: 'vteam_task_context', description: '查询任务概览与团队实例成员' },
-    { action: 'group_post', name: 'vteam_group_post', description: '向任务群聊发布消息' },
-    { action: 'read_file', name: 'vteam_read_file', description: '读取产出物文件或 worker 工作区文件' },
-    { action: 'notify_agent', name: 'vteam_notify_agent', description: '向任务内实例定向发消息并触发执行' },
-    { action: 'submit_artifact', name: 'vteam_submit_artifact', description: '提交产出物到任务文档库' },
-    { action: 'issue_create', name: 'vteam_issue_create', description: '创建任务内 issue' },
-    { action: 'issue_list', name: 'vteam_issue_list', description: '查询任务内 issue 列表' },
-    { action: 'issue_get', name: 'vteam_issue_get', description: '查询单个 issue 详情' },
-    { action: 'issue_update', name: 'vteam_issue_update', description: '更新 issue 标题/描述/标签' },
-    { action: 'issue_transition', name: 'vteam_issue_transition', description: '流转 issue 状态' },
-    { action: 'task_transition', name: 'vteam_task_transition', description: '流转任务状态（仅主 Agent）' },
-    { action: 'question_confirm', name: 'vteam_question_confirm', description: '托管模式确认成员请求（仅主 Agent）' },
-    { action: 'memory_save', name: 'vteam_memory_save', description: '写入平台记忆（task/team/global 三级）' },
-    { action: 'memory_search', name: 'vteam_memory_search', description: '检索平台记忆' },
-    { action: 'team_view', name: 'vteam_team_view', description: '查询任务团队实时视图' },
-    { action: 'my_profile', name: 'vteam_my_profile', description: '查询自身 Agent 配置' },
-    { action: 'team_add_member', name: 'vteam_team_add_member', description: '申请将 Agent 加入团队（仅主 Agent）' },
-    { action: 'plan_complete', name: 'vteam_plan_complete', description: '标记计划执行完成（仅主 Agent）' },
-    { action: 'channel_send', name: 'vteam_channel_send', description: 'Agent 主动推送通知到通知渠道（webhook/企微机器人）' },
-    { action: 'wecom_reply', name: 'vteam_wecom_reply', description: '回复企业微信用户（仅当消息来自企微时使用）' },
-    { action: 'task_create', name: 'vteam_task_create', description: '在团队会话无任务时创建任务（仅主 Agent 可调）' },
-    { action: 'memory_update', name: 'vteam_memory_update', description: '更新平台记忆（团队隔离校验）' },
-    { action: 'skill_create', name: 'vteam_skill_create', description: '创建技能（仅主 Agent，默认停用）' },
-    { action: 'git_repos_list', name: 'vteam_git_repos_list', description: '查询被授权仓库只读清单（脱敏）' },
-    { action: 'hook_register', name: 'vteam_hook_register', description: '注册稍后唤醒（定时/静默，唤醒回同会话）' },
-    { action: 'hook_cancel', name: 'vteam_hook_cancel', description: '取消 hook（仅所有者或主 Agent）' },
-    { action: 'secret_command', name: 'vteam_secret_command', description: '请求执行敏感命令：提交命令模板与变量声明（不提交值），由用户在弹窗填写并确认后在 worker 执行' },
+    {
+      action: 'chat_history',
+      name: 'vteam_chat_history',
+      description: '查询任务群聊历史消息（按需拉取）',
+    },
+    {
+      action: 'doclib',
+      name: 'vteam_doclib',
+      description: '查询任务产出物文档库',
+    },
+    {
+      action: 'task_context',
+      name: 'vteam_task_context',
+      description: '查询任务概览与团队实例成员',
+    },
+    {
+      action: 'group_post',
+      name: 'vteam_group_post',
+      description: '向任务群聊发布消息',
+    },
+    {
+      action: 'read_file',
+      name: 'vteam_read_file',
+      description: '读取产出物文件或 worker 工作区文件',
+    },
+    {
+      action: 'notify_agent',
+      name: 'vteam_notify_agent',
+      description: '向任务内实例定向发消息并触发执行',
+    },
+    {
+      action: 'submit_artifact',
+      name: 'vteam_submit_artifact',
+      description: '提交产出物到任务文档库',
+    },
+    {
+      action: 'issue_create',
+      name: 'vteam_issue_create',
+      description: '创建任务内 issue',
+    },
+    {
+      action: 'issue_list',
+      name: 'vteam_issue_list',
+      description: '查询任务内 issue 列表',
+    },
+    {
+      action: 'issue_get',
+      name: 'vteam_issue_get',
+      description: '查询单个 issue 详情',
+    },
+    {
+      action: 'issue_update',
+      name: 'vteam_issue_update',
+      description: '更新 issue 标题/描述/标签',
+    },
+    {
+      action: 'issue_transition',
+      name: 'vteam_issue_transition',
+      description: '流转 issue 状态',
+    },
+    {
+      action: 'task_transition',
+      name: 'vteam_task_transition',
+      description: '流转任务状态（仅主 Agent）',
+    },
+    {
+      action: 'question_confirm',
+      name: 'vteam_question_confirm',
+      description: '托管模式确认成员请求（仅主 Agent）',
+    },
+    {
+      action: 'memory_save',
+      name: 'vteam_memory_save',
+      description: '写入平台记忆（task/team/global 三级）',
+    },
+    {
+      action: 'memory_search',
+      name: 'vteam_memory_search',
+      description: '检索平台记忆',
+    },
+    {
+      action: 'team_view',
+      name: 'vteam_team_view',
+      description: '查询任务团队实时视图',
+    },
+    {
+      action: 'my_profile',
+      name: 'vteam_my_profile',
+      description: '查询自身 Agent 配置',
+    },
+    {
+      action: 'team_add_member',
+      name: 'vteam_team_add_member',
+      description: '申请将 Agent 加入团队（仅主 Agent）',
+    },
+    {
+      action: 'plan_complete',
+      name: 'vteam_plan_complete',
+      description: '标记计划执行完成（仅主 Agent）',
+    },
+    {
+      action: 'channel_send',
+      name: 'vteam_channel_send',
+      description: 'Agent 主动推送通知到通知渠道（webhook/企微机器人）',
+    },
+    {
+      action: 'wecom_reply',
+      name: 'vteam_wecom_reply',
+      description: '回复企业微信用户（仅当消息来自企微时使用）',
+    },
+    {
+      action: 'task_create',
+      name: 'vteam_task_create',
+      description: '在团队会话无任务时创建任务（仅主 Agent 可调）',
+    },
+    {
+      action: 'memory_update',
+      name: 'vteam_memory_update',
+      description: '更新平台记忆（团队隔离校验）',
+    },
+    {
+      action: 'skill_create',
+      name: 'vteam_skill_create',
+      description: '创建技能（仅主 Agent，默认停用）',
+    },
+    {
+      action: 'git_repos_list',
+      name: 'vteam_git_repos_list',
+      description: '查询被授权仓库只读清单（脱敏）',
+    },
+    {
+      action: 'hook_register',
+      name: 'vteam_hook_register',
+      description: '注册稍后唤醒（定时/静默，唤醒回同会话）',
+    },
+    {
+      action: 'hook_cancel',
+      name: 'vteam_hook_cancel',
+      description: '取消 hook（仅所有者或主 Agent）',
+    },
+    {
+      action: 'secret_command',
+      name: 'vteam_secret_command',
+      description:
+        '请求执行敏感命令：提交命令模板与变量声明（不提交值），由用户在弹窗填写并确认后在 worker 执行',
+    },
   ];
 
   for (const t of vteamTools) {
@@ -2423,7 +2649,9 @@ version: 0.1.0
     });
   }
   // 默认主 Agent 为项目经理（仅未设置时填充，不覆盖用户已改值）。
-  const pmIndex = seedMemberAgents.findIndex((m) => m.agentId === 'a_project_manager');
+  const pmIndex = seedMemberAgents.findIndex(
+    (m) => m.agentId === 'a_project_manager',
+  );
   const pmMemberId = `tmm_${String(pmIndex + 1).padStart(10, '0')}`;
   await prisma.team.updateMany({
     where: { id: seedTeamId, mainAgentMemberId: null },
@@ -2480,7 +2708,8 @@ version: 0.1.0
       teamId: seedTeamId,
       content: charterMemoryContent,
       contentHash: computeMemoryContentHash(charterMemoryContent),
-      description: '团队协作规约：求助三要素/转交落 issue/广播纪律/10 分钟超时升级',
+      description:
+        '团队协作规约：求助三要素/转交落 issue/广播纪律/10 分钟超时升级',
       createdBy: admin.id,
       sourceType: 'system',
     },
@@ -2488,14 +2717,28 @@ version: 0.1.0
 
   console.log('Seed 完成：');
   console.log(`  - 角色：${adminRole.name} / ${memberRole.name}`);
-  console.log(`  - 用户：admin(u_admin) / seed-admin(${admin.id}) / seed-member(u_seed_member)`);
-  console.log(`  - 模板 Agent：${templateAgents.map((a) => `${a.name}(${a.agentKey})`).join('、')}（type=template）`);
-  console.log(`  - 角色策略：${templateAgents.map((a) => resolvePolicyBinding(a.agentKey).policyId).join('、')}（type=template）`);
-  console.log(`  - 内置工具：${builtinTools.map((t) => t.action).join('、')}（source=builtin）`);
-  console.log(`  - MCP 工具：${vteamTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=vteam）`);
+  console.log(
+    `  - 用户：admin(u_admin) / seed-admin(${admin.id}) / seed-member(u_seed_member)`,
+  );
+  console.log(
+    `  - 模板 Agent：${templateAgents.map((a) => `${a.name}(${a.agentKey})`).join('、')}（type=template）`,
+  );
+  console.log(
+    `  - 角色策略：${templateAgents.map((a) => resolvePolicyBinding(a.agentKey).policyId).join('、')}（type=template）`,
+  );
+  console.log(
+    `  - 内置工具：${builtinTools.map((t) => t.action).join('、')}（source=builtin）`,
+  );
+  console.log(
+    `  - MCP 工具：${vteamTools.map((t) => t.action).join('、')}（source=mcp，mcpServer=vteam）`,
+  );
   console.log(`  - MCP Server：vteam（remote，${platformMcpUrl}）`);
-  console.log(`  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m: ModelSeedRow) => m.modelID).join('、')}）`);
-  console.log(`  - 示例团队：${seedTeamName}(${seedTeamId}) 含 ${seedMemberAgents.length} 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）`);
+  console.log(
+    `  - 模型目录：${modelRows.length} 个模型（${modelRows.map((m: ModelSeedRow) => m.modelID).join('、')}）`,
+  );
+  console.log(
+    `  - 示例团队：${seedTeamName}(${seedTeamId}) 含 ${seedMemberAgents.length} 成员（5 角色 + 计划员 + 知识管理员各 1，主 Agent 为产品经理）`,
+  );
   console.log(`  - 管理员密码：${ADMIN_PASSWORD}`);
   console.log(`  - 初始 admin 账号：admin / admin123`);
 }
