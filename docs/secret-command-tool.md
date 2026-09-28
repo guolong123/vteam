@@ -30,13 +30,54 @@
 ```
 模型 tools/call secret_command
    → server 校验（占位符↔变量双向一致 / 变量名唯一 / cwd 相对无 .. / timeoutSec 1..300 默认 60）
-   → 归属校验（403）· 托管模式 fail-closed（403，创建问题之前直接拒绝）
+   → 归属解析（403/400）：teamId 为主，taskId 为可选归属标注，二者至少传一
+   → 托管门（403）：仅**非主 Agent** 发起者被拒；主 Agent 发起放行
    → 创建 secret_input 平台问题（只落模板与变量元数据）
    → 用户填写 → server 阻塞等待（输入预算 540s）
    → 提供值 ⇒ 下发 worker POST /secret-command（X-Worker-Token）
    → worker 执行 + 进程组超时 + 脱敏 + 每流 32KB 截断
-   → server 二次脱敏 → 返回 envelope → 模型继续
+   → server 二次脱敏 → 返回 envelope（含 disposition / timeoutLayer）→ 模型继续
 ```
+
+## 三之二、超时层次与处置规则（`is_0000000001` 问题 3 / 4）
+
+一次阻塞调用串行穿过 6 层超时，**每层各有生效值，且「超时后服务端是否仍在跑」的语义
+完全不同**。这张表是唯一口径：工具 description、`x-vteam-secret-command-budget` 响应头、
+本节三处均由 `server/src/platform-mcp/platform-mcp.constants.ts` 的 `layerBudgetTable()`
+同源渲染（改任一超时只改常量）。
+
+| # | 层 | 实际生效值 | 控制方 | 超时后服务端可能仍在执行 |
+|---|----|-----------|--------|---------------------|
+| 1 | `gateway` | 部署侧决定（平台不可控），须 ≥ 855s | 网关/代理 | **是** |
+| 2 | `client_wait` | opencode `mcp.vteam.timeout`（注入下限 900000ms） | 调用方客户端 | **是** |
+| 3 | `server_hold` | 无硬超时；≤30s SSE 注释心跳保活 | vteam-server | **是** |
+| 4 | `input_budget` | 540000ms（540s） | vteam-server（questions 域） | 否（**唯一**服务端自己判定的超时） |
+| 5 | `command_exec` | `timeoutSec`，缺省 60s、上限 300s | 调用方入参 → worker | 是 |
+| 6 | `worker_request` | 命令超时 + 5000ms | vteam-server → worker | 是 |
+
+优先级：**外层先于内层生效**。客户端/网关超时一旦小于服务端可控最坏预算
+（`SECRET_COMMAND_SERVER_MAX_BUDGET_MS` = 540000 + 300000 + 5000 = 845000ms），就会先于
+服务端终态掐断连接。
+
+### 「-32001 Request timed out」是**假失败信号**（务必按下面的规则处理）
+
+- 成因：`-32001` 是 **MCP SDK 客户端侧** `RequestTimeout`（层 2）。SDK 超时只**放弃等待**，
+  **不关闭底层 HTTP 连接**，因此 server 的 `res.on('close')` 收不到断开信号 → 请求继续存活、
+  用户填完值后命令照常执行，而调用方已拿到一个与事实相反的「失败」。
+- 因此**超时 ≠ 失败**。判定口径：
+  - 拿到 envelope → 看 `disposition`：`executed` = 已下发并跑完；`not_executed` = 服务端确定没跑。
+  - 只拿到 -32001 / 409 → 属「可能仍在执行」态，**服务端无法主动告知**（结果无处可送）。
+- **处置规则（禁止立即重发）**：
+  1. 收到 -32001 或 409 后，**先复核目标状态**（命令副作用、落盘文件、远端凭据是否已生效）；
+  2. 确认未执行再重试，否则会**重复执行**；
+  3. 409 报文已带上一次在飞请求的实时状态（`requestId` / 阶段 / 已持续秒数 / 层次标识），
+     按它判断是「仍在等待输入」还是「已在 worker 执行」；
+  4. 调 `status` 层面的权威依据是**目标系统本身**（如 `gh auth status` 的退出码），
+     不是本次工具调用的返回。
+- 各层预算的自述入口：`POST /api/v1/platform-mcp` 的响应头
+  `x-vteam-secret-command-budget`（`total` / `server_max` / `client_floor` / `input_budget` /
+  `command_default` / `command_max` / `worker_slack` / `keepalive`）；503 错误 message 带
+  `layer=i/n:<层名>` 标签。
 
 关键时序与预算（服务端常量，单位 ms）：
 
@@ -46,16 +87,19 @@
 | 命令超时 | `timeoutSec`，默认 60、上限 300 | worker 到点对**进程组** `SIGKILL` |
 | worker 执行超时 | `timeoutSec + 5000` | 计划强制要求，**不回落**到客户端默认 60s |
 | HTTP 请求超时 | 执行超时 + 5000 | 请求恒晚于命令结束，避免调用被中途掐断 |
-| 总预算 | 540000 + 300000 + 15000 = 855000（最坏 855s） | 注入的 MCP 客户端超时必须覆盖它 |
+| 服务端可控最坏预算 | 540000 + 300000 + 5000 = 845000 | 客户端/网关超时必须 ≥ 本值 |
+| 传输/编排裕量 | 10000 | worker 调度、DB 往返、心跳首帧前空窗 |
+| 总预算 | 845000 + 10000 = 855000（最坏 855s） | 注入的 MCP 客户端超时必须覆盖它（下限 900000） |
 | keepalive | 每 60000 重臂一次 | 覆盖「等待 + 执行」两段，settle 即 `clearInterval` |
 | 输出截断 | 每流 32768（32KB） | 采集额度 1MB；截断置 `stdoutTruncated` / `stderrTruncated` |
 
 其他确定语义：
 
 - 用户取消（关闭弹窗 / Esc / `{secrets:null}`）→ `cancelled`，worker **零调用**。
-- MCP 客户端在此之前超时或断开 → pending 问题被置为取消，**不产生幽灵执行**。
+- MCP 客户端**断开连接**（socket 真关）→ pending 问题被置为取消，**不产生幽灵执行**；
+  但客户端**仅等待超时**不关连接，属上面的「假失败」态，不适用本条。
 - 单会话单 in-flight：同一平台 Session 已有一次 `secret_command` 在等待或执行 → 409
-  （`PLATFORM_MCP_SECRET_COMMAND_CONFLICT`）。
+  （`PLATFORM_MCP_SECRET_COMMAND_CONFLICT`，报文带上一次在飞请求的实时状态）。
 - worker 端 `requestId` 幂等：同 `requestId` 且同归属返回既有结果，同 `requestId` 不同归属 409。
 
 ## 四、权限默认与关闭方式
@@ -110,6 +154,7 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 
 ```json
 {
+  "teamId": "<TEAM_ID>",
   "taskId": "<TASK_ID>",
   "selfInstanceId": "<INSTANCE_ID>",
   "command": "curl -fsS -H \"Authorization: Bearer {{REGISTRY_TOKEN}}\" https://registry.example.com/v2/<REPO>/tags/list",
@@ -123,6 +168,14 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 }
 ```
 
+**归属维度（`teamId` 为主，`taskId` 可选）**：`secret_command` 挂在**团队**上，凭据类运维
+（配 gh CLI、装依赖、登录 registry）**不必**为此挂一个业务任务。
+
+- 团队直聊（无任务）：只传 `teamId` 即可。
+- 任务内：可只传 `taskId`，或 `taskId` + `teamId` 同传（`taskId` 优先）。
+- 两者都不传 → 400 / `-32602`。
+- `teamId` 传成任务 id（`t_` 前缀）→ 400「团队会话请传 teamId，不要传 taskId」。
+
 占位符语法：`{{NAME}}`（`NAME` 为 `[A-Za-z_][A-Za-z0-9_]*`，允许 `{{ name }}` 带空格）。
 `secret:true` 的变量在弹窗中渲染为 password 输入框；模板与 reason 只读展示。
 示例中的值一律写成占位符或 `<占位符>`，**不要**在文档、issue、日志中粘贴任何真实 secret。
@@ -134,6 +187,8 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 | `command` | 原始模板（未渲染） |
 | `variables[]` | 变量元数据 + `provided`（是否已填写），无值 |
 | `status` | `succeeded` / `failed` / `timeout`（worker）· `cancelled` / `input_timeout`（server） |
+| `disposition` | `executed`（已下发并跑完）/ `not_executed`（服务端确定没跑）——「跑没跑」的权威判定 |
+| `timeoutLayer` | 非成功终态的断点层（`input_budget` / `command_exec`），`succeeded` 恒 `null` |
 | `exitCode` / `signal` / `timedOut` / `durationMs` | 执行结果元数据 |
 | `stdout` / `stderr` + `*Truncated` | 脱敏 + 截断后的输出 |
 
@@ -141,6 +196,22 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 `PLATFORM_MCP_SECRET_COMMAND_INVALID`(400)、并发 409、托管模式
 `PLATFORM_MCP_SECRET_COMMAND_MANAGED_FORBIDDEN`(403)、worker 不可用
 `PLATFORM_MCP_SECRET_COMMAND_UNAVAILABLE`(503)。
+
+## 七之二、托管模式（`managedMode=on`）语义
+
+托管模式的语义是「**非主 Agent** 发起的 `question`/`permission` 请求，改由主 Agent 确认」。
+据此，`secret_command` 分成两件**互不替代**的事：
+
+| 事项 | 谁来确认 | 托管模式下的处理 |
+|------|---------|----------------|
+| 「是否受理这次请求」 | 发起人即主 Agent 时，**无需他人确认** | **放行**（不再 fail-closed 拒绝） |
+| 「密钥值本身」 | **只能由用户提供** | 始终向**用户**弹窗索取（`secret_input` 的 `managedMode` 恒 `false`） |
+| 非主 Agent 发起 | — | 403 `PLATFORM_MCP_SECRET_COMMAND_MANAGED_FORBIDDEN` |
+
+两道门都按此口径：platform-mcp 的 `assertSecretCommandManagedAllowed`（创建 pending 问题
+之前）与 questions 域的 `createSecretForPlatform`。DTO 侧 `secret_input` 恒
+`managedMode=false`，否则前端（`web/app/(main)/teams/[id]/session/page.tsx` 过滤
+`!q.managedMode`）永不弹窗 —— 等于把主 Agent 也彻底堵死。
 
 ## 八、运维注意事项与残余风险
 
@@ -151,7 +222,11 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
   `timeout >= 900000`（覆盖 855s 最坏总预算），不依赖 OpenCode 客户端默认值，也不需要 DB
   迁移（`mcp_servers` 无 timeout 列）。环境变量 `VTEAM_MCP_TIMEOUT_MS` 可覆盖，但一律
   **clamp 到 ≥900000**：缺失、空串、非十进制整数、非正数都直接取下限，较小值被抬到下限。
-- **in-flight 门是进程内的。** 单会话单 in-flight 用的是 server 进程内的 `Set`，不是分布式
+  该下限与 server 侧 `SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS` 必须同值（跨包各持一份，
+  由 `platform-mcp.service.spec.ts` 的跨包契约测试锁死漂移）。
+- **客户端等待超时不取消服务端请求。** 见「三之二」：这是 `-32001` 假失败的根因，
+  平台侧**无法**消除（SDK 不关连接），只能靠契约约束调用方「先复核、禁重发」。
+- **in-flight 门是进程内的。** 单会话单 in-flight 用的是 server 进程内的 `Map`，不是分布式
   锁；server 多副本部署时，跨副本的并发第二调用不保证被拦成 409。
 - **执行已下发后取消不追回。** abort 信号只在「拿到值」与「下发执行」之间检查；命令一旦
   发往 worker，客户端断开 / abort **不会**取消正在执行的命令，它会跑完或到超时被 worker

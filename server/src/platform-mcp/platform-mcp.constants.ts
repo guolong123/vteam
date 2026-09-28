@@ -6,6 +6,8 @@
  * - 任务/频道/产出物/版本不存在 → 404
  * - submit_artifact 参数非法（text 缺 content / doc/file 缺 fileRef）→ 400
  */
+import { SECRET_INPUT_BUDGET_MS } from '../questions/questions.constants';
+
 export const PLATFORM_MCP_ERRORS = {
   MISSING_WORKER_ID: 'PLATFORM_MCP_MISSING_WORKER_ID',
   FORBIDDEN: 'PLATFORM_MCP_FORBIDDEN',
@@ -46,11 +48,23 @@ export const PLATFORM_MCP_ERRORS = {
    * cwd 越界或绝对路径 / timeoutSec 越界）→ 400。
    */
   SECRET_COMMAND_INVALID: 'PLATFORM_MCP_SECRET_COMMAND_INVALID',
-  /** secret_command 单会话 in-flight 冲突（并发第二次调用）/ worker 幂等归属冲突 → 409。 */
+  /**
+   * secret_command 单会话 in-flight 冲突（并发第二次调用）/ worker 幂等归属冲突 → 409。
+   *
+   * 报文带**上一次在飞请求的实时状态**（phase/已持续秒数/层次标识），因为绝大多数
+   * 409 是「上一次请求在客户端等待超时（-32001）后仍在服务端存活」导致的盲目重发，
+   * 不给状态调用方只会当成真冲突再重试 → 可能重复执行。处置口径见
+   * `SECRET_COMMAND_TIMEOUT_LAYER` 层表与 docs/secret-command-tool.md。
+   */
   SECRET_COMMAND_CONFLICT: 'PLATFORM_MCP_SECRET_COMMAND_CONFLICT',
   /**
-   * secret_command 托管模式 fail-closed：团队 managedMode=on 时在创建 pending
-   * question **之前**直接拒绝（不产生孤儿行、不进入执行链）→ 403。
+   * secret_command 托管模式门：团队 managedMode=on **且发起人不是团队主 Agent** 时，
+   * 在创建 pending question **之前**直接拒绝（不产生孤儿行、不进入执行链）→ 403。
+   *
+   * 语义澄清（is_0000000001 问题 2）：托管模式管的是「非主 Agent 的请求改由主 Agent
+   * 确认」。发起人本身就是主 Agent 时不存在「需他人确认」，故放行；主 Agent 无法代为
+   * 确认的部分（**密钥值本身**）仍由 secret_input 弹窗向**用户**索取——这是两件事，
+   * 不做 fail-closed 一刀切。
    */
   SECRET_COMMAND_MANAGED_FORBIDDEN:
     'PLATFORM_MCP_SECRET_COMMAND_MANAGED_FORBIDDEN',
@@ -63,20 +77,200 @@ export type PlatformMcpErrorCode =
 
 /**
  * secret_command 阻塞预算族（单位 ms，除 timeoutSec 外均为服务端常量）：
- * - `SECRET_INPUT_BUDGET_MS`（540s，在 questions 域）：等待用户填写敏感值的上限；
+ * - `SECRET_COMMAND_INPUT_BUDGET_MS`（540s，在 questions 域）：等待用户填写敏感值的上限；
  * - 命令执行超时：入参 timeoutSec，缺省 60s、上限 300s；
- * - 总预算 = 540s + 300s + 15s = 855s（最坏），注入的 MCP 客户端 timeout 必须
- *   覆盖它（worker 注入点下限 900000ms）——见 `VTEAM_MCP_TIMEOUT_FLOOR_MS`；
+ * - 总预算 = 540s + 300s + 5s 请求裕量 + 10s 传输裕量 = 855s（最坏），
+ *   注入的 MCP 客户端 timeout 必须覆盖它（worker 注入点下限 900000ms）——
+ *   见 `VTEAM_MCP_TIMEOUT_FLOOR_MS`；
  * - keepalive 周期 60s：等待与执行期间重臂静默看门狗；
  * - 请求侧裕量 5s：worker 客户端超时 = 命令超时 + 5s。
  */
+export const SECRET_COMMAND_INPUT_BUDGET_MS = SECRET_INPUT_BUDGET_MS;
 export const SECRET_COMMAND_TOTAL_BUDGET_MS = 855_000;
 export const SECRET_COMMAND_KEEPALIVE_MS = 60_000;
 export const SECRET_COMMAND_DEFAULT_TIMEOUT_SEC = 60;
 export const SECRET_COMMAND_MAX_TIMEOUT_SEC = 300;
 export const SECRET_COMMAND_REQUEST_SLACK_MS = 5_000;
+/**
+ * 传输/编排裕量 ms：总预算里除「输入 + 命令 + 请求侧 slack」之外的余量
+ * （worker 调度、DB 往返、SSE 心跳首帧前的空窗）。写死而非隐式，使
+ * `SECRET_COMMAND_TOTAL_BUDGET_MS` 可被逐项复核（`layerBudgetTable` 的对账基准）。
+ */
+export const SECRET_COMMAND_TRANSPORT_MARGIN_MS = 10_000;
+/**
+ * 服务端**可控**的最坏预算（输入 + 命令 + 请求侧 slack）。
+ * 客户端/网关超时必须 ≥ 本值，否则先于服务端终态掐断连接 → 产生「假失败信号」
+ * （is_0000000001 问题 3）。
+ */
+export const SECRET_COMMAND_SERVER_MAX_BUDGET_MS =
+  SECRET_COMMAND_INPUT_BUDGET_MS +
+  SECRET_COMMAND_MAX_TIMEOUT_SEC * 1000 +
+  SECRET_COMMAND_REQUEST_SLACK_MS;
+/**
+ * MCP 客户端（opencode `mcp.vteam.timeout`）超时**下限** ms，与 worker 注入点
+ * `VTEAM_MCP_TIMEOUT_FLOOR_MS` 必须同值。两侧各持一份常量（跨包不互相 import），
+ * 由 `platform-mcp.service.spec.ts` 的跨包契约测试锁死漂移。
+ */
+export const SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS = 900_000;
 /** worker 侧每流截断上限（双写 MAX_SENSITIVE_OUTPUT_BYTES）：服务端兜底再截一次。 */
 export const SECRET_COMMAND_MAX_STREAM_BYTES = 32 * 1024;
+
+/**
+ * secret_command 超时层次标识（is_0000000001 问题 4）。
+ *
+ * 一次阻塞调用串行穿过 6 层，每层各有自己的超时与「超时后服务端是否仍在跑」的语义。
+ * 层次标识同时出现在三处，保证「报错即可定位」：工具 description（模型可见）、
+ * 409/503 错误 message、`x-vteam-secret-command-budget` 响应头。改任一层的生效值
+ * 必须同步改本表（`layerBudgetTable` 是唯一口径，spec 逐项对账）。
+ */
+export const SECRET_COMMAND_TIMEOUT_LAYER = {
+  /**
+   * MCP 客户端等待超时：opencode `mcp.vteam.timeout` → MCP SDK
+   * `RequestOptions.timeout`，超时报 **-32001 RequestTimeout**。
+   *
+   * **关键语义**：这是**客户端单方面放弃等待**，SDK 不关闭底层 HTTP 连接，
+   * 因此服务端 `res.on('close')` 收不到断开信号 → 请求继续存活、命令照常执行，
+   * 而调用方已拿到一个与事实相反的「失败」。见 `SECRET_COMMAND_DISPOSITION`。
+   */
+  CLIENT_WAIT: 'client_wait',
+  /**
+   * vteam-server 之前的网关/代理（部署侧，平台不可控）。与 CLIENT_WAIT 同类：
+   * 超时不会取消服务端请求。
+   */
+  GATEWAY: 'gateway',
+  /** vteam-server HTTP 挂起段：本身无硬超时，靠 ≤30s SSE 注释心跳保活。 */
+  SERVER_HOLD: 'server_hold',
+  /**
+   * 服务端等待用户填写敏感值的输入预算（540s）。耗尽 → 主动取消 pending 问题并返回
+   * `input_timeout`，**必定未执行**（唯一「服务端自己说的超时」层）。
+   */
+  INPUT_BUDGET: 'input_budget',
+  /** worker 侧命令执行超时（timeoutSec，缺省 60s、上限 300s），进程组终止。 */
+  COMMAND_EXEC: 'command_exec',
+  /** server→worker 请求超时（命令超时 + 5s slack）→ 503 SECRET_COMMAND_UNAVAILABLE。 */
+  WORKER_REQUEST: 'worker_request',
+} as const;
+
+export type SecretCommandTimeoutLayer =
+  (typeof SECRET_COMMAND_TIMEOUT_LAYER)[keyof typeof SECRET_COMMAND_TIMEOUT_LAYER];
+
+/** 超时层的可诊断序数（错误/日志里 `[layer=n/x]` 用，越大越靠近命令执行）。 */
+const SECRET_COMMAND_TIMEOUT_LAYER_ORDER: readonly SecretCommandTimeoutLayer[] =
+  [
+    SECRET_COMMAND_TIMEOUT_LAYER.GATEWAY,
+    SECRET_COMMAND_TIMEOUT_LAYER.CLIENT_WAIT,
+    SECRET_COMMAND_TIMEOUT_LAYER.SERVER_HOLD,
+    SECRET_COMMAND_TIMEOUT_LAYER.INPUT_BUDGET,
+    SECRET_COMMAND_TIMEOUT_LAYER.COMMAND_EXEC,
+    SECRET_COMMAND_TIMEOUT_LAYER.WORKER_REQUEST,
+  ];
+
+/**
+ * `layer=i/n` 标签：把层次标识写进错误 message 与日志，使「-32001 到底断在哪一层」
+ * 不再需要猜。n 为层总数（6），序数按上表从外到内。
+ */
+export function secretCommandLayerTag(
+  layer: SecretCommandTimeoutLayer,
+): string {
+  const index = SECRET_COMMAND_TIMEOUT_LAYER_ORDER.indexOf(layer);
+  return `layer=${index < 0 ? '?' : index + 1}/${SECRET_COMMAND_TIMEOUT_LAYER_ORDER.length}:${layer}`;
+}
+
+const seconds = (ms: number): string => `${Math.round(ms / 1000)}s`;
+
+/** 单层预算表项（工具 description / 文档 / 响应头共用的渲染元数据）。 */
+export interface SecretCommandTimeoutLayerSpec {
+  layer: SecretCommandTimeoutLayer;
+  /** 实际生效值的人读描述（已含单位）。 */
+  effective: string;
+  /** 谁控制这一层。 */
+  owner: string;
+  /** 超时后服务端请求是否仍可能执行（决定调用方能不能重发）。 */
+  serverMayStillRun: boolean;
+}
+
+/**
+ * 超时层表（唯一口径）：`tools.ts` 的工具 description、`docs/secret-command-tool.md`
+ * 的层表、`x-vteam-secret-command-budget` 响应头三处同源渲染，杜绝「文档写 540s、
+ * 实际不是」这类不可诊断。
+ */
+export function layerBudgetTable(): readonly SecretCommandTimeoutLayerSpec[] {
+  return [
+    {
+      layer: SECRET_COMMAND_TIMEOUT_LAYER.GATEWAY,
+      effective: '由部署侧决定（平台不可控），须 ≥ 855s',
+      owner: '网关/代理',
+      serverMayStillRun: true,
+    },
+    {
+      layer: SECRET_COMMAND_TIMEOUT_LAYER.CLIENT_WAIT,
+      effective: `opencode mcp.vteam.timeout（注入下限 ${SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS}ms）`,
+      owner: '调用方客户端',
+      serverMayStillRun: true,
+    },
+    {
+      layer: SECRET_COMMAND_TIMEOUT_LAYER.SERVER_HOLD,
+      effective: '无硬超时；≤30s SSE 注释心跳保活',
+      owner: 'vteam-server',
+      serverMayStillRun: true,
+    },
+    {
+      layer: SECRET_COMMAND_TIMEOUT_LAYER.INPUT_BUDGET,
+      effective: seconds(SECRET_COMMAND_INPUT_BUDGET_MS),
+      owner: 'vteam-server（questions 域）',
+      serverMayStillRun: false,
+    },
+    {
+      layer: SECRET_COMMAND_TIMEOUT_LAYER.COMMAND_EXEC,
+      effective: `timeoutSec（缺省 ${SECRET_COMMAND_DEFAULT_TIMEOUT_SEC}s，上限 ${SECRET_COMMAND_MAX_TIMEOUT_SEC}s）`,
+      owner: '调用方入参 → worker',
+      serverMayStillRun: true,
+    },
+    {
+      layer: SECRET_COMMAND_TIMEOUT_LAYER.WORKER_REQUEST,
+      effective: `命令超时 + ${seconds(SECRET_COMMAND_REQUEST_SLACK_MS)}`,
+      owner: 'vteam-server → worker',
+      serverMayStillRun: true,
+    },
+  ];
+}
+
+/**
+ * 预算自述响应头名（is_0000000001 问题 4）：`secret_command` 各层超时的实际生效值。
+ * 与 `secretCommandBudgetHeaderValue()` 同源，值恒为服务端常量，不含任何入参。
+ */
+export const SECRET_COMMAND_BUDGET_HEADER = 'x-vteam-secret-command-budget';
+
+/** 机器可读预算串（响应头）：`total=855000;server_max=845000;...`。 */
+export function secretCommandBudgetHeaderValue(): string {
+  return [
+    `total=${SECRET_COMMAND_TOTAL_BUDGET_MS}`,
+    `server_max=${SECRET_COMMAND_SERVER_MAX_BUDGET_MS}`,
+    `client_floor=${SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS}`,
+    `input_budget=${SECRET_COMMAND_INPUT_BUDGET_MS}`,
+    `command_default=${SECRET_COMMAND_DEFAULT_TIMEOUT_SEC * 1000}`,
+    `command_max=${SECRET_COMMAND_MAX_TIMEOUT_SEC * 1000}`,
+    `worker_slack=${SECRET_COMMAND_REQUEST_SLACK_MS}`,
+    `keepalive=${SECRET_COMMAND_KEEPALIVE_MS}`,
+  ].join(';');
+}
+
+/**
+ * secret_command 终态的**执行事实**（is_0000000001 问题 3 的核心诉求）。
+ *
+ * 客户端拿到的每个 envelope 都带它，把「服务端已判定未执行」与「跑过（无论成败）」
+ * 机器可判地区分开；而「客户端等待超时、服务端可能仍在执行」这一态**不由服务端下发**
+ * （结果无处可送），只能靠工具 description 的禁止重发规则 + 409 的实时状态兜底。
+ */
+export const SECRET_COMMAND_DISPOSITION = {
+  /** 命令已下发 worker 并跑完（succeeded/failed/timeout 都是 executed）。 */
+  EXECUTED: 'executed',
+  /** 服务端确定**没有**执行：用户取消、输入预算耗尽、客户端断开于下发之前。 */
+  NOT_EXECUTED: 'not_executed',
+} as const;
+
+export type SecretCommandDisposition =
+  (typeof SECRET_COMMAND_DISPOSITION)[keyof typeof SECRET_COMMAND_DISPOSITION];
 
 /**
  * notify_agent `type` 值集（reply-join）：区分执行答复 / 求助 / 普通通知，

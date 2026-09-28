@@ -27,6 +27,20 @@ import {
   WorkerUnavailableException,
 } from '../workers/worker.client';
 import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
+import {
+  layerBudgetTable,
+  SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS,
+  SECRET_COMMAND_DISPOSITION,
+  SECRET_COMMAND_INPUT_BUDGET_MS,
+  SECRET_COMMAND_MAX_TIMEOUT_SEC,
+  SECRET_COMMAND_REQUEST_SLACK_MS,
+  SECRET_COMMAND_SERVER_MAX_BUDGET_MS,
+  SECRET_COMMAND_TIMEOUT_LAYER,
+  SECRET_COMMAND_TOTAL_BUDGET_MS,
+  SECRET_COMMAND_TRANSPORT_MARGIN_MS,
+  secretCommandBudgetHeaderValue,
+  secretCommandLayerTag,
+} from './platform-mcp.constants';
 import * as platformConstants from './platform-mcp.constants';
 import { SKILL_ERRORS } from '../common/constants/skill.constants';
 import { TASK_ERRORS } from '../common/constants/task.constants';
@@ -37,6 +51,7 @@ import {
   buildPlatformMcpTools,
   memorySaveSchema,
   memoryUpdateSchema,
+  SECRET_COMMAND_SCHEMA,
 } from './platform-mcp.tools';
 import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
@@ -7426,9 +7441,12 @@ describe('PlatformMcpService', () => {
       expect(questionsService.createSecretForPlatform).not.toHaveBeenCalled();
     });
 
-    it('托管模式 fail-closed：创建 question 之前 403（创建调用 0 次、worker 0 次）', async () => {
+    it('托管模式：非主 Agent 发起 → 创建 question 之前 403（创建调用 0 次、worker 0 次）', async () => {
       setupSecret();
-      prisma.team.findUnique.mockResolvedValue({ managedMode: true } as any);
+      prisma.team.findUnique.mockResolvedValue({
+        managedMode: true,
+        mainAgentMemberId: 'tmm_other_main',
+      } as any);
       await expectCode(
         service.secretCommand(ctx, secretArgs()),
         ForbiddenException,
@@ -7974,6 +7992,327 @@ describe('PlatformMcpService', () => {
       } finally {
         logSpy.mockRestore();
       }
+    });
+
+    // ==================================================================
+    // is_0000000001 回归：secret_command 四个平台缺陷
+    // ==================================================================
+
+    describe('is_0000000001 问题 1：归属维度改为团队（taskId 降级为可选标注）', () => {
+      /** 团队直聊：只传 teamId，任务表完全不参与（不建任务也能配凭据）。 */
+      const teamOnlyArgs = (overrides: Record<string, unknown> = {}) => {
+        const { taskId: _dropped, ...rest } = secretArgs();
+        return { ...rest, teamId: 'tm_1', ...overrides };
+      };
+
+      it('只传 teamId → 走团队维度成功下发 worker（不查任务表，createSecret 用 taskId="" + teamId）', async () => {
+        setupSecret();
+        injectSyncHook('provided', { TOKEN: SENTINEL });
+        prisma.task.findUnique.mockReset();
+
+        const env = await service.secretCommand(ctx, teamOnlyArgs());
+
+        expect(env.status).toBe('succeeded');
+        // 团队维度不应触碰 task 表（原 bug：团队直聊被迫先建任务）。
+        expect(prisma.task.findUnique).not.toHaveBeenCalled();
+        expect(workerClient.runSecretCommand).toHaveBeenCalledTimes(1);
+        // worker 侧归属标注：团队维度不带 taskId，带 sessionId。
+        const workerArgs = workerClient.runSecretCommand.mock.calls[0][1];
+        expect(workerArgs).not.toHaveProperty('taskId');
+        expect(workerArgs.sessionId).toBe('ses_0001');
+        // secret_input 走团队 scope：taskId 空串 + teamId 显式传入。
+        expect(questionsService.createSecretForPlatform).toHaveBeenCalledWith(
+          '',
+          expect.anything(),
+          expect.objectContaining({ teamId: 'tm_1' }),
+        );
+      });
+
+      it('把团队 id 误传进 taskId 字段（tm_ 前缀）→ 400（明确指引改传 teamId）', async () => {
+        setupSecret();
+        const err = await service
+          .secretCommand(ctx, secretArgs({ teamId: undefined, taskId: 'tm_1' }))
+          .then(
+            () => undefined,
+            (e: unknown) => e as { message?: string },
+          );
+        // resolveExecContext 抛的是无 code 的裸 BadRequestException（与既有两维度一致）。
+        expect(err?.message).toContain('请传 teamId');
+        expect(questionsService.createSecretForPlatform).not.toHaveBeenCalled();
+        expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+      });
+
+      it('teamId 与 taskId 双空 → 400 SECRET_COMMAND_INVALID（不创建 question 不调 worker）', async () => {
+        setupSecret();
+        await expectCode(
+          service.secretCommand(ctx, secretArgs({ taskId: undefined })),
+          BadRequestException,
+          PLATFORM_MCP_ERRORS.SECRET_COMMAND_INVALID,
+        );
+        expect(questionsService.createSecretForPlatform).not.toHaveBeenCalled();
+        expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+      });
+
+      it('工具 schema：teamId/taskId 皆可选，但双空被 refine 拒绝（团队直聊只传 teamId 可过）', () => {
+        const teamOnly = SECRET_COMMAND_SCHEMA.safeParse({
+          teamId: 'tm_1',
+          selfInstanceId: senderInstanceId,
+          command: 'echo {{TOKEN}}',
+          variables: [{ name: 'TOKEN' }],
+        });
+        expect(teamOnly.success).toBe(true);
+
+        const taskOnly = SECRET_COMMAND_SCHEMA.safeParse({
+          taskId,
+          selfInstanceId: senderInstanceId,
+          command: 'echo {{TOKEN}}',
+          variables: [{ name: 'TOKEN' }],
+        });
+        expect(taskOnly.success).toBe(true);
+
+        const neither = SECRET_COMMAND_SCHEMA.safeParse({
+          selfInstanceId: senderInstanceId,
+          command: 'echo {{TOKEN}}',
+          variables: [{ name: 'TOKEN' }],
+        });
+        expect(neither.success).toBe(false);
+      });
+    });
+
+    describe('is_0000000001 问题 2：托管模式不拦主 Agent（密钥值仍向用户索取）', () => {
+      it('发起人 = 团队主 Agent + managedMode=on → 放行，仍走用户弹窗拿值', async () => {
+        setupSecret();
+        prisma.team.findUnique.mockResolvedValue({
+          managedMode: true,
+          mainAgentMemberId: senderInstanceId,
+        } as any);
+        injectSyncHook('provided', { TOKEN: SENTINEL });
+
+        const env = await service.secretCommand(ctx, secretArgs());
+
+        expect(env.status).toBe('succeeded');
+        // 放行的前提仍是「值由用户提供」：secret_input 问题照常创建。
+        expect(questionsService.createSecretForPlatform).toHaveBeenCalledTimes(
+          1,
+        );
+        // 发起者身份透传给 questions 域（第二道门据此判定是否放行）。
+        expect(questionsService.createSecretForPlatform).toHaveBeenCalledWith(
+          taskId,
+          expect.anything(),
+          expect.objectContaining({ requesterInstanceId: senderInstanceId }),
+        );
+        expect(workerClient.runSecretCommand).toHaveBeenCalledTimes(1);
+      });
+
+      it('主 Agent 放行时 403 语义反转：非主发起者仍被拦且错误信息指向主 Agent', async () => {
+        setupSecret();
+        prisma.team.findUnique.mockResolvedValue({
+          managedMode: true,
+          mainAgentMemberId: 'tmm_main_1',
+        } as any);
+        const err = await service.secretCommand(ctx, secretArgs()).then(
+          () => undefined,
+          (e: unknown) => e as { getResponse(): { message?: string } },
+        );
+        expect(err?.getResponse()).toMatchObject({
+          code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_MANAGED_FORBIDDEN,
+        });
+        expect(err?.getResponse().message).toContain('主 Agent');
+      });
+
+      it('managedMode=off → 不查 mainAgentMemberId 也不拦（放行）', async () => {
+        setupSecret();
+        prisma.team.findUnique.mockResolvedValue({
+          managedMode: false,
+          mainAgentMemberId: 'tmm_main_1',
+        } as any);
+        injectSyncHook('provided', { TOKEN: SENTINEL });
+        const env = await service.secretCommand(ctx, secretArgs());
+        expect(env.status).toBe('succeeded');
+      });
+    });
+
+    describe('is_0000000001 问题 3：超时语义可判定（跑没跑 / 断在哪层）', () => {
+      it('envelope 恒带 disposition + timeoutLayer（succeeded → executed/null）', async () => {
+        setupSecret();
+        injectSyncHook('provided', { TOKEN: SENTINEL });
+        const env = await service.secretCommand(ctx, secretArgs());
+        expect(env).toMatchObject({
+          status: 'succeeded',
+          disposition: SECRET_COMMAND_DISPOSITION.EXECUTED,
+          timeoutLayer: null,
+        });
+      });
+
+      it('用户取消 → not_executed（服务端确定没跑），timeoutLayer 恒 null', async () => {
+        setupSecret();
+        injectSyncHook('cancelled', null);
+        const env = await service.secretCommand(ctx, secretArgs());
+        expect(env).toMatchObject({
+          status: 'cancelled',
+          disposition: SECRET_COMMAND_DISPOSITION.NOT_EXECUTED,
+          timeoutLayer: null,
+        });
+        expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+      });
+
+      it('命令被进程组超时杀掉 → executed + timeoutLayer=command_exec（区分「跑了但超时」）', async () => {
+        setupSecret();
+        injectSyncHook('provided', { TOKEN: SENTINEL });
+        workerClient.runSecretCommand.mockResolvedValue(
+          workerResult({ status: 'timeout', exitCode: null, timedOut: true }),
+        );
+        const env = await service.secretCommand(ctx, secretArgs());
+        expect(env).toMatchObject({
+          status: 'timeout',
+          timedOut: true,
+          disposition: SECRET_COMMAND_DISPOSITION.EXECUTED,
+          timeoutLayer: SECRET_COMMAND_TIMEOUT_LAYER.COMMAND_EXEC,
+        });
+      });
+
+      it('409 报文带上一次在飞请求的实时状态 + 禁止立即重发（假超时后盲目重试的护栏）', async () => {
+        setupSecret();
+        const hook = captureHook();
+        const first = service.secretCommand(ctx, secretArgs());
+        await tick();
+
+        const err = await service.secretCommand(ctx, secretArgs()).then(
+          () => undefined,
+          (e: unknown) => e as { getResponse(): { message?: string } },
+        );
+        const message = err?.getResponse().message ?? '';
+        expect(err?.getResponse()).toMatchObject({
+          code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_CONFLICT,
+        });
+        // 可诊断：requestId / 阶段 / 已持续秒数 / 层次标识。
+        expect(message).toMatch(/secmd_[0-9a-f-]{36}/);
+        expect(message).toContain('等待用户填写敏感值');
+        expect(message).toMatch(/已持续 \d+s/);
+        expect(message).toContain('server_hold');
+        // 处置规则必须写在报文里（调用方只看得到这条）。
+        expect(message).toContain('禁止立即重发');
+        expect(message).toContain('先复核目标状态');
+        expect(message).not.toContain(SENTINEL);
+
+        await hook.fire('provided', { TOKEN: SENTINEL });
+        await tick();
+        await first;
+      });
+
+      it('工具描述写明「超时≠失败 / 禁止立即重发 / disposition 才是执行事实」', () => {
+        const tool = buildPlatformMcpTools(service).find(
+          (candidate) => candidate.name === 'secret_command',
+        );
+        const description = tool?.description ?? '';
+        expect(description).toContain('-32001');
+        expect(description).toContain('禁止立即重发');
+        expect(description).toContain('先复核目标状态');
+        expect(description).toContain('disposition');
+        // 层次表必须出现在模型可见的描述里。
+        for (const spec of layerBudgetTable()) {
+          expect(description).toContain(spec.layer);
+        }
+      });
+    });
+
+    describe('is_0000000001 问题 4：各层超时生效值与层次标识可诊断', () => {
+      it('层表逐项可对账：总预算 = 输入 + 命令上限 + 请求裕量 + 传输裕量', () => {
+        expect(SECRET_COMMAND_SERVER_MAX_BUDGET_MS).toBe(
+          SECRET_COMMAND_INPUT_BUDGET_MS +
+            SECRET_COMMAND_MAX_TIMEOUT_SEC * 1000 +
+            SECRET_COMMAND_REQUEST_SLACK_MS,
+        );
+        expect(SECRET_COMMAND_TOTAL_BUDGET_MS).toBe(
+          SECRET_COMMAND_SERVER_MAX_BUDGET_MS +
+            SECRET_COMMAND_TRANSPORT_MARGIN_MS,
+        );
+        // 客户端下限必须覆盖总预算，否则先于服务端终态掐断 → 假失败。
+        expect(SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS).toBeGreaterThanOrEqual(
+          SECRET_COMMAND_TOTAL_BUDGET_MS,
+        );
+      });
+
+      it('层表 6 层齐全，且只有 input_budget 声明「服务端不会仍在执行」', () => {
+        const table = layerBudgetTable();
+        expect(table.map((s) => s.layer)).toEqual([
+          SECRET_COMMAND_TIMEOUT_LAYER.GATEWAY,
+          SECRET_COMMAND_TIMEOUT_LAYER.CLIENT_WAIT,
+          SECRET_COMMAND_TIMEOUT_LAYER.SERVER_HOLD,
+          SECRET_COMMAND_TIMEOUT_LAYER.INPUT_BUDGET,
+          SECRET_COMMAND_TIMEOUT_LAYER.COMMAND_EXEC,
+          SECRET_COMMAND_TIMEOUT_LAYER.WORKER_REQUEST,
+        ]);
+        expect(
+          table.filter((s) => !s.serverMayStillRun).map((s) => s.layer),
+        ).toEqual([SECRET_COMMAND_TIMEOUT_LAYER.INPUT_BUDGET]);
+        expect(
+          table.every((s) => s.effective.length > 0 && s.owner.length > 0),
+        ).toBe(true);
+      });
+
+      it('层标签带序号（layer=i/6:name），序数由外到内', () => {
+        expect(
+          secretCommandLayerTag(SECRET_COMMAND_TIMEOUT_LAYER.GATEWAY),
+        ).toBe('layer=1/6:gateway');
+        expect(
+          secretCommandLayerTag(SECRET_COMMAND_TIMEOUT_LAYER.WORKER_REQUEST),
+        ).toBe('layer=6/6:worker_request');
+      });
+
+      it('预算自述头含各层实际生效值（机器可读，驱动方按它配客户端超时）', () => {
+        const header = secretCommandBudgetHeaderValue();
+        expect(header).toContain(`total=${SECRET_COMMAND_TOTAL_BUDGET_MS}`);
+        expect(header).toContain(
+          `server_max=${SECRET_COMMAND_SERVER_MAX_BUDGET_MS}`,
+        );
+        expect(header).toContain(
+          `client_floor=${SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS}`,
+        );
+        expect(header).toContain(
+          `input_budget=${SECRET_COMMAND_INPUT_BUDGET_MS}`,
+        );
+        expect(header).toContain(
+          `worker_slack=${SECRET_COMMAND_REQUEST_SLACK_MS}`,
+        );
+      });
+
+      it('跨包契约：worker 注入的客户端超时下限与 server 侧同值（防漂移）', () => {
+        // worker/src/resources/injector.ts 的 VTEAM_MCP_TIMEOUT_FLOOR_MS 与本常量
+        // 分处两个包、无法互相 import，故用源码字面量对账锁死漂移。
+        const injectorSource = fs.readFileSync(
+          path.resolve(__dirname, '../../../worker/src/resources/injector.ts'),
+          'utf8',
+        );
+        const floor = /VTEAM_MCP_TIMEOUT_FLOOR_MS\s*=\s*([\d_]+)/.exec(
+          injectorSource,
+        );
+        expect(floor).not.toBeNull();
+        expect(Number(floor?.[1].replace(/_/g, ''))).toBe(
+          SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS,
+        );
+      });
+
+      it('503 报文带层次标识（区分命令超时与 server→worker 链路失败）', async () => {
+        setupSecret();
+        injectSyncHook('provided', { TOKEN: SENTINEL });
+        workerClient.runSecretCommand.mockRejectedValue(
+          new WorkerUnavailableException(workerId, 'socket hang up', 503),
+        );
+        const err = await service.secretCommand(ctx, secretArgs()).then(
+          () => undefined,
+          (e: unknown) => e as { getResponse(): { message?: string } },
+        );
+        const message = err?.getResponse().message ?? '';
+        expect(err?.getResponse()).toMatchObject({
+          code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_UNAVAILABLE,
+        });
+        expect(message).toContain('worker_request');
+        expect(message).toContain('layer=6/6');
+        // 命令超时与请求超时的差值可从报文直接读出。
+        expect(message).toContain('65000ms');
+        expect(message).not.toContain(SENTINEL);
+      });
     });
   });
 });
