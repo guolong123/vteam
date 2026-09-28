@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
-import { NOTIFY_STAGE, NOTIFY_TYPE } from './platform-mcp.constants';
+import {
+  layerBudgetTable,
+  NOTIFY_STAGE,
+  NOTIFY_TYPE,
+  SECRET_COMMAND_SERVER_MAX_BUDGET_MS,
+  SECRET_COMMAND_TOTAL_BUDGET_MS,
+  secretCommandLayerTag,
+} from './platform-mcp.constants';
 import type { PlatformMcpService } from './platform-mcp.service';
 
 /**
@@ -840,72 +847,120 @@ type HookCancelArgs = z.infer<typeof hookCancelSchema>;
  * secret_input 旁路（不落库不回显）回到本处理器；`variables` 与模板占位符一一对应。
  * 结构约束在 zod（类型/必填/长度/timeoutSec 上限），语义约束在 service
  * （占位符↔声明一致、变量名唯一、cwd 相对安全），两侧都拒非法输入。
+ *
+ * 归属维度（is_0000000001 问题 1）：**teamId 为主、taskId 为可选归属标注**。
+ * 此前 taskId 硬必填且服务端只认任务维度，导致团队直聊（无任务）下三种传法
+ * （传 taskId / 只传 teamId / taskId 空串）全部 400，凭据类运维被迫挂业务任务。
+ * 现在两维皆可选、二者至少传一；传了 taskId 就按任务维度校验归属，未传则按团队维度。
  */
-export const SECRET_COMMAND_SCHEMA = z.object({
-  taskId: z.string().describe('任务 ID'),
-  selfInstanceId: z
-    .string()
-    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  command: z
-    .string()
-    .min(1)
-    .max(4000)
-    .describe(
-      '命令模板（shell 命令行，敏感值一律写 {{NAME}} 占位符；禁止把明文密钥写进模板）',
-    ),
-  variables: z
-    .array(
-      z.object({
-        name: z
-          .string()
-          .min(1)
-          .max(64)
-          .regex(
-            /^[A-Za-z_][A-Za-z0-9_]*$/,
-            '变量名须以字母/下划线开头，仅含字母数字下划线',
-          )
-          .describe('变量名（与模板 {{NAME}} 对应）'),
-        label: z
-          .string()
-          .max(120)
-          .optional()
-          .describe('展示标签（缺省用 name）'),
-        secret: z
-          .boolean()
-          .optional()
-          .describe('是否按敏感字段展示（缺省 true，密码框输入）'),
-        required: z.boolean().optional().describe('是否必填（缺省 true）'),
-      }),
-    )
-    .max(20)
-    .describe('变量声明（只声明名称与是否敏感，绝不携带值）'),
-  cwd: z
-    .string()
-    .max(512)
-    .optional()
-    .describe(
-      '相对执行目录（缺省 = 任务工作目录；绝对路径、`..` 越界一律 400）',
-    ),
-  timeoutSec: z
-    .number()
-    .int()
-    .min(1)
-    .max(300)
-    .optional()
-    .describe('命令执行超时秒（缺省 60，上限 300）'),
-  title: z
-    .string()
-    .max(200)
-    .optional()
-    .describe('请求标题（可选，仅供调用方自述；不进入模型可见结果）'),
-  reason: z
-    .string()
-    .max(1000)
-    .optional()
-    .describe('执行原因（展示给填写敏感值的用户）'),
-});
+export const SECRET_COMMAND_SCHEMA = z
+  .object({
+    teamId: z
+      .string()
+      .optional()
+      .describe(
+        '团队 ID（tm_ 前缀）：secret_command 的归属维度，团队直聊（无任务）时**只传它**即可',
+      ),
+    taskId: z
+      .string()
+      .optional()
+      .describe(
+        '任务 ID（t_ 前缀）：**可选**的归属标注（凭据类运维不必挂任务）；传了则按任务维度校验归属，与 teamId 二选一或同传（taskId 优先）',
+      ),
+    selfInstanceId: z
+      .string()
+      .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+    command: z
+      .string()
+      .min(1)
+      .max(4000)
+      .describe(
+        '命令模板（shell 命令行，敏感值一律写 {{NAME}} 占位符；禁止把明文密钥写进模板）',
+      ),
+    variables: z
+      .array(
+        z.object({
+          name: z
+            .string()
+            .min(1)
+            .max(64)
+            .regex(
+              /^[A-Za-z_][A-Za-z0-9_]*$/,
+              '变量名须以字母/下划线开头，仅含字母数字下划线',
+            )
+            .describe('变量名（与模板 {{NAME}} 对应）'),
+          label: z
+            .string()
+            .max(120)
+            .optional()
+            .describe('展示标签（缺省用 name）'),
+          secret: z
+            .boolean()
+            .optional()
+            .describe('是否按敏感字段展示（缺省 true，密码框输入）'),
+          required: z.boolean().optional().describe('是否必填（缺省 true）'),
+        }),
+      )
+      .max(20)
+      .describe('变量声明（只声明名称与是否敏感，绝不携带值）'),
+    cwd: z
+      .string()
+      .max(512)
+      .optional()
+      .describe(
+        '相对执行目录（缺省 = 任务/会话工作目录；绝对路径、`..` 越界一律 400）',
+      ),
+    timeoutSec: z
+      .number()
+      .int()
+      .min(1)
+      .max(300)
+      .optional()
+      .describe('命令执行超时秒（缺省 60，上限 300）'),
+    title: z
+      .string()
+      .max(200)
+      .optional()
+      .describe('请求标题（可选，仅供调用方自述；不进入模型可见结果）'),
+    reason: z
+      .string()
+      .max(1000)
+      .optional()
+      .describe('执行原因（展示给填写敏感值的用户）'),
+  })
+  .refine((d) => !!d.taskId || !!d.teamId, {
+    message:
+      'teamId 与 taskId 至少传一个（团队直聊传 teamId；任务内可传 taskId 作归属标注）',
+    path: ['teamId'],
+  });
 
 type SecretCommandArgs = z.infer<typeof SECRET_COMMAND_SCHEMA>;
+
+/**
+ * secret_command 工具描述（is_0000000001 问题 3/4）。
+ *
+ * **从 `layerBudgetTable()` 渲染而非手写**：问题 4 的根因之一就是「文档声明 540s、
+ * 实际生效值另有其人」且无从定位。层表与生效值改为单一来源后，工具描述、
+ * 响应头、docs/secret-command-tool.md 三处永远同源；改任一超时只改常量。
+ *
+ * 描述里必须落地的两条**可执行**规则（模型唯一能看到的契约）：
+ * 1. 超时 ≠ 失败：-32001 / 409 之后服务端请求可能仍在执行 → 禁止立即重发；
+ * 2. `disposition` 是服务端判定的执行事实，`input_timeout`/`cancelled` 才是真没跑。
+ */
+const SECRET_COMMAND_DESCRIPTION = [
+  '在 worker 上执行一条需要密码/Token 的命令（阻塞式）。你只提交命令模板与变量声明（{{NAME}} 占位符），敏感值由用户在弹窗填写、不经你的上下文；结果只回原始模板、脱敏且每流 32KB 截断的 stdout/stderr 与 status/exitCode/timedOut/durationMs/disposition/timeoutLayer。渲染后的命令与明文 secret 不会出现在返回里。',
+  '归属：teamId 为主（团队直聊只传 teamId 即可），taskId 是**可选**的归属标注（凭据类运维不必挂任务）；二者至少传一个。',
+  '托管模式：发起人是团队主 Agent 时放行（密钥值本身仍必须由用户在弹窗输入，主 Agent 无法代确认）；非主 Agent 发起 → 403 SECRET_COMMAND_MANAGED_FORBIDDEN。',
+  '同一会话同一时刻只允许一次调用，并发第二次 → 409 SECRET_COMMAND_CONFLICT（报文带上一次在飞请求的实时状态）。',
+  '【超时语义，务必遵守】一次调用串行穿过 6 层超时（由外到内）：',
+  ...layerBudgetTable().map(
+    (spec) =>
+      `- ${secretCommandLayerTag(spec.layer)}：${spec.effective}（控制方：${spec.owner}；超时后服务端可能仍在执行：${spec.serverMayStillRun ? '是' : '否'}）`,
+  ),
+  `- 服务端可控最坏预算 ${SECRET_COMMAND_SERVER_MAX_BUDGET_MS}ms，总预算 ${SECRET_COMMAND_TOTAL_BUDGET_MS}ms；客户端/网关超时必须 ≥ 该值，否则先于服务端终态掐断连接。`,
+  '因此收到 -32001 Request timed out（客户端层）或 409 时，**请求可能仍在服务端执行，禁止立即重发**：先复核目标状态（命令副作用、落盘文件、远端凭据是否已生效），确认未执行再重试，否则会重复执行。',
+  '只有 disposition=not_executed（status=cancelled / input_timeout）才表示服务端确定没有执行；disposition=executed 表示命令已下发并跑完（status=succeeded/failed/timeout）。',
+].join('\n');
 
 /**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
@@ -1147,8 +1202,7 @@ export function buildPlatformMcpTools(
     },
     {
       name: 'secret_command',
-      description:
-        '在 worker 上执行一条需要密码/Token 的命令（阻塞式，最长等待 540s + 命令 300s）。你只提交命令模板与变量声明（{{NAME}} 占位符），敏感值由用户在弹窗填写、不经你的上下文；结果只回原始模板、脱敏且每流 32KB 截断的 stdout/stderr 与 status/exitCode/timedOut/durationMs。托管模式团队直接 403 拒绝；同一会话同一时刻只允许一次调用（并发第二次 409）；输入超时返回 input_timeout，用户取消返回 cancelled。注意：渲染后的命令与明文 secret 不会出现在返回里。',
+      description: SECRET_COMMAND_DESCRIPTION,
       inputSchema: SECRET_COMMAND_SCHEMA,
       handler: (ctx, args, signal) =>
         service.secretCommand(ctx, args as SecretCommandArgs, signal),

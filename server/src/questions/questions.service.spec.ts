@@ -1218,9 +1218,14 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       );
     });
 
-    it('托管团队 fail-closed：agentQuestion.create 调用 0（无孤儿 pending 行）且不 emit', async () => {
+    it('托管团队 + 非主 Agent 发起：agentQuestion.create 调用 0（无孤儿 pending 行）且不 emit', async () => {
       prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
-      prisma.team.findUnique.mockResolvedValue({ managedMode: true });
+      prisma.team.findUnique.mockResolvedValue({
+        managedMode: true,
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
 
       await expect(
         service.createSecretForPlatform(
@@ -1229,7 +1234,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
             template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
             variables: [{ name: 'DB_PASSWORD', secret: true }],
           },
-          { agentId: 'a_1' },
+          { agentId: 'a_1', requesterInstanceId: 'tmm_other' },
         ),
       ).rejects.toMatchObject({
         response: {
@@ -1240,6 +1245,96 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(prisma.agentQuestion.create).not.toHaveBeenCalled();
       expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
       expect(realtime.emit).not.toHaveBeenCalled();
+    });
+
+    // ------------------------------------------------------------------
+    // is_0000000001 问题 2：托管模式放行主 Agent，密钥值仍由用户提供
+    // ------------------------------------------------------------------
+
+    it('托管团队 + 发起人即主 Agent → 放行创建，且 DTO.managedMode 恒 false（用户弹窗必须出现）', async () => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({
+        managedMode: true,
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.agentQuestion.create.mockResolvedValue(secretRow());
+
+      const result = await service.createSecretForPlatform(
+        't_1',
+        {
+          template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+          variables: [{ name: 'DB_PASSWORD', secret: true }],
+        },
+        { agentId: 'a_1', requesterInstanceId: 'tmm_main' },
+      );
+
+      expect(prisma.agentQuestion.create).toHaveBeenCalledTimes(1);
+      // 关键：团队明明托管中，DTO 仍必须 managedMode=false —— 前端据此过滤
+      // (!q.managedMode)，带 true 会让密钥弹窗永不出现，等于把主 Agent 也堵死。
+      expect(result.managedMode).toBe(false);
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({
+          question: expect.objectContaining({ managedMode: false }),
+        }),
+        { type: 'team', id: 'tm_1' },
+      );
+    });
+
+    it('toDto 口径：secret_input 恒 managedMode=false（reply/expire 收敛帧同样带 false）', async () => {
+      const hook = await createSecretQuestion();
+      prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+      echoUpdate();
+
+      const result = await service.reply(
+        'aq_secret',
+        { secrets: { DB_PASSWORD: SECRET_SENTINEL } } as ReplyQuestionDto,
+        'u_1',
+      );
+
+      expect(result.managedMode).toBe(false);
+      const emitted = realtime.emit.mock.calls.find(
+        (call) => call[0] === EVENT_TYPES.AGENT_QUESTION,
+      );
+      expect(emitted?.[1]).toMatchObject({
+        question: expect.objectContaining({ managedMode: false }),
+      });
+      await hook;
+    });
+
+    it('团队直聊（taskId="" + teamId）→ 落库走团队主 Agent 会话，不查任务表', async () => {
+      prisma.task.findUnique.mockReset();
+      prisma.team.findUnique.mockResolvedValue({
+        managedMode: false,
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.agentQuestion.create.mockResolvedValue(
+        secretRow({ taskId: '', sessionId: 's_main' }),
+      );
+
+      const result = await service.createSecretForPlatform(
+        '',
+        {
+          template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+          variables: [{ name: 'DB_PASSWORD', secret: true }],
+        },
+        { agentId: 'a_1', teamId: 'tm_1', requesterInstanceId: 'tmm_main' },
+      );
+
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ taskId: '', sessionId: 's_main' }),
+      });
+      expect(result).toMatchObject({ taskId: '', managedMode: false });
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({ teamId: 'tm_1' }),
+        { type: 'team', id: 'tm_1' },
+      );
     });
 
     it('带 sentinel 的回复：落库 answers 只有 {provided,filled,actorType,actorId}，update 入参与序列化 SSE payload 0 命中，hook 内存收到明文', async () => {

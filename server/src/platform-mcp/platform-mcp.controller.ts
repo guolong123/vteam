@@ -17,6 +17,8 @@ import { WorkerTokenGuard } from '../workers/worker-token.guard';
 import {
   PLATFORM_MCP_SERVER_NAME,
   PLATFORM_MCP_SERVER_VERSION,
+  SECRET_COMMAND_BUDGET_HEADER,
+  secretCommandBudgetHeaderValue,
 } from './platform-mcp.constants';
 import { PlatformMcpService } from './platform-mcp.service';
 import { PlatformToolPermissionService } from './platform-tool-permission.service';
@@ -104,9 +106,21 @@ export class PlatformMcpController {
     @Body() body: unknown,
   ): Promise<void> {
     const workerId = String(req.headers[WORKER_ID_HEADER] ?? '');
+    // 预算自述头（is_0000000001 问题 4）：把**服务端实际生效**的各层超时值回给调用方，
+    // 使「-32001 到底断在哪一层」不必靠猜。必须在任何写响应体之前挂（含心跳接管
+    // 路径，否则首帧已发头就补不上了），且对 curl 等非 MCP 客户端同样可见。
+    res.setHeader(
+      SECRET_COMMAND_BUDGET_HEADER,
+      secretCommandBudgetHeaderValue(),
+    );
     // MCP 客户端断开探测：响应未写完就关闭（客户端超时/断连）→ abort 工具 handler
     // 的 ctx.signal。阻塞式工具（secret_command）凭此在执行前取消 pending 问题，
     // 防止「客户端已放弃等待、命令仍被执行」的幽灵执行。
+    //
+    // 局限（务必知悉，`client_wait` 层的语义来源）：MCP SDK 客户端**等待超时**只
+    // 放弃等待、**不关闭底层 HTTP 连接**，此处收不到信号 → 请求继续存活、命令照常
+    // 执行，而调用方已拿到与事实相反的失败。该态不可由服务端消除，只能靠工具描述
+    // 的「超时后先复核目标状态、禁止立即重发」+ 409 实时状态兜底。
     const disconnect = new AbortController();
     const onDisconnect = (): void => {
       if (!res.writableEnded) {

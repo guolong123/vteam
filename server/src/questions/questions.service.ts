@@ -757,8 +757,12 @@ export class QuestionsService {
   /**
    * 平台侧创建 secret_input question（secret_command 等待用户填写敏感值）。
    * - content 只持久化模板与变量元数据（source/template/variables/reason），绝不存值；
-   * - 托管模式 fail-closed：团队 managedMode=true 时在 agentQuestion.create **之前**拒绝
-   *   （创建调用为 0，不产生孤儿 pending 行）；
+   * - 托管模式门：团队 managedMode=true **且发起人不是团队主 Agent** 时，在
+   *   agentQuestion.create **之前**拒绝（创建调用为 0，不产生孤儿 pending 行）。
+   *   发起人即主 Agent 时放行（`options.requesterInstanceId`）——托管模式管的是
+   *   「非主 Agent 的请求改由主 Agent 确认」，主 Agent 自己发起不存在该问题；
+   *   密钥值本身仍由**用户**弹窗提供（`toDto` 对 secret_input 恒 managedMode=false）；
+   * - `options.teamId`：团队直聊（无任务）场景的归属，taskId 传空串；
    * - requestId 用 que_platform_ 前缀（与 createForPlatform 同规则，防唯一键碰撞）；
    * - options.onSecretResolved：终态（填写/取消）钩子，secrets 仅在进程内存传递。
    */
@@ -771,14 +775,29 @@ export class QuestionsService {
     },
     options: {
       agentId?: string;
+      teamId?: string;
+      requesterInstanceId?: string;
       onSecretResolved?: PlatformSecretResolveHook;
     } = {},
   ): Promise<AgentQuestionDto> {
-    if (await this.managedModeOf(taskId, null)) {
-      throw new ForbiddenException({
-        code: QUESTIONS_ERRORS.QUESTION_SECRET_MANAGED_FORBIDDEN,
-        message: '团队已开启托管模式，敏感输入不予受理（fail-closed）',
-      });
+    const teamId = options.teamId ?? (await this.teamIdOf(taskId, null));
+    const sessionId = teamId
+      ? ((await this.mainAgentSessionOfTeam(teamId)) ??
+        (taskId ? await this.mainAgentSessionOf(taskId) : null))
+      : await this.mainAgentSessionOf(taskId);
+    const managed = await this.managedModeOf(taskId || null, sessionId);
+    if (managed) {
+      const mainAgentMemberId = teamId
+        ? await this.mainAgentMemberIdOf(teamId)
+        : null;
+      if (mainAgentMemberId !== options.requesterInstanceId) {
+        throw new ForbiddenException({
+          code: QUESTIONS_ERRORS.QUESTION_SECRET_MANAGED_FORBIDDEN,
+          message:
+            '团队已开启托管模式，非主 Agent 发起的敏感输入不予受理（fail-closed）；' +
+            '请由团队主 Agent 发起（密钥值仍须由用户在弹窗提供）',
+        });
+      }
     }
     const seq = await this.idGen.nextId('que');
     const requestId = `que_platform_${seq.split('_')[1] ?? ''}`;
@@ -796,7 +815,7 @@ export class QuestionsService {
       data: {
         id,
         requestId,
-        sessionId: (await this.mainAgentSessionOf(taskId)) ?? 's_placeholder',
+        sessionId: sessionId ?? 's_placeholder',
         taskId,
         agentId: options.agentId ?? '',
         kind: AGENT_QUESTION_KINDS.SECRET_INPUT,
@@ -1048,20 +1067,43 @@ export class QuestionsService {
     if (!task?.teamId) {
       return null;
     }
+    return this.mainAgentSessionOfTeam(task.teamId);
+  }
+
+  /** 团队主 Agent 的团队会话 id（团队直聊/任务内共用同一口径）。 */
+  private async mainAgentSessionOfTeam(teamId: string): Promise<string | null> {
     const team = await this.prisma.team.findUnique({
-      where: { id: task.teamId },
+      where: { id: teamId },
       select: { mainAgentMemberId: true },
     });
     if (!team?.mainAgentMemberId) {
       return null;
     }
     const session = await this.prisma.session.findFirst({
-      where: { teamId: task.teamId, teamMemberId: team.mainAgentMemberId },
+      where: { teamId, teamMemberId: team.mainAgentMemberId },
       select: { id: true },
     });
     return session?.id ?? null;
   }
 
+  /** 团队主 Agent 成员 id（团队不存在 → null；托管模式门比对用）。 */
+  private async mainAgentMemberIdOf(teamId: string): Promise<string | null> {
+    const team = await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { mainAgentMemberId: true },
+    });
+    return team?.mainAgentMemberId ?? null;
+  }
+
+  /**
+   * AgentQuestion → DTO。
+   *
+   * `secret_input` 的 managedMode **恒 false**（is_0000000001 问题 2）：托管标记的
+   * 作用是「前端不弹窗、改由主 Agent 代确认」，而密钥值只有用户手里有——带着
+   * managedMode=true 会让弹窗永不出现，等于把主 Agent 也彻底堵死。收敛口径必须
+   * 收在这里（create/resolve/expire/list 共用），否则任一路径漏改就复现「无人收到
+   * 弹窗」。
+   */
   private toDto(row: AgentQuestion, managedMode = false): AgentQuestionDto {
     return {
       id: row.id,
@@ -1073,7 +1115,8 @@ export class QuestionsService {
       content: row.content,
       status: row.status,
       answers: row.answers,
-      managedMode,
+      managedMode:
+        row.kind === AGENT_QUESTION_KINDS.SECRET_INPUT ? false : managedMode,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
