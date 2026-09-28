@@ -36,6 +36,30 @@ const WORKER_ID_HEADER = 'x-worker-id';
 /** MCP 协议版本（2025-03-26：tools.listChanged/call 由协议级处理，本 server 实现 v1）。 */
 const MCP_PROTOCOL_VERSION = '2025-03-26';
 
+/**
+ * 阻塞 tools/call 心跳间隔（≤60s）。opencode 1.18.32 对零字节挂起的
+ * tools/call 在约 240s（60s 扫描相位）客户端 abort；30s 间隔保证任意扫描
+ * 窗口内都有字节到达，重置其空闲判定。
+ */
+const MCP_HEARTBEAT_INTERVAL_MS = 30_000;
+
+/**
+ * 仅对声明接受 text/event-stream 的客户端发心跳。opencode MCP 客户端
+ * `Accept: application/json, text/event-stream` 走 SSE 帧；curl 的默认
+ * 通配 Accept 不含 event-stream，永不接管响应，最终正文保持纯 JSON。
+ */
+function acceptsEventStream(req: Request): boolean {
+  return String(req.headers.accept ?? '')
+    .split(',')
+    .some((part) => part.split(';')[0].trim() === 'text/event-stream');
+}
+
+/** JSON-RPC 通知无 id：心跳接管后的错误帧仍需回填请求 id。 */
+function messageId(body: unknown): unknown {
+  const msg = body as { id?: unknown } | null | undefined;
+  return msg && typeof msg === 'object' ? msg.id : undefined;
+}
+
 /** JSON-RPC 错误码（JSON-RPC 2.0 规范）。 */
 const ERROR_METHOD_NOT_FOUND = -32601;
 const ERROR_INVALID_PARAMS = -32602;
@@ -74,11 +98,11 @@ export class PlatformMcpController {
     summary:
       '平台 MCP Streamable HTTP 端点（X-Worker-Token 鉴权，initialize/tools/list/call）',
   })
-  handle(
+  async handle(
     @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
+    @Res() res: Response,
     @Body() body: unknown,
-  ): unknown {
+  ): Promise<void> {
     const workerId = String(req.headers[WORKER_ID_HEADER] ?? '');
     // MCP 客户端断开探测：响应未写完就关闭（客户端超时/断连）→ abort 工具 handler
     // 的 ctx.signal。阻塞式工具（secret_command）凭此在执行前取消 pending 问题，
@@ -91,12 +115,101 @@ export class PlatformMcpController {
     };
     res.on('close', onDisconnect);
     req.on('aborted', onDisconnect);
-    // MCP 通知契约：无 id 请求 → 202 Accepted（passthrough 仅设状态码，响应体仍 Nest 序列化）
+    // MCP 通知契约：无 id 请求 → 202 Accepted（正文仍由本方法写出）
     const message = body as { id?: unknown } | null | undefined;
-    if (message && typeof message === 'object' && message.id === undefined) {
+    const isNotification =
+      !!message && typeof message === 'object' && message.id === undefined;
+    if (isNotification) {
       res.status(202);
     }
-    return this.dispatch(body, workerId, disconnect.signal);
+
+    let out: unknown;
+    let heartbeated = false;
+    try {
+      out = this.dispatch(body, workerId, disconnect.signal);
+      if (out instanceof Promise) {
+        // 只有阻塞式 tools/call 会走到这里：handler 挂起期间按 ≤60s 在响应上写
+        // SSE 注释心跳，避免 opencode 客户端把零字节长连接当作空闲超时 abort。
+        const held = await this.awaitWithHeartbeat(
+          out,
+          res,
+          acceptsEventStream(req),
+        );
+        out = held.body;
+        heartbeated = held.heartbeated;
+      }
+    } catch (err) {
+      if (res.headersSent) {
+        // 心跳已接管响应：错误必须以 JSON-RPC SSE 帧收尾，客户端仍可解析。
+        this.endWithJsonRpcFrame(
+          res,
+          this.error(
+            messageId(body),
+            ERROR_INTERNAL_ERROR,
+            this.toErrorMessage(err),
+          ),
+        );
+        return;
+      }
+      throw err;
+    }
+
+    if (heartbeated) {
+      this.endWithJsonRpcFrame(res, out);
+      return;
+    }
+    // 未触发心跳的请求保持原语义：整体 JSON-RPC 正文（curl / Accept:* 客户端可直接 JSON.parse）
+    res.json(out);
+  }
+
+  /**
+   * 阻塞 tools/call 等待器：handler pending 期间，若客户端声明接受
+   * text/event-stream（opencode MCP 客户端为 `application/json, text/event-stream`，
+   * curl 默认通配 Accept 不含该类型），每 ≤ MCP_HEARTBEAT_INTERVAL_MS 在响应上
+   * 写一条 SSE 注释帧。首次心跳才切换响应头，因此快速返回的请求（含非阻塞
+   * 流量）完全不受影响；未声明 event-stream 的客户端永不写心跳，正文仍是纯 JSON。
+   */
+  private async awaitWithHeartbeat(
+    pending: Promise<unknown>,
+    res: Response,
+    enabled: boolean,
+  ): Promise<{ body: unknown; heartbeated: boolean }> {
+    if (!enabled) {
+      return { body: await pending, heartbeated: false };
+    }
+    let heartbeated = false;
+    const timer = setInterval(() => {
+      if (res.writableEnded || res.destroyed) return;
+      if (!heartbeated) {
+        heartbeated = true;
+        res.status(200);
+        res.setHeader('content-type', 'text/event-stream; charset=utf-8');
+        res.setHeader('cache-control', 'no-cache, no-transform');
+        res.setHeader('connection', 'keep-alive');
+        res.setHeader('x-accel-buffering', 'no');
+      }
+      res.write(`: vteam-mcp-heartbeat ${Date.now()}\n\n`);
+    }, MCP_HEARTBEAT_INTERVAL_MS);
+    timer.unref?.();
+    const stop = (): void => clearInterval(timer);
+    res.on('close', stop);
+    try {
+      return { body: await pending, heartbeated };
+    } finally {
+      stop();
+      res.off('close', stop);
+    }
+  }
+
+  /** 心跳接管后的收尾：JSON-RPC 结果以单条 SSE data 帧写出并结束流。 */
+  private endWithJsonRpcFrame(res: Response, payload: unknown): void {
+    if (res.writableEnded || res.destroyed) return;
+    try {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      res.end();
+    } catch {
+      // 客户端已断开：忽略（断开语义由 AbortSignal 路径处理）
+    }
   }
 
   /**
