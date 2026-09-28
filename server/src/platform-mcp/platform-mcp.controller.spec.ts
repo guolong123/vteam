@@ -1359,7 +1359,9 @@ describe('PlatformMcpController (HTTP)', () => {
       });
       const res = Object.assign(new EventEmitter(), {
         writableEnded: false,
+        destroyed: false,
         status: jest.fn(),
+        json: jest.fn(),
       });
 
       const dispatch = controller.handle(
@@ -1379,7 +1381,7 @@ describe('PlatformMcpController (HTTP)', () => {
             },
           },
         } as never,
-      ) as Promise<Record<string, unknown>>;
+      );
 
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(service.secretCommand).toHaveBeenCalledTimes(1);
@@ -1393,11 +1395,190 @@ describe('PlatformMcpController (HTTP)', () => {
       res.emit('close');
       expect(signal.aborted).toBe(true);
 
-      await expect(dispatch).resolves.toMatchObject({
-        jsonrpc: '2.0',
-        id: 11,
-        result: expect.any(Object),
+      await dispatch;
+      // 无心跳接管 → 仍以整体 JSON-RPC 正文返回（原契约不变）
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ jsonrpc: '2.0', id: 11 }),
+      );
+      expect(res.json.mock.calls[0][0].result).toEqual(expect.any(Object));
+    });
+  });
+
+  describe('阻塞 tools/call 心跳（todo 13：opencode ~240s 客户端 abort）', () => {
+    const blockingBody = {
+      jsonrpc: '2.0',
+      id: 91,
+      method: 'tools/call',
+      params: {
+        name: 'secret_command',
+        arguments: {
+          taskId: 't_0000000001',
+          selfInstanceId: 'tmm_sender',
+          command: 'echo {{TOKEN}}',
+          variables: [{ name: 'TOKEN' }],
+        },
+      },
+    };
+
+    const makeReq = (accept: string) =>
+      Object.assign(new EventEmitter(), {
+        headers: { 'x-worker-id': 'w_0001', accept },
       });
+
+    interface FakeRes extends EventEmitter {
+      writableEnded: boolean;
+      destroyed: boolean;
+      headersSent: boolean;
+      status: jest.Mock;
+      setHeader: jest.Mock;
+      write: jest.Mock;
+      end: jest.Mock;
+      json: jest.Mock;
+    }
+
+    const makeRes = (): FakeRes => {
+      const res: FakeRes = Object.assign(new EventEmitter(), {
+        writableEnded: false,
+        destroyed: false,
+        headersSent: false,
+        status: jest.fn(() => res),
+        setHeader: jest.fn(),
+        write: jest.fn(() => {
+          res.headersSent = true;
+          return true;
+        }),
+        end: jest.fn(() => {
+          res.writableEnded = true;
+        }),
+        json: jest.fn(),
+      });
+      return res;
+    };
+
+    const startBlockingCall = async (accept: string) => {
+      const controller = app.get(PlatformMcpController);
+      const req = makeReq(accept);
+      const res = makeRes();
+      const dispatch = controller.handle(
+        req as never,
+        res as never,
+        blockingBody as never,
+      );
+      await jest.advanceTimersByTimeAsync(0);
+      expect(service.secretCommand).toHaveBeenCalledTimes(1);
+      return { res, dispatch };
+    };
+
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    it('声明 text/event-stream 的客户端：pending 期间每 ≤60s 至少 1 条心跳，且切到 SSE 响应头', async () => {
+      let release!: (value: unknown) => void;
+      service.secretCommand.mockImplementation(
+        () => new Promise((resolve) => (release = resolve)),
+      );
+
+      const { res, dispatch } = await startBlockingCall(
+        'application/json, text/event-stream',
+      );
+      expect(res.write).not.toHaveBeenCalled();
+
+      const perMinute: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        const before = res.write.mock.calls.length;
+        await jest.advanceTimersByTimeAsync(60_000);
+        perMinute.push(res.write.mock.calls.length - before);
+      }
+      // 30s 间隔 → 每个 60s 窗口恰好 2 条；至少 1 条是计划验收线
+      expect(perMinute).toEqual([2, 2, 2, 2, 2, 2]);
+      expect(res.setHeader).toHaveBeenCalledWith(
+        'content-type',
+        'text/event-stream; charset=utf-8',
+      );
+      for (const [chunk] of res.write.mock.calls) {
+        expect(chunk).toMatch(/^: vteam-mcp-heartbeat \d+\n\n$/);
+      }
+
+      release({ status: 'cancelled' });
+      await dispatch;
+
+      const writes = res.write.mock.calls.map(([chunk]) => chunk as string);
+      const dataFrame = writes[writes.length - 1];
+      expect(dataFrame.startsWith('data: ')).toBe(true);
+      const rpc = JSON.parse(dataFrame.slice('data: '.length).trim());
+      expect(rpc.jsonrpc).toBe('2.0');
+      expect(rpc.id).toBe(91);
+      expect(JSON.parse(rpc.result.content[0].text)).toEqual({
+        status: 'cancelled',
+      });
+      expect(res.end).toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
+    });
+
+    it('Accept 不含 text/event-stream（curl */*）：永不写心跳，正文仍是可 JSON.parse 的整体响应', async () => {
+      let release!: (value: unknown) => void;
+      service.secretCommand.mockImplementation(
+        () => new Promise((resolve) => (release = resolve)),
+      );
+
+      const { res, dispatch } = await startBlockingCall('*/*');
+      await jest.advanceTimersByTimeAsync(600_000);
+      expect(res.write).not.toHaveBeenCalled();
+      expect(res.setHeader).not.toHaveBeenCalled();
+
+      release({ status: 'cancelled' });
+      await dispatch;
+
+      expect(res.write).not.toHaveBeenCalled();
+      expect(res.end).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ jsonrpc: '2.0', id: 91 }),
+      );
+    });
+
+    it('客户端断开：signal 立即 abort，之后不再写心跳，也不再收尾写帧', async () => {
+      let release!: (value: unknown) => void;
+      service.secretCommand.mockImplementation(
+        () => new Promise((resolve) => (release = resolve)),
+      );
+
+      const { res, dispatch } = await startBlockingCall(
+        'application/json, text/event-stream',
+      );
+      await jest.advanceTimersByTimeAsync(30_000);
+      expect(res.write).toHaveBeenCalledTimes(1);
+
+      const signal = service.secretCommand.mock.calls[0][2] as AbortSignal;
+      res.emit('close');
+      expect(signal.aborted).toBe(true);
+      res.destroyed = true; // express 在客户端断开后置 destroyed
+
+      await jest.advanceTimersByTimeAsync(600_000);
+      expect(res.write).toHaveBeenCalledTimes(1);
+
+      release({ status: 'cancelled' });
+      await dispatch;
+      expect(res.write).toHaveBeenCalledTimes(1);
+      expect(res.end).not.toHaveBeenCalled();
+    });
+
+    it('快速返回（非阻塞）：即使声明 event-stream 也不触发心跳，走整体 JSON 正文', async () => {
+      service.secretCommand.mockResolvedValue({ status: 'cancelled' });
+      const { res, dispatch } = await startBlockingCall(
+        'application/json, text/event-stream',
+      );
+      await dispatch;
+
+      expect(res.setHeader).not.toHaveBeenCalled();
+      expect(res.write).not.toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ jsonrpc: '2.0', id: 91 }),
+      );
     });
   });
 });
