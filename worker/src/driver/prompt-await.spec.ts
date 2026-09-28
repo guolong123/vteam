@@ -779,6 +779,67 @@ describe('awaitCompletion', () => {
     await expect(promise).rejects.toBeInstanceOf(CompletionTimeoutError);
     expect(abort).toHaveBeenCalledWith('ses_1');
   });
+
+  it('secret 等待：仅在途 tool part（无 text/reasoning）且 serve 静止 → 首字窗口过期不 abort，直到工具返回', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    let calls = 0;
+    const runningTool = {
+      id: 'tp1',
+      type: 'tool',
+      tool: 'vteam_secret_command',
+      state: { status: 'running', time: { start: 1 } },
+    };
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      if (calls <= 60) {
+        return [asstMsg('a1', [runningTool])];
+      }
+      return [
+        asstMsg('a1', [
+          { ...runningTool, state: { status: 'completed', time: { start: 1, end: 9 } } },
+          stepFinishPart(),
+        ]),
+      ];
+    });
+
+    const result = await awaitCompletion(driver, 'ses_secret_wait', {
+      firstTokenTimeoutMs: 40,
+      pollMs: 5,
+    });
+    expect(abort).not.toHaveBeenCalled();
+    expect(calls).toBeGreaterThan(60);
+    expect(result).toBeDefined();
+  });
+
+  it('工具已终态（completed）且无任何新输出 → 首字超时照常（在途豁免不掩护真 hang）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue([
+      asstMsg('a1', [
+        { id: 'tp1', type: 'tool', state: { status: 'completed', output: 'done' } },
+      ]),
+    ]);
+
+    const promise = awaitCompletion(driver, 'ses_done_tool', {
+      firstTokenTimeoutMs: 60,
+      pollMs: 5,
+    });
+    await expect(promise).rejects.toBeInstanceOf(CompletionTimeoutError);
+    expect(abort).toHaveBeenCalledWith('ses_done_tool');
+  });
+
+  it('tool part 无 state（未知状态）→ 不享受在途豁免，首字超时照常', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue([
+      asstMsg('a1', [{ id: 'tp1', type: 'tool', tool: 'vteam_group_post' }]),
+    ]);
+
+    const promise = awaitCompletion(driver, 'ses_stateless_tool', {
+      firstTokenTimeoutMs: 60,
+      pollMs: 5,
+    });
+    await expect(promise).rejects.toBeInstanceOf(CompletionTimeoutError);
+    expect(abort).toHaveBeenCalledWith('ses_stateless_tool');
+  });
 });
 
 describe('extractServeError（转义引号）', () => {

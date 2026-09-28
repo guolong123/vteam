@@ -7,6 +7,8 @@ import {
   WorkerCommand,
   ModelCredentialsPayload,
   GitCredentialsPayload,
+  SecretCommandRequestPayload,
+  SecretCommandResponsePayload,
 } from './worker-protocol';
 
 /**
@@ -334,6 +336,78 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {  it('Register
     const gitPayload = parsed.payload as GitCredentialsPayload | undefined;
     expect(gitPayload?.credentials).toHaveLength(1);
     expect(gitPayload?.targetWorkerIds).toBeUndefined();
+  });
+
+  it('secret-command：请求体 round-trip 携带模板/secrets/cwd/timeout 与幂等归属字段', () => {
+    const request: SecretCommandRequestPayload = {
+      requestId: 'req_0000000001',
+      taskId: 't_0000000001',
+      sessionId: 'ses_0000000001',
+      commandTemplate: 'mysql -h db -u root -p{{PASSWORD}} -e "select 1"',
+      secrets: { PASSWORD: 's3cr3t-A9f' },
+      cwd: 'repo',
+      timeoutMs: 120000,
+    };
+
+    const parsed = JSON.parse(JSON.stringify(request)) as SecretCommandRequestPayload;
+
+    expect(parsed.requestId).toBe('req_0000000001');
+    expect(parsed.taskId).toBe('t_0000000001');
+    expect(parsed.sessionId).toBe('ses_0000000001');
+    expect(parsed.commandTemplate).toBe(
+      'mysql -h db -u root -p{{PASSWORD}} -e "select 1"',
+    );
+    expect(parsed.secrets).toEqual({ PASSWORD: 's3cr3t-A9f' });
+    expect(parsed.cwd).toBe('repo');
+    expect(parsed.timeoutMs).toBe(120000);
+  });
+
+  it('secret-command：可选 cwd/timeoutMs/taskId/sessionId 缺省时不落进 wire（反序列化 undefined）', () => {
+    const request: SecretCommandRequestPayload = {
+      requestId: 'req_0000000002',
+      commandTemplate: 'echo {{TOKEN}}',
+      secrets: { TOKEN: 'tok' },
+    };
+
+    const parsed = JSON.parse(JSON.stringify(request)) as SecretCommandRequestPayload;
+
+    expect(parsed.requestId).toBe('req_0000000002');
+    expect(parsed.cwd).toBeUndefined();
+    expect(parsed.timeoutMs).toBeUndefined();
+    expect(parsed.taskId).toBeUndefined();
+    expect(parsed.sessionId).toBeUndefined();
+  });
+
+  it('secret-command：响应体 round-trip 含状态/exitCode/durationMs/双流截断 flag，且不含渲染命令', () => {
+    const response: SecretCommandResponsePayload = {
+      requestId: 'req_0000000001',
+      status: 'failed',
+      exitCode: 1,
+      durationMs: 42,
+      stdout: 'ok {{REDACTED}}',
+      stderr: 'denied {{REDACTED}}',
+      stdoutTruncated: false,
+      stderrTruncated: true,
+      error: 'failed to start command process',
+    };
+
+    const wire = JSON.stringify(response);
+    const parsed = JSON.parse(wire) as SecretCommandResponsePayload;
+
+    expect(parsed.requestId).toBe('req_0000000001');
+    expect(parsed.status).toBe('failed');
+    expect(parsed.exitCode).toBe(1);
+    expect(parsed.durationMs).toBe(42);
+    expect(parsed.stdout).toBe('ok {{REDACTED}}');
+    expect(parsed.stderr).toBe('denied {{REDACTED}}');
+    expect(parsed.stdoutTruncated).toBe(false);
+    expect(parsed.stderrTruncated).toBe(true);
+    expect(parsed.error).toBe('failed to start command process');
+    expect('commandTemplate' in parsed).toBe(false);
+    expect('secrets' in parsed).toBe(false);
+    expect('cwd' in parsed).toBe(false);
+    expect('argv' in parsed).toBe(false);
+    expect(wire).not.toContain('s3cr3t-A9f');
   });
 
   it('C5：reload-config 命令不携带 payload（向后兼容既有命令结构）', () => {

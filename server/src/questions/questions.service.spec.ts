@@ -5,6 +5,8 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { IdGeneratorService } from '../common/id-generator';
 import { EVENT_TYPES } from '../common/constants/event.constants';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,8 +17,11 @@ import {
 } from '../workers/worker.client';
 import { ReplyQuestionDto } from './dto/reply-question.dto';
 import {
+  AGENT_QUESTION_KINDS,
   QUESTION_CONFIRM_INTEGRITY_ERRORS,
   QUESTIONS_ERRORS,
+  SECRET_INPUT_BUDGET_MS,
+  SECRET_QUESTION_SOURCE,
 } from './questions.constants';
 import { QuestionsService } from './questions.service';
 
@@ -503,6 +508,84 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         select: { id: true },
       });
     });
+
+    it('重启后 que 计数器从 request_id 最大数字尾段续号（...07 → ...08，不重发 ...01 撞 P2002）', async () => {
+      // 模拟进程重启：全新的 IdGeneratorService（内存计数器全空 = 重启归零）。
+      const restartedModule = await Test.createTestingModule({
+        providers: [
+          QuestionsService,
+          { provide: PrismaService, useValue: prisma },
+          { provide: IdGeneratorService, useValue: new IdGeneratorService() },
+          { provide: RealtimeService, useValue: realtime },
+          { provide: WorkerClient, useValue: workerClient },
+        ],
+      }).compile();
+      const restarted = restartedModule.get<QuestionsService>(QuestionsService);
+
+      prisma.agentQuestion.findMany.mockImplementation(
+        (args: {
+          where?: {
+            id?: { startsWith?: string };
+            requestId?: { startsWith?: string };
+          };
+          select?: Record<string, boolean>;
+        }) => {
+          if (args?.where?.requestId?.startsWith === 'que_platform_') {
+            return Promise.resolve([
+              { requestId: 'que_platform_0000000007' },
+              { requestId: 'que_platform_not-a-seq' }, // 非数字尾段必须忽略
+              { requestId: 'que_platform_' }, // 空尾段必须忽略
+              { requestId: `que_platform_${'9'.repeat(25)}` }, // 超安全整数尾段必须忽略
+              { requestId: 'per_0000000099' }, // 非 que_platform_ 行不参与
+            ]);
+          }
+          return Promise.resolve([]); // aq_ 续号：重启后空表
+        },
+      );
+      prisma.team.findUnique.mockResolvedValue({
+        managedMode: false,
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.agentQuestion.create.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) =>
+          Promise.resolve(aqRow({ ...data })),
+      );
+
+      await restarted.onModuleInit();
+
+      // 必须真的按 request_id 前缀查询（防“没查也算绿”的假成功）
+      expect(prisma.agentQuestion.findMany).toHaveBeenCalledWith({
+        where: { requestId: { startsWith: 'que_platform_' } },
+        select: { requestId: true },
+      });
+
+      const input = {
+        template: 'echo $TOKEN',
+        variables: [{ name: 'TOKEN', secret: true }],
+      };
+      const first = await restarted.createSecretForPlatform('t_1', input, {
+        agentId: 'a_1',
+      });
+      const firstInsert =
+        prisma.agentQuestion.create.mock.calls[
+          prisma.agentQuestion.create.mock.calls.length - 1
+        ][0];
+      // 断言实际生成并落库的 requestId（而非仅 seed 被调用）
+      expect(firstInsert.data.requestId).toBe('que_platform_0000000008');
+      expect(first.requestId).toBe('que_platform_0000000008');
+      expect(first.requestId).not.toBe('que_platform_0000000001');
+
+      const second = await restarted.createSecretForPlatform('t_1', input, {
+        agentId: 'a_1',
+      });
+      expect(second.requestId).toBe('que_platform_0000000009');
+      expect(
+        prisma.agentQuestion.create.mock.calls[
+          prisma.agentQuestion.create.mock.calls.length - 1
+        ][0].data.requestId,
+      ).toBe('que_platform_0000000009');
+    });
   });
 
   /** 平台 question 行（content.source='platform'，确认门场景）。 */
@@ -575,10 +658,13 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
           status: 'pending',
         },
       });
+      // Todo 12:团队域投递 — create emit 须带顶层 teamId（与 scope 同源），
+      // 否则 web matchesScope team: 兜底按真实 t_... taskId 匹配失败、实时帧被丢弃。
       expect(realtime.emit).toHaveBeenCalledWith(
         EVENT_TYPES.AGENT_QUESTION,
         expect.objectContaining({
           taskId: 't_1',
+          teamId: 'tm_1',
           question: expect.objectContaining({
             requestId: 'que_platform_0000000001',
           }),
@@ -1005,6 +1091,452 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         code: QUESTION_CONFIRM_INTEGRITY_ERRORS.CROSS_TASK_FORBIDDEN,
       });
       expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('secret_input（不回显的敏感输入生命周期）', () => {
+    /** no-leak 哨兵：断言 update 参数 / SSE 序列化 payload / DTO 均 0 命中。 */
+    const SECRET_SENTINEL = 's3cr3t-A9f';
+
+    /** todo 9 证据 sink：仅在 VTEAM_TASK9_SINK_DIR 设置时落盘，未设置零副作用。 */
+    const SINK_DIR = process.env.VTEAM_TASK9_SINK_DIR;
+    const dumpSink = (file: string, text: string): void => {
+      if (!SINK_DIR) return;
+      fs.mkdirSync(SINK_DIR, { recursive: true });
+      fs.appendFileSync(path.join(SINK_DIR, file), `${text}\n`);
+    };
+
+    /** secret_input pending 行（content 只有模板 + 变量元数据，无值）。 */
+    const secretRow = (overrides: Record<string, unknown> = {}) =>
+      aqRow({
+        id: 'aq_secret',
+        requestId: 'que_platform_0000000001',
+        kind: AGENT_QUESTION_KINDS.SECRET_INPUT,
+        content: {
+          source: SECRET_QUESTION_SOURCE,
+          template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+          variables: [{ name: 'DB_PASSWORD', secret: true }],
+          reason: '导出订单表',
+        },
+        ...overrides,
+      });
+
+    /** 落库回显真实入参：update 直接回写收到的 status/answers（断言的 payload 来自真实调用参数）。 */
+    const echoUpdate = () => {
+      prisma.agentQuestion.update.mockImplementation(
+        async (args: { data: { status: string; answers: unknown } }) => ({
+          ...secretRow(),
+          status: args.data.status,
+          answers: args.data.answers,
+        }),
+      );
+    };
+
+    /** 走真实 createSecretForPlatform 注册终态钩子（key=requestId），返回 mock hook。 */
+    const createSecretQuestion = async () => {
+      const hook = jest.fn().mockResolvedValue(undefined);
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+        managedMode: false,
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.agentQuestion.create.mockResolvedValue(secretRow());
+      await service.createSecretForPlatform(
+        't_1',
+        {
+          template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+          variables: [{ name: 'DB_PASSWORD', secret: true }],
+          reason: '导出订单表',
+        },
+        { agentId: 'a_1', onSecretResolved: hook },
+      );
+      prisma.agentQuestion.create.mockClear();
+      return hook;
+    };
+
+    it('输入预算常量固定 540s（阻塞式 secret_command 的输入预算，不是 600s）', () => {
+      expect(SECRET_INPUT_BUDGET_MS).toBe(540 * 1000);
+      expect(AGENT_QUESTION_KINDS.SECRET_INPUT).toBe('secret_input');
+      expect(SECRET_QUESTION_SOURCE).toBe('secret_input');
+    });
+
+    it('createSecretForPlatform：content 只落模板与变量元数据（source=secret_input）+ 返回 managedMode:false + emit 收敛帧', async () => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+        managedMode: false,
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.agentQuestion.create.mockResolvedValue(secretRow());
+
+      const result = await service.createSecretForPlatform(
+        't_1',
+        {
+          template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+          variables: [{ name: 'DB_PASSWORD', secret: true }],
+          reason: '导出订单表',
+        },
+        { agentId: 'a_1' },
+      );
+
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith({
+        data: {
+          id: 'aq_0000000001',
+          requestId: 'que_platform_0000000001',
+          sessionId: 's_main',
+          taskId: 't_1',
+          agentId: 'a_1',
+          kind: AGENT_QUESTION_KINDS.SECRET_INPUT,
+          content: {
+            source: SECRET_QUESTION_SOURCE,
+            template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+            variables: [{ name: 'DB_PASSWORD', secret: true }],
+            reason: '导出订单表',
+          },
+          status: 'pending',
+        },
+      });
+      expect(result).toMatchObject({
+        kind: AGENT_QUESTION_KINDS.SECRET_INPUT,
+        status: 'pending',
+        managedMode: false,
+      });
+      // Todo 12:团队域投递 — secret create emit 同样须带顶层 teamId（弹窗不刷新即弹）。
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({
+          taskId: 't_1',
+          teamId: 'tm_1',
+          question: expect.objectContaining({
+            kind: AGENT_QUESTION_KINDS.SECRET_INPUT,
+          }),
+        }),
+        { type: 'team', id: 'tm_1' },
+      );
+    });
+
+    it('托管团队 fail-closed：agentQuestion.create 调用 0（无孤儿 pending 行）且不 emit', async () => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({ managedMode: true });
+
+      await expect(
+        service.createSecretForPlatform(
+          't_1',
+          {
+            template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+            variables: [{ name: 'DB_PASSWORD', secret: true }],
+          },
+          { agentId: 'a_1' },
+        ),
+      ).rejects.toMatchObject({
+        response: {
+          code: QUESTIONS_ERRORS.QUESTION_SECRET_MANAGED_FORBIDDEN,
+        },
+      });
+
+      expect(prisma.agentQuestion.create).not.toHaveBeenCalled();
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+      expect(realtime.emit).not.toHaveBeenCalled();
+    });
+
+    it('带 sentinel 的回复：落库 answers 只有 {provided,filled,actorType,actorId}，update 入参与序列化 SSE payload 0 命中，hook 内存收到明文', async () => {
+      const hook = await createSecretQuestion();
+      prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+      echoUpdate();
+
+      const result = await service.reply(
+        'aq_secret',
+        { secrets: { DB_PASSWORD: SECRET_SENTINEL } } as ReplyQuestionDto,
+        'u_1',
+      );
+
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+      expect(workerClient.permissionReply).not.toHaveBeenCalled();
+      expect(prisma.worker.findUnique).not.toHaveBeenCalled();
+      expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
+        where: { id: 'aq_secret' },
+        data: {
+          status: 'resolved',
+          answers: {
+            provided: true,
+            filled: ['DB_PASSWORD'],
+            actorType: 'user',
+            actorId: 'u_1',
+          },
+        },
+      });
+      expect(
+        JSON.stringify(prisma.agentQuestion.update.mock.calls),
+      ).not.toContain(SECRET_SENTINEL);
+      expect(realtime.emit.mock.calls.length).toBeGreaterThan(0);
+      expect(JSON.stringify(realtime.emit.mock.calls)).not.toContain(
+        SECRET_SENTINEL,
+      );
+      expect(JSON.stringify(result)).not.toContain(SECRET_SENTINEL);
+      expect(hook).toHaveBeenCalledWith({
+        outcome: 'provided',
+        secrets: { DB_PASSWORD: SECRET_SENTINEL },
+        actor: { type: 'user', id: 'u_1' },
+      });
+      expect(result.status).toBe('resolved');
+      expect(result.answers).toEqual({
+        provided: true,
+        filled: ['DB_PASSWORD'],
+        actorType: 'user',
+        actorId: 'u_1',
+      });
+    });
+
+    it('todo 9 sink：完整 create→reply 链路的落库入参 / SSE / 日志 / 回包落盘且 0 命中（明文只在内存钩子）', async () => {
+      const logLines: string[] = [];
+      const capture = (...args: unknown[]): void => {
+        logLines.push(args.map(String).join(' '));
+      };
+      const logger = (
+        service as unknown as {
+          logger: Record<
+            'log' | 'warn' | 'error',
+            (...args: unknown[]) => void
+          >;
+        }
+      ).logger;
+      const spies = [
+        jest.spyOn(logger, 'log').mockImplementation(capture),
+        jest.spyOn(logger, 'warn').mockImplementation(capture),
+        jest.spyOn(logger, 'error').mockImplementation(capture),
+      ];
+      try {
+        prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+        prisma.team.findUnique.mockResolvedValue({
+          mainAgentMemberId: 'tmm_main',
+          managedMode: false,
+        });
+        prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+        prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+        prisma.agentQuestion.create.mockResolvedValue(secretRow());
+        const hook = jest.fn().mockResolvedValue(undefined);
+        await service.createSecretForPlatform(
+          't_1',
+          {
+            template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+            variables: [{ name: 'DB_PASSWORD', secret: true }],
+            reason: '导出订单表',
+          },
+          { agentId: 'a_1', onSecretResolved: hook },
+        );
+        prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+        echoUpdate();
+
+        const replyResult = await service.reply(
+          'aq_secret',
+          { secrets: { DB_PASSWORD: SECRET_SENTINEL } } as ReplyQuestionDto,
+          'u_1',
+        );
+
+        const sinks: Array<readonly [string, string]> = [
+          [
+            'question-create.json',
+            JSON.stringify(prisma.agentQuestion.create.mock.calls, null, 2),
+          ],
+          [
+            'question-answers.json',
+            JSON.stringify(prisma.agentQuestion.update.mock.calls, null, 2),
+          ],
+          [
+            'sse-payload.json',
+            JSON.stringify(realtime.emit.mock.calls, null, 2),
+          ],
+          ['question-reply-result.json', JSON.stringify(replyResult, null, 2)],
+          ['questions-server.log', logLines.join('\n')],
+        ];
+        for (const [file, text] of sinks) {
+          expect(text.split(SECRET_SENTINEL).length - 1).toBe(0);
+          dumpSink(file, text);
+        }
+        expect(prisma.agentQuestion.create.mock.calls.length).toBeGreaterThan(
+          0,
+        );
+        expect(logLines.length).toBeGreaterThan(0);
+        expect(hook).toHaveBeenCalledWith(
+          expect.objectContaining({
+            secrets: { DB_PASSWORD: SECRET_SENTINEL },
+          }),
+        );
+      } finally {
+        spies.forEach((s) => s.mockRestore());
+      }
+    });
+
+    it('{secrets:null} → 取消：终态 rejected + hook outcome=cancelled + 不执行命令（不触 worker）', async () => {
+      const hook = await createSecretQuestion();
+      prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+      echoUpdate();
+
+      const result = await service.reply(
+        'aq_secret',
+        { secrets: null } as ReplyQuestionDto,
+        'u_1',
+      );
+
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+      expect(prisma.worker.findUnique).not.toHaveBeenCalled();
+      expect(prisma.agentQuestion.update).toHaveBeenCalledWith({
+        where: { id: 'aq_secret' },
+        data: {
+          status: 'rejected',
+          answers: {
+            provided: false,
+            filled: [],
+            actorType: 'user',
+            actorId: 'u_1',
+          },
+        },
+      });
+      expect(hook).toHaveBeenCalledWith({
+        outcome: 'cancelled',
+        secrets: null,
+        actor: { type: 'user', id: 'u_1' },
+      });
+      expect(result.status).toBe('rejected');
+    });
+
+    it('钩子抛出含 sentinel 的错误 → logger.error 落盘前精确脱敏（0 命中）且收敛照常完成', async () => {
+      const hook = await createSecretQuestion();
+      hook.mockRejectedValue(new Error(`worker failed: ${SECRET_SENTINEL}`));
+      const errSpy = jest
+        .spyOn((service as any).logger, 'error')
+        .mockImplementation(() => undefined);
+      prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+      echoUpdate();
+
+      const result = await service.reply(
+        'aq_secret',
+        { secrets: { DB_PASSWORD: SECRET_SENTINEL } } as ReplyQuestionDto,
+        'u_1',
+      );
+
+      const logged = errSpy.mock.calls
+        .map((call: unknown[]) => call.map(String).join(' '))
+        .join('\n');
+      expect(errSpy).toHaveBeenCalledTimes(1);
+      expect(logged).toContain('***');
+      expect(logged).not.toContain(SECRET_SENTINEL);
+      expect(result.status).toBe('resolved');
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+      expect(JSON.stringify(realtime.emit.mock.calls)).not.toContain(
+        SECRET_SENTINEL,
+      );
+      errSpy.mockRestore();
+    });
+
+    it('缺 secrets（字段未携带）→ 400 QUESTION_INVALID_REPLY（不落库、不触发钩子）', async () => {
+      const hook = await createSecretQuestion();
+      prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+
+      await expect(
+        service.reply('aq_secret', {} as ReplyQuestionDto, 'u_1'),
+      ).rejects.toMatchObject({
+        response: { code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY },
+      });
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+      expect(hook).not.toHaveBeenCalled();
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+    });
+
+    it('未声明变量（secrets 带 content 未声明的 key）→ 400 QUESTION_INVALID_REPLY', async () => {
+      const hook = await createSecretQuestion();
+      prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+
+      await expect(
+        service.reply(
+          'aq_secret',
+          { secrets: { ROOT_PASSWORD: SECRET_SENTINEL } } as ReplyQuestionDto,
+          'u_1',
+        ),
+      ).rejects.toMatchObject({
+        response: { code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY },
+      });
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+      expect(hook).not.toHaveBeenCalled();
+      expect(JSON.stringify(realtime.emit.mock.calls)).not.toContain(
+        SECRET_SENTINEL,
+      );
+    });
+
+    it('已声明变量缺值（secrets:{}）→ 400 QUESTION_INVALID_REPLY', async () => {
+      const hook = await createSecretQuestion();
+      prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+
+      await expect(
+        service.reply('aq_secret', { secrets: {} } as ReplyQuestionDto, 'u_1'),
+      ).rejects.toMatchObject({
+        response: { code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY },
+      });
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+      expect(hook).not.toHaveBeenCalled();
+    });
+
+    it('终态重复回复（已 resolved）→ 400 QUESTION_ALREADY_RESOLVED（不再触发钩子）', async () => {
+      const hook = await createSecretQuestion();
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        secretRow({ status: 'resolved' }),
+      );
+
+      await expect(
+        service.reply(
+          'aq_secret',
+          { secrets: { DB_PASSWORD: SECRET_SENTINEL } } as ReplyQuestionDto,
+          'u_1',
+        ),
+      ).rejects.toMatchObject({
+        response: { code: QUESTIONS_ERRORS.QUESTION_ALREADY_RESOLVED },
+      });
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
+      expect(hook).not.toHaveBeenCalled();
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+    });
+
+    it('secret source 即使被送进 forwardReply 也走平台旁路：不查 worker、不调 questionReply、不落明文', async () => {
+      const hook = await createSecretQuestion();
+      echoUpdate();
+
+      const result = await (service as any).forwardReply(
+        secretRow(),
+        { secrets: { DB_PASSWORD: SECRET_SENTINEL } },
+        { type: 'user', id: 'u_1' },
+      );
+
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+      expect(prisma.worker.findUnique).not.toHaveBeenCalled();
+      expect(
+        JSON.stringify(prisma.agentQuestion.update.mock.calls),
+      ).not.toContain(SECRET_SENTINEL);
+      expect(hook).toHaveBeenCalledWith({
+        outcome: 'provided',
+        secrets: { DB_PASSWORD: SECRET_SENTINEL },
+        actor: { type: 'user', id: 'u_1' },
+      });
+      expect(result.status).toBe('resolved');
+    });
+
+    it('钩子未注册（进程重启丢失）→ 落库 + emit 照常，不抛错（stale pending 不悬挂）', async () => {
+      prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+      echoUpdate();
+
+      const result = await service.reply(
+        'aq_secret',
+        { secrets: { DB_PASSWORD: SECRET_SENTINEL } } as ReplyQuestionDto,
+        'u_1',
+      );
+
+      expect(result.status).toBe('resolved');
+      expect(workerClient.questionReply).not.toHaveBeenCalled();
+      expect(JSON.stringify(realtime.emit.mock.calls)).not.toContain(
+        SECRET_SENTINEL,
+      );
     });
   });
 });

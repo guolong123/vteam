@@ -95,6 +95,29 @@ for (const type of ["agent.error", "agent.status", "agent.question"]) {
   });
 }
 
+// Todo 12 生产形状 — server create emit 携带真实 `t_...` taskId + 顶层 teamId
+// （scope={type:'team',id:'tm_...'}）；e2e 夹具曾用 `team:<id>` taskId 掩盖了该分裂。
+for (const type of ["agent.question"]) {
+  test(`team: scope passes ${type} with production shape (real taskId + teamId)`, () => {
+    assert.equal(
+      matchesScope(ev(type, { taskId: "t_0000000001", teamId: "tm_0000000001" }), "team:tm_0000000001"),
+      true,
+    );
+  });
+  test(`team: scope drops ${type} whose teamId belongs to another team`, () => {
+    assert.equal(
+      matchesScope(ev(type, { taskId: "t_0000000001", teamId: "tm_OTHER" }), "team:tm_0000000001"),
+      false,
+    );
+  });
+  test(`team: scope drops ${type} with real taskId but missing teamId`, () => {
+    assert.equal(
+      matchesScope(ev(type, { taskId: "t_0000000001" }), "team:tm_0000000001"),
+      false,
+    );
+  });
+}
+
 // task: 分支审计 — toExecutionScope(taskId) 返回裸 taskId,故裸匹配正确,无需改
 test("task: scope passes agent.loading with bare taskId (legacy task-mode shape)", () => {
   assert.equal(matchesScope(ev("agent.loading", { taskId: "t_0000000001" }), "task:t_0000000001"), true);

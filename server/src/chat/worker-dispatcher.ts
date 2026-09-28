@@ -4225,6 +4225,39 @@ export class WorkerDispatcher
   }
 
   /**
+   * 阻塞式 MCP 调用（`secret_command` 等待敏感值填写/命令执行期）的保活入口：
+   * 由 platform-mcp 阻塞处理器每 60s 调用一次，重臂
+   * ① 内存静默 watchdog（滑动窗口，防 600s 无回流事件被判死/唤醒）；
+   * ② durable TriggerService deadline（事件高频路径不落 durable，此处是唯一需要
+   *    显式重臂的低频路径：新行落库后取消旧行，防旧行到期误收割）；
+   * ③ DB 活动列（空闲判死计时）。
+   *
+   * 会话已终态/判败/不在本进程监控（无 pending）→ 仅刷新活动列，不复活 watchdog；
+   * durable/DB 失败沿用既有 best-effort 语义（warn 不抛，内存窗口照常生效）。
+   */
+  async keepAliveSession(sessionId: string): Promise<void> {
+    if (!sessionId) {
+      return;
+    }
+    this.rearmSilenceWatchdogBySession(sessionId);
+    void this.persistSessionActivity(sessionId);
+    if (!this.triggers) {
+      return;
+    }
+    const key = this.pendingBySession.get(sessionId);
+    if (key === undefined) {
+      return;
+    }
+    const entry = this.pending.get(key);
+    if (!entry || entry.sessionId !== sessionId) {
+      return;
+    }
+    const staleDedupKey = entry.triggerDedupKey;
+    await this.scheduleSilenceTrigger(entry, key, entry.deadlineAt);
+    void this.cancelSilenceTrigger(staleDedupKey);
+  }
+
+  /**
    * 静默 deadline 收割（内存 timer 与 durable trigger 共用同一行为，async）：
    * ① 心跳快速失败——先查 worker：已 offline（或行缺失）→ 立即走失败路径，
    *    **不**调 tryAutoRestart（离线 worker 唤醒无意义，探活归心跳路径）；

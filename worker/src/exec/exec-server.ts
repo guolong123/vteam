@@ -60,7 +60,14 @@ import {
   writeOmoAgents,
 } from '../resources/omo-config';
 import { WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
+import type {
+  SecretCommandRequestPayload,
+  SecretCommandResponsePayload,
+  SensitiveCommandOutput,
+} from '../protocol/worker-protocol';
 import { collectFileArtifacts } from './artifact-extract';
+import { SensitiveCommandError, runSensitiveCommand } from './sensitive-command';
+import type { SensitiveCommandErrorCode } from './sensitive-command';
 
 export interface ExecutionConfig {
   permissions: Record<string, 'allow' | 'ask' | 'deny'>;
@@ -319,10 +326,69 @@ function readBody(req: http.IncomingMessage, maxBytes: number): Promise<string> 
 function sendJson(
   res: http.ServerResponse,
   status: number,
-  body: Record<string, unknown>,
+  body: object,
 ): void {
   res.writeHead(status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(body));
+}
+
+/**
+ * `SensitiveCommandError.code` → 固定 400 文案。
+ *
+ * 按 code 查表而不是透传 `err.message`：即使模块未来在 message 里带了动态片段，
+ * 路由也不会把它（或渲染命令/secret）回给调用方或写进日志。
+ */
+const SECRET_COMMAND_REJECTIONS: Record<SensitiveCommandErrorCode, string> = {
+  invalid_input: '请求体必须是对象且包含 commandTemplate 与 secrets',
+  invalid_workdir: 'worker 工作目录未配置或无法解析',
+  invalid_template: 'commandTemplate 非法或超过大小上限',
+  invalid_secrets: 'secrets 必须是字符串值对象',
+  invalid_cwd: 'cwd 必须是工作目录内的相对路径',
+  invalid_timeout: 'timeoutMs 必须是正有限数',
+};
+
+/** `/secret-command` 单次请求的最终回包（错误与成功共用同一暂存形状，供幂等回放）。 */
+interface SecretCommandResult {
+  status: number;
+  body: SecretCommandResponsePayload | { error: string; code?: SensitiveCommandErrorCode };
+}
+
+/** 幂等表条目：归属判定字段 + 执行结果（在途时也可被回放方 await）。 */
+interface SecretCommandRecord {
+  taskId: string;
+  sessionId: string;
+  settled: boolean;
+  result: Promise<SecretCommandResult>;
+}
+
+/**
+ * 幂等表上限：只淘汰已落定的旧记录（在途记录永不淘汰），防止长生命周期 worker
+ * 无界增长。淘汰掉的 requestId 理论上可重新执行，但重复提交的时间窗远小于容量。
+ */
+const SECRET_COMMAND_CACHE_MAX = 256;
+
+/**
+ * 把模块输出收敛为对外响应体：显式挑拣字段（不 spread 原对象），
+ * 保证渲染命令/argv/cwd/secrets 无论模块返回什么形状都出不了 worker。
+ */
+function toSecretCommandResponse(
+  requestId: string,
+  output: SensitiveCommandOutput,
+): SecretCommandResponsePayload {
+  const payload: SecretCommandResponsePayload = {
+    requestId,
+    status: output.status,
+    exitCode: output.exitCode,
+    durationMs: output.durationMs,
+    stdout: output.stdout,
+    stderr: output.stderr,
+    stdoutTruncated: output.stdoutTruncated,
+    stderrTruncated: output.stderrTruncated,
+  };
+  if (output.error !== undefined) {
+    payload.error = output.error;
+  }
+  return payload;
 }
 
 export class ExecServer {
@@ -346,6 +412,8 @@ export class ExecServer {
   /** 本地配置下推执行器（standalone=true 且注入 resourceInjector 时可用）。 */
   private readonly localConfig?: LocalConfigApplier;
   private readonly logger: Logger;
+  /** `POST /secret-command` 幂等表：requestId → 归属 + 执行结果（同 requestId 绝不二次执行）。 */
+  private readonly secretCommands = new Map<string, SecretCommandRecord>();
   private server: http.Server | null = null;
 
   constructor(options: ExecServerOptions) {
@@ -440,6 +508,10 @@ export class ExecServer {
     }
     if (url.pathname === '/question-reply') {
       await this.handleQuestionReply(req, res);
+      return;
+    }
+    if (url.pathname === '/secret-command') {
+      await this.handleSecretCommand(req, res);
       return;
     }
     if (url.pathname === '/agents') {
@@ -1240,6 +1312,157 @@ export class ExecServer {
   }
 
   // ---- 执行链路 ----
+
+  /**
+   * POST /secret-command：token 保护的敏感命令同步执行端点（sensitive-command-tool todo 4）。
+   *
+   * - 鉴权/方法/体积分支：非 POST 405；缺/错 X-Worker-Token 或未配置 token 401；
+   *   超 maxBodyBytes 413（先排空再回包）；坏 JSON 400。
+   * - 执行：同步 `runSensitiveCommand({workDir, signal})`；`SensitiveCommandError`
+   *   按 code 映射固定 400 文案（不透传 err.message）。命令自身成功/失败/超时以
+   *   200 结构化结果表达。响应只含 SensitiveCommandOutput 派生字段 + requestId，
+   *   不含渲染命令/argv/cwd/secrets；访问日志只记状态与 code，不记请求体。
+   * - 幂等：条目在任何 await 之前登记 → 重复/并发提交共用同一 promise，绝不二次执行；
+   *   同 requestId 同归属回放既有结果，不同归属 409。
+   */
+  private async handleSecretCommand(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      this.logger.warn('[exec] secret-command -> 拒绝（X-Worker-Token 无效） (HTTP 401)');
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await readBody(req, this.maxBodyBytes);
+    } catch (err) {
+      await drainRequest(req);
+      this.logger.warn('[exec] secret-command -> 请求体超限 (HTTP 413)');
+      sendJson(res, 413, { error: err instanceof Error ? err.message : '请求体过大' });
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw || '{}');
+    } catch {
+      this.logger.warn('[exec] secret-command -> 请求体非法 JSON (HTTP 400)');
+      sendJson(res, 400, { error: '请求体必须是合法 JSON' });
+      return;
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      this.logger.warn('[exec] secret-command -> 请求体非对象 (HTTP 400)');
+      sendJson(res, 400, { error: '请求体必须是 JSON 对象' });
+      return;
+    }
+    const payload = parsed as SecretCommandRequestPayload;
+    if (typeof payload.requestId !== 'string' || payload.requestId === '') {
+      this.logger.warn('[exec] secret-command -> 缺少 requestId (HTTP 400)');
+      sendJson(res, 400, { error: '缺少必填字段 requestId' });
+      return;
+    }
+    const taskId = typeof payload.taskId === 'string' ? payload.taskId : '';
+    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
+    const existing = this.secretCommands.get(payload.requestId);
+    if (existing !== undefined) {
+      if (existing.taskId !== taskId || existing.sessionId !== sessionId) {
+        this.logger.warn('[exec] secret-command -> requestId 归属冲突 (HTTP 409)');
+        sendJson(res, 409, { error: 'requestId 已被其他归属使用' });
+        return;
+      }
+      const replay = await existing.result;
+      sendJson(res, replay.status, replay.body);
+      return;
+    }
+
+    const controller = new AbortController();
+    // 客户端提前断开 → 中止执行（模块对进程组 SIGKILL），不留孤儿长命令。
+    const onClientGone = (): void => {
+      if (!res.writableEnded) {
+        controller.abort();
+      }
+    };
+    res.on('close', onClientGone);
+    try {
+      const record: SecretCommandRecord = {
+        taskId,
+        sessionId,
+        settled: false,
+        result: this.executeSecretCommand(payload, controller.signal),
+      };
+      this.secretCommands.set(payload.requestId, record);
+      this.evictSecretCommandCache();
+      void record.result.then(
+        () => {
+          record.settled = true;
+        },
+        () => {
+          record.settled = true;
+        },
+      );
+      const outcome = await record.result;
+      this.logger.info(`[exec] secret-command -> 完成 (HTTP ${outcome.status})`);
+      sendJson(res, outcome.status, outcome.body);
+    } finally {
+      res.removeListener('close', onClientGone);
+    }
+  }
+
+  /** 淘汰最旧的已落定幂等记录，把表长限制在 SECRET_COMMAND_CACHE_MAX（在途记录不淘汰）。 */
+  private evictSecretCommandCache(): void {
+    while (this.secretCommands.size > SECRET_COMMAND_CACHE_MAX) {
+      let evicted = false;
+      for (const [key, record] of this.secretCommands) {
+        if (record.settled) {
+          this.secretCommands.delete(key);
+          evicted = true;
+          break;
+        }
+      }
+      if (!evicted) {
+        return;
+      }
+    }
+  }
+
+  /** 执行单次敏感命令并归一为 HTTP 结果；永不 reject（意外错误也走固定文案 500）。 */
+  private async executeSecretCommand(
+    payload: SecretCommandRequestPayload,
+    signal: AbortSignal,
+  ): Promise<SecretCommandResult> {
+    try {
+      const output = await runSensitiveCommand(
+        {
+          commandTemplate: payload.commandTemplate,
+          secrets: payload.secrets,
+          cwd: payload.cwd,
+          timeoutMs: payload.timeoutMs,
+        },
+        { workDir: this.workDir, signal },
+      );
+      return { status: 200, body: toSecretCommandResponse(payload.requestId, output) };
+    } catch (err) {
+      if (err instanceof SensitiveCommandError) {
+        this.logger.warn(`[exec] secret-command -> 拒绝（${err.code}） (HTTP 400)`);
+        return {
+          status: 400,
+          body: {
+            error: SECRET_COMMAND_REJECTIONS[err.code] ?? SECRET_COMMAND_REJECTIONS.invalid_input,
+            code: err.code,
+          },
+        };
+      }
+      // 意外错误的 message 可能携带动态片段：响应与日志都只用固定文案。
+      this.logger.warn('[exec] secret-command 执行异常 (HTTP 500)');
+      return { status: 500, body: { error: 'internal error' } };
+    }
+  }
 
   /**
    * fire-and-forget 执行：驱动 serve + 事件按序上送 + trackInstance 计数。

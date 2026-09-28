@@ -113,6 +113,7 @@ export const VTEAM_MCP_SERVER_NAME = 'vteam' as const;
 /**
  * vteam MCP 工具真实暴露名（`vteam_<action>`，与 seed.ts 注册的 tools 表 name 一致）。
  * guard allowlist / 层① `permission.<真实名>` 均引用此清单，禁止裸 MCP 名。
+ * 32 项（sensitive-command-tool todo 1：`vteam_secret_command` 敏感命令执行）。
  */
 export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_chat_history',
@@ -146,6 +147,7 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_git_repos_list',
   'vteam_hook_register',
   'vteam_hook_cancel',
+  'vteam_secret_command',
 ] as const;
 
 /**
@@ -320,6 +322,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_hook_cancel: 'allow',
       browser: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -361,6 +364,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_diff: 'allow',
       git_log: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -408,6 +412,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       // push 写远端：guard 放行后仍需仓库 write 授权（工具内 pushGuard 校验），无授权照样拒绝
       git_push: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -452,6 +457,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_diff: 'allow',
       git_log: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -499,6 +505,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_hook_register: 'allow',
       vteam_hook_cancel: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -532,6 +539,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_submit_artifact: 'allow',
       browser: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -567,6 +575,7 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_log: 'allow',
       browser: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 };

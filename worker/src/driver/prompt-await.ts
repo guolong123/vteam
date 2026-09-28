@@ -385,6 +385,36 @@ function hasFirstToken(messages: ServeMessage[]): boolean {
   return false;
 }
 
+/**
+ * 在途工具态（`state.status` 白名单）：模型正被外部依赖卡住——典型是 `secret_command`
+ * 等用户填敏感值（输入预算 540s > 首字窗口 300s）。这种「无 text/reasoning 且 serve
+ * 静止」不是模型没输出，而是模型在等工具返回；此时首字超时不得 abort。
+ * 白名单而非黑名单：未知/缺失 status 不延长活性（保持既有判死语义）。
+ */
+const IN_FLIGHT_TOOL_STATES = new Set(['pending', 'running']);
+
+function hasInFlightTool(messages: ServeMessage[]): boolean {
+  for (const m of messages) {
+    if (m.info?.role !== 'assistant') {
+      continue;
+    }
+    for (const p of m.parts ?? []) {
+      if (p.type !== 'tool') {
+        continue;
+      }
+      const state = p.state as { status?: unknown } | undefined | null;
+      const status =
+        state !== undefined && state !== null && typeof state === 'object'
+          ? state.status
+          : undefined;
+      if (typeof status === 'string' && IN_FLIGHT_TOOL_STATES.has(status)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function hashStr(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) {
@@ -446,7 +476,9 @@ function activitySignature(messages: ServeMessage[]): string {
  *
  * 活性顺延：即使 text/reasoning 尚未出现，只要 serve 侧持续追加/推进 parts（主循环在
  * 推进，如长 tool-calls 循环），首字 deadline 顺延——只有「无首字**且**无任何新输出」
- * 满时限才 abort。纯 tool 循环被误杀是线上主 agent 中断的另一来源（与 T17 子域秒杀并列）。
+ * 满时限才 abort。在途工具豁免：存在 `state.status=pending/running` 的 tool part（模型在
+ * 等工具返回，如 `secret_command` 阻塞等待用户填敏感值，输入预算 540s > 首字 300s）时，
+ * serve 静止不等于模型失联，首字超时不触发。纯 tool 循环被误杀是线上主 agent 中断的另一来源（与 T17 子域秒杀并列）。
  */
 export async function awaitCompletion(
   driver: V1Driver,
@@ -528,7 +560,7 @@ export async function awaitCompletion(
     }
     // 首字（text 或 reasoning）出现后无完成超时（继续轮询，判死由上层负责）；
     // 仅「时限内 text/reasoning 均未出现**且**无任何新输出」才 abort；firstTokenTimeoutMs<=0 视为禁用
-    if (firstTokenTimeoutMs > 0 && firstTokenAt === null && Date.now() - Math.max(startedAt, lastActivityAt) >= firstTokenTimeoutMs) {
+    if (firstTokenTimeoutMs > 0 && firstTokenAt === null && !hasInFlightTool(collected) && Date.now() - Math.max(startedAt, lastActivityAt) >= firstTokenTimeoutMs) {
       break;
     }
     await sleep(pollMs);

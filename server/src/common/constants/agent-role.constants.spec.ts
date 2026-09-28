@@ -1,6 +1,7 @@
 import { ROLE_BOUNDARIES, type VteamAgentName } from './agent.constants';
 import {
   buildCapabilityMatrixFromTools,
+  buildFactoryCapabilityMatrix,
   PLATFORM_CAPABILITY_KEYS,
 } from './platform-capability.constants';
 import {
@@ -10,7 +11,9 @@ import {
   BUILTIN_AGENT_ROLE_BY_KEY,
   BUILTIN_ROLE_CAPABILITY_MAPS,
   EXTERNAL_AGENT_ROLES,
+  EXTERNAL_AGENT_ROLE_CAPABILITIES,
   EXTERNAL_AGENT_ROLE_KEYS,
+  EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST,
   FALLBACK_AGENT_ROLE,
   deriveCustomAgentRoleId,
   deriveCustomAgentRoleKey,
@@ -79,7 +82,7 @@ describe('agent-role.constants（agent_roles 单一事实来源）', () => {
     );
   });
 
-  it('BUILTIN_ROLE_CAPABILITY_MAPS 恰覆盖 7 内置岗 × 28 目录键（键序 = 目录序）', () => {
+  it('BUILTIN_ROLE_CAPABILITY_MAPS 恰覆盖 7 内置岗 × 29 目录键（键序 = 目录序）', () => {
     expect(Object.keys(BUILTIN_ROLE_CAPABILITY_MAPS).sort()).toEqual(
       BUILTIN_AGENT_ROLES.map((r) => r.key).sort(),
     );
@@ -90,9 +93,9 @@ describe('agent-role.constants（agent_roles 单一事实来源）', () => {
     }
   });
 
-  it('契约：project_manager = 全 28 点 true（显式覆盖，不按 ROLE_BOUNDARIES 派生）', () => {
+  it('契约：project_manager = 全 29 点 true（显式覆盖，不按 ROLE_BOUNDARIES 派生）', () => {
     const pm = BUILTIN_ROLE_CAPABILITY_MAPS.project_manager;
-    expect(Object.keys(pm)).toHaveLength(28);
+    expect(Object.keys(pm)).toHaveLength(29);
     for (const key of PLATFORM_CAPABILITY_KEYS) {
       expect(`${key}=${pm[key]}`).toBe(`${key}=true`);
     }
@@ -114,6 +117,20 @@ describe('agent-role.constants（agent_roles 单一事实来源）', () => {
         }
       }
     }
+  });
+
+  it('secret.command 全角色开放：外部 allowlist 9 项、外部/出厂矩阵显式 true', () => {
+    expect([...EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST]).toContain(
+      'vteam_secret_command',
+    );
+    expect(EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST).toHaveLength(9);
+    expect(EXTERNAL_AGENT_ROLE_CAPABILITIES['secret.command']).toBe(true);
+    for (const role of BUILTIN_AGENT_ROLES) {
+      expect(BUILTIN_ROLE_CAPABILITY_MAPS[role.key]['secret.command']).toBe(
+        true,
+      );
+    }
+    expect(buildFactoryCapabilityMatrix()['secret.command']).toBe(true);
   });
 
   it('外部 3 岗定义：key 清单/外部槽位/sortOrder 紧随内置 1..7/一行式 rolePrompt', () => {

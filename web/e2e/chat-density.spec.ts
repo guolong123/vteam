@@ -100,7 +100,11 @@ type Kind =
   | "aborted-long"
   | "aborted-short"
   | "streaming-long"
-  | "system-long";
+  | "system-long"
+  // ---- todo 8 工具卡 awaiting-input 第四态 ----
+  | "tool-secret-awaiting"
+  | "tool-secret-other-tool"
+  | "tool-secret-terminal";
 
 const WEB_ROOT = process.cwd();
 
@@ -141,7 +145,10 @@ type Kind =
   | "aborted-long"
   | "aborted-short"
   | "streaming-long"
-  | "system-long";
+  | "system-long"
+  | "tool-secret-awaiting"
+  | "tool-secret-other-tool"
+  | "tool-secret-terminal";
 
 function Fixture({ kind, payload }: { kind: Kind; payload: string }) {
   const meta = { author: "密度", role: "developer" as const, time: "12:00" };
@@ -245,6 +252,52 @@ function Fixture({ kind, payload }: { kind: Kind; payload: string }) {
   }
   if (kind === "system-long") {
     return <ChatBubble type="system" text={payload} time="12:00" />;
+  }
+  // ---- todo 8 工具卡 awaiting-input 第四态 ----
+  if (kind === "tool-secret-awaiting") {
+    return (
+      <MsgParts
+        {...meta}
+        secretAwaiting
+        parts={[
+          {
+            type: "tool",
+            tool: "vteam_secret_command",
+            state: { status: "running", input: payload, output: "" },
+          },
+        ]}
+      />
+    );
+  }
+  if (kind === "tool-secret-other-tool") {
+    return (
+      <MsgParts
+        {...meta}
+        secretAwaiting
+        parts={[
+          {
+            type: "tool",
+            tool: "vteam_task_context",
+            state: { status: "running", input: payload, output: "" },
+          },
+        ]}
+      />
+    );
+  }
+  if (kind === "tool-secret-terminal") {
+    return (
+      <MsgParts
+        {...meta}
+        secretAwaiting
+        parts={[
+          {
+            type: "tool",
+            tool: "vteam_secret_command",
+            state: { status: "completed", input: payload, output: "脱敏输出完成" },
+          },
+        ]}
+      />
+    );
   }
   // ---- B7 用户消息状态标记（复选框 10）----
   if (kind === "user-status") {
@@ -1451,4 +1504,55 @@ test("B11 真机交互观察：长附件/error/aborted 三态点击截图与 DOM
 
   fs.writeFileSync(path.join(dir, "task-12-observe.json"), JSON.stringify(observed, null, 2) + "\n", "utf8");
   console.log("[B11] observe =", JSON.stringify(observed));
+});
+
+/* ==================== sensitive-command-tool todo 8 · 工具卡 awaiting-input ==================== */
+
+/** 只用于测试代码的假 sentinel：卡片 DOM 断言以它做 0 命中证明。 */
+const SECRET8_SENTINEL = "s3cr3t-A9f";
+const SECRET8_TEMPLATE = 'mysql -h db.internal -u root -p"{{DB_PASSWORD}}" < backup.sql';
+const SECRET8_INPUT = JSON.stringify({
+  command: SECRET8_TEMPLATE,
+  variables: [{ name: "DB_PASSWORD", secret: true }],
+});
+
+test("todo8 awaiting-input 第四态：running secret_command 升级为「等待填写敏感信息」", async ({ page }) => {
+  await mountHarness(page);
+  await renderFixture(page, "tool-secret-awaiting", SECRET8_INPUT);
+
+  const card = page.getByTestId("msg-tool");
+  await expect(card).toHaveCount(1);
+  // 失败语义：派生规则删除时 data-status 回落 running（改动前只有三态），此断言红
+  await expect(card).toHaveAttribute("data-status", "awaiting-input");
+  await expect(card.getByTestId("msg-tool-awaiting")).toHaveCount(1);
+  await expect(card).toContainText("等待填写敏感信息");
+  await expect(card).toContainText("vteam_secret_command");
+
+  // 脱敏边界：DOM 只见模板与变量名，绝不见 secret 值（此处根本没进过 props）
+  await expect(card).toContainText("{{DB_PASSWORD}}");
+  expect(await page.content()).not.toContain(SECRET8_SENTINEL);
+
+  // 既有三态语义零改动：非等待态卡片不带新 testid
+  await renderFixture(page, "tool", "普通工具输出");
+  await expect(page.getByTestId("msg-tool")).toHaveAttribute("data-status", "success");
+  await expect(page.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+});
+
+test("todo8 派生门槛：非 secret_command 工具与终态 part 不进 awaiting-input", async ({ page }) => {
+  await mountHarness(page);
+
+  // 门槛一：同样 secretAwaiting=true，但工具名不是 secret_command → 维持 running
+  await renderFixture(page, "tool-secret-other-tool", SECRET8_INPUT);
+  const other = page.getByTestId("msg-tool");
+  await expect(other).toHaveAttribute("data-status", "running");
+  await expect(other.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+
+  // 门槛二：secret_command 已落终态（completed）→ success，question 未收敛也不得回亮
+  await renderFixture(page, "tool-secret-terminal", SECRET8_INPUT);
+  const done = page.getByTestId("msg-tool");
+  await expect(done).toHaveAttribute("data-status", "success");
+  await expect(done.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+  await done.locator("button[aria-expanded]").click();
+  await expect(done.getByTestId("msg-tool-io")).toContainText("脱敏输出完成");
+  expect(await page.content()).not.toContain(SECRET8_SENTINEL);
 });

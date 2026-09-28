@@ -52,56 +52,163 @@ function applyResync(
 const P2021_RETRY_INTERVAL_MS = 3000;
 const P2021_RETRY_MAX_ATTEMPTS = 40;
 
+/**
+ * P2021 fail-open 共用实现（主键续号 / requestId 续号共用）：
+ * 表尚未创建时上抛会让 Nest onModuleInit 崩溃 → restart 循环 → 连带 worker 启动注入
+ * fetch failed（k8s 实测）。故不阻塞启动，后台轮询到表就绪再补 seed；若不补，计数器停留 0，
+ * 迁移 seed 出的数字 id 会让首个插入撞 P2002。
+ */
+function startP2021Retry(
+  fetchRows: () => Promise<unknown>,
+  apply: (rows: unknown) => void,
+  label: string,
+  cause: Error,
+): void {
+  console.warn(
+    `[id-resync] 表不存在（P2021），${label} 续号转后台重试（不阻塞启动）: ${cause.message}`,
+  );
+  let attempts = 0;
+  const timer = setInterval(() => {
+    void (async () => {
+      attempts += 1;
+      try {
+        apply(await fetchRows());
+        clearInterval(timer);
+        console.warn(
+          `[id-resync] ${label} 续号已随表就绪补成功（第 ${attempts} 次重试）`,
+        );
+      } catch (retryErr) {
+        if (attempts >= P2021_RETRY_MAX_ATTEMPTS) {
+          clearInterval(timer);
+          console.warn(
+            `[id-resync] ${label} 续号后台重试耗尽（${P2021_RETRY_MAX_ATTEMPTS} 次），下次重启续号自愈: ${(retryErr as Error).message}`,
+          );
+        }
+      }
+    })();
+  }, P2021_RETRY_INTERVAL_MS);
+  timer.unref?.();
+}
+
 export async function resyncIdPrefix(
   model: ResyncIdModel,
   prefix: string,
   idGen: Pick<IdGenerator, 'seed'>,
 ): Promise<void> {
-  let rows: Array<{ id: string }>;
-  try {
-    rows = (await model.findMany({
+  const fetchRows = () =>
+    model.findMany({
       where: { id: { startsWith: `${prefix}_` } },
       select: { id: true },
-    })) as Array<{ id: string }>;
+    });
+  let rows: unknown;
+  try {
+    rows = await fetchRows();
   } catch (err) {
-    // P2021 = 表尚未创建：K8s 下 server 可能先于 init Job 的迁移就绪（启动竞态）。
-    // 此处上抛 → Nest onModuleInit 崩溃 → restart 循环 → 连带 worker 启动注入
-    // fetch failed（k8s 实测 4 次重启）。故 fail-open 不阻塞启动，后台轮询到
-    // 表就绪再补 seed；若不补，计数器停留 0，迁移 seed 出的数字 id 会让首个
-    // 插入撞 P2002。非 P2021 错误保持既有行为（向上抛）。
     if ((err as { code?: string })?.code !== 'P2021') {
       throw err;
     }
-    console.warn(
-      `[id-resync] 表不存在（P2021），${prefix} 续号转后台重试（不阻塞启动）: ${(err as Error).message}`,
+    startP2021Retry(
+      fetchRows,
+      (lateRows) =>
+        applyResync(lateRows as Array<{ id: string }>, prefix, idGen),
+      prefix,
+      err as Error,
     );
-    let attempts = 0;
-    const timer = setInterval(() => {
-      void (async () => {
-        attempts += 1;
-        try {
-          const lateRows = (await model.findMany({
-            where: { id: { startsWith: `${prefix}_` } },
-            select: { id: true },
-          })) as Array<{ id: string }>;
-          applyResync(lateRows, prefix, idGen);
-          clearInterval(timer);
-          console.warn(
-            `[id-resync] ${prefix} 续号已随表就绪补成功（第 ${attempts} 次重试）`,
-          );
-        } catch (retryErr) {
-          if (attempts >= P2021_RETRY_MAX_ATTEMPTS) {
-            clearInterval(timer);
-            console.warn(
-              `[id-resync] ${prefix} 续号后台重试耗尽（${P2021_RETRY_MAX_ATTEMPTS} 次），下次重启续号自愈: ${(retryErr as Error).message}`,
-            );
-          }
-        }
-      })();
-    }, P2021_RETRY_INTERVAL_MS);
-    timer.unref?.();
     return;
   }
+  applyResync(rows as Array<{ id: string }>, prefix, idGen);
+}
 
-  applyResync(rows, prefix, idGen);
+/**
+ * 域主键前缀续号的目标模型接口，但按 `requestId` 列（非主键）过滤——
+ * 对应 `agent_questions.request_id` 这类 `@unique` 唯一约束列（非 PK）。
+ */
+export interface ResyncRequestIdModel {
+  findMany(args: {
+    where: { requestId: { startsWith: string } };
+    select: { requestId: true };
+  }): Promise<unknown>;
+}
+
+/**
+ * 落地 requestId 续号：取 `<requestIdPrefix>_` 前缀行中**纯数字**尾段最大值，
+ * seed 进 `idPrefix` 计数器（生成侧 `nextId(idPrefix)` 的数字尾段与
+ * `<requestIdPrefix>_<同一数字>` 一一对应）。命名尾段、空尾段、超出安全整数的
+ * 超长尾段跳过（超长值无法保持 ID_PAD_WIDTH 零填充格式）；max=0 时不 seed。
+ */
+function applyRequestIdResync(
+  rows: Array<{ requestId: string }>,
+  requestIdPrefix: string,
+  idPrefix: string,
+  idGen: Pick<IdGenerator, 'seed'>,
+): void {
+  let max = 0;
+  for (const row of rows) {
+    if (!row.requestId.startsWith(`${requestIdPrefix}_`)) {
+      continue; // 非本前缀行（per_/que_ 等）不参与，避免按偏移切片切出杂散数字
+    }
+    const tail = row.requestId.slice(requestIdPrefix.length + 1);
+    if (!/^\d+$/.test(tail)) {
+      continue;
+    }
+    const seq = Number(tail);
+    if (!Number.isSafeInteger(seq)) {
+      continue;
+    }
+    if (seq > max) {
+      max = seq;
+    }
+  }
+  if (max > 0) {
+    idGen.seed(idPrefix, max);
+  }
+}
+
+/**
+ * 按 requestId 列前缀重新同步计数器（进程启动续号）。
+ *
+ * 修复：`que` 计数器重启归零，而 `agent_questions.request_id` 是 `@unique`
+ * （agent_questions_request_id_key），重启后重发 `que_platform_0000000001` 撞既有行
+ * → P2002，secret question 创建反复失败直到计数器烧过存量最大值。
+ * P2021（表不存在）走与 resyncIdPrefix 相同的 fail-open 后台补续号。
+ */
+export async function resyncRequestIdPrefix(
+  model: ResyncRequestIdModel,
+  idPrefix: string,
+  requestIdPrefix: string,
+  idGen: Pick<IdGenerator, 'seed'>,
+): Promise<void> {
+  const fetchRows = () =>
+    model.findMany({
+      where: { requestId: { startsWith: `${requestIdPrefix}_` } },
+      select: { requestId: true },
+    });
+  const label = `${idPrefix}→${requestIdPrefix}`;
+  let rows: unknown;
+  try {
+    rows = await fetchRows();
+  } catch (err) {
+    if ((err as { code?: string })?.code !== 'P2021') {
+      throw err;
+    }
+    startP2021Retry(
+      fetchRows,
+      (lateRows) =>
+        applyRequestIdResync(
+          lateRows as Array<{ requestId: string }>,
+          requestIdPrefix,
+          idPrefix,
+          idGen,
+        ),
+      label,
+      err as Error,
+    );
+    return;
+  }
+  applyRequestIdResync(
+    rows as Array<{ requestId: string }>,
+    requestIdPrefix,
+    idPrefix,
+    idGen,
+  );
 }

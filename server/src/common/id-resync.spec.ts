@@ -1,5 +1,10 @@
 import { IdGeneratorService } from './id-generator';
-import { resyncIdPrefix, ResyncIdModel } from './id-resync';
+import {
+  resyncIdPrefix,
+  resyncRequestIdPrefix,
+  ResyncIdModel,
+  ResyncRequestIdModel,
+} from './id-resync';
 
 describe('resyncIdPrefix（域主键续号：只统计前缀下纯数字序号）', () => {
   let idGen: IdGeneratorService;
@@ -140,5 +145,90 @@ describe('resyncIdPrefix（域主键续号：只统计前缀下纯数字序号�
     await expect(resyncIdPrefix(model, 'tl', idGen)).rejects.toThrow(
       'connection refused',
     );
+  });
+});
+
+describe('resyncRequestIdPrefix（@unique requestId 列续号：非主键列）', () => {
+  let idGen: IdGeneratorService;
+
+  const mockModel = (rows: Array<{ requestId: string }>) => {
+    const findMany = jest.fn().mockResolvedValue(rows);
+    return {
+      model: { findMany } as unknown as ResyncRequestIdModel,
+      findMany,
+    };
+  };
+
+  beforeEach(() => {
+    idGen = new IdGeneratorService();
+  });
+
+  it('findMany 按 `<requestIdPrefix>_` 过滤 + 仅取 requestId 列', async () => {
+    const { model, findMany } = mockModel([]);
+
+    await resyncRequestIdPrefix(model, 'que', 'que_platform', idGen);
+
+    expect(findMany).toHaveBeenCalledWith({
+      where: { requestId: { startsWith: 'que_platform_' } },
+      select: { requestId: true },
+    });
+  });
+
+  it('que_platform_ 最大数字尾段 seed 进 que 计数器 → 下一个 requestId 尾段续到 8', async () => {
+    const { model } = mockModel([
+      { requestId: 'que_platform_0000000003' },
+      { requestId: 'que_platform_0000000007' },
+    ]);
+
+    await resyncRequestIdPrefix(model, 'que', 'que_platform', idGen);
+
+    expect(await idGen.nextId('que')).toBe('que_0000000008');
+  });
+
+  it('非数字/空/超安全整数尾段与非前缀行一律忽略（不污染计数器）', async () => {
+    const { model } = mockModel([
+      { requestId: 'que_platform_not-a-seq' },
+      { requestId: 'que_platform_' },
+      { requestId: `que_platform_${'9'.repeat(25)}` },
+      { requestId: 'que_0000000099' },
+      { requestId: 'per_0000000099' },
+      { requestId: 'que_platform_0000000002' },
+    ]);
+
+    await resyncRequestIdPrefix(model, 'que', 'que_platform', idGen);
+
+    expect(await idGen.nextId('que')).toBe('que_0000000003');
+  });
+
+  it('无 que_platform_ 行 → 不 seed，nextId 从 1 起', async () => {
+    const { model } = mockModel([]);
+
+    await resyncRequestIdPrefix(model, 'que', 'que_platform', idGen);
+
+    expect(await idGen.nextId('que')).toBe('que_0000000001');
+  });
+
+  it('P2021（表不存在）→ fail-open 不抛，不阻塞启动', async () => {
+    const findMany = jest
+      .fn()
+      .mockRejectedValue(
+        Object.assign(new Error('table does not exist'), { code: 'P2021' }),
+      );
+    const model = { findMany } as unknown as ResyncRequestIdModel;
+
+    await expect(
+      resyncRequestIdPrefix(model, 'que', 'que_platform', idGen),
+    ).resolves.toBeUndefined();
+  });
+
+  it('非 P2021 错误保持既有行为（向上抛）', async () => {
+    const findMany = jest
+      .fn()
+      .mockRejectedValue(new Error('connection refused'));
+    const model = { findMany } as unknown as ResyncRequestIdModel;
+
+    await expect(
+      resyncRequestIdPrefix(model, 'que', 'que_platform', idGen),
+    ).rejects.toThrow('connection refused');
   });
 });

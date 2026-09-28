@@ -110,4 +110,25 @@ describe('agent_roles builtin capability current-schema contract (historical 202
     expect(roleModel).not.toMatch(/^\s*policyId\s/m);
     expect(roleModel).toContain('@@map("agent_roles")');
   });
+
+  it('fresh 出厂矩阵与升级迁移都把 secret.command 显式置 true（ar_general 同口径）', () => {
+    expect(FACTORY_MATRIX['secret.command']).toBe(true);
+    const upgrade = fs.readFileSync(
+      path.resolve(
+        __dirname,
+        '..',
+        '..',
+        'prisma',
+        'migrations',
+        '20260926000000_secret_command_capability',
+        'migration.sql',
+      ),
+      'utf8',
+    );
+    const executable = executableSql(upgrade);
+    expect(executable).toMatch(/UPDATE\s+`agent_roles`/i);
+    expect(executable).toMatch(/\$\."secret\.command"',\s*true/i);
+    expect(executable).toMatch(/JSON_CONTAINS_PATH/i);
+    expect(executable).toMatch(/`capabilities`\s+IS NOT NULL/i);
+  });
 });

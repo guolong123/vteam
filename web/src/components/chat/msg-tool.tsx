@@ -1,11 +1,16 @@
 /**
- * MsgTool：工具调用消息（tool part，工具卡片三态）
+ * MsgTool：工具调用消息（tool part，工具卡片四态）
  * =============================================
  * 从 docs/agent-platform/prototypes/group-chat/index.tsx 迁移：
- * - 卡片含工具名 + 输入/输出摘要 + 状态徽章（运行中/成功/失败，失败=ToolStateError）
- * - 失败时边框/输出文字用错误语义色（errorTheme.quota 红色系）
- * data-testid=msg-tool；身份（B1）：头像/作者/时间统一由 MsgParts 共享身份栏渲染，
- * 本卡片只留工具名、I/O 摘录与运行状态。token 引用统一走 src/theme/tokens.ts。
+ * - 卡片含工具名 + 输入/输出摘要 + 状态徽章（运行中/成功/失败/等待填写敏感信息，
+ *   失败=ToolStateError；第四态 awaiting-input 见 sensitive-command-tool todo 8）
+ * - 失败时边框/输出文字用错误语义色（errorTheme.quota 红色系）；awaiting-input 用琥珀
+ *   描边表示「等待用户动作」而非错误。
+ * data-testid=msg-tool（data-status 四态）；awaiting-input 徽章额外带
+ * data-testid=msg-tool-awaiting。身份（B1）：头像/作者/时间统一由 MsgParts 共享身份栏
+ * 渲染，本卡片只留工具名、I/O 摘录与运行状态。token 引用统一走 src/theme/tokens.ts。
+ * 安全边界：本组件只接收已脱敏的 input/output 文本——secret 值与渲染后命令从不进入
+ * 这些 props（server/worker 契约保证），组件也不做任何拼接渲染。
  */
 "use client";
 import { useState } from "react";
@@ -22,19 +27,23 @@ import { LoadingDots } from "./loading-indicator";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
-/** 工具状态色：运行中=蓝 / 成功=绿 / 失败=红 */
+/** 工具卡片状态四态（第四态 awaiting-input 由 MsgParts 按 pending secret_input 派生）。 */
+export type MsgToolStatus = "running" | "success" | "failed" | "awaiting-input";
+
+/** 工具状态色：运行中=蓝 / 成功=绿 / 失败=红 / 等待填写敏感信息=琥珀 */
 const toolStatus: Record<
-  "running" | "success" | "failed",
+  MsgToolStatus,
   { label: string; color: string; bg: string; border: string }
 > = {
   running: { label: "运行中", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
   success: { label: "成功", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   failed: { label: "失败", color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+  "awaiting-input": { label: "等待填写敏感信息", color: "#B45309", bg: "rgba(245,158,11,0.12)", border: "rgba(245,158,11,0.32)" },
 };
 
 export interface MsgToolProps {
   name: string;
-  status: "running" | "success" | "failed";
+  status: MsgToolStatus;
   input: string;
   output: string;
   style?: CSSProperties;
@@ -45,6 +54,7 @@ export interface MsgToolProps {
 export function MsgTool({ name, status, input, output, style, className }: MsgToolProps) {
   const st = toolStatus[status];
   const failed = status === "failed";
+  const awaiting = status === "awaiting-input";
   const [open, setOpen] = useState(false);
   const summary = input || output || "（无输入输出）";
   return (
@@ -72,7 +82,7 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
           padding: space.md,
           borderRadius: radius.md,
           backgroundColor: "var(--color-surface)",
-          border: `1px solid ${failed ? "rgba(239,68,68,0.22)" : neutral[200]}`,
+          border: `1px solid ${failed ? "rgba(239,68,68,0.22)" : awaiting ? "rgba(245,158,11,0.32)" : neutral[200]}`,
           boxShadow: shadow.sm,
           cursor: "pointer",
           transition: "border-color .15s ease",
@@ -83,7 +93,7 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
       >
         <div style={{ display: "flex", alignItems: "center", gap: space.sm, minWidth: 0 }}>
           <span aria-hidden style={{ fontSize: fontSize.md, lineHeight: 1, flexShrink: 0 }}>
-            {failed ? "✕" : "⚙"}
+            {failed ? "✕" : awaiting ? "🔐" : "⚙"}
           </span>
           <span style={{ fontSize: fontSize.sm, color: neutral[700], fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>{name}</span>
           <span
@@ -102,6 +112,7 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
             {summary}
           </span>
           <span
+            data-testid={awaiting ? "msg-tool-awaiting" : undefined}
             style={{
               display: "inline-flex",
               alignItems: "center",
