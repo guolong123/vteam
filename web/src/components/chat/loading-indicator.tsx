@@ -55,15 +55,32 @@ export interface LoadingIndicatorProps {
   label: string;
   /** 可选时间戳 */
   time?: string;
+  /**
+   * 容器 testid（B12）：默认 `loading-indicator`；瞬态 session 状态行复用本容器时传
+   * `session-status`，使两行共用同一容器实现（结构、样式、指示元素完全一致）。
+   */
+  testid?: string;
+  /**
+   * 三连点 testid（B12）：默认沿用 `loading-indicator`（既有定位契约）；复用容器时须显式传入
+   * （如 `session-status-dots`），否则同页两行会各带一个同名 testid。
+   */
+  dotsTestId?: string;
   style?: CSSProperties;
   className?: string;
 }
 
 /** Agent 处理中指示条（对应 session.status busy / agent.loading） */
-export function LoadingIndicator({ label, time, style, className }: LoadingIndicatorProps) {
+export function LoadingIndicator({
+  label,
+  time,
+  testid = "loading-indicator",
+  dotsTestId,
+  style,
+  className,
+}: LoadingIndicatorProps) {
   return (
     <div
-      data-testid="loading-indicator"
+      data-testid={testid}
       className={className}
       style={{
         display: "flex",
@@ -77,7 +94,7 @@ export function LoadingIndicator({ label, time, style, className }: LoadingIndic
       }}
     >
       <style>{chatCss}</style>
-      <LoadingDots />
+      <LoadingDots testid={dotsTestId} />
       {label}…
       {time ? <span style={{ color: neutral[400], marginLeft: "auto" }}>{time}</span> : null}
     </div>

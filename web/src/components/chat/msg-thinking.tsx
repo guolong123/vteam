@@ -4,42 +4,43 @@
  * 从 docs/agent-platform/prototypes/group-chat/index.tsx 迁移：
  * - state=pending：思考中（三连点 + 「思考中…」，不可折叠）
  * - state=done：已完成，默认折叠（「已思考 · 点击展开 ▸」），点击展开/收起
- * data-testid=msg-thinking，token 引用统一走 src/theme/tokens.ts。
+ * data-testid=msg-thinking；身份（B1）：头像/作者/时间统一由 MsgParts 共享身份栏渲染，
+ * 本组件只留过程内容（状态 + 摘录 + 展开正文）。token 引用统一走 src/theme/tokens.ts。
  */
 "use client";
 import { useState } from "react";
 import type { CSSProperties } from "react";
 import {
-  type RoleKey,
   neutral,
   space,
   radius,
   fontSize,
   fontFamily,
 } from "@/src/theme/tokens";
-import { AgentAvatar } from "@/src/components/ui";
 import { LoadingDots } from "./loading-indicator";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
+/** 思考密度阈值（A3）：折叠摘录 200 字符；展开态与 title 最多 2000 字符进入 DOM。 */
+export const THINKING_EXCERPT_CHARS = 200;
+export const THINKING_MAX_CHARS = 2000;
+
 export interface MsgThinkingProps {
-  author: string;
-  role: RoleKey;
   state: "pending" | "done";
   text: string;
-  time?: string;
   style?: CSSProperties;
   className?: string;
 }
 
 /** 思考中消息（reasoning 阶段）：pending=思考中带动画 / done=可折叠（单行缩略 + 思考摘要，点击展开） */
-export function MsgThinking({ author, role, state, text, time, style, className }: MsgThinkingProps) {
+export function MsgThinking({ state, text, style, className }: MsgThinkingProps) {
   const [open, setOpen] = useState(state === "done" ? false : true);
   const pending = state === "pending";
-  // 折叠态单行缩略：取思考正文前 60 字（空白归一），无内容时仅显示"已思考"
-  const excerpt = !pending
-    ? text.replace(/\s+/g, " ").trim().slice(0, 60)
-    : "";
+  // 折叠态单行缩略：空白归一后取前 200 字符（无内容时仅显示"已思考"）；
+  // 展开正文与 title 统一截到前 2000 字符——第 2001 字符起不进入 DOM，不追加省略号。
+  const normalized = pending ? "" : text.replace(/\s+/g, " ").trim();
+  const excerpt = normalized.slice(0, THINKING_EXCERPT_CHARS);
+  const detail = text.slice(0, THINKING_MAX_CHARS);
   return (
     <div
       data-testid="msg-thinking"
@@ -54,7 +55,6 @@ export function MsgThinking({ author, role, state, text, time, style, className 
         ...style,
       }}
     >
-      <AgentAvatar role={role} size="sm" dot={false} style={{ marginTop: 2 }} />
       <button
         type="button"
         aria-expanded={state === "done" ? open : undefined}
@@ -82,20 +82,22 @@ export function MsgThinking({ author, role, state, text, time, style, className 
               💭
             </span>
           )}
-          <span
-            style={{
-              fontSize: fontSize.sm,
-              color: neutral[500],
-              fontWeight: 500,
-              fontStyle: "italic",
-              flexShrink: 0,
-            }}
-          >
-            {pending ? "思考中…" : author}
-          </span>
+          {pending && (
+            <span
+              style={{
+                fontSize: fontSize.sm,
+                color: neutral[500],
+                fontWeight: 500,
+                fontStyle: "italic",
+                flexShrink: 0,
+              }}
+            >
+              思考中…
+            </span>
+          )}
           {!pending && excerpt && (
             <span
-              title={text.trim()}
+              title={detail}
               style={{
                 flex: 1,
                 minWidth: 0,
@@ -107,7 +109,7 @@ export function MsgThinking({ author, role, state, text, time, style, className 
                 textOverflow: "ellipsis",
               }}
             >
-              {excerpt}{text.replace(/\s+/g, " ").trim().length > 60 ? "…" : ""}
+              {excerpt}
             </span>
           )}
           {!pending && (
@@ -115,10 +117,10 @@ export function MsgThinking({ author, role, state, text, time, style, className 
               {open ? "▾ 收起" : "已思考 · 点击展开 ▸"}
             </span>
           )}
-          {time && <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: excerpt ? 0 : "auto", flexShrink: 0 }}>{time}</span>}
         </div>
         {(open || pending) && (
           <div
+            data-testid="msg-thinking-detail"
             style={{
               fontSize: fontSize.md,
               color: pending ? neutral[400] : neutral[600],
@@ -128,7 +130,7 @@ export function MsgThinking({ author, role, state, text, time, style, className 
               wordBreak: "break-word",
             }}
           >
-            {pending ? text : text.trim() ? text : "（无详细思考内容）"}
+            {pending ? detail : text.trim() ? detail : "（无详细思考内容）"}
           </div>
         )}
       </button>

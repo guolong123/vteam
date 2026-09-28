@@ -17,9 +17,13 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
+import { isGroupedWithPrevious } from "@/lib/message-grouping";
+import { dateSeparatorFlags, formatDateSeparatorLabel, localDateKey } from "@/lib/date-separator";
+import { resolveDisplayAuthor } from "@/lib/display-author";
+import { messageInitials } from "@/lib/message-initials";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { useRealtimeEvents, type RealtimeChatMessage } from "@/hooks/use-realtime";
-import type { AgentStatusEvent, RealtimeQuestionEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
+import type { AgentStatusEvent, ChannelMessagesCache, RealtimeQuestionEvent, SessionUpdatedEvent } from "@/hooks/use-realtime";
 import { AgentAvatar, ChatBubble, MessageInput } from "@/src/components/ui";
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
@@ -39,7 +43,7 @@ import type {
   ArtifactsResponse,
 } from "@/src/components/tasks/task-detail-types";
 import { docIdFor } from "@/src/components/tasks/task-detail-types";
-import { type RoleKey, ROLE_KEYS, neutral, space, radius, fontSize, fontFamily } from "@/src/theme/tokens";
+import { type RoleKey, ROLE_KEYS, neutral, space, radius, fontSize, fontFamily, messageFontSize } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -249,6 +253,8 @@ export default function TeamSessionPage() {
   const [sendError, setSendError] = useState<string | null>(null);
   const activePrivateId = activeTab.startsWith("private:") ? activeTab.slice(8) : null;
   const isGroupTab = activeTab === "group";
+  /** 当前可见频道：群聊 Tab 为群频道，私聊 Tab 为选中私聊频道（滚动门控 / delta 补拉的唯一判据）。 */
+  const visibleChannelId = isGroupTab ? channelId : activePrivateId;
 
   /* ---------- 消息历史 ---------- */
   const messagesQuery = useQuery({
@@ -272,6 +278,8 @@ export default function TeamSessionPage() {
       }
     },
     enabled: !!activePrivateId && !!user?.id,
+    // C2 轮询兜底：SSE 断连 / delta 丢失时私聊仍以 30s 拉齐（群聊查询行为不变）
+    refetchInterval: 30_000,
   });
 
   /* ---------- 当前任务派生查询（三 Tab 数据源） ---------- */
@@ -684,13 +692,55 @@ export default function TeamSessionPage() {
     queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId], exact: true });
   }, [queryClient, teamId]);
 
+  const scrollToBottom = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  /**
+   * DM 未读红点：agent 新输出落到某私聊频道（非群聊频道）且该 Tab 未激活 → 标记未读；
+   * 当前正打开的 Tab 不标（用户已在看）。loading 收敛后红点接替 spinner（见 Tab 渲染互斥）。
+   * onMessage / onMessagePartDelta 共用，保证其他频道事件的未读/状态收敛不因滚动门控丢失。
+   */
+  const markUnreadForChannel = useCallback(
+    (m: { channelId: string; senderId?: string | null; senderInstanceId?: string | null }) => {
+      const chId = m.channelId;
+      if (!chId || chId === channelId) return;
+      let instKey: string | null = null;
+      for (const [k, v] of privateChannelMap.entries()) {
+        if (v === chId) { instKey = k; break; }
+      }
+      if (!instKey) {
+        const senderInst = m.senderInstanceId ?? null;
+        const hit = teamAgentMembers.find((a) =>
+          (senderInst && (a.instanceId ?? a.id) === senderInst) ||
+          a.id === m.senderId ||
+          (a.instanceId ?? a.id) === m.senderId,
+        );
+        instKey = hit ? (hit.instanceId ?? hit.id) : null;
+      }
+      if (!instKey || chId === activePrivateId) return;
+      const markKey = instKey;
+      setUnreadByInstance((prev) => (prev[markKey] ? prev : { ...prev, [markKey]: true }));
+    },
+    [channelId, privateChannelMap, teamAgentMembers, activePrivateId],
+  );
+
+  /** C2 空缓存补拉去重：每个私聊频道一次；切换私聊 Tab 后允许再补。 */
+  const deltaRefetchChannelRef = useRef<string | null>(null);
+  useEffect(() => {
+    deltaRefetchChannelRef.current = null;
+  }, [activePrivateId]);
+
   useRealtimeEvents({
     // 会话统一团队域：只订阅 team: + channel:（群聊/私聊） + global，不再订阅 task:。
     // 回流载荷 taskId 恒 team scope 串/归因透传（LANE-A），守卫一律 team 域放行（见各回调）。
     scope: `team:${teamId}${channelId ? `,channel:${channelId}` : ""}${activePrivateId ? `,channel:${activePrivateId}` : ""},global`,
     enabled: !!teamId && !!user?.id,
     onMessage: (payload) => {
-      if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+      // 滚动门控：team 域放行其他频道消息，仅当前可见频道的事件推动当前列表滚动
+      if (payload.message.channelId === visibleChannelId) scrollToBottom();
       if (effectivePanelTaskId) queryClient.invalidateQueries({ queryKey: ["plans", effectivePanelTaskId], exact: true });
       const m = payload.message;
       if (m.senderType === "agent" && m.senderId) {
@@ -720,31 +770,25 @@ export default function TeamSessionPage() {
           }
           return next ?? prev;
         });
-        // DM 未读红点：agent 新输出落到某私聊频道（非群聊频道）且该 Tab 未激活 → 标记未读；
-        // 当前正打开的 Tab 不标（用户已在看）。loading 收敛后红点接替 spinner（见 Tab 渲染互斥）。
-        const chId = m.channelId;
-        if (chId && chId !== channelId) {
-          let instKey: string | null = null;
-          for (const [k, v] of privateChannelMap.entries()) {
-            if (v === chId) { instKey = k; break; }
-          }
-          if (!instKey) {
-            const senderInst = (m as unknown as { senderInstanceId?: string | null }).senderInstanceId ?? null;
-            const hit = teamAgentMembers.find((a) =>
-              (senderInst && (a.instanceId ?? a.id) === senderInst) ||
-              a.id === m.senderId ||
-              (a.instanceId ?? a.id) === m.senderId,
-            );
-            instKey = hit ? (hit.instanceId ?? hit.id) : null;
-          }
-          if (instKey) {
-            const activePriv = activeTab.startsWith("private:") ? activeTab.slice(8) : null;
-            if (chId !== activePriv) {
-              const markKey = instKey;
-              setUnreadByInstance((prev) => (prev[markKey] ? prev : { ...prev, [markKey]: true }));
-            }
-          }
+        // DM 未读红点（共用助手，见 markUnreadForChannel）
+        markUnreadForChannel(m);
+      }
+    },
+    onMessagePartDelta: (payload) => {
+      const chId = payload.message?.channelId;
+      if (!chId) return;
+      if (chId === visibleChannelId) scrollToBottom();
+      // 首个 delta 可能早于 REST cache：upsertMessage 无缓存时不落数据，这里补一次私聊历史拉取。
+      // gate 一：仅当前选中私聊（activePrivateId 在群聊 Tab 恒 null）；gate 二：按频道去重。
+      if (chId === activePrivateId && deltaRefetchChannelRef.current !== chId) {
+        const cached = queryClient.getQueryData<ChannelMessagesCache>(["channel", chId, "messages"]);
+        if (!cached) {
+          deltaRefetchChannelRef.current = chId;
+          void privateMessagesQuery.refetch();
         }
+      }
+      if (payload.message.senderType === "agent" && payload.message.senderId) {
+        markUnreadForChannel(payload.message);
       }
     },
     onAgentLoading: (payload) => {
@@ -1145,6 +1189,7 @@ export default function TeamSessionPage() {
   const nextCursor = isGroupTab
     ? (messagesQuery.data?.nextCursor ?? null)
     : (privateMessagesQuery.data?.nextCursor ?? null);
+  const dateSeparatorFlagsByIndex = dateSeparatorFlags(messages);
   const teamEditable = !!queueHeadTask && (queueHeadTask.status === "pending" || queueHeadTask.status === "in_progress" || queueHeadTask.status === "blocked");
 
   return (
@@ -1286,13 +1331,57 @@ export default function TeamSessionPage() {
                 <button type="button" data-testid="chat-load-more" disabled={loadingMore} onClick={handleLoadMore} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[600], fontSize: fontSize.sm, cursor: loadingMore ? "default" : "pointer", opacity: loadingMore ? 0.6 : 1 }}> {loadingMore ? "加载中…" : "加载更多历史消息"}</button>
               </div>
             )}
-            {messages.map((msg) => {
+            {messages.map((msg, index) => {
+              // B2 连续分组：仅与上一条比较，不重排、不过滤数据源
+              const grouped = isGroupedWithPrevious(index > 0 ? messages[index - 1] : undefined, msg);
+              // B3 跨天分隔：只在本地日键变化的那一条之前插入，消息顺序与数据源不动
+              const separatorKey = dateSeparatorFlagsByIndex[index] ? localDateKey(msg.createdAt) : null;
+              const withSeparator = (node: React.ReactElement): React.ReactNode => {
+                if (separatorKey === null) return node;
+                return (
+                  <React.Fragment key={msg.id}>
+                    <div
+                      key={`date-separator-${msg.id}`}
+                      data-testid="chat-date-separator"
+                      data-date-key={separatorKey}
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: space.md,
+                        margin: `${space.xs}px ${space.sm}px`,
+                        padding: `${space.xs}px ${space.sm}px`,
+                        backgroundColor: neutral[50],
+                        ...baseFont,
+                      }}
+                    >
+                      <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
+                      <span style={{ fontSize: messageFontSize.meta, color: neutral[500], whiteSpace: "nowrap" }}>
+                        {formatDateSeparatorLabel(separatorKey)}
+                      </span>
+                      <span style={{ flex: 1, height: 1, backgroundColor: neutral[200] }} />
+                    </div>
+                    {node}
+                  </React.Fragment>
+                );
+              };
               const agent = msg.senderId ? agentMap.get(msg.senderId) : undefined;
               const memberHit = msg.senderId ? teamMemberById.get(msg.senderId) : undefined;
               const role = agent?.role ?? memberHit?.role ?? (msg.senderId ? toRole(msg.senderId) : null) ?? "developer";
-              const author = (msg as unknown as { senderInstanceId?: string }).senderInstanceId
-                ? (instanceNameById.get((msg as unknown as { senderInstanceId?: string }).senderInstanceId as string) ?? agent?.name ?? memberHit?.name ?? msg.senderId ?? "")
-                : (agent?.name ?? memberHit?.name ?? msg.senderId ?? "");
+              // B5/B9：三路业务映射先解析出展示名，裸 sender/成员/实例 id 一律被过滤，
+              // 全部落空时不传 author（由 MessageIdentity/ChatBubble 回落角色标签）
+              const senderInstanceId = (msg as unknown as { senderInstanceId?: string }).senderInstanceId;
+              const author = resolveDisplayAuthor([
+                senderInstanceId ? instanceNameById.get(senderInstanceId) : undefined,
+                agent?.name,
+                memberHit?.name,
+              ]);
+              // B8：头像缩写只从已解析的人名/别名生成（裸 id 已在 resolveDisplayAuthor 被丢弃），
+              // 解析不到名字 → undefined → AgentAvatar 回落角色字母，同角色不同成员因此不撞字母
+              const initials = messageInitials(author);
               // 过程片段：群聊（平台表，只有 group_post 发布的结论）仅保留 text；
               // 私聊（session-history，serve 完整会话）全量透传 reasoning/thinking/tool，
               // 与旧 messages/[id] 私聊页一致，后端已做 synthetic/过程 part 策展
@@ -1312,7 +1401,7 @@ export default function TeamSessionPage() {
                 ? { url: msg.attachmentUrl, name: msg.attachmentName ?? msg.attachmentUrl, ext: msg.attachmentType ?? "" }
                 : undefined;
               if ((msg as unknown as { senderType: string }).senderType === "external") {
-                return (
+                return withSeparator(
                   <ChatBubble
                     key={msg.id}
                     text={(msg.content?.text ?? "") as string}
@@ -1322,12 +1411,13 @@ export default function TeamSessionPage() {
                     time={formatTime(msg.createdAt)}
                     senderType="external"
                     attachment={attachment}
-                  />
+                    initials={initials}
+                  />,
                 );
               }
               // Agent 消息：过程片段 + 正文置底（MsgParts）；status=processing 为流式中间态
               if (msg.senderType === "agent") {
-                return (
+                return withSeparator(
                   <MsgParts
                     key={msg.id}
                     parts={parts}
@@ -1339,21 +1429,24 @@ export default function TeamSessionPage() {
                     streaming={msg.status === "processing"}
                     isMentionMe={isMentionMe}
                     attachment={attachment}
-                  />
+                    grouped={grouped}
+                    initials={initials}
+                  />,
                 );
               }
               if (msg.senderType === "system") {
-                return <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type="system" time={formatTime(msg.createdAt)} />;
+                return withSeparator(
+                  <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type="system" time={formatTime(msg.createdAt)} />,
+                );
               }
-              return <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachment={attachment} />;
+              return withSeparator(
+                <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachment={attachment} initials={initials} status={msg.status} />,
+              );
             })}
             {loadingLabel && <LoadingIndicator label={loadingLabel} />}
             {errorLabel && <MsgError kind={errorLabel.kind} detail={errorLabel.detail} time={formatTime(new Date().toISOString())} />}
-            {sessionLabel && (
-              <div data-testid="session-status" style={{ display: "flex", alignItems: "center", gap: space.sm, color: neutral[500], fontSize: fontSize.sm, padding: `${space.xs}px ${space.sm}px`, ...baseFont }}>
-                {sessionLabel}…
-              </div>
-            )}
+            {/* B12：瞬态 session 状态行复用 LoadingIndicator 的容器（testid=session-status，指示点 testid=session-status-dots）；仍在 messages.map 之外追加，不进消息数组。 */}
+            {sessionLabel && <LoadingIndicator label={sessionLabel} testid="session-status" dotsTestId="session-status-dots" />}
           </div>
 
           <div style={{ padding: `${space.md}px ${space.xl}px`, backgroundColor: "var(--color-surface)", borderTop: `1px solid ${neutral[200]}` }}>

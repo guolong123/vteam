@@ -42,6 +42,13 @@ export default defineConfig({
       testDir: "./lib",
       testMatch: /.*\.spec\.ts$/,
     },
+    {
+      // A1–A3 密度阈值门（chat-ux-hierarchy-and-streaming 复选框 2）：
+      // e2e/chat-density.spec.ts 用 esbuild-wasm 打包真实组件到空白页渲染，
+      // 不依赖 setup 登录态 / 后端 / dev server 路由，故不挂 dependencies。
+      name: "chat-density",
+      testMatch: /chat-density\.spec\.ts/,
+    },
     { name: "login", testMatch: /login\.spec\.ts/, dependencies: ["setup"] },
     {
       name: "pages",
