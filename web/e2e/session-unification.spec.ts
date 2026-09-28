@@ -1589,3 +1589,615 @@ test.describe("B12 session-status 容器与 system 消息时间", () => {
     await page.screenshot({ path: path.join(B12_DIR, "task-8-status-cleanup.png") });
   });
 });
+
+/* ==================== sensitive-command-tool Todo 7 · 敏感命令输入弹窗 ==================== */
+
+const SECRET_TASK7_DIR = path.join(process.cwd(), "..", ".omo", "evidence", "sensitive-command-tool");
+/** 只用于测试代码的假 sentinel：提交体 / DOM 断言都以它做 0 命中证明。 */
+const SECRET_SENTINEL = "s3cr3t-A9f";
+const SECRET_TEMPLATE_A = 'mysql -h db.internal -u root -p"{{DB_PASSWORD}}" < backup.sql';
+const SECRET_TEMPLATE_B = "aws s3 cp ./out s3://bucket/{{REGION}}/";
+const SECRET_TEMPLATE_HTML = 'echo "<img src=x onerror=alert(1)>"';
+
+interface SecretQuestionSeed {
+  id: string;
+  template: string;
+  /** 缺省 = content 无 variables 字段（malformed_input 夹具）。 */
+  variables?: Array<{ name: string; secret?: boolean }>;
+  reason?: string | null;
+  /** 会话归属（todo 8 同会话派生用）；缺省沿用主会话 s_1 / a_developer。 */
+  agentId?: string;
+  sessionId?: string;
+}
+
+/** server createSecretForPlatform 落库 DTO 形状（GET /questions 与 agent.question 同源）。 */
+function secretQuestionDto(seed: SecretQuestionSeed) {
+  return {
+    id: seed.id,
+    requestId: `que_platform_${seed.id}`,
+    sessionId: seed.sessionId ?? "s_1",
+    taskId: `team:${TEAM_ID}`,
+    agentId: seed.agentId ?? "a_developer",
+    kind: "secret_input" as const,
+    content: {
+      source: "secret_input",
+      template: seed.template,
+      variables: seed.variables,
+      reason: seed.reason ?? null,
+    },
+    status: "pending",
+    managedMode: false,
+  };
+}
+
+function secretQuestionFrame(seed: SecretQuestionSeed) {
+  return {
+    question: secretQuestionDto(seed),
+    taskId: `team:${TEAM_ID}`,
+    teamId: TEAM_ID,
+    agentId: seed.agentId ?? "a_developer",
+    sessionId: seed.sessionId ?? "s_1",
+  };
+}
+
+/** server create emit 的生产形状：payload.question.taskId 是真实 t_...，顶层另带 teamId。 */
+const PRODUCTION_TASK_ID = "t_0000000001";
+
+function productionSecretFrame(seed: SecretQuestionSeed) {
+  return {
+    question: { ...secretQuestionDto(seed), taskId: PRODUCTION_TASK_ID },
+    taskId: PRODUCTION_TASK_ID,
+    teamId: TEAM_ID,
+    agentId: seed.agentId ?? "a_developer",
+    sessionId: seed.sessionId ?? "s_1",
+  };
+}
+
+interface SecretHarness {
+  pending: ReturnType<typeof secretQuestionDto>[];
+  /** 已收到的 POST /questions/:id/reply（id + 请求体原文，断言用）。 */
+  replies: { questionId: string; payload: unknown }[];
+  /** 放进此集合的 question 以 410 QUESTION_EXPIRED 回复（既有静默关闭路径）。 */
+  expired: Set<string>;
+}
+
+/** GET /questions 返回 pending secret 列表 + 捕获 reply 请求体；未命中路径交给 installHarness。 */
+async function installSecretQuestions(page: Page, seeds: SecretQuestionSeed[]): Promise<SecretHarness> {
+  const state: SecretHarness = {
+    pending: seeds.map(secretQuestionDto),
+    replies: [],
+    expired: new Set(),
+  };
+  await page.route("**/api/v1/**", async (route) => {
+    const req = route.request();
+    const apiPath = new URL(req.url()).pathname.replace(/^\/api\/v1/, "") || "/";
+    if (req.method() === "GET" && apiPath === "/questions") {
+      return route.fulfill({ json: state.pending });
+    }
+    if (req.method() === "POST" && /^\/questions\/[^/]+\/reply$/.test(apiPath)) {
+      const id = apiPath.split("/")[2] ?? "";
+      state.replies.push({ questionId: id, payload: req.postDataJSON() });
+      state.pending = state.pending.filter((q) => q.id !== id);
+      if (state.expired.has(id)) {
+        return route.fulfill({ status: 410, json: { code: "QUESTION_EXPIRED", message: "问题已过期" } });
+      }
+      return route.fulfill({ json: { id, status: "resolved" } });
+    }
+    return route.fallback();
+  });
+  return state;
+}
+
+async function openSecretSession(page: Page, seeds: SecretQuestionSeed[]): Promise<SecretHarness> {
+  await installSseStub(page);
+  await installHarness(page, ["running", "idle", null]);
+  const state = await installSecretQuestions(page, seeds);
+  await page.goto(`/teams/${TEAM_ID}/session`);
+  await expect(page.getByTestId("team-session-root")).toBeVisible({ timeout: 15_000 });
+  return state;
+}
+
+test.describe("sensitive-command-tool Todo7 敏感命令输入弹窗", () => {
+  test.use({ storageState: path.join(process.cwd(), ".auth", "user.json") });
+
+  test.beforeAll(() => {
+    fs.mkdirSync(SECRET_TASK7_DIR, { recursive: true });
+  });
+
+  test("0. 生产形状 create emit（真实 t_ taskId + 顶层 teamId）实时弹窗，无需刷新补拉", async ({ page }) => {
+    const state = await openSecretSession(page, []);
+    await page.evaluate(() => {
+      (window as unknown as { __noReload?: boolean }).__noReload = true;
+    });
+
+    await emitFrame(page, 305, "agent.question", productionSecretFrame({
+      id: "aq_705",
+      template: SECRET_TEMPLATE_A,
+      variables: [{ name: "DB_PASSWORD", secret: true }],
+      reason: "生产 create emit 形状",
+    }));
+
+    const modal = page.getByTestId("question-modal");
+    await expect(modal).toBeVisible();
+    await expect(page.getByTestId("question-secret-template")).toHaveValue(SECRET_TEMPLATE_A);
+    const noReload = await page.evaluate(
+      () => (window as unknown as { __noReload?: boolean }).__noReload === true,
+    );
+    expect(noReload).toBe(true);
+    expect(state.pending).toHaveLength(0);
+    await page.screenshot({ path: path.join(SECRET_TASK7_DIR, "task-12-production-shape-live.png") });
+    await page.getByTestId("question-secret-cancel").click();
+    await expect(modal).toHaveCount(0);
+  });
+
+  test("1. SSE 注入 secret_input：只读模板/输入类型/必填门控/提交体，关闭后 DOM 无 sentinel", async ({ page }) => {
+    const state = await openSecretSession(page, []);
+    await emitFrame(page, 301, "agent.question", secretQuestionFrame({
+      id: "aq_701",
+      template: SECRET_TEMPLATE_A,
+      variables: [
+        { name: "DB_PASSWORD", secret: true },
+        { name: "REGION", secret: false },
+      ],
+      reason: "夜间备份需要数据库口令",
+    }));
+
+    const modal = page.getByTestId("question-modal");
+    await expect(modal).toBeVisible();
+    await expect(page.getByTestId("question-secret-body")).toBeVisible();
+
+    const template = page.getByTestId("question-secret-template");
+    await expect(template).toHaveValue(SECRET_TEMPLATE_A);
+    expect(await template.getAttribute("readonly")).not.toBeNull();
+    await expect(page.getByTestId("question-secret-reason")).toContainText("夜间备份需要数据库口令");
+
+    const secretInput = page.getByTestId("question-secret-input-0");
+    const plainInput = page.getByTestId("question-secret-input-1");
+    await expect(secretInput).toHaveAttribute("type", "password");
+    await expect(secretInput).toHaveAttribute("autocomplete", "new-password");
+    await expect(plainInput).toHaveAttribute("type", "text");
+
+    const submit = page.getByTestId("question-secret-submit");
+    await expect(submit).toBeDisabled();
+    await plainInput.fill("cn-north");
+    await expect(submit).toBeDisabled();
+    await secretInput.fill(SECRET_SENTINEL);
+    await expect(submit).toBeEnabled();
+
+    await page.screenshot({ path: path.join(SECRET_TASK7_DIR, "task-7-secret-modal.png") });
+    await submit.click();
+
+    await expect.poll(() => state.replies.length).toBe(1);
+    expect(state.replies[0].questionId).toBe("aq_701");
+    expect(state.replies[0].payload).toEqual({
+      secrets: { DB_PASSWORD: SECRET_SENTINEL, REGION: "cn-north" },
+    });
+
+    await expect(modal).toHaveCount(0);
+    await expect(page.locator('input[type="password"]')).toHaveCount(0);
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+    await page.screenshot({ path: path.join(SECRET_TASK7_DIR, "task-7-after-submit.png") });
+  });
+
+  test("2. 取消按钮/遮罩/Esc 三条关闭路径都提交 {secrets:null}，已填值不外带", async ({ page }) => {
+    const state = await openSecretSession(page, []);
+    const seed: SecretQuestionSeed = {
+      id: "aq_711",
+      template: SECRET_TEMPLATE_A,
+      variables: [{ name: "DB_PASSWORD", secret: true }],
+    };
+
+    await emitFrame(page, 311, "agent.question", secretQuestionFrame(seed));
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await page.getByTestId("question-secret-input-0").fill(SECRET_SENTINEL);
+    await page.getByTestId("question-secret-cancel").click();
+    await expect.poll(() => state.replies.length).toBe(1);
+    expect(state.replies[0]).toEqual({ questionId: "aq_711", payload: { secrets: null } });
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+
+    await emitFrame(page, 312, "agent.question", secretQuestionFrame({ ...seed, id: "aq_712" }));
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await page.getByTestId("question-secret-input-0").fill(SECRET_SENTINEL);
+    await page.getByTestId("question-modal-mask").click({ position: { x: 8, y: 8 } });
+    await expect.poll(() => state.replies.length).toBe(2);
+    expect(state.replies[1]).toEqual({ questionId: "aq_712", payload: { secrets: null } });
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+
+    await emitFrame(page, 313, "agent.question", secretQuestionFrame({ ...seed, id: "aq_713" }));
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await page.getByTestId("question-secret-input-0").fill(SECRET_SENTINEL);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => state.replies.length).toBe(3);
+    expect(state.replies[2]).toEqual({ questionId: "aq_713", payload: { secrets: null } });
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+
+    expect(JSON.stringify(state.replies.map((r) => r.payload))).not.toContain(SECRET_SENTINEL);
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+  });
+
+  test("3. 刷新补拉 pending secret 重开弹窗，多条 pending 队列逐个显示且不串值", async ({ page }) => {
+    const state = await openSecretSession(page, [
+      { id: "aq_721", template: SECRET_TEMPLATE_A, variables: [{ name: "DB_PASSWORD", secret: true }] },
+      { id: "aq_722", template: SECRET_TEMPLATE_B, variables: [{ name: "S3_KEY", secret: true }] },
+    ]);
+
+    // 刷新（reload）后仅凭 GET /questions 补拉即重开，SSE 一帧都不发
+    await page.reload();
+    await expect(page.getByTestId("team-session-root")).toBeVisible({ timeout: 15_000 });
+    const template = page.getByTestId("question-secret-template");
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await expect(template).toHaveValue(SECRET_TEMPLATE_A);
+
+    // 当前弹窗不被第二条覆盖；填值后取消第一条 → {secrets:null}，队列立刻显示第二条
+    await page.getByTestId("question-secret-input-0").fill(SECRET_SENTINEL);
+    await page.getByTestId("question-secret-cancel").click();
+    await expect.poll(() => state.replies.length).toBe(1);
+    expect(state.replies[0]).toEqual({ questionId: "aq_721", payload: { secrets: null } });
+
+    await expect(template).toHaveValue(SECRET_TEMPLATE_B);
+    await expect(page.getByTestId("question-secret-input-0")).toHaveValue("");
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+
+    await page.getByTestId("question-secret-input-0").fill("second-only");
+    await page.getByTestId("question-secret-submit").click();
+    await expect.poll(() => state.replies.length).toBe(2);
+    expect(state.replies[1]).toEqual({
+      questionId: "aq_722",
+      payload: { secrets: { S3_KEY: "second-only" } },
+    });
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+  });
+
+  test("4. 已过期（410）静默关闭，DOM 无 sentinel", async ({ page }) => {
+    const state = await openSecretSession(page, []);
+    state.expired.add("aq_731");
+    await emitFrame(page, 331, "agent.question", secretQuestionFrame({
+      id: "aq_731",
+      template: SECRET_TEMPLATE_A,
+      variables: [{ name: "DB_PASSWORD", secret: true }],
+    }));
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await page.getByTestId("question-secret-input-0").fill(SECRET_SENTINEL);
+    await page.getByTestId("question-secret-submit").click();
+    await expect.poll(() => state.replies.length).toBe(1);
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+  });
+
+  test("5. malformed 变量元数据不崩：模板只读可见、无输入框、确认提交 {secrets:{}}，模板按纯文本渲染", async ({ page }) => {
+    const state = await openSecretSession(page, []);
+
+    await emitFrame(page, 341, "agent.question", secretQuestionFrame({
+      id: "aq_741",
+      template: SECRET_TEMPLATE_HTML,
+      variables: [],
+    }));
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await expect(page.getByTestId("question-secret-template")).toHaveValue(SECRET_TEMPLATE_HTML);
+    await expect(page.getByTestId("question-secret-no-vars")).toBeVisible();
+    await expect(page.getByTestId("question-secret-input-0")).toHaveCount(0);
+    expect(await page.locator('img[src="x"]').count()).toBe(0);
+
+    const submit = page.getByTestId("question-secret-submit");
+    await expect(submit).toBeEnabled();
+    await submit.click();
+    await expect.poll(() => state.replies.length).toBe(1);
+    expect(state.replies[0]).toEqual({ questionId: "aq_741", payload: { secrets: {} } });
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+
+    // content 完全没有 variables 字段（结构畸形）→ 同样不崩、可确认
+    await emitFrame(page, 342, "agent.question", secretQuestionFrame({ id: "aq_742", template: "echo hi" }));
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await expect(page.getByTestId("question-secret-no-vars")).toBeVisible();
+    await page.getByTestId("question-secret-submit").click();
+    await expect.poll(() => state.replies.length).toBe(2);
+    expect(state.replies[1]).toEqual({ questionId: "aq_742", payload: { secrets: {} } });
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+  });
+});
+
+/* ==================== sensitive-command-tool todo 8 · 工具卡 awaiting-input ==================== */
+
+/** 私聊历史夹具：一条 running、一条 completed 的 secret_command 工具消息（session=s_1 的 a_developer）。 */
+function secretToolHistory() {
+  const toolInput = {
+    command: SECRET_TEMPLATE_A,
+    variables: [{ name: "DB_PASSWORD", secret: true }],
+  };
+  const item = (id: string, status: string, state: Record<string, unknown>) => ({
+    id,
+    channelId: DM1,
+    senderType: "agent",
+    senderId: "a_developer",
+    senderInstanceId: "ta_1",
+    content: {
+      text: "",
+      parts: [{ type: "tool", tool: "vteam_secret_command", state: { ...state, input: toolInput } }],
+    },
+    mentions: [],
+    attachmentUrl: null,
+    attachmentName: null,
+    attachmentType: null,
+    status,
+    createdAt: iso,
+  });
+  return {
+    items: [
+      item("sec_md_running", "processing", { status: "running", output: "" }),
+      item("sec_md_done", "sent", { status: "completed", output: "备份完成（已脱敏）" }),
+    ],
+    nextCursor: null,
+  };
+}
+
+/** 打开会话页并进入 ta_1 私聊，等待 secret_toolHistory 落地；返回 questions 捕获器。 */
+async function openSecretToolSession(page: Page): Promise<SecretHarness> {
+  await installSseStub(page);
+  const harness = await installHarness(page, ["running", "idle", null], {
+    privateHistoryOverride: secretToolHistory(),
+  });
+  const state = await installSecretQuestions(page, []);
+  await page.goto(`/teams/${TEAM_ID}/session`);
+  await expect(page.getByTestId("team-session-root")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("dm-tab-private-ta_1").click();
+  await expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(1);
+  return state;
+}
+
+/** pending 收敛帧：server 回复/超期后广播的 {resolved:true} 收敛形状。 */
+function resolvedSecretFrame(seed: SecretQuestionSeed) {
+  return {
+    question: { ...secretQuestionDto(seed), status: "resolved" },
+    taskId: `team:${TEAM_ID}`,
+    teamId: TEAM_ID,
+    agentId: seed.agentId ?? "a_developer",
+    sessionId: seed.sessionId ?? "s_1",
+    resolved: true,
+  };
+}
+
+test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
+  test.use({ storageState: path.join(process.cwd(), ".auth", "user.json") });
+
+  test.beforeAll(() => {
+    fs.mkdirSync(SECRET_TASK7_DIR, { recursive: true });
+  });
+
+  test("1. SSE 注入同会话 pending secret_input → 卡片进 awaiting-input；resolved 后清除；DOM 无 sentinel", async ({ page }) => {
+    await openSecretToolSession(page);
+    const cards = page.getByTestId("msg-tool");
+    await expect(cards).toHaveCount(2);
+
+    // 基线：未注入 question 时 running 卡片保持 running，且不带新 testid
+    const running = cards.first();
+    await expect(running).toHaveAttribute("data-status", "running");
+    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+
+    const seed: SecretQuestionSeed = {
+      id: "aq_801",
+      template: SECRET_TEMPLATE_A,
+      variables: [{ name: "DB_PASSWORD", secret: true }],
+      agentId: "a_developer",
+      sessionId: "s_1",
+    };
+    await emitFrame(page, 401, "agent.question", secretQuestionFrame(seed));
+
+    // 字面状态断言：不只是「可见」，必须是第四个 data-status + 新 testid + 中文文案
+    await expect(running).toHaveAttribute("data-status", "awaiting-input");
+    await expect(running.getByTestId("msg-tool-awaiting")).toBeVisible();
+    await expect(running.getByTestId("msg-tool-awaiting")).toContainText("等待填写敏感信息");
+    await expect(running).toContainText("vteam_secret_command");
+
+    // 终态卡片不受 question 影响（stale_state：part 已 completed 就不得回亮）
+    await expect(cards.nth(1)).toHaveAttribute("data-status", "success");
+    await expect(cards.nth(1).getByTestId("msg-tool-awaiting")).toHaveCount(0);
+
+    await page.screenshot({ path: path.join(SECRET_TASK7_DIR, "task-8-awaiting-input.png") });
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+
+    // 收敛：resolved:true → 队列出队 → 卡片回落 running，新 testid 离场
+    await emitFrame(page, 402, "agent.question", resolvedSecretFrame(seed));
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+    await expect(running).toHaveAttribute("data-status", "running");
+    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await page.screenshot({ path: path.join(SECRET_TASK7_DIR, "task-8-cleared.png") });
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+  });
+
+  test("2. 异会话 pending 不点亮；malformed（缺 sessionId/agentId）不点亮且不崩", async ({ page }) => {
+    await openSecretToolSession(page);
+    const running = page.getByTestId("msg-tool").first();
+    await expect(running).toHaveAttribute("data-status", "running");
+
+    // 同 agent 群里另一个会话（ta_2 / a_tester）的 pending：不得点亮 a_developer 的卡片
+    await emitFrame(page, 411, "agent.question", secretQuestionFrame({
+      id: "aq_811",
+      template: SECRET_TEMPLATE_B,
+      variables: [{ name: "S3_KEY", secret: true }],
+      agentId: "a_tester",
+      sessionId: "s_2",
+    }));
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await expect(running).toHaveAttribute("data-status", "running");
+    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+
+    // malformed_input：缺 sessionId/agentId → 键集合为空，卡片不进第四态，页面不崩
+    await emitFrame(page, 412, "agent.question", {
+      question: {
+        id: "aq_812",
+        requestId: "que_platform_812",
+        kind: "secret_input",
+        content: { source: "secret_input", template: "echo hi" },
+        status: "pending",
+        managedMode: false,
+      },
+      taskId: `team:${TEAM_ID}`,
+      teamId: TEAM_ID,
+      sessionId: null,
+      agentId: null,
+    });
+    await expect(running).toHaveAttribute("data-status", "running");
+    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await expect(page.getByTestId("team-session-root")).toBeVisible();
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+  });
+
+  test("3. GET /questions 补拉 pending 同样点亮；reply 成功（取消）后清除", async ({ page }) => {
+    await installSseStub(page);
+    const harness = await installHarness(page, ["running", "idle", null], {
+      privateHistoryOverride: secretToolHistory(),
+    });
+    const state = await installSecretQuestions(page, [
+      { id: "aq_821", template: SECRET_TEMPLATE_A, variables: [{ name: "DB_PASSWORD", secret: true }], agentId: "a_developer", sessionId: "s_1" },
+    ]);
+    await page.goto(`/teams/${TEAM_ID}/session`);
+    await expect(page.getByTestId("team-session-root")).toBeVisible({ timeout: 15_000 });
+    // 补拉弹窗挂载即出现并盖住 Tab 栏（真实场景同样遮挡）：用 DOM 直接触发 onClick 切 Tab，
+    // 走关闭/取消会把 pending question 提前终结，测的就不是补拉点亮了。
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await page.getByTestId("dm-tab-private-ta_1").evaluate((el: HTMLElement) => el.click());
+    await expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(1);
+
+    const running = page.getByTestId("msg-tool").first();
+
+    // 补拉路径（刷新后仅凭 GET /questions，SSE 一帧不发）也必须点亮：
+    // 弹窗在挂载时已入队，所以历史一落地卡片就是第四态（没有 running 基线可断言）。
+    await expect(page.getByTestId("question-modal")).toBeVisible();
+    await expect(running).toHaveAttribute("data-status", "awaiting-input");
+    await expect(running.getByTestId("msg-tool-awaiting")).toContainText("等待填写敏感信息");
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+
+    // 取消 = {secrets:null} → reply 成功 → 队列出队 → 卡片回落 running
+    await page.getByTestId("question-secret-cancel").click();
+    await expect.poll(() => state.replies.length).toBe(1);
+    expect(state.replies[0]).toEqual({ questionId: "aq_821", payload: { secrets: null } });
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+    await expect(running).toHaveAttribute("data-status", "running");
+    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    expect(await page.content()).not.toContain(SECRET_SENTINEL);
+  });
+});
+
+/* ==================== sensitive-command-tool todo 9 · 全链路不回显（UI 腿） ==================== */
+
+const SECRET_TASK9_DIR = path.join(SECRET_TASK7_DIR, "task-9-sinks");
+
+/** 把页面收到的每一帧 SSE 原文记进 window.__sseLog（必须在 stub 安装之后注册）。 */
+async function captureSseFrames(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const w = window as unknown as {
+      __sseEmit?: (f: unknown) => void;
+      __sseLog?: string[];
+    };
+    const log: string[] = [];
+    w.__sseLog = log;
+    const original = w.__sseEmit;
+    w.__sseEmit = (frame) => {
+      log.push(JSON.stringify(frame));
+      original?.(frame);
+    };
+  });
+}
+
+test.describe("sensitive-command-tool Todo9 全链路不回显", () => {
+  test.use({ storageState: path.join(process.cwd(), ".auth", "user.json") });
+
+  test.beforeAll(() => {
+    fs.mkdirSync(SECRET_TASK9_DIR, { recursive: true });
+  });
+
+  test("SSE→弹窗→提交→工具卡→收敛：除 reply 请求体外全通道 0 sentinel，SSE/网络/存储捕获落盘", async ({ page }) => {
+    const requests: Array<{ method: string; url: string; postData: string | null }> = [];
+    page.on("request", (r) =>
+      requests.push({ method: r.method(), url: r.url(), postData: r.postData() }),
+    );
+
+    await installSseStub(page);
+    await captureSseFrames(page);
+    const harness = await installHarness(page, ["running", "idle", null], {
+      privateHistoryOverride: secretToolHistory(),
+    });
+    const state = await installSecretQuestions(page, []);
+    await page.goto(`/teams/${TEAM_ID}/session`);
+    await expect(page.getByTestId("team-session-root")).toBeVisible({ timeout: 15_000 });
+    await page.getByTestId("dm-tab-private-ta_1").click();
+    await expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(1);
+
+    const running = page.getByTestId("msg-tool").first();
+    await expect(running).toHaveAttribute("data-status", "running");
+
+    const seed: SecretQuestionSeed = {
+      id: "aq_901",
+      template: SECRET_TEMPLATE_A,
+      variables: [{ name: "DB_PASSWORD", secret: true }],
+      agentId: "a_developer",
+      sessionId: "s_1",
+    };
+    await emitFrame(page, 501, "agent.question", secretQuestionFrame(seed));
+    await expect(running).toHaveAttribute("data-status", "awaiting-input");
+    await expect(running.getByTestId("msg-tool-awaiting")).toContainText("等待填写敏感信息");
+    await page.screenshot({ path: path.join(SECRET_TASK9_DIR, "task-9-awaiting-input.png") });
+
+    await page.getByTestId("question-secret-input-0").fill(SECRET_SENTINEL);
+    await page.getByTestId("question-secret-submit").click();
+    await expect.poll(() => state.replies.length).toBe(1);
+    expect(state.replies[0]).toEqual({
+      questionId: "aq_901",
+      payload: { secrets: { DB_PASSWORD: SECRET_SENTINEL } },
+    });
+    await expect(page.getByTestId("question-modal")).toHaveCount(0);
+
+    await emitFrame(page, 502, "agent.question", resolvedSecretFrame(seed));
+    await expect(running).toHaveAttribute("data-status", "running");
+    await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    await page.screenshot({ path: path.join(SECRET_TASK9_DIR, "task-9-cleared.png") });
+
+    const dom = await page.content();
+    const sseLog = (
+      (await page.evaluate(
+        () => (window as unknown as { __sseLog?: string[] }).__sseLog ?? [],
+      )) as string[]
+    ).join("\n");
+    const storage = await page.evaluate(() =>
+      JSON.stringify({
+        localStorage: { ...window.localStorage },
+        sessionStorage: { ...window.sessionStorage },
+      }),
+    );
+    const replyChannel = (r: { method: string; url: string }) =>
+      r.method === "POST" && /\/questions\/[^/]+\/reply$/.test(new URL(r.url).pathname);
+    const offending = requests.filter(
+      (r) =>
+        r.url.includes(SECRET_SENTINEL) ||
+        ((r.postData ?? "").includes(SECRET_SENTINEL) && !replyChannel(r)),
+    );
+
+    expect(dom).not.toContain(SECRET_SENTINEL);
+    expect(sseLog).not.toContain(SECRET_SENTINEL);
+    expect(storage).not.toContain(SECRET_SENTINEL);
+    expect(page.url()).not.toContain(SECRET_SENTINEL);
+    expect(offending).toEqual([]);
+    expect(
+      requests.filter((r) => (r.postData ?? "").includes(SECRET_SENTINEL)),
+    ).toHaveLength(1);
+
+    fs.writeFileSync(path.join(SECRET_TASK9_DIR, "web-sse-capture.json"), sseLog);
+    fs.writeFileSync(
+      path.join(SECRET_TASK9_DIR, "web-network.json"),
+      JSON.stringify(
+        requests.map((r) => ({
+          ...r,
+          postData: (r.postData ?? "").split(SECRET_SENTINEL).join("***"),
+        })),
+        null,
+        2,
+      ),
+    );
+    fs.writeFileSync(path.join(SECRET_TASK9_DIR, "web-storage.txt"), storage);
+    fs.writeFileSync(
+      path.join(SECRET_TASK9_DIR, "web-dom.txt"),
+      `sentinel_hits=${dom.split(SECRET_SENTINEL).length - 1}\nurl=${page.url()}\n`,
+    );
+  });
+});

@@ -80,12 +80,23 @@ export class PlatformMcpController {
     @Body() body: unknown,
   ): unknown {
     const workerId = String(req.headers[WORKER_ID_HEADER] ?? '');
+    // MCP 客户端断开探测：响应未写完就关闭（客户端超时/断连）→ abort 工具 handler
+    // 的 ctx.signal。阻塞式工具（secret_command）凭此在执行前取消 pending 问题，
+    // 防止「客户端已放弃等待、命令仍被执行」的幽灵执行。
+    const disconnect = new AbortController();
+    const onDisconnect = (): void => {
+      if (!res.writableEnded) {
+        disconnect.abort();
+      }
+    };
+    res.on('close', onDisconnect);
+    req.on('aborted', onDisconnect);
     // MCP 通知契约：无 id 请求 → 202 Accepted（passthrough 仅设状态码，响应体仍 Nest 序列化）
     const message = body as { id?: unknown } | null | undefined;
     if (message && typeof message === 'object' && message.id === undefined) {
       res.status(202);
     }
-    return this.dispatch(body, workerId);
+    return this.dispatch(body, workerId, disconnect.signal);
   }
 
   /**
@@ -114,7 +125,11 @@ export class PlatformMcpController {
    * - 缺 id → notification → 202 Accepted 语义（响应体 {accepted:true}）
    * - 其余按 method 走 initialize / tools/list / tools/call / 未知 method
    */
-  private dispatch(body: unknown, workerId: string): unknown {
+  private dispatch(
+    body: unknown,
+    workerId: string,
+    signal: AbortSignal,
+  ): unknown {
     const message = body as
       | { jsonrpc?: string; id?: unknown; method?: unknown; params?: unknown }
       | null
@@ -133,7 +148,7 @@ export class PlatformMcpController {
       case 'tools/list':
         return this.toolsList(message.id);
       case 'tools/call':
-        return this.toolsCall(message.id, message.params, workerId);
+        return this.toolsCall(message.id, message.params, workerId, signal);
       default:
         return this.error(
           message.id,
@@ -179,6 +194,7 @@ export class PlatformMcpController {
     id: unknown,
     params: unknown,
     workerId: string,
+    signal: AbortSignal,
   ): Promise<unknown> {
     const name =
       params && typeof params === 'object'
@@ -219,7 +235,7 @@ export class PlatformMcpController {
       if (!input.taskId && resolved.taskId) input.taskId = resolved.taskId;
       if (!input.teamId && resolved.teamId) input.teamId = resolved.teamId;
       await this.toolPermission.assertToolAllowed(resolved.callerId, tool.name);
-      const result = await tool.handler({ workerId }, input);
+      const result = await tool.handler({ workerId }, input, signal);
       return this.result(id, {
         content: [{ type: 'text', text: JSON.stringify(result) }],
       });

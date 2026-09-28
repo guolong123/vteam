@@ -1,13 +1,19 @@
 /**
- * QuestionModal：模型提问 / 工具权限确认弹窗（worker 检测 serve pending → ingress 落库 → SSE → 本组件）。
+ * QuestionModal：模型提问 / 工具权限确认 / 敏感输入弹窗（worker 检测 serve pending → ingress 落库 → SSE → 本组件）。
  * =============================================
  * - kind=question：header + question + 选项列表（单选/多选按 multiple）+ 自定义输入（custom）+「拒绝」；
  * - kind=permission：title + pattern + 三个按钮「允许一次(once) / 总是允许(always) / 拒绝(reject)」；
+ * - kind=secret_input：只读命令模板 + reason（可缺省）+ 每个声明变量一个输入框
+ *   （`secret:true` → type=password + autoComplete=new-password；非敏感 → text）+ 必填门控
+ *   +「取消 / 确认」；确认发 `{secrets:{变量:值}}`，取消与关闭/Esc/遮罩一律发 `{secrets:null}`
+ *   （server 固定按取消处理 → cancelled，不执行命令），全部经 lib/secret-question 组装；
+ * - secret 值只存在本组件的私有 state（不复用 customInput 共享态），关闭即清空，
+ *   不进 URL / SSE / console / DOM（关闭后组件卸载，state 一并回收）；
  * - 确认调 reply API（POST /questions/:id/reply），成功关闭；拒绝调 replies=null / response=reject；
  * - 风格对齐 ConfirmDialog（token 引用 @/src/theme/tokens，absolute 相对宿主，无 fixed/100vh）；
  * - 弹窗不阻塞消息列表（仅视觉层覆盖，消息流 delta 照常滚动渲染）。
  */
-import { useEffect, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import {
   neutral,
   space,
@@ -17,6 +23,14 @@ import {
   shadow,
 } from "@/src/theme/tokens";
 import { useFocusTrap } from "@/hooks/use-focus-trap";
+import {
+  buildSecretReply,
+  canSubmitSecret,
+  secretReasonOf,
+  secretTemplateOf,
+  secretVariablesOf,
+  type SecretVariableField,
+} from "@/lib/secret-question";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -33,19 +47,49 @@ export interface QuestionModalItem {
   custom?: boolean;
 }
 
+/** secret_input content.variables 元数据条目（server 只落 name/secret）。 */
+export interface QuestionModalSecretVariable {
+  name: string;
+  secret?: boolean;
+}
+
+/**
+ * secret_input content（对齐 server createSecretForPlatform 落库形状）：
+ * 只含模板与变量元数据，**不含也不会含任何 secret 值**。
+ */
+export interface QuestionModalSecretContent {
+  source?: string;
+  template?: string;
+  variables?: QuestionModalSecretVariable[];
+  reason?: string | null;
+}
+
 /** AgentQuestion DTO（对齐 GET /questions 响应项 / agent.question 事件 payload.question）。 */
 export interface QuestionModalData {
   id: string;
   requestId: string;
-  kind: "question" | "permission";
+  kind: "question" | "permission" | "secret_input";
   content:
     | { questions: QuestionModalItem[] }
-    | { title?: string; pattern?: string | string[] | null; type?: string };
+    | { title?: string; pattern?: string | string[] | null; type?: string }
+    | QuestionModalSecretContent;
   status: string;
   taskId: string | null;
   agentId: string | null;
   /** 托管模式标记：任务开启托管时请求改由主 Agent 确认，页面不弹窗。 */
   managedMode?: boolean;
+}
+
+/**
+ * 弹窗提交体（POST /questions/:id/reply 请求体，三类 kind 共用一个类型）：
+ * - question：answers label 数组 / null=拒绝；
+ * - permission：response；
+ * - secret_input：secrets {变量名: 值} / null=取消。
+ */
+export interface QuestionModalSubmitPayload {
+  answers?: string[][] | null;
+  response?: "once" | "always" | "reject";
+  secrets?: Record<string, string> | null;
 }
 
 export interface QuestionModalProps {
@@ -54,11 +98,8 @@ export interface QuestionModalProps {
   question: QuestionModalData | null;
   submitting?: boolean;
   onClose: () => void;
-  /** 提交回复（question: answers label 数组/null=拒绝；permission: response）。 */
-  onSubmit: (payload: {
-    answers?: string[][] | null;
-    response?: "once" | "always" | "reject";
-  }) => void;
+  /** 提交回复（question: answers label 数组/null=拒绝；permission: response；secret_input: secrets/null）。 */
+  onSubmit: (payload: QuestionModalSubmitPayload) => void;
 }
 
 /** 权限确认按钮（once/always/reject）。 */
@@ -78,25 +119,41 @@ export function QuestionModal({
   // question 多选/自定义输入的选择态（重开时重置）
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [customInput, setCustomInput] = useState("");
+  // secret_input 填写值：独立于 customInput 的私有态，关闭即清空（值不留在组件状态）
+  const [secretValues, setSecretValues] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    if (open) {
-      setSelected(new Set());
-      setCustomInput("");
+  const isSecret = question?.kind === "secret_input";
+  const questionId = question?.id ?? null;
+
+  /** 关闭入口（Esc / 遮罩 / 焦点陷阱）：secret 一律以 `{secrets:null}` 取消，其余沿用 onClose。 */
+  const requestClose = useCallback(() => {
+    if (isSecret) {
+      if (submitting) return;
+      onSubmit(buildSecretReply("cancel", [], {}));
+      return;
     }
-  }, [open]);
+    onClose();
+  }, [submitting, isSecret, onClose, onSubmit]);
+
+  // 打开或**切换到另一条 question** 都要重置：队列直切时 open 不翻转，
+  // 否则上一条已填的 secret 会残留在下一条的输入框里（并可能被提交）。
+  useEffect(() => {
+    setSelected(new Set());
+    setCustomInput("");
+    setSecretValues({});
+  }, [open, questionId]);
 
   // Esc 关闭（对齐 ConfirmDialog / reject-modal 模式）
   useEffect(() => {
     if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") requestClose();
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [open, onClose]);
+  }, [open, requestClose]);
 
-  const dialogRef = useFocusTrap<HTMLDivElement>(open, onClose);
+  const dialogRef = useFocusTrap<HTMLDivElement>(open, requestClose);
 
   if (!open || !question) return null;
 
@@ -109,6 +166,9 @@ export function QuestionModal({
     isPermission || !("questions" in (question.content ?? {}))
       ? []
       : ((question.content as { questions: QuestionModalItem[] }).questions ?? []);
+  const secretTemplate = isSecret ? secretTemplateOf(question.content) : "";
+  const secretReason = isSecret ? secretReasonOf(question.content) : null;
+  const secretFields: SecretVariableField[] = isSecret ? secretVariablesOf(question.content) : [];
 
   const toggleOption = (index: number, multiple?: boolean) => {
     setSelected((prev) => {
@@ -137,6 +197,7 @@ export function QuestionModal({
     if (!q.options.length) return false;
     return [...selected].length > 0;
   });
+  const secretCanSubmit = canSubmitSecret(secretFields, secretValues);
 
   return (
     <div
@@ -159,7 +220,7 @@ export function QuestionModal({
         data-testid="question-modal-mask"
         onClick={(e) => {
           e.stopPropagation();
-          onClose();
+          requestClose();
         }}
         style={{ position: "absolute", inset: 0, backgroundColor: "rgba(15,23,42,.32)" }}
       />
@@ -168,7 +229,7 @@ export function QuestionModal({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={isPermission ? "权限确认" : "Agent 提问"}
+        aria-label={isPermission ? "权限确认" : isSecret ? "敏感信息填写" : "Agent 提问"}
         style={{
           position: "relative",
           width: 440,
@@ -185,7 +246,7 @@ export function QuestionModal({
       >
         <div>
           <div style={{ fontSize: fontSize.xl, fontWeight: 600, color: neutral[900], lineHeight: 1.3 }}>
-            {isPermission ? "工具权限确认" : "Agent 需要您的确认"}
+            {isPermission ? "工具权限确认" : isSecret ? "填写敏感信息" : "Agent 需要您的确认"}
           </div>
           {isPermission && permissionContent && (
             <div style={{ marginTop: space.sm, display: "flex", flexDirection: "column", gap: space.xs }}>
@@ -213,7 +274,7 @@ export function QuestionModal({
           )}
         </div>
 
-        {!isPermission && (
+        {!isPermission && !isSecret && (
           <div style={{ display: "flex", flexDirection: "column", gap: space.md }}>
             {questions.length === 0 && (
               <div style={{ fontSize: fontSize.sm, color: neutral[500] }}>（无详细问题内容）</div>
@@ -285,8 +346,125 @@ export function QuestionModal({
           </div>
         )}
 
+        {isSecret && (
+          <div data-testid="question-secret-body" style={{ display: "flex", flexDirection: "column", gap: space.md }}>
+            <div style={{ fontSize: fontSize.sm, color: neutral[600], lineHeight: 1.5 }}>
+              模型请求执行一条需要敏感输入的命令。填入的值只随本次回复提交，不写入会话与页面。
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+              <div style={{ fontSize: fontSize.xs, color: neutral[500] }}>命令模板（只读）</div>
+              <textarea
+                data-testid="question-secret-template"
+                aria-label="命令模板"
+                readOnly
+                tabIndex={-1}
+                rows={Math.min(6, Math.max(2, secretTemplate.split("\n").length))}
+                value={secretTemplate}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  resize: "vertical",
+                  padding: `${space.sm + 1}px ${space.md}px`,
+                  borderRadius: radius.md,
+                  border: `1px solid ${neutral[200]}`,
+                  backgroundColor: neutral[50],
+                  color: neutral[700],
+                  fontSize: fontSize.sm,
+                  fontFamily: fontFamily.mono,
+                  lineHeight: 1.5,
+                }}
+              />
+            </div>
+            {secretReason && (
+              <div data-testid="question-secret-reason" style={{ fontSize: fontSize.sm, color: neutral[600] }}>
+                申请原因：{secretReason}
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
+              {secretFields.length === 0 && (
+                <div data-testid="question-secret-no-vars" style={{ fontSize: fontSize.sm, color: neutral[500] }}>
+                  （未声明变量：确认即可执行）
+                </div>
+              )}
+              {secretFields.map((field, idx) => (
+                <label
+                  key={field.name}
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: space.xs,
+                    fontSize: fontSize.sm,
+                    color: neutral[700],
+                  }}
+                >
+                  <span>
+                    {field.name}
+                    {field.secret ? <span style={{ color: neutral[500] }}>（敏感）</span> : null}
+                  </span>
+                  <input
+                    data-testid={`question-secret-input-${idx}`}
+                    type={field.secret ? "password" : "text"}
+                    autoComplete={field.secret ? "new-password" : "off"}
+                    autoFocus={idx === 0}
+                    value={secretValues[field.name] ?? ""}
+                    onChange={(e) => setSecretValues((prev) => ({ ...prev, [field.name]: e.target.value }))}
+                    style={{
+                      padding: `${space.sm + 1}px ${space.md}px`,
+                      borderRadius: radius.md,
+                      border: `1px solid ${neutral[200]}`,
+                      fontSize: fontSize.md,
+                      fontFamily: fontFamily.body,
+                    }}
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
         <div style={{ display: "flex", justifyContent: "flex-end", gap: space.sm, marginTop: space.sm }}>
-          {isPermission ? (
+          {isSecret ? (
+            <>
+              <button
+                type="button"
+                data-testid="question-secret-cancel"
+                onClick={() => onSubmit(buildSecretReply("cancel", secretFields, secretValues))}
+                disabled={submitting}
+                style={{
+                  padding: `${space.sm + 1}px ${space.lg}px`,
+                  borderRadius: radius.pill,
+                  border: `1px solid ${neutral[200]}`,
+                  backgroundColor: "var(--color-surface)",
+                  color: neutral[600],
+                  fontSize: fontSize.md,
+                  cursor: submitting ? "default" : "pointer",
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                {submitting ? "处理中…" : "取消"}
+              </button>
+              <button
+                type="button"
+                data-testid="question-secret-submit"
+                onClick={() => onSubmit(buildSecretReply("submit", secretFields, secretValues))}
+                disabled={submitting || !secretCanSubmit}
+                style={{
+                  padding: `${space.sm + 1}px ${space.lg}px`,
+                  borderRadius: radius.pill,
+                  border: "none",
+                  backgroundColor: "#0D9488",
+                  color: "#FFFFFF",
+                  fontSize: fontSize.md,
+                  fontWeight: 500,
+                  cursor: submitting || !secretCanSubmit ? "default" : "pointer",
+                  opacity: submitting || !secretCanSubmit ? 0.6 : 1,
+                  fontFamily: fontFamily.body,
+                }}
+              >
+                {submitting ? "处理中…" : "确认"}
+              </button>
+            </>
+          ) : isPermission ? (
             <>
               <button
                 type="button"

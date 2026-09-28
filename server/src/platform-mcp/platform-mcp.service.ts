@@ -12,7 +12,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import {
   ACTOR_TYPE,
   CHANNEL_TYPE,
@@ -36,6 +36,7 @@ import { FileStorageService } from '../uploads/uploads.service';
 import { DEFAULT_TASK_WORK_DIR, taskDirOf } from '../tasks/work-dir.util';
 import { PlanStepsService } from '../tasks/plan-steps.service';
 import {
+  SecretCommandResult,
   WorkerClient,
   WorkerUnavailableException,
 } from '../workers/worker.client';
@@ -47,7 +48,10 @@ import {
 } from '../common/constants/task.constants';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
-import { AGENT_QUESTION_STATUS } from '../questions/questions.constants';
+import {
+  AGENT_QUESTION_STATUS,
+  SECRET_INPUT_BUDGET_MS,
+} from '../questions/questions.constants';
 import {
   MEMORY_ERRORS,
   MEMORY_LEVELS,
@@ -60,6 +64,11 @@ import {
   NOTIFY_STAGE,
   NOTIFY_TYPE,
   PLATFORM_MCP_ERRORS,
+  SECRET_COMMAND_DEFAULT_TIMEOUT_SEC,
+  SECRET_COMMAND_KEEPALIVE_MS,
+  SECRET_COMMAND_MAX_STREAM_BYTES,
+  SECRET_COMMAND_MAX_TIMEOUT_SEC,
+  SECRET_COMMAND_REQUEST_SLACK_MS,
   validateTsxPrototype,
 } from './platform-mcp.constants';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
@@ -295,6 +304,60 @@ export interface ChatHistoryPage {
   truncated: boolean;
   total: number;
 }
+
+/**
+ * secret_command 模型可见变量元数据（值永不进入本结构：只记录变量名/标签/
+ * 是否敏感/是否必填，明文只在进程内存里传给 worker）。
+ */
+export interface SecretCommandVariableMeta {
+  name: string;
+  label: string;
+  secret: boolean;
+  required: boolean;
+}
+
+/**
+ * secret_command 模型可见结果（唯一对外出口）。
+ *
+ * 只含：原始模板（占位符原样，不含渲染结果）+ 变量元数据/是否已填写 + 状态 +
+ * exitCode/signal/timedOut/durationMs + 脱敏截断后的 stdout/stderr 与截断标记。
+ * **不含**渲染后命令、argv、cwd、secret、worker 基础设施错误原文。
+ */
+export interface SecretCommandEnvelope {
+  command: string;
+  variables: Array<SecretCommandVariableMeta & { provided: boolean }>;
+  status: 'succeeded' | 'failed' | 'timeout' | 'cancelled' | 'input_timeout';
+  exitCode: number | null;
+  /** 进程终止信号；worker 响应契约不回传信号，恒 null（超时由 timedOut 表达）。 */
+  signal: string | null;
+  timedOut: boolean;
+  durationMs: number;
+  stdout: string;
+  stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+}
+
+/** secret_input 等待结果：用户终态（提供/取消）/ 输入预算耗尽 / 客户端断开。 */
+type SecretCommandWaitOutcome =
+  | {
+      kind: 'hook';
+      outcome: 'provided' | 'cancelled';
+      secrets: Record<string, string> | null;
+    }
+  | { kind: 'input_timeout' }
+  | { kind: 'aborted' };
+
+/** 模板占位符集合（`{{NAME}}`，NAME 同 zod 变量名规则；`{{ name }}` 带空格亦识别）。 */
+function secretCommandPlaceholders(template: string): Set<string> {
+  const names = new Set<string>();
+  const re = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g;
+  for (const match of template.matchAll(re)) {
+    names.add(match[1]);
+  }
+  return names;
+}
+
 /** group_post 附件挂载（message 表附件三字段，UX-10；attachmentType 为小写 ext）。 */
 export interface GroupPostAttachment {
   attachmentUrl: string;
@@ -498,6 +561,14 @@ export class PlatformMcpService implements OnModuleInit {
    * createMessage）永不经过此处。
    */
   private readonly mentionThrottle = new MentionThrottle();
+
+  /**
+   * secret_command 单会话 in-flight 门（进程内集合，key=平台 Session 主键）。
+   * 为什么不用 reply-pending 查询做并发门：「查 pending questions → 创建」两步
+   * 非原子（并发两次都能查到空），且 pending 行按 taskId 过滤会把同任务不同会话
+   * 误伤；故由处理器自持同步门——进入即占位，settle（含异常）必释放。
+   */
+  private readonly secretCommandSessions = new Set<string>();
 
   /**
    * chat_history：任务群聊历史消息（按需拉取，替代自动注入的群聊历史）。
@@ -4133,6 +4204,465 @@ export class PlatformMcpService implements OnModuleInit {
       taskId: args.taskId,
       agentId: args.agentId,
       alias,
+    };
+  }
+
+  /**
+   * secret_command：阻塞式敏感命令执行（sensitive-command-tool todo 6）。
+   *
+   * 链路：入参校验（400）→ 归属校验（403）→ 托管 fail-closed（403，先于创建）
+   * → worker 行存在（503）→ 会话定位（403）→ 单会话 in-flight 门（409）
+   * → `createSecretForPlatform` 创建 secret_input 问题并阻塞等待
+   * （输入预算 540s，期间每 60s `keepAliveSession` 重臂静默看门狗与 durable
+   * deadline，settle 即 `clearInterval`）→ 客户端断开/输入超时 → 取消 pending
+   * 问题（不执行）→ 用户提供值 → `workerClient.runSecretCommand`（显式
+   * timeout = 命令超时 + 5s）→ 组装脱敏 envelope。
+   *
+   * 泄露面：明文只存在于本方法栈帧与 worker 请求体；不写日志、不进异常 message、
+   * 不进 envelope（worker 回包再做一次精确值替换 + 32KB 截断兜底）。
+   */
+  async secretCommand(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId: string;
+      selfInstanceId: string;
+      command: string;
+      variables: Array<{
+        name: string;
+        label?: string;
+        secret?: boolean;
+        required?: boolean;
+      }>;
+      cwd?: string;
+      timeoutSec?: number;
+      title?: string;
+      reason?: string;
+    },
+    signal?: AbortSignal,
+  ): Promise<SecretCommandEnvelope> {
+    const template = args.command;
+    const { variables, timeoutMs, cwd } = this.validateSecretCommandArgs(args);
+
+    const instanceId = await this.assertWorkerTask(
+      ctx,
+      args.taskId,
+      args.selfInstanceId,
+    );
+    const teamId = await this.teamIdOfTask(args.taskId);
+    if (!teamId) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '该 worker 无此任务会话，禁止跨任务访问',
+      });
+    }
+    const team = (await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { managedMode: true },
+    })) as { managedMode?: boolean | null } | null;
+    if (team?.managedMode === true) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_MANAGED_FORBIDDEN,
+        message: '团队已开启托管模式，敏感命令不予受理（fail-closed）',
+      });
+    }
+    const workerRow = await this.prisma.worker.findUnique({
+      where: { id: ctx.workerId },
+      select: { id: true, capabilities: true },
+    });
+    if (!workerRow) {
+      throw new ServiceUnavailableException({
+        code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_UNAVAILABLE,
+        message: '执行该任务的 worker 不存在，无法执行敏感命令',
+      });
+    }
+    const session = await this.prisma.session.findFirst({
+      where: {
+        teamId,
+        workerId: ctx.workerId,
+        teamMemberId: args.selfInstanceId,
+      },
+      select: { id: true, agentId: true, instanceRef: true },
+    });
+    if (!session) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message: '该 worker 无绑定团队会话，禁止跨任务访问',
+      });
+    }
+    const sessionKey = session.id;
+    if (this.secretCommandSessions.has(sessionKey)) {
+      throw new ConflictException({
+        code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_CONFLICT,
+        message: '该会话已有一次 secret_command 正在等待输入或执行，请稍后再试',
+      });
+    }
+    this.secretCommandSessions.add(sessionKey);
+    // keepalive 横跨「等待输入 + 执行」两段：settle（含异常）即 clearInterval。
+    const keepAliveTimer = setInterval(() => {
+      void this.keepAliveSession(sessionKey);
+    }, SECRET_COMMAND_KEEPALIVE_MS);
+    keepAliveTimer.unref?.();
+    this.logger.log(
+      `[secret-command] 发起 task=${args.taskId} session=${sessionKey} caller=${instanceId} vars=${variables.length} timeout=${timeoutMs}ms`,
+    );
+    try {
+      const wait = await this.awaitSecretInput({
+        signal,
+        taskId: args.taskId,
+        sessionKey,
+        agentId: session.agentId ?? '',
+        template,
+        variables,
+        reason: args.reason,
+      });
+      const provided =
+        wait.kind === 'hook' &&
+        wait.outcome === 'provided' &&
+        wait.secrets !== null;
+      if (!provided) {
+        const status: SecretCommandEnvelope['status'] =
+          wait.kind === 'input_timeout' ? 'input_timeout' : 'cancelled';
+        this.logger.log(
+          `[secret-command] 未执行 task=${args.taskId} session=${sessionKey} status=${status}`,
+        );
+        return this.secretEnvelope({
+          status,
+          command: template,
+          variables,
+          provided: false,
+          secrets: null,
+        });
+      }
+      if (signal?.aborted === true) {
+        // 客户端在「已收到值」与「下发执行」之间断开：不下发，杜绝幽灵执行。
+        this.logger.log(
+          `[secret-command] 客户端已断开，跳过执行 task=${args.taskId} session=${sessionKey}`,
+        );
+        return this.secretEnvelope({
+          status: 'cancelled',
+          command: template,
+          variables,
+          provided: false,
+          secrets: null,
+        });
+      }
+      const secrets = wait.secrets ?? {};
+      let result: SecretCommandResult;
+      try {
+        result = await this.workerClient.runSecretCommand(
+          { id: workerRow.id, capabilities: workerRow.capabilities },
+          {
+            requestId: `secmd_${randomUUID()}`,
+            commandTemplate: template,
+            secrets,
+            ...(cwd !== undefined ? { cwd } : {}),
+            // 显式超时 = 命令超时 + 5s 裕量（绝不落回客户端默认 60s：敏感命令最长 300s，
+            // 客户端据此再叠 5s 请求超时，请求恒晚于命令结束才可能被掐断）。
+            timeoutMs: timeoutMs + SECRET_COMMAND_REQUEST_SLACK_MS,
+            taskId: args.taskId,
+            ...(session.instanceRef ? { sessionId: session.instanceRef } : {}),
+          },
+        );
+      } catch (err) {
+        throw this.toSecretCommandError(err, secrets);
+      }
+      this.logger.log(
+        `[secret-command] 执行完成 task=${args.taskId} session=${sessionKey} status=${result.status} exitCode=${result.exitCode} durationMs=${result.durationMs}`,
+      );
+      return this.secretEnvelope({
+        status: result.status,
+        command: template,
+        variables,
+        provided: true,
+        secrets,
+        result,
+      });
+    } finally {
+      clearInterval(keepAliveTimer);
+      this.secretCommandSessions.delete(sessionKey);
+    }
+  }
+
+  /** 静默看门狗重臂（best-effort）：失败只 warn，不打断阻塞等待与执行。 */
+  private async keepAliveSession(sessionKey: string): Promise<void> {
+    try {
+      await this.workerDispatcher.keepAliveSession(sessionKey);
+    } catch (err) {
+      this.logger.warn(
+        `[secret-command] keepalive 失败（忽略） session=${sessionKey}：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** secret_command 入参校验（语义层；结构层在 zod schema）：任一失败 → 400。 */
+  private validateSecretCommandArgs(args: {
+    command: string;
+    variables: Array<{
+      name: string;
+      label?: string;
+      secret?: boolean;
+      required?: boolean;
+    }>;
+    cwd?: string;
+    timeoutSec?: number;
+  }): {
+    variables: SecretCommandVariableMeta[];
+    timeoutMs: number;
+    cwd?: string;
+  } {
+    const invalid = (message: string): BadRequestException =>
+      new BadRequestException({
+        code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_INVALID,
+        message,
+      });
+
+    const template = typeof args.command === 'string' ? args.command : '';
+    if (template.trim().length === 0) {
+      throw invalid('command 模板不能为空');
+    }
+    const declared = Array.isArray(args.variables) ? args.variables : [];
+    const names: string[] = [];
+    const variables: SecretCommandVariableMeta[] = [];
+    for (const item of declared) {
+      const name = typeof item?.name === 'string' ? item.name : '';
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+        throw invalid(`变量名非法：${String(item?.name)}`);
+      }
+      if (names.includes(name)) {
+        throw invalid(`变量名重复：${name}`);
+      }
+      names.push(name);
+      variables.push({
+        name,
+        label:
+          typeof item.label === 'string' && item.label.length > 0
+            ? item.label
+            : name,
+        secret: item.secret !== false,
+        required: item.required !== false,
+      });
+    }
+    const placeholders = secretCommandPlaceholders(template);
+    for (const name of placeholders) {
+      if (!names.includes(name)) {
+        throw invalid(`模板占位符 {{${name}}} 未在 variables 中声明`);
+      }
+    }
+    for (const name of names) {
+      if (!placeholders.has(name)) {
+        throw invalid(`variables 声明的 ${name} 未出现在命令模板中`);
+      }
+    }
+
+    let cwd: string | undefined;
+    if (args.cwd !== undefined && args.cwd !== null) {
+      const raw = String(args.cwd);
+      if (raw.trim().length === 0) {
+        throw invalid('cwd 不能为空串');
+      }
+      if (raw.includes('\0')) {
+        throw invalid('cwd 含非法字符');
+      }
+      if (
+        raw.startsWith('/') ||
+        raw.startsWith('\\') ||
+        /^[A-Za-z]:[\\/]/.test(raw)
+      ) {
+        throw invalid('cwd 必须是相对路径（绝对路径拒绝）');
+      }
+      if (raw.split(/[\\/]+/).some((segment) => segment === '..')) {
+        throw invalid('cwd 不得包含 ..（越界拒绝）');
+      }
+      cwd = raw;
+    }
+
+    const timeoutSec = args.timeoutSec ?? SECRET_COMMAND_DEFAULT_TIMEOUT_SEC;
+    if (
+      !Number.isInteger(timeoutSec) ||
+      timeoutSec < 1 ||
+      timeoutSec > SECRET_COMMAND_MAX_TIMEOUT_SEC
+    ) {
+      throw invalid(
+        `timeoutSec 须为 1~${SECRET_COMMAND_MAX_TIMEOUT_SEC} 的整数（缺省 ${SECRET_COMMAND_DEFAULT_TIMEOUT_SEC}）`,
+      );
+    }
+    return { variables, timeoutMs: timeoutSec * 1000, cwd };
+  }
+
+  /**
+   * secret_input 等待（阻塞核）：创建问题 → 起输入预算计时 → race（用户终态 /
+   * 输入超时 / 客户端断开）。非 hook 终态（超时、断开）意味着问题仍 pending，
+   * 此处显式取消（`secrets:null` 旁路），保证不存在幽灵执行。
+   * deferred 先于创建建立：兼容钩子在 `createSecretForPlatform` 返回前同步触发。
+   * keepalive 由外层统一起停（需覆盖等待与执行两段）。
+   */
+  private async awaitSecretInput(input: {
+    signal?: AbortSignal;
+    taskId: string;
+    sessionKey: string;
+    agentId: string;
+    template: string;
+    variables: SecretCommandVariableMeta[];
+    reason?: string;
+  }): Promise<SecretCommandWaitOutcome> {
+    let settle!: (value: SecretCommandWaitOutcome) => void;
+    const outcome = new Promise<SecretCommandWaitOutcome>((resolve) => {
+      settle = resolve;
+    });
+    let inputTimer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort: (() => void) | undefined;
+    let questionId: string | null = null;
+    try {
+      const question = await this.questionsService.createSecretForPlatform(
+        input.taskId,
+        {
+          template: input.template,
+          variables: input.variables.map((v) => ({
+            name: v.name,
+            secret: v.secret,
+          })),
+          ...(input.reason !== undefined ? { reason: input.reason } : {}),
+        },
+        {
+          agentId: input.agentId,
+          onSecretResolved: async (resolved) => {
+            settle({
+              kind: 'hook',
+              outcome: resolved.outcome,
+              secrets: resolved.secrets,
+            });
+          },
+        },
+      );
+      questionId = question.id;
+      inputTimer = setTimeout(
+        () => settle({ kind: 'input_timeout' }),
+        SECRET_INPUT_BUDGET_MS,
+      );
+      inputTimer.unref?.();
+      const signal = input.signal;
+      if (signal) {
+        if (signal.aborted) {
+          settle({ kind: 'aborted' });
+        } else {
+          onAbort = () => settle({ kind: 'aborted' });
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+      }
+      const result = await outcome;
+      if (result.kind !== 'hook' && questionId) {
+        await this.cancelSecretQuestion(questionId);
+      }
+      return result;
+    } finally {
+      if (inputTimer) clearTimeout(inputTimer);
+      if (onAbort && input.signal) {
+        input.signal.removeEventListener('abort', onAbort);
+      }
+    }
+  }
+
+  /** 取消仍在 pending 的 secret 输入问题（超时/断开）：走 `secrets:null` 取消旁路。 */
+  private async cancelSecretQuestion(questionId: string): Promise<void> {
+    try {
+      await this.questionsService.reply(questionId, { secrets: null });
+    } catch (err) {
+      this.logger.warn(
+        `[secret-command] 取消 pending secret 输入失败（忽略） id=${questionId}：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * worker 400/409/其余 → 精确错误码（客户端只给 httpStatus，不解析响应体）。
+   * 异常 message 一律先按明文值精确替换：任何外来错误文本都不得携带 secret。
+   */
+  private toSecretCommandError(
+    err: unknown,
+    secrets: Record<string, string>,
+  ): Error {
+    const redact = (text: string): string => this.redactSecrets(text, secrets);
+    if (err instanceof WorkerUnavailableException) {
+      const status = err.httpStatus;
+      if (status === 400) {
+        return new BadRequestException({
+          code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_INVALID,
+          message: `worker 拒绝该命令模板或参数：${redact(err.message)}`,
+        });
+      }
+      if (status === 409) {
+        return new ConflictException({
+          code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_CONFLICT,
+          message: `worker 幂等冲突（不同归属复用同一 requestId）：${redact(err.message)}`,
+        });
+      }
+      return new ServiceUnavailableException({
+        code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_UNAVAILABLE,
+        message: `worker 执行敏感命令失败（HTTP ${status ?? 'n/a'}）`,
+      });
+    }
+    const detail = redact(err instanceof Error ? err.message : String(err));
+    return new ServiceUnavailableException({
+      code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_UNAVAILABLE,
+      message: `worker 执行敏感命令失败：${detail}`,
+    });
+  }
+
+  /** 精确值替换脱敏（短值优先按长度倒序，避免子串互相吞掉）。 */
+  private redactSecrets(
+    text: string,
+    secrets: Record<string, string> | null | undefined,
+  ): string {
+    const values = Object.values(secrets ?? {})
+      .filter((value) => typeof value === 'string' && value.length > 0)
+      .sort((a, b) => b.length - a.length);
+    let out = text;
+    for (const value of values) {
+      out = out.split(value).join('***');
+    }
+    return out;
+  }
+
+  /**
+   * 组装模型可见 envelope：先按明文值精确脱敏，再按 32KB 逐字节截断（worker
+   * 已截断过一次，此处为兜底）。不写入渲染命令/argv/cwd/secret/worker 错误原文。
+   */
+  private secretEnvelope(input: {
+    status: SecretCommandEnvelope['status'];
+    command: string;
+    variables: SecretCommandVariableMeta[];
+    provided: boolean;
+    secrets: Record<string, string> | null;
+    result?: SecretCommandResult;
+  }): SecretCommandEnvelope {
+    const scrub = (text: string): [string, boolean] => {
+      const redacted = this.redactSecrets(text, input.secrets);
+      const bytes = Buffer.from(redacted, 'utf8');
+      if (bytes.length <= SECRET_COMMAND_MAX_STREAM_BYTES) {
+        return [redacted, false];
+      }
+      return [
+        bytes.subarray(0, SECRET_COMMAND_MAX_STREAM_BYTES).toString('utf8'),
+        true,
+      ];
+    };
+    const [stdout, stdoutCut] = scrub(input.result?.stdout ?? '');
+    const [stderr, stderrCut] = scrub(input.result?.stderr ?? '');
+    return {
+      command: input.command,
+      variables: input.variables.map((v) => ({
+        ...v,
+        provided: input.provided,
+      })),
+      status: input.status,
+      exitCode: input.result?.exitCode ?? null,
+      signal: null,
+      timedOut: input.result?.status === 'timeout',
+      durationMs: input.result?.durationMs ?? 0,
+      stdout,
+      stderr,
+      stdoutTruncated: stdoutCut || input.result?.stdoutTruncated === true,
+      stderrTruncated: stderrCut || input.result?.stderrTruncated === true,
     };
   }
 

@@ -41,10 +41,42 @@ export const PLATFORM_MCP_ERRORS = {
   TOOL_NOT_PERMITTED: 'PLATFORM_MCP_TOOL_NOT_PERMITTED',
   /** vteam_todo action=done：planId+seq 定位不到步骤 → 404。 */
   PLAN_STEP_NOT_FOUND: 'PLATFORM_MCP_PLAN_STEP_NOT_FOUND',
+  /**
+   * secret_command 入参非法（模板占位符与 variables 声明不一致 / 变量重名 /
+   * cwd 越界或绝对路径 / timeoutSec 越界）→ 400。
+   */
+  SECRET_COMMAND_INVALID: 'PLATFORM_MCP_SECRET_COMMAND_INVALID',
+  /** secret_command 单会话 in-flight 冲突（并发第二次调用）/ worker 幂等归属冲突 → 409。 */
+  SECRET_COMMAND_CONFLICT: 'PLATFORM_MCP_SECRET_COMMAND_CONFLICT',
+  /**
+   * secret_command 托管模式 fail-closed：团队 managedMode=on 时在创建 pending
+   * question **之前**直接拒绝（不产生孤儿行、不进入执行链）→ 403。
+   */
+  SECRET_COMMAND_MANAGED_FORBIDDEN:
+    'PLATFORM_MCP_SECRET_COMMAND_MANAGED_FORBIDDEN',
+  /** secret_command worker 执行端点不可用（网络/超时/5xx）→ 503。 */
+  SECRET_COMMAND_UNAVAILABLE: 'PLATFORM_MCP_SECRET_COMMAND_UNAVAILABLE',
 } as const;
 
 export type PlatformMcpErrorCode =
   (typeof PLATFORM_MCP_ERRORS)[keyof typeof PLATFORM_MCP_ERRORS];
+
+/**
+ * secret_command 阻塞预算族（单位 ms，除 timeoutSec 外均为服务端常量）：
+ * - `SECRET_INPUT_BUDGET_MS`（540s，在 questions 域）：等待用户填写敏感值的上限；
+ * - 命令执行超时：入参 timeoutSec，缺省 60s、上限 300s；
+ * - 总预算 = 540s + 300s + 15s = 855s（最坏），注入的 MCP 客户端 timeout 必须
+ *   覆盖它（worker 注入点下限 900000ms）——见 `VTEAM_MCP_TIMEOUT_FLOOR_MS`；
+ * - keepalive 周期 60s：等待与执行期间重臂静默看门狗；
+ * - 请求侧裕量 5s：worker 客户端超时 = 命令超时 + 5s。
+ */
+export const SECRET_COMMAND_TOTAL_BUDGET_MS = 855_000;
+export const SECRET_COMMAND_KEEPALIVE_MS = 60_000;
+export const SECRET_COMMAND_DEFAULT_TIMEOUT_SEC = 60;
+export const SECRET_COMMAND_MAX_TIMEOUT_SEC = 300;
+export const SECRET_COMMAND_REQUEST_SLACK_MS = 5_000;
+/** worker 侧每流截断上限（双写 MAX_SENSITIVE_OUTPUT_BYTES）：服务端兜底再截一次。 */
+export const SECRET_COMMAND_MAX_STREAM_BYTES = 32 * 1024;
 
 /**
  * notify_agent `type` 值集（reply-join）：区分执行答复 / 求助 / 普通通知，

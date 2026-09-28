@@ -67,6 +67,7 @@ const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_git_repos_list',
   'vteam_hook_register',
   'vteam_hook_cancel',
+  'vteam_secret_command',
 ] as const;
 
 function defineBoundary(base: Omit<RoleBoundary, 'mcpDenies'>): RoleBoundary {
@@ -124,6 +125,11 @@ const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
     defaultDeny: true,
   },
   { key: 'git.repos', tools: ['vteam_git_repos_list'], defaultDeny: false },
+  {
+    key: 'secret.command',
+    tools: ['vteam_secret_command'],
+    defaultDeny: false,
+  },
 ];
 
 function capabilityMatrixFromTools(
@@ -148,7 +154,7 @@ function factoryCapabilityMatrix(): Record<string, boolean> {
  * 内置岗位能力矩阵（2026-09-22 用户决策「按角色针对性开放」；与 src
  * `agent-role.constants.ts` 的 `BUILTIN_ROLE_CAPABILITY_MAPS` 同口径——seed.spec
  * 逐岗断言落库值与该常量相等，改 src 表/边界必须同步此处，否则单测红）。
- * 规则：project_manager 显式全 27 点 true（所有 vteam 权限开放，不按边界派生）；
+ * 规则：project_manager 显式全 29 点 true（所有 vteam 权限开放，不按边界派生）；
  * 其余 6 岗 = ROLE_BOUNDARIES toolAllows 全组放行才 true（capabilityMatrixFromTools，
  * 只收窄不放大；issue/memory 各点拆分后均单工具，逐工具判定不塌缩）。
  */
@@ -231,6 +237,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_hook_cancel: 'allow',
       browser: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -272,6 +279,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_diff: 'allow',
       git_log: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -319,6 +327,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       // push 写远端：guard 放行后仍需仓库 write 授权（工具内 pushGuard 校验），无授权照样拒绝
       git_push: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -363,6 +372,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_diff: 'allow',
       git_log: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -410,6 +420,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_hook_register: 'allow',
       vteam_hook_cancel: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -443,6 +454,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_submit_artifact: 'allow',
       browser: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 
@@ -478,6 +490,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_log: 'allow',
       browser: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     },
   }),
 };
@@ -710,6 +723,7 @@ const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
   'vteam_task_context',
   'vteam_my_profile',
   'vteam_team_view',
+  'vteam_secret_command',
 ];
 
 /** 外部岗位最小能力矩阵（default-allow 下必须显式拒绝未覆盖能力点）。 */
@@ -1139,7 +1153,7 @@ async function main() {
   // 不做 role_prompt 的 updateMany 回填，避免重跑 seed 覆盖用户编辑过的岗位说明。
   for (const role of BUILTIN_AGENT_ROLES) {
     // 按角色定制能力矩阵（2026-09-22 用户决策「PM 全开、其余按角色针对性开放」）：
-    // PM 显式全 27 点 true，其余 6 岗按 ROLE_BOUNDARIES toolAllows 全组放行派生
+    // PM 显式全 29 点 true，其余 6 岗按 ROLE_BOUNDARIES toolAllows 全组放行派生
     // （builtinRoleCapabilityMap，同 src BUILTIN_ROLE_CAPABILITY_MAPS）；存量库由
     // migration 20260921000009 覆盖为同一矩阵。外部 3 岗走下方最小矩阵，ar_general
     // 走出厂兜底，均不在本循环内。
@@ -1173,7 +1187,7 @@ async function main() {
   // 「内置为 seed」——此前全新库不存在外部岗）。幂等策略 = 按唯一键 key 的
   // create-if-absent upsert（update 空对象 ≙ INSERT ... ON DUPLICATE KEY UPDATE no-op）：
   // 重跑不产生重复行，也绝不覆盖运营者对既有行的后续编辑（名称/排序/外部槽位/rolePrompt/
-  // 矩阵一概不动）；仅 capabilities 仍为 NULL 的存量行由随后的 updateMany 补 8 工具矩阵。
+  // 矩阵一概不动）；仅 capabilities 仍为 NULL 的存量行由随后的 updateMany 补 9 工具矩阵。
   for (const role of EXTERNAL_AGENT_ROLES) {
     await prisma.agentRole.upsert({
       where: { key: role.key },
@@ -1425,6 +1439,7 @@ async function main() {
     { action: 'git_repos_list', name: 'vteam_git_repos_list', description: '查询被授权仓库只读清单（脱敏）' },
     { action: 'hook_register', name: 'vteam_hook_register', description: '注册稍后唤醒（定时/静默，唤醒回同会话）' },
     { action: 'hook_cancel', name: 'vteam_hook_cancel', description: '取消 hook（仅所有者或主 Agent）' },
+    { action: 'secret_command', name: 'vteam_secret_command', description: '请求执行敏感命令：提交命令模板与变量声明（不提交值），由用户在弹窗填写并确认后在 worker 执行' },
   ];
 
   for (const t of vteamTools) {

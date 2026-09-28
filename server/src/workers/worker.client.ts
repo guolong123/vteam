@@ -50,6 +50,16 @@ export const DEFAULT_EXEC_PORT = 4198;
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 /** FR-41：GET /file 文件拉取超时（较大文件/网络慢） */
 export const DEFAULT_FILE_FETCH_TIMEOUT_MS = 60_000;
+/** 敏感命令缺省执行超时（对齐 worker SensitiveCommandInput.timeoutMs 缺省值 60000）。 */
+export const DEFAULT_SECRET_COMMAND_TIMEOUT_MS = 60_000;
+/** 敏感命令执行超时硬上限（对齐 worker MAX_COMMAND_TIMEOUT_MS，超限由 worker 截断）。 */
+export const MAX_SECRET_COMMAND_TIMEOUT_MS = 600_000;
+/**
+ * secret-command HTTP 请求超时余量：请求超时 = 命令超时 + 该余量。
+ * 必须覆盖 worker 同步执行 + 脱敏收尾的回包时间；请求超时绝不回落
+ * DEFAULT_REQUEST_TIMEOUT_MS（60s），否则 60s+ 的命令会被客户端提前掐断。
+ */
+export const SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS = 5_000;
 
 /**
  * worker 行最小契约（Prisma Worker 的 id + capabilities Json；T10 传 findUnique 结果）。
@@ -187,6 +197,55 @@ export interface ExecuteAttachment {
   mime?: string;
   /** 原文件名（缺省取 url basename）。 */
   filename?: string;
+}
+
+/**
+ * POST /secret-command 请求体（双写自 worker/src/protocol/worker-protocol.ts
+ * SecretCommandRequestPayload；不跨包 import：server tsc 会把 common root 抬到仓库根，
+ * 破坏 dist 布局，双写一致性由 worker/src/protocol/contract.spec.ts 钉住）。
+ *
+ * `secrets` 明文只经此请求体进入 worker，不落日志、不进异常 message。
+ */
+export interface SecretCommandRequest {
+  /** 幂等键：同 requestId + 同归属 worker 回放既有结果；不同归属 409。 */
+  requestId: string;
+  /** 命令模板（含 `{{NAME}}` 占位符，精确替换在 worker 侧完成）。 */
+  commandTemplate: string;
+  /** 变量名 → 明文值（绝不进日志/异常 message）。 */
+  secrets: Record<string, string>;
+  /** 相对 worker workDir 的执行目录（缺省 = workDir 根）。 */
+  cwd?: string;
+  /** 命令执行超时 ms（缺省 60000，worker 侧上限 600000）。 */
+  timeoutMs?: number;
+  /** 平台 Task 主键（t_ 前缀，幂等归属判定）。 */
+  taskId?: string;
+  /** opencode 会话 id（ses_ 前缀，幂等归属判定）。 */
+  sessionId?: string;
+}
+
+/**
+ * POST /secret-command 响应（双写自 worker SecretCommandResponsePayload）：
+ * 脱敏 + 每流 32KB 截断之后的唯一对外出口，不含渲染命令/argv/cwd/secret。
+ */
+export interface SecretCommandResult {
+  /** 回显幂等键，便于调用方配对。 */
+  requestId: string;
+  /** succeeded=exit 0；failed=非 0 或启动失败；timeout=超时后进程组被杀。 */
+  status: 'succeeded' | 'failed' | 'timeout';
+  /** 进程退出码（信号杀死/启动失败为 null）。 */
+  exitCode: number | null;
+  /** 端到端耗时 ms。 */
+  durationMs: number;
+  /** 脱敏 + 截断后的标准输出。 */
+  stdout: string;
+  /** 脱敏 + 截断后的标准错误。 */
+  stderr: string;
+  /** stdout 是否被截断。 */
+  stdoutTruncated: boolean;
+  /** stderr 是否被截断。 */
+  stderrTruncated: boolean;
+  /** 基础设施级失败原因（已脱敏；仅 spawn/启动失败等场景携带）。 */
+  error?: string;
 }
 
 /**
@@ -400,6 +459,92 @@ export class WorkerClient {
         `question reply HTTP ${res.status}`,
       );
     }
+  }
+
+  /**
+   * POST /secret-command（worker 执行端点，X-Worker-Token 保护）：同步执行敏感命令。
+   *
+   * - 超时显式注入：请求超时 = 命令超时 + SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS（5s），
+   *   恒 > DEFAULT_REQUEST_TIMEOUT_MS（60s）——敏感命令最长可到 300s+，绝不能被默认 60s 掐断。
+   * - 失败归一：非 2xx / 网络失败 / 超时 / 非 JSON 响应一律 WorkerUnavailableException，
+   *   `httpStatus` 保留 worker 侧原码（400 模板非法、409 幂等冲突、5xx 故障）。
+   * - 不泄露：请求体含明文 secrets，本方法全程不写日志；异常 detail 只带状态码，
+   *   不回显响应体，更不回显请求体。
+   */
+  async runSecretCommand(
+    worker: WorkerEndpointRef,
+    opts: SecretCommandRequest,
+  ): Promise<SecretCommandResult> {
+    const commandTimeoutMs = this.resolveSecretCommandTimeout(opts.timeoutMs);
+    const requestTimeoutMs =
+      commandTimeoutMs + SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS;
+    const res = await this.requestExec(
+      worker,
+      '/secret-command',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Worker-Token': this.workerToken,
+        },
+        body: JSON.stringify({
+          requestId: opts.requestId,
+          commandTemplate: opts.commandTemplate,
+          secrets: opts.secrets,
+          ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+          timeoutMs: commandTimeoutMs,
+          ...(opts.taskId ? { taskId: opts.taskId } : {}),
+          ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+        }),
+      },
+      requestTimeoutMs,
+    );
+    if (!res.ok) {
+      throw new WorkerUnavailableException(
+        worker.id,
+        `secret-command HTTP ${res.status}`,
+        res.status,
+      );
+    }
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      throw new WorkerUnavailableException(
+        worker.id,
+        'secret-command 响应非合法 JSON',
+        res.status,
+      );
+    }
+    const result = body as Partial<SecretCommandResult> | null;
+    if (
+      result === null ||
+      typeof result !== 'object' ||
+      Array.isArray(result) ||
+      typeof result.status !== 'string'
+    ) {
+      throw new WorkerUnavailableException(
+        worker.id,
+        'secret-command 响应缺少 status 字段',
+        res.status,
+      );
+    }
+    return result as SecretCommandResult;
+  }
+
+  /**
+   * 命令超时归一：对齐 worker normalizeTimeout（缺省 60000，上限 600000），
+   * 请求超时据此计算——先归一再算请求超时，客户端与 worker 的超时预算才一致。
+   */
+  private resolveSecretCommandTimeout(timeoutMs?: number): number {
+    if (
+      typeof timeoutMs !== 'number' ||
+      !Number.isFinite(timeoutMs) ||
+      timeoutMs <= 0
+    ) {
+      return DEFAULT_SECRET_COMMAND_TIMEOUT_MS;
+    }
+    return Math.min(timeoutMs, MAX_SECRET_COMMAND_TIMEOUT_MS);
   }
 
   /**
@@ -944,7 +1089,10 @@ export class WorkerClient {
         signal: controller.signal,
       });
     } catch (err) {
-      throw new WorkerUnavailableException(workerId, this.describeError(err));
+      throw new WorkerUnavailableException(
+        workerId,
+        this.describeError(err, timeoutMs),
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -1038,15 +1186,21 @@ export class WorkerClient {
     return [];
   }
 
-  /** 错误信息归一（超时/网络/HTTP 消息，避免泄露过多内部细节）。 */
-  private describeError(err: unknown): string {
+  /**
+   * 错误信息归一（超时/网络/HTTP 消息，避免泄露过多内部细节）。
+   * `timeoutMs` 供超时文案报出生效的请求超时（secret-command 等显式超时路径不误导为默认 60s）。
+   */
+  private describeError(
+    err: unknown,
+    timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS,
+  ): string {
     // fetch abort 在 Node 18+ 抛 DOMException（非 Error 实例），按 name 识别 AbortError
     const name =
       typeof err === 'object' && err !== null && 'name' in err
         ? (err as { name?: string }).name
         : undefined;
     if (name === 'AbortError') {
-      return `请求超时（>${DEFAULT_REQUEST_TIMEOUT_MS}ms）`;
+      return `请求超时（>${timeoutMs}ms）`;
     }
     if (err instanceof Error) {
       return err.message;

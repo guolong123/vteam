@@ -486,6 +486,128 @@ describe('ResourceInjector.injectMcp', () => {
     });
   });
 
+  /**
+   * sensitive-command-tool todo 6：注入的 vteam 远端条目必须带显式 timeout 下限。
+   * secret_command 阻塞工具最坏总预算 855s（540s 输入 + 300s 命令 + 15s 裕量），
+   * 依赖 OpenCode 客户端默认超时会把调用在 855s 前掐断 → 必须硬编码 ≥900000ms。
+   */
+  describe('vteam 远端条目显式 timeout 下限（secret_command 阻塞调用）', () => {
+    const injectVteam = async (
+      record: Record<string, unknown>,
+      env?: string,
+    ): Promise<Record<string, unknown> | undefined> => {
+      const workDir = workDirFor();
+      const fetchImpl = makeFetch({
+        '/api/v1/mcp-servers': () => ({
+          items: [
+            {
+              id: 'ms_vteam',
+              name: 'vteam',
+              type: 'remote',
+              command: null,
+              url: 'https://vteam.example.com/api/v1/platform-mcp',
+              headers: null,
+              oauth: null,
+              ...record,
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 100,
+        }),
+      });
+      const injector = new ResourceInjector({
+        serverUrl: 'http://localhost:3000',
+        workerToken: 'tok',
+        workerId: 'w_test',
+        workDir,
+        fetchImpl,
+      });
+      const previous = process.env.VTEAM_MCP_TIMEOUT_MS;
+      if (env === undefined) {
+        delete process.env.VTEAM_MCP_TIMEOUT_MS;
+      } else {
+        process.env.VTEAM_MCP_TIMEOUT_MS = env;
+      }
+      try {
+        await injector.injectMcp();
+      } finally {
+        if (previous === undefined) {
+          delete process.env.VTEAM_MCP_TIMEOUT_MS;
+        } else {
+          process.env.VTEAM_MCP_TIMEOUT_MS = previous;
+        }
+      }
+      const config = JSON.parse(
+        fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
+      ) as { mcp?: Record<string, Record<string, unknown>> };
+      return config.mcp?.vteam;
+    };
+
+    it('缺省注入 timeout >= 900000（覆盖 855s 最坏总预算，不依赖 OpenCode 默认值）', async () => {
+      const entry = await injectVteam({});
+      expect(entry).toBeDefined();
+      const timeout = Number(entry?.timeout);
+      expect(Number.isFinite(timeout)).toBe(true);
+      expect(timeout).toBeGreaterThanOrEqual(900_000);
+      expect(entry).toMatchObject({
+        type: 'remote',
+        url: 'https://vteam.example.com/api/v1/platform-mcp',
+        enabled: true,
+      });
+    });
+
+    it('服务端已给 timeout 时仍 clamp 到下限（服务端 30000 → 900000）', async () => {
+      const entry = await injectVteam({ timeout: 30_000 });
+      expect(Number(entry?.timeout)).toBeGreaterThanOrEqual(900_000);
+    });
+
+    it('VTEAM_MCP_TIMEOUT_MS 覆盖且 clamp：1200000 原样生效、1000 抬到 900000、垃圾值回落缺省 900000', async () => {
+      expect(Number((await injectVteam({}, '1200000'))?.timeout)).toBe(
+        1_200_000,
+      );
+      expect(Number((await injectVteam({}, '1000'))?.timeout)).toBe(900_000);
+      expect(Number((await injectVteam({}, 'not-a-number'))?.timeout)).toBe(
+        900_000,
+      );
+    });
+
+    it('非 vteam 远端条目不受下限影响（服务端 timeout 原样 / 缺省不写）', async () => {
+      const workDir = workDirFor();
+      const fetchImpl = makeFetch({
+        '/api/v1/mcp-servers': () => ({
+          items: [
+            {
+              id: 'ms_0000000002',
+              name: 'gitee-remote',
+              type: 'remote',
+              command: null,
+              url: 'https://mcp.example.com/gitee',
+              headers: null,
+              oauth: null,
+              timeout: 8000,
+            },
+          ],
+          total: 1,
+          page: 1,
+          pageSize: 100,
+        }),
+      });
+      const injector = new ResourceInjector({
+        serverUrl: 'http://localhost:3000',
+        workerToken: 'tok',
+        workerId: 'w_test',
+        workDir,
+        fetchImpl,
+      });
+      await injector.injectMcp();
+      const config = JSON.parse(
+        fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
+      ) as { mcp?: Record<string, unknown> };
+      expect(config.mcp?.['gitee-remote']).toMatchObject({ timeout: 8000 });
+    });
+  });
+
   it('配置不完整跳过：local 缺 command[] / remote 缺 url 不入 mcp 节', async () => {
     const workDir = workDirFor();
     const fetchImpl = makeFetch({

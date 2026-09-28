@@ -114,7 +114,12 @@ export function matchesScope(ev: SSEEvent<unknown>, scopeStr?: string): boolean 
       // 字段(仅 id/type/payload/timestamp,见上接口定义),故不依赖信封匹配,
       // 以 payload.taskId 双形状匹配为准。
       const taskId = (ev.payload as { taskId?: string })?.taskId;
-      return taskId === id || taskId === `team:${id}`;
+      return (
+        taskId === id ||
+        taskId === `team:${id}` ||
+        // server create emit 带真实 t_... taskId + 顶层 teamId（reply/expire/ingress 同形）
+        (ev.payload as { teamId?: string })?.teamId === id
+      );
     }
     return false;
   });

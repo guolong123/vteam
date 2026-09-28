@@ -6,6 +6,8 @@
 export const AGENT_QUESTION_KINDS = {
   QUESTION: 'question',
   PERMISSION: 'permission',
+  /** secret_command 敏感输入：只存模板与变量元数据，值不落库、不回显、不广播。 */
+  SECRET_INPUT: 'secret_input',
 } as const;
 
 /** AgentQuestion.status 枚举（pending → resolved/rejected；expired=僵尸/超期自动终态）。 */
@@ -30,6 +32,18 @@ export const QUESTION_PENDING_TTL_MS = 30 * 60 * 1000;
  */
 export const PLATFORM_QUESTION_SOURCE = 'platform';
 
+/**
+ * secret_input 专用 content.source：与 platform 同走平台旁路（isPlatformQuestion 识别，
+ * 不转发 worker），但 resolvePlatformQuestion 按 kind 走 secret 分支落 `{provided,filled,...}`。
+ */
+export const SECRET_QUESTION_SOURCE = 'secret_input';
+
+/**
+ * secret_input 输入预算 ms（540s）：阻塞式 secret_command 等待用户填写的上限，
+ * 总预算 = 本值 + commandTimeout + 15s（最坏 855s，注入 MCP timeout 须 ≥900000ms）。
+ */
+export const SECRET_INPUT_BUDGET_MS = 540 * 1000;
+
 /** 权限确认 response 枚举（对齐 serve replyPermission 契约）。 */
 export const PERMISSION_RESPONSES = ['once', 'always', 'reject'] as const;
 export type PermissionResponse = (typeof PERMISSION_RESPONSES)[number];
@@ -44,6 +58,8 @@ export const QUESTIONS_ERRORS = {
   QUESTION_EXPIRED: 'QUESTION_EXPIRED',
   /** 托管读团队行时团队归属存在但团队行缺失（session-unification Todo 9）→ 404。 */
   QUESTION_TEAM_NOT_FOUND: 'QUESTION_TEAM_NOT_FOUND',
+  /** 托管模式 fail-closed：托管团队不创建/不受理 secret_input（明文输入不进托管确认链）→ 403。 */
+  QUESTION_SECRET_MANAGED_FORBIDDEN: 'QUESTION_SECRET_MANAGED_FORBIDDEN',
 } as const;
 
 /**

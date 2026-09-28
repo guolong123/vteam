@@ -1,8 +1,10 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   DEFAULT_EXEC_PORT,
   DEFAULT_REQUEST_TIMEOUT_MS,
+  DEFAULT_SECRET_COMMAND_TIMEOUT_MS,
+  SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS,
   WorkerClient,
   WorkerUnavailableException,
 } from './worker.client';
@@ -429,6 +431,262 @@ describe('WorkerClient', () => {
           answers: [],
         }),
       ).rejects.toMatchObject({ workerId: 'w_1', status: 503 });
+    });
+  });
+
+  describe('runSecretCommand（POST /secret-command 显式超时客户端）', () => {
+    const execWorker = {
+      id: 'w_1',
+      capabilities: { baseUrl: 'http://worker:46267', execPort: 4198 },
+    };
+    /** 哨兵 secret：只允许出现在测试代码与请求体里，绝不能出现在日志/异常消息。 */
+    const SENTINEL = 's3cr3t-A9f';
+    const okPayload = {
+      requestId: 'scr_1',
+      status: 'succeeded',
+      exitCode: 0,
+      durationMs: 12,
+      stdout: 'done',
+      stderr: '',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+    };
+
+    it('POST /secret-command：exec 端点 URL + X-Worker-Token + Content-Type + 完整请求体', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ json: async () => okPayload }));
+
+      await client.runSecretCommand(execWorker, {
+        requestId: 'scr_1',
+        commandTemplate: 'echo {{TOKEN}}',
+        secrets: { TOKEN: SENTINEL },
+        cwd: 'tasks/t_1',
+        timeoutMs: 300_000,
+        taskId: 't_1',
+        sessionId: 'ses_1',
+      });
+
+      const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe('http://worker:4198/secret-command');
+      expect(init.method).toBe('POST');
+      const headers = init.headers as Headers;
+      expect(headers.get('X-Worker-Token')).toBe('dev-worker-token');
+      expect(headers.get('Content-Type')).toBe('application/json');
+      expect(JSON.parse(String(init.body))).toEqual({
+        requestId: 'scr_1',
+        commandTemplate: 'echo {{TOKEN}}',
+        secrets: { TOKEN: SENTINEL },
+        cwd: 'tasks/t_1',
+        timeoutMs: 300_000,
+        taskId: 't_1',
+        sessionId: 'ses_1',
+      });
+    });
+
+    it('命令 300s → 实际请求超时 305000ms（> 默认 60000，绝不回落默认 60s）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ json: async () => okPayload }));
+      const spy = jest.spyOn(globalThis, 'setTimeout');
+      try {
+        await client.runSecretCommand(execWorker, {
+          requestId: 'scr_1',
+          commandTemplate: 'sleep 300',
+          secrets: {},
+          timeoutMs: 300_000,
+        });
+        const delays = (spy.mock.calls as unknown[][]).map((c) => Number(c[1]));
+        // 断言真实生效的超时参数（不是调用次数）：命令超时 + 5000ms 余量
+        expect(delays).toContain(
+          300_000 + SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS,
+        );
+        expect(delays).toContain(305_000);
+        expect(delays).not.toContain(DEFAULT_REQUEST_TIMEOUT_MS);
+        expect(Math.max(...delays)).toBeGreaterThan(DEFAULT_REQUEST_TIMEOUT_MS);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('缺省 timeoutMs → 请求超时 65000ms（对齐 worker 默认 60000 + 余量，仍 > 默认 60000）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(response({ json: async () => okPayload }));
+      const spy = jest.spyOn(globalThis, 'setTimeout');
+      try {
+        await client.runSecretCommand(execWorker, {
+          requestId: 'scr_1',
+          commandTemplate: 'echo hi',
+          secrets: {},
+        });
+        const delays = (spy.mock.calls as unknown[][]).map((c) => Number(c[1]));
+        expect(delays).toContain(
+          DEFAULT_SECRET_COMMAND_TIMEOUT_MS +
+            SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS,
+        );
+        expect(delays).toContain(65_000);
+        expect(delays).not.toContain(DEFAULT_REQUEST_TIMEOUT_MS);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('请求超时（abort）→ WorkerUnavailableException，消息带真实超时 305000ms（非默认 60000 文案）', async () => {
+      const client = makeClient();
+      mockFetch.mockRejectedValue(
+        new DOMException('The operation was aborted.', 'AbortError'),
+      );
+
+      const err = await client
+        .runSecretCommand(execWorker, {
+          requestId: 'scr_1',
+          commandTemplate: 'sleep 300',
+          secrets: {},
+          timeoutMs: 300_000,
+        })
+        .catch((e) => e);
+
+      expect(err).toBeInstanceOf(WorkerUnavailableException);
+      expect(err.workerId).toBe('w_1');
+      expect(err.status).toBe(503);
+      expect(String(err.message)).toContain('请求超时（>305000ms）');
+    });
+
+    it('200 → 返回类型化结果（status/exitCode/durationMs/双流截断/requestId）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({
+          json: async () => ({
+            ...okPayload,
+            status: 'failed',
+            exitCode: 1,
+            stderr: 'boom',
+            stdoutTruncated: true,
+          }),
+        }),
+      );
+
+      await expect(
+        client.runSecretCommand(execWorker, {
+          requestId: 'scr_1',
+          commandTemplate: 'false',
+          secrets: {},
+          timeoutMs: 300_000,
+        }),
+      ).resolves.toEqual({
+        requestId: 'scr_1',
+        status: 'failed',
+        exitCode: 1,
+        durationMs: 12,
+        stdout: 'done',
+        stderr: 'boom',
+        stdoutTruncated: true,
+        stderrTruncated: false,
+      });
+    });
+
+    it('HTTP 非 2xx（500/400/409）→ WorkerUnavailableException，httpStatus 保留原码且异常不含响应体', async () => {
+      const client = makeClient();
+
+      for (const status of [500, 400, 409]) {
+        mockFetch.mockResolvedValue(
+          response({
+            ok: false,
+            status,
+            // 响应体带哨兵：异常消息不得回显它（连响应体都不读）
+            json: async () => ({ error: `boom ${SENTINEL}` }),
+            text: async () => `boom ${SENTINEL}`,
+          }),
+        );
+        const err = await client
+          .runSecretCommand(execWorker, {
+            requestId: 'scr_1',
+            commandTemplate: 'echo {{TOKEN}}',
+            secrets: { TOKEN: SENTINEL },
+            timeoutMs: 300_000,
+          })
+          .catch((e) => e);
+        expect(err).toBeInstanceOf(WorkerUnavailableException);
+        expect(err.workerId).toBe('w_1');
+        expect(err.status).toBe(503);
+        expect(err.httpStatus).toBe(status);
+        expect(String(err.message)).toContain(`secret-command HTTP ${status}`);
+        expect(String(err.message)).not.toContain(SENTINEL);
+      }
+    });
+
+    it('200 但响应非 JSON → WorkerUnavailableException（坏输入归一，不当成功）', async () => {
+      const client = makeClient();
+      mockFetch.mockResolvedValue(
+        response({ json: async () => Promise.reject(new Error('bad json')) }),
+      );
+
+      const err = await client
+        .runSecretCommand(execWorker, {
+          requestId: 'scr_1',
+          commandTemplate: 'echo hi',
+          secrets: {},
+          timeoutMs: 300_000,
+        })
+        .catch((e) => e);
+
+      expect(err).toBeInstanceOf(WorkerUnavailableException);
+      expect(err.status).toBe(503);
+    });
+
+    it('网络失败（ECONNREFUSED）→ WorkerUnavailableException（503，带 workerId）', async () => {
+      const client = makeClient();
+      mockFetch.mockRejectedValue(new TypeError('ECONNREFUSED'));
+
+      await expect(
+        client.runSecretCommand(execWorker, {
+          requestId: 'scr_1',
+          commandTemplate: 'echo hi',
+          secrets: {},
+          timeoutMs: 300_000,
+        }),
+      ).rejects.toMatchObject({ workerId: 'w_1', status: 503 });
+    });
+
+    it('成功与失败路径都不把请求体/secret 写进日志（sentinel 0 命中）', async () => {
+      const client = makeClient();
+      const methods = ['log', 'error', 'warn', 'debug', 'verbose'] as const;
+      const spies = methods.map((m) =>
+        jest.spyOn(Logger.prototype, m).mockImplementation(() => undefined),
+      );
+      try {
+        mockFetch.mockResolvedValue(response({ json: async () => okPayload }));
+        await client.runSecretCommand(execWorker, {
+          requestId: 'scr_1',
+          commandTemplate: 'echo {{TOKEN}}',
+          secrets: { TOKEN: SENTINEL },
+          timeoutMs: 300_000,
+        });
+        mockFetch.mockResolvedValue(
+          response({
+            ok: false,
+            status: 500,
+            json: async () => ({ error: `boom ${SENTINEL}` }),
+            text: async () => `boom ${SENTINEL}`,
+          }),
+        );
+        const err = await client
+          .runSecretCommand(execWorker, {
+            requestId: 'scr_2',
+            commandTemplate: 'echo {{TOKEN}}',
+            secrets: { TOKEN: SENTINEL },
+            timeoutMs: 300_000,
+          })
+          .catch((e) => e);
+
+        const logged = spies
+          .flatMap((s) => s.mock.calls.flat())
+          .map(String)
+          .join('\n');
+        expect(logged).not.toContain(SENTINEL);
+        expect(String(err.message)).not.toContain(SENTINEL);
+        expect(err).toBeInstanceOf(WorkerUnavailableException);
+      } finally {
+        spies.forEach((s) => s.mockRestore());
+      }
     });
   });
 

@@ -24,4 +24,4 @@ export type { MsgUnknownPartProps } from "./msg-unknown-part";
 export { MsgParts } from "./msg-parts";
 export type { MsgPartsProps, PartShape } from "./msg-parts";
 export { QuestionModal } from "./question-modal";
-export type { QuestionModalProps, QuestionModalData } from "./question-modal";
+export type { QuestionModalProps, QuestionModalData, QuestionModalSubmitPayload } from "./question-modal";

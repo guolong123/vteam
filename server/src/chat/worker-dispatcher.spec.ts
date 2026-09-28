@@ -19,6 +19,7 @@ import {
   loadBoundaryBaseline,
 } from '../execution-policies/__fixtures__/policy-fixtures';
 import { TRIGGER_KIND } from '../common/constants/trigger.constants';
+import { SECRET_COMMAND_KEEPALIVE_MS } from '../platform-mcp/platform-mcp.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import {
   WorkerClient,
@@ -4665,6 +4666,238 @@ describe('WorkerDispatcher', () => {
       };
       walk(srcRoot);
       expect(hits).toEqual([]);
+    });
+  });
+
+  describe('keepAliveSession（secret_command 阻塞等待期保活）', () => {
+    const silenceSetup = () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_0000000001',
+        instanceRef: 'ses_0001',
+        teamId: 'tm_0000000001',
+        teamMemberId: 'tmm_0000000001',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: 'online',
+        capabilities: {},
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+      });
+      prisma.artifact.findMany.mockResolvedValue([]);
+    };
+    const makeTriggers = () => ({
+      registerHandler: jest.fn(),
+      schedule: jest.fn().mockResolvedValue({ id: 'tmr_0000000001' }),
+      cancel: jest.fn().mockResolvedValue({ id: 'tmr_0000000001' }),
+    });
+    const createDispatcherWithTriggers = (triggers: unknown) =>
+      new WorkerDispatcher(
+        prisma as any,
+        idGen as any,
+        realtime as any,
+        workersService as any,
+        workerClient as any,
+        sessionLifecycle as any,
+        artifactsService as any,
+        config as any,
+        ingress as any,
+        undefined as any,
+        triggers as any,
+      );
+    const startWatchdog = (d: unknown) =>
+      (d as any).startPendingWatchdog(
+        'team:tm_0000000001',
+        'a_product',
+        's_0000000001',
+        'w_0000000001',
+        'tmm_0000000001',
+      );
+
+    it('内存静默窗口重臂：调用时刻起窗口重新计满 600s（阻塞等待不会被静默判死）', async () => {
+      jest.useFakeTimers();
+      silenceSetup();
+      const d = createDispatcher();
+      const wakeSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+      await d.dispatch(request);
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS - 1);
+      await d.keepAliveSession('s_0000000001');
+      await jest.advanceTimersByTimeAsync(DEFAULT_SILENT_SESSION_WAKE_MS - 1);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(wakeSpy).not.toHaveBeenCalled();
+      expect(d.isSessionPending('s_0000000001')).toBe(true);
+      await jest.advanceTimersByTimeAsync(2);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(wakeSpy).toHaveBeenCalledTimes(1);
+      jest.useRealTimers();
+    });
+
+    it('同步重臂 durable TriggerService deadline：落新 dedupKey 行并取消旧行', async () => {
+      jest.useFakeTimers();
+      silenceSetup();
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      startWatchdog(d);
+      await jest.advanceTimersByTimeAsync(0);
+      expect(triggers.schedule).toHaveBeenCalledTimes(1);
+      const firstDedupKey = triggers.schedule.mock.calls[0][3];
+
+      const before = Date.now();
+      await d.keepAliveSession('s_0000000001');
+      await jest.advanceTimersByTimeAsync(0);
+      expect(triggers.schedule).toHaveBeenCalledTimes(2);
+      const [kind, dueAt, payload, secondDedupKey] =
+        triggers.schedule.mock.calls[1];
+      expect(kind).toBe(TRIGGER_KIND.SESSION_IDLE_SCAN);
+      expect(secondDedupKey).not.toBe(firstDedupKey);
+      expect((dueAt as Date).getTime()).toBeGreaterThanOrEqual(
+        before + (d as any).silentSessionWakeMs,
+      );
+      expect(payload).toMatchObject({
+        reason: 'silent-session',
+        sessionId: 's_0000000001',
+      });
+      expect(triggers.cancel).toHaveBeenCalledWith(firstDedupKey);
+      jest.useRealTimers();
+    });
+
+    it('会话已终态（无 pending）→ 不落 durable 行、不抛错，仅刷新 DB 活动列', async () => {
+      jest.useFakeTimers();
+      silenceSetup();
+      const triggers = makeTriggers();
+      const d = createDispatcherWithTriggers(triggers);
+      await expect(d.keepAliveSession('s_0000000001')).resolves.toBeUndefined();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(triggers.schedule).not.toHaveBeenCalled();
+      expect(prisma.session.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 's_0000000001' } }),
+      );
+      jest.useRealTimers();
+    });
+
+    it('空 sessionId（防御）→ 直接返回，不触碰 DB', async () => {
+      jest.useFakeTimers();
+      silenceSetup();
+      const d = createDispatcher();
+      await d.keepAliveSession('');
+      await jest.advanceTimersByTimeAsync(0);
+      expect(prisma.session.update).not.toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+  });
+
+  // sensitive-command-tool todo 9：阻塞处理器保活节奏 × 静默看门狗（正证 + 反证）
+  describe('secret_command 保活节奏 × 静默窗口（SILENT_SESSION_WAKE_MS 10:1 缩放）', () => {
+    /** 与生产等比缩放：窗口 600s/60=10s，节奏 60s/60=1s，比值 10:1 不变。 */
+    const SCALE = 60;
+    const wakeMs = DEFAULT_SILENT_SESSION_WAKE_MS / SCALE;
+    const cadence = SECRET_COMMAND_KEEPALIVE_MS / SCALE;
+
+    const silenceSetup = () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_0000000001',
+        instanceRef: 'ses_0001',
+        teamId: 'tm_0000000001',
+        teamMemberId: 'tmm_0000000001',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        status: 'online',
+        capabilities: {},
+      });
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+      });
+      prisma.artifact.findMany.mockResolvedValue([]);
+    };
+
+    const scaledDispatcher = async () => {
+      silenceSetup();
+      config.get.mockImplementation((key: string) =>
+        key === 'WORK_DIR'
+          ? workRoot
+          : key === 'SILENT_SESSION_WAKE_MS'
+            ? String(wakeMs)
+            : undefined,
+      );
+      const d = createDispatcher();
+      const errors: unknown[] = [];
+      d.onError((e) => errors.push(e));
+      const wakeSpy = jest
+        .spyOn(d as any, 'tryAutoRestart')
+        .mockResolvedValue(undefined);
+      await d.dispatch(request);
+      expect((d as any).silentSessionWakeMs).toBe(wakeMs);
+      return { d, errors, wakeSpy };
+    };
+
+    const agentErrorBodies = () =>
+      realtime.broadcast.mock.calls
+        .filter((c) => c[0] === EVENT_TYPES.AGENT_ERROR)
+        .map((c) => c[1]);
+
+    it('比例锁定 + 正证：节奏 = 窗口/10 跑满 5 个窗口（等待输入 + 执行）→ 过期前 ≥1 次保活、0 次唤醒、0 次 silent_session_timeout', async () => {
+      expect(SECRET_COMMAND_KEEPALIVE_MS).toBe(60_000);
+      expect(DEFAULT_SILENT_SESSION_WAKE_MS).toBe(600_000);
+      expect(cadence * 10).toBe(wakeMs);
+      expect(wakeMs).toBeLessThan(DEFAULT_SILENT_SESSION_WAKE_MS);
+
+      jest.useFakeTimers();
+      try {
+        const { d, errors, wakeSpy } = await scaledDispatcher();
+        let keepalives = 0;
+        const timer = setInterval(() => {
+          keepalives += 1;
+          void d.keepAliveSession('s_0000000001');
+        }, cadence);
+
+        await jest.advanceTimersByTimeAsync(wakeMs - 1);
+        expect(keepalives).toBeGreaterThanOrEqual(1);
+        await jest.advanceTimersByTimeAsync(wakeMs * 4);
+        clearInterval(timer);
+
+        expect(keepalives).toBeGreaterThanOrEqual(45);
+        expect(wakeSpy).not.toHaveBeenCalled();
+        expect(errors).toHaveLength(0);
+        expect(agentErrorBodies()).toHaveLength(0);
+        expect(d.isSessionPending('s_0000000001')).toBe(true);
+        expect(prisma.session.update).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 's_0000000001' } }),
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('反证：同一缩放场景禁用保活 → 4 个窗口内 3 次唤醒 + silent_session_timeout（正证三条断言全红）', async () => {
+      jest.useFakeTimers();
+      try {
+        const { d, errors, wakeSpy } = await scaledDispatcher();
+
+        for (let i = 0; i < MAX_SILENT_WAKE_ATTEMPTS + 1; i++) {
+          await jest.advanceTimersByTimeAsync(wakeMs);
+          await jest.advanceTimersByTimeAsync(0);
+        }
+
+        expect(wakeSpy).toHaveBeenCalledTimes(MAX_SILENT_WAKE_ATTEMPTS);
+        expect(errors).toHaveLength(1);
+        expect((errors[0] as { error: string }).error).toMatch(
+          new RegExp(`${wakeMs / 1000}s 无事件回流`),
+        );
+        expect(agentErrorBodies()).toEqual([
+          expect.objectContaining({ errorType: 'silent_session_timeout' }),
+        ]);
+        expect(d.isSessionPending('s_0000000001')).toBe(false);
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 

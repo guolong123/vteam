@@ -11,7 +11,7 @@ import { AgentQuestion, Prisma } from '@prisma/client';
 import { ACTOR_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
 import { TASK_ERRORS } from '../common/constants/task.constants';
 import { IdGeneratorService } from '../common/id-generator';
-import { resyncIdPrefix } from '../common/id-resync';
+import { resyncIdPrefix, resyncRequestIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeScope } from '../realtime/realtime.service';
 import { RealtimeService } from '../realtime/realtime.service';
@@ -29,6 +29,7 @@ import {
   QUESTION_CONFIRM_INTEGRITY_ERRORS,
   QUESTION_PENDING_TTL_MS,
   QUESTIONS_ERRORS,
+  SECRET_QUESTION_SOURCE,
 } from './questions.constants';
 
 /** AgentQuestion 对外 DTO（落库行脱 Json 原样透传 content，前端据此渲染弹窗）。 */
@@ -55,6 +56,16 @@ type PlatformResolveHook = (args: {
 }) => Promise<void>;
 
 /**
+ * secret_input 终态钩子（createSecretForPlatform 注册，填写/取消时触发）。
+ * secrets 值只在进程内存传给钩子执行命令：不落 content、不落 answers、不进 SSE、不写日志。
+ */
+type PlatformSecretResolveHook = (args: {
+  outcome: 'provided' | 'cancelled';
+  secrets: Record<string, string> | null;
+  actor: { type: string; id: string };
+}) => Promise<void>;
+
+/**
  * 模型提问 / 工具权限确认服务（worker 检测 serve pending → ingress 落库 → 本服务读/回复）。
  *
  * - findAll：会话页补拉（GET /questions?taskId=&status=pending），刷新/进入页面恢复弹窗；
@@ -73,6 +84,12 @@ export class QuestionsService {
   /** 平台 question 终态钩子（key=requestId，终态/超期时触发并移除）。 */
   private readonly platformResolvers = new Map<string, PlatformResolveHook>();
 
+  /** secret_input 终态钩子（key=requestId；secret 值仅经此内存传递，绝不落库/广播）。 */
+  private readonly secretResolvers = new Map<
+    string,
+    PlatformSecretResolveHook
+  >();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly idGen: IdGeneratorService,
@@ -80,11 +97,23 @@ export class QuestionsService {
     private readonly workerClient: WorkerClient,
   ) {}
 
-  /** 进程启动对齐 aq_ 前缀序号（重启续号，对齐 models/git-repos onModuleInit 模式）。 */
+  /**
+   * 进程启动对齐序号（重启续号，对齐 models/git-repos onModuleInit 模式）：
+   * - `aq_` 主键前缀；
+   * - `que` 计数器对齐 `request_id` 中 `que_platform_` 的最大数字尾段——
+   *   `agent_questions.request_id` 是 `@unique`（agent_questions_request_id_key，非 PK），
+   *   计数器重启归零后重发 `que_platform_0000000001` 会撞既有行 P2002。
+   */
   async onModuleInit(): Promise<void> {
     await resyncIdPrefix(
       this.prisma.agentQuestion,
       AGENT_QUESTION_ID_PREFIX,
+      this.idGen,
+    );
+    await resyncRequestIdPrefix(
+      this.prisma.agentQuestion,
+      'que',
+      'que_platform',
       this.idGen,
     );
   }
@@ -228,6 +257,13 @@ export class QuestionsService {
       throw new BadRequestException({
         code: QUESTIONS_ERRORS.QUESTION_ALREADY_RESOLVED,
         message: `AgentQuestion ${id} 已终态（${row.status}），不可重复回复`,
+      });
+    }
+    if (row.kind === AGENT_QUESTION_KINDS.SECRET_INPUT) {
+      // secret 不进 forwardReply（worker 转发链）：平台旁路直接终态，值仅传给注册钩子（内存）。
+      return this.resolveSecretQuestion(row, dto, {
+        type: ACTOR_TYPE.user,
+        id: userId ?? '',
       });
     }
     if (row.kind === AGENT_QUESTION_KINDS.QUESTION) {
@@ -391,7 +427,11 @@ export class QuestionsService {
   /** 回复转发核心（reply / confirmByAgent 共用）：worker 定位 → workerClient → 终态落库 → emit 收敛。 */
   private async forwardReply(
     row: AgentQuestion,
-    payload: { answers?: string[][] | null; response?: PermissionResponse },
+    payload: {
+      answers?: string[][] | null;
+      response?: PermissionResponse;
+      secrets?: Record<string, string> | null;
+    },
     actor?: { type: string; id: string },
   ): Promise<AgentQuestionDto> {
     // 平台 question（source='platform'）短路：serve 无该 requestId 必 404→expire，不经
@@ -607,6 +647,7 @@ export class QuestionsService {
    */
   private async expire(row: AgentQuestion, reason: string): Promise<void> {
     this.platformResolvers.delete(row.requestId);
+    this.secretResolvers.delete(row.requestId);
     const updated = await this.prisma.agentQuestion.update({
       where: { id: row.id },
       data: {
@@ -690,6 +731,9 @@ export class QuestionsService {
     if (options.onResolved) {
       this.platformResolvers.set(requestId, options.onResolved);
     }
+    // create emit 与 scope 同源补顶层 teamId：payload.taskId 保持真实 t_... 以兼容
+    // task-scope 消费者；否则 web matchesScope team: 兜底无法匹配、实时帧被丢弃。
+    const createScope = await this.scopeOf(row.taskId, row.sessionId);
     await this.realtime.emit(
       EVENT_TYPES.AGENT_QUESTION,
       {
@@ -698,10 +742,11 @@ export class QuestionsService {
           await this.managedModeOf(row.taskId, row.sessionId),
         ),
         taskId: row.taskId,
+        teamId: createScope.type === 'team' ? createScope.id : null,
         agentId: row.agentId,
         sessionId: row.sessionId,
       },
-      await this.scopeOf(row.taskId, row.sessionId),
+      createScope,
     );
     this.logger.log(
       `[questions] 平台创建 question id=${row.id} requestId=${requestId} taskId=${taskId}（确认门）`,
@@ -709,10 +754,86 @@ export class QuestionsService {
     return this.toDto(row, await this.managedModeOf(row.taskId, row.sessionId));
   }
 
-  /** content.source === 'platform' 的平台 question 判定（旁路转发的标记分支）。 */
+  /**
+   * 平台侧创建 secret_input question（secret_command 等待用户填写敏感值）。
+   * - content 只持久化模板与变量元数据（source/template/variables/reason），绝不存值；
+   * - 托管模式 fail-closed：团队 managedMode=true 时在 agentQuestion.create **之前**拒绝
+   *   （创建调用为 0，不产生孤儿 pending 行）；
+   * - requestId 用 que_platform_ 前缀（与 createForPlatform 同规则，防唯一键碰撞）；
+   * - options.onSecretResolved：终态（填写/取消）钩子，secrets 仅在进程内存传递。
+   */
+  async createSecretForPlatform(
+    taskId: string,
+    input: {
+      template: string;
+      variables: Array<{ name: string; secret?: boolean }>;
+      reason?: string;
+    },
+    options: {
+      agentId?: string;
+      onSecretResolved?: PlatformSecretResolveHook;
+    } = {},
+  ): Promise<AgentQuestionDto> {
+    if (await this.managedModeOf(taskId, null)) {
+      throw new ForbiddenException({
+        code: QUESTIONS_ERRORS.QUESTION_SECRET_MANAGED_FORBIDDEN,
+        message: '团队已开启托管模式，敏感输入不予受理（fail-closed）',
+      });
+    }
+    const seq = await this.idGen.nextId('que');
+    const requestId = `que_platform_${seq.split('_')[1] ?? ''}`;
+    const id = await this.idGen.nextId(AGENT_QUESTION_ID_PREFIX);
+    const content: Prisma.InputJsonValue = {
+      source: SECRET_QUESTION_SOURCE,
+      template: input.template,
+      variables: (input.variables ?? []).map((v) => ({
+        name: v.name,
+        secret: v.secret ?? true,
+      })),
+      reason: input.reason ?? null,
+    } as unknown as Prisma.InputJsonValue;
+    const row = await this.prisma.agentQuestion.create({
+      data: {
+        id,
+        requestId,
+        sessionId: (await this.mainAgentSessionOf(taskId)) ?? 's_placeholder',
+        taskId,
+        agentId: options.agentId ?? '',
+        kind: AGENT_QUESTION_KINDS.SECRET_INPUT,
+        content,
+        status: AGENT_QUESTION_STATUS.PENDING,
+      },
+    });
+    if (options.onSecretResolved) {
+      this.secretResolvers.set(requestId, options.onSecretResolved);
+    }
+    const managedMode = await this.managedModeOf(row.taskId, row.sessionId);
+    // create emit 与 scope 同源补顶层 teamId（口径同 createForPlatform）。
+    const secretScope = await this.scopeOf(row.taskId, row.sessionId);
+    await this.realtime.emit(
+      EVENT_TYPES.AGENT_QUESTION,
+      {
+        question: this.toDto(row, managedMode),
+        taskId: row.taskId,
+        teamId: secretScope.type === 'team' ? secretScope.id : null,
+        agentId: row.agentId,
+        sessionId: row.sessionId,
+      },
+      secretScope,
+    );
+    this.logger.log(
+      `[questions] 平台创建 secret_input id=${row.id} requestId=${requestId} taskId=${taskId}（敏感输入，值不落库）`,
+    );
+    return this.toDto(row, managedMode);
+  }
+
+  /** content.source === 'platform'|'secret_input' 的平台 question 判定（旁路转发的标记分支）。 */
   private isPlatformQuestion(row: AgentQuestion): boolean {
     const content = (row.content ?? {}) as { source?: string };
-    return content.source === PLATFORM_QUESTION_SOURCE;
+    return (
+      content.source === PLATFORM_QUESTION_SOURCE ||
+      content.source === SECRET_QUESTION_SOURCE
+    );
   }
 
   /** content.requesterInstanceId：平台 question 创建时记录的发起者实例 id（历史/占位行为 null）。 */
@@ -731,9 +852,20 @@ export class QuestionsService {
    */
   private async resolvePlatformQuestion(
     row: AgentQuestion,
-    payload: { answers?: string[][] | null; response?: PermissionResponse },
+    payload: {
+      answers?: string[][] | null;
+      response?: PermissionResponse;
+      secrets?: Record<string, string> | null;
+    },
     actor?: { type: string; id: string },
   ): Promise<AgentQuestionDto> {
+    if (row.kind === AGENT_QUESTION_KINDS.SECRET_INPUT) {
+      return this.resolveSecretQuestion(
+        row,
+        { secrets: payload.secrets },
+        actor ?? { type: ACTOR_TYPE.user, id: '' },
+      );
+    }
     const answers: Prisma.InputJsonValue =
       row.kind === AGENT_QUESTION_KINDS.QUESTION
         ? (payload.answers as Prisma.InputJsonValue)
@@ -786,6 +918,123 @@ export class QuestionsService {
         resolved: true,
       },
       confirmTeamId ? { type: 'team', id: confirmTeamId } : { type: 'global' },
+    );
+    return this.toDto(updated, managedMode);
+  }
+
+  /** content.variables[].name 清单（secret_input 已声明变量；content 缺失/畸形 → 空数组）。 */
+  private secretVariableNamesOf(row: AgentQuestion): string[] {
+    const content = (row.content ?? {}) as { variables?: unknown };
+    if (!Array.isArray(content.variables)) {
+      return [];
+    }
+    return content.variables
+      .map((v) => (v as { name?: unknown }).name)
+      .filter((name): name is string => typeof name === 'string');
+  }
+
+  /**
+   * secret_input 终态（平台旁路：不经 workerClient、不经 forwardReply）。
+   * - `{secrets:{变量:值}}` → resolved；值只传给注册钩子（进程内存），落库 answers=
+   *   `{provided,filled,actorType,actorId}`（filled=变量名清单，不含值）；
+   * - `{secrets:null}` → 取消：rejected + 钩子 outcome='cancelled'（不执行命令）；
+   * - 缺 secrets / 未声明变量 / 已声明变量缺值 → 400（终态重复回复在 reply 入口 400）。
+   */
+  private async resolveSecretQuestion(
+    row: AgentQuestion,
+    dto: { secrets?: Record<string, string> | null },
+    actor: { type: string; id: string },
+  ): Promise<AgentQuestionDto> {
+    if (dto.secrets === undefined) {
+      throw new BadRequestException({
+        code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY,
+        message:
+          'secret_input 回复需携带 secrets（{变量名: 值}）或 null（取消）',
+      });
+    }
+    const declared = this.secretVariableNamesOf(row);
+    const secrets = dto.secrets;
+    if (secrets !== null) {
+      for (const key of Object.keys(secrets)) {
+        if (!declared.includes(key)) {
+          throw new BadRequestException({
+            code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY,
+            message: `secrets 含未声明变量 ${key}`,
+          });
+        }
+      }
+      for (const name of declared) {
+        if (!Object.prototype.hasOwnProperty.call(secrets, name)) {
+          throw new BadRequestException({
+            code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY,
+            message: `secrets 缺少已声明变量 ${name}`,
+          });
+        }
+        if (typeof secrets[name] !== 'string') {
+          throw new BadRequestException({
+            code: QUESTIONS_ERRORS.QUESTION_INVALID_REPLY,
+            message: `secrets.${name} 必须为字符串`,
+          });
+        }
+      }
+    }
+    const provided = secrets !== null;
+    const status = provided
+      ? AGENT_QUESTION_STATUS.RESOLVED
+      : AGENT_QUESTION_STATUS.REJECTED;
+    const answers: Prisma.InputJsonValue = {
+      provided,
+      filled: provided ? declared : [],
+      actorType: actor.type,
+      actorId: actor.id,
+    };
+    const updated = await this.prisma.agentQuestion.update({
+      where: { id: row.id },
+      data: { status, answers },
+    });
+    this.logger.log(
+      `[questions] secret_input 终态 id=${row.id} status=${status} filled=${provided ? declared.length : 0} requestId=${row.requestId}（旁路，不转发 worker）`,
+    );
+    const hook = this.secretResolvers.get(row.requestId);
+    if (hook) {
+      try {
+        await hook({
+          outcome: provided ? 'provided' : 'cancelled',
+          secrets,
+          actor,
+        });
+      } catch (err) {
+        // 钩子错误 message 由执行链拼装（可能含命令输出/secret）：落日志前精确替换脱敏。
+        let msg = (err as Error)?.message ?? String(err);
+        for (const v of Object.values(secrets ?? {})) {
+          if (v) {
+            msg = msg.split(v).join('***');
+          }
+        }
+        this.logger.error(
+          `[questions] secret_input 终态钩子执行失败 id=${row.id} requestId=${row.requestId}：${msg}`,
+        );
+      } finally {
+        this.secretResolvers.delete(row.requestId);
+      }
+    }
+    const managedMode = await this.managedModeOf(
+      updated.taskId,
+      updated.sessionId,
+    );
+    const secretTeamId = await this.teamIdOf(updated.taskId, updated.sessionId);
+    await this.realtime.emit(
+      EVENT_TYPES.AGENT_QUESTION,
+      {
+        question: this.toDto(updated, managedMode),
+        taskId:
+          updated.taskId || (secretTeamId ? `team:${secretTeamId}` : null),
+        teamId: secretTeamId,
+        agentId: updated.agentId,
+        sessionId: updated.sessionId,
+        resolved: true,
+      },
+      secretTeamId ? { type: 'team', id: secretTeamId } : { type: 'global' },
     );
     return this.toDto(updated, managedMode);
   }

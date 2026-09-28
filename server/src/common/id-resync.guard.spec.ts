@@ -21,8 +21,12 @@ const SRC_ROOT = path.join(__dirname, '..');
 /** 豁免前缀 → 理由（每条必须说明为何无需启动期 resync）。 */
 const RESYNC_EXEMPT: Record<string, string> = {
   ev: 'realtime 事件自带 P2002 自愈重试（realtime.service.ts isPrimaryConflict/reseedFromDb）',
-  que: '仅用于生成 requestId 字符串（que_platform_<seq>），非任何表主键，无主键冲突风险',
 };
+// que 已移出豁免表：原理由「非任何表主键，无主键冲突风险」错误——
+// agent_questions.request_id 是 @unique 唯一约束（agent_questions_request_id_key），并非
+// 「无约束可撞」；计数器重启归零后 createSecretForPlatform 重发 que_platform_0000000001
+// 照样撞 P2002。现已由 QuestionsService.onModuleInit 的
+// resyncRequestIdPrefix('que', 'que_platform') 按 request_id 续号，按生成点识别即可。
 
 function collectSourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -144,12 +148,16 @@ describe('防回归：IdGeneratorService 前缀须有启动期 resync', () => {
         const secondArg = hit.arg; // collectCallArgs 只取到首个逗号（即 model）
         void secondArg;
       }
-      // resync 的第二实参需单独解析：按行取 `resyncIdPrefix(` 后第一个逗号到第二个逗号之间。
-      const re = /resyncIdPrefix\(\s*[^,]+,\s*([^,]+),/g;
-      let m: RegExpExecArray | null;
-      while ((m = re.exec(text)) !== null) {
-        const prefix = resolvePrefix(m[1], constants);
-        if (prefix !== null) resynced.add(prefix);
+      // resync 的第二实参需单独解析：按行取 `<helper>(` 后第一个逗号到第二个逗号之间。
+      // 两类入口：resyncIdPrefix(model, prefix, idGen) 主键续号；
+      // resyncRequestIdPrefix(model, idPrefix, requestIdPrefix, idGen) requestId 续号。
+      for (const helper of ['resyncIdPrefix', 'resyncRequestIdPrefix']) {
+        const re = new RegExp(`${helper}\\(\\s*[^,]+,\\s*([^,]+),`, 'g');
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(text)) !== null) {
+          const prefix = resolvePrefix(m[1], constants);
+          if (prefix !== null) resynced.add(prefix);
+        }
       }
     }
 

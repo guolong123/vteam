@@ -18,7 +18,7 @@ import {
  * The archived migration carried eleven literal UPDATEs.  A squashed baseline
  * cannot retain those one-off statements, but it must retain the resulting
  * schema and the current matrix source must retain the post-split semantics.
- * These tests therefore assert the final 28-key matrices, including the cells
+ * These tests therefore assert the final 29-key matrices, including the cells
  * that the old grouped keys used to collapse.
  */
 
@@ -29,6 +29,15 @@ const BASELINE = path.resolve(
   'prisma',
   'migrations',
   '20260925000000_squashed_baseline',
+  'migration.sql',
+);
+const SECRET_CAPABILITY_UPGRADE = path.resolve(
+  __dirname,
+  '..',
+  '..',
+  'prisma',
+  'migrations',
+  '20260926000000_secret_command_capability',
   'migration.sql',
 );
 
@@ -80,9 +89,9 @@ describe('agent capability split current-schema contract (historical 20260921000
     expect(roles).toMatch(/`capabilities`\s+JSON NULL/);
   });
 
-  it('the current capability catalog is the complete 28-key post-split catalog', () => {
-    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(28);
-    expect(new Set(PLATFORM_CAPABILITY_KEYS).size).toBe(28);
+  it('the current capability catalog is the complete 29-key post-split catalog', () => {
+    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(29);
+    expect(new Set(PLATFORM_CAPABILITY_KEYS).size).toBe(29);
     for (const retired of RETIRED_KEYS) {
       expect(PLATFORM_CAPABILITY_KEYS).not.toContain(retired);
     }
@@ -92,24 +101,26 @@ describe('agent capability split current-schema contract (historical 20260921000
     expect(Object.keys(BUILTIN_ROLE_CAPABILITY_MAPS)).toEqual(BUILTIN_KEYS);
     for (const key of BUILTIN_KEYS) {
       expectBooleanCatalog(BUILTIN_ROLE_CAPABILITY_MAPS[key]);
+      expect(BUILTIN_ROLE_CAPABILITY_MAPS[key]['secret.command']).toBe(true);
     }
   });
 
   it('project_manager remains explicitly fully authorized', () => {
     const matrix = BUILTIN_ROLE_CAPABILITY_MAPS.project_manager;
-    expect(Object.keys(matrix)).toHaveLength(28);
+    expect(Object.keys(matrix)).toHaveLength(29);
     expect(Object.values(matrix).every((value) => value === true)).toBe(true);
   });
 
   it('external roles retain the explicit least-privilege matrix', () => {
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((value) => value),
-    ).toHaveLength(8);
+    ).toHaveLength(9);
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(
         (value) => value === false,
       ),
     ).toHaveLength(20);
+    expect(EXTERNAL_AGENT_ROLE_CAPABILITIES['secret.command']).toBe(true);
     expectBooleanCatalog(EXTERNAL_AGENT_ROLE_CAPABILITIES);
     expect(EXTERNAL_AGENT_ROLE_KEYS).toEqual([
       'sisyphus',
@@ -121,14 +132,15 @@ describe('agent capability split current-schema contract (historical 20260921000
     }
   });
 
-  it('ar_general-equivalent factory matrix remains balanced at 14 allow and 14 deny', () => {
+  it('ar_general-equivalent factory matrix has 15 allow and 14 deny (secret.command newly allowed)', () => {
     const factory = buildFactoryCapabilityMatrix();
     expect(
       Object.values(factory).filter((value) => value === true),
-    ).toHaveLength(14);
+    ).toHaveLength(15);
     expect(
       Object.values(factory).filter((value) => value === false),
     ).toHaveLength(14);
+    expect(factory['secret.command']).toBe(true);
     expectBooleanCatalog(factory);
   });
 
@@ -164,5 +176,28 @@ describe('agent capability split current-schema contract (historical 20260921000
     expect(executable).not.toMatch(/issue\.manage|memory\.manage/);
     expect(executable).not.toMatch(/^\s*(UPDATE|INSERT|DELETE)\s/m);
     expect(executable).not.toMatch(/JSON_(SET|REMOVE|OBJECT)\(/);
+  });
+});
+
+describe('secret.command upgrade migration (post-baseline 20260926000000)', () => {
+  const sql = fs.readFileSync(SECRET_CAPABILITY_UPGRADE, 'utf8');
+  const executable = executableSql(sql);
+
+  it('存量 agent_roles 矩阵显式回填 secret.command=true（升级路径不依赖「缺失键=允许」）', () => {
+    expect(executable).toMatch(/UPDATE\s+`agent_roles`/i);
+    expect(executable).toContain('JSON_SET');
+    expect(executable).toContain('secret.command');
+    expect(executable).toContain('JSON_CONTAINS_PATH');
+    expect(executable).toMatch(/\$\."secret\.command"/);
+    expect(executable).toMatch(/WHERE/i);
+  });
+
+  it('只补新键：不改写其他能力点、不建 secret 表或列（无 DDL、无 JSON_REMOVE）', () => {
+    expect(executable).not.toMatch(
+      /CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE/i,
+    );
+    expect(executable).not.toMatch(/JSON_(REMOVE|OBJECT|MERGE)\(/i);
+    expect(executable).not.toMatch(/^\s*(INSERT|DELETE)\s/im);
+    expect(executable.match(/UPDATE\s+`agent_roles`/gi)).toHaveLength(1);
   });
 });

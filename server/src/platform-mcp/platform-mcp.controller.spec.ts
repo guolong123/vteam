@@ -1,6 +1,7 @@
 import { ForbiddenException, INestApplication } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
+import { EventEmitter } from 'node:events';
 import * as request from 'supertest';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
 import { PlatformMcpController } from './platform-mcp.controller';
@@ -43,6 +44,7 @@ describe('PlatformMcpController (HTTP)', () => {
     gitReposList: jest.Mock;
     hookRegister: jest.Mock;
     hookCancel: jest.Mock;
+    secretCommand: jest.Mock;
   };
 
   /** 手写 JSON-RPC 端点：无需 Accept 头，直接 POST JSON 即可。 */
@@ -173,6 +175,7 @@ describe('PlatformMcpController (HTTP)', () => {
         hookId: 'hks_0000000001',
         status: 'cancelled',
       }),
+      secretCommand: jest.fn(),
     };
     service.resolveToolCallerId = jest
       .fn()
@@ -268,7 +271,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 31 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search/memory_update + team_view/my_profile + team_add_member + plan_complete/plan_finalize/plan_confirm + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 32 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search/memory_update + team_view/my_profile + team_add_member + plan_complete/plan_finalize/plan_confirm + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel + secret_command；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -316,6 +319,7 @@ describe('PlatformMcpController (HTTP)', () => {
         'git_repos_list',
         'hook_register',
         'hook_cancel',
+        'secret_command',
       ]);
 
       for (const tool of tools) {
@@ -1343,6 +1347,57 @@ describe('PlatformMcpController (HTTP)', () => {
 
       expect(res.body).toEqual({ accepted: true });
       expect(service.chatHistory).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('客户端断开信号（阻塞式 secret_command 的 handler 第三参）', () => {
+    it('tools/call 注入 AbortSignal；响应未写完即 close → signal 立即 abort', async () => {
+      service.secretCommand.mockResolvedValue({ status: 'cancelled' });
+      const controller = app.get(PlatformMcpController);
+      const req = Object.assign(new EventEmitter(), {
+        headers: { 'x-worker-id': 'w_0001' },
+      });
+      const res = Object.assign(new EventEmitter(), {
+        writableEnded: false,
+        status: jest.fn(),
+      });
+
+      const dispatch = controller.handle(
+        req as never,
+        res as never,
+        {
+          jsonrpc: '2.0',
+          id: 11,
+          method: 'tools/call',
+          params: {
+            name: 'secret_command',
+            arguments: {
+              taskId: 't_0000000001',
+              selfInstanceId: 'tmm_sender',
+              command: 'echo {{TOKEN}}',
+              variables: [{ name: 'TOKEN' }],
+            },
+          },
+        } as never,
+      ) as Promise<Record<string, unknown>>;
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(service.secretCommand).toHaveBeenCalledTimes(1);
+      const [handlerCtx, handlerArgs, signal] =
+        service.secretCommand.mock.calls[0];
+      expect(handlerCtx).toEqual({ workerId: 'w_0001' });
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal.aborted).toBe(false);
+      expect(handlerArgs).toMatchObject({ taskId: 't_0000000001' });
+
+      res.emit('close');
+      expect(signal.aborted).toBe(true);
+
+      await expect(dispatch).resolves.toMatchObject({
+        jsonrpc: '2.0',
+        id: 11,
+        result: expect.any(Object),
+      });
     });
   });
 });

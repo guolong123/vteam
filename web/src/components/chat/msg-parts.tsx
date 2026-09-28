@@ -3,7 +3,8 @@
  * =============================================
  * 将一条 agent 消息的 content.parts 按 10 篇 §2.2/§2.3 规则映射为 UI：
  * - reasoning / thinking → MsgThinking（思考折叠条，thinking 为 reasoning 别名）
- * - tool               → MsgTool（工具卡片三态）
+ * - tool               → MsgTool（工具卡片四态；running secret_command + pending
+ *                        secret_input question → awaiting-input，见 secretAwaiting prop）
  * - error              → MsgError（消息级错误）
  * - aborted            → MsgAborted（灰「已中断」）；按 10 篇 §2.3：中断时其余
  *                       未完成 Part 不渲染，仅显示中断灰条
@@ -32,6 +33,7 @@ import type { ChatBubbleAttachment } from "@/src/components/ui";
 import { LoadingDots } from "./loading-indicator";
 import { MsgThinking } from "./msg-thinking";
 import { MsgTool } from "./msg-tool";
+import type { MsgToolStatus } from "./msg-tool";
 import { MsgError } from "./msg-error";
 import { MsgAborted } from "./msg-aborted";
 import { MsgUnknownPart } from "./msg-unknown-part";
@@ -96,7 +98,7 @@ function formatToolIO(value: unknown): string {
     : serialized;
 }
 
-/** serve tool part 状态值（completed 等）→ MsgTool 三态（running/success/failed）。 */
+/** serve tool part 状态值（completed 等）→ MsgTool 四态（running/success/failed/awaiting-input）。 */
 function toToolStatus(value: unknown): "running" | "success" | "failed" {
   const s = typeof value === "string" ? value.toLowerCase() : "";
   if (s === "running" || s === "streaming" || s === "pending" || s === "queued") {
@@ -107,6 +109,11 @@ function toToolStatus(value: unknown): "running" | "success" | "failed" {
   }
   // success / completed / done / 空 → success（serve 终态以 completed 落盘）
   return "success";
+}
+
+/** serve tool part 工具名（`<serverName>_<toolName>` 或裸名）是否敏感命令工具。 */
+function isSecretCommandPart(name: string): boolean {
+  return name === "secret_command" || name.endsWith("_secret_command");
 }
 
 export interface MsgPartsProps {
@@ -127,9 +134,17 @@ export interface MsgPartsProps {
   grouped?: boolean;
   /** B8 头像缩写：调用方从已解析人名生成（lib/message-initials），只透传给共享身份栏 */
   initials?: string;
+  /**
+   * 敏感命令「等待填写」派生（sensitive-command-tool todo 8）：调用方判定当前消息所属
+   * session 存在 pending `secret_input` question（来自 agent.question / GET /questions）后传入。
+   * 本层只做两件事——仅对 running 的 `secret_command` tool part 升级为 awaiting-input，
+   * 其余 part / 其余状态一律按原三态渲染。question resolve/reject/expire 或 tool part
+   * 落终态时调用方把该 prop 收回（或本层因终态自然不命中），状态即清除。
+   */
+  secretAwaiting?: boolean;
 }
 
-export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, isMentionMe, style, className, messageStatus, grouped, initials }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting }: MsgPartsProps) {
   const list = (parts ?? []) as PartShape[];
   /** 终态收敛：消息已 sent/failed 但 part 仍 pending/running → sent 收敛成功，failed 收敛失败 */
   const terminal = messageStatus === "sent" || messageStatus === "failed";
@@ -174,14 +189,19 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
               rawState !== undefined && rawState !== null && typeof rawState === "object"
                 ? (rawState as unknown as Record<string, unknown>)
                 : undefined;
-            let status = toToolStatus(st?.status ?? p.status);
+            const toolName = String(p.tool ?? p.name ?? "工具");
+            let status: MsgToolStatus = toToolStatus(st?.status ?? p.status);
             if (terminal && status === "running") {
               status = messageStatus === "failed" ? "failed" : "success";
+            }
+            // awaiting-input 只在「仍在 running」时成立：question 已收敛或 part 已终态都不命中
+            if (secretAwaiting && status === "running" && isSecretCommandPart(toolName)) {
+              status = "awaiting-input";
             }
             return (
               <MsgTool
                 key={i}
-                name={String(p.tool ?? p.name ?? "工具")}
+                name={toolName}
                 status={status}
                 input={formatToolIO(st?.input)}
                 output={formatToolIO(st?.output)}

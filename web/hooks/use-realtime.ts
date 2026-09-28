@@ -228,9 +228,27 @@ export interface RealtimeQuestionInfo {
   custom?: boolean;
 }
 
+/** secret_input 变量元数据条目（对齐 server createSecretForPlatform content.variables：只有 name/secret）。 */
+export interface RealtimeSecretVariable {
+  name: string;
+  secret?: boolean;
+}
+
+/**
+ * secret_input content（对齐 server createSecretForPlatform 落库形状）：
+ * 只含模板与变量元数据，**不含也不会含任何 secret 值**（值只经 reply 请求体提交）。
+ */
+export interface RealtimeSecretContent {
+  source?: string;
+  template?: string;
+  variables?: RealtimeSecretVariable[];
+  reason?: string | null;
+}
+
 /**
  * agent.question 事件 payload（对齐 EVENT_TYPES.AGENT_QUESTION，ingress 落库后 broadcast / reply 后收敛）。
- * kind=question：content = {questions: RealtimeQuestionInfo[]}；kind=permission：content = {title, pattern, type}。
+ * kind=question：content = {questions: RealtimeQuestionInfo[]}；kind=permission：content = {title, pattern, type}；
+ * kind=secret_input：content = {source, template, variables, reason}（只读模板 + 变量元数据，无值）。
  * resolved=true 表示该 question 已被回复（前端据此关闭弹窗）。
  */
 export interface RealtimeQuestionEvent {
@@ -240,10 +258,11 @@ export interface RealtimeQuestionEvent {
     sessionId: string;
     taskId: string | null;
     agentId: string | null;
-    kind: "question" | "permission";
+    kind: "question" | "permission" | "secret_input";
     content:
       | { questions: RealtimeQuestionInfo[] }
-      | { title?: string; pattern?: string | string[] | null; type?: string };
+      | { title?: string; pattern?: string | string[] | null; type?: string }
+      | RealtimeSecretContent;
     status: string;
     /** 托管模式标记：任务开启托管时请求改由主 Agent 确认，页面不弹窗。 */
     managedMode?: boolean;

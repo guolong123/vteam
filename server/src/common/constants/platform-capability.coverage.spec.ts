@@ -27,9 +27,9 @@ describe('platform capability catalogue coverage', () => {
     expect(PLATFORM_CAPABILITY_KEYS).toEqual(keys);
   });
 
-  it('目录覆盖 VTEAM_MCP_TOOL_NAMES 全 31 项，且每项恰属一个能力点（28 点 ↔ 31 工具）', () => {
-    expect(PLATFORM_CAPABILITIES).toHaveLength(28);
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(31);
+  it('目录覆盖 VTEAM_MCP_TOOL_NAMES 全 32 项，且每项恰属一个能力点（29 点 ↔ 32 工具）', () => {
+    expect(PLATFORM_CAPABILITIES).toHaveLength(29);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(32);
     const owner = new Map<string, string>();
     let toolSum = 0;
     for (const capability of PLATFORM_CAPABILITIES) {
@@ -39,7 +39,7 @@ describe('platform capability catalogue coverage', () => {
         owner.set(tool, capability.key);
       }
     }
-    expect(toolSum).toBe(31);
+    expect(toolSum).toBe(32);
     expect([...owner.keys()].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
     for (const tool of VTEAM_MCP_TOOL_NAMES) {
       expect(capabilityKeyForTool(tool)).toBe(owner.get(tool));
@@ -55,6 +55,21 @@ describe('platform capability catalogue coverage', () => {
     // 已拆分的组键不再是合法能力点键。
     expect(isPlatformCapabilityKey('issue.manage')).toBe(false);
     expect(isPlatformCapabilityKey('memory.manage')).toBe(false);
+  });
+
+  it('secret_command：vteam_secret_command → secret.command，defaultDeny=false 且出厂 true', () => {
+    expect(capabilityKeyForTool('vteam_secret_command')).toBe('secret.command');
+    const capability = PLATFORM_CAPABILITIES.find(
+      (c) => c.key === 'secret.command',
+    );
+    expect(capability).toBeDefined();
+    expect(capability?.tools).toEqual(['vteam_secret_command']);
+    expect(capability?.defaultDeny).toBe(false);
+    expect(buildFactoryCapabilityMatrix()['secret.command']).toBe(true);
+    expect(isCapabilityGranted({}, 'secret.command')).toBe(true);
+    expect(
+      isCapabilityGranted({ 'secret.command': false }, 'secret.command'),
+    ).toBe(false);
   });
 
   it('未知工具映射为 null（unknown 面 fail-closed 的依据）', () => {

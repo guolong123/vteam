@@ -123,8 +123,23 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
     }
   });
 
+  it('全 7 角色 toolAllows 显式放行 vteam_secret_command（secret.command 能力点全角色开放）', () => {
+    let granted = 0;
+    for (const name of ROLE_NAMES) {
+      expect(ROLE_BOUNDARIES[name].toolAllows).toHaveProperty(
+        'vteam_secret_command',
+        'allow',
+      );
+      expect(ROLE_BOUNDARIES[name].mcpDenies).not.toContain(
+        'vteam_secret_command',
+      );
+      granted += 1;
+    }
+    expect(granted).toBe(7);
+  });
+
   it('mcpDenies = 全部 MCP 工具中未列入 toolAllows 者（无 server-gated 例外），且全为 vteam_ 真实名', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(31);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(32);
     for (const mcp of VTEAM_MCP_TOOL_NAMES) expect(mcp).toMatch(/^vteam_/);
     for (const name of ROLE_NAMES) {
       const { toolAllows, mcpDenies } = ROLE_BOUNDARIES[name];
@@ -314,6 +329,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       vteam_plan_confirm: 'allow',
       vteam_todo: 'allow',
       vteam_submit_artifact: 'allow',
+      vteam_secret_command: 'allow',
       browser: 'allow',
     });
     expect(ROLE_BOUNDARIES['vteam-librarian'].toolAllows).toEqual({
@@ -334,6 +350,7 @@ describe('ROLE_BOUNDARIES — 角色边界映射（agent 名 + 真实工具名�
       git_log: 'allow',
       browser: 'allow',
       vteam_todo: 'allow',
+      vteam_secret_command: 'allow',
     });
     // 反转旧断言：formerly-gated 工具按授权矩阵进/不进 toolAllows（不再一律不进）。
     for (const name of ROLE_NAMES) {

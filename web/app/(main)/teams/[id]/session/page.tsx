@@ -28,7 +28,7 @@ import { AgentAvatar, ChatBubble, MessageInput } from "@/src/components/ui";
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
 import { LoadingIndicator, MsgError, QuestionModal, MsgParts } from "@/src/components/chat";
-import type { QuestionModalData } from "@/src/components/chat";
+import type { QuestionModalData, QuestionModalSubmitPayload } from "@/src/components/chat";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { TaskInfoEditModal } from "@/src/components/tasks/TaskInfoEditModal";
@@ -99,6 +99,13 @@ function formatTime(iso: string): string {
   return `${hh}:${mm}`;
 }
 
+/**
+ * questionQueue 条目（QuestionModalData + sessionId）：
+ * server AgentQuestionDto / agent.question 事件都带 sessionId，QuestionModalData 未声明，
+ * 工具卡 awaiting-input 的「同会话」派生要用它（sensitive-command-tool todo 8）。
+ */
+type SessionQuestionData = QuestionModalData & { sessionId?: string | null };
+
 interface ChannelItem {
   id: string;
   type: string;
@@ -154,8 +161,14 @@ export default function TeamSessionPage() {
   const instanceIdBySessionRef = useRef<Record<string, string | null>>({});
   const [loadingMore, setLoadingMore] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
-  const [pendingQuestion, setPendingQuestion] = useState<QuestionModalData | null>(null);
+  // pending question 单队列：head 即当前弹窗，后到的 pending 只入队不覆盖（终态后自动显示下一条）。
+  const [questionQueue, setQuestionQueue] = useState<SessionQuestionData[]>([]);
+  const pendingQuestion = questionQueue[0] ?? null;
   const [questionSubmitting, setQuestionSubmitting] = useState(false);
+  // 当前弹窗切换时清掉上一条的提交中态，避免「处理中…」残留给下一条。
+  useEffect(() => {
+    setQuestionSubmitting(false);
+  }, [pendingQuestion?.id]);
   const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
   const [taskEditOpen, setTaskEditOpen] = useState(false);
   const [taskDetailOpen, setTaskDetailOpen] = useState(false);
@@ -380,7 +393,7 @@ export default function TeamSessionPage() {
   const questionsQuery = useQuery({
     queryKey: ["questions", effectivePanelTaskId ?? teamId, "pending"],
     queryFn: () =>
-      api.get<QuestionModalData[]>(`/questions`, {
+      api.get<SessionQuestionData[]>(`/questions`, {
         query: effectivePanelTaskId
           ? { taskId: effectivePanelTaskId, status: "pending" }
           : { teamId, status: "pending" },
@@ -390,10 +403,15 @@ export default function TeamSessionPage() {
   useEffect(() => {
     const pending = questionsQuery.data;
     if (!pending || pending.length === 0) return;
-    // 取首个**非托管** pending（托管项由主 Agent 路由，前端不弹）——
-    // 盲取 [0] 会让托管项挡住后面可直接处理的权限/问题。
-    const actionable = pending.find((p) => !p.managedMode);
-    setPendingQuestion((prev) => prev ?? (actionable ?? null));
+    // 取**非托管** pending（托管项由主 Agent 路由，前端不弹）——
+    // 盲取 [0] 会让托管项挡住后面可直接处理的权限/问题/敏感输入。
+    const actionable = pending.filter((p) => !p.managedMode);
+    if (actionable.length === 0) return;
+    setQuestionQueue((prev) => {
+      const known = new Set(prev.map((q) => q.id));
+      const added = actionable.filter((p) => !known.has(p.id));
+      return added.length === 0 ? prev : [...prev, ...added];
+    });
   }, [questionsQuery.data]);
 
   const teamAgentMembers = useMemo(() => {
@@ -477,6 +495,50 @@ export default function TeamSessionPage() {
       return out;
     },
     [teamAgentMembers, team],
+  );
+
+  /**
+   * pending `secret_input` question 的「同会话」身份键（工具卡 awaiting-input 的唯一派生源，
+   * sensitive-command-tool todo 8）。
+   *
+   * 相关性口径：question 只带 `sessionId`/`agentId`，而消息 DTO 只带 `senderId`/`senderInstanceId`
+   * （没有 sessionId），所以「同一 session」在客户端只能落到**该会话的身份键**上判定——
+   * 以 `question.agentId`（= 被阻塞会话的 agent，server `secretCommand` 传入）为主键，
+   * 经 `agentKeysFor` 展开成 agentId / 任务实例 id / 团队成员 id 三种别名；
+   * `sessionId` 仅在能反查到任务实例且该实例 agentId 一致时补一个实例别名
+   * （server 该字段落的是任务主 Agent 会话，直接采信会把别的会话误点亮）。
+   *
+   * 清除时机全在数据源：question resolve/reject/expire 出队（SSE `resolved` / reply 成功 /
+   * 410 静默关闭 / GET 补拉不再返回 pending）→ 集合即空，卡片回落 running；
+   * tool part 落终态则由 MsgParts 侧 `status === "running"` 门控自然不命中。
+   * 只收 `kind === 'secret_input'` 且 `status === 'pending'` 的条目，托管项在入队时已被过滤。
+   */
+  const pendingSecretKeys = useMemo(() => {
+    const keys = new Set<string>();
+    const pending = questionQueue.filter(
+      (q) => q.kind === "secret_input" && !q.managedMode && (!q.status || q.status === "pending"),
+    );
+    if (pending.length === 0) return keys;
+    const instBySession = new Map<string, TaskInstance>();
+    for (const task of [queueHeadTask, panelTask]) {
+      for (const inst of task?.instances ?? []) {
+        if (inst.sessionId) instBySession.set(inst.sessionId, inst);
+      }
+    }
+    for (const q of pending) {
+      const inst = q.sessionId ? instBySession.get(q.sessionId) : undefined;
+      const agentId = q.agentId || inst?.agentId || "";
+      const instanceId = inst && (!agentId || inst.agentId === agentId) ? inst.id : null;
+      for (const key of agentKeysFor({ instanceId, agentId: agentId || null })) keys.add(key);
+    }
+    return keys;
+  }, [questionQueue, queueHeadTask, panelTask, agentKeysFor]);
+
+  /** 该消息发送方是否命中 pending secret_input 会话（空键集合恒 false，不产生额外渲染）。 */
+  const secretAwaitingFor = useCallback(
+    (senderId?: string | null, senderInstanceId?: string | null) =>
+      pendingSecretKeys.has(senderId ?? "") || pendingSecretKeys.has(senderInstanceId ?? ""),
+    [pendingSecretKeys],
   );
   // loading 全量删除（含 loadingSeenRef 同步清理；key 不存在时返回原引用，不触发重渲染）。
   const removeLoadingKeys = useCallback((keys: Iterable<string>) => {
@@ -900,50 +962,55 @@ export default function TeamSessionPage() {
       }
     },
     onAgentQuestion: (payload: RealtimeQuestionEvent) => {
-      if (payload.resolved) {
-        setPendingQuestion((prev) => (prev && prev.id === payload.question.id ? null : prev));
-        return;
-      }
-      if (payload.question.status !== "pending") return;
-      // team 域放行：问题事件不再按当前任务过滤（与 onAgentStatus 同规则）。
-      if (payload.taskId && payload.taskId.startsWith("team:") && payload.taskId !== `team:${teamId}`) return;
-      if (payload.question.managedMode) return;
-      setPendingQuestion({
+      const nextQuestion: SessionQuestionData = {
         id: payload.question.id,
         requestId: payload.question.requestId,
+        sessionId: payload.question.sessionId,
         kind: payload.question.kind,
         content: payload.question.content,
         status: payload.question.status,
         taskId: payload.question.taskId,
         agentId: payload.question.agentId,
         managedMode: payload.question.managedMode,
-      });
+      };
+      if (payload.resolved) {
+        // 当前弹窗或队列中的该条被服务端/他人收敛 → 移出队列并补拉剩余 pending（队列继续往下走）。
+        setQuestionQueue((prev) => prev.filter((q) => q.id !== nextQuestion.id));
+        queryClient.invalidateQueries({ queryKey: ["questions"] });
+        return;
+      }
+      if (payload.question.status !== "pending") return;
+      // team 域放行：问题事件不再按当前任务过滤（与 onAgentStatus 同规则）。
+      if (payload.taskId && payload.taskId.startsWith("team:") && payload.taskId !== `team:${teamId}`) return;
+      if (payload.question.managedMode) return;
+      setQuestionQueue((prev) => (prev.some((q) => q.id === nextQuestion.id) ? prev : [...prev, nextQuestion]));
     },
   });
 
   /* ---------- 提问回复 ---------- */
   const questionReplyMutation = useMutation({
-    mutationFn: (payload: { answers?: string[][] | null; response?: "once" | "always" | "reject" }) =>
-      api.post(`/questions/${pendingQuestion?.id}/reply`, payload),
-    onSuccess: () => {
-      setPendingQuestion(null);
+    mutationFn: (input: { questionId: string; payload: QuestionModalSubmitPayload }) =>
+      api.post(`/questions/${input.questionId}/reply`, input.payload),
+    onSuccess: (_data, input) => {
       setQuestionSubmitting(false);
+      setQuestionQueue((prev) => prev.filter((q) => q.id !== input.questionId));
       queryClient.invalidateQueries({ queryKey: ["questions"] });
     },
-    onError: (err) => {
+    onError: (err, input) => {
       setQuestionSubmitting(false);
       if (isApiError(err) && (err.status === 410 || err.code === "QUESTION_EXPIRED")) {
-        setPendingQuestion(null);
+        // 已过期（超 TTL / 重复终态）→ 静默关闭当前条并补拉，让队列下一条继续。
+        setQuestionQueue((prev) => prev.filter((q) => q.id !== input.questionId));
         queryClient.invalidateQueries({ queryKey: ["questions"] });
       } else {
-        console.error("[TeamSession] question reply failed", { questionId: pendingQuestion?.id, error: err });
+        console.error("[TeamSession] question reply failed", { questionId: input.questionId, error: err });
       }
     },
   });
-  const handleQuestionSubmit = (payload: { answers?: string[][] | null; response?: "once" | "always" | "reject" }) => {
+  const handleQuestionSubmit = (payload: QuestionModalSubmitPayload) => {
     if (!pendingQuestion) return;
     setQuestionSubmitting(true);
-    questionReplyMutation.mutate(payload);
+    questionReplyMutation.mutate({ questionId: pendingQuestion.id, payload });
   };
 
   /* ---------- 发送（群聊/私聊路由） ---------- */
@@ -1417,11 +1484,13 @@ export default function TeamSessionPage() {
               }
               // Agent 消息：过程片段 + 正文置底（MsgParts）；status=processing 为流式中间态
               if (msg.senderType === "agent") {
+                const secretAwaiting = secretAwaitingFor(msg.senderId, senderInstanceId);
                 return withSeparator(
                   <MsgParts
                     key={msg.id}
                     parts={parts}
                     messageStatus={msg.status}
+                    secretAwaiting={secretAwaiting}
                     bodyText={((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string}
                     author={author}
                     role={role}
@@ -1554,7 +1623,10 @@ export default function TeamSessionPage() {
           open={!!pendingQuestion}
           question={pendingQuestion}
           submitting={questionSubmitting}
-          onClose={() => setPendingQuestion(null)}
+          onClose={() => {
+            const closingId = pendingQuestion?.id;
+            setQuestionQueue((prev) => (closingId ? prev.filter((q) => q.id !== closingId) : prev));
+          }}
           onSubmit={handleQuestionSubmit}
         />
       </div>

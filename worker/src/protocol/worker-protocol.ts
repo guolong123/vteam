@@ -291,6 +291,71 @@ export interface SessionQuestionPayload {
   questions: SessionQuestionInfo[];
 }
 
+/**
+ * 敏感命令执行输入（POST /secret-command 业务体，todo 3 双写）。
+ *
+ * 独立于 question/answers 明文回显通道：`secrets` 明文只经此请求体进入 worker，
+ * 不落日志、不进错误 message、不回写任何事件。`commandTemplate` 为原始模板
+ * （含 `{{NAME}}` 占位符），渲染结果只在 worker 进程内存中短暂存在。
+ */
+export interface SensitiveCommandInput {
+  /** 命令模板（shell 命令行，`{{NAME}}` 占位符由 secrets 精确替换）。 */
+  commandTemplate: string;
+  /** 变量名 → 明文值（secret，绝不进日志/错误 message/响应）。 */
+  secrets: Record<string, string>;
+  /**
+   * 相对 worker workDir 的执行目录（缺省 = workDir 根）。绝对路径、`..`、
+   * NUL 与符号链接逃逸一律拒绝（由 runSensitiveCommand 校验）。
+   */
+  cwd?: string;
+  /** 执行超时 ms（缺省 60000，硬上限 600000）；超时/取消对进程组 SIGKILL。 */
+  timeoutMs?: number;
+}
+
+/**
+ * 敏感命令执行结果（脱敏 + 截断之后的形状，worker 唯一对外出口）。
+ *
+ * 约束：本结构任何字段都不得包含渲染后命令、argv、cwd 或未脱敏文本；
+ * `stdout`/`stderr` 已做精确值替换 → 残留占位符掩码 → 每流 32KB 截断。
+ */
+export interface SensitiveCommandOutput {
+  /** succeeded=exit 0；failed=非 0 或启动失败；timeout=超时/取消后进程组被杀。 */
+  status: 'succeeded' | 'failed' | 'timeout';
+  /** 进程退出码（被信号杀死或启动失败为 null）。 */
+  exitCode: number | null;
+  /** 端到端耗时 ms。 */
+  durationMs: number;
+  /** 脱敏 + 截断后的标准输出。 */
+  stdout: string;
+  /** 脱敏 + 截断后的标准错误。 */
+  stderr: string;
+  /** stdout 是否被截断到 MAX_SENSITIVE_OUTPUT_BYTES。 */
+  stdoutTruncated: boolean;
+  /** stderr 是否被截断到 MAX_SENSITIVE_OUTPUT_BYTES。 */
+  stderrTruncated: boolean;
+  /**
+   * 基础设施级失败原因（已脱敏；仅 spawn/启动失败等场景填写）。
+   * 命令自身非 0 退出不填——原因看脱敏后的 stderr，避免把命令输出折进 error。
+   */
+  error?: string;
+}
+
+/** POST /secret-command 请求体（todo 4 路由契约，server SecretCommandRequestDto 双写）。 */
+export interface SecretCommandRequestPayload extends SensitiveCommandInput {
+  /** 幂等键：同 requestId + 同归属 → 返回既有结果；不同归属 → 409。 */
+  requestId: string;
+  /** 平台 Task 主键（t_ 前缀，幂等归属判定）。 */
+  taskId?: string;
+  /** opencode 会话 id（ses_ 前缀，幂等归属判定）。 */
+  sessionId?: string;
+}
+
+/** POST /secret-command 响应体（todo 4 路由契约；不回显 commandTemplate/argv/cwd）。 */
+export interface SecretCommandResponsePayload extends SensitiveCommandOutput {
+  /** 回显幂等键，便于调用方配对。 */
+  requestId: string;
+}
+
 /** session.permission 事件负载（server AgentQuestion.content.permission 透传形状）。 */
 export interface SessionPermissionPayload {
   /** opencode 会话 id（ses_ 前缀，server 经 instanceRef 反查平台 Session）。 */

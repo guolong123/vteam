@@ -48,7 +48,16 @@ export interface PlatformMcpTool {
   name: string;
   description: string;
   inputSchema: z.ZodTypeAny;
-  handler: (ctx: PlatformMcpToolContext, args: unknown) => Promise<unknown>;
+  /**
+   * handler 第三参 `signal`：MCP 客户端断开信号（controller 从 HTTP 连接 close
+   * 派生，响应写完不触发）。仅阻塞式工具（secret_command）消费——凭它在客户端
+   * 放弃等待后取消 pending 问题、阻止新的敏感命令执行；其余工具忽略。
+   */
+  handler: (
+    ctx: PlatformMcpToolContext,
+    args: unknown,
+    signal?: AbortSignal,
+  ) => Promise<unknown>;
 }
 
 const chatHistorySchema = z.object({
@@ -825,6 +834,80 @@ const hookCancelSchema = z
 type HookCancelArgs = z.infer<typeof hookCancelSchema>;
 
 /**
+ * secret_command（sensitive-command-tool todo 6）：阻塞式敏感命令执行。
+ *
+ * 契约要点：模型只提交**命令模板 + 变量元数据**，值由用户在 Web 弹窗填写并经
+ * secret_input 旁路（不落库不回显）回到本处理器；`variables` 与模板占位符一一对应。
+ * 结构约束在 zod（类型/必填/长度/timeoutSec 上限），语义约束在 service
+ * （占位符↔声明一致、变量名唯一、cwd 相对安全），两侧都拒非法输入。
+ */
+export const SECRET_COMMAND_SCHEMA = z.object({
+  taskId: z.string().describe('任务 ID'),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  command: z
+    .string()
+    .min(1)
+    .max(4000)
+    .describe(
+      '命令模板（shell 命令行，敏感值一律写 {{NAME}} 占位符；禁止把明文密钥写进模板）',
+    ),
+  variables: z
+    .array(
+      z.object({
+        name: z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(
+            /^[A-Za-z_][A-Za-z0-9_]*$/,
+            '变量名须以字母/下划线开头，仅含字母数字下划线',
+          )
+          .describe('变量名（与模板 {{NAME}} 对应）'),
+        label: z
+          .string()
+          .max(120)
+          .optional()
+          .describe('展示标签（缺省用 name）'),
+        secret: z
+          .boolean()
+          .optional()
+          .describe('是否按敏感字段展示（缺省 true，密码框输入）'),
+        required: z.boolean().optional().describe('是否必填（缺省 true）'),
+      }),
+    )
+    .max(20)
+    .describe('变量声明（只声明名称与是否敏感，绝不携带值）'),
+  cwd: z
+    .string()
+    .max(512)
+    .optional()
+    .describe(
+      '相对执行目录（缺省 = 任务工作目录；绝对路径、`..` 越界一律 400）',
+    ),
+  timeoutSec: z
+    .number()
+    .int()
+    .min(1)
+    .max(300)
+    .optional()
+    .describe('命令执行超时秒（缺省 60，上限 300）'),
+  title: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('请求标题（可选，仅供调用方自述；不进入模型可见结果）'),
+  reason: z
+    .string()
+    .max(1000)
+    .optional()
+    .describe('执行原因（展示给填写敏感值的用户）'),
+});
+
+type SecretCommandArgs = z.infer<typeof SECRET_COMMAND_SCHEMA>;
+
+/**
  * 构建工具集（service 闭包注入，controller 构造时调用一次）。
  * handler 签名 `(ctx, args)`：ctx.workerId 为 controller 透传的 header 值；
  * args 已在 tools/call 内经 inputSchema.safeParse 校验，此处收窄为具体类型。
@@ -1061,6 +1144,14 @@ export function buildPlatformMcpTools(
         '取消 hook（按 hookId 或 dedupKey；仅所有者或主 Agent 可取消，已终态行幂等直返）。返回 {hookId, status}。',
       inputSchema: hookCancelSchema,
       handler: (ctx, args) => service.hookCancel(ctx, args as HookCancelArgs),
+    },
+    {
+      name: 'secret_command',
+      description:
+        '在 worker 上执行一条需要密码/Token 的命令（阻塞式，最长等待 540s + 命令 300s）。你只提交命令模板与变量声明（{{NAME}} 占位符），敏感值由用户在弹窗填写、不经你的上下文；结果只回原始模板、脱敏且每流 32KB 截断的 stdout/stderr 与 status/exitCode/timedOut/durationMs。托管模式团队直接 403 拒绝；同一会话同一时刻只允许一次调用（并发第二次 409）；输入超时返回 input_timeout，用户取消返回 cancelled。注意：渲染后的命令与明文 secret 不会出现在返回里。',
+      inputSchema: SECRET_COMMAND_SCHEMA,
+      handler: (ctx, args, signal) =>
+        service.secretCommand(ctx, args as SecretCommandArgs, signal),
     },
   ];
 }

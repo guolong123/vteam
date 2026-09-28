@@ -175,6 +175,11 @@ describe('platform-mcp tool naming contract', () => {
         teamId: OPTIONAL,
         taskId: OPTIONAL,
       },
+      secret_command: {
+        selfInstanceId: REQUIRED,
+        teamId: ABSENT,
+        taskId: REQUIRED,
+      },
     };
 
     const observed: Record<string, Record<string, string>> = {};

@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as fs from 'node:fs';
@@ -16,13 +17,17 @@ import {
 import { IdGeneratorService } from '../common/id-generator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { WorkerDispatcher } from '../chat/worker-dispatcher';
+import {
+  WorkerDispatcher,
+  MAX_SILENT_WAKE_ATTEMPTS,
+} from '../chat/worker-dispatcher';
 import { ArtifactsService } from '../artifacts/artifacts.service';
 import {
   WorkerClient,
   WorkerUnavailableException,
 } from '../workers/worker.client';
 import { PLATFORM_MCP_ERRORS } from './platform-mcp.constants';
+import * as platformConstants from './platform-mcp.constants';
 import { SKILL_ERRORS } from '../common/constants/skill.constants';
 import { TASK_ERRORS } from '../common/constants/task.constants';
 import { SkillsService } from '../skills/skills.service';
@@ -36,7 +41,10 @@ import {
 import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
 import { QuestionsService } from '../questions/questions.service';
-import { QUESTION_CONFIRM_INTEGRITY_ERRORS } from '../questions/questions.constants';
+import {
+  QUESTION_CONFIRM_INTEGRITY_ERRORS,
+  SECRET_INPUT_BUDGET_MS,
+} from '../questions/questions.constants';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
 import { ExecutionPolicyService } from '../execution-policies/execution-policy.service';
 import { MessageReceiptsService } from '../chat/message-receipts.service';
@@ -107,10 +115,11 @@ describe('PlatformMcpService', () => {
   };
   let idGen: { nextId: jest.Mock };
   let realtime: { broadcast: jest.Mock };
-  let workerClient: { fetchFile: jest.Mock };
+  let workerClient: { fetchFile: jest.Mock; runSecretCommand: jest.Mock };
   let workerDispatcher: {
     dispatchAgentMention: jest.Mock;
     isAgentExecuting: jest.Mock;
+    keepAliveSession: jest.Mock;
   };
   let artifactsService: { append: jest.Mock; archiveFile: jest.Mock };
   let issuesService: {
@@ -128,6 +137,8 @@ describe('PlatformMcpService', () => {
   let questionsService: {
     confirmByAgent: jest.Mock;
     createForPlatform: jest.Mock;
+    createSecretForPlatform: jest.Mock;
+    reply: jest.Mock;
   };
   let skillsService: { create: jest.Mock };
   let gitReposService: { findAll: jest.Mock };
@@ -255,11 +266,15 @@ describe('PlatformMcpService', () => {
     );
     idGen = { nextId: jest.fn() };
     realtime = { broadcast: jest.fn().mockResolvedValue({ id: 'ev_1' }) };
-    workerClient = { fetchFile: jest.fn() };
+    workerClient = {
+      fetchFile: jest.fn(),
+      runSecretCommand: jest.fn(),
+    };
     workerDispatcher = {
       dispatchAgentMention: jest.fn().mockResolvedValue(undefined),
       // 默认无注册记录 → 回退 findFirst 原校验路径（单测隔离，不依赖 dispatch 时序）
       isAgentExecuting: jest.fn().mockReturnValue(null),
+      keepAliveSession: jest.fn().mockResolvedValue(undefined),
     };
     artifactsService = { append: jest.fn(), archiveFile: jest.fn() };
     issuesService = {
@@ -277,6 +292,8 @@ describe('PlatformMcpService', () => {
     questionsService = {
       confirmByAgent: jest.fn(),
       createForPlatform: jest.fn(),
+      createSecretForPlatform: jest.fn(),
+      reply: jest.fn(),
     };
     skillsService = { create: jest.fn() };
     gitReposService = { findAll: jest.fn().mockResolvedValue([]) };
@@ -7271,6 +7288,692 @@ describe('PlatformMcpService', () => {
         where: { teamId: 'tm_session' },
         select: { messageChannelId: true },
       });
+    });
+  });
+
+  describe('secret_command（阻塞式敏感命令）', () => {
+    const SENTINEL = 's3cr3t-A9f';
+    const secretArgs = (overrides: Record<string, unknown> = {}) => ({
+      taskId,
+      selfInstanceId: senderInstanceId,
+      command:
+        'curl -s -H "Authorization: Bearer {{TOKEN}}" https://example.internal/deploy',
+      variables: [
+        { name: 'TOKEN', label: '部署 Token', secret: true, required: true },
+      ],
+      ...overrides,
+    });
+
+    const workerResult = (overrides: Record<string, unknown> = {}) => ({
+      requestId: 'secmd_1',
+      status: 'succeeded',
+      exitCode: 0,
+      durationMs: 42,
+      stdout: 'deployed\n',
+      stderr: '',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      ...overrides,
+    });
+
+    /** 归属 + worker 行 + 默认成功回包。 */
+    const setupSecret = () => {
+      allowWorker();
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_1',
+        agentId: senderAgentId,
+        teamMemberId: senderInstanceId,
+        instanceRef: 'ses_0001',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: workerId,
+        capabilities: { execBaseUrl: 'http://w1:4198' },
+      } as any);
+      workerClient.runSecretCommand.mockResolvedValue(workerResult());
+    };
+
+    type SecretHookOptions = { onSecretResolved: (a: unknown) => void };
+
+    /**
+     * 同步钩子注入：createSecretForPlatform **返回前**即触发终态钩子（早于处理器
+     * 进入 await），钉住「deferred 必须先于创建」这一顺序约束。
+     */
+    const injectSyncHook = (
+      outcome: 'provided' | 'cancelled',
+      secrets: Record<string, string> | null,
+    ) => {
+      questionsService.createSecretForPlatform.mockImplementation(
+        (_taskId: string, _input: unknown, options: SecretHookOptions) => {
+          options.onSecretResolved({
+            outcome,
+            secrets,
+            actor: { type: 'user', id: 'u_1' },
+          });
+          return { id: 'aq_1', requestId: 'que_platform_1' };
+        },
+      );
+    };
+
+    /** 延迟钩子：测试侧自行决定何时触发终态（并发/超时/断开用例）。 */
+    const captureHook = () => {
+      let hook:
+        | ((a: {
+            outcome: 'provided' | 'cancelled';
+            secrets: Record<string, string> | null;
+            actor: { type: string; id: string };
+          }) => Promise<void> | void)
+        | undefined;
+      questionsService.createSecretForPlatform.mockImplementation(
+        (_taskId: string, _input: unknown, options: SecretHookOptions) => {
+          hook = options.onSecretResolved as typeof hook;
+          return { id: 'aq_1', requestId: 'que_platform_1' };
+        },
+      );
+      return {
+        fire: (
+          outcome: 'provided' | 'cancelled',
+          secrets: Record<string, string> | null,
+        ) =>
+          (hook as (a: unknown) => Promise<void> | void)?.({
+            outcome,
+            secrets,
+            actor: { type: 'user', id: 'u_1' },
+          }),
+      };
+    };
+
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    const sentinelHits = (value: unknown) =>
+      JSON.stringify(value).split(SENTINEL).length - 1;
+
+    it('模板/变量/cwd/timeout 非法 → 400 SECRET_COMMAND_INVALID（不创建 question 不调 worker）', async () => {
+      setupSecret();
+      const invalid = [
+        { command: 'echo {{A}} {{B}}', variables: [{ name: 'A' }] },
+        {
+          command: 'echo {{A}}',
+          variables: [{ name: 'A' }, { name: 'A' }],
+        },
+        {
+          command: 'echo {{A}}',
+          variables: [{ name: 'A' }, { name: 'B' }],
+        },
+        { cwd: '/etc' },
+        { cwd: 'a/../../etc' },
+        { timeoutSec: 301 },
+        { timeoutSec: 0 },
+        { command: '' },
+      ];
+      for (const overrides of invalid) {
+        await expectCode(
+          service.secretCommand(ctx, secretArgs(overrides)),
+          BadRequestException,
+          PLATFORM_MCP_ERRORS.SECRET_COMMAND_INVALID,
+        );
+      }
+      expect(questionsService.createSecretForPlatform).not.toHaveBeenCalled();
+      expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+    });
+
+    it('归属校验缺失 → 403 PLATFORM_MCP_FORBIDDEN（与其余工具同门）', async () => {
+      denyWorker();
+      await expectCode(
+        service.secretCommand(ctx, secretArgs()),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+      expect(questionsService.createSecretForPlatform).not.toHaveBeenCalled();
+    });
+
+    it('托管模式 fail-closed：创建 question 之前 403（创建调用 0 次、worker 0 次）', async () => {
+      setupSecret();
+      prisma.team.findUnique.mockResolvedValue({ managedMode: true } as any);
+      await expectCode(
+        service.secretCommand(ctx, secretArgs()),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.SECRET_COMMAND_MANAGED_FORBIDDEN,
+      );
+      expect(questionsService.createSecretForPlatform).not.toHaveBeenCalled();
+      expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+    });
+
+    it('happy：同步钩子给 secret → 调 worker（timeoutMs=60s+5s）→ succeeded，envelope 无明文无渲染命令', async () => {
+      setupSecret();
+      injectSyncHook('provided', { TOKEN: SENTINEL });
+
+      const env = await service.secretCommand(
+        ctx,
+        secretArgs({ cwd: 'deploy' }),
+      );
+
+      expect(env.status).toBe('succeeded');
+      expect(env).toMatchObject({
+        exitCode: 0,
+        signal: null,
+        timedOut: false,
+        durationMs: 42,
+        stdout: 'deployed\n',
+        stderr: '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+      });
+      expect(env.variables).toEqual([
+        {
+          name: 'TOKEN',
+          label: '部署 Token',
+          secret: true,
+          required: true,
+          provided: true,
+        },
+      ]);
+      expect(env.command).toContain('{{TOKEN}}');
+
+      const [workerRef, opts] = workerClient.runSecretCommand.mock.calls[0];
+      expect(workerRef).toMatchObject({ id: workerId });
+      expect(opts).toMatchObject({
+        commandTemplate: expect.stringContaining('{{TOKEN}}'),
+        secrets: { TOKEN: SENTINEL },
+        timeoutMs: 65_000,
+        cwd: 'deploy',
+        taskId,
+        sessionId: 'ses_0001',
+      });
+      expect(String(opts.requestId)).toMatch(/^secmd_/);
+
+      const json = JSON.stringify(env);
+      expect(sentinelHits(env)).toBe(0);
+      expect(env.command).toBe(secretArgs().command);
+      expect(json).not.toContain('"cwd"');
+      expect(json).not.toContain('"secrets"');
+      expect(workerDispatcher.keepAliveSession).not.toHaveBeenCalled();
+    });
+
+    it('worker 非零退出 → failed；超时 → timeout+timedOut', async () => {
+      setupSecret();
+      injectSyncHook('provided', { TOKEN: SENTINEL });
+      workerClient.runSecretCommand.mockResolvedValue(
+        workerResult({ status: 'failed', exitCode: 2, stderr: 'boom\n' }),
+      );
+      const failed = await service.secretCommand(ctx, secretArgs());
+      expect(failed.status).toBe('failed');
+      expect(failed.exitCode).toBe(2);
+      expect(failed.timedOut).toBe(false);
+
+      workerClient.runSecretCommand.mockResolvedValue(
+        workerResult({ status: 'timeout', exitCode: null, stdout: '' }),
+      );
+      const timedOut = await service.secretCommand(ctx, secretArgs());
+      expect(timedOut).toMatchObject({
+        status: 'timeout',
+        timedOut: true,
+        exitCode: null,
+      });
+    });
+
+    it('worker 回包含明文 secret（未脱敏兜底）→ envelope 二次精确脱敏，序列化 0 命中', async () => {
+      setupSecret();
+      workerClient.runSecretCommand.mockResolvedValue(
+        workerResult({
+          status: 'failed',
+          exitCode: 1,
+          stdout: `echoed ${SENTINEL}`,
+          stderr: `auth rejected: ${SENTINEL}`,
+        }),
+      );
+      injectSyncHook('provided', { TOKEN: SENTINEL });
+
+      const env = await service.secretCommand(ctx, secretArgs());
+
+      expect(sentinelHits(env)).toBe(0);
+      expect(env.stdout).toBe('echoed ***');
+      expect(env.stderr).toBe('auth rejected: ***');
+      expect(env.stdoutTruncated).toBe(false);
+    });
+
+    it('hook 返回 secrets:null → cancelled，且绝不调 worker', async () => {
+      setupSecret();
+      injectSyncHook('cancelled', null);
+
+      const env = await service.secretCommand(ctx, secretArgs());
+
+      expect(env.status).toBe('cancelled');
+      expect(env.variables[0].provided).toBe(false);
+      expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+      expect(sentinelHits(env)).toBe(0);
+    });
+
+    it('同会话并发第二次调用 → 409 SECRET_COMMAND_CONFLICT（handler 自持单 in-flight 门）', async () => {
+      setupSecret();
+      const hook = captureHook();
+
+      const first = service.secretCommand(ctx, secretArgs());
+      await tick();
+      expect(questionsService.createSecretForPlatform).toHaveBeenCalledTimes(1);
+
+      await expectCode(
+        service.secretCommand(ctx, secretArgs()),
+        ConflictException,
+        PLATFORM_MCP_ERRORS.SECRET_COMMAND_CONFLICT,
+      );
+      expect(questionsService.createSecretForPlatform).toHaveBeenCalledTimes(1);
+
+      await hook.fire('cancelled', null);
+      expect((await first).status).toBe('cancelled');
+
+      const again = service.secretCommand(ctx, secretArgs());
+      await tick();
+      await hook.fire('cancelled', null);
+      expect((await again).status).toBe('cancelled');
+      expect(questionsService.createSecretForPlatform).toHaveBeenCalledTimes(2);
+      expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+    });
+
+    it('MCP 客户端断开（ctx.signal abort）→ 取消 pending question，不执行命令；迟到提交亦不执行', async () => {
+      setupSecret();
+      const hook = captureHook();
+      const controller = new AbortController();
+
+      const pending = service.secretCommand(
+        ctx,
+        secretArgs(),
+        controller.signal,
+      );
+      await tick();
+      expect(questionsService.createSecretForPlatform).toHaveBeenCalledTimes(1);
+
+      controller.abort();
+      const env = await pending;
+      expect(env.status).toBe('cancelled');
+      expect(questionsService.reply).toHaveBeenCalledWith('aq_1', {
+        secrets: null,
+      });
+      expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+
+      await hook.fire('provided', { TOKEN: SENTINEL });
+      expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+      expect(sentinelHits(env)).toBe(0);
+    });
+
+    it('输入超预算 540s → input_timeout + 取消 pending question；keepalive 每 60s 至少一次，settle 后停止', async () => {
+      jest.useFakeTimers();
+      try {
+        setupSecret();
+        captureHook();
+
+        const pending = service.secretCommand(ctx, secretArgs());
+        await jest.advanceTimersByTimeAsync(0);
+        await jest.advanceTimersByTimeAsync(SECRET_INPUT_BUDGET_MS - 1);
+        expect(workerDispatcher.keepAliveSession).toHaveBeenCalledTimes(8);
+
+        await jest.advanceTimersByTimeAsync(2);
+        const env = await pending;
+        expect(env.status).toBe('input_timeout');
+        expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+        expect(questionsService.reply).toHaveBeenCalledWith('aq_1', {
+          secrets: null,
+        });
+
+        const afterSettle = workerDispatcher.keepAliveSession.mock.calls.length;
+        expect(afterSettle).toBeGreaterThanOrEqual(8);
+        await jest.advanceTimersByTimeAsync(60_000 * 5);
+        expect(workerDispatcher.keepAliveSession).toHaveBeenCalledTimes(
+          afterSettle,
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('等待与执行期间 keepalive 至少每 60s 一次（长执行）并在 settle 后 clearInterval', async () => {
+      jest.useFakeTimers();
+      try {
+        setupSecret();
+        const hook = captureHook();
+        let releaseWorker: (() => void) | undefined;
+        workerClient.runSecretCommand.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              releaseWorker = () => resolve(workerResult());
+            }),
+        );
+
+        const pending = service.secretCommand(ctx, secretArgs());
+        await jest.advanceTimersByTimeAsync(0);
+        await hook.fire('provided', { TOKEN: SENTINEL });
+        await jest.advanceTimersByTimeAsync(0);
+        expect(workerClient.runSecretCommand).toHaveBeenCalledTimes(1);
+
+        // 执行期间 3 个 60s 心跳
+        await jest.advanceTimersByTimeAsync(60_000 * 3);
+        expect(workerDispatcher.keepAliveSession).toHaveBeenCalledTimes(3);
+
+        releaseWorker?.();
+        const env = await pending;
+        expect(env.status).toBe('succeeded');
+
+        const afterSettle = workerDispatcher.keepAliveSession.mock.calls.length;
+        expect(afterSettle).toBe(3);
+        await jest.advanceTimersByTimeAsync(60_000 * 2);
+        expect(workerDispatcher.keepAliveSession).toHaveBeenCalledTimes(
+          afterSettle,
+        );
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('worker 400/409/5xx 只经 httpStatus 区分，异常 message 一律无 secret', async () => {
+      const failing = (detail: string, status: number) => {
+        workerClient.runSecretCommand.mockRejectedValue(
+          new WorkerUnavailableException(workerId, detail, status),
+        );
+      };
+      const messageOf = async (promise: Promise<unknown>) => {
+        const err = await promise.then(
+          () => undefined,
+          (e: unknown) => e as { message?: string },
+        );
+        return err?.message ?? '';
+      };
+
+      setupSecret();
+      injectSyncHook('provided', { TOKEN: SENTINEL });
+
+      failing(`secret-command HTTP 400 ${SENTINEL}`, 400);
+      await expectCode(
+        service.secretCommand(ctx, secretArgs()),
+        BadRequestException,
+        PLATFORM_MCP_ERRORS.SECRET_COMMAND_INVALID,
+      );
+      const message400 = await messageOf(
+        service.secretCommand(ctx, secretArgs()),
+      );
+      expect(message400).not.toContain(SENTINEL);
+
+      failing(`secret-command HTTP 409 ${SENTINEL}`, 409);
+      await expectCode(
+        service.secretCommand(ctx, secretArgs()),
+        ConflictException,
+        PLATFORM_MCP_ERRORS.SECRET_COMMAND_CONFLICT,
+      );
+
+      failing('secret-command HTTP 500', 500);
+      await expectCode(
+        service.secretCommand(ctx, secretArgs()),
+        ServiceUnavailableException,
+        PLATFORM_MCP_ERRORS.SECRET_COMMAND_UNAVAILABLE,
+      );
+      expect(sentinelHits(message400)).toBe(0);
+    });
+
+    // ------------------------------------------------------------------
+    // sensitive-command-tool todo 9：跨包不回显 sink + 看门狗保活集成（正证/反证）
+    // ------------------------------------------------------------------
+
+    /** 测试态静默窗口（生产 600s 不变，由 worker-dispatcher 默认值测试锁定）。 */
+    const WATCHDOG_WAKE_MS = 10_000;
+
+    const SINK_DIR = process.env.VTEAM_TASK9_SINK_DIR;
+    const dumpSink = (file: string, text: string): void => {
+      if (!SINK_DIR) return;
+      fs.mkdirSync(SINK_DIR, { recursive: true });
+      fs.appendFileSync(path.join(SINK_DIR, file), `${text}\n`);
+    };
+
+    const setKeepaliveCadence = (ms: number): void => {
+      (
+        platformConstants as unknown as Record<string, number>
+      ).SECRET_COMMAND_KEEPALIVE_MS = ms;
+    };
+
+    /**
+     * 真实 WorkerDispatcher（静默窗口 = wakeMs）：platform-mcp 只拿到 mock，这里补一台
+     * 生产实例，让 keepAliveSession → 静默 watchdog → 唤醒/判败走真实代码。
+     * 只 mock 构造与 watchdog 需要的 DB/入口；dispatchAgentMention 被 spy 以观察唤醒文本。
+     */
+    const buildWatchdogDispatcher = (wakeMs: number): WorkerDispatcher => {
+      const watchdogPrisma = {
+        session: {
+          update: jest.fn().mockResolvedValue({ id: 's_1' }),
+          findUnique: jest.fn().mockResolvedValue({
+            id: 's_1',
+            taskId: null,
+            teamId: 'tm_1',
+            teamMemberId: senderInstanceId,
+          }),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+        worker: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ id: workerId, status: 'online' }),
+        },
+        agent: {
+          findUnique: jest
+            .fn()
+            .mockResolvedValue({ id: senderAgentId, defaultModelId: null }),
+        },
+        artifact: { findMany: jest.fn().mockResolvedValue([]) },
+        chatChannel: {
+          findFirst: jest
+            .fn()
+            .mockResolvedValue({ id: 'ch_1', type: CHANNEL_TYPE.team_group }),
+        },
+      };
+      const watchdogConfig = {
+        get: jest.fn((key: string) =>
+          key === 'SILENT_SESSION_WAKE_MS' ? String(wakeMs) : undefined,
+        ),
+      };
+      const watchdogIngress = {
+        onTaskCompleted: jest.fn().mockReturnThis(),
+        onAgentStatus: jest.fn().mockReturnThis(),
+        onSessionActivity: jest.fn().mockReturnThis(),
+      };
+      return new WorkerDispatcher(
+        watchdogPrisma as unknown as never,
+        idGen as unknown as never,
+        realtime as unknown as never,
+        undefined as unknown as never,
+        undefined as unknown as never,
+        undefined as unknown as never,
+        undefined as unknown as never,
+        watchdogConfig as unknown as never,
+        watchdogIngress as unknown as never,
+        undefined,
+        undefined,
+        executionPolicyService as unknown as never,
+      );
+    };
+
+    /** 完整「等待输入 + 执行」周期：keepalive=true 走生产处理器间隔，false = 临时禁用保活。 */
+    const runWatchdogCycle = async (keepalive: boolean) => {
+      const dispatcher = buildWatchdogDispatcher(WATCHDOG_WAKE_MS);
+      const wakeErrors: Array<{ error?: string }> = [];
+      dispatcher.onError((e: { error?: string }) => wakeErrors.push(e));
+      const wakeDispatch = jest
+        .spyOn(dispatcher, 'dispatchAgentMention')
+        .mockResolvedValue(undefined as never);
+      const keepAliveCalls: string[] = [];
+      setupSecret();
+      const hook = captureHook();
+      if (keepalive) {
+        workerDispatcher.keepAliveSession.mockImplementation((id: string) => {
+          keepAliveCalls.push(id);
+          return dispatcher.keepAliveSession(id);
+        });
+      }
+      let releaseWorker: (() => void) | undefined;
+      workerClient.runSecretCommand.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseWorker = () => resolve(workerResult());
+          }),
+      );
+      const watchdogHost = dispatcher as unknown as {
+        startPendingWatchdog: (...args: unknown[]) => void;
+      };
+      watchdogHost.startPendingWatchdog(
+        'team:tm_1',
+        senderAgentId,
+        's_1',
+        workerId,
+        senderInstanceId,
+      );
+      try {
+        const pending = service.secretCommand(ctx, secretArgs());
+        await jest.advanceTimersByTimeAsync(0);
+
+        // 等待输入段：跨 3 个静默窗口（每窗口 wake/10 就有一次保活）
+        await jest.advanceTimersByTimeAsync(WATCHDOG_WAKE_MS - 1);
+        const keepAliveBeforeExpiry = keepAliveCalls.length;
+        await jest.advanceTimersByTimeAsync(WATCHDOG_WAKE_MS * 2);
+
+        await hook.fire('provided', { TOKEN: SENTINEL });
+        await jest.advanceTimersByTimeAsync(0);
+        expect(workerClient.runSecretCommand).toHaveBeenCalledTimes(1);
+
+        // 执行段：再跨 2 个静默窗口
+        await jest.advanceTimersByTimeAsync(WATCHDOG_WAKE_MS * 2);
+        releaseWorker?.();
+        const envelope = await pending;
+
+        const agentErrors = realtime.broadcast.mock.calls.filter(
+          (c) => c[0] === EVENT_TYPES.AGENT_ERROR,
+        );
+        const settledCalls =
+          workerDispatcher.keepAliveSession.mock.calls.length;
+        return {
+          keepAliveBeforeExpiry,
+          keepAliveAfterSettle: settledCalls,
+          wakeDispatch,
+          wakeErrors,
+          agentErrors,
+          envelope,
+          broadcasts: JSON.stringify(realtime.broadcast.mock.calls),
+        };
+      } finally {
+        dispatcher.onModuleDestroy();
+      }
+    };
+
+    it('看门狗正证：SILENT_SESSION_WAKE_MS 调低 + 生产 keepalive 缩放 wake/10 → 等待+执行全周期过期前 ≥1 次保活、0 次唤醒、0 次 silent_session_timeout', async () => {
+      jest.useFakeTimers();
+      const productionCadence = platformConstants.SECRET_COMMAND_KEEPALIVE_MS;
+      try {
+        expect(productionCadence).toBe(60_000);
+        setKeepaliveCadence(WATCHDOG_WAKE_MS / 10);
+        expect(platformConstants.SECRET_COMMAND_KEEPALIVE_MS).toBe(
+          WATCHDOG_WAKE_MS / 10,
+        );
+
+        const r = await runWatchdogCycle(true);
+
+        expect(r.keepAliveBeforeExpiry).toBeGreaterThanOrEqual(1);
+        expect(r.keepAliveAfterSettle).toBeGreaterThanOrEqual(40);
+        expect(r.wakeDispatch).not.toHaveBeenCalled();
+        expect(r.wakeErrors).toHaveLength(0);
+        expect(r.agentErrors).toHaveLength(0);
+        expect(r.broadcasts).not.toContain('【自动恢复】');
+        expect(r.broadcasts).not.toContain('silent_session_timeout');
+        expect(r.envelope.status).toBe('succeeded');
+        expect(sentinelHits(r.envelope)).toBe(0);
+        expect(sentinelHits(r.broadcasts)).toBe(0);
+      } finally {
+        setKeepaliveCadence(productionCadence);
+        jest.useRealTimers();
+      }
+      expect(platformConstants.SECRET_COMMAND_KEEPALIVE_MS).toBe(60_000);
+    });
+
+    it('看门狗反证：同一周期临时禁用 keepalive → 必然 3 次【自动恢复】唤醒 + silent_session_timeout（正证三条断言全红）', async () => {
+      jest.useFakeTimers();
+      const productionCadence = platformConstants.SECRET_COMMAND_KEEPALIVE_MS;
+      try {
+        setKeepaliveCadence(WATCHDOG_WAKE_MS / 10);
+        const r = await runWatchdogCycle(false);
+
+        expect(r.keepAliveBeforeExpiry).toBe(0);
+        expect(r.wakeDispatch).toHaveBeenCalledTimes(MAX_SILENT_WAKE_ATTEMPTS);
+        expect(r.wakeDispatch.mock.calls[0][0]).toMatchObject({
+          kind: 'wake',
+          text: expect.stringContaining('【自动恢复】'),
+        });
+        expect(r.wakeErrors).toHaveLength(1);
+        expect(r.wakeErrors[0].error).toMatch(/无事件回流/);
+        expect(r.agentErrors).toHaveLength(1);
+        expect(r.agentErrors[0][1]).toMatchObject({
+          errorType: 'silent_session_timeout',
+        });
+        expect(r.broadcasts).toContain('silent_session_timeout');
+      } finally {
+        setKeepaliveCadence(productionCadence);
+        jest.useRealTimers();
+      }
+      expect(platformConstants.SECRET_COMMAND_KEEPALIVE_MS).toBe(60_000);
+    });
+
+    it('执行期间客户端断开 → 不取消已下发的命令（只调一次 worker，envelope 照常返回）', async () => {
+      setupSecret();
+      const hook = captureHook();
+      const controller = new AbortController();
+      let releaseWorker: (() => void) | undefined;
+      workerClient.runSecretCommand.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseWorker = () => resolve(workerResult());
+          }),
+      );
+
+      const pending = service.secretCommand(
+        ctx,
+        secretArgs(),
+        controller.signal,
+      );
+      await tick();
+      await hook.fire('provided', { TOKEN: SENTINEL });
+      await tick();
+      expect(workerClient.runSecretCommand).toHaveBeenCalledTimes(1);
+
+      controller.abort();
+      await tick();
+      expect(workerClient.runSecretCommand).toHaveBeenCalledTimes(1);
+
+      releaseWorker?.();
+      const envelope = await pending;
+      expect(envelope.status).toBe('succeeded');
+      expect(sentinelHits(envelope)).toBe(0);
+    });
+
+    it('todo 9 sink：全链路 server 日志 / SSE 帧 / tool result 落盘（VTEAM_TASK9_SINK_DIR）且 0 命中', async () => {
+      const logLines: string[] = [];
+      const logger = (
+        service as unknown as { logger: { log: (...args: unknown[]) => void } }
+      ).logger;
+      const logSpy = jest
+        .spyOn(logger, 'log')
+        .mockImplementation((...args: unknown[]) => {
+          logLines.push(args.map(String).join(' '));
+        });
+      try {
+        setupSecret();
+        injectSyncHook('provided', { TOKEN: SENTINEL });
+
+        const envelope = await service.secretCommand(ctx, secretArgs());
+
+        expect(sentinelHits(envelope)).toBe(0);
+        expect(sentinelHits(logLines.join('\n'))).toBe(0);
+        expect(
+          sentinelHits(JSON.stringify(realtime.broadcast.mock.calls)),
+        ).toBe(0);
+        expect(logLines.length).toBeGreaterThan(0);
+
+        dumpSink('server-secret-command.log', logLines.join('\n'));
+        dumpSink('server-tool-result.json', JSON.stringify(envelope, null, 2));
+      } finally {
+        logSpy.mockRestore();
+      }
     });
   });
 });

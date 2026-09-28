@@ -2605,3 +2605,598 @@ describe('ExecServer：GET /omo-agent-prompt（按需取单 agent 提示词）',
     }
   });
 });
+
+/**
+ * sensitive-command-tool todo 4：POST /secret-command token 保护同步路由。
+ *
+ * 对抗类覆盖：
+ * - malformed_input：非 POST 405、缺/错 token 401、坏 JSON 400、超 maxBodyBytes 413、
+ *   非对象体/缺 requestId/非法 cwd/非法 secrets 400（固定文案）。
+ * - hung/long command：路由层 timeoutMs → 200 {status:'timeout'} 且不等满命令时长。
+ * - stale_state：同 requestId 同归属回放既有结果（字节级相同），不同归属 409，
+ *   并发重复 requestId 只产生一次副作用执行。
+ * - misleading_success_output：按字面 HTTP 状态与响应键集合断言。
+ * - secrets：sentinel 扫描响应与全部访问日志。
+ * prompt injection 不适用：请求体是结构化 JSON（模板/secrets/幂等字段），没有自然语言
+ * 指令解释路径；命令模板本就由调用方完全控制执行语义，注入不构成额外攻击面。
+ */
+describe('ExecServer：POST /secret-command（token 保护的敏感命令同步执行）', () => {
+  const TOKEN = 'tok';
+  const SENTINEL = 's3cr3t-A9f';
+  let workDir: string;
+
+  beforeAll(() => {
+    jest.setTimeout(30000);
+  });
+
+  afterAll(() => {
+    jest.setTimeout(5000);
+  });
+
+  beforeEach(async () => {
+    workDir = await fsp.realpath(await fsp.mkdtemp(join(os.tmpdir(), 'vteam-secret-')));
+  });
+
+  afterEach(async () => {
+    await fsp.rm(workDir, { recursive: true, force: true });
+  });
+
+  /**
+   * todo 9 证据 sink：设置了 VTEAM_TASK9_SINK_DIR 时把捕获的产物落到证据目录
+   * （未设置时零副作用），供 `grep -R "s3cr3t-A9f"` 做 0 命中证明。
+   */
+  const SINK_DIR = process.env.VTEAM_TASK9_SINK_DIR;
+  const dumpSink = (file: string, text: string): void => {
+    if (!SINK_DIR) return;
+    fs.mkdirSync(SINK_DIR, { recursive: true });
+    fs.appendFileSync(join(SINK_DIR, file), `${text}\n`);
+  };
+
+  function callSecretCommand(
+    port: number,
+    body: unknown,
+    opts: { token?: string; method?: string; raw?: string } = {},
+  ): Promise<{ status: number; body: any; raw: string }> {
+    return new Promise((resolve, reject) => {
+      const data = opts.raw !== undefined ? opts.raw : JSON.stringify(body);
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Content-Length': String(Buffer.byteLength(data)),
+      };
+      if (opts.token !== undefined) {
+        headers['X-Worker-Token'] = opts.token;
+      }
+      const req = http.request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/secret-command',
+          method: opts.method ?? 'POST',
+          headers,
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks).toString('utf8');
+            let parsed: any = raw;
+            try {
+              parsed = JSON.parse(raw);
+            } catch {
+              /* 保留原始文本（非 JSON 响应） */
+            }
+            resolve({ status: res.statusCode ?? 0, body: parsed, raw });
+          });
+        },
+      );
+      req.on('error', reject);
+      req.write(data);
+      req.end();
+    });
+  }
+
+  function recordingLogger(): { logger: { info: (m: unknown) => void; warn: (m: unknown) => void; error: (m: unknown) => void }; lines: string[] } {
+    const lines: string[] = [];
+    const logger = {
+      info: (m: unknown) => lines.push(String(m)),
+      warn: (m: unknown) => lines.push(String(m)),
+      error: (m: unknown) => lines.push(String(m)),
+    };
+    return { logger, lines };
+  }
+
+  function serverWith(
+    opts: {
+      workDir?: string;
+      workerToken?: string;
+      maxBodyBytes?: number;
+      logger?: { info: (m: unknown) => void; warn: (m: unknown) => void; error: (m: unknown) => void };
+    } = {},
+  ): ExecServer {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    return new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: opts.workerToken ?? TOKEN,
+      workDir: opts.workDir,
+      maxBodyBytes: opts.maxBodyBytes,
+      logger: (opts.logger ?? SILENT_LOGGER) as typeof SILENT_LOGGER,
+    });
+  }
+
+  function basePayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      requestId: 'req_1',
+      taskId: 't_1',
+      sessionId: 'ses_1',
+      commandTemplate: 'echo {{TOKEN}}',
+      secrets: { TOKEN: SENTINEL },
+      ...overrides,
+    };
+  }
+
+  async function countLines(file: string): Promise<number> {
+    try {
+      const text = await fsp.readFile(file, 'utf8');
+      return text.split('\n').filter((line) => line.length > 0).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  it('非 POST → 405（鉴权之前先判方法）', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await callSecretCommand(bound, basePayload(), { method: 'GET', token: TOKEN });
+      expect(res.status).toBe(405);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('缺失 token / 错误 token / 未配置 workerToken → 401，且命令不执行', async () => {
+    const { logger, lines } = recordingLogger();
+    const exec = serverWith({ workDir, logger });
+    const bound = await exec.start();
+    try {
+      const payload = basePayload({ commandTemplate: 'echo run >> auth-hits.txt' });
+      expect((await callSecretCommand(bound, payload)).status).toBe(401);
+      expect((await callSecretCommand(bound, payload, { token: 'wrong' })).status).toBe(401);
+      expect(await countLines(join(workDir, 'auth-hits.txt'))).toBe(0);
+    } finally {
+      await exec.stop();
+    }
+
+    const noToken = serverWith({ workDir, workerToken: '' });
+    const noTokenBound = await noToken.start();
+    try {
+      const res = await callSecretCommand(noTokenBound, basePayload(), { token: 'anything' });
+      expect(res.status).toBe(401);
+      expect(await countLines(join(workDir, 'auth-hits.txt'))).toBe(0);
+    } finally {
+      await noToken.stop();
+    }
+    expect(lines.join('\n')).not.toContain(SENTINEL);
+  });
+
+  it('坏 JSON / 空请求体 / 非对象体 → 400', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const bad = await callSecretCommand(bound, undefined, { token: TOKEN, raw: '{oops' });
+      expect(bad.status).toBe(400);
+      const empty = await callSecretCommand(bound, undefined, { token: TOKEN, raw: '' });
+      expect(empty.status).toBe(400);
+      const array = await callSecretCommand(bound, undefined, { token: TOKEN, raw: '[1,2]' });
+      expect(array.status).toBe(400);
+      expect(await countLines(join(workDir, 'bad-hits.txt'))).toBe(0);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('请求体超过 maxBodyBytes → 413（先排空再回包，不半路断连）', async () => {
+    const exec = serverWith({ workDir, maxBodyBytes: 1024 });
+    const bound = await exec.start();
+    try {
+      const res = await callSecretCommand(
+        bound,
+        basePayload({ commandTemplate: `echo ${'x'.repeat(4096)}` }),
+        { token: TOKEN },
+      );
+      expect(res.status).toBe(413);
+      expect(res.raw).toContain('1024');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('缺 requestId → 400（幂等键必填）', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await callSecretCommand(
+        bound,
+        basePayload({ requestId: undefined }),
+        { token: TOKEN },
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('requestId');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('SensitiveCommandError（cwd 越界 / 非法 timeoutMs / 非法 secrets）→ 400 固定文案，不回显输入', async () => {
+    const { logger, lines } = recordingLogger();
+    const exec = serverWith({ workDir, logger });
+    const bound = await exec.start();
+    try {
+      const cwdEscape = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_cwd', commandTemplate: 'id', cwd: '../../etc' }),
+        { token: TOKEN },
+      );
+      expect(cwdEscape.status).toBe(400);
+      expect(cwdEscape.raw).not.toContain('../../etc');
+      expect(typeof cwdEscape.body.error).toBe('string');
+      expect(typeof cwdEscape.body.code).toBe('string');
+
+      const badTimeout = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_timeout', commandTemplate: 'id', timeoutMs: -5 }),
+        { token: TOKEN },
+      );
+      expect(badTimeout.status).toBe(400);
+      expect(badTimeout.body.code).toBe('invalid_timeout');
+
+      const badSecrets = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_secrets', commandTemplate: 'echo ok', secrets: ['nope'] }),
+        { token: TOKEN },
+      );
+      expect(badSecrets.status).toBe(400);
+      expect(badSecrets.body.code).toBe('invalid_secrets');
+
+      // 模板非法但 secrets 已携带 sentinel：错误响应与日志都不得出现明文
+      const badTemplate = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_template', commandTemplate: undefined }),
+        { token: TOKEN },
+      );
+      expect(badTemplate.status).toBe(400);
+      expect(badTemplate.raw).not.toContain(SENTINEL);
+
+      // 幂等规则对错误同样生效：同 requestId 同归属 → 回放既有 400（不重新校验/执行）
+      const replay = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_cwd', commandTemplate: 'echo should-not-run' }),
+        { token: TOKEN },
+      );
+      expect(replay.status).toBe(400);
+      expect(replay.raw).toBe(cwdEscape.raw);
+      expect(await countLines(join(workDir, 'should-not-run.txt'))).toBe(0);
+      expect(lines.join('\n')).not.toContain(SENTINEL);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('正常执行 → 200，响应只含 SensitiveCommandOutput 派生字段且已脱敏', async () => {
+    const { logger, lines } = recordingLogger();
+    const exec = serverWith({ workDir, logger });
+    const bound = await exec.start();
+    try {
+      const res = await callSecretCommand(
+        bound,
+        basePayload({
+          commandTemplate: 'echo {{TOKEN}} && echo {{TOKEN}} >&2 && echo done',
+        }),
+        { token: TOKEN },
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('succeeded');
+      expect(res.body.exitCode).toBe(0);
+      expect(typeof res.body.durationMs).toBe('number');
+      expect(res.body.stdout).toBe('{{REDACTED}}\ndone\n');
+      expect(res.body.stderr).toBe('{{REDACTED}}\n');
+      expect(res.body.stdoutTruncated).toBe(false);
+      expect(res.body.stderrTruncated).toBe(false);
+      expect(res.body.requestId).toBe('req_1');
+      // 精确键集合：不允许多余字段（渲染命令/argv/cwd/secrets 无处安放）
+      expect(Object.keys(res.body).sort()).toEqual([
+        'durationMs',
+        'exitCode',
+        'requestId',
+        'status',
+        'stderr',
+        'stderrTruncated',
+        'stdout',
+        'stdoutTruncated',
+      ]);
+      // 字面响应扫描：无 secret、无渲染命令、无模板/argv/cwd 字段
+      expect(res.raw).not.toContain(SENTINEL);
+      expect(res.raw).not.toContain('commandTemplate');
+      expect(res.raw).not.toContain('"cwd"');
+      expect(res.raw).not.toContain('"secrets"');
+      expect(res.raw).not.toContain('"command"');
+      expect(res.raw).not.toContain('echo s3cr3t');
+      expect(lines.join('\n')).not.toContain(SENTINEL);
+      expect(lines.join('\n')).not.toContain('echo ');
+      dumpSink('worker-exec.log', lines.join('\n'));
+      dumpSink('worker-tool-result.json', res.raw);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('命令非零退出 → 200 {status:failed, exitCode}（不误报成功）', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await callSecretCommand(
+        bound,
+        basePayload({ commandTemplate: 'echo boom >&2; exit 3' }),
+        { token: TOKEN },
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('failed');
+      expect(res.body.exitCode).toBe(3);
+      expect(res.body.stderr).toBe('boom\n');
+      expect(res.body.error).toBeUndefined();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('长命令超时 → 200 {status:timeout}，不等满命令时长', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const started = Date.now();
+      const res = await callSecretCommand(
+        bound,
+        basePayload({ commandTemplate: 'sleep 30', timeoutMs: 300 }),
+        { token: TOKEN },
+      );
+      const elapsed = Date.now() - started;
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('timeout');
+      expect(res.body.exitCode).toBeNull();
+      expect(elapsed).toBeLessThan(5000);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('幂等：同 requestId 同归属 → 回放既有结果（字节级相同），只执行一次', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const payload = basePayload({ commandTemplate: 'echo run >> idem-hits.txt' });
+      const first = await callSecretCommand(bound, payload, { token: TOKEN });
+      expect(first.status).toBe(200);
+      expect(first.body.status).toBe('succeeded');
+      expect(await countLines(join(workDir, 'idem-hits.txt'))).toBe(1);
+
+      const second = await callSecretCommand(bound, payload, { token: TOKEN });
+      expect(second.status).toBe(200);
+      expect(second.raw).toBe(first.raw);
+      expect(await countLines(join(workDir, 'idem-hits.txt'))).toBe(1);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('幂等：并发重复 requestId → 两次都 200 且只执行一次', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const payload = basePayload({
+        commandTemplate: 'sleep 0.4 && echo run >> conc-hits.txt',
+      });
+      const [a, b] = await Promise.all([
+        callSecretCommand(bound, payload, { token: TOKEN }),
+        callSecretCommand(bound, payload, { token: TOKEN }),
+      ]);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(a.raw).toBe(b.raw);
+      expect(await countLines(join(workDir, 'conc-hits.txt'))).toBe(1);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('幂等：同 requestId 不同归属 → 409 且不执行第二次', async () => {
+    const { logger, lines } = recordingLogger();
+    const exec = serverWith({ workDir, logger });
+    const bound = await exec.start();
+    try {
+      const first = await callSecretCommand(
+        bound,
+        basePayload({ commandTemplate: 'echo run >> conflict-hits.txt' }),
+        { token: TOKEN },
+      );
+      expect(first.status).toBe(200);
+      expect(await countLines(join(workDir, 'conflict-hits.txt'))).toBe(1);
+
+      const conflictTask = await callSecretCommand(
+        bound,
+        basePayload({ taskId: 't_2', commandTemplate: 'echo pwned >> conflict-hits.txt' }),
+        { token: TOKEN },
+      );
+      expect(conflictTask.status).toBe(409);
+
+      const conflictSession = await callSecretCommand(
+        bound,
+        basePayload({ sessionId: 'ses_2', commandTemplate: 'echo pwned >> conflict-hits.txt' }),
+        { token: TOKEN },
+      );
+      expect(conflictSession.status).toBe(409);
+
+      expect(await countLines(join(workDir, 'conflict-hits.txt'))).toBe(1);
+      expect(lines.join('\n')).not.toContain(SENTINEL);
+      expect(lines.join('\n')).not.toContain('pwned');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('未命中路径仍 404（新增路由不改变既有行为）', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const res = await new Promise<number>((resolve, reject) => {
+        const r = http.request(
+          { host: '127.0.0.1', port: bound, path: '/nope', method: 'GET' },
+          (resp) => {
+            resp.resume();
+            resolve(resp.statusCode ?? 0);
+          },
+        );
+        r.on('error', reject);
+        r.end();
+      });
+      expect(res).toBe(404);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  // ------------------------------------------------------------------
+  // sensitive-command-tool todo 9：幂等表淘汰边界刻画（SECRET_COMMAND_CACHE_MAX = 256）
+  // ------------------------------------------------------------------
+
+  /** 私有幂等表（刻画目标）：requestId → {taskId, sessionId, settled, result}。 */
+  const cacheOf = (exec: ExecServer): Map<string, { settled: boolean }> =>
+    (exec as unknown as { secretCommands: Map<string, { settled: boolean }> })
+      .secretCommands;
+
+  it('淘汰边界：settle 记录在恰好 256 个更新 requestId 内可回放；第 256 个把最旧 settle 记录挤出（此后同 id 重新执行）', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const marker = 'evict-hits.txt';
+      const template = `echo a >> ${marker}`;
+      const first = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_oldest', commandTemplate: template }),
+        { token: TOKEN },
+      );
+      expect(first.status).toBe(200);
+      expect(await countLines(join(workDir, marker))).toBe(1);
+
+      // 前 255 个更新 requestId：总数 256 = 上限，不触发淘汰 → 最旧记录仍字节级回放
+      for (let i = 1; i <= 255; i++) {
+        const r = await callSecretCommand(
+          bound,
+          basePayload({ requestId: `req_new_${i}`, commandTemplate: 'echo n' }),
+          { token: TOKEN },
+        );
+        expect(r.status).toBe(200);
+      }
+      const cache = cacheOf(exec);
+      expect(cache.size).toBe(256);
+      expect(cache.has('req_oldest')).toBe(true);
+
+      const replay = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_oldest', commandTemplate: template }),
+        { token: TOKEN },
+      );
+      expect(replay.raw).toBe(first.raw);
+      expect(await countLines(join(workDir, marker))).toBe(1);
+
+      // 第 256 个更新 requestId：总数 257 > 上限 → 淘汰最旧的 settle 记录（req_oldest）
+      const last = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_new_256', commandTemplate: 'echo n' }),
+        { token: TOKEN },
+      );
+      expect(last.status).toBe(200);
+      expect(cache.size).toBe(256);
+      expect(cache.has('req_oldest')).toBe(false);
+
+      // 边界另一侧：淘汰后同 requestId 不再命中幂等 → 重新执行（这是被锁定的契约，
+      // 因此调用方不得跨「256 次更新提交」假设 requestId 永久去重）
+      const after = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_oldest', commandTemplate: template }),
+        { token: TOKEN },
+      );
+      expect(after.status).toBe(200);
+      expect(await countLines(join(workDir, marker))).toBe(2);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('在途记录永不淘汰：容量压力只淘汰 settle 记录，在途请求只执行一次且字节级回放', async () => {
+    const exec = serverWith({ workDir });
+    const bound = await exec.start();
+    try {
+      const marker = 'inflight-hits.txt';
+      // 闸门命令：完成时机由测试显式控制，不靠 sleep 竞态
+      const template = `for i in $(seq 1 400); do [ -f gate.txt ] && break; sleep 0.05; done; echo x >> ${marker}`;
+      const inflight = callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_inflight', commandTemplate: template }),
+        { token: TOKEN },
+      );
+      const deadline = Date.now() + 5000;
+      while (!cacheOf(exec).has('req_inflight') && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(cacheOf(exec).get('req_inflight')).toMatchObject({
+        settled: false,
+      });
+
+      // 260 个更新 requestId（> 上限）分批并发灌入：每次超限都只能淘汰 settle 记录
+      for (let start = 0; start < 260; start += 20) {
+        await Promise.all(
+          Array.from({ length: 20 }, (_, k) =>
+            callSecretCommand(
+              bound,
+              basePayload({
+                requestId: `req_press_${start + k}`,
+                commandTemplate: 'echo n',
+              }),
+              { token: TOKEN },
+            ),
+          ),
+        ).then((rs) => rs.forEach((r) => expect(r.status).toBe(200)));
+      }
+
+      const cache = cacheOf(exec);
+      expect(cache.has('req_inflight')).toBe(true);
+      expect(cache.get('req_inflight')).toMatchObject({ settled: false });
+      expect(cache.size).toBeLessThanOrEqual(256);
+
+      // 放行：在途请求只执行一次，结果正常返回
+      await fsp.writeFile(join(workDir, 'gate.txt'), 'go');
+      const res = await inflight;
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('succeeded');
+      expect(await countLines(join(workDir, marker))).toBe(1);
+      expect(cacheOf(exec).get('req_inflight')).toMatchObject({
+        settled: true,
+      });
+
+      // settle 后仍在表内 → 字节级回放，绝不二次执行
+      const replay = await callSecretCommand(
+        bound,
+        basePayload({ requestId: 'req_inflight', commandTemplate: template }),
+        { token: TOKEN },
+      );
+      expect(replay.raw).toBe(res.raw);
+      expect(await countLines(join(workDir, marker))).toBe(1);
+      expect(replay.raw).not.toContain(SENTINEL);
+    } finally {
+      await exec.stop();
+    }
+  });
+});

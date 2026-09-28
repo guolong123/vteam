@@ -170,7 +170,7 @@ export const BUILTIN_AGENT_ROLES: readonly BuiltinAgentRole[] = [
  *
  * 外部引擎 Agent（如 Sisyphus/Prometheus/Atlas）不是平台内受管 Agent：它们**不得**
  * 创建任务、加成员、流转任务、创建技能、确认提问，也不得驱动 wecom/外发通道。
- * 仅放行协作/取证/产出所需的 8 个 `vteam_*` 工具，其余能力点显式 `false`。
+ * 仅放行协作/取证/产出与敏感命令执行所需的 9 个 `vteam_*` 工具，其余能力点显式 `false`。
  * migration 在存量库按 key 写入本能力矩阵；seed 对已存在的 NULL 行补齐。
  */
 /**
@@ -225,7 +225,7 @@ export const EXTERNAL_AGENT_ROLES: readonly ExternalAgentRole[] = [
 export const EXTERNAL_AGENT_ROLE_KEYS: readonly string[] =
   EXTERNAL_AGENT_ROLES.map((r) => r.key);
 
-/** 外部岗位允许的 `vteam_*` 工具全集（其余 deny）。 */
+/** 外部岗位允许的 `vteam_*` 工具全集（9 项；其余 deny）。 */
 export const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
   'vteam_group_post',
   'vteam_chat_history',
@@ -235,10 +235,11 @@ export const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
   'vteam_task_context',
   'vteam_my_profile',
   'vteam_team_view',
+  'vteam_secret_command',
 ] as const;
 
 /**
- * 外部岗位的最小能力矩阵（由 8 工具 allowlist 经目录映射；未覆盖能力点显式 `false`）。
+ * 外部岗位的最小能力矩阵（由 9 工具 allowlist 经目录映射；未覆盖能力点显式 `false`）。
  * default-allow 语义下必须显式拒绝，否则外部岗位会因「缺失键 ⇒ 允许」获得全部能力。
  */
 export const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
@@ -271,9 +272,10 @@ export const BUILTIN_AGENT_ROLE_BY_KEY: Record<string, BuiltinAgentRole> =
   Object.fromEntries(BUILTIN_AGENT_ROLES.map((r) => [r.key, r]));
 
 /**
- * 7 个内置岗位的**业务能力点矩阵**（27 键全量，键序 = 目录序；2026-09-22 用户决策
+ * 7 个内置岗位的**业务能力点矩阵**（29 键全量，键序 = 目录序；2026-09-22 用户决策
  * 「项目经理默认所有 vteam 权限开放，其他角色按角色需要针对性开放」；同日拆分组能力点
- * `issue.manage`/`memory.manage` 消除组塌缩后重生成）——写库的**单一事实来源**：
+ * `issue.manage`/`memory.manage` 消除组塌缩后重生成，sensitive-command-tool todo 1 追加
+ * `secret.command`）——写库的**单一事实来源**：
  * - migration `20260921000009_split_grouped_capabilities` 携带的整列 JSON 字面量由
  *   `src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts` 逐键断言与本常量相等
  *   （SQL↔TS 防漂移，同 000007/000008 契约形状）；
@@ -281,7 +283,7 @@ export const BUILTIN_AGENT_ROLE_BY_KEY: Record<string, BuiltinAgentRole> =
  *   `src/prisma/seed.spec.ts` 逐岗断言落库值与本常量相等。
  *
  * 派生规则（只收窄、绝不放大授权；表为显式字面量便于 review，规则由契约 spec 锁定）：
- * - `project_manager`：**显式覆盖为全 27 点 true**（用户决策「所有 vteam 权限开放」，
+ * - `project_manager`：**显式覆盖为全 29 点 true**（用户决策「所有 vteam 权限开放」，
  *   不按 ROLE_BOUNDARIES 派生——其 `toolAllows` 未含 `vteam_submit_artifact` /
  *   `vteam_git_repos_list` 亦全开；⊆ 断言对 PM 不适用）；
  * - 其余 6 岗：`ROLE_BOUNDARIES['vteam-<key>'].toolAllows` 经
@@ -289,7 +291,7 @@ export const BUILTIN_AGENT_ROLE_BY_KEY: Record<string, BuiltinAgentRole> =
  *   （拆分后 issue/memory 各点均单工具，该规则退化为逐工具判定，不再产生组塌缩；
  *   仍覆盖多工具的仅 `hook.manage`，全组放行才 true）。
  *
- * 不在本表（有意设计）：外部 3 岗保持 `EXTERNAL_AGENT_ROLE_CAPABILITIES`（8 工具最小矩阵）；
+ * 不在本表（有意设计）：外部 3 岗保持 `EXTERNAL_AGENT_ROLE_CAPABILITIES`（9 工具最小矩阵）；
  * `ar_general` 保持出厂矩阵（`buildFactoryCapabilityMatrix()`）。
  */
 export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
@@ -325,6 +327,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     my_profile: true,
     'hook.manage': true,
     'git.repos': false,
+    'secret.command': true,
   },
   project_manager: {
     'task.create': true,
@@ -355,6 +358,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     my_profile: true,
     'hook.manage': true,
     'git.repos': true,
+    'secret.command': true,
   },
   architect: {
     'task.create': false,
@@ -385,6 +389,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     my_profile: true,
     'hook.manage': false,
     'git.repos': false,
+    'secret.command': true,
   },
   developer: {
     'task.create': false,
@@ -415,6 +420,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     my_profile: true,
     'hook.manage': false,
     'git.repos': false,
+    'secret.command': true,
   },
   tester: {
     'task.create': false,
@@ -445,6 +451,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     my_profile: true,
     'hook.manage': false,
     'git.repos': false,
+    'secret.command': true,
   },
   plan: {
     'task.create': false,
@@ -475,6 +482,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     my_profile: true,
     'hook.manage': false,
     'git.repos': false,
+    'secret.command': true,
   },
   librarian: {
     'task.create': false,
@@ -505,6 +513,7 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     my_profile: true,
     'hook.manage': false,
     'git.repos': true,
+    'secret.command': true,
   },
 };
 

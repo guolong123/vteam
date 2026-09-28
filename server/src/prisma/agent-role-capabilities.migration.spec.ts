@@ -128,7 +128,7 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
     }
   });
 
-  it('external role matrix remains the explicit eight-tool least-privilege set', () => {
+  it('external role matrix remains the explicit nine-tool least-privilege set', () => {
     expect(EXTERNAL_AGENT_ROLE_KEYS).toEqual([
       'sisyphus',
       'prometheus',
@@ -159,6 +159,7 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
     );
     expect(factory).toEqual(expected);
     expectCapabilityCatalog(factory);
+    expect(factory['secret.command']).toBe(true);
     expect(
       Object.values(factory).filter((value) => value === false),
     ).toHaveLength(14);
@@ -180,8 +181,8 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
     expect(agentModel).toMatch(/policyId\s+String\?\s+@map\("policy_id"\)/);
   });
 
-  it('the vteam catalog still covers all 31 tools after the capability split', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(31);
-    expect(new Set(VTEAM_MCP_TOOL_NAMES).size).toBe(31);
+  it('the vteam catalog still covers all 32 tools after the capability split', () => {
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(32);
+    expect(new Set(VTEAM_MCP_TOOL_NAMES).size).toBe(32);
   });
 });

@@ -1007,6 +1007,28 @@ describe('seed（计划 skills + 评审子句）', () => {
     }
   });
 
+  it('vteam 工具含 secret_command 行（sensitive-command-tool todo-1：全角色敏感命令）', async () => {
+    await main();
+
+    const toolCalls = mockPrisma.tool.upsert.mock.calls;
+    const row = toolCalls.find(
+      (call) => call[0].where.action === 'secret_command',
+    );
+    expect(row).toBeDefined();
+    expect(row[0].create).toMatchObject({
+      name: 'vteam_secret_command',
+      action: 'secret_command',
+      source: 'mcp',
+      mcpServer: 'vteam',
+    });
+    expect(VTEAM_MCP_TOOL_NAMES).toContain('vteam_secret_command');
+    for (const name of Object.keys(ROLE_BOUNDARIES)) {
+      expect(
+        ROLE_BOUNDARIES[name as keyof typeof ROLE_BOUNDARIES].toolAllows,
+      ).toHaveProperty('vteam_secret_command', 'allow');
+    }
+  });
+
   it('seed Tool upsert 携带 description（后端权威文案：builtin/vteam 数组 description 落库）', async () => {
     await main();
 
@@ -1164,11 +1186,11 @@ describe('seed（计划 skills + 评审子句）', () => {
       key: { in: [...EXTERNAL_AGENT_ROLE_KEYS] },
       capabilities: { equals: Prisma.DbNull },
     });
-    // 8 协作/取证/产出能力点 true，其余 20 项显式 false（default-allow 下不可省；28 键 = 8 + 20）。
-    expect(Object.keys(EXTERNAL_AGENT_ROLE_CAPABILITIES)).toHaveLength(28);
+    // 9 协作/取证/产出/敏感命令能力点 true，其余 20 项显式 false（default-allow 下不可省；29 键 = 9 + 20）。
+    expect(Object.keys(EXTERNAL_AGENT_ROLE_CAPABILITIES)).toHaveLength(29);
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(Boolean),
-    ).toHaveLength(8);
+    ).toHaveLength(9);
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(
         (v) => v === false,
@@ -1176,7 +1198,8 @@ describe('seed（计划 skills + 评审子句）', () => {
     ).toHaveLength(20);
     expect(bind?.[0].data.capabilities['task.create']).toBe(false);
     expect(bind?.[0].data.capabilities['chat.post']).toBe(true);
-    expect(EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST).toHaveLength(8);
+    expect(bind?.[0].data.capabilities['secret.command']).toBe(true);
+    expect(EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST).toHaveLength(9);
   });
 
   it('兜底：任意 capabilities 仍为 NULL 的角色落出厂矩阵（保证无 NULL）', async () => {
@@ -1191,6 +1214,17 @@ describe('seed（计划 skills + 评审子句）', () => {
     expect(fallback?.[0].data).toEqual({
       capabilities: buildFactoryCapabilityMatrix(),
     });
+    expect(
+      (fallback?.[0].data.capabilities as Record<string, boolean>)[
+        'secret.command'
+      ],
+    ).toBe(true);
+    for (const role of BUILTIN_AGENT_ROLES) {
+      expect(BUILTIN_ROLE_CAPABILITY_MAPS[role.key]['secret.command']).toBe(
+        true,
+      );
+    }
+    expect(EXTERNAL_AGENT_ROLE_CAPABILITIES['secret.command']).toBe(true);
   });
 
   it('7 个内置 rolePrompt 均非空、以角色身份行开头、且含 ## 职责（岗位定义非空）', async () => {
