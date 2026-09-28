@@ -177,8 +177,9 @@ describe('platform-mcp tool naming contract', () => {
       },
       secret_command: {
         selfInstanceId: REQUIRED,
-        teamId: ABSENT,
-        taskId: REQUIRED,
+        // is_0000000001 问题 1：归属改为团队维度，taskId 降级为可选归属标注。
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
       },
     };
 

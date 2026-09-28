@@ -6,6 +6,10 @@ import * as request from 'supertest';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
 import { PlatformMcpController } from './platform-mcp.controller';
 import { PlatformMcpService } from './platform-mcp.service';
+import {
+  secretCommandBudgetHeaderValue,
+  SECRET_COMMAND_BUDGET_HEADER,
+} from './platform-mcp.constants';
 import { PlatformToolPermissionService } from './platform-tool-permission.service';
 
 /**
@@ -1350,6 +1354,104 @@ describe('PlatformMcpController (HTTP)', () => {
     });
   });
 
+  describe('is_0000000001 问题 4：超时预算自述头（可诊断各层生效值）', () => {
+    const makeReq = () =>
+      Object.assign(new EventEmitter(), {
+        headers: { 'x-worker-id': 'w_0001' },
+      });
+    const makeRes = () => {
+      const res = Object.assign(new EventEmitter(), {
+        writableEnded: false,
+        destroyed: false,
+        headersSent: false,
+        status: jest.fn(() => res),
+        setHeader: jest.fn(),
+        write: jest.fn(() => {
+          res.headersSent = true;
+          return true;
+        }),
+        end: jest.fn(() => {
+          res.writableEnded = true;
+        }),
+        json: jest.fn(),
+      });
+      return res;
+    };
+
+    it('非阻塞 tools/call 也带头，且在任何响应体写出之前挂上', async () => {
+      service.doclib.mockResolvedValue({ artifacts: [] });
+      const controller = app.get(PlatformMcpController);
+      const res = makeRes();
+      await controller.handle(
+        makeReq() as never,
+        res as never,
+        {
+          jsonrpc: '2.0',
+          id: 71,
+          method: 'tools/call',
+          params: { name: 'doclib', arguments: { taskId: 't_1' } },
+        } as never,
+      );
+      expect(res.setHeader).toHaveBeenCalledWith(
+        SECRET_COMMAND_BUDGET_HEADER,
+        secretCommandBudgetHeaderValue(),
+      );
+      const headerCallOrder = res.setHeader.mock.invocationCallOrder[0];
+      expect(headerCallOrder).toBeLessThan(
+        res.json.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('阻塞式 secret_command 走心跳接管时头仍在首帧之前（首帧发头就补不上了）', async () => {
+      jest.useFakeTimers();
+      let release!: (value: unknown) => void;
+      service.secretCommand.mockImplementation(
+        () => new Promise((resolve) => (release = resolve)),
+      );
+      try {
+        const controller = app.get(PlatformMcpController);
+        const res = makeRes();
+        const dispatch = controller.handle(
+          Object.assign(new EventEmitter(), {
+            headers: {
+              'x-worker-id': 'w_0001',
+              accept: 'application/json, text/event-stream',
+            },
+          }) as never,
+          res as never,
+          {
+            jsonrpc: '2.0',
+            id: 72,
+            method: 'tools/call',
+            params: {
+              name: 'secret_command',
+              arguments: {
+                teamId: 'tm_1',
+                selfInstanceId: 'tmm_sender',
+                command: 'echo {{TOKEN}}',
+                variables: [{ name: 'TOKEN' }],
+              },
+            },
+          } as never,
+        );
+        await jest.advanceTimersByTimeAsync(35_000);
+        expect(res.setHeader).toHaveBeenCalledWith(
+          SECRET_COMMAND_BUDGET_HEADER,
+          secretCommandBudgetHeaderValue(),
+        );
+        expect(res.write).toHaveBeenCalled();
+        expect(res.setHeader.mock.invocationCallOrder[0]).toBeLessThan(
+          res.write.mock.invocationCallOrder[0],
+        );
+        release({ status: 'succeeded' });
+        await jest.advanceTimersByTimeAsync(0);
+        await dispatch;
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+  });
+
   describe('客户端断开信号（阻塞式 secret_command 的 handler 第三参）', () => {
     it('tools/call 注入 AbortSignal；响应未写完即 close → signal 立即 abort', async () => {
       service.secretCommand.mockResolvedValue({ status: 'cancelled' });
@@ -1361,6 +1463,7 @@ describe('PlatformMcpController (HTTP)', () => {
         writableEnded: false,
         destroyed: false,
         status: jest.fn(),
+        setHeader: jest.fn(),
         json: jest.fn(),
       });
 
@@ -1469,6 +1572,16 @@ describe('PlatformMcpController (HTTP)', () => {
       return { res, dispatch };
     };
 
+    /**
+     * 心跳接管专属的响应头切换（content-type/cache-control/connection/x-accel-buffering）。
+     * 「未接管」类断言一律查这个子集而非 setHeader 全体——端点另有预算自述头
+     * （问题 4），与心跳接管无关。
+     */
+    const sseHeaderCalls = (res: { setHeader: jest.Mock }): unknown[] =>
+      res.setHeader.mock.calls.filter(
+        ([name]) => name !== SECRET_COMMAND_BUDGET_HEADER,
+      );
+
     beforeEach(() => {
       jest.useFakeTimers();
     });
@@ -1529,7 +1642,8 @@ describe('PlatformMcpController (HTTP)', () => {
       const { res, dispatch } = await startBlockingCall('*/*');
       await jest.advanceTimersByTimeAsync(600_000);
       expect(res.write).not.toHaveBeenCalled();
-      expect(res.setHeader).not.toHaveBeenCalled();
+      // 非 SSE 客户端不应发生「响应头切换」——只允许预算自述头这一个非 SSE 头。
+      expect(sseHeaderCalls(res)).toEqual([]);
 
       release({ status: 'cancelled' });
       await dispatch;
@@ -1574,7 +1688,8 @@ describe('PlatformMcpController (HTTP)', () => {
       );
       await dispatch;
 
-      expect(res.setHeader).not.toHaveBeenCalled();
+      // 快速返回不接管响应 → 不发生 SSE 头切换（预算自述头除外，见上）。
+      expect(sseHeaderCalls(res)).toEqual([]);
       expect(res.write).not.toHaveBeenCalled();
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ jsonrpc: '2.0', id: 91 }),

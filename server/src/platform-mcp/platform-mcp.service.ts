@@ -64,11 +64,17 @@ import {
   NOTIFY_STAGE,
   NOTIFY_TYPE,
   PLATFORM_MCP_ERRORS,
+  SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS,
   SECRET_COMMAND_DEFAULT_TIMEOUT_SEC,
+  SECRET_COMMAND_DISPOSITION,
   SECRET_COMMAND_KEEPALIVE_MS,
   SECRET_COMMAND_MAX_STREAM_BYTES,
   SECRET_COMMAND_MAX_TIMEOUT_SEC,
   SECRET_COMMAND_REQUEST_SLACK_MS,
+  SECRET_COMMAND_TIMEOUT_LAYER,
+  type SecretCommandDisposition,
+  type SecretCommandTimeoutLayer,
+  secretCommandLayerTag,
   validateTsxPrototype,
 } from './platform-mcp.constants';
 import { NotificationDispatcherService } from '../notifications/notification-dispatcher.service';
@@ -320,13 +326,25 @@ export interface SecretCommandVariableMeta {
  * secret_command 模型可见结果（唯一对外出口）。
  *
  * 只含：原始模板（占位符原样，不含渲染结果）+ 变量元数据/是否已填写 + 状态 +
- * exitCode/signal/timedOut/durationMs + 脱敏截断后的 stdout/stderr 与截断标记。
+ * exitCode/signal/timedOut/durationMs + 脱敏截断后的 stdout/stderr 与截断标记 +
+ * `disposition`/`timeoutLayer`（is_0000000001 问题 3：让「跑没跑」与「断在哪一层」
+ * 机器可判，不再靠 status 猜）。
  * **不含**渲染后命令、argv、cwd、secret、worker 基础设施错误原文。
  */
 export interface SecretCommandEnvelope {
   command: string;
   variables: Array<SecretCommandVariableMeta & { provided: boolean }>;
   status: 'succeeded' | 'failed' | 'timeout' | 'cancelled' | 'input_timeout';
+  /**
+   * 服务端判定的执行事实：`executed`=已下发 worker 并跑完（成败都算），
+   * `not_executed`=服务端确定没跑（用户取消 / 输入预算耗尽 / 断开于下发之前）。
+   *
+   * 注意它**不覆盖**「客户端等待超时、服务端可能仍在执行」那一态——该态结果无处
+   * 可送，只能由工具描述的禁止重发规则 + 409 报文承担。
+   */
+  disposition: SecretCommandDisposition;
+  /** 非成功终态的断点层次（`status=succeeded` 恒 null）。 */
+  timeoutLayer: SecretCommandTimeoutLayer | null;
   exitCode: number | null;
   /** 进程终止信号；worker 响应契约不回传信号，恒 null（超时由 timedOut 表达）。 */
   signal: string | null;
@@ -347,6 +365,17 @@ type SecretCommandWaitOutcome =
     }
   | { kind: 'input_timeout' }
   | { kind: 'aborted' };
+
+/**
+ * 单会话在飞台账（仅供 409 诊断，`is_0000000001` 问题 3）。字段刻意只留
+ * requestId/起始时刻/阶段——**不得**加入命令模板、变量名或任何可能承载敏感值的
+ * 内容，409 报文是直接进 Agent 上下文的。
+ */
+interface SecretCommandInflight {
+  requestId: string;
+  startedAt: number;
+  phase: 'awaiting_input' | 'executing';
+}
 
 /** 模板占位符集合（`{{NAME}}`，NAME 同 zod 变量名规则；`{{ name }}` 带空格亦识别）。 */
 function secretCommandPlaceholders(template: string): Set<string> {
@@ -563,12 +592,19 @@ export class PlatformMcpService implements OnModuleInit {
   private readonly mentionThrottle = new MentionThrottle();
 
   /**
-   * secret_command 单会话 in-flight 门（进程内集合，key=平台 Session 主键）。
+   * secret_command 单会话 in-flight 门（进程内 Map，key=平台 Session 主键）。
    * 为什么不用 reply-pending 查询做并发门：「查 pending questions → 创建」两步
    * 非原子（并发两次都能查到空），且 pending 行按 taskId 过滤会把同任务不同会话
    * 误伤；故由处理器自持同步门——进入即占位，settle（含异常）必释放。
+   *
+   * 存 Map 而非 Set（is_0000000001 问题 3）：409 必须能报出「上一次请求现在到底在
+   * 干什么、等了多久」，否则调用方会把「客户端超时后仍存活的请求」当成真冲突继续
+   * 重试 → 重复执行。值不含任何敏感信息。
    */
-  private readonly secretCommandSessions = new Set<string>();
+  private readonly secretCommandInflight = new Map<
+    string,
+    SecretCommandInflight
+  >();
 
   /**
    * chat_history：任务群聊历史消息（按需拉取，替代自动注入的群聊历史）。
@@ -4210,8 +4246,9 @@ export class PlatformMcpService implements OnModuleInit {
   /**
    * secret_command：阻塞式敏感命令执行（sensitive-command-tool todo 6）。
    *
-   * 链路：入参校验（400）→ 归属校验（403）→ 托管 fail-closed（403，先于创建）
-   * → worker 行存在（503）→ 会话定位（403）→ 单会话 in-flight 门（409）
+   * 链路：入参校验（400）→ **归属解析**（团队/任务双维度，403/400）→ 托管门
+   * （403，仅非主 Agent 发起者）→ worker 行存在（503）→ 会话定位（403）→
+   * 单会话 in-flight 门（409，**带上一次在飞请求的实时状态**）
    * → `createSecretForPlatform` 创建 secret_input 问题并阻塞等待
    * （输入预算 540s，期间每 60s `keepAliveSession` 重臂静默看门狗与 durable
    * deadline，settle 即 `clearInterval`）→ 客户端断开/输入超时 → 取消 pending
@@ -4224,7 +4261,8 @@ export class PlatformMcpService implements OnModuleInit {
   async secretCommand(
     ctx: PlatformMcpContext,
     args: {
-      taskId: string;
+      teamId?: string;
+      taskId?: string;
       selfInstanceId: string;
       command: string;
       variables: Array<{
@@ -4243,28 +4281,23 @@ export class PlatformMcpService implements OnModuleInit {
     const template = args.command;
     const { variables, timeoutMs, cwd } = this.validateSecretCommandArgs(args);
 
-    const instanceId = await this.assertWorkerTask(
-      ctx,
-      args.taskId,
-      args.selfInstanceId,
-    );
-    const teamId = await this.teamIdOfTask(args.taskId);
+    // 归属：teamId 为主、taskId 为可选标注（is_0000000001 问题 1）。复用
+    // resolveExecContext —— 与其余工具同一套绑定校验，不新增第二套逻辑。
+    const exec = await this.resolveExecContext(ctx, {
+      ...(args.taskId !== undefined ? { taskId: args.taskId } : {}),
+      ...(args.teamId !== undefined ? { teamId: args.teamId } : {}),
+      selfInstanceId: args.selfInstanceId,
+    });
+    const callerId = exec.callerId;
+    const teamId =
+      exec.kind === 'team' ? exec.teamId : await this.teamIdOfTask(exec.taskId);
     if (!teamId) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: '该 worker 无此任务会话，禁止跨任务访问',
+        message: '该 worker 无此会话所属团队，禁止跨团队访问',
       });
     }
-    const team = (await this.prisma.team.findUnique({
-      where: { id: teamId },
-      select: { managedMode: true },
-    })) as { managedMode?: boolean | null } | null;
-    if (team?.managedMode === true) {
-      throw new ForbiddenException({
-        code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_MANAGED_FORBIDDEN,
-        message: '团队已开启托管模式，敏感命令不予受理（fail-closed）',
-      });
-    }
+    await this.assertSecretCommandManagedAllowed(teamId, callerId);
     const workerRow = await this.prisma.worker.findUnique({
       where: { id: ctx.workerId },
       select: { id: true, capabilities: true },
@@ -4272,43 +4305,52 @@ export class PlatformMcpService implements OnModuleInit {
     if (!workerRow) {
       throw new ServiceUnavailableException({
         code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_UNAVAILABLE,
-        message: '执行该任务的 worker 不存在，无法执行敏感命令',
+        message: '执行该命令的 worker 不存在，无法执行敏感命令',
       });
     }
     const session = await this.prisma.session.findFirst({
       where: {
         teamId,
         workerId: ctx.workerId,
-        teamMemberId: args.selfInstanceId,
+        teamMemberId: callerId,
       },
       select: { id: true, agentId: true, instanceRef: true },
     });
     if (!session) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-        message: '该 worker 无绑定团队会话，禁止跨任务访问',
+        message: '该 worker 无绑定团队会话，禁止跨会话访问',
       });
     }
     const sessionKey = session.id;
-    if (this.secretCommandSessions.has(sessionKey)) {
+    const inflight = this.secretCommandInflight.get(sessionKey);
+    if (inflight) {
       throw new ConflictException({
         code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_CONFLICT,
-        message: '该会话已有一次 secret_command 正在等待输入或执行，请稍后再试',
+        message: this.describeSecretConflict(inflight),
       });
     }
-    this.secretCommandSessions.add(sessionKey);
+    const requestId = `secmd_${randomUUID()}`;
+    const live: SecretCommandInflight = {
+      requestId,
+      startedAt: Date.now(),
+      phase: 'awaiting_input',
+    };
+    this.secretCommandInflight.set(sessionKey, live);
     // keepalive 横跨「等待输入 + 执行」两段：settle（含异常）即 clearInterval。
     const keepAliveTimer = setInterval(() => {
       void this.keepAliveSession(sessionKey);
     }, SECRET_COMMAND_KEEPALIVE_MS);
     keepAliveTimer.unref?.();
     this.logger.log(
-      `[secret-command] 发起 task=${args.taskId} session=${sessionKey} caller=${instanceId} vars=${variables.length} timeout=${timeoutMs}ms`,
+      `[secret-command] 发起 scope=${exec.kind} task=${exec.kind === 'task' ? exec.taskId : '-'} team=${teamId} session=${sessionKey} caller=${callerId} vars=${variables.length} command_timeout=${timeoutMs}ms client_floor=${SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS}ms request=${requestId}`,
     );
     try {
       const wait = await this.awaitSecretInput({
         signal,
-        taskId: args.taskId,
+        taskId: exec.kind === 'task' ? exec.taskId : '',
+        teamId,
+        requesterInstanceId: callerId,
         sessionKey,
         agentId: session.agentId ?? '',
         template,
@@ -4323,7 +4365,11 @@ export class PlatformMcpService implements OnModuleInit {
         const status: SecretCommandEnvelope['status'] =
           wait.kind === 'input_timeout' ? 'input_timeout' : 'cancelled';
         this.logger.log(
-          `[secret-command] 未执行 task=${args.taskId} session=${sessionKey} status=${status}`,
+          `[secret-command] 未执行 session=${sessionKey} status=${status} request=${requestId} ${secretCommandLayerTag(
+            wait.kind === 'input_timeout'
+              ? SECRET_COMMAND_TIMEOUT_LAYER.INPUT_BUDGET
+              : SECRET_COMMAND_TIMEOUT_LAYER.SERVER_HOLD,
+          )}`,
         );
         return this.secretEnvelope({
           status,
@@ -4331,12 +4377,16 @@ export class PlatformMcpService implements OnModuleInit {
           variables,
           provided: false,
           secrets: null,
+          timeoutLayer:
+            wait.kind === 'input_timeout'
+              ? SECRET_COMMAND_TIMEOUT_LAYER.INPUT_BUDGET
+              : null,
         });
       }
       if (signal?.aborted === true) {
         // 客户端在「已收到值」与「下发执行」之间断开：不下发，杜绝幽灵执行。
         this.logger.log(
-          `[secret-command] 客户端已断开，跳过执行 task=${args.taskId} session=${sessionKey}`,
+          `[secret-command] 客户端已断开，跳过执行 session=${sessionKey} request=${requestId}`,
         );
         return this.secretEnvelope({
           status: 'cancelled',
@@ -4344,30 +4394,32 @@ export class PlatformMcpService implements OnModuleInit {
           variables,
           provided: false,
           secrets: null,
+          timeoutLayer: null,
         });
       }
       const secrets = wait.secrets ?? {};
+      live.phase = 'executing';
       let result: SecretCommandResult;
       try {
         result = await this.workerClient.runSecretCommand(
           { id: workerRow.id, capabilities: workerRow.capabilities },
           {
-            requestId: `secmd_${randomUUID()}`,
+            requestId,
             commandTemplate: template,
             secrets,
             ...(cwd !== undefined ? { cwd } : {}),
             // 显式超时 = 命令超时 + 5s 裕量（绝不落回客户端默认 60s：敏感命令最长 300s，
             // 客户端据此再叠 5s 请求超时，请求恒晚于命令结束才可能被掐断）。
             timeoutMs: timeoutMs + SECRET_COMMAND_REQUEST_SLACK_MS,
-            taskId: args.taskId,
+            ...(exec.kind === 'task' ? { taskId: exec.taskId } : {}),
             ...(session.instanceRef ? { sessionId: session.instanceRef } : {}),
           },
         );
       } catch (err) {
-        throw this.toSecretCommandError(err, secrets);
+        throw this.toSecretCommandError(err, secrets, timeoutMs);
       }
       this.logger.log(
-        `[secret-command] 执行完成 task=${args.taskId} session=${sessionKey} status=${result.status} exitCode=${result.exitCode} durationMs=${result.durationMs}`,
+        `[secret-command] 执行完成 session=${sessionKey} status=${result.status} exitCode=${result.exitCode} durationMs=${result.durationMs} request=${requestId}`,
       );
       return this.secretEnvelope({
         status: result.status,
@@ -4376,11 +4428,77 @@ export class PlatformMcpService implements OnModuleInit {
         provided: true,
         secrets,
         result,
+        timeoutLayer:
+          result.status === 'timeout'
+            ? SECRET_COMMAND_TIMEOUT_LAYER.COMMAND_EXEC
+            : null,
       });
     } finally {
       clearInterval(keepAliveTimer);
-      this.secretCommandSessions.delete(sessionKey);
+      this.secretCommandInflight.delete(sessionKey);
     }
+  }
+
+  /**
+   * 托管模式门（is_0000000001 问题 2）。
+   *
+   * 托管模式的语义是「**非主 Agent** 发起的确认请求改由主 Agent 确认」。发起人就是
+   * 主 Agent 时不存在「需他人确认」，故放行；主 Agent 无法代为确认的部分（**密钥值
+   * 本身**）由 secret_input 弹窗向**用户**索取（questions 域强制 managedMode=false）。
+   * 两件事拆开，避免 fail-closed 一刀切把主 Agent 自己也挡在门外。
+   */
+  private async assertSecretCommandManagedAllowed(
+    teamId: string,
+    callerId: string,
+  ): Promise<void> {
+    const team = (await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { managedMode: true, mainAgentMemberId: true },
+    })) as {
+      managedMode?: boolean | null;
+      mainAgentMemberId?: string | null;
+    } | null;
+    if (team?.managedMode !== true) {
+      return;
+    }
+    if (team.mainAgentMemberId === callerId) {
+      this.logger.log(
+        `[secret-command] 托管模式放行（发起人为团队主 Agent ${callerId} team=${teamId}；密钥值仍由用户弹窗提供）`,
+      );
+      return;
+    }
+    throw new ForbiddenException({
+      code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_MANAGED_FORBIDDEN,
+      message:
+        `团队已开启托管模式，非主 Agent（${callerId}）发起的敏感命令不予受理；` +
+        '托管模式下请由团队主 Agent 发起（主 Agent 发起即放行，密钥值仍由用户在弹窗提供）',
+    });
+  }
+
+  /**
+   * 409 报文（is_0000000001 问题 3）：带上一次在飞请求的实时状态。
+   *
+   * 绝大多数 409 是「上一次调用在客户端等待超时（-32001）后仍在服务端存活」引发的
+   * 盲目重发。只回一句「已有请求在跑」会让调用方当成真冲突继续重试 → 重复执行。
+   * 这里把 phase / 已持续时长 / 层次标识写进 message，并明确「禁止立即重发、
+   * 先复核目标状态」。字段只含 requestId 与耗时，不含任何敏感值。
+   */
+  private describeSecretConflict(live: SecretCommandInflight): string {
+    const elapsedSec = Math.max(
+      0,
+      Math.round((Date.now() - live.startedAt) / 1000),
+    );
+    const phaseText =
+      live.phase === 'awaiting_input'
+        ? '等待用户填写敏感值'
+        : '已取得敏感值并在 worker 执行';
+    return (
+      `该会话已有一次 secret_command 正在${phaseText}（requestId=${live.requestId}，` +
+      `已持续 ${elapsedSec}s，${secretCommandLayerTag(SECRET_COMMAND_TIMEOUT_LAYER.SERVER_HOLD)}）；` +
+      '本次 409 不会取消上一次请求。**禁止立即重发**：若上一次是客户端等待超时（-32001）' +
+      '导致，请先复核目标状态（命令副作用 / 落盘文件 / 远端凭据是否已生效），确认未执行再重试，' +
+      '否则会重复执行。'
+    );
   }
 
   /** 静默看门狗重臂（best-effort）：失败只 warn，不打断阻塞等待与执行。 */
@@ -4396,6 +4514,8 @@ export class PlatformMcpService implements OnModuleInit {
 
   /** secret_command 入参校验（语义层；结构层在 zod schema）：任一失败 → 400。 */
   private validateSecretCommandArgs(args: {
+    taskId?: string;
+    teamId?: string;
     command: string;
     variables: Array<{
       name: string;
@@ -4416,6 +4536,10 @@ export class PlatformMcpService implements OnModuleInit {
         message,
       });
 
+    // zod refine 已拦双空，直调 service 的路径在此兜底（不依赖 schema 层）。
+    if (!args.taskId && !args.teamId) {
+      throw invalid('teamId 与 taskId 至少传一个（团队直聊传 teamId）');
+    }
     const template = typeof args.command === 'string' ? args.command : '';
     if (template.trim().length === 0) {
       throw invalid('command 模板不能为空');
@@ -4499,6 +4623,8 @@ export class PlatformMcpService implements OnModuleInit {
   private async awaitSecretInput(input: {
     signal?: AbortSignal;
     taskId: string;
+    teamId: string;
+    requesterInstanceId: string;
     sessionKey: string;
     agentId: string;
     template: string;
@@ -4525,6 +4651,8 @@ export class PlatformMcpService implements OnModuleInit {
         },
         {
           agentId: input.agentId,
+          teamId: input.teamId,
+          requesterInstanceId: input.requesterInstanceId,
           onSecretResolved: async (resolved) => {
             settle({
               kind: 'hook',
@@ -4576,10 +4704,13 @@ export class PlatformMcpService implements OnModuleInit {
   /**
    * worker 400/409/其余 → 精确错误码（客户端只给 httpStatus，不解析响应体）。
    * 异常 message 一律先按明文值精确替换：任何外来错误文本都不得携带 secret。
+   * 503 报文带 `layer=` 层次标识（问题 4）：worker 请求超时与命令本身超时是两层，
+   * 不标层次时无法区分「命令跑太久」与「server→worker 链路断了」。
    */
   private toSecretCommandError(
     err: unknown,
     secrets: Record<string, string>,
+    commandTimeoutMs: number,
   ): Error {
     const redact = (text: string): string => this.redactSecrets(text, secrets);
     if (err instanceof WorkerUnavailableException) {
@@ -4598,13 +4729,18 @@ export class PlatformMcpService implements OnModuleInit {
       }
       return new ServiceUnavailableException({
         code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_UNAVAILABLE,
-        message: `worker 执行敏感命令失败（HTTP ${status ?? 'n/a'}）`,
+        message:
+          `worker 执行敏感命令失败（HTTP ${status ?? 'n/a'}，` +
+          `${secretCommandLayerTag(SECRET_COMMAND_TIMEOUT_LAYER.WORKER_REQUEST)}，` +
+          `请求超时=命令超时+裕量=${commandTimeoutMs + SECRET_COMMAND_REQUEST_SLACK_MS}ms）`,
       });
     }
     const detail = redact(err instanceof Error ? err.message : String(err));
     return new ServiceUnavailableException({
       code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_UNAVAILABLE,
-      message: `worker 执行敏感命令失败：${detail}`,
+      message: `worker 执行敏感命令失败：${detail}（${secretCommandLayerTag(
+        SECRET_COMMAND_TIMEOUT_LAYER.WORKER_REQUEST,
+      )}）`,
     });
   }
 
@@ -4634,6 +4770,7 @@ export class PlatformMcpService implements OnModuleInit {
     provided: boolean;
     secrets: Record<string, string> | null;
     result?: SecretCommandResult;
+    timeoutLayer?: SecretCommandTimeoutLayer | null;
   }): SecretCommandEnvelope {
     const scrub = (text: string): [string, boolean] => {
       const redacted = this.redactSecrets(text, input.secrets);
@@ -4648,6 +4785,8 @@ export class PlatformMcpService implements OnModuleInit {
     };
     const [stdout, stdoutCut] = scrub(input.result?.stdout ?? '');
     const [stderr, stderrCut] = scrub(input.result?.stderr ?? '');
+    // 没有 worker 回包 = 命令没下发过 = 服务端确定未执行（问题 3 的判定口径）。
+    const executed = input.result !== undefined;
     return {
       command: input.command,
       variables: input.variables.map((v) => ({
@@ -4655,6 +4794,10 @@ export class PlatformMcpService implements OnModuleInit {
         provided: input.provided,
       })),
       status: input.status,
+      disposition: executed
+        ? SECRET_COMMAND_DISPOSITION.EXECUTED
+        : SECRET_COMMAND_DISPOSITION.NOT_EXECUTED,
+      timeoutLayer: input.timeoutLayer ?? null,
       exitCode: input.result?.exitCode ?? null,
       signal: null,
       timedOut: input.result?.status === 'timeout',
