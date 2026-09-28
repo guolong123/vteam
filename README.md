@@ -87,6 +87,13 @@ docker compose up -d --build
 
 首次启动时 `init` 容器自动执行 `prisma migrate deploy` 与 seed（迁移基线 + 种子数据），成功后才拉起 server。
 
+> 迁移已于 2026-09-25 折叠为单一基线 `20260925000000_squashed_baseline`。
+> **空库**直接 `migrate deploy` 即可；**已有数据的库**会被 Prisma 以
+> `P3005 The database schema is not empty` 拒绝（安全、不写库），需按
+> [docs/migration-baseline.md](docs/migration-baseline.md) 判定库是否落后于基线，
+> 再决定补迁移还是 `migrate resolve --applied`。`resolve` 是声明而非校验，
+> 对落后的库使用会静默留下 schema 不对齐的库。
+
 ### 端口
 
 | 服务 | 容器内 | 宿主机 |

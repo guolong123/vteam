@@ -36,6 +36,55 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # 等数据库 schema 就绪。判据用 `prisma migrate status` 报 up to date，而不是探 TCP：
+      # MySQL 端口可连时 init job 的 migrate deploy 可能尚未跑完，server 会在
+      # RealtimeService.onModuleInit 以 P2021（表不存在）退出并反复重启（实测 4 次）。
+      # migrate status 读实际 migrations 目录判定，不写库，也不在此硬编码迁移名。
+      # 目标地址取自 ConfigMap 的 DATABASE_URL，与 server 自身同源；复用 server 镜像。
+      initContainers:
+        - name: wait-for-db
+          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
+          imagePullPolicy: {{ .Values.server.image.pullPolicy | default .Values.image.pullPolicy }}
+          command:
+            - node
+            - -e
+            - |
+              const { execFile } = require('child_process');
+              const deadline =
+                Date.now() + Number(process.env.SCHEMA_WAIT_TIMEOUT_SECONDS) * 1000;
+              const pollMs = Number(process.env.SCHEMA_WAIT_POLL_SECONDS) * 1000;
+              const schemaReady = () =>
+                new Promise((resolve) => {
+                  execFile(
+                    'npx',
+                    ['prisma', 'migrate', 'status'],
+                    { timeout: 60000 },
+                    (err) => resolve(!err),
+                  );
+                });
+              (async () => {
+                for (;;) {
+                  if (await schemaReady()) {
+                    console.log('database schema is up to date');
+                    process.exit(0);
+                  }
+                  if (Date.now() > deadline) {
+                    console.error(
+                      `database schema not ready within ${process.env.SCHEMA_WAIT_TIMEOUT_SECONDS}s`,
+                    );
+                    process.exit(1);
+                  }
+                  await new Promise((r) => setTimeout(r, pollMs));
+                }
+              })();
+          envFrom:
+            - configMapRef:
+                name: {{ include "vteam.config.name" . }}
+          env:
+            - name: SCHEMA_WAIT_TIMEOUT_SECONDS
+              value: {{ .Values.server.schemaWait.timeoutSeconds | default 300 | quote }}
+            - name: SCHEMA_WAIT_POLL_SECONDS
+              value: {{ .Values.server.schemaWait.pollIntervalSeconds | default 3 | quote }}
       containers:
         - name: server
           image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
