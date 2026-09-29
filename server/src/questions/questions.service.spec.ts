@@ -1254,7 +1254,10 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
     it('secret_input 的 DTO 恒 managedMode=false ⇒ 托管与非托管下都弹窗（用户要求 2 的看护）', async () => {
       for (const managedMode of [true, false]) {
         prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
-        prisma.team.findUnique.mockResolvedValue({ managedMode });
+        prisma.team.findUnique.mockResolvedValue({
+          managedMode,
+          mainAgentMemberId: 'tmm_main',
+        });
         prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
         prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
         prisma.agentQuestion.create.mockResolvedValue({
@@ -1278,6 +1281,31 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
 
         expect(dto.managedMode).toBe(false);
       }
+    });
+
+    it('团队直聊且主 Agent 会话缺失 → 快速失败，不落占位行（否则调用方空等 540s）', async () => {
+      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
+      prisma.session.findFirst.mockResolvedValue(null);
+      prisma.session.findUnique.mockResolvedValue(null);
+
+      const err = await service
+        .createSecretForPlatform(
+          '',
+          {
+            template: 'echo {{TOKEN}}',
+            variables: [{ name: 'TOKEN', secret: true }],
+          },
+          { teamId: 'tm_1' },
+        )
+        .then(
+          () => undefined,
+          (e: unknown) => e as { getResponse(): { code?: string } },
+        );
+
+      expect(err?.getResponse().code).toBe(
+        QUESTIONS_ERRORS.QUESTION_WORKER_UNAVAILABLE,
+      );
+      expect(prisma.agentQuestion.create).not.toHaveBeenCalled();
     });
 
     // ------------------------------------------------------------------
