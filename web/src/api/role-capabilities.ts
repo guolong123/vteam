@@ -2,9 +2,12 @@
  * 岗位业务能力点目录（web 端与服务端目录**逐字对照的副本**）
  * =============================================
  * 唯一来源：`server/src/common/constants/platform-capability.constants.ts`
- * （`PLATFORM_CAPABILITIES`：27 项覆盖 28 个 `vteam_*` 工具，键/中文名/工具/出厂拒绝
- * 全部逐字抄录，含顺序）。服务端目前**未**暴露目录接口（`GET /agent-roles` 只回矩阵，
- * 不回目录），故这里是副本；服务端目录接口就绪后应改为「接口优先、本清单离线回退」。
+ * （`PLATFORM_CAPABILITIES`：32 项覆盖 40 个工具 —— 其中 `vteam_*` 32 个，另 8 个属
+ * `git_clone` / `git_push` / `browser` 等 `git`、`browser` 命名空间；键/中文名/工具/出厂拒绝
+ * 全部逐字抄录）。**数组顺序不保证与服务端一致**（面板按 `group` 过滤渲染，顺序不影响用户
+ * 所见；已知 `question.confirm` 位置与服务端不同，属既有差异、不在本次对齐范围）。
+ * 服务端目前**未**暴露目录接口（`GET /agent-roles` 只回矩阵、不回目录），故这里是副本；
+ * 服务端目录接口就绪后应改为「接口优先、本清单离线回退」。
  *
  * 语义（与 SLICE 6a 契约一致，勿改）：
  * - 岗位 `capabilities: Record<string, boolean> | null`；`false` = 拒绝（二进制，无 ask）；
@@ -47,11 +50,12 @@ export interface RoleCapability {
 }
 
 /**
- * 28 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
- * `PLATFORM_CAPABILITIES`（顺序一致；仅新增 UI 分组 `group` 字段）。
- * 出厂拒绝 14 项：task.create / task.transition / task.complete / team.add_member /
+ * 32 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
+ * `PLATFORM_CAPABILITIES`（键集合逐项相等；仅新增 UI 分组 `group` 字段，顺序不强制）。
+ * 出厂拒绝 16 项：task.create / task.transition / task.complete / team.add_member /
  * chat.channel_send / wecom.reply / question.confirm / issue.create / issue.get /
- * issue.list / issue.update / issue.transition / skill.create / hook.manage。
+ * issue.list / issue.update / issue.transition / skill.create / hook.manage /
+ * git.repo.write / web.browse。
  */
 export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
   { key: "task.create", label: "创建任务", group: "task", tools: ["vteam_task_create"], factoryDefault: false },
@@ -80,8 +84,15 @@ export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
   { key: "memory.update", label: "更新团队记忆", group: "memory", tools: ["vteam_memory_update"], factoryDefault: true },
   { key: "skill.create", label: "沉淀技能", group: "capability", tools: ["vteam_skill_create"], factoryDefault: false },
   { key: "my_profile", label: "查询自身", group: "capability", tools: ["vteam_my_profile"], factoryDefault: true },
-  { key: "git.repos", label: "查看授权仓库", group: "capability", tools: ["vteam_git_repos_list"], factoryDefault: true },
   { key: "hook.manage", label: "注册/取消唤醒", group: "automation", tools: ["vteam_hook_register", "vteam_hook_cancel"], factoryDefault: false },
+  { key: "git.repos", label: "查看授权仓库", group: "capability", tools: ["vteam_git_repos_list"], factoryDefault: true },
+  // 以下 4 项为 T11 补齐；`secret.command` 是**既有缺陷**、非 T11 引入。
+  // 3 项 label 的「执行点待上线」后缀是刻意的不对称（`secret.command` 有真实拦截点），
+  // 勿当笔误统一掉——它必须留在用户可见文案里，见 issue is_0000000009。
+  { key: "secret.command", label: "执行敏感命令", group: "capability", tools: ["vteam_secret_command"], factoryDefault: true },
+  { key: "git.repo.read", label: "读取 Git 仓库（执行点待上线，当前不产生拦截）", group: "capability", tools: ["git_clone", "git_pull", "git_fetch", "git_status", "git_diff", "git_log"], factoryDefault: true },
+  { key: "git.repo.write", label: "写入 Git 远端（执行点待上线，当前不产生拦截）", group: "capability", tools: ["git_push"], factoryDefault: false },
+  { key: "web.browse", label: "浏览外部网页（执行点待上线，当前不产生拦截）", group: "capability", tools: ["browser"], factoryDefault: false },
 ] as const;
 
 const CAPABILITY_BY_KEY: ReadonlyMap<string, RoleCapability> = new Map(
