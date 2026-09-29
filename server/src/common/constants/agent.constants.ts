@@ -157,8 +157,10 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
  * `team.mainAgentMemberId` 权威判定（401/403）、guard 层② pass-through 的工具；
  * 该清单既不进 `toolAllows`（guard 白名单），也不进 `mcpDenies`（层① deny）。
  *
- * 现状（server-gate-removal-tool-authority）：工具权限唯一来源已收敛到 worker guard
- * 的角色 `toolAllows`（未列出即 deny）；服务端不再按主实例身份做工具级判定。
+ * 现状（server-gate-removal-tool-authority + T10 订正）：**岗位工具授权的唯一权威事实
+ * 来源是 DB 的 `AgentRole.capabilities`**；`toolAllows` 已降级为「出厂默认 + 配置生成源」，
+ * 不再是运行时白名单。worker 侧的角色守卫模块（`role-guard/policy.ts`）已于 `4a82949`
+ * 删除，故「未列出即 deny」已不成立。
  * 本常量保留为空数组以兼容 `/agent-policies` 的 `serverGated` 消费方（todo 6 退休），
  * 任何非空写入都会使 `mcpDenies` 推导在语义上失真，禁止再向其中添加工具。
  */
@@ -409,7 +411,9 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
-      // push 写远端：guard 放行后仍需仓库 write 授权（工具内 pushGuard 校验），无授权照样拒绝
+      // push 写远端：岗位放行后仍需仓库 write 授权——真实实现是**内联渲染进生成的
+      // 工具源码**（worker/src/git/git-tools.ts 内 push 工具模板里的 permission
+      // !== 'write' 抛错），不存在同名 guard 函数；无仓库授权照样拒绝
       git_push: 'allow',
       vteam_todo: 'allow',
       vteam_secret_command: 'allow',

@@ -346,7 +346,9 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       git_status: 'allow',
       git_diff: 'allow',
       git_log: 'allow',
-      // push 写远端：guard 放行后仍需仓库 write 授权（工具内 pushGuard 校验），无授权照样拒绝
+      // push 写远端：岗位放行后仍需仓库 write 授权——真实实现是**内联渲染进生成的
+      // 工具源码**（worker/src/git/git-tools.ts 内 push 工具模板里的 permission
+      // !== 'write' 抛错），不存在同名 guard 函数；无仓库授权照样拒绝
       git_push: 'allow',
       vteam_todo: 'allow',
       vteam_secret_command: 'allow',

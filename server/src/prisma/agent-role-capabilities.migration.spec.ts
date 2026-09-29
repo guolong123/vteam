@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   ROLE_BOUNDARIES,
+  VTEAM_BROWSER_TOOL_NAMES,
+  VTEAM_GIT_TOOL_NAMES,
   VTEAM_MCP_TOOL_NAMES,
   type VteamAgentName,
 } from '../common/constants/agent.constants';
@@ -184,5 +186,67 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
   it('the vteam catalog still covers all 32 tools after the capability split', () => {
     expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(32);
     expect(new Set(VTEAM_MCP_TOOL_NAMES).size).toBe(32);
+  });
+
+  // ------------------------------------------------------------------
+  // T10 验收②：目录与能力矩阵的**双向**完备性断言
+  // ------------------------------------------------------------------
+
+  describe('T10 目录 × 能力矩阵 双向完备性', () => {
+    /** 各命名空间的权威工具清单（bare 名，不含 `vteam_` 前缀）。 */
+    const CATALOG: Record<string, readonly string[]> = {
+      mcp: VTEAM_MCP_TOOL_NAMES.map((n) => n.replace(/^vteam_/, '')),
+      git: VTEAM_GIT_TOOL_NAMES.map((n) => n.replace(/^git_/, '')),
+      browser: VTEAM_BROWSER_TOOL_NAMES,
+    };
+
+    /** 能力矩阵登记的全部工具名（`vteam_` 前缀），附其所属命名空间。 */
+    const matrixEntries = (): Array<{
+      tool: string;
+      ns: string;
+      key: string;
+    }> =>
+      PLATFORM_CAPABILITIES.flatMap((cap) =>
+        cap.tools.map((tool) => ({
+          tool,
+          ns: (cap as { namespace?: string }).namespace ?? 'mcp',
+          key: cap.key,
+        })),
+      );
+
+    it('正向：矩阵登记的每个工具都真实存在于其命名空间清单（无登记了但工具不存在）', () => {
+      const unknown = matrixEntries()
+        .filter(
+          (e) => !(CATALOG[e.ns] ?? []).includes(e.tool.replace(/^vteam_/, '')),
+        )
+        .map((e) => `${e.key}:${e.tool}(ns=${e.ns})`);
+      expect(unknown).toEqual([]);
+    });
+
+    it('无重复登记：同一工具不被两个能力点同时声明', () => {
+      const seen = new Map<string, string>();
+      const dupes: string[] = [];
+      for (const e of matrixEntries()) {
+        const prev = seen.get(e.tool);
+        if (prev) dupes.push(`${e.tool} ∈ ${prev} & ${e.key}`);
+        else seen.set(e.tool, e.key);
+      }
+      expect(dupes).toEqual([]);
+    });
+
+    it('当前裸奔工具数 == 8（git_* 7 + browser 1），T11 补 3 能力点后此断言必须改写为 0', () => {
+      // 现状（计划 §5.1 修正 4）：git_clone/pull/fetch/status/diff/log/push 与 browser
+      // **没有任何岗位维度授权门**。这里把缺口显式钉成数字，而不是留一条恒绿断言：
+      // T11 落地后本数字应变 0，届时把本断言改成 expect(unregistered).toEqual([])。
+      const registered = new Set(
+        matrixEntries().map((e) => `${e.ns}:${e.tool.replace(/^vteam_/, '')}`),
+      );
+      const unregistered = Object.entries(CATALOG).flatMap(([ns, names]) =>
+        names
+          .filter((n) => !registered.has(`${ns}:${n}`))
+          .map((n) => `${ns}:${n}`),
+      );
+      expect(unregistered).toHaveLength(8);
+    });
   });
 });
