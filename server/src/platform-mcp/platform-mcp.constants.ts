@@ -57,17 +57,6 @@ export const PLATFORM_MCP_ERRORS = {
    * `SECRET_COMMAND_TIMEOUT_LAYER` 层表与 docs/secret-command-tool.md。
    */
   SECRET_COMMAND_CONFLICT: 'PLATFORM_MCP_SECRET_COMMAND_CONFLICT',
-  /**
-   * secret_command 托管模式门：团队 managedMode=on **且发起人不是团队主 Agent** 时，
-   * 在创建 pending question **之前**直接拒绝（不产生孤儿行、不进入执行链）→ 403。
-   *
-   * 语义澄清（is_0000000001 问题 2）：托管模式管的是「非主 Agent 的请求改由主 Agent
-   * 确认」。发起人本身就是主 Agent 时不存在「需他人确认」，故放行；主 Agent 无法代为
-   * 确认的部分（**密钥值本身**）仍由 secret_input 弹窗向**用户**索取——这是两件事，
-   * 不做 fail-closed 一刀切。
-   */
-  SECRET_COMMAND_MANAGED_FORBIDDEN:
-    'PLATFORM_MCP_SECRET_COMMAND_MANAGED_FORBIDDEN',
   /** secret_command worker 执行端点不可用（网络/超时/5xx）→ 503。 */
   SECRET_COMMAND_UNAVAILABLE: 'PLATFORM_MCP_SECRET_COMMAND_UNAVAILABLE',
 } as const;
