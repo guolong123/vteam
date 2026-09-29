@@ -1220,7 +1220,7 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       );
     });
 
-    it('托管团队 + 非主 Agent 发起：agentQuestion.create 调用 0（无孤儿 pending 行）且不 emit', async () => {
+    it('与托管模式解耦：托管团队 + 非主 Agent 发起**照常建行**（用户决策 2026-09-29）', async () => {
       prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
       prisma.team.findUnique.mockResolvedValue({
         managedMode: true,
@@ -1228,32 +1228,63 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       });
       prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
       prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.agentQuestion.create.mockResolvedValue({
+        id: 'q_1',
+        taskId: 't_1',
+        agentId: 'a_1',
+        kind: 'secret_input',
+        status: 'pending',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as any);
 
-      await expect(
-        service.createSecretForPlatform(
+      const dto = await service.createSecretForPlatform(
+        't_1',
+        {
+          template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+          variables: [{ name: 'DB_PASSWORD', secret: true }],
+        },
+        { agentId: 'a_1', requesterInstanceId: 'tmm_other' },
+      );
+
+      expect(prisma.agentQuestion.create).toHaveBeenCalledTimes(1);
+      expect(dto.kind).toBe('secret_input');
+    });
+
+    it('secret_input 的 DTO 恒 managedMode=false ⇒ 托管与非托管下都弹窗（用户要求 2 的看护）', async () => {
+      for (const managedMode of [true, false]) {
+        prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+        prisma.team.findUnique.mockResolvedValue({ managedMode });
+        prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+        prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+        prisma.agentQuestion.create.mockResolvedValue({
+          id: 'q_1',
+          taskId: 't_1',
+          agentId: 'a_1',
+          kind: 'secret_input',
+          status: 'pending',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        } as any);
+
+        const dto = await service.createSecretForPlatform(
           't_1',
           {
-            template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
-            variables: [{ name: 'DB_PASSWORD', secret: true }],
+            template: 'echo {{TOKEN}}',
+            variables: [{ name: 'TOKEN', secret: true }],
           },
           { agentId: 'a_1', requesterInstanceId: 'tmm_other' },
-        ),
-      ).rejects.toMatchObject({
-        response: {
-          code: QUESTIONS_ERRORS.QUESTION_SECRET_MANAGED_FORBIDDEN,
-        },
-      });
+        );
 
-      expect(prisma.agentQuestion.create).not.toHaveBeenCalled();
-      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
-      expect(realtime.emit).not.toHaveBeenCalled();
+        expect(dto.managedMode).toBe(false);
+      }
     });
 
     // ------------------------------------------------------------------
     // is_0000000001 问题 2：托管模式放行主 Agent，密钥值仍由用户提供
     // ------------------------------------------------------------------
 
-    it('托管团队 + 发起人即主 Agent → 放行创建，且 DTO.managedMode 恒 false（用户弹窗必须出现）', async () => {
+    it('与托管模式解耦：托管团队下 secret_input 照常创建，DTO 与 emit 的 managedMode 恒 false', async () => {
       prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
       prisma.team.findUnique.mockResolvedValue({
         managedMode: true,

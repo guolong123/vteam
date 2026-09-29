@@ -4246,8 +4246,13 @@ export class PlatformMcpService implements OnModuleInit {
   /**
    * secret_command：阻塞式敏感命令执行（sensitive-command-tool todo 6）。
    *
-   * 链路：入参校验（400）→ **归属解析**（团队/任务双维度，403/400）→ 托管门
-   * （403，仅非主 Agent 发起者）→ worker 行存在（503）→ 会话定位（403）→
+   * **本工具与托管模式无关**（用户决策 2026-09-29）：链路上**没有**托管门，任何
+   * agent 都能发起，托管开关开或关都照常弹窗。理由是这类工具本身就需要**用户强制
+   * 输入密钥**——托管模式开了之后，主 Agent 也决定不了用户会输什么；托管的「交主
+   * Agent 确认」语义管不到这个环节。
+   *
+   * 链路：入参校验（400）→ **归属解析**（团队/任务双维度，403/400）
+   * → worker 行存在（503）→ 会话定位（403）→
    * 单会话 in-flight 门（409，**带上一次在飞请求的实时状态**）
    * → `createSecretForPlatform` 创建 secret_input 问题并阻塞等待
    * （输入预算 540s，期间每 60s `keepAliveSession` 重臂静默看门狗与 durable
@@ -4297,7 +4302,6 @@ export class PlatformMcpService implements OnModuleInit {
         message: '该 worker 无此会话所属团队，禁止跨团队访问',
       });
     }
-    await this.assertSecretCommandManagedAllowed(teamId, callerId);
     const workerRow = await this.prisma.worker.findUnique({
       where: { id: ctx.workerId },
       select: { id: true, capabilities: true },
@@ -4437,42 +4441,6 @@ export class PlatformMcpService implements OnModuleInit {
       clearInterval(keepAliveTimer);
       this.secretCommandInflight.delete(sessionKey);
     }
-  }
-
-  /**
-   * 托管模式门（is_0000000001 问题 2）。
-   *
-   * 托管模式的语义是「**非主 Agent** 发起的确认请求改由主 Agent 确认」。发起人就是
-   * 主 Agent 时不存在「需他人确认」，故放行；主 Agent 无法代为确认的部分（**密钥值
-   * 本身**）由 secret_input 弹窗向**用户**索取（questions 域强制 managedMode=false）。
-   * 两件事拆开，避免 fail-closed 一刀切把主 Agent 自己也挡在门外。
-   */
-  private async assertSecretCommandManagedAllowed(
-    teamId: string,
-    callerId: string,
-  ): Promise<void> {
-    const team = (await this.prisma.team.findUnique({
-      where: { id: teamId },
-      select: { managedMode: true, mainAgentMemberId: true },
-    })) as {
-      managedMode?: boolean | null;
-      mainAgentMemberId?: string | null;
-    } | null;
-    if (team?.managedMode !== true) {
-      return;
-    }
-    if (team.mainAgentMemberId === callerId) {
-      this.logger.log(
-        `[secret-command] 托管模式放行（发起人为团队主 Agent ${callerId} team=${teamId}；密钥值仍由用户弹窗提供）`,
-      );
-      return;
-    }
-    throw new ForbiddenException({
-      code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_MANAGED_FORBIDDEN,
-      message:
-        `团队已开启托管模式，非主 Agent（${callerId}）发起的敏感命令不予受理；` +
-        '托管模式下请由团队主 Agent 发起（主 Agent 发起即放行，密钥值仍由用户在弹窗提供）',
-    });
   }
 
   /**

@@ -950,7 +950,7 @@ type SecretCommandArgs = z.infer<typeof SECRET_COMMAND_SCHEMA>;
 const SECRET_COMMAND_DESCRIPTION = [
   '在 worker 上执行一条需要密码/Token 的命令（阻塞式）。你只提交命令模板与变量声明（{{NAME}} 占位符），敏感值由用户在弹窗填写、不经你的上下文；结果只回原始模板、脱敏且每流 32KB 截断的 stdout/stderr 与 status/exitCode/timedOut/durationMs/disposition/timeoutLayer。渲染后的命令与明文 secret 不会出现在返回里。',
   '归属：teamId 为主（团队直聊只传 teamId 即可），taskId 是**可选**的归属标注（凭据类运维不必挂任务）；二者至少传一个。',
-  '托管模式：发起人是团队主 Agent 时放行（密钥值本身仍必须由用户在弹窗输入，主 Agent 无法代确认）；非主 Agent 发起 → 403 SECRET_COMMAND_MANAGED_FORBIDDEN。',
+  '本工具与托管模式无关：任何 agent 都能发起，托管开关开或关都照常向用户弹窗索取密钥（这类工具本来就需要用户强制输入，托管的「交主 Agent 确认」语义管不到这个环节）。',
   '同一会话同一时刻只允许一次调用，并发第二次 → 409 SECRET_COMMAND_CONFLICT（报文带上一次在飞请求的实时状态）。',
   '【超时语义，务必遵守】一次调用串行穿过 6 层超时（由外到内）：',
   ...layerBudgetTable().map(

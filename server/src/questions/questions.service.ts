@@ -785,20 +785,6 @@ export class QuestionsService {
       ? ((await this.mainAgentSessionOfTeam(teamId)) ??
         (taskId ? await this.mainAgentSessionOf(taskId) : null))
       : await this.mainAgentSessionOf(taskId);
-    const managed = await this.managedModeOf(taskId || null, sessionId);
-    if (managed) {
-      const mainAgentMemberId = teamId
-        ? await this.mainAgentMemberIdOf(teamId)
-        : null;
-      if (mainAgentMemberId !== options.requesterInstanceId) {
-        throw new ForbiddenException({
-          code: QUESTIONS_ERRORS.QUESTION_SECRET_MANAGED_FORBIDDEN,
-          message:
-            '团队已开启托管模式，非主 Agent 发起的敏感输入不予受理（fail-closed）；' +
-            '请由团队主 Agent 发起（密钥值仍须由用户在弹窗提供）',
-        });
-      }
-    }
     const seq = await this.idGen.nextId('que');
     const requestId = `que_platform_${seq.split('_')[1] ?? ''}`;
     const id = await this.idGen.nextId(AGENT_QUESTION_ID_PREFIX);
@@ -1087,15 +1073,6 @@ export class QuestionsService {
       select: { id: true },
     });
     return session?.id ?? null;
-  }
-
-  /** 团队主 Agent 成员 id（团队不存在 → null；托管模式门比对用）。 */
-  private async mainAgentMemberIdOf(teamId: string): Promise<string | null> {
-    const team = await this.prisma.team.findUnique({
-      where: { id: teamId },
-      select: { mainAgentMemberId: true },
-    });
-    return team?.mainAgentMemberId ?? null;
   }
 
   /**

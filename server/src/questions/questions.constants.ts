@@ -58,8 +58,6 @@ export const QUESTIONS_ERRORS = {
   QUESTION_EXPIRED: 'QUESTION_EXPIRED',
   /** 托管读团队行时团队归属存在但团队行缺失（session-unification Todo 9）→ 404。 */
   QUESTION_TEAM_NOT_FOUND: 'QUESTION_TEAM_NOT_FOUND',
-  /** 托管模式 fail-closed：托管团队不创建/不受理 secret_input（明文输入不进托管确认链）→ 403。 */
-  QUESTION_SECRET_MANAGED_FORBIDDEN: 'QUESTION_SECRET_MANAGED_FORBIDDEN',
 } as const;
 
 /**
