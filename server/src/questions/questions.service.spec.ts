@@ -1195,6 +1195,8 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
             template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
             variables: [{ name: 'DB_PASSWORD', secret: true }],
             reason: '导出订单表',
+            // T4(B2)：与 createForPlatform 同形。未传 requesterInstanceId 时为 null。
+            requesterInstanceId: null,
           },
           status: 'pending',
         },
@@ -1335,6 +1337,123 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         expect.objectContaining({ teamId: 'tm_1' }),
         { type: 'team', id: 'tm_1' },
       );
+    });
+
+    // ------------------------------------------------------------------
+    // T4（B2）：content 必须落 requesterInstanceId，否则自确认校验 1a 永不触发
+    // ------------------------------------------------------------------
+
+    it('T4 验收①：落库行 content.requesterInstanceId 等于传入值（与 createForPlatform 同形）', async () => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({
+        managedMode: false,
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.agentQuestion.create.mockResolvedValue(secretRow());
+
+      await service.createSecretForPlatform(
+        't_1',
+        {
+          template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+          variables: [{ name: 'DB_PASSWORD', secret: true }],
+        },
+        { agentId: 'a_1', requesterInstanceId: 'tmm_caller' },
+      );
+
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          content: expect.objectContaining({
+            requesterInstanceId: 'tmm_caller',
+          }),
+        }),
+      });
+    });
+
+    it('T4 验收①b：未传 requesterInstanceId 时落 null（向后兼容，存量行同形）', async () => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({
+        managedMode: false,
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.agentQuestion.create.mockResolvedValue(secretRow());
+
+      await service.createSecretForPlatform(
+        't_1',
+        {
+          template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+          variables: [{ name: 'DB_PASSWORD', secret: true }],
+        },
+        { agentId: 'a_1' },
+      );
+
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          content: expect.objectContaining({ requesterInstanceId: null }),
+        }),
+      });
+    });
+
+    it('T4 验收②回归：落库后 confirmByAgent 三道防线行为不变（secret_input 仍 100% 被拒）', async () => {
+      prisma.task.findUnique.mockResolvedValue({ id: 't_1', teamId: 'tm_1' });
+      prisma.team.findUnique.mockResolvedValue({
+        managedMode: false,
+        mainAgentMemberId: 'tmm_main',
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_main' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_1' });
+      prisma.agentQuestion.create.mockResolvedValue(secretRow());
+      await service.createSecretForPlatform(
+        't_1',
+        {
+          template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+          variables: [{ name: 'DB_PASSWORD', secret: true }],
+        },
+        { agentId: 'a_1', requesterInstanceId: 'tmm_caller' },
+      );
+
+      // 防线 2（row.kind 等值）：kind 声明 secret_input 时 confirmByAgent 必拒。
+      prisma.agentQuestion.findUnique.mockResolvedValue(secretRow());
+      await expect(
+        service.confirmByAgent({
+          taskId: 't_1',
+          instanceId: 'tmm_other',
+          requestId: 'que_platform_0000000001',
+          kind: 'secret_input',
+          answers: [['任意']],
+        } as unknown as Parameters<typeof service.confirmByAgent>[0]),
+      ).rejects.toBeDefined();
+
+      // 防线 1a（自确认）：**读回落库行的 content.requesterInstanceId**——这正是 T4
+      // 的要害：字段不落库时 1a 永不触发（此处若用不带该字段的 secretRow()，本断言
+      // 会退化成 INVALID_REPLY，正好演示缺字段的后果）。
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        secretRow({
+          content: {
+            source: SECRET_QUESTION_SOURCE,
+            template: 'mysql -h db -u root -p{{DB_PASSWORD}}',
+            variables: [{ name: 'DB_PASSWORD', secret: true }],
+            reason: '导出订单表',
+            requesterInstanceId: 'tmm_caller',
+          },
+        }),
+      );
+      await expect(
+        service.confirmByAgent({
+          taskId: 't_1',
+          instanceId: 'tmm_caller',
+          requestId: 'que_platform_0000000001',
+          kind: 'question',
+          answers: [['任意']],
+        }),
+      ).rejects.toMatchObject({
+        response: {
+          code: QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
+        },
+      });
     });
 
     it('带 sentinel 的回复：落库 answers 只有 {provided,filled,actorType,actorId}，update 入参与序列化 SSE payload 0 命中，hook 内存收到明文', async () => {
@@ -1634,4 +1753,100 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       );
     });
   });
+  // ==================================================================
+  // T8：§4.2 两条「不得回退」结论的回归钉死
+  // ==================================================================
+
+  describe('T8 冷评审已验证结论的回归钉死', () => {
+    const SERVICE_PATH = path.resolve(__dirname, './questions.service.ts');
+
+    /**
+     * 检测谓词（刻意**不是**「grep `AgentQuestionDto` 出现处」）。
+     *
+     * 选 `managedMode` 作锚，因为它是 `AgentQuestionDto` 的**必填**字段
+     * （questions.service.ts:47）⇒ 任何新的 DTO 产出点若漏掉它就**编译不过**。
+     * 所以「行首 `managedMode:` 的出现处」= DTO 产出点。
+     *
+     * 三条必须一起成立，缺一即误判：
+     * 1. **行首锚**（`/^\s*managedMode:/`）——排除 prisma 查询里的行内写法
+     *    `select: { id: true, managedMode: true }`（:220），那是 DB 列不是 DTO 字段；
+     * 2. **不是类型声明**（行尾无 `;`）——排除 `AgentQuestionDto` 接口体里的
+     *    `managedMode: boolean;`（:47），那是声明不是产出；
+     * 3. **必填 + 12 字段** ⇒ DTO 字面量不可能挤进一行，prettier 必换行 ⇒ 行首锚不会漏。
+     *
+     * 刻意**不**检测：import 行、返回类型标注、入参位置、任何 spec 引用。
+     */
+    const dtoProductionSites = (): Array<{ line: number; text: string }> => {
+      const src = fs.readFileSync(SERVICE_PATH, 'utf8');
+      const out: Array<{ line: number; text: string }> = [];
+      src.split('\n').forEach((text, i) => {
+        if (/^\s*managedMode:/.test(text) && !/;\s*$/.test(text)) {
+          out.push({ line: i + 1, text });
+        }
+      });
+      return out;
+    };
+
+    it('验收①：`AgentQuestionDto` 产出点唯一（仅 toDto 内），新增第二条产 DTO 路径即红', () => {
+      const sites = dtoProductionSites();
+      expect(sites).toHaveLength(1);
+      // 唯一产出点必须落在 toDto 方法体内（toDto 是私有方法，toDtoOfDto 之类不算）
+      const src = fs.readFileSync(SERVICE_PATH, 'utf8');
+      const toDtoStart = src.indexOf('private toDto(');
+      expect(toDtoStart).toBeGreaterThan(-1);
+      const offsetOf = (line: number): number =>
+        src.split('\n').slice(0, line - 1).join('\n').length;
+      expect(offsetOf(sites[0].line)).toBeGreaterThan(toDtoStart);
+    });
+
+    it('验收①自证：临时加第二产出点必须让上一条变红（谓词不是恒绿）', () => {
+      const src = fs.readFileSync(SERVICE_PATH, 'utf8');
+      // 在 createSecretForPlatform 的 prisma.create 之前插一条「像 DTO 的返回路径」
+      const anchor = '    const row = await this.prisma.agentQuestion.create({';
+      expect(src).toContain(anchor);
+      const mutant = src.replace(
+        anchor,
+        [
+          '    const mutatedDtoProbe: AgentQuestionDto = {',
+          '      id,',
+          '      requestId,',
+          '      taskId,',
+          '      agentId: "",',
+          '      kind: "question",',
+          '      content: {},',
+          '      status: "pending",',
+          '      answers: null,',
+          '      managedMode: false,',
+          '      createdAt: new Date(),',
+          '      updatedAt: new Date(),',
+          '    };',
+          '    void mutatedDtoProbe;',
+          anchor,
+        ].join('\n'),
+      );
+      const probe = path.join(__dirname, '__t8_mutation_probe.service.ts');
+      try {
+        fs.writeFileSync(probe, mutant, 'utf8');
+        const mutantSites = ((): number => {
+          const text = fs.readFileSync(probe, 'utf8');
+          return text
+            .split('\n')
+            .filter((l) => /^\s*managedMode:/.test(l) && !/;\s*$/.test(l)).length;
+        })();
+        // 变异后产出点 = 2 ⇒ 原断言的 toHaveLength(1) 必红
+        expect(mutantSites).toBe(2);
+      } finally {
+        fs.rmSync(probe, { force: true });
+      }
+    });
+
+    it('验收①边界：谓词不误伤 import / 返回类型标注 / 入参 / spec 引用', () => {
+      // 这些都不该被算成产出点：它们都不在 questions.service.ts 的 DTO 字面量里
+      const sites = dtoProductionSites();
+      expect(sites).toHaveLength(1);
+      // 该唯一产出点的行内容就是 DTO 字段，不是 import/类型
+      expect(sites[0].text).not.toMatch(/import|interface|boolean|;\s*$/);
+    });
+  });
+
 });

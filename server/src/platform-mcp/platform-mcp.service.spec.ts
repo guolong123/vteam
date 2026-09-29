@@ -8053,6 +8053,48 @@ describe('PlatformMcpService', () => {
         expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
       });
 
+      it('T6：teamId 误传任务 id（t_ 前缀）→ 400 对称校验；归属错仍是 403（分层不回退）', async () => {
+        setupSecret();
+        // 对称：teamId 填 t_ 前缀 → 400（与 taskId 填 tm_ 前缀同层）
+        const err400 = await service
+          .secretCommand(
+            ctx,
+            teamOnlyArgs({ teamId: 't_0000000001' }),
+          )
+          .then(
+            () => undefined,
+            (e: unknown) => e as { message?: string },
+          );
+        expect(err400?.message).toContain('请传 taskId');
+        expect(err400?.message).toContain('tm_ 前缀');
+        // 分层：teamId 前缀合法但与该 worker 会话所属团队不匹配 → 403，不是 400。
+        // setupSecret 的 session mock 是无差别命中（不看 where 的 teamId），故这里
+        // 换成按 teamId 判定的实现，否则 assertWorkerTeam 会假通过、测不到分层。
+        prisma.session.findFirst.mockImplementation(
+          async (args: { where?: { teamId?: string } }) =>
+            args.where?.teamId === 'tm_other'
+              ? null
+              : {
+                  id: 's_1',
+                  agentId: senderAgentId,
+                  teamMemberId: senderInstanceId,
+                  instanceRef: 'ses_0001',
+                },
+        );
+        const err403 = await service
+          .secretCommand(ctx, teamOnlyArgs({ teamId: 'tm_other' }))
+          .then(
+            () => undefined,
+            (e: unknown) => e as {
+              getResponse(): { code?: string; message?: string };
+            },
+          );
+        expect(err403?.getResponse().code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
+        // 前缀误传不得创建 question / 调 worker（任一分支都不得有副作用）
+        expect(questionsService.createSecretForPlatform).not.toHaveBeenCalled();
+        expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
+      });
+
       it('工具 schema：teamId/taskId 皆可选，但双空被 refine 拒绝（团队直聊只传 teamId 可过）', () => {
         const teamOnly = SECRET_COMMAND_SCHEMA.safeParse({
           teamId: 'tm_1',
@@ -8277,21 +8319,44 @@ describe('PlatformMcpService', () => {
         );
       });
 
-      it('跨包契约：worker 注入的客户端超时下限与 server 侧同值（防漂移）', () => {
-        // worker/src/resources/injector.ts 的 VTEAM_MCP_TIMEOUT_FLOOR_MS 与本常量
-        // 分处两个包、无法互相 import，故用源码字面量对账锁死漂移。
-        const injectorSource = fs.readFileSync(
-          path.resolve(__dirname, '../../../worker/src/resources/injector.ts'),
-          'utf8',
+      // 跨包契约：worker 侧常量与 server 侧同值。两侧分处两个 npm 包、无法互相
+      // import，只能读源码字面量对账；因此本条**依赖仓库里有 worker/ 目录**。
+      // 「只 clone server/」的本地环境读不到该文件 → 守卫 + skip（不拖垮整个 spec）。
+      // 注意：这不是 CI 修复——ci.yml:27/54/69 是裸 actions/checkout@v4、无 paths/
+      // sparse-checkout，server job 拿的是全仓，worker/src/resources/injector.ts
+      // 存在，本条在 CI 里照常执行。降级后的漂移兜底见 T17。
+      const WORKER_INJECTOR_REL = '../../../worker/src/resources/injector.ts';
+      const workerInjectorPath = path.resolve(__dirname, WORKER_INJECTOR_REL);
+      const hasWorkerInjector = fs.existsSync(workerInjectorPath);
+      const crossPackageIt = hasWorkerInjector ? it : it.skip;
+      crossPackageIt(
+        '跨包契约：worker 注入的客户端超时下限与 server 侧同值（防漂移）',
+        () => {
+          const injectorSource = fs.readFileSync(workerInjectorPath, 'utf8');
+          const floor = /VTEAM_MCP_TIMEOUT_FLOOR_MS\s*=\s*([\d_]+)/.exec(
+            injectorSource,
+          );
+          // 两侧值都打进断言消息：漂移时能直接看出是哪一侧变了、原文怎么写的
+          // （源码字面量带下划线分隔，如 900_000，故按数值比、原样留档）。
+          expect({
+            matchedLiteral: floor?.[1] ?? null,
+            matched: Number(floor?.[1].replace(/_/g, '')),
+            server: SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS,
+          }).toEqual({
+            matchedLiteral: floor?.[1] ?? null,
+            matched: SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS,
+            server: SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS,
+          });
+        },
+      );
+      if (!hasWorkerInjector) {
+        // 让「本条被跳过」这件事在输出里可见，而不是静默少跑一条。
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[skip] 跨包契约测试未执行：缺少 ${WORKER_INJECTOR_REL}` +
+            `（server 侧下限 ${SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS}ms 未经跨包对账）`,
         );
-        const floor = /VTEAM_MCP_TIMEOUT_FLOOR_MS\s*=\s*([\d_]+)/.exec(
-          injectorSource,
-        );
-        expect(floor).not.toBeNull();
-        expect(Number(floor?.[1].replace(/_/g, ''))).toBe(
-          SECRET_COMMAND_CLIENT_TIMEOUT_FLOOR_MS,
-        );
-      });
+      }
 
       it('503 报文带层次标识（区分命令超时与 server→worker 链路失败）', async () => {
         setupSecret();

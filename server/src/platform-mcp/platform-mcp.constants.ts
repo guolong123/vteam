@@ -198,7 +198,11 @@ export function layerBudgetTable(): readonly SecretCommandTimeoutLayerSpec[] {
   return [
     {
       layer: SECRET_COMMAND_TIMEOUT_LAYER.GATEWAY,
-      effective: '由部署侧决定（平台不可控），须 ≥ 855s',
+      // 数值取自常量而非字面量：855s = SECRET_COMMAND_TOTAL_BUDGET_MS（手写会与
+      // 预算常量漂移，且 doc 层表断言比的是这里的产物）。
+      effective: `由部署侧决定（平台不可控），须 ≥ ${Math.round(
+        SECRET_COMMAND_TOTAL_BUDGET_MS / 1000,
+      )}s`,
       owner: '网关/代理',
       serverMayStillRun: true,
     },
@@ -216,19 +220,23 @@ export function layerBudgetTable(): readonly SecretCommandTimeoutLayerSpec[] {
     },
     {
       layer: SECRET_COMMAND_TIMEOUT_LAYER.INPUT_BUDGET,
-      effective: seconds(SECRET_COMMAND_INPUT_BUDGET_MS),
+      // 显式带 ms：工具 description 是模型可见的，单写「540s」会让模型无法与
+      // 预算头的毫秒值对齐。
+      effective: `${SECRET_COMMAND_INPUT_BUDGET_MS}ms（${seconds(
+        SECRET_COMMAND_INPUT_BUDGET_MS,
+      )}）`,
       owner: 'vteam-server（questions 域）',
       serverMayStillRun: false,
     },
     {
       layer: SECRET_COMMAND_TIMEOUT_LAYER.COMMAND_EXEC,
-      effective: `timeoutSec（缺省 ${SECRET_COMMAND_DEFAULT_TIMEOUT_SEC}s，上限 ${SECRET_COMMAND_MAX_TIMEOUT_SEC}s）`,
+      effective: `timeoutSec，缺省 ${SECRET_COMMAND_DEFAULT_TIMEOUT_SEC}s、上限 ${SECRET_COMMAND_MAX_TIMEOUT_SEC}s`,
       owner: '调用方入参 → worker',
       serverMayStillRun: true,
     },
     {
       layer: SECRET_COMMAND_TIMEOUT_LAYER.WORKER_REQUEST,
-      effective: `命令超时 + ${seconds(SECRET_COMMAND_REQUEST_SLACK_MS)}`,
+      effective: `命令超时 + ${SECRET_COMMAND_REQUEST_SLACK_MS}ms`,
       owner: 'vteam-server → worker',
       serverMayStillRun: true,
     },
