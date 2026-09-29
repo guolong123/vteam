@@ -36,6 +36,16 @@ const MIGRATION = path.resolve(
   'migration.sql',
 );
 
+const BASELINE_MIGRATION = path.resolve(
+  __dirname,
+  '..',
+  '..',
+  'prisma',
+  'migrations',
+  '20260925000000_squashed_baseline',
+  'migration.sql',
+);
+
 const T11_KEYS = ['git.repo.read', 'git.repo.write', 'web.browse'] as const;
 
 const BUILTIN_KEYS = BUILTIN_AGENT_ROLES.map((role) => role.key);
@@ -180,5 +190,34 @@ describe('T11 三键存量回填迁移 20260929000000', () => {
     expect(sql).toMatch(
       /`capabilities` IS NOT NULL[\s\S]{0,80}`capabilities_configured_at` IS NULL/i,
     );
+  });
+
+  it('DDL 守卫：SET 到的列，要么建表时已存在，要么由本迁移 ADD COLUMN 补上', () => {
+    const baseline = fs.readFileSync(BASELINE_MIGRATION, 'utf8');
+    const createTable =
+      /CREATE TABLE `agent_roles` \(([\s\S]*?)\n\) ENGINE=/.exec(baseline);
+    expect(createTable).not.toBeNull();
+    const baselineColumns = new Set(
+      [...(createTable as RegExpExecArray)[1].matchAll(/^\s*`(\w+)`/gm)].map(
+        (m) => m[1],
+      ),
+    );
+
+    const sql = executableSql(fs.readFileSync(MIGRATION, 'utf8'));
+    const setColumns = new Set(
+      [...sql.matchAll(/UPDATE\s+`agent_roles`\s+SET\s+`(\w+)`/g)].map(
+        (m) => m[1],
+      ),
+    );
+    expect(setColumns.size).toBeGreaterThan(0);
+    const addedHere = new Set(
+      [...sql.matchAll(/ADD COLUMN\s+`(\w+)`/g)].map((m) => m[1]),
+    );
+
+    expect(
+      [...setColumns].filter(
+        (c) => !baselineColumns.has(c) && !addedHere.has(c),
+      ),
+    ).toEqual([]);
   });
 });

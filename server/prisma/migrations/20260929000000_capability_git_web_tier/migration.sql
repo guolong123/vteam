@@ -28,6 +28,14 @@
 -- **全部**缺失时为真，若某行已有其中一键，整行会被跳过、另外两键永久留空
 -- （default-allow 下即永久放行）。拆开后每键独立幂等。
 
+-- ── 0) DDL：新增 capabilities_configured_at 列 ───────────────────────────
+-- 必须自带且必须排在末尾打戳之前：`agent_roles` 建表于 squashed_baseline，列清单
+-- 里没有这一列（schema.prisma 本次才加），否则打戳报 ERROR 1054 Unknown column。
+-- 配套契约测试是**文本解析**（readFileSync → 剥 `--` → 正则），从不执行 SQL，
+-- 结构上发现不了缺失的 DDL —— 勿以「测试全绿」推断本语句可删。
+ALTER TABLE `agent_roles`
+  ADD COLUMN `capabilities_configured_at` datetime(3) DEFAULT NULL;
+
 -- ── 1) 7 个内置岗：派生取值 ──────────────────────────────────────────────
 -- git.repo.read = true：developer / tester / project_manager / librarian
 --   （architect 缺 git_fetch，六个读工具不齐 ⇒ false）
