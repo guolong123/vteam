@@ -28,9 +28,7 @@ describe('platform-mcp secret_command 常量与文档层表一致性', () => {
   /** 取「三之二」小节里那张 6 行层表（以 `| # | 层 |` 表头定位，避开别的表）。 */
   const docLayerRows = (): Map<string, string[]> => {
     const lines = doc().split('\n');
-    const header = lines.findIndex(
-      (l) => /^\|\s*#\s*\|\s*层\s*\|/.test(l),
-    );
+    const header = lines.findIndex((l) => /^\|\s*#\s*\|\s*层\s*\|/.test(l));
     expect(header).toBeGreaterThan(-1);
     const rows = new Map<string, string[]>();
     for (const line of lines.slice(header + 2)) {
@@ -95,9 +93,15 @@ describe('platform-mcp secret_command 常量与文档层表一致性', () => {
         .trim();
       // 文档在「否」那格加了长解释，只判首字（是/否），细节文字不参与比对。
       const truthy = cell.trim().startsWith('是');
-      expect({ layer: spec.layer, truthy, flag: spec.serverMayStillRun }).toEqual(
-        { layer: spec.layer, truthy: spec.serverMayStillRun, flag: spec.serverMayStillRun },
-      );
+      expect({
+        layer: spec.layer,
+        truthy,
+        flag: spec.serverMayStillRun,
+      }).toEqual({
+        layer: spec.layer,
+        truthy: spec.serverMayStillRun,
+        flag: spec.serverMayStillRun,
+      });
     }
     const stillRunnable = layerBudgetTable()
       .filter((s) => s.serverMayStillRun)
