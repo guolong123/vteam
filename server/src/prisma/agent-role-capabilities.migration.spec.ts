@@ -164,7 +164,7 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
     expect(factory['secret.command']).toBe(true);
     expect(
       Object.values(factory).filter((value) => value === false),
-    ).toHaveLength(14);
+    ).toHaveLength(16); // T11：+git.repo.write +web.browse 出厂即拒
   });
 
   it('execution policy remains the owner of Agent.policyId and its JSON config column', () => {
@@ -193,14 +193,22 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
   // ------------------------------------------------------------------
 
   describe('T10 目录 × 能力矩阵 双向完备性', () => {
-    /** 各命名空间的权威工具清单（bare 名，不含 `vteam_` 前缀）。 */
+    /**
+     * 各命名空间的权威工具清单，**一律用真实暴露名**。
+     *
+     * 三个命名空间的暴露名形态本来就不同：mcp 是 `vteam_<action>`，git 是
+     * `git_<action>`，browser 就是 `browser`。**都不要再剥前缀**——之前把 git 也
+     * `replace(/^git_/,'')` 剥成 `clone/pull/...` 是错的：能力点 `tools[]` 登记的
+     * 是暴露名 `git_clone`，两侧口径必须一致。该错误在 git 工具尚未登记任何能力点时
+     * 是**潜伏**的（正向断言遍历空集合恒通过），T11 登记后才暴露。
+     */
     const CATALOG: Record<string, readonly string[]> = {
-      mcp: VTEAM_MCP_TOOL_NAMES.map((n) => n.replace(/^vteam_/, '')),
-      git: VTEAM_GIT_TOOL_NAMES.map((n) => n.replace(/^git_/, '')),
+      mcp: VTEAM_MCP_TOOL_NAMES,
+      git: VTEAM_GIT_TOOL_NAMES,
       browser: VTEAM_BROWSER_TOOL_NAMES,
     };
 
-    /** 能力矩阵登记的全部工具名（`vteam_` 前缀），附其所属命名空间。 */
+    /** 能力矩阵登记的全部工具**真实暴露名**，附其所属命名空间。 */
     const matrixEntries = (): Array<{
       tool: string;
       ns: string;
@@ -216,9 +224,7 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
 
     it('正向：矩阵登记的每个工具都真实存在于其命名空间清单（无登记了但工具不存在）', () => {
       const unknown = matrixEntries()
-        .filter(
-          (e) => !(CATALOG[e.ns] ?? []).includes(e.tool.replace(/^vteam_/, '')),
-        )
+        .filter((e) => !(CATALOG[e.ns] ?? []).includes(e.tool))
         .map((e) => `${e.key}:${e.tool}(ns=${e.ns})`);
       expect(unknown).toEqual([]);
     });
@@ -234,19 +240,19 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
       expect(dupes).toEqual([]);
     });
 
-    it('当前裸奔工具数 == 8（git_* 7 + browser 1），T11 补 3 能力点后此断言必须改写为 0', () => {
-      // 现状（计划 §5.1 修正 4）：git_clone/pull/fetch/status/diff/log/push 与 browser
-      // **没有任何岗位维度授权门**。这里把缺口显式钉成数字，而不是留一条恒绿断言：
-      // T11 落地后本数字应变 0，届时把本断言改成 expect(unregistered).toEqual([])。
+    it('反向：命名空间清单里的每个工具都被某个能力点登记（无「裸奔」工具）', () => {
+      // T10 写下这条时实测为 8（git_* 7 + browser 1，计划 §5.1 修正 4 的真实缺口）；
+      // T11 登记 git.repo.read / git.repo.write / web.browse 后归零。新增能力点却
+      // 忘了登记工具、或登记了却拼错工具名，本条即红。
       const registered = new Set(
-        matrixEntries().map((e) => `${e.ns}:${e.tool.replace(/^vteam_/, '')}`),
+        matrixEntries().map((e) => `${e.ns}:${e.tool}`),
       );
       const unregistered = Object.entries(CATALOG).flatMap(([ns, names]) =>
         names
           .filter((n) => !registered.has(`${ns}:${n}`))
           .map((n) => `${ns}:${n}`),
       );
-      expect(unregistered).toHaveLength(8);
+      expect(unregistered).toEqual([]);
     });
   });
 });
