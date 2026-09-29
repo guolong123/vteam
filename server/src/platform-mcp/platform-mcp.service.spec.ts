@@ -7441,21 +7441,6 @@ describe('PlatformMcpService', () => {
       expect(questionsService.createSecretForPlatform).not.toHaveBeenCalled();
     });
 
-    it('托管模式：非主 Agent 发起 → 创建 question 之前 403（创建调用 0 次、worker 0 次）', async () => {
-      setupSecret();
-      prisma.team.findUnique.mockResolvedValue({
-        managedMode: true,
-        mainAgentMemberId: 'tmm_other_main',
-      } as any);
-      await expectCode(
-        service.secretCommand(ctx, secretArgs()),
-        ForbiddenException,
-        PLATFORM_MCP_ERRORS.SECRET_COMMAND_MANAGED_FORBIDDEN,
-      );
-      expect(questionsService.createSecretForPlatform).not.toHaveBeenCalled();
-      expect(workerClient.runSecretCommand).not.toHaveBeenCalled();
-    });
-
     it('happy：同步钩子给 secret → 调 worker（timeoutMs=60s+5s）→ succeeded，envelope 无明文无渲染命令', async () => {
       setupSecret();
       injectSyncHook('provided', { TOKEN: SENTINEL });
@@ -8144,31 +8129,35 @@ describe('PlatformMcpService', () => {
         expect(workerClient.runSecretCommand).toHaveBeenCalledTimes(1);
       });
 
-      it('主 Agent 放行时 403 语义反转：非主发起者仍被拦且错误信息指向主 Agent', async () => {
+      it('与托管模式解耦：managedMode on/off 都能发起成功，且恒向用户弹窗（用户决策 2026-09-29）', async () => {
+        for (const managedMode of [true, false]) {
+          setupSecret();
+          prisma.team.findUnique.mockResolvedValue({
+            managedMode,
+            mainAgentMemberId: 'tmm_main_1',
+          } as any);
+          injectSyncHook('provided', { TOKEN: SENTINEL });
+          const env = await service.secretCommand(ctx, secretArgs());
+          expect(env.status).toBe('succeeded');
+          expect(
+            questionsService.createSecretForPlatform,
+          ).toHaveBeenCalledTimes(1);
+          questionsService.createSecretForPlatform.mockClear();
+        }
+      });
+
+      it('发起人不是团队主 Agent 也照常受理（托管门已整块移除）', async () => {
         setupSecret();
         prisma.team.findUnique.mockResolvedValue({
           managedMode: true,
-          mainAgentMemberId: 'tmm_main_1',
-        } as any);
-        const err = await service.secretCommand(ctx, secretArgs()).then(
-          () => undefined,
-          (e: unknown) => e as { getResponse(): { message?: string } },
-        );
-        expect(err?.getResponse()).toMatchObject({
-          code: PLATFORM_MCP_ERRORS.SECRET_COMMAND_MANAGED_FORBIDDEN,
-        });
-        expect(err?.getResponse().message).toContain('主 Agent');
-      });
-
-      it('managedMode=off → 不查 mainAgentMemberId 也不拦（放行）', async () => {
-        setupSecret();
-        prisma.team.findUnique.mockResolvedValue({
-          managedMode: false,
-          mainAgentMemberId: 'tmm_main_1',
+          mainAgentMemberId: 'tmm_someone_else',
         } as any);
         injectSyncHook('provided', { TOKEN: SENTINEL });
         const env = await service.secretCommand(ctx, secretArgs());
         expect(env.status).toBe('succeeded');
+        expect(questionsService.createSecretForPlatform).toHaveBeenCalledTimes(
+          1,
+        );
       });
     });
 

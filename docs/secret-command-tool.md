@@ -3,6 +3,7 @@
 > 面向运维与接入方的操作说明。本文描述**已实现的行为**与**明确接受的残余风险**，
 > 不是安全承诺：文中所有"脱敏""拦截"均为 best-effort 防顺手泄露，不构成安全边界。
 > 涉及代码位置见文末「参考」，以仓库实际实现为准。
+> 另见 §7.2：`secret_command` 与托管模式**解耦**，任何 agent 都能发起（密钥值仍只由用户输入）。
 
 ## 一、这个工具做什么
 
@@ -18,12 +19,12 @@
 
 ## 二、三方职责
 
-| 角色 | 职责 | 不做什么 |
-|------|------|----------|
-| 模型 | 提交命令模板 + `{{变量}}` 声明 + `reason`；解释返回的状态与脱敏输出 | 不提供值、看不到值、拿不到渲染后命令 / argv / cwd 明细 |
-| 用户（人） | 在 Web 弹窗中核对只读模板与 reason，填写变量（敏感项为 password 输入框），确认或取消 | 不在聊天消息里粘贴 secret；取消即 `{secrets:null}`，命令不会执行 |
-| worker | token 保护的同步 `POST /secret-command`：变量替换、cwd 约束、进程组超时、精确值脱敏、截断后同步返回 | 不回传渲染命令 / argv / cwd / 未脱敏错误；不把 secret 写入日志或响应 |
-| server | 校验入参与归属、创建不回显的 `secret_input` 问题、阻塞等待、下发执行、二次脱敏、组装 envelope | 不持久化 secret、不写 DB 审计表、不在 SSE / 日志里携带值 |
+| 角色       | 职责                                                                                                | 不做什么                                                             |
+| ---------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| 模型       | 提交命令模板 + `{{变量}}` 声明 + `reason`；解释返回的状态与脱敏输出                                 | 不提供值、看不到值、拿不到渲染后命令 / argv / cwd 明细               |
+| 用户（人） | 在 Web 弹窗中核对只读模板与 reason，填写变量（敏感项为 password 输入框），确认或取消                | 不在聊天消息里粘贴 secret；取消即 `{secrets:null}`，命令不会执行     |
+| worker     | token 保护的同步 `POST /secret-command`：变量替换、cwd 约束、进程组超时、精确值脱敏、截断后同步返回 | 不回传渲染命令 / argv / cwd / 未脱敏错误；不把 secret 写入日志或响应 |
+| server     | 校验入参与归属、创建不回显的 `secret_input` 问题、阻塞等待、下发执行、二次脱敏、组装 envelope       | 不持久化 secret、不写 DB 审计表、不在 SSE / 日志里携带值             |
 
 ## 三、阻塞式人机交互流程（blocking human-in-the-loop）
 
@@ -31,7 +32,7 @@
 模型 tools/call secret_command
    → server 校验（占位符↔变量双向一致 / 变量名唯一 / cwd 相对无 .. / timeoutSec 1..300 默认 60）
    → 归属解析（403/400）：teamId 为主，taskId 为可选归属标注，二者至少传一
-   → 托管门（403）：仅**非主 Agent** 发起者被拒；主 Agent 发起放行
+   → （**无托管门**）：本工具与托管模式无关，任何 agent 都能发起
    → 创建 secret_input 平台问题（只落模板与变量元数据）
    → 用户填写 → server 阻塞等待（输入预算 540s）
    → 提供值 ⇒ 下发 worker POST /secret-command（X-Worker-Token）
@@ -46,25 +47,25 @@
 
 层表的**真实来源是「两处自动 + 一处手抄」**，别再当「三处同源」：
 
-| 位置 | 生成方式 |
-|---|---|
-| 工具 description（模型可见） | **自动**——`platform-mcp.tools.ts` 调 `layerBudgetTable()` 渲染 |
-| `x-vteam-secret-command-budget` 响应头 | **自动**——`secretCommandBudgetHeaderValue()` 读同一批常量 |
-| **本节下面这张 markdown 表** | **手抄**——markdown 不会被 TS 渲染 |
+| 位置                                   | 生成方式                                                       |
+| -------------------------------------- | -------------------------------------------------------------- |
+| 工具 description（模型可见）           | **自动**——`platform-mcp.tools.ts` 调 `layerBudgetTable()` 渲染 |
+| `x-vteam-secret-command-budget` 响应头 | **自动**——`secretCommandBudgetHeaderValue()` 读同一批常量      |
+| **本节下面这张 markdown 表**           | **手抄**——markdown 不会被 TS 渲染                              |
 
 唯一口径是 `server/src/platform-mcp/platform-mcp.constants.ts` 的 `layerBudgetTable()`
 与 `SECRET_COMMAND_TOTAL_BUDGET_MS` 等常量（改任一超时只改常量）。手抄这一处由
 `platform-mcp.constants.spec.ts` 的「doc 层表与 `layerBudgetTable()` 逐行一致」断言钉住
 （数值漂移即红）；**若两条不一致，以工具 description 与响应头为准**（那两个是自动的）。
 
-| # | 层 | 实际生效值 | 控制方 | 超时后服务端可能仍在执行 |
-|---|----|-----------|--------|---------------------|
-| 1 | `gateway` | 由部署侧决定（平台不可控），须 ≥ 855s | 网关/代理 | **是** |
-| 2 | `client_wait` | opencode `mcp.vteam.timeout`（注入下限 900000ms） | 调用方客户端 | **是** |
-| 3 | `server_hold` | 无硬超时；≤30s SSE 注释心跳保活 | vteam-server | **是** |
-| 4 | `input_budget` | 540000ms（540s） | vteam-server（questions 域） | 否（**唯一**服务端自己判定的超时） |
-| 5 | `command_exec` | `timeoutSec`，缺省 60s、上限 300s | 调用方入参 → worker | 是 |
-| 6 | `worker_request` | 命令超时 + 5000ms | vteam-server → worker | 是 |
+| #   | 层               | 实际生效值                                        | 控制方                       | 超时后服务端可能仍在执行           |
+| --- | ---------------- | ------------------------------------------------- | ---------------------------- | ---------------------------------- |
+| 1   | `gateway`        | 由部署侧决定（平台不可控），须 ≥ 855s             | 网关/代理                    | **是**                             |
+| 2   | `client_wait`    | opencode `mcp.vteam.timeout`（注入下限 900000ms） | 调用方客户端                 | **是**                             |
+| 3   | `server_hold`    | 无硬超时；≤30s SSE 注释心跳保活                   | vteam-server                 | **是**                             |
+| 4   | `input_budget`   | 540000ms（540s）                                  | vteam-server（questions 域） | 否（**唯一**服务端自己判定的超时） |
+| 5   | `command_exec`   | `timeoutSec`，缺省 60s、上限 300s                 | 调用方入参 → worker          | 是                                 |
+| 6   | `worker_request` | 命令超时 + 5000ms                                 | vteam-server → worker        | 是                                 |
 
 优先级：**外层先于内层生效**。客户端/网关超时一旦小于服务端可控最坏预算
 （`SECRET_COMMAND_SERVER_MAX_BUDGET_MS` = 540000 + 300000 + 5000 = 845000ms），就会先于
@@ -92,17 +93,17 @@
 
 关键时序与预算（服务端常量，单位 ms）：
 
-| 项 | 值 | 说明 |
-|----|----|------|
-| 输入预算 | 540000（540s） | 等待用户填写上限；超时 → `input_timeout`，pending 问题被取消，**不执行** |
-| 命令超时 | `timeoutSec`，默认 60、上限 300 | worker 到点对**进程组** `SIGKILL` |
-| worker 执行超时 | `timeoutSec + 5000` | 计划强制要求，**不回落**到客户端默认 60s |
-| HTTP 请求超时 | 执行超时 + 5000 | 请求恒晚于命令结束，避免调用被中途掐断 |
-| 服务端可控最坏预算 | 540000 + 300000 + 5000 = 845000 | 客户端/网关超时必须 ≥ 本值 |
-| 传输/编排裕量 | 10000 | worker 调度、DB 往返、心跳首帧前空窗 |
-| 总预算 | 845000 + 10000 = 855000（最坏 855s） | 注入的 MCP 客户端超时必须覆盖它（下限 900000） |
-| keepalive | 每 60000 重臂一次 | 覆盖「等待 + 执行」两段，settle 即 `clearInterval` |
-| 输出截断 | 每流 32768（32KB） | 采集额度 1MB；截断置 `stdoutTruncated` / `stderrTruncated` |
+| 项                 | 值                                   | 说明                                                                     |
+| ------------------ | ------------------------------------ | ------------------------------------------------------------------------ |
+| 输入预算           | 540000（540s）                       | 等待用户填写上限；超时 → `input_timeout`，pending 问题被取消，**不执行** |
+| 命令超时           | `timeoutSec`，默认 60、上限 300      | worker 到点对**进程组** `SIGKILL`                                        |
+| worker 执行超时    | `timeoutSec + 5000`                  | 计划强制要求，**不回落**到客户端默认 60s                                 |
+| HTTP 请求超时      | 执行超时 + 5000                      | 请求恒晚于命令结束，避免调用被中途掐断                                   |
+| 服务端可控最坏预算 | 540000 + 300000 + 5000 = 845000      | 客户端/网关超时必须 ≥ 本值                                               |
+| 传输/编排裕量      | 10000                                | worker 调度、DB 往返、心跳首帧前空窗                                     |
+| 总预算             | 845000 + 10000 = 855000（最坏 855s） | 注入的 MCP 客户端超时必须覆盖它（下限 900000）                           |
+| keepalive          | 每 60000 重臂一次                    | 覆盖「等待 + 执行」两段，settle 即 `clearInterval`                       |
+| 输出截断           | 每流 32768（32KB）                   | 采集额度 1MB；截断置 `stdoutTruncated` / `stderrTruncated`               |
 
 其他确定语义：
 
@@ -170,7 +171,12 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
   "selfInstanceId": "<INSTANCE_ID>",
   "command": "curl -fsS -H \"Authorization: Bearer {{REGISTRY_TOKEN}}\" https://registry.example.com/v2/<REPO>/tags/list",
   "variables": [
-    { "name": "REGISTRY_TOKEN", "label": "镜像仓库访问 Token", "secret": true, "required": true }
+    {
+      "name": "REGISTRY_TOKEN",
+      "label": "镜像仓库访问 Token",
+      "secret": true,
+      "required": true
+    }
   ],
   "cwd": "services/api",
   "timeoutSec": 60,
@@ -198,36 +204,55 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 
 ## 七、返回给模型的 envelope
 
-| 字段 | 内容 |
-|------|------|
-| `command` | 原始模板（未渲染） |
-| `variables[]` | 变量元数据 + `provided`（是否已填写），无值 |
-| `status` | `succeeded` / `failed` / `timeout`（worker）· `cancelled` / `input_timeout`（server） |
-| `disposition` | `executed`（已下发并跑完）/ `not_executed`（服务端确定没跑）——「跑没跑」的权威判定 |
-| `timeoutLayer` | 非成功终态的断点层（`input_budget` / `command_exec`），`succeeded` 恒 `null` |
-| `exitCode` / `signal` / `timedOut` / `durationMs` | 执行结果元数据 |
-| `stdout` / `stderr` + `*Truncated` | 脱敏 + 截断后的输出 |
+| 字段                                              | 内容                                                                                  |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `command`                                         | 原始模板（未渲染）                                                                    |
+| `variables[]`                                     | 变量元数据 + `provided`（是否已填写），无值                                           |
+| `status`                                          | `succeeded` / `failed` / `timeout`（worker）· `cancelled` / `input_timeout`（server） |
+| `disposition`                                     | `executed`（已下发并跑完）/ `not_executed`（服务端确定没跑）——「跑没跑」的权威判定    |
+| `timeoutLayer`                                    | 非成功终态的断点层（`input_budget` / `command_exec`），`succeeded` 恒 `null`          |
+| `exitCode` / `signal` / `timedOut` / `durationMs` | 执行结果元数据                                                                        |
+| `stdout` / `stderr` + `*Truncated`                | 脱敏 + 截断后的输出                                                                   |
 
 不含：渲染后命令、argv、cwd、secret、未脱敏错误 message。错误码：入参非法
-`PLATFORM_MCP_SECRET_COMMAND_INVALID`(400)、并发 409、托管模式
-`PLATFORM_MCP_SECRET_COMMAND_MANAGED_FORBIDDEN`(403)、worker 不可用
-`PLATFORM_MCP_SECRET_COMMAND_UNAVAILABLE`(503)。
+`PLATFORM_MCP_SECRET_COMMAND_INVALID`(400)、并发 409、归属不符 403、worker 不可用
+`PLATFORM_MCP_SECRET_COMMAND_UNAVAILABLE`(503)。**无「托管模式」错误码**——本工具
+不受托管拦截（见 §7.2）。
 
-## 七之二、托管模式（`managedMode=on`）语义
+## 七之二、与托管模式的关系：**解耦，不受拦截**
 
-托管模式的语义是「**非主 Agent** 发起的 `question`/`permission` 请求，改由主 Agent 确认」。
-据此，`secret_command` 分成两件**互不替代**的事：
+> ⚠️ **本节描述 2026-09-29 用户决策后的行为。** 原先链路上有两道按「发起人是否为团队主
+> Agent」放行的托管门，已**整块移除**。
 
-| 事项 | 谁来确认 | 托管模式下的处理 |
-|------|---------|----------------|
-| 「是否受理这次请求」 | 发起人即主 Agent 时，**无需他人确认** | **放行**（不再 fail-closed 拒绝） |
-| 「密钥值本身」 | **只能由用户提供** | 始终向**用户**弹窗索取（`secret_input` 的 `managedMode` 恒 `false`） |
-| 非主 Agent 发起 | — | 403 `PLATFORM_MCP_SECRET_COMMAND_MANAGED_FORBIDDEN` |
+**用户给出的理由**：
 
-两道门都按此口径：platform-mcp 的 `assertSecretCommandManagedAllowed`（创建 pending 问题
-之前）与 questions 域的 `createSecretForPlatform`。DTO 侧 `secret_input` 恒
-`managedMode=false`，否则前端（`web/app/(main)/teams/[id]/session/page.tsx` 过滤
-`!q.managedMode`）永不弹窗 —— 等于把主 Agent 也彻底堵死。
+> 这类工具本身就需要用户强制输入密钥；托管模式开了之后，主 Agent 也决定不了用户会输什么。
+> 托管的「交主 Agent 确认」语义对它不适用。
+
+**因此 `secret_command` 的行为**：
+
+| 事项                     | 行为                                            |
+| ------------------------ | ----------------------------------------------- |
+| 托管模式开/关            | **无差别**：两种状态下都可发起、都会弹窗        |
+| 发起人是不是团队主 Agent | **无差别**：任何 agent 都能发起                 |
+| 密钥值由谁提供           | **始终由用户**在弹窗输入（任何 agent 都拿不到） |
+
+**恒弹窗的实现保证**：`secret_input` 的 DTO 恒 `managedMode=false`
+（`questions.service.ts` 的 `toDto`），前端按 `!q.managedMode` 过滤后**必定弹窗**，
+与团队托管状态无关。这条不变量由 `questions.service.spec.ts` 显式断言钉死。
+
+### 托管语义**并未**整体失效
+
+**请勿误读**：`managedMode=on` 对 `question` / `permission` 的
+「**非主 Agent 的请求交主 Agent 确认**」语义**仍然有效**，其它工具不受影响。
+**`secret_input` 是唯一的例外**——因为它的确认方是**用户**，不是主 Agent，
+托管语义在这个环节本就无处施加。
+
+### 这不是安全边界
+
+移除托管门**不表示**本工具受身份保护。任何同团队 agent 都能让平台弹出一个
+由它自撰命令模板的密钥输入框；**密钥值仍只能由用户本人输入，agent 拿不到。**
+本文开头的「非安全承诺 / best-effort / 不构成安全边界」总声明同样适用于本节。
 
 ## 八、运维注意事项与残余风险
 
@@ -235,14 +260,15 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 
 本工具有三处**进程内状态**（无分布式锁），`server` 副本数一旦 > 1 就会失效：
 
-| 前置条件 | 不满足时的后果 | 为什么必须同副本 |
-|---|---|---|
-| **`server` 副本必须为 1** | ①`secret_command` 单会话 in-flight 门（进程内 `Map`）失效 ⇒ 并发第二次不再被拦成 409，可重复执行<br>②`secret_command` 保持的 token 生命周期计数（`SECRET_COMMAND_TIMEOUT_LAYER` 各层计时）按各副本分别计，跨副本的等待/取消判定不一致 | 门与计时器都是**进程内**结构，跨副本不可见 |
-| **扩容须按 `sessionId` 粘性路由** | 同一会话的请求被路由到不同副本 ⇒ 上面的门与计时器在不同副本各判一次 | 粘性路由让「同一会话 ⇒ 同一副本」成立，是多副本下唯一可行的近似 |
-| **SSE 长连接与 ≤30s 心跳同样依赖同副本** | 连接 A 在副本 1、后续帧/心跳由副本 2 判定 ⇒ 丢心跳、连接被回收。**扩容会同时丢心跳与 in-flight，不只是丢 409** | SSE 连接与心跳定时器都在**单副本**内维护 |
+| 前置条件                                 | 不满足时的后果                                                                                                                                                                                                                        | 为什么必须同副本                                                |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| **`server` 副本必须为 1**                | ①`secret_command` 单会话 in-flight 门（进程内 `Map`）失效 ⇒ 并发第二次不再被拦成 409，可重复执行<br>②`secret_command` 保持的 token 生命周期计数（`SECRET_COMMAND_TIMEOUT_LAYER` 各层计时）按各副本分别计，跨副本的等待/取消判定不一致 | 门与计时器都是**进程内**结构，跨副本不可见                      |
+| **扩容须按 `sessionId` 粘性路由**        | 同一会话的请求被路由到不同副本 ⇒ 上面的门与计时器在不同副本各判一次                                                                                                                                                                   | 粘性路由让「同一会话 ⇒ 同一副本」成立，是多副本下唯一可行的近似 |
+| **SSE 长连接与 ≤30s 心跳同样依赖同副本** | 连接 A 在副本 1、后续帧/心跳由副本 2 判定 ⇒ 丢心跳、连接被回收。**扩容会同时丢心跳与 in-flight，不只是丢 409**                                                                                                                        | SSE 连接与心跳定时器都在**单副本**内维护                        |
 
 > 换言之：把 `server` 扩到多副本需要三件事一起做——粘性路由 + 把 in-flight 门外置（Redis 等）
-> + 心跳/长连接跨副本可共享。当前实现**只支持单副本**；扩容前请按上述三件一并规划。
+>
+> - 心跳/长连接跨副本可共享。当前实现**只支持单副本**；扩容前请按上述三件一并规划。
 
 ### 8.1 残余风险
 
