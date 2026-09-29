@@ -5,9 +5,11 @@ import {
   BUILTIN_ROLE_CAPABILITY_MAPS,
   EXTERNAL_AGENT_ROLE_CAPABILITIES,
   EXTERNAL_AGENT_ROLE_KEYS,
+  EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS,
 } from '../common/constants/agent-role.constants';
 import {
   buildFactoryCapabilityMatrix,
+  isCapabilityGranted,
   PLATFORM_CAPABILITY_KEYS,
 } from '../common/constants/platform-capability.constants';
 
@@ -78,6 +80,21 @@ function expectBooleanCatalog(matrix: Readonly<Record<string, boolean>>): void {
   ).toBe(true);
 }
 
+function expectBooleanCatalogMissing(
+  matrix: Readonly<Record<string, boolean>>,
+  unmanagedKeys: readonly string[],
+): void {
+  expect(Object.keys(matrix)).toEqual(
+    PLATFORM_CAPABILITY_KEYS.filter((key) => !unmanagedKeys.includes(key)),
+  );
+  for (const retired of RETIRED_KEYS) {
+    expect(Object.keys(matrix)).not.toContain(retired);
+  }
+  expect(
+    Object.values(matrix).every((value) => typeof value === 'boolean'),
+  ).toBe(true);
+}
+
 describe('agent capability split current-schema contract (historical 20260921000009)', () => {
   const sql = fs.readFileSync(BASELINE, 'utf8');
   const executable = executableSql(sql);
@@ -108,11 +125,11 @@ describe('agent capability split current-schema contract (historical 20260921000
 
   it('project_manager remains explicitly fully authorized', () => {
     const matrix = BUILTIN_ROLE_CAPABILITY_MAPS.project_manager;
-    expect(Object.keys(matrix)).toHaveLength(29);
+    expect(Object.keys(matrix)).toHaveLength(32); // T11: +git.repo.read/write, web.browse
     expect(Object.values(matrix).every((value) => value === true)).toBe(true);
   });
 
-  it('external roles retain the explicit least-privilege matrix', () => {
+  it('external roles do NOT emit the T11 keys (default-allow => they retain git/browse)', () => {
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((value) => value),
     ).toHaveLength(9);
@@ -122,7 +139,19 @@ describe('agent capability split current-schema contract (historical 20260921000
       ),
     ).toHaveLength(20);
     expect(EXTERNAL_AGENT_ROLE_CAPABILITIES['secret.command']).toBe(true);
-    expectBooleanCatalog(EXTERNAL_AGENT_ROLE_CAPABILITIES);
+    expectBooleanCatalogMissing(
+      EXTERNAL_AGENT_ROLE_CAPABILITIES,
+      EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS,
+    );
+    // 用户决定（2026-09-29）：外部助手不纳入 git.repo.read / git.repo.write /
+    // web.browse 三档开关。三键必须【不存在】而非 false —— default-allow 下
+    // 缺失即允许，写 false 恰好会拒绝外部助手，与决定相反。
+    for (const key of EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS) {
+      expect(EXTERNAL_AGENT_ROLE_CAPABILITIES).not.toHaveProperty(key);
+      expect(isCapabilityGranted(EXTERNAL_AGENT_ROLE_CAPABILITIES, key)).toBe(
+        true,
+      );
+    }
     expect(EXTERNAL_AGENT_ROLE_KEYS).toEqual([
       'sisyphus',
       'prometheus',

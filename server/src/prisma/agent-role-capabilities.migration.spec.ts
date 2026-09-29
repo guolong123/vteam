@@ -13,11 +13,13 @@ import {
   EXTERNAL_AGENT_ROLE_CAPABILITIES,
   EXTERNAL_AGENT_ROLE_KEYS,
   EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST,
+  EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS,
 } from '../common/constants/agent-role.constants';
 import {
   buildCapabilityMatrixFromTools,
   buildFactoryCapabilityMatrix,
   capabilityKeyForTool,
+  isCapabilityGranted,
   PLATFORM_CAPABILITIES,
   PLATFORM_CAPABILITY_KEYS,
 } from '../common/constants/platform-capability.constants';
@@ -85,6 +87,18 @@ function expectCapabilityCatalog(
   ).toBe(true);
 }
 
+function expectCapabilityCatalogMissing(
+  matrix: Readonly<Record<string, boolean>>,
+  unmanagedKeys: readonly string[],
+): void {
+  expect(Object.keys(matrix)).toEqual(
+    PLATFORM_CAPABILITY_KEYS.filter((key) => !unmanagedKeys.includes(key)),
+  );
+  expect(
+    Object.values(matrix).every((value) => typeof value === 'boolean'),
+  ).toBe(true);
+}
+
 describe('agent_roles.capabilities current-schema contract (historical 20260921000006)', () => {
   const sql = fs.readFileSync(BASELINE, 'utf8');
   const executable = executableSql(sql);
@@ -136,7 +150,16 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
       'prometheus',
       'atlas',
     ]);
-    expectCapabilityCatalog(EXTERNAL_AGENT_ROLE_CAPABILITIES);
+    expectCapabilityCatalogMissing(
+      EXTERNAL_AGENT_ROLE_CAPABILITIES,
+      EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS,
+    );
+    for (const key of EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS) {
+      expect(EXTERNAL_AGENT_ROLE_CAPABILITIES).not.toHaveProperty(key);
+      expect(isCapabilityGranted(EXTERNAL_AGENT_ROLE_CAPABILITIES, key)).toBe(
+        true,
+      );
+    }
     const granted = Object.entries(EXTERNAL_AGENT_ROLE_CAPABILITIES)
       .filter(([, value]) => value)
       .map(([key]) => key)

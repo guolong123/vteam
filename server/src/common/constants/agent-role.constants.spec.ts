@@ -93,9 +93,9 @@ describe('agent-role.constants（agent_roles 单一事实来源）', () => {
     }
   });
 
-  it('契约：project_manager = 全 29 点 true（显式覆盖，不按 ROLE_BOUNDARIES 派生）', () => {
+  it('契约：project_manager = 全 32 点 true（显式覆盖，不按 ROLE_BOUNDARIES 派生）', () => {
     const pm = BUILTIN_ROLE_CAPABILITY_MAPS.project_manager;
-    expect(Object.keys(pm)).toHaveLength(29);
+    expect(Object.keys(pm)).toHaveLength(32);
     for (const key of PLATFORM_CAPABILITY_KEYS) {
       expect(`${key}=${pm[key]}`).toBe(`${key}=true`);
     }

@@ -831,11 +831,31 @@ const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
   'vteam_secret_command',
 ];
 
-/** 外部岗位最小能力矩阵（default-allow 下必须显式拒绝未覆盖能力点）。 */
+/**
+ * 外部岗位**不纳入**的三档开关能力点（用户决定 2026-09-29）。
+ * 镜像 `src/common/constants/agent-role.constants.ts` 的同名常量。
+ * default-allow 下「键缺失 ⇒ 允许」，故必须删键、不能写 `false`。
+ */
+const EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS: readonly string[] = [
+  'git.repo.read',
+  'git.repo.write',
+  'web.browse',
+];
+
+/**
+ * 外部岗位最小能力矩阵（default-allow 下必须显式拒绝未覆盖能力点），
+ * 但 `EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS` 三键**不发射**。
+ */
 const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
-  capabilityMatrixFromTools(
-    Object.fromEntries(
-      EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST.map((tool) => [tool, 'allow']),
+  Object.fromEntries(
+    Object.entries(
+      capabilityMatrixFromTools(
+        Object.fromEntries(
+          EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST.map((tool) => [tool, 'allow']),
+        ),
+      ),
+    ).filter(
+      ([key]) => !EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS.includes(key),
     ),
   );
 
