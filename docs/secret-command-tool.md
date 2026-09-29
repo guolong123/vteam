@@ -198,6 +198,16 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 前缀与错误码分层：`t_` / `tm_` 填错是**入参错 → 400**；`teamId` 与该 worker 实际会话所属团队
 不匹配是**归属错 → 403**（`PLATFORM_MCP_FORBIDDEN`）。两者不可混。
 
+> **归属如何落地：无 schema 变更。** 改的是**工具入参**（zod schema 里 `teamId` 新增、
+> `taskId` 降可选），不是数据库。`agent_questions` 表没有 `teamId` 列，`taskId` 仍是
+> `NOT NULL` —— 团队归属一律经 `taskId` / `sessionId` **反查**得出（与本仓 questions 域既有
+> 口径一致，见 `findAll` 的「teamId 经任务归属 + 会话归属双路实现，无 schema 变更」）。
+> 团队直聊时 `taskId` 落空串，团队归属全靠 `sessionId` 承载。
+>
+> 由此带来一条前置条件：**团队必须已存在主 Agent 会话**。否则
+> `createSecretForPlatform` 解析不到会话，直接 503 快速失败（不落占位行）——
+> 早失败远好过创建一个永远送不到用户面前、让调用方空等满 540s 输入预算的行。
+
 占位符语法：`{{NAME}}`（`NAME` 为 `[A-Za-z_][A-Za-z0-9_]*`，允许 `{{ name }}` 带空格）。
 `secret:true` 的变量在弹窗中渲染为 password 输入框；模板与 reason 只读展示。
 示例中的值一律写成占位符或 `<占位符>`，**不要**在文档、issue、日志中粘贴任何真实 secret。

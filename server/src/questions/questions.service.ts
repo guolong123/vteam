@@ -756,13 +756,19 @@ export class QuestionsService {
 
   /**
    * 平台侧创建 secret_input question（secret_command 等待用户填写敏感值）。
-   * - content 只持久化模板与变量元数据（source/template/variables/reason），绝不存值；
-   * - 托管模式门：团队 managedMode=true **且发起人不是团队主 Agent** 时，在
-   *   agentQuestion.create **之前**拒绝（创建调用为 0，不产生孤儿 pending 行）。
-   *   发起人即主 Agent 时放行（`options.requesterInstanceId`）——托管模式管的是
-   *   「非主 Agent 的请求改由主 Agent 确认」，主 Agent 自己发起不存在该问题；
-   *   密钥值本身仍由**用户**弹窗提供（`toDto` 对 secret_input 恒 managedMode=false）；
+   * - content 只持久化模板与变量元数据（source/template/variables/reason/
+   *   requesterInstanceId），绝不存值；
+   * - **本方法不读 managedMode、不做任何身份门禁**（用户决策 2026-09-29，提交
+   *   8eaaa22 整块移除了 `assertSecretCommandManagedAllowed` 与
+   *   `createSecretForPlatform` 的托管身份分支）：托管开关开或关都照常弹窗，
+   *   团队内任意 agent 都能发起。理由是这类工具必须**用户本人**输入密钥，托管的
+   *   「交主 Agent 确认」语义在这个环节管不到东西；`toDto` 对 secret_input 恒
+   *   `managedMode=false` 即该决策的落点。此处**不要**再加回按身份的拒绝。
    * - `options.teamId`：团队直聊（无任务）场景的归属，taskId 传空串；
+   * - `options.requesterInstanceId`：写入 content，供 `confirmByAgent` 的自确认
+   *   校验比对。**注意其来源是工具入参 `selfInstanceId`（客户端可控）**，不是
+   *   服务端推导的身份；当前无身份门依赖它，但若将来据它做授权判断，须先消除
+   *   该回声（团队内可冒名他人 instance id）。
    * - requestId 用 que_platform_ 前缀（与 createForPlatform 同规则，防唯一键碰撞）；
    * - options.onSecretResolved：终态（填写/取消）钩子，secrets 仅在进程内存传递。
    */
@@ -785,6 +791,19 @@ export class QuestionsService {
       ? ((await this.mainAgentSessionOfTeam(teamId)) ??
         (taskId ? await this.mainAgentSessionOf(taskId) : null))
       : await this.mainAgentSessionOf(taskId);
+    // 解析不到会话就**快速失败**，不落占位行。
+    //
+    // 与 createForPlatform 的不对称：那边 s_placeholder 无害（question 行只等
+    // worker 转发，无人应答会走 TTL/expire 收敛）；这边调用方**阻塞等待**答复，
+    // 而 teamId 只能由 taskId/sessionId 反查 —— 两者皆为哨兵值时该行永远送不到
+    // 用户面前，调用方只能空等满 540s 输入预算。
+    if (!sessionId) {
+      throw new ServiceUnavailableException({
+        code: QUESTIONS_ERRORS.QUESTION_WORKER_UNAVAILABLE,
+        message:
+          '该团队暂无主 Agent 会话，无法弹出敏感值输入框（不会创建问题行，请先建立主 Agent 会话后重试）',
+      });
+    }
     const seq = await this.idGen.nextId('que');
     const requestId = `que_platform_${seq.split('_')[1] ?? ''}`;
     const id = await this.idGen.nextId(AGENT_QUESTION_ID_PREFIX);
