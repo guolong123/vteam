@@ -6856,6 +6856,11 @@ export class PlatformMcpService implements OnModuleInit {
         '团队会话请传 teamId，不要传 taskId（taskId 是任务 ID，t_ 前缀）',
       );
     }
+    if (typeof args.teamId === 'string' && args.teamId.startsWith('t_')) {
+      throw new BadRequestException(
+        '任务上下文请传 taskId，不要传 teamId（teamId 是团队 ID，tm_ 前缀）',
+      );
+    }
     if (args.taskId) {
       const instanceId = await this.assertWorkerTask(
         ctx,

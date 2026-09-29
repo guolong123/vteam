@@ -42,13 +42,24 @@
 ## 三之二、超时层次与处置规则（`is_0000000001` 问题 3 / 4）
 
 一次阻塞调用串行穿过 6 层超时，**每层各有生效值，且「超时后服务端是否仍在跑」的语义
-完全不同**。这张表是唯一口径：工具 description、`x-vteam-secret-command-budget` 响应头、
-本节三处均由 `server/src/platform-mcp/platform-mcp.constants.ts` 的 `layerBudgetTable()`
-同源渲染（改任一超时只改常量）。
+完全不同**。
+
+层表的**真实来源是「两处自动 + 一处手抄」**，别再当「三处同源」：
+
+| 位置 | 生成方式 |
+|---|---|
+| 工具 description（模型可见） | **自动**——`platform-mcp.tools.ts` 调 `layerBudgetTable()` 渲染 |
+| `x-vteam-secret-command-budget` 响应头 | **自动**——`secretCommandBudgetHeaderValue()` 读同一批常量 |
+| **本节下面这张 markdown 表** | **手抄**——markdown 不会被 TS 渲染 |
+
+唯一口径是 `server/src/platform-mcp/platform-mcp.constants.ts` 的 `layerBudgetTable()`
+与 `SECRET_COMMAND_TOTAL_BUDGET_MS` 等常量（改任一超时只改常量）。手抄这一处由
+`platform-mcp.constants.spec.ts` 的「doc 层表与 `layerBudgetTable()` 逐行一致」断言钉住
+（数值漂移即红）；**若两条不一致，以工具 description 与响应头为准**（那两个是自动的）。
 
 | # | 层 | 实际生效值 | 控制方 | 超时后服务端可能仍在执行 |
 |---|----|-----------|--------|---------------------|
-| 1 | `gateway` | 部署侧决定（平台不可控），须 ≥ 855s | 网关/代理 | **是** |
+| 1 | `gateway` | 由部署侧决定（平台不可控），须 ≥ 855s | 网关/代理 | **是** |
 | 2 | `client_wait` | opencode `mcp.vteam.timeout`（注入下限 900000ms） | 调用方客户端 | **是** |
 | 3 | `server_hold` | 无硬超时；≤30s SSE 注释心跳保活 | vteam-server | **是** |
 | 4 | `input_budget` | 540000ms（540s） | vteam-server（questions 域） | 否（**唯一**服务端自己判定的超时） |
@@ -174,7 +185,12 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 - 团队直聊（无任务）：只传 `teamId` 即可。
 - 任务内：可只传 `taskId`，或 `taskId` + `teamId` 同传（`taskId` 优先）。
 - 两者都不传 → 400 / `-32602`。
-- `teamId` 传成任务 id（`t_` 前缀）→ 400「团队会话请传 teamId，不要传 taskId」。
+- 两者互传错（`taskId` 填 `tm_` 前缀 / `teamId` 填 `t_` 前缀）→ 400，对称报错：
+  - `taskId` 填团队 id → 400「团队会话请传 teamId，不要传 taskId（taskId 是任务 ID，t_ 前缀）」
+  - `teamId` 填任务 id → 400「任务上下文请传 taskId，不要传 teamId（teamId 是团队 ID，tm_ 前缀）」
+
+前缀与错误码分层：`t_` / `tm_` 填错是**入参错 → 400**；`teamId` 与该 worker 实际会话所属团队
+不匹配是**归属错 → 403**（`PLATFORM_MCP_FORBIDDEN`）。两者不可混。
 
 占位符语法：`{{NAME}}`（`NAME` 为 `[A-Za-z_][A-Za-z0-9_]*`，允许 `{{ name }}` 带空格）。
 `secret:true` 的变量在弹窗中渲染为 password 输入框；模板与 reason 只读展示。
@@ -214,6 +230,21 @@ fresh install（seed）与 upgrade（迁移）两条路径上对以下岗位都�
 `!q.managedMode`）永不弹窗 —— 等于把主 Agent 也彻底堵死。
 
 ## 八、运维注意事项与残余风险
+
+### 8.0 运维前置条件（不满足会静默降级，必须在部署侧保证）
+
+本工具有三处**进程内状态**（无分布式锁），`server` 副本数一旦 > 1 就会失效：
+
+| 前置条件 | 不满足时的后果 | 为什么必须同副本 |
+|---|---|---|
+| **`server` 副本必须为 1** | ①`secret_command` 单会话 in-flight 门（进程内 `Map`）失效 ⇒ 并发第二次不再被拦成 409，可重复执行<br>②`secret_command` 保持的 token 生命周期计数（`SECRET_COMMAND_TIMEOUT_LAYER` 各层计时）按各副本分别计，跨副本的等待/取消判定不一致 | 门与计时器都是**进程内**结构，跨副本不可见 |
+| **扩容须按 `sessionId` 粘性路由** | 同一会话的请求被路由到不同副本 ⇒ 上面的门与计时器在不同副本各判一次 | 粘性路由让「同一会话 ⇒ 同一副本」成立，是多副本下唯一可行的近似 |
+| **SSE 长连接与 ≤30s 心跳同样依赖同副本** | 连接 A 在副本 1、后续帧/心跳由副本 2 判定 ⇒ 丢心跳、连接被回收。**扩容会同时丢心跳与 in-flight，不只是丢 409** | SSE 连接与心跳定时器都在**单副本**内维护 |
+
+> 换言之：把 `server` 扩到多副本需要三件事一起做——粘性路由 + 把 in-flight 门外置（Redis 等）
+> + 心跳/长连接跨副本可共享。当前实现**只支持单副本**；扩容前请按上述三件一并规划。
+
+### 8.1 残余风险
 
 - **worker 镜像的 opencode CLI 未 pin。** `worker/Dockerfile` 默认 `ARG OPENCODE_CLI_SPEC=opencode-ai`，
   每次构建取 npm 最新版；需要可复现构建时显式传

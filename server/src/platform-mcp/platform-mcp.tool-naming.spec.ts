@@ -228,4 +228,48 @@ describe('platform-mcp tool naming contract', () => {
     });
     expect(parsedLegacy).not.toMatchObject({ data: { taskId: 't_1' } });
   });
+  // ==================================================================
+  // T8 验收②：`confirmByAgent` 对 `secret_input` 三道独立防线（落点 1/3：tool schema 层）
+  // ==================================================================
+
+  describe('T8：`confirmByAgent` 对 `secret_input` 的防线（tool schema 层）', () => {
+    const confirmTool = buildPlatformMcpTools(service).find(
+      (t) => t.name === 'question_confirm',
+    );
+    const parse = (args: unknown) => confirmTool?.inputSchema.safeParse(args);
+    const base = {
+      taskId: 't_0000000001',
+      selfInstanceId: 'tmm_sender',
+      requestId: 'que_platform_0000000001',
+    };
+
+    it('防线 1（zod 枚举）：`kind=\'secret_input\'` 在入口即被拒（枚举只有 question/permission）', () => {
+      const parsed = parse({ ...base, kind: 'secret_input', answers: [['x']] });
+      expect(parsed?.success).toBe(false);
+    });
+
+    it('防线 1 边界：合法 kind 仍放行（证明上一条不是「schema 全拒」的假绿）', () => {
+      expect(parse({ ...base, kind: 'question', answers: [['x']] })?.success).toBe(
+        true,
+      );
+      expect(
+        parse({ ...base, kind: 'permission', response: 'once' })?.success,
+      ).toBe(true);
+    });
+
+    it('防线 3（payload 无 `secrets` 字段）：schema 不接受 `secrets`，确认路径无法夹带值', () => {
+      const parsed = parse({
+        ...base,
+        kind: 'question',
+        answers: [['x']],
+        secrets: { TOKEN: 'leaked' },
+      });
+      // zod 默认剥离未知键 ⇒ 解析仍成功但 `secrets` 不得出现在结果里
+      expect(parsed?.success).toBe(true);
+      expect(parsed?.success && 'secrets' in (parsed.data as object)).toBe(
+        false,
+      );
+    });
+  });
+
 });
