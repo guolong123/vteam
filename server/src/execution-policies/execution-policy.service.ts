@@ -154,7 +154,16 @@ export const NATIVE_PERMISSION_KEYS: readonly string[] = [
 
 /**
  * `agents[].permission` 发射投影：只保留 {@link NATIVE_PERMISSION_KEYS}，丢弃 `vteam_*`
- * 平台键（引擎只认原生键；平台工具权限改由服务端 platform-mcp 调用时裁决）。
+ * 平台键。
+ *
+ * **为什么 `vteam_*` 会落到服务端裁决（此前本注释因果写反了，T10 订正）**：
+ * **不是**「引擎只认原生键，所以平台键必须服务端裁决」，**而是**
+ * 「**平台保守地只投影了这 4 个键**，所以 `vteam_*` 被丢弃后才落到服务端裁决」。
+ * 实测依据：opencode 的 permission schema 是 `Record<String, "ask"|"allow"|"deny">`
+ * ——**任意字符串键皆合法**；引擎内置的 plan agent 就在用 `question` / `plan_exit` /
+ * `external_directory` / `task.general` 这类非类别键，MCP 工具权限键形如
+ * `mcp:<server>:<tool>`。所以这处过滤是**平台的保守选择**（见
+ * {@link NATIVE_PERMISSION_KEYS} 的「投影而非新增」自陈），**不是引擎限制**。
  *
  * **仅投影 `agents[]`**：`guard.roles[*].permission` 保持完整，直到 worker guard 层删除
  * （ordering hazard：worker `role-guard/policy.ts` 仍读取该矩阵）。
