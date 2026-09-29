@@ -1126,6 +1126,7 @@ describe('seed（计划 skills + 评审子句）', () => {
       });
       expect(patches[1]?.[0].data).toEqual({
         capabilities: expectedCapabilities,
+        capabilitiesConfiguredAt: expect.any(Date),
       });
     }
   });
@@ -1224,6 +1225,7 @@ describe('seed（计划 skills + 评审子句）', () => {
     expect(fallback).toBeDefined();
     expect(fallback?.[0].data).toEqual({
       capabilities: buildFactoryCapabilityMatrix(),
+      capabilitiesConfiguredAt: expect.any(Date),
     });
     expect(
       (fallback?.[0].data.capabilities as Record<string, boolean>)[

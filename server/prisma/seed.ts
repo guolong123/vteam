@@ -1307,6 +1307,7 @@ async function main() {
         type: 'builtin',
         defaultAgentId: role.defaultAgentId,
         capabilities,
+        capabilitiesConfiguredAt: new Date(),
         rolePrompt: role.rolePrompt,
         sortOrder: role.sortOrder,
       },
@@ -1318,7 +1319,7 @@ async function main() {
     // 定制矩阵补齐：仅填 NULL，不覆盖管理员已改的矩阵。
     await prisma.agentRole.updateMany({
       where: { id: role.id, capabilities: { equals: Prisma.DbNull } },
-      data: { capabilities },
+      data: { capabilities, capabilitiesConfiguredAt: new Date() },
     });
   }
 
@@ -1339,6 +1340,7 @@ async function main() {
         defaultAgentId: null,
         defaultOpencodeAgentName: role.defaultOpencodeAgentName,
         capabilities: EXTERNAL_AGENT_ROLE_CAPABILITIES,
+        capabilitiesConfiguredAt: new Date(),
         rolePrompt: role.rolePrompt,
         sortOrder: role.sortOrder,
       },
@@ -1351,13 +1353,19 @@ async function main() {
       key: { in: [...EXTERNAL_AGENT_ROLE_KEYS] },
       capabilities: { equals: Prisma.DbNull },
     },
-    data: { capabilities: EXTERNAL_AGENT_ROLE_CAPABILITIES },
+    data: {
+      capabilities: EXTERNAL_AGENT_ROLE_CAPABILITIES,
+      capabilitiesConfiguredAt: new Date(),
+    },
   });
 
   // 其余未写矩阵的角色（如 ar_general 及任意历史自定义行）落出厂矩阵，保证无 NULL。
   await prisma.agentRole.updateMany({
     where: { capabilities: { equals: Prisma.DbNull } },
-    data: { capabilities: factoryCapabilityMatrix() },
+    data: {
+      capabilities: factoryCapabilityMatrix(),
+      capabilitiesConfiguredAt: new Date(),
+    },
   });
 
   // 预置模型目录（C1：STATIC_AVAILABLE_MODELS → models 表，防空目录回归；
