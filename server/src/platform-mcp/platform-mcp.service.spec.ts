@@ -8057,10 +8057,7 @@ describe('PlatformMcpService', () => {
         setupSecret();
         // 对称：teamId 填 t_ 前缀 → 400（与 taskId 填 tm_ 前缀同层）
         const err400 = await service
-          .secretCommand(
-            ctx,
-            teamOnlyArgs({ teamId: 't_0000000001' }),
-          )
+          .secretCommand(ctx, teamOnlyArgs({ teamId: 't_0000000001' }))
           .then(
             () => undefined,
             (e: unknown) => e as { message?: string },
@@ -8085,9 +8082,10 @@ describe('PlatformMcpService', () => {
           .secretCommand(ctx, teamOnlyArgs({ teamId: 'tm_other' }))
           .then(
             () => undefined,
-            (e: unknown) => e as {
-              getResponse(): { code?: string; message?: string };
-            },
+            (e: unknown) =>
+              e as {
+                getResponse(): { code?: string; message?: string };
+              },
           );
         expect(err403?.getResponse().code).toBe(PLATFORM_MCP_ERRORS.FORBIDDEN);
         // 前缀误传不得创建 question / 调 worker（任一分支都不得有副作用）
