@@ -86,6 +86,8 @@ interface PlatformCapabilityMirror {
   key: string;
   tools: readonly string[];
   defaultDeny: boolean;
+  /** 工具命名空间；缺省 `mcp`（T11 起 git/browser 能力点需显式标注）。 */
+  namespace?: 'mcp' | 'git' | 'browser';
 }
 
 const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
@@ -149,6 +151,36 @@ const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
     key: 'secret.command',
     tools: ['vteam_secret_command'],
     defaultDeny: false,
+  },
+  // ── git / browser 命名空间（T11）──────────────────────────────────────────
+  // 与 platform-capability.constants.ts 的目录**手工镜像**（seed 不 import src，
+  // 见计划 §5.2 Q7）。漏镜像即 seed 落库矩阵与 src 目录漂移 ⇒ 断言红。
+  {
+    key: 'git.repo.read',
+    tools: [
+      'git_clone',
+      'git_pull',
+      'git_fetch',
+      'git_status',
+      'git_diff',
+      'git_log',
+    ],
+    defaultDeny: false,
+    namespace: 'git',
+  },
+  // 唯一写远端的工具 ⇒ 出厂必须拒绝（M1）。
+  {
+    key: 'git.repo.write',
+    tools: ['git_push'],
+    defaultDeny: true,
+    namespace: 'git',
+  },
+  // 当前完全无门 ⇒ 出厂必须关，否则等于出厂即可被诱导浏览任意站点（M1）。
+  {
+    key: 'web.browse',
+    tools: ['browser'],
+    defaultDeny: true,
+    namespace: 'browser',
   },
 ];
 

@@ -89,9 +89,10 @@ describe('agent capability split current-schema contract (historical 20260921000
     expect(roles).toMatch(/`capabilities`\s+JSON NULL/);
   });
 
-  it('the current capability catalog is the complete 29-key post-split catalog', () => {
-    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(29);
-    expect(new Set(PLATFORM_CAPABILITY_KEYS).size).toBe(29);
+  it('the current capability catalog is the complete 32-key post-split catalog', () => {
+    // v2.3 T11：29 → 32（新增 git.repo.read / git.repo.write / web.browse）。
+    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(32);
+    expect(new Set(PLATFORM_CAPABILITY_KEYS).size).toBe(32);
     for (const retired of RETIRED_KEYS) {
       expect(PLATFORM_CAPABILITY_KEYS).not.toContain(retired);
     }
@@ -132,15 +133,20 @@ describe('agent capability split current-schema contract (historical 20260921000
     }
   });
 
-  it('ar_general-equivalent factory matrix has 15 allow and 14 deny (secret.command newly allowed)', () => {
+  it('ar_general-equivalent factory matrix has 16 allow and 16 deny (M1: 写/浏览新键出厂即拒)', () => {
     const factory = buildFactoryCapabilityMatrix();
+    // T11：+git.repo.read(allow) / +git.repo.write(deny) / +web.browse(deny)
+    // ⇒ 16 allow / 16 deny。M1 安全要求：后两者必须 defaultDeny=true。
     expect(
       Object.values(factory).filter((value) => value === true),
-    ).toHaveLength(15);
+    ).toHaveLength(16);
     expect(
       Object.values(factory).filter((value) => value === false),
-    ).toHaveLength(14);
+    ).toHaveLength(16);
     expect(factory['secret.command']).toBe(true);
+    expect(factory['git.repo.read']).toBe(true);
+    expect(factory['git.repo.write']).toBe(false);
+    expect(factory['web.browse']).toBe(false);
     expectBooleanCatalog(factory);
   });
 

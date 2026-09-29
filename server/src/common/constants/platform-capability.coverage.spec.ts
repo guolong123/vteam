@@ -1,4 +1,8 @@
-import { VTEAM_MCP_TOOL_NAMES } from './agent.constants';
+import {
+  VTEAM_BROWSER_TOOL_NAMES,
+  VTEAM_GIT_TOOL_NAMES,
+  VTEAM_MCP_TOOL_NAMES,
+} from './agent.constants';
 import {
   buildCapabilityMatrixFromTools,
   buildFactoryCapabilityMatrix,
@@ -27,8 +31,10 @@ describe('platform capability catalogue coverage', () => {
     expect(PLATFORM_CAPABILITY_KEYS).toEqual(keys);
   });
 
-  it('目录覆盖 VTEAM_MCP_TOOL_NAMES 全 32 项，且每项恰属一个能力点（29 点 ↔ 32 工具）', () => {
-    expect(PLATFORM_CAPABILITIES).toHaveLength(29);
+  it('目录覆盖三个命名空间全部工具，且每项恰属一个能力点（32 点 ↔ 40 工具）', () => {
+    // v2.3 T11 后目录含 3 个新能力点（git.repo.read 6 工具 / git.repo.write 1 /
+    // web.browse 1）⇒ 32 点、40 工具。mcp 命名空间仍是 32 项。
+    expect(PLATFORM_CAPABILITIES).toHaveLength(32);
     expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(32);
     const owner = new Map<string, string>();
     let toolSum = 0;
@@ -39,19 +45,28 @@ describe('platform capability catalogue coverage', () => {
         owner.set(tool, capability.key);
       }
     }
-    expect(toolSum).toBe(32);
-    expect([...owner.keys()].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
-    for (const tool of VTEAM_MCP_TOOL_NAMES) {
+    // 工具总数跨三个命名空间；mcp 那一批仍须与 VTEAM_MCP_TOOL_NAMES 逐项相等。
+    expect(toolSum).toBe(40);
+    const allNamespaces = [
+      ...VTEAM_MCP_TOOL_NAMES,
+      ...VTEAM_GIT_TOOL_NAMES,
+      ...VTEAM_BROWSER_TOOL_NAMES,
+    ];
+    expect([...owner.keys()].sort()).toEqual([...allNamespaces].sort());
+    for (const tool of allNamespaces) {
       expect(capabilityKeyForTool(tool)).toBe(owner.get(tool));
     }
-    // 拆分组能力点后仍覆盖多工具的：task.complete（完工/定稿/确认）+ hook.manage（register + cancel）。
+    // 仍覆盖多工具的：task.complete（完工/定稿/确认）+ hook.manage（register + cancel）
+    // + git.repo.read（clone/pull/fetch/status/diff/log，v2.3 T11 新增）。
     const multiTool = PLATFORM_CAPABILITIES.filter((c) => c.tools.length > 1);
     expect(multiTool.map((c) => c.key)).toEqual([
       'task.complete',
       'hook.manage',
+      'git.repo.read',
     ]);
     expect(multiTool[0]?.tools).toHaveLength(3);
     expect(multiTool[1]?.tools).toHaveLength(2);
+    expect(multiTool[2]?.tools).toHaveLength(6);
     // 已拆分的组键不再是合法能力点键。
     expect(isPlatformCapabilityKey('issue.manage')).toBe(false);
     expect(isPlatformCapabilityKey('memory.manage')).toBe(false);

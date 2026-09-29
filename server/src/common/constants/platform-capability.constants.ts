@@ -24,6 +24,17 @@
  * 每个工具恰好属于一个能力点（`platform-capability.coverage.spec.ts` 断言，防漂移）。
  */
 
+/**
+ * 工具命名空间（v2.3 §5.2 Q5）。
+ *
+ * 存在的理由：MCP 工具的暴露名是 `vteam_<action>`，而 worker 注入的自定义 git /
+ * browser 工具**不带该前缀**。此前调用方一律用 `vteam_${bareToolName}` 反查能力
+ * 点（`platform-tool-permission.service.ts:41`），对 git/browser **恒等于错误键**
+ * ——这就是「这些工具没有任何岗位维度授权门」的实现根因。有了 namespace 后，
+ * 反查按 `namespace + name` 组键，前缀不再是调用方的猜测。
+ */
+export type ToolNamespace = 'mcp' | 'git' | 'browser';
+
 /** 单个业务能力点。 */
 export interface PlatformCapability {
   /** 能力点键（ASCII 点分，如 `task.create`；`my_profile` 为无点单段）。 */
@@ -34,6 +45,13 @@ export interface PlatformCapability {
   readonly tools: readonly string[];
   /** 出厂是否预置为拒绝（`true` ⇒ 出厂矩阵 `false`）。 */
   readonly defaultDeny: boolean;
+  /**
+   * 该能力点覆盖的工具所属命名空间（v2.3 新增）。`mcp` 为缺省，故存量 29 项不写。
+   *
+   * **不要**给能力点键加 `vteam_` 前缀来「对齐」——那会让 `capabilityKeyForTool`
+   * 对 git/browser 返回 null、全量 git 工具 403（这正是 Q5 避开的坑）。
+   */
+  readonly namespace?: ToolNamespace;
 }
 
 /** 有序能力点目录（顺序即 UI 展示序；29 项覆盖 32 个 `vteam_*` 工具——`hook.manage` 覆盖 2、`task.complete` 覆盖 3）。 */
@@ -217,6 +235,45 @@ export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
     label: '执行敏感命令',
     tools: ['vteam_secret_command'],
     defaultDeny: false,
+  },
+
+  // ── git / browser 命名空间（v2.3 §5.2 Q4/Q5 + M1 安全警告）─────────────────
+  // 这三个能力点覆盖的是 worker 注入的**自定义**工具，暴露名不带 `vteam_` 前缀。
+  // 此前它们不在任何能力点里 ⇒ 没有任何岗位维度授权门（`browser` 等于任意角色
+  // 可用的无门外部访问），这是本组要补的真实缺口。
+  //
+  // ⚠️ M1：`git.repo.write` / `web.browse` **必须** `defaultDeny: true`。default-allow
+  // 下新增能力点会让**所有存量角色行自动获得它们**——把「当前无门」变成「看起来有门
+  // 其实是开的」。新键必须与存量回填同 PR 刷全表。
+  {
+    key: 'git.repo.read',
+    label: '读取 Git 仓库',
+    tools: [
+      'git_clone',
+      'git_pull',
+      'git_fetch',
+      'git_status',
+      'git_diff',
+      'git_log',
+    ],
+    defaultDeny: false,
+    namespace: 'git',
+  },
+  {
+    key: 'git.repo.write',
+    label: '写入 Git 远端',
+    tools: ['git_push'],
+    // 唯一会写远端的工具 ⇒ 出厂必须拒绝。
+    defaultDeny: true,
+    namespace: 'git',
+  },
+  {
+    key: 'web.browse',
+    label: '浏览外部网页',
+    tools: ['browser'],
+    // 当前完全无门 ⇒ 默认必须关；否则等于把「可被诱导浏览任意站点」变成出厂能力。
+    defaultDeny: true,
+    namespace: 'browser',
   },
 ];
 
