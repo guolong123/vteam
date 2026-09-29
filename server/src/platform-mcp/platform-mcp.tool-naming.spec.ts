@@ -243,15 +243,15 @@ describe('platform-mcp tool naming contract', () => {
       requestId: 'que_platform_0000000001',
     };
 
-    it('防线 1（zod 枚举）：`kind=\'secret_input\'` 在入口即被拒（枚举只有 question/permission）', () => {
+    it("防线 1（zod 枚举）：`kind='secret_input'` 在入口即被拒（枚举只有 question/permission）", () => {
       const parsed = parse({ ...base, kind: 'secret_input', answers: [['x']] });
       expect(parsed?.success).toBe(false);
     });
 
     it('防线 1 边界：合法 kind 仍放行（证明上一条不是「schema 全拒」的假绿）', () => {
-      expect(parse({ ...base, kind: 'question', answers: [['x']] })?.success).toBe(
-        true,
-      );
+      expect(
+        parse({ ...base, kind: 'question', answers: [['x']] })?.success,
+      ).toBe(true);
       expect(
         parse({ ...base, kind: 'permission', response: 'once' })?.success,
       ).toBe(true);
@@ -271,5 +271,4 @@ describe('platform-mcp tool naming contract', () => {
       );
     });
   });
-
 });

@@ -1795,7 +1795,10 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       const toDtoStart = src.indexOf('private toDto(');
       expect(toDtoStart).toBeGreaterThan(-1);
       const offsetOf = (line: number): number =>
-        src.split('\n').slice(0, line - 1).join('\n').length;
+        src
+          .split('\n')
+          .slice(0, line - 1)
+          .join('\n').length;
       expect(offsetOf(sites[0].line)).toBeGreaterThan(toDtoStart);
     });
 
@@ -1831,7 +1834,8 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
           const text = fs.readFileSync(probe, 'utf8');
           return text
             .split('\n')
-            .filter((l) => /^\s*managedMode:/.test(l) && !/;\s*$/.test(l)).length;
+            .filter((l) => /^\s*managedMode:/.test(l) && !/;\s*$/.test(l))
+            .length;
         })();
         // 变异后产出点 = 2 ⇒ 原断言的 toHaveLength(1) 必红
         expect(mutantSites).toBe(2);
@@ -1848,5 +1852,4 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       expect(sites[0].text).not.toMatch(/import|interface|boolean|;\s*$/);
     });
   });
-
 });
