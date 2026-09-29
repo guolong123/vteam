@@ -810,6 +810,9 @@ export class QuestionsService {
         secret: v.secret ?? true,
       })),
       reason: input.reason ?? null,
+      // 真实发起者实例 id：对齐 createForPlatform（:717）。缺它则 platformRequesterOf
+      // 对 secret_input 恒返回 null，confirmByAgent 的自确认校验 1a 永不触发。
+      requesterInstanceId: options.requesterInstanceId ?? null,
     } as unknown as Prisma.InputJsonValue;
     const row = await this.prisma.agentQuestion.create({
       data: {

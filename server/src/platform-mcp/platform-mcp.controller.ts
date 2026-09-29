@@ -106,9 +106,12 @@ export class PlatformMcpController {
     @Body() body: unknown,
   ): Promise<void> {
     const workerId = String(req.headers[WORKER_ID_HEADER] ?? '');
-    // 预算自述头（is_0000000001 问题 4）：把**服务端实际生效**的各层超时值回给调用方，
-    // 使「-32001 到底断在哪一层」不必靠猜。必须在任何写响应体之前挂（含心跳接管
+    // 预算自述头（is_0000000001 问题 4 / T7-C2）：把**服务端实际生效**的各层超时值回给
+    // 调用方，使「-32001 到底断在哪一层」不必靠猜。必须在任何写响应体之前挂（含心跳接管
     // 路径，否则首帧已发头就补不上了），且对 curl 等非 MCP 客户端同样可见。
+    // **无条件挂在所有 platform-mcp 响应上**（不分方法/工具，含 notification 与错误帧）：
+    // 它的读者是排障的人，鉴权/入参失败时最需要知道各层预算是多少。值恒为服务端常量，
+    // 不含任何入参 ⇒ 不构成信息泄露面。
     res.setHeader(
       SECRET_COMMAND_BUDGET_HEADER,
       secretCommandBudgetHeaderValue(),
