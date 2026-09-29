@@ -165,8 +165,11 @@ export const NATIVE_PERMISSION_KEYS: readonly string[] = [
  * `mcp:<server>:<tool>`。所以这处过滤是**平台的保守选择**（见
  * {@link NATIVE_PERMISSION_KEYS} 的「投影而非新增」自陈），**不是引擎限制**。
  *
- * **仅投影 `agents[]`**：`guard.roles[*].permission` 保持完整，直到 worker guard 层删除
- * （ordering hazard：worker `role-guard/policy.ts` 仍读取该矩阵）。
+ * **仅投影 `agents[]`**：`guard.roles[*].permission` **完整保留、不做投影**，但它
+ * **已不再是任何执行者的输入**——worker 侧的 role-guard 插件与其 `roles.json` 注入
+ * 已由 `4a82949`（`refactor(worker): remove the role-guard plugin and roles.json
+ * injection`）整体删除，`AgentGuardRole` 也随之只剩 `permission` 一个字段（无 `tools`）。
+ * 该字段当前仅作 API/UI 展示用，不再参与任何运行时裁决。
  */
 export function projectNativePermission(
   permission: Record<string, unknown>,
