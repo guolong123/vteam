@@ -54,9 +54,13 @@ import {
   EXTERNAL_AGENT_ROLE_CAPABILITIES,
   EXTERNAL_AGENT_ROLE_KEYS,
   EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST,
+  EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS,
   EXTERNAL_SYSTEM_AGENT_ID,
 } from '../common/constants/agent-role.constants';
-import { buildFactoryCapabilityMatrix } from '../common/constants/platform-capability.constants';
+import {
+  buildFactoryCapabilityMatrix,
+  isCapabilityGranted,
+} from '../common/constants/platform-capability.constants';
 import { BUILTIN_ROLE_PROMPTS } from '../common/constants/agent-role-prompts.constants';
 import { computeMemoryContentHash } from '../memories/memory.constants';
 
@@ -1186,8 +1190,8 @@ describe('seed（计划 skills + 评审子句）', () => {
       key: { in: [...EXTERNAL_AGENT_ROLE_KEYS] },
       capabilities: { equals: Prisma.DbNull },
     });
-    // 9 协作/取证/产出/敏感命令能力点 true，其余 20 项显式 false（default-allow 下不可省；29 键 = 9 + 20）。
-    expect(Object.keys(EXTERNAL_AGENT_ROLE_CAPABILITIES)).toHaveLength(29);
+    // 语义：外部岗位的 vteam_* 最小权限集照旧（9 true / 20 false）；
+    // T11 三档开关【不发射】（键缺失 ⇒ default-allow ⇒ 保留其 git/browser 能力）。
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(Boolean),
     ).toHaveLength(9);
@@ -1196,6 +1200,13 @@ describe('seed（计划 skills + 评审子句）', () => {
         (v) => v === false,
       ),
     ).toHaveLength(20);
+    for (const key of EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS) {
+      expect(EXTERNAL_AGENT_ROLE_CAPABILITIES).not.toHaveProperty(key);
+      expect(isCapabilityGranted(EXTERNAL_AGENT_ROLE_CAPABILITIES, key)).toBe(
+        true,
+      );
+      expect(bind?.[0].data.capabilities).not.toHaveProperty(key);
+    }
     expect(bind?.[0].data.capabilities['task.create']).toBe(false);
     expect(bind?.[0].data.capabilities['chat.post']).toBe(true);
     expect(bind?.[0].data.capabilities['secret.command']).toBe(true);
