@@ -114,8 +114,15 @@ export function ChatBubble({
   const isUser = type === "user";
   const isSystem = type === "system";
   const roleTheme = role ? roles[role] : null;
-  /** B5：身份行主文本 + 并列角色标签（author 已由容器解析，裸 id 不在本组件职责内） */
-  const display = authorRoleDisplay(author, (roleTheme ?? roles.developer).label);
+  /**
+   * B5：身份行主文本 + 并列角色标签（author 已由容器解析，裸 id 不在本组件职责内）。
+   *
+   * `role` 缺省时角色标签传空串而非回落 developer：外部渠道消息（企微）没有平台角色，
+   * 回落 developer 会让「GuoLong」旁边并排挂一个假的「开发者」标签——该消息曾因此被
+   * 整体误显示为「开发者」。author 为空时 `authorRoleDisplay` 仍会回落到 label，此时
+   * 空串会让 primary 也为空，由调用方保证 author 非空（外部消息的 author 取 senderId）。
+   */
+  const display = authorRoleDisplay(author, roleTheme ? roleTheme.label : "");
   /** B7：仅 user + sending/sent/failed 三个白名单取值出标记 */
   const statusMarker = isUser ? userMessageStatus(status) : null;
   const [expanded, setExpanded] = useState(false);

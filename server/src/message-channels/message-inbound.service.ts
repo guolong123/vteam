@@ -315,7 +315,14 @@ export class MessageInboundService implements MessageHost {
               groupChannel.id,
               '__external__',
               { text: inboundText } as any,
-              { senderType: SENDER_TYPE.external, senderId: null },
+              // senderId 承载外部发送者的**展示名**（企微用户名，缺省退回企微 userId）。
+              // 此前恒传 null ⇒ 前端三路业务映射（agent/teamMember/instance）全落空 ⇒
+              // 作者名 undefined + 角色标签回落硬编码 "developer"，企微消息被误显示为
+              // 「开发者」。展示名须结构化落库，而非让前端去解析 `[WeCom:xxx]` 文本前缀。
+              {
+                senderType: SENDER_TYPE.external,
+                senderId: displayLabel || null,
+              },
             );
             const internalMessageId = (res as { message?: { id?: string } })
               ?.message?.id;

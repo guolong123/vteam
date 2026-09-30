@@ -54,7 +54,9 @@ export function MessageIdentity({
   className,
 }: MessageIdentityProps) {
   const roleTheme = role ? roles[role] : null;
-  const display = authorRoleDisplay(author, (roleTheme ?? roles.developer).label);
+  // 同 ChatBubble：`role` 缺省不回落 developer（外部渠道消息无平台角色，回落会让
+  // 「GuoLong」旁并排挂假「开发者」标签）。
+  const display = authorRoleDisplay(author, roleTheme ? roleTheme.label : "");
   return (
     <div
       data-testid="message-identity"

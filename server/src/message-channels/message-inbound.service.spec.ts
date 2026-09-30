@@ -282,7 +282,7 @@ describe('MessageInboundService', () => {
         groupChannelId,
         '__external__',
         { text: '[WeCom:GuoLong] hello wecom' },
-        { senderType: SENDER_TYPE.external, senderId: null },
+        { senderType: SENDER_TYPE.external, senderId: 'GuoLong' },
       );
       expect(delivery.finish).toHaveBeenCalledWith(
         'md_1',

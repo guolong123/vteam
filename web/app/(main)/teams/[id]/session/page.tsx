@@ -1437,12 +1437,19 @@ export default function TeamSessionPage() {
               };
               const agent = msg.senderId ? agentMap.get(msg.senderId) : undefined;
               const memberHit = msg.senderId ? teamMemberById.get(msg.senderId) : undefined;
-              const role = agent?.role ?? memberHit?.role ?? (msg.senderId ? toRole(msg.senderId) : null) ?? "developer";
+              const isExternal = (msg as unknown as { senderType: string }).senderType === "external";
+              // 外部渠道（企微）消息：senderId 承载的是**外部发送者展示名**（见
+              // message-inbound.service.ts），不是 agentId/成员 id —— 不可拿它查业务
+              // 映射或推断角色，否则查不到就回落成硬编码 "developer"（曾把企微消息
+              // 误显示为「开发者」）。此处直接用其作作者名，角色标签走中性 external。
+              const role: RoleKey =
+                agent?.role ?? memberHit?.role ?? (msg.senderId ? toRole(msg.senderId) : null) ?? "developer";
               // B5/B9：三路业务映射先解析出展示名，裸 sender/成员/实例 id 一律被过滤，
               // 全部落空时不传 author（由 MessageIdentity/ChatBubble 回落角色标签）
               const senderInstanceId = (msg as unknown as { senderInstanceId?: string }).senderInstanceId;
               const author = resolveDisplayAuthor([
                 senderInstanceId ? instanceNameById.get(senderInstanceId) : undefined,
+                isExternal ? msg.senderId : undefined,
                 agent?.name,
                 memberHit?.name,
               ]);
@@ -1474,7 +1481,7 @@ export default function TeamSessionPage() {
                     text={(msg.content?.text ?? "") as string}
                     type="agent"
                     author={author}
-                    role={role}
+                    role={undefined}
                     time={formatTime(msg.createdAt)}
                     senderType="external"
                     attachment={attachment}
