@@ -50,49 +50,222 @@ export interface RoleCapability {
 }
 
 /**
- * 32 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
+ * 29 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
  * `PLATFORM_CAPABILITIES`（键集合逐项相等；仅新增 UI 分组 `group` 字段，顺序不强制）。
- * 出厂拒绝 16 项：task.create / task.transition / task.complete / team.add_member /
+ * 出厂拒绝 14 项：task.create / task.transition / task.complete / team.add_member /
  * chat.channel_send / wecom.reply / question.confirm / issue.create / issue.get /
- * issue.list / issue.update / issue.transition / skill.create / hook.manage /
- * git.repo.write / web.browse。
+ * issue.list / issue.update / issue.transition / skill.create / hook.manage。
  */
 export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
-  { key: "task.create", label: "创建任务", group: "task", tools: ["vteam_task_create"], factoryDefault: false },
-  { key: "task.transition", label: "流转任务状态", group: "task", tools: ["vteam_task_transition"], factoryDefault: false },
-  { key: "task.complete", label: "完成/确认计划", group: "task", tools: ["vteam_plan_complete", "vteam_plan_finalize", "vteam_plan_confirm"], factoryDefault: false },
-  { key: "plan.steps", label: "计划执行步骤", group: "task", tools: ["vteam_todo"], factoryDefault: true },
-  { key: "task.context", label: "读取任务上下文", group: "task", tools: ["vteam_task_context"], factoryDefault: true },
-  { key: "team.view", label: "查看团队", group: "team", tools: ["vteam_team_view"], factoryDefault: true },
-  { key: "team.add_member", label: "添加团队成员", group: "team", tools: ["vteam_team_add_member"], factoryDefault: false },
-  { key: "chat.post", label: "群聊发言", group: "collab", tools: ["vteam_group_post"], factoryDefault: true },
-  { key: "chat.read", label: "读取会话", group: "collab", tools: ["vteam_chat_history"], factoryDefault: true },
-  { key: "chat.notify", label: "通知成员", group: "collab", tools: ["vteam_notify_agent"], factoryDefault: true },
-  { key: "chat.channel_send", label: "渠道推送", group: "collab", tools: ["vteam_channel_send"], factoryDefault: false },
-  { key: "wecom.reply", label: "回复企业微信", group: "collab", tools: ["vteam_wecom_reply"], factoryDefault: false },
-  { key: "question.confirm", label: "确认问答", group: "collab", tools: ["vteam_question_confirm"], factoryDefault: false },
-  { key: "doc.read", label: "读取产出物", group: "artifact", tools: ["vteam_doclib"], factoryDefault: true },
-  { key: "doc.submit", label: "提交产出物", group: "artifact", tools: ["vteam_submit_artifact"], factoryDefault: true },
-  { key: "file.read", label: "读取文件", group: "artifact", tools: ["vteam_read_file"], factoryDefault: true },
-  { key: "issue.create", label: "创建需求/缺陷", group: "issue", tools: ["vteam_issue_create"], factoryDefault: false },
-  { key: "issue.get", label: "查看需求缺陷", group: "issue", tools: ["vteam_issue_get"], factoryDefault: false },
-  { key: "issue.list", label: "需求缺陷列表", group: "issue", tools: ["vteam_issue_list"], factoryDefault: false },
-  { key: "issue.update", label: "更新需求缺陷", group: "issue", tools: ["vteam_issue_update"], factoryDefault: false },
-  { key: "issue.transition", label: "流转需求缺陷", group: "issue", tools: ["vteam_issue_transition"], factoryDefault: false },
-  { key: "memory.save", label: "写入团队记忆", group: "memory", tools: ["vteam_memory_save"], factoryDefault: true },
-  { key: "memory.search", label: "检索团队记忆", group: "memory", tools: ["vteam_memory_search"], factoryDefault: true },
-  { key: "memory.update", label: "更新团队记忆", group: "memory", tools: ["vteam_memory_update"], factoryDefault: true },
-  { key: "skill.create", label: "沉淀技能", group: "capability", tools: ["vteam_skill_create"], factoryDefault: false },
-  { key: "my_profile", label: "查询自身", group: "capability", tools: ["vteam_my_profile"], factoryDefault: true },
-  { key: "hook.manage", label: "注册/取消唤醒", group: "automation", tools: ["vteam_hook_register", "vteam_hook_cancel"], factoryDefault: false },
-  { key: "git.repos", label: "查看授权仓库", group: "capability", tools: ["vteam_git_repos_list"], factoryDefault: true },
-  // 以下 4 项为 T11 补齐；`secret.command` 是**既有缺陷**、非 T11 引入。
-  // 3 项 label 的「执行点待上线」后缀是刻意的不对称（`secret.command` 有真实拦截点），
-  // 勿当笔误统一掉——它必须留在用户可见文案里，见 issue is_0000000009。
-  { key: "secret.command", label: "执行敏感命令", group: "capability", tools: ["vteam_secret_command"], factoryDefault: true },
-  { key: "git.repo.read", label: "读取 Git 仓库（执行点待上线，当前不产生拦截）", group: "capability", tools: ["git_clone", "git_pull", "git_fetch", "git_status", "git_diff", "git_log"], factoryDefault: true },
-  { key: "git.repo.write", label: "写入 Git 远端（执行点待上线，当前不产生拦截）", group: "capability", tools: ["git_push"], factoryDefault: false },
-  { key: "web.browse", label: "浏览外部网页（执行点待上线，当前不产生拦截）", group: "capability", tools: ["browser"], factoryDefault: false },
+  {
+    key: "task.create",
+    label: "创建任务",
+    group: "task",
+    tools: ["vteam_task_create"],
+    factoryDefault: false,
+  },
+  {
+    key: "task.transition",
+    label: "流转任务状态",
+    group: "task",
+    tools: ["vteam_task_transition"],
+    factoryDefault: false,
+  },
+  {
+    key: "task.complete",
+    label: "完成/确认计划",
+    group: "task",
+    tools: ["vteam_plan_complete", "vteam_plan_finalize", "vteam_plan_confirm"],
+    factoryDefault: false,
+  },
+  {
+    key: "plan.steps",
+    label: "计划执行步骤",
+    group: "task",
+    tools: ["vteam_todo"],
+    factoryDefault: true,
+  },
+  {
+    key: "task.context",
+    label: "读取任务上下文",
+    group: "task",
+    tools: ["vteam_task_context"],
+    factoryDefault: true,
+  },
+  {
+    key: "team.view",
+    label: "查看团队",
+    group: "team",
+    tools: ["vteam_team_view"],
+    factoryDefault: true,
+  },
+  {
+    key: "team.add_member",
+    label: "添加团队成员",
+    group: "team",
+    tools: ["vteam_team_add_member"],
+    factoryDefault: false,
+  },
+  {
+    key: "chat.post",
+    label: "群聊发言",
+    group: "collab",
+    tools: ["vteam_group_post"],
+    factoryDefault: true,
+  },
+  {
+    key: "chat.read",
+    label: "读取会话",
+    group: "collab",
+    tools: ["vteam_chat_history"],
+    factoryDefault: true,
+  },
+  {
+    key: "chat.notify",
+    label: "通知成员",
+    group: "collab",
+    tools: ["vteam_notify_agent"],
+    factoryDefault: true,
+  },
+  {
+    key: "chat.channel_send",
+    label: "渠道推送",
+    group: "collab",
+    tools: ["vteam_channel_send"],
+    factoryDefault: false,
+  },
+  {
+    key: "wecom.reply",
+    label: "回复企业微信",
+    group: "collab",
+    tools: ["vteam_wecom_reply"],
+    factoryDefault: false,
+  },
+  {
+    key: "question.confirm",
+    label: "确认问答",
+    group: "collab",
+    tools: ["vteam_question_confirm"],
+    factoryDefault: false,
+  },
+  {
+    key: "doc.read",
+    label: "读取产出物",
+    group: "artifact",
+    tools: ["vteam_doclib"],
+    factoryDefault: true,
+  },
+  {
+    key: "doc.submit",
+    label: "提交产出物",
+    group: "artifact",
+    tools: ["vteam_submit_artifact"],
+    factoryDefault: true,
+  },
+  {
+    key: "file.read",
+    label: "读取文件",
+    group: "artifact",
+    tools: ["vteam_read_file"],
+    factoryDefault: true,
+  },
+  {
+    key: "issue.create",
+    label: "创建需求/缺陷",
+    group: "issue",
+    tools: ["vteam_issue_create"],
+    factoryDefault: false,
+  },
+  {
+    key: "issue.get",
+    label: "查看需求缺陷",
+    group: "issue",
+    tools: ["vteam_issue_get"],
+    factoryDefault: false,
+  },
+  {
+    key: "issue.list",
+    label: "需求缺陷列表",
+    group: "issue",
+    tools: ["vteam_issue_list"],
+    factoryDefault: false,
+  },
+  {
+    key: "issue.update",
+    label: "更新需求缺陷",
+    group: "issue",
+    tools: ["vteam_issue_update"],
+    factoryDefault: false,
+  },
+  {
+    key: "issue.transition",
+    label: "流转需求缺陷",
+    group: "issue",
+    tools: ["vteam_issue_transition"],
+    factoryDefault: false,
+  },
+  {
+    key: "memory.save",
+    label: "写入团队记忆",
+    group: "memory",
+    tools: ["vteam_memory_save"],
+    factoryDefault: true,
+  },
+  {
+    key: "memory.search",
+    label: "检索团队记忆",
+    group: "memory",
+    tools: ["vteam_memory_search"],
+    factoryDefault: true,
+  },
+  {
+    key: "memory.update",
+    label: "更新团队记忆",
+    group: "memory",
+    tools: ["vteam_memory_update"],
+    factoryDefault: true,
+  },
+  {
+    key: "skill.create",
+    label: "沉淀技能",
+    group: "capability",
+    tools: ["vteam_skill_create"],
+    factoryDefault: false,
+  },
+  {
+    key: "my_profile",
+    label: "查询自身",
+    group: "capability",
+    tools: ["vteam_my_profile"],
+    factoryDefault: true,
+  },
+  {
+    key: "hook.manage",
+    label: "注册/取消唤醒",
+    group: "automation",
+    tools: ["vteam_hook_register", "vteam_hook_cancel"],
+    factoryDefault: false,
+  },
+  {
+    key: "git.repos",
+    label: "查看授权仓库",
+    group: "capability",
+    tools: ["vteam_git_repos_list"],
+    factoryDefault: true,
+  },
+  // 以下 1 项为 T11 补齐；`secret.command` 是**既有缺陷**、非 T11 引入。
+  //
+  // ⚠️ 2026-09-30：`git.repo.read` / `git.repo.write` / `web.browse` 三项已**整组退役**。
+  // 它们覆盖的 `git_*` / `browser` 是 worker 注入的本地工具、不经 platform-mcp，服务端
+  // 能力门拦不到（`isCapabilityGranted` 零运行时调用方）⇒ 这三个开关从未生效过。改由助手页
+  // 的 agent 权限（opencode 原生，与 bash 同链路）管控，默认值取 `ROLE_BOUNDARIES.toolAllows`。
+  {
+    key: "secret.command",
+    label: "执行敏感命令",
+    group: "capability",
+    tools: ["vteam_secret_command"],
+    factoryDefault: true,
+  },
 ] as const;
 
 const CAPABILITY_BY_KEY: ReadonlyMap<string, RoleCapability> = new Map(
@@ -125,7 +298,9 @@ export interface NormalizedCapabilities {
  * - 已保存 map → 目录键缺省**允许**（契约：缺失键 = 允许，绝不回落出厂拒绝），
  *   显式 `false`（含目录外键）→ 拒绝；`true`/异常值 → 允许。
  */
-export function normalizeCapabilities(raw: Record<string, boolean> | null | undefined): NormalizedCapabilities {
+export function normalizeCapabilities(
+  raw: Record<string, boolean> | null | undefined,
+): NormalizedCapabilities {
   if (raw == null) {
     return { map: factoryCapabilityMap(), fromFactory: true, extraKeys: [] };
   }
@@ -140,7 +315,10 @@ export function normalizeCapabilities(raw: Record<string, boolean> | null | unde
 }
 
 /** 列表项/编辑器摘要：「N 允许 / M 拒绝」（对完整 map 计数）。 */
-export function summarizeCapabilities(map: Record<string, boolean>): { allowed: number; denied: number } {
+export function summarizeCapabilities(map: Record<string, boolean>): {
+  allowed: number;
+  denied: number;
+} {
   let allowed = 0;
   let denied = 0;
   for (const value of Object.values(map)) {

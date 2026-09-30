@@ -187,7 +187,7 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
     expect(factory['secret.command']).toBe(true);
     expect(
       Object.values(factory).filter((value) => value === false),
-    ).toHaveLength(16); // T11：+git.repo.write +web.browse 出厂即拒
+    ).toHaveLength(14); // T11 三键（+git.repo.write/+web.browse）2026-09-30 退役
   });
 
   it('execution policy remains the owner of Agent.policyId and its JSON config column', () => {
@@ -263,19 +263,17 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
       expect(dupes).toEqual([]);
     });
 
-    it('反向：命名空间清单里的每个工具都被某个能力点登记（无「裸奔」工具）', () => {
-      // T10 写下这条时实测为 8（git_* 7 + browser 1，计划 §5.1 修正 4 的真实缺口）；
-      // T11 登记 git.repo.read / git.repo.write / web.browse 后归零。新增能力点却
-      // 忘了登记工具、或登记了却拼错工具名，本条即红。
+    it('反向：mcp 工具都被能力点登记（git/browser 已退役，见下条）', () => {
+      // T10 写下这条时实测裸奔 8（git_* 7 + browser 1）；T11 曾登记三个能力点归零；
+      // 2026-09-30 三键退役（本地工具不经 platform-mcp，服务端门拦不到）⇒ 那 8 个
+      // 退出本断言范围，当前无门（`platform-capability.coverage.spec` 显式记录该现状）。
       const registered = new Set(
         matrixEntries().map((e) => `${e.ns}:${e.tool}`),
       );
-      const unregistered = Object.entries(CATALOG).flatMap(([ns, names]) =>
-        names
-          .filter((n) => !registered.has(`${ns}:${n}`))
-          .map((n) => `${ns}:${n}`),
+      const unregisteredMcp = (CATALOG['mcp'] ?? []).filter(
+        (n) => !registered.has(`mcp:${n}`),
       );
-      expect(unregistered).toEqual([]);
+      expect(unregisteredMcp).toEqual([]);
     });
   });
 });
