@@ -106,10 +106,10 @@ describe('agent capability split current-schema contract (historical 20260921000
     expect(roles).toMatch(/`capabilities`\s+JSON NULL/);
   });
 
-  it('the current capability catalog is the complete 32-key post-split catalog', () => {
-    // v2.3 T11：29 → 32（新增 git.repo.read / git.repo.write / web.browse）。
-    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(32);
-    expect(new Set(PLATFORM_CAPABILITY_KEYS).size).toBe(32);
+  it('the current capability catalog is the complete 29-key post-retirement catalog', () => {
+    // v2.3 T11 曾加到 32（+git.repo.read/write/web.browse），2026-09-30 三键退役 ⇒ 29。
+    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(29);
+    expect(new Set(PLATFORM_CAPABILITY_KEYS).size).toBe(29);
     for (const retired of RETIRED_KEYS) {
       expect(PLATFORM_CAPABILITY_KEYS).not.toContain(retired);
     }
@@ -125,7 +125,7 @@ describe('agent capability split current-schema contract (historical 20260921000
 
   it('project_manager remains explicitly fully authorized', () => {
     const matrix = BUILTIN_ROLE_CAPABILITY_MAPS.project_manager;
-    expect(Object.keys(matrix)).toHaveLength(32); // T11: +git.repo.read/write, web.browse
+    expect(Object.keys(matrix)).toHaveLength(29); // T11 三键退役后
     expect(Object.values(matrix).every((value) => value === true)).toBe(true);
   });
 
@@ -162,20 +162,19 @@ describe('agent capability split current-schema contract (historical 20260921000
     }
   });
 
-  it('ar_general-equivalent factory matrix has 16 allow and 16 deny (M1: 写/浏览新键出厂即拒)', () => {
+  it('ar_general-equivalent factory matrix has 15 allow and 14 deny', () => {
     const factory = buildFactoryCapabilityMatrix();
-    // T11：+git.repo.read(allow) / +git.repo.write(deny) / +web.browse(deny)
-    // ⇒ 16 allow / 16 deny。M1 安全要求：后两者必须 defaultDeny=true。
+    // T11 三键（+1 allow / +2 deny）已于 2026-09-30 退役 ⇒ 15 allow / 14 deny。
     expect(
       Object.values(factory).filter((value) => value === true),
-    ).toHaveLength(16);
+    ).toHaveLength(15);
     expect(
       Object.values(factory).filter((value) => value === false),
-    ).toHaveLength(16);
+    ).toHaveLength(14);
     expect(factory['secret.command']).toBe(true);
-    expect(factory['git.repo.read']).toBe(true);
-    expect(factory['git.repo.write']).toBe(false);
-    expect(factory['web.browse']).toBe(false);
+    for (const retired of ['git.repo.read', 'git.repo.write', 'web.browse']) {
+      expect(factory).not.toHaveProperty(retired);
+    }
     expectBooleanCatalog(factory);
   });
 

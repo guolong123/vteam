@@ -239,23 +239,24 @@ export const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
 ] as const;
 
 /**
- * 外部岗位**不纳入**的三档开关能力点（用户决定 2026-09-29，v2.3 §T11）：
- * 外部助手保留自身 git 操作与浏览网页能力，`vteam_*` MCP 对其默认开放。
+ * 外部岗位**不纳入**管控的能力点（用户决定 2026-09-29）。
  *
- * default-allow 语义下「键缺失 ⇒ 允许」，所以这里**必须删键、不能写 `false`**：
- * 写 `false` 恰好会拒绝外部助手，与用户决定相反。
+ * ⚠️ 2026-09-30：原为 `git.repo.read` / `git.repo.write` / `web.browse` 三键，因对应
+ * 能力点退役而**整组清空**。外部助手保留自身 git 操作与浏览网页能力这一决定**不变**，
+ * 只是不再需要豁免机制：那三个键已不在目录里，外部矩阵与内置矩阵一样不会发射它们。
+ * 外部助手走的是 worker 侧 opencode 原生权限链路（其 agent 定义不经本矩阵）。
+ *
+ * 保留本常量而非直接删掉：`EXTERNAL_AGENT_ROLE_CAPABILITIES` 仍按它做删键，
+ * 语义（哪些能力点不纳入外部管控）需要有一个可扩展的落点。
  */
-export const EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS: readonly string[] = [
-  'git.repo.read',
-  'git.repo.write',
-  'web.browse',
-] as const;
+export const EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS: readonly string[] =
+  [] as const;
 
 /**
  * 外部岗位的最小能力矩阵（由 9 工具 allowlist 经目录映射；未覆盖能力点显式 `false`）。
  * default-allow 语义下必须显式拒绝，否则外部岗位会因「缺失键 ⇒ 允许」获得全部能力。
  *
- * 例外：`EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS` 三键被**删去**（不发射），
+ * 例外：`EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS` 内的键被**删去**（不发射），
  * 理由见其上方注释。
  */
 export const EXTERNAL_AGENT_ROLE_CAPABILITIES: Record<string, boolean> =
@@ -324,9 +325,6 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
   Record<string, boolean>
 > = {
   product: {
-    // ↓ T11 存量回填：git.repo.read / git.repo.write / web.browse。
-    // 取值由 ROLE_BOUNDARIES.toolAllows 派生（该处已声明本岗位能用哪些
-    // git_*/browser），不在此另立一套口径。
     'task.create': true,
     'task.transition': true,
     'task.complete': false,
@@ -356,9 +354,6 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'hook.manage': true,
     'git.repos': false,
     'secret.command': true,
-    'git.repo.read': false,
-    'git.repo.write': false,
-    'web.browse': true,
   },
   project_manager: {
     'task.create': true,
@@ -393,9 +388,6 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     // ⚠️ 声明偏离：ROLE_BOUNDARIES 未给本岗 browser/git_*，但本岗矩阵既有不变量是
     // 「全量授权」（见 split-grouped spec）。沿用它以免改写该不变量；代价是主 Agent
     // 获得 web.browse 与 git_push —— 若要收紧请走 D6。
-    'git.repo.read': true,
-    'git.repo.write': true,
-    'web.browse': true,
   },
   architect: {
     'task.create': false,
@@ -427,9 +419,6 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'hook.manage': false,
     'git.repos': false,
     'secret.command': true,
-    'git.repo.read': false,
-    'git.repo.write': false,
-    'web.browse': true,
   },
   developer: {
     'task.create': false,
@@ -461,9 +450,6 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'hook.manage': false,
     'git.repos': false,
     'secret.command': true,
-    'git.repo.read': true,
-    'git.repo.write': true,
-    'web.browse': true,
   },
   tester: {
     'task.create': false,
@@ -495,9 +481,6 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'hook.manage': false,
     'git.repos': false,
     'secret.command': true,
-    'git.repo.read': true,
-    'git.repo.write': false,
-    'web.browse': true,
   },
   plan: {
     'task.create': false,
@@ -529,9 +512,6 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'hook.manage': false,
     'git.repos': false,
     'secret.command': true,
-    'git.repo.read': false,
-    'git.repo.write': false,
-    'web.browse': true,
   },
   librarian: {
     'task.create': false,
@@ -563,9 +543,6 @@ export const BUILTIN_ROLE_CAPABILITY_MAPS: Record<
     'hook.manage': false,
     'git.repos': true,
     'secret.command': true,
-    'git.repo.read': true,
-    'git.repo.write': false,
-    'web.browse': true,
   },
 };
 

@@ -31,11 +31,12 @@ describe('platform capability catalogue coverage', () => {
     expect(PLATFORM_CAPABILITY_KEYS).toEqual(keys);
   });
 
-  it('目录覆盖三个命名空间全部工具，且每项恰属一个能力点（32 点 ↔ 40 工具）', () => {
-    // v2.3 T11 后目录含 3 个新能力点（git.repo.read 6 工具 / git.repo.write 1 /
-    // web.browse 1）⇒ 32 点、40 工具。mcp 命名空间仍是 32 项。
-    expect(PLATFORM_CAPABILITIES).toHaveLength(32);
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(32);
+  it('目录只覆盖 mcp 命名空间，且每项恰属一个能力点（29 点 ↔ 32 工具）', () => {
+    // git_* / browser 已于 2026-09-30 整组退役：它们是 worker 注入的本地工具、不经
+    // platform-mcp，服务端能力门结构上拦不到 ⇒ 目录不再登记（详见常量文件末退役记录）。
+    // 补齐它们需要打通 agent 权限投影 + 重新基线化 `/agent-policies`，属独立后续工作。
+    // 在此之前这 8 个工具无门（见下方那条 spec 的显式记录）。
+    expect(PLATFORM_CAPABILITIES).toHaveLength(29);
     const owner = new Map<string, string>();
     let toolSum = 0;
     for (const capability of PLATFORM_CAPABILITIES) {
@@ -45,31 +46,40 @@ describe('platform capability catalogue coverage', () => {
         owner.set(tool, capability.key);
       }
     }
-    // 工具总数跨三个命名空间；mcp 那一批仍须与 VTEAM_MCP_TOOL_NAMES 逐项相等。
-    expect(toolSum).toBe(40);
-    const allNamespaces = [
-      ...VTEAM_MCP_TOOL_NAMES,
-      ...VTEAM_GIT_TOOL_NAMES,
-      ...VTEAM_BROWSER_TOOL_NAMES,
-    ];
-    expect([...owner.keys()].sort()).toEqual([...allNamespaces].sort());
-    for (const tool of allNamespaces) {
+    // 工具总数 32 = VTEAM_MCP_TOOL_NAMES 全量：git/browser 那 8 个已退役，故 mcp 侧
+    // 目录现在恰好覆盖 VTEAM_MCP_TOOL_NAMES 全部 32 项（此前 29 点覆盖其中 32 工具 +
+    // 另 8 个由退役三键覆盖）。
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(32);
+    expect(toolSum).toBe(32);
+    expect([...owner.keys()].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
+    for (const tool of VTEAM_MCP_TOOL_NAMES) {
       expect(capabilityKeyForTool(tool)).toBe(owner.get(tool));
     }
-    // 仍覆盖多工具的：task.complete（完工/定稿/确认）+ hook.manage（register + cancel）
-    // + git.repo.read（clone/pull/fetch/status/diff/log，v2.3 T11 新增）。
+    // 仍覆盖多工具的：task.complete（完工/定稿/确认）+ hook.manage（register + cancel）。
     const multiTool = PLATFORM_CAPABILITIES.filter((c) => c.tools.length > 1);
     expect(multiTool.map((c) => c.key)).toEqual([
       'task.complete',
       'hook.manage',
-      'git.repo.read',
     ]);
     expect(multiTool[0]?.tools).toHaveLength(3);
     expect(multiTool[1]?.tools).toHaveLength(2);
-    expect(multiTool[2]?.tools).toHaveLength(6);
-    // 已拆分的组键不再是合法能力点键。
+    // 已拆分的组键、以及已退役的 git/browser 键，均不再是合法能力点键。
     expect(isPlatformCapabilityKey('issue.manage')).toBe(false);
     expect(isPlatformCapabilityKey('memory.manage')).toBe(false);
+    for (const retired of ['git.repo.read', 'git.repo.write', 'web.browse']) {
+      expect(isPlatformCapabilityKey(retired)).toBe(false);
+    }
+  });
+
+  it('退役的 git_* / browser 既不在目录、也不被任何岗位能力点治理（执行点待后续 PR）', () => {
+    // 已知且**有意**的现状：这三个能力点退役后，这 8 个 worker 本地工具失去了唯一的
+    // 管控入口（它们不经 platform-mcp，服务端能力门结构上拦不到），当前靠 opencode
+    // 侧默认放行。补齐需要打通 agent 权限投影（NATIVE_PERMISSION_KEYS）+ 重新基线化
+    // `/agent-policies` 字节基线，属独立后续工作。
+    // 本断言锁住「确实无门」这个事实，避免有人误以为它们受控。
+    for (const tool of [...VTEAM_GIT_TOOL_NAMES, ...VTEAM_BROWSER_TOOL_NAMES]) {
+      expect(capabilityKeyForTool(tool)).toBeNull();
+    }
   });
 
   it('secret_command：vteam_secret_command → secret.command，defaultDeny=false 且出厂 true', () => {

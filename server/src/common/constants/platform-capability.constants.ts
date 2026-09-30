@@ -27,13 +27,14 @@
 /**
  * 工具命名空间（v2.3 §5.2 Q5）。
  *
- * 存在的理由：MCP 工具的暴露名是 `vteam_<action>`，而 worker 注入的自定义 git /
- * browser 工具**不带该前缀**。此前调用方一律用 `vteam_${bareToolName}` 反查能力
- * 点（`platform-tool-permission.service.ts:41`），对 git/browser **恒等于错误键**
- * ——这就是「这些工具没有任何岗位维度授权门」的实现根因。有了 namespace 后，
- * 反查按 `namespace + name` 组键，前缀不再是调用方的猜测。
+ * 原为 `'mcp' | 'git' | 'browser'`——后两个是 worker 注入的自定义工具
+ * （暴露名不带 `vteam_` 前缀，故前缀反查对它们恒等于错误键）。但那组能力点已于
+ * 2026-09-30 退役（见文件末退役记录）：`git_*` / `browser` 走 worker 侧 opencode
+ * 原生权限链路，不经本目录。故 `'git'` / `'browser'` 两个成员已无对应能力点，
+ * 收窄为 `'mcp'`。字段本身保留——它是本目录的可扩展位，运行时消费方
+ * （`buildCapabilityMatrixFromTools`）当前按工具名直查、不读它。
  */
-export type ToolNamespace = 'mcp' | 'git' | 'browser';
+export type ToolNamespace = 'mcp';
 
 /** 单个业务能力点。 */
 export interface PlatformCapability {
@@ -236,46 +237,14 @@ export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
     tools: ['vteam_secret_command'],
     defaultDeny: false,
   },
-
-  // ── git / browser 命名空间（v2.3 §5.2 Q4/Q5 + M1 安全警告）─────────────────
-  // 这三个能力点覆盖的是 worker 注入的**自定义**工具，暴露名不带 `vteam_` 前缀。
-  // 此前它们不在任何能力点里 ⇒ 没有任何岗位维度授权门（`browser` 等于任意角色
-  // 可用的无门外部访问），这是本组要补的真实缺口。
-  //
-  // ⚠️ M1：`git.repo.write` / `web.browse` **必须** `defaultDeny: true`。default-allow
-  // 下新增能力点会让**所有存量角色行自动获得它们**——把「当前无门」变成「看起来有门
-  // 其实是开的」。新键必须与存量回填同 PR 刷全表。
-  {
-    key: 'git.repo.read',
-    label: '读取 Git 仓库',
-    tools: [
-      'git_clone',
-      'git_pull',
-      'git_fetch',
-      'git_status',
-      'git_diff',
-      'git_log',
-    ],
-    defaultDeny: false,
-    namespace: 'git',
-  },
-  {
-    key: 'git.repo.write',
-    label: '写入 Git 远端',
-    tools: ['git_push'],
-    // 唯一会写远端的工具 ⇒ 出厂必须拒绝。
-    defaultDeny: true,
-    namespace: 'git',
-  },
-  {
-    key: 'web.browse',
-    label: '浏览外部网页',
-    tools: ['browser'],
-    // 当前完全无门 ⇒ 默认必须关；否则等于把「可被诱导浏览任意站点」变成出厂能力。
-    defaultDeny: true,
-    namespace: 'browser',
-  },
 ];
+
+// ── 已退役：git / browser 三个岗位能力点（2026-09-30）────────────────────────
+// `git.repo.read` / `git.repo.write` / `web.browse` 覆盖的 `git_*` / `browser` 是
+// worker 注入的**本地**工具，**不经 platform-mcp** ⇒ 服务端能力门结构上拦不到它们
+// （实证：`isCapabilityGranted` 零运行时调用方，那三个键从未拦截过任何调用）。在岗位页
+// 留一个改不动的开关比没有更危险，故整组退役。权威源改为 `ROLE_BOUNDARIES.toolAllows`
+// → `NATIVE_PERMISSION_KEYS` 投影 → opencode 原生校验（与 `bash` 同一链路）。
 
 /** 能力点键全集（有序；DTO 校验与 UI 消费方用）。 */
 export const PLATFORM_CAPABILITY_KEYS: readonly string[] =

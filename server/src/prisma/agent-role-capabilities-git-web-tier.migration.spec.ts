@@ -3,27 +3,26 @@ import * as path from 'path';
 import {
   BUILTIN_AGENT_ROLES,
   BUILTIN_ROLE_CAPABILITY_MAPS,
-  EXTERNAL_AGENT_ROLE_KEYS,
   EXTERNAL_AGENT_ROLE_CAPABILITIES,
+  EXTERNAL_AGENT_ROLE_KEYS,
   EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS,
 } from '../common/constants/agent-role.constants';
-import { isCapabilityGranted } from '../common/constants/platform-capability.constants';
+import { isPlatformCapabilityKey } from '../common/constants/platform-capability.constants';
 
 /**
- * Contract for migration `20260929000000_capability_git_web_tier`.
+ * Contract for migration `20260929000000_capability_git_web_tier` — **历史迁移**。
  *
- * The three T11 keys are absent from every pre-existing `agent_roles.capabilities`
- * row (they were introduced together with the catalog), and seed only backfills
- * `capabilities IS NULL`. So after this migration runs, every row that does not
- * appear here gains the new keys **by default-allow** — the migration is the only
- * place that can pin them down. It therefore has to be exact in both directions:
+ * ⚠️ 2026-09-30：本迁移写入的三个键（`git.repo.read` / `git.repo.write` /
+ * `web.browse`）已由**后继**迁移 `20260930000000_capability_git_web_retire` 摘除，
+ * 对应的岗位能力点亦整组退役（覆盖的 `git_*` / `browser` 是 worker 注入的本地工具，
+ * 不经 platform-mcp ⇒ 服务端能力门结构上拦不到，从未生效过）。
  *
- * - the 7 builtin roles get the value derived from `ROLE_BOUNDARIES.toolAllows`
- *   (asserted here against the very constants the runtime uses, so the migration
- *   cannot silently drift from them);
- * - the 3 external roles must receive **nothing** — the user decided external
- *   assistants keep their own git/browser capability, and writing `false` would
- *   deny exactly what that decision preserved.
+ * 因此本 spec 的职责从「校验三键回填值与 src 常量一致」**改为**「校验历史迁移的 SQL
+ * 本身未被篡改」+「三键确已退役」。逐岗位回填值已无处可比（src 侧已无这三个键），
+ * 那部分校验移交退役 spec 与 `platform-capability.coverage.spec`。
+ *
+ * 保留本 spec 的意义：历史迁移文件一旦被改写，升级链路的重放结果就会与已部署数据库
+ * 不一致（本地已跑过、异地重放时值不同）——这是不可逆偏差，必须能在测试里发现。
  */
 
 const MIGRATION = path.resolve(
@@ -126,18 +125,7 @@ describe('T11 三键存量回填迁移 20260929000000', () => {
   });
 
   for (const key of T11_KEYS) {
-    it(`${key}：迁移写入值与 src 常量逐岗位一致（7 内置）`, () => {
-      const written = writtenFor(key);
-      for (const role of BUILTIN_KEYS) {
-        const expected = BUILTIN_ROLE_CAPABILITY_MAPS[role][key];
-        expect(typeof expected).toBe('boolean');
-        expect(written[role]).toBe(expected);
-      }
-    });
-  }
-
-  for (const key of T11_KEYS) {
-    it(`${key}：外部岗位零写入且出现在排除名单内（不得回填为 false）`, () => {
+    it(`${key}：外部岗位零写入且出现在排除名单内（历史行为，不得回填为 false）`, () => {
       const written = writtenFor(key);
       for (const role of EXTERNAL_AGENT_ROLE_KEYS) {
         expect(written[role]).toBeUndefined();
@@ -151,24 +139,28 @@ describe('T11 三键存量回填迁移 20260929000000', () => {
     });
   }
 
-  it('外部岗位经本迁移后仍「缺失即允许」（用户决定：不纳入三档管控）', () => {
-    for (const key of EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS) {
+  it('三键已从 src 侧彻底退役（后继迁移摘除，目录不再登记）', () => {
+    for (const key of T11_KEYS) {
+      expect(isPlatformCapabilityKey(key)).toBe(false);
+    }
+    for (const role of BUILTIN_KEYS) {
+      for (const key of T11_KEYS) {
+        expect(BUILTIN_ROLE_CAPABILITY_MAPS[role]).not.toHaveProperty(key);
+      }
+    }
+    // 外部岗豁免名单随之清空：那三个键已不在目录，外部矩阵本就不发射它们。
+    expect(EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS).toHaveLength(0);
+    for (const key of T11_KEYS) {
       expect(EXTERNAL_AGENT_ROLE_CAPABILITIES).not.toHaveProperty(key);
-      expect(isCapabilityGranted(EXTERNAL_AGENT_ROLE_CAPABILITIES, key)).toBe(
-        true,
-      );
     }
   });
 
-  it('其余行（ar_general + 历史自定义）走出厂值 read=T / write=F / browse=F', () => {
-    // ar_general 不在任何 IN 名单里，它是靠 NOT IN 语句被覆盖的。
-    const viaExclusion = (key: string): boolean | undefined => {
-      const stmt = parsed.find((a) => a.negated && a.key === key);
-      return stmt && !stmt.keys.includes('ar_general') ? stmt.value : undefined;
-    };
-    expect(viaExclusion('git.repo.read')).toBe(true);
-    expect(viaExclusion('git.repo.write')).toBe(false);
-    expect(viaExclusion('web.browse')).toBe(false);
+  it('历史迁移仍写出三键（SQL 未被篡改，保证异地重放结果一致）', () => {
+    // 本迁移文件一旦被改写，已部署库与异地重放会得到不同结果——不可逆偏差。
+    for (const key of T11_KEYS) {
+      expect(writtenFor(key)).toBeDefined();
+      expect(parsed.some((a) => a.key === key)).toBe(true);
+    }
   });
 
   it('只增不改：每条语句都以「该键缺失」为守卫（不覆盖运营者已显式的值）', () => {
