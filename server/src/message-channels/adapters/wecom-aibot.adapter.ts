@@ -40,12 +40,27 @@ export class WecomAibotAdapter extends MessageAdapter {
       fromUserName?: string;
       chattype?: string;
       spinnerTimer?: NodeJS.Timeout | null;
+      registeredAt?: number;
     }
   >();
   private static readonly STREAM_LIMIT = 100;
   // Zero-width suffix forces WeCom markdown diff repaint while visually icon-only (⏳ vs ⌛ alone may be deduped/cached by WeCom client)
   private static readonly SPINNER_FRAMES = ['⏳\u200B', '⌛\u200C'];
   private static readonly SPINNER_INTERVAL_MS = 1000;
+  /**
+   * stream 存活上限 ms：超过即停 spinner 并从 map 摘除。
+   *
+   * 此前唯一的清理是 `registerStreamCorrelation` 里 `size >= STREAM_LIMIT(=100)` 的
+   * FIFO 淘汰——**低流量下永不触发**。而 spinner 的正常收尾依赖下游调用
+   * `finishStream` / `discardStream`；一旦那条路径没走到（如消息未落库、dispatch 提前
+   * 抛错），spinner timer 就永久存活，每秒往企微发一次 `⏳`。生产实测：两条 06:35/06:43
+   * 的 stream 刷到 09:24 仍未停，企微回绝 `errcode=846608 stream message update
+   * expired (>10 minutes)`，占位永久卡在「正在输入」。
+   *
+   * 取 10min：与企微自身的 stream 有效期（>10 minutes 即过期）对齐——超过这个点
+   * spinner 的更新注定被拒，继续发送只是无谓地刷错误日志。
+   */
+  private static readonly STREAM_TTL_MS = 10 * 60 * 1000;
 
   private readonly reconnectCounts = new Map<string, number>();
 
@@ -192,6 +207,33 @@ export class WecomAibotAdapter extends MessageAdapter {
     this.attachedHost = host;
   }
 
+  /**
+   * 清扫超龄 stream：停 spinner + 摘除。
+   *
+   * 补 `STREAM_LIMIT` FIFO 淘汰的缺口——后者只在条目数打满时触发，低流量下永不执行，
+   * 于是未走到 finishStream/discardStream 的 stream 永久存活（见 STREAM_TTL_MS 注释）。
+   * 每次注册新 stream 前清扫一次：无需额外定时器，且新建 stream 本身就是最需要回收资源的时刻。
+   *
+   * 幂等且 best-effort：clearInterval 失败不影响摘除（否则 timer 泄漏无法回收）。
+   */
+  private reapExpiredStreams(now = Date.now()): void {
+    for (const [key, entry] of this.streams) {
+      const age = now - new Date(entry.registeredAt ?? now).getTime();
+      if (age < WecomAibotAdapter.STREAM_TTL_MS) continue;
+      if (entry.spinnerTimer) {
+        try {
+          clearInterval(entry.spinnerTimer);
+        } catch {}
+        entry.spinnerTimer = null;
+      }
+      this.streams.delete(key);
+      this.logger.warn(
+        `wecom stream reaped: 超过 ${WecomAibotAdapter.STREAM_TTL_MS}ms 未收尾，` +
+          `已停 spinner 并摘除 internalMessageId=${key} stream=${entry.streamId} ageMs=${age}`,
+      );
+    }
+  }
+
   registerStreamCorrelation(
     internalMessageId: string,
     ref: {
@@ -204,6 +246,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       spinnerTimer?: NodeJS.Timeout | null;
     },
   ): void {
+    this.reapExpiredStreams();
     if (this.streams.size >= WecomAibotAdapter.STREAM_LIMIT) {
       const firstKey = this.streams.keys().next().value as string | undefined;
       if (firstKey) {
@@ -222,7 +265,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         clearInterval(existing.spinnerTimer);
       } catch {}
     }
-    this.streams.set(internalMessageId, ref);
+    this.streams.set(internalMessageId, { ...ref, registeredAt: Date.now() });
     this.logger.log(
       `wecom registerStreamCorrelation internalMessageId=${internalMessageId} channelId=${ref.channelId} streamId=${ref.streamId} fromUserId=${ref.fromUserId ?? ''} chattype=${ref.chattype ?? ''} size=${this.streams.size}`,
     );
