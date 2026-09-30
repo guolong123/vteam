@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Get,
   NotFoundException,
@@ -37,6 +38,86 @@ function maskChannel(row: any): any {
     ...row,
     secrets: maskSecrets(row.secrets as Record<string, any> | null),
   };
+}
+
+/** 渠道→团队的绑定独占性检查结果（供 message / notification 两条绑定路径复用）。 */
+interface ExclusiveBindingConflict {
+  channelId: string;
+  teamIds: string[];
+  teamNames: string[];
+}
+
+/**
+ * 找出「已被其他团队绑定」的渠道。
+ *
+ * 渠道是**独占**资源：入站时 `message-inbound.service.ts` 对该渠道绑定的每个 teamId
+ * 循环写一次群消息 + 派发一次会话。同一渠道绑两个团队 ⇒ 同一条外部消息在两个群各触发
+ * 一次，两个团队的 PM 各回一次（生产实测：企微通道同时绑开发团队与运维群，每条消息
+ * 产生成对消息 id、两个 project_manager 会话同时回复）。
+ *
+ * 缺省不静默抢占：抛 409 让前端弹确认框，用户确认后带 `replaceExisting=true` 重提。
+ */
+async function findExclusiveBindingConflicts(
+  prisma: PrismaService,
+  teamId: string,
+  linkTable: 'teamMessageChannel' | 'teamNotificationChannel',
+  channelIds: string[],
+): Promise<ExclusiveBindingConflict[]> {
+  if (channelIds.length === 0) return [];
+  const model = (prisma as any)[linkTable];
+  const links = await model.findMany({
+    where: { messageChannelId: { in: channelIds }, teamId: { not: teamId } },
+    select: { messageChannelId: true, teamId: true },
+  });
+  const byChannel = new Map<string, Set<string>>();
+  for (const l of links as Array<{
+    messageChannelId: string;
+    teamId: string;
+  }>) {
+    if (!byChannel.has(l.messageChannelId))
+      byChannel.set(l.messageChannelId, new Set());
+    byChannel.get(l.messageChannelId)!.add(l.teamId);
+  }
+  if (byChannel.size === 0) return [];
+
+  const allTeamIds = [
+    ...new Set([...byChannel.values()].flatMap((s) => [...s])),
+  ];
+  const teams = await (prisma as any).team.findMany({
+    where: { id: { in: allTeamIds } },
+    select: { id: true, name: true },
+  });
+  const nameById = new Map(
+    (teams as Array<{ id: string; name: string }>).map((t) => [t.id, t.name]),
+  );
+
+  return [...byChannel.entries()]
+    .map(([channelId, teamIds]) => {
+      const ids = [...teamIds];
+      return {
+        channelId,
+        teamIds: ids,
+        teamNames: ids.map((id) => nameById.get(id) ?? id),
+      };
+    })
+    .sort((a, b) => a.channelId.localeCompare(b.channelId));
+}
+
+/** 抢占：先解除这些渠道在其他团队上的绑定（独占语义）。 */
+async function releaseConflictingBindings(
+  prisma: PrismaService,
+  linkTable: 'teamMessageChannel' | 'teamNotificationChannel',
+  channelIdField: 'messageChannelId' | 'notificationChannelId',
+  conflicts: ExclusiveBindingConflict[],
+  keepTeamId: string,
+): Promise<void> {
+  if (conflicts.length === 0) return;
+  await (prisma as any)[linkTable].deleteMany({
+    where: {
+      [channelIdField]: { in: conflicts.map((c) => c.channelId) },
+      teamId: { not: keepTeamId },
+    },
+  });
 }
 
 @ApiTags('teams')
@@ -122,6 +203,28 @@ export class TeamChannelBindingsController {
         });
       }
     }
+
+    const conflicts = await findExclusiveBindingConflicts(
+      this.prisma,
+      teamId,
+      'teamMessageChannel',
+      ids,
+    );
+    if (conflicts.length > 0 && dto.replaceExisting !== true) {
+      throw new ConflictException({
+        code: 'CHANNEL_ALREADY_BOUND',
+        message:
+          '渠道已被其他团队绑定，重新绑定将取消原有群聊绑定（同一条外部消息会在每个绑定团队各触发一次会话）',
+        details: { conflicts },
+      });
+    }
+    await releaseConflictingBindings(
+      this.prisma,
+      'teamMessageChannel',
+      'messageChannelId',
+      conflicts,
+      teamId,
+    );
 
     await (this.prisma as any).teamMessageChannel.deleteMany({
       where: { teamId },
@@ -216,6 +319,27 @@ export class TeamChannelBindingsController {
         });
       }
     }
+
+    const conflicts = await findExclusiveBindingConflicts(
+      this.prisma,
+      teamId,
+      'teamNotificationChannel',
+      ids,
+    );
+    if (conflicts.length > 0 && dto.replaceExisting !== true) {
+      throw new ConflictException({
+        code: 'CHANNEL_ALREADY_BOUND',
+        message: '通知渠道已被其他团队绑定，重新绑定将取消原有绑定',
+        details: { conflicts },
+      });
+    }
+    await releaseConflictingBindings(
+      this.prisma,
+      'teamNotificationChannel',
+      'notificationChannelId',
+      conflicts,
+      teamId,
+    );
 
     await (this.prisma as any).teamNotificationChannel.deleteMany({
       where: { teamId },
