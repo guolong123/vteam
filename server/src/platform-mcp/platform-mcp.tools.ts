@@ -374,9 +374,9 @@ export const memorySaveSchema = z.object({
     .string()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
   level: z
-    .enum(['team', 'global'])
+    .enum(['team', 'role', 'global'])
     .describe(
-      '记忆级别：team=团队级（写入当前任务所属团队，跨任务共享）/ global=全局（global 级仅主 Agent 可写）',
+      '记忆级别：team=团队级（写入当前任务所属团队，跨任务共享，自动注入给本团队主 Agent）/ role=角色级（写入你当前所属岗位，仅本团队该岗位 agent 自动注入；未绑定岗位时不可写）/ global=全局（跨团队，自动注入给各团队主 Agent；仅主 Agent 可写）',
     ),
   content: z.string().min(1).max(20000).describe('记忆内容（1~20000 字符）'),
   description: z
@@ -392,6 +392,12 @@ export const memorySaveSchema = z.object({
     .max(20)
     .optional()
     .describe('记忆标签（≤20 个，memory_search 按标签过滤命中）'),
+  autoInject: z
+    .boolean()
+    .optional()
+    .describe(
+      '是否让这条记忆每轮自动注入 prompt，省去你主动 search（默认 false = 仅可通过 vteam_memory_search 按需检索）。注入受众按 level 决定：team/global → 本团队主 Agent；role → 本团队该岗位全部 agent。仅对高价值、每轮都该记住的条目开 true——注入会占用 prompt 预算。',
+    ),
 });
 
 type MemorySaveArgs = z.infer<typeof memorySaveSchema>;
@@ -421,14 +427,19 @@ export const memoryUpdateSchema = z
       .max(20)
       .optional()
       .describe('记忆标签（≤20 个，全量替换）'),
+    autoInject: z
+      .boolean()
+      .optional()
+      .describe('是否参与每轮自动注入（不传则保留原设置）'),
   })
   .refine(
     (d) =>
       d.content !== undefined ||
       d.description !== undefined ||
-      d.tags !== undefined,
+      d.tags !== undefined ||
+      d.autoInject !== undefined,
     {
-      message: '至少提供 content/description/tags 之一',
+      message: '至少提供 content/description/tags/autoInject 之一',
       path: ['content'],
     },
   );
@@ -443,9 +454,11 @@ const memorySearchSchema = z.object({
     .optional()
     .describe('关键词过滤（content/description 包含即命中，多词空格分隔 AND）'),
   level: z
-    .enum(['team', 'global'])
+    .enum(['team', 'role', 'global'])
     .optional()
-    .describe('级别过滤（缺省聚合当前任务可见的 team+global 两级）'),
+    .describe(
+      '级别过滤（缺省聚合当前可见的 team+role+global 三级；role 级只见你所属岗位的）',
+    ),
   tags: z
     .array(z.string())
     .optional()

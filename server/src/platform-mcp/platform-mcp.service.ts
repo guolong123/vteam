@@ -3354,20 +3354,44 @@ export class PlatformMcpService implements OnModuleInit {
     level: MemoryLevel,
     teamId: string | null,
     contentHash: string,
+    roleId: string | null = null,
   ): Promise<{ id: string } | null> {
     return this.prisma.memory.findFirst({
-      where: { deletedAt: null, level, teamId, contentHash },
+      where: {
+        deletedAt: null,
+        level,
+        teamId,
+        ...(roleId ? { roleId } : {}),
+        contentHash,
+      },
       select: { id: true },
     });
   }
 
   /**
-   * memory_save 团队维度：仅 team/global（session-unification Todo 9：任务级记忆
-   * 已删除，level=task → 400 MEMORY_LEVEL_INVALID）；
-   * project 级已下线（400 指引改用 team）；team 级直接落 teamId；
-   * global 级仅团队主 Agent 可写（成员 === team.mainAgentMemberId，否则 403）。
+   * role 级记忆的归属岗位解析：**从调用方的 TeamMember.roleId 反查**，不接收入参。
+   * 与 team 级「teamId 从 task 行反查」同一防跨归属思路——agent 不能替别的岗位写记忆。
+   * 成员行缺失 / 未绑定岗位（roleId=null）→ null，由调用方抛 400。
+   */
+  private async resolveCallerRoleId(
+    teamId: string,
+    memberId: string,
+  ): Promise<string | null> {
+    const member = await this.prisma.teamMember.findFirst({
+      where: { id: memberId, teamId },
+      select: { roleId: true },
+    });
+    return member?.roleId ?? null;
+  }
+
+  /**
+   * memory_save 团队维度：team/role/global（task 级记忆已删除 → 400）。
+   * project 级已下线（400 指引改用 team）；team/role 级直接落 teamId（role 级另落
+   * roleId=调用方岗位，未绑岗位 → 400）；global 级仅团队主 Agent 可写
+   * （成员 === team.mainAgentMemberId，否则 403）。
    * 落库 taskId 置空（团队记忆无任务归属），createdBy = 团队成员 id。
-   * T4：先按 contentHash 精确去重，命中即返 {status:'duplicate'} 不落库。
+   * autoInject 由 agent 自行决定（缺省 false = 仅 memory_search 按需检索）。
+   * T4：先按 contentHash 精确去重（含 roleId 归属），命中即返 {status:'duplicate'} 不落库。
    */
   private async memorySaveForTeam(
     teamId: string,
@@ -3378,6 +3402,7 @@ export class PlatformMcpService implements OnModuleInit {
       content: string;
       description?: string;
       tags?: string[];
+      autoInject?: boolean;
     },
   ): Promise<{
     memoryId: string;
@@ -3392,12 +3417,13 @@ export class PlatformMcpService implements OnModuleInit {
     }
     if (
       args.level !== MEMORY_LEVELS.team &&
+      args.level !== MEMORY_LEVELS.role &&
       args.level !== MEMORY_LEVELS.global
     ) {
       throw new BadRequestException({
         code: PLATFORM_MCP_ERRORS.MEMORY_LEVEL_INVALID,
         message:
-          '任务级记忆已删除，请改用 level=team（团队级记忆）或 level=global（全局记忆）',
+          '任务级记忆已删除，请改用 level=team（团队级）/ level=role（角色级）或 level=global（全局记忆）',
       });
     }
     const team = await this.prisma.team.findUnique({
@@ -3416,14 +3442,28 @@ export class PlatformMcpService implements OnModuleInit {
         message: '仅主 Agent 可写入全局记忆，禁止普通成员写 global 级',
       });
     }
+    // role 级：岗位从调用方成员行反查（不接收 roleId 入参，防替别的岗位写记忆）
+    let memoryRoleId: string | null = null;
+    if (args.level === MEMORY_LEVELS.role) {
+      memoryRoleId = await this.resolveCallerRoleId(teamId, memberId);
+      if (!memoryRoleId) {
+        throw new BadRequestException({
+          code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+          message:
+            '你当前未绑定岗位，无法写入 role 级记忆。请改用 level=team（团队级），或让管理员为你的成员行绑定岗位（TeamMember.roleId）',
+        });
+      }
+    }
     const description = (
       args.description?.trim() || args.content.slice(0, 120)
     ).slice(0, 255);
     const contentHash = computeMemoryContentHash(args.content);
+    const scopedTeamId = args.level === MEMORY_LEVELS.global ? null : teamId;
     const duplicate = await this.findDuplicateMemory(
       args.level,
-      args.level === MEMORY_LEVELS.team ? teamId : null,
+      scopedTeamId,
       contentHash,
+      memoryRoleId,
     );
     if (duplicate) {
       return { memoryId: duplicate.id, level: args.level, status: 'duplicate' };
@@ -3442,7 +3482,9 @@ export class PlatformMcpService implements OnModuleInit {
         id: await this.idGen.nextId('me'),
         level: args.level,
         taskId: null,
-        teamId: args.level === MEMORY_LEVELS.team ? teamId : null,
+        teamId: scopedTeamId,
+        roleId: memoryRoleId,
+        autoInject: args.autoInject === true,
         content: args.content,
         contentHash,
         description,
@@ -3486,6 +3528,7 @@ export class PlatformMcpService implements OnModuleInit {
       content: string;
       description?: string;
       tags?: string[];
+      autoInject?: boolean;
     },
   ): Promise<{
     memoryId: string;
@@ -3518,18 +3561,36 @@ export class PlatformMcpService implements OnModuleInit {
       });
     }
 
-    // 级别校验（显式分支 + 兜底 400，纵深防御）：session-unification Todo 9 起
-    // 任务级记忆已删除，level=task → 400 MEMORY_LEVEL_INVALID；
-    // team 级从 task 反查 teamId（不接收入参，防跨团队写入）；global 级仅主 Agent 可写（防全局污染，Metis M3）。
+    // 级别校验（显式分支 + 兜底 400，纵深防御）：2026-09-30 起 team/role/global 三级，
+    // level=task → 400 MEMORY_LEVEL_INVALID；
+    // team 级从 task 反查 teamId（不接收入参，防跨团队写入）；role 级另从调用方成员行
+    // 反查 roleId（同样不接收入参，防替别的岗位写记忆）；global 级仅主 Agent 可写（防全局污染，Metis M3）。
     // 非法 level 不再落入 global 分支（zod schema 已保证合法，此处防绕过 schema 直调 service）。
     const memoryTaskId: string | null = null;
     let memoryTeamId: string | null = null;
-    if (args.level === MEMORY_LEVELS.team) {
+    let memoryRoleId: string | null = null;
+    if (
+      args.level === MEMORY_LEVELS.team ||
+      args.level === MEMORY_LEVELS.role
+    ) {
       memoryTeamId = (task as { teamId?: string | null }).teamId ?? null;
       if (!memoryTeamId) {
         throw new BadRequestException(
-          'team 级记忆需要团队上下文（当前任务无团队归属）',
+          `${args.level} 级记忆需要团队上下文（当前任务无团队归属）`,
         );
+      }
+      if (args.level === MEMORY_LEVELS.role) {
+        memoryRoleId = await this.resolveCallerRoleId(
+          memoryTeamId,
+          args.selfInstanceId,
+        );
+        if (!memoryRoleId) {
+          throw new BadRequestException({
+            code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+            message:
+              '你当前未绑定岗位，无法写入 role 级记忆。请改用 level=team（团队级），或让管理员为你的成员行绑定岗位（TeamMember.roleId）',
+          });
+        }
       }
     } else if (args.level === MEMORY_LEVELS.global) {
       const globalTeamId = (task as { teamId?: string | null }).teamId ?? null;
@@ -3552,7 +3613,7 @@ export class PlatformMcpService implements OnModuleInit {
       throw new BadRequestException({
         code: PLATFORM_MCP_ERRORS.MEMORY_LEVEL_INVALID,
         message:
-          '任务级记忆已删除，请改用 level=team（团队级记忆）或 level=global（全局记忆）',
+          '任务级记忆已删除，请改用 level=team（团队级）/ level=role（角色级）或 level=global（全局记忆）',
       });
     }
 
@@ -3564,6 +3625,7 @@ export class PlatformMcpService implements OnModuleInit {
       args.level,
       memoryTeamId,
       contentHash,
+      memoryRoleId,
     );
     if (duplicate) {
       return { memoryId: duplicate.id, level: args.level, status: 'duplicate' };
@@ -3609,6 +3671,8 @@ export class PlatformMcpService implements OnModuleInit {
         level: args.level,
         taskId: memoryTaskId,
         teamId: memoryTeamId,
+        roleId: memoryRoleId,
+        autoInject: args.autoInject === true,
         content: args.content,
         contentHash,
         description,
@@ -3647,6 +3711,7 @@ export class PlatformMcpService implements OnModuleInit {
       content?: string;
       description?: string;
       tags?: string[];
+      autoInject?: boolean;
     },
   ): Promise<{
     memoryId: string;
@@ -3679,13 +3744,15 @@ export class PlatformMcpService implements OnModuleInit {
       }
       execTeamId = task.teamId ?? null;
     }
-    if (row.level === MEMORY_LEVELS.team) {
+    if (row.level === MEMORY_LEVELS.team || row.level === MEMORY_LEVELS.role) {
       if (!execTeamId || row.teamId !== execTeamId) {
         throw new ForbiddenException({
           code: PLATFORM_MCP_ERRORS.FORBIDDEN,
           message: '仅归属团队可更新该记忆，禁止跨团队更新',
         });
       }
+      // role 级：团队内任意成员可改（与 team 级同级，不按岗位隔离——记忆归属团队，
+      // 岗位只是受众维度；越权写 role 级才需要在 save 侧按调用方岗位反查）。
     } else if (row.level === MEMORY_LEVELS.global) {
       const mainTeam = execTeamId
         ? await this.prisma.team.findUnique({
@@ -3708,11 +3775,12 @@ export class PlatformMcpService implements OnModuleInit {
     if (
       args.content === undefined &&
       args.description === undefined &&
-      args.tags === undefined
+      args.tags === undefined &&
+      args.autoInject === undefined
     ) {
       throw new BadRequestException({
         code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
-        message: '至少提供 content/description/tags 之一',
+        message: '至少提供 content/description/tags/autoInject 之一',
       });
     }
     if (args.content !== undefined && args.content.trim().length === 0) {
@@ -3733,6 +3801,9 @@ export class PlatformMcpService implements OnModuleInit {
     }
     if (args.tags !== undefined) {
       data.tags = args.tags as Prisma.InputJsonValue;
+    }
+    if (args.autoInject !== undefined) {
+      data.autoInject = args.autoInject;
     }
     const updated = await this.prisma.memory.update({
       where: { id: row.id },
@@ -3804,14 +3875,31 @@ export class PlatformMcpService implements OnModuleInit {
       });
     }
 
-    // 可见范围：所属团队的 team 级（task 无团队归属则不匹配）+ global 级；
-    // level 入参收窄到单级。
+    // 可见范围：所属团队的 team 级（task 无团队归属则不匹配）+ global 级 +
+    // **调用方自己岗位的 role 级**（roleId 从调用方成员行反查，不接收入参——否则可搜
+    // 别的岗位记忆）；level 入参收窄到单级。
     const whereOr: Prisma.MemoryWhereInput[] = [];
+    const wantLevel = (lv: MemoryLevel) =>
+      args.level === undefined || args.level === lv;
     if (exec.kind === 'team') {
-      if (args.level === undefined || args.level === MEMORY_LEVELS.team) {
+      if (wantLevel(MEMORY_LEVELS.team)) {
         whereOr.push({ level: MEMORY_LEVELS.team, teamId: exec.teamId });
       }
-      if (args.level === undefined || args.level === MEMORY_LEVELS.global) {
+      if (wantLevel(MEMORY_LEVELS.role)) {
+        const roleId = await this.resolveCallerRoleId(
+          exec.teamId,
+          exec.callerId,
+        );
+        // 未绑岗位 → 该分支不产出条件（而非 push 空 roleId 匹配全团队 role 记忆）
+        if (roleId) {
+          whereOr.push({
+            level: MEMORY_LEVELS.role,
+            teamId: exec.teamId,
+            roleId,
+          });
+        }
+      }
+      if (wantLevel(MEMORY_LEVELS.global)) {
         whereOr.push({ level: MEMORY_LEVELS.global });
       }
     } else {
@@ -3826,15 +3914,26 @@ export class PlatformMcpService implements OnModuleInit {
         });
       }
       const taskTeamId = (task as { teamId?: string | null }).teamId ?? null;
-      if (args.level === undefined || args.level === MEMORY_LEVELS.team) {
-        if (taskTeamId) {
+      if (taskTeamId && wantLevel(MEMORY_LEVELS.team)) {
+        whereOr.push({
+          level: MEMORY_LEVELS.team,
+          teamId: taskTeamId,
+        });
+      }
+      if (taskTeamId && wantLevel(MEMORY_LEVELS.role)) {
+        const roleId = await this.resolveCallerRoleId(
+          taskTeamId,
+          exec.callerId,
+        );
+        if (roleId) {
           whereOr.push({
-            level: MEMORY_LEVELS.team,
+            level: MEMORY_LEVELS.role,
             teamId: taskTeamId,
+            roleId,
           });
         }
       }
-      if (args.level === undefined || args.level === MEMORY_LEVELS.global) {
+      if (wantLevel(MEMORY_LEVELS.global)) {
         whereOr.push({ level: MEMORY_LEVELS.global });
       }
     }

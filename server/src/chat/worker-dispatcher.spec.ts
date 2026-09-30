@@ -97,6 +97,7 @@ describe('WorkerDispatcher', () => {
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     messageChannel: { findUnique: jest.Mock };
     taskMessageChannel: { findMany: jest.Mock };
+    memory: { count: jest.Mock; findMany: jest.Mock };
     task: { findUnique: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
@@ -219,6 +220,12 @@ describe('WorkerDispatcher', () => {
       chatChannel: { findUnique: jest.fn(), findFirst: jest.fn() },
       messageChannel: { findUnique: jest.fn().mockResolvedValue(null) },
       taskMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
+      // 记忆自动注入（2026-09-30）：默认 0 条 → buildTeamMemoryIndex 返 null，
+      // system 不含记忆索引块（既有断言不受影响）。受众分流用例单独 mock。
+      memory: {
+        count: jest.fn().mockResolvedValue(0),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       // 主 Agent/团队成员注入：默认无 task 行 → isMainAgent=false + team=[]（既有断言
       // system 不含主 Agent/团队段，回归现状）；需要注入的用例单独 mockResolvedValue。
       task: { findUnique: jest.fn() },
@@ -8107,45 +8114,174 @@ describe('WorkerDispatcher', () => {
       expect(system).not.toContain('【计划工作流】');
     });
 
-    it('Todo9 memoryIndex：team+global 计数 + 最近条目进 system（任务级记忆已删除，prompt hint 富集）', async () => {
-      (prisma as any).memory = {
-        count: jest.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(3),
-        findMany: jest.fn().mockResolvedValue([
-          {
-            id: 'me_2',
-            level: 'team',
-            description: '团队经验摘要',
-            content: '团队经验正文',
-            tags: ['pitfall'],
-          },
-        ]),
+    // 2026-09-30：记忆自动注入改为「单条记忆的 autoInject 属性 + 按 level 分受众」。
+    // 判据取 buildTeamMemoryIndex 实际下推给 prisma 的 where（system 文本会被
+    // 1200 字截断与拼装掩盖，且拼装标题已改）。
+    describe('记忆自动注入：autoInject 属性 + 受众分流', () => {
+      const mountMemory = (
+        opts: {
+          count?: number;
+          rows?: Array<Record<string, unknown>>;
+        } = {},
+      ) => {
+        (prisma as any).memory = {
+          count: jest.fn().mockResolvedValue(opts.count ?? 0),
+          findMany: jest.fn().mockResolvedValue(opts.rows ?? []),
+        };
+        return (prisma as any).memory;
       };
-      const d = createDispatcher();
-      await d.dispatch(
-        teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
-      );
-      const system = workerClient.execute.mock.calls[0][1].system as string;
-      expect(system).toContain('【可用记忆索引');
-      expect(system).not.toContain('本任务可见 task:');
-      expect(system).toContain('team:1');
-      expect(system).toContain('global:3');
-      expect(system).toContain('团队经验摘要');
-      expect((prisma as any).memory.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({
-            OR: [
-              { level: 'team', teamId: expect.any(String) },
-              { level: 'global' },
-            ],
+
+      const mainAgentRow = (role: Record<string, unknown> | null = null) => ({
+        id: 'tmm_0000000001',
+        agentId: 'a_product',
+        alias: '产品经理-1',
+        seq: 1,
+        agent: { id: 'a_product', name: '产品经理', agentKey: 'product' },
+        role,
+      });
+
+      it('主 Agent：单次 count 覆盖 team(本团队)+global+自己岗位的 role，autoInject=true 为硬前提', async () => {
+        const mem = mountMemory({
+          count: 4,
+          rows: [
+            {
+              id: 'me_2',
+              level: 'team',
+              description: '团队经验摘要',
+              content: '团队经验正文',
+              tags: ['pitfall'],
+            },
+          ],
+        });
+        (prisma as any).team.findUnique.mockResolvedValue({
+          mainAgentMemberId: 'tmm_0000000001',
+        });
+        (prisma as any).teamMember.findMany.mockResolvedValue([
+          mainAgentRow({
+            id: 'ar_product',
+            key: 'product',
+            capabilities: {},
+            rolePrompt: null,
           }),
-        }),
-      );
-      workerClient.execute.mockClear();
-      delete (prisma as any).memory;
-      await d.dispatch(teamRequest() as any);
-      expect(
-        workerClient.execute.mock.calls[0][1].system as string,
-      ).not.toContain('【可用记忆索引');
+        ]);
+        const d = createDispatcher();
+        await d.dispatch(
+          teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+        );
+
+        const system = workerClient.execute.mock.calls[0][1].system as string;
+        expect(system).toContain('【自动注入记忆');
+        expect(system).toContain('团队经验摘要');
+        expect(system).not.toContain('本任务可见 task:');
+        // 单次 count 覆盖全部受众（不再是 team/global 两次 count）
+        expect(mem.count).toHaveBeenCalledTimes(1);
+        expect(mem.count).toHaveBeenCalledWith({
+          where: {
+            deletedAt: null,
+            autoInject: true,
+            OR: [
+              { level: 'team', teamId: 'tm_0000000001' },
+              { level: 'global' },
+              {
+                level: 'role',
+                teamId: 'tm_0000000001',
+                roleId: 'ar_product',
+              },
+            ],
+          },
+        });
+        expect(mem.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({ autoInject: true }),
+          }),
+        );
+      });
+
+      it('非主 Agent：scope 只剩自己岗位的 role（拿不到 team/global）', async () => {
+        const mem = mountMemory({ count: 1 });
+        (prisma as any).team.findUnique.mockResolvedValue({
+          mainAgentMemberId: 'tmm_0000000009',
+        });
+        (prisma as any).teamMember.findMany.mockResolvedValue([
+          mainAgentRow({
+            id: 'ar_product',
+            key: 'product',
+            capabilities: {},
+            rolePrompt: null,
+          }),
+        ]);
+        const d = createDispatcher();
+        await d.dispatch(
+          teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+        );
+
+        expect(mem.count.mock.calls[0][0].where.OR).toEqual([
+          {
+            level: 'role',
+            teamId: 'tm_0000000001',
+            roleId: 'ar_product',
+          },
+        ]);
+      });
+
+      it('未绑岗位的非主 Agent：scope 为空 → 完全不查库（不会捞到他人岗位记忆）', async () => {
+        const mem = mountMemory({ count: 5 });
+        (prisma as any).team.findUnique.mockResolvedValue({
+          mainAgentMemberId: 'tmm_0000000009',
+        });
+        (prisma as any).teamMember.findMany.mockResolvedValue([
+          mainAgentRow(null),
+        ]);
+        const d = createDispatcher();
+        await d.dispatch(
+          teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+        );
+
+        expect(mem.count).not.toHaveBeenCalled();
+        expect(mem.findMany).not.toHaveBeenCalled();
+        expect(
+          workerClient.execute.mock.calls[0][1].system as string,
+        ).not.toContain('【自动注入记忆');
+      });
+
+      it('autoInject=false 的记忆不进 prompt（存量行 default false）', async () => {
+        // where 必带 autoInject:true —— 即便库里全是 default false 的存量行，
+        // count 也只会返回 0，索引块不生成。
+        const mem = mountMemory({ count: 0 });
+        (prisma as any).team.findUnique.mockResolvedValue({
+          mainAgentMemberId: 'tmm_0000000001',
+        });
+        (prisma as any).teamMember.findMany.mockResolvedValue([
+          mainAgentRow({
+            id: 'ar_product',
+            key: 'product',
+            capabilities: {},
+            rolePrompt: null,
+          }),
+        ]);
+        const d = createDispatcher();
+        await d.dispatch(
+          teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+        );
+
+        expect((mem.count.mock.calls[0][0] as any).where.autoInject).toBe(true);
+        expect(
+          workerClient.execute.mock.calls[0][1].system as string,
+        ).not.toContain('【自动注入记忆');
+      });
+
+      it('无任务上下文的团队直聊（taskIdForPrompt 空）不注入记忆索引', async () => {
+        const mem = mountMemory({ count: 3 });
+        (prisma as any).team.findUnique.mockResolvedValue({
+          mainAgentMemberId: 'tmm_0000000001',
+        });
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+        expect(mem.count).not.toHaveBeenCalled();
+        expect(
+          workerClient.execute.mock.calls[0][1].system as string,
+        ).not.toContain('【自动注入记忆');
+      });
     });
 
     it('Todo2 主门唯一来源 team.mainAgentMemberId；dispatch 不再读取 task 表', async () => {

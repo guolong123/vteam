@@ -44,21 +44,23 @@ export class MemoriesService implements OnModuleInit {
   }
 
   /**
-   * GET /memories：level/teamId 过滤 + keyword 内容模糊搜索 + 分页。
+   * GET /memories：level/teamId/roleId/autoInject 过滤 + keyword 内容模糊搜索 + 分页。
    * 硬过滤 deletedAt: null（软删不可见，对齐 issue 列表语义）。
-   * session-unification Todo 9：仅 team/global；level=task（含任务级过滤 taskId，
+   * 2026-09-30：level 扩为 team/role/global；level=task（含任务级过滤 taskId，
    * 已随任务级记忆删除）→ 400 MEMORY_LEVEL_INVALID。
    * 返回 {items, total, page, pageSize}（对齐 tools.findMany 模式）。
+   * items 为完整行（含 autoInject / roleId），记忆页据此渲染行标识与岗位徽标。
    */
   async findAll(query: QueryMemoriesDto = {}) {
     if (
       query.level !== undefined &&
       query.level !== MEMORY_LEVELS.team &&
+      query.level !== MEMORY_LEVELS.role &&
       query.level !== MEMORY_LEVELS.global
     ) {
       throw new BadRequestException({
         code: MEMORY_ERRORS.MEMORY_LEVEL_INVALID,
-        message: `非法记忆级别：${query.level}（仅支持 team/global，任务级记忆已删除）`,
+        message: `非法记忆级别：${query.level}（仅支持 team/role/global，任务级记忆已删除）`,
       });
     }
     const page = this.normalizePage(query.page);
@@ -67,6 +69,11 @@ export class MemoriesService implements OnModuleInit {
       deletedAt: null,
       ...(query.level ? { level: query.level } : {}),
       ...(query.teamId ? { teamId: query.teamId } : {}),
+      ...(query.roleId ? { roleId: query.roleId } : {}),
+      // 仅在显式传入时筛：`undefined`=不筛，`false`=只看按需检索的记忆。
+      ...(query.autoInject !== undefined
+        ? { autoInject: query.autoInject }
+        : {}),
       ...(query.keyword
         ? {
             OR: [
@@ -91,9 +98,10 @@ export class MemoriesService implements OnModuleInit {
   }
 
   /**
-   * PATCH /memories/:id：部分更新 content/description/tags（T4 记忆演进）。
+   * PATCH /memories/:id：部分更新 content/description/tags/autoInject（T4 记忆演进；
+   * 2026-09-30 增 autoInject，记忆页行内开关走此处）。
    * 不存在（含已软删）→ 404 MEMORY_NOT_FOUND；全空 → 400 MEMORY_UPDATE_EMPTY；
-   * team 级行要求调用者是该团队成员（403 PERMISSION_TEAM_NOT_MEMBER，AdminGuard
+   * team/role 级行要求调用者是该团队成员（403 PERMISSION_TEAM_NOT_MEMBER，AdminGuard
    * 已前置，此处叠加团队归属）；global 级行仅管理员可改（AdminGuard 已保证）。
    * content 更新时同步重算 contentHash（去重键与正文一致）。
    */
@@ -108,11 +116,12 @@ export class MemoriesService implements OnModuleInit {
     if (
       dto.content === undefined &&
       dto.description === undefined &&
-      dto.tags === undefined
+      dto.tags === undefined &&
+      dto.autoInject === undefined
     ) {
       throw new BadRequestException({
         code: MEMORY_ERRORS.MEMORY_UPDATE_EMPTY,
-        message: '至少提供 content/description/tags 之一',
+        message: '至少提供 content/description/tags/autoInject 之一',
       });
     }
     if (existing.teamId) {
@@ -141,6 +150,9 @@ export class MemoriesService implements OnModuleInit {
     }
     if (dto.tags !== undefined) {
       data.tags = dto.tags as Prisma.InputJsonValue;
+    }
+    if (dto.autoInject !== undefined) {
+      data.autoInject = dto.autoInject;
     }
     return this.prisma.memory.update({ where: { id }, data });
   }

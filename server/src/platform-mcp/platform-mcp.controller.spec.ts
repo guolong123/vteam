@@ -429,6 +429,11 @@ describe('PlatformMcpController (HTTP)', () => {
         type: 'string',
       });
       expect(memorySave.inputSchema.properties.tags).toEqual({ type: 'array' });
+      // 2026-09-30：autoInject 可选布尔（单条记忆的自动注入开关，默认 false）
+      expect(memorySave.inputSchema.properties.autoInject).toEqual({
+        type: 'boolean',
+      });
+      expect(memorySave.inputSchema.required).not.toContain('autoInject');
       // memory_search：taskId/teamId 双可选，query/level/tags/limit 可选
       const memorySearch = tools.find((t) => t.name === 'memory_search')!;
       expect(memorySearch.inputSchema.required).toEqual([]);

@@ -153,6 +153,45 @@ describe('MemoriesService', () => {
       expect(prisma.memory.findMany).not.toHaveBeenCalled();
     });
 
+    it('level=role 放行（2026-09-30 角色级记忆）', async () => {
+      prisma.memory.count.mockResolvedValue(0);
+      prisma.memory.findMany.mockResolvedValue([]);
+
+      await service.findAll({ level: 'role', roleId: 'ar_1' });
+
+      expect(prisma.memory.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ level: 'role', roleId: 'ar_1' }),
+        }),
+      );
+    });
+
+    it('autoInject=false 显式下推为 where 条件（不被当成 falsy 丢弃）', async () => {
+      prisma.memory.count.mockResolvedValue(0);
+      prisma.memory.findMany.mockResolvedValue([]);
+
+      await service.findAll({ autoInject: false });
+
+      expect(prisma.memory.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ autoInject: false }),
+        }),
+      );
+    });
+
+    it('autoInject 缺省时不进 where（不筛，三档全返回）', async () => {
+      prisma.memory.count.mockResolvedValue(0);
+      prisma.memory.findMany.mockResolvedValue([]);
+
+      await service.findAll({});
+
+      expect(prisma.memory.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { deletedAt: null },
+        }),
+      );
+    });
+
     it('GET /memories?teamId= 团队级过滤可用（teamId 精确匹配）', async () => {
       prisma.memory.count.mockResolvedValue(1);
       prisma.memory.findMany.mockResolvedValue([{ id: 'me_1', level: 'team' }]);
@@ -344,6 +383,54 @@ describe('MemoriesService', () => {
       await expect(
         service.update('me_0000000001', {}, { id: 'u_1' }),
       ).rejects.toMatchObject({ response: { code: 'MEMORY_UPDATE_EMPTY' } });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('仅切 autoInject 即为有效更新（记忆页行内开关，2026-09-30）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.memory.update.mockResolvedValue(row({ autoInject: true }));
+
+      await service.update(
+        'me_0000000001',
+        { autoInject: true },
+        { id: 'u_1' },
+      );
+
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: { autoInject: true },
+      });
+    });
+
+    it('autoInject=false 也能落库（不被当成未提供而 400）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.memory.update.mockResolvedValue(row({ autoInject: false }));
+
+      await service.update(
+        'me_0000000001',
+        { autoInject: false },
+        { id: 'u_1' },
+      );
+
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: { autoInject: false },
+      });
+    });
+
+    it('role 级行同样要求团队成员（非成员 → 403）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(
+        row({ level: 'role', roleId: 'ar_1' }),
+      );
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.update('me_0000000001', { autoInject: true }, { id: 'u_x' }),
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
       expect(prisma.memory.update).not.toHaveBeenCalled();
     });
 

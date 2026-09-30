@@ -1009,9 +1009,15 @@ model PlanTask {
 
 model Memory {
   id               String    @id // me_ 前缀，服务层 IdGeneratorService 生成
-  level            String // task|team|global（字符串枚举，双库兼容——不声明 Prisma enum）
-  taskId           String?   @map("task_id")
-  teamId           String?   @map("team_id") // team 级归属；task 级冗余存所属团队便于团队内检索
+  level            String // task|team|role|global（字符串枚举，双库兼容——不声明 Prisma enum；task 级已废弃，列保留见下 taskId）
+  taskId           String?   @map("task_id") // ⚠️ 已废弃：task 级记忆已删除，服务层不再读写此列；保留仅为避免不可逆 DDL 丢历史数据
+  teamId           String?   @map("team_id") // team/role 级归属团队；global 级为空
+  /// 角色级记忆归属岗位（ar_ 前缀 → AgentRole.id）；仅 level=role 时非空（2026-09-30）
+  roleId           String?   @map("role_id")
+  /// 是否参与每轮自动注入（2026-09-30）。由 agent 建记忆时自行决定，**新建默认 false**：
+  /// false = 仅能经 memory_search 按需检索，不进 prompt；true = 按 level 的受众规则注入。
+  /// 受众：global/team → 本团队主 Agent；role → 本团队该岗位全部 agent。
+  autoInject       Boolean   @default(false) @map("auto_inject")
   content          String    @db.Text
   // 精确去重键（T4 记忆演进）：sha256(归一化 content)，save 前按 level+归属+hash 查命中
   // 即返 duplicate（check-then-insert 竞态接受，不建唯一键）；可空兼容存量行回填前。
@@ -1034,6 +1040,8 @@ model Memory {
   @@index([level], map: "idx_memories_level")
   @@index([taskId, createdAt], map: "idx_memories_task_time")
   @@index([teamId, createdAt], map: "idx_memories_team_time")
+  // 自动注入查询：按受众筛（global 无归属 / team+role 带 teamId，role 再带 roleId）
+  @@index([autoInject, teamId, roleId], map: "idx_memories_inject")
   @@index([contentHash], map: "idx_memories_content_hash")
   @@map("memories")
 }
