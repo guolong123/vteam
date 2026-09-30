@@ -152,36 +152,6 @@ const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
     tools: ['vteam_secret_command'],
     defaultDeny: false,
   },
-  // ── git / browser 命名空间（T11）──────────────────────────────────────────
-  // 与 platform-capability.constants.ts 的目录**手工镜像**（seed 不 import src，
-  // 见计划 §5.2 Q7）。漏镜像即 seed 落库矩阵与 src 目录漂移 ⇒ 断言红。
-  {
-    key: 'git.repo.read',
-    tools: [
-      'git_clone',
-      'git_pull',
-      'git_fetch',
-      'git_status',
-      'git_diff',
-      'git_log',
-    ],
-    defaultDeny: false,
-    namespace: 'git',
-  },
-  // 唯一写远端的工具 ⇒ 出厂必须拒绝（M1）。
-  {
-    key: 'git.repo.write',
-    tools: ['git_push'],
-    defaultDeny: true,
-    namespace: 'git',
-  },
-  // 当前完全无门 ⇒ 出厂必须关，否则等于出厂即可被诱导浏览任意站点（M1）。
-  {
-    key: 'web.browse',
-    tools: ['browser'],
-    defaultDeny: true,
-    namespace: 'browser',
-  },
 ];
 
 function capabilityMatrixFromTools(
@@ -832,15 +802,13 @@ const EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: readonly string[] = [
 ];
 
 /**
- * 外部岗位**不纳入**的三档开关能力点（用户决定 2026-09-29）。
- * 镜像 `src/common/constants/agent-role.constants.ts` 的同名常量。
- * default-allow 下「键缺失 ⇒ 允许」，故必须删键、不能写 `false`。
+ * 外部岗位**不纳入**管控的能力点。镜像
+ * `src/common/constants/agent-role.constants.ts` 的同名常量。
+ *
+ * 2026-09-30：原为 git.repo.read / git.repo.write / web.browse 三键，因对应能力点
+ * 退役而清空（那组工具走 worker 侧 opencode 原生权限链路，不经本矩阵）。
  */
-const EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS: readonly string[] = [
-  'git.repo.read',
-  'git.repo.write',
-  'web.browse',
-];
+const EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS: readonly string[] = [];
 
 /**
  * 外部岗位最小能力矩阵（default-allow 下必须显式拒绝未覆盖能力点），
