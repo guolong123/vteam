@@ -47,6 +47,66 @@ describe('WecomAibotAdapter (message-channels)', () => {
     expect((adapter as any).attachedHost).toBe(host);
   });
 
+  /**
+   * spinner 泄漏回归（2026-09-30）：生产实测两条 06:35/06:43 的 stream 刷到 09:24
+   * 仍未停止，企微回绝 `errcode=846608 stream message update expired (>10 minutes)`。
+   * 根因是唯一清理路径 `size >= STREAM_LIMIT(100)` 的 FIFO 淘汰在低流量下永不触发。
+   */
+  describe('stream TTL 兜底回收', () => {
+    const TTL = 10 * 60 * 1000;
+
+    it('超龄 stream 被摘除且其 spinner timer 被 clearInterval', () => {
+      const clearSpy = jest.spyOn(global, 'clearInterval');
+      adapter.registerStreamCorrelation('m_old', {
+        channelId: 'mc_1',
+        frameHeaders: {},
+        streamId: 'stream_old',
+        spinnerTimer: setInterval(() => {}, 1000) as unknown as NodeJS.Timeout,
+      });
+      expect(adapter.getStream('m_old')).toBeDefined();
+
+      // 把入表时刻推到 TTL 之前（超龄），再注册一条新 stream 触发清扫
+      const entry = (adapter as any).streams.get('m_old');
+      entry.registeredAt = Date.now() - TTL - 1000;
+      adapter.registerStreamCorrelation('m_new', {
+        channelId: 'mc_1',
+        frameHeaders: {},
+        streamId: 'stream_new',
+      });
+
+      expect(clearSpy).toHaveBeenCalled();
+      expect(adapter.getStream('m_old')).toBeUndefined();
+      expect(adapter.getStream('m_new')).toBeDefined();
+      clearSpy.mockRestore();
+    });
+
+    it('未超龄的 stream 不被清扫（正常回流的 stream 保留）', () => {
+      adapter.registerStreamCorrelation('m_fresh', {
+        channelId: 'mc_1',
+        frameHeaders: {},
+        streamId: 'stream_fresh',
+      });
+      adapter.registerStreamCorrelation('m_another', {
+        channelId: 'mc_1',
+        frameHeaders: {},
+        streamId: 'stream_another',
+      });
+      expect(adapter.getStream('m_fresh')).toBeDefined();
+      expect(adapter.getStream('m_another')).toBeDefined();
+    });
+
+    it('清扫幂等：重复触发不抛错、不误删', () => {
+      adapter.registerStreamCorrelation('m_1', {
+        channelId: 'mc_1',
+        frameHeaders: {},
+        streamId: 'stream_1',
+      });
+      (adapter as any).reapExpiredStreams();
+      (adapter as any).reapExpiredStreams();
+      expect(adapter.getStream('m_1')).toBeDefined();
+    });
+  });
+
   it('finishStream logs called and miss when no stream', async () => {
     const ok = await adapter.finishStream('missing_id', 'hello');
     expect(ok).toBe(false);
