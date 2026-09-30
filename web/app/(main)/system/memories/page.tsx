@@ -1,21 +1,25 @@
 "use client";
 
 /**
- * 记忆管理页（Todo 6：mem-web）
+ * 记忆管理页（Todo 6：mem-web；2026-09-30 增角色级 + 自动注入开关）
  * =============================================
- * - 级别筛选 tab（全部 / 团队 / 全局）+ keyword 搜索（防抖 300ms）+ 分页列表 + 删除
+ * - 级别筛选 tab（全部 / 团队 / 角色 / 全局）+ keyword 搜索（防抖 300ms）+ 分页列表 + 删除
  * - 数据源：GET /api/v1/memories（level / keyword / page / pageSize 过滤，AdminGuard）
  * - 对齐 agents/models 页面 TanStack Query + api 封装模式
  * - 铁律（T15）：无 fixed / 100vh / 100vw；root flex:1 铺满（AppShell 提供导航）
  *
- * ⚠ 级别只含 team/global：任务级记忆已删除（session-unification Todo 9），
- *   后端 level=task → 400 MEMORY_LEVEL_INVALID，故无「任务」筛选 Tab。
+ * ⚠ 无「任务」级别 Tab：任务级记忆已删除（session-unification Todo 9），
+ *   后端 level=task → 400 MEMORY_LEVEL_INVALID。
+ *
+ * 2026-09-30：`autoInject` 是**单条记忆的属性**（行内开关 + 行标识），不是筛选维度，
+ *   故不做成独立 tab；`level=role` 的记忆行额外显示归属岗位名（roleId → /agent-roles）。
  */
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { ConfirmDialog, SegmentedTabs } from "@/src/components/ui";
+import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
   neutral,
   space,
@@ -29,15 +33,20 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /* ------------------------------ API 数据模型 ------------------------------ */
 
-/** GET /memories 条目（对齐 MemoriesService.findAll 返回）。 */
+/** GET /memories 条目（对齐 MemoriesService.findAll 返回的完整行）。 */
 interface MemoryItem {
   id: string;
-  level: "team" | "global";
+  level: "team" | "role" | "global";
   content: string;
   description?: string | null;
   tags: string[] | null;
   createdBy: string;
   createdAt: string;
+  /** 是否参与每轮自动注入（单条记忆属性；false = 仅 memory_search 按需检索）。 */
+  autoInject: boolean;
+  /** 角色级记忆的归属岗位（ar_ 前缀 → AgentRole.id）；仅 level=role 时非空。 */
+  roleId?: string | null;
+  teamId?: string | null;
 }
 
 /** GET /memories 分页响应。 */
@@ -50,21 +59,30 @@ interface MemoriesResponse {
 
 /* ------------------------------ 级别筛选 Tab ------------------------------ */
 
-type LevelFilter = "" | "team" | "global";
+type LevelFilter = "" | "team" | "role" | "global";
 
 const LEVEL_TABS: { key: LevelFilter; label: string; icon: string }[] = [
   { key: "", label: "全部", icon: "◈" },
   { key: "team", label: "团队", icon: "◨" },
+  { key: "role", label: "角色", icon: "◉" },
   { key: "global", label: "全局", icon: "◎" },
 ];
 
-/** 级别 → 徽章配色（对齐 tokens 语义色系；任务级已删除，仅 team/global）。 */
+/** 级别 → 徽章配色（对齐 tokens 语义色系；任务级已删除）。 */
 const LEVEL_META: Record<
   MemoryItem["level"],
   { label: string; color: string; bg: string; border: string }
 > = {
   team: { label: "团队", color: "#7C3AED", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
+  role: { label: "角色", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.26)" },
   global: { label: "全局", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+};
+
+/** 各级自动注入的受众说明（行内开关的 title 提示）。 */
+const LEVEL_AUDIENCE: Record<MemoryItem["level"], string> = {
+  team: "自动注入给本团队主 Agent",
+  role: "自动注入给本团队该岗位的全部 agent",
+  global: "自动注入给各团队主 Agent",
 };
 
 /* ------------------------------ 行 hover CSS ------------------------------ */
@@ -117,6 +135,36 @@ export default function MemoriesPage() {
           pageSize,
         },
       }),
+  });
+
+  /* ---------- 岗位名解析（role 级记忆显示归属岗位） ---------- */
+  const rolesQuery = useQuery({
+    queryKey: ["agent-roles"],
+    queryFn: () => agentRolesApi.list({ page: 1, pageSize: 100 }),
+    staleTime: 5 * 60 * 1000,
+  });
+  const roleNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const r of (rolesQuery.data?.items ?? []) as AgentRoleDto[]) {
+      map.set(r.id, r.name);
+    }
+    return map;
+  }, [rolesQuery.data]);
+
+  /* ---------- 自动注入开关（单条记忆属性，行内切换） ---------- */
+  const [pendingInject, setPendingInject] = useState<string | null>(null);
+  const injectMutation = useMutation({
+    mutationFn: (input: { id: string; autoInject: boolean }) =>
+      api.patch(`/memories/${input.id}`, { autoInject: input.autoInject }),
+    onMutate: (input) => {
+      setPendingInject(input.id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["memories"] });
+    },
+    onSettled: () => {
+      setPendingInject(null);
+    },
   });
 
   /* ---------- 展开/收起 ---------- */
@@ -359,6 +407,28 @@ export default function MemoriesPage() {
                       {levelMeta.label}
                     </span>
 
+                    {/* 角色级记忆的归属岗位（仅 role 级；岗位名缺失时回落 roleId 短码） */}
+                    {item.level === "role" && item.roleId && (
+                      <span
+                        data-testid="memory-role-badge"
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          padding: `${space.xs}px ${space.sm}px`,
+                          borderRadius: radius.pill,
+                          backgroundColor: neutral[100],
+                          color: neutral[600],
+                          fontSize: fontSize.xs,
+                          lineHeight: 1.4,
+                          whiteSpace: "nowrap",
+                          flexShrink: 0,
+                          marginTop: 2,
+                        }}
+                      >
+                        {roleNameById.get(item.roleId) ?? item.roleId}
+                      </span>
+                    )}
+
                     {/* 内容区 */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {(() => {
@@ -475,6 +545,65 @@ export default function MemoriesPage() {
                           </div>
                         )}
 
+                        {/* 自动注入标识 + 行内开关（单条记忆属性，非筛选维度） */}
+                        <button
+                          type="button"
+                          data-testid="memory-auto-inject-toggle"
+                          data-memory-id={item.id}
+                          data-auto-inject={item.autoInject ? "true" : "false"}
+                          disabled={
+                            pendingInject === item.id || injectMutation.isPending
+                          }
+                          onClick={() =>
+                            injectMutation.mutate({
+                              id: item.id,
+                              autoInject: !item.autoInject,
+                            })
+                          }
+                          title={
+                            item.autoInject
+                              ? `已开启自动注入（${LEVEL_AUDIENCE[item.level]}）——点击关闭，改为仅按需检索`
+                              : `已关闭自动注入（仅 memory_search 按需检索）——点击开启，每轮注入（${LEVEL_AUDIENCE[item.level]}）`
+                          }
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "1px 8px",
+                            borderRadius: radius.pill,
+                            border: `1px solid ${
+                              item.autoInject
+                                ? "rgba(13,148,136,0.36)"
+                                : neutral[200]
+                            }`,
+                            backgroundColor: item.autoInject
+                              ? "rgba(13,148,136,0.10)"
+                              : "transparent",
+                            color: item.autoInject ? "#0D9488" : neutral[400],
+                            fontSize: fontSize.xs,
+                            fontWeight: 500,
+                            lineHeight: 1.5,
+                            whiteSpace: "nowrap",
+                            cursor:
+                              pendingInject === item.id ? "wait" : "pointer",
+                            fontFamily: fontFamily.body,
+                          }}
+                        >
+                          <span
+                            aria-hidden
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: "50%",
+                              backgroundColor: item.autoInject
+                                ? "#0D9488"
+                                : neutral[300],
+                              flexShrink: 0,
+                            }}
+                          />
+                          {item.autoInject ? "自动注入" : "按需检索"}
+                        </button>
+
                         {/* createdBy */}
                         <span
                           data-testid="memory-created-by"
@@ -482,7 +611,6 @@ export default function MemoriesPage() {
                         >
                           {item.createdBy}
                         </span>
-
                         {/* createdAt */}
                         <span
                           data-testid="memory-created-at"
@@ -589,6 +717,30 @@ export default function MemoriesPage() {
           </>
         )}
       </div>
+
+      {/* 自动注入开关失败提示（内联） */}
+      {injectMutation.isError && (
+        <div
+          data-testid="memory-auto-inject-error"
+          role="alert"
+          style={{
+            fontSize: fontSize.sm,
+            color: "#DC2626",
+            display: "flex",
+            alignItems: "center",
+            gap: space.xs,
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: "rgba(239,68,68,0.10)",
+            border: `1px solid rgba(239,68,68,0.22)`,
+          }}
+        >
+          <span aria-hidden style={{ fontWeight: 700 }}>!</span>
+          {isApiError(injectMutation.error)
+            ? injectMutation.error.message
+            : "切换自动注入失败，请重试"}
+        </div>
+      )}
 
       {/* 删除确认弹窗 */}
       <ConfirmDialog

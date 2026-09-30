@@ -271,7 +271,12 @@ export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
  */
 export const MEMORY_INSTRUCTION =
   '【记忆管理】只存可复用经验：怎么做（howto）、坑与规避（pitfall）、平台硬约束（constraint），不存会话总结。\n' +
-  '开始任务/需要经验时调 vteam_memory_search 检索，沉淀时调 vteam_memory_save 保存；参数细节查工具 schema，文档查 doclib。';
+  '开始任务/需要经验时调 vteam_memory_search 检索，沉淀时调 vteam_memory_save 保存；参数细节查工具 schema，文档查 doclib。\n' +
+  '【记忆分级与自动注入】level=role 写你当前岗位的专属经验（自动注入给本团队该岗位全体 agent）；' +
+  'level=team 写团队共识；level=global 写跨团队经验（仅主 Agent 可写）。' +
+  'autoInject=true 让这条记忆每轮自动进你的 prompt、省去主动 search——只对每轮都该记住的高价值条目开；' +
+  '其余留 false，靠 vteam_memory_search 按需检索（注入占 prompt 预算）。' +
+  '受众：team/global → 本团队主 Agent；role → 本团队该岗位全体 agent。';
 
 /** GLOBAL 前 6 行（【记忆管理】之前的不变段；与 MEMORY_INSTRUCTION 拼出完整 GLOBAL）。 */
 const GLOBAL_BASE_LINES = [
@@ -1936,25 +1941,38 @@ export class WorkerDispatcher
   }
 
   /**
-   * 团队记忆索引（prompt hint 富集专用，session-unification Todo 9 起仅
-   * team+global 两域，任务级记忆已删除）：计数 + 最近 5 条 description 行拼成
-   * 索引块注入 system。仅读记忆表做提示词富集，不改 memorySave/memorySearch
-   * 写/可见语义。失败吞错返 null（无记忆 mock/表异常时分派照常）。
+   * 团队记忆索引（prompt hint 富集专用，2026-09-30 起按受众规则分流）：
+   *
+   * **受众规则**（`auto_inject=true` 的记忆才有资格进索引）：
+   *   - team / global → 仅本团队**主 Agent**（协调者持有全局视角）
+   *   - role → 本团队**该岗位的全部 agent**（主 Agent 若绑该岗位同样可见）
+   *
+   * 形状不变：计数 + 最近 5 条 description 行拼成索引块，1200 字截断。
+   * 仅读记忆表做提示词富集，不改 memorySave/memorySearch 写/可见语义。
+   * 失败吞错返 null（无记忆 mock/表异常时分派照常）。
    */
-  private async buildTeamMemoryIndex(teamId: string): Promise<string | null> {
+  private async buildTeamMemoryIndex(
+    teamId: string,
+    audience: { isMainAgent: boolean; roleId: string | null },
+  ): Promise<string | null> {
     try {
-      const [teamCnt, globCnt, recent] = await Promise.all([
-        this.prisma.memory.count({
-          where: { level: 'team', teamId, deletedAt: null },
-        } as any),
-        this.prisma.memory.count({
-          where: { level: 'global', deletedAt: null },
-        } as any),
+      // 受众条件：非主 Agent 拿不到 team/global，只能拿自己岗位的 role 记忆。
+      const scope: any[] = [];
+      if (audience.isMainAgent) {
+        scope.push({ level: 'team', teamId });
+        scope.push({ level: 'global' });
+      }
+      if (audience.roleId) {
+        scope.push({ level: 'role', teamId, roleId: audience.roleId });
+      }
+      // 无任何受众（如未绑岗位的普通成员）→ 返 null，不做全表扫描。
+      if (scope.length === 0) return null;
+      const where = { deletedAt: null, autoInject: true, OR: scope };
+
+      const [scopeCnt, recent] = await Promise.all([
+        this.prisma.memory.count({ where } as any),
         this.prisma.memory.findMany({
-          where: {
-            deletedAt: null,
-            OR: [{ level: 'team', teamId }, { level: 'global' }],
-          } as any,
+          where,
           orderBy: { createdAt: 'desc' },
           take: 5,
           select: {
@@ -1966,6 +1984,8 @@ export class WorkerDispatcher
           },
         } as any),
       ]);
+      if (scopeCnt === 0) return null;
+
       const tagMap = new Map<string, number>();
       for (const r of recent as any[]) {
         const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
@@ -1979,17 +1999,14 @@ export class WorkerDispatcher
         (r) =>
           `- [${r.level}] ${r.description || String(r.content).slice(0, 60)} (tags:${Array.isArray(r.tags) ? (r.tags as string[]).join(',') : '-'})`,
       );
-      if (teamCnt + globCnt > 0) {
-        let memoryIndex =
-          `【可用记忆索引 team:${teamCnt} global:${globCnt}${topTags.length ? ` Top tags:${topTags.join(',')}` : ''}】\n` +
-          (lines.length
-            ? lines.join('\n') +
-              '\n按需用 vteam_memory_search 拉正文，摘要命中再取 content。'
-            : '暂无记忆正文。');
-        if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
-        return memoryIndex;
-      }
-      return null;
+      let memoryIndex =
+        `【自动注入记忆 ${scopeCnt} 条${topTags.length ? ` Top tags:${topTags.join(',')}` : ''}】\n` +
+        (lines.length
+          ? lines.join('\n') +
+            '\n按需用 vteam_memory_search 拉正文，摘要命中再取 content。'
+          : '暂无记忆正文。');
+      if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
+      return memoryIndex;
     } catch (err) {
       this.logger.debug(
         `记忆索引构建失败 team=${teamId}，返回 null：${this.describeError(err)}`,
@@ -2333,7 +2350,10 @@ export class WorkerDispatcher
       ? `${prompt}\n\n${imageAttach.pointer}`
       : prompt;
     const memoryIndex = taskIdForPrompt
-      ? await this.buildTeamMemoryIndex(teamId)
+      ? await this.buildTeamMemoryIndex(teamId, {
+          isMainAgent,
+          roleId: selfRoleAuthority?.id ?? null,
+        })
       : null;
     // 策略解析一次、两用（agent-role-decommission todo 2；2026-09-21 role-owned）：岗位
     // 绑定策略 → correction 边界段；tools → 记忆/产出物段屏蔽（`resolvedTools`）。两条

@@ -1,14 +1,19 @@
 /**
- * 记忆等级常量（memory-management；session-unification Todo 9 起仅 team/global，
- * 任务级记忆已删除——level=task 入参一律 400 MEMORY_LEVEL_INVALID）。
+ * 记忆等级常量（2026-09-30 起 team/global/role 三级，task 级已删除——
+ * level=task 入参一律 400 MEMORY_LEVEL_INVALID）。
  *
  * 字符串枚举 + 应用层常量（双库兼容：不声明 Prisma enum，
- * 对齐 schema.prisma 头部「字符串枚举 + Json 列」约定）：
- *   - team：团队级记忆（仅 teamId，跨任务共享）
- *   - global：全局记忆（两者均为空）
+ * 对齐 schema.prisma 头部「字符串枚举 + Json 列」约定）。
+ *
+ * **各级的自动注入受众**（`auto_inject=true` 时，见 worker-dispatcher 的
+ * `buildTeamMemoryIndex`）——受众是「这条记忆给谁看」，与「谁写的」无关：
+ *   - team：团队级（teamId，跨任务共享）→ **本团队主 Agent**
+ *   - role：角色级（teamId + roleId，团队内该岗位共享）→ **本团队该岗位全部 agent**
+ *   - global：全局（无归属，跨团队）→ **各团队主 Agent**
  */
 export const MEMORY_LEVELS = {
   team: 'team',
+  role: 'role',
   global: 'global',
 } as const;
 

@@ -3803,12 +3803,20 @@ describe('PlatformMcpService', () => {
         ).toBe(false);
       });
 
-      it('level=team 通过 zod，level=task/project 被拒（仅 team/global，400 前置）', () => {
+      it('level=team 通过 zod，level=task/project 被拒（仅 team/role/global，400 前置）', () => {
         expect(
           memorySaveSchema.safeParse({
             taskId,
             selfInstanceId: senderInstanceId,
             level: 'team',
+            content: 'x',
+          }).success,
+        ).toBe(true);
+        expect(
+          memorySaveSchema.safeParse({
+            taskId,
+            selfInstanceId: senderInstanceId,
+            level: 'role',
             content: 'x',
           }).success,
         ).toBe(true);
@@ -3847,6 +3855,147 @@ describe('PlatformMcpService', () => {
           PLATFORM_MCP_ERRORS.FORBIDDEN,
         );
         expect(prisma.memory.create).not.toHaveBeenCalled();
+      });
+
+      // 2026-09-30：role 级记忆 + autoInject 开关。
+      describe('level=role（角色级）', () => {
+        it('roleId 从调用方成员行反查落库（不接收 roleId 入参 → 无法替别的岗位写）', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.teamMember.findFirst.mockResolvedValue({
+            agentId: 'a_1',
+            alias: '开发-1',
+            roleId: 'ar_developer',
+          });
+          idGen.nextId.mockResolvedValue('me_0000000002');
+          prisma.memory.create.mockResolvedValue({
+            id: 'me_0000000002',
+            level: 'role',
+          });
+
+          await service.memorySave(ctx, {
+            taskId,
+            selfInstanceId: senderInstanceId,
+            level: 'role',
+            content: '本岗位专属经验',
+          });
+
+          expect(prisma.memory.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+              data: expect.objectContaining({
+                level: 'role',
+                teamId: taskTeamId,
+                roleId: 'ar_developer',
+              }),
+            }),
+          );
+        });
+
+        it('未绑岗位 → 400 MEMORY_INVALID（提示改用 team 级），不落库', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.teamMember.findFirst.mockResolvedValue({
+            agentId: 'a_1',
+            alias: '临时-1',
+            roleId: null,
+          });
+
+          await expectCode(
+            service.memorySave(ctx, {
+              taskId,
+              selfInstanceId: senderInstanceId,
+              level: 'role',
+              content: 'x',
+            }),
+            BadRequestException,
+            PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+          );
+          expect(prisma.memory.create).not.toHaveBeenCalled();
+        });
+
+        it('去重键含 roleId：同 content 在别的岗位下不判重（各自一份）', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.teamMember.findFirst.mockResolvedValue({
+            agentId: 'a_1',
+            alias: '开发-1',
+            roleId: 'ar_developer',
+          });
+          prisma.memory.findFirst.mockResolvedValue(null);
+          idGen.nextId.mockResolvedValue('me_0000000002');
+          prisma.memory.create.mockResolvedValue({
+            id: 'me_0000000002',
+            level: 'role',
+          });
+
+          await service.memorySave(ctx, {
+            taskId,
+            selfInstanceId: senderInstanceId,
+            level: 'role',
+            content: '同名经验',
+          });
+
+          expect(prisma.memory.findFirst).toHaveBeenCalledWith(
+            expect.objectContaining({
+              where: expect.objectContaining({
+                level: 'role',
+                teamId: taskTeamId,
+                roleId: 'ar_developer',
+              }),
+            }),
+          );
+        });
+      });
+
+      describe('autoInject 开关（单条记忆属性）', () => {
+        it('缺省落库 false（不进每轮 prompt，仅 memory_search 按需检索）', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.memory.findFirst.mockResolvedValue(null);
+          idGen.nextId.mockResolvedValue('me_0000000002');
+          prisma.memory.create.mockResolvedValue({
+            id: 'me_0000000002',
+            level: 'team',
+          });
+
+          await service.memorySave(ctx, {
+            taskId,
+            selfInstanceId: senderInstanceId,
+            level: 'team',
+            content: 'x',
+          });
+
+          expect(prisma.memory.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+              data: expect.objectContaining({ autoInject: false }),
+            }),
+          );
+        });
+
+        it('autoInject=true 透传落库', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.memory.findFirst.mockResolvedValue(null);
+          idGen.nextId.mockResolvedValue('me_0000000002');
+          prisma.memory.create.mockResolvedValue({
+            id: 'me_0000000002',
+            level: 'team',
+          });
+
+          await service.memorySave(ctx, {
+            taskId,
+            selfInstanceId: senderInstanceId,
+            level: 'team',
+            content: 'x',
+            autoInject: true,
+          });
+
+          expect(prisma.memory.create).toHaveBeenCalledWith(
+            expect.objectContaining({
+              data: expect.objectContaining({ autoInject: true }),
+            }),
+          );
+        });
       });
 
       it('level=global 主 Agent 可写：taskId/teamId 均不落库（null）', async () => {

@@ -1,9 +1,11 @@
 import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { plainToInstance } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminGuard } from '../users/admin.guard';
 import { MemoriesController } from './memories.controller';
 import { MemoriesService } from './memories.service';
+import { QueryMemoriesDto } from './dto/query-memories.dto';
 
 describe('MemoriesController', () => {
   let controller: MemoriesController;
@@ -77,6 +79,22 @@ describe('MemoriesController', () => {
         pageSize: 20,
       });
       expect(out).toMatchObject({ items: [], total: 0, page: 1, pageSize: 20 });
+    });
+
+    it('GET /memories 的 autoInject 查询串按字面量解析（"false" ≠ true，2026-09-30）', () => {
+      // 回归防护：@Type(() => Boolean) 会把 query 串 "false" 变成 true，导致
+      // 「仅看按需检索的记忆」反向筛出自动注入的记忆。改用 @Transform 字面量解析
+      // （对齐 QueryModelsDto.enabled 的既有写法）。
+      const parse = (raw: string) =>
+        plainToInstance(
+          QueryMemoriesDto,
+          Object.fromEntries(new URLSearchParams(raw)),
+        ).autoInject;
+
+      expect(parse('autoInject=true')).toBe(true);
+      expect(parse('autoInject=false')).toBe(false);
+      expect(parse('autoInject=')).toBeUndefined();
+      expect(parse('')).toBeUndefined();
     });
 
     it('DELETE /memories/:id 转发 id/viewer 到 remove（团队归属下沉 service，与 PATCH 对齐）', async () => {

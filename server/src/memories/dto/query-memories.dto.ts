@@ -1,8 +1,9 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsOptional,
@@ -15,15 +16,15 @@ import {
 import { MEMORY_LEVELS } from '../memory.constants';
 
 /**
- * GET /memories 查询参数（level/teamId 过滤 + keyword 内容搜索 + 分页，
+ * GET /memories 查询参数（level/teamId/autoInject 过滤 + keyword 内容搜索 + 分页，
  * 对齐 QueryToolsDto 模式，返回 {items, total, page, pageSize}）。
  * 全端点 AdminGuard（Metis m6：记忆管理仅管理员可见，不扩展权限矩阵）。
- * session-unification Todo 9：仅 team/global（任务级记忆已删除，level=task → 400，
- * taskId 过滤已删除）。
+ * 2026-09-30：level 扩为 team/role/global（task 级记忆已删除，level=task → 400，
+ * taskId 过滤已删除）；新增 autoInject 过滤（记忆页「仅看自动注入」）。
  */
 export class QueryMemoriesDto {
   @ApiPropertyOptional({
-    description: '记忆等级过滤（team/global），缺省返回全部',
+    description: '记忆等级过滤（team/role/global），缺省返回全部',
     enum: Object.values(MEMORY_LEVELS),
   })
   @IsOptional()
@@ -34,6 +35,26 @@ export class QueryMemoriesDto {
   @IsOptional()
   @IsString()
   teamId?: string;
+
+  @ApiPropertyOptional({
+    description: '岗位过滤（roleId 精确匹配，仅对 level=role 有意义）',
+  })
+  @IsOptional()
+  @IsString()
+  roleId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '自动注入过滤：true=仅参与每轮注入的记忆，false=仅按需检索的记忆；缺省不筛',
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true' || value === true) return true;
+    if (value === 'false' || value === false) return false;
+    return undefined;
+  })
+  @IsIn([true, false])
+  autoInject?: boolean;
 
   @ApiPropertyOptional({ description: '记忆内容模糊搜索（content contains）' })
   @IsOptional()
@@ -66,9 +87,10 @@ export class QueryMemoriesDto {
 }
 
 /**
- * PATCH /memories/:id 部分更新体（T4 记忆演进）。
- * content/description/tags 至少传一个（全空 → 400 MEMORY_UPDATE_EMPTY）；
+ * PATCH /memories/:id 部分更新体（T4 记忆演进；2026-09-30 增 autoInject 开关）。
+ * content/description/tags/autoInject 至少传一个（全空 → 400 MEMORY_UPDATE_EMPTY）；
  * content 更新时服务端同步重算 contentHash（精确去重键保持与正文一致）。
+ * autoInject 是**单条记忆**的属性（记忆页行内开关），非团队/全局开关。
  */
 export class UpdateMemoryDto {
   @ApiPropertyOptional({ description: '记忆正文（更新后重算去重键）' })
@@ -91,4 +113,14 @@ export class UpdateMemoryDto {
   @IsString({ each: true })
   @ArrayMaxSize(20)
   tags?: string[];
+
+  @ApiPropertyOptional({
+    description:
+      '是否参与每轮自动注入（单条记忆属性）。true 时按 level 受众规则注入：team/global → 本团队主 Agent，role → 本团队该岗位全部 agent。false（默认）= 仅 memory_search 按需检索。',
+    type: Boolean,
+  })
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  autoInject?: boolean;
 }
