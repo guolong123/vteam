@@ -26,10 +26,14 @@ export function authorRoleDisplay(
   const primary = typeof author === "string" ? author.trim() : "";
   const label = typeof roleLabel === "string" ? roleLabel.trim() : "";
   if (primary === "") {
-    return { primary: label, roleLabel: null };
+    // 两者皆空（外部渠道消息且 senderId 缺失）：给中性兜底，避免渲染出空身份行。
+    return { primary: label === "" ? UNKNOWN_AUTHOR : label, roleLabel: null };
   }
   if (label === "" || primary === label) {
     return { primary, roleLabel: null };
   }
   return { primary, roleLabel: label };
 }
+
+/** 作者名与角色标签皆不可解析时的中性兜底（非角色名，避免误显示为某岗位）。 */
+const UNKNOWN_AUTHOR = "外部用户";
