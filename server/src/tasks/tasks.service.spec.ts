@@ -2451,7 +2451,12 @@ describe('TasksService', () => {
     });
 
     it('systemBlock：看门狗停滞回调专用，actor=system + 同 block 语义落库', async () => {
+      // 三次 findUnique 依次：① 长期值班豁免门禁 ② transition 自身的读 ③ transition
+      // 之后取 teamId/title 的公告用读。Once 队列必须按此顺序排，否则 ② 会拿到 ③ 的行。
       prisma.task.findUnique
+        .mockResolvedValueOnce(
+          row({ status: 'in_progress', version: 2, teamId: null }),
+        )
         .mockResolvedValueOnce(
           row({ status: 'in_progress', version: 2, teamId: null }),
         )
@@ -3112,6 +3117,99 @@ describe('TasksService', () => {
       );
       expect(prisma.$transaction).not.toHaveBeenCalled();
       expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('长期值班任务：transitionByAgent + mark-pending-review → 403（无部分写入）', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_0000000001',
+        teamId: 'tm_0000000001',
+        longRunning: true,
+      });
+
+      await expectForbiddenCode(
+        () =>
+          service.transitionByAgent(
+            't_0000000001',
+            'tmm_0000000001',
+            'mark-pending-review',
+          ),
+        TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
+      );
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('长期值班任务：accept/archive 仍 403、block/resume 仍放行（升级通道不失效）', async () => {
+      for (const action of ['accept', 'archive'] as const) {
+        prisma.task.findUnique.mockResolvedValue({
+          id: 't_0000000001',
+          teamId: 'tm_0000000001',
+          longRunning: true,
+        });
+        await expectForbiddenCode(
+          () =>
+            service.transitionByAgent(
+              't_0000000001',
+              'tmm_0000000001',
+              action,
+            ),
+          TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
+        );
+      }
+      // block 是升级通道且非终态，豁免不得把它一起关掉。
+      for (const action of ['block', 'resume'] as const) {
+        const from = action === 'block' ? 'in_progress' : 'blocked';
+        const to = action === 'block' ? 'blocked' : 'in_progress';
+        prisma.task.findUnique
+          .mockResolvedValueOnce({
+            id: 't_0000000001',
+            teamId: 'tm_0000000001',
+            longRunning: true,
+          })
+          .mockResolvedValueOnce(row({ status: from, version: 1 }))
+          .mockResolvedValue(row({ status: to, version: 2 }));
+        prisma.chatChannel.findFirst.mockResolvedValue({
+          id: 'c_0000000001',
+        });
+        idGen.nextId.mockResolvedValue('te_0000000001');
+        mockTransitionTx();
+        await expect(
+          service.transitionByAgent('t_0000000001', 'tmm_0000000001', action),
+        ).resolves.toBeDefined();
+      }
+    });
+
+    it('长期值班任务：systemBlock 不调 transition，状态保持 in_progress', async () => {
+      prisma.task.findUnique.mockResolvedValue({
+        id: 't_0000000001',
+        status: 'in_progress',
+        longRunning: true,
+      });
+
+      await service.systemBlock('t_0000000001', '看门狗：连续 3 轮无进展');
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalled();
+    });
+
+    it('负向对照：非长期值班任务的 systemBlock 仍正常置阻塞', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'in_progress', version: 2 }))
+        .mockResolvedValueOnce(row({ status: 'in_progress', version: 2 }))
+        .mockResolvedValue(row({ status: 'blocked', version: 3 }));
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: 'c_0000000001',
+      });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      const txModels = mockTransitionTx();
+
+      await service.systemBlock('t_0000000001', '看门狗：连续 3 轮无进展');
+
+      expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ eventType: 'block' }),
+      });
     });
 
     it('transitionByAgent：start/mark-pending-review/reject 主实例仍放行（完工门禁回归）', async () => {

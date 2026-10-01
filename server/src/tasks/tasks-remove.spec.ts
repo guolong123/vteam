@@ -13,7 +13,12 @@ import { TasksService } from './tasks.service';
 describe('TasksService.remove（DELETE /api/v1/tasks/:id）', () => {
   type Row = { id: string };
 
-  let taskRow: { id: string; teamId: string | null; status: string } | null;
+  let taskRow: {
+    id: string;
+    teamId: string | null;
+    status: string;
+    longRunning?: boolean;
+  } | null;
   let calls: string[];
   let prisma: Record<string, unknown>;
   let service: TasksService;
@@ -102,6 +107,17 @@ describe('TasksService.remove（DELETE /api/v1/tasks/:id）', () => {
       expect(calls).toEqual([]);
     },
   );
+
+  it('长期值班任务：in_progress 豁免删除拦截（其常态就是 in_progress）', async () => {
+    taskRow = {
+      id,
+      teamId: 'tm_0000000001',
+      status: 'in_progress',
+      longRunning: true,
+    };
+    await expect(service.remove(id)).resolves.toEqual({ deleted: true, id });
+    expect(calls).toContain('task.delete');
+  });
 
   it('可删状态：返回 deleted，删除任务行并清空 teams.currentTaskId', async () => {
     await expect(service.remove(id)).resolves.toEqual({ deleted: true, id });
