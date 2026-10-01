@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
@@ -58,26 +58,97 @@ function AuthTypeBadge({ authType }: { authType: GitRepoView["authType"] | GitCr
   );
 }
 
-function PermBadge({ permission }: { permission: GitGrantView["permission"] }) {
-  const theme = permTheme[permission];
+const GRANT_VISIBLE_LIMIT = 3;
+
+function matchGrant(g: GitGrantView, agentId: string | null, writeOnly: boolean) {
+  if (agentId !== null && g.agentId !== agentId) return false;
+  if (writeOnly && g.permission !== "write") return false;
+  return true;
+}
+
+function selectGrants(grants: GitGrantView[], agentId: string | null, writeOnly: boolean) {
+  if (agentId === null && !writeOnly) return grants;
+  return grants.filter((g) => matchGrant(g, agentId, writeOnly));
+}
+
+function FilterChip({ active, label, count, onClick, testid }: { active: boolean; label: string; count?: number; onClick: () => void; testid?: string }) {
   return (
-    <span data-testid="git-repo-grant-perm" data-permission={permission} style={{ display: "inline-flex", alignItems: "center", padding: "0 6px", borderRadius: radius.sm, backgroundColor: theme.bg, border: `1px solid ${theme.border}`, color: theme.color, fontSize: fontSize.xs, fontWeight: 600, lineHeight: 1.5, whiteSpace: "nowrap", fontFamily: fontFamily.mono, ...baseFont }}>
-      {theme.label}
+    <button type="button" data-testid={testid} aria-pressed={active} onClick={onClick} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: "3px 10px", borderRadius: radius.pill, border: `1px solid ${active ? "rgba(13,148,136,0.28)" : neutral[200]}`, backgroundColor: active ? "rgba(13,148,136,0.10)" : "var(--color-surface)", color: active ? "#0D9488" : neutral[500], fontSize: fontSize.xs, fontWeight: active ? 600 : 500, lineHeight: 1.6, whiteSpace: "nowrap", cursor: "pointer", ...baseFont }}>
+      {label}
+      {count !== undefined && <span style={{ fontFamily: fontFamily.mono, opacity: 0.7 }}>{count}</span>}
+    </button>
+  );
+}
+
+function PermDot({ permission }: { permission: GitGrantView["permission"] }) {
+  const theme = permTheme[permission];
+  const write = permission === "write";
+  return (
+    <span
+      data-testid="git-repo-grant-perm"
+      data-permission={permission}
+      aria-hidden
+      style={{ boxSizing: "border-box", width: 6, height: 6, borderRadius: "50%", flexShrink: 0, backgroundColor: write ? theme.color : "transparent", border: write ? "none" : `1.5px solid ${theme.color}` }}
+    />
+  );
+}
+
+function GrantChip({ grant }: { grant: GitGrantView }) {
+  const write = grant.permission === "write";
+  const theme = permTheme[grant.permission];
+  const label = grant.name ?? grant.agentId;
+  return (
+    <span
+      data-agent-id={grant.agentId}
+      data-permission={grant.permission}
+      title={`${label} · ${write ? "write（可 push）" : "read（clone/pull）"}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: space.xs,
+        padding: "2px 8px",
+        borderRadius: radius.pill,
+        backgroundColor: write ? theme.bg : "var(--color-surface)",
+        border: `1px solid ${write ? theme.border : neutral[200]}`,
+        color: write ? theme.color : neutral[600],
+        fontSize: fontSize.xs,
+        fontWeight: write ? 600 : 500,
+        lineHeight: 1.6,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        ...baseFont,
+      }}
+    >
+      <PermDot permission={grant.permission} />
+      {label}
     </span>
   );
 }
 
 function GrantTags({ grants }: { grants: GitGrantView[] }) {
+  const [expanded, setExpanded] = useState(false);
   if (grants.length === 0) return <span data-testid="git-repo-grants" data-empty="true" style={{ fontSize: fontSize.md, color: neutral[300] }}>—</span>;
+  const visible = expanded ? grants : grants.slice(0, GRANT_VISIBLE_LIMIT);
+  const hidden = grants.length - visible.length;
   return (
-    <span data-testid="git-repo-grants" style={{ display: "flex", alignItems: "center", gap: space.xs, flexWrap: "wrap", minWidth: 0 }}>
-      {grants.map((g) => (
-        <span key={g.agentId} data-agent-id={g.agentId} data-permission={g.permission} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.pill, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, fontSize: fontSize.xs, color: neutral[700], whiteSpace: "nowrap", ...baseFont }}>
-          {g.name ?? g.agentId}
-          <PermBadge permission={g.permission} />
-        </span>
-      ))}
-    </span>
+    <div
+      data-testid="git-repo-grants"
+      data-total={grants.length}
+      data-expanded={expanded ? "true" : "false"}
+      style={{ display: "flex", alignItems: "center", gap: space.xs, flexWrap: expanded ? "wrap" : "nowrap", overflow: "hidden", minWidth: 0 }}
+    >
+      {visible.map((g) => (<GrantChip key={g.agentId} grant={g} />))}
+      {hidden > 0 && (
+        <button type="button" data-testid="git-repo-grants-more" aria-expanded="false" title="展开全部授权 Agent" onClick={() => setExpanded(true)} style={{ display: "inline-flex", alignItems: "center", padding: "2px 6px", borderRadius: radius.pill, backgroundColor: "transparent", border: `1px dashed ${neutral[300]}`, color: neutral[500], fontSize: fontSize.xs, fontWeight: 600, lineHeight: 1.6, whiteSpace: "nowrap", flexShrink: 0, cursor: "pointer", ...baseFont }}>
+          +{hidden}
+        </button>
+      )}
+      {expanded && (
+        <button type="button" data-testid="git-repo-grants-collapse" aria-expanded="true" onClick={() => setExpanded(false)} style={{ display: "inline-flex", alignItems: "center", padding: "2px 6px", borderRadius: radius.pill, backgroundColor: "transparent", border: `1px dashed ${neutral[300]}`, color: neutral[500], fontSize: fontSize.xs, fontWeight: 600, lineHeight: 1.6, whiteSpace: "nowrap", flexShrink: 0, cursor: "pointer", ...baseFont }}>
+          收起
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -91,16 +162,16 @@ function StatusBadge() {
   );
 }
 
-function GitRepoRow({ repo, isAdmin, onConfigure, onDelete }: { repo: GitRepoView; isAdmin: boolean; onConfigure: (repo: GitRepoView) => void; onDelete: (repo: GitRepoView) => void }) {
+function GitRepoRow({ repo, grants, isAdmin, onConfigure, onDelete }: { repo: GitRepoView; grants: GitGrantView[]; isAdmin: boolean; onConfigure: (repo: GitRepoView) => void; onDelete: (repo: GitRepoView) => void }) {
   return (
-    <div data-testid="git-repo-item" data-repo-id={repo.id} data-auth-type={repo.authType} className="gr-repo-row" style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.lg}px ${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
-      <span data-testid="git-repo-url" data-repo-url={repo.repoUrl} style={{ width: 220, flexShrink: 0, fontSize: fontSize.md, fontWeight: 600, color: neutral[800], fontFamily: fontFamily.mono, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.repoUrl}</span>
-      <span style={{ width: 84, flexShrink: 0 }}><AuthTypeBadge authType={repo.authType} /></span>
-      <span data-testid="git-repo-credential" style={{ width: 140, flexShrink: 0, fontSize: fontSize.sm, color: neutral[600], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.credentialName ?? repo.credentialId}</span>
-      <span data-testid="git-repo-fingerprint" data-fingerprint={repo.fingerprint ?? ""} style={{ width: 140, flexShrink: 0, fontSize: fontSize.sm, fontFamily: fontFamily.mono, color: repo.fingerprint ? neutral[500] : neutral[300], letterSpacing: "0.02em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.fingerprint ?? "—"}</span>
-      <div style={{ flex: 1, minWidth: 0 }}><GrantTags grants={repo.grantedAgents} /></div>
-      <span style={{ width: 88, flexShrink: 0 }}><StatusBadge /></span>
-      <div style={{ width: 160, flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+    <div data-testid="git-repo-item" data-repo-id={repo.id} data-auth-type={repo.authType} className="gr-repo-row" style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
+      <span data-testid="git-repo-url" data-repo-url={repo.repoUrl} title={repo.repoUrl} style={{ width: 240, flexShrink: 0, fontSize: fontSize.md, fontWeight: 600, color: neutral[800], fontFamily: fontFamily.mono, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.repoUrl}</span>
+      <span style={{ width: 76, flexShrink: 0 }}><AuthTypeBadge authType={repo.authType} /></span>
+      <span data-testid="git-repo-credential" title={repo.credentialName ?? repo.credentialId} style={{ width: 120, flexShrink: 0, fontSize: fontSize.sm, color: neutral[600], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.credentialName ?? repo.credentialId}</span>
+      <span data-testid="git-repo-fingerprint" data-fingerprint={repo.fingerprint ?? ""} style={{ width: 120, flexShrink: 0, fontSize: fontSize.sm, fontFamily: fontFamily.mono, color: repo.fingerprint ? neutral[500] : neutral[300], letterSpacing: "0.02em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.fingerprint ?? "—"}</span>
+      <div style={{ flex: 1, minWidth: 0 }}><GrantTags grants={grants} /></div>
+      <span style={{ width: 84, flexShrink: 0 }}><StatusBadge /></span>
+      <div style={{ width: 150, flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: space.sm }}>
         {isAdmin && (<><ActionButton testid="git-repo-configure" label="配置" primary onClick={() => onConfigure(repo)} /><ActionButton testid="git-repo-delete" label="删除" onClick={() => onDelete(repo)} /></>)}
       </div>
     </div>
@@ -306,11 +377,13 @@ export default function GitReposPage() {
   const [repoModal, setRepoModal] = useState<{ mode: "create" } | { mode: "edit"; repo: GitRepoView } | null>(null);
   const [credModal, setCredModal] = useState<{ mode: "create" } | { mode: "edit"; cred: GitCredentialView } | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
+  const [agentFilter, setAgentFilter] = useState<string | null>(null);
+  const [writeOnly, setWriteOnly] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<GitRepoView | null>(null);
   const [deleteCredTarget, setDeleteCredTarget] = useState<GitCredentialView | null>(null);
 
   const reposQuery = useQuery({ queryKey: ["git-repos"], queryFn: () => api.get<GitRepoView[]>("/git-repos"), enabled: !!user });
-  const repos = reposQuery.data ?? [];
+  const repos = useMemo(() => reposQuery.data ?? [], [reposQuery.data]);
   const credsQuery = useQuery({ queryKey: ["git-credentials"], queryFn: () => api.get<GitCredentialView[]>("/git-credentials"), enabled: !!user });
   const credentials = credsQuery.data ?? [];
   const agentsQuery = useQuery({ queryKey: ["agents"], queryFn: () => api.get<AgentsResponse>("/agents", { query: { page: 1, pageSize: 100 } }), enabled: !!user });
@@ -338,18 +411,54 @@ export default function GitReposPage() {
   });
 
   const grantedAgentCount = useMemo(() => { const ids = new Set<string>(); for (const r of repos) for (const g of r.grantedAgents) ids.add(g.agentId); return ids.size; }, [repos]);
+
+  const grantAgentOptions = useMemo(() => {
+    const seen = new Map<string, { label: string; repos: number }>();
+    for (const r of repos) for (const g of r.grantedAgents) {
+      const cur = seen.get(g.agentId);
+      if (cur) cur.repos += 1;
+      else seen.set(g.agentId, { label: g.name ?? g.agentId, repos: 1 });
+    }
+    return Array.from(seen, ([id, v]) => ({ id, label: v.label, repos: v.repos }));
+  }, [repos]);
+
+  const writeRepoCount = useMemo(() => repos.filter((r) => r.grantedAgents.some((g) => g.permission === "write")).length, [repos]);
+
+  const filteredRepos = useMemo(
+    () => (agentFilter === null && !writeOnly ? repos : repos.map((repo) => ({ repo, grants: selectGrants(repo.grantedAgents, agentFilter, writeOnly) })).filter((r) => r.grants.length > 0).map((r) => r.repo)),
+    [repos, agentFilter, writeOnly],
+  );
+
+  const grantsFor = useCallback((repo: GitRepoView) => selectGrants(repo.grantedAgents, agentFilter, writeOnly), [agentFilter, writeOnly]);
+  const filterActive = agentFilter !== null || writeOnly;
+  const clearFilter = () => { setAgentFilter(null); setWriteOnly(false); };
   const editingRepo = repoModal !== null && repoModal.mode === "edit" ? repoModal.repo : null;
 
   return (
     <div data-testid="git-repos-root" style={{ flex: 1, minHeight: 0, position: "relative", display: "flex", flexDirection: "column", backgroundColor: neutral[50], fontFamily: fontFamily.body, overflow: "auto" }}>
       <style>{rowCss}</style>
       <main style={{ flex: 1, minHeight: 0, padding: space.xl }}>
-        <div style={{ maxWidth: 1080, margin: "0 auto", display: "flex", flexDirection: "column", gap: space.lg }}>
+        <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", flexDirection: "column", gap: space.lg }}>
           <div data-testid="git-repos-toolbar" style={{ display: "flex", alignItems: "center", gap: space.lg, flexWrap: "wrap" }}>
             <span style={{ fontSize: fontSize.xl, fontWeight: 700, color: neutral[900] }}>仓库管理</span>
-            <span data-testid="git-repos-count" style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "2px 10px", fontFamily: fontFamily.mono }}>{repos.length} 个仓库 · {credentials.length} 个凭证 · 已授权 {grantedAgentCount} 个 Agent</span>
+            <span data-testid="git-repos-count" style={{ fontSize: fontSize.xs, color: neutral[500], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, borderRadius: radius.pill, padding: "2px 10px", fontFamily: fontFamily.mono }}>{filterActive ? `${filteredRepos.length} / ${repos.length} 个仓库` : `${repos.length} 个仓库`} · {credentials.length} 个凭证 · 已授权 {grantedAgentCount} 个 Agent</span>
             <span style={{ fontSize: fontSize.xs, color: neutral[400], marginLeft: "auto" }}>{isAdmin ? "凭证加密存储 · 按活跃 Agent 下发" : "成员只读"}</span>
           </div>
+
+          {tab === "repos" && grantAgentOptions.length > 0 && (
+            <div data-testid="git-repos-filters" style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>按 Agent 筛选</span>
+              <FilterChip testid="git-repos-filter-all" active={!filterActive} label="全部" count={repos.length} onClick={clearFilter} />
+              {grantAgentOptions.map((o) => (<FilterChip key={o.id} testid="git-repos-filter-agent" active={agentFilter === o.id} label={o.label} count={o.repos} onClick={() => { setWriteOnly(false); setAgentFilter((prev) => (prev === o.id ? null : o.id)); }} />))}
+              <span aria-hidden style={{ width: 1, height: 16, backgroundColor: neutral[200], margin: "0 2px" }} />
+              <FilterChip testid="git-repos-filter-write" active={writeOnly} label="仅看可写 push" count={writeRepoCount} onClick={() => { setAgentFilter(null); setWriteOnly((prev) => !prev); }} />
+              {filterActive && (
+                <button type="button" data-testid="git-repos-filter-clear" onClick={clearFilter} style={{ display: "inline-flex", alignItems: "center", gap: space.xs, padding: "3px 10px", borderRadius: radius.pill, border: `1px solid ${neutral[200]}`, backgroundColor: "transparent", color: neutral[500], fontSize: fontSize.xs, fontWeight: 500, lineHeight: 1.6, whiteSpace: "nowrap", cursor: "pointer", ...baseFont }}>
+                  清除筛选
+                </button>
+              )}
+            </div>
+          )}
 
           <div style={{ display: "flex", gap: space.sm, alignItems: "center" }}>
             <SegmentedTabs
@@ -370,9 +479,15 @@ export default function GitReposPage() {
             reposQuery.isPending ? <div data-testid="git-repos-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div> : reposQuery.isError ? <div data-testid="git-repos-error" role="alert" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: space.md, padding: space.xl }}><div style={{ color: "#DC2626" }}>{isApiError(reposQuery.error) ? reposQuery.error.message : "加载失败"}</div><button data-testid="git-repos-retry" onClick={() => reposQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>重试</button></div> : (
               <div data-testid="git-repos-list" style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.md }}>
                 <div style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.md}px` }}><span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>已配置仓库</span><span style={{ fontSize: fontSize.xs, color: neutral[400] }}>凭证按仓库粒度复用 · 授权 Agent 可 clone/pull/push</span></div>
-                <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.sm}px ${space.xl}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}><span style={{ width: 220, flexShrink: 0 }}>仓库地址</span><span style={{ width: 84, flexShrink: 0 }}>认证</span><span style={{ width: 140, flexShrink: 0 }}>凭证</span><span style={{ width: 140, flexShrink: 0 }}>指纹</span><span style={{ flex: 1 }}>授权 Agent</span><span style={{ width: 88, flexShrink: 0 }}>状态</span><span style={{ width: 160, flexShrink: 0, textAlign: "right" }}>操作</span></div>
-                {repos.map((repo) => (<GitRepoRow key={repo.id} repo={repo} isAdmin={isAdmin} onConfigure={(r) => { setModalError(null); setRepoModal({ mode: "edit", repo: r }); }} onDelete={(r) => { setModalError(null); setDeleteTarget(r); }} />))}
+                <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.lg}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}><span style={{ width: 240, flexShrink: 0 }}>仓库地址</span><span style={{ width: 76, flexShrink: 0 }}>认证</span><span style={{ width: 120, flexShrink: 0 }}>凭证</span><span style={{ width: 120, flexShrink: 0 }}>指纹</span><span style={{ flex: 1 }}>授权 Agent</span><span style={{ width: 84, flexShrink: 0 }}>状态</span><span style={{ width: 150, flexShrink: 0, textAlign: "right" }}>操作</span></div>
+                {filteredRepos.map((repo) => (<GitRepoRow key={repo.id} repo={repo} grants={grantsFor(repo)} isAdmin={isAdmin} onConfigure={(r) => { setModalError(null); setRepoModal({ mode: "edit", repo: r }); }} onDelete={(r) => { setModalError(null); setDeleteTarget(r); }} />))}
                 {repos.length === 0 && <div style={{ padding: space.xxl, textAlign: "center", fontSize: fontSize.md, color: neutral[400] }}>暂无仓库，{isAdmin ? "点右上角“新增仓库”并选择已有凭证" : "请管理员配置"}</div>}
+                {repos.length > 0 && filteredRepos.length === 0 && (
+                  <div data-testid="git-repos-filter-empty" style={{ padding: space.xxl, textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: space.md }}>
+                    <span style={{ fontSize: fontSize.md, color: neutral[400] }}>没有匹配当前筛选的仓库</span>
+                    <button type="button" data-testid="git-repos-filter-empty-clear" onClick={clearFilter} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[600], fontSize: fontSize.sm, fontWeight: 500, cursor: "pointer", ...baseFont }}>清除筛选</button>
+                  </div>
+                )}
               </div>
             )
           ) : (
