@@ -774,6 +774,50 @@ describe('TaskProgressionScheduler', () => {
     });
   });
 
+  describe('启动清扫不得吃掉在跑任务的计数（B1/B2/B3）', () => {
+    it('B1：in_progress 任务的 pending 行跨启动存活，fireCount/quietStreak 不被重置', async () => {
+      prisma.task.findMany.mockResolvedValue([{ id: 't_1' }]);
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      seedPatrolRow('t_1', {
+        fireCount: 3,
+        payload: { taskId: 't_1', quietStreak: 2 },
+      });
+      const key = buildProgressionDedupKey('t_1');
+
+      await scheduler.onModuleInit();
+
+      expect(rows[key].status).toBe(TRIGGER_STATUS.PENDING);
+      expect(rows[key].fireCount).toBe(3);
+      expect(rows[key].payload.quietStreak).toBe(2);
+      expect(triggers.schedule).not.toHaveBeenCalled();
+    });
+
+    it('B2：任务已转终态的 pending 行仍被清扫为 CANCELLED（清扫只收窄、不删除）', async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+      seedPatrolRow('t_gone', { payload: { taskId: 't_gone' } });
+      const key = buildProgressionDedupKey('t_gone');
+
+      await scheduler.onModuleInit();
+
+      expect(rows[key].status).toBe(TRIGGER_STATUS.CANCELLED);
+    });
+
+    it('B3：长期值班任务在启动时不排期', async () => {
+      prisma.task.findMany.mockResolvedValue([{ id: 't_1' }]);
+      prisma.task.findUnique.mockResolvedValue(
+        inProgressTask({ longRunning: true }),
+      );
+      seedPatrolRow('t_1', { payload: { taskId: 't_1' } });
+      const key = buildProgressionDedupKey('t_1');
+
+      await scheduler.onModuleInit();
+
+      expect(triggers.schedule).not.toHaveBeenCalled();
+      // 遗留行不由清扫取消（该任务仍 in_progress），但会到期后被 {expire:true} 收敛
+      expect(rows[key].status).toBe(TRIGGER_STATUS.PENDING);
+    });
+  });
+
   describe('长期值班任务豁免（Task.longRunning）', () => {
     const key = buildProgressionDedupKey('t_1');
     const fireCtx = (overrides: Record<string, unknown> = {}) => ({

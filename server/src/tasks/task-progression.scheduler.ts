@@ -56,7 +56,8 @@ export const STALL_INFLIGHT_ISSUE_STATUSES = [
  * 任务分区（messages.task_id）内有新消息即视为在途，递延停滞检查。
  */
 export const DEFAULT_STALL_CHAT_ACTIVITY_WINDOW_MS = 10 * 60_000;
-/** 巡检扫描周期 ms（旧 setInterval 驱动已退役，见类注释；保留导出防外部引用 churn）。 */
+/** 巡检扫描周期 ms（**仅旧 setInterval 驱动**已退役，interval 行巡检仍由 trigger
+ * ticker 按此周期驱动；保留导出防外部引用 churn）。 */
 export const PROGRESSION_SCAN_INTERVAL_MS = 30_000;
 
 /**
@@ -95,7 +96,8 @@ export function buildProgressionPrompt(title: string, status: string): string {
  * 一任务一行，dedupKey=`progression_patrol:task:<taskId>`）：
  * - register(taskId)：任务进入 in_progress（start/reject）时排期（intervalMs=巡检间隔、
  *   maxFires=轮次上限、guardKey=冷却否决）；幂等：pending 行已存在 → 直接保留
- *   （fireCount/quietStreak 不清零——重启安全核心）。
+ *   （fireCount/quietStreak 不清零——依赖启动清扫跳过仍在跑的任务，见
+ *   cancelStalePatrolTriggers）。
  * - unregister(taskId)：任务离开 in_progress 时 cancel 触发器（行留 cancelled 备查）。
  * - 轮次计数：rounds ≡ trigger.fireCount（基座每次触发后 +1 并落库，重启不丢）；
  *   maxRounds ≡ maxFires（基座 claim 前 + 触发后双重强制熄火，非内存计数）。
@@ -104,9 +106,9 @@ export function buildProgressionPrompt(title: string, status: string): string {
  * - 触发器行即唯一状态源：isRegistered 查 pending 行是否存在；patrolNow/scan 均派生
  *   自触发器行；连续静默轮次 quietStreak 随行 payload 持久化（叫醒累加、观测活跃清零、
  *   达 STALL_QUIET_STREAK_LIMIT 自动置阻塞）。
- * - 自主 setInterval 扫描已退役（与 trigger ticker 双驱动会重复下发 wake 消息）；
- *   scan() 保留为按需例程（spec/手工巡检：遍历 pending 触发器行派生到期巡检），
- *   生产节拍唯一来自 trigger ticker。
+ * - 自主 setInterval 扫描已退役（与 trigger ticker 双驱动会重复下发 wake 消息）——
+ *   「退役」的只是这个内存循环，interval 行巡检仍由 trigger ticker 驱动，节拍
+ *   唯一来自 ticker；scan() 保留为按需例程（spec/手工巡检）。
  *
  * 功能 2（托管确认路由）：订阅 realtime bus 的 agent.question 事件，payload.managed=true 且
  * 未收敛（resolved≠true）→ dispatch 确认请求消息给主 Agent（question_confirm 决策指令）。
@@ -123,7 +125,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     return this.prisma.trigger;
   }
 
-  /** 巡检间隔 ms（env PROGRESSION_INTERVAL_MS，缺省 20min；公开便于测试覆盖）。 */
+  /** 巡检间隔 ms（env PROGRESSION_INTERVAL_MS，缺省 10min；公开便于测试覆盖）。 */
   public progressionIntervalMs: number;
   /** 巡检轮次上限（env PROGRESSION_MAX_ROUNDS，缺省 6；映射为触发器 maxFires 由基座强制）。 */
   public maxRounds: number;
@@ -179,8 +181,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     // 巡检 handler + 冷却 guard 接线（TriggerService 缺席时 no-op，内存循环照常）。
     this.registerProgressionTrigger();
-    // periodic patrol 已退役：清扫库内遗留的 pending progression_patrol 触发器行
-    //（fan-out JOIN drain 接管唤醒职责，旧 interval 行会重复下发 wake 消息）。
+    // 清扫库内遗留的 pending progression_patrol 触发器行（其任务已转终态者）。
     await this.cancelStalePatrolTriggers();
     // 数据修复：库内 in_progress 任务逐个 register（pending 触发器行保留 fireCount，
     // 终态/缺失行重建——重启不再清零 rounds）。
@@ -204,8 +205,8 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   /**
    * 巡检 handler + 冷却 guard 接线（幂等覆盖注册；TriggerService 缺席时 no-op）。
    *
-   * NOTE: periodic patrol 巡检已退役——fan-out JOIN drain 取代了定期巡检的唤醒职责。
-   * 这里仅注册 handler/guard 的接线（fail-open），不排任何 interval 行。
+   * NOTE: 这里只注册 handler/guard 的接线（fail-open）。interval 行的排期由
+   * TasksService.transition 进入 in_progress 时调用 register() 触发，不在此处。
    */
   private registerProgressionTrigger(): void {
     if (!this.triggers) {
@@ -227,7 +228,7 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
 
   /**
    * 任务进入 in_progress 时注册（start/reject）。幂等：触发器侧 pending 行已存在 →
-   * 直接保留（fireCount/quietStreak 不清零）。
+   * 直接保留（fireCount/quietStreak 不清零）。⚠️ 该保留仅在启动清扫未取消本行时成立。
    * 非 in_progress 或主 Agent 缺失 → 不排期（防脏行）。
    */
   async register(taskId: string): Promise<void> {
@@ -992,8 +993,16 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * periodic patrol 退役清扫：取消库内所有 pending progression_patrol 触发器行。
-   * fan-out JOIN drain 接管唤醒；旧 interval 行会重复下发 wake 消息。
+   * 启动清扫：取消「其任务已不在 in_progress」的 pending progression_patrol 触发器行
+   * （进程宕机期间转终态的任务留下的孤儿）。
+   *
+   * ⚠️ 不可无条件取消所有 pending 行：本方法在 restoreInProgressTasks **之前**执行
+   * （见 onModuleInit），无条件清扫会让每个在跑的任务的行先变 cancelled，随后的
+   * persistPatrolTrigger 走「删掉重建」分支，fireCount 归零、payload 里的
+   * quietStreak 丢失——每发一次版就重置一次静默计数。跳过在跑的任务后，
+   * persistPatrolTrigger 的幂等早退才可达，计数得以跨发版存活。
+   *
+   * taskId 取自行 payload（ProgressionPatrolPayload），**不解析 dedupKey 字符串**。
    * fail-open：DB 操作失败仅 warn。
    */
   private async cancelStalePatrolTriggers(): Promise<void> {
@@ -1003,24 +1012,38 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
           kind: TRIGGER_KIND.PROGRESSION_PATROL,
           status: TRIGGER_STATUS.PENDING,
         },
-        select: { dedupKey: true },
+        select: { dedupKey: true, payload: true },
       });
       if (Array.isArray(stale)) {
+        const liveTaskIds = new Set(
+          (
+            (await this.prisma.task.findMany({
+              where: { status: TASK_STATUS.in_progress },
+              select: { id: true },
+            })) ?? []
+          ).map((t: { id: string }) => t.id),
+        );
+        let cancelled = 0;
         for (const row of stale) {
+          const taskId = (row.payload as { taskId?: unknown } | null)?.taskId;
+          if (typeof taskId === 'string' && liveTaskIds.has(taskId)) {
+            continue;
+          }
           try {
             await this.patrolTriggerRows()?.update?.({
               where: { dedupKey: row.dedupKey },
               data: { status: TRIGGER_STATUS.CANCELLED },
             });
+            cancelled += 1;
           } catch (err) {
             this.logger.warn(
               `[progression] 清扫 stale patrol ${row.dedupKey} 失败: ${this.describeError(err)}`,
             );
           }
         }
-        if (stale.length > 0) {
+        if (cancelled > 0) {
           this.logger.log(
-            `[progression] 清扫 stale patrol 触发器：${stale.length} 个 pending 行已取消`,
+            `[progression] 清扫 stale patrol 触发器：${cancelled} 个 pending 行已取消（跳过 ${stale.length - cancelled} 个仍在跑的）`,
           );
         }
       }
