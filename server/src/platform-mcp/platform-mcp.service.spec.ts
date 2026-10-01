@@ -1287,6 +1287,7 @@ describe('PlatformMcpService', () => {
         status: 'in_progress',
         backgroundDocs: [{ name: '背景.md' }],
         teamId: 'tm_1',
+        longRunning: true,
       });
       prisma.team.findUnique.mockResolvedValue({
         mainAgentMemberId: 'tmm_1',
@@ -1323,6 +1324,7 @@ describe('PlatformMcpService', () => {
         status: 'in_progress',
         mainAgentMemberId: 'tmm_1',
         backgroundDocs: [{ name: '背景.md' }],
+        longRunning: true,
         channelId,
         pendingReceipts: { pending: 0, total: 0 },
         agentMembers: [
@@ -5924,6 +5926,95 @@ describe('PlatformMcpService', () => {
       );
     });
 
+    it('longRunning=true → 透传 true 给 createByAgent', async () => {
+      allowWorker();
+      prisma.task.findUnique.mockResolvedValue({
+        id: taskId,
+        teamId: 'tm_1',
+      });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
+
+      await service.taskCreate(ctx, {
+        taskId,
+        selfInstanceId: senderInstanceId,
+        title: '长时任务',
+        longRunning: true,
+      });
+
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        senderInstanceId,
+        expect.objectContaining({ longRunning: true }),
+      );
+    });
+
+    it('longRunning=false → 透传 false（非 undefined，落库取默认口径）', async () => {
+      allowWorker();
+      prisma.task.findUnique.mockResolvedValue({
+        id: taskId,
+        teamId: 'tm_1',
+      });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
+
+      await service.taskCreate(ctx, {
+        taskId,
+        selfInstanceId: senderInstanceId,
+        title: '普通任务',
+        longRunning: false,
+      });
+
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        senderInstanceId,
+        expect.objectContaining({ longRunning: false }),
+      );
+    });
+
+    it('省略 longRunning → 收敛为 false（与库 default(false) 一致）', async () => {
+      allowWorker();
+      prisma.task.findUnique.mockResolvedValue({
+        id: taskId,
+        teamId: 'tm_1',
+      });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
+
+      await service.taskCreate(ctx, {
+        taskId,
+        selfInstanceId: senderInstanceId,
+        title: '普通任务',
+      });
+
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        senderInstanceId,
+        expect.objectContaining({ longRunning: false }),
+      );
+    });
+
+    it('longRunning 传字符串 "yes" → 不抛异常，收敛为 false（agent 入口无 DTO 校验兜底）', async () => {
+      allowWorker();
+      prisma.task.findUnique.mockResolvedValue({
+        id: taskId,
+        teamId: 'tm_1',
+      });
+      tasksService.createByAgent.mockResolvedValue({ id: 't_new' });
+
+      const err = await service
+        .taskCreate(ctx, {
+          taskId,
+          selfInstanceId: senderInstanceId,
+          title: '脏类型任务',
+          longRunning: 'yes' as unknown as boolean,
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+
+      expect(err).toBeNull();
+      expect(tasksService.createByAgent).toHaveBeenCalledWith(
+        senderInstanceId,
+        expect.objectContaining({ longRunning: false }),
+      );
+    });
+
     it('任务归属团队主成员 → 成功，teamId 取任务所属团队', async () => {
       allowWorker();
       prisma.task.findUnique.mockResolvedValue({
@@ -6227,6 +6318,25 @@ describe('PlatformMcpService', () => {
           selfInstanceId: 'tmm_1',
           teamId: 'tm_1',
         }).success,
+      ).toBe(false);
+    });
+
+    it('task_create schema 含 longRunning 可选 boolean（缺省过 parse，字符串不过 parse）', () => {
+      const tools = buildPlatformMcpTools(service);
+      const taskCreate = tools.find((t) => t.name === 'task_create')!;
+      const schema = taskCreate.inputSchema as unknown as {
+        safeParse: (v: unknown) => { success: boolean };
+      };
+      const base = { selfInstanceId: 'tmm_1', title: 't' };
+      expect(schema.safeParse(base).success).toBe(true);
+      expect(
+        schema.safeParse({ ...base, longRunning: true }).success,
+      ).toBe(true);
+      expect(
+        schema.safeParse({ ...base, longRunning: false }).success,
+      ).toBe(true);
+      expect(
+        schema.safeParse({ ...base, longRunning: 'yes' }).success,
       ).toBe(false);
     });
 
