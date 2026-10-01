@@ -1300,6 +1300,18 @@ export class TasksService implements OnModuleInit {
    */
   async systemBlock(id: string, reason: string) {
     const text = (reason ?? '').trim() || '看门狗判定停滞';
+    // 执行点 (c) — 长期值班任务不自动置阻塞。与下方那次 findUnique 分开：那次在
+    // transition 之后、取的是 teamId/title，无法用于前置判定。
+    const gate = await this.prisma.task.findUnique({
+      where: { id },
+      select: { longRunning: true },
+    });
+    if (gate?.longRunning) {
+      this.logger.warn(
+        `停滞自动置阻塞跳过 taskId=${id}（长期值班任务，豁免巡检自动置阻塞）`,
+      );
+      return;
+    }
     const dto = await this.transition(id, 'block', 'system', {
       ...this.transitionOpts(id, 'block', text),
       actor: { type: ACTOR_TYPE.system, id: 'system' },
@@ -1363,7 +1375,7 @@ export class TasksService implements OnModuleInit {
   async remove(id: string): Promise<{ deleted: true; id: string }> {
     const task = await this.prisma.task.findUnique({
       where: { id },
-      select: { id: true, teamId: true, status: true },
+      select: { id: true, teamId: true, status: true, longRunning: true },
     });
     if (!task) {
       throw new NotFoundException({
@@ -1371,7 +1383,12 @@ export class TasksService implements OnModuleInit {
         message: '任务不存在',
       });
     }
-    if (task.status === 'in_progress' || task.status === 'pending_review') {
+    // 长期值班任务例外：其常态就是 in_progress（等人提问）。写成条件收窄而非
+    // `if (longRunning) return { deleted: true }`——后者会谎报删除成功却什么都没删，
+    // 调用方以为已清理、实际级联全未执行。
+    const deleting =
+      task.status === 'in_progress' || task.status === 'pending_review';
+    if (deleting && !task.longRunning) {
       throw new ConflictException({
         code: TASK_ERRORS.TASK_DELETE_BLOCKED,
         message: '任务执行中或待验收，不可删除',
@@ -1575,7 +1592,7 @@ export class TasksService implements OnModuleInit {
   ) {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { id: true, teamId: true },
+      select: { id: true, teamId: true, longRunning: true },
     });
     if (!task) {
       throw new NotFoundException({
@@ -1583,11 +1600,17 @@ export class TasksService implements OnModuleInit {
         message: '任务不存在',
       });
     }
-    if (action === 'accept' || action === 'archive') {
+    // 长期值班任务：Agent 不得把它推向终态。巡检提示词原文会引导 Agent「若全部工作完成，
+    // 调用 mark-pending-review 提交验收」，用户一句「今天值班结束」就会让它自己交差消失。
+    // 必须 403 而非静默跳过（静默 → Agent 无限重试）；人工路径不受此门禁影响。
+    const dutySubmitForbidden =
+      action === 'mark-pending-review' && task.longRunning;
+    if (action === 'accept' || action === 'archive' || dutySubmitForbidden) {
       throw new ForbiddenException({
         code: TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
-        message:
-          '仅人类用户可在管理界面验收完成/归档任务，Agent 不可调用 accept/archive；请向用户报告任务已就绪、等待人工验收，不要重复调用',
+        message: dutySubmitForbidden
+          ? '这是长期值班任务（常驻进行中、无终态），Agent 不可调用 mark-pending-review 提交验收；请向用户报告值班仍在进行，不要重复调用'
+          : '仅人类用户可在管理界面验收完成/归档任务，Agent 不可调用 accept/archive；请向用户报告任务已就绪、等待人工验收，不要重复调用',
       });
     }
     return this.transition(taskId, action, instanceId, {
