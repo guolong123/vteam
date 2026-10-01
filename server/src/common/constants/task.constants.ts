@@ -79,6 +79,8 @@ export const TASK_ERRORS = {
   TEAM_NOT_FOUND: 'TEAM_NOT_FOUND',
   TEAM_NOT_QUEUE_HEAD: 'TEAM_NOT_QUEUE_HEAD',
   TEAM_REQUIRED: 'TEAM_REQUIRED',
-  /** 删除前置校验：in_progress / pending_review 不可删（前者 worker 执行中会变孤儿，后者待人工验收，删除即丢评审态），409。 */
+  /** 删除前置校验：in_progress / pending_review 不可删（前者 worker 执行中会变孤儿，后者待人工验收，删除即丢评审态），409。
+   *  例外：`longRunning=true` 的长期值班任务豁免此拦截——其常态就是 in_progress（见
+   *  `TasksService.remove`）。 */
   TASK_DELETE_BLOCKED: 'TASK_DELETE_BLOCKED',
 } as const;

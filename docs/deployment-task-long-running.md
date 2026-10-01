@@ -19,6 +19,15 @@
 | 人工操作 | **完全不受影响**：`mark-pending-review` / `accept` / `archive` / `block` / `resume` 照旧可用 |
 | 删除 | 额外允许硬删 `in_progress` 状态的任务 |
 
+> 门禁只作用于 **agent 的终态动作**。agent 仍可调 `task_transition block` / `resume`，
+> 即它**能把值班任务推到 `blocked`**，而 `blocked` 任务不受巡检管辖、也没有停滞公告——
+> 需人工 `resume` 才恢复。这是有意保留的（`block` 非终态、且人工可逆），但值班群不会
+> 自己说「我卡住了」，请留意。
+>
+> 由此还有一条：硬删值班任务会连带删掉它的 `sessions` 行，但**不**停 worker、不关 SSE/
+> realtime。若删除时该任务正有活跃会话，worker 后续的状态写入会报 P2025 使该轮出错，
+> 且它仍会往团队群频道（频道保留、只解绑 taskId）继续输出。删前请确认任务处于静默状态。
+
 > ⚠️ **这是一刀切豁免，不是「更温和的看门狗」**。该任务真卡死时看门狗也不会自动阻塞，需人工巡看。选 `true` 前请确认这一点可接受。
 
 ---
@@ -94,9 +103,19 @@ npx prisma migrate resolve --rolled-back 20261001000000_task_long_running # 确�
 
 | 范围 | 操作 | 可逆性 |
 |---|---|---|
-| 只回滚标记（推荐） | `UPDATE tasks SET long_running = 0 WHERE id = '<值班任务 id>';` | 完全可逆，任务恢复受巡检管辖 |
+| 只回滚标记（推荐） | `UPDATE tasks SET long_running = 0 WHERE id = '<值班任务 id>';` | 值可逆，**但看门狗不会自动恢复**——见下方警告 |
 | 回滚代码 | 部署上一版 server 镜像 | 可逆；旧代码不读该列，多余列无害 |
 | 回滚列 | **不可逆** | 仓库无 down-migration 约定（`docs/tech-debt-rollback.md`），删列只能 dump-restore |
+
+> ⚠️ **清标记 ≠ 恢复看门狗管辖。** `TasksService.update()` 写 `longRunning` 时**不会**调用
+> `progression.register()`（`tasks.service.ts:701-736`），所以 `1 → 0` 这个方向没有重排钩子。
+> 清掉标记后，巡检行要等到下列任一条件才会重建：
+>
+> 1. **重启 server**（`restoreInProgressTasks` 在 `onModuleInit` 重建），或
+> 2. 该任务**重新进入 `in_progress`**（例如先 `block` 再 `resume`）。
+>
+> 在此之前该任务**不受停滞保护**，且界面上没有任何提示。做回滚时必须显式执行其中一步，
+> 否则等于用一个静默失效换掉一个显式告警。
 
 若因回滚标记导致任务被重新置阻塞：`POST /api/v1/tasks/<id>/resume`。
 
@@ -110,13 +129,39 @@ npx prisma migrate resolve --rolled-back 20261001000000_task_long_running # 确�
 
 **今天影响面小，只因值班团队恰好只有这一个任务**——这是本设计的使用前提。一旦有人往该团队加第二个任务即成活 bug。
 
-**修复（无需改代码）**：调用公开入口提升队首。
+#### ⚠️ 修复手段：无自助入口，需人工 SQL
 
-```bash
-POST /api/v1/teams/<teamId>/promote-next
+`TasksService.promoteNext(teamId)`（`tasks.service.ts:651`）虽是 `public`，但**既无 HTTP 路由、也无生产调用方**：
+
+- `grep -rn promote server/src --include='*.controller.ts'` → 零命中。`teams.controller.ts` 只暴露 `@Post(':id/queue')`（把 pending 任务追加进队）与 `@Delete(':id/queue/:taskId')`（取消排队），**没有 promote-next**。按 `POST /api/v1/teams/<teamId>/promote-next` 调用只会得到 404。
+- 生产路径上它只被 `accept`/`reject`/`archive` 三个迁移内部经 `promoteNextInTx` 间接调用（`tasks.service.ts:1126/1144/1189`）——而这正是本改动**没有**加到 `remove()` 的那一步。
+
+所以**没有「无需改代码」的 HTTP 修复路径**。确认孤儿后，在停机窗口内直接改库把队首拉起：
+
+```sql
+-- ① 看清现场
+SELECT id, current_task_id FROM teams WHERE id = '<teamId>';
+SELECT task_id, position FROM team_queues WHERE team_id = '<teamId>' ORDER BY position;
+
+-- ② 队首行提为 pending（current_task_id 为 NULL，故不会被顶掉）
+START TRANSACTION;
+UPDATE tasks SET status = 'pending'
+ WHERE id = (SELECT task_id FROM team_queues
+              WHERE team_id = '<teamId>' ORDER BY position LIMIT 1);
+UPDATE team_queues SET position = position - 1
+ WHERE team_id = '<teamId>' AND position > 1;
+DELETE FROM team_queues
+ WHERE team_id = '<teamId>'
+   AND task_id = (SELECT id FROM tasks WHERE status = 'pending' LIMIT 1);
+UPDATE teams SET current_task_id = (
+  SELECT id FROM tasks WHERE team_id = '<teamId>' AND status = 'pending' LIMIT 1
+) WHERE id = '<teamId>';
+COMMIT;
 ```
 
-**消除它**需要改 `remove()`（删完调一次 `promoteNext`）——那会给「不改队列逻辑」的红线开口子，故本 PR 不做。
+改完调 `POST /api/v1/tasks/<队首 id>/start` 拉起。**操作前先 `SELECT` 核对，`team_queues` 的 position 重排是本仓既有语义**（见 `promoteNextInTx` 的实现，`tasks.service.ts:560`），照抄其规则即可。
+
+**根治**需要改 `remove()`（删完调一次 `promoteNext`）**并**为它加 HTTP 路由——前者会给「不改队列逻辑」的红线开口子，后者超出本 PR 范围。故本 PR 不做，改以本文档 + 数据库操作兜底。
 
 另有一处影响有界的同类孤儿：`remove()` 也不删那条 `payload.taskId` 指向被删任务的 `progression_patrol` 触发器行。该行会经 `handleProgressionFire` 的 `!task → {expire:true}` 自毁，收窄后的启动清扫也会取消它（已删任务不是 `in_progress`），无需处理。
 
