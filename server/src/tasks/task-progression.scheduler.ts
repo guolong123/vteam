@@ -233,9 +233,18 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   async register(taskId: string): Promise<void> {
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { id: true, status: true, teamId: true },
+      select: { id: true, status: true, teamId: true, longRunning: true },
     });
     if (!task || task.status !== TASK_STATUS.in_progress) {
+      return;
+    }
+    // 执行点 (a) — 长期值班任务不排巡检。巡检的目的是把任务推向终态，而常驻任务没有终态；
+    // 「连续 N 轮无进展」对它是正常稳态（没人说话正说明它健康），不是异常。
+    // 此早退只挡新建；flag 翻转前已存在的遗留行靠 handleProgressionFire 的 {expire:true} 自毁。
+    if ((task as any).longRunning) {
+      this.logger.log(
+        `[progression] 跳过巡检注册 taskId=${taskId}（长期值班任务，豁免巡检）`,
+      );
       return;
     }
     const mainMemberId = await this.mainMemberOfTask(
@@ -521,9 +530,19 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
     }
     const task = await this.prisma.task.findUnique({
       where: { id: taskId },
-      select: { title: true, status: true, teamId: true },
+      select: { title: true, status: true, teamId: true, longRunning: true },
     });
     if (!task || task.status !== TASK_STATUS.in_progress) {
+      return { expire: true };
+    }
+    // 执行点 (b) — 长期值班任务：唯一的必经门禁。{expire:true} 让基座把该触发器行落
+    // cancelled（trigger.service.ts 的 expire 出口），故 flag 翻转前遗留的行也会自毁。
+    // ⚠️ 位置不可下移：runPatrol() 会叫醒 agent、quietStreak++ 会推进计数，两者都在
+    // 此门之后且都不抛异常——门放晚一行，豁免任务仍会被叫醒并被计入停滞。
+    if ((task as any).longRunning) {
+      this.logger.log(
+        `[progression] 巡检跳过 taskId=${taskId}（长期值班任务，豁免巡检并注销遗留触发器行）`,
+      );
       return { expire: true };
     }
     const mainMemberId = await this.mainMemberOfTask(
