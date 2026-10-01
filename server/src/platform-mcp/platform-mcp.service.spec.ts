@@ -6329,15 +6329,15 @@ describe('PlatformMcpService', () => {
       };
       const base = { selfInstanceId: 'tmm_1', title: 't' };
       expect(schema.safeParse(base).success).toBe(true);
-      expect(
-        schema.safeParse({ ...base, longRunning: true }).success,
-      ).toBe(true);
-      expect(
-        schema.safeParse({ ...base, longRunning: false }).success,
-      ).toBe(true);
-      expect(
-        schema.safeParse({ ...base, longRunning: 'yes' }).success,
-      ).toBe(false);
+      expect(schema.safeParse({ ...base, longRunning: true }).success).toBe(
+        true,
+      );
+      expect(schema.safeParse({ ...base, longRunning: false }).success).toBe(
+        true,
+      );
+      expect(schema.safeParse({ ...base, longRunning: 'yes' }).success).toBe(
+        false,
+      );
     });
 
     it('5 工具接受 teamId-only，双空亦通过 parse（回填由服务端会话完成）', () => {
