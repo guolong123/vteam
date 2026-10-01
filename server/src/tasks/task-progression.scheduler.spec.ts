@@ -774,6 +774,79 @@ describe('TaskProgressionScheduler', () => {
     });
   });
 
+  describe('长期值班任务豁免（Task.longRunning）', () => {
+    const key = buildProgressionDedupKey('t_1');
+    const fireCtx = (overrides: Record<string, unknown> = {}) => ({
+      id: 'tmr_1',
+      kind: TRIGGER_KIND.PROGRESSION_PATROL,
+      fireCount: 2,
+      payload: { taskId: 't_1' },
+      ...overrides,
+    });
+    const handlerOf = async () => {
+      prisma.task.findMany.mockResolvedValue([]);
+      await scheduler.onModuleInit();
+      return triggers.registerHandler.mock.calls[0][1];
+    };
+
+    it('执行点 (a)：register 不排期 —— 无触发器行、isRegistered 为 false', async () => {
+      prisma.task.findUnique.mockResolvedValue(
+        inProgressTask({ longRunning: true }),
+      );
+      allowMainMember();
+      await scheduler.register('t_1');
+      expect(triggers.schedule).not.toHaveBeenCalled();
+      await expect(scheduler.isRegistered('t_1')).resolves.toBe(false);
+    });
+
+    it('执行点 (b)：flag 翻转当刻已有 quietStreak=2 的遗留行 → 自毁且不叫醒、不推进计数、无停滞回调', async () => {
+      // 用 quietStreak=2 而非 0：只有贴着上限的那一行才会真的被 systemBlock 置阻塞，
+      // 简化为 0 会让本用例失去意义（flag 翻转的竞态窗口正是这里）。
+      prisma.task.findUnique.mockResolvedValue(
+        inProgressTask({ longRunning: true }),
+      );
+      allowMainMember();
+      const stalled: Array<{ taskId: string; reason: string }> = [];
+      scheduler.onStallDetected((taskId, reason) =>
+        stalled.push({ taskId, reason }),
+      );
+      const handler = await handlerOf();
+      seedPatrolRow('t_1', {
+        status: TRIGGER_STATUS.PENDING,
+        fireCount: 2,
+        maxFires: 6,
+        payload: { taskId: 't_1', quietStreak: 2 },
+      });
+
+      const out = await handler(fireCtx({ payload: { ...rows[key].payload } }));
+
+      expect(out).toEqual({ expire: true });
+      expect(workerDispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+      expect(rows[key].payload.quietStreak).toBe(2);
+      expect(stalled).toHaveLength(0);
+    });
+
+    it('负向对照：同 seed 但非 longRunning → 仍叫醒、quietStreak 推进到 3、返回非 expire', async () => {
+      // 挡住「对所有任务都返回 {expire:true}」的实现：那种实现能过上面全部正向断言，
+      // 却会把全平台看门狗悄悄打死。
+      prisma.task.findUnique.mockResolvedValue(inProgressTask());
+      allowMainMember();
+      const handler = await handlerOf();
+      seedPatrolRow('t_1', {
+        status: TRIGGER_STATUS.PENDING,
+        fireCount: 2,
+        maxFires: 6,
+        payload: { taskId: 't_1', quietStreak: 2 },
+      });
+
+      const out = await handler(fireCtx({ payload: { ...rows[key].payload } }));
+
+      expect(out).toBeUndefined();
+      expect(workerDispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+      expect(rows[key].payload.quietStreak).toBe(3);
+    });
+  });
+
   describe('postStallNoticeToTeamGroup（停滞群公告）', () => {
     it('团队群频道存在 → 落 system 消息 + 广播', async () => {
       prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_group' });
