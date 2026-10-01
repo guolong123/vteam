@@ -106,6 +106,7 @@ export const PAGES: PageTestidRef[] = [
       "team-option",
       "team-member-preview-item",
       "reset-after-complete-toggle",
+      "long-running-toggle",
       "create-task-button",
       "create-hint",
       "create-success",

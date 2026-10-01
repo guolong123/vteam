@@ -5,8 +5,8 @@
  * 任务创建页（vteam-team-refactor Task 12）
  * =============================================
  * - 左栏任务表单：标题* / 描述 / 背景文档上传 / 优先级（同原型；托管模式为团队级，不在此设置）
- * - 右栏团队选择：团队下拉（GET /teams）+ 选中团队成员预览（只读）+ resetAfterComplete 勾选
- * - 提交：POST /tasks {teamId, resetAfterComplete?, title, description, priority, backgroundDocs}
+ * - 右栏团队选择：团队下拉（GET /teams）+ 选中团队成员预览（只读）+ resetAfterComplete / longRunning 勾选
+ * - 提交：POST /tasks {teamId, resetAfterComplete?, longRunning?, title, description, priority, backgroundDocs}
  * - 移除 agents / 主 Agent 面板（团队域已全局复用）
  */
 import { useMemo, useState, useRef } from "react";
@@ -131,11 +131,13 @@ function TeamSelectPanel({
   teams, teamsLoading, teamsError, onRetry,
   selectedTeamId, onSelectTeam, selectedTeam,
   resetAfterComplete, onResetChange,
+  longRunning, onLongRunningChange,
   teamError, submitting, created, createError, onCreate,
 }: {
   teams: TeamDto[]; teamsLoading: boolean; teamsError: boolean; onRetry: () => void;
   selectedTeamId: string | null; onSelectTeam: (id: string) => void; selectedTeam: TeamDto | null;
   resetAfterComplete: boolean; onResetChange: (v: boolean) => void;
+  longRunning: boolean; onLongRunningChange: (v: boolean) => void;
   teamError: string | null; submitting: boolean; created: boolean; createError: string | null; onCreate: () => void;
 }) {
   const toRole = (r: string | null): RoleKey => (r && (ROLE_KEYS as readonly string[]).includes(r) ? r as RoleKey : "developer");
@@ -214,6 +216,15 @@ function TeamSelectPanel({
             <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>覆盖团队 reuseSession，为下一任务开新会话</span>
           </span>
         </label>
+
+        {/* longRunning 勾选 */}
+        <label style={{ display: "flex", alignItems: "center", gap: space.md, cursor: "pointer", padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}` }}>
+          <input type="checkbox" data-testid="long-running-toggle" checked={longRunning} onChange={(e) => onLongRunningChange(e.target.checked)} style={{ width: 16, height: 16, accentColor: "#0D9488" }} />
+          <span style={{ display: "flex", flexDirection: "column" }}>
+            <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>长期值班任务（常驻进行中、豁免巡检）</span>
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>常驻进行中、无终态；不被进度巡检判停</span>
+          </span>
+        </label>
       </div>
 
       <button type="button" data-testid="create-task-button" disabled={submitting} onClick={onCreate} style={{ width: "100%", padding: `${space.md + 2}px ${space.lg}px`, borderRadius: radius.md, border: "none", backgroundColor: "#0D9488", color: "#FFFFFF", fontSize: fontSize.lg, fontWeight: 600, cursor: submitting ? "default" : "pointer", opacity: submitting ? 0.7 : 1, boxShadow: "0 6px 16px rgba(13,148,136,.3)", fontFamily: fontFamily.body }}>
@@ -249,6 +260,7 @@ export default function TaskCreatePage() {
 
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(() => getInitialTeamId());
   const [resetAfterComplete, setResetAfterComplete] = useState(false);
+  const [longRunning, setLongRunning] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
   const [teamError, setTeamError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -283,6 +295,7 @@ export default function TaskCreatePage() {
         backgroundDocs: backgroundDocs.map((d) => ({ name: d.name, url: d.url })),
         teamId: selectedTeamId,
         ...(resetAfterComplete ? { resetAfterComplete: true } : {}),
+        ...(longRunning ? { longRunning: true } : {}),
       });
       setCreated(true);
       const taskId = res.id;
@@ -340,6 +353,8 @@ export default function TaskCreatePage() {
           selectedTeam={selectedTeam}
           resetAfterComplete={resetAfterComplete}
           onResetChange={setResetAfterComplete}
+          longRunning={longRunning}
+          onLongRunningChange={setLongRunning}
           teamError={teamError}
           submitting={submitting}
           created={created}

@@ -39,6 +39,7 @@ export interface TaskDetail {
   instances: TaskInstance[];
   teamId: string | null;
   resetAfterComplete?: boolean | null;
+  longRunning?: boolean | null;
   createdBy: string;
   createdAt: string;
   startedAt: string | null;
