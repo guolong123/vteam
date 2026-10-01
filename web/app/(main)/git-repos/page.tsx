@@ -60,6 +60,18 @@ function AuthTypeBadge({ authType }: { authType: GitRepoView["authType"] | GitCr
 
 const GRANT_VISIBLE_LIMIT = 3;
 
+/** REPO_ROW_MIN_WIDTH 必须 ≥ ΣREPO_COLS + 72(gap) + 32(padding) + 3 个 chip + 「+N」的固有宽度（约 300px），否则窄屏下数据行被内容撑得比表头宽、列错位。改列宽需同步重算。 */
+const REPO_COLS = {
+  url: { width: 200, flexShrink: 0 },
+  auth: { width: 68, flexShrink: 0 },
+  cred: { width: 100, flexShrink: 0 },
+  fingerprint: { width: 104, flexShrink: 0 },
+  status: { width: 76, flexShrink: 0 },
+  actions: { width: 140, flexShrink: 0 },
+} as const;
+const REPO_ROW_MIN_WIDTH = 1120;
+const GRANTS_MIN_WIDTH = 260;
+
 function matchGrant(g: GitGrantView, agentId: string | null, writeOnly: boolean) {
   if (agentId !== null && g.agentId !== agentId) return false;
   if (writeOnly && g.permission !== "write") return false;
@@ -164,14 +176,14 @@ function StatusBadge() {
 
 function GitRepoRow({ repo, grants, isAdmin, onConfigure, onDelete }: { repo: GitRepoView; grants: GitGrantView[]; isAdmin: boolean; onConfigure: (repo: GitRepoView) => void; onDelete: (repo: GitRepoView) => void }) {
   return (
-    <div data-testid="git-repo-item" data-repo-id={repo.id} data-auth-type={repo.authType} className="gr-repo-row" style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
-      <span data-testid="git-repo-url" data-repo-url={repo.repoUrl} title={repo.repoUrl} style={{ width: 240, flexShrink: 0, fontSize: fontSize.md, fontWeight: 600, color: neutral[800], fontFamily: fontFamily.mono, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.repoUrl}</span>
-      <span style={{ width: 76, flexShrink: 0 }}><AuthTypeBadge authType={repo.authType} /></span>
-      <span data-testid="git-repo-credential" title={repo.credentialName ?? repo.credentialId} style={{ width: 120, flexShrink: 0, fontSize: fontSize.sm, color: neutral[600], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.credentialName ?? repo.credentialId}</span>
-      <span data-testid="git-repo-fingerprint" data-fingerprint={repo.fingerprint ?? ""} style={{ width: 120, flexShrink: 0, fontSize: fontSize.sm, fontFamily: fontFamily.mono, color: repo.fingerprint ? neutral[500] : neutral[300], letterSpacing: "0.02em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.fingerprint ?? "—"}</span>
-      <div style={{ flex: 1, minWidth: 0 }}><GrantTags grants={grants} /></div>
-      <span style={{ width: 84, flexShrink: 0 }}><StatusBadge /></span>
-      <div style={{ width: 150, flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: space.sm }}>
+    <div data-testid="git-repo-item" data-repo-id={repo.id} data-auth-type={repo.authType} className="gr-repo-row" style={{ display: "flex", alignItems: "center", gap: space.md, minWidth: REPO_ROW_MIN_WIDTH, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
+      <span data-testid="git-repo-url" data-repo-url={repo.repoUrl} title={repo.repoUrl} style={{ ...REPO_COLS.url, fontSize: fontSize.md, fontWeight: 600, color: neutral[800], fontFamily: fontFamily.mono, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.repoUrl}</span>
+      <span style={REPO_COLS.auth}><AuthTypeBadge authType={repo.authType} /></span>
+      <span data-testid="git-repo-credential" title={repo.credentialName ?? repo.credentialId} style={{ ...REPO_COLS.cred, fontSize: fontSize.sm, color: neutral[600], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.credentialName ?? repo.credentialId}</span>
+      <span data-testid="git-repo-fingerprint" data-fingerprint={repo.fingerprint ?? ""} style={{ ...REPO_COLS.fingerprint, fontSize: fontSize.sm, fontFamily: fontFamily.mono, color: repo.fingerprint ? neutral[500] : neutral[300], letterSpacing: "0.02em", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{repo.fingerprint ?? "—"}</span>
+      <div style={{ flex: 1, minWidth: GRANTS_MIN_WIDTH }}><GrantTags grants={grants} /></div>
+      <span style={REPO_COLS.status}><StatusBadge /></span>
+      <div style={{ ...REPO_COLS.actions, display: "flex", justifyContent: "flex-end", gap: space.sm }}>
         {isAdmin && (<><ActionButton testid="git-repo-configure" label="配置" primary onClick={() => onConfigure(repo)} /><ActionButton testid="git-repo-delete" label="删除" onClick={() => onDelete(repo)} /></>)}
       </div>
     </div>
@@ -180,11 +192,11 @@ function GitRepoRow({ repo, grants, isAdmin, onConfigure, onDelete }: { repo: Gi
 
 function CredentialRow({ cred, isAdmin, onEdit, onDelete }: { cred: GitCredentialView; isAdmin: boolean; onEdit: (c: GitCredentialView) => void; onDelete: (c: GitCredentialView) => void }) {
   return (
-    <div data-testid="git-credential-item" data-credential-id={cred.id} data-auth-type={cred.authType} className="gr-repo-row" style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.lg}px ${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
+    <div data-testid="git-credential-item" data-credential-id={cred.id} data-auth-type={cred.authType} className="gr-repo-row" style={{ display: "flex", alignItems: "center", gap: space.lg, minWidth: 1000, padding: `${space.lg}px ${space.xl}px`, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, ...baseFont }}>
       <span data-testid="git-credential-name" style={{ width: 200, flexShrink: 0, fontSize: fontSize.md, fontWeight: 600, color: neutral[800], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cred.name}</span>
       <span style={{ width: 84, flexShrink: 0 }}><AuthTypeBadge authType={cred.authType} /></span>
       <span data-testid="git-credential-fingerprint" style={{ width: 160, flexShrink: 0, fontSize: fontSize.sm, fontFamily: fontFamily.mono, color: cred.fingerprint ? neutral[500] : neutral[300] }}>{cred.fingerprint ?? "—"}</span>
-      <span style={{ flex: 1, minWidth: 0, fontSize: fontSize.sm, color: neutral[500], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cred.description ?? "—"}</span>
+      <span style={{ flex: 1, minWidth: 120, fontSize: fontSize.sm, color: neutral[500], whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{cred.description ?? "—"}</span>
       <span style={{ width: 88, flexShrink: 0 }}><StatusBadge /></span>
       <div style={{ width: 160, flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: space.sm }}>
         {isAdmin && (<><ActionButton testid="git-credential-edit" label="编辑" primary onClick={() => onEdit(cred)} /><ActionButton testid="git-credential-delete" label="删除" onClick={() => onDelete(cred)} /></>)}
@@ -477,9 +489,9 @@ export default function GitReposPage() {
 
           {tab === "repos" ? (
             reposQuery.isPending ? <div data-testid="git-repos-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div> : reposQuery.isError ? <div data-testid="git-repos-error" role="alert" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: space.md, padding: space.xl }}><div style={{ color: "#DC2626" }}>{isApiError(reposQuery.error) ? reposQuery.error.message : "加载失败"}</div><button data-testid="git-repos-retry" onClick={() => reposQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)" }}>重试</button></div> : (
-              <div data-testid="git-repos-list" style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.md }}>
+              <div data-testid="git-repos-list" style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.md, overflowX: "auto" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.md}px` }}><span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>已配置仓库</span><span style={{ fontSize: fontSize.xs, color: neutral[400] }}>凭证按仓库粒度复用 · 授权 Agent 可 clone/pull/push</span></div>
-                <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.lg}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}><span style={{ width: 240, flexShrink: 0 }}>仓库地址</span><span style={{ width: 76, flexShrink: 0 }}>认证</span><span style={{ width: 120, flexShrink: 0 }}>凭证</span><span style={{ width: 120, flexShrink: 0 }}>指纹</span><span style={{ flex: 1 }}>授权 Agent</span><span style={{ width: 84, flexShrink: 0 }}>状态</span><span style={{ width: 150, flexShrink: 0, textAlign: "right" }}>操作</span></div>
+                <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.md, minWidth: REPO_ROW_MIN_WIDTH, padding: `${space.sm}px ${space.lg}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}><span style={REPO_COLS.url}>仓库地址</span><span style={REPO_COLS.auth}>认证</span><span style={REPO_COLS.cred}>凭证</span><span style={REPO_COLS.fingerprint}>指纹</span><span style={{ flex: 1, minWidth: GRANTS_MIN_WIDTH }}>授权 Agent</span><span style={REPO_COLS.status}>状态</span><span style={{ ...REPO_COLS.actions, textAlign: "right" }}>操作</span></div>
                 {filteredRepos.map((repo) => (<GitRepoRow key={repo.id} repo={repo} grants={grantsFor(repo)} isAdmin={isAdmin} onConfigure={(r) => { setModalError(null); setRepoModal({ mode: "edit", repo: r }); }} onDelete={(r) => { setModalError(null); setDeleteTarget(r); }} />))}
                 {repos.length === 0 && <div style={{ padding: space.xxl, textAlign: "center", fontSize: fontSize.md, color: neutral[400] }}>暂无仓库，{isAdmin ? "点右上角“新增仓库”并选择已有凭证" : "请管理员配置"}</div>}
                 {repos.length > 0 && filteredRepos.length === 0 && (
@@ -492,9 +504,9 @@ export default function GitReposPage() {
             )
           ) : (
             credsQuery.isPending ? <div data-testid="git-credentials-loading" style={{ fontSize: fontSize.md, color: neutral[400], padding: `${space.xxl}px 0`, textAlign: "center" }}>加载中…</div> : credsQuery.isError ? <div data-testid="git-credentials-error" role="alert" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: space.md, padding: space.xl }}><div style={{ color: "#DC2626" }}>{isApiError(credsQuery.error) ? credsQuery.error.message : "加载失败"}</div><button data-testid="git-credentials-retry" onClick={() => credsQuery.refetch()} style={{ padding: `${space.sm}px ${space.lg}px`, borderRadius: radius.md, border: `1px solid ${neutral[200]}` }}>重试</button></div> : (
-              <div data-testid="git-credentials-list" style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.md }}>
+              <div data-testid="git-credentials-list" style={{ display: "flex", flexDirection: "column", gap: space.sm, padding: space.md, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.md, overflowX: "auto" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: space.md, padding: `${space.sm}px ${space.md}px` }}><span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[900] }}>凭证池</span><span style={{ fontSize: fontSize.xs, color: neutral[400] }}>一个凭证可关联多仓库 · 名称全局唯一</span></div>
-                <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.lg, padding: `${space.sm}px ${space.xl}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}><span style={{ width: 200, flexShrink: 0 }}>凭证名称</span><span style={{ width: 84, flexShrink: 0 }}>认证</span><span style={{ width: 160, flexShrink: 0 }}>指纹</span><span style={{ flex: 1 }}>描述</span><span style={{ width: 88, flexShrink: 0 }}>状态</span><span style={{ width: 160, flexShrink: 0, textAlign: "right" }}>操作</span></div>
+                <div aria-hidden style={{ display: "flex", alignItems: "center", gap: space.lg, minWidth: 1000, padding: `${space.sm}px ${space.xl}px`, fontSize: fontSize.xs, fontWeight: 600, color: neutral[400] }}><span style={{ width: 200, flexShrink: 0 }}>凭证名称</span><span style={{ width: 84, flexShrink: 0 }}>认证</span><span style={{ width: 160, flexShrink: 0 }}>指纹</span><span style={{ flex: 1, minWidth: 120 }}>描述</span><span style={{ width: 88, flexShrink: 0 }}>状态</span><span style={{ width: 160, flexShrink: 0, textAlign: "right" }}>操作</span></div>
                 {credentials.map((c) => (<CredentialRow key={c.id} cred={c} isAdmin={isAdmin} onEdit={(cred) => { setModalError(null); setCredModal({ mode: "edit", cred }); }} onDelete={(cred) => { setModalError(null); setDeleteCredTarget(cred); }} />))}
                 {credentials.length === 0 && <div style={{ padding: space.xxl, textAlign: "center", fontSize: fontSize.md, color: neutral[400] }}>暂无凭证，{isAdmin ? "点右上角“新增凭证”" : "请管理员创建"}</div>}
               </div>
