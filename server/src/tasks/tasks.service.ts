@@ -79,6 +79,7 @@ type TaskRow = {
   status: string;
   backgroundDocs: Prisma.JsonValue | null;
   resetAfterComplete?: boolean | null;
+  longRunning?: boolean | null;
   teamId?: string | null;
   createdBy: string;
   createdAt: Date;
@@ -412,6 +413,7 @@ export class TasksService implements OnModuleInit {
               backgroundDocs: (dto.backgroundDocs ??
                 []) as Prisma.InputJsonValue,
               resetAfterComplete: (dto as any).resetAfterComplete ?? false,
+              longRunning: (dto as any).longRunning ?? false,
               createdBy: opts.createdBy,
               version: 0,
             },
@@ -722,6 +724,9 @@ export class TasksService implements OnModuleInit {
     }
     if ((dto as any).resetAfterComplete !== undefined) {
       data.resetAfterComplete = (dto as any).resetAfterComplete;
+    }
+    if ((dto as any).longRunning !== undefined) {
+      data.longRunning = (dto as any).longRunning;
     }
     const updated = await this.prisma.task.update({
       where: { id },
@@ -1996,6 +2001,7 @@ export class TasksService implements OnModuleInit {
       mainAgentMemberId: mainMemberId,
       backgroundDocs: task.backgroundDocs ?? [],
       resetAfterComplete: Boolean(task.resetAfterComplete),
+      longRunning: Boolean(task.longRunning),
       teamId: (task as any).teamId ?? null,
       teamAgentIds: members.map((m) => m.agentId),
       instances,

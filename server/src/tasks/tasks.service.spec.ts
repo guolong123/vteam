@@ -614,6 +614,31 @@ describe('TasksService', () => {
       );
     });
 
+    it('longRunning 落库：create 路径原样透传（缺省 false）', async () => {
+      const taskId = 't_0000000001';
+      const tx = setupTxIdle(taskId);
+      idGen.nextId
+        .mockResolvedValueOnce(taskId)
+        .mockResolvedValueOnce('c_0000000001')
+        .mockResolvedValueOnce('te_0000000001');
+
+      await service.create(userId, {
+        title: '值班任务',
+        teamId,
+        longRunning: true,
+      } as any);
+
+      expect(tx.task.create.mock.calls[0][0].data).toMatchObject({
+        longRunning: true,
+      });
+
+      const tx2 = setupTxIdle(taskId);
+      await service.create(userId, { title: '普通任务', teamId } as any);
+      expect(tx2.task.create.mock.calls[0][0].data).toMatchObject({
+        longRunning: false,
+      });
+    });
+
     it('团队主成员变化时创建任务返回团队派生身份', async () => {
       const taskId = 't_0000000003';
       const tx = setupTxIdle(taskId);
@@ -1104,6 +1129,30 @@ describe('TasksService', () => {
       );
     });
 
+    it('longRunning 落库：createByAgent 与 create 共用 createTaskInternal，同样透传', async () => {
+      (prisma.teamUserMember as any).findMany = jest.fn().mockResolvedValue([
+        { userId: 'u_owner', role: 'owner' },
+      ]);
+      const { captured } = setupAgentTx();
+      prisma.task.findUnique.mockResolvedValue(
+        row({ id: 't_0000000001', teamId, status: 'pending' }) as any,
+      );
+
+      await service.createByAgent('tmm_caller_1', {
+        title: 'agent 值班任务',
+        teamId,
+        longRunning: true,
+      } as any);
+      expect(captured[0].longRunning).toBe(true);
+
+      const { captured: captured2 } = setupAgentTx();
+      await service.createByAgent('tmm_caller_1', {
+        title: 'agent 普通任务',
+        teamId,
+      } as any);
+      expect(captured2[0].longRunning).toBe(false);
+    });
+
     it('teamId 缺失 → 400 TEAM_REQUIRED（不触达成员查询）', async () => {
       const findMany = jest.fn();
       (prisma.teamUserMember as any).findMany = findMany;
@@ -1414,6 +1463,28 @@ describe('TasksService', () => {
       expect(def.resetAfterComplete).toBe(false);
     });
 
+    it('详情 DTO 暴露 longRunning：显式设置与入参一致，未设置缺省 false', async () => {
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        mainAgentMemberId: null,
+      });
+      prisma.teamMember.findMany.mockResolvedValue([]);
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001', longRunning: true }),
+      );
+      expect(await service.findOne('t_0000000001')).toMatchObject({
+        longRunning: true,
+      });
+
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001' }),
+      );
+      const def = await service.findOne('t_0000000001');
+      expect(def.longRunning).toBe(false);
+    });
+
     it('任务不存在 → 404 TASK_NOT_FOUND', async () => {
       prisma.task.findUnique.mockResolvedValue(null);
 
@@ -1455,6 +1526,32 @@ describe('TasksService', () => {
         data: { backgroundDocs: [{ name: '新需求文档.md' }] },
       });
       expect(result.backgroundDocs).toEqual([{ name: '新需求文档.md' }]);
+    });
+
+    it('longRunning 未传（undefined）→ 不进 data：不得用 false 覆盖既有 true', async () => {
+      prisma.task.findUnique.mockResolvedValue(row({ longRunning: true }));
+      prisma.task.update.mockResolvedValue(row({ longRunning: true }));
+
+      await service.update('t_0000000001', { title: 'x' } as any);
+
+      const data = prisma.task.update.mock.calls[0][0].data;
+      expect(data).not.toHaveProperty('longRunning');
+    });
+
+    it('longRunning 显式传 true/false → 进 data 并原样落库（true 可被 false 关掉）', async () => {
+      prisma.task.findUnique.mockResolvedValue(row());
+
+      prisma.task.update.mockResolvedValue(row({ longRunning: true }));
+      await service.update('t_0000000001', { longRunning: true } as any);
+      expect(prisma.task.update.mock.calls[0][0].data).toMatchObject({
+        longRunning: true,
+      });
+
+      prisma.task.update.mockResolvedValue(row({ longRunning: false }));
+      await service.update('t_0000000001', { longRunning: false } as any);
+      expect(prisma.task.update.mock.calls[1][0].data).toMatchObject({
+        longRunning: false,
+      });
     });
   });
 

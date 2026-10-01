@@ -47,4 +47,12 @@ export class UpdateTaskDto {
   @IsOptional()
   @IsBoolean()
   resetAfterComplete?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      '长期值班/常驻任务：豁免进度巡检、Agent 不得提交验收；人工完成通道不受影响',
+  })
+  @IsOptional()
+  @IsBoolean()
+  longRunning?: boolean;
 }
