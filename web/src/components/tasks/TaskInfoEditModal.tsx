@@ -57,6 +57,7 @@ export function TaskInfoEditModal({
 }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
+  const [longRunning, setLongRunning] = useState(Boolean(task.longRunning));
   const [docs, setDocs] = useState<BackgroundDocItem[]>(() =>
     parseBackgroundDocs(task.backgroundDocs),
   );
@@ -69,6 +70,7 @@ export function TaskInfoEditModal({
     if (!open) return;
     setTitle(task.title);
     setDescription(task.description ?? "");
+    setLongRunning(Boolean(task.longRunning));
     setDocs(parseBackgroundDocs(task.backgroundDocs));
     setFormError(null);
     setUploadError(null);
@@ -99,9 +101,9 @@ export function TaskInfoEditModal({
       setUploadError(isApiError(err) ? err.message : "文档上传失败，请稍后重试"),
   });
 
-  // 保存：PATCH /tasks/:id {title, description, backgroundDocs}
+  // 保存：PATCH /tasks/:id {title, description, backgroundDocs, longRunning}
   const saveMutation = useMutation({
-    mutationFn: (payload: { title: string; description: string; backgroundDocs: BackgroundDocItem[] }) =>
+    mutationFn: (payload: { title: string; description: string; backgroundDocs: BackgroundDocItem[]; longRunning: boolean }) =>
       api.patch<TaskDetail>(`/tasks/${task.id}`, payload),
     onSuccess: () => {
       onSaved();
@@ -123,10 +125,13 @@ export function TaskInfoEditModal({
       return;
     }
     setFormError(null);
+    // longRunning 必须显式传 true/false，不能沿用新建表单的「未勾选则省略」：
+    // 省略等于「不改动」，那样取消勾选就不会生效。
     saveMutation.mutate({
       title: title.trim(),
       description: description.trim(),
       backgroundDocs: docs,
+      longRunning,
     });
   };
 
@@ -196,7 +201,7 @@ export function TaskInfoEditModal({
             编辑任务信息
           </div>
           <div style={{ fontSize: fontSize.sm, color: neutral[400], marginTop: space.xs }}>
-            修改任务标题 / 描述 / 背景文档，保存后任务详情即时刷新
+            修改任务标题 / 描述 / 背景文档 / 长期值班标记，保存后任务详情即时刷新
           </div>
         </div>
 
@@ -222,6 +227,37 @@ export function TaskInfoEditModal({
             onChange={(e) => setDescription(e.target.value)}
             style={{ ...inputBase, resize: "vertical", lineHeight: 1.6 }}
           />
+        </label>
+
+        {/* 长期值班任务开关：与新建表单的同名勾选保持一致 */}
+        <label
+          data-testid="task-edit-long-running-label"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: space.md,
+            cursor: "pointer",
+            padding: `${space.sm}px ${space.md}px`,
+            borderRadius: radius.md,
+            backgroundColor: neutral[50],
+            border: `1px solid ${neutral[200]}`,
+          }}
+        >
+          <input
+            type="checkbox"
+            data-testid="task-edit-long-running-toggle"
+            checked={longRunning}
+            onChange={(e) => setLongRunning(e.target.checked)}
+            style={{ width: 16, height: 16, accentColor: "#0D9488" }}
+          />
+          <span style={{ display: "flex", flexDirection: "column" }}>
+            <span style={{ fontSize: fontSize.md, fontWeight: 600, color: neutral[800] }}>
+              长期值班任务
+            </span>
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              常驻进行中、无终态：不被进度巡检判停，Agent 不可提交验收；人工完成与删除不受影响
+            </span>
+          </span>
         </label>
 
         {/* 背景文档：已有列表 + 上传 */}

@@ -107,15 +107,14 @@ npx prisma migrate resolve --rolled-back 20261001000000_task_long_running # 确�
 | 回滚代码 | 部署上一版 server 镜像 | 可逆；旧代码不读该列，多余列无害 |
 | 回滚列 | **不可逆** | 仓库无 down-migration 约定（`docs/tech-debt-rollback.md`），删列只能 dump-restore |
 
-> ⚠️ **清标记 ≠ 恢复看门狗管辖。** `TasksService.update()` 写 `longRunning` 时**不会**调用
-> `progression.register()`（`tasks.service.ts:701-736`），所以 `1 → 0` 这个方向没有重排钩子。
-> 清掉标记后，巡检行要等到下列任一条件才会重建：
+> **改标记会同步巡检排期。** `TasksService.update()`（`tasks.service.ts:724-745`）在
+> `longRunning` **取值翻转**时联动巡检：翻 true → `unregister()`（立即注销遗留巡检行）；
+> 翻 false 且任务 `in_progress` → `register()`（**看门狗当场恢复**）。取值未翻转则不动排期，
+> 所以改标题这类无关 PATCH 不会产生多余的排期写。
 >
-> 1. **重启 server**（`restoreInProgressTasks` 在 `onModuleInit` 重建），或
-> 2. 该任务**重新进入 `in_progress`**（例如先 `block` 再 `resume`）。
->
-> 在此之前该任务**不受停滞保护**，且界面上没有任何提示。做回滚时必须显式执行其中一步，
-> 否则等于用一个静默失效换掉一个显式告警。
+> ⚠️ 该联动**只经 `PATCH /tasks/:id` 生效**。用 SQL 直接改 `long_running` 绕过它时，排期不会
+> 跟着变：`1 → 0` 需重启 server 或让任务重新进入 `in_progress`；`0 → 1` 最多等一个巡检间隔
+> （10min）由 `{expire:true}` 收敛。**上线请走 API 或界面开关，不要直接 UPDATE。**
 
 若因回滚标记导致任务被重新置阻塞：`POST /api/v1/tasks/<id>/resume`。
 
@@ -171,11 +170,14 @@ COMMIT;
 
 这是刻意的：`status` / `title` / `priority` 都推不出「常驻值班」，而错标 `true` 会永久关掉真任务的停滞保护、且不可逆。
 
-### L3 — 改标记不主动注销遗留巡检行
+### L3 — SQL 直改标记绕过巡检联动（API / 界面操作不受影响）
 
-`longRunning` 翻 true 时**不会**立刻取消已存在的 `progression_patrol` 触发器行。该行会在下次到期时被 `handleProgressionFire` 的 `{expire:true}` 自毁——**最长一个巡检间隔（10min）**。
+经 `PATCH /tasks/:id` 或界面开关改标记时，`update()` 会联动巡检（见 §四）：翻 true 立即
+`unregister()`，翻 false 且任务在跑则当场 `register()`。**因此本局限只针对直接写 SQL 的
+场景**——那种改法绕过联动，`0 → 1` 最多等一个巡检间隔（10min）由 `handleProgressionFire`
+的 `{expire:true}` 收敛，`1 → 0` 则需重启 server。
 
-急需立即生效时手工取消：
+若确需手工取消遗留巡检行：
 
 ```sql
 UPDATE triggers SET status = 'cancelled'
