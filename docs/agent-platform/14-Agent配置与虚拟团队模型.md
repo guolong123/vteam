@@ -201,7 +201,7 @@ Agent 是平台中的 AI 协作者，每名 Agent 是一个可独立配置、可
 
 | 维度 | 约定 | 依据 |
 |------|------|------|
-| 归属 | `POST /tasks` `{teamId!, title!, resetAfterComplete?}`；`teamId` 必填 | 09 §3.4，28 §3 |
+| 归属 | `POST /tasks` `{teamId!, title!, longRunning?, resetAfterComplete?}`；`teamId` 必填 | 09 §3.4，28 §3 |
 | 串行 | 一团队一次仅一任务进行中（`teams.current_task_id` 指队首）；其余入 `team_queues` 按 `position` 1..N FIFO 排队，状态 `queued` | 28 §3 |
 | 入队 | 团队空闲（`current_task_id` NULL）→ 任务 `pending` 并设 `current_task_id`；忙时 → `queued` + `team_queues` 追加（`MAX(position)+1`，`FOR UPDATE` 行锁 + `version` CAS） | 28 §3 |
 | 晋升 | `accept`/`archive`/`reject` 后事务内 `promoteNextInTx`：队首 `queued→pending`、删队首 `team_queues`、重排剩余 `position` 1..N、`current_task_id` 指向新队首或 NULL（空闲） | 28 §3 |
@@ -278,7 +278,7 @@ flowchart LR
 | 群聊 @ 触发 | 分派到该实例该任务会话 | FR-14/37，28 §4 |
 | 私聊（POST /dm-channels） | 按 `team_member_id` 复用，与群聊**历史可跨任务保留**（`reuseSession` 时） | FR-14，28 §4 |
 | 任务启动私信主 Agent | 主实例的任务会话（启动消息作为会话首条上下文） | FR-07 / 13 §4.2 |
-| 跨任务复用 | `teams.reuseSession=true` 且 `tasks.reset_after_complete=false` 时，`sessions.team_member_id` 同行延续（`instanceRef` 保留）；任一为 false 时完成/归档同事务内批量 reset（`POST /teams/:id/reset-sessions` 同逻辑，幂等） | 28 §4 |
+| 跨任务复用 | `teams.reuseSession=true` 且 `tasks.reset_after_complete=false` 时，`sessions.team_member_id` 同行延续（`instanceRef` 保留）；任一为 false 时完成/归档同事务内批量 reset（`POST /teams/:id/reset-sessions` 同逻辑，幂等）。`tasks.long_running=true` 的值班任务存续期内不完成/归档，故不触发任何 reset，值班上下文天然跨轮次保留 | 28 §4 |
 
 > **一实例一任务一会话，团队维度可复用**：`team_member_id` 分区让同一成员在同一团队的多任务间可选择保留上下文（`reuseSession` 默认保留）或每任务新会话（reset）。私聊按 `team_member_id` 复用，群聊一团队一群按 `taskId` 分区过滤历史，底层会话是否复用由团队记忆开关与任务级覆盖共同决定。
 
@@ -293,7 +293,7 @@ flowchart LR
 | 激活 | `active` | 任务 `pending→in_progress`（start，13 篇 §4.2：创建 worker 实例） | 会话接入 worker 实例，可被 @ 分派与处理 |
 | 协作中 | `active` | @ 触发 / 私聊 / Agent 互 @ | **上下文连续**：@ 触发时注入群聊历史（按 `taskId` 分区）+ 文档库（FR-15/46，12 篇 §8） |
 | 冻结 | `frozen` | 团队移除成员（§5.1） | 不再接收 @ 与消息；历史可查看；产出保留 |
-| 重置（批量） | 删除旧行 → 新 `created` | 任务完成/归档且 `!reuseSession || resetAfterComplete` 时同事务批量 `resetTeamSessionsInTx`（含手动 `POST /teams/:id/reset-sessions`） | 软删 `task_group_instances` → 删 `sessions` → 建新 `created` 会话（`workerId/instanceRef` 清空）+ 系统消息「已为下一任务开新会话」 |
+| 重置（批量） | 删除旧行 → 新 `created` | 任务完成/归档且 `!reuseSession || resetAfterComplete` 时同事务批量 `resetTeamSessionsInTx`（含手动 `POST /teams/:id/reset-sessions`）；`longRunning` 值班任务仅在人工完成/归档后才进入本路径 | 软删 `task_group_instances` → 删 `sessions` → 建新 `created` 会话（`workerId/instanceRef` 清空）+ 系统消息「已为下一任务开新会话」 |
 | 归档 | `archived` | 任务归档（archive，13 篇 §4.5） | 实例回收（DELETE /instances/{gid}）；会话只读可回看；无恢复路径（晋升队首前先重置则新会话归档） |
 
 ### 6.3 任务间隔离（FR-37）

@@ -116,9 +116,9 @@ description: 完整平台控制面对外契约：REST 端点清单、SSE 事件�
 | 方法 | 路径 | 请求要点 | 响应要点 | 权限 | 依据 |
 |------|------|---------|---------|------|------|
 | GET | `/tasks` | `teamId?`、`page/pageSize`、`status?`（五态筛选）、`priority?` | 看板/列表数据（FR-03 五态对应；无 `teamId` 时返回调用者所有可见团队任务） | `[team]` | FR-01/03 |
-| POST | `/tasks` | `{teamId!, title, description?, priority?, backgroundDocs[]?}` | `201` + 任务对象；任务直连团队（`teamId` 必填）；**自动创建任务群聊频道与文档库**（FR-01/09）；背景文档入文档库（FR-06） | `[team]` | FR-01/02/06/09 |
+| POST | `/tasks` | `{teamId!, title, description?, priority?, longRunning?, backgroundDocs[]?}` | `201` + 任务对象；任务直连团队（`teamId` 必填）；**自动创建任务群聊频道与文档库**（FR-01/09）；背景文档入文档库（FR-06）；`longRunning=true` 标记长期值班任务（常驻进行中、无终态） | `[team]` | FR-01/02/06/09 |
 | GET | `/tasks/:id` | — | 任务详情（状态/团队/主 Agent/产出物摘要） | `[team]` | FR-01 |
-| PATCH | `/tasks/:id` | `{title?, description?, priority?, mainAgentId?}` | 更新后任务；mainAgentId 校验须为团队内已选 Agent（FR-08） | `[team]` | FR-01/08 |
+| PATCH | `/tasks/:id` | `{title?, description?, priority?, longRunning?, mainAgentId?}` | 更新后任务；mainAgentId 校验须为团队内已选 Agent（FR-08） | `[team]` | FR-01/08 |
 | POST | `/tasks/:id/start` | — | 状态 待开始→进行中；校验已选 Agent 与主 Agent（FR-07）；**启动消息私信主 Agent**（FR-07）；响应 `{task, mainAgentId}` | `[team]` | FR-07/08 |
 | POST | `/tasks/:id/mark-pending-review` | — | 状态 进行中→待验收（成员手动标记，FR-04）；**Agent 不自动触发** | `[team]` | FR-04 |
 | POST | `/tasks/:id/accept` | — | 状态 待验收→已完成；记录产出物验收基线 `accepted_flag`（FR-04/43） | `[team]` | FR-04 |
