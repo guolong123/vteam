@@ -732,6 +732,27 @@ export class TasksService implements OnModuleInit {
       where: { id },
       data,
     });
+    // 改标记必须同步巡检排期，否则两个方向都是静默失效：
+    //   false → true：不注销则遗留巡检行会再叫醒一次，直到到期被 {expire:true} 收敛
+    //   true → false：**不重排的话看门狗永不恢复**——任务已在跑，不会再有状态迁移去
+    //     register，而 update() 原先完全不碰排期。只在取值真的翻转时才动，避免改标题
+    //     这类无关 PATCH 产生多余的排期写。
+    if (
+      (dto as any).longRunning !== undefined &&
+      Boolean((dto as any).longRunning) !== Boolean((task as any).longRunning)
+    ) {
+      if ((dto as any).longRunning) {
+        this.progression.unregister(id);
+      } else if (updated.status === TASK_STATUS.in_progress) {
+        await this.progression
+          .register(id)
+          .catch((err: unknown) =>
+            this.logger.error(
+              `巡检注册失败 taskId=${id}: ${err instanceof Error ? err.message : String(err)}`,
+            ),
+          );
+      }
+    }
     return this.toTaskDto(updated);
   }
 

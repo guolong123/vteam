@@ -63,6 +63,11 @@ describe('TasksService', () => {
   let idGen: { nextId: jest.Mock; seed: jest.Mock };
   let realtime: { broadcast: jest.Mock };
   let planLifecycle: { autoEnsureRow: jest.Mock; getStatus: jest.Mock };
+  let progression: {
+    register: jest.Mock;
+    unregister: jest.Mock;
+    triggerMemoryHarvest: jest.Mock;
+  };
   let sessionLifecycle: {
     getInstancesByTeamMember: jest.Mock;
     getInstanceBySession: jest.Mock;
@@ -271,6 +276,11 @@ describe('TasksService', () => {
       currentTaskId: 't_0000000001',
     } as any);
     (prisma.teamMember.count as jest.Mock).mockResolvedValue(2);
+    progression = {
+      register: jest.fn().mockResolvedValue(undefined),
+      unregister: jest.fn(),
+      triggerMemoryHarvest: jest.fn().mockResolvedValue(undefined),
+    };
     sessionLifecycle = {
       getInstancesByTeamMember: jest.fn().mockResolvedValue([]),
       getInstanceBySession: jest.fn().mockResolvedValue(null),
@@ -286,14 +296,7 @@ describe('TasksService', () => {
         { provide: RealtimeService, useValue: realtime },
         { provide: SessionLifecycleService, useValue: sessionLifecycle },
         { provide: PlanLifecycleService, useValue: planLifecycle },
-        {
-          provide: TaskProgressionScheduler,
-          useValue: {
-            register: jest.fn().mockResolvedValue(undefined),
-            unregister: jest.fn(),
-            triggerMemoryHarvest: jest.fn().mockResolvedValue(undefined),
-          },
-        },
+        { provide: TaskProgressionScheduler, useValue: progression },
       ],
     }).compile();
 
@@ -1551,6 +1554,82 @@ describe('TasksService', () => {
       await service.update('t_0000000001', { longRunning: false } as any);
       expect(prisma.task.update.mock.calls[1][0].data).toMatchObject({
         longRunning: false,
+      });
+    });
+
+    // 改标记必须同步巡检排期。只断言 data 是不够的：那两条用例在联动被删掉后仍会全绿。
+    describe('改标记同步巡检排期', () => {
+      it('true → false 且任务 in_progress → register（看门狗必须回来，否则永不恢复）', async () => {
+        prisma.task.findUnique.mockResolvedValue(
+          row({ status: 'in_progress', longRunning: true }),
+        );
+        prisma.task.update.mockResolvedValue(
+          row({ status: 'in_progress', longRunning: false }),
+        );
+
+        await service.update('t_0000000001', { longRunning: false } as any);
+
+        expect(progression.register).toHaveBeenCalledWith('t_0000000001');
+        expect(progression.unregister).not.toHaveBeenCalled();
+      });
+
+      it('false → true → unregister（立即注销遗留巡检行，不再多叫醒一次）', async () => {
+        prisma.task.findUnique.mockResolvedValue(
+          row({ status: 'in_progress', longRunning: false }),
+        );
+        prisma.task.update.mockResolvedValue(
+          row({ status: 'in_progress', longRunning: true }),
+        );
+
+        await service.update('t_0000000001', { longRunning: true } as any);
+
+        expect(progression.unregister).toHaveBeenCalledWith('t_0000000001');
+        expect(progression.register).not.toHaveBeenCalled();
+      });
+
+      it('true → false 但任务非 in_progress → 不 register（非在跑任务无需巡检）', async () => {
+        prisma.task.findUnique.mockResolvedValue(
+          row({ status: 'pending_review', longRunning: true }),
+        );
+        prisma.task.update.mockResolvedValue(
+          row({ status: 'pending_review', longRunning: false }),
+        );
+
+        await service.update('t_0000000001', { longRunning: false } as any);
+
+        expect(progression.register).not.toHaveBeenCalled();
+        expect(progression.unregister).not.toHaveBeenCalled();
+      });
+
+      it('取值未翻转（传了同值）→ 不动排期，避免改标题这类无关 PATCH 产生多余写', async () => {
+        prisma.task.findUnique.mockResolvedValue(
+          row({ status: 'in_progress', longRunning: true }),
+        );
+        prisma.task.update.mockResolvedValue(
+          row({ status: 'in_progress', longRunning: true }),
+        );
+
+        await service.update('t_0000000001', {
+          title: '只改标题',
+          longRunning: true,
+        } as any);
+
+        expect(progression.register).not.toHaveBeenCalled();
+        expect(progression.unregister).not.toHaveBeenCalled();
+      });
+
+      it('register 抛错不影响 PATCH 成功（排期是尽力而为，与 transition 同口径）', async () => {
+        prisma.task.findUnique.mockResolvedValue(
+          row({ status: 'in_progress', longRunning: true }),
+        );
+        prisma.task.update.mockResolvedValue(
+          row({ status: 'in_progress', longRunning: false }),
+        );
+        progression.register.mockRejectedValueOnce(new Error('db down'));
+
+        await expect(
+          service.update('t_0000000001', { longRunning: false } as any),
+        ).resolves.toBeDefined();
       });
     });
   });
