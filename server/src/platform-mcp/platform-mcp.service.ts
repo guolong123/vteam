@@ -1219,7 +1219,8 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * task_context：任务概览（title/description/status/mainAgentMemberId/backgroundDocs）
+   * task_context：任务概览（title/description/status/mainAgentMemberId/backgroundDocs
+   * /longRunning，长期值班任务标记缺省 false）
    * + 群聊频道 id + 团队 agentMembers（团队成员列表，实例形状
    * {id: 成员 id, alias, agentId, name, role, main}，main 按 team.mainAgentMemberId 判定）。
    */
@@ -1234,6 +1235,7 @@ export class PlatformMcpService implements OnModuleInit {
         status: true,
         backgroundDocs: true,
         teamId: true,
+        longRunning: true,
       },
     });
     if (!task) {
@@ -1278,6 +1280,7 @@ export class PlatformMcpService implements OnModuleInit {
       status: task.status,
       mainAgentMemberId: ctxMainId,
       backgroundDocs: task.backgroundDocs ?? [],
+      longRunning: task.longRunning ?? false,
       channelId: channel?.id ?? null,
       pendingReceipts,
       agentMembers: agentRows.map((r) => ({
@@ -3232,6 +3235,7 @@ export class PlatformMcpService implements OnModuleInit {
       title: string;
       description?: string;
       priority?: string;
+      longRunning?: boolean;
     },
   ): Promise<unknown> {
     const exec = await this.resolveExecContext(ctx, args);
@@ -3267,11 +3271,14 @@ export class PlatformMcpService implements OnModuleInit {
       }
       teamId = team.id;
     }
+    // 用 `=== true` 而非直接透传：MCP 入参无 class-validator 兜底（swagger-mcp 走 asDto
+    // 无校验转换），照 memory_save 的 autoInject 先例把真值字符串（"yes"/1）收敛为 false。
     return this.tasksService.createByAgent(exec.callerId, {
       title: args.title,
       description: args.description,
       priority: args.priority,
       teamId,
+      longRunning: args.longRunning === true,
     });
   }
 

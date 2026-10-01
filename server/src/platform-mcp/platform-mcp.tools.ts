@@ -716,6 +716,12 @@ const taskCreateSchema = z.object({
     .string()
     .optional()
     .describe('优先级（high/medium/low，缺省 medium）'),
+  longRunning: z
+    .boolean()
+    .optional()
+    .describe(
+      '是否长期值班任务（缺省 false）。常驻进行中、没有终态的岗位（如值班群）才开 true：开启后调度侧不为它排进度巡检（不唤醒、不因「无进展」自动置阻塞、不发停滞公告），且 Agent 不得调用 mark-pending-review 把它推向验收。普通一次性任务务必留 false——true 是豁免看门狗，该任务真卡死时也不会被自动阻塞，需人工巡看。',
+    ),
 });
 
 type TaskCreateArgs = z.infer<typeof taskCreateSchema>;
