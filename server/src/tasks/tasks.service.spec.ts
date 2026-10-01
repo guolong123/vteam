@@ -1130,9 +1130,9 @@ describe('TasksService', () => {
     });
 
     it('longRunning 落库：createByAgent 与 create 共用 createTaskInternal，同样透传', async () => {
-      (prisma.teamUserMember as any).findMany = jest.fn().mockResolvedValue([
-        { userId: 'u_owner', role: 'owner' },
-      ]);
+      (prisma.teamUserMember as any).findMany = jest
+        .fn()
+        .mockResolvedValue([{ userId: 'u_owner', role: 'owner' }]);
       const { captured } = setupAgentTx();
       prisma.task.findUnique.mockResolvedValue(
         row({ id: 't_0000000001', teamId, status: 'pending' }) as any,
@@ -3148,11 +3148,7 @@ describe('TasksService', () => {
         });
         await expectForbiddenCode(
           () =>
-            service.transitionByAgent(
-              't_0000000001',
-              'tmm_0000000001',
-              action,
-            ),
+            service.transitionByAgent('t_0000000001', 'tmm_0000000001', action),
           TASK_ERRORS.TASK_AGENT_COMPLETION_FORBIDDEN,
         );
       }

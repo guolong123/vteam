@@ -56,7 +56,9 @@ describe('Task.longRunning 强制执行点（源码级）', () => {
     expect(gate).toBeGreaterThan(-1);
     // 门禁必须落在「叫醒 agent」与「推进静默计数」两处之前，否则豁免形同虚设
     expect(gate).toBeLessThan(body.indexOf('this.runPatrol('));
-    expect(gate).toBeLessThan(body.indexOf('this.readQuietStreak(ctx.payload) + 1'));
+    expect(gate).toBeLessThan(
+      body.indexOf('this.readQuietStreak(ctx.payload) + 1'),
+    );
   });
 
   it('执行点 (c) systemBlock() 在 transition 之前有独立的 longRunning 前置查询', () => {
