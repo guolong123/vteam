@@ -247,6 +247,12 @@ model Task {
   backgroundDocs      Json?     @map("background_docs")
   /// 完成后为下一任务开新会话（覆盖 Team.reuseSession，默认 false，Todo7）
   resetAfterComplete  Boolean   @default(false) @map("reset_after_complete")
+  /// 长期值班任务（常驻进行中、无终态，默认 false）。
+  /// 勾选后：进度巡检完全不排期（无唤醒、无自动置阻塞、无停滞公告），且 Agent 不得把它
+  /// 推向终态（`mark-pending-review` 返 403）。人工完成通道（mark-pending-review/accept/
+  /// archive/block/resume）不受影响，且额外允许硬删。
+  /// 代价：这是**一刀切豁免**——真正卡死的长驻任务也不会被看门狗自动阻塞，运维需自行巡看。
+  longRunning         Boolean   @default(false) @map("long_running")
   createdBy           String    @map("created_by")
   version             Int       @default(0)
   teamId              String?   @map("team_id")
