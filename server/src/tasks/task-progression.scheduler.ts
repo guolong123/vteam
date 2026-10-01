@@ -56,8 +56,10 @@ export const STALL_INFLIGHT_ISSUE_STATUSES = [
  * 任务分区（messages.task_id）内有新消息即视为在途，递延停滞检查。
  */
 export const DEFAULT_STALL_CHAT_ACTIVITY_WINDOW_MS = 10 * 60_000;
-/** 巡检扫描周期 ms（**仅旧 setInterval 驱动**已退役，interval 行巡检仍由 trigger
- * ticker 按此周期驱动；保留导出防外部引用 churn）。 */
+/** 旧 setInterval 巡检的扫描周期 ms（**该驱动已退役**；interval 行巡检改由 trigger
+ * ticker 按触发器行内 `intervalMs`（= `progressionIntervalMs`，缺省 10min）驱动，ticker
+ * 自身节拍另见 `TIMER_SCAN_INTERVAL_MS`，与本常量无关）。
+ * 本常量现已无任何消费者，仅保留导出以免外部引用 churn。 */
 export const PROGRESSION_SCAN_INTERVAL_MS = 30_000;
 
 /**
@@ -181,7 +183,8 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   async onModuleInit(): Promise<void> {
     // 巡检 handler + 冷却 guard 接线（TriggerService 缺席时 no-op，内存循环照常）。
     this.registerProgressionTrigger();
-    // 清扫库内遗留的 pending progression_patrol 触发器行（其任务已转终态者）。
+    // 清扫库内遗留的 pending progression_patrol 触发器行（其任务已不在 in_progress 者，
+    // 含 blocked 与任务已删除的行）。
     await this.cancelStalePatrolTriggers();
     // 数据修复：库内 in_progress 任务逐个 register（pending 触发器行保留 fireCount，
     // 终态/缺失行重建——重启不再清零 rounds）。
@@ -370,6 +373,11 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
   /**
    * 主动触发一次巡检（真实链路验证用）：无 pending 行 → no-op；
    * 否则跳过到期判定直接 dispatch（轮次/上限由基座 maxFires 强制）。
+   *
+   * ⚠️ 本入口**不含** `longRunning` 豁免。`isRegistered` 对「有 flag 翻转前遗留行」的
+   * 值班任务为真，故若把本方法接到任何面向用户的端点，必须先补豁免门禁，否则会绕过
+   * `handleProgressionFire` 的必经门禁向值班群下发巡检提示词（含 mark-pending-review
+   * 诱导）。当前无任何生产调用方（仅 spec），故未加门禁以免为死代码引入额外查询。
    */
   async patrolNow(taskId: string): Promise<void> {
     if (!(await this.isRegistered(taskId))) {
@@ -383,6 +391,8 @@ export class TaskProgressionScheduler implements OnModuleInit, OnModuleDestroy {
    * ticker，见类注释）。语义与旧扫描一致：到期行 → 冷却否决（isSessionPending/
    * 近期活跃则跳过，不计轮次）→ dispatch；轮次计数与上限由基座 fireCount/maxFires
    * 强制，scan 不记账。
+   *
+   * ⚠️ 同 patrolNow：本入口**不含** `longRunning` 豁免，接线到生产前须补门禁。
    */
   private async scan(now = Date.now()): Promise<void> {
     const rows = (await this.patrolTriggerRows()?.findMany?.({

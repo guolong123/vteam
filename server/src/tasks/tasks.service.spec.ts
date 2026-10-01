@@ -2451,8 +2451,9 @@ describe('TasksService', () => {
     });
 
     it('systemBlock：看门狗停滞回调专用，actor=system + 同 block 语义落库', async () => {
-      // 三次 findUnique 依次：① 长期值班豁免门禁 ② transition 自身的读 ③ transition
-      // 之后取 teamId/title 的公告用读。Once 队列必须按此顺序排，否则 ② 会拿到 ③ 的行。
+      // 四次 findUnique 依次：① 长期值班豁免门禁 ② transition 开头的读 ③ transition
+      // 事务后的 fresh 读 ④ 取 teamId/title 的群公告用读。Once 队列只排前两次，③④ 由
+      // 尾部的 mockResolvedValue 覆盖——顺序错乱会让 ② 拿到 ④ 的 blocked 行。
       prisma.task.findUnique
         .mockResolvedValueOnce(
           row({ status: 'in_progress', version: 2, teamId: null }),
@@ -3206,6 +3207,122 @@ describe('TasksService', () => {
       expect(txModels.taskEvent.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ eventType: 'block' }),
       });
+    });
+
+    it('长期值班任务：人工 mark-pending-review → accept → archive 全链放行（豁免不得蔓延到人工路径）', async () => {
+      // 负向断言：门禁只加在 transitionByAgent（agent 路径）。若有人日后「为一致性」把
+      // longRunning 判断补进 markPendingReview/accept/archive，本用例立即变红——那会删掉
+      // 值班任务唯一的完成通道（人工通道），是本设计不可妥协的属性。
+      const step = async (
+        run: () => Promise<unknown>,
+        from: string,
+        to: string,
+        eventType: string,
+      ) => {
+        prisma.task.findUnique
+          .mockResolvedValueOnce(
+            row({ status: from, version: 1, longRunning: true }),
+          )
+          .mockResolvedValueOnce(
+            row({ status: from, version: 1, longRunning: true }),
+          )
+          .mockResolvedValue(
+            row({ status: to, version: 2, longRunning: true }),
+          );
+        prisma.chatChannel.findFirst.mockResolvedValue({
+          id: 'c_0000000001',
+        });
+        idGen.nextId
+          .mockResolvedValueOnce('te_0000000001')
+          .mockResolvedValueOnce('m_0000000001');
+        const txModels = mockTransitionTx();
+        await expect(run()).resolves.toBeDefined();
+        expect(txModels.task.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ status: to }),
+          }),
+        );
+        expect(txModels.taskEvent.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({
+            eventType,
+            fromStatus: from,
+            toStatus: to,
+          }),
+        });
+      };
+
+      await step(
+        () => service.markPendingReview('t_0000000001', userId),
+        'in_progress',
+        'pending_review',
+        'status_change',
+      );
+      await step(
+        () => service.accept('t_0000000001', userId, { force: true }),
+        'pending_review',
+        'completed',
+        'accept',
+      );
+      await step(
+        () => service.archive('t_0000000001', userId, { force: true }),
+        'completed',
+        'archived',
+        'archive',
+      );
+    });
+
+    it('长期值班任务：人工 block / resume 放行（升级与恢复通道不被豁免关掉）', async () => {
+      for (const [run, from, to] of [
+        [
+          () => service.block('t_0000000001', userId, '人工卡点'),
+          'in_progress',
+          'blocked',
+        ],
+        [
+          () => service.resume('t_0000000001', userId),
+          'blocked',
+          'in_progress',
+        ],
+      ] as const) {
+        prisma.task.findUnique
+          .mockResolvedValueOnce(
+            row({ status: from, version: 1, longRunning: true }),
+          )
+          .mockResolvedValueOnce(
+            row({ status: from, version: 1, longRunning: true }),
+          )
+          .mockResolvedValue(
+            row({ status: to, version: 2, longRunning: true }),
+          );
+        prisma.chatChannel.findFirst.mockResolvedValue({
+          id: 'c_0000000001',
+        });
+        idGen.nextId
+          .mockResolvedValueOnce('te_0000000001')
+          .mockResolvedValueOnce('m_0000000001');
+        const txModels = mockTransitionTx();
+        await expect(run()).resolves.toBeDefined();
+        expect(txModels.task.updateMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ status: to }),
+          }),
+        );
+      }
+    });
+
+    it('负向对照：非长期值班任务上同样三个动作不受影响（防止上两条变成无条件放行）', async () => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(row({ status: 'in_progress', version: 1 }))
+        .mockResolvedValueOnce(row({ status: 'in_progress', version: 1 }))
+        .mockResolvedValue(row({ status: 'pending_review', version: 2 }));
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001');
+      mockTransitionTx();
+      await expect(
+        service.markPendingReview('t_0000000001', userId),
+      ).resolves.toBeDefined();
     });
 
     it('transitionByAgent：start/mark-pending-review/reject 主实例仍放行（完工门禁回归）', async () => {

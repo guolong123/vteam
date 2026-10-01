@@ -816,6 +816,39 @@ describe('TaskProgressionScheduler', () => {
       // 遗留行不由清扫取消（该任务仍 in_progress），但会到期后被 {expire:true} 收敛
       expect(rows[key].status).toBe(TRIGGER_STATUS.PENDING);
     });
+
+    it('清扫的防御分支：payload.taskId 缺失/非字符串的行仍被取消（无法归属者正是孤儿）', async () => {
+      prisma.task.findMany.mockResolvedValue([{ id: 't_1' }]);
+      seedPatrolRow('t_bad', { payload: {} as never });
+      seedPatrolRow('t_null', { payload: null as never });
+      seedPatrolRow('t_num', {
+        payload: { taskId: 42 } as never,
+      });
+
+      await scheduler.onModuleInit();
+
+      for (const id of ['t_bad', 't_null', 't_num']) {
+        expect(rows[buildProgressionDedupKey(id)].status).toBe(
+          TRIGGER_STATUS.CANCELLED,
+        );
+      }
+    });
+
+    it('清扫 fail-open：task.findMany 抛错时整段清扫跳过，不半跑（残留行由 {expire:true} 兜底）', async () => {
+      seedPatrolRow('t_1', { payload: { taskId: 't_1' } });
+      seedPatrolRow('t_gone', { payload: { taskId: 't_gone' } });
+      const key = buildProgressionDedupKey('t_gone');
+      // 只让清扫那一次查询失败：restoreInProgressTasks 紧接着还要用同一个 mock
+      prisma.task.findMany
+        .mockRejectedValueOnce(new Error('db down'))
+        .mockResolvedValue([]);
+
+      await scheduler.onModuleInit();
+
+      // 整段跳过 ⇒ 连本该取消的终态行也保持 pending；这是刻意的 fail-open，
+      // 因为 handleProgressionFire 的 !task → {expire:true} 会在其下次到期时兜底。
+      expect(rows[key].status).toBe(TRIGGER_STATUS.PENDING);
+    });
   });
 
   describe('长期值班任务豁免（Task.longRunning）', () => {
