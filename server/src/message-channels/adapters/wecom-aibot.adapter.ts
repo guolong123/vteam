@@ -44,8 +44,9 @@ export class WecomAibotAdapter extends MessageAdapter {
     }
   >();
   private static readonly STREAM_LIMIT = 100;
-  // Zero-width suffix forces WeCom markdown diff repaint while visually icon-only (⏳ vs ⌛ alone may be deduped/cached by WeCom client)
-  private static readonly SPINNER_FRAMES = ['⏳\u200B', '⌛\u200C'];
+  // Zero-width suffix forces WeCom markdown diff repaint (the bare ⏳ alone may be deduped/cached by the WeCom client).
+  // INVARIANT: both frames must use the SAME glyph — only the invisible suffix may differ, or the placeholder visibly alternates between two icons.
+  private static readonly SPINNER_FRAMES = ['⏳\u200B', '⏳\u200C'];
   private static readonly SPINNER_INTERVAL_MS = 1000;
   /**
    * stream 存活上限 ms：超过即停 spinner 并从 map 摘除。
@@ -315,7 +316,10 @@ export class WecomAibotAdapter extends MessageAdapter {
     }
     for (const channelId of channelIds) {
       if (this.clients.has(channelId)) {
-        throw new Error('already started');
+        this.logger.log(
+          `wecom-aibot start: channel ${channelId} already connected, skip`,
+        );
+        continue;
       }
       const ch = await ctx.getChannel(channelId);
       if (!ch) {
@@ -349,7 +353,9 @@ export class WecomAibotAdapter extends MessageAdapter {
       this.bindListeners(channelId, client, ctx);
       try {
         client.connect();
-        await ctx.updateChannelRuntime(channelId, { lastStatus: 'connected' });
+        // connect() 返回 this（不含握手结果），故此处只能标connecting；
+        // 真正连通由 SDK 的 authenticated 事件改写为 connected。
+        await ctx.updateChannelRuntime(channelId, { lastStatus: 'connecting' });
       } catch (e) {
         const msg = (e as Error).message ?? String(e);
         this.logger.error(
@@ -361,7 +367,9 @@ export class WecomAibotAdapter extends MessageAdapter {
         });
         this.clients.delete(channelId);
         this.hosts.delete(channelId);
-        throw e;
+        this.logger.warn(
+          `wecom-aibot start: channel ${channelId} connect failed, continuing with remaining channels`,
+        );
       }
     }
   }
@@ -440,6 +448,25 @@ export class WecomAibotAdapter extends MessageAdapter {
     return [];
   }
 
+  /**
+   * 解析发送者展示名。
+   *
+   * 企业微信智能机器人协议不返回发送者姓名：`from` 对象只有 `userid`
+   * （SDK `MessageFrom`/`EventFrom` 均如此定义，官方长连接规范亦同）。
+   * 若机器人创建者非企业超管，`userid` 还是 35 字符加密 open_userid，
+   * 直接展示会是一串乱码。故姓名缺失时降级为可读标签，仍保留尾部 4 位
+   * 以便区分不同发送者。真实 id 始终另存于 `fromUserId`，不受影响。
+   */
+  private static resolveSenderName(
+    rawName: unknown,
+    userId: string | undefined,
+  ): string {
+    const name = typeof rawName === 'string' ? rawName.trim() : '';
+    if (name) return name;
+    if (!userId) return '';
+    return `企微用户-${userId.slice(-4)}`;
+  }
+
   private bindListeners(
     channelId: string,
     client: WSClient,
@@ -465,7 +492,10 @@ export class WecomAibotAdapter extends MessageAdapter {
       const rawContent = body.text?.content ?? '';
       const text = rawContent.replace(/^@[^ ]+\s*/, '').trim();
       const fromUserId = body.from?.userid;
-      const fromUserName = body.from?.name ?? fromUserId ?? '';
+      const fromUserName = WecomAibotAdapter.resolveSenderName(
+        body.from?.name,
+        fromUserId,
+      );
       const chattype = body.chattype ?? 'single';
       if (!text) {
         try {
@@ -922,11 +952,10 @@ export class WecomAibotAdapter extends MessageAdapter {
         }
       }
       const operatorExternalId = body?.from?.userid;
-      const operatorExternalName =
-        (body?.from as any)?.name ??
-        (body as any)?.from_name ??
-        operatorExternalId ??
-        '';
+      const operatorExternalName = WecomAibotAdapter.resolveSenderName(
+        (body?.from as any)?.name ?? (body as any)?.from_name,
+        operatorExternalId,
+      );
       const operatorChattype = body?.chattype;
       const operatorChatId = body?.chatid as string | undefined;
       this.logger.log(
@@ -942,7 +971,7 @@ export class WecomAibotAdapter extends MessageAdapter {
           });
         } catch {}
       }
-      const userLabel = operatorExternalId ?? '用户';
+      const userLabel = operatorExternalName || '用户';
       const display =
         action === 'approve'
           ? '已批准'
@@ -1092,10 +1121,10 @@ export class WecomAibotAdapter extends MessageAdapter {
     });
 
     client.on('connected', async () => {
+      // SDK 语义：connected = WebSocket open，认证尚未完成，故不能记为 connected。
       try {
         await ctx.updateChannelRuntime(channelId, {
-          lastStatus: 'connected',
-          lastError: '',
+          lastStatus: 'connecting',
         });
       } catch {}
     });
@@ -1144,8 +1173,14 @@ export class WecomAibotAdapter extends MessageAdapter {
     });
   }
 
-  async stop(): Promise<void> {
-    for (const [channelId, client] of this.clients.entries()) {
+  /**
+   * Tear down exactly ONE channel: disconnect its WSClient and purge every
+   * internal map entry that belongs to it. All other channels are untouched.
+   * Idempotent — unknown/absent channels are a no-op beyond map cleanup.
+   */
+  async stopChannel(channelId: string): Promise<void> {
+    const client = this.clients.get(channelId);
+    if (client) {
       try {
         client.disconnect();
       } catch (e) {
@@ -1154,6 +1189,34 @@ export class WecomAibotAdapter extends MessageAdapter {
         );
       }
     }
+    this.clients.delete(channelId);
+    this.hosts.delete(channelId);
+
+    for (const [k, entry] of [...this.streams.entries()]) {
+      if (entry.channelId !== channelId) continue;
+      if (entry.spinnerTimer) {
+        try {
+          clearInterval(entry.spinnerTimer);
+        } catch {}
+      }
+      this.streams.delete(k);
+    }
+    for (const [k, entry] of [...this.taskPendingOperators.entries()]) {
+      if (entry.channelId === channelId) this.taskPendingOperators.delete(k);
+    }
+    for (const [k, entry] of [...this.aqOperatorMap.entries()]) {
+      if (entry.channelId === channelId) this.aqOperatorMap.delete(k);
+    }
+    this.reconnectCounts.delete(channelId);
+
+    this.logger.log(`wecom-aibot stopChannel: ${channelId}`);
+  }
+
+  async stop(): Promise<void> {
+    for (const channelId of [...this.clients.keys()]) {
+      await this.stopChannel(channelId);
+    }
+    // residual entries whose owning channel already left `clients` still need clearing
     for (const entry of this.streams.values()) {
       if (entry.spinnerTimer) {
         try {
