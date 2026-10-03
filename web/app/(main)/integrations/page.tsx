@@ -23,6 +23,7 @@ const notifTypeTheme: Record<string, { label: string; color: string; bg: string;
 };
 
 const messageStatusTheme: Record<string, { label: string; color: string; bg: string; border: string }> = {
+  connecting: { label: "连接中", color: "#2563EB", bg: "rgba(37,99,235,0.10)", border: "rgba(37,99,235,0.24)" },
   connected: { label: "已连接", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   reconnecting: { label: "重连中", color: "#D97706", bg: "rgba(251,191,36,0.12)", border: "rgba(251,191,36,0.32)" },
   error: { label: "连接失败", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
