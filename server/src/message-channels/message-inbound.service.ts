@@ -165,6 +165,7 @@ export class MessageInboundService implements MessageHost {
     commands: InboundCommand[],
   ): Promise<{ results: Array<{ ok: boolean; internalMessageId?: string }> }> {
     const results: Array<{ ok: boolean; internalMessageId?: string }> = [];
+    let stopRequested = false;
     for (const cmd of commands) {
       const channelRow = await (this.prisma as any).messageChannel.findUnique({
         where: { id: channelId },
@@ -185,7 +186,10 @@ export class MessageInboundService implements MessageHost {
           },
         );
         try {
-          await this.requestStop(channelId);
+          if (!stopRequested) {
+            stopRequested = true;
+            await this.requestStop(channelId);
+          }
         } catch {}
         results.push({ ok: false });
         continue;

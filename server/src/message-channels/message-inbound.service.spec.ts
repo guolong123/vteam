@@ -390,6 +390,19 @@ describe('MessageInboundService', () => {
       expect(res2.results[0].ok).toBe(false);
     });
 
+    it('multi-command batch requests stop only once (hoisted out of the command loop)', async () => {
+      prisma.messageChannel.findUnique.mockResolvedValue(null);
+      const res = await service.submitInbound(channelId, [
+        { kind: 'post_message', text: 'a' } as any,
+        { kind: 'post_message', text: 'b' } as any,
+        { kind: 'post_message', text: 'c' } as any,
+      ]);
+      expect(registry.requestStop).toHaveBeenCalledTimes(1);
+      expect(registry.requestStop).toHaveBeenCalledWith(channelId);
+      expect(res.results).toHaveLength(3);
+      for (const r of res.results) expect(r.ok).toBe(false);
+    });
+
     it('wecom_aibot does NOT register bad stream correlation (adapter handles it)', async () => {
       const wecomChannel = { ...baseChannel, type: 'wecom_aibot' };
       prisma.messageChannel.findUnique.mockResolvedValue(wecomChannel);
