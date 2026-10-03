@@ -7337,6 +7337,78 @@ describe('PlatformMcpService', () => {
       expect(prisma.message.create).not.toHaveBeenCalled();
     });
 
+    /**
+     * 同一 team 绑定多个企微机器人时，回复必须回到用户当初发言的那个机器人。
+     * 取首个绑定会把回信发到用户根本没发言的群里。
+     */
+    it('团队绑定多个企微渠道时，回复路由到用户实际发言的渠道', async () => {
+      const adapter = arrangeTeamChannel();
+      // finishStream 走 stream 内部 channel（隐式），失败后落到显式吃 channelId 的
+      // sendNewMessage，便于断言路由结果
+      adapter.finishStream.mockResolvedValue(false);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([
+        { messageChannelId: 'mc_a' },
+        { messageChannelId: 'mc_b' },
+      ]);
+      prisma.messageChannel.findUnique.mockImplementation(
+        async (query: { where?: { id?: string } }) =>
+          query.where?.id === 'mc_b'
+            ? { id: 'mc_b', type: 'wecom_aibot' }
+            : { id: 'mc_a', type: 'wecom_aibot' },
+      );
+      adapter.getStream.mockReturnValue({
+        fromUserName: 'Alice',
+        chattype: 'group',
+        channelId: 'mc_b',
+      });
+
+      await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(adapter.sendNewMessage).toHaveBeenCalledWith(
+        'mc_b',
+        expect.any(String),
+      );
+      expect(adapter.sendNewMessage).not.toHaveBeenCalledWith(
+        'mc_a',
+        expect.any(String),
+      );
+    });
+
+    it('入站渠道不可考时才回退到首个绑定渠道', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.finishStream.mockResolvedValue(false);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([
+        { messageChannelId: 'mc_a' },
+        { messageChannelId: 'mc_b' },
+      ]);
+      prisma.messageChannel.findUnique.mockImplementation(
+        async (query: { where?: { id?: string } }) =>
+          query.where?.id === 'mc_b'
+            ? { id: 'mc_b', type: 'wecom_aibot' }
+            : { id: 'mc_a', type: 'wecom_aibot' },
+      );
+      // stream 不带 channelId：无从判断用户从哪个机器人发言
+      adapter.getStream.mockReturnValue({
+        fromUserName: 'Alice',
+        chattype: 'group',
+      });
+
+      await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+      });
+
+      expect(adapter.sendNewMessage).toHaveBeenCalledWith(
+        'mc_a',
+        expect.any(String),
+      );
+    });
+
     it('无 teamId 时从 session.teamId 回填并完成团队投递', async () => {
       arrangeTeamChannel();
 

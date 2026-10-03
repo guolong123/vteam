@@ -180,6 +180,8 @@ type WecomStreamInfo = {
   readonly fromUserId?: string;
   readonly fromUserName?: string;
   readonly chattype?: string;
+  /** 入站消息实际到达的渠道，决定回信路由；运行时存在但此前未声明 */
+  readonly channelId?: string;
 };
 
 type WecomExternalMessage = {
@@ -5286,7 +5288,7 @@ export class PlatformMcpService implements OnModuleInit {
     }
     const replyScopeId = teamId;
 
-    let wecomChannelId: string | null = null;
+    const boundWecomChannelIds: string[] = [];
     try {
       const bindings = await (this.prisma as any).teamMessageChannel.findMany({
         where: { teamId },
@@ -5298,14 +5300,11 @@ export class PlatformMcpService implements OnModuleInit {
             where: { id: b.messageChannelId },
             select: { id: true, type: true },
           });
-          if (ch && ch.type === 'wecom_aibot') {
-            wecomChannelId = ch.id;
-            break;
-          }
+          if (ch && ch.type === 'wecom_aibot') boundWecomChannelIds.push(ch.id);
         } catch {}
       }
     } catch {}
-    if (!wecomChannelId) {
+    if (boundWecomChannelIds.length === 0) {
       return {
         content: [
           { type: 'text', text: '发送失败: 当前团队未绑定企业微信渠道' },
@@ -5313,6 +5312,7 @@ export class PlatformMcpService implements OnModuleInit {
         isError: false,
       };
     }
+    let wecomChannelId: string | null = boundWecomChannelIds[0] ?? null;
 
     let adapter: any | undefined;
     try {
@@ -5343,8 +5343,9 @@ export class PlatformMcpService implements OnModuleInit {
           readonly stream: WecomStreamInfo;
         })
       | null = null;
+    let pending: any = null;
     try {
-      const pending = legacyTaskId
+      pending = legacyTaskId
         ? (adapter as any).getPendingOperatorForTask?.(legacyTaskId)
         : null;
       activeExternal = pending
@@ -5361,6 +5362,17 @@ export class PlatformMcpService implements OnModuleInit {
         chattype = activeExternal.stream.chattype ?? null;
       }
     } catch {}
+
+    // 回复须回到用户当初发言的那个机器人：同一 team 绑定多个 wecom 渠道时，
+    // 取第一个绑定会把回信发到用户没发言的群里。仅当入站渠道不可考时才回退首个绑定。
+    const inboundChannelId =
+      pending?.channelId ?? activeExternal?.stream?.channelId ?? null;
+    if (inboundChannelId && boundWecomChannelIds.includes(inboundChannelId)) {
+      this.logger.log(
+        `wecom_reply route to inbound channel teamId=${teamId} channel=${inboundChannelId} bound=${boundWecomChannelIds.length}`,
+      );
+      wecomChannelId = inboundChannelId;
+    }
 
     let wecomText = rawText;
     let mirrorText = rawText;
