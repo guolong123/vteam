@@ -1,10 +1,76 @@
+/**
+ * 适配器 `import { WSClient, generateReqId } from '@wecom/aibot-node-sdk'`，
+ * start() 路径会真实 `new WSClient(...)` 并调用 `on()` / `connect()` / `disconnect()`。
+ * 原 spec 对 start() 零覆盖，所以必须整体 mock 掉 SDK 才能驱动连接生命周期。
+ */
+const mockClients: any[] = [];
+const mockConnectImpls: Array<() => void> = [];
+jest.mock('@wecom/aibot-node-sdk', () => ({
+  WSClient: jest.fn().mockImplementation(() => {
+    const c = {
+      connect: jest.fn(() => {
+        const impl = mockConnectImpls.shift();
+        if (impl) impl();
+      }),
+      disconnect: jest.fn(),
+      on: jest.fn(),
+      off: jest.fn(),
+      replyStream: jest.fn().mockResolvedValue({}),
+      updateTemplateCard: jest.fn().mockResolvedValue({}),
+      sendMessage: jest.fn().mockResolvedValue({}),
+      sendCard: jest.fn().mockResolvedValue({}),
+    };
+    mockClients.push(c);
+    return c;
+  }),
+  generateReqId: jest.fn(() => 'req_test'),
+}));
+
 import { WecomAibotAdapter } from './wecom-aibot.adapter';
+
+/**
+ * 最小 MessageHost 替身。
+ *
+ * resolveChannelIds() 的取 channelId 顺序：
+ *   1) candidates=[ctx, this.attachedHost]，逐个找 `prisma.integrationChannel.findMany`
+ *      → 不存在，跳过；
+ *   2) 同一候选上找 `prisma.messageChannel.findMany` → 命中，返回 rows.map(r => r.id)。
+ * 因此这里只需提供 `prisma.messageChannel.findMany`，start() 每个 channel 再走
+ * `ctx.getChannel(id)` 取 botId/secret、`ctx.updateChannelRuntime` 回写状态。
+ */
+function makeHost(channels: Array<{ id: string; secrets?: any }>) {
+  return {
+    prisma: {
+      messageChannel: {
+        findMany: jest
+          .fn()
+          .mockResolvedValue(channels.map((c) => ({ id: c.id }))),
+      },
+    },
+    getChannel: jest.fn(async (id: string) => {
+      const c = channels.find((x) => x.id === id);
+      return c
+        ? {
+            id: c.id,
+            type: 'wecom_aibot',
+            config: {},
+            secrets: c.secrets ?? { botId: 'b_' + id, secret: 's_' + id },
+            enabled: true,
+          }
+        : null;
+    }),
+    updateChannelRuntime: jest.fn().mockResolvedValue(undefined),
+    submitInbound: jest.fn(),
+  } as any;
+}
 
 describe('WecomAibotAdapter (message-channels)', () => {
   let adapter: WecomAibotAdapter;
 
   beforeEach(() => {
     adapter = new WecomAibotAdapter();
+    mockClients.length = 0;
+    mockConnectImpls.length = 0;
   });
 
   it('type wecom_aibot and supportsInbound with sendQuestionCard', () => {
@@ -651,6 +717,268 @@ describe('WecomAibotAdapter (message-channels)', () => {
       expect(typeof adapter.finishStream).toBe('function');
       expect(typeof adapter.sendNewMessage).toBe('function');
       expect(typeof adapter.discardStream).toBe('function');
+    });
+  });
+
+  /**
+   * 多 bot 回归（2026-10-03）。
+   *
+   * WecomAibotAdapter 是 NestJS default-scope 单例，被所有 wecom_aibot 渠道共享，
+   * 内部持有 clients: Map<channelId, WSClient>。原 start() 遍历全部启用渠道，遇到
+   * 已连接的渠道直接 `throw new Error('already started')`，**整个循环中断**。
+   * resolveChannelIds() 没有 orderBy，MySQL 先返回存量 bot，于是运行时新增第二个
+   * bot 后再次 start() → 撞上存量 bot 抛错 → 循环在到达新 bot 之前就结束了
+   * → 新 bot 永远拿不到 WSClient → 它的入站消息永远收不到；调用方 `.catch(() => {})`
+   * 把异常吞掉，HTTP 200 且无任何日志。
+   *
+   * 同类缺陷第二例：单个渠道 connect 失败时 `throw e`，同样中断其后所有渠道。
+   */
+  describe('multi-bot start/stop 回归（单例共享 clients map）', () => {
+    it('一次 start() 同时连接两个渠道', async () => {
+      const host = makeHost([{ id: 'mc_a' }, { id: 'mc_b' }]);
+      await adapter.start(host);
+
+      expect(adapter.getClient('mc_a')).toBeDefined();
+      expect(adapter.getClient('mc_b')).toBeDefined();
+      expect(mockClients).toHaveLength(2);
+      expect(mockClients[0].connect).toHaveBeenCalled();
+      expect(mockClients[1].connect).toHaveBeenCalled();
+    });
+
+    /**
+     * 生产故障原样复现：先只有存量 bot，运行时新增一个 bot 后再次 start()。
+     * 修复前这里抛 'already started'，mc_b 始终 undefined（新 bot 收不到消息）。
+     */
+    it('存量 bot 已在连接时再次 start()，新增 bot 仍能连上且不抛错', async () => {
+      const host1 = makeHost([{ id: 'mc_a' }]);
+      await adapter.start(host1);
+      expect(adapter.getClient('mc_a')).toBeDefined();
+      expect(adapter.getClient('mc_b')).toBeUndefined();
+
+      // 运行时新增第二个 bot，再次 start()（生产里由 startEnabled 重新触发）
+      const host2 = makeHost([{ id: 'mc_a' }, { id: 'mc_b' }]);
+      await expect(adapter.start(host2)).resolves.not.toThrow();
+
+      expect(adapter.getClient('mc_a')).toBeDefined();
+      expect(adapter.getClient('mc_b')).toBeDefined();
+      expect(mockClients).toHaveLength(2);
+    });
+
+    it('单个渠道 connect 失败不阻断其余渠道，且错误状态照常回写', async () => {
+      mockConnectImpls.push(() => {
+        throw new Error('boom');
+      });
+      const host = makeHost([{ id: 'mc_a' }, { id: 'mc_b' }]);
+
+      await expect(adapter.start(host)).resolves.not.toThrow();
+
+      expect(adapter.getClient('mc_a')).toBeUndefined();
+      expect(adapter.getClient('mc_b')).toBeDefined();
+      expect(mockClients[1].connect).toHaveBeenCalled();
+      expect(host.updateChannelRuntime).toHaveBeenCalledWith('mc_a', {
+        lastStatus: 'error',
+        lastError: 'boom',
+      });
+      expect(host.updateChannelRuntime).toHaveBeenCalledWith('mc_b', {
+        lastStatus: 'connecting',
+      });
+    });
+
+    it('start() 不再乐观写 connected：须由 authenticated 事件驱动', async () => {
+      const host = makeHost([{ id: 'mc_a' }]);
+      await adapter.start(host);
+
+      expect(host.updateChannelRuntime).toHaveBeenCalledWith('mc_a', {
+        lastStatus: 'connecting',
+      });
+      expect(host.updateChannelRuntime).not.toHaveBeenCalledWith('mc_a', {
+        lastStatus: 'connected',
+      });
+
+      const handlerOf = (ev: string) =>
+        mockClients[0].on.mock.calls.find((c: any[]) => c[0] === ev)?.[1];
+      // SDK 语义：connected = WS open，认证尚未完成
+      await handlerOf('connected')();
+      expect(host.updateChannelRuntime).toHaveBeenCalledWith('mc_a', {
+        lastStatus: 'connecting',
+      });
+
+      await handlerOf('authenticated')();
+      expect(host.updateChannelRuntime).toHaveBeenCalledWith('mc_a', {
+        lastStatus: 'connected',
+        lastError: '',
+      });
+    });
+
+    it('stopChannel 只拆一个渠道，其余渠道与其内部状态完全不受影响', async () => {
+      const host = makeHost([{ id: 'mc_a' }, { id: 'mc_b' }]);
+      await adapter.start(host);
+
+      adapter.registerStreamCorrelation('m_a', {
+        channelId: 'mc_a',
+        frameHeaders: {},
+        streamId: 's_a',
+      });
+      adapter.registerStreamCorrelation('m_b', {
+        channelId: 'mc_b',
+        frameHeaders: {},
+        streamId: 's_b',
+      });
+      adapter.setPendingOperatorForTask('t_a', {
+        channelId: 'mc_a',
+        fromUserId: 'u',
+        fromUserName: 'n',
+      });
+      adapter.setPendingOperatorForTask('t_b', {
+        channelId: 'mc_b',
+        fromUserId: 'u',
+        fromUserName: 'n',
+      });
+      adapter.setPendingOperatorForAq('aq_a', {
+        channelId: 'mc_a',
+        fromUserId: 'u',
+        fromUserName: 'n',
+      });
+      adapter.setPendingOperatorForAq('aq_b', {
+        channelId: 'mc_b',
+        fromUserId: 'u',
+        fromUserName: 'n',
+      });
+
+      const clearSpy = jest.spyOn(global, 'clearInterval');
+      adapter.registerStreamCorrelation('m_a', {
+        channelId: 'mc_a',
+        frameHeaders: {},
+        streamId: 's_a',
+        spinnerTimer: setInterval(() => {}, 1000) as unknown as NodeJS.Timeout,
+      });
+
+      await adapter.stopChannel('mc_a');
+
+      expect(adapter.getClient('mc_a')).toBeUndefined();
+      expect(adapter.getClient('mc_b')).toBeDefined();
+      expect(adapter.getStream('m_a')).toBeUndefined();
+      expect(adapter.getStream('m_b')).toBeDefined();
+      expect(adapter.getPendingOperatorForTask('t_a')).toBeUndefined();
+      expect(adapter.getPendingOperatorForTask('t_b')).toBeDefined();
+      expect(adapter.getPendingOperatorForAq('aq_a')).toBeUndefined();
+      expect(adapter.getPendingOperatorForAq('aq_b')).toBeDefined();
+      expect(clearSpy).toHaveBeenCalled();
+      expect(mockClients[0].disconnect).toHaveBeenCalled();
+      expect(mockClients[1].disconnect).not.toHaveBeenCalled();
+
+      clearSpy.mockRestore();
+    });
+
+    it('stopChannel 幂等：未知渠道与重复调用都不抛错', async () => {
+      const host = makeHost([{ id: 'mc_a' }, { id: 'mc_b' }]);
+      await adapter.start(host);
+
+      await expect(
+        adapter.stopChannel('never_existed'),
+      ).resolves.toBeUndefined();
+
+      await adapter.stopChannel('mc_a');
+      await expect(adapter.stopChannel('mc_a')).resolves.toBeUndefined();
+
+      expect(adapter.getClient('mc_b')).toBeDefined();
+      expect(mockClients[1].disconnect).not.toHaveBeenCalled();
+    });
+
+    it('stop() 仍全量拆干净（onModuleDestroy 走这条路径）', async () => {
+      const host = makeHost([{ id: 'mc_a' }, { id: 'mc_b' }]);
+      await adapter.start(host);
+      adapter.registerStreamCorrelation('m_a', {
+        channelId: 'mc_a',
+        frameHeaders: {},
+        streamId: 's_a',
+      });
+      expect(adapter.getStreamSize()).toBe(1);
+
+      await adapter.stop();
+
+      expect(adapter.getClient('mc_a')).toBeUndefined();
+      expect(adapter.getClient('mc_b')).toBeUndefined();
+      expect(adapter.getStreamSize()).toBe(0);
+      expect(adapter.getPendingOperatorForTask('t_a')).toBeUndefined();
+      expect(mockClients[0].disconnect).toHaveBeenCalled();
+      expect(mockClients[1].disconnect).toHaveBeenCalled();
+    });
+  });
+
+  describe('spinner 帧视觉一致性', () => {
+    const ZERO_WIDTH = /[\u200B-\u200D\uFEFF]/g;
+
+    it('所有帧剥离零宽字符后是同一个字形', () => {
+      const frames = (WecomAibotAdapter as any).SPINNER_FRAMES as string[];
+      const visible = frames.map((f) => f.replace(ZERO_WIDTH, ''));
+      expect(visible.length).toBeGreaterThan(1);
+      expect(new Set(visible).size).toBe(1);
+    });
+
+    it('相邻帧仅靠零宽后缀区分（借其触发企微重绘，避免被去重缓存）', () => {
+      const frames = (WecomAibotAdapter as any).SPINNER_FRAMES as string[];
+      const suffixes = frames.map((f) => f.slice(-1));
+      expect(new Set(suffixes).size).toBe(frames.length);
+      for (const s of suffixes) expect(s).toMatch(ZERO_WIDTH);
+    });
+  });
+
+  /**
+   * 企微智能机器人协议不返回发送者姓名（`from` 只有 userid）。生产实测：
+   * 值班群机器人由企业超管创建 → userid 明文（恰好形如人名，显示正常）；
+   * 自行创建 → userid 为 35 字符加密 open_userid，直接展示是一串乱码。
+   */
+  describe('发送者名降级展示', () => {
+    const ENC = 'woiGjxCgAALi1qEHavg6e3cK3ofow_yQ';
+    const resolve = (name: unknown, id?: string) =>
+      (WecomAibotAdapter as any).resolveSenderName(name, id) as string;
+
+    it('payload 带 name 时原样采用（未来腾讯若补上该字段即自动生效）', () => {
+      expect(resolve('GuoLong', ENC)).toBe('GuoLong');
+      expect(resolve('  GuoLong  ', ENC)).toBe('GuoLong');
+    });
+
+    it('name 缺失时降级为可读标签，不暴露裸 userid', () => {
+      expect(resolve(undefined, ENC)).toBe('企微用户-w_yQ');
+      expect(resolve('', ENC)).toBe('企微用户-w_yQ');
+      expect(resolve(null, ENC)).toBe('企微用户-w_yQ');
+      expect(resolve(undefined, ENC)).not.toContain(ENC);
+    });
+
+    it('name 与 userid 都缺失时为空串', () => {
+      expect(resolve(undefined, undefined)).toBe('');
+      expect(resolve(undefined, '')).toBe('');
+    });
+
+    it('message.text 入站：senderName 用降级标签，真实 id 仍走 senderExternalId', async () => {
+      const host = makeHost([{ id: 'mc_a' }]);
+      host.submitInbound.mockResolvedValue({
+        results: [{ ok: true, internalMessageId: 'm_1' }],
+      });
+      await adapter.start(host);
+
+      const handler = mockClients[0].on.mock.calls.find(
+        (c: any[]) => c[0] === 'message.text',
+      )?.[1];
+      expect(typeof handler).toBe('function');
+
+      await handler({
+        headers: { req_id: 'r1' },
+        body: {
+          msgid: 'm1',
+          from: { userid: ENC },
+          text: { content: 'nihao' },
+          chattype: 'group',
+        },
+      });
+
+      const [channelIdArg, cmds] = host.submitInbound.mock.calls[0];
+      expect(channelIdArg).toBe('mc_a');
+      expect(cmds[0].senderName).toBe('企微用户-w_yQ');
+      expect(cmds[0].senderExternalId).toBe(ENC);
+      expect(cmds[0].wecomUserName).toBe('企微用户-w_yQ');
+      expect(cmds[0].text).toBe('nihao');
     });
   });
 });
