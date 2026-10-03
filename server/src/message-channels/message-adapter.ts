@@ -72,7 +72,8 @@ export interface MessageHost {
  * 能力面：
  * - verifyInbound(req, channel)：可选，验签 / 鉴权失败抛异常；
  * - normalizeInbound(req, channel)：抽象，将原始请求归一化为统一 InboundCommand 数组；
- * - start(ctx: MessageHost) / stop()：可选，长连接型适配器生命周期；
+ * - start(ctx: MessageHost) / stop()：可选，长连接型适配器生命周期（全量）；
+ * - stopChannel?(channelId)：可选，按渠道粒度停止；缺省时 requestStop 退化为全量 stop()；
  * - registerStreamCorrelation?(...): 可选，wecom 用于占位→终态关联；
  * - attach(host): 可选，注册表在 OnModuleInit 注入宿主。
  */
@@ -99,6 +100,12 @@ export abstract class MessageAdapter {
   start?(ctx: MessageHost): Promise<void>;
 
   stop?(): Promise<void>;
+
+  /**
+   * 仅停止单个渠道。长连接型适配器在同一 type 下持有多个渠道实例时必须实现，
+   * 否则 `MessageRegistryService.requestStop` 会退化为全量 `stop()`，导致停一个渠道连带停掉所有渠道。
+   */
+  stopChannel?(channelId: string): Promise<void>;
 
   registerStreamCorrelation?(
     internalMessageId: string,
