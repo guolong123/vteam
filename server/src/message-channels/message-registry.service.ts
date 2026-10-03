@@ -181,9 +181,18 @@ export class MessageRegistryService
     const channel = await this.getChannel(channelId);
     if (!channel) return;
     const adapter = this.map.get(channel.type);
-    if (!adapter || typeof adapter.stop !== 'function') return;
+    if (!adapter) return;
     try {
-      await adapter.stop();
+      if (typeof adapter.stopChannel === 'function') {
+        await adapter.stopChannel(channelId);
+        return;
+      }
+      if (typeof adapter.stop === 'function') {
+        this.logger.warn(
+          `requestStop ${channelId}: adapter ${channel.type} has no stopChannel, falling back to full stop`,
+        );
+        await adapter.stop();
+      }
     } catch (e) {
       this.logger.error(
         `requestStop ${channelId} adapter ${channel.type} stop failed: ${(e as Error).message}`,
