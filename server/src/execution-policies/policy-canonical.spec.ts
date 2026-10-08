@@ -288,7 +288,7 @@ describe('policy canonical emission + per-field db resolution (Todo 2)', () => {
       },
     );
 
-    it('tools 层不发射任何 server-gated 概念：未授权 formerly-gated 工具进 deny，授权者进 allow', () => {
+    it('tools 层不发射任何 server-gated 概念：全部 formerly-gated 工具默认 allow，授权者 tools 层 allow', () => {
       const formerlyGated = [
         'vteam_task_transition',
         'vteam_question_confirm',
@@ -304,10 +304,10 @@ describe('policy canonical emission + per-field db resolution (Todo 2)', () => {
           const granted = tool in resolved.tools;
           if (granted) {
             expect(resolved.tools[tool]).toBe('allow');
-            expect(resolved.permission[tool]).toBeUndefined();
+            expect(resolved.permission[tool]).toBe('allow');
           } else {
             expect(resolved.tools[tool]).toBeUndefined();
-            expect(resolved.permission[tool]).toBe('deny');
+            expect(resolved.permission[tool]).toBe('allow');
           }
           assertions += 2;
         }

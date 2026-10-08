@@ -44,6 +44,8 @@
           "bash": "allow",
           "task": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_skill_create": "deny",
           "vteam_git_repos_list": "deny"
         },
@@ -67,7 +69,6 @@
           "vteam_issue_transition": "allow",
           "vteam_task_create": "allow",
           "vteam_task_transition": "allow",
-          "vteam_plan_mode": "allow",
           "vteam_team_add_member": "allow",
           "vteam_question_confirm": "allow",
           "vteam_group_post": "allow",
@@ -84,7 +85,9 @@
           "vteam_channel_send": "allow",
           "vteam_hook_register": "allow",
           "vteam_hook_cancel": "allow",
-          "browser": "allow"
+          "browser": "allow",
+          "vteam_todo": "allow",
+          "vteam_secret_command": "allow"
         }
       }
     },
@@ -98,7 +101,7 @@
           "read": {
             "*": "allow"
           },
-          "bash": "deny",
+          "bash": "allow",
           "task": "deny",
           "vteam_submit_artifact": "deny",
           "vteam_git_repos_list": "deny"
@@ -125,8 +128,9 @@
           "vteam_issue_transition": "allow",
           "vteam_task_create": "allow",
           "vteam_task_transition": "allow",
-          "vteam_plan_mode": "allow",
           "vteam_plan_complete": "allow",
+          "vteam_plan_finalize": "allow",
+          "vteam_plan_confirm": "allow",
           "vteam_team_add_member": "allow",
           "vteam_question_confirm": "allow",
           "vteam_skill_create": "allow",
@@ -141,7 +145,9 @@
           "vteam_wecom_reply": "allow",
           "vteam_channel_send": "allow",
           "vteam_hook_register": "allow",
-          "vteam_hook_cancel": "allow"
+          "vteam_hook_cancel": "allow",
+          "vteam_todo": "allow",
+          "vteam_secret_command": "allow"
         }
       }
     },
@@ -163,8 +169,9 @@
           "vteam_task_transition": "deny",
           "vteam_question_confirm": "deny",
           "vteam_team_add_member": "deny",
-          "vteam_plan_mode": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_task_create": "deny",
           "vteam_skill_create": "deny",
           "vteam_git_repos_list": "deny",
@@ -204,7 +211,9 @@
           "git_pull": "allow",
           "git_status": "allow",
           "git_diff": "allow",
-          "git_log": "allow"
+          "git_log": "allow",
+          "vteam_todo": "allow",
+          "vteam_secret_command": "allow"
         }
       }
     },
@@ -224,8 +233,9 @@
           "vteam_task_transition": "deny",
           "vteam_question_confirm": "deny",
           "vteam_team_add_member": "deny",
-          "vteam_plan_mode": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_task_create": "deny",
           "vteam_skill_create": "deny",
           "vteam_git_repos_list": "deny",
@@ -269,7 +279,9 @@
           "git_status": "allow",
           "git_diff": "allow",
           "git_log": "allow",
-          "git_push": "allow"
+          "git_push": "allow",
+          "vteam_todo": "allow",
+          "vteam_secret_command": "allow"
         }
       }
     },
@@ -291,8 +303,9 @@
           "vteam_task_transition": "deny",
           "vteam_question_confirm": "deny",
           "vteam_team_add_member": "deny",
-          "vteam_plan_mode": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_task_create": "deny",
           "vteam_skill_create": "deny",
           "vteam_git_repos_list": "deny",
@@ -334,7 +347,9 @@
           "git_fetch": "allow",
           "git_status": "allow",
           "git_diff": "allow",
-          "git_log": "allow"
+          "git_log": "allow",
+          "vteam_todo": "allow",
+          "vteam_secret_command": "allow"
         }
       }
     },
@@ -351,7 +366,6 @@
           },
           "bash": "allow",
           "task": "allow",
-          "vteam_submit_artifact": "deny",
           "vteam_issue_create": "deny",
           "vteam_issue_list": "deny",
           "vteam_issue_get": "deny",
@@ -362,7 +376,6 @@
           "vteam_memory_save": "deny",
           "vteam_memory_update": "deny",
           "vteam_team_add_member": "deny",
-          "vteam_plan_mode": "deny",
           "vteam_channel_send": "deny",
           "vteam_task_create": "deny",
           "vteam_skill_create": "deny",
@@ -393,7 +406,12 @@
           "vteam_notify_agent": "allow",
           "vteam_memory_search": "allow",
           "vteam_plan_complete": "allow",
-          "browser": "allow"
+          "vteam_plan_finalize": "allow",
+          "vteam_plan_confirm": "allow",
+          "vteam_submit_artifact": "allow",
+          "browser": "allow",
+          "vteam_todo": "allow",
+          "vteam_secret_command": "allow"
         }
       }
     },
@@ -421,8 +439,9 @@
           "vteam_memory_save": "deny",
           "vteam_memory_update": "deny",
           "vteam_team_add_member": "deny",
-          "vteam_plan_mode": "deny",
           "vteam_plan_complete": "deny",
+          "vteam_plan_finalize": "deny",
+          "vteam_plan_confirm": "deny",
           "vteam_channel_send": "deny",
           "vteam_wecom_reply": "deny",
           "vteam_task_create": "deny",
@@ -457,7 +476,9 @@
           "git_status": "allow",
           "git_diff": "allow",
           "git_log": "allow",
-          "browser": "allow"
+          "browser": "allow",
+          "vteam_todo": "allow",
+          "vteam_secret_command": "allow"
         }
       }
     }

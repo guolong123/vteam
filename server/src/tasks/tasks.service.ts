@@ -1153,16 +1153,13 @@ export class TasksService implements OnModuleInit {
         };
       }
       case 'reject': {
-        let rejectTeamId: string | null = null;
         return {
           eventType: 'reject',
           fields: { pendingReviewAt: null },
           metadata: reason ? { reason } : undefined,
-          preflight: async (task) => {
-            rejectTeamId = (task as any).teamId ?? null;
-          },
-          afterCommit: async (tx) => {
-            if (rejectTeamId) await this.promoteNextInTx(tx, rejectTeamId);
+          afterCommit: async () => {
+            // reject 后任务回到 in_progress、仍为该团队的队首占用——不推进队列，
+            // 否则 currentTaskId 指向已不属于本任务/被清空，session 页右侧找不到任务与其 agent。
           },
           sysMessage: () =>
             reason

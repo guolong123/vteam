@@ -1015,6 +1015,7 @@ export class TeamsService implements OnModuleInit {
           data: {
             id: await this.idGen.nextId('s'),
             taskId: null,
+            teamId,
             agentId: s.agentId,
             teamMemberId: s.teamMemberId,
             status: 'created',

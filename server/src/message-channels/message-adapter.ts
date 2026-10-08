@@ -24,6 +24,10 @@ export type InboundCommand =
       chattype?: string;
       wecomUserId?: string;
       wecomUserName?: string;
+      /** 附件三字段（与 CreateMessageDto 对齐，可选；图片等 inbound 媒体经 /uploads 落盘后透传） */
+      attachmentUrl?: string;
+      attachmentName?: string;
+      attachmentType?: string;
     }
   | {
       kind: 'card_action';

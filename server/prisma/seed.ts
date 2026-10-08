@@ -1181,8 +1181,10 @@ async function main() {
         read: buildReadPermission(),
         bash: boundary.bashEffect,
         task: taskEffect,
+        // MCP 工具执行权限默认 allow（含全部 vteam_*）：服务端权限门兜底，
+        // 与 src/execution-policies/execution-policy.service.ts#buildRolePermission 一致。
         ...Object.fromEntries(
-          boundary.mcpDenies.map((tool: string) => [tool, 'deny' as const]),
+          VTEAM_MCP_TOOL_NAMES.map((tool: string) => [tool, 'allow' as const]),
         ),
       },
       correction: {

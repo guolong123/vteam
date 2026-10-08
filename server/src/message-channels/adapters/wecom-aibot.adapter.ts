@@ -10,6 +10,7 @@ import {
   MESSAGE_CHANNEL_TYPES,
   INTEGRATIONS_ERRORS,
 } from '../message-channel.constants';
+import { FileStorageService } from '../../uploads/uploads.service';
 
 export const WECOM_OPERATOR_TTL_MS = 10 * 60 * 1000;
 
@@ -554,11 +555,31 @@ export class WecomAibotAdapter extends MessageAdapter {
       );
       try {
         let pendingTick = false;
+        let consecutiveFailures = 0;
+        const startedAt = Date.now();
+        const stopSpinner = (reason: string) => {
+          if (spinnerTimer) {
+            try {
+              clearInterval(spinnerTimer);
+            } catch {}
+            spinnerTimer = null;
+          }
+          for (const [key, entry] of this.streams) {
+            if (entry.streamId === streamId) this.streams.delete(key);
+          }
+          this.logger.warn(
+            `wecom spinner auto-stopped stream=${streamId} reason=${reason}`,
+          );
+        };
         spinnerTimer = setInterval(() => {
           if (pendingTick) {
             this.logger.warn(
               `wecom spinner tick skipped (prev pending) stream=${streamId}`,
             );
+            return;
+          }
+          if (Date.now() - startedAt > WecomAibotAdapter.STREAM_TTL_MS) {
+            stopSpinner('stream TTL exceeded');
             return;
           }
           const tickText = spinnerFrames[spinnerIndex++ % spinnerFrames.length];
@@ -573,10 +594,17 @@ export class WecomAibotAdapter extends MessageAdapter {
               pendingTick = false;
               const rc = (res as any)?.errcode;
               if (typeof rc !== 'undefined' && rc !== 0) {
+                consecutiveFailures += 1;
                 this.logger.warn(
                   `wecom spinner replyStream non-zero errcode stream=${streamId} tickText=${JSON.stringify(tickText)} res=${JSON.stringify(res).slice(0, 500)}`,
                 );
+                // 企微回 846608（stream 超期）等即同步为连续失败：连续 3 次即自停，
+                // 避免企微已判定 stream 过期后仍每秒重试刷屏。
+                if (consecutiveFailures >= 3) {
+                  stopSpinner(`consecutive replyStream failures (rc=${rc})`);
+                }
               } else {
+                consecutiveFailures = 0;
                 this.logger.log(
                   `wecom spinner replyStream ok stream=${streamId} tickText=${JSON.stringify(tickText)}`,
                 );
@@ -584,9 +612,23 @@ export class WecomAibotAdapter extends MessageAdapter {
             })
             .catch((e) => {
               pendingTick = false;
+              consecutiveFailures += 1;
+              const errText =
+                e instanceof Error
+                  ? e.message
+                  : (() => {
+                      try {
+                        return JSON.stringify(e);
+                      } catch {
+                        return String(e);
+                      }
+                    })();
               this.logger.warn(
-                `wecom spinner replyStream failed stream=${streamId} tickText=${JSON.stringify(tickText)} err=${(e as Error)?.message ?? String(e)}`,
+                `wecom spinner replyStream failed stream=${streamId} tickText=${JSON.stringify(tickText)} err=${errText}`,
               );
+              if (consecutiveFailures >= 3) {
+                stopSpinner('consecutive replyStream failures (exception)');
+              }
             });
         }, WecomAibotAdapter.SPINNER_INTERVAL_MS);
         if ((spinnerTimer as any)?.unref) (spinnerTimer as any).unref();
@@ -663,9 +705,22 @@ export class WecomAibotAdapter extends MessageAdapter {
       }
     });
 
+    (
+      client as unknown as {
+        on: (ev: string, fn: (...args: unknown[]) => unknown) => unknown;
+      }
+    ).on('message.image', async (frame: unknown) => {
+      await this.handleInboundImage(client, channelId, ctx, frame);
+    });
+    (
+      client as unknown as {
+        on: (ev: string, fn: (...args: unknown[]) => unknown) => unknown;
+      }
+    ).on('message.mixed', async (frame: unknown) => {
+      await this.handleInboundMixed(client, channelId, ctx, frame);
+    });
+
     const fallbackTypes = [
-      'message.image',
-      'message.mixed',
       'message.voice',
       'message.file',
       'message.video',
@@ -1686,6 +1741,375 @@ export class WecomAibotAdapter extends MessageAdapter {
         `wecom sendFallbackMessage failed channelId=${channelId} chatId=${fallbackChatId}: ${(e as Error).message}`,
       );
       return false;
+    }
+  }
+
+  private static detectImageExt(buffer: Buffer, filename?: string): string {
+    const fromName = filename?.match(/\.([a-zA-Z0-9]+)$/)?.[1]?.toLowerCase();
+    if (fromName && ['png', 'jpg', 'jpeg', 'gif'].includes(fromName)) {
+      return fromName;
+    }
+    if (
+      buffer.length >= 3 &&
+      buffer[0] === 0xff &&
+      buffer[1] === 0xd8 &&
+      buffer[2] === 0xff
+    ) {
+      return 'jpg';
+    }
+    if (
+      buffer.length >= 4 &&
+      buffer[0] === 0x89 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x4e &&
+      buffer[3] === 0x47
+    ) {
+      return 'png';
+    }
+    if (buffer.length >= 6 && buffer.toString('ascii', 0, 4) === 'GIF8') {
+      return 'gif';
+    }
+    return 'jpg';
+  }
+
+  /** 图片/图文消息的公共尾流：spinner + submitInbound + stream 关联（与文本路径同形）。 */
+  private async dispatchInboundWithSpinner(
+    client: WSClient,
+    channelId: string,
+    ctx: MessageHost,
+    f: unknown,
+    cmds: InboundCommand[],
+    fromUserId: string | undefined,
+    fromUserName: string,
+    chattype: string,
+  ): Promise<void> {
+    const frameHeaders = (f as { headers?: unknown }).headers ?? f;
+    const streamId = generateReqId('stream');
+    const spinnerFrames = WecomAibotAdapter.SPINNER_FRAMES;
+    let spinnerIndex = 0;
+    let spinnerTimer: NodeJS.Timeout | null = null;
+    const spinnerPayload = { headers: frameHeaders } as unknown as {
+      headers: { req_id: string };
+    };
+    try {
+      await client.replyStream(
+        spinnerPayload,
+        streamId,
+        spinnerFrames[0],
+        false,
+      );
+    } catch (e) {
+      this.logger.warn(
+        `wecom replyStream placeholder failed channel=${channelId}: ${(e as Error).message}`,
+      );
+    }
+    spinnerIndex = 1;
+    try {
+      let pendingTick = false;
+      let consecutiveFailures = 0;
+      const startedAt = Date.now();
+      const stopSpinner = (reason: string) => {
+        if (spinnerTimer) {
+          try {
+            clearInterval(spinnerTimer);
+          } catch {}
+          spinnerTimer = null;
+        }
+        for (const [key, entry] of this.streams) {
+          if (entry.streamId === streamId) this.streams.delete(key);
+        }
+        this.logger.warn(
+          `wecom spinner auto-stopped stream=${streamId} reason=${reason}`,
+        );
+      };
+      spinnerTimer = setInterval(() => {
+        if (pendingTick) return;
+        if (Date.now() - startedAt > WecomAibotAdapter.STREAM_TTL_MS) {
+          stopSpinner('stream TTL exceeded');
+          return;
+        }
+        const tickText = spinnerFrames[spinnerIndex++ % spinnerFrames.length];
+        pendingTick = true;
+        client
+          .replyStream(spinnerPayload, streamId, tickText, false)
+          .then((res) => {
+            pendingTick = false;
+            const rc = (res as any)?.errcode;
+            if (typeof rc !== 'undefined' && rc !== 0) {
+              consecutiveFailures += 1;
+              if (consecutiveFailures >= 3) {
+                stopSpinner(`consecutive replyStream failures (rc=${rc})`);
+              }
+            } else {
+              consecutiveFailures = 0;
+            }
+          })
+          .catch(() => {
+            pendingTick = false;
+            consecutiveFailures += 1;
+            if (consecutiveFailures >= 3) {
+              stopSpinner('consecutive replyStream failures (exception)');
+            }
+          });
+      }, WecomAibotAdapter.SPINNER_INTERVAL_MS);
+      if ((spinnerTimer as any)?.unref) (spinnerTimer as any).unref();
+    } catch (e) {
+      this.logger.warn(
+        `wecom spinner setInterval failed stream=${streamId}: ${(e as Error).message}`,
+      );
+    }
+    let result:
+      | { results: Array<{ ok: boolean; internalMessageId?: string }> }
+      | undefined;
+    try {
+      result = await ctx.submitInbound(channelId, cmds);
+    } catch (e) {
+      this.logger.error(
+        `wecom submitInbound failed channel=${channelId}: ${(e as Error).message}`,
+      );
+    }
+    const first = result?.results?.[0];
+    if (first?.ok && first.internalMessageId) {
+      this.registerStreamCorrelation(first.internalMessageId, {
+        channelId,
+        frameHeaders,
+        streamId,
+        fromUserId,
+        fromUserName,
+        chattype,
+        spinnerTimer,
+      });
+      try {
+        if (
+          typeof (ctx as MessageHost).registerStreamCorrelation === 'function'
+        ) {
+          (ctx as MessageHost).registerStreamCorrelation!(
+            first.internalMessageId,
+            {
+              channelId,
+              frameHeaders,
+              streamId,
+              fromUserId,
+              fromUserName,
+              chattype,
+              spinnerTimer,
+            } as any,
+          );
+        }
+      } catch {}
+    } else {
+      if (spinnerTimer) {
+        try {
+          clearInterval(spinnerTimer);
+        } catch {}
+      }
+    }
+  }
+
+  private async handleInboundImage(
+    client: WSClient,
+    channelId: string,
+    ctx: MessageHost,
+    frame: unknown,
+  ): Promise<void> {
+    const f = frame as {
+      headers?: unknown;
+      body?: {
+        msgid: string;
+        from?: { userid: string; name?: string };
+        chatid?: string;
+        chattype?: string;
+        image?: { url: string; aeskey?: string };
+      };
+    };
+    const body = f.body;
+    if (!body?.image?.url) return;
+    const fromUserId = body.from?.userid;
+    const fromUserName = WecomAibotAdapter.resolveSenderName(
+      body.from?.name,
+      fromUserId,
+    );
+    const chattype = body.chattype ?? 'single';
+    try {
+      const { buffer, filename } = await client.downloadFile(
+        body.image.url,
+        body.image.aeskey,
+      );
+      const ext = WecomAibotAdapter.detectImageExt(buffer, filename);
+      const stored = await FileStorageService.saveBufferFile(
+        buffer,
+        filename ?? `wecom-image.${ext}`,
+      );
+      const cmd: InboundCommand = {
+        kind: 'post_message',
+        text: '[图片]',
+        senderExternalId: fromUserId,
+        senderName: fromUserName,
+        dedupKey: body.msgid,
+        chattype,
+        wecomUserId: fromUserId,
+        wecomUserName: fromUserName,
+        attachmentUrl: stored.url,
+        attachmentName: stored.name,
+        attachmentType: stored.ext,
+      } as InboundCommand;
+      await this.dispatchInboundWithSpinner(
+        client,
+        channelId,
+        ctx,
+        f,
+        [cmd],
+        fromUserId,
+        fromUserName,
+        chattype,
+      );
+      await this.updateRuntimeAfterInbound(ctx, channelId, body);
+    } catch (e) {
+      this.logger.error(
+        `wecom inbound image failed channel=${channelId}: ${(e as Error).message}`,
+      );
+      try {
+        await client.replyStream(
+          f as { headers: { req_id: string } },
+          generateReqId('stream'),
+          '图片下载失败，请重发或改发文本。',
+          true,
+        );
+      } catch {}
+    }
+  }
+
+  private async handleInboundMixed(
+    client: WSClient,
+    channelId: string,
+    ctx: MessageHost,
+    frame: unknown,
+  ): Promise<void> {
+    const f = frame as {
+      headers?: unknown;
+      body?: {
+        msgid: string;
+        from?: { userid: string; name?: string };
+        chatid?: string;
+        chattype?: string;
+        mixed?: {
+          msg_item?: Array<{
+            msgtype: string;
+            text?: { content: string };
+            image?: { url: string; aeskey?: string };
+          }>;
+        };
+      };
+    };
+    const body = f.body;
+    if (!body?.mixed?.msg_item?.length) return;
+    const fromUserId = body.from?.userid;
+    const fromUserName = WecomAibotAdapter.resolveSenderName(
+      body.from?.name,
+      fromUserId,
+    );
+    const chattype = body.chattype ?? 'single';
+    const texts: string[] = [];
+    const images: Array<{ url: string; aeskey?: string }> = [];
+    for (const item of body.mixed.msg_item) {
+      if (item.msgtype === 'text' && item.text?.content) {
+        texts.push(item.text.content);
+      } else if (item.msgtype === 'image' && item.image?.url) {
+        images.push(item.image);
+      }
+    }
+    const text = texts.join('\n').trim();
+    try {
+      const cmds: InboundCommand[] = [];
+      for (let i = 0; i < images.length; i++) {
+        const { buffer, filename } = await client.downloadFile(
+          images[i].url,
+          images[i].aeskey,
+        );
+        const ext = WecomAibotAdapter.detectImageExt(buffer, filename);
+        const stored = await FileStorageService.saveBufferFile(
+          buffer,
+          filename ?? `wecom-image.${ext}`,
+        );
+        cmds.push({
+          kind: 'post_message',
+          text: i === 0 && text ? text : '[图片]',
+          senderExternalId: fromUserId,
+          senderName: fromUserName,
+          dedupKey:
+            images.length > 1 ? `${body.msgid}_${i}` : (body.msgid ?? undefined),
+          chattype,
+          wecomUserId: fromUserId,
+          wecomUserName: fromUserName,
+          attachmentUrl: stored.url,
+          attachmentName: stored.name,
+          attachmentType: stored.ext,
+        } as InboundCommand);
+      }
+      if (cmds.length === 0) {
+        if (text) {
+          cmds.push({
+            kind: 'post_message',
+            text,
+            senderExternalId: fromUserId,
+            senderName: fromUserName,
+            dedupKey: body.msgid,
+            chattype,
+            wecomUserId: fromUserId,
+            wecomUserName: fromUserName,
+          } as InboundCommand);
+        } else {
+          return;
+        }
+      }
+      await this.dispatchInboundWithSpinner(
+        client,
+        channelId,
+        ctx,
+        f,
+        cmds,
+        fromUserId,
+        fromUserName,
+        chattype,
+      );
+      await this.updateRuntimeAfterInbound(ctx, channelId, body);
+    } catch (e) {
+      this.logger.error(
+        `wecom inbound mixed failed channel=${channelId}: ${(e as Error).message}`,
+      );
+      try {
+        await client.replyStream(
+          f as { headers: { req_id: string } },
+          generateReqId('stream'),
+          '图文消息解析失败，请重发或改发文本。',
+          true,
+        );
+      } catch {}
+    }
+  }
+
+  private async updateRuntimeAfterInbound(
+    ctx: MessageHost,
+    channelId: string,
+    body: {
+      chatid?: string;
+      chattype?: string;
+      from?: { userid?: string };
+    },
+  ): Promise<void> {
+    try {
+      const effectiveChatId = body.chatid ?? body.from?.userid ?? null;
+      await ctx.updateChannelRuntime(channelId, {
+        configMerge: {
+          lastChatid: effectiveChatId,
+          lastChattype: body.chattype,
+          lastSenderExternalId: body.from?.userid ?? null,
+        },
+      });
+    } catch (e) {
+      this.logger.warn(
+        `wecom updateChannelRuntime configMerge failed: ${(e as Error).message}`,
+      );
     }
   }
 

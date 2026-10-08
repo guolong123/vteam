@@ -111,7 +111,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     }
   });
 
-  it('层① permission 派生 == Permission matrix：edit/read/bash/task/mcpDenies/ask，无 write', () => {
+  it('层① permission 派生 == Permission matrix：edit/read/bash/task/mcpAllow，无 write', () => {
     for (const name of AGENT_NAMES) {
       const boundary = ROLE_BOUNDARIES[name];
       const expected: Record<string, unknown> = {
@@ -120,7 +120,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
         bash: boundary.bashEffect,
         task: name === 'vteam-plan' ? 'allow' : 'deny',
         ...Object.fromEntries(
-          boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+          VTEAM_MCP_TOOL_NAMES.map((tool) => [tool, 'allow' as const]),
         ),
       };
       // 形状断言：edit/read 由 helper 派生、bash 取自边界、task 恒 deny、无 write 键。
@@ -129,13 +129,13 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       expect(expected.bash).toBe(boundary.bashEffect);
       expect(expected.task).toBe(name === 'vteam-plan' ? 'allow' : 'deny');
       expect(expected).not.toHaveProperty('write');
-      for (const denied of boundary.mcpDenies) {
-        expect(expected[denied]).toBe('deny');
+      for (const tool of VTEAM_MCP_TOOL_NAMES) {
+        expect(expected[tool]).toBe('allow');
       }
     }
   });
 
-  it('内置层① permission：未授权 formerly-gated 工具显式 deny（guard 侧），agents[] 原生键投影', async () => {
+  it('内置层① permission：MCP 工具默认 allow（guard 侧），agents[] 原生键投影', async () => {
     const service = new ExecutionPolicyService(
       {
         agent: { findMany: jest.fn().mockResolvedValue([]) },
@@ -154,14 +154,10 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
           boundary.toolAllows,
           tool,
         );
-        if (granted) {
-          expect(agent.permission).not.toHaveProperty(tool);
-          expect(rolePermission).not.toHaveProperty(tool);
-        } else {
-          // todo 4：agents[] 只发射原生键——deny 明细留在 guard.roles[*].permission。
-          expect(agent.permission).not.toHaveProperty(tool);
-          expect(rolePermission).toHaveProperty(tool, 'deny');
-        }
+        // MCP 工具默认 allow：agents[] 只发射原生键（投影），
+        // 全量 allow 明细留在 guard.roles[*].permission。
+        expect(agent.permission).not.toHaveProperty(tool);
+        expect(rolePermission).toHaveProperty(tool, 'allow');
         assertions += 2;
       }
     }
@@ -216,7 +212,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       const file = join(EVIDENCE_DIR, 'before-agent-policies.json');
       const sha = createHash('sha256').update(readFileSync(file)).digest('hex');
       expect(sha).toBe(
-        '3b8c5d4bf29003c48079b11623cf840f9741e3044f6b40e3bfe035c011ceaf87',
+        '62b8cab35c4c61a749ddc8dda5f185c93747594942fc62bdae11c1f71a5c054f',
       );
     });
 
@@ -251,7 +247,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
           bash: boundary.bashEffect,
           task: agent.name === 'vteam-plan' ? 'allow' : 'deny',
           ...Object.fromEntries(
-            boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+            VTEAM_MCP_TOOL_NAMES.map((tool) => [tool, 'allow' as const]),
           ),
         };
         // guard.roles[*].permission 保持完整（含 vteam_* deny 明细，worker guard 层消费）。
@@ -294,8 +290,9 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       for (const glob of plansGlobs) {
         expect(edit[glob]).toBe('allow');
       }
-      expect(policies.guard.roles['vteam-plan'].permission).not.toHaveProperty(
+      expect(policies.guard.roles['vteam-plan'].permission).toHaveProperty(
         'vteam_group_post',
+        'allow',
       );
       expect(
         Object.prototype.hasOwnProperty.call(

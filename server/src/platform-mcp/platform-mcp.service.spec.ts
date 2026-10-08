@@ -68,7 +68,12 @@ import { HookService } from '../triggers/hook.service';
 describe('PlatformMcpService', () => {
   let service: PlatformMcpService;
   let prisma: {
-    session: { findFirst: jest.Mock; findMany: jest.Mock };
+    session: {
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+    };
     chatChannel: { findFirst: jest.Mock; create: jest.Mock };
     message: {
       findMany: jest.Mock;
@@ -212,7 +217,12 @@ describe('PlatformMcpService', () => {
 
   beforeEach(async () => {
     prisma = {
-      session: { findFirst: jest.fn(), findMany: jest.fn() },
+      session: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       chatChannel: {
         findFirst: jest.fn(),
         create: jest.fn().mockRejectedValue(new Error('not configured')),

@@ -3,6 +3,7 @@ import {
   buildReadPermission,
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
+  VTEAM_MCP_TOOL_NAMES,
   ROLE_POLICY_DENY_TEMPLATE,
   ROLE_SERVER_GATED_TOOLS,
 } from '../common/constants/agent.constants';
@@ -52,7 +53,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
           bash: boundary.bashEffect,
           task: name === 'vteam-plan' ? 'allow' : 'deny',
           ...Object.fromEntries(
-            boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+            VTEAM_MCP_TOOL_NAMES.map((tool) => [tool, 'allow' as const]),
           ),
         }),
       };
@@ -71,7 +72,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
               bash: boundary.bashEffect,
               task: name === 'vteam-plan' ? 'allow' : 'deny',
               ...Object.fromEntries(
-                boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+                VTEAM_MCP_TOOL_NAMES.map((tool) => [tool, 'allow' as const]),
               ),
             },
           },
@@ -104,7 +105,7 @@ describe('agent-policies custom agents (Todo 2)', () => {
       expect(policies).toMatchSnapshot();
     });
 
-    it('内置层① permission 对未授权 formerly-gated 工具显式 deny（guard 侧），agents[] 原生键投影', async () => {
+    it('内置层① permission 对全部 formerly-gated 工具默认 allow（guard 侧），agents[] 原生键投影', async () => {
       const service = serviceWith({
         agent: { findMany: jest.fn().mockResolvedValue([]) },
         executionPolicy: { findMany: jest.fn().mockResolvedValue([]) },
@@ -122,10 +123,10 @@ describe('agent-policies custom agents (Todo 2)', () => {
           );
           // todo 5：guard.roles[*] 只留 permission；agents[] 永不发射平台键。
           expect(agent.permission).not.toHaveProperty(tool);
-          if (granted) {
-            expect(role.permission).not.toHaveProperty(tool);
+          if (true) {
+            expect(role.permission).toHaveProperty(tool, 'allow');
           } else {
-            expect(role.permission).toHaveProperty(tool, 'deny');
+            expect(role.permission).toHaveProperty(tool, 'allow');
           }
           assertions += 3;
         }

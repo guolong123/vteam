@@ -420,8 +420,12 @@ export function buildRolePermission(
     // opencode 原生 ctx.ask({permission:'task'}) 先于 guard 生效，两道门须同时打开：
     // 仅 vteam-plan 放行 task（可扇出只读评审 subagent），其余角色保持 deny。
     task: resolveTaskEffect(name),
+    // MCP 工具执行权限默认 allow（含全部 vteam_*）：vteam 工具由 platform-mcp
+    // 服务端权限门（岗位 capabilities + resolveExecContext 绑定校验）兜底，
+    // 引擎层不再 deny；否则未出现在 permission 中的工具会按引擎默认 ask/deny，
+    // 导致 MCP 工具执行权限默认全关。
     ...Object.fromEntries(
-      boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+      VTEAM_MCP_TOOL_NAMES.map((tool) => [tool, 'allow' as const]),
     ),
   };
 }

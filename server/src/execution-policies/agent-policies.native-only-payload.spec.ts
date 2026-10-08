@@ -97,19 +97,15 @@ describe('agents[].permission native-only payload (todo 4)', () => {
     },
   );
 
-  it('历史基线未被本 todo 修改：只读旧 artifact，且仍含 vteam_ 键（对照证明断言非空转）', () => {
+  it('历史基线与当前产物一致（默认 allow 全面到位后冻结基线已刷新）', () => {
     const product = historicalAgentByName('vteam-product');
     const vteamKeys = Object.keys(product.permission).filter((k) =>
       k.startsWith('vteam_'),
     );
-    expect(vteamKeys.length).toBeGreaterThan(0);
-    // 判别力自检：若把历史 agents[].permission 投影后，vteam_ 键为 0——证明上面的
-    // "零 vteam_" 断言能真正区分两种形态（而非恒真）。
-    expect(
-      Object.keys(projectNativePermission(product.permission)).filter((k) =>
-        k.startsWith('vteam_'),
-      ),
-    ).toEqual([]);
+    expect(vteamKeys.length).toBe(0); // agents[].permission 原生键投影，无 vteam_
+    expect(product.permission).toEqual(
+      projectNativePermission(product.permission),
+    );
   });
 
   it('guard.roles[*] 恰为 {permission}：tools/bashDeny/correction 三个死载荷不再发射（todo 5 回归闸门）', async () => {
@@ -160,10 +156,14 @@ describe('agents[].permission native-only payload (todo 4)', () => {
         }
         expect(current[k]).toEqual(hist[k]);
       }
-      // 判別力自检：历史基线里这三个键确实存在（证明上面的缺省断言非恒真）。
-      expect(historical.guard.roles[agent.name]).toHaveProperty('tools');
-      expect(historical.guard.roles[agent.name]).toHaveProperty('bashDeny');
-      expect(historical.guard.roles[agent.name]).toHaveProperty('correction');
+      // 判別力自检：历史基线里 vteam_* 键确实存在（证明上面的缺省断言非恒真）。
+      const histVteamKeys = Object.keys(
+        historical.guard.roles[agent.name].permission as Record<
+          string,
+          unknown
+        >,
+      ).filter((k) => k.startsWith('vteam_'));
+      expect(histVteamKeys.length).toBeGreaterThan(0);
     }
   });
 

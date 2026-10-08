@@ -31,7 +31,12 @@ import { HookService } from '../triggers/hook.service';
 describe('PlatformMcpService hook_register/hook_cancel', () => {
   let service: PlatformMcpService;
   let prisma: {
-    session: { findFirst: jest.Mock };
+    session: {
+      findFirst: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+    };
     task: { findUnique: jest.Mock };
     team: { findUnique: jest.Mock };
     teamMember: { findFirst: jest.Mock; findUnique: jest.Mock };
@@ -53,7 +58,12 @@ describe('PlatformMcpService hook_register/hook_cancel', () => {
 
   beforeEach(async () => {
     prisma = {
-      session: { findFirst: jest.fn() },
+      session: {
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({}),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       task: { findUnique: jest.fn() },
       team: { findUnique: jest.fn() },
       teamMember: { findFirst: jest.fn(), findUnique: jest.fn() },

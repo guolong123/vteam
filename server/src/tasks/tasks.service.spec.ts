@@ -5079,7 +5079,7 @@ describe('TasksService', () => {
       expect(resetInTx).not.toHaveBeenCalled();
     });
 
-    it('reject 同样走 promoteNext：事务内闲置则 currentTaskId=null 广播 idle', async () => {
+    it('reject 不再 promoteNext：不清 currentTaskId、不广播 idle', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(
           row({
@@ -5135,11 +5135,9 @@ describe('TasksService', () => {
       tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
       prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
       await service.reject('t_0000000001', userId, { reason: 'nope' });
-      expect(tx.team.updateMany).toHaveBeenCalledWith({
-        where: { id: teamId, version: 3 },
-        data: { currentTaskId: null, version: { increment: 1 } },
-      });
-      expect(realtime.broadcast).toHaveBeenCalledWith(
+      // reject 后任务回到 in_progress 仍是队首占用：不应清 currentTaskId、不应广播 idle
+      expect(tx.team.updateMany).not.toHaveBeenCalled();
+      expect(realtime.broadcast).not.toHaveBeenCalledWith(
         EVENT_TYPES.TEAM_QUEUE_CHANGED,
         expect.objectContaining({ teamId, action: 'idle' }),
         { type: 'team', id: teamId },

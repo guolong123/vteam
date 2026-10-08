@@ -5,6 +5,7 @@ import {
   buildReadPermission,
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
+  VTEAM_MCP_TOOL_NAMES,
   ROLE_POLICY_DENY_TEMPLATE,
   type VteamAgentName,
 } from '../../common/constants/agent.constants';
@@ -40,7 +41,7 @@ export function constantDerived(name: VteamAgentName) {
       bash: boundary.bashEffect,
       task: name === 'vteam-plan' ? ('allow' as const) : ('deny' as const),
       ...Object.fromEntries(
-        boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+        VTEAM_MCP_TOOL_NAMES.map((tool) => [tool, 'allow' as const]),
       ),
     },
     tools: { ...boundary.toolAllows },
@@ -89,7 +90,7 @@ export function factorySeedConfig(name: VteamAgentName) {
       bash: boundary.bashEffect,
       task: name === 'vteam-plan' ? ('allow' as const) : ('deny' as const),
       ...Object.fromEntries(
-        boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+        VTEAM_MCP_TOOL_NAMES.map((tool) => [tool, 'allow' as const]),
       ),
     },
     correction: {

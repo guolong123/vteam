@@ -12,6 +12,7 @@ import {
   buildReadPermission,
   ROLE_BASH_DENY_PATTERNS,
   ROLE_BOUNDARIES,
+  VTEAM_MCP_TOOL_NAMES,
   ROLE_POLICY_DENY_TEMPLATE,
 } from '../common/constants/agent.constants';
 import { IdGeneratorService } from '../common/id-generator';
@@ -1812,7 +1813,7 @@ describe('AgentsService', () => {
           // 与 seed.ts:900-905 一致：仅 vteam-plan 放行 task。
           task: agentName === 'vteam-plan' ? 'allow' : 'deny',
           ...Object.fromEntries(
-            boundary.mcpDenies.map((tool) => [tool, 'deny' as const]),
+            VTEAM_MCP_TOOL_NAMES.map((tool) => [tool, 'allow' as const]),
           ),
         },
         correction: {

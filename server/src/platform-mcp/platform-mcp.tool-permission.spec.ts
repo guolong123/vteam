@@ -215,7 +215,12 @@ describe('platform tool permission gate (capability model)', () => {
 
     const buildService = async () => {
       prisma = {
-        session: { findFirst: jest.fn() },
+        session: {
+          findFirst: jest.fn(),
+          findMany: jest.fn().mockResolvedValue([]),
+          update: jest.fn().mockResolvedValue({}),
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
         task: { findUnique: jest.fn() },
       };
       const module: TestingModule = await Test.createTestingModule({

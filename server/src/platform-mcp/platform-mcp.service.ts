@@ -6898,7 +6898,7 @@ export class PlatformMcpService implements OnModuleInit {
         message: '该 worker 无此任务会话，禁止跨任务访问',
       });
     }
-    const session = await this.prisma.session.findFirst({
+    let session = await this.prisma.session.findFirst({
       where: {
         teamId: authTeamId,
         workerId: ctx.workerId,
@@ -6908,6 +6908,24 @@ export class PlatformMcpService implements OnModuleInit {
       },
       select: { id: true, agentId: true, teamMemberId: true },
     });
+    if (!session) {
+      // 任务完成/归档触发 resetTeamSessionsInTx 会硬删并重建会话且丢弃 workerId，
+      // 而运行中的 opencode 会话并未停止——此时该 worker 的后续工具调用会被
+      // fail-closed 403。兜底：对（teamId[+selfInstanceId]）唯一匹配的未绑定
+      // （workerId=null）会话做 adopt 回填，仅回填 workerId，instanceRef 保持
+      // 空以便下次分派仍创建全新会话；已绑定他人 worker 的会话绝不抢占。
+      const adopted = await this.adoptOrphanedSession(ctx, {
+        teamId: authTeamId,
+        selfInstanceId,
+      });
+      if (adopted) {
+        session = {
+          id: adopted.id,
+          agentId: adopted.agentId,
+          teamMemberId: adopted.teamMemberId,
+        };
+      }
+    }
     if (!session) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,
@@ -7032,39 +7050,104 @@ export class PlatformMcpService implements OnModuleInit {
         agentId: true,
       },
     });
-    if (session?.taskId) {
+    // 任务关闭后会话 workerId 被 reset 清空，回退路径同样兜底 adopt 一次
+    // （teamMemberId 全局唯一，按 selfInstanceId 精确匹配且必须唯一）。
+    let fallbackSession = session;
+    if (!fallbackSession && args.selfInstanceId !== undefined) {
+      const orphans = await this.prisma.session.findMany({
+        where: { teamMemberId: args.selfInstanceId, workerId: null },
+        select: {
+          taskId: true,
+          teamId: true,
+          teamMemberId: true,
+          agentId: true,
+        },
+        take: 2,
+      });
+      if (orphans.length === 1) {
+        fallbackSession = orphans[0];
+        await this.prisma.session.updateMany({
+          where: { teamMemberId: args.selfInstanceId, workerId: null },
+          data: { workerId: ctx.workerId },
+        });
+        this.logger.log(
+          `[mcp] adopt 未绑定会话(双空上下文) member=${args.selfInstanceId} worker=${ctx.workerId}`,
+        );
+      }
+    }
+    const effectiveSession = fallbackSession ?? session;
+    if (effectiveSession?.taskId) {
       const callerId = await this.assertWorkerTask(
         ctx,
-        session.taskId,
+        effectiveSession.taskId,
         args.selfInstanceId,
       );
-      return { callerId, taskId: session.taskId };
+      return { callerId, taskId: effectiveSession.taskId };
     }
-    if (session?.teamId) {
+    if (effectiveSession?.teamId) {
       const { memberId } = await this.assertWorkerTeam(
         ctx,
-        session.teamId,
+        effectiveSession.teamId,
         args.selfInstanceId,
       );
-      return { callerId: memberId, teamId: session.teamId };
+      return { callerId: memberId, teamId: effectiveSession.teamId };
     }
-    if (session?.teamMemberId) {
+    if (effectiveSession?.teamMemberId) {
       if (
         args.selfInstanceId !== undefined &&
-        args.selfInstanceId !== session.teamMemberId
+        args.selfInstanceId !== effectiveSession.teamMemberId
       ) {
         throw new ForbiddenException({
           code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `selfInstanceId 与该 worker 最近会话成员（${session.teamMemberId}）不一致，禁止冒充`,
+          message: `selfInstanceId 与该 worker 最近会话成员（${effectiveSession.teamMemberId}）不一致，禁止冒充`,
         });
       }
-      return { callerId: session.teamMemberId };
+      return { callerId: effectiveSession.teamMemberId };
     }
     throw new ForbiddenException({
       code: PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,
       message:
         '无法解析调用方身份（该 worker 无任务/团队会话或会话未绑定成员），按 fail-closed 策略拒绝调用',
     });
+  }
+
+  /**
+   * 未绑定会话 adopt 兜底（任务关闭后 reset 清空 workerId 的场景）：
+   * 仅匹配 workerId=null 的会话，且 teamId[+selfInstanceId] 维度下必须唯一，
+   * 避免多成员 team 里误领他人会话；只回填 workerId，不碰 instanceRef，
+   * 下次分派仍走“创建全新 opencode 会话”分支。已绑定（workerId 非空）
+   * 的会话绝不 adopt，防止冒充。
+   */
+  private async adoptOrphanedSession(
+    ctx: PlatformMcpContext,
+    args: { teamId: string; selfInstanceId?: string },
+  ): Promise<{
+    id: string;
+    agentId: string;
+    teamMemberId: string | null;
+  } | null> {
+    if (!ctx.workerId) return null;
+    const candidates = await this.prisma.session.findMany({
+      where: {
+        teamId: args.teamId,
+        workerId: null,
+        ...(args.selfInstanceId !== undefined
+          ? { teamMemberId: args.selfInstanceId }
+          : {}),
+      },
+      select: { id: true, agentId: true, teamMemberId: true },
+      take: 2,
+    });
+    if (candidates.length !== 1) return null;
+    const candidate = candidates[0];
+    await this.prisma.session.update({
+      where: { id: candidate.id },
+      data: { workerId: ctx.workerId },
+    });
+    this.logger.log(
+      `[mcp] adopt 未绑定会话 team=${args.teamId} session=${candidate.id} member=${candidate.teamMemberId ?? '-'} worker=${ctx.workerId}`,
+    );
+    return candidate;
   }
 
   /**
@@ -7083,7 +7166,7 @@ export class PlatformMcpService implements OnModuleInit {
         message: '缺少 x-worker-id header',
       });
     }
-    const session = await this.prisma.session.findFirst({
+    let session = await this.prisma.session.findFirst({
       where: {
         teamId,
         workerId: ctx.workerId,
@@ -7093,6 +7176,17 @@ export class PlatformMcpService implements OnModuleInit {
       },
       select: { id: true, teamMemberId: true },
     });
+    if (!session) {
+      // 同 assertWorkerTask 的 adopt 兜底：任务关闭后 workerId 被 reset 清空，
+      // 运行中的会话此时会被 fail-closed 403；回填唯一未绑定会话的 workerId。
+      const adopted = await this.adoptOrphanedSession(ctx, {
+        teamId,
+        selfInstanceId,
+      });
+      if (adopted) {
+        session = { id: adopted.id, teamMemberId: adopted.teamMemberId };
+      }
+    }
     if (!session) {
       throw new ForbiddenException({
         code: PLATFORM_MCP_ERRORS.FORBIDDEN,

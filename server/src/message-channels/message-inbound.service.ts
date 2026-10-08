@@ -318,7 +318,16 @@ export class MessageInboundService implements MessageHost {
             const res = await this.chatService.createMessage(
               groupChannel.id,
               '__external__',
-              { text: inboundText } as any,
+              {
+                text: inboundText,
+                ...(cmdAny.attachmentUrl
+                  ? {
+                      attachmentUrl: cmdAny.attachmentUrl,
+                      attachmentName: cmdAny.attachmentName ?? null,
+                      attachmentType: cmdAny.attachmentType ?? null,
+                    }
+                  : {}),
+              } as any,
               // senderId 承载外部发送者的**展示名**（企微用户名，缺省退回企微 userId）。
               // 此前恒传 null ⇒ 前端三路业务映射（agent/teamMember/instance）全落空 ⇒
               // 作者名 undefined + 角色标签回落硬编码 "developer"，企微消息被误显示为

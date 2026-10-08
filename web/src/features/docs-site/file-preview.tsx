@@ -161,7 +161,7 @@ function DownloadCard({
         <a
           data-testid="docs-file-download"
           href={fileUrl}
-          {...(canDownload ? { download: true } : {})}
+          {...(canDownload ? { download: displayName || true } : {})}
           target="_blank"
           rel="noopener noreferrer"
           style={{
@@ -336,7 +336,7 @@ function TextFilePreview({
       <a
         data-testid="docs-file-download"
         href={fileUrl}
-        {...(fileUrl.startsWith("/uploads/") ? { download: true } : {})}
+        {...(fileUrl.startsWith("/uploads/") ? { download: displayName || true } : {})}
         target="_blank"
         rel="noopener noreferrer"
         style={{ alignSelf: "flex-start", color: "#0D9488", fontSize: fontSize.sm, fontWeight: 500, textDecoration: "none", fontFamily: fontFamily.body }}
@@ -413,7 +413,7 @@ export function FilePreview({
 
   const fileUrl = version.fileUrl ?? version.contentRef;
   const ext = (version.fileExt || extractExtFromUrl(fileUrl)).toLowerCase();
-  const displayName = version.fileName || fileUrl.split(/[\\/]/).pop() || title;
+  const displayName = version.fileName || title || fileUrl.split(/[\\/]/).pop() || "";
   // P2 判定（与合站页/孪生 artifacts 页同语义）：/uploads/ 前缀 + fileSize==null → 不可访问降级。
   const fileMissing = fileUrl.startsWith("/uploads/") && version.fileSize == null;
   const accessible = isAccessibleFileRef(fileUrl) && !fileMissing;
