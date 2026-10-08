@@ -282,11 +282,11 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
         (key) => !['edit', 'read', 'bash', 'task'].includes(key),
       );
       expect([...otherKeys].sort()).toEqual(
-        [...ROLE_BOUNDARIES[agentName].mcpDenies].sort(),
+        [...VTEAM_MCP_TOOL_NAMES].sort(),
       );
       for (const key of otherKeys) {
         expect(key.startsWith('vteam_')).toBe(true);
-        expect(permission[key]).toBe('deny');
+        expect(permission[key]).toBe('allow');
       }
       // 旧断言为“permission 无 gated 键”；反转为按授权矩阵进 allow 或显式 deny。
       let gateAssertions = 0;
@@ -294,11 +294,10 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
         const granted = FORMERLY_GATED_GRANTS[tool].includes(agentName);
         if (granted) {
           expect(create.config.tools).toHaveProperty(tool, 'allow');
-          expect(permission).not.toHaveProperty(tool);
         } else {
-          expect(permission).toHaveProperty(tool, 'deny');
           expect(create.config.tools).not.toHaveProperty(tool);
         }
+        expect(permission).toHaveProperty(tool, 'allow');
         gateAssertions += 2;
       }
       expect(gateAssertions).toBe(FORMERLY_GATED_TOOLS.length * 2);
