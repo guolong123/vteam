@@ -6327,8 +6327,9 @@ export class PlatformMcpService implements OnModuleInit {
               }
             }
             if (!buffer) {
-              if (!legacyTaskId) {
-                sendError = `无法解析当前任务上下文，请传 taskId 后再拉取${mediaKind === 'file' ? '文件' : '图片'}`;
+              const isAbsoluteRef = mediaRef.startsWith('/');
+              if (!legacyTaskId && !isAbsoluteRef) {
+                sendError = `无法解析当前任务上下文，请传 taskId 后再拉取${mediaKind === 'file' ? '文件' : '图片'}（或改用 worker 绝对路径 / 开头）`;
                 throw new Error(sendError);
               }
               const workerRow = await this.prisma.worker.findUnique({
@@ -6344,7 +6345,7 @@ export class PlatformMcpService implements OnModuleInit {
                   id: ctx.workerId,
                   capabilities: workerRow.capabilities,
                 },
-                this.workerFileCandidates(legacyTaskId, mediaRef),
+                this.workerFileCandidates(legacyTaskId ?? '', mediaRef),
               );
             }
           } catch (e) {
@@ -6418,7 +6419,7 @@ export class PlatformMcpService implements OnModuleInit {
       const msg = (e as Error).message ?? String(e);
       if (!sendError) sendError = msg;
       this.logger.warn(
-        `wecom_reply send failed teamId=${teamId} msgtype=${msgtype} err=${msg} stack=${(e as Error).stack?.slice(0, 800) ?? ''} card=${JSON.stringify(resolvedCard ?? args.card).slice(0, 1200)}`,
+        `wecom_reply send failed teamId=${teamId} msgtype=${msgtype} err=${msg} stack=${(e as Error).stack?.slice(0, 800) ?? ''} card=${String(JSON.stringify(resolvedCard ?? args.card) ?? 'null').slice(0, 1200)}`,
       );
       if (!mirrorContent) {
         mirrorContent = {

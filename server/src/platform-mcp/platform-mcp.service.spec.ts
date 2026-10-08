@@ -7713,6 +7713,28 @@ describe('PlatformMcpService', () => {
         'media_file_2',
       );
     });
+
+    it('回归：file 发送全失败且无 card 时，catch 日志不因 JSON.stringify(undefined).slice 崩溃，返回结构化错误', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue(undefined);
+      (adapter as any).uploadMediaBuffer = jest
+        .fn()
+        .mockResolvedValue('media_file_3');
+      (adapter as any).replyMedia = jest.fn().mockResolvedValue(false);
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(false);
+
+      // 修复前：catch 内 `JSON.stringify(resolvedCard ?? args.card)` 在 card 均缺省时
+      // 得 undefined → `.slice` 抛 TypeError → 逃逸为 -32603。现应正常返回结构化结果。
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_file_3',
+      });
+
+      expect(result.wecomSent).toBe(false);
+      expect(result.content[0].text).toContain('file 发送失败');
+    });
   });
 
   describe('secret_command（阻塞式敏感命令）', () => {
