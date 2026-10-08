@@ -2734,10 +2734,18 @@ export class WecomAibotAdapter extends MessageAdapter {
     buffer: Buffer,
     mediaType: 'image' | 'file' | 'voice' | 'video',
     filename: string,
+    channelId?: string,
   ): Promise<string | null> {
-    const client = this.clients.values().next().value as WSClient | undefined;
+    // media_id 按机器人隔离：必须用目标渠道（发送方）的 client 上传。多机器人共存时
+    // clients 有多条 WS，取"第一个"会让素材落在别的 bot 上 → 发送方 40007 invalid
+    // media_id。channelId 缺省才回退首个 client（保持旧调用兼容）。
+    const client =
+      (channelId ? this.clients.get(channelId) : undefined) ??
+      (this.clients.values().next().value as WSClient | undefined);
     if (!client) {
-      this.logger.warn('wecom uploadMediaBuffer no client available');
+      this.logger.warn(
+        `wecom uploadMediaBuffer no client available channelId=${channelId ?? 'first'}`,
+      );
       return null;
     }
     try {
@@ -2746,12 +2754,12 @@ export class WecomAibotAdapter extends MessageAdapter {
         filename,
       });
       this.logger.log(
-        `wecom uploadMedia ok type=${mediaType} filename=${filename} media_id=${res?.media_id}`,
+        `wecom uploadMedia ok type=${mediaType} filename=${filename} channel=${channelId ?? 'first'} media_id=${res?.media_id}`,
       );
       return res?.media_id ?? null;
     } catch (e) {
       this.logger.error(
-        `wecom uploadMedia failed type=${mediaType} filename=${filename}: ${WecomAibotAdapter.describeSendError(e)}`,
+        `wecom uploadMedia failed type=${mediaType} filename=${filename} channel=${channelId ?? 'first'}: ${WecomAibotAdapter.describeSendError(e)}`,
       );
       return null;
     }

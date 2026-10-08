@@ -6367,19 +6367,26 @@ export class PlatformMcpService implements OnModuleInit {
             buffer,
             mediaKind,
             resolvedFilename,
+            wecomChannelId,
           );
           if (!mediaIdToSend) {
             sendError = `${mediaKind} 上传失败（uploadMedia 返回空）`;
             throw new Error(sendError);
           }
         }
-        // Send via passive reply first, fallback to active
+        // Send：文件仅走主动推送（官方长连接协议 回复消息 无「文件消息」，
+        // aibot_respond_msg 只支持 stream/markdown/card；主动推送 aibot_send_msg
+        // 才列了文件消息）；图片保持 被动回复 → 主动推送 的回退顺序。
         let internalId: string | null = null;
         try {
           const ext = activeExternal;
           if (ext) internalId = ext.id;
         } catch {}
-        if (internalId && typeof (adapter as any).replyMedia === 'function') {
+        if (
+          mediaKind !== 'file' &&
+          internalId &&
+          typeof (adapter as any).replyMedia === 'function'
+        ) {
           wecomSent = await (adapter as any).replyMedia(
             internalId,
             mediaKind,
@@ -6401,7 +6408,10 @@ export class PlatformMcpService implements OnModuleInit {
           );
         }
         if (!wecomSent) {
-          sendError = `${mediaKind} 发送失败（replyMedia/sendMediaMessage 均失败）`;
+          sendError =
+            mediaKind === 'file'
+              ? 'file 发送失败（主动推送 sendMediaMessage 失败，见服务端日志 errcode/errmsg）'
+              : `${mediaKind} 发送失败（replyMedia/sendMediaMessage 均失败）`;
           this.logger.warn(
             `wecom_reply ${mediaKind} both methods failed teamId=${teamId} mediaId=${mediaIdToSend} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`,
           );

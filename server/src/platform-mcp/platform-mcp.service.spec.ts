@@ -7660,7 +7660,7 @@ describe('PlatformMcpService', () => {
       expect(prisma.message.create).not.toHaveBeenCalled();
     });
 
-    it('msgtype=file 带 mediaId → uploadMediaBuffer 跳过、replyMedia 以 file 类型发送', async () => {
+    it('msgtype=file 带 mediaId → 跳过上传，直接主动推送（不走被动回复）', async () => {
       const adapter = arrangeTeamChannel();
       (adapter as any).uploadMediaBuffer = jest.fn();
       (adapter as any).replyMedia = jest.fn().mockResolvedValue(true);
@@ -7677,8 +7677,10 @@ describe('PlatformMcpService', () => {
 
       expect(result.wecomSent).toBe(true);
       expect((adapter as any).uploadMediaBuffer).not.toHaveBeenCalled();
-      expect((adapter as any).replyMedia).toHaveBeenCalledWith(
-        'm_external_1',
+      // 官方协议：被动回复（aibot_respond_msg）不支持文件消息 → file 跳过 replyMedia
+      expect((adapter as any).replyMedia).not.toHaveBeenCalled();
+      expect((adapter as any).sendMediaMessage).toHaveBeenCalledWith(
+        'mc_team_1',
         'file',
         'media_file_1',
       );
@@ -7688,6 +7690,37 @@ describe('PlatformMcpService', () => {
         mediaId: 'media_file_1',
         filename: '测试报告.docx',
       });
+    });
+
+    it('媒体上传必须带目标渠道 channelId（多 bot media_id 隔离，否则 40007）', async () => {
+      const adapter = arrangeTeamChannel();
+      (adapter as any).uploadMediaBuffer = jest
+        .fn()
+        .mockResolvedValue('media_file_x');
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+      const fsReadSpy = jest
+        .spyOn(fs.promises, 'readFile')
+        .mockResolvedValue(Buffer.from('docx-bytes'));
+
+      try {
+        await service.wecomReply(ctx, {
+          teamId: 'tm_1',
+          selfInstanceId: senderInstanceId,
+          msgtype: 'file',
+          media: '/uploads/report.docx',
+          filename: 'report.docx',
+        });
+      } finally {
+        fsReadSpy.mockRestore();
+      }
+
+      expect((adapter as any).uploadMediaBuffer).toHaveBeenCalledWith(
+        expect.anything(),
+        'file',
+        'report.docx',
+        'mc_team_1',
+      );
     });
 
     it('msgtype=file 无活动 stream → 回退 sendMediaMessage 主动推送 file 类型', async () => {
