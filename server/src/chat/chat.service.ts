@@ -526,7 +526,10 @@ export class ChatService {
         .filter((p) => p.type === 'text' && !p.synthetic)
         .map((p) => (typeof p.text === 'string' ? p.text : ''))
         .join('');
-      // 保留 parts：user 仅 text；assistant 保留 text/reasoning/tool（过程 part 忽略）
+      // 保留 parts：user 仅 text；assistant 保留 text/reasoning/thinking/tool。
+      // serve 若干内部过程 part 一律过滤（step-start/step-finish/snapshot/patch
+      // 等），不透传给前端轮询——它们被前端渲染为「未知片段」诊断行，噪声大于价值。
+      // 误分类的诊断行仅记录在平台日志侧，不影响消息落库。
       const kept =
         role === 'user'
           ? parts.filter((p) => p.type === 'text' && !p.synthetic)
@@ -534,6 +537,7 @@ export class ChatService {
               (p) =>
                 p.type === 'text' ||
                 p.type === 'reasoning' ||
+                p.type === 'thinking' ||
                 p.type === 'tool',
             );
       // 空消息（无文本且无保留 parts，如仅 step-start 的空壳）→ 跳过

@@ -56,7 +56,49 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
   const failed = status === "failed";
   const awaiting = status === "awaiting-input";
   const [open, setOpen] = useState(false);
+  // 单值 I/O 展开为值原文（不包 JSON）：{"command":"…"} → 直接显示命令；
+  // 多键才保留 JSON 序列化的紧凑形态（换行原样保留）。
+  const displayValue = (raw: string): string => {
+    const t = raw.trim();
+    if (
+      (t.startsWith("{") && t.endsWith("}")) ||
+      (t.startsWith("[") && t.endsWith("]"))
+    ) {
+      try {
+        const parsed: unknown = JSON.parse(t);
+        if (parsed !== null && typeof parsed === "object") {
+          if (!Array.isArray(parsed)) {
+            const entries = Object.entries(
+              parsed as Record<string, unknown>,
+            );
+            if (
+              entries.length === 1 &&
+              (typeof entries[0][1] === "string" ||
+                typeof entries[0][1] === "number")
+            ) {
+              return String(entries[0][1]);
+            }
+          }
+          return JSON.stringify(parsed);
+        }
+      } catch {
+        /* 非 JSON，按原文返回 */
+      }
+    }
+    return raw;
+  };
   const summary = input || output || "（无输入输出）";
+  // 展开态直接展示完整 2000 字符输入/输出原文（换行保留，不压缩为单行）；
+  // DOM 封顶约束仍由上游 formatToolIO 保证（A2：字符串/JSON 两路径各截 2000）。
+  const detailFont: CSSProperties = {
+    fontFamily: fontFamily.mono,
+    fontSize: fontSize.xs,
+    lineHeight: 1.6,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+    overflowWrap: "anywhere",
+  };
+  const titleText = displayValue(summary);
   return (
     <div
       data-testid="msg-tool"
@@ -97,7 +139,7 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
           </span>
           <span style={{ fontSize: fontSize.sm, color: neutral[700], fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>{name}</span>
           <span
-            title={summary}
+            title={titleText}
             style={{
               flex: 1,
               minWidth: 0,
@@ -109,7 +151,7 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
               textOverflow: "ellipsis",
             }}
           >
-            {summary}
+            {titleText}
           </span>
           <span
             data-testid={awaiting ? "msg-tool-awaiting" : undefined}
@@ -152,13 +194,23 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
           >
             <div style={{ display: "flex", gap: space.sm }}>
               <span style={{ color: neutral[400], flexShrink: 0 }}>输入</span>
-              <span style={{ fontFamily: fontFamily.mono, wordBreak: "break-all" }}>{input}</span>
+              <pre style={{ margin: 0, flex: 1, minWidth: 0, ...detailFont }}>
+                {displayValue(input)}
+              </pre>
             </div>
             <div style={{ display: "flex", gap: space.sm }}>
               <span style={{ color: neutral[400], flexShrink: 0 }}>输出</span>
-              <span style={{ wordBreak: "break-word", color: failed ? "#B91C1C" : neutral[600] }}>
-                {output}
-              </span>
+              <pre
+                style={{
+                  margin: 0,
+                  flex: 1,
+                  minWidth: 0,
+                  ...detailFont,
+                  color: failed ? "#B91C1C" : neutral[600],
+                }}
+              >
+                {displayValue(output)}
+              </pre>
             </div>
           </div>
         )}

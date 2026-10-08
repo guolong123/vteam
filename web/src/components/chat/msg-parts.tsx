@@ -211,8 +211,9 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
           if (p.type === "error") {
             return <MsgError key={i} kind={p.kind ?? "retry"} detail={p.detail ?? "处理失败"} />;
           }
-          // B6：step-start/step-finish/patch 及一切未识别 type 不再静默丢弃
-          return <MsgUnknownPart key={i} part={p} />;
+          // step-start/step-finish/patch 等内部过程 part 不渲染（过程噪声）。
+          // 已在分发层显式处理之外的未识别 type 同样不渲染。
+          return null;
         })}
         {body ? (
           streaming ? (
