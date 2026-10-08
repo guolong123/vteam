@@ -88,6 +88,12 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
     return raw;
   };
   const summary = input || output || "（无输入输出）";
+  // "{}"/"[]" 空对象无信息量：摘要回退输出，两者皆空则不显示占位串
+  const displayValue2 = (raw: string): string => {
+    const v = displayValue(raw);
+    const t = v.trim();
+    return t === "{}" || t === "[]" ? "" : v;
+  };
   // 展开态直接展示完整 2000 字符输入/输出原文（换行保留，不压缩为单行）；
   // DOM 封顶约束仍由上游 formatToolIO 保证（A2：字符串/JSON 两路径各截 2000）。
   const detailFont: CSSProperties = {
@@ -98,7 +104,9 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
     wordBreak: "break-word",
     overflowWrap: "anywhere",
   };
-  const titleText = displayValue(summary);
+  const summaryText = displayValue2(input) || displayValue2(output);
+  // 标题行摘要：优先有效输入，回退有效输出；皆空（如 {}/running 无输出）→ 空串
+  const titleText = summaryText;
   return (
     <div
       data-testid="msg-tool"

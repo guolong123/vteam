@@ -27,18 +27,29 @@ export function normalizeParts(parts: unknown): Array<Record<string, unknown>> {
  */
 const RENDERABLE_PART_TYPES: ReadonlySet<string> = new Set([
   'text',
-  'reasoning',
-  'thinking',
   'tool',
   'error',
   'aborted',
 ]);
+
+/**
+ * reasoning/thinking 是否有实际内容：serve 会推空 text 的 reasoning 占位
+ * （`{"type":"reasoning","text":""}`），前端展开后是「（无详细思考内容）」空壳，
+ * 不算可渲染——避免建出只剩空思考条的「空消息」。
+ */
+function reasoningHasContent(p: Record<string, unknown>): boolean {
+  const c = p.text ?? p.summary ?? p.thoughts ?? p.detail;
+  return typeof c === 'string' && c.trim().length > 0;
+}
 
 /** parts 中是否存在任一可渲染条目（text 取非 synthetic——合成占位不渲染）。 */
 export function hasRenderableContent(parts: unknown): boolean {
   return normalizeParts(parts).some((p) => {
     const type = typeof p.type === 'string' ? p.type : '';
     if (type === 'text') return !p.synthetic && typeof p.text === 'string' && p.text.length > 0;
+    if (type === 'reasoning' || type === 'thinking') {
+      return reasoningHasContent(p);
+    }
     return RENDERABLE_PART_TYPES.has(type);
   });
 }

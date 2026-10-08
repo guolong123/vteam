@@ -166,14 +166,23 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
   const textParts = list.filter((p) => p.type === "text");
   const body = textParts.map((t) => t.text ?? "").join("\n") || bodyText || "";
   const cleanBody = stripInjectedContext(body);
-  // 可渲染内容 = 正文 / 附件 / 可渲染过程 part（reasoning/tool/error 等）。
+  // 可渲染内容 = 正文 / 附件 / 可渲染过程 part（tool/error 恒可渲染；
+  // reasoning/thinking 须有实际文本——serve 会推 text="" 的空思考占位，
+  // 渲染出来只有「（无详细思考内容）」空壳）。
   // 仅含 step-start/step-finish 等不渲染片段的消息整条不出（含身份栏）——
   // 否则存量空行会渲染成「只有头像+时间」的空消息。
-  const RENDERABLE_PROC = new Set(["reasoning", "thinking", "tool", "error"]);
+  const procRenderable = (p: PartShape): boolean => {
+    const t = p.type ?? "";
+    if (t === "reasoning" || t === "thinking") {
+      const c = (p.text ?? p.summary ?? p.thoughts ?? p.detail ?? "").trim();
+      return c.length > 0;
+    }
+    return t === "tool" || t === "error" || t === "aborted";
+  };
   const hasContent =
     cleanBody.length > 0 ||
     Boolean(attachment) ||
-    procParts.some((p) => RENDERABLE_PROC.has(p.type ?? ""));
+    procParts.some(procRenderable);
 
   if (!hasContent) {
     return null;
@@ -184,6 +193,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
       <div style={secondaryRows}>
         {procParts.map((p, i) => {
           if (p.type === "reasoning" || p.type === "thinking") {
+            if (!procRenderable(p)) return null;
             return (
               <MsgThinking
                 key={i}
