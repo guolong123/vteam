@@ -38,6 +38,9 @@
 #                       ⚠️ 0.0.0.0 会把 serve 暴露到本机所有网卡；serve 带 Basic Auth
 #                       （OPENCODE_SERVER_PASSWORD），但仍建议在防火墙/安全组限制来源 IP。
 #                       确需仅本机访问可显式传 --serve-hostname 127.0.0.1。
+#   --serve-port <port>  opencode serve 端口（OPENCODE_SERVE_PORT，可选）：缺省安装时自动
+#                       从 4199 起探测首个空闲端口并固定写入 .env（重启不变）；显式传入则
+#                       以传入值为准；传 0 表示恢复随机端口（每次启动由 OS 分配）。
 #   --work-dir <path>   worker 工作目录（WORK_DIR，可选；缺省 /data/vteam-worker）：opencode serve
 #                       工作目录 + 资源注入落点（opencode.json / 技能 / 工具）。外部 worker 若
 #                       需固定工作目录/挂载持久化盘可设置；缺省不写入（worker 用内置默认）。
@@ -65,6 +68,7 @@ WORKER_SERVE_HOSTNAME="0.0.0.0"
 WORK_DIR=""
 NO_SERVICE=""
 SYSTEM_SERVICE=""
+SERVE_PORT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -78,11 +82,12 @@ while [[ $# -gt 0 ]]; do
     --mcp-url) WORKER_MCP_URL="${2:-}"; shift 2 ;;
     --advertise-host) WORKER_ADVERTISE_HOST="${2:-}"; shift 2 ;;
     --serve-hostname) WORKER_SERVE_HOSTNAME="${2:-}"; shift 2 ;;
+    --serve-port) SERVE_PORT="${2:-}"; shift 2 ;;
     --work-dir) WORK_DIR="${2:-}"; shift 2 ;;
     --no-service) NO_SERVICE="1"; shift ;;
     --system-service) SYSTEM_SERVICE="1"; shift ;;
     *)
-      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--work-dir/--system-service/--no-service）" >&2
+      echo "[install-worker] ERROR: 未知参数 $1（支持 --server/--worker-id/--concurrency/--opencode/--token/--src-url/--dir/--mcp-url/--advertise-host/--serve-hostname/--serve-port/--work-dir/--system-service/--no-service）" >&2
       exit 1
       ;;
   esac
@@ -214,7 +219,38 @@ fi
 if [ -n "${WORK_DIR}" ]; then
   update_env WORK_DIR "${WORK_DIR}"
 fi
-echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}）"
+# 固定 opencode serve 端口（安装时选定一次，重启不再漂移）：
+# - 显式 --serve-port 总是覆盖（--serve-port 0 = 明确改回随机，后续重装也保留 0）；
+# - .env 已有 OPENCODE_SERVE_PORT（含 0）则保留（重复安装不换端口）；
+# - 键缺失（.env.example 里该行默认注释掉）→ 从 4199 起探测首个空闲端口写入。
+existing_serve_port="$(grep '^OPENCODE_SERVE_PORT=' .env | tail -n 1 | cut -d= -f2- || true)"
+if [ -n "${SERVE_PORT}" ]; then
+  update_env OPENCODE_SERVE_PORT "${SERVE_PORT}"
+elif [ -z "${existing_serve_port}" ]; then
+  pinned_port="$(node -e '
+const net = require("net");
+(async () => {
+  for (let p = 4199; p < 4199 + 64; p++) {
+    const free = await new Promise((resolve) => {
+      const s = net.createServer();
+      s.once("error", () => resolve(false));
+      s.listen(p, "0.0.0.0", () => s.close(() => resolve(true)));
+    });
+    if (free) { process.stdout.write(String(p)); process.exit(0); }
+  }
+  process.exit(1);
+})();' || true)"
+  if [ -n "${pinned_port}" ]; then
+    update_env OPENCODE_SERVE_PORT "${pinned_port}"
+  else
+    echo "[install-worker] ⚠️  4199-4262 端口段全被占用，保留 OPENCODE_SERVE_PORT=${existing_serve_port:-0}（随机）" >&2
+  fi
+fi
+resolved_serve_port="$(grep '^OPENCODE_SERVE_PORT=' .env | tail -n 1 | cut -d= -f2- || true)"
+echo "[install-worker] .env 已更新（SERVER_URL=${SERVER_URL}，WORKER_ID=${WORKER_ID}${WORKER_TOKEN:+，X_WORKER_TOKEN 已注入}${WORKER_MCP_URL:+，WORKER_MCP_URL 已注入}${WORKER_ADVERTISE_HOST:+，WORKER_ADVERTISE_HOST 已注入}${WORKER_SERVE_HOSTNAME:+，OPENCODE_SERVE_HOSTNAME 已注入}${WORK_DIR:+，WORK_DIR 已注入}，OPENCODE_SERVE_PORT=${resolved_serve_port:-0}）"
+if [ "${resolved_serve_port:-0}" != "0" ]; then
+  echo "[install-worker] opencode serve 端口已固定为 ${resolved_serve_port}（重启不变；改端口可重跑并加 --serve-port <port>）"
+fi
 
 # ------------------------------ token 校验 ------------------------------
 if [ -z "${X_WORKER_TOKEN:-}" ]; then

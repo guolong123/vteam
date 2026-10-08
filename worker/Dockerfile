@@ -116,6 +116,9 @@ COPY --from=build /app/node_modules ./node_modules
 # WORKER_ADVERTISE_HOST 公布给 server（compose 网络服务名 http://worker）。
 # X_WORKER_TOKEN 运行时必填（不固化在镜像内），以下均可由 compose / docker run 覆盖。
 ENV OPENCODE_SERVE_HOSTNAME=0.0.0.0
+# serve 端口默认固定 18080（与安装向导 `docker run -p 18080:18080` 对齐，容器重启端口不变）；
+# compose / k8s 仍可显式覆盖（compose=4000，chart 由 worker.env.servePort 下发）。
+ENV OPENCODE_SERVE_PORT=18080
 ENV WORKER_ADVERTISE_HOST=http://worker
 ENV SERVER_URL=http://server:3000
 ENV WORKER_ID=w_keta-worker
