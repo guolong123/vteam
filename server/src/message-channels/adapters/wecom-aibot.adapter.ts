@@ -2708,6 +2708,28 @@ export class WecomAibotAdapter extends MessageAdapter {
     }
   }
 
+  /**
+   * 归一化错误描述：SDK 回执失败时 `reject(frame)` reject 的是原始帧对象
+   * `{errcode, errmsg}` 而非 Error——直接读 `.message` 会得到 undefined，
+   * 真实错误码丢失。此处统一提取，Error / 帧对象 / 其它都能输出可读文本。
+   */
+  private static describeSendError(e: unknown): string {
+    if (e instanceof Error) return e.message;
+    if (e && typeof e === 'object') {
+      const o = e as { errcode?: unknown; errmsg?: unknown; message?: unknown };
+      if (o.errcode !== undefined || o.errmsg !== undefined) {
+        return `errcode=${String(o.errcode)} errmsg=${String(o.errmsg)}`;
+      }
+      if (typeof o.message === 'string' && o.message) return o.message;
+      try {
+        return JSON.stringify(o).slice(0, 400);
+      } catch {
+        return String(o);
+      }
+    }
+    return String(e);
+  }
+
   async uploadMediaBuffer(
     buffer: Buffer,
     mediaType: 'image' | 'file' | 'voice' | 'video',
@@ -2729,7 +2751,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       return res?.media_id ?? null;
     } catch (e) {
       this.logger.error(
-        `wecom uploadMedia failed type=${mediaType} filename=${filename}: ${(e as Error).message}`,
+        `wecom uploadMedia failed type=${mediaType} filename=${filename}: ${WecomAibotAdapter.describeSendError(e)}`,
       );
       return null;
     }
@@ -2762,7 +2784,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       return true;
     } catch (e) {
       this.logger.error(
-        `wecom sendMediaMessage failed channelId=${channelId}: ${(e as Error).message}`,
+        `wecom sendMediaMessage failed channelId=${channelId} chatId=${chatId} type=${mediaType}: ${WecomAibotAdapter.describeSendError(e)}`,
       );
       return false;
     }
@@ -2811,7 +2833,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       return true;
     } catch (e) {
       this.logger.warn(
-        `wecom replyMedia failed internalMessageId=${internalMessageId}: ${(e as Error).message}`,
+        `wecom replyMedia failed internalMessageId=${internalMessageId} type=${mediaType}: ${WecomAibotAdapter.describeSendError(e)}`,
       );
       this.streams.delete(internalMessageId);
       return false;
