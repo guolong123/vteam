@@ -5152,6 +5152,7 @@ export class PlatformMcpService implements OnModuleInit {
       'markdown',
       'template_card',
       'image',
+      'file',
       'mpnews',
     ].includes(msgtypeRaw)
       ? msgtypeRaw
@@ -5178,12 +5179,16 @@ export class PlatformMcpService implements OnModuleInit {
         isError: false,
       };
     }
-    if (msgtype === 'image' && !args.media && !args.mediaId) {
+    if (
+      (msgtype === 'image' || msgtype === 'file') &&
+      !args.media &&
+      !args.mediaId
+    ) {
       return {
         content: [
           {
             type: 'text',
-            text: '发送失败: image 需要 media(文件路径) 或 mediaId 参数',
+            text: `发送失败: ${msgtype} 需要 media(文件路径) 或 mediaId 参数`,
           },
         ],
         isError: false,
@@ -6251,16 +6256,20 @@ export class PlatformMcpService implements OnModuleInit {
           articles: normalized,
           parts: [],
         };
-      } else if (msgtype === 'image') {
+      } else if (msgtype === 'image' || msgtype === 'file') {
+        // image/file 共用媒体链路：buffer 解析 → uploadMediaBuffer → replyMedia
+        // （被动）→ sendMediaMessage（主动）回退；仅上传 mediaType 不同。
+        const mediaKind: 'image' | 'file' = msgtype === 'file' ? 'file' : 'image';
+        const defaultName = mediaKind === 'file' ? 'file.bin' : 'image.png';
         let mediaIdToSend: string | null = args.mediaId?.trim() || null;
         const resolvedFilename = (args.filename?.trim() ||
           (args.media
-            ? args.media.split(/[\\/]/).pop() || 'image.png'
-            : 'image.png')) as string;
+            ? args.media.split(/[\\/]/).pop() || defaultName
+            : defaultName)) as string;
         if (!mediaIdToSend) {
           const mediaRef = (args.media ?? '').trim();
           if (!mediaRef) {
-            sendError = 'image 需要 media(文件路径) 或 mediaId 参数';
+            sendError = `${mediaKind} 需要 media(文件路径) 或 mediaId 参数`;
             throw new Error(sendError);
           }
           let buffer: Buffer | null = null;
@@ -6319,7 +6328,7 @@ export class PlatformMcpService implements OnModuleInit {
             }
             if (!buffer) {
               if (!legacyTaskId) {
-                sendError = '无法解析当前任务上下文，请传 taskId 后再拉取图片';
+                sendError = `无法解析当前任务上下文，请传 taskId 后再拉取${mediaKind === 'file' ? '文件' : '图片'}`;
                 throw new Error(sendError);
               }
               const workerRow = await this.prisma.worker.findUnique({
@@ -6341,25 +6350,25 @@ export class PlatformMcpService implements OnModuleInit {
           } catch (e) {
             if (!sendError) sendError = (e as Error).message ?? String(e);
             this.logger.warn(
-              `wecom_reply image fetch failed media=${mediaRef} teamId=${teamId} err=${sendError}`,
+              `wecom_reply ${mediaKind} fetch failed media=${mediaRef} teamId=${teamId} err=${sendError}`,
             );
             throw new Error(sendError);
           }
           if (!buffer) {
-            sendError = '图片文件读取失败';
+            sendError = `${mediaKind} 文件读取失败`;
             throw new Error(sendError);
           }
           if (typeof (adapter as any).uploadMediaBuffer !== 'function') {
-            sendError = 'WeCom 适配器不支持图片上传';
+            sendError = `WeCom 适配器不支持 ${mediaKind} 上传`;
             throw new Error(sendError);
           }
           mediaIdToSend = await (adapter as any).uploadMediaBuffer(
             buffer,
-            'image',
+            mediaKind,
             resolvedFilename,
           );
           if (!mediaIdToSend) {
-            sendError = '图片上传失败（uploadMedia 返回空）';
+            sendError = `${mediaKind} 上传失败（uploadMedia 返回空）`;
             throw new Error(sendError);
           }
         }
@@ -6372,7 +6381,7 @@ export class PlatformMcpService implements OnModuleInit {
         if (internalId && typeof (adapter as any).replyMedia === 'function') {
           wecomSent = await (adapter as any).replyMedia(
             internalId,
-            'image',
+            mediaKind,
             mediaIdToSend,
           );
           if (!wecomSent)
@@ -6386,20 +6395,20 @@ export class PlatformMcpService implements OnModuleInit {
         ) {
           wecomSent = await (adapter as any).sendMediaMessage(
             wecomChannelId,
-            'image',
+            mediaKind,
             mediaIdToSend,
           );
         }
         if (!wecomSent) {
-          sendError = '图片发送失败（replyMedia/sendMediaMessage 均失败）';
+          sendError = `${mediaKind} 发送失败（replyMedia/sendMediaMessage 均失败）`;
           this.logger.warn(
-            `wecom_reply image both methods failed teamId=${teamId} mediaId=${mediaIdToSend} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`,
+            `wecom_reply ${mediaKind} both methods failed teamId=${teamId} mediaId=${mediaIdToSend} internalId=${internalId ?? 'null'} channel=${wecomChannelId}`,
           );
           throw new Error(sendError);
         }
         mirrorContent = {
-          text: mirrorText || rawText || `[image] ${resolvedFilename}`,
-          msgtype: 'image',
+          text: mirrorText || rawText || `[${mediaKind}] ${resolvedFilename}`,
+          msgtype: mediaKind,
           mediaId: mediaIdToSend,
           filename: resolvedFilename,
           parts: [],

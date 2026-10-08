@@ -591,17 +591,17 @@ const wecomReplySchema = z
       .optional()
       .describe('调用方成员 id（tmm_ 前缀，你的成员身份；缺省自动解析）'),
     msgtype: z
-      .enum(['text', 'markdown', 'template_card', 'image', 'mpnews'])
+      .enum(['text', 'markdown', 'template_card', 'image', 'file', 'mpnews'])
       .optional()
       .describe(
-        '消息类型：text/markdown 文本、template_card 卡片、image 图片、mpnews 图文（默认 text）。card/mpnews 图片均为可选 HTTPS URL，无本地文件要求。',
+        '消息类型：text/markdown 文本、template_card 卡片、image 图片、file 文件、mpnews 图文（默认 text）。card/mpnews 图片均为可选 HTTPS URL，无本地文件要求。',
       ),
     text: z
       .string()
       .max(4000)
       .optional()
       .describe(
-        '回复正文，支持 markdown，≤4000字。msgtype=text/markdown 时必填，template_card/image/mpnews 时可选（作为附带文本镜像群聊）',
+        '回复正文，支持 markdown，≤4000字。msgtype=text/markdown 时必填，template_card/image/file/mpnews 时可选（作为附带文本镜像群聊）',
       ),
     atUser: z
       .boolean()
@@ -619,19 +619,19 @@ const wecomReplySchema = z
       .string()
       .optional()
       .describe(
-        '图片文件引用（msgtype=image 时必填其一：与 mediaId 二选一）：worker 工作区路径（如 /tmp/opencode/xxx.png）或已归档 fileRef/artifactId，服务端自动拉取并上传为 mediaId；仅 image 需要本地文件，card/mpnews 的 picurl 为可选 HTTPS URL',
+        '文件引用（msgtype=image/file 时必填其一：与 mediaId 二选一）：worker 工作区路径（如 /tmp/opencode/report.docx）或已归档 fileRef/artifactId，服务端自动拉取并上传为 mediaId；card/mpnews 的 picurl 为可选 HTTPS URL',
       ),
     mediaId: z
       .string()
       .optional()
       .describe(
-        '已上传媒体 ID（msgtype=image 时与 media 二选一，传 mediaId 则直接发送不再上传）',
+        '已上传媒体 ID（msgtype=image/file 时与 media 二选一，传 mediaId 则直接发送不再上传）',
       ),
     filename: z
       .string()
       .optional()
       .describe(
-        '文件名（msgtype=image 时可选，上传时透传，如 image.png；缺省从 media 推断）',
+        '文件名（msgtype=image/file 时可选，上传时透传，如 测试报告.docx；缺省从 media 推断）',
       ),
     articles: z
       .array(
@@ -1178,7 +1178,7 @@ export function buildPlatformMcpTools(
     {
       name: 'wecom_reply',
       description:
-        '回复企业微信私聊或群@消息（唯一 conversational 回流入企微入口，通过 wecom_aibot 长连接）。teamId 可选，缺省自动从最近会话解析。支持类型：msgtype=text|markdown|template_card|image|mpnews（默认 text）。text/markdown 走 replyStream/finishStream 替换占位并镜像团队群聊；template_card 需 card JSON（card_type+main_title 必填，icon_url/pic_url/image_url 等图片字段均为可选不传也能发：如 {card_type:"text_notice", main_title:{title:"标题"}} 即可），优先 replyTemplateCard/被动回复否则 sendMessage 主动推送；image 需 media(文件路径/fileRef, 仅此类型需本地文件) 或 mediaId 二选一 + 可选 filename；mpnews 图文需 articles 或 mpnews 二选一（每篇仅 title 必填，picurl/description/url 均可选，无 picurl 也能发，自动映射为 news_notice 卡片无需上传）。\n\n【msgtype 选型指南｜何时用哪种】\n| msgtype | 适用场景 | 典型例子 | 媒体/图片说明 |\n| text | 私聊/群@ 简单文本回复，无格式需求 | 问候、确认、简短答复、状态回告 | 无图片 |\n| markdown | 需要格式化、链接、列表、代码块的回复 | 带链接的说明、分步骤列表、富文本答复 | 无图片 |\n| template_card | 需交互（按钮/跳转/投票）或结构化展示 | 审批/确认按钮、投票、通知卡片；4类 card_type：text_notice(通知)、news_notice(单图文)、button_interaction(交互按钮)、vote_interaction(投票) | card 内 pic_url/image_url/icon_url 均为可选 HTTPS URL，不传也能发 |\n| image | 需发送图片（图表、截图、可视化结果） | 生成的图表、截图、二维码 | 仅此类型需本地文件：media(工作区路径/fileRef) 或 mediaId 二选一，服务端自动上传 |\n| mpnews | 需发送多图文消息 | 文档列表、新闻推送、多文章合集 | articles 每篇仅 title 必填，picurl/description/url 均为可选 HTTPS URL，无 picurl 也能发，无需上传 |\n\n常见会话场景：私聊直回（atUser 忽略直回发送者）、群聊 @回复（atUser=true 自动 @发送者）、卡片交互回调后更新/再发卡片、图文推送。不要用 channel_send/group_post 回复企微用户。\n\n示例：{msgtype:"template_card", card:{card_type:"text_notice", main_title:{title:"标题"}}}；{msgtype:"mpnews", articles:[{title:"标题", description:"摘要", url:"https://example.com"}]}。',
+        '回复企业微信私聊或群@消息（唯一 conversational 回流入企微入口，通过 wecom_aibot 长连接）。teamId 可选，缺省自动从最近会话解析。支持类型：msgtype=text|markdown|template_card|image|file|mpnews（默认 text）。text/markdown 走 replyStream/finishStream 替换占位并镜像团队群聊；template_card 需 card JSON（card_type+main_title 必填，icon_url/pic_url/image_url 等图片字段均为可选不传也能发：如 {card_type:"text_notice", main_title:{title:"标题"}} 即可），优先 replyTemplateCard/被动回复否则 sendMessage 主动推送；image 需 media(文件路径/fileRef, 仅此类型需本地文件) 或 mediaId 二选一 + 可选 filename；file 与 image 同参（media/mediaId/filename），发送任意类型文件（测试报告 docx/xlsx、导出 zip、日志 txt 等），对方在企微收到可下载的文件消息；mpnews 图文需 articles 或 mpnews 二选一（每篇仅 title 必填，picurl/description/url 均可选，无 picurl 也能发，自动映射为 news_notice 卡片无需上传）。\n\n【msgtype 选型指南｜何时用哪种】\n| msgtype | 适用场景 | 典型例子 | 媒体/图片说明 |\n| text | 私聊/群@ 简单文本回复，无格式需求 | 问候、确认、简短答复、状态回告 | 无图片 |\n| markdown | 需要格式化、链接、列表、代码块的回复 | 带链接的说明、分步骤列表、富文本答复 | 无图片 |\n| template_card | 需交互（按钮/跳转/投票）或结构化展示 | 审批/确认按钮、投票、通知卡片；4类 card_type：text_notice(通知)、news_notice(单图文)、button_interaction(交互按钮)、vote_interaction(投票) | card 内 pic_url/image_url/icon_url 均为可选 HTTPS URL，不传也能发 |\n| image | 需发送图片（图表、截图、可视化结果） | 生成的图表、截图、二维码 | 仅此类型需本地文件：media(工作区路径/fileRef) 或 mediaId 二选一，服务端自动上传 |\n| file | 需发送任意文件（用户要下载打开的交付物） | 测试报告 .docx/.xlsx、导出包 .zip、日志 .txt、脚本等 | 与 image 同参：media(工作区路径/fileRef/artifactId) 或 mediaId 二选一，服务端自动上传，filename 指定接收方看到的文件名 |\n| mpnews | 需发送多图文消息 | 文档列表、新闻推送、多文章合集 | articles 每篇仅 title 必填，picurl/description/url 均为可选 HTTPS URL，无 picurl 也能发，无需上传 |\n\n常见会话场景：私聊直回（atUser 忽略直回发送者）、群聊 @回复（atUser=true 自动 @发送者）、卡片交互回调后更新/再发卡片、图文推送。不要用 channel_send/group_post 回复企微用户。\n\n示例：{msgtype:"template_card", card:{card_type:"text_notice", main_title:{title:"标题"}}}；{msgtype:"file", media:"/data/vteam-worker/tasks/t_x/docs/测试报告.docx", filename:"测试报告.docx"}；{msgtype:"mpnews", articles:[{title:"标题", description:"摘要", url:"https://example.com"}]}。',
       inputSchema: wecomReplySchema,
       handler: (ctx, args) => service.wecomReply(ctx, args as WecomReplyArgs),
     },

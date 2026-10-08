@@ -7645,6 +7645,74 @@ describe('PlatformMcpService', () => {
         select: { messageChannelId: true },
       });
     });
+
+    it('msgtype=file 缺 media/mediaId → 参数校验不进媒体链路', async () => {
+      const adapter = arrangeTeamChannel();
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+      });
+
+      expect(result.content[0].text).toContain('file 需要 media');
+      expect((adapter as any).sendMediaMessage).toBeUndefined();
+      expect(prisma.message.create).not.toHaveBeenCalled();
+    });
+
+    it('msgtype=file 带 mediaId → uploadMediaBuffer 跳过、replyMedia 以 file 类型发送', async () => {
+      const adapter = arrangeTeamChannel();
+      (adapter as any).uploadMediaBuffer = jest.fn();
+      (adapter as any).replyMedia = jest.fn().mockResolvedValue(true);
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_file_1',
+        filename: '测试报告.docx',
+        text: '报告已生成',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect((adapter as any).uploadMediaBuffer).not.toHaveBeenCalled();
+      expect((adapter as any).replyMedia).toHaveBeenCalledWith(
+        'm_external_1',
+        'file',
+        'media_file_1',
+      );
+      const created = (prisma.message.create as jest.Mock).mock.calls[0][0];
+      expect(created.data.content).toMatchObject({
+        msgtype: 'file',
+        mediaId: 'media_file_1',
+        filename: '测试报告.docx',
+      });
+    });
+
+    it('msgtype=file 无活动 stream → 回退 sendMediaMessage 主动推送 file 类型', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue(undefined);
+      (adapter as any).uploadMediaBuffer = jest
+        .fn()
+        .mockResolvedValue('media_file_2');
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_file_2',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect((adapter as any).sendMediaMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        'file',
+        'media_file_2',
+      );
+    });
   });
 
   describe('secret_command（阻塞式敏感命令）', () => {
