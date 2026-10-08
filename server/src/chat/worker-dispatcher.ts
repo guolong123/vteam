@@ -73,7 +73,7 @@ import {
   normalizePlanHash,
   selectFrozenPlanHash,
 } from '../issues/plan-hash-gate';
-import { normalizeParts } from './message-parts';
+import { hasRenderableContent, normalizeParts } from './message-parts';
 import {
   TRIGGER_KIND,
   buildTriggerDedupKey,
@@ -2335,15 +2335,41 @@ export class WorkerDispatcher
     this.registerExecution(workerId, scope, teamMemberId);
     const cleanupChannel = await this.resolveTeamChannel(teamId, teamMemberId);
     if (cleanupChannel) {
-      await this.prisma.message.updateMany({
+      const staleRows = await this.prisma.message.findMany({
         where: {
           channelId: cleanupChannel.id,
           senderType: SENDER_TYPE.agent,
           senderId: target.agentId,
           status: MESSAGE_STATUS.processing,
         },
-        data: { status: MESSAGE_STATUS.failed },
+        select: { id: true, content: true },
       });
+      const staleIds = staleRows.map((r) => r.id);
+      if (staleIds.length > 0) {
+        // 空行（无可渲染内容：只剩 step-start/step-finish 等）直接删——
+        // 标 failed 会在 UI 上留下空消息；有内容的才保留为 failed 供回看。
+        const emptyIds = staleRows
+          .filter(
+            (r) =>
+              !hasRenderableContent(
+                (r.content as { parts?: unknown })?.parts,
+              ) &&
+              !((r.content as { text?: unknown })?.text ?? '').toString().trim(),
+          )
+          .map((r) => r.id);
+        const failedIds = staleIds.filter((id) => !emptyIds.includes(id));
+        if (emptyIds.length > 0) {
+          await this.prisma.message.deleteMany({
+            where: { id: { in: emptyIds } },
+          });
+        }
+        if (failedIds.length > 0) {
+          await this.prisma.message.updateMany({
+            where: { id: { in: failedIds } },
+            data: { status: MESSAGE_STATUS.failed },
+          });
+        }
+      }
     }
     const imageAttach = await this.resolveImageAttachments(request.messageId);
     const finalPrompt = imageAttach
@@ -2606,6 +2632,42 @@ export class WorkerDispatcher
   }
 
   /**
+   * 终态新建 sent 消息：内容无可渲染（空正文 + 仅 step-start 等噪声 part）→ 返回 null，
+   * 调用方跳过落库，避免 UI 空消息；可渲染才建行。
+   */
+  private async createFinalMessageIfRenderable(
+    channel: { id: string },
+    args: {
+      taskId: string | null;
+      agentId: string;
+      teamMemberId: string;
+      finalContent: Prisma.InputJsonValue;
+    },
+  ): Promise<MessageRow | null> {
+    const content = args.finalContent as unknown as {
+      text?: unknown;
+      parts?: unknown;
+    };
+    const textEmpty = !String(content.text ?? '').trim();
+    if (textEmpty && !hasRenderableContent(content.parts)) {
+      return null;
+    }
+    return this.prisma.message.create({
+      data: {
+        id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+        channelId: channel.id,
+        taskId: args.taskId,
+        senderType: SENDER_TYPE.agent,
+        senderId: args.agentId,
+        senderInstanceId: args.teamMemberId,
+        content: args.finalContent,
+        mentions: null,
+        status: MESSAGE_STATUS.sent,
+      } as any,
+    });
+  }
+
+  /**
    * task.completed 回流团队唯一实现（Todo 7）：团队归属解析 → 频道定位 →
    * 落库（senderType=agent）→ 广播 chat.message.new + emitFinal。
    * - 归属解析 team-only：sessionId → 团队会话直查 (teamId, teamMemberId)；
@@ -2728,23 +2790,69 @@ export class WorkerDispatcher
               taskId: taskId ?? null,
             } as any,
           })
-        : await this.prisma.message.create({
-            data: {
-              id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-              channelId: channel.id,
-              taskId: taskId ?? null,
-              senderType: SENDER_TYPE.agent,
-              senderId: agentId,
-              senderInstanceId: teamMemberId,
-              content: finalContent,
-              mentions: null,
-              status: MESSAGE_STATUS.sent,
-            } as any,
+        : await this.createFinalMessageIfRenderable(channel, {
+            taskId: taskId ?? null,
+            agentId,
+            teamMemberId,
+            finalContent,
           });
+      if (!processingRow && !message) {
+        // 终态无任何可渲染内容（无正文、无 reasoning/tool part）→ 不落空 sent 行
+        this.logger.log(
+          `agent ${agentId} task.completed 内容为空，跳过空消息落库（channel=${channel.id}）`,
+        );
+        if (sessionId) {
+          this.completedSessions.add(sessionId);
+        }
+        this.emitFinal({ taskId: scope, agentId, messageId: '', text });
+        return unsettled;
+      }
       if (processingRow) {
         this.logger.log(
           `agent ${agentId} 流式消息终态化 message=${processingRow.id} → sent`,
         );
+        // 残留清扫：同频道同 agent 还有其它 processing 行（并发 delta 建行竞态/
+        // 部分轮次未收尾）——空行删除，有内容的收敛为 sent（同 content 不改写），
+        // 避免它们永远挂在 processing，UI 上表现为「消息开始了但没结束」的空消息。
+        const residual = await this.prisma.message.findMany({
+          where: {
+            channelId: channel.id,
+            senderType: SENDER_TYPE.agent,
+            senderId: agentId,
+            status: MESSAGE_STATUS.processing,
+            id: { not: processingRow.id },
+          },
+          select: { id: true, content: true },
+        });
+        const residualEmpty = residual
+          .filter(
+            (r) =>
+              !hasRenderableContent(
+                (r.content as { parts?: unknown })?.parts,
+              ) &&
+              !((r.content as { text?: unknown })?.text ?? '').toString().trim(),
+          )
+          .map((r) => r.id);
+        const residualFilled = residual
+          .map((r) => r.id)
+          .filter((id) => !residualEmpty.includes(id));
+        if (residualEmpty.length > 0) {
+          await this.prisma.message.deleteMany({
+            where: { id: { in: residualEmpty } },
+          });
+          this.logger.log(
+            `agent ${agentId} 终态化清扫空 processing 行 ${residualEmpty.length} 条`,
+          );
+        }
+        if (residualFilled.length > 0) {
+          await this.prisma.message.updateMany({
+            where: { id: { in: residualFilled } },
+            data: { status: MESSAGE_STATUS.sent },
+          });
+          this.logger.log(
+            `agent ${agentId} 终态化收敛残留 processing 行 ${residualFilled.length} 条 → sent`,
+          );
+        }
       }
       if (sessionId) {
         this.completedSessions.add(sessionId);

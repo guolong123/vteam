@@ -166,12 +166,21 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
   const textParts = list.filter((p) => p.type === "text");
   const body = textParts.map((t) => t.text ?? "").join("\n") || bodyText || "";
   const cleanBody = stripInjectedContext(body);
-  // 无任何可渲染内容时不出身份栏：保持既有「空消息不占位」行为
-  const hasContent = list.length > 0 || cleanBody.length > 0 || Boolean(attachment);
+  // 可渲染内容 = 正文 / 附件 / 可渲染过程 part（reasoning/tool/error 等）。
+  // 仅含 step-start/step-finish 等不渲染片段的消息整条不出（含身份栏）——
+  // 否则存量空行会渲染成「只有头像+时间」的空消息。
+  const RENDERABLE_PROC = new Set(["reasoning", "thinking", "tool", "error"]);
+  const hasContent =
+    cleanBody.length > 0 ||
+    Boolean(attachment) ||
+    procParts.some((p) => RENDERABLE_PROC.has(p.type ?? ""));
 
+  if (!hasContent) {
+    return null;
+  }
   return (
     <div className={className} style={{ display: "flex", flexDirection: "column", gap: space.sm, ...style }}>
-      {hasContent && !grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
+      {!grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
       <div style={secondaryRows}>
         {procParts.map((p, i) => {
           if (p.type === "reasoning" || p.type === "thinking") {

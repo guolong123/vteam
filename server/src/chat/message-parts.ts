@@ -20,6 +20,29 @@ export function normalizeParts(parts: unknown): Array<Record<string, unknown>> {
   );
 }
 
+/**
+ * 可渲染 part 类型：与前端 MsgParts 分发口径一致（text 正文 + reasoning/tool/error
+ * 过程卡片）。step-start/step-finish/snapshot/patch 等内部片段前端不渲染——
+ * 只含这些类型的「消息」在 UI 上是空消息，不应建行/应清理。
+ */
+const RENDERABLE_PART_TYPES: ReadonlySet<string> = new Set([
+  'text',
+  'reasoning',
+  'thinking',
+  'tool',
+  'error',
+  'aborted',
+]);
+
+/** parts 中是否存在任一可渲染条目（text 取非 synthetic——合成占位不渲染）。 */
+export function hasRenderableContent(parts: unknown): boolean {
+  return normalizeParts(parts).some((p) => {
+    const type = typeof p.type === 'string' ? p.type : '';
+    if (type === 'text') return !p.synthetic && typeof p.text === 'string' && p.text.length > 0;
+    return RENDERABLE_PART_TYPES.has(type);
+  });
+}
+
 /** 结论性 parts（群聊只保留此子集）：type==='text' && 非 synthetic（reasoning/tool 排除）。 */
 export function extractConclusionParts(
   parts: unknown,

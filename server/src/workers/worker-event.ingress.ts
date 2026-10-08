@@ -16,6 +16,7 @@ import { WORKER_ERRORS } from './workers.constants';
 import {
   concatText,
   extractConclusionParts,
+  hasRenderableContent,
   normalizeParts,
 } from '../chat/message-parts';
 import { inferErrorType } from './infer-error-type';
@@ -587,7 +588,7 @@ export class WorkerEventIngress {
       );
       return true;
     }
-    const existing = await this.prisma.message.findFirst({
+    const hasExisting = await this.prisma.message.findFirst({
       where: {
         channelId,
         senderType: SENDER_TYPE.agent,
@@ -597,13 +598,28 @@ export class WorkerEventIngress {
       orderBy: { createdAt: 'desc' },
       select: { id: true, content: true },
     });
+    // 只含 step-start/step-finish 等前端不渲染片段的增量：
+    // - 无 processing 行 → 不建行（否则消息开始时就落一条 UI 上的空消息）；
+    // - 已有行 → 不追加（避免内容被噪声撑大、终态化后仍无可渲染内容）。
+    if (!hasExisting && !hasRenderableContent(kept)) {
+      this.logger.debug(
+        `[ingress] message.part.delta 增量无可渲染内容且无 processing 行，跳过（channel=${channelId}）`,
+      );
+      return true;
+    }
     let row: MessageRow;
-    if (existing) {
-      const oldContent = (existing.content ?? {}) as Record<string, unknown>;
+    if (hasExisting && !hasRenderableContent(kept)) {
+      this.logger.debug(
+        `[ingress] message.part.delta 增量无可渲染内容，不追加 message=${hasExisting.id}（channel=${channelId}）`,
+      );
+      return true;
+    }
+    if (hasExisting) {
+      const oldContent = (hasExisting.content ?? {}) as Record<string, unknown>;
       const oldParts = Array.isArray(oldContent.parts) ? oldContent.parts : [];
       const merged = [...oldParts, ...kept];
       row = await this.prisma.message.update({
-        where: { id: existing.id },
+        where: { id: hasExisting.id },
         data: {
           content: {
             text: concatText(merged),
@@ -612,7 +628,7 @@ export class WorkerEventIngress {
         },
       });
       this.logger.debug(
-        `[ingress] message.part.delta 累积更新 message=${existing.id} parts=${kept.length}（workerId=${dto.workerId}）`,
+        `[ingress] message.part.delta 累积更新 message=${hasExisting.id} parts=${kept.length}（workerId=${dto.workerId}）`,
       );
     } else {
       row = await this.prisma.message.create({

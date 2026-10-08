@@ -541,7 +541,7 @@ async function measureToolJson(
     const text = el.textContent ?? "";
     const titleEl = el.querySelector("[title]");
     const title = titleEl?.getAttribute("title") ?? "";
-    const spans = Array.from(el.querySelectorAll("span")).map((s) => s.textContent ?? "");
+    const spans = Array.from(el.querySelectorAll("span, pre")).map((s) => s.textContent ?? "");
     return {
       aria: el.querySelector("button[aria-expanded]")?.getAttribute("aria-expanded") ?? "",
       summaryIsInputFirst2000: (titleEl?.textContent ?? "") === exp.inputFirst,
@@ -914,31 +914,16 @@ test("B1 共享身份栏：reasoning+tool+text 单条 agent 消息只渲染一�
   await expect(page.getByTestId("chat-bubble-content")).toContainText("最终结论");
 });
 
-test("B6 未知 part：patch/step-start/step-finish/未识别 type 各渲染一个 msg-unknown-part，默认收起，已知分支不回归", async ({
+test("B6 未知 part 不渲染：patch/step-start/step-finish/未识别 type 全部隐藏，已知分支不回归", async ({
   page,
 }) => {
   await mountHarness(page);
   await renderFixture(page, "unknown", UNKNOWN_MARKER);
 
+  // 契约（本仓库当前行为）：未知/内部片段（step-start/step-finish/patch 等）
+  // 一律不渲染——旧的 msg-unknown-part 诊断行已下线（避免空消息与过程噪声）。
   const nodes = page.getByTestId("msg-unknown-part");
-  await expect(nodes).toHaveCount(4); // 改动前 0：dispatcher 末尾 return null
-
-  const partTypes = await nodes.evaluateAll((els) =>
-    els.map((el) => el.getAttribute("data-part-type"))
-  );
-  expect(partTypes.slice(0, 3)).toEqual(["patch", "step-start", "step-finish"]);
-  expect(partTypes[3]).toMatch(/^[A-Za-z0-9_.:-]{1,32}$/); // 未识别 type 清洗后仍是安全标签
-
-  await expect(nodes.nth(0)).toContainText("patch");
-  await expect(nodes.nth(1)).toContainText("step-start");
-  await expect(nodes.nth(2)).toContainText("step-finish");
-
-  // 默认收起：4 个折叠开关全为 aria-expanded=false，摘要与 payload 都不进 DOM
-  const toggles = page.locator('[data-testid="msg-unknown-part"] button[aria-expanded]');
-  await expect(toggles).toHaveCount(4);
-  await expect(
-    page.locator('[data-testid="msg-unknown-part"] button[aria-expanded="false"]')
-  ).toHaveCount(4);
+  await expect(nodes).toHaveCount(0);
   await expect(page.getByTestId("msg-unknown-part-summary")).toHaveCount(0);
   await expect(page.getByText(UNKNOWN_MARKER)).toHaveCount(0);
 
@@ -967,64 +952,30 @@ test("B6 未知 part：patch/step-start/step-finish/未识别 type 各渲染一�
   await expect(page.getByTestId("chat-bubble-content")).toContainText("已知正文分支");
 });
 
-test("B6 展开/收起：展开显示受限 JSON 摘要，收起后摘要离开 DOM", async ({ page }) => {
+test("B6 未知 part payload 不进 DOM：展开/收起节点不存在，摘要计数恒 0", async ({ page }) => {
   await mountHarness(page);
   await renderFixture(page, "unknown", UNKNOWN_MARKER);
 
-  const node = page.getByTestId("msg-unknown-part").first();
-  const toggle = node.locator("button[aria-expanded]");
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
-  await expect(page.getByTestId("msg-unknown-part-summary")).toHaveCount(0);
-
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "true");
-  const summary = page.getByTestId("msg-unknown-part-summary");
-  await expect(summary).toHaveCount(1);
-  await expect(summary).toContainText('"type":"patch"');
-  await expect(summary).toContainText(UNKNOWN_MARKER);
-  const expandedLen = (await summary.textContent())?.length ?? 0;
-  expect(expandedLen).toBeGreaterThan(0);
-  expect(expandedLen).toBeLessThanOrEqual(UNKNOWN_SUMMARY_MAX);
-
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByTestId("msg-unknown-part")).toHaveCount(0);
   await expect(page.getByTestId("msg-unknown-part-summary")).toHaveCount(0);
   await expect(page.getByText(UNKNOWN_MARKER)).toHaveCount(0);
 });
 
-test("B6 超长 payload：摘要恰封顶 400 字符，第 401 字符起不进 DOM", async ({ page }) => {
+test("B6 超长 payload 不进 DOM：无未知 part 节点，封顶摘要计数恒 0", async ({ page }) => {
   await mountHarness(page);
   expect(HUGE_PAYLOAD.length).toBeGreaterThan(UNKNOWN_SUMMARY_MAX);
   await renderFixture(page, "unknown-huge", HUGE_PAYLOAD);
 
-  const node = page.getByTestId("msg-unknown-part");
-  await expect(node).toHaveCount(1);
-  await expect(node).toHaveAttribute("data-part-type", "patch");
-  // 改动前无节点 → 摘要计数 0 是「节点缺失」而非「已收起」，红点由此转绿
+  await expect(page.getByTestId("msg-unknown-part")).toHaveCount(0);
   await expect(page.getByTestId("msg-unknown-part-summary")).toHaveCount(0);
-
-  await node.locator("button[aria-expanded]").click();
-  const summary = page.getByTestId("msg-unknown-part-summary");
-  await expect(summary).toBeVisible();
-
-  const text = (await summary.textContent()) ?? "";
-  expect(text.length).toBe(UNKNOWN_SUMMARY_MAX); // 恰好封顶，不追加省略号
-  expect(text).toContain(HUGE_HEAD);
-  expect(text).not.toContain(HUGE_PAST_BOUND);
   await expect(page.getByText(HUGE_PAST_BOUND)).toHaveCount(0);
 });
 
-test("B6 安全标签：恶意 type 不产生标记注入，data-part-type 只含安全字符", async ({ page }) => {
+test("B6 恶意 type 无注入：未知 part 不渲染，DOM 无 img/onerror/pwn 标记", async ({ page }) => {
   await mountHarness(page);
   await renderFixture(page, "unknown-hostile", "");
 
-  const node = page.getByTestId("msg-unknown-part");
-  await expect(node).toHaveCount(1);
-  const label = await node.getAttribute("data-part-type");
-  expect(label).toMatch(/^[A-Za-z0-9_.:-]{1,32}$/);
-  expect(label).not.toContain("<");
-  expect(label).not.toContain(">");
-  expect(label).not.toContain('"');
+  await expect(page.getByTestId("msg-unknown-part")).toHaveCount(0);
 
   const dom = await page.evaluate(() => ({
     imgs: document.querySelectorAll("img").length,
@@ -1249,12 +1200,9 @@ test("B11 低优先级默认收起：thinking/tool/unknown/长附件初始收起
   await expect(tool).not.toContainText(TOOL_TAIL30);
 
   await renderFixture(page, "unknown-huge", HUGE_PAYLOAD);
-  const unknown = page.getByTestId("msg-unknown-part");
-  await expect(unknown).toHaveCount(1);
-  await expect(unknown.locator("button[aria-expanded]")).toHaveAttribute("aria-expanded", "false");
+  // 未知 part 已下线：不渲染任何节点/payload
+  await expect(page.getByTestId("msg-unknown-part")).toHaveCount(0);
   await expect(page.getByTestId("msg-unknown-part-summary")).toHaveCount(0);
-  await unknown.locator("button[aria-expanded]").click();
-  await expect(page.getByTestId("msg-unknown-part-summary")).toBeVisible();
 
   await renderFixture(page, "attachment-long", LONG_ATTACHMENT_NAME);
   const attachToggle = page.getByTestId("attachment-detail-toggle");
@@ -1404,7 +1352,7 @@ test("B11 短内容不引入折叠噪音：短 error/短 aborted/短附件无开
   await expect(page.getByTestId("attachment-file")).toContainText("report.pdf");
 });
 
-test("B11 折叠矩阵快照：八类内容的初始态与展开态逐行落盘", async ({ page }) => {
+test("B11 折叠矩阵快照：七类内容的初始态与展开态逐行落盘", async ({ page }) => {
   await mountHarness(page);
   const rows: Array<Record<string, unknown>> = [];
 
@@ -1439,7 +1387,7 @@ test("B11 折叠矩阵快照：八类内容的初始态与展开态逐行落盘"
 
   await probe("process(thinking)", "thinking", THINK_3000, '[data-testid="msg-thinking"]', '[data-testid="msg-thinking-detail"]', '[data-testid="msg-thinking"] button[aria-expanded]');
   await probe("tool", "tool", TOOL_3000, '[data-testid="msg-tool"]', '[data-testid="msg-tool-io"]', '[data-testid="msg-tool"] button[aria-expanded]');
-  await probe("unknown", "unknown-huge", HUGE_PAYLOAD, '[data-testid="msg-unknown-part"]', '[data-testid="msg-unknown-part-summary"]', '[data-testid="msg-unknown-part"] button[aria-expanded]');
+  // unknown 类目已下线（未知 part 不渲染），矩阵由八类收窄为七类
   await probe("attachment", "attachment-long", LONG_ATTACHMENT_NAME, '[data-testid="attachment-file"], [data-testid="attachment-detail-toggle"]', '[data-testid="attachment-file"]', '[data-testid="attachment-detail-toggle"]');
   await probe("error", "error-long", LONG_ERROR_DETAIL, '[data-testid="msg-error"]', '[data-testid="msg-error-detail"]', '[data-testid="msg-error-detail-toggle"]');
   await probe("aborted", "aborted-long", LONG_ABORTED_DETAIL, '[data-testid="msg-aborted"]', '[data-testid="msg-aborted-detail"]', '[data-testid="msg-aborted-detail-toggle"]');
