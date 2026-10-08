@@ -119,5 +119,5 @@ secret.yaml 与 configmap.yaml（拼装 DATABASE_URL）必须引用同一个生�
 {{- define "vteam.image" -}}
 {{- $img := index . 0 -}}
 {{- $ctx := index . 1 -}}
-{{- printf "%s:%s" $img.repository ($img.tag | default $ctx.Chart.AppVersion) -}}
+{{- printf "%s:%s" $img.repository ($img.tag | default $ctx.Chart.AppVersion | toString) -}}
 {{- end }}

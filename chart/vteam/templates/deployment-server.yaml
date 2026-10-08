@@ -43,7 +43,7 @@ spec:
       # 目标地址取自 ConfigMap 的 DATABASE_URL，与 server 自身同源；复用 server 镜像。
       initContainers:
         - name: wait-for-db
-          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
+          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion | toString) }}
           imagePullPolicy: {{ .Values.server.image.pullPolicy | default .Values.image.pullPolicy }}
           command:
             - node
@@ -87,7 +87,7 @@ spec:
               value: {{ .Values.server.schemaWait.pollIntervalSeconds | default 3 | quote }}
       containers:
         - name: server
-          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
+          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion | toString) }}
           imagePullPolicy: {{ .Values.server.image.pullPolicy | default .Values.image.pullPolicy }}
           ports:
             - name: http

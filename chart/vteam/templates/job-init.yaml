@@ -26,7 +26,7 @@ spec:
       {{- if .Values.db.enabled }}
       initContainers:
         - name: wait-db
-          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
+          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion | toString) }}
           imagePullPolicy: {{ .Values.server.image.pullPolicy | default .Values.image.pullPolicy }}
           env:
             - name: DB_HOST
@@ -50,7 +50,7 @@ spec:
       {{- end }}
       containers:
         - name: init
-          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion) }}
+          image: {{ printf "%s:%s" .Values.server.image.repository (.Values.server.image.tag | default .Chart.AppVersion | toString) }}
           imagePullPolicy: {{ .Values.server.image.pullPolicy | default .Values.image.pullPolicy }}
           command:
             - sh

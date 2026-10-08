@@ -43,7 +43,7 @@ spec:
       {{- end }}
       containers:
         - name: worker
-          image: {{ printf "%s:%s" .Values.worker.image.repository (.Values.worker.image.tag | default .Chart.AppVersion) }}
+          image: {{ printf "%s:%s" .Values.worker.image.repository (.Values.worker.image.tag | default .Chart.AppVersion | toString) }}
           imagePullPolicy: {{ .Values.worker.image.pullPolicy | default .Values.image.pullPolicy }}
           ports:
             - name: serve

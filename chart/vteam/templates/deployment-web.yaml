@@ -35,7 +35,7 @@ spec:
       {{- end }}
       containers:
         - name: web
-          image: {{ printf "%s:%s" .Values.web.image.repository (.Values.web.image.tag | default .Chart.AppVersion) }}
+          image: {{ printf "%s:%s" .Values.web.image.repository (.Values.web.image.tag | default .Chart.AppVersion | toString) }}
           imagePullPolicy: {{ .Values.web.image.pullPolicy | default .Values.image.pullPolicy }}
           ports:
             - name: http
