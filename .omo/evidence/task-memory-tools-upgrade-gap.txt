@@ -1,0 +1,100 @@
+# Evidence — task-memory-tools-upgrade-gap
+
+Repo: /Volumes/SSD-Data/01work/git-project/vteam  branch: feat/memory-enhancement
+Node: v22.15.0 (`export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"`)
+
+## 1. Enforcement chain (every store that gates the two new MCP tools)
+
+| # | Store | Read at | Missing-key semantics | Blocks the 2 tools in prod? |
+|---|-------|---------|------------------------|------------------------------|
+| 1 | `execution_policies.config.tools` | `execution-policy.service.ts:392` `resolveGuardTools` (called at `:476` via `resolveBuiltinPolicy`, `:1085` via `guardForAgent`) | **DENY-by-omission.** `canonicalizeTools` keeps only `allow/ask/deny`; if ≥1 legal entry survives it is returned **whole** — there is **no per-key merge** with `ROLE_BOUNDARIES[name].toolAllows`. So a missing key in a non-null object means "not in allowlist" (`worker-dispatcher.ts:486 toolAllowed()` → false), *not* fall-through to constants. | **YES.** `ep_project_manager` has 30 legal entries and lacks both keys ⇒ they are absent from the resolved allowlist. Consumers: `resolveByAgent`/`resolveManyByAgents` → `agents.service.ts:636,662` `effectivePermission` (the operator-visible "工具权限" surface) and `worker-dispatcher.ts:3567` role-less fallback. |
+| 2 | `agent_roles.capabilities` | `platform-tool-permission.service.ts:40` `assertToolAllowed` (explicit false → 403 at `:72`); also `worker-dispatcher.ts:3537` `capabilityMatrixToToolStates(role.capabilities)`; also `platform-mcp.service.ts:4299` `myProfile.effectivePermission` | **DEFAULT-ALLOW.** `matrix?.[cap] === false` → 403, otherwise allowed (missing ≡ null ≡ `{}` ≡ allow). | **Not a hard 403 for PM** (missing ⇒ allowed), but it is (a) the surface an agent introspects — `my_profile` echoes the matrix verbatim, so PM's matrix missing the two keys is what produced the production report 「只有 memory_search/save/update，没有 merge/archive」; and (b) a live **over-grant**: the other 6 builtin roles are missing the same keys ⇒ default-allow lets them call the org tools too, contradicting `BUILTIN_ROLE_CAPABILITY_MAPS` (PM-only). |
+| 3 | `execution_policies.config.permission` (`vteam_*` keys) | `projectNativePermission` `execution-policy.service.ts:174` | **INERT.** Only `NATIVE_PERMISSION_KEYS` = `edit/read/bash/task` are emitted into `agents[].permission`; `vteam_*` keys are dropped before reaching the worker (`opencode-config-builder.ts:48` consumes only that projection). T10 correction comment at `:159-166` states this explicitly. | No. Deliberately **not** backfilled (writing there would be a fake switch). |
+| 4 | `execution_policies` rows of `type='custom'` | `buildAgentPolicies` `execution-policy.service.ts:904` | operator-authored | No. Deliberately untouched. |
+| 5 | `ROLE_BOUNDARIES[*].toolAllows` (constants) | `agent.constants.ts:508-509` | constant | No — already contains both keys for PM. Fresh-install + fallback path are correct. |
+| 6 | `VTEAM_MCP_TOOL_NAMES` / `PLATFORM_CAPABILITIES` | `agent.constants.ts:139-140`, `platform-capability.constants.ts:205-216` | constant | No — both tools + both capability keys already registered. |
+| 7 | `tools` catalog table / `tools/list` | `platform-mcp.controller.ts:306` | `tools/list` returns the full registered list, unfiltered | No (verified present in prod per task brief). |
+
+**Ground truth reading.** The agent's report is explained by store #2 (`my_profile` echoes a
+matrix without the two keys) and store #1 (the operator/agent-visible allowlist also lacks
+them). Both are now backfilled; #2 additionally closes the silent over-grant for non-PM roles.
+
+## 2. Migration
+
+`server/prisma/migrations/20261009020000_capability_memory_org_tools/migration.sql`
+— 11 statements, no DDL, sha256 `49f4d7539d37228490e62928cb1fce1a5c8798152844679e4c18e7d91a3fa035`.
+
+- `execution_policies` × 2 — `ep_project_manager` only (`type='template'`), one key per
+  statement, guarded by `JSON_CONTAINS_PATH(...)=0` **and** by
+  `JSON_CONTAINS_PATH(...'$.tools.vteam_memory_update')=1`. The second guard is a hard
+  requirement: without it, a row whose `config` has no `tools` would get a brand-new 2-key
+  `tools` object which, under `resolveGuardTools`' whole-object-wins semantics, would evict
+  PM's other 28 tools from the allowlist.
+  The other 6 builtin policy rows get **nothing** — their factory `toolAllows` never contained
+  these tools and this layer's "missing ⇒ not in allowlist" already equals the intended deny;
+  writing explicit `'deny'` would diverge from the fresh-install value.
+- `agent_roles` × 8 — per factory matrix: PM `true`, other 6 builtin `false`, 3 external
+  `false`, everything else (`ar_general` + historical custom) `true`.
+  External roles get `false` (deviation from 20260929000000's blanket exemption, argued in the
+  file header: the exemption list `EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS` was emptied on
+  2026-09-30, so external matrices are now fully managed, the factory value for these two keys
+  is `false`, and there is no user decision exempting externals from memory-org tools).
+- `agent_roles` × 1 — `capabilities_configured_at` stamp, `IS NULL` only (never overwrites an
+  operator's existing stamp).
+
+Idempotent: every write is `JSON_CONTAINS_PATH(...)=0`-guarded, one key per statement, so a
+re-run on an already-backfilled DB is a safe no-op.
+
+## 3. Specs added
+
+- `server/src/prisma/capability-memory-org-tools.migration.spec.ts` — 22 tests, text-parse
+  contract (readFileSync → strip `--` → regex; never executes SQL): constants parity, required
+  JSON_SET statements, per-key splitting, only-add-never-change, values compared cell-by-cell
+  against `BUILTIN_ROLE_CAPABILITY_MAPS` / `EXTERNAL_AGENT_ROLE_CAPABILITIES`, no-DDL +
+  column-coverage guard, seed `update: {}` regression guard.
+- `server/src/prisma/capability-memory-org-tools-upgrade.spec.ts` — 23 tests, behavioural proof.
+  Parses the assignments **out of the migration file** and applies them to production-shaped
+  rows, then drives the real `resolveGuardTools` / `resolveBuiltinPolicy` / `toolAllowed` /
+  `capabilityMatrixToToolStates` / `PlatformToolPermissionService.assertToolAllowed`.
+  Covers: pre-backfill gap (falsifiable baseline), PM granted in both layers, the 6 builtin
+  roles + 3 external roles denied with `PLATFORM_MCP_TOOL_NOT_PERMITTED`, idempotency,
+  operator-set values preserved, NULL-matrix rows untouched, half-backfilled rows resumable.
+
+## 4. Mutation checks (falsifiability)
+
+Migration mutated, specs re-run, then file restored byte-identical (sha unchanged):
+
+| Mutation | Result |
+|---|---|
+| A — delete PM's `memory.archive = true` statement | 3 tests red |
+| B — invert anti-footgun guard (`vteam_memory_update = 1` → `= 0`) | 1 test red |
+| C — merge both keys into one two-path guard | **initially NOT caught** → assertion was re-written to forbid multi-path guards, plus a behavioural half-backfill test added; re-run: 1 test red |
+| D — non-PM `memory.merge` `false` → `true` (security flip) | 7 tests red |
+| E — delete both `execution_policies` statements | 7 tests red |
+
+Mutation C is the notable one: the first version of the per-key assertion counted *guards per
+statement* (`≤1`), which a two-path guard satisfies. Fixed to forbid any guard carrying a
+second path argument.
+
+## 5. Gates
+
+```
+cd server && npx tsc --noEmit                 → exit 0
+cd server && npx eslint <both new specs>      → clean (after --fix)
+cd server && npm run test                     → Test Suites: 167 passed, 167 total
+                                                 Tests:       3932 passed, 3932 total
+baseline (pre-change)                         → 165 suites / 3887 tests
+delta                                        → +2 suites / +45 tests (22 + 23)
+```
+
+## 6. Known limitation (disclosed)
+
+No MySQL client / server is reachable in this environment (`command -v mysql` → none; tests run
+on sqlite by `server/test/setup-env.js`), so the SQL was **never executed**. Confidence comes
+from three sources instead:
+1. the SQL idiom is byte-for-byte the one already deployed in production by
+   `20260929000000_capability_git_web_tier` and `20260926000000_secret_command_capability`;
+2. the behavioural spec reimplements MySQL's `JSON_CONTAINS_PATH(doc,'one',p)=0` ≡ "path absent"
+   and `JSON_SET` only-add semantics, and is driven by the parsed SQL rather than a hand copy;
+3. a real `prisma migrate deploy` should be exercised on a staging MySQL before rollout, as the
+   house DDL-guard specs are text-parse only and structurally cannot detect a runtime SQL error.
