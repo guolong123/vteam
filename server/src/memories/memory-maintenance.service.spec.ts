@@ -572,4 +572,121 @@ describe('MemoryMaintenanceService', () => {
       );
     });
   });
+
+  describe('单团队范围（点谁整理谁）', () => {
+    const dupRows = () => [
+      healthyRow('me_a', { contentHash: 'dup' }),
+      healthyRow('me_b', { contentHash: 'dup' }),
+    ];
+    const allTeams = [{ teamId: 'tm_1' }, { teamId: 'tm_2' }, { teamId: 'tm_3' }];
+    // groupBy mock 按 where 语义过滤：只有范围真的进了 where，收窄才成立。
+    const groupByHonouringWhere = () =>
+      prisma.memory.groupBy.mockImplementation(
+        async (args: { where: { teamId: string | { not: null } } }) =>
+          typeof args.where.teamId === 'string'
+            ? allTeams.filter((r) => r.teamId === args.where.teamId)
+            : allTeams,
+      );
+    // 群频道按 teamId 命名：可断言 system 条只落在范围内那个团队的频道。
+    const perTeamChannel = () =>
+      prisma.chatChannel.findFirst.mockImplementation(
+        async (args: { where: { teamId: string } }) => ({
+          id: `c_group_${args.where.teamId}`,
+        }),
+      );
+
+    it('runOnce(teamId) 把团队迭代查询收窄到该团队（where teamId = 传入值）', async () => {
+      groupByHonouringWhere();
+      prisma.memory.findMany.mockResolvedValue(dupRows());
+
+      await service.runOnce('tm_2');
+
+      expect(prisma.memory.groupBy).toHaveBeenCalledWith({
+        by: ['teamId'],
+        where: { level: 'team', deletedAt: null, teamId: 'tm_2' },
+      });
+      expect(prisma.memory.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { level: 'team', teamId: 'tm_2', deletedAt: null },
+        }),
+      );
+    });
+
+    it('范围内只有该团队：其他团队不落 system 条、不派发（摘要也只含本团队）', async () => {
+      groupByHonouringWhere();
+      perTeamChannel();
+      prisma.memory.findMany.mockResolvedValue(dupRows());
+
+      const summary = await service.runOnce('tm_2');
+
+      expect(summary).toEqual({
+        teams: 1,
+        candidates: { duplicates: 2, unused: 0, untags: 0 },
+      });
+      expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+      expect(dispatcher.dispatchAgentMention).toHaveBeenCalledWith(
+        expect.objectContaining({ teamId: 'tm_2', internal: true }),
+      );
+      expect(prisma.team.findUnique).toHaveBeenCalledWith({
+        where: { id: 'tm_2' },
+        select: { mainAgentMemberId: true },
+      });
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      const channels = prisma.message.create.mock.calls.map(
+        (c) => c[0].data.channelId,
+      );
+      expect(channels).toEqual(['c_group_tm_2']);
+    });
+
+    it('范围内团队无活跃记忆 → teams=0 且不落条不派发', async () => {
+      groupByHonouringWhere();
+      perTeamChannel();
+      prisma.memory.findMany.mockResolvedValue(dupRows());
+
+      const summary = await service.runOnce('tm_404');
+
+      expect(summary).toEqual({
+        teams: 0,
+        candidates: { duplicates: 0, unused: 0, untags: 0 },
+      });
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('回归：runOnce()（无 scope）仍全局——where 保持 teamId:{not:null} 且逐团队都派发', async () => {
+      groupByHonouringWhere();
+      perTeamChannel();
+      prisma.memory.findMany.mockResolvedValue(dupRows());
+
+      const summary = await service.runOnce();
+
+      expect(prisma.memory.groupBy).toHaveBeenCalledWith({
+        by: ['teamId'],
+        where: { level: 'team', deletedAt: null, teamId: { not: null } },
+      });
+      expect(summary.teams).toBe(3);
+      expect(
+        dispatcher.dispatchAgentMention.mock.calls.map((c) => c[0].teamId),
+      ).toEqual(['tm_1', 'tm_2', 'tm_3']);
+      expect(prisma.message.create).toHaveBeenCalledTimes(3);
+    });
+
+    it('定时 handler 固定走全局变体（不继承手动端的 scope）', async () => {
+      await service.onModuleInit();
+      const call = triggers.registerHandler.mock.calls.find(
+        (c) => c[0] === 'memory_maintenance',
+      );
+      const handler = call?.[1] as (ctx: unknown) => Promise<void>;
+      groupByHonouringWhere();
+      prisma.memory.findMany.mockResolvedValue(dupRows());
+
+      await handler({});
+
+      expect(prisma.memory.groupBy).toHaveBeenCalledWith({
+        by: ['teamId'],
+        where: { level: 'team', deletedAt: null, teamId: { not: null } },
+      });
+      expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(3);
+    });
+  });
 });

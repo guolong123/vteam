@@ -18,6 +18,7 @@ describe('MemoriesController', () => {
     purge: jest.Mock;
   };
   let maintenance: { runOnce: jest.Mock };
+  let prisma: { team: { findUnique: jest.Mock } };
 
   beforeEach(async () => {
     service = {
@@ -28,12 +29,14 @@ describe('MemoriesController', () => {
       purge: jest.fn(),
     };
     maintenance = { runOnce: jest.fn() };
+    prisma = { team: { findUnique: jest.fn().mockResolvedValue({ id: 'tm_1' }) } };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [MemoriesController],
       providers: [
         { provide: MemoriesService, useValue: service },
         { provide: MemoryMaintenanceService, useValue: maintenance },
+        { provide: PrismaService, useValue: prisma },
       ],
     })
       // @UseGuards(AdminGuard) 在模块 compile 时即被 Nest 实例化（非请求期）→ 必须 override
@@ -140,6 +143,43 @@ describe('MemoriesController', () => {
 
       await expect(controller.maintain()).resolves.toEqual(summary);
       expect(maintenance.runOnce).toHaveBeenCalledTimes(1);
+    });
+
+    it('POST /memories/maintain 带 teamId → 只整理该团队（点谁整理谁）', async () => {
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_9' });
+      const summary = {
+        teams: 1,
+        candidates: { duplicates: 0, unused: 0, untags: 5 },
+      };
+      maintenance.runOnce.mockResolvedValue(summary);
+
+      await expect(controller.maintain({ teamId: 'tm_9' })).resolves.toEqual(
+        summary,
+      );
+      expect(prisma.team.findUnique).toHaveBeenCalledWith({
+        where: { id: 'tm_9' },
+        select: { id: true },
+      });
+      expect(maintenance.runOnce).toHaveBeenCalledWith('tm_9');
+    });
+
+    it('POST /memories/maintain 无 body / 空 body → 全局一轮（runOnce 零参）', async () => {
+      await controller.maintain();
+      expect(maintenance.runOnce).toHaveBeenCalledWith();
+      expect(prisma.team.findUnique).not.toHaveBeenCalled();
+
+      maintenance.runOnce.mockClear();
+      await controller.maintain({});
+      expect(maintenance.runOnce).toHaveBeenCalledWith();
+    });
+
+    it('POST /memories/maintain 未知 teamId → 404 TEAM_NOT_FOUND 且不整理', async () => {
+      prisma.team.findUnique.mockResolvedValue(null);
+
+      await expect(controller.maintain({ teamId: 'tm_nope' })).rejects.toMatchObject(
+        { response: { code: 'TEAM_NOT_FOUND' } },
+      );
+      expect(maintenance.runOnce).not.toHaveBeenCalled();
     });
 
     it('GET /memories 的 autoInject 查询串按字面量解析（"false" ≠ true，2026-09-30）', () => {

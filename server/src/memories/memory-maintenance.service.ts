@@ -80,6 +80,8 @@ const MS_PER_DAY = 86_400_000;
  *
  * ## 范围
  * 只处理 **team 级**记忆（决策⑤：global/role 无宿主团队，global 写操作仅管理员 UI 单条处理）。
+ * 整理**范围**（整轮 vs 单团队）由 `runOnce(scopeTeamId?)` 决定：缺省=全局（定时触发器），
+ * 传 teamId=只整理该团队（手动端点）；逐团队管线两种范围完全一致。
  */
 @Injectable()
 export class MemoryMaintenanceService implements OnModuleInit {
@@ -128,7 +130,11 @@ export class MemoryMaintenanceService implements OnModuleInit {
     }
   }
 
-  /** handler 入口（trigger 消费）。内部即 `runOnce`，异常由基座落 failed。 */
+  /**
+   * handler 入口（trigger 消费）。内部即 `runOnce()` **全局变体**（不带 scope）——定时语义
+   * 固定为「全平台每 24h 一轮」，scope 只由 `POST /memories/maintain` 的 body 传入。
+   * 异常由基座落 failed。
+   */
   private async handleFire(_ctx: TriggerFireContext): Promise<void> {
     await this.runOnce();
   }
@@ -216,7 +222,11 @@ export class MemoryMaintenanceService implements OnModuleInit {
   /**
    * 单轮整理（handler 与 `POST /memories/maintain` 共用同一入口，保证手动/定时口径一致）。
    *
-   * a) 取有活跃 team 级记忆的团队；
+   * @param scopeTeamId 整理范围：**缺省 = 全局一轮**（定时触发器固定走这个变体，行为不变）；
+   *   传团队 id = 只整理该团队（「点谁整理谁」，手动端点 body.teamId）。范围只影响
+   *   「迭代哪些团队」，逐团队管线与摘要口径完全一致。
+   *
+   * a) 取有活跃 team 级记忆的团队（指定范围时只取该团队）；
    * b) 逐团队收集候选（同 hash 组 / 低频未引用 / 标签不规范，cap 后带摘要与建议动作）；
    * c) 落灰色 system 条（本轮检测 + 上轮实际结果）；
    * d) 派 prompt 给该团队主 Agent（kind='wake'、internal=true、private 频道优先）；
@@ -224,7 +234,7 @@ export class MemoryMaintenanceService implements OnModuleInit {
    *
    * 逐团队 try/catch 隔离：单团队失败只 logger.error，不中断其他团队。
    */
-  async runOnce(): Promise<MemoryMaintenanceSummary> {
+  async runOnce(scopeTeamId?: string): Promise<MemoryMaintenanceSummary> {
     const summary: MemoryMaintenanceSummary = {
       teams: 0,
       candidates: { duplicates: 0, unused: 0, untags: 0 },
@@ -232,7 +242,7 @@ export class MemoryMaintenanceService implements OnModuleInit {
     const previousRunAt = this.lastRunAt;
     this.running = true;
     try {
-      const teamIds = await this.teamsWithActiveMemories();
+      const teamIds = await this.teamsWithActiveMemories(scopeTeamId);
       for (const teamId of teamIds) {
         try {
           await this.maintainTeam(teamId, previousRunAt, summary);
@@ -248,19 +258,26 @@ export class MemoryMaintenanceService implements OnModuleInit {
       this.lastRunAt = new Date();
     }
     this.logger.log(
-      `[memory-maintenance] 单轮完成 teams=${summary.teams} 候选 重复=${summary.candidates.duplicates} 未引用=${summary.candidates.unused} 标签=${summary.candidates.untags}`,
+      `[memory-maintenance] 单轮完成 teams=${summary.teams} 候选 重复=${summary.candidates.duplicates} 未引用=${summary.candidates.unused} 标签=${summary.candidates.untags}` +
+        (scopeTeamId ? ` scope=${scopeTeamId}` : ''),
     );
     return summary;
   }
 
-  /** (a) 有活跃 team 级记忆的团队（groupBy teamId，null 归属行跳过）。 */
-  private async teamsWithActiveMemories(): Promise<string[]> {
+  /**
+   * (a) 有活跃 team 级记忆的团队（groupBy teamId，null 归属行跳过）。
+   * `scopeTeamId` 缺省 → `teamId: {not: null}`（全局，与既有查询逐字一致）；
+   * 指定 → `teamId: scopeTeamId`（只回该团队一行；无活跃记忆则空集 → 本轮 teams=0、不派发）。
+   */
+  private async teamsWithActiveMemories(
+    scopeTeamId?: string,
+  ): Promise<string[]> {
     const rows = await this.prisma.memory.groupBy({
       by: ['teamId'],
       where: {
         level: MEMORY_LEVELS.team,
         deletedAt: null,
-        teamId: { not: null },
+        teamId: scopeTeamId ?? { not: null },
       },
     });
     return rows

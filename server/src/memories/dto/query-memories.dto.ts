@@ -102,6 +102,27 @@ export class QueryMemoriesDto {
 }
 
 /**
+ * POST /memories/maintain 请求体（手动触发一轮记忆整理，memory-enhancement 后新增）。
+ *
+ * `teamId` 缺省 = **全局一轮**（所有有活跃 team 级记忆的团队；既有手动端点行为不变，
+ * 定时触发器走同一入口的全局变体）。传 `teamId` = **只整理该团队**（「点谁整理谁」：
+ * 团队记忆 tab 的「整理记忆」按钮固定传当前 tab 的 teamId，不会捎带整轮全局派发）。
+ * 未知/不存在的 teamId → 404 TEAM_NOT_FOUND（controller 校验，避免静默空跑一轮）。
+ *
+ * 空 body（连 `{}` 都没有）与 `{}` 等价：字段全 optional → 走全局一轮，AdminGuard 保留。
+ */
+export class MaintainMemoriesDto {
+  @ApiPropertyOptional({
+    description:
+      '只整理该团队（点谁整理谁）；缺省 = 全局一轮（所有有活跃 team 级记忆的团队）。未知团队 → 404 TEAM_NOT_FOUND',
+  })
+  @IsOptional()
+  @IsString()
+  @MinLength(1)
+  teamId?: string;
+}
+
+/**
  * PATCH /memories/:id 部分更新体（T4 记忆演进；2026-09-30 增 autoInject 开关）。
  * content/description/tags/autoInject 至少传一个（全空 → 400 MEMORY_UPDATE_EMPTY）；
  * content 更新时服务端同步重算 contentHash（精确去重键保持与正文一致）。

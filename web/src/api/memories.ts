@@ -72,8 +72,10 @@ export function memoriesQueryKey(
 
 /**
  * POST /memories/maintain 响应（手动触发一轮记忆整理）。
- * - `teams`：本轮**真正派发**整理的团队数（无候选或无主 Agent 的团队不计入）
- * - `candidates`：三类候选计数（duplicates 疑似重复 / unused 低频未引用 / untags 标签不规范）
+ * - `teams`：本轮**真正派发**整理的团队数（无候选或无主 Agent 的团队不计入）；
+ *   传了 teamId 时其取值只可能是 0 或 1
+ * - `candidates`：三类候选计数（duplicates 疑似重复 / unused 低频未引用 / untags 标签不规范），
+ *   团队范围下只统计该团队
  */
 export interface MaintainResult {
   teams: number;
@@ -112,11 +114,18 @@ export const memoriesApi = {
     return api.patch<MemoryItem>(`/memories/${id}`, { autoInject });
   },
   /**
-   * 手动跑一轮记忆整理（AdminGuard）：跨团队筛候选 → 群内落灰色 system 条 →
-   * 派 prompt 给各团队主 Agent。**本轮不直接改任何记忆**，故调用方无需失效
+   * 手动跑一轮记忆整理（AdminGuard）：筛候选 → 群内落灰色 system 条 →
+   * 派 prompt 给主 Agent。**本轮不直接改任何记忆**，故调用方无需失效
    * `["memories"]` 查询（清单内容不变），只需展示返回的派发结果。
+   *
+   * 范围：`teamId` 缺省 = 全局一轮（所有有活跃 team 级记忆的团队）；传 teamId = 只整理
+   * 该团队（「点谁整理谁」，团队记忆 tab 的按钮固定传当前 teamId）。缺省时**不传 body**，
+   * 空 body 与 `{teamId}` 服务端都接受。
    */
-  maintain(): Promise<MaintainResult> {
-    return api.post<MaintainResult>("/memories/maintain");
+  maintain(teamId?: string): Promise<MaintainResult> {
+    return api.post<MaintainResult>(
+      "/memories/maintain",
+      teamId ? { teamId } : undefined
+    );
   },
 };

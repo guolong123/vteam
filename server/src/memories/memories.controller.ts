@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -12,8 +13,13 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
+import { PrismaService } from '../prisma/prisma.service';
 import { AdminGuard } from '../users/admin.guard';
-import { QueryMemoriesDto, UpdateMemoryDto } from './dto/query-memories.dto';
+import {
+  MaintainMemoriesDto,
+  QueryMemoriesDto,
+  UpdateMemoryDto,
+} from './dto/query-memories.dto';
 import { MemoryMaintenanceService } from './memory-maintenance.service';
 import { MemoriesService } from './memories.service';
 
@@ -34,8 +40,8 @@ import { MemoriesService } from './memories.service';
  * - **团队行写**（归档/恢复/硬删）= 该团队 team_user_members 成员；**global 行写** = 平台管理员；
  *   两类均不满足 → 403 MEMORY_FORBIDDEN（service `assertRowWritable`）；
  * - **编辑**（PATCH）保留 AdminGuard（内容/标签编辑属管理动作），另叠加既有团队归属校验。
- * - **整理**（POST /maintain，memory-enhancement Todo 9）保留 AdminGuard：跨团队全局动作，
- *   成员触发会变更他人团队记忆。
+ * - **整理**（POST /maintain，memory-enhancement Todo 9）保留 AdminGuard：整理会变更团队记忆，
+ *   无论全局还是单团队范围都不对普通成员开放；范围收窄由 body `teamId` 决定，不放松鉴权。
  */
 @ApiTags('memories')
 @ApiBearerAuth()
@@ -44,6 +50,7 @@ export class MemoriesController {
   constructor(
     private readonly memoriesService: MemoriesService,
     private readonly memoryMaintenanceService: MemoryMaintenanceService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -97,19 +104,45 @@ export class MemoriesController {
 
   /**
    * 手动触发一轮记忆整理（memory-enhancement Todo 9；与定时触发器同一 handler 入口）。
-   * POST /api/v1/memories/maintain → 200 {teams, candidates: {duplicates, unused, untags}}。
+   * POST /api/v1/memories/maintain  body `{teamId?}`（**可省略**）
+   *   → 200 {teams, candidates: {duplicates, unused, untags}}。
+   *
+   * 范围口径（`teamId` 缺省 = 全局一轮，保持既有手动端点行为；传 teamId = 只整理该团队，
+   * 「点谁整理谁」）：未知团队 → 404 TEAM_NOT_FOUND（不静默空跑一轮）。
    *
    * 服务端只收集候选 + 落 system 条 + 派 prompt，**合并/归档由 Agent 侧经 MCP 工具执行**；
-   * 摘要为服务端统计值，不等待 Agent 回传。仅管理员（AdminGuard）：整理是跨团队
-   * 全局动作，成员触发会让他人团队的记忆被动变更。
+   * 摘要为服务端统计值，不等待 Agent 回传。仅管理员（AdminGuard）：整理会变更团队记忆，
+   * 成员触发会让他人团队的记忆被动变更。
    */
   @Post('maintain')
   @UseGuards(AdminGuard)
   @ApiOperation({
-    summary: '手动触发一轮记忆整理（仅管理员；Agent 侧执行合并/归档）',
+    summary:
+      '手动触发一轮记忆整理（仅管理员；可传 teamId 只整理该团队；Agent 侧执行合并/归档）',
   })
-  maintain() {
-    return this.memoryMaintenanceService.runOnce();
+  maintain(@Body() dto?: MaintainMemoriesDto) {
+    return this.runMaintenance(dto?.teamId);
+  }
+
+  /**
+   * 整理范围校验 + 转发：缺省 `teamId` → `runOnce()`（全局，与定时触发器同一口径）；
+   * 传 `teamId` → 必须命中真实团队（404 TEAM_NOT_FOUND，抄 team-channel-bindings 的团队存在性校验）。
+   */
+  private async runMaintenance(teamId?: string) {
+    if (!teamId) {
+      return this.memoryMaintenanceService.runOnce();
+    }
+    const team = await this.prisma.team.findUnique({
+      where: { id: teamId },
+      select: { id: true },
+    });
+    if (!team) {
+      throw new NotFoundException({
+        code: 'TEAM_NOT_FOUND',
+        message: `team ${teamId} not found`,
+      });
+    }
+    return this.memoryMaintenanceService.runOnce(teamId);
   }
 
   /**

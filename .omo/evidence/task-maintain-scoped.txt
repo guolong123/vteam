@@ -1,0 +1,106 @@
+# 手动整理收窄到单团队（点谁整理谁）— POST /memories/maintain body.teamId
+
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Branch: feat/memory-enhancement
+执行：Sisyphus-Junior（plan memory-enhancement Todo 9 之后追加）
+
+问题：`POST /memories/maintain` 走 `runOnce()` 扫**所有**有 team 级记忆的团队。
+线上实测：点单个团队的「整理记忆」按钮，返回 `{teams:3, candidates:{...,untags:31}}`
+——一次点击捎带整轮全局派发。用户要「点谁整理谁」。
+**24h 定时触发器保持全局不变。**
+
+====================================================================
+1. 改动文件（5 个）
+====================================================================
+| 文件 | 改动 |
+|------|------|
+| server/src/memories/dto/query-memories.dto.ts | 新增 `MaintainMemoriesDto`（`teamId?` 全 optional；空 body 合法） |
+| server/src/memories/memories.controller.ts | `maintain(@Body() dto?)` + `runMaintenance()`：缺省全局 / 传 teamId 先校验存在性（404 TEAM_NOT_FOUND）；注入 PrismaService |
+| server/src/memories/memory-maintenance.service.ts | `runOnce(scopeTeamId?)`；`teamsWithActiveMemories(scopeTeamId?)` 的 where 收窄；日志附 scope |
+| server/src/memories/memory-maintenance.service.spec.ts | 新增 `describe('单团队范围')` 5 例 |
+| server/src/memories/memories.controller.spec.ts | maintain 转发/404/全局 3 例 + PrismaService provider |
+| web/src/api/memories.ts | `maintain(teamId?)` → `api.post('/memories/maintain', teamId ? { teamId } : undefined)` |
+| web/src/components/teams/TeamMemoriesTab.tsx | 按钮传 `teamId`；`maintainNoticeText` 改「本团队」口径 |
+
+====================================================================
+2. 服务端：范围收窄点（只有「团队迭代查询」一处）
+====================================================================
+`teamsWithActiveMemories(scopeTeamId?)`：
+
+    teamId: scopeTeamId ?? { not: null }     // 全局变体查询**逐字不变**
+
+逐团队管线（candidates → 灰色 system 条 → dispatch internal:true）完全未动，
+只是迭代到的团队变少；`summary.teams += 1` 仍只统计**真正派发**的团队（无候选 /
+无主 Agent / 无频道的团队不计入）——语义未变。
+`runOnce` 的 `lastRunAt` / `running` 冷却态与范围无关，仍每轮更新。
+
+### 定时路径未被污染（关键约束）
+`handleFire` 仍是 `await this.runOnce()`（**零参** = 全局变体），scope 只有一个入口：
+`POST /memories/maintain` 的 body。env / guard / dedupKey / 排期逻辑一行未动。
+新增回归断言：从 `triggers.registerHandler` 取回真实 handler 并调用，
+断言 groupBy where 为 `teamId: { not: null }` 且 3 个团队都派发（不继承 scope）。
+
+====================================================================
+3. 控制器：house pattern 取舍
+====================================================================
+团队存在性校验照抄 `src/teams/team-channel-bindings.controller.ts:137-146`
+（`team.findUnique({where:{id}, select:{id:true}})` + `NotFoundException
+{code:'TEAM_NOT_FOUND', message:'team X not found'}`）——本仓既有的团队 404 惯例，
+而不是另造一个错误码。AdminGuard **保留**（范围收窄不放宽鉴权：整理会变更团队记忆）。
+空 body：`@Body() dto?` + `dto?.teamId`（body-parser 在无 body 时给 `{}`/undefined，
+两条都归一到全局；`whitelist:true`/`forbidNonWhitelisted:false` 下 `{teamId}` 放行）。
+
+web 侧 `api.post(path, undefined)` 经 `lib/api.ts:92` 的
+`body !== undefined ? JSON.stringify(body) : undefined` → **不带 body**，兼容空 body 契约。
+
+====================================================================
+4. 文案口径（TeamMemoriesTab）
+====================================================================
+- 已派发：`已派发整理：本团队 · 疑似重复 X · 低频未引用 Y · 标签不规范 Z`
+- 无候选：`本团队无待整理候选，本轮跳过派发`
+- teams>0 但候选全 0：`已派发整理：本团队 · 无待整理候选`（异常组合，沿用旧分支）
+按钮 title 同步改为「（仅本团队）… 派给本团队主 Agent 复核处理」。
+本 tab 已**不可能**触发全局（`mutate(teamId)`，teamId 为空时组件本身就渲染 EmptyState）。
+
+====================================================================
+5. 测试增量（8 例，全绿）
+====================================================================
+memory-maintenance.service.spec.ts（新增 describe「单团队范围」）：
+ 1. `runOnce('tm_2')` → groupBy where `{level:'team',deletedAt:null,teamId:'tm_2'}`，
+    findMany where.teamId='tm_2'
+ 2. 范围内只有该团队：dispatch 恰好 1 次且 teamId=tm_2；system 条 channelId 恰好
+    ['c_group_tm_2']（mock 群频道按 teamId 命名 → 证明其他团队既没派发也没留痕）
+ 3. 范围内团队无活跃记忆 → teams=0、不落条不派发
+ 4. 回归 `runOnce()`（无 scope）：where 仍 `teamId:{not:null}`，3 团队全派发、3 条 system 条
+ 5. 定时 handler（从 registerHandler 取回）→ 仍走全局 where，3 团队全派发
+
+（关键：groupBy mock 按 `where` 语义过滤，否则 1/2 会在 scope 未生效时假通过。）
+
+memories.controller.spec.ts（新增 3 例）：
+ 6. `{teamId:'tm_9'}` → findUnique where.id + `runOnce('tm_9')`
+ 7. 无 body 与 `{}` → `runOnce()` **零参**（断言全局变体），且不查 team 表
+ 8. 未知 teamId → 404 TEAM_NOT_FOUND 且 runOnce 未被调用
+
+既有 125 例 memories 相关用例全部保持绿。
+
+====================================================================
+6. 门禁结果
+====================================================================
+server `npx tsc --noEmit`          : clean
+server `npm run test`              : Test Suites 165 passed / 165 total
+                                     Tests 3887 passed / 3887 total（基线 3879 + 新增 8）
+                                     Snapshots 1 passed
+web    `npx tsc --noEmit`          : clean
+web    `npm run lint`              : 0 errors, 729 warnings（与基线 729 一致）
+web    `npm run build`             : 成功（/teams/[id]/session 41.4 kB 等路由正常产出）
+
+命令：`export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"` 后执行。
+
+====================================================================
+7. 未触碰（Must NOT）
+====================================================================
+- 定时触发器行为：handler 全局调用、env `MEMORY_MAINTENANCE_INTERVAL_MS`（0=禁用）、
+  冷却 guard、dedupKey `memory_maintenance:global:main`、排期逻辑 —— 全部未改
+- platform-mcp/、chat/ 未动；web 仅改 `api/memories.ts` 与 `components/teams/TeamMemoriesTab.tsx`
+- 无 `as any` / `@ts-ignore` / 空 catch（mock 均为具名实现，无吞异常）
+- 未执行任何 git 命令（提交由 orchestrator 负责）

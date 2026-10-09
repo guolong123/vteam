@@ -120,19 +120,21 @@ const dismissButtonStyle: CSSProperties = {
 
 /**
  * 把 POST /memories/maintain 的返回体拼成一句人话。
- * 注意 `teams` 语义 = 本轮**真正派发**的团队数（无候选 / 无主 Agent 的团队不计入），
+ * 本 tab 的按钮**只整理当前团队**（服务端按 teamId 限定范围），故文案统一按「本团队」
+ * 口径表述，不会出现「N 个团队」。
+ * 注意 `teams` 语义 = 本轮**真正派发**的团队数（无候选 / 无主 Agent 不计入），
  * 因此「teams>0 但候选全 0」是异常组合——文案需区分「跳过派发」与「已派发 + 有候选」。
  */
 function maintainNoticeText(r: MaintainResult): string {
   const { duplicates, unused, untags } = r.candidates;
   if (r.teams <= 0) {
-    return "无待整理候选，本轮跳过派发（没有团队筛出可整理的记忆）。";
+    return "本团队无待整理候选，本轮跳过派发";
   }
   if (duplicates + unused + untags === 0) {
-    return `已派发整理：${r.teams} 个团队 · 无待整理候选`;
+    return "已派发整理：本团队 · 无待整理候选";
   }
   return (
-    `已派发整理：${r.teams} 个团队 · 疑似重复 ${duplicates}` +
+    `已派发整理：本团队 · 疑似重复 ${duplicates}` +
     ` · 低频未引用 ${unused} · 标签不规范 ${untags}`
   );
 }
@@ -660,10 +662,11 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
   });
 
   /* ---------- 手动跑一轮整理（AdminGuard：按钮仅 isAdmin 可见） ----------
+   * **只整理当前团队**（传 teamId，「点谁整理谁」）；全平台口径留给 24h 定时触发器。
    * 本轮服务端只筛候选 + 落灰色 system 条 + 派 prompt，**不改记忆内容**，
    * 故不失效 ["memories"]（避免无谓重拉）；仅回填提示文案。 */
   const maintainMutation = useMutation({
-    mutationFn: () => memoriesApi.maintain(),
+    mutationFn: (targetTeamId: string) => memoriesApi.maintain(targetTeamId),
     onMutate: () => setMaintainNotice(null),
     onSuccess: (result) =>
       setMaintainNotice({ tone: "success", text: maintainNoticeText(result) }),
@@ -787,8 +790,8 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
             type="button"
             data-testid="team-memory-maintain"
             disabled={maintainMutation.isPending}
-            title="手动跑一轮记忆整理：筛出疑似重复 / 低频未引用 / 标签不规范的候选，派给各团队主 Agent 复核处理"
-            onClick={() => maintainMutation.mutate()}
+            title="手动跑一轮记忆整理（仅本团队）：筛出疑似重复 / 低频未引用 / 标签不规范的候选，派给本团队主 Agent 复核处理"
+            onClick={() => maintainMutation.mutate(teamId)}
             style={
               maintainMutation.isPending
                 ? { ...actionButtonStyle, ...disabledActionStyle }
