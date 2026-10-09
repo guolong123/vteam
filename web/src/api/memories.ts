@@ -72,18 +72,14 @@ export function memoriesQueryKey(
 
 /**
  * POST /memories/maintain 响应（手动触发一轮记忆整理）。
- * - `teams`：本轮**真正派发**整理的团队数（无候选或无主 Agent 的团队不计入）；
+ * - `teams`：本轮**真正派发**整理的团队数（无新记忆或无主 Agent 的团队不计入）；
  *   传了 teamId 时其取值只可能是 0 或 1
- * - `candidates`：三类候选计数（duplicates 疑似重复 / unused 低频未引用 / untags 标签不规范），
- *   团队范围下只统计该团队
+ * - `newMemories`：已派发团队的新记忆条数之和（服务端零检测：只统计自上次整理以来
+ *   新建的记忆，团队范围下只统计该团队）
  */
 export interface MaintainResult {
   teams: number;
-  candidates: {
-    duplicates: number;
-    unused: number;
-    untags: number;
-  };
+  newMemories: number;
 }
 
 export const memoriesApi = {
@@ -114,9 +110,9 @@ export const memoriesApi = {
     return api.patch<MemoryItem>(`/memories/${id}`, { autoInject });
   },
   /**
-   * 手动跑一轮记忆整理（AdminGuard）：筛候选 → 群内落灰色 system 条 →
-   * 派 prompt 给主 Agent。**本轮不直接改任何记忆**，故调用方无需失效
-   * `["memories"]` 查询（清单内容不变），只需展示返回的派发结果。
+   * 手动跑一轮记忆整理（AdminGuard）：取「自上次整理以来的新记忆」→ 群内落灰色 system 条 →
+   * 派事实清单给主 Agent。**本轮不直接改任何记忆**（判断与执行都在 Agent 侧），故调用方
+   * 无需失效 `["memories"]` 查询（清单内容不变），只需展示返回的派发结果。
    *
    * 范围：`teamId` 缺省 = 全局一轮（所有有活跃 team 级记忆的团队）；传 teamId = 只整理
    * 该团队（「点谁整理谁」，团队记忆 tab 的按钮固定传当前 teamId）。缺省时**不传 body**，

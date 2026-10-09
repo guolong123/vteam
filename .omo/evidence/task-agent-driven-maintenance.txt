@@ -1,0 +1,103 @@
+# 记忆整理触发管线改版 — 服务端零检测（Agent 全权判断）
+
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Branch: feat/memory-enhancement
+执行：Sisyphus-Junior
+
+用户最终决策（不再翻案）：**服务端零检测** —— 删除全部服务端候选启发式（contentHash 分桶 /
+refCount 低频判定 / 标签白名单判定），判断权 100% 交给 Agent。服务端只做两件事：
+① 闸门 = 「该团队自上次整理以来是否有新记忆」；② 呈事实。默认间隔 24h → 7 天。
+本任务**取代** .omo/plans/memory-enhancement.md 中 Todo 9 的候选检测部分（deviation 记于此）。
+
+===================================================================
+1. 改动文件清单（9 个，未越界）
+===================================================================
+| 文件 | 改动 |
+|------|------|
+| server/src/memories/memory-maintenance.service.ts | 重写核心（见 §2-§5） |
+| server/src/memories/memory-maintenance.service.spec.ts | 重写，25 → 41 用例 |
+| server/src/memories/memories.controller.ts | **仅** `/maintain` 文档注释（响应形状） |
+| server/src/memories/memories.controller.spec.ts | **仅** 2 个 maintain 断言的摘要形状 |
+| docker-compose.yml | interval → 604800000，删 2 行 MEMORY_ORG_* |
+| chart/vteam/templates/configmap.yaml | 删 2 行 MEMORY_ORG_*（interval 行保留） |
+| chart/vteam/values.yaml | interval → 604800000，删 2 个 memoryOrg* 键 |
+| web/src/api/memories.ts | `MaintainResult` 类型 + 文档注释 |
+| web/src/components/teams/TeamMemoriesTab.tsx | `maintainNoticeText` 文案 + 调用传 teamId + 按钮 title |
+
+chart/vteam/values-dev.yaml **无 `server.env` 段**（已用 js-yaml 解析确认 `server.env === null`）
+→ 无 memoryOrg* 键可删，未改。
+
+===================================================================
+2. 删除清单（服务端启发式，全仓清零）
+===================================================================
+删除：`collectCandidates` / `MemoryCandidateGroup` / `MemoryOrgCandidate` /
+`tagsNeedNormalize` / `unusedDays` / `candidateLimit` / `EXCERPT_MAX=80→160` /
+常量 `DEFAULT_MEMORY_ORG_UNUSED_DAYS` / `DEFAULT_MEMORY_ORG_CANDIDATE_LIMIT` / `MS_PER_DAY`。
+
+grep 复核（`--include` 覆盖 ts/tsx/yml/yaml/json/md/txt，排除 node_modules）：
+剩余命中仅 `.omo/evidence/task-9-memory-enhancement.txt` 与 `.omo/plans/memory-enhancement.md`
+—— 历史证据与旧计划文本，按要求保留（orchestrator 记 deviation）。
+
+新增取代物 `listNewMemories(teamId, cursor)` → `MemoryOrgFact[]`：
+`{id, content(截160字), tags, refCount, lastUsedAt, createdAt}`。
+select 显式不含 `contentHash`（有测试断言这点），即服务端连哈希都不取。
+
+===================================================================
+3. 每团队游标（organizedAtByTeam）
+===================================================================
+`private readonly organizedAtByTeam = new Map<string, Date>()`
+`private lastRunAt` 保留但**仅供冷却 guard**（与游标解耦，注释已改写）。
+
+- 新记忆 = `level=team AND teamId=X AND deletedAt IS NULL [AND createdAt > cursor]`，
+  `orderBy {createdAt:'asc'}`；无游标 → 不带时间条件（首轮 = 有界全量扫描）。
+- 0 条 → 单行 `logger.log` 静默跳过；不落 system 条、不派发、不进 summary。
+- **游标推进**（`advanceCursor`，仅在派发成功后）：全量入 prompt → `now`；
+  被 20 条上限截断 → 末条**已列入**行的 `createdAt`。
+  同毫秒边界的取舍已写进方法注释：宁可下轮重复呈现（幂等安全），不漏。
+- `previousRunAt` = 该团队本轮**之前**的 map entry；首轮 null → 省略「上轮实际结果」从句
+  （`lastRunResult` DB 统计子句原样保留，测试断言其 `updatedAt.gte` 与本轮查询游标同源）。
+
+未推进游标的路径：mainAgentMemberId 缺失 / 私聊与群聊均缺失 / 派发抛错 → 下轮仍带上该批
+新记忆（测试「主 Agent 缺失 → 不派发且不推进游标」覆盖）。
+
+===================================================================
+4. 文案与形状
+===================================================================
+- `MemoryMaintenanceSummary = { teams: number; newMemories: number }`
+  （newMemories = 已派发团队的新记忆**全量**条数之和；截断时仍报 25 而非 20，有测试锁定）
+- 日志：`单轮完成 teams=N 新记忆=M` + ` scope=teamId`
+- system 条：`【记忆整理】发现 N 条新记忆，已派发整理`（+ 上轮实际结果从句）
+- prompt：先声明「平台只负责**列事实**……平台不做任何判断」，再给 ①search 逐条对比
+  ②merge 并入信息最全的一条 ③update 只改标签 ④archive + 「**拿不准就不动**」
+  ⑤清单外顺手发现的历史重复可一并处理；收尾「合并 X 条 / 归档 Y 条 / 改标签 Z 条 /
+  判断为不该动 W 条」。截断时附「还有 K 条留待下轮」。
+- web `MaintainResult = { teams, newMemories }`；notice：
+  scoped → `已派发整理：本团队 · 新记忆 N 条` / `本团队自上次整理无新记忆，本轮跳过`；
+  全局变体（不传 teamId）→ `已派发整理：N 个团队 · 新记忆 M 条`。
+
+===================================================================
+5. 间隔默认 7 天 + **让 pending 行真的改掉**（生产关键）
+===================================================================
+`DEFAULT_MEMORY_MAINTENANCE_INTERVAL_MS = 7*24*60*60*1000` = 604800000。
+
+原逻辑：`existing.status === PENDING` → 直接 return，**既有 pending 行的 intervalMs
+永远不会被改** —— 生产正躺着一条 intervalMs=86400000 的 pending 行，改默认值形同虚设。
+新增分支：`existing.intervalMs !== intervalMs`（含 `null` 脏数据）→ `prisma.trigger.update`
+写 `intervalMs` + `nextFireAt = now + intervalMs`，保留 id / fireCount / status，并记 info 日志；
+一致 → 原样保留（不 update 不 schedule）。终态行删-then-重建路径与删失败语义**未动**。
+`intervalMs<=0` → 仍 cancel 既有 pending 行、不排期（未动）。
+
+===================================================================
+6. 门禁数字（全部实测）
+===================================================================
+- `cd server && npm run test` → **167 suites / 3950 tests 全绿**（基线 3932，净 +18）
+- `cd server && npx tsc --noEmit` → clean
+- `cd web && npx tsc --noEmit` → clean
+- `cd web && npm run lint` → **0 errors, 729 warnings**（与基线逐字一致）
+- `cd web && npm run build` → 成功
+- `npx jest src/memories` → 4 suites / 151 tests 全绿
+- docker-compose.yml / values.yaml / values-dev.yaml 均过 js-yaml 解析
+
+保留未动的既有行为：冷却 guard（running + 间隔）、`internal:true` + `kind:'wake'` 派发、
+私聊优先→群聊回退、逐团队 try/catch 隔离、`scopeTeamId` 收窄、AdminGuard、
+`lastRunResult` DB 统计、env 0 禁用、无 `as any` / `@ts-ignore` / 空 catch。

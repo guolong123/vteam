@@ -72,13 +72,9 @@ services:
       # 600000 > worker 首字 300000 不抢跑；到期先查心跳，worker 已离线则立即失败不唤醒
       SILENT_SESSION_WAKE_MS: "600000"
       AGENT_IDLE_TIMEOUT_MS: "0"
-      # 记忆定时整理（Todo 9）：间隔 ms，**0 = 禁用**（不排期并取消既有行）。
-      # 服务端只列候选 + 落 system 条 + 派 prompt，合并/归档由 Agent 经 MCP 工具执行。
-      MEMORY_MAINTENANCE_INTERVAL_MS: "86400000"
-      # 「低频未引用」阈值（天）：refCount=0 且 lastUsedAt/createdAt 早于此值即进候选
-      MEMORY_ORG_UNUSED_DAYS: "30"
-      # 每团队候选清单上限（防大团队 prompt 爆长）
-      MEMORY_ORG_CANDIDATE_LIMIT: "50"
+      # 记忆定时整理（Todo 9）：间隔 ms，**0 = 禁用**（不排期并取消既有行）。默认 7 天。
+      # 服务端零检测：只按「自上次整理以来的新记忆」派事实清单，合并/归档由 Agent 经 MCP 工具执行。
+      MEMORY_MAINTENANCE_INTERVAL_MS: "604800000"
     depends_on:
       db:
         condition: service_healthy

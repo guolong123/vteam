@@ -120,23 +120,21 @@ const dismissButtonStyle: CSSProperties = {
 
 /**
  * 把 POST /memories/maintain 的返回体拼成一句人话。
- * 本 tab 的按钮**只整理当前团队**（服务端按 teamId 限定范围），故文案统一按「本团队」
- * 口径表述，不会出现「N 个团队」。
- * 注意 `teams` 语义 = 本轮**真正派发**的团队数（无候选 / 无主 Agent 不计入），
- * 因此「teams>0 但候选全 0」是异常组合——文案需区分「跳过派发」与「已派发 + 有候选」。
+ * 本 tab 的按钮**只整理当前团队**（服务端按 teamId 限定范围，故传 `teamId` 走「本团队」
+ * 口径）；不传 teamId 的全局变体按「N 个团队」口径表述。
+ * 注意 `teams` 语义 = 本轮**真正派发**的团队数（无新记忆 / 无主 Agent 不计入），
+ * 因此 `teams<=0` = 本轮没有任何团队被派发。
  */
-function maintainNoticeText(r: MaintainResult): string {
-  const { duplicates, unused, untags } = r.candidates;
+function maintainNoticeText(r: MaintainResult, teamId?: string): string {
   if (r.teams <= 0) {
-    return "本团队无待整理候选，本轮跳过派发";
+    return teamId
+      ? "本团队自上次整理无新记忆，本轮跳过"
+      : "各团队自上次整理均无新记忆，本轮跳过派发";
   }
-  if (duplicates + unused + untags === 0) {
-    return "已派发整理：本团队 · 无待整理候选";
+  if (teamId) {
+    return `已派发整理：本团队 · 新记忆 ${r.newMemories} 条`;
   }
-  return (
-    `已派发整理：本团队 · 疑似重复 ${duplicates}` +
-    ` · 低频未引用 ${unused} · 标签不规范 ${untags}`
-  );
+  return `已派发整理：${r.teams} 个团队 · 新记忆 ${r.newMemories} 条`;
 }
 
 /* ------------------------------ 记忆行 ------------------------------ */
@@ -662,14 +660,18 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
   });
 
   /* ---------- 手动跑一轮整理（AdminGuard：按钮仅 isAdmin 可见） ----------
-   * **只整理当前团队**（传 teamId，「点谁整理谁」）；全平台口径留给 24h 定时触发器。
-   * 本轮服务端只筛候选 + 落灰色 system 条 + 派 prompt，**不改记忆内容**，
+   * **只整理当前团队**（传 teamId，「点谁整理谁」）；全平台口径留给定时触发器。
+   * 本轮服务端只按「自上次整理以来的新记忆」开闸门 + 呈事实清单 + 落灰色 system 条 +
+   * 派 prompt，**不改记忆内容**（合并/归档由主 Agent 执行），
    * 故不失效 ["memories"]（避免无谓重拉）；仅回填提示文案。 */
   const maintainMutation = useMutation({
     mutationFn: (targetTeamId: string) => memoriesApi.maintain(targetTeamId),
     onMutate: () => setMaintainNotice(null),
-    onSuccess: (result) =>
-      setMaintainNotice({ tone: "success", text: maintainNoticeText(result) }),
+    onSuccess: (result, targetTeamId) =>
+      setMaintainNotice({
+        tone: "success",
+        text: maintainNoticeText(result, targetTeamId),
+      }),
     onError: (err) =>
       setMaintainNotice({
         tone: "error",
@@ -790,7 +792,7 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
             type="button"
             data-testid="team-memory-maintain"
             disabled={maintainMutation.isPending}
-            title="手动跑一轮记忆整理（仅本团队）：筛出疑似重复 / 低频未引用 / 标签不规范的候选，派给本团队主 Agent 复核处理"
+            title="手动跑一轮记忆整理（仅本团队）：把自上次整理以来的新记忆列给本团队主 Agent，由它判断是否重复/过时/需归一标签并执行合并归档"
             onClick={() => maintainMutation.mutate(teamId)}
             style={
               maintainMutation.isPending

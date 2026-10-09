@@ -134,11 +134,8 @@ describe('MemoriesController', () => {
       expect(service.findAll).toHaveBeenCalledWith({}, undefined);
     });
 
-    it('POST /memories/maintain 透传单轮摘要 {teams, candidates}', async () => {
-      const summary = {
-        teams: 2,
-        candidates: { duplicates: 3, unused: 1, untags: 4 },
-      };
+    it('POST /memories/maintain 透传单轮摘要 {teams, newMemories}', async () => {
+      const summary = { teams: 2, newMemories: 8 };
       maintenance.runOnce.mockResolvedValue(summary);
 
       await expect(controller.maintain()).resolves.toEqual(summary);
@@ -147,10 +144,7 @@ describe('MemoriesController', () => {
 
     it('POST /memories/maintain 带 teamId → 只整理该团队（点谁整理谁）', async () => {
       prisma.team.findUnique.mockResolvedValue({ id: 'tm_9' });
-      const summary = {
-        teams: 1,
-        candidates: { duplicates: 0, unused: 0, untags: 5 },
-      };
+      const summary = { teams: 1, newMemories: 5 };
       maintenance.runOnce.mockResolvedValue(summary);
 
       await expect(controller.maintain({ teamId: 'tm_9' })).resolves.toEqual(

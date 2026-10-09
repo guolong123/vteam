@@ -105,14 +105,15 @@ export class MemoriesController {
   /**
    * 手动触发一轮记忆整理（memory-enhancement Todo 9；与定时触发器同一 handler 入口）。
    * POST /api/v1/memories/maintain  body `{teamId?}`（**可省略**）
-   *   → 200 {teams, candidates: {duplicates, unused, untags}}。
+   *   → 200 {teams, newMemories}。
    *
    * 范围口径（`teamId` 缺省 = 全局一轮，保持既有手动端点行为；传 teamId = 只整理该团队，
    * 「点谁整理谁」）：未知团队 → 404 TEAM_NOT_FOUND（不静默空跑一轮）。
    *
-   * 服务端只收集候选 + 落 system 条 + 派 prompt，**合并/归档由 Agent 侧经 MCP 工具执行**；
-   * 摘要为服务端统计值，不等待 Agent 回传。仅管理员（AdminGuard）：整理会变更团队记忆，
-   * 成员触发会让他人团队的记忆被动变更。
+   * 服务端零检测：只按「该团队自上次整理以来的新记忆」开闸门 + 呈事实清单 + 落 system 条 +
+   * 派 prompt，**是否重复/过时/标签是否规范一律由 Agent 判断，合并/归档由其经 MCP 工具执行**；
+   * `newMemories` 是服务端统计的新记忆条数，不等待 Agent 回传。仅管理员（AdminGuard）：
+   * 整理会变更团队记忆，成员触发会让他人团队的记忆被动变更。
    */
   @Post('maintain')
   @UseGuards(AdminGuard)

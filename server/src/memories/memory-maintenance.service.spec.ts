@@ -25,7 +25,7 @@ describe('MemoryMaintenanceService', () => {
     message: { create: jest.Mock };
     chatChannel: { findFirst: jest.Mock };
     team: { findUnique: jest.Mock };
-    trigger: { findUnique: jest.Mock; delete: jest.Mock };
+    trigger: { findUnique: jest.Mock; delete: jest.Mock; update: jest.Mock };
     $transaction: jest.Mock;
   };
   let triggers: {
@@ -48,22 +48,44 @@ describe('MemoryMaintenanceService', () => {
 
   const daysAgo = (n: number): Date => new Date(Date.now() - n * DAY);
 
-  /** team 级活跃记忆行（默认合规标签 + 被引用过，落不进任何候选组）。 */
-  const healthyRow = (id: string, over: Record<string, unknown> = {}) => ({
+  /**
+   * team 级活跃记忆行（默认：合规标签 + 被引用过 + 建档于 1 天前 → 首轮算「新」）。
+   * 服务端零检测下**没有**「脏/干净」之分：只要行活跃就是事实清单的一行。
+   */
+  const newRow = (id: string, over: Record<string, unknown> = {}) => ({
     id,
-    content: `正常记忆 ${id}`,
-    contentHash: `hash_${id}`,
+    content: `新记忆 ${id}`,
     tags: ['howto'],
     refCount: 3,
     lastUsedAt: daysAgo(1),
-    createdAt: daysAgo(40),
+    createdAt: daysAgo(1),
     ...over,
   });
 
+  /** 两条可派发的新记忆（各团队测试默认素材）。 */
+  const twoRows = () => [newRow('me_a'), newRow('me_b')];
+
+  /** 认游标的 findMany（不认游标的 mock 会让第二轮凭空又冒出「首轮全量」）。 */
+  const memoriesHonouringCursor = () =>
+    prisma.memory.findMany.mockImplementation(
+      async (args: {
+        where: { teamId: string; createdAt?: { gt: Date } };
+      }) => {
+        const gt = args.where.createdAt?.gt;
+        return twoRows().filter((r) => !gt || r.createdAt > gt);
+      },
+    );
+
+  const loggerOf = (
+    level: 'log' | 'warn' | 'error',
+  ): jest.SpyInstance<jest.Mock, unknown[]> =>
+    jest.spyOn(
+      (service as unknown as { logger: Record<string, jest.Mock> }).logger,
+      level,
+    );
+
   beforeEach(async () => {
     delete process.env.MEMORY_MAINTENANCE_INTERVAL_MS;
-    delete process.env.MEMORY_ORG_UNUSED_DAYS;
-    delete process.env.MEMORY_ORG_CANDIDATE_LIMIT;
 
     prisma = {
       memory: {
@@ -85,6 +107,7 @@ describe('MemoryMaintenanceService', () => {
       trigger: {
         findUnique: jest.fn().mockResolvedValue(null),
         delete: jest.fn().mockResolvedValue({ id: 'tmr_1' }),
+        update: jest.fn().mockResolvedValue({ id: 'tmr_1' }),
       },
       $transaction: jest.fn((args: Array<Promise<unknown>>) =>
         Promise.all(args),
@@ -147,20 +170,91 @@ describe('MemoryMaintenanceService', () => {
       );
     });
 
-    it('幂等：既有 pending 行原样保留（不重复 schedule）', async () => {
+    it('默认间隔 = 7 天（决策修订：24h 过于频繁，记忆整理本无实时性要求）', async () => {
+      expect(DEFAULT_MEMORY_MAINTENANCE_INTERVAL_MS).toBe(604_800_000);
+      await service.onModuleInit();
+      expect(triggers.schedule).toHaveBeenCalledWith(
+        'memory_maintenance',
+        expect.any(Date),
+        expect.anything(),
+        MEMORY_MAINTENANCE_DEDUP_KEY,
+        expect.objectContaining({ intervalMs: 604_800_000 }),
+      );
+    });
+
+    it('排期 purpose 用「新记忆」口径（不再是列候选）', async () => {
+      await service.onModuleInit();
+      expect(triggers.schedule).toHaveBeenCalledWith(
+        'memory_maintenance',
+        expect.any(Date),
+        expect.objectContaining({
+          purpose: expect.stringContaining('新记忆'),
+        }),
+        MEMORY_MAINTENANCE_DEDUP_KEY,
+        expect.anything(),
+      );
+    });
+
+    it('幂等：既有 pending 行且间隔一致 → 原样保留（不 update 不 schedule）', async () => {
       prisma.trigger.findUnique.mockResolvedValue({
         id: 'tmr_1',
         status: 'pending',
+        intervalMs: DEFAULT_MEMORY_MAINTENANCE_INTERVAL_MS,
       });
       await service.onModuleInit();
       expect(triggers.schedule).not.toHaveBeenCalled();
       expect(triggers.cancel).not.toHaveBeenCalled();
+      expect(prisma.trigger.update).not.toHaveBeenCalled();
+    });
+
+    it('既有 pending 行但间隔不一致（生产那条 24h 行）→ 就地改 intervalMs + nextFireAt，保留 id/status/fireCount', async () => {
+      prisma.trigger.findUnique.mockResolvedValue({
+        id: 'tmr_prod',
+        status: 'pending',
+        intervalMs: 86_400_000,
+        fireCount: 3,
+      });
+
+      await service.onModuleInit();
+
+      expect(prisma.trigger.update).toHaveBeenCalledWith({
+        where: { id: 'tmr_prod' },
+        data: {
+          intervalMs: DEFAULT_MEMORY_MAINTENANCE_INTERVAL_MS,
+          nextFireAt: expect.any(Date),
+        },
+      });
+      const nextFireAt = (
+        prisma.trigger.update.mock.calls[0][0] as {
+          data: { nextFireAt: Date };
+        }
+      ).data.nextFireAt;
+      expect(nextFireAt.getTime()).toBeGreaterThan(Date.now());
+      // 走的是 update 分支，不该再 schedule（schedule 会按 dedupKey 幂等回旧行）
+      expect(triggers.schedule).not.toHaveBeenCalled();
+    });
+
+    it('既有 pending 行 intervalMs 为 null（脏数据）也走就地改分支', async () => {
+      prisma.trigger.findUnique.mockResolvedValue({
+        id: 'tmr_1',
+        status: 'pending',
+        intervalMs: null,
+      });
+      await service.onModuleInit();
+      expect(prisma.trigger.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            intervalMs: DEFAULT_MEMORY_MAINTENANCE_INTERVAL_MS,
+          }),
+        }),
+      );
     });
 
     it('既有终态行先删后建（改 env 后能生效，不被 dedupKey 幂等卡死）', async () => {
       prisma.trigger.findUnique.mockResolvedValue({
         id: 'tmr_1',
         status: 'fired',
+        intervalMs: 86_400_000,
       });
       await service.onModuleInit();
       expect(prisma.trigger.delete).toHaveBeenCalledWith({
@@ -173,6 +267,7 @@ describe('MemoryMaintenanceService', () => {
       prisma.trigger.findUnique.mockResolvedValue({
         id: 'tmr_1',
         status: 'fired',
+        intervalMs: 86_400_000,
       });
       prisma.trigger.delete.mockRejectedValue(new Error('db locked'));
 
@@ -186,6 +281,7 @@ describe('MemoryMaintenanceService', () => {
       prisma.trigger.findUnique.mockResolvedValue({
         id: 'tmr_1',
         status: 'pending',
+        intervalMs: 86_400_000,
       });
       await service.onModuleInit();
       expect(triggers.schedule).not.toHaveBeenCalled();
@@ -220,7 +316,7 @@ describe('MemoryMaintenanceService', () => {
       const guard = guardFn();
       await expect(guard()).resolves.toBe(true);
 
-      prisma.memory.findMany.mockResolvedValue([healthyRow('me_1')]);
+      prisma.memory.findMany.mockResolvedValue(twoRows());
       await service.runOnce();
 
       await expect(guard()).resolves.toBe(false);
@@ -230,148 +326,261 @@ describe('MemoryMaintenanceService', () => {
       process.env.MEMORY_MAINTENANCE_INTERVAL_MS = '0';
       await service.onModuleInit();
       const guard = guardFn();
-      prisma.memory.findMany.mockResolvedValue([healthyRow('me_1')]);
+      prisma.memory.findMany.mockResolvedValue(twoRows());
       await service.runOnce();
       await expect(guard()).resolves.toBe(true);
     });
   });
 
-  describe('候选收集', () => {
-    it('三分组各自正确：同 hash 重复 / 低频未引用 / 标签不规范', async () => {
-      prisma.memory.findMany.mockResolvedValue([
-        // duplicates：me_a 与 me_b 同 contentHash
-        healthyRow('me_a', {
-          contentHash: 'dup',
-          tags: ['howto'],
-          refCount: 5,
-        }),
-        healthyRow('me_b', {
-          contentHash: 'dup',
-          tags: ['howto'],
-          refCount: 4,
-        }),
-        // unused：refCount=0 且 90 天前建、从没被引用
-        healthyRow('me_c', {
-          refCount: 0,
-          lastUsedAt: null,
-          createdAt: daysAgo(90),
-        }),
-        // untags：标签含白名单外的值
-        healthyRow('me_d', { tags: ['note', 'howto'] }),
-        // untags：标签缺失
-        healthyRow('me_e', { tags: null }),
-        // 合规行：不该进任何组
-        healthyRow('me_ok'),
-        // 被引用过的新鲜 unused 候选（refCount=0 但 lastUsedAt 是昨天）→ 不算低频
-        healthyRow('me_f', { refCount: 0, lastUsedAt: daysAgo(1) }),
-      ]);
+  describe('触发闸门：是否有新记忆', () => {
+    it('首轮（无游标）→ 全部活跃行都算新（有界全量扫描）', async () => {
+      prisma.memory.findMany.mockResolvedValue(twoRows());
 
       const summary = await service.runOnce();
 
-      expect(summary.candidates).toEqual({
-        duplicates: 2,
-        unused: 1,
-        untags: 2,
-      });
-      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
-      expect(prompt).toContain('me_a');
-      expect(prompt).toContain('me_b');
-      expect(prompt).toContain('me_c');
-      expect(prompt).toContain('me_d');
-      expect(prompt).toContain('me_e');
-      expect(prompt).not.toContain('me_ok');
-      expect(prompt).not.toContain('me_f');
+      expect(summary).toEqual({ teams: 1, newMemories: 2 });
+      expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
+      expect(prisma.memory.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { level: 'team', teamId: 'tm_1', deletedAt: null },
+          orderBy: { createdAt: 'asc' },
+        }),
+      );
     });
 
-    it('同一条同时命中多组时只提示一次（重复组优先）', async () => {
-      prisma.memory.findMany.mockResolvedValue([
-        healthyRow('me_x', {
-          contentHash: 'dup',
-          refCount: 0,
-          lastUsedAt: null,
-          createdAt: daysAgo(90),
-          tags: ['bad'],
-        }),
-        healthyRow('me_y', {
-          contentHash: 'dup',
-          refCount: 1,
-          tags: ['howto'],
-        }),
-      ]);
+    it('首轮 0 条活跃记忆 → 静默跳过（不派发、不落 system 条）', async () => {
+      prisma.memory.findMany.mockResolvedValue([]);
+
       const summary = await service.runOnce();
-      expect(summary.candidates).toEqual({
-        duplicates: 2,
-        unused: 0,
-        untags: 0,
-      });
-      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
-      expect(prompt.match(/\[me_x\]/g)).toHaveLength(1);
+
+      expect(summary).toEqual({ teams: 0, newMemories: 0 });
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
     });
 
-    it('候选上限生效（env CANDIDATE_LIMIT）', async () => {
-      process.env.MEMORY_ORG_CANDIDATE_LIMIT = '2';
-      prisma.memory.findMany.mockResolvedValue([
-        healthyRow('me_a', { contentHash: 'dup' }),
-        healthyRow('me_b', { contentHash: 'dup' }),
-        healthyRow('me_c', { contentHash: 'dup' }),
-      ]);
+    it('游标之后无新记忆 → 静默跳过（不落 system 条、不派发）', async () => {
+      prisma.memory.findMany.mockResolvedValue(twoRows());
+      await service.runOnce();
+      prisma.message.create.mockClear();
+      prisma.memory.findMany.mockResolvedValue([]);
+
       const summary = await service.runOnce();
-      expect(summary.candidates.duplicates).toBe(2);
-      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
-      expect(prompt).toContain('me_a');
-      expect(prompt).toContain('me_b');
-      expect(prompt).not.toContain('me_c');
+
+      expect(summary).toEqual({ teams: 0, newMemories: 0 });
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
     });
 
-    it('摘要截断至 80 字', async () => {
-      prisma.memory.findMany.mockResolvedValue([
-        healthyRow('me_a', {
-          contentHash: 'dup',
-          content: '长'.repeat(200),
+    it('跳过时只记一行 info，不 warn 不 error', async () => {
+      prisma.memory.findMany.mockResolvedValue([]);
+      const warn = loggerOf('warn');
+      const error = loggerOf('error');
+      const log = loggerOf('log');
+
+      await service.runOnce();
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('自上次整理无新记忆'),
+      );
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+    });
+
+    it('每轮按 createdAt ASC 取新记忆（游标语义 = created_at > 上轮边界）', async () => {
+      prisma.memory.findMany.mockResolvedValue(twoRows());
+      await service.runOnce();
+      prisma.memory.findMany.mockClear();
+
+      prisma.memory.findMany.mockResolvedValue([newRow('me_c')]);
+      await service.runOnce();
+
+      const where = prisma.memory.findMany.mock.calls[0][0].where as {
+        createdAt: { gt: Date };
+      };
+      expect(where.createdAt.gt).toBeInstanceOf(Date);
+    });
+
+    it('每团队游标互相独立：团队 A 跑过不挡团队 B 首轮', async () => {
+      prisma.memory.groupBy.mockResolvedValue([
+        { teamId: 'tm_a' },
+        { teamId: 'tm_b' },
+      ]);
+      // 每团队首批都算新，第二轮 A 空、B 仍有新
+      prisma.memory.findMany.mockImplementation(
+        async (args: { where: { teamId: string; createdAt?: { gt: Date } } }) =>
+          args.where.teamId === 'tm_b' || !args.where.createdAt
+            ? [newRow(`me_${args.where.teamId}`)]
+            : [],
+      );
+
+      const first = await service.runOnce();
+      expect(first).toEqual({ teams: 2, newMemories: 2 });
+
+      const second = await service.runOnce();
+      expect(second).toEqual({ teams: 1, newMemories: 1 });
+      expect(
+        dispatcher.dispatchAgentMention.mock.calls.map((c) => c[0].teamId),
+      ).toEqual(['tm_a', 'tm_b', 'tm_b']);
+    });
+
+    it('主 Agent 缺失 → 不派发且不推进游标（下轮仍会带上这批新记忆）', async () => {
+      prisma.memory.findMany.mockResolvedValue(twoRows());
+      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
+      const warn = loggerOf('warn');
+
+      await service.runOnce();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('mainAgentMemberId'),
+      );
+
+      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: 'tmm_main' });
+      const second = await service.runOnce();
+      expect(second).toEqual({ teams: 1, newMemories: 2 });
+    });
+  });
+
+  describe('游标推进与截断续跑', () => {
+    const manyRows = (n: number): ReturnType<typeof newRow>[] =>
+      Array.from({ length: n }, (_, i) =>
+        newRow(`me_${String(i).padStart(2, '0')}`, {
+          createdAt: new Date(Date.now() - (n - i) * 60_000),
         }),
-        healthyRow('me_b', { contentHash: 'dup' }),
+      );
+
+    it('全量入 prompt → 游标推进到 now（第二轮空集跳过）', async () => {
+      memoriesHonouringCursor();
+
+      await service.runOnce();
+      const second = await service.runOnce();
+
+      expect(second).toEqual({ teams: 0, newMemories: 0 });
+    });
+
+    it('超过单轮上限 → prompt 只列前 20 条且说明余量留待下轮', async () => {
+      prisma.memory.findMany.mockResolvedValue(manyRows(25));
+
+      await service.runOnce();
+
+      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
+      expect(prompt).toContain('me_19');
+      expect(prompt).not.toContain('me_20');
+      expect(prompt).toContain('还有 5 条留待下轮');
+    });
+
+    it('截断时游标 = 末条已列入行的 createdAt → 下轮从余量续跑（cap 之上的行不饿死）', async () => {
+      const rows = manyRows(25);
+      prisma.memory.findMany.mockResolvedValue(rows);
+      await service.runOnce();
+      prisma.message.create.mockClear();
+
+      // 第二轮：余下 5 条仍在游标之后
+      prisma.memory.findMany.mockResolvedValue(rows.slice(20));
+      const second = await service.runOnce();
+
+      expect(second).toEqual({ teams: 1, newMemories: 5 });
+      const prompt = dispatcher.dispatchAgentMention.mock.calls[1][0].text;
+      expect(prompt).toContain('me_24');
+      expect(prompt).toContain('已全部列出');
+      // 游标落在 me_19 的 createdAt（本例 createdAt = now-5min）
+      expect(prisma.memory.findMany.mock.calls[1][0].where.createdAt.gt).toEqual(
+        rows[19].createdAt,
+      );
+    });
+
+    it('摘要条数按团队新记忆总数计（截断时 summary 仍报全量 25）', async () => {
+      prisma.memory.findMany.mockResolvedValue(manyRows(25));
+
+      const summary = await service.runOnce();
+
+      expect(summary).toEqual({ teams: 1, newMemories: 25 });
+    });
+  });
+
+  describe('事实清单与 prompt', () => {
+    beforeEach(() => {
+      prisma.memory.findMany.mockResolvedValue([
+        newRow('me_a', { refCount: 0, lastUsedAt: null, tags: ['note'] }),
+      ]);
+    });
+
+    it('只列事实（id / tags / refCount / 建档与命中时间 / 内容），不给任何服务端建议动作', async () => {
+      await service.runOnce();
+      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
+      expect(prompt).toContain('[me_a]');
+      expect(prompt).toContain('tags=note');
+      expect(prompt).toContain('refCount=0');
+      expect(prompt).toContain('最近命中=从未');
+      expect(prompt).toContain(`建于=${new Date(Date.now() - DAY).toISOString().slice(0, 10)}`);
+      expect(prompt).not.toContain('建议动作');
+    });
+
+    it('声明平台零判断，并把判断权与「拿不准就别动」纪律交给 Agent', async () => {
+      await service.runOnce();
+      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
+      expect(prompt).toContain('平台只负责**列事实**');
+      expect(prompt).toContain('平台不做任何判断');
+      expect(prompt).toContain('拿不准就不动');
+    });
+
+    it('引用 agent 侧工具名并给标签词表', async () => {
+      await service.runOnce();
+      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
+      expect(prompt).toContain('vteam_memory_search');
+      expect(prompt).toContain('vteam_memory_merge');
+      expect(prompt).toContain('vteam_memory_archive');
+      expect(prompt).toContain('vteam_memory_update');
+      expect(prompt).toContain('howto / pitfall / constraint');
+      expect(prompt).toContain('信息最全的一条');
+    });
+
+    it('收尾汇报格式：合并/归档/改标签/不动', async () => {
+      await service.runOnce();
+      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
+      expect(prompt).toContain('合并 X 条 / 归档 Y 条 / 改标签 Z 条 / 判断为不该动 W 条');
+    });
+
+    it('单轮上限常量进 prompt', async () => {
+      await service.runOnce();
+      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
+      expect(prompt).toContain(
+        `单轮上限 ${MEMORY_MAINTENANCE_PROMPT_ITEM_LIMIT} 条`,
+      );
+    });
+
+    it('tags 非数组 / 含非字符串项 → 只留字符串（事实行不炸）', async () => {
+      prisma.memory.findMany.mockResolvedValue([
+        newRow('me_a', { tags: 'howto' }),
+        newRow('me_b', { tags: [1, 'pitfall', null] }),
       ]);
       await service.runOnce();
       const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
-      expect(prompt).toContain('长'.repeat(80));
-      expect(prompt).not.toContain('长'.repeat(81));
+      expect(prompt).toContain('tags=（无）');
+      expect(prompt).toContain('tags=pitfall');
     });
 
-    it('无候选团队不落 system 条、不派发', async () => {
-      prisma.memory.findMany.mockResolvedValue([healthyRow('me_ok')]);
-      const summary = await service.runOnce();
-      expect(summary).toEqual({
-        teams: 0,
-        candidates: { duplicates: 0, unused: 0, untags: 0 },
-      });
-      expect(prisma.message.create).not.toHaveBeenCalled();
-      expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    it('内容节选截断至 160 字', async () => {
+      prisma.memory.findMany.mockResolvedValue([
+        newRow('me_a', { content: '长'.repeat(400) }),
+      ]);
+      await service.runOnce();
+      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
+      expect(prompt).toContain('长'.repeat(160));
+      expect(prompt).not.toContain('长'.repeat(161));
     });
   });
 
   describe('灰色 system 条', () => {
     beforeEach(() => {
-      prisma.memory.findMany.mockResolvedValue([
-        healthyRow('me_a', { contentHash: 'dup' }),
-        healthyRow('me_b', { contentHash: 'dup' }),
-        healthyRow('me_c', {
-          refCount: 0,
-          lastUsedAt: null,
-          createdAt: daysAgo(90),
-        }),
-        healthyRow('me_d', { tags: ['oops'] }),
-      ]);
+      prisma.memory.findMany.mockResolvedValue(twoRows());
     });
 
-    it('首轮落 team_group 频道的 system 消息（无「上轮实际结果」从句）', async () => {
+    it('首轮落 team_group 频道的 system 消息（新记忆条数 + 无「上轮实际结果」从句）', async () => {
       await service.runOnce();
       expect(prisma.message.create).toHaveBeenCalledTimes(1);
       const arg = prisma.message.create.mock.calls[0][0];
       expect(arg.data.senderType).toBe('system');
       expect(arg.data.channelId).toBe('c_group');
-      expect(arg.data.content.text).toBe(
-        '【记忆整理】本轮检测：疑似重复 2 · 低频未引用 1 · 标签不规范 1，已派发整理',
-      );
+      expect(arg.data.content.text).toBe('【记忆整理】发现 2 条新记忆，已派发整理');
       expect(realtime.broadcast).toHaveBeenCalledWith(
         'chat.message.new',
         expect.objectContaining({
@@ -384,15 +593,19 @@ describe('MemoryMaintenanceService', () => {
       );
     });
 
-    it('第二轮带上轮实际结果（服务端 DB 统计，不依赖 Agent 回传）', async () => {
+    it('第二轮带上轮实际结果（服务端 DB 统计，窗口 = 该团队上轮游标，不依赖 Agent 回传）', async () => {
       await service.runOnce();
       prisma.message.create.mockClear();
+      prisma.memory.findMany.mockClear();
       prisma.memory.count.mockResolvedValueOnce(3).mockResolvedValueOnce(2);
+      prisma.memory.findMany.mockResolvedValue([newRow('me_c')]);
 
       await service.runOnce();
       const text = prisma.message.create.mock.calls[0][0].data.content
         .text as string;
-      expect(text).toContain('上轮实际结果：合并 3 条 · 归档 2 条');
+      expect(text).toBe(
+        '【记忆整理】发现 1 条新记忆，已派发整理。上轮实际结果：合并 3 条 · 归档 2 条',
+      );
       expect(prisma.memory.count).toHaveBeenCalledWith({
         where: expect.objectContaining({
           level: 'team',
@@ -407,15 +620,34 @@ describe('MemoryMaintenanceService', () => {
           deletedAt: { gte: expect.any(Date) },
         }),
       });
+      // 统计窗口起点 = 第二轮的查询游标（同一次读，避免两处 Date.now 漂移）
+      const cursor = (prisma.memory.findMany.mock.calls[0][0].where as {
+        createdAt: { gt: Date };
+      }).createdAt.gt;
+      expect(prisma.memory.count).toHaveBeenCalledWith({
+        where: expect.objectContaining({ updatedAt: { gte: cursor } }),
+      });
+    });
+
+    it('无 team_group 频道 → 只 warn，不阻断派发', async () => {
+      // 私聊在、群聊缺（system 条落不了群）→ 仍照常私聊派发
+      prisma.chatChannel.findFirst
+        .mockResolvedValueOnce({ id: 'c_private' })
+        .mockResolvedValue(null);
+      const warn = loggerOf('warn');
+
+      await service.runOnce();
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('无 team_group 频道'),
+      );
+      expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('派发主 Agent', () => {
     beforeEach(() => {
-      prisma.memory.findMany.mockResolvedValue([
-        healthyRow('me_a', { contentHash: 'dup' }),
-        healthyRow('me_b', { contentHash: 'dup' }),
-      ]);
+      prisma.memory.findMany.mockResolvedValue(twoRows());
     });
 
     it('kind=wake + internal=true + target=mainAgentMemberId + 私聊频道优先', async () => {
@@ -443,66 +675,39 @@ describe('MemoryMaintenanceService', () => {
         expect.objectContaining({ channelId: 'c_group' }),
       );
     });
+  });
 
-    it('mainAgentMemberId 缺失 → 跳过该团队并告警', async () => {
-      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
-      const warn = jest.spyOn(
-        (service as unknown as { logger: { warn: jest.Mock } }).logger,
-        'warn',
-      );
-      const summary = await service.runOnce();
-      expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
-      expect(prisma.message.create).not.toHaveBeenCalled();
-      expect(summary.teams).toBe(0);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('mainAgentMemberId'),
-      );
-    });
+  describe('单轮日志', () => {
+    it('新记忆计数进日志 + scope 后缀', async () => {
+      prisma.memory.findMany.mockResolvedValue(twoRows());
+      const log = loggerOf('log');
 
-    it('prompt 引用 agent 侧工具名并给出单轮处理上限', async () => {
-      await service.runOnce();
-      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
-      expect(prompt).toContain('vteam_memory_search');
-      expect(prompt).toContain('vteam_memory_merge');
-      expect(prompt).toContain('vteam_memory_archive');
-      expect(prompt).toContain('vteam_memory_update');
-      expect(prompt).toContain('howto / pitfall / constraint');
-      expect(prompt).toContain(
-        `单轮最多处理 ${MEMORY_MAINTENANCE_PROMPT_ITEM_LIMIT} 条`,
+      await service.runOnce('tm_1');
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('单轮完成 teams=1 新记忆=2'),
+      );
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('scope=tm_1'),
       );
     });
 
-    it('候选多于单轮上限时 prompt 只列前 20 条并说明余量留待下轮', async () => {
-      process.env.MEMORY_ORG_CANDIDATE_LIMIT = '25';
-      const rows: ReturnType<typeof healthyRow>[] = [];
-      for (let i = 0; i < 25; i++) {
-        rows.push(
-          healthyRow(`me_${String(i).padStart(2, '0')}`, {
-            contentHash: 'dup',
-          }),
-        );
-      }
-      prisma.memory.findMany.mockResolvedValue(rows);
+    it('无新记忆也只记一行摘要（teams=0 新记忆=0）', async () => {
+      const log = loggerOf('log');
       await service.runOnce();
-      const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
-      expect(prompt).toContain('me_19');
-      expect(prompt).not.toContain('me_20');
-      expect(prompt).toContain('本轮超出部分（5 条）留待下轮');
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('单轮完成 teams=0 新记忆=0'),
+      );
     });
   });
 
   describe('单团队异常隔离', () => {
-    const dupRows = () => [
-      healthyRow('me_a', { contentHash: 'dup' }),
-      healthyRow('me_b', { contentHash: 'dup' }),
-    ];
-
     it('一个团队派发抛错不中断其他团队', async () => {
       prisma.memory.groupBy.mockResolvedValue([
         { teamId: 'tm_bad' },
         { teamId: 'tm_ok' },
       ]);
-      prisma.memory.findMany.mockResolvedValue(dupRows());
+      prisma.memory.findMany.mockResolvedValue(twoRows());
       prisma.team.findUnique.mockImplementation(
         async (args: { where: { id: string } }) =>
           args.where.id === 'tm_bad'
@@ -515,14 +720,11 @@ describe('MemoryMaintenanceService', () => {
           return 's_ok';
         },
       );
-      const error = jest.spyOn(
-        (service as unknown as { logger: { error: jest.Mock } }).logger,
-        'error',
-      );
+      const error = loggerOf('error');
 
       const summary = await service.runOnce();
 
-      expect(summary.teams).toBe(1);
+      expect(summary).toEqual({ teams: 1, newMemories: 2 });
       const dispatched = dispatcher.dispatchAgentMention.mock.calls.map(
         (c) => c[0].teamId,
       );
@@ -534,7 +736,7 @@ describe('MemoryMaintenanceService', () => {
       );
     });
 
-    it('候选收集抛错同样被隔离（不冒泡出 runOnce）', async () => {
+    it('新记忆查询抛错同样被隔离（不冒泡出 runOnce）', async () => {
       prisma.memory.groupBy.mockResolvedValue([
         { teamId: 'tm_bad' },
         { teamId: 'tm_ok' },
@@ -542,11 +744,11 @@ describe('MemoryMaintenanceService', () => {
       prisma.memory.findMany.mockImplementation(
         async (args: { where: { teamId: string } }) => {
           if (args.where.teamId === 'tm_bad') throw new Error('db down');
-          return dupRows();
+          return twoRows();
         },
       );
       const summary = await service.runOnce();
-      expect(summary.teams).toBe(1);
+      expect(summary).toEqual({ teams: 1, newMemories: 2 });
     });
   });
 
@@ -563,21 +765,26 @@ describe('MemoryMaintenanceService', () => {
       });
     });
 
-    it('候选查询只覆盖本团队 team 级活跃行', async () => {
+    it('新记忆查询只覆盖本团队 team 级活跃行，且不选服务端检测用的 contentHash', async () => {
+      prisma.memory.findMany.mockResolvedValue(twoRows());
       await service.runOnce();
       expect(prisma.memory.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { level: 'team', teamId: 'tm_1', deletedAt: null },
+          select: {
+            id: true,
+            content: true,
+            tags: true,
+            refCount: true,
+            lastUsedAt: true,
+            createdAt: true,
+          },
         }),
       );
     });
   });
 
   describe('单团队范围（点谁整理谁）', () => {
-    const dupRows = () => [
-      healthyRow('me_a', { contentHash: 'dup' }),
-      healthyRow('me_b', { contentHash: 'dup' }),
-    ];
     const allTeams = [{ teamId: 'tm_1' }, { teamId: 'tm_2' }, { teamId: 'tm_3' }];
     // groupBy mock 按 where 语义过滤：只有范围真的进了 where，收窄才成立。
     const groupByHonouringWhere = () =>
@@ -597,7 +804,7 @@ describe('MemoryMaintenanceService', () => {
 
     it('runOnce(teamId) 把团队迭代查询收窄到该团队（where teamId = 传入值）', async () => {
       groupByHonouringWhere();
-      prisma.memory.findMany.mockResolvedValue(dupRows());
+      prisma.memory.findMany.mockResolvedValue(twoRows());
 
       await service.runOnce('tm_2');
 
@@ -615,14 +822,11 @@ describe('MemoryMaintenanceService', () => {
     it('范围内只有该团队：其他团队不落 system 条、不派发（摘要也只含本团队）', async () => {
       groupByHonouringWhere();
       perTeamChannel();
-      prisma.memory.findMany.mockResolvedValue(dupRows());
+      prisma.memory.findMany.mockResolvedValue(twoRows());
 
       const summary = await service.runOnce('tm_2');
 
-      expect(summary).toEqual({
-        teams: 1,
-        candidates: { duplicates: 2, unused: 0, untags: 0 },
-      });
+      expect(summary).toEqual({ teams: 1, newMemories: 2 });
       expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
       expect(dispatcher.dispatchAgentMention).toHaveBeenCalledWith(
         expect.objectContaining({ teamId: 'tm_2', internal: true }),
@@ -641,22 +845,36 @@ describe('MemoryMaintenanceService', () => {
     it('范围内团队无活跃记忆 → teams=0 且不落条不派发', async () => {
       groupByHonouringWhere();
       perTeamChannel();
-      prisma.memory.findMany.mockResolvedValue(dupRows());
+      prisma.memory.findMany.mockResolvedValue(twoRows());
 
       const summary = await service.runOnce('tm_404');
 
-      expect(summary).toEqual({
-        teams: 0,
-        candidates: { duplicates: 0, unused: 0, untags: 0 },
-      });
+      expect(summary).toEqual({ teams: 0, newMemories: 0 });
       expect(prisma.message.create).not.toHaveBeenCalled();
       expect(dispatcher.dispatchAgentMention).not.toHaveBeenCalled();
+    });
+
+    it('手动重跑同一团队：首轮已整理完的增量在下轮带上（新记忆才派发）', async () => {
+      groupByHonouringWhere();
+      memoriesHonouringCursor();
+
+      const first = await service.runOnce('tm_2');
+      expect(first).toEqual({ teams: 1, newMemories: 2 });
+
+      const second = await service.runOnce('tm_2');
+      expect(second).toEqual({ teams: 0, newMemories: 0 });
+      expect(dispatcher.dispatchAgentMention).toHaveBeenCalledTimes(1);
     });
 
     it('回归：runOnce()（无 scope）仍全局——where 保持 teamId:{not:null} 且逐团队都派发', async () => {
       groupByHonouringWhere();
       perTeamChannel();
-      prisma.memory.findMany.mockResolvedValue(dupRows());
+      prisma.memory.findMany.mockImplementation(
+        async (args: {
+          where: { teamId: string; createdAt?: { gt: Date } };
+        }) =>
+          args.where.createdAt ? [] : [newRow(`me_${args.where.teamId}`)],
+      );
 
       const summary = await service.runOnce();
 
@@ -664,7 +882,7 @@ describe('MemoryMaintenanceService', () => {
         by: ['teamId'],
         where: { level: 'team', deletedAt: null, teamId: { not: null } },
       });
-      expect(summary.teams).toBe(3);
+      expect(summary).toEqual({ teams: 3, newMemories: 3 });
       expect(
         dispatcher.dispatchAgentMention.mock.calls.map((c) => c[0].teamId),
       ).toEqual(['tm_1', 'tm_2', 'tm_3']);
@@ -678,7 +896,7 @@ describe('MemoryMaintenanceService', () => {
       );
       const handler = call?.[1] as (ctx: unknown) => Promise<void>;
       groupByHonouringWhere();
-      prisma.memory.findMany.mockResolvedValue(dupRows());
+      prisma.memory.findMany.mockResolvedValue(twoRows());
 
       await handler({});
 
