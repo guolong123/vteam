@@ -94,6 +94,22 @@ describe('WecomAibotAdapter (message-channels)', () => {
     expect(cmds).toEqual([]);
   });
 
+  it('registerStreamCorrelation 保留 chatid（出站按会话定位的来源）', () => {
+    adapter.registerStreamCorrelation('m_with_chat', {
+      channelId: 'mc_1',
+      frameHeaders: { req_id: 'req_c' },
+      streamId: 'stream_c',
+      fromUserId: 'GuoLong',
+      chattype: 'group',
+      chatid: 'wriGjxCgAA_groupA',
+    });
+    expect(adapter.getStream('m_with_chat')).toMatchObject({
+      chattype: 'group',
+      chatid: 'wriGjxCgAA_groupA',
+      fromUserId: 'GuoLong',
+    });
+  });
+
   it('registerStreamCorrelation LRU 100', () => {
     for (let i = 0; i < 101; i++) {
       adapter.registerStreamCorrelation(`msg_${i}`, {
