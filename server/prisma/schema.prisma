@@ -1028,6 +1028,16 @@ model Memory {
   /// false = 仅能经 memory_search 按需检索，不进 prompt；true = 按 level 的受众规则注入。
   /// 受众：global/team → 本团队主 Agent；role → 本团队该岗位全部 agent。
   autoInject       Boolean   @default(false) @map("auto_inject")
+  /// 主动检索引用计数（2026-10-09）：agent 经 memory_search 命中 +1。
+  /// **仅主动检索计数**——每轮自动注入不计（否则主 Agent 每轮刷新即刷爆指标）。
+  /// 新建记忆恒为 0（存量行不回填，迁移只 ADD COLUMN）。
+  refCount         Int       @default(0) @map("ref_count")
+  /// 最近一次被 memory_search 命中的时刻；NULL = 从未被引用过。
+  /// 重要度计龄基准 = lastUsedAt ?? createdAt（见 memory-importance.ts）。
+  lastUsedAt       DateTime? @map("last_used_at")
+  /// 合并追溯：本行已被并入哪条记忆（vteam_memory_merge 写，source 行软删）。
+  /// 只读追溯标记，不建外键（合并是历史事实，外键会连带限制清理）。
+  mergedIntoId     String?   @map("merged_into_id")
   content          String    @db.Text
   // 精确去重键（T4 记忆演进）：sha256(归一化 content)，save 前按 level+归属+hash 查命中
   // 即返 duplicate（check-then-insert 竞态接受，不建唯一键）；可空兼容存量行回填前。
@@ -1053,6 +1063,8 @@ model Memory {
   // 自动注入查询：按受众筛（global 无归属 / team+role 带 teamId，role 再带 roleId）
   @@index([autoInject, teamId, roleId], map: "idx_memories_inject")
   @@index([contentHash], map: "idx_memories_content_hash")
+  // 注入候选按 refCount desc 预筛（再在内存按重要度精排）走这条索引
+  @@index([refCount], map: "idx_memories_ref_count")
   @@map("memories")
 }
 

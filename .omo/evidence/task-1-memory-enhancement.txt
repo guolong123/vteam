@@ -1,0 +1,151 @@
+==============================================================
+Task 1 (mem-metric-schema) evidence — memory-enhancement Wave 1
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Node: v22.15.0 (nvm) — /usr/bin/node not on PATH, used $HOME/.nvm/versions/node/v22.15.0/bin
+==============================================================
+
+--- FILES CHANGED (5) ---
+M  server/prisma/schema.prisma                                    (model Memory only: 3 fields + 1 @@index)
+A  server/prisma/migrations/20261009010000_memory_refcount/migration.sql
+A  server/src/memories/memory-importance.ts
+A  server/src/memories/memory-importance.spec.ts
+A  server/src/prisma/memory-refcount.migration.spec.ts
+
+--- ENV NOTE ---
+$ npx prisma migrate status
+    warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+    For more information, see: https://pris.ly/prisma-config
+    
+    Environment variables loaded from .env
+    Prisma schema loaded from prisma/schema.prisma
+    Datasource "db": MySQL database "aiagents" at "localhost:3306"
+    Error: P1001: Can't reach database server at `localhost:3306`
+    
+    Please make sure your database server is running at `localhost:3306`.
+    => P1001: no live MySQL on localhost:3306 (docker-compose only binds db service).
+    => FALLBACK TAKEN (per instructions): hand-author migration.sql following
+       prisma/migrations/20260930010000_memory_role_inject/migration.sql format.
+       Timestamp 20261009010000 sorts after the newest existing migration 20261009000000_message_external_chat_id.
+
+==============================================================
+$ npx prisma validate      (from server/)
+==============================================================
+  warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+  For more information, see: https://pris.ly/prisma-config
+  
+  Environment variables loaded from .env
+  Prisma schema loaded from prisma/schema.prisma
+  The schema at prisma/schema.prisma is valid 🚀
+  EXIT=0
+
+==============================================================
+$ npx prisma generate      (from server/)
+==============================================================
+  warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+  For more information, see: https://pris.ly/prisma-config
+  
+  Environment variables loaded from .env
+  Prisma schema loaded from prisma/schema.prisma
+  
+  ✔ Generated Prisma Client (v6.19.3) to ./node_modules/@prisma/client in 358ms
+  
+  Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+  
+  Tip: Interested in query caching in just a few lines of code? Try Accelerate today! https://pris.ly/tip-3-accelerate
+  
+  EXIT=0
+
+==============================================================
+$ npx tsc --noEmit         (from server/)
+==============================================================
+  EXIT=0  (empty output = no type errors)
+
+==============================================================
+$ npx jest --runInBand memory-importance memory-refcount
+==============================================================
+  PASS src/prisma/memory-refcount.migration.spec.ts
+  PASS src/memories/memory-importance.spec.ts
+  
+  Test Suites: 2 passed, 2 total
+  Tests:       18 passed, 18 total
+  Snapshots:   0 total
+  Time:        2.317 s, estimated 3 s
+  Ran all test suites matching /memory-importance|memory-refcount/i.
+
+==============================================================
+$ npx eslint <3 new files>          (lint + prettier gate)
+==============================================================
+  EXIT=0  (0 = clean; note: zero 'as any' / '@ts-ignore' / empty catch in new files)
+
+==============================================================
+$ npx jest --runInBand src/prisma src/memories   (regression sweep)
+==============================================================
+  PASS src/prisma/agent-role-drop.migration.spec.ts
+  
+  Test Suites: 18 passed, 18 total
+  Tests:       211 passed, 211 total
+  Snapshots:   0 total
+  Time:        4.279 s
+  Ran all test suites matching /src\/prisma|src\/memories/i.
+
+==============================================================
+QA FAILURE SCENARIOS (plan: "守卫测试在人为注入违规时失败")
+Guard spec proven to BITE — each violation run against a mutated copy
+of migration.sql, then restored. ==========================================
+
+--- NEG1: inject backfill UPDATE (must fail '存量行不回填')
+--- NEG2: add forbidden `category` column
+--- NEG3: DROP COLUMN `task_id` (the dead column must survive)
+--- NEG4: rename CREATE INDEX so it no longer matches @@index map
+
+[NEG-1] inject backfill UPDATE
+        ✕ 存量行不回填：迁移无任何 UPDATE（ref_count=0 是「未被引用过」的诚实取值） (1 ms)
+    Tests:       1 failed, 7 passed, 8 total
+[NEG-2] add forbidden `category` column
+        ✕ 本迁移 ADD COLUMN 的列在 schema.prisma 的 Memory 里都存在 (7 ms)
+        ✕ 不加 category / enabled 等新状态列（归档复用 deletedAt，分类复用 tags） (1 ms)
+    Tests:       2 failed, 6 passed, 8 total
+[NEG-3] DROP COLUMN `task_id`
+        ✕ 不删 task_id 死列：task 级记忆虽已废弃，删列不可逆 (1 ms)
+    Tests:       1 failed, 7 passed, 8 total
+[NEG-4] rename index to idx_memories_refcnt
+        ✕ 本迁移 CREATE INDEX 的名字在 schema.prisma 的 Memory @@index 里有声明 (2 ms)
+    Tests:       1 failed, 7 passed, 8 total
+
+[RESTORED] clean re-run:
+    Test Suites: 1 passed, 1 total
+    Tests:       8 passed, 8 total
+
+==============================================================
+ARTIFACT CONTENTS
+==============================================================
+--- server/prisma/migrations/20261009010000_memory_refcount/migration.sql
+-- 记忆引用计数指标（2026-10-09）
+--
+-- 1) 新增 `ref_count`：agent 经 memory_search 主动命中 +1（**自动注入不计**）。
+--    存量行一律保持 DEFAULT 0，不回填——历史行没被计量过，臆造一个引用数
+--    会直接污染重要度排序（旧行会因为 fake refCount 压过全新记忆）。
+--    refCount=0 正是「未被引用过」的诚实取值，由时间新鲜度项接管排序。
+-- 2) 新增 `last_used_at`：最近一次被检索命中的时刻，NULL = 从未被引用。
+--    重要度计龄基准 = last_used_at ?? created_at（见 memory-importance.ts）。
+-- 3) 新增 `merged_into_id`：合并追溯（本行已被并入哪条记忆），只读标记，
+--    不建外键——合并是历史事实，外键会连带限制胜出行的清理。
+-- 4) 新增单列索引 idx_memories_ref_count，支撑注入候选 `orderBy refCount desc`
+--    的预筛（预筛后在内存按重要度精排取 top5）。
+--
+-- 不动 task_id / idx_memories_task_time：task 级记忆虽已废弃（服务层 400 拒收），
+--    但删列是不可逆 DDL，若其他环境残留 task 级数据会直接丢失。保留死列零成本。
+
+ALTER TABLE `memories`
+  ADD COLUMN `ref_count` int NOT NULL DEFAULT 0,
+  ADD COLUMN `last_used_at` datetime(3) DEFAULT NULL,
+  ADD COLUMN `merged_into_id` varchar(191) DEFAULT NULL;
+
+CREATE INDEX `idx_memories_ref_count`
+  ON `memories` (`ref_count`);--- schema.prisma model Memory delta (new fields + index)
+    1034:  refCount         Int       @default(0) @map("ref_count")
+    1036:  /// 重要度计龄基准 = lastUsedAt ?? createdAt（见 memory-importance.ts）。
+    1037:  lastUsedAt       DateTime? @map("last_used_at")
+    1040:  mergedIntoId     String?   @map("merged_into_id")
+    1066:  // 注入候选按 refCount desc 预筛（再在内存按重要度精排）走这条索引
+    1067:  @@index([refCount], map: "idx_memories_ref_count")
