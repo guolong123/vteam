@@ -1,0 +1,130 @@
+# Todo 7 — mem-admin-archive 证据
+
+分支：`feat/memory-enhancement`
+改动文件（**仅此一个**）：`web/app/(main)/system/memories/page.tsx`
+（未触碰 `server/`、`web/src/components/teams/*`、`web/src/api/memories.ts`、NAV/权限、无新增依赖）
+
+---
+
+## 1. 验收标准逐条对照
+
+### ① Delete → Archive 语义
+
+| 项 | 改前 | 改后 |
+| --- | --- | --- |
+| mutation | `deleteMutation` → `memoriesApi.archive(id)` | `archiveMutation` → `memoriesApi.archive(id)`（调用点不变，仅重命名 + 文案） |
+| 抽屉按钮 | `删除`（hover 变红 `#DC2626`） | `归档`（hover 变琥珀 `#B45309`，与软删=可恢复语义一致，不误导为不可逆） |
+| testid | `memory-delete-button` | `memory-archive-button` |
+| ConfirmDialog | testid `confirm-delete-memory`／标题「删除记忆」／描述「…此操作不可恢复。」／`confirmLabel=确认删除`／`danger` | testid `confirm-archive-memory`／标题「归档记忆」／描述「确定要归档这条{级别}级记忆吗？**归档后可在「已归档」视图恢复。**」／`confirmLabel=确认归档`／`danger={false}`（走蓝色按钮） |
+| 错误横幅 | `memory-delete-error`，文案「删除失败，请重试」 | `memory-archive-error`，文案「归档失败，请重试」 |
+
+### ② 活跃 / 已归档 视图
+
+- 工具条（`manage-toolbar`）在 `LEVEL_TABS` 紧右侧新增 `SegmentedTabs`
+  （`ARCHIVE_TABS = [{活跃}, {已归档}]`，testid `memory-archive-tabs` / `memory-archive-tab`）。
+  选择理由：与 `LEVEL_TABS` 同组件同视觉语言，两个正交维度并排，「一个页面两个视图」而非两套页面。
+- 查询参数（`listParams`，useMemo）：
+
+  | 视图 | archived 参数 | 实际请求 |
+  | --- | --- | --- |
+  | 活跃 | **不传**（键省略） | `GET /memories?level&keyword&page&pageSize` —— 服务端默认仅活跃 |
+  | 已归档 | `archived: true` | `GET /memories?archived=true&level&keyword&page&pageSize` |
+
+- queryKey 走 `memoriesQueryKey(listParams)`，两视图各自独立缓存。
+- 切换重置：把 `archived` 并入既有重置 effect
+  `useEffect(() => { setPage(1); setSelectedId(null); }, [levelFilter, archived])`
+  —— 与 levelTab 切换同一套reset 纪律（页码归1 + 关闭抽屉）。
+- level 筛选 / keyword 300ms 防抖 / 分页组件**同一份代码**在两视图复用，均进同一次GET。
+- 空态与计数文案随视图切换：活跃「暂无记忆数据 / 共 N 条活跃记忆」，
+  已归档「暂无已归档记忆 · 被归档或合并的记忆会出现在这里，可恢复或永久删除 / 共 N 条已归档记忆」。
+
+### ③ 已归档视图行操作
+
+| 操作 | 调用 | 反馈 |
+| --- | --- | --- |
+| 恢复（卡片 `memory-card-restore` + 抽屉 `memory-drawer-restore`） | `memoriesApi.restore(id)` | 成功→绿色内联横幅 `memory-notice`「已恢复，该记忆重新参与注入与检索。」；失败→`memory-restore-error` 横幅，**`isApiError(err) ? err.message : "恢复失败，请重试"`** —— 撞活跃同 hash 时后端 409 `MEMORY_RESTORE_DUPLICATE` 的 message 原样透传 |
+| 永久删除（卡片 `memory-card-purge` + 抽屉 `memory-drawer-purge`） | `memoriesApi.purge(id)` | ConfirmDialog `confirm-purge-memory`，标题「永久删除记忆」，描述「确定要永久删除这条{级别}级记忆吗？**此操作不可恢复，确定？**」，`confirmLabel=永久删除`，`danger`（红）；成功→`memory-notice`「已永久删除，无法恢复。」 |
+
+- 已归档视图下卡片右上角/抽屉底部不再显示「自动注入开关」（归档行本就不参与注入），
+  替换为 恢复 / 永久删除 —— 与 TeamMemoriesTab 的行内操作语义一致。
+  **活跃视图的自动注入开关位置、文案、行为零变化。**
+
+### ④ refCount 展示
+
+- 新增 `RefCountBadge`（卡片芯片行 + 抽屉芯片行各一处）：
+  文本「引用 N」，`N>0` 用品牌青 `#0D9488`（`rgba(13,148,136,.08)` 底 + `.22` 边），
+  `N=0` 中性灰弱化；`safeRefCount()` 防御非有限值/负数（迁移前老行为 0）。
+- `lastUsedAt` 非空时：
+  - 卡片元信息行追加「最近引用 {相对时间}」（`data-testid="memory-last-used-at"`，
+    title 为完整时间戳），复用既有 `formatRelativeTime`（:236「刚刚/N 分钟前/…/M月D日」）；
+  - 抽屉元信息块追加「最近引用：2026/10/8 10:22:31（3 小时前）」。
+- `RefCountBadge` 的 title 带完整 lastUsedAt，便于 hover 精读。
+
+### ⑤ mergedIntoId 只读标记
+
+- 新增 `MergedMarker`（testid `memory-merged-marker`，`data-merged-into=<id>`），
+  卡片（主题标签之前）与抽屉（芯片行 + 元信息块「已合并至：<mono id>」）均渲染。
+- **仅展示**：本页不提供合并/回滚/改指操作（合并由 Agent 侧 `vteam_memory_merge` 执行）。
+
+### ⑥ 失效与共享 queryKey 契约
+
+- 新增 `invalidateMemories = () => queryClient.invalidateQueries({ queryKey: ["memories"] })`，
+  三个mutation（archive / restore / purge）与既有 inject mutation 全部走它。
+  `["memories"]` 前缀同时命中**本页 queryKey 与 TeamMemoriesTab 的两组 queryKey**
+  （`memoriesQueryKey` 返回 `["memories", params]`）→ 一处操作两处刷新，契约保持不变。
+- 全页无裸 `api.get/post/patch/delete`，一律经 `memoriesApi` wrapper。
+
+### ⑦ 其他新增（可观测性）
+
+- `notice` 状态 + 5s 自动消失的内联成功横幅（仓库无全局 toast，就地内联，品牌青配色与 errorBanner 同形）。
+- `pendingRowId`：卡片/抽屉该行有mutation 在途时禁用其操作按钮，避免重复提交。
+- 三个mutation 各有 `onMutate` 记录在途 id、`onSettled` 清理。
+
+---
+
+## 2. 保持不变（回归点）
+
+- level tabs（全部/团队/角色/全局）、keyword 300ms 防抖、分页（上一页/下一页 + `N / M`）
+- 卡片网格 `minmax(320px,1fr)`、点击卡片开抽屉、键盘 Enter/Space、遮罩点击关闭、Esc 关闭
+- 抽屉「编辑能力」原样（正文 Markdown 全量渲染、主题标签、角色归属岗位、创建人/团队/时间元信息）
+- 自动注入开关（卡片右上 + 抽屉底部，on/按需检索文案、title 受众说明、乐观禁用态）
+- 创建者解析 `resolveCreator`（system/u_/tmm_ 分流）、团队名解析、`INJECT_*` 配色
+- 铁律 T15：无 fixed / vh / vw；抽屉仍为 absolute 浮层
+
+---
+
+## 3. 验证输出（web/ 下执行，`export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"` 前置）
+
+```
+=== node -v ===
+v22.15.0
+
+=== npx tsc --noEmit ===
+（无任何输出 = 通过，exit 0）
+
+=== npm run lint (tail) ===
+
+✖ 729 problems (0 errors, 729 warnings)
+```
+
+- `0 errors`；`729 warnings` = **与基线完全一致**（中途一度 730，定位到本文件
+  `MemoryCardProps.onArchive` 未使用 —— 卡片本来就不承担归档入口（归档入口在抽屉），
+  已删掉该冗余 prop，回落基线 729）。
+
+```
+=== npm run build ===
+ ✓ Compiled successfully in 12.1s
+ ✓ Generating static pages (30/30)
+├ ○ /system/memories                     9.71 kB         176 kB
++ First Load JS shared by all             104 kB
+```
+
+`/system/memories` 体积 9.74 kB → 9.71 kB（新增视图逻辑，但删掉了抽屉内联的删除按钮
+一大段 inline hover 样式，改用共享 `actionStyle()` 工厂，净变化基本持平）。
+
+## 4. 未做的项（Must NOT 遵守）
+
+- 未提供mergedIntoId 的合并/恢复合并 UI（只读标记）
+- 未改 level 筛选 / 关键词 / 分页既有行为，未新增编辑能力，未动导航与权限
+- 未改 `web/src/components/teams/*`（TeamMemoriesTab / TeamRightPanel 保持committed 状态）
+- 无 `as any` / `@ts-ignore` / 空 catch；未新增依赖

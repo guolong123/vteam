@@ -9,8 +9,14 @@
  *   其余主题词 → 中性描边芯片（>6 折叠为 +N）。无类型标签则不渲染类型芯片。
  * - 归属信息：teamId → 团队名；createdBy（tmm_）→ 成员 alias + agent 名
  *   （**一次 teams 查询同时解析团队名与成员别名**，绝不把 tmm_ 裸 id 渲染给用户）。
- * - 级别筛选 tab（全部 / 团队 / 角色 / 全局）+ keyword 搜索（防抖 300ms）+ 分页 + 删除
- * - 数据源：GET /api/v1/memories（level / keyword / page / pageSize 过滤，AdminGuard）
+ * - 级别筛选 tab（全部 / 团队 / 角色 / 全局）+ 活跃/已归档切换 + keyword 搜索（防抖 300ms）
+ *   + 分页 + 归档/恢复/永久删除
+ * - 数据源：GET /api/v1/memories（level / archived / keyword / page / pageSize 过滤）
+ * - 归档语义（Todo 7：mem-admin-archive）：`DELETE /memories/:id` = **归档**（软删，写 deletedAt，
+ *   从检索与注入消失但**可恢复**）；恢复走 `POST /memories/:id/restore`（撞活跃同 hash → 409
+ *   MEMORY_RESTORE_DUPLICATE），不可恢复的硬删走 `POST /memories/:id/purge`。
+ *   卡片与抽屉展示 refCount（「引用 N」，>0 用品牌青）+ lastUsedAt 相对时间，
+ *   并对 mergedIntoId 渲染「已合并至 <id>」**只读**追溯标记（合并由 Agent MCP 工具执行）。
  * - 铁律（T15）：无 fixed 定位、无视口尺寸单位（vh/vw）；抽屉为 absolute 浮层
  *   （宿主 = 页面根 flex 容器 `position:relative`，滚动发生在其内层 overflow:auto，
  *   与 board 页 TaskDetailDrawer 同构）+ 遮罩点击关闭 + Esc 关闭。
@@ -40,6 +46,7 @@ import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import {
   memoriesApi,
   memoriesQueryKey,
+  type MemoriesListParams,
   type MemoriesResponse,
   type MemoryItem,
 } from "@/src/api/memories";
@@ -106,6 +113,16 @@ const LEVEL_TABS: { key: LevelFilter; label: string; icon: string }[] = [
   { key: "team", label: "团队", icon: "◨" },
   { key: "role", label: "角色", icon: "◉" },
   { key: "global", label: "全局", icon: "◎" },
+];
+
+/**
+ * 活跃 / 已归档切换（Todo 7）。`archived` 是列表维度（软删与否），与 LEVEL_TABS 正交：
+ * 两者连同 keyword / page 组合进**同一次** GET /memories（DTO 可选参数可叠加），
+ * 故两个视图共用同一套卡片 / 分页 / 抽屉，切换只换 queryKey 与行内操作。
+ */
+const ARCHIVE_TABS: { key: string; label: string }[] = [
+  { key: "active", label: "活跃" },
+  { key: "archived", label: "已归档" },
 ];
 
 /** 级别 → 徽章配色（对齐 tokens 语义色系；任务级已删除）。color 同时作卡片左侧色条。 */
@@ -191,6 +208,33 @@ const MAX_TOPIC_TAGS = 6;
 const INJECT_ON = "#0D9488";
 /** 自动注入开关「关」态轨道（同色 0.22 透明度）。 */
 const INJECT_OFF_TRACK = "rgba(13,148,136,0.22)";
+/** 行内操作按钮（恢复 / 归档 / 永久删除）：中性描边小号胶囊。 */
+const ACTION_BTN: CSSProperties = {
+  padding: `2px ${space.sm + 2}px`,
+  borderRadius: radius.md,
+  border: `1px solid ${neutral[200]}`,
+  backgroundColor: surface,
+  color: neutral[600],
+  fontSize: fontSize.xs,
+  fontFamily: fontFamily.body,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  flexShrink: 0,
+};
+/** 危险操作按钮（永久删除）：与 agents 页删除按钮同红系。 */
+const DANGER_BTN: CSSProperties = {
+  ...ACTION_BTN,
+  color: "#DC2626",
+  border: "1px solid rgba(220,38,38,0.28)",
+};
+/** 在途（mutation pending）时的按钮禁用态。 */
+const BTN_PENDING: CSSProperties = { opacity: 0.6, cursor: "default" };
+
+/** 操作按钮样式选择：在途时叠加禁用态。 */
+function actionStyle(pending: boolean, danger = false): CSSProperties {
+  const base = danger ? DANGER_BTN : ACTION_BTN;
+  return pending ? { ...base, ...BTN_PENDING } : base;
+}
 
 /* ------------------------------ 纯函数工具 ------------------------------ */
 
@@ -258,6 +302,17 @@ function detailTitle(memory: MemoryItem): string {
     .split("\n")
     .find((line) => line.trim().length > 0);
   return firstLine?.trim() || "未命名记忆";
+}
+
+/** refCount 归一：防御非有限值 / 负数（老行迁移前为 0）。 */
+function safeRefCount(memory: MemoryItem): number {
+  return Number.isFinite(memory.refCount) ? Math.max(0, Math.trunc(memory.refCount)) : 0;
+}
+
+/** 最近引用时间（lastUsedAt 归一为可展示文本；无值返回 null）。 */
+function lastUsedText(memory: MemoryItem): string | null {
+  if (!memory.lastUsedAt) return null;
+  return formatRelativeTime(memory.lastUsedAt);
 }
 
 /* ------------------------------ 卡片 hover CSS ------------------------------ */
@@ -381,6 +436,79 @@ function LevelBadge({ level }: { level: MemoryItem["level"] }) {
         }}
       />
       {meta.label}
+    </span>
+  );
+}
+
+/**
+ * 引用计数徽标「引用 N」（Todo 7）。refCount 是记忆重要度排序的核心指标——
+ * agent 主动检索命中次数；0 次用中性灰弱化，>0 用品牌青强调（与 INJECT_ON 同源）。
+ * 最近引用的可见文案在卡片元信息行 / 抽屉元信息块，这里只把它收进 title。
+ */
+function RefCountBadge({ memory }: { memory: MemoryItem }) {
+  const count = safeRefCount(memory);
+  const hot = count > 0;
+  const lastUsedFull = memory.lastUsedAt
+    ? new Date(memory.lastUsedAt).toLocaleString("zh-CN")
+    : null;
+  return (
+    <span
+      data-testid="memory-refcount-badge"
+      data-ref-count={count}
+      title={
+        lastUsedFull
+          ? `被检索命中 ${count} 次 · 最近引用 ${lastUsedFull}`
+          : hot
+            ? `被检索命中 ${count} 次`
+            : "尚未被检索命中"
+      }
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: space.xs,
+        padding: `${space.xs}px ${space.sm}px`,
+        borderRadius: radius.pill,
+        backgroundColor: hot ? "rgba(13,148,136,0.08)" : neutral[100],
+        border: `1px solid ${hot ? "rgba(13,148,136,0.22)" : neutral[200]}`,
+        color: hot ? INJECT_ON : neutral[400],
+        fontSize: fontSize.xs,
+        fontWeight: 500,
+        lineHeight: 1.4,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      引用 {count}
+    </span>
+  );
+}
+
+/**
+ * 「已合并至 <id>」只读追溯标记（Todo 7）。mergedIntoId 非空 = 本行内容已被
+ * vteam_memory_merge 并入目标行（败者同时被软删），故该行通常落在「已归档」视图。
+ * 合并由 Agent 侧工具执行，本页**不提供**合并/回滚操作，仅作追溯展示。
+ */
+function MergedMarker({ mergedIntoId }: { mergedIntoId: string }) {
+  return (
+    <span
+      data-testid="memory-merged-marker"
+      data-merged-into={mergedIntoId}
+      title={`该记忆已被合并进 ${mergedIntoId}，不再参与注入与检索`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: `${space.xs}px ${space.sm}px`,
+        borderRadius: radius.pill,
+        backgroundColor: neutral[100],
+        border: `1px solid ${neutral[200]}`,
+        color: neutral[500],
+        fontSize: fontSize.xs,
+        lineHeight: 1.4,
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      已合并至 {mergedIntoId}
     </span>
   );
 }
@@ -516,8 +644,14 @@ interface MemoryCardProps {
   roleName: string | undefined;
   /** 自动注入开关是否禁用（在途）。 */
   injectDisabled: boolean;
+  /** 已归档视图：操作区从「注入开关」换成「恢复 / 永久删除」。 */
+  archived: boolean;
+  /** 该行有 mutation 在途（归档 / 恢复 / 硬删），禁用其操作按钮。 */
+  rowPending: boolean;
   onOpen: (id: string) => void;
   onToggleInject: (memory: MemoryItem) => void;
+  onRestore: (memory: MemoryItem) => void;
+  onRequestPurge: (memory: MemoryItem) => void;
 }
 
 /** 单条记忆卡片：左侧级别色条 + 类型芯片/开关 + 标题 + 正文预览 + 元信息 + 主题标签。 */
@@ -527,8 +661,12 @@ function MemoryCard({
   member,
   roleName,
   injectDisabled,
+  archived,
+  rowPending,
   onOpen,
   onToggleInject,
+  onRestore,
+  onRequestPurge,
 }: MemoryCardProps) {
   const title = cardTitle(memory);
   const creator = resolveCreator(memory, member);
@@ -536,6 +674,10 @@ function MemoryCard({
     ? `${memory.createdBy}（${member.agentName}）`
     : memory.createdBy;
   const createdAtFull = new Date(memory.createdAt).toLocaleString("zh-CN");
+  const lastUsed = lastUsedText(memory);
+  const lastUsedFull = memory.lastUsedAt
+    ? new Date(memory.lastUsedAt).toLocaleString("zh-CN")
+    : null;
 
   return (
     <div
@@ -593,7 +735,7 @@ function MemoryCard({
           cursor: "pointer",
         }}
       >
-        {/* ② 顶部：类型芯片（左） + 自动注入开关（右） */}
+        {/* ② 顶部：芯片（左） + 注入开关 / 归档视图操作（右） */}
         <div
           style={{
             display: "flex",
@@ -612,15 +754,57 @@ function MemoryCard({
             }}
           >
             <TypeChips tags={memory.tags} />
+            <RefCountBadge memory={memory} />
             {memory.level === "role" && memory.roleId && (
               <RoleBadge roleId={memory.roleId} name={roleName} />
             )}
           </div>
-          <AutoInjectSwitch
-            memory={memory}
-            disabled={injectDisabled}
-            onToggle={onToggleInject}
-          />
+          {archived ? (
+            <div
+              data-testid="memory-card-actions"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: space.xs,
+                flexShrink: 0,
+              }}
+            >
+              <button
+                type="button"
+                data-testid="memory-card-restore"
+                data-memory-id={memory.id}
+                disabled={rowPending}
+                title="恢复这条记忆，使其重新参与注入与检索"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRestore(memory);
+                }}
+                style={actionStyle(rowPending)}
+              >
+                恢复
+              </button>
+              <button
+                type="button"
+                data-testid="memory-card-purge"
+                data-memory-id={memory.id}
+                disabled={rowPending}
+                title="永久删除，不可恢复"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRequestPurge(memory);
+                }}
+                style={actionStyle(rowPending, true)}
+              >
+                永久删除
+              </button>
+            </div>
+          ) : (
+            <AutoInjectSwitch
+              memory={memory}
+              disabled={injectDisabled}
+              onToggle={onToggleInject}
+            />
+          )}
         </div>
 
         {/* ③ 标题（永远存在，不被正文抢占） */}
@@ -690,13 +874,28 @@ function MemoryCard({
           >
             {formatRelativeTime(memory.createdAt)}
           </span>
+          {lastUsed ? (
+            <>
+              <span aria-hidden>·</span>
+              <span
+                data-testid="memory-last-used-at"
+                title={lastUsedFull ?? undefined}
+                style={{ cursor: "help", whiteSpace: "nowrap" }}
+              >
+                最近引用 {lastUsed}
+              </span>
+            </>
+          ) : null}
           <span aria-hidden>·</span>
           <span style={{ whiteSpace: "nowrap" }}>
             {memory.content.length} 字
           </span>
         </div>
 
-        {/* ⑦ 主题标签 */}
+        {/* ⑦ 已合并只读标记 */}
+        {memory.mergedIntoId && <MergedMarker mergedIntoId={memory.mergedIntoId} />}
+
+        {/* ⑧ 主题标签 */}
         <TopicChips tags={memory.tags} />
       </div>
     </div>
@@ -711,8 +910,14 @@ interface MemoryDetailDrawerProps {
   member: MemberRef | undefined;
   roleName: string | undefined;
   injectDisabled: boolean;
+  /** 已归档视图：底部操作区改为「恢复 / 永久删除」，并隐藏注入开关。 */
+  archived: boolean;
+  /** 该行有 mutation 在途（恢复 / 硬删）。 */
+  rowPending: boolean;
   onToggleInject: (memory: MemoryItem) => void;
-  onDelete: (memory: MemoryItem) => void;
+  onArchive: (memory: MemoryItem) => void;
+  onRestore: (memory: MemoryItem) => void;
+  onRequestPurge: (memory: MemoryItem) => void;
   onClose: () => void;
 }
 
@@ -726,8 +931,12 @@ function MemoryDetailDrawer({
   member,
   roleName,
   injectDisabled,
+  archived,
+  rowPending,
   onToggleInject,
-  onDelete,
+  onArchive,
+  onRestore,
+  onRequestPurge,
   onClose,
 }: MemoryDetailDrawerProps) {
   useEffect(() => {
@@ -841,7 +1050,7 @@ function MemoryDetailDrawer({
           </button>
         </div>
 
-        {/* 类型芯片 + 级别 + 团队 */}
+        {/* 类型芯片 + 级别 + 团队 + 引用计数 + 合并标记 */}
         <div
           style={{
             display: "flex",
@@ -852,6 +1061,10 @@ function MemoryDetailDrawer({
         >
           <TypeChips tags={memory.tags} />
           <LevelBadge level={memory.level} />
+          <RefCountBadge memory={memory} />
+          {memory.mergedIntoId && (
+            <MergedMarker mergedIntoId={memory.mergedIntoId} />
+          )}
           <span style={{ fontSize: fontSize.sm, color: neutral[500] }}>
             {teamName}
           </span>
@@ -902,6 +1115,27 @@ function MemoryDetailDrawer({
             <span>{new Date(memory.createdAt).toLocaleString("zh-CN")}</span>
           </div>
           <div style={metaRow}>
+            <span style={metaKey}>引用次数：</span>
+            <span>{safeRefCount(memory)} 次</span>
+          </div>
+          {memory.lastUsedAt ? (
+            <div style={metaRow}>
+              <span style={metaKey}>最近引用：</span>
+              <span>
+                {new Date(memory.lastUsedAt).toLocaleString("zh-CN")}
+                （{formatRelativeTime(memory.lastUsedAt)}）
+              </span>
+            </div>
+          ) : null}
+          {memory.mergedIntoId ? (
+            <div style={metaRow}>
+              <span style={metaKey}>已合并至：</span>
+              <span style={{ fontFamily: fontFamily.mono, color: neutral[700] }}>
+                {memory.mergedIntoId}
+              </span>
+            </div>
+          ) : null}
+          <div style={metaRow}>
             <span style={metaKey}>字数：</span>
             <span>{memory.content.length} 字</span>
           </div>
@@ -938,7 +1172,7 @@ function MemoryDetailDrawer({
         {/* 主题标签 */}
         <TopicChips tags={memory.tags} />
 
-        {/* 底部操作：自动注入开关 + 删除 */}
+        {/* 底部操作：活跃=注入开关 + 归档；已归档=恢复 + 永久删除 */}
         <div
           style={{
             display: "flex",
@@ -949,45 +1183,76 @@ function MemoryDetailDrawer({
             borderTop: `1px solid ${neutral[100]}`,
           }}
         >
-          <AutoInjectSwitch
-            memory={memory}
-            disabled={injectDisabled}
-            onToggle={onToggleInject}
-          />
-          <button
-            type="button"
-            data-testid="memory-delete-button"
-            data-memory-id={memory.id}
-            onClick={() => onDelete(memory)}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: space.xs,
-              padding: `${space.sm}px ${space.lg}px`,
-              borderRadius: radius.md,
-              border: `1px solid ${neutral[200]}`,
-              backgroundColor: surface,
-              color: neutral[600],
-              fontSize: fontSize.md,
-              fontWeight: 500,
-              cursor: "pointer",
-              fontFamily: fontFamily.body,
-              transition:
-                "color .15s ease, border-color .15s ease, background-color .15s ease",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = "#DC2626";
-              e.currentTarget.style.borderColor = "rgba(239,68,68,0.22)";
-              e.currentTarget.style.backgroundColor = "rgba(239,68,68,0.10)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = neutral[600];
-              e.currentTarget.style.borderColor = neutral[200];
-              e.currentTarget.style.backgroundColor = surface;
-            }}
-          >
-            删除
-          </button>
+          {archived ? (
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              该记忆已归档，不参与注入与检索
+            </span>
+          ) : (
+            <AutoInjectSwitch
+              memory={memory}
+              disabled={injectDisabled}
+              onToggle={onToggleInject}
+            />
+          )}
+          {archived ? (
+            <div style={{ display: "flex", gap: space.sm, flexShrink: 0 }}>
+              <button
+                type="button"
+                data-testid="memory-drawer-restore"
+                data-memory-id={memory.id}
+                disabled={rowPending}
+                onClick={() => onRestore(memory)}
+                style={actionStyle(rowPending)}
+              >
+                恢复
+              </button>
+              <button
+                type="button"
+                data-testid="memory-drawer-purge"
+                data-memory-id={memory.id}
+                disabled={rowPending}
+                onClick={() => onRequestPurge(memory)}
+                style={actionStyle(rowPending, true)}
+              >
+                永久删除
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              data-testid="memory-archive-button"
+              data-memory-id={memory.id}
+              onClick={() => onArchive(memory)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: space.xs,
+                padding: `${space.sm}px ${space.lg}px`,
+                borderRadius: radius.md,
+                border: `1px solid ${neutral[200]}`,
+                backgroundColor: surface,
+                color: neutral[600],
+                fontSize: fontSize.md,
+                fontWeight: 500,
+                cursor: "pointer",
+                fontFamily: fontFamily.body,
+                transition:
+                  "color .15s ease, border-color .15s ease, background-color .15s ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = "#B45309";
+                e.currentTarget.style.borderColor = "rgba(180,83,9,0.22)";
+                e.currentTarget.style.backgroundColor = "rgba(180,83,9,0.08)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = neutral[600];
+                e.currentTarget.style.borderColor = neutral[200];
+                e.currentTarget.style.backgroundColor = surface;
+              }}
+            >
+              归档
+            </button>
+          )}
         </div>
       </aside>
     </div>
@@ -1001,6 +1266,8 @@ export default function MemoriesPage() {
 
   /* ---------- 状态 ---------- */
   const [levelFilter, setLevelFilter] = useState<LevelFilter>("");
+  /** 活跃 / 已归档视图（false = 活跃）。已归档 = 软删行，走 restore/purge。 */
+  const [archived, setArchived] = useState(false);
   const [keyword, setKeyword] = useState("");
   const [debouncedKeyword, setDebouncedKeyword] = useState("");
   const [page, setPage] = useState(1);
@@ -1017,32 +1284,31 @@ export default function MemoriesPage() {
     return () => clearTimeout(timer);
   }, [keyword]);
 
-  /* ---------- 切换筛选：重置页码并关闭抽屉 ---------- */
+  /* ---------- 切换筛选（级别 / 归档视图）：重置页码并关闭抽屉 ---------- */
   useEffect(() => {
     setPage(1);
     setSelectedId(null);
-  }, [levelFilter]);
+  }, [levelFilter, archived]);
 
   /* ---------- 翻页 / 搜索变化：关闭抽屉 ---------- */
   useEffect(() => {
     setSelectedId(null);
   }, [debouncedKeyword, page]);
 
-  /* ---------- 数据查询 ---------- */
-  const memoriesQuery = useQuery<MemoriesResponse>({
-    queryKey: memoriesQueryKey({
-      level: levelFilter || undefined,
-      keyword: debouncedKeyword,
+  /* ---------- 数据查询（级别 / 归档视图 / 关键词 / 分页正交组合） ---------- */
+  const listParams: MemoriesListParams = useMemo(
+    () => ({
+      ...(levelFilter ? { level: levelFilter } : {}),
+      ...(archived ? { archived: true } : {}),
+      ...(debouncedKeyword ? { keyword: debouncedKeyword } : {}),
       page,
       pageSize,
     }),
-    queryFn: () =>
-      memoriesApi.list({
-        ...(levelFilter ? { level: levelFilter } : {}),
-        ...(debouncedKeyword ? { keyword: debouncedKeyword } : {}),
-        page,
-        pageSize,
-      }),
+    [levelFilter, archived, debouncedKeyword, page],
+  );
+  const memoriesQuery = useQuery<MemoriesResponse>({
+    queryKey: memoriesQueryKey(listParams),
+    queryFn: () => memoriesApi.list(listParams),
   });
 
   /* ---------- 岗位名解析（role 级记忆显示归属岗位） ---------- */
@@ -1104,16 +1370,69 @@ export default function MemoriesPage() {
     injectMutation.mutate({ id: memory.id, autoInject: !memory.autoInject });
   };
 
-  /* ---------- 删除 ---------- */
-  const [deleteTarget, setDeleteTarget] = useState<MemoryItem | null>(null);
-  const deleteMutation = useMutation({
+  /* ---------- 失效：["memories"] 前缀连带刷新团队记忆 tab（共享 queryKey 形状） ---------- */
+  const invalidateMemories = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["memories"] });
+  }, [queryClient]);
+
+  /* ---------- 行在途标记（归档 / 恢复 / 硬删 共用，禁用该行全部操作） ---------- */
+  const [pendingRowId, setPendingRowId] = useState<string | null>(null);
+  const clearPendingRow = useCallback(() => setPendingRowId(null), []);
+
+  /* ---------- 操作成功提示（无全局 toast，就地内联横幅，5s 自动消失） ---------- */
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+
+  /* ---------- 归档（DELETE = 软删，可恢复；确认弹窗说明归档语义） ---------- */
+  const [archiveTarget, setArchiveTarget] = useState<MemoryItem | null>(null);
+  const archiveMutation = useMutation({
     mutationFn: (id: string) => memoriesApi.archive(id),
+    onMutate: (id: string) => setPendingRowId(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["memories"] });
-      setDeleteTarget(null);
+      invalidateMemories();
+      setArchiveTarget(null);
       setSelectedId(null);
+      setNotice("已归档，该记忆不再参与注入与检索，可在「已归档」视图恢复。");
     },
+    onSettled: clearPendingRow,
   });
+
+  /* ---------- 恢复（撞活跃同 hash → 409 MEMORY_RESTORE_DUPLICATE，透传后端 message） ---------- */
+  const restoreMutation = useMutation({
+    mutationFn: (id: string) => memoriesApi.restore(id),
+    onMutate: (id: string) => setPendingRowId(id),
+    onSuccess: (_data, id) => {
+      invalidateMemories();
+      setSelectedId((current) => (current === id ? null : current));
+      setNotice("已恢复，该记忆重新参与注入与检索。");
+    },
+    onSettled: clearPendingRow,
+  });
+
+  /* ---------- 永久删除（硬删，行彻底消失；ConfirmDialog 保留不可恢复警示） ---------- */
+  const [purgeTarget, setPurgeTarget] = useState<MemoryItem | null>(null);
+  const purgeMutation = useMutation({
+    mutationFn: (id: string) => memoriesApi.purge(id),
+    onMutate: (id: string) => setPendingRowId(id),
+    onSuccess: () => {
+      invalidateMemories();
+      setPurgeTarget(null);
+      setSelectedId(null);
+      setNotice("已永久删除，无法恢复。");
+    },
+    onSettled: clearPendingRow,
+  });
+
+  /* ---------- 行内操作回调（卡片 / 抽屉共用；对应行在途时按钮禁用） ---------- */
+  const isRowPending = (id: string) => pendingRowId === id;
+  const handleRestore = (memory: MemoryItem) =>
+    restoreMutation.mutate(memory.id);
+  const handleRequestPurge = (memory: MemoryItem) => setPurgeTarget(memory);
+  const handleArchive = (memory: MemoryItem) => setArchiveTarget(memory);
 
   /* ---------- 分页 ---------- */
   const totalPages = useMemo(() => {
@@ -1149,6 +1468,19 @@ export default function MemoriesPage() {
     borderRadius: radius.md,
     backgroundColor: "rgba(239,68,68,0.10)",
     border: `1px solid rgba(239,68,68,0.22)`,
+  };
+
+  /** 成功提示横幅（归档 / 恢复 / 硬删完成后；与 errorBanner 同形，品牌青）。 */
+  const noticeBanner: CSSProperties = {
+    fontSize: fontSize.sm,
+    color: INJECT_ON,
+    display: "flex",
+    alignItems: "center",
+    gap: space.xs,
+    padding: `${space.sm}px ${space.md}px`,
+    borderRadius: radius.md,
+    backgroundColor: "rgba(13,148,136,0.10)",
+    border: `1px solid rgba(13,148,136,0.22)`,
   };
 
   /* 宿主结构照 board 页（TaskDetailDrawer 同款）：外层 flex:1 + minHeight:0 + position:relative
@@ -1190,7 +1522,7 @@ export default function MemoriesPage() {
             gap: space.lg,
           }}
         >
-          {/* ① 工具条：级别 Tab + 搜索框 */}
+          {/* ① 工具条：级别 Tab + 活跃/已归档切换 + 搜索框 */}
           <div
             data-testid="manage-toolbar"
             style={{
@@ -1205,6 +1537,15 @@ export default function MemoriesPage() {
               items={LEVEL_TABS}
               active={levelFilter}
               onChange={(k) => setLevelFilter(k as LevelFilter)}
+            />
+
+            {/* 活跃 / 已归档（次级维度，紧贴级别 Tab；与级别 + 关键词 + 分页正交） */}
+            <SegmentedTabs
+              items={ARCHIVE_TABS}
+              active={archived ? "archived" : "active"}
+              onChange={(k) => setArchived(k === "archived")}
+              testId="memory-archive-tabs"
+              optionTestId="memory-archive-tab"
             />
 
             {/* 搜索框（防抖 300ms） */}
@@ -1306,12 +1647,20 @@ export default function MemoriesPage() {
           ) : items.length === 0 ? (
             <div data-testid="memories-empty">
               <EmptyState
-                icon={<span aria-hidden>◈</span>}
-                title={debouncedKeyword ? "未找到匹配的记忆" : "暂无记忆数据"}
+                icon={<span aria-hidden>{archived ? "◌" : "◈"}</span>}
+                title={
+                  debouncedKeyword
+                    ? "未找到匹配的记忆"
+                    : archived
+                      ? "暂无已归档记忆"
+                      : "暂无记忆数据"
+                }
                 description={
                   debouncedKeyword
                     ? "换个关键词试试，或切回「全部」标签。"
-                    : "Agent 在协作过程中沉淀的记忆会出现在这里。"
+                    : archived
+                      ? "被归档或合并的记忆会出现在这里，可恢复或永久删除。"
+                      : "Agent 在协作过程中沉淀的记忆会出现在这里。"
                 }
               />
             </div>
@@ -1322,7 +1671,7 @@ export default function MemoriesPage() {
                 data-testid="memories-count"
                 style={{ fontSize: fontSize.sm, color: neutral[400] }}
               >
-                共 {total} 条记忆
+                共 {total} 条{archived ? "已归档" : "活跃"}记忆
               </div>
 
               {/* 卡片网格 */}
@@ -1354,8 +1703,12 @@ export default function MemoriesPage() {
                       injectDisabled={
                         pendingInject === item.id || injectMutation.isPending
                       }
+                      archived={archived}
+                      rowPending={isRowPending(item.id)}
                       onOpen={setSelectedId}
                       onToggleInject={toggleInject}
+                      onRestore={handleRestore}
+                      onRequestPurge={handleRequestPurge}
                     />
                   ))}
                 </div>
@@ -1433,19 +1786,66 @@ export default function MemoriesPage() {
             </div>
           )}
 
-          {/* 删除失败提示（内联，对齐 agents 页错误显示模式） */}
-          {deleteMutation.isError && (
+          {/* 归档失败提示（内联，对齐 agents 页错误显示模式） */}
+          {archiveMutation.isError && (
             <div
-              data-testid="memory-delete-error"
+              data-testid="memory-archive-error"
               role="alert"
               style={errorBanner}
             >
               <span aria-hidden style={{ fontWeight: 700 }}>
                 !
               </span>
-              {isApiError(deleteMutation.error)
-                ? deleteMutation.error.message
-                : "删除失败，请重试"}
+              {isApiError(archiveMutation.error)
+                ? archiveMutation.error.message
+                : "归档失败，请重试"}
+            </div>
+          )}
+
+          {/* 恢复失败提示：撞活跃同 hash 时后端返回 409 MEMORY_RESTORE_DUPLICATE，
+              直接透传 isApiError 的 message（告知用户哪条重复），不自行改写文案 */}
+          {restoreMutation.isError && (
+            <div
+              data-testid="memory-restore-error"
+              role="alert"
+              style={errorBanner}
+            >
+              <span aria-hidden style={{ fontWeight: 700 }}>
+                !
+              </span>
+              {isApiError(restoreMutation.error)
+                ? restoreMutation.error.message
+                : "恢复失败，请重试"}
+            </div>
+          )}
+
+          {/* 永久删除失败提示 */}
+          {purgeMutation.isError && (
+            <div
+              data-testid="memory-purge-error"
+              role="alert"
+              style={errorBanner}
+            >
+              <span aria-hidden style={{ fontWeight: 700 }}>
+                !
+              </span>
+              {isApiError(purgeMutation.error)
+                ? purgeMutation.error.message
+                : "永久删除失败，请重试"}
+            </div>
+          )}
+
+          {/* 操作成功提示（归档 / 恢复 / 硬删完成后自动消失） */}
+          {notice && (
+            <div
+              data-testid="memory-notice"
+              role="status"
+              style={noticeBanner}
+            >
+              <span aria-hidden style={{ fontWeight: 700 }}>
+                ✓
+              </span>
+              {notice}
             </div>
           )}
         </div>
@@ -1463,27 +1863,50 @@ export default function MemoriesPage() {
           !!selected &&
           (pendingInject === selected.id || injectMutation.isPending)
         }
+        archived={archived}
+        rowPending={!!selected && isRowPending(selected.id)}
         onToggleInject={toggleInject}
-        onDelete={(memory) => setDeleteTarget(memory)}
+        onArchive={handleArchive}
+        onRestore={handleRestore}
+        onRequestPurge={handleRequestPurge}
         onClose={() => setSelectedId(null)}
       />
 
-      {/* 删除确认弹窗 */}
+      {/* 归档确认弹窗：软删 = 可恢复，故不再警示「不可恢复」 */}
       <ConfirmDialog
-        open={!!deleteTarget}
-        testid="confirm-delete-memory"
-        title="删除记忆"
-        description={`确定要删除这条${deleteTarget ? LEVEL_META[deleteTarget.level].label : ""}级记忆吗？此操作不可恢复。`}
-        confirmLabel="确认删除"
-        pendingLabel="删除中…"
-        danger
-        submitting={deleteMutation.isPending}
+        open={!!archiveTarget}
+        testid="confirm-archive-memory"
+        title="归档记忆"
+        description={`确定要归档这条${archiveTarget ? LEVEL_META[archiveTarget.level].label : ""}级记忆吗？归档后可在「已归档」视图恢复。`}
+        confirmLabel="确认归档"
+        pendingLabel="归档中…"
+        danger={false}
+        submitting={archiveMutation.isPending}
         onClose={() => {
-          setDeleteTarget(null);
-          deleteMutation.reset();
+          setArchiveTarget(null);
+          archiveMutation.reset();
         }}
         onConfirm={() => {
-          if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+          if (archiveTarget) archiveMutation.mutate(archiveTarget.id);
+        }}
+      />
+
+      {/* 永久删除确认弹窗（硬删，真不可恢复） */}
+      <ConfirmDialog
+        open={!!purgeTarget}
+        testid="confirm-purge-memory"
+        title="永久删除记忆"
+        description={`确定要永久删除这条${purgeTarget ? LEVEL_META[purgeTarget.level].label : ""}级记忆吗？此操作不可恢复，确定？`}
+        confirmLabel="永久删除"
+        pendingLabel="删除中…"
+        danger
+        submitting={purgeMutation.isPending}
+        onClose={() => {
+          setPurgeTarget(null);
+          purgeMutation.reset();
+        }}
+        onConfirm={() => {
+          if (purgeTarget) purgeMutation.mutate(purgeTarget.id);
         }}
       />
     </div>
