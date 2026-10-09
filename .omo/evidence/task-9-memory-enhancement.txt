@@ -1,0 +1,205 @@
+# Todo 9 — mem-trigger-pipeline（定时记忆整理触发器 + Agent 派发 + 手动端点）
+
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Branch: feat/memory-enhancement
+执行：Sisyphus-Junior（Wave 3，与 Todo 8a 并发）
+
+====================================================================
+1. 触发器 kind 注册（服务端 4 处 + web 3 处，web 确实存在 label map）
+====================================================================
+| # | 文件 | 改动 |
+|---|------|------|
+| 1 | server/src/common/constants/trigger.constants.ts | `TRIGGER_KIND.MEMORY_MAINTENANCE: 'memory_maintenance'` |
+| 2 | 同上 | `TRIGGER_KIND_LABEL[...] = '记忆整理'` |
+| 3 | 同上（`triggerSourceOf` 文档注释） | system kind 清单补 memory_maintenance（代码无需改：非 AGENT_TRIGGER_KINDS → 自动落 system，spec 已断言） |
+| 4 | server/src/timers/triggers.service.ts:770 | `buildDescription` per-kind switch 新增分支（purpose 派生描述） |
+| 5 | server/src/timers/dto/query-triggers.dto.ts | **未改**：`@IsIn(Object.values(TRIGGER_KIND))` 自动跟随（已核，见下） |
+
+DTO 自动跟随验证：`QueryTriggersDto.kind` 用 `@IsIn(Object.values(TRIGGER_KIND))`，
+`enum: Object.values(TRIGGER_KIND)` 亦随之扩展 → 7 kind 自动放行，无需改动。
+
+web 侧**确实存在 3 个 kind label map**（且文件自带「改一处须同步另两处」注释），
+故全部补齐：
+| 文件 | 改动 |
+|------|------|
+| web/app/(main)/system/triggers/page.tsx | `KIND_LABEL` + `KIND_META`（徽章配色） |
+| web/src/components/teams/TeamRightPanel.tsx | `TRIGGER_KIND_LABEL` |
+| web/src/components/teams/TriggerDetailModal.tsx | `TRIGGER_KIND_LABEL` |
+
+grep 依据：`grep -rn "progression_patrol" web/` → 命中 system/triggers/page.tsx；
+`TRIGGER_KIND|KIND_LABEL` → 命中上述 3 处（`web/.next/cache/**` 为构建产物，忽略）。
+**未改 web 其他任何文件**（无 UI/接口行为变更）。
+
+回归守卫同步：`src/common/constants/trigger.constants.spec.ts`
+白名单断言 6 → 7 kind，并补 `triggerSourceOf(MEMORY_MAINTENANCE) === 'system'`。
+（该 spec 锁死白名单数量，新增 kind 必然要改——这是它作为守卫测试的预期行为。）
+
+====================================================================
+2. 新增 memory-maintenance.service.ts
+====================================================================
+`server/src/memories/memory-maintenance.service.ts`（+ 同名 spec，25 用例）
+
+## onModuleInit 三件事
+1. `registerHandler(TRIGGER_KIND.MEMORY_MAINTENANCE, handler)`
+2. `registerGuard('memory_maintenance_cooldown', guard)` —— 冷却窗口拒绝重入：
+   - `running` 为真（上一轮未跑完）→ 否决，留 pending 待下轮复核；
+   - 距 `lastRunAt` 不足一个 interval → 否决（ticker 重入 / 手动与定时撞车）；
+   - 异常 → fail-open 放行（对齐 progressionCooldownGuard 惯例）。
+3. 全局单行排期（抄 `hook.service.ts:923-948 ensureGlobalPoll`）：
+   - dedupKey 常量 `memory_maintenance:global:main`；
+   - `schedule(kind, dueAt, payload, dedupKey, {intervalMs, guardKey})`；
+   - 幂等：既有 pending 行原样保留（fireCount 不清零）；
+   - 既有终态行先删后建（否则 dedupKey 幂等回旧行，改 env 后永不生效）；
+   - `intervalMs <= 0` → 不排期 **且 cancel 既有非 cancelled 行**。
+
+## env（校验惯例抄 trigger.service.ts:678-685 `scanIntervalMs`）
+| env | 默认 | 语义 |
+|-----|------|------|
+| MEMORY_MAINTENANCE_INTERVAL_MS | 86400000（24h） | **0 = 禁用**（不排期 + 取消既有行） |
+| MEMORY_ORG_UNUSED_DAYS | 30 | 低频未引用阈值（天） |
+| MEMORY_ORG_CANDIDATE_LIMIT | 50 | 每团队候选清单上限 |
+
+非法值（非数字/非有限）静默回落默认 —— 配置项不该让进程起不来（沿用既有惯例）。
+非正数的 unusedDays / candidateLimit 亦回落默认（0 会让判定退化）。
+
+接线：
+- `docker-compose.yml` server env 段（`:75-81`，紧邻既有 SILENT_SESSION_WAKE_MS 块）；
+- chart **存在 env 清单**（configmap `server.env.*` + values.yaml `server.env`）→ 已补
+  `memoryMaintenanceIntervalMs` / `memoryOrgUnusedDays` / `memoryOrgCandidateLimit`。
+
+## handler 单轮（a→e）
+- (a) `memory.groupBy({by:['teamId'], where:{level:'team', deletedAt:null, teamId:{not:null}}})`
+- (b) 每团队候选（**服务端只列清单，判断权全在 Agent**）：
+  - `duplicates`：同 team scope 内同 `contentHash` ≥2 条；
+  - `unused`：`refCount=0` 且 `lastUsedAt ?? createdAt` 早于 UNUSED_DAYS；
+  - `untags`：`tags` 缺失/空/含 `howto|pitfall|constraint` 之外的值（Json → 内存过滤）；
+  - 三组按「重复 → 未引用 → 标签」优先级去重（同一条只提示一次），整体 cap CANDIDATE_LIMIT；
+  - 每条 `{id, excerpt(80字), tags, refCount, group, suggestedAction}`；确定性排序（`orderBy id asc`）。
+- (c) 灰色 system 条（克隆 `task-progression.scheduler.ts:740-793 postStallNoticeToTeamGroup`）：
+  `chatChannel.findFirst({teamId, type:'team_group', deletedAt:null})` → `message.create`
+  （`senderType=system`、`senderId=null`、`status=sent`）→ `realtime.broadcast(CHAT_MESSAGE_NEW, …)`。
+  文案：`【记忆整理】本轮检测：疑似重复 X · 低频未引用 Y · 标签不规范 Z，已派发整理`
+  **+ 上轮实际结果**（首轮省略该从句）。
+- (d) 派发：`dispatchAgentMention({teamId, channelId, targetInstanceId: team.mainAgentMemberId,
+  kind:'wake', text: prompt, internal:true})`；
+  channelId 解析克隆 `task-progression.scheduler.ts:846-857`：**主 Agent private 优先 → team_group 回退**；
+  `mainAgentMemberId` 为 null → logger.warn 跳过该团队（不落条、不派发）。
+- (e) `lastRunAt` 更新（finally 内，进程内存态、无新列/无迁移）；
+  **单团队 try/catch 隔离**：失败只 `logger.error`（带 stack），不影响其他团队。
+
+## 「上轮实际结果」= 服务端 DB 统计（不依赖 Agent 回传）
+`memory.count({level:'team', teamId, updatedAt:{gte: lastRunAt}, mergedIntoId:{not:null}})`
++ `memory.count({…, deletedAt:{gte: lastRunAt}})` → `上轮实际结果：合并 A 条 · 归档 B 条`。
+Agent 不回复/超时/崩溃，留痕数字依然为真（plan 硬约束：报告不依赖 Agent 回传）。
+
+## prompt 模板（中文，风格抄 triggerMemoryHarvest :800-819）
+说明本轮任务 + 平台只列候选/判断归 Agent → ① `vteam_memory_search` 逐条核对
+→ ② 语义重复 `vteam_memory_merge` → ③ 低价值/过时 `vteam_memory_archive`
+→ ④ 标签 `vteam_memory_update` 归一到 howto/pitfall/constraint
+→ ⑤ **单轮上限 20 条**（超出显式告知「留待下轮，不要赶工」）
+→ 收尾要求简要汇报 + 「不该动」的条目及原因 + 禁止动 global/role 级。
+
+====================================================================
+3. 跳过【团队接待】人格（internal 标记）
+====================================================================
+三处最小改动（不新增第二个分派入口）：
+1. `worker-dispatcher.ts` `dispatchAgentMention` 入参加可选 `internal?: boolean`；
+2. `message-dispatcher.ts` `DispatchRequest` 加 `internal?: boolean`（透传）；
+   `dispatchAgentMention` → `dispatch({..., internal: input.internal ? true : undefined 语义})`；
+3. `BuildSystemInstructionsOptions.internal?: boolean`，
+   接待注入点由 `if (isTeamMode)` 改为 `if (isTeamMode && opts?.internal !== true)`；
+   `dispatchForTeamTarget` 传 `internal: request.internal === true`。
+
+**其余门禁一律不变**（kind 仍 'wake'、终态任务门、计划哈希门均不动）。
+所有既有调用方不传该字段 → 行为逐字节不变（有回归用例锁死）。
+
+====================================================================
+4. 手动端点
+====================================================================
+`POST /memories/maintain` + `@UseGuards(AdminGuard)` → `MemoryMaintenanceService.runOnce()`
+→ `{teams, candidates:{duplicates, unused, untags}}`。
+与定时触发器**同一 handler 入口**，手动/定时口径一致；不做任何跨 team's 动作。
+**AdminGuard 未移除**（跨团队全局动作，成员触发会变更他人团队记忆）。
+路由置于 `:id/restore`/`:id/purge` 之前（单段路径与两段 `:id/xxx` 本就不冲突，顺序仅为可读）。
+
+====================================================================
+5. 循环依赖结论：**无环**（以静态模块图 + tsc 双重核验）
+====================================================================
+`MemoriesModule` 新增 import `TimersModule`（导出 TriggerService）+ `ChatModule`（导出 WorkerDispatcher）。
+
+静态模块图遍历（29 个 *.module.ts，DFS 找环）结果：
+- 检出 2 个环，**均为改动前既有**且已由 `forwardRef` 显式解：
+  `workers ↔ mcp-servers`、`workers ↔ models`（workers.module.ts 注释已声明）；
+- **含 MemoriesModule 的环：0**。其依赖闭包（chat/realtime/timers → workers/artifacts/
+  execution-policies → …）不回到 memories。
+佐证：`grep -rn "memories.module"` 全仓仅 `app.module.ts` 命中（8a 亦仅从
+`memory-state.ts` / `memory-importance.ts` 引纯函数模块，非 Nest provider）。
+故**无需** plan 的 fallback 两段式（handler 注册在 chat 侧）——采用方案 A（单服务持有 handler+派发）。
+
+====================================================================
+6. 验收命令与结果（server/，PATH 已置 v22.15.0）
+====================================================================
+| 命令 | 结果 |
+|------|------|
+| `npx tsc --noEmit` | **clean（0 error）** |
+| `npx jest src/memories/memory-maintenance.service.spec.ts` | **25/25 PASS** |
+| `npx jest src/memories/… src/chat/worker-dispatcher.spec.ts src/common/constants/trigger.constants.spec.ts src/timers`（scoped） | **7 suites / 409 tests PASS** |
+| `npx eslint <本次改动文件>` | **0 error**（仅 worker-dispatcher 既有 unused-import warning，非本次引入） |
+| `npm run test`（全量） | **165 suites / 3866 tests；151 suites PASS，14 suites FAIL（全部属并发中的 Todo 8a，见下）** |
+
+### 全量 14 个失败套件的归属（诚实核对，均非本次改动引起）
+`common/constants/agent.constants.spec.ts`、`common/constants/agent-role.constants.spec.ts`、
+`common/constants/platform-capability.coverage.spec.ts`、`prisma/seed.spec.ts`、
+`prisma/role-capabilities-web-parity.spec.ts`、
+`prisma/agent-role-capabilities{,-split-grouped,-git-web-retire}.migration.spec.ts`、
+`execution-policies/agent-policies.{matrix,db-builtin,db-driven,custom-agents,native-edit,native-only-payload}.spec.ts`
+
+根因全部是 8a 并发新增 `vteam_memory_archive` / `vteam_memory_merge` 两个工具导致的
+**工具目录计数与冻结基线漂移**，实测证据：
+- `VTEAM_MCP_TOOL_NAMES` 断言 `toHaveLength(32)` → 实收 34（+2 新工具）；
+- `mcpDenies` 断言长度 32 → 34；
+- capability 目录 `29 点 ↔ 32 工具` → 30 点 ↔ 34 工具；web 副本尚未同步（8a 拥有 `web/src/api/role-capabilities.ts`）；
+- 6 个 `agent-policies.*` 的 `before-agent-policies.json` 冻结基线因角色 tools allowlist 变化而失配；
+- `seed.spec.ts` capabilities 行 20 → 22。
+反证：全量输出中 grep `memory_maintenance|MemoryMaintenance|MEMORY_MAINTENANCE|internal`
+仅命中**我自己 PASS 的 spec** 的预期错误路径日志；14 个失败套件无一引用 memories/trigger/
+dispatcher/controller 相关标识。已按要求在隔离环境单独复跑确认。
+（`src/memories/memory-state.ts`、`memories.service.ts`、`memory.constants.ts` 亦为 8a 并发改动，
+本任务未触碰其逻辑，仅在 controller/module 侧接线。）
+
+====================================================================
+7. 变更文件清单
+====================================================================
+新增：
+- server/src/memories/memory-maintenance.service.ts
+- server/src/memories/memory-maintenance.service.spec.ts
+
+修改（server）：
+- src/common/constants/trigger.constants.ts（kind + label + source 注释）
+- src/common/constants/trigger.constants.spec.ts（白名单 6→7 + source 断言）
+- src/timers/triggers.service.ts（description 分支）
+- src/chat/worker-dispatcher.ts（internal 入参 / DispatchRequest 透传 / systemOpts / 接待门）
+- src/chat/message-dispatcher.ts（DispatchRequest.internal）
+- src/chat/worker-dispatcher.spec.ts（4 条：2 unit + 2 dispatchAgentMention 端到端）
+- src/memories/memories.module.ts（import Timers/Chat + 注册 provider + 无环说明）
+- src/memories/memories.controller.ts（POST /maintain + AdminGuard + 注释）
+
+修改（部署配置）：
+- docker-compose.yml（3 个 env）
+- chart/vteam/templates/configmap.yaml + chart/vteam/values.yaml（server.env 3 项）
+
+修改（web，**仅 kind label map**）：
+- web/app/(main)/system/triggers/page.tsx（KIND_LABEL + KIND_META）
+- web/src/components/teams/TeamRightPanel.tsx、TriggerDetailModal.tsx（TRIGGER_KIND_LABEL）
+
+====================================================================
+8. 红线自检
+====================================================================
+- 未编辑 `platform-mcp/**`（8a 红线）——仅在 prompt 文本中按契约引用工具名字符串。
+- 未改 schema.prisma / migrations（Wave 1 冻结）。
+- 未改既有 6 个 TRIGGER_KIND 的任何行为；未动 memorySearch 计数路径与注入排序。
+- 无 global/role 级定时整理；无任何定时硬删/purge（仅 archive 建议，写 Agent 侧执行）。
+- 服务端零 LLM 调用（只组装 prompt + 候选清单）。
+- 无 `as any` / `@ts-ignore`；无空 catch（逐团队 catch 走 logger.error + stack）。
+- POST /maintain 保留 AdminGuard。
+- 未执行任何 git 命令。

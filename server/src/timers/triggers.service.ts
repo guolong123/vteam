@@ -766,6 +766,12 @@ export class TriggersService {
       const scope = this.str(p['scope']);
       return scope ? `空闲扫描 · ${scope}` : fallback;
     }
+    if (row.kind === TRIGGER_KIND.MEMORY_MAINTENANCE) {
+      const purpose = this.str(p['purpose']);
+      return purpose
+        ? `${fallback} · ${this.collapse(purpose, 120)}`
+        : fallback;
+    }
     return fallback;
   }
 

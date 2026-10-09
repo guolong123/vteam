@@ -14,6 +14,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { AdminGuard } from '../users/admin.guard';
 import { QueryMemoriesDto, UpdateMemoryDto } from './dto/query-memories.dto';
+import { MemoryMaintenanceService } from './memory-maintenance.service';
 import { MemoriesService } from './memories.service';
 
 /**
@@ -24,6 +25,7 @@ import { MemoriesService } from './memories.service';
  * - DELETE /api/v1/memories/:id：归档（软删 deletedAt=now）
  * - POST /api/v1/memories/:id/restore：恢复归档行
  * - POST /api/v1/memories/:id/purge：永久硬删（唯一不可逆入口，仅人工触发）
+ * - POST /api/v1/memories/maintain：手动跑一轮记忆整理（AdminGuard，见下）
  *
  * 鉴权模型（memory-enhancement Todo 2，权限下沉 service，不扩展 roles.constants 权限矩阵）：
  * - 全局 JwtAuthGuard（APP_GUARD）兜底认证；
@@ -32,12 +34,17 @@ import { MemoriesService } from './memories.service';
  * - **团队行写**（归档/恢复/硬删）= 该团队 team_user_members 成员；**global 行写** = 平台管理员；
  *   两类均不满足 → 403 MEMORY_FORBIDDEN（service `assertRowWritable`）；
  * - **编辑**（PATCH）保留 AdminGuard（内容/标签编辑属管理动作），另叠加既有团队归属校验。
+ * - **整理**（POST /maintain，memory-enhancement Todo 9）保留 AdminGuard：跨团队全局动作，
+ *   成员触发会变更他人团队记忆。
  */
 @ApiTags('memories')
 @ApiBearerAuth()
 @Controller('memories')
 export class MemoriesController {
-  constructor(private readonly memoriesService: MemoriesService) {}
+  constructor(
+    private readonly memoriesService: MemoriesService,
+    private readonly memoryMaintenanceService: MemoryMaintenanceService,
+  ) {}
 
   /**
    * 记忆列表（level/teamId/archived 过滤 + keyword 内容搜索 + 分页）。
@@ -86,6 +93,23 @@ export class MemoriesController {
   })
   remove(@Param('id') id: string, @Req() req: Request) {
     return this.memoriesService.remove(id, this.viewerOf(req));
+  }
+
+  /**
+   * 手动触发一轮记忆整理（memory-enhancement Todo 9；与定时触发器同一 handler 入口）。
+   * POST /api/v1/memories/maintain → 200 {teams, candidates: {duplicates, unused, untags}}。
+   *
+   * 服务端只收集候选 + 落 system 条 + 派 prompt，**合并/归档由 Agent 侧经 MCP 工具执行**；
+   * 摘要为服务端统计值，不等待 Agent 回传。仅管理员（AdminGuard）：整理是跨团队
+   * 全局动作，成员触发会让他人团队的记忆被动变更。
+   */
+  @Post('maintain')
+  @UseGuards(AdminGuard)
+  @ApiOperation({
+    summary: '手动触发一轮记忆整理（仅管理员；Agent 侧执行合并/归档）',
+  })
+  maintain() {
+    return this.memoryMaintenanceService.runOnce();
   }
 
   /**

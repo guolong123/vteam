@@ -42,6 +42,11 @@ export interface DispatchRequest {
   text: string;
   /** 仅 dispatched 状态的目标（agent_removed / no_session 不参与分派）。 */
   targets: DispatchTarget[];
+  /**
+   * 平台内部派发标记（Todo 9）：true 时团队直聊的 system 提示**不注入【团队接待】段**。
+   * 由 `dispatchAgentMention` 透传；其他 dispatch 调用方缺省 false，行为不变。
+   */
+  internal?: boolean;
 }
 
 /** 分派结果：mock 实现返回回复（已落库）；真实实现为空（回复经 worker 事件回流）。 */

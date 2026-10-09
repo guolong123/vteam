@@ -83,6 +83,7 @@ import {
   TriggerOutcome,
   TriggerService,
 } from '../timers/trigger.service';
+import { computeMemoryImportance } from '../memories/memory-importance';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
@@ -518,6 +519,12 @@ export interface BuildSystemInstructionsOptions {
   /** 当前任务 id（team-mode 传空串；仅 teamMode=true 且 taskId 为空时触发接待段，task-mode 调用方不传本字段）。 */
   taskId?: string | null;
   /**
+   * 平台内部派发（Todo 9）：team-mode 下**跳过**【团队接待】人格段。整理类后台派发
+   * 的收件方不是接待员，注入「开工三步/追问验收标准」会污染 prompt。
+   * 缺省/false → 注入（存量逐字节不变）。
+   */
+  internal?: boolean;
+  /**
    * 角色职责边界段（Todo 4）：调用方先由目标 Agent 的角色/opencode agent 名渲染
    * （renderBoundarySection）后传入；非空时追加【职责边界】段，空/缺省不注入
    * （系统提示与引入前逐字节一致）。
@@ -649,11 +656,12 @@ export function buildSystemInstructions(
     blocks.push(MAIN_AGENT_INSTRUCTION);
   }
   // team-mode 接待段：显式 teamMode=true，或显式传入空 taskId；task-mode 调用方
-  // 从不传 taskId 字段（undefined 且无 key），文本字节保持不变
+  // 从不传 taskId 字段（undefined 且无 key），文本字节保持不变。
+  // internal（Todo 9 平台内部整理派发）跳过本段：收件方执行后台任务而非接待用户。
   const isTeamMode =
     opts?.teamMode === true ||
     (opts !== undefined && 'taskId' in opts && !opts.taskId);
-  if (isTeamMode) {
+  if (isTeamMode && opts?.internal !== true) {
     blocks.push(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
   }
   // 平台级共享块（agent-role-entity todo 3）：对全部 7 个内置 Agent 无条件注入，
@@ -1663,6 +1671,12 @@ export class WorkerDispatcher
      * notifyAgent 层不透传本字段（各层以自有输入独立执法）。
      */
     planHash?: string | null;
+    /**
+     * 平台内部派发（Todo 9 记忆整理）：团队直聊时不注入【团队接待】人格段——
+     * 收件方此刻执行的是后台整理任务，不是接待用户开工，教它追问「可以开始了吗」只会污染 prompt。
+     * 其余门禁（kind/终态任务/计划哈希）一律不变。缺省 undefined = 存量行为逐字节不变。
+     */
+    internal?: boolean;
   }): Promise<string> {
     let teamId: string | null = null;
     let taskIdForDispatch: string | null = null;
@@ -1720,6 +1734,7 @@ export class WorkerDispatcher
       ...(taskIdForDispatch
         ? { taskContext: { taskId: taskIdForDispatch } }
         : {}),
+      ...(input.internal ? { internal: true } : {}),
       text: input.text,
       targets: [
         {
@@ -1947,7 +1962,12 @@ export class WorkerDispatcher
    *   - team / global → 仅本团队**主 Agent**（协调者持有全局视角）
    *   - role → 本团队**该岗位的全部 agent**（主 Agent 若绑该岗位同样可见）
    *
-   * 形状不变：计数 + 最近 5 条 description 行拼成索引块，1200 字截断。
+   * 形状不变：计数 + **重要度最高的 5 条** description 行拼成索引块，1200 字截断。
+   * 排序不再按时间倒序：宽候选池（refCount desc → createdAt desc，take 50）回内存
+   * 按 `computeMemoryImportance` 精排后截 5 条——「老但高频被引用」的记忆不再沉底，
+   * 而 recency 项保证全新未引用的记忆仍有入池机会（不被饿死）。
+   * **此处绝不写 refCount**：每轮自动注入都计会让主 Agent 一次会话刷爆指标；
+   * 计数只发生在 agent 主动 `memorySearch` 命中时。
    * 仅读记忆表做提示词富集，不改 memorySave/memorySearch 写/可见语义。
    * 失败吞错返 null（无记忆 mock/表异常时分派照常）。
    */
@@ -1969,22 +1989,35 @@ export class WorkerDispatcher
       if (scope.length === 0) return null;
       const where = { deletedAt: null, autoInject: true, OR: scope };
 
-      const [scopeCnt, recent] = await Promise.all([
+      const [scopeCnt, candidates] = await Promise.all([
         this.prisma.memory.count({ where } as any),
+        // 宽候选池：DB 按单列排（refCount desc → createdAt desc，走
+        // idx_memories_ref_count），真正的排序键是跨两列合成的重要度分
+        // （memories/memory-importance.ts），SQL 表达不了 → 取 50 条回内存
+        // 精排后截到注入预算的 5 条。
         this.prisma.memory.findMany({
           where,
-          orderBy: { createdAt: 'desc' },
-          take: 5,
+          orderBy: [{ refCount: 'desc' }, { createdAt: 'desc' }],
+          take: 50,
           select: {
             id: true,
             level: true,
             description: true,
             content: true,
             tags: true,
+            // 重要度排序输入：引用项 refCount + 计龄基准 lastUsedAt ?? createdAt
+            refCount: true,
+            lastUsedAt: true,
+            createdAt: true,
           },
         } as any),
       ]);
       if (scopeCnt === 0) return null;
+
+      // 重要度降序；同分保留 DB 次序（sort 稳定，比较器仅按分数、不设次级键）。
+      const recent = [...(candidates as any[])]
+        .sort((a, b) => computeMemoryImportance(b) - computeMemoryImportance(a))
+        .slice(0, 5);
 
       const tagMap = new Map<string, number>();
       for (const r of recent as any[]) {
@@ -2202,7 +2235,10 @@ export class WorkerDispatcher
       ).trim();
       const sourceRaw =
         sepIdx >= 0
-          ? rawLabel.slice(sepIdx + 1).trim().replace(/^from\s*/i, '')
+          ? rawLabel
+              .slice(sepIdx + 1)
+              .trim()
+              .replace(/^from\s*/i, '')
           : '';
       const sourceNote = sourceRaw ? `（来源：${sourceRaw}）` : '';
       const tailored = wecomUserLabel
@@ -2365,7 +2401,9 @@ export class WorkerDispatcher
               !hasRenderableContent(
                 (r.content as { parts?: unknown })?.parts,
               ) &&
-              !((r.content as { text?: unknown })?.text ?? '').toString().trim(),
+              !((r.content as { text?: unknown })?.text ?? '')
+                .toString()
+                .trim(),
           )
           .map((r) => r.id);
         const failedIds = staleIds.filter((id) => !emptyIds.includes(id));
@@ -2416,6 +2454,8 @@ export class WorkerDispatcher
       // 与岗位策略解析同一次查询）。行缺失/未绑角色/rolePrompt 空 → null（不注入
       // 【岗位职责】，不抛错）。agent.role 是标签 key，不是此段来源。
       rolePrompt: selfRoleRow?.rolePrompt ?? null,
+      // Todo 9：平台内部派发（记忆整理）→ 团队直聊时不注入【团队接待】人格段。
+      internal: request.internal === true,
     };
     if (taskIdForPrompt) {
       if (memoryIndex) {
@@ -2841,7 +2881,9 @@ export class WorkerDispatcher
               !hasRenderableContent(
                 (r.content as { parts?: unknown })?.parts,
               ) &&
-              !((r.content as { text?: unknown })?.text ?? '').toString().trim(),
+              !((r.content as { text?: unknown })?.text ?? '')
+                .toString()
+                .trim(),
           )
           .map((r) => r.id);
         const residualFilled = residual

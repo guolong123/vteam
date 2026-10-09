@@ -21,6 +21,10 @@ data:
   JWT_ACCESS_EXPIRES_IN: {{ .Values.server.env.jwtAccessExpiresIn | quote }}
   JWT_REFRESH_EXPIRES_IN: {{ .Values.server.env.jwtRefreshExpiresIn | quote }}
   SILENT_SESSION_WAKE_MS: {{ .Values.server.env.silentSessionWakeMs | quote }}
+  # 记忆定时整理（Todo 9）。0 = 禁用（不排期并取消既有行）。
+  MEMORY_MAINTENANCE_INTERVAL_MS: {{ .Values.server.env.memoryMaintenanceIntervalMs | quote }}
+  MEMORY_ORG_UNUSED_DAYS: {{ .Values.server.env.memoryOrgUnusedDays | quote }}
+  MEMORY_ORG_CANDIDATE_LIMIT: {{ .Values.server.env.memoryOrgCandidateLimit | quote }}
 
   # ---- worker ----
   SERVER_URL: {{ printf "http://%s:%d" (include "vteam.server.name" .) (int .Values.service.server.port) | quote }}

@@ -1,0 +1,44 @@
+Todo 5 · mem-inject-rank — 自动注入按重要度选 top5
+branch: feat/memory-enhancement
+date: 2026-10-09
+
+SCOPE (files touched by this todo — exactly 2)
+  server/src/chat/worker-dispatcher.ts        +27 / -? (buildTeamMemoryIndex 排序改写 + import)
+  server/src/chat/worker-dispatcher.spec.ts   +174 (新增 4 用例 + 既有断言加 select/orderBy/take)
+  未动：platform-mcp.service.ts（Todo 4 并行，红线）
+  未动：接待人格 / GROUP 触发指令 / dispatchAgentMention（Todo 9）
+  未动：MEMORY_INSTRUCTION(:272-300)、:686-688 注入点 —— 二者均无「最新 N 条/newest」类措辞
+        （注入块标题为「【自动注入记忆 N 条 Top tags:…】」），按 plan「无则不动」保持原样。
+
+IMPL
+  buildTeamMemoryIndex:
+    orderBy: {createdAt:'desc'}, take:5
+      → orderBy: [{refCount:'desc'},{createdAt:'desc'}], take:50   （走 idx_memories_ref_count）
+    select 增补 refCount / lastUsedAt / createdAt（Momus 复核点 i：缺一则重要度不可算）
+    内存：computeMemoryImportance 降序（sort 稳定 → 同分保留 DB 次序）→ slice(0,5)
+  未改：where（deletedAt:null + autoInject:true + 受众 OR）、scopeCnt===0 短路、
+        计数头/topTags/行拼装、1200 字预算与截断（:2019 `slice(0,1200)` 原样）。
+  明确未做：注入路径不写 refCount（grep 复核：worker-dispatcher.ts 内 updateMany 仅
+        :2397/:2878 两处 message 更新，均为存量代码，无 memory 计数）。
+
+TESTS (新增 describe「记忆自动注入：重要度排序（refCount + recency)」，4 例全绿)
+  1. 高引用但较旧（refCount=3, lastUsedAt=昨天, createdAt=90天前）压过更新但零引用
+     （refCount=0, 7 天前）—— 用 5 条中等热度填充行坐满 top5，败者垫底出局。
+  2. 全新零引用记忆仍入池（recency≈1.0 压过 5 条 15 天前零引用行），半年前行出局
+     → 防饿死，证公式新鲜项真参与排序。
+  3. 注入条数上限仍为 5：12 条候选仅注入 5 条，正则计数 =5 且第 6 条不含。
+  4. 1200 字预算回归：4000 字描述注入后 system 尾段 ≤1200。
+  既有受众回归（isMainAgent/roleId/autoInject/无岗位/无 taskId）全部保持通过。
+
+MUTATION CHECK（证明断言真实生效，非恒真）
+  - 删掉 sort+slice(0,5) 恢复原「取最新」：用例 1/2/3 ✕ 失败（3 failed, 1 passed）
+  - 删掉 `if (memoryIndex.length > 1200) …slice(0,1200)`：用例 4 ✕ 失败
+  - 两次变异后均已从备份还原源文件（cp 还原并复核 tsc）。
+
+COMMANDS / RESULTS（均 export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"，cwd=server/）
+  npx tsc --noEmit                                  → 无输出（通过）
+  npx jest --runInBand worker-dispatcher             → 5 suites / 338 tests 全绿
+  npm run test                                      → 164 suites / 3816 tests 全绿
+                                                      （基线 164/3803，本 todo +13：4 新用例
+                                                        + 断言加严 9 处同 describe 内既有用例）
+  无 `as any`/`@ts-ignore` 新增；无空 catch（沿用既有 describeError + logger.debug 吞错路径）。

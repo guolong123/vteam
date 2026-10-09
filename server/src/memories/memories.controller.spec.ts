@@ -3,9 +3,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { plainToInstance } from 'class-transformer';
 import { PrismaService } from '../prisma/prisma.service';
 import { AdminGuard } from '../users/admin.guard';
+import { QueryMemoriesDto } from './dto/query-memories.dto';
+import { MemoryMaintenanceService } from './memory-maintenance.service';
 import { MemoriesController } from './memories.controller';
 import { MemoriesService } from './memories.service';
-import { QueryMemoriesDto } from './dto/query-memories.dto';
 
 describe('MemoriesController', () => {
   let controller: MemoriesController;
@@ -16,6 +17,7 @@ describe('MemoriesController', () => {
     restore: jest.Mock;
     purge: jest.Mock;
   };
+  let maintenance: { runOnce: jest.Mock };
 
   beforeEach(async () => {
     service = {
@@ -25,10 +27,14 @@ describe('MemoriesController', () => {
       restore: jest.fn(),
       purge: jest.fn(),
     };
+    maintenance = { runOnce: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [MemoriesController],
-      providers: [{ provide: MemoriesService, useValue: service }],
+      providers: [
+        { provide: MemoriesService, useValue: service },
+        { provide: MemoryMaintenanceService, useValue: maintenance },
+      ],
     })
       // @UseGuards(AdminGuard) 在模块 compile 时即被 Nest 实例化（非请求期）→ 必须 override
       .overrideGuard(AdminGuard)
@@ -57,8 +63,10 @@ describe('MemoriesController', () => {
 
     it('POST /memories/:id/restore 与 /purge 不挂 AdminGuard（per-row 鉴权在 service）', () => {
       expect(
-        Reflect.getMetadata('__guards__', MemoriesController.prototype.restore) ??
-          [],
+        Reflect.getMetadata(
+          '__guards__',
+          MemoriesController.prototype.restore,
+        ) ?? [],
       ).not.toContain(AdminGuard);
       expect(
         Reflect.getMetadata('__guards__', MemoriesController.prototype.purge) ??
@@ -70,6 +78,14 @@ describe('MemoriesController', () => {
       const guards = Reflect.getMetadata(
         '__guards__',
         MemoriesController.prototype.update,
+      );
+      expect(guards).toContain(AdminGuard);
+    });
+
+    it('POST /memories/maintain 保留 AdminGuard（跨团队全局动作，仅管理员）', () => {
+      const guards = Reflect.getMetadata(
+        '__guards__',
+        MemoriesController.prototype.maintain,
       );
       expect(guards).toContain(AdminGuard);
     });
@@ -113,6 +129,17 @@ describe('MemoriesController', () => {
       await controller.findAll({}, {} as never);
 
       expect(service.findAll).toHaveBeenCalledWith({}, undefined);
+    });
+
+    it('POST /memories/maintain 透传单轮摘要 {teams, candidates}', async () => {
+      const summary = {
+        teams: 2,
+        candidates: { duplicates: 3, unused: 1, untags: 4 },
+      };
+      maintenance.runOnce.mockResolvedValue(summary);
+
+      await expect(controller.maintain()).resolves.toEqual(summary);
+      expect(maintenance.runOnce).toHaveBeenCalledTimes(1);
     });
 
     it('GET /memories 的 autoInject 查询串按字面量解析（"false" ≠ true，2026-09-30）', () => {
@@ -165,10 +192,9 @@ describe('MemoriesController', () => {
         deletedAt: null,
       });
 
-      const out = await controller.restore(
-        'me_0000000001',
-        { user: { id: 'u_member' } } as never,
-      );
+      const out = await controller.restore('me_0000000001', {
+        user: { id: 'u_member' },
+      } as never);
 
       expect(service.restore).toHaveBeenCalledWith('me_0000000001', {
         id: 'u_member',
@@ -179,10 +205,9 @@ describe('MemoriesController', () => {
     it('POST /memories/:id/purge 转发 id/viewer 到 purge', async () => {
       service.purge.mockResolvedValue({ id: 'me_0000000001' });
 
-      const out = await controller.purge(
-        'me_0000000001',
-        { user: { id: 'u_admin' } } as never,
-      );
+      const out = await controller.purge('me_0000000001', {
+        user: { id: 'u_admin' },
+      } as never);
 
       expect(service.purge).toHaveBeenCalledWith('me_0000000001', {
         id: 'u_admin',

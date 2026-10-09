@@ -509,9 +509,7 @@ describe('WorkerDispatcher', () => {
       expect(legacyPrompt).not.toContain('（来源：');
 
       // 展示名含 | 时按最后一个 | 切，用户名不被截断
-      const pipeNamePrompt = await promptFor(
-        '[WeCom:张|三|from 群聊] 你好',
-      );
+      const pipeNamePrompt = await promptFor('[WeCom:张|三|from 群聊] 你好');
       expect(pipeNamePrompt).toContain('企业微信用户 张|三');
       expect(pipeNamePrompt).toContain('（来源：群聊）');
     });
@@ -7758,6 +7756,34 @@ describe('WorkerDispatcher', () => {
       expect(out).toContain(MAIN_AGENT_INSTRUCTION);
       expect(out).toContain('【团队成员】');
     });
+
+    it('Todo9 internal=true → 接待段缺席，其余段落逐字节不变', () => {
+      const base = buildSystemInstructions(agent, { teamMode: true });
+      const internal = buildSystemInstructions(agent, {
+        teamMode: true,
+        internal: true,
+      });
+      expect(internal).not.toContain(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
+      expect(internal).not.toContain('团队接待');
+      expect(internal).toBe(
+        base.replace(`${TEAM_SYSTEM_RECEPTION_INSTRUCTION}\n\n`, ''),
+      );
+    });
+
+    it('Todo9 internal 缺省/false → 接待段照常注入（回归：存量调用零影响）', () => {
+      expect(
+        buildSystemInstructions(agent, { teamMode: true, internal: false }),
+      ).toContain(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
+      expect(buildSystemInstructions(agent, { teamMode: true })).toContain(
+        TEAM_SYSTEM_RECEPTION_INSTRUCTION,
+      );
+    });
+
+    it('Todo9 internal=true 且 taskId 判 team-mode（分派侧实际传法）→ 同样跳过接待段', () => {
+      expect(
+        buildSystemInstructions(agent, { taskId: '', internal: true }),
+      ).not.toContain('团队接待');
+    });
   });
 
   describe('dispatch team-mode（无任务团队直聊）', () => {
@@ -8154,6 +8180,8 @@ describe('WorkerDispatcher', () => {
     // 判据取 buildTeamMemoryIndex 实际下推给 prisma 的 where（system 文本会被
     // 1200 字截断与拼装掩盖，且拼装标题已改）。
     describe('记忆自动注入：autoInject 属性 + 受众分流', () => {
+      const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
+
       const mountMemory = (
         opts: {
           count?: number;
@@ -8186,6 +8214,9 @@ describe('WorkerDispatcher', () => {
               description: '团队经验摘要',
               content: '团队经验正文',
               tags: ['pitfall'],
+              refCount: 2,
+              lastUsedAt: daysAgo(1),
+              createdAt: daysAgo(30),
             },
           ],
         });
@@ -8229,6 +8260,13 @@ describe('WorkerDispatcher', () => {
         expect(mem.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
             where: expect.objectContaining({ autoInject: true }),
+            orderBy: [{ refCount: 'desc' }, { createdAt: 'desc' }],
+            take: 50,
+            select: expect.objectContaining({
+              refCount: true,
+              lastUsedAt: true,
+              createdAt: true,
+            }),
           }),
         );
       });
@@ -8317,6 +8355,168 @@ describe('WorkerDispatcher', () => {
         expect(
           workerClient.execute.mock.calls[0][1].system as string,
         ).not.toContain('【自动注入记忆');
+      });
+
+      // 2026-10-09（mem-inject-rank）：注入候选不再取「最新 5 条」，改为
+      // 「引用多 / 最近被用过」的 top5；recency 项保留使新记忆不被饿死。
+      describe('记忆自动注入：重要度排序（refCount + recency）', () => {
+        const mainRow = (role: Record<string, unknown> | null = null) => ({
+          id: 'tmm_0000000001',
+          agentId: 'a_product',
+          alias: '产品经理-1',
+          seq: 1,
+          agent: { id: 'a_product', name: '产品经理', agentKey: 'product' },
+          role,
+        });
+
+        const runAsMainAgent = async (
+          rows: Array<Record<string, unknown>>,
+          count = rows.length,
+        ) => {
+          const mem = mountMemory({ count, rows });
+          (prisma as any).team.findUnique.mockResolvedValue({
+            mainAgentMemberId: 'tmm_0000000001',
+          });
+          (prisma as any).teamMember.findMany.mockResolvedValue([
+            mainRow({
+              id: 'ar_product',
+              key: 'product',
+              capabilities: {},
+              rolePrompt: null,
+            }),
+          ]);
+          const d = createDispatcher();
+          await d.dispatch(
+            teamRequest({ taskContext: { taskId: 't_0000000001' } }) as any,
+          );
+          return {
+            mem,
+            system: workerClient.execute.mock.calls[0][1].system as string,
+          };
+        };
+
+        it('高引用但较旧的记忆压过更新、零引用的记忆', async () => {
+          // 5 条「中等热度」填充行把 top5 坐满：若排序仍按时间倒序，
+          // 7 天前零引用的 me_new_cold 会挤掉其中一条；按重要度则它垫底出局。
+          const fillers = Array.from({ length: 5 }, (_, i) => ({
+            id: `me_fill_${i}`,
+            level: 'team' as const,
+            description: `中等热度经验${i}`,
+            content: 'c',
+            tags: ['howto'],
+            refCount: 1,
+            lastUsedAt: daysAgo(1),
+            createdAt: daysAgo(60),
+          }));
+          const { system } = await runAsMainAgent([
+            ...fillers,
+            {
+              id: 'me_old_hot',
+              level: 'team',
+              description: '老而热的高引用经验',
+              content: 'x',
+              tags: ['howto'],
+              refCount: 3,
+              lastUsedAt: daysAgo(1),
+              createdAt: daysAgo(90),
+            },
+            {
+              id: 'me_new_cold',
+              level: 'team',
+              description: '更新但零引用的经验',
+              content: 'y',
+              tags: ['pitfall'],
+              refCount: 0,
+              lastUsedAt: null,
+              createdAt: daysAgo(7),
+            },
+          ]);
+          expect(system).toContain('【自动注入记忆');
+          expect(system).toContain('老而热的高引用经验');
+          expect(system).not.toContain('更新但零引用的经验');
+          expect((system.match(/- \[team\] /g) ?? []).length).toBe(5);
+        });
+
+        it('全新零引用记忆仍能入池（recency 项生效，不被饿死）', async () => {
+          // 5 条 15 天前零引用的填充行：全新记忆（recency≈1.0）必须压过它们，
+          // 而半年前的行垫底出局——证明公式的新鲜项真的参与了排序。
+          const fillers = Array.from({ length: 5 }, (_, i) => ({
+            id: `me_stale_${i}`,
+            level: 'team' as const,
+            description: `陈旧经验${i}`,
+            content: 'c',
+            tags: ['howto'],
+            refCount: 0,
+            lastUsedAt: null,
+            createdAt: daysAgo(15),
+          }));
+          const { system } = await runAsMainAgent([
+            ...fillers,
+            {
+              id: 'me_fresh',
+              level: 'team',
+              description: '刚建的零引用经验',
+              content: 'z',
+              tags: ['constraint'],
+              refCount: 0,
+              lastUsedAt: null,
+              createdAt: daysAgo(0),
+            },
+            {
+              id: 'me_ancient',
+              level: 'team',
+              description: '半年前的零引用经验',
+              content: 'w',
+              tags: ['pitfall'],
+              refCount: 0,
+              lastUsedAt: null,
+              createdAt: daysAgo(180),
+            },
+          ]);
+          expect(system).toContain('刚建的零引用经验');
+          expect(system).not.toContain('半年前的零引用经验');
+          expect((system.match(/- \[team\] /g) ?? []).length).toBe(5);
+        });
+
+        it('注入条数上限仍为 5（宽候选池不回退到全量注入）', async () => {
+          const rows = Array.from({ length: 12 }, (_, i) => ({
+            id: `me_${i}`,
+            level: 'team' as const,
+            description: `第${i}条经验`,
+            content: 'c',
+            tags: ['howto'],
+            refCount: 12 - i,
+            lastUsedAt: daysAgo(1),
+            createdAt: daysAgo(10),
+          }));
+          const { system } = await runAsMainAgent(rows);
+          for (let i = 0; i < 5; i++) {
+            expect(system).toContain(`第${i}条经验`);
+          }
+          expect(system).not.toContain('第5条经验');
+          const injected = (system.match(/- \[team\] 第\d+条经验/g) ?? [])
+            .length;
+          expect(injected).toBe(5);
+        });
+
+        it('1200 字预算回归：超长记忆仍被截断', async () => {
+          const long = '内'.repeat(4000);
+          const { system } = await runAsMainAgent([
+            {
+              id: 'me_long',
+              level: 'team',
+              description: long,
+              content: long,
+              tags: ['howto'],
+              refCount: 1,
+              lastUsedAt: daysAgo(1),
+              createdAt: daysAgo(10),
+            },
+          ]);
+          const start = system.indexOf('【自动注入记忆');
+          expect(start).toBeGreaterThanOrEqual(0);
+          expect(system.length - start).toBeLessThanOrEqual(1200);
+        });
       });
     });
 
@@ -8924,6 +9124,39 @@ describe('WorkerDispatcher', () => {
       expect(system).toContain('vteam_wecom_reply');
       expect(system).toContain('绝不传 taskId');
       expect(system).toContain('tmm_ 前缀');
+    });
+
+    it('Todo9 internal=true 经 dispatchAgentMention → execute.system 不含接待人格', async () => {
+      const d = createDispatcher();
+      await d.dispatchAgentMention({
+        teamId: 'tm_0000000001',
+        channelId: 'c_0000000001',
+        targetInstanceId: 'tmm_0000000001',
+        kind: 'wake',
+        text: '【记忆整理】请整理本团队记忆',
+        internal: true,
+      });
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).not.toContain(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
+      expect(system).not.toContain('团队接待');
+      expect(system).not.toContain('开工仪式三步');
+      expect(system).toContain(TEAM_COLLABORATION_CHARTER_INSTRUCTION);
+      const prompt = workerClient.execute.mock.calls[0][1].prompt[0]
+        .text as string;
+      expect(prompt).toContain('【记忆整理】请整理本团队记忆');
+    });
+
+    it('Todo9 internal 缺省（回归）：既有团队派发仍注入接待人格', async () => {
+      const d = createDispatcher();
+      await d.dispatchAgentMention({
+        teamId: 'tm_0000000001',
+        channelId: 'c_0000000001',
+        targetInstanceId: 'tmm_0000000001',
+        kind: 'wake',
+        text: '请协助',
+      });
+      const system = workerClient.execute.mock.calls[0][1].system as string;
+      expect(system).toContain(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
     });
   });
 

@@ -140,6 +140,7 @@ const KIND_LABEL: Record<string, string> = {
   session_idle_scan: "空闲扫描",
   hook_fire: "定时",
   hook_poll: "条件",
+  memory_maintenance: "记忆整理",
 };
 
 /** kind → 徽章配色（对齐 tokens 语义色系；字面量与 memories 页 LEVEL_META 同式）。 */
@@ -150,6 +151,7 @@ const KIND_META: Record<string, { color: string; bg: string; border: string }> =
   session_idle_scan: { color: "#D97706", bg: "rgba(251,191,36,0.12)", border: "rgba(251,191,36,0.32)" },
   hook_fire: { color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
   hook_poll: { color: "#6D28D9", bg: "rgba(124,58,237,0.10)", border: "rgba(124,58,237,0.22)" },
+  memory_maintenance: { color: "#B45309", bg: "rgba(217,119,6,0.10)", border: "rgba(217,119,6,0.22)" },
 };
 
 const KIND_META_FALLBACK = { color: neutral[500], bg: neutral[100], border: neutral[200] };

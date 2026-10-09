@@ -19,6 +19,9 @@ export const TRIGGER_KIND = {
   SESSION_IDLE_SCAN: 'session_idle_scan',
   HOOK_FIRE: 'hook_fire',
   HOOK_POLL: 'hook_poll',
+  // memory-enhancement Todo 9：记忆定时整理（消费方 memories/memory-maintenance.service.ts，
+  // 全局单行 interval；只列候选 + 派 prompt，判断在 agent 侧）。
+  MEMORY_MAINTENANCE: 'memory_maintenance',
 } as const;
 
 export type TriggerKind = (typeof TRIGGER_KIND)[keyof typeof TRIGGER_KIND];
@@ -52,7 +55,8 @@ export function buildTriggerDedupKey(
  * - `agent`：agent 经 hook 自建的触发器（`hook_fire`/`hook_poll`，
  *   `ownerInstanceId` 归属 agent 实例，由 hook_register 服务端写入）；
  * - `system`：其余白名单 kind（平台基座排期：receipt_nudge /
- *   review_round_timeout / progression_patrol / session_idle_scan）。
+ *   review_round_timeout / progression_patrol / session_idle_scan /
+ *   memory_maintenance）。
  *
  * 规则：禁止在 controller/service 里自建第二份 kind→source 名单，一律走
  * `triggerSourceOf`。白名单外未知 kind 归 `system`（展示侧 fail-closed；
@@ -91,6 +95,7 @@ export const TRIGGER_KIND_LABEL: Record<string, string> = {
   [TRIGGER_KIND.SESSION_IDLE_SCAN]: '空闲扫描',
   [TRIGGER_KIND.HOOK_FIRE]: '定时',
   [TRIGGER_KIND.HOOK_POLL]: '条件',
+  [TRIGGER_KIND.MEMORY_MAINTENANCE]: '记忆整理',
 };
 
 /**

@@ -80,6 +80,12 @@ server:
     ## server 事件静默自愈窗口 ms（滑动，对齐 compose SILENT_SESSION_WAKE_MS=600000）
     silentSessionWakeMs: "600000"
     agentIdleTimeoutMs: "0"
+    ## 记忆定时整理（Todo 9）：间隔 ms，**0 = 禁用**（不排期并取消既有行）
+    memoryMaintenanceIntervalMs: "86400000"
+    ## 「低频未引用」阈值（天）：refCount=0 且 lastUsedAt/createdAt 早于此值即进候选
+    memoryOrgUnusedDays: "30"
+    ## 每团队候选清单上限（防大团队 prompt 爆长）
+    memoryOrgCandidateLimit: "50"
   ## initContainer 等待数据库「schema 就绪」的最长秒数。判据是 prisma migrate status
   ## 报 up to date——只探 TCP 不够：MySQL 端口可连时迁移可能尚未跑完，server 会以
   ## P2021（表不存在）退出并反复重启。

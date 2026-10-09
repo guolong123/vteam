@@ -2204,6 +2204,7 @@ const TRIGGER_KIND_LABEL: Record<string, string> = {
   session_idle_scan: "空闲扫描",
   hook_fire: "定时",
   hook_poll: "条件",
+  memory_maintenance: "记忆整理",
 };
 
 /** 行标题：display.description（人话）优先，缺失回退中文 kind 标签；永不为空、永不用 raw id/raw kind。 */
