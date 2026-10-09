@@ -29,7 +29,6 @@ import {
   type CSSProperties,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import {
   ConfirmDialog,
@@ -38,6 +37,12 @@ import {
   SegmentedTabs,
 } from "@/src/components/ui";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
+import {
+  memoriesApi,
+  memoriesQueryKey,
+  type MemoriesResponse,
+  type MemoryItem,
+} from "@/src/api/memories";
 import { teamsApi } from "@/src/api/teams";
 import {
   neutral,
@@ -52,35 +57,6 @@ import {
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
 /* ------------------------------ API 数据模型 ------------------------------ */
-
-/** GET /memories 条目（对齐 MemoriesService.findAll 返回的完整行）。 */
-interface MemoryItem {
-  id: string;
-  level: "team" | "role" | "global";
-  content: string;
-  description?: string | null;
-  tags: string[] | null;
-  createdBy: string;
-  createdAt: string;
-  /** 是否参与每轮自动注入（单条记忆属性；false = 仅 memory_search 按需检索）。 */
-  autoInject: boolean;
-  /** 角色级记忆的归属岗位（ar_ 前缀 → AgentRole.id）；仅 level=role 时非空。 */
-  roleId?: string | null;
-  teamId?: string | null;
-  /**
-   * 写入来源（agent|user|system）。与 `createdBy` 的 id 形态一起决定创建者展示：
-   * seed 出来的团队章程是 `system` + `u_` 用户 id，压根不是团队成员。
-   */
-  sourceType?: string | null;
-}
-
-/** GET /memories 分页响应。 */
-interface MemoriesResponse {
-  items: MemoryItem[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
 
 /** 团队成员引用（teams 查询解析 createdBy 得到的展示信息）。 */
 interface MemberRef {
@@ -1054,23 +1030,18 @@ export default function MemoriesPage() {
 
   /* ---------- 数据查询 ---------- */
   const memoriesQuery = useQuery<MemoriesResponse>({
-    queryKey: [
-      "memories",
-      {
-        level: levelFilter || undefined,
-        keyword: debouncedKeyword,
+    queryKey: memoriesQueryKey({
+      level: levelFilter || undefined,
+      keyword: debouncedKeyword,
+      page,
+      pageSize,
+    }),
+    queryFn: () =>
+      memoriesApi.list({
+        ...(levelFilter ? { level: levelFilter } : {}),
+        ...(debouncedKeyword ? { keyword: debouncedKeyword } : {}),
         page,
         pageSize,
-      },
-    ],
-    queryFn: () =>
-      api.get<MemoriesResponse>("/memories", {
-        query: {
-          ...(levelFilter ? { level: levelFilter } : {}),
-          ...(debouncedKeyword ? { keyword: debouncedKeyword } : {}),
-          page,
-          pageSize,
-        },
       }),
   });
 
@@ -1118,7 +1089,7 @@ export default function MemoriesPage() {
   const [pendingInject, setPendingInject] = useState<string | null>(null);
   const injectMutation = useMutation({
     mutationFn: (input: { id: string; autoInject: boolean }) =>
-      api.patch(`/memories/${input.id}`, { autoInject: input.autoInject }),
+      memoriesApi.setAutoInject(input.id, input.autoInject),
     onMutate: (input) => {
       setPendingInject(input.id);
     },
@@ -1136,7 +1107,7 @@ export default function MemoriesPage() {
   /* ---------- 删除 ---------- */
   const [deleteTarget, setDeleteTarget] = useState<MemoryItem | null>(null);
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/memories/${id}`),
+    mutationFn: (id: string) => memoriesApi.archive(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["memories"] });
       setDeleteTarget(null);

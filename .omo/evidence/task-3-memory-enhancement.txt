@@ -1,0 +1,145 @@
+Task 3 (mem-web-api) — web 记忆 API wrapper 抽取
+Plan: .omo/plans/memory-enhancement.md (Todo 3, lines 116-128)
+Date: 2026-10-09
+
+================================================================================
+FILES CHANGED (2)
+================================================================================
+1. NEW  web/src/api/memories.ts
+2. EDIT web/app/(main)/system/memories/page.tsx   (pure refactor, no UI/text change)
+
+NOT touched (owned by parallel/other todos): server/**, web/src/components/teams/TeamRightPanel.tsx,
+web/package.json. No new dependencies. No git commands issued.
+
+================================================================================
+WRAPPER API SURFACE (web/src/api/memories.ts)
+================================================================================
+Types:
+  MemoryLevel        = "team" | "role" | "global"
+  MemoryItem         all pre-existing fields (id/level/content/description/tags/
+                     createdBy/createdAt/autoInject/roleId/teamId/sourceType)
+                     + refCount: number
+                     + lastUsedAt?: string | null
+                     + mergedIntoId?: string | null
+  MemoriesResponse   { items: MemoryItem[]; total: number; page: number; pageSize: number }
+  MemoriesListParams { level?, teamId?, roleId?, archived?, keyword?, page?, pageSize? }
+                     (declared as a `type` alias, not `interface`, so TS grants it the
+                      implicit index signature required for the `as Record<...>` cast —
+                      same reason teams.ts:109 uses an anonymous object type.)
+
+Exported helper:
+  memoriesQueryKey(params: MemoriesListParams): [string, MemoriesListParams]
+  => returns ["memories", params]
+  Style precedent: triggersQueryKey, web/src/components/teams/TeamRightPanel.tsx:2120-2122
+
+Methods (all via @/lib/api):
+  list(params)          -> api.get<MemoriesResponse>("/memories", { query })
+  archive(id)           -> api.delete<MemoryItem>(`/memories/${id}`)
+                          comment: 这是软删（写 deletedAt，GET 列表不可见，可 restore 恢复）；
+                          不可恢复的物理删除走 purge
+  restore(id)           -> api.post<MemoryItem>(`/memories/${id}/restore`)
+  purge(id)             -> api.post<MemoryItem>(`/memories/${id}/purge`)
+  setAutoInject(id, v)  -> api.patch<MemoryItem>(`/memories/${id}`, { autoInject: v })
+
+restore/purge are exported-but-uncalled (server routes land in parallel Todo 2).
+Exported object members / exported functions are not reported by the repo's ESLint
+config (web/eslint.config.mjs = next/core-web-vitals + next/typescript, no
+no-unused-exports rule), so nothing is flagged.
+
+================================================================================
+MIGRATED CALL SITES (web/app/(main)/system/memories/page.tsx)
+================================================================================
+:31-45  imports
+        REMOVED  import { api } from "@/lib/api";
+        ADDED    import { memoriesApi, memoriesQueryKey,
+                          type MemoriesResponse, type MemoryItem } from "@/src/api/memories";
+
+:59-75  REMOVED local `interface MemoryItem` (old :57-75) and
+        `interface MemoriesResponse` (old :77-83). All 14 in-file references
+        (resolveCreator:85, LEVEL_META:113, LEVEL_AUDIENCE:137, cardTitle:249,
+        detailTitle:254, LevelBadge:351, MemoryCard props :420/:423,
+        AutoInjectSwitch props :510/:520, drawer props :709/:714/:715,
+        toggleInject:1103, deleteTarget:1108, teamNameOf:1137)
+        now resolve to the imported types — no duplicate type definitions remain.
+
+:1032-1046  useQuery<MemoriesResponse>
+        queryKey: inline ["memories", {level, keyword, page, pageSize}]
+              ->  memoriesQueryKey({ level: levelFilter || undefined,
+                                     keyword: debouncedKeyword, page, pageSize })
+        queryFn:  api.get<MemoriesResponse>("/memories", { query: {...spread...} })
+              ->  memoriesApi.list({ ...(levelFilter ? {level} : {}),
+                                     ...(debouncedKeyword ? {keyword} : {}),
+                                     page, pageSize })
+        The key shape is byte-identical to the previous inline key (same "memories"
+        prefix, same 4 fields, same conditional-spread filtering), so
+        invalidateQueries({ queryKey: ["memories"] }) at :1097 and :1112 still
+        matches exactly as before. No invalidation logic was restructured.
+
+:1090-1095  injectMutation
+        api.patch(`/memories/${input.id}`, { autoInject: input.autoInject })
+        -> memoriesApi.setAutoInject(input.id, input.autoInject)
+
+:1109-1113  deleteMutation
+        api.delete(`/memories/${id}`)
+        -> memoriesApi.archive(id)
+        Same HTTP method + same DELETE /memories/:id route. The button copy change
+        ("删除" -> archive wording) is explicitly left to Todo 7.
+
+Behavior parity notes:
+  - queryKey values unchanged -> no extra/duplicate cache entries.
+  - level/keyword conditional spread preserved verbatim -> identical query strings.
+  - pageSize/page unchanged; pagination math untouched.
+  - isApiError(error) error rendering untouched; useMutation onSuccess/onMutate/
+    onSettled bodies unchanged.
+
+================================================================================
+ACCEPTANCE CRITERIA — STATUS
+================================================================================
+[x] grep: no raw `/memories` literal or `api.*` call remains in the admin page.
+    grep pattern `"/memories|`/memories|'/memories|api\.` on
+    web/app/(main)/system/memories/page.tsx  =>  No matches found.
+    The only remaining occurrence of the string "/memories" in that file is inside the
+    header doc comment on line 13 ("数据源：GET /api/v1/memories ..."), which is
+    prose describing the endpoint, not a call.
+[x] grep: `import { api } from "@/lib/api"` removed from the page; `api` is no longer
+    referenced anywhere in the file (no dangling import -> no lint error).
+[x] Zero UI/text/markup change: no JSX touched at all in this diff.
+[x] package.json untouched (no new deps).
+[x] No `as any` / `@ts-ignore` introduced. The single cast is
+    `params as Record<string, string | number | boolean | undefined>`, identical in
+    form to the existing teams.ts:109 precedent, and legal because
+    MemoriesListParams is a type alias with an implicit index signature.
+
+[ ] `cd web && npm run build`  — NOT RUN
+[ ] `cd web && npm run lint`   — NOT RUN
+
+BLOCKER (honest disclosure): this subagent session was provisioned WITHOUT a shell /
+bash / command-execution tool. The complete available tool catalog was enumerated
+(67 tools) and contains no process-spawning capability; `tools.bash`,
+`tools.shell`, `tools.run`, `tools.exec_command` all resolve to "Unknown tool".
+Per the task's REQUIRED TOOLS list, `shell` was expected to be available.
+Consequently build/lint could NOT be executed and their output CANNOT be claimed here.
+
+Manual type/lint review performed instead (substitute, not equivalent to running tsc):
+  1. memoriesQueryKey returns a 2-tuple of [string, MemoriesListParams]; TanStack
+     QueryKey is `readonly unknown[]` -> assignable.
+  2. `levelFilter || undefined` narrows to "team"|"role"|"global"|undefined, which
+     fits `level?: MemoryLevel | ""`.
+  3. `level?: MemoryLevel | ""` is still string-typed, so it fits the
+     Record<string, string | number | boolean | undefined> query cast.
+  4. mutationFn return types narrowed from Promise<unknown> to Promise<MemoryItem>;
+     neither mutation's data is consumed, so no downstream inference change.
+  5. memories.ts imports only `@/lib/api` -> no import cycle introduced.
+
+ACTION REQUIRED BY ORCHESTRATOR before merging Wave 1:
+    cd web && npm run lint
+    cd web && npm run build
+Both must be green; if either fails, treat this todo as unverified.
+
+================================================================================
+QA SCENARIOS (per plan line 127)
+================================================================================
+happy     — /system/memories renders, level tabs filter, 300ms-debounced keyword search,
+            pagination, autoInject toggle, and the 删除 confirm dialog all behave
+            identically pre/post refactor (same routes, same query keys).
+failure   — a type error would surface as a build failure; unverified here (see blocker).
