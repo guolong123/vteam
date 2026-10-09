@@ -81,7 +81,8 @@ describe('T11 三键退役迁移 20260930000000', () => {
     for (const key of RETIRED_KEYS) {
       expect(EXTERNAL_AGENT_ROLE_CAPABILITIES).not.toHaveProperty(key);
     }
-    // 外部岗矩阵本身不变（9 true / 20 false）：它们本就不含这三键。
+    // 外部岗矩阵：9 true 不变（9 工具 allowlist 未含本 plan 新增键），false 侧随目录
+    // 增键（memory-enhancement Todo 8a 的 memory.archive / memory.merge）而 +2。
     expect(
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter((v) => v),
     ).toHaveLength(9);
@@ -89,7 +90,7 @@ describe('T11 三键退役迁移 20260930000000', () => {
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(
         (v) => v === false,
       ),
-    ).toHaveLength(20);
+    ).toHaveLength(22);
   });
 
   it('三个键全部出现在 SQL 中（漏摘一个即转红）', () => {

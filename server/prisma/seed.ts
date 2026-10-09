@@ -53,6 +53,8 @@ const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_memory_save',
   'vteam_memory_search',
   'vteam_memory_update',
+  'vteam_memory_archive',
+  'vteam_memory_merge',
   'vteam_team_view',
   'vteam_my_profile',
   'vteam_team_add_member',
@@ -134,6 +136,8 @@ const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
   { key: 'memory.save', tools: ['vteam_memory_save'], defaultDeny: false },
   { key: 'memory.search', tools: ['vteam_memory_search'], defaultDeny: false },
   { key: 'memory.update', tools: ['vteam_memory_update'], defaultDeny: false },
+  { key: 'memory.archive', tools: ['vteam_memory_archive'], defaultDeny: false },
+  { key: 'memory.merge', tools: ['vteam_memory_merge'], defaultDeny: false },
   { key: 'skill.create', tools: ['vteam_skill_create'], defaultDeny: true },
   {
     key: 'question.confirm',
@@ -436,6 +440,8 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_memory_save: 'allow',
       vteam_memory_search: 'allow',
       vteam_memory_update: 'allow',
+      vteam_memory_archive: 'allow',
+      vteam_memory_merge: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
       vteam_read_file: 'allow',
@@ -1671,6 +1677,16 @@ async function main() {
       action: 'memory_update',
       name: 'vteam_memory_update',
       description: '更新平台记忆（团队隔离校验）',
+    },
+    {
+      action: 'memory_archive',
+      name: 'vteam_memory_archive',
+      description: '归档团队记忆（可恢复软删，仅本团队 team 级）',
+    },
+    {
+      action: 'memory_merge',
+      name: 'vteam_memory_merge',
+      description: '合并重复团队记忆（计数转移 + source 归档，仅本团队 team 级）',
     },
     {
       action: 'skill_create',

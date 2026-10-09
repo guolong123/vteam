@@ -1199,7 +1199,7 @@ describe('seed（计划 skills + 评审子句）', () => {
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(
         (v) => v === false,
       ),
-    ).toHaveLength(20);
+    ).toHaveLength(22);
     for (const key of EXTERNAL_AGENT_UNMANAGED_CAPABILITY_KEYS) {
       expect(EXTERNAL_AGENT_ROLE_CAPABILITIES).not.toHaveProperty(key);
       expect(isCapabilityGranted(EXTERNAL_AGENT_ROLE_CAPABILITIES, key)).toBe(

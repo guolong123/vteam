@@ -18,6 +18,7 @@ import {
   MEMORY_LEVELS,
   computeMemoryContentHash,
 } from './memory.constants';
+import { archiveMemoryRow } from './memory-state';
 
 /** Memory 主键前缀（15 篇 §2.2：<prefix>_<零填充序号>，me_0000000001 起）。 */
 const MEMORY_ID_PREFIX = 'me';
@@ -201,6 +202,7 @@ export class MemoriesService implements OnModuleInit {
    * 不存在（含已软删条目）→ 404 MEMORY_NOT_FOUND；存在 → 返回软删后的条目。
    * memory-enhancement Todo 2：AdminGuard 已从控制器移除，鉴权改由 `assertRowWritable` 承担
    * （团队行=该团队成员，global 行=管理员，否则 403 MEMORY_FORBIDDEN）。
+   * Todo 8a：软删写入经共享出口 `archiveMemoryRow`（与 MCP `memory_archive` 同一语义）。
    */
   async remove(id: string, viewer?: MemoryViewer) {
     const existing = await this.findRowOrThrow(id);
@@ -208,10 +210,7 @@ export class MemoriesService implements OnModuleInit {
       throw this.memoryNotFound();
     }
     await this.assertRowWritable(existing, viewer);
-    return this.prisma.memory.update({
-      where: { id },
-      data: { deletedAt: new Date() },
-    });
+    return archiveMemoryRow(this.prisma, id);
   }
 
   /**

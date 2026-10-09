@@ -486,6 +486,36 @@ const memorySearchSchema = z.object({
 
 type MemorySearchArgs = z.infer<typeof memorySearchSchema>;
 
+/** memory_archive 入参**只有** id 与身份：refCount / mergedIntoId / deletedAt 等服务端
+ * 不变量字段一律不接受（防 Agent 污染指标与合并可追溯性）。 */
+export const memoryArchiveSchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  memoryId: z.string().describe('记忆条目 id（me_ 前缀，vteam_memory_search 返回值）'),
+});
+
+type MemoryArchiveArgs = z.infer<typeof memoryArchiveSchema>;
+
+/** memory_merge 入参同 archive：source/target 两个 id + 身份，服务端单事务执行不变量。 */
+export const memoryMergeSchema = z.object({
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
+  selfInstanceId: z
+    .string()
+    .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
+  sourceId: z
+    .string()
+    .describe('被合并（语义重复、将被归档）的一侧记忆 id（me_ 前缀）'),
+  targetId: z
+    .string()
+    .describe('保留为主条目的记忆 id（me_ 前缀；内容更完整/更常被引用的一侧）'),
+});
+
+type MemoryMergeArgs = z.infer<typeof memoryMergeSchema>;
+
 export const teamViewSchema = z.object({
   taskId: z.string().describe('任务 ID'),
 });
@@ -1114,6 +1144,22 @@ export function buildPlatformMcpTools(
       inputSchema: memorySearchSchema,
       handler: (ctx, args) =>
         service.memorySearch(ctx, args as MemorySearchArgs),
+    },
+    {
+      name: 'memory_archive',
+      description:
+        '归档一条团队级记忆（可恢复软删，不硬删）：从 vteam_memory_search 检索结果与每轮自动注入中立即消失，内容仍在库中可由平台恢复。适用于低效/过期/被证伪的记忆。只能归档**本团队 team 级**记忆（跨团队 / global / role 级返回 403）。仅整理派给团队主 Agent，普通成员岗位无此工具。返回 {memoryId, level, status:"archived"}。',
+      inputSchema: memoryArchiveSchema,
+      handler: (ctx, args) =>
+        service.memoryArchive(ctx, args as MemoryArchiveArgs),
+    },
+    {
+      name: 'memory_merge',
+      description:
+        '合并两条语义重复的团队级记忆：把 sourceId 的内容并入 targetId，引用计数累加转移，source 自动归档（软删，可追溯「已合并至」）。适用于同一坑/同一做法被多次沉淀成多条记忆的情形——先 vteam_memory_search 核对内容，保留更完整/更常被引用的一条作 target。仅本团队 team 级记忆可合并（跨团队 / global / role 级 403），source 已归档或与 target 同 id 返回 404 / 400。返回 {merged:true, targetId, transferredRef}。',
+      inputSchema: memoryMergeSchema,
+      handler: (ctx, args) =>
+        service.memoryMerge(ctx, args as MemoryMergeArgs),
     },
     {
       name: 'team_view',

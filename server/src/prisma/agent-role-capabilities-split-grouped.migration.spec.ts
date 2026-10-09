@@ -20,7 +20,7 @@ import {
  * The archived migration carried eleven literal UPDATEs.  A squashed baseline
  * cannot retain those one-off statements, but it must retain the resulting
  * schema and the current matrix source must retain the post-split semantics.
- * These tests therefore assert the final 29-key matrices, including the cells
+ * These tests therefore assert the final matrices, including the cells
  * that the old grouped keys used to collapse.
  */
 
@@ -106,10 +106,11 @@ describe('agent capability split current-schema contract (historical 20260921000
     expect(roles).toMatch(/`capabilities`\s+JSON NULL/);
   });
 
-  it('the current capability catalog is the complete 29-key post-retirement catalog', () => {
-    // v2.3 T11 曾加到 32（+git.repo.read/write/web.browse），2026-09-30 三键退役 ⇒ 29。
-    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(29);
-    expect(new Set(PLATFORM_CAPABILITY_KEYS).size).toBe(29);
+  it('the current capability catalog is the complete 31-key catalog', () => {
+    // v2.3 T11 曾加到 32（+git.repo.read/write/web.browse），2026-09-30 三键退役 ⇒ 29；
+    // memory-enhancement Todo 8a 加 memory.archive / memory.merge ⇒ 31。
+    expect(PLATFORM_CAPABILITY_KEYS).toHaveLength(31);
+    expect(new Set(PLATFORM_CAPABILITY_KEYS).size).toBe(31);
     for (const retired of RETIRED_KEYS) {
       expect(PLATFORM_CAPABILITY_KEYS).not.toContain(retired);
     }
@@ -125,7 +126,7 @@ describe('agent capability split current-schema contract (historical 20260921000
 
   it('project_manager remains explicitly fully authorized', () => {
     const matrix = BUILTIN_ROLE_CAPABILITY_MAPS.project_manager;
-    expect(Object.keys(matrix)).toHaveLength(29); // T11 三键退役后
+    expect(Object.keys(matrix)).toHaveLength(31);
     expect(Object.values(matrix).every((value) => value === true)).toBe(true);
   });
 
@@ -137,7 +138,7 @@ describe('agent capability split current-schema contract (historical 20260921000
       Object.values(EXTERNAL_AGENT_ROLE_CAPABILITIES).filter(
         (value) => value === false,
       ),
-    ).toHaveLength(20);
+    ).toHaveLength(22);
     expect(EXTERNAL_AGENT_ROLE_CAPABILITIES['secret.command']).toBe(true);
     expectBooleanCatalogMissing(
       EXTERNAL_AGENT_ROLE_CAPABILITIES,
@@ -162,12 +163,13 @@ describe('agent capability split current-schema contract (historical 20260921000
     }
   });
 
-  it('ar_general-equivalent factory matrix has 15 allow and 14 deny', () => {
+  it('ar_general-equivalent factory matrix has 17 allow and 14 deny', () => {
     const factory = buildFactoryCapabilityMatrix();
-    // T11 三键（+1 allow / +2 deny）已于 2026-09-30 退役 ⇒ 15 allow / 14 deny。
+    // memory-enhancement Todo 8a 加的 memory.archive / memory.merge 均 defaultDeny=false
+    // ⇒ +2 allow / deny 不变。
     expect(
       Object.values(factory).filter((value) => value === true),
-    ).toHaveLength(15);
+    ).toHaveLength(17);
     expect(
       Object.values(factory).filter((value) => value === false),
     ).toHaveLength(14);

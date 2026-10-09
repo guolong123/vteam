@@ -31,12 +31,12 @@ describe('platform capability catalogue coverage', () => {
     expect(PLATFORM_CAPABILITY_KEYS).toEqual(keys);
   });
 
-  it('目录只覆盖 mcp 命名空间，且每项恰属一个能力点（29 点 ↔ 32 工具）', () => {
+  it('目录只覆盖 mcp 命名空间，且每项恰属一个能力点（31 点 ↔ 34 工具）', () => {
     // git_* / browser 已于 2026-09-30 整组退役：它们是 worker 注入的本地工具、不经
     // platform-mcp，服务端能力门结构上拦不到 ⇒ 目录不再登记（详见常量文件末退役记录）。
     // 补齐它们需要打通 agent 权限投影 + 重新基线化 `/agent-policies`，属独立后续工作。
     // 在此之前这 8 个工具无门（见下方那条 spec 的显式记录）。
-    expect(PLATFORM_CAPABILITIES).toHaveLength(29);
+    expect(PLATFORM_CAPABILITIES).toHaveLength(31);
     const owner = new Map<string, string>();
     let toolSum = 0;
     for (const capability of PLATFORM_CAPABILITIES) {
@@ -49,8 +49,8 @@ describe('platform capability catalogue coverage', () => {
     // 工具总数 32 = VTEAM_MCP_TOOL_NAMES 全量：git/browser 那 8 个已退役，故 mcp 侧
     // 目录现在恰好覆盖 VTEAM_MCP_TOOL_NAMES 全部 32 项（此前 29 点覆盖其中 32 工具 +
     // 另 8 个由退役三键覆盖）。
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(32);
-    expect(toolSum).toBe(32);
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(34);
+    expect(toolSum).toBe(34);
     expect([...owner.keys()].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
     for (const tool of VTEAM_MCP_TOOL_NAMES) {
       expect(capabilityKeyForTool(tool)).toBe(owner.get(tool));

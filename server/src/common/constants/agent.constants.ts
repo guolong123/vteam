@@ -113,7 +113,8 @@ export const VTEAM_MCP_SERVER_NAME = 'vteam' as const;
 /**
  * vteam MCP 工具真实暴露名（`vteam_<action>`，与 seed.ts 注册的 tools 表 name 一致）。
  * guard allowlist / 层① `permission.<真实名>` 均引用此清单，禁止裸 MCP 名。
- * 32 项（sensitive-command-tool todo 1：`vteam_secret_command` 敏感命令执行）。
+ * 34 项（sensitive-command-tool todo 1：`vteam_secret_command`；memory-enhancement
+ * Todo 8a：`vteam_memory_archive` / `vteam_memory_merge` 记忆整理入口）。
  */
 export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_chat_history',
@@ -133,6 +134,10 @@ export const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_memory_save',
   'vteam_memory_search',
   'vteam_memory_update',
+  // 记忆整理（memory-enhancement Todo 8a）：仅团队主 Agent 放行（见 ROLE_BOUNDARIES
+  // `vteam-project_manager`），其余 6 岗经 mcpDenys 补集显式 deny。
+  'vteam_memory_archive',
+  'vteam_memory_merge',
   'vteam_team_view',
   'vteam_my_profile',
   'vteam_team_add_member',
@@ -499,6 +504,9 @@ export const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_memory_save: 'allow',
       vteam_memory_search: 'allow',
       vteam_memory_update: 'allow',
+      // 记忆整理入口（memory-enhancement Todo 8a）：仅团队主 Agent（PM）持有。
+      vteam_memory_archive: 'allow',
+      vteam_memory_merge: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
       vteam_read_file: 'allow',

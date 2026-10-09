@@ -55,11 +55,20 @@ import {
 import {
   MEMORY_ERRORS,
   MEMORY_LEVELS,
+  MemoryArchiveStatus,
   MemoryLevel,
   MemorySaveStatus,
   MemoryUpdateStatus,
   computeMemoryContentHash,
 } from '../memories/memory.constants';
+import {
+  MemoryImportanceInput,
+  computeMemoryImportance,
+} from '../memories/memory-importance';
+import {
+  archiveMemoryRow,
+  assertTeamScopedMemoryRow,
+} from '../memories/memory-state';
 import {
   NOTIFY_STAGE,
   NOTIFY_TYPE,
@@ -3843,7 +3852,11 @@ export class PlatformMcpService implements OnModuleInit {
    *    **软删过滤必须**（Metis M7）；可选 level 入参收窄到单级。
    * 4. query → content contains（prisma 层过滤）；tags → 取回后内存过滤
    *    （tags 为 Json 列，prisma 无 contains 支持）。
-   * 5. limit 截断（默认 20，max 50），createdAt desc 排序。
+   * 5. tags 过滤后按 `computeMemoryImportance` 降序重排（memory-enhancement
+   *    Todo 4；prisma 侧仍取 createdAt desc 以便重要度全平时的观感与可复现），
+   *    再 limit 截断（默认 20，max 50）。
+   * 6. 对**实际返回**的 id fire-and-forget 计 `refCount+1` / `lastUsedAt`
+   *    （仅主动检索计数；注入与管理端 GET 不计）。
    * 返回 [{id, level, content, tags, createdBy, createdAt}]。
    */
   async memorySearch(
@@ -3990,23 +4003,149 @@ export class PlatformMcpService implements OnModuleInit {
     });
 
     const limit = this.normalizeMemoryLimit(args.limit);
-    return this.filterMemoryByTags(rows as any, args.tags)
-      .slice(0, limit)
-      .map((row: any) => ({
-        id: row.id,
-        level: row.level,
-        content: row.content,
-        description: row.description ?? null,
-        tags: row.tags,
-        createdBy: row.createdBy,
-        createdAt: row.createdAt.toISOString(),
-        sourceAgentId: row.sourceAgentId ?? null,
-        sourceInstanceId: row.sourceInstanceId ?? null,
-        sourceType: row.sourceType ?? null,
-        sessionId: row.sessionId ?? null,
-        sessionTitle: row.sessionTitle ?? null,
-        channelId: row.channelId ?? null,
-      }));
+    const ranked = this.sortMemoriesByImportance(
+      this.filterMemoryByTags(rows, args.tags),
+    ).slice(0, limit);
+
+    // 命中计数：只计 agent 真正看到的这 limit 条（tags 淘汰行/截断行非命中，
+    // 计入会刷虚高 refCount）；fire-and-forget——失败仅告警，否则一次 DB 抖动
+    // 就让 agent 拿不到记忆，比计数丢失严重得多。
+    const hitIds = ranked.map((row) => row.id);
+    if (hitIds.length > 0) {
+      void this.prisma.memory
+        .updateMany({
+          where: { id: { in: hitIds } },
+          data: { refCount: { increment: 1 }, lastUsedAt: new Date() },
+        })
+        .catch((err: unknown) => {
+          this.logger.warn(
+            `memory_search 引用计数失败（不影响返回） ids=${hitIds.length}：${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+    }
+
+    return ranked.map((row) => ({
+      id: row.id,
+      level: row.level,
+      content: row.content,
+      description: row.description ?? null,
+      tags: row.tags,
+      createdBy: row.createdBy,
+      createdAt: row.createdAt.toISOString(),
+      sourceAgentId: row.sourceAgentId ?? null,
+      sourceInstanceId: row.sourceInstanceId ?? null,
+      sourceType: row.sourceType ?? null,
+      sessionId: row.sessionId ?? null,
+      sessionTitle: row.sessionTitle ?? null,
+      channelId: row.channelId ?? null,
+    }));
+  }
+
+  /**
+   * memory_archive：归档团队级记忆（memory-enhancement Todo 8a，记忆整理 P3 入口）。
+   * 归属：resolveExecContext（selfInstanceId 防冒充，与 memorySave/memoryUpdate 同源）。
+   * scope：**仅 team 级且归属调用方团队**（决策⑤：global / role 行 → 403，不给 Agent
+   * 跨归属/跨级别的整理入口）；已软删行 → 404（重复归档不可恢复为「再归档一次」）。
+   * 写入：走 memories/memory-state.ts 的共享软删出口（与 REST DELETE /memories/:id
+   * 同一语义）——**不硬删**，purge/restore 不暴露给 Agent。
+   */
+  async memoryArchive(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId?: string;
+      teamId?: string;
+      selfInstanceId: string;
+      memoryId: string;
+    },
+  ): Promise<{
+    memoryId: string;
+    level: string;
+    status: MemoryArchiveStatus;
+  }> {
+    const exec = await this.resolveExecContext(ctx, args);
+    const row = await this.findMemoryRowOrThrow(args.memoryId);
+    assertTeamScopedMemoryRow(row, await this.resolveExecTeamId(exec));
+    await archiveMemoryRow(this.prisma, row.id);
+    return { memoryId: row.id, level: row.level, status: 'archived' };
+  }
+
+  /**
+   * memory_merge：语义重复记忆合并（Todo 8a）。先 vteam_memory_search 核对内容，
+   * 由 Agent 判断哪条留作 target，服务端只守不变量：
+   * 1. 两行定位（任一不存在/已软删 → 404；source 已归档再合并即命中此路径）；
+   * 2. 同 id → 400（自合并无意义，且会让 refCount 翻倍）；
+   * 3. scope：两行都必须是本团队 team 级（同 memoryArchive 决策⑤）；
+   * 4. **单事务**：target.refCount += source.refCount、source.mergedIntoId = target.id、
+   *    source.deletedAt = now。计数转移与归档必须同生共死，否则出现
+   *    「引用计数丢在已归档行上、target 重要性被低估」的半合并态。
+   * 入参不含 refCount / mergedIntoId / deletedAt（对 Agent 只读）。
+   */
+  async memoryMerge(
+    ctx: PlatformMcpContext,
+    args: {
+      taskId?: string;
+      teamId?: string;
+      selfInstanceId: string;
+      sourceId: string;
+      targetId: string;
+    },
+  ): Promise<{ merged: true; targetId: string; transferredRef: number }> {
+    const exec = await this.resolveExecContext(ctx, args);
+    if (args.sourceId === args.targetId) {
+      throw new BadRequestException({
+        code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+        message: 'sourceId 与 targetId 不能是同一条记忆（自合并无意义）',
+      });
+    }
+    const [source, target] = await Promise.all([
+      this.findMemoryRowOrThrow(args.sourceId),
+      this.findMemoryRowOrThrow(args.targetId),
+    ]);
+    const execTeamId = await this.resolveExecTeamId(exec);
+    assertTeamScopedMemoryRow(source, execTeamId);
+    assertTeamScopedMemoryRow(target, execTeamId);
+    const transferredRef = source.refCount;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.memory.update({
+        where: { id: target.id },
+        data: { refCount: { increment: transferredRef } },
+      });
+      await tx.memory.update({
+        where: { id: source.id },
+        data: { mergedIntoId: target.id, deletedAt: new Date() },
+      });
+    });
+    return { merged: true, targetId: target.id, transferredRef };
+  }
+
+  /** 记忆行定位（不存在或已软删 → 404 MEMORY_NOT_FOUND；memory_update 同款口径）。 */
+  private async findMemoryRowOrThrow(memoryId: string) {
+    const row = await this.prisma.memory.findUnique({ where: { id: memoryId } });
+    if (!row || row.deletedAt) {
+      throw new NotFoundException({
+        code: MEMORY_ERRORS.MEMORY_NOT_FOUND,
+        message: '记忆条目不存在',
+      });
+    }
+    return row;
+  }
+
+  /** 执行上下文的团队 id（team 维度直接取；task 维度取任务归属团队，无团队 → null）。 */
+  private async resolveExecTeamId(exec: ExecContext): Promise<string | null> {
+    if (exec.kind === 'team') {
+      return exec.teamId;
+    }
+    const task = await this.prisma.task.findUnique({
+      where: { id: exec.taskId },
+      select: { teamId: true },
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
+        message: '任务不存在',
+      });
+    }
+    return task.teamId ?? null;
   }
 
   /**
@@ -7526,6 +7665,33 @@ export class PlatformMcpService implements OnModuleInit {
     const l = Number(limit ?? 20);
     if (!Number.isFinite(l)) return 20;
     return Math.min(Math.max(Math.floor(l), 1), 50);
+  }
+
+  /**
+   * memory_search 结果按重要度降序（memory-enhancement Todo 4）。
+   *
+   * 原先靠 prisma 的 `createdAt desc` 排序，于是「老但高频被引用」的记忆必然
+   * 沉底。改为纯内存排序：候选集已由 where（deletedAt/scope/keyword）收窄，
+   * 最多几百行，无需下推到 SQL。
+   *
+   * `now` 只求值一次并透传给全部行——否则同一批候选跨一次毫秒跳动打分，
+   * 结果不可复现（也难写断言）。同分时按 `lastUsedAt ?? createdAt` 新者优先，
+   * 与原先 createdAt desc 的观感一致。
+   */
+  private sortMemoriesByImportance<
+    T extends MemoryImportanceInput & { id: string },
+  >(rows: T[]): T[] {
+    if (rows.length < 2) return rows;
+    const now = new Date();
+    const recencyOf = (row: T) =>
+      (row.lastUsedAt ?? row.createdAt).getTime();
+    return [...rows].sort((a, b) => {
+      const diff =
+        computeMemoryImportance(b, undefined, now) -
+        computeMemoryImportance(a, undefined, now);
+      if (diff !== 0) return diff;
+      return recencyOf(b) - recencyOf(a);
+    });
   }
 
   /** memory_search tags 内存过滤（Json 列无 prisma contains 支持）：须包含全部查询标签。 */

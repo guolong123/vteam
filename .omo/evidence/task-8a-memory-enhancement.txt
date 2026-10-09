@@ -1,0 +1,148 @@
+Todo 8a（mem-mcp-tools）— memory_archive / memory_merge MCP 工具
+Plan: .omo/plans/memory-enhancement.md（Todo 8 块）
+Branch: feat/memory-enhancement
+Date: 2026-10-09
+
+================================================================================
+1. 复用机制的选择（plan 允许二选一；以实际 tsc 与模块读取为准）
+================================================================================
+选择：**共享纯 helper**（新建 server/src/memories/memory-state.ts），而非注入
+MemoriesService 调其 remove()。
+
+依据（三条，均为实际核查结果，非推测）：
+
+(1) MemoriesModule 未导出 MemoriesService（server/src/memories/memories.module.ts:14-19
+    只列 providers，无 exports）。注入需改 memories.module.ts —— 该文件是 Todo 9 的
+    红线（并行运行中，已被他改），本 todo 不得触碰。
+(2) 鉴权口径本质不同，无法直接复用 remove(id, viewer)：
+      - REST remove 的 assertRowWritable 按**人类用户**判权：team 行查
+        team_user_members（viewer.id = users.id），global 行要求平台管理员
+        （memories.service.ts:288-315）。
+      - MCP 调用方是**团队成员实例**（tmm_），且按 plan 决策⑤只允许 team 级
+        （global/role → 403），管理员身份对 Agent 无意义。
+      强行复用需伪造一个 MemoryViewer，语义会失真。
+(3) 无循环依赖：memory-state.ts 只 import @nestjs/common(ForebiddenException)、
+    ../prisma/prisma.service（type-only import）、./memory.constants。已读
+    memories.module.ts + platform-mcp.module.ts 确认方向单向；
+    runtime 实测加载通过（见 §4 证据 4）。
+
+共享内容（两条归档路径同一语义出口）：
+  - assertTeamScopedMemoryRow(row, callerTeamId)：team 级归属纯守卫（global/role/跨团队 → 403）
+  - archiveMemoryRow(prisma, id, archivedAt)：软删唯一写出口（写 deletedAt，不硬删）
+REST 侧 memories.service.remove() 已改走 archiveMemoryRow（行为等价：仍是
+deletedAt=new Date()，不抛错、不改返回形状；memories.service.spec 全绿）。
+
+================================================================================
+2. 权限矩阵（两工具）
+================================================================================
+服务端硬闸（platform-mcp.service.ts，agent 无法绕过）：
+  能力点        默认出厂   生效面
+  memory.archive true      仅 vteam-project_manager（团队主 Agent）= true；其余 6 岗 false
+  memory.merge   true      同上
+
+MCP handler scope 门（两道工具共用）：
+  行不存在 / 已软删              → 404 MEMORY_NOT_FOUND
+  level !== 'team'（global/role） → 403 MEMORY_FORBIDDEN
+  row.teamId !== 调用方团队        → 403 MEMORY_FORBIDDEN
+  merge sourceId === targetId     → 400 MEMORY_INVALID
+  merge 任一行已归档              → 404（重复合并不可执行）
+  无权限岗位调用                   → 403 PLATFORM_MCP_TOOL_NOT_PERMITTED（既有能力门，
+                                    经 capabilityKeyForTool 桥接，无需新增代码）
+
+引擎层（ROLE_BOUNDARIES / buildAgentPolicies）：
+  VTEAM_MCP_TOOL_NAMES 32 → 34；vteam-project_manager.toolAllows 增两项 allow；
+  其余 6 岗经 mcpDenies 补集自动 deny。层① permission 全 vteam_* 恒 allow
+  （既有设计：MCP 权限由服务端能力门兜底）。
+
+入参只读保证：memoryArchiveSchema / memoryMergeSchema 只接受 id 类字段，
+不含 refCount / mergedIntoId / deletedAt（zod 非 strict，多余键被剥离，service 层
+从不读取这些键 —— 已有 spec 断言 parsed.data 不含它们）。
+未暴露 purge / restore（唯一不可逆入口仍只在人工确认路径）。
+
+================================================================================
+3. 文件改动清单
+================================================================================
+新增：
+  server/src/memories/memory-state.ts
+
+服务端实现：
+  server/src/platform-mcp/platform-mcp.tools.ts        +2 schema +2 注册（memory_archive / memory_merge）
+  server/src/platform-mcp/platform-mcp.service.ts      +memoryArchive / +memoryMerge
+                                                     +findMemoryRowOrThrow / +resolveExecTeamId
+  server/src/memories/memories.service.ts              remove() 改走 archiveMemoryRow
+  server/src/memories/memory.constants.ts              +MemoryArchiveStatus
+
+注册面（三处，任务要求）：
+  server/src/common/constants/platform-capability.constants.ts   +memory.archive / +memory.merge
+  server/src/common/constants/agent.constants.ts        VTEAM_MCP_TOOL_NAMES +2；
+                                                     project_manager toolAllows +2 allow
+  server/src/common/constants/agent-role.constants.ts   7 岗矩阵 +2 键（PM=true，其余 false）
+  server/prisma/seed.ts                                自包含镜像同步（工具名 / 能力点 / PM allowlist / tools 表行）
+  web/src/api/role-capabilities.ts                     +归档记忆 / +合并记忆（group:"memory"，:35 组标签已覆盖）
+
+单测与契约守卫（随口径变化的计数/基线，非新增功能）：
+  server/src/platform-mcp/platform-mcp.service.spec.ts          +memory_archive/memory_merge describe（20 用例）
+  server/src/platform-mcp/platform-mcp.tool-naming.spec.ts      身份字段表 +2 条
+  server/src/platform-mcp/platform-mcp.controller.spec.ts       工具名清单 +2，32→34
+  server/src/platform-mcp/platform-mcp.tool-permission.spec.ts  32→34
+  server/src/common/constants/platform-capability.coverage.spec.ts  29→31 点 / 32→34 工具
+  server/src/common/constants/agent-role.constants.spec.ts      29→31 键
+  server/src/common/constants/agent.constants.spec.ts           32→34
+  server/src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts  29→31；factory 15→17 allow；外部 deny 20→22
+  server/src/prisma/agent-role-capabilities-git-web-retire.migration.spec.ts  外部 deny 20→22
+  server/src/prisma/agent-role-capabilities.migration.spec.ts   32→34 工具
+  server/src/prisma/seed.spec.ts                              外部 deny 20→22
+  server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap  重新基线化（-u）
+
+再基线化 artifact：
+  .omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json
+    用仓库自带 capture-native-only-baseline.mjs 重生成（该脚本即为此 artifact 的
+    唯一捕获口）。diff 恰为 7 岗 × 2 个新工具 allow 键，无其它漂移。
+
+未触碰（Todo 9 红线，他人并行改动）：worker-dispatcher.ts / worker-dispatcher.spec.ts /
+timers/triggers.service.ts / memories.controller.ts / memories.controller.spec.ts /
+memories.module.ts / memory-maintenance.service.ts / trigger.constants.ts。
+web 仅改 role-capabilities.ts。
+
+================================================================================
+4. 验证证据
+================================================================================
+证据 1 — 类型检查（含新增文件的类型面）
+  $ cd server && npx tsc --noEmit
+  (no output)  → 退出码 0
+
+证据 2 — platform-mcp 域
+  $ npx jest --runInBand platform-mcp
+  Test Suites: 16 passed, 16 total
+  Tests:       544 passed, 544 total
+
+证据 3 — 全量回归（基线 164 suites / 3816 tests → 现 165 / 3866，无回归）
+  $ cd server && npm run test
+  Test Suites: 165 passed, 165 total
+  Tests:       3866 passed, 3866 total
+  Snapshots:   1 passed, 1 total
+
+证据 4 — 无循环依赖（runtime 实测，非仅 tsc 推断）
+  $ node -e "ts-node 注册后 require('./src/memories/memory-state.ts')
+             与 './src/platform-mcp/platform-mcp.service.ts'"
+  memory-state exports: assertTeamScopedMemoryRow,archiveMemoryRow
+  service loaded OK; has memoryArchive/memoryMerge: function function
+
+证据 5 — web 类型面
+  $ cd web && npx tsc --noEmit
+  WEB_TSC=0（无输出）
+
+================================================================================
+5. 已知取舍与诚实声明
+================================================================================
+- 「归档后 memorySearch 不再返回」与「merge 后 source 消失、target refCount=8」两条用例
+  用了有状态内存 DB mock（findUnique 读当前行 / update 真落库 / findMany 滤软删行），
+  而非两次孤立断言 —— 目的是让「归档 → 检索消失」成为一条端到端链路。其余用例仍是
+  单点断言。
+- 层① permission（引擎原生）对全部 vteam_* 恒 allow 是既有设计（服务端能力门兜底），
+  本 todo 未改该设计；两工具的实际收窄靠 AgentRole.capabilities + handler scope 门。
+- baseline-agent-policies.json 属证据 artifact 而非产品代码，重生成走仓库自带捕获脚本；
+  spec 中对**旧**历史基线 before-agent-policies.json 的 sha256 闸门未被触碰（仍只读）。
+- 未做 git 操作（任务约束）。
+- 未跑 web 的 npm run build / lint（任务验收仅要求 server 侧三项 + web role-capabilities
+  改动；web 侧改动为纯数据数组字面量新增，tsc 已过）。若需要 build/lint 证据可补跑。

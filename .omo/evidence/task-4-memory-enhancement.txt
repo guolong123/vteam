@@ -1,0 +1,131 @@
+Evidence — Todo 4 (mem-search-rank): memorySearch 重要度排序 + 命中引用计数
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Branch: feat/memory-enhancement
+Env: export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH" (node v22.15.0, npx 10.9.2)
+
+FILES CHANGED (exactly the two files owned by Todo 4; worker-dispatcher.ts and
+memories service/controller were NOT touched — Todo 5 / Wave 1 own them)
+--------------------------------------------------------------------------------
+  server/src/platform-mcp/platform-mcp.service.ts       |  90 ++++++++++---
+  server/src/platform-mcp/platform-mcp.service.spec.ts | 189 +++++++++++++++
+
+$ git diff --stat -- server/src/platform-mcp/platform-mcp.service.ts \
+                       server/src/platform-mcp/platform-mcp.service.spec.ts
+ .../src/platform-mcp/platform-mcp.service.spec.ts  | 189 +++++++++++++++++++++
+ server/src/platform-mcp/platform-mcp.service.ts  |  90 ++++++++--
+ 2 files changed, 261 insertions(+), 18 deletions(-)
+
+$ git status --porcelain   # only my 2 src files among src/ (rest are parallel Todo 5/6 work)
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ (others: server/src/chat/worker-dispatcher{,.spec}.ts = parallel Todo 5;
+          web/src/components/teams/* = parallel Todo 6; .omo/* = orchestration)
+
+IMPLEMENTATION — memorySearch (platform-mcp.service.ts)
+--------------------------------------------------------------------------------
+(a) COUNTING — after final .slice(0, limit), fire-and-forget:
+    const hitIds = ranked.map((row) => row.id);
+    if (hitIds.length > 0) {
+      void this.prisma.memory
+        .updateMany({
+          where: { id: { in: hitIds } },
+          data: { refCount: { increment: 1 }, lastUsedAt: new Date() },
+        })
+        .catch((err: unknown) => {
+          this.logger.warn(
+            `memory_search 引用计数失败（不影响返回） ids=${hitIds.length}：${...}`,
+          );
+        });
+    }
+  - ids empty  -> updateMany skipped entirely (no wasted write)
+  - .catch logs via this.logger.warn (NO empty catch; F2 guard satisfied)
+  - `void` + .catch => rejection never propagates, return value unaffected
+  - `{increment:1}` idiom per trigger.service.ts:589 precedent
+
+(b) RANKING — between filterMemoryByTags and slice:
+    const ranked = this.sortMemoriesByImportance(
+      this.filterMemoryByTags(rows, args.tags),
+    ).slice(0, limit);
+  New private helper sortMemoriesByImportance (next to filterMemoryByTags):
+  - descending computeMemoryImportance(row)
+  - tie-break: newer (lastUsedAt ?? createdAt) first
+  - `now` evaluated ONCE and passed to every row's score => reproducible ordering,
+    no millisecond-tick jitter between rows (also makes assertions stable)
+  - sorts a copy ([...rows]); returns input untouched when length < 2
+  - import: `import { MemoryImportanceInput, computeMemoryImportance }
+             from '../memories/memory-importance';`
+    (memory-importance.ts has zero imports => no circular-dependency risk)
+
+PRESERVATION CHECKS (plan "Must NOT")
+--------------------------------------------------------------------------------
+- where clause semantics UNCHANGED: deletedAt:null / OR scope(team,role,global) /
+  tokenFilters / sourceFilters / task-missing 404 / project+task 400 — untouched.
+- orderBy: { createdAt: 'desc' } still sent to prisma (deliberately kept: it is the
+  base order the in-memory sort refines; stable baseline when importance ties).
+- limit normalization UNCHANGED: normalizeMemoryLimit (default 20, clamp 1..50).
+- Return object structure UNCHANGED: same 14 keys, same order, same ISO createdAt.
+- No counting added to: admin GET / findDuplicateMemory / memorySave / memoryUpdate /
+  auto-injection (worker-dispatcher untouched).
+- Bonus: removed 4 pre-existing `as any` casts in this chain (rows is already a fully
+  typed Memory[] because findMany uses no select) — required by the "no as any" rule.
+
+VERIFICATION
+--------------------------------------------------------------------------------
+$ npx tsc --noEmit
+exit=0
+
+$ npx jest --runInBand platform-mcp
+PASS src/platform-mcp/platform-mcp.service.spec.ts
+PASS src/platform-mcp/platform-mcp.controller.spec.ts
+... (16 suites)
+Test Suites: 16 passed, 16 total
+Tests:       544 passed, 544 total
+
+$ npm run test   (full suite)
+Test Suites: 164 passed, 164 total
+Tests:       3816 passed, 3816 total
+Snapshots:   1 passed, 1 total
+
+BASELINE RECONCILIATION (164 suites / 3803 tests -> 3816 tests, +13)
+- Todo 4 contributes exactly +9 (`npx jest platform-mcp.service.spec -t "mem-search-rank"`
+  => "9 passed, 321 skipped").
+- The remaining +4 come from the PARALLEL Todo 5 (mem-inject-rank), which landed
+  mid-flight in worker-dispatcher.ts/spec.ts (verified: `grep -c computeMemoryImportance
+  src/chat/worker-dispatcher.ts` => 3; worker-dispatcher suite => 338 tests).
+  NOT authored or touched by this todo.
+- Suite count unchanged at 164 => no suite added/removed, zero regressions.
+
+NEW TESTS (9) — spec: platform-mcp.service.spec.ts, describe '重要度排序 + 命中计数'
+--------------------------------------------------------------------------------
+Ranking:
+ 1. refCount=3 昨天 压过 refCount=0 今天   (the plan's required case; note the DB
+    baseline createdAt desc would put me_fresh first, so this proves the re-rank)
+ 2. lastUsedAt 作为计龄基准 — 半年前建、昨天被引用 的行压过 半年前建、从未被引用 的行
+ 3. 重要度相同时按 lastUsedAt ?? createdAt 新者优先（稳定，不依赖 DB 返回顺序）
+ 4. 排序后仍以 limit 截断，且只计截断后的 id
+Counting:
+ 5. id.in 恰为返回的 N 条，不是 DB 候选全量 (3 candidates -> exactly 3 ids;
+    also asserts data: { refCount: { increment: 1 }, lastUsedAt: expect.any(Date) })
+ 6. tags 过滤淘汰的行不计入 id.in  (explicit not.toContain on the dropped row)
+ 7. 无结果时 updateMany 不调用
+ 8. updateMany reject 时 memorySearch 正常返回、不抛错，并记 logger.warn
+    (mock rejects + setImmediate to flush the rejection microtask + assert
+     Logger.prototype.warn called with 'memory_search 引用计数失败')
+ 9. 非计数路径：memorySave / memoryUpdate 触发 memory.update 但 NOT memory.updateMany
+
+QA FAILURE-MODE PROOFS
+--------------------------------------------------------------------------------
+- "tag-filtered rows must not count": test 6 would fail if counting ran before
+  filterMemoryByTags (ids would include me_drop).
+- "counting failure must not break search": test 8 rejects updateMany; without the
+  .catch the returned promise would reject and the test would fail.
+- "only returned ids counted": tests 4/5/6 fail if the full DB candidate set is used.
+- Test 9 guards the "injection/save/update never counts" plan decision.
+
+TRANSIENT NOTE (not a regression)
+--------------------------------------------------------------------------------
+One combined platform-mcp run showed a 407 "Proxy Authentication Required" in
+platform-mcp.controller.spec.ts ('无 id（notification）→ 202'). Investigated:
+that spec mocks PlatformMcpService wholesale, so it is unreachable from this change;
+it passed 3/3 in isolation and 2/2 on subsequent combined runs (544/544 both times),
+and passes in the full suite. Pre-existing supertest flake, not caused by Todo 4.

@@ -50,7 +50,7 @@ export interface RoleCapability {
 }
 
 /**
- * 29 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
+ * 31 个能力点 —— 逐字对照 `server/src/common/constants/platform-capability.constants.ts`
  * `PLATFORM_CAPABILITIES`（键集合逐项相等；仅新增 UI 分组 `group` 字段，顺序不强制）。
  * 出厂拒绝 14 项：task.create / task.transition / task.complete / team.add_member /
  * chat.channel_send / wecom.reply / question.confirm / issue.create / issue.get /
@@ -223,6 +223,20 @@ export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
     label: "更新团队记忆",
     group: "memory",
     tools: ["vteam_memory_update"],
+    factoryDefault: true,
+  },
+  {
+    key: "memory.archive",
+    label: "归档记忆",
+    group: "memory",
+    tools: ["vteam_memory_archive"],
+    factoryDefault: true,
+  },
+  {
+    key: "memory.merge",
+    label: "合并记忆",
+    group: "memory",
+    tools: ["vteam_memory_merge"],
     factoryDefault: true,
   },
   {

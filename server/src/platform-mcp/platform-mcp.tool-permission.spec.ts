@@ -513,12 +513,12 @@ describe('platform tool permission gate (capability model)', () => {
       expect(service.groupPost).not.toHaveBeenCalled();
     });
 
-    it('tools/list 全量不受权限影响（32 个工具，调用时才拦截）', async () => {
+    it('tools/list 全量不受权限影响（34 个工具，调用时才拦截）', async () => {
       const res = await mcpPost()
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
         .expect(200);
 
-      expect((res.body.result.tools as unknown[]).length).toBe(32);
+      expect((res.body.result.tools as unknown[]).length).toBe(34);
       expect(
         (res.body.result.tools as Array<{ name: string }>).map((t) => t.name),
       ).toContain('task_transition');

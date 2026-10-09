@@ -117,6 +117,16 @@ describe('platform-mcp tool naming contract', () => {
         teamId: OPTIONAL,
         taskId: OPTIONAL,
       },
+      memory_archive: {
+        selfInstanceId: REQUIRED,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
+      },
+      memory_merge: {
+        selfInstanceId: REQUIRED,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
+      },
       team_view: { selfInstanceId: ABSENT, teamId: ABSENT, taskId: REQUIRED },
       my_profile: {
         selfInstanceId: REQUIRED,

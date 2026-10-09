@@ -199,6 +199,21 @@ export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
     tools: ['vteam_memory_update'],
     defaultDeny: false,
   },
+  // 记忆整理 2 点（memory-enhancement Todo 8a）：服务端硬闸（scope 限本团队 team 级）
+  // 在 handler 内，能力点只表达「谁被授予整理权」——出厂默认放行，实际生效面由岗位矩阵
+  // （仅主 Agent 岗 true）收窄。
+  {
+    key: 'memory.archive',
+    label: '归档记忆',
+    tools: ['vteam_memory_archive'],
+    defaultDeny: false,
+  },
+  {
+    key: 'memory.merge',
+    label: '合并记忆',
+    tools: ['vteam_memory_merge'],
+    defaultDeny: false,
+  },
   {
     key: 'skill.create',
     label: '沉淀技能',

@@ -46,6 +46,9 @@ export type MemorySaveStatus = 'created' | 'duplicate';
 
 export type MemoryUpdateStatus = 'updated';
 
+/** memory_archive 返回态（归档=软删成功；硬删 purge 不暴露给 Agent）。 */
+export type MemoryArchiveStatus = 'archived';
+
 /**
  * 记忆内容归一化（精确去重键输入，T4 记忆演进）。
  * 统一换行符 + 去首尾空白；语义相近但文本不同的合并仍只是 prompt 提示，不阻塞写入。

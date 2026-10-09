@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -49,6 +50,8 @@ import { GitReposService } from '../git-repos/git-repos.service';
 import { PlatformMcpService } from './platform-mcp.service';
 import {
   buildPlatformMcpTools,
+  memoryArchiveSchema,
+  memoryMergeSchema,
   memorySaveSchema,
   memoryUpdateSchema,
   SECRET_COMMAND_SCHEMA,
@@ -114,6 +117,7 @@ describe('PlatformMcpService', () => {
       findFirst: jest.Mock;
       findUnique: jest.Mock;
       update: jest.Mock;
+      updateMany: jest.Mock;
     };
     agent: { findUnique: jest.Mock };
     agentQuestion: { findMany: jest.Mock };
@@ -266,6 +270,7 @@ describe('PlatformMcpService', () => {
         findFirst: jest.fn(),
         findUnique: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       agent: { findUnique: jest.fn() },
       agentQuestion: { findMany: jest.fn() },
@@ -4835,6 +4840,598 @@ describe('PlatformMcpService', () => {
           PLATFORM_MCP_ERRORS.FORBIDDEN,
         );
         expect(prisma.memory.findMany).not.toHaveBeenCalled();
+      });
+
+      // memory-enhancement Todo 4：重要度排序 + 命中引用计数。
+      describe('重要度排序 + 命中计数（mem-search-rank）', () => {
+        // 用相对日期而非固定日期：断言只需要「新旧」这一相对关系。
+        const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
+        const row = (
+          id: string,
+          days: number,
+          extra: {
+            refCount?: number;
+            lastUsedAt?: Date | null;
+            tags?: string[];
+          } = {},
+        ) => ({
+          id,
+          level: 'team',
+          content: `c-${id}`,
+          description: null,
+          tags: extra.tags ?? null,
+          createdBy: 'a',
+          createdAt: daysAgo(days),
+          refCount: extra.refCount ?? 0,
+          lastUsedAt: extra.lastUsedAt ?? null,
+        });
+
+        /** updateMany 收到的 id.in；未调用过则 null。 */
+        const countedIds = (): string[] | null => {
+          const call = prisma.memory.updateMany.mock.calls[0];
+          return call ? (call[0].where.id.in as string[]) : null;
+        };
+
+        beforeEach(() => {
+          allowTeamWorker();
+        });
+
+        it('排序：refCount=3 昨天 压过 refCount=0 今天（createdAt desc 时后者在前）', async () => {
+          prisma.memory.findMany.mockResolvedValue([
+            row('me_fresh', 0),
+            row('me_hot', 1, { refCount: 3 }),
+          ]);
+
+          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+
+          expect(out.map((r) => r.id)).toEqual(['me_hot', 'me_fresh']);
+        });
+
+        it('排序：lastUsedAt 作为计龄基准——半年前建、昨天被引用的记忆压过半年前建的', async () => {
+          prisma.memory.findMany.mockResolvedValue([
+            row('me_stale', 180),
+            row('me_used', 180, { lastUsedAt: daysAgo(1) }),
+          ]);
+
+          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+
+          expect(out.map((r) => r.id)).toEqual(['me_used', 'me_stale']);
+        });
+
+        it('排序：重要度相同时按 lastUsedAt ?? createdAt 新者优先（稳定）', async () => {
+          prisma.memory.findMany.mockResolvedValue([
+            row('me_a', 5),
+            row('me_b', 2),
+          ]);
+
+          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+
+          expect(out.map((r) => r.id)).toEqual(['me_b', 'me_a']);
+        });
+
+        it('排序后仍以 limit 截断，且只计截断后的 id', async () => {
+          prisma.memory.findMany.mockResolvedValue([
+            row('me_1', 0),
+            row('me_2', 1),
+            row('me_3', 2),
+          ]);
+
+          const out = await service.memorySearch(ctx, {
+            teamId: 'tm_1',
+            limit: 2,
+          });
+
+          expect(out.map((r) => r.id)).toEqual(['me_1', 'me_2']);
+          expect(countedIds()).toEqual(['me_1', 'me_2']);
+        });
+
+        it('计数：id.in 恰为返回的 N 条，不是 DB 候选全量', async () => {
+          prisma.memory.findMany.mockResolvedValue([
+            row('me_1', 0),
+            row('me_2', 1),
+            row('me_3', 2),
+          ]);
+
+          await service.memorySearch(ctx, { teamId: 'tm_1' });
+
+          expect(prisma.memory.updateMany).toHaveBeenCalledTimes(1);
+          expect(countedIds()).toEqual(['me_1', 'me_2', 'me_3']);
+          expect(prisma.memory.updateMany.mock.calls[0][0].data).toEqual({
+            refCount: { increment: 1 },
+            lastUsedAt: expect.any(Date),
+          });
+        });
+
+        it('计数：tags 过滤淘汰的行不计入 id.in', async () => {
+          prisma.memory.findMany.mockResolvedValue([
+            row('me_keep', 0, { tags: ['x', 'y'] }),
+            row('me_drop', 1, { tags: ['x'] }),
+          ]);
+
+          const out = await service.memorySearch(ctx, {
+            teamId: 'tm_1',
+            tags: ['x', 'y'],
+          });
+
+          expect(out.map((r) => r.id)).toEqual(['me_keep']);
+          expect(countedIds()).toEqual(['me_keep']);
+          expect(countedIds()).not.toContain('me_drop');
+        });
+
+        it('计数：无结果时 updateMany 不调用', async () => {
+          prisma.memory.findMany.mockResolvedValue([]);
+
+          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+
+          expect(out).toEqual([]);
+          expect(prisma.memory.updateMany).not.toHaveBeenCalled();
+        });
+
+        it('计数失败（updateMany reject）不影响返回：正常返回结果、不抛错，并记 warn', async () => {
+          const warnSpy = jest
+            .spyOn(Logger.prototype, 'warn')
+            .mockImplementation(() => undefined);
+          prisma.memory.findMany.mockResolvedValue([
+            row('me_1', 0),
+            row('me_2', 1),
+          ]);
+          prisma.memory.updateMany.mockRejectedValue(new Error('db down'));
+
+          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+          // fire-and-forget：让被拒绝的 promise 的 catch 微任务队列跑完。
+          await new Promise((resolve) => setImmediate(resolve));
+
+          expect(out.map((r) => r.id)).toEqual(['me_1', 'me_2']);
+          expect(warnSpy).toHaveBeenCalledWith(
+            expect.stringContaining('memory_search 引用计数失败'),
+          );
+          warnSpy.mockRestore();
+        });
+
+        it('非计数路径：memorySave / memoryUpdate 不触发 updateMany', async () => {
+          prisma.memory.create.mockResolvedValue({
+            id: 'me_0000000010',
+            level: 'team',
+          });
+          prisma.memory.update.mockResolvedValue({
+            id: 'me_0000000010',
+            level: 'team',
+          } as never);
+          prisma.memory.findUnique.mockResolvedValue({
+            id: 'me_0000000010',
+            level: 'team',
+            taskId: null,
+            teamId: 'tm_1',
+            content: 'x',
+            description: null,
+            tags: null,
+            createdBy: 'tmm_1',
+            deletedAt: null,
+          });
+          idGen.nextId.mockResolvedValue('me_0000000010');
+
+          await service.memorySave(ctx, {
+            teamId: 'tm_1',
+            selfInstanceId: 'tmm_1',
+            level: 'team',
+            content: 'x',
+          });
+          await service.memoryUpdate(ctx, {
+            teamId: 'tm_1',
+            selfInstanceId: 'tmm_1',
+            memoryId: 'me_0000000010',
+            content: 'y',
+          });
+
+          expect(prisma.memory.update).toHaveBeenCalled();
+          expect(prisma.memory.updateMany).not.toHaveBeenCalled();
+        });
+      });
+    });
+
+    // memory-enhancement Todo 8a：memory_archive / memory_merge（Agent 记忆整理入口）。
+    describe('memory_archive / memory_merge（mem-mcp-tools）', () => {
+      const teamId = 'tm_1';
+      /** 团队维度归属通过：worker 有该团队会话（绑定成员 tmm_1）。 */
+      const allowTeamWorker = () => {
+        prisma.session.findFirst.mockResolvedValue({
+          id: 's_team',
+          teamMemberId: 'tmm_1',
+        });
+      };
+      const teamRow = (
+        id: string,
+        overrides: Record<string, unknown> = {},
+      ) => ({
+        id,
+        level: 'team',
+        taskId: null,
+        teamId,
+        roleId: null,
+        content: `内容-${id}`,
+        contentHash: null,
+        description: null,
+        tags: null,
+        createdBy: 'tmm_1',
+        createdAt: new Date('2026-08-08T00:00:00Z'),
+        refCount: 0,
+        mergedIntoId: null,
+        deletedAt: null,
+        ...overrides,
+      });
+      /** findUnique 按 id 分派 mock（archive 1 行、merge 2 行）。 */
+      const rows = (map: Record<string, unknown>) => {
+        prisma.memory.findUnique.mockImplementation(
+          ({ where }: { where: { id: string } }) =>
+            Promise.resolve(map[where.id] ?? null) as never,
+        );
+      };
+      const archiveArgs = {
+        teamId,
+        selfInstanceId: 'tmm_1',
+        memoryId: 'me_a',
+      };
+      const mergeArgs = {
+        teamId,
+        selfInstanceId: 'tmm_1',
+        sourceId: 'me_a',
+        targetId: 'me_b',
+      };
+      /** 事务回调里对 memory.update 的调用序列（$transaction 直通回调 → tx===prisma mock）。 */
+      const updates = () =>
+        prisma.memory.update.mock.calls.map((call) => ({
+          where: call[0].where,
+          data: call[0].data,
+        }));
+
+      describe('memory_archive', () => {
+        it('本团队 team 级行 → 软删（deletedAt 落点），返回 status=archived', async () => {
+          allowTeamWorker();
+          rows({ me_a: teamRow('me_a') });
+          prisma.memory.update.mockResolvedValue(teamRow('me_a') as never);
+
+          const out = await service.memoryArchive(ctx, archiveArgs);
+
+          expect(prisma.memory.update).toHaveBeenCalledWith({
+            where: { id: 'me_a' },
+            data: { deletedAt: expect.any(Date) },
+          });
+          expect(out).toEqual({
+            memoryId: 'me_a',
+            level: 'team',
+            status: 'archived',
+          });
+        });
+
+        it('归档后 memorySearch 不再返回该行（软删落点被检索过滤）', async () => {
+          allowTeamWorker();
+          // 有状态内存 DB（findUnique 读当前行 / update 真落 deletedAt / findMany 滤软删行），
+          // 使「归档 → 检索消失」成为一条端到端链路而非两个孤立断言。
+          const db = new Map<string, Record<string, unknown>>([
+            ['me_a', teamRow('me_a')],
+          ]);
+          prisma.memory.findUnique.mockImplementation(
+            ({ where }: { where: { id: string } }) =>
+              Promise.resolve({ ...(db.get(where.id) ?? null) }) as never,
+          );
+          prisma.memory.update.mockImplementation(
+            ({ where, data }: { where: { id: string }; data: { deletedAt?: Date } }) => {
+              const row = { ...db.get(where.id), ...data };
+              db.set(where.id, row);
+              return Promise.resolve({ ...row }) as never;
+            },
+          );
+          prisma.memory.findMany.mockImplementation(() => {
+            const visible = [...db.values()].filter((r) => !r.deletedAt);
+            return Promise.resolve(visible) as never;
+          });
+
+          await service.memoryArchive(ctx, archiveArgs);
+          const out = await service.memorySearch(ctx, { teamId });
+
+          expect(db.get('me_a')?.deletedAt).toBeInstanceOf(Date);
+          expect(out).toEqual([]);
+        });
+
+        it('跨团队 403：行 teamId ≠ 调用方团队 → MEMORY_FORBIDDEN（不写库）', async () => {
+          allowTeamWorker();
+          rows({ me_a: teamRow('me_a', { teamId: 'tm_other' }) });
+
+          await expectCode(
+            service.memoryArchive(ctx, archiveArgs),
+            ForbiddenException,
+            'MEMORY_FORBIDDEN',
+          );
+          expect(prisma.memory.update).not.toHaveBeenCalled();
+        });
+
+        it('global 行 403：不做 global 级整理入口（决策⑤）', async () => {
+          allowTeamWorker();
+          rows({ me_a: teamRow('me_a', { level: 'global', teamId: null }) });
+
+          await expectCode(
+            service.memoryArchive(ctx, archiveArgs),
+            ForbiddenException,
+            'MEMORY_FORBIDDEN',
+          );
+          expect(prisma.memory.update).not.toHaveBeenCalled();
+        });
+
+        it('role 行 403：不做 role 级整理入口', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a', { level: 'role', roleId: 'ar_dev' }),
+          });
+
+          await expectCode(
+            service.memoryArchive(ctx, archiveArgs),
+            ForbiddenException,
+            'MEMORY_FORBIDDEN',
+          );
+          expect(prisma.memory.update).not.toHaveBeenCalled();
+        });
+
+        it('已归档行 → 404 MEMORY_NOT_FOUND（不重复软删）', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a', {
+              deletedAt: new Date('2026-08-10T00:00:00Z'),
+            }),
+          });
+
+          await expectCode(
+            service.memoryArchive(ctx, archiveArgs),
+            NotFoundException,
+            'MEMORY_NOT_FOUND',
+          );
+          expect(prisma.memory.update).not.toHaveBeenCalled();
+        });
+
+        it('不存在 → 404 MEMORY_NOT_FOUND', async () => {
+          allowTeamWorker();
+          rows({});
+
+          await expectCode(
+            service.memoryArchive(ctx, archiveArgs),
+            NotFoundException,
+            'MEMORY_NOT_FOUND',
+          );
+          expect(prisma.memory.update).not.toHaveBeenCalled();
+        });
+
+        it('冒充 403：无会话归属 → PLATFORM_MCP_FORBIDDEN（不读行）', async () => {
+          prisma.session.findFirst.mockResolvedValue(null);
+          rows({ me_a: teamRow('me_a') });
+
+          await expectCode(
+            service.memoryArchive(ctx, archiveArgs),
+            ForbiddenException,
+            PLATFORM_MCP_ERRORS.FORBIDDEN,
+          );
+          expect(prisma.memory.findUnique).not.toHaveBeenCalled();
+        });
+      });
+
+      describe('memory_merge', () => {
+        it('不变量（单事务）：target.refCount += source.refCount、source.mergedIntoId=target.id + 软删', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a', { refCount: 3 }),
+            me_b: teamRow('me_b', { refCount: 5 }),
+          });
+
+          const out = await service.memoryMerge(ctx, mergeArgs);
+
+          expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+          expect(updates()).toEqual([
+            { where: { id: 'me_b' }, data: { refCount: { increment: 3 } } },
+            {
+              where: { id: 'me_a' },
+              data: { mergedIntoId: 'me_b', deletedAt: expect.any(Date) },
+            },
+          ]);
+          expect(out).toEqual({
+            merged: true,
+            targetId: 'me_b',
+            transferredRef: 3,
+          });
+        });
+
+        it('transferredRef=0 也走同一事务（source 零引用不必特殊处理）', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a', { refCount: 0 }),
+            me_b: teamRow('me_b', { refCount: 2 }),
+          });
+
+          const out = await service.memoryMerge(ctx, mergeArgs);
+
+          expect(updates()[0]).toEqual({
+            where: { id: 'me_b' },
+            data: { refCount: { increment: 0 } },
+          });
+          expect(out.transferredRef).toBe(0);
+        });
+
+        it('同 id → 400 MEMORY_INVALID（不触达行、不开事务）', async () => {
+          allowTeamWorker();
+
+          await expectCode(
+            service.memoryMerge(ctx, { ...mergeArgs, targetId: 'me_a' }),
+            BadRequestException,
+            PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+          );
+          expect(prisma.memory.findUnique).not.toHaveBeenCalled();
+          expect(prisma.$transaction).not.toHaveBeenCalled();
+        });
+
+        it('source 已归档 → 404（重复合并不可执行）', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a', {
+              deletedAt: new Date('2026-08-10T00:00:00Z'),
+            }),
+            me_b: teamRow('me_b'),
+          });
+
+          await expectCode(
+            service.memoryMerge(ctx, mergeArgs),
+            NotFoundException,
+            'MEMORY_NOT_FOUND',
+          );
+          expect(prisma.$transaction).not.toHaveBeenCalled();
+        });
+
+        it('target 已归档 → 404', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a'),
+            me_b: teamRow('me_b', {
+              deletedAt: new Date('2026-08-10T00:00:00Z'),
+            }),
+          });
+
+          await expectCode(
+            service.memoryMerge(ctx, mergeArgs),
+            NotFoundException,
+            'MEMORY_NOT_FOUND',
+          );
+          expect(prisma.$transaction).not.toHaveBeenCalled();
+        });
+
+        it('跨团队 403：source 属他人团队 → MEMORY_FORBIDDEN（不开事务）', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a', { teamId: 'tm_other' }),
+            me_b: teamRow('me_b'),
+          });
+
+          await expectCode(
+            service.memoryMerge(ctx, mergeArgs),
+            ForbiddenException,
+            'MEMORY_FORBIDDEN',
+          );
+          expect(prisma.$transaction).not.toHaveBeenCalled();
+        });
+
+        it('global 行 403：target 为 global 时拒绝（决策⑤）', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a'),
+            me_b: teamRow('me_b', { level: 'global', teamId: null }),
+          });
+
+          await expectCode(
+            service.memoryMerge(ctx, mergeArgs),
+            ForbiddenException,
+            'MEMORY_FORBIDDEN',
+          );
+          expect(prisma.$transaction).not.toHaveBeenCalled();
+        });
+
+        it('role 行 403：target 为 role 时拒绝', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a'),
+            me_b: teamRow('me_b', { level: 'role', roleId: 'ar_dev' }),
+          });
+
+          await expectCode(
+            service.memoryMerge(ctx, mergeArgs),
+            ForbiddenException,
+            'MEMORY_FORBIDDEN',
+          );
+          expect(prisma.$transaction).not.toHaveBeenCalled();
+        });
+
+        it('入参只读：refCount / mergedIntoId / deletedAt 由服务端决定，不接受 Agent 传入', () => {
+          expect(
+            memoryArchiveSchema.safeParse({
+              teamId,
+              selfInstanceId: 'tmm_1',
+              memoryId: 'me_a',
+              refCount: 99,
+            }).success,
+          ).toBe(true);
+          expect(
+            memoryArchiveSchema.safeParse({
+              teamId,
+              selfInstanceId: 'tmm_1',
+              memoryId: 'me_a',
+              mergedIntoId: 'me_x',
+            }).success,
+          ).toBe(true);
+          const parsed = memoryMergeSchema.safeParse({
+            teamId,
+            selfInstanceId: 'tmm_1',
+            sourceId: 'me_a',
+            targetId: 'me_b',
+          });
+          expect(parsed.success).toBe(true);
+          if (parsed.success) {
+            expect(parsed.data).toEqual({
+              teamId,
+              selfInstanceId: 'tmm_1',
+              sourceId: 'me_a',
+              targetId: 'me_b',
+            });
+          }
+          expect(
+            memoryMergeSchema.safeParse({
+              teamId,
+              selfInstanceId: 'tmm_1',
+              sourceId: 'me_a',
+            }).success,
+          ).toBe(false);
+          expect(
+            memoryArchiveSchema.safeParse({ teamId, memoryId: 'me_a' }).success,
+          ).toBe(false);
+        });
+
+        it('归档后不再出现在 memorySearch 结果（source 软删、target 留存且引用计数已转移）', async () => {
+          allowTeamWorker();
+          const db = new Map<string, Record<string, unknown>>([
+            ['me_a', teamRow('me_a', { refCount: 3 })],
+            ['me_b', teamRow('me_b', { refCount: 5 })],
+          ]);
+          prisma.memory.findUnique.mockImplementation(
+            ({ where }: { where: { id: string } }) =>
+              Promise.resolve({ ...(db.get(where.id) ?? null) }) as never,
+          );
+          prisma.memory.update.mockImplementation(
+            ({
+              where,
+              data,
+            }: {
+              where: { id: string };
+              data: {
+                refCount?: { increment: number };
+                mergedIntoId?: string;
+                deletedAt?: Date;
+              };
+            }) => {
+              const prev = db.get(where.id) ?? {};
+              const refCount =
+                data.refCount?.increment === undefined
+                  ? prev.refCount
+                  : Number(prev.refCount ?? 0) + data.refCount.increment;
+              const row = { ...prev, ...data, refCount };
+              db.set(where.id, row);
+              return Promise.resolve({ ...row }) as never;
+            },
+          );
+          prisma.memory.findMany.mockImplementation(() =>
+            Promise.resolve([...db.values()].filter((r) => !r.deletedAt)) as never,
+          );
+
+          await service.memoryMerge(ctx, mergeArgs);
+          const out = await service.memorySearch(ctx, { teamId });
+
+          expect(out.map((r) => r.id)).toEqual(['me_b']);
+          expect(db.get('me_b')?.refCount).toBe(8);
+          expect(db.get('me_a')?.deletedAt).toBeInstanceOf(Date);
+          expect(db.get('me_a')?.mergedIntoId).toBe('me_b');
+        });
       });
     });
   });

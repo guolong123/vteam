@@ -206,9 +206,9 @@ describe('agent_roles.capabilities current-schema contract (historical 202609210
     expect(agentModel).toMatch(/policyId\s+String\?\s+@map\("policy_id"\)/);
   });
 
-  it('the vteam catalog still covers all 32 tools after the capability split', () => {
-    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(32);
-    expect(new Set(VTEAM_MCP_TOOL_NAMES).size).toBe(32);
+  it('the vteam catalog still covers all 34 tools after the capability split', () => {
+    expect(VTEAM_MCP_TOOL_NAMES).toHaveLength(34);
+    expect(new Set(VTEAM_MCP_TOOL_NAMES).size).toBe(34);
   });
 
   // ------------------------------------------------------------------
