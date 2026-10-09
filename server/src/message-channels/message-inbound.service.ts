@@ -620,6 +620,7 @@ export class MessageInboundService implements MessageHost {
           opId ??
           '';
         const opChattype = (cmd as any).chattype as string | undefined;
+        const opChatId = (cmd as any).chatId as string | undefined;
         try {
           const adapter = this.registry?.get?.('wecom_aibot') as unknown as
             | {
@@ -630,6 +631,7 @@ export class MessageInboundService implements MessageHost {
                     fromUserId: string;
                     fromUserName: string;
                     chattype?: string;
+                    chatid?: string;
                     aqId?: string;
                   },
                 ) => void;
@@ -640,6 +642,7 @@ export class MessageInboundService implements MessageHost {
                     fromUserId: string;
                     fromUserName: string;
                     chattype?: string;
+                    chatid?: string;
                   },
                 ) => void;
               }
@@ -651,6 +654,7 @@ export class MessageInboundService implements MessageHost {
                 fromUserId: opId,
                 fromUserName: opName || opId,
                 chattype: opChattype,
+                chatid: opChatId,
                 aqId,
               });
             } else if (typeof adapter.setPendingOperatorForAq === 'function') {
@@ -659,6 +663,7 @@ export class MessageInboundService implements MessageHost {
                 fromUserId: opId,
                 fromUserName: opName || opId,
                 chattype: opChattype,
+                chatid: opChatId,
               });
             }
             this.logger.log(

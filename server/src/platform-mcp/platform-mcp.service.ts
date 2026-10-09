@@ -180,6 +180,9 @@ type WecomStreamInfo = {
   readonly fromUserId?: string;
   readonly fromUserName?: string;
   readonly chattype?: string;
+  /** 入站消息所属会话（群聊 chatid；单聊无此字段）：出站主动推送按它定位，
+   *  避免多群共用 bot 时被渠道级 lastChatid 带偏到别的群。 */
+  readonly chatid?: string;
   /** 入站消息实际到达的渠道，决定回信路由；运行时存在但此前未声明 */
   readonly channelId?: string;
 };
@@ -5368,6 +5371,11 @@ export class PlatformMcpService implements OnModuleInit {
       }
     } catch {}
 
+    // 出站目标会话：优先入站消息自己的 chatid（多群共用 bot 时唯一可靠来源）；
+    // 缺省（pending 路径/旧流未存 chatid）才由适配器回退渠道级 lastChatid。
+    const inboundChatId =
+      pending?.chatid ?? activeExternal?.stream?.chatid ?? null;
+
     // 回复须回到用户当初发言的那个机器人：同一 team 绑定多个 wecom 渠道时，
     // 取第一个绑定会把回信发到用户没发言的群里。仅当入站渠道不可考时才回退首个绑定。
     const inboundChannelId =
@@ -5427,6 +5435,7 @@ export class PlatformMcpService implements OnModuleInit {
           wecomSent = await (adapter as any).sendNewMessage(
             wecomChannelId,
             wecomText,
+            inboundChatId ?? undefined,
           );
         }
         if (
@@ -6405,6 +6414,7 @@ export class PlatformMcpService implements OnModuleInit {
             wecomChannelId,
             mediaKind,
             mediaIdToSend,
+            inboundChatId ?? undefined,
           );
         }
         if (!wecomSent) {

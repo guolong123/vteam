@@ -703,6 +703,55 @@ describe('WecomAibotAdapter (message-channels)', () => {
       expect(ok).toBe(false);
     });
 
+    it('多群共用 bot：explicitChatId 覆盖渠道级 lastChatid（避免发到别的群）', async () => {
+      const mockClient: any = {
+        sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+        sendMediaMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+        uploadMedia: jest.fn().mockResolvedValue({ media_id: 'mid_x' }),
+      };
+      (adapter as any).clients.set('mc_multi', mockClient);
+      (adapter as any).hosts.set('mc_multi', {
+        getChannel: jest.fn().mockResolvedValue({
+          id: 'mc_multi',
+          // 渠道级 lastChatid 已被别的群的入站覆盖
+          config: { lastChatid: 'chat_GROUP_B' },
+        }),
+      });
+
+      await adapter.sendNewMessage('mc_multi', 'hi', 'chat_GROUP_A');
+      expect(mockClient.sendMessage).toHaveBeenCalledWith(
+        'chat_GROUP_A',
+        expect.objectContaining({ msgtype: 'markdown' }),
+      );
+
+      await adapter.sendMediaMessage('mc_multi', 'file', 'media_1', 'chat_GROUP_A');
+      expect(mockClient.sendMediaMessage).toHaveBeenCalledWith(
+        'chat_GROUP_A',
+        'file',
+        'media_1',
+      );
+    });
+
+    it('未给 explicitChatId 时仍回退渠道级 lastChatid（单群场景不变）', async () => {
+      const mockClient: any = {
+        sendMediaMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+      };
+      (adapter as any).clients.set('mc_single', mockClient);
+      (adapter as any).hosts.set('mc_single', {
+        getChannel: jest.fn().mockResolvedValue({
+          id: 'mc_single',
+          config: { lastChatid: 'chat_only' },
+        }),
+      });
+
+      await adapter.sendMediaMessage('mc_single', 'file', 'media_2');
+      expect(mockClient.sendMediaMessage).toHaveBeenCalledWith(
+        'chat_only',
+        'file',
+        'media_2',
+      );
+    });
+
     it('LRU and health still intact after post-card fix', () => {
       // LRU still 100
       for (let i = 0; i < 105; i++) {

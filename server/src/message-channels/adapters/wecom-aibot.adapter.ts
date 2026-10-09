@@ -40,6 +40,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       fromUserId?: string;
       fromUserName?: string;
       chattype?: string;
+      chatid?: string;
       spinnerTimer?: NodeJS.Timeout | null;
       registeredAt?: number;
     }
@@ -81,6 +82,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       fromUserId: string;
       fromUserName: string;
       chattype?: string;
+      chatid?: string;
       frameHeaders?: unknown;
       streamId?: string;
       at: number;
@@ -96,6 +98,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       fromUserId: string;
       fromUserName: string;
       chattype?: string;
+      chatid?: string;
       at: number;
     }
   >();
@@ -107,6 +110,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       fromUserId: string;
       fromUserName: string;
       chattype?: string;
+      chatid?: string;
       aqId?: string;
       frameHeaders?: unknown;
       streamId?: string;
@@ -120,6 +124,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         fromUserId: info.fromUserId,
         fromUserName: info.fromUserName,
         chattype: info.chattype,
+        chatid: info.chatid,
         at: now,
       });
     }
@@ -135,6 +140,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       fromUserId: string;
       fromUserName: string;
       chattype?: string;
+      chatid?: string;
     },
   ): void {
     this.aqOperatorMap.set(aqId, { ...info, at: Date.now() });
@@ -148,6 +154,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         fromUserId: string;
         fromUserName: string;
         chattype?: string;
+        chatid?: string;
         channelId: string;
         aqId?: string;
       }
@@ -163,6 +170,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       fromUserId: e.fromUserId,
       fromUserName: e.fromUserName,
       chattype: e.chattype,
+      chatid: e.chatid,
       channelId: e.channelId,
       aqId: e.aqId,
     };
@@ -173,6 +181,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         fromUserId: string;
         fromUserName: string;
         chattype?: string;
+        chatid?: string;
         channelId: string;
         aqId?: string;
       }
@@ -245,6 +254,9 @@ export class WecomAibotAdapter extends MessageAdapter {
       fromUserId?: string;
       fromUserName?: string;
       chattype?: string;
+      /** 入站消息所属会话（群聊 chatid / 单聊无此字段）：出站主动推送按它定位，
+       *  避免多群共用 bot 时被渠道级 lastChatid（每条入站覆盖）带偏到别的群。 */
+      chatid?: string;
       spinnerTimer?: NodeJS.Timeout | null;
     },
   ): void {
@@ -659,6 +671,7 @@ export class WecomAibotAdapter extends MessageAdapter {
           fromUserId,
           fromUserName,
           chattype,
+          chatid: body.chatid,
           spinnerTimer,
         });
         try {
@@ -674,6 +687,7 @@ export class WecomAibotAdapter extends MessageAdapter {
                 fromUserId,
                 fromUserName,
                 chattype,
+                chatid: body.chatid,
                 spinnerTimer,
               } as any,
             );
@@ -1023,6 +1037,7 @@ export class WecomAibotAdapter extends MessageAdapter {
             fromUserId: operatorExternalId,
             fromUserName: operatorExternalName || operatorExternalId,
             chattype: operatorChattype,
+            chatid: operatorChatId,
           });
         } catch {}
       }
@@ -1523,15 +1538,21 @@ export class WecomAibotAdapter extends MessageAdapter {
     return had;
   }
 
-  async sendNewMessage(channelId: string, text: string): Promise<boolean> {
+  async sendNewMessage(
+    channelId: string,
+    text: string,
+    explicitChatId?: string,
+  ): Promise<boolean> {
     const client = this.clients.get(channelId);
     if (!client) {
       this.logger.warn(`wecom sendNewMessage no client channelId=${channelId}`);
       return false;
     }
+    // explicitChatId（入站 stream.chatid）优先；缺省才走渠道级 lastChatid
+    // ——后者每条入站都覆盖，多群共用 bot 会发到别的群。
     const host = this.hosts.get(channelId) ?? this.attachedHost;
-    let targetChatId: string | null = null;
-    if (host?.getChannel) {
+    let targetChatId: string | null = explicitChatId ?? null;
+    if (!targetChatId && host?.getChannel) {
       try {
         const ch = await host.getChannel(channelId);
         const cfg = (ch?.config ?? {}) as Record<string, unknown>;
@@ -1782,6 +1803,7 @@ export class WecomAibotAdapter extends MessageAdapter {
     fromUserId: string | undefined,
     fromUserName: string,
     chattype: string,
+    chatid?: string,
   ): Promise<void> {
     const frameHeaders = (f as { headers?: unknown }).headers ?? f;
     const streamId = generateReqId('stream');
@@ -1877,6 +1899,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         fromUserId,
         fromUserName,
         chattype,
+        chatid,
         spinnerTimer,
       });
       try {
@@ -1892,6 +1915,7 @@ export class WecomAibotAdapter extends MessageAdapter {
               fromUserId,
               fromUserName,
               chattype,
+              chatid,
               spinnerTimer,
             } as any,
           );
@@ -1962,6 +1986,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         fromUserId,
         fromUserName,
         chattype,
+        body.chatid,
       );
       await this.updateRuntimeAfterInbound(ctx, channelId, body);
     } catch (e) {
@@ -2071,6 +2096,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         fromUserId,
         fromUserName,
         chattype,
+        body.chatid,
       );
       await this.updateRuntimeAfterInbound(ctx, channelId, body);
     } catch (e) {
@@ -2769,6 +2795,7 @@ export class WecomAibotAdapter extends MessageAdapter {
     channelId: string,
     mediaType: 'image' | 'file' | 'voice' | 'video',
     mediaId: string,
+    targetChatId?: string,
   ): Promise<boolean> {
     const client = this.clients.get(channelId);
     if (!client) {
@@ -2777,7 +2804,9 @@ export class WecomAibotAdapter extends MessageAdapter {
       );
       return false;
     }
-    const chatId = await this.resolveChatId(channelId);
+    // 优先用调用方给出的目标会话（来自入站 stream.chatid）；缺省才回退渠道级
+    // lastChatid——后者每条入站都会覆盖，多群共用 bot 时会发到别的群。
+    const chatId = targetChatId ?? (await this.resolveChatId(channelId));
     if (!chatId) {
       this.logger.warn(
         `wecom sendMediaMessage no chatId channelId=${channelId}`,
@@ -2787,7 +2816,7 @@ export class WecomAibotAdapter extends MessageAdapter {
     try {
       await client.sendMediaMessage(chatId, mediaType as any, mediaId);
       this.logger.log(
-        `wecom sendMediaMessage ok channelId=${channelId} chatId=${chatId} type=${mediaType} mediaId=${mediaId}`,
+        `wecom sendMediaMessage ok channelId=${channelId} chatId=${chatId} type=${mediaType} target=${targetChatId ? 'explicit' : 'lastChatid'} mediaId=${mediaId}`,
       );
       return true;
     } catch (e) {

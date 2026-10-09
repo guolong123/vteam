@@ -7381,10 +7381,12 @@ describe('PlatformMcpService', () => {
       expect(adapter.sendNewMessage).toHaveBeenCalledWith(
         'mc_b',
         expect.any(String),
+        undefined,
       );
       expect(adapter.sendNewMessage).not.toHaveBeenCalledWith(
         'mc_a',
         expect.any(String),
+        undefined,
       );
     });
 
@@ -7416,6 +7418,7 @@ describe('PlatformMcpService', () => {
       expect(adapter.sendNewMessage).toHaveBeenCalledWith(
         'mc_a',
         expect.any(String),
+        undefined,
       );
     });
 
@@ -7494,7 +7497,11 @@ describe('PlatformMcpService', () => {
 
       expect(result.wecomSent).toBe(true);
       expect(adapter.finishStream).not.toHaveBeenCalled();
-      expect(adapter.sendNewMessage).toHaveBeenCalledWith('mc_team_1', 'hello');
+      expect(adapter.sendNewMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        'hello',
+        undefined,
+      );
     });
 
     it('活动 stream 超出时间窗时不调用 finishStream', async () => {
@@ -7518,7 +7525,11 @@ describe('PlatformMcpService', () => {
 
       expect(result.wecomSent).toBe(true);
       expect(adapter.finishStream).not.toHaveBeenCalled();
-      expect(adapter.sendNewMessage).toHaveBeenCalledWith('mc_team_1', 'hello');
+      expect(adapter.sendNewMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        'hello',
+        undefined,
+      );
     });
 
     it('他人 processing 占位不被当前回复覆盖', async () => {
@@ -7683,6 +7694,7 @@ describe('PlatformMcpService', () => {
         'mc_team_1',
         'file',
         'media_file_1',
+        undefined,
       );
       const created = (prisma.message.create as jest.Mock).mock.calls[0][0];
       expect(created.data.content).toMatchObject({
@@ -7723,6 +7735,59 @@ describe('PlatformMcpService', () => {
       );
     });
 
+    it('多群共用 bot：入站 stream.chatid 透传给出站发送（否则回退 lastChatid 会发错群）', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue({
+        fromUserName: 'Alice',
+        chattype: 'group',
+        chatid: 'wriGjxCgAA_groupA',
+      });
+      (adapter as any).uploadMediaBuffer = jest
+        .fn()
+        .mockResolvedValue('media_file_g');
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_file_g',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect((adapter as any).sendMediaMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        'file',
+        'media_file_g',
+        'wriGjxCgAA_groupA',
+      );
+    });
+
+    it('无活动 stream（stream 无 chatid）→ 出站第 4 参为 undefined（适配器回退 lastChatid）', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue(undefined);
+      (adapter as any).uploadMediaBuffer = jest
+        .fn()
+        .mockResolvedValue('media_file_h');
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+
+      await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_file_h',
+      });
+
+      expect((adapter as any).sendMediaMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        'file',
+        'media_file_h',
+        undefined,
+      );
+    });
+
     it('msgtype=file 无活动 stream → 回退 sendMediaMessage 主动推送 file 类型', async () => {
       const adapter = arrangeTeamChannel();
       adapter.getStream.mockReturnValue(undefined);
@@ -7744,6 +7809,7 @@ describe('PlatformMcpService', () => {
         'mc_team_1',
         'file',
         'media_file_2',
+        undefined,
       );
     });
 
