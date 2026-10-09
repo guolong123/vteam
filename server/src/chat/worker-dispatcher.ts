@@ -330,7 +330,7 @@ export const NON_MAIN_AGENT_NOTE =
 
 /** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
 export const WECOM_SYSTEM_INSTRUCTION =
-  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名] 标记）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到团队群聊，确保用户在企微端收到回复。';
+  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名|from 群聊/私聊] 标记，来源部分说明该消息来自群聊还是私聊）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到团队群聊，确保用户在企微端收到回复。回复场景请与来源一致：私聊来的消息直接答复该用户；群聊来的消息在群内答复并 @ 该用户。';
 
 /**
  * 平台级共享块（agent-role-entity 计划 todo 3）：原在 seed 的 7 个 prompt 内各抄一份，
@@ -2193,9 +2193,20 @@ export class WorkerDispatcher
     }
     if (request.text.includes('[WeCom:')) {
       const wecomMatch = /\[WeCom:([^\]]+)\]/.exec(request.text);
-      const wecomUserLabel = wecomMatch ? wecomMatch[1].trim() : '';
+      const rawLabel = wecomMatch ? wecomMatch[1].trim() : '';
+      // 新格式 `[WeCom:用户名|from 群聊|from 私聊]`；旧格式 `[WeCom:用户名]` 仍兼容
+      // （无 | → 来源留空，不渲染来源括注）。展示名可能含 |，故按最后一个 | 切。
+      const sepIdx = rawLabel.lastIndexOf('|');
+      const wecomUserLabel = (
+        sepIdx >= 0 ? rawLabel.slice(0, sepIdx) : rawLabel
+      ).trim();
+      const sourceRaw =
+        sepIdx >= 0
+          ? rawLabel.slice(sepIdx + 1).trim().replace(/^from\s*/i, '')
+          : '';
+      const sourceNote = sourceRaw ? `（来源：${sourceRaw}）` : '';
       const tailored = wecomUserLabel
-        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel} via WeCom，请务必使用 vteam_wecom_reply 工具回复，不要使用 vteam_group_post，以确保用户在企微端收到@回复。`
+        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel}${sourceNote} via WeCom，请务必使用 vteam_wecom_reply 工具回复，不要使用 vteam_group_post，以确保用户在企微端收到@回复。`
         : WECOM_TRIGGER_INSTRUCTION;
       promptBlocks.push(tailored);
     }

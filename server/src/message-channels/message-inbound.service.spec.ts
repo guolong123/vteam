@@ -254,7 +254,7 @@ describe('MessageInboundService', () => {
       expect(res.results[0].ok).toBe(true);
     });
 
-    it('wecom directed: prefixes chat text with [WeCom:name] and stores wecom meta', async () => {
+    it('wecom directed: prefixes chat text with [WeCom:name|from 群聊] and stores wecom meta', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
       prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
       prisma.chatChannel.findFirst.mockResolvedValue({
@@ -281,7 +281,7 @@ describe('MessageInboundService', () => {
       expect(chatService.createMessage).toHaveBeenCalledWith(
         groupChannelId,
         '__external__',
-        { text: '[WeCom:GuoLong] hello wecom' },
+        { text: '[WeCom:GuoLong|from 群聊] hello wecom' },
         { senderType: SENDER_TYPE.external, senderId: 'GuoLong' },
       );
       expect(delivery.finish).toHaveBeenCalledWith(
@@ -292,6 +292,55 @@ describe('MessageInboundService', () => {
         expect.objectContaining({ wecomUserId: 'GuoLong', chattype: 'group' }),
       );
       expect(res.results[0].ok).toBe(true);
+    });
+
+    it('wecom single chattype → 前缀为 from 私聊（chattype 缺失亦按私聊）', async () => {
+      prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
+      prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: groupChannelId,
+        type: 'team_group',
+        teamId,
+      });
+      chatService.createMessage.mockResolvedValue({
+        message: { id: 'm_3' },
+        triggers: [],
+      });
+
+      await service.submitInbound(channelId, [
+        {
+          kind: 'post_message',
+          text: 'private msg',
+          dedupKey: 'k_single',
+          senderExternalId: 'GuoLong',
+          senderName: 'GuoLong',
+          wecomUserId: 'GuoLong',
+          wecomUserName: 'GuoLong',
+          chattype: 'single',
+        } as any,
+      ]);
+      expect(chatService.createMessage).toHaveBeenCalledWith(
+        groupChannelId,
+        '__external__',
+        { text: '[WeCom:GuoLong|from 私聊] private msg' },
+        { senderType: SENDER_TYPE.external, senderId: 'GuoLong' },
+      );
+
+      await service.submitInbound(channelId, [
+        {
+          kind: 'post_message',
+          text: 'no chattype',
+          dedupKey: 'k_notype',
+          senderExternalId: 'GuoLong',
+          wecomUserId: 'GuoLong',
+        } as any,
+      ]);
+      expect(chatService.createMessage).toHaveBeenLastCalledWith(
+        groupChannelId,
+        '__external__',
+        { text: '[WeCom:GuoLong|from 私聊] no chattype' },
+        { senderType: SENDER_TYPE.external, senderId: 'GuoLong' },
+      );
     });
 
     it('logs rejected when team_group channel missing', async () => {

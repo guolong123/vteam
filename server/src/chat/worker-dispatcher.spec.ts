@@ -480,6 +480,42 @@ describe('WorkerDispatcher', () => {
       expect(system).toContain(WECOM_SYSTEM_INSTRUCTION);
     });
 
+    it('新前缀带来源：|from 群聊/私聊 解析为用户名 + 来源括注（旧格式不渲染括注）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: request.channelId,
+        type: 'team_group',
+      });
+
+      const promptFor = async (text: string) => {
+        const d = createDispatcher();
+        await d.dispatch({ ...request, text });
+        const calls = workerClient.execute.mock.calls;
+        return calls[calls.length - 1][1].prompt[0].text as string;
+      };
+
+      const groupPrompt = await promptFor(
+        '[WeCom:GuoLong|from 群聊] 请帮我看看进度',
+      );
+      expect(groupPrompt).toContain('企业微信用户 GuoLong');
+      expect(groupPrompt).toContain('（来源：群聊）');
+
+      const singlePrompt = await promptFor('[WeCom:张三|from 私聊] 你好');
+      expect(singlePrompt).toContain('企业微信用户 张三');
+      expect(singlePrompt).toContain('（来源：私聊）');
+
+      // 旧格式（无 |）保持兼容：不出现来源括注
+      const legacyPrompt = await promptFor('[WeCom:GuoLong] 请帮我看看进度');
+      expect(legacyPrompt).toContain('企业微信用户 GuoLong');
+      expect(legacyPrompt).not.toContain('（来源：');
+
+      // 展示名含 | 时按最后一个 | 切，用户名不被截断
+      const pipeNamePrompt = await promptFor(
+        '[WeCom:张|三|from 群聊] 你好',
+      );
+      expect(pipeNamePrompt).toContain('企业微信用户 张|三');
+      expect(pipeNamePrompt).toContain('（来源：群聊）');
+    });
+
     it('P0 默认不注入企微：非企微群聊触发 → prompt 注入 GROUP 指令，system 无企微段', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: request.channelId,

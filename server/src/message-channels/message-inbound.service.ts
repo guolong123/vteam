@@ -305,8 +305,11 @@ export class MessageInboundService implements MessageHost {
             const chattype: string | undefined = cmdAny.chattype;
             const displayLabel = wecomUserName || wecomUserId || '';
             const rawText: string = String(cmdAny.text ?? '');
+            // 前缀携带会话来源（协议 chattype：group/single），供 agent 判断回复场景；
+            // 解析方（worker-dispatcher）按 | 切分，展示名可能含 |，故取最后一个 |。
+            const wecomSource = chattype === 'group' ? '群聊' : '私聊';
             const inboundText = displayLabel
-              ? `[WeCom:${displayLabel}] ${rawText}`
+              ? `[WeCom:${displayLabel}|from ${wecomSource}] ${rawText}`
               : rawText;
             const wecomMeta = wecomUserId
               ? {
