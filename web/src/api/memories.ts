@@ -4,7 +4,7 @@
  * 对齐 server/src/memories：GET /memories 分页检索（level / teamId / roleId /
  * archived / keyword / page / pageSize）、PATCH /memories/:id（autoInject）、
  * DELETE /memories/:id（**软删 = 归档**）、POST /memories/:id/restore（恢复）、
- * POST /memories/:id/purge（**硬删，不可恢复**）。
+ * POST /memories/:id/purge（**硬删，不可恢复**）、POST /memories/maintain（手动跑一轮整理）。
  * 所有方法经 web/lib/api 统一鉴权与错误归一。
  */
 import { api } from "@/lib/api";
@@ -70,6 +70,20 @@ export function memoriesQueryKey(
   return ["memories", params];
 }
 
+/**
+ * POST /memories/maintain 响应（手动触发一轮记忆整理）。
+ * - `teams`：本轮**真正派发**整理的团队数（无候选或无主 Agent 的团队不计入）
+ * - `candidates`：三类候选计数（duplicates 疑似重复 / unused 低频未引用 / untags 标签不规范）
+ */
+export interface MaintainResult {
+  teams: number;
+  candidates: {
+    duplicates: number;
+    unused: number;
+    untags: number;
+  };
+}
+
 export const memoriesApi = {
   /** 分页检索记忆。 */
   list(params: MemoriesListParams): Promise<MemoriesResponse> {
@@ -96,5 +110,13 @@ export const memoriesApi = {
   /** 切换单条记忆的自动注入开关。 */
   setAutoInject(id: string, autoInject: boolean): Promise<MemoryItem> {
     return api.patch<MemoryItem>(`/memories/${id}`, { autoInject });
+  },
+  /**
+   * 手动跑一轮记忆整理（AdminGuard）：跨团队筛候选 → 群内落灰色 system 条 →
+   * 派 prompt 给各团队主 Agent。**本轮不直接改任何记忆**，故调用方无需失效
+   * `["memories"]` 查询（清单内容不变），只需展示返回的派发结果。
+   */
+  maintain(): Promise<MaintainResult> {
+    return api.post<MaintainResult>("/memories/maintain");
   },
 };

@@ -34,6 +34,7 @@ import { useAuthStore } from "@/lib/stores/authStore";
 import {
   memoriesApi,
   memoriesQueryKey,
+  type MaintainResult,
   type MemoriesListParams,
   type MemoryItem,
 } from "@/src/api/memories";
@@ -58,6 +59,7 @@ import {
   radius,
   fontSize,
   fontFamily,
+  statusColors,
   surface,
 } from "@/src/theme/tokens";
 
@@ -101,6 +103,39 @@ const errorBannerStyle: CSSProperties = {
   backgroundColor: "rgba(239,68,68,0.10)",
   border: `1px solid rgba(239,68,68,0.22)`,
 };
+
+/** 整理结果提示条：与 errorBannerStyle 同骨架，仅语义色换「已完成」绿 token。 */
+const noticeBannerStyle: CSSProperties = {
+  ...errorBannerStyle,
+  color: statusColors["已完成"].color,
+  backgroundColor: statusColors["已完成"].bg,
+  border: `1px solid ${statusColors["已完成"].border}`,
+};
+
+/** 提示条内的「知道了」按钮（复用 actionButtonStyle 视觉，仅更紧凑）。 */
+const dismissButtonStyle: CSSProperties = {
+  ...actionButtonStyle,
+  padding: `1px ${space.sm}px`,
+};
+
+/**
+ * 把 POST /memories/maintain 的返回体拼成一句人话。
+ * 注意 `teams` 语义 = 本轮**真正派发**的团队数（无候选 / 无主 Agent 的团队不计入），
+ * 因此「teams>0 但候选全 0」是异常组合——文案需区分「跳过派发」与「已派发 + 有候选」。
+ */
+function maintainNoticeText(r: MaintainResult): string {
+  const { duplicates, unused, untags } = r.candidates;
+  if (r.teams <= 0) {
+    return "无待整理候选，本轮跳过派发（没有团队筛出可整理的记忆）。";
+  }
+  if (duplicates + unused + untags === 0) {
+    return `已派发整理：${r.teams} 个团队 · 无待整理候选`;
+  }
+  return (
+    `已派发整理：${r.teams} 个团队 · 疑似重复 ${duplicates}` +
+    ` · 低频未引用 ${unused} · 标签不规范 ${untags}`
+  );
+}
 
 /* ------------------------------ 记忆行 ------------------------------ */
 
@@ -535,6 +570,14 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
   const [purgeTarget, setPurgeTarget] = useState<MemoryItem | null>(null);
   /** 详情弹窗选中的行 id（null = 关闭）。存 id 而非对象：失效刷新后内容自动跟最新数据。 */
   const [detailId, setDetailId] = useState<string | null>(null);
+  /**
+   * 整理结果提示（null = 不展示）。同时承载成功文案与失败文案，
+   * 单槽位互斥：新一轮运行直接覆盖上一轮结果。
+   */
+  const [maintainNotice, setMaintainNotice] = useState<{
+    tone: "success" | "error";
+    text: string;
+  } | null>(null);
 
   /* ---------- 搜索防抖 300ms（抄管理页 :1036-1042） ---------- */
   useEffect(() => {
@@ -614,6 +657,21 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
       setPurgeTarget(null);
     },
     onSettled: () => setPendingId(null),
+  });
+
+  /* ---------- 手动跑一轮整理（AdminGuard：按钮仅 isAdmin 可见） ----------
+   * 本轮服务端只筛候选 + 落灰色 system 条 + 派 prompt，**不改记忆内容**，
+   * 故不失效 ["memories"]（避免无谓重拉）；仅回填提示文案。 */
+  const maintainMutation = useMutation({
+    mutationFn: () => memoriesApi.maintain(),
+    onMutate: () => setMaintainNotice(null),
+    onSuccess: (result) =>
+      setMaintainNotice({ tone: "success", text: maintainNoticeText(result) }),
+    onError: (err) =>
+      setMaintainNotice({
+        tone: "error",
+        text: isApiError(err) ? err.message : "整理失败，请稍后重试",
+      }),
   });
 
   /* ---------- 错误文案（403 等由服务端 per-row 鉴权返回） ---------- */
@@ -724,7 +782,47 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
             fontFamily: fontFamily.body,
           }}
         />
+        {isAdmin && (
+          <button
+            type="button"
+            data-testid="team-memory-maintain"
+            disabled={maintainMutation.isPending}
+            title="手动跑一轮记忆整理：筛出疑似重复 / 低频未引用 / 标签不规范的候选，派给各团队主 Agent 复核处理"
+            onClick={() => maintainMutation.mutate()}
+            style={
+              maintainMutation.isPending
+                ? { ...actionButtonStyle, ...disabledActionStyle }
+                : actionButtonStyle
+            }
+          >
+            {maintainMutation.isPending ? "正在整理…" : "整理记忆"}
+          </button>
+        )}
       </div>
+
+      {maintainNotice && (
+        <div
+          role="status"
+          data-testid="team-memory-maintain-notice"
+          style={
+            maintainNotice.tone === "error"
+              ? errorBannerStyle
+              : noticeBannerStyle
+          }
+        >
+          <span aria-hidden style={{ fontWeight: 700 }}>
+            {maintainNotice.tone === "error" ? "!" : "✓"}
+          </span>
+          <span style={{ flex: 1 }}>{maintainNotice.text}</span>
+          <button
+            type="button"
+            onClick={() => setMaintainNotice(null)}
+            style={dismissButtonStyle}
+          >
+            知道了
+          </button>
+        </div>
+      )}
 
       {teamName && (
         <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>
