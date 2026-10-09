@@ -1,0 +1,20 @@
+=== task-memory-detail-modal evidence ===
+date: 2026-10-09T08:54:25Z
+
+--- git status (short) ---
+
+=== npx tsc --noEmit ===
+tsc exit=0
+
+=== npm run lint (tail) ===
+
+✖ 729 problems (0 errors, 729 warnings)
+
+
+=== npm run build (tail) ===
+  └ other shared chunks (total)          3.72 kB
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+

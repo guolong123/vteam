@@ -10,9 +10,12 @@
  *   已归档视图：团队行「恢复」= restore（已合并行置灰，服务端亦 409 MEMORY_RESTORE_MERGED）
  *   +「永久删除」= purge。
  * - 不做内容/tags 编辑、不做合并操作 UI（编辑与合并归管理页 / Agent 工具）。
+ * - 点卡片内容区弹出详情（TeamMemoryDetailModal，复用 DocModalShell 外壳）：看全文 + 元信息，
+ *   底部操作与卡片同一套权限门。操作行在可点击区之外，点它不会开详情。
  *
- * 视觉语言复制 system/memories 管理页（类型芯片 / 自动注入 / 相对时间），
- * 但**在本文件内局部实现**——管理页那些组件是页面私有函数，跨文件 import 会把整页耦合进面板。
+ * 视觉语言复制 system/memories 管理页（类型芯片 / 自动注入 / 相对时间）。
+ * 芯片/徽标/相对时间的**共用地基**在 memoryParts.tsx（卡片与详情弹窗共用一份，
+ * 避免两处各写一份漂移）；这里只做卡片骨架 + 操作行 + 数据编排。
  *
  * 刷新联动：所有 mutation 成功后失效 `["memories"]` 前缀——`memoriesQueryKey(params)`
  * 是其下的精确子键，前缀失效连带刷新本 tab 的两组查询与 /system/memories 管理页。
@@ -39,6 +42,16 @@ import {
   EmptyState,
   SegmentedTabs,
 } from "@/src/components/ui";
+import { TeamMemoryDetailModal } from "@/src/components/teams/TeamMemoryDetailModal";
+import {
+  absoluteTime,
+  AutoInjectBadge,
+  formatRelativeTime,
+  MergedMarker,
+  RefCountBadge,
+  TopicChips,
+  TypeChips,
+} from "@/src/components/teams/memoryParts";
 import {
   neutral,
   space,
@@ -51,251 +64,7 @@ import {
 /** 单页条数（显式传，避免服务端改默认时本 tab 行为漂移）。 */
 const PAGE_SIZE = 20;
 
-/** 主题标签最多渲染个数，超出折叠为 +N。 */
-const MAX_TOPIC_TAGS = 6;
-
-/** 品牌青：自动注入开启态 / 引用计数强调色（与管理页同源）。 */
-const INJECT_ON = "#0D9488";
-
-const MINUTE_MS = 60_000;
-const HOUR_MS = 60 * MINUTE_MS;
-const DAY_MS = 24 * HOUR_MS;
-
-/* ------------------------------ 纯函数工具 ------------------------------ */
-
-/** 平台记忆分类法的三个类型标签 → 实心着色；其余主题词 → 中性描边芯片。 */
-const TYPE_TAGS = ["howto", "pitfall", "constraint"] as const;
-type MemoryTypeTag = (typeof TYPE_TAGS)[number];
-
-const TYPE_META: Record<
-  MemoryTypeTag,
-  { label: string; color: string; bg: string; border: string }
-> = {
-  howto: {
-    label: "做法",
-    color: "#0284C7",
-    bg: "rgba(2,132,199,0.10)",
-    border: "rgba(2,132,199,0.24)",
-  },
-  pitfall: {
-    label: "坑",
-    color: "#B45309",
-    bg: "rgba(217,119,6,0.12)",
-    border: "rgba(217,119,6,0.26)",
-  },
-  constraint: {
-    label: "约束",
-    color: "#BE123C",
-    bg: "rgba(225,29,72,0.10)",
-    border: "rgba(225,29,72,0.24)",
-  },
-};
-
-const TYPE_TAG_SET: ReadonlySet<string> = new Set<string>(TYPE_TAGS);
-
-/** 拆分 tags：类型标签（实心）与主题词（中性描边）；非法元素跳过而非崩溃。 */
-function splitTags(tags: string[] | null | undefined): {
-  types: MemoryTypeTag[];
-  topics: string[];
-} {
-  const types: MemoryTypeTag[] = [];
-  const topics: string[] = [];
-  for (const raw of Array.isArray(tags) ? tags : []) {
-    const tag = typeof raw === "string" ? raw.trim() : "";
-    if (!tag) continue;
-    const key = tag.toLowerCase();
-    if (TYPE_TAG_SET.has(key)) {
-      const type = key as MemoryTypeTag;
-      if (!types.includes(type)) types.push(type);
-    } else if (!topics.includes(tag)) {
-      topics.push(tag);
-    }
-  }
-  return { types, topics };
-}
-
-/** 相对时间：刚刚 / N 分钟前 / N 小时前 / N 天前（7 天内）/ M月D日。 */
-function formatRelativeTime(iso: string, now: number = Date.now()): string {
-  const ts = Date.parse(iso);
-  if (Number.isNaN(ts)) return "时间未知";
-  const diff = now - ts;
-  if (diff < MINUTE_MS) return "刚刚";
-  if (diff < HOUR_MS) return `${Math.floor(diff / MINUTE_MS)} 分钟前`;
-  if (diff < DAY_MS) return `${Math.floor(diff / HOUR_MS)} 小时前`;
-  if (diff < 7 * DAY_MS) return `${Math.floor(diff / DAY_MS)} 天前`;
-  const d = new Date(ts);
-  return `${d.getMonth() + 1}月${d.getDate()}日`;
-}
-
-/* ------------------------------ 局部小组件 ------------------------------ */
-
-/** 类型芯片（实心着色）；无类型标签则整块不渲染。 */
-function TypeChips({ tags }: { tags: string[] | null | undefined }) {
-  const { types } = splitTags(tags);
-  if (types.length === 0) return null;
-  return (
-    <>
-      {types.map((type) => {
-        const meta = TYPE_META[type];
-        return (
-          <span
-            key={type}
-            data-testid="team-memory-type-badge"
-            data-type={type}
-            title={type}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              padding: `${space.xs}px ${space.sm}px`,
-              borderRadius: radius.pill,
-              backgroundColor: meta.bg,
-              border: `1px solid ${meta.border}`,
-              color: meta.color,
-              fontSize: fontSize.xs,
-              fontWeight: 500,
-              lineHeight: 1.4,
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-            }}
-          >
-            {meta.label}
-          </span>
-        );
-      })}
-    </>
-  );
-}
-
-/** 主题标签芯片（中性描边），超出折叠为 +N。 */
-function TopicChips({ tags }: { tags: string[] | null | undefined }) {
-  const { topics } = splitTags(tags);
-  if (topics.length === 0) return null;
-  const shown = topics.slice(0, MAX_TOPIC_TAGS);
-  const rest = topics.length - shown.length;
-  const chip: CSSProperties = {
-    display: "inline-flex",
-    alignItems: "center",
-    padding: `1px ${space.sm}px`,
-    borderRadius: radius.pill,
-    border: `1px solid ${neutral[200]}`,
-    backgroundColor: "transparent",
-    color: neutral[500],
-    fontSize: fontSize.xs,
-    lineHeight: 1.5,
-    whiteSpace: "nowrap",
-  };
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: space.xs }}>
-      {shown.map((tag) => (
-        <span key={tag} style={chip}>
-          {tag}
-        </span>
-      ))}
-      {rest > 0 && (
-        <span style={chip} title={topics.slice(MAX_TOPIC_TAGS).join("、")}>
-          +{rest}
-        </span>
-      )}
-    </div>
-  );
-}
-
-/** 自动注入徽标（只读形态：本 tab 不提供编辑，开关在管理页）。 */
-function AutoInjectBadge({ on }: { on: boolean }) {
-  return (
-    <span
-      data-testid="team-memory-inject-badge"
-      data-auto-inject={on ? "true" : "false"}
-      title={on ? "每轮自动注入给 Agent" : "仅 memory_search 按需检索"}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        padding: `${space.xs}px ${space.sm}px`,
-        borderRadius: radius.pill,
-        backgroundColor: on ? "rgba(13,148,136,0.08)" : neutral[100],
-        border: `1px solid ${on ? "rgba(13,148,136,0.22)" : neutral[200]}`,
-        color: on ? INJECT_ON : neutral[500],
-        fontSize: fontSize.xs,
-        fontWeight: 500,
-        lineHeight: 1.4,
-        whiteSpace: "nowrap",
-        flexShrink: 0,
-      }}
-    >
-      {on ? "注入中" : "仅检索"}
-    </span>
-  );
-}
-
-/**
- * 引用次数徽标：refCount 是记忆重要度排序的核心指标（被检索/注入命中次数）。
- * 0 次 = 尚未被用到，用中性色弱化；≥1 用品牌青强调。
- */
-function RefCountBadge({
-  count,
-  lastUsedAt,
-}: {
-  count: number;
-  lastUsedAt?: string | null;
-}) {
-  const safe = Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0;
-  const hot = safe > 0;
-  const lastUsedText = lastUsedAt
-    ? `，最近一次 ${formatRelativeTime(lastUsedAt)}`
-    : "";
-  return (
-    <span
-      data-testid="team-memory-refcount-badge"
-      data-ref-count={safe}
-      title={
-        hot
-          ? `被检索命中 ${safe} 次${lastUsedText}`
-          : "尚未被检索命中"
-      }
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        padding: `${space.xs}px ${space.sm}px`,
-        borderRadius: radius.pill,
-        backgroundColor: hot ? "rgba(13,148,136,0.08)" : neutral[100],
-        border: `1px solid ${hot ? "rgba(13,148,136,0.22)" : neutral[200]}`,
-        color: hot ? INJECT_ON : neutral[400],
-        fontSize: fontSize.xs,
-        fontWeight: 500,
-        lineHeight: 1.4,
-        whiteSpace: "nowrap",
-        flexShrink: 0,
-      }}
-    >
-      引用 {safe}
-    </span>
-  );
-}
-
-/** 「已合并至 <id>」只读标记（合并由 Agent 工具执行，本 tab 不提供操作）。 */
-function MergedMarker({ mergedIntoId }: { mergedIntoId: string }) {
-  return (
-    <span
-      data-testid="team-memory-merged-marker"
-      title={`该记忆已被合并进 ${mergedIntoId}，不再参与注入与检索`}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        padding: `${space.xs}px ${space.sm}px`,
-        borderRadius: radius.pill,
-        backgroundColor: neutral[100],
-        border: `1px solid ${neutral[200]}`,
-        color: neutral[500],
-        fontSize: fontSize.xs,
-        lineHeight: 1.4,
-        whiteSpace: "nowrap",
-        flexShrink: 0,
-      }}
-    >
-      已合并至 {mergedIntoId}
-    </span>
-  );
-}
+/* ------------------------------ 局部样式常量 ------------------------------ */
 
 const actionButtonStyle: CSSProperties = {
   padding: `2px ${space.sm + 2}px`,
@@ -343,25 +112,28 @@ interface MemoryRowProps {
   canOperate: boolean;
   /** 该行有 mutation 在途。 */
   pending: boolean;
+  /** 点击卡片打开详情弹窗。 */
+  onOpenDetail: (memory: MemoryItem) => void;
   onArchive: (memory: MemoryItem) => void;
   onRestore: (memory: MemoryItem) => void;
   onRequestPurge: (memory: MemoryItem) => void;
 }
 
-/** 单条记忆卡片：芯片行 + 摘要 + 正文预览 + 时间 + 操作行。 */
+/** 单条记忆卡片：芯片行 + 摘要 + 正文预览 + 时间 + 操作行（整卡点击看详情）。 */
 function MemoryRow({
   memory,
   archived,
   canOperate,
   pending,
+  onOpenDetail,
   onArchive,
   onRestore,
   onRequestPurge,
 }: MemoryRowProps) {
   const title = memory.description?.trim() || "";
-  const createdAtFull = new Date(memory.createdAt).toLocaleString("zh-CN");
+  const createdAtFull = absoluteTime(memory.createdAt);
   const lastUsed = memory.lastUsedAt
-    ? `最近命中：${new Date(memory.lastUsedAt).toLocaleString("zh-CN")}`
+    ? `最近命中：${absoluteTime(memory.lastUsedAt)}`
     : null;
   // 已合并行不可恢复（refCount 已转移给目标行，再恢复会二次计数）；
   // 「永久删除」保留，作为清理误合并的出口。
@@ -380,82 +152,112 @@ function MemoryRow({
         display: "flex",
         flexDirection: "column",
         gap: space.sm,
+        transition: "border-color .15s ease, background-color .15s ease",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = "rgba(13,148,136,0.34)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = neutral[200];
       }}
     >
+      {/* 内容区可点击打开详情；操作行在其外层，互不干扰（对齐管理页 memory-card-open 结构） */}
       <div
+        data-testid="team-memory-open"
+        role="button"
+        tabIndex={0}
+        aria-label={`查看记忆详情：${title || memory.content.slice(0, 40)}`}
+        title="点击查看详情"
+        onClick={() => onOpenDetail(memory)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpenDetail(memory);
+          }
+        }}
         style={{
           display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
+          flexDirection: "column",
           gap: space.sm,
+          cursor: "pointer",
         }}
       >
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            flexWrap: "wrap",
-            gap: space.xs,
-            minWidth: 0,
+            justifyContent: "space-between",
+            gap: space.sm,
           }}
         >
-          <TypeChips tags={memory.tags} />
-          <AutoInjectBadge on={!!memory.autoInject} />
-          <RefCountBadge
-            count={memory.refCount}
-            lastUsedAt={memory.lastUsedAt}
-          />
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: space.xs,
+              minWidth: 0,
+            }}
+          >
+            <TypeChips tags={memory.tags} />
+            <AutoInjectBadge on={!!memory.autoInject} />
+            <RefCountBadge
+              count={memory.refCount}
+              lastUsedAt={memory.lastUsedAt}
+            />
+          </div>
+          <span
+            title={lastUsed ? `${createdAtFull}\n${lastUsed}` : createdAtFull}
+            style={{
+              fontSize: fontSize.xs,
+              color: neutral[400],
+              whiteSpace: "nowrap",
+              flexShrink: 0,
+            }}
+          >
+            {formatRelativeTime(memory.createdAt)}
+          </span>
         </div>
-        <span
-          title={lastUsed ? `${createdAtFull}\n${lastUsed}` : createdAtFull}
-          style={{
-            fontSize: fontSize.xs,
-            color: neutral[400],
-            whiteSpace: "nowrap",
-            flexShrink: 0,
-          }}
-        >
-          {formatRelativeTime(memory.createdAt)}
-        </span>
-      </div>
 
-      {title && (
+        {title && (
+          <div
+            style={{
+              fontSize: fontSize.sm,
+              fontWeight: 600,
+              color: neutral[700],
+              lineHeight: 1.5,
+            }}
+          >
+            {title}
+          </div>
+        )}
+
         <div
+          data-testid="team-memory-content"
           style={{
             fontSize: fontSize.sm,
-            fontWeight: 600,
-            color: neutral[700],
-            lineHeight: 1.5,
+            color: neutral[600],
+            lineHeight: 1.6,
+            display: "-webkit-box",
+            WebkitLineClamp: 3,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+            whiteSpace: "pre-wrap",
           }}
         >
-          {title}
+          {memory.content}
         </div>
-      )}
 
-      <div
-        data-testid="team-memory-content"
-        style={{
-          fontSize: fontSize.sm,
-          color: neutral[600],
-          lineHeight: 1.6,
-          display: "-webkit-box",
-          WebkitLineClamp: 3,
-          WebkitBoxOrient: "vertical",
-          overflow: "hidden",
-          whiteSpace: "pre-wrap",
-        }}
-      >
-        {memory.content}
+        <TopicChips tags={memory.tags} />
+
+        {memory.mergedIntoId && (
+          <MergedMarker mergedIntoId={memory.mergedIntoId} />
+        )}
       </div>
-
-      <TopicChips tags={memory.tags} />
-
-      {memory.mergedIntoId && (
-        <MergedMarker mergedIntoId={memory.mergedIntoId} />
-      )}
 
       {canOperate && (
         <div
+          onClick={(e) => e.stopPropagation()}
           style={{
             display: "flex",
             alignItems: "center",
@@ -554,6 +356,7 @@ interface MemorySectionProps {
   canOperateNonTeamRows: boolean;
   onPageChange: (page: number) => void;
   onRetry: () => void;
+  onOpenDetail: (memory: MemoryItem) => void;
   onArchive: (memory: MemoryItem) => void;
   onRestore: (memory: MemoryItem) => void;
   onRequestPurge: (memory: MemoryItem) => void;
@@ -574,6 +377,7 @@ function MemorySection({
   canOperateNonTeamRows,
   onPageChange,
   onRetry,
+  onOpenDetail,
   onArchive,
   onRestore,
   onRequestPurge,
@@ -645,6 +449,7 @@ function MemorySection({
               memory.level === "team" ? true : canOperateNonTeamRows
             }
             pending={pendingId === memory.id}
+            onOpenDetail={onOpenDetail}
             onArchive={onArchive}
             onRestore={onRestore}
             onRequestPurge={onRequestPurge}
@@ -728,6 +533,8 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
   const [pendingId, setPendingId] = useState<string | null>(null);
   /** 永久删除确认目标。 */
   const [purgeTarget, setPurgeTarget] = useState<MemoryItem | null>(null);
+  /** 详情弹窗选中的行 id（null = 关闭）。存 id 而非对象：失效刷新后内容自动跟最新数据。 */
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   /* ---------- 搜索防抖 300ms（抄管理页 :1036-1042） ---------- */
   useEffect(() => {
@@ -735,10 +542,11 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
     return () => clearTimeout(timer);
   }, [keyword]);
 
-  /* ---------- 筛选 / 搜索变化：两组各自回第一页 ---------- */
+  /* ---------- 筛选 / 搜索变化：两组各自回第一页，并关掉详情 ---------- */
   useEffect(() => {
     setTeamPage(1);
     setGlobalPage(1);
+    setDetailId(null);
   }, [archived, debouncedKeyword]);
 
   /* ---------- 查询参数（两组各自独立翻页） ---------- */
@@ -821,6 +629,41 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
   const globalItems = useMemo(
     () => globalQuery.data?.items ?? [],
     [globalQuery.data],
+  );
+
+  /* ---------- 详情目标：始终从列表数据里取，行被归档/删除后自然消失 ---------- */
+  const detailMemory = useMemo(() => {
+    if (!detailId) return null;
+    return (
+      teamItems.find((m) => m.id === detailId) ??
+      globalItems.find((m) => m.id === detailId) ??
+      null
+    );
+  }, [detailId, teamItems, globalItems]);
+
+  /* ---------- 选中行从列表消失（如刚被归档/删除）→ 关闭详情 ---------- */
+  useEffect(() => {
+    if (!detailId) return;
+    // 首次加载完成前不清（此时列表还空，误关）
+    if (teamQuery.isLoading || globalQuery.isLoading) return;
+    if (!detailMemory) setDetailId(null);
+  }, [detailId, detailMemory, teamQuery.isLoading, globalQuery.isLoading]);
+
+  const detailCanOperate = detailMemory
+    ? detailMemory.level === "team"
+      ? true
+      : isAdmin
+    : false;
+
+  const closeDetail = useCallback(() => setDetailId(null), []);
+
+  const archiveFromDetail = useCallback(
+    (m: MemoryItem) => archiveMutation.mutate(m.id),
+    [archiveMutation]
+  );
+  const restoreFromDetail = useCallback(
+    (m: MemoryItem) => restoreMutation.mutate(m.id),
+    [restoreMutation]
   );
 
   if (!teamId) {
@@ -912,6 +755,7 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
         canOperateNonTeamRows
         onPageChange={setTeamPage}
         onRetry={() => void teamQuery.refetch()}
+        onOpenDetail={(m) => setDetailId(m.id)}
         onArchive={(m) => archiveMutation.mutate(m.id)}
         onRestore={(m) => restoreMutation.mutate(m.id)}
         onRequestPurge={setPurgeTarget}
@@ -932,9 +776,25 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
         canOperateNonTeamRows={isAdmin}
         onPageChange={setGlobalPage}
         onRetry={() => void globalQuery.refetch()}
+        onOpenDetail={(m) => setDetailId(m.id)}
         onArchive={(m) => archiveMutation.mutate(m.id)}
         onRestore={(m) => restoreMutation.mutate(m.id)}
         onRequestPurge={setPurgeTarget}
+      />
+
+      {/* ---------- 记忆详情弹窗（点卡片打开；永久删除时先关详情再弹确认） ---------- */}
+      <TeamMemoryDetailModal
+        memory={detailMemory}
+        archived={archived}
+        canOperate={detailCanOperate}
+        pending={!!detailMemory && pendingId === detailMemory.id}
+        onArchive={archiveFromDetail}
+        onRestore={restoreFromDetail}
+        onRequestPurge={(m) => {
+          closeDetail();
+          setPurgeTarget(m);
+        }}
+        onClose={closeDetail}
       />
 
       {/* ---------- 永久删除二次确认（不可恢复） ---------- */}
