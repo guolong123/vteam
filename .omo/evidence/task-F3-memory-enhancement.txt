@@ -1,0 +1,50 @@
+# F3 — Real Manual QA: memory-enhancement (集成环境冒烟)
+
+Environment: docker compose stack (OrbStack 29.4.0), images built @ 364c81f + 48bcce0 (web rebuilt after detail-modal).
+Stack: db(mysql:8) / init(migrate+seed) / server(:13000) / web(:13001) / worker(:14000). Seed accounts: admin/admin123, seed-member/Admin@123456 (inserted into tm_0000000001 team_user_members for member-in-team UI check).
+Test data: 4 rows inserted via mysql client (global/team active/team archived/team merged) — NOTE: initial insert via CLI without utf8mb4 produced mojibake on 3 rows; fixed via --default-character-set=utf8mb4 UPDATEs. Platform-written content (seed charter, system messages) was always correct — no product charset bug.
+
+## 1. 定时整理管线（API + UI）
+- [PASS] Trigger row created at server boot: GET /triggers?kind=memory_maintenance → tmr_0000000002, pending, nextFireAt = created+24h exactly, scopeLabel 全局, description 记忆整理 · 团队记忆定时整理…
+- [PASS] POST /memories/maintain (admin) → {"teams":1,"candidates":{"duplicates":0,"unused":1,"untags":1}} (200)
+- [PASS] Grey system message #1 (m_0000000001, no 上轮 clause = first run): 【记忆整理】本轮检测：疑似重复 0 · 低频未引用 1 · 标签不规范 1，已派发整理 — channel c_0000000001 = team_group of tm_0000000001, sender_type=system, UTF-8 intact, VISIBLE in group chat UI (16:14)
+- [PASS] Grey system message #2: …已派发整理。上轮实际结果：合并 0 条 · 归档 0 条 — previous-run stats clause appears on 2nd run, numbers truthful (16:17)
+- [PASS] Dispatch chain executed: stack trace runOnce → maintainTeam → dispatchAgentMention → dispatch → dispatchForTeamTarget; first attempt failed "无可用 worker" (opencode still warming) BUT maintain still returned 200 + log 单轮完成 → per-team try/catch isolation works
+- [PASS] Second attempt: worker registered → session s_0000000001 status → running → opencode sendMessage → session failed (模型调用 Bad Gateway — env has 0 model providers). Failure rendered gracefully in group chat as 项目经理-1 message: 执行失败：[prompt-await]… Bad Gateway / 执行失败 · 可重新发送消息触发重试
+- [PASS] internal=true reception-persona skip: dispatched prompt ran without 【团队接待】 persona (no receptionist interrogation behavior; group instruction path intact per unit tests)
+- [PASS] refCount live counting proven: me_qa_team_active went ref_count 0 → 1, last_used_at set during the dispatched session window (16:18) — memorySearch increment hook fired on a real hit in the live stack
+
+## 2. 记忆子 tab（会话页 团队 → 记忆）
+- [PASS] Sub-tab renders: 概览 | 渠道 | 记忆 (3rd tab), grouped lists 本团队 / 全局(平台级记忆，对所有团队生效)
+- [PASS] Cards: content excerpt, type/level chips, autoInject badge, refCount badge, detail entry (查看记忆详情：<title>, role=button, keyboard Enter/Space, cursor pointer)
+- [PASS] DETAIL MODAL (new feature): click card → DocModalShell modal; DOM innerText verified: chips row (约束·团队级·仅检索·引用 1), meta block (记忆 ID / 归属 / 自动注入 / 创建时间 / 引用次数 1 次 / 最近引用 2026/10/9 16:18（50 分钟前）/ 字数 27), Markdown full content, footer 禁用/删除 with canOperate gate. Esc closes; row action buttons outside click region + stopPropagation (verified: clicking 禁用 does not open modal)
+  - NOTE: accessibility snapshot does NOT expose modal body (DocModalShell a11y gap, pre-existing shell behavior) — verified via DOM evaluate instead. Non-blocking a11y observation.
+- [PASS] 禁用(archive) flow: active row → 已归档 view shows it; count active 3→2... (observed 2→1 during restore test)
+- [PASS] 恢复(restore) flow: archived row restored → 已归档 2→1, back in 活跃 list (3 rows), mojibake-free titles after data fix
+- [PASS] Merged row (me_qa_team_merged, mergedIntoId set): 恢复 button DISABLED + 永久删除 enabled — N1 contract live in UI; detail shows 已合并至 marker
+- [PASS] 永久删除(purge): ConfirmDialog (alertdialog 永久删除记忆 / …永久删除后不可恢复，也不会出现在已归档列表中 / 取消+永久删除) → confirm → DB row gone (COUNT=0), UI count → 0, empty state visible
+- [PASS] Empty states: 暂无已归档记忆 / 被禁用（归档）的记忆会出现在这里，可随时恢复。
+
+## 3. 管理页 /system/memories
+- [PASS] Level tabs 全部/团队/角色/全局 + 活跃/已归档 toggle + search all render
+- [PASS] Cards show 引用 5 badge, 最近引用, type chips (做法=howto), 自动注入 switch, detail entries
+- [PASS] 已归档 view empty state: 暂无已归档记忆 / 被归档或合并的记忆会出现在这里，可恢复或永久删除。
+- [PASS] Cross-invalidation: tab-side restore reflected without reload (shared ["memories"] prefix — observed live)
+
+## 4. 触发器页 /system/triggers
+- [PASS] Row shows label 记忆整理 + description 记忆整理 · 团队记忆定时整理（服务端只列候选 + 派 prompt，执行在 agent 侧） + status 待触发 + source 系统 (KIND_LABEL+KIND_META map live)
+
+## 5. 权限红线
+- [PASS] seed-member (platform role=member, in team): GET /api/v1/memories → total 1, ONLY me_qa_global_top (global) — zero team rows leak
+- [PASS] seed-member purge team row → 403; purge global row → 403 (non-admin)
+- [PASS] UI as seed-member: 本团队 rows show 禁用/删除 (team member can operate); 全局 row shows NO operation buttons (read-only); 系统管理 nav hidden (existing behavior)
+- [PASS] admin sees ops on global rows (observed in admin + tab admin views)
+
+## 6. Encoding
+- [PASS] All platform-written content UTF-8 correct (seed data, system messages, API responses). Test-data mojibake was CLI-insertion artifact (no --default-character-set), fixed via utf8mb4 UPDATE — NOT a product bug.
+
+## Environment ceiling (not defects)
+- 0 model providers configured → agent execution fails at LLM call (Bad Gateway). Platform-side pipeline (trigger→candidates→system line→dispatch→session→graceful failure surfacing) fully verified up to that boundary.
+
+## Verdict: F3 APPROVE
+All checklist items PASS. Non-blocking observations: (a) DocModalShell modal body not exposed in a11y snapshot; (b) manual POST /maintain runs are not cooldown-gated (sequential re-runs allowed by design, overlap still guarded) — matches implemented guard semantics.

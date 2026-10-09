@@ -80,7 +80,7 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
 ## Todos
 > Implementation + Test = ONE todo. Never separate.
 <!-- APPEND TASK BATCHES BELOW THIS LINE WITH edit/apply_patch - never rewrite the headers above. -->
-- [ ] 1. mem-metric-schema：Memory 三新列 + 迁移守卫 + 重要度公式
+- [x] 1. mem-metric-schema：Memory 三新列 + 迁移守卫 + 重要度公式
   What to do / Must NOT do:
   - `server/prisma/schema.prisma` `model Memory`（:1020-1057）新增：`refCount Int @default(0) @map("ref_count")`、`lastUsedAt DateTime? @map("last_used_at")`、`mergedIntoId String? @map("merged_into_id")`；索引 `@@index([refCount], map: "idx_memories_ref_count")`（命名对齐既有 `idx_memories_*` 风格）
   - 生成迁移：`cd server && npx prisma migrate dev --name memory_refcount`（产物 server/prisma/migrations/<ts>_memory_refcount/migration.sql，仅 `ADD COLUMN` + `CREATE INDEX`，**无回填 UPDATE**）；`npx prisma generate`
@@ -94,7 +94,7 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
   QA scenarios (name the exact tool + invocation): happy——`npx prisma migrate dev --name memory_refcount` 生成迁移、`npx prisma migrate deploy` 幂等通过；failure——守卫测试在人为向迁移注入回填 UPDATE 时失败（验证断言真实生效）。Evidence .omo/evidence/task-1-memory-enhancement.txt
   Commit: Y | feat(memory): 记忆引用计数字段与重要度公式
 
-- [ ] 2. mem-rest-perm：成员感知查询 + 归档/恢复/硬删端点
+- [x] 2. mem-rest-perm：成员感知查询 + 归档/恢复/硬删端点
   What to do / Must NOT do:
   - `dto/query-memories.dto.ts`：`QueryMemoriesDto` 加 `archived?: boolean`（@Transform "true"/"false"→bool + @IsIn([true,false])，抄 :46-57 `autoInject` 三态模式；undefined=只查活跃 `deletedAt:null`，true=只查已归档 `deletedAt not null`）
   - `memories.service.ts`：
@@ -113,7 +113,7 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
   QA scenarios (name the exact tool + invocation): happy——jest 断言成员 GET 响应 items 全部满足 `level==='global' || teamId===自己团队`；failure——构造跨团队 purge 断言 403、global purge 断言 403、restore 撞重复断言 409、漏过滤时专用测试用例失败。Evidence .omo/evidence/task-2-memory-enhancement.txt
   Commit: Y | feat(memory): 记忆接口成员感知权限与归档恢复硬删
 
-- [ ] 3. mem-web-api：web 记忆 API wrapper 抽取
+- [x] 3. mem-web-api：web 记忆 API wrapper 抽取
   What to do / Must NOT do:
   - 新建 `web/src/api/memories.ts`（对齐 `web/src/api/teams.ts` typed helper 风格）：
     - 类型 `MemoryItem`（含新字段 `refCount: number`、`lastUsedAt?: string|null`、`mergedIntoId?: string|null`、既有全字段）、`MemoriesResponse {items, total, page, pageSize}`
@@ -127,7 +127,7 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
   QA scenarios (name the exact tool + invocation): happy——build+lint 绿且管理页列表/筛选/删除按钮行为与改前一致（Playwright 冒烟：/system/memories 渲染、分页、删除确认弹窗出现）；failure——类型错误导致 build 失败即验收不通过。Evidence .omo/evidence/task-3-memory-enhancement.txt
   Commit: Y | refactor(web): 记忆 API wrapper 抽取
 
-- [ ] 4. mem-search-rank：memorySearch 重要度排序 + 引用计数
+- [x] 4. mem-search-rank：memorySearch 重要度排序 + 引用计数
   What to do / Must NOT do:
   - `server/src/platform-mcp/platform-mcp.service.ts` `memorySearch`（:3849-3994）两处改动：
     1. **计数（在最终 `.slice(0, limit)` 之后）**：取 slice 结果的 `id` 数组 → `void this.prisma.memory.updateMany({ where: { id: { in: ids } }, data: { refCount: { increment: 1 }, lastUsedAt: new Date() } }).catch(err => this.logger.warn(...))`——fire-and-forget，**失败仅告警绝不影响返回值**；ids 为空跳过；`{increment:1}` 惯例抄 trigger.service.ts:589
@@ -140,7 +140,7 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
   QA scenarios (name the exact tool + invocation): happy——jest 断言命中 2 条时 updateMany 的 `id.in` 恰为这 2 个；failure——mock updateMany 抛错断言 memorySearch 仍返回、断言候选集中未返回的行不在 `id.in` 中。Evidence .omo/evidence/task-4-memory-enhancement.txt
   Commit: Y | feat(memory): 检索命中计数与重要度排序
 
-- [ ] 5. mem-inject-rank：自动注入按重要度选 top5
+- [x] 5. mem-inject-rank：自动注入按重要度选 top5
   What to do / Must NOT do:
   - `server/src/chat/worker-dispatcher.ts` `buildTeamMemoryIndex`（:1954-2014）：候选查询从 `orderBy:{createdAt:'desc'}, take:5` 改为 `orderBy:[{refCount:'desc'},{createdAt:'desc'}], take:50`（走 idx_memories_ref_count）→ 内存 `computeMemoryImportance` 降序 → `slice(0, 5)` → 进入既有 1200 字预算/截断逻辑（:2008 附近，保持不变）
   - 检查 `MEMORY_INSTRUCTION`（:272-300）与注入文案（:686-688）：若含"最新 N 条"类表述则改为"按重要度"；无则不动
@@ -152,7 +152,7 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
   QA scenarios (name the exact tool + invocation): happy——jest 断言高引用行胜出且注入条数=5；failure——断言若无 recency 项则全新记忆永不可见的用例（防饿死验证）。Evidence .omo/evidence/task-5-memory-enhancement.txt
   Commit: Y | feat(memory): 自动注入按重要度选记忆
 
-- [ ] 6. mem-tab：会话页团队 tab 下新增"记忆"子 tab
+- [x] 6. mem-tab：会话页团队 tab 下新增"记忆"子 tab
   What to do / Must NOT do:
   - `web/src/components/teams/TeamRightPanel.tsx` 三处接线：`:586` `type TeamSubTab = "overview" | "channels" | "memories"`；`:945-955` 按钮数组追加 `{ key: "memories" as const, label: "记忆" }`（按钮行已 overflowX:auto，无需布局改动）；`:1325` channels 块之后追加 `{subTab === "memories" && <TeamMemoriesTab teamId={team?.id ?? ""} teamName={team?.name} />}`（`team` prop 在 TeamSubTabs 作用域内已有）
   - 新建 `web/src/components/teams/TeamMemoriesTab.tsx`（tab body 抽独立文件，对齐 modal 抽离惯例）：
@@ -169,7 +169,7 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
   QA scenarios (name the exact tool + invocation): happy——浏览器打开会话页 → 团队 tab → 记忆子 tab，执行归档+恢复闭环；failure——API 403（成员操作 global）时按钮本就隐藏，直接调接口返回 403 且 UI 显示 isApiError 消息。Evidence .omo/evidence/task-6-memory-enhancement.txt
   Commit: Y | feat(web): 会话页记忆子 tab
 
-- [ ] 7. mem-admin-archive：管理页归档视图 + refCount 展示
+- [x] 7. mem-admin-archive：管理页归档视图 + refCount 展示
   What to do / Must NOT do:
   - `web/app/(main)/system/memories/page.tsx`：
     - `deleteMutation` 语义改为归档：按钮/确认文案从"删除…不可恢复"改为"归档（可在已归档视图恢复）"，调用仍为 `memoriesApi.archive`
@@ -185,7 +185,7 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
   QA scenarios (name the exact tool + invocation): happy——归档/恢复/永久删除三操作闭环 + refCount 徽标渲染；failure——restore 遇活跃重复返回 409 时 UI 显示后端 message。Evidence .omo/evidence/task-7-memory-enhancement.txt
   Commit: Y | feat(web): 记忆管理页归档视图与引用展示
 
-- [ ] 8. mem-mcp-tools：memory_archive / memory_merge MCP 工具
+- [x] 8. mem-mcp-tools：memory_archive / memory_merge MCP 工具
   What to do / Must NOT do:
   - `server/src/platform-mcp/platform-mcp.tools.ts`：新增 `memoryArchiveSchema`（`{memoryId: string, selfInstanceId: string}`）与 `memoryMergeSchema`（`{sourceId: string, targetId: string, selfInstanceId: string}`），注册 `vteam_memory_archive`（description：归档=可恢复软删，从检索/注入消失）与 `vteam_memory_merge`（description：把 source 内容并入 target、引用计数累加、source 归档，用于语义重复合并）——注册位置与风格抄 :1095-1117 三工具
   - `server/src/platform-mcp/platform-mcp.service.ts`：
@@ -201,7 +201,7 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
   QA scenarios (name the exact tool + invocation): happy——jest 断言 merge 事务：refCount 累加+mergedIntoId+软删原子完成；failure——跨团队/global 调用 403、已归档 source 404、同 id 400 断言。Evidence .omo/evidence/task-8-memory-enhancement.txt
   Commit: Y | feat(memory): 记忆归档与合并 MCP 工具
 
-- [ ] 9. mem-trigger-pipeline：定时整理触发器 + Agent 派发 + 手动端点
+- [x] 9. mem-trigger-pipeline：定时整理触发器 + Agent 派发 + 手动端点
   What to do / Must NOT do:
   - **Trigger 注册四处**：`common/constants/trigger.constants.ts` `TRIGGER_KIND`（:15-22）加 `MEMORY_MAINTENANCE: 'memory_maintenance'`；`TRIGGER_KIND_LABEL`（:87-94）加「记忆整理」；`timers/triggers.service.ts` :712-770 per-kind 描述 switch 加分支；`QueryTriggersDto.kind` 的 `@IsIn(Object.values(TRIGGER_KIND))` 自动跟随（确认即可）。另 grep web 端是否有 kind 文案映射（搜 `progression_patrol`/`TRIGGER_KIND`），有则同步加标签
   - **新建 `server/src/memories/memory-maintenance.service.ts`**（注册进 `MemoriesModule` providers；module 加 import `TimersModule`、`ChatModule`、`RealtimeModule`（已 import）——先确认 ChatModule 不反向依赖 MemoriesModule：worker-dispatcher 直用 prisma 不依赖 MemoriesService，应无环，以 tsc 为准；若环则改走 handler 注册在 chat 侧+service 只出数据的两段式，commit 注明）
@@ -226,10 +226,10 @@ Your next move: approve 后执行 `$start-work memory-enhancement`，或先运�
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit okay before declaring complete.
-- [ ] F1. Plan compliance audit：逐条核对 Scope Must have / Must NOT have（重点：DELETE 仍=软删、PATCH 仍 AdminGuard、非 admin findAll OR 过滤存在、注入路径无 updateMany 计数、global 行 agent 侧 403、无服务端 LLM 调用、无定时硬删）
-- [ ] F2. Code quality review：`cd server && npm run test && npx tsc --noEmit` + `cd web && npm run build && npm run lint`；检查无 `as any`/`@ts-ignore`、空 catch、错误吞没（计数 catch 必须 logger.warn）
-- [ ] F3. Real manual QA：集成环境冒烟——会话页记忆子 tab 全操作闭环（列表/归档/恢复/硬删/refCount 徽标/非 admin 全局行只读）；`POST /memories/maintain` → 群聊出现灰色 system 条 + 主 Agent 被派发；管理页归档视图与 tab 双向同步失效；`GET /memories` 非 admin 跨团队不可见
-- [ ] F4. Scope fidelity：git diff 范围核对——未动 roles.constants 权限矩阵、未动任务状态机、未动 worker/、未引入新依赖（package.json 零 diff）
+- [x] F1. Plan compliance audit：逐条核对 Scope Must have / Must NOT have（重点：DELETE 仍=软删、PATCH 仍 AdminGuard、非 admin findAll OR 过滤存在、注入路径无 updateMany 计数、global 行 agent 侧 403、无服务端 LLM 调用、无定时硬删）
+- [x] F2. Code quality review：`cd server && npm run test && npx tsc --noEmit` + `cd web && npm run build && npm run lint`；检查无 `as any`/`@ts-ignore`、空 catch、错误吞没（计数 catch 必须 logger.warn）
+- [x] F3. Real manual QA：集成环境冒烟——会话页记忆子 tab 全操作闭环（列表/归档/恢复/硬删/refCount 徽标/非 admin 全局行只读）；`POST /memories/maintain` → 群聊出现灰色 system 条 + 主 Agent 被派发；管理页归档视图与 tab 双向同步失效；`GET /memories` 非 admin 跨团队不可见
+- [x] F4. Scope fidelity：git diff 范围核对——未动 roles.constants 权限矩阵、未动任务状态机、未动 worker/、未引入新依赖（package.json 零 diff）
 
 ## Commit strategy
 - 每个 todo 完成后单独 commit（约定式提交，scope=memory/web）：`feat(memory): <subject>` / `feat(web): <subject>` / `refactor(web): <subject>`；执行完成后如用户要求可 squash（AGENTS.md「同一需求不要新增 commit」优先，用 `git commit --amend` 合并后续小改）
