@@ -163,7 +163,8 @@ export class MemoryMaintenanceService implements OnModuleInit {
    * 全局单行排期（幂等，抄 hook.service ensureGlobalPoll）：
    * - `intervalMs <= 0`（env 0 = 禁用）→ 不排期，且把既有 pending 行 cancel 掉；
    * - 既有 pending 行 → 原样保留（fireCount 不清零）；
-   * - 既有终态行 → 先删后建（否则 dedupKey 幂等回旧行，改 env 后永不生效）。
+   * - 既有终态行 → 先删后建（否则 dedupKey 幂等回旧行，改 env 后永不生效）；
+   *   删失败 → 记 warn 并跳过本次重建（不排期）。
    */
   private async ensureGlobalTrigger(): Promise<void> {
     const intervalMs = this.intervalMs();
@@ -183,13 +184,18 @@ export class MemoryMaintenanceService implements OnModuleInit {
       if (existing.status === TRIGGER_STATUS.PENDING) {
         return;
       }
-      await this.prisma.trigger
-        .delete({ where: { dedupKey: MEMORY_MAINTENANCE_DEDUP_KEY } })
-        .catch((err: unknown) => {
-          this.logger.warn(
-            `[memory-maintenance] 终态行删除失败，跳过本次重建: ${this.describeError(err)}`,
-          );
+      // 旧行删不掉时必须整段放弃：schedule 会按 dedupKey 幂等返回那条旧行，
+      // 继续往下走等于「静默沿用旧排期」，与日志宣称的「跳过本次重建」相反。
+      try {
+        await this.prisma.trigger.delete({
+          where: { dedupKey: MEMORY_MAINTENANCE_DEDUP_KEY },
         });
+      } catch (err) {
+        this.logger.warn(
+          `[memory-maintenance] 终态行删除失败，跳过本次重建: ${this.describeError(err)}`,
+        );
+        return;
+      }
     }
     await this.triggers.schedule(
       TRIGGER_KIND.MEMORY_MAINTENANCE as string,

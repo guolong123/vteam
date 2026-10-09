@@ -1,0 +1,393 @@
+======================================================================
+F2 review fixes — memory-enhancement (branch feat/memory-enhancement)
+env: node v22.15.0 / npm 10.9.2
+======================================================================
+
+### [MAJOR-1] memoryMerge reads outside transaction
+file: server/src/platform-mcp/platform-mcp.service.ts:4104-4141 (memoryMerge)
+  - claim-first conditional write inside $transaction:
+      tx.memory.updateMany({ where:{id:source.id, deletedAt:null}, data:{mergedIntoId, deletedAt} })
+    count===0 -> NotFoundException MEMORY_NOT_FOUND (409 alt rejected: retry is pointless,
+    the row is gone for the caller; matches existing 'source archived -> 404' path)
+  - transfer amount read from the SAME tx snapshot AFTER the claim (tx.memory.findUnique select refCount)
+  - target increment + claim in the same $transaction
+  - pre-checks kept OUTSIDE tx unchanged: same-id 400 / scope 403 (assertTeamScopedMemoryRow) / target 404
+  - doc comment updated to the claim-first contract
+
+### [MINOR-1] removed 'as any' in prod
+file: server/src/chat/worker-dispatcher.ts:1978-2032 (buildTeamMemoryIndex)
+  - scope typed Prisma.MemoryWhereInput[]; where typed Prisma.MemoryWhereInput
+  - dropped both pre-existing 'as any' casts (count({where} as any) and findMany({...} as any))
+  - candidates flow straight into sortMemoriesByImportance(); remaining 'as string[]' is on
+    the Json tags column (narrowing cast, not 'as any')
+
+### [MINOR-2] shared sortMemoriesByImportance (now evaluated ONCE, single sort impl)
+server/src/memories/memory-importance.ts:113-134  (new pure export, no Prisma/Nest imports)
+  used by: server/src/platform-mcp/platform-mcp.service.ts:4002 (local helper deleted)
+           server/src/chat/worker-dispatcher.ts:2017
+
+### [MINOR-3] maintenance catch logged 'skip' then fell through
+file: server/src/memories/memory-maintenance.service.ts:182-198 (ensureGlobalTrigger)
+  .catch(...) -> try/catch + 'return' so this pass really skips (schedule would have returned
+  the stale row via dedupKey idempotency). No throw (onModuleInit must not fail).
+
+### [MINOR-4] stale doc comment
+file: web/src/components/teams/TeamMemoriesTab.tsx:16-17, 766
+  header now says: only the ["memories"] prefix is invalidated (memoriesQueryKey(params) is
+  ["memories", params], so prefix invalidation covers both groups + /system/memories)
+
+### [MINOR-5] isAdmin predicate divergence
+file: web/src/components/teams/TeamMemoriesTab.tsx:28, 711
+  permissions ARE cheaply available client-side (authStore.user.permissions, already used by
+  app-shell.tsx NAV gating) -> switched to the shared predicate:
+      isPlatformAdmin(useAuthStore(s => s.user?.permissions))
+  matches server/src/users/admin-permission.ts:26-36 (all===true || users.manage===true).
+  No new data fetching added.
+
+### F1 one-liners
+  (a) server/src/timers/dto/query-triggers.dto.ts:51  '白名单 6 种' -> '白名单 7 种'
+  (b) trailing newline added: server/prisma/migrations/20261009010000_memory_refcount/migration.sql
+      and server/src/users/admin-permission.ts
+
+======================================================================
+GATE 1: cd server && npx tsc --noEmit
+======================================================================
+exit=0 (no output above = clean)
+
+======================================================================
+GATE 2: cd server && npm run test  (full)
+======================================================================
+PASS src/platform-mcp/platform-mcp.service.spec.ts
+PASS src/chat/worker-dispatcher.spec.ts
+PASS src/memories/memory-maintenance.service.spec.ts
+PASS src/memories/memory-importance.spec.ts
+PASS src/auth/auth.service.spec.ts
+PASS src/platform-mcp/platform-mcp.authority-matrix.spec.ts
+PASS src/message-channels/adapters/wecom-aibot.adapter.spec.ts
+PASS src/tasks/tasks.service.spec.ts
+PASS src/workers/workers.controller.spec.ts
+PASS src/swagger-mcp/swagger-mcp.controller.spec.ts
+PASS src/chat/receipt-nudge.handler.spec.ts
+PASS src/users/users.service.spec.ts
+PASS src/agents/agents.service.spec.ts
+PASS src/prisma/seed.spec.ts
+PASS src/tasks/tasks.controller.spec.ts
+PASS src/teams/teams.service.spec.ts
+PASS src/teams/teams.controller.spec.ts
+PASS src/chat/worker-dispatcher.gate.spec.ts
+PASS src/git-repos/git-repos.controller.spec.ts
+PASS src/agents/agents.controller.spec.ts
+PASS src/platform-mcp/platform-mcp.tool-permission.spec.ts
+PASS src/chat/chat.service.spec.ts
+PASS src/mcp-servers/mcp-servers.service.spec.ts
+PASS src/tasks/task-progression.scheduler.spec.ts
+PASS src/memories/memories.controller.spec.ts
+PASS src/platform-mcp/platform-mcp.controller.spec.ts
+PASS src/workers/workers.service.spec.ts
+PASS src/platform-mcp/platform-mcp.service.reply-join.spec.ts
+PASS src/mcp-servers/mcp-servers.controller.spec.ts
+PASS src/platform-mcp/platform-mcp.file-path-resolution.spec.ts
+PASS src/agent-roles/agent-roles.controller.spec.ts
+PASS src/triggers/hook.service.spec.ts
+PASS src/execution-policies/execution-policies.controller.spec.ts
+PASS src/execution-policies/agent-policies.matrix.spec.ts
+PASS src/questions/questions.service.spec.ts
+PASS src/skills/skills.service.spec.ts
+PASS src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+PASS src/models/models.service.spec.ts
+PASS src/platform-mcp/platform-mcp.service.receipt-nudge.spec.ts
+PASS src/workers/worker-events.controller.spec.ts
+PASS src/platform-mcp/plan-removal.guard.spec.ts
+PASS src/execution-policies/dto/policy-config.dto.spec.ts
+PASS src/tools/tools.controller.spec.ts
+PASS src/skills/skills.controller.spec.ts
+PASS src/tools/tools.service.spec.ts
+PASS src/git-repos/git-repos.service.spec.ts
+PASS src/notifications/notification-dispatcher.service.spec.ts
+PASS src/execution-policies/agent-policies.controller.spec.ts
+PASS src/agent-roles/agent-roles.service.spec.ts
+PASS src/platform-mcp/platform-mcp.service.hook.spec.ts
+PASS src/realtime/realtime.controller.spec.ts
+PASS src/message-channels/message-channels.controller.spec.ts
+PASS src/platform-mcp/platform-mcp.service.review-dispatch.spec.ts
+PASS src/platform-mcp/platform-mcp.service.gate.spec.ts
+PASS src/common/id-resync.guard.spec.ts
+PASS src/chat/worker-dispatcher.plan-hash.spec.ts
+PASS src/tasks/plan-lifecycle.service.spec.ts
+PASS src/tasks/plan-review-wiring.spec.ts
+PASS src/models/models.controller.spec.ts
+PASS src/platform-mcp/plan-managed-signoff.spec.ts
+PASS src/teams/seed.spec.ts
+PASS src/execution-policies/agent-policies-db-builtin.spec.ts
+PASS src/common/constants/trigger.constants.spec.ts
+PASS src/platform-mcp/platform-mcp.service.review-round-open.spec.ts
+PASS src/artifacts/artifacts.controller.spec.ts
+PASS src/memories/memories.service.spec.ts
+PASS src/chat/chat.controller.spec.ts
+PASS src/execution-policies/agent-policies.custom-agents.spec.ts
+PASS src/workers/worker.client.spec.ts
+PASS src/chat/worker-dispatcher.integration.spec.ts
+PASS src/execution-policies/execution-policy.service.spec.ts
+PASS src/triggers/hook-failure.listener.spec.ts
+PASS src/questions/questions.controller.spec.ts
+PASS src/execution-policies/agent-policies.native-only-payload.spec.ts
+PASS src/workers/dto/worker-dto.spec.ts
+PASS src/chat/worker-dispatcher.snapshot.spec.ts
+PASS src/uploads/uploads.controller.spec.ts
+PASS src/execution-policies/policy-canonical.spec.ts
+PASS src/execution-policies/agent-policies.native-edit.spec.ts
+PASS src/notifications/notification-channels.controller.spec.ts
+PASS src/docs-site/docs-site.controller.spec.ts
+PASS src/timers/triggers.controller.spec.ts
+PASS src/tasks/plan-docs.service.spec.ts
+PASS src/artifacts/artifacts.service.spec.ts
+PASS src/workers/session-lifecycle.spec.ts
+PASS src/issues/issues.controller.spec.ts
+PASS src/execution-policies/agent-policies-db-driven.spec.ts
+PASS src/tasks/tasks-remove.spec.ts
+PASS src/message-channels/message-inbound.service.spec.ts
+PASS src/execution-policies/agent-policies.no-external-emission.spec.ts
+PASS src/tasks/task-channel-bindings.controller.spec.ts
+PASS src/common/credential-crypto.service.spec.ts
+PASS src/issues/review-round.service.spec.ts
+PASS src/execution-policies/agent-policy-fallback.spec.ts
+PASS src/execution-policies/agent-policy-derivation.spec.ts
+PASS src/workers/worker-event.ingress.spec.ts
+PASS src/tasks/plan-revise-loop.spec.ts
+PASS src/chat/review-round-timeout.handler.spec.ts
+PASS src/tasks/plan-archive.service.spec.ts
+PASS src/issues/review-round-gate.service.spec.ts
+PASS src/realtime/realtime-subscribers.spec.ts
+PASS src/issues/issues.service.spec.ts
+PASS src/auth/guards/jwt-auth.guard.spec.ts
+PASS src/tasks/plan-finalize-trio.spec.ts
+PASS src/common/guards/permission.guard.spec.ts
+PASS src/users/admin.guard.spec.ts
+PASS src/issues/review-verdict.listener.spec.ts
+PASS src/chat/message-receipts.service.spec.ts
+PASS src/realtime/realtime.service.spec.ts
+PASS src/message-channels/message-delivery.service.spec.ts
+PASS src/notifications/notification-delivery.service.spec.ts
+PASS src/uploads/uploads.service.spec.ts
+PASS src/timers/trigger.service.spec.ts
+PASS src/platform-mcp/platform-mcp.tool-naming.spec.ts
+PASS src/tasks/plan-steps.service.spec.ts
+PASS src/users/roles.service.spec.ts
+PASS src/triggers/trigger-reconciler.service.spec.ts
+PASS src/swagger-mcp/swagger-tools.sync.spec.ts
+PASS src/docs-site/prototypes.service.spec.ts
+PASS src/skills/skill-frontmatter.util.spec.ts
+PASS src/common/id-resync.spec.ts
+PASS src/issues/review-round-gate.attach-notifier.spec.ts
+PASS src/common/constants/event.constants.spec.ts
+PASS src/timers/triggers.service.spec.ts
+PASS src/message-channels/adapters/generic-webhook-inbound.adapter.spec.ts
+PASS src/workers/worker-token.guard.spec.ts
+PASS src/message-channels/adapters/github-webhook.adapter.spec.ts
+PASS src/notifications/adapters/webhook-notification.adapter.spec.ts
+PASS src/common/guards/team-membership.guard.spec.ts
+PASS src/common/constants/agent.constants.spec.ts
+PASS src/message-channels/message-registry.service.spec.ts
+PASS src/prisma/task-long-running.migration.spec.ts
+PASS src/notifications/adapters/wecom-group-robot.adapter.spec.ts
+PASS src/prisma/agent-prompt-backfill.migration.spec.ts
+PASS src/agents/persona.constants.spec.ts
+PASS src/issues/plan-hash-gate.spec.ts
+PASS src/common/id-generator.spec.ts
+PASS src/prisma/agent-role.migration.spec.ts
+PASS src/common/constants/task.constants.spec.ts
+PASS src/common/constants/agent-role.constants.spec.ts
+PASS src/message-channels/adapters/gitee-webhook.adapter.spec.ts
+PASS src/prisma/agent-role-capabilities-git-web-retire.migration.spec.ts
+PASS src/prisma/plan-doc-submit.migration.spec.ts
+PASS src/prisma/agent-role-external-agent.migration.spec.ts
+PASS src/common/opencode-agent-duty.spec.ts
+PASS src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts
+PASS src/platform-mcp/platform-mcp.constants.spec.ts
+PASS src/common/constants/platform-capability.coverage.spec.ts
+PASS src/prisma/agent-role-capabilities-factory-default.migration.spec.ts
+PASS src/prisma/role-capabilities-web-parity.spec.ts
+PASS src/chat/review-dispatch-triplet.spec.ts
+PASS src/artifacts/artifact-slug.spec.ts
+PASS src/prisma/agent-role-capabilities.migration.spec.ts
+PASS src/tasks/task-long-running.guard.spec.ts
+PASS src/prisma/memory-refcount.migration.spec.ts
+PASS src/issues/review-round-ledger.spec.ts
+PASS src/prisma/agent-role-capabilities-git-web-tier.migration.spec.ts
+PASS src/prisma/memory-role-inject.migration.spec.ts
+PASS src/prisma/agent-role-drop.migration.spec.ts
+PASS src/message-channels/field-template.util.spec.ts
+PASS src/common/constants/status-vocabulary.spec.ts
+PASS src/chat/message-receipt.constants.spec.ts
+PASS src/gates/no-tighten-audit.spec.ts
+PASS src/chat/mention-throttle.spec.ts
+PASS src/swagger-mcp/swagger-tools.spec.ts
+Test Suites: 165 passed, 165 total
+Tests:       3874 passed, 3874 total
+Snapshots:   1 passed, 1 total
+Time:        30.022 s, estimated 48 s
+
+exit code: 0 (see GATE 1 line + this block: no FAIL lines present)
+PASS src/chat/mention-throttle.spec.ts
+PASS src/swagger-mcp/swagger-tools.spec.ts
+
+Test Suites: 165 passed, 165 total
+Tests:       3874 passed, 3874 total
+Snapshots:   1 passed, 1 total
+Time:        30.022 s, estimated 48 s
+Ran all test suites.
+
+  Baseline (F2 review): 165 suites / 3866 tests. Now: 165 suites / 3874 tests (+8 new, 0 failures).
+  New tests added:
+    platform-mcp.service.spec.ts  +4 (3 concurrency-safety + claim-first invariant rewrite)
+    memory-importance.spec.ts     +4 (sortMemoriesByImportance describe)
+    memory-maintenance.service.spec.ts +1 (delete-failure really skips)
+
+======================================================================
+GATE 2b: targeted memory_merge run (MAJOR-1 evidence)
+======================================================================
+          ✓ 本团队 team 级行 → 软删（deletedAt 落点），返回 status=archived (10 ms)
+          ✓ 归档后 memorySearch 不再返回该行（软删落点被检索过滤） (5 ms)
+          ✓ 跨团队 403：行 teamId ≠ 调用方团队 → MEMORY_FORBIDDEN（不写库） (2 ms)
+          ✓ global 行 403：不做 global 级整理入口（决策⑤） (2 ms)
+          ✓ role 行 403：不做 role 级整理入口 (2 ms)
+          ✓ 已归档行 → 404 MEMORY_NOT_FOUND（不重复软删） (2 ms)
+          ✓ 不存在 → 404 MEMORY_NOT_FOUND (2 ms)
+          ✓ 冒充 403：无会话归属 → PLATFORM_MCP_FORBIDDEN（不读行） (3 ms)
+          ✓ 不变量（单事务）：先条件 claim 归档 source，再按事务内读到的 refCount 转移给 target (3 ms)
+          ✓ 并发保护：claim 落空（count=0）→ 404 MEMORY_NOT_FOUND，target 一次都不被转移 (1 ms)
+          ✓ 并发保护：两次合并同一 source 只有一次转移（target 不出现 += 2N） (2 ms)
+          ✓ 转移量取事务内快照：并发命中的 +1 不丢（事务外读 3 → 按事务内 4 转移） (1 ms)
+          ✓ transferredRef=0 也走同一事务（source 零引用不必特殊处理） (1 ms)
+          ✓ 同 id → 400 MEMORY_INVALID（不触达行、不开事务） (1 ms)
+          ✓ source 已归档 → 404（重复合并不可执行） (1 ms)
+          ✓ target 已归档 → 404 (1 ms)
+          ✓ 跨团队 403：source 属他人团队 → MEMORY_FORBIDDEN（不开事务） (2 ms)
+          ✓ global 行 403：target 为 global 时拒绝（决策⑤） (2 ms)
+          ✓ role 行 403：target 为 role 时拒绝 (1 ms)
+          ✓ 入参只读：refCount / mergedIntoId / deletedAt 由服务端决定，不接受 Agent 传入 (6 ms)
+          ✓ 归档后不再出现在 memorySearch 结果（source 软删、target 留存且引用计数已转移） (3 ms)
+Test Suites: 1 passed, 1 total
+Tests:       330 skipped, 21 passed, 351 total
+
+======================================================================
+GATE 2c: memory-importance + memory-maintenance targeted run
+======================================================================
+    ✓ 默认半衰期为 30 天（未配 env 时取默认值） (6 ms)
+    ✓ env 非法时静默回落默认值（配置写错不该让进程起不来）
+    ✓ 全新未被引用的记忆 score ≈ 1.0（落 (0.9, 1.1]，不被新鲜度项饿死） (1 ms)
+    ✓ 同龄下 refCount 越高 score 单调越高（引用多的压过引用少的） (1 ms)
+    ✓ 同 refCount 下越老 score 越低（指数衰减，30 天半衰）
+    ✓ 省略 halfLifeDays 时用导出的 MEMORY_IMPORTANCE_HALF_LIFE_DAYS（默认 30） (1 ms)
+    ✓ lastUsedAt 优先于 createdAt 计龄（半年前建、昨天命中 → 记昨天的龄）
+    ✓ 半衰期越小越看重新鲜度（同一行，调小半衰期后老行掉分更多） (1 ms)
+    ✓ 半衰期非法（0/负数/NaN）时回落默认值，不产出 NaN/Infinity
+    ✓ 异常行不毁排序：负数/非有限的 refCount 与未来时间戳都被钳住 (1 ms)
+    ✓ 降序：分高者在前（与逐行 computeMemoryImportance 同序） (1 ms)
+    ✓ 同分时 lastUsedAt ?? createdAt 新者优先；同分同龄保持入参次序（sort 稳定）
+    ✓ now 只求值一次：冻结时钟下同一批候选反复排序结果稳定 (1 ms)
+    ✓ 纯函数：不改入参、总是返回新数组
+      ✓ 注册 memory_maintenance handler 与冷却 guard (8 ms)
+      ✓ 全局单行排期：dedupKey 固定 + intervalMs/guardKey 透传 (4 ms)
+      ✓ 幂等：既有 pending 行原样保留（不重复 schedule） (1 ms)
+      ✓ 既有终态行先删后建（改 env 后能生效，不被 dedupKey 幂等卡死） (1 ms)
+      ✓ 既有终态行删除失败 → 跳过本次重建（不再 schedule 幂等回旧行），且不抛错 (1 ms)
+      ✓ interval=0（禁用）→ 不排期，且取消既有 pending 行 (1 ms)
+      ✓ interval=0 且无既有行 → 既不排期也不 cancel (1 ms)
+      ✓ 非法 env（非数字）回落默认值，不让进程起不来 (1 ms)
+      ✓ 尚未跑过时放行；一轮跑完后（间隔内）拒绝重入 (1 ms)
+      ✓ 间隔 env=0（禁用）时 guard 不按间隔否决（fail-open 放行） (2 ms)
+      ✓ 三分组各自正确：同 hash 重复 / 低频未引用 / 标签不规范 (1 ms)
+      ✓ 同一条同时命中多组时只提示一次（重复组优先） (1 ms)
+      ✓ 候选上限生效（env CANDIDATE_LIMIT） (5 ms)
+      ✓ 摘要截断至 80 字 (2 ms)
+      ✓ 无候选团队不落 system 条、不派发 (1 ms)
+      ✓ 首轮落 team_group 频道的 system 消息（无「上轮实际结果」从句） (1 ms)
+      ✓ 第二轮带上轮实际结果（服务端 DB 统计，不依赖 Agent 回传） (1 ms)
+      ✓ kind=wake + internal=true + target=mainAgentMemberId + 私聊频道优先 (1 ms)
+      ✓ 主 Agent 私聊缺失时回退 team_group 频道 (1 ms)
+      ✓ mainAgentMemberId 缺失 → 跳过该团队并告警
+      ✓ prompt 引用 agent 侧工具名并给出单轮处理上限 (1 ms)
+      ✓ 候选多于单轮上限时 prompt 只列前 20 条并说明余量留待下轮 (1 ms)
+      ✓ 一个团队派发抛错不中断其他团队 (17 ms)
+      ✓ 候选收集抛错同样被隔离（不冒泡出 runOnce） (1 ms)
+      ✓ 只取 level=team 且有活跃记忆的团队（global/role 不进）
+      ✓ 候选查询只覆盖本团队 team 级活跃行 (1 ms)
+Test Suites: 2 passed, 2 total
+Tests:       40 passed, 40 total
+
+======================================================================
+GATE 3: cd web && npx tsc --noEmit
+======================================================================
+exit=0 (no output above = clean)
+
+======================================================================
+GATE 4: cd web && npm run lint   (baseline 729 warnings / 0 errors)
+======================================================================
+
+/Volumes/SSD-Data/01work/git-project/vteam/web/src/features/docs-site/prototype-sandbox.tsx
+  2:21  warning  'useRef' is defined but never used  @typescript-eslint/no-unused-vars
+
+✖ 729 problems (0 errors, 729 warnings)
+
+exit code: 0
+
+  changed web files lint check (TeamMemoriesTab.tsx):
+  0 problems on the changed file
+
+======================================================================
+GATE 5: cd web && npm run build
+======================================================================
+ ✓ Compiled successfully in 7.7s
+   Generating static pages (0/30) ...
+   Generating static pages (7/30) 
+   Generating static pages (14/30) 
+   Generating static pages (22/30) 
+ ✓ Generating static pages (30/30)
+   Finalizing page optimization ...
+Route (app)                                 Size  First Load JS
++ First Load JS shared by all             104 kB
+exit code: 0
+
+======================================================================
+DIFF SUMMARY (no git commands used — file-level inventory of touched files)
+======================================================================
+server/src/platform-mcp/platform-mcp.service.ts
+  ~memoryMerge        claim-first guarded write inside $transaction + in-tx refCount read
+  ~memorySearch       local sortMemoriesByImportance helper deleted -> shared import
+  ~imports            {MemoryImportanceInput, computeMemoryImportance} -> {sortMemoriesByImportance}
+  ~doc comments       memoryMerge invariant 4 + memorySearch step 5 reworded
+server/src/platform-mcp/platform-mcp.service.spec.ts
+  +4 merge tests, 1 invariant test rewritten to claim-first ordering,
+   beforeEach(updateMany->{count:1}), stateful archive test now mocks the claim
+server/src/memories/memory-importance.ts
+  +sortMemoriesByImportance<T>(rows, now?)  (pure; returns new array; now-once)
+  ~module doc '语义边界' bullet now points at the shared sort
+server/src/memories/memory-importance.spec.ts
+  +describe('sortMemoriesByImportance') with 4 tests (desc, tiebreak, now-once, purity)
+server/src/memories/memory-maintenance.service.ts
+  ~ensureGlobalTrigger .catch -> try/catch + return (genuine skip)
+server/src/memories/memory-maintenance.service.spec.ts
+  +1 test: delete rejects -> onModuleInit resolves, schedule never called
+server/src/chat/worker-dispatcher.ts
+  ~buildTeamMemoryIndex: scope/where typed with Prisma.MemoryWhereInput,
+   both 'as any' casts removed, candidates passed to sortMemoriesByImportance
+server/src/timers/dto/query-triggers.dto.ts
+  ~Swagger description 6 -> 7 kinds
+server/prisma/migrations/20261009010000_memory_refcount/migration.sql  +trailing newline
+server/src/users/admin-permission.ts                                              +trailing newline
+web/src/components/teams/TeamMemoriesTab.tsx
+  ~header doc + inline comment corrected (prefix invalidation only)
+  ~isAdmin -> isPlatformAdmin(useAuthStore(s => s.user?.permissions))
+  +import { isPlatformAdmin } from "@/lib/permissions"
+
+======================================================================
+NO-GO CHECKS
+======================================================================
+  new 'as any' / @ts-ignore in changed code: none
+    (remaining 'as string[]' in worker-dispatcher is a Json narrowing cast, pre-existing pattern;
+     the two 'as any' casts there were REMOVED, not added)
+  empty catch blocks introduced: none (MINOR-3 catch logs a warn)
+  behavior changes beyond the listed fixes: none — return shapes, scope guards (403 team/global),
+  error codes and pre-check placement unchanged; server hit-count fire-and-forget untouched
+  git commands used: none (orchestrator commits)

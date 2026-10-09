@@ -83,7 +83,7 @@ import {
   TriggerOutcome,
   TriggerService,
 } from '../timers/trigger.service';
-import { computeMemoryImportance } from '../memories/memory-importance';
+import { sortMemoriesByImportance } from '../memories/memory-importance';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
@@ -1964,7 +1964,7 @@ export class WorkerDispatcher
    *
    * 形状不变：计数 + **重要度最高的 5 条** description 行拼成索引块，1200 字截断。
    * 排序不再按时间倒序：宽候选池（refCount desc → createdAt desc，take 50）回内存
-   * 按 `computeMemoryImportance` 精排后截 5 条——「老但高频被引用」的记忆不再沉底，
+   * 按 `sortMemoriesByImportance` 精排后截 5 条——「老但高频被引用」的记忆不再沉底，
    * 而 recency 项保证全新未引用的记忆仍有入池机会（不被饿死）。
    * **此处绝不写 refCount**：每轮自动注入都计会让主 Agent 一次会话刷爆指标；
    * 计数只发生在 agent 主动 `memorySearch` 命中时。
@@ -1977,7 +1977,7 @@ export class WorkerDispatcher
   ): Promise<string | null> {
     try {
       // 受众条件：非主 Agent 拿不到 team/global，只能拿自己岗位的 role 记忆。
-      const scope: any[] = [];
+      const scope: Prisma.MemoryWhereInput[] = [];
       if (audience.isMainAgent) {
         scope.push({ level: 'team', teamId });
         scope.push({ level: 'global' });
@@ -1987,10 +1987,14 @@ export class WorkerDispatcher
       }
       // 无任何受众（如未绑岗位的普通成员）→ 返 null，不做全表扫描。
       if (scope.length === 0) return null;
-      const where = { deletedAt: null, autoInject: true, OR: scope };
+      const where: Prisma.MemoryWhereInput = {
+        deletedAt: null,
+        autoInject: true,
+        OR: scope,
+      };
 
       const [scopeCnt, candidates] = await Promise.all([
-        this.prisma.memory.count({ where } as any),
+        this.prisma.memory.count({ where }),
         // 宽候选池：DB 按单列排（refCount desc → createdAt desc，走
         // idx_memories_ref_count），真正的排序键是跨两列合成的重要度分
         // （memories/memory-importance.ts），SQL 表达不了 → 取 50 条回内存
@@ -2010,17 +2014,14 @@ export class WorkerDispatcher
             lastUsedAt: true,
             createdAt: true,
           },
-        } as any),
+        }),
       ]);
       if (scopeCnt === 0) return null;
 
-      // 重要度降序；同分保留 DB 次序（sort 稳定，比较器仅按分数、不设次级键）。
-      const recent = [...(candidates as any[])]
-        .sort((a, b) => computeMemoryImportance(b) - computeMemoryImportance(a))
-        .slice(0, 5);
+      const recent = sortMemoriesByImportance(candidates).slice(0, 5);
 
       const tagMap = new Map<string, number>();
-      for (const r of recent as any[]) {
+      for (const r of recent) {
         const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
         for (const t of tags) tagMap.set(t, (tagMap.get(t) ?? 0) + 1);
       }
@@ -2028,7 +2029,7 @@ export class WorkerDispatcher
         .sort((a, b) => b[1] - a[1])
         .slice(0, 10)
         .map(([k]) => k);
-      const lines = (recent as any[]).map(
+      const lines = recent.map(
         (r) =>
           `- [${r.level}] ${r.description || String(r.content).slice(0, 60)} (tags:${Array.isArray(r.tags) ? (r.tags as string[]).join(',') : '-'})`,
       );

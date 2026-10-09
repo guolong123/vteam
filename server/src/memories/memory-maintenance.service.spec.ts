@@ -169,6 +169,18 @@ describe('MemoryMaintenanceService', () => {
       expect(triggers.schedule).toHaveBeenCalled();
     });
 
+    it('既有终态行删除失败 → 跳过本次重建（不再 schedule 幂等回旧行），且不抛错', async () => {
+      prisma.trigger.findUnique.mockResolvedValue({
+        id: 'tmr_1',
+        status: 'fired',
+      });
+      prisma.trigger.delete.mockRejectedValue(new Error('db locked'));
+
+      await expect(service.onModuleInit()).resolves.toBeUndefined();
+
+      expect(triggers.schedule).not.toHaveBeenCalled();
+    });
+
     it('interval=0（禁用）→ 不排期，且取消既有 pending 行', async () => {
       process.env.MEMORY_MAINTENANCE_INTERVAL_MS = '0';
       prisma.trigger.findUnique.mockResolvedValue({

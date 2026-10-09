@@ -13,8 +13,8 @@
  * 视觉语言复制 system/memories 管理页（类型芯片 / 自动注入 / 相对时间），
  * 但**在本文件内局部实现**——管理页那些组件是页面私有函数，跨文件 import 会把整页耦合进面板。
  *
- * 刷新联动：所有 mutation 成功后同时失效 `memoriesQueryKey(params)` 与 `["memories"]`
- * 前缀 —— 前者精确刷新本 tab 的两组查询，后者连带刷新 /system/memories 管理页。
+ * 刷新联动：所有 mutation 成功后失效 `["memories"]` 前缀——`memoriesQueryKey(params)`
+ * 是其下的精确子键，前缀失效连带刷新本 tab 的两组查询与 /system/memories 管理页。
  */
 import {
   useCallback,
@@ -25,6 +25,7 @@ import {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isApiError } from "@/lib/errors";
+import { isPlatformAdmin } from "@/lib/permissions";
 import { useAuthStore } from "@/lib/stores/authStore";
 import {
   memoriesApi,
@@ -700,11 +701,14 @@ export interface TeamMemoriesTabProps {
  *
  * 权限模型（服务端为准，本组件只控按钮显隐）：
  * - 团队级记忆：团队成员可归档 / 恢复 / 永久删除；
- * - 全局级记忆（平台级记忆）：仅 admin 显示操作按钮。
+ * - 全局级记忆（平台级记忆）：仅 admin 显示操作按钮（口径 = isPlatformAdmin）。
  */
 export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
   const queryClient = useQueryClient();
-  const isAdmin = useAuthStore((s) => s.user?.roleName === "admin");
+  // 全局记忆的写操作门：与服务端 admin-permission.hasAdminPermission / AdminGuard
+  // 同口径（permissions.all===true || permissions.users.manage===true），复用
+  // lib/permissions 的共享谓词，不按 roleName 字符串另立一套。
+  const isAdmin = isPlatformAdmin(useAuthStore((s) => s.user?.permissions));
 
   /* ---------- 状态 ---------- */
   const [archived, setArchived] = useState(false);
@@ -763,7 +767,7 @@ export function TeamMemoriesTab({ teamId, teamName }: TeamMemoriesTabProps) {
     queryFn: () => memoriesApi.list(globalParams),
   });
 
-  /* ---------- 失效：精确 key + ["memories"] 前缀（管理页同步刷新） ---------- */
+  /* ---------- 失效：["memories"] 前缀（覆盖本 tab 两组查询 + 管理页） ---------- */
   const invalidateMemories = useCallback(() => {
     // ["memories"] 前缀覆盖本 tab 两组查询与 /system/memories 管理页（共享 key 形状）。
     queryClient.invalidateQueries({ queryKey: ["memories"] });

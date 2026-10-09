@@ -3,6 +3,7 @@ import {
   MEMORY_IMPORTANCE_HALF_LIFE_DAYS,
   MEMORY_IMPORTANCE_HALF_LIFE_DAYS_DEFAULT,
   resolveMemoryImportanceHalfLifeDays,
+  sortMemoriesByImportance,
 } from './memory-importance';
 
 const DAY = 86_400_000;
@@ -141,5 +142,70 @@ describe('computeMemoryImportance', () => {
       NOW,
     );
     expect(future).toBeCloseTo(Math.log(2) + 1, 10);
+  });
+});
+
+describe('sortMemoriesByImportance', () => {
+  const named = (id: string, refCount: number, ageDays: number, lastUsedAt?: Date | null) => ({
+    id,
+    ...row(refCount, ageDays, lastUsedAt),
+  });
+
+  it('降序：分高者在前（与逐行 computeMemoryImportance 同序）', () => {
+    const rows = [
+      named('cold', 0, 30),
+      named('hot', 5, 30),
+      named('mid', 1, 1),
+    ];
+    expect(sortMemoriesByImportance(rows, NOW).map((r) => r.id)).toEqual([
+      'hot',
+      'mid',
+      'cold',
+    ]);
+  });
+
+  it('同分时 lastUsedAt ?? createdAt 新者优先；同分同龄保持入参次序（sort 稳定）', () => {
+    const rows = [
+      named('older', 2, 40),
+      named('newer', 2, 5),
+      named('twins_a', 2, 10),
+      named('twins_b', 2, 10),
+      // lastUsedAt 比 createdAt 新：计龄基准取 lastUsedAt → 它排最前
+      named('used_recently', 2, 90, daysAgo(1)),
+    ];
+    expect(sortMemoriesByImportance(rows, NOW).map((r) => r.id)).toEqual([
+      'used_recently',
+      'newer',
+      'twins_a',
+      'twins_b',
+      'older',
+    ]);
+  });
+
+  it('now 只求值一次：冻结时钟下同一批候选反复排序结果稳定', () => {
+    const rows = [
+      named('a', 0, 2),
+      named('b', 1, 2),
+      named('c', 2, 2),
+    ];
+    const frozen = new Date(NOW.getTime());
+    const first = sortMemoriesByImportance(rows, frozen).map((r) => r.id);
+    // 若 now 在比较器里逐次求值，跨一次时钟跳动会让同分行的次序漂移；
+    // 传入同一个 now 对象则每次调用都必须给出同一结果。
+    for (let i = 0; i < 5; i += 1) {
+      expect(sortMemoriesByImportance(rows, frozen).map((r) => r.id)).toEqual(
+        first,
+      );
+    }
+    expect(first).toEqual(['c', 'b', 'a']);
+  });
+
+  it('纯函数：不改入参、总是返回新数组', () => {
+    const rows = [named('a', 0, 1), named('b', 9, 1)];
+    const snapshot = [...rows];
+    const out = sortMemoriesByImportance(rows, NOW);
+    expect(rows).toEqual(snapshot);
+    expect(out).not.toBe(rows);
+    expect(sortMemoriesByImportance([], NOW)).toEqual([]);
   });
 });

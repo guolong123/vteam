@@ -5213,7 +5213,13 @@ describe('PlatformMcpService', () => {
       });
 
       describe('memory_merge', () => {
-        it('不变量（单事务）：target.refCount += source.refCount、source.mergedIntoId=target.id + 软删', async () => {
+        beforeEach(() => {
+          // 默认 claim 命中；全局默认 mock 是 { count: 0 }（= claim 落空），
+          // 不覆盖会让每个 merge 用例都撞 404。
+          prisma.memory.updateMany.mockResolvedValue({ count: 1 });
+        });
+
+        it('不变量（单事务）：先条件 claim 归档 source，再按事务内读到的 refCount 转移给 target', async () => {
           allowTeamWorker();
           rows({
             me_a: teamRow('me_a', { refCount: 3 }),
@@ -5223,18 +5229,105 @@ describe('PlatformMcpService', () => {
           const out = await service.memoryMerge(ctx, mergeArgs);
 
           expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+          // claim 是条件写：deletedAt:null 才是并发的裁决点（不再是事务外的软删检查）
+          expect(prisma.memory.updateMany).toHaveBeenCalledWith({
+            where: { id: 'me_a', deletedAt: null },
+            data: { mergedIntoId: 'me_b', deletedAt: expect.any(Date) },
+          });
+          // 转移量在事务内读（claim 之后），不是复用事务外的前置检查读数
+          expect(prisma.memory.findUnique).toHaveBeenCalledWith({
+            where: { id: 'me_a' },
+            select: { refCount: true },
+          });
+          const claimOrder = prisma.memory.updateMany.mock.invocationCallOrder[0];
+          const readOrder =
+            prisma.memory.findUnique.mock.invocationCallOrder.at(-1)!;
+          const transferOrder =
+            prisma.memory.update.mock.invocationCallOrder[0];
+          expect(claimOrder).toBeLessThan(readOrder);
+          expect(readOrder).toBeLessThan(transferOrder);
+          // source 归档改由 claim 完成 → update 只剩 target 的计数转移
           expect(updates()).toEqual([
             { where: { id: 'me_b' }, data: { refCount: { increment: 3 } } },
-            {
-              where: { id: 'me_a' },
-              data: { mergedIntoId: 'me_b', deletedAt: expect.any(Date) },
-            },
           ]);
           expect(out).toEqual({
             merged: true,
             targetId: 'me_b',
             transferredRef: 3,
           });
+        });
+
+        it('并发保护：claim 落空（count=0）→ 404 MEMORY_NOT_FOUND，target 一次都不被转移', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a', { refCount: 3 }),
+            me_b: teamRow('me_b', { refCount: 5 }),
+          });
+          // 前置检查通过后、事务执行前，source 被另一请求归档/认领 → 条件写落空
+          prisma.memory.updateMany.mockResolvedValue({ count: 0 });
+
+          await expectCode(
+            service.memoryMerge(ctx, mergeArgs),
+            NotFoundException,
+            'MEMORY_NOT_FOUND',
+          );
+          expect(prisma.memory.update).not.toHaveBeenCalled();
+          expect(prisma.memory.findUnique).not.toHaveBeenCalledWith({
+            where: { id: 'me_a' },
+            select: { refCount: true },
+          });
+        });
+
+        it('并发保护：两次合并同一 source 只有一次转移（target 不出现 += 2N）', async () => {
+          allowTeamWorker();
+          rows({
+            me_a: teamRow('me_a', { refCount: 4 }),
+            me_b: teamRow('me_b', { refCount: 5 }),
+          });
+          prisma.memory.updateMany
+            .mockResolvedValueOnce({ count: 1 })
+            .mockResolvedValueOnce({ count: 0 });
+
+          const first = await service.memoryMerge(ctx, mergeArgs);
+          await expect(service.memoryMerge(ctx, mergeArgs)).rejects.toBeInstanceOf(
+            NotFoundException,
+          );
+
+          expect(first.transferredRef).toBe(4);
+          expect(updates()).toEqual([
+            { where: { id: 'me_b' }, data: { refCount: { increment: 4 } } },
+          ]);
+        });
+
+        it('转移量取事务内快照：并发命中的 +1 不丢（事务外读 3 → 按事务内 4 转移）', async () => {
+          allowTeamWorker();
+          let hits = 0;
+          prisma.memory.findUnique.mockImplementation(
+            ({
+              where,
+              select,
+            }: {
+              where: { id: string };
+              select?: { refCount?: boolean };
+            }) => {
+              if (select?.refCount) {
+                hits += 1;
+                // claim 之后：期间一次 memory_search 命中计数 +1 已提交
+                return Promise.resolve({ refCount: 4 }) as never;
+              }
+              return Promise.resolve(
+                teamRow(where.id, where.id === 'me_a' ? { refCount: 3 } : {}),
+              ) as never;
+            },
+          );
+
+          const out = await service.memoryMerge(ctx, mergeArgs);
+
+          expect(hits).toBe(1);
+          expect(updates()).toEqual([
+            { where: { id: 'me_b' }, data: { refCount: { increment: 4 } } },
+          ]);
+          expect(out.transferredRef).toBe(4);
         });
 
         it('transferredRef=0 也走同一事务（source 零引用不必特殊处理）', async () => {
@@ -5422,6 +5515,23 @@ describe('PlatformMcpService', () => {
           );
           prisma.memory.findMany.mockImplementation(() =>
             Promise.resolve([...db.values()].filter((r) => !r.deletedAt)) as never,
+          );
+          // claim 与 memory_search 的命中计数共用 updateMany：前者按 deletedAt:null
+          // 条件落 deletedAt/mergedIntoId，后者在本用例里不改内存 DB。
+          prisma.memory.updateMany.mockImplementation(
+            ({
+              where,
+              data,
+            }: {
+              where: { id?: string | { in: string[] }; deletedAt?: Date | null };
+              data: { mergedIntoId?: string; deletedAt?: Date };
+            }) => {
+              if (typeof where.id !== 'string') return Promise.resolve({ count: 0 });
+              const prev = db.get(where.id);
+              if (!prev || prev.deletedAt) return Promise.resolve({ count: 0 });
+              db.set(where.id, { ...prev, ...data });
+              return Promise.resolve({ count: 1 });
+            },
           );
 
           await service.memoryMerge(ctx, mergeArgs);

@@ -23,7 +23,8 @@
  *   每轮自动注入都计会让主 Agent 一次会话把指标刷爆，指标随即失去意义。
  *   只有 agent 主动 `memory_search` 命中才 +1。
  * - 本模块**不做**分类/合并判断，也不参与过滤：它只给已通过 where 条件的
- *   候选行打分，排序仍由调用方决定（降序，同分时新者优先）。
+ *   候选行打分，排序由同模块的 `sortMemoriesByImportance` 统一给出
+ *   （降序，同分时新者优先），避免各处各抄一份口径不同的比较器。
  */
 
 /** 记忆重要度默认半衰期（天）。可用环境变量 `MEMORY_IMPORTANCE_HALF_LIFE_DAYS` 覆盖。 */
@@ -108,4 +109,28 @@ export function computeMemoryImportance(
   );
 
   return Math.log(1 + refCount) + Math.exp(-ageDays / hl);
+}
+
+/**
+ * 按重要度降序排序候选记忆（检索 `memory_search` 与每轮自动注入共用）。
+ *
+ * - **`now` 每次调用只求值一次**并透传给全部行：若让
+ *   {@link computeMemoryImportance} 的默认 `new Date()` 在比较器里逐次求值，
+ *   同一批候选会跨一次时钟跳动打分，结果不可复现（排序抖动、测试难断言）。
+ * - 同分时按 `lastUsedAt ?? createdAt` 新者优先（与原先 `createdAt desc` 的观感一致），
+ *   且 `Array.prototype.sort` 稳定，同分同龄保持入参次序。
+ * - 纯函数：不改入参、不触库，返回新数组（调用方可直接 `.slice()` 截断）。
+ */
+export function sortMemoriesByImportance<T extends MemoryImportanceInput>(
+  rows: readonly T[],
+  now: Date = new Date(),
+): T[] {
+  const recencyOf = (row: T) => (row.lastUsedAt ?? row.createdAt).getTime();
+  return [...rows].sort((a, b) => {
+    const diff =
+      computeMemoryImportance(b, undefined, now) -
+      computeMemoryImportance(a, undefined, now);
+    if (diff !== 0) return diff;
+    return recencyOf(b) - recencyOf(a);
+  });
 }

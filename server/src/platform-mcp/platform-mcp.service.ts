@@ -61,10 +61,7 @@ import {
   MemoryUpdateStatus,
   computeMemoryContentHash,
 } from '../memories/memory.constants';
-import {
-  MemoryImportanceInput,
-  computeMemoryImportance,
-} from '../memories/memory-importance';
+import { sortMemoriesByImportance } from '../memories/memory-importance';
 import {
   archiveMemoryRow,
   assertTeamScopedMemoryRow,
@@ -3852,7 +3849,7 @@ export class PlatformMcpService implements OnModuleInit {
    *    **软删过滤必须**（Metis M7）；可选 level 入参收窄到单级。
    * 4. query → content contains（prisma 层过滤）；tags → 取回后内存过滤
    *    （tags 为 Json 列，prisma 无 contains 支持）。
-   * 5. tags 过滤后按 `computeMemoryImportance` 降序重排（memory-enhancement
+   * 5. tags 过滤后按 `sortMemoriesByImportance` 降序重排（memory-enhancement
    *    Todo 4；prisma 侧仍取 createdAt desc 以便重要度全平时的观感与可复现），
    *    再 limit 截断（默认 20，max 50）。
    * 6. 对**实际返回**的 id fire-and-forget 计 `refCount+1` / `lastUsedAt`
@@ -4003,7 +4000,7 @@ export class PlatformMcpService implements OnModuleInit {
     });
 
     const limit = this.normalizeMemoryLimit(args.limit);
-    const ranked = this.sortMemoriesByImportance(
+    const ranked = sortMemoriesByImportance(
       this.filterMemoryByTags(rows, args.tags),
     ).slice(0, limit);
 
@@ -4075,8 +4072,10 @@ export class PlatformMcpService implements OnModuleInit {
    * 1. 两行定位（任一不存在/已软删 → 404；source 已归档再合并即命中此路径）；
    * 2. 同 id → 400（自合并无意义，且会让 refCount 翻倍）；
    * 3. scope：两行都必须是本团队 team 级（同 memoryArchive 决策⑤）；
-   * 4. **单事务**：target.refCount += source.refCount、source.mergedIntoId = target.id、
-   *    source.deletedAt = now。计数转移与归档必须同生共死，否则出现
+   * 4. **单事务 + 条件 claim**：先以 `deletedAt: null` 为条件把 source 归档
+   *    （mergedIntoId + deletedAt），count=0 说明已被归档/他人认领 → 整体回滚；
+   *    再在同一事务内读 source.refCount 并 `target.refCount +=` 该值。
+   *    计数转移与归档必须同生共死，否则出现
    *    「引用计数丢在已归档行上、target 重要性被低估」的半合并态。
    * 入参不含 refCount / mergedIntoId / deletedAt（对 Agent 只读）。
    */
@@ -4104,16 +4103,36 @@ export class PlatformMcpService implements OnModuleInit {
     const execTeamId = await this.resolveExecTeamId(exec);
     assertTeamScopedMemoryRow(source, execTeamId);
     assertTeamScopedMemoryRow(target, execTeamId);
-    const transferredRef = source.refCount;
-    await this.prisma.$transaction(async (tx) => {
-      await tx.memory.update({
-        where: { id: target.id },
-        data: { refCount: { increment: transferredRef } },
-      });
-      await tx.memory.update({
-        where: { id: source.id },
+    // claim 与计数转移都发生在同一事务内：claim 失败则整体回滚，target 不受影响。
+    const transferredRef = await this.prisma.$transaction(async (tx) => {
+      // 条件 claim（`deletedAt: null`）是并发的唯一裁决点：两个以同一 source 进入的
+      // 并发 merge 只有一个能拿到 count=1，输家整体回滚——否则两次都通过事务外的软删
+      // 前置检查 → target 被转移 2N 次。
+      const claim = await tx.memory.updateMany({
+        where: { id: source.id, deletedAt: null },
         data: { mergedIntoId: target.id, deletedAt: new Date() },
       });
+      if (claim.count === 0) {
+        // 与本方法文档「source 已归档再合并即命中此路径」同口径：对调用方该行已不存在，
+        // 且重试无意义（已被另一请求认领），故 404 而非 409。
+        throw new NotFoundException({
+          code: MEMORY_ERRORS.MEMORY_NOT_FOUND,
+          message: '记忆条目已被归档或合并（并发合并已由另一请求认领）',
+        });
+      }
+      // 转移量在事务内、claim 之后读：此刻 source 已被本事务独占（他人 claim 必为 0），
+      // 读到的 refCount 含 claim 前已提交的并发 +1（memory_search 命中计数），
+      // 事务外读会把这部分增量丢掉。
+      const claimed = await tx.memory.findUnique({
+        where: { id: source.id },
+        select: { refCount: true },
+      });
+      const amount = claimed?.refCount ?? 0;
+      await tx.memory.update({
+        where: { id: target.id },
+        data: { refCount: { increment: amount } },
+      });
+      return amount;
     });
     return { merged: true, targetId: target.id, transferredRef };
   }
@@ -7665,33 +7684,6 @@ export class PlatformMcpService implements OnModuleInit {
     const l = Number(limit ?? 20);
     if (!Number.isFinite(l)) return 20;
     return Math.min(Math.max(Math.floor(l), 1), 50);
-  }
-
-  /**
-   * memory_search 结果按重要度降序（memory-enhancement Todo 4）。
-   *
-   * 原先靠 prisma 的 `createdAt desc` 排序，于是「老但高频被引用」的记忆必然
-   * 沉底。改为纯内存排序：候选集已由 where（deletedAt/scope/keyword）收窄，
-   * 最多几百行，无需下推到 SQL。
-   *
-   * `now` 只求值一次并透传给全部行——否则同一批候选跨一次毫秒跳动打分，
-   * 结果不可复现（也难写断言）。同分时按 `lastUsedAt ?? createdAt` 新者优先，
-   * 与原先 createdAt desc 的观感一致。
-   */
-  private sortMemoriesByImportance<
-    T extends MemoryImportanceInput & { id: string },
-  >(rows: T[]): T[] {
-    if (rows.length < 2) return rows;
-    const now = new Date();
-    const recencyOf = (row: T) =>
-      (row.lastUsedAt ?? row.createdAt).getTime();
-    return [...rows].sort((a, b) => {
-      const diff =
-        computeMemoryImportance(b, undefined, now) -
-        computeMemoryImportance(a, undefined, now);
-      if (diff !== 0) return diff;
-      return recencyOf(b) - recencyOf(a);
-    });
   }
 
   /** memory_search tags 内存过滤（Json 列无 prisma contains 支持）：须包含全部查询标签。 */

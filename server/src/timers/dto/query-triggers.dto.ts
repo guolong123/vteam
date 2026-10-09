@@ -48,7 +48,7 @@ export class QueryTriggersDto {
   status?: string;
 
   @ApiPropertyOptional({
-    description: 'kind 过滤（TRIGGER_KIND 白名单 6 种），非法值 400',
+    description: 'kind 过滤（TRIGGER_KIND 白名单 7 种），非法值 400',
     enum: Object.values(TRIGGER_KIND),
   })
   @IsOptional()
