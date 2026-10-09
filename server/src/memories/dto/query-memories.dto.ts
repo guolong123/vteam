@@ -16,11 +16,13 @@ import {
 import { MEMORY_LEVELS } from '../memory.constants';
 
 /**
- * GET /memories 查询参数（level/teamId/autoInject 过滤 + keyword 内容搜索 + 分页，
+ * GET /memories 查询参数（level/teamId/autoInject/archived 过滤 + keyword 内容搜索 + 分页，
  * 对齐 QueryToolsDto 模式，返回 {items, total, page, pageSize}）。
- * 全端点 AdminGuard（Metis m6：记忆管理仅管理员可见，不扩展权限矩阵）。
  * 2026-09-30：level 扩为 team/role/global（task 级记忆已删除，level=task → 400，
  * taskId 过滤已删除）；新增 autoInject 过滤（记忆页「仅看自动注入」）。
+ * memory-enhancement Todo 2：GET 去 AdminGuard → 成员感知过滤（service 层按
+ * global ∪ 自己团队收窄，非 admin 不加 archived 跨团队行）；新增 archived 三态过滤
+ * （归档复用 deletedAt 软删列，不引入 enabled/category 新状态列）。
  */
 export class QueryMemoriesDto {
   @ApiPropertyOptional({
@@ -55,6 +57,19 @@ export class QueryMemoriesDto {
   })
   @IsIn([true, false])
   autoInject?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      '归档状态过滤：缺省/false=只看活跃（deletedAt=null），true=只看已归档（deletedAt 非空）。归档复用软删列（不新增状态列）',
+  })
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === 'true' || value === true) return true;
+    if (value === 'false' || value === false) return false;
+    return undefined;
+  })
+  @IsIn([true, false])
+  archived?: boolean;
 
   @ApiPropertyOptional({ description: '记忆内容模糊搜索（content contains）' })
   @IsOptional()

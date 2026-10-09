@@ -13,6 +13,8 @@ describe('MemoriesController', () => {
     findAll: jest.Mock;
     remove: jest.Mock;
     update: jest.Mock;
+    restore: jest.Mock;
+    purge: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -20,6 +22,8 @@ describe('MemoriesController', () => {
       findAll: jest.fn(),
       remove: jest.fn(),
       update: jest.fn(),
+      restore: jest.fn(),
+      purge: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -34,24 +38,35 @@ describe('MemoriesController', () => {
     controller = module.get<MemoriesController>(MemoriesController);
   });
 
-  describe('守卫元数据（全端点 admin，Metis m6）', () => {
-    it('GET /memories 挂 AdminGuard', () => {
+  describe('守卫元数据（memory-enhancement Todo 2：权限下沉 service）', () => {
+    it('GET /memories 不再挂 AdminGuard（成员感知过滤下沉 service）', () => {
       const guards = Reflect.getMetadata(
         '__guards__',
         MemoriesController.prototype.findAll,
       );
-      expect(guards).toContain(AdminGuard);
+      expect(guards ?? []).not.toContain(AdminGuard);
     });
 
-    it('DELETE /memories/:id 挂 AdminGuard', () => {
+    it('DELETE /memories/:id 不再挂 AdminGuard（per-row 鉴权在 service）', () => {
       const guards = Reflect.getMetadata(
         '__guards__',
         MemoriesController.prototype.remove,
       );
-      expect(guards).toContain(AdminGuard);
+      expect(guards ?? []).not.toContain(AdminGuard);
     });
 
-    it('PATCH /memories/:id 挂 AdminGuard（更新不移除 admin，仅叠加团队归属）', () => {
+    it('POST /memories/:id/restore 与 /purge 不挂 AdminGuard（per-row 鉴权在 service）', () => {
+      expect(
+        Reflect.getMetadata('__guards__', MemoriesController.prototype.restore) ??
+          [],
+      ).not.toContain(AdminGuard);
+      expect(
+        Reflect.getMetadata('__guards__', MemoriesController.prototype.purge) ??
+          [],
+      ).not.toContain(AdminGuard);
+    });
+
+    it('PATCH /memories/:id 保留 AdminGuard（编辑权限不放开）', () => {
       const guards = Reflect.getMetadata(
         '__guards__',
         MemoriesController.prototype.update,
@@ -61,24 +76,43 @@ describe('MemoriesController', () => {
   });
 
   describe('端点路由转发', () => {
-    it('GET /memories 透传查询参数到 findAll', async () => {
+    it('GET /memories 透传查询参数与调用方到 findAll', async () => {
       const result = { items: [], total: 0, page: 1, pageSize: 20 };
       service.findAll.mockResolvedValue(result);
 
-      const out = await controller.findAll({
-        level: 'team',
-        teamId: 'tm_1',
+      const out = await controller.findAll(
+        {
+          level: 'team',
+          teamId: 'tm_1',
+          page: 1,
+          pageSize: 20,
+        },
+        { user: { id: 'u_member' } } as never,
+      );
+
+      expect(service.findAll).toHaveBeenCalledWith(
+        {
+          level: 'team',
+          teamId: 'tm_1',
+          page: 1,
+          pageSize: 20,
+        },
+        { id: 'u_member' },
+      );
+      expect(out).toMatchObject({ items: [], total: 0, page: 1, pageSize: 20 });
+    });
+
+    it('GET /memories 无 req.user 时传 undefined viewer（service 内 fail closed）', async () => {
+      service.findAll.mockResolvedValue({
+        items: [],
+        total: 0,
         page: 1,
         pageSize: 20,
       });
 
-      expect(service.findAll).toHaveBeenCalledWith({
-        level: 'team',
-        teamId: 'tm_1',
-        page: 1,
-        pageSize: 20,
-      });
-      expect(out).toMatchObject({ items: [], total: 0, page: 1, pageSize: 20 });
+      await controller.findAll({}, {} as never);
+
+      expect(service.findAll).toHaveBeenCalledWith({}, undefined);
     });
 
     it('GET /memories 的 autoInject 查询串按字面量解析（"false" ≠ true，2026-09-30）', () => {
@@ -97,19 +131,63 @@ describe('MemoriesController', () => {
       expect(parse('')).toBeUndefined();
     });
 
-    it('DELETE /memories/:id 转发 id/viewer 到 remove（团队归属下沉 service，与 PATCH 对齐）', async () => {
+    it('GET /memories 的 archived 查询串按字面量解析三态（缺省=活跃）', () => {
+      const parse = (raw: string) =>
+        plainToInstance(
+          QueryMemoriesDto,
+          Object.fromEntries(new URLSearchParams(raw)),
+        ).archived;
+
+      expect(parse('archived=true')).toBe(true);
+      expect(parse('archived=false')).toBe(false);
+      expect(parse('archived=')).toBeUndefined();
+      expect(parse('')).toBeUndefined();
+    });
+
+    it('DELETE /memories/:id 转发 id/viewer 到 remove（per-row 鉴权下沉 service）', async () => {
       service.remove.mockResolvedValue({
         id: 'me_0000000001',
         deletedAt: new Date('2026-08-15T00:00:00Z'),
       });
-      const req = { user: { id: 'u_admin' } };
+      const req = { user: { id: 'u_member' } };
 
       const out = await controller.remove('me_0000000001', req as never);
 
       expect(service.remove).toHaveBeenCalledWith('me_0000000001', {
-        id: 'u_admin',
+        id: 'u_member',
       });
       expect(out.deletedAt).toBeInstanceOf(Date);
+    });
+
+    it('POST /memories/:id/restore 转发 id/viewer 到 restore', async () => {
+      service.restore.mockResolvedValue({
+        id: 'me_0000000001',
+        deletedAt: null,
+      });
+
+      const out = await controller.restore(
+        'me_0000000001',
+        { user: { id: 'u_member' } } as never,
+      );
+
+      expect(service.restore).toHaveBeenCalledWith('me_0000000001', {
+        id: 'u_member',
+      });
+      expect(out.deletedAt).toBeNull();
+    });
+
+    it('POST /memories/:id/purge 转发 id/viewer 到 purge', async () => {
+      service.purge.mockResolvedValue({ id: 'me_0000000001' });
+
+      const out = await controller.purge(
+        'me_0000000001',
+        { user: { id: 'u_admin' } } as never,
+      );
+
+      expect(service.purge).toHaveBeenCalledWith('me_0000000001', {
+        id: 'u_admin',
+      });
+      expect(out).toEqual({ id: 'me_0000000001' });
     });
 
     it('PATCH /memories/:id 转发 id/dto/ viewer 到 update（团队归属下沉 service）', async () => {
@@ -147,10 +225,46 @@ describe('MemoriesController', () => {
         response: { code: 'MEMORY_NOT_FOUND', message: '记忆条目不存在' },
       });
     });
+
+    it('service 抛 403 MEMORY_FORBIDDEN（成员操作 global 行）时透传给客户端', async () => {
+      service.purge.mockRejectedValue(
+        Object.assign(new Error('Forbidden'), {
+          status: 403,
+          response: {
+            code: 'MEMORY_FORBIDDEN',
+            message: '全局记忆仅平台管理员可操作',
+          },
+        }),
+      );
+
+      await expect(
+        controller.purge('me_1', { user: { id: 'u_member' } } as never),
+      ).rejects.toMatchObject({
+        response: { code: 'MEMORY_FORBIDDEN' },
+      });
+    });
+
+    it('service 抛 409 MEMORY_RESTORE_DUPLICATE（撞活跃同 hash）时透传给客户端', async () => {
+      service.restore.mockRejectedValue(
+        Object.assign(new Error('Conflict'), {
+          status: 409,
+          response: {
+            code: 'MEMORY_RESTORE_DUPLICATE',
+            message: '同内容记忆已处于活跃状态，请先删除重复条目',
+          },
+        }),
+      );
+
+      await expect(
+        controller.restore('me_1', { user: { id: 'u_member' } } as never),
+      ).rejects.toMatchObject({
+        response: { code: 'MEMORY_RESTORE_DUPLICATE' },
+      });
+    });
   });
 });
 
-describe('MemoriesController AdminGuard（非 admin 403）', () => {
+describe('MemoriesController AdminGuard（PATCH 编辑仍 admin-only）', () => {
   let guard: AdminGuard;
   let prisma: {
     user: {

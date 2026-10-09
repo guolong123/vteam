@@ -1,0 +1,113 @@
+PASS src/memories/memories.service.spec.ts
+  MemoriesService
+    onModuleInit（重启续号，对齐 me_ 前缀）
+      ✓ 库内已有 me_<数字> 最大 id 时对齐 memory 前缀序号 (9 ms)
+      ✓ 混入 me_builtin_* 命名 id 时仍按数字序号续号（parseInt NaN 防护） (1 ms)
+      ✓ 空库/无记录时跳过续号 (1 ms)
+    findAll（分页 + 过滤；管理员全量）
+      ✓ 默认分页：deletedAt: null + createdAt desc + page/pageSize 归一 (3 ms)
+      ✓ level/teamId/keyword 过滤透传（keyword → content OR description contains） (1 ms)
+      ✓ level=task → 400 MEMORY_LEVEL_INVALID（任务级记忆已删除，不触达 Prisma） (2 ms)
+      ✓ 非法 level → 400 MEMORY_LEVEL_INVALID（不触达 Prisma） (1 ms)
+      ✓ level=role 放行（2026-09-30 角色级记忆）
+      ✓ autoInject=false 显式下推为 where 条件（不被当成 falsy 丢弃） (1 ms)
+      ✓ autoInject 缺省时不进 where（不筛，三档全返回）
+      ✓ GET /memories?teamId= 团队级过滤可用（teamId 精确匹配） (1 ms)
+      ✓ description 字段透传：keyword 同时命中 content 与 description
+      ✓ page/pageSize 非法值归一（page=0→1，pageSize=999→100） (1 ms)
+    findAll（成员感知过滤：非 admin 仅见 global ∪ 自己团队）
+      ✓ 非 admin：where 强制 AND global ∪ teamId in 我的团队（安全红线）
+      ✓ 非 admin：跨团队行不可见（响应 items 仅 global 或自己团队） (1 ms)
+      ✓ 非 admin + keyword：成员过滤走 AND 不覆盖 keyword 的 OR（两条件并存）
+      ✓ 非 admin：不属于任何团队 → teamId in [] 只剩 global 行 (1 ms)
+      ✓ 无 viewer（未认证直入 service）→ fail closed 仅 global，不查成员表
+      ✓ 非 admin + level=global：成员过滤仍叠加（不因显式 level 而放行） (1 ms)
+      ✓ 非 admin + level=task → 400 MEMORY_LEVEL_INVALID（不触达 Prisma，校验优先于鉴权）
+    findAll（archived 三态过滤，归档复用 deletedAt）
+      ✓ 管理员 archived=true → deletedAt not null（只看已归档） (1 ms)
+      ✓ 管理员 archived=false → deletedAt null（只看活跃）
+      ✓ 管理员 archived 缺省 → deletedAt null（默认活跃）
+      ✓ 非 admin archived=true → 已归档且团队可见性同时收窄
+    remove（归档软删，per-row 鉴权）
+      ✓ 置 deletedAt=now，返回软删后的条目 (1 ms)
+      ✓ 条目不存在 → 404 MEMORY_NOT_FOUND
+      ✓ 已软删条目再次删除 → 404 MEMORY_NOT_FOUND (1 ms)
+      ✓ team 级行非成员 → 403 MEMORY_FORBIDDEN（不删除，per-row 鉴权）
+      ✓ 成员归档本团队行成功（非 admin 也可，团队成员即可） (1 ms)
+      ✓ 成员归档 global 行 → 403 MEMORY_FORBIDDEN（不查成员表，只判管理员）
+      ✓ 无 viewer 归档 global 行 → 403 MEMORY_FORBIDDEN（fail closed） (1 ms)
+      ✓ 管理员归档 global 行成功（AdminGuard 移除后由 service 兜底管理员门） (4 ms)
+      ✓ 成员操作他人团队行 → 403 MEMORY_FORBIDDEN（跨团队不可写） (2 ms)
+      ✓ team 级行成员可删：软删落库 (1 ms)
+      ✓ global 级行（teamId 为空）不查成员表，管理员直接软删
+    restore（恢复归档行 + 撞活跃重复 409）
+      ✓ 已归档行 → 清除 deletedAt 回到活跃列表
+      ✓ 条目不存在 → 404 MEMORY_NOT_FOUND (1 ms)
+      ✓ 本就活跃的行 → 404 MEMORY_NOT_FOUND（不重复恢复） (1 ms)
+      ✓ 撞同 scope 活跃同 hash 行 → 409 MEMORY_RESTORE_DUPLICATE (1 ms)
+      ✓ 存量行 contentHash 为 null → 跳过查重直接恢复（避免误报 409）
+      ✓ role 级行查重带 roleId（不与同团队其他岗位行混淆） (1 ms)
+      ✓ 成员恢复本团队行成功（非 admin 也可）
+      ✓ 归档→恢复闭环：恢复后重新命中活跃列表查询（archived 缺省） (1 ms)
+      ✓ 成员恢复 global 行 → 403 MEMORY_FORBIDDEN（鉴权先于查重）
+      ✓ 管理员恢复 global 行成功 (1 ms)
+      ✓ 成员恢复他人团队行 → 403 MEMORY_FORBIDDEN（跨团队不可写）
+    purge（硬删，per-row 鉴权）
+      ✓ 真硬删：prisma.memory.delete 落库（不再是软删） (1 ms)
+      ✓ 行已归档也可硬删（已归档视图的「永久删除」）
+      ✓ 条目不存在 → 404 MEMORY_NOT_FOUND（不删）
+      ✓ 成员硬删 global 行 → 403 MEMORY_FORBIDDEN (1 ms)
+      ✓ 成员硬删他人团队行 → 403 MEMORY_FORBIDDEN（跨团队不可写）
+      ✓ 管理员硬删 global 行成功
+    update（PATCH 部分更新 + 团队归属）
+      ✓ 条目不存在 → 404 MEMORY_NOT_FOUND（不更新） (1 ms)
+      ✓ 已软删条目 → 404 MEMORY_NOT_FOUND（不更新）
+      ✓ 全空 → 400 MEMORY_UPDATE_EMPTY（不更新） (1 ms)
+      ✓ 仅切 autoInject 即为有效更新（记忆页行内开关，2026-09-30）
+      ✓ autoInject=false 也能落库（不被当成未提供而 400） (1 ms)
+      ✓ role 级行同样要求团队成员（非成员 → 403） (1 ms)
+      ✓ team 级行非成员 → 403 PERMISSION_TEAM_NOT_MEMBER（不更新）
+      ✓ 成员更新 content：同步重算 contentHash（sha256 hex） (1 ms)
+      ✓ 成员部分更新 tags：仅透传 tags，不碰 contentHash (1 ms)
+      ✓ global 级行（teamId 为空）不查成员表，直接更新
+
+PASS src/memories/memories.controller.spec.ts
+  MemoriesController
+    守卫元数据（memory-enhancement Todo 2：权限下沉 service）
+      ✓ GET /memories 不再挂 AdminGuard（成员感知过滤下沉 service） (3 ms)
+      ✓ DELETE /memories/:id 不再挂 AdminGuard（per-row 鉴权在 service） (1 ms)
+      ✓ POST /memories/:id/restore 与 /purge 不挂 AdminGuard（per-row 鉴权在 service）
+      ✓ PATCH /memories/:id 保留 AdminGuard（编辑权限不放开） (1 ms)
+    端点路由转发
+      ✓ GET /memories 透传查询参数与调用方到 findAll
+      ✓ GET /memories 无 req.user 时传 undefined viewer（service 内 fail closed） (1 ms)
+      ✓ GET /memories 的 autoInject 查询串按字面量解析（"false" ≠ true，2026-09-30） (1 ms)
+      ✓ GET /memories 的 archived 查询串按字面量解析三态（缺省=活跃） (1 ms)
+      ✓ DELETE /memories/:id 转发 id/viewer 到 remove（per-row 鉴权下沉 service） (1 ms)
+      ✓ POST /memories/:id/restore 转发 id/viewer 到 restore (1 ms)
+      ✓ POST /memories/:id/purge 转发 id/viewer 到 purge
+      ✓ PATCH /memories/:id 转发 id/dto/ viewer 到 update（团队归属下沉 service） (1 ms)
+      ✓ service 抛 404 MEMORY_NOT_FOUND 时透传给客户端 (1 ms)
+      ✓ service 抛 403 MEMORY_FORBIDDEN（成员操作 global 行）时透传给客户端
+      ✓ service 抛 409 MEMORY_RESTORE_DUPLICATE（撞活跃同 hash）时透传给客户端 (1 ms)
+  MemoriesController AdminGuard（PATCH 编辑仍 admin-only）
+    ✓ 非 admin（无 users:manage）→ 403 FORBIDDEN_ADMIN (1 ms)
+
+PASS src/memories/memory-importance.spec.ts
+  computeMemoryImportance
+    ✓ 默认半衰期为 30 天（未配 env 时取默认值）
+    ✓ env 非法时静默回落默认值（配置写错不该让进程起不来）
+    ✓ 全新未被引用的记忆 score ≈ 1.0（落 (0.9, 1.1]，不被新鲜度项饿死）
+    ✓ 同龄下 refCount 越高 score 单调越高（引用多的压过引用少的）
+    ✓ 同 refCount 下越老 score 越低（指数衰减，30 天半衰）
+    ✓ 省略 halfLifeDays 时用导出的 MEMORY_IMPORTANCE_HALF_LIFE_DAYS（默认 30） (1 ms)
+    ✓ lastUsedAt 优先于 createdAt 计龄（半年前建、昨天命中 → 记昨天的龄）
+    ✓ 半衰期越小越看重新鲜度（同一行，调小半衰期后老行掉分更多）
+    ✓ 半衰期非法（0/负数/NaN）时回落默认值，不产出 NaN/Infinity
+    ✓ 异常行不毁排序：负数/非有限的 refCount 与未来时间戳都被钳住
+
+Test Suites: 3 passed, 3 total
+Tests:       88 passed, 88 total
+Snapshots:   0 total
+Time:        3.821 s, estimated 4 s
+Ran all test suites matching /memories/i.

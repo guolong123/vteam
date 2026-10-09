@@ -1,0 +1,129 @@
+================================================================================
+EVIDENCE — Plan: memory-enhancement / Todo 2 (mem-rest-perm)
+任务：记忆接口成员感知权限 + 归档/恢复/硬删端点（SECURITY-CRITICAL）
+执行时间：2026-10-09
+================================================================================
+
+[1] 变更文件清单（5 个源文件 + 2 个 spec，0 迁移）
+
+  server/src/users/admin-permission.ts          [NEW]  共享 admin 谓词（单一事实来源）
+  server/src/users/admin.guard.ts               [MOD]  改为复用 hasAdminPermission（语义零变更）
+  server/src/memories/memory.constants.ts       [MOD]  MEMORY_ERRORS 追加 FORBIDDEN / RESTORE_DUPLICATE
+  server/src/memories/dto/query-memories.dto.ts [MOD]  QueryMemoriesDto.archived 三态
+  server/src/memories/memories.service.ts       [MOD]  findAll 成员感知 + per-row 守卫 + restore/purge
+  server/src/memories/memories.controller.ts    [MOD]  GET/DELETE 去 AdminGuard，新增 2 端点
+  server/src/memories/memories.service.spec.ts  [MOD]  权限矩阵 + archived 三态 + restore/purge
+  server/src/memories/memories.controller.spec.ts [MOD] 守卫元数据反向断言 + 403/409 透传
+
+  未触碰：prisma/schema.prisma、prisma/migrations/*、memory-importance.*（Todo 1 所有）、
+          platform-mcp/、chat/worker-dispatcher.ts、web/、roles.constants.ts（权限矩阵零扩展）
+
+
+[2] 实现的权限矩阵
+
+  端点                                 全局守卫              管理员        团队成员       非成员/其他团队    无 viewer
+  ----------------------------------- --------------------- ------------ -------------- ---------------- ---------
+  GET    /memories                     JwtAuthGuard(全局)    全量         global∪本团队   仅 global         仅 global（fail closed）
+  DELETE /memories/:id  (归档软删)     JwtAuthGuard(全局)    任意行       本团队行        403 FORBIDDEN     403 FORBIDDEN
+  POST   /memories/:id/restore         JwtAuthGuard(全局)    任意行       本团队行        403 FORBIDDEN     403 FORBIDDEN
+  POST   /memories/:id/purge (硬删)    JwtAuthGuard(全局)    任意行       本团队行        403 FORBIDDEN     403 FORBIDDEN
+  PATCH  /memories/:id                 JwtAuthGuard + AdminGuard（保留）  —   —                —                —
+
+  * global 行（teamId=null）写操作仅管理员；team/role 行写操作=该团队 team_user_members 成员。
+  * DELETE 语义不变（软删=归档）；硬删只在新增的 purge 端点。PATCH 权限零变更（仍 AdminGuard）。
+
+  错误码：403 MEMORY_FORBIDDEN（新增）/ 404 MEMORY_NOT_FOUND（既有）/ 409 MEMORY_RESTORE_DUPLICATE（新增）
+
+  Admin 谓词复用：users/admin-permission.ts 抽出 hasAdminPermission（permissions.all===true ||
+  permissions.users.manage===true，与 admin.guard.ts:55-61 完全同源），AdminGuard 改为调用它，
+  memories.service 通过 isPlatformAdminByUserId 查库复用同一口径（不再各自抄一份逻辑）。
+
+
+[3] 安全红线验证（非 admin findAll 必须带 OR 过滤）
+
+  做法：临时把 memories.service.ts 中 `...(!isAdmin ? { AND: [{ OR: [...] }] } : {})`
+        替换为 `...(!isAdmin ? {} : {})`（模拟"漏过滤"回归），跑 scoped jest。
+
+  $ npx jest --runInBand memories.service
+  实际输出（6 个专用用例失败，断言真实生效）：
+      ✕ 非 admin：where 强制 AND global ∪ teamId in 我的团队（安全红线） (2 ms)
+      ✕ 非 admin + keyword：成员过滤走 AND 不覆盖 keyword 的 OR（两条件并存)
+      ✕ 非 admin：不属于任何团队 → teamId in [] 只剩 global 行 (2 ms)
+      ✕ 无 viewer（未认证直入 service）→ fail closed 仅 global，不查成员表 (2 ms)
+      ✕ 非 admin + level=global：成员过滤仍叠加（不因显式 level 而放行）
+      ✕ 非 admin archived=true → 已归档且团队可见性同时收窄 (1 ms)
+    Tests:       6 failed, 56 passed, 62 total
+
+  随后已从备份还原源文件（grep 确认 "安全红线" 注释与 AND 过滤均在位），全量回归通过。
+
+
+[4] 验证命令与结果
+
+  [4.1] 类型检查
+  $ cd server && npx tsc --noEmit
+  （无输出 = 通过；期间唯一报错 memories.controller.spec.ts:68 "Expected 2 arguments"
+    已随 spec 适配 findAll 新增 viewer 形参而修复）
+
+  [4.2] scoped jest（记忆域，含 Todo 1 的 memory-importance.spec）
+  $ cd server && npx jest --runInBand --verbose memories
+  Test Suites: 3 passed, 3 total
+  Tests:       88 passed, 88 total
+  （完整逐条输出见同目录 task-2-scoped-jest.txt）
+
+  [4.3] 全量单测
+  $ cd server && npm run test
+  Test Suites: 164 passed, 164 total
+  Tests:       3803 passed, 3803 total
+  Snapshots:   1 passed, 1 total
+  Time:        31.446 s
+  → 既有 suites 无回归（含 users/admin.guard.spec、tools、skills、timers 等复用 admin 语义的域）
+
+
+[5] 新增测试覆盖（对照 todo 要求逐条）
+
+  findAll 成员感知：
+    ✓ 非 admin where 强制 AND global ∪ teamId in 我的团队（安全红线，断言完整 where 形状）
+    ✓ 非 admin 响应 items 全部满足 level==='global' || teamId∈自己团队（跨团队不可见）
+    ✓ 非 admin + keyword：AND 不覆盖 keyword 的 OR（两条件并存，防"优化掉过滤"）
+    ✓ 无团队成员 → teamId in []（只剩 global）
+    ✓ 无 viewer → fail closed 且不查成员表
+    ✓ 非 admin + level=global 仍叠加成员过滤
+    ✓ 管理员 GET 全量回归（原 8 条 findAll 断言全部保持，仅补 viewer 形参）
+    ✓ level 校验优先于鉴权（level=task → 400，不触达 Prisma）
+  archived 三态：管理员 true/false/缺省 三条 + 非 admin archived=true 叠加团队收窄
+  归档（DELETE 语义不变）：
+    ✓ 成员归档本团队行成功 / 成员归档 global 行 403 / 成员操作他人团队行 403
+    ✓ 管理员 global 行成功（AdminGuard 移除后由 service 兜底）/ 无 viewer fail closed
+    ✓ 已归档行重复删 → 404（既有语义保持）
+  恢复：
+    ✓ 已归档行清除 deletedAt / 活跃行 → 404 / 不存在 → 404
+    ✓ 撞同 scope 活跃同 hash → 409（并断言 findFirst 完整 where 抄 findDuplicateMemory）
+    ✓ role 级行查重带 roleId / contentHash=null 存量行跳过查重（防误报 409）
+    ✓ 成员恢复本团队行成功 / global 行 403 / 他人团队行 403 / 管理员 global 行成功
+    ✓ 归档→恢复闭环：恢复后重新出现在 archived 缺省的活跃列表
+  硬删（purge）：
+    ✓ 真 prisma.memory.delete（断言 update 未被调用 = 非软删）
+    ✓ 已归档行也可硬删 / 不存在 → 404
+    ✓ 成员 purge global 行 403 / 他人团队行 403 / 管理员 global 行成功
+    ✓ purge 后 findUnique 语义=row 消失由 delete 调用 + 404 缺行用例覆盖
+  控制器：
+    ✓ GET/DELETE/restore/purge 均不挂 AdminGuard（守卫元数据反向断言）
+    ✓ PATCH 仍挂 AdminGuard（编辑权限未放开）
+    ✓ viewer 由 @Req() 透传；无 req.user → undefined
+    ✓ 403 MEMORY_FORBIDDEN / 409 MEMORY_RESTORE_DUPLICATE / 404 MEMORY_NOT_FOUND 透传客户端
+    ✓ archived 查询串字面量解析（"false" ≠ true 回归防护，同 autoInject 既有写法）
+
+
+[6] 护栏自检
+
+  ✓ 非 admin findAll 必带 OR 过滤（已做反向验证，见 [3]）
+  ✓ DELETE 仍软删=归档，未改语义；硬删仅 purge 端点（spec 断言 update 未被调用）
+  ✓ PATCH 权限与行为零变更（AdminGuard + 原 TEAM_MEMBERSHIP_ERRORS 校验保留）
+  ✓ 未编辑 schema.prisma / 未建迁移 / 未动 memory-importance.*（Todo 1 资产）
+  ✓ 未动 platform-mcp/、chat/worker-dispatcher.ts、web/
+  ✓ roles.constants.ts 未动（无新增权限资源位，矩阵零扩展）
+  ✓ 无 as any / @ts-ignore / 空 catch（新增代码零 any，catch 零新增）
+  ✓ 未执行任何 git 命令（交由 orchestrator 按 wave 提交）
+  ✓ 归档复用 deletedAt，未引入 category/enabled 新状态列
+
+================================================================================

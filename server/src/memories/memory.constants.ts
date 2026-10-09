@@ -23,14 +23,18 @@ export type MemoryLevel = (typeof MEMORY_LEVELS)[keyof typeof MEMORY_LEVELS];
  * 记忆域错误码常量（对齐 tool.constants / mcp-server.constants 命名约定：
  * 大写 SNAKE，随异常响应的 code 字段返回）。
  *
- * - 目标记忆不存在（DELETE）→ 404 MEMORY_NOT_FOUND（含已软删条目）
+ * - 目标记忆不存在（DELETE/purge）→ 404 MEMORY_NOT_FOUND（含已软删条目）
  * - 任务级/非法 level 入参（session-unification Todo 9，任务级记忆已删除）→ 400 MEMORY_LEVEL_INVALID
  * - 更新无有效字段（PATCH /memory_update 全空）→ 400 MEMORY_UPDATE_EMPTY
+ * - 行级鉴权失败（memory-enhancement Todo 2：团队行非成员 / 全局行非管理员）→ 403 MEMORY_FORBIDDEN
+ * - 恢复撞同 scope 活跃同 hash 行（restore）→ 409 MEMORY_RESTORE_DUPLICATE
  */
 export const MEMORY_ERRORS = {
   MEMORY_NOT_FOUND: 'MEMORY_NOT_FOUND',
   MEMORY_LEVEL_INVALID: 'MEMORY_LEVEL_INVALID',
   MEMORY_UPDATE_EMPTY: 'MEMORY_UPDATE_EMPTY',
+  MEMORY_FORBIDDEN: 'MEMORY_FORBIDDEN',
+  MEMORY_RESTORE_DUPLICATE: 'MEMORY_RESTORE_DUPLICATE',
 } as const;
 
 import { createHash } from 'node:crypto';

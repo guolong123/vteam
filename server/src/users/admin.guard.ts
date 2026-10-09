@@ -6,6 +6,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { hasAdminPermission } from './admin-permission';
 
 /**
  * 平台管理员守卫（Phase 3 T8 落地）。
@@ -48,15 +49,7 @@ export class AdminGuard implements CanActivate {
       });
     }
 
-    const permissions = (user.role.permissions ?? {}) as Record<
-      string,
-      unknown
-    >;
-    if (permissions.all === true) {
-      return true;
-    }
-    const usersPerm = permissions.users as { manage?: boolean } | undefined;
-    if (usersPerm?.manage === true) {
+    if (hasAdminPermission(user.role.permissions)) {
       return true;
     }
 
