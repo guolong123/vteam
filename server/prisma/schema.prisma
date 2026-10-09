@@ -383,6 +383,10 @@ model Message {
   senderType       String   @map("sender_type")
   senderId         String?  @map("sender_id")
   senderInstanceId String?  @map("sender_instance_id") // 消息精确归属实例（agent sender 时为 ta_ 实例 id）
+  // 入站消息所属企微会话 id（仅 sender_type=external 且来自 WeCom 时有值）：
+  // 出站按它锚定目标会话，避免多群共用 bot 时被渠道级 lastChatid（每条入站覆盖）
+  // 带偏到别的群；取不到才回退 lastChatid。详见 20261009000000 迁移说明。
+  externalChatId  String?  @map("external_chat_id")
   content          Json
   mentions         Json?
   // UX-10 群聊附件：客户端先 POST /uploads 拿 url，随消息提交（图片/文档均可）

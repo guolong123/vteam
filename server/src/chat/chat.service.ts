@@ -1026,6 +1026,7 @@ export class ChatService {
         content: { text: dto.text, parts: [] } as Prisma.InputJsonValue,
         mentions: mentionsStored as Prisma.InputJsonValue,
         status: MESSAGE_STATUS.sent,
+        ...(dto.externalChatId ? { externalChatId: dto.externalChatId } : {}),
         ...(dto.attachmentUrl
           ? {
               attachmentUrl: dto.attachmentUrl,

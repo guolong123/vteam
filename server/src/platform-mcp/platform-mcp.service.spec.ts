@@ -7788,6 +7788,68 @@ describe('PlatformMcpService', () => {
       );
     });
 
+    it('内存流失效 → 回退持久化 chatid 锚点（多群共用 bot 不再依赖 lastChatid）', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue(undefined);
+      (adapter as any).uploadMediaBuffer = jest
+        .fn()
+        .mockResolvedValue('media_file_anchor');
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+      // 最近外部消息带持久化 chatid（新列）
+      prisma.message.findMany.mockResolvedValue([
+        { externalChatId: 'wriGjxCgAA_anchor' },
+      ]);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_file_anchor',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(prisma.message.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            senderType: SENDER_TYPE.external,
+            externalChatId: { not: null },
+          }),
+        }),
+      );
+      expect((adapter as any).sendMediaMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        'file',
+        'media_file_anchor',
+        'wriGjxCgAA_anchor',
+      );
+    });
+
+    it('锚点也查不到（历史消息未持久化 chatid）→ 仍回退 lastChatid（undefined）', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue(undefined);
+      (adapter as any).uploadMediaBuffer = jest
+        .fn()
+        .mockResolvedValue('media_file_none');
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+      prisma.message.findMany.mockResolvedValue([]);
+
+      await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_file_none',
+      });
+
+      expect((adapter as any).sendMediaMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        'file',
+        'media_file_none',
+        undefined,
+      );
+    });
+
     it('msgtype=file 无活动 stream → 回退 sendMediaMessage 主动推送 file 类型', async () => {
       const adapter = arrangeTeamChannel();
       adapter.getStream.mockReturnValue(undefined);

@@ -323,6 +323,9 @@ export class MessageInboundService implements MessageHost {
               '__external__',
               {
                 text: inboundText,
+                ...(cmdAny.chatid
+                  ? { externalChatId: String(cmdAny.chatid) }
+                  : {}),
                 ...(cmdAny.attachmentUrl
                   ? {
                       attachmentUrl: cmdAny.attachmentUrl,

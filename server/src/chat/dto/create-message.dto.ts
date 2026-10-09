@@ -56,6 +56,14 @@ export class CreateMessageDto {
   @IsString()
   attachmentType?: string;
 
+  @ApiPropertyOptional({
+    description:
+      '外部渠道会话 id（仅企微入站，群聊有值）：出站按它锚定目标会话，避免多群共用 bot 时错投',
+  })
+  @IsOptional()
+  @IsString()
+  externalChatId?: string;
+
   @ApiPropertyOptional({ description: '任务分区 id（team_group 频道分区）' })
   @IsOptional()
   @IsString()

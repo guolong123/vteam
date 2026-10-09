@@ -22,6 +22,8 @@ export type InboundCommand =
       dedupKey?: string;
       /** WeCom directed: chattype single|group */
       chattype?: string;
+      /** 入站消息所属会话 id（群聊有值，单聊无）：落库到消息行供出站锚定 */
+      chatid?: string;
       wecomUserId?: string;
       wecomUserName?: string;
       /** 附件三字段（与 CreateMessageDto 对齐，可选；图片等 inbound 媒体经 /uploads 落盘后透传） */

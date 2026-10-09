@@ -538,6 +538,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         senderName: fromUserName,
         dedupKey: body.msgid,
         chattype,
+        chatid: body.chatid,
         wecomUserId: fromUserId,
         wecomUserName: fromUserName,
       };
@@ -1971,6 +1972,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         senderName: fromUserName,
         dedupKey: body.msgid,
         chattype,
+        chatid: body.chatid,
         wecomUserId: fromUserId,
         wecomUserName: fromUserName,
         attachmentUrl: stored.url,
@@ -2064,6 +2066,7 @@ export class WecomAibotAdapter extends MessageAdapter {
           dedupKey:
             images.length > 1 ? `${body.msgid}_${i}` : (body.msgid ?? undefined),
           chattype,
+          chatid: body.chatid,
           wecomUserId: fromUserId,
           wecomUserName: fromUserName,
           attachmentUrl: stored.url,
@@ -2080,6 +2083,7 @@ export class WecomAibotAdapter extends MessageAdapter {
             senderName: fromUserName,
             dedupKey: body.msgid,
             chattype,
+            chatid: body.chatid,
             wecomUserId: fromUserId,
             wecomUserName: fromUserName,
           } as InboundCommand);

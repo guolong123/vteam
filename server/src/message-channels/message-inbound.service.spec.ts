@@ -276,12 +276,16 @@ describe('MessageInboundService', () => {
           wecomUserId: 'GuoLong',
           wecomUserName: 'GuoLong',
           chattype: 'group',
+          chatid: 'wriGjxCgAA_groupA',
         } as any,
       ]);
       expect(chatService.createMessage).toHaveBeenCalledWith(
         groupChannelId,
         '__external__',
-        { text: '[WeCom:GuoLong|from 群聊] hello wecom' },
+        {
+          text: '[WeCom:GuoLong|from 群聊] hello wecom',
+          externalChatId: 'wriGjxCgAA_groupA',
+        },
         { senderType: SENDER_TYPE.external, senderId: 'GuoLong' },
       );
       expect(delivery.finish).toHaveBeenCalledWith(

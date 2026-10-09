@@ -161,6 +161,15 @@ const GROUP_POST_DEDUP_WINDOW_MS = 5 * 60_000;
 /** group_post 幂等比对单次最多回溯行数（与 notify 侧同量级）。 */
 const GROUP_POST_DEDUP_SCAN_LIMIT = 20;
 
+/**
+ * 出站会话锚点回退窗口：内存流（10 分钟 TTL）失效后，取该频道最近一条外部消息
+ * 持久化的 chatid 作为目标会话。7 天是刻意放宽——chatid 稳定且锚点只在内存流
+ * 取不到时才用；设太短（如沿用 10 分钟）等于没修：agent 隔夜回复仍会回落到
+ * 渠道级 lastChatid，多群共用 bot 时错投概率不降。设太长则可能回复到用户已
+ * 退群的会话，故取一周。
+ */
+const WECOM_CHAT_ANCHOR_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** 所有 triggered=false 拦截路径的统一人读提示：本次调用未发布，重发无用。 */
 const NOTIFY_NOT_PUBLISHED_HINT =
   '本次调用未在群聊发布任何消息：triggered:false 不是投递失败，请勿重发；请按 reason 处理（throttled 稍后按需重派，plan-gated 待计划放行，review-triplet 补齐三元组，duplicate/dedup 说明已有在途或已发送）。';
@@ -5373,8 +5382,12 @@ export class PlatformMcpService implements OnModuleInit {
 
     // 出站目标会话：优先入站消息自己的 chatid（多群共用 bot 时唯一可靠来源）；
     // 缺省（pending 路径/旧流未存 chatid）才由适配器回退渠道级 lastChatid。
-    const inboundChatId =
+    let inboundChatId =
       pending?.chatid ?? activeExternal?.stream?.chatid ?? null;
+    if (!inboundChatId) {
+      // 内存流（10 分钟 TTL）已失效/重启丢失：回退持久化的 chatid 锚点
+      inboundChatId = await this.latestExternalChatId(teamId);
+    }
 
     // 回复须回到用户当初发言的那个机器人：同一 team 绑定多个 wecom 渠道时，
     // 取第一个绑定会把回信发到用户没发言的群里。仅当入站渠道不可考时才回退首个绑定。
@@ -7270,6 +7283,38 @@ export class PlatformMcpService implements OnModuleInit {
         if (stream) return { ...candidate, stream };
       }
       return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 出站会话锚点：该团队企微频道最近一条外部消息持久化的 chatid。
+   * 仅在内存流取不到时使用（窗口见 WECOM_CHAT_ANCHOR_TTL_MS）。缺值/异常一律
+   * null，调用方回退渠道级 lastChatid（既有行为，不劣化）。
+   */
+  private async latestExternalChatId(teamId: string): Promise<string | null> {
+    try {
+      const groupChannel = await this.findTeamGroupChannel(teamId);
+      if (!groupChannel) return null;
+      const rows = (await (this.prisma as any).message.findMany({
+        where: {
+          channelId: groupChannel.id,
+          senderType: SENDER_TYPE.external,
+          createdAt: { gte: new Date(Date.now() - WECOM_CHAT_ANCHOR_TTL_MS) },
+          externalChatId: { not: null },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+        select: { externalChatId: true },
+      })) as Array<{ externalChatId: string | null }>;
+      const chatId = rows[0]?.externalChatId ?? null;
+      if (chatId) {
+        this.logger.log(
+          `wecom_reply chatid 锚点回退 teamId=${teamId} chatId=${chatId}（内存流不可用）`,
+        );
+      }
+      return chatId;
     } catch {
       return null;
     }
