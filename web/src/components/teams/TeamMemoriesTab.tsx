@@ -7,7 +7,8 @@
  * - 两组并列：团队级（团队成员可写）与全局级（平台级记忆，仅 admin 有操作按钮）。
  *   服务端 GET /memories 已做成员感知过滤（global ∪ 自己的团队），本组件不再自行过滤。
  * - 活跃视图：团队行「禁用」= memoriesApi.archive（软删 = 归档，可恢复）+「删除」= purge（硬删）；
- *   已归档视图：团队行「恢复」= restore +「永久删除」= purge。
+ *   已归档视图：团队行「恢复」= restore（已合并行置灰，服务端亦 409 MEMORY_RESTORE_MERGED）
+ *   +「永久删除」= purge。
  * - 不做内容/tags 编辑、不做合并操作 UI（编辑与合并归管理页 / Agent 工具）。
  *
  * 视觉语言复制 system/memories 管理页（类型芯片 / 自动注入 / 相对时间），
@@ -362,6 +363,9 @@ function MemoryRow({
   const lastUsed = memory.lastUsedAt
     ? `最近命中：${new Date(memory.lastUsedAt).toLocaleString("zh-CN")}`
     : null;
+  // 已合并行不可恢复（refCount 已转移给目标行，再恢复会二次计数）；
+  // 「永久删除」保留，作为清理误合并的出口。
+  const merged = !!memory.mergedIntoId;
 
   return (
     <div
@@ -464,11 +468,15 @@ function MemoryRow({
               <button
                 type="button"
                 data-testid="team-memory-restore"
-                disabled={pending}
-                title="恢复这条记忆，使其重新生效"
+                disabled={pending || merged}
+                title={
+                  merged
+                    ? "该记忆已合并到其他记忆，无法恢复；如需使用请查看目标记忆"
+                    : "恢复这条记忆，使其重新生效"
+                }
                 onClick={() => onRestore(memory)}
                 style={
-                  pending
+                  pending || merged
                     ? { ...actionButtonStyle, ...disabledActionStyle }
                     : actionButtonStyle
                 }

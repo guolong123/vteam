@@ -218,6 +218,10 @@ export class MemoriesService implements OnModuleInit {
    * 行不存在或本就活跃 → 404 MEMORY_NOT_FOUND；同 scope 已有活跃同 contentHash 行
    * （level/teamId/roleId 一致、id 不同）→ 409 MEMORY_RESTORE_DUPLICATE
    * （条件抄 platform-mcp.service.ts findDuplicateMemory，避免恢复出检索层面重复行）。
+   * **已合并行（mergedIntoId 非空）拒绝恢复** → 409 MEMORY_RESTORE_MERGED：
+   * 合并时 refCount 已累加转移到目标行，若把源行恢复成活跃，它会带着自己的 refCount
+   * 二次参与排序/注入 → 计数双算、还能再被合并一次，且 MergedMarker 宣称的
+   * 「不再参与注入与检索」变成假话。要清理误合并请走 purge。
    * 鉴权与归档/硬删同一出口 `assertRowWritable`。
    */
   async restore(id: string, viewer?: MemoryViewer) {
@@ -226,6 +230,12 @@ export class MemoriesService implements OnModuleInit {
       throw this.memoryNotFound();
     }
     await this.assertRowWritable(existing, viewer);
+    if (existing.mergedIntoId) {
+      throw new ConflictException({
+        code: MEMORY_ERRORS.MEMORY_RESTORE_MERGED,
+        message: '该记忆已合并到其他记忆，无法恢复；如需使用请查看目标记忆',
+      });
+    }
     // contentHash 为 null 的存量行没有去重键，跳过查重（否则 `contentHash: null` 会命中任意无 hash 行 → 误报 409）
     const duplicate = existing.contentHash
       ? await this.prisma.memory.findFirst({

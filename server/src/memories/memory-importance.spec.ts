@@ -200,6 +200,62 @@ describe('sortMemoriesByImportance', () => {
     expect(first).toEqual(['c', 'b', 'a']);
   });
 
+  it('零平局字段（同分 + 同计龄基准）时名次只由 sort 稳定性决定，冻结时钟下反复排序稳定', () => {
+    // refCount 与计龄基准（lastUsedAt ?? createdAt）逐行相同 → 重要度恒相等，
+    // 平局字段也被抹平：任何时钟取值都改不了名次，只剩 sort 稳定性（入参次序）。
+    const twins = [
+      { id: 'twin_1', refCount: 2, lastUsedAt: null, createdAt: daysAgo(10) },
+      { id: 'twin_2', refCount: 2, lastUsedAt: null, createdAt: daysAgo(10) },
+      { id: 'twin_3', refCount: 2, lastUsedAt: null, createdAt: daysAgo(10) },
+    ];
+    const frozen = new Date(NOW.getTime());
+    const first = sortMemoriesByImportance(twins, frozen).map((r) => r.id);
+    expect(first).toEqual(['twin_1', 'twin_2', 'twin_3']);
+    for (let i = 0; i < 5; i += 1) {
+      expect(sortMemoriesByImportance(twins, frozen).map((r) => r.id)).toEqual(
+        first,
+      );
+    }
+    // now 推到 10 年后（两条都进衰减底）仍同序：分数相等 + 平局字段相等 ⇒ 输出与时钟无关。
+    const far = new Date(NOW.getTime() + 3650 * DAY);
+    expect(sortMemoriesByImportance(twins, far).map((r) => r.id)).toEqual(
+      first,
+    );
+  });
+
+  it('定序依赖传入的 now：同一批候选换一个冻结时刻名次翻转（逐次取钟的排序器无法复现）', () => {
+    const rows = [
+      {
+        id: 'stale_hot',
+        refCount: 2,
+        lastUsedAt: null,
+        createdAt: daysAgo(60),
+      },
+      {
+        id: 'fresh_quiet',
+        refCount: 1,
+        lastUsedAt: null,
+        createdAt: daysAgo(0),
+      },
+    ];
+    // NOW 下新鲜度项（e^-60/30≈0.135 vs 1）压过 ln(3)-ln(2)≈0.405 → fresh_quiet 在前。
+    expect(sortMemoriesByImportance(rows, NOW).map((r) => r.id)).toEqual([
+      'fresh_quiet',
+      'stale_hot',
+    ]);
+    // now 前推 60 天让两条都进衰减底（新鲜度项同为 1）→ 只剩 ln 差距，stale_hot 反超。
+    const frozenLate = new Date(NOW.getTime() + 60 * DAY);
+    const late = sortMemoriesByImportance(rows, frozenLate).map((r) => r.id);
+    expect(late).toEqual(['stale_hot', 'fresh_quiet']);
+    // 名次确实随时钟翻转（比较器逐次 new Date() 就落进这条缝里，排序不再可复现）；
+    // 冻结时钟下同一批候选必须反复给同一结果。
+    for (let i = 0; i < 5; i += 1) {
+      expect(
+        sortMemoriesByImportance(rows, frozenLate).map((r) => r.id),
+      ).toEqual(late);
+    }
+  });
+
   it('纯函数：不改入参、总是返回新数组', () => {
     const rows = [named('a', 0, 1), named('b', 9, 1)];
     const snapshot = [...rows];

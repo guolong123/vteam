@@ -28,6 +28,7 @@ export type MemoryLevel = (typeof MEMORY_LEVELS)[keyof typeof MEMORY_LEVELS];
  * - 更新无有效字段（PATCH /memory_update 全空）→ 400 MEMORY_UPDATE_EMPTY
  * - 行级鉴权失败（memory-enhancement Todo 2：团队行非成员 / 全局行非管理员）→ 403 MEMORY_FORBIDDEN
  * - 恢复撞同 scope 活跃同 hash 行（restore）→ 409 MEMORY_RESTORE_DUPLICATE
+ * - 恢复已合并行（restore，mergedIntoId 非空）→ 409 MEMORY_RESTORE_MERGED
  */
 export const MEMORY_ERRORS = {
   MEMORY_NOT_FOUND: 'MEMORY_NOT_FOUND',
@@ -35,6 +36,7 @@ export const MEMORY_ERRORS = {
   MEMORY_UPDATE_EMPTY: 'MEMORY_UPDATE_EMPTY',
   MEMORY_FORBIDDEN: 'MEMORY_FORBIDDEN',
   MEMORY_RESTORE_DUPLICATE: 'MEMORY_RESTORE_DUPLICATE',
+  MEMORY_RESTORE_MERGED: 'MEMORY_RESTORE_MERGED',
 } as const;
 
 import { createHash } from 'node:crypto';

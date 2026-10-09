@@ -1,5 +1,6 @@
 /**
- * 触发器 kind 白名单（trigger-unification todo-2 建表，todo-4 补全六 kind）。
+ * 触发器 kind 白名单（trigger-unification todo-2 建表，todo-4 补全 kind 清单；
+ * 后续 kind 增量追加，memory_maintenance 为 memory-enhancement Todo 9 新增）。
  *
  * - kind 是后端强制的注册表：`TriggerService.schedule` 拒绝白名单外 kind
  *  （未知 kind 必须 expire + 大声报错，禁止静默 feature-detect）。

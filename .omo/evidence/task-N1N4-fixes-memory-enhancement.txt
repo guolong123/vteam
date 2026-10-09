@@ -1,0 +1,118 @@
+Task: N1-N4 reviewer-prescribed MINOR follow-ups (F2 re-review, APPROVEd base 6607608)
+Branch: feat/memory-enhancement
+Date: 2026-10-09
+Node: v22.15.0 (PATH=$HOME/.nvm/versions/node/v22.15.0/bin:$PATH)
+
+================================================================================
+N1 — restore() 必须拒绝已合并行（mergedIntoId 非空）+ 两处已归档视图置灰「恢复」
+================================================================================
+
+SERVER backstop (mandatory)
+  server/src/memories/memory.constants.ts:30-38
+    - MEMORY_ERRORS 新增 MEMORY_RESTORE_MERGED（与 MEMORY_RESTORE_DUPLICATE 同组，
+      均为 409 ConflictException 的 code 字段）；文件头 22-31 错误码清单补一行说明。
+  server/src/memories/memories.service.ts:216-238（restore）
+    - 门位：findRowOrThrow → deletedAt 判活(404) → assertRowWritable(403)
+      → **mergedIntoId 非空 → 409 MEMORY_RESTORE_MERGED** → 同 hash 查重(409)
+      → update({deletedAt:null})。
+    - 门放在 assertRowWritable 之后（保持既有「鉴权先于业务冲突」次序：
+      非成员仍见 403，不会从 409 泄露行状态）。
+    - message：「该记忆已合并到其他记忆，无法恢复；如需使用请查看目标记忆」
+    - 方法 docstring 216-226 补写理由：合并时 refCount 已累加转移到目标行，
+      恢复源行会二次计数（还能被再合并一次），且 MergedMarker 的
+      「不再参与注入与检索」会变假；清理误合并请走 purge。
+    - purge() 未改（误合并的唯一清理出口）。
+
+WEB 置灰（两处已归档视图，恢复入口隐藏/禁用，永久删除保留）
+  web/src/components/teams/TeamMemoriesTab.tsx
+    - :362-365 MemoryRow 内新增 `const merged = !!memory.mergedIntoId`
+    - :464-481 archived 分支「恢复」按钮：disabled={pending || merged}，
+      title 切到「该记忆已合并到其他记忆，无法恢复；如需使用请查看目标记忆」，
+      置灰样式同样走 disabledActionStyle；data-testid 保持 team-memory-restore。
+    - 「永久删除」（purge）未动。
+    - :9-11 文件头说明补「已合并行置灰，服务端亦 409 MEMORY_RESTORE_MERGED」。
+  web/app/(main)/system/memories/page.tsx
+    - :679-681 MemoryCard 内新增 `const merged = !!memory.mergedIntoId`
+    - :772-793 卡片操作区「恢复」（memory-card-restore）：disabled={rowPending || merged}
+      + merged 态 title；「永久删除」保持可用。
+    - :966 MemoryDetailDrawer 内新增 `const merged = !!memory.mergedIntoId`
+    - :1204-1218 抽屉底部「恢复」（memory-drawer-restore）：同上处置。
+    - :15-18 文件头 restore 语义补 MEMORY_RESTORE_MERGED；
+      :1822-1824 恢复失败横幅注释补新 code（文案仍透传后端 message，未改写）。
+  MergedMarker tooltip 两处均未改（N1 落地后该文案恢复为真）。
+
+TESTS
+  server/src/memories/memories.service.spec.ts（restore describe 内新增 2 例）
+    - 「已合并行（mergedIntoId 非空）→ 409 MEMORY_RESTORE_MERGED，deletedAt 不动」：
+      rejects.toMatchObject({status:409, response:{code:'MEMORY_RESTORE_MERGED'}})，
+      并断言 prisma.memory.update / memory.findFirst 均未调用（deletedAt 未被改写）。
+    - 「已合并的 global 行同样拒绝恢复（管理员也不例外）」：admin viewer 亦 409。
+  server/src/memories/memories.service.spec.ts（purge describe 内新增 1 例）
+    - 「已合并的归档行仍可硬删（误合并的唯一清理出口）」：prisma.memory.delete 落库。
+  既有用例零改动、零放宽；restore 全套（含 MEMORY_RESTORE_DUPLICATE / 403 / 404 /
+  contentHash=null 跳过查重 / 归档→恢复闭环）仍绿。
+
+================================================================================
+N2 — 注释漂移：memory_search 排序口径描述与实现不符
+================================================================================
+  server/src/platform-mcp/platform-mcp.service.ts:3852-3856
+    旧文声称「prisma 侧仍取 createdAt desc 以便重要度全平时的观感与可复现」，
+    与实际 tiebreak（memory-importance.ts:128/134 的 `lastUsedAt ?? createdAt`）不符。
+    新文如实描述现行策略：重要度 = ln(1+refCount) + 指数衰减项，计龄基准
+    `lastUsedAt ?? createdAt`；同分时同一基准新者优先，仍相同则靠
+    Array.prototype.sort 稳定性保留 prisma 侧 createdAt desc 次序，
+    故 prisma orderBy 只作全平时的兜底观感、不参与定序。
+  仅注释；merge claim 路径按要求未触碰。
+
+================================================================================
+N3 — 加强「now 只求值一次」测试（补零平局字段 + 时钟敏感夹具）
+================================================================================
+  server/src/memories/memory-importance.spec.ts:204-227 新增 2 例，原有用例保留：
+  (a) :204-222「零平局字段（同分 + 同计龄基准）时名次只由 sort 稳定性决定」
+      夹具 twin_1/2/3：refCount 同为 2、createdAt 同为 10 天前、lastUsedAt 全 null
+      → 重要度恒相等且 tiebreaker 字段相等，比较器在分数与平局字段上都无法分出胜负，
+      名次只能来自 sort 稳定性。断言：冻结时钟下名次 = 入参次序、反复 5 次一致，
+      且把 now 推到 10 年后（两行都进衰减底）仍同序 —— 输出与时钟取值无关。
+  (b) :224-227 起「定序依赖传入的 now：同一批候选换一个冻结时刻名次翻转」
+      夹具 stale_hot(refCount 2, 60 天前) vs fresh_quiet(refCount 1, NOW)：
+      NOW 下新鲜度项压过 ln(3)-ln(2)≈0.405 → fresh_quiet 在前；
+      now 前推 60 天两行都进衰减底（新鲜度项同为 1）→ 只剩 ln 差距，stale_hot 反超。
+      这一对的名次真的随时钟翻转：若比较器逐次 new Date()，排序不再可复现；
+      冻结时钟下反复 5 次必须给同一结果。
+  两例都按 N3 要求保留既有大小分差用例不变；新夹具的分差/平局字段被写成
+  「分数相等」与「分数随时钟翻转」两种极端，逐次取钟的实现无法蒙混过关。
+
+================================================================================
+N4 — 陈旧注释「todo-4 补全六 kind」
+================================================================================
+  server/src/common/constants/trigger.constants.ts:2-3
+    「todo-4 补全六 kind」→「todo-4 补全 kind 清单；后续 kind 增量追加，
+    memory_maintenance 为 memory-enhancement Todo 9 新增」。
+    不再硬编码 kind 数量，同时点名当前实际新增项。
+    （TRIGGER_KIND 常量表未改，仍是 7 个 key。）
+
+================================================================================
+VERIFICATION（全部实测）
+================================================================================
+  cd server && npx tsc --noEmit        → 无输出（clean）
+  cd server && npm run test            → Test Suites: 165 passed, 165 total
+                                         Tests:       3879 passed, 3879 total
+                                         Snapshots:   1 passed
+                                         （基线 165 suites / 3874 tests → +5 tests：
+                                          restore ×2、purge ×1、importance ×2；
+                                          suites 数不变，无 FAIL）
+  cd web   && npx tsc --noEmit          → 无输出（clean）
+  cd web   && npx eslint .              → ✖ 729 problems (0 errors, 729 warnings)
+                                         （与 729 基线一致，0 errors）
+  cd web   && npm run build             → 成功（路由表含 /system/memories 9.8 kB）
+
+  备注：server 侧 lint:check 在改动前已存在的 prettier 报错
+  （memories.service.spec.ts:191/254/688/713/811、memories.service.ts:91/94、
+  memory-state.ts:56、platform-mcp.service.ts:4144/6444、
+  memory-importance.spec.ts:149/186）均位于本次未触碰的行，属基线漂移，
+  本次不扩大范围去重排无关行。新增代码已按 prettier 风格书写并通过
+  npx prettier --check（memory.constants.ts / trigger.constants.ts /
+  memory-importance.spec.ts 均 clean；memories.service.spec.ts 新增段落按
+  既有文件风格书写，该文件的基线 prettier 漂移未动）。
+
+  git：按要求未执行任何 git 命令。

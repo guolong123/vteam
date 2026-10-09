@@ -851,6 +851,39 @@ describe('MemoriesService', () => {
       ).rejects.toMatchObject({ response: { code: 'MEMORY_FORBIDDEN' } });
       expect(prisma.memory.update).not.toHaveBeenCalled();
     });
+
+    it('已合并行（mergedIntoId 非空）→ 409 MEMORY_RESTORE_MERGED，deletedAt 不动', async () => {
+      prisma.memory.findUnique.mockResolvedValue(
+        archivedRow({ mergedIntoId: 'me_target' }),
+      );
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+
+      await expect(
+        service.restore('me_0000000001', { id: 'u_member' }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: { code: 'MEMORY_RESTORE_MERGED' },
+      });
+      // 不许写库：refCount 已在合并时转移给目标行，恢复会让它二次参与排序/注入
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+      expect(prisma.memory.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('已合并的 global 行同样拒绝恢复（管理员也不例外）', async () => {
+      prisma.user.findUnique.mockResolvedValue(adminUser);
+      prisma.memory.findUnique.mockResolvedValue(
+        archivedRow({
+          level: 'global',
+          teamId: null,
+          mergedIntoId: 'me_target',
+        }),
+      );
+
+      await expect(
+        service.restore('me_global', { id: 'u_admin' }),
+      ).rejects.toMatchObject({ response: { code: 'MEMORY_RESTORE_MERGED' } });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('purge（硬删，per-row 鉴权）', () => {
@@ -886,6 +919,23 @@ describe('MemoriesService', () => {
       await service.purge('me_0000000001', { id: 'u_member' });
 
       expect(prisma.memory.delete).toHaveBeenCalled();
+    });
+
+    it('已合并的归档行仍可硬删（误合并的唯一清理出口）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(
+        row({
+          deletedAt: new Date('2026-08-10T00:00:00Z'),
+          mergedIntoId: 'me_target',
+        }),
+      );
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.memory.delete.mockResolvedValue({ id: 'me_0000000001' });
+
+      await service.purge('me_0000000001', { id: 'u_member' });
+
+      expect(prisma.memory.delete).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+      });
     });
 
     it('条目不存在 → 404 MEMORY_NOT_FOUND（不删）', async () => {

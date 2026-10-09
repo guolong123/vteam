@@ -14,7 +14,8 @@
  * - 数据源：GET /api/v1/memories（level / archived / keyword / page / pageSize 过滤）
  * - 归档语义（Todo 7：mem-admin-archive）：`DELETE /memories/:id` = **归档**（软删，写 deletedAt，
  *   从检索与注入消失但**可恢复**）；恢复走 `POST /memories/:id/restore`（撞活跃同 hash → 409
- *   MEMORY_RESTORE_DUPLICATE），不可恢复的硬删走 `POST /memories/:id/purge`。
+ *   MEMORY_RESTORE_DUPLICATE；已合并行 → 409 MEMORY_RESTORE_MERGED，UI 同步置灰「恢复」），
+ *   不可恢复的硬删走 `POST /memories/:id/purge`。
  *   卡片与抽屉展示 refCount（「引用 N」，>0 用品牌青）+ lastUsedAt 相对时间，
  *   并对 mergedIntoId 渲染「已合并至 <id>」**只读**追溯标记（合并由 Agent MCP 工具执行）。
  * - 铁律（T15）：无 fixed 定位、无视口尺寸单位（vh/vw）；抽屉为 absolute 浮层
@@ -678,6 +679,9 @@ function MemoryCard({
   const lastUsedFull = memory.lastUsedAt
     ? new Date(memory.lastUsedAt).toLocaleString("zh-CN")
     : null;
+  // 已合并行不可恢复（refCount 已转移给目标行，再恢复会二次计数）；
+  // 「永久删除」保留，作为清理误合并的出口。
+  const merged = !!memory.mergedIntoId;
 
   return (
     <div
@@ -773,13 +777,17 @@ function MemoryCard({
                 type="button"
                 data-testid="memory-card-restore"
                 data-memory-id={memory.id}
-                disabled={rowPending}
-                title="恢复这条记忆，使其重新参与注入与检索"
+                disabled={rowPending || merged}
+                title={
+                  merged
+                    ? "该记忆已合并到其他记忆，无法恢复；如需使用请查看目标记忆"
+                    : "恢复这条记忆，使其重新参与注入与检索"
+                }
                 onClick={(e) => {
                   e.stopPropagation();
                   onRestore(memory);
                 }}
-                style={actionStyle(rowPending)}
+                style={actionStyle(rowPending || merged)}
               >
                 恢复
               </button>
@@ -957,6 +965,7 @@ function MemoryDetailDrawer({
     wordBreak: "break-word",
   };
   const metaKey: CSSProperties = { color: neutral[400], flexShrink: 0 };
+  const merged = !!memory.mergedIntoId;
 
   return (
     <div
@@ -1200,9 +1209,14 @@ function MemoryDetailDrawer({
                 type="button"
                 data-testid="memory-drawer-restore"
                 data-memory-id={memory.id}
-                disabled={rowPending}
+                disabled={rowPending || merged}
+                title={
+                  merged
+                    ? "该记忆已合并到其他记忆，无法恢复；如需使用请查看目标记忆"
+                    : "恢复这条记忆，使其重新参与注入与检索"
+                }
                 onClick={() => onRestore(memory)}
-                style={actionStyle(rowPending)}
+                style={actionStyle(rowPending || merged)}
               >
                 恢复
               </button>
@@ -1802,8 +1816,9 @@ export default function MemoriesPage() {
             </div>
           )}
 
-          {/* 恢复失败提示：撞活跃同 hash 时后端返回 409 MEMORY_RESTORE_DUPLICATE，
-              直接透传 isApiError 的 message（告知用户哪条重复），不自行改写文案 */}
+          {/* 恢复失败提示：撞活跃同 hash → 409 MEMORY_RESTORE_DUPLICATE，已合并行 →
+              409 MEMORY_RESTORE_MERGED（服务端兜底，UI 已置灰「恢复」）；
+              一律直接透传 isApiError 的 message，不自行改写文案 */}
           {restoreMutation.isError && (
             <div
               data-testid="memory-restore-error"

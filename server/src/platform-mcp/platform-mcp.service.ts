@@ -3850,7 +3850,9 @@ export class PlatformMcpService implements OnModuleInit {
    * 4. query → content contains（prisma 层过滤）；tags → 取回后内存过滤
    *    （tags 为 Json 列，prisma 无 contains 支持）。
    * 5. tags 过滤后按 `sortMemoriesByImportance` 降序重排（memory-enhancement
-   *    Todo 4；prisma 侧仍取 createdAt desc 以便重要度全平时的观感与可复现），
+   *    Todo 4）：重要度 = ln(1+refCount) + 指数衰减项，计龄基准 `lastUsedAt ?? createdAt`；
+   *    同分时同一基准新者优先，仍相同则靠 `Array.prototype.sort` 稳定性保留 prisma 侧的
+   *    `createdAt desc` 次序，故 prisma 的 orderBy 只作全平时的兜底观感，不参与定序），
    *    再 limit 截断（默认 20，max 50）。
    * 6. 对**实际返回**的 id fire-and-forget 计 `refCount+1` / `lastUsedAt`
    *    （仅主动检索计数；注入与管理端 GET 不计）。
