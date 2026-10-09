@@ -1,0 +1,88 @@
+=== Task 6 (mem-tab) evidence — 2026-10-09 14:30:48 CST
+repo: /Volumes/SSD-Data/01work/git-project/vteam
+branch: feat/memory-enhancement
+
+--- node/npm ---
+v22.15.0
+10.9.2
+
+--- npx tsc --noEmit (web) ---
+tsc exit=0
+
+--- npm run lint (web) ---
+/Volumes/SSD-Data/01work/git-project/vteam/web/src/features/docs-site/prototype-sandbox.tsx
+  2:21  warning  'useRef' is defined but never used  @typescript-eslint/no-unused-vars
+
+✖ 729 problems (0 errors, 729 warnings)
+
+
+--- lint: TeamMemoriesTab mentions ---
+0
+0
+
+--- npm run build (web) ---
+├ ○ /workers                             5.07 kB         179 kB
+├ ƒ /workers/[id]                        10.3 kB         132 kB
+└ ○ /workers/install                     8.03 kB         112 kB
++ First Load JS shared by all             104 kB
+  ├ chunks/1255-cf02c4775860a5ab.js        46 kB
+  ├ chunks/4bd1b696-100b9d70ed4e49c1.js  54.2 kB
+  └ other shared chunks (total)          3.72 kB
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+
+=== Files changed by Task 6 ===
+NEW  web/src/components/teams/TeamMemoriesTab.tsx
+EDIT web/src/components/teams/TeamRightPanel.tsx (3 wiring edits + 1 import)
+
+=== Wiring diff (TeamRightPanel.tsx) ===
+diff --git a/web/src/components/teams/TeamRightPanel.tsx b/web/src/components/teams/TeamRightPanel.tsx
+index c8ea14c..df5c6bb 100644
+--- a/web/src/components/teams/TeamRightPanel.tsx
++++ b/web/src/components/teams/TeamRightPanel.tsx
+@@ -14,6 +14,7 @@ import {
+ } from "@/src/components/teams/PlanDocModal";
+ import { ArtifactDocModal } from "@/src/components/teams/ArtifactDocModal";
+ import { TriggerDetailModal } from "@/src/components/teams/TriggerDetailModal";
++import { TeamMemoriesTab } from "@/src/components/teams/TeamMemoriesTab";
+ import {
+   type RoleKey,
+   ROLE_KEYS,
+@@ -583,7 +584,7 @@ const subTabStyle = (active: boolean): CSSProperties => ({
+ /* ------------------------------------------------------------------ */
+ /* 团队子 Tab                                                          */
+ /* ------------------------------------------------------------------ */
+-type TeamSubTab = "overview" | "channels";
++type TeamSubTab = "overview" | "channels" | "memories";
+ 
+ /** 角色字符串 → RoleKey（团队成员的角色在 m.agent.role，非法值归一 developer） */
+ function toRoleKey(role: string | null | undefined): RoleKey {
+@@ -944,6 +945,7 @@ function TeamSubTabs({
+         {[
+           { key: "overview" as const, label: "概览" },
+           { key: "channels" as const, label: "渠道" },
++          { key: "memories" as const, label: "记忆" },
+         ].map((tab) => (
+           <button
+             key={tab.key}
+@@ -1324,6 +1326,12 @@ function TeamSubTabs({
+             />
+           </div>
+         )}
++        {subTab === "memories" && (
++          <TeamMemoriesTab
++            teamId={team?.id ?? ""}
++            teamName={team?.name}
++          />
++        )}
+       </div>
+     </div>
+   );
+=== Guards ===
+session/page.tsx untouched: 0 file(s) changed under web/app
+system/memories page untouched: 0
+no as any / @ts-ignore in new file: 0
+new file lines: 951
