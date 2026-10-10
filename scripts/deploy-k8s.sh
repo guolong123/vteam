@@ -290,13 +290,14 @@ build_one() {
   if [[ -n "$PLATFORM" && "$PLATFORM" != "native" ]]; then
     plat_args=(--platform "$PLATFORM")
   fi
-  local -a arg_args=()
+  # 合并数组恒非空（plat_args 现在可为空 → 单独展开空数组在 set -u 下报 unbound）。
+  local -a build_args=("${plat_args[@]:-}")
   # CODE_VERSION 构建参数：镜像内 pack-worker 打版本戳用（构建上下文无 .git）。
   if [[ -n "$code_version" ]]; then
-    arg_args=(--build-arg "CODE_VERSION=$code_version")
+    build_args+=(--build-arg "CODE_VERSION=$code_version")
   fi
   log "building $name → $image${plat_args[*]:+ (platform=${plat_args[1]})}"
-  if DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "$image" "${plat_args[@]}" "${arg_args[@]}" "$context" \
+  if DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "$image" "${build_args[@]}" "$context" \
        >"$LOG_DIR/build-$name.log" 2>&1; then
     local size
     size=$(docker images --format '{{.Size}}' "$image" 2>/dev/null | head -1)
