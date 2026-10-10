@@ -1,0 +1,13 @@
+# task-2 pdf-block-adapt — 结论：无需改码（范围收缩，如实记录）
+
+## 排查证据
+1. docs-markdown.tsx 全部块样式均为 token 变量（inline code: neutral[100]/[800]；pre: neutral[800]；blockquote: neutral[50]/[300]/[600]；thead: neutral[50]；th 同族）——var(--color-*) 由 Todo 1 宿主覆盖统一翻转，无需逐元素适配
+2. mermaid-block.tsx 恒定浅色主题（theme:"base" + primaryColor #e0ebfe / primaryTextColor #1e293b / lineColor #94a3b8）——与暗色应用主题无关；截图中"深色 mermaid 区"实为外层 pre 容器（token 变量，已被 Todo 1 翻转）
+3. 硬编码 hex 审计：docs 组件中仅剩浅色适配值（amber 徽章 #FFFBEB/#B45309/#FDE68A、ACCENT #0D9488、device-switcher 阴影 rgba）——白纸上均正确
+4. `.dark` 直接规则审计：globals.css 仅 `.dark :focus-visible`（打印无关）+ Tailwind variant 声明（`&:is(.dark *)`）；docs-site 零 `dark:` 实用类使用——无穿透宿主作用域的从属色规则
+
+## 判定
+深色孤岛症状为全局变量泄漏的一体症状；治本点在 Todo 1。本 todo 编码面收缩为 0，由 Todo 4 的真实导出冒烟做最终确认（若冒烟暴露残留，回此 todo 补作用域适配）。
+
+## 门禁
+无代码变更，沿用 Todo 1 门禁（tsc/lint 0err·729/build 全绿）。
