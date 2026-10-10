@@ -2329,4 +2329,214 @@ describe('WorkersService', () => {
       ).resolves.toBeNull();
     });
   });
+
+  // worker-self-update Todo 2：代码版本通道。上报值落 `workers.code_version`；
+  // 期望值来自 env CODE_VERSION，仅出现在心跳响应（纯信息字段）。
+  describe('codeVersion（worker-self-update Todo 2）', () => {
+    const originalCodeVersion = process.env.CODE_VERSION;
+
+    beforeEach(() => {
+      delete process.env.CODE_VERSION;
+    });
+
+    afterAll(() => {
+      if (originalCodeVersion === undefined) {
+        delete process.env.CODE_VERSION;
+      } else {
+        process.env.CODE_VERSION = originalCodeVersion;
+      }
+    });
+
+    const heartbeatDto = () => {
+      const dto = new HeartbeatWorkerDto();
+      dto.workerId = 'w_0000000001';
+      dto.load = { instances: 0 };
+      dto.health = 'ok';
+      return dto;
+    };
+
+    describe('register 持久化', () => {
+      it('worker 上报 codeVersion → upsert create/update 都写入该列', async () => {
+        prisma.worker.upsert.mockResolvedValue(workerRow());
+        const dto = registerDto();
+        dto.codeVersion = 'abc1234';
+
+        await service.register('secret-token', dto);
+
+        const [args] = prisma.worker.upsert.mock.calls[0];
+        expect(args.create.codeVersion).toBe('abc1234');
+        expect(args.update.codeVersion).toBe('abc1234');
+      });
+
+      it('旧 worker 不带 codeVersion → 该键整键缺席（保留已有值，不写 null）', async () => {
+        prisma.worker.upsert.mockResolvedValue(workerRow());
+        const dto = registerDto();
+        expect(dto.codeVersion).toBeUndefined();
+
+        await expect(
+          service.register('secret-token', dto),
+        ).resolves.toBeDefined();
+
+        const [args] = prisma.worker.upsert.mock.calls[0];
+        expect('codeVersion' in args.create).toBe(false);
+        expect('codeVersion' in args.update).toBe(false);
+      });
+
+      it('空串/纯空白上报 → 视为未上报（不写列），旧 worker 兼容不炸', async () => {
+        prisma.worker.upsert.mockResolvedValue(workerRow());
+        for (const blank of ['', '   ']) {
+          const dto = registerDto();
+          dto.codeVersion = blank;
+          await expect(
+            service.register('secret-token', dto),
+          ).resolves.toBeDefined();
+        }
+        const calls = prisma.worker.upsert.mock.calls;
+        expect('codeVersion' in calls[0][0].create).toBe(false);
+        expect('codeVersion' in calls[1][0].update).toBe(false);
+      });
+
+      it('超长上报截断到 191（不因 MySQL 1406 让注册整体失败）', async () => {
+        prisma.worker.upsert.mockResolvedValue(workerRow());
+        const dto = registerDto();
+        dto.codeVersion = 'z'.repeat(400);
+
+        await service.register('secret-token', dto);
+
+        const [args] = prisma.worker.upsert.mock.calls[0];
+        expect(args.create.codeVersion).toHaveLength(191);
+      });
+    });
+
+    describe('heartbeat 持久化', () => {
+      beforeEach(() => {
+        prisma.worker.findUnique.mockResolvedValue(workerRow());
+        prisma.worker.update.mockResolvedValue(workerRow());
+      });
+
+      it('心跳携带 codeVersion → update 写入（滚动更新后心跳即刷新当前版本）', async () => {
+        const dto = heartbeatDto();
+        dto.codeVersion = 'def5678';
+
+        await service.heartbeat('w_0000000001', dto);
+
+        const [args] = prisma.worker.update.mock.calls[0];
+        expect(args.data.codeVersion).toBe('def5678');
+      });
+
+      it('旧 worker 心跳不带 codeVersion → 该键整键缺席（保留 register 上报的值）', async () => {
+        const dto = heartbeatDto();
+
+        await expect(
+          service.heartbeat('w_0000000001', dto),
+        ).resolves.toBeDefined();
+
+        const [args] = prisma.worker.update.mock.calls[0];
+        expect('codeVersion' in args.data).toBe(false);
+      });
+    });
+
+    describe('心跳响应 expectedVersion（纯信息字段）', () => {
+      beforeEach(() => {
+        prisma.worker.findUnique.mockResolvedValue(workerRow());
+        prisma.worker.update.mockResolvedValue(workerRow());
+      });
+
+      it('env CODE_VERSION 有值 → 响应携带 expectedVersion', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-1';
+
+        const result = await service.heartbeat(
+          'w_0000000001',
+          heartbeatDto(),
+        );
+
+        expect(result.expectedVersion).toBe('deploy-tag-1');
+      });
+
+      it('env 缺省 → 响应不含 expectedVersion 键（不下发期望 = 无更新语义）', async () => {
+        delete process.env.CODE_VERSION;
+
+        const result = await service.heartbeat(
+          'w_0000000001',
+          heartbeatDto(),
+        );
+
+        expect('expectedVersion' in result).toBe(false);
+      });
+
+      it('env 空串/纯空白 → 同缺省（不产生「期望版本为空」这种假期望）', async () => {
+        for (const blank of ['', '  ']) {
+          process.env.CODE_VERSION = blank;
+          const result = await service.heartbeat(
+            'w_0000000001',
+            heartbeatDto(),
+          );
+          expect('expectedVersion' in result).toBe(false);
+        }
+      });
+
+      it('与既有 T4a commands 通道并存：两者同时下发且互不影响（Todo 3 入队点回归守卫）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-1';
+        service.enqueueCommand('w_0000000001', {
+          type: 'reload-config',
+          resourceVersion: 'rv-1',
+        });
+
+        const result = await service.heartbeat(
+          'w_0000000001',
+          heartbeatDto(),
+        );
+
+        expect(result.commands).toEqual([
+          { type: 'reload-config', resourceVersion: 'rv-1' },
+        ]);
+        expect(result.expectedVersion).toBe('deploy-tag-1');
+        // 旧字段一个不少、取值不变（向后兼容）。
+        expect(result.workerId).toBe('w_0000000001');
+        expect(result.status).toBe(WORKER_STATUS.ONLINE);
+        expect(typeof result.lastHeartbeatAt).toBe('string');
+      });
+
+      it('无 commands 时仍不下发 commands 键，expectedVersion 独立生效', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-1';
+
+        const result = await service.heartbeat(
+          'w_0000000001',
+          heartbeatDto(),
+        );
+
+        expect('commands' in result).toBe(false);
+        expect(result.expectedVersion).toBe('deploy-tag-1');
+      });
+    });
+
+    describe('旧 worker 全程兼容（无 codeVersion 的真实旧载荷）', () => {
+      it('register + 心跳均不含 codeVersion → 成功上线且响应结构合法', async () => {
+        delete process.env.CODE_VERSION;
+        prisma.worker.upsert.mockResolvedValue(workerRow());
+        prisma.worker.findUnique.mockResolvedValue(workerRow());
+        prisma.worker.update.mockResolvedValue(workerRow());
+
+        const registerResult = await service.register(
+          'secret-token',
+          registerDto(),
+        );
+        expect(registerResult).toEqual({
+          workerId: 'w_0000000001',
+          heartbeatIntervalMs: WORKER_HEARTBEAT_INTERVAL_MS,
+          serverTime: expect.any(String),
+        });
+
+        const heartbeatResult = await service.heartbeat(
+          'w_0000000001',
+          heartbeatDto(),
+        );
+        expect(heartbeatResult).toEqual({
+          workerId: 'w_0000000001',
+          status: WORKER_STATUS.ONLINE,
+          lastHeartbeatAt: expect.any(String),
+        });
+      });
+    });
+  });
 });

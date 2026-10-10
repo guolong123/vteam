@@ -65,6 +65,8 @@ server/docs-root/
 
 # worker 发布包（pack-worker.sh 构建产物，随 web 静态服务发布，不入库）
 web/public/worker-src.tar.gz
+# 发布包版本元数据（{version,sha256,builtAt}，与上一行同源产物，每次打包重写）
+web/public/worker-src.version.json
 
 # deploy-k8s.sh 持久化的 4 个 secret（DB_PASSWORD / JWT / WORKER_TOKEN / MODEL_KEY），
 # 不入库；删除后下次 deploy 会重新生成（破坏现有登录态 / MySQL root / worker 注册）

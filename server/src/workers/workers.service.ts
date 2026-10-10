@@ -32,6 +32,10 @@ import {
   WORKER_STATUS,
   WORKER_TOKEN_BCRYPT_ROUNDS,
 } from './workers.constants';
+import {
+  normalizeReportedCodeVersion,
+  resolveExpectedCodeVersion,
+} from './worker-code-version';
 
 /** schema Worker.capabilities Json 形状。 */
 interface WorkerCapabilitiesShape {
@@ -260,6 +264,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       ...(dto.capabilities as unknown as Record<string, unknown>),
       ...(dto.mcpUrl ? { mcpUrl: dto.mcpUrl } : {}),
     };
+    // worker-self-update Todo 2：上报代码版本归一化后为 undefined（未携带/空串）→ 整键缺席。
+    // **缺席语义 = 保留已有值**（不写 null）：旧 worker 不携带 codeVersion，若写 null，
+    // 一次旧版 worker 重注册就会把「新版本 worker 刚上报的 SHA」抹成未知。
+    const reportedCodeVersion = normalizeReportedCodeVersion(dto.codeVersion);
     const data = {
       name: dto.name ?? null,
       opencodeVersion: dto.opencodeVersion,
@@ -268,6 +276,9 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       // C2：worker 上报默认模型——仅显式提供时更新（旧 worker 不携带时保留已有值，不误清 C8/PATCH 配置）
       ...(dto.defaultModelId !== undefined
         ? { defaultModelId: dto.defaultModelId || null }
+        : {}),
+      ...(reportedCodeVersion !== undefined
+        ? { codeVersion: reportedCodeVersion }
         : {}),
       status: WORKER_STATUS.ONLINE,
       tokenHash,
@@ -393,12 +404,17 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     const safeLoad = {
       instances: safeInstances,
     } as unknown as Prisma.InputJsonValue;
+    // worker-self-update Todo 2：心跳刷新代码版本，缺席语义同 register（保留已有值）。
+    const reportedCodeVersion = normalizeReportedCodeVersion(dto.codeVersion);
     await this.prisma.worker.update({
       where: { id },
       data: {
         load: safeLoad,
         status,
         lastHeartbeatAt,
+        ...(reportedCodeVersion !== undefined
+          ? { codeVersion: reportedCodeVersion }
+          : {}),
       },
     });
     // C5（R5）：worker 从 offline 恢复上线 → 回放未吊销凭据——补离线期间保存的
@@ -413,11 +429,17 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     if (commands.length > 0) {
       this.pendingCommands.delete(id);
     }
+    // worker-self-update Todo 2：期望代码版本（server env CODE_VERSION = deploy TAG，
+    // 与 pack-worker tarball 同源）。纯信息字段——不下发任何更新语义，更新指令走既有
+    // T4a commands 通道（Todo 3 在该通道入队 update-worker），此处不动 pendingCommands。
+    // env 缺省/空串 → undefined → **整字段省略**（未设该 env 的部署不产生「版本不一致」）。
+    const expectedVersion = resolveExpectedCodeVersion();
     return {
       workerId: id,
       status,
       lastHeartbeatAt: lastHeartbeatAt.toISOString(),
       ...(commands.length > 0 ? { commands } : {}),
+      ...(expectedVersion !== undefined ? { expectedVersion } : {}),
     };
   }
 

@@ -367,6 +367,10 @@ HELM_ARGS=(
   --set "secret.modelCredentialKey=$MODEL_CREDENTIAL_KEY"
   --set "server.image.repository=$(repo_of "$IMAGE_SERVER")"
   --set "server.image.tag=$TAG"
+  # 期望 worker 代码版本（worker-self-update Todo 2）：与 image tag 同一个 $TAG，
+  # 天然与 pack-worker 发布的 tarball/worker-src.version.json 同源 → server 心跳响应
+  # 的 expectedVersion 与 worker 应跑的版本永远一致，不一致即真的待更新。
+  --set "server.env.codeVersion=$TAG"
   --set "web.image.repository=$(repo_of "$IMAGE_WEB")"
   --set "web.image.tag=$TAG"
   --set "worker.image.repository=$(repo_of "$IMAGE_WORKER")"

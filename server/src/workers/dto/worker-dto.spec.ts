@@ -197,6 +197,90 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     expect(wire.mcpStatus).toBeUndefined();
   });
 
+  // worker-self-update Todo 2：codeVersion 是**加法可选**字段——旧 worker 不携带时
+  // 序列化结果必须与加字段之前逐键相同（否则旧 worker 的报文本身会变形）。
+  describe('codeVersion（worker-self-update Todo 2：可选，旧 worker 缺席不炸）', () => {
+    const registerBase = () => {
+      const dto = new RegisterWorkerDto();
+      dto.workerId = 'w_0000000001';
+      dto.opencodeVersion = '1.18.14';
+      dto.capabilities = { maxInstances: 1, skills: [], tools: [] };
+      dto.load = { instances: 0 };
+      return dto;
+    };
+
+    const heartbeatBase = () => {
+      const dto = new HeartbeatWorkerDto();
+      dto.workerId = 'w_0000000001';
+      dto.load = { instances: 0 };
+      dto.health = 'ok';
+      return dto;
+    };
+
+    it('RegisterWorkerDto 携带 codeVersion 时序列化出去（短 SHA 原样）', () => {
+      const dto = registerBase();
+      dto.codeVersion = 'abc1234';
+
+      const wire = JSON.parse(JSON.stringify(dto));
+      expect(wire.codeVersion).toBe('abc1234');
+    });
+
+    it('RegisterWorkerDto 未携带时序列化不产生 codeVersion 键（旧载荷逐字兼容）', () => {
+      const wire = JSON.parse(JSON.stringify(registerBase()));
+      expect('codeVersion' in wire).toBe(false);
+      expect(wire).toEqual({
+        workerId: 'w_0000000001',
+        opencodeVersion: '1.18.14',
+        capabilities: { maxInstances: 1, skills: [], tools: [] },
+        load: { instances: 0 },
+      });
+    });
+
+    it('HeartbeatWorkerDto 携带 codeVersion 时序列化出去', () => {
+      const dto = heartbeatBase();
+      dto.codeVersion = 'manual-20261010';
+
+      expect(JSON.parse(JSON.stringify(dto)).codeVersion).toBe(
+        'manual-20261010',
+      );
+    });
+
+    it('HeartbeatWorkerDto 未携带时不产生 codeVersion 键（旧心跳载荷逐字兼容）', () => {
+      const wire = JSON.parse(JSON.stringify(heartbeatBase()));
+      expect('codeVersion' in wire).toBe(false);
+      expect(wire).toEqual({
+        workerId: 'w_0000000001',
+        load: { instances: 0 },
+        health: 'ok',
+      });
+    });
+
+    it('codeVersion 非字符串 → 校验失败（@IsString），不静默落脏值', async () => {
+      const errors = await validate(
+        plainToInstance(RegisterWorkerDto, {
+          workerId: 'w_0000000001',
+          opencodeVersion: '1.18.14',
+          capabilities: { maxInstances: 1, skills: [], tools: [] },
+          load: { instances: 0 },
+          codeVersion: 123,
+        }),
+      );
+      expect(errors.some((e) => e.property === 'codeVersion')).toBe(true);
+    });
+
+    it('codeVersion 为字符串 → 校验通过（旧 worker 路径与新 worker 路径同规则）', async () => {
+      const errors = await validate(
+        plainToInstance(HeartbeatWorkerDto, {
+          workerId: 'w_0000000001',
+          load: { instances: 0 },
+          health: 'ok',
+          codeVersion: 'abc1234',
+        }),
+      );
+      expect(errors).toHaveLength(0);
+    });
+  });
+
   it('WorkerEventDto 序列化后字段完整（workerId/eventId/type/payload/seq）', () => {
     const dto = new WorkerEventDto();
     dto.workerId = 'w_0000000001';

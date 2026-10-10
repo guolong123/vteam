@@ -15,6 +15,12 @@ secret:
 
 # 小资源
 server:
+  env:
+    # 期望 worker 代码版本（worker-self-update Todo 2）：**dev 显式留空 = 不下发期望版本**。
+    # 开发栈的 worker 是本地 tsx/镜像混合体，没有可比的发布 SHA；空值让心跳响应省略
+    # expectedVersion，UI/worker 不会对着一个假版本判定「待更新」。
+    # 需要联调版本比对时改成具体短 SHA（如 abc1234）即可，无需改 chart。
+    codeVersion: ""
   resources:
     requests:
       cpu: 100m

@@ -137,6 +137,11 @@ services:
       WORKER_ADVERTISE_HOST: http://worker
       # worker 默认模型兜底（C2 新增，Agent 未配模型时用，C7 模型解析优先级第 3 级）；空 = 不指定（serve 默认）
       WORKER_DEFAULT_MODEL: ${WORKER_DEFAULT_MODEL:-}
+      # 代码版本（worker/src/code-version.ts）：env 优先于 dist/version.js 文件戳。
+      # compose 构建不走 pack-worker.sh（那是 web 镜像发布 tarball 的链路），镜像内
+      # 无版本戳文件，故此处即容器路径的版本来源。默认 local-compose（本地开发标识，
+      # 显式可见而非静默回落 'dev'）；需与发布 tarball 同源时设 WORKER_CODE_VERSION=<git sha>。
+      WORKER_CODE_VERSION: ${WORKER_CODE_VERSION:-local-compose}
       # 并发上限：worker 上报 capabilities.maxInstances，server 按此算剩余容量派单
       WORKER_MAX_INSTANCES: "10"
       # 首字超时（worker awaitCompletion）：300s 内无首字输出即 abort 释放槽位——首字/模型

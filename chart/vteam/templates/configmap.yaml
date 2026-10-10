@@ -24,6 +24,10 @@ data:
   # 记忆定时整理（Todo 9）。0 = 禁用（不排期并取消既有行）；服务端零检测，只按
   # 「自上次整理以来的新记忆」派事实清单，判断/合并/归档在 agent 侧。
   MEMORY_MAINTENANCE_INTERVAL_MS: {{ .Values.server.env.memoryMaintenanceIntervalMs | quote }}
+  # 期望 worker 代码版本（worker-self-update Todo 2）：deploy-k8s.sh 以
+  # --set server.env.codeVersion=$TAG 注入（TAG = git 短 SHA，与 worker 镜像 tag 同源）。
+  # 空串 = server 读到 undefined → 心跳响应整字段省略 expectedVersion（不判定不一致）。
+  CODE_VERSION: {{ .Values.server.env.codeVersion | default "" | quote }}
 
   # ---- worker ----
   SERVER_URL: {{ printf "http://%s:%d" (include "vteam.server.name" .) (int .Values.service.server.port) | quote }}
@@ -38,4 +42,9 @@ data:
   # headless baseUrl 直连对应 pod（serve :4000 / exec :4198 同 origin），不依赖负载均衡。
   WORKER_DEFAULT_MODEL: {{ .Values.worker.env.defaultModel | quote }}
   WORKER_FIRST_TOKEN_TIMEOUT_MS: {{ .Values.worker.env.firstTokenTimeoutMs | quote }}
+  # 代码版本（worker/src/code-version.ts）：env 优先于 dist/version.js 文件戳。worker 镜像
+  # 不经 pack-worker.sh 构建，镜像内无版本戳文件，故集群路径的版本来源即本项
+  # （部署时 --set worker.env.codeVersion=<git sha> 与发布 tarball 对齐）。
+  # 空 = 不注入（运行时回落 dist/version.js，再回落 'dev'）。
+  WORKER_CODE_VERSION: {{ .Values.worker.env.codeVersion | quote }}
   WORK_DIR: {{ .Values.worker.env.workDir | quote }}

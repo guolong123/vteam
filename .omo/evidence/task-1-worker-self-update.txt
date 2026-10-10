@@ -1,0 +1,218 @@
+================================================================================
+Todo 1 — uw-version-stamp（worker 版本戳与发布包版本文件）
+plan: .omo/plans/worker-self-update.md   branch: feat/worker-self-update
+env: node v22.15.0 / npm 10.9.2 / docker 29.4.0 / helm v3.17.3 (macOS, darwin)
+================================================================================
+
+[1] 变更文件清单（9 个；生成物均已 gitignore）
+--------------------------------------------------------------------------------
+修改：
+  scripts/pack-worker.sh              版本戳生成 + sha256/版本文件 + --print-version 自检入口
+  worker/Dockerfile                   runner 阶段 ARG CODE_VERSION → ENV WORKER_CODE_VERSION
+  docker-compose.yml                  worker.environment 增 WORKER_CODE_VERSION
+  chart/vteam/templates/configmap.yaml worker 段增 WORKER_CODE_VERSION（ConfigMap 走 sts envFrom）
+  chart/vteam/values.yaml             worker.env 增 codeVersion（缺省 ""）
+  .gitignore                          新增 web/public/worker-src.version.json（同源产物）
+
+新增：
+  worker/src/code-version.ts          运行时版本解析（纯函数 + 注入式文件读取）
+  worker/src/code-version.spec.ts     单测
+  scripts/smoke-pack-worker-version.sh 打包链路 shell 冒烟
+  .omo/evidence/task-1-worker-self-update.txt（本文件）
+
+未触碰（按 Must NOT）：worker/scripts/start.sh、install-worker.sh、heartbeat 协议、
+server/、web UI 代码、package.json（零新依赖）、tar 清单成员。
+
+
+[2] 关键设计决策
+--------------------------------------------------------------------------------
+2.1 版本解析优先级（worker/src/code-version.ts 头部注释已文档化）
+    env WORKER_CODE_VERSION（容器/集群注入，**优先**）
+      > dist/version.js（打包脚本在 tsc 之后、tar 之前生成的版本戳文件）
+      > 'dev'
+    - env 空串/纯空白视为未设置（编排层误配不遮蔽文件戳），实测 E2E-3。
+    - 运行时模块按**文本读取 + 正则解析** dist/version.js，不 require：
+      worker 编译目标为 CommonJS（tsconfig module=commonjs），而版本戳文件由 shell
+      生成不经 tsc；require 会在缺失时抛错且把生成格式锁死为 CJS，文本解析对
+      `export const` 与 `exports.X =` 两种写法都成立，且不污染 require 缓存
+      （自更新覆盖 dist 后同进程再解析可读到新值）。
+
+2.2 ⚠️ 命名冲突（本次实测发现并修复，务必知悉）
+    最初按计划新建 `worker/src/version.ts`，tsc 编译产物即 `dist/version.js`，
+    而 pack-worker.sh 也写 `dist/version.js`（版本戳文件）→ **后者覆盖前者**：
+    发布包内 dist/version.js 是版本戳，运行时解析模块被整个顶掉（线上即崩）。
+    仅靠 "tar 内含 dist/version.js" 断言无法发现（文件确实存在，只是内容错了）。
+    修复：运行时模块改名 `worker/src/code-version.ts`（产物 dist/code-version.js），
+    版本戳文件保持计划约定的 dist/version.js。smoke 已加断言长期防护该类回归。
+
+2.3 容器路径（worker/Dockerfile）
+    本 Dockerfile 由 src 直接 tsc 编译（**不经过** pack-worker.sh），镜像内
+    dist 无版本戳文件 → env 是容器路径唯一版本来源。
+    runner 阶段：ARG CODE_VERSION=container-unstamped → ENV WORKER_CODE_VERSION。
+    缺省用显式占位值而非空串：空串会被 resolveCodeVersion 视为未设置而静默回落
+    'dev'，看起来像注入成功实则版本丢失。
+    运行期 env（compose -e / chart env）优先于镜像 ENV；chart 中 container `env`
+    优先于 `envFrom` ConfigMap → **env 优先于文件戳**在三层编排上均成立。
+
+2.4 sha256（无新 npm 依赖）
+    系统 sha256sum（Linux/Alpine）→ shasum -a 256（macOS）→ node 内置 crypto 兜底
+    （打包链路已要求 node/npm，node crypto 不是新依赖）。
+
+2.5 web/Dockerfile 在镜像构建期调用 pack-worker.sh
+    （COPY scripts/pack-worker.sh → RUN ./scripts/pack-worker.sh → runner 阶段
+     COPY --from=build /app/web/public ./public），故版本戳 + worker-src.version.json
+    随 web 镜像自动发布到静态服务，**生产 tarball 无需任何手动前置步骤**即带版本戳。
+
+2.6 deploy-k8s.sh TAG→worker env：**未改**（留给 Todo 2 的 server env 同批）
+    现状该脚本 `--set` 列表只有 server/web/worker 的 image.tag（deploy-k8s.sh:368-373），
+    没有 env 批量 --set。worker 的 env 接线改由 chart values（worker.env.codeVersion）
+    完成，部署侧只需追加一行 `--set worker.env.codeVersion=$TAG` —— 属 Todo 2
+    与 server.env.codeVersion 同批的改动，刻意不在此并发触碰同一脚本段。
+
+2.7 worker-src.version.json 纳入 .gitignore
+    与 worker-src.tar.gz 同源产物，每次打包重写（含 sha256/时间戳），入库只会
+    制造无意义 diff。运行期由 web 静态服务提供，与 tarball 生命周期一致。
+    注意：Todo 4 执行器须容忍该文件缺失（无 pack 的纯 web 部署不会有它）——
+    计划已规定「version.json 缺失/不匹配 → 放弃并 warn」。
+
+
+[3] 门禁结果（全部实测）
+--------------------------------------------------------------------------------
+3.1 worker typecheck —— PASS（exit 0，无输出）
+    $ cd worker && npm run typecheck        # tsc --noEmit
+
+3.2 worker 全量单测 —— PASS
+    $ cd worker && npm run test
+      Test Suites: 26 passed, 26 total
+      Tests:       702 passed, 702 total
+      Time:        31.898 s
+    基线 25 suites / 689 tests → 26 suites / 702 tests（+1 suite / +13 tests）
+
+3.3 compose 语法 —— PASS
+    $ docker compose config -q                              → exit 0
+    $ docker compose config | grep WORKER_CODE_VERSION
+      WORKER_CODE_VERSION: local-compose                    （缺省渲染）
+    $ WORKER_CODE_VERSION=fc4cd95 docker compose config | grep …
+      WORKER_CODE_VERSION: fc4cd95                          （覆盖生效）
+
+3.4 Dockerfile 静态校验 —— PASS（不构建镜像）
+    $ docker build --check ./worker
+      Check complete, no warnings found.                    exit 0
+
+3.5 chart —— PASS
+    $ helm lint chart/vteam --set replicaCount.worker=1
+      1 chart(s) linted, 0 chart(s) failed
+    $ helm template … --set worker.env.codeVersion=fc4cd95 | grep WORKER_CODE_VERSION
+      WORKER_CODE_VERSION: "fc4cd95"
+    $ helm template …（缺省）→ WORKER_CODE_VERSION: ""
+    渲染后 YAML 解析断言（12 docs）：
+      worker sts = vteam-worker, replicas=1
+      envFrom: ['vteam-config']          ← ConfigMap 即注入通道
+      container env: [X_WORKER_TOKEN, HOME, POD_NAME, WORKER_ID, WORKER_ADVERTISE_HOST]
+      configmap WORKER_CODE_VERSION = 'fc4cd95'
+    并存无冲突：Todo 2 已落的 server 侧 `CODE_VERSION`（configmap:30）与本 Todo 的
+    worker 侧 `WORKER_CODE_VERSION`（configmap:49）是两个独立键，共享 ConfigMap 同时
+    喂 server/worker 容器，互不覆盖。
+
+3.6 pack-worker.sh shell 冒烟 —— SMOKE PASS（exit 0）
+    $ sh scripts/smoke-pack-worker-version.sh
+    == 1/3 运行 pack-worker.sh ==
+    [pack-worker] 构建 dist ...
+    > worker@0.0.1 build
+    > tsc
+    [pack-worker] 版本戳 = fc4cd95 → dist/version.js
+    [pack-worker] 打包发布包 → …/web/public/worker-src.tar.gz
+    [pack-worker] 版本文件 = …/web/public/worker-src.version.json（sha256 59cc99ee9e16bf19270ed2987218285dca03b97e218f328beda78fcd7aa82301，builtAt 2026-10-10T07:45:13Z）
+    [pack-worker] 完成：392K（记得部署 web 使其随静态服务发布）
+    == 断言 dist/version.js ==
+      [OK]   dist/version.js 版本 = fc4cd95
+    == 断言 tar 清单 ==
+      [OK]   tar 含版本戳文件 dist/version.js
+      [OK]   tar 含运行时解析模块 dist/code-version.js（未被版本戳覆盖）
+      [OK]   tar 顶层清单未变：.env.example dist package-lock.json package.json scripts
+    == 断言 version.json ==
+      [OK]   version.json 存在
+      [OK]   字段 version = fc4cd95
+      [OK]   字段 sha256 = 59cc99ee9e16bf19270ed2987218285dca03b97e218f328beda78fcd7aa82301
+      [OK]   字段 builtAt = 2026-10-10T07:45:13Z（ISO 8601 UTC）
+      [OK]   version.json.version 与 dist/version.js 一致
+      [OK]   sha256 与 tarball 实际字节一致
+    == 断言非 git 回退 ==
+      [OK]   非 git 环境回退 manual-<YYYYMMDD> = manual-20261010
+    == 结果 ==
+    SMOKE PASS
+
+3.7 sha256 独立复核（冒烟之外再验一次字节）
+    $ shasum -a 256 web/public/worker-src.tar.gz
+      59cc99ee9e16bf19270ed2987218285dca03b97e218f328beda78fcd7aa82301  ← 与 version.json 一致
+
+3.8 tar 清单未变（对照原脚本 dist package.json package-lock.json scripts .env.example）
+    顶层 5 项完全一致，仅 dist/ 内多出 dist/version.js（版本戳）与
+    dist/code-version.js（tsc 产物，源码新增模块的正常产物）。
+
+
+[4] 运行时端到端实测（编译后的 CommonJS 产物 + 真实 dist/version.js）
+--------------------------------------------------------------------------------
+$ cd worker
+E2E-1 env 未设 → 读同级 dist/version.js
+   env -u WORKER_CODE_VERSION node -e "require('./dist/code-version.js')…"
+   resolved = fc4cd95
+E2E-2 env 已设 → env 压过文件
+   WORKER_CODE_VERSION=container-injected-sha …   resolved = container-injected-sha
+E2E-3 env 空串（chart 缺省）→ 继续读文件
+   WORKER_CODE_VERSION="" …                        resolved = fc4cd95
+E2E-4 无版本戳文件 → dev
+   …resolveCodeVersion(process.env, () => undefined)   resolved = dev
+E2E-5 真实 tsx 开发路径（__dirname=src/，无 src/version.js）→ dev + 一次告警
+   $ npx tsx -e "import {resolveCodeVersion} from './src/code-version';…"
+   [version] 读取版本戳文件 …/worker/src/version.js 失败（ENOENT…），回落 dev
+   resolved = dev
+
+注：E2E-1/2/3 是本 todo 最初**未通过**的检查——路径写错暴露了 2.2 的覆盖 bug，
+修复后复测通过。
+
+
+[5] 产出物样例
+--------------------------------------------------------------------------------
+worker/dist/version.js（pack-worker.sh 生成，非 tsc 产物）：
+  // 本文件由 scripts/pack-worker.sh 自动生成，请勿手工编辑。
+  // dist 是 tsc 产物目录，每次 npm run build 后由打包脚本重写本文件。
+  // 运行时版本解析（worker/src/code-version.ts）：
+  //   env WORKER_CODE_VERSION（容器/集群注入，优先）> 本文件 > 'dev'
+  export const WORKER_CODE_VERSION = 'fc4cd95';
+
+web/public/worker-src.version.json：
+  {
+    "version": "fc4cd95",
+    "sha256": "59cc99ee9e16bf19270ed2987218285dca03b97e218f328beda78fcd7aa82301",
+    "builtAt": "2026-10-10T07:45:13Z"
+  }
+
+
+[6] 单测覆盖（13 例，worker/src/code-version.spec.ts）
+--------------------------------------------------------------------------------
+优先级三态：env 压过文件 / env 缺省读文件 / 两者皆缺回落 dev
+env 空串与纯空白视为未设置（继续读文件；文件亦缺则 dev）
+文件存在但解析不出（空文件 / 纯注释 / 无该常量 / 空串值）→ dev
+manual-<date> 形态版本串可解析（与 2.x 回退路径对齐）
+parseStampedVersion：单引号 / 双引号 / CommonJS exports / 无 const 前缀 四种写法
+parseStampedVersion 负例：EXPECTED_WORKER_CODE_VERSION、WORKER_CODE_VERSION_X 不误命中
+   ↑ 该负例在首轮实测中**真实失败**（正则左边界未收紧，误取同后缀常量），已修复
+     为 /(?:^|[^\w$])WORKER_CODE_VERSION\s*=\s*(['"])([^'"\r\n]+)\1/
+defaultVersionFileReader（真实文件系统 tmpdir）：文件存在→返回文本；缺失→undefined + warn
+缺失文件经 resolveCodeVersion 端到端 → dev
+默认 reader 指向 __dirname/version.js（ts-jest 下 src/ 无该文件 → dev）
+
+
+[7] 未做 / 交接说明
+--------------------------------------------------------------------------------
+- deploy-k8s.sh 未改（见 2.6），worker env 由 chart values 承接；部署侧追加一行
+  --set worker.env.codeVersion=$TAG 归 Todo 2 与 server.env.codeVersion 同批。
+- resolveCodeVersion **未被任何业务代码调用**（registry-client 上报 codeVersion 属
+  Todo 2 worker 侧；本次只交付可被调用的纯模块 + 覆盖测试），避免与 Todo 2 并发改
+  同一文件。调用点建议 worker/src/client/registry-client.ts（register/heartbeat 组包处）。
+- .env.example 未加 WORKER_CODE_VERSION 条目：该文件随 tarball 分发给外部 worker，
+  env 注入是容器/集群编排职责（compose/chart/Dockerfile 已覆盖），加进去会扩大
+  Todo 4 执行器之外的运维面；如需用户手改 .env 覆盖，Todo 4 可按需补。
+- 未跑 git 命令（任务约束）；工作树改动以上述清单为准，commit 由上层统一执行。
+================================================================================

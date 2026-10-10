@@ -115,6 +115,15 @@ COPY --from=build /app/node_modules ./node_modules
 # D2 网络拓扑：serve 绑定 0.0.0.0（本地默认 127.0.0.1 铁律，容器内必须覆盖为 0.0.0.0）；
 # WORKER_ADVERTISE_HOST 公布给 server（compose 网络服务名 http://worker）。
 # X_WORKER_TOKEN 运行时必填（不固化在镜像内），以下均可由 compose / docker run 覆盖。
+# 代码版本注入（worker 自更新机制的容器路径）：构建时
+#   docker build --build-arg CODE_VERSION=<git short SHA> ./worker
+# 转为运行期 env WORKER_CODE_VERSION；运行期 env（compose -e / chart env）仍可覆盖。
+# 说明：本 Dockerfile 直接由 src 经 tsc 编译（不经 scripts/pack-worker.sh），镜像内
+# dist 无 version.js 文件戳，因此 env 是容器路径的唯一版本来源；未传 ARG 时用显式
+# 占位值而非空串，避免「看起来注入成功实则回落 dev」。
+# 运行时优先级见 worker/src/code-version.ts：env WORKER_CODE_VERSION > dist/version.js > 'dev'。
+ARG CODE_VERSION=container-unstamped
+ENV WORKER_CODE_VERSION=${CODE_VERSION}
 ENV OPENCODE_SERVE_HOSTNAME=0.0.0.0
 # serve 端口默认固定 18080（与安装向导 `docker run -p 18080:18080` 对齐，容器重启端口不变）；
 # compose / k8s 仍可显式覆盖（compose=4000，chart 由 worker.env.servePort 下发）。

@@ -1,0 +1,168 @@
+================================================================================
+EVIDENCE — Plan todo 2「uw-heartbeat-proto：心跳协议版本通道（两端 + 迁移 + env）」
+Repo: /Volumes/SSD-Data/01work/git-project/vteam   Branch: feat/worker-self-update
+Plan: .omo/plans/worker-self-update.md (todo block lines 78-91)
+Node: v22.15.0 (PATH=$HOME/.nvm/versions/node/v22.15.0/bin)   Helm: v3.17.3 (/opt/homebrew/bin/helm)
+================================================================================
+
+0. MOMUS FLAG — HONORED
+   "a generic heartbeat `commands` channel ALREADY exists — you must NOT break or
+    duplicate it."
+   → Read workers.service.ts :196 (pendingCommands Map) 与 :412-420（心跳下发/清空）
+     before touching anything. 本 todo **零改动** pendingCommands / enqueueCommand /
+     broadcastCommand / WorkerCommand / extractCommands 分派骨架。更新指令沿用该通道
+     入队（Todo 3），本 todo 只加一个**纯信息**响应字段。回归守卫见 §5 最后一条。
+
+1. FILES CHANGED (11)
+--------------------------------------------------------------------------------
+  server/prisma/schema.prisma                                   (+ codeVersion 字段)
+  server/prisma/migrations/20261010020000_worker_code_version/migration.sql  (NEW)
+  server/src/workers/worker-code-version.ts                      (NEW 归一化/env helper)
+  server/src/workers/worker-code-version.spec.ts                 (NEW 9 tests)
+  server/src/workers/dto/register-worker.dto.ts                  (+ codeVersion?)
+  server/src/workers/dto/heartbeat-worker.dto.ts                 (+ codeVersion?)
+  server/src/workers/workers.service.ts                          (register/heartbeat/响应)
+  server/src/workers/workers.service.spec.ts                     (+ 13 tests)
+  server/src/workers/dto/worker-dto.spec.ts                      (+ 6 tests)
+  server/src/prisma/worker-code-version.migration.spec.ts        (NEW 8 tests)
+  worker/src/protocol/worker-protocol.ts                         (+ codeVersion? / expectedVersion?)
+  worker/src/client/registry-client.ts                           (+ 上报 + extractExpectedVersion)
+  worker/src/client/registry-client.spec.ts                      (+ 7 tests, 4 处整包断言更新)
+  scripts/deploy-k8s.sh                                         (+ 1 个 --set)
+  chart/vteam/values.yaml                                       (+ server.env.codeVersion)
+  chart/vteam/templates/configmap.yaml                           (+ CODE_VERSION)
+  chart/vteam/values-dev.yaml                                   (+ server.env.codeVersion 空串)
+
+  NOT touched（越界即事故）：workers.controller.ts、workers.constants.ts、
+  docker-compose.yml（server 段，Todo 1 正在改同文件的 worker 段 → 零重叠规避）、
+  worker/src/index.ts、worker/src/code-version.ts（Todo 1 所有）、
+  pack-worker.sh、web/**、install-worker.sh、start.sh。
+
+2. MIGRATION — workers.code_version
+--------------------------------------------------------------------------------
+  DDL:  ALTER TABLE `workers`
+          ADD COLUMN `code_version` varchar(191) DEFAULT NULL;
+
+  离线等价性证明（照 20261010010000_model_usage 的先例，无 MySQL 可达）：
+    $ npx prisma migrate diff \
+        --from-schema-datamodel <本仓 schema 去掉 codeVersion 的副本> \
+        --to-schema-datamodel   <本仓 schema.prisma 现版> --script
+    -- AlterTable
+    ALTER TABLE `workers` ADD COLUMN `code_version` VARCHAR(191) NULL;
+
+  → Prisma 自产 DDL 与手写 DDL **语义等价**（MySQL `NULL` ≡ `DEFAULT NULL`；
+    列名/宽度/可空性逐项一致）。格式对齐 house 先例 memory_refcount。
+  → Prisma Client 已 `prisma generate` 重生成（v6.19.3），server tsc 才认得新列。
+
+  守卫 spec（server/src/prisma/worker-code-version.migration.spec.ts，照抄
+  memory-refcount.model-usage 模板结构，8 条双向断言）：
+    ✓ schema.prisma 的 Worker 声明可选 codeVersion（@map("code_version")）
+    ✓ 本迁移 ADD COLUMN 的列在 schema 里都存在（正向平价）
+    ✓ code_version 列确实由本迁移建出（漏建 → 运行时 P2022）
+    ✓ DDL 守卫：baseline 里不含 code_version（否则 ERROR 1060）
+    ✓ 零回填：无 UPDATE / INSERT / DELETE FROM
+    ✓ 可空 varchar(191) DEFAULT NULL，且不得 NOT NULL
+    ✓ 不建索引（workers 行数个位数，版本不参与过滤/排序 → 只有写放大）
+    ✓ 不删列/索引/表，不动 workers 以外的表
+
+  注：守卫断言跑在**剥离注释后的 DDL** 上——文件标题里的 `worker-self-update`
+  一词会让 `/\bUPDATE\b/i` 假红（实测踩到过一次）。该 helper 的存在理由写在注释里。
+
+3. PERSIST SEMANTICS — 本 todo 选定的口径
+--------------------------------------------------------------------------------
+  **absent → 保留已有值（整键不写，绝不写 null）**，register 与 heartbeat 一致。
+
+  理由：codeVersion 与既有 defaultModelId 同为「worker 自报的可选事实」。
+  写 null 的后果是：同一 workerId 上一次新版 worker 注册上报了 SHA，随后一次
+  旧版 worker（不带该字段）重注册就把版本抹成未知 —— UI 徽章从「具体版本」
+  退化成「未知」，而真相（worker 确实跑着新版）被丢掉。NULL 只应表示「从未上报过」。
+
+  其他口径：
+    - 空串 / 纯空白 → 视为未上报（同 absent）
+    - > 191 字符 → 截断到 191（MySQL 严格模式 1406 会让整个注册/心跳失败；
+      截断只损失展示精度，版本串本就是给人眼比对的短标识）
+    - 新建行（create）时缺席 → 列取默认 NULL = 从未上报
+  选定口径已由 13 条 service spec 钉住（含「整键缺席」`'codeVersion' in data === false`）。
+
+4. HEARTBEAT RESPONSE — expectedVersion ONLY
+--------------------------------------------------------------------------------
+  env `CODE_VERSION`（chart codeVersion → configmap CODE_VERSION →
+  server env，经 resolveExpectedCodeVersion() 归一化）：
+    有值   → 响应携带 `expectedVersion`
+    缺省/空串/纯空白 → **整字段省略**（不下发期望 = 不产生「版本不一致」判定）
+  纯信息字段：server 不因它的存在产生任何更新语义；更新指令走既有 commands 通道。
+
+5. TESTS（本次新增/改写）
+--------------------------------------------------------------------------------
+  server/src/workers/worker-code-version.spec.ts        NEW  9 tests
+  server/src/prisma/worker-code-version.migration.spec  NEW  8 tests
+  server/src/workers/dto/worker-dto.spec.ts             NEW  6 tests
+  server/src/workers/workers.service.spec.ts            NEW 13 tests
+      · register 持久化 / 缺席整键缺席 / 空串不写 / 超长截断
+      · heartbeat 持久化 / 缺席整键缺席
+      · expectedVersion：有值下发 / 缺省不出现 / 空串同缺省
+      · **commands 与 expectedVersion 并存互不影响（Todo 3 入队点回归守卫）**
+      · **旧 worker 无 codeVersion 载荷：register + heartbeat 全程成功、响应结构合法**
+  worker/src/client/registry-client.spec.ts             +7 tests（4 处整包断言更新）
+      · register/heartbeat 就地 resolveCodeVersion()、显式值优先
+      · expectedVersion 解析 + 缺字段/空串/非字符串降级
+      · **expectedVersion 与既有 commands 并存互不影响（下行通道回归守卫）**
+
+6. GATES（全部实测，无推测）
+--------------------------------------------------------------------------------
+  $ cd server && npx tsc --noEmit
+      exit 0，零错误。
+
+  $ cd server && npm run test
+      Test Suites: 172 passed, 172 total
+      Tests:       4054 passed, 4054 total
+      Snapshots:   1 passed, 1 total
+      Time:        27.4 s
+      （基线 170 suites；+2 = 本 todo 新增的两个 spec 文件。无既有 suite 回归。）
+
+  $ cd worker && npm run typecheck
+      exit 0，零错误。
+
+  $ cd worker && npm test
+      Test Suites: 26 passed, 26 total
+      Tests:       709 passed, 709 total
+      Time:        31.9 s
+      计数对账（诚实）：计划基线 25 suites/689 tests 是 Todo 1 落地**之前**的数字。
+        689（基线）+ 7（本 todo：registry-client.spec.ts 15→22）
+                  + 13（并行的 sibling Todo 1 新增 src/code-version.spec.ts 一个 suite）
+                  = 709 ✔ 与实测逐项吻合，无隐藏失败、无掩盖。
+
+  $ helm template vteam chart/vteam --set ... --set server.env.codeVersion=deadbee
+      64:  CODE_VERSION: "deadbee"        ← env 注入渲染成功
+  $ helm template vteam chart/vteam --set ...          （未设）
+      64:  CODE_VERSION: ""               ← 缺省 = 不下发期望版本
+  $ helm template vteam chart/vteam -f chart/vteam/values-dev.yaml
+      64:  CODE_VERSION: ""               ← dev 缺省语义（显式注释于 values-dev.yaml）
+  $ bash -n scripts/deploy-k8s.sh
+      OK（deploy-k8s.sh 需 docker/kubectl 真实集群，未整体执行；helm 参数段
+          经 helm template 单独验证如上）
+
+7. SIBLING DEPENDENCY（Todo 1）
+--------------------------------------------------------------------------------
+  CONTRACT 偏差（已适配，非阻塞）：计划写 `worker/src/version.ts`，sibling 实际
+  落在 `worker/src/code-version.ts`。签名实测：
+      resolveCodeVersion(env?: VersionEnv, readVersionFile?: VersionFileReader): string
+  两参均可选 → registry-client 以 `import { resolveCodeVersion } from '../code-version'`
+  并 `resolveCodeVersion()` 无参调用，**无需本地 fallback**。
+  解析顺序：env WORKER_CODE_VERSION > dist/version.js > 'dev'。
+  registry-client 的上报口径因此**不需要调用方（index.ts）改一行代码**——版本在
+  客户端内部解析，index.ts / buildRegisterOptions / 心跳定时器零改动，也就不与
+  Todo 4 的执行器改动重叠。
+
+8. KNOWN GAP（诚实声明，非本 todo 范围）
+--------------------------------------------------------------------------------
+  · docker-compose.yml 的 server 段**未**加 CODE_VERSION：该文件 worker 段正由
+    Todo 1 并行修改，避免同文件写冲突。故 compose 本地栈 = 不下发期望版本
+    （心跳响应省略 expectedVersion，UI 不判定不一致）——与 plan 的
+    「dev 缺省 = 不下发期望」一致，不是缺陷。
+  · `GET /workers` 出参**未**加 codeVersion/expectedVersion：`findAll` 是手写 SQL
+    窄行投影 + toWorkerView 投影，属 Todo 3 明写的范围（计划 :96/:100）。本 todo
+    只落库与心跳响应，Todo 5 的 UI 类型必须等 Todo 3 落地后逐字对齐。
+  · `extractExpectedVersion` 目前只有 spec 消费、**生产路径未调用**——刻意的：
+    「本轮只接收不执行」，执行器属 Todo 4（避免两处各写一半）。
+================================================================================

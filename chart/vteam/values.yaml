@@ -82,6 +82,11 @@ server:
     agentIdleTimeoutMs: "0"
     ## 记忆定时整理（Todo 9）：间隔 ms，**0 = 禁用**（不排期并取消既有行）。默认 7 天
     memoryMaintenanceIntervalMs: "604800000"
+    ## 期望 worker 代码版本（worker-self-update Todo 2）：deploy-k8s.sh 以
+    ## `--set server.env.codeVersion=$TAG` 注入（TAG = git 短 SHA，与 pack-worker 发布的
+    ## tarball 同源）。**空串 = 不下发期望版本**（心跳响应省略 expectedVersion，UI 不做
+    ## 「版本不一致」判定）——手写 helm install / 本地栈即此缺省语义。
+    codeVersion: ""
   ## initContainer 等待数据库「schema 就绪」的最长秒数。判据是 prisma migrate status
   ## 报 up to date——只探 TCP 不够：MySQL 端口可连时迁移可能尚未跑完，server 会以
   ## P2021（表不存在）退出并反复重启。
@@ -165,6 +170,13 @@ worker:
     ## worker 唯一 id；空 = 自动按 pod 名生成（w_<pod 名>，downward API 注入，
     ## 多副本天然唯一）；显式设置时用该值（注意多副本下须自行保证唯一）
     workerId: ""
+    ## worker 代码版本（WORKER_CODE_VERSION，configmap worker 段下发）：
+    ## 决定 worker 向 server 上报的 codeVersion（版本徽章 / 自更新比对）。
+    ## 缺省空 = 不注入该 env（worker 侧回落 dist/version.js 文件戳，再回落 'dev'；
+    ## chart 部署的镜像内无版本戳文件，故实际表现为 'dev'）。
+    ## 部署时用 --set worker.env.codeVersion=<git short sha> 注入，与发布 tarball
+    ## （web/public/worker-src.version.json 的 version 同源）对齐。
+    codeVersion: ""
   resources:
     requests:
       cpu: 500m

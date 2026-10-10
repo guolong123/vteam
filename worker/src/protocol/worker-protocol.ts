@@ -97,6 +97,12 @@ export interface RegisterWorkerPayload {
   defaultModelId?: string;
   /** 内置 vteam MCP 地址覆盖（env WORKER_MCP_URL，可选；server 按 worker 覆盖下发） */
   mcpUrl?: string;
+  /**
+   * worker 代码版本（worker-self-update Todo 2）：`resolveCodeVersion()` 的解析结果
+   * （env WORKER_CODE_VERSION > dist/version.js > 'dev'）。可选——旧 worker 不携带，
+   * server 按「缺席 = 保留已有值」处理，不会因为缺这个键报错或清空。
+   */
+  codeVersion?: string;
 }
 
 /** POST /workers/:id/heartbeat 请求体（对齐 server HeartbeatWorkerDto）。 */
@@ -106,6 +112,11 @@ export interface HeartbeatWorkerPayload {
   health: WorkerHealth;
   /** T8c：MCP 服务器三态快照（节流探测结果；可选，兼容旧 server 不携带） */
   mcpStatus?: McpStatusEntry[];
+  /**
+   * worker 代码版本（worker-self-update Todo 2）：与 register 同字段同口径；可选，
+   * 旧 worker 心跳不携带（server 按「缺席 = 保留上次上报值」处理）。
+   */
+  codeVersion?: string;
 }
 /** 下行命令 type 枚举（T4a：对齐 server WORKER_COMMAND_TYPES）。 */
 export const WORKER_COMMAND_TYPES = {
@@ -249,6 +260,13 @@ export interface HeartbeatResponse {
   lastHeartbeatAt: string;
   /** T4a：待执行下行命令；无命令时不携带 */
   commands?: WorkerCommand[];
+  /**
+   * worker-self-update Todo 2：server 侧的期望代码版本（env CODE_VERSION = deploy TAG）。
+   * **纯信息字段**——server 不因它的存在产生任何更新语义（更新指令走上面既有的
+   * commands 通道）。env 未配置时 server 整字段省略，故此处也可缺省。
+   * 本轮 worker 只接收不执行（执行器属更新执行任务）。
+   */
+  expectedVersion?: string;
 }
 
 export interface ExecutionConfig {

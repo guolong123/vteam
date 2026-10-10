@@ -1,5 +1,6 @@
 import {
   extractCommands,
+  extractExpectedVersion,
   registerWorker,
   registerWorkerWithRetry,
   sendHeartbeat,
@@ -18,6 +19,26 @@ function mockFetch(): void {
   fetchMock.mockReset();
   (globalThis as { fetch: unknown }).fetch = fetchMock as unknown as typeof fetch;
 }
+
+/**
+ * 固定 `resolveCodeVersion()` 的取值（env 优先于 dist/version.js）。
+ * 不这么做的话，注册/心跳报文里的 codeVersion 会随本机 dist/version.js 与 env 漂移，
+ * 整包 toEqual 断言既不确定也会打 fs 缺失的 warn 日志。
+ */
+const TEST_CODE_VERSION = 'testver1';
+const ORIGINAL_CODE_VERSION_ENV = process.env.WORKER_CODE_VERSION;
+
+beforeEach(() => {
+  process.env.WORKER_CODE_VERSION = TEST_CODE_VERSION;
+});
+
+afterAll(() => {
+  if (ORIGINAL_CODE_VERSION_ENV === undefined) {
+    delete process.env.WORKER_CODE_VERSION;
+  } else {
+    process.env.WORKER_CODE_VERSION = ORIGINAL_CODE_VERSION_ENV;
+  }
+});
 
 function okJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -59,6 +80,7 @@ describe('registerWorker（POST /api/v1/workers/register）', () => {
       opencodeVersion: '1.18.15',
       capabilities: { maxInstances: 1, skills: [], tools: ['git_clone'] },
       load: { instances: 0 },
+      codeVersion: TEST_CODE_VERSION,
     });
     expect(result).toEqual(serverResp);
   });
@@ -115,6 +137,7 @@ describe('sendHeartbeat（POST /api/v1/workers/:id/heartbeat）', () => {
       workerId: 'w_test-1',
       load: { instances: 1 },
       health: 'ok',
+      codeVersion: TEST_CODE_VERSION,
     });
   });
 
@@ -157,6 +180,7 @@ describe('sendHeartbeat（POST /api/v1/workers/:id/heartbeat）', () => {
         { serverName: 'gitee-ent', status: 'connected' },
         { serverName: 'test-bad-local', status: 'failed' },
       ],
+      codeVersion: TEST_CODE_VERSION,
     });
   });
 
@@ -177,6 +201,7 @@ describe('sendHeartbeat（POST /api/v1/workers/:id/heartbeat）', () => {
       workerId: 'w_test-1',
       load: { instances: 0 },
       health: 'ok',
+      codeVersion: TEST_CODE_VERSION,
     });
   });
 
@@ -241,6 +266,139 @@ describe('sendHeartbeat（POST /api/v1/workers/:id/heartbeat）', () => {
         commands: [{ type: 'reload-config', resourceVersion: 'v1' }],
       }),
     ).toEqual([{ type: 'reload-config', resourceVersion: 'v1' }]);
+  });
+});
+
+// worker-self-update Todo 2：代码版本双向通道（上报 codeVersion / 接收 expectedVersion）。
+describe('codeVersion 通道（worker-self-update Todo 2）', () => {
+  beforeEach(mockFetch);
+
+  describe('上报方向', () => {
+    it('register 未显式传 codeVersion → 报文就地解析 resolveCodeVersion()（env 优先）', async () => {
+      fetchMock.mockResolvedValue(
+        okJson({ workerId: 'w_test-1', heartbeatIntervalMs: 10_000, serverTime: '' }),
+      );
+
+      await registerWorker(REG_BASE);
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string).codeVersion).toBe(TEST_CODE_VERSION);
+    });
+
+    it('register 显式传 codeVersion → 以传入值为准（不覆盖调用方口径）', async () => {
+      fetchMock.mockResolvedValue(
+        okJson({ workerId: 'w_test-1', heartbeatIntervalMs: 10_000, serverTime: '' }),
+      );
+
+      await registerWorker({ ...REG_BASE, codeVersion: 'explicit1' });
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string).codeVersion).toBe('explicit1');
+    });
+
+    it('heartbeat 同样携带解析出的 codeVersion（滚动更新后心跳即刷新当前版本）', async () => {
+      fetchMock.mockResolvedValue(
+        okJson({ workerId: 'w_test-1', status: 'online', lastHeartbeatAt: '' }),
+      );
+
+      await sendHeartbeat({
+        serverUrl: 'http://localhost:3000',
+        workerToken: 'dev-worker-token',
+        workerId: 'w_test-1',
+        load: { instances: 0 },
+        health: 'ok',
+      });
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string).codeVersion).toBe(TEST_CODE_VERSION);
+    });
+
+    it('heartbeat 显式传 codeVersion → 以传入值为准', async () => {
+      fetchMock.mockResolvedValue(
+        okJson({ workerId: 'w_test-1', status: 'online', lastHeartbeatAt: '' }),
+      );
+
+      await sendHeartbeat({
+        serverUrl: 'http://localhost:3000',
+        workerToken: 'dev-worker-token',
+        workerId: 'w_test-1',
+        load: { instances: 0 },
+        health: 'ok',
+        codeVersion: 'manual-20261010',
+      });
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(JSON.parse(init.body as string).codeVersion).toBe(
+        'manual-20261010',
+      );
+    });
+  });
+
+  describe('接收方向（只接收不执行）', () => {
+    it('sendHeartbeat 返回体带 expectedVersion 原样解析（旧 server 无此字段则 undefined）', async () => {
+      fetchMock.mockResolvedValue(
+        okJson({
+          workerId: 'w_test-1',
+          status: 'online',
+          lastHeartbeatAt: '2026-10-10T00:00:00Z',
+          expectedVersion: 'deploy-tag-1',
+        }),
+      );
+
+      const result = await sendHeartbeat({
+        serverUrl: 'http://localhost:3000',
+        workerToken: 'dev-worker-token',
+        workerId: 'w_test-1',
+        load: { instances: 0 },
+        health: 'ok',
+      });
+
+      expect(result.expectedVersion).toBe('deploy-tag-1');
+      expect(extractExpectedVersion(result)).toBe('deploy-tag-1');
+    });
+
+    it('extractExpectedVersion 缺字段/空串/空白/非字符串 → undefined（旧 server 兼容）', () => {
+      const base = {
+        workerId: 'w_test-1',
+        status: 'online',
+        lastHeartbeatAt: '',
+      };
+      expect(extractExpectedVersion({ ...base })).toBeUndefined();
+      expect(extractExpectedVersion({ ...base, expectedVersion: '' })).toBeUndefined();
+      expect(extractExpectedVersion({ ...base, expectedVersion: '   ' })).toBeUndefined();
+      // 非字符串（服务端被误改/旧版形状）不得让 worker 崩。
+      expect(
+        extractExpectedVersion({
+          ...base,
+          expectedVersion: 42 as unknown as string,
+        }),
+      ).toBeUndefined();
+    });
+
+    it('expectedVersion 与既有 commands 字段并存且互不影响（下行通道回归守卫）', async () => {
+      fetchMock.mockResolvedValue(
+        okJson({
+          workerId: 'w_test-1',
+          status: 'online',
+          lastHeartbeatAt: '2026-10-10T00:00:00Z',
+          commands: [{ type: 'reload-config', resourceVersion: 'v9' }],
+          expectedVersion: 'deploy-tag-1',
+        }),
+      );
+
+      const result = await sendHeartbeat({
+        serverUrl: 'http://localhost:3000',
+        workerToken: 'dev-worker-token',
+        workerId: 'w_test-1',
+        load: { instances: 0 },
+        health: 'ok',
+      });
+
+      expect(extractCommands(result)).toEqual([
+        { type: 'reload-config', resourceVersion: 'v9' },
+      ]);
+      expect(extractExpectedVersion(result)).toBe('deploy-tag-1');
+    });
   });
 });
 

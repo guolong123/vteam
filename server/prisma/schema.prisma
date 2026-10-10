@@ -902,6 +902,12 @@ model Worker {
   // worker 默认模型兜底（分派时 Agent 未配模型 → 用执行 worker 默认模型，C8）
   defaultModelId  String?   @map("default_model_id")
   tokenHash       String?   @map("token_hash")
+  // worker 自更新（worker-self-update Todo 2）：worker 心跳/注册上报的**代码版本**
+  // （pack-worker 构建期戳的 git 短 SHA / `manual-<date>` / `dev`）。NULL = 该 worker
+  // 从未上报（旧版 worker 或版本解析失败）= 版本未知，UI 展示「未知」而非假装一致。
+  // 不建索引：workers 表行数为外部 worker 个位数，版本只整行读回、不参与过滤/排序，
+  // 加索引纯属写放大。
+  codeVersion     String?   @map("code_version")
   lastHeartbeatAt DateTime? @map("last_heartbeat_at")
   registeredAt    DateTime  @default(now()) @map("registered_at")
 

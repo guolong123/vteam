@@ -167,4 +167,17 @@ export class RegisterWorkerDto {
   @IsOptional()
   @IsString()
   mcpUrl?: string;
+
+  /**
+   * worker 代码版本（worker-self-update Todo 2）：pack-worker 构建期戳的
+   * git 短 SHA / `manual-<date>` / `dev`。旧 worker 不携带该字段——**可选，
+   * 缺席不报错、不清空已有值**（持久化语义见 workers.service.ts register）。
+   */
+  @ApiPropertyOptional({
+    description:
+      'worker 代码版本（git 短 SHA / manual-<date> / dev）；旧 worker 缺省 = 版本未知',
+  })
+  @IsOptional()
+  @IsString()
+  codeVersion?: string;
 }

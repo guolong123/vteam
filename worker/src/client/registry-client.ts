@@ -23,6 +23,7 @@ import {
   WorkerHealth,
   WorkerLoad,
 } from '../protocol/worker-protocol';
+import { resolveCodeVersion } from '../code-version';
 
 /** X-Worker-Token 鉴权 header（对齐 server workers.constants.ts WORKER_TOKEN_HEADER）。 */
 export const WORKER_TOKEN_HEADER = 'x-worker-token';
@@ -56,6 +57,12 @@ export interface RegistryClientOptions {
   defaultModelId?: string;
   /** 内置 vteam MCP 地址覆盖（config.mcpUrl，env WORKER_MCP_URL）；空不携带 */
   mcpUrl?: string;
+  /**
+   * 上报的代码版本（worker-self-update Todo 2）。省略时由本模块就地解析
+   * `resolveCodeVersion()`（env WORKER_CODE_VERSION > dist/version.js > 'dev'），
+   * 故调用方无需改代码即自动带上版本；显式传入用于测试与将来的版本注入点。
+   */
+  codeVersion?: string;
   /** fetch 注入点（测试用）；默认 globalThis.fetch */
   fetchImpl?: typeof fetch;
 }
@@ -68,6 +75,8 @@ export interface HeartbeatOptions {
   health: WorkerHealth;
   /** T8c：MCP 服务器三态快照（节流探测结果，可选） */
   mcpStatus?: McpStatusEntry[];
+  /** 上报代码版本；省略时同 register 就地 `resolveCodeVersion()` */
+  codeVersion?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -106,6 +115,7 @@ export async function registerWorker(opts: RegistryClientOptions): Promise<Regis
     load: opts.load ?? { instances: 0 },
     ...(opts.defaultModelId ? { defaultModelId: opts.defaultModelId } : {}),
     ...(opts.mcpUrl ? { mcpUrl: opts.mcpUrl } : {}),
+    codeVersion: opts.codeVersion ?? resolveCodeVersion(),
   };
   const response = await fetchImpl(apiUrl(opts.serverUrl, '/workers/register'), {
     method: 'POST',
@@ -135,6 +145,7 @@ export async function sendHeartbeat(opts: HeartbeatOptions): Promise<HeartbeatRe
     ...(opts.mcpStatus !== undefined && opts.mcpStatus.length > 0
       ? { mcpStatus: opts.mcpStatus }
       : {}),
+    codeVersion: opts.codeVersion ?? resolveCodeVersion(),
   };
   const response = await fetchImpl(
     apiUrl(opts.serverUrl, `/workers/${encodeURIComponent(opts.workerId)}/heartbeat`),
@@ -156,6 +167,21 @@ export async function sendHeartbeat(opts: HeartbeatOptions): Promise<HeartbeatRe
 /** T4a：从心跳响应提取待执行命令（无命令返回空数组，兼容旧 server）。 */
 export function extractCommands(response: HeartbeatResponse): WorkerCommand[] {
   return response.commands ?? [];
+}
+
+/**
+ * worker-self-update Todo 2：从心跳响应提取 server 期望的代码版本。
+ *
+ * 与 {@link extractCommands} 同样按「旧 server / 未配置 env → undefined」降级。
+ * **本轮只读取不执行**——比对与更新执行属更新执行任务的职责，此处保持通道畅通即可。
+ */
+export function extractExpectedVersion(
+  response: HeartbeatResponse,
+): string | undefined {
+  const raw = response.expectedVersion;
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /**

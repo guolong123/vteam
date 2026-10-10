@@ -46,4 +46,17 @@ export class HeartbeatWorkerDto {
   @ValidateNested({ each: true })
   @Type(() => McpStatusEntryDto)
   mcpStatus?: McpStatusEntryDto[];
+
+  /**
+   * worker 代码版本（worker-self-update Todo 2）：与 register 同字段同口径。
+   * 旧 worker 不携带——**可选，缺席不报错、不清空已有值**（心跳缺席时保留
+   * register 阶段上报的版本，而不是把「本次没说」误读成「没有版本」）。
+   */
+  @ApiPropertyOptional({
+    description:
+      'worker 代码版本（git 短 SHA / manual-<date> / dev）；旧 worker 缺省 = 保留上次上报值',
+  })
+  @IsOptional()
+  @IsString()
+  codeVersion?: string;
 }
