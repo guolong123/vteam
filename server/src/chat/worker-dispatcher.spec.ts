@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Logger } from '@nestjs/common';
 import {
   CHANNEL_TYPE,
   EVENT_TYPES,
@@ -69,6 +70,8 @@ import {
   aggregateText,
   findError,
   findFinish,
+  parseUsageTokens,
+  UNKNOWN_MODEL_KEY,
   truncateUtf8,
   TeamMemberInfo,
   WorkerDispatcher,
@@ -99,6 +102,7 @@ describe('WorkerDispatcher', () => {
     taskMessageChannel: { findMany: jest.Mock };
     memory: { count: jest.Mock; findMany: jest.Mock };
     task: { findUnique: jest.Mock };
+    modelUsage: { create: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
   let realtime: { broadcast: jest.Mock };
@@ -229,6 +233,8 @@ describe('WorkerDispatcher', () => {
       // 主 Agent/团队成员注入：默认无 task 行 → isMainAgent=false + team=[]（既有断言
       // system 不含主 Agent/团队段，回归现状）；需要注入的用例单独 mockResolvedValue。
       task: { findUnique: jest.fn() },
+      // usage-sink：完成回流的用量记账行（默认成功；幂等用例换主键唯一约束模拟）
+      modelUsage: { create: jest.fn().mockResolvedValue({ id: 'us_x' }) },
       // 单团队入口（Todo 1）：分派统一走团队会话/名册；默认空名册 + 无主成员，
       // 需要团队数据的用例单独覆盖。
       ...({
@@ -3906,6 +3912,368 @@ describe('WorkerDispatcher', () => {
             ],
           },
         }),
+      });
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // usage-sink：完成回流的用量记账（幂等 / 脏数据 / 失败不阻断）
+  // ------------------------------------------------------------------
+
+  describe('用量记账（token-usage-stats Todo 3 usage-sink）', () => {
+    const usageTokens = {
+      total: 1650,
+      input: 900,
+      output: 200,
+      reasoning: 100,
+      cache: { read: 500, write: 60 },
+    };
+    /** 一轮完成的 parts：ingress 路径与自持轮询路径读到的是同一份 serve 数据。 */
+    const finishParts = (partId = 'prt_finish_1') => [
+      { type: 'text', text: '已完成' },
+      {
+        type: 'step-finish',
+        reason: 'stop',
+        id: partId,
+        tokens: usageTokens,
+        cost: 0.25,
+      },
+    ];
+    /** 主键唯一约束模拟：同一 id 二次写入抛 P2002（= 真实 DB 的仲裁行为）。 */
+    const withUniquePrimaryKey = () => {
+      const rows = new Map<string, Record<string, unknown>>();
+      prisma.modelUsage.create.mockImplementation(
+        ({ data }: { data: Record<string, unknown> }) => {
+          const id = String(data.id);
+          if (rows.has(id)) {
+            return Promise.reject(
+              Object.assign(new Error('Unique constraint failed on PRIMARY'), {
+                code: 'P2002',
+              }),
+            );
+          }
+          rows.set(id, data);
+          return Promise.resolve(data);
+        },
+      );
+      return rows;
+    };
+    /** 走私有入口：自持轮询的完成回流（第二生产者）。 */
+    const pollCompletion = (
+      d: WorkerDispatcher,
+      params: {
+        taskId: string;
+        agentId: string;
+        sessionId: string;
+        channelId?: string;
+      },
+      messages: unknown[],
+    ) =>
+      (
+        d as unknown as {
+          handlePolledCompletion(
+            p: typeof params,
+            m: unknown[],
+          ): Promise<void>;
+        }
+      ).handlePolledCompletion(params, messages);
+
+    beforeEach(() => {
+      prisma.chatChannel.findUnique.mockResolvedValue(null);
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: request.channelId });
+      prisma.message.create.mockResolvedValue(messageRow());
+      prisma.session.findUnique.mockResolvedValue({
+        agentId: 'a_product',
+        teamId: 'tm_0000000001',
+        teamMemberId: 'tmm_0000000001',
+      });
+      prisma.modelUsage.create.mockResolvedValue({ id: 'us_x' });
+    });
+
+    it('happy：tokens/cost + 归属上下文原样落一行', async () => {
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        text: '已完成',
+        parts: finishParts(),
+        tokens: usageTokens,
+        cost: 0.25,
+        model: 'anthropic/claude-sonnet-4',
+      });
+
+      expect(prisma.modelUsage.create).toHaveBeenCalledTimes(1);
+      expect(prisma.modelUsage.create).toHaveBeenCalledWith({
+        data: {
+          id: expect.stringMatching(/^us_[0-9a-f]{32}$/),
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
+          sessionId: 's_0000000001',
+          channelId: request.channelId,
+          agentId: 'a_product',
+          taskId: request.taskId,
+          model: 'anthropic/claude-sonnet-4',
+          inputTokens: 900,
+          outputTokens: 200,
+          reasoningTokens: 100,
+          cacheReadTokens: 500,
+          cacheWriteTokens: 60,
+          totalTokens: 1650,
+          cost: 0.25,
+        },
+      });
+    });
+
+    it('幂等（红线）：内存 completedSessions 失效后（两个 dispatcher = 重启/多副本）同一 completion 投递两次 → 只一行', async () => {
+      const rows = withUniquePrimaryKey();
+      const payload = {
+        taskId: '',
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        text: '已完成',
+        parts: finishParts(),
+        tokens: usageTokens,
+        cost: 0.25,
+        model: 'anthropic/claude-sonnet-4',
+      };
+
+      // 两个实例 = 两块互不相干的内存 completedSessions；DB 主键是唯一防线
+      await createDispatcher().handleTaskCompleted(payload);
+      await createDispatcher().handleTaskCompleted(payload);
+
+      expect(prisma.modelUsage.create).toHaveBeenCalledTimes(2);
+      expect([...rows.values()]).toHaveLength(1);
+      expect(rows.values().next().value).toMatchObject({
+        totalTokens: 1650,
+        cost: 0.25,
+      });
+    });
+
+    it('两个生产者（ingress 事件体 / 自持轮询 parts）算出同一幂等键 → 仍只一行', async () => {
+      const rows = withUniquePrimaryKey();
+      const messages = [
+        {
+          info: { role: 'assistant', id: 'msg_1' },
+          parts: finishParts(),
+        },
+      ];
+
+      await pollCompletion(
+        createDispatcher(),
+        {
+          taskId: request.taskId,
+          agentId: 'a_product',
+          sessionId: 's_0000000001',
+          channelId: request.channelId,
+        },
+        messages,
+      );
+      await createDispatcher().handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        text: '已完成',
+        parts: finishParts(),
+        tokens: usageTokens,
+        cost: 0.25,
+        model: 'anthropic/claude-sonnet-4',
+      });
+
+      expect([...rows.values()]).toHaveLength(1);
+    });
+
+    it('同会话同 taskId（团队直聊恒为空串）的不同轮次 → 各自记一行，不互相吞', async () => {
+      const rows = withUniquePrimaryKey();
+
+      for (const partId of ['prt_finish_1', 'prt_finish_2']) {
+        await createDispatcher().handleTaskCompleted({
+          taskId: '',
+          agentId: 'a_product',
+          sessionId: 's_0000000001',
+          channelId: request.channelId,
+          text: '已完成',
+          parts: finishParts(partId),
+          tokens: usageTokens,
+          cost: 0.25,
+        });
+      }
+
+      expect([...rows.values()]).toHaveLength(2);
+    });
+
+    it('脏 tokens（缺字段/NaN/非数字/负数）→ 归零且行照落，不断链', async () => {
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        text: '已完成',
+        parts: finishParts(),
+        tokens: {
+          total: Number.NaN,
+          input: '900',
+          output: -5,
+          reasoning: Number.POSITIVE_INFINITY,
+          cache: { read: Number.NaN },
+        },
+      });
+
+      expect(prisma.modelUsage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          totalTokens: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          cost: null,
+        }),
+      });
+      // 脏数据只影响计数，不影响回复落库
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('tokens 整体缺失 → 六个计数全 0（best-effort 缺字段不断链）', async () => {
+      await createDispatcher().handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        text: '已完成',
+      });
+
+      expect(prisma.modelUsage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          inputTokens: 0,
+          outputTokens: 0,
+          reasoningTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 0,
+          cost: null,
+        }),
+      });
+    });
+
+    it('model 缺失 / 空串 → 记 unknown 哨兵串（与 worker UNKNOWN_MODEL_KEY 同值）', async () => {
+      for (const model of [undefined, '', '   ']) {
+        prisma.modelUsage.create.mockClear();
+        await createDispatcher().handleTaskCompleted({
+          taskId: request.taskId,
+          agentId: 'a_product',
+          sessionId: 's_0000000001',
+          channelId: request.channelId,
+          text: '已完成',
+          parts: finishParts(),
+          ...(model === undefined ? {} : { model }),
+        });
+        expect(prisma.modelUsage.create).toHaveBeenCalledWith({
+          data: expect.objectContaining({ model: UNKNOWN_MODEL_KEY }),
+        });
+      }
+    });
+
+    it('cost 非数字 → 记 null（未知），不按 0（免费）落库、不做任何换算', async () => {
+      await createDispatcher().handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        text: '已完成',
+        parts: finishParts(),
+        cost: '0.25' as unknown as number,
+      });
+
+      expect(prisma.modelUsage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({ cost: null }),
+      });
+    });
+
+    it('写入抛错 → 只 warn，回复照常落库（统计不阻断主链路）', async () => {
+      const warnSpy = jest
+        .spyOn(Logger.prototype, 'warn')
+        .mockImplementation(() => undefined);
+      prisma.modelUsage.create.mockRejectedValue(new Error('db down'));
+      const d = createDispatcher();
+      const finals: unknown[] = [];
+      d.onFinal((e) => finals.push(e));
+
+      await expect(
+        d.handleTaskCompleted({
+          taskId: request.taskId,
+          agentId: 'a_product',
+          sessionId: 's_0000000001',
+          channelId: request.channelId,
+          text: '已完成',
+          parts: finishParts(),
+          tokens: usageTokens,
+          cost: 0.25,
+        }),
+      ).resolves.toBeUndefined();
+
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(finals).toHaveLength(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('用量落库失败'),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('群聊回退频道（不建 message 行）→ 用量照样记账', async () => {
+      prisma.chatChannel.findFirst.mockResolvedValue({
+        id: 'c_group',
+        type: CHANNEL_TYPE.team_group,
+      });
+      await createDispatcher().handleTaskCompleted({
+        taskId: '',
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '已完成',
+        parts: finishParts(),
+        tokens: usageTokens,
+        cost: 0.25,
+      });
+
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(prisma.modelUsage.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          channelId: 'c_group',
+          totalTokens: 1650,
+        }),
+      });
+    });
+
+    it('parseUsageTokens：脏值逐字段归零（缺字段/NaN/±Infinity/负数/小数截断）', () => {
+      expect(
+        parseUsageTokens({
+          total: 10.9,
+          input: Number.NaN,
+          output: -1,
+          reasoning: 'x',
+          cache: { read: Number.POSITIVE_INFINITY, write: 7 },
+        }),
+      ).toEqual({
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 7,
+        totalTokens: 10,
+      });
+      expect(parseUsageTokens(undefined)).toEqual({
+        inputTokens: 0,
+        outputTokens: 0,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        totalTokens: 0,
       });
     });
   });

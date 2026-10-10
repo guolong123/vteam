@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import {
@@ -87,6 +88,170 @@ import { sortMemoriesByImportance } from '../memories/memory-importance';
 
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
+
+// ==================================================================
+// 用量落库（token-usage-stats Todo 3 usage-sink）
+//
+// 落库点在 `handleTeamTaskCompleted` 的**频道解析之后、消息落库之前**：用量事实与
+// 「这条回复要不要落成 message 行」无关（群聊回退分支不建 message 行，模型照样被
+// 调用过），而消息落库是主链路、绝不能被统计写入拖垮 —— recordModelUsage 自带
+// try/catch，任何失败只 logger.warn 后返回，调用点不做任何错误传播。
+//
+// ── 幂等键（本 todo 的红线）────────────────────────────────────────
+// 同一轮完成有**两个生产者**：① ingress `POST /workers/:id/events`（worker 主动推，
+// worker-event.ingress.handleTaskCompleted）；② dispatcher 自持轮询
+// （handlePolledCompletion）。内存 `completedSessions` 只挡同进程顺序到达，进程重启
+// 或多副本下即失效 ⇒ 必须由 **DB 唯一约束**兜底，否则同一轮用量记两遍（计费口径直
+// 接翻倍）。
+//
+// 所选自然键：**step-finish part 的 opencode part id**（回退其 messageID，再回退
+// 「会话+任务+用量指纹+正文指纹」）。读事件体后确认的理由：
+//   1. 该字段确实存在于两个生产者的输入里：ingress 路径 `payload.parts`（worker 原样
+//      上送 assistant parts）与轮询路径的 step-finish part，读的是同一份 serve 数据
+//      ⇒ 同一轮完成跨生产者算出同一个键；
+//   2. **不能**用 `sessionId + taskId`：团队直聊 taskId 恒为 ''，而 sessions 按
+//      (teamId, teamMemberId) 复用同一会话（uk_sessions_team_member 的 STORED 生成列
+//      team_member_key）⇒ 同会话多轮会撞键，把后续轮次的用量整轮吞掉。
+//
+// ── 为什么把幂等键编码进主键，而不是另加 dedupKey 唯一列 ──────────
+// model_usages 的 DB 唯一约束**只有主键 id**：Wave 1 冻结的 schema 与迁移
+// 20261010010000_model_usage 只建了三个 `@@index` + PRIMARY KEY，无任何 `@@unique`
+// 列，且 prisma/model-usage.migration.spec.ts 双向钉死了列集合与索引集合（改动它
+// 等于回退 Wave 1 已验收的契约）。故把自然键摘要成 `id = 'us_' + sha256(键)[0:32]`：
+// 重复投递 → 主键冲突（P2002）→ 记 debug 后忽略。这仍是**DB 唯一约束仲裁**，不是先
+// 查后写，无需改 schema/migration。
+// 连带后果：id 不再是 `us_` + 计数器序号，故本类**不调** resyncIdPrefix —— 本类内
+// 没有「用量前缀（us）的 id 生成调用点」，计数器归零撞主键那一类事故在本表不可能
+// 发生（common/id-resync.guard.spec.ts 的「生成点须有 resync」方向天然满足）。
+// ==================================================================
+
+/** 用量行主键前缀。 */
+const MODEL_USAGE_ID_PREFIX = 'us';
+
+/**
+ * 「模型未知」哨兵串——必须与 worker 侧 `UNKNOWN_MODEL_KEY`
+ * （worker/src/protocol/worker-protocol.ts）**逐字节一致**：worker 与 server 之间没有
+ * 共享 import 路径，两端各定义一份常量。事件体缺 model / 非串 / 空串时落本值，使
+ * 「未知」在聚合里是一个可辨识的分组，而不是混进真实模型名（空串会被当成真模型）。
+ */
+export const UNKNOWN_MODEL_KEY = 'unknown';
+
+export interface UsageTokenCounts {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+}
+
+function usageTokenCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : 0;
+}
+
+/**
+ * `payload.tokens`（worker `ServeTokens` 权威形状，见
+ * worker/src/driver/v1-driver.ts `{total,input,output,reasoning,cache:{read,write}}`）
+ * → 六计数。worker 的 step-finish 用量是 best-effort 上报，缺字段/NaN/负数都出现过；
+ * 逐字段 `Number.isFinite` 校验后归零，**脏数据归零不断链**——绝不让一行统计因某个
+ * 字段缺失而整条写不进去。
+ */
+export function parseUsageTokens(raw: unknown): UsageTokenCounts {
+  const bag = (
+    typeof raw === 'object' && raw !== null ? raw : {}
+  ) as Record<string, unknown>;
+  const cache = (
+    typeof bag.cache === 'object' && bag.cache !== null ? bag.cache : {}
+  ) as Record<string, unknown>;
+  return {
+    inputTokens: usageTokenCount(bag.input),
+    outputTokens: usageTokenCount(bag.output),
+    reasoningTokens: usageTokenCount(bag.reasoning),
+    cacheReadTokens: usageTokenCount(cache.read),
+    cacheWriteTokens: usageTokenCount(cache.write),
+    totalTokens: usageTokenCount(bag.total),
+  };
+}
+
+function sha256Hex(input: string): string {
+  return createHash('sha256').update(input, 'utf8').digest('hex');
+}
+
+/**
+ * step-finish part 的稳定标识：opencode part id 优先，其次承载它的 message id。两者
+ * 都只认非空字符串——空串当缺失处理，否则所有缺 part 的完成会撞同一个键。
+ */
+function findStepFinishPartKey(parts: unknown): string | null {
+  if (!Array.isArray(parts)) {
+    return null;
+  }
+  for (const raw of parts) {
+    if (typeof raw !== 'object' || raw === null) {
+      continue;
+    }
+    const part = raw as Record<string, unknown>;
+    if (part.type !== 'step-finish') {
+      continue;
+    }
+    const partId = typeof part.id === 'string' ? part.id.trim() : '';
+    if (partId) {
+      return `part:${partId}`;
+    }
+    const messageId =
+      typeof part.messageID === 'string' ? part.messageID.trim() : '';
+    if (messageId) {
+      return `message:${messageId}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * 本轮完成的**自然幂等键**（跨生产者稳定）：优先 step-finish part id；parts 缺失
+ * （老 worker / 事件体裁剪）时回退「会话+任务+用量指纹+正文指纹」——两个生产者对
+ * 同一轮完成用同一套聚合与同一份 step-finish 数据，回退串同样相同；不同轮次只要用量
+ * 或正文有别即区分开。
+ */
+export function usageCompletionDedupKey(args: {
+  sessionId: string | null;
+  taskId: string | null;
+  parts: unknown;
+  tokens: unknown;
+  cost: unknown;
+  text: unknown;
+}): string {
+  const finishKey = findStepFinishPartKey(args.parts);
+  if (finishKey !== null) {
+    return finishKey;
+  }
+  const counts = parseUsageTokens(args.tokens);
+  return [
+    'tally',
+    args.sessionId ?? '',
+    args.taskId ?? '',
+    `${counts.totalTokens}/${counts.inputTokens}/${counts.outputTokens}`,
+    typeof args.cost === 'number' && Number.isFinite(args.cost)
+      ? String(args.cost)
+      : '',
+    sha256Hex(typeof args.text === 'string' ? args.text : '').slice(0, 16),
+  ].join('|');
+}
+
+/** 幂等行主键 `us_` + sha256(自然键)[0:32]：128 bit 摘要，本表量级下碰撞可忽略。 */
+export function modelUsageRowId(dedupKey: string): string {
+  return `${MODEL_USAGE_ID_PREFIX}_${sha256Hex(dedupKey).slice(0, 32)}`;
+}
+
+/** Prisma P2002（MySQL 侧 ER_DUP_ENTRY / 1062）判定——幂等去重是它的唯一用途。 */
+function isUniqueConstraintViolation(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) {
+    return false;
+  }
+  const code = (err as { code?: unknown }).code;
+  return code === 'P2002' || code === 'ER_DUP_ENTRY';
+}
 
 type WecomBridgeExternalMessage = {
   readonly id: string;
@@ -2802,6 +2967,17 @@ export class WorkerDispatcher
       });
       return unsettled;
     }
+    // 用量记账（usage-sink）：归属（teamId/teamMemberId/agentId）与频道此刻都已解析
+    // 完毕，正是记账所需的全部上下文。刻意放在消息落库**之前**且自带 try/catch：
+    // ① 群聊回退分支不建 message 行，但模型确实被调用过，用量照样要记；
+    // ② 统计写入的任何失败都只 logger.warn，绝不阻断主链路的 message.create。
+    await this.recordModelUsage({
+      payload,
+      teamId,
+      teamMemberId,
+      agentId,
+      channelId: channel.id,
+    });
     // 群聊回退（team_group）时正文独白不落群聊（结论经 group_post 工具直发），
     // 仅幂等标记 + emitFinal 收尾
     if (channel.type === CHANNEL_TYPE.team_group) {
@@ -2935,6 +3111,88 @@ export class WorkerDispatcher
       return { teamId, agentId, teamMemberId, text, displayText, finalParts };
     }
     return { teamId, agentId, teamMemberId, text, displayText, finalParts };
+  }
+
+  /**
+   * 用量落库（usage-sink）：把 worker 上报的 tokens/cost **原样**记一行 model_usages。
+   *
+   * - 不做任何计算：不重算费用（无权威价目表，重算即凭空造口径）、不做聚合（消费侧
+   *   的聚合接口负责）；cost 非有限数按「上游未给」记 NULL（NULL=未知，0=免费，语义
+   *   不同不可混同）。
+   * - 幂等：行主键 = `us_` + sha256(自然键)，同一轮完成重复投递撞主键 P2002 → 记
+   *   debug 后忽略（唯一赢家已落库）。这是 DB 唯一约束仲裁，非先查后写。
+   * - 失败一律 logger.warn 后返回，调用点（消息落库）不受影响。
+   */
+  private async recordModelUsage(args: {
+    payload: TaskCompletedPayload;
+    teamId: string;
+    teamMemberId: string;
+    agentId: string;
+    channelId: string;
+  }): Promise<void> {
+    // 防御：未接入 modelUsage delegate 的宿主（灰度/裁剪部署）跳过记账，不打断主链路。
+    const usageStore = this.prisma.modelUsage;
+    if (!usageStore) {
+      this.logger.debug('[usage] 本宿主未接入 modelUsage delegate，跳过用量记账');
+      return;
+    }
+    const { payload } = args;
+    const sessionId =
+      typeof payload.sessionId === 'string' && payload.sessionId
+        ? payload.sessionId
+        : null;
+    const taskId =
+      typeof payload.taskId === 'string' && payload.taskId ? payload.taskId : null;
+    const counts = parseUsageTokens(payload.tokens);
+    const cost =
+      typeof payload.cost === 'number' && Number.isFinite(payload.cost)
+        ? payload.cost
+        : null;
+    const model =
+      typeof payload.model === 'string' && payload.model.trim() !== ''
+        ? payload.model
+        : UNKNOWN_MODEL_KEY;
+    const rowId = modelUsageRowId(
+      usageCompletionDedupKey({
+        sessionId,
+        taskId,
+        parts: payload.parts,
+        tokens: payload.tokens,
+        cost: payload.cost,
+        text: payload.text,
+      }),
+    );
+    try {
+      await usageStore.create({
+        data: {
+          id: rowId,
+          teamId: args.teamId,
+          teamMemberId: args.teamMemberId,
+          // session_id 列非空：极少数不带 sessionId 的旧回流落空串——为一个软关联维度
+          // 丢掉整轮 token/费用（真金白银）比留空值更糟；聚合按成员×模型，不读本列。
+          sessionId: sessionId ?? '',
+          channelId: args.channelId,
+          agentId: args.agentId,
+          taskId,
+          model,
+          ...counts,
+          cost,
+        },
+      });
+      this.logger.debug(
+        `[usage] 用量已记账 row=${rowId} model=${model} total=${counts.totalTokens} cost=${cost ?? 'null'}`,
+      );
+    } catch (err) {
+      if (isUniqueConstraintViolation(err)) {
+        this.logger.debug(
+          `[usage] 同一 completion 重复投递，主键仲裁下已存在，跳过（row=${rowId}）`,
+        );
+        return;
+      }
+      this.logger.warn(
+        `[usage] 用量落库失败（不影响回复落库）: ${this.describeError(err)}`,
+      );
+    }
   }
 
   /** P3：合并多来源产出物声明（worker 上送 + 回复文本提取），按声明形状去重防重复归档。 */

@@ -704,6 +704,10 @@ export class WorkerEventIngress {
       parts: raw.parts,
       tokens: raw.tokens,
       cost: typeof raw.cost === 'number' ? raw.cost : undefined,
+      // 用量口径模型标识透传（worker ctx 的 providerID/modelID）：Wave 1 只声明了本类型，
+      // 真正把字段搬进 payload 属 usage-sink 的消费侧——不搬则 dispatcher 永远读不到，
+      // 全表 model 恒为 'unknown'，模型维度失效。
+      model: this.str(raw.model),
       artifacts: Array.isArray(raw.artifacts) ? raw.artifacts : undefined,
     };
     this.logger.log(

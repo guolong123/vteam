@@ -1,0 +1,132 @@
+TASK_COMPLETED
+Task: 3. usage-sink — handleTaskCompleted 落库（含幂等）
+Repo: /Volumes/SSD-Data/01work/git-project/vteam  branch: feat/token-usage-stats
+Date: 2026-10-10
+
+====================================================================
+1. 改动文件（3 个，全部在 Todo 3 声明范围内）
+====================================================================
+- server/src/chat/worker-dispatcher.ts        （落库实现 + 幂等键 + 脏值归零）
+- server/src/chat/worker-dispatcher.spec.ts   （新增 11 条用例）
+- server/src/workers/worker-event.ingress.ts （1 行 model 透传，见 §4 偏离说明）
+未触碰：worker/、web/、server/prisma/schema.prisma 与 migrations、server/src/usage/*
+（并行 Todo 4 领地）、server/src/memories/*、server/src/app.module.ts（Todo 4 已改）。
+无 package.json 变更（零新依赖），无 git 命令。
+
+====================================================================
+2. 幂等键选择与理由（红线）
+====================================================================
+两个生产者必须走同一写入函数 handleTaskCompleted → handleTeamTaskCompleted
+→ recordModelUsage：
+  ① ingress：worker-event.ingress.handleTaskCompleted → taskCompletedCallbacks
+     （本次仅补 1 行 model 透传，写入逻辑不在 ingress）
+  ② dispatcher 自持轮询：handlePolledCompletion
+
+所选自然键（读事件体后确定）：
+  part:<step-finish part 的 opencode part id>
+  → 回退 message:<该 part 的 messageID>
+  → 再回退 tally:<sessionId|taskId|total/input/output|cost|sha256(text)[0:16]>
+
+选它的理由：
+  1) 两个生产者的输入里都真实存在该字段且指向同一份 serve 数据：ingress 路径
+     payload.parts（worker 原样上送 assistant parts，见 exec-server.ts:1556-1565 的
+     `...result.parts`），轮询路径 messages[].parts（worker-client.getMessages 原样返回
+     serve 响应，无字段裁剪）⇒ 同一轮完成跨生产者算出同一个键。
+  2) 排除 sessionId+taskId：团队直聊 taskId 恒为 ''（DispatchRequest.taskId 缺省按
+     '' 处理），而 sessions 按 (teamId, teamMemberId) 复用同一会话
+     （uk_sessions_team_member 的 STORED 生成列 team_member_key）⇒ 同会话多轮会撞键，
+     把后续轮次用量整轮吞掉。已用「同会话同 taskId 空串的不同轮次 → 两行」用例钉住。
+
+仲裁方式：DB 唯一约束，不是先查后写。
+  model_usages 的唯一约束**只有主键 id**——Wave 1 冻结的 schema/迁移只建了三个
+  @@index + PRIMARY KEY，无任何 @@unique 列，且 model-usage.migration.spec.ts 用
+  toEqual 双向钉死列集合与索引集合（改它 = 回退 Wave 1 已验收契约，而 Todo 3 被明确
+  禁止改 schema/migrations）。故把自然键摘要进主键：
+        id = 'us_' + sha256(自然键)[0:32]
+  重复投递 → 主键冲突 P2002 → 记 debug 后忽略（唯一赢家已落库）。
+  128 bit 摘要，本表量级碰撞可忽略；35 字符 << varchar(191)。
+
+连带说明（对 Wave 1 文档口径的偏离，已在代码注释写明）：
+  * id 不再是 'us_' + 计数器序号 ⇒ 本类**不调** resyncIdPrefix('us')：没有
+    nextId('us') 生成点，计数器归零撞主键那一类事故在本表不可能发生；
+    common/id-resync.guard.spec.ts 的「nextId 生成点须有 resync」方向天然满足，
+    实测全绿（见 §5）。若后续希望回到 us_<序号> + 独立 dedupKey 唯一列，需要
+    一次 Wave-1 schema/guard 契约变更（不在本 todo 授权范围内）。
+  * completedSessions 语义**未动**（仍只挡同进程顺序到达的重复回流），本次只在
+    其后追加 DB 级防线，不依赖它。
+
+====================================================================
+3. 实现要点
+====================================================================
+- tokens 按 worker ServeTokens 权威形状解析（worker/src/driver/v1-driver.ts:79-85：
+  total/input/output/reasoning/cache.{read,write}），parseUsageTokens 逐字段
+  Number.isFinite 校验；非数字/NaN/±Infinity/负数/小数一律归零（截断取整）。
+  缺失 tokens 或 cache 子对象 → 六计数全 0，行照落（脏数据归零不断链）。
+- cost：typeof number 且有限 → 原样存；否则 null（NULL=未知 ≠ 0=免费）。**不做任何**
+  换算/重算/汇总（聚合属 Todo 4）。
+- model：事件体 model 非空串则原样存；缺失/空串/空白 → 'unknown'，与 worker 侧
+  UNKNOWN_MODEL_KEY 逐字节一致（worker 与 server 无共享 import 路径，两端各定义）。
+- 归属：teamId/teamMemberId/agentId 取 handleTeamTaskCompleted 既有的归属解析结果，
+  channelId 取 resolveTeamChannel 结果，taskId/sessionId 取 payload（sessionId 缺失时
+  落空串——为一个软关联维度丢掉整轮真金白银更糟）。
+- 调用点：频道解析之后、message 落库 try 块**之前**（群聊回退分支不建 message 行，
+  但模型确实被调用过，用量照样要记）。recordModelUsage 自带 try/catch，任何失败只
+  logger.warn 后返回，绝不阻断 prisma.message.create。
+- 写失败分级：P2002/ER_DUP_ENTRY（重复投递）→ logger.debug；其他异常 →
+  logger.warn。无空 catch、无 as any、无 @ts-ignore。
+
+====================================================================
+4. 偏离说明（需上游知悉）
+====================================================================
+a) worker-event.ingress.ts 增 1 行 `model: this.str(raw.model)`。
+   理由：Wave 1 只在 TaskCompletedPayload 上**声明**了 model?: string（注释明写
+   「消费（落库）属 usage-sink」），但 ingress 构造 payload 时没搬这个字段 ⇒
+   dispatcher 永远读不到，全表 model 恒为 'unknown'，模型维度形同虚设。该行是本
+   todo「model 取事件体」能成立的前提，且不在并行 Todo 4 的 server/src/usage/* 内，
+   无冲突面。若不接受，删掉该行即可回落为全 'unknown'（其余行为不变）。
+b) 未新增 dedupKey 唯一列 / 未改迁移 —— 理由与替代方案见 §2。
+
+====================================================================
+5. 门禁实测输出（server/）
+====================================================================
+$ npx tsc --noEmit
+tsc: clean (exit 0)
+
+$ npm run test
+Test Suites: 170 passed, 170 total
+Tests:       4018 passed, 4018 total
+Snapshots:   1 passed, 1 total
+Time:        32.126 s
+Ran all test suites.
+
+对照基线 168 suites / 3985 tests：+2 suites / +33 tests = 并行 Todo 4 的
+server/src/usage/{usage.service,usage.controller}.spec.ts（其领地文件，本次未触碰）
++ 本 todo 的 11 条新用例。无既有 suite 回归（170/170 全绿）。
+
+$ npx jest src/chat/worker-dispatcher.spec.ts --runInBand
+Tests: 307 passed, 307 total（296 → 307，本 todo 新增 11 条，全绿）
+
+新增用例（describe: 用量记账（token-usage-stats Todo 3 usage-sink））：
+  ✓ happy：tokens/cost + 归属上下文原样落一行
+  ✓ 幂等（红线）：内存 completedSessions 失效后（两个 dispatcher = 重启/多副本）
+    同一 completion 投递两次 → 只一行（create 被调用 2 次、DB 唯一约束吃掉第二次）
+  ✓ 两个生产者（ingress 事件体 / 自持轮询 parts）算出同一幂等键 → 仍只一行
+  ✓ 同会话同 taskId（团队直聊恒为空串）的不同轮次 → 各自记一行，不互相吞
+  ✓ 脏 tokens（缺字段/NaN/非数字/负数/±Infinity）→ 归零且行照落，不断链
+  ✓ tokens 整体缺失 → 六个计数全 0
+  ✓ model 缺失 / 空串 / 空白 → 'unknown' 哨兵串
+  ✓ cost 非数字 → null（未知），不按 0、不做任何换算
+  ✓ 写入抛错 → 只 warn，回复照常落库 + emitFinal 照常（统计不阻断主链路）
+  ✓ 群聊回退频道（不建 message 行）→ 用量照样记账
+  ✓ parseUsageTokens：脏值逐字段归零（缺字段/NaN/±Infinity/负数/小数截断）
+
+同时复跑通过（未修改，仅回归确认）：
+  src/prisma/model-usage.migration.spec.ts、src/common/id-resync.guard.spec.ts、
+  src/workers/worker-event.ingress.spec.ts（model 透传未打破既有断言）。
+
+====================================================================
+6. QA 场景对照（计划 Todo 3 要求）
+====================================================================
+happy—— jest 断言双投递单行（用例 2、3）、脏数据归零（用例 5、6、11）：见上方清单。
+failure—— mock prisma.modelUsage.create reject（用例 9）：handleTaskCompleted
+  resolves 不抛错、message.create 与 emitFinal 照常、logger.warn 命中「用量落库失败」。
