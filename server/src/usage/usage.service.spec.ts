@@ -224,6 +224,7 @@ describe('UsageService', () => {
       prisma.teamMember.findMany.mockResolvedValue([
         {
           id: 'tmb_1',
+          alias: '测试-1',
           agent: { name: '产品经理' },
           role: { name: '产品' },
         },
@@ -235,6 +236,7 @@ describe('UsageService', () => {
         where: { id: { in: ['tmb_1'] } },
         select: {
           id: true,
+          alias: true,
           agent: { select: { name: true } },
           role: { select: { name: true } },
         },
@@ -242,6 +244,7 @@ describe('UsageService', () => {
       expect(out.members).toEqual([
         {
           teamMemberId: 'tmb_1',
+          memberName: '测试-1',
           agentName: '产品经理',
           roleName: '产品',
           totalTokens: 300,
@@ -394,13 +397,34 @@ describe('UsageService', () => {
         groupRow('tmb_1', 'openai/gpt-5', { totalTokens: 10 }),
       ]);
       prisma.teamMember.findMany.mockResolvedValue([
-        { id: 'tmb_1', agent: { name: '自由人' }, role: null },
+        { id: 'tmb_1', alias: null, agent: { name: '自由人' }, role: null },
       ]);
 
       const out = await service.getTeamUsage('tm_1', viewer);
 
       expect(out.members[0].agentName).toBe('自由人');
       expect(out.members[0].roleName).toBeNull();
+      // alias 空时 memberName 回落 agentName
+      expect(out.members[0].memberName).toBe('自由人');
+    });
+
+    it('memberName 取 alias（同 Agent 多实例「测试-1/测试-2」可区分），agentName 保留为副信息', async () => {
+      prisma.modelUsage.groupBy.mockResolvedValue([
+        groupRow('tmb_a', 'openai/gpt-5', { totalTokens: 10 }),
+        groupRow('tmb_b', 'openai/gpt-5', { totalTokens: 20 }),
+      ]);
+      prisma.teamMember.findMany.mockResolvedValue([
+        { id: 'tmb_a', alias: '测试-1', agent: { name: '开发者' }, role: { name: '开发' } },
+        { id: 'tmb_b', alias: '测试-2', agent: { name: '开发者' }, role: { name: '开发' } },
+      ]);
+
+      const out = await service.getTeamUsage('tm_1', viewer);
+
+      const names = out.members.map((m) => [m.memberName, m.agentName]).sort();
+      expect(names).toEqual([
+        ['测试-1', '开发者'],
+        ['测试-2', '开发者'],
+      ]);
     });
 
     it('成员行已删（model_usage 无 FK）→ 名字回落空串，数字不丢', async () => {
@@ -414,6 +438,7 @@ describe('UsageService', () => {
       expect(out.members).toHaveLength(1);
       expect(out.members[0]).toMatchObject({
         teamMemberId: 'tmb_gone',
+        memberName: '',
         agentName: '',
         roleName: null,
         totalTokens: 77,

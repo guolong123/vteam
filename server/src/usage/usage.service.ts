@@ -27,6 +27,8 @@ export interface UsageModelBreakdown {
 /** 单个团队成员的用量小计 + 其模型维度展开行。 */
 export interface UsageMemberSummary {
   teamMemberId: string;
+  /** 成员实例显示名（TeamMember.alias，创建时已解析为「别名 或 <角色中文名>-<seq>」，如 测试-1）。 */
+  memberName: string;
   agentName: string;
   roleName: string | null;
   totalTokens: number;
@@ -145,16 +147,23 @@ export class UsageService {
       where: { id: { in: memberIds } },
       select: {
         id: true,
+        alias: true,
         agent: { select: { name: true } },
         role: { select: { name: true } },
       },
     });
     // model_usage 不建 FK（软关联），成员被删除后其历史用量行仍在：
-    // 查不到成员行时回落 agentName='' / roleName=null，聚合数字照常返回，不丢成员。
+    // 查不到成员行时回落 memberName='' / agentName='' / roleName=null，
+    // 聚合数字照常返回，不丢成员。memberName 取 alias（创建时已解析的实例显示名，
+    // 同一 Agent 的多实例「测试-1/测试-2」由此可区分），空 alias 回落 agentName。
     const namesByMemberId = new Map(
       memberRows.map((m) => [
         m.id,
-        { agentName: m.agent?.name ?? '', roleName: m.role?.name ?? null },
+        {
+          memberName: m.alias?.trim() || m.agent?.name || '',
+          agentName: m.agent?.name ?? '',
+          roleName: m.role?.name ?? null,
+        },
       ]),
     );
 
@@ -169,6 +178,7 @@ export class UsageService {
         const names = namesByMemberId.get(row.teamMemberId);
         member = {
           teamMemberId: row.teamMemberId,
+          memberName: names?.memberName ?? '',
           agentName: names?.agentName ?? '',
           roleName: names?.roleName ?? null,
           ...emptyTotals(),

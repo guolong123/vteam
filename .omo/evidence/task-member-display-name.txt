@@ -1,0 +1,15 @@
+# 统计维度显示名改为群内成员名（用户迭代需求）
+
+## 根因
+聚合本就是实例级（groupBy team_member_id=tmm_，测试-1/测试-2 天然两行）；错在展示层只取了 Agent 名（项目经理/开发者），多实例无法区分。
+
+## 修法（单一来源，零命名逻辑重造）
+TeamMember.alias 在创建时已解析为最终显示名（teams.service.ts:139/600：用户别名 || <角色中文名>-<seq>）——
+- server：usage 成员联表 select += alias → 新字段 memberName（回落链 alias → agentName → ''孤儿行）；agentName/roleName 保留为副信息（契约只增不删）
+- web：成员行/Top 条/按模型透视子行 主标题 = memberName，副标题 = agentName · roleName；头像首字跟随 title；miniMemberName 同源
+
+## 验证
+- server：src/usage 23/23（新增：alias 优先区分 测试-1/测试-2、alias 空回落 agentName、孤儿行 memberName=''）
+- 全量 server 套件：见下（编排者复跑）
+- web：tsc clean / lint 0 errors·729 基线 / build 成功
+- 生效需再部署（server+web 镜像）
