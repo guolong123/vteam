@@ -78,13 +78,36 @@ async function svgToDataUrl(svg: SVGSVGElement, width: number, height: number): 
  * 逐个栅格化内联 SVG（失败保留原 SVG）→ 离屏宿主挂载 → html2canvas-pro
  * 截图 → 沿纵轴切片写入 jsPDF → `pdf.save(filename)`。
  */
+/**
+ * 读取浅色主题的全部 CSS 自定义属性（供导出宿主内联覆盖）。
+ * 根因：离屏宿主仍处 `html.dark` 作用域，宿主子树内 `var(--color-*)` 一律解析为暗色值，
+ * 只改克隆根节点 color 会被后代类样式覆盖。取浅色值：临时摘掉 documentElement 的 dark 类，
+ * 同步批量读 computed 后立即还原（同一任务内无绘制，无闪烁）。枚举 `--*` 属性，零维护清单。
+ */
+function collectLightCustomProperties(): Array<[string, string]> {
+  const el = document.documentElement;
+  const hadDark = el.classList.contains("dark");
+  if (hadDark) el.classList.remove("dark");
+  try {
+    const cs = window.getComputedStyle(el);
+    const out: Array<[string, string]> = [];
+    for (let i = 0; i < cs.length; i += 1) {
+      const name = cs.item(i);
+      if (name.startsWith("--")) out.push([name, cs.getPropertyValue(name)]);
+    }
+    return out;
+  } finally {
+    if (hadDark) el.classList.add("dark");
+  }
+}
+
 export async function exportNodeToPdf(node: HTMLElement, filename: string): Promise<void> {
   // 1) 克隆（远离原 DOM，避免污染页面/深色主题）。
   const clone = node.cloneNode(true) as HTMLElement;
 
-  // 2) 克隆上强制浅色主题 + A4 宽度，避免深色变量带进 PDF。
+  // 2) 克隆上定宽 + 白底（浅色变量由宿主级覆盖统一生效，见步骤 5；
+  //    仅设根节点 color 无效——会被后代类样式的显式 color 覆盖，故不设置）。
   clone.style.background = "#ffffff";
-  clone.style.color = "#111827";
   clone.style.width = `${PDF_WIDTH_PX}px`;
   clone.style.maxWidth = `${PDF_WIDTH_PX}px`;
   clone.style.overflow = "visible";
@@ -137,6 +160,11 @@ export async function exportNodeToPdf(node: HTMLElement, filename: string): Prom
   host.style.background = "#ffffff";
   host.style.zIndex = "-1";
   host.setAttribute("aria-hidden", "true");
+  // 宿主级浅色变量覆盖：切断 html.dark 作用域——自定义属性沿 DOM 继承，宿主最近祖先
+  // 生效，宿主子树内所有 var(--color-*) 引用随之解析为浅色（这是本修复的治本点）。
+  for (const [name, value] of collectLightCustomProperties()) {
+    host.style.setProperty(name, value);
+  }
   host.appendChild(clone);
   document.body.appendChild(host);
 

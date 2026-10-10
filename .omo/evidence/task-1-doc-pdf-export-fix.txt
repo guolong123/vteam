@@ -1,0 +1,13 @@
+# task-1 pdf-light-scope — 宿主级浅色变量覆盖
+
+## 改动（web/src/features/docs-site/doc-export.ts）
+- 新增 collectLightCustomProperties()：临时摘 documentElement 的 dark 类 → 同步枚举 computed 的 `--*` 自定义属性读浅色值 → finally 还原（同任务无绘制，无闪烁；枚举制零维护清单）
+- 步骤 2：移除无效的 clone.style.color（会被后代类样式覆盖），保留白底+定宽，注释记录根因
+- 步骤 5：宿主逐条 setProperty 浅色变量——自定义属性沿 DOM 继承，宿主子树内 var(--color-*) 全解析浅色（治本点）
+
+## 门禁
+- web tsc clean / lint 0 err（729 基线）/ build 成功
+- 暗色真实导出像素断言：Todo 4 冒烟覆盖（本 todo 无单测缝）
+
+## 备注
+- `.dark X { ... }` 形式的直接规则（非 var 引用）不受变量覆盖影响；若 Todo 4 冒烟暴露此类残留，归 Todo 2 作用域适配处理。
