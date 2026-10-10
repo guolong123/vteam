@@ -908,6 +908,16 @@ model Worker {
   // 不建索引：workers 表行数为外部 worker 个位数，版本只整行读回、不参与过滤/排序，
   // 加索引纯属写放大。
   codeVersion     String?   @map("code_version")
+  // worker 自更新执行状态（worker-self-update Todo 3）：worker 经 register/heartbeat 上报的
+  // pending/downloading/restarting/ready-manual/rolledback（与 Todo 4 worker 执行器、
+  // Todo 5 web UI 共享同一份契约，常量与取值见 src/workers/worker-update-state.ts）。
+  // 落库而非纯内存：server 重启后 UI 仍须显示「已回滚 / 待手动重启」这类**上次更新结果**，
+  // 纯内存会在重启时把「已回滚」悄悄变回「未回滚」。NULL = 从未上报（旧 worker / 未自更新）
+  // = 未知，UI 显示未知而不是假装一致。
+  updateState     String?   @map("update_state")
+  // 最近一次自更新是否被自动回滚（一次性结果标志，上报后可保持 true 供 UI 展示）。
+  // 默认 false = 「没有回滚发生过的证据」，NOT NULL 免得 UI 拿到三态各写一遍判断。
+  rolledBack      Boolean   @default(false) @map("rolled_back")
   lastHeartbeatAt DateTime? @map("last_heartbeat_at")
   registeredAt    DateTime  @default(now()) @map("registered_at")
 
