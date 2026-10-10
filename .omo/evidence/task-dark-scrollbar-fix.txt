@@ -1,0 +1,147 @@
+TASK: dark-mode scrollbar styling fix
+REPO : /Volumes/SSD-Data/01work/git-project/vteam  (web/)
+FILE : web/app/globals.css  — ONLY file modified. One CSS block inserted at :230-280,
+       immediately after the `.dark` variable block (:180-228). No component, server/,
+       worker/, dependency, or git changes.
+
+=== ENV ===
+export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"
+node v22.15.0 / npm 10.9.2  (confirmed)
+
+=== ROOT CAUSE (confirmed, not assumed) ===
+grep -rn "scrollbar" web --include=*.tsx --include=*.ts --include=*.css  ->
+  only 2 hits, both in src/components/layout/system-sidebar.tsx (its own hide rule).
+  globals.css had NO scrollbar styling anywhere => every overflow:auto container in
+  dark mode fell back to the UA-default LIGHT scrollbar.
+  Repro surface: src/components/teams/TeamStatsTab.tsx:107-112 (overflowX:"auto" wrapper).
+  NOTE: orchestrator's path was src/components/team/TeamStatsTab.tsx; actual path is
+        src/components/teams/TeamStatsTab.tsx (plural). Content matches (:106-111).
+  `.dark` is toggled on <html>: src/theme/theme-provider.tsx:28
+      document.documentElement.classList.toggle("dark", ...); app/layout.tsx:25.
+
+=== CSS ADDED (verbatim) ===
+:where(html.dark) {
+  scrollbar-color: var(--color-neutral-400) transparent;
+}
+:where(html.dark)::-webkit-scrollbar,
+:where(html.dark) ::-webkit-scrollbar { width: 10px; height: 10px; }
+:where(html.dark)::-webkit-scrollbar-track,
+:where(html.dark) ::-webkit-scrollbar-track,
+:where(html.dark)::-webkit-scrollbar-corner,
+:where(html.dark) ::-webkit-scrollbar-corner { background: transparent; }
+:where(html.dark)::-webkit-scrollbar-thumb,
+:where(html.dark) ::-webkit-scrollbar-thumb {
+  background-color: var(--color-neutral-400);
+  border-radius: var(--radius-control);
+}
+:where(html.dark)::-webkit-scrollbar-thumb:hover,
+:where(html.dark) ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-neutral-500);
+}
+@supports not selector(::-webkit-scrollbar) {
+  :where(html.dark) { scrollbar-width: thin; }
+}
+
+NO hardcoded colors. --color-neutral-400 (#64748b) thumb / --color-neutral-500 (#94a3b8)
+hover are both PRE-EXISTING in the `.dark` block; they resolve to the neutral greys that
+sit correctly on --color-bg #020617 and --color-surface #1e293b.
+--radius-control is pre-existing in @theme (:287) and VERIFIED EMITTED by Tailwind
+(v4 @theme -> :root): compiled CSS contains `--radius-control:.5rem` (= 8px, house
+control radius). Thumb is 10px wide with 8px radius -> fully rounded pill.
+
+=== WHY BOTH `::-webkit-scrollbar` AND `html` ITSELF ===
+Two selector groups per rule: the bare `::-webkit-scrollbar` (html element's own
+scrollbar) and the descendant one. Without the first, the DOCUMENT/root scrollbar
+would keep the light UA style even in dark mode, since ::-webkit-scrollbar is NOT
+inherited (unlike scrollbar-color).
+
+=== CRITICAL: system-sidebar.tsx INTERACTION — NO CONFLICT ===
+system-sidebar.tsx:84-87
+  .sysnav-scroll { scrollbar-width: none; }                              -> (0,1,0)
+  .sysnav-scroll::-webkit-scrollbar { display: none; }                   -> (0,1,1)
+Our rules (via :where(), which zeroes subject specificity):
+  :where(html.dark)          { scrollbar-color / scrollbar-width }       -> (0,0,0)
+  :where(html.dark)::-webkit-scrollbar*                                 -> (0,0,1)
+=> Sidebar wins on BOTH declarations, unconditionally. Same origin, no !important on
+   either side, so specificity alone decides. The sidebar's hidden scrollbar is NOT
+   resurrected.
+Two independent guarantees stack here:
+  (1) specificity — sidebar (0,1,1) strictly greater than ours (0,0,1);
+  (2) cascade order — the sidebar CSS is a runtime-injected <style>{sidebarCss}</style>
+      (system-sidebar.tsx:138) rendered in the body, i.e. AFTER globals.css in tree
+      order, so it also wins any tie.
+scrollbar-color is inherited onto .sysnav-scroll, but is inert there because
+scrollbar-width:none suppresses the scrollbar entirely.
+Verified in COMPILED output: `:where()` survived minification verbatim (not optimized away).
+
+=== LIGHT-MODE NON-REGRESSION ===
+Every selector in the block is prefixed with `:where(html.dark)`. In light mode <html>
+never carries `.dark`, so NOTHING matches: not the ::-webkit pseudo-elements, not the
+scrollbar-color/scrollbar-width declaration. There is no unscoped fallback and no
+non-dark selector group anywhere in the block. Light mode therefore keeps the exact
+UA/system default scrollbar rendering — behaviourally identical to before this change.
+Confirmed by exhaustive scan of the compiled stylesheet: every scrollbar rule present is
+html.dark-scoped; there are no other scrollbar rules in the build output.
+Scrollbars are NOT hidden globally — only the pre-existing sidebar stays hidden, as before.
+
+=== @supports not selector() GUARD — RATIONALE ===
+Chromium/Safari ignore the entire ::-webkit-scrollbar styling the moment
+`scrollbar-width` is anything other than `auto`. Setting it unconditionally would give
+Firefox a slim scrollbar but cost Chromium the 10px sizing, the 8px radius and the
+:hover highlight — i.e. degrade the very engine where the bug was reported.
+`selector(::-webkit-scrollbar)` is false only in engines lacking ::-webkit-scrollbar
+support (Firefox), so `@supports not selector(...)` confines `scrollbar-width: thin`
+to exactly those. Firefox: slim + correct dark colours via scrollbar-color.
+Chromium/Safari: 10px rounded thumb + hover highlight via ::-webkit rules.
+Verified intact in compiled CSS:
+  @supports not selector(::-webkit-scrollbar){:where(html.dark){scrollbar-width:thin}}
+Safe degradation: engines that do not understand `@supports selector()` drop the whole
+block rather than mis-applying it.
+
+=== GATES ===
+ENV       PASS  node v22.15.0, npm 10.9.2
+tsc        PASS  `cd web && npx tsc --noEmit` -> clean, no output
+lint       PASS  `npm run lint` -> "✖ 729 problems (0 errors, 729 warnings)"
+                 EXACTLY the stated 729-warning baseline; 0 errors.
+build      PASS  `npm run build` -> success, full route table emitted
+                 (incl. /teams/[id]/session 44.8 kB), no errors.
+
+=== POST-BUILD CSS ASSERTIONS (on .next/static/css/dfa657675566d502.css) ===
+[OK] --radius-control:.5rem                                   (var resolves, 8px)
+[OK] :where(html.dark){scrollbar-color:var(--color-neutral-400) transparent}
+[OK] :where(html.dark)::-webkit-scrollbar{width:10px;height:10px}
+[OK] :where(html.dark) ::-webkit-scrollbar{width:10px;height:10px}
+[OK] :where(html.dark) ::-webkit-scrollbar-thumb{background-color:var(--color-neutral-400);border-radius:var(--radius-control)}
+[OK] :where(html.dark) ::-webkit-scrollbar-thumb:hover{background-color:var(--color-neutral-500)}
+[OK] :where(html.dark) ::-webkit-scrollbar-track{background:0 0}
+[OK] :where(html.dark) ::-webkit-scrollbar-corner{background:0 0}
+[OK] @supports not selector(::-webkit-scrollbar){:where(html.dark){scrollbar-width:thin}}
+[OK] exhaustive scan: every scrollbar rule in the build is html.dark-scoped — no leak
+[OK] no !important in any scrollbar rule (the 3 hits in the file are pre-existing:
+     mobile font-size media query, prefers-reduced-motion block, Tailwind `.\!hidden`)
+
+=== VISUAL VERIFICATION — DEFERRED (disclosed, not claimed) ===
+No stack was running on :13001 as stated. I started the built app myself
+(`npx next start -p 13011`, HTTP 200 on /teams) to attempt a real visual check, but the
+browser toolset is not available to this session:
+  browser.tabs.list -> {"browser.disconnected": "No desktop browser is connected to this
+  session. Open this session in the desktop app and wait for it to connect."}
+So no screenshot was captured and NO visual result is claimed. The substituted evidence
+is the compiled-CSS assertion set above, which proves the rules ship, are dark-scoped,
+are var-driven, and cannot out-specify the sidebar hide rule.
+VISUAL CHECK REMAINS DEFERRED to the orchestrator's prod verification:
+  session page -> team -> 统计 tab -> the stats table wrapper should show a slim
+  #64748b thumb with an 8px rounded pill on a transparent track (brightening to #94a3b8
+  on hover), and the left system sidebar should remain free of any scrollbar.
+
+=== AGENTS.md ===
+web/AGENTS.md carries only the `nextjs-agent-rules` block, instructing agents to read
+the relevant guide in node_modules/next/dist/docs/ before writing code.
+Checked: `node_modules/next/dist/docs/` DOES NOT EXIST in this install, and neither does
+node_modules/next/dist/server/lib/generate-agent-files.js (the file AGENTS.md names as
+the block's author). No docs dir exists anywhere under node_modules/next (find -maxdepth 4).
+The instruction is therefore unsatisfiable here, and in any case N/A: this change is pure
+declarative CSS in a global stylesheet — no Next.js API, convention, config, or file-layout
+concern is touched. globals.css is already imported by app/layout.tsx; Next CSS handling
+is unchanged. No deprecation surface engaged. AGENTS.md was NOT edited (it is regenerated
+by `next dev`).

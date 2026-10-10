@@ -228,6 +228,58 @@ a {
 }
 
 /* ============================================================
+ * 暗色滚动条：`.dark` 下所有 overflow:auto/scroll 容器（表格横向滚动盒、
+ * 弹窗正文等）默认走 UA 浅色滚动条，在深色 UI 上是刺眼的亮白条。
+ *
+ * 作用域与特异度设计（两条都重要）：
+ * - 仅以 `.dark` 开头选择，浅色主题不匹配任何一条 → 浅色行为完全不变；
+ * - `:where()` 把主体特异度归零，使本组规则特异度为 (0,0,1)，
+ *   低于 system-sidebar.tsx 的 `.sysnav-scroll::-webkit-scrollbar`（(0,1,1)）
+ *   与 `.sysnav-scroll`（(0,1,0)），因此侧边栏"隐藏滚动条"始终胜出，
+ *   不会被本组规则复活。
+ * - 颜色一律走 `.dark` 已有的 neutral 变量，不硬编码色值。
+ * ============================================================ */
+:where(html.dark) {
+  /* Firefox / CSSOM-View 标准属性（继承到所有后代滚动容器） */
+  scrollbar-color: var(--color-neutral-400) transparent;
+}
+
+:where(html.dark)::-webkit-scrollbar,
+:where(html.dark) ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+/* 轨道与角落透明：贴合任意容器底色（surface / bg 都有），不产生突兀色块 */
+:where(html.dark)::-webkit-scrollbar-track,
+:where(html.dark) ::-webkit-scrollbar-track,
+:where(html.dark)::-webkit-scrollbar-corner,
+:where(html.dark) ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+:where(html.dark)::-webkit-scrollbar-thumb,
+:where(html.dark) ::-webkit-scrollbar-thumb {
+  background-color: var(--color-neutral-400);
+  border-radius: var(--radius-control);
+}
+
+/* 悬停提亮一档（neutral-500），保证"可滚动"这一线索始终可发现 */
+:where(html.dark)::-webkit-scrollbar-thumb:hover,
+:where(html.dark) ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-neutral-500);
+}
+
+/* 仅 Firefox 需要 scrollbar-width 才能变细：Chromium/Safari 一旦设了非 auto 的
+   scrollbar-width 就会忽略全部 ::-webkit-scrollbar 样式（圆角/悬停会失效），
+   故用 `not selector()` 把 thin 限定给不支持 ::-webkit-scrollbar 的引擎。 */
+@supports not selector(::-webkit-scrollbar) {
+  :where(html.dark) {
+    scrollbar-width: thin;
+  }
+}
+
+/* ============================================================
  * Tailwind（is_0000000037）：为移植的 md-docs 原型（src/components/docs/prototypes/）
  * 提供工具类。
  * - **不引入 preflight**（仅 theme + utilities）：避免 button cursor、img/svg display、
