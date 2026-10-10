@@ -1,0 +1,211 @@
+Task 5 · usage-web：「统计」子 tab（表格 + 三层汇总）
+Token usage stats — plan .omo/plans/token-usage-stats.md, branch feat/token-usage-stats
+Executed by: Sisyphus-Junior · Wave 3 (blocked by Todo 4, committed)
+
+================================================================
+0. 契约核对（BLOCKING CHECK — 先做，不通过即停）
+================================================================
+backend 契约来源：server/src/usage/usage.service.ts:16-58（Task 4 已提交）
+  UsageModelBreakdown  = { model, totalTokens, inputTokens, outputTokens,
+                           cacheReadTokens, cacheWriteTokens, cost }
+  UsageMemberSummary   = { teamMemberId, agentName, roleName: string|null,
+                           totalTokens, inputTokens, outputTokens,
+                           cacheReadTokens, cacheWriteTokens, cost, models[] }
+  UsageTotals          = { totalTokens, inputTokens, outputTokens,
+                           cacheReadTokens, cacheWriteTokens, cost }
+  TeamUsageResponse    = { members[], teamTotal }
+端点：server/src/usage/usage.controller.ts:45 `@Get('teams/:teamId/usage')`
+      （可选 `?model=`；本 tab 不用该参数，故 web 封装只暴露 summary(teamId)）
+
+逐字段机器核对（backend 出现 vs web 出现）—— 13/13 全部 OK，**零偏差，未发生猜测**：
+  OK  teamMemberId       OK  agentName         OK  roleName
+  OK  totalTokens        OK  inputTokens       OK  outputTokens
+  OK  cacheReadTokens    OK  cacheWriteTokens  OK  cost
+  OK  models / model     OK  members / teamTotal
+
+两条后端口径已写进 web 注释并据此设计展示层：
+  (a) cost 恒为 number（DB NULL 在聚合层按 0 参与）→ web **不做 null 分支**；
+  (b) 空团队返回 `{members: [], teamTotal: 全 0}`（非 404）→ web 走空态非错误态。
+
+================================================================
+1. 文件变更
+================================================================
+NEW  web/src/api/stats.ts                          （~90 行）
+NEW  web/src/components/teams/TeamStatsTab.tsx     （~830 行）
+MOD  web/src/components/teams/TeamRightPanel.tsx   （**恰好 4 处**，见 §3）
+
+未触碰（已用 mtime + find 复核，见 §5 范围核对）：
+TeamMemoriesTab.tsx / system/memories 页 / server/ / worker/ /
+app/(main)/teams/[id]/session/page.tsx / web/package.json（零新依赖）。
+
+----------------------------------------------------------------
+1.1 web/src/api/stats.ts（抄 memories.ts:43-91 风格）
+----------------------------------------------------------------
+  - `UsageTotals` 六元组 —— web 侧三层汇总共用的唯一数值形状（与后端 addInto 同源）。
+  - `UsageModelBreakdown extends UsageTotals`（+ model）
+  - `UsageMemberSummary extends UsageTotals`（+ teamMemberId/agentName/roleName/models）
+  - `TeamStatsResponse` { members: UsageMemberSummary[]; teamTotal: UsageTotals }
+  - `statsQueryKey(teamId): [string, string]` → `["team-stats", teamId]`
+  - `statsApi.summary(teamId)` → `api.get<TeamStatsResponse>(\`/teams/${teamId}/usage\`)`
+  - 文件头注释写明三条口径（纯累计无分页 / cost 恒数字 / 全员可见无 admin 门）。
+  - 复用 `@/lib/api` 的 `api.get`（**不自建 fetch**；模块内 0 处裸 fetch）。
+
+----------------------------------------------------------------
+1.2 web/src/components/teams/TeamStatsTab.tsx（抄 TeamMemoriesTab 骨架）
+----------------------------------------------------------------
+骨架对齐 TeamMemoriesTab.tsx：
+  "use client" → 文件头注释块（定位/数据源/权限模型/三层汇总/空数据口径）→
+  局部样式常量区 → 小组件 → 主组件 → export default。
+  数据面：`useQuery({ queryKey: statsQueryKey(teamId), queryFn, enabled: !!teamId })`
+  + `useMemo` 派生（members/teamTotal/modelBuckets/rows/topRows/miniRows）
+  + `isApiError(error) ? error.message : "加载用量统计失败，请重试"` 错误面
+  + data-testid root = `team-stats-tab`。
+
+TABLE（成员主行 / 模型展开行）
+  - 列：成员(首字头像+名字+角色) | 总数 | 输入 | 输出 | 缓存读 | 缓存写 | 费用 | 明细(展开)
+  - 展开行 = 该成员逐模型一行；`SegmentedTabs` 按成员/按模型透视切换时，
+    主行与展开行整体对调（按模型 → 展开该模型的逐贡献成员）。
+  - 样式抄 `app/(main)/system/roles/page.tsx`：
+      th 对象      ← 逐字抄 :238-247；首列 `<th style={{...th, textAlign:"left", minWidth:140}}>`
+                     同 :287；数值列 `<th style={{...th, textAlign:"right"}}>`。
+      cellBase 骨架 ← 抄 :248-261 的字号/字重/内衬/弱化文字色，语义差异是右对齐 + mono。
+      表格盒        ← :275-283 overflowX:"auto" + radius.md + 1px neutral[200] + surface；
+                     `<table borderCollapse:"separate" borderSpacing:0>` 同 :284；
+                     data-testid="team-stats-table"（同 :276 permission-matrix）。
+  - 数字：千分位 `toLocaleString()`；费用 `$` + `toFixed(4)`；比率 `toFixed(1)%`；
+    数值列右对齐 + fontFamily.mono；模型名 mono。
+  - **无分页**：组件内 0 处 page/pageSize/Pagination（grep 已证）。
+
+三层汇总（全部前端派生，零额外请求）
+  ① 顶部四指标卡：Token 总数 / 输入·输出 / 缓存读·写(附命中率) / 总费用。
+     副标题为派生比率：输出占比 · 成员数 · 模型数 / 输入占比 · 缓存写入 /
+     命中率=cacheRead÷total / Top3 合计费用 · Top3 占比。
+  ② 表尾合计行 `<tfoot>`：直接取 teamTotal（与卡片同源，天然自洽）。
+  ③ Top3 条 + 另一维度迷你分布条：纯 CSS 宽度条（`width:%` 包裹盒），
+     颜色取自 tokens 的 `roles` 色板（CSS 变量，跟随 light/dark），**无图表库**。
+     维度跟随：按成员→模型分布；按模型→成员分布。
+  - Top 区求和口径已在注释写明：服务端保证 成员小计 = Σmodels、teamTotal = Σ全部桶，
+    故前端按模型重排后的总和与 teamTotal 天然相等（冒烟 SMOKE-2 已实测验证）。
+
+状态与交互
+  - `SegmentedTabs` 透视（按成员/按模型）+ 手动「刷新」按钮（`query.refetch()`）。
+  - **无轮询**：组件内 0 处 refetchInterval / setInterval（grep 已证）。
+  - 空态 `EmptyState` title = "暂无用量数据——新调用产生后自动统计"（计划指定文案）。
+  - 错误态 role="alert" + 重试按钮；非 teamId 时 "未选择团队" 空态（对齐 memories）。
+  - **全员可见**：组件内 0 处 isPlatformAdmin / useAuthStore / 权限判断（grep 已证），
+    读成员门完全下沉服务端（usage.service.ts:204-224 assertTeamReadable）。
+
+data-testid：team-stats-tab / -cards / -card[data-metric] / -distribution /
+-top / -top-item / -mini / -mini-item / -bar / -table / -table-section /
+-row[data-expanded] / -expand / -detail-row / -total-row / -pivot / -pivot-tab /
+-refresh / -loading / empty-state。
+
+================================================================
+2. 门禁（全部实跑，PATH 已按要求 export nvm v22.15.0）
+================================================================
+命令与实际输出：
+
+$ cd web && npx tsc --noEmit
+  （无输出）TSC_EXIT=0                                        ✅ PASS
+
+$ cd web && npm run lint
+  ✖ 729 problems (0 errors, 729 warnings)                  ✅ PASS
+  改动前后同为 729 warnings（基线未漂移，零新增）。
+  最后一条 warning 为 docs-site/prototype-sandbox.tsx 'useRef' unused（既有基线）。
+
+$ cd web && npm run build
+  ✓ Compiled successfully in 11.2s
+  ✓ Generating static pages (30/30)                         ✅ PASS
+
+================================================================
+3. TeamRightPanel.tsx —— 恰好 4 处接线（逐处实测行号）
+================================================================
+E1  :18  import { TeamStatsTab } from "@/src/components/teams/TeamStatsTab";
+      （紧随 :17 的 TeamMemoriesTab import 之后）
+E2  :588 type TeamSubTab = "overview" | "channels" | "memories" | "stats";
+E3  :950 { key: "stats" as const, label: "统计" },
+      （紧随 :949 `{ key: "memories" as const, label: "记忆" }` 之后）
+E4  :1337-1339 {subTab === "stats" && (
+          <TeamStatsTab teamId={team?.id ?? ""} teamName={team?.name} />
+        )}
+      （紧随 :1329-1334 memories body 块之后）
+`grep -c TeamStatsTab TeamRightPanel.tsx` = 2（import 1 + JSX 1）→ 确认无多余引用。
+该文件无其它改动。
+
+================================================================
+4. 冒烟（实跑真实 Chromium，非推断）
+================================================================
+手法：沿用仓库既有 e2e/chat-density.spec.ts 的测试缝——用已声明依赖 esbuild-wasm
+把**真实 TeamStatsTab 组件**打成 IIFE 注入空白页，`window.fetch` 打桩返回固定
+fixture，故**不依赖 dev server / 后端 / 登录态**。真实浏览器 + 真实组件树。
+fixture：2 成员 × 2 模型，teamTotal = 1,500,000 tokens / $1.7345
+        （张三 1.2M/$1.2345：claude-sonnet-4 800k + gpt-5 400k；
+          李四 300k/$0.5：claude-sonnet-4 300k）
+临时 spec 与临时 playwright config **已删除**（不入库），删除后门禁复跑仍全绿。
+
+  npx playwright test zz-temp-stats-smoke --repeat-each=2
+    ✓ SMOKE-1 空态：members=[] 时渲染 EmptyState 指定文案，无表无卡片
+    ✓ SMOKE-2 三层汇总一致：卡片 = 表尾合计行 = Top 条求和 = 成员行求和
+    ✓ SMOKE-3 展开模型行：按成员透视展开逐模型行（mono 模型名）；切按模型后展开逐成员
+    ✓ SMOKE-4 403 错误面：isApiError 文案上屏，无卡片无表
+    8 passed (2 次重复均绿)
+
+实测断言摘录（非"应该对"，是断言输出）：
+  SMOKE-1 empty-state 含 "暂无用量数据——新调用产生后自动统计"；
+           team-stats-cards / team-stats-table / total-row 计数 = 0。
+  SMOKE-2 卡片读数：
+             Token 总数 "1,500,000"      副标题 "输出占比 20.0% · 2 位成员 · 2 个模型"
+             输入/输出 "650,000 / 300,000" 副标题 "输入占比 43.3% · 缓存写入 50,000"
+             缓存读/写 "500,000 / 50,000"  副标题 "命中率 33.3%（缓存读 ÷ 总数）"
+             总费用   "$1.7345"           副标题 "Top3 合计 $1.7345 · 占比 100.0%"
+           表尾合计行 tds = [合计（2 位成员）, 1,500,000, 650,000, 300,000,
+                             500,000, 50,000, $1.7345, ""]
+           成员主行逐列求和 = 1500000/650000/300000/500000/50000/1.7345
+             → 与 teamTotal、卡片、表尾**四者逐项相等**（三层汇总一致性达成）
+           Top 条求和 = 1,500,000（= teamTotal）；迷你条 sonnet 73.3% / gpt-5 26.7%；
+           team-stats-bar 总数 = 4（Top2 + 迷你2，纯 CSS 条）。
+  SMOKE-3 展开前 0 明细行 → 点 ▾ 后 2 明细行，innerText 逐格核对：
+             anthropic/claude-sonnet-4 800,000/300,000/150,000/300,000/50,000/$0.9000
+             openai/gpt-5                400,000/200,000/50,000/150,000/0/$0.3345
+           模型名 computed font-family 含 "mono"；再点收起回 0 行。
+           切「按模型」：2 模型主行（claude-sonnet-4 · "2 位成员使用"），
+             展开出 2 条成员明细（张三/李四，字体现为正文字体非 mono → 透视对调生效）。
+           table computed：border-collapse=separate、border-spacing=0px、
+             父级 overflow-x=auto；数值列 td text-align=right。
+  SMOKE-4 fetch 打桩 403 {code:PERMISSION_TEAM_NOT_MEMBER, message:"您不是该团队成员"}
+             → role="alert" 上屏该 message；卡片/表格计数 0；刷新按钮常驻可见。
+
+实际做到的验证（据实记录）：空态 ✅ / 三层汇总一致性 ✅ / 展开模型行 ✅ /
+透视切换 ✅ / 403 错误面 ✅ / 表格几何与排版样式 ✅ —— 全部在真实浏览器实测。
+**未**做：真实后端联调冒烟（Todo 6 的职责，需可运行栈 + 真实 agent 调用）。
+
+================================================================
+5. 范围核对（Scope Must-NOT 逐条）
+================================================================
+$ find web/src web/app web/lib web/e2e -newermt "-60 minutes" -type f
+  web/src/api/stats.ts
+  web/src/components/teams/TeamStatsTab.tsx
+  web/src/components/teams/TeamRightPanel.tsx
+→ 仅 3 个文件，落在 web/ 内。server/ 与 worker/ 零改动。
+
+$ grep -nE "as any|@ts-ignore|@ts-expect-error|isPlatformAdmin|useAuthStore"
+      web/src/api/stats.ts web/src/components/teams/TeamStatsTab.tsx
+  （无命中）→ 无 as any / 无 ts-ignore / 无 admin 门。
+$ grep -niE "pagination|pageSize|page:" 两个新文件 → 无命中（无分页）。
+$ grep -nE "refetchInterval|setInterval" TeamStatsTab.tsx → 无命中（无轮询）。
+$ grep -n "catch" 两个新文件 → 无命中（无空 catch / 无错误吞没）。
+$ grep -nE "recharts|chart" 两个新文件 → 无命中（无图表库）。
+web/package.json 零 diff（未加任何依赖）。
+TeamMemoriesTab.tsx mtime = Oct 9 20:47（早于本次改动，未动）。
+app/(main)/teams/[id]/session/page.tsx mtime = Sep 30 18:31（未动）。
+临时冒烟文件（e2e/zz-temp-stats-smoke.spec.ts、web/zz-temp-smoke.playwright.config.ts）
+已删除，web/test-results 已清空。
+
+================================================================
+6. 结论
+================================================================
+Todo 5 达成。新增 2 个文件 + TeamRightPanel 4 处接线；三道门禁（tsc / lint /
+build）全绿且 lint 基线未漂移；真实 Chromium 冒烟 4 组断言 ×2 轮全绿，
+覆盖空态、三层汇总一致性、展开模型行、透视切换、403 错误面。
+契约与后端 usage.service.ts 逐字段核对零偏差，未发生任何字段猜测。
+遗留：Todo 6（usage-e2e）需可运行栈做真实调用端到端冒烟。

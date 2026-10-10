@@ -15,6 +15,7 @@ import {
 import { ArtifactDocModal } from "@/src/components/teams/ArtifactDocModal";
 import { TriggerDetailModal } from "@/src/components/teams/TriggerDetailModal";
 import { TeamMemoriesTab } from "@/src/components/teams/TeamMemoriesTab";
+import { TeamStatsTab } from "@/src/components/teams/TeamStatsTab";
 import {
   type RoleKey,
   ROLE_KEYS,
@@ -584,7 +585,7 @@ const subTabStyle = (active: boolean): CSSProperties => ({
 /* ------------------------------------------------------------------ */
 /* 团队子 Tab                                                          */
 /* ------------------------------------------------------------------ */
-type TeamSubTab = "overview" | "channels" | "memories";
+type TeamSubTab = "overview" | "channels" | "memories" | "stats";
 
 /** 角色字符串 → RoleKey（团队成员的角色在 m.agent.role，非法值归一 developer） */
 function toRoleKey(role: string | null | undefined): RoleKey {
@@ -946,6 +947,7 @@ function TeamSubTabs({
           { key: "overview" as const, label: "概览" },
           { key: "channels" as const, label: "渠道" },
           { key: "memories" as const, label: "记忆" },
+          { key: "stats" as const, label: "统计" },
         ].map((tab) => (
           <button
             key={tab.key}
@@ -1331,6 +1333,9 @@ function TeamSubTabs({
             teamId={team?.id ?? ""}
             teamName={team?.name}
           />
+        )}
+        {subTab === "stats" && (
+          <TeamStatsTab teamId={team?.id ?? ""} teamName={team?.name} />
         )}
       </div>
     </div>
