@@ -1,0 +1,516 @@
+================================================================================
+TASK 6 — usage-e2e：端到端冒烟（真实 agent 调用落表进表）
+Plan: .omo/plans/token-usage-stats.md (Todo 6, lines 137-146)
+Repo: /Volumes/SSD-Data/01work/git-project/vteam   branch: feat/token-usage-stats
+Date: 2026-10-10   执行者: subagent（Todo 6 独占，零业务代码改动）
+================================================================================
+
+0. 结论速览
+--------------------------------------------------------------------------------
+**未降级**。计划允许的降级口径（server 集成测试 + web build 冒烟）**未被使用**：
+本次在真实 compose 栈上跑通了「真实 LLM 回合 → worker 事件 → 落表 → 聚合接口 →
+浏览器 UI」全链路，并有 2 行 `model_usages` 来自**真实模型调用**（非合成）。
+
+| 断言 | 结果 | 证据位置 |
+| --- | --- | --- |
+| A 真实调用落表（字段/模型/成员归属） | ✅ 2 行真实 + 3 行受控 | §4 |
+| B GET /teams/:teamId/usage 聚合正确 | ✅ 与 DB 手算逐项相等 | §5 |
+| C 统计 tab 三层汇总一致（真实浏览器） | ✅ 卡片=表尾=Top=模型行求和 | §6 |
+| D 同一 completion 投递两次 → 一行 | ✅ 跨进程重启复投，行数不变 | §7 |
+| E 非成员 403 | ✅ PERMISSION_TEAM_NOT_MEMBER | §8 |
+| F 脏 part 归零（附加，非降级） | ✅ 六计数 0 / cost NULL / model='unknown' | §9 |
+| G 空态（附加） | ✅ EmptyState 上屏，0 卡片 0 表格 | §10 |
+| 测试数据清理 | ✅ 全清，残留 1 项已说明 | §11 |
+
+三个必须诚实声明的**替代/边界**（详见 §12）：
+1. 幂等与脏数据两条探针用的是**合成 `task.completed` 事件投递**（POST /worker/events），
+   不是第二次真实 LLM 回合——真实回合无法天然重复投递。这是计划明示的最低层级替代，
+   走的仍是生产代码路径（ingress → dispatcher → recordModelUsage）。
+2. `docker logs` 里看不到 `[usage]` 的 debug 行（compose server 跑 info 级，level 20 被
+   丢弃），所以幂等结论靠「行数 + 同批次消息行副作用」证明，不靠日志行。
+3. 环境的 free-tier 模型端点不稳（见 §4.3），其中一次真实调用在上游失败 → 未落行
+   （符合预期：失败回合不是可计费完成）。
+
+================================================================================
+1. 栈来源（provenance）
+================================================================================
+ENV
+  node v22.15.0（`export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"`）
+  docker 29.4.0（Docker Engine Community，context=orbstack，linux/arm64）
+  compose project = `aiagents`（docker-compose.yml:19 `name: aiagents`）
+
+端口预检（up 之前实测，全部空闲）
+  port 3306: free   port 13000: free   port 13001: free
+  port 14000: free  port 14848: free
+
+镜像：**本次全部重建**（原镜像是本功能之前的旧产物）
+  $ docker compose build server init     → aiagents-server:latest 86c0049f7672
+                                            aiagents-init:latest   21884da742c4
+  $ docker compose build web              → aiagents-web:latest    452cac8d90aa
+  $ docker compose build worker           → aiagents-worker:latest dd7ebd98e9e9
+  （worker 也必须重建：Todo 1 改了 worker/src/exec/exec-server.ts 的 model 透传）
+  MODEL_CREDENTIAL_KEY：compose 必填，本次用 `openssl rand -hex 32` 现场生成
+  （2f3daf550de0a81b93b4d17abd8f198b2487d0e5e20ffe297968a8cce623226e），
+  只存在于本次 shell，未写入任何仓库文件。
+
+数据卷：**复用**（未 `down -v`，未重建）
+  up 之前 `docker volume ls` 已有 aiagents_mysql_data / aiagents_uploads_data /
+  aiagents_vteam_worker_data / aiagents_worker_home 四个卷 → 复用 `aiagents_mysql_data`。
+  代价：库里带 2026-10-09 上一轮 QA 的残留（见 §1.2），已逐条识别，未误删。
+
+最终栈状态
+  aiagents-compose-db      mysql:8            Up (healthy)   3306/tcp（不映射宿主）
+  aiagents-compose-init    aiagents-init      Exited(0)      migrate deploy + seed
+  aiagents-compose-server  aiagents-server    Up (healthy)   0.0.0.0:13000->3000
+  aiagents-compose-web     aiagents-web       Up (healthy)   0.0.0.0:13001->3000
+  aiagents-compose-worker  aiagents-worker    Up             0.0.0.0:14000->4000, 14848->4848
+  全程**只有这一个 compose 栈**（无并行第二套 project / 无第二个 db 容器）。
+
+1.1 迁移（init 服务实跑输出）
+  $ docker logs aiagents-compose-init
+    Applying migration `20261009020000_capability_memory_org_tools`   ← 上一功能的欠账
+    Applying migration `20261010010000_model_usage`                  ← 本功能
+    All migrations have been successfully applied.
+    ...
+    - 初始 admin 账号：admin / admin123
+
+  _prisma_migrations：10 行，全部 finished_at 非空，末两行为
+    20261009020000_capability_memory_org_tools | 1
+    20261010010000_model_usage                | 1
+
+  SHOW CREATE TABLE model_usages（实测输出，未省略）
+    CREATE TABLE `model_usages` (
+      `id` varchar(191) ... NOT NULL, `team_id` ... NOT NULL,
+      `team_member_id` ... NOT NULL, `session_id` ... NOT NULL,
+      `channel_id` ... NOT NULL, `agent_id` ... NOT NULL,
+      `task_id` varchar(191) ... DEFAULT NULL, `model` ... NOT NULL,
+      `input_tokens` int NOT NULL DEFAULT '0', `output_tokens` int NOT NULL DEFAULT '0',
+      `reasoning_tokens` int NOT NULL DEFAULT '0',
+      `cache_read_tokens` int NOT NULL DEFAULT '0',
+      `cache_write_tokens` int NOT NULL DEFAULT '0',
+      `total_tokens` int NOT NULL DEFAULT '0',
+      `cost` double DEFAULT NULL,
+      `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+      PRIMARY KEY (`id`),
+      KEY `idx_usage_team_member` (`team_id`,`team_member_id`),
+      KEY `idx_usage_team_model` (`team_id`,`model`),
+      KEY `idx_usage_created` (`created_at`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  → 16 列 / 3 索引 / 零 FK / 无回填，与 Todo 2 守卫 spec 的契约一致。
+  起跑基线：$ SELECT COUNT(*) FROM model_usages; → **0**（表确实新建、确实空）
+
+1.2 种子与账号（实测）
+  seed 输出：用户 admin(u_admin) / seed-admin(u_seed_admin) / seed-member(u_seed_member)
+             团队 tm_0000000001（vteam开发团队）7 成员；模型目录 0 个模型
+  登录实测：admin/admin123 → 200；seed-member/Admin@123456 → 200；
+            seed-member/admin123 → 401 AUTH_INVALID_CREDENTIALS
+  ⚠️ 复用卷的残留：`team_user_members` 里有 2026-10-09 08:23:59 的
+     `tum_qa_member (tm_0000000001, u_seed_member, owner)` → **seed-member 是成员，
+     不能当非成员用**。故另建专用 qa 账号做 403（§8）。
+  实际可用模型：worker 注册后 ModelsService 合并 8471 个模型目录，
+     `/config/providers` 显示**唯一已认证 provider 是 `opencode`（apiKey=public，11 个 free 模型）**。
+     → 父任务简报里「环境 0 model provider」的判断需要修正：目录为 0，但 opencode free
+       通道真实可用（本次两轮真实回合都成功返回），只是端点不稳。
+
+================================================================================
+2. 账号 / 通道准备
+================================================================================
+  $ POST /api/v1/auth/login {"username":"admin","password":"admin123"}   → 200
+  $ POST /api/v1/dm-channels {"teamId":"tm_0000000001","agentId":"a_project_manager"}
+      → 201 {"id":"c_0000000002","type":"private","teamMemberId":"tmm_0000000002", ...}
+
+  过程中实测到一条**既有业务门禁**（与本功能无关，如实记录）：
+    先对 a_developer 建私聊 c_0000000003 并 @ 它 →
+      server log: ChatService "team 主 agent 门禁拦截 team=tm_0000000001 跳过=开发者-1"
+      triggers: []（不派发）
+    ⇒ 团队内只有**主 Agent（项目经理-1）**可被前端触发。统计 tab 因此在本环境
+      只会出现 1 个成员（多成员聚合由 Todo 4 单测 + Todo 5 Chromium 冒烟覆盖）。
+
+================================================================================
+3. 真实 agent 调用怎么打通的（含一次真实失败，如实记录）
+================================================================================
+3.1 第一次派单失败——worker 启动窗口内的心跳抖动
+  $ POST /api/v1/channels/c_0000000002/messages
+      {"text":"qa-usage-e2e：请用一句话回复你收到的这条消息。",
+       "mentions":[{"type":"agent","agentId":"a_project_manager"}]}
+    → 201 triggers[0] = {"sessionId":"s_0000000001","status":"dispatched"}
+  但 server log：
+    WorkerDispatcher "agent a_project_manager 绑定的 worker w_compose_worker 不可用（offline），解绑并重新分配 worker"
+    WorkerDispatcher "agent a_project_manager dispatch failed: 无可用 worker：请先启动 worker 节点（mock 降级需 WORKER_MOCK_FALLBACK）"
+  根因：`WorkersService 健康检查：1 个 worker 心跳超时标记 offline` 早于 worker
+  完成注册（注册成功后心跳恢复，DB `last_heartbeat_at` 每 10s 前进）。**非本功能缺陷**。
+  处理：等心跳稳定后重发同一消息 → 派单成功。
+
+3.2 真实回合成功 #1（无模型配置 → 走 opencode serve 默认模型）
+  worker log:
+    [v1-driver] sendMessage -> ses_edc63915cffeXFiz6rO2hgaxAE model=(default) agent=vteam-project_manager (HTTP 204)
+    [exec] 执行完成 session=ses_edc63915cffeXFiz6rO2hgaxAE taskId=- model=(default) text=38 chars
+  落库行（$ SELECT * FROM model_usages\G，真实输出）
+    id                  : us_caa4df908192d04c7971451d70eeec6c
+    team_id             : tm_0000000001
+    team_member_id      : tmm_0000000002      ← 成员归属正确
+    session_id          : s_0000000001
+    channel_id          : c_0000000002
+    agent_id            : a_project_manager
+    task_id             : NULL                ← 团队直聊本就无 task，正确
+    model               : unknown              ← payload.model 缺失 → Todo 1 的哨兵串
+    input_tokens        : 28650
+    output_tokens       : 25
+    reasoning_tokens    : 73
+    cache_read_tokens   : 1920
+    cache_write_tokens  : 0
+    total_tokens        : 30668
+    cost                : 0
+    created_at          : 2026-10-10 02:20:57.626
+  **独立反证**（不信任 server 自己的落库，直接问 opencode serve）：
+    $ curl http://localhost:14000/session/ses_edc63915cffeXFiz6rO2hgaxAE
+      {"tokens":{"input":28650,"output":25,"reasoning":73,"cache":{"read":1920,"write":0}},"cost":0,
+       "model":{"id":"big-pickle","providerID":"opencode","variant":"default"}, ...}
+    → 六个计数与 cost 与落库行**逐项相同**，证明这些数字是真模型的真用量，不是编的。
+
+3.3 一次真实失败（上游端点不可用）
+    $ PATCH /api/v1/agents/a_project_manager {"defaultModelId":"opencode/ling-3.1-flash-free"} → 200
+    $ POST .../messages（第 2 次真实调用）→ 201 dispatched
+    worker log: [v1-driver] sendMessage ... model=opencode/ling-3.1-flash-free (HTTP 204)
+                [exec] 执行失败 ... 模型调用失败：... Upstream request failed: Endpoint is unavailable.
+    DB：model_usages 行数仍为 **1**（未新增）
+    ⇒ 失败回合不落用量行 —— 符合「只记完成回合」的设计，不是漏记。
+
+3.4 真实回合成功 #2（显式配置模型 → model 维度拿到真串）
+    $ PATCH /api/v1/agents/a_project_manager {"defaultModelId":"opencode/space-bunny-free"} → 200
+    $ POST .../messages（第 3 次真实调用）→ 201 dispatched
+    worker log: [v1-driver] sendMessage ... model=opencode/space-bunny-free (HTTP 204)
+                [exec] 执行完成 ... model=opencode/space-bunny-free text=2 chars
+    落库行（真实输出）
+      id                 : us_b8049a6ddfb5a0eb4521783dc6f66096
+      team_member_id     : tmm_0000000002      agent_id: a_project_manager
+      model              : opencode/space-bunny-free     ← providerID/modelID 全链透传成立
+      input/output/reasoning : 27368 / 3 / 0
+      cache_read/write   : 1943 / 0
+      total_tokens       : 29314
+      cost               : 0
+  ⇒ Todo 1（worker ctx.model）→ Todo 3（ingress 透传 + sink 落库）的 model 链路
+    在**真实生产代码路径**上被打通，不是 mock。
+
+3.5 起止行数轨迹
+    起跑      rows = 0
+    §3.2 后   rows = 1
+    §3.3 后   rows = 1   （失败回合不记）
+    §3.4 后   rows = 2
+    §7 后     rows = 4   （幂等探针 A1 + A2，A2 未增）
+    §9 后     rows = 5   （脏数据探针，落一行全 0）
+
+================================================================================
+4. 断言 A —— `model_usages` 落行
+================================================================================
+见 §3.2 / §3.4。字段逐项核对：
+  归属四维（team/teamMember/agent/channel）   ✅ 与 dispatch 目标、会话、频道一致
+  session_id / task_id                          ✅ s_0000000001 / NULL
+  model                                        ✅ 'unknown' 哨兵 + 'opencode/space-bunny-free' 真串
+  六计数 + cost                                ✅ 与 opencode serve 原始 tokens 逐项相等
+  主键格式                                     ✅ us_ + sha256(自然键)[0:32]（35 字符 < 191）
+
+================================================================================
+5. 断言 B —— GET /teams/:teamId/usage 聚合
+================================================================================
+$ curl -s -X GET "http://localhost:13000/api/v1/teams/tm_0000000001/usage" \
+       -H "Authorization: Bearer <admin accessToken>"      → HTTP 200
+（4 行时快照，原样输出）
+{
+  "members": [{
+    "teamMemberId":"tmm_0000000002","agentName":"项目经理","roleName":"项目经理",
+    "totalTokens":64752,"inputTokens":59018,"outputTokens":628,
+    "cacheReadTokens":4763,"cacheWriteTokens":120,"cost":0.0508,
+    "models":[
+      {"model":"opencode/space-bunny-free","totalTokens":34084,"inputTokens":30368,
+       "outputTokens":603,"cacheReadTokens":2843,"cacheWriteTokens":120,"cost":0.0508},
+      {"model":"unknown","totalTokens":30668,"inputTokens":28650,"outputTokens":25,
+       "cacheReadTokens":1920,"cacheWriteTokens":0,"cost":0}
+    ]}],
+  "teamTotal":{"totalTokens":64752,"inputTokens":59018,"outputTokens":628,
+               "cacheReadTokens":4763,"cacheWriteTokens":120,"cost":0.0508}
+}
+
+手算复核（成员小计 = Σ模型桶；teamTotal = Σ全部行；DB 原始行 = §3.2/3.4/7/9）
+  30668 + 29314 + 1590 + 3180 + 0(脏行) = 64752  ✅
+  28650 + 27368 + 1000 + 2000 + 0         = 59018  ✅
+     25 +     3 +  200 +  400 + 0         =   628  ✅
+   1920 +  1943 +  300 +  600 + 0         =  4763  ✅
+      0 +     0 +   40 +   80 + 0         =   120  ✅
+   0 + 0 + 0.0175 + 0.0333 + NULL→0        = 0.0508 ✅
+  模型桶：opencode/space-bunny-free = 29314+1590+3180 = 34084 ✅
+
+附加端点行为（实测）
+  ?model=opencode/space-bunny-free → models 仅剩 1 行，teamTotal 降为 34084/…/0.0508 ✅ 精确过滤
+  ?model=zzz/nope                   → {"members":[],"teamTotal":全 0}             ✅ 零值结构而非 404
+  （费用恒为 number：DB 的 NULL cost 在聚合层按 0 参与，前端无 null 分支 —— 与 Todo 4 契约一致）
+
+================================================================================
+6. 断言 C —— 统计 tab 三层汇总（真实浏览器）
+================================================================================
+方法（据实声明）：本会话的 `browser` 工具集返回
+  `[browser.disconnected] No desktop browser is connected to this session`
+→ 改用仓库既有依赖 **Playwright 1.62.1 + 系统 Chrome（channel: chrome）** 驱动
+  **真实 web 容器 http://localhost:13001** + **真实后端数据** 的无头 Chromium。
+  脚本放在临时目录（不在仓库内，跑完保留于
+  /private/var/.../T/opencode/usage-ui-smoke.js），非仓库测试文件。
+  导航：/login（admin/admin123 真实表单登录）→ /teams/tm_0000000001/session
+       → 点「统计」子 tab → 读 DOM。
+
+A0b  team-stats-tab 实例数 = 1
+A1   四指标卡（[data-testid="team-stats-card"][data-metric]，读数原文）
+       Token 总数    "64,752"   副标题 "输出占比 1.0% · 1 位成员 · 2 个模型"
+       输入 / 输出   "59,018 / 628"  副标题 "输入占比 91.1% · 缓存写入 120"
+       缓存读 / 写   "4,763 / 120"   副标题 "命中率 7.4%（缓存读 ÷ 总数）"
+       总费用        "$0.0508"  副标题 "Top3 合计 $0.0508 · 占比 100.0%"
+A2   THEAD  ["成员","总数","输入","输出","缓存读","缓存写","费用","明细"]
+A3   成员主行 ×1
+       ["项目经理\n项目经理","64,752","59,018","628","4,763","120","$0.0508","▾"]
+A4   表尾合计行 <tfoot>
+       ["合计（1 位成员）","64,752","59,018","628","4,763","120","$0.0508",""]
+A5   展开后模型明细行 ×2（点 ▾ 后出现，再点收起）
+       ["opencode/space-bunny-free","34,084","30,368","603","2,843","120","$0.0508",""]
+       ["unknown","30,668","28,650","25","1,920","0","$0.0000",""]
+A6   模型名 span 计算字体 = "JetBrains Mono", SFMono-Regular, Consolas, "Liberation Mono", monospace
+     （外层 td 是正文字体；mono 落在承载模型名的 span 上 —— 上一轮只读 td 会误判）
+A7   Top 条      ["1. 项目经理\n64,752 · $0.0508"]
+A8   模型迷你条  ["opencode/space-bunny-free\n52.6%","unknown\n47.4%"]
+A9   team-stats-bar 总数 = 3（Top 1 + 迷你 2）—— 纯 CSS 宽度条，无图表库
+A_TABLE_GEO  border-collapse: separate；border-spacing: 0px
+A_NUMERIC_CELL  text-align: right；font-family: JetBrains Mono…（右对齐 + mono）
+A10  截图 → .omo/evidence/task-6-stats-tab-member.png
+
+**三层一致性判定（卡片 = 表尾 = 成员行 = Top 求和 = 模型行求和 = teamTotal = DB 聚合）**
+  64,752 / 59,018 / 628 / 4,763 / 120 / $0.0508  ← 七项在上述六处**逐项相等**
+  模型行求和 34,084+30,668 = 64,752；603+25 = 628；2,843+1,920 = 4,763；
+            120+0 = 120；0.0508+0.0000 = 0.0508                     ✅
+  迷你条占比 52.6% + 47.4% = 100.0%；34,084/64,752 = 52.64%         ✅
+  卡片派生比率自洽：628/64,752 = 0.97% ≈ 1.0%；59,018/64,752 = 91.1%；
+            4,763/64,752 = 7.35% ≈ 7.4%                           ✅
+
+截图文件
+  .omo/evidence/task-6-stats-tab-member.png   （有数据态，1600×1100 视口截图）
+  .omo/evidence/task-6-stats-tab-empty.png    （清理后空态，§10）
+  ⚠️ 关于 member.png 的裁切：右侧面板是**内部滚动容器**（`team-subtab-scroll`），
+     视口截图只覆盖到「模型分布」与表尾合计行的上沿（可见 "...018  628  4,763  120  $0.0508"）。
+     **成员表头 / 成员主行 / 展开的两条模型明细行的完整读数在上面的 A2–A5 DOM dump 里**
+     （那是逐格 innerText 实测输出，不是转述）。之所以没有补一张滚到面板底部的第二张
+     截图：补拍需要重新灌入那 4 行数据，而其中 2 行是 §3.2/§3.4 的**真实 LLM 回合**产物，
+     重新造等值数据会让截图来源变得不可辨——宁可用文字证据也不用可能误导的图片。
+
+================================================================================
+7. 断言 D —— 同一 completion 投递两次 → 只记一行（红线）
+================================================================================
+探针形态（**合成 task.completed 走生产 ingress**，真实回合无法天然重复投递）：
+  POST /api/v1/worker/events   Header: X-Worker-Token: compose-worker-token
+  {
+    "workerId":"w_compose_worker", "eventId":"evw_qa_idem_A1", "seq":9101,
+    "type":"task.completed",
+    "payload":{ "agentId":"a_project_manager","sessionId":"s_0000000001",
+      "channelId":"c_0000000002","model":"opencode/space-bunny-free",
+      "text":"qa-usage-e2e idempotency probe A",
+      "parts":[{"type":"step-finish","id":"qa-usage-e2e-step-2","messageID":"qa-usage-e2e-msg-2",
+                "tokens":{"input":2000,"output":400,"reasoning":100,"cache":{"read":600,"write":80}}}],
+      "tokens":{"total":3180,"input":2000,"output":400,"reasoning":100,"cache":{"read":600,"write":80}},
+      "cost":0.0333 }}
+
+步骤与实测计数（`$ SELECT COUNT(*) …` / `… FROM messages WHERE channel_id='c_0000000002'`）
+  投递 A1（新自然键）
+    rows 3 → **4**   msgs 7 → **8**
+    新行：id us_f7a21ec52ea69940c67f5a7aee4a4504 / opencode/space-bunny-free /
+          2000·400·100·600·80 / total 3180 / cost 0.0333
+  **$ docker compose restart server**（清空进程内 completedSessions 与 ingress 事件去重）
+  投递 A2（同一 step-finish part id ⇒ 同一自然键 ⇒ 同一主键；eventId/seq/text 全换新）
+    rows 4 → **4**（未增）   msgs 8 → **9**（新增一条 agent 消息）
+    新消息原文：m_0000000017 "qa-usage-e2e idempotency probe B (same step-finish part id => same natural key)"
+    $ SELECT COUNT(*) FROM model_usages WHERE total_tokens=3180 AND cost=0.0333; → **1**
+
+**判定**：A2 的消息行确实落库了 ⇒ 该请求**完整走完了** handleTaskCompleted（含
+recordModelUsage 之后的落库/广播/emitFinal），并没有被任何内存闸门提前短路；
+而 `model_usages` 行数**没有增加** ⇒ 挡住重复的唯一机制就是 DB 主键唯一约束
+（`id = us_ + sha256(自然键)[0:32]` → P2002）。这正是 Todo 3 设计的仲裁层，
+且是跨进程（重启/多副本）成立的。
+
+**同进程内存闸门（顺带实测，非替代）**
+  在不重启的情况下对同一 sessionId 复投（eventId 各不相同），ingress 日志确认事件
+  已被接收（`[ingress] task.completed workerId=w_compose_worker taskId= agentId=a_project_manager`），
+  但 model_usages 行数与消息数均不变 → 进程内 `completedSessions` 先行拦截。
+  两层职责与 Todo 3 证据 §2 的描述完全一致。
+
+================================================================================
+8. 断言 E —— 非成员 403
+================================================================================
+准备（因 §1.2 的原因必须新建专用账号，qa- 前缀标注）
+  $ POST /api/v1/users  (admin Bearer)
+      {"username":"qa-usage-nonmember","password":"qa-usage-123",
+       "displayName":"QA Usage Nonmember","roleId":"r_member"}
+    → 201 {"id":"u_1791598951867", ...}
+    （首次尝试缺 roleId → 400 "roleId should not be empty"，已补齐）
+  $ POST /api/v1/auth/login {"username":"qa-usage-nonmember","password":"qa-usage-123"} → 200
+
+断言
+  $ curl -i -X GET /api/v1/teams/tm_0000000001/usage -H "Authorization: Bearer <qa token>"
+    HTTP/1.1 403
+    {"code":"PERMISSION_TEAM_NOT_MEMBER","message":"您不是该团队成员"}
+  $ 同上不带 token → 401 {"code":"AUTH_UNAUTHORIZED","message":"未认证或 token 无效/已过期"}
+  $ 同一路由 admin（团队 owner）→ 200（§5）
+
+UI 侧观察（如实记录，不当作 403 断言）
+  非成员登录后访问 /teams/tm_0000000001/session：页面渲染但团队数据被拒，
+  正文为「暂无团队群聊频道（team_group）/ 请确认团队已创建，稍后重试」，
+  右侧面板不可达 → **「统计」按钮不存在**，且网络层 `page.on('response')` 监听到
+  `/usage` 请求数 = **0**（压根没发请求）。
+  结论：非成员在 UI 上被更前置的团队数据门挡住，403 断言的有效面在**接口层**（已证）。
+
+================================================================================
+9. 断言 F（附加）—— 脏 part 归零不断链（端到端复核，非降级）
+================================================================================
+探针：合成 task.completed，tokens/cost/part 全部投脏值，model 投空白串
+  "tokens":{"total":"abc","input":null,"output":-5,"reasoning":"x",
+            "cache":{"read":"NaN","write":{"deep":1}}},
+  "cost":"not-a-number",  "model":"   "
+  parts[0].tokens = {"input":"NaN","output":null,"cache":{"read":"1e999"}}
+  （先 restart server 清空内存闸门，否则事件会被 completedSessions 拦掉——这一点
+    本身也是 §7 结论的复现）
+结果（$ SELECT … ORDER BY created_at DESC LIMIT 1）
+  id                  : us_ba0d25cf6e3a6b9d96eb124287df3a20
+  model               : unknown            （空白串 → 哨兵）
+  input/output/reasoning : 0 / 0 / 0
+  cache_read/cache_write : 0 / 0
+  total_tokens        : 0
+  cost                : NULL              （cost_is_null = 1；未知 ≠ 免费）
+  行仍然落库 → **归零不断链** ✅
+附带：此全 0 行加入后，`GET /teams/tm_0000000001/usage` 快照与加入前**完全相等**
+（`SNAP_C == SNAP_D → True`）⇒ 零计数行与 NULL cost 在聚合层按 0 参与、不污染任何数字。
+
+写入失败不阻断主链路：Todo 3 单测已覆盖（prisma.modelUsage.create reject 时
+message.create 与 emitFinal 照常、logger.warn 命中）。本次**未复跑**（按父任务要求
+不重做单测覆盖的部分）。另有一处**反向**的实测佐证：§12.1 的 FK 故障发生在
+recordModelUsage **之后**，用量行照落，说明统计与主链路解耦是双向的。
+
+================================================================================
+10. 断言 G（附加）—— 空态（清理后自然复验）
+================================================================================
+$ curl /api/v1/teams/tm_0000000001/usage  (admin)
+  {"members":[],"teamTotal":{"totalTokens":0,"inputTokens":0,"outputTokens":0,
+                             "cacheReadTokens":0,"cacheWriteTokens":0,"cost":0}}   HTTP 200
+浏览器（同一套 Playwright + 系统 Chrome，admin 登录）
+  team-stats-tab 文本：
+    "按成员 / 按模型 / 刷新 / 「vteam开发团队」的 Token 用量与费用累计：全员可见，纯只读，
+     统计自用量开始累积起算（不回填历史）。 / ◌ / 暂无用量数据——新调用产生后自动统计 /
+     用量自统计上线后开始累计，不回填历史调用；团队成员产生新的调用后，点「刷新」即可看到分布。"
+  cards = 0   table = 0   refreshBtn = 1
+  截图 → .omo/evidence/task-6-stats-tab-empty.png
+  ⇒ 空态文案（计划指定）、无卡片无表格、刷新按钮常驻 ✅
+
+================================================================================
+11. 测试数据清理
+================================================================================
+删除前扫描（对 information_schema 里所有带 created_at 的表逐张统计 >= 02:17 的行）
+  chat_channels 1 / messages 12 / model_usages 5 / realtime_events 36 /
+  sessions 1 / task_group_instances 1 / triggers 3 / users 1
+  （message_receipts / tasks / issues / task_events / memories / artifacts 全为 0）
+
+执行
+  DELETE FROM model_usages;                                          -- 起跑基线就是 0，全清
+  DELETE FROM messages            WHERE created_at>='2026-10-10 02:17:00';
+  DELETE FROM chat_channels       WHERE created_at>='2026-10-10 02:17:00';   -- c_0000000003
+  DELETE FROM sessions            WHERE created_at>='2026-10-10 02:17:00';   -- s_0000000002
+  DELETE FROM triggers            WHERE created_at>='2026-10-10 02:17:00';   -- 3 条 session_idle_scan
+  DELETE FROM task_group_instances WHERE created_at>='2026-10-10 02:17:00';
+  DELETE FROM realtime_events     WHERE created_at>='2026-10-10 02:17:00';
+  DELETE FROM users               WHERE username='qa-usage-nonmember';
+  $ PATCH /api/v1/agents/a_project_manager {"defaultModelId":null} → 200，复查 = None
+  （Agent 的模型配置是本次为了拿真 model 串临时改的，用生产 API 改回去，未动 SQL）
+
+删除后复核
+  model_usages 0 / messages_window 0 / chat_channels_window 0 / sessions_window 0 /
+  triggers_window 0 / tgi_window 0 / realtime_events_window 0 / users_qa 0
+  全库当前：users 3（admin, seed-admin, seed-member）/ chat_channels 2 / sessions 1 / messages 3
+  剩余 3 条 messages 的 created_at 全为 2026-10-09（上一轮 QA 的系统消息）→ 非本次产生，未动。
+  c_0000000001(team_group) / c_0000000002(private) / s_0000000001 均为起跑前已存在。
+
+**唯一残留（如实声明，不藏）**
+  sessions.s_0000000001 的 `status`（failed → idle）与 `instance_ref`
+  （ses_ee0427d11ffeEFmcbBpDqasg0C → ses_edc63915cffeXFiz6rO2hgaxAE）被本次真实回合改写，
+  其消息内容已随上面 DELETE 一并清空。**未把 instance_ref 写回旧的 ses_ 值**：
+  旧值指向一个早已失效的 opencode 会话，伪造回去比留真值更糟。此项由 QA 复用卷
+  （§1）引入，是共享开发环境的既有噪声，非本功能产生的业务数据。
+
+**仓库洁净度**
+  $ find server/src server/prisma worker/src web/src web/app web/lib -type f \
+        -newermt "2026-10-10 10:15:00"
+    （空输出）—— 本会话对业务代码**零写入**。
+  web/ 下无临时 spec/config 残留；Playwright 脚本只落在系统临时目录，未进仓库。
+  本次唯一新增的仓库文件 = 3 个证据截图（本文件 + 2 png）。
+  未执行任何 git 命令（证据提交由 orchestrator 负责）。
+
+================================================================================
+12. 观察到的既有问题（非本功能引入，未修，供 F1/F3 定夺）
+================================================================================
+12.1 `task.completed` 事件里 `taskId: ""`（空串而非缺省）会让回复落库炸 FK
+  实测：ingress `this.str(raw.taskId)` 把 "" 保留成 ""，随后
+  `prisma.message.create({ taskId: '' })` 触发
+  `Foreign key constraint violated on the fields: (task_id)`，
+  server log 两行（WorkerDispatcher error + ChatService emitError）。
+  真实 worker 的团队直聊**不传** taskId（worker log `taskId=-`），所以线上不触发；
+  只有合成事件显式传空串才会踩到。与本功能无关，且「统计写入不阻断主链路」反而被
+  这次故障佐证（用量行照落）。
+12.2 sink 的日志全是 logger.debug，compose server 以 info 级运行
+  `$ docker logs aiagents-compose-server | grep -c '"level":20'` → **0**
+  ⇒ `[usage] 用量已记账` / `[usage] 同一 completion 重复投递，主键仲裁下已存在，跳过`
+  这些行在 compose 环境永远不可见。本次幂等结论因此改用「行数 + 同批次消息行」证明。
+  如需可观测性，建议 F 波评估是否把 P2002 分支提到 warn（本 todo 不改代码）。
+12.3 团队「主 agent 门禁」使统计 tab 在本环境只有 1 个成员
+  （§2）多成员 × 多模型的表格/透视/Top3 由 Todo 4 单测（多成员/多模型三层一致性）与
+  Todo 5 的真实 Chromium 冒烟（2 成员 × 2 模型 fixture）覆盖，本 todo 不重复。
+12.4 opencode free 端点不稳
+  `opencode/ling-3.1-flash-free` → "Upstream request failed: Endpoint is unavailable."；
+  `opencode/big-pickle`（serve 默认）与 `opencode/space-bunny-free` 正常。
+  影响：真实回合的模型覆盖只有 2 个（unknown + space-bunny-free），不是环境限制而是上游抖动。
+
+================================================================================
+13. 复现命令清单（按序）
+================================================================================
+  export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+  export MODEL_CREDENTIAL_KEY=$(openssl rand -hex 32)
+  cd /Volumes/SSD-Data/01work/git-project/vteam
+  docker compose build server init && docker compose build web && docker compose build worker
+  docker compose up -d
+  docker logs aiagents-compose-init            # 核对 20261010010000_model_usage 已 apply
+  docker exec aiagents-compose-db mysql -uroot -paiagents-root aiagents -e "SHOW CREATE TABLE model_usages\G"
+  # 真实回合
+  ADM=$(curl -s -XPOST :13000/api/v1/auth/login -H 'Content-Type: application/json' \
+        -d '{"username":"admin","password":"admin123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["accessToken"])')
+  curl -s -XPOST :13000/api/v1/dm-channels -H "Authorization: Bearer $ADM" \
+       -H 'Content-Type: application/json' -d '{"teamId":"tm_0000000001","agentId":"a_project_manager"}'
+  curl -s -XPOST :13000/api/v1/channels/c_0000000002/messages -H "Authorization: Bearer $ADM" \
+       -H 'Content-Type: application/json' \
+       -d '{"text":"…","mentions":[{"type":"agent","agentId":"a_project_manager"}]}'
+  # 聚合 / 权限
+  curl -s :13000/api/v1/teams/tm_0000000001/usage -H "Authorization: Bearer $ADM"
+  # UI（真实 Chromium）
+  node <tmp>/usage-ui-smoke.js     # 读 DOM + 截图到 .omo/evidence/
+  # 清理
+  docker exec aiagents-compose-db mysql -uroot -paiagents-root aiagents -e "<§11 的 DELETE 集合>"
+
+================================================================================
+14. Todo 6 验收对照
+================================================================================
+计划 Acceptance criteria：「证据文件记录每条断言的实际输出；降级时声明口径」
+  → 每条断言的实际 HTTP 码 / SQL 行 / DOM 文本 / 截图路径均在上文逐条贴出；未降级，已声明。
+
+计划 What to do 逐条
+  「走一轮真实 agent 调用」                        ✅ 2 轮真实 LLM 回合（§3.2 / §3.4）
+  「断言 model_usage 落行」                        ✅ §4（含 opencode serve 反证）
+  「GET /teams/:teamId/usage 聚合正确」            ✅ §5（手算逐项复核）
+  「统计 tab 三层汇总一致」                        ✅ §6（真实浏览器六处相等）
+  「双投递单行」                                  ✅ §7（跨进程重启，行数不变）
+  「脏 part 归零（单测已覆则引用）」               ✅ §9 端到端复验 + 引用 Todo 3 单测
+  「非成员 403」                                  ✅ §8
+  「若无可运行栈，允许降级…」                     ✅ 未触发（栈可用且真实回合成功）
+
+计划 Must NOT
+  「不为冒烟改业务代码」    ✅ §11 洁净度：源码目录零写入
+  「不留测试脏数据」        ✅ §11 全清 + 1 项残留显式声明
+================================================================================
