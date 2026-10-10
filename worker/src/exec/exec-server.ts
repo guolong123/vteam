@@ -59,7 +59,7 @@ import {
   resolveOmoConfigPath,
   writeOmoAgents,
 } from '../resources/omo-config';
-import { WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
+import { UNKNOWN_MODEL_KEY, WORKER_EVENT_TYPES } from '../protocol/worker-protocol';
 import type {
   SecretCommandRequestPayload,
   SecretCommandResponsePayload,
@@ -254,6 +254,14 @@ export class ExecuteRequestError extends Error {}
 function describeModel(model: DriverModelRef | null | undefined): string {
   if (!model) {
     return '(default)';
+  }
+  return `${model.providerID}/${model.modelID}`;
+}
+
+/** 用量口径模型标识（`providerID/modelID` 原样组合；缺失/空 → UNKNOWN_MODEL_KEY 哨兵串）。 */
+function usageModelKey(model: DriverModelRef | null | undefined): string {
+  if (!model?.providerID || !model.modelID) {
+    return UNKNOWN_MODEL_KEY;
   }
   return `${model.providerID}/${model.modelID}`;
 }
@@ -1511,6 +1519,9 @@ export class ExecServer {
         agentId: payload.agentId,
         channelId: payload.channelId,
         sessionId: opencodeSessionId,
+        // 用量口径模型标识：随 ctx 扩散进 task.completed 事件体（server usage 落库按此归集）。
+        // 取 payload.model 原样组合，缺失落哨兵串——必填 string，下游无需判空。
+        model: usageModelKey(payload.model),
       };
       await this.sender.send(WORKER_EVENT_TYPES.SESSION_UPDATED, {
         ...ctx,

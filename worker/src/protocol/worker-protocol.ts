@@ -256,7 +256,25 @@ export interface ExecutionConfig {
   writePaths: string[];
 }
 
-/** POST /worker/events 请求体（对齐 server WorkerEventDto）。 */
+/**
+ * 用量统计口径的模型缺失哨兵串。
+ *
+ * `task.completed` 事件体的 `model` 字段语义：`providerID/modelID` 组合串（与
+ * WorkerCapabilities.models 的 id 格式一致）；payload.model 缺省/null 时落本串，
+ * 使"模型未知"与"真实模型名"在下游聚合时可区分。server 侧 usage 落库
+ * （worker-event.ingress TaskCompletedPayload.model → model_usage.model）采用
+ * 同一口径，两端常量各自定义但值必须一致。
+ */
+export const UNKNOWN_MODEL_KEY = 'unknown';
+
+/**
+ * POST /worker/events 请求体（对齐 server WorkerEventDto）。
+ *
+ * `payload` 为各事件自定义负载（逐事件形状由 exec-server 构造处与 server
+ * WorkerEventDto/dto 约定）；`task.completed` 额外携带 `model`
+ * （`providerID/modelID`，缺失为 `UNKNOWN_MODEL_KEY`）与 step-finish 实测的
+ * `tokens`/`cost`。
+ */
 export interface WorkerEventPayload {
   workerId: string;
   eventId: string;

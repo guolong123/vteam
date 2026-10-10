@@ -1,0 +1,167 @@
+# Todo 2 (usage-store) 证据 — token-usage-stats
+
+分支：feat/token-usage-stats · 执行时间：2026-10-10 · 执行者：subagent（Todo 2 独占）
+
+## 1. 文件改动（3 个，全部在 server/）
+
+| 文件 | 动作 | 说明 |
+| --- | --- | --- |
+| `server/prisma/schema.prisma` | edit（追加 EOF） | 新增「用量域」段注释 + `model ModelUsage` |
+| `server/prisma/migrations/20261010010000_model_usage/migration.sql` | new | 手写 CREATE TABLE + 3 索引，零回填 |
+| `server/src/prisma/model-usage.migration.spec.ts` | new | 守卫 spec，13 条断言 |
+
+未触碰：`server/src/chat/`、`worker/`、`web/`、`package.json`、Model/Message/Session 等既有模型。
+
+## 2. 迁移方式：**手写（手写路径）**，非 `migrate dev`
+
+按计划先试的前置探测结果：
+
+```
+$ nc -z -w 3 localhost 3306 → MYSQL_NOT_REACHABLE
+$ cd server && npx prisma validate
+  The schema at prisma/schema.prisma is valid 🚀
+```
+
+`nc` 证实本机无 MySQL 在监听，`migrate dev` 需要 shadow database 无法执行 → 走计划写明的
+「若无 DB 则手工按先例格式编写」分支。
+
+### 2.1 DDL 正确性不是手搓的 —— 用 Prisma 自己的 migrate diff 反证
+
+无 shadow DB 也能跑 `migrate diff`（纯 schema→schema），用它把「加入 ModelUsage 前后」
+两个 schema 的差异导出，得到 Prisma 自己会生成的 DDL，与手写迁移逐列比对：
+
+```
+$ npx prisma migrate diff --from-schema-datamodel <裁剪掉用量域的 schema> \
+                          --to-schema-datamodel prisma/schema.prisma --script
+
+-- CreateTable
+CREATE TABLE `model_usages` (
+    `id` VARCHAR(191) NOT NULL, ... `cost` DOUBLE NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    INDEX `idx_usage_team_member`(`team_id`, `team_member_id`),
+    INDEX `idx_usage_team_model`(`team_id`, `model`),
+    INDEX `idx_usage_created`(`created_at`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+差异仅此一条、零外键。手写迁移采用 `20261009010000_memory_refcount/migration.sql` +
+squashed_baseline 的列式方言（`varchar(191) CHARACTER SET utf8mb4 COLLATE
+utf8mb4_unicode_ci` / `int` / `double` / `datetime(3)`，2 空格缩进），
+把 Prisma 输出的 `VARCHAR(191)`/`INTEGER`/`DOUBLE`/`DATETIME(3)` 换成本仓既有
+migration.sql 的等价写法 —— 两者在 MySQL 8 上是同一张表，仅大小写与类型别名不同。
+
+### 2.2 迁移内容要点
+
+- 只 1 条语句：`CREATE TABLE model_usages (...)`，无 ALTER / DROP / RENAME / TRUNCATE。
+- 列（16）：`id` / `team_id` / `team_member_id` / `session_id` / `channel_id` /
+  `agent_id` / `task_id`(NULL) / `model` / 六个 `*_tokens` int NOT NULL DEFAULT 0 /
+  `cost` double DEFAULT NULL / `created_at` datetime(3)。
+- 索引（3）：`idx_usage_team_member (team_id,team_member_id)`、
+  `idx_usage_team_model (team_id,model)`、`idx_usage_created (created_at)`。
+- 零 FK / 零 CONSTRAINT（软关联）。
+- 零 UPDATE / INSERT / DELETE。
+
+## 3. resyncIdPrefix 落点（计划要求二选一：本 todo 不产出服务 → 记精确位置）
+
+本 todo 是纯 store 层，不创建任何 service，故**未**新增 `onModuleInit`。责任与位置
+已写进两处代码注释（不是口头交接）：
+
+- `schema.prisma` 用量域注释：「落库方（usage-sink，写入点在 worker-dispatcher 的完成
+  事件路径）必须在 `onModuleInit` 调 `resyncIdPrefix(this.prisma.modelUsage, 'us',
+  this.idGen)` —— 否则重启后计数器归零、nextId('us') 撞既有主键 P2002」。
+- 同一段注释也出现在 migration.sql 文件头（迁移可能被单独 review，注释必须在场）。
+- 守卫 spec 第 13 条把 `resyncIdPrefix(this.prisma.modelUsage, 'us'` 字面量钉在 schema
+  上：Todo 3 落地消费侧时，这条断言会确认口径没被改写成别的前缀。
+
+对标先例：`memories.service.ts:24,62`（`MEMORY_ID_PREFIX = 'me'` + `onModuleInit` 内
+`resyncIdPrefix(this.prisma.memory, ...)`）、`session-lifecycle.service.ts:63`。
+既有的 `common/id-resync.guard.spec.ts` 断言「凡 nextId 生成点必须有 resync」——
+本 todo 未新增 nextId 调用点，故该守卫当前仍绿（待 Todo 3 引入 nextId('us') 时，
+它会自动要求配套 resync）。
+
+## 4. 门禁结果
+
+| 门禁 | 命令 | 结果 |
+| --- | --- | --- |
+| schema 合法 | `cd server && npx prisma validate` | ✅ `The schema at prisma/schema.prisma is valid` |
+| client 生成 | `cd server && npx prisma generate` | ✅ `Generated Prisma Client (v6.19.3)` |
+| 类型检查 | `cd server && npx tsc --noEmit` | ✅ 退出码 0，零输出 |
+| 新 spec | `cd server && npx jest src/prisma/model-usage.migration.spec.ts` | ✅ **1 suite / 13 tests passed** |
+| 全量回归 | `cd server && npm run test` | ✅ **168 suites / 3985 tests passed, 1 snapshot passed**，32.971 s |
+
+迁移状态口径：计划验收写的 `prisma migrate status` 需要真实连接，本机无 MySQL 无法执行，
+故按计划括号内的备选口径「validate + generate 通过」交付，两者均已绿。该降级口径在此声明。
+
+## 5. QA 场景（计划要求 name the exact tool + invocation）
+
+### happy —— 守卫在真实产物上全绿
+
+```
+$ cd server && npx jest src/prisma/model-usage.migration.spec.ts
+PASS src/prisma/model-usage.migration.spec.ts
+  migration 20261010010000_model_usage
+    ✓ schema.prisma 声明 model ModelUsage 且 @@map 到 model_usages
+    ✓ 本迁移 CREATE TABLE 的列在 schema.prisma 的 ModelUsage 里都存在（正向平价）
+    ✓ 反向平价：schema.prisma 的 ModelUsage 列都被本迁移建出来（漏建列 → 运行时 P2022）
+    ✓ 十六个契约列一个不少不多（id/归属六维/model/六计数/cost/created_at）
+    ✓ DDL 守卫：baseline 迁移里不含 model_usages（否则重复建表 → ERROR 1057）
+    ✓ 本迁移建的索引名在 schema.prisma 的 ModelUsage @@index 里有声明（正向）
+    ✓ 反向：schema.prisma 声明的三个 @@index 都被本迁移真建出来（漏建 → 静默全表扫描）
+    ✓ 零回填：迁移无任何 UPDATE / INSERT / DELETE（历史用量不可诚实重建）
+    ✓ 六个 token 计数列 NOT NULL DEFAULT 0（脏数据归零不断链，不靠 NULL 兜底）
+    ✓ 不建外键（软关联）：迁移与 schema 均无 FK/CONSTRAINT/relations
+    ✓ 不加 price/单价/币种列（本仓无权威价目表，cost 存上游原值）
+    ✓ 只建这一张表：不 ALTER / DROP / RENAME 任何既有表
+    ✓ us_ 前缀主键 + 无 DEFAULT：id 永远由服务层 IdGeneratorService 显式写入
+
+Tests:       13 passed, 13 total
+```
+
+### failure —— 注入回填 UPDATE，守卫必须变红（已执行并回滚）
+
+往 migration.sql 追加 `UPDATE \`model_usages\` SET \`total_tokens\` = 0 WHERE 1=1;` 后：
+
+```
+    ✕ 零回填：迁移无任何 UPDATE / INSERT / DELETE（历史用量不可诚实重建）
+    ✕ 只建这一张表：不 ALTER / DROP / RENAME 任何既有表
+Tests:       2 failed, 11 passed, 13 total
+```
+
+### failure —— 注入「加单价列 + 漏建索引 + 建 FK」，守卫必须变红（已执行并回滚）
+
+```
+    ✕ 本迁移 CREATE TABLE 的列在 schema.prisma 的 ModelUsage 里都存在（正向平价）
+    ✕ 反向：schema.prisma 声明的三个 @@index 都被本迁移真建出来（漏建 → 静默全表扫描）
+    ✕ 零回填：迁移无任何 UPDATE / INSERT / DELETE（历史用量不可诚实重建）
+    ✕ 不建外键（软关联）：迁移与 schema 均无 FK/CONSTRAINT/relations
+    ✕ 不加 price/单价/币种列（本仓无权威价目表，cost 存上游原值）
+Tests:       5 failed, 8 passed, 13 total
+```
+
+三处注入（`unit_price` 列 / 删掉 `KEY idx_usage_created` / 加
+`CONSTRAINT ... FOREIGN KEY (team_id) REFERENCES teams(id)`）被 5 条不同的断言独立捕获，
+互不遮蔽。回滚用 `cp` 覆盖回原文件，随后 `diff` 确认 `RESTORED_CLEAN` 且重跑 13 tests
+全绿——迁移文件最终态即 §2 所述产物。
+
+## 6. Must NOT 逐条自检
+
+| 红线 | 落实 |
+| --- | --- |
+| 无 price/单价表 | schema 与迁移均无 price 列；spec 第 11 条钉死 |
+| 无外键 | 六个归属维度全为软关联 id 串；迁移无 FK；spec 第 10 条钉死 |
+| 无回填 | 迁移零 UPDATE/INSERT/DELETE；spec 第 8 条钉死 |
+| 不动 Model/Message/Session | schema 仅在 EOF 追加；迁移单条 CREATE TABLE；spec 第 12 条钉死 |
+| 无 Prisma enum | 无 enum 声明（沿用 15 篇 §2 双库兼容：状态/类型一律 String 列） |
+| 未动 chat/ / usage/ / web/ / worker/ | 本 todo 仅写 server/prisma + server/src/prisma |
+| 未写消费/聚合逻辑 | 无 service / controller；聚合归 Todo 4，落库归 Todo 3 |
+| 无 `as any` / `@ts-ignore` | 新 spec 零断言抑制 |
+
+## 7. 对下游 todo 的交接
+
+- **Todo 3（usage-sink）**：写 `nextId('us')` 时必须同时提供
+  `resyncIdPrefix(this.prisma.modelUsage, 'us', this.idGen)` 的 onModuleInit，
+  否则 `common/id-resync.guard.spec.ts` 会红。模型标识缺失记 `'unknown'`。
+- **Todo 4（usage-api）**：聚合走 `groupBy [teamMemberId, model]`，两条索引已就位；
+  `cost` 求和时 NULL 按 0 参与（DB 侧 `double` 存 NULL，Prisma groupBy 返回 `null`）。
+- **Todo 6（usage-e2e）**：表名 `model_usages`，主键 `us_0000000001` 形式。

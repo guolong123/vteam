@@ -8,6 +8,7 @@
  *   session.updated(idle) → task.completed
  * - 失败路径：awaitCompletion 首字超时 → agent.status(error) + session.updated(failed) + abort
  * - trackInstance 计数增减（执行期间 = 1，完成后归零）
+ * - usage-ctx：task.completed 事件体携带 model（payload.model 原样组合，缺失落哨兵 unknown）
  * - 请求校验：非 /execute 404、非 POST 405、缺 prompt 400
  * - GET /file（FR-41）：鉴权 401（缺失/错误 token）、成功 200 二进制内容、
  *   不存在 404、目录 400、超 10MB 413、缺 path 400
@@ -409,6 +410,63 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
         text: 'Hello done',
       });
       expect(sent[5].payload.cost).toBe(0.5);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('usage-ctx：payload.model 透传——task.completed 事件体带 model=providerID/modelID', async () => {
+    const { driver, createSession } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, {
+        taskId: 't_1',
+        agentId: 'a_1',
+        channelId: 'ch_1',
+        model: { providerID: 'opencode', modelID: 'grok-code' },
+        prompt: 'go',
+      });
+      await waitFor(() => sent.length >= 5);
+      // 原样透传：createSession 收到的引用不被解析/改写
+      expect(createSession).toHaveBeenCalledWith({ providerID: 'opencode', modelID: 'grok-code' });
+      const completed = sent.find((s) => s.type === 'task.completed');
+      expect(completed?.payload.model).toBe('opencode/grok-code');
+      // ctx 扩散：会话上下文事件同样带 model（与 taskId/agentId 同为 ctx 成员）
+      const running = sent.find((s) => s.type === 'session.updated' && s.payload.status === 'running');
+      expect(running?.payload.model).toBe('opencode/grok-code');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('usage-ctx：payload.model 缺失 → 事件体 model 落哨兵串 unknown（非空，下游无需判空）', async () => {
+    const { driver, createSession } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 5);
+      expect(createSession).toHaveBeenCalledWith(undefined);
+      const completed = sent.find((s) => s.type === 'task.completed');
+      expect(completed?.payload.model).toBe('unknown');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('usage-ctx：payload.model=null 与空串字段同样落哨兵串 unknown', async () => {
+    const { driver } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', model: null, prompt: 'go' });
+      await waitFor(() => sent.length >= 5);
+      const completed = sent.find((s) => s.type === 'task.completed');
+      expect(completed?.payload.model).toBe('unknown');
     } finally {
       await exec.stop();
     }

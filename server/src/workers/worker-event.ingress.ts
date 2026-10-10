@@ -40,6 +40,14 @@ export interface TaskCompletedPayload {
   parts?: unknown;
   tokens?: unknown;
   cost?: number;
+  /**
+   * 用量口径模型标识（`providerID/modelID` 组合串，worker ctx 透传）。缺失时 worker
+   * 落固定哨兵串 `'unknown'`（worker/src/protocol/worker-protocol.ts UNKNOWN_MODEL_KEY）。
+   *
+   * 可选——存量/旧版本 worker 事件不带该字段，消费方需自行兜底。消费（落库）属
+   * usage-sink，本类型仅声明。
+   */
+  model?: string;
   /** Agent 声明产出物（12 篇 §3.1 声明形状，T10 直连 ArtifactsService 归档）。 */
   artifacts?: unknown[];
   [key: string]: unknown;

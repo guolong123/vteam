@@ -1,0 +1,147 @@
+================================================================================
+TASK 1 — usage-ctx：worker ctx 透传 model 字段
+Plan: .omo/plans/token-usage-stats.md (Todo 1, lines 72-83)
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Branch: feat/token-usage-stats
+Date: 2026-10-10
+================================================================================
+
+ENV
+--------------------------------------------------------------------------------
+node/npm/npx are NOT on default PATH. Every command was prefixed with:
+  export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"
+Node: v22.15.0
+
+Gate commands were verified against worker/package.json BEFORE use:
+  "typecheck": "tsc --noEmit"
+  "test":     "jest --runInBand"
+
+--------------------------------------------------------------------------------
+SENTINEL DECISION (must match Todo 3 / usage-sink)
+--------------------------------------------------------------------------------
+CHOICE: literal string  'unknown'
+
+Exported as worker/src/protocol/worker-protocol.ts:
+  export const UNKNOWN_MODEL_KEY = 'unknown';
+
+Rationale: Todo 2's model_usage.model column stores `providerID/modelID` composite
+string. When payload.model is absent/null the worker emits 'unknown' so the field is
+ALWAYS a non-empty string -> downstream never needs a null check, and "unknown" is
+distinguishable from any real model id.
+
+Todo 3 MUST use the same literal 'unknown' as its own fallback. NOTE for the sink
+implementer: worker/ and server/ are separate processes with no shared import path
+(architecture decision 1B - worker must not import server code), so the constant is
+declared independently on both sides; only the VALUE must match byte-for-byte.
+
+Empty-string handling (slightly beyond the literal spec, defensive):
+usageModelKey() also maps {providerID:'', modelID:''} -> 'unknown' rather than
+emitting a junk '/' key into the DB.
+
+--------------------------------------------------------------------------------
+FILES CHANGED (4 source + 1 spec; zero overlap with sibling Todo 2 prisma work)
+--------------------------------------------------------------------------------
+1. worker/src/exec/exec-server.ts
+   - :62 import: `import { UNKNOWN_MODEL_KEY, WORKER_EVENT_TYPES } from '../protocol/worker-protocol';`
+   - :261-268 new helper `usageModelKey(model)`:
+         if (!model?.providerID || !model.modelID) return UNKNOWN_MODEL_KEY;
+         return `${model.providerID}/${model.modelID}`;
+     (`describeModel()` left untouched - it is log-only, still returns '(default)'.)
+   - :1516-1524 `ctx` (was :1509-1514) gains `model: usageModelKey(payload.model)`.
+     ctx is spread into TASK_COMPLETED, so the event body now carries `model`.
+   NOT touched: payload.model parsing (:90), createSession (:1493 / :1542),
+   v1-driver.ts, prompt-await.ts.
+
+2. worker/src/protocol/worker-protocol.ts
+   - :259-274 added `export const UNKNOWN_MODEL_KEY = 'unknown';` with docstring.
+   - :276-291 `WorkerEventPayload` docstring updated to state the task.completed
+     body contract: model (`providerID/modelID`, missing = UNKNOWN_MODEL_KEY),
+     plus tokens/cost.
+   - :13-27 `WORKER_EVENT_TYPES` UNTOUCHED (still exactly 9 entries - verified).
+
+3. server/src/workers/worker-event.ingress.ts
+   - :43-51 added optional `model?: string` to `TaskCompletedPayload`.
+     TYPE ONLY - zero consumption logic (Todo 3 owns the sink).
+     Optional => backward compatible: server accepts events WITH and WITHOUT model.
+
+4. worker/src/exec/exec-server.spec.ts
+   - :10 header coverage line added.
+   - :417-478 three new tests (see below).
+
+NOT CHANGED - and why (per the "if they enumerate the fields" condition):
+  - worker/src/protocol/worker-protocol.ts:259 WorkerEventPayload.payload is
+    `Record<string, unknown>` - it does NOT enumerate per-event fields, so the only
+    change needed was documenting the contract (done above).
+  - worker/src/client/event-client.ts:129-138 `deliver()` only JSON.stringify()s the
+    envelope and retries; it does NOT enumerate body fields. No change required.
+
+--------------------------------------------------------------------------------
+QA SCENARIOS (plan lines 82)
+--------------------------------------------------------------------------------
+happy  - mock payload.model, assert ctx.model + event body agree
+         TEST: 'usage-ctx：payload.model 透传——task.completed 事件体带 model=providerID/modelID'
+         asserts: createSession called with the UNCHANGED ref {opencode, grok-code}
+                  (proves no parsing/rewriting of payload.model)
+                  task.completed payload.model === 'opencode/grok-code'
+                  session.updated(running) payload.model === 'opencode/grok-code'
+                  (ctx spreads, so the context events carry it too)
+failure- missing model => fixed sentinel
+         TEST: 'usage-ctx：payload.model 缺失 → 事件体 model 落哨兵串 unknown（非空，下游无需判空）'
+         asserts: createSession called with undefined; task.completed payload.model === 'unknown'
+extra   - null model
+         TEST: 'usage-ctx：payload.model=null 与空串字段同样落哨兵串 unknown'
+         asserts: task.completed payload.model === 'unknown'
+
+--------------------------------------------------------------------------------
+GATE RESULTS (exact commands + numbers)
+--------------------------------------------------------------------------------
+$ export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"
+$ cd worker && npm run typecheck
+  > worker@0.0.1 typecheck
+  > tsc --noEmit
+  EXIT=0, no diagnostics output.                              [PASS]
+
+$ cd worker && npx jest --runInBand src/exec/exec-server.spec.ts
+  Test Suites: 1 passed, 1 total
+  Tests:       123 passed, 123 total        (120 before + 3 new)     [PASS]
+
+$ cd worker && npx jest --runInBand src/exec/exec-server.spec.ts -t "usage-ctx"
+  Tests:       120 skipped, 3 passed, 123 total
+  -> all 3 new tests execute and pass in isolation.                      [PASS]
+
+$ cd worker && npm run test                      (full suite)
+  Test Suites: 25 passed, 25 total
+  Tests:       673 passed, 673 total
+  Time:        29.366 s                                              [PASS]
+
+$ cd server && npx tsc --noEmit                 (ingress type addition)
+  EXIT=0, no diagnostics output.                                       [PASS]
+
+$ cd server && npx jest --runInBand src/workers/worker-event.ingress.spec.ts
+  Test Suites: 1 passed, 1 total
+  Tests:       72 passed, 72 total                                     [PASS]
+
+--------------------------------------------------------------------------------
+SCOPE GUARDRAILS (plan line 78 "Must NOT" + Scope Must NOT have)
+--------------------------------------------------------------------------------
+- payload.model parsing / session creation : UNTOUCHED (test asserts createSession
+  receives the original reference object unchanged)
+- opencode driver (v1-driver.ts, prompt-await.ts) : UNTOUCHED
+- server consumption logic : UNTOUCHED (type declaration only)
+- event type enumeration (WORKER_EVENT_TYPES) : UNTOUCHED, still 9 entries
+- price-related fields : NONE added
+- server/prisma/schema.prisma + migrations : UNTOUCHED (Todo 2 owns, parallel)
+- no `as any` / `@ts-ignore` / empty catch introduced.
+  Scan output hits are PRE-EXISTING lines outside the edited ranges:
+    worker-event.ingress.ts:526,527 / exec-server.spec.ts:1033,1061,1210,2531
+- no new dependencies; no package.json touched; no git commands run.
+
+--------------------------------------------------------------------------------
+DOWNSTREAM CONTRACT (for Todo 3 usage-sink)
+--------------------------------------------------------------------------------
+Event body field:  payload.model : string  (ALWAYS present, never empty)
+Value form:        "providerID/modelID"   e.g. "opencode/grok-code"
+Missing/empty:     "unknown"
+Server type:       TaskCompletedPayload.model?: string  (optional for back-compat,
+                   so the sink itself must still defensively default to 'unknown')
+================================================================================

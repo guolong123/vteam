@@ -1218,3 +1218,56 @@ model TeamNotificationChannel {
  @@index([teamId])
  @@map("team_notification_channels")
 }
+
+// ==================================================================
+// 用量域（token-usage-stats Todo 2：us_ 前缀主键；成员×模型×调用粒度的
+// 用量与费用行，只累计不重算）
+//
+// - 费用直存 worker 上报的 cost 原始值（Float?），**不建模型单价表**：本仓
+//   没有权威价目表，重算等于凭空造口径；上游没给就记 NULL（= 未知），而不是
+//   0（= 免费）——两者语义不同，不可混同。
+// - 六个 token 计数一律 `Int @default(0)` 且不可空：worker 的 step-finish 用量
+//   是 best-effort，缺字段/NaN 由服务层 Number.isFinite 归零后写入（脏数据归零
+//   不断链），故库侧用 DEFAULT 0 兜底而非 NULL。
+// - **软关联**：teamId/taskId/sessionId/channelId/teamMemberId/agentId 一律只存
+//   id 串，不建 FK——对齐本仓既有跨域表惯例（MessageReceipt / Trigger /
+//   MessageDelivery 的 id 列均为逻辑关联，见各自域注释）。用量是**只读审计
+//   事实**，不参与任何域的删除编排；建 FK 会让删会话/删成员/删团队的既有
+//   RESTRICT 删除路径被一张统计表连带卡死，是纯粹的跨域耦合负债。
+// - 主键续号的责任在本 todo 的**消费侧**：本 todo 不产出服务，落库方
+//   （usage-sink，写入点在 worker-dispatcher 的完成事件路径）必须在
+//   `onModuleInit` 调
+//   `resyncIdPrefix(this.prisma.modelUsage, 'us', this.idGen)`
+//   —— 否则重启后计数器归零，nextId('us') 撞既有主键 P2002
+//   （同源事故固化见 common/id-resync.guard.spec.ts）。
+// ==================================================================
+
+model ModelUsage {
+  id           String  @id // us_ 前缀，服务层 IdGeneratorService 生成（onModuleInit 需 resyncIdPrefix('us')，见域注释）
+  // 调用发生时的归属快照：全部为 id 串软关联（不建 FK，理由见上方域注释）
+  teamId       String  @map("team_id") // 团队（聚合一级维度，非空）
+  teamMemberId String  @map("team_member_id") // 成员归属键（聚合主维度：成员 × 模型）
+  sessionId    String  @map("session_id") // 产生本次调用的会话
+  channelId    String  @map("channel_id") // 产生本次调用的渠道（群聊）
+  agentId      String  @map("agent_id") // 实际执行调用的成员实例
+  taskId       String? @map("task_id") // 任务维度可空（非 task-mode 调用无任务）
+  /// 模型标识 = `providerID/modelID` 组合串（上游事件体原样透传）。
+  /// 缺失记固定串 `'unknown'`——空串会被当成一个真实模型名参与分组，污染统计口径。
+  model String
+  // 六个计数口径与 worker `ServeTokens` 一一对应；脏值（缺字段/NaN/负数）服务层归零
+  inputTokens      Int @default(0) @map("input_tokens")
+  outputTokens     Int @default(0) @map("output_tokens")
+  reasoningTokens  Int @default(0) @map("reasoning_tokens")
+  cacheReadTokens  Int @default(0) @map("cache_read_tokens")
+  cacheWriteTokens Int @default(0) @map("cache_write_tokens")
+  totalTokens      Int @default(0) @map("total_tokens")
+  /// 上游上报的费用原值（美元）；NULL = 上游未给（未知），非 0 = 免费
+  cost      Float?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // 聚合查询面：成员透视 / 模型透视 / 时间维度游标（只累计，不做时间序列切片）
+  @@index([teamId, teamMemberId], map: "idx_usage_team_member")
+  @@index([teamId, model], map: "idx_usage_team_model")
+  @@index([createdAt], map: "idx_usage_created")
+  @@map("model_usages")
+}
