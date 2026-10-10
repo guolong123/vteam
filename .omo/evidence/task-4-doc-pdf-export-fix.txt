@@ -1,0 +1,28 @@
+# task-4 pdf-verify — 暗色导出 Chromium 像素冒烟
+
+## 装置（web/e2e/doc-pdf-export.spec.ts，新增独立 playwright project）
+esbuild-wasm 运行期打包入口（真实 doc-export + 样例文档：标题/段落×40/表格/代码块/引用块）→
+setContent 空白页注入真实 globals.css 的 :root/.dark 变量块（按标记+规则起始双校验提取，
+规避「注释中的 :root 字样」与「.dark :focus-visible」误匹配）→ html.dark +
+真实 exportNodeToPdf（仅 jspdf 换捕获桩，html2canvas 真实执行）→ 解码页面 PNG 像素断言。
+
+## 断言（全绿）
+- 几何：每页 x=y=12mm、w=186mm（210-24）、h≤273.5mm（页容量内）
+- textMinLum < 120（段落文本区最小亮度，深色可读）
+- codeBgLum > 200（代码块底色浅色）
+- veryDarkRatio < 0.08（无深色块）
+- cornerWhite（白底基座）
+
+## 突变校验（承重证明）
+禁用宿主浅色覆盖 → 断言红：textMinLum=231.1（浅灰字），PROBE 实测 textColor=rgb(226,232,240)、
+bgColor=rgb(2,6,23)——与用户截图症状完全一致。恢复后绿。
+
+## 冒烟抓出的产品缺陷（已修，随本 todo 一起提交）
+Todo 3 断页吸附含向下分支 → 切点可越过页容量 → 页高 273.70mm 溢出。修复：吸附仅向上（提前切）。
+
+## 开发中修掉的 harness 自身缺陷（防后人复踩）
+1) jspdf 桩参数序误写（真实签名为 addImage(dataUrl, format, x, y, w, h)）——反向印证产品调用签名正确
+2) CSS 块提取曾命中注释字样导致注入失效（黑字假绿）——修正后突变校验方才有效
+
+## 门禁
+web tsc clean / lint 0 err·729 / build 成功；playwright project=doc-pdf-export 1 passed（修复态）。
