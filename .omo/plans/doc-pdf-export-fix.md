@@ -51,7 +51,7 @@
 ## Todos
 > Implementation + Test = ONE todo. Never separate.
 <!-- APPEND TASK BATCHES BELOW THIS LINE WITH edit/apply_patch - never rewrite the headers above. -->
-- [ ] 1. pdf-light-scope：宿主级浅色变量覆盖
+- [x] 1. pdf-light-scope：宿主级浅色变量覆盖
   What to do / Must NOT do:
   - `web/src/features/docs-site/doc-export.ts`：删除克隆根节点的 `clone.style.background/color` 两行（无效：被类样式覆盖）；改为在**离屏宿主**（:128-138 的 `host`）内联写全套浅色变量——从 `web/app/globals.css` 的 `:root` 块逐字段复制 `--color-*`（neutral 10 阶 / surface / bg / border / text / text-muted / mention-* / warning-* / role-* / segment-* 等），使宿主子树内 `var(--color-*)` 全部解析为浅色，切断 `html.dark` 影响
   - 变量清单与 `:root` 保持同步的防漂移措施（二选一：运行时从 `document.documentElement` 计算值读取并内联 / 或复制常量并注释来源+守护断言）；选型与理由写进注释与报告
@@ -63,7 +63,7 @@
   QA scenarios (name the exact tool + invocation): happy——暗色下导出，正文/标题区域像素为深色（Todo 4 冒烟断言）；failure——禁用内联变量后同断言变红（验证承重）。Evidence .omo/evidence/task-1-doc-pdf-export-fix.txt
   Commit: Y | fix(docs): PDF 导出宿主级浅色变量覆盖
 
-- [ ] 2. pdf-block-adapt：深色孤岛导出作用域浅色适配
+- [x] 2. pdf-block-adapt：深色孤岛导出作用域浅色适配
   What to do / Must NOT do:
   - 宿主加导出作用域类（如 `pdf-export`）；在导出管线内注入一段 scope 样式（宿主内 `<style>` 或行内覆盖），对以下深色元素做浅色适配：代码块（浅灰底 + 深字）、inline code 芯片、引用/提示块（admonition）、表格头（浅底深字）、mermaid 容器
   - mermaid：栅格化前（`svgToDataUrl` 调用点 :115-128）将图内文字/连线颜色归一为深色（当前白底 + 浅色图元低对比）；失败路径保持既有兜底（foreignObject 保留内联 SVG）
@@ -75,7 +75,7 @@
   QA scenarios: happy——暗色导出代码块/表头为浅色系（Todo 4 采样断言）；failure——不改 scope 时断言红。Evidence .omo/evidence/task-2-doc-pdf-export-fix.txt
   Commit: Y | fix(docs): PDF 导出深色孤岛浅色适配
 
-- [ ] 3. pdf-layout：页边距 + 白行吸附断页
+- [x] 3. pdf-layout：页边距 + 白行吸附断页
   What to do / Must NOT do:
   - A4 页边距：`addImage` 改为留边（约 12mm），内容宽度 = 210 - 2×margin，页面高度同步收窄；首页顶部留白一致
   - 断页：切片边界向最近「近白行」吸附（在页高附近上下扫描一行像素亮度，命中则把切点移过去），避免从表格/代码块中间硬切；扫描范围有界（如 ±15% 页高），找不到白行则维持原位
@@ -86,7 +86,7 @@
   QA scenarios: happy——导出 PDF 四周留白、无明显块中切断；failure——回归旧参数时断言红。Evidence .omo/evidence/task-3-doc-pdf-export-fix.txt
   Commit: Y | fix(docs): PDF 导出页边距与白行吸附断页
 
-- [ ] 4. pdf-verify：Chromium 暗色导出冒烟 + 证据
+- [x] 4. pdf-verify：Chromium 暗色导出冒烟 + 证据
   What to do / Must NOT do:
   - Chromium（真实浏览器）内：构造示例文档（标题/段落/表格/代码块/提示块/mermaid），`html.dark` 生效，执行真实导出链；采样画布像素断言：① 正文文字区域为深色（非浅灰）② 代码块/表头为浅底 ③ 首页有页边距 ④ 无整行浅灰文字
   - 若导出函数需可测缝（暴露 canvas/回调），按最小侵入添加并注释
@@ -100,10 +100,10 @@
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit okay before declaring complete.
-- [ ] F1. Plan compliance audit：Must have 四条 / Must NOT 逐条（重点：改动限导出域、无新依赖、浅色模式不劣化、无文本层假设）
-- [ ] F2. Code quality review：web tsc/lint(0err/729)/build；无 `as any`/空 catch；变量覆盖清单与 `:root` 对齐（防漂移措施有效）
-- [ ] F3. Real manual QA：暗色真实导出即所修场景——可读性对照（修复前后）、块中切断检查、浅色模式回归
-- [ ] F4. Scope fidelity：git diff 限 web/src/features/docs-site/**（+ 必要的 globals.css 读取不改写）；package.json 零 diff
+- [x] F1. Plan compliance audit：Must have 四条 / Must NOT 逐条（重点：改动限导出域、无新依赖、浅色模式不劣化、无文本层假设）
+- [x] F2. Code quality review：web tsc/lint(0err/729)/build；无 `as any`/空 catch；变量覆盖清单与 `:root` 对齐（防漂移措施有效）
+- [x] F3. Real manual QA：暗色真实导出即所修场景——可读性对照（修复前后）、块中切断检查、浅色模式回归
+- [x] F4. Scope fidelity：git diff 限 web/src/features/docs-site/**（+ 必要的 globals.css 读取不改写）；package.json 零 diff
 
 ## Commit strategy
 - 每 todo 单 commit：`fix(docs): <subject>`；小改 amend 合并
