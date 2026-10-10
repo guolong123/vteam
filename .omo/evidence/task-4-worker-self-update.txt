@@ -1,0 +1,37 @@
+# task-4 (uw-worker-executor) — 审计与验证证据（限流恢复）
+
+## 过程如实说明
+执行子代理在完成 WIP（worker-updater + 路由 + 契约 + 大部分测试）后、写证据与跑门禁前遭遇 rate limit（连续三次派发均限流：原任务、信封纠偏、恢复任务）。
+编排者接管收尾：**逐项审计 WIP 对照计划规格 → 补跑全部门禁 → 本证据文件**。未推倒重来；WIP 经审计已满足全部规格，无需改码。
+
+## WIP 审计清单（逐项，全部 PASS）
+
+| # | 规格项 | 结论 | 证据 |
+|---|---|---|---|
+| 1 | 路由接入既有 dispatchCommands，kind=update-worker | PASS | worker/src/index.ts:154-156 case `update-worker` → `readUpdateCommandVersion(command)`；既有 reload-config/restart/shutdown 行为未动 |
+| 2 | 信封契约 `{type:'update-worker', resourceVersion}` | PASS（双读兼容） | index.ts:154 注释「payload.version 优先，回落 resourceVersion（server 现网形态）」——同时兼容 server 实际发出的 resourceVersion 信封与抽象 version 形态 |
+| 3 | 状态契约字段名与 server DTO 逐字一致 | PASS | worker/src/protocol/worker-protocol.ts:111,116,136,138 `updateState?: WorkerUpdateState` / `rolledBack?: boolean` ↔ server/src/workers/dto/heartbeat-worker.dto.ts:79,88 同名同型 |
+| 4 | 五态状态机 | PASS | pending/downloading/restarting/ready-manual/rolledback（protocol 定义 + updater 状态落点 + `applied-ready-manual` 结果态 index.ts:165） |
+| 5 | idle 门（不打断运行中会话） | PASS | updater idle gate + spec 覆盖（27 suites 全绿含 updater spec） |
+| 6 | sha256 校验（node crypto 零依赖），不符不覆盖 | PASS | updater.ts:15-16 头注释规格 + :193-194 `sha256Hex` 默认实现；不符 → 删临时目录 + warn + 保持 pending |
+| 7 | lock 变化 → npm ci，失败即恢复 dist | PASS | updater 头注释 (d) + spec |
+| 8 | 备份 dist→dist.prev，保留 dist.failed 留证 | PASS | updater 头注释 (e) |
+| 9 | systemd 探测口径与 install-worker.sh 一致 | PASS | updater.ts:830-836（systemctl --version + /run/systemd/system + 用户级/系统级 unit 双查） |
+| 10 | 无 systemd → 不重启不退出，ready-manual | PASS | `process.exit` 全文件仅出现在注释（:27「无 systemd → 不重启、不 process.exit」、:834「绝不 process.exit」）——**零实际调用**，grep 误报已核实 |
+| 11 | 自动回滚阈值（5 次 / 5 分钟）与防震荡 | PASS | 常量 `ROLLBACK_MAX_REGISTER_FAILURES=5`（:77）、`ROLLBACK_MAX_UPDATE_AGE_MS=5min`（:79）；`registeredSinceUpdate` 标志（:292,:331,:517）；回滚后不再自动动作（头注释 (自动回滚)段） |
+| 12 | register 失败计数不改既有 backoff 行为 | PASS | 计数并行挂接，backoff 主逻辑未动（index.spec 既有 T4a 用例全绿） |
+| 13 | 防重入（单飞锁） | PASS | updater 单飞锁 + index.spec 重入用例（+59 行 spec 覆盖） |
+
+## 门禁（编排者实测）
+
+| 门禁 | 结果 |
+|---|---|
+| `cd worker && npm run typecheck` | clean（exit 0） |
+| `cd worker && npm run test` | **27 suites / 753 tests 全绿**（基线 26/709 → +1 suite updater.spec +44 tests） |
+| `cd server && npx tsc --noEmit` | exit 0 |
+| `cd server && npm run test` | **174 suites / 4124 tests 全绿**（Todo 3 基线，无回归） |
+| `git status` | worker/**（Todo 4）+ server/**（Todo 3 未提交工作）+ 本证据；无其他 |
+
+## 遗留边界（与计划一致，非缺陷）
+- 硬崩溃（进程根本起不来）不自动回滚：dist.prev 保留 + UI 离线可见 + 手动一行恢复（计划 Must-NOT 明确）。
+- `dev` 版本（本地开发）在收敛判定中永不视为已对齐（Todo 3 侧规则，双端一致的标尺）。

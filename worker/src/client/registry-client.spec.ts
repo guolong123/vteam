@@ -402,6 +402,61 @@ describe('codeVersion 通道（worker-self-update Todo 2）', () => {
   });
 });
 
+/**
+ * worker-self-update Todo 4：register/heartbeat 的自更新状态上报。
+ * 缺席语义 = 「本次没上报」（旧 worker 形态），故未传时**不得**产生这两个键。
+ */
+describe('updateState / rolledBack 上报（Todo 3 ↔ Todo 4 共享契约）', () => {
+  beforeEach(mockFetch);
+
+  it('register 携带 updateState + rolledBack=true', async () => {
+    fetchMock.mockResolvedValue(okJson({ workerId: 'w', heartbeatIntervalMs: 10000, serverTime: '' }));
+
+    await registerWorker({ ...REG_BASE, updateState: 'rolledback', rolledBack: true });
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body.updateState).toBe('rolledback');
+    expect(body.rolledBack).toBe(true);
+  });
+
+  it('heartbeat 携带 updateState=ready-manual（无 systemd 路径）', async () => {
+    fetchMock.mockResolvedValue(okJson({ workerId: 'w', status: 'online', lastHeartbeatAt: '' }));
+
+    await sendHeartbeat({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'dev-worker-token',
+      workerId: 'w_test-1',
+      load: { instances: 0 },
+      health: 'ok',
+      updateState: 'ready-manual',
+    });
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body.updateState).toBe('ready-manual');
+    expect('rolledBack' in body).toBe(false);
+  });
+
+  it('未提供状态字段时两个键都不出现（缺席 = 没上报，旧 server/旧 UI 兼容）', async () => {
+    fetchMock.mockResolvedValue(okJson({ workerId: 'w', heartbeatIntervalMs: 10000, serverTime: '' }));
+    await registerWorker(REG_BASE);
+    const registerBody = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect('updateState' in registerBody).toBe(false);
+    expect('rolledBack' in registerBody).toBe(false);
+
+    fetchMock.mockResolvedValue(okJson({ workerId: 'w', status: 'online', lastHeartbeatAt: '' }));
+    await sendHeartbeat({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'dev-worker-token',
+      workerId: 'w_test-1',
+      load: { instances: 0 },
+      health: 'ok',
+    });
+    const heartbeatBody = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect('updateState' in heartbeatBody).toBe(false);
+    expect('rolledBack' in heartbeatBody).toBe(false);
+  });
+});
+
 describe('registerWorkerWithRetry（指数退避重试，1s/2s/4s/8s... 封顶 30s）', () => {
   beforeEach(mockFetch);
 

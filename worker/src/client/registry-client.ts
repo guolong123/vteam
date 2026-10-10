@@ -22,6 +22,7 @@ import {
   WorkerCommand,
   WorkerHealth,
   WorkerLoad,
+  WorkerUpdateState,
 } from '../protocol/worker-protocol';
 import { resolveCodeVersion } from '../code-version';
 
@@ -63,6 +64,13 @@ export interface RegistryClientOptions {
    * 故调用方无需改代码即自动带上版本；显式传入用于测试与将来的版本注入点。
    */
   codeVersion?: string;
+  /**
+   * 自更新执行状态（共享契约，见 protocol/worker-protocol.ts WORKER_UPDATE_STATES）。
+   * 省略 = 不携带该键（旧 worker 形态，server 按「缺席 = 保留已有值」处理，不报错）。
+   */
+  updateState?: WorkerUpdateState;
+  /** 最近一次自更新是否已被自动回滚（共享契约）；省略 = 不携带该键。 */
+  rolledBack?: boolean;
   /** fetch 注入点（测试用）；默认 globalThis.fetch */
   fetchImpl?: typeof fetch;
 }
@@ -77,6 +85,10 @@ export interface HeartbeatOptions {
   mcpStatus?: McpStatusEntry[];
   /** 上报代码版本；省略时同 register 就地 `resolveCodeVersion()` */
   codeVersion?: string;
+  /** 自更新执行状态（共享契约）；省略 = 不携带该键 */
+  updateState?: WorkerUpdateState;
+  /** 最近一次自更新是否已被自动回滚（共享契约）；省略 = 不携带该键 */
+  rolledBack?: boolean;
   fetchImpl?: typeof fetch;
 }
 
@@ -116,6 +128,10 @@ export async function registerWorker(opts: RegistryClientOptions): Promise<Regis
     ...(opts.defaultModelId ? { defaultModelId: opts.defaultModelId } : {}),
     ...(opts.mcpUrl ? { mcpUrl: opts.mcpUrl } : {}),
     codeVersion: opts.codeVersion ?? resolveCodeVersion(),
+    // 自更新状态字段条件携带：undefined 时**不产生键**——旧形态 payload 逐字不变
+    // （register 既有 spec 用整包 toEqual 断言，缺席语义即「没上报」）。
+    ...(opts.updateState !== undefined ? { updateState: opts.updateState } : {}),
+    ...(opts.rolledBack !== undefined ? { rolledBack: opts.rolledBack } : {}),
   };
   const response = await fetchImpl(apiUrl(opts.serverUrl, '/workers/register'), {
     method: 'POST',
@@ -146,6 +162,8 @@ export async function sendHeartbeat(opts: HeartbeatOptions): Promise<HeartbeatRe
       ? { mcpStatus: opts.mcpStatus }
       : {}),
     codeVersion: opts.codeVersion ?? resolveCodeVersion(),
+    ...(opts.updateState !== undefined ? { updateState: opts.updateState } : {}),
+    ...(opts.rolledBack !== undefined ? { rolledBack: opts.rolledBack } : {}),
   };
   const response = await fetchImpl(
     apiUrl(opts.serverUrl, `/workers/${encodeURIComponent(opts.workerId)}/heartbeat`),

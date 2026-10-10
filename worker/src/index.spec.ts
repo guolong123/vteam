@@ -34,6 +34,7 @@ import {
   resolveModels,
   warnLoopbackAdvertiseHost,
 } from './index';
+import { readUpdateCommandVersion } from './update/worker-updater';
 
 /** 最小 WorkerConfig（buildRegisterOptions 全字段）。 */
 const CONFIG: WorkerConfig = {
@@ -527,6 +528,64 @@ describe('T4a 命令分派（onCommands + dispatchCommands）', () => {
     expect(handler).toHaveBeenCalledWith(commands);
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('shutdown'),
+    );
+  });
+
+  it('worker-self-update：update-worker 命令打目标版本日志并透传回调', () => {
+    const handler = jest.fn();
+    onCommands(handler);
+    const commands: WorkerCommand[] = [
+      { type: 'update-worker', resourceVersion: 'a1b2c3d' },
+    ];
+
+    dispatchCommands(commands);
+
+    expect(handler).toHaveBeenCalledWith(commands);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('update-worker'),
+    );
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('a1b2c3d'));
+  });
+
+  it('worker-self-update：payload.version 优先于 resourceVersion（server 换负载形态也不炸）', () => {
+    const handler = jest.fn();
+    onCommands(handler);
+    const commands: WorkerCommand[] = [
+      { type: 'update-worker', resourceVersion: 'rv-1', payload: { version: 'pv-2' } },
+    ];
+
+    dispatchCommands(commands);
+
+    expect(readUpdateCommandVersion(commands[0])).toBe('pv-2');
+    expect(handler).toHaveBeenCalledWith(commands);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('目标版本=pv-2'),
+    );
+  });
+
+  it('worker-self-update：缺目标版本时日志标注未携带（执行器侧放弃本轮）', () => {
+    const handler = jest.fn();
+    onCommands(handler);
+    const commands = [
+      { type: 'update-worker', resourceVersion: '   ' },
+    ] as unknown as WorkerCommand[];
+
+    dispatchCommands(commands);
+
+    expect(readUpdateCommandVersion(commands[0])).toBeUndefined();
+    expect(handler).toHaveBeenCalledWith(commands);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining('目标版本=未携带'),
+    );
+  });
+
+  it('worker-self-update：非 update-worker 命令不打印自更新日志（其它 kind 行为零变化）', () => {
+    onCommands(jest.fn());
+
+    dispatchCommands([{ type: 'restart', resourceVersion: 'v1' }]);
+
+    expect(logSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('update-worker'),
     );
   });
 });

@@ -46,6 +46,7 @@ import {
   WorkerCommandType,
   WorkerHealth,
   WorkerLoad,
+  WorkerUpdateState,
   WORKER_COMMAND_TYPES,
 } from './protocol/worker-protocol';
 import { OpencodeServer } from './runtime/opencode-server';
@@ -57,6 +58,7 @@ import {
   RestartCoordinator,
   RestartDecision,
 } from './restart/restart-coordinator';
+import { readUpdateCommandVersion, WorkerUpdater } from './update/worker-updater';
 import {
   AuthJsonResult,
   buildAuthJson,
@@ -146,6 +148,12 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
     if (command.type === WORKER_COMMAND_TYPES.SHUTDOWN) {
       console.log(
         `[worker] 收到命令 shutdown（resourceVersion=${command.resourceVersion}），分派优雅退出`,
+      );
+    }
+    if (command.type === WORKER_COMMAND_TYPES.UPDATE_WORKER) {
+      // 自更新目标版本：payload.version 优先，回落 resourceVersion（server 现网形态）。
+      console.log(
+        `[worker] 收到命令 update-worker（目标版本=${readUpdateCommandVersion(command) ?? '未携带'}），分派自更新执行器`,
       );
     }
   }
@@ -657,6 +665,31 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   let registeredWorkerId = '';
   let heartbeatIntervalMs = config.heartbeatIntervalMs;
 
+  // worker-self-update Todo 4：自更新执行器（下载 → sha256 校验 → 备份覆盖 → systemd 重启
+  // / 无 systemd 落 ready-manual）+ 自动回滚看护。注册在它之前创建，因为 registerCurrent
+  // 要顺带把自更新状态字段带进注册报文（register 与 heartbeat 同契约）。
+  // 安装目录 = 进程入口 dist/index.js 的上一级（dev 走 tsx src/index.ts 时是 worker/ 根）。
+  const updater = new WorkerUpdater({
+    serverUrl: config.serverUrl,
+    installDir: path.resolve(__dirname, '..'),
+    // 空闲判定的唯一事实源与 RestartCoordinator 共用同一份会话计数。
+    activeSessionCount: () => getLoad().instances,
+    logger: {
+      info: (message: string) => console.log(`[worker] ${message}`),
+      warn: (message: string) => console.warn(`[worker] ${message}`),
+      debug: (message: string) => console.debug(`[worker] ${message}`),
+    },
+  });
+
+  /** 自更新状态字段投影（undefined = 不携带该键，缺席语义 = 「本次没上报」）。 */
+  const updaterReport = (): {
+    updateState?: WorkerUpdateState;
+    rolledBack?: boolean;
+  } => ({
+    ...(updater.state !== undefined ? { updateState: updater.state } : {}),
+    ...(updater.rolledBack ? { rolledBack: true } : {}),
+  });
+
   // T9：最近一次注入报告（启动注入 + reload-config 重注入后更新）。
   // 注册/reRegister 据此上报真实 skills/tools 清单——reload-config 后 reRegister 复用，
   // 资源变更后 worker 详情页数据非陈旧。
@@ -680,22 +713,29 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       : await resolveModels(driver, { stability: 2 });
     const executableModels = resolveExecutableModels();
     const result = await registerWorkerWithRetry(
-      await buildRegisterOptions(
-        config,
-        serveServer.port,
-        serveServer.version,
-        opencodeVersion,
-        lastInjectReport,
-        models,
-        execPort,
-        executableModels,
-      ),
+      {
+        ...(await buildRegisterOptions(
+          config,
+          serveServer.port,
+          serveServer.version,
+          opencodeVersion,
+          lastInjectReport,
+          models,
+          execPort,
+          executableModels,
+        )),
+        // 自更新状态随注册一并上报（server 落库供 UI 展示；缺席 = 未上报）。
+        ...updaterReport(),
+      },
       { logger: { warn: (message: string) => console.warn(`[worker] ${message}`) } },
     ).catch((err: Error) => {
       console.error(`[worker] 注册失败（重试耗尽）: ${err.message}`);
       return null;
     });
+    // 自更新回滚看护的计数**并行**记录，不改动上面的重试/退避/退出主逻辑：
+    // 一次「重试耗尽仍失败」= 1 次失败（内部 8 次重试不拆分计数，避免阈值被网络抖动刷爆）。
     if (result !== null) {
+      updater.noteRegisterSuccess();
       // C6：记录本次注册是否携带 models（探测降级 undefined = 未上报）——
       // reRegister 快路径据此决定是否必须全量重探。
       lastModelsReported = models !== undefined;
@@ -713,6 +753,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       } catch (err) {
         console.warn(`[worker] 注册后重注入失败: ${(err as Error).message}`);
       }
+    } else {
+      updater.noteRegisterFailure();
     }
     return result;
   };
@@ -756,6 +798,44 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       error: (message: string) => console.error(`[worker] ${message}`),
     },
   });
+
+  // T8c：MCP 三态探测器（30s 节流——不能每 10s 心跳 spawn 子进程，Metis 高优补项 7）。
+  // 心跳回调携带 getStatus() 快照（节流窗口内复用缓存），首次探测失败为空数组不阻断心跳。
+  const mcpStatusProbe = new McpStatusProbe({
+    // cwd 对齐 workDir：opencode mcp list 基于 cwd 查找 opencode.json（注入配置落点）
+    cwd: config.workDir,
+    logger: {
+      warn: (message: string) => console.warn(`[worker] ${message}`),
+    },
+  });
+
+  // 心跳单次发送（worker-self-update Todo 4 抽出）：定时器与「自更新执行完毕补报状态」
+  // 共用同一条路径，保证两处上报字段与失败处理完全一致。
+  const sendHeartbeatOnce = async (): Promise<void> => {
+    // F2 M4：load 上报真实活动会话数（instance-tracker 计数，
+    // T10 会话执行接线后由 V1Driver 调用点 trackInstanceStart/End 驱动）
+    const load: WorkerLoad = getLoad(config.workerMaxInstances);
+    const health: WorkerHealth = serveServer.isRunning ? 'ok' : 'degraded';
+    try {
+      // 回滚判定排在心跳之前：真触发回滚时，rolledback 状态要在**这一轮**就报上去，
+      // server 的指令收敛（convergePendingUpdateCommand）才能及时清掉 pending。
+      await updater.maybeRollback();
+      const heartbeat = await sendHeartbeat({
+        serverUrl: config.serverUrl,
+        workerToken: config.workerToken,
+        workerId: registeredWorkerId,
+        load,
+        health,
+        // T8c：MCP 三态快照（节流缓存，30s 内复用）
+        mcpStatus: mcpStatusProbe.getStatus(),
+        ...updaterReport(),
+      });
+      // T4a：心跳响应携带的下行命令 → 分派处理（reload-config 注入+重启）
+      dispatchCommands(heartbeat.commands ?? []);
+    } catch (err) {
+      console.warn(`[worker] 心跳失败: ${(err as Error).message}`);
+    }
+  };
 
   // T4b：注册命令处理回调（T4a 挂载点）——reload-config 触发资源重拉 + 注入 +
   // T4c 重启判定（无活跃会话立即重启 serve 使新配置生效，有活跃会话则挂起）。
@@ -878,21 +958,27 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         console.log('[worker] shutdown 命令：优雅退出中（停心跳 + flush 事件 + stop serve）');
         shutdown('remote-shutdown');
       }
+      if (command.type === WORKER_COMMAND_TYPES.UPDATE_WORKER) {
+        // 自更新：下载 + sha256 校验 + 备份覆盖 + （systemd）重启，无 systemd 则落
+        // ready-manual。执行可能耗时数秒且内部自带单飞锁，故**放后台**跑，不阻塞同批
+        // 其余命令；结束后立刻补一次心跳，让 UI 尽快看到 restarting/ready-manual/rolledback。
+        // 指令未携带目标版本**不跳过**（wire 契约：降级执行，只要求 version.json 存在）。
+        void (async () => {
+          try {
+            await updater.handleCommand(command);
+          } catch (err) {
+            // handleCommand 内部已兜底不抛；这里只防未来改动引入的未预期异常，
+            // 自更新失败绝不能把 worker 带下线（继续心跳，等下轮重试）。
+            console.warn(`[worker] update-worker 执行异常: ${(err as Error).message}`);
+          }
+          await sendHeartbeatOnce();
+        })();
+      }
     }
   });
 
   // T4c：活跃会话归零时检查挂起的重启（T10 会话执行接入 trackInstanceStart/End 后自动触发）
   onActiveSessionsIdle(() => restartCoordinator.checkPending());
-
-  // T8c：MCP 三态探测器（30s 节流——不能每 10s 心跳 spawn 子进程，Metis 高优补项 7）。
-  // 心跳回调携带 getStatus() 快照（节流窗口内复用缓存），首次探测失败为空数组不阻断心跳。
-  const mcpStatusProbe = new McpStatusProbe({
-    // cwd 对齐 workDir：opencode mcp list 基于 cwd 查找 opencode.json（注入配置落点）
-    cwd: config.workDir,
-    logger: {
-      warn: (message: string) => console.warn(`[worker] ${message}`),
-    },
-  });
 
   // T6：事件上送通道（进程内单例，seq 从 1 起单调递增 + F2 M1 bootId 区分重启）。
   // 事件产生（session.updated/task.completed 等）待 T10 回流接线（C1 并行任务）。
@@ -1057,30 +1143,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         `[worker] 注册成功: workerId=${registerResult.workerId}, heartbeatInterval=${registerResult.heartbeatIntervalMs}ms, serverTime=${registerResult.serverTime}`,
       );
 
-      // 心跳：间隔以 server 返回为准（T7 协议 heartbeatIntervalMs），
-      // 顺带上报 serve 健康（isRunning → ok，否则 degraded）。
+      // 心跳：间隔以 server 返回为准（T7 协议 heartbeatIntervalMs）。
       heartbeatTimer = setInterval(() => {
-        void (async () => {
-          // F2 M4：load 上报真实活动会话数（instance-tracker 计数，
-          // T10 会话执行接线后由 V1Driver 调用点 trackInstanceStart/End 驱动）
-          const load: WorkerLoad = getLoad(config.workerMaxInstances);
-          const health: WorkerHealth = serveServer.isRunning ? 'ok' : 'degraded';
-          try {
-            const heartbeat = await sendHeartbeat({
-              serverUrl: config.serverUrl,
-              workerToken: config.workerToken,
-              workerId: registeredWorkerId,
-              load,
-              health,
-              // T8c：MCP 三态快照（节流缓存，30s 内复用）
-              mcpStatus: mcpStatusProbe.getStatus(),
-            });
-            // T4a：心跳响应携带的下行命令 → 分派处理（reload-config 注入+重启）
-            dispatchCommands(heartbeat.commands ?? []);
-          } catch (err) {
-            console.warn(`[worker] 心跳失败: ${(err as Error).message}`);
-          }
-        })();
+        void sendHeartbeatOnce();
       }, heartbeatIntervalMs);
     } catch (err) {
       console.error(`[worker] opencode serve 启动失败: ${(err as Error).message}`);

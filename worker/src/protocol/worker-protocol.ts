@@ -103,6 +103,17 @@ export interface RegisterWorkerPayload {
    * server 按「缺席 = 保留已有值」处理，不会因为缺这个键报错或清空。
    */
   codeVersion?: string;
+  /**
+   * 自更新执行状态（worker-self-update Todo 3 ↔ Todo 4 共享契约，字段名逐字对齐）：
+   * pending/downloading/restarting/ready-manual/rolledback。可选——缺席 = 「本次没上报」，
+   * 旧 worker 不携带，server 不写该列、不报错。
+   */
+  updateState?: WorkerUpdateState;
+  /**
+   * 最近一次自更新是否已被自动回滚（一次性结果标志，可保持 true 供 UI 展示「已回滚」）。
+   * 缺席 = 未上报（server 不覆盖已有值）；显式 false 才落 false。
+   */
+  rolledBack?: boolean;
 }
 
 /** POST /workers/:id/heartbeat 请求体（对齐 server HeartbeatWorkerDto）。 */
@@ -117,6 +128,14 @@ export interface HeartbeatWorkerPayload {
    * 旧 worker 心跳不携带（server 按「缺席 = 保留上次上报值」处理）。
    */
   codeVersion?: string;
+  /**
+   * 自更新执行状态（共享契约，与 register 同字段同口径）。
+   * server 据此收敛 update 指令（对齐/已回滚即清 pending，见 workers.service.ts
+   * convergePendingUpdateCommand），并落库供 UI 展示状态行。
+   */
+  updateState?: WorkerUpdateState;
+  /** 最近一次自更新是否已被自动回滚（共享契约，与 register 同字段同口径）。 */
+  rolledBack?: boolean;
 }
 /** 下行命令 type 枚举（T4a：对齐 server WORKER_COMMAND_TYPES）。 */
 export const WORKER_COMMAND_TYPES = {
@@ -144,7 +163,44 @@ export const WORKER_COMMAND_TYPES = {
    * 明文传输，不落 worker 日志。按 worker 承载活跃 agent 的授权仓库过滤打包。
    */
   GIT_CREDENTIALS: 'git-credentials',
+  /**
+   * worker-self-update：管理员点【更新】→ server 经既有 commands 通道下发（对齐
+   * server workers.constants.ts WORKER_COMMAND_TYPES.UPDATE_WORKER = 'update-worker'）。
+   * **目标版本走 `resourceVersion`**（server 侧 requestUpdate 入队时写的就是期望版本，
+   * 见 workers.service.ts `enqueueCommand({type: UPDATE_WORKER, resourceVersion: expectedVersion})`）；
+   * worker 侧同时兼容 payload.version 形态（未来若 server 改成显式负载）。
+   * 执行器见 update/worker-updater.ts；命令一次有效，取出后由 server 侧收敛规则清理。
+   */
+  UPDATE_WORKER: 'update-worker',
 } as const;
+
+/**
+ * 自更新执行状态机取值（worker-self-update **两端共享契约**，逐字对齐 server
+ * `src/workers/worker-update-state.ts` 的 WORKER_UPDATE_STATES —— worker 为独立进程
+ * 不得 import server 代码，故此处双写，改任一端必须同步另一端）。
+ *
+ * 状态流转（worker 上报，server 只透传 + 展示，不做推断）：
+ *   pending（收到指令，等空闲）→ downloading（下载 + sha256 校验）
+ *   → restarting（已覆盖新码，systemd 重启中）/ ready-manual（已下载但无 systemd，等人工重启）
+ *   → rolledback（自动回滚已生效）。
+ * 失败路径（校验不过 / 下载失败 / 依赖安装失败后回滚）**停在 pending** 等待下轮心跳重试，
+ * 或落到 rolledback；绝不会出现「校验失败却报已重启」这种撒谎状态。
+ */
+export const WORKER_UPDATE_STATES = {
+  /** 指令已收到，等待空闲（有活跃会话时保持此态，下轮心跳再试）。 */
+  PENDING: 'pending',
+  /** 正在下载 tarball 并做 sha256 校验（校验不过即放弃，绝不覆盖旧码）。 */
+  DOWNLOADING: 'downloading',
+  /** 新码已覆盖，systemd 重启执行中（重启后 worker 进程即换新码）。 */
+  RESTARTING: 'restarting',
+  /** 新码已覆盖但无 systemd：等人工重启（worker 绝不自杀、不 process.exit）。 */
+  READY_MANUAL: 'ready-manual',
+  /** 自动回滚已生效（新版本注册不上，已恢复 dist.prev 并上报）。 */
+  ROLLEDBACK: 'rolledback',
+} as const;
+
+export type WorkerUpdateState =
+  (typeof WORKER_UPDATE_STATES)[keyof typeof WORKER_UPDATE_STATES];
 
 export type WorkerCommandType =
   (typeof WORKER_COMMAND_TYPES)[keyof typeof WORKER_COMMAND_TYPES];
@@ -242,6 +298,17 @@ export interface GitCredentialsPayload {
 }
 
 /**
+ * update-worker 命令负载（可选形态）。
+ *
+ * 现网 server（Todo 3 已落地）把目标版本写在命令的 `resourceVersion` 上、**不带** payload；
+ * 本接口是为了让「将来 server 若改成显式负载」时 worker 无需改代码即可工作，故执行器
+ * 读 `payload?.version ?? command.resourceVersion`（两者都缺 → 放弃本次执行并告警）。
+ */
+export interface UpdateWorkerCommandPayload {
+  version: string;
+}
+
+/**
  * 心跳响应携带的下行命令（T4a，对齐 server WorkerCommand）。
  * 设计为通用 commands 数组（复用点：AgentsModule 配置变更重启也走此通道）。
  */
@@ -250,7 +317,10 @@ export interface WorkerCommand {
   /** 资源版本号：T1/T2 变更时递增，worker 侧据此判断是否需重拉注入 */
   resourceVersion: string;
   /** C5/T6：model-credentials 或 git-credentials 命令携带的凭据负载（仅该两 type 携带；reload-config 等不携带） */
-  payload?: ModelCredentialsPayload | GitCredentialsPayload;
+  payload?:
+    | ModelCredentialsPayload
+    | GitCredentialsPayload
+    | UpdateWorkerCommandPayload;
 }
 
 /** POST /workers/:id/heartbeat 成功响应（对齐 server workers.service.ts heartbeat 返回）。 */
