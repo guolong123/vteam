@@ -29,6 +29,7 @@ import { MessageChannelsModule } from './message-channels/message-channels.modul
 import { NotificationChannelsModule } from './notifications/notification-channels.module';
 import { TeamsModule } from './teams/teams.module';
 import { TimersModule } from './timers/timers.module';
+import { UsageModule } from './usage/usage.module';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { TimersModule } from './timers/timers.module';
     NotificationChannelsModule,
     TeamsModule,
     TimersModule,
+    UsageModule,
   ],
   controllers: [],
   providers: [],

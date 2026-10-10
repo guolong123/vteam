@@ -1,0 +1,239 @@
+================================================================================
+TASK 4 — usage-api：GET /teams/:teamId/usage 聚合接口
+Plan: .omo/plans/token-usage-stats.md (Todo 4, lines 110-120)
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Branch: feat/token-usage-stats
+Date: 2026-10-10
+================================================================================
+
+ENV
+--------------------------------------------------------------------------------
+node/npm/npx are NOT on default PATH. Every command was prefixed with:
+  export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"
+Node: v22.15.0
+Gate commands verified against server/package.json BEFORE use:
+  "test": "jest --runInBand"   (npx tsc --noEmit per plan acceptance criteria)
+
+--------------------------------------------------------------------------------
+FILES CREATED (5) / MODIFIED (1) — nothing else touched
+--------------------------------------------------------------------------------
+CREATED server/src/usage/usage.service.ts
+CREATED server/src/usage/usage.controller.ts
+CREATED server/src/usage/usage.module.ts
+CREATED server/src/usage/usage.service.spec.ts
+CREATED server/src/usage/usage.controller.spec.ts
+MODIFIED server/src/app.module.ts   (exactly 2 lines: :32 import, :77 imports[] entry)
+
+NOT touched (per Must NOT): worker/, web/, server/prisma/schema.prisma,
+server/prisma/migrations/**, server/src/chat/worker-dispatcher.ts (+spec),
+server/src/memories/**. No git commands were run.
+
+--------------------------------------------------------------------------------
+ENDPOINT SHAPE
+--------------------------------------------------------------------------------
+GET /api/v1/teams/:teamId/usage[?model=providerID/modelID]
+
+Controller: @Controller() bare-mounted + @Get('teams/:teamId/usage')
+  (mirrors chat.controller.ts:104/:164 scoped-endpoint pattern and
+   docs-site TeamPrototypesController; avoids coupling with TeamsController's
+   own `@Controller('teams')` `@Get(':id')`).
+
+Auth: global JwtAuthGuard (APP_GUARD) via @CurrentUser(); team membership
+  enforced in the SERVICE (same chain as memories.service):
+    team_user_members has a row            -> allow (no extra query)
+    no row -> isPlatformAdminByUserId(...) -> allow if platform admin
+    neither                               -> 403 PERMISSION_TEAM_NOT_MEMBER
+  fail-closed: no viewer (theoretically unreachable) is treated as non-member.
+  NO admin gate, NO row-level filtering (plan: 全员可见 / 统计 tab 无 admin 门).
+  Error code constant REUSED from common/guards/team-membership.guard
+  (TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER); admin predicate REUSED from
+  users/admin-permission.ts (isPlatformAdminByUserId). Zero duplication.
+
+Write surface: NONE. usage.controller.spec.ts asserts the controller class has
+  exactly one own handler (getTeamUsage) — the statistics API is read-only.
+
+--------------------------------------------------------------------------------
+RESPONSE CONTRACT (byte-identical to plan Todo 4 — CONTRACT with Todo 5/web)
+--------------------------------------------------------------------------------
+{
+  members: [{
+    teamMemberId, agentName, roleName,
+    totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost,
+    models: [{ model, totalTokens, inputTokens, outputTokens,
+               cacheReadTokens, cacheWriteTokens, cost }]
+  }],
+  teamTotal: { totalTokens, inputTokens, outputTokens, cacheReadTokens,
+               cacheWriteTokens, cost }
+}
+Exported TS interfaces (usage.service.ts): UsageViewer, UsageModelBreakdown,
+UsageMemberSummary, UsageTotals, TeamUsageResponse — Todo 5 should mirror these.
+
+--------------------------------------------------------------------------------
+SERVICE IMPLEMENTATION NOTES
+--------------------------------------------------------------------------------
+1. Single query (comment in code explains the choice):
+     prisma.modelUsage.groupBy({
+       by: ['teamMemberId', 'model'],
+       where: { teamId, ...(model ? { model } : {}) },
+       _sum: { totalTokens, inputTokens, outputTokens,
+               cacheReadTokens, cacheWriteTokens, cost }   // all `true`
+     })
+   `where:{teamId}` (+ optional `model` equality) matches the leading columns of
+   idx_usage_team_member(team_id, team_member_id) and
+   idx_usage_team_model(team_id, model). Aggregation happens DB-side, so only
+   "member x model" aggregate rows cross the wire — never the team's raw usage
+   rows (row count = call count, orders of magnitude larger).
+
+2. Three-layer totals share ONE accumulator (addInto / normalizeBucket), so
+   member subtotal = sum of its model buckets and teamTotal = sum of all rows
+   are same-source by construction (asserted by a test, not just by prose).
+
+3. Display names joined LIVE — never snapshotted:
+     prisma.teamMember.findMany({ where: { id: { in: memberIds } },
+       select: { id, agent: { name }, role: { name } } })
+   model_usage has no FK, so a deleted member can still have usage rows:
+   fallback agentName='' / roleName=null, numbers preserved.
+
+4. cost convention (documented in code):
+   model_usage.cost is NULL-able (NULL = upstream reported nothing = "unknown",
+   not 0 = "free"). Prisma `_sum` returns null when every row in a group is
+   NULL; normalizeBucket maps null -> 0 so NULL-cost rows PARTICIPATE AS 0 in
+   every sum and the response cost is ALWAYS a number (web never needs a null
+   branch). The unknown/free distinction survives at the detail-row level.
+   No rounding is applied (raw accumulation; $ + 4dp display is web's job).
+
+5. ?model= filter: trimmed; empty/blank = no filter (never yields empty results).
+
+6. Deterministic ordering: members by totalTokens DESC, tie -> teamMemberId ASC;
+   model buckets by totalTokens DESC, tie -> model name ASC. (Web need not re-sort.)
+
+7. Empty team / no rows -> {members: [], teamTotal: all-zeros with cost: 0} and
+   the member-name query is SKIPPED entirely.
+
+8. Not aggregated: reasoningTokens. It is absent from the plan's response
+   contract (the "6 fields" = 5 token counters + cost) and is already contained
+   in totalTokens upstream, so exposing/summing it separately would invite double
+   counting. Documented in the code comment. (Parent brief said "6 token fields
+   + cost"; the plan's byte-exact response shape won — see DECISIONS.)
+
+--------------------------------------------------------------------------------
+DECISIONS / DEVIATIONS (surfaced for F1 audit)
+--------------------------------------------------------------------------------
+D1. Sums cover the 5 contract token counters + cost, not reasoningTokens.
+    Rationale above. If F1/F3 wants reasoning surfaced, that is a CONTRACT change
+    affecting Todo 5's web types — it must be decided there, not smuggled in here.
+D2. Route is bare-mounted `@Controller()` + `teams/:teamId/usage` rather than
+    `@Controller('teams')` + `:teamId/usage`, following the cited chat.controller
+    scoped-endpoint anchor. Same effective URL.
+D3. No team-existence 404 check: the plan asks for an empty-team ZERO structure,
+    and membership+admin is the only gate specified. Non-members get 403 for an
+    unknown team too (fail closed, no existence oracle).
+
+--------------------------------------------------------------------------------
+TESTS (22 new, all green)
+--------------------------------------------------------------------------------
+usage.service.spec.ts (16)
+  - 403 PERMISSION_TEAM_NOT_MEMBER for cross-team / no membership row, non-admin
+  - no viewer -> 403 (fail closed, never fail open)
+  - platform admin with NO membership row still allowed (AdminGuard parity)
+  - member path does not run the extra admin/user query
+  - groupBy arg shape asserted verbatim (by/_sum/where) -> locks the query choice
+  - ?model= exact filter; blank model = no filter; filtered-empty -> zeros
+  - empty team -> {members: [], teamTotal: all zeros}, member query skipped
+  - single member single model: field-by-field passthrough + live name join
+  - ONE member TWO models: models split into rows, subtotal = sum of buckets
+  - multi member/multi model: member ordering + THREE-LAYER CONSISTENCY
+    (sum of member subtotals === teamTotal, asserted numerically)
+  - null cost participates as 0 at bucket/member/team level
+  - role-less member -> roleName null
+  - deleted member (no FK row) -> agentName '' + numbers preserved
+  - deterministic tie-break ordering (members and models)
+
+usage.controller.spec.ts (6)  [real UsageService injected, not a stub]
+  - route metadata: bare mount + `teams/:teamId/usage` + RequestMethod.GET
+  - controller exposes exactly ONE handler (zero write endpoints)
+  - 200 happy path: viewer/teamId reach the query, member + total returned
+  - 200 empty team -> {members: [], teamTotal: zeros}
+  - ?model= forwarded as an exact-equality where filter
+  - cross-team non-member -> 403 PERMISSION_TEAM_NOT_MEMBER, usage query never runs
+
+--------------------------------------------------------------------------------
+GATE RESULTS (exact commands + numbers)
+--------------------------------------------------------------------------------
+$ export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"
+
+$ cd server && npx tsc --noEmit
+  EXIT=0, no diagnostics output.                                            [PASS]
+
+$ cd server && npx eslint "src/usage/**/*.ts" "src/app.module.ts"
+  EXIT=0, 0 problems (after --fix for prettier import/newline formatting). [PASS]
+
+$ cd server && npx jest --runInBand src/usage
+  Test Suites: 2 passed, 2 total
+  Tests:       22 passed, 22 total                                        [PASS]
+
+$ cd server && npm run test          (FULL SUITE)
+  Test Suites: 1 failed, 169 passed, 170 total
+  Tests:       1 failed, 4006 passed, 4007 total
+  Time:        28.001 s
+
+  Baseline was 168 suites / 3985 tests. This run adds exactly my 2 suites and
+  22 tests (4007 - 22 = 3985; 170 - 2 = 168) => NO regression, NO pre-existing
+  test was altered or removed.
+
+  THE ONE FAILURE IS NOT MINE — IT IS A TODO 3 BLOCKER:
+    FAIL src/common/id-resync.guard.spec.ts
+    防回归：IdGeneratorService 前缀须有启动期 resync
+      - Array [] + Array [ "前缀 'us' 缺失 resync，生成点：chat/worker-dispatcher.ts:124" ]
+
+  Root cause (verified by reading the guard source and the offending line):
+  id-resync.guard.spec.ts does a LINE-TEXT scan (`collectCallArgs(text,'nextId')`)
+  over src/**, so it matches the literal string `nextId('us')` even inside a
+  COMMENT. server/src/chat/worker-dispatcher.ts:124 reads exactly:
+      // nextId('us') 生成点，计数器归零撞主键那一类事故在本表不可能发生
+  i.e. Todo 3's rationale comment explaining why that class does NOT call
+  resyncIdPrefix trips the scanner and registers prefix 'us' as a generation
+  site with no resync.
+
+  Proof it is outside this task:
+  - `grep -n "nextId(\|resyncIdPrefix(" src/usage/*.ts src/app.module.ts`
+    -> (none). This todo creates zero id-generation points.
+  - The failing file src/chat/worker-dispatcher.ts is EXPLICITLY OUT OF SCOPE for
+    Todo 4 (Todo 3 owns it, running in parallel); I did not and will not edit it.
+  - I did not weaken, skip, or touch any test.
+
+  Fix belongs to Todo 3 (either is one line, both in ITS file):
+    (a) reword the comment so it does not contain the literal `nextId('us')`
+        (e.g. write "nextId 生成点" /「计数器生成点」), or
+    (b) keep the comment and register `us` in RESYNC_EXEMPT in
+        src/common/id-resync.guard.spec.ts WITH a >10 char rationale
+        (the guard's second test enforces that any exemption carries a reason).
+
+--------------------------------------------------------------------------------
+SCOPE GUARDRAILS (plan line 115 "Must NOT" + Scope Must NOT have)
+--------------------------------------------------------------------------------
+- Write endpoints of any kind: NONE (one GET; asserted by a test).
+- Time series / pagination: NONE (single cumulative groupBy, no orderBy/take/skip,
+  no createdAt slicing; the createdAt index is deliberately unused by this API).
+- Name snapshots: NONE (ids only in the table; names joined live every request).
+- worker/, web/, server/prisma/schema.prisma, server/prisma/migrations/**,
+  server/src/chat/worker-dispatcher.ts (+spec), server/src/memories/**: UNTOUCHED.
+- Existing controllers: UNCHANGED (only app.module.ts gained 2 lines).
+- package.json: UNTOUCHED, zero new dependencies.
+- `as any` / `@ts-ignore` / empty catch in new files: NONE (grep-verified).
+- Git commands: NONE run.
+
+--------------------------------------------------------------------------------
+DOWNSTREAM CONTRACT (for Todo 5 usage-web)
+--------------------------------------------------------------------------------
+Endpoint : GET /api/v1/teams/:teamId/usage
+Query    : ?model=<providerID/modelID>   (optional, exact match)
+Auth     : Bearer token; 403 PERMISSION_TEAM_NOT_MEMBER when not a team member
+Type     : TeamUsageResponse (server/src/usage/usage.service.ts) — mirror exactly:
+           { members: UsageMemberSummary[], teamTotal: UsageTotals }
+Notes    : every number is a real number (never null/undefined), including cost
+           (NULL upstream = 0 in aggregates); ordering already deterministic
+           (members & models both by totalTokens DESC); empty team yields
+           {members: [], teamTotal: zeros} so the web tab can render EmptyState
+           off `members.length === 0`.
+================================================================================
