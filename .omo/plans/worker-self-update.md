@@ -63,7 +63,7 @@ Your next move: approve 后执行 `$start-work worker-self-update`，或先运�
 ## Todos
 > Implementation + Test = ONE todo. Never separate.
 <!-- APPEND TASK BATCHES BELOW THIS LINE WITH edit/apply_patch - never rewrite the headers above. -->
-- [ ] 1. uw-version-stamp：版本戳与发布包版本文件
+- [x] 1. uw-version-stamp：版本戳与发布包版本文件
   What to do / Must NOT do:
   - `scripts/pack-worker.sh`：打包前生成 `worker/dist/version.js`（`export const WORKER_CODE_VERSION='...'`，值 = `git rev-parse --short HEAD`，非 git/失败回退 `manual-<YYYYMMDD>`；注意 dist 是 tsc 产物目录，version 文件生成时机放在 npm run build 之后、tar 打包之前，或以 build 脚本钩子注入——读脚本现状选实现，确保 `tar` 清单包含它）；打包后对 tarball 计 sha256 并生成 `web/public/worker-src.version.json` = `{"version","sha256","builtAt"}`；`tar` 清单维持不变（dist 会自然带上 version.js）
   - worker 运行时版本模块（新文件，如 `worker/src/version.ts`）：`resolveCodeVersion(env)` = env `WORKER_CODE_VERSION`（容器/集群注入，优先）> 读 dist/version.js（try/catch，模块缺失/'dev' 回退）> `'dev'`；单测三优先级
@@ -75,7 +75,7 @@ Your next move: approve 后执行 `$start-work worker-self-update`，或先运�
   Acceptance: `sh scripts/pack-worker.sh` 成功且 tar 内含 version.js、version.json 字段齐全 sha256 吻合；worker `npm run typecheck` + scoped jest 绿；compose/chart 渲染含注入
   QA: happy——打包冒烟断言；failure——version.js 缺失时 resolve 回退 'dev'。Evidence .omo/evidence/task-1-worker-self-update.txt
   Commit: Y | feat(worker): 构建版本戳与发布包版本文件
-- [ ] 2. uw-heartbeat-proto：心跳协议版本通道（两端 + 迁移 + env）
+- [x] 2. uw-heartbeat-proto：心跳协议版本通道（两端 + 迁移 + env）
   What to do / Must NOT do:
   - 迁移：workers 表 += `code_version varchar(191) NULL`（+ 索引可选，行数极小可不加）；守卫测试照抄 memory-refcount 模板（schema 声明/基线不含/无回填）
   - server DTO：`RegisterWorkerDto`/`HeartbeatWorkerDto` += `codeVersion?: string`（可选，IsOptional/IsString）；register upsert + heartbeat 刷新写 `codeVersion`（缺席不覆盖已有值或写 null——语义自定并注释）
@@ -89,7 +89,7 @@ Your next move: approve 后执行 `$start-work worker-self-update`，或先运�
   Acceptance: `cd server && npx tsc --noEmit` + `npm run test` 绿（报数）；`cd worker && npm run typecheck` + test 绿；helm template 渲染含 CODE_VERSION
   QA: happy——旧 payload 注册成功且响应含结构；failure——env 缺省无 expectedVersion 且不报错。Evidence .omo/evidence/task-2-worker-self-update.txt
   Commit: Y | feat(worker): 心跳协议版本通道与迁移
-- [ ] 3. uw-command-api：更新指令端点（server）
+- [x] 3. uw-command-api：更新指令端点（server）
   What to do / Must NOT do:
   - `POST /workers/:id/update`（workers.controller，守卫对齐该控制器既有管理端点——查现状用 JWT 还是 admin，沿用并注释）：worker 不存在 → 404；当前 offline → 409（离线无法接收指令）；幂等——已 pending 同版本直接返回 ok（结构 `{status:'pending', version}`）；写内存 map（workerId → {version, requestedAt}，服务重启丢失可接受，注释说明）
   - 心跳响应透出 pendingUpdate（与 Todo 2 的响应结构汇合；若 Todo 2 先落则此处填值）；worker 执行完成后（Todo 4 上报 ack 或下轮心跳无 pending——**ack 语义在此定义**：建议 worker 执行成功后心跳请求带 `updateAck:true` 或 server 在检测到 codeVersion 已对齐时自动清除 pending——选后者更简单：**心跳里 codeVersion == expectedVersion 且存在 pending → 清除**，注释该收敛规则）
@@ -101,7 +101,7 @@ Your next move: approve 后执行 `$start-work worker-self-update`，或先运�
   Acceptance: server tsc + `npm run test` 绿（报数）；端点矩阵四态（200/200 幂等/404/409）覆盖
   QA: happy——两次点击幂等且响应一致；failure——offline worker 409。Evidence .omo/evidence/task-3-worker-self-update.txt
   Commit: Y | feat(worker): 更新指令下发端点
-- [ ] 4. uw-worker-executor：更新执行器 + 自动回滚（worker）
+- [x] 4. uw-worker-executor：更新执行器 + 自动回滚（worker）
   What to do / Must NOT do:
   - 指令接入 = **既有 `dispatchCommands` 路由新增 kind `update-worker`**（index.ts :1079 已有分发骨架与 spec——新增 case 调执行器，**先读既有 dispatchCommands 避免与 T4a 命令重入/状态冲突**，Momus 非阻断提示点名要求）；同一时刻仅一个执行流（防重入锁）
   - 执行器步骤（严格顺序 + 每步失败策略）：a) idle 判定——`load.instances > 0` 或已知 running 会话数 > 0 → 跳过本轮（保持 pending，下轮心跳再试，debug 日志）；b) 下载 tarball（URL = 从 install 时 src-url 推导或心跳未带则用 `${serverUrl origin}/worker-src.tar.gz`——**读 install-worker.sh 的缺省推导 `SERVER_URL%/worker-src.tar.gz` 保持同源**）到临时文件 + 下载 version.json 取期望 sha256（version.json 缺失/不匹配 → 放弃并 warn，退避重试）；c) `sha256sum/shasum` 校验（失败即弃，绝不覆盖）；d) lock 是否变化比对（下载的 package-lock vs 本地）→ 变化则覆盖后 `npm ci --omit=dev`（失败 → 立即回滚 dist 并告警）；e) 备份 `rm -rf dist.prev && mv dist dist.prev` → 解压 tarball 的 dist/（及 package*.json、scripts——.env 不在包内天然安全）；f) systemd 检测：`systemctl` + `/run/systemd/system` +（用户级 unit 存在或系统级存在）→ `systemctl [--user] restart aiagents-worker`；g) 无 systemd → **不重启不退出**，置状态 `ready-manual`（心跳上报，UI 显示"已下载待手动重启"）
@@ -114,7 +114,7 @@ Your next move: approve 后执行 `$start-work worker-self-update`，或先运�
   Acceptance: worker typecheck + `npm run test` 全绿（报数）
   QA: happy——mock 全链成功且 systemd 被调；failure——sha256 不符不覆盖 + 阈值回滚。Evidence .omo/evidence/task-4-worker-self-update.txt
   Commit: Y | feat(worker): 更新执行器与自动回滚
-- [ ] 5. uw-web-ui：Worker 节点页版本徽章与更新按钮
+- [x] 5. uw-web-ui：Worker 节点页版本徽章与更新按钮
   What to do / Must NOT do:
   - `web/app/(main)/workers/page.tsx`（+shared.tsx 若卡片在此）：卡片 += codeVersion 徽章（mono 字体，短 SHA 展示）；`codeVersion !== expectedVersion` → "待更新"高亮；`updateState` 状态行（pending/downloading/restarting → 执行中、ready-manual → "已下载待手动重启"、rolledback → "已回滚（新版本异常）"警示）；【更新】按钮——仅 `codeVersion !== expectedVersion` 时可见（一致则无意义），点击 → `POST /workers/:id/update` → 成功转"已下发，空闲后执行"（pending 态）；按钮防双击（请求中 disabled）；admin/守卫门对齐该页既有约定（读页面现状：Worker 页对普通用户可见性如何处理就如何）
   - 错误面：`isApiError` 展示 404/409；`GET /workers` 出参类型扩展（WorkerItem += codeVersion/expectedVersion/pendingUpdate/updateState/rolledBack，字段与 Todo 3 实际实现**逐字对齐——先读服务端出参再写类型**）
@@ -125,7 +125,7 @@ Your next move: approve 后执行 `$start-work worker-self-update`，或先运�
   Acceptance: web tsc + lint(0 err/729 基线) + build 绿；徽章三态渲染（一致/待更新/回滚）+ 按钮四态（可见/禁用中/已下发/不可用）
   QA: happy——build+lint 绿且（有条件时）浏览器断言徽章与点击流；failure——409 展示正确。Evidence .omo/evidence/task-5-worker-self-update.txt
   Commit: Y | feat(web): worker 版本徽章与更新按钮
-- [ ] 6. uw-e2e：端到端验证（更新链 + 回滚链 + 兼容性）
+- [x] 6. uw-e2e：端到端验证（更新链 + 回滚链 + 兼容性）
   What to do / Must NOT do:
   - 场景矩阵（可用栈或降级口径，诚实声明）：① 旧 worker 心跳（无 codeVersion）→ server 不炸、UI 显示未知/待更新 ② 点更新 → 指令下发 → worker 空闲执行下载换码重启 → codeVersion 对齐、pending 自动清除、UI 转一致 ③ 人为破坏（改期望版本或喂坏 sha256）→ 不覆盖旧码/回滚生效、UI 显示已回滚 ④ 有 running 会话时点更新 → 指令保持 pending 不打断 ⑤ 无 systemd 模拟 → ready-manual 不退出 ⑥ pack-worker 产物冒烟（version.json sha256 吻合）
   - 无 docker/无真实 worker 机时允许降级：server 集成测试（supertest 指令矩阵）+ worker 单测引用 + web build 冒烟，声明口径
@@ -138,10 +138,10 @@ Your next move: approve 后执行 `$start-work worker-self-update`，或先运�
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit okay before declaring complete.
-- [ ] F1. Plan compliance audit：Must have / Must NOT 逐条（重点：无全自动、无批量、硬崩溃不自动回滚、旧 worker 兼容、pending 不落库、校验不过不覆盖、无 systemd 不退出）
-- [ ] F2. Code quality review：server+worker+web 三端门禁重跑；无 `as any`/空 catch/吞错；更新路径每步失败策略可追溯
-- [ ] F3. Real manual QA：本地/生产链路实测（版本徽章、按钮流、回滚）
-- [ ] F4. Scope fidelity：git diff 范围（未动 install-worker 首装/start.sh 校验/register 鉴权、package.json 零 diff）
+- [x] F1. Plan compliance audit：Must have / Must NOT 逐条（重点：无全自动、无批量、硬崩溃不自动回滚、旧 worker 兼容、pending 不落库、校验不过不覆盖、无 systemd 不退出）
+- [x] F2. Code quality review：server+worker+web 三端门禁重跑；无 `as any`/空 catch/吞错；更新路径每步失败策略可追溯
+- [x] F3. Real manual QA：本地/生产链路实测（版本徽章、按钮流、回滚）
+- [x] F4. Scope fidelity：git diff 范围（未动 install-worker 首装/start.sh 校验/register 鉴权、package.json 零 diff）
 
 ## Commit strategy
 - 每 todo 单独 commit（scope=worker/web）：`feat(worker): <subject>` / `feat(web): <subject>`；小改 amend 合并；迁移文件随其 todo 提交
