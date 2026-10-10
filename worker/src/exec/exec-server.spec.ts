@@ -8,7 +8,7 @@
  *   session.updated(idle) → task.completed
  * - 失败路径：awaitCompletion 首字超时 → agent.status(error) + session.updated(failed) + abort
  * - trackInstance 计数增减（执行期间 = 1，完成后归零）
- * - usage-ctx：task.completed 事件体携带 model（payload.model 原样组合，缺失落哨兵 unknown）
+ * - usage-ctx：task.completed 事件体携带 model（payload.model 优先，缺失回退 serve 回报的实际模型，皆缺落哨兵 unknown）
  * - 请求校验：非 /execute 404、非 POST 405、缺 prompt 400
  * - GET /file（FR-41）：鉴权 401（缺失/错误 token）、成功 200 二进制内容、
  *   不存在 404、目录 400、超 10MB 413、缺 path 400
@@ -33,10 +33,26 @@ import {
   MAX_IMAGE_ATTACHMENT_BYTES,
   MAX_PLAN_DOC_BYTES,
   MAX_PLAN_UPLOAD_BYTES,
+  resolveUsageModelKey,
 } from './exec-server';
 
 function asstMsg(id: string, parts: ServePart[]): ServeMessage {
   return { info: { id, role: 'assistant' }, parts };
+}
+
+function finishMsgWithModel(modelInfo: Record<string, unknown>): ServeMessage {
+  const msg = asstMsg('a1', [textPart('Hello'), stepFinishPart()]);
+  Object.assign(msg.info, modelInfo);
+  return msg;
+}
+
+/** 覆盖 getMessages：前 2 次（sendAndAwait 基线快照）返回空会话，之后返回指定 msgs。 */
+function serveMessages(getMessages: jest.Mock, msgs: ServeMessage[]): void {
+  let calls = 0;
+  getMessages.mockImplementation(async () => {
+    calls += 1;
+    return calls <= 2 ? [] : msgs;
+  });
 }
 
 function textPart(text: string): ServePart {
@@ -470,6 +486,79 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     } finally {
       await exec.stop();
     }
+  });
+
+  it('model 回退：payload.model 缺失 + serve 回报 info 模型 → task.completed 记实际模型（零配置真相）', async () => {
+    const { driver, getMessages } = mockDriver();
+    serveMessages(getMessages, [
+      finishMsgWithModel({ providerID: 'opencode', modelID: 'big-pickle' }),
+    ]);
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 5);
+      const completed = sent.find((s) => s.type === 'task.completed');
+      expect(completed?.payload.model).toBe('opencode/big-pickle');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('model 优先级：payload.model 显式配置 > serve 回报模型（配置即事实）', async () => {
+    const { driver, getMessages } = mockDriver();
+    serveMessages(getMessages, [
+      finishMsgWithModel({ providerID: 'serve-side', modelID: 'drifted' }),
+    ]);
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, {
+        taskId: 't_1',
+        model: { providerID: 'opencode', modelID: 'grok-code' },
+        prompt: 'go',
+      });
+      await waitFor(() => sent.length >= 5);
+      const completed = sent.find((s) => s.type === 'task.completed');
+      expect(completed?.payload.model).toBe('opencode/grok-code');
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('model 回退：info 缺 modelID / 只有 modelID / 非字符串畸形 → 均落哨兵串 unknown', async () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['缺 modelID', { providerID: 'opencode' }],
+      ['只有 modelID', { modelID: 'grok-code' }],
+      ['非字符串畸形', { providerID: 42, modelID: { id: 'grok-code' } }],
+      ['空串', { providerID: '', modelID: '' }],
+      ['无字段', {}],
+    ];
+    for (const [label, modelInfo] of cases) {
+      const { driver, getMessages } = mockDriver();
+      serveMessages(getMessages, [finishMsgWithModel(modelInfo)]);
+      const { sender, sent } = createSender();
+      const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+      const bound = await exec.start();
+      try {
+        await postExecute(bound, { taskId: 't_1', prompt: 'go' });
+        await waitFor(() => sent.length >= 5);
+        const completed = sent.find((s) => s.type === 'task.completed');
+        expect(completed?.payload.model).toBe('unknown');
+      } finally {
+        await exec.stop();
+      }
+      expect(label).toBeTruthy();
+    }
+  });
+
+  it('resolveUsageModelKey：config 有效取 config，config 缺失取 serve 回报，两级皆缺落哨兵串', () => {
+    expect(resolveUsageModelKey({ providerID: 'c', modelID: 'm' }, { providerID: 's', modelID: 'm' })).toBe('c/m');
+    expect(resolveUsageModelKey(null, { providerID: 's', modelID: 'm' })).toBe('s/m');
+    expect(resolveUsageModelKey(undefined, undefined)).toBe('unknown');
+    expect(resolveUsageModelKey({ providerID: '', modelID: 'm' }, null)).toBe('unknown');
   });
 
   it('失败路径（awaitCompletion 首字超时）→ agent.status(error) + session.updated(failed) + abort', async () => {

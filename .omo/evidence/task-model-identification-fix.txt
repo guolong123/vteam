@@ -1,0 +1,130 @@
+================================================================================
+TASK: Fix model identification in token usage records (model='unknown' in prod)
+Repo: /Volumes/SSD-Data/01work/git-project/vteam   Branch: feat/token-usage-stats
+Date: 2026-10-10
+Env: node v22.15.0 / npm 10.9.2  (export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH")
+================================================================================
+
+## 1. PROBLEM
+All production rows in model_usage landed model='unknown'.
+
+Verified chain:
+  DB: agents.*.default_model_id = NULL + worker.default_model_id = NULL
+    → server dispatcher toModelSelection(...) → null
+    → worker/client.ts:373 sends `model` in the prompt body ONLY when truthy
+    → serve uses its own configured default (SEEDED_OMO_DEFAULT_MODEL)
+    → the model actually used was never surfaced anywhere
+    → exec-server ctx.model = usageModelKey(payload.model) = UNKNOWN_MODEL_KEY ('unknown')
+    → all 19 prod rows 'unknown'.
+
+Root gap: ServeMessage.info carries modelID/providerID on assistant messages
+(opencode message info) but NO code read them.
+
+## 2. CHANGES (worker only — 2 source files + 2 spec files)
+
+### worker/src/driver/prompt-await.ts
+- import DriverModelRef from './v1-driver'.
+- CompletionResult gains `model?: DriverModelRef` (documented: serve-reported model,
+  undefined when absent/malformed — never fabricated).
+- NEW extractModelInfo(m): index-signature-safe read of info.providerID/info.modelID
+  (same defensive style as the existing info.error read at ~:124). BOTH must be
+  non-empty strings, otherwise undefined (no half-built "modelID-only" keys).
+- NEW exported findAssistantModel(messages): prefers the assistant message that owns
+  step-finish(reason=stop) (tool loops may switch models); falls back to the last
+  assistant message on the timeout path (no finish). user messages are never used.
+- buildResult() (~:381) now sets `...(model ? { model } : {})` alongside tokens/cost.
+- Threading: buildResult's output is CompletionResult, returned by awaitCompletion and
+  by sendAndAwait → runSendAndAwait already returns it verbatim, so
+  `result.model` reaches exec-server with no signature changes anywhere.
+
+### worker/src/exec/exec-server.ts
+- NEW exported helper `resolveUsageModelKey(configured, reported)` (~:269) — the ONE
+  place the task.completed model chain is produced. Format still comes exclusively from
+  usageModelKey (`providerID/modelID`), so the byte format cannot diverge.
+  Precedence (documented in the doc comment):
+    1. payload.model  — explicit config (agent/worker default_model_id) wins.
+    2. serve-reported model (CompletionResult.model) — the only truth source for
+       zero-config environments.
+    3. UNKNOWN_MODEL_KEY ('unknown') — neither available.
+- task.completed (~:1584): `model: modelKey` placed AFTER `...ctx` so it is not
+  overwritten by the ctx value (which stays the pre-completion config-only value used
+  by streaming events: session.updated running/idle). Backward compatible: the field
+  was already required-non-empty string in the event body.
+- describeModel() log line extended for ops visibility:
+    model=<resolved> (config=<payload.model|default> serve=<info model|default>)
+
+### NOT touched (deliberately)
+- server/ — dispatcher is already correct (sends model when configured).
+- web/ — no changes (see §5 note about a concurrent sibling session).
+- handlePolledCompletion / poll path — dormant under 方案 A; no such symbol exists in
+  worker/src (verified by grep) → nothing to touch, left model-less as F2 documented.
+- dispatcher, usageModelKey format, UNKNOWN_MODEL_KEY value — unchanged.
+- No `as any`, no `@ts-ignore`, no empty catch added.
+
+## 3. TESTS ADDED (16 new, all green)
+
+prompt-await.spec.ts (+12):
+- findAssistantModel: info with both fields → {providerID, modelID};
+  finish-owning message wins over earlier messages; no finish → last assistant message;
+  missing modelID → undefined; missing providerID → undefined; non-string/malformed
+  → undefined; empty/blank → undefined; no fields / empty list → undefined;
+  user message carrying model fields → ignored.
+- awaitCompletion: result.model carries the serve model; no info model → undefined;
+  modelID-only → undefined (strict, matches usageModelKey contract).
+
+exec-server.spec.ts (+4):
+- payload.model absent + serve reports model → task.completed model = 'opencode/big-pickle'.
+- payload.model WINS over a differing serve-reported model ('opencode/grok-code').
+- table-driven: missing modelID / modelID-only / non-string malformed / empty strings /
+  no fields → all 'unknown'.
+- resolveUsageModelKey unit: config>serve, config-missing→serve, neither→'unknown',
+  config with empty providerID → 'unknown'.
+
+## 4. GATES
+
+  cd worker && npm run typecheck   → clean, no output
+  cd worker && npm run test        → Test Suites: 25 passed, 25 total
+                                     Tests:       689 passed, 689 total
+                                     (baseline 25 suites / 673 tests → +16 new tests)
+  Snapshots: 0 total. Time ~32s.
+
+  git diff --stat (tracked, excl .omo):
+    worker/src/driver/prompt-await.ts      |  43 +++++++++++++-
+    worker/src/driver/prompt-await.spec.ts | 105 +++++++++++++++++++++++++++++
+    worker/src/exec/exec-server.ts         |  30 ++++++-
+    worker/src/exec/exec-server.spec.ts    |  91 ++++++++++++++++++++++++++-
+
+  server/ : untouched (no server/ paths appear in `git status`).
+  web/    : untouched BY ME — see §5.
+
+## 5. DISCLOSURE — concurrent modification in the same worktree
+`web/app/globals.css` shows as modified in `git status` (mtime 12:39:38, during this
+task's window). It is NOT part of this fix: the diff is a dark-mode scrollbar CSS
+change belonging to the concurrent "chat-ux-hierarchy-and-streaming" task (matching
+the untracked .omo/drafts/chat-ux-hierarchy-and-streaming.md etc.). A sibling
+session is editing the same checkout. My changes are confined to the 4 worker/ files
+listed above. Verify attribution with: git diff --stat -- worker/ server/ web/
+
+## 6. HOW TO VERIFY IN PROD
+1. Deploy this worker build (no server/web change needed).
+2. Make ONE real agent call from an environment with default_model_id = NULL
+   (the production condition that produced the 19 'unknown' rows).
+3. Check the worker log line for ops confirmation:
+   [exec] 执行完成 session=... model=<providerID/modelID> (config=(default) serve=<providerID/modelID>)
+   Both `serve=` and `model=` must show the serve default (e.g. opencode/big-pickle);
+   previously it printed model=(default).
+4. DB check:
+   SELECT model, tokens_input, tokens_output, cost, created_at
+     FROM model_usage ORDER BY id DESC LIMIT 5;
+   The newest row's model must be 'providerID/modelID' instead of 'unknown'.
+5. Regression guard for configured environments: set default_model_id on an agent,
+   run one call, confirm the row keeps the configured model even if serve reports a
+   different one (payload precedence, covered by the unit test).
+
+## 7. KEY FILE:LINE REFERENCES
+- worker/src/driver/prompt-await.ts:84-92   CompletionResult.model
+- worker/src/driver/prompt-await.ts:94-106  extractModelInfo
+- worker/src/driver/prompt-await.ts:113-124  findAssistantModel
+- worker/src/driver/prompt-await.ts:381-397  buildResult
+- worker/src/exec/exec-server.ts:269-288    resolveUsageModelKey (唯一出口)
+- worker/src/exec/exec-server.ts:1587-1600  TASK_COMPLETED model + describeModel 日志

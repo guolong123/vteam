@@ -266,6 +266,25 @@ function usageModelKey(model: DriverModelRef | null | undefined): string {
   return `${model.providerID}/${model.modelID}`;
 }
 
+/**
+ * task.completed 的 model 取值链（**唯一**出口，格式统一走 usageModelKey，禁止旁路拼接）：
+ *
+ * 1. `configured`（payload.model = 显式下发的模型，来源 agent/worker 的 default_model_id）
+ *    —— 配置即事实，优先级最高；显式配置了但 serve 回报不同模型时以配置为准（防 serve
+ *    会话中途被换模型的统计漂移）。
+ * 2. `reported`（serve 回报的实际模型 = CompletionResult.model，来自 assistant 消息
+ *    info.providerID/modelID）—— 零配置环境（default_model_id 为空 → 下发 body 不带
+ *    model）的唯一真相来源：serve 用自己的默认模型，不回报就永远落 unknown。
+ * 3. 两级都缺 → UNKNOWN_MODEL_KEY 哨兵串（下游无需判空）。
+ */
+export function resolveUsageModelKey(
+  configured: DriverModelRef | null | undefined,
+  reported: DriverModelRef | null | undefined,
+): string {
+  const fromConfig = usageModelKey(configured);
+  return fromConfig !== UNKNOWN_MODEL_KEY ? fromConfig : usageModelKey(reported);
+}
+
 /** 将字符串 prompt 归一为 parts 数组（对象数组直接透传）。 */
 export function normalizeParts(prompt: string | unknown[]): unknown[] {
   if (typeof prompt === 'string') {
@@ -1519,8 +1538,9 @@ export class ExecServer {
         agentId: payload.agentId,
         channelId: payload.channelId,
         sessionId: opencodeSessionId,
-        // 用量口径模型标识：随 ctx 扩散进 task.completed 事件体（server usage 落库按此归集）。
-        // 取 payload.model 原样组合，缺失落哨兵串——必填 string，下游无需判空。
+        // 用量口径模型标识：随 ctx 扩散进事件体（server usage 落库按 task.completed 的
+        // model 归集）。此处只是**完成前**能知道的显式配置口径（流式事件用），必填 string；
+        // task.completed 会用 resolveUsageModelKey 覆盖为零配置环境的 serve 实际模型。
         model: usageModelKey(payload.model),
       };
       await this.sender.send(WORKER_EVENT_TYPES.SESSION_UPDATED, {
@@ -1564,8 +1584,12 @@ export class ExecServer {
       });
       // P2/P3：doc/file 产出物文件内容上送（server 端落盘 uploads 生成可访问 URL）
       const artifacts = await collectFileArtifacts(result.text, payload.directory);
+      // 用量口径模型：覆盖 ctx.model（仅显式配置口径）——零配置环境改用 serve 回报的
+      // 实际模型（取值链见 resolveUsageModelKey）。放在 ...ctx 之后，避免被 ctx 覆盖。
+      const modelKey = resolveUsageModelKey(payload.model, result.model);
       await this.sender.send(WORKER_EVENT_TYPES.TASK_COMPLETED, {
         ...ctx,
+        model: modelKey,
         text: result.text,
         parts: result.parts,
         ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
@@ -1573,7 +1597,7 @@ export class ExecServer {
         ...(artifacts.length > 0 ? { artifacts } : {}),
       });
       this.logger.info(
-        `[exec] 执行完成 session=${opencodeSessionId} taskId=${payload.taskId ?? '-'} model=${describeModel(payload.model)} text=${result.text.length} chars`,
+        `[exec] 执行完成 session=${opencodeSessionId} taskId=${payload.taskId ?? '-'} model=${modelKey} (config=${describeModel(payload.model)} serve=${describeModel(result.model)}) text=${result.text.length} chars`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

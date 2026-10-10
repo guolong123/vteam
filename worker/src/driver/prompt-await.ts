@@ -17,7 +17,7 @@
  * 「模型完全没响应」才报错。
  */
 
-import { V1Driver, ServeMessage, ServePart, ServeTokens } from './v1-driver';
+import { V1Driver, ServeMessage, ServePart, ServeTokens, DriverModelRef } from './v1-driver';
 
 export interface AwaitCompletionOptions {
   /**
@@ -81,6 +81,43 @@ export interface CompletionResult {
   tokens?: ServeTokens;
   /** step-finish 的 cost */
   cost?: number;
+  /**
+   * **serve 实际使用的模型**（assistant 消息 `info.providerID`/`info.modelID`，opencode
+   * message info 实测字段）。零配置环境（default_model_id 为空）serve 自选默认模型，
+   * 调用方无从得知——本字段带出真实模型。缺失/非法一律 undefined（不造假数据），
+   * 与显式配置的优先级由 exec-server 决定。
+   */
+  model?: DriverModelRef;
+}
+
+/**
+ * 从 assistant 消息 `info` 取实际使用模型。沿用 info.error 的索引签名安全访问：
+ * 两个字段都必须是非空字符串才认可（任一缺失/空白/非字符串 → undefined，绝不半截拼接）。
+ */
+function extractModelInfo(m: ServeMessage): DriverModelRef | undefined {
+  const providerID = m.info?.providerID;
+  const modelID = m.info?.modelID;
+  if (typeof providerID !== 'string' || providerID.trim() === '') {
+    return undefined;
+  }
+  if (typeof modelID !== 'string' || modelID.trim() === '') {
+    return undefined;
+  }
+  return { providerID, modelID };
+}
+
+/**
+ * 本轮实际使用模型：优先取**持有 step-finish(reason=stop) 的那条 assistant 消息**的
+ * info（= 最后一次真实模型调用的归属消息，工具循环换模型时也以它为准）；无 finish
+ * （超时路径）则退化为最后一条 assistant 消息。
+ */
+export function findAssistantModel(messages: ServeMessage[]): DriverModelRef | undefined {
+  const assistants = messages.filter((m) => m.info?.role === 'assistant');
+  const owner =
+    assistants.find((m) =>
+      (m.parts ?? []).some((p) => p.type === 'step-finish' && p.reason === 'stop'),
+    ) ?? assistants[assistants.length - 1];
+  return owner ? extractModelInfo(owner) : undefined;
 }
 
 /**
@@ -341,9 +378,10 @@ export function aggregateText(messages: ServeMessage[]): string {
   return texts.map((p) => p.text ?? '').join('');
 }
 
-/** 从已收集消息构建聚合结果（tokens/cost 取 step-finish part）。 */
+/** 从已收集消息构建聚合结果（tokens/cost 取 step-finish part，model 取 finish 归属消息的 info）。 */
 function buildResult(messages: ServeMessage[]): CompletionResult {
   const finish = findFinish(messages);
+  const model = findAssistantModel(messages);
   return {
     text: aggregateText(messages),
     // P1 补充修复：parts 与 text 一致只取 assistant 消息——user 消息的 parts
@@ -354,6 +392,7 @@ function buildResult(messages: ServeMessage[]): CompletionResult {
       .flatMap((m) => m.parts ?? []),
     ...(finish?.tokens ? { tokens: finish.tokens } : {}),
     ...(finish?.cost !== undefined ? { cost: finish.cost } : {}),
+    ...(model ? { model } : {}),
   };
 }
 

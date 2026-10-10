@@ -3,6 +3,7 @@
  *
  * mock V1Driver，覆盖：
  * - 完成判定：assistant 消息含 step-finish(reason=stop) → 返回文本/tokens/cost
+ * - 实际模型：info.providerID/modelID → CompletionResult.model（缺失/半截/非字符串 → undefined）
  * - 无 step-finish 持续轮询（getMessages 多次调用）
  * - 首字判定：reasoning（思考）产出即算首字（serve 先 reasoning 后 text）——只有
  *   reasoning 无 text 时不超时、持续轮询到 step-finish；仅「text/reasoning 均无」才超时
@@ -19,6 +20,7 @@ import {
   sendAndAwait,
   aggregateText,
   findFinish,
+  findAssistantModel,
   CompletionTimeoutError,
   describeTimeoutReason,
   extractServeError,
@@ -32,6 +34,13 @@ function userMsg(parts: ServePart[] = []): ServeMessage {
 
 function asstMsg(id: string, parts: ServePart[]): ServeMessage {
   return { info: { id, role: 'assistant' }, parts };
+}
+
+/** assistant 消息带 serve 回报的实际模型字段（info.providerID / info.modelID）。 */
+function asstModelMsg(id: string, parts: ServePart[], modelInfo: Record<string, unknown>): ServeMessage {
+  const msg = asstMsg(id, parts);
+  Object.assign(msg.info, modelInfo);
+  return msg;
 }
 
 /** assistant 消息带 serve 直接透传的 info.error（如 APIError；实测 parts=[]）。 */
@@ -90,6 +99,73 @@ describe('findFinish（完成判定铁律）', () => {
       ]),
     ];
     expect(findFinish(msgs)).toBeUndefined();
+  });
+});
+
+describe('findAssistantModel（serve 实际使用模型）', () => {
+  it('info 携带 providerID + modelID → 原样带出（零配置环境的真实模型）', () => {
+    const msgs = [
+      asstModelMsg('a1', [textPart('x', 100), stepFinishPart()], {
+        providerID: 'opencode',
+        modelID: 'grok-code',
+      }),
+    ];
+    expect(findAssistantModel(msgs)).toEqual({ providerID: 'opencode', modelID: 'grok-code' });
+  });
+
+  it('取持有 step-finish 的那条消息（工具循环换模型时以最后真实调用为准）', () => {
+    const msgs = [
+      asstModelMsg('a1', [stepFinishPart({ reason: 'tool-calls' })], {
+        providerID: 'p1',
+        modelID: 'm1',
+      }),
+      asstModelMsg('a2', [stepFinishPart()], { providerID: 'p2', modelID: 'm2' }),
+    ];
+    expect(findAssistantModel(msgs)).toEqual({ providerID: 'p2', modelID: 'm2' });
+  });
+
+  it('无 step-finish（超时路径）→ 退化为最后一条 assistant 消息的模型', () => {
+    const msgs = [
+      asstModelMsg('a1', [], { providerID: 'p1', modelID: 'm1' }),
+      asstModelMsg('a2', [{ id: 'p1', type: 'reasoning', text: '...' }], {
+        providerID: 'p2',
+        modelID: 'm2',
+      }),
+    ];
+    expect(findAssistantModel(msgs)).toEqual({ providerID: 'p2', modelID: 'm2' });
+  });
+
+  it('只有 modelID 缺 providerID → undefined（不半截拼接）', () => {
+    const msgs = [asstModelMsg('a1', [stepFinishPart()], { modelID: 'grok-code' })];
+    expect(findAssistantModel(msgs)).toBeUndefined();
+  });
+
+  it('只有 providerID 缺 modelID → undefined', () => {
+    const msgs = [asstModelMsg('a1', [stepFinishPart()], { providerID: 'opencode' })];
+    expect(findAssistantModel(msgs)).toBeUndefined();
+  });
+
+  it('非字符串（malformed）→ undefined', () => {
+    const msgs = [
+      asstModelMsg('a1', [stepFinishPart()], { providerID: 42, modelID: { id: 'grok-code' } }),
+    ];
+    expect(findAssistantModel(msgs)).toBeUndefined();
+  });
+
+  it('空串/空白串 → undefined', () => {
+    expect(findAssistantModel([asstModelMsg('a1', [stepFinishPart()], { providerID: '', modelID: 'm' })])).toBeUndefined();
+    expect(findAssistantModel([asstModelMsg('a2', [stepFinishPart()], { providerID: 'p', modelID: '   ' })])).toBeUndefined();
+  });
+
+  it('info 无任何模型字段（serve 未回报）→ undefined', () => {
+    expect(findAssistantModel([asstMsg('a1', [stepFinishPart()])])).toBeUndefined();
+    expect(findAssistantModel([])).toBeUndefined();
+  });
+
+  it('user 消息携带模型字段 → 不采信（只有 assistant 消息是模型输出）', () => {
+    const user = userMsg();
+    Object.assign(user.info, { providerID: 'p', modelID: 'm' });
+    expect(findAssistantModel([user])).toBeUndefined();
   });
 });
 
@@ -273,6 +349,35 @@ describe('awaitCompletion', () => {
     expect(result.cost).toBe(0.25);
     expect(result.tokens).toEqual({ input: 50, output: 8 });
     expect(getMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it('CompletionResult 带出 serve 实际模型（info.providerID/modelID）', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([
+      userMsg([textPart('hi', 100)]),
+      asstModelMsg('a1', [textPart('Hello!', 200), stepFinishPart()], {
+        providerID: 'opencode',
+        modelID: 'grok-code',
+      }),
+    ]);
+    const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 1000, pollMs: 5 });
+    expect(result.model).toEqual({ providerID: 'opencode', modelID: 'grok-code' });
+  });
+
+  it('info 未回报模型 → result.model 为 undefined（不造假数据）', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('x', 100), stepFinishPart()])]);
+    const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 1000, pollMs: 5 });
+    expect(result.model).toBeUndefined();
+  });
+
+  it('info 只带 modelID → result.model undefined（严格，与 usageModelKey 口径一致）', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([
+      asstModelMsg('a1', [textPart('x', 100), stepFinishPart()], { modelID: 'grok-code' }),
+    ]);
+    const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 1000, pollMs: 5 });
+    expect(result.model).toBeUndefined();
   });
 
   it('无 step-finish 持续轮询直到出现（getMessages 多次调用）', async () => {
