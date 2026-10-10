@@ -39,6 +39,8 @@ export interface UsageModelBreakdown extends UsageTotals {
 /** 单个团队成员的小计 + 其模型维度展开行。 */
 export interface UsageMemberSummary extends UsageTotals {
   teamMemberId: string;
+  /** 成员实例显示名（TeamMember.alias：别名或「角色中文名-序号」，如 测试-1；同 Agent 多实例据此区分）。 */
+  memberName: string;
   agentName: string;
   /** AgentRole 名称（实时联表，非快照）；成员已删除 / 未绑角色时为 null。 */
   roleName: string | null;

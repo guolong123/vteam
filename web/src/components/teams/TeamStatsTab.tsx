@@ -5,7 +5,7 @@
  * =============================================================
  * 定位：**纯只读展示**，一个数据源 `GET /teams/:teamId/usage` 撑起整页，零额外请求。
  * - 数据源 server/src/usage/usage.service.ts 的 `TeamUsageResponse`：
- *   `{members: [{teamMemberId, agentName, roleName, 6 个数值, models:[…]}], teamTotal: {6 个数值}}`。
+ *   `{members: [{teamMemberId, memberName, agentName, roleName, 6 个数值, models:[…]}], teamTotal: {6 个数值}}`。
  *   三层汇总（成员小计 / 模型桶 / 团队合计）由**服务端同一个 addInto** 累加得出，
  *   前端因此可以把卡片、表尾合计、Top 条三处数字对到同一口径上（同一份 teamTotal/members 派生）。
  * - **全员可见，无 admin 门**：服务端成员门在 service（非成员且非平台管理员 → 403），
@@ -245,6 +245,7 @@ interface ModelBucket {
   totals: UsageTotals;
   contributors: Array<{
     teamMemberId: string;
+    memberName: string;
     agentName: string;
     roleName: string | null;
     totals: UsageTotals;
@@ -271,6 +272,7 @@ function aggregateByModel(members: TeamStatsResponse["members"]): ModelBucket[] 
       addInto(agg.totals, bucket);
       agg.contributors.push({
         teamMemberId: member.teamMemberId,
+        memberName: member.memberName,
         agentName: member.agentName,
         roleName: member.roleName,
         totals: toTotals(bucket),
@@ -322,8 +324,10 @@ export function TeamStatsTab({ teamId, teamName }: TeamStatsTabProps) {
     if (dimension === "member") {
       return members.map((member) => ({
         key: `member:${member.teamMemberId}`,
-        title: member.agentName,
-        subtitle: member.roleName ?? "未绑定角色",
+        title: member.memberName || member.agentName,
+        subtitle: member.agentName
+          ? `${member.agentName} · ${member.roleName ?? "未绑定角色"}`
+          : member.roleName ?? "未绑定角色",
         totals: toTotals(member),
         children: member.models.map((model) => ({
           key: `member:${member.teamMemberId}:model:${model.model}`,
@@ -340,8 +344,10 @@ export function TeamStatsTab({ teamId, teamName }: TeamStatsTabProps) {
       totals: toTotals(bucket.totals),
       children: bucket.contributors.map((contributor) => ({
         key: `model:${bucket.model}:member:${contributor.teamMemberId}`,
-        title: contributor.agentName,
-        subtitle: contributor.roleName ?? "未绑定角色",
+        title: contributor.memberName || contributor.agentName,
+        subtitle: contributor.agentName
+          ? `${contributor.agentName} · ${contributor.roleName ?? "未绑定角色"}`
+          : contributor.roleName ?? "未绑定角色",
         totals: toTotals(contributor.totals),
       })),
     }));
@@ -799,7 +805,8 @@ function miniMemberName(
   members: TeamStatsResponse["members"],
   teamMemberId: string,
 ): string {
-  return members.find((m) => m.teamMemberId === teamMemberId)?.agentName ?? "已删除成员";
+  const member = members.find((m) => m.teamMemberId === teamMemberId);
+  return member?.memberName || member?.agentName || "已删除成员";
 }
 
 /* ------------------------------ 表格行 ------------------------------ */
