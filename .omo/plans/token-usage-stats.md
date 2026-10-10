@@ -69,7 +69,7 @@ Your next move: approve 后执行工作流，或先运行高精度评审（momus
 ## Todos
 > Implementation + Test = ONE todo. Never separate.
 <!-- APPEND TASK BATCHES BELOW THIS LINE WITH edit/apply_patch - never rewrite the headers above. -->
-- [ ] 1. usage-ctx：worker ctx 透传 model 字段
+- [x] 1. usage-ctx：worker ctx 透传 model 字段
   What to do / Must NOT do:
   - `worker/src/exec/exec-server.ts`：`ctx` 构造处（:1509-1514，现有 taskId/agentId/channelId/sessionId）新增 `model` 字段，取值 `payload.model`（:90 入参、:1493 `driver.createSession(payload.model)` 已在手边，`{providerID, modelID}` 原样透传；缺失时记固定串 `'unknown'`，与 todo 3 的未知口径一致）
   - `TASK_COMPLETED` 事件体（:1556-1565）带上 `model` → 现有 `POST /api/v1/worker/events` 通道（`worker/src/client/event-client.ts:129-138`、`worker/src/protocol/worker-protocol.ts:259` body 契约同步更新；`WORKER_EVENT_TYPES` :13-27 不动）
@@ -82,7 +82,7 @@ Your next move: approve 后执行工作流，或先运行高精度评审（momus
   QA scenarios (name the exact tool + invocation): happy——mock payload.model 断言 ctx.model 与事件体一致；failure——缺失 model 时断言固定 `'unknown'`。Evidence .omo/evidence/task-1-token-usage-stats.txt
   Commit: Y | feat(usage): worker 事件透传模型标识
 
-- [ ] 2. usage-store：model_usage 表 + 迁移 + 守卫测试
+- [x] 2. usage-store：model_usage 表 + 迁移 + 守卫测试
   What to do / Must NOT do:
   - `server/prisma/schema.prisma` 新增 `model ModelUsage`（对齐 Memory 模型模式）：`id String @id`（us_ 前缀，服务层 IdGeneratorService 生成，`onModuleInit` 用 `resyncIdPrefix` 续号）；`teamId String @map("team_id")`；`taskId String? @map("task_id")`；`sessionId String @map("session_id")`；`channelId String @map("channel_id")`；`teamMemberId String @map("team_member_id")`；`agentId String @map("agent_id")`；`model String`（`providerID/modelID` 组合串）；`inputTokens/outputTokens/reasoningTokens/cacheReadTokens/cacheWriteTokens/totalTokens Int @default(0)`；`cost Float?`（nullable）；`createdAt DateTime @default(now()) @map("created_at")`。索引：`@@index([teamId, teamMemberId], map:"idx_usage_team_member")`、`@@index([teamId, model], map:"idx_usage_team_model")`、`@@index([createdAt], map:"idx_usage_created")`；`@@map("model_usages")`。relations：一律软关联（只存 id，不建 FK，避免跨域耦合；注释写明）
   - 生成迁移：`cd server && npx prisma migrate dev --name model_usage`（若无 DB 则手工按先例格式编写，仅 `CREATE TABLE` + 索引，无回填）；`npx prisma generate`
@@ -94,7 +94,7 @@ Your next move: approve 后执行工作流，或先运行高精度评审（momus
   QA scenarios (name the exact tool + invocation): happy——迁移生成且 deploy 幂等；failure——向迁移注入 UPDATE 断言守卫变红。Evidence .omo/evidence/task-2-token-usage-stats.txt
   Commit: Y | feat(usage): 用量记录表模型与迁移
 
-- [ ] 3. usage-sink：handleTaskCompleted 落库（含幂等）
+- [x] 3. usage-sink：handleTaskCompleted 落库（含幂等）
   What to do / Must NOT do:
   - `server/src/chat/worker-dispatcher.ts` `handleTaskCompleted`（:2567）：从 payload 读 `tokens`（`ServeTokens` 形状 total/input/output/reasoning/cache.read/write——worker `v1-driver.ts:79-85` 为准，`Number.isFinite` 逐字段校验归零）+ `cost`（number 则存，否则 null）+ 上下文（teamId/teamMemberId/sessionId/channelId/taskId 从归属解析，model 取事件体 `model` 缺失记 `'unknown'`，与 todo 1 一致）
   - **幂等（红线）**：DB 唯一键做请求级去重——自然键建议 `sessionId + worker 侧 step 序号/消息 id`（先读事件体实际字段再定，`upsert` 或先查后写二选一，并在代码注释写明所选键与理由）；内存 `completedSessions`（:2582-2589）保留但不作为唯一防线；ingress 路径与自轮询路径（:3229-3268）走同一写入函数
@@ -107,7 +107,7 @@ Your next move: approve 后执行工作流，或先运行高精度评审（momus
   QA scenarios (name the exact tool + invocation): happy——jest 断言双投递单行、脏数据归零；failure——mock prisma 写入抛错断言消息落库不受影响。Evidence .omo/evidence/task-3-token-usage-stats.txt
   Commit: Y | feat(usage): 完成事件用量落库
 
-- [ ] 4. usage-api：GET /teams/:teamId/usage 聚合接口
+- [x] 4. usage-api：GET /teams/:teamId/usage 聚合接口
   What to do / Must NOT do:
   - 新建 `server/src/usage/`（`usage.controller.ts` + `usage.service.ts` + `usage.module.ts`，`app.module.ts` 注册；参考 `memories.module.ts` 注册模式）：`GET /teams/:teamId/usage`，全局 JwtAuthGuard + 团队成员检查（`team_user_members` 无行且非 admin → 403，抄 memories Todo2 的成员过滤模式与 `admin-permission.ts` 谓词；可选 `?model=` 精确过滤）
   - service：一次 `groupBy [teamMemberId, model]` 求和（走 `idx_usage_team_member`/`idx_usage_team_model`），内存拼成员名（TeamMember→Agent 名/Role 名联表；`cost` 求和时 null 按 0 参与但 teamTotal.cost 保持数字口径）；返回 `{members: [{teamMemberId, agentName, roleName, totalTokens, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, cost, models: [{model, …同6字段}]}], teamTotal: {…6字段}}`；空团队返回零值结构（members: []，teamTotal 全 0）
@@ -119,7 +119,7 @@ Your next move: approve 后执行工作流，或先运行高精度评审（momus
   QA scenarios (name the exact tool + invocation): happy——jest 断言聚合数学正确与零值结构；failure——跨团队调用 403。Evidence .omo/evidence/task-4-token-usage-stats.txt
   Commit: Y | feat(usage): 团队用量聚合接口
 
-- [ ] 5. usage-web：「统计」子 tab（表格 + 三层汇总）
+- [x] 5. usage-web：「统计」子 tab（表格 + 三层汇总）
   What to do / Must NOT do:
   - 新建 `web/src/api/stats.ts`（抄 `memories.ts:51-91`）：`TeamStatsResponse` 类型（members[] 含 models[] 展开 + teamTotal，字段名与 todo 4 接口逐字对齐）、`statsQueryKey(teamId)`、`statsApi.summary(teamId)` → `api.get('/teams/'+teamId+'/usage')`
   - 新建 `web/src/components/teams/TeamStatsTab.tsx`（抄 `TeamMemoriesTab.tsx` 骨架：文件头注释、style 常量、data-testid root、`useMemo` params、`useQuery({queryKey, queryFn, enabled: !!teamId})`、`isApiError` 错误面）：
@@ -134,7 +134,7 @@ Your next move: approve 后执行工作流，或先运行高精度评审（momus
   QA scenarios (name the exact tool + invocation): happy——build+lint 绿且 tab 渲染三层汇总一致；failure——API 403/空数据时错误态与空态正确。Evidence .omo/evidence/task-5-token-usage-stats.txt
   Commit: Y | feat(web): 团队用量统计子 tab
 
-- [ ] 6. usage-e2e：端到端冒烟（真实调用落表进表）
+- [x] 6. usage-e2e：端到端冒烟（真实调用落表进表）
   What to do / Must NOT do:
   - 在可用栈走一轮真实 agent 调用：断言 `model_usage` 落行 → `GET /teams/:teamId/usage` 聚合正确 → 统计 tab 三层汇总一致；双投递单行；脏 part 归零（单测已覆则引用）；非成员 403
   - 若无可运行栈，允许降级为 server 集成测试 + web build 冒烟，并在证据中明确声明降级口径
@@ -147,10 +147,10 @@ Your next move: approve 后执行工作流，或先运行高精度评审（momus
 
 ## Final verification wave
 > Runs in parallel after ALL todos. ALL must APPROVE. Surface results and wait for the user's explicit okay before declaring complete.
-- [ ] F1. Plan compliance audit：逐条核对 Scope Must have / Must NOT have（重点：无单价表、无回填、无时间序列、无图表依赖、无 admin 门、统计接口零写操作、幂等唯一键存在、失败不阻断）
-- [ ] F2. Code quality review：`cd server && npm run test && npx tsc --noEmit` + worker 类型检查 + `cd web && npm run build && npm run lint`；无 `as any`/`@ts-ignore`、空 catch、错误吞没（sink 失败必须 logger.warn）
-- [ ] F3. Real manual QA：集成环境冒烟——统计 tab 三层汇总一致、展开行模型正确、空态/错误态、成员过滤 403、双投递单行
-- [ ] F4. Scope fidelity：git diff 范围核对——未动 opencode 驱动、未动权限矩阵、未动 worker/ 以外目录、package.json 零 diff（无新依赖）
+- [x] F1. Plan compliance audit：逐条核对 Scope Must have / Must NOT have（重点：无单价表、无回填、无时间序列、无图表依赖、无 admin 门、统计接口零写操作、幂等唯一键存在、失败不阻断）
+- [x] F2. Code quality review：`cd server && npm run test && npx tsc --noEmit` + worker 类型检查 + `cd web && npm run build && npm run lint`；无 `as any`/`@ts-ignore`、空 catch、错误吞没（sink 失败必须 logger.warn）
+- [x] F3. Real manual QA：集成环境冒烟——统计 tab 三层汇总一致、展开行模型正确、空态/错误态、成员过滤 403、双投递单行
+- [x] F4. Scope fidelity：git diff 范围核对——未动 opencode 驱动、未动权限矩阵、未动 worker/ 以外目录、package.json 零 diff（无新依赖）
 
 ## Commit strategy
 - 每个 todo 完成后单独 commit（约定式提交，scope=usage/web）：`feat(usage): <subject>` / `feat(web): <subject>`；小改用 `git commit --amend` 合并
