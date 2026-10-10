@@ -217,8 +217,8 @@ export async function exportNodeToPdf(node: HTMLElement, filename: string): Prom
         return true;
       };
       for (let off = 0; off <= maxShift; off += 1) {
+        // 只向上吸附（提前切）：向下越过 nominalBottom 会让本页超出页容量。
         if (preferred - off > top && rowIsWhite(preferred - off)) return preferred - off;
-        if (preferred + off < bottom && rowIsWhite(preferred + off)) return preferred + off;
       }
       return preferred;
     };
