@@ -98,7 +98,26 @@ export interface WorkerItem {
   registeredAt: string;
   /** C8：worker 默认模型 id（providerID/modelID；C2 register 上报或 PATCH 配置，null=未配置）。 */
   defaultModelId: string | null;
+  /** worker-self-update：worker 代码版本（心跳上报；null=旧版本 worker 未上报）。 */
+  codeVersion: string | null;
+  /** worker-self-update：期望代码版本（server env CODE_VERSION 部署期常量；null=未配置 → 无更新语义）。 */
+  expectedVersion: string | null;
+  /** worker-self-update：最近一次自更新执行状态（worker 上报五态之一；null=无记录）。 */
+  updateState: string | null;
+  /** worker-self-update：自动回滚是否发生过（粘滞标志，供 UI 常显警示直到人工处理）。 */
+  rolledBack: boolean;
+  /** worker-self-update：是否有可用更新（server 计算：双版本存在且不等；'dev'/缺省 → false）。 */
+  updateAvailable: boolean;
 }
+
+/** 自更新执行状态 → 展示文案（五态契约见 plan worker-self-update Todo 4；未知值原样展示）。 */
+export const WORKER_UPDATE_STATE_LABEL: Record<string, string> = {
+  pending: "等待空闲执行",
+  downloading: "下载更新中",
+  restarting: "重启加载新版本",
+  "ready-manual": "已下载，待手动重启",
+  rolledback: "已回滚（新版本异常）",
+};
 
 /** 心跳载荷中的单条 MCP 服务器状态（server McpStatusEntryDto，11 篇 §5.8 三态）。 */
 export interface McpStatusEntry {

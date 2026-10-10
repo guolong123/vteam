@@ -46,6 +46,7 @@ import {
 } from "@/src/theme/tokens";
 import {
   WORKER_STATUS_LABEL,
+  WORKER_UPDATE_STATE_LABEL,
   workerStatusTheme,
   loadColor,
   pulseCss,
@@ -68,9 +69,11 @@ function WorkerCard({
   canEdit,
   canDelete,
   busy,
+  dispatched,
   onRestart,
   onShutdown,
   onDelete,
+  onUpdate,
 }: {
   worker: WorkerItem;
   now: number;
@@ -79,10 +82,13 @@ function WorkerCard({
   /** workers.delete 权限（仅 offline 行显示删除入口） */
   canDelete: boolean;
   /** 当前进行中的操作（同一卡片任一操作 busy 时全部按钮禁用防并发） */
-  busy: { workerId: string; action: "restart" | "shutdown" | "delete" } | null;
+  busy: { workerId: string; action: "restart" | "shutdown" | "delete" | "update" } | null;
+  /** 本次会话内已下发过更新（本地提示态；updateAvailable 翻 false 后自然消失） */
+  dispatched: boolean;
   onRestart: (id: string) => void;
   onShutdown: (id: string) => void;
   onDelete: (id: string) => void;
+  onUpdate: (id: string) => void;
 }) {
   const router = useRouter();
   const label = WORKER_STATUS_LABEL[worker.status];
@@ -114,6 +120,7 @@ function WorkerCard({
   const restartBusy = isBusy && busy?.action === "restart";
   const shutdownBusy = isBusy && busy?.action === "shutdown";
   const deleteBusy = isBusy && busy?.action === "delete";
+  const updateBusy = isBusy && busy?.action === "update";
   const opsDisabled = !canEdit || isOffline || isBusy;
   const opsTitle = !canEdit
     ? "无 workers.edit 权限"
@@ -215,7 +222,61 @@ function WorkerCard({
         >
           🖥 主机 {worker.name ?? "未命名节点"}
         </span>
+        {worker.codeVersion && (
+          <span
+            data-testid="worker-code-version"
+            title={`代码版本 ${worker.codeVersion}（期望：${worker.expectedVersion ?? "未配置"}）`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              fontSize: fontSize.xs,
+              fontWeight: 600,
+              color: worker.updateAvailable ? "#D97706" : neutral[500],
+              backgroundColor: worker.updateAvailable ? "rgba(245,158,11,0.10)" : neutral[100],
+              border: `1px solid ${worker.updateAvailable ? "rgba(245,158,11,0.28)" : neutral[200]}`,
+              padding: "1px 6px",
+              borderRadius: radius.pill,
+              fontFamily: fontFamily.mono,
+            }}
+          >
+            代码 {worker.codeVersion.length > 10 ? worker.codeVersion.slice(0, 10) : worker.codeVersion}
+          </span>
+        )}
+        {worker.updateAvailable && (
+          <span
+            data-testid="worker-update-available"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              fontSize: fontSize.xs,
+              fontWeight: 600,
+              color: "#D97706",
+              backgroundColor: "rgba(245,158,11,0.10)",
+              border: "1px solid rgba(245,158,11,0.28)",
+              padding: "1px 6px",
+              borderRadius: radius.pill,
+              fontFamily: fontFamily.body,
+            }}
+          >
+            待更新
+          </span>
+        )}
       </div>
+
+      {/* 自更新执行状态（worker 上报五态 + 粘滞回滚警示 + 已下发提示；无记录不占行） */}
+      {(worker.updateState || worker.rolledBack || (dispatched && worker.updateAvailable)) && (
+        <div
+          data-testid="worker-update-state"
+          style={{ fontSize: fontSize.xs, color: neutral[400], display: "flex", gap: space.xs, alignItems: "center" }}
+        >
+          {worker.rolledBack || worker.updateState === "rolledback" ? (
+            <span style={{ color: "#D97706", fontWeight: 600 }}>⚠ 已回滚（新版本异常）</span>
+          ) : (
+            <span>{WORKER_UPDATE_STATE_LABEL[worker.updateState ?? ""] ?? worker.updateState}</span>
+          )}
+          {dispatched && worker.updateAvailable && <span>· 已下发，空闲后执行</span>}
+        </div>
+      )}
 
       {/* 能力声明：并发上限 + skill/tool 数量（11.2 能力声明） */}
       <div data-testid="worker-capability" style={{ display: "flex", gap: space.md }}>
@@ -383,6 +444,37 @@ function WorkerCard({
         >
           查看详情
         </button>
+        {worker.updateAvailable && (
+          <button
+            type="button"
+            data-testid="worker-update-button"
+            data-worker-id={worker.id}
+            disabled={opsDisabled || dispatched}
+            title={
+              !canEdit
+                ? "无 workers.edit 权限"
+                : isOffline
+                  ? "离线节点无法接收更新指令"
+                  : dispatched
+                    ? "指令已下发，等待 worker 空闲执行"
+                    : "下载新版本并在空闲时重启生效"
+            }
+            onClick={() => onUpdate(worker.id)}
+            style={{
+              flex: 1,
+              padding: `${space.sm - 1}px ${space.md}px`,
+              borderRadius: radius.md,
+              border: `1px solid ${opsDisabled || dispatched ? neutral[100] : "rgba(245,158,11,0.28)"}`,
+              backgroundColor: opsDisabled || dispatched ? neutral[100] : "rgba(245,158,11,0.10)",
+              color: opsDisabled || dispatched ? neutral[400] : "#D97706",
+              fontSize: fontSize.md,
+              cursor: opsDisabled || dispatched ? "not-allowed" : "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {updateBusy ? "下发中…" : dispatched ? "已下发" : "更新"}
+          </button>
+        )}
         <button
           type="button"
           data-testid="worker-restart-button"
@@ -491,7 +583,7 @@ export default function WorkersPage() {
   /* 操作中的 worker（防并发：同一卡片任一操作 busy 时全部按钮均禁用） */
   const [busyWorker, setBusyWorker] = useState<{
     workerId: string;
-    action: "restart" | "shutdown" | "delete";
+    action: "restart" | "shutdown" | "delete" | "update";
   } | null>(null);
   /* 删除二次确认目标（null = 弹窗关闭） */
   const [deleteTarget, setDeleteTarget] = useState<WorkerItem | null>(null);
@@ -537,6 +629,26 @@ export default function WorkersPage() {
 
   /* 删除：DELETE /workers/:id（仅 offline；后端 409 拒绝 online/degraded）
      → ConfirmDialog 确认后执行 → 刷新列表；失败走页级错误条 */
+  /* 已下发更新的 worker（本地提示态；updateAvailable 翻 false 后渲染条件自然清除） */
+  const [dispatchedIds, setDispatchedIds] = useState<string[]>([]);
+
+  /* 自更新：POST /workers/:id/update → 命令经心跳下发（workers.edit；目标版本由 server env 决定） */
+  const updateMutation = useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ status: string; version: string | null }>(`/workers/${id}/update`),
+    onMutate: (id) => setBusyWorker({ workerId: id, action: "update" }),
+    onSuccess: (_data, id) => {
+      setBusyWorker(null);
+      setActionError(null);
+      setDispatchedIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+      queryClient.invalidateQueries({ queryKey: ["workers"] });
+    },
+    onError: (err) => {
+      setBusyWorker(null);
+      setActionError(isApiError(err) ? err.message : "下发更新失败，请稍后重试");
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) =>
       api.delete<{ id: string; deleted: boolean }>(`/workers/${id}`),
@@ -778,8 +890,10 @@ export default function WorkersPage() {
               canEdit={canEditWorker}
               canDelete={canDeleteWorker}
               busy={busyWorker}
+              dispatched={dispatchedIds.includes(w.id)}
               onRestart={(id) => restartMutation.mutate(id)}
               onShutdown={(id) => shutdownMutation.mutate(id)}
+              onUpdate={(id) => updateMutation.mutate(id)}
               onDelete={(id) => {
                 const target = items.find((x) => x.id === id);
                 if (target) setDeleteTarget(target);

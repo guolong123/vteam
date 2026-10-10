@@ -1,0 +1,27 @@
+# task-5 (uw-web-ui) — Worker 节点页版本徽章与更新按钮
+
+## 执行说明
+本 todo 的执行子代理遭遇 rate limit（会话 ses_edaf1c4f0ffeEznB4yWQptRjPp 启动即失败，无 WIP）。
+编排者按 Todo 4 恢复先例直接实施：读页面现状（834 行 page.tsx + 265 行 shared.tsx）与 server 出参契约（workers.service.toWorkerView :1383-1417）后落码。
+
+## 契约核对（先读 server 再写类型，未猜）
+GET /workers 出参（toWorkerView）：`codeVersion: string|null`、`expectedVersion: string|null`、`updateState: string|null`（normalize 后）、`rolledBack: boolean`（恒布尔，jsonScalarToBoolean 归一）、`updateAvailable: boolean`（server 计算）。
+POST /workers/:id/update（workers.edit PermissionGuard）：响应 `{status:'pending', version}`（controller :143-145 注释：目标版本由 server env 唯一决定，不接受客户端指定）。
+
+## 改动（2 文件）
+- `web/app/(main)/workers/shared.tsx`：`WorkerItem` += 五字段（JSDoc 记录各自 null 语义来源）；`WORKER_UPDATE_STATE_LABEL` 五态文案映射（未知值兜底原样展示）。
+- `web/app/(main)/workers/page.tsx`：
+  - 卡片版本行 += 「代码 <短 SHA>」mono 徽章（updateAvailable 时琥珀化，title 显示期望版本）+ 「待更新」徽章（琥珀，对齐页内 V2Runtime 徽章风格，零新设计语言）；
+  - 状态行（有记录才占行）：五态文案 + 粘滞回滚警示「⚠ 已回滚（新版本异常）」（琥珀 600 加粗，updateState==='rolledback' 或 rolledBack 真都触发）+ 「已下发，空闲后执行」提示（dispatched && updateAvailable）；
+  - 操作行 += 「更新」按钮：仅 updateAvailable 可见；禁用矩阵复用 opsDisabled（canEdit/offline/busy）+ dispatched（防双击）；label 三态（更新/下发中…/已下发）；title 四态解释；
+  - 父层：busy 动作并集 += "update"；`dispatchedIds` 本地提示态（onSuccess 追加，渲染条件挂 updateAvailable 翻转自然清除，无显式清理）；`updateMutation` 抄重启 mutation 惯例（busy/actionError/invalidate 三件套）。
+
+## 验证
+- `npx tsc --noEmit` → clean
+- `npm run lint` → 0 errors / **729 warnings（与基线逐字一致，零新增）**
+- `npm run build` → ✓ Compiled successfully（30/30 静态页）
+- 视觉/点击流冒烟：deferred 至 orchestrator 部署后生产核验（无本地栈）；组件逻辑经 tsc 契约与既有 mutation 模式对齐
+
+## 遗留边界
+- `dev` 版本 worker：updateAvailable 由 server 判 false → 按钮不出现（开发环境语义，注释已述）。
+- 旧 worker（无 codeVersion）：徽章不渲染、按钮不出现——向后兼容零破坏。
