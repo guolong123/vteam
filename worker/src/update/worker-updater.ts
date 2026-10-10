@@ -215,9 +215,39 @@ const defaultFs: UpdateFs = {
       .then((stat) => stat.isDirectory())
       .catch(() => false),
   rm: (target) => fs.promises.rm(target, { recursive: true, force: true }),
-  rename: (from, to) => fs.promises.rename(from, to),
+  rename: (from, to) =>
+    robustRename(
+      (f, t) => fs.promises.rename(f, t),
+      (f, t) => fs.promises.cp(f, t, { recursive: true }),
+      (target) => fs.promises.rm(target, { recursive: true, force: true }),
+      from,
+      to,
+    ),
   cp: (from, to) => fs.promises.cp(from, to, { recursive: true }),
 };
+
+/**
+ * 健壮 move：rename 在跨设备（EXDEV）时被内核拒绝——容器挂载盘、外挂盘、NFS 上的
+ * 安装目录都会触发（compose e2e 实测：rename '/app/dist' → '/app/dist.prev' EXDEV）。
+ * 回退 copy+rm 保持四个调用点（备份/回滚/恢复）语义一致。
+ */
+export async function robustRename(
+  rename: (from: string, to: string) => Promise<void>,
+  cp: (from: string, to: string) => Promise<void>,
+  rm: (target: string) => Promise<void>,
+  from: string,
+  to: string,
+): Promise<void> {
+  try {
+    await rename(from, to);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EXDEV') {
+      throw err;
+    }
+    await cp(from, to);
+    await rm(from);
+  }
+}
 
 /** spawn 版命令执行器（异步，见 CommandRunner 注释里的死锁说明）。 */
 export const spawnCommandRunner: CommandRunner = (command, args, options = {}) =>

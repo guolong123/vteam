@@ -1,0 +1,29 @@
+# task-6 (uw-e2e) — 端到端验证证据（编排者执行；子代理 rate limit 后接管）
+
+## 执行方式
+本地 compose 栈（全新重建镜像）+ override 注入版本差：server `CODE_VERSION=vtest-new`、worker `WORKER_CODE_VERSION=vtest-old`、`WORKER_SRC_URL=http://web:3000/worker-src.tar.gz`。全程未触碰生产（vteam.ketaops.cc / 集群 DB 零操作）。栈验证完毕 `compose down`（卷保留）。
+
+## 场景矩阵
+
+| # | 场景 | 结论 | 关键输出 |
+|---|---|---|---|
+| S0 | pack 冒烟（scripts/smoke-pack-worker-version.sh） | **PASS** | sha256=实际字节一致；version.json 三字段齐；非 git 回退 manual-20261010 |
+| S1 | 栈起 + 迁移 | **PASS** | db/server/web healthy；两新迁移经 API 可用性反证（codeVersion/updateState 列存在） |
+| S2 | 注册面版本差异 | **PASS** | GET /workers：`codeVersion=vtest-old, expectedVersion=vtest-new, updateAvailable=true, updateState=null, rolledBack=false` |
+| S5 | 坏包守卫（sha256 篡改） | **PASS** | `sha256 校验不通过（期望 deadbeef…，实际 880f53f4…），已放弃本轮，绝不覆盖 dist`；dist 哈希前后一致（e6e7fe7bc423e89b）；updateState=pending；指令重投即重试（投递即消费语义，重启后需重新点——与 UI 按钮模型一致） |
+| S3 | 全链更新 | **PASS** | 下载→lock 比对（容器缺根级 lock 按变化处理）→npm ci --omit=dev 完成→备份→覆盖（dist 哈希 e6e7fe…→7862e8…）→无 systemd→`ready-manual` + 手动重启一行命令 `cd /app && ./scripts/start.sh`；GET updateState=ready-manual；dist.prev 存在 |
+| S3' | 收敛（模拟人工重启） | **PASS** | 以 vtest-new 重起 worker → `codeVersion==expectedVersion`、`updateAvailable=false`；粘滞 ready-manual 正确保留至实际重启；pending 指令自动清除由 Todo 3 回归测试覆盖（unit-referenced，API 不暴露 pending） |
+| S4 | 自动回滚 | **unit-referenced（如实声明）** | compose 内无 systemd/真实 register 失败注入路径；阈值逻辑由 updater spec 覆盖（次数/时间双阈值、成功注册抑制、回滚后不震荡），代码走线 index.ts 计数挂接已审计 |
+| S6 | 旧 worker 兼容 | **unit-referenced** | 无 codeVersion payload 注册由 server spec 覆盖（缺席不覆盖语义 + 响应结构合法） |
+
+## 🐞 e2e 抓到的真缺陷（已修复）
+**EXDEV rename 跨设备拒绝**：容器挂载布局下 `rename('/app/dist','/app/dist.prev')` 被内核拒绝（mock 文件系统的单测测不出）。执行器当时 fail-safe 正确（停 pending、dist 未动），但更新在挂载盘环境永远无法完成。
+**修复**：`robustRename` helper（EXDEV → cp recursive + rm），接入默认 fs 实现的 rename，四个调用点（备份/回滚×2/恢复）统一受益——真实机器上安装目录在外挂盘/NFS/bind mount 同样受益。+3 单测（EXDEV 回退、非 EXDEV 原样抛、成功不回退）；worker 27 suites/756 tests 全绿。
+
+## 容器环境注记（非缺陷）
+- 容器 dist 无 version.js（Dockerfile 源码构建不经 pack 戳）→ env WORKER_CODE_VERSION 兜底，三级优先级实测生效
+- 容器无根级 package-lock.json（镜像只拷 dist）→ 按 lock 变化处理 → npm ci 成功（容器有 registry 网络）
+- 指令为"投递即消费"：失败后 in-process 重试，进程重启后需重新下发（与 UI 按钮模型语义一致）
+
+## 门禁（修复后终值）
+worker typecheck clean；worker test **27 suites / 756 tests**；server tsc clean / 174 suites / 4124 tests（未动）；web tsc/lint 0err·729 基线/build（未动）。

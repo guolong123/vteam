@@ -14,6 +14,7 @@ import {
   CommandRunner,
   readUpdateCommandVersion,
   resolveWorkerSourceUrls,
+  robustRename,
   RunCommandOptions,
   UpdateFs,
   WorkerUpdater,
@@ -757,5 +758,65 @@ describe('共享状态契约（worker 上报 ↔ server DTO 逐字一致）', ()
     const service = serverSource('workers.service.ts');
     expect(service).toMatch(/UPDATE_WORKER:\s*'update-worker'/);
     expect(service).toMatch(/dto\.rolledBack === true/);
+  });
+});
+
+describe('robustRename（EXDEV 跨设备回退，compose e2e 实测缺陷）', () => {
+  it('EXDEV 时回退 copy+rm 且不抛', async () => {
+    const calls: string[] = [];
+    await robustRename(
+      async () => {
+        const err = new Error('cross-device link not permitted') as NodeJS.ErrnoException;
+        err.code = 'EXDEV';
+        throw err;
+      },
+      async (from, to) => {
+        calls.push(`cp:${from}->${to}`);
+      },
+      async (target) => {
+        calls.push(`rm:${target}`);
+      },
+      '/app/dist',
+      '/app/dist.prev',
+    );
+    expect(calls).toEqual(['cp:/app/dist->/app/dist.prev', 'rm:/app/dist']);
+  });
+
+  it('非 EXDEV 错误原样抛出且不回退', async () => {
+    const err = new Error('EACCES') as NodeJS.ErrnoException;
+    err.code = 'EACCES';
+    await expect(
+      robustRename(
+        async () => {
+          throw err;
+        },
+        async () => {
+          throw new Error('不应触达 cp');
+        },
+        async () => {
+          throw new Error('不应触达 rm');
+        },
+        'a',
+        'b',
+      ),
+    ).rejects.toThrow('EACCES');
+  });
+
+  it('rename 成功时不触发 cp/rm', async () => {
+    const calls: string[] = [];
+    await robustRename(
+      async () => {
+        calls.push('rename');
+      },
+      async () => {
+        calls.push('cp');
+      },
+      async () => {
+        calls.push('rm');
+      },
+      'a',
+      'b',
+    );
+    expect(calls).toEqual(['rename']);
   });
 });
