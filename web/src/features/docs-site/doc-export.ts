@@ -17,6 +17,9 @@ const PDF_WIDTH_PX = 794;
 const A4_WIDTH_MM = 210;
 const A4_HEIGHT_MM = 297;
 
+/** 页边距（mm，四周一致）：内容四周留白，避免文字贴页缘。 */
+const PDF_MARGIN_MM = 12;
+
 /** 栅格化倍率（SVG → 位图，2x 保证清晰度）。 */
 const SVG_RASTER_SCALE = 2;
 
@@ -189,17 +192,44 @@ export async function exportNodeToPdf(node: HTMLElement, filename: string): Prom
       throw new Error("无法生成 PDF：内容为空或未渲染出画布");
     }
 
-    // 8) A4 纵向切片分页。
+    // 8) A4 纵向切片分页（四周页边距 + 断点向「近白行」吸附，避免块中硬切）。
     const { jsPDF } = await import("jspdf");
     const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4", compress: true });
-    const pxPerMm = canvas.width / A4_WIDTH_MM;
-    const pagePx = A4_HEIGHT_MM * pxPerMm;
-    const pageCount = Math.max(1, Math.ceil(canvas.height / pagePx));
+    const contentWidthMm = A4_WIDTH_MM - PDF_MARGIN_MM * 2;
+    const pxPerMm = canvas.width / contentWidthMm;
+    const pagePx = (A4_HEIGHT_MM - PDF_MARGIN_MM * 2) * pxPerMm;
 
-    for (let page = 0; page < pageCount; page += 1) {
-      const sliceTop = page * pagePx;
-      const sliceHeight = Math.min(pagePx, canvas.height - sliceTop);
-      if (sliceHeight <= 0) break;
+    /** 在 preferred 附近 ±15% 页高内找最近「近白行」作为断点；找不到则维持原位（有界回退）。 */
+    const snapBreakRow = (preferred: number): number => {
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return preferred;
+      const maxShift = Math.round(pagePx * 0.15);
+      const top = Math.max(1, preferred - maxShift);
+      const bottom = Math.min(canvas.height - 1, preferred + maxShift);
+      if (bottom - top < 2) return preferred;
+      const strip = ctx.getImageData(0, top, canvas.width, bottom - top).data;
+      const rowIsWhite = (row: number): boolean => {
+        const base = (row - top) * canvas.width * 4;
+        for (let x = 0; x < canvas.width; x += 8) {
+          const i = base + x * 4;
+          if (strip[i] < 245 || strip[i + 1] < 245 || strip[i + 2] < 245) return false;
+        }
+        return true;
+      };
+      for (let off = 0; off <= maxShift; off += 1) {
+        if (preferred - off > top && rowIsWhite(preferred - off)) return preferred - off;
+        if (preferred + off < bottom && rowIsWhite(preferred + off)) return preferred + off;
+      }
+      return preferred;
+    };
+
+    let sliceTop = 0;
+    let page = 0;
+    while (sliceTop < canvas.height) {
+      const nominalBottom = Math.min(canvas.height, sliceTop + pagePx);
+      const isLast = nominalBottom >= canvas.height;
+      const breakRow = isLast ? canvas.height : snapBreakRow(nominalBottom);
+      const sliceHeight = Math.max(1, breakRow - sliceTop);
 
       const slice = document.createElement("canvas");
       slice.width = canvas.width;
@@ -211,7 +241,16 @@ export async function exportNodeToPdf(node: HTMLElement, filename: string): Prom
       ctx.drawImage(canvas, 0, sliceTop, canvas.width, sliceHeight, 0, 0, canvas.width, sliceHeight);
 
       if (page > 0) pdf.addPage();
-      pdf.addImage(slice.toDataURL("image/png"), "PNG", 0, 0, A4_WIDTH_MM, sliceHeight / pxPerMm);
+      pdf.addImage(
+        slice.toDataURL("image/png"),
+        "PNG",
+        PDF_MARGIN_MM,
+        PDF_MARGIN_MM,
+        contentWidthMm,
+        sliceHeight / pxPerMm,
+      );
+      sliceTop += sliceHeight;
+      page += 1;
     }
 
     pdf.save(filename);

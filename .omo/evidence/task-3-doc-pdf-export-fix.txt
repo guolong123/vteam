@@ -1,0 +1,11 @@
+# task-3 pdf-layout — 页边距 + 白行吸附断页
+
+## 改动（web/src/features/docs-site/doc-export.ts）
+- 常量 PDF_MARGIN_MM=12；内容宽/高扣除四周边距，pxPerMm 按内容宽重算
+- addImage 落点 (margin, margin)，宽 = 内容宽（不再 0,0 满幅）
+- 断页吸附 snapBreakRow：±15% 页高内自近及远找「近白行」（采样每 8 列、RGB 均 ≥245）作为切点；找不到回退原位（有界，防死循环：slice 高度恒 ≥1）
+- 循环改为 cursor 推进（sliceTop += sliceHeight），末页自然收尾
+
+## 门禁
+web tsc clean / lint 0 err·729 基线 / build 成功
+像素级验证（页边距存在、断点非块中）由 Todo 4 Chromium 冒烟覆盖。
