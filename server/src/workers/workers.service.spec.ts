@@ -7,12 +7,16 @@ import { ModelsService } from '../models/models.service';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
 import {
+  WORKER_ERRORS,
   WORKER_HEARTBEAT_INTERVAL_MS,
   WORKER_OFFLINE_TIMEOUT_MS,
   WORKER_STATUS,
 } from './workers.constants';
 import { WorkersService } from './workers.service';
-import { workerSupportsAgentPolicies } from './workers.service';
+import {
+  WORKER_COMMAND_TYPES,
+  workerSupportsAgentPolicies,
+} from './workers.service';
 
 jest.mock('bcrypt', () => ({
   hash: jest.fn(),
@@ -1731,9 +1735,22 @@ describe('WorkersService', () => {
           lastHeartbeatAt: true,
           registeredAt: true,
           defaultModelId: true,
+          // Todo 3：自更新状态三列走同一窄投影（降级路径也得让 UI 拿到它们）
+          codeVersion: true,
+          updateState: true,
+          rolledBack: true,
         },
         orderBy: { registeredAt: 'desc' },
       });
+      // 降级路径同样不得把 255KB 大 JSON 拽进投影（1038 的根因）
+      expect(
+        (
+          prisma.worker.findMany.mock.calls[0][0].select as Record<
+            string,
+            boolean
+          >
+        ).capabilities,
+      ).toBeUndefined();
       // 降级路径不返回 capabilities（卡片计数显示 0，与 b000ac6 后行为一致）
       expect(rows).toHaveLength(1);
       expect(rows[0]).not.toHaveProperty('tokenHash');
@@ -2445,10 +2462,7 @@ describe('WorkersService', () => {
       it('env CODE_VERSION 有值 → 响应携带 expectedVersion', async () => {
         process.env.CODE_VERSION = 'deploy-tag-1';
 
-        const result = await service.heartbeat(
-          'w_0000000001',
-          heartbeatDto(),
-        );
+        const result = await service.heartbeat('w_0000000001', heartbeatDto());
 
         expect(result.expectedVersion).toBe('deploy-tag-1');
       });
@@ -2456,10 +2470,7 @@ describe('WorkersService', () => {
       it('env 缺省 → 响应不含 expectedVersion 键（不下发期望 = 无更新语义）', async () => {
         delete process.env.CODE_VERSION;
 
-        const result = await service.heartbeat(
-          'w_0000000001',
-          heartbeatDto(),
-        );
+        const result = await service.heartbeat('w_0000000001', heartbeatDto());
 
         expect('expectedVersion' in result).toBe(false);
       });
@@ -2482,10 +2493,7 @@ describe('WorkersService', () => {
           resourceVersion: 'rv-1',
         });
 
-        const result = await service.heartbeat(
-          'w_0000000001',
-          heartbeatDto(),
-        );
+        const result = await service.heartbeat('w_0000000001', heartbeatDto());
 
         expect(result.commands).toEqual([
           { type: 'reload-config', resourceVersion: 'rv-1' },
@@ -2500,10 +2508,7 @@ describe('WorkersService', () => {
       it('无 commands 时仍不下发 commands 键，expectedVersion 独立生效', async () => {
         process.env.CODE_VERSION = 'deploy-tag-1';
 
-        const result = await service.heartbeat(
-          'w_0000000001',
-          heartbeatDto(),
-        );
+        const result = await service.heartbeat('w_0000000001', heartbeatDto());
 
         expect('commands' in result).toBe(false);
         expect(result.expectedVersion).toBe('deploy-tag-1');
@@ -2535,6 +2540,551 @@ describe('WorkersService', () => {
           workerId: 'w_0000000001',
           status: WORKER_STATUS.ONLINE,
           lastHeartbeatAt: expect.any(String),
+        });
+      });
+    });
+  });
+
+  describe('update-worker（worker-self-update Todo 3）', () => {
+    const originalCodeVersion = process.env.CODE_VERSION;
+
+    beforeEach(() => {
+      delete process.env.CODE_VERSION;
+    });
+
+    afterAll(() => {
+      if (originalCodeVersion === undefined) {
+        delete process.env.CODE_VERSION;
+      } else {
+        process.env.CODE_VERSION = originalCodeVersion;
+      }
+    });
+
+    const hbDto = () => {
+      const dto = new HeartbeatWorkerDto();
+      dto.workerId = 'w_0000000001';
+      dto.load = { instances: 0 };
+      dto.health = 'ok';
+      return dto;
+    };
+
+    /** 入队一条 update-worker（等价于已经点过一次【更新】）。 */
+    const queueUpdate = (version = 'deploy-tag-2') => {
+      service.enqueueCommand('w_0000000001', {
+        type: WORKER_COMMAND_TYPES.UPDATE_WORKER,
+        resourceVersion: version,
+      });
+    };
+
+    beforeEach(() => {
+      prisma.worker.findUnique.mockResolvedValue(workerRow());
+      prisma.worker.update.mockResolvedValue(workerRow());
+    });
+
+    describe('POST /workers/:id/update（端点矩阵）', () => {
+      it('在线 worker → 200：入队既有 pendingCommands 通道的 update-worker 命令', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+
+        const result = await service.requestUpdate('w_0000000001');
+
+        expect(result).toEqual({ status: 'pending', version: 'deploy-tag-2' });
+        expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+          {
+            type: WORKER_COMMAND_TYPES.UPDATE_WORKER,
+            resourceVersion: 'deploy-tag-2',
+          },
+        ]);
+      });
+
+      it('复用 T4a 信封 {type, resourceVersion}：不新建并行指令字段/map（worker 侧按 type 分发）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+
+        await service.requestUpdate('w_0000000001');
+
+        const queued = service['pendingCommands'].get('w_0000000001');
+        expect(queued).toHaveLength(1);
+        // 无 payload：目标版本就是 resourceVersion（与 model-credentials 同形）
+        expect(queued?.[0]).not.toHaveProperty('payload');
+        expect(Object.keys(queued![0]).sort()).toEqual([
+          'resourceVersion',
+          'type',
+        ]);
+      });
+
+      it('幂等：已排队 update-worker → 200 且响应逐字相同、不重复入队', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        const first = await service.requestUpdate('w_0000000001');
+        const second = await service.requestUpdate('w_0000000001');
+
+        expect(second).toEqual(first);
+        expect(service['pendingCommands'].get('w_0000000001')).toHaveLength(1);
+      });
+
+      it('幂等语义诚实：env 在两次点击之间变了 → 返回真正会被执行的那条指令版本', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        await service.requestUpdate('w_0000000001');
+        process.env.CODE_VERSION = 'deploy-tag-3';
+
+        const result = await service.requestUpdate('w_0000000001');
+
+        expect(result).toEqual({ status: 'pending', version: 'deploy-tag-2' });
+        expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+          {
+            type: WORKER_COMMAND_TYPES.UPDATE_WORKER,
+            resourceVersion: 'deploy-tag-2',
+          },
+        ]);
+      });
+
+      it('worker 不存在 → 404 WORKER_NOT_FOUND，不入队', async () => {
+        prisma.worker.findUnique.mockResolvedValue(null);
+
+        await expect(service.requestUpdate('w_unknown')).rejects.toMatchObject({
+          response: { code: WORKER_ERRORS.WORKER_NOT_FOUND },
+        });
+        expect(service['pendingCommands'].size).toBe(0);
+      });
+
+      it('offline worker → 409 WORKER_OFFLINE_UPDATE_UNREACHABLE（离线收不到心跳指令）', async () => {
+        prisma.worker.findUnique.mockResolvedValue(
+          workerRow({ status: WORKER_STATUS.OFFLINE }),
+        );
+
+        await expect(
+          service.requestUpdate('w_0000000001'),
+        ).rejects.toMatchObject({
+          response: { code: WORKER_ERRORS.WORKER_OFFLINE_UPDATE_UNREACHABLE },
+        });
+        expect(service['pendingCommands'].size).toBe(0);
+      });
+
+      it('degraded worker → 200（降权≠离线，仍有心跳可取指令）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        prisma.worker.findUnique.mockResolvedValue(
+          workerRow({ status: WORKER_STATUS.DEGRADED }),
+        );
+
+        await expect(service.requestUpdate('w_0000000001')).resolves.toEqual({
+          status: 'pending',
+          version: 'deploy-tag-2',
+        });
+      });
+
+      it('env CODE_VERSION 缺省 → 409 WORKER_UPDATE_NO_EXPECTED_VERSION，不入队', async () => {
+        delete process.env.CODE_VERSION;
+
+        await expect(
+          service.requestUpdate('w_0000000001'),
+        ).rejects.toMatchObject({
+          response: { code: WORKER_ERRORS.WORKER_UPDATE_NO_EXPECTED_VERSION },
+        });
+        expect(service['pendingCommands'].size).toBe(0);
+      });
+
+      it('env CODE_VERSION 空串/纯空白 → 同缺省（不下发无目标的指令）', async () => {
+        for (const blank of ['', '   ']) {
+          process.env.CODE_VERSION = blank;
+          await expect(
+            service.requestUpdate('w_0000000001'),
+          ).rejects.toMatchObject({
+            response: { code: WORKER_ERRORS.WORKER_UPDATE_NO_EXPECTED_VERSION },
+          });
+        }
+        expect(service['pendingCommands'].size).toBe(0);
+      });
+
+      it('离线判定先于期望版本判定（离线 worker 不因缺 CODE_VERSION 报另一种错）', async () => {
+        delete process.env.CODE_VERSION;
+        prisma.worker.findUnique.mockResolvedValue(
+          workerRow({ status: WORKER_STATUS.OFFLINE }),
+        );
+
+        await expect(
+          service.requestUpdate('w_0000000001'),
+        ).rejects.toMatchObject({
+          response: { code: WORKER_ERRORS.WORKER_OFFLINE_UPDATE_UNREACHABLE },
+        });
+      });
+
+      it('入队后心跳即下发（端点→通道闭环，一次有效）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        await service.requestUpdate('w_0000000001');
+
+        const result = await service.heartbeat('w_0000000001', hbDto());
+
+        expect(result.commands).toEqual([
+          {
+            type: WORKER_COMMAND_TYPES.UPDATE_WORKER,
+            resourceVersion: 'deploy-tag-2',
+          },
+        ]);
+        // 取出即清空（T4a 语义未被破坏）
+        const second = await service.heartbeat('w_0000000001', hbDto());
+        expect(second.commands).toBeUndefined();
+      });
+    });
+
+    describe('pending 收敛规则（heartbeat 下发前结算）', () => {
+      it('codeVersion 与期望版本对齐 → update-worker 被清除，不再下发（别重复执行）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        queueUpdate('deploy-tag-2');
+        const dto = hbDto();
+        dto.codeVersion = 'deploy-tag-2';
+
+        const result = await service.heartbeat('w_0000000001', dto);
+
+        expect(result.commands).toBeUndefined();
+        expect(service['pendingCommands'].has('w_0000000001')).toBe(false);
+      });
+
+      it('版本仍不一致 → 指令保留并照常下发一次', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        queueUpdate('deploy-tag-2');
+        const dto = hbDto();
+        dto.codeVersion = 'deploy-tag-1';
+
+        const result = await service.heartbeat('w_0000000001', dto);
+
+        expect(result.commands).toEqual([
+          {
+            type: WORKER_COMMAND_TYPES.UPDATE_WORKER,
+            resourceVersion: 'deploy-tag-2',
+          },
+        ]);
+      });
+
+      it('updateState=rolledback → 清除（避免更新↔回滚死循环）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        queueUpdate('deploy-tag-2');
+        const dto = hbDto();
+        dto.updateState = 'rolledback';
+        dto.codeVersion = 'deploy-tag-1';
+
+        const result = await service.heartbeat('w_0000000001', dto);
+
+        expect(result.commands).toBeUndefined();
+        expect(service['pendingCommands'].has('w_0000000001')).toBe(false);
+      });
+
+      it('rolledBack=true（一次性标志，不带 updateState）→ 同样清除', async () => {
+        queueUpdate('deploy-tag-2');
+        const dto = hbDto();
+        dto.rolledBack = true;
+
+        const result = await service.heartbeat('w_0000000001', dto);
+
+        expect(result.commands).toBeUndefined();
+      });
+
+      it('rolledBack=false / updateState 非回滚态 → 不清除（显式 false ≠ 回滚）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        queueUpdate('deploy-tag-2');
+        const dto = hbDto();
+        dto.rolledBack = false;
+        dto.updateState = 'downloading';
+        dto.codeVersion = 'deploy-tag-1';
+
+        const result = await service.heartbeat('w_0000000001', dto);
+
+        expect(result.commands).toHaveLength(1);
+      });
+
+      it('收敛只动 update-worker：同队列的 reload-config/shutdown 原样下发', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        service.enqueueCommand('w_0000000001', {
+          type: WORKER_COMMAND_TYPES.RELOAD_CONFIG,
+          resourceVersion: 'rv-1',
+        });
+        service.enqueueCommand('w_0000000001', {
+          type: WORKER_COMMAND_TYPES.SHUTDOWN,
+          resourceVersion: 'remote-shutdown',
+        });
+        queueUpdate('deploy-tag-2');
+        const dto = hbDto();
+        dto.codeVersion = 'deploy-tag-2';
+
+        const result = await service.heartbeat('w_0000000001', dto);
+
+        expect(result.commands).toEqual([
+          { type: WORKER_COMMAND_TYPES.RELOAD_CONFIG, resourceVersion: 'rv-1' },
+          {
+            type: WORKER_COMMAND_TYPES.SHUTDOWN,
+            resourceVersion: 'remote-shutdown',
+          },
+        ]);
+      });
+
+      it('队列里没有 update-worker → 收敛逻辑对 T4a 其它 kind 完全透明', async () => {
+        prisma.worker.findUnique.mockResolvedValue(
+          workerRow({ status: WORKER_STATUS.OFFLINE }),
+        );
+        service.enqueueCommand('w_0000000001', {
+          type: WORKER_COMMAND_TYPES.RELOAD_CONFIG,
+          resourceVersion: 'rv-1',
+        });
+        const dto = hbDto();
+        dto.codeVersion = 'deploy-tag-2';
+        dto.rolledBack = true;
+
+        const result = await service.heartbeat('w_0000000001', dto);
+
+        expect(result.commands).toEqual([
+          { type: WORKER_COMMAND_TYPES.RELOAD_CONFIG, resourceVersion: 'rv-1' },
+        ]);
+      });
+
+      it('心跳未上报 codeVersion（缺席）→ 不清除（这次不知道 ≠ 已是新版本）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        queueUpdate('deploy-tag-2');
+
+        const result = await service.heartbeat('w_0000000001', hbDto());
+
+        expect(result.commands).toHaveLength(1);
+      });
+
+      it('dev 版本不算对齐（未知占位不产生假收敛）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        queueUpdate('deploy-tag-2');
+        const dto = hbDto();
+        dto.codeVersion = 'dev';
+
+        const result = await service.heartbeat('w_0000000001', dto);
+
+        expect(result.commands).toHaveLength(1);
+      });
+
+      it('expectedVersion 未配置 → 无从判断对齐，指令保留', async () => {
+        delete process.env.CODE_VERSION;
+        queueUpdate('deploy-tag-2');
+        const dto = hbDto();
+        dto.codeVersion = 'deploy-tag-2';
+
+        const result = await service.heartbeat('w_0000000001', dto);
+
+        expect(result.commands).toHaveLength(1);
+      });
+
+      it('收敛只影响该 worker：别的 worker 的同 kind 指令不受影响', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        queueUpdate('deploy-tag-2');
+        service.enqueueCommand('w_0000000002', {
+          type: WORKER_COMMAND_TYPES.UPDATE_WORKER,
+          resourceVersion: 'deploy-tag-2',
+        });
+        const dto = hbDto();
+        dto.codeVersion = 'deploy-tag-2';
+
+        await service.heartbeat('w_0000000001', dto);
+
+        expect(service['pendingCommands'].get('w_0000000002')).toEqual([
+          {
+            type: WORKER_COMMAND_TYPES.UPDATE_WORKER,
+            resourceVersion: 'deploy-tag-2',
+          },
+        ]);
+      });
+    });
+
+    describe('updateState / rolledBack 持久化（与 codeVersion 同缺席语义）', () => {
+      it('register 上报 → upsert create/update 都写入两列', async () => {
+        prisma.worker.upsert.mockResolvedValue(workerRow());
+        const dto = registerDto();
+        dto.updateState = 'downloading';
+        dto.rolledBack = true;
+
+        await service.register('secret-token', dto);
+
+        const [args] = prisma.worker.upsert.mock.calls[0];
+        expect(args.create.updateState).toBe('downloading');
+        expect(args.create.rolledBack).toBe(true);
+        expect(args.update.updateState).toBe('downloading');
+        expect(args.update.rolledBack).toBe(true);
+      });
+
+      it('旧 worker 两字段都缺席 → 整键缺席（保留 register 阶段已有值）', async () => {
+        prisma.worker.upsert.mockResolvedValue(workerRow());
+        const dto = registerDto();
+
+        await service.register('secret-token', dto);
+
+        const [args] = prisma.worker.upsert.mock.calls[0];
+        expect('updateState' in args.create).toBe(false);
+        expect('rolledBack' in args.create).toBe(false);
+      });
+
+      it('rolledBack 显式 false → 落 false（与「未上报」可区分，UI 二态）', async () => {
+        prisma.worker.upsert.mockResolvedValue(workerRow());
+        const dto = registerDto();
+        dto.rolledBack = false;
+
+        await service.register('secret-token', dto);
+
+        const [args] = prisma.worker.upsert.mock.calls[0];
+        expect(args.create.rolledBack).toBe(false);
+      });
+
+      it('心跳上报 → update 刷新两列（执行进度由心跳刷新最快）', async () => {
+        const dto = hbDto();
+        dto.updateState = 'restarting';
+        dto.rolledBack = false;
+
+        await service.heartbeat('w_0000000001', dto);
+
+        const [args] = prisma.worker.update.mock.calls[0];
+        expect(args.data.updateState).toBe('restarting');
+        expect(args.data.rolledBack).toBe(false);
+      });
+
+      it('心跳未上报 → 两键整键缺席（不清空 UI 正在展示的上次结果）', async () => {
+        await service.heartbeat('w_0000000001', hbDto());
+
+        const [args] = prisma.worker.update.mock.calls[0];
+        expect('updateState' in args.data).toBe(false);
+        expect('rolledBack' in args.data).toBe(false);
+      });
+
+      it('非法 updateState 取值（绕过 HTTP 直接调 service）→ 视为未上报，不落脏值', async () => {
+        // 绕过 HTTP 的 @IsIn 直达 service：Object.assign 不做字面量类型收窄，
+        // 用来构造「DTO 类型上不该出现的脏值」，无需 any/双重断言。
+        const dto = Object.assign(hbDto(), { updateState: 'weird-state' });
+
+        await expect(
+          service.heartbeat('w_0000000001', dto),
+        ).resolves.toBeDefined();
+
+        const [args] = prisma.worker.update.mock.calls[0];
+        expect('updateState' in args.data).toBe(false);
+      });
+    });
+
+    describe('GET /workers 出参（Todo 5 web 消费口径）', () => {
+      const summaryRow = (overrides: Record<string, unknown> = {}) => ({
+        id: 'w_0000000001',
+        name: 'worker-1',
+        opencodeVersion: '1.18.14',
+        load: { instances: 1 },
+        status: WORKER_STATUS.ONLINE,
+        lastHeartbeatAt: new Date('2026-08-08T00:00:00Z'),
+        registeredAt: new Date('2026-08-08T00:00:00Z'),
+        defaultModelId: null,
+        codeVersion: 'deploy-tag-1',
+        updateState: 'ready-manual',
+        rolledBack: 0,
+        maxInstances: 5,
+        skills: JSON.stringify(['coding']),
+        tools: JSON.stringify(['git']),
+        ...overrides,
+      });
+
+      it('出参含 codeVersion/expectedVersion/updateState/rolledBack/updateAvailable', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        prisma.$queryRawUnsafe.mockResolvedValue([summaryRow()]);
+
+        const rows = await service.findAll();
+
+        expect(rows[0]).toMatchObject({
+          codeVersion: 'deploy-tag-1',
+          expectedVersion: 'deploy-tag-2',
+          updateState: 'ready-manual',
+          rolledBack: false,
+          updateAvailable: true,
+        });
+      });
+
+      it('版本一致 → updateAvailable=false（UI 不显示可点按钮）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-1';
+        prisma.$queryRawUnsafe.mockResolvedValue([summaryRow()]);
+
+        const rows = await service.findAll();
+
+        expect(rows[0].updateAvailable).toBe(false);
+      });
+
+      it('旧 worker（两列 NULL / 未上报）→ 出参 null + false，且不误报可更新', async () => {
+        delete process.env.CODE_VERSION;
+        prisma.$queryRawUnsafe.mockResolvedValue([
+          summaryRow({ codeVersion: null, updateState: null }),
+        ]);
+
+        const rows = await service.findAll();
+
+        expect(rows[0]).toMatchObject({
+          codeVersion: null,
+          expectedVersion: null,
+          updateState: null,
+          rolledBack: false,
+          updateAvailable: false,
+        });
+      });
+
+      it('dev 版本 vs 真期望版本 → updateAvailable=false（未知占位不算不一致）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        prisma.$queryRawUnsafe.mockResolvedValue([
+          summaryRow({ codeVersion: 'dev' }),
+        ]);
+
+        const rows = await service.findAll();
+
+        expect(rows[0].updateAvailable).toBe(false);
+      });
+
+      it('rolledBack 列缺列/非法值 → 归一化为 false（UI 二态，不出 null）', async () => {
+        prisma.$queryRawUnsafe.mockResolvedValue([
+          summaryRow({ rolledBack: undefined }),
+          summaryRow({ id: 'w_2', rolledBack: 1 }),
+          summaryRow({ id: 'w_3', rolledBack: '0' }),
+        ]);
+
+        const rows = await service.findAll();
+
+        expect(rows.map((r) => r.rolledBack)).toEqual([false, true, false]);
+      });
+
+      it('非法 updateState 列值 → 出参 null（不把脏值透给 UI）', async () => {
+        prisma.$queryRawUnsafe.mockResolvedValue([
+          summaryRow({ updateState: 'bogus' }),
+        ]);
+
+        const rows = await service.findAll();
+
+        expect(rows[0].updateState).toBeNull();
+      });
+
+      it('SQL 摘要投影新增三个窄标量列，且仍不整列 select capabilities（1038 根因）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        prisma.$queryRawUnsafe.mockResolvedValue([summaryRow()]);
+
+        await service.findAll();
+
+        const sql = prisma.$queryRawUnsafe.mock.calls[0][0] as string;
+        expect(sql).toContain('code_version AS codeVersion');
+        expect(sql).toContain('update_state AS updateState');
+        expect(sql).toContain('rolled_back AS rolledBack');
+        // 大 JSON 仍只作为 JSON_EXTRACT 入参，不得成为独立投影列
+        expect(sql).not.toMatch(/(^|,)\s*capabilities\s*(,|\s+FROM)/im);
+        // 物化窄行 + 外层排序的护栏不得被本次扩列破坏
+        expect(sql).toMatch(/ORDER BY id\s+LIMIT 1000000/i);
+        expect(sql).toMatch(/\)\s*AS t\s+ORDER BY t\.registeredAt DESC/i);
+      });
+
+      it('findOne 详情同样含自更新字段（worker 详情页与列表同口径）', async () => {
+        process.env.CODE_VERSION = 'deploy-tag-2';
+        prisma.worker.findUnique.mockResolvedValue(
+          workerRow({
+            codeVersion: 'deploy-tag-1',
+            updateState: 'rolledback',
+            rolledBack: true,
+          }),
+        );
+
+        const view = await service.findOne('w_0000000001');
+
+        expect(view).toMatchObject({
+          codeVersion: 'deploy-tag-1',
+          expectedVersion: 'deploy-tag-2',
+          updateState: 'rolledback',
+          rolledBack: true,
+          updateAvailable: true,
         });
       });
     });

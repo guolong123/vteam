@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsIn,
   IsNotEmpty,
   IsOptional,
@@ -9,6 +10,10 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { McpStatusEntryDto } from '../../mcp-servers/dto/mcp-status.dto';
+import {
+  WORKER_UPDATE_STATES,
+  WorkerUpdateState,
+} from '../worker-update-state';
 import { WorkerLoadDto } from './register-worker.dto';
 
 export const WORKER_HEALTH = {
@@ -59,4 +64,26 @@ export class HeartbeatWorkerDto {
   @IsOptional()
   @IsString()
   codeVersion?: string;
+
+  /**
+   * 自更新执行状态（与 register 同字段同口径，Todo 3 ↔ Todo 4 共享契约）。
+   * 心跳是执行器的进度上报通道，故状态在心跳里刷新最快（下载中/重启中/待手动重启）。
+   */
+  @ApiPropertyOptional({
+    description:
+      '自更新执行状态（pending/downloading/restarting/ready-manual/rolledback）；旧 worker 缺省 = 未上报',
+    enum: Object.values(WORKER_UPDATE_STATES),
+  })
+  @IsOptional()
+  @IsIn(Object.values(WORKER_UPDATE_STATES))
+  updateState?: WorkerUpdateState;
+
+  /** 最近一次自更新是否已被自动回滚（缺席 = 未上报 → 不写列，显式 false 才落 false）。 */
+  @ApiPropertyOptional({
+    description:
+      '最近一次自更新是否已被自动回滚（缺席 = 未上报，不覆盖已有值）',
+  })
+  @IsOptional()
+  @IsBoolean()
+  rolledBack?: boolean;
 }

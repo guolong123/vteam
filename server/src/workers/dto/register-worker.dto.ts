@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsObject,
@@ -11,6 +12,10 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import {
+  WORKER_UPDATE_STATES,
+  WorkerUpdateState,
+} from '../worker-update-state';
 
 /** worker agent 策略能力位（Todo 14：injector 注入结果透传；旧 worker 缺省=不支持）。 */
 export class WorkerAgentPoliciesDto {
@@ -180,4 +185,31 @@ export class RegisterWorkerDto {
   @IsOptional()
   @IsString()
   codeVersion?: string;
+
+  /**
+   * 自更新执行状态（worker-self-update Todo 3 ↔ Todo 4 共享契约，**字段名逐字对齐**）。
+   * worker 更新执行器当前状态（pending/downloading/restarting/ready-manual/rolledback）；
+   * server 只透传 + 落库 + 供 UI 展示，不发明状态、不做状态机推断。
+   * 旧 worker 不携带——**可选，缺席不清空已有值**（持久化语义见 workers.service.ts register）。
+   */
+  @ApiPropertyOptional({
+    description:
+      '自更新执行状态（pending/downloading/restarting/ready-manual/rolledback）；旧 worker 缺省 = 未上报',
+    enum: Object.values(WORKER_UPDATE_STATES),
+  })
+  @IsOptional()
+  @IsIn(Object.values(WORKER_UPDATE_STATES))
+  updateState?: WorkerUpdateState;
+
+  /**
+   * 最近一次自更新是否已被自动回滚（一次性结果标志，可保持为 true 供 UI 展示）。
+   * 缺席（undefined）= 「本次没上报」→ 不写列；显式 false 才落 false。
+   */
+  @ApiPropertyOptional({
+    description:
+      '最近一次自更新是否已被自动回滚（缺席 = 未上报，不覆盖已有值）',
+  })
+  @IsOptional()
+  @IsBoolean()
+  rolledBack?: boolean;
 }

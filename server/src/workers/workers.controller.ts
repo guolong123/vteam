@@ -29,6 +29,8 @@ import { DEFAULT_WORKER_TOKEN } from './workers.constants';
  *   09 篇 §3.7 [admin]（运维可见 FR-26）；内置 member 简写 view 放行）。
  * - PATCH /workers/:id：用户 JWT + PermissionGuard（workers.edit，CONF-03 读写守卫
  *   同资源权限点，替代原 AdminGuard 的 users.manage 语义倒挂）。
+ * - POST /workers/:id/restart|shutdown|update：用户 JWT + PermissionGuard（workers.edit）——
+ *   与 PATCH :id 同级：管理型动作一律走权限点，不与 @Public 的 worker 侧通道混用。
  * 全局前缀 /api/v1（main.ts 已设置），故实际路由为 /api/v1/workers。
  */
 @ApiTags('workers')
@@ -128,6 +130,28 @@ export class WorkersController {
   @ApiOperation({ summary: '重启 worker（workers.edit；经心跳命令下发）' })
   requestRestart(@Param('id') id: string) {
     return this.workers.requestRestart(id);
+  }
+
+  /**
+   * POST /api/v1/workers/:id/update：下发自更新指令（worker-self-update，workers.edit）。
+   *
+   * 守卫对齐本控制器既有**管理型**端点（PATCH :id / POST :id/restart / POST :id/shutdown），
+   * 即用户 JWT + PermissionGuard(workers.edit)——**刻意不是 @Public**：register/heartbeat
+   * 公开是因为它们走 X-Worker-Token 鉴权，而本端点是纯管理员动作，任何能拿到共享
+   * worker token 的进程都不该有权让别人的机器换码重启。
+   *
+   * 无请求体（更新目标版本由 server env CODE_VERSION 唯一决定，不接受客户端指定版本：
+   * 否则一个越权请求就能把 worker 钉到任意版本）。响应 `{status:'pending', version}`。
+   */
+  @Post(':id/update')
+  @UseGuards(PermissionGuard)
+  @RequirePermission('workers.edit')
+  @ApiOperation({
+    summary:
+      '下发 worker 自更新指令（workers.edit；经心跳命令下发，空闲后执行）',
+  })
+  requestUpdate(@Param('id') id: string) {
+    return this.workers.requestUpdate(id);
   }
 
   /**

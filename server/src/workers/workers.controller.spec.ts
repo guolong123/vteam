@@ -1,5 +1,9 @@
+import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants';
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
+import { IS_PUBLIC_KEY } from '../auth/decorators/public.decorator';
+import { REQUIRE_PERMISSION_KEY } from '../common/decorators/require-permission.decorator';
+import { PermissionGuard } from '../common/guards/permission.guard';
 import { PrismaService } from '../prisma/prisma.service';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
@@ -18,6 +22,7 @@ describe('WorkersController', () => {
     updateDefaultModel: jest.Mock;
     requestRestart: jest.Mock;
     requestShutdown: jest.Mock;
+    requestUpdate: jest.Mock;
     remove: jest.Mock;
   };
 
@@ -30,6 +35,7 @@ describe('WorkersController', () => {
       updateDefaultModel: jest.fn(),
       requestRestart: jest.fn(),
       requestShutdown: jest.fn(),
+      requestUpdate: jest.fn(),
       remove: jest.fn(),
     };
 
@@ -181,5 +187,48 @@ describe('WorkersController', () => {
 
     expect(service.remove).toHaveBeenCalledWith('w_0000000001');
     expect(result).toEqual({ id: 'w_0000000001', deleted: true });
+  });
+
+  describe('POST /workers/:id/update（worker-self-update Todo 3）', () => {
+    it('转发 requestUpdate，返回 {status,version}', async () => {
+      service.requestUpdate.mockResolvedValue({
+        status: 'pending',
+        version: 'deploy-tag-2',
+      });
+
+      const result = await controller.requestUpdate('w_0000000001');
+
+      expect(service.requestUpdate).toHaveBeenCalledWith('w_0000000001');
+      expect(result).toEqual({ status: 'pending', version: 'deploy-tag-2' });
+    });
+
+    it('路由为 POST :id/update（与 :id/restart|:id/shutdown 同级，只吃一个 path 参数）', () => {
+      const handler = controller.requestUpdate;
+      expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(':id/update');
+      expect(Reflect.getMetadata(METHOD_METADATA, handler)).toBe(1); // RequestMethod.POST
+      expect(handler.length).toBe(1);
+    });
+
+    it('守卫对齐管理型端点：workers.edit + PermissionGuard，且**不是** @Public', () => {
+      const handler = controller.requestUpdate;
+      expect(Reflect.getMetadata(REQUIRE_PERMISSION_KEY, handler)).toBe(
+        'workers.edit',
+      );
+      expect(
+        (Reflect.getMetadata('__guards__', handler) as unknown[]) ?? [],
+      ).toContain(PermissionGuard);
+      // 关键回归：register/heartbeat 走 @Public + X-Worker-Token，本端点是管理员动作，
+      // 绝不能是 @Public（否则任何共享 worker token 都能让别人机器换码重启）。
+      expect(Reflect.getMetadata(IS_PUBLIC_KEY, handler)).toBeUndefined();
+    });
+
+    it('权限点与既有 restart/shutdown 同一个（不新造权限点）', () => {
+      expect(
+        Reflect.getMetadata(REQUIRE_PERMISSION_KEY, controller.requestRestart),
+      ).toBe('workers.edit');
+      expect(
+        Reflect.getMetadata(REQUIRE_PERMISSION_KEY, controller.requestShutdown),
+      ).toBe('workers.edit');
+    });
   });
 });

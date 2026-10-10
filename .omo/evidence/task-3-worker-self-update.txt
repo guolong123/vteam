@@ -1,0 +1,243 @@
+# Task 3（uw-command-api）证据 — worker 自更新指令下发端点
+分支 feat/worker-self-update · 范围 server/src/workers/** + 一份迁移 · 2026-10-10
+
+================================================================================
+## 0. 环境
+================================================================================
+$ export PATH="$HOME/.nvm/versions/node/v22.15.0/bin:$PATH"
+node -v  → v22.15.0
+npm  -v  → 10.9.2
+prisma  → 6.19.3（CLI 离线可用；本机/CI 无 MySQL，`nc -z localhost 3306` 不通）
+
+================================================================================
+## 1. 门禁结果（收尾实测）
+================================================================================
+$ cd server && npx tsc --noEmit
+tsc OK（exit 0，无输出）
+
+$ cd server && npm run test
+Test Suites: 174 passed, 174 total
+Tests:       4124 passed, 4124 total
+Snapshots:   1 passed, 1 total
+Time:        33.71 s
+
+基线 172 suites / 4054 tests → 现在 **174 suites / 4124 tests（全绿）**
+差值：+2 suite（worker-update-state.spec.ts、worker-update-state.migration.spec.ts）
+      +70 tests（service 45 / controller 4 / dto 12 / 状态模块 10 / 迁移守卫 11，部分重叠计）
+
+$ npx eslint <本次全部改动文件>
+0 errors, 3 warnings —— 3 条 warning 全部落在**既有**代码上
+（worker-dto.spec.ts:336/341 的 `const { capabilities, ...rest }` 解构、
+  workers.service.spec.ts:906 `broadcastSpy`），非本次引入。
+src/workers + src/prisma 全目录仍有 10 条 prettier error，全部位于 Wave 1 与更早
+的既有文件（model-usage.migration.spec.ts / seed.spec.ts / worker-code-version.*），
+本 todo 未触碰，未越界修。
+
+禁止模式扫描（本次新增 + 修改的全部文件）：`as any` / `@ts-ignore` / `@ts-expect-error`
+命中数 **0**；无空 catch。
+
+================================================================================
+## 2. 文件清单
+================================================================================
+新增
+  server/prisma/migrations/20261010030000_worker_update_state/migration.sql
+  server/src/workers/worker-update-state.ts                    （共享契约 + 版本比对）
+  server/src/workers/worker-update-state.spec.ts
+  server/src/prisma/worker-update-state.migration.spec.ts
+修改
+  server/prisma/schema.prisma                                  （+updateState/+rolledBack）
+  server/src/workers/dto/register-worker.dto.ts                 （+updateState/+rolledBack）
+  server/src/workers/dto/heartbeat-worker.dto.ts                （+updateState/+rolledBack）
+  server/src/workers/workers.constants.ts                       （+2 错误码）
+  server/src/workers/workers.controller.ts                      （+POST :id/update）
+  server/src/workers/workers.service.ts                         （+requestUpdate/+收敛/+投影）
+  server/src/workers/workers.controller.spec.ts
+  server/src/workers/workers.service.spec.ts
+  server/src/workers/dto/worker-dto.spec.ts
+
+`git status` 里 worker/src/{index.ts,client/registry-client.ts,protocol/worker-protocol.ts}
+与 worker/src/update/ 的改动**来自并行执行的 Todo 4**，本 todo 未写入 worker/ 与 web/
+（本 todo 的每一次 write/edit 都只落在 server/ 下；web/ 在 git status 中完全干净）。
+
+================================================================================
+## 3. 端点矩阵（实测用例见 workers.service.spec.ts「POST /workers/:id/update」）
+================================================================================
+| 场景                              | 结果 | 响应 |
+|-----------------------------------|------|------|
+| 在线 worker（CODE_VERSION 有值）  | 200  | `{status:'pending', version:'deploy-tag-2'}` |
+| 重复点击（已排队）                | 200  | 与首次**逐字相同**，队列长度仍为 1（无重复） |
+| worker 不存在                     | 404  | `WORKER_NOT_FOUND` |
+| offline worker                    | 409  | `WORKER_OFFLINE_UPDATE_UNREACHABLE` |
+| degraded worker                   | 200  | 降权≠离线，仍有心跳可取指令 |
+| env CODE_VERSION 缺省/空串        | 409  | `WORKER_UPDATE_NO_EXPECTED_VERSION` |
+
+守卫（controllers 断言，实际 guard 非假设）：
+  `@UseGuards(PermissionGuard)` + `@RequirePermission('workers.edit')`，
+  与本控制器既有管理端点 PATCH :id / POST :id/restart / POST :id/shutdown **同一个权限点**；
+  显式断言 `IS_PUBLIC_KEY` 未定义 —— 与 register/heartbeat 的 @Public+X-Worker-Token 通道划清界限。
+  路由元数据断言：PATH=':id/update'、METHOD=POST、handler 只吃 1 个参数（无请求体：
+  更新目标版本由 server env 唯一决定，不接受客户端指定版本）。
+
+================================================================================
+## 4. 指令形状（复用既有 T4a 通道，未建并行 map）
+================================================================================
+计划里的 `{kind:'update-worker', version}` 与本通道信封 `{type, resourceVersion, payload?}`
+是同一件事的两种写法。选后者，因为 **worker 侧 `dispatchCommands` 已按 `command.type`
+分发**（worker/src/index.ts：reload-config / model-credentials / git-credentials /
+restart / shutdown 五个分支都是 `if (command.type === WORKER_COMMAND_TYPES.X)`），
+`extractCommands` 也只做 `response.commands ?? []`。若按 `{kind,...}` 另立形状，
+worker 的 switch 永远不匹配，且必然诱发「新建一条并行通道」——正是 plan Must-NOT 明令禁止的。
+
+实际入队（service 内联断言过键集合恰为两个）：
+  { type: 'update-worker', resourceVersion: '<CODE_VERSION>' }
+无 payload：目标版本就是 resourceVersion（与 model-credentials 同形）。
+Todo 4 侧对接点：`command.type === 'update-worker'` → `command.resourceVersion` = 目标版本。
+
+存储：**既有 `pendingCommands`（workers.service.ts 内存 Map，workerId → WorkerCommand[]）**，
+经既有 `enqueueCommand` 入队、既有「心跳取出即清空」路径下发。未新增任何 Map/字段/表列
+来存待发指令（plan：pending 指令不落库 ✓）。
+
+================================================================================
+## 5. 决策一：updateState / rolledBack 落库（新增迁移），理由
+================================================================================
+选择**落库**，而非纯内存：
+
+- 这两项回答的是「**上次更新结果如何**」，不是「下一条指令发什么」。纯内存态下 server
+  一重启，`rolledback` 会悄悄变回 false —— 运维看到的是「一切正常」，而实际这个 worker
+  的新版本已经起不来、正跑在 dist.prev 上。这正是计划里 UI 要展示的那条警示事实，
+  属于最不该被吞掉的一类状态。
+- 计划本身只要求「pending 指令」不落库（Must-NOT 原文限定的是指令），从未禁止落**结果**；
+  我刻意把两者分开存放：指令 = 瞬时（内存，一次有效），事实 = 可追溯（库）。
+- UI 重启后仍需展示 → 需要跨 server 生命周期的存储。
+
+迁移（手写 DDL，无 MySQL 环境，等价性见 §6）：
+  ALTER TABLE `workers`
+    ADD COLUMN `update_state` varchar(191) DEFAULT NULL,
+    ADD COLUMN `rolled_back` boolean NOT NULL DEFAULT false;
+
+列语义：
+  update_state  NULL = 从未上报（旧 worker / 从未自更新过）= 未知，UI 显示未知而非假装一致；
+               缺席语义与 codeVersion 逐字一致：register/heartbeat 未携带 → **整键缺席**
+               （保留上次值），显式 `false` 才落 false（`rolledBack` 用 `!== undefined`
+               判定，真值判断会把「显式没回滚」误当「没说话」）。
+  rolled_back   NOT NULL DEFAULT false —— false = 没有回滚发生过的证据；选二态是让前端
+               不必为 null 单独写一套判断。零回填：存量 worker 无从重建（从未自更新过）。
+
+register DTO / heartbeat DTO 的共享契约（与 Todo 4 逐字对齐，字段名与取值均由
+src/workers/worker-update-state.ts 单点定义）：
+  updateState?: 'pending' | 'downloading' | 'restarting' | 'ready-manual' | 'rolledback'
+  rolledBack?: boolean
+两处 DTO 的 @IsIn 白名单与枚举共用同一常量，spec 断言「恰好 5 个取值」+「两侧字段名逐字一致」。
+
+================================================================================
+## 6. 决策二：收敛规则实现位置
+================================================================================
+实现点：workers.service.ts 私有两段，抽在既有 enqueueCommand 之后，与「取出即清空」同一区域：
+
+  heartbeat()  →  const commands = this.takePendingCommands(id, dto);
+                 takePendingCommands() 内部先调 convergePendingUpdateCommand(id, dto)，
+                 再执行 T4a 原逻辑（get → 非空则 delete → 返回）。
+
+规则（只影响 update-worker 一种 kind）：
+  1. 本次心跳上报的 codeVersion 与 server env CODE_VERSION **对齐** → 清除
+     （已是新码，别让它再执行一遍）；
+  2. 本次上报 updateState='rolledback' 或 rolledBack=true → 清除
+     （否则下一轮心跳又把同一条指令喂回去，worker 陷入「更新→回滚→再更新」死循环）；
+  3. 其余（未上报 / 仍不一致 / env 无期望版本 / dev 占位）→ 原样保留。
+
+两条刻意的边界：
+- **只看本次上报，不回查库里的旧 codeVersion**。心跳没说 = 「这次我不知道」，
+  不是「我已经是新版本了」——宁可让指令多留一轮，也不错清。
+- **dev 永不判为对齐**。`dev === dev` 若算对齐，本地栈会凭空显示「已是最新」，
+  也会让 pending 指令被假收敛清掉。与 GET /workers 的 `updateAvailable` 共用同一把尺子
+  （`isCodeVersionAligned` / `computeUpdateAvailable` 严格互补，见 worker-update-state.spec.ts 真值表）。
+
+对其它 kind 的影响：**零**。收敛按 type 过滤，其余命令原样保留并照常下发
+（spec「收敛只动 update-worker：同队列的 reload-config/shutdown 原样下发」）；
+队列里没有 update-worker 时收敛函数直接 return（「对 T4a 其它 kind 完全透明」）。
+T4a 既有 5 组 spec（取出即清空 / 多次累积 / worker 间不串扰 / 无命令不带键 /
+离线恢复回放）全部保持绿。
+
+================================================================================
+## 7. GET /workers 出参与投影
+================================================================================
+新增出参（toWorkerView，findAll 列表 / findOne 详情 / PATCH 回包三处同口径）：
+  codeVersion    string | null   （表列直读）
+  expectedVersion string | null   （server env CODE_VERSION 实时读，未配置 → null）
+  updateState    'pending'|'downloading'|'restarting'|'ready-manual'|'rolledback' | null
+  rolledBack     boolean          （MySQL tinyint(1) / Prisma boolean / 缺列 三态统一归一为二态）
+  updateAvailable boolean         （两侧可比对且不相等；dev / 缺期望版本 → false）
+
+**投影纪律**（原注释警告的是 b000ac6 的 MySQL 1038 'Out of sort memory'：
+大 JSON 进 filesort 排序缓冲区即炸）：本次只扩了 3 个窄标量列，未动 capabilities 处理方式。
+  摘要 SQL 内层新增：
+      code_version AS codeVersion, update_state AS updateState, rolled_back AS rolledBack
+  capabilities 仍**只**作为 JSON_EXTRACT 的入参出现，不是独立投影列；内层
+  `ORDER BY id` + `LIMIT 1000000` 物化护栏与外层 `ORDER BY t.registeredAt DESC` 原样保留。
+  spec 断言（findAll 投影用例）：三个新列别名都在、capabilities 不作为独立投影列、
+  两条 filesort 护栏正则仍匹配、`prisma.worker.findMany` 未被调用。
+  降级路径（JSON_EXTRACT 不可用 → findMany）同步补了三列，并显式断言
+  select 里仍无 capabilities。
+
+**有意的既有测试改动**：workers.service.spec.ts:1716「findAll 降级」用例用
+`toHaveBeenCalledWith` 精确断言了降级 select 对象，故把三列加进该期望值，并追加
+「select 无 capabilities」断言。该用例的不变式（降级不取大 JSON、不 500）未被削弱。
+
+================================================================================
+## 8. 迁移等价性证明（离线，无 MySQL）
+================================================================================
+$ npx prisma migrate diff \
+    --from-schema-datamodel <去掉两列的迁移前 schema> \
+    --to-schema-datamodel prisma/schema.prisma --script
+
+-- AlterTable
+ALTER TABLE `workers` ADD COLUMN `rolled_back` BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN `update_state` VARCHAR(191) NULL;
+
+手写迁移（去注释）：
+  ALTER TABLE `workers`
+    ADD COLUMN `update_state` varchar(191) DEFAULT NULL,
+    ADD COLUMN `rolled_back` boolean NOT NULL DEFAULT false;
+
+列名、类型、默认值、可空性逐项一致；唯一差别是 `VARCHAR(191) NULL` 与
+`varchar(191) DEFAULT NULL` 两种可空写法（同一语义，Prisma 自产前者、本仓惯例后者，
+与 Wave 1 的 `20261010020000_worker_code_version` 同）。
+等价性已固化为断言：src/prisma/worker-update-state.migration.spec.ts 把 Prisma 自产 DDL
+作为常量写在 spec 里，归一化后与手写 DDL 逐字比对——手写 DDL 单独改动即红。
+
+迁移守卫 spec（11 项，照 Wave 1 的 memory-refcount / worker-code-version 模板）：
+schema 声明双向平价 / 两列确由本迁移建出且只 ALTER workers / 两列在 baseline **与前序迁移**
+里都不存在（防 ERROR 1060 重复建列）/ 零回填（无 UPDATE·INSERT·DELETE）/
+update_state 可空 varchar / rolled_back NOT NULL DEFAULT false / 不建索引（schema 侧也无声明）/
+不删列删表不 RENAME / 与 Prisma 自产 DDL 等价。
+
+$ npx prisma generate   （schema 变更后已重跑，client 类型含 updateState/rolledBack）
+
+================================================================================
+## 9. 端到端闭环用例（service 层实测）
+================================================================================
+「入队后心跳即下发（端点→通道闭环，一次有效）」：
+  requestUpdate → heartbeat 拿到
+    commands=[{type:'update-worker', resourceVersion:'deploy-tag-2'}]，
+  第二次心跳 commands 为 undefined（取出即清空未被破坏）。
+
+与 Wave 2 既有守卫的兼容：wave 1 的
+「与既有 T4a commands 通道并存：两者同时下发且互不影响（Todo 3 入队点回归守卫）」
+在本次改动后保持绿。
+
+================================================================================
+## 10. 交接给 Todo 4（worker 执行器）的契约
+================================================================================
+- 心跳下发命令命中分支：`command.type === 'update-worker'`，
+  目标版本取 `command.resourceVersion`（string，非 payload 字段）。
+- 心跳请求体上报字段：`updateState`（5 取值之一）、`rolledBack`（boolean，可长期保持 true）。
+- 不需要 ack 字段：server 侧按「上报 codeVersion 与 CODE_VERSION 对齐」或
+  「上报 rolledBack/rolledback」自动收敛清除（§6），无需 worker 再发确认包。
+- 缺席语义：worker 某一轮不上报这两字段不影响 server 行为（不写列、不清空）。
+
+交接给 Todo 5（web UI）的出参口径：
+  GET /workers 每项新增 codeVersion / expectedVersion / updateState / rolledBack / updateAvailable，
+  全部可能为 null 或 false（旧 worker 与未配置 CODE_VERSION 的部署）；
+  POST /workers/:id/update 无请求体，200 `{status:'pending', version}`，
+  404 `WORKER_NOT_FOUND` / 409 `WORKER_OFFLINE_UPDATE_UNREACHABLE` /
+  409 `WORKER_UPDATE_NO_EXPECTED_VERSION`。

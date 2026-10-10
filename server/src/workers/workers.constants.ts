@@ -33,6 +33,16 @@ export const WORKER_ERRORS = {
    * online/degraded 删除 → 409，先经 shutdown/下线再删。
    */
   WORKER_ONLINE_NOT_REMOVABLE: 'WORKER_ONLINE_NOT_REMOVABLE',
+  /**
+   * POST /workers/:id/update 防护：离线 worker 收不到更新指令——指令只在心跳响应里下发，
+   * 离线的 worker 没有心跳可取，排队等于让 UI 显示「已下发」而永远不发生。409。
+   */
+  WORKER_OFFLINE_UPDATE_UNREACHABLE: 'WORKER_OFFLINE_UPDATE_UNREACHABLE',
+  /**
+   * POST /workers/:id/update：server env `CODE_VERSION` 未配置 → 期望版本未知，
+   * 没有「更新到哪个版本」的答案。409（部署态问题，非请求格式问题）。
+   */
+  WORKER_UPDATE_NO_EXPECTED_VERSION: 'WORKER_UPDATE_NO_EXPECTED_VERSION',
 } as const;
 
 /** tokenHash bcrypt 轮数，与 auth.service.ts BCRYPT_ROUNDS（10）保持一致。 */

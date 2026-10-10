@@ -4,6 +4,7 @@ import { EVENT_TYPES } from '../../common/constants/event.constants';
 import { HeartbeatWorkerDto } from './heartbeat-worker.dto';
 import { RegisterWorkerDto } from './register-worker.dto';
 import { WORKER_EVENT_TYPES, WorkerEventDto } from './worker-event.dto';
+import { WORKER_UPDATE_STATES } from '../worker-update-state';
 
 /**
  * worker 协议 DTO 契约测试（T1 契约基座，server 侧视角）。
@@ -349,6 +350,110 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
 
     it('完整对象 → 校验通过', async () => {
       expect(await errorsOf(base)).toHaveLength(0);
+    });
+  });
+
+  /**
+   * worker-self-update Todo 3/4 共享契约：`updateState` + `rolledBack` 两个可选上报字段。
+   * 两端靠它们对齐（worker 执行器上报 → server 落库 → web 展示），故此处钉死
+   * 「可选 + 取值枚举 + 缺席不报错」三条：任一条漂移，Todo 4 的执行器或 Todo 5 的
+   * UI 就会静默收不到/收错值。
+   */
+  describe('自更新状态字段（updateState/rolledBack）', () => {
+    const base = {
+      workerId: 'w_0000000009',
+      opencodeVersion: '1.18.14',
+      capabilities: { maxInstances: 1, skills: [], tools: [] },
+      load: { instances: 0 },
+    };
+    const errorsOf = async (cls: new () => object, obj: object) =>
+      (await validate(plainToInstance(cls, obj)))
+        .map((e) => e.property)
+        .filter(Boolean);
+
+    for (const [name, cls] of [
+      ['RegisterWorkerDto', RegisterWorkerDto],
+      ['HeartbeatWorkerDto', HeartbeatWorkerDto],
+    ] as const) {
+      it(`${name}：updateState 接受全部 5 个状态取值`, async () => {
+        for (const state of Object.values(WORKER_UPDATE_STATES)) {
+          expect(
+            await errorsOf(cls as new () => object, {
+              ...base,
+              health: 'ok',
+              updateState: state,
+            }),
+          ).toEqual([]);
+        }
+      });
+
+      it(`${name}：updateState 缺席（旧 worker）→ 校验通过且键不进 wire`, async () => {
+        const wire = JSON.parse(
+          JSON.stringify(
+            plainToInstance(cls as new () => object, { ...base, health: 'ok' }),
+          ),
+        );
+        expect(
+          await errorsOf(cls as new () => object, { ...base, health: 'ok' }),
+        ).toEqual([]);
+        expect(wire.updateState).toBeUndefined();
+        expect(wire.rolledBack).toBeUndefined();
+      });
+
+      it(`${name}：非法 updateState 取值 → 400 拒绝（不把脏值写进 UI 会展示的列）`, async () => {
+        expect(
+          await errorsOf(cls as new () => object, {
+            ...base,
+            health: 'ok',
+            updateState: 'weird-state',
+          }),
+        ).toContain('updateState');
+      });
+
+      it(`${name}：rolledBack 布尔可用；非布尔值被拒`, async () => {
+        expect(
+          await errorsOf(cls as new () => object, {
+            ...base,
+            health: 'ok',
+            rolledBack: true,
+          }),
+        ).toEqual([]);
+        expect(
+          await errorsOf(cls as new () => object, {
+            ...base,
+            health: 'ok',
+            rolledBack: 'yes',
+          }),
+        ).toContain('rolledBack');
+      });
+    }
+
+    it('register 与心跳两侧字段名逐字一致（Todo 4 按这两个名字发，server 按这两个名字收）', () => {
+      const CONTRACT_FIELDS = ['updateState', 'rolledBack'];
+      const regWire = JSON.parse(
+        JSON.stringify(
+          plainToInstance(RegisterWorkerDto, {
+            ...base,
+            updateState: 'downloading',
+            rolledBack: true,
+          }),
+        ),
+      );
+      const hbWire = JSON.parse(
+        JSON.stringify(
+          plainToInstance(HeartbeatWorkerDto, {
+            ...base,
+            health: 'ok',
+            updateState: 'downloading',
+            rolledBack: true,
+          }),
+        ),
+      );
+      for (const field of CONTRACT_FIELDS) {
+        expect(regWire).toHaveProperty(field);
+        expect(hbWire).toHaveProperty(field);
+        expect(hbWire[field]).toBe(regWire[field]);
+      }
     });
   });
 });

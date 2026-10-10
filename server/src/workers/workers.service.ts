@@ -36,6 +36,12 @@ import {
   normalizeReportedCodeVersion,
   resolveExpectedCodeVersion,
 } from './worker-code-version';
+import {
+  computeUpdateAvailable,
+  isCodeVersionAligned,
+  normalizeReportedUpdateState,
+  WORKER_UPDATE_STATES,
+} from './worker-update-state';
 
 /** schema Worker.capabilities Json 形状。 */
 interface WorkerCapabilitiesShape {
@@ -48,6 +54,13 @@ interface WorkerCapabilitiesShape {
 interface WorkerLoadShape {
   instances: number;
 }
+
+/**
+ * worker-self-update Todo 3：`POST /workers/:id/update` 的响应状态字面量。
+ * 恒为 'pending'——本端点只负责入队，「已执行/已完成/已回滚」都不是 server 能断言的事实
+ * （它们由 worker 上报的 codeVersion/updateState/rolledBack 表达，见 GET /workers 出参）。
+ */
+const UPDATE_REQUEST_STATUS = 'pending';
 
 /** P5：心跳 token 校验缓存 TTL ms（30s = 3 次心跳窗口，token 轮换后 30s 内旧结果过期）。 */
 const TOKEN_CHECK_TTL_MS = 30_000;
@@ -93,6 +106,19 @@ export const WORKER_COMMAND_TYPES = {
    * 明文传输，不落 worker 日志。按 worker 承载活跃 agent 的授权仓库过滤打包。
    */
   GIT_CREDENTIALS: 'git-credentials',
+  /**
+   * worker-self-update：管理员在 Worker 节点页点【更新】→ 本命令入队 → worker 下次心跳
+   * 取出 → 执行器（Todo 4）空闲时下载 tarball、校验 sha256、备份 dist.prev、覆盖并重启。
+   *
+   * 走既有 T4a commands 通道（**不新建并行指令字段/内存 map**，见 plan Must-NOT）：
+   * `{ type:'update-worker', resourceVersion: <期望版本> }` 即计划里的
+   * `{kind:'update-worker', version}` 的同一件事，套在本通道 worker 侧已解析的
+   * `{type, resourceVersion, payload?}` 信封里——dispatchCommands 按 `type` 分发、
+   * 从 `resourceVersion` 取目标版本，与 model-credentials 同形，故无需 payload。
+   * 命令一次有效：心跳取出即清空（取出 ≠ 执行完毕；执行结果由 codeVersion 对齐 /
+   * rolledBack 上报经 heartbeat 的收敛规则闭环）。
+   */
+  UPDATE_WORKER: 'update-worker',
 } as const;
 
 export type WorkerCommandType =
@@ -268,6 +294,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     // **缺席语义 = 保留已有值**（不写 null）：旧 worker 不携带 codeVersion，若写 null，
     // 一次旧版 worker 重注册就会把「新版本 worker 刚上报的 SHA」抹成未知。
     const reportedCodeVersion = normalizeReportedCodeVersion(dto.codeVersion);
+    // 自更新状态/回滚标志：与 codeVersion 同一套缺席语义（undefined = 本次没上报
+    // → 整键缺席，保留已有值）。注意 rolledBack 用 `!== undefined` 而非真值判断：
+    // 显式 false 是「我确认没回滚」，与「没说话」必须可区分。
+    const reportedUpdateState = normalizeReportedUpdateState(dto.updateState);
     const data = {
       name: dto.name ?? null,
       opencodeVersion: dto.opencodeVersion,
@@ -280,6 +310,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       ...(reportedCodeVersion !== undefined
         ? { codeVersion: reportedCodeVersion }
         : {}),
+      ...(reportedUpdateState !== undefined
+        ? { updateState: reportedUpdateState }
+        : {}),
+      ...(dto.rolledBack !== undefined ? { rolledBack: dto.rolledBack } : {}),
       status: WORKER_STATUS.ONLINE,
       tokenHash,
       lastHeartbeatAt: now,
@@ -406,6 +440,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     } as unknown as Prisma.InputJsonValue;
     // worker-self-update Todo 2：心跳刷新代码版本，缺席语义同 register（保留已有值）。
     const reportedCodeVersion = normalizeReportedCodeVersion(dto.codeVersion);
+    const reportedUpdateState = normalizeReportedUpdateState(dto.updateState);
     await this.prisma.worker.update({
       where: { id },
       data: {
@@ -415,6 +450,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         ...(reportedCodeVersion !== undefined
           ? { codeVersion: reportedCodeVersion }
           : {}),
+        ...(reportedUpdateState !== undefined
+          ? { updateState: reportedUpdateState }
+          : {}),
+        ...(dto.rolledBack !== undefined ? { rolledBack: dto.rolledBack } : {}),
       },
     });
     // C5（R5）：worker 从 offline 恢复上线 → 回放未吊销凭据——补离线期间保存的
@@ -425,13 +464,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       await this.replayModelCredentials(id);
       await this.replayGitCredentials(id);
     }
-    const commands = this.pendingCommands.get(id) ?? [];
-    if (commands.length > 0) {
-      this.pendingCommands.delete(id);
-    }
+    const commands = this.takePendingCommands(id, dto);
     // worker-self-update Todo 2：期望代码版本（server env CODE_VERSION = deploy TAG，
     // 与 pack-worker tarball 同源）。纯信息字段——不下发任何更新语义，更新指令走既有
-    // T4a commands 通道（Todo 3 在该通道入队 update-worker），此处不动 pendingCommands。
+    // T4a commands 通道（update-worker 入队见 requestUpdate），此处不动 pendingCommands。
     // env 缺省/空串 → undefined → **整字段省略**（未设该 env 的部署不产生「版本不一致」）。
     const expectedVersion = resolveExpectedCodeVersion();
     return {
@@ -452,6 +488,86 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     const existing = this.pendingCommands.get(workerId) ?? [];
     existing.push(command);
     this.pendingCommands.set(workerId, existing);
+  }
+
+  /**
+   * T4a 心跳下发：取出该 worker 的全部待下发命令并清空（命令一次有效）。
+   *
+   * worker-self-update Todo 3：**仅**在取出前执行 update-worker 的收敛判断
+   * （见 {@link convergePendingUpdateCommand}）——收敛只影响 update-worker 一种 kind，
+   * 其余 kind 的入队/下发/清空语义逐字保持 T4a 现状（回归由 T4a 既有 spec 守卫）。
+   */
+  private takePendingCommands(
+    workerId: string,
+    dto: HeartbeatWorkerDto,
+  ): WorkerCommand[] {
+    this.convergePendingUpdateCommand(workerId, dto);
+    const commands = this.pendingCommands.get(workerId) ?? [];
+    if (commands.length > 0) {
+      this.pendingCommands.delete(workerId);
+    }
+    return commands;
+  }
+
+  /**
+   * worker-self-update Todo 3：pending update-worker 指令的**收敛规则**（下发前结算）。
+   *
+   * 命令一次有效，但「取出」不等于「执行完毕」——worker 取出后要下载、校验、覆盖、
+   * 重启（中途还要等空闲）。若它停在半路而 UI 再点一次【更新】，就会下发第二条
+   * 重复指令；反之若更新已完成而指令还留着（重启窗口内心跳没赶上），反复重放一个
+   * 已完成的更新毫无意义。故在下发前按**本次心跳的实际上报**结算：
+   *   1. codeVersion 与期望版本对齐 → 已是新码，清掉（别让它再执行一遍）；
+   *   2. updateState=rolledback 或 rolledBack=true → 自动回滚已生效，清掉（否则
+   *      下一轮心跳又把这条指令喂回去，worker 陷入「更新→回滚→再更新」死循环）；
+   *   3. 其余（未上报 / 仍不一致 / 下载中）→ 原样保留，其它 kind 的命令一概不动。
+   *
+   * 只看本次上报、不回查库里的旧 codeVersion：心跳没说 = 「这次我不知道」，
+   * 不是「我已经是新版本了」——宁可让指令多留一轮，也不错清。
+   */
+  private convergePendingUpdateCommand(
+    workerId: string,
+    dto: HeartbeatWorkerDto,
+  ): void {
+    const pending = this.pendingCommands.get(workerId);
+    if (
+      !pending ||
+      !pending.some((c) => c.type === WORKER_COMMAND_TYPES.UPDATE_WORKER)
+    ) {
+      return;
+    }
+    const expectedVersion = resolveExpectedCodeVersion();
+    const reported = normalizeReportedCodeVersion(dto.codeVersion);
+    const rolledBack =
+      dto.rolledBack === true ||
+      normalizeReportedUpdateState(dto.updateState) ===
+        WORKER_UPDATE_STATES.ROLLEDBACK;
+    if (!rolledBack && !isCodeVersionAligned(reported, expectedVersion)) {
+      return;
+    }
+    const remaining = pending.filter(
+      (c) => c.type !== WORKER_COMMAND_TYPES.UPDATE_WORKER,
+    );
+    if (remaining.length === 0) {
+      this.pendingCommands.delete(workerId);
+    } else {
+      this.pendingCommands.set(workerId, remaining);
+    }
+    this.logger.log(
+      `worker ${workerId} update 指令收敛清除（${
+        rolledBack
+          ? `已回滚 ${dto.updateState ?? 'rolledBack=true'}`
+          : `版本已对齐 ${reported}`
+      }），保留其它命令 ${remaining.length} 条`,
+    );
+  }
+
+  /** 该 worker 已排队的 update-worker 命令（幂等判定用），无则 undefined。 */
+  private findPendingUpdateCommand(
+    workerId: string,
+  ): WorkerCommand | undefined {
+    return this.pendingCommands
+      .get(workerId)
+      ?.find((c) => c.type === WORKER_COMMAND_TYPES.UPDATE_WORKER);
   }
 
   /**
@@ -858,6 +974,9 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
           lastHeartbeatAt: Date | null;
           registeredAt: Date;
           defaultModelId: string | null;
+          codeVersion: string | null;
+          updateState: string | null;
+          rolledBack: unknown;
           maxInstances: unknown;
           skills: unknown;
           tools: unknown;
@@ -865,11 +984,14 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       >(
         `SELECT t.id, t.name, t.opencodeVersion, t.\`load\`, t.status,
                 t.lastHeartbeatAt, t.registeredAt, t.defaultModelId,
+                t.codeVersion, t.updateState, t.rolledBack,
                 t.maxInstances, t.skills, t.tools
            FROM (
              SELECT id, name, opencode_version AS opencodeVersion, \`load\`, status,
                     last_heartbeat_at AS lastHeartbeatAt, registered_at AS registeredAt,
                     default_model_id AS defaultModelId,
+                    code_version AS codeVersion, update_state AS updateState,
+                    rolled_back AS rolledBack,
                     JSON_EXTRACT(capabilities, '$.maxInstances') AS maxInstances,
                     JSON_EXTRACT(capabilities, '$.skills') AS skills,
                     JSON_EXTRACT(capabilities, '$.tools') AS tools
@@ -911,6 +1033,9 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
           lastHeartbeatAt: true,
           registeredAt: true,
           defaultModelId: true,
+          codeVersion: true,
+          updateState: true,
+          rolledBack: true,
         },
         orderBy: { registeredAt: 'desc' },
       });
@@ -926,6 +1051,22 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     if (typeof value === 'bigint') return Number(value);
     const n = Number(value);
     return Number.isFinite(n) ? n : fallback;
+  }
+
+  /**
+   * 布尔列 → boolean：MySQL tinyint(1) 驱动回 0/1、Prisma 回 boolean、降级路径回
+   * 缺列（undefined），三种形态都归一化成二态。缺列/非法值一律 false
+   * （= 没有回滚发生过的证据，而不是三态 null 让前端各写一遍判断）。
+   */
+  private jsonScalarToBoolean(value: unknown): boolean {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'bigint') return value !== 0n;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+      const n = Number(value);
+      return Number.isFinite(n) && n !== 0;
+    }
+    return false;
   }
 
   /** JSON 数组列 → string[]：驱动可能回 string（未解析）或已解析数组，两种都归一化。 */
@@ -1041,6 +1182,65 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       command: WORKER_COMMAND_TYPES.RESTART,
       queued: true,
     };
+  }
+
+  /**
+   * worker-self-update：POST /workers/:id/update 下发自更新指令（workers.edit 保护）。
+   *
+   * - worker 不存在 → 404 WORKER_NOT_FOUND；
+   * - offline → 409 WORKER_OFFLINE_UPDATE_UNREACHABLE：指令只在**心跳响应**里下发，
+   *   离线的 worker 没有心跳可取，排队也永远不会被取出（UI 会显示「已下发」却什么都不
+   *   发生）。与 requestRestart「离线也排队」的口径差异是有意的：重启/下线命令丢了代价
+   *   小且可重下，更新指令丢了会让人误判更新状态，故直接拒绝让操作者先把它叫醒；
+   * - server env `CODE_VERSION` 缺省 → 409 WORKER_UPDATE_NO_EXPECTED_VERSION：期望版本
+   *   未知时没有「更新到哪个版本」的答案，下发一条没有目标的指令是撒谎；
+   * - 幂等：已排队 update-worker → 直接返回同样的 `pending`（**不重复入队**，避免同一
+   *   worker 队列里堆多条相同指令；此时返回的是那条已排队指令的版本，env 在两次点击
+   *   之间若变了，返回的仍是真正会被执行的那个版本）。
+   *
+   * 返回体 `{status:'pending', version}`——与既有 restart/shutdown 端点不同：那两个返回
+   * `queued` 布尔，而本端点的幂等语义要求两次调用**响应逐字相同**（UI 靠它显示
+   * 「已下发，空闲后执行」），故不返回区分首次/重复的字段。
+   */
+  async requestUpdate(id: string) {
+    const worker = await this.prisma.worker.findUnique({
+      where: { id },
+      select: { id: true, status: true },
+    });
+    if (!worker) {
+      throw new NotFoundException({
+        code: WORKER_ERRORS.WORKER_NOT_FOUND,
+        message: `Worker ${id} 不存在`,
+      });
+    }
+    if (worker.status === WORKER_STATUS.OFFLINE) {
+      throw new ConflictException({
+        code: WORKER_ERRORS.WORKER_OFFLINE_UPDATE_UNREACHABLE,
+        message: 'Worker 当前离线，无法接收更新指令（请先恢复其上线）',
+      });
+    }
+    const expectedVersion = resolveExpectedCodeVersion();
+    if (expectedVersion === undefined) {
+      throw new ConflictException({
+        code: WORKER_ERRORS.WORKER_UPDATE_NO_EXPECTED_VERSION,
+        message: '未配置期望版本（CODE_VERSION），无法下发更新指令',
+      });
+    }
+    const pending = this.findPendingUpdateCommand(id);
+    if (pending) {
+      return {
+        status: UPDATE_REQUEST_STATUS,
+        version: pending.resourceVersion,
+      };
+    }
+    this.enqueueCommand(id, {
+      type: WORKER_COMMAND_TYPES.UPDATE_WORKER,
+      resourceVersion: expectedVersion,
+    });
+    this.logger.log(
+      `worker ${id} 已入队 update-worker 指令 → 目标版本 ${expectedVersion}`,
+    );
+    return { status: UPDATE_REQUEST_STATUS, version: expectedVersion };
   }
 
   /**
@@ -1190,7 +1390,13 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     lastHeartbeatAt: Date | null;
     registeredAt: Date;
     defaultModelId: string | null;
+    codeVersion?: string | null;
+    updateState?: string | null;
+    rolledBack?: unknown;
   }) {
+    // 期望版本来自 server env（部署期常量，不落库）——每请求实时读，与心跳响应同源。
+    const expectedVersion = resolveExpectedCodeVersion() ?? null;
+    const codeVersion = worker.codeVersion ?? null;
     return {
       id: worker.id,
       name: worker.name,
@@ -1201,6 +1407,11 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       lastHeartbeatAt: worker.lastHeartbeatAt,
       registeredAt: worker.registeredAt,
       defaultModelId: worker.defaultModelId,
+      codeVersion,
+      expectedVersion,
+      updateState: normalizeReportedUpdateState(worker.updateState) ?? null,
+      rolledBack: this.jsonScalarToBoolean(worker.rolledBack),
+      updateAvailable: computeUpdateAvailable(codeVersion, expectedVersion),
       mcpStatus: this.workerMcpStatus.get(worker.id) ?? [],
     };
   }
