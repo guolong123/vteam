@@ -49,6 +49,12 @@ export default defineConfig({
       name: "chat-density",
       testMatch: /chat-density\.spec\.ts/,
     },
+    {
+      // doc-pdf-export 冒烟：同样以 esbuild-wasm 注入空白页（真实导出链 + 像素断言），
+      // 不依赖登录态 / 后端 / dev server 路由。
+      name: "doc-pdf-export",
+      testMatch: /doc-pdf-export\.spec\.ts/,
+    },
     { name: "login", testMatch: /login\.spec\.ts/, dependencies: ["setup"] },
     {
       name: "pages",
