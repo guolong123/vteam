@@ -15,6 +15,10 @@ COPY web/ ./web/
 # 复用 pack-worker.sh 单一来源，镜像构建即自动打包，无需任何手动前置步骤）
 COPY worker ./worker
 COPY scripts/pack-worker.sh ./scripts/pack-worker.sh
+# 版本戳：deploy 以 --build-arg CODE_VERSION=$TAG 传入（构建上下文无 .git，
+# 不传则 pack-worker 回退 git/日期戳）。空默认值 = 保留回退链。
+ARG CODE_VERSION=
+ENV CODE_VERSION=${CODE_VERSION}
 RUN chmod +x scripts/pack-worker.sh \
     && cd worker && npm ci \
     && cd .. && ./scripts/pack-worker.sh \

@@ -41,7 +41,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # 版本解析（可单独执行，供自检验证非 git 回退分支）。
 # 非 git 目录（git 不存在/命令失败/不在工作树内）→ manual-<YYYYMMDD>。
 resolve_code_version() {
-  CODE_VERSION="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  # 构建期注入优先：web 镜像构建上下文无 .git（.dockerignore 排除），
+  # deploy 以 --build-arg CODE_VERSION=$TAG 传入，否则回退 git，再否则日期戳。
+  if [ -z "${CODE_VERSION:-}" ]; then
+    CODE_VERSION="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  fi
   if [ -z "${CODE_VERSION}" ]; then
     CODE_VERSION="manual-$(date +%Y%m%d)"
   fi

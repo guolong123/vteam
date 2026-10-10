@@ -285,13 +285,18 @@ IMAGE_WEB="$REGISTRY/vteam-web:$TAG"
 IMAGE_WORKER="$REGISTRY/vteam-worker:$TAG"
 
 build_one() {
-  local dockerfile="$1" context="$2" image="$3" name="$4"
+  local dockerfile="$1" context="$2" image="$3" name="$4" code_version="${5:-}"
   local -a plat_args=()
   if [[ -n "$PLATFORM" && "$PLATFORM" != "native" ]]; then
     plat_args=(--platform "$PLATFORM")
   fi
+  local -a arg_args=()
+  # CODE_VERSION 构建参数：镜像内 pack-worker 打版本戳用（构建上下文无 .git）。
+  if [[ -n "$code_version" ]]; then
+    arg_args=(--build-arg "CODE_VERSION=$code_version")
+  fi
   log "building $name → $image${plat_args[*]:+ (platform=${plat_args[1]})}"
-  if DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "$image" "${plat_args[@]}" "$context" \
+  if DOCKER_BUILDKIT=1 docker build -f "$dockerfile" -t "$image" "${plat_args[@]}" "${arg_args[@]}" "$context" \
        >"$LOG_DIR/build-$name.log" 2>&1; then
     local size
     size=$(docker images --format '{{.Size}}' "$image" 2>/dev/null | head -1)
@@ -311,8 +316,8 @@ if [[ $NO_BUILD -eq 1 ]]; then
   ok "all 3 images present locally"
 else
   build_one "$REPO_ROOT/server/Dockerfile" "$REPO_ROOT/server" "$IMAGE_SERVER" server
-  build_one "$REPO_ROOT/worker/Dockerfile" "$REPO_ROOT/worker" "$IMAGE_WORKER" worker
-  build_one "$REPO_ROOT/web/Dockerfile"    "$REPO_ROOT"          "$IMAGE_WEB"    web
+  build_one "$REPO_ROOT/worker/Dockerfile" "$REPO_ROOT/worker" "$IMAGE_WORKER" worker "$TAG"
+  build_one "$REPO_ROOT/web/Dockerfile"    "$REPO_ROOT"          "$IMAGE_WEB"    web    "$TAG"
 fi
 
 # ============================================================
