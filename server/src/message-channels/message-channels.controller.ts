@@ -2,6 +2,7 @@ import {
   All,
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -30,7 +31,10 @@ import { Public } from '../auth/decorators/public.decorator';
 import { MessageRegistryService } from './message-registry.service';
 import { MessageDeliveryService } from './message-delivery.service';
 import { MessageInboundService } from './message-inbound.service';
-import { INTEGRATIONS_ERRORS } from './message-channel.constants';
+import {
+  INTEGRATIONS_ERRORS,
+  MESSAGE_CHANNEL_TYPES,
+} from './message-channel.constants';
 import { CreateMessageChannelDto } from './dto/create-message-channel.dto';
 import { UpdateMessageChannelDto } from './dto/update-message-channel.dto';
 
@@ -51,6 +55,16 @@ function maskChannel(row: any): any {
     ...row,
     secrets: maskSecrets(row.secrets as Record<string, any> | null),
   };
+}
+
+function extractWecomBotId(
+  secrets: Record<string, any> | null | undefined,
+): string | undefined {
+  if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) {
+    return undefined;
+  }
+  const raw = secrets.botId ?? secrets.botID ?? secrets.bot_id;
+  return typeof raw === 'string' && raw.trim() !== '' ? raw : undefined;
 }
 
 @ApiTags('message-channels')
@@ -91,12 +105,69 @@ export class MessageChannelsController {
     return maskChannel(row);
   }
 
+  /**
+   * wecom_aibot 独占校验：一个企微机器人只能有一条长连接，WeCom 服务端会把后连的那条
+   * 直接踢下线（SDK 收 disconnected_event 后不再重连），表现为渠道永远停在 connecting，
+   * 且旧 `clients.has()` skip 判据让它再也拉不起来 —— 生产 mc_2/mc_6 同 botId 事故。
+   *
+   * 仅当冲突方**已启用**时拒绝：冲突方处于停用态即放行，这正是「先停旧、再启新」的迁移路径。
+   * 目标渠道自身将停用（enabled=false）时也放行 —— 停用永远不该被拦。
+   *
+   * 入参统一是「变更落库**之后**的那一帧状态」（type/secrets/enabled）+ 可选的自身
+   * channelId（自身天然不构成冲突，且要传进 where 的 id:not 让查询也排掉它）。
+   * create / update / enable 三条入口共用这一个 helper，故「保存态」与「启用态」
+   * 不可能漂移：save 侧放行的「目标已启用 + 冲突方停用」这一对，只能靠 disable→enable
+   * 迁移成「两条都启用」，而唯一的收敛点就是 enable 这道校验。
+   */
+  private async assertWecomBotIdAvailable(params: {
+    channelId?: string;
+    type?: string;
+    secrets?: Record<string, any> | null;
+    enabled: boolean;
+  }): Promise<void> {
+    if (!params.enabled) return;
+    if (params.type !== MESSAGE_CHANNEL_TYPES.wecom_aibot) return;
+    const botId = extractWecomBotId(params.secrets);
+    if (!botId) return;
+    const rows: any[] =
+      (await (this.prisma as any).messageChannel.findMany({
+        where: {
+          type: MESSAGE_CHANNEL_TYPES.wecom_aibot,
+          enabled: true,
+          ...(params.channelId ? { id: { not: params.channelId } } : {}),
+        },
+        select: { id: true, name: true, enabled: true, secrets: true },
+      })) ?? [];
+    // enabled 与「排除自身」已在 where 里收窄，这里再判一次：规则本身不依赖查询是否忠实
+    const conflict = rows.find(
+      (r) =>
+        r?.id !== params.channelId &&
+        r?.enabled !== false &&
+        extractWecomBotId(r?.secrets) === botId,
+    );
+    if (!conflict) return;
+    throw new ConflictException({
+      code: INTEGRATIONS_ERRORS.CHANNEL_BOTID_DUPLICATE,
+      message:
+        `botId ${botId} 已被消息渠道「${conflict.name ?? ''}」(${conflict.id}) 占用：` +
+        `一个企微机器人只能有一条长连接，请先停用该渠道再启用新的`,
+      conflictingChannelId: conflict.id,
+      conflictingChannelName: conflict.name ?? null,
+    });
+  }
+
   /** POST /message-channels — 创建（channels.manage，无 taskId） — auto-connect if enabled */
   @Post()
   @UseGuards(PermissionGuard)
   @RequirePermission('channels.manage')
   @ApiOperation({ summary: '创建消息渠道（channels.manage，无 taskId）' })
   async create(@Body() dto: CreateMessageChannelDto): Promise<any> {
+    await this.assertWecomBotIdAvailable({
+      type: dto.type,
+      secrets: (dto.secrets ?? {}) as Record<string, any>,
+      // create 恒定 enabled: true
+      enabled: true,
+    });
     const id = await this.idGen.nextId('mc');
     const row = await (this.prisma as any).messageChannel.create({
       data: {
@@ -177,6 +248,18 @@ export class MessageChannelsController {
       return maskChannel(existing);
     }
 
+    // 校验放在空改动早退之前：任何 update 都不得成为绕过 botId 独占校验的后门。
+    // dto.secrets 缺省时用库里的旧值参与校验（浅合并语义与 newSecrets 一致）。
+    await this.assertWecomBotIdAvailable({
+      channelId: id,
+      type: (dto.type ?? (existing.type as string)) as string,
+      secrets:
+        (newSecrets as Record<string, any> | undefined) ??
+        (existing.secrets as Record<string, any> | null) ??
+        {},
+      enabled: existing.enabled !== false,
+    });
+
     const updated = await (this.prisma as any).messageChannel.update({
       where: { id },
       data,
@@ -223,6 +306,15 @@ export class MessageChannelsController {
         message: `channel ${id} not found`,
       });
     }
+    // enable 是 save 侧放行的「冲突方已停用」那一对唯一可能双双启用的收敛点，
+    // 故此处复用同一 helper、传落库后的那一帧状态（恒 enabled:true）。
+    await this.assertWecomBotIdAvailable({
+      channelId: id,
+      type: (existing.type as string) ?? undefined,
+      secrets:
+        (existing.secrets as Record<string, any> | null | undefined) ?? {},
+      enabled: true,
+    });
     const updated = await (this.prisma as any).messageChannel.update({
       where: { id },
       data: { enabled: true },

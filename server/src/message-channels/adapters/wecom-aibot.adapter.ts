@@ -15,6 +15,16 @@ import { FileStorageService } from '../../uploads/uploads.service';
 export const WECOM_OPERATOR_TTL_MS = 10 * 60 * 1000;
 
 /**
+ * 渠道连接状态（由 bindListeners 已绑定的事件维护，见 connStates）。
+ * - connecting：已 connect，尚未收到 authenticated（此时 SDK isConnected 已为 true）
+ * - connected：收到 authenticated，渠道可用
+ * - reconnecting：SDK 侧 reconnectTimer 在跑，自愈中
+ * - lost：连接已死且 SDK 不会自己重连，必须重建
+ */
+export type WecomConnectionState =
+  'connecting' | 'connected' | 'reconnecting' | 'lost';
+
+/**
  * WeCom AiBot adapter — WS inbound + outbound question card.
  * Inbound: WS message.text + template_card_event handling.
  * Outbound: sendQuestionCard sends button_interaction template_card via WSClient.sendMessage.
@@ -66,6 +76,31 @@ export class WecomAibotAdapter extends MessageAdapter {
   private static readonly STREAM_TTL_MS = 10 * 60 * 1000;
 
   private readonly reconnectCounts = new Map<string, number>();
+
+  /**
+   * 每个渠道的连接状态影子表（由 bindListeners 里已绑定的事件维护）。
+   *
+   * 为什么不用 SDK 的 `client.isConnected`：该 getter 只等价于
+   * `ws.readyState === OPEN`（sdk index.esm.js:1387-1389 → :733-734），
+   * **不含认证结果**。生产事故恰恰是「open 成功 → 服务端立刻踢掉 → 从未 authenticated」，
+   * 此期间 isConnected 一直为 true，用它判断存活会把僵死连接判成健康。
+   * SDK 也没有暴露「已认证」态的查询，故只能由事件驱动维护状态。
+   */
+  private readonly connStates = new Map<string, WecomConnectionState>();
+  /** connect() 后等待 authenticated 的超时定时器（用于自愈，见 HANDSHAKE_TIMEOUT_MS） */
+  private readonly handshakeTimers = new Map<string, NodeJS.Timeout>();
+  /**
+   * 握手超时：connect() 返回 this 且不含握手结果（sdk index.esm.js:971-981），
+   * 因此「已 connect」不等于「已连通」。
+   *
+   * 关键在于 SDK 的 disconnected_event 分支（`New connection established,
+   * server disconnected this connection`，生产 mc_6 的 last_error）会置
+   * `isManualClose = true` 并 **直接 return，不再 scheduleReconnect**
+   * （sdk index.esm.js:380-397）——即 `maxReconnectAttempts: -1` 对这条路径无效，
+   * 渠道会永远停在 connecting。故这里加超时自愈：超时未认证即判死并拆干净，
+   * 让下一次 enable / 进程 boot 重新建立。
+   */
+  private static readonly HANDSHAKE_TIMEOUT_MS = 30_000;
 
   /**
    * Card operator pending map for post-question @ directed reply.
@@ -329,10 +364,20 @@ export class WecomAibotAdapter extends MessageAdapter {
     }
     for (const channelId of channelIds) {
       if (this.clients.has(channelId)) {
-        this.logger.log(
-          `wecom-aibot start: channel ${channelId} already connected, skip`,
+        const state = this.getConnectionState(channelId) ?? 'unknown';
+        if (this.isConnectionAlive(channelId)) {
+          this.logger.log(
+            `wecom-aibot start: channel ${channelId} already connected, skip (state=${state})`,
+          );
+          continue;
+        }
+        // 客户端还在 map 里但连接已死：旧的 `clients.has()` 无条件 skip 会让渠道
+        // 永久卡在 connecting（生产 mc_6 事故：SDK 掉线后不再重连，enable 也救不回）。
+        // 先拆干净（清 map + reconnectCounts + 握手定时器）再重建。
+        this.logger.warn(
+          `wecom-aibot start: channel ${channelId} stale client, recreate (state=${state})`,
         );
-        continue;
+        await this.stopChannel(channelId);
       }
       const ch = await ctx.getChannel(channelId);
       if (!ch) {
@@ -363,6 +408,10 @@ export class WecomAibotAdapter extends MessageAdapter {
       });
       this.clients.set(channelId, client);
       this.hosts.set(channelId, ctx);
+      // 先置 connecting 并武装握手超时，再 connect：mock/真实 socket 都可能在
+      // connect() 返回前同步抛错或触发事件，顺序反了会漏掉超时或漏掉 authenticated。
+      this.connStates.set(channelId, 'connecting');
+      this.armHandshakeTimeout(channelId, ctx);
       this.bindListeners(channelId, client, ctx);
       try {
         client.connect();
@@ -378,6 +427,8 @@ export class WecomAibotAdapter extends MessageAdapter {
           lastStatus: 'error',
           lastError: msg.slice(0, 512),
         });
+        this.clearHandshakeTimer(channelId);
+        this.connStates.delete(channelId);
         this.clients.delete(channelId);
         this.hosts.delete(channelId);
         this.logger.warn(
@@ -385,6 +436,85 @@ export class WecomAibotAdapter extends MessageAdapter {
         );
       }
     }
+  }
+
+  getConnectionState(channelId: string): WecomConnectionState | undefined {
+    return this.connStates.get(channelId);
+  }
+
+  /**
+   * 事件驱动的状态写入，带 client 身份校验：被 stopChannel 拆掉的旧 client
+   * 仍可能补发事件（SDK 的 terminate/close 不解绑监听），不校验就会用旧事件
+   * 覆盖新 client 的状态，并误清掉新 client 的握手定时器。
+   */
+  private applyConnState(
+    channelId: string,
+    client: WSClient,
+    state: WecomConnectionState,
+  ): void {
+    if (this.clients.get(channelId) !== client) return;
+    this.connStates.set(channelId, state);
+    if (state === 'connected') this.clearHandshakeTimer(channelId);
+  }
+
+  /**
+   * 现有 client 是否真的还活着 —— start() 的 skip 判据。
+   *
+   * - connected：已认证，可用；
+   * - reconnecting：SDK 侧 reconnectTimer 仍在跑（sdk index.esm.js:530-535），
+   *   maxReconnectAttempts=-1 时无次数上限，属自愈中，不重建（否则打断 SDK 重连）；
+   * - connecting 且握手超时定时器仍在：连接刚发起、尚未判死，不重建
+   *   （两个 start() 连续触发时避免互相打断，见 multi-bot 回归 spec）；
+   * - lost / connecting 但定时器已清（超时自愈已判死）/ 无状态记录：僵死，重建。
+   */
+  private isConnectionAlive(channelId: string): boolean {
+    const state = this.connStates.get(channelId);
+    if (state === 'connected' || state === 'reconnecting') return true;
+    if (state === 'connecting') return this.handshakeTimers.has(channelId);
+    return false;
+  }
+
+  private armHandshakeTimeout(channelId: string, ctx: MessageHost): void {
+    this.clearHandshakeTimer(channelId);
+    const timer: NodeJS.Timeout = setTimeout(() => {
+      void this.handleHandshakeTimeout(channelId, ctx);
+    }, WecomAibotAdapter.HANDSHAKE_TIMEOUT_MS);
+    timer.unref?.();
+    this.handshakeTimers.set(channelId, timer);
+  }
+
+  private clearHandshakeTimer(channelId: string): void {
+    const timer = this.handshakeTimers.get(channelId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.handshakeTimers.delete(channelId);
+  }
+
+  /**
+   * 握手超时自愈：超时仍无 authenticated → 记 error 并拆掉该渠道，
+   * 让下一次 enable / 进程 boot 能干净重建（此前只能靠重启 Pod）。
+   */
+  private async handleHandshakeTimeout(
+    channelId: string,
+    ctx: MessageHost,
+  ): Promise<void> {
+    this.handshakeTimers.delete(channelId);
+    if (this.connStates.get(channelId) === 'connected') return;
+    if (!this.clients.has(channelId)) return;
+    this.connStates.set(channelId, 'lost');
+    const msg = `connect timeout: not authenticated within ${WecomAibotAdapter.HANDSHAKE_TIMEOUT_MS}ms`;
+    this.logger.warn(`wecom-aibot ${msg} channel=${channelId}`);
+    try {
+      await ctx.updateChannelRuntime(channelId, {
+        lastStatus: 'error',
+        lastError: msg,
+      });
+    } catch (e) {
+      this.logger.warn(
+        `wecom-aibot handshake timeout status write failed channel=${channelId}: ${(e as Error).message}`,
+      );
+    }
+    await this.stopChannel(channelId);
   }
 
   private async resolveChannelIds(ctx: MessageHost): Promise<string[]> {
@@ -735,11 +865,7 @@ export class WecomAibotAdapter extends MessageAdapter {
       await this.handleInboundMixed(client, channelId, ctx, frame);
     });
 
-    const fallbackTypes = [
-      'message.voice',
-      'message.file',
-      'message.video',
-    ];
+    const fallbackTypes = ['message.voice', 'message.file', 'message.video'];
     for (const ev of fallbackTypes) {
       (
         client as unknown as {
@@ -1193,6 +1319,7 @@ export class WecomAibotAdapter extends MessageAdapter {
 
     client.on('connected', async () => {
       // SDK 语义：connected = WebSocket open，认证尚未完成，故不能记为 connected。
+      this.applyConnState(channelId, client, 'connecting');
       try {
         await ctx.updateChannelRuntime(channelId, {
           lastStatus: 'connecting',
@@ -1201,6 +1328,7 @@ export class WecomAibotAdapter extends MessageAdapter {
     });
     client.on('authenticated', async () => {
       this.reconnectCounts.set(channelId, 0);
+      this.applyConnState(channelId, client, 'connected');
       try {
         await ctx.updateChannelRuntime(channelId, {
           lastStatus: 'connected',
@@ -1209,6 +1337,10 @@ export class WecomAibotAdapter extends MessageAdapter {
       } catch {}
     });
     client.on('disconnected', async (reason: string) => {
+      // 含 SDK 的 disconnected_event（被新连接踢下线）：那条路径不触发
+      // scheduleReconnect（sdk index.esm.js:380-397），故这里必须判 lost，
+      // 让下一次 start() 重建而不是被 skip 掉。
+      this.applyConnState(channelId, client, 'lost');
       try {
         await ctx.updateChannelRuntime(channelId, {
           lastStatus: 'disconnected',
@@ -1217,6 +1349,8 @@ export class WecomAibotAdapter extends MessageAdapter {
       } catch {}
     });
     client.on('reconnecting', async (attempt: number) => {
+      // SDK 正在自愈（reconnectTimer 存活，maxReconnectAttempts=-1 无上限）
+      this.applyConnState(channelId, client, 'reconnecting');
       const cur = (this.reconnectCounts.get(channelId) ?? 0) + 1;
       this.reconnectCounts.set(channelId, cur);
       try {
@@ -1260,6 +1394,8 @@ export class WecomAibotAdapter extends MessageAdapter {
         );
       }
     }
+    this.clearHandshakeTimer(channelId);
+    this.connStates.delete(channelId);
     this.clients.delete(channelId);
     this.hosts.delete(channelId);
 
@@ -1287,6 +1423,9 @@ export class WecomAibotAdapter extends MessageAdapter {
     for (const channelId of [...this.clients.keys()]) {
       await this.stopChannel(channelId);
     }
+    for (const channelId of [...this.handshakeTimers.keys()]) {
+      this.clearHandshakeTimer(channelId);
+    }
     // residual entries whose owning channel already left `clients` still need clearing
     for (const entry of this.streams.values()) {
       if (entry.spinnerTimer) {
@@ -1299,6 +1438,7 @@ export class WecomAibotAdapter extends MessageAdapter {
     this.hosts.clear();
     this.streams.clear();
     this.reconnectCounts.clear();
+    this.connStates.clear();
     this.taskPendingOperators.clear();
     this.aqOperatorMap.clear();
   }
@@ -2064,7 +2204,9 @@ export class WecomAibotAdapter extends MessageAdapter {
           senderExternalId: fromUserId,
           senderName: fromUserName,
           dedupKey:
-            images.length > 1 ? `${body.msgid}_${i}` : (body.msgid ?? undefined),
+            images.length > 1
+              ? `${body.msgid}_${i}`
+              : (body.msgid ?? undefined),
           chattype,
           chatid: body.chatid,
           wecomUserId: fromUserId,

@@ -740,7 +740,12 @@ describe('WecomAibotAdapter (message-channels)', () => {
         expect.objectContaining({ msgtype: 'markdown' }),
       );
 
-      await adapter.sendMediaMessage('mc_multi', 'file', 'media_1', 'chat_GROUP_A');
+      await adapter.sendMediaMessage(
+        'mc_multi',
+        'file',
+        'media_1',
+        'chat_GROUP_A',
+      );
       expect(mockClient.sendMediaMessage).toHaveBeenCalledWith(
         'chat_GROUP_A',
         'file',
@@ -1044,6 +1049,214 @@ describe('WecomAibotAdapter (message-channels)', () => {
       expect(cmds[0].senderExternalId).toBe(ENC);
       expect(cmds[0].wecomUserName).toBe('企微用户-w_yQ');
       expect(cmds[0].text).toBe('nihao');
+    });
+  });
+
+  /**
+   * 连接状态感知 + 握手超时自愈（生产 mc_6 事故）。
+   *
+   * 事故链：两个渠道共用同一 botId → WeCom 只允许一条长连接，后连的那条收到
+   * SDK 的 disconnected_event（`New connection established, server disconnected
+   * this connection`）→ 该分支置 isManualClose=true 且 **不再 scheduleReconnect**
+   * （sdk index.esm.js:380-397）→ 渠道永远停在 connecting。
+   *
+   * 旧 start() 只看 `clients.has(channelId)` 就 skip，僵死 client 永远留在 map 里，
+   * 于是后续 enable / boot 也拉不起来，只能重启 Pod。这里的判据改成看真实连接状态。
+   */
+  describe('连接状态感知（skip 判据 + 握手超时自愈）', () => {
+    const TIMEOUT_MS = 30_000;
+    /** 从 mock client 的 on() 注册表里取出 SDK 事件处理函数 */
+    const handlerOf = (client: any, ev: string) =>
+      client.on.mock.calls.find((c: any[]) => c[0] === ev)?.[1];
+
+    it('已认证（connected）的存量 client 仍被 skip，不重建', async () => {
+      const host = makeHost([{ id: 'mc_a' }]);
+      await adapter.start(host);
+      await handlerOf(mockClients[0], 'authenticated')();
+      expect(adapter.getConnectionState('mc_a')).toBe('connected');
+
+      await adapter.start(host);
+
+      expect(mockClients).toHaveLength(1);
+      expect(mockClients[0].disconnect).not.toHaveBeenCalled();
+      expect(adapter.getConnectionState('mc_a')).toBe('connected');
+    });
+
+    it('掉线（lost）的存量 client 被 stopChannel 后重建', async () => {
+      const host = makeHost([{ id: 'mc_a' }]);
+      await adapter.start(host);
+      const stale = mockClients[0];
+      await handlerOf(
+        stale,
+        'disconnected',
+      )('New connection established, server disconnected this connection');
+      expect(adapter.getConnectionState('mc_a')).toBe('lost');
+
+      await adapter.start(host);
+
+      expect(stale.disconnect).toHaveBeenCalled();
+      expect(mockClients).toHaveLength(2);
+      expect(mockClients[1].connect).toHaveBeenCalled();
+      expect(adapter.getClient('mc_a')).toBe(mockClients[1]);
+      expect(adapter.getConnectionState('mc_a')).toBe('connecting');
+    });
+
+    it('SDK 自愈重连中（reconnecting）不打断 SDK，start() 仍然 skip', async () => {
+      const host = makeHost([{ id: 'mc_a' }]);
+      await adapter.start(host);
+      await handlerOf(mockClients[0], 'reconnecting')(2);
+      expect(adapter.getConnectionState('mc_a')).toBe('reconnecting');
+
+      await adapter.start(host);
+
+      // 重建会打断 SDK 自己的 reconnectTimer，反而害处大于收益
+      expect(mockClients).toHaveLength(1);
+      expect(mockClients[0].disconnect).not.toHaveBeenCalled();
+    });
+
+    it('握手超时未认证：记 error 并摘除 client，使下一次 start() 能干净重试', async () => {
+      jest.useFakeTimers();
+      try {
+        const host = makeHost([{ id: 'mc_a' }]);
+        await adapter.start(host);
+
+        jest.advanceTimersByTime(TIMEOUT_MS);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(host.updateChannelRuntime).toHaveBeenCalledWith('mc_a', {
+          lastStatus: 'error',
+          lastError: `connect timeout: not authenticated within ${TIMEOUT_MS}ms`,
+        });
+        expect(adapter.getClient('mc_a')).toBeUndefined();
+        expect(adapter.getConnectionState('mc_a')).toBeUndefined();
+
+        // 超时拆干净后再 start：必须真正新建，而不是被 skip
+        await adapter.start(host);
+        expect(mockClients).toHaveLength(2);
+        expect(mockClients[1].connect).toHaveBeenCalled();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('authenticated 先到即清除握手定时器，不会二次触发（无 double-fire）', async () => {
+      jest.useFakeTimers();
+      try {
+        const host = makeHost([{ id: 'mc_a' }]);
+        await adapter.start(host);
+        await handlerOf(mockClients[0], 'authenticated')();
+
+        jest.advanceTimersByTime(TIMEOUT_MS * 3);
+        await Promise.resolve();
+
+        expect(host.updateChannelRuntime).not.toHaveBeenCalledWith(
+          'mc_a',
+          expect.objectContaining({ lastStatus: 'error' }),
+        );
+        // client 未被超时拆掉
+        expect(adapter.getClient('mc_a')).toBe(mockClients[0]);
+        expect(adapter.getConnectionState('mc_a')).toBe('connected');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('握手定时器 unref，不吊住进程', async () => {
+      jest.useFakeTimers();
+      const setSpy = jest.spyOn(global, 'setTimeout');
+      try {
+        const host = makeHost([{ id: 'mc_a' }]);
+        await adapter.start(host);
+
+        const armIdx = setSpy.mock.calls.findIndex(
+          (c: any[]) => c[1] === TIMEOUT_MS,
+        );
+        expect(armIdx).toBeGreaterThanOrEqual(0);
+        const handle = setSpy.mock.results[armIdx].value as {
+          hasRef?: () => boolean;
+        };
+        // hasRef()==false 证明 unref 过，事件循环不会被这个 30s 定时器吊住
+        expect(handle.hasRef?.() ?? false).toBe(false);
+      } finally {
+        setSpy.mockRestore();
+        jest.useRealTimers();
+      }
+    });
+
+    it('停用→启用循环：stopChannel 清干净，新 client 独立武装自己的定时器', async () => {
+      jest.useFakeTimers();
+      const setSpy = jest.spyOn(global, 'setTimeout');
+      const clearSpy = jest.spyOn(global, 'clearTimeout');
+      try {
+        const host = makeHost([{ id: 'mc_a' }]);
+        await adapter.start(host);
+        const oldArmIdx = setSpy.mock.calls.findIndex(
+          (c: any[]) => c[1] === TIMEOUT_MS,
+        );
+        const oldHandle = setSpy.mock.results[oldArmIdx].value;
+
+        // 停用路由走 registry.requestStop → adapter.stopChannel
+        await adapter.stopChannel('mc_a');
+        expect(adapter.getConnectionState('mc_a')).toBeUndefined();
+        // 旧 client 的握手定时器必须被清掉，否则它会在新 client 建连期间误判超时
+        expect(clearSpy).toHaveBeenCalledWith(oldHandle);
+
+        await adapter.start(host);
+        expect(mockClients).toHaveLength(2);
+        expect(adapter.getClient('mc_a')).toBe(mockClients[1]);
+
+        // 走满两轮 30s：新 client 自己的握手超时正常触发，client 被摘掉
+        jest.advanceTimersByTime(TIMEOUT_MS * 2);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(host.updateChannelRuntime).toHaveBeenCalledWith('mc_a', {
+          lastStatus: 'error',
+          lastError: `connect timeout: not authenticated within ${TIMEOUT_MS}ms`,
+        });
+      } finally {
+        clearSpy.mockRestore();
+        setSpy.mockRestore();
+        jest.useRealTimers();
+      }
+    });
+
+    it('connect() 同步抛错时不残留状态与定时器', async () => {
+      jest.useFakeTimers();
+      const setSpy = jest.spyOn(global, 'setTimeout');
+      const clearSpy = jest.spyOn(global, 'clearTimeout');
+      try {
+        mockConnectImpls.push(() => {
+          throw new Error('boom');
+        });
+        const host = makeHost([{ id: 'mc_a' }]);
+        await adapter.start(host);
+
+        expect(adapter.getClient('mc_a')).toBeUndefined();
+        expect(adapter.getConnectionState('mc_a')).toBeUndefined();
+
+        // 握手定时器必须已清：残留的定时器会在 30s 后误报 connect timeout
+        const armIdx = setSpy.mock.calls.findIndex(
+          (c: any[]) => c[1] === TIMEOUT_MS,
+        );
+        expect(armIdx).toBeGreaterThanOrEqual(0);
+        expect(clearSpy).toHaveBeenCalledWith(
+          setSpy.mock.results[armIdx].value,
+        );
+
+        jest.advanceTimersByTime(TIMEOUT_MS);
+        await Promise.resolve();
+        expect(host.updateChannelRuntime).not.toHaveBeenCalledWith(
+          'mc_a',
+          expect.objectContaining({
+            lastError: expect.stringContaining('connect timeout'),
+          }),
+        );
+      } finally {
+        clearSpy.mockRestore();
+        setSpy.mockRestore();
+        jest.useRealTimers();
+      }
     });
   });
 });

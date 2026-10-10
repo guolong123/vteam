@@ -1,0 +1,244 @@
+================================================================================
+TASK: wecom_aibot 双缺陷修复（分支 feat/memory-enhancement）
+DATE: 2026-10-10
+GATES: server npx tsc --noEmit -> PASS ; server npm run test -> 167 suites / 3966 tests ALL PASS
+        (baseline 167 / 3966 -> +6 tests, 无既有测试被削弱或删除)
+        web 未触碰 -> 未跑 web gates
+================================================================================
+
+--------------------------------------------------------------------------------
+0. SDK 源码勘查结论（@wecom/aibot-node-sdk v1.0.7）
+   路径: server/node_modules/@wecom/aibot-node-sdk/dist/index.esm.js
+--------------------------------------------------------------------------------
+
+[A] 状态 API：SDK 只有「WS open」态，**没有**「已认证」态的活体查询
+    - WSClient.isConnected getter      index.esm.js:1387-1389
+    -   -> WsConnectionManager.isConnected  index.esm.js:733-734
+        return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+      声明处: dist/ws.d.ts:160  `get isConnected(): boolean`
+    结论：isConnected 只反映 TCP/WS 是否 OPEN，**不含认证结果**。
+      生产事故恰好发生在「open 已成功 → 服务端立刻踢掉 → 从未 authenticated」
+      这一窗口内，此时 isConnected 恒为 true。
+      故不能拿 isConnected 当存活判据 —— 必须自维护影子状态（本次采用）。
+
+[B] disconnected_event 是**终态**，maxReconnectAttempts: -1 对它无效（事故根因）
+    index.esm.js:380-397  handleFrame() 内 EVENT_CALLBACK 分支：
+      :380  识别 frame.body.event.eventtype === 'disconnected_event'
+      :388  this.isManualClose = true;
+      :390  this.onServerDisconnect?.('New connection established, server
+             disconnected this connection');   <-- 生产 mc_6 的 last_error
+      :392-396 ws.removeAllListeners(); ws.terminate(); this.ws = null;
+      :397  return;                              <-- 直接返回
+    close 处理器 :318-329 里只有 `if (!this.isManualClose) this.scheduleReconnect()`
+      —— isManualClose 已被置 true，故 scheduleReconnect() **根本不会被调用**。
+    对外表现：index.esm.js:949-953  onServerDisconnect -> this.started = false;
+      并 emit('disconnected', reason)，与正常掉线**同事件名、无法区分**。
+    即：SDK 对「被新连接踢下线」不重试，而适配器原实现把该事件当成普通掉线、
+      依赖 maxReconnectAttempts:-1 兜底 —— 该兜底在此路径上不存在。
+
+[C] 正常的断线/心跳超时重连确实是活的、且无次数上限
+    scheduleReconnect(): index.esm.js:500-537
+      :521  if (this.maxReconnectAttempts !== -1 && attempts >= max) -> 放弃
+            适配器传 maxReconnectAttempts: -1 -> 走 :526-535，无上限
+      :530-535 reconnectTimer = setTimeout(...) -> connect()，定时器存活期间
+            emit('reconnecting', attempt) 已由 :529 发出。
+    故 state==='reconnecting' 视为「SDK 自愈中」，start() 不得重建（否则打断它）。
+    认证失败另走 authFailureAttempts 计数器，受 maxAuthFailureAttempts 默认 5
+      封顶（index.esm.js:909），超出后 emit error（WSAuthFailureError）。
+      —— 该分支仍会发 reconnecting 事件，故 'reconnecting' 的存活判断对两条路都成立。
+
+[D] connect() 不返回握手结果
+    index.esm.js:971-981  connect() { ...; return this; }
+    故「已 connect」不等于「已连通」，必须等 authenticated（:941-943）事件。
+
+--------------------------------------------------------------------------------
+1. 缺陷 B —— start() skip 判据 + 握手超时自愈
+   文件: server/src/message-channels/adapters/wecom-aibot.adapter.ts
+--------------------------------------------------------------------------------
+
+新增:
+  - export type WecomConnectionState = 'connecting'|'connected'|'reconnecting'|'lost'
+  - connStates: Map<channelId, WecomConnectionState>        影子状态表
+  - handshakeTimers: Map<channelId, NodeJS.Timeout>         握手超时定时器
+  - static HANDSHAKE_TIMEOUT_MS = 30_000                    命名常量
+  - getConnectionState(channelId)                           公开只读访问器（诊断用）
+  - applyConnState(channelId, client, state)                事件写入 + client 身份校验
+  - isConnectionAlive(channelId)                            新的 skip 判据
+  - armHandshakeTimeout / clearHandshakeTimer / handleHandshakeTimeout
+
+start() 改动（原 :331-335 `if (this.clients.has(channelId)) skip`）:
+  connected                              -> skip，日志带 state=connected
+  reconnecting                           -> skip（日志带 state=reconnecting），
+                                            不打断 SDK 自己的 reconnectTimer
+  connecting 且握手定时器仍在             -> skip（防两个 start() 互相打断）
+  lost / connecting 但定时器已清 / 无状态 -> await this.stopChannel(channelId)
+                                            再 fall through 建新 client
+  日志保留原措辞并补 state=，另加一条 warn 说明为何重建。
+
+握手超时自愈:
+  connect() 前武装 30s 定时器（unref）；未收到 authenticated ->
+    lastStatus='error' + lastError='connect timeout: not authenticated within 30000ms'
+    -> stopChannel()（清 clients/hosts/connStates/timer/reconnectCounts）
+  清除时机：authenticated 事件（applyConnState）、stopChannel()、stop()、
+            connect() 同步抛错的 catch 分支 —— 均走 clearHandshakeTimer，
+            故不存在二次触发与定时器泄漏。
+
+事件状态映射（全部复用 bindListeners 里**已有**的绑定，未新增 SDK 事件）:
+  'connected'    -> 'connecting'   （SDK 语义 open != 认证，沿用既有注释）
+  'authenticated'-> 'connected' + 清握手定时器
+  'disconnected' -> 'lost'         （含 [B] 的 disconnected_event）
+  'reconnecting' -> 'reconnecting'
+  'error'        -> 不改状态（重连路径上紧随其后必来 reconnecting）
+
+保留未动的既有行为:
+  connect() 同步抛错路径、'disconnected'/'reconnecting'/'error' 的 DB 回写、
+  maxReconnectAttempts: -1、heartbeatInterval: 30000、enable/disable 路由、
+  stopChannel/stop 的其余清理、sendQuestionCard 等消息收发逻辑。
+
+--------------------------------------------------------------------------------
+2. 缺陷 A —— wecom_aibot 的 botId 独占校验
+   文件: server/src/message-channels/message-channels.controller.ts
+        server/src/message-channels/message-channel.constants.ts
+--------------------------------------------------------------------------------
+
+常量: INTEGRATIONS_ERRORS 新增 CHANNEL_BOTID_DUPLICATE: 'CHANNEL_BOTID_DUPLICATE'
+helper: extractWecomBotId(secrets) —— 兼容 botId / botID / bot_id 三种键
+        （与适配器 start() 的取值口径一致）
+private: assertWecomBotIdAvailable({channelId?, type?, secrets?, enabled})
+
+  规则:
+   1) enabled=false            -> 直接放行（停用永远不被拦）
+   2) type !== wecom_aibot     -> 直接放行（非企微类型零影响，连查询都不发）
+   3) secrets 无 botId         -> 放行
+   4) 存在**另一个** channel（id 不同）且 enabled 且 botId 相同
+      -> 409 ConflictException:
+         { code: 'CHANNEL_BOTID_DUPLICATE',
+           message: 'botId <x> 已被消息渠道「<name>」(<id>) 占用：一个企微机器人
+                     只能有一条长连接，请先停用该渠道再启用新的',
+           conflictingChannelId, conflictingChannelName }
+
+  接入点（三处，共用同一 helper）:
+   - create()  :99 之前（create 恒 enabled=true）
+   - update()  :134 —— 放在「空改动早退」**之前**，且 dto.secrets 缺省时用
+     existing.secrets 参与校验（浅合并语义与 newSecrets 一致）
+   - enable()  :130 ——【后补，见 2.1】放在 messageChannel.update 之前，传「落库
+     后的那一帧状态」：channelId=id、type/secrets 取库中现值、enabled=true
+     （enable 恒置真）。幂等 re-enable 由 id:{not:id} 排除自身，不误伤。
+   - disable() 仍无校验，且**必须**永远无 —— 停用不得被拦，否则「先停旧」这条
+     迁移路径自己先走不通。
+
+  双重判定: where 已收窄 enabled:true 与 id:not:<self>，谓词里再判一次
+    (r.id !== channelId && r.enabled !== false && botId 相同)，
+    使规则不依赖查询是否忠实过滤（测试用不忠实的 mock 也能真正覆盖到该规则）。
+
+--------------------------------------------------------------------------------
+2.1 后补 —— enable 路径的 botId 独占校验（补齐唯一残余旁路）
+   文件: server/src/message-channels/message-channels.controller.ts  enable() :294
+--------------------------------------------------------------------------------
+
+问题: save 侧（create/update）刻意放行「目标已启用 + 同 botId 冲突方已停用」，
+     因为那正是「先停旧、再启新」的迁移路径。但这一对一旦存在，**只有**
+     POST :id/enable 能把它们双双变成 enabled —— 上一版没在校验，于是
+     「更新期间合法 → 稍后点一下启用」会把两条同 botId 的长连接同时拉起来，
+     WeCom 服务端踢掉后连的那条，症状与 mc_2/mc_6 事故完全一致。
+     即：save 侧的放行是有意为之，enable 侧的收敛才是它成立的前提。
+
+改动: enable() 在 messageChannel.update 之前调用同一个 helper
+      assertWecomBotIdAvailable({channelId:id, type:existing.type,
+                                 secrets:existing.secrets, enabled:true})
+     语义与 save 侧逐条对齐：
+       同 botId 的**另一个**渠道已启用 -> 409 CHANNEL_BOTID_DUPLICATE，
+         message / conflictingChannelId / conflictingChannelName 三者与
+         create/update 完全同形
+       同 botId 的冲突方全停用        -> 放行（迁移路径本身照走）
+       自身重复启用（幂等 re-enable） -> 放行，id:{not:id} 排除自己
+       非 wecom_aibot / 无 botId     -> 放行，连查询都不发
+
+签名选择（有意为之）: **未**改 helper 签名，也**未**加
+     excludeDisabledConflict 之类的开关 —— 原签名
+     {channelId?, type?, secrets?, enabled} 的入参统一表达「变更落库之后的
+     那一帧状态」，而 enable 恰好是「库中现值 + enabled 恒 true」，与 update 的
+     「浅合并后的值 + existing.enabled」同形，三条入口零分支差异。
+     若改成布尔开关，等于把「唯一的一条规则」拆成调用方可选的两条，调用点
+     越多越可能漏传，且类型系统也兜不住。查询与判定逻辑全程只有一份。
+
+影响面: 仅 wecom_aibot 且 secrets 带 botId 时多 1 次 findMany；
+     409 时不落库、不触发 adapter.start、不触发 registry.startEnabled。
+
+--------------------------------------------------------------------------------
+3. 测试
+   文件: server/src/message-channels/adapters/wecom-aibot.adapter.spec.ts  (+8)
+        server/src/message-channels/message-channels.controller.spec.ts       (+14)
+
+适配器（describe: 连接状态感知（skip 判据 + 握手超时自愈））:
+  1 已认证 connected 的存量 client 仍被 skip、不重建
+  2 lost 的存量 client 被 stopChannel 后重建（生产 mc_6 事故原样复现，
+    用真实事故 reason 'New connection established, server disconnected this
+    connection' 驱动）
+  3 reconnecting 中不打断 SDK 自愈
+  4 握手超时 -> error + 摘 client + 下次 start 真新建
+  5 authenticated 先到 -> 无 double-fire（client 不被误拆）
+  6 握手定时器 unref（断言句柄 hasRef()===false）
+  7 停用->启用循环：旧定时器被 clearTimeout，新 client 独立武装
+  8 connect() 同步抛错不残留状态与定时器
+
+控制器（describe: wecom_aibot botId 独占校验）:
+  1 创建重复 + 冲突方 enabled -> 409 + 点名 id/名称 + 中文说明 + 未落库
+  2 创建重复 + 冲突方 disabled -> 放行（迁移路径）
+  3 非 wecom_aibot 类型不受影响（且不发查询）
+  4 更新不带 secrets -> 读库旧 botId 校验，仍挡住
+  5 自身已停用即便重复也放行
+  6 冲突方停用时放行
+  7 排除自身（同一渠道改名不误伤），并断言 id:{not:<self>} 传下去
+  8 停用路由不受影响
+
+控制器（describe: wecom_aibot botId 独占校验 > enable 路由，+6）:
+   9 enable 同 botId 且冲突方 enabled -> 409 + 点名 id/名称 + 中文说明，
+     并断言 update / registry.startEnabled 均未被调用（冲突不得落库）
+  10 enable 同 botId 但冲突方 disabled -> 放行，且 adapter.start 与
+     registry.startEnabled 都被走到（迁移路径真跑通，不只是 resolve）
+  11 重复启用自身（幂等）不误伤，并断言 id:{not:<self>} 传下去
+  12 非 wecom_aibot 启用完全不受影响（断言连查询都不发）
+  13 happy path：无冲突时正常返回掩码后的 enabled=true 渠道，
+     adapter.start / startEnabled 均被触发（原有行为未被削弱）
+  14 enable 不存在的渠道 -> 404 且不落库（校验插在 NotFound 之后、
+     update 之前，未改变原有错误次序）
+
+**无既有测试被修改/删除/放宽。** 特别说明：既有
+  '存量 bot 已在连接时再次 start()，新增 bot 仍能连上且不抛错'
+在新的状态语义下**依然通过且未被改写** —— 该场景 mc_a 的状态是
+connecting 且握手定时器仍在（真机上仍在握手窗口内），按新判据属「活着」应 skip；
+只有判为僵死时才重建。这是有意设计：避免 create/enable 触发的连续两次
+start() 互相打断。
+
+--------------------------------------------------------------------------------
+4. 门禁
+--------------------------------------------------------------------------------
+npx tsc --noEmit            PASS（0 error）
+npm run test                Test Suites: 167 passed, 167 total
+                            Tests:       3972 passed, 3972 total
+                            Snapshots:   1 passed
+  基线                       167 suites / 3966 tests -> 本次 +6 条，全绿
+                            （更早一版基线 167 / 3950，累计 +22）
+  单文件复核                 message-channels.controller.spec.ts 16 passed / 16 total
+npx eslint --fix（4 个改动文件）  本次改动的 2 个文件 eslint 复检 0 error 0 warning；
+  全量仅剩 1 条既有 warning：
+  wecom-aibot.adapter.ts:521 `maybeAny` unused —— 该行属既有 resolveChannelIds，
+  非本次改动引入，未动。
+web/                         未触碰，无 web gates。
+
+--------------------------------------------------------------------------------
+5. 未做的事（范围外）
+--------------------------------------------------------------------------------
+- 未改 webhook/gitee/github 适配器；未改入站/投递/出站逻辑
+- 未加依赖；未改 schema / 未写 migration（校验纯代码级）
+- 新增代码未使用 `as any` / `@ts-ignore`；无空 catch
+- 未执行任何 git 命令（提交交由 orchestrator）
+
+残留（已知且刻意保留，供后续决策，非本次范围）:
+- 校验是代码级而非 DB 级。并发窗口仍在：两个同时到达的 enable/create 请求可
+  能都查到「无冲突」再各自落库。要彻底消除需 DB 唯一约束或事务/锁
+  （botId 需抽成生成列或另建占用表），涉及 schema + migration，本次未做。
+- 前端 web/app/(main)/integrations/page.tsx:158 直接调 enable，409 会以
+  toast 形式抛出；UI 未做「冲突方一键停用」的引导文案。未改 web。
+- 存量已产生的同 botId 双启用数据不会被追溯拦截，只挡住后续新增/启用。
