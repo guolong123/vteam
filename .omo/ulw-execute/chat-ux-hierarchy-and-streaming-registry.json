@@ -1,0 +1,1199 @@
+{
+  "schema_version": 1,
+  "work_id": "chat-ux-hierarchy-and-streaming-38db65ea",
+  "plan_name": "chat-ux-hierarchy-and-streaming",
+  "plan_path": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/chat-ux-hierarchy-and-streaming.md",
+  "delivery_mode": "direct",
+  "registered_at": "2026-09-25T13:33:10.632Z",
+  "session_id": "opencode:ses_f273ae953ffeipbrGRWbJ8mh1J",
+  "progress": {
+    "implementation_total": 14,
+    "final_total": 5,
+    "top_level_total": 19,
+    "completed": 18,
+    "skipped": 1,
+    "final_verification": "F1-F5 complete; 18 completed, 1 evidence-backed skipped (C1)"
+  },
+  "phases": [
+    {
+      "id": "wave-0",
+      "name": "Wave 0 · 门禁与独立页面消费",
+      "status": "in_progress",
+      "tasks": [
+        {
+          "id": "1",
+          "title": "C0 实机验证 opencode serve 是否暴露可续传 text part",
+          "status": "completed",
+          "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/c0-serve-incremental.txt",
+          "steps": [
+            {
+              "id": "1.1",
+              "title": "确认现有私聊、worker capability、serve base URL 与 session id 的真实来源，不输出密码或 Authorization header",
+              "files": [
+                "worker/src/driver/v1-driver.ts",
+                "worker/src/driver/prompt-await.ts",
+                "worker/src/exec/exec-server.ts"
+              ],
+              "verify": "运行时来源与代码契约一致，且证据不含 secret",
+              "status": "completed"
+            },
+            {
+              "id": "1.2",
+              "title": "在 worker 可访问网络位置创建 $TMPDIR/c0-serve-incremental.mjs，每 500ms 轮询 GET /session/{id}/message，最多 120 次",
+              "files": [
+                "$TMPDIR/c0-serve-incremental.mjs"
+              ],
+              "verify": "脚本记录 assistant message id、text part id、长度序列和 step-finish，Basic Auth 不落盘",
+              "status": "completed"
+            },
+            {
+              "id": "1.3",
+              "title": "触发真实私聊 agent 回复并执行 capture，原始样本写入 c0-serve-incremental.txt",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/c0-serve-incremental.txt"
+              ],
+              "verify": "证据至少 3 个样本，含同一 part id 长度序列、step-finish 时间和明确 C0=PASS|FAIL",
+              "status": "completed"
+            },
+            {
+              "id": "1.4",
+              "title": "按严格递增且发生在 step-finish 前的判据确认 C0，删除临时脚本并记录 C1 是否解锁",
+              "files": [
+                "$TMPDIR/c0-serve-incremental.mjs",
+                ".omo/ulw-execute/ledger.jsonl"
+              ],
+              "verify": "C0 结论可复算；无临时脚本残留；不改产品代码、不提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f271f2793ffduuSisr7k81zUTN",
+            "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/c0-serve-incremental.txt"
+          }
+        },
+        {
+          "id": "2",
+          "title": "A1–A3 放宽正文、tool I/O、thinking 密度阈值",
+          "status": "completed",
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-2-density.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-2-density-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "2.1",
+              "title": "记录 chat UI 既有 data-testid 基线并阅读 web/node_modules/next/dist/docs 中客户端组件与测试相关指南",
+              "files": [
+                "web/src/components/chat/",
+                "web/src/components/ui/chat-bubble.tsx",
+                "web/src/components/ui/agent-avatar.tsx",
+                "web/node_modules/next/dist/docs/"
+              ],
+              "verify": "chat-testids-before.txt 已保存，指南路径与结论写入证据；若指南缺失则阻塞产品编辑",
+              "status": "completed"
+            },
+            {
+              "id": "2.2",
+              "title": "先补失败用例：900 字符正文 10 行折叠、3000 字符 tool I/O 仅前 2000 入 DOM、thinking 折叠 200 字符且展开完整",
+              "files": [
+                "web/e2e/pages.spec.ts",
+                "web/e2e/session-unification.spec.ts",
+                "web/lib/"
+              ],
+              "verify": "旧实现下新断言失败，失败症状与阈值缺陷一致",
+              "status": "completed"
+            },
+            {
+              "id": "2.3",
+              "title": "在 chat-bubble.tsx 将正文阈值改为 800 字符、10 行并保持唯一 WebkitLineClamp",
+              "files": [
+                "web/src/components/ui/chat-bubble.tsx"
+              ],
+              "verify": "WebkitLineClamp 仅一处，chat-bubble-toggle 文案/testid 不变",
+              "status": "completed"
+            },
+            {
+              "id": "2.4",
+              "title": "在 msg-parts.tsx/msg-tool.tsx 将 tool I/O 入 DOM 文本限制为前 2000 字符",
+              "files": [
+                "web/src/components/chat/msg-parts.tsx",
+                "web/src/components/chat/msg-tool.tsx"
+              ],
+              "verify": "折叠与展开都不把第 2001 字符起内容放入 DOM",
+              "status": "completed"
+            },
+            {
+              "id": "2.5",
+              "title": "在 msg-thinking.tsx 将折叠摘录改为 200 字符并保持展开态完整",
+              "files": [
+                "web/src/components/chat/msg-thinking.tsx"
+              ],
+              "verify": "默认摘录 200 字符，展开后完整 thinking 可见",
+              "status": "completed"
+            },
+            {
+              "id": "2.6",
+              "title": "运行 tsc、check-only eslint、目标 Playwright 与失败场景，保存 task-2 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-2-density.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-2-density-failure.txt"
+              ],
+              "verify": "全部验收命令 exit 0，既有 testid 零消失，仅计划文件进入 feat(chat) commit",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f271f736fffdRF7TWOPp3KtLCV",
+          "commit": "31ff11f765afab0da0fb12b46cdfbba7d0c0da0a",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.92,
+            "session_id": "ses_f26ee97e0ffeMpCHbiZc3Rsgmx",
+            "commit": "31ff11f765afab0da0fb12b46cdfbba7d0c0da0a"
+          }
+        },
+        {
+          "id": "14",
+          "title": "C2 页面消费 delta、当前频道滚动门控与 DM 轮询兜底",
+          "status": "completed",
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-14-page-delta.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-14-page-delta-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "14.1",
+              "title": "阅读 Next 本地指南并为 DM query 30s refetchInterval、当前/非当前频道 delta 滚动、空 cache 首帧 refetch 建立失败基线",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/hooks/use-realtime.ts",
+                "web/hooks/use-sse.ts",
+                "web/e2e/pages.spec.ts",
+                "web/e2e/session-unification.spec.ts"
+              ],
+              "verify": "旧实现至少对无 interval、无 delta 回调和跨频道滚动产生可重复失败",
+              "status": "completed"
+            },
+            {
+              "id": "14.2",
+              "title": "将 privateMessagesQuery 设置 30s refetchInterval，并保持现有数据源和 upsertMessage 终态优先规则",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/hooks/use-realtime.ts"
+              ],
+              "verify": "DM 查询 30s 轮询，终态不被旧 delta 覆盖",
+              "status": "completed"
+            },
+            {
+              "id": "14.3",
+              "title": "在页面传入 onMessagePartDelta，定义 group channelId / private activePrivateId 可见频道门控",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx"
+              ],
+              "verify": "当前频道 delta 滚动；其他频道仅更新 unread/状态且不改变 scrollTop",
+              "status": "completed"
+            },
+            {
+              "id": "14.4",
+              "title": "当私聊 delta 到达目标 query cache 尚无数据时触发一次 privateMessagesQuery.refetch，避免首帧永久丢失",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx"
+              ],
+              "verify": "cache 空时 REST refetch 一次并显示首帧，不发生重复 refetch 循环",
+              "status": "completed"
+            },
+            {
+              "id": "14.5",
+              "title": "运行 tsc、目标 Playwright 和真实页面手动 QA，保存 task-14 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-14-page-delta.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-14-page-delta-failure.txt"
+              ],
+              "verify": "当前/非当前频道、空 cache、30s interval、终态优先全部通过；群聊 delta 路由无改动",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f271f7359ffeSYkIgWjMlLxny1",
+          "commits": [
+            "8092b16",
+            "a6139ec"
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.9,
+            "session_id": "ses_f26ed6926ffeCiBy0JEGKXtpk0",
+            "commits": [
+              "8092b16",
+              "a6139ec"
+            ]
+          },
+          "history_deviation": "Two commits for one todo due to intervening verified A1-A3 commit 31ff11f; no history rewrite; disclose in F5."
+        }
+      ]
+    },
+    {
+      "id": "wave-1",
+      "name": "Wave 1 · 身份与阅读层级",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "3",
+          "title": "A4 建立消息专用三级字号并拆出时间元信息",
+          "status": "completed",
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-3-type-scale.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-3-type-scale-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "3.1",
+              "title": "阅读 Next 指南并先补 DOM 断言：正文 14、身份 12/600、元信息 11，时间与作者不共享 style",
+              "files": [
+                "web/src/theme/tokens.ts",
+                "web/src/components/ui/chat-bubble.tsx",
+                "web/e2e/pages.spec.ts"
+              ],
+              "verify": "旧实现对至少一个字号或 span 契约失败",
+              "status": "completed"
+            },
+            {
+              "id": "3.2",
+              "title": "在 tokens.ts 新增消息作用域 body/identity/meta token，不改全局 fontSize.md",
+              "files": [
+                "web/src/theme/tokens.ts"
+              ],
+              "verify": "新增 14/12/11 层级，全局 md 仍为 13",
+              "status": "completed"
+            },
+            {
+              "id": "3.3",
+              "title": "在 chat-bubble.tsx 将正文、身份、时间分别绑定 token，并把 timestamp 拆成独立元信息 span",
+              "files": [
+                "web/src/components/ui/chat-bubble.tsx"
+              ],
+              "verify": "正文 14、身份 12 semibold、元信息 11；author/time 不再同字号同色同 span",
+              "status": "completed"
+            },
+            {
+              "id": "3.4",
+              "title": "运行 tsc、check-only eslint 和目标 DOM 手动 QA，保存 task-3 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-3-type-scale.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-3-type-scale-failure.txt"
+              ],
+              "verify": "命令 exit 0、失败门可复现、commit 仅含计划范围",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f26e0fee2ffe9KqwiZAckoLfM6",
+          "commit": "438a0b67afbf830d1363227bdc2a3683405ee557",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.92,
+            "session_id": "ses_f26c8ee7effe4EQCDPrg1J43h4",
+            "commit": "438a0b67afbf830d1363227bdc2a3683405ee557"
+          }
+        },
+        {
+          "id": "4",
+          "title": "B1 提取共享消息身份栏，process part 降级为附属行",
+          "status": "completed",
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-4-identity-rail.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-4-identity-rail-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "4.1",
+              "title": "在 reasoning+tool+text 三 part fixture 建立头像/作者/时间各一次的失败结构断言，并保存 testid before/after 对比方法",
+              "files": [
+                "web/src/components/chat/msg-parts.tsx",
+                "web/src/components/chat/msg-thinking.tsx",
+                "web/src/components/chat/msg-tool.tsx",
+                "web/src/components/chat/msg-error.tsx",
+                "web/src/components/chat/msg-aborted.tsx",
+                "web/src/components/ui/chat-bubble.tsx"
+              ],
+              "verify": "旧实现重复身份被测试捕获；既有 testid 列表作为零消失基线",
+              "status": "completed"
+            },
+            {
+              "id": "4.2",
+              "title": "新建 message-identity.tsx，封装 avatar、author/role、time，并从 ui/index.ts 导出",
+              "files": [
+                "web/src/components/ui/message-identity.tsx",
+                "web/src/components/ui/index.ts"
+              ],
+              "verify": "组件无业务映射职责，保留 agent-avatar/chat-bubble-author 等 testid",
+              "status": "completed"
+            },
+            {
+              "id": "4.3",
+              "title": "在 MsgParts 顶层渲染一条共享身份栏，process 组件去除头像/作者/时间",
+              "files": [
+                "web/src/components/chat/msg-parts.tsx",
+                "web/src/components/chat/msg-thinking.tsx",
+                "web/src/components/chat/msg-tool.tsx",
+                "web/src/components/chat/msg-error.tsx",
+                "web/src/components/chat/msg-aborted.tsx"
+              ],
+              "verify": "reasoning/tool/text 共用一条身份，过程内容仍保留 testid",
+              "status": "completed"
+            },
+            {
+              "id": "4.4",
+              "title": "为最终正文/附件传 showIdentity=false 或等价明确 props，避免 ChatBubble 二次身份",
+              "files": [
+                "web/src/components/ui/chat-bubble.tsx",
+                "web/src/components/chat/msg-parts.tsx"
+              ],
+              "verify": "最终正文、附件和 aborted 分支均只出现一次身份",
+              "status": "completed"
+            },
+            {
+              "id": "4.5",
+              "title": "运行 tsc、结构计数、testid diff 和真实页面 QA，保存 task-4 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-4-identity-rail.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-4-identity-rail-failure.txt"
+              ],
+              "verify": "身份元素各 1 次、既有 testid 零消失、commit 为 refactor(chat)",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f26c24381ffeLnyJ06arc8u1q3",
+          "commit": "e750e32",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f26a3f975ffeG6tK5qxQ0KRc3n",
+            "commit": "e750e32"
+          }
+        },
+        {
+          "id": "5",
+          "title": "B2 连续同发送者消息分组并复用身份栏",
+          "status": "completed",
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-5-grouping.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-5-grouping-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "5.1",
+              "title": "在 session/page.tsx 提取或新增纯分组判定：同 agent senderType、非空同 senderId、≤5 分钟、未跨日",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/lib/"
+              ],
+              "verify": "旧实现同发送者连续消息仍重复身份，失败断言可复现",
+              "status": "completed"
+            },
+            {
+              "id": "5.2",
+              "title": "在 messages.map 传入 index/previous，计算 grouped 并向 MsgParts/ChatBubble 传递 hideIdentity",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/src/components/chat/msg-parts.tsx"
+              ],
+              "verify": "同 agent 连续第 2/3 条省略身份，消息顺序和数据源不变",
+              "status": "completed"
+            },
+            {
+              "id": "5.3",
+              "title": "覆盖 user/system、不同 sender、超过 5 分钟、跨日和缺 createdAt 的负向 fixture",
+              "files": [
+                "web/e2e/pages.spec.ts",
+                "web/e2e/session-unification.spec.ts",
+                "web/lib/"
+              ],
+              "verify": "所有负向场景均保持独立身份且不崩溃",
+              "status": "completed"
+            },
+            {
+              "id": "5.4",
+              "title": "运行 tsc、目标 Playwright 和真实列表手动 QA，保存 task-5 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-5-grouping.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-5-grouping-failure.txt"
+              ],
+              "verify": "正负向场景全过，commit 为 feat(chat)",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f269be31bffeOIqD1DYqvE7pHL",
+          "commit": "cf08cf9",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.92,
+            "session_id": "ses_f2670b87fffePLiJNZTj0EtfpS",
+            "commit": "cf08cf9"
+          },
+          "evidence_correction": "system→agent phrase corrected as agent→agent fixture shorthand."
+        },
+        {
+          "id": "6",
+          "title": "B3 跨天日期分隔与 B4 system 行视觉降噪",
+          "status": "completed",
+          "dependencies": [
+            "5"
+          ],
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-6-date-system.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-6-date-system-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "6.1",
+              "title": "建立单日无多余分隔、跨日出现 chat-date-separator、缺 createdAt 不崩溃的失败基线",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/e2e/pages.spec.ts"
+              ],
+              "verify": "旧实现缺少日期分隔且缺时间数据有明确风险",
+              "status": "completed"
+            },
+            {
+              "id": "6.2",
+              "title": "按 createdAt 本地日期生成 chat-date-separator，仅在日期键变化时插入且不改变消息顺序",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx"
+              ],
+              "verify": "同一天零重复，跨天恰好一个分隔，sticky 不影响滚动",
+              "status": "completed"
+            },
+            {
+              "id": "6.3",
+              "title": "为 system 消息建立低对比度居中容器和独立间距，保留 chat-bubble[data-type=system]",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/src/components/ui/chat-bubble.tsx"
+              ],
+              "verify": "system 与正文在 DOM 容器、字号节奏和非颜色区隔上不同",
+              "status": "completed"
+            },
+            {
+              "id": "6.4",
+              "title": "运行目标 Playwright、DOM/视觉手动 QA，保存 task-6 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-6-date-system.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-6-date-system-failure.txt"
+              ],
+              "verify": "日期/system 正负向全过，commit 为 feat(chat)",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f266379d5ffe4DAqc0wH55Lho1",
+          "commit": "67e7442",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f26486c23ffempI6joeJLlunRr",
+            "commit": "67e7442"
+          },
+          "evidence_correction": "Verifier corrected test-count labels and file line counts; totals unchanged."
+        },
+        {
+          "id": "7",
+          "title": "B5 角色名与 author 并列，B9 禁止 author 裸 id 兜底",
+          "status": "completed",
+          "dependencies": [
+            "4"
+          ],
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-7-author-role.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-7-author-role-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "7.1",
+              "title": "建立已解析 author+role 去重、未映射 sender 不显示裸 id、external/@you 徽标保留的失败 fixture",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/src/components/ui/message-identity.tsx",
+                "web/src/components/ui/chat-bubble.tsx",
+                "web/e2e/pages.spec.ts"
+              ],
+              "verify": "旧实现至少暴露裸 id 或 author/role 二选一",
+              "status": "completed"
+            },
+            {
+              "id": "7.2",
+              "title": "在 session page 解析并安全过滤 senderId/team member/instance id，MessageIdentity 仅接收 display author 与 role label",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/src/components/ui/message-identity.tsx"
+              ],
+              "verify": "未解析只显示角色标签；DOM 不匹配 a_|tmm_|ta_ id",
+              "status": "completed"
+            },
+            {
+              "id": "7.3",
+              "title": "author 成功时并列显示 author 与 role，相同去重，同时保留 external/@you 徽标",
+              "files": [
+                "web/src/components/ui/message-identity.tsx",
+                "web/src/components/ui/chat-bubble.tsx"
+              ],
+              "verify": "agent fixture 同时见 author+role；相同只显示一次；徽标不丢",
+              "status": "completed"
+            },
+            {
+              "id": "7.4",
+              "title": "运行 tsc、目标 DOM QA，保存 task-7 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-7-author-role.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-7-author-role-failure.txt"
+              ],
+              "verify": "正负向断言全过，commit 为 feat(chat)",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f263fd4dfffeNdFBlTuykbrBvG",
+          "commit": "9674e4cc7c31b0aed8bb65120def500d4f7c7dd1",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.85,
+            "session_id": "ses_f261ca4cdffep4y45FnFna7rM7",
+            "commit": "9674e4cc7c31b0aed8bb65120def500d4f7c7dd1"
+          },
+          "evidence_correction": "Only final red iteration is proven to use stash cycle; earlier iterations ran against pre-B5 container."
+        },
+        {
+          "id": "8",
+          "title": "B12 为 session-status 增加容器并恢复 system 消息时间",
+          "status": "completed",
+          "dependencies": [
+            "4"
+          ],
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-8-status-container.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-8-status-container-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "8.1",
+              "title": "建立 transient status 容器存在、system DOM 含 time 的失败断言",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/src/components/ui/chat-bubble.tsx",
+                "web/e2e/pages.spec.ts"
+              ],
+              "verify": "旧实现 status 为裸文本且 system time 被提前 return 吞掉",
+              "status": "completed"
+            },
+            {
+              "id": "8.2",
+              "title": "让 session-status 使用与 LoadingIndicator 一致的可识别容器/testid，不混入消息数组",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx"
+              ],
+              "verify": "状态行存在、清理逻辑不变",
+              "status": "completed"
+            },
+            {
+              "id": "8.3",
+              "title": "在 ChatBubble system pill 内以元信息样式渲染传入 time",
+              "files": [
+                "web/src/components/ui/chat-bubble.tsx"
+              ],
+              "verify": "系统消息 DOM 含时间且层级不与正文相同",
+              "status": "completed"
+            },
+            {
+              "id": "8.4",
+              "title": "运行 tsc、目标 DOM QA，保存 task-8 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-8-status-container.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-8-status-container-failure.txt"
+              ],
+              "verify": "容器和时间断言通过，commit 为 fix(chat)",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f2602c7a9ffepYEgPXtY1mkDIs",
+          "commit": "1433275d35d4cb04a7e6398ddb0dfc51f0c78513",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f25ea9825ffeZRQu3XkXej5IGe",
+            "commit": "1433275d35d4cb04a7e6398ddb0dfc51f0c78513"
+          }
+        }
+      ]
+    },
+    {
+      "id": "wave-2",
+      "name": "Wave 2 · 细节与可访问性",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "9",
+          "title": "B6 未知 part 默认收起、可展开的诊断行",
+          "status": "completed",
+          "dependencies": [
+            "4"
+          ],
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-9-unknown-part.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-9-unknown-part-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "9.1",
+              "title": "注入 patch/未知 part 并建立节点存在、默认收起、摘要受限的失败断言",
+              "files": [
+                "web/src/components/chat/msg-parts.tsx",
+                "web/e2e/pages.spec.ts"
+              ],
+              "verify": "旧实现 return null，失败症状为无任何诊断节点",
+              "status": "completed"
+            },
+            {
+              "id": "9.2",
+              "title": "新增 msg-unknown-part 分支，显示安全 part 类型名和 data-part-type，默认收起",
+              "files": [
+                "web/src/components/chat/msg-parts.tsx"
+              ],
+              "verify": "step-start/step-finish/patch/未知均可见但低噪音",
+              "status": "completed"
+            },
+            {
+              "id": "9.3",
+              "title": "展开时渲染受限长度 JSON 摘要，禁止原样无限 payload，known 分支不回归",
+              "files": [
+                "web/src/components/chat/msg-parts.tsx"
+              ],
+              "verify": "超长 payload 被截断，text/reasoning/tool/error 行为保持",
+              "status": "completed"
+            },
+            {
+              "id": "9.4",
+              "title": "运行 tsc、fixture 和手动展开 QA，保存 task-9 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-9-unknown-part.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-9-unknown-part-failure.txt"
+              ],
+              "verify": "正负向通过，commit 为 fix(chat)",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f25dc01b2ffeLgvnwgPAZlS6Qh",
+          "commit": "129b7612972a36397be0194d279bba40e03a9844",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.92,
+            "session_id": "ses_f25c2311bffeRnO0zFwgHxF2lL",
+            "commit": "129b7612972a36397be0194d279bba40e03a9844"
+          },
+          "boundary_note": "Group chat text-only upstream filter means B6 rows primarily appear on DM path; pre-existing boundary."
+        },
+        {
+          "id": "10",
+          "title": "B7 用户消息状态标记与 B8 人名缩写",
+          "status": "completed",
+          "dependencies": [
+            "4"
+          ],
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-10-status-initials.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-10-status-initials-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "10.1",
+              "title": "建立 sending/sent/failed user 状态、同角色不同成员缩写不同且不暴露 id 的失败 fixture",
+              "files": [
+                "web/src/components/ui/chat-bubble.tsx",
+                "web/src/components/ui/agent-avatar.tsx",
+                "web/hooks/use-realtime.ts",
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/e2e/pages.spec.ts"
+              ],
+              "verify": "旧实现无状态且 initials 回退同一角色字母",
+              "status": "completed"
+            },
+            {
+              "id": "10.2",
+              "title": "ChatBubble 增加可选 status，user 消息显示不遮挡正文的轻量 sending/sent/failed 标记",
+              "files": [
+                "web/src/components/ui/chat-bubble.tsx",
+                "web/hooks/use-realtime.ts"
+              ],
+              "verify": "三状态可见，正文布局稳定，终态语义不变",
+              "status": "completed"
+            },
+            {
+              "id": "10.3",
+              "title": "从已解析 name/alias 生成 Unicode 安全 initials，并在聊天链路显式传递",
+              "files": [
+                "web/src/components/ui/agent-avatar.tsx",
+                "web/app/(main)/teams/[id]/session/page.tsx",
+                "web/hooks/use-realtime.ts"
+              ],
+              "verify": "中文取首字、拉丁名取前两字符；无法解析才角色字母；不显示内部 id",
+              "status": "completed"
+            },
+            {
+              "id": "10.4",
+              "title": "运行 tsc、目标 DOM/视觉 QA，保存 task-10 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-10-status-initials.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-10-status-initials-failure.txt"
+              ],
+              "verify": "状态和缩写正负向通过，commit 为 feat(chat)",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f2526783effe7mc1p8pnSspJe7",
+          "commit": "1bef2e0635c3146772e2abc14e22a285a8428e86",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.92,
+            "session_id": "ses_f24fe6358ffe3DwMBxAG1HsWnz",
+            "commit": "1bef2e0635c3146772e2abc14e22a285a8428e86"
+          },
+          "post_build_followup": "Rerun page suites and real DM smoke after next web rebuild."
+        },
+        {
+          "id": "11",
+          "title": "B10 角色色改用 CSS 变量并验证 light/dark",
+          "status": "completed",
+          "dependencies": [
+            "3"
+          ],
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-11-role-theme.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-11-role-theme-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "11.1",
+              "title": "建立 tokens.ts 角色 hex 为零、light/dark computed role color/bg/border 等于 CSS 变量解析值的失败基线",
+              "files": [
+                "web/src/theme/tokens.ts",
+                "web/app/globals.css",
+                "web/e2e/dark-mode-role-warning.spec.ts"
+              ],
+              "verify": "旧实现存在硬编码 hex 且主题切换不能完全跟随变量",
+              "status": "completed"
+            },
+            {
+              "id": "11.2",
+              "title": "将六个 RoleKey 的 roles.color/bg/border 与 roleText 全部改为 var(--color-role-*)，未知角色仍回退 developer",
+              "files": [
+                "web/src/theme/tokens.ts"
+              ],
+              "verify": "不新增第二套角色色源，无角色硬编码 hex",
+              "status": "completed"
+            },
+            {
+              "id": "11.3",
+              "title": "验证 AgentAvatar/MessageIdentity 的文字、底色、边框在 light/dark 均解析为 CSS 变量值",
+              "files": [
+                "web/src/components/ui/agent-avatar.tsx",
+                "web/src/components/ui/message-identity.tsx",
+                "web/src/components/ui/chat-bubble.tsx"
+              ],
+              "verify": "computed style 与变量值一致，主题切换即时更新",
+              "status": "completed"
+            },
+            {
+              "id": "11.4",
+              "title": "运行 tsc、dark-mode Playwright 和视觉 QA，保存 task-11 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-11-role-theme.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-11-role-theme-failure.txt"
+              ],
+              "verify": "light/dark 正负向通过，commit 为 refactor(theme)",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "recovered-no-live-session",
+          "commit": "9fcbf85",
+          "verification_session": "ses_f25308aceffeiZt99IZ5viXVlg",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.9,
+            "session_id": "ses_f25308aceffeiZt99IZ5viXVlg",
+            "commit": "9fcbf85"
+          },
+          "evidence_hygiene": "Verifier noted overwritten deps log, stale pre-rebuild provenance line, and gitignored last-run marker; no product defect."
+        },
+        {
+          "id": "12",
+          "title": "B11 统一低优先级折叠并保护 error/aborted 可见性",
+          "status": "completed",
+          "dependencies": [
+            "4",
+            "9",
+            "10"
+          ],
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-12-collapse-policy.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-12-collapse-policy-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "12.1",
+              "title": "为 process/tool/unknown/附件/error/aborted/streaming/system 长内容建立初始折叠矩阵失败断言",
+              "files": [
+                "web/src/components/chat/msg-thinking.tsx",
+                "web/src/components/chat/msg-tool.tsx",
+                "web/src/components/chat/msg-parts.tsx",
+                "web/src/components/ui/chat-bubble.tsx",
+                "web/src/components/chat/msg-error.tsx",
+                "web/src/components/chat/msg-aborted.tsx",
+                "web/e2e/pages.spec.ts"
+              ],
+              "verify": "旧实现至少附件/process 策略或 error/aborted 默认状态不满足",
+              "status": "completed"
+            },
+            {
+              "id": "12.2",
+              "title": "确保 thinking/tool/unknown diagnostic/长附件详情默认可收起并可展开，正文/streaming/system 不默认折叠",
+              "files": [
+                "web/src/components/chat/msg-thinking.tsx",
+                "web/src/components/chat/msg-tool.tsx",
+                "web/src/components/chat/msg-parts.tsx",
+                "web/src/components/ui/chat-bubble.tsx"
+              ],
+              "verify": "低优先级细节有 toggle，正文流始终可见",
+              "status": "completed"
+            },
+            {
+              "id": "12.3",
+              "title": "error/aborted 标题、状态、摘要始终可见；超长 detail 可 toggle 但默认展开，retry/quota/action 不丢",
+              "files": [
+                "web/src/components/chat/msg-error.tsx",
+                "web/src/components/chat/msg-aborted.tsx",
+                "web/src/components/ui/chat-bubble.tsx"
+              ],
+              "verify": "高优先级状态与动作始终可发现",
+              "status": "completed"
+            },
+            {
+              "id": "12.4",
+              "title": "运行 tsc、完整折叠矩阵 Playwright 和手动交互 QA，保存 task-12 证据并提交原子 commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-12-collapse-policy.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-12-collapse-policy-failure.txt"
+              ],
+              "verify": "八类内容矩阵全过，commit 为 feat(chat)",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f24f474b4ffezSUZVxZDx6wscV",
+          "commit": "b27f4c706304a4b791fa2b6cdb5d90f9347d803a",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f24e48640ffeUgNRjkebnSaYVD",
+            "commit": "b27f4c706304a4b791fa2b6cdb5d90f9347d803a"
+          }
+        }
+      ]
+    },
+    {
+      "id": "wave-3",
+      "name": "Wave 3 · 条件传输修复",
+      "status": "pending",
+      "tasks": [
+        {
+          "id": "13",
+          "title": "C1 条件修正 MessageDeltaTracker 与 server part merge",
+          "status": "skipped",
+          "dependencies": [
+            "1"
+          ],
+          "condition": "仅 C0=PASS；C0=FAIL 时记录 skipped 且不产生 commit",
+          "evidence": [
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-13-delta-semantics.txt",
+            ".omo/evidence/chat-ux-hierarchy-and-streaming/task-13-delta-semantics-failure.txt"
+          ],
+          "steps": [
+            {
+              "id": "13.1",
+              "title": "复核 C0=PASS 且递增发生在 step-finish 前；否则将 todo 标记 skipped 并记录证据",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/c0-serve-incremental.txt"
+              ],
+              "verify": "C1 启动条件与 C0 原始证据一致",
+              "status": "completed"
+            },
+            {
+              "id": "13.2",
+              "title": "在 worker prompt-await.spec.ts 先建立同一稳定 text part 两次增长的失败测试，保留 id-less append-only、reasoning/tool/step-finish 基线",
+              "files": [
+                "worker/src/driver/prompt-await.ts",
+                "worker/src/driver/prompt-await.spec.ts"
+              ],
+              "verify": "旧 tracker 第二次 growth 丢弃导致红测",
+              "status": "skipped"
+            },
+            {
+              "id": "13.3",
+              "title": "让 MessageDeltaTracker 记录上次完整 text，并在同 part 增长时发送最新完整快照；500ms poll 不变",
+              "files": [
+                "worker/src/driver/prompt-await.ts",
+                "worker/src/exec/exec-server.ts"
+              ],
+              "verify": "首次快照+更新快照，事件名和顶层 payload 不变",
+              "status": "skipped"
+            },
+            {
+              "id": "13.4",
+              "title": "在 server worker-event.ingress.spec.ts 先建立同 id part 不重复且 concatText 完整的失败测试",
+              "files": [
+                "server/src/workers/worker-event.ingress.ts",
+                "server/src/workers/worker-event.ingress.spec.ts",
+                "server/src/chat/message-parts.ts"
+              ],
+              "verify": "旧 ingress 追加重复 id 导致红测",
+              "status": "skipped"
+            },
+            {
+              "id": "13.5",
+              "title": "server ingress 按 part id 替换已有 part，无 id 保持 append-only，群聊过程/最终路由代码零改动",
+              "files": [
+                "server/src/workers/worker-event.ingress.ts",
+                "server/src/chat/message-parts.ts"
+              ],
+              "verify": "同 id 唯一、最终文本等于完整 serve 文本、群聊契约无 diff",
+              "status": "skipped"
+            },
+            {
+              "id": "13.6",
+              "title": "运行 worker/server 聚焦与全量门、跨包合并 QA，保存 task-13 证据并提交原子 fix(stream) commit",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-13-delta-semantics.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/task-13-delta-semantics-failure.txt"
+              ],
+              "verify": "worker typecheck/full Jest 与 server lint:check/full Jest 全绿，commit 范围精确",
+              "status": "skipped"
+            }
+          ],
+          "skip_reason": "C0=FAIL confirmed; C1 is conditional and explicitly skipped."
+        }
+      ]
+    },
+    {
+      "id": "final-wave",
+      "name": "Final verification wave",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "F1",
+          "title": "结构与计划合规审计",
+          "status": "completed",
+          "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f1-plan-structure.txt",
+          "steps": [
+            {
+              "id": "F1.1",
+              "title": "审计 implementation/Final checkbox 编号、References/Acceptance/QA/Commit/Category/evidence 完整性及 task-id 唯一性",
+              "files": [
+                ".omo/plans/chat-ux-hierarchy-and-streaming.md"
+              ],
+              "verify": "final-f1-plan-structure.txt 逐项 PASS/FAIL",
+              "status": "completed"
+            },
+            {
+              "id": "F1.2",
+              "title": "生成 chat-testids-after.txt 并与 before 对比，确认零 testid 消失",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/chat-testids-before.txt",
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/chat-testids-after.txt"
+              ],
+              "verify": "comm -23 before after 为空",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f24d88079ffeE5ypMrL7YdZt1G",
+          "verification": {
+            "verdict": "PASS",
+            "confidence": 0.9,
+            "session_id": "ses_f24d88079ffeE5ypMrL7YdZt1G",
+            "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f1-plan-structure.txt"
+          }
+        },
+        {
+          "id": "F2",
+          "title": "全仓 gate",
+          "status": "completed",
+          "dependencies": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11",
+            "12",
+            "13",
+            "14"
+          ],
+          "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f2-gate.txt",
+          "steps": [
+            {
+              "id": "F2.1",
+              "title": "运行 bash scripts/gate.sh（不带 --with-playwright），记录 11 步与 GATE GREEN",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f2-gate.txt"
+              ],
+              "verify": "exit 0 且输出 GATE GREEN；不运行 npm run lint",
+              "status": "completed"
+            },
+            {
+              "id": "F2.2",
+              "title": "若有失败，区分本计划回归与预存问题并按计划修复本计划引入项",
+              "files": [
+                "server/",
+                "worker/",
+                "web/"
+              ],
+              "verify": "所有本计划失败清零，预存问题单独记录",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f24d87ff2ffd2NP4Oml6MqA32p",
+          "verification": {
+            "verdict": "GATE GREEN",
+            "confidence": 0.98,
+            "session_id": "ses_f24d87ff2ffd2NP4Oml6MqA32p",
+            "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f2-gate.txt"
+          },
+          "first_attempt": "exit 127 due nvm PATH; identical rerun with Node v24.14.0 passed"
+        },
+        {
+          "id": "F3",
+          "title": "Playwright 与视觉行为验收",
+          "status": "completed",
+          "dependencies": [
+            "F2"
+          ],
+          "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f3-playwright.txt",
+          "steps": [
+            {
+              "id": "F3.1",
+              "title": "记录 phase5-t9-playwright.json hash，确认 localhost:3001 活栈并运行 web Playwright 全量",
+              "files": [
+                ".omo/evidence/phase5-t9-playwright.json",
+                "web/playwright-report/",
+                "web/test-results/"
+              ],
+              "verify": "不少于基线 125/125，退出码 0；仅清理本次生成物",
+              "status": "completed"
+            },
+            {
+              "id": "F3.2",
+              "title": "截图/浏览器核验长消息、分组、跨天、system/error/aborted、状态、缩写和当前/非当前频道滚动",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx"
+              ],
+              "verify": "final-f3-playwright.txt 记录每项视觉/行为 verdict",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f24ce8d74ffdPfibO4VKsemvJ7",
+          "verification": {
+            "verdict": "PASS",
+            "confidence": 0.95,
+            "session_id": "ses_f24ce8d74ffdPfibO4VKsemvJ7",
+            "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f3-playwright.txt",
+            "tests": "209/209"
+          }
+        },
+        {
+          "id": "F4",
+          "title": "真实私聊人工验收",
+          "status": "completed",
+          "dependencies": [
+            "F2"
+          ],
+          "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f4-manual.txt",
+          "steps": [
+            {
+              "id": "F4.1",
+              "title": "执行一次 reasoning+tool+text 私聊和一次长回复，实时观察身份、折叠、分组、日期和 delta",
+              "files": [
+                "web/app/(main)/teams/[id]/session/page.tsx"
+              ],
+              "verify": "身份一次、阈值正确、当前频道实时更新、error/aborted 可见",
+              "status": "completed"
+            },
+            {
+              "id": "F4.2",
+              "title": "检查浏览器 console 无新增未处理异常并清理临时会话/浏览器/服务资源",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f4-manual.txt"
+              ],
+              "verify": "console 审计与 cleanup receipt 完整",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f2498f6d2ffew0HJVV3XTpTgWZ"
+        },
+        {
+          "id": "F5",
+          "title": "范围、阻塞门与脏工作树审计",
+          "status": "completed",
+          "dependencies": [
+            "F1",
+            "F2",
+            "F3",
+            "F4"
+          ],
+          "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f5-scope-and-gates.txt",
+          "steps": [
+            {
+              "id": "F5.1",
+              "title": "核对 C0 结论与 C1 实施/skip 一致，确认 C0=FAIL 时 C2 和所有 UI 仍完成",
+              "files": [
+                ".omo/evidence/chat-ux-hierarchy-and-streaming/c0-serve-incremental.txt",
+                "server/src/workers/worker-event.ingress.ts",
+                "worker/src/driver/prompt-await.ts"
+              ],
+              "verify": "无伪造 PASS，无条件项越权",
+              "status": "completed"
+            },
+            {
+              "id": "F5.2",
+              "title": "逐条核对 Scope OUT：SSE/存储/群聊路由/群聊最终契约/依赖/移动端/分页/error 可见性/脏文件均未改",
+              "files": [
+                "server/src/workers/worker-event.ingress.ts",
+                "web/",
+                "worker/",
+                "server/"
+              ],
+              "verify": "git diff 与提交清单逐项 PASS",
+              "status": "completed"
+            },
+            {
+              "id": "F5.3",
+              "title": "对比初始/最终 git status 与每个 commit 文件集，确认预存脏文件未覆盖或纳入产品 commit",
+              "files": [
+                ".omo/boulder.json",
+                ".omo/ulw-execute/ledger.jsonl",
+                ".omo/evidence/",
+                ".opencode/opencode.json"
+              ],
+              "verify": "仅本计划产品/test 文件入 commit，.omo 状态本地保留",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f246c73adffegTD8NRcsr9XvLt",
+          "verification": {
+            "verdict": "CONFIRMED PASS",
+            "confidence": 0.9,
+            "session_id": "ses_f246c73adffegTD8NRcsr9XvLt",
+            "evidence": ".omo/evidence/chat-ux-hierarchy-and-streaming/final-f5-scope-and-gates.txt"
+          }
+        }
+      ]
+    }
+  ]
+}

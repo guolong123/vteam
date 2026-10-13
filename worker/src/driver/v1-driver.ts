@@ -249,6 +249,11 @@ export class V1Driver {
     this.logger.info(`[v1-driver] baseUrl 更新: ${this.baseUrlValue}`);
   }
 
+  /** serve Basic Auth 密码（GET /event SSE 订阅用；空=不鉴权）。 */
+  get authPassword(): string {
+    return this.serverPassword;
+  }
+
   /**
    * POST /session：创建 opencode 会话。
    * serve 实测返回 `{ id: "ses_..." }`（SDK 声明 {sessionID} 是错的根源），

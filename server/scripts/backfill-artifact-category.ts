@@ -8,8 +8,8 @@
  *   npx ts-node server/scripts/backfill-artifact-category.ts --dry-run  # 只打印，不写库
  *   npx ts-node server/scripts/backfill-artifact-category.ts            # 实跑
  * DB 无直连路由时（如宿主机 → compose MySQL），按 T1 既定模式进容器跑：
- *   docker cp server/scripts/backfill-artifact-category.ts aiagents-compose-server:/tmp/
- *   docker exec aiagents-compose-server npx ts-node --transpile-only \
+ *   docker cp server/scripts/backfill-artifact-category.ts vteam-compose-server:/tmp/
+ *   docker exec vteam-compose-server npx ts-node --transpile-only \
  *     --compiler-options '{"module":"commonjs","moduleResolution":"node"}' /tmp/backfill-artifact-category.ts --dry-run
  *
  * 连接方式：prisma 直连（抄 `server/prisma/seed.ts` 的 `new PrismaClient()` 自包含模式，

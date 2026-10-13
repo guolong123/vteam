@@ -1,0 +1,102 @@
+# task-6-date-system-failure — B3 跨天日期分隔 / B4 system 行降噪（红证据）
+# chat-ux-hierarchy-and-streaming 复选框 6
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:167-173（References / Acceptance / QA happy / QA failure）
+#      + :78-91 消息结构断言门 + Scope IN 第 4、5 条 + Success criteria 第 5 条
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 绿证据: 同目录 task-6-date-system.txt
+
+======================================================================
+0. 结论（failing-first 成立）
+======================================================================
+先写测试、后写实现。实现前的被测页面 = compose 镜像 aiagents-web:latest =
+aiagents-web:with-b2 = 5471616bff85（= 已提交的 B2 cf08cf9 源码，未含本 todo 任何改动）。
+  - 纯逻辑门红：lib-unit 无法加载 ./date-separator（模块不存在），exit 1。
+  - 类型门红：tsc 报 TS2307，exit 2。
+  - 渲染门红：session-unification 项目 6 failed / 15 passed，exit 1；
+    B2 子元素数断言 Expected 23 / Received 22（分隔条不存在），
+    B3 四处 chat-date-separator toHaveCount 全部拿到 0，
+    B4 system 字号 Expected "11px" / Received "12px"（system 仍共用正文容器节奏）。
+同一份测试在实现后全部转绿（见 task-6-date-system.txt §4.2）。
+
+======================================================================
+1. 红跑前置与镜像出处（provenance）
+======================================================================
+$ docker images | grep aiagents-web
+  aiagents-web:latest    5471616bff85   ← 红跑被测镜像（B2 提交 cf08cf9 构建）
+  aiagents-web:with-b2   5471616bff85
+$ docker ps → aiagents-compose-web healthy，宿主 13001→容器 3000
+$ curl localhost:3001/ 与 localhost:13001/ → 同一响应体
+  （Playwright baseURL=localhost:3001 由本机桥接转发到 compose standalone，
+    两处 sha 一致；即被测页面就是 compose 构建产物，不是 next dev）
+红跑期间未改动任何产品代码，也未重建镜像，故红/绿差异只来自本 todo 的实现。
+
+======================================================================
+2. 红命令与退出码
+======================================================================
+R1  $ cd web && npx playwright test lib/date-separator.spec.ts --project=lib-unit --reporter=list
+    → exit 1
+      Error: Cannot find module './date-separator'
+      Require stack: web/lib/date-separator.spec.ts
+      Error: No tests found.
+    （新增 web/lib/date-separator.ts 尚未创建 → 失败先行证明该断言针对新纯函数）
+    日志: /tmp/b6-lib-red.log
+
+R2  $ cd web && npx tsc --noEmit
+    → exit 2
+      lib/date-separator.spec.ts(6,8): error TS2307:
+      Cannot find module './date-separator' or its corresponding type declarations.
+    日志: /tmp/b6-tsc-red.log
+
+R3  $ cd web && npx playwright test session-unification.spec.ts --project=session-unification --reporter=list
+    → exit 1  （6 failed / 15 passed，耗时 1.1m）
+    日志: /tmp/b6-e2e-red.log
+    逐条失败（原样摘录）：
+      1) B2 › 1. 分组矩阵 …
+         Error: expect(received).toBe(expected)   Expected: 23   Received: 22
+         > expect(await nodes.count()).toBe(1 + B2_ROWS.length + B2_SEPARATOR_BEFORE_ROW.length)
+         （B2 断言已按「1 头部 + 21 消息 + 1 分隔」改写；实现前只有 22 → 必红）
+      2) B3 › 2. 跨天列表恰好一条 chat-date-separator 落在交界处
+         expect(locator).toHaveCount(expected) failed → Expected 1, Received 0
+      3) B3 › 3. 多次跨天逐次插入分隔 …        → Expected 3, Received 0
+      4) B3 › 4. 缺失/非法 createdAt 不崩溃…  → Expected 1, Received 0
+      5) B3 › 5. 首条缺 createdAt …           → Expected 1, Received 0
+      6) B3 › 6. system 行独立低对比居中容器，与 14px 正文非颜色区隔
+         Error: expect(received).toBe(expected)   Expected: "11px"   Received: "12px"
+         （system 容器仍 {...bubbleBase, fontSize: fontSize.sm}，与正文同一容器节奏）
+    红跑保持通过的守卫项（不构成失败先行，但证明未削弱既有行为）：
+      B2 › 2. user/system 相邻消息独立气泡 ✓、B2 › 3. 分组态仍渲染正文与过程 testid ✓、
+      B3 › 1. 单日列表零分隔 ✓（实现前本来就是 0）、
+      Todo12 4 例 ✓、Todo14 6 例 ✓（C2 滚动/delta/30s 轮询断言原样通过）。
+
+======================================================================
+3. 红期失败的测试即最终测试（未在实现后放宽断言）
+======================================================================
+- B2 既有 3 例一条未删：只把「子元素数 = 1 + 消息数」改写为
+  「1 + 消息数 + 分隔数」，并把分隔下标显式写死为 B2_SEPARATOR_BEFORE_ROW=[19]
+  （不调用生产 helper 反推，避免同源断言）。B2 的身份三件套计数、user/system
+  独立气泡、分组态过程 testid 等断言逐条未改，仅行定位从 nth(i+1) 改为
+  b2NodeIndex(i) = 1 + i + (19 <= i ? 1 : 0)。
+- 新增 B3 describe 6 例与 lib/date-separator.spec.ts 7 例即红跑那一份；
+  实现落地后唯一一次修改是本文件 §4.3 记录的测试侧下标笔误（4 → 3），
+  属于新测试自身的算错，不是放宽产品断言。
+
+======================================================================
+4. 实现期修正说明（透明记录）
+======================================================================
+4.1 首次绿跑（focused -g "B2|B3"）exit 1，只有 B3 › 5 失败：
+    expect(outline[4].startsWith("chat-date-separator=")).toBe(true) → Received false
+    原因：新测试里分隔条下标算错。5 行夹具 1 头部 + 3 消息 + 1 分隔，
+    分隔在 index 3、第三条消息在 index 4；产品行为正确（分隔确实在跨天交界）。
+4.2 修正为 outline[3] / nodes.nth(3) 后重跑 → 10 passed（见绿证据）。
+    positions 断言 [1,2,4] 本就正确，未改动；该测试对分隔位置的约束强度不变。
+4.3 未删除、未放宽任何断言；未触碰 playwright.config.ts / pages.spec.ts。
+
+======================================================================
+5. 复现要点
+======================================================================
+- 红跑镜像 aiagents-web:5471616bff85 仍以 aiagents-web:with-b2 保留；
+  若被 docker image prune 清理，复现需回退 web/lib/date-separator.ts、
+  page.tsx 的 withSeparator、chat-bubble.tsx 的 system 分支三处产品改动后重建。
+- 红跑全部使用 --reporter=list，config 中的 JSON reporter 未被触发
+  （.omo/evidence/phase5-t9-playwright.json 前后 shasum 均
+   ca4f79e9ceef5210962af118d266e9a7bca06aae，mtime 未变）。

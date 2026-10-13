@@ -1,0 +1,4 @@
+      ✓ B1：in_progress 任务的 pending 行跨启动存活，fireCount/quietStreak 不被重置 (1 ms)
+      ✕ B2：任务已转终态的 pending 行仍被清扫为 CANCELLED（清扫只收窄、不删除） (3 ms)
+      ✓ B3：长期值班任务在启动时不排期 (1 ms)
+Tests:       1 failed, 43 passed, 44 total

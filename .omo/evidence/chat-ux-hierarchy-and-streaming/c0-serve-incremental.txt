@@ -1,0 +1,97 @@
+# C0 实机证据 — opencode serve 是否暴露可续传 text part
+# plan: .omo/plans/chat-ux-hierarchy-and-streaming.md (todo 1 / C0 实机验证门)
+# captured_at=2026-09-25T13:59:31Z
+# stack: docker compose aiagents-compose-{server,web,worker,db}（host 端口 server=13000 web=13001 worker opencode serve=14000）
+# SERVE_BASE_URL=http://127.0.0.1:14000 （host -> worker 容器内 http://127.0.0.1:4000，compose: OPENCODE_SERVE_HOSTNAME=0.0.0.0 / OPENCODE_SERVE_PORT=4000）
+# serve_base_url 来源（worker capability/启动日志）: docker logs aiagents-compose-worker -> '[opencode-server] serve 就绪: http://127.0.0.1:4000' 与 '[v1-driver] baseUrl 更新: http://127.0.0.1:4000'
+# SESSION_ID=ses_f2829acd3ffee1mfDDeSxL4X3l
+# session_id 来源（会话事件 + worker 日志交叉确认）: server sessions.instance_ref(agent=a_project_manager, team=tm_0000000001)；worker 日志 '[v1-driver] sendMessage -> ses_f2829acd3ffee1mfDDeSxL4X3l ... (HTTP 204)'
+# baseline: 触发前 GET http://127.0.0.1:14000/session/ses_f2829acd3ffee1mfDDeSxL4X3l/message 快照 22 条 message id（BASELINE_IDS 传入脚本）
+# trigger: 先后台启动 capture，再 POST /api/v1/channels/c_0000000017/messages（private DM, agent=a_project_manager 主 agent, user=seed-admin, 要求约 800 字长回复）, HTTP=201
+# auth: Basic opencode:<OPENCODE_SERVER_PASSWORD>（值与 Authorization header 均不打印/不落盘；compose 未配置该变量 → 空密码）
+# poll: GET $SERVE_BASE_URL/session/$SESSION_ID/message 每 500ms，最多 120 次（<=60s）
+# 判据（plan C0 门）: PASS=同一 type=text part id 长度至少一次严格递增且递增发生在 step-finish 之前；FAIL=首次即完整/恒定，或 60s 内无可判定样本
+# 备注: 本文件前两次试跑因 capture 脚本自身缺陷（baseline 取样时机、record() 未接线）作废，未纳入本证据；本次为修正后唯一有效运行。
+
+C0 capture: opencode serve incremental text part observation
+generated_at=2026-09-25T13:59:10.376Z
+SERVE_BASE_URL=http://127.0.0.1:14000
+SESSION_ID=ses_f2829acd3ffee1mfDDeSxL4X3l
+auth=Basic opencode:<OPENCODE_SERVER_PASSWORD> (configured=no, length=0; value/header never printed)
+poll_interval_ms=500 max_polls=120 window_ms=60000
+baseline_source=pre-trigger snapshot (22 message ids taken before the DM was sent)
+note=samples below are raw non-secret observations (ids, part types, lengths only)
+
+=== samples ===
+[001] t=+29ms http=200 msgs=22 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant
+[002] t=+555ms http=200 msgs=22 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant
+[003] t=+1075ms http=200 msgs=22 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant
+[004] t=+1594ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[]
+[005] t=+2115ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[]
+[006] t=+2630ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[]
+[007] t=+3143ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[]
+[008] t=+3656ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[]
+[009] t=+4175ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[010] t=+4699ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[011] t=+5211ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[012] t=+5718ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[013] t=+6240ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[014] t=+6766ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[015] t=+7285ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[016] t=+7813ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[017] t=+8326ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[018] t=+8844ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[019] t=+9359ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[020] t=+9880ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[021] t=+10387ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[] parts=[step-start,reasoning]
+[022] t=+10916ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[023] t=+11443ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[024] t=+11960ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[025] t=+12482ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[026] t=+13005ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[027] t=+13523ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[028] t=+14037ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[029] t=+14546ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[030] t=+15059ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[031] t=+15575ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[032] t=+16095ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[033] t=+16637ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[034] t=+17156ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[035] t=+17679ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[036] t=+18194ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[037] t=+18715ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[038] t=+19238ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=no text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:0] parts=[step-start,reasoning,text]
+[039] t=+19755ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=yes text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:865] parts=[step-start,reasoning,text,step-finish]
+[040] t=+20279ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=yes text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:865] parts=[step-start,reasoning,text,step-finish]
+[041] t=+20798ms http=200 msgs=24 roles=user,assistant,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,assistant,user,assistant,assistant,assistant,assistant,user,assistant,user,assistant,user,assistant | asst=msg_0d8dceb50001j5xIxwl6eBBJPd step_finish=yes text=[prt_0d8dd0dd20012iLtzP5q0QLSKG:865] parts=[step-start,reasoning,text,step-finish]
+
+=== per-part length sequences (assistant, non-baseline) ===
+msg=msg_0d8dceb50001j5xIxwl6eBBJPd part=prt_0d8dd0dd20012iLtzP5q0QLSKG lengths=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 865, 865, 865] samples=[22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41] at_ms=[10916, 11443, 11960, 12482, 13005, 13523, 14037, 14546, 15059, 15575, 16095, 16637, 17156, 17679, 18194, 18715, 19238, 19755, 20279, 20798] step_finish_observed_by_then=[no, no, no, no, no, no, no, no, no, no, no, no, no, no, no, no, no, yes, yes, yes]
+
+=== step-finish timing ===
+step-finish: first seen for msg=msg_0d8dceb50001j5xIxwl6eBBJPd at t=+19755ms (sample 39)
+
+=== growth events (same part id, strictly increasing) ===
+msg=msg_0d8dceb50001j5xIxwl6eBBJPd part=prt_0d8dd0dd20012iLtzP5q0QLSKG len 0 -> 865 (sample 38 t=+19238ms -> sample 39 t=+19755ms) AFTER step-finish
+
+=== raw final message structure (assistant, non-baseline; text truncated) ===
+msg=msg_0d8dceb50001j5xIxwl6eBBJPd time={"created":1790344751952,"completed":1790344769800} error=null
+  part id=prt_0d8dcf479001wOiiAuB29LngwQ type=step-start
+  part id=prt_0d8dcf47d0017TYYWEP4jaYws9 type=reasoning len=1939 text_head="We need give Chinese ~800 chars, five headings, concrete. We can answer directly, no need tools. Need ensure approx 800 "
+  part id=prt_0d8dd0dd20012iLtzP5q0QLSKG type=text len=865 text_head="### 平台定位 vteam 是面向多智能体协作的团队任务平台，解决 AI Agent 工作中角色边界不清、消息分散、进度不可见、交付物难归档等问题。它把人员沟通与系统流程结合，让每个角色在同一任务中完成需求分析、方案设计、计划编制、代码"
+  part id=prt_0d8dd30fd001k2jHa1yqs06EPY type=step-finish reason=stop
+
+=== verdict ===
+polls=41 elapsed_ms=20796 http_ok=41
+first_http_ok_at=+29ms
+determinate_samples=20
+growth_before_step_finish=0 growth_total=1
+reason=text part only grew after step-finish was already observed (not a pre-finish increment)
+C0=FAIL
+
+=== cleanup receipts ===
+temp_script=/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T//c0-serve-incremental.mjs deleted=YES (rm -fv 输出见执行日志)
+temp_artifacts=c0-capture.out,c0-capture.rc,c0-worker-tail.log,/tmp/c0-*.json deleted=YES
+runtime_resource=POST /api/v1/dm-channels c_0000000016 (type=private, agent=a_architect, 首次尝试被主 agent 门禁拦截、无消息) → DELETE /api/v1/channels/c_0000000016 http=200 (soft delete)
+runtime_resource_kept=c_0000000017 (本次真实私聊触发频道及其消息，作为触发链路证据保留)
+product_code_changes=none; plan/boulder/registry changes=none; commit=none

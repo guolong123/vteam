@@ -1,0 +1,117 @@
+# task-7-author-role-failure — B5 author 与角色并列 / B9 禁止裸 id 兜底（红证据）
+# chat-ux-hierarchy-and-streaming 复选框 7
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:175-181（References / Acceptance / QA happy / QA failure）
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 绿证据: 同目录 task-7-author-role.txt
+
+======================================================================
+0. 结论（failing-first 成立）
+======================================================================
+先写测试、后写实现。最终测试文本（含 §3 的两次测试侧收敛）在实现缺席的构建上跑出：
+  - 纯逻辑门红：lib-unit 无法加载两个新模块 → exit 1（No tests found）；
+  - 类型门红：tsc 报 TS2307 ×2 → exit 2；
+  - 渲染门红：session-unification 项目 3 failed / 2 passed → exit 1，
+    三处失败分别是「角色标签缺失」「裸 a_plan 兜底」「裸 a_ghost_ext 兜底」，
+    第 4 例（user/system/B2 分组保持）在红期即通过，证明只红在本 todo 要改的行为上。
+同一份测试在实现后全部转绿（见 task-7-author-role.txt §4.2）。
+
+======================================================================
+1. 红跑前置与镜像出处（provenance）
+======================================================================
+$ docker images | grep aiagents-web
+  aiagents-web:latest    86bb6580d971   ← 绿跑最终镜像（本 todo 提交源码）
+  aiagents-web:with-b4   427c5c6630b1   ← 复选框 6（67e7442）产物，红跑前基线
+  aiagents-web:with-b2   5471616bff85
+红跑构造（两次，均为「测试在、实现缺席」）：
+  R-A（纯逻辑门）: 把 web/lib/display-author.ts 与 web/lib/author-role-display.ts
+       移到 /tmp/b7-impl-hold，跑 lib-unit 与 tsc，随后原样移回（4 个产品文件未动、未重建）。
+  R-B（渲染门）:   git stash push -- web/src/components/ui/message-identity.tsx
+                   web/src/components/ui/chat-bubble.tsx web/src/components/chat/msg-parts.tsx
+                   'web/app/(main)/teams/[id]/session/page.tsx'
+       → 仅 4 个产品文件回退到 HEAD（复选框 6 状态），测试文件与 2 个新 lib 保留；
+       → docker compose build web && docker compose up -d web → 产物 aiagents-web:latest =
+         d2acf2223e07（task-7-docker-build-red.txt，BUILD_EXIT=0 / UP_EXIT=0 / healthy）；
+       → 跑最终测试文本；跑完 git stash pop 恢复实现（成功，树状态一致）。
+$ docker ps → aiagents-compose-web healthy，宿主 13001→容器 3000
+$ curl localhost:3001/ 与 localhost:13001/ → 同一响应体
+  （Playwright baseURL=localhost:3001 由本机桥接转发到 compose standalone，
+    即被测页面就是 compose 构建产物，不是 next dev）
+红跑期间未改动任何产品源码（只有 stash/恢复），故红/绿差异只来自本 todo 的 4 处实现。
+
+======================================================================
+2. 红命令与退出码
+======================================================================
+R1  $ cd web && npx playwright test lib/display-author.spec.ts lib/author-role-display.spec.ts \
+        --project=lib-unit --reporter=list
+    → exit 1
+      Error: Cannot find module './display-author'
+      Require stack: web/lib/display-author.spec.ts
+      Error: Cannot find module './author-role-display'
+      Error: No tests found.
+    日志: task-7-lib-red.log
+R2  $ cd web && npx tsc --noEmit → exit 2
+      lib/author-role-display.spec.ts(2,35): error TS2307: Cannot find module './author-role-display'…
+      lib/display-author.spec.ts(2,76): error TS2307: Cannot find module './display-author'…
+    日志: task-7-tsc-red.log
+R3  $ cd web && npx playwright test session-unification.spec.ts --project=session-unification \
+        -g "B5" --reporter=list   （镜像 d2acf2223e07，最终测试文本）
+    → exit 1（3 failed / 2 passed，耗时 39.2s）
+    日志: task-7-e2e-red.log，逐条失败原样摘录：
+    1) B5 › 1. 已解析 author 与角色标签并列展示，二者同值时只出现一次
+       Error: expect(locator).toContainText(expected) failed
+       Locator: …/*').nth(1).getByTestId('chat-bubble-author')
+       Expected substring: "开发者"
+       Received string:    "Dev-1"
+       （身份栏只有 author，没有并列角色标签 → B5 未实现）
+    2) B5 › 2. 未映射 sender 只显示角色标签，可见 DOM 不含裸 a_/tmm_/ta_ id
+       Error: expect(locator).toHaveText(expected) failed
+       Locator: …/*').nth(3).getByTestId('chat-bubble-author')
+       Expected: "计划员"
+       Received: "a_plan"
+       （未映射 senderId 直接被 `?? msg.senderId` 兜底进可见文本 → B9 违反）
+    3) B5 › 3. external 渠道徽标与 @你 提及徽标在身份改造后仍可见
+       Error: expect(locator).toHaveText(expected) failed
+       Locator: …/*').nth(5).getByTestId('chat-bubble-author').locator(':scope > span').first()
+       Expected: "开发者"
+       Received: "a_ghost_ext"
+       （external 行同一病灶：裸实例/发送者 id 进身份行）
+    红跑保持通过的守卫项（不构成失败先行，但证明未削弱既有行为）：
+       B5 › 4. user/system 独立气泡与 B2 分组省略身份行为不受影响 ✓（红期 732ms 通过）
+       setup 登录 ✓
+    说明：例 3 的「external 徽标可见、文本=外部渠道」两条断言在红跑中**先于**失败断言通过
+    （执行到 :scope > span 那行才停），即徽标保留是红绿两侧共同成立的守卫。
+
+======================================================================
+3. 红期测试即最终测试（透明记录两次测试侧收敛）
+======================================================================
+3.1 第一次红跑（task-7-e2e-red-iter1.log）暴露的测试自身 bug：
+    例 3 写成 `external.getByTestId("chat-bubble").toHaveCount(1)` → Expected 1 / Received 0。
+    原因：external 行的列表直接子元素**就是** chat-bubble 根节点，后代查询取不到自身
+    （B2 既有 bubbleCount helper 注释已记录同一事实）。产品行为正确。
+    修正：改为对节点自身断言 `toHaveAttribute("data-testid","chat-bubble")` 与
+    `toHaveAttribute("data-type","agent")`，并补上该行的 B9 断言（role 标签 + 裸 id 扫描）。
+3.2 第二次红跑（task-7-e2e-red-iter2.log）：
+    例 3 改后红在 `Expected "开发者" / Received "a_ghost_ext"`（正确的红）；
+    例 1、例 2 与第一次红完全一致。
+3.3 实现后首跑（无独立日志，见下方 3.4 说明）有两处失败，均因**既有结构**：
+    external 渠道徽标本来就是 chat-bubble-author 的子元素（B1 之前的既有布局），
+    整个 author span 的文本是 "开发者外部渠道"，而断言写的是整串相等 "开发者"。
+    修正：把这两处从「整串 author span」收敛到「author span 的首个子 span（= 主文本）」：
+      `expect(author.locator(":scope > span").first()).toHaveText("开发者")`
+    收敛方向是**更严**（逐字锁定主文本），同时保留并新增
+    `not.toContainText("a_ghost_ext")` 与整行 innerText 裸 id 扫描，未删除任何断言。
+3.4 为保证「红跑 = 最终测试文本」，修正后重新执行了 §1 的 R-B 红跑（task-7-e2e-red.log），
+    三处失败全部复现且第三处用的正是 `:scope > span` 选择器 →
+    不存在「改测试迁就实现」的情况，红绿差异只来自 4 个产品文件。
+
+======================================================================
+4. 复现要点
+======================================================================
+- 红跑镜像 d2acf2223e07 会随下一次 docker build 被覆盖；若被清理，复现需按 §1 R-B
+  重新 stash 4 个产品文件后 `docker compose build web && docker compose up -d web`。
+  aiagents-web:with-b4 = 427c5c6630b1 是 stash 前的同源产物，可作为「复选框 6 状态」参照。
+- 红跑全部使用 --reporter=list，config 中的 JSON reporter 未被触发
+  （.omo/evidence/phase5-t9-playwright.json 前后 shasum 均
+   ca4f79e9ceef5210962af118d266e9a7bca06aae，mtime 未变）。
+- 环境前置：本机 shell 默认无 node/docker，需先
+  `source ~/.nvm/nvm.sh && nvm use default` 与 `export PATH=$PATH:/usr/local/bin`。

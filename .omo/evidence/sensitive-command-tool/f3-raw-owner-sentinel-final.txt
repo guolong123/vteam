@@ -1,0 +1,18 @@
+=== OWNER FINAL SENTINEL SWEEP (corrected dump: stdout+stderr) 2026-09-27T04:43:02Z ===
+docker log aiagents-compose-server bytes= 2434297 hits=0
+docker log aiagents-compose-worker bytes=   34435 hits=0
+docker log aiagents-compose-web bytes=   11176 hits=0
+--- worker session store / workdir ---
+session_store hits=0
+workdir hits=0
+--- app fs ---
+server /app hits=0
+web /app/.next hits=0
+--- MySQL ---
+messages.content hits=0
+agent_questions.content hits=0
+agent_questions.answers hits=0
+realtime_events.payload hits=0
+--- rendered command probes (template w/o placeholder is fine; look for sentinel in rendered argv/cwd logs) ---
+server rendered-cmd hits=0
+worker rendered-cmd hits=0

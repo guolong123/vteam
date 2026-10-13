@@ -133,12 +133,12 @@ describe('WorkerClient', () => {
         model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
         agent: 'build',
         parts: [{ type: 'text', text: 'hi' }],
-        directory: '/data/git-project/aiagents',
+        directory: '/data/git-project/vteam',
       });
 
       const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
       expect(url).toBe(
-        'http://localhost:4199/session/ses_1/prompt_async?directory=%2Fdata%2Fgit-project%2Faiagents',
+        'http://localhost:4199/session/ses_1/prompt_async?directory=%2Fdata%2Fgit-project%2Fvteam',
       );
       expect(JSON.parse(String(init.body))).toEqual({
         model: { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },

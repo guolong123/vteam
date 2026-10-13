@@ -1,0 +1,122 @@
+[
+  {
+    "row": "process(thinking)",
+    "rowSelector": "[data-testid=\"msg-thinking\"]",
+    "detailSelector": "[data-testid=\"msg-thinking-detail\"]",
+    "toggleSelector": "[data-testid=\"msg-thinking\"] button[aria-expanded]",
+    "initial": {
+      "toggleCount": 1,
+      "toggleAria": "false",
+      "detailCount": 0
+    },
+    "afterToggle": {
+      "toggleAria": "true",
+      "detailCount": 1
+    }
+  },
+  {
+    "row": "tool",
+    "rowSelector": "[data-testid=\"msg-tool\"]",
+    "detailSelector": "[data-testid=\"msg-tool-io\"]",
+    "toggleSelector": "[data-testid=\"msg-tool\"] button[aria-expanded]",
+    "initial": {
+      "toggleCount": 1,
+      "toggleAria": "false",
+      "detailCount": 0
+    },
+    "afterToggle": {
+      "toggleAria": "true",
+      "detailCount": 1
+    }
+  },
+  {
+    "row": "attachment",
+    "rowSelector": "[data-testid=\"attachment-file\"], [data-testid=\"attachment-detail-toggle\"]",
+    "detailSelector": "[data-testid=\"attachment-file\"]",
+    "toggleSelector": "[data-testid=\"attachment-detail-toggle\"]",
+    "initial": {
+      "toggleCount": 1,
+      "toggleAria": "false",
+      "detailCount": 0
+    },
+    "afterToggle": {
+      "toggleAria": "true",
+      "detailCount": 1
+    }
+  },
+  {
+    "row": "error",
+    "rowSelector": "[data-testid=\"msg-error\"]",
+    "detailSelector": "[data-testid=\"msg-error-detail\"]",
+    "toggleSelector": "[data-testid=\"msg-error-detail-toggle\"]",
+    "initial": {
+      "toggleCount": 1,
+      "toggleAria": "true",
+      "detailCount": 1
+    },
+    "afterToggle": {
+      "toggleAria": "false",
+      "detailCount": 0
+    }
+  },
+  {
+    "row": "aborted",
+    "rowSelector": "[data-testid=\"msg-aborted\"]",
+    "detailSelector": "[data-testid=\"msg-aborted-detail\"]",
+    "toggleSelector": "[data-testid=\"msg-aborted-detail-toggle\"]",
+    "initial": {
+      "toggleCount": 1,
+      "toggleAria": "true",
+      "detailCount": 1
+    },
+    "afterToggle": {
+      "toggleAria": "false",
+      "detailCount": 0
+    }
+  },
+  {
+    "row": "streaming",
+    "rowSelector": "[data-testid=\"msg-streaming\"]",
+    "detailSelector": "[data-testid=\"msg-streaming\"]",
+    "toggleSelector": "[data-testid=\"msg-streaming\"] button[aria-expanded]",
+    "initial": {
+      "toggleCount": 0,
+      "toggleAria": null,
+      "detailCount": 1
+    },
+    "afterToggle": {
+      "toggleAria": null,
+      "detailCount": 1
+    }
+  },
+  {
+    "row": "system",
+    "rowSelector": "[data-testid=\"chat-bubble\"][data-type=\"system\"]",
+    "detailSelector": "[data-testid=\"chat-bubble\"][data-type=\"system\"]",
+    "toggleSelector": "[data-testid=\"chat-bubble\"][data-type=\"system\"] button[aria-expanded]",
+    "initial": {
+      "toggleCount": 0,
+      "toggleAria": null,
+      "detailCount": 1
+    },
+    "afterToggle": {
+      "toggleAria": null,
+      "detailCount": 1
+    }
+  },
+  {
+    "row": "main-body",
+    "rowSelector": "[data-testid=\"chat-bubble-content\"]",
+    "detailSelector": "[data-testid=\"chat-bubble-content\"]",
+    "toggleSelector": "[data-testid=\"chat-bubble-toggle\"]",
+    "initial": {
+      "toggleCount": 1,
+      "toggleAria": "false",
+      "detailCount": 1
+    },
+    "afterToggle": {
+      "toggleAria": "true",
+      "detailCount": 1
+    }
+  }
+]

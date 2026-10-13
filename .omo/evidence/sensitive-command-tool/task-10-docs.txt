@@ -1,0 +1,119 @@
+# sensitive-command-tool · Todo 10 — 记录使用方式与安全边界
+# Evidence: .omo/evidence/sensitive-command-tool/task-10-docs.txt
+# Date: 2026-09-27 · Workdir: /Volumes/SSD-Data/01work/git-project/vteam
+# Uncommitted by design (Commit strategy: .omo/evidence/** never committed)
+# Product file: docs/secret-command-tool.md (182 lines)
+
+================================================================================
+0. SCOPE
+================================================================================
+Added: docs/secret-command-tool.md  (new operator doc, existing docs/ style:
+       Chinese, numbered `## 一、…` sections, tables, fenced code blocks —
+       mirrors docs/deployment.md / docs/README.md conventions)
+No other product file touched. No lint run (mutating lint prohibited by task).
+
+================================================================================
+1. AUTOMATED VERIFICATION (exact commands + exit codes, post-final-edit)
+================================================================================
+$ test -f docs/secret-command-tool.md
+exit=0
+
+$ grep -R "s3cr3t" docs/secret-command-tool.md
+(no output) exit=1          # 0 hits — required
+
+$ grep -nE "sandbox|network|allowlist|best-effort|bash|VTEAM_MCP_TIMEOUT_MS" docs/secret-command-tool.md
+4:> 不是安全承诺：文中所有"脱敏""拦截"均为 best-effort 防顺手泄露，不构成安全边界。
+74:2. **`toolAllows`**（worker guard 层② 工具白名单，`ROLE_BOUNDARIES` + 外部岗位 allowlist，
+75:   源码常量）：7 个内置岗位显式 `allow`，外部岗位 allowlist 共 9 项含 `vteam_secret_command`。
+82:- **代码级**：同时移除 `ROLE_BOUNDARIES[*].toolAllows` 与外部 allowlist 中的
+85:> `bash` permission **不会**拦截 `secret_command`。`permission.bash`（角色的 `bashEffect`）
+86:> 只作用于 opencode 会话内的 `bash` 工具；`secret_command` 是平台 MCP 工具，走上面两道
+87:> 自己的门。把 `permission.bash` 设为 `deny` **不会**让敏感命令工具失效，反之亦然。
+94:1. **脱敏是 best-effort 精确值替换。** worker 在返回前、server 在出口前，各做一次对提交值的
+96:2. **无沙箱（no sandbox）。** 命令以 worker 进程身份执行，没有容器 / namespace / seccomp /
+98:3. **无网络出口策略（no network egress policy）。** 不限制 DNS、不限制目标地址、不强制走
+100:4. **无命令白名单（no command allowlist / denylist）。** 模型可以提交任意命令，这是 MVP
+152:  迁移（`mcp_servers` 无 timeout 列）。环境变量 `VTEAM_MCP_TIMEOUT_MS` 可覆盖，但一律
+exit=0
+
+================================================================================
+2. MANUAL QA CHECKLIST — every required boundary, exact line refs
+   (read end-to-end after final edit; doc = 182 lines)
+================================================================================
+[x] 工具用途 / 是什么                    : L7-L17（模板+变量声明，模型只见模板与脱敏输出）
+[x] 模型 / 用户 / worker / server 职责    : L19-L26（四行职责表，含"不做什么"列）
+[x] 阻塞式人机交互流程                   : L28-L39（时序图）+ L41-L51（预算表）+ L53-L59（取消/断开/409/幂等）
+[x] 全角色默认（含外部/访客与 ar_general）: L63-L68（7 内置 + sisyphus/prometheus/atlas 外部引擎岗
+                                          + `ar_general`，fresh/upgrade 双路径显式 true）
+[x] 运维如何在角色能力里关闭             : L77-L83（角色 Tab → role-capability-editor → 拒绝 → 保存；
+                                          default-allow ⇒ 必须显式 false；代码级 toolAllows 同步）
+[x] 边界① best-effort 精确值脱敏         : L94-L95（+ 免责声明 L3-L4）
+[x] 边界② 无沙箱 no sandbox              : L96-L97
+[x] 边界③ 无网络出口策略 no network      : L98-L99
+[x] 边界④ 无命令白名单 no allowlist      : L100-L101
+[x] 边界⑤ 变形/编码外传无法阻止          : L102-L104（平台不声称能阻止）+ 综合定位 L106-L107
+[x] bash 不 gate secret_command          : L85-L88（只有 secret.command 能力点 L72-L73
+                                          与 toolAllows L74-L75 决定，L70「只有这两道」）
+[x] worker 镜像 opencode CLI 未 pin       : L147-L149（OPENCODE_CLI_SPEC 默认不锁，build-arg 覆盖）
+[x] MCP timeout 显式注入 >=900000        : L150-L153（VTEAM_MCP_TIMEOUT_MS clamp 到 >=900000，
+                                          非法/偏小值取下限，无 DB 迁移）
+[x] worker 超时 = timeoutSec + 5s        : L47（不回落客户端默认 60s）+ L48 请求侧再 +5s
+[x] 单 in-flight 为进程内（非分布式）    : L154-L155（+ 语义 L57-L58）
+[x] 执行已下发后 abort 不取消             : L156-L158（abort 只在下发前检查，已发命令跑完/超时）
+[x] worker 被强杀可遗留孤儿子进程         : L159-L161（detached 进程组，需外部清理）
+[x] 无 secret 持久化                     : L162-L164（内存 only，不进 answers/SSE/日志/session store）
+[x] 无 DB 审计表                         : L165-L166（不新增表/列/迁移）
+[x] evidence/plan 状态不入库             : L167-L168（.omo/evidence|plans|ulw-execute 不提交）
+[x] 安全示例（占位符、无真实 secret）     : L109-L128（JSON 示例用 {{REGISTRY_TOKEN}} / <TASK_ID> /
+                                          <REPO>；L126-L128 占位符语法与"不要粘贴真实 secret"）
+
+No sentence claims a hard security boundary:
+  - L3-L4   "不是安全承诺 … 不构成安全边界"
+  - L92     "任何一条都不是硬性安全保证"
+  - L104    "平台不声称能阻止这类外传"
+  - L106-L107 "不是访问控制或数据外泄防护边界 … 不要当作保密机制"
+  - L88     能力门"只防误调用"，vteam-api / swagger-mcp 不受约束
+  Implementation-behavior statements (L13-L17, L26) are properties covered by the
+  plan's sentinel no-leak tests (todo 9), not secrecy guarantees.
+
+================================================================================
+3. ADVERSARIAL CLASSES
+================================================================================
+[probed] misleading_success_output — PASS: no sentence promises guaranteed secrecy;
+  every redaction/permission statement is qualified (best-effort L4/L94,
+  非硬性边界 L92, 不声称 L104, 不当作保密机制 L107). Doc explicitly separates
+  "已实现行为" from "安全承诺" at L3-L4.
+[probed] secrets — PASS: grep -R "s3cr3t" → 0 hits (exit=1); example uses
+  {{REGISTRY_TOKEN}}, <TASK_ID>, <INSTANCE_ID>, <REPO>, registry.example.com only
+  (L111-L128). No real token/password anywhere in the doc.
+[probed] dirty_worktree — PASS: commit contains only docs/secret-command-tool.md
+  (git diff --cached --name-only / git show --stat recorded in §4). Pre-existing
+  dirty files (.omo/**, .opencode/opencode.json) left untouched and uncommitted;
+  this evidence file is uncommitted by design.
+[n/a] malformed_input — reason: doc-only todo; no parser, JSON payload, template
+  substitution or HTTP surface is executed/changed here. Input-validation behavior
+  (占位符/变量名/cwd/timeoutSec 校验) is documented at L32 but tested in todos 3/6.
+[n/a] hung commands — reason: no command execution introduced by this todo; the
+  blocking/wait budgets it documents (540s / timeoutSec+5s / 855s / keepalive 60s,
+  L41-L51) are enforced and covered by todos 6 and 9, not exercised here.
+[n/a] prompt injection — reason: the doc is static operator documentation with no
+  model-facing instruction channel, no tool call and no user-supplied content path;
+  nothing in it is rendered back into a prompt.
+
+================================================================================
+4. COMMIT
+================================================================================
+(to be appended after commit)
+
+### Commit
+$ git add docs/secret-command-tool.md && git diff --cached --name-only
+docs/secret-command-tool.md   # (only this file staged)
+$ git commit -m 'docs(secret-command): 记录使用方式与安全边界'
+$ git show --stat --oneline HEAD
+c61cc64 docs(secret-command): 记录使用方式与安全边界
+ docs/secret-command-tool.md | 182 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 182 insertions(+)
+
+full SHA: c61cc6411c9e60d5b0cac30713c9c8088c07a9ce
+post-commit worktree: same pre-existing dirty files only (.omo/**, .opencode/opencode.json),
+no new tracked changes — evidence/** left uncommitted as required.

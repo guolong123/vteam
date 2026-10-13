@@ -666,14 +666,110 @@ export async function sendAndAwait(
  *  - 空壳消息（parts=[]）不产生 key，不影响后续；同消息增量部分（新 id/新索引）
  *    被提取，旧 part 不重复上送
  * 保证 message.part.delta 事件只上送新增 part，不重复上送整批历史。
+ *
+ * tool part 的**状态重发**（状态流转去重）：serve 的 tool part 在模型参数解析完成前
+ * 就以 `{status:'pending', input:{}}` 空壳落盘，参数/输出稍后才写入同一 `part.id`。
+ * 纯「首次上送一次」会把每个工具调用永久冻结在参数解析前的空态（线上表现：聊天 UI
+ * 大量工具卡片永远 running + 输入 {} + 空输出）。故 tool part 按**可观测状态指纹**
+ * （status/input/output 的有界采样哈希）去重：指纹变化即重发同一 part（part.id 不变，
+ * server 侧按 id 合并覆盖），指纹不变不重发。
+ * text/reasoning part 按**内容增长阈值**重发：累计增长 ≥ TEXT_GROWTH_MIN_CHARS
+ * 字符才重发同一 part——思考/正文随生成过程流动刷新（流式观感），又不会每轮 poll
+ * 都重传累积全文（带宽回归）；终态全量仍由 task.completed 的 result.parts 兜底。
  */
-export class MessageDeltaTracker {
-  private readonly sentPartKeys = new Set<string>();
+/**
+ * tool part 单调进度指纹：状态rank × 1e12 + input 长度 × 1e6 + output 长度。
+ * 双路（SSE 实时 + 轮询快照）并发上送同一 part 时，**进度大的赢、旧快照盖不住新状态**——
+ * serve 快照天然可能比 SSE 事件旧（轮询间隙），用状态字符串直接比较会regress
+ * （completed 快照晚到反而把卡片打回 running）。rank：pending=0 / running=1 /
+ * 其余（completed/error/未知终态）=2。input/output 长度单调增长（append-only）。
+ */
+const TOOL_STATUS_RANK: Record<string, number> = {
+  pending: 0,
+  queued: 0,
+  running: 1,
+  streaming: 1,
+};
+const TOOL_PROGRESS_BASE = 1e12;
+const TOOL_INPUT_WEIGHT = 1e6;
 
-  /** 返回本轮 messages 中此前未上送过的 **assistant** 消息的增量 parts（扁平拼接）；
-   *  无新增返回空数组。
+function toolProgress(part: ServePart): string {
+  const state = part.state as
+    | { status?: unknown; input?: unknown; output?: unknown }
+    | undefined
+    | null;
+  if (state === undefined || state === null || typeof state !== 'object') {
+    return String(TOOL_PROGRESS_BASE * 2);
+  }
+  const status = typeof state.status === 'string' ? state.status : '';
+  const rank = TOOL_STATUS_RANK[status] ?? 2;
+  const inLen = typeof state.input === 'string' ? state.input.length : safeJsonLength(state.input);
+  const outLen =
+    typeof state.output === 'string' ? state.output.length : safeJsonLength(state.output);
+  return String(rank * TOOL_PROGRESS_BASE + inLen * TOOL_INPUT_WEIGHT + outLen);
+}
+
+function safeJsonLength(value: unknown): number {
+  if (value === undefined || value === null) {
+    return 0;
+  }
+  try {
+    return (JSON.stringify(value) ?? '').length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * text/reasoning part 的内容增长重发阈值（字符）：serve 的 text/reasoning part 同一
+ * `part.id` 随生成累积变长（append-only），按阈值重发让 UI 流动刷新思考/正文，
+ * 又避免每轮 poll（默认 500ms）重传累积全文的带宽回归。终态全量由 task.completed
+ * 的 result.parts 兜底，阈值截断不影响最终内容。
+ */
+export const TEXT_GROWTH_MIN_CHARS = 64;
+
+/**
+ * text/reasoning part 指纹 = 候选文本字段总长度（`L<len>`，append-only 单调增长）；
+ * 无任何文本字段 → ''（维持首次即发一次，如空壳占位）。
+ */
+function textGrowthFingerprint(part: ServePart): string {
+  const p = part as {
+    text?: unknown;
+    summary?: unknown;
+    thoughts?: unknown;
+    detail?: unknown;
+  };
+  let len = 0;
+  for (const key of ['text', 'summary', 'thoughts', 'detail'] as const) {
+    const v = p[key];
+    if (typeof v === 'string') {
+      len += v.length;
+    }
+  }
+  return len > 0 ? `L${len}` : '';
+}
+
+/** 首发/记录基准指纹：tool → 单调进度值；text/reasoning → 增长长度；其余 → ''（仅首发）。 */
+function fingerprintOf(part: ServePart): string {
+  if (part.type === 'tool') {
+    return toolProgress(part);
+  }
+  if (part.type === 'text' || part.type === 'reasoning') {
+    return textGrowthFingerprint(part);
+  }
+  return '';
+}
+
+export class MessageDeltaTracker {
+  /** part key → 最近一次上送时的指纹（tool=单调进度 / text·reasoning=增长长度 / 其余=''）。 */
+  private readonly sentPartKeys = new Map<string, string>();
+
+  /** 返回本轮 messages 中**首次出现**或**可观测状态已推进**的 **assistant** 消息 parts
+   *  （扁平拼接）；无新增/无推进返回空数组。
    *  P1/P6：过滤 role=assistant——user/system 消息（含 prompt 注入的 [群聊历史消息]/
-   *  doclib 上下文）绝不进入流式回复，杜绝聊天记录显示注入重复内容。 */
+   *  doclib 上下文）绝不进入流式回复，杜绝聊天记录显示注入重复内容。
+   *  双路并发（SSE 实时 + 轮询快照）：轮询快照可能比 SSE 事件旧——tool 进度值、
+   *  text 长度均为**单调**量，旧快照永远小于已记录值，不会回覆盖（见 noteSent）。 */
   extractNewParts(messages: ServeMessage[]): ServePart[] {
     const fresh: ServePart[] = [];
     for (const m of messages) {
@@ -691,17 +787,52 @@ export class MessageDeltaTracker {
         // part key：优先 part.id（serve 实测稳定 `prt_` 前缀）；无 id 时回退
         // `消息id:partIndex`（0 基索引，parts append-only 累积索引稳定）
         const key = part.id ? part.id : `${msgId}:${i}`;
-        if (this.sentPartKeys.has(key)) {
+        const prev = this.sentPartKeys.get(key);
+        if (prev === undefined) {
+          // 首次出现：任何类型都上送
+          this.sentPartKeys.set(key, fingerprintOf(part));
+          fresh.push(part);
           continue;
         }
-        this.sentPartKeys.add(key);
-        fresh.push(part);
+        // tool part：单调进度推进才重发（pending→running→completed；旧快照不回退）
+        if (part.type === 'tool') {
+          const fp = toolProgress(part);
+          if (Number(fp) > Number(prev)) {
+            this.sentPartKeys.set(key, fp);
+            fresh.push(part);
+          }
+          continue;
+        }
+        // text/reasoning part：内容累计增长 ≥ 阈值才重发（流式刷新 + 带宽受控）
+        if (part.type === 'text' || part.type === 'reasoning') {
+          const fp = textGrowthFingerprint(part);
+          if (fp === '') {
+            continue; // 无文本字段（空壳/占位）：不重发
+          }
+          const prevLen = prev.startsWith('L') ? Number(prev.slice(1)) : 0;
+          const curLen = Number(fp.slice(1));
+          if (curLen - prevLen >= TEXT_GROWTH_MIN_CHARS) {
+            this.sentPartKeys.set(key, fp);
+            fresh.push(part);
+          }
+          continue;
+        }
+        // 其余类型（step-start/step-finish/patch 等）：首次已发，不再上送
       }
     }
     return fresh;
   }
 
-  /** 重置已上送集合（多轮执行复用同一实例时隔离）。 */
+  /**
+   * 记录「已直接上送」的 part（SSE 实时路用）：把状态推进量写入 sentPartKeys，
+   * 使后续轮询快照对同一 part 的比较以 SSE 已发进度为基准——旧快照压下不回退，
+   * 更新的快照仍可继续推进。与 extractNewParts 共用同一套指纹口径。
+   */
+  noteSent(part: ServePart): void {
+    this.sentPartKeys.set(part.id ?? `<noid>:${fingerprintOf(part)}`, fingerprintOf(part));
+  }
+
+  /** 重置已上送集合（多轮执行复用实例时隔离）。 */
   reset(): void {
     this.sentPartKeys.clear();
   }

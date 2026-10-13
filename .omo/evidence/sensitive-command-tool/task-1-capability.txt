@@ -1,0 +1,307 @@
+# sensitive-command-tool · Todo 1 — 注册 vteam_secret_command + secret.command 全角色开放
+# Evidence: .omo/evidence/sensitive-command-tool/task-1-capability.txt
+# Date: 2026-09-26 · Workdir: /Volumes/SSD-Data/01work/git-project/vteam
+# Uncommitted by design (Commit strategy: .omo/evidence/** never committed)
+
+================================================================================
+0. SCOPE OF CHANGES (product/test files only)
+================================================================================
+server/src/common/constants/agent.constants.ts
+  - VTEAM_MCP_TOOL_NAMES: + 'vteam_secret_command' (31 -> 32)
+  - ROLE_BOUNDARIES[all 7].toolAllows: + vteam_secret_command: 'allow'
+  - mcpDenies derived by complement (no role denies the new tool)
+server/src/common/constants/platform-capability.constants.ts
+  - PLATFORM_CAPABILITIES: + { key: 'secret.command', label: '执行敏感命令',
+      tools: ['vteam_secret_command'], defaultDeny: false } (28 -> 29 点)
+  - capabilityKeyForTool('vteam_secret_command') === 'secret.command' (derived map)
+server/src/common/constants/agent-role.constants.ts
+  - EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST: 8 -> 9 (+ vteam_secret_command)
+  - EXTERNAL_AGENT_ROLE_CAPABILITIES: derived -> 29 keys / 9 true / 20 false
+  - BUILTIN_ROLE_CAPABILITY_MAPS: all 7 roles + 'secret.command': true (28 -> 29 键)
+server/prisma/seed.ts  (self-contained mirror, no src import)
+  - VTEAM_MCP_TOOL_NAMES mirror + PLATFORM_CAPABILITIES mirror
+    + 7 ROLE_BOUNDARIES toolAllows + EXTERNAL allowlist (all + secret_command)
+  - vteamTools[]: + { action: 'secret_command', name: 'vteam_secret_command' }
+  - builtinRoleCapabilityMap()/factoryCapabilityMatrix() pick the new key up
+    from the mirrors (PM all-true, 6 roles derived, factory defaultDeny:false)
+server/prisma/migrations/20260926000000_secret_command_capability/migration.sql
+  - single UPDATE agent_roles: JSON_SET(capabilities,'$."secret.command"',true)
+    WHERE capabilities IS NOT NULL AND key missing (no DDL, no secret table/column)
+tests updated: platform-capability.coverage.spec.ts, agent.constants.spec.ts,
+  agent-role.constants.spec.ts, seed.spec.ts,
+  agent-role-capabilities.migration.spec.ts,
+  agent-role-capabilities-split-grouped.migration.spec.ts,
+  agent-role-capabilities-factory-default.migration.spec.ts
+
+================================================================================
+1. FAILING-FIRST (red before production edit)
+================================================================================
+Command: cd server && npx jest src/common/constants src/prisma --runInBand
+Exit code: 1
+Test Suites: 7 failed, 9 passed, 16 total
+Tests:       12 failed, 158 passed, 170 total
+Failing tests (all new assertions, none existed pre-change):
+  - platform capability catalogue coverage › 目录覆盖 VTEAM_MCP_TOOL_NAMES 全 32 项 ... (29 点 ↔ 32 工具)
+  - platform capability catalogue coverage › secret_command：vteam_secret_command → secret.command，defaultDeny=false 且出厂 true
+  - ROLE_BOUNDARIES › 全 7 角色 toolAllows 显式放行 vteam_secret_command（secret.command 能力点全角色开放）
+  - ROLE_BOUNDARIES › mcpDenies = 全部 MCP 工具中未列入 toolAllows 者 ... (31 != 32)
+  - agent-role.constants › 契约：project_manager = 全 29 点 true
+  - agent-role.constants › secret.command 全角色开放：外部 allowlist 9 项、外部/出厂矩阵显式 true
+  - seed › vteam 工具含 secret_command 行（sensitive-command-tool todo-1）
+  - seed › 存量外部岗位补最小能力矩阵 (28/8 -> 29/9)
+  - seed › 兜底：任意 capabilities 仍为 NULL 的角色落出厂矩阵（secret.command true）
+  - agent_roles.capabilities contract › factory fallback ... (factory['secret.command'] undefined)
+  - agent_roles.capabilities contract › the vteam catalog still covers all 32 tools
+  - agent_roles builtin capability contract › fresh 出厂矩阵与升级迁移都把 secret.command 显式置 true
+  - split-grouped suite: ENOENT prisma/migrations/20260926000000_secret_command_capability/migration.sql
+
+================================================================================
+2. GREEN AFTER IMPLEMENTATION — exact commands + exit codes
+================================================================================
+[CMD 1] cd server && npx jest src/common/constants src/prisma --runInBand
+EXIT CODE: 0
+Test Suites: 16 passed, 16 total
+Tests:       180 passed, 180 total
+
+[CMD 2] cd server && npx jest src/common/constants/platform-capability.coverage.spec.ts src/common/constants/agent.constants.spec.ts src/prisma/seed.spec.ts src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts --runInBand
+EXIT CODE: 0
+Test Suites: 4 passed, 4 total
+Tests:       94 passed, 94 total
+
+[CMD 3] cd server && npm run lint:check
+EXIT CODE: 0
+✖ 66 problems (0 errors, 66 warnings)   # 66 warnings are pre-existing; 0 errors
+(no `npm run lint`, no `--fix` used)
+
+[extra] cd server && npx tsc --noEmit -p tsconfig.json -> EXIT 0
+[extra] cd server && npx jest src/execution-policies src/agent-roles --runInBand
+        -> 16 suites / 271 tests passed, EXIT 0
+
+================================================================================
+3. MANUAL QA — derived matrices for 7 built-in + 3 external + ar_general
+   (real ts-node read of the exported production constants; raw output below)
+================================================================================
+CAPABILITY_DUMP_BEGIN
+== capabilityKeyForTool / tool catalogue ==
+capabilityKeyForTool('vteam_secret_command') = "secret.command"
+VTEAM_MCP_TOOL_NAMES.length = 32
+contains vteam_secret_command = true
+PLATFORM_CAPABILITIES.length = 29
+PLATFORM_CAPABILITY_KEYS.length = 29
+capability = {"key":"secret.command","label":"执行敏感命令","tools":["vteam_secret_command"],"defaultDeny":false}
+factory[secret.command] = true (defaultDeny=false)
+
+== 7 builtin roles (src source of truth = fresh seed落库值) ==
+ar_product             key=product          matrix[secret.command]=true  derivedFromToolAllows[secret.command]=true  toolAllows.vteam_secret_command=allow  mcpDeniesHas=false  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+ar_project_manager     key=project_manager  matrix[secret.command]=true  derivedFromToolAllows[secret.command]=true  toolAllows.vteam_secret_command=allow  mcpDeniesHas=false  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+ar_architect           key=architect        matrix[secret.command]=true  derivedFromToolAllows[secret.command]=true  toolAllows.vteam_secret_command=allow  mcpDeniesHas=false  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+ar_developer           key=developer        matrix[secret.command]=true  derivedFromToolAllows[secret.command]=true  toolAllows.vteam_secret_command=allow  mcpDeniesHas=false  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+ar_tester              key=tester           matrix[secret.command]=true  derivedFromToolAllows[secret.command]=true  toolAllows.vteam_secret_command=allow  mcpDeniesHas=false  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+ar_plan                key=plan             matrix[secret.command]=true  derivedFromToolAllows[secret.command]=true  toolAllows.vteam_secret_command=allow  mcpDeniesHas=false  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+ar_librarian           key=librarian        matrix[secret.command]=true  derivedFromToolAllows[secret.command]=true  toolAllows.vteam_secret_command=allow  mcpDeniesHas=false  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+
+== 3 external engine roles (least-privilege matrix) ==
+EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST.length = 9
+allowlist = ["vteam_group_post","vteam_chat_history","vteam_doclib","vteam_submit_artifact","vteam_notify_agent","vteam_task_context","vteam_my_profile","vteam_team_view","vteam_secret_command"]
+external keys=29 true=9 false=20
+ar_sisyphus            key=sisyphus         matrix[secret.command]=true  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+ar_prometheus          key=prometheus       matrix[secret.command]=true  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+ar_atlas               key=atlas            matrix[secret.command]=true  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+
+== ar_general (factory matrix, fresh + upgrade兜底) ==
+ar_general keys=29 true=15 false=14
+factory[secret.command] = true  toolStates.vteam_secret_command=allow  isCapabilityGranted=true
+
+== all-roles verdict ==
+ar_product             secret.command===true : PASS
+ar_project_manager     secret.command===true : PASS
+ar_architect           secret.command===true : PASS
+ar_developer           secret.command===true : PASS
+ar_tester              secret.command===true : PASS
+ar_plan                secret.command===true : PASS
+ar_librarian           secret.command===true : PASS
+ar_sisyphus            secret.command===true : PASS
+ar_prometheus          secret.command===true : PASS
+ar_atlas               secret.command===true : PASS
+ar_general             secret.command===true : PASS
+ALL 11 ROLES TRUE: PASS
+capabilityKeyForTool check: PASS
+CAPABILITY_DUMP_END
+
+================================================================================
+4. UPGRADE-PATH PROOF — real MySQL 8 (throwaway container, image already local)
+   stale_state probe: fresh seed vs existing 28-key DB matrix divergence
+================================================================================
+Steps (all raw outputs below):
+  4.1 docker run -d --name task1-mysql-verify -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=vtask mysql:8
+      -> CONTAINER_STARTED, MYSQL_READY after 3 tries
+  4.2 generate pre-change rows: current matrices minus 'secret.command'
+      (= exactly the 28-key matrices an existing DB has) via ts-node read of the
+      production constants: prepared rows=12 oldBuiltinKeys=28 externalKeys=28 factoryKeys=28
+  4.3 apply prisma/migrations/20260925000000_squashed_baseline/migration.sql
+      -> BASELINE_APPLIED=0
+  4.4 INSERT 7 builtin + 3 external + ar_general + 1 NULL-capabilities probe row
+      -> OLD_ROWS_INSERTED=0
+  4.5 apply prisma/migrations/20260926000000_secret_command_capability/migration.sql
+      -> SECRET_MIGRATION_APPLIED=0
+  4.6 read back + deep-compare (JSON.parse, delete 'secret.command', compare to original):
+MYSQL_VERIFY_BEGIN
+ar_architect           secret.command=true keys=29 other28Intact=true : PASS
+ar_atlas               secret.command=true keys=29 other28Intact=true : PASS
+ar_developer           secret.command=true keys=29 other28Intact=true : PASS
+ar_general             secret.command=true keys=29 other28Intact=true : PASS
+ar_librarian           secret.command=true keys=29 other28Intact=true : PASS
+ar_null_probe          capabilities=NULL (unchanged) : PASS
+ar_plan                secret.command=true keys=29 other28Intact=true : PASS
+ar_product             secret.command=true keys=29 other28Intact=true : PASS
+ar_project_manager     secret.command=true keys=29 other28Intact=true : PASS
+ar_prometheus          secret.command=true keys=29 other28Intact=true : PASS
+ar_sisyphus            secret.command=true keys=29 other28Intact=true : PASS
+ar_tester              secret.command=true keys=29 other28Intact=true : PASS
+upgrade verification: PASS=12 FAIL=0
+MYSQL_VERIFY_END
+  4.7 re-apply same migration (idempotency): REAPPLY_EXIT=0;
+      SELECT COUNT(*) ... JSON_CONTAINS_PATH missing key = 0 (no-op second run);
+      JSON_LENGTH(capabilities)=29 for all 11 non-NULL rows
+  4.8 independent SQL read with correct dotted-key path `$."secret.command"`:
+      11 rows -> 'true' (7 builtin + 3 external + ar_general); ar_null_probe -> NULL
+      true count = 11; rows still missing key = 0
+  4.9 container removed: CONTAINER_REMOVED / no task1 container; temp scripts
+      .task1-dump.ts/.task1-old.ts/.task1-verify.ts deleted (no stray repo files)
+NOTE: the live dev DB (aiagents-compose-db) was NOT touched; only a throwaway
+container from the already-local mysql:8 image was used.
+
+================================================================================
+5. TARGETED FAILURE PROBE (plan QA scenario: one role loses the grant)
+================================================================================
+Action: temporarily removed `vteam_secret_command: 'allow'` from ROLE_BOUNDARIES['vteam-librarian'],
+run: npx jest src/common/constants/agent.constants.spec.ts src/prisma/seed.spec.ts src/prisma/agent-role-capabilities.migration.spec.ts --runInBand
+Result: PROBE_RED_EXIT=1, Tests: 6 failed, 79 passed, 85 total
+Failing:
+  - seed › 7 条角色 ExecutionPolicy upsert ... permission 全量派生自 ROLE_BOUNDARIES
+  - seed › 模板策略 create.config.tools 为 ROLE_BOUNDARIES allowlist 的拷贝
+  - seed › vteam 工具含 secret_command 行 ... 全角色敏感命令
+  - ROLE_BOUNDARIES › 全 7 角色 toolAllows 显式放行 vteam_secret_command
+  - ROLE_BOUNDARIES › Permission matrix 精确值（层①/层② 单一口径）
+  - agent_roles.capabilities contract › six derived builtin matrices remain equivalent to their code boundaries
+Then reverted the removal and re-ran CMD 1/CMD 2 (exit 0, see §2) — proves the
+assertions really execute and cover every role (not vacuous).
+
+================================================================================
+6. ADVERSARIAL CLASSES
+================================================================================
+stale_state: NO DIVERGENCE. fresh path proven by seed-derived matrices (§3) +
+  seed.spec equality assertions; upgrade path executed on real MySQL 8 (§4) ->
+  identical 29-key matrices with the other 28 cells byte-identical; NULL rows stay
+  NULL and are filled by seed's factory matrix (same defaultDeny:false value).
+dirty_worktree: pre-existing dirty files untouched: .omo/boulder.json,
+  .omo/evidence/phase5-t9-playwright.json,
+  .omo/evidence/plan-review-execution-gates/task-12/asserts.json,
+  .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json,
+  .omo/ulw-execute/ledger.jsonl, .opencode/opencode.json — same M state as before
+  this task, never staged/committed.
+  ONE DISCLOSED SIDE EFFECT: .omo/evidence/plan-review-execution-gates/task-9/probe.json
+  is rewritten by src/prisma/seed.spec.ts itself (it fs.writeFileSync's this evidence
+  file on every run). It was already dirty before this task; the mandated CMD 1 run
+  changed only the `generatedAt` timestamp line (git diff = 1 insertion/1 deletion).
+  Content otherwise identical; file remains uncommitted, nothing staged from .omo/**.
+misleading_success_output: assertions actually ran — §1 shows 12 real failures
+  before implementation, §5 shows 6 real failures on a single-role removal, §2 shows
+  explicit per-suite totals (16/16 suites, 180 tests; 4/4, 94 tests) and §3 lists
+  secret.command===true for every one of the 11 role rows + capabilityKeyForTool.
+malformed_evidence: N/A — evidence is plain text raw command output; no structured
+  artifact is being validated, and the only machine-checked JSON here (§4.6 compare)
+  was produced and consumed by scripts deleted after the run.
+secrets: N/A — no secret/credential/sentinel value was handled in todo 1 (capability
+  registration only); no secret table/column/field created; grep for real credentials
+  is meaningless here because none were used.
+
+================================================================================
+7. RAW LOG EXCERPTS (final green runs)
+================================================================================
+--- CMD1: npx jest src/common/constants src/prisma --runInBand ---
+PASS src/prisma/seed.spec.ts
+PASS src/common/constants/agent.constants.spec.ts
+PASS src/prisma/agent-role-capabilities.migration.spec.ts
+PASS src/prisma/agent-role-capabilities-factory-default.migration.spec.ts
+PASS src/common/constants/trigger.constants.spec.ts
+PASS src/common/constants/event.constants.spec.ts
+PASS src/prisma/agent-role-external-agent.migration.spec.ts
+PASS src/common/constants/agent-role.constants.spec.ts
+PASS src/common/constants/platform-capability.coverage.spec.ts
+PASS src/prisma/agent-role.migration.spec.ts
+PASS src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts
+PASS src/prisma/agent-prompt-backfill.migration.spec.ts
+PASS src/prisma/agent-role-drop.migration.spec.ts
+PASS src/prisma/plan-doc-submit.migration.spec.ts
+PASS src/common/constants/task.constants.spec.ts
+PASS src/common/constants/status-vocabulary.spec.ts
+Test Suites: 16 passed, 16 total
+Tests:       180 passed, 180 total
+Snapshots:   0 total
+Time:        6.125 s
+Ran all test suites matching /src\/common\/constants|src\/prisma/i.
+--- CMD2: 4 named specs ---
+PASS src/prisma/seed.spec.ts
+PASS src/common/constants/agent.constants.spec.ts
+PASS src/common/constants/platform-capability.coverage.spec.ts
+PASS src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts
+Test Suites: 4 passed, 4 total
+Tests:       94 passed, 94 total
+Snapshots:   0 total
+Time:        2.456 s, estimated 3 s
+Ran all test suites matching /src\/common\/constants\/platform-capability.coverage.spec.ts|src\/common\/constants\/agent.constants.spec.ts|src\/prisma\/seed.spec.ts|src\/prisma\/agent-role-capabilities-split-grouped.migration.spec.ts/i.
+--- CMD3: npm run lint:check (tail) ---
+
+✖ 66 problems (0 errors, 66 warnings)
+
+
+================================================================================
+8. KNOWN CROSS-TODO RED + COMMIT
+================================================================================
+KNOWN RED (intentional, wave-order): src/platform-mcp/platform-mcp.tool-naming.spec.ts
+  '注册名 == 矩阵裸名 == VTEAM_MCP_TOOL_NAMES 去前缀（全裸名、一一对应）' — registered tool list
+  (buildPlatformMcpTools, server/src/platform-mcp/platform-mcp.tools.ts) still has 31 entries
+  while the matrix has 32. platform-mcp files are NOT in todo 1 scope; todo 6 registers
+  SECRET_COMMAND_SCHEMA + handler and blocks on todo 1 (plan dependency matrix), which
+  restores the bijection. Measured now: 1 failed / 26 passed across tool-naming + tool-permission.
+  Also untouched on purpose: platform-mcp.authority-matrix.spec.ts (writes pre-existing dirty
+  .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json) — not run.
+
+COMMIT:
+  8a87765 feat(mcp): 注册 secret_command 并全角色开放
+   .../migration.sql                                  | 15 +++++++
+   server/prisma/seed.ts                              | 21 +++++++--
+   .../common/constants/agent-role.constants.spec.ts  | 23 ++++++++--
+   .../src/common/constants/agent-role.constants.ts   | 23 +++++++---
+   .../src/common/constants/agent.constants.spec.ts   | 19 +++++++-
+   server/src/common/constants/agent.constants.ts     |  9 ++++
+   .../constants/platform-capability.constants.ts     | 12 ++++-
+   .../constants/platform-capability.coverage.spec.ts | 23 ++++++++--
+   ...-capabilities-factory-default.migration.spec.ts | 21 +++++++++
+   ...le-capabilities-split-grouped.migration.spec.ts | 51 ++++++++++++++++++----
+   .../agent-role-capabilities.migration.spec.ts      |  9 ++--
+   server/src/prisma/seed.spec.ts                     | 42 ++++++++++++++++--
+   12 files changed, 232 insertions(+), 36 deletions(-)
+  COMMIT_SHA=8a8776589c890aeae4643bf56727955497f1a7a7
+  staged scope verified via git diff --cached --name-only before commit: 12 files,
+  no .omo/**, no .opencode/**, no unrelated dirty files.
+
+POST-COMMIT git status --porcelain:
+   M .omo/boulder.json
+   M .omo/evidence/phase5-t9-playwright.json
+   M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+   M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+   M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+   M .omo/ulw-execute/ledger.jsonl
+   M .opencode/opencode.json
+  ?? .omo/drafts/chat-ux-hierarchy-and-streaming.md
+  ?? .omo/drafts/sensitive-command-tool.md
+  ?? .omo/evidence/chat-ux-hierarchy-and-streaming/
+  ?? .omo/evidence/sensitive-command-tool/
+  ?? .omo/notepads/chat-ux-hierarchy-and-streaming/
+  ?? .omo/notepads/sensitive-command-tool/
+  ?? .omo/plans/chat-ux-hierarchy-and-streaming.md
+  ?? .omo/plans/sensitive-command-tool.md
+  ?? .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+  ?? .omo/ulw-execute/sensitive-command-tool-registry.json

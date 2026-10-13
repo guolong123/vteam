@@ -1,0 +1,129 @@
+task-14 · C2 页面消费 delta / 滚动门控 / DM 轮询兜底 —— QA failure
+================================================================
+日期: 2026-09-25 (CST)
+原则: 先写测试 (tests-after 于实现之前), 对未实现的产品代码必须红;
+      所有“红”都必须红在本 todo 的目标断言上, 而不是环境噪音。
+
+--------------------------------------------------------------------------
+1. Failing-first 运行 (实现前)
+--------------------------------------------------------------------------
+命令: $ cd web && npx playwright test session-unification.spec.ts
+退出码: PW_EXIT=1  →  4 failed, 6 passed (32.9s)
+失败输出 (节选, 完整日志 $TMPDIR/opencode/t14-before.txt):
+
+  ✘ 1. 当前私聊 delta 滚到底，非当前私聊 delta 不滚动但未读收敛   (788ms)
+       Error: expect(received).toBeGreaterThan(expected)
+       Expected: > 0
+       Received:   0
+       位置: expect(await scrollTopOf(list)).toBeGreaterThan(0)  (delta 投递后)
+       → 证明: 页面未传 onMessagePartDelta / 未消费 delta, 当前频道 delta 不产生滚动。
+
+  ✘ 2. 非当前频道 chat.message.new 不改当前列表滚动               (924ms)
+       Error: expect(received).toBe(expected) // Object.is equality
+       Expected: 0
+       Received: 5348
+       → 证明: page.tsx:693 的滚动是无条件的, 其他频道事件会把当前列表拽到 5348px 底部。
+
+  ✘ 3. 空缓存首个 delta 触发恰好一次补拉并渲染消息               (11.0s)
+       Error: expect(received).toBe(expected)
+       Expected: 2
+       Received: 1
+       位置: expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(2)
+       → 证明: 未实现“cache 无数据时补一次 privateMessagesQuery.refetch()”,
+               delta 到达后私聊历史请求数纹丝不动 (始终 1)。
+
+  ✘ 4. DM 查询 30s 轮询兜底可观测                                (11.9s)
+       Error: expect(received).toBe(expected)
+       Expected: 2
+       Received: 1
+       位置: page.clock.fastForward(31_000) 之后的请求数轮询
+       → 证明: privateMessagesQuery 没有 refetchInterval, 假时钟推进 31s 也不发第二次请求。
+
+  ✓ 通过的 6 个 (不属于本 todo 的红): Todo12 的 4 个回归用例 +
+     Todo14-5 终态消息不被旧 delta 覆盖 (既有 upsertMessage 行为, 属“保持不回归”断言) +
+     [setup] auth.setup。
+
+结论: 4 个红全部命中本 todo 的 4 个验收点 (delta 消费 / 滚动门控 / 空缓存补拉 / 30s 轮询),
+      无一条红来自选择器缺失、超时配置或环境不可用 —— failing-first 成立。
+
+--------------------------------------------------------------------------
+2. 中途出现的“假红”: 被测栈是构建产物 (已修复, 非产品代码问题)
+--------------------------------------------------------------------------
+现象: 实现后复跑仍 4 failed, 且第 2 条 Received 依旧是 5348 (与实现前一模一样)。
+定位:
+  $ lsof -nP -iTCP:3001 -sTCP:LISTEN
+    → node .../opencode/pw-bridge/bridge.js  (“Throwaway TCP forwarder: 3001 -> 13001”)
+  $ docker ps → aiagents-compose-web (standalone next build 产物, 不挂载源码)
+结论: localhost:3001 服务的是 4 小时前构建的旧 bundle, 我的 page.tsx 改动根本没进运行时。
+处置: $ docker compose build web → BUILD_EXIT=0; $ docker compose up -d web → (healthy);
+      page.tsx mtime(22:26:21) < image created(22:30 CST) 复核通过。
+复跑后: 1 failed (仅 Todo14-3), 1、2、4、5 全绿 → 证明改动确实生效。
+
+--------------------------------------------------------------------------
+3. Todo14-3 的第二次红 (真实语义分歧, 已按库语义修正断言而非放宽)
+--------------------------------------------------------------------------
+现象: 实现生效后 Todo14-3 仍 Expected 2 / Received 1 (10s 超时)。
+根因 (读库源码, 非猜测):
+  web/node_modules/@tanstack/query-core/src/query.ts:400-415
+    if (this.state.fetchStatus !== 'idle' && this.#retryer?.status() !== 'rejected') {
+      if (this.state.data !== undefined && fetchOptions?.cancelRefetch) {
+        this.cancel({ silent: true })      // 只有已有 data 才取消重发
+      } else if (this.#retryer) {
+        return this.#retryer.promise        // data undefined → 并入在途请求, 不产生第二次 HTTP
+      }
+    }
+即: “初始请求被挂起 + cache 无数据”时, refetch() 不会产生第二次 history 请求 ——
+这是 React Query 的去重设计, 不是实现缺失。
+处置 (两处, 都不放宽验收):
+  a) Todo14-3 改为可稳定观察的空缓存态 (error + idle, data===undefined):
+     harness.failPrivateHistoryAttempts=2 → 初始 2 次尝试 500 → 前 2 次 /messages 回退也 500 →
+     查询落 error/idle → delta 触发的 refetch() 必然发出新的 session-history 请求 (2→3)。
+  b) 原“挂起”形态保留为 Todo14-3b, 断言其真实可保证的结果: delta 不丢、放行后消息渲染、
+     回退请求数 0。
+之后复跑 → Todo14-3 / 3b 双绿, 请求数证据见 task-14-page-delta.txt 第 6 节。
+
+--------------------------------------------------------------------------
+4. 历史失败记录汇总 (供审计追溯)
+--------------------------------------------------------------------------
+run  #1 (实现前, 仅 tail)   4 failed / 6 passed
+run  #2 (实现前, 全量)      PW_EXIT=1, 4 failed / 6 passed   ← 本文件第 1 节
+run  #3 (实现后, 旧 bundle) 4 failed / 6 passed               ← 本文件第 2 节 (环境)
+run  #4 (新 bundle)         1 failed / 9 passed               ← 本文件第 3 节 (语义)
+run  #5 (修正断言后)        PW_EXIT=0, 11 passed
+run  #6 (计划 QA happy)     PW_EXIT=0, 41 passed (pages + session-unification)
+
+--------------------------------------------------------------------------
+5. 未被接受的“捷径” (明确未做)
+--------------------------------------------------------------------------
+- 没有为了让请求计数 +1 而在产品代码里绕开 React Query 去重;
+- 没有把断言改成“任意时刻请求 >= 2”之类的 timing-only 判据;
+- 没有修改 use-sse.ts / use-realtime.ts / playwright.config.ts 来迁就测试;
+- 没有使用 @ts-ignore / any 抑制类型错误 (tsc --noEmit 与 check-only eslint 均 0);
+- 没有伪造 localhost:3001 不可用时的“手动绿”: 本次 3001 全程可用, 全部为真实浏览器断言。
+
+--------------------------------------------------------------------------
+6. 跨计划复跑暴露的测试自身 flake (已修, 产品代码无问题)
+--------------------------------------------------------------------------
+观测: 并行计划于 22:48 复跑本套件, Todo14-1 再次红:
+      Error: expect(received).toBe(expected)  Expected: 0  Received: 5348
+排除产品回退的证据:
+  $ docker inspect aiagents-compose-web → image 6eaa3201c902, created 2026-09-25T14:30:00Z,
+    container started 14:30:06Z —— 自本 todo 构建后未被重建/重启;
+  $ git show HEAD:web/app/(main)/teams/[id]/session/page.tsx | grep visibleChannelId → 存在;
+  $ git status → page.tsx 无未提交改动 (实现已入库)。
+  即被测 bundle 与我方绿灯时完全一致 → 不是“旧 bundle”, 而是测试时序竞争。
+根因: page.tsx 首屏滚底效果 (bottomTabRef) 在 requestAnimationFrame 后还会补一次
+      setTimeout(150ms) 滚底; 测试的“scrollTop=0 → 读回”若落在该 150ms 之内,
+      读回值即为 5348。属于产品既有的 UX 补滚, 不是被测行为。
+修复 (测试侧, 产品零改动): resetScroll 改为有界“归零→读回”循环, 以状态收敛代替 sleep。
+复跑证明:
+  npx playwright test session-unification.spec.ts --grep "Todo14" --repeat-each=4
+    → PW_EXIT=0, 29 passed (每个用例 4 次)
+  npx playwright test pages.spec.ts session-unification.spec.ts → PW_EXIT=0, 41 passed
+交付: 加固以跟随提交 a6139ec 交付 (主提交 8092b16 已被并行计划的 31ff11f 叠加, 不做历史改写)。
+
+--------------------------------------------------------------------------
+7. 运行序号补全
+--------------------------------------------------------------------------
+run  #7 (Todo14 ×4 复跑加固后)   PW_EXIT=0, 29 passed
+run  #8 (最终 QA happy 复跑)      PW_EXIT=0, 41 passed

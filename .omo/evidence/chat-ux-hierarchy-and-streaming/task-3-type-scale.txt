@@ -1,0 +1,264 @@
+# task-3-type-scale — A4 消息专用三级字号 + 时间元信息拆分（chat-ux-hierarchy-and-streaming 复选框 3）
+# 记录时间: 2026-09-25 (Asia/Shanghai)
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md 复选框 3（第 143-149 行）+ Scope(13-51) + Verification strategy(52-107) + Success criteria 第 4 条(274)
+
+======================================================================
+1. Next.js 本地文档缺席证据（DIST_DOCS_ABSENT）+ v15.5.22 官方文档来源
+======================================================================
+背景: web/AGENTS.md 要求改产品代码前先读 web/node_modules/next/dist/docs/ 指南；
+本机该目录不存在（用户已批准以版本匹配的 v15.5.22 官方 tag 文档作为替代来源）。
+
+命令:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  ls node_modules/next/dist/docs/ ; echo "exit=$?"
+  cat node_modules/next/package.json | grep '"version"'
+
+输出:
+  ls: node_modules/next/dist/docs/: No such file or directory
+  exit:2（目录不存在）
+    "version": "15.5.22",
+
+结论: DIST_DOCS_ABSENT；安装版本 next=15.5.22，与用户批准的 tag 文档版本一致。
+
+文档来源（GitHub raw @ commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775，curl exit=0，已实际读取全文）:
+  (1) 客户端组件: docs/01-app/01-getting-started/05-server-and-client-components.mdx (18342 bytes)
+  (2) 样式/渲染:  docs/01-app/01-getting-started/11-css.mdx (12357 bytes)
+  (3) use client: docs/01-app/03-api-reference/01-directives/use-client.mdx (3835 bytes)
+  (4) Playwright: docs/01-app/02-guides/testing/playwright.mdx (4398 bytes)
+  路径定位方式: GitHub git/trees API @ commit 6ad9e56…（tree 36101 项，truncated=false，
+  顶层含 docs/，docs/ 下 405 个 mdx）→ 本地缓存于 $TMPDIR/next-docs-6ad9e56/。
+  注意: 该 commit 的仓库树中不存在 dist/docs 产物，dist/docs 由 next dev 生成，本机未生成 → 仍为 ABSENT。
+
+与本 todo 相关的要点（指导实现决策）:
+  - Server and Client Components / use client: 'use client' 放文件顶部、import 之前；含 state 与
+    事件处理器的交互组件属于 Client Component；文件标记 use client 后其全部 import 与子组件进入
+    client bundle。chat-bubble.tsx 已有 "use client"（首行），本次仅新增 token 导入与 span 结构，
+    不改变组件边界，无需新增/移动指令。
+  - 样式/渲染（11-css.mdx）: 官方指南覆盖 Tailwind / CSS Modules / Global CSS / 外部样式表与
+    样式合并顺序，未强制单一写法；本组件沿用仓库既有的 React inline style 对象（camelCase）+
+    src/theme/tokens.ts 统一取值，与文档不冲突，不引入新的样式体系。
+  - Playwright: 官方指南建议测试经 playwright.config.ts 的 baseURL 打到运行中的 server（可选
+    webServer 自启）；本仓 playwright.config.ts 明确不配置 webServer（计划 Verification
+    strategy 第 76 行），chat-density 项目为无依赖的空白页测试缝，本 todo 不改 config。
+  - 未发现文档与现有代码冲突之处，无需停止（计划第 107 行判据）。
+
+======================================================================
+2. 改动前状态确认（A1-A3 密度常量与 C2 页面改动保持不动）
+======================================================================
+命令:
+  cd /Volumes/SSD-Data/01work/git-project/vteam && git log --oneline -4
+输出:
+  a6139ec test(chat): 滚动归零改状态收敛，修 Todo14 首屏 150ms 补滚竞争
+  31ff11f feat(chat): 放宽正文、tool I/O 与 thinking 密度阈值
+  8092b16 feat(chat): 私聊按选中频道消费 delta 并补轮询兜底
+
+改动前读取:
+  - web/src/theme/tokens.ts:92-100 全局 fontSize = { xs:11, sm:12, md:13, lg:15, xl:18, xxl:22 }，
+    无 14px 档；components 消息正文走 fontSize.md=13。
+  - web/src/components/ui/chat-bubble.tsx: bubbleBase.fontSize=fontSize.md（正文 13）；
+    身份行 data-testid="chat-bubble-author" fontSize=fontSize.xs(11)/fontWeight 500；
+    时间戳为 author span 内无样式的裸 <span> · {time}</span>（与作者名继承同一 fontSize+color）。
+  - A1-A3 常量: CHAT_COLLAPSE_THRESHOLD=800、WebkitLineClamp:10、maxHeight 16em、
+    TOOL_IO_MAX_CHARS=2000、thinking 200/2000 —— 本 todo 全程未改动（见第 5 节 diff 摘要）。
+  - C2 改动: web/app/(main)/teams/[id]/session/page.tsx、hooks/use-realtime.ts、use-sse.ts
+    本 todo 未触碰（见第 9 节 git status）。
+
+testid 基线（计划第 83-85 行命令原文，改动前已存在，本次重新确认一致）:
+  grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx \
+    web/src/components/ui/agent-avatar.tsx | sort -u \
+    > .omo/evidence/chat-ux-hierarchy-and-streaming/chat-testids-before.txt
+  退出码 0，23 条。
+
+======================================================================
+3. failing-first：先写 A4 断言，在改动前跑红（证明测试咬住行为）
+======================================================================
+新增断言（tests-after，先于产品代码编写）:
+  web/e2e/chat-density.spec.ts（既有 chat-density 项目，testMatch /chat-density\.spec\.ts/，
+  无需改 playwright.config.ts）:
+    - L548 "A4 三级字号：正文 14px / 身份 12px·600 / 元信息 11px，时间戳为独立元信息元素"
+      computed 断言（expect.soft，保证一次红里全部曝光）+ 独立 span 结构断言 + 12:00 可见性。
+    - L592 "A4 守门：全局 fontSize 档位不变（md=13），消息三级字号不写入全局档"
+      harness 经 esbuild-wasm 暴露产品 tokens 快照 window.__density.tokens.fontSize。
+  web/lib/chat-density.spec.ts（既有 lib-unit 项目）:
+    - L120 "A4 三级字号源契约：消息作用域 14/12·600/11 与全局 fontSize.md=13 并存"
+      纯源码检查：全局档无 14、messageFontSize/messageFontWeight 存在、ChatBubble 三级绑定、
+      时间戳独立 testid、旧裸 <span> · {time}</span> 结构消失。
+  未触碰 pages.spec.ts / session-unification.spec.ts / playwright.config.ts。
+
+命令 1（纯检查，lib-unit）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx playwright test lib/chat-density.spec.ts --project=lib-unit
+退出码: 1（LIB_RED_EXIT=1；1 failed / 3 passed）
+关键输出（期望 vs 实收）:
+  A4 源契约 toEqual 失败:
+    - {body:"14", identity:"12", meta:"11"}  +  {body:null, identity:null, meta:null}
+      （改动前 tokens.ts 无 messageFontSize → 正则解析全 null）
+  A1/A2/A3 三项既有 lib 断言保持绿（3 passed）。
+  守门前半段: pick(globalBlock,"md")="13" 通过、全局档不含 14 通过（改动前已为真）。
+
+命令 2（真实浏览器 DOM，chat-density 项目）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx playwright test chat-density.spec.ts --project=chat-density
+退出码: 1（E2E_RED_EXIT=1；1 failed / 6 passed）
+关键输出（期望 vs 实收，全部为阈值/结构型失败，无基础设施错误）:
+  - 正文 computed 14px        Expected: 14   Received: 13     （正文仍继承全局 fontSize.md=13）
+  - 身份 computed 12px        Expected: 12   Received: 11     （身份仍为 fontSize.xs=11）
+  - 身份 computed weight 600  Expected: "600" Received: "500"
+  - 元信息 computed 11px      Expected: 11   Received: null    （chat-bubble-time 元素不存在）
+  - 元信息 computed weight    Expected: "400" Received: null
+  - 三级字号互不相同          Expected: 3    Received: 2       （只有 13 与 11 两档）
+  - expect(time).toBeVisible() 失败: element(s) not found → getByTestId('chat-bubble-time')
+  - expect(time).toHaveText(/12:00/) 失败（元素不存在）
+  - 全局守门测试（md=13 + 全局档无 14）在改动前就是绿的（6 passed 中的 1 项）。
+原始日志（未截断）:
+  .omo/evidence/chat-ux-hierarchy-and-streaming/task-3-type-scale-red-e2e.log
+  .omo/evidence/chat-ux-hierarchy-and-streaming/task-3-type-scale-red-lib.log
+前置: npx tsc --noEmit 退出码 0（新测试代码本身类型干净，红纯粹来自产品行为差异）。
+
+结论: A4 六类旧行为（13/11/500/无元信息元素/两档字号/旧 author 内嵌时间结构）在改动前全部转红，
+characterization 成功；无 as any / @ts-ignore / @ts-expect-error，无隐藏失败。
+
+======================================================================
+4. 实现内容（仅 2 个产品文件）
+======================================================================
+web/src/theme/tokens.ts（新增消息作用域 token，紧跟全局 fontSize 之后）:
+  export const messageFontSize = { body: 14, identity: 12, meta: 11 } as const;
+  export const messageFontWeight = { identity: 600 } as const;
+  全局 fontSize 对象零改动（md 仍为 13）。
+
+web/src/components/ui/chat-bubble.tsx:
+  - bubbleBase.fontSize: fontSize.md → messageFontSize.body（正文 14）；lineHeight 1.6 与
+    maxHeight:"16em" 折叠几何不变 → 16em ÷ (1.6×14px) 仍恰为 10 行（A1 语义不回归）。
+  - 新增行内 flex 身份行容器（baseline 对齐，gap=space.xs）。
+  - chat-bubble-author span: fontSize messageFontSize.identity(12)、
+    fontWeight messageFontWeight.identity(600)，颜色仍 roleText[role] / neutral[400]；
+    外部渠道徽章 external-channel-badge 原样保留在 author span 内。
+  - 时间戳拆为独立元素: <span data-testid="chat-bubble-time" style={fontSize:
+    messageFontSize.meta(11), color: neutral[500], lineHeight 1.4, fontFamily}> · {time}</span>，
+    位于 author span 之外（与 author 是兄弟节点），不再继承身份的 12/600/roleText。
+  - system 分支（fontSize.sm）与 toggle/附件字号、A1-A3 折叠阈值、C2 页面逻辑均未改动。
+
+======================================================================
+5. 静态门与绿跑（改动后，commit-ready 状态）
+======================================================================
+命令 1:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web && npx tsc --noEmit
+退出码: 0（日志: task-3-tsc.log）
+
+命令 2（check-only，未使用 npm run lint / --fix）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web && npx eslint src/theme/tokens.ts \
+    src/components/ui/chat-bubble.tsx e2e/chat-density.spec.ts lib/chat-density.spec.ts
+退出码: 0（日志: task-3-eslint.log）
+输出: 4 problems (0 errors, 4 warnings) —— 全部为 chat-bubble.tsx AttachmentCard 既有的
+@next/next/no-img-element 警告（行 365/398/521/555，本 todo 未触碰的既有代码），0 error。
+
+命令 3（真实浏览器 DOM）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web && npx playwright test chat-density.spec.ts --project=chat-density
+退出码: 0（7 passed；日志: task-3-type-scale-green-e2e.log）
+  ✓ A1 正文 900 字符 / A1 恰好 800 边界 / A2 tool 字符串 / A2 tool JSON / A3 thinking
+    （A1-A3 五项在正文 13→14 后保持绿，maxHeight 16em 几何断言 lineClamp=10、
+     maxHeightInLines=10、visibleLines=10、lineHeightRatio=1.6 全部通过）
+  ✓ A4 三级字号（L548）
+  ✓ A4 守门：全局 fontSize 档位不变 md=13（L592）
+
+命令 4（纯源码契约）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web && npx playwright test lib/chat-density.spec.ts --project=lib-unit
+退出码: 0（4 passed；日志: task-3-type-scale-green-lib.log）
+
+======================================================================
+6. computed 观测值（真实浏览器 getComputedStyle，probe 一次性导出后已删除 probe 行）
+======================================================================
+命令: npx playwright test chat-density.spec.ts --project=chat-density -g "A4"
+退出码: 0（2 passed；原始日志: task-3-type-scale-probe.log）
+观测（window.__density 渲染 MsgParts → ChatBubble，author=密度/role=developer/time=12:00）:
+  A4-TYPE-SCALE-PROBE {"bodyFontSize":14,"identityFontSize":12,"identityWeight":"600",
+                       "metaFontSize":11,"metaWeight":"400",
+                       "identityColor":"rgb(4, 120, 87)","metaColor":"rgb(0, 0, 0)",
+                       "metaInsideIdentity":false}
+  解读:
+    - 正文 14px ✓ / 身份 12px 且 weight 600（semibold）✓ / 元信息 11px 且 weight 400 ✓
+    - 三档字号 14/12/11 互不相同 ✓
+    - identityColor=rgb(4,120,87) 即 roleText.developer(#047857)；metaColor 在测试缝里为初始值
+      （HARNESS_HTML 未定义 --color-neutral-*，var(--color-neutral-500) 按 CSS 规则回落到
+      initial）；生产 globals.css 下解析为 --color-neutral-500，与身份色不同源。
+    - metaInsideIdentity=false：时间元素不在 author span 内（拆分成立）。
+  全局守门（同一绿跑，L592 测试）:
+    window.__density.tokens.fontSize === { xs:11, sm:12, md:13, lg:15, xl:18, xxl:22 }
+    → fontSize.md === 13 ✓，全局档位无 14 ✓，消息三级字号未写入全局档 ✓。
+
+======================================================================
+7. span / style 直接相异性（QA failure 判据，见 task-3-type-scale-failure.txt 第 2 节）
+======================================================================
+  - 元素相异: chat-bubble-author 与 chat-bubble-time 是两个独立 span（DOM 断言 author 内
+    time 计数 0、time 内 author 计数 0、metaInsideIdentity=false）。
+  - 字号相异: 12 vs 11（且与正文 14 三档全不同）。
+  - 字重相异: 600 vs 400。
+  - 颜色相异: roleText.developer vs neutral[500]（无 role 时身份为 neutral[400]，字号+字重仍不同）。
+  → 不满足“同时拥有相同 fontSize 和 color”的失败条件。
+
+======================================================================
+8. testid 结构门（零消失，计划第 87 行）
+======================================================================
+命令（改动后，计划原文）:
+  grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx \
+    web/src/components/ui/agent-avatar.tsx | sort -u \
+    > .omo/evidence/chat-ux-hierarchy-and-streaming/chat-testids-after.txt
+退出码: 0（24 条）
+diff before→after（diff 退出码 1，仅 1 行新增）:
+  7a8
+  > data-testid="chat-bubble-time"
+消失项: comm -23 before after → DISAPPEAR_COUNT=0（零消失 ✓）
+新增项: data-testid="chat-bubble-time"（时间戳拆分后的新元信息 testid；仅新增、未改名）
+依赖项逐一确认仍在: agent-avatar / chat-bubble / chat-bubble-author / chat-bubble-content /
+  chat-bubble-toggle / external-channel-badge / msg-thinking / msg-tool / msg-error /
+  msg-aborted / msg-streaming 等全部保留。
+既有 chat-bubble-author 保留且仍指向身份名 span（可见、文本=密度）。
+
+======================================================================
+9. 范围保护与脏工作树
+======================================================================
+本 todo 变更文件（git status --porcelain -- web）:
+   M web/e2e/chat-density.spec.ts
+   M web/lib/chat-density.spec.ts
+   M web/src/components/ui/chat-bubble.tsx
+   M web/src/theme/tokens.ts
+未触碰（MUST NOT 清单逐项核对）:
+  web/app/(main)/teams/[id]/session/page.tsx、web/hooks/use-realtime.ts、web/hooks/use-sse.ts、
+  worker/server 文件、web/playwright.config.ts、mobile CSS（globals.css 断点）、
+  .omo/plans|boulder|ulw-execute/ledger、.opencode/opencode.json。
+预存脏文件保持原样（未被覆盖、未被 add）:
+   M .omo/boulder.json
+   M .omo/evidence/phase5-t9-playwright.json（JSON reporter 必然重写，仅记录前后 hash）
+   M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+   M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+   M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+   M .omo/ulw-execute/ledger.jsonl
+   M .opencode/opencode.json
+   ?? .omo/drafts|evidence|notepads|plans|ulw-execute（本计划相关未跟踪目录）
+
+Playwright JSON reporter 前后 hash（计划第 105 行）:
+  改动前: 791e9b36f31dea55a03418f54b5e879c61165cef  .omo/evidence/phase5-t9-playwright.json
+          （记录于 task-3-report-hash-before.txt）
+  改动后: ca4f79e9ceef5210962af118d266e9a7bca06aae
+  说明: 该文件在本 todo 开始前已是 M 状态，重写属计划明示的预期行为，不计作覆盖脏改动。
+
+清理回执:
+  rm -rf web/test-results web/playwright-report → CLEANUP_TEST_RESULTS=ok
+  （两者均未被 git 跟踪（git ls-files 为空），内容全部由本 todo 三轮 playwright 运行生成；
+    playwright-report 目录不存在；证据日志已先复制入 .omo/evidence/。）
+  本 todo 未创建任何仓库内临时脚本；$TMPDIR 下的文档缓存与运行日志在仓库外。
+  证据文件（task-3-*、chat-testids-after.txt、task-3-report-hash-before.txt）按计划第 265 行
+  留在本地未提交。
+
+======================================================================
+10. 已知风险 / 未做事项
+======================================================================
+  - 视觉差异未做像素级截图对比：本 todo 的验收判据是 computed 字号与 DOM 结构（计划第 146 行），
+    已用真实浏览器 getComputedStyle 逐项取证；正文 13→14 会使气泡文字略放大，属预期效果。
+  - A1-A3 五项密度断言在同一 chat-density 项目里全绿（16em ÷ (1.6×14px)=10 行仍成立），
+    但整仓 Playwright 全量（125 基线）与 A1-A3 verifier 要求的“本 commit 后最终合并跑”
+    属 Final wave（F3），不在本 todo 范围。
+  - system 消息时间被吞、process part 各自重复身份等既有问题属 B12/B1（复选框 4/8），
+    本 todo 按计划引用范围（tokens.ts + chat-bubble.tsx）不处理。
+  - 测试缝 HARNESS_HTML 未定义 CSS 变量，metaColor 观测为 initial 值；生产主题下为
+    --color-neutral-500。已如实记录，未伪造颜色证据。

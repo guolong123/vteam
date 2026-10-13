@@ -7,8 +7,8 @@
  * 只统计 `skv_<数字>`，天然跳过，不干扰后续 `skv_` 续号）。
  *
  * 用法（compose 网络内，DB 宿主机无端口映射）：
- *   docker cp server/prisma/backfill-skill-versions.ts aiagents-compose-server:/app/prisma/
- *   docker exec aiagents-compose-server npx ts-node prisma/backfill-skill-versions.ts
+ *   docker cp server/prisma/backfill-skill-versions.ts vteam-compose-server:/app/prisma/
+ *   docker exec vteam-compose-server npx ts-node prisma/backfill-skill-versions.ts
  */
 import { PrismaClient } from '@prisma/client';
 

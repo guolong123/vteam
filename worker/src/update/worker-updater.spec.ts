@@ -115,8 +115,8 @@ class FakeFs implements UpdateFs {
   }
 }
 
-const INSTALL_DIR = '/opt/aiagents-worker';
-const USER_UNIT = '/home/tester/.config/systemd/user/aiagents-worker.service';
+const INSTALL_DIR = '/opt/vteam-worker';
+const USER_UNIT = '/home/tester/.config/systemd/user/vteam-worker.service';
 const TARBALL = Buffer.from('fake-worker-tarball-bytes');
 const TARBALL_SHA = createHash('sha256').update(TARBALL).digest('hex');
 const LOCK_V1 = Buffer.from('lockfile-v1');
@@ -134,6 +134,10 @@ interface HarnessOptions {
   tarballSha?: string;
   installDir?: string;
   clockStart?: number;
+  /** env 覆盖（与 BASE_ENV 合并；用于 WORKER_SYSTEMD_UNIT 等探测入参）。 */
+  env?: NodeJS.ProcessEnv;
+  /** 可变活跃会话数（deferred→空闲续跑测试用；优先于 activeSessions）。 */
+  activeSessionsRef?: { value: number };
 }
 
 function seedInstallDir(fsImpl: FakeFs, installDir: string, lock: Buffer): void {
@@ -207,12 +211,12 @@ function createHarness(options: HarnessOptions = {}) {
   const updater = new WorkerUpdater({
     serverUrl: 'http://server.example.com',
     installDir,
-    activeSessionCount: () => options.activeSessions ?? 0,
+    activeSessionCount: () => options.activeSessionsRef?.value ?? options.activeSessions ?? 0,
     fetchImpl: fetchMock as unknown as typeof fetch,
     fsImpl,
     run,
     now: () => clock.t,
-    env: BASE_ENV,
+    env: { ...BASE_ENV, ...(options.env ?? {}) },
     logger: { info: () => {}, warn: () => {}, debug: () => {} },
   });
 
@@ -270,7 +274,7 @@ describe('WorkerUpdater 正常路径（状态机 + 备份覆盖顺序）', () =>
     const restart = h.calls.find(
       (call) => call.command === 'systemctl' && call.args.includes('restart'),
     );
-    expect(restart?.args).toEqual(['--user', 'restart', 'aiagents-worker']);
+    expect(restart?.args).toEqual(['--user', 'restart', 'vteam-worker']);
     expect(restart?.options?.env?.XDG_RUNTIME_DIR).toBeDefined();
     expect(restart?.options?.env?.DBUS_SESSION_BUS_ADDRESS).toContain('unix:path=');
     // lock 未变化 → 不装依赖
@@ -294,6 +298,19 @@ describe('WorkerUpdater 正常路径（状态机 + 备份覆盖顺序）', () =>
   it('系统级 unit 存在时走 systemctl（不带 --user）', async () => {
     const h = createHarness();
     h.fsImpl.dirs.add('/run/systemd/system');
+    h.fsImpl.files.set('/etc/systemd/system/vteam-worker.service', Buffer.from('[Unit]'));
+
+    await h.updater.handleCommand({ ...UPDATE_CMD });
+
+    const restart = h.calls.find(
+      (call) => call.command === 'systemctl' && call.args.includes('restart'),
+    );
+    expect(restart?.args).toEqual(['restart', 'vteam-worker']);
+  });
+
+  it('旧安装兼容：只有 aiagents-worker unit 时也探测命中并重启它', async () => {
+    const h = createHarness();
+    h.fsImpl.dirs.add('/run/systemd/system');
     h.fsImpl.files.set('/etc/systemd/system/aiagents-worker.service', Buffer.from('[Unit]'));
 
     await h.updater.handleCommand({ ...UPDATE_CMD });
@@ -302,6 +319,78 @@ describe('WorkerUpdater 正常路径（状态机 + 备份覆盖顺序）', () =>
       (call) => call.command === 'systemctl' && call.args.includes('restart'),
     );
     expect(restart?.args).toEqual(['restart', 'aiagents-worker']);
+  });
+
+  it('env WORKER_SYSTEMD_UNIT 覆盖优先于内置候选', async () => {
+    const h = createHarness({ env: { WORKER_SYSTEMD_UNIT: 'custom-worker' } });
+    h.fsImpl.dirs.add('/run/systemd/system');
+    h.fsImpl.files.set('/etc/systemd/system/custom-worker.service', Buffer.from('[Unit]'));
+
+    await h.updater.handleCommand({ ...UPDATE_CMD });
+
+    const restart = h.calls.find(
+      (call) => call.command === 'systemctl' && call.args.includes('restart'),
+    );
+    expect(restart?.args).toEqual(['restart', 'custom-worker']);
+  });
+});
+
+describe('WorkerUpdater 空闲续跑（retryPendingUpdate）', () => {
+  it('deferred-idle 后会话归零 → 续跑真正执行下载+重启（指令不丢失）', async () => {
+    const sessions = { value: 2 };
+    const h = createHarness({ activeSessionsRef: sessions });
+    h.fsImpl.dirs.add('/run/systemd/system');
+    h.fsImpl.files.set('/etc/systemd/system/vteam-worker.service', Buffer.from('[Unit]'));
+
+    // 忙：指令被 defer，什么都没发生
+    expect(await h.updater.handleCommand({ ...UPDATE_CMD })).toBe('deferred-idle');
+    expect(h.fetchMock).not.toHaveBeenCalled();
+    expect(h.updater.state).toBe('pending');
+
+    // 会话归零 → 空闲跃变触发续跑：下载 + 重启都补上
+    sessions.value = 0;
+    expect(await h.updater.retryPendingUpdate()).toBe('applied-restarting');
+    expect(h.fetchMock).toHaveBeenCalled(); // 下载确实发生了
+    const restart = h.calls.find(
+      (call) => call.command === 'systemctl' && call.args.includes('restart'),
+    );
+    expect(restart?.args).toEqual(['restart', 'vteam-worker']);
+  });
+
+  it('ready-manual（重启被活跃会话挡下）→ 会话归零后续跑重启，且不重复下载', async () => {
+    const sessions = { value: 0 };
+    const h = createHarness({ activeSessionsRef: sessions });
+    h.fsImpl.dirs.add('/run/systemd/system');
+    h.fsImpl.files.set('/etc/systemd/system/vteam-worker.service', Buffer.from('[Unit]'));
+    // 下载途中把计数顶满：runUpdate 的空闲检查（0，放行）与 attemptRestart 的门禁
+    // （1，拦截）之间唯一的异步边界就是下载——包装原 fetch 实现，不破坏 version/tarball 双响应。
+    const originalFetch = h.fetchMock.getMockImplementation()!;
+    h.fetchMock.mockImplementation(((url: string) => {
+      sessions.value = 1;
+      return originalFetch(url);
+    }) as unknown as typeof fetch);
+
+    const first = await h.updater.handleCommand({ ...UPDATE_CMD });
+    expect(first).toBe('applied-ready-manual');
+    expect(h.updater.state).toBe('ready-manual');
+    expect(
+      h.calls.some((c) => c.command === 'systemctl' && c.args.includes('restart')),
+    ).toBe(false);
+
+    // 会话归零 → 空闲续跑只补重启，不再重新下载
+    sessions.value = 0;
+    const downloadsBefore = h.fetchMock.mock.calls.length;
+    const retry = await h.updater.retryPendingUpdate();
+    expect(retry).toBe('applied-restarting');
+    expect(
+      h.calls.some((c) => c.command === 'systemctl' && c.args.includes('restart')),
+    ).toBe(true);
+    expect(h.fetchMock.mock.calls.length).toBe(downloadsBefore);
+  });
+
+  it('无挂起事件 → retryPendingUpdate 返回 null（心跳空闲跃变的空调用无害）', async () => {
+    const h = createHarness();
+    expect(await h.updater.retryPendingUpdate()).toBeNull();
   });
 });
 

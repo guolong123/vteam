@@ -74,7 +74,15 @@ import {
   normalizePlanHash,
   selectFrozenPlanHash,
 } from '../issues/plan-hash-gate';
-import { hasRenderableContent, normalizeParts } from './message-parts';
+import {
+  hasRenderableContent,
+  isStaleToolOnlyContent,
+  normalizeParts,
+} from './message-parts';
+import {
+  AGENT_QUESTION_KINDS,
+  AGENT_QUESTION_STATUS,
+} from '../questions/questions.constants';
 import {
   TRIGGER_KIND,
   buildTriggerDedupKey,
@@ -2415,6 +2423,36 @@ export class WorkerDispatcher
     promptBlocks.push(request.text);
     const prompt = promptBlocks.join('\n\n');
 
+    // 展示回写：把「实际发给模型的完整组装消息」（上下文块 + 用户原文）落回触发
+    // 消息的 content.text——前端原样渲染content.text，用户消息行即完整可见
+    // （此前只存原文，DM 里看不到【任务上下文】【群聊回复要求】等注入块）。
+    // parts 保原样（user 行恒 []，读取式保留防未来形态回归）；无 messageId/无上下文
+    // 块（prompt === 原文）时不写，避免无谓 UPDATE。
+    if (request.messageId && prompt !== request.text) {
+      try {
+        const sourceRow = await this.prisma.message.findFirst({
+          where: { id: request.messageId },
+          select: { content: true },
+        });
+        const prevParts = Array.isArray(
+          (sourceRow?.content as { parts?: unknown } | null | undefined)?.parts,
+        )
+          ? ((sourceRow?.content as { parts: unknown[] }).parts ?? [])
+          : [];
+        await this.prisma.message.update({
+          where: { id: request.messageId },
+          data: {
+            content: { text: prompt, parts: prevParts } as Prisma.InputJsonValue,
+          },
+        });
+      } catch (err) {
+        // 回写失败不影响主链路（prompt 已发给 worker；仅展示少一段上下文）。
+        this.logger.warn(
+          `组装消息回写展示失败 message=${request.messageId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     // 4. loading(thinking)：团队 scope 广播 + team: 作用域事件
     await this.realtime.broadcast(
       EVENT_TYPES.AGENT_LOADING,
@@ -2849,6 +2887,39 @@ export class WorkerDispatcher
   }
 
   /**
+   * 会话是否存在待用户填写的 `secret_input` question（secret_command 工具阻塞等待）。
+   * 消息行自身不带该信息，而 web 的工具卡 awaiting-input 态正是由它派生的，
+   * 故终态清扫前须查一次；查询失败按「可能有待填」保守处理。
+   */
+  private async hasPendingSecretInput(refs: {
+    agentId: string;
+    sessionId?: string | null;
+    taskId?: string | null;
+  }): Promise<boolean> {
+    const where: Record<string, unknown> = {
+      agentId: refs.agentId,
+      kind: AGENT_QUESTION_KINDS.SECRET_INPUT,
+      status: AGENT_QUESTION_STATUS.PENDING,
+    };
+    if (refs.sessionId) where.sessionId = refs.sessionId;
+    if (refs.taskId) where.taskId = refs.taskId;
+    try {
+      const row = await this.prisma.agentQuestion.findFirst({
+        where,
+        select: { id: true },
+      });
+      return row !== null;
+    } catch (err) {
+      // 查询失败按「可能有待填」处理：宁可多留一条 running 的 secret_command 卡
+      // （question 收敛后卡片自然回落），也不能把用户正在填的输入的卡删掉。
+      this.logger.warn(
+        `agent ${refs.agentId} 终态化查 pending secret_input 失败（保守按有待填处理，不清扫 secret_command 卡）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return true;
+    }
+  }
+
+  /**
    * 终态新建 sent 消息：内容无可渲染（空正文 + 仅 step-start 等噪声 part）→ 返回 null，
    * 调用方跳过落库，避免 UI 空消息；可渲染才建行。
    */
@@ -3042,6 +3113,8 @@ export class WorkerDispatcher
         // 残留清扫：同频道同 agent 还有其它 processing 行（并发 delta 建行竞态/
         // 部分轮次未收尾）——空行删除，有内容的收敛为 sent（同 content 不改写），
         // 避免它们永远挂在 processing，UI 上表现为「消息开始了但没结束」的空消息。
+        // 第三类「只含非终态空 tool 卡」行（输入 {} + 永久 running + 重复的工具卡）
+        // 同样删除而非收敛为 sent：收敛后 UI 会长期挂着永远转圈的卡片。
         const residual = await this.prisma.message.findMany({
           where: {
             channelId: channel.id,
@@ -3051,6 +3124,13 @@ export class WorkerDispatcher
             id: { not: processingRow.id },
           },
           select: { id: true, content: true },
+        });
+        // secret_command 等待用户填写（pending secret_input question）→ 其 running
+        // 工具卡实为 awaiting-input，不得清扫（与 web 的派生口径一致）。
+        const secretAwaiting = await this.hasPendingSecretInput({
+          agentId,
+          sessionId,
+          taskId,
         });
         const residualEmpty = residual
           .filter(
@@ -3063,15 +3143,26 @@ export class WorkerDispatcher
                 .trim(),
           )
           .map((r) => r.id);
+        const residualStaleTool = residual
+          .filter(
+            (r) =>
+              !residualEmpty.includes(r.id) &&
+              isStaleToolOnlyContent(r.content, { secretAwaiting }),
+          )
+          .map((r) => r.id);
         const residualFilled = residual
           .map((r) => r.id)
-          .filter((id) => !residualEmpty.includes(id));
-        if (residualEmpty.length > 0) {
+          .filter(
+            (id) =>
+              !residualEmpty.includes(id) && !residualStaleTool.includes(id),
+          );
+        const deletable = [...residualEmpty, ...residualStaleTool];
+        if (deletable.length > 0) {
           await this.prisma.message.deleteMany({
-            where: { id: { in: residualEmpty } },
+            where: { id: { in: deletable } },
           });
           this.logger.log(
-            `agent ${agentId} 终态化清扫空 processing 行 ${residualEmpty.length} 条`,
+            `agent ${agentId} 终态化清扫空 processing 行 ${residualEmpty.length} 条 + 空壳工具卡行 ${residualStaleTool.length} 条`,
           );
         }
         if (residualFilled.length > 0) {

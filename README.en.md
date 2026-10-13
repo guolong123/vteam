@@ -1,4 +1,4 @@
-# aiagents
+# vteam
 
 #### Description
 AI 智能体平台：多 Agent 协作（任务编排/群聊/产出物归档/真实 opencode 会话），NestJS + Next.js + Worker

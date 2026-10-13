@@ -6,7 +6,7 @@
 
 运行：
   cd sdks/python
-  python3 examples/e2e_resource_delivery.py                 # 默认镜像 aiagents-worker
+  python3 examples/e2e_resource_delivery.py                 # 默认镜像 vteam-worker
   python3 examples/e2e_resource_delivery.py --keep          # 保留容器便于排查
   python3 examples/e2e_resource_delivery.py --image <tag>   # 指定 worker 镜像
 
@@ -93,7 +93,7 @@ def start_container(image: str, control_port: int, token: str, work_dir: str) ->
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--image", default="aiagents-worker")
+    ap.add_argument("--image", default="vteam-worker")
     ap.add_argument("--token", default="dev-token")
     ap.add_argument("--port", type=int, default=13999)
     ap.add_argument("--work-dir", default="/data/vteam-worker")

@@ -1,0 +1,438 @@
+================================================================================
+task-7 · Web 敏感命令输入弹窗（sensitive-command-tool todo 7）
+================================================================================
+Date      : 2026-09-27
+Executor  : Sisyphus-Junior (subagent)
+Plan      : .omo/plans/sensitive-command-tool.md · todo 7
+Status    : CODE COMPLETE · AUTOMATED VERIFICATION **NOT RUN** · COMMIT **NOT MADE**
+            (原因见 §4「执行环境缺失」——本 subagent 运行时没有任何 shell/npx/git)
+
+--------------------------------------------------------------------------------
+1. 先读了什么（编码前的实测，不臆造字段）
+--------------------------------------------------------------------------------
+server/src/questions/questions.service.ts
+  - L749-809  createSecretForPlatform() 落库 content 的**真实形状**：
+      {
+        source: 'secret_input',                      // SECRET_QUESTION_SOURCE
+        template: string,                            // 命令模板（含 {{VAR}} 占位符）
+        variables: Array<{ name: string, secret: boolean }>,  // v.secret ?? true 归一
+        reason: string | null
+      }
+      → 实测**没有** requester 字段（requesterInstanceId 只在 createForPlatform 的
+        平台确认门路径写入，secret 路径不写）。DTO（toDto L1046）原样透传 content。
+  - L906-915  secretVariableNamesOf()：variables 非数组 → []；name 非字符串 → 丢弃。
+  - L924-961  resolveSecretQuestion()：secrets === undefined → 400；key 未声明 → 400；
+      **每个已声明变量必须存在且为 string（缺值 400）→ 前端必填门控 = 全部已声明变量必填**；
+      secrets === null → rejected + 钩子 outcome='cancelled'（不执行命令）。
+server/src/questions/dto/reply-question.dto.ts L32-42  secrets?: Record<string,string> | null
+server/src/platform-mcp/platform-mcp.service.ts L4499-4563  todo-6 阻塞等待：
+      L4516-4525 调 createSecretForPlatform({template, variables:[{name,secret}], reason})；
+      L4566-4574 cancelSecretQuestion() 走 reply({secrets:null}) 取消旁路。
+
+web 既有接线（改动前实测）
+  - hooks/use-realtime.ts L236-255  RealtimeQuestionEvent（kind/content 联合）
+  - src/components/chat/question-modal.tsx（kind=question / permission 两分支）
+  - app/(main)/teams/[id]/session/page.tsx L386-408 补拉、L913-935 SSE、L938-962 reply
+  - e2e/session-unification.spec.ts L189-230 __sseEmit stub、L299-373 全量 route-mock
+    （GET /questions 在 L369 固定回 [] → 新增一层更高优先级 route 覆盖它）
+
+--------------------------------------------------------------------------------
+2. 改了什么（产品/测试文件，共 8 个）
+--------------------------------------------------------------------------------
+NEW  web/lib/secret-question.ts
+     纯逻辑 seam：secretVariablesOf / secretTemplateOf / secretReasonOf /
+     canSubmitSecret / buildSecretReply(action, fields, values)。
+     - 畸形元数据不抛错：variables 缺失/非数组 → []；条目非对象、name 非字符串或空白 → 丢弃
+       （与 server secretVariableNamesOf 同口径，留着会变成 400「未声明变量」）；
+       重名保留首条；secret 非布尔 → 按敏感处理（默认遮蔽）。
+     - buildSecretReply 是确认/取消的**唯一入口**：
+         cancel → { secrets: null }（即使 values 已有值也绝不外带）
+         submit → 仅已声明 key → 用户原样值（不 trim），未声明 key 先裁掉
+     - 无已声明变量 → submit 得 { secrets: {} }（不是 null，null 会被 server 当取消）。
+
+NEW  web/lib/secret-question.spec.ts
+     lib-unit（npx playwright test lib/secret-question.spec.ts --project=lib-unit）：
+     9 个 test 覆盖畸形元数据、必填门控、提交体形状、cancel 恒 null 且序列化后无 sentinel。
+     失败语义：模块是本 todo 新增 → 改动前 import 即红。
+
+MOD  web/hooks/use-realtime.ts
+     - 新增 RealtimeSecretVariable / RealtimeSecretContent；
+     - RealtimeQuestionEvent.question.kind 扩为 "question" | "permission" | "secret_input"；
+     - content 联合加 RealtimeSecretContent 分支（只含模板与变量元数据，不含值）。
+
+MOD  web/src/components/chat/question-modal.tsx
+     - kind/content 联合 + QuestionModalSecretContent/Variable 扩到 secret_input；
+     - 新增导出 QuestionModalSubmitPayload（三 kind 共用提交体类型）；
+     - secret 分支：只读模板 <textarea readOnly>（testid question-secret-template）、
+       reason 行、每变量一个输入框（secret → type=password + autoComplete=new-password；
+       非敏感 → type=text），testid 为 question-secret-input-<index>；
+       全部已声明变量非空白才允许确认；
+     - 「取消」button / 遮罩 / Esc / 焦点陷阱统一走 requestClose →
+       secret 提交 {secrets:null}，其余 kind 仍调 onClose（**不改既有 question/permission 行为**，
+       submitting 屏蔽只作用于 secret 分支）；
+     - secret 值只存在组件私有 state secretValues（**不复用 customInput 共享态**），
+       依赖 [open, questionId] 重置 —— 队列直切下一条时 open 不翻转，
+       必须按 questionId 重置，否则上一条已填值会残留在下一条；
+     - requestClose 用 useCallback：入参只有 props，本地 state 变化不改其身份，
+       避免每次键入都重跑 useFocusTrap 导致焦点被抢回第一个可聚焦元素。
+
+MOD  web/src/components/chat/index.ts
+     导出 QuestionModalSubmitPayload。
+
+MOD  web/app/(main)/teams/[id]/session/page.tsx
+     - pendingQuestion 改为**单队列派生**：questionQueue: QuestionModalData[]，
+       pendingQuestion = queue[0] ?? null（head 即当前弹窗）。
+       * SSE 新 pending → 去重入队（**不覆盖当前弹窗**）；
+       * SSE resolved / reply 成功 / 410 过期 → 按 id 移出队列 → 下一条自动显示；
+       * GET /questions 补拉 → 非托管项按 id 去重入队（refresh 重开 + 队列补齐）；
+       * 单一 state 让「出队 + 入队」原子，避免两 state 的陈旧闭包互相覆盖。
+     - questionReplyMutation 改为 { questionId, payload }，onSuccess/onError 按
+       **变量里的 questionId** 精确移除（onSuccess 执行时 pendingQuestion 可能已被
+       SSE resolved 换成下一条，按闭包 id 会误删下一条）。
+     - 提交体类型放宽为 QuestionModalSubmitPayload（可带 secrets / secrets:null）。
+     - 现有 testid 全部保留（question-modal / question-modal-mask / question-modal-close /
+       question-reject / question-submit / question-permission-* / question-option-* /
+       question-custom-*），新增 testid 见 §5。
+
+MOD  web/e2e/session-unification.spec.ts
+     新增 describe「sensitive-command-tool Todo7 敏感命令输入弹窗」5 个用例（§5 详述），
+     复用既有 __sseEmit stub 与 installHarness，再叠一层 route 供 GET /questions
+     与 POST /questions/:id/reply（捕获请求体原文 + 可注入 410）。
+
+MOD  web/e2e/reference/testids.ts
+     2.3b team-session 列表登记 7 个新 testid。
+
+UNCOMMITTED EVIDENCE 本文件。
+
+--------------------------------------------------------------------------------
+3. 关键不变量（静态论证；§5 的自动化断言是它的机器证明）
+--------------------------------------------------------------------------------
+INV-1 取消必发 {secrets:null}
+      secret 分支的**所有**关闭入口（取消按钮 / 遮罩 / Esc / 焦点陷阱 Esc）都只经
+      buildSecretReply("cancel", …) → {secrets:null}；不存在「直接 onClose 静默关闭」的
+      secret 路径（requestClose 里 isSecret 早返回，不走 onClose）。
+INV-2 关闭后 secret 不残留 DOM/state
+      提交成功/410 → queue 按 id 移除 → head 变化 → QuestionModal 的
+      useEffect([open, questionId]) 把 secretValues 置 {} → open=false 时组件卸载。
+      且值从不写进 URL（POST body）、SSE、console（onError 只记 questionId + err）。
+INV-3 队列不覆盖、不串值
+      单队列 head 语义保证当前弹窗不被后到 pending 顶掉；questionId 变化强制清空输入。
+INV-4 既有行为不变
+      question/permission 两分支的渲染与按钮 onClick、managedMode 跳过（SSE
+      payload.question.managedMode return + 补拉 filter(!managedMode)）均未改动。
+
+--------------------------------------------------------------------------------
+4. 自动化验证 —— **未执行（环境无 shell），不是「通过」**
+--------------------------------------------------------------------------------
+本 subagent 的可用工具是 read/edit/write/glob/grep + Code Mode 内 96 个工具，
+**没有 shell/bash/exec 工具，不能 spawn 子 agent（depth limit），没有桌面浏览器**。
+三处实证：
+  (a) tools.search(limit:100) 枚举全部 96 个工具 → 无任何 shell/exec/batch 工具；
+  (b) subagent({agent:"general"}) → "Subagent depth limit reached (1)"；
+      call_omo_agent({subagent_type:"explore"}) → "No tool named call_omo_agent is currently available"；
+  (c) tools.browser.tabs.open → "No desktop browser is connected"；
+      tools.skill_mcp(mcp_name:"playwright") → **"Executable not found in $PATH: npx"**
+      → 运行时连 npx 都不存在 ⇒ tsc / playwright / git 一律无法调用。
+
+因此下表为「待父会话执行」的**原文命令与占位 exit code**，绝未被我运行过：
+
+  $ cd web && npx tsc --noEmit
+    EXIT=<NOT RUN>
+
+  $ cd web && npx playwright test lib/secret-question.spec.ts --project=lib-unit --reporter=list
+    EXIT=<NOT RUN>
+
+  $ cd web && npx playwright test session-unification.spec.ts --project=session-unification --reporter=list
+    EXIT=<NOT RUN>   （需 live :3001 + 后端；setup 项目会用 seed-admin 真实登录）
+
+  红跑（改动前失败语义，供记录）：
+    lib/secret-question.spec.ts  → Cannot find module './secret-question'
+    e2e 新用例                   → question-secret-* testid 全部 0 命中
+
+--------------------------------------------------------------------------------
+5. 新增测试用例与新 testid（断言的是 payload/DOM，不是「看得见」）
+--------------------------------------------------------------------------------
+e2e/session-unification.spec.ts · describe「sensitive-command-tool Todo7 敏感命令输入弹窗」
+  1) SSE 注入 secret_input → 只读模板 has value + readonly 属性；reason 可见；
+     input-0 type=password & autocomplete=new-password、input-1 type=text；
+     只填一个 → 确认 disabled；两个都填 → enabled；
+     点确认 → 断言**网络请求体原文**
+     {secrets:{DB_PASSWORD:"s3cr3t-A9f", REGION:"cn-north"}}（toEqual 全量比对）；
+     弹窗卸载 + input[type=password] 计数 0 + page.content() 不含 sentinel。
+  2) 三条关闭路径（取消按钮 / 遮罩 / Esc），每条都**先填 sentinel 再关**，
+     断言请求体恒 {secrets:null}、payload JSON.stringify 不含 sentinel、关闭后 DOM 无 sentinel。
+  3) 刷新补拉：先 page.reload()（一帧 SSE 都不发）→ 仅凭 GET /questions 重开弹窗；
+     两条 pending → 先显示模板 A（不被 B 覆盖）；填 sentinel 后取消 A → {secrets:null}；
+     立刻显示模板 B 且 input-0 为空（不串值）；再填并确认 B → {secrets:{S3_KEY:"second-only"}}。
+  4) 410：reply 回 410 QUESTION_EXPIRED → 既有静默关闭路径 → 弹窗消失 + DOM 无 sentinel。
+  5) malformed：variables:[] → 无输入框、question-secret-no-vars 可见、确认可用、
+     请求体 {secrets:{}}；模板含 `<img src=x onerror=alert(1)>` → textarea value 原样、
+     page.locator('img[src="x"]') 计数 0（模型文本只按纯文本渲染，非 HTML）；
+     content 完全没有 variables 字段 → 同样不崩、可确认。
+
+新 testid（已登记 web/e2e/reference/testids.ts 2.3b）：
+  question-secret-body · question-secret-template · question-secret-reason ·
+  question-secret-no-vars · question-secret-input-<index> · question-secret-cancel ·
+  question-secret-submit
+
+--------------------------------------------------------------------------------
+6. 对抗类处置
+--------------------------------------------------------------------------------
+malformed_input    → 见用例 5 + lib spec（缺/非数组/无 name/重名/坏 secret 类型/非字符串模板与 reason）。
+stale_state        → 用例 3（reload 补拉 + 队列逐条）、用例 4（410 静默关）；
+                     onSuccess/onError 按变量 questionId 移除，避免闭包 id 误删下一条。
+dirty_worktree     → **未能核查**（无 git）。我只改了 §2 列出的 8 个文件，
+                     父会话提交前必须 `git status`，仅暂存这 8 个路径。
+misleading_success → 所有断言针对**请求体原文**（route 捕获 postDataJSON）与 **DOM 计数/内容**，
+                     不以「弹窗可见」作为通过条件。
+secrets            → sentinel `s3cr3t-A9f` 只出现在测试代码；用例 1-4 每条都断言
+                     关闭后 page.content() 不含 sentinel，用例 2 断言任何提交体都不含。
+prompt_injection   → **部分适用**：模板/reason 确实由模型提供并渲染，但只进
+                     <textarea value>（不作 HTML 解析）与 React 文本节点（自动转义），
+                     不执行任何标记；应用侧不会把它们当指令消费。用例 5 的 img 断言为机器证明。
+                     「模型文本影响模型自身」不属于本 todo 范围 → 记为 N/A。
+
+--------------------------------------------------------------------------------
+7. 清理
+--------------------------------------------------------------------------------
+- 未创建临时文件/进程/服务；未改动 web/.next、node_modules、playwright 报告配置。
+- 一次 browser.tabs.open 探测因「无桌面浏览器」失败，未产生 tab。
+- 证据文件路径即本文件，**保持未提交**（.omo/evidence/** 不得入库）。
+
+--------------------------------------------------------------------------------
+8. 风险 / 交接给父会话
+--------------------------------------------------------------------------------
+R1 本 todo 的三条命令全部未跑（§4）。请按 §4 原文执行并把真实 exit code 回填本文件。
+R2 若 live :3001 跑的是旧构建镜像，e2e 看到的是旧代码 → 先重建 web 容器（计划
+   Verification strategy 已写明），否则会得到假红。
+R3 用例 2 的遮罩点击用 position {x:8,y:8}（弹窗卡片居中且顶部有 10% padding，
+   正中点会被卡片拦截）。若失败，改点该坐标或改用 mask.evaluate(el => el.click())。
+R4 queue 语义对 question/permission 也生效：**单条** pending 的表现与旧版完全一致；
+   唯一可观测差异是「同时存在 ≥2 条 pending」时不再互相覆盖（这正是计划要求）。
+   仓库内没有任何 e2e 依赖旧的覆盖行为（grep "question-" 于 web/e2e 无命中）。
+R5 我无法执行 commit。父会话执行：
+     git add web/lib/secret-question.ts web/lib/secret-question.spec.ts \
+             web/hooks/use-realtime.ts web/src/components/chat/question-modal.tsx \
+             web/src/components/chat/index.ts \
+             "web/app/(main)/teams/[id]/session/page.tsx" \
+             web/e2e/session-unification.spec.ts web/e2e/reference/testids.ts
+     git diff --cached --name-only     # 必须恰好这 8 个
+     git commit -m "feat(web): 增加敏感命令输入弹窗"
+     git show --stat                   # 回填 SHA
+   确认不包含 .omo/、.opencode/ 及任何既有脏文件。
+================================================================================
+
+================================================================================
+9. 自动化验证实跑记录（执行者：Sisyphus-Junior 第二个 subagent，**有 shell**）
+   Date: 2026-09-27 · HEAD 起点 c61cc6411c9e60d5b0cac30713c9c8088c07a9ce
+================================================================================
+
+环境事实（本机 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，故以下 export 是前置条件，非仓库改动）：
+  node/npx  → ~/.nvm/versions/node/v24.14.0/bin   (v24.14.0；:3001 的 bridge 也由它启动)
+  docker    → /usr/local/bin/docker → /Applications/OrbStack.app/.../docker (OrbStack)
+  compose   → Docker Compose version v5.1.2
+
+--------------------------------------------------------------------------------
+9.1 端口 :3001 到底是谁在听
+--------------------------------------------------------------------------------
+$ lsof -nP -iTCP:3001 -sTCP:LISTEN
+COMMAND   PID USER   FD   NODE NAME
+node    94825 mac    12u  TCP 127.0.0.1:3001 (LISTEN)
+
+$ ps -o command= -p 94825
+node /private/var/folders/0y/.../opencode/pw-bridge/bridge.js
+
+$ cat /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/pw-bridge/bridge.js
+// Throwaway TCP forwarder: 127.0.0.1:3001 -> 127.0.0.1:13001
+// Exists only because web/playwright.config.ts hard-codes baseURL :3001 while
+// docker-compose publishes web on :13001. Repo files are NOT modified.
+
+⇒ 结论：playwright 的 baseURL :3001 由**临时 TCP 转发**指向 docker `web` 容器发布口 13001，
+  仓库文件未被改动（无 playwright.config.ts / compose 端口改动）。
+
+--------------------------------------------------------------------------------
+9.2 Bundle provenance：重建前的旧镜像**不含**新代码（假红风险已实证并排除）
+--------------------------------------------------------------------------------
+$ docker ps --format '...'
+aiagents-compose-web | aiagents-web | Up 16 hours (healthy) | 0.0.0.0:13001->3000/tcp
+
+$ docker inspect aiagents-compose-web --format 'container={{.Id}} image={{.Image}} started={{.State.StartedAt}}'
+container=ee001a5211608092d310bcb03d2e1015ddca5edcecf8a40a21f10211587513d2
+image=sha256:c0066ebadb77a4ff0341235d911c74a029ef0e616de65c5f3fb5561dd5eda9bb
+started=2026-09-26T00:57:47.418467697Z
+
+$ stat -f '%Sm %N' web/lib/secret-question.ts web/src/components/chat/question-modal.tsx \
+    'web/app/(main)/teams/[id]/session/page.tsx' web/hooks/use-realtime.ts
+Sep 27 00:54:05 2026 web/lib/secret-question.ts
+Sep 27 01:03:13 2026 web/src/components/chat/question-modal.tsx
+Sep 27 01:02:38 2026 web/app/(main)/teams/[id]/session/page.tsx
+Sep 27 01:03:43 2026 web/hooks/use-realtime.ts
+⇒ 源码改于 Sep 27 00:54+，镜像建于 Sep 26 00:57 UTC → 早于改动 = 旧 bundle。
+
+【重建前 served bundle grep（http://127.0.0.1:3001/teams/tm_0000000001/session 的 25 个 chunk）】
+$ for m in secret_input secret-question secretVariablesOf question-secret-body new-password; do grep -o "$m" *.js | wc -l; done
+secret_input                    0
+secret-question                 0
+secretVariablesOf               0
+question-secret-body            0
+new-password                    0
+（同一 chunk page-*.js 里能 grep 到旧代码的「工具权限确认」「question-modal」
+  → 证明抓取链路正常，0 命中 = 镜像确实没带新代码）
+
+--------------------------------------------------------------------------------
+9.3 重建 + 重启（计划 Verification strategy 指定通道：docker compose）
+--------------------------------------------------------------------------------
+$ docker compose build web
+BUILD_EXIT=0
+  #24 resolving provenance for metadata file
+   Image aiagents-web Built
+
+$ docker compose up -d web
+UP_EXIT=0
+  Container aiagents-compose-web Recreate → Recreated → Started
+  （db/server 仅 Waiting 健康检查，未重建；init 重跑 migrate deploy + seed → Exited）
+
+$ docker inspect aiagents-compose-web --format 'container={{.Id}} image={{.Image}} started={{.State.StartedAt}} status={{.State.Status}} health={{.State.Health.Status}}'
+container=4ef2bb0bb3194b545c3dc84adefa2a4882bff9281ed3bbf7a950521457dccf30
+image=sha256:78302b9bb648bb6c70d7770bbd874286d05fc674c057256743395b3243d55c88
+started=2026-09-26T17:25:52.048312228Z status=running health=healthy
+
+$ docker images --format '...' | grep aiagents-web
+aiagents-web:latest 78302b9bb648 32 seconds ago
+
+PROVENANCE 汇总：
+  旧 container ee001a521160…  →  新 container 4ef2bb0bb319…
+  旧 image     sha256:c0066ebadb77…  →  新 image sha256:78302b9bb648…（aiagents-web:latest 78302b9bb648）
+
+【重建后 served bundle grep（同一 URL、同样 25 个 chunk，page chunk 换名）】
+$ grep -o "$m" *.js | wc -l
+secret_input             1
+secretVariablesOf        0      ← 构建期被压缩改名（minify），非缺代码
+question-secret-body     1
+question-secret-submit   1
+new-password             1
+secret-question          0      ← 同上（模块路径被压掉）
+buildSecretReply         0      ← 同上
+$ grep -l "secretVariablesOf\|question-secret-body" *.js
+page-ba3f1505622aeeb5.js
+⇒ 新 marker（testid / kind / autoComplete 字面量）已进入**被服务的 chunk**，构建期实证。
+
+--------------------------------------------------------------------------------
+9.4 必跑命令与 exit code（全部为本 subagent 实际执行）
+--------------------------------------------------------------------------------
+[1] $ cd web && npx tsc --noEmit
+    EXIT=0   (无任何输出)
+
+[2] $ cd web && npx playwright test lib/secret-question.spec.ts --project=lib-unit --reporter=list
+    EXIT=0   11 passed (308ms)
+      ✓ 变量清单按声明顺序归一，secret 标记透传
+      ✓ malformed：content/variables 缺失或形态错误 → 空清单且不抛错
+      ✓ malformed：无 name / name 非字符串 / 空白 name 的条目被丢弃
+      ✓ malformed：重名保留首条，secret 非布尔按敏感处理（默认遮蔽）
+      ✓ 模板与原因提取：非字符串/空串归一为 空串 / null
+      ✓ 必填门控：任一已声明变量未填/全空白 → 禁止提交；全填 → 放行
+      ✓ 必填门控：无变量元数据（畸形/空）→ 放行
+      ✓ 确认提交体：只带已声明 key 的原样值，未声明 key 被裁掉，值不 trim
+      ✓ 确认提交体：无已声明变量 → `{secrets:{}}`
+      ✓ 取消提交体：恒为 `{secrets:null}`，已填值绝不外带
+      ✓ 取消提交体序列化后不含 sentinel
+
+[3] $ cd web && npx playwright test session-unification.spec.ts --project=session-unification --reporter=list
+    （前置：9.3 已把 web 容器换到含新代码的 image 78302b9bb648；:3001 转发存活）
+    EXIT=0   33 passed (43.3s)   —— 含 [setup] auth.setup.ts 真实表单登录
+      ✓ 1 [setup] e2e/auth.setup.ts 真实表单登录 seed-admin → storageState (2.0s)
+      … 既有 28 条（Todo12/14、B2/B3/B4/B5/B9/B12）全绿 …
+      ✓ 29 Todo7 · 1. SSE 注入 secret_input：只读模板/输入类型/必填门控/提交体，关闭后 DOM 无 sentinel (1.1s)
+      ✓ 30 Todo7 · 2. 取消按钮/遮罩/Esc 三条关闭路径都提交 {secrets:null}，已填值不外带 (2.1s)
+      ✓ 31 Todo7 · 3. 刷新补拉 pending secret 重开弹窗，多条 pending 队列逐个显示且不串值 (2.2s)
+      ✓ 32 Todo7 · 4. 已过期（410）静默关闭，DOM 无 sentinel (1.1s)
+      ✓ 33 Todo7 · 5. malformed 变量元数据不崩：模板只读可见、无输入框、确认提交 {secrets:{}}，模板按纯文本渲染 (1.1s)
+    原文日志：/tmp/sess-unif.log（本次运行）；JSON reporter 输出写入
+    .omo/evidence/phase5-t9-playwright.json（既有脏文件，未暂存）
+
+[4] 静态检查（非计划要求，附带）：eslint 8 个改动路径
+    $ npx eslint lib/secret-question.ts lib/secret-question.spec.ts hooks/use-realtime.ts \
+        src/components/chat/question-modal.tsx src/components/chat/index.ts \
+        'app/(main)/teams/[id]/session/page.tsx' e2e/session-unification.spec.ts e2e/reference/testids.ts
+    EXIT=0 —— 0 error / 1 warning
+    question-modal.tsx:177:9 @typescript-eslint/no-unused-expressions
+    （该行是既有的三元表达式 `isPermission || !("questions" in …) ? [] : …`，非本次引入的 error 级问题）
+
+[5] sentinel 泄露检查（提交前）
+    $ grep -rln "s3cr3t-A9f" web/
+    web/lib/secret-question.spec.ts
+    web/e2e/session-unification.spec.ts
+    ⇒ 仅测试代码，产品文件 0 命中。
+
+--------------------------------------------------------------------------------
+9.5 todo 7 逐条验收对账
+--------------------------------------------------------------------------------
+只读模板            → e2e#1 expect(template).toHaveValue(…) + getAttribute("readonly") 非空  PASS
+reason               → e2e#1 question-secret-reason containText("夜间备份需要数据库口令")    PASS
+password + new-password
+                     → e2e#1 input-0 type=password & autocomplete=new-password；input-1 type=text  PASS
+required 门控        → e2e#1 只填 REGION 时 confirm disabled，两值齐才 enabled（lib spec 6/7）  PASS
+精确 {secrets}       → e2e#1 网络请求体原文 toEqual {secrets:{DB_PASSWORD:"s3cr3t-A9f",REGION:"cn-north"}}  PASS
+精确 {secrets:null}  → e2e#2 取消/遮罩/Esc 三路 payload 均 toEqual {secrets:null}（已填值不外带） PASS
+刷新补拉 rehydrate   → e2e#3 page.reload() 零 SSE，仅凭 GET /questions 重开                            PASS
+队列不覆盖           → e2e#3 两条 pending 逐条显示、questionId 切换后 input 清空不串值                  PASS
+关闭后 DOM 无 sentinel→ e2e#1-4 断言 modal count 0 + input[type=password] count 0 + page.content() 无 sentinel  PASS
+过期静默关闭         → e2e#4 410 QUESTION_EXPIRED → 弹窗消失                                              PASS
+malformed 不崩       → e2e#5 variables:[] / 缺 variables 字段 → {secrets:{}}；模板按纯文本渲染         PASS
+
+manual_qa artifact（真机截图，来自本次 live 运行）：
+  .omo/evidence/sensitive-command-tool/task-7-secret-modal.png    (161024 B, 01:27)
+  .omo/evidence/sensitive-command-tool/task-7-after-submit.png    (137190 B, 01:27)
+  目视复核 secret-modal.png：标题「填写敏感信息」、只读模板框含 {{DB_PASSWORD}} 占位、
+  「申请原因：夜间备份需要数据库口令」、DB_PASSWORD（敏感）显示为掩码圆点、REGION 显示 cn-north、
+  「取消 / 确认」按钮齐全，布局与既有 ConfirmDialog 风格一致，无溢出/遮挡。
+
+--------------------------------------------------------------------------------
+9.6 清理
+--------------------------------------------------------------------------------
+- 未改动任何仓库文件（本轮只跑命令）；仓库内 8 个 web 路径保持原样。
+- 残留的可观察物：pw-bridge（:3001→:3001 前向，先前 worker 建立，测试仍需它）、
+  /tmp/chunks /tmp/chunks2 /tmp/sess*.html /tmp/web-build.log /tmp/web-restart.log /tmp/sess-unif.log（/tmp 临时）。
+- 未创建进程、未改动 compose 端口、未 down 任何服务；web 容器现为 healthy 新镜像。
+- 本证据文件与截图**不提交**（.omo/evidence/** 禁止入库）。
+
+--------------------------------------------------------------------------------
+9.7 提交
+--------------------------------------------------------------------------------
+$ git add -- web/lib/secret-question.ts web/lib/secret-question.spec.ts \
+    web/hooks/use-realtime.ts web/src/components/chat/question-modal.tsx \
+    web/src/components/chat/index.ts "web/app/(main)/teams/[id]/session/page.tsx" \
+    web/e2e/session-unification.spec.ts web/e2e/reference/testids.ts
+
+$ git diff --cached --name-only          # 恰好 8 个，全部在 web/ 内
+web/app/(main)/teams/[id]/session/page.tsx
+web/e2e/reference/testids.ts
+web/e2e/session-unification.spec.ts
+web/hooks/use-realtime.ts
+web/lib/secret-question.spec.ts
+web/lib/secret-question.ts
+web/src/components/chat/index.ts
+web/src/components/chat/question-modal.tsx
+(共 8 行)
+
+$ git commit -m "feat(web): 增加敏感命令输入弹窗"
+COMMIT_EXIT=0
+[task-delete-and-db-readiness 7c9e307] feat(web): 增加敏感命令输入弹窗
+ 8 files changed, 777 insertions(+), 52 deletions(-)
+
+$ git show --stat --oneline HEAD
+7c9e307 feat(web): 增加敏感命令输入弹窗
+ web/app/(main)/teams/[id]/session/page.tsx |  70 +++++---
+ web/e2e/reference/testids.ts               |   7 +
+ web/e2e/session-unification.spec.ts        | 265 +++++++++++++++++++++++++++++
+ web/hooks/use-realtime.ts                  |  25 ++-
+ web/lib/secret-question.spec.ts            | 130 ++++++++++++++
+ web/lib/secret-question.ts                 | 108 ++++++++++++
+ web/src/components/chat/index.ts           |   2 +-
+ web/src/components/chat/question-modal.tsx | 222 +++++++++++++++++++++---
+ 8 files changed, 777 insertions(+), 52 deletions(-)
+
+COMMIT SHA : 7c9e30786afff77c70a93eaba3ae4db2f0b3b067
+PARENT     : c61cc64（todo 10 docs）
+BRANCH     : task-delete-and-db-readiness
+未暂存残留：.omo/** 与 .opencode/opencode.json（既有脏文件，按计划禁止入库）——本证据文件同样未提交。

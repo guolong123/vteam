@@ -278,7 +278,7 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {  it('Register
       payload: {
         credentials: [
           {
-            repoUrl: 'git@github.com:xishuhq/aiagents.git',
+            repoUrl: 'git@github.com:xishuhq/vteam.git',
             authType: 'ssh_key',
             key: '-----BEGIN OPENSSH PRIVATE KEY-----',
             fingerprint: 'sha256:abcd1234',
@@ -300,7 +300,7 @@ describe('worker 协议契约（T1 双端 JSON 互通）', () => {  it('Register
     const gitPayload = parsed.payload as GitCredentialsPayload | undefined;
     expect(gitPayload?.credentials).toEqual([
       {
-        repoUrl: 'git@github.com:xishuhq/aiagents.git',
+        repoUrl: 'git@github.com:xishuhq/vteam.git',
         authType: 'ssh_key',
         key: '-----BEGIN OPENSSH PRIVATE KEY-----',
         fingerprint: 'sha256:abcd1234',

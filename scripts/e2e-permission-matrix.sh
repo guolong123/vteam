@@ -119,8 +119,8 @@ jget() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v='"$2"'; 
 
 # db_query <sql> : single-value DB lookup against the compose db (stdout, no header).
 db_query() {
-  docker exec aiagents-compose-db mysql -uroot -paiagents-root -D aiagents -N -e "$1" 2>/dev/null \
-    || (cd "$REPO_ROOT" && docker compose exec -T db mysql -uroot -paiagents-root -D aiagents -N -e "$1" 2>/dev/null)
+  docker exec vteam-compose-db mysql -uroot -pvteam-root -D vteam -N -e "$1" 2>/dev/null \
+    || (cd "$REPO_ROOT" && docker compose exec -T db mysql -uroot -pvteam-root -D vteam -N -e "$1" 2>/dev/null)
 }
 
 # mcp_call <out-file> <id> <tool> <arguments-json> : POST tools/call, saves raw body.
@@ -147,7 +147,7 @@ EOF
 # re-fetches /agent-policies and re-writes opencode.json.
 reload_worker() {
   (cd "$REPO_ROOT" && docker compose restart worker >/dev/null 2>&1) \
-    || docker restart aiagents-compose-worker >/dev/null 2>&1
+    || docker restart vteam-compose-worker >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------- preconditions
@@ -388,7 +388,7 @@ need = {"vteam_my_profile", "vteam_task_transition"}
 holders = sorted({r["agent"] for r in rows if r.get("expect") == "allow" and r["tool"] in need
                   and {x["tool"] for x in rows if x.get("expect") == "allow" and x["agent"] == r["agent"]} >= need})
 members = subprocess.run(
-    ["docker", "exec", "aiagents-compose-db", "mysql", "-uroot", "-paiagents-root", "-D", "aiagents",
+    ["docker", "exec", "vteam-compose-db", "mysql", "-uroot", "-pvteam-root", "-D", "vteam",
      "--default-character-set=utf8mb4", "-N", "-e",
      "SELECT tm.id, a.agent_key FROM team_members tm JOIN agents a ON a.id=tm.agent_id "
      "WHERE tm.team_id='%s';" % team],
@@ -415,7 +415,7 @@ probe_args = {
 deny_tool = ""
 if member:
     key = subprocess.run(
-        ["docker", "exec", "aiagents-compose-db", "mysql", "-uroot", "-paiagents-root", "-D", "aiagents",
+        ["docker", "exec", "vteam-compose-db", "mysql", "-uroot", "-pvteam-root", "-D", "vteam",
          "--default-character-set=utf8mb4", "-N", "-e",
          "SELECT a.agent_key FROM team_members tm JOIN agents a ON a.id=tm.agent_id WHERE tm.id='%s';" % member],
         capture_output=True, text=True).stdout.strip()

@@ -1,0 +1,11 @@
+=== todo 9 验收 ===
+--- ① 门禁链（见上）: prisma validate/generate OK, lint 0 error, test 3700 pass, e2e 10 pass, build OK ---
+--- ② 裸 catch 计数（CI 权威命令，baseline 175）---
+count:      166
+--- ③ 工具数 32 两处 ---
+Test Suites: 2 passed, 2 total
+Tests:       52 passed, 52 total
+--- ④ 关键声明 ---
+迁移 SQL 从未在真实 DB 上执行过：server/test.db 不存在、jest.config.js 无 globalSetup、
+CI 无 MySQL service。全流程仅 prisma validate / prisma generate / tsc 触碰 long_running 列。
+--- ⑤ 未声称迁移已验证 ---

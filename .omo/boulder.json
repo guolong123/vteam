@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "opencode-native-permissions-and-fixes-74b2cdb3",
+  "active_work_id": "task-long-running-3df59d0a",
   "works": {
     "vteam-team-refactor-f2fc70e5": {
       "work_id": "vteam-team-refactor-f2fc70e5",
@@ -2357,151 +2357,35 @@
       },
       "ended_at": "2026-09-20T10:32:55.423Z",
       "elapsed_ms": 29924237
+    },
+    "task-long-running-3df59d0a": {
+      "work_id": "task-long-running-3df59d0a",
+      "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/task-long-running.md",
+      "plan_name": "task-long-running",
+      "status": "active",
+      "started_at": "2026-10-01T03:11:49.463Z",
+      "updated_at": "2026-10-01T03:11:49.463Z",
+      "session_ids": [
+        "opencode:ses_f0b236abcffeC7FCb0M5QWZ0Lm"
+      ],
+      "session_origins": {
+        "opencode:ses_f0b236abcffeC7FCb0M5QWZ0Lm": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {}
     }
   },
-  "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/opencode-native-permissions-and-fixes.md",
-  "started_at": "2026-09-20T02:14:11.186Z",
-  "status": "completed",
-  "updated_at": "2026-09-21T07:53:24.204Z",
+  "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/task-long-running.md",
+  "started_at": "2026-10-01T03:11:49.463Z",
+  "status": "active",
+  "updated_at": "2026-10-01T03:11:49.463Z",
   "session_ids": [
-    "opencode:ses_f504212b8ffeden4mpbfhWdYxo",
-    "opencode:ses_f3d0ba596ffegzdTS2URU8kZ5j",
-    "opencode:ses_f3d0b6d64ffeOfTvw7sU8Fc4mK"
+    "opencode:ses_f0b236abcffeC7FCb0M5QWZ0Lm"
   ],
   "session_origins": {
-    "opencode:ses_f504212b8ffeden4mpbfhWdYxo": "direct",
-    "opencode:ses_f3d0ba596ffegzdTS2URU8kZ5j": "appended",
-    "opencode:ses_f3d0b6d64ffeOfTvw7sU8Fc4mK": "appended"
+    "opencode:ses_f0b236abcffeC7FCb0M5QWZ0Lm": "direct"
   },
-  "plan_name": "opencode-native-permissions-and-fixes",
-  "task_sessions": {
-    "todo:1": {
-      "task_key": "todo:1",
-      "task_label": "1",
-      "task_title": "[server] Prove the MCP tool-call identity + tool-name mapping (the foundation for server-side enforcement)",
-      "session_id": "opencode:ses_f43677cc0ffe3ib1l901cLywz8",
-      "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-09-20T02:51:21.396Z",
-      "started_at": "2026-09-20T02:35:25.743Z",
-      "status": "completed",
-      "ended_at": "2026-09-20T02:51:21.396Z",
-      "elapsed_ms": 955653
-    },
-    "todo:3": {
-      "task_key": "todo:3",
-      "task_label": "3",
-      "task_title": "[server] Enforce `vteam_*` permission server-side in platform-mcp",
-      "session_id": "opencode:ses_f4342b608ffe08Av2vB7wC2qsR",
-      "agent": "Sisyphus-Junior",
-      "started_at": "2026-09-20T03:19:17.686Z",
-      "status": "completed",
-      "updated_at": "2026-09-20T03:57:21.361Z",
-      "ended_at": "2026-09-20T03:57:21.361Z",
-      "elapsed_ms": 2283675
-    },
-    "todo:5": {
-      "task_key": "todo:5",
-      "task_label": "5",
-      "task_title": "[worker] Delete the role-guard interception layer and its injection",
-      "session_id": "opencode:ses_f4303bbbcffe1u2lhQHWSQxwWk",
-      "agent": "Sisyphus-Junior",
-      "category": "unspecified-high",
-      "updated_at": "2026-09-20T05:41:13.306Z",
-      "started_at": "2026-09-20T05:41:13.305Z",
-      "status": "completed",
-      "ended_at": "2026-09-20T05:41:13.306Z",
-      "elapsed_ms": 1
-    },
-    "todo:6": {
-      "task_key": "todo:6",
-      "task_label": "6",
-      "task_title": "[web] Make the `task` permission editable (issue 1)",
-      "session_id": "opencode:ses_f42a43e02ffe0UAqhApzYRwFbf",
-      "agent": "Sisyphus-Junior",
-      "category": "visual-engineering",
-      "updated_at": "2026-09-20T06:12:41.855Z",
-      "started_at": "2026-09-20T06:12:41.852Z",
-      "status": "completed",
-      "ended_at": "2026-09-20T06:12:41.855Z",
-      "elapsed_ms": 3
-    },
-    "todo:7": {
-      "task_key": "todo:7",
-      "task_label": "7",
-      "task_title": "[web+server] Role editor: one agent slot, internal or external (issue 3)",
-      "session_id": "opencode:ses_f4266da4effeXt2Zwpir3SfLNn",
-      "agent": "Sisyphus-Junior",
-      "category": "visual-engineering",
-      "started_at": "2026-09-20T06:53:17.970Z",
-      "status": "completed",
-      "updated_at": "2026-09-20T07:31:24.898Z",
-      "ended_at": "2026-09-20T07:31:24.898Z",
-      "elapsed_ms": 2286928
-    },
-    "todo:8": {
-      "task_key": "todo:8",
-      "task_label": "8",
-      "task_title": "[web] Dark-mode fixes for the role active state and the warnings (issue 4)",
-      "session_id": "opencode:ses_f42262644ffe13qkhkPdyWRQX9",
-      "agent": "Sisyphus-Junior",
-      "category": "quick",
-      "started_at": "2026-09-20T08:00:55.241Z",
-      "status": "completed",
-      "updated_at": "2026-09-20T08:15:31.363Z",
-      "ended_at": "2026-09-20T08:15:31.363Z",
-      "elapsed_ms": 876122
-    },
-    "todo:9": {
-      "task_key": "todo:9",
-      "task_label": "9",
-      "task_title": "[docs+tests] Refresh the test-case doc and the e2e suite for the new behaviour",
-      "session_id": "opencode:ses_f421cdd10ffebpX1UyfCwZ9K6S",
-      "agent": "Sisyphus-Junior",
-      "started_at": "2026-09-20T08:31:11.236Z",
-      "status": "completed",
-      "updated_at": "2026-09-20T08:55:24.848Z",
-      "ended_at": "2026-09-20T08:55:24.848Z",
-      "elapsed_ms": 1453612
-    },
-    "todo:10": {
-      "task_key": "todo:10",
-      "task_label": "10",
-      "task_title": "[proof] Live end-to-end proof of the new arrangement",
-      "session_id": "opencode:ses_f41f00502ffe9mhc1CVdZKtRKQ",
-      "agent": "Sisyphus-Junior",
-      "started_at": "2026-09-20T09:04:53.595Z",
-      "status": "completed",
-      "updated_at": "2026-09-20T09:44:27.551Z",
-      "ended_at": "2026-09-20T09:44:27.551Z",
-      "elapsed_ms": 2373956
-    },
-    "final-wave:f1": {
-      "task_key": "final-wave:f1",
-      "task_label": "F1",
-      "task_title": "Plan compliance audit",
-      "session_id": "opencode:ses_f41cac8d7ffejkSwwa4VHFj1oK",
-      "agent": "Momus - Plan Critic",
-      "updated_at": "2026-09-20T10:14:56.683Z",
-      "started_at": "2026-09-20T09:50:06.265Z",
-      "status": "completed",
-      "ended_at": "2026-09-20T10:14:56.683Z",
-      "elapsed_ms": 1490418
-    },
-    "final-wave:f2": {
-      "task_key": "final-wave:f2",
-      "task_label": "F2",
-      "task_title": "Code quality review",
-      "session_id": "opencode:ses_f41a55356ffe4b5CdeSdWP5gyM",
-      "agent": "oracle",
-      "started_at": "2026-09-20T10:26:16.931Z",
-      "status": "completed",
-      "updated_at": "2026-09-20T10:32:32.915Z",
-      "ended_at": "2026-09-20T10:32:32.915Z",
-      "elapsed_ms": 375984
-    }
-  },
-  "agent": "atlas",
-  "ended_at": "2026-09-20T10:32:55.423Z",
-  "elapsed_ms": 29924237
+  "plan_name": "task-long-running",
+  "task_sessions": {},
+  "agent": "atlas"
 }

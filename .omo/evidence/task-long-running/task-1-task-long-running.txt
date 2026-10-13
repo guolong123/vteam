@@ -1,0 +1,8 @@
+    ✓ 单条 ALTER TABLE：无第二条语句、不建索引（无查询路径需要） (1 ms)
+    ✓ 不删列（删列不可逆，且本仓库无 down-migration 约定）
+
+Test Suites: 1 passed, 1 total
+Tests:       6 passed, 6 total
+Snapshots:   0 total
+Time:        2.426 s
+Ran all test suites matching /src\/prisma\/task-long-running.migration.spec.ts/i.

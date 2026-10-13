@@ -1,0 +1,18 @@
+=== FINAL CODE MARKERS (start & end) 2026-09-27T03:48:27Z ===
+HEAD=0987980f0b0e3e10cece4aa87d88ebdb8d878db0
+(empty above = no product file modified)
+--- server dist (todo13 heartbeat + todo12 teamId emit) ---
+/app/dist/src/platform-mcp/platform-mcp.controller.js
+1
+--- web build (todo12 scope fallback + awaiting-input card) ---
+/app/.next/server/chunks/7965.js
+/app/.next/server/app/(main)/teams/[id]/session/page.js
+--- worker dist (secret-command route + redaction mask) ---
+/app/dist/exec/exec-server.js
+/app/dist/exec/exec-server.spec.js
+/app/dist/protocol/contract.spec.js
+1
+--- images vs HEAD commit time (2026-09-27T10:58:05+08:00) ---
+/aiagents-compose-web created=2026-09-27T03:32:56.571711744Z image=sha256:9c239c318857b66822439420675b8340a5a196e49ed006b4490eeedfe43947dd
+/aiagents-compose-server created=2026-09-27T02:52:42.654137828Z image=sha256:7490e62748634a5f32ede0b21b05dd3a6eec55a158ce38dc804a9ccb85cc2b90
+/aiagents-compose-worker created=2026-09-26T21:41:35.423076928Z image=sha256:78dae6ef19f774c28142a0771eaeabc494fe201737c3287f709627a080031973

@@ -1,0 +1,144 @@
+=== todo 3 — worker 敏感命令模块：变量替换、精确脱敏、进程组超时 ===
+date: 2026-09-26 21:41:57 +0800  node: v22.15.0
+workdir: /Volumes/SSD-Data/01work/git-project/vteam
+
+--- 变更文件 ---
+ M worker/src/protocol/contract.spec.ts
+ M worker/src/protocol/worker-protocol.ts
+?? worker/src/exec/sensitive-command.spec.ts
+?? worker/src/exec/sensitive-command.ts
+
+--- [CMD1] cd worker && npx jest src/exec/sensitive-command.spec.ts src/protocol --runInBand ---
+PASS src/exec/sensitive-command.spec.ts
+PASS src/protocol/contract.spec.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       52 passed, 52 total
+Snapshots:   0 total
+Time:        3.134 s
+Ran all test suites matching /src\/exec\/sensitive-command.spec.ts|src\/protocol/i.
+exit=0
+
+--- [CMD2] cd worker && npm run typecheck ---
+
+> worker@0.0.1 typecheck
+> tsc --noEmit
+
+exit=0
+
+--- [CMD3] grep -R spawnSync worker/src/exec/sensitive-command.ts (期望无命中/exit 1) ---
+exit=1 (1 = 无命中)
+
+--- 回归套件 cd worker && npx jest src/exec src/protocol src/resources --runInBand ---
+
+Test Suites: 10 passed, 10 total
+Tests:       243 passed, 243 total
+Snapshots:   0 total
+Time:        6.365 s, estimated 9 s
+Ran all test suites matching /src\/exec|src\/protocol|src\/resources/i.
+exit=0
+CMD exits: jest=0 typecheck=0 grep=1 regression=0
+
+--- 红灯 QA（临时破坏，跑完立即恢复） ---
+
+### MUTATION A-关闭精确值替换
+### patch: scrubSecrets 内 split/join 替换改为 no-op
+    ✕ 正则元字符 secret 走纯字符串替换，不因转义差异漏替换 (1 ms)
+    ✕ 重叠 secret 按长度降序替换，长串区域不被短串切碎后残留 (1 ms)
+    ✕ 超短 secret（单字符）全部命中
+    ✕ 多行输出逐行精确替换 (1 ms)
+    ✕ sentinel 出现在 stdout/stderr/失败路径时，全结果 0 命中 (4 ms)
+    ✕ 模板渲染后的 secret 值在执行输出中被精确替换 (3 ms)
+    ✕ stale_state：大输出之后的调用截断 flag 归零，且并发调用结果互不串扰 (36 ms)
+Test Suites: 1 failed, 1 total
+Tests:       7 failed, 25 passed, 32 total
+
+### MUTATION B-只杀直接子进程
+### patch: process.kill(-pid) → process.kill(pid)
+    ✕ 异步超时后进程组（含孙进程）被杀 (6740 ms)
+    ✕ AbortSignal 取消与超时同路径（进程组被杀，结果为 timeout） (6449 ms)
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 30 passed, 32 total
+
+### MUTATION C-关闭32KB截断
+### patch: finalizeStream 跳过 cutBytes
+    ✕ 40KB+ 双流各截断到 32768 字节（按实际字节数断言） (54 ms)
+    ✕ 多字节字符输出截断后仍不超过 32768 字节 (28 ms)
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 30 passed, 32 total
+
+### 恢复后复跑：
+Test Suites: 2 passed, 2 total
+Tests:       52 passed, 52 total
+
+--- 真实执行手动 QA（原始输入/输出直出，未加工） ---
+npm warn exec The following package was not found and will be installed: tsx@4.23.15
+=== MANUAL QA: worker sensitive-command (todo 3) ===
+MAX_SENSITIVE_OUTPUT_BYTES=32768
+workDir=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/qa-sens-WGVrrd
+node=v22.15.0 uid=501
+
+--- CASE 1: sentinel -> stdout + stderr + failure path ---
+RAW INPUT  : {"commandTemplate":"printf 'stdout auth ok user=s3cr3t-A9f\\n'; printf 'stderr auth denied token=s3cr3t-A9f\\n' >&2; printf 'stderr2 reconnect s3cr3t-A9f\\n' >&2; exit 3","secrets":{"TOKEN":"s3cr3t-A9f"},"timeoutMs":10000}
+RAW OUTPUT : {
+  "status": "failed",
+  "exitCode": 3,
+  "durationMs": 4,
+  "stdout": "stdout auth ok user={{REDACTED}}\n",
+  "stderr": "stderr auth denied token={{REDACTED}}\nstderr2 reconnect {{REDACTED}}\n",
+  "stdoutTruncated": false,
+  "stderrTruncated": false
+}
+[CHECK] case1 wire: sentinel_hits=0 (expected 0)
+[CHECK] case1 stdout: sentinel_hits=0 (expected 0)
+[CHECK] case1 stderr: sentinel_hits=0 (expected 0)
+[CHECK] case1 stdout="stdout auth ok user={{REDACTED}}\n"
+[CHECK] case1 stderr="stderr auth denied token={{REDACTED}}\nstderr2 reconnect {{REDACTED}}\n"
+[CHECK] case1 status=failed exitCode=3 error=undefined
+[CHECK] case1 rendered command leaked=false
+
+--- CASE 1b: spawn failure path (cwd not executable) ---
+RAW INPUT  : {"commandTemplate":"printf 'leak s3cr3t-A9f'","secrets":{"TOKEN":"s3cr3t-A9f"},"cwd":"locked","timeoutMs":5000}
+RAW OUTPUT : {
+  "status": "failed",
+  "exitCode": null,
+  "durationMs": 1,
+  "stdout": "",
+  "stderr": "",
+  "stdoutTruncated": false,
+  "stderrTruncated": false,
+  "error": "failed to start the command process (EACCES)"
+}
+[CHECK] case1b wire: sentinel_hits=0 (expected 0)
+[CHECK] case1b path leaked=false
+[CHECK] case1b status=failed error=failed to start the command process (EACCES)
+
+--- CASE 2: >40KB on both streams ---
+RAW INPUT  : {"commandTemplate":"'/Users/mac/.nvm/versions/node/v22.15.0/bin/node' -e \"process.stdout.write('x'.repeat(45000)); process.stderr.write('y'.repeat(45000))\"","secrets":{},"timeoutMs":15000}
+RAW OUTPUT : {
+  "status": "succeeded",
+  "exitCode": 0,
+  "durationMs": 29,
+  "stdoutBytes": 32768,
+  "stderrBytes": 32768,
+  "stdoutTruncated": true,
+  "stderrTruncated": true
+}
+[CHECK] case2 stdoutBytes=32768 (<=32768: true)
+[CHECK] case2 stderrBytes=32768 (<=32768: true)
+[CHECK] case2 flags stdout=true stderr=true
+
+--- GLOBAL SENTINEL SCAN over all captured raw outputs ---
+[CHECK] global sentinel hits=0 (expected 0)
+
+=== END ===
+qa_exit=0
+
+--- 剩余风险 ---
+1. TOCTOU：resolveSafeCwd 在 spawn 前 realpath 校验，校验与 spawn 之间 cwd 被换成符号链接的窗口无法在无沙箱前提下消除。
+2. 脱敏是 best-effort：只做精确值替换 + 占位符掩码，命令把 secret 变形/编码/外传无法阻止。
+3. 进程组 SIGKILL 后，setsid 逃逸的孙进程不随组被杀；模块以 3s 宽限兜底返回，不挂死调用方。
+4. 错误 message 为固定字面量（仅 errno 白名单动态片段），排障信息面收窄是取舍而非缺陷。
+prompt injection：不适用——本模块输入是命令模板与键值 secret，不是可注入的自然语言指令通道。
+commit: 见下方（证据文件不入库）
+commit: c72d68f (feat(worker): 增加敏感命令执行、脱敏与进程组超时) — 仅 4 个产品/测试文件，证据未入库

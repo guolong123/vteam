@@ -1,0 +1,43 @@
+=== FINAL HEALTH 2026-09-27T03:47:52Z ===
+aiagents-compose-web	Up 14 minutes (healthy)	2026-09-27 11:32:56 +0800 CST
+aiagents-compose-server	Up 11 minutes (healthy)	2026-09-27 10:52:42 +0800 CST
+aiagents-compose-worker	Up 42 seconds	2026-09-27 05:41:35 +0800 CST
+aiagents-compose-db	Up 47 hours (healthy)	2026-09-25 12:49:05 +0800 CST
+--- endpoints ---
+web 3001 -> 200
+server 13000 health -> {"status":"ok","info":{},"error":{},"details":{}}
+web direct 13001 -> 200
+--- worker heartbeat after restart (server log) ---
+16
+--- pending questions ---
+0
+=== FINAL SENTINEL SWEEP (post-cleanup) ===
+server hits=0
+worker hits=0
+web hits=0
+worker session store hits=0
+worker workdir hits=0
+server fs hits=0
+web fs hits=0
+messages	0
+aq_content	0
+aq_answers	0
+realtime	0
+=== git status (product files untouched?) ===
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M .opencode/opencode.json
+?? .omo/drafts/chat-ux-hierarchy-and-streaming.md
+?? .omo/drafts/sensitive-command-tool.md
+?? .omo/evidence/chat-ux-hierarchy-and-streaming/
+?? .omo/evidence/sensitive-command-tool/
+?? .omo/notepads/chat-ux-hierarchy-and-streaming/
+?? .omo/notepads/sensitive-command-tool/
+?? .omo/plans/chat-ux-hierarchy-and-streaming.md
+?? .omo/plans/sensitive-command-tool.md
+?? .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+?? .omo/ulw-execute/sensitive-command-tool-registry.json

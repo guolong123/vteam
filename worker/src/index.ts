@@ -59,6 +59,7 @@ import {
   RestartDecision,
 } from './restart/restart-coordinator';
 import { readUpdateCommandVersion, WorkerUpdater } from './update/worker-updater';
+import { resolveCodeVersion } from './code-version';
 import {
   AuthJsonResult,
   buildAuthJson,
@@ -681,6 +682,16 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     },
   });
 
+  /**
+   * 进程启动时的代码版本（一次性定格）。
+   *
+   * 为什么必须定格：自更新把新码覆盖到磁盘后，运行中的**旧进程**若每次心跳都现读
+   * dist/version.js，会把新版本号上报给 server——UI 显示「已是最新」而进程跑的仍是旧码
+   * （线上真实事故：两次更新都「成功」落盘，进程 13 天没重启，实时流修复从未生效）。
+   * 启动时解析一次 = 上报本进程真实所跑版本；进程重启后自然读到的就是新码版本。
+   */
+  const BOOT_CODE_VERSION = resolveCodeVersion();
+
   /** 自更新状态字段投影（undefined = 不携带该键，缺席语义 = 「本次没上报」）。 */
   const updaterReport = (): {
     updateState?: WorkerUpdateState;
@@ -726,6 +737,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         )),
         // 自更新状态随注册一并上报（server 落库供 UI 展示；缺席 = 未上报）。
         ...updaterReport(),
+        // 代码版本 = 进程启动时定格（杜绝「磁盘已是新码、进程仍是旧码」的虚报，
+        // 见 BOOT_CODE_VERSION 注释）。
+        codeVersion: BOOT_CODE_VERSION,
       },
       { logger: { warn: (message: string) => console.warn(`[worker] ${message}`) } },
     ).catch((err: Error) => {
@@ -829,6 +843,8 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         // T8c：MCP 三态快照（节流缓存，30s 内复用）
         mcpStatus: mcpStatusProbe.getStatus(),
         ...updaterReport(),
+        // 同 register：上报进程启动时定格的版本，不现读磁盘文件。
+        codeVersion: BOOT_CODE_VERSION,
       });
       // T4a：心跳响应携带的下行命令 → 分派处理（reload-config 注入+重启）
       dispatchCommands(heartbeat.commands ?? []);
@@ -978,7 +994,15 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   });
 
   // T4c：活跃会话归零时检查挂起的重启（T10 会话执行接入 trackInstanceStart/End 后自动触发）
-  onActiveSessionsIdle(() => restartCoordinator.checkPending());
+  // worker-self-update：同一空闲跃变同时驱动自更新续跑——指令到达时正忙被 defer 的
+  // 更新、以及「新码已落盘但重启被会话挡下」的 ready-manual，都在此归零后续跑
+  // （旧实现此处无钩子 = 新码躺磁盘、进程跑旧码，修复数周不生效的线上事故根因）。
+  onActiveSessionsIdle(() => {
+    restartCoordinator.checkPending();
+    void updater.retryPendingUpdate().catch((err: unknown) => {
+      console.warn(`[worker] 空闲续跑更新失败（不影响主流程）: ${String(err)}`);
+    });
+  });
 
   // T6：事件上送通道（进程内单例，seq 从 1 起单调递增 + F2 M1 bootId 区分重启）。
   // 事件产生（session.updated/task.completed 等）待 T10 回流接线（C1 并行任务）。

@@ -1,0 +1,3 @@
+        ✕ true → false 且任务 in_progress → register（看门狗必须回来，否则永不恢复） (1 ms)
+        ✕ false → true → unregister（立即注销遗留巡检行，不再多叫醒一次）
+Tests:       2 failed, 138 passed, 140 total

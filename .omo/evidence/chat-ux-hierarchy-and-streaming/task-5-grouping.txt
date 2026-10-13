@@ -1,0 +1,193 @@
+# task-5-grouping — B2 连续同发送者消息复用身份栏（绿证据）
+# chat-ux-hierarchy-and-streaming 复选框 5
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:159-165（References / Acceptance / QA happy / QA failure）
+#      + :78-91 消息结构断言门（B2 额外断言）+ Scope IN 第 3 条 + Success criteria 第 5 条
+# 记录时间: 2026-09-26 (Asia/Shanghai)     Commit: cf08cf9 feat(chat): 连续同发送者消息复用身份栏
+# 红证据: 同目录 task-5-grouping-failure.txt（含被否弃的中间红跑说明）
+
+======================================================================
+0. 结论
+======================================================================
+分组谓词 + 分组态身份栏省略均已实现并通过全部门：
+  - tsc exit 0、check-only eslint exit 0、lib-unit 7/7、
+    聚焦 B2 4/4、pages+session-unification 44/44（C2/Todo12 全绿）。
+  - 红跑（pre-B2 镜像 + 同一份测试）三处 Expected 0 / Received 1，绿跑同三处全转绿。
+  - 消息顺序、数据源、SSE、未读、loading 均未改动（见 §5、§7）。
+
+======================================================================
+1. 文档决策（docs decision）
+======================================================================
+DIST_DOCS_ABSENT = TRUE
+  $ ls web/node_modules/next/dist/docs → No such file or directory（仓库根同样不存在）
+  安装版本 next = 15.5.22。
+改产品代码前实际抓取并通读用户批准的 v15.5.22 tag 文档
+（commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775）:
+  (1) docs/01-app/01-getting-started/05-server-and-client-components.mdx
+  (2) docs/01-app/01-getting-started/08-updating-data.mdx
+  (3) docs/01-app/02-guides/testing/playwright.mdx
+决策: 分组是渲染期派生值（不新增 state/effect）；结果经 props 下传给 client 组件
+MsgParts（B1 身份出口），MessageIdentity 不改签名；Playwright 沿用运行中 server + 既有 project，
+不改 playwright.config.ts。文档与现有代码无冲突，无需停止。
+
+======================================================================
+2. 改动文件（仅本 todo，已原子提交 cf08cf9）
+======================================================================
+  web/lib/message-grouping.ts                 +46  新增：纯谓词与 MESSAGE_GROUP_MAX_GAP_MS
+  web/lib/message-grouping.spec.ts            +87  新增：lib-unit 边界/负例 7 例
+  web/src/components/chat/msg-parts.tsx       +10/-5  新增 grouped prop；两处 `!grouped && <MessageIdentity>`
+  web/app/(main)/teams/[id]/session/page.tsx   +6/-1  map 增加 index，与上一条比较 → grouped 传入 MsgParts
+  web/e2e/session-unification.spec.ts        +212   新增「B2 连续同发送者消息复用身份栏」describe（3 例）
+                                                     + HarnessOptions.groupHistory / privateHistoryOverride 可选夹具钩子
+未触碰: msg-parts 的身份契约其余部分、chat-bubble.tsx、message-identity.tsx、agent-avatar.tsx、
+        use-realtime.ts、use-sse.ts、playwright.config.ts、pages.spec.ts、worker/server、移动端 CSS、
+        plan/boulder/registry。
+
+======================================================================
+3. 实现要点（可测边界）
+======================================================================
+web/lib/message-grouping.ts
+  export const MESSAGE_GROUP_MAX_GAP_MS = 5 * 60 * 1000;   // 恰好 5 分钟成组，5 分 + 1ms 不成组
+  isGroupedWithPrevious(previous, current) 依次判定:
+    1) previous/current 都存在
+    2) 两条 senderType === "agent"（user/system/external 任一侧即 false）
+    3) senderId 为字符串且非空、两者相等（""、null、字段缺失即 false）
+    4) 两条 createdAt 可解析（缺失、""、非法串即 false）
+    5) 本地日历日相同（new Date 的 getFullYear/Month/Date，跨日即 false）
+    6) |Δt| <= MESSAGE_GROUP_MAX_GAP_MS
+  谓词成对语义：是否与「上一条」成组由调用方 messages.map((msg, index)) 的 index+1 决定，
+  谓词本身不排序、不读数据源、不做链式回溯。
+page.tsx: `messages.map((msg, index) => …)` 内
+  `const grouped = isGroupedWithPrevious(index > 0 ? messages[index - 1] : undefined, msg);`
+  仅 agent 分支的 <MsgParts … grouped={grouped} /> 消费；external/user/system 分支不接该 prop。
+msg-parts.tsx: grouped=true 时不渲染共享 MessageIdentity（aborted 分支与主分支两处），
+  secondaryRows 的 paddingLeft:36 不变 → 分组行与上一条正文左对齐；正文/过程/流式渲染路径不变。
+
+======================================================================
+4. 红/绿命令与退出码
+======================================================================
+4.1 RED（同 §3 实现前；镜像 ef075000741e = B1 完成、B2 未实现；详见 task-5-grouping-failure.txt）
+  $ cd web && npx playwright test lib/message-grouping.spec.ts --project=lib-unit --reporter=list
+      → exit 1（Cannot find module './message-grouping'）      日志 /tmp/b2-lib-red.log
+  $ cd web && npx playwright test session-unification.spec.ts --project=session-unification -g "B2" --reporter=list
+      → exit 1（3 failed / 1 passed；三处 Expected: 0 Received: 1）日志 /tmp/b2-red-final.log
+  $ cd web && npx tsc --noEmit → exit 0（红期测试可编译）        日志 /tmp/b2-tsc-red2.txt
+
+4.2 GREEN（最终工作树 = 提交 cf08cf9 的内容；镜像 5471616bff85）
+  $ cd /Volumes/SSD-Data/01work/git-project/vteam/web && npx tsc --noEmit
+      → exit 0                                                 日志 /tmp/b2-tsc-final.txt
+  $ cd web && npx eslint lib/message-grouping.ts lib/message-grouping.spec.ts \
+        src/components/chat/msg-parts.tsx 'app/(main)/teams/[id]/session/page.tsx' \
+        e2e/session-unification.spec.ts
+      → exit 0（0 error / 0 warning；未运行 npm run lint 或 --fix）日志 /tmp/b2-eslint-final.txt
+  $ cd web && npx playwright test lib/message-grouping.spec.ts --project=lib-unit --reporter=list
+      → exit 0（7 passed）                                      日志 /tmp/b2-lib-green2.log
+  $ cd web && npx playwright test session-unification.spec.ts --project=session-unification -g "B2" --reporter=list
+      → exit 0（4 passed = setup + 3 例；[B2] 截图时刻列表 scrollTop=0）
+                                                             日志 /tmp/b2-green-final2.log
+  $ cd web && npx playwright test pages.spec.ts session-unification.spec.ts --reporter=list
+      → exit 0（44 passed / 49.3s）——计划 QA happy 原命令        日志 /tmp/b2-full-green-final.log
+
+======================================================================
+5. 渲染侧边界矩阵与分组 DOM 计数（绿期实测）
+======================================================================
+列表直接子元素数 = 22（1 个「团队会话 · 历史跨任务可见」分隔标题 + 21 条消息），顺序与夹具一致。
+每行断言: toContainText(正文) + chat-bubble 计数 1 +
+          message-identity / agent-avatar / chat-bubble-author 计数 = 下表期望值。
+  行(0-based) id     期望身份  判定
+   0  b2_01  1  首条独立
+   1  b2_02  0  同发送者 1 分钟            → 分组（隐藏身份）
+   2  b2_03  0  同发送者 3 分钟            → 分组
+   3  b2_04  0  间隔恰好 5 分钟（边界 ≤）   → 分组
+   4  b2_05  1  5 分 + 1ms（边界 >）        → 独立
+   5  b2_06  1  换发送者 a_tester
+   6  b2_07  1  换回 a_developer（前一条不同）
+   7  b2_08  0* user 独立气泡（chat-bubble data-type=user，自身即气泡根）
+   8  b2_09  1  user 之后首条
+   9  b2_10  0* system 独立气泡（data-type=system）
+  10  b2_11  1  system 之后首条
+  11  b2_12  0  system 之后连续            → 分组
+  12  b2_13  1  senderId ""
+  13  b2_14  1  前一条 senderId ""
+  14  b2_15  1  senderId 字段缺失
+  15  b2_16  1  前一条 senderId 字段缺失
+  16  b2_17  1  createdAt 字段缺失（正文仍渲染，无崩溃）
+  17  b2_18  1  前一条 createdAt 缺失
+  18  b2_19  1  同日间隔 13.5 小时
+  19  b2_20  1  跨日仅 3 分钟（23:58 → 00:01）
+  20  b2_21  0  跨日后 1 分钟              → 分组（新一天重新起算）
+  分组行计数: 5 行（b2_02/b2_03/b2_04/b2_12/b2_21）+ 私聊 1 行（p2_2）
+  独立行计数: 14 agent 行 + 1 user + 1 system = 16 行
+私聊分组态过程消息（test 3, 2 条消息 → 列表子元素 3）:
+  第 1 条: message-identity 1 / agent-avatar 1 / msg-thinking 1 / msg-tool 1 / chat-bubble 1
+  第 2 条: message-identity 0 / agent-avatar 0 / chat-bubble-author 0 /
+           msg-thinking 1 / msg-tool 1 / chat-bubble 1 / msg-streaming 0 + 正文可见
+  → 分组只隐藏身份，过程与正文 testid、内容全部保留。
+
+纯谓词边界（lib-unit 7 例全绿）:
+  MESSAGE_GROUP_MAX_GAP_MS = 300000；300000 → true；300001 → false；299999 → true；
+  跨本地日 3 分钟 → false；同日 00:01→00:05 → true；createdAt 缺失/""/非法 → false；
+  首条、user/system/external 任一侧、senderId ""/null/缺失 → false。
+
+======================================================================
+6. testid / 页面守卫与 C2 非回归
+======================================================================
+$ grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx \
+    web/src/components/ui/agent-avatar.tsx web/src/components/ui/message-identity.tsx | sort -u
+  before(task-5-chat-testids-before.txt) = 25 条, after(task-5-chat-testids-after.txt) = 25 条,
+  diff 为空 → 本 todo 零 testid 消失、零新增（agent-avatar / chat-bubble / chat-bubble-content /
+  chat-bubble-toggle / chat-bubble-author / chat-bubble-time / msg-thinking / msg-tool / msg-error /
+  msg-aborted / msg-streaming / message-identity 全部仍可定位）。
+$ diff 计划基线 chat-testids-before.txt（B1 之前） vs after → 仅 `> data-testid="chat-bubble-time"`
+  （A4 复选框 3 引入的既有新增），无任何删除行。
+页面 testid（B2 describe 内断言）: team-session-root / dm-tabs / chat-message-list 可见；
+C2 非回归: `npx playwright test pages.spec.ts session-unification.spec.ts --reporter=list` → 44 passed，
+  含 Todo12 4 例（session-status 翻转 / 重置路由 / 群消息分区 / 就绪兜底）与 Todo14 6 例
+  （当前私聊 delta 滚动、非当前不滚、空缓存补拉、挂起期 delta、30s 轮询、终态优先、群 Tab 门控）
+  —— C2 的可见频道滚动与 delta 行为断言全部原样通过。
+
+======================================================================
+7. 实机观察（真实浏览器）
+======================================================================
+被测浏览器: Playwright channel=chrome（系统 Chrome），走 3001 → 13001 compose 容器。
+截图1 .omo/evidence/chat-ux-hierarchy-and-streaming/task-5-grouping.png（scrollTop=0）:
+  可见「Dev-1 · 10:00」唯一身份栏 → 分组-01 首条独立 → 分组-02/03/04 三条无身份栏、左对齐成组
+  → 「Dev-1 · 10:14」重新出现（5 分 + 1ms 边界），即视觉上一组四条共用一条身份栏。
+截图2 task-5-grouping-parts.png（私聊）:
+  「Dev-1 · 10:30」唯一身份栏 + 思考条 + 工具卡 + 正文；第二条只有 思考条 + 工具卡 + 正文，
+  无重复头像/作者/时间，过程行与正文仍渲染。
+两张 PNG 均由本次绿色 e2e 运行现场生成（非手工拼接），并经图像复核确认。
+
+======================================================================
+8. 清理回执（cleanup receipts）
+======================================================================
+- $ rm -rf web/test-results web/playwright-report → 两目录均不存在（playwright-report 本未生成）。
+- playwright JSON 报告 .omo/evidence/phase5-t9-playwright.json 前后 shasum 均
+  ca4f79e9ceef5210962af118d266e9a7bca06aae、mtime 2026-09-25 23:32 未变：
+  所有运行都带 `--reporter=list`（覆盖 config 中的 json reporter），预存脏文件未被写入。
+- 预存脏文件保持原样未被覆盖/提交: .omo/boulder.json、.omo/ulw-execute/ledger.jsonl、
+  .omo/evidence/plan-review-execution-gates/**、.omo/evidence/server-gate-removal-tool-authority/**、
+  .opencode/opencode.json、.omo/drafts|notepads|plans|ulw-execute-*-registry.json。
+- 提交范围逐个核对: `git diff --cached --name-only` 恰为 5 个文件（见 §2），
+  commit cf08cf9 只含这 5 个文件；.omo/.opencode 未进 commit。
+- docker: aiagents-web:latest = aiagents-web:with-b2 = 5471616bff85（与提交后源码一致），
+  容器 aiagents-compose-web healthy；红跑镜像 ef075000741e 保留为 dangling 供复现。
+  build 日志: task-5-docker-build-red.txt（BUILD_EXIT=0）、task-5-docker-build-green.txt（BUILD_EXIT=0/UP_EXIT=0）。
+- 未新增依赖、无 `any`/`@ts-ignore` 类抑制、未运行 mutating lint、未跑与 dev server 竞争的本地 build。
+
+======================================================================
+9. 风险与后续依赖
+======================================================================
+R1 被测页面是 compose 的 next build 产物：后续 B3/B4/B5… 任何页面改动前必须重新
+   `docker compose build web && docker compose up -d web`，否则 e2e 跑在陈旧构建上（本 todo 已踩坑并留证）。
+R2 分组矩阵断言用「列表直接子元素数 = 1 + 消息数」定位每条消息；B3 插入 chat-date-separator 后
+   该等式需同步调整（分隔条也是直接子元素），否则 todo 6 会误红。
+R3 选择器依赖 `chat-message-list` 在页面中唯一（当前唯一），且消息节点是其直接子元素；
+   若后续把消息包进分组容器，需改为按容器定位。
+R4 谓词只看 senderType + senderId（按计划 Acceptance），不看 senderInstanceId：
+   同一 agent 的不同实例若共用 senderId 会被判为一组；B5/B9 若要区分需同步调整该谓词与本矩阵。
+R5 分组行保留 36px 左缩进以与上一条正文对齐，未做「首条/续条」的额外视觉收敛（B3/B4 负责层级降噪）。
+R6 红跑依赖本地保留的 dangling 镜像 ef075000741e；若被 `docker image prune` 清理，
+   复现红跑需回退三处产品改动后重新 build。
+
+=== independent verifier correction ===
+The phrase previously read as "system→agent consecutive → grouped" was a fixture-label shorthand. The grouped pair is agent→agent (b2_11→b2_12). The predicate requires both senderType values to be agent, and system/user rows render independently. No code defect; this note is the authoritative reading.

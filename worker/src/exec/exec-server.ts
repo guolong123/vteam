@@ -28,6 +28,7 @@ import {
   MessageDeltaTracker,
   sendAndAwait,
 } from '../driver/prompt-await';
+import { ServeEventStream } from '../driver/serve-event-stream';
 import { SERVE_FATAL_KEYWORDS } from '../runtime/serve-log';
 import { ResourceInjector } from '../resources/injector';
 import {
@@ -41,6 +42,7 @@ import {
   DriverRequestError,
   Logger,
   ServeMessage,
+  ServePart,
   V1Driver,
 } from '../driver/v1-driver';
 import {
@@ -1755,7 +1757,82 @@ export class ExecServer {
       ...fileParts,
       ...(notes.length > 0 ? [{ type: 'text', text: notes.join('\n') }] : []),
     ];
-    return sendAndAwait(
+    // delta 上送串行链（按任务隔离）：onPoll 每 pollMs 触发一次，sendDelta 含网络投递，
+    // 直接并发 fire 会让同一任务的快照乱序/并发抵达 server（eventId seq 也随之乱序）。
+    // 提取增量（extractNewParts）仍在 onPoll 内**同步**完成，保证去重时序与现状一致；
+    // 只有「上送」排进串行链。发送失败仅记日志，不阻断链与主流程。
+    let deltaChain: Promise<void> = Promise.resolve();
+    const enqueueDelta = (messages: ServeMessage[]): void => {
+      const fresh = tracker.extractNewParts(messages);
+      if (fresh.length === 0) {
+        return;
+      }
+      deltaChain = deltaChain
+        .then(() => this.sendDelta(ctx, fresh))
+        .catch((err: unknown) => {
+          this.logger.warn(`message.part.delta 上送失败（不影响主流程）: ${String(err)}`);
+        });
+    };
+    // SSE 实时路（serve GET /event 订阅）：part 事件零阈值、零轮询延迟直接上送，
+    // 并经 tracker.noteSent 记录进度基准——后续轮询快照对同一 part 的比较以此为基线，
+    // 旧快照（单调量更小）自动被压制，双路不会互相回覆盖。全局总线事件按 sessionID +
+    // assistant 消息集合过滤后才入链（其它会话/角色的事件直接丢弃）。
+    const enqueueParts = (freshParts: ServePart[]): void => {
+      if (freshParts.length === 0) {
+        return;
+      }
+      for (const p of freshParts) {
+        tracker.noteSent(p);
+      }
+      deltaChain = deltaChain
+        .then(() => this.sendDelta(ctx, freshParts))
+        .catch((err: unknown) => {
+          this.logger.warn(`message.part.delta（SSE）上送失败（不影响主流程）: ${String(err)}`);
+        });
+    };
+    // SSE 路开关：默认开（VTEAM_SSE_FORWARD=0/false 关，退回纯轮询兜底路）。
+    const sseEnabled = !/^(0|false|no)$/i.test(process.env.VTEAM_SSE_FORWARD ?? '');
+    const assistantMsgIds = new Set<string>();
+    let sseStream: ServeEventStream | null = null;
+    if (sseEnabled && this.driver.baseUrl) {
+      sseStream = new ServeEventStream({
+        baseUrl: this.driver.baseUrl,
+        serverPassword: this.driver.authPassword,
+        logger: this.logger,
+        onMessageInfo: (info) => {
+          if (info.role === 'assistant' && typeof info.id === 'string' && info.id) {
+            assistantMsgIds.add(info.id);
+          }
+        },
+        onPart: (part) => {
+          // 全局总线过滤：① sessionID 匹配本任务会话（缺失时放行由消息集合兜底）；
+          // ② messageID 属于 assistant 消息（集合非空时强校验；user 回复的 part 不带
+          // role，只有 message.updated 的 info.role 能区分）。
+          if (part.sessionID && part.sessionID !== sessionID) {
+            return;
+          }
+          if (
+            assistantMsgIds.size > 0 &&
+            (!part.messageID || !assistantMsgIds.has(part.messageID))
+          ) {
+            return;
+          }
+          enqueueParts([part as unknown as ServePart]);
+        },
+        onOpen: () => {
+          // 连接成活（首帧 server.connected）：清空去重基准，下一轮 poll 以全量当前
+          // 快照对账一次——SSE 连接建立前 poll 可能已发过更旧的内容，对账保证不丢
+          // （server 按 part.id 合并，重复快照无害）。
+          tracker.reset();
+          this.logger.info(`[sse-forward] serve /event 已订阅（session=${sessionID}），下一轮 poll 对账`);
+        },
+        onClose: (reason) => {
+          this.logger.warn(`[sse-forward] serve /event 断开（${reason}），轮询兜底路接管，将自动重连`);
+        },
+      });
+      sseStream.start();
+    }
+    const result = await sendAndAwait(
       this.driver,
       sessionID,
       {
@@ -1782,27 +1859,28 @@ export class ExecServer {
           (/level=ERROR\b|error\.(error|name|message|code)=/.test(text) &&
           SERVE_FATAL_KEYWORDS.test(text)),
         onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
-          void this.sendDelta(ctx, tracker, messages);
+          enqueueDelta(messages);
           // question/权限确认旁路检测：serve 侧 pending 时上送事件（不 abort，等用户）
           void detector.detect(ctx, sessionID);
         },
       },
     );
+    // 终态事件（session.updated idle / task.completed）由调用方在 runSendAndAwait 返回后
+    // 上送——先排空 delta 链，保证所有流式快照严格早于终态事件抵达 server。
+    await deltaChain;
+    sseStream?.close();
+    return result;
   }
 
-  /** onPoll 钩子：增量上送 message.part.delta（按消息 id 去重，只送新增 parts）。 */
+  /** onPoll 钩子的上送段：把已提取的增量 parts 作为 message.part.delta 事件发出
+   *  （payload 形状不变：{ ...ctx, parts, status:'streaming' }）。 */
   private async sendDelta(
     ctx: Record<string, string | undefined>,
-    tracker: MessageDeltaTracker,
-    messages: ServeMessage[],
+    parts: ServePart[],
   ): Promise<void> {
-    const fresh = tracker.extractNewParts(messages);
-    if (fresh.length === 0) {
-      return;
-    }
     await this.sender.send(WORKER_EVENT_TYPES.MESSAGE_PART_DELTA, {
       ...ctx,
-      parts: fresh,
+      parts,
       status: 'streaming',
     });
   }

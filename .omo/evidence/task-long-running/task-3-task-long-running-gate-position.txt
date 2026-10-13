@@ -1,0 +1,2 @@
+      ✕ 执行点 (b)：flag 翻转当刻已有 quietStreak=2 的遗留行 → 自毁且不叫醒、不推进计数、无停滞回调 (1 ms)
+Tests:       1 failed, 40 passed, 41 total

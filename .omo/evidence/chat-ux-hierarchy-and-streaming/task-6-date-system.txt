@@ -1,0 +1,226 @@
+# task-6-date-system — B3 跨天日期分隔与 B4 system 行视觉降噪（绿证据）
+# chat-ux-hierarchy-and-streaming 复选框 6
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:167-173（References / Acceptance / QA happy / QA failure）
+#      + :78-91 消息结构断言门（新增 chat-date-separator）+ Scope IN 第 4、5 条 + Success criteria 第 5 条
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 红证据: 同目录 task-6-date-system-failure.txt
+
+======================================================================
+0. 结论
+======================================================================
+B3 只在本地日键变化处插入 chat-date-separator（不重排、不改数据源），
+B4 给 system 行独立低对比度居中容器/间距/字号，与 14px 正文形成非颜色区隔，
+并保留 chat-bubble[data-type=system] 兼容选择器与全部既有 testid。
+  - tsc exit 0；check-only eslint exit 0（0 error / 4 处既有 no-img-element warning）；
+  - lib-unit（含新 date-separator 7 例 + 既有 message-grouping 7 例 + chat-density 14 例）28 passed；
+  - 聚焦 B2+B3：10 passed；
+  - 计划 QA happy 原命令 `pages.spec.ts session-unification.spec.ts`：50 passed（29 pages + 20 session + 1 setup）。
+  - 红跑（同 §4.1）三处不同断言全部转绿。
+
+======================================================================
+1. 文档决策（docs decision）
+======================================================================
+DIST_DOCS_ABSENT = TRUE
+  $ ls web/node_modules/next/dist/docs → No such file or directory（仓库根同样不存在）
+  安装版本 next = 15.5.22（web/node_modules/next/package.json）。
+改产品代码前抓取并通读用户批准的 v15.5.22 tag 文档（commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775）：
+  (1) docs/01-app/01-getting-started/05-server-and-client-components.mdx  → 客户端渲染
+  (2) docs/01-app/01-getting-started/11-css.mdx                          → CSS
+  (3) docs/01-app/02-guides/testing/playwright.mdx                       → Playwright
+决策：
+  - 分隔判定是渲染期派生值（纯函数 dateSeparatorFlags，不新增 state/effect、不新增 hook 依赖）；
+    session/page.tsx 已是 Client Component，渲染期计算与既有 B2 grouped 同一模式。
+  - CSS 文档确认项目可用的着色方式（Tailwind / CSS Modules / Global / 外链）与既有
+    内联样式方案不冲突；本次沿用 tokens.ts 的 CSS 变量 token，不新增第二套样式源。
+  - Playwright 文档确认「测试打到已运行的服务、baseURL 写在 config、不自动起 webServer」，
+    与 playwright.config.ts:6-8,25-34 现状一致 → 不改 playwright.config.ts。
+文档与现有代码无冲突，无需停止。
+
+======================================================================
+2. 改动文件（仅本 todo，见 §8 提交）
+======================================================================
+  web/lib/date-separator.ts             +43  新增：localDateKey / dateSeparatorFlags / formatDateSeparatorLabel
+  web/lib/date-separator.spec.ts        +110 新增：lib-unit 7 例（本地日键、缺失非法、单日/跨天/多跨天）
+  web/app/(main)/teams/[id]/session/page.tsx  +54/-?  import 纯函数；messages 后算 flags；
+                                             map 内 withSeparator() 包裹 4 个 return（external/agent/system/user）
+  web/src/components/ui/chat-bubble.tsx  +25/-14 system 分支改为独立容器（不再 spread bubbleBase）
+  web/e2e/session-unification.spec.ts   +338/-? B2 子元素数与行下标计入分隔；
+                                             新增「B3 跨天日期分隔与 B4 system 行降噪」describe 6 例
+未触碰: hooks/use-realtime.ts、hooks/use-sse.ts、worker/server、playwright.config.ts、
+        pages.spec.ts、移动端 CSS、plan/boulder/registry、B2 谓词 message-grouping.ts、
+        B1 身份 message-identity.tsx / msg-parts.tsx、B12 的 time 分支。
+
+======================================================================
+3. 实现要点（可测边界）
+======================================================================
+web/lib/date-separator.ts（纯函数，不依赖组件与运行环境）
+  localDateKey(value)        非字符串/空串/不可解析 → null（不抛异常）；否则
+                             `${getFullYear}-${pad(getMonth+1)}-${pad(getDate)}`（浏览器本地时区）
+  dateSeparatorFlags(list)   返回长度 === list.length 的 boolean[]；
+                             仅当「当前条日键」与「上一个已知日键」都非 null 且不同时为 true；
+                             时间缺失/非法的条恒为 false，且不清空已累积日键
+                             → 单日列表零分隔、首条缺失不在顶部插分隔、跨缺失行的跨天仍分隔
+  formatDateSeparatorLabel   "2026-09-21" → "2026/09/21"
+page.tsx
+  const dateSeparatorFlagsByIndex = dateSeparatorFlags(messages);   // 在 messages 定义之后
+  withSeparator(node)：separatorKey === null 时原样返回 node（key 仍是 msg.id，行为与 B2 完全一致）；
+    否则返回 <React.Fragment key={msg.id}> + 分隔 div + node —— 只做插入，不排序、不过滤。
+  分隔条：position sticky / top 0 / zIndex 1 / backgroundColor neutral[50]（与中央聊天区同色，
+    滚动吸顶时不透字）、hairline flex:1 + 11px 中性文字、margin 4px 8px、data-date-key。
+chat-bubble.tsx system 分支
+  根：display flex + justifyContent center + margin 4px 8px（正文行 margin 0，只吃列表 16px gap）
+  内：独立样式（不再 spread bubbleBase）：padding 4px 12px、border 1px dashed neutral[200]、
+      borderRadius pill、backgroundColor neutral[100]、color neutral[500]、
+      fontSize messageFontSize.meta(11)、lineHeight 1.5、textAlign center
+  保留 data-testid="chat-bubble" data-type="system"；全文渲染，无 clamp / 无 toggle / 不隐藏。
+
+======================================================================
+4. 红 / 绿命令与退出码
+======================================================================
+4.1 RED（实现前，镜像 5471616bff85；详见 task-6-date-system-failure.txt）
+  $ cd web && npx playwright test lib/date-separator.spec.ts --project=lib-unit --reporter=list → exit 1
+  $ cd web && npx tsc --noEmit → exit 2（TS2307）
+  $ cd web && npx playwright test session-unification.spec.ts --project=session-unification --reporter=list
+      → exit 1（6 failed / 15 passed：B2 子元素数 Expected 23 / Received 22、
+                B3 四处 toHaveCount 拿到 0、B4 Expected 11px / Received 12px）
+
+4.2 GREEN（最终工作树 = 本 todo 提交内容；镜像 427c5c6630b1）
+  $ cd web && npx tsc --noEmit
+      → exit 0                                             日志 /tmp/b6-tsc.log
+  $ cd web && npx eslint lib/date-separator.ts lib/date-separator.spec.ts \
+        e2e/session-unification.spec.ts src/components/ui/chat-bubble.tsx \
+        'app/(main)/teams/[id]/session/page.tsx'
+      → exit 0（0 error；4 warning 全为 chat-bubble.tsx:383/416/539/573 既有 no-img-element，
+                与本 todo 改动行无关；未运行 npm run lint / --fix）日志 /tmp/b6-eslint.log
+  $ cd web && npx playwright test lib/date-separator.spec.ts --project=lib-unit --reporter=list
+      → exit 0（7 passed）                                 日志 /tmp/b6-lib-green.log
+  $ cd web && npx playwright test session-unification.spec.ts --project=session-unification \
+        -g "B2|B3" --reporter=list
+      → exit 0（10 passed = setup 1 + B2 3 + B3 6）
+        （首次该命令 exit 1，为新测试自身下标笔误 outline[4]→[3]，修正后转绿；
+          修正说明与产品无关性见红证据 §4）              日志 /tmp/b6-green-focused2.log
+  $ cd web && npx playwright test pages.spec.ts session-unification.spec.ts --reporter=list
+      → exit 0（50 passed / 53.8s）——计划 QA happy 原命令   日志 /tmp/b6-green-full.log
+  $ cd web && npx playwright test --project=lib-unit --project=chat-density --reporter=list
+      → exit 0（28 passed，含 A4 字号源契约、B1 身份、B2 谓词既有门）日志 /tmp/b6-lib-all-green.log
+  重建（被测页面是 compose standalone 构建，源改动必须重建才进 E2E）：
+  $ docker compose build web → BUILD_EXIT=0；docker compose up -d web → UP_EXIT=0；
+    aiagents-compose-web healthy，镜像 sha256:427c5c6630b1…；
+    curl localhost:3001/ 与 localhost:13001/ 响应体 sha 一致（3001 桥接到 13001）。
+    日志 .omo/evidence/chat-ux-hierarchy-and-streaming/task-6-docker-build.txt
+
+======================================================================
+5. 日期分隔矩阵（绿期实测，均为 chat-message-list 直接子元素下标）
+======================================================================
+  夹具                        行数  子元素=1头+行+分隔   期望分隔(下标)   实测
+  ─ 单日 3 条（10:00/10:01/21:00 同日）   3        4 =1+3+0        []            0 ✓
+  ─ 跨天 4 条（20日10:00、20日23:58、     4        6 =1+4+1        [3]           1 ✓
+    21日00:01、21日00:02）                            分隔键 2026-09-21，文案 2026/09/21
+  ─ 多跨天 5 条（20、21、22、22、23 日）   5        9 =1+5+3        [2,4,7]       3 ✓
+                                                    分隔键 2026-09-21/22/23
+  ─ 缺失+非法+跨天 5 条                    5        7 =1+5+1        [5]           1 ✓
+    (缺 createdAt / "not-a-date" / "" / 20日23:00 / 21日00:30)
+                                                    前三条之间 0 分隔，全部正文可见、无崩溃
+  ─ 首条缺失+跨缺失 3 条                   3        5 =1+3+1        [3]           1 ✓
+    (缺 createdAt / 20日23:30 / 21日00:30)            顶部 0 分隔
+  ─ B2 分组矩阵 21 条（b2_01…b2_21）      21      23 =1+21+1       [20]          1 ✓
+    唯一跨天 b2_19(20日23:58) → b2_20(21日00:01)；分隔紧邻其前，
+    其后仍断言 b2_20 含「分组-20 跨日仅3分钟」、b2_21 无身份。
+顺序保证：每个夹具都用 childOutline（逐直接子元素 testid=可见文本）断言
+  positions 数组（消息下标严格递增）与期望下标完全相等 → 只插入、不重排。
+单日/私聊零分隔：B3-1、B2-3（私聊 2 条同日 → 子元素仍 3）、Todo12/14 全部单日夹具
+  均断言或体现为「子元素数不变」。
+
+======================================================================
+6. system 行 vs 正文（B4 实测计算样式，来自 [B4] 日志）
+======================================================================
+  维度              system 容器（内层）                正文容器（chat-bubble-content 宿主）
+  ────────────────  ───────────────────────────────  ──────────────────────────────────
+  font-size         11px（messageFontSize.meta）      14px（messageFontSize.body）
+  text-align        center（根 justifyContent=center） flex-start / 用户行 flex-end
+  border            1px dashed（neutral-200）          1px solid（neutral-200）
+  padding           4px 12px                          12px 16px
+  外边距节奏         根 margin 4px 8px                  根 margin 0（只吃列表 gap 16px）
+  背景              rgb(241,245,249)（neutral-100）    rgb(255,255,255)（surface）
+  文字色            rgb(100,116,139)（neutral-500）    rgb(30,41,59)（neutral-800）
+  WCAG 对比度        4.34                               14.63（断言 system < body，且 ≥3）
+  结构              无头像、无 message-identity、无 chat-bubble-content、无 toggle
+  兼容选择器         [data-testid="chat-bubble"][data-type="system"] 定位 1 个 ✓
+  可见性            system 全文可见（toBeVisible + toContainText），未折叠、未隐藏 ✓
+非颜色区隔（计划 Acceptance 要求）：字号 11≠14、虚线≠实线、居中≠左对齐、
+  内边距 4/12≠12/16、外边距 4/8≠0、有无头像 —— 不依赖颜色即可区分。
+
+======================================================================
+7. testid / 页面守卫与 C2、B2 非回归
+======================================================================
+$ grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx \
+    web/src/components/ui/agent-avatar.tsx web/src/components/ui/message-identity.tsx | sort -u
+  task-6-chat-testids-before.txt(=task-5 after, 25 条) vs task-6-chat-testids-after.txt(25 条) → diff 为空
+  与计划基线 chat-testids-before.txt 比：仅新增 chat-bubble-time(A4)、message-identity(B1)，零删除。
+$ page.tsx testid 17 → 18，唯一新增 data-testid="chat-date-separator"（本 todo 文档化的新 testid）
+  diff task-6-page-testids-before.txt → task-6-page-testids-after.txt = "0a1 > chat-date-separator"
+必查清单全部存在：agent-avatar / chat-bubble / chat-bubble-content / chat-bubble-toggle /
+  chat-bubble-author / chat-bubble-time / msg-thinking / msg-tool / msg-error / msg-aborted /
+  msg-streaming / message-identity / chat-date-separator（msg-error、msg-aborted 仍在 src 原位）。
+B2 非回归：B2 三例全绿；身份三件套计数、user/system 独立气泡、分组态过程 testid 断言未删未弱化，
+  仅行定位改为 b2NodeIndex(i) 且子元素总数显式含 1 条分隔。
+C2 非回归：Todo14 七例（当前私聊 delta 滚底 / 非当前不滚 / 空缓存补拉 / 挂起期 delta /
+  30s 轮询 / 终态优先 / 群 Tab 门控）与 Todo12 四例全部原样通过；
+  C2 夹具全部单日 → 0 分隔，scrollTop 门控断言不受影响。
+A4/B1 门：--project=chat-density 14 例全绿（字号源契约、三级字号、共享身份栏）。
+
+======================================================================
+8. 真实浏览器观察
+======================================================================
+被测浏览器：Playwright channel=chrome（系统 Chrome），baseURL localhost:3001 → compose 13001。
+截图1 .omo/evidence/chat-ux-hierarchy-and-streaming/task-6-cross-day.png（B3-2 现场生成）：
+  「Dev-1 · 10:00 跨天-01」→「Dev-1 · 23:58 跨天-02」→ 居中分隔条 2026/09/21（左右细线）→
+  「Dev-1 · 00:01 跨天-03」→「Dev-1 · 00:02 跨天-04」，顺序与夹具一致。
+截图2 task-6-system-body.png（B3-6 现场生成）：
+  左对齐带头像/身份/14px 正文卡 ↔ 居中 11px 浅灰虚线胶囊 system 行 ↔ 右对齐青色用户气泡，
+  三者容器形态与间距明显不同；system 行文本完整可读、未收起。
+截图3/4 task-6-live-group.png / task-6-live-private.png + task-6-live-observation.txt：
+  适配说明 —— 桌面浏览器桥接工具本会话不可用（browser.disconnected：no desktop browser
+  is connected），故“真实页面”观察改由同一系统 Chrome 直连活栈完成（无 route mock）：
+  页面 team-session-root / chat-message-list 正常出现，pageerror 与 console.error 均为 0，
+  但活库的群频道与私聊频道当前都是空列表（listChildCount=1，仅分组标题，0 条消息），
+  因此活页上没有可观察的跨天/system 实数据。跨天与 system 的真实浏览器观察以
+  夹具驱动的系统 Chrome 渲染为准（截图1、截图2 + §6 计算样式），此为适配后的观察通道，
+  不声称活页存在跨天/system 实例。
+
+======================================================================
+9. 清理回执（cleanup receipts）
+======================================================================
+- $ rm -rf web/test-results web/playwright-report → 删除后两目录均不存在（红跑 trace 已清）。
+- 临时脚本 $TMPDIR/opencode/b6-live-observe.cjs 已删除（不入库、不留在仓库）。
+- playwright JSON 报告 .omo/evidence/phase5-t9-playwright.json 前后 shasum 均
+  ca4f79e9ceef5210962af118d266e9a7bca06aae（所有运行都带 --reporter=list 覆盖 json reporter）。
+- 预存脏文件保持原样未被覆盖/提交：.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、
+  .omo/evidence/phase5-t9-playwright.json、.omo/evidence/plan-review-execution-gates/**、
+  .omo/evidence/server-gate-removal-tool-authority/**、.opencode/opencode.json、
+  .omo/drafts|notepads|plans|ulw-execute-*-registry.json、.omo/evidence/chat-ux-hierarchy-and-streaming/**（证据留本地不提交）。
+- 提交范围逐个核对：git diff --cached --name-only 恰为 5 个文件（见 §2），
+  .omo/.opencode/web/AGENTS.md 未进 commit。
+- docker: aiagents-web:latest = 427c5c6630b1（本 todo 重建，与提交源码一致），
+  红跑镜像 5471616bff85 保留为 aiagents-web:with-b2 供复现；
+  aiagents-compose-web healthy；build/up 日志 task-6-docker-build.txt（BUILD_EXIT=0 / UP_EXIT=0）。
+- 未新增依赖、无 any / @ts-ignore / ts-expect-error 抑制、未运行 mutating lint、
+  未跑与共享 dev server 竞争的本地 next build（只做 docker compose build web）。
+
+======================================================================
+10. 风险与后续依赖
+======================================================================
+R1 被测页面是 compose standalone：后续任何页面改动前仍须
+   `docker compose build web && docker compose up -d web`，否则 E2E 跑在陈旧构建上。
+R2 分隔条采用 sticky + 不透明 neutral[50] 底：吸顶时不透字，但若后续给列表换背景色，
+   需同步改分隔条 backgroundColor，否则吸顶层会露底色。
+R3 断言用「列表直接子元素」定位；若后续把消息包进分组容器，
+   B2 的 b2NodeIndex 与 B3 的 childOutline 需一起改。
+R4 日期键用浏览器本地时区：跨时区查看同一批消息时分隔位置随本地日变化（与消息时间显示口径一致）；
+   夹具用 new Date(2026,8,day,h,m).toISOString() 本地构造，断言不依赖运行时区。
+R5 分隔只看 createdAt 日期，不参与 B2 的 5 分钟分组判定，也不改分组谓词；
+   B5/B9/B12/B6/B11 未实施，本 todo 未越界。
+R6 活库当前无跨天/system 实数据（§8）：真实数据下的观感需在有数据后由 F3/F4 复核。
+
+=== independent verifier corrections ===
+Count labels in earlier sections were imprecise: the combined 28 tests are lib-unit 20 (api 2 + lib chat-density 4 + date-separator 7 + message-grouping 7) plus chat-density 8; the 50-test full run is 1 setup + 29 pages + 20 session. Date-separator file is 38 lines and spec is 109 lines. Totals and verdicts are unchanged.

@@ -1,0 +1,3 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	task_id	kind	status	created_at
+aq_0000000001	t_0000000001	secret_input	rejected	2026-09-27 03:12:20.136

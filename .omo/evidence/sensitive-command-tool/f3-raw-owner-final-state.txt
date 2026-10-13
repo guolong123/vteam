@@ -1,0 +1,52 @@
+=== OWNER-SESSION PRE-CLEANUP STATE DUMP 2026-09-27T04:28:51Z ===
+--- tasks ---
+id	title	status	created_at
+t_0000000001	F3 exemption window	pending	2026-09-27 03:11:38.288
+--- agent_questions (full) ---
+*************************** 1. row ***************************
+        id: aq_0000000001
+request_id: que_platform_0000000001
+   task_id: t_0000000001
+    status: rejected
+created_at: 2026-09-27 03:12:20.136
+updated_at: 2026-09-27 03:21:20.261
+   content: {"reason": "F3 exemption distinguishing run 2", "source": "secret_input", "template": "echo {{TOKEN}}", "variables": [{"name": "TOKEN", "secret": true}]}
+   answers: {"filled": [], "actorId": "", "provided": false, "actorType": "user"}
+--- my messages m_203/m_204 (full content) ---
+*************************** 1. row ***************************
+         id: m_0000000203
+ channel_id: c_0000000017
+    task_id: NULL
+sender_type: user
+  sender_id: u_admin
+ created_at: 2026-09-27 03:12:15.326
+    content: {"text": "?? vteam MCP ?? secret_command?arguments ????{\"taskId\":\"t_0000000001\",\"selfInstanceId\":\"tmm_0000000002\",\"command\":\"echo {{TOKEN}}\",\"variables\":[{\"name\":\"TOKEN\",\"secret\":true}],\"reason\":\"F3 exemption distinguishing run 2\"}?secret ????? true????????????????", "parts": []}
+*************************** 2. row ***************************
+         id: m_0000000204
+ channel_id: c_0000000017
+    task_id: NULL
+sender_type: agent
+  sender_id: a_project_manager
+ created_at: 2026-09-27 03:12:20.092
+    content: {"text": "status=input_timeout???????????", "parts": [{"id": "prt_0e0d967af001yIboAef4FZUPHv", "type": "step-start", "messageID": "msg_0e0d95aab001FUAV8iISdDH9EN", "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"}, {"id": "prt_0e0d967b7001FirxxccSpfFGZL", "tool": "vteam_secret_command", "type": "tool", "state": {"time": {"end": 1790479280328, "start": 1790478739634}, "input": {"reason": "F3 exemption distinguishing run 2", "taskId": "t_0000000001", "command": "echo {{TOKEN}}", "variables": [{"name": "TOKEN"}], "selfInstanceId": "tmm_0000000002"}, "title": "", "output": "{\"command\":\"echo {{TOKEN}}\",\"variables\":[{\"name\":\"TOKEN\",\"label\":\"TOKEN\",\"secret\":true,\"required\":true,\"provided\":false}],\"status\":\"input_timeout\",\"exitCode\":null,\"signal\":null,\"timedOut\":false,\"durationMs\":0,\"stdout\":\"\",\"stderr\":\"\",\"stdoutTruncated\":false,\"stderrTruncated\":false}", "status": "completed", "metadata": {"truncated": false}}, "callID": "call_function_dohyt55saixo_1", "messageID": "msg_0e0d95aab001FUAV8iISdDH9EN", "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"}, {"id": "prt_0e0e1a8db001g0cJ28GJoITjo8", "cost": 0, "type": "step-finish", "reason": "tool-calls", "tokens": {"cache": {"read": 50152, "write": 0}, "input": 144, "total": 50400, "output": 104, "reasoning": 0}, "messageID": "msg_0e0d95aab001FUAV8iISdDH9EN", "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"}, {"id": "prt_0e0e1b56a0014V38uCZVSrI1Ea", "type": "step-start", "messageID": "msg_0e0e1a907001VpHhLTItZ7xcSa", "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"}, {"id": "prt_0e0e1b578001yOn5Qu5dA2GbZc", "text": "status=input_timeout???????????", "time": {"end": 1790479283617, "start": 1790479283576}, "type": "text", "messageID": "msg_0e0e1a907001VpHhLTItZ7xcSa", "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"}, {"id": "prt_0e0e1b5af001CcbxxCK4nE1I5h", "cost": 0, "type": "step-finish", "reason": "stop", "tokens": {"cache": {"read": 50398, "write": 0}, "input": 91, "total": 50500, "output": 11, "reasoning": 0}, "messageID": "msg_0e0e1a907001VpHhLTItZ7xcSa", "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"}]}
+--- counts ---
+c17	aq	pending	tasks
+56	1	0	1
+=== OWNER FINAL CLEANUP 2026-09-27T05:10:38Z ===
+--- [action] pre-delete state (full dump: f3-raw-owner-final-state.txt) ---
+t_0000000001	F3 exemption window	pending
+1
+56
+--- [action] DELETE /api/v1/tasks/t_0000000001 ---
+HTTP=200 body={"deleted":true,"id":"t_0000000001"}
+--- [post] counts ---
+tasks=0
+agent_questions=0
+aq_pending=0
+c17_messages=56
+c17_max=m_0000000204
+channels_c17_exists=1
+--- [action] 2026-09-27T05:27:47Z removed temp credential/scratch files ---
+[removed] /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/f3-token.txt (leftover u_admin JWT, 222B, no harness reference)
+[removed] /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/f3-admin-token.tmp, del-task.json, q1.sql, q2.sql, m204.json (owner scratch)
+[left]    /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/pw-bridge/bridge.js :3001 — created Sep 24 (pre-F3), shared forwarder used by final-f3-manual.txt topology; not created by F3 lanes, left running to avoid breaking concurrent lanes

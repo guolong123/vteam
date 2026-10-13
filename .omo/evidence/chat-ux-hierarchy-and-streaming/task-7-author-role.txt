@@ -1,0 +1,293 @@
+# task-7-author-role — B5 author 与角色并列 / B9 禁止裸 id 兜底（绿证据）
+# chat-ux-hierarchy-and-streaming 复选框 7
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:175-181（References / Acceptance / QA happy / QA failure）
+#      + :78-91 消息结构断言门 + Scope IN 第 6 条 + Success criteria 第 6 条
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 红证据: 同目录 task-7-author-role-failure.txt
+# Commit: 见本文件 §12（提交后回填）
+
+======================================================================
+0. 结论
+======================================================================
+B5：身份栏在 author 解析成功时同时展示 author 与角色标签，二者同值去重只出现一次；
+B9：author 解析失败（或候选本身就是裸 a_/tmm_/ta_ id）时只展示安全的角色标签，
+    裸 sender/成员/实例 id 不进入任何可见文本；external 渠道徽标与 ★@你 提及徽标保留。
+边界：session 页面（容器）负责解析 author 与 role，MessageIdentity / ChatBubble（展示）
+    只接收已解析的 display 数据，不访问业务映射。
+  - tsc exit 0；check-only eslint exit 0（0 error / 4 处既有 no-img-element warning）；
+  - lib-unit 新增 6 例 exit 0；lib-unit + chat-density 共 34 passed（B1/A4/B2 既有门全绿）；
+  - 聚焦 B5：5 passed（setup 1 + 4 例）；
+  - 计划 QA happy 原命令 `pages.spec.ts session-unification.spec.ts`：54 passed（29 pages + 24 session + 1 setup）；
+  - 红跑（同 §4.1）三处不同断言全部转绿，且红跑用的是最终测试文本。
+
+======================================================================
+1. 文档决策（docs decision）
+======================================================================
+DIST_DOCS_ABSENT = TRUE
+  $ ls web/node_modules/next/dist/docs → No such file or directory（仓库根同样不存在）
+  安装版本 next = 15.5.22（web/node_modules/next/package.json，node 读取）。
+改产品代码前抓取并通读用户批准的 v15.5.22 tag 文档（commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775）：
+  (1) docs/01-app/01-getting-started/05-server-and-client-components.mdx  → 客户端组件与 props 边界
+  (2) docs/01-app/01-getting-started 目录清单（GitHub API 同 tag 枚举）→ 确认「rendering」
+      对应篇目为 05（服务端/客户端组件渲染）与 07-fetching-data，无独立 rendering 篇
+  (3) docs/01-app/02-guides/testing/playwright.mdx                      → Playwright
+决策：
+  - author/role 的解析是渲染期派生值（不新增 state/effect、不新增 hook 依赖），
+    与 B2 grouped、B3 dateSeparatorFlags 同一模式；session/page.tsx 已是 Client Component。
+  - 文档确认「props 传给 Client Component 必须可序列化、'use client' 是模块边界」→
+    把「已解析的 author 字符串 + RoleKey」作为 props 下传展示组件符合官方模型，
+    展示组件不需要也不应该反向读取业务映射。
+  - Playwright 文档确认「测试打到已运行的服务、baseURL 写在 config、不自动起 webServer」，
+    与 playwright.config.ts:6-8,25-34 现状一致 → 不改 playwright.config.ts。
+文档与现有代码无冲突，无需停止。
+
+======================================================================
+2. 改动文件（仅本 todo，见 §12 提交）
+======================================================================
+  web/lib/display-author.ts                    +37  新增（B9 容器侧）：RAW_SENDER_ID_PATTERN /
+                                                isRawSenderId / resolveDisplayAuthor
+  web/lib/display-author.spec.ts               +48  新增 lib-unit 3 例（裸 id 判定 / 解析顺序 / 全部落空）
+  web/lib/author-role-display.ts               +38  新增（B5 展示侧）：authorRoleDisplay
+  web/lib/author-role-display.spec.ts          +30  新增 lib-unit 3 例（并列 / 去重 / 回落）
+  web/src/components/ui/message-identity.tsx   +19/-2  身份栏改为 primary + 并列角色标签
+  web/src/components/ui/chat-bubble.tsx         +17/-2  兼容身份头同一展示规则
+  web/src/components/chat/msg-parts.tsx         +3/-1   MsgPartsProps.author 改为可选（已解析可为空）
+  web/app/(main)/teams/[id]/session/page.tsx   +10/-5  author 解析链改走 resolveDisplayAuthor
+  web/e2e/session-unification.spec.ts          +211   HarnessOptions.teamOverride（新增可选夹具钩子）
+                                                + 新 describe「B5 author 与角色并列，B9 禁止裸 id 兜底」4 例
+未触碰: hooks/use-realtime.ts、hooks/use-sse.ts、worker/server、playwright.config.ts、
+        pages.spec.ts、移动端 CSS、plan/boulder/registry、web/AGENTS.md、
+        msg-parts 的分组/流式/过程渲染路径、chat-bubble 的折叠与 system 分支、
+        B1 的 message-identity testid 结构、B12/B6/B7/B8/B11 相关代码。
+
+======================================================================
+3. 实现要点（页面 / 组件边界）
+======================================================================
+容器侧 web/lib/display-author.ts（只被 session 页面 import）
+  RAW_SENDER_ID_PATTERN = /^(?:a|tmm|ta)_[0-9a-z]+$/   （整串锚定，不做子串误伤）
+  isRawSenderId(value)      typeof string 且命中该正则
+  resolveDisplayAuthor([...]) 按序取第一个「非空且非裸 id」的候选并 trim；
+                              全部落空 → undefined（不返回空串、不返回任何 id）
+page.tsx（1369-1381）
+  旧: instanceNameById.get(si) ?? agent?.name ?? memberHit?.name ?? msg.senderId ?? ""
+      → 解析不到时把裸 senderId 直接当作者名（B9 的病灶）
+  新: const senderInstanceId = msg.senderInstanceId
+      const author = resolveDisplayAuthor([
+        senderInstanceId ? instanceNameById.get(senderInstanceId) : undefined,
+        agent?.name,
+        memberHit?.name,
+      ]);
+  role 解析不变：agent?.role ?? memberHit?.role ?? toRole(senderId) ?? "developer"（恒为 RoleKey）
+展示侧 web/lib/author-role-display.ts（只被两个展示组件 import，不含 id 知识）
+  authorRoleDisplay(author, roleLabel) →
+    primary = author?.trim()；label = roleLabel.trim()
+    primary 空         → { primary: label,  roleLabel: null }   // 只显示角色标签
+    primary === label  → { primary,         roleLabel: null }   // 同值去重，只一次
+    否则               → { primary,         roleLabel: label }  // author 与角色并列
+message-identity.tsx / chat-bubble.tsx
+  <span data-testid="chat-bubble-author">
+    <span>{display.primary}</span>
+    {display.roleLabel !== null && <span data-testid="message-identity-role">· {roleLabel}</span>}
+    {senderType === "external" && <span data-testid="external-channel-badge">外部渠道</span>}
+  </span>
+  角色标签样式：fontSize messageFontSize.identity(12) / fontWeight 500 / color neutral[600]
+  → 与 12px·600 的 author、11px·400 的 time 形成 600/500/400 层级，A4 三级字号断言不受影响。
+msg-parts.tsx：author 由必填改可选（page 现在可能传 undefined）；
+  MessageIdentity / ChatBubble(showIdentity={false}) 的入参不变，B1「单条消息只出一次身份」不变。
+
+======================================================================
+4. 红 / 绿命令与退出码
+======================================================================
+环境前置（本机 shell 无 node/docker，需显式加载）：
+  $ source ~/.nvm/nvm.sh && nvm use default        # node v24.14.0 / npm 11.9.0
+  $ export PATH=$PATH:/usr/local/bin               # docker
+
+4.1 RED（实现前；被测镜像 aiagents-web:latest = d2acf2223e07；
+    构造 = 只 stash 4 个产品文件、保留全部测试与 lib 文件，详见红证据 §1-§2）
+  $ cd web && npx playwright test lib/display-author.spec.ts lib/author-role-display.spec.ts \
+        --project=lib-unit --reporter=list → exit 1（No tests found，Cannot find module ×2）
+  $ cd web && npx tsc --noEmit → exit 2（TS2307 ×2）
+  $ cd web && npx playwright test session-unification.spec.ts --project=session-unification \
+        -g "B5" --reporter=list → exit 1（3 failed / 2 passed）
+      1) 1. 已解析 author 与角色标签并列展示… Expected substring "开发者" / Received "Dev-1"
+      2) 2. 未映射 sender 只显示角色标签…      Expected "计划员" / Received "a_plan"
+      3) 3. external 渠道徽标与 @你…           Expected "开发者" / Received "a_ghost_ext"
+      ✓ 4. user/system 与 B2 分组不受影响（保持通过）
+  日志: task-7-lib-red.log / task-7-tsc-red.log / task-7-e2e-red.log
+
+4.2 GREEN（最终工作树 = 本 todo 提交内容；镜像 86bb6580d971）
+  $ cd web && npx tsc --noEmit → exit 0                       日志 task-7-tsc-green.log
+  $ cd web && npx eslint lib/display-author.ts lib/display-author.spec.ts \
+        lib/author-role-display.ts lib/author-role-display.spec.ts \
+        src/components/ui/message-identity.tsx src/components/ui/chat-bubble.tsx \
+        src/components/chat/msg-parts.tsx 'app/(main)/teams/[id]/session/page.tsx' \
+        e2e/session-unification.spec.ts
+      → exit 0（0 error；4 warning 全为 chat-bubble.tsx:400/433/556/590 既有 no-img-element，
+                与本 todo 改动行无关；未运行 npm run lint / --fix）
+                                                             日志 task-7-eslint-green.log
+  $ cd web && npx playwright test lib/display-author.spec.ts lib/author-role-display.spec.ts \
+        --project=lib-unit --reporter=list → exit 0（6 passed） 日志 task-7-lib-green.log
+  $ cd web && npx playwright test --project=lib-unit --project=chat-density --reporter=list
+      → exit 0（34 passed：api 2 + date-separator 7 + message-grouping 7 + display-author 3
+                + author-role-display 3 + chat-density 12）    日志 task-7-lib-all-green.log
+  $ cd web && npx playwright test session-unification.spec.ts --project=session-unification \
+        -g "B5" --reporter=list → exit 0（5 passed = setup 1 + 4 例） 日志 task-7-e2e-green.log
+  $ cd web && npx playwright test pages.spec.ts session-unification.spec.ts --reporter=list
+      → exit 0（54 passed / 55.5s）——计划 QA happy 原命令    日志 task-7-full-green.log
+  重建（被测页面是 compose standalone 构建，源改动必须重建才进 E2E）：
+  $ docker tag aiagents-web:latest aiagents-web:with-b4      # 427c5c6630b1 = 复选框 6 产物，供复现
+  $ docker compose build web → BUILD_EXIT=0；docker compose up -d web → UP_EXIT=0；
+    aiagents-compose-web healthy；最终镜像 aiagents-web:latest = 86bb6580d971；
+    curl localhost:3001/ 与 localhost:13001/ 响应体 sha 一致（0f121790aedb…，3001 桥接到 13001）。
+    红跑镜像 d2acf2223e07（仅 4 个产品文件回退）已随 latest 被覆盖，日志见 task-7-docker-build-red.txt。
+    日志 task-7-docker-build.txt
+
+======================================================================
+5. author / role 正负矩阵（绿期实测，真实系统 Chrome + 路由 mock 夹具）
+======================================================================
+来源: task-7-identity-matrix.json / task-7-identity-matrix.png / task-7-identity-matrix-top.png
+行 夹具                          解析结果                       身份栏可见文本            role 元素   裸 id
+1  a_developer + ta_1（已映射）   instanceName "Dev-1"/developer  Dev-1 · 开发者 · 10:00    1（· 开发者） 无
+2  tmm_5，alias="计划员"/plan     memberHit "计划员"/plan         计划员 · 10:01            0（同值去重） 无
+3  a_plan + ta_99（全未映射）     author 空 / toRole→plan         计划员 · 10:02            0（只回落）   无
+4  tmm_404（未映射）              author 空 / role→developer      开发者 · 10:03            0（只回落）   无
+5  external a_ghost_ext（未映射） author 空 / role→developer      开发者 外部渠道 · 10:04    0           无
+6  a_developer + mentions=[all]   "Dev-1"/developer + @你         Dev-1 · 开发者 · 10:05     1           无
+7  user                           不进身份栏                      data-type=user，无 author —           无
+8  system                         不进身份栏                      data-type=system，无 author —          无
+补充（e2e 夹具第 9/10 行）：a_tester 连续两条 → 首条 "Test-1 · 测试"，
+次条 message-identity/agent-avatar/chat-bubble-author 计数均为 0（B2 分组不回归）。
+"仅出现一次" 的判据：chat-bubble-author 的可见文本里 "计划员" 出现次数 === 1（e2e 断言）。
+"只显示角色标签" 的判据：chat-bubble-author 的首个子 span 文本 === 角色标签 且
+message-identity-role 计数 === 0（e2e 断言）。
+
+======================================================================
+6. 裸 id DOM 扫描（计划 QA happy 指定正则）
+======================================================================
+扫描口径: /a_[0-9a-z]+|tmm_[0-9a-z]+|ta_[0-9a-z]+/，作用于「可见文本」
+          （Playwright innerText / document.body.innerText；data-testid、title、aria-label
+           属性不计入可见文本，属性 testid（如 dm-tab-private-ta_1）为既有且必须保留的定位契约）。
+1) e2e 断言（fixture 全页）: document.body.innerText 不匹配 → 绿（task-7-e2e-green.log）
+   且逐行 innerText 不匹配（b5_3 / b5_4 / b5_5 三行）。
+2) 独立脚本复核（真实 Chrome + 同族夹具）: task-7-identity-matrix.json
+   → "bodyRawId": false, "bodyHits": [], 8 行 rowRawId 全 false。
+3) 活页复核（无 mock、真实后端数据）: task-7-live-observe.json
+   → "rawIdScanMatched": false, "rawIdHits": []（同时该页当前 0 条消息，见 §9）。
+负例保证：e2e 断言夹具里确实存在 ≥3 个裸 id 发送者（a_plan / tmm_404 / a_ghost_ext），
+否则该扫描会因夹具无裸 id 而空转。
+
+======================================================================
+7. 徽标与既有行为非回归
+======================================================================
+徽标（计划 QA failure 明确要求不丢）:
+  external-channel-badge：b5_5 计数 1 且 visible，文本恰为「外部渠道」→ e2e 例 3 通过；
+                          矩阵实测 externalBadge=1。
+  mention-me-badge（★ @你）：b5_8 计数 1 且 visible，含「@你」→ e2e 例 3 通过；
+                          矩阵实测 mentionBadge=1，截图 task-7-author-role.png 可见。
+B1 共享身份栏：chat-density「B1 单条 reasoning+tool+text 只渲染一次头像/作者/时间」通过
+              （agent-avatar/chat-bubble-author/chat-bubble-time 各 1，author 可见 leaf 1）。
+A4 三级字号：chat-density A4 通过（正文 14 / 身份 12·600 / 元信息 11，时间不在 author 内）。
+              角色标签 12·500 是身份档内新元素，不改动被测两元素的 computed style。
+A1-A3 密度：chat-density A1/A2/A3 通过（800/10/16em、2000、200 契约未动）。
+B2 分组：e2e 例 4 断言连续同发送者第 2 条身份三件套全 0、正文仍渲染；
+        B2 既有 3 例、B3 既有 6 例在54 全量绿跑中全通过。
+B3/B4 日期与 system：B3 6 例通过（system 行仍无身份、字号 11px 容器不变）。
+C2 delta / 滚动：Todo14 7 例、Todo12 4 例在 54 全量绿跑中全通过（未改 use-realtime/use-sse）。
+数据源/顺序：本 todo 只改 author 字符串来源与身份行渲染，不改 messages 顺序、分组谓词、
+            日期分隔与消息分支结构。
+
+======================================================================
+8. testid / 文件范围
+======================================================================
+$ grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx \
+    web/src/components/ui/agent-avatar.tsx web/src/components/ui/message-identity.tsx | sort -u
+  task-7-chat-testids-before.txt(=task-6 after, 25 条) → task-7-chat-testids-after.txt(26 条)
+  diff = 仅 `> data-testid="message-identity-role"`（14a15），零删除。
+$ 页面 testid: task-7-page-testids-before.txt == after（18 条，diff 为空）→ 零消失零新增。
+必查清单全部存在: agent-avatar / chat-bubble / chat-bubble-content / chat-bubble-toggle /
+  chat-bubble-author / chat-bubble-time / msg-thinking / msg-tool / msg-error / msg-aborted /
+  msg-streaming / message-identity / external-channel-badge / mention-me-badge /
+  chat-date-separator / session-status / chat-load-more。
+新增 testid（本 todo 文档化）: `message-identity-role`
+  含义: 身份栏中与 author 并列的角色标签元素（`· {角色名}`）。
+        仅在「author 已解析且与角色标签不同」时渲染；author===role 或 author 未解析时不渲染。
+        同一 testid 同时出现在 MessageIdentity 身份栏与 ChatBubble 兼容身份头（两者互斥渲染，
+        一条消息最多 1 个）。断言用法见 e2e 例 1/3。
+e2e 文件: session-unification.spec.ts 20 → 24 例（新增 4），既有 Todo12 4 / Todo14 7 /
+  B2 3 / B3 6 一条未删、断言未放宽；HarnessOptions 只新增可选 teamOverride，
+  不传时行为与之前逐字节一致（`options.teamOverride ?? teamFixture()`）。
+未编辑: pages.spec.ts、playwright.config.ts。
+
+======================================================================
+9. 真实浏览器观察
+======================================================================
+被测浏览器: Playwright channel=chrome（系统 Chrome），baseURL localhost:3001 → compose 13001。
+适配说明: 桌面浏览器桥接工具本会话不可用（[browser.disconnected] No desktop browser is
+  connected to this session），故「真实页面」观察改由同一系统 Chrome 直连完成。
+通道 1 —— 活页（无 route mock，真实后端数据），task-7-live-observe.json / .png：
+  team-session-root / chat-message-list 正常，identityCount=0、listChildren=1（仅分组标题），
+  即活库的群频道当前没有任何消息 → 活页上没有可观察的「已映射/未映射身份」实例；
+  页面可见文本 rawIdScanMatched=false，pageerror=0，console.error 2 条均为 /events SSE
+  被 harness/脚本主动 abort 的 net::ERR_FAILED（本观察脚本同样 abort /events）。
+通道 2 —— 路由 mock 夹具 + 系统 Chrome（本 todo 的主观察通道，确定性、可复现）：
+  task-7-identity-matrix.json + 两张截图。8 行矩阵全部符合 §5，
+  未映射身份（a_plan/tmm_404/a_ghost_ext）在真实浏览器 DOM 中只显示角色标签。
+不声称活页存在已映射/未映射实例——活库当前无消息，该结论仅来自夹具通道（如实记录）。
+
+======================================================================
+10. 清理回执（cleanup receipts）
+======================================================================
+- $ rm -rf web/test-results web/playwright-report → 见 §13 提交后复核（红跑 trace 已清）。
+- 临时观察脚本 $TMPDIR/opencode/b7-live-observe.cjs、b7-matrix-observe.cjs 已删除
+  （不入库、不留在仓库）。
+- playwright JSON 报告 .omo/evidence/phase5-t9-playwright.json 前后 shasum 均
+  ca4f79e9ceef5210962af118d266e9a7bca06aae（所有运行都带 --reporter=list 覆盖 json reporter）。
+- 预存脏文件保持原样未被覆盖/提交：.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、
+  .omo/evidence/phase5-t9-playwright.json、.omo/evidence/plan-review-execution-gates/**、
+  .omo/evidence/server-gate-removal-tool-authority/**、.opencode/opencode.json、
+  .omo/drafts|notepads|plans|ulw-execute-*-registry.json、
+  .omo/evidence/chat-ux-hierarchy-and-streaming/**（证据留本地不提交）。
+- 本 todo 期间只对 4 个产品文件做过 git stash push/pop（红跑构造），pop 成功、
+  树状态与 stash 前一致，未使用会覆盖预存改动的 `git checkout -- <path>`。
+- 提交范围逐个核对：git diff --cached --name-only 恰为 §2 的 9 个文件，
+  .omo/.opencode/web/AGENTS.md 未进 commit。
+- docker: aiagents-web:latest = 86bb6580d971（本 todo 最终源码），aiagents-web:with-b4 =
+  427c5c6630b1（复选框 6 产物，红跑前基线），aiagents-compose-web healthy。
+- 未新增依赖、无 any / @ts-ignore / ts-expect-error 抑制、未运行 mutating lint、
+  未跑与共享 dev server 竞争的本地 next build（只做 docker compose build web）。
+
+======================================================================
+11. 风险与后续依赖
+======================================================================
+R1 被测页面仍是 compose standalone：B12/B6/B11/B7/B8 等后续页面改动前仍须
+   `docker compose build web && docker compose up -d web`，否则 E2E 跑在陈旧构建上。
+R2 裸 id 判定是整串锚定（`^(?:a|tmm|ta)_[0-9a-z]+$`）：若将来出现含连字符/大写的 id
+   形态（如 tmm_A1-b2），resolveDisplayAuthor 不会过滤它。当前计划 QA 的扫描正则同样只覆盖
+   [0-9a-z]，二者口径一致；扩充 id 形态时须同时改这两处。
+R3 角色标签取 tokens 的 roleLabel：B10（角色色 CSS 变量）落地时只改颜色来源，
+   不影响本 todo 的并列/去重逻辑；若 B10 改 label 文案，去重按新文案自动生效。
+R4 B8（头像缩写）落地时 message-identity 的 initials 会变化，与 role 标签互不影响。
+R5 活库当前无消息（§9）：真实数据下的观感需在有数据后由 F3/F4 复核。
+R6 消息正文若天然包含 "a_xxx"/"ta_xxx" 子串（例如正文里贴了 id），扫描会命中——
+   该情形属内容而非身份兜底，本次未做正文脱敏（超出 B9 范围）。
+
+======================================================================
+12. 提交
+======================================================================
+Commit: 9674e4cc7c31b0aed8bb65120def500d4f7c7dd1
+        `feat(chat): 并列展示 author 与角色并隐藏裸 id 兜底`
+        9 files changed, 419 insertions(+), 10 deletions(-)
+        恰为 §2 列出的 9 个文件；.omo/.opencode/web/AGENTS.md 未进 commit。
+        提交后 `git status --short` 只剩 §10 列出的预存脏文件。
+
+======================================================================
+13. 提交后复核（cleanup receipts 回填）
+======================================================================
+- $ rm -rf web/test-results web/playwright-report → 删除后两目录均不存在 ✓（红跑 trace 已清）
+- 临时脚本 $TMPDIR/opencode/b7-live-observe.cjs、b7-matrix-observe.cjs 已删除 ✓（目录无 b7* 残留）
+- $ shasum .omo/evidence/phase5-t9-playwright.json
+  → ca4f79e9ceef5210962af118d266e9a7bca06aae（与红跑前一致，未被 JSON reporter 重写）
+- 证据文件 .omo/evidence/chat-ux-hierarchy-and-streaming/task-7-* 全部留在本地未提交 ✓
+
+=== independent verifier provenance note ===
+Only the final-text red run is proven to have used the documented stash/build cycle. Earlier red iteration logs were produced against a pre-B5 container state; their failure values still match pre-B5 source, but the evidence should not claim the same stash mechanism for every iteration. This is documentation-only; no code fix required.

@@ -1,0 +1,112 @@
+# task-11 · B10 角色色统一走 light/dark CSS 变量 —— HAPPY 证据
+plan: .omo/plans/chat-ux-hierarchy-and-streaming.md 复选框 11
+commit message (required): refactor(theme): 角色色统一走 light/dark CSS 变量
+
+## 0) docs decision
+- web/AGENTS.md 的 nextjs-agent-rules 指向 node_modules/next/dist/docs/ => DIST_DOCS_ABSENT（目录不存在）。
+- 按用户批准改读 Next.js v15.5.22 tag commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775 的三份文档：
+  docs/01-app/01-getting-started/11-css.mdx（Global CSS 在 app/globals.css 由 root layout 引入；
+  CSS 顺序跟随 import 顺序；生产会合并压缩 -> :root/.dark 自定义属性是唯一全局色源，可安全用于客户端内联样式）、
+  docs/01-app/01-getting-started/05-server-and-client-components.mdx（"use client" 边界；
+  ThemeProvider 客户端组件把 dark class 写到 html —— 正是本应用 theme-store -> html.dark 的做法）、
+  docs/01-app/02-guides/testing/playwright.mdx（baseURL 由 config 提供、测试跑在已运行的服务上）。
+  全文与抓取记录：task-11-docs-decision.txt
+
+## 1) 改动文件（product/test only）
+ M web/src/theme/tokens.ts                     roles + roleText 六角色全改 var(--color-role-*)
+ M web/app/(main)/skills/page.tsx              2 处 roleText + "14" 十六进制 alpha 拼接改 color-mix（否则 var 拼接出非法 CSS）
+ ?? web/lib/role-theme.spec.ts                 本 todo 窄归属门（源契约 + 真浏览器计算值 + 回归）
+未改：globals.css（变量本就存在）、agent-avatar.tsx / message-identity.tsx / chat-bubble.tsx（纯消费方）、
+      msg-parts.tsx / session page / use-realtime / use-sse / playwright.config.ts / chat-density / session-unification / pages。
+
+## 2) 角色色映射表（RoleKey -> CSS 变量，六条不多不少）
+RoleKey           label    roles.color                        roles.bg                            roles.border                          roleText
+product           产品经理 var(--color-role-product-color)     var(--color-role-product-bg)        var(--color-role-product-border)      var(--color-role-product-color)
+project_manager   项目经理 var(--color-role-project-manager-color) var(--color-role-project-manager-bg) var(--color-role-project-manager-border) var(--color-role-project-manager-color)
+architect         架构师   var(--color-role-architect-color)   var(--color-role-architect-bg)      var(--color-role-architect-border)    var(--color-role-architect-color)
+developer         开发者   var(--color-role-developer-color)   var(--color-role-developer-bg)      var(--color-role-developer-border)    var(--color-role-developer-color)
+tester            测试     var(--color-role-tester-color)      var(--color-role-tester-bg)         var(--color-role-tester-border)       var(--color-role-tester-color)
+plan              计划员   var(--color-role-plan-color)        var(--color-role-plan-bg)           var(--color-role-plan-border)         var(--color-role-plan-color)
+- roleText 与 roles.color 同变量（globals.css 只有 color/bg/border 三档，不新建 -text 变量 = 不开第二套角色色源）。
+- 每个变量在 globals.css 的 :root 与 .dark 双侧都存在（spec 内断言），新增第二套色源会被该断言拒绝。
+
+## 3) RED（改动前，失败先行）—— 详见 task-11-role-theme-failure.txt
+$ grep -nE '#[0-9A-Fa-f]{6}' web/src/theme/tokens.ts           -> exit 0，roles/roleText 命中 12 行 hex（tokens.ts:19-39 共 12 个）
+$ npx playwright test lib/role-theme.spec.ts --project=lib-unit -> EXIT=1（3 failed / 1 passed）
+  - 源契约：roles 表不得含硬编码 hex
+  - 计算值：light/product 身份文字 computed=rgb(15,118,110)(#0F766E) != 变量解析值 rgb(37,99,235)
+  - 计算值：dark/未知角色头像底色 computed=rgb(236,253,245)(#ECFDF5 浅色不透明) != dark 变量 rgba(5,150,105,0.18)
+
+## 4) GREEN（改动后）—— 同一命令
+$ npx playwright test lib/role-theme.spec.ts --project=lib-unit -> EXIT=0（4 passed）
+  ✓ 源契约：roles/roleText 零硬编码 hex + 逐项 var() + 键序/标签不变 + :root/.dark 双侧变量齐全
+  ✓ 计算值：light/dark × 6 角色，身份文字 color、头像 backgroundColor/borderTopColor 全部 == 变量解析值，
+    且每角色三组 light/dark 解析值互不相同（证明真的随主题切换）
+  ✓ 未知角色回落 + external/mention 徽标
+  ✓ 回归：故意硬编码 hex 探针在 dark 下被判失败（门有牙）
+  ROLE_THEME_VALUES [{"theme":"light","role":"product","identityColor":"rgb(37, 99, 235)","avatarBg":"rgb(239, 246, 255)","avatarBorder":"rgb(191, 219, 254)","varColor":"rgb(37, 99, 235)","varBg":"rgb(239, 246, 255)","varBorder":"rgb(191, 219, 254)"},{"theme":"light","role":"project_manager","identityColor":"rgb(8, 145, 178)","avatarBg":"rgb(236, 254, 255)","avatarBorder":"rgb(165, 243, 252)","varColor":"rgb(8, 145, 178)","varBg":"rgb(236, 254, 255)","varBorder":"rgb(165, 243, 252)"},{"theme":"light","role":"architect","identityColor":"rgb(124, 58, 237)","avatarBg":"rgb(245, 243, 255)","avatarBorder":"rgb(221, 214, 254)","varColor":"rgb(124, 58, 237)","varBg":"rgb(245, 243, 255)","varBorder":"rgb(221, 214, 254)"},{"theme":"light","role":"developer","identityColor":"rgb(5, 150, 105)","avatarBg":"rgb(236, 253, 245)","avatarBorder":"rgb(167, 243, 208)","varColor":"rgb(5, 150, 105)","varBg":"rgb(236, 253, 245)","varBorder":"rgb(167, 243, 208)"},{"theme":"light","role":"tester","identityColor":"rgb(217, 119, 6)","avatarBg":"rgb(255, 251, 235)","avatarBorder":"rgb(253, 230, 138)","varColor":"rgb(217, 119, 6)","varBg":"rgb(255, 251, 235)","varBorder":"rgb(253, 230, 138)"},{"theme":"light","role":"plan","identityColor":"rgb(79, 70, 229)","avatarBg":"rgb(238, 242, 255)","avatarBorder":"rgb(199, 210, 254)","varColor":"rgb(79, 70, 229)","varBg":"rgb(238, 242, 255)","varBorder":"rgb(199, 210, 254)"},{"theme":"dark","role":"product","identityColor":"rgb(147, 197, 253)","avatarBg":"rgba(37, 99, 235, 0.18)","avatarBorder":"rgba(191, 219, 254, 0.35)","varColor":"rgb(147, 197, 253)","varBg":"rgba(37, 99, 235, 0.18)","varBorder":"rgba(191, 219, 254, 0.35)"},{"theme":"dark","role":"project_manager","identityColor":"rgb(103, 232, 249)","avatarBg":"rgba(8, 145, 178, 0.18)","avatarBorder":"rgba(165, 243, 252, 0.35)","varColor":"rgb(103, 232, 249)","varBg":"rgba(8, 145, 178, 0.18)","varBorder":"rgba(165, 243, 252, 0.35)"},{"theme":"dark","role":"architect","identityColor":"rgb(196, 181, 253)","avatarBg":"rgba(124, 58, 237, 0.2)","avatarBorder":"rgba(221, 214, 254, 0.35)","varColor":"rgb(196, 181, 253)","varBg":"rgba(124, 58, 237, 0.2)","varBorder":"rgba(221, 214, 254, 0.35)"},{"theme":"dark","role":"developer","identityColor":"rgb(110, 231, 183)","avatarBg":"rgba(5, 150, 105, 0.18)","avatarBorder":"rgba(167, 243, 208, 0.35)","varColor":"rgb(110, 231, 183)","varBg":"rgba(5, 150, 105, 0.18)","varBorder":"rgba(167, 243, 208, 0.35)"},{"theme":"dark","role":"tester","identityColor":"rgb(251, 191, 36)","avatarBg":"rgba(245, 158, 11, 0.14)","avatarBorder":"rgba(253, 230, 138, 0.35)","varColor":"rgb(251, 191, 36)","varBg":"rgba(245, 158, 11, 0.14)","varBorder":"rgba(253, 230, 138, 0.35)"},{"theme":"dark","role":"plan","identityColor":"rgb(165, 180, 252)","avatarBg":"rgba(79, 70, 229, 0.2)","avatarBorder":"rgba(199, 210, 254, 0.35)","varColor":"rgb(165, 180, 252)","varBg":"rgba(79, 70, 229, 0.2)","varBorder":"rgba(199, 210, 254, 0.35)"}]
+
+## 5) 未知角色安全回退 developer（spec 第 3 条，light+dark 各跑一遍，均绿）
+- 渲染 role="__unknown_role__" 的真实 MessageIdentity：
+  * [data-testid="agent-avatar"] 存在且 data-role="__unknown_role__"，其 backgroundColor/borderTopColor
+    逐字节等于 developer 变量在当前主题的解析值
+    dark : bg=rgba(5,150,105,0.18)  border=rgba(167,243,208,0.35)
+    light: bg=rgb(236,253,245)      border=rgb(167,243,208)
+  * 角色标签 [data-testid="message-identity-role"] 文案含「开发者」（authorRoleDisplay 的 developer 回退）
+  * 身份文字 color 仍是已定义主题色（正则 rgb()/rgba()，非 undefined/继承）
+  - 说明：identity 文字色在 role 未命中时沿用既有 neutral[400] 回退（本次不改 fallback 语义），
+    头像与标签走 developer —— 与改动前的兜底行为一致，未新增崩溃路径。
+- external 徽标：存在，background == var(--color-neutral-100) 解析值（light/dark 各一次）
+- mention(@你) 徽标：存在，color/bg/border == var(--color-mention-text|bg|border) 解析值（light/dark 各一次）
+
+## 6) 真浏览器 + 真服务 light/dark 观察（重建 bundle 后）
+- 环境事实：localhost:3001 由 opencode pw-bridge 代理，实际服务 = compose standalone web（与 :13001 同字节），
+  没有 next dev；改动前的旧镜像仍返回旧色（已实测：product bg rgb(240,253,250)=#F0FDFA 旧值）。
+- 因此按要求先重建再观察：
+  $ docker compose build web   -> BUILD_EXIT=0（49s）
+  image_id=sha256:1c7f70f2f64f27d74a4ba9855157f9e8554767310f88bc3130f142fd83646b68 created=2026-09-26T04:36:12+08:00
+  $ docker compose up -d web   -> aiagents-compose-web (healthy) image=aiagents-web
+  明确未跑宿主 `next build`（不与共享环境竞速）；web 服务无 host volume，构建全在镜像内。
+- 观察脚本（$TMPDIR/t11-observe.mjs / t11-identity.mjs，system Chrome，跑完已删，见 §8）
+  a) /agents 头像：6 角色 × (color/bg/border) × (dark/light) = 36 项全部 computed == 变量解析值。
+     dark : product color rgb(147,197,253) bg rgba(37,99,235,0.18) border rgba(191,219,254,0.35)
+     light: product color rgb(37,99,235)   bg rgb(239,246,255)     border rgb(191,219,254)
+     （developer/tester/plan/architect/project_manager 同样逐项相等，完整 JSON 见本目录截图与运行日志）
+  b) 真实私聊会话（seed-admin -> 测试-1 DM，5 条消息，role=project_manager）：
+     dark : 身份文字 color rgb(103,232,249) == var(--color-role-project-manager-color)
+            头像 bg rgba(8,145,178,0.18) / border rgba(165,243,252,0.35) == 变量
+     light: 身份文字 color rgb(8,145,178)  == 变量
+            头像 bg rgb(236,254,255) / border rgb(165,243,252) == 变量
+     截图：task-11-observe-identity-dark.png / task-11-observe-identity-light.png
+  c) 群频道头像栈：session/page.tsx:1220 用 style 传 border:"2px solid #FFF" 覆盖了头像边框（既有白色分隔圈，
+     非角色色、且该文件属本 todo 禁改范围）——如实记录，未修改；其余头像均跟随变量。
+     截图：task-11-observe-agents-{dark,light}.png、task-11-observe-session-{dark,light}.png
+- 备注：desktop browser MCP 处于 disconnected，故真浏览器观察改用已安装 Playwright 的系统 Chrome 通道
+  （与测试套件同一引擎），未新装任何依赖。
+
+## 7) dark-mode Playwright 项目（计划 QA happy 命令）
+$ npx playwright test dark-mode-role-warning.spec.ts --project=engine-dependent  -> 35 passed, EXIT=0
+  （依赖 self-login 也全绿；首次尝试 EXIT=1 仅因我的 shell PATH 缺 /usr/local/bin 导致 docker ENOENT，
+    加上 PATH 后重跑全绿，期间零代码改动）
+$ npx playwright test dark-mode-role-warning.spec.ts --project=engine-dependent --no-deps -> 2 passed, EXIT=0
+  （在重建 bundle 之后再跑一次，确认重建未破坏 dark/light 变量断言）
+
+## 8) 类型 / lint / 清理
+$ cd web && npx tsc --noEmit                                             -> EXIT=0
+$ npx eslint src/theme/tokens.ts lib/role-theme.spec.ts "app/(main)/skills/page.tsx" -> EXIT=0（check-only，未用 npm run lint / --fix）
+cleanup receipts:
+  - 临时观察脚本已删除：$TMPDIR/t11-observe.mjs、$TMPDIR/t11-probe.mjs、$TMPDIR/t11-identity.mjs（ls 均已不存在）
+  - web/test-results、web/playwright-report：本次运行后不存在（无残留）
+  - shasum .omo/evidence/phase5-t9-playwright.json before=45a51f4d5d77f371b3f55cd48dd3187b021bd2dc
+    after=2990ec2a917197be818a475fd6ec166d5734205f（json reporter 必然重写，按计划只记前后 hash）
+  - 本文件与其余 .omo/** 证据一律不进入产品 commit
+testid/file scope: 见 task-11-scope.txt（skills/page.tsx 的 83 个 testid 前后 diff 为空；
+  tokens.ts 无 testid；改动面只有 tokens.ts + skills/page.tsx + 新增 lib/role-theme.spec.ts）
+
+## commit
+9fcbf853334c474880fbb77070d5d931e93a6db8
+staged: web/src/theme/tokens.ts | web/app/(main)/skills/page.tsx | web/lib/role-theme.spec.ts
+evidence 未提交（.omo/** 保持 untracked/dirty 不入产品 commit）
+
+=== independent verifier hygiene note ===
+Acceptance-critical role mapping/computed evidence is independently confirmed. Non-blocking documentation issues: the deps-inclusive 35-test count lacks a surviving raw log because the JSON reporter overwrites; task-11-provenance.txt has a stale pre-rebuild "rebuilt: NO" line; a gitignored web/test-results/.last-run.json remained. No product defect.

@@ -1,0 +1,351 @@
+# task-12-collapse-policy — B11 统一低优先级折叠并保持错误中断可见（绿证据）
+# chat-ux-hierarchy-and-streaming 复选框 12
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:215-221（References / Acceptance / QA happy / QA failure）
+#      + :16-20 Scope IN 第 11 条（B11）+ :44-46 Scope OUT 第 8 条（不默认折叠 error/aborted）
+#      + :78-91 消息结构断言门 + :117 Wave 2
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 红证据: 同目录 task-12-collapse-policy-failure.txt（含红态矩阵 task-12-collapse-matrix-red.json）
+# Commit: b27f4c706304a4b791fa2b6cdb5d90f9347d803a
+#         feat(chat): 统一低优先级折叠并保持错误中断可见
+
+======================================================================
+0. 结论
+======================================================================
+B11 落地，8 类内容的折叠/可见策略收敛到一处常量源
+（web/src/components/ui/collapse-policy.ts）：
+
+  低优先级（默认收起、可展开，开关带 aria-expanded）
+    thinking 摘录  / tool I/O  / unknown part 诊断 / 长附件详情
+  高优先级（永不默认收起）
+    主正文 / 流式正文 / system 行 —— 内容永远在 DOM、元素永远可见
+    error / aborted —— 标题·状态·摘要·retry/quota/action 控件永远在 DOM 且可见；
+                       只有 detail 超过 200 字符才额外给一个 **默认展开** 的开关，
+                       收起只摘 detail 区，摘不掉标题/状态/控件
+
+  - 聚焦 chat-density：绿 26/26 exit 0（红态 5 failed / 21 passed，exit 1，同一份测试文件）
+  - tsc --noEmit exit 0；check-only eslint exit 0（0 error / 5 warning 全为改动前既有）
+  - lib-unit 37 passed exit 0（A1/A2/A3/A4/B1/B5/B6/B7/B8/B9/B10 源契约一个不回退）
+  - 既有页面套件 session-unification 28 passed exit 0、pages 30 passed exit 0
+  - testid before/after：0 消失，+9 新增（全部在 §7 列出并被测试引用）
+  - 真机交互观察：长附件/error/aborted 各 3 态点击截图 + DOM 快照（§6）
+
+未做（本 todo 明确不碰）：
+  use-realtime.ts / use-sse.ts / worker/* / server/* / 移动端 CSS / playwright.config.ts /
+  e2e/pages.spec.ts / e2e/session-unification.spec.ts / .omo/plans / .omo/boulder.json /
+  ulw-execute registry / C2 滚动与轮询 / B10 角色色 / B7·B8 状态与缩写 / B6 安全边界
+  （B6/B7/B8/B10 只被「新增折叠开关」集成，断言与阈值一个没改）。
+
+======================================================================
+1. 文档决策（docs decision）
+======================================================================
+DIST_DOCS_ABSENT = TRUE
+  $ ls -d web/node_modules/next/dist/docs
+    → No such file or directory（exit 1）
+  $ ls web/node_modules/next/dist/  → api bin build cli client compiled diagnostics esm
+    experimental export lib next-devtools pages server shared styled-jsx telemetry trace types.d.ts
+    （有 dist/docs 该有的邻居目录，唯独没有 docs/）
+  安装版本 next = 15.5.22（web/node_modules/next/package.json → "version": "15.5.22"）。
+  web/AGENTS.md 的 nextjs-agent-rules 块存在（line 1-9），其指向的本地指南目录缺失
+  → 按任务授权改用「用户批准的 v15.5.22 tag 文档」
+    （commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775）。
+
+改产品代码前抓取并通读的篇目（GitHub raw，全部 HTTP 200）：
+  (1) docs/01-app/01-getting-started/05-server-and-client-components.mdx
+  (2) docs/01-app/03-api-reference/01-directives/use-client.mdx
+  (3) docs/01-app/01-getting-started/11-css.mdx
+  (4) docs/01-app/02-guides/testing/playwright.mdx
+
+决策（与本 todo 的落地方式逐条对应）：
+  - 05/use-client：新增的折叠开关都是 Client Component 内的 useState + onClick，
+    三个被改组件（msg-error / msg-aborted / chat-bubble）顶部已有 `"use client"`，
+    collapse-policy.ts 是纯常量/纯函数模块，被客户端组件 import，
+    传入 props 仍是 part/attachment 等可序列化值 → 与文档模型一致。
+  - 11-css：继续沿用 inline style + tokens.ts（该篇不禁止 inline style，
+    且「Extract shared styles into shared components」支持把折叠阈值/头部截断
+    这类共享片段收进 collapse-policy.ts，而不是每个组件各写一份字面量）。
+    本 todo 不新增颜色源、不改 globals.css、不碰移动端断点。
+  - playwright.mdx：文档建议 e2e 打在已运行的服务上（`npm run build && npm run start`
+    后另开终端 `npx playwright test`），与 playwright.config.ts:6-8「不自动起 webServer」
+    一致 → config 一行未改；chat-density 项目自包含（不挂 dependencies），
+    正是本 todo 的确定性测试缝。
+  文档与现有代码无冲突，无需停止。
+
+======================================================================
+2. 改动文件（仅本 todo，见 §11 提交）
+======================================================================
+  web/src/components/ui/collapse-policy.ts    +33（新增）策略单一常量源 + headChars()
+  web/src/components/ui/chat-bubble.tsx       附件卡重构：badge/label/link 提为共享片段，
+                                                     长文件名走 summary+toggle
+  web/src/components/chat/msg-error.tsx       超长 detail → 默认展开的 msg-error-detail 区
+  web/src/components/chat/msg-aborted.tsx     超长 detail → 默认展开的 msg-aborted-detail 区
+  web/src/components/chat/msg-thinking.tsx    +1（展开区 data-testid=msg-thinking-detail）
+  web/src/components/chat/msg-tool.tsx        +1（展开区 data-testid=msg-tool-io）
+  web/src/components/chat/msg-parts.tsx       +2（文件头注释补 B11 分发说明，逻辑零改动）
+  web/e2e/chat-density.spec.ts               +375/-2 6 条 B11 断言 + 矩阵落盘 + 真机观察
+                                             （19 条既有测试一行未改）
+
+未触碰: src/theme/tokens.ts、src/components/ui/agent-avatar.tsx、hooks/use-realtime.ts、
+        hooks/use-sse.ts、app/(main)/teams/[id]/session/page.tsx、worker/*、server/*、
+        移动端 CSS、playwright.config.ts、e2e/pages.spec.ts、e2e/session-unification.spec.ts、
+        .omo/plans、.omo/boulder.json、ulw-execute registry、web/AGENTS.md。
+
+======================================================================
+3. 策略实现要点
+======================================================================
+collapse-policy.ts（单一事实源，3 个消费者 msg-error / msg-aborted / chat-bubble）
+  HIGH_PRIORITY_DETAIL_COLLAPSE_CHARS = 200   error/aborted detail 严格大于才给开关
+  HIGH_PRIORITY_TITLE_HEAD_CHARS      = 60    超长时标题保留的头部（+1 个省略号）
+  ATTACHMENT_DETAIL_COLLAPSE_CHARS    = 60    文件名严格大于才给开关
+  ATTACHMENT_NAME_HEAD_CHARS          = 24    折叠摘要里的名字头部
+  headChars(text, max)                      短文本原样返回，超长才截断 —— 短内容零噪音
+
+msg-error.tsx
+  短 detail（≤200）：结构与改动前逐像素同构，只多一个 data-testid="msg-error-title"；
+                     无开关、无 detail 区。
+  长 detail（>200）：标题 = headChars(detail, 60)（msg-error-title，恒可见）
+                     + msg-error-detail-toggle（aria-expanded，**初始 true**）
+                     + msg-aborted 同款 msg-error-detail（完整 detail，默认在 DOM）
+                     状态行（RetryPart attempt / APIError / 执行失败 / insufficient_quota）
+                     与 msg-error-action 全部排在 detail 区之外 → 收起也摘不掉。
+
+msg-aborted.tsx
+  短 detail：pill「▮▮ 已中断」+「处理被用户中断 — {detail}」，与改动前同结构、无开关。
+  长 detail：外层 flexDirection 由 row 改 column，内层新增一行
+             pill +「处理被用户中断」+ msg-aborted-detail-toggle（初始 true），
+             msg-aborted-detail 在下方，默认展开；收起后 pill 与摘要仍在 DOM。
+
+chat-bubble.tsx / AttachmentCard
+  只对「非图片 && name.length > 60」的附件启用折叠（图片是内容不是详情，不折叠）：
+    收起（默认）→ attachment-summary（徽标 + headChars(name,24) + 大小）
+                  + attachment-detail-toggle(aria-expanded=false)，
+                  完整 attachment-file 链接 0 个（不进 DOM）
+    展开        → attachment-file（download/title 仍是完整 name）+ toggle(aria-expanded=true)
+  短文件名、图片、以及 ChatBubble 正文的 A1 行数上限：一行逻辑未改。
+
+msg-thinking.tsx / msg-tool.tsx
+  只给既有展开区挂 testid（msg-thinking-detail / msg-tool-io），
+  折叠阈值、aria-expanded、200/2000/2000 三处封顶与 A3/A2 完全不动。
+
+msg-parts.tsx
+  分发层不折叠，仅文件头注释补一行 B11 说明（逻辑零改动 → A2 的 formatToolIO
+  两处 slice 与两个 formatToolIO(...) 调用点逐字未变）。
+
+======================================================================
+4. 红/绿命令与退出码（tests-after，同一份测试文件）
+======================================================================
+RED（产品代码 = HEAD，测试 = 最终版）
+  $ cd /Volumes/SSD-Data/01work/git-project/vteam/web && \
+    npx playwright test chat-density.spec.ts --project=chat-density
+  → exit 1：5 failed / 21 passed（1.1m）
+    1) B11 低优先级默认收起：thinking/tool/unknown/长附件初始收起且可展开
+    2) B11 error 超长 detail：默认展开可收起，标题/状态/操作始终可见
+    3) B11 aborted 超长 detail：pill 与摘要始终可见，detail 默认展开可收起
+    4) B11 短内容不引入折叠噪音：短 error/短 aborted/短附件无开关且内容原样可见
+    5) B11 真机交互观察：长附件/error/aborted 三态点击截图与 DOM 快照
+  日志: .omo/evidence/chat-ux-hierarchy-and-streaming/task-12-red-e2e.log
+  红矩阵: .omo/evidence/chat-ux-hierarchy-and-streaming/task-12-collapse-matrix-red.json
+  红态实现方式：把 6 个产品文件按 `git show HEAD:<path>` 覆盖回 HEAD
+                （改动前先 cp 备份到 $TMPDIR/task12-bk，跑完原样 cp 回来），
+                只回退本 todo 自己改的文件，未触碰任何预存脏文件。
+
+GREEN（产品代码 = 本提交）
+  $ cd /Volumes/SSD-Data/01work/git-project/vteam/web && \
+    npx playwright test chat-density.spec.ts --project=chat-density
+  → exit 0：26 passed（12.5s）
+  日志: .omo/evidence/chat-ux-hierarchy-and-streaming/task-12-green-e2e.log
+  绿矩阵: .omo/evidence/chat-ux-hierarchy-and-streaming/task-12-collapse-matrix.json
+
+类型 / lint（全绿）
+  $ cd web && npx tsc --noEmit                                        → exit 0
+  $ cd web && npx eslint src/components/chat src/components/ui e2e/chat-density.spec.ts
+                                                                      → exit 0
+    0 error / 5 warning：question-modal.tsx:117 no-unused-expressions（文件未触碰）+
+    chat-bubble.tsx 4× no-img-element（`git show HEAD:… | grep -c '<img'` = 4，
+    改动后 = 4，未增删图片元素）—— 5 条全部为改动前既有，未使用 --fix / npm run lint。
+  日志: task-12-eslint.log
+
+======================================================================
+5. 完整折叠矩阵（红 → 绿，逐格来自 task-12-collapse-matrix[-red].json）
+======================================================================
+格式: 初始 {toggleCount, aria-expanded, detailCount} → 点一次开关后 {aria, detailCount}
+
+row                | RED 初始                     | RED 之后           | GREEN 初始                  | GREEN 之后
+-------------------+------------------------------+--------------------+-----------------------------+--------------------
+process(thinking)  | 1,false,0                    | true,**0** ✗       | 1,false,0                    | true,**1** ✓
+tool               | 1,false,0                    | true,**0** ✗       | 1,false,0                    | true,**1** ✓
+unknown            | 1,false,0                    | true,0             | 1,false,0                    | true,1 ✓
+attachment         | **0**,–,**1**(链接直接可见)  | –                  | 1,false,0                    | true,**1** ✓
+error              | **0**,–,0(无 detail 区)      | –                  | 1,**true**,1                 | **false**,0 ✓
+aborted            | **0**,–,0(无 detail 区)      | –                  | 1,**true**,1                 | **false**,0 ✓
+streaming          | 0,–,1                        | –,1                | 0,–,1                       | –,1 ✓
+system             | 0,–,1                        | –,1                | 0,–,1                       | –,1 ✓
+main-body          | 1,false,1                    | true,**1**         | 1,false,1                    | true,**1** ✓
+
+判读：
+  - 低 4 格（process/tool/unknown/attachment）：初始 detail=0、toggle aria-expanded=false、
+    点一次 → aria=true 且 detail 计数 0→1 → 「默认收起且可展开」成立。
+    RED 时 process/tool 点开后 detail 仍为 0（改动前没有具名展开区），
+    attachment 点前链接就在 DOM（default=1，压根没有开关）→ 这三格在红跑里真失败。
+  - error/aborted：初始 detail=1 且 aria=**true**（默认展开），
+    点一次 → aria=false 且 detail 1→0（可收起）→ 「超长 detail 默认展开 + 可收起」成立。
+    RED 时 toggleCount=0 → 无开关，红跑里真失败。
+  - streaming / system / main-body：toggleCount=0（system/streaming 无开关），
+    detail/行计数恒为 1 → 「永不默认收起」成立；这三格在红跑里也是绿的，
+    它们是回归护栏（不是本次修复的缺口）。
+  - main-body 的 chat-bubble-toggle 是 **A1 行数上限**（既定行为，本 todo 按 MUST DO 保留）：
+    aria-expanded=false 只代表「还没展开看更多行」，chat-bubble-content 计数始终 1、
+    900 字符全文一直在 DOM（测试断言 head 100 字符 + tail 40 字符都在 textContent 里）。
+    A1 的 clamp 是**视觉行上限**，B11 的折叠是**内容是否离开 DOM** —— 两者不混。
+
+======================================================================
+6. error/aborted 可见性 + 真机交互观察
+======================================================================
+断言（e2e/chat-density.spec.ts）：
+  error(quota)  收起后仍可见: msg-error-title 含 60 字头、不含第 201-240 字、
+                            "insufficient_quota · 不可重试"、msg-error-action
+                            （"查看升级方案"）
+  error(retry)  收起后仍可见: "RetryPart · attempt 1/3"、
+                            "APIError · isRetryable · 稍后自动重试"、msg-error-title；
+                            kind=retry 无 msg-error-action（与改动前一致）
+  error(failed) 收起后仍可见: "执行失败 · 可重新发送消息触发重试"、msg-error-title
+  aborted       收起后仍可见: "▮▮ 已中断"、"处理被用户中断"，msg-aborted 不含第 201-240 字
+  短 error/短 aborted/短附件：toggle 计数 0（不引入开关噪音），内容原样可见
+
+真机交互观察（同 spec 的「B11 真机交互观察」用例，系统 Chrome，真实点击 3 次/例）
+  证据: task-12-observe.json + 6 张截图
+    task-12-attachment-state1.png (收起) / -state2.png (展开)
+    task-12-error-state1.png       (展开) / -state2.png (收起)
+    task-12-aborted-state1.png     (展开) / -state2.png (收起)
+  DOM 快照（三态点击，rootTextLen 变化即 detail 真的离开/回到 DOM）：
+    attachment  state1(收起) toggle aria=false detail absent rootTextLen=57
+                state2(展开) toggle aria=true  detail present rootTextLen=187
+                state3(再收) toggle aria=false detail absent rootTextLen=57
+    error       state1(展开) toggle aria=true  detail present rootTextLen=716
+                state2(收起) toggle aria=false detail absent rootTextLen=116
+                state3(再展) toggle aria=true  detail present rootTextLen=716
+    aborted     state1(展开) toggle aria=true  detail present rootTextLen=634
+                state2(收起) toggle aria=false detail absent rootTextLen=34
+                state3(再展) toggle aria=true  detail present rootTextLen=634
+  截图肉眼复核：附件收起态只剩「PDF 交付报告-… 120.6 KB 展开详情 ▸」；
+                error 收起态标题(60 字头+…)、展开链接、insufficient_quota 状态行、
+                红色「查看升级方案 →」按钮四者同屏可见；
+                aborted 展开态 pill「▮▮ 已中断」+「处理被用户中断」+收起链接 + 完整 detail。
+
+======================================================================
+7. testid before/after（消息结构断言门）
+======================================================================
+基线命令（计划 :78-83 原样）：
+  grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ \
+       web/src/components/ui/chat-bubble.tsx web/src/components/ui/agent-avatar.tsx | sort -u
+  → task-12-chat-testids-before.txt  (27 项)
+  → task-12-chat-testids-after.txt   (36 项)
+
+  $ comm -23 before after   → 空 = **0 项消失** ✓
+  $ diff before after       → 只有 9 行 `>` 新增：
+
+    + data-testid="attachment-detail-toggle"
+    + data-testid="attachment-summary"
+    + data-testid="msg-aborted-detail"
+    + data-testid="msg-aborted-detail-toggle"
+    + data-testid="msg-error-detail"
+    + data-testid="msg-error-detail-toggle"
+    + data-testid="msg-error-title"
+    + data-testid="msg-thinking-detail"
+    + data-testid="msg-tool-io"
+
+  MUST DO 要求保留的 8 个逐个复核仍在 after 里：
+    msg-thinking / msg-tool / msg-unknown-part / msg-error / msg-error-action /
+    msg-aborted / msg-streaming / chat-bubble-toggle  ✓
+  既有依赖项 agent-avatar / chat-bubble / chat-bubble-content / chat-bubble-author /
+  chat-bubble-time / chat-bubble-status / message-attachment / attachment-file /
+  attachment-image / attachment-lightbox 也全部保留 ✓
+
+======================================================================
+8. 先行套件非回归（prior suites）
+======================================================================
+  cd web && npx playwright test lib/ --project=lib-unit
+      → exit 0，37 passed（task-12-lib-unit.log）
+        A1 源契约（800/10/16em、WebkitLineClamp 恰 1 处、toggle 文案）、
+        A2 源契约（formatToolIO 两处 slice=2000 + 两个调用点正则）、
+        A3 源契约（msg-thinking 恰两处 slice=[200,2000]、无 `title={text.trim()}`、
+        无 `length > n ? "…"`）、A4 字号源契约、B10 角色色 —— 全部仍绿
+        → 证明本 todo 没有为了折叠去动 A1–A4/B10 的任何阈值。
+  cd web && npx playwright test session-unification.spec.ts
+      → exit 0，28 passed（task-12-prior-session-unification.log）
+        B1 身份只出现一次 / B2 分组 / B3 跨天分隔 / B4 system 降噪 / B5·B9 author /
+        B12 status 容器与 system time —— 全部仍绿（**打在 §9 的旧 bundle 上**）
+  cd web && npx playwright test pages.spec.ts
+      → exit 0，30 passed（task-12-prior-pages.log）（**打在 §9 的旧 bundle 上**）
+  cd web && npx playwright test chat-density.spec.ts --project=chat-density
+      → exit 0，26 passed：其中 19 条是 A1/A2/A3/A4/B1/B6/B7/B8 既有用例，一行未改，
+        本次同跑全绿 = 组件级非回归的直接证据（这一套是现场打包 HEAD 源码，最可信）。
+
+======================================================================
+9. 服务包 provenance（为什么页面 E2E 不算 B11 覆盖）
+======================================================================
+  证据: task-12-bundle-provenance.txt
+  - http://localhost:3001 由 PID 94825 `.../opencode/pw-bridge/bridge.js` 监听；
+    响应头 x-nextjs-prerender: 1 / x-nextjs-cache: HIT / X-Powered-By: Next.js
+    → 预构建 Next 生产包，不是 next dev。
+  - 3001 与 http://localhost:13001（docker-compose.yml:119 的 `13001:3000` web
+    standalone，OrbStack 监听）返回完全相同的 ETag `nbf96cbefd5qy` / Content-Length 7470
+    → 3001 就是 compose 侧 standalone bundle 的转发。
+  - 真实浏览器登录后扫 25 个 JS / 1,540,134 bytes：
+    「查看升级方案」「发送中…」「未知片段」「收起 ▲」均命中，
+    **「收起详情」（本 todo 新增文案）0 命中** → 包里没有 B11。
+  - 因此：session-unification / pages 两套只作为「既有行为未被本 todo 破坏」的记录，
+    **不声称覆盖 B11**；B11 的确定性覆盖只来自 chat-density
+    （esbuild-wasm 现场把 HEAD 源码打包进空白页，与 3001 无关）。
+  - 本 todo 未改任何 page 文件，不需要也没有重建该包（未跑 next build，
+    以免与共享 dev/served 栈竞态）。
+
+======================================================================
+10. 清理回执
+======================================================================
+  - 临时 provenance 脚本 web/tmp-task12-provenance.mjs：跑完 `rm -f` 删除 ✓
+    （git status 已确认不存在）
+  - 红态回退用的备份 $TMPDIR/task12-bk/：临时目录，随系统 TMP 清理，不在仓库内 ✓
+  - web/test-results、web/playwright-report：本次运行新生成 → `rm -rf` 清掉 ✓
+    （`ls test-results` → No such file or directory）
+  - 报告 hash 前后（计划 :101 要求只做 hash 记录，不视为污染）：
+      before af9de50834c1d793ba61c3c1e7e6be130b3ea6b8
+      after  b8a38a585851f3131140476e3ac40cfc8d422436
+      → task-12-report-hash-before.txt / task-12-report-hash-after.txt
+      （JSON reporter 每次运行必然重写 .omo/evidence/phase5-t9-playwright.json）
+  - 未执行任何 `npm run lint` / `--fix`；未执行 `next build`；未执行路径级 checkout
+    去恢复 evidence（只用 `git show HEAD:<自己改的文件>` 回退自己的产品文件）。
+  - 本证据目录 `.omo/evidence/chat-ux-hierarchy-and-streaming/` 整体不入提交。
+
+======================================================================
+11. 提交
+======================================================================
+  SHA   : b27f4c706304a4b791fa2b6cdb5d90f9347d803a
+  message: feat(chat): 统一低优先级折叠并保持错误中断可见
+  暂存清单（`git diff --cached --name-status` 提交前逐项核对，仅 8 个本 todo 文件）:
+    M  web/e2e/chat-density.spec.ts
+    M  web/src/components/chat/msg-aborted.tsx
+    M  web/src/components/chat/msg-error.tsx
+    M  web/src/components/chat/msg-parts.tsx
+    M  web/src/components/chat/msg-thinking.tsx
+    M  web/src/components/chat/msg-tool.tsx
+    M  web/src/components/ui/chat-bubble.tsx
+    A  web/src/components/ui/collapse-policy.ts
+  diff --stat: 8 files changed, 699 insertions(+), 155 deletions(-)
+  预存脏文件（.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、
+  .omo/evidence/phase5-t9-playwright.json、.opencode/opencode.json、
+  .omo/evidence/** 下非本计划文件、.omo/plans|.drafts|.notepads|registry 等）
+  一个都没有被 add / 被覆盖，提交后仍是未暂存或未跟踪状态。
+
+======================================================================
+12. 风险与边界（如实记录）
+======================================================================
+  - 「主正文不默认折叠」按内容是否留在 DOM 判定：A1 的 10 行 clamp 是计划
+    checkbox 2 已验收的**视觉行上限**，本 todo 按 MUST DO「Preserve A1-A3 density caps」
+    一行未改；chat-bubble-content 在任何状态下计数恒为 1、全文恒在 textContent 中。
+    若把 A1 的 clamp 也读成「折叠」，则与计划自身 Scope IN 第 1 条自相矛盾 ——
+    本证据按「内容离 DOM = 折叠」的口径记录。
+  - streaming / system / retry-quota-action 三格在红跑里就是绿的：它们是**护栏**，
+    不是本次修复的缺口；对应失败模式的拦截断言见 failure 证据 §3 的映射表。
+  - 附件折叠只覆盖「非图片 + 文件名 > 60」：图片预览是内容不是详情，不折叠；
+    这是 B11「长附件详情」的字面口径，已在组件头注释与本证据写明。
+  - 页面级 E2E 打在不含 B11 的旧 standalone 包上（§9），只算非回归不算覆盖。

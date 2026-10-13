@@ -1,0 +1,14 @@
+## testid / file scope
+changed files (mine):
+ M web/app/(main)/skills/page.tsx
+ M web/src/theme/tokens.ts
+?? web/lib/role-theme.spec.ts
+
+pre-existing dirty files owned by others (must NOT be in my commit):
+
+-- testid set diff for my changed product file (HEAD vs worktree) --
+testid_diff_exit=0 (0 = unchanged)
+head_count=83 now_count=83
+
+-- tokens.ts exports a testid? --
+0

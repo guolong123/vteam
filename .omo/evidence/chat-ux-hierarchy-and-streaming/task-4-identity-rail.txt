@@ -1,0 +1,211 @@
+# task-4-identity-rail — B1 提取共享消息身份栏，process part 降级为附属行
+# （chat-ux-hierarchy-and-streaming 复选框 4）
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:151-157（复选框 4）
+#      + :78-91（消息结构断言门 / B1 额外断言）+ Scope IN 第 2 条 + Scope OUT + Success criteria 第 2 条
+
+======================================================================
+1. Next.js 本地文档缺席证据（DIST_DOCS_ABSENT）+ v15.5.22 官方 tag 文档
+======================================================================
+web/AGENTS.md 要求改产品代码前先读 `node_modules/next/dist/docs/` 指南。
+
+命令:
+  cd /Volumes/SSD-Data/01work/git-project/vteam
+  ls -d node_modules/next/dist/docs web/node_modules/next/dist/docs
+  ls web/node_modules/next | head        # 安装产物存在，但无 docs/
+  node -p "require('<web>/node_modules/next/package.json').version"
+
+输出:
+  ls: node_modules/next/dist/docs: No such file or directory
+  ls: web/node_modules/next/dist/docs: No such file or directory
+  15.5.22
+
+结论: DIST_DOCS_ABSENT（仓库根与 web 两处 dist/docs 均不存在）；安装版本 next=15.5.22，
+与用户批准的版本匹配 tag 一致。
+
+文档来源（GitHub raw @ commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775，本会话实际抓取并通读全文）:
+  (1) 客户端组件: docs/01-app/01-getting-started/05-server-and-client-components.mdx
+  (2) use client: docs/01-app/03-api-reference/01-directives/use-client.mdx
+  (3) 样式/渲染:  docs/01-app/01-getting-started/11-css.mdx
+  (4) Playwright: docs/01-app/02-guides/testing/playwright.mdx
+
+与本 todo 相关的要点（指导实现决策）:
+  - Server and Client Components / use client: 'use client' 放文件顶部、import 之前；文件一旦标记，
+    其 import 与子组件一并进入 client bundle。新建的 message-identity.tsx 无状态、无浏览器 API，
+    但被 client 组件（MsgParts/ChatBubble）引用，按仓库既有约定保留 "use client" 首行，组件边界不变。
+  - 组件间用 props 组合传递已解析数据（官方推荐的 Server→Client 数据下传方式），与
+    "MessageIdentity 只接收已解析展示数据、不做业务映射" 的验收一致。
+  - 11-css.mdx: 官方指南覆盖 Tailwind/CSS Modules/Global CSS，未强制单一写法；本仓沿用 React inline
+    style 对象 + src/theme/tokens.ts 统一取值，不引入新样式体系。
+  - Playwright: 官方建议经 playwright.config.ts 的 baseURL 打到运行中的 server（webServer 可选）；
+    本仓 config 明确不配 webServer，chat-density 项目为无依赖的空白页测试缝 → 本 todo 不改 config。
+  - 未发现文档与现有代码冲突，无需停止（计划 Verification strategy 判据）。
+
+======================================================================
+2. 改动前基线（testid 门 + 身份重复的 failing-first 断言）
+======================================================================
+2.1 testid 基线（计划 §消息结构断言门 原命令）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam
+  grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx \
+    web/src/components/ui/agent-avatar.tsx | sort -u \
+    > .omo/evidence/chat-ux-hierarchy-and-streaming/task-4-chat-testids-before.txt
+退出码: 0，24 条（全文见 task-4-chat-testids-before.txt）。
+
+2.2 改动前状态读取:
+  - chat-bubble.tsx 已有独立 `chat-bubble-author` 与 `chat-bubble-time`（A4 438a0b6 产出，保持不动）。
+  - msg-parts.tsx:114-215 顶层容器直接分发 thinking/tool/error → 各 process 组件自带
+    AgentAvatar + 作者 + 时间；最终正文走 ChatBubble（自带头像 + 身份行）。
+  - msg-thinking.tsx:62 / msg-tool.tsx:69 / msg-error.tsx:63 / msg-aborted.tsx:47 各渲染一个 AgentAvatar。
+  - A1-A3 密度常量（800/10/16em、2000、200）与 A4 三级字号（14/12·600/11）保持不动。
+
+2.3 failing-first 结构夹具（先写测试，改动前跑红）:
+  新增 e2e/chat-density.spec.ts 用例
+  「B1 共享身份栏：reasoning+tool+text 单条 agent 消息只渲染一次头像/作者/时间」
+  夹具 kind="identity" → 生产渲染器 MsgParts(parts=[reasoning, tool, text])，
+  author="密度" / role="developer" / time="12:00"。
+
+命令（改动前，产品代码未改）:
+  cd web && npx playwright test chat-density.spec.ts --project=chat-density --reporter=list -g "B1 共享身份栏"
+退出码: 1（红）；日志: task-4-red-run.log
+同批跑整个 chat-density 项目：1 failed / 7 passed（既有 A1-A4 用例仍绿，只有 B1 新用例红）。
+
+红点实际值（identity 计数对象）:
+  avatar          = 3   （期望 1：MsgThinking / MsgTool / ChatBubble 各带一个头像）
+  authorTextLeaf  = 2   （期望 1：thinking 头部 author + 正文身份行内层 span）
+  timeTextLeaf    = 3   （期望 1：thinking / tool / chat-bubble-time 各带一次时间）
+  author          = 1   time = 1   （chat-bubble-author/chat-bubble-time 改动前已各 1，但身份文本重复）
+
+======================================================================
+3. 实现（仅本 todo 的产品/测试文件）
+======================================================================
+新增
+  web/src/components/ui/message-identity.tsx
+    纯展示组件 MessageIdentity({ author, role, time, senderType, initials, style, className })：
+    一次渲染 AgentAvatar(s/sm/dot=false) + `chat-bubble-author`（12px/600，roleText 取色，
+    author 缺省回落角色标签，external 徽标）+ `chat-bubble-time`（11px，`· HH:MM`，与作者同级兄弟，
+    不嵌套）。不读原始 id、不访问业务映射/数据源；role 仅用于 theme/tokens 取色。
+    新增 testid：`message-identity`（身份栏容器，仅此一个新 testid，见 §5）。
+  web/src/components/ui/index.ts  → 导出 MessageIdentity + MessageIdentityProps。
+
+改动
+  ui/chat-bubble.tsx    新增 `showIdentity?: boolean`（默认 true）；false 时跳过自身 AgentAvatar
+                        与身份行（mention 徽标、正文、折叠、附件均不受影响）。页面级独立气泡
+                        （user/system/external/无 part 的 agent）未传该 prop → 行为不变。
+  chat/msg-parts.tsx    顶部渲染唯一 MessageIdentity；过程片段 + 正文/附件 收进 `secondaryRows`
+                        （左缩进 36 = 头像 28 + 间距 8，对齐身份栏文字列）；
+                        正文与附件两条 ChatBubble 调用传 `showIdentity={false}`；
+                        aborted 分支 = MessageIdentity + MsgAborted（各一次身份）；
+                        无任何可渲染内容时不渲染身份栏（保持空消息不占位）；
+                        不再向 MsgThinking/MsgTool/MsgError/MsgAborted 传 author/role/time。
+  chat/msg-thinking.tsx 移除 AgentAvatar、author、time（pending 仍显示「思考中…」）；
+                        props 收敛为 { state, text, style, className }；A3 两处 .slice 截断原样保留。
+  chat/msg-tool.tsx     移除 AgentAvatar、摘要行 time、展开面板作者/时间 footer；
+                        props 收敛为 { name, status, input, output, style, className }；I/O 2000 封顶不变。
+  chat/msg-error.tsx    移除 AgentAvatar 与 author；保留可选 `time`（session/page.tsx:1391 独立状态行
+                        在传，该文件本 todo 不允许改动 → MsgParts 不再传 time，消息内时间只来自身份栏）。
+  chat/msg-aborted.tsx  移除 AgentAvatar/author/time，文案改为「处理被用户中断 — {detail}」；
+                        props 收敛为 { detail, style, className }。
+测试
+  e2e/chat-density.spec.ts 追加 kind="identity" 夹具、countLeafText 辅助与 B1 结构用例
+  （chat-density 项目既有，未新增项目、未改 playwright.config.ts）。
+
+未触碰（按 MUST NOT）: app/(main)/teams/[id]/session/page.tsx、hooks/use-realtime.ts、hooks/use-sse.ts、
+playwright.config.ts、worker/server 文件、mobile CSS、lib/chat-density.spec.ts（A1-A4 源码契约原样）。
+
+======================================================================
+4. 红/绿命令与退出码
+======================================================================
+RED（改动前）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx playwright test chat-density.spec.ts --project=chat-density --reporter=list -g "B1 共享身份栏"
+  → EXIT=1（task-4-red-run.log）
+
+GREEN（改动后，全部本会话实跑）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx tsc --noEmit                                              → EXIT=0   （task-4-tsc.log）
+  npx eslint src/components/ui/message-identity.tsx src/components/ui/index.ts \
+    src/components/ui/chat-bubble.tsx src/components/chat/msg-parts.tsx \
+    src/components/chat/msg-thinking.tsx src/components/chat/msg-tool.tsx \
+    src/components/chat/msg-error.tsx src/components/chat/msg-aborted.tsx \
+    e2e/chat-density.spec.ts                                    → EXIT=0   （task-4-eslint.log，4 条既有 no-img-element warning，0 error）
+  npx playwright test chat-density.spec.ts --project=chat-density --reporter=list -g "B1 共享身份栏"
+                                               → EXIT=0   （task-4-b1-focused.log，1 passed）
+  npx playwright test chat-density.spec.ts --project=chat-density --reporter=list
+                                               → EXIT=0   （task-4-green-e2e.log，8 passed：A1×2/A2×2/A3/A4×2/B1）
+  npx playwright test lib/ --project=lib-unit --reporter=list   → EXIT=0   （task-4-green-lib.log，6 passed，A1-A4 源码契约未破坏）
+
+未运行（记录原因）: `npm run lint`、任何 `--fix`、`next build`（与共享 dev server 竞争，计划禁止）、
+pages.spec.ts / session-unification.spec.ts（C2 拥有该页面与测试，本 todo 不跑不改）。
+
+======================================================================
+5. 结构计数与 testid 前后 diff
+======================================================================
+5.1 结构计数（reasoning + tool + text 单条 agent 消息）
+  来源 A：B1 结构用例断言（通过）见 task-4-b1-focused.log
+  来源 B：真实浏览器（系统 Chrome，channel=chrome）渲染生产 MsgParts 的独立观测
+          命令: cd web && node scripts/b1-identity-visual.tmp.mjs   → EXIT=0（脚本用后删除）
+          日志: task-4-browser-observation.log   截图: task-4-identity-rail.png
+  {
+    "agent-avatar": 1, "message-identity": 1,
+    "chat-bubble-author": 1, "chat-bubble-time": 1,
+    "msg-thinking": 1, "msg-tool": 1, "chat-bubble": 1, "chat-bubble-content": 1, "msg-streaming": 0,
+    "author-leaf(密度)": 1, "time-leaf(12:00)": 1
+  }
+  → 头像 / 作者行 / 时间各 1；过程 testid 与内容仍各 1 且可见。
+
+5.2 testid 前后 diff（计划原命令）
+  grep ... > task-4-chat-testids-before.txt   （24 条）
+  改动后再跑同一命令 > task-4-chat-testids-after.txt （24 条）
+  diff before after → EXIT=0（逐行相同，零消失、零新增于该 grep 作用域）
+  追加集合校验（把新建的 message-identity.tsx 一并纳入 grep）：
+    comm -13 before after → 仅 `data-testid="message-identity"` 一条新增，
+    其余 message-identity.tsx 内的 agent-avatar/chat-bubble-author/chat-bubble-time/
+    external-channel-badge 均已在基线中存在。
+  新增 testid 记录：`message-identity`（共享身份栏容器，供 B2/B6 结构断言定位）。
+  既有依赖项仍可定位: agent-avatar / chat-bubble / chat-bubble-author / chat-bubble-time /
+  chat-bubble-content / chat-bubble-toggle / mention-me-badge / external-channel-badge /
+  msg-thinking / msg-tool / msg-error / msg-error-action / msg-aborted / msg-streaming /
+  msg-streaming-dots / attachment-image / attachment-file / message-attachment。
+
+5.3 可见内容保留（浏览器观测 visibleText）
+  "D | 密度 | · 12:00 | 💭 | 推理内容 | 已思考 · 点击展开 ▸ | ⚙ | identity_tool | in | 成功 | ▸ | 最终结论"
+  → thinking 摘录与展开、tool 名称/输入/状态徽章、正文全部保留，仅身份收敛为顶部一行。
+
+======================================================================
+6. 真实浏览器/人工观察
+======================================================================
+- 截图 task-4-identity-rail.png（960×720，系统 Chrome 渲染生产组件）：
+  顶部一条身份栏（D 头像 + 密度 + · 12:00），下方三行附属行（思考条、工具卡、正文气泡）
+  左缘对齐到身份栏文字列（缩进 36px），全图仅一个头像、一处作者、一处时间。
+- 共享 dev server 活栈冒烟（未跑完整 build）:
+  curl -s -o /tmp/b1-session.html -w '%{http_code}' http://localhost:3001/teams/tm_0000000001/session → 200（12909 bytes）
+  curl http://localhost:3001/login → 200；HTML 中无 Application error / Module not found / BuildError。
+  说明 session 路由在改动后仍可被 next dev 正常编译（改动组件由该路由引入）。
+
+======================================================================
+7. 清理回执
+======================================================================
+- 临时脚本 web/scripts/b1-identity-visual.tmp.mjs → 已删除（ls web/scripts 仅剩既有两个 mjs）。
+- Playwright 产物 web/test-results、web/playwright-report → 已删除。
+- .omo/evidence/phase5-t9-playwright.json 前后 shasum 均为
+  ca4f79e9ceef5210962af118d266e9a7bca06aae（task-4-report-hash-before.txt）：
+  本次全部运行带 `--reporter=list` 覆盖了 config 的 json reporter，该脏文件未被改写。
+- 未执行任何 `git checkout --` / `git stash`；预存脏文件（.omo/boulder.json、
+  .omo/ulw-execute/ledger.jsonl、.omo/evidence/** 非本计划文件、.opencode/opencode.json 等）原样保留。
+- 本证据目录（.omo/evidence/chat-ux-hierarchy-and-streaming/task-4-*）不纳入产品 commit。
+
+======================================================================
+8. 已知风险 / 说明
+======================================================================
+1) 身份行的实现存在两处来源：MessageIdentity（MsgParts 链路，本 todo 生效）与 ChatBubble 内联身份行
+   （页面级独立气泡沿用）。未做二次抽取的原因：lib/chat-density.spec.ts 的 A4 源码契约断言
+   `fontSize: messageFontSize.identity` / `fontWeight: messageFontWeight.identity` /
+   `data-testid="chat-bubble-time"` 必须出现在 chat-bubble.tsx，移动该 markup 会打破既有测试门，
+   而本 todo 禁止为迁就重构修改既有测试契约 → 运行期身份仍只渲染一次，源码层留两处等价 markup。
+2) MsgError 保留可选 `time`（session/page.tsx:1391 独立状态行在传）；MsgParts 已不再向其传
+   author/role/time，故消息内不重复时间。若后续 B12 改该状态行，可一并收敛。
+3) MsgAborted 文案由「{author} 的处理被用户中断 · {time} — {detail}」简化为
+   「处理被用户中断 — {detail}」，author/time 由共享身份栏承载（无测试依赖旧文案）。
+4) 未跑 pages.spec.ts / session-unification.spec.ts（本 todo 范围外，C2 拥有）；
+   最终回归由 F2/F3 覆盖。
+5) 新增 testid 仅 `message-identity`，已在 §5.2 记录，供 F1 结构门核对。

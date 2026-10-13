@@ -1,0 +1,479 @@
+==========================================================================
+task-2  新增不回显的 secret_input 问题生命周期  —— evidence
+plan: .omo/plans/sensitive-command-tool.md (todo 2)
+date: 2026-09-26T13:48:30Z  host: guolong-macdeMac-mini.local
+sentinel: s3cr3t-A9f (fake, test-only)
+==========================================================================
+
+### Changed files (product/test only)
+ server/src/questions/dto/reply-question.dto.ts |  15 +-
+ server/src/questions/questions.constants.ts    |  16 ++
+ server/src/questions/questions.service.spec.ts | 330 +++++++++++++++++++++++++
+ server/src/questions/questions.service.ts      | 231 ++++++++++++++++-
+ 4 files changed, 587 insertions(+), 5 deletions(-)
+
+-----------------[ RED: failing-first before implementation ]-----------------
+$ cd server && npx jest src/questions/questions.service.spec.ts --runInBand
+(run before production edit; new API surface did not exist)
+--- exit=1 ---
+    src/questions/questions.service.spec.ts:21:3 - error TS2305: Module '"./questions.constants"' has no exported member 'SECRET_INPUT_BUDGET_MS'.
+    src/questions/questions.service.spec.ts:22:3 - error TS2305: Module '"./questions.constants"' has no exported member 'SECRET_QUESTION_SOURCE'.
+    src/questions/questions.service.spec.ts:1023:36 - error TS2339: Property 'SECRET_INPUT' does not exist on type '{ readonly QUESTION: "question"; readonly PERMISSION: "permission"; }'.
+    src/questions/questions.service.spec.ts:1055:21 - error TS2551: Property 'createSecretForPlatform' does not exist on type 'QuestionsService'. Did you mean 'createForPlatform'?
+    src/questions/questions.service.spec.ts:1070:35 - error TS2339: Property 'SECRET_INPUT' does not exist on type '{ readonly QUESTION: "question"; readonly PERMISSION: "permission"; }'.
+    src/questions/questions.service.spec.ts:1084:36 - error TS2551: Property 'createSecretForPlatform' does not exist on type 'QuestionsService'. Did you mean 'createForPlatform'?
+    src/questions/questions.service.spec.ts:1101:38 - error TS2339: Property 'SECRET_INPUT' does not exist on type '{ readonly QUESTION: "question"; readonly PERMISSION: "permission"; }'.
+    src/questions/questions.service.spec.ts:1112:36 - error TS2339: Property 'SECRET_INPUT' does not exist on type '{ readonly QUESTION: "question"; readonly PERMISSION: "permission"; }'.
+    src/questions/questions.service.spec.ts:1121:40 - error TS2339: Property 'SECRET_INPUT' does not exist on type '{ readonly QUESTION: "question"; readonly PERMISSION: "permission"; }'.
+    src/questions/questions.service.spec.ts:1133:17 - error TS2551: Property 'createSecretForPlatform' does not exist on type 'QuestionsService'. Did you mean 'createForPlatform'?
+    src/questions/questions.service.spec.ts:1143:34 - error TS2339: Property 'QUESTION_SECRET_MANAGED_FORBIDDEN' does not exist on type '{ readonly QUESTION_NOT_FOUND: "QUESTION_NOT_FOUND"; readonly QUESTION_WORKER_UNAVAILABLE: "QUESTION_WORKER_UNAVAILABLE"; readonly QUESTION_INVALID_REPLY: "QUESTION_INVALID_REPLY"; readonly QUESTION_ALREADY_RESOLVED: "QUESTION_ALREADY_RESOLVED"; readonly QUESTION_EXPIRED: "QUESTION_EXPIRED"; readonly QUESTION_TEAM_N...'.
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+
+-----------------[ GREEN: required verification commands ]-------------------
+--- raw tail of /tmp/gate1.log ---
+      ✓ 未声明变量（secrets 带 content 未声明的 key）→ 400 QUESTION_INVALID_REPLY (1 ms)
+      ✓ 已声明变量缺值（secrets:{}）→ 400 QUESTION_INVALID_REPLY
+      ✓ 终态重复回复（已 resolved）→ 400 QUESTION_ALREADY_RESOLVED（不再触发钩子）
+      ✓ secret source 即使被送进 forwardReply 也走平台旁路：不查 worker、不调 questionReply、不落明文 (1 ms)
+      ✓ 钩子未注册（进程重启丢失）→ 落库 + emit 照常，不抛错（stale pending 不悬挂）
+
+Test Suites: 1 passed, 1 total
+Tests:       44 passed, 44 total
+Snapshots:   0 total
+Time:        3.296 s, estimated 4 s
+Ran all test suites matching /src\/questions\/questions.service.spec.ts/i.
+EXIT=0
+
+--- raw tail of /tmp/gate2.log ---
+### CMD: cd server && npx jest src/questions --runInBand
+[Nest] 38919  - 09/26/2026, 9:47:20 PM   ERROR [QuestionsService] [questions] 平台 question 确认钩子执行失败 id=aq_platform requestId=que_platform_0000000001：updateTeam 409
+PASS src/questions/questions.service.spec.ts
+PASS src/questions/questions.controller.spec.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       55 passed, 55 total
+Snapshots:   0 total
+Time:        1.699 s, estimated 4 s
+Ran all test suites matching /src\/questions/i.
+EXIT=0
+
+--- raw tail of /tmp/gate3.log ---
+  2:10  warning  'ConfigService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker.client.ts
+  238:5  warning  'model' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/workers.service.spec.ts
+  902:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 67 problems (1 error, 66 warnings)
+  1 error and 0 warnings potentially fixable with the `--fix` option.
+
+EXIT=1
+
+NOTE: npm run lint:check exit=1 的唯一 1 个 error 位于
+  server/src/common/constants/platform-capability.coverage.spec.ts
+  即 wave-1 并行 todo 1 正在编辑的非本任务文件（dirty worktree），未触碰。
+本任务 4 个文件的定向 lint：
+$ npx eslint src/questions/questions.service.ts src/questions/questions.service.spec.ts src/questions/questions.constants.ts src/questions/dto/reply-question.dto.ts
+--- exit=0（0 error，1 warning 为 HEAD 已存在的 BadRequestException 未使用导入）---
+$ npx eslint src/questions/questions.service.ts src/questions/questions.service.spec.ts src/questions/questions.constants.ts src/questions/dto/reply-question.dto.ts
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/questions/questions.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 1 problem (0 errors, 1 warning)
+
+scoped-lint-exit=0
+
+-----------------[ MANUAL QA: answers/SSE 无 sentinel，hook 内存有明文 ]-------
+$ cd server && npx jest src/questions/task-2-manual-qa.spec.ts --runInBand
+  harness 保存在 .omo/evidence/sensitive-command-tool/task-2-manual-qa.spec.ts（未提交）
+  一次运行同时抓取：agentQuestion.update 入参 JSON / 序列化 realtime.emit payload / hook 入参
+--- raw output ---
+  console.log
+    ===AGENT_QUESTION_UPDATE_ARGS_JSON===
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:143:13)
+
+  console.log
+    [
+      {
+        "where": {
+          "id": "aq_secret_1"
+        },
+        "data": {
+          "status": "resolved",
+          "answers": {
+            "provided": true,
+            "filled": [
+              "DB_PASSWORD"
+            ],
+            "actorType": "user",
+            "actorId": "u_1"
+          }
+        }
+      },
+      {
+        "where": {
+          "id": "aq_secret_2"
+        },
+        "data": {
+          "status": "rejected",
+          "answers": {
+            "provided": false,
+            "filled": [],
+            "actorType": "user",
+            "actorId": "u_1"
+          }
+        }
+      }
+    ]
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:144:13)
+
+  console.log
+    ===SERIALIZED_REALTIME_EMIT_PAYLOAD===
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:145:13)
+
+  console.log
+    [
+      [
+        "agent.question",
+        {
+          "question": {
+            "id": "aq_0000000002",
+            "requestId": "que_platform_0000000001",
+            "sessionId": "s_main",
+            "taskId": "t_1",
+            "agentId": "a_1",
+            "kind": "secret_input",
+            "content": {
+              "source": "secret_input",
+              "template": "mysql -h db -u root -p{{DB_PASSWORD}}",
+              "variables": [
+                {
+                  "name": "DB_PASSWORD",
+                  "secret": true
+                }
+              ],
+              "reason": "导出订单表"
+            },
+            "status": "pending",
+            "answers": null,
+            "managedMode": false,
+            "createdAt": "2026-09-26T13:49:10.487Z",
+            "updatedAt": "2026-09-26T13:49:10.487Z"
+          },
+          "taskId": "t_1",
+          "agentId": "a_1",
+          "sessionId": "s_main"
+        },
+        {
+          "type": "team",
+          "id": "tm_1"
+        }
+      ],
+      [
+        "agent.question",
+        {
+          "question": {
+            "id": "aq_secret_1",
+            "requestId": "que_platform_0000000001",
+            "sessionId": "s_main",
+            "taskId": "t_1",
+            "agentId": "a_1",
+            "kind": "secret_input",
+            "content": {
+              "source": "secret_input",
+              "template": "mysql -h db -u root -p{{DB_PASSWORD}}",
+              "variables": [
+                {
+                  "name": "DB_PASSWORD",
+                  "secret": true
+                }
+              ],
+              "reason": "导出订单表"
+            },
+            "status": "resolved",
+            "answers": {
+              "provided": true,
+              "filled": [
+                "DB_PASSWORD"
+              ],
+              "actorType": "user",
+              "actorId": "u_1"
+            },
+            "managedMode": false,
+            "createdAt": "2026-09-26T13:49:10.487Z",
+            "updatedAt": "2026-09-26T13:49:10.487Z"
+          },
+          "taskId": "t_1",
+          "teamId": "tm_1",
+          "agentId": "a_1",
+          "sessionId": "s_main",
+          "resolved": true
+        },
+        {
+          "type": "team",
+          "id": "tm_1"
+        }
+      ],
+      [
+        "agent.question",
+        {
+          "question": {
+            "id": "aq_secret_2",
+            "requestId": "que_platform_0000000001",
+            "sessionId": "s_main",
+            "taskId": "t_1",
+            "agentId": "a_1",
+            "kind": "secret_input",
+            "content": {
+              "source": "secret_input",
+              "template": "mysql -h db -u root -p{{DB_PASSWORD}}",
+              "variables": [
+                {
+                  "name": "DB_PASSWORD",
+                  "secret": true
+                }
+              ],
+              "reason": "导出订单表"
+            },
+            "status": "rejected",
+            "answers": {
+              "provided": false,
+              "filled": [],
+              "actorType": "user",
+              "actorId": "u_1"
+            },
+            "managedMode": false,
+            "createdAt": "2026-09-26T13:49:10.487Z",
+            "updatedAt": "2026-09-26T13:49:10.487Z"
+          },
+          "taskId": "t_1",
+          "teamId": "tm_1",
+          "agentId": "a_1",
+          "sessionId": "s_main",
+          "resolved": true
+        },
+        {
+          "type": "team",
+          "id": "tm_1"
+        }
+      ]
+    ]
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:146:13)
+
+  console.log
+    ===HOOK_ARGS_IN_MEMORY===
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:147:13)
+
+  console.log
+    [
+      {
+        "outcome": "provided",
+        "secrets": {
+          "DB_PASSWORD": "s3cr3t-A9f"
+        },
+        "actor": {
+          "type": "user",
+          "id": "u_1"
+        }
+      }
+    ]
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:148:13)
+
+  console.log
+    ===SENTINEL_SCAN===
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:149:13)
+
+  console.log
+    answers          sentinel_hits=0
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:150:13)
+
+  console.log
+    sse_payload      sentinel_hits=0
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:151:13)
+
+  console.log
+    reply_dto        sentinel_hits=0
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:152:13)
+
+  console.log
+    hook_in_memory   sentinel_hits=1
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:153:13)
+
+  console.log
+    provided.status=resolved cancelled.status=rejected
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:154:13)
+
+  console.log
+    workerClient.questionReply_calls=0 permissionReply_calls=0 worker.findUnique_calls=0
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:155:13)
+
+  console.log
+    create_calls=1 update_calls=2 emit_calls=3
+
+      at Object.<anonymous> (questions/task-2-manual-qa.spec.ts:158:13)
+
+PASS src/questions/task-2-manual-qa.spec.ts
+  TASK2_MANUAL_QA secret_input no-echo capture
+    ✓ captures update args / SSE payload / hook args in one run (10 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       1 passed, 1 total
+Snapshots:   0 total
+Time:        2.381 s, estimated 3 s
+Ran all test suites matching /src\/questions\/task-2-manual-qa.spec.ts/i.
+--- manual QA exit=0（PASS）---
+
+-----------------[ NEGATIVE CONTROL：把明文写进 answers → 断言必须变红 ]--------
+临时把 resolveSecretQuestion 的 answers 增加 leaked: secrets（plaintext 落库）→ 跑同一 spec：
+--- exit=1 ---
+      ✕ 带 sentinel 的回复：落库 answers 只有 {provided,filled,actorType,actorId}，update 入参与序列化 SSE payload 0 命中，hook 内存收到明文 (3 ms)
+      ✕ {secrets:null} → 取消：终态 rejected + hook outcome=cancelled + 不执行命令（不触 worker） (2 ms)
+      ✕ secret source 即使被送进 forwardReply 也走平台旁路：不查 worker、不调 questionReply、不落明文 (1 ms)
+      ✕ 钩子未注册（进程重启丢失）→ 落库 + emit 照常，不抛错（stale pending 不悬挂） (17 ms)
+Tests:       4 failed, 40 passed, 44 total
+--- 恢复后 diff /tmp/questions.service.ts.bak questions.service.ts → RESTORED_CLEAN，重跑 exit=0（44 passed）---
+
+-----------------[ SENTINEL 扫描（secrets 对抗类） ]---------------------------
+$ grep -rn 's3cr3t-A9f' server/src | sed 's/:.*//' | sort -u
+server/src/questions/questions.service.spec.ts
+  → 仅测试文件命中（计划允许 sentinel 只存在于测试代码）；product 代码 0 命中
+$ grep -c 's3cr3t-A9f' 于 answers JSON / SSE payload / reply DTO → 见 MANUAL QA SENTINEL_SCAN（0/0/0，hook=1）
+
+-----------------[ 对抗类探针 ]-----------------------------------------------
+stale_state         : ① 已终态行再回复 → 400 QUESTION_ALREADY_RESOLVED（update 调用 0，hook 未触发）
+                      ② 进程重启后 hook 未注册 → 落库 + emit 照常、不抛错、不悬挂
+                      ③ expire() 同时注销 platformResolvers 与 secretResolvers，无残留 pending 钩子
+dirty_worktree      : 起始已脏文件（.omo/* .opencode/* 与并行 todo1 的 capability/seed/migration spec）未触碰；
+                      本任务只改 server/src/questions 下 4 个文件（git diff --stat 见上），提交前逐一核对 staged 文件名
+misleading_success  : 断言读取真实 mock 调用入参与 echo-update 回写的真实 data（非预置常量）；
+                      反证 QA：临时把明文写进 answers → 4 个用例变红（见 NEGATIVE CONTROL）
+malformed_evidence  : 所有 payload 断言走 JSON.stringify 序列化（对象序列化后扫描），原始 jest 输出含 exit 码
+secrets             : sentinel 扫描 product 代码 0 命中；answers/SSE/DTO 0 命中，hook 内存 1 命中（预期）
+prompt_injection    : N/A —— 本 todo 不解析任何模型/外部文本，入参仅为类型化 DTO 与 DB 行，无注入面
+hung_commands       : N/A —— 本 todo 不执行任何命令/子进程/网络调用（question 生命周期本身同步、无等待循环）
+
+-----------------[ 验收要点对照 ]---------------------------------------------
+content 仅模板+变量元数据            : create 入参 content 深等断言（source/template/variables/reason）
+answers 仅 {provided,filled,actorType,actorId} : 深等断言 + JSON.stringify 无 sentinel
+{secrets:null} → rejected + cancelled   : 用例「{secrets:null} → 取消」
+缺 secrets/未声明变量/终态 → 400        : 3 个独立用例
+托管 fail-closed、create 调用 0        : 用例「托管团队 fail-closed」
+secret 回复不进 workerClient.questionReply : 提供路径与被强送 forwardReply 的防御路径均断言 0 调用 + worker 查询 0 次
+SECRET_INPUT_BUDGET_MS = 540s          : 常量用例（供 todo 6 阻塞预算使用）
+
+-----------------[ 手动 QA 命令清单 ]-----------------------------------------
+RED   : cd server && npx jest src/questions/questions.service.spec.ts --runInBand   → exit=1 (4 处 TS 错误，实现前)
+GREEN : cd server && npx jest src/questions/questions.service.spec.ts --runInBand   → exit=0 (44 tests)
+GREEN : cd server && npx jest src/questions --runInBand                             → exit=0 (55 tests)
+GREEN : cd server && npm run lint:check                                             → 见上（唯一 error 属并行 todo1 文件；本任务 4 文件定向 lint exit=0）
+QA    : cd server && npx jest src/questions/task-2-manual-qa.spec.ts --runInBand    → exit=0
+
+-----------------[ COMMIT ]---------------------------------------------------
+git diff --cached --name-only 核对（提交前）：
+  server/src/questions/dto/reply-question.dto.ts
+  server/src/questions/questions.constants.ts
+  server/src/questions/questions.service.spec.ts
+  server/src/questions/questions.service.ts
+git show --stat HEAD：
+  353af23 feat(questions): 新增不回显的 secret_input 生命周期
+   server/src/questions/dto/reply-question.dto.ts |  15 +-
+   server/src/questions/questions.constants.ts    |  16 ++
+   server/src/questions/questions.service.spec.ts | 330 +++++++++++++++++++++++++
+   server/src/questions/questions.service.ts      | 231 ++++++++++++++++-
+   4 files changed, 587 insertions(+), 5 deletions(-)
+COMMIT_SHA=353af23e2293b56fa48dd20cb1ae1a2f54ca5b3f
+message: feat(questions): 新增不回显的 secret_input 生命周期
+evidence 目录（.omo/evidence/**）、.omo/plans/** 未进入提交（保持 untracked/未暂存）
+
+-----------------[ 收尾复跑 npm run lint:check ]--------------------------------
+--- exit=1：唯一 2 个 error 均在并行 todo 1 正在编辑的文件（非本任务、未触碰、未暂存）---
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/constants/platform-capability.coverage.spec.ts ->   70:12  error  Replace `isCapabilityGranted({·'secret.command':·false·},·'secret.command')).toBe(⏎······false,⏎····` with `⏎······isCapabilityGranted({·'secret.command':·false·},·'secret.command'),⏎····).toBe(false`  prettier/prettier
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/agent-role-capabilities-split-grouped.migration.spec.ts ->   196:36  error  Replace `/CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE/i` with `⏎······/CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE/i,⏎····`  prettier/prettier
+本任务 4 文件定向 lint：0 error（上面 scoped-lint-exit=0）
+
+-----------------[ 提交后 git status（server/src/questions 应干净） ]-----------
+(无输出 = 已提交且无残留)
+==========================================================================
+
+==========================================================================
+FIX ROUND 1 — hook 错误日志未脱敏（needs-fix blocker）  2026-09-26T14:11:38Z
+==========================================================================
+defect: questions.service.ts secret hook catch 直接记录 (err as Error).message，
+        hook 抛 Error('worker failed: s3cr3t-A9f') 时 ERROR 日志含明文 secret
+fix   : 落日志前对本次提交的每个非空 secret 值做精确字符串替换 → '***'（只改 catch 分支）
+
+-----------------[ RED: 撤销脱敏后的负向对照 ]--------------------------------
+临时把 catch 恢复为原始 ${(err as Error).message} → 同一 spec：
+      ✕ 钩子抛出含 sentinel 的错误 → logger.error 落盘前精确脱敏（0 命中）且收敛照常完成 (1 ms)
+Tests:       1 failed, 44 passed, 45 total
+--- negative-control exit=1（仅新回归用例变红，其余 44 全绿）---
+--- cp /tmp/questions.service.ts.bak2 恢复 → diff -q → RESTORED_CLEAN ---
+
+-----------------[ LOGGER SENTINEL PROBE（修复后） ]--------------------------
+$ cd server && npx jest src/questions/task-2-logger-probe.spec.ts --runInBand
+  harness: .omo/evidence/sensitive-command-tool/task-2-logger-probe.spec.ts（未提交）
+--- raw output（关键行）---
+    worker failed: s3cr3t-A9f
+    [questions] secret_input 终态钩子执行失败 id=aq_secret_1 requestId=que_platform_0000000001：worker failed: ***
+    logger.error sentinel_hits=0
+    redaction_marker_present=true
+    dto.status=resolved emit_calls=2 questionReply_calls=0
+    emit_sentinel_hits=0
+PASS src/questions/task-2-logger-probe.spec.ts
+Tests:       1 passed, 1 total
+--- probe exit=0 (PASS) ---
+  上表两行对照：hook 原始 Error='worker failed: s3cr3t-A9f' → 实际 logger.error 行以 '：worker failed: ***' 结尾
+  logger.error sentinel_hits=0 / redaction_marker_present=true / dto.status=resolved / emit sentinel_hits=0
+
+-----------------[ GREEN: 修复后回归门 ]--------------------------------------
+PASS src/questions/questions.service.spec.ts
+PASS src/questions/questions.controller.spec.ts
+Test Suites: 2 passed, 2 total
+Tests:       56 passed, 56 total
+EXIT=0
+$ npx eslint src/questions/questions.service.ts src/questions/questions.service.spec.ts → 0 errors, 1 pre-existing warning, exit=0
+
+-----------------[ 回归测试 ]--------------------------------------------------
+questions.service.spec.ts 新增：「钩子抛出含 sentinel 的错误 → logger.error 落盘前精确脱敏（0 命中）且收敛照常完成」
+  断言：logger.error 恰好 1 次、日志含 '***'、日志不含 sentinel、结果仍 resolved、questionReply 0 次、SSE payload 无 sentinel
+
+-----------------[ 范围 ]------------------------------------------------------
+ M server/src/questions/questions.service.spec.ts
+ M server/src/questions/questions.service.ts
+仅 questions.service.ts（脱敏 catch）与 questions.service.spec.ts（回归用例）两文件变更；
+未触碰 .omo/.opencode/todo1/todo4 文件；以 --amend 并入原原子提交。
+
+-----------------[ COMMIT: fix round ]----------------------------------------
+amend 前置条件核对：HEAD=8a87765（本任务原提交 353af23）
+  → 并行 todo 1 已在其上提交 8a87765，HEAD 不再是本任务提交：
+     - git commit --amend 会把本修复折进 todo 1 的提交（跨任务污染）
+     - 改写 353af23 需重写 8a87765，会破坏 todo 1 已记录的 SHA
+  → 采用等价安全方案：独立的、范围同样只有 2 个文件的 fix 提交（保持原子可回滚）
+staged 核对（提交前）：
+  ee3dc6c fix(questions): 脱敏 secret_input 钩子错误日志
+   server/src/questions/questions.service.spec.ts | 29 ++++++++++++++++++++++++++
+   server/src/questions/questions.service.ts      |  9 +++++++-
+   2 files changed, 37 insertions(+), 1 deletion(-)
+FIX_COMMIT_SHA=ee3dc6c657f90d8a9d2626c79ffa59c893b494cb
+message: fix(questions): 脱敏 secret_input 钩子错误日志
+post-commit git status --short -- server/src/questions:
+(无输出 = 已提交且无残留；.omo 证据未进入提交)
+history: ee3dc6c fix(questions): 脱敏 secret_input 钩子错误日志 8a87765 feat(mcp): 注册 secret_command 并全角色开放 353af23 feat(questions): 新增不回显的 secret_input 生命周期 
+==========================================================================

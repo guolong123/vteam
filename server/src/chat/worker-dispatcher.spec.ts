@@ -92,11 +92,13 @@ describe('WorkerDispatcher', () => {
     artifactVersion: { findMany: jest.Mock };
     message: {
       create: jest.Mock;
+      deleteMany: jest.Mock;
       findMany: jest.Mock;
       findFirst: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
     };
+    agentQuestion: { findFirst: jest.Mock };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
     messageChannel: { findUnique: jest.Mock };
     taskMessageChannel: { findMany: jest.Mock };
@@ -214,6 +216,7 @@ describe('WorkerDispatcher', () => {
       // 默认空历史（dispatch 新增群聊历史查询；未注入 → 既有测试 prompt 行为不变）
       message: {
         create: jest.fn(),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         findMany: jest.fn().mockResolvedValue([]),
         // 默认无 processing 流式消息 → handleTaskCompleted 走 create 落库路径（兼容既有测试）
         findFirst: jest.fn().mockResolvedValue(null),
@@ -221,6 +224,8 @@ describe('WorkerDispatcher', () => {
         // dm-sse-no-refresh：dispatch 前清理目标频道残留 processing（无残留时 count=0）
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
+      // 终态清扫前探测待填 secret_input（默认无 → 不豁免任何工具卡）
+      agentQuestion: { findFirst: jest.fn().mockResolvedValue(null) },
       chatChannel: { findUnique: jest.fn(), findFirst: jest.fn() },
       messageChannel: { findUnique: jest.fn().mockResolvedValue(null) },
       taskMessageChannel: { findMany: jest.fn().mockResolvedValue([]) },
@@ -3345,6 +3350,26 @@ describe('WorkerDispatcher', () => {
       expect(promptText).toContain(request.text);
     });
 
+    it('展示回写：触发消息的 content.text 落为完整组装 prompt（上下文块 + 原文）', async () => {
+      prisma.message.findFirst.mockResolvedValue({
+        content: { text: request.text, parts: [] },
+      });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      const updateCall = prisma.message.update.mock.calls.find(
+        (c) => (c[0] as { where: { id: string } }).where.id === request.messageId,
+      );
+      expect(updateCall).toBeDefined();
+      const written = (updateCall![0] as { data: { content: { text: string; parts: unknown[] } } }).data
+        .content;
+      expect(written.text).toContain('【任务上下文】');
+      expect(written.text).toContain(request.text);
+      // parts 原样保留（user 行恒 []）
+      expect(written.parts).toEqual([]);
+    });
+
     it('方法保留：buildDoclibContext 仍可组装 <doclib> 块（最新版本正文 + 总量截断补闭合标签）', async () => {
       prisma.artifact.findMany.mockResolvedValue([
         {
@@ -3786,6 +3811,268 @@ describe('WorkerDispatcher', () => {
           text: '最终',
         },
       ]);
+    });
+
+    it('残留清扫：仅含非终态空 tool 卡的残留行 → 删除（不收敛为 sent，UI 不留永久 running 卡）', async () => {
+      prisma.message.findFirst.mockResolvedValue({ id: 'm_main' });
+      prisma.message.update.mockResolvedValue(
+        messageRow({ id: 'm_main', status: MESSAGE_STATUS.sent }),
+      );
+      const staleToolPart = {
+        id: 'prt_x',
+        type: 'tool',
+        tool: 'read',
+        state: { status: 'running', input: {}, output: '' },
+      };
+      prisma.message.findMany.mockResolvedValue([
+        { id: 'm_stale1', content: { text: '', parts: [staleToolPart] } },
+        {
+          id: 'm_stale2',
+          content: {
+            text: '',
+            parts: [
+              { id: 'p1', type: 'tool', state: { status: 'pending' } },
+              { id: 'p2', type: 'tool', state: { status: 'streaming' } },
+            ],
+          },
+        },
+      ]);
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '结论',
+        parts: [{ type: 'text', text: '结论' }],
+      });
+
+      // 空壳工具卡行删除
+      expect(prisma.message.deleteMany).toHaveBeenCalledWith({
+        where: { id: { in: ['m_stale1', 'm_stale2'] } },
+      });
+      // 不得收敛为 sent（那正是「永久 running 工具卡」的来源）
+      expect(prisma.message.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: { in: expect.arrayContaining(['m_stale1']) } },
+        }),
+      );
+    });
+
+    it('残留清扫：有真实内容/终态工具输出/error 的残留行 → 保留并收敛为 sent（不变更既有行为）', async () => {
+      prisma.message.findFirst.mockResolvedValue({ id: 'm_main' });
+      prisma.message.update.mockResolvedValue(
+        messageRow({ id: 'm_main', status: MESSAGE_STATUS.sent }),
+      );
+      const rows = [
+        // 真实正文
+        {
+          id: 'm_keep1',
+          content: {
+            text: '我在处理',
+            parts: [{ type: 'text', text: '我在处理' }],
+          },
+        },
+        // 工具已落终态 + 有输出
+        {
+          id: 'm_keep2',
+          content: {
+            text: '',
+            parts: [
+              {
+                id: 'p1',
+                type: 'tool',
+                state: {
+                  status: 'completed',
+                  input: { p: 'a' },
+                  output: 'ok',
+                },
+              },
+            ],
+          },
+        },
+        // error part
+        {
+          id: 'm_keep3',
+          content: {
+            text: '',
+            parts: [{ id: 'p1', type: 'error', detail: '炸了' }],
+          },
+        },
+        // aborted part
+        {
+          id: 'm_keep4',
+          content: {
+            text: '',
+            parts: [{ id: 'p1', type: 'aborted', detail: '用户中断' }],
+          },
+        },
+        // 非终态但有真实 input/output（工具确实在跑/有参数）→ 仍算有内容
+        {
+          id: 'm_keep5',
+          content: {
+            text: '',
+            parts: [
+              {
+                id: 'p1',
+                type: 'tool',
+                state: { status: 'running', input: { p: 'a' }, output: '' },
+              },
+            ],
+          },
+        },
+        // 真空行（无渲染 part）→ 仍按既有语义删除
+        { id: 'm_empty', content: { text: '', parts: [] } },
+      ];
+      prisma.message.findMany.mockResolvedValue(rows);
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '结论',
+        parts: [{ type: 'text', text: '结论' }],
+      });
+
+      expect(prisma.message.deleteMany).toHaveBeenCalledWith({
+        where: { id: { in: ['m_empty'] } },
+      });
+      expect(prisma.message.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: {
+            in: ['m_keep1', 'm_keep2', 'm_keep3', 'm_keep4', 'm_keep5'],
+          },
+        },
+        data: { status: MESSAGE_STATUS.sent },
+      });
+    });
+
+    it('残留清扫：会话存在 pending secret_input → running 的 secret_command 卡保留不清扫', async () => {
+      prisma.message.findFirst.mockResolvedValue({ id: 'm_main' });
+      prisma.message.update.mockResolvedValue(
+        messageRow({ id: 'm_main', status: MESSAGE_STATUS.sent }),
+      );
+      prisma.agentQuestion.findFirst.mockResolvedValue({ id: 'aq_1' });
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: 'm_secret',
+          content: {
+            text: '',
+            parts: [
+              {
+                id: 'p1',
+                type: 'tool',
+                tool: 'secret_command',
+                state: { status: 'running', input: {}, output: '' },
+              },
+            ],
+          },
+        },
+      ]);
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '结论',
+        parts: [{ type: 'text', text: '结论' }],
+      });
+
+      // 用户正在填敏感值 → 该行不得被删（仍按既有语义收敛为 sent）
+      expect(prisma.message.deleteMany).not.toHaveBeenCalled();
+      expect(prisma.message.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['m_secret'] } },
+        data: { status: MESSAGE_STATUS.sent },
+      });
+    });
+
+    it('残留清扫：pending secret_input 只豁免 secret_command 卡，普通空壳工具卡照删', async () => {
+      prisma.message.findFirst.mockResolvedValue({ id: 'm_main' });
+      prisma.message.update.mockResolvedValue(
+        messageRow({ id: 'm_main', status: MESSAGE_STATUS.sent }),
+      );
+      prisma.agentQuestion.findFirst.mockResolvedValue({ id: 'aq_1' });
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: 'm_secret',
+          content: {
+            text: '',
+            parts: [
+              {
+                id: 'p1',
+                type: 'tool',
+                tool: 'secret_command',
+                state: { status: 'running', input: {}, output: '' },
+              },
+            ],
+          },
+        },
+        {
+          id: 'm_plain',
+          content: {
+            text: '',
+            parts: [
+              {
+                id: 'p2',
+                type: 'tool',
+                tool: 'read',
+                state: { status: 'running', input: {}, output: '' },
+              },
+            ],
+          },
+        },
+      ]);
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '结论',
+        parts: [{ type: 'text', text: '结论' }],
+      });
+
+      expect(prisma.message.deleteMany).toHaveBeenCalledWith({
+        where: { id: { in: ['m_plain'] } },
+      });
+    });
+
+    it('残留清扫：查 pending secret_input 失败 → 保守不清扫（不删可能正被填写的卡）', async () => {
+      prisma.message.findFirst.mockResolvedValue({ id: 'm_main' });
+      prisma.message.update.mockResolvedValue(
+        messageRow({ id: 'm_main', status: MESSAGE_STATUS.sent }),
+      );
+      prisma.agentQuestion.findFirst.mockRejectedValue(new Error('db down'));
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: 'm_secret',
+          content: {
+            text: '',
+            parts: [
+              {
+                id: 'p1',
+                type: 'tool',
+                tool: 'secret_command',
+                state: { status: 'running', input: {}, output: '' },
+              },
+            ],
+          },
+        },
+      ]);
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '结论',
+        parts: [{ type: 'text', text: '结论' }],
+      });
+
+      // fail-safe：探测不可靠 → 视为可能有待填的 secret_command 卡，不删
+      expect(prisma.message.deleteMany).not.toHaveBeenCalled();
     });
 
     it('缺少 taskId/agentId：不落库不崩溃', async () => {

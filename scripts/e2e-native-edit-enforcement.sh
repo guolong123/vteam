@@ -131,7 +131,7 @@ fetch_agent_policies() {
 read_artifacts() {
   local oc="$1"
   docker_compose exec -T worker cat "$WORKER_WORK_DIR/opencode.json" >"$oc" 2>/dev/null \
-    || docker exec aiagents-compose-worker cat "$WORKER_WORK_DIR/opencode.json" >"$oc"
+    || docker exec vteam-compose-worker cat "$WORKER_WORK_DIR/opencode.json" >"$oc"
 }
 
 # probe_in_artifact <opencode.json> : exit 0 iff vteam-product's injected permission.edit

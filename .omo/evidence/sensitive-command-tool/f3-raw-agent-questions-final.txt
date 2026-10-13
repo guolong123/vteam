@@ -1,0 +1,23 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+id	kind	status	request_id	task_id	session_id	answers	content	created_at	updated_at
+aq_0000000031	secret_input	rejected	que_platform_0000000022	t_0000000002	s_0000000011	{"filled": [], "actorId": "u_admin", "provided": false, "actorType": "user"}	{"reason": "F3 live SSE delivery", "source": "secret_input", "template": "echo {{TOKEN}}", "variables": [{"name": "TOKEN", "secret": true}]}	2026-09-27 01:40:03.005	2026-09-27 01:41:48.938
+aq_0000000032	secret_input	rejected	que_platform_0000000023	t_0000000002	s_0000000011	{"filled": [], "actorId": "u_admin", "provided": false, "actorType": "user"}	{"reason": "F3 live SSE delivery retest", "source": "secret_input", "template": "echo {{TOKEN}}", "variables": [{"name": "TOKEN", "secret": true}]}	2026-09-27 01:43:11.674	2026-09-27 01:45:42.325
+aq_0000000033	secret_input	rejected	que_platform_0000000024	t_0000000002	s_0000000011	{"filled": [], "actorId": "u_admin", "provided": false, "actorType": "user"}	{"reason": "F3 SSE probe", "source": "secret_input", "template": "echo {{TOKEN}}", "variables": [{"name": "TOKEN", "secret": true}]}	2026-09-27 01:45:48.544	2026-09-27 01:48:01.283
+aq_0000000034	secret_input	rejected	que_platform_0000000025	t_0000000002	s_0000000011	{"filled": [], "actorId": "u_admin", "provided": false, "actorType": "user"}	{"reason": "F3 SSE tee test", "source": "secret_input", "template": "echo {{TOKEN}}", "variables": [{"name": "TOKEN", "secret": true}]}	2026-09-27 01:48:06.768	2026-09-27 01:49:34.499
+aq_0000000035	secret_input	rejected	que_platform_0000000026	t_0000000002	s_0000000011	{"filled": [], "actorId": "u_admin", "provided": false, "actorType": "user"}	{"reason": "F3 raw SSE check", "source": "secret_input", "template": "echo {{TOKEN}}", "variables": [{"name": "TOKEN", "secret": true}]}	2026-09-27 01:49:38.657	2026-09-27 01:54:02.352
+aq_0000000036	secret_input	rejected	que_platform_0000000027	t_0000000002	s_0000000011	{"filled": [], "actorId": "", "provided": false, "actorType": "user"}	{"reason": "F3 live ES capture", "source": "secret_input", "template": "echo {{TOKEN}}", "variables": [{"name": "TOKEN", "secret": true}]}	2026-09-27 01:54:20.786	2026-09-27 01:58:24.209
+aq_0000000037	secret_input	rejected	que_platform_0000000028	t_0000000002	s_0000000011	{"filled": [], "actorId": "", "provided": false, "actorType": "user"}	{"reason": "task13 baseline probe", "source": "secret_input", "template": "echo probe-{{P}}", "variables": [{"name": "P", "secret": true}]}	2026-09-27 02:26:46.994	2026-09-27 02:31:36.601
+aq_0000000038	secret_input	rejected	que_platform_0000000029	t_0000000002	s_0000000011	{"filled": [], "actorId": "", "provided": false, "actorType": "user"}	{"reason": "task13 que burn", "source": "secret_input", "template": "echo burn-{{B}}", "variables": [{"name": "B", "secret": true}]}	2026-09-27 02:36:10.654	2026-09-27 02:36:16.596
+aq_0000000039	secret_input	resolved	que_platform_0000000030	t_0000000002	s_0000000011	{"filled": ["P"], "actorId": "u_seed_admin", "provided": true, "actorType": "user"}	{"reason": "task13 heartbeat probe", "source": "secret_input", "template": "sleep 150 # {{P}}", "variables": [{"name": "P", "secret": true}]}	2026-09-27 02:38:10.434	2026-09-27 02:45:45.104
+aq_0000000040	secret_input	rejected	que_platform_0000000031	t_0000000002	s_0000000011	{"filled": [], "actorId": "", "provided": false, "actorType": "user"}	{"reason": "task13 sse capture", "source": "secret_input", "template": "echo {{C}}", "variables": [{"name": "C", "secret": true}]}	2026-09-27 02:49:00.314	2026-09-27 02:50:05.405
+
+=== FINAL STATE after owner cleanup (2026-09-27T05:45:21Z, file mtime) ===
+agent_questions_total
+0
+pending
+0
+tasks
+0
+note: aq_0000000001 (owner's distinguishing run row) removed with temp task t_0000000001 via
+      DELETE /api/v1/tasks/t_0000000001 -> HTTP 200 at 05:10:38Z; full row content preserved
+      in f3-raw-agent-questions.txt (pre-delete dump @04:49Z) and lifecycle lines in f3-raw-server.log

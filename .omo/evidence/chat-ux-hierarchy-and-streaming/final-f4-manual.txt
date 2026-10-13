@@ -1,0 +1,349 @@
+F4 — 真实私聊人工验收 (chat-ux-hierarchy-and-streaming)
+===============================================================
+date:            2026-09-26 10:06–10:32 CST (Asia/Shanghai；原始采样为 UTC ISO8601，本文标注 +08:00)
+repo:            /Volumes/SSD-Data/01work/git-project/vteam
+plan row F4:     "真实私聊人工验收：执行一次有 reasoning/tool/text 的私聊回复和一次长回复；
+                 确认身份只出现一次、长内容按阈值折叠/展开、error/aborted 可见、日期/分组正确、
+                 delta 在当前频道实时更新；检查 console 无新增未处理异常。"
+plan evidence:   .omo/evidence/chat-ux-hierarchy-and-streaming/final-f4-manual.txt（本文件）
+executor:        F4 verifier（visual-engineering 类别）；只做 F4，未跑 F3 全量套件、未做 F5 范围审计
+read-before-run: plan F4 行 + F3 全文（final-f3-playwright.txt，重点 §2 服务包 provenance、§6 十二项行为、
+                 §7 console、§8 对抗探针）+ task-12-bundle-provenance.txt + 实现侧
+                 web/src/components/ui/{chat-bubble,message-identity,message-input}.ts、
+                 web/src/components/chat/msg-*.tsx、web/app/(main)/teams/[id]/session/page.tsx、
+                 server/src/chat/chat.controller.ts（只读）
+
+-- VERDICT ----------------------------------------------------------------------
+AdversarialVerify verdict: **F4 PASS**（22 项子检查：17 PASS / 5 NOT-EXERCISED，无 FAIL）
+confidence: 高（85%）——结论全部来自真实 Chrome 上的活栈 DOM 测量与真实后端返回，
+            零 mock、零 route 拦截、零 SSE 注入；每项 PASS 均附原始数值 + 截图 + 原始 JSON。
+NOT-EXERCISED 明细（不冒充 PASS，理由见 §3.5–§3.8、§3.13、§3.14）：
+  · 用户气泡 data-status=sending       —— 真实发送链路无乐观气泡，发送中状态由按钮"发送中…"承担
+  · 用户气泡 data-status=failed        —— 真实失败走 team-session-send-error 横幅，不生成失败气泡
+  · agent 侧 msg-error 呈现            —— 活数据本轮未产生失败回复（F3 夹具已覆盖渲染分支）
+  · msg-aborted（中断态）              —— 会话页无中断/停止控件、活数据无 aborted part；造它=造数据
+  · 同角色成员头像缩写相异             —— 7 名成员 7 个互不相同的角色，活数据不存在同角色对
+不满足则 FAIL 的红线自检：未改任何产品/测试/配置/计划/boulder/registry；未 checkout/reset/stash/restore；
+未跑 npm run lint 或 --fix；未装依赖；未跑 F3 套件；未执行 F5；未删除或覆盖任何预存数据/证据；
+未把夹具或 route mock 当作活栈证据 → 全部满足（§6）。
+
+===============================================================================
+1. 活栈确认 + 服务包 provenance（先证明新鲜，再动手）
+===============================================================================
+1.1 :3001 在听
+  $ lsof -nP -iTCP:3001 -sTCP:LISTEN
+    node 94825 … TCP 127.0.0.1:3001 (LISTEN)   （$TMPDIR/opencode/pw-bridge/bridge.js → 127.0.0.1:13001）
+  $ curl -sS -o /dev/null -w "%{http_code} %{time_total}" http://localhost:3001/  → 200 0.009883s
+  （3001 是到 compose 侧 web standalone :13001 的转发，与 F3 记录一致）
+
+1.2 镜像/容器 = F3 重建后的那一套，未被重建、未被重启
+  $ docker inspect aiagents-web:latest --format '{{.Created}} {{.Id}}'
+    2026-09-26T08:57:32.500314358+08:00  sha256:c006ebadb77a4ff0341235d911c74a029ef0e616de65c5f3fb5561dd5eda9bb
+  $ docker ps --filter name=web
+    aiagents-compose-web  ee001a521160  aiagents-web  Up About an hour (healthy)  0.0.0.0:13001->3000/tcp
+    （完整容器 id: ee001a5211608092d310bcb03d2e1015ddca5edcecf8a40a21f10211587513d2，与 F3 §2.3 同一个）
+  server / worker / db：Up 16h / 16h / 22h —— 全程未重启（shared-runtime 零打扰）
+  git HEAD：b27f4c706304a4b791fa2b6cdb5d90f9347d803a (B11, 08:24:42+08)
+            链上含 1bef2e0 (B7/B8, 07:53:12)、9fcbf85 (B10, 04:43:24)
+  → 镜像(08:57) > 最新提交(08:24) → 初判 FRESH，未触发重建。
+
+1.3 三重"服务字节含 B11/B7/B10"证明（本次亲测，非引用 F3）
+  (a) 容器内被服务文件（standalone/.next/static 就是 HTTP 下发那套字节）
+      $ docker exec aiagents-compose-web sh -c 'grep -rl 收起详情 .next/static'
+        .next/static/chunks/4493-75740678d043e21e.js
+        .next/static/chunks/app/(main)/teams/[id]/session/page-762a0d5dca4e67f0.js
+      grep -rl chat-bubble-status → 4493-75740678d043e21e.js
+      grep -rlE '产品经理.{0,60}var\(--color-role' → 3044-f55ca4ab50eb5605.js、4493-…、system/layout-…
+  (b) 经 :3001 的 HTTP 字节（curl -g，均 200）
+        /_next/static/chunks/4493-75740678d043e21e.js      34,819 B  B11=1 B7=1 B10=1
+        /_next/static/chunks/3044-f55ca4ab50eb5605.js        8,035 B  B11=0 B7=0 B10=1
+        /_next/static/chunks/app/(main)/teams/[id]/session/page-762a0d5dca4e67f0.js
+                                                            135,374 B  B11=1
+  (c) 真实浏览器已加载脚本扫描（登录后 /teams/tm_0000000001/session，performance 资源表逐个 fetch）
+        scripts=25, bytes=1,542,743, B11_收起详情=2, B7_chat_bubble_status=1,
+        B10_label_var=2, A1_收起箭头=1, B6_未知片段=1
+  → SERVED_BUNDLE_FRESH = TRUE（三处一致）→ 后续一切观察都打在含全部实现提交的包上；
+    本次**没有**重建镜像/容器（bundle 不陈旧，记录 id 供追溯）。
+
+===============================================================================
+2. 方法：真实交互时间线（活栈、真实 Chrome、零 mock）
+===============================================================================
+工具：一次性 Node 脚本（require web/node_modules/@playwright/test，chromium channel="chrome" headless，
+      viewport 1440×900，storageState=web/.auth/user.json 由 F3 auth.setup 真实表单登录产出）。
+      脚本与临时日志放在 $TMPDIR/opencode/f4{,b}，**跑完已删**（§7 回执）；观测 JSON 已归档到本目录
+      f4-observe-1..6-*.json；截图 f4-01..f4-33 共 33 张。
+约束：全程 0 条 page.route / page.routefulfill / EventSource 桩；只用真实 UI 点击 + 真实 REST 调用。
+
+时间线（CST）：
+  10:06:xx  probe：storageState 打开会话页 → 未跳 /login；dm-tab-group + 7 个 dm-tab-private-* 齐全
+  10:07:07–10:07:36   轮次1：落地 → 主 agent 私聊基线 → 架构师私聊（system 行）→ 真实回复① →
+                       长消息 → 主题切换 → 收尾（f4-01..f4-11，f4-observe-1）
+  10:15:19 / 10:15:50 / 10:16:34  轮次2 前三次因**我自己脚本的 bug**中断（sel().first、page 未定义、
+                       T.C 未初始化），原文见 f4-attempt-error-run2.txt；均未产生任何产品侧影响
+  10:17:32–10:18:20   轮次2 成功：精确行结构 → 未知part/tool/thinking 展开收起 →
+                       长消息 toggle 全循环 → system 行 → 角色色 → 当前频道流式 →
+                       非当前频道门（f4-12..f4-23，f4-observe-2）
+  10:21:37–10:21:56   轮次3：角色色（正确变量名 + 实测颜色）→ 非当前事件门（未映射频道）→
+                       真实 413 发送失败 → 软删临时频道（f4-24..f4-27，f4-observe-3）
+  10:23:05–10:23:25   轮次4：可滚动当前列表 + 频道映射后的非当前事件（f4-28..f4-29，f4-observe-4）
+  10:25:18–10:25:41   轮次5（决定性）：可滚动当前列表 + **非当前频道 agent 真实回复**，
+                       spinner+未读双证（f4-30..f4-31，f4-observe-5）
+  10:26     probe2：chat-bubble-content 内含注入 <style>（1993 B CSS）→ 修正 textContent 口径
+  10:30–10:31:57      补测：agent 长回复（987 字符）toggle 展开/收起全循环（f4-32..f4-33，f4-observe-6）
+
+2.1 真实数据落点（后端 API 复核，GET /channels/c_0000000017/session-history）
+  验收前：21 条（全部 2026-09-25）
+  验收后：31 条 = 21 旧 + 我方 5 条 user + agent 5 条回复（全部 status=sent）
+  新增（UTC / CST+8）：
+    m_0000000128 user 02:07:12.592 (10:07:12) 153 字符 —— reasoning+tool+text 三段式指令
+    m_0000000129 agent 02:07:16.532 133 字符
+        parts = [step-start, **reasoning**, **text**, **tool(vteam_memory_search, completed)**,
+                 step-finish, step-start, text, step-finish]
+    m_0000000130 user 02:07:27.270 **828 字符 / 14 行** —— 长消息
+    m_0000000131 agent 02:07:29.928 "收到"（2 字符）
+    m_0000000132 user 02:17:43.289 109 字符 —— 两次工具 + ≥600 字总结
+    m_0000000133 agent 02:17:47.690 **996 字符**（正文实测 987）
+        parts = [step-start, reasoning, text, tool, step-finish, step-start, text, tool,
+                 step-finish, step-start, reasoning, text, step-finish]
+    m_0000000134 user 02:18:05.779 74 字符 / m_0000000135 agent 02:18:08.038（tool+text）
+    m_0000000148 user 02:25:22.695 13 字符 / m_0000000149 agent 02:25:27.153 "收到"
+  群聊频道 c_0000000001：仍是 0 条（未被触碰）✔
+
+===============================================================================
+3. 逐项判定
+===============================================================================
+
+3.1 一次真实 reasoning+tool+text 私聊回复 —— **PASS**
+  指令 m_0000000128 → 回复 m_0000000129 单条消息内同时含 reasoning + tool + text（后端 parts 逐个列出见 §2.1）。
+  DOM（轮次1，f4-observe-1 → 4.reply1.rows，行 i=24）：
+    message-identity=1, agent-avatar=1（"项"）, chat-bubble-author=1（"项目经理-1· 项目经理"）,
+    chat-bubble-time=1（"· 10:07"）, msg-thinking=1, msg-tool=1（data-status=success）,
+    msg-unknown-part=4（step-start×2/step-finish×2）, chat-bubble=1, msg-streaming=0
+  第二条更强：m_0000000133（行 i=28）reasoning×2 + tool×2 + text 同条消息，
+    DOM：identity=1、avatar=1、author=1、time=1、tool=success、thinking=1、bubble=1。
+  补充：截图 f4-20 抓到流式中间态——msg-tool "⚙ vteam_memory_search {"limit":10,"query":"部署"…
+    ⋯ 运行中" + "⋯⋯ 生成中"(msg-streaming) + 左侧成员卡"处理中" + Tab 转圈。
+
+3.2 身份只出现一次 / 字号层级 —— **PASS**
+  多 part 消息行内计数 = 1/1/1（头像/作者/时间），分组行 identity=0 但过程 part 照常渲染（见 3.3）。
+  computed style：author 12px / font-weight 600；time 11px（role 色与 meta 灰不同）；正文 14px。
+  行内无裸 a_/tmm_/ta_/c_/m_ id 出现在可见文本（id 只出现在可展开的未知片段 JSON 摘要里，属诊断内容）。
+
+3.3 B2 同 sender 分组不吞行 —— **PASS**（真实 09-25 历史）
+  基线 18 个行容器（f4-observe-1 → 2.baseline.rows）：
+    i=1 identity=1（组首，17:12）→ i=2..5 identity=0（组内，各自仍有 msg-tool + msg-thinking）
+    → i=6 identity=0（同组，只有 bubble+thinking）→ i=7 identity=1（换组，18:25）
+    → i=8..15 identity=0（组内）→ i=17/19/21 identity=1（每条 user 之后重新起组）
+    user/system 行 identity=0；组内行的过程 testid（msg-tool/msg-thinking/msg-unknown-part）全部保留。
+  → 分组只省身份栏，不隐藏任何消息行/过程行。
+
+3.4 B3 跨天日期分隔 + system 行 —— **PASS**（两者都是真实数据）
+  日期分隔：基线 0 条（历史全在 2026-09-25，单日零分隔）→ 我的第一条新消息到达后
+    **恰 1 条** chat-date-separator，data-date-key="2026-09-26"，文案 "2026/09/26"，
+    位置落在 09-25/09-26 交界（f4-20 顶部可见）；此后始终 1 条，未重复。
+  system 行：架构师私聊（c_0000000016）真实 system 消息 m_0000000024（f4-03 / f4-17）
+    行结构：i=1 type=user（bubble 16px 容器、chat-bubble-status data-status=sent"已发送"、无身份栏）
+            i=2 type=system（独立 pill、居中、时间 "21:50" 11px、正文与 pill 非同容器）
+    → user/system 相邻各占一行，未被并进同一分组；system 时间在 pill 内以 11px 元信息渲染。
+
+3.5 未知 part 收起/展开（真实 step-start/step-finish）—— **PASS**
+  收起态文案 "⋯ 未知片段 · step-start 点击展开 ▸"，summary 节点不存在。
+  点击后（f4-12）：aria-expanded=true，msg-unknown-part-summary 出现且内容
+    {"id":"prt_0d8d6efe4001M78DabxEcKciZg","type":"step-start","messageID":"msg_0d8d6ce55001zAKjmvS6SHYvsj",
+     "sessionID":"ses_f2829acd3ffee1mfDDeSxL4X3l"}
+  再点：summary 消失、aria-expanded=false。
+  附带：msg-tool 点击展开 → msg-tool-io 出现（ioLen 124）、aria=true，再点收回（f4-13）；
+        msg-thinking 点击展开 → msg-thinking-detail 出现（detailLen 1010）、aria=true（f4-14）。
+
+3.6 长内容按阈值折叠/展开 —— **PASS**（长 prompt + 长回复两个方向都实测）
+  (a) 长 prompt（我方 user 消息 m_0000000130，828 字符 / 14 行；f4-15、f4-16）
+      折叠：webkitLineClamp="10"、maxHeight=224px(=16em×14px)、boxH=224、scrollH=582、
+            visuallyClipped=true、toggle aria-expanded=false 文案"展开 ▼"
+      展开：lineClamp="none"、maxHeight="none"、boxH=582、aria-expanded=true 文案"收起 ▲"、clipped=false
+      再收起：回到 clamp=10 / 224px / aria=false（全循环可逆）
+      精确性：DOM textContent=828 == 后端 text 长度 828（user 气泡无注入 CSS，口径干净）
+  (b) 长回复（agent 消息 m_0000000133，可见正文 987 > 800；f4-32、f4-33）
+      折叠：clamp="10"、maxHeight=224px、boxH=224、scrollH=425、aria=false "展开 ▼"
+      展开：clamp="none"、maxHeight="none"、boxH=744、aria=true "收起 ▲"
+      再收起：回到 224px / aria=false
+  另：09-25 的旧回复 m_0000000030（正文 836）同样处于 clamp=10 + toggle 收起态（i=21 行）。
+  口径说明（避免误读）：agent 气泡的 chat-bubble-content 内含组件注入的 <style>（1993 B CSS，
+    class=.md-render），所以 raw textContent 会偏大；判定阈值用的是 React text prop，本节"可见正文长度"
+    一律按"去掉 <style> 后的 textContent"计（f4-observe-2 / -6 已按此口径记录）。
+
+3.7 用户发送/状态标记 —— **PASS(sent) / NOT-EXERCISED(sending、failed 气泡)**
+  PASS：每次发送后 user 气泡下方恰 1 个 chat-bubble-status，data-status="sent"、role="status"、文案"已发送"
+        （轮次1 sendSamples 40 采样：statuses 集合恒为 {"sent"}；f4-20/f4-27/f4-30 可见）。
+  PASS（按钮级发送中）：POST 在途时 message-input-send 文案 "发送中…" 且 disabled=true，
+        成功后回 "发送"（f4-04 抓到 "发送中…"）。
+  NOT-EXERCISED：data-status="sending" 气泡 —— 真实链路 page.tsx:954 的 sendMutation 没有乐观插行，
+        消息由服务端落库(status 默认 sent)后经 SSE/refetch 进入列表，故活栈不存在 sending 气泡；
+        该状态仅在 F3 夹具中覆盖。**未伪造**。
+  NOT-EXERCISED：data-status="failed" 气泡 —— 真实失败路径只出横幅、不产生消息行（见 3.8）。
+  附带真实状态观察：旧 tool part 的 data-status="failed"（i=1 行）与流式中的"运行中"均真实出现。
+
+3.8 error 可见且可恢复 —— **PASS**（真实 413，非 mock）/ agent 侧 msg-error、aborted —— **NOT-EXERCISED**
+  诱导方式：向真实端点 POST 一条 5,662,517 字节（> express.json 5mb 上限，server/src/main.ts:38）的正文，
+            由真实服务端返回 413；未拦截任何请求、未伪造响应。
+    10:21:52.743  HTTP 413  POST http://localhost:3001/api/v1/channels/c_0000000017/messages
+    10:21:53.248（897ms 后）界面出现 role=alert 红色横幅 **"发送失败：request entity too large"**（f4-27）
+    输入框内容保留（用户可改后重试）→ reload 后横幅消失、输入框清空 → 可恢复
+    console：2 条 error（"Failed to load resource … 413"、"[TeamSession] send message failed … ApiError:
+             request entity too large"）——**均由本探针直接引起，已点名归因**；pageerror 0，无未处理异常。
+  NOT-EXERCISED：agent 侧 msg-error（quota/failed 摘要+动作）—— 本轮真实回复全部成功，活数据无 error part；
+            msg-aborted —— 会话页无中断/停止控件（page.tsx 内无 abort/stop 命中），活数据也无 aborted part，
+            要"造"它只能改库或注入 SSE，属伪造，故不执行、不判 PASS。
+
+3.9 同角色成员缩写相异 —— **NOT-EXERCISED**
+  活团队 7 名成员 7 个互不相同的角色（product/project_manager/architect/developer/tester/plan/librarian，
+  GET /api/v1/agents 核对），不存在同角色对；成员面板 TeamMembersPanel 仅渲染 agent（头像走 AgentAvatar 按角色字母），
+  且**没有移除成员实例的控件**（只有 add-instance-entry/add-instance-confirm），为测该条而新增实例会留下不可清理的
+  团队配置改动 → 判 NOT-EXERCISED，不判 PASS。已有正面观察：会话内头像缩写来自已解析人名（"项"），DOM 无裸 id。
+
+3.10 角色色随 light/dark —— **PASS**（变量 = 实测值，且 light ≠ dark）
+  同一页面用真实 theme-toggle 切换（theme-option-light / theme-option-dark），测 项目经理(project_manager)：
+    light: --color-role-project-manager-color=#0891b2 → authorColor=rgb(8,145,178) ✔相等
+           bg=#ecfeff → avatarBg=rgb(236,254,255) ✔；border=#a5f3fc → avatarBorder=rgb(165,243,252) ✔
+    dark:  --color-role-project-manager-color=#67e8f9 → authorColor=rgb(103,232,249) ✔
+           bg=#0891b22e → avatarBg=rgba(8,145,178,0.18) ✔；border=#a5f3fc59 → avatarBorder=rgba(165,243,252,0.35) ✔
+    authorMatchesVar / avatarBgMatchesVar / avatarBorderMatchesVar 三者 light、dark 均为 true；light≠dark。
+  截图：f4-09/f4-10（轮次1）、f4-18/f4-19、f4-24/f4-25（含身份行实拍）。测完已还原为"跟随系统"。
+
+3.11 当前频道 delta 实时更新 —— **PASS**
+  留在主 agent 私聊发送 m_0000000132，120ms 间隔采样 142 次（f4-observe-2 → F1.current.samples）：
+    streamingSeen=true，含流式采样 64 个，msg-streaming 文本长度最大 1996、累计增长 1996 字符；
+    scrollTop 3847 → 4513（随内容增长贴底），scrollHeight 4423 → 5287；
+    截图 f4-20 正是流式瞬间（生成中 + 工具"运行中" + 成员卡"处理中" + Tab 转圈）。
+
+3.12 非当前频道事件不扰动当前列表 —— **PASS**（决定性一轮，f4-observe-5 / f4-30）
+  前置：临时 tester 私聊先建、再开页面（进 privateChannelMap），4 条多行真实消息把该列表撑到
+        scrollHeight=3492 > clientHeight=576（可滚动），滚到中部 anchor.scrollTop=1458 并等稳定。
+  动作：当前频道=测试-1 私聊；真实 POST 主 agent 私聊消息 → 主 agent 真实回复并流式输出（非当前频道）。
+  采样 60 次 / 15s：
+    distinctScrollTops = [1458]（**一次都没动**），scrollHeight 恒 3492
+    非当前的"私聊: 项目经理-1" Tab：+261ms 出现 spinner、+4571ms 出现未读红点（active=false）
+    → 证明非当前频道的事件在浏览器里**确实到达并被处理**（loading 收敛 + 未读收敛），
+      同时当前列表滚动位置零变化；截图 f4-30（当前=测试-1、PM Tab 红点、可滚动中部）。
+  旁证1（f4-observe-2，当前=架构师、PM 流式中）：distinctScrollTops=[0]，PM Tab spinner/未读全程出现。
+  旁证2（f4-observe-3，当前=PM 可滚动中部 2287，另一频道收到真实消息）：9s/30 采样 distinctScrollTops=[2287]。
+  旁证3（f4-observe-4，同上 anchor 2573）：11.8s/47 采样 distinctScrollTops=[2573]。
+  诚实边界：旁证2/4 的"事件到达"只有服务端 201 为证（自己发的消息不给自己回未读点），
+            故决定性证据取轮次5（spinner+未读双证 + 可滚动当前列表）。
+
+3.13 console / pageerror / 失败请求 —— **PASS（无新增未处理异常）**
+  5 段观测 + 1 次 probe 汇总：
+    pageerror            = 0（6/6 次全部为 0）
+    requestfailed        = 0
+    HTTP >=400           = 仅 1 条 413，且是本 F4 主动诱导的超限探针（见 3.8），已点名
+    console.error        = 仅 2 条，均由该 413 探针引起（"Failed to load resource … 413"、
+                           "[TeamSession] send message failed …"）；其余 5 段全部为空
+    console.warning      = 0
+  → 除本探针自造的 2 条外，活栈全程 0 控制台错误、0 未处理异常、0 意外 4xx/5xx。
+
+3.14 其他用户可见交互态（顺带核实）
+  · 成员面板：7 成员、主 Agent 徽标落在 项目经理-1、处理中/就绪状态随回复起落（f4-20、f4-30）
+  · Tab：私聊 Tab 转圈（dm-tab-loading-*）与红点（dm-tab-unread-*）互斥出现，切 Tab 即清
+  · 输入区 placeholder 随频道切换 "发送私聊给 项目经理-1…" / "发送私聊给 测试-1…"（f4-30）
+  · 未测：群聊 Tab 的消息渲染（群频道 0 条数据，无法产生真实行；F3 夹具已覆盖）
+
+===============================================================================
+4. 原始产物清单
+===============================================================================
+截图（本目录，33 张，1440×900 视口实拍）
+  f4-01-session-landing.png        落地（群 Tab 默认、7 个私聊 Tab）
+  f4-02-dm-baseline.png            主 agent 私聊基线（09-25 历史、分组、0 分隔条）
+  f4-03-system-row.png             架构师私聊 system 行（轮次1 版本）
+  f4-04-send-inflight.png          发送在途（按钮"发送中…"）
+  f4-05-reply1-complete.png        回复①完成（身份只出现一次 + 日期分隔）
+  f4-06-long-collapsed.png         828 字符长 prompt 折叠态（轮次1，点错开关前）
+  f4-07-long-expanded.png          轮次1 展开采样（注：该次点到了 DOM 中第一个 toggle，见 §5 flaky）
+  f4-08-after-long-reply.png       第二条回复后的列表
+  f4-09/f4-10-role-light/dark.png  角色色 light/dark（轮次1）
+  f4-11-final-state.png            轮次1 末态
+  f4-12-unknown-expanded.png       未知 part 展开（真实 step-start JSON 摘要）
+  f4-13-tool-expanded.png          tool 展开（msg-tool-io）
+  f4-14-thinking-expanded.png      thinking 展开（detail 1010）
+  f4-15/f4-16-long2-collapsed/expanded.png  828 字符 toggle 全循环（精确版）
+  f4-17-system-row-precise.png     system 行精确结构
+  f4-18/f4-19 / f4-24/f4-25        角色色 light/dark（轮次2、轮次3，含身份行）
+  f4-20-current-streaming.png      **当前频道流式中**（生成中 + 工具运行中 + 日期分隔）
+  f4-21-after-prompt3.png          987 字符长回复完成（clamp 10 + toggle）
+  f4-22-noncurrent-arch.png        当前=架构师、PM 流式（非当前门旁证1）
+  f4-23-after-prompt4.png          第 4 条真实回复后
+  f4-26-noncurrent-scroll-gate.png 当前=PM 可滚动中部、另一频道收到消息（旁证2）
+  f4-27-send-error.png             **真实 413 发送失败横幅**（可恢复）
+  f4-28/f4-29                      旁证3 + 临时频道落地核对
+  f4-30-noncurrent-gate3.png       **决定性一轮**：当前可滚动列表不动 + PM Tab 未读红点
+  f4-31-pm-reply-while-away.png    切回 PM：非当前期间的回复确实落地
+  f4-32/f4-33-agent-long-collapsed/expanded.png  987 字符 agent 回复 toggle 全循环
+观测 JSON（本目录）
+  f4-observe-1-session-DM.json        轮次1 全量（provenance/行结构/采样/console）
+  f4-observe-2-dom-delta.json         轮次2 全量（A–G 段）
+  f4-observe-3-role-gate-413.json     轮次3（角色色/门/413/清理回执）
+  f4-observe-4-gate-mapped.json       轮次4
+  f4-observe-5-gate-agent.json        轮次5（决定性）
+  f4-observe-6-agent-long-toggle.json 长回复 toggle 全循环
+  f4-attempt-error-run2.txt           我自己脚本第 3 次失败的原始堆栈（不隐藏失败）
+
+===============================================================================
+5. 对抗性探针（AdversarialVerify 清单）
+===============================================================================
+stale_state（bundle 陈旧）：**未命中**。镜像 08:57:32 > HEAD 08:24:42；容器内、HTTP 字节、
+  浏览器已加载脚本三处 B11/B7/B10 全部命中（§1.3）→ 未静默测旧码；因 bundle 新鲜，**未重建**。
+dirty_worktree（脏工作树）：**未命中**。执行前后 `git status --short` 完全一致（7 个预存脏文件
+  .omo/boulder.json、phase5-t9-playwright.json、plan-review×2、server-gate-removal task-9-matrix.json、
+  ledger.jsonl、.opencode/opencode.json + 5 个 untracked .omo 路径）；`git diff --cached` 全程为空；
+  未用 checkout/reset/stash/restore；web/ 下 tracked 改动 = 0；本次仅新增 untracked 的 f4-* 证据文件。
+misleading_success_output（把不可靠输出当结论）：**命中并已修正 3 处测量错误**
+  ① 行计数用 `container.querySelector(sel)` 漏掉"元素自身即目标"的行（user/system 气泡），
+     导致轮次1 system 行采样为空 → 改为 self||descendant 复测（3.system / D.rows）后才判定；
+  ② 长消息 toggle 用 `[data-testid=chat-bubble-toggle]` 的第一个匹配点击，点到了 DOM 更早的一条
+     836 字符旧回复 → 轮次1 展开采样无效（f4-07 标注为无效证据），改为**行内定位**后重测（f4-15/16）；
+  ③ agent 气泡 textContent 含组件注入的 1993 B <style>，导致长度虚高（曾误判 1995 字符的"收到"回复）
+     → probe2 定位根因，改用"去掉 style 后的 textContent"口径（§3.6 口径说明）。
+  另：轮次1 的"已收敛"判定在 agent 尚未起流时就返回 true（elapsedMs=4）→ 轮次2 改为等 spinner+streaming
+  同时消失；轮次2 前三次因我方脚本 bug 中断，原文保留（f4-attempt-error-run2.txt），未据此下任何结论。
+flaky/timing：所有关键判定至少 30 采样、间隔 120–300ms，且要求"连续 N 次不变"才收敛；
+  非当前门要求 distinctScrollTops 只有一个值；toggle 判定要求三态（折叠→展开→再折叠）可逆。
+cleanup：临时目录 $TMPDIR/opencode/f4{,b} 已整目录删除；playwright 临时 profile
+  /var/folders/…/T/playwright_chromiumdev_profile-qAUCAN 已删除；pgrep 确认无残留 Playwright Chrome 进程
+  （system Chrome / agent-browser 的进程不属于本次，未动）。
+secrets：探针曾用 /tmp/f4-token.txt 暂存 API JWT（仅存文件，未打印明文）→ **已删除**；
+  对 6 个观测 JSON `grep eyJ` → 0 命中；本文件不记录任何密钥/口令。
+shared-runtime interruption：全程只用 docker 的**只读**命令（ps / inspect / exec 只读 grep / logs --since），
+  未 build、未 up、未 restart、未 prune；server(16h)/worker(16h)/db(22h)/web(1h) uptime 连续；
+  未跑 F3 全量套件（避免长时间占用活栈）、未执行 F5。
+data fabrication：没有任何消息是伪造的——所有 DOM 中的回复均由真实 opencode 会话产生
+  （后端 session-history 可逐条对上 id/parts/时间戳）；未注入 SSE、未拦截路由。
+
+===============================================================================
+6. 数据与清理回执
+===============================================================================
+新增（留在库里，无法/不该删除）
+  频道 c_0000000017（主 agent 项目经理私聊，**预存频道，未删除**）新增 10 条：
+    user  m_0000000128 / m_0000000130 / m_0000000132 / m_0000000134 / m_0000000148
+    agent m_0000000129 / m_0000000131 / m_0000000133 / m_0000000135 / m_0000000149
+    频道消息总数 21 → 31；全部 status=sent；预存 21 条**一条未改、一条未删**。
+    （chat 只有频道级软删端点 DELETE /channels/:id，无单条消息删除端点；按"不得删除预存数据"
+      约束，这些验收消息原样保留，供 F5/复核追溯。）
+临时（已清理）
+  频道 c_0000000127（tester 私聊，本轮创建）：轮次3/4/5 各自创建 → 使用 → DELETE 软删
+    最终 GET /channels/c_0000000127 → {"code":"CHANNEL_NOT_FOUND"}
+    GET /channels?type=private&teamId=tm_0000000001 → 只剩 6 个预存频道
+    （c_0000000089/088/087/086/017/016），与验收前一致 ✔
+    该频道内的垫片消息（m_0000000136/138/140/142/144/146 + 系统回复）随频道软删一并隐藏。
+  群聊频道 c_0000000001：0 条，未触碰 ✔
+  脚本/临时文件：$TMPDIR/opencode/f4、$TMPDIR/opencode/f4b 整目录删除；/tmp/f4-token.txt 删除；
+    /tmp/f4chunks 删除；playwright 临时 profile 删除。
+  浏览器：每段脚本均 ctx.close() + browser.close()，无残留 headless 进程。
+  主题偏好：测完还原 localStorage vteam-theme = {"state":{"theme":"system"},"version":0}。
+  Docker：无任何容器/镜像变更（id 见 §1.2）。
+Git：未新增 tracked 改动；本文件与 f4-* 截图/JSON 属 untracked 证据目录内的新增文件。
+
+===============================================================================
+7. 本文件不覆盖 / 不代表
+===============================================================================
+· 未运行 `cd web && npx playwright test`（F3 的范围，已由 F3 记录 209/209）。
+· 未执行 F5 的范围、阻塞门与脏工作树审计（只做了本 F4 需要的 git status 前后对照）。
+· 未对 §3.5/3.7/3.8/3.9 中标 NOT-EXERCISED 的项给出任何结论——它们**没有被验证过**。
+· 夹具/page.route 注入产生的证据（F3 §5 CTX-2）不计入本 F4 判定。

@@ -107,6 +107,10 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
   const summaryText = displayValue2(input) || displayValue2(output);
   // 标题行摘要：优先有效输入，回退有效输出；皆空（如 {}/running 无输出）→ 空串
   const titleText = summaryText;
+  // 展开区输入/输出与标题同一口径：空串 / 字面 {} / [] 一律折成空（不再打印「输入 {}」）
+  const detailInput = displayValue2(input);
+  const detailOutput = displayValue2(output);
+  const noIO = detailInput.length === 0 && detailOutput.length === 0;
   return (
     <div
       data-testid="msg-tool"
@@ -200,26 +204,34 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
               lineHeight: 1.6,
             }}
           >
-            <div style={{ display: "flex", gap: space.sm }}>
-              <span style={{ color: neutral[400], flexShrink: 0 }}>输入</span>
-              <pre style={{ margin: 0, flex: 1, minWidth: 0, ...detailFont }}>
-                {displayValue(input)}
-              </pre>
-            </div>
-            <div style={{ display: "flex", gap: space.sm }}>
-              <span style={{ color: neutral[400], flexShrink: 0 }}>输出</span>
-              <pre
-                style={{
-                  margin: 0,
-                  flex: 1,
-                  minWidth: 0,
-                  ...detailFont,
-                  color: failed ? "#B91C1C" : neutral[600],
-                }}
-              >
-                {displayValue(output)}
-              </pre>
-            </div>
+            {noIO ? (
+              <span style={{ color: neutral[400] }}>（无输入输出）</span>
+            ) : (
+              <>
+                {detailInput.length > 0 && (
+                  <div style={{ display: "flex", gap: space.sm }}>
+                    <span style={{ color: neutral[400], flexShrink: 0 }}>输入</span>
+                    <pre style={{ margin: 0, flex: 1, minWidth: 0, ...detailFont }}>
+                      {detailInput}
+                    </pre>
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: space.sm }}>
+                  <span style={{ color: neutral[400], flexShrink: 0 }}>输出</span>
+                  <pre
+                    style={{
+                      margin: 0,
+                      flex: 1,
+                      minWidth: 0,
+                      ...detailFont,
+                      color: failed ? "#B91C1C" : neutral[600],
+                    }}
+                  >
+                    {detailOutput.length > 0 ? detailOutput : "（无输出）"}
+                  </pre>
+                </div>
+              </>
+            )}
           </div>
         )}
       </button>

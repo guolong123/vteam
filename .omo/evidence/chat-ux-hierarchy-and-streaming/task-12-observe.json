@@ -1,0 +1,128 @@
+[
+  {
+    "case": "attachment",
+    "state1": {
+      "toggle": {
+        "present": true,
+        "aria": "false",
+        "text": "展开详情 ▸"
+      },
+      "detail": {
+        "present": false,
+        "aria": null,
+        "text": ""
+      },
+      "rootTextLen": 57
+    },
+    "state2": {
+      "toggle": {
+        "present": true,
+        "aria": "true",
+        "text": "收起详情 ▾"
+      },
+      "detail": {
+        "present": true,
+        "aria": null,
+        "text": "PDF交付报告-䠀䠁䠂䠃䠄䠅䠆䠇䠈䠉䠊䠋䠌䠍䠎䠏䠐䠑䠒䠓䠔䠕䠖䠗䠘䠙䠚䠛䠜䠝䠞䠟䠠䠡䠢䠣䠤䠥䠦䠧䠨䠩䠪䠫䠬䠭䠮䠯䠰䠱䠲䠳䠴䠵䠶䠷䠸䠹䠺䠻䠼䠽䠾䠿䡀䡁䡂䡃䡄䡅䡆䡇"
+      },
+      "rootTextLen": 187
+    },
+    "state3": {
+      "toggle": {
+        "present": true,
+        "aria": "false",
+        "text": "展开详情 ▸"
+      },
+      "detail": {
+        "present": false,
+        "aria": null,
+        "text": ""
+      },
+      "rootTextLen": 57
+    }
+  },
+  {
+    "case": "error",
+    "state1": {
+      "toggle": {
+        "present": true,
+        "aria": "true",
+        "text": "收起详情 ▾"
+      },
+      "detail": {
+        "present": true,
+        "aria": null,
+        "text": "㐀㐁㐂㐃㐄㐅㐆㐇㐈㐉㐊㐋㐌㐍㐎㐏㐐㐑㐒㐓㐔㐕㐖㐗㐘㐙㐚㐛㐜㐝㐞㐟㐠㐡㐢㐣㐤㐥㐦㐧㐨㐩㐪㐫㐬㐭㐮㐯㐰㐱㐲㐳㐴㐵㐶㐷㐸㐹㐺㐻㐼㐽㐾㐿㑀㑁㑂㑃㑄㑅㑆㑇㑈㑉㑊㑋㑌㑍㑎㑏"
+      },
+      "rootTextLen": 716
+    },
+    "state2": {
+      "toggle": {
+        "present": true,
+        "aria": "false",
+        "text": "展开详情 ▸"
+      },
+      "detail": {
+        "present": false,
+        "aria": null,
+        "text": ""
+      },
+      "rootTextLen": 116
+    },
+    "state3": {
+      "toggle": {
+        "present": true,
+        "aria": "true",
+        "text": "收起详情 ▾"
+      },
+      "detail": {
+        "present": true,
+        "aria": null,
+        "text": "㐀㐁㐂㐃㐄㐅㐆㐇㐈㐉㐊㐋㐌㐍㐎㐏㐐㐑㐒㐓㐔㐕㐖㐗㐘㐙㐚㐛㐜㐝㐞㐟㐠㐡㐢㐣㐤㐥㐦㐧㐨㐩㐪㐫㐬㐭㐮㐯㐰㐱㐲㐳㐴㐵㐶㐷㐸㐹㐺㐻㐼㐽㐾㐿㑀㑁㑂㑃㑄㑅㑆㑇㑈㑉㑊㑋㑌㑍㑎㑏"
+      },
+      "rootTextLen": 716
+    }
+  },
+  {
+    "case": "aborted",
+    "state1": {
+      "toggle": {
+        "present": true,
+        "aria": "true",
+        "text": "收起详情 ▾"
+      },
+      "detail": {
+        "present": true,
+        "aria": null,
+        "text": "䀀䀁䀂䀃䀄䀅䀆䀇䀈䀉䀊䀋䀌䀍䀎䀏䀐䀑䀒䀓䀔䀕䀖䀗䀘䀙䀚䀛䀜䀝䀞䀟䀠䀡䀢䀣䀤䀥䀦䀧䀨䀩䀪䀫䀬䀭䀮䀯䀰䀱䀲䀳䀴䀵䀶䀷䀸䀹䀺䀻䀼䀽䀾䀿䁀䁁䁂䁃䁄䁅䁆䁇䁈䁉䁊䁋䁌䁍䁎䁏"
+      },
+      "rootTextLen": 634
+    },
+    "state2": {
+      "toggle": {
+        "present": true,
+        "aria": "false",
+        "text": "展开详情 ▸"
+      },
+      "detail": {
+        "present": false,
+        "aria": null,
+        "text": ""
+      },
+      "rootTextLen": 34
+    },
+    "state3": {
+      "toggle": {
+        "present": true,
+        "aria": "true",
+        "text": "收起详情 ▾"
+      },
+      "detail": {
+        "present": true,
+        "aria": null,
+        "text": "䀀䀁䀂䀃䀄䀅䀆䀇䀈䀉䀊䀋䀌䀍䀎䀏䀐䀑䀒䀓䀔䀕䀖䀗䀘䀙䀚䀛䀜䀝䀞䀟䀠䀡䀢䀣䀤䀥䀦䀧䀨䀩䀪䀫䀬䀭䀮䀯䀰䀱䀲䀳䀴䀵䀶䀷䀸䀹䀺䀻䀼䀽䀾䀿䁀䁁䁂䁃䁄䁅䁆䁇䁈䁉䁊䁋䁌䁍䁎䁏"
+      },
+      "rootTextLen": 634
+    }
+  }
+]

@@ -1,0 +1,16 @@
+# task-8 被测镜像 provenance — 2026-09-26 03:24:58 CST
+HEAD = 9674e4cc7c31b0aed8bb65120def500d4f7c7dd1
+docker compose build web → BUILD_EXIT=0（03:24:36，会话内观察；本次 tee 路径笔误未落完整 build 日志，故此处以可复核状态回填）
+docker compose up -d web → UP_EXIT=0（03:24:36）
+aiagents-web:with-b12-pre = sha256:86bb6580d9713cf1900454ac3ceadbdf0feb0ecd8f22788a4e9d0b4f88e60d4b  # 改动前基线（= 红跑所用 latest 86bb6580d971）
+aiagents-web:latest(改后) = sha256:58dccd2c87041f035eca5b85259cfe447e1fcf7a4d0c8c241e6586cb83a46f9e
+container: aiagents-compose-web Up 17 seconds (healthy) image=aiagents-web
+image sha: sha256:58dccd2c87041f035eca5b85259cfe447e1fcf7a4d0c8c241e6586cb83a46f9e
+3001/13001 同源校验:
+6c1c03eedd28cac1ee51cc05122697902fab3a5a  -
+6c1c03eedd28cac1ee51cc05122697902fab3a5a  -
+git status --porcelain (web):
+ M web/app/(main)/teams/[id]/session/page.tsx
+ M web/e2e/session-unification.spec.ts
+ M web/src/components/chat/loading-indicator.tsx
+ M web/src/components/ui/chat-bubble.tsx

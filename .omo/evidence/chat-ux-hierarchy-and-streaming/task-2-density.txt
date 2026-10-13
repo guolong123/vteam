@@ -1,0 +1,258 @@
+# task-2-density — A1-A3 密度阈值（chat-ux-hierarchy-and-streaming 复选框 2）
+# 记录时间: 2026-09-25 (Asia/Shanghai)
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md 复选框 2（第 135-141 行）+ Scope(13-51) + Verification strategy(52-107)
+
+======================================================================
+1. Next.js 本地文档缺席证据（DIST_DOCS_ABSENT）+ v15.5.22 官方文档来源
+======================================================================
+背景: web/AGENTS.md 要求改产品代码前先读 web/node_modules/next/dist/docs/ 指南；
+本机该目录不存在，用户已明确批准以版本匹配的 v15.5.22 官方 tag 文档（commit
+6ad9e56bbb6b1ebc17a3d35fa820800ac6419775）作为替代来源。
+
+命令:
+  cd /Volumes/SSD-Data/01work/git-project/vteam
+  if [ -d web/node_modules/next/dist/docs ]; then echo "DIST_DOCS_PRESENT"; else echo "DIST_DOCS_ABSENT"; fi
+  cat web/node_modules/next/package.json | head -5
+
+输出:
+  DIST_DOCS_ABSENT
+  {
+    "name": "next",
+    "version": "15.5.22",
+    "description": "The React Framework",
+    "main": "./dist/server/next.js",
+    "module": ...
+
+结论: DIST_DOCS_ABSENT，安装版本 next=15.5.22，与用户批准的 tag 文档版本一致。
+
+文档来源（GitHub raw @ tag v15.5.22 / commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775，HTTP 200，已实际读取）:
+  (1) 客户端组件: https://raw.githubusercontent.com/vercel/next.js/6ad9e56bbb6b1ebc17a3d35fa820800ac6419775/docs/01-app/01-getting-started/05-server-and-client-components.mdx
+  (2) Updating data: https://raw.githubusercontent.com/vercel/next.js/6ad9e56bbb6b1ebc17a3d35fa820800ac6419775/docs/01-app/01-getting-started/08-updating-data.mdx
+  (3) Playwright: https://raw.githubusercontent.com/vercel/next.js/6ad9e56bbb6b1ebc17a3d35fa820800ac6419775/docs/01-app/02-guides/testing/playwright.mdx
+  (4) use client 指令: https://raw.githubusercontent.com/vercel/next.js/6ad9e56bbb6b1ebc17a3d35fa820800ac6419775/docs/01-app/03-api-reference/01-directives/use-client.mdx
+  路径定位方式: GitHub git/trees API @ commit 6ad9e56… → docs tree fffe3269…（370 个 mdx/md，truncated=false）。
+
+与本 todo 相关的要点（指导实现决策）:
+  - Server and Client Components / use client: 'use client' 放在文件顶部、在 import 之前；
+    含 state 与事件处理器的交互组件属于 Client Component；文件一旦标记 use client，
+    其全部 import 与子组件都进入 client bundle（本 todo 三个组件均已标记 use client，
+    密度阈值纯属客户端展示状态，不涉及 Server Component 边界调整）。
+  - Updating data: 客户端本地 UI 状态（展开/折叠）在事件处理器里用 useState 更新即可，
+    Server Functions 仅用于服务端数据变更；本 todo 的 toggle 不需要任何 Server Action /
+    网络往返，不改数据获取与存储。
+  - Playwright 指南: E2E 测试经 playwright.config.ts 的 baseURL 针对已在运行的 Next
+    server 执行，`npx playwright test` 于另一终端运行（可选用 webServer 自启）。
+    本仓 playwright.config.ts 明确不配置 webServer（计划 Verification strategy 第 76 行），
+    与官方指南一致，本 todo 不引入 webServer 配置。
+  - 未发现与现有代码冲突之处，无需停止。
+
+======================================================================
+2. 消息结构 testid 基线（改动前，计划第 82-85 行命令原文）
+======================================================================
+命令:
+  grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx web/src/components/ui/agent-avatar.tsx | sort -u \
+    > .omo/evidence/chat-ux-hierarchy-and-streaming/chat-testids-before.txt
+退出码: 0（23 条，见 chat-testids-before.txt 全文）
+
+data-testid="agent-avatar"
+data-testid="attachment-file"
+data-testid="attachment-image"
+data-testid="attachment-lightbox"
+data-testid="chat-bubble"
+data-testid="chat-bubble-author"
+data-testid="chat-bubble-content"
+data-testid="chat-bubble-toggle"
+data-testid="external-channel-badge"
+data-testid="loading-indicator"
+data-testid="mention-me-badge"
+data-testid="message-attachment"
+data-testid="msg-aborted"
+data-testid="msg-error"
+data-testid="msg-error-action"
+data-testid="msg-streaming"
+data-testid="msg-thinking"
+data-testid="msg-tool"
+data-testid="question-modal"
+data-testid="question-modal-close"
+data-testid="question-modal-mask"
+data-testid="question-reject"
+data-testid="question-submit"
+
+改动后将用同一命令生成 chat-testids-after.txt 并 diff（预期 diff 为空）。
+
+======================================================================
+3. 改动前基线与环境保护
+======================================================================
+改动前 git status --short（全仓）:
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M .opencode/opencode.json
+?? .omo/drafts/chat-ux-hierarchy-and-streaming.md
+?? .omo/evidence/chat-ux-hierarchy-and-streaming/
+?? .omo/notepads/chat-ux-hierarchy-and-streaming/
+?? .omo/plans/chat-ux-hierarchy-and-streaming.md
+?? .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+  → web/ 子树干净（git status --short -- web/ 无输出）；上述预存脏文件全部不碰、不入本 todo commit。
+
+改动前基线阈值（将建立 failing-first characterization）:
+  web/src/components/ui/chat-bubble.tsx:117  CHAT_COLLAPSE_THRESHOLD = 360
+  web/src/components/ui/chat-bubble.tsx:242  WebkitLineClamp: 6（全文件唯一一处）
+  web/src/components/ui/chat-bubble.tsx:245  maxHeight: "9.6em"（= 6 行 × 1.6）
+  web/src/components/chat/msg-parts.tsx:51-69 formatToolIO 500 字符截断（字符串与 JSON 两条路径）
+  web/src/components/chat/msg-thinking.tsx:36-42 折叠摘录 slice(0, 60)（+ ">60 ? …" 尾随省略号）
+  web/src/components/chat/msg-thinking.tsx:96-112 展开态渲染完整 text，title={text.trim()}（无上限）
+
+Playwright JSON reporter 覆盖保护（计划第 105 行）:
+  改动前 shasum .omo/evidence/phase5-t9-playwright.json
+    5d3b2c38f0bf9a6e38d16dadfc783fffad9494c0  .omo/evidence/phase5-t9-playwright.json
+  （playwright.config.ts:25-27 每次运行必然重写该报告，仅做前后 hash 记录。）
+
+环境:
+  - web dev server: localhost:3001 LISTEN（node PID 94825, node v24.14.0）
+  - 后端 API（middleware 代理目标 localhost:3000）: 未监听（curl → 000/closed）
+    → pages.spec.ts / session-unification.spec.ts 的 setup 真实登录依赖后端，属 live-stack 限制，
+      若失败将记录为适配证据（第 8 节）。
+  - node: ~/.nvm/versions/node/v24.14.0/bin（与 dev server 同版本）；PATH 需手动注入。
+  - 未安装任何新依赖（esbuild-wasm 为 web/package.json 已声明 dependencies）。
+
+======================================================================
+4. 验收解读（与计划另一句 "full thinking" 的差异，按任务要求记录）
+======================================================================
+计划复选框 2 Acceptance 原文（第 137 行）: "thinking 折叠摘录 200 字符，展开态展示完整的
+2000 字符摘录（原始输出超过 2000 时第 2001 字符起不进入 DOM）"。
+计划 Scope IN 第 21 行: "thinking 摘录 200 字符"。
+任务书详细验收: "thinking collapsed excerpt is 200 characters and expanded content is the
+complete 2000-character excerpt with raw character 2001+ absent from the DOM"。
+→ 以详细验收为准：折叠摘录恰好 200 字符；展开态 DOM 恰好为完整 2000 字符摘录
+  （text.trim().slice(0, 2000)，不追加尾随省略号，否则 DOM 为 2001 字符且不再"恰好等于"
+  完整摘录）；title 属性同样截断至 2000，保证第 2001 字符起（含属性）不进入 DOM。
+  计划中 "full thinking" 语句与该详细验收冲突时，按任务书指示以详细验收为权威。
+同理解读 tool I/O: 任务书 "puts at most the first 2000 characters into the DOM" + 计划
+QA failure "显示前 2000 字符且第 2001 字符起不出现" → 截断结果为 payload.slice(0, 2000)
+本身（2000 字符，不加省略号），折叠态 summary/title 与展开态 input/output 均由此保证
+≤2000 且第 2001 个原始字符不进入 DOM。
+
+（以下各节随执行追加）
+======================================================================
+5. 本 todo 产品改动（最终态关键行）
+======================================================================
+web/src/components/ui/chat-bubble.tsx
+  L60:  export const CHAT_COLLAPSE_THRESHOLD = 800;        （原组件内局部 const = 360）
+  L247: WebkitLineClamp: 10,                               （原 6；全文件仍唯一一处）
+  L250: maxHeight: "16em",                                 （原 9.6em；10 行 × 行高 1.6）
+  toggle 契约不变：L264 data-testid="chat-bubble-toggle"，L280 {expanded ? "收起 ▲" : "展开 ▼"}
+web/src/components/chat/msg-parts.tsx
+  L52: export const TOOL_IO_MAX_CHARS = 2000;
+  formatToolIO 字符串路径与 JSON 路径均 slice(0, TOOL_IO_MAX_CHARS)（原 500 + "…"）
+  调用方不变：input={formatToolIO(st?.input)} / output={formatToolIO(st?.output)}
+web/src/components/chat/msg-thinking.tsx
+  L26-27: THINKING_EXCERPT_CHARS = 200 / THINKING_MAX_CHARS = 2000
+  折叠摘录 = 空白归一后 slice(0, 200)（原 60 + 尾随 "…"）
+  展开正文 = text.slice(0, 2000)，title={detail}（均原为未截断 text/text.trim()）
+  既有折叠/收起文案未改。
+
+======================================================================
+6. QA 命令与结果（精确命令、退出码、观察）
+======================================================================
+(1) cd web && npx tsc --noEmit
+    → exit 0（改动前后各跑一次，均 0）
+(2) check-only lint（改动文件，无 --fix，未运行 npm run lint）
+    cd web && npx eslint src/components/ui/chat-bubble.tsx src/components/chat/msg-parts.tsx \
+      src/components/chat/msg-thinking.tsx e2e/chat-density.spec.ts lib/chat-density.spec.ts playwright.config.ts
+    → exit 0；0 errors / 4 warnings（全部为 chat-bubble.tsx 既有 <img> 警告，行 341/374/497/531 不在本次 diff 内）
+(3) 计划 Verification strategy 标准命令（第 60 行）
+    cd web && npx tsc --noEmit && npx eslint src/components/chat src/components/ui 'app/(main)/teams/[id]/session'
+    → exit 0；0 errors / 5 warnings（question-modal.tsx 既有 1 条 + chat-bubble.tsx 既有 4 条 <img>）
+(4) 纯检查（计划第 63 行命令）
+    cd web && npx playwright test lib/ --project=lib-unit
+    → exit 0；5 passed（含 lib/api.spec.ts 2 条既有 + chat-density 3 条）
+(5) 密度专项 e2e（本 todo 测试缝）
+    cd web && npx playwright test chat-density.spec.ts --project=chat-density
+    → exit 0；5 passed（failing-first 同命令为 5 failed / exit 1，见 task-2-density-failure.txt）
+(6) 计划复选框 2 QA happy 命令（第 138 行）
+    cd web && npx playwright test pages.spec.ts session-unification.spec.ts
+    run #1 → exit 1；40 passed / 1 failed——失败项为 session-unification.spec.ts:468（checkbox 14 的
+      Todo14「resetScroll 期望 scrollTop=0 实得 5348」滚动时序问题）。
+      归因排查：单独重跑该测例（同一命令带我的改动）→ exit 0 通过；
+      完整命令 run #2 → exit 0；41 passed / 0 failed。
+      结论：单次滚动时序 flake，非本 todo 密度改动引起（改动前后该测例均可通过；断言点为滚动复位
+      时序，与折叠阈值无数据依赖）。两次原始日志：/tmp/t2/pages-session.log、/tmp/t2/pages-session2.log
+      （run #2 为计划 QA happy 的判定依据，exit 0）。
+(7) 未执行 `bash scripts/gate.sh`（计划第 74 行全仓门）：gate 含 `web npm run build`（next build），
+    与本机正在运行、被其他 todo 共享使用的 next dev（:3001，turbopack）并发写 .next 有互相破坏风险；
+    且 server/worker 步骤与本 todo（纯 web 展示阈值）无代码交集。适配执行 = (1)(2)(3) 覆盖 gate 的
+    web lint/typecheck 面，(4)(5)(6) 覆盖计划要求的 Playwright 面。此为 live-stack 约束下的适配，
+    非隐藏失败；如需全仓门，应在独占构建窗口内运行。
+    （web 端 gate 的 lint 步骤等价命令即 (3)，已 exit 0。）
+
+======================================================================
+7. 计算校验：800 / 10 / 2000 / 200（绿跑实测）
+======================================================================
+A1 正文（900 字符夹具，e2e 实测快照）:
+  折叠态 { lineClamp: "10", maxHeightStyle: "16em", lineHeightRatio: 1.6,
+           maxHeightInLines: 10, visibleLines: 10, toggleAria: "false" }
+  - 16em ÷ (1.6 × fontSize 13px) = 208px ÷ 20.8px/行 = 10 行 ✓（与 clamp 10、实际裁剪高度 10 行一致）
+  - 800 < 900 → toggle 出现；800 = 800（严格大于不触发）→ toggle 计数 0 ✓
+  展开态 { lineClamp: "", maxHeightStyle: "", lineHeightRatio: 1.6,
+           beyondClippedHeight: true, toggleAria: "true" }，文案 展开 ▼ ⇄ 收起 ▲ ✓
+A2 tool（3000 字符夹具）:
+  字符串路径：折叠/展开 hasFirst2000=true、hasAfter2000=false、exactFirst2000Span=true、titleLen=2000
+    → DOM 恰好含前 2000 字符，第 2001..3000（1000 字符）完全缺席，title 属性 ≤2000
+  JSON 路径：折叠 summary/title = JSON.stringify({...}).slice(0,2000)（titleLen 2000）；
+    展开 input/output 两个 span 各恰好 2000，序列化第 2001 字符起缺席
+A3 thinking（3000 字符夹具）:
+  折叠 { excerptLen: 200, excerptIs200: true, titleLen: 2000, titleIs2000: true,
+         hasAfter2000: false } → 201..3000 共 2800 字符缺席（含 title 属性）
+  展开 { hasExact2000Div: true, hasAfter2000: false, titleLen: 2000 } → 展开内容恰好完整 2000 字符，
+    第 2001 字符起不进 DOM
+纯检查侧（lib-unit）: caps=[2000,2000]（字符串+JSON 两路径）、caps=[200,2000]、
+  clampLines=1、threshold=800、lineClamp=10、maxHeightEm=16、16/1.6=10 ✓
+夹具唯一性：CJK 连续码点（0x4E00/0x5000/0x6000 起），slice(2000) 不可能包含于 slice(0,2000)，
+  「第 2001 字符起不出现」断言无假阳性。
+
+======================================================================
+8. 结构 testid 基线（改后）与计划 QA failure 判据复验
+======================================================================
+改后命令（同第 2 节）→ chat-testids-after.txt（23 条）
+  diff chat-testids-before.txt chat-testids-after.txt → exit 0，输出为空（无 testid 消失/新增）
+  关键依赖项仍在: agent-avatar / chat-bubble / chat-bubble-author / chat-bubble-content /
+  chat-bubble-toggle / msg-thinking / msg-tool / msg-error / msg-aborted / msg-streaming ✓
+grep -c 'WebkitLineClamp' web/src/components/ui/chat-bubble.tsx → 1 ✓（计划 QA failure 判据 1）
+900 字符 toggle + 折叠 10 行 ✓、3000 字符 tool 前 2000 且 2001+ 不出现 ✓（判据 2/3，见第 7 节）
+
+======================================================================
+9. 环境、清理与运行回执
+======================================================================
+Playwright JSON reporter 覆盖记录（计划第 105 行）:
+  前 5d3b2c38f0bf9a6e38d16dadfc783fffad9494c0  .omo/evidence/phase5-t9-playwright.json
+  后 729c640b7050e71c3735ab5beba2492390310618  .omo/evidence/phase5-t9-playwright.json
+  （playwright.config.ts:25-27 每跑必重写，仅记录 hash；未回滚、未覆盖其他脏文件。）
+清理:
+  - 测试缝 bundle 全程内存构建（esbuild-wasm write:false），未落任何临时文件
+    （find web -maxdepth 2 -name "*density*" 除 e2e/lib 归属文件外为空）
+  - web/test-results：失败轮产生的 trace 目录已被后续绿跑清空，仅剩本次 .last-run.json，已删除
+  - web/playwright-report：不存在（config 仅 list+json reporter）
+  - .auth/user.json 为 setup 登录态（gitignored，正常产物，未提交）
+  - 未执行任何 git checkout；预存脏文件（.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、
+    .opencode/opencode.json、phase5-t9-playwright.json 等）除计划允许的 phase5 JSON 自动重写外原样保留
+  - web/ 改动前后仅本 todo 6 个文件（git status --short -- web/ 核对）
+
+======================================================================
+10. 提交范围（见文末追加的 commit 回执）
+======================================================================
+提交（先 git diff --cached --name-only 核对为且仅为以下 6 个文件后提交）:
+  31ff11f765afab0da0fb12b46cdfbba7d0c0da0a
+  feat(chat): 放宽正文、tool I/O 与 thinking 密度阈值
+  web/src/components/ui/chat-bubble.tsx   |  11 +-
+  web/src/components/chat/msg-parts.tsx   |  17 +-
+  web/src/components/chat/msg-thinking.tsx |  19 +-
+  web/e2e/chat-density.spec.ts            | 495 +++++ (新建，本 todo 测试缝)
+  web/lib/chat-density.spec.ts            | 118 ++++ (新建，lib-unit 纯检查)
+  web/playwright.config.ts                |   7 + (仅新增 chat-density 项目入口)
+  6 files changed, 654 insertions(+), 13 deletions(-)
+未入提交: 全部 .omo/**（含本任务证据目录）、.opencode/**、web/e2e/session-unification.spec.ts
+  （提交前核对时发现该文件被 checkbox 14 并发修改——非本 todo 文件，未 add、未入提交）。

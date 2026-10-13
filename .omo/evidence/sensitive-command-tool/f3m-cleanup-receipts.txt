@@ -1,0 +1,39 @@
+=== CLEANUP RECEIPTS at=2026-09-27T00:44:48Z
+[pre] messages in c_0000000017: 44
+[pre] agent_questions rows: 17
+[action 1] DELETE my lane-B chat messages (m_0000000166..177, content LIKE F3-LANE-B/laneB)
+[action 2] DELETE my synthetic probe questions (aq_0000000019 warmup, aq_0000000022 sse-probe)
+[action 3] DELETE message receipts/deliveries orphan rows for those messages (if any)
+[post] messages in c_0000000017: 32  (baseline=31)
+[post] max message id: m_0000000165  (baseline=m_0000000165)
+[post] agent_questions rows: 15
+[post] remaining LANE-B rows: 5
+[action 4] no temporary DM/channel created: channel list unchanged (c_0000000017 pre-existing, created 2026-09-25)
+[action 5] remove throwaway /tmp artifacts
+    removed: /tmp/burn*.json|out /tmp/login*.json /tmp/teams.json /tmp/dm*.json /tmp/tools.json /tmp/*.html /tmp/dmmsgs.json /tmp/pm.json /tmp/baseline_msg_ids.txt
+[kept] evidence scripts+logs+screenshots under .omo/evidence/sensitive-command-tool/ (deliverable artifacts, never committed)
+=== CLEANUP ROUND 2 (awaiting probes) at=2026-09-27T00:51:48Z
+[pre] LANE-B messages:
+id	sender_type	created_at
+m_0000000178	user	2026-09-27 00:46:19.216
+m_0000000179	agent	2026-09-27 00:46:23.648
+m_0000000180	user	2026-09-27 00:48:34.117
+[action] DELETE ids: 'm_0000000178','m_0000000179','m_0000000180'
+[action] DELETE awaiting probe questions: aq_0000000027,aq_0000000028
+ERROR 1054 (42S22) at line 1: Unknown column 'aq_0000000027' in 'where clause'
+[post] LANE-B message rows: 0
+[post] messages in c_0000000017: 35 (baseline=32)
+[post] max message id: m_0000000183 (baseline=m_0000000165)
+[note] NOT touched: aq_0000000029 (reason 'F3 exemption timed attempt', created 00:50:06Z by concurrent lane-A run) — left for its owner
+[action-r2b] DELETE awaiting probe questions (quoted):
+[post-r2b] LANE-B awaiting question rows: 0
+[post-r2b] remaining LANE-B rows (real flow, kept as audit, no secrets):
+id	request_id	status	r
+aq_0000000021	que_platform_0000000012	rejected	"F3-LANE-B success"
+aq_0000000023	que_platform_0000000014	resolved	"F3-LANE-B success"
+aq_0000000024	que_platform_0000000015	resolved	"F3-LANE-B failure"
+aq_0000000025	que_platform_0000000016	rejected	"F3-LANE-B cancel"
+aq_0000000026	que_platform_0000000017	resolved	"F3-LANE-B timeout"
+[post-r2b] messages c_0000000017=35 baseline=32 (+3 = concurrent lane-A, not mine) max=m_0000000183
+[post-r2b] pending questions now:
+[{"id":"aq_0000000029","requestId":"que_platform_0000000020","sessionId":"s_0000000011","taskId":"t_0000000001","agentId":"a_project_manager","kind":"secret_input","content":{"reason":"F3 exemption timed attempt","source":"secret_input","template":"echo {{TOKEN}}","variables":[{"name":"TOKEN","secret":true}]},"status":"pending","answers":null,"managedMode":false,"createdAt":"2026-09-27T00:50:06.89

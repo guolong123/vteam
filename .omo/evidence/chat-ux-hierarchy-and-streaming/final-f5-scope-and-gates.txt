@@ -1,0 +1,451 @@
+================================================================================
+F5 — SCOPE / CONDITIONAL-GATE / CONTRACT / DIRTY-WORKTREE AUDIT
+================================================================================
+work_id        : chat-ux-hierarchy-and-streaming-38db65ea
+plan           : .omo/plans/chat-ux-hierarchy-and-streaming.md
+registry       : .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+ledger         : .omo/ulw-execute/ledger.jsonl (155 lines)
+evidence dir   : .omo/evidence/chat-ux-hierarchy-and-streaming/
+verifier       : F5 (final wave), session ses_f246c73adffegTD8NRcsr9XvLt
+mode           : READ-ONLY. The ONLY file written by this verifier is this file.
+                 No source/test/plan/boulder/registry/ledger edit; no
+                 checkout/reset/stash; no gate/build/playwright run.
+date           : 2026-09-26
+baseline       : 7c9765f  (pre-plan HEAD, "merge: cmdk 键盘导航 + 任务删除接口/数据库就绪")
+HEAD at audit  : b27f4c7  (feat(chat): 统一低优先级折叠并保持错误中断可见)
+
+-- VERDICT (first) -------------------------------------------------------------
+AdversarialVerify verdict: **CONFIRMED (PASS)** — 0 blockers, 11 non-blocking notes.
+confidence    : 0.90
+statement     : Every scope contract checked below holds. C0=FAIL / C1-skipped is
+                consistent across plan, registry, ledger, evidence and git history;
+                no group-chat routing / final-MCP / SSE / storage contract changed;
+                no new dependency, no mobile work, no mutating lint; all
+                pre-existing dirty files are still dirty, unstaged and absent from
+                all 13 product commits; F1-F4 results reconcile honestly, with
+                F4's 5 NOT-EXERCISED items never counted as PASS.
+                **The plan MAY be marked complete by the orchestrator** (ticking the
+                F5 checkbox remains an orchestrator action; this file does not tick it).
+
+================================================================================
+1. C0 / C1 RULING (recomputed, not inherited)
+================================================================================
+Check                                                    | Result
+---------------------------------------------------------+--------
+C0 evidence exists, >=3 samples, length sequence,        | PASS
+  step-finish time, explicit verdict                     | c0-serve-incremental.txt:
+                                                         |   polls=41 http_ok=41,
+                                                         |   determinate_samples=20,
+                                                         |   part prt_0d8dd0dd... len
+                                                         |   sequence [0 x17, 865, 865,
+                                                         |   865], step-finish at
+                                                         |   +19755ms (sample 39),
+                                                         |   growth 0->865 at sample 39
+                                                         |   "AFTER step-finish"
+                                                         |   => line 90 `C0=FAIL`
+C0=FAIL, no C0=PASS claim anywhere                       | PASS
+  (grep "C0=PASS" over evidence/registry/ledger -> only
+   conditional template text in plan/registry/F1 prose)  |
+No C1 commit exists                                      | PASS
+  git log --grep="fix(stream)" 7c9765f..HEAD -> EMPTY    |
+  git log 7c9765f..HEAD -- worker server -> EMPTY        |
+  git log -- worker/src/driver/prompt-await.ts ->
+      HEAD-most change = 9db2e71 (pre-plan Tech debt)    |
+  no worker MessageDeltaTracker / server ingress edit    |
+No C1 behaviour claimed                                  | PASS
+  plan row 13 = `- [x] 13.` with header `（skipped：C0=FAIL，
+  详见 .../c0-serve-incremental.txt）`; registry task 13
+  status=skipped + skip_reason; ledger line 81 task-skipped
+  ("C0=FAIL; plan forbids implementing C1")              |
+C2 + all UI todos completed despite C0=FAIL              | PASS
+  12 committed implementation rows (2,3,4,5,6,7,8,9,10,
+  11,12,14) + row 1 (pure verification, no commit) = 13
+  commits = git rev-list --count 7c9765f..HEAD           |
+Plan checkbox state honest                               | PASS
+  18 `- [x]` + 1 `- [ ]` (F5 only); no box ticked for a
+  non-existent C1 implementation                         |
+RULING: C0=FAIL / C1 skipped is consistent end-to-end. C1 correctly did not run,
+C2 and every UI todo did run. No blocker.
+
+================================================================================
+2. CONTRACT / GROUP-ROUTE DIFF TABLE (base 7c9765f -> HEAD b27f4c7)
+================================================================================
+File / contract                                          | Diff lines | Verdict
+---------------------------------------------------------+------------+---------
+server/src/workers/worker-event.ingress.ts               |     0      | UNCHANGED
+  (group process -> private/internal channel routing,    |            | PASS
+   group final reply -> direct MCP, `source.type ===     |            |
+   CHANNEL_TYPE.team_group` skip logic still at :576-    |            |
+   583; group_post appears ONLY as an unchanged context  |            |
+   line: `git diff | grep -c '^[+-].*group_post'` = 0/0) |
+server/src/chat/message-parts.ts                         |     0      | UNCHANGED / PASS
+server/src/event.constants.ts (CHAT_MESSAGE_NEW,         |     0      | UNCHANGED / PASS
+  MESSAGE_PART_DELTA names + top-level payload)          |            |
+server/src/middleware.ts (SSE passthrough)               |     0      | UNCHANGED / PASS
+worker/src/driver/prompt-await.ts (500ms poll, tracker)  |     0      | UNCHANGED / PASS
+worker/src/exec/exec-server.ts (delta send)              |     0      | UNCHANGED / PASS
+any worker prompt-await/exec file                        |     0      | UNCHANGED / PASS
+all of server/ (incl. prisma schema + migrations)        |     0      | UNCHANGED / PASS
+all of worker/                                           |     0      | UNCHANGED / PASS
+git diff --name-only 7c9765f..b27f4c7 -- server worker   |  (empty)   | PASS
+web/hooks/use-realtime.ts, web/hooks/use-sse.ts          |     0      | UNCHANGED / PASS
+  (SSE client contract / upsertMessage terminal rule untouched)
+group history query + pagination in session/page.tsx     |     0      | UNCHANGED / PASS
+  (diff hunks touch only: imports, visibleChannelId,
+   DM refetchInterval 30_000, scroll gate, unread helper,
+   onMessagePartDelta, grouping/date-separator/identity
+   rendering; grep of diff for
+   pagination|pageSize|hasMore|cursor|infinite|loadMore
+   |offset -> 0 hits; comment in diff: "群聊查询行为不变")
+web/app/globals.css (mobile shell / overflow-x)          |     0      | UNCHANGED / PASS
+package.json / *lock* (root, web, server, worker)        |     0      | UNCHANGED / PASS
+`git diff 7c9765f..b27f4c7 | grep -c '^[+-].*@media'`   |     0      | no mobile work / PASS
+
+Group final reply / MCP contract, group process routing, SSE event names and
+payload shape, and storage schema are byte-identical to the pre-plan baseline.
+NO BLOCKER.
+
+================================================================================
+3. Scope OUT LINE-ITEM TABLE
+================================================================================
+# | Scope OUT item                                    | Evidence / recomputation | Verdict
+--+---------------------------------------------------+--------------------------+--------
+1 | 不改 SSE 协议 (event.constants.ts +               | both files diff = 0;     | PASS
+  | middleware.ts passthrough)                        | web hooks diff = 0       |
+2 | 不改消息存储模型 (no column / migration /         | entire server/ diff = 0  | PASS
+  | status enum)                                      | (schema + migrations)    |
+3 | 不改群聊 delta 路由或群聊最终消息契约              | ingress diff = 0;        | PASS
+  | (worker-event.ingress.ts:570-579)                 | group_post +/- = 0/0;    |
+  |                                                   | zero worker commits      |
+4 | 不引入新依赖 / 不加 web Jest runner                | no package/lock diff;    | PASS (note N1)
+  |                                                   | `chat-density` is a      |
+  |                                                   | Playwright project entry |
+  |                                                   | in playwright.config.ts  |
+  |                           only (D1, see §4);       |                          |
+  |                           esbuild-wasm already     |                          |
+  |                           present (nothing added)  |                          |
+5 | 不做移动端适配                                    | globals.css diff = 0;    | PASS
+  |                                                   | 0 @media added           |
+6 | 不改群聊历史分页逻辑 / 不删不重建消息数据          | no pagination tokens in  | PASS
+  |                                                   | diff; F4 cleanup shows   |
+  |                                                   | pre-existing 21 msgs     |
+  |                                                   | untouched (21 -> 31, +)  |
+7 | C0 结论前不改 C1；C0=FAIL 保留未实现事实           | zero worker/server       | PASS
+  |                                                   | commits; no "token-level |
+  |                                                   | streaming" claim found   |
+8 | 不默认折叠 error/aborted                          | msg-error.tsx:55         | PASS
+  |                                                   | detailOpen=useState(true)|
+  |                                                   | msg-aborted.tsx:35 same; |
+  |                                                   | F3 ⑨/F4 3.8 observe      |
+  |                                                   | visible titles/summary   |
+9 | 不触碰既有脏工作树                                | status set identical     | PASS (note N2)
+  | (.omo/boulder.json, ledger.jsonl,                 | plan-start -> F1 -> F2   |
+  |  .omo/evidence/** non-plan files,                 | -> F4 -> F5; nothing     |
+  |  .opencode/opencode.json)                         | staged; stash list EMPTY;|
+  |                                                   | reflog linear, no reset; |
+  |                                                   | 0 of 13 commits contains |
+  |                                                   | any .omo/.opencode path  |
+10| 不使用 mutating lint                              | F2 step grep: 0 `--fix`, | PASS
+  |                                                   | 0 bare `npm run lint`;   |
+  |                                                   | only `npm run lint:check`|
+  |                                                   | (server+web) and worker  |
+  |                                                   | typecheck; every task    |
+  |                                                   | evidence repeats it      |
+11| 编辑 web 前读 next 本地文档                       | web/node_modules/next/   | PASS (note N3 / D4)
+  |                                                   | dist/docs ABSENT;        |
+  |                                                   | DIST_DOCS_ABSENT logged, |
+  |                                                   | ledger decision line 74, |
+  |                                                   | `user_approved: true`,   |
+  |                                                   | version-matched v15.5.22 |
+  |                                                   | tag docs used; 16        |
+  |                                                   | evidence files cite read |
+NO Scope OUT item is violated. No blocker.
+
+================================================================================
+4. DISCLOSED-DEVIATION ADJUDICATION
+================================================================================
+D1  web/playwright.config.ts gained a third Playwright project `chat-density`
+    inside commit 31ff11f (row 2). Config file is not in row 2's References and
+    the project is neither `lib-unit` nor an existing e2e project.
+    ADJUDICATION: **ACCEPTED, non-blocking (note N1).** It adds no dependency, no
+    runner (Scope OUT #4's actual prohibitions are streaming libs / virtual list /
+    web Jest runner), runs the same Playwright binary, is commented as
+    "复选框 2" gate, and is disclosed in ledger line 143 deviations_disclosed[0]
+    and F1 §6. Residual: future plans should declare such harness edits in the
+    row's References.
+
+D2  commit 9fcbf85 also changed 2 lines in web/app/(main)/skills/page.tsx:
+    `roleText[...] + "14"` -> `color-mix(in srgb, ... 8%, transparent)`.
+    ADJUDICATION: **ACCEPTED, non-blocking (note N4).** After B10, roleText
+    returns `var(--color-role-*)`, so hex-alpha concatenation would have produced
+    invalid CSS on the skills page. Direct, minimal consequence of in-scope B10;
+    no second role-colour source introduced; disclosed in ledger line 129
+    (scope-note) and F1 §6.
+
+D3  Todo 14 spans two commits (8092b16 feat + a6139ec test) because verified
+    31ff11f landed between them; the second subject uses type `test(chat):`,
+    outside the Commit strategy's enumerated type list.
+    ADJUDICATION: **ACCEPTED, non-blocking (note N5).** Disclosed in THREE places
+    (plan row 14 header L231, registry `history_deviation`, ledger line 88). Both
+    commits contain only todo-14 files (2 files + 1 file, all web/), no evidence/
+    dirty file, no rebase/squash, reflog linear. `test(chat):` keeps the required
+    `type(scope): 中文摘要` shape and touches tests only.
+
+D4  (from F1 H6) local Next docs directory absent; version-matched official
+    tag docs used under an explicit user-approved decision.
+    ADJUDICATION: **ACCEPTED, non-blocking (note N3)** — documented, not silent.
+
+Evidence-hygiene notes carried forward from F1/other verifiers and re-checked here:
+  · task-5 `evidence_correction` (system→agent label) — corrected text still
+    consistent with predicate/rendering (grouped pair agent b2_11 -> b2_12). OK.
+  · task-11 `evidence_hygiene` (overwritten deps log, stale provenance line,
+    gitignored last-run marker) — product unaffected; F3 later re-verified
+    bundle freshness by 3 independent probes. OK.
+  · task-9 `PASS_WITH_MISSING_TSC_LOG`, task-14 `PASS_WITH_COUNT_NIT`,
+    task-14 `PASS_WITH_REBUILD_NOTE` — all disclosed at the time; F2/F3 re-ran
+    full gates afterwards. OK.
+
+================================================================================
+5. COMMIT / DIRTY-WORKTREE TABLE
+================================================================================
+commit | row | files | non-web | notes
+-------+-----+-------+---------+---------------------------------------------
+8092b16| 14  |   2   |    0    | C2 page delta consumption + spec
+31ff11f|  2  |   6   |    0    | + web/playwright.config.ts (D1)
+a6139ec| 14  |   1   |    0    | test-only follow-up (D3, type test(chat))
+438a0b6|  3  |   4   |    0    |
+e750e32|  4  |   9   |    0    | + ui/message-identity.tsx, ui/index.ts
+cf08cf9|  5  |   5   |    0    | + lib/message-grouping{,.spec}.ts
+67e7442|  6  |   5   |    0    | + lib/date-separator{,.spec}.ts
+9674e4c|  7  |   9   |    0    | + lib/{author-role-display,display-author}
+1433275|  8  |   4   |    0    |
+129b761|  9  |   4   |    0    | + chat/msg-unknown-part.tsx, chat/index.ts
+9fcbf85| 11  |   3   |    0    | + skills/page.tsx (D2)
+1bef2e0| 10  |   6   |    0    | + lib/message-initials{,.spec}.ts
+b27f4c7| 12  |   8   |    0    | + ui/collapse-policy.ts
+-------+-----+-------+---------+---------------------------------------------
+TOTAL  |13 cm|  66   |    0    | 13/13 commits: web/ paths only
+                                      grep over all `git show --name-only`
+                                      outputs for .omo/, .opencode/,
+                                      ledger.jsonl, boulder.json,
+                                      phase5-t9-playwright, *.png/*.log/*.txt,
+                                      test-results/, playwright-report/
+                                      -> ZERO hits. No evidence/plan/boulder/
+                                      ledger file entered a product commit.
+
+Dirty worktree: initial vs final
+  Plan-start snapshot (task-2-density.txt §3, 2026-09-25 22:40)
+  F1 audit snapshot (final-f1 §7)   }
+  F2 before/after gate (final-f2)   } -> all 12 entries identical to
+  F4 before/after (final-f4 §5)     }    current `git status --short`
+  F5 recomputation (this file)      }
+    M .omo/boulder.json
+    M .omo/evidence/phase5-t9-playwright.json
+    M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+    M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+    M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+    M .omo/ulw-execute/ledger.jsonl
+    M .opencode/opencode.json
+    ?? .omo/drafts/chat-ux-hierarchy-and-streaming.md
+    ?? .omo/evidence/chat-ux-hierarchy-and-streaming/
+    ?? .omo/notepads/chat-ux-hierarchy-and-streaming/
+    ?? .omo/plans/chat-ux-hierarchy-and-streaming.md
+    ?? .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+  (byte-level: F2's block differs from raw output only by one extra leading
+   space of the evidence document's own formatting; 12/12 entries compare
+   equal after strip -> IDENTICAL_STATUS confirmed by this verifier too.)
+  `git diff --cached --name-only` -> EMPTY (nothing staged now)
+  `git stash list` -> EMPTY
+  `git reflog` -> linear chain of exactly the 13 plan commits on top of
+                  7c9765f; no reset/rebase/checkout-of-branch during the plan
+  `git status --short -- web server worker` -> EMPTY (product tree clean)
+  .omo/evidence/phase5-t9-playwright.json is the one pre-existing dirty file
+  the plan is explicitly allowed to rewrite (JSON reporter); shasum before/after
+  recorded by task-3/task-12/F3 as required.
+  → Scope OUT #9 satisfied: all pre-existing dirty files preserved, never
+    staged, never committed, never path-checkout-restored. NO BLOCKER.
+
+================================================================================
+6. TESTID BASELINE RECOMPUTATION (incl. dynamic-id caveat)
+================================================================================
+Plan-designated pair (plan L83-87): chat-testids-before.txt (23) vs
+chat-testids-after.txt (24) -> `comm -23` = EMPTY, only addition
+`chat-bubble-time`. PASS.
+F1 additionally recomputed every recorded pair + the live tree:
+  latest recorded after (task-12-chat-testids-after.txt, 36 ids) minus live
+  tree -> EMPTY.
+THIS VERIFIER re-ran the plan's literal grep against the current tree:
+  before(23) vs now(36): the ONLY literal that disappears is
+      data-testid="loading-indicator"
+  CAVEAT CONFIRMED, and it is an artifact, not a deletion:
+    - B12 commit 1433275 converted loading-indicator.tsx to a dynamic
+      `data-testid={testid}` with default `testid = "loading-indicator"`
+      (live lines 27 and 76) so the container can be reused by the status row.
+    - page.tsx:1446 still renders `<LoadingIndicator label={loadingLabel} />`
+      (default testid) and page.tsx:1449 renders the second row with
+      `testid="session-status"` + `dotsTestId="session-status-dots"`; the
+      original id is therefore NOT shadowed away.
+    - e2e still locates `div[data-testid="loading-indicator"]`
+      (session-unification.spec.ts:1507,1562) and task-8's green run asserted
+      count 1.
+  Raw `data-testid` deletion lines across the whole diff = 11, each accounted
+  for: session-status + loading-indicator (now dynamic-prop, still rendered),
+  4 comment lines, and msg-streaming / chat-bubble-author /
+  external-channel-badge / attachment-file (all present as literals in the
+  live set).
+  `session-status` is likewise present as a runtime attribute via the prop.
+  => ZERO real testid disappearances, including the dynamic
+     loading-indicator/session-status caveat. PASS (note N6: the designated
+     chat-testids-after.txt is stale; regenerate or cite task-12's file).
+
+================================================================================
+7. F1-F4 RECONCILIATION (evidence vs claims)
+================================================================================
+Gate | Recorded result                | Recomputed / spot-checked         | Verdict
+-----+--------------------------------+-----------------------------------+--------
+F1   | PASS, 14/14 checks, 0 FAIL,    | file exists (26,722 B); table     | PASS
+     | 6 hygiene notes                | present; testid comm -23 EMPTY;   |
+     |                                | 13/13 commits web-only; no       |
+     |                                | over-claim of F2/F3/F4/F5         |
+F2   | GATE GREEN, exit 0, 89s,       | file exists (534,692 B); final   | PASS
+     | 11/11 steps; ATTEMPT 1         | line literally `GATE GREEN: all   |
+     | exit 127 (npx not found, nvm   | steps passed (exit 0)`; attempt 1 |
+     | PATH) disclosed as             | FAIL: server npx prisma generate  |
+     | environment precondition, no  | (exit 127) preserved verbatim;    |
+     | code fix                       | 11-step summary all exit 0;       |
+     |                                | before/after git status identical |
+F3   | PASS, 209/209 (0 failed,       | file exists (33,084 B); run2      | PASS
+     | 0 skipped, 0 flaky, retries=0) | `209 passed (8.0m)` literal +     |
+     | after web bundle rebuild;      | JSON report 209×expected; run1    |
+     | run1 181/3-failed/25-not-run   | (PATH missing docker) failure     |
+     | disclosed                      | preserved; image sha256:c006ebad  |
+     |                                | created 08:57 > HEAD 08:24 with   |
+     |                                | B11/B7/B10 markers verified in    |
+     |                                | container + HTTP bytes + browser  |
+F4   | PASS, 22 sub-checks =          | file exists (30,272 B); verdict   | PASS
+     | 17 PASS / 5 NOT-EXERCISED /    | line states exactly that; the 5   |
+     | 0 FAIL; cleanup receipt +      | items are itemised (sending bubble,|
+     | real transcript                | failed bubble, agent msg-error,   |
+     |                                | msg-aborted, same-role initials) |
+     |                                | and §7 explicitly refuses to draw |
+     |                                | conclusions on them; ledger 152   |
+     |                                | = status `completed_with_not_     |
+     |                                | exercised` + note "never counted   |
+     |                                | as PASS"; real DM transcript with |
+     |                                | ids m_0000000128..149 on          |
+     |                                | c_0000000017; temp channel        |
+     |                                | c_0000000127 soft-deleted,        |
+     |                                | /tmp/f4-token.txt deleted,        |
+     |                                | `grep eyJ` = 0                    |
+Not-exercised items are NOT reported as PASS anywhere (ledger, registry, or
+evidence). NO misleading-success finding.
+
+================================================================================
+8. ADVERSARIAL CLASS RESULTS
+================================================================================
+class                     | result | detail
+--------------------------+--------+-------------------------------------------------
+stale_state               | PASS   | HEAD == b27f4c7 (last plan commit); web tree
+                          |        | clean; web image 08:57 > last commit 08:24 and
+                          |        | markers verified 3x -> F3/F4 ran fresh code.
+                          |        | N7 (non-blocking): registry wave-0 status
+                          |        | `in_progress`, wave-3 `pending`, F5
+                          |        | `in_progress`, and chat-testids-after.txt
+                          |        | is stale — cosmetic only, task-level states
+                          |        | correct.
+dirty_worktree            | PASS   | §5: identical 12-entry status set from
+                          |        | plan start to now; nothing staged; stash
+                          |        | empty; reflog linear; 0 leakage into commits.
+                          |        | N2: preservation is proven at path/status
+                          |        | level (no content hashes of the 6 pre-existing
+                          |        | dirty files were recorded at plan start), so
+                          |        | the claim rests on identical status + no
+                          |        | checkout/reset/stash of those paths.
+misleading_success_output  | PASS   | C0=FAIL stated at line 90 with raw samples;
+                          |        | F2 attempt-1 failure kept verbatim; F3 run1
+                          |        | failure kept; F4 NOT-EXERCISED never PASS;
+                          |        | no "token-level streaming"/C1-done claim
+                          |        | found in evidence/registry.
+                          |        | N8: registry F4 entry has no verdict /
+                          |        | not_exercised field (ledger carries it).
+malformed_evidence         | PASS   | F1-F4 + C0 all exist, non-empty, with literal
+                          |        | verdicts. N9: task-13-*.txt declared in plan
+                          |        | row 13 + registry but absent (legitimately
+                          |        | skipped row); row 1 QA-failure evidence is
+                          |        | anaphoric ("同一 C0 文件"); f4-attempt-error-
+                          |        | run2.txt is a raw retained script stack.
+flaky/timing               | PASS   | F3 retries=0, 0 flaky, 209/209 single run;
+                          |        | F2 89s single real run; F4 timed sampling with
+                          |        | disclosed 3 measurement corrections (§5 of
+                          |        | F4) rather than silent re-runs.
+cleanup                    | PASS   | C0 temp script deleted (receipt in file); F4
+                          |        | temp dirs/profile/token deleted, throwaway
+                          |        | channel soft-deleted, theme restored; F3
+                          |        | test-results/playwright-report cleaned. N10:
+                          |        | F3 leftovers disclosed (dangling old web image
+                          |        | 1c7f70f2f64f, docker-on-PATH caveat) — out of
+                          |        | scope, not cleaned.
+secrets                    | PASS   | c0 file prints only the placeholder
+                          |        | `opencode:<OPENCODE_SERVER_PASSWORD>` +
+                          |        | `configured=no, length=0`; this verifier's
+                          |        | scan of the whole evidence dir for
+                          |        | eyJ*/Basic<base64>/literal password assignment
+                          |        | -> the single hit is F1's own grep-regex text;
+                          |        | no secret in any commit message/file name.
+shared-runtime interruption| PASS   | docker ps now: server 16h, worker 16h, db 22h
+                          |        | — same uptimes F3/F4 recorded; only the web
+                          |        | image was rebuilt (documented, image+container
+                          |        | ids recorded); no compose down/restart/prune in
+                          |        | any evidence; this verifier used read-only
+                          |        | docker commands only.
+                           |        | N11: red-state constructions used `git show
+                           |        | HEAD:<file> > <file>` and pathspec-limited
+                           |        | `git stash push -- <own files>` (popped, stash
+                           |        | list empty); the `git checkout b27f4c7 -- ...`
+                           |        | line in task-12-*-failure.txt:178 is inside a
+                           |        | "可重放" recipe, not an executed command — and
+                           |        | even as written it targets only this plan's own
+                           |        | product files, never pre-existing dirty paths.
+
+Blockers: NONE.
+Non-blocking notes: N1..N11 (all disclosed above; none contradicts a scope
+contract, a gate result, or an acceptance criterion).
+
+================================================================================
+9. SUCCESS-CRITERIA SPOT CHECK (F5-relevant only)
+================================================================================
+ 9. C0 real evidence exists; C1 not implemented; no token-level streaming
+    claimed; C2 scroll gating + first-delta refetch + DM 30s polling present
+    (page.tsx diff lines for `refetchInterval: 30_000`,
+    `payload.message.channelId === visibleChannelId`,
+    `deltaRefetchChannelRef`)                              -> PASS
+10. N/A (C1 not implemented; criterion is conditional)     -> N/A
+11. group delta routing and group final MCP contract
+    zero-diff (§2); all pre-existing dirty files preserved (§5) -> PASS
+
+================================================================================
+10. VERDICT
+================================================================================
+VERDICT  : CONFIRMED (AdversarialVerify: confirmed)
+CONFIDENCE: 0.90
+BLOCKERS : 0
+NOTES    : N1 playwright `chat-density` project (D1) · N2 no content hashes for
+           pre-existing dirty files · N3 local next/dist/docs absent, approved
+           fallback (D4/H6) · N4 skills page color-mix (D2) · N5 two commits +
+           `test(chat):` type for todo 14 (D3) · N6 stale designated testid
+           after-file · N7 registry wave-level status staleness · N8 registry F4
+           lacks not_exercised field · N9 declared-but-absent task-13 evidence ·
+           N10 F3 leftover dangling image / PATH caveat · N11 documented
+           `git checkout` replay recipe (not executed; own files only).
+
+** The plan MAY be marked complete. **  F1-PASS / F2-GATE-GREEN / F3-209-of-209 /
+F4-17-PASS-5-NOT-EXERCISED-0-FAIL all reconcile with the artifacts; C0=FAIL with
+C1 skipped is honest and consistent; every Scope OUT line item holds. Ticking the
+F5 checkbox and updating boulder/registry is the orchestrator's action after
+reading this file — this verifier did not touch them.
+
+METHOD: read/grep/glob over plan, registry, ledger, C0/F1-F4 evidence;
+`git status --short`, `git diff --name-only/--numstat 7c9765f..b27f4c7`,
+`git show --name-only` ×13, `git log --grep`, `git reflog`, `git stash list`,
+`git diff --cached`; plan's literal testid grep recomputed + `comm`;
+read-only `docker ps` / `docker inspect`. Writes: this file only.

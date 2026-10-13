@@ -154,11 +154,11 @@ function injectTaskValue(policyId: string, value: string) {
   const sql = `UPDATE execution_policies SET config=JSON_SET(config, '$.permission.task', '${value}') WHERE id='${policyId}';`;
   execFileSync("docker", [
     "exec",
-    "aiagents-compose-db",
+    "vteam-compose-db",
     "mysql",
     "-uroot",
-    "-paiagents-root",
-    "aiagents",
+    "-pvteam-root",
+    "vteam",
     "-N",
     "-B",
     "-e",

@@ -28,7 +28,7 @@ import { test, expect, type APIRequestContext } from "@playwright/test";
  */
 
 const SERVER = "http://localhost:13000";
-const SERVER_CONTAINER = "aiagents-compose-server";
+const SERVER_CONTAINER = "vteam-compose-server";
 const SEED_TEAM_NAME = "vteam开发团队";
 const P = "t12qa-";
 const PROTOTYPE_META_ID = "t12qa-demo";

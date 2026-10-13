@@ -1,0 +1,518 @@
+=== RED run: 2026-09-27 09:56:14 ===
+$ npx jest src/questions/questions.service.spec.ts src/common/id-resync.guard.spec.ts --runInBand
+FAIL src/common/id-resync.guard.spec.ts (5.542 s)
+  ● 防回归：IdGeneratorService 前缀须有启动期 resync › 每个 nextId 生成点都有对应 resyncIdPrefix（豁免须逐条注明理由）
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 3
+
+    - Array []
+    + Array [
+    +   "前缀 'que' 缺失 resync，生成点：questions/questions.service.ts:690, questions/questions.service.ts:767",
+    + ]
+
+      169 |     }
+      170 |
+    > 171 |     expect(missing).toEqual([]);
+          |                     ^
+      172 |   });
+      173 |
+      174 |   it('豁免表非空时每条必须带理由（防无脑加豁免绕过守卫）', () => {
+
+      at Object.<anonymous> (common/id-resync.guard.spec.ts:171:21)
+
+[31m[Nest] 35033  - [39m09/27/2026, 9:56:21 AM [31m  ERROR[39m [38;5;3m[QuestionsService] [39m[31m[questions] 平台 question 确认钩子执行失败 id=aq_platform requestId=que_platform_0000000001：updateTeam 409[39m
+FAIL src/questions/questions.service.spec.ts
+  ● QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 + emit 收敛） › onModuleInit（重启续号） › 重启后 que 计数器从 request_id 最大数字尾段续号（...07 → ...08，不重发 ...01 撞 P2002）
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    - Expected
+    + Received
+
+      Object {
+        "select": Object {
+    -     "requestId": true,
+    +     "id": true,
+        },
+        "where": Object {
+    -     "requestId": Object {
+    -       "startsWith": "que_platform_",
+    +     "id": Object {
+    +       "startsWith": "aq_",
+          },
+        },
+      },
+
+    Number of calls: 1
+
+      556 |
+      557 |       // 必须真的按 request_id 前缀查询（防“没查也算绿”的假成功）
+    > 558 |       expect(prisma.agentQuestion.findMany).toHaveBeenCalledWith({
+          |                                             ^
+      559 |         where: { requestId: { startsWith: 'que_platform_' } },
+      560 |         select: { requestId: true },
+      561 |       });
+
+      at Object.<anonymous> (questions/questions.service.spec.ts:558:45)
+
+Test Suites: 2 failed, 2 total
+Tests:       2 failed, 48 passed, 50 total
+Snapshots:   0 total
+Time:        6.403 s
+Ran all test suites matching /src\/questions\/questions.service.spec.ts|src\/common\/id-resync.guard.spec.ts/i.
+EXIT=1
+=== GREEN run: 2026-09-27 09:57:30 ===
+$ npx jest src/questions/questions.service.spec.ts src/common/id-resync.guard.spec.ts --runInBand
+PASS src/common/id-resync.guard.spec.ts (5.044 s)
+[31m[Nest] 35257  - [39m09/27/2026, 9:57:37 AM [31m  ERROR[39m [38;5;3m[QuestionsService] [39m[31m[questions] 平台 question 确认钩子执行失败 id=aq_platform requestId=que_platform_0000000001：updateTeam 409[39m
+FAIL src/questions/questions.service.spec.ts
+  ● QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 + emit 收敛） › onModuleInit（重启续号） › 重启后 que 计数器从 request_id 最大数字尾段续号（...07 → ...08，不重发 ...01 撞 P2002）
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "que_platform_0000000008"
+    Received: "que_platform_0000000010"
+
+      574 |       ][0];
+      575 |       // 断言实际生成并落库的 requestId（而非仅 seed 被调用）
+    > 576 |       expect(firstInsert.data.requestId).toBe('que_platform_0000000008');
+          |                                          ^
+      577 |       expect(first.requestId).toBe('que_platform_0000000008');
+      578 |       expect(first.requestId).not.toBe('que_platform_0000000001');
+      579 |
+
+      at Object.<anonymous> (questions/questions.service.spec.ts:576:42)
+
+Test Suites: 1 failed, 1 passed, 2 total
+Tests:       1 failed, 49 passed, 50 total
+Snapshots:   0 total
+Time:        6.118 s, estimated 7 s
+Ran all test suites matching /src\/questions\/questions.service.spec.ts|src\/common\/id-resync.guard.spec.ts/i.
+EXIT=1
+=== GREEN run 2: 2026-09-27 09:58:25 ===
+$ npx jest src/questions/questions.service.spec.ts src/common/id-resync.guard.spec.ts --runInBand
+[31m[Nest] 35369  - [39m09/27/2026, 9:58:29 AM [31m  ERROR[39m [38;5;3m[QuestionsService] [39m[31m[questions] 平台 question 确认钩子执行失败 id=aq_platform requestId=que_platform_0000000001：updateTeam 409[39m
+PASS src/questions/questions.service.spec.ts
+PASS src/common/id-resync.guard.spec.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       50 passed, 50 total
+Snapshots:   0 total
+Time:        3.324 s, estimated 6 s
+Ran all test suites matching /src\/questions\/questions.service.spec.ts|src\/common\/id-resync.guard.spec.ts/i.
+EXIT=0
+
+=== FULL suite: 2026-09-27 09:58:35 ===
+$ npx jest src/questions src/common --runInBand
+[31m[Nest] 35421  - [39m09/27/2026, 9:58:38 AM [31m  ERROR[39m [38;5;3m[QuestionsService] [39m[31m[questions] 平台 question 确认钩子执行失败 id=aq_platform requestId=que_platform_0000000001：updateTeam 409[39m
+PASS src/questions/questions.service.spec.ts
+PASS src/common/constants/agent.constants.spec.ts
+PASS src/common/constants/trigger.constants.spec.ts
+PASS src/questions/questions.controller.spec.ts
+PASS src/common/id-resync.guard.spec.ts
+PASS src/common/credential-crypto.service.spec.ts
+[33m[Nest] 35421  - [39m09/27/2026, 9:58:40 AM [33m   WARN[39m [38;5;3m[CredentialCryptoService] [39m[33mMODEL_CREDENTIAL_KEY 未配置，使用【显式标记的开发密钥】加密模型凭据（仅限开发/测试，生产环境禁止）[39m
+PASS src/common/guards/permission.guard.spec.ts
+PASS src/common/constants/event.constants.spec.ts
+PASS src/common/id-generator.spec.ts
+PASS src/common/id-resync.spec.ts
+  ● Console
+
+    console.warn
+      [id-resync] 表不存在（P2021），mr 续号转后台重试（不阻塞启动）: The table `vteam`.`message_receipts` does not exist
+
+      65 |   cause: Error,
+      66 | ): void {
+    > 67 |   console.warn(
+         |           ^
+      68 |     `[id-resync] 表不存在（P2021），${label} 续号转后台重试（不阻塞启动）: ${cause.message}`,
+      69 |   );
+      70 |   let attempts = 0;
+
+      at startP2021Retry (common/id-resync.ts:67:11)
+      at resyncIdPrefix (common/id-resync.ts:110:5)
+      at Object.<anonymous> (common/id-resync.spec.ts:113:5)
+
+    console.warn
+      [id-resync] 表不存在（P2021），tl 续号转后台重试（不阻塞启动）: not exist
+
+      65 |   cause: Error,
+      66 | ): void {
+    > 67 |   console.warn(
+         |           ^
+      68 |     `[id-resync] 表不存在（P2021），${label} 续号转后台重试（不阻塞启动）: ${cause.message}`,
+      69 |   );
+      70 |   let attempts = 0;
+
+      at startP2021Retry (common/id-resync.ts:67:11)
+      at resyncIdPrefix (common/id-resync.ts:110:5)
+      at Object.<anonymous> (common/id-resync.spec.ts:127:7)
+
+    console.warn
+      [id-resync] tl 续号已随表就绪补成功（第 1 次重试）
+
+      75 |         apply(await fetchRows());
+      76 |         clearInterval(timer);
+    > 77 |         console.warn(
+         |                 ^
+      78 |           `[id-resync] ${label} 续号已随表就绪补成功（第 ${attempts} 次重试）`,
+      79 |         );
+      80 |       } catch (retryErr) {
+
+      at common/id-resync.ts:77:17
+
+    console.warn
+      [id-resync] 表不存在（P2021），que→que_platform 续号转后台重试（不阻塞启动）: table does not exist
+
+      65 |   cause: Error,
+      66 | ): void {
+    > 67 |   console.warn(
+         |           ^
+      68 |     `[id-resync] 表不存在（P2021），${label} 续号转后台重试（不阻塞启动）: ${cause.message}`,
+      69 |   );
+      70 |   let attempts = 0;
+
+      at startP2021Retry (common/id-resync.ts:67:11)
+      at resyncRequestIdPrefix (common/id-resync.ts:193:5)
+      at Object.<anonymous> (common/id-resync.spec.ts:217:5)
+
+PASS src/common/guards/team-membership.guard.spec.ts
+PASS src/common/constants/agent-role.constants.spec.ts
+PASS src/common/constants/platform-capability.coverage.spec.ts
+PASS src/common/constants/status-vocabulary.spec.ts
+PASS src/common/opencode-agent-duty.spec.ts
+PASS src/common/constants/task.constants.spec.ts
+
+Test Suites: 16 passed, 16 total
+Tests:       183 passed, 183 total
+Snapshots:   0 total
+Time:        4.749 s, estimated 5 s
+Ran all test suites matching /src\/questions|src\/common/i.
+EXIT=0
+
+=== LINT: 2026-09-27 09:58:46 ===
+$ npm run lint:check
+
+> server@0.0.1 lint:check
+> eslint "{src,apps,libs,test}/**/*.ts"
+
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/agent-roles.service.ts
+  6:3  warning  'Logger' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.controller.spec.ts
+  202:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  203:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  216:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  217:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.service.ts
+  349:15  warning  'updated' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/chat.service.spec.ts
+  2201:13  warning  'result' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.plan-hash.spec.ts
+  7:10  warning  'PlanLifecycleService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.spec.ts
+  10:10  warning  'ArtifactsService' is defined but never used. Allowed unused vars must match /^_/u         @typescript-eslint/no-unused-vars
+  23:10  warning  'SessionLifecycleService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  25:3   warning  'WorkerClient' is defined but never used. Allowed unused vars must match /^_/u             @typescript-eslint/no-unused-vars
+  28:10  warning  'WorkerEventIngress' is defined but never used. Allowed unused vars must match /^_/u       @typescript-eslint/no-unused-vars
+  29:10  warning  'WorkersService' is defined but never used. Allowed unused vars must match /^_/u           @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/id-resync.spec.ts
+  212:26  error  Replace `.fn()` with `⏎······.fn()⏎······`  prettier/prettier
+  213:1   error  Insert `··`                                 prettier/prettier
+  214:1   error  Insert `··`                                 prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/common/id-resync.ts
+  112:20  error  Insert `⏎·······`                                                                                                                                                                    prettier/prettier
+  207:24  error  Replace `rows·as·Array<{·requestId:·string·}>,·requestIdPrefix,·idPrefix,·idGen` with `⏎····rows·as·Array<{·requestId:·string·}>,⏎····requestIdPrefix,⏎····idPrefix,⏎····idGen,⏎··`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/docs-site.controller.spec.ts
+  3:10  warning  'PrismaService' is defined but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+  4:10  warning  'PrototypesService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/prototypes.service.spec.ts
+   47:9   warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  147:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  295:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.controller.spec.ts
+  40:9  warning  'REQUIRED_BASH_DENY' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.custom-agents.spec.ts
+  6:3  warning  'ROLE_POLICY_DENY_TEMPLATE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.matrix.spec.ts
+  7:3  warning  'ROLE_BASH_DENY_PATTERNS' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-credentials.service.ts
+  121:5  warning  'userId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-repos.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  4:3  warning  'NotFoundException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/dto/query-issues.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/issues.service.spec.ts
+  893:19  warning  'action' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/mcp-servers/mcp-servers.service.spec.ts
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/message-channels/adapters/wecom-aibot.adapter.ts
+  327:11  warning  'maybeAny' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/models/dto/set-model-credential.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/notifications/notification-channels.controller.ts
+  408:14  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.controller.spec.ts
+  186:31  warning  'args' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.gate.spec.ts
+  3:3  warning  'EVENT_TYPES' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  5:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+  4:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.spec.ts
+  145:7  warning  'plansService' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  153:9  warning  'allowPolicy' is assigned a value but never used. Allowed unused vars must match /^_/u   @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.ts
+  80:3  warning  'containsTeamWideMention' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.tools.ts
+  39:7  warning  'REQUIRE_TASK_OR_TEAM_MSG' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts
+  1564:16  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  1565:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/questions/questions.service.spec.ts
+    2:3   warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u                              @typescript-eslint/no-unused-vars
+  567:61  error    Replace `⏎········'t_1',⏎········input,⏎········{·agentId:·'a_1'·}` with `'t_1',·input,·{⏎········agentId:·'a_1'`  prettier/prettier
+  571:7   error    Insert `}`                                                                                                         prettier/prettier
+  572:26  error    Insert `⏎·······`                                                                                                  prettier/prettier
+  573:1   error    Insert `··`                                                                                                        prettier/prettier
+  574:1   error    Insert `··`                                                                                                        prettier/prettier
+  580:62  error    Replace `⏎········'t_1',⏎········input,⏎········{·agentId:·'a_1'·}` with `'t_1',·input,·{⏎········agentId:·'a_1'`  prettier/prettier
+  584:7   error    Insert `}`                                                                                                         prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/bind-message-channels.dto.ts
+  5:3  warning  'IsNotEmpty' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+  6:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  7:3  warning  'IsOptional' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/update-team.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/task-progression.scheduler.ts
+  8:3  warning  'forwardRef' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/tasks.service.spec.ts
+   18:10  warning  'sanitizeWorkDirName' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  316:9   warning  'mockCreateTx' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  489:11  warning  'sCounter' is assigned a value but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/dto/bind-team-channels.dto.ts
+  2:29  warning  'IsOptional' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/dto/create-team.dto.ts
+  4:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.spec.ts
+  616:13  warning  'callArgs' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.ts
+  109:11  warning  'team' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook-failure.listener.spec.ts
+  2:10  warning  'Prisma' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook.service.ts
+  1277:7  warning  'TRIGGER_ID_PREFIX_VALUE' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/dto/worker-dto.spec.ts
+  251:15  warning  'capabilities' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  256:15  warning  'load' is assigned a value but never used. Allowed unused vars must match /^_/u          @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-event.ingress.ts
+    18:3  warning  'extractConclusionParts' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   136:6  warning  'ActivityCallback' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  1019:5  warning  'taskId' is defined but never used. Allowed unused args must match /^_/u                  @typescript-eslint/no-unused-vars
+  1020:5  warning  'agentId' is defined but never used. Allowed unused args must match /^_/u                 @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-or-jwt.guard.ts
+  10:10  warning  'Request' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-token.guard.spec.ts
+  2:10  warning  'ConfigService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker.client.ts
+  297:5  warning  'model' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/workers.service.spec.ts
+  902:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 78 problems (12 errors, 66 warnings)
+  12 errors and 0 warnings potentially fixable with the `--fix` option.
+
+EXIT=1
+
+=== VERIFY after format fixes: 2026-09-27 10:00:42 ===
+$ npm run lint:check
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-event.ingress.ts
+    18:3  warning  'extractConclusionParts' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   136:6  warning  'ActivityCallback' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  1019:5  warning  'taskId' is defined but never used. Allowed unused args must match /^_/u                  @typescript-eslint/no-unused-vars
+  1020:5  warning  'agentId' is defined but never used. Allowed unused args must match /^_/u                 @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-or-jwt.guard.ts
+  10:10  warning  'Request' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-token.guard.spec.ts
+  2:10  warning  'ConfigService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker.client.ts
+  297:5  warning  'model' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/workers.service.spec.ts
+  902:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 66 problems (0 errors, 66 warnings)
+
+LINT_EXIT=0
+$ npx jest src/questions src/common --runInBand
+PASS src/common/opencode-agent-duty.spec.ts
+PASS src/common/constants/status-vocabulary.spec.ts
+
+Test Suites: 16 passed, 16 total
+Tests:       183 passed, 183 total
+Snapshots:   0 total
+Time:        6.529 s
+Ran all test suites matching /src\/questions|src\/common/i.
+JEST_EXIT=0
+
+=== FINAL targeted run: 2026-09-27 10:01:27 ===
+$ npx jest src/questions/questions.service.spec.ts src/common/id-resync.guard.spec.ts --runInBand
+PASS src/questions/questions.service.spec.ts
+PASS src/common/id-resync.guard.spec.ts
+
+Test Suites: 2 passed, 2 total
+Tests:       50 passed, 50 total
+Snapshots:   0 total
+Time:        3.755 s
+Ran all test suites matching /src\/questions\/questions.service.spec.ts|src\/common\/id-resync.guard.spec.ts/i.
+EXIT=0
+
+=== MANUAL QA: simulated restart (raw output) 2026-09-27 10:02:02 ===
+$ npx jest src/questions/qa-task11-restart.spec.ts --runInBand --verbose
+  console.log
+    [QA] restart simulated: que counter = <empty>
+
+      at Object.<anonymous> (questions/qa-task11-restart.spec.ts:86:13)
+
+  console.log
+    [QA] findMany(id startsWith ...) -> {"id":{"startsWith":"aq_"}}
+
+      at Object.<anonymous> (questions/qa-task11-restart.spec.ts:33:21)
+
+  console.log
+    [QA] findMany(requestId startsWith que_platform_) -> {"requestId":{"startsWith":"que_platform_"}}
+
+      at Object.<anonymous> (questions/qa-task11-restart.spec.ts:22:23)
+
+  console.log
+    [QA] onModuleInit() done
+
+      at Object.<anonymous> (questions/qa-task11-restart.spec.ts:88:13)
+
+  console.log
+    [QA] emitted DTO requestId = que_platform_0000000008
+
+      at Object.<anonymous> (questions/qa-task11-restart.spec.ts:95:13)
+
+  console.log
+    [QA] inserted data.requestId = que_platform_0000000008
+
+      at Object.<anonymous> (questions/qa-task11-restart.spec.ts:98:13)
+
+  console.log
+    [QA] insert call data.id = aq_0000000001 kind=secret_input status=pending
+
+      at Object.<anonymous> (questions/qa-task11-restart.spec.ts:101:13)
+
+  console.log
+    [QA] agentQuestion.create calls = 1
+
+      at Object.<anonymous> (questions/qa-task11-restart.spec.ts:104:13)
+
+  console.log
+    [QA] second created requestId = que_platform_0000000009
+
+      at Object.<anonymous> (questions/qa-task11-restart.spec.ts:113:13)
+
+PASS src/questions/qa-task11-restart.spec.ts (5.243 s)
+  QA task-11：重启后 que 续号手工验证
+    ✓ seed 空计数器 + 库内最大 que_platform_0000000007 → 创建生成 0008 (62 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       1 passed, 1 total
+Snapshots:   0 total
+Time:        5.411 s
+Ran all test suites matching /src\/questions\/qa-task11-restart.spec.ts/i.
+EXIT=0
+
+=== ADVERSARIAL PROBES (task-11 que resync) ===
+- stale_state: PASS — restart simulated by fresh IdGeneratorService (counters empty); onModuleInit re-synced from DB max que_platform_0000000007; next create emitted/inserted que_platform_0000000008 (not ...0001). Covered by RED-first test + QA run above.
+- malformed_input: PASS — rows que_platform_not-a-seq (non-numeric), que_platform_ (empty tail), que_platform_9999999999999999999999999 (25 nines > Number.MAX_SAFE_INTEGER) and non-prefix rows (per_0000000099, que_0000000099) are ignored by applyRequestIdResync; seed stayed 7.
+- dirty_worktree: PASS — pre-existing dirty files (.omo/boulder.json, .omo/evidence/*, .omo/ulw-execute/ledger.jsonl, .opencode/opencode.json, untracked .omo/{drafts,notepads,plans,ulw-execute}) untouched; only server/src/questions/questions.service.ts + .spec, server/src/common/id-resync.ts + .spec, id-resync.guard.spec.ts modified, this evidence file added.
+- misleading_success_output: PASS — assertions target the actual generated/inserted data.requestId (que_platform_0000000008 / ...0009) and the findMany where-clause (requestId startsWith que_platform_), not merely a seed() call.
+- cleanup: PASS — temporary QA spec server/src/questions/qa-task11-restart.spec.ts deleted after run (git status below shows it absent); no sentinel/secret values written (template only, no secret literals); P2021 background retry timer is unref().
+- secrets: N/A — QA used no credential/secret value, only variable name TOKEN in a template; no logs contain secret material.
+- prompt_injection: N/A — no external/untrusted content parsed; all inputs are local test fixtures.
+- hung_commands: N/A — all jest/eslint runs completed < 60s with exit codes recorded above.
+
+=== git status (post-cleanup) ===
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M .opencode/opencode.json
+ M server/src/common/id-resync.guard.spec.ts
+ M server/src/common/id-resync.spec.ts
+ M server/src/common/id-resync.ts
+ M server/src/questions/questions.service.spec.ts
+ M server/src/questions/questions.service.ts
+?? .omo/drafts/chat-ux-hierarchy-and-streaming.md
+?? .omo/drafts/sensitive-command-tool.md
+?? .omo/evidence/chat-ux-hierarchy-and-streaming/
+?? .omo/evidence/sensitive-command-tool/
+?? .omo/notepads/chat-ux-hierarchy-and-streaming/
+?? .omo/notepads/sensitive-command-tool/
+?? .omo/plans/chat-ux-hierarchy-and-streaming.md
+?? .omo/plans/sensitive-command-tool.md
+?? .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+?? .omo/ulw-execute/sensitive-command-tool-registry.json
+
+=== COMMIT ===
+commit a30397e3f7129e2c8ac46089fb687f6d88d5c471
+fix(questions): 重启后从 request_id 续号避免 secret 问题 P2002
+files: server/src/common/id-resync.guard.spec.ts, id-resync.spec.ts, id-resync.ts, server/src/questions/questions.service.spec.ts, questions.service.ts
+npx tsc --noEmit -p tsconfig.json EXIT=0

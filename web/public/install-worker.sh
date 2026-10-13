@@ -19,7 +19,7 @@
 #   --opencode <ver>    opencode CLI 版本（如 v1.18.15）；CLI 缺失时按此版本 npm 安装（缺省 latest），已安装则仅提示校验
 #   --token <token>     X_WORKER_TOKEN（注册鉴权，需与 server 侧约定一致；缺省引导手动填写）
 #   --src-url <url>     worker 发布包下载地址（缺省 ${SERVER_URL%/}/worker-src.tar.gz）
-#   --dir <path>        安装目录（缺省 $HOME/aiagents-worker）
+#   --dir <path>        安装目录（缺省 $HOME/vteam-worker）
 #   --mcp-url <url>     内置 vteam MCP 地址覆盖（WORKER_MCP_URL，可选）：集群外 worker 必须设置
 #                       为外部可达地址（如 http://<控制面外部地址>/api/v1/platform-mcp），否则内置
 #                       MCP 不可达（server 下发的默认地址为集群内服务名）；集群内 worker 可省略。
@@ -48,7 +48,7 @@
 #                       缺省用**用户级** `systemctl --user`（unit 写 ~/.config/systemd/user），
 #                       普通用户无需任何权限即可安装。差异见下方「启动」段。
 #   --no-service        不注册 systemd 服务（默认注册：守护进程 + 崩溃自动重启，
-#                       服务名 aiagents-worker，日志 journalctl --user -u aiagents-worker -f）。
+#                       服务名 vteam-worker，日志 journalctl --user -u vteam-worker -f）。
 #                       无 systemd 环境（容器等）自动回退前台启动。
 set -euo pipefail
 
@@ -59,7 +59,7 @@ CONCURRENCY=""
 OPENCODE_VERSION=""
 WORKER_TOKEN=""
 WORKER_SRC_URL=""
-INSTALL_DIR="${HOME}/aiagents-worker"
+INSTALL_DIR="${HOME}/vteam-worker"
 WORKER_MCP_URL=""
 WORKER_ADVERTISE_HOST=""
 # 缺省 0.0.0.0：独立安装的 worker 必须被 server 直连，serve 只绑回环会导致
@@ -332,34 +332,34 @@ elif [ -z "${SYSTEMD_AVAILABLE}" ]; then
   echo "[install-worker] 未检测到可用的 systemd（容器/精简环境/无用户总线），回退前台启动"
   if [ "${SYSTEMD_SCOPE}" = "user" ]; then
     echo "  手动注册用户级服务：mkdir -p ~/.config/systemd/user"
-    echo "    unit 内容同 ${INSTALL_DIR}/worker/scripts/start.sh（ExecStart），随后 systemctl --user enable --now aiagents-worker"
+    echo "    unit 内容同 ${INSTALL_DIR}/worker/scripts/start.sh（ExecStart），随后 systemctl --user enable --now vteam-worker"
   else
-    echo "  手动注册 systemd 可参考：/etc/systemd/system/aiagents-worker.service（ExecStart=${INSTALL_DIR}/worker/scripts/start.sh）"
+    echo "  手动注册 systemd 可参考：/etc/systemd/system/vteam-worker.service（ExecStart=${INSTALL_DIR}/worker/scripts/start.sh）"
   fi
 else
   # node 可能在非默认 PATH（ensure_node 装到 ${HOME}/.local/node/bin）——unit 里显式补 PATH
   NODE_BIN_DIR="$(dirname "$(command -v node 2>/dev/null || echo /usr/bin/node)")"
   if [ "${SYSTEMD_SCOPE}" = "user" ]; then
-    SERVICE_UNIT="${HOME}/.config/systemd/user/aiagents-worker.service"
-    SERVICE_LOG_HINT="journalctl --user -u aiagents-worker -f"
+    SERVICE_UNIT="${HOME}/.config/systemd/user/vteam-worker.service"
+    SERVICE_LOG_HINT="journalctl --user -u vteam-worker -f"
     SERVICE_CTL="systemctl --user"
     # 用户级 unit 无 network-online.target 可用性保证，用 basic.target（用户会话就绪即启动）
     UNIT_AFTER="After=network.target"
     UNIT_WANTS="Wants=network.target"
     UNIT_WANTED_BY="WantedBy=default.target"
   else
-    SERVICE_UNIT="/etc/systemd/system/aiagents-worker.service"
-    SERVICE_LOG_HINT="journalctl -u aiagents-worker -f"
+    SERVICE_UNIT="/etc/systemd/system/vteam-worker.service"
+    SERVICE_LOG_HINT="journalctl -u vteam-worker -f"
     SERVICE_CTL="systemctl"
     UNIT_AFTER="After=network-online.target"
     UNIT_WANTS="Wants=network-online.target"
     UNIT_WANTED_BY="WantedBy=multi-user.target"
   fi
   mkdir -p "$(dirname "${SERVICE_UNIT}")"
-  echo "[install-worker] 注册 systemd 服务（${SYSTEMD_SCOPE} 级）：aiagents-worker（unit=${SERVICE_UNIT}）"
+  echo "[install-worker] 注册 systemd 服务（${SYSTEMD_SCOPE} 级）：vteam-worker（unit=${SERVICE_UNIT}）"
   cat > "${SERVICE_UNIT}" <<EOF
 [Unit]
-Description=vteam AI worker (aiagents, workerId=${WORKER_ID})
+Description=vteam AI worker (vteam, workerId=${WORKER_ID})
 ${UNIT_AFTER}
 ${UNIT_WANTS}
 
@@ -382,10 +382,10 @@ EOF
     exit 1
   fi
   ${SERVICE_CTL} daemon-reload
-  ${SERVICE_CTL} enable --now aiagents-worker >/dev/null 2>&1 || true
-  if ${SERVICE_CTL} is-active --quiet aiagents-worker; then
-    echo "[install-worker] ✅ systemd 服务已启动：aiagents-worker（${SYSTEMD_SCOPE} 级）"
-    echo "  状态：${SERVICE_CTL} status aiagents-worker；日志：${SERVICE_LOG_HINT}"
+  ${SERVICE_CTL} enable --now vteam-worker >/dev/null 2>&1 || true
+  if ${SERVICE_CTL} is-active --quiet vteam-worker; then
+    echo "[install-worker] ✅ systemd 服务已启动：vteam-worker（${SYSTEMD_SCOPE} 级）"
+    echo "  状态：${SERVICE_CTL} status vteam-worker；日志：${SERVICE_LOG_HINT}"
     if [ "${SYSTEMD_SCOPE}" = "user" ]; then
       # 用户级 unit 默认随会话消亡；linger 让其登出后继续运行并开机自启。
       if command -v loginctl >/dev/null 2>&1; then
@@ -401,8 +401,8 @@ EOF
         echo "  ⚠️  未找到 loginctl，开机自启需另行配置"
       fi
     fi
-    echo "  停止：${SERVICE_CTL} stop aiagents-worker"
-    echo "  卸载：${SERVICE_CTL} disable --now aiagents-worker && rm -f ${SERVICE_UNIT} && ${SERVICE_CTL} daemon-reload"
+    echo "  停止：${SERVICE_CTL} stop vteam-worker"
+    echo "  卸载：${SERVICE_CTL} disable --now vteam-worker && rm -f ${SERVICE_UNIT} && ${SERVICE_CTL} daemon-reload"
     exit 0
   fi
   echo "[install-worker] ⚠️  systemd 服务启动失败，请检查：${SERVICE_LOG_HINT} -n 50" >&2

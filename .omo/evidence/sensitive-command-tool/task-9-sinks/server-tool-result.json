@@ -1,0 +1,21 @@
+{
+  "command": "curl -s -H \"Authorization: Bearer {{TOKEN}}\" https://example.internal/deploy",
+  "variables": [
+    {
+      "name": "TOKEN",
+      "label": "部署 Token",
+      "secret": true,
+      "required": true,
+      "provided": true
+    }
+  ],
+  "status": "succeeded",
+  "exitCode": 0,
+  "signal": null,
+  "timedOut": false,
+  "durationMs": 42,
+  "stdout": "deployed\n",
+  "stderr": "",
+  "stdoutTruncated": false,
+  "stderrTruncated": false
+}

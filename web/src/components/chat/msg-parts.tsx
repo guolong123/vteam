@@ -13,6 +13,10 @@
  *                        终态（sent）消息由 chat.message.new 替换后自动切换回 ChatBubble
  * - 其余类型（step-start/step-finish/patch 等内部片段）→ MsgUnknownPart 默认收起的
  *                       诊断行（B6，标注 part 类型，不再静默丢弃）
+ * 空卡兜底：输入/输出皆零信息量（空串或字面 {} / []）的 tool part 不渲染——存量脏数据里
+ *               成片「永久运行中 + 输入 {}」的卡片对用户零价值；豁免仍在流式推进的当前消息上的
+ *               running 卡（进度反馈）与 secret_command awaiting-input 卡（用户操作入口）。
+ *               另按 part.id 去重，重复快照只渲染最后一次（见 procPartsDeduped / toolView）。
  * 正文兜底：parts 无 text 片段时回退 content.text（T10 落库格式 { text, parts }，
  * 两者可能其一为空）；parts 全空时退化为普通 ChatBubble（Phase 2 mock 形态）。
  * 身份（B1）：本组件是单条 agent 消息唯一的身份出口——顶部一条 MessageIdentity
@@ -52,6 +56,8 @@ const secondaryRows: CSSProperties = {
 /** 前端认识的 part 字段（后端 parts Json 透传，宽松读取防御未知字段）。 */
 export interface PartShape {
   type?: string;
+  /** part 唯一 id（serve 落盘形态）：同一 id 重复出现时按 id 去重，保留最后一次快照 */
+  id?: string;
   state?: "pending" | "done";
   text?: string;
   /** reasoning 兜底字段：部分 serve 模型 reasoning 内容落在 summary/thoughts/detail 而非 text。 */
@@ -116,6 +122,12 @@ function isSecretCommandPart(name: string): boolean {
   return name === "secret_command" || name.endsWith("_secret_command");
 }
 
+/** 工具 I/O 是否「零信息量」：空串，或字面空对象/空数组（`{}` / `[]`，含空白包裹形态）。 */
+function isEmptyToolIO(value: string): boolean {
+  const t = value.trim();
+  return t.length === 0 || t === "{}" || t === "[]";
+}
+
 export interface MsgPartsProps {
   parts: unknown[];
   bodyText?: string;
@@ -164,8 +176,62 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
 
   const procParts = list.filter((p) => p.type !== "text");
   const textParts = list.filter((p) => p.type === "text");
+  // 按 part.id 去重，保留最后一次快照（顺序取最后一次出现的位置）：
+  // 历史脏数据里同一次工具调用会重复落多个快照，逐个渲染会让同一次调用出现多张卡。
+  const procPartsDeduped = (() => {
+    const seen = new Set<string>();
+    const out: PartShape[] = [];
+    for (let i = procParts.length - 1; i >= 0; i -= 1) {
+      const p = procParts[i];
+      const id = typeof p.id === "string" && p.id.length > 0 ? p.id : undefined;
+      if (id !== undefined) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      out.push(p);
+    }
+    return out.reverse();
+  })();
   const body = textParts.map((t) => t.text ?? "").join("\n") || bodyText || "";
   const cleanBody = stripInjectedContext(body);
+
+  /**
+   * tool part 的渲染视图（状态 + 规范化 I/O）；返回 null 表示该卡片不予渲染。
+   *
+   * 空卡兜底：输入与输出都「零信息量」（空串 / 字面 `{}` / `[]`）的 tool part 不渲染——
+   * 存量脏数据里成片「永久运行中 + 输入 {}」的卡片对用户零价值，且消息终态收敛后不会自愈。
+   * 两条豁免：① 仍在流式推进的当前消息上的 running 卡（进度反馈不能闪断）；
+   * ② `secret_command` 等待填写卡（用户唯一的操作入口）。
+   */
+  const toolView = (
+    p: PartShape,
+  ): { name: string; status: MsgToolStatus; state: Record<string, unknown> | undefined } | null => {
+    const rawState = p.state;
+    const state =
+      rawState !== undefined && rawState !== null && typeof rawState === "object"
+        ? (rawState as unknown as Record<string, unknown>)
+        : undefined;
+    const name = String(p.tool ?? p.name ?? "工具");
+    let status: MsgToolStatus = toToolStatus(state?.status ?? p.status);
+    if (terminal && status === "running") {
+      status = messageStatus === "failed" ? "failed" : "success";
+    }
+    // awaiting-input 只在「仍在 running」时成立：question 已收敛或 part 已终态都不命中
+    if (secretAwaiting && status === "running" && isSecretCommandPart(name)) {
+      status = "awaiting-input";
+    }
+    const live = status === "running" && (streaming === true || messageStatus === "processing");
+    if (
+      status !== "awaiting-input" &&
+      !live &&
+      isEmptyToolIO(formatToolIO(state?.input)) &&
+      isEmptyToolIO(formatToolIO(state?.output))
+    ) {
+      return null;
+    }
+    return { name, status, state };
+  };
+
   // 可渲染内容 = 正文 / 附件 / 可渲染过程 part（tool/error 恒可渲染；
   // reasoning/thinking 须有实际文本——serve 会推 text="" 的空思考占位，
   // 渲染出来只有「（无详细思考内容）」空壳）。
@@ -177,12 +243,15 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
       const c = (p.text ?? p.summary ?? p.thoughts ?? p.detail ?? "").trim();
       return c.length > 0;
     }
-    return t === "tool" || t === "error" || t === "aborted";
+    if (t === "tool") {
+      return toolView(p) !== null;
+    }
+    return t === "error" || t === "aborted";
   };
   const hasContent =
     cleanBody.length > 0 ||
     Boolean(attachment) ||
-    procParts.some(procRenderable);
+    procPartsDeduped.some(procRenderable);
 
   if (!hasContent) {
     return null;
@@ -191,7 +260,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
     <div className={className} style={{ display: "flex", flexDirection: "column", gap: space.sm, ...style }}>
       {!grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
       <div style={secondaryRows}>
-        {procParts.map((p, i) => {
+        {procPartsDeduped.map((p, i) => {
           if (p.type === "reasoning" || p.type === "thinking") {
             if (!procRenderable(p)) return null;
             return (
@@ -203,25 +272,14 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
             );
           }
           if (p.type === "tool") {
-            const rawState = p.state;
-            const st =
-              rawState !== undefined && rawState !== null && typeof rawState === "object"
-                ? (rawState as unknown as Record<string, unknown>)
-                : undefined;
-            const toolName = String(p.tool ?? p.name ?? "工具");
-            let status: MsgToolStatus = toToolStatus(st?.status ?? p.status);
-            if (terminal && status === "running") {
-              status = messageStatus === "failed" ? "failed" : "success";
-            }
-            // awaiting-input 只在「仍在 running」时成立：question 已收敛或 part 已终态都不命中
-            if (secretAwaiting && status === "running" && isSecretCommandPart(toolName)) {
-              status = "awaiting-input";
-            }
+            const view = toolView(p);
+            if (!view) return null;
+            const st = view.state;
             return (
               <MsgTool
                 key={i}
-                name={toolName}
-                status={status}
+                name={view.name}
+                status={view.status}
                 input={formatToolIO(st?.input)}
                 output={formatToolIO(st?.output)}
               />

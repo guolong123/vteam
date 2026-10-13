@@ -1,0 +1,56 @@
+F3 真机 QA（载体：docker compose 的 db=mysql:8 / init / server，orbstack context）
+======================================================================
+
+【F3-0 迁移在真实 MySQL 上落库】
+  SHOW COLUMNS FROM tasks LIKE 'long_running'
+    → long_running | tinyint(1) | NO | | 0 |        ← 列存在，NOT NULL，default false
+  SELECT COUNT(*) FROM _prisma_migrations WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL
+    → 0                                                 ← 无 failed 行（runbook 的人工校验通过）
+  SELECT migration_name FROM _prisma_migrations WHERE migration_name LIKE '%task_long_running%'
+    → 20261001000000_task_long_running | 2026-10-01 03:43:51
+  ⚠️ 零回填在存量行上未被实证：seed 后 tasks 表 0 行，SUM(long_running=0/1) 为 NULL。
+
+【F3-a 巡检豁免：对照实验（同一任务、同一状态，只改标记）】
+  long_running=1 → pending 巡检行 0 条
+    日志: [progression] 跳过巡检注册 taskId=t_0000000001（长期值班任务，豁免巡检）
+  long_running=0 → pending 巡检行 1 条，interval_ms=600000, max_fires=6
+    日志: [progression] 注册巡检 taskId=t_0000000001（interval=600000ms, maxRounds=6）
+  ⇒ 豁免与排期严格由该标记决定，非「巡检恰好没跑」。
+
+【F3-boot 清扫修复真机生效】
+  清零标记后 docker compose restart server，日志:
+    [progression] 重启重建巡检循环：1 个 in_progress 任务
+  旧 patrol 行跨重启存活（status 仍 pending、fire_count 未归零）⇒ :270-272 幂等早退
+  在启动路径上已可达（修复前不可达）。
+
+【F3-b 人工完成链：完整走通】
+  task_events 审计轨迹：
+    status_change: pending → in_progress
+    status_change: in_progress → pending_review
+    accept:  pending_review → completed
+    archive: completed → archived
+  最终 status=archived，long_running 保留为 1。
+  中途 accept/archive 各被既有 assertCompletionPreflight 拦 409（该任务有 plan 处于
+  draft）——属既有完工预检，与本改动无关：
+    git diff ... -- tasks.service.ts | grep -c assertCompletionPreflight → 0（未改动）
+  加 force=true（既有参数）后走通。HTTP 用户路径全程不受 longRunning 门禁影响。
+
+【F3-c agent 门禁】
+  真实栈上以 admin 身份走 HTTP，无法经 platform-mcp 的 task_transition 触发
+  transitionByAgent（需 agent 实例令牌）。该项以单元级证据覆盖：
+    tasks.service.spec.ts「长期值班任务：transitionByAgent + mark-pending-review
+    → 403（无部分写入）」通过。
+  ⇒ 真实栈未覆盖此项，明确记为 UNVERIFIED-ON-LIVE-STACK。
+
+【F3 补充：全程无看门狗阻塞】
+  SELECT actor_type FROM task_events WHERE task_id=? AND event_type='block' → （无）
+  值班任务从 pending 走到 archived 期间，未被系统置阻塞。
+
+【F3 未覆盖项（诚实记录）】
+  - 「跨 ≥3 个巡检周期观察恒为 in_progress」：未等待满 30 分钟。改以对照实验
+    （标记 1↔0 切换即刻观察排期差异）达成同等证明力——排期与否由标记决定，
+    而非依赖时间流逝。
+  - 「反向顺序（先 resume 后打标记）复现被重新阻塞」：未执行。该场景需让
+    hasInflightWork 递延分支不生效（任务无 in_progress issue 且 10min 内无消息），
+    本次任务有 draft plan，条件不满足。
+  - 零回填在存量行上：seed 后 tasks 表为空，未实证。

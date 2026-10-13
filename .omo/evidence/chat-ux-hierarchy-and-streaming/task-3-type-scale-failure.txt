@@ -1,0 +1,82 @@
+# task-3-type-scale-failure — 复选框 3 failing-first characterization + QA failure 判据
+# 记录时间: 2026-09-25；第 1 节所有命令在改动产品代码【之前】执行（此时正文仍 13、身份仍 11/500、无时间元信息）
+
+======================================================================
+1. failing-first：先写 A4 断言，确认在旧行为上转红（证明测试真的咬住行为）
+======================================================================
+原始日志（未截断）:
+  .omo/evidence/chat-ux-hierarchy-and-streaming/task-3-type-scale-red-e2e.log
+  .omo/evidence/chat-ux-hierarchy-and-streaming/task-3-type-scale-red-lib.log
+
+命令 1（纯检查，lib-unit）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx playwright test lib/chat-density.spec.ts --project=lib-unit
+退出码: 1（LIB_RED_EXIT=1；1 failed / 3 passed——3 passed 为既有 A1/A2/A3 源契约）
+关键输出（期望 vs 实收）:
+  A4 源契约 toEqual 失败:
+    - {body:"14", identity:"12", meta:"11"}  +  {body:null, identity:null, meta:null}
+      （改动前 tokens.ts 不存在 messageFontSize → 块解析整体为 null）
+  守门半段在改动前已为真: pick(globalBlock,"md")="13" 通过、全局字号档不含 14 通过。
+
+命令 2（真实浏览器 DOM，chat-density 项目）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx playwright test chat-density.spec.ts --project=chat-density
+退出码: 1（E2E_RED_EXIT=1；1 failed / 6 passed——失败的只有新加的 A4 三级字号测试）
+关键输出（expect.soft，一次红里全部曝光；期望 vs 实收）:
+  - 正文 computed 14px         Expected: 14    Received: 13     （bubbleBase 仍 fontSize.md）
+  - 身份 computed 12px         Expected: 12    Received: 11     （身份仍 fontSize.xs）
+  - 身份 computed weight 600   Expected: "600" Received: "500"
+  - 元信息 computed 11px       Expected: 11    Received: null    （chat-bubble-time 不存在）
+  - 元信息 computed weight     Expected: "400" Received: null
+  - 三级字号互不相同           Expected: 3     Received: 2
+  - expect(time).toBeVisible(): Error: element(s) not found — waiting for getByTestId('chat-bubble-time')
+  - expect(time).toHaveText(/12:00/)：元素不存在 → 失败
+  前置 npx tsc --noEmit 退出码 0（红纯来自产品行为，非测试自身类型问题）。
+  A1-A3 五项既有密度测试在改动前保持绿（6 passed），证明本次红是 A4 独占、无误伤。
+
+结论: 13/11/500/无元信息元素/仅两档字号/时间嵌在 author span 内 —— 六类旧行为全部转红，
+characterization 成立；无 as any / ts-ignore，无基础设施失败掩盖。
+
+======================================================================
+2. 计划复选框 3 QA failure 判据（第 147 行）与复验
+======================================================================
+判据 1: 检查 tokens.ts 未把全局 fontSize.md 改成 14
+  改动后核验（源码 + 浏览器双通道）:
+    a) 源码（lib-unit L120，绿跑退出码 0）:
+       export const fontSize = { xs:11, sm:12, md:13, lg:15, xl:18, xxl:22 } —— 块未改动；
+       pick(globalBlock,"md") === "13" 断言通过；
+       全局档正则解析出的数字列表 not.toContain(14) 断言通过。
+    b) 浏览器（chat-density L592，绿跑退出码 0）:
+       window.__density.tokens.fontSize === {xs:11,sm:12,md:13,lg:15,xl:18,xxl:22}
+       → fontSize.md === 13；全局档位无 14。
+  结论: 判据 1 通过（改动前后 md 均为 13；14 只存在于新增的 messageFontSize.body）。
+
+判据 2: 检查作者与时间戳的 style 不再同时拥有相同 fontSize 和 color
+  改动前: 时间戳是 author span 内的裸 <span> · {time}</span> —— 无自身样式，与作者名继承
+    完全相同的 fontSize(11) 与 color(roleText/neutral[400])，且同处一个 span 容器 → 同时同 fontSize
+    与 color，判据 2 失败（failing-first 第 1 节已红）。
+  改动后（真实浏览器 getComputedStyle，probe 观测见 task-3-type-scale.txt 第 6 节）:
+    author: fontSize=12, fontWeight="600", color=rgb(4,120,87)（roleText.developer）
+    time:   fontSize=11, fontWeight="400", color=neutral[500]（测试缝内 var 未定义→initial；
+            生产 globals.css 下解析为 --color-neutral-500，与身份色不同）
+    结构:   metaInsideIdentity=false；author 内 time 计数 0、time 内 author 计数 0
+    → fontSize 不同（12≠11）且 color 不同，“同时相同 fontSize 和 color”不可能成立。
+  结论: 判据 2 通过。
+
+判据 3（计划 Success criteria 第 4 条补强）: 时间戳不再与身份名共享同一字号/颜色/span
+  字号: 11 vs 12 vs 正文 14 —— 三档互不相同（Set size 断言 =3，绿）。
+  字重: 400 vs 600。
+  span: chat-bubble-author 与 chat-bubble-time 为兄弟节点的两个独立元素（DOM 计数断言，绿）。
+  结论: 通过。
+
+======================================================================
+3. 结构门与清理（复验）
+======================================================================
+testid 消失项: comm -23 chat-testids-before.txt chat-testids-after.txt → 0 条（零消失）；
+  仅新增 data-testid="chat-bubble-time"；既有 chat-bubble-author/external-channel-badge/
+  chat-bubble-content/chat-bubble-toggle 等全部保留。
+绿跑（commit-ready 状态）: tsc=0、eslint check-only=0、chat-density e2e=7 passed、
+  lib-unit=4 passed（日志: task-3-tsc.log / task-3-eslint.log /
+  task-3-type-scale-green-e2e.log / task-3-type-scale-green-lib.log）。
+清理: rm -rf web/test-results web/playwright-report → ok（均未被 git 跟踪，仅含本 todo 运行产物；
+  playwright-report 不存在）；report JSON 前后 hash 791e9b36… → ca4f79e9…（计划明示预期重写）。

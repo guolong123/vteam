@@ -1,0 +1,197 @@
+task-12 — 修复 live `agent.question` 团队域投递（modal 仅刷新补拉生效）
+================================================================================
+Plan: .omo/plans/sensitive-command-tool.md  todo 12 (Wave 4)
+Date: 2026-09-27
+Branch: task-delete-and-db-readiness
+
+--------------------------------------------------------------------------------
+1. ROOT CAUSE (confirmed by red run)
+--------------------------------------------------------------------------------
+Server create emits carried the REAL task id but no top-level `teamId`, while the
+event scope was `{type:'team', id:'tm_...'}`:
+
+  server/src/questions/questions.service.ts
+    createForPlatform      emit payload = {question, taskId:'t_...', agentId, sessionId}
+    createSecretForPlatform emit payload = {question, taskId:'t_...', agentId, sessionId}
+    (reply / expire / resolvePlatformQuestion / worker-event.ingress already emit teamId)
+
+Web subscribes the session page with scope `team:tm_...,channel:...,global`
+(web/app/(main)/teams/[id]/session/page.tsx:798-801).
+
+web/hooks/use-sse.ts matchesScope `team:` fallback only accepted
+`taskId === id || taskId === 'team:'+id`. A real `t_...` taskId matches neither and
+`payload.teamId` was never consulted -> frame dropped before `onAgentQuestion`
+-> the secret modal only appeared after a refresh (GET /questions 补拉).
+
+Why QA was falsely green: web/e2e fixtures emitted `taskId:'team:'+id`
+(secretQuestionFrame), a shape the live path never produces.
+
+--------------------------------------------------------------------------------
+2. RED  (fix not yet applied — new assertions only)
+--------------------------------------------------------------------------------
+$ cd web && node --test hooks/use-sse.scope.test.mjs
+  # tests 45 / # pass 44 / # fail 1
+  ✖ team: scope passes agent.question with production shape (real taskId + teamId)
+    AssertionError: false !== true   (at use-sse.scope.test.mjs:102)
+  exit 1
+
+$ cd server && npx jest src/questions/questions.service.spec.ts --runInBand
+  ● createForPlatform ... + emit AGENT_QUESTION
+    - ObjectContaining {..., "taskId": "t_1", "teamId": "tm_1"}
+    + {..., "taskId": "t_1"}                      <- top-level teamId missing
+  ● createSecretForPlatform ... emit 收敛帧
+    - ObjectContaining {..., "taskId": "t_1", "teamId": "tm_1"}
+    + {..., "taskId": "t_1"}                      <- top-level teamId missing
+  Tests: 2 failed, 45 passed, 47 total           exit 1
+
+$ npx playwright test --project=session-unification -g "生产形状 create emit" --reporter=list
+  (run against the PRE-FIX web image still running at :3001)
+  ✘ 0. 生产形状 create emit（真实 t_ taskId + 顶层 teamId）实时弹窗，无需刷新补拉 (11.0s)
+    expect(locator).toBeVisible() failed — getByTestId('question-modal') not found
+  1 failed                                        exit 1
+
+--------------------------------------------------------------------------------
+3. FIX
+--------------------------------------------------------------------------------
+server/src/questions/questions.service.ts
+  - both create emits now derive `teamId` from the very scope object they publish with:
+      const createScope = await this.scopeOf(row.taskId, row.sessionId);
+      payload = { ..., taskId: row.taskId,
+                  teamId: createScope.type === 'team' ? createScope.id : null, ... }
+      emit(..., createScope)
+    (same for createSecretForPlatform with `secretScope`)
+  - `payload.taskId` unchanged (still the real `t_...`) -> task-scope consumers and the
+    page's existing `payload.taskId.startsWith('team:')` guard keep working unchanged
+  - `scopeOf` stays the single source of truth for both scope and teamId (no dead code,
+    no second teamIdOf lookup)
+
+web/hooks/use-sse.ts
+  - `team:` fallback only:
+      return taskId === id || taskId === `team:${id}`
+            || (ev.payload as { teamId?: string })?.teamId === id;
+  - every other branch and `TEAM_SCOPE_WHITELISTED_EVENTS` behaviour untouched;
+    the added disjunct is an exact `=== id` comparison, so cross-team frames still drop
+
+--------------------------------------------------------------------------------
+4. GREEN
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/questions/questions.service.spec.ts --runInBand
+  SERVER_JEST_EXIT=0   Test Suites: 1 passed   Tests: 47 passed, 47 total
+
+$ cd server && npx jest src/questions --runInBand
+  exit 0                Test Suites: 2 passed   Tests: 58 passed, 58 total
+
+$ cd web && node --test hooks/use-sse.scope.test.mjs
+  WEB_SCOPE_EXIT=0      tests 45 / pass 45 / fail 0
+
+$ cd web && npx tsc --noEmit
+  TSC_EXIT=0            (0 bytes of diagnostics)
+
+--------------------------------------------------------------------------------
+5. PRODUCTION SHAPE SCOPE MATRIX
+--------------------------------------------------------------------------------
+$ node .omo/evidence/sensitive-command-tool/task-12-scope-matrix.js
+  (extracts matchesScope live from shipped web/hooks/use-sse.ts)
+  rows=14 mismatched=0  MATRIX_EXIT=0
+
+case                                    | event              | scope                                        | expected | actual
+production                              | agent.question     | team:tm_0000000001,channel:c_...,global       | true     | true
+production                              | agent.question     | team:tm_0000000001,channel:c_...,global       | false    | false   (teamId=tm_OTHER)
+production (no teamId)                  | agent.question     | team:tm_0000000001,channel:c_...,global       | false    | false
+legacy fixture                          | agent.question     | team:tm_0000000001,channel:c_...,global       | true     | true    (taskId='team:tm_...')
+legacy bare id                          | agent.question     | team:tm_0000000001,channel:c_...,global       | true     | true
+other team legacy                       | agent.question     | team:tm_0000000001,channel:c_...,global       | false    | false
+reply/expire/ingress shape              | agent.question     | team:tm_0000000001,channel:c_...,global       | true     | true    (resolved:true + teamId)
+task-scope consumer                     | agent.question     | task:t_0000000001                             | true     | true
+task-scope other task                   | agent.question     | task:t_0000000001                             | false    | false
+task-scope ignores teamId (pre-existing)| agent.question     | task:t_0000000001                             | true     | true
+queue whitelist                         | team.queue.changed | team:tm_0000000001,channel:c_...,global       | true     | true
+queue cross-team                        | team.queue.changed | team:tm_0000000001,channel:c_...,global       | false    | false
+chat passthrough                        | chat.message.new   | team:tm_0000000001,channel:c_...,global       | true     | true
+global branch                           | task.status.changed| global                                        | true     | true
+
+Note: the `task:` branch keys on `payload.taskId` alone and ignores `teamId` —
+pre-existing semantics, deliberately untouched by this todo (taskId already pins the
+task, and thus its team).
+
+--------------------------------------------------------------------------------
+6. REAL-BROWSER manual_qa  (production-shape frame -> modal, no reload)
+--------------------------------------------------------------------------------
+Fixture added: web/e2e/session-unification.spec.ts
+  productionSecretFrame() = {question:{...dto, taskId:'t_0000000001'},
+                             taskId:'t_0000000001', teamId:'tm_0000000001', ...}
+  test "0. 生产形状 create emit（真实 t_ taskId + 顶层 teamId）实时弹窗，无需刷新补拉"
+    - installs a window marker, emits exactly one __sseEmit frame, asserts
+      question-modal visible + template value, asserts the marker survived (=> no
+      reload happened) and that GET /questions was empty (=> refresh 补拉 could not
+      have produced the modal), then cancels.
+
+Red  (pre-fix image): 1 failed — question-modal not found (see §2)
+Green (rebuilt image):
+
+$ docker compose build web && docker compose up -d web     BUILD_EXIT=0 / container healthy
+$ cd web && npx playwright test --project=session-unification -g "生产形状 create emit" --reporter=list
+  ✓ [setup] auth.setup.ts 真实表单登录 seed-admin → storageState (1.9s)
+  ✓ [session-unification] session-unification.spec.ts:1707 › 0. 生产形状 create emit… (1.3s)
+  2 passed (5.8s)                                          PW_EXIT=0
+
+manual_qa artifact:
+  .omo/evidence/sensitive-command-tool/task-12-production-shape-live.png
+  (screenshot taken by the green run, modal open with the production-shape frame)
+
+--------------------------------------------------------------------------------
+7. CLEANUP / PROTECTION RECEIPTS
+--------------------------------------------------------------------------------
+$ git status --porcelain -- server web   (after fix)
+ M server/src/platform-mcp/platform-mcp.controller.ts   <- PRE-EXISTING, other lane (todo 13), NOT staged
+ M server/src/questions/questions.service.spec.ts        <- staged
+ M server/src/questions/questions.service.ts             <- staged
+ M web/e2e/session-unification.spec.ts                   <- staged
+ M web/hooks/use-sse.scope.test.mjs                      <- staged
+ M web/hooks/use-sse.ts                                  <- staged
+
+Protected pre-existing dirty files (left untouched, never staged):
+  .omo/boulder.json, .omo/evidence/phase5-t9-playwright.json,
+  .omo/evidence/plan-review-execution-gates/**, .omo/evidence/server-gate-removal-tool-authority/**
+  .omo/ulw-execute/ledger.jsonl, .opencode/opencode.json
+  server/src/platform-mcp/platform-mcp.controller.ts
+
+- Playwright run used `--reporter=list` so the pre-existing dirty
+  .omo/evidence/phase5-t9-playwright.json was NOT rewritten.
+- No mutating lint run (per instructions).
+- No temp/scratch files left in the repo tree; the only new files are this evidence
+  directory (uncommitted by design) and the modified tracked product/test files.
+- Infra touched for verification only: rebuilt + restarted aiagents-compose-web so the
+  browser hit the fixed bundle (compose stack healthy: web/server/db up). No repo files
+  changed by the rebuild (web/.next is gitignored, worker-src.tar.gz is not tracked).
+- Evidence left uncommitted, as required.
+
+--------------------------------------------------------------------------------
+8. RISKS
+--------------------------------------------------------------------------------
+- The `team:` fallback now accepts any event type carrying a matching top-level
+  `teamId`, not only agent.* events. It is an exact equality check on the subscribed
+  team id, so cross-team delivery is still rejected; but it does broaden which
+  *event types* reach subscribers inside the same team. Existing per-type guards
+  (page callbacks) are unchanged.
+- `payload.taskId` semantics were deliberately left alone, so `task:`-scope consumers
+  and the page's `startsWith('team:')` guard behave exactly as before.
+- Real-browser proof covers the frontend delivery path with a stubbed EventSource; the
+  server-side emit shape is proven by the Jest create-emit assertions rather than by a
+  live end-to-end server broadcast in this todo.
+
+--------------------------------------------------------------------------------
+9. COMMIT
+--------------------------------------------------------------------------------
+1b3152103b38ccbd15d69ecb475eb32a2a8cfc95  fix(team-scope): 修复 agent.question 团队域投递
+ 5 files changed, 82 insertions(+), 3 deletions(-)
+   server/src/questions/questions.service.spec.ts |  5 ++++
+   server/src/questions/questions.service.ts      | 11 +++++--
+   web/e2e/session-unification.spec.ts            | 39 +++++++++++++
+   web/hooks/use-sse.scope.test.mjs               | 23 +++++++++++
+   web/hooks/use-sse.ts                           |  7 +++-
+`git diff --cached --name-only` before the commit showed exactly those 5 files.
+Evidence (this directory) left uncommitted.
+
+Concurrent-lane note: `server/src/platform-mcp/platform-mcp.controller.ts` and its
+`.spec.ts` are dirty from the todo-13 lane and were never staged by this todo.

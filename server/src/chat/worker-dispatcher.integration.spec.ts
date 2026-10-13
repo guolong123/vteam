@@ -271,8 +271,10 @@ describe('WorkerDispatcher × WorkerEventIngress 集成（方案 A 主链路）'
   });
 
   it('端到端主链路：execute(prompt/sessionId/taskId/agentId/channelId) → running → delta → completed 终态化 → idle', async () => {
-    // delta 处理：无 processing 流式消息 → 新建（private 全量 parts）
+    // 组装消息展示回写：dispatch 内先读一次触发消息行（保住 parts），故链首为它；
+    // 其后恢复 delta/completed 的原两次查找语义。
     prisma.message.findFirst
+      .mockResolvedValueOnce({ content: { text: request.text, parts: [] } }) // 展示回写读源行
       .mockResolvedValueOnce(null) // delta：新建 processing
       .mockResolvedValueOnce({ id: 'm_stream' }); // task.completed：定位 processing 行终态化
     prisma.message.create.mockResolvedValue({

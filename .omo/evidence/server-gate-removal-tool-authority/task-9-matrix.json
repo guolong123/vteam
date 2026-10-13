@@ -28,24 +28,28 @@
       "vteam_memory_save",
       "vteam_memory_search",
       "vteam_memory_update",
+      "vteam_memory_archive",
+      "vteam_memory_merge",
       "vteam_team_view",
       "vteam_my_profile",
       "vteam_team_add_member",
       "vteam_plan_complete",
       "vteam_plan_finalize",
       "vteam_plan_confirm",
+      "vteam_todo",
       "vteam_channel_send",
       "vteam_wecom_reply",
       "vteam_task_create",
       "vteam_skill_create",
       "vteam_git_repos_list",
       "vteam_hook_register",
-      "vteam_hook_cancel"
+      "vteam_hook_cancel",
+      "vteam_secret_command"
     ],
-    "expectedCellCount": 210,
-    "iteratedCellCount": 210,
-    "allowCellCount": 132,
-    "denyCellCount": 78,
+    "expectedCellCount": 238,
+    "iteratedCellCount": 238,
+    "allowCellCount": 148,
+    "denyCellCount": 90,
     "allCellsMatch": true,
     "cells": [
       {
@@ -169,6 +173,20 @@
       },
       {
         "agent": "vteam-architect",
+        "tool": "vteam_memory_archive",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_archive 未获授权：岗位（architect）已拒绝能力点 memory.archive，拒绝调用"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_memory_merge",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_merge 未获授权：岗位（architect）已拒绝能力点 memory.merge，拒绝调用"
+      },
+      {
+        "agent": "vteam-architect",
         "tool": "vteam_team_view",
         "expect": "allow",
         "actual": "allow",
@@ -208,6 +226,13 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_plan_confirm 未获授权：岗位（architect）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_todo",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-architect",
@@ -257,6 +282,13 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_hook_cancel 未获授权：岗位（architect）已拒绝能力点 hook.manage，拒绝调用"
+      },
+      {
+        "agent": "vteam-architect",
+        "tool": "vteam_secret_command",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-developer",
@@ -379,6 +411,20 @@
       },
       {
         "agent": "vteam-developer",
+        "tool": "vteam_memory_archive",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_archive 未获授权：岗位（developer）已拒绝能力点 memory.archive，拒绝调用"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_memory_merge",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_merge 未获授权：岗位（developer）已拒绝能力点 memory.merge，拒绝调用"
+      },
+      {
+        "agent": "vteam-developer",
         "tool": "vteam_team_view",
         "expect": "allow",
         "actual": "allow",
@@ -418,6 +464,13 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_plan_confirm 未获授权：岗位（developer）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_todo",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-developer",
@@ -467,6 +520,13 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_hook_cancel 未获授权：岗位（developer）已拒绝能力点 hook.manage，拒绝调用"
+      },
+      {
+        "agent": "vteam-developer",
+        "tool": "vteam_secret_command",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-librarian",
@@ -589,6 +649,20 @@
       },
       {
         "agent": "vteam-librarian",
+        "tool": "vteam_memory_archive",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_archive 未获授权：岗位（librarian）已拒绝能力点 memory.archive，拒绝调用"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_memory_merge",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_merge 未获授权：岗位（librarian）已拒绝能力点 memory.merge，拒绝调用"
+      },
+      {
+        "agent": "vteam-librarian",
         "tool": "vteam_team_view",
         "expect": "allow",
         "actual": "allow",
@@ -628,6 +702,13 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_plan_confirm 未获授权：岗位（librarian）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_todo",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-librarian",
@@ -677,6 +758,13 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_hook_cancel 未获授权：岗位（librarian）已拒绝能力点 hook.manage，拒绝调用"
+      },
+      {
+        "agent": "vteam-librarian",
+        "tool": "vteam_secret_command",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-plan",
@@ -799,6 +887,20 @@
       },
       {
         "agent": "vteam-plan",
+        "tool": "vteam_memory_archive",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_archive 未获授权：岗位（plan）已拒绝能力点 memory.archive，拒绝调用"
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_memory_merge",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_merge 未获授权：岗位（plan）已拒绝能力点 memory.merge，拒绝调用"
+      },
+      {
+        "agent": "vteam-plan",
         "tool": "vteam_team_view",
         "expect": "allow",
         "actual": "allow",
@@ -835,6 +937,13 @@
       {
         "agent": "vteam-plan",
         "tool": "vteam_plan_confirm",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-plan",
+        "tool": "vteam_todo",
         "expect": "allow",
         "actual": "allow",
         "message": null
@@ -889,6 +998,13 @@
         "message": "工具 vteam_hook_cancel 未获授权：岗位（plan）已拒绝能力点 hook.manage，拒绝调用"
       },
       {
+        "agent": "vteam-plan",
+        "tool": "vteam_secret_command",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
         "agent": "vteam-product",
         "tool": "vteam_chat_history",
         "expect": "allow",
@@ -1009,6 +1125,20 @@
       },
       {
         "agent": "vteam-product",
+        "tool": "vteam_memory_archive",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_archive 未获授权：岗位（product）已拒绝能力点 memory.archive，拒绝调用"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_memory_merge",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_merge 未获授权：岗位（product）已拒绝能力点 memory.merge，拒绝调用"
+      },
+      {
+        "agent": "vteam-product",
         "tool": "vteam_team_view",
         "expect": "allow",
         "actual": "allow",
@@ -1048,6 +1178,13 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_plan_confirm 未获授权：岗位（product）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-product",
+        "tool": "vteam_todo",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-product",
@@ -1099,6 +1236,13 @@
         "message": null
       },
       {
+        "agent": "vteam-product",
+        "tool": "vteam_secret_command",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
         "agent": "vteam-project_manager",
         "tool": "vteam_chat_history",
         "expect": "allow",
@@ -1219,6 +1363,20 @@
       },
       {
         "agent": "vteam-project_manager",
+        "tool": "vteam_memory_archive",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_memory_merge",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
         "tool": "vteam_team_view",
         "expect": "allow",
         "actual": "allow",
@@ -1255,6 +1413,13 @@
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_plan_confirm",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_todo",
         "expect": "allow",
         "actual": "allow",
         "message": null
@@ -1304,6 +1469,13 @@
       {
         "agent": "vteam-project_manager",
         "tool": "vteam_hook_cancel",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
+      },
+      {
+        "agent": "vteam-project_manager",
+        "tool": "vteam_secret_command",
         "expect": "allow",
         "actual": "allow",
         "message": null
@@ -1429,6 +1601,20 @@
       },
       {
         "agent": "vteam-tester",
+        "tool": "vteam_memory_archive",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_archive 未获授权：岗位（tester）已拒绝能力点 memory.archive，拒绝调用"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_memory_merge",
+        "expect": "deny",
+        "actual": "deny",
+        "message": "工具 vteam_memory_merge 未获授权：岗位（tester）已拒绝能力点 memory.merge，拒绝调用"
+      },
+      {
+        "agent": "vteam-tester",
         "tool": "vteam_team_view",
         "expect": "allow",
         "actual": "allow",
@@ -1468,6 +1654,13 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_plan_confirm 未获授权：岗位（tester）已拒绝能力点 task.complete，拒绝调用"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_todo",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       },
       {
         "agent": "vteam-tester",
@@ -1517,13 +1710,20 @@
         "expect": "deny",
         "actual": "deny",
         "message": "工具 vteam_hook_cancel 未获授权：岗位（tester）已拒绝能力点 hook.manage，拒绝调用"
+      },
+      {
+        "agent": "vteam-tester",
+        "tool": "vteam_secret_command",
+        "expect": "allow",
+        "actual": "allow",
+        "message": null
       }
     ]
   },
   "plan": "server-gate-removal-tool-authority",
   "todo": 9,
   "generatedBy": "server/src/platform-mcp/platform-mcp.authority-matrix.spec.ts (worker matrix + service-level proof)",
-  "generatedAt": "2026-09-23T07:50:03.288Z",
+  "generatedAt": "2026-10-12T14:29:13.841Z",
   "mainHappyPath": {
     "steps": [
       {

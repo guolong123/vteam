@@ -54,6 +54,125 @@ export function hasRenderableContent(parts: unknown): boolean {
   });
 }
 
+/** part.id（非空字符串才算有效标识；缺失/空串 → undefined，保留追加语义）。 */
+function partIdOf(p: Record<string, unknown>): string | undefined {
+  return typeof p.id === 'string' && p.id.length > 0 ? p.id : undefined;
+}
+
+/** 按 part.id 去重：保留最后一次出现的位置与内容（对齐 web MsgParts 的 procParts 去重口径，
+ *  修复历史脏数据里同一次工具调用重复落多个快照 → 同一次调用出多张卡）。 */
+function dedupePartsById(
+  parts: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const seen = new Set<string>();
+  const out: Array<Record<string, unknown>> = [];
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const id = partIdOf(parts[i]);
+    if (id !== undefined) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+    }
+    out.push(parts[i]);
+  }
+  return out.reverse();
+}
+
+/**
+ * 流式 parts 合并：同一 part.id 的旧快照被新快照**原地替换**（last-write-wins），
+ * 新出现的 id 按到达顺序追加到末尾；无 id 的 part 保持追加语义。
+ *
+ * 背景：worker 改为「重发状态变化」后，同一 part.id 会随每轮快照重复上送，
+ * 旧实现 `[...old, ...new]` 无条件追加 → 同一 part 在 content.parts 里堆出多份
+ * 快照（UI 上表现为重复的工具卡/重复正文）。
+ */
+export function mergePartsById(
+  oldParts: unknown,
+  newParts: unknown,
+): Array<Record<string, unknown>> {
+  const merged = dedupePartsById(normalizeParts(oldParts));
+  const incoming = normalizeParts(newParts);
+  const indexById = new Map<string, number>();
+  for (let i = 0; i < merged.length; i += 1) {
+    const id = partIdOf(merged[i]);
+    if (id !== undefined) indexById.set(id, i);
+  }
+  for (const p of incoming) {
+    const id = partIdOf(p);
+    if (id !== undefined) {
+      const at = indexById.get(id);
+      if (at !== undefined) {
+        merged[at] = p;
+        continue;
+      }
+      indexById.set(id, merged.length);
+    }
+    merged.push(p);
+  }
+  return merged;
+}
+
+/** tool part 非终态状态集（对齐 web toToolStatus 的 running 口径）。 */
+const NON_TERMINAL_TOOL_STATUS: ReadonlySet<string> = new Set([
+  'running',
+  'streaming',
+  'pending',
+  'queued',
+]);
+
+/** 敏感命令工具名（对齐 web isSecretCommandPart）。 */
+function isSecretCommandToolName(p: Record<string, unknown>): boolean {
+  const raw = p.tool ?? p.name;
+  const name = typeof raw === 'string' ? raw : '';
+  return name === 'secret_command' || name.endsWith('_secret_command');
+}
+
+/** 工具 I/O 是否零信息量（缺失/null/空串/空数组/空对象）。 */
+function isEmptyToolIO(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === 'string') return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'object') return Object.keys(value).length === 0;
+  return false;
+}
+
+/**
+ * 残留行的 content 是否**只由「非终态且无任何 I/O 的 tool part」构成**——
+ * 即并发 delta 建行竞态/未收尾轮次留下的空壳工具卡行。
+ *
+ * 与 `hasRenderableContent` 刻意分开：后者把 `tool` 无条件算作可渲染（流式中
+ * in-flight 工具卡必须算，否则行永远不落地），因此无法区分「有内容的工具卡」与
+ * 「永远 running + 输入 {} 的空壳」。本函数只服务终态清扫：
+ * - 有真实 text / reasoning / 终态工具输出 / error / aborted → false（保留原处理）
+ * - 纯 pending/running tool 且 input、output 皆空 → true（应删，不应收敛为 sent）
+ *
+ * `opts.secretAwaiting`：会话存在 pending `secret_input` question 时，
+ * running 的 `secret_command` 工具卡实为「等待用户填写」（web 派生的
+ * awaiting-input 态），必须保留 → 返回 false。
+ */
+export function isStaleToolOnlyContent(
+  content: unknown,
+  opts: { secretAwaiting?: boolean } = {},
+): boolean {
+  const parts = normalizeParts(
+    (content as { parts?: unknown } | null | undefined)?.parts,
+  );
+  if (parts.length === 0) return false;
+  for (const p of parts) {
+    if (p.type !== 'tool') return false;
+    const state =
+      p.state !== null && typeof p.state === 'object'
+        ? (p.state as Record<string, unknown>)
+        : undefined;
+    const rawStatus = state?.status ?? p.status;
+    const status = typeof rawStatus === 'string' ? rawStatus.toLowerCase() : '';
+    if (!NON_TERMINAL_TOOL_STATUS.has(status)) return false;
+    if (opts.secretAwaiting && isSecretCommandToolName(p)) return false;
+    if (!isEmptyToolIO(state?.input ?? p.input)) return false;
+    if (!isEmptyToolIO(state?.output ?? p.output)) return false;
+  }
+  return true;
+}
+
 /** 结论性 parts（群聊只保留此子集）：type==='text' && 非 synthetic（reasoning/tool 排除）。 */
 export function extractConclusionParts(
   parts: unknown,

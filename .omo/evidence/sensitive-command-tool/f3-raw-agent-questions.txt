@@ -1,0 +1,17 @@
+=== agent_questions FULL DUMP 2026-09-27T04:49:08Z ===
+mysql: [Warning] Using a password on the command line interface can be insecure.
+*************************** 1. row ***************************
+        id: aq_0000000001
+request_id: que_platform_0000000001
+session_id: s_0000000011
+   task_id: t_0000000001
+      kind: secret_input
+    status: rejected
+created_at: 2026-09-27 03:12:20.136
+updated_at: 2026-09-27 03:21:20.261
+   content: {"reason": "F3 exemption distinguishing run 2", "source": "secret_input", "template": "echo {{TOKEN}}", "variables": [{"name": "TOKEN", "secret": true}]}
+   answers: {"filled": [], "actorId": "", "provided": false, "actorType": "user"}
+=== counts ===
+mysql: [Warning] Using a password on the command line interface can be insecure.
+aq_total	pending	tasks	c17
+1	0	1	56

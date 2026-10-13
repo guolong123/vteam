@@ -1,0 +1,227 @@
+================================================================================
+todo 13 · MCP 阻塞调用 ~240s 客户端 abort —— 判定探针 + 心跳修复
+Plan      : .omo/plans/sensitive-command-tool.md → 13 修复 MCP 阻塞调用约 240s 客户端 abort
+Evidence  : .omo/evidence/sensitive-command-tool/task-13-mcp-heartbeat.txt (this file)
+Verifier  : Sisyphus-Junior subagent (task 13)
+Window    : 2026-09-27 02:17Z → 03:00Z (2026-09-27 10:17 → 11:00 CST)
+Sentinel  : probe-fake-secret-1（本次探针假值，非 s3cr3t-A9f）
+================================================================================
+
+--------------------------------------------------------------------------------
+0. VERDICT
+--------------------------------------------------------------------------------
+VERDICT    : IDLE-CAP（空闲型超时），修复已实现并现场验证 → 实施心跳修复并提交
+CONFIDENCE : HIGH —— 同一 opencode 1.18.32 客户端、同一代码路径、同一工具：
+               无心跳 → 289.9s 客户端 abort（DOMException TimeoutError）
+               30s 心跳 → 605.4s 无 abort，最终 JSON-RPC 正常解析并成功返回
+             若为 age-cap（从请求起算的固定总时长），心跳不会把 abort 推后 315s。
+DECISION   : 按计划走「idle-cap → 最小修复」分支：platform-mcp.controller.ts 对
+             阻塞 tools/call 在 pending 期间按 30s（≤60s）写 SSE `:` 心跳，最终
+             仍返回合法 JSON-RPC；非阻塞流量与 disconnect abort 语义不变。
+COMMIT     : `fix(mcp): 阻塞工具调用期间维持长连接心跳`（SHA 见 §9）
+
+--------------------------------------------------------------------------------
+1. 前置事实复核（现场）
+--------------------------------------------------------------------------------
+- /data/vteam-worker/opencode.json → mcp.vteam.timeout = 900000, enabled=true,
+  headers x-worker-id=w_compose_worker / x-worker-token=compose-worker-token。（注入正确）
+- 客户端：opencode-ai@1.18.32（worker 容器 /usr/local/bin/opencode → bin/opencode.exe 184MB）。
+- 服务端 platform-mcp 仅 POST 请求-响应，pending 期间零字节写出
+  （platform-mcp.controller.ts 原实现），无服务端超时（F3 curl 540.16s 拿到 200 JSON）。
+- 历史（F3 final-f3-manual.txt）：五次 abort 年龄 246.2/257.3/278.1/293.2/294.4s，
+  错误 "The operation timed out."（DOMException TimeoutError，非 MCP SDK 的
+  "Request timed out"），abort 时刻落在 60s 网格上。
+- 二进制静态证据（worker 容器 opencode.exe）：
+  * MCP 工具执行点：`X.callTool({name,arguments}, t0,
+    {resetTimeoutOnProgress:!0, signal:J.abortSignal, timeout:Y, onprogress:()=>{}})`
+    （Y = 注入的 900000 → MCP SDK setTimeout 900s 路径不会在 240s 触发）。
+  * SDK `Protocol.request`：`Y?.signal?.addEventListener("abort",()=>A(Y?.signal?.reason))`
+    → 以 signal.reason 拒绝 ⇒ 观察到的 DOMException TimeoutError 来自 ctx.abortSignal
+    被某个 60s 周期机制 abort，而非 SDK 自身超时。
+  * 60s 网格相位：era1 xx.x48.9（旧 serve 起点 21:41:48.9 附近）、era2 xx.x24.181/24.185
+    （容器重启 23:46:24 附近）、本次探针 xx.x36.6（opencode run 客户端进程 02:26:33 启动、
+    MCP 连接 ≈02:26:36.6）→ 相位随客户端进程重建，= 客户端进程/连接时刻锚定的 60s tick。
+  * 历史年龄窗口联立（每次 abort = 请求开始后第一个 ≥T 的 tick）⇒ T ∈ (233.2, 246.2]s，
+    即 ~240s；本次 289.6s（tick 落在 02:31:36.6，请求 02:26:47.0）与 240s+tick 一致。
+
+--------------------------------------------------------------------------------
+2. 判定探针 A —— BASELINE（当前代码、无心跳、等待 >600s 预期）
+--------------------------------------------------------------------------------
+Harness    : .omo/evidence/sensitive-command-tool/task-13-baseline.sh
+             （worker 容器内 `opencode run -m opencode/big-pickle --auto --format json`，
+             cwd=/data/vteam-worker → 读同一份注入 opencode.json，真实 MCP 客户端路径）
+Image/Stack: server sha256:8494b82821ef837a446c2be0815a7dbfa84bdba3c2b30f400e5632c56a42c7d4
+             （started 2026-09-26T23:46:27.700Z，探针期间未重启）
+Raw logs   : task-13-baseline.{meta,client.jsonl,client-err,questions,server.log,worker.log}
+             前两次失败尝试留档：task-13-baseline.*.attempt2.txt
+             （attempt1：宿主机无 timeout 命令 exit 127；attempt2：模型先调 task_context
+              发现 t_0000000001 已被其他 lane 删除 → 拒绝调用；attempt3 = 下述成功基线）
+
+Timeline (UTC)：
+  02:26:33.3   T0 启动 opencode run（prompt 指定固定 arguments）
+  02:26:46.673 client tool_use start (vteam_secret_command)
+  02:26:46.994 server: [questions] 平台创建 secret_input id=aq_0000000037
+                        requestId=que_platform_0000000028 taskId=t_0000000002
+  02:26:47.043 HTTP POST /api/v1/platform-mcp 抵达（ua=opencode/1.18.32,
+                        Accept: application/json, text/event-stream, port 36374）
+  02:31:36.576 server pino: "msg":"request aborted" "responseTime":289756
+  02:31:36.601 client tool_use end → status=error, error="The operation timed out."
+                        客户端时长 289,928 ms
+  02:31:36.615 server: [questions] secret_input 终态 id=aq_0000000037 status=rejected
+  02:31:43.3   opencode run 正常退出（模型复述错误），TOTAL 见 meta
+
+RESULT     : 复现成功 —— 零字节挂起的 tools/call 在 289.9s 被客户端 abort，
+             与 F3 五次观测同带（246–294s）；服务端正确取消 pending 问题（无幽灵执行）。
+             注意：零字节下 idle==age，baseline 单独不能区分 age/idle（计划已预见），
+             判定需要步骤 3 的心跳对照。
+
+--------------------------------------------------------------------------------
+3. 判定探针 B —— HEARTBEAT（30s 心跳，同一客户端、同一工具、等待 >600s）
+--------------------------------------------------------------------------------
+Fix        : server/src/platform-mcp/platform-mcp.controller.ts（见 §4），构建进镜像
+             dist grep: dist/src/platform-mcp/platform-mcp.controller.js 含 "vteam-mcp-heartbeat" = 1
+Image/Stack: server sha256:31235a92c12490d34eb341af70a7268a9c63f99c67e423bb9ac95959137f6ad8
+             started 2026-09-27T02:35:09.638Z，health {"status":"ok"}
+             （重启后 que 计数器未复位，直接创建成功 —— todo 11 的 P2002 本次未复现；
+              task-13-qeburn.sh 一次调用即建出 aq_0000000038）
+Harness    : .omo/evidence/sensitive-command-tool/task-13-heartbeat.sh
+             持有策略：问题出现后 450s 回填 secret，命令 `sleep 150 # {{P}}`（timeoutSec=300）
+             → 总挂起 > 600s（计划要求的 >600s 等待）
+Raw logs   : task-13-heartbeat.{meta,client.jsonl,client-err,reply.json,server.log,worker.log}
+
+Timeline (UTC)：
+  02:37:57.0   T0 启动 opencode run
+  02:38:10.071 client tool_use start
+  02:38:10.434 server: 平台创建 secret_input id=aq_0000000039
+                        requestId=que_platform_0000000030 template="sleep 150 # {{P}}"
+  02:38:14     探针脚本发现 pending 问题（QID=aq_0000000039）
+  02:45:45.104 回填 {secrets:{"P":"probe-fake-secret-1"}} → status=resolved, filled=[P],
+                        actor=u_seed_admin（POST /api/v1/questions/aq_0000000039/reply 200）
+  02:48:15.383 server pino: POST /platform-mcp "request completed" responseTime=605126
+                        （port 41938；本窗口 "request aborted" 计数 = 0）
+  02:48:15.452 client tool_use end → status=**completed**, error=None,
+                        result: status=succeeded, exitCode=0, timedOut=false,
+                        durationMs=150098, stdout/stderr 空（模型正常解析最终 JSON-RPC）
+  02:48:24     opencode run exit 0；TOTAL_SECONDS=627（>600s ✓）
+
+RESULT     : 605,381 ms 无 abort，正常完成 ⇒ 心跳重置了客户端的超时判定
+             ⇒ **IDLE-CAP**（不是 age-cap）。对照：无心跳同调用 289.9s 即 abort。
+
+--------------------------------------------------------------------------------
+4. 心跳的线级直证（SSE 注释帧）
+--------------------------------------------------------------------------------
+Capture    : task-13-heartbeat-sse-capture.{headers.txt,meta.txt} + body 文件
+             curl --max-time 65 -H 'accept: text/event-stream' 打同一端点（挂起 secret_command）
+             （执行于 02:49:30Z，镜像 31235a92；此时无其他 in-flight 调用）
+响应头     : HTTP 200, content-type: text/event-stream; charset=utf-8,
+             cache-control: no-cache, no-transform, connection: keep-alive,
+             x-accel-buffering: no, Transfer-Encoding: chunked
+响应体(74B): ": vteam-mcp-heartbeat 1790477370280\n\n" / ": vteam-mcp-heartbeat 1790477400277\n\n"
+             两帧 Δ = 29,997 ms ≈ 30s；65.14s 内 2 帧（curl --max-time 主动断开 → 问题自动 rejected）
+反向直证   : 同请求不带 event-stream Accept → 快速路径仍是 Content-Type: application/json
+             的整体 JSON（本次 409 冲突响应实测），即 curl/JSON 客户端字节形态不变。
+
+--------------------------------------------------------------------------------
+5. 修复内容（代码变更）
+--------------------------------------------------------------------------------
+server/src/platform-mcp/platform-mcp.controller.ts（+125/-11）
+  - `handle` 改为自持响应（@Res() raw，@HttpCode 默认 200，通知仍 res.status(202)），
+    dispatch 结果是 Promise（仅阻塞 tools/call）时进入 awaitWithHeartbeat：
+    * 仅当请求 Accept 声明 text/event-stream（opencode: "application/json, text/event-stream"）
+      才启用；常量 MCP_HEARTBEAT_INTERVAL_MS = 30_000（≤60s，保证任意 60s 扫描窗内有字节）；
+    * 首次心跳才切换响应头（text/event-stream + no-cache/no-transform + x-accel-buffering: no）
+      并写 `: vteam-mcp-heartbeat <epoch>\n\n`；快速返回的请求（非阻塞流量）从不触发切换；
+    * settle 后：接管过 → `data: <JSON-RPC>\n\n` + res.end()；未接管 → res.json(整体 JSON)；
+    * await 期间抛错：headers 未发送 → 维持原语义抛给 Nest；已接管 → 以 JSON-RPC 错误帧收尾；
+    * disconnect 语义不变（res 'close' / req 'aborted' → abort ctx.signal）；close 即清定时器，
+      destroyed/writableEnded 后不写帧（断开后无心跳、无收尾写）。
+server/src/platform-mcp/platform-mcp.controller.spec.ts（+191/-…）
+  - 新增 describe「阻塞 tools/call 心跳」4 个 fake timers 用例：
+    1) event-stream 客户端：pending 期间每个 60s 窗口恰 2 条心跳（≥1 是验收线）、
+       切到 SSE 响应头、最终 `data:` 帧 JSON.parse 后 {jsonrpc,id:91,result.content[0].text}
+       再 parse = {status:'cancelled'}，res.end 被调用、res.json 不被调用；
+    2) Accept 不含 event-stream（curl 默认）：推进 600s 零写入、零 setHeader，
+       最终仍 res.json 整体 JSON；
+    3) 客户端断开：signal 立即 aborted，此后推进 600s 不再写、res.end 不被调用；
+    4) 快速返回：即使声明 event-stream 也不切 SSE，走整体 JSON。
+  - 既有「客户端断开信号」用例改为断言 res.json 收到整体 JSON-RPC（原 resolves 契约等价迁移）。
+
+--------------------------------------------------------------------------------
+6. 验证命令（全部原样记录）
+--------------------------------------------------------------------------------
+1) cd server && npx jest src/platform-mcp/platform-mcp.controller.spec.ts \
+     src/platform-mcp/platform-mcp.service.spec.ts --runInBand
+   → exit 0；Test Suites 2 passed；Tests 320 passed
+   （含 4 个新心跳用例 + 更新后的断开用例，见 --verbose 输出：全部 ✓）
+2) cd server && npm run lint:check
+   → exit 0；✖ 66 problems (0 errors, 66 warnings)（66 条均为存量 warning）
+3) cd server && npx jest src/platform-mcp --runInBand（附加回归）
+   → exit 0；15 suites / 482 tests passed
+4) cd server && npx tsc --noEmit -p tsconfig.json（附加）
+   → exit 0
+5) 构建与重启：
+   PATH=/usr/local/bin:$PATH docker compose build server → Image aiagents-server Built
+   PATH=/usr/local/bin:$PATH docker compose up -d server → started
+   curl http://localhost:13000/api/v1/health → {"status":"ok"}（重启后多次验证）
+   最终镜像 dist grep vteam-mcp-heartbeat → 1
+
+镜像/容器回执：
+  before（无心跳）: sha256:8494b82821ef837a446c2be0815a7dbfa84bdba3c2b30f400e5632c56a42c7d4
+                    container aiagents-compose-server started 2026-09-26T23:46:27.700Z
+  probed  (心跳): sha256:31235a92c12490d34eb341af70a7268a9c63f99c67e423bb9ac95959137f6ad8
+                    started 2026-09-27T02:35:09.638Z —— §3 605s 探针与 §4 线级抓包在此镜像
+  final   (提交源码): sha256:7490e62748634a5f32ede0b21b05dd3a6eec55a158ce38dc804a9ccb85cc2b90
+                    started 2026-09-27T02:52:57.018Z
+                    与 probed 仅差一处 prettier 换行（无语义变化），故未再跑一轮 600s 探针；
+                    final 镜像验证 = health ok + dist 含心跳代码 +
+                    initialize/tools-list 快速路径 JSON.parse-OK（32 工具含 secret_command）
+
+--------------------------------------------------------------------------------
+7. 无泄露 / 清理回执
+--------------------------------------------------------------------------------
+- sentinel grep "probe-fake-secret-1"（0 命中）：
+    docker logs aiagents-compose-server → 0
+    docker logs aiagents-compose-worker → 0
+    worker 容器 /root/.local/share/opencode + /data/vteam-worker → 0（grep -v :0 无输出）
+- agent_questions：本次探针行为 aq_0000000037（baseline rejected）、aq_0000000038（qeburn
+  rejected）、aq_0000000039（heartbeat resolved，answers 仅 {provided,filled,actor}）、
+  aq_0000000040（SSE 抓包 rejected）；核收时任务表与 agent_questions 已被并发 lane 清空
+  （select count(*) = 0；tasks 表空 → 收尾时平台无残留探针行）。
+- opencode 会话清理（worker 容器 `opencode session delete`，均返回 "deleted"）：
+    ses_f1f4600eeffeZbLJ8Dkk8fZg2y（heartbeat）、ses_f1f5072a9ffe3RLsusNi7eOiEX（baseline）、
+    ses_f1f55e2cdffevNRe4eKkS2F8RK（attempt2）、ses_f1f5a13b3ffeGnUHFc7pgBUK0Y（sanity PONG）
+    清理后 session list 剩 39 条（产品会话未动）。
+- 产品代码改动面：仅 2 个文件（controller + controller.spec）；.omo/.opencode 既有脏文件不入提交。
+- 栈状态：server/web/worker/db 均 running（server healthy，health 200）。
+- 未跑 mutating lint（仅 npm run lint:check）；未改 MCP 方法名/事件名；未加服务端全局超时。
+
+--------------------------------------------------------------------------------
+8. 风险与限制
+--------------------------------------------------------------------------------
+1) 心跳只对 Accept 声明 text/event-stream 的客户端启用：声明了却硬要求 application/json
+   正文的非标准客户端会收到 SSE 正文（MCP Streamable HTTP 客户端两者皆支持，
+   opencode 1.18.32 实测通过；未覆盖其他客户端版本）。
+2) 判定为经验结论：abort 机制在 184MB 压缩二进制中未定位到具体实现（60s tick + ~240s 阈值
+   由时间戳反推），若上游 opencode 改变该行为，需重跑本探针。
+3) final 镜像与 probed 镜像存在一处 prettier 换行差异，未在 final 镜像上重跑 600s 探针
+   （理由：无语义变化，且 tsc/lint/320 tests/dist grep/health 全绿）。
+4) 并发 lane 在本任务期间清空 tasks/agent_questions 并删除 t_0000000002，
+   探针行无法在收尾时逐行核对（原始日志已留档 §2/§3 raw 文件）。
+5) que 计数器重启复位（todo 11）本次两次 server 重启均未复现（counter 未归零），
+   仍按 todo 11 处理，不在本任务范围。
+6) 心跳帧会出现在响应字节流中：任何按「纯 JSON 单帧」做字节级断言的客户端测试需同步更新
+   （本仓库既有 spec 已覆盖两种形态）。
+
+--------------------------------------------------------------------------------
+9. 提交
+--------------------------------------------------------------------------------
+Commit    : fix(mcp): 阻塞工具调用期间维持长连接心跳
+Files     : server/src/platform-mcp/platform-mcp.controller.ts
+            server/src/platform-mcp/platform-mcp.controller.spec.ts
+Scope     : git diff --cached --name-only 核对 = 仅上述 2 文件（.omo/.opencode 未入暂存）
+SHA       : 0987980f0b0e3e10cece4aa87d88ebdb8d878db0
+            （parent 1b31521 = todo 12 `fix(team-scope)`；分支 task-delete-and-db-readiness）
+            git show --stat HEAD → 2 files changed, 305 insertions(+), 11 deletions(-)
+            提交后 git status：无任何 server/ 脏文件；仅存量 .omo/.opencode 脏文件未入提交。
+Evidence  : 本文件与同目录 raw 产物不提交（计划 commit strategy）。
+================================================================================

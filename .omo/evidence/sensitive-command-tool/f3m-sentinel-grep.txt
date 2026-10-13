@@ -1,0 +1,36 @@
+=== F3 lane-B SENTINEL GREP  sentinel='s3cr3t-A9f'  at=2026-09-27T00:43:40Z  head=16584d5
+
+[1] container logs (full log since container start)
+    server  bytes=4162077   hits=0
+    worker  bytes=18250     hits=0
+    web     bytes=298       hits=0
+
+[2] product session store: worker /root/.local/share/opencode
+    file: /root/.local/share/opencode/log/opencode.log
+    file: /root/.local/share/opencode/opencode.db
+    file: /root/.local/share/opencode/opencode.db-wal
+    file: /root/.local/share/opencode/opencode.db-shm
+    file: /root/.local/share/opencode/storage/oh-my-openagent/tui-state/898e02857c81350f.json
+    matching lines (grep -R): 0
+
+[3] worker workdir /data/vteam-worker (excl .git)
+    matching files (grep -R -l): 0
+
+[4] mysql product stores
+    messages.content        hits=0
+    agent_questions.content hits=0
+    agent_questions.answers hits=0
+    realtime_events.payload hits=0
+
+[5] browser DOM after action (page source): see f3m-*.log AFTER_FACTS.domHasSentinel=false / CAPTURE_DOM_SENTINEL=false
+
+=== SECOND PASS (covers tail runs incl. awaiting probes) at=2026-09-27T00:52:30Z
+    log[server] bytes=4511547   hits=0
+    log[worker] bytes=21608     hits=0
+    log[web   ] bytes=298       hits=0
+    session-store matching lines: 0
+    worker workdir matching files: 0
+    mysql messages.content        hits=0
+    mysql agent_questions.content hits=0
+    mysql agent_questions.answers hits=0
+    mysql realtime_events.payload hits=0

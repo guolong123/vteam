@@ -1,0 +1,54 @@
+# task-11 RED - failing-first baseline (BEFORE change)
+date: 2026-09-25T20:15:25Z
+
+## 1) hard-coded role hex in web/src/theme/tokens.ts (whole file)
+20:  product: { label: "产品经理", color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
+21:  project_manager: { label: "项目经理", color: "#0284C7", bg: "#F0F9FF", border: "#BAE6FD" },
+22:  architect: { label: "架构师", color: "#7C3AED", bg: "#F5F3FF", border: "#DDD6FE" },
+23:  developer: { label: "开发者", color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+24:  tester: { label: "测试", color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
+25:  plan: { label: "计划员", color: "#475569", bg: "#F8FAFC", border: "#CBD5E1" },
+33:  product: "#0F766E",
+34:  project_manager: "#0369A1",
+35:  architect: "#6D28D9",
+36:  developer: "#047857",
+37:  tester: "#B45309",
+38:  plan: "#334155",
+52:  "进行中": { color: "#0D9488", bg: "#F0FDFA", border: "#99F6E4" },
+53:  "阻塞中": { color: "#B91C1C", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
+54:  "待验收": { color: "#D97706", bg: "#FFFBEB", border: "#FDE68A" },
+55:  "已完成": { color: "#059669", bg: "#ECFDF5", border: "#A7F3D0" },
+grep_exit=0
+
+## 2) hex count inside role tables (tokens.ts:19-39)
+12
+
+## 3) RED run BEFORE change: npx playwright test lib/role-theme.spec.ts --project=lib-unit
+$ npx playwright test lib/role-theme.spec.ts --project=lib-unit
+EXIT=1
+
+    Error: roles 表不得含硬编码 hex
+    Error: light/product 身份文字: computed=rgb(15, 118, 110)  variable=rgb(37, 99, 235)
+    Expected: "rgb(37, 99, 235)"
+    Received: "rgb(15, 118, 110)"
+    Error: dark/未知角色头像底色: computed=rgb(236, 253, 245)  variable=rgba(5, 150, 105, 0.18)
+    Expected: "rgba(5, 150, 105, 0.18)"
+    Received: "rgb(236, 253, 245)"
+  3 failed
+  1 passed (4.3s)
+
+## 5) GREEN comparison (same commands AFTER change)
+$ grep -nE "#[0-9A-Fa-f]{6}" web/src/theme/tokens.ts | sed -n "1,39p"  -> roles/roleText 区段命中 0
+0
+hex_count_in_roles_block=0
+$ npx playwright test lib/role-theme.spec.ts --project=lib-unit  -> EXIT=0 (4 passed)
+
+## 6) QA failure 判据逐条核对（计划复选框 11 QA failure）
+- "grep 仍命中 tokens.ts:19-39 角色硬编码 hex"：改动前命中 12 -> 改动后 0（本文件 §2/§5）
+- "切换 .dark 后 computed role color/bg/border 不等于变量解析值"：改动前 dark 下 computed=浅色不透明 hex（本文件 §3），改动后 light/dark 12 组全部相等（task-11-role-theme.txt §4）
+- 结论：两条失败判据在改动前都真实为红，改动后都为绿，未放宽任何断言。
+
+## commit
+9fcbf853334c474880fbb77070d5d931e93a6db8
+staged: web/src/theme/tokens.ts | web/app/(main)/skills/page.tsx | web/lib/role-theme.spec.ts
+evidence 未提交（.omo/** 保持 untracked/dirty 不入产品 commit）

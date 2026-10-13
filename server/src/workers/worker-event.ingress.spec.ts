@@ -662,6 +662,263 @@ describe('WorkerEventIngress', () => {
       );
     });
 
+    it('同 part.id 重发快照 → 原地替换该 part（last-write-wins），不追加重复快照', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const runningPart = {
+        id: 'prt_1',
+        type: 'tool',
+        tool: 'read',
+        state: { status: 'running', input: { path: 'a.ts' }, output: '' },
+      };
+      const donePart = {
+        id: 'prt_1',
+        type: 'tool',
+        tool: 'read',
+        state: { status: 'completed', input: { path: 'a.ts' }, output: '内容' },
+      };
+      prisma.message.findFirst.mockResolvedValueOnce({
+        id: 'm_stream',
+        content: { text: '', parts: [runningPart] },
+      });
+      prisma.message.update.mockResolvedValue({
+        id: 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '', parts: [donePart] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(31, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [donePart],
+          }),
+        ),
+      ).toBe(true);
+
+      // 同 id 替换而非追加 → content.parts 只剩一份快照
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_stream' },
+        data: { content: { text: '', parts: [donePart] } },
+      });
+    });
+
+    it('同 part.id 重发 + 新 part 混入 → 老 part 原地替换，新 part 按序追加到末尾', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const textV1 = {
+        id: 'prt_t',
+        type: 'text',
+        text: '你好',
+        synthetic: false,
+      };
+      const textV2 = {
+        id: 'prt_t',
+        type: 'text',
+        text: '你好世界',
+        synthetic: false,
+      };
+      const toolPart = {
+        id: 'prt_2',
+        type: 'tool',
+        tool: 'read',
+        state: { status: 'completed', input: {}, output: 'ok' },
+      };
+      prisma.message.findFirst.mockResolvedValueOnce({
+        id: 'm_stream',
+        content: { text: '你好', parts: [textV1] },
+      });
+      prisma.message.update.mockResolvedValue({
+        id: 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '你好世界', parts: [textV2, toolPart] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(32, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [textV2, toolPart],
+          }),
+        ),
+      ).toBe(true);
+
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_stream' },
+        data: {
+          content: { text: '你好世界', parts: [textV2, toolPart] },
+        },
+      });
+    });
+
+    it('无 id 的 part 保持追加语义（不因合并逻辑被覆盖）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const oldPart = { type: 'text', text: '你好', synthetic: false };
+      const newPart = { type: 'text', text: '世界', synthetic: false };
+      prisma.message.findFirst.mockResolvedValueOnce({
+        id: 'm_stream',
+        content: { text: '你好', parts: [oldPart] },
+      });
+      prisma.message.update.mockResolvedValue({
+        id: 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '你好世界', parts: [oldPart, newPart] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      await ingress.handleEvent(
+        deltaEvent(33, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [newPart],
+        }),
+      );
+
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_stream' },
+        data: {
+          content: { text: '你好世界', parts: [oldPart, newPart] },
+        },
+      });
+    });
+
+    it('并发 delta（worker 不 await 连发）→ findFirst→create 串行化，只建一条 processing 行', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      // 两个 handler 若并发：两者 findFirst 都在对方的 create 之前进入（快照均为 null）
+      // → 各建一行。串行化后第二个 findFirst 进入时第一行已存在 → 走 update。
+      let created = false;
+      prisma.message.findFirst.mockImplementation(async () => {
+        // 同步快照此刻的可见性，再让出事件循环逼出真实并发
+        const visible = created;
+        await new Promise((r) => setImmediate(r));
+        return visible
+          ? { id: 'm_race', content: { text: '', parts: [] } }
+          : null;
+      });
+      prisma.message.create.mockImplementation(async () => {
+        created = true;
+        return {
+          id: 'm_race',
+          channelId: 'c_dm',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_1',
+          content: { text: '', parts: [] },
+          mentions: null,
+          status: MESSAGE_STATUS.processing,
+          createdAt: new Date('2026-08-10T00:00:00Z'),
+        };
+      });
+      prisma.message.update.mockResolvedValue({
+        id: 'm_race',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '', parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      await Promise.all([
+        ingress.handleEvent(
+          deltaEvent(34, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [{ type: 'text', text: 'A', synthetic: false }],
+          }),
+        ),
+        ingress.handleEvent(
+          deltaEvent(35, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [{ type: 'text', text: 'B', synthetic: false }],
+          }),
+        ),
+      ]);
+
+      // 关键判据：create 至多一次（无串行化时为 2 次 → 重复独白消息）
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(prisma.message.update).toHaveBeenCalledTimes(1);
+    });
+
+    it('不同 agent 的 delta 不互相串行（各自独立建行）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.create.mockImplementation(async (args: any) => ({
+        id: args?.data?.id,
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: args?.data?.senderId,
+        content: args?.data?.content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      }));
+
+      await Promise.all([
+        ingress.handleEvent(
+          deltaEvent(36, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [{ type: 'text', text: 'A', synthetic: false }],
+          }),
+        ),
+        ingress.handleEvent(
+          deltaEvent(37, {
+            taskId: 't_1',
+            agentId: 'a_2',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [{ type: 'text', text: 'B', synthetic: false }],
+          }),
+        ),
+      ]);
+
+      // 两个 agent 是两条不同的流式消息，各自建行（串行化键含 senderId）
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);
+    });
+
     it('纯 reasoning delta（群聊触发）→ 落成员 team 私聊独白全量（reasoning 亦入流式，不丢弃）', async () => {
       prisma.session.findUnique.mockResolvedValue({
         agentId: 'a_1',

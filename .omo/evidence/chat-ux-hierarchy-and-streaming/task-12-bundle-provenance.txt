@@ -1,0 +1,59 @@
+# task-12 bundle provenance (served web at http://localhost:3001)
+# 采集时间: 2026-09-26 08:20:20 CST
+
+## 谁在监听 3001
+node    94825  mac   12u  IPv4 0xf5ede08efcef94f1      0t0  TCP 127.0.0.1:3001 (LISTEN)
+  PID STARTED                      COMMAND
+94825 Thu Sep 24 19:38:09 2026     node /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/pw-bridge/bridge.js
+
+## 响应头
+HTTP/1.1 200 OK
+Vary: rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch, Accept-Encoding
+x-nextjs-cache: HIT
+x-nextjs-prerender: 1
+x-nextjs-prerender: 1
+x-nextjs-stale-time: 300
+X-Powered-By: Next.js
+Cache-Control: s-maxage=31536000
+ETag: "nbf96cbefd5qy"
+Content-Type: text/html; charset=utf-8
+Content-Length: 7470
+Date: Sat, 26 Sep 2026 00:20:20 GMT
+
+## docker compose 侧（web standalone 映射端口）
+8:#   web     Next.js standalone（build ARG 注入 API_PROXY_TARGET=http://server:3000；
+111:      # standalone server.js 以 HOSTNAME env（容器自动=容器 ID）为监听地址，非 127.0.0.1；
+119:      - "13001:3000"
+
+## 源码标记是否出现在已下发的 JS chunk 里
+chunks found:        9
+scanned bytes: 518169
+B_marker(查看升级方案, msg-error 既有) present: 0
+B11_new(收起详情, 本 todo 新增) present: 0
+
+## 结论
+SERVED_BUNDLE_CONTAINS_B11 = FALSE
+→ 3001 是预构建 Next 生产包，未包含本 todo 源码改动；
+  本 todo 的确定性证据走 chat-density 项目（esbuild-wasm 现场打包源码，不打 3001）。
+
+## 补充探针（真实浏览器，登录后进入 /teams/tm_0000000001/session 扫描已加载 JS）
+工具: 一次性脚本 web/tmp-task12-provenance.mjs（@playwright/test chromium, channel=chrome）
+      跑完即删（见 cleanup 回执）
+扫描: 25 个 script URL / 1,540,134 bytes
+命中:
+  "查看升级方案" (msg-error 既有)        : 1
+  "已思考 · 点击展开" (A3, 31ff11f)      : 0   ← 登录/会话首屏未挂载该分支，非结论项
+  "发送中…" (B7, 1bef2e0)                : 1
+  "未知片段" (B6, 129b761)               : 1
+  "收起 ▲" (A1, 31ff11f)                 : 1
+  "收起详情" (B11, 本 todo b27f4c7)      : 0   ← 关键结论
+
+补充对照:
+  curl -sI http://localhost:3001/  与 http://localhost:13001/ 的 ETag 完全一致
+  (nbf96cbefd5qy) / Content-Length 7470 → 3001 就是 compose 侧 web standalone（OrbStack :13001）
+  的转发，非 next dev。
+
+SERVED_BUNDLE_VINTAGE = 含 B6(129b761)/B7(1bef2e0)/A1 等既有标记，不含 B11(b27f4c7)
+→ 页面级 E2E（pages / session-unification）只能作为「既有行为非回归」记录，
+  不能、也不被认作 B11 的覆盖证据；B11 覆盖一律来自 chat-density 项目
+  （esbuild-wasm 现场把 HEAD 源码打包进空白页，与 3001 无关）。

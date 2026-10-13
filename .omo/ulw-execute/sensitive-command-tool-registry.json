@@ -1,0 +1,614 @@
+{
+  "schema_version": 1,
+  "work_id": "sensitive-command-tool-05d30d58",
+  "plan_name": "sensitive-command-tool",
+  "plan_path": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/sensitive-command-tool.md",
+  "delivery_mode": "direct",
+  "session_id": "opencode:ses_f273ae953ffeipbrGRWbJ8mh1J",
+  "registered_at": "2026-09-26T13:21:41.266Z",
+  "progress": {
+    "implementation_total": 13,
+    "final_total": 4,
+    "top_level_total": 17,
+    "completed": 17,
+    "skipped": 0,
+    "status": "completed"
+  },
+  "phases": [
+    {
+      "id": "wave-1",
+      "name": "Wave 1 - Foundation",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "1",
+          "title": "注册 secret_command 能力并完成全角色授权链路",
+          "status": "completed",
+          "commit": "8a8776589c890aeae4643bf56727955497f1a7a7",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-1-capability.txt",
+          "steps": [
+            {
+              "id": "1.1",
+              "title": "在 agent.constants.ts 的 VTEAM_MCP_TOOL_NAMES 增加 vteam_secret_command",
+              "status": "completed"
+            },
+            {
+              "id": "1.2",
+              "title": "在 platform-capability.constants.ts 增加 secret.command（defaultDeny:false），并更新 capabilityKeyForTool 覆盖",
+              "status": "completed"
+            },
+            {
+              "id": "1.3",
+              "title": "7 个内置角色 toolAllows 全部加 vteam_secret_command；EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST 8→9；PM 映射、ar_general factory、外部能力矩阵同步 true",
+              "status": "completed"
+            },
+            {
+              "id": "1.4",
+              "title": "同步 seed.ts 镜像、vteamTools 注册、role policy tools 与 upgrade migration（fresh/upgrade 一致）",
+              "status": "completed"
+            },
+            {
+              "id": "1.5",
+              "title": "更新 coverage/agent.constants/seed/migration specs（28→29、31→32、external 8→9、factory 14 false 语义）",
+              "status": "completed"
+            },
+            {
+              "id": "1.6",
+              "title": "运行 server 定向 Jest，记录 fresh/upgrade 双形态证据并提交",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f221df3cdffe5zkcBHBeOulBx0",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f21f2df93ffe2emmxer1qecuOs",
+            "commit": "8a8776589c890aeae4643bf56727955497f1a7a7"
+          }
+        },
+        {
+          "id": "2",
+          "title": "新增不回显的 secret_input 问题生命周期",
+          "status": "completed",
+          "commit": "353af23e2293b56fa48dd20cb1ae1a2f54ca5b3f",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-2-questions-no-echo.txt",
+          "steps": [
+            {
+              "id": "2.1",
+              "title": "questions.constants.ts 增加 SECRET_INPUT kind、secret source 与超时预算常量",
+              "status": "completed"
+            },
+            {
+              "id": "2.2",
+              "title": "reply-question.dto.ts 增加可选 secrets: Record<string,string>|null",
+              "status": "completed"
+            },
+            {
+              "id": "2.3",
+              "title": "questions.service.ts 增加 createSecretForPlatform()，只持久化模板与变量元数据，managedMode fail-closed 在 create 前",
+              "status": "completed"
+            },
+            {
+              "id": "2.4",
+              "title": "resolvePlatformQuestion 增加 secret 分支，只持久化 {provided,filled,actorType,actorId}，isPlatformQuestion 识别 secret source",
+              "status": "completed"
+            },
+            {
+              "id": "2.5",
+              "title": "reply() 校验 secret kind 与未声明变量；{secrets:null} 为 rejected/cancel；重复终态 400",
+              "status": "completed"
+            },
+            {
+              "id": "2.6",
+              "title": "补 questions.service.spec.ts happy/failure：answers/SSE 不含 sentinel、hook 内存明文、无孤儿行",
+              "status": "completed"
+            },
+            {
+              "id": "2.7",
+              "title": "运行 questions 定向 Jest 并提交",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f221df368ffdgF3Ry6aMGmtE4K",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.9,
+            "session_id": "ses_f220389fbffeE9Vvvo1KHcLx3r",
+            "commits": [
+              "353af23e2293b56fa48dd20cb1ae1a2f54ca5b3f",
+              "ee3dc6c657f90d8a9d2626c79ffa59c893b494cb"
+            ]
+          },
+          "history_deviation": "Two commits due to intervening todo 1 commit; no rewrite; disclose in F5."
+        },
+        {
+          "id": "3",
+          "title": "Worker 敏感命令模块：变量替换、精确脱敏、进程组超时",
+          "status": "completed",
+          "commit": "c72d68f",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-3-worker-redaction.txt",
+          "steps": [
+            {
+              "id": "3.1",
+              "title": "worker-protocol.ts 增加 SecretCommandRequest/Response 类型与 contract.spec.ts 往返用例",
+              "status": "completed"
+            },
+            {
+              "id": "3.2",
+              "title": "新增 worker/src/exec/sensitive-command.ts：substituteTemplate、scrubSecrets、runSensitiveCommand",
+              "status": "completed"
+            },
+            {
+              "id": "3.3",
+              "title": "实现异步 child_process.spawn + detached 进程组 SIGKILL，禁止 spawnSync 阻塞事件循环",
+              "status": "completed"
+            },
+            {
+              "id": "3.4",
+              "title": "实现 cwd 解析与 workDir 包含校验、绝对路径/.. 拒绝、timeoutSec 边界",
+              "status": "completed"
+            },
+            {
+              "id": "3.5",
+              "title": "实现 stdout/stderr/error message 精确值脱敏、残留占位符替换、每流 32KB 截断与 flags",
+              "status": "completed"
+            },
+            {
+              "id": "3.6",
+              "title": "补 sensitive-command.spec.ts：重叠 secret、正则元字符、多行、短 secret、残留、40KB 截断、cwd 拒绝、进程组消失",
+              "status": "completed"
+            },
+            {
+              "id": "3.7",
+              "title": "运行 worker 定向 Jest/typecheck 并提交",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f221df367ffdj3usE6jTL9no6E",
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.9,
+            "session_id": "ses_f2208bdc7ffeZHqYHLBZPGS2kX",
+            "commit": "c72d68f"
+          }
+        },
+        {
+          "id": "4",
+          "title": "Worker POST /secret-command token 保护路由",
+          "status": "completed",
+          "commit": "0ea57ad7af21f190dd5cae07149dd106cfc95a41",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-4-worker-route.txt",
+          "steps": [
+            {
+              "id": "4.1",
+              "title": "exec-server.ts 路由表增加 /secret-command 并实现 handleSecretCommand",
+              "status": "completed"
+            },
+            {
+              "id": "4.2",
+              "title": "实现 X-Worker-Token 鉴权与 405/401/413/400 错误分支，不记录 secret 请求体",
+              "status": "completed"
+            },
+            {
+              "id": "4.3",
+              "title": "实现 requestId 幂等规则：同归属返回既有结果，不同归属 409，不重复执行",
+              "status": "completed"
+            },
+            {
+              "id": "4.4",
+              "title": "响应只含脱敏输出/状态/flags，不含 secret、渲染命令或 argv",
+              "status": "completed"
+            },
+            {
+              "id": "4.5",
+              "title": "补 exec-server.spec.ts 真实 HTTP 端口测试并提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.85,
+            "session_id": "ses_f21dec322ffebVMNdfiQz6ElYf",
+            "commit": "0ea57ad7af21f190dd5cae07149dd106cfc95a41"
+          }
+        }
+      ]
+    },
+    {
+      "id": "wave-2",
+      "name": "Wave 2 - Delivery chain",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "5",
+          "title": "WorkerClient 增加 runSecretCommand 显式超时客户端",
+          "status": "completed",
+          "commit": "ed516bea353a8059219c54c3cd9752928d00610c",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-5-worker-client.txt",
+          "steps": [
+            {
+              "id": "5.1",
+              "title": "worker.client.ts 增加 runSecretCommand，显式 timeoutMs = commandTimeout + 5000，X-Worker-Token，非 2xx 归一异常",
+              "status": "completed"
+            },
+            {
+              "id": "5.2",
+              "title": "补 worker.client.spec.ts：2xx/500/超时、请求体不写日志",
+              "status": "completed"
+            },
+            {
+              "id": "5.3",
+              "title": "运行 server 定向 Jest 并提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f21b083baffekZbwpfZg7WC9Q4",
+            "commit": "ed516bea353a8059219c54c3cd9752928d00610c"
+          }
+        },
+        {
+          "id": "6",
+          "title": "MCP secret_command 工具与阻塞式处理器",
+          "status": "completed",
+          "commit": "4831c41e7ba13a2654fe4468dcc1a91448f0faf4",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-6-mcp-handler.txt",
+          "steps": [
+            {
+              "id": "6.1",
+              "title": "platform-mcp.tools.ts 增加 SECRET_COMMAND_SCHEMA 与工具注册",
+              "status": "completed"
+            },
+            {
+              "id": "6.2",
+              "title": "platform-mcp.service.ts 实现 secretCommand 校验/阻塞/createSecretForPlatform/单会话 409",
+              "status": "completed"
+            },
+            {
+              "id": "6.3",
+              "title": "等待期间每 60s keepAliveSession 重臂内存 watchdog 与 durable TriggerService deadline，settle clearInterval",
+              "status": "completed"
+            },
+            {
+              "id": "6.4",
+              "title": "客户端超时/断开时取消 pending question；injector.ts 注入 timeout >=900000 且 VTEAM_MCP_TIMEOUT_MS clamp",
+              "status": "completed"
+            },
+            {
+              "id": "6.5",
+              "title": "envelope 只含原始模板/脱敏输出/状态/exitCode/durationMs/flags，错误 message 脱敏，托管模式 fail-closed",
+              "status": "completed"
+            },
+            {
+              "id": "6.6",
+              "title": "补 platform-mcp.service.spec.ts 与 worker/src/resources spec，覆盖 happy/failed/cancelled/expired/409/keepalive/timeout override",
+              "status": "completed"
+            },
+            {
+              "id": "6.7",
+              "title": "运行 server + worker resources 定向 Jest 并提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f216e8228ffeCN5JkErDOqIeLO",
+            "commit": "4831c41e7ba13a2654fe4468dcc1a91448f0faf4"
+          }
+        },
+        {
+          "id": "10",
+          "title": "记录使用方式与安全边界",
+          "status": "completed",
+          "commit": "c61cc6411c9e60d5b0cac30713c9c8088c07a9ce",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-10-docs.txt",
+          "steps": [
+            {
+              "id": "10.1",
+              "title": "新增 docs/secret-command-tool.md，说明模型/用户/worker 职责与全角色权限默认",
+              "status": "completed"
+            },
+            {
+              "id": "10.2",
+              "title": "写明 best-effort 脱敏、无沙箱/网络策略/白名单、bash permission 不拦截、CLI 未 pin、孤儿进程残余风险",
+              "status": "completed"
+            },
+            {
+              "id": "10.3",
+              "title": "校验无真实 secret 示例并提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f2160d241ffer7LiEHFmxyJVTo",
+            "commit": "c61cc6411c9e60d5b0cac30713c9c8088c07a9ce"
+          }
+        }
+      ]
+    },
+    {
+      "id": "wave-3",
+      "name": "Wave 3 - UI and integration",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "7",
+          "title": "Web 敏感命令输入弹窗",
+          "status": "completed",
+          "commit": "7c9e30786afff77c70a93eaba3ae4db2f0b3b067",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-7-web-modal.txt",
+          "steps": [
+            {
+              "id": "7.1",
+              "title": "use-realtime.ts 扩展 RealtimeQuestionEvent kind/content 支持 secret_input",
+              "status": "completed"
+            },
+            {
+              "id": "7.2",
+              "title": "question-modal.tsx 增加只读命令模板、reason、password/text 变量字段、必填校验、取消/确认",
+              "status": "completed"
+            },
+            {
+              "id": "7.3",
+              "title": "session/page.tsx 提交 {secrets}|{secrets:null}，刷新补拉，过期关闭，多 pending 队列",
+              "status": "completed"
+            },
+            {
+              "id": "7.4",
+              "title": "补 Playwright/tsc 用例：密码字段类型、必填禁用、提交/取消 payload、关闭后 DOM 无值",
+              "status": "completed"
+            },
+            {
+              "id": "7.5",
+              "title": "运行 web tsc 与定向 Playwright 并提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f2138a449ffefvn5h4gZosDg26",
+            "commit": "7c9e30786afff77c70a93eaba3ae4db2f0b3b067"
+          }
+        },
+        {
+          "id": "8",
+          "title": "Web 工具卡等待填写状态",
+          "status": "completed",
+          "commit": "a8cedf4",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-8-tool-card.txt",
+          "steps": [
+            {
+              "id": "8.1",
+              "title": "定义 awaiting-input 派生：同 session pending secret_input + running secret_command tool part",
+              "status": "completed"
+            },
+            {
+              "id": "8.2",
+              "title": "msg-tool.tsx/msg-parts.tsx 增加第四状态与「等待填写敏感信息」文案/testid",
+              "status": "completed"
+            },
+            {
+              "id": "8.3",
+              "title": "补 __sseEmit 驱动的进入/清除断言，DOM 不含 sentinel，既有 testid 零消失",
+              "status": "completed"
+            },
+            {
+              "id": "8.4",
+              "title": "运行 web tsc 与 chat-density Playwright 并提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f20db881fffeHhW9m5Q8jF8ORr",
+            "commit": "a8cedf4"
+          }
+        },
+        {
+          "id": "9",
+          "title": "跨包不回显、取消与超时集成覆盖",
+          "status": "completed",
+          "commit": "16584d50960e95931b61f3f5c632022672ce1c79",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-9-integration.txt",
+          "steps": [
+            {
+              "id": "9.1",
+              "title": "建立 sentinel s3cr3t-A9f 全链路测试，grep server/worker 日志、SSE、answers、tool result、session store 0 命中",
+              "status": "completed"
+            },
+            {
+              "id": "9.2",
+              "title": "覆盖取消、输入过期、命令超时、重复提交、并发 409、cwd 越界",
+              "status": "completed"
+            },
+            {
+              "id": "9.3",
+              "title": "SILENT_SESSION_WAKE_MS 与测试 keepalive 10:1 缩放，正例无 wake/timeout；禁用 keepalive 反证必须红",
+              "status": "completed"
+            },
+            {
+              "id": "9.4",
+              "title": "覆盖 worker 首字等待 300s 活性判定不误杀 secret 等待会话",
+              "status": "completed"
+            },
+            {
+              "id": "9.5",
+              "title": "运行 server/worker npm test 与 session-unification Playwright 并提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.9,
+            "session_id": "ses_f208486b2ffecGOhWOgQnwKDNZ",
+            "commit": "16584d50960e95931b61f3f5c632022672ce1c79"
+          }
+        }
+      ]
+    },
+    {
+      "id": "final-wave",
+      "name": "Final verification wave",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "F1",
+          "title": "Plan compliance audit",
+          "status": "completed",
+          "evidence": ".omo/evidence/sensitive-command-tool/final-f1-plan-compliance.txt",
+          "steps": [
+            {
+              "id": "F1.1",
+              "title": "核对计划结构/todo 字段/提交范围/证据存在与无 secret 泄露",
+              "status": "completed"
+            }
+          ]
+        },
+        {
+          "id": "F2",
+          "title": "Code quality review",
+          "status": "completed",
+          "evidence": ".omo/evidence/sensitive-command-tool/final-f2-quality.txt",
+          "steps": [
+            {
+              "id": "F2.1",
+              "title": "独立复跑定向 Jest、worker typecheck、web tsc、bash scripts/gate.sh 并审查脱敏/错误路径",
+              "status": "completed"
+            }
+          ]
+        },
+        {
+          "id": "F3",
+          "title": "Real manual QA",
+          "status": "completed",
+          "evidence": ".omo/evidence/sensitive-command-tool/final-f3-manual.txt",
+          "steps": [
+            {
+              "id": "F3.1",
+              "title": "真实栈跑成功/失败/取消/超时并做 sentinel no-leak grep、console/进程清理检查",
+              "status": "completed"
+            }
+          ],
+          "executor_session": "ses_f205dcf68ffdfOG2VDMZdwvWx1"
+        },
+        {
+          "id": "F4",
+          "title": "Scope fidelity",
+          "status": "completed",
+          "evidence": ".omo/evidence/sensitive-command-tool/final-f4-scope.txt",
+          "steps": [
+            {
+              "id": "F4.1",
+              "title": "确认 Scope OUT 未触碰、无 secret/渲染命令入提交或日志、fresh/upgrade 授权一致",
+              "status": "completed"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "wave-4",
+      "name": "Wave 4 - F3 remediation",
+      "status": "completed",
+      "tasks": [
+        {
+          "id": "11",
+          "title": "修复 que requestId 重启续号",
+          "status": "completed",
+          "commit": "a30397e3f7129e2c8ac46089fb687f6d88d5c471",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-11-que-resync.txt",
+          "steps": [
+            {
+              "id": "11.1",
+              "title": "onModuleInit 从 que_platform_ request_id 最大值续号并 P2021 fail-open",
+              "status": "completed"
+            },
+            {
+              "id": "11.2",
+              "title": "更新 id-resync guard 豁免说明",
+              "status": "completed"
+            },
+            {
+              "id": "11.3",
+              "title": "RED-first 重启续号测试与提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f1f6565c2ffeAVfUHZHaARbS87",
+            "commit": "a30397e3f7129e2c8ac46089fb687f6d88d5c471"
+          }
+        },
+        {
+          "id": "12",
+          "title": "修复 agent.question 团队域投递",
+          "status": "completed",
+          "commit": "1b3152103b38ccbd15d69ecb475eb32a2a8cfc95",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-12-team-scope.txt",
+          "steps": [
+            {
+              "id": "12.1",
+              "title": "server create emit 增加 teamId",
+              "status": "completed"
+            },
+            {
+              "id": "12.2",
+              "title": "web matchesScope 团队兜底读取 payload.teamId",
+              "status": "completed"
+            },
+            {
+              "id": "12.3",
+              "title": "生产形状 scope 测试与提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f1f4dca30ffeoJeRyFAHb2MV7I",
+            "commit": "1b3152103b38ccbd15d69ecb475eb32a2a8cfc95"
+          }
+        },
+        {
+          "id": "13",
+          "title": "修复 MCP 阻塞调用约240s abort",
+          "status": "completed",
+          "commit": "0987980f0b0e3e10cece4aa87d88ebdb8d878db0",
+          "evidence": ".omo/evidence/sensitive-command-tool/task-13-mcp-heartbeat.txt",
+          "steps": [
+            {
+              "id": "13.1",
+              "title": ">600s 判定探针区分 idle-cap/age-cap",
+              "status": "completed"
+            },
+            {
+              "id": "13.2",
+              "title": "idle-cap 时实现阻塞 tools/call 心跳；age-cap 时返回计划决策",
+              "status": "completed"
+            },
+            {
+              "id": "13.3",
+              "title": "controller spec 与提交",
+              "status": "completed"
+            }
+          ],
+          "verification": {
+            "verdict": "confirmed",
+            "confidence": 0.95,
+            "session_id": "ses_f1f3202b1ffeuoj6WinhofxKif",
+            "commit": "0987980f0b0e3e10cece4aa87d88ebdb8d878db0"
+          }
+        }
+      ]
+    }
+  ]
+}

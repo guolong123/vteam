@@ -1,0 +1,2 @@
+sentinel_hits=0
+url=http://localhost:3001/teams/tm_0000000001/session

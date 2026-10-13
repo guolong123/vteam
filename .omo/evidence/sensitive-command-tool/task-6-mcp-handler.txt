@@ -1,0 +1,319 @@
+==========================================================================
+task-6  MCP secret_command 阻塞式敏感命令工具  —— evidence
+plan: .omo/plans/sensitive-command-tool.md (todo 6)
+date: 2026-09-26T16:31:29Z  host: guolong-macdeMac-mini.local
+sentinel: s3cr3t-A9f (fake, test-only)
+HEAD(before commit): ed516be
+==========================================================================
+
+### Changed files (product/test only, 12)
+ server/src/chat/worker-dispatcher.spec.ts          | 122 +++++
+ server/src/chat/worker-dispatcher.ts               |  33 ++
+ server/src/platform-mcp/platform-mcp.constants.ts  |  32 ++
+ .../platform-mcp/platform-mcp.controller.spec.ts   |  57 ++-
+ server/src/platform-mcp/platform-mcp.controller.ts |  24 +-
+ .../src/platform-mcp/platform-mcp.service.spec.ts  | 436 ++++++++++++++++-
+ server/src/platform-mcp/platform-mcp.service.ts    | 534 ++++++++++++++++++++-
+ .../platform-mcp/platform-mcp.tool-naming.spec.ts  |   5 +
+ .../platform-mcp.tool-permission.spec.ts           |   4 +-
+ server/src/platform-mcp/platform-mcp.tools.ts      |  93 +++-
+ worker/src/resources/injector.spec.ts              | 122 +++++
+ worker/src/resources/injector.ts                   |  34 +-
+ 12 files changed, 1482 insertions(+), 14 deletions(-)
+
+### 行为覆盖（对应 todo 6 验收）
+- SECRET_COMMAND_SCHEMA + 注册：tools/list 32 工具（tool-naming 已知红清除，31→32）
+- 语义校验 400：占位符↔variables 双向一致 / 变量名唯一 / cwd 相对且无.. / timeoutSec 1..300 缺省 60
+- 归属 403 / 托管 fail-closed 403(创建前) / worker 行缺失 503 / 会话缺失 403
+- 单会话 in-flight 409（处理器自持 Set，不依赖非原子的 pending 查询）
+- 输入预算 540s → input_timeout + 取消 pending question；keepalive 60s 覆盖等待+执行两段，settle 即 clearInterval
+- keepAliveSession(sessionId)：内存静默窗口滑动重臂 + durable TriggerService 行（新 dedupKey 落库 + 旧行取消）+ DB 活动列
+- 客户端断开（handler 第三参 AbortSignal，controller 由 res 'close' 未写响应派生）→ 取消 pending 问题，迟到提交不执行
+- secrets:null → cancelled 且 worker 零调用
+- runSecretCommand 显式 timeoutMs = 命令超时 + 5000（不落回默认 60s）
+- worker 400/409 仅经 WorkerUnavailableException.httpStatus 区分 → 400/409，其余 503；异常 message 精确值脱敏
+- envelope 只含：原始模板/变量元数据+provided/status/exitCode/signal/timedOut/durationMs/脱敏截断 stdout/stderr+截断标记；无 cwd、无渲染命令、无 argv、无 secret
+- worker 回包含明文时服务端二次精确脱敏 + 32KB 兜底截断
+- injector：vteam 远端条目硬编码 timeout>=900000，VTEAM_MCP_TIMEOUT_MS clamp 到下限；无 DB 迁移、mcp_servers 无 timeout 列
+
+-----------------[ RED: failing-first before production edits ]-----------------
+
+### R1 已知红：tool-naming 注册名集合缺 secret_command（本次改动前先跑）
+$ cd server && npx jest src/platform-mcp/platform-mcp.tool-naming.spec.ts --runInBand
+--- exit=1 ---
+  ● platform-mcp tool naming contract › 注册名 == 矩阵裸名 == VTEAM_MCP_TOOL_NAMES 去前缀（全裸名、一一对应）
+    expect(received).toEqual(expected) // deep equality
+    - Expected  - 1
+    + Received  + 0
+    @@ -19,11 +19,10 @@
+        "question_confirm",
+        "read_file",
+    -   "secret_command",
+        "skill_create",
+    Tests: 1 failed, 1 total (其余 3 passed)
+
+### R2 handler 面：service spec 先写（生产代码尚无 secretCommand / 错误码）
+$ cd server && npx jest src/platform-mcp/platform-mcp.service.spec.ts --runInBand
+--- exit=1（原始日志 /tmp/red-svc.log，节选）---
+FAIL src/platform-mcp/platform-mcp.service.spec.ts
+  ● Test suite failed to run
+
+    src/platform-mcp/platform-mcp.service.spec.ts:7401:19 - error TS2339: Property 'secretCommand' does not exist on type 'PlatformMcpService'.
+
+    7401           service.secretCommand(ctx, secretArgs(overrides)),
+                           ~~~~~~~~~~~~~
+    src/platform-mcp/platform-mcp.service.spec.ts:7403:31 - error TS2339: Property 'SECRET_COMMAND_INVALID' does not exist on type '{ readonly MISSING_WORKER_ID: "PLATFORM_MCP_MISSING_WORKER_ID"; readonly FORBIDDEN: "PLATFORM_MCP_FORBIDDEN"; readonly TASK_NOT_FOUND: "PLATFORM_MCP_TASK_NOT_FOUND"; readonly CHANNEL_NOT_FOUND: "PLATFORM_MCP_CHANNEL_NOT_FOUND"; ... 11 more ...; readonly PLAN_STEP_NOT_FOUND: "PLATFORM_MCP_PLAN_STEP_NOT_FOUND"; }'.
+
+    7403           PLATFORM_MCP_ERRORS.SECRET_COMMAND_INVALID,
+                                       ~~~~~~~~~~~~~~~~~~~~~~
+    src/platform-mcp/platform-mcp.service.spec.ts:7413:17 - error TS2339: Property 'secretCommand' does not exist on type 'PlatformMcpService'.
+
+    7413         service.secretCommand(ctx, secretArgs()),
+                         ~~~~~~~~~~~~~
+    src/platform-mcp/platform-mcp.service.spec.ts:7424:17 - error TS2339: Property 'secretCommand' does not exist on type 'PlatformMcpService'.
+
+    7424         service.secretCommand(ctx, secretArgs()),
+                         ~~~~~~~~~~~~~
+    src/platform-mcp/platform-mcp.service.spec.ts:7426:29 - error TS2339: Property 'SECRET_COMMAND_MANAGED_FORBIDDEN' does not exist on type '{ readonly MISSING_WORKER_ID: "PLATFORM_MCP_MISSING_WORKER_ID"; readonly FORBIDDEN: "PLATFORM_MCP_FORBIDDEN"; readonly TASK_NOT_FOUND: "PLATFORM_MCP_TASK_NOT_FOUND"; readonly CHANNEL_NOT_FOUND: "PLATFORM_MCP_CHANNEL_NOT_FOUND"; ... 11 more ...; readonly PLAN_STEP_NOT_FOUND: "PLATFORM_MCP_PLAN_STEP_NOT_FOUND"; }'.
+
+    7426         PLATFORM_MCP_ERRORS.SECRET_COMMAND_MANAGED_FORBIDDEN,
+
+### R3 保活面：keepAliveSession 尚不存在
+$ cd server && npx jest src/chat/worker-dispatcher.spec.ts --runInBand -t keepAliveSession
+--- exit=1（原始日志 /tmp/red-ka.log，节选）---
+FAIL src/chat/worker-dispatcher.spec.ts
+  ● Test suite failed to run
+
+    src/chat/worker-dispatcher.spec.ts:4728:15 - error TS2339: Property 'keepAliveSession' does not exist on type 'WorkerDispatcher'.
+
+    4728       await d.keepAliveSession('s_0000000001');
+                       ~~~~~~~~~~~~~~~~
+    src/chat/worker-dispatcher.spec.ts:4750:15 - error TS2339: Property 'keepAliveSession' does not exist on type 'WorkerDispatcher'.
+
+    4750       await d.keepAliveSession('s_0000000001');
+                       ~~~~~~~~~~~~~~~~
+    src/chat/worker-dispatcher.spec.ts:4774:11 - error TS2339: Property 'keepAliveSession' does not exist on type 'WorkerDispatcher'.
+
+    4774         d.keepAliveSession('s_0000000001'),
+
+### R4 worker 注入面：vteam 条目无 timeout 下限
+$ cd worker && npx jest src/resources/injector.spec.ts --runInBand
+--- exit=1（原始日志 /tmp/red-injector.log，节选）---
+      ✕ 缺省注入 timeout >= 900000（覆盖 855s 最坏总预算，不依赖 OpenCode 默认值） (1 ms)
+      ✕ 服务端已给 timeout 时仍 clamp 到下限（服务端 30000 → 900000） (1 ms)
+      ✕ VTEAM_MCP_TIMEOUT_MS 覆盖且 clamp：1200000 原样生效、1000 抬到 900000、垃圾值回落缺省 900000 (2 ms)
+    Expected: >= 900000
+Tests:       3 failed, 37 passed, 40 total
+
+-----------------[ GREEN: required verification commands (final, after harness removal) ]-----------------
+
+$ cd server && npx jest src/platform-mcp/platform-mcp.service.spec.ts src/platform-mcp/platform-mcp.tool-naming.spec.ts src/chat/worker-dispatcher.spec.ts --runInBand
+--- exit=0 ---
+Test Suites: 3 passed, 3 total
+Tests:       566 passed, 566 total
+Snapshots:   0 total
+
+$ cd worker && npx jest src/resources --runInBand
+--- exit=0 ---
+Test Suites: 5 passed, 5 total
+Tests:       64 passed, 64 total
+Snapshots:   0 total
+
+$ cd server && npm run lint:check      # 未运行 npm run lint / --fix
+--- exit=0 ---
+✖ 66 problems (0 errors, 66 warnings)
+
+$ cd worker && npm run typecheck
+--- exit=0 ---
+> worker@0.0.1 typecheck
+> tsc --noEmit
+
+
+### 补充回归（计划契约门 + 全量，非本 todo 门槛但用于证明零回归）
+$ cd server && npx jest src/common/constants src/prisma src/questions src/platform-mcp src/workers src/chat/worker-dispatcher.spec.ts --runInBand
+--- exit=0 ---
+Test Suites: 42 passed, 42 total
+Tests:       1302 passed, 1302 total
+$ cd server && npm test
+--- exit=0 ---
+Test Suites: 156 passed, 156 total
+Tests:       3579 passed, 3579 total
+
+-----------------[ MANUAL QA: 同步钩子注入跑通全链路 ]-----------------
+harness: .omo/evidence/sensitive-command-tool/task-6-manual-qa.spec.ts（运行期 cp 到 server/src/platform-mcp/，跑完即删，不留 untracked 产品文件）
+$ cd server && npx jest src/platform-mcp/task-6-manual-qa.spec.ts --runInBand
+--- exit=0（原始输出，去掉 stack 行与 ANSI）---
+    --- 1 happy provided -> succeeded ---
+    STATUS=succeeded
+    WORKER_CALLS=1
+    REPLY_CALLS=0
+    KEEPALIVE_CALLS=0
+    ENVELOPE_JSON={"command":"curl -s -H \"Authorization: Bearer {{TOKEN}}\" https://example.internal/deploy","variables":[{"name":"TOKEN","label":"部署 Token","secret":true,"required":true,"provided":true}],"status":"succeeded","exitCode":0,"signal":null,"timedOut":false,"durationMs":17,"stdout":"deployed\n","stderr":"","stdoutTruncated":false,"stderrTruncated":false}
+    ENVELOPE_SENTINEL_HITS=0
+    WORKER_TIMEOUT_MS=65000
+    WORKER_RECEIVED_SECRET_VALUE=true
+    WORKER_TEMPLATE_UNRENDERED=true
+    CWD_IN_ENVELOPE=false
+    --- 2 worker exit 2 -> failed ---
+    STATUS=failed
+    WORKER_CALLS=1
+    REPLY_CALLS=0
+    KEEPALIVE_CALLS=0
+    ENVELOPE_JSON={"command":"curl -s -H \"Authorization: Bearer {{TOKEN}}\" https://example.internal/deploy","variables":[{"name":"TOKEN","label":"部署 Token","secret":true,"required":true,"provided":true}],"status":"failed","exitCode":2,"signal":null,"timedOut":false,"durationMs":17,"stdout":"deployed\n","stderr":"boom\n","stdoutTruncated":false,"stderrTruncated":false}
+    ENVELOPE_SENTINEL_HITS=0
+    --- 3 secrets:null -> cancelled (worker not called) ---
+    STATUS=cancelled
+    WORKER_CALLS=0
+    REPLY_CALLS=0
+    KEEPALIVE_CALLS=0
+    ENVELOPE_JSON={"command":"curl -s -H \"Authorization: Bearer {{TOKEN}}\" https://example.internal/deploy","variables":[{"name":"TOKEN","label":"部署 Token","secret":true,"required":true,"provided":false}],"status":"cancelled","exitCode":null,"signal":null,"timedOut":false,"durationMs":0,"stdout":"","stderr":"","stdoutTruncated":false,"stderrTruncated":false}
+    ENVELOPE_SENTINEL_HITS=0
+    --- 4 concurrent second call -> 409 ---
+    STATUS=cancelled
+    WORKER_CALLS=0
+    REPLY_CALLS=0
+    KEEPALIVE_CALLS=0
+    ENVELOPE_JSON={"command":"curl -s -H \"Authorization: Bearer {{TOKEN}}\" https://example.internal/deploy","variables":[{"name":"TOKEN","label":"部署 Token","secret":true,"required":true,"provided":false}],"status":"cancelled","exitCode":null,"signal":null,"timedOut":false,"durationMs":0,"stdout":"","stderr":"","stdoutTruncated":false,"stderrTruncated":false}
+    ENVELOPE_SENTINEL_HITS=0
+    SECOND_CALL_RESULT=PLATFORM_MCP_SECRET_COMMAND_CONFLICT
+    --- 5 client abort -> cancelled pending question, no execution ---
+    STATUS=cancelled
+    WORKER_CALLS=0
+    REPLY_CALLS=1
+    KEEPALIVE_CALLS=0
+    ENVELOPE_JSON={"command":"curl -s -H \"Authorization: Bearer {{TOKEN}}\" https://example.internal/deploy","variables":[{"name":"TOKEN","label":"部署 Token","secret":true,"required":true,"provided":false}],"status":"cancelled","exitCode":null,"signal":null,"timedOut":false,"durationMs":0,"stdout":"","stderr":"","stdoutTruncated":false,"stderrTruncated":false}
+    ENVELOPE_SENTINEL_HITS=0
+    CANCEL_REPLY_PAYLOAD={"secrets":null}
+    LATE_SUBMIT_EXECUTED=false
+    --- 6 input expiry 540s -> input_timeout ---
+    STATUS=input_timeout
+    WORKER_CALLS=0
+    REPLY_CALLS=1
+    KEEPALIVE_CALLS=9
+    ENVELOPE_JSON={"command":"curl -s -H \"Authorization: Bearer {{TOKEN}}\" https://example.internal/deploy","variables":[{"name":"TOKEN","label":"部署 Token","secret":true,"required":true,"provided":false}],"status":"input_timeout","exitCode":null,"signal":null,"timedOut":false,"durationMs":0,"stdout":"","stderr":"","stdoutTruncated":false,"stderrTruncated":false}
+    ENVELOPE_SENTINEL_HITS=0
+    KEEPALIVE_BEFORE_EXPIRY=8
+    KEEPALIVE_INTERVAL_MS=60000
+    INPUT_BUDGET_MS=540000
+    SENTINEL_SCAN_ALL_ENVELOPES=0
+PASS src/platform-mcp/task-6-manual-qa.spec.ts
+  TASK6_MANUAL_QA secret_command 阻塞式处理器全链路
+    ✓ 1. happy：同步钩子提供 secret → succeeded，envelope 无明文 secret/无渲染命令 (12 ms)
+    ✓ 2. worker 非零退出 → failed
+    ✓ 3. secrets:null → cancelled，且 worker 零调用 (1 ms)
+    ✓ 4. 同会话并发第二次 → 409 SECRET_COMMAND_CONFLICT (7 ms)
+    ✓ 5. 客户端断开（AbortSignal）→ 取消 pending 问题、worker 零调用 (3 ms)
+    ✓ 6. 输入超预算 540s → input_timeout + 取消 pending 问题（keepalive 每 60s） (1 ms)
+Test Suites: 1 passed, 1 total
+Tests:       6 passed, 6 total
+Snapshots:   0 total
+Time:        3.045 s
+Ran all test suites matching /src\/platform-mcp\/task-6-manual-qa.spec.ts/i.
+
+### SENTINEL 扫描（对上面整段原始输出做精确值 grep）
+$ grep -c "s3cr3t-A9f" <manual QA 原始输出>  → 0
+（6 个场景的 ENVELOPE_JSON 行各自 ENVELOPE_SENTINEL_HITS=0；上面每行即断言结果）
+
+-----------------[ ADVERSARIAL PROBES ]-----------------
+
+1) stale_state（客户端超时不留幽灵执行 / 重启与过期）
+   - 断开探测：controller 由 res 'close' + !writableEnded 派生 AbortSignal（controller.spec 新增用例断言 close → signal.aborted=true）。
+   - 断开后取消：service.spec「MCP 客户端断开（ctx.signal abort）→ 取消 pending question，不执行命令；迟到提交亦不执行」
+     → questionsService.reply(aq_1,{secrets:null}) 被调用，runSecretCommand 0 次；QA 场景5 LATE_SUBMIT_EXECUTED=false。
+   - 「已收值→下发执行之间断开」再复核一次 signal.aborted，仍不下发（service.secretCommand 内 signal 二次检查）。
+   - 进程重启：process 内 secretResolvers/in-flight Set 一并丢失 → 无 handler 可执行；遗留 pending 行由 questions 侧 TTL 过期收敛（无 hook 即无执行）。
+   - 输入超期：service.spec「输入超预算 540s → input_timeout + 取消 pending question」→ QA 场景6 STATUS=input_timeout、REPLY_CALLS=1、WORKER_CALLS=0。
+
+2) hung / 长命令（540s 预算与 keepalive）
+   - service.spec「等待与执行期间 keepalive 至少每 60s 一次（长执行）并在 settle 后 clearInterval」：执行挂起期 180s 内 3 次 keepalive，settle 后计数不再增长。
+   - worker-dispatcher.spec「keepAliveSession」4 例：窗口重臂（600s 重新起算）、durable 行新 dedupKey+旧行 cancel、无 pending 不落 durable、空 sessionId 不碰 DB。
+   - 命令侧超时归 worker（进程组 SIGKILL），服务端请求超时 = timeoutMs + 5000，超出由 WorkerUnavailableException 503 收敛。
+
+3) malformed_input（全部 400 SECRET_COMMAND_INVALID，且不创建 question 不调 worker）
+   - 未声明占位符 {{B}}、变量重名、声明变量未出现在模板、cwd=/etc、cwd=a/../../etc、timeoutSec=301、timeoutSec=0、command=''（service.spec 参数校验用例，8 个 case）。
+   - 结构层（zod）另拦：变量名正则、timeoutSec 1..300、command 1..4000 → tools/call 返回 -32602。
+
+4) dirty_worktree（保护既有脏文件）
+   - 改动前 git status 记录：.omo/boulder.json、.omo/evidence/**、.omo/ulw-execute/ledger.jsonl、.opencode/opencode.json 已脏，全部未 staged、未提交。
+   - 本 todo 只 stage 12 个产品/测试文件（见下 git diff --cached --name-only）。
+
+5) misleading_success_output（断言序列化 envelope，不数调用次数）
+   - 每个场景打印 ENVELOPE_JSON 原文并断言 ENVELOPE_SENTINEL_HITS=0；CWD_IN_ENVELOPE=false；WORKER_TEMPLATE_UNRENDERED=true。
+   - service.spec「worker 回包含明文 secret（未脱敏兜底）→ envelope 二次精确脱敏」：stdout 'echoed s3cr3t-A9f' → 'echoed ***'。
+   - 全段 manual QA 原始输出 grep -c s3cr3t-A9f = 0。
+
+6) cleanup（每条路径 clearInterval）
+   - keepAliveTimer 在 secretCommand 的 finally 中清理（正常/取消/超时/断开/校验后异常/worker 抛错全覆盖）；
+     输入计时器与 abort 监听在 awaitSecretInput 的 finally 中清理（含 createSecretForPlatform 抛错路径）。
+   - 断言：settle 后推进 5 个 60s keepAliveSession 计数不再增长（input_timeout 与长执行两个用例各断言一次）。
+
+7) secrets（sentinel 0 命中）
+   - 6 个 envelope 原文 0 命中；manual QA 全量输出 0 命中；日志行只含 taskId/session/状态/计数，不含模板、cwd、值。
+   - 异常 message：toSecretCommandError 对外来错误文本先按明文值精确替换（service.spec 断言 400 错误 message 不含 sentinel）。
+
+8) prompt injection —— not applicable
+   - handler 不把模型文本渲染进任何提示词/模板/日志：command 原样透传 worker，日志只记 id/状态/计数；title/reason 不写日志不进 envelope。
+   - 因此无“模型文本被二次渲染给另一个模型”的注入面；若后续给 title/reason 加展示位，需重新评估。
+
+-----------------[ 单元测试索引（同一批断言） ]-----------------
+platform-mcp.service.spec.ts › secret_command（阻塞式敏感命令）：
+  - '模板/变量/cwd/timeout 非法 → 400 SECRET_COMMAND_INVALID（不创建 question 不调 worker）', async () => {
+  - '归属校验缺失 → 403 PLATFORM_MCP_FORBIDDEN（与其余工具同门）', async () => {
+  - '托管模式 fail-closed：创建 question 之前 403（创建调用 0 次、worker 0 次）', async () => {
+  - 'happy：同步钩子给 secret → 调 worker（timeoutMs=60s+5s）→ succeeded，envelope 无明文无渲染命令', async () => {
+  - 'worker 非零退出 → failed；超时 → timeout+timedOut', async () => {
+  - 'worker 回包含明文 secret（未脱敏兜底）→ envelope 二次精确脱敏，序列化 0 命中', async () => {
+  - 'hook 返回 secrets:null → cancelled，且绝不调 worker', async () => {
+  - '同会话并发第二次调用 → 409 SECRET_COMMAND_CONFLICT（handler 自持单 in-flight 门）', async () => {
+  - 'MCP 客户端断开（ctx.signal abort）→ 取消 pending question，不执行命令；迟到提交亦不执行', async () => {
+  - '输入超预算 540s → input_timeout + 取消 pending question；keepalive 每 60s 至少一次，settle 后停止', async () => {
+  - '等待与执行期间 keepalive 至少每 60s 一次（长执行）并在 settle 后 clearInterval', async () => {
+  - 'worker 400/409/5xx 只经 httpStatus 区分，异常 message 一律无 secret', async () => {
+worker-dispatcher.spec.ts › keepAliveSession（secret_command 阻塞等待期保活）：
+  - '内存静默窗口重臂：调用时刻起窗口重新计满 600s（阻塞等待不会被静默判死）', async () => {
+  - '同步重臂 durable TriggerService deadline：落新 dedupKey 行并取消旧行', async () => {
+  - '会话已终态（无 pending）→ 不落 durable 行、不抛错，仅刷新 DB 活动列', async () => {
+  - '空 sessionId（防御）→ 直接返回，不触碰 DB', async () => {
+worker/src/resources/injector.spec.ts › vteam 远端条目显式 timeout 下限：
+  - '缺省注入 timeout >= 900000（覆盖 855s 最坏总预算，不依赖 OpenCode 默认值）', async () => {
+  - '服务端已给 timeout 时仍 clamp 到下限（服务端 30000 → 900000）', async () => {
+  - 'VTEAM_MCP_TIMEOUT_MS 覆盖且 clamp：1200000 原样生效、1000 抬到 900000、垃圾值回落缺省 900000', async () => {
+  - '非 vteam 远端条目不受下限影响（服务端 timeout 原样 / 缺省不写）', async () => {
+
+-----------------[ CLEANUP ]-----------------
+- 临时 harness 已移出产品目录：server/src/platform-mcp/task-6-manual-qa.spec.ts → .omo/evidence/sensitive-command-tool/task-6-manual-qa.spec.ts（git status 中 server/src、worker/src 无 untracked）。
+- 未运行 npm run lint / --fix / prettier --write（仅 lint:check 只读）。
+- 未新增依赖、未新增 DB 表列/迁移（mcp_servers 仍无 timeout 列）、未新增 SSE 事件、未改 questions/worker-route/worker-client 既有契约（只新增 keepAliveSession、AbortSignal 第三参与 4 个错误码）。
+- 未触碰既有脏文件：.omo/boulder.json、.omo/evidence/**（除本 todo 新增证据）、.omo/ulw-execute/ledger.jsonl、.opencode/opencode.json 全部保持未 staged。
+- 进程/定时器：所有 setInterval/setTimeout 均在 finally 清理并 unref；QA 跑完无残留 fake timers（finally 内 useRealTimers）。
+
+-----------------[ RISKS / 残余面 ]-----------------
+1) 断开与执行的竞态：signal.aborted 在下发前复核，但「复核通过 → fetch 发出」之间若恰好断开，本次已发出的命令仍会跑完（worker /secret-command 无取消端点，契约已确认不可改）；窗口为毫秒级，且命令自身受 timeoutSec 上限约束。不能声称“断开必可终止在途命令”，只能声称“断开后不再启动新执行”。
+2) 单进程门：in-flight Set 是进程内状态；多实例部署下同会话跨实例并发未做分布式互斥（当前 server 为单实例）。
+3) keepalive 依赖会话仍在 pending 监控中；若会话被前序静默判败（failedSessions），keepAliveSession 只刷新活动列不复活 watchdog——此为既有语义，避免复活已判死会话。
+4) 服务端二次脱敏是精确值替换：变形/编码后的外传无法阻止（计划已声明 best-effort，非安全边界）。
+5) timeoutSec 传入 worker 时按「命令超时 + 5000」下发（任务要求），worker 侧命令实际窗口比用户请求多 5s；换取请求超时恒晚于命令结束，避免被客户端默认超时掐断。
+6) 服务重启期间遗留 pending secret_input question：hook 随进程丢失，用户提交后只落 {provided,...} 不执行，由 TTL 过期收敛（无幽灵执行，但用户侧会看到“提交后无反应”）。
+7) envelope.signal 恒 null：worker 响应契约不回传信号，超时用 timedOut=true 表达（未编造 SIGKILL 值）。
+
+-----------------[ COMMIT ]-----------------
+$ git add <12 product/test files> && git diff --cached --name-only   # 恰好 12 项，无 .omo/.opencode/evidence/plan
+$ git commit -m 'feat(mcp): 实现 secret_command 阻塞式敏感命令工具'
+commit: 4831c41e7ba13a2654fe4468dcc1a91448f0faf4  (short 4831c41)
+4831c41e7ba13a2654fe4468dcc1a91448f0faf4
+guolong Sun Sep 27 00:33:05 2026 +0800
+feat(mcp): 实现 secret_command 阻塞式敏感命令工具
+
+ server/src/chat/worker-dispatcher.spec.ts          | 122 +++++
+ server/src/chat/worker-dispatcher.ts               |  33 ++
+ server/src/platform-mcp/platform-mcp.constants.ts  |  32 ++
+ .../platform-mcp/platform-mcp.controller.spec.ts   |  57 ++-
+ server/src/platform-mcp/platform-mcp.controller.ts |  24 +-
+ .../src/platform-mcp/platform-mcp.service.spec.ts  | 436 ++++++++++++++++-
+ server/src/platform-mcp/platform-mcp.service.ts    | 534 ++++++++++++++++++++-
+ .../platform-mcp/platform-mcp.tool-naming.spec.ts  |   5 +
+ .../platform-mcp.tool-permission.spec.ts           |   4 +-
+ server/src/platform-mcp/platform-mcp.tools.ts      |  93 +++-
+ worker/src/resources/injector.spec.ts              | 122 +++++
+ worker/src/resources/injector.ts                   |  34 +-
+ 12 files changed, 1482 insertions(+), 14 deletions(-)

@@ -1,0 +1,285 @@
+================================================================================
+F4 — FINAL SCOPE FIDELITY AUDIT (sensitive-command-tool)
+================================================================================
+Plan          : .omo/plans/sensitive-command-tool.md
+Evidence path : .omo/evidence/sensitive-command-tool/final-f4-scope.txt
+Verifier      : F4 subagent (read-only lane; no product/code edits, no lint/build
+                mutation, no git checkout/reset/stash, no F1/F2/F3 work executed)
+Date          : 2026-09-27 (CST)
+Final HEAD    : 0987980f0b0e3e10cece4aa87d88ebdb8d878db0
+Baseline      : b27f4c7 (parent of first implementation commit c72d68f)
+Audit range   : git diff b27f4c7..0987980  (55 files, +7364 / -188, linear, no merges)
+SUPERSEDES    : previous final-f4-scope.txt (2026-09-27 05:33) which referenced the
+                retired sha 0c683d8 and only 11 commits — STALE, overwritten here.
+
+Implementation commits audited (14/14 verified reachable from 0987980):
+  oldest -> newest (actual topology, `git log --reverse b27f4c7..0987980`):
+  c72d68f feat(worker): 敏感命令执行、脱敏与进程组超时                (todo 3)
+  353af23 feat(questions): 不回显的 secret_input 生命周期             (todo 2)
+  8a87765 feat(mcp): 注册 secret_command 并全角色开放                 (todo 1)
+  ee3dc6c fix(questions): 脱敏 secret_input 钩子错误日志              (todo 2 fix)
+  0ea57ad feat(worker): token 保护的 /secret-command 路由             (todo 4)
+  ed516be feat(server): secret-command worker 客户端                  (todo 5)
+  4831c41 feat(mcp): secret_command 阻塞式敏感命令工具                (todo 6)
+  c61cc64 docs(secret-command): 使用方式与安全边界                    (todo 10)
+  7c9e307 feat(web): 敏感命令输入弹窗                                 (todo 7)
+  a8cedf4 feat(web): 工具卡 awaiting-input 状态                       (todo 8)
+  16584d5 test(secret-command): 不回显、取消与超时集成覆盖            (todo 9)
+  a30397e fix(questions): request_id 续号 (REMEDIATION 11)
+  1b31521 fix(team-scope): agent.question 团队域投递 (REMEDIATION 12)
+  0987980 fix(mcp): 阻塞工具调用心跳               (REMEDIATION 13)
+  NOTE (D1): the commit *order* in the audit request differs from actual
+  topology for 3 pairs (8a87765/353af23, ee3dc6c/c72d68f, c61cc64/7c9e307).
+  The *set* is identical (14/14, all ancestors of 0987980); ordering has no
+  bearing on scope verdict.
+
+================================================================================
+1. SCOPE OUT LINE-ITEM TABLE (plan §Must NOT have, 12 guardrails)
+================================================================================
+# | Scope OUT item                                            | Verdict | Evidence / how verified
+--+------------------------------------------------------------+---------+------------------------
+1 | No sandbox / container / namespace isolation / seccomp /   | NOT     | `git diff b27f4c7..0987980` keyword scan: sandbox|seccomp|
+  | ulimit / read-only filesystem                              | TOUCHED | namespace|ulimit hits are ONLY in docs/secret-command-tool.md
+  |                                                            |         | §五.2 which *documents the absence* ("无沙箱…没有容器 /
+  |                                                            |         | namespace / seccomp / ulimit / 只读文件系统隔离"). Zero code
+  |                                                            |         | implementing any isolation mechanism in any of the 14 commits.
+  |                                                            |         | worker/src/exec/sensitive-command.ts:323 spawn() runs
+  |                                                            |         | `sh -c rendered` with no isolation — MVP-accepted, unchanged.
+2 | No network egress policy / DNS restriction / proxy          | NOT     | Keyword scan (egress|firewall|iptables|DNS|proxy): only
+  | requirement                                                | TOUCHED | docs §五.3 documenting absence. No net-filter code added in
+  |                                                            |         | server/, worker/, web/.
+3 | No command allowlist / denylist                            | NOT     | No command filter/deny logic added anywhere. Only PRE-EXISTING
+  |                                                            | TOUCHED | role→tool allowlist (EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST,
+  |                                                            |         | ROLE_BOUNDARIES[*].toolAllows) grew 8→9 by `vteam_secret_command`
+  |                                                            |         | — that is Must-have #2 (all roles open), NOT a command filter.
+  |                                                            |         | worker executes arbitrary shell; docs §五.4 states it.
+4 | No secret vault / no credential persistence, rotation or    | NOT     | values live only in the request body + JS stack:
+  | cross-call reuse                                           | TOUCHED | questions.service resolveSecretQuestion() persists answers =
+  |                                                            |         | {provided, filled, actorType, actorId} (variable NAMES only),
+  |                                                            |         | forwards `secrets` in-process to the registered hook, then
+  |                                                            |         | secretResolvers.delete(requestId) in finally (no reuse).
+  |                                                            |         | Grep for vault|keyring|encrypt|rotation in range diff => only
+  |                                                            |         | docs lines stating none exist. Every call mints a new
+  |                                                            |         | requestId `secmd_<uuid>` (platform-mcp.service).
+5 | No new DB table/column/migration to store secrets; no       | NOT     | Only migration added in range:
+  | `mcp_servers`.timeout column                               | TOUCHED | server/prisma/migrations/20260926000000_secret_command_capability/
+  |                                                            |         | migration.sql = a single UPDATE agent_roles SET capabilities =
+  |                                                            |         | JSON_SET(...,'$."secret.command"',true) WHERE key missing.
+  |                                                            |         | No CREATE TABLE / ALTER TABLE / ADD COLUMN anywhere in range
+  |                                                            |         | (`git diff | grep -E "^\+.*(CREATE TABLE|ALTER TABLE|ADD COLUMN)"`
+  |                                                            |         | => empty). `git diff -- '*.prisma'` => EMPTY (schema untouched).
+  |                                                            |         | mcp_servers timeout: only a doc/comment hit; injector.ts
+  |                                                            |         | hardcodes VTEAM_MCP_TIMEOUT_FLOOR_MS=900_000 + env override
+  |                                                            |         | (in-memory), no column (Must-have #8 satisfied).
+6 | No new SSE event type; reuse `agent.question`               | NOT     | server/src/common/constants/event.constants.ts is NOT in the
+  |                                                            | TOUCHED | changed-file list. All new emits use EVENT_TYPES.AGENT_QUESTION
+  |                                                            |         | (questions.service lines 538/664/737/813/909/1026).
+  |                                                            |         | Web side only ADDED a `kind: "secret_input"` union member to the
+  |                                                            |         | existing RealtimeQuestionEvent payload (use-realtime.ts) —
+  |                                                            |         | that is the question *kind* required by Must-have #3, not an
+  |                                                            |         | event type. No new event names / subscribe calls added.
+7 | No reuse of unauthenticated async 202 `POST /execute`       | NOT     | worker.client.runSecretCommand() posts to '/secret-command'
+  |                                                            | TOUCHED | (worker.client.ts:483) behind X-Worker-Token; the pre-existing
+  |                                                            |         | requestExec('/execute') line is unchanged context. exec-server.ts
+  |                                                            |         | diff hunk headers: 60-74, 319-397, 346->412, 442->510, 1241->1313;
+  |                                                            |         | original line 881 handleExecute falls in an untouched gap and
+  |                                                            |         | `git diff | grep -c handleExecute` = 0. Only a new dispatch
+  |                                                            |         | branch `if (url.pathname === '/secret-command')` was added.
+  |                                                            |         | `/execute` contract explicitly kept as-is (exec-server comment).
+8 | No reuse of plaintext `questions.answers` echo path for      | NOT     | secret_input replies arrive via a NEW DTO field `secrets`
+  | secrets                                                    | TOUCHED | (reply-question.dto.ts +IsObject) and take the platform bypass
+  |                                                            |         | (never workerClient / forwardReply). Terminal row stores only
+  |                                                            |         | {provided, filled, actorType, actorId}. Passing `secret` source
+  |                                                            |         | into forwardReply is covered by a passing test: "secret source
+  |                                                            |         | 即使被送进 forwardReply 也走平台旁路：不查 worker、不调
+  |                                                            |         | questionReply、不落明文" (questions.service.spec, 47/47 green).
+9 | No rendered command / argv / cwd / secret / unredacted error | NOT     | server: `[secret-command]` logs = task/session/caller/vars-count/
+  | in logs, SSE, tool result or audit records                  | TOUCHED | timeout/status/exitCode/durationMs only — no template, no secrets
+  |                                                            |         | (platform-mcp.service ~4280-4390). Hook error path splits+joins
+  |                                                            |         | each secret value to `***` BEFORE logger.error (ee3dc6c).
+  |                                                            |         | worker: sensitive-command.ts has ZERO logger calls;
+  |                                                            |         | exec-server secret-command logs are constant strings + err.code.
+  |                                                            |         | tool result: SecretCommandEnvelope.command = ORIGINAL template
+  |                                                            |         | (placeholders intact), stdout/stderr exact-value redacted +
+  |                                                            |         | 32KB cap in secretEnvelope(); rendered string exists only as
+  |                                                            |         | spawn argv in-process (sensitive-command.ts:312/323).
+  |                                                            |         | SSE payload content = template + variable metadata only.
+  |                                                            |         | platform-mcp.tools.ts contains no `secrets` reference at all.
+10| No visual command-template editor / history page / background | NOT     | Only one new UI surface: question-modal.tsx (template field is
+  | task / interactive stdin                                    | TOUCHED | `readOnly` at line 359; secret fields type=password,
+  |                                                            |         | autoComplete=new-password). No new routes/pages/components
+  |                                                            |         | beyond modal + 4th tool-card state. `web` grep for
+  |                                                            |         | background task|后台任务|BackgroundTask|job queue => only a
+  |                                                            |         | worker comment about setsid. worker spawn stdio =
+  |                                                            |         | ['ignore','pipe','pipe'] => stdin explicitly NOT connected
+  |                                                            |         | (no interactive stdin possible).
+11| No SSE / group-chat / message-storage contract change; no     | NOT     | No message model, API gateway or storage file touched (changed
+  | mobile layout change                                        | TOUCHED | files list has zero message/storage entries; prisma schema
+  |                                                            |         | untouched). Chat deltas are in-memory UI state (questionQueue)
+  |                                                            |         | + a 4th tool-card render state (Must-have: todo 8). SSE contract
+  |                                                            |         | delta is an ADDITIVE optional top-level `teamId` on the existing
+  |                                                            |         | agent.question payload (remediation 12, see §3). No mobile code
+  |                                                            |         | exists in repo (`find -iname '*mobile*'` => none); grep for
+  |                                                            |         | mobile|media query in range diff => none.
+12| Redaction must NOT be described as a security boundary; docs | NOT     | docs/secret-command-tool.md line 4: "不是安全承诺：文中所有
+  | must state transformation/exfiltration cannot be prevented   | TOUCHED | 「脱敏」「拦截」均为 best-effort 防顺手泄露，不构成安全边界";
+  |                                                            |         | §五.5 "变形 / 编码外传无法阻止" (base64/hex/URL/分片/大小写/
+  |                                                            |         | 异或 all defeat it); §尾 "不是访问控制或数据外泄防护边界".
+  |                                                            |         | Grep for 脱敏+(安全|边界|防护|保证) claims => no hits.
+
+================================================================================
+2. ROLE AUTHORIZATION (fresh seed + upgrade migration)
+================================================================================
+Requirement: 7 builtin roles + 3 external engine roles + `ar_general` explicitly
+true for `secret.command` on BOTH paths.
+Ruling: VERIFIED (static source + migration SQL + 93/93 targeted jest tests green).
+
+  fresh seed path
+    - BUILTIN_ROLE_CAPABILITY_MAPS: all 7 roles carry `'secret.command': true`
+      literal (agent-role.constants.ts, +1 line per role in 8a87765).
+    - EXTERNAL_AGENT_ROLE_TOOL_ALLOWLIST grew to 9 entries incl.
+      `vteam_secret_command` => EXTERNAL_AGENT_ROLE_CAPABILITIES derives
+      `'secret.command': true` explicitly (3 roles share the matrix).
+    - ar_general: PLATFORM_CAPABILITIES gained
+      {key:'secret.command', tools:['vteam_secret_command'], defaultDeny:false}
+      => buildFactoryCapabilityMatrix()['secret.command'] === true; seed writes
+      the 29-key matrix for NULL rows (fallback updateMany).
+  upgrade path
+    - 20260926000000_secret_command_capability/migration.sql: single
+      `UPDATE agent_roles SET capabilities = JSON_SET(capabilities,
+      '$."secret.command"', true) WHERE capabilities IS NOT NULL AND
+      JSON_CONTAINS_PATH(...) = 0` — additive-only (operator-set false is
+      preserved), covers builtin + external + ar_general + custom rows with
+      non-NULL matrices; NULL rows are backfilled by seed's factory matrix.
+  tests executed in this audit lane (node v24.14.0 via nvm; jest runInBand):
+    - server: seed.spec + split-grouped.migration.spec + factory-default
+      .migration.spec + agent-role.constants.spec + platform-capability
+      .coverage.spec => 5 suites / 93 tests PASSED.
+    - Assertions observed: FACTORY_MATRIX['secret.command']===true;
+      EXTERNAL_AGENT_ROLE_CAPABILITIES['secret.command']===true;
+      all 7 BUILTIN maps ===true; migration spec asserts executable SQL
+      contains the 20260926000000 backfill (upgrade path locked).
+
+================================================================================
+3. REMEDIATION COMMITS 11-13 — SCOPE-NEUTRALITY RULINGS
+================================================================================
+11 | a30397e que/request_id resync | SCOPE-NEUTRAL (server-side id normalization)
+    | - server/src/common/id-resync.ts: adds exported
+    |   `resyncRequestIdPrefix(model, idPrefix, requestIdPrefix, idGen)` using
+    |   `model.findMany({where: requestId startsWith 'que_platform_'})` +
+    |   in-process counter seed. NO `$queryRaw/$executeRaw/executeRaw` in file
+    |   (grep empty). NO schema/DDL. P2021 (table missing) is retried in
+    |   background via the pre-existing startP2021Retry helper.
+    | - questions.service: +16 lines wiring `resyncRequestIdPrefix(...)` into the
+    |   existing `onModuleInit` next to the pre-existing `resyncIdPrefix(aq_)`.
+    | - Scope: id counter alignment only; no secret handling, no API/SSE shape
+    |   change. Tests: id-resync specs 19/19 green in isolation.
+
+12 | 1b31521 team-scope delivery | SCOPE-NEUTRAL (teamId + narrow fallback only)
+    | - server: two `realtime.emit(EVENT_TYPES.AGENT_QUESTION, ...)` create
+    |   sites now compute `createScope`/`secretScope` once and add ONE field
+    |   `teamId: scope.type==='team' ? scope.id : null`. Event type, envelope
+    |   and stored rows unchanged.
+    | - web/hooks/use-sse.ts: ONE additive clause inside the existing
+    |   `case 'team:'` branch of matchesScope:
+    |   `(ev.payload as {teamId?}).teamId === id`. No other branch touched.
+    | - Tests added: use-sse.scope.test.mjs 45/45 PASSED in this audit lane.
+
+13 | 0987980 MCP heartbeat | SCOPE-NEUTRAL (transport-only)
+    | - platform-mcp.controller: while a handler returns a Promise (blocking
+    |   tools/call), writes `: vteam-mcp-heartbeat <ts>` SSE *comment* frames at
+    |   30s to clients whose Accept includes `text/event-stream`; final result
+    |   wrapped as one `data:` frame. Non-SSE Accept clients (curl) keep the
+    |   exact previous pure-JSON body. No auth, no scope, no tool payload, no
+    |   permission and no platform event-bus change. Ruling (D5): an SSE
+    |   comment on the MCP HTTP transport is NOT a "new SSE event type" under
+    |   guardrail #6 (no `event:` name, not the realtime channel, not persisted).
+    | - `handle()` switched from passthrough to manual write — behaviour parity
+    |   covered by controller spec (paired suite: 38 tests green).
+
+================================================================================
+4. COMMIT HYGIENE / DIRTY-WORKTREE
+================================================================================
+  .omo / .opencode files inside any of the 14 commits : NONE (grep of
+    `git show --name-only` over all 14 => empty; exit 1 = no match).
+    Committed content contains no `.omo/` references either (the only
+    `.opencode/` string hits are pre-existing docs/agent-platform/* files that
+    are NOT in this range).
+  Unrelated / dirty files committed                    : NONE — all 55 changed
+    files live under server/ src, worker/src, web/(app,e2e,hooks,lib,src) and
+    docs/secret-command-tool.md. No lockfiles, no dist/build output, no logs,
+    no .env.
+  Secrets in commits                                  : NONE — no AKIA/ghp_/sk-/private-key/Bearer
+    patterns; only the review sentinel `s3cr3t-A9f` and a regex-torture literal
+    inside test files (by design).
+  Product worktree dirt at audit time                  : NONE — `git status`
+    filtered to non-.omo/.opencode paths => empty.
+  Pre-existing dirty .omo/.opencode files              : PRESERVED — same 7
+    modified + 10 untracked `.omo/.opencode` entries before and after this
+    audit; this audit wrote ONLY the evidence file below (untracked dir
+    .omo/evidence/sensitive-command-tool/), which cannot alter tracked dirt.
+
+================================================================================
+5. DEVIATION RULINGS
+================================================================================
+D1 (informational) Request's commit ordering differs from actual topology for 3
+   pairs; commit SET identical (14/14 ancestors of 0987980). NO IMPACT.
+D2 Previous final-f4-scope.txt (05:33) cited retired sha 0c683d8 / 11 commits =>
+   stale_state. Resolved by this overwrite. (Prior file also carried an open
+   note that plan line 155 + 5 ledger records still reference the dead sha —
+   out of F4 scope, unchanged here.)
+D3 stale_state, NON-BLOCKING: F1 (05:33), F2 (05:33), F3 (08:29 / 09:01)
+   artifacts predate remediation commits a30397e (10:02), 1b31521 (10:28),
+   0987980 (10:58). Plan Wave 4 requires the final wave to re-run after
+   todos 11-13. This F4 run IS on final HEAD; F1-F3 were not re-run and are
+   outside this lane's mandate. REMEDIATION (process, not scope): re-run
+   F1/F2/F3 on 0987980 before declaring the plan complete.
+D4 observed test flake (NON-SCOPE): the first combined run of
+   `jest src/common/id-resync src/platform-mcp/platform-mcp.controller.spec.ts`
+   reported 1 failed / 56 passed (failing test name not captured — output was
+   tailed). The same combined invocation then passed 10 consecutive times
+   (57/57), and id-resync alone passed 19/19. Classified as intermittent, not a
+   scope violation; recommend an F2 follow-up to identify the timing-sensitive
+   assertion.
+D5 MCP heartbeat SSE framing on the MCP transport ruled TRANSPORT-ONLY
+   (see §3.13) — does not engage guardrail #6.
+D6 teamId added to agent.question create payloads ruled SCOPE-NEUTRAL —
+   additive optional field on an existing event, no storage/API contract change
+   (see §3.12).
+
+================================================================================
+6. ADVERSARIAL CLASS RESULTS
+================================================================================
+  dirty_worktree        : PASS (no product dirt; pre-existing .omo/.opencode
+                          dirt intact before/after; audit wrote only evidence)
+  misleading_success    : PASS with observation — every claim re-derived from
+                          source/diff; 93/93 + 45/45 + 47/47 + 38 tests re-run
+                          green in this lane. One un-captured flake (D4) and
+                          stale F1-F3 timestamps (D3) are reported, not hidden.
+  malformed_evidence    : PASS — prior evidence file was stale (D2) and has been
+                          replaced with a line-item table whose every row cites
+                          file/line/命令.
+  secrets               : PASS — no credentials in commits; sentinel literals
+                          confined to tests; no secret value persisted, echoed,
+                          logged or returned in envelopes.
+  stale_state           : PASS for F4 scope verdict (audited on final HEAD
+                          0987980); D2 resolved; D3 raised as process remediation.
+
+================================================================================
+7. VERDICT
+================================================================================
+F4 STATUS   : **APPROVE**
+Scope OUT   : 12/12 guardrail items NOT TOUCHED — 0 violations, 0 remediation
+              owed for scope.
+Roles       : 7 builtin + 3 external + ar_general explicitly true on fresh seed
+              AND upgrade migration (verified statically + 93 tests).
+Remediation : commits 11/12/13 confirmed scope-neutral (id normalization /
+              teamId+narrow fallback / transport-only heartbeat).
+Hygiene     : no .omo, .opencode, lockfiles, build output or unrelated dirt in
+              any of the 14 commits; no dirty product files.
+Confidence  : 0.95 — minus 0.03 for the single un-reproducible jest flake (D4)
+              and 0.02 for D3 (F1-F3 evidence predates remediation commits; F4
+              itself is on final HEAD as required).
+Remediation : NONE for scope. Process follow-ups only: re-run F1/F2/F3 at
+              0987980 (D3) and optionally isolate the id-resync flake (D4).
+================================================================================

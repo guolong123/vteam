@@ -1,0 +1,478 @@
+================================================================================
+F3 · Lane A — automated live-stack verification (sensitive-command-tool)
+Plan          : .omo/plans/sensitive-command-tool.md
+Evidence path : .omo/evidence/sensitive-command-tool/final-f3-live.txt
+Sibling lane  : .omo/evidence/sensitive-command-tool/final-f3-manual.txt (lane B)
+Target HEAD   : 0987980f0b0e3e10cece4aa87d88ebdb8d878db0 (short 0987980)
+                "fix(mcp): 阻塞工具调用期间维持长连接心跳"  committed 2026-09-27 10:58:05 +0800
+Executed      : 2026-09-27T03:29Z .. 2026-09-27T04:02Z (UTC) / 11:29..12:02 +0800
+Host          : macOS (darwin), docker CLI /usr/local/bin/docker (OrbStack) 29.4.0
+                node v24.14.0 via ~/.nvm/versions/node/v24.14.0/bin
+Note          : login-shell PATH is minimal (/usr/bin:/bin:/usr/sbin:/sbin);
+                `docker`/`npx`/`node` are NOT on the default PATH, so every command
+                below was run with an explicit PATH prefix
+                `export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:/usr/local/bin:$PATH"`.
+Note          : a CONCURRENT lane was active in the same stack during this run
+                (docker exec marker greps against the worker + a worker container
+                restart at 2026-09-27T03:47:10Z are visible in `docker events`).
+                Environmental caveat only — see §7.
+
+VERDICT: PASS
+  · bundle provenance + all 3 marker proofs ......... PASS
+  · live Playwright (70 tests) ..................... PASS-with-1-pre-existing-flake
+        (69 passed / 1 failed, exit 1; the single failure is the known Todo14
+         scroll flake and passes in isolation, exit 0)
+  · sentinel s3cr3t-A9f no-leak sink table .......... PASS (0 hits in every
+        product sink; host agent-transcript hits recorded separately, not a leak)
+  · orphan command processes / stray timers ......... PASS (see §5, §7 for the
+        one proxy-only sub-check)
+  · worker first-token exemption suite .............. PASS (68/68, exit 0)
+  · todo-11 restart resync suites ................... PASS (183/183, exit 0;
+        both targeted que-continuation cases green)
+Confidence : HIGH for bundle provenance, marker proof, sentinel sinks,
+              process hygiene and the two required test suites;
+              MEDIUM for "no stray timers" (automated proxy evidence only —
+              direct in-process timer introspection NOT-EXERCISED, §7).
+Blockers   : none.
+
+================================================================================
+§0  COMMAND / EXIT TABLE (literal)
+--------------------------------------------------------------------------------
+#  Command (as run)                                                                Exit
+--  ----------------------------------------------------------------------------  ----
+1   git rev-parse HEAD                                                             0
+2   git status --porcelain                                                         0
+3   docker images / docker inspect (pre-build provenance)                          0
+4   docker compose up -d --build server web worker   (>rebuild.log)               0
+5   docker compose restart server worker             (>restart.log)                0
+6   docker exec server: grep -rl "vteam-mcp-heartbeat" /app/dist                   0  (1 file, 1 hit)
+7   docker exec worker: grep -rl "hasInFlightTool"    /app/dist                    0  (1 file, 2 hits)
+8   docker exec web:    grep -ro "secret_input"       /app/.next                   0  (4 hits)
+9   docker exec web:    grep -ro "msg-tool-awaiting"  /app/.next                   0  (2 hits)
+10  cd web && npx playwright test session-unification.spec.ts \
+        chat-density.spec.ts --reporter=list                        (>pw-aggregate.log)  1
+11  cd web && npx playwright test session-unification.spec.ts \
+        -g "群聊 Tab：群频道 delta 滚动，私聊频道 delta 不滚动但未读收敛" \
+        --reporter=list                                       (>pw-todo14-iso.log)  0
+12  docker logs {server,worker,web} | grep -c -F s3cr3t-A9f                        1,1,1 (0 hits each)
+13  docker exec worker: grep -ra -o -F s3cr3t-A9f /root/.local/share/opencode      1 (0 hits)
+14  docker exec worker: grep -ra -o -F s3cr3t-A9f /data/vteam-worker               1 (0 hits)
+15  docker exec server: grep -ra -o -F s3cr3t-A9f /app --exclude-dir=node_modules  1 (0 hits)
+16  docker exec web:    grep -ra -o -F s3cr3t-A9f /app/.next                       1 (0 hits)
+17  docker exec -i db mysql < db-sentinel.sql  (333 text columns, UNION COUNT)     0  (TOTAL_HITS 0)
+18  grep -ra -o -F s3cr3t-A9f ~/.local/share/opencode   (HOST, separate sink)     0 (1712 hits)
+19  cd worker && npx jest src/driver/prompt-await.spec.ts --runInBand \
+        (>jest-worker-firsttoken.log)                                             0  (68/68)
+20  cd server && npx jest src/questions src/common --runInBand \
+        (>jest-server-que-resync.log)                                             0  (16 suites/183)
+21  cd server && npx jest src/questions/questions.service.spec.ts \
+        -t "重启后 que 计数器" --runInBand (>jest-que-target.log)                 0  (1 passed/46 skipped)
+22  cd server && npx jest src/common/id-resync.spec.ts \
+        -t "que_platform_ 最大数字尾段" --runInBand (>jest-idresync-target.log)   0  (1 passed/15 skipped)
+23  docker exec worker/server/web: ps -eo pid,ppid,stat,etimes,comm / ps -ef       0
+24  docker logs server | grep -cE 'silent_session_timeout|【自动恢复】|wake dispatch'  1 (0 hits)
+25  docker logs server | grep -c "request aborted"                                 1 (0 hits)
+26  git rev-parse HEAD && git status --porcelain  (post-run)                       0 (unchanged)
+27  rm -rf /private/var/folders/.../T/opencode/f3live  (temp cleanup)              0
+
+Exit-code legend: `grep` exits 1 on 0 matches = the DESIRED outcome for every
+sentinel sweep (recorded as "0 hits", never as a failure of the check).
+Playwright exit 1 in row 10 is the single pre-existing flake documented in §3.
+
+================================================================================
+§1  HEAD + WORKING-TREE IMPURITY GUARANTEE
+--------------------------------------------------------------------------------
+$ git rev-parse HEAD
+0987980f0b0e3e10cece4aa87d88ebdb8d878db0          <-- == 0987980  PASS
+
+$ git status --porcelain   (before AND after this lane — byte-identical,
+                            md5 of output both times:
+                            9be175f6433ce987327996dc97b01b31)
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M .opencode/opencode.json
+?? .omo/drafts/chat-ux-hierarchy-and-streaming.md
+?? .omo/drafts/sensitive-command-tool.md
+?? .omo/evidence/chat-ux-hierarchy-and-streaming/
+?? .omo/evidence/sensitive-command-tool/
+?? .omo/notepads/chat-ux-hierarchy-and-streaming/
+?? .omo/notepads/sensitive-command-tool/
+?? .omo/plans/chat-ux-hierarchy-and-streaming.md
+?? .omo/plans/sensitive-command-tool.md
+?? .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+?? .omo/ulw-execute/sensitive-command-tool-registry.json
+
+=> This lane modified NO product, test, plan or state file. The only files it
+   created are inside .omo/evidence/sensitive-command-tool/ (this file + two
+   raw Playwright logs) and the git-ignored web/test-results/ that Playwright
+   itself writes when the mandated command runs.
+
+Commits on the fixed build (for provenance):
+  0987980 2026-09-27 10:58:05 +0800  fix(mcp): 阻塞工具调用期间维持长连接心跳
+          -> server/src/platform-mcp/platform-mcp.controller{,.spec}.ts
+  1b31521 2026-09-27 10:28:23 +0800  fix(team-scope): 修复 agent.question 团队域投递
+          -> server/src/questions/*, web/hooks/use-sse.ts, web/hooks/use-sse.scope.test.mjs,
+             web/e2e/session-unification.spec.ts
+  a30397e 2026-09-27 10:02:46 +0800  fix(questions): 重启后从 request_id 续号避免 P2002
+          -> server/src/common/id-resync{,.spec,.guard.spec}.ts, server/src/questions/*
+  (no commit after 2026-09-27 05:40:49 +0800 touched worker/  — verified with
+   `git log --since='2026-09-27 05:40:49 +0800' -- worker/` → empty output)
+
+================================================================================
+§2  BUNDLE PROVENANCE (image / container ids) + MARKER PROOFS
+--------------------------------------------------------------------------------
+2.1 PRE-BUILD (2026-09-27T03:29:51Z)
+    aiagents-server:latest|7490e6274863|2026-09-27 10:52:33 +0800|624MB
+    aiagents-web:latest   |5c05f74ac3f7|2026-09-27 10:24:23 +0800|267MB   <-- STALE
+    aiagents-worker:latest|78dae6ef19f7|2026-09-27 05:40:49 +0800|2.36GB
+    aiagents-init:latest  |95b44083c41a|2026-09-27 05:37:31 +0800|624MB
+    server container image sha256:7490e62748634a5f32ede0b21b05dd3a6eec55a158ce38dc804a9ccb85cc2b90
+    web    container image sha256:5c05f74ac3f78046b8d3ca59f6458ba1fe648a1f70dd3a33bbed000d4ae64529
+    worker container image sha256:78dae6ef19f774c28142a0771eaeabc494fe201737c3287f709627a080031973
+
+    Web was demonstrably stale: image built 10:24:23 +0800, i.e. 4 minutes BEFORE
+    1b31521 (10:28:23) which is the commit that edits web/hooks/use-sse.ts.
+
+2.2 REBUILD / RESTART (row 4, row 5 → both exit 0)
+    $ docker compose up -d --build server web worker
+      Image aiagents-server Built
+      Image aiagents-web    Built
+      Image aiagents-worker Built
+      Image aiagents-init   Built
+      Container aiagents-compose-web Recreate / Recreated / Started
+      Container aiagents-compose-server Running (image digest byte-identical → no-op)
+      Container aiagents-compose-worker Running (image digest byte-identical → no-op)
+      Container aiagents-compose-init Exited (migrate deploy + seed, exit 0)
+    $ docker compose restart server worker     (forces a fresh process on HEAD)
+
+2.3 POST-BUILD / POST-RESTART CONTAINER PROVENANCE (2026-09-27T03:34:57Z)
+    aiagents-compose-server | image=sha256:7490e62748634a5f32ede0b21b05dd3a6eec55a158ce38dc804a9ccb85cc2b90
+                              image-tag=aiagents-server:latest  built 2026-09-27 10:52:33 +0800
+                              started=2026-09-27T03:34:30.669Z  status=running  health=healthy
+    aiagents-compose-web    | image=sha256:9c239c318857b66822439420675b8340a5a196e49ed006b4490eeedfe43947dd
+                              image-tag=aiagents-web:latest   built 2026-09-27 11:32:55 +0800  (NEW)
+                              started=2026-09-27T03:33:02.765Z  status=running  health=healthy
+    aiagents-compose-worker | image=sha256:78dae6ef19f774c28142a0771eaeabc494fe201737c3287f709627a080031973
+                              image-tag=aiagents-worker:latest built 2026-09-27 05:40:49 +0800
+                              started=2026-09-27T03:47:10.334Z (concurrent-lane restart, exit=0,
+                              oom=false, same container id 5a5c8cdb134f2ade82ea251022528b0ca3c4fe36c3c89554c06f511b0d647ec6)
+                              status=running  health=none (compose defines no healthcheck for worker)
+
+    Provenance honesty note: `docker compose up --build` produced BYTE-IDENTICAL
+    image digests for server (7490e6274863) and worker (78dae6ef19f7) — i.e. a
+    BuildKit cache hit, no image-ID delta. That is only possible if the build
+    inputs were already the remediated sources (the working tree was built at
+    10:52 and 0987980 was committed at 10:58 with the same content). Rather than
+    trust the timestamp, §2.4 proves the markers inside the RUNNING containers.
+    Only web had a real digest change (5c05f74ac3f7 → 9c239c318857).
+
+2.4 MARKER PROOFS (all re-run AFTER the restart, 2026-09-27T03:34:57Z)
+    $ docker exec aiagents-compose-server sh -lc \
+        'grep -rlo "vteam-mcp-heartbeat" /app/dist; grep -ro "vteam-mcp-heartbeat" /app/dist | wc -l'
+      /app/dist/src/platform-mcp/platform-mcp.controller.js
+      hits=1                          grep exit 0     => PASS  (todo 13 heartbeat, HEAD 0987980)
+
+    $ docker exec aiagents-compose-worker sh -lc \
+        'grep -rlo "hasInFlightTool" /app/dist; grep -ro "hasInFlightTool" /app/dist | wc -l'
+      /app/dist/driver/prompt-await.js
+      hits=2                          grep exit 0     => PASS  (todo 9 first-token in-flight exemption)
+
+    $ docker exec aiagents-compose-web sh -lc 'grep -ro "secret_input" /app/.next | wc -l'
+      secret_input hits=4   in:
+        /app/.next/server/app/(main)/teams/[id]/session/page.js
+        /app/.next/static/chunks/app/(main)/teams/[id]/session/page-655852a1137c2fcd.js
+                                                              grep exit 0   => PASS  (todo 7 secret modal)
+
+    $ docker exec aiagents-compose-web sh -lc 'grep -ro "msg-tool-awaiting" /app/.next | wc -l'
+      msg-tool-awaiting hits=2  (same two files)              grep exit 0   => PASS  (todo 8 awaiting-input)
+
+    Bonus corroboration (not required, recorded for completeness):
+      web `secret_command` hits = 4
+      web session chunk `teamId===` occurrences = 29 (todo 12 / 1b31521 scope fix is in the bundle;
+        exact text `payload.teamId===id` is 0 only because the bundle is minified/renamed)
+      server health endpoint http://localhost:13000/api/v1/health -> HTTP 200
+      web    http://localhost:3001/                                -> HTTP 200
+
+    Routing proof: web/playwright.config.ts hard-codes baseURL http://localhost:3001
+    while compose publishes web on 13001. A pre-existing throwaway TCP forwarder
+    (/private/var/folders/.../T/opencode/pw-bridge/bridge.js, started Sep 24,
+    pid 94825) forwards 127.0.0.1:3001 -> 127.0.0.1:13001 and modifies no repo
+    file. So the Playwright run in §3 exercised the CONTAINER bundle proven above.
+
+================================================================================
+§3  LIVE PLAYWRIGHT (localhost:3001)
+--------------------------------------------------------------------------------
+3.1 AGGREGATE RUN (row 10)
+    $ cd web && npx playwright test session-unification.spec.ts chat-density.spec.ts \
+        --reporter=list
+      Running 70 tests using 1 worker
+      ...
+      1 failed
+        [session-unification] › e2e/session-unification.spec.ts:603:7 ›
+          Todo14 页面 delta 消费 / 滚动门控 / DM 轮询 › 6. 群聊 Tab：群频道 delta 滚动，
+          私聊频道 delta 不滚动但未读收敛
+      69 passed (1.3m)
+    EXIT = 1
+    Totals: 70 selected | 69 passed | 1 failed | 0 skipped | 0 flaky
+            (70 = 1 [setup] + 4 [lib-unit] + 28 [chat-density] + 37 [session-unification])
+
+    Failure detail (literal):
+      Error: expect(received).toBe(expected) // Object.is equality
+      Expected: 0
+      Received: 5592
+        630 |     expect(await scrollTopOf(list)).toBe(0);
+      at web/e2e/session-unification.spec.ts:630:37
+
+    Full raw output preserved at:
+      .omo/evidence/sensitive-command-tool/final-f3-live-pw-aggregate.log
+
+3.2 ISOLATED RERUN OF THE SINGLE FAILURE (row 11)
+    $ cd web && npx playwright test session-unification.spec.ts \
+        -g "群聊 Tab：群频道 delta 滚动，私聊频道 delta 不滚动但未读收敛" --reporter=list
+      Running 2 tests using 1 worker
+        ✓  1 [setup] › e2e/auth.setup.ts:12:6 › 真实表单登录 seed-admin → storageState (1.2s)
+        ✓  2 [session-unification] › ...Todo14... › 6. 群聊 Tab：群频道 delta 滚动，
+             私聊频道 delta 不滚动但未读收敛 (954ms)
+      2 passed (3.8s)
+    EXIT = 0
+    Full raw output preserved at:
+      .omo/evidence/sensitive-command-tool/final-f3-live-pw-todo14-isolation.log
+
+3.3 FAILURE CLASSIFICATION: **PRE-EXISTING FLAKE** — not plan-caused.
+    Reasoning:
+      · The failing assertion is `scrollTopOf(list) === 0` in the Todo14 delta
+        scroll-gating block (web/e2e/session-unification.spec.ts:630). Todo14 is
+        not a todo of this plan; it belongs to the pre-existing scroll/delta work.
+      · The assertion failed in the 22-test worker-pooled aggregate run and passed
+        on the very next isolated run with no code change in between → order/timing
+        dependent scroll race, i.e. the known Todo14 scroll flake.
+      · Neither 0987980 nor 1b31521 nor a30397e touches scroll, delta consumption
+        or the DM polling path (see §1 commit file lists).
+      · All 12 sensitive-command-tool tests in this plan passed in the same
+        aggregate run: Todo7 (0-5), Todo8 (1-3), Todo9 (1) — including the
+        production-shape team-scope case "0. 生产形状 create emit…实时弹窗，无需刷新补拉"
+        which is the 1b31521 live fix, and Todo8 awaiting-input.
+    Classification: PRE-EXISTING / OUT-OF-SCOPE. Does not change the verdict.
+
+    Note on reporting: `--reporter=list` was used exactly as specified, so no
+    shared JSON/HTML reporter output was overwritten.
+
+================================================================================
+§4  SENTINEL `s3cr3t-A9f` — SINK TABLE (definitive sweep 2026-09-27T03:55:21Z)
+--------------------------------------------------------------------------------
+Sink                                                     Window / size        Hits   Verdict
+----                                                     -------------        ----   -------
+docker logs aiagents-compose-server                      all retained logs    0      PASS
+                                                          2660 lines,
+                                                          25 secret-command mentions
+                                                          (row 12: grep exit 1)
+docker logs aiagents-compose-worker                      all retained logs    0      PASS
+                                                          360 lines,
+                                                          11 secret-command mentions
+                                                          (row 12: grep exit 1)
+docker logs aiagents-compose-web                         all retained logs    0      PASS
+                                                          294 lines (row 12: grep exit 1)
+server live-follow capture 03:34Z→03:54Z                 1475 lines captured  0      PASS
+                                                          (21 secret-command mentions
+                                                           inside the window)
+worker live-follow capture 03:47Z→03:54Z                 29 lines captured    0      PASS
+PRODUCT session store: worker /root/.local/share/opencode  recursive -r -a      0      PASS
+PRODUCT workdir:       worker /data/vteam-worker          recursive -r -a      0      PASS
+PRODUCT server bundle: /app (excl. node_modules)          recursive -r -a      0      PASS
+PRODUCT web bundle:    /app/.next                         recursive -r -a      0      PASS
+PRODUCT DB: aiagents — all 333 varchar/text/json columns  UNION COUNT(*) query 0      PASS
+                                                          TOTAL_HITS=0 (row 17 exit 0)
+                                                          incl. agent_questions.answers
+                                                          (the persisted-answers path)
+---- ----------------------------------------------------------------------------------
+NON-PRODUCT / recorded separately, NOT counted as a leak:
+  HOST agent transcripts  ~/.local/share/opencode         recursive -r -a      1712   EXPECTED
+      → the host-side OpenCode session store of THIS coding session; it contains the
+        literal sentinel because the agent writes/reads it. It is outside the product
+        (different machine-side directory, not reachable by the containers).
+      → ~/.cache/opencode = 0 hits; ~/.local/share/opencode-go = directory absent.
+  repo git-tracked files holding the sentinel                                              10      EXPECTED
+      9 × *.spec.ts / e2e fixtures (test code, as the plan requires):
+        server/src/platform-mcp/platform-mcp.service.spec.ts
+        server/src/questions/questions.service.spec.ts
+        server/src/workers/worker.client.spec.ts
+        web/e2e/chat-density.spec.ts
+        web/e2e/session-unification.spec.ts
+        web/lib/secret-question.spec.ts
+        worker/src/exec/exec-server.spec.ts
+        worker/src/exec/sensitive-command.spec.ts
+        worker/src/protocol/contract.spec.ts
+      1 × .omo/ulw-execute/ledger.jsonl (pre-existing dirty state file, not this lane's)
+      verification: `git grep -l s3cr3t-A9f -- 'server/src/**/*.ts' 'worker/src/**/*.ts' 'web/**'`
+      filtered to non-spec → EMPTY ⇒ no product runtime source contains the sentinel.
+
+Result: 0 hits in EVERY product sink (server/worker/web logs, product session store,
+product workdir, both bundles, and the full DB text-column sweep).
+
+================================================================================
+§5  ORPHAN COMMAND PROCESSES + STRAY TIMERS
+--------------------------------------------------------------------------------
+5.1 PROCESS TABLES (2026-09-27T04:00:32Z, after all runs)
+    aiagents-compose-worker
+        1     0   Ssl   802   node                     (PID 1 = dist/index.js)
+       51     1   Ssl   801   opencode                 (opencode serve --port 4000)
+      (their MCP helper children come and go with `opencode serve`)
+      live (non-zombie) command procs of class sh|bash|timeout|sleep|python|curl|ping
+        count = 0      (the only `sh` in the listing is the `docker exec` shell of
+                       this very probe)
+      zombie (Z-state) count = 0
+    aiagents-compose-server
+        1  root  0:43  node dist/src/main               (+ the `ps -ef` probe itself)
+    aiagents-compose-web
+        1  root  0:24  next-server (v…)                 (+ the `ps -ef` probe itself)
+    host: `pgrep -fl playwright` → no output (no orphan Playwright/worker processes)
+
+    => 0 orphan command processes. No `timeout`, no `sleep`, no stray `sh -c`
+       command wrappers left behind by any secret-command execution.
+
+    OBSERVATION (recorded honestly, not hidden): at 03:44:38Z and 03:45:23Z a probe
+    found TWO Z-state entries `371/1 Z sleep` and `467/1 Z sleep` (defunct, PPID 1,
+    not consuming CPU, count STATIC over a 45s re-sample → no leak growth). They were
+    gone after the concurrent-lane worker restart at 03:47:10Z (zombie count = 0 at
+    04:00:32Z). Defunct entries are already-terminated processes awaiting reaping by
+    PID 1, not running commands. Recorded under §7 for completeness.
+
+5.2 STRAY TIMERS
+    $ docker logs aiagents-compose-server | grep -cE 'silent_session_timeout|【自动恢复】|wake dispatch'
+      0        grep exit 1      => no spurious silent-session wake / timeout dispatch
+    $ docker logs aiagents-compose-server | grep -c "request aborted"
+      0        grep exit 1      => the todo-13 heartbeat fix shows NO aborted blocking
+                                   calls anywhere in the retained server log
+    $ docker logs aiagents-compose-server | grep -icE 'keepalive|keep-alive'
+      1572     — but every single match is the plain HTTP request header
+                 `"connection":"keep-alive"` in fastify access-log lines (verified with
+                 `grep -ioE '.{0,40}keep-?alive.{0,40}' | sort -u`: only request/response
+                 header shapes appear). NOT a keepAliveSession timer log, i.e. no
+                 evidence of an un-cleared 60s keepalive interval.
+    => no stray-timer indicators in the automated evidence.
+    => Direct in-process timer introspection NOT-EXERCISED — see §7.1.
+
+================================================================================
+§6  REQUIRED TEST SUITES IN THE FINAL BUILD
+--------------------------------------------------------------------------------
+6.1 WORKER FIRST-TOKEN EXEMPTION (row 19) — EXIT 0
+    $ cd worker && npx jest src/driver/prompt-await.spec.ts --runInBand
+      Test Suites: 1 passed, 1 total
+      Tests:       68 passed, 68 total
+    The four exemption-critical cases all present and green:
+      ✓ secret 等待：仅在途 tool part（无 text/reasoning）且 serve 静止 → 首字窗口过期不 abort，直到工具返回 (388 ms)
+      ✓ 工具已终态（completed）且无任何新输出 → 首字超时照常（在途豁免不掩护真 hang） (66 ms)
+      ✓ tool part 无 state（未知状态）→ 不享受在途豁免，首字超时照常 (66 ms)
+      ✓ 主循环持续追加新 parts（长 tool 循环，无 text/reasoning）→ 首字超时顺延，不误杀 (274 ms)
+    Corroborates the §2.4 marker: `hasInFlightTool` is in /app/dist/driver/prompt-await.js.
+
+6.2 TODO-11 RESTART RESYNC (rows 20-22) — EXIT 0
+    $ cd server && npx jest src/questions src/common --runInBand
+      Test Suites: 16 passed, 16 total
+      Tests:       183 passed, 183 total
+      PASS src/questions/questions.service.spec.ts
+      PASS src/common/id-resync.spec.ts
+      PASS src/common/id-resync.guard.spec.ts   (the corrected `que` exemption comment)
+      PASS src/common/id-generator.spec.ts + 12 more
+    Targeted re-runs (to make the todo-11 acceptance unambiguous):
+      $ npx jest src/questions/questions.service.spec.ts -t "重启后 que 计数器" --runInBand
+        Tests: 46 skipped, 1 passed, 47 total    EXIT 0
+        ✓ 重启后 que 计数器从 request_id 最大数字尾段续号（...07 → ...08，不重发 ...01 撞 P2002）
+      $ npx jest src/common/id-resync.spec.ts -t "que_platform_ 最大数字尾段" --runInBand
+        Tests: 15 skipped, 1 passed, 16 total    EXIT 0
+        ✓ que_platform_ 最大数字尾段 seed 进 que 计数器 → 下一个 requestId 尾段续到 8
+    The live server was also restarted during this lane (row 5), so the resync path
+    ran for real on boot; no P2002 appears anywhere in the retained server log.
+
+================================================================================
+§7  NOT-EXERCISED / LIMITATIONS (never counted as PASS)
+--------------------------------------------------------------------------------
+7.1 DIRECT IN-PROCESS TIMER INTROSPECTION — NOT-EXERCISED.
+    Reason: no endpoint, heap snapshot or debug socket exposes the active
+    `setInterval` set of the running NestJS process, and attaching a debugger to
+    the container would modify the runtime under test. Proxy evidence only:
+    0 `silent_session_timeout` / `【自动恢复】` / `wake dispatch`, 0 `request aborted`,
+    and zero non-HTTP keepalive log lines (§5.2), observed over a log window that
+    contains 25 real secret-command handler mentions. Verdict contribution: this
+    sub-check is scored MEDIUM/PASS-BY-PROXY, NOT a direct PASS.
+
+7.2 ORPHAN-PROCESS CHECK AFTER A DELIBERATE CANCEL/TIMEOUT — NOT-EXERCISED by this
+    lane. Reason: lane A does not drive the UI (that is lane B,
+    final-f3-manual.txt). Proxy evidence: 0 live command-class processes and
+    0 zombies after the full run (§5.1). The two transient Z-state `sleep` entries
+    seen at 03:44-03:45 are recorded in §5.1 rather than omitted.
+
+7.3 IMAGE-ID DELTA PROOF FOR server/worker — NOT-EXERCISED (cache hit).
+    Reason: BuildKit returned byte-identical digests for aiagents-server and
+    aiagents-worker because their build inputs were already remediated (§2.3).
+    Compensated by grepping the markers inside the RUNNING containers (§2.4),
+    which is the stronger check anyway.
+
+7.4 HOST `web/.next` NOT PROVEN — the web marker proof was taken from the
+    container path `/app/.next`, which is the bundle actually served to Playwright
+    through 127.0.0.1:3001 → 13001. The host `web/.next` was not built (no
+    `next build` on the host) and is irrelevant to what was served.
+
+7.5 WEB LOG SENTINEL COVERAGE — the web container only emits 294 log lines and
+    never logs question payloads at all, so its 0-hit result is a weak sink on its
+    own; it is listed for completeness and the load-bearing sinks are the server
+    log, worker log, product session store and DB (§4).
+
+================================================================================
+§8  CLEANUP RECEIPTS
+--------------------------------------------------------------------------------
+Temp workspace used: /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/f3live/
+  (inside the pre-created/approved opencode temp dir — NOT inside the repo)
+
+  RETAINED (moved into the evidence dir as raw artifacts):
+    .omo/evidence/sensitive-command-tool/final-f3-live-pw-aggregate.log        22965 B
+    .omo/evidence/sensitive-command-tool/final-f3-live-pw-todo14-isolation.log   382 B
+    .omo/evidence/sensitive-command-tool/final-f3-live.txt                   (this file)
+
+  DELETED by `rm -rf` of the whole temp dir (row 27, exit 0) — 13 files:
+    pre-build.txt               1140 B   rebuild.log              22965 B
+    restart.log                  182 B   pw-aggregate.log         22965 B (copied out first)
+    pw-todo14-iso.log            382 B   jest-worker-firsttoken.log 7406 B
+    jest-server-que-resync.log  3649 B   jest-que-target.log       6061 B
+    jest-idresync-target.log    1804 B   db-cols.txt               7170 B
+    db-sentinel.sql            30190 B   worker-follow.log         1534 B
+    server-follow.log         980569 B
+    (sum ≈ 1.06 MB removed; the two `pw-*.log` were copied to the evidence dir
+     before deletion, and every literal command output that matters is inlined
+     in §0-§6 above so no result depends on a deleted file)
+
+  NOT touched (other lanes' files / pre-existing state):
+    web/test-results/  — git-ignored (web/.gitignore:17) Playwright-native output
+                         produced by the mandated command; deliberately left in
+                         place because a concurrent lane may be running the same
+                         suite. No repo file was created, edited or deleted by
+                         this lane outside .omo/evidence/sensitive-command-tool/.
+
+  PATH hygiene: no temp scripts were written to the repo; all probes were inline
+  `docker exec` / shell one-liners.
+
+================================================================================
+§9  BLOCKERS
+--------------------------------------------------------------------------------
+None.
+
+Environmental caveats (do not block):
+  · A concurrent lane was operating on the same stack: `docker events` captured
+    `exec_create/exec_start` of `grep -rlo "secret-command" /app/dist ... REDACTED`
+    against the worker at 1790480908, and the worker container was restarted by it
+    at 2026-09-27T03:47:10Z (exit 0, OOM false, same container id). docker logs
+    retention was verified intact across that restart (`docker logs --until
+    2026-09-27T03:46:00Z` still returns 331 lines), so no sink window was lost.
+  · A background product task loop is live (worker `[exec] plan-files list` /
+    `[v1-driver] sendMessage` on t_0000000001), which is why the sink windows
+    contain real traffic — that is a benefit for the sentinel sweep, not a defect.
+  · `docker` is not on the login PATH; every command needed the explicit PATH
+    prefix documented at the top of this file.
+
+================================================================================
+END OF EVIDENCE — VERDICT: PASS
+================================================================================

@@ -1,0 +1,4 @@
+Tests:       524 passed, 524 total
+Snapshots:   0 total
+Time:        5.728 s, estimated 6 s
+Ran all test suites matching /src\/platform-mcp\//i.

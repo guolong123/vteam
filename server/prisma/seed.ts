@@ -930,7 +930,7 @@ async function main() {
       username: 'admin',
       passwordHash: await bcrypt.hash('admin123', 10),
       displayName: '平台管理员',
-      email: 'admin@aiagents.local',
+      email: 'admin@vteam.local',
       roleId: adminRole.id,
       enabled: true,
     },

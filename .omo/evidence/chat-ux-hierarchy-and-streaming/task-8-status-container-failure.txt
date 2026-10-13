@@ -1,0 +1,131 @@
+# task-8-status-container-failure — B12 红证据（失败先行）
+# chat-ux-hierarchy-and-streaming 复选框 8
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:183-189（References / Acceptance / QA happy / QA failure）
+#      + :78-91 消息结构断言门 + Scope IN 第 12 条（B12）
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 绿证据: 同目录 task-8-status-container.txt
+
+======================================================================
+0. 结论（红）
+======================================================================
+按计划 QA failure 两条判据，改动前两条断言均为红：
+  (1) "`session-status` 仍为无容器裸文本" → 实测：容器 div 存在但**零个元素子节点**，
+      纯文本载荷，没有 LoadingIndicator 容器的任何可识别结构（无 <style> 指示动画、
+      无三连点指示元素），也没有共享的容器实现（页面自己复制了一份内联样式）。
+      断言 `expect(shape.children.length).toBeGreaterThan(0)` → Expected > 0 / Received 0。
+  (2) "system 消息传入时间却不在 DOM 中" → 实测：system 气泡 pill 内
+      `[data-testid=chat-bubble-time]` 计数 0（传入的 time 被 system 分支提前 return 吞掉）。
+  第 (3) 类断言（loading/error 清理行为）在改动前就是绿的 → 正说明该行为本就正确，
+  本 todo 只锁定它、不修改它。
+红跑退出码 1；2 failed / 2 passed（含 setup 1 passed）。
+
+======================================================================
+1. 红跑构造（最终测试文本 + 仅回退 3 个产品文件）
+======================================================================
+背景：被测页面是 compose standalone 构建，源码改动必须重建才进 E2E；
+      红跑必须让「测试 = 最终文本、产品 = 改动前」同时成立。
+步骤（日志: task-8-docker-build-red.txt）：
+  $ git stash push -m task8-red -- \
+      "web/app/(main)/teams/[id]/session/page.tsx" \
+      web/src/components/ui/chat-bubble.tsx \
+      web/src/components/chat/loading-indicator.tsx
+    → STASH_EXIT=0；git status web/ 只剩 `M web/e2e/session-unification.spec.ts`
+    （测试文件保留；`git diff --stat HEAD -- <3 个产品文件>` 为空 = 已回到 HEAD 版本）
+  $ docker compose build web   → BUILD_EXIT=0
+  $ docker compose up -d web   → UP_EXIT=0；容器 healthy
+  $ docker images --no-trunc aiagents-web:latest
+    → 红跑镜像 sha256:cf98acd827bc9f61c16f7893b3a1e3b8f3ea462c2c3512a09db14997b819e6a0
+      （= HEAD 9674e4c 的产品代码 + 最终 B12 测试文本）
+  未使用 `git checkout -- <path>`；未触碰预存脏文件。
+
+======================================================================
+2. 红命令与退出码
+======================================================================
+环境前置：
+  $ source ~/.nvm/nvm.sh && nvm use default      # node v24.14.0 / npm 11.9.0
+  $ export PATH=$PATH:/usr/local/bin             # docker
+
+  $ cd web && npx playwright test session-unification.spec.ts \
+        --project=session-unification -g "B12" --reporter=list
+    → RED_EXIT=1（2 failed / 2 passed / 17.0s）
+    日志: task-8-e2e-red.log
+
+失败明细（红跑日志原文）：
+  1) B12 › 1. transient session-status 是与 LoadingIndicator 一致的可识别容器，且不混入消息数组
+     Error: expect(received).toBeGreaterThan(expected)
+       Expected: > 0
+       Received:   0
+       > 1476 | expect(shape.children.length).toBeGreaterThan(0);
+       at web/e2e/session-unification.spec.ts:1476:35
+     → status 行没有任何元素子节点（裸文本）。
+
+  2) B12 › 2. system 消息传入 time 时在 pill 内以元信息样式渲染，降噪契约不回退
+     Error: expect(locator).toHaveCount(expected) failed
+       Locator: locator('[data-testid="chat-bubble"][data-type="system"]')
+                  .locator('> div').getByTestId('chat-bubble-time')
+       Expected: 1
+       Received: 0
+       24 × locator resolved to 0 elements
+       at web/e2e/session-unification.spec.ts:1525 附近
+     → system 分支提前 return，time 未进 DOM。
+
+  ✓ 3) B12 › 3. loading/error 起落与终结事件下 status 行清理行为不变   （改动前即通过）
+     → 该断言集是回归护栏：证明本 todo 未改变 loading/error 清理语义。
+
+======================================================================
+3. 改动前 session-status 原样 DOM（红跑日志逐字摘录）
+======================================================================
+[B12] session-status outerHTML = <div data-testid="session-status" style="display: flex;
+  align-items: center; gap: 8px; color: var(--color-neutral-500); font-size: 12px;
+  padding: 4px 8px; font-family: ...;">Dev-1 会话运行中…</div>
+
+要点：
+  - 有外层 div + data-testid（自 6277ce5 引入后从未变过）；
+  - children = []：没有 <style>、没有指示点，只有裸文本节点 → 「无可识别结构」成立；
+  - 样式是页面里手抄 LoadingIndicator 的一份内联副本，未共享实现；
+  - system 气泡改动前：红跑断言 `system pill 内 [data-testid=chat-bubble-time]` 计数
+    Expected 1 / Received 0（真实系统 Chrome 渲染），即 time 未进 DOM。
+
+对计划措辞的如实说明（不做粉饰）：
+  计划/草稿写的「无容器裸文本」若按「有没有 div+testid」理解，与 HEAD 事实不完全一致
+  （div 与 testid 一直存在，`git log -L 1440,1446:web/.../page.tsx` 显示仅 6277ce5 创建过）；
+  本 todo 按「与 LoadingIndicator 一致的可识别容器」这一 Acceptance 原文实现：
+  状态行改为复用 LoadingIndicator 容器组件本身，从而拿到与 loading 行完全一致的结构与
+  指示元素；红断言用「元素子节点数 > 0 + 容器签名（<style> chat-bounce + 三连点）」来度量
+  「不是裸文本」。这一点在红绿两侧都是同一把尺子。
+
+======================================================================
+4. 测试文本迭代记录（避免把早期红当成最终红）
+======================================================================
+- 迭代 0（镜像 86bb6580d971 = 改动前源码，测试文本为初稿）：3 failed —— 其中测试 3 因我
+  漏传 `payload.taskId`（use-sse 的 team: 域过滤要求 payload.taskId === teamId ||
+  `team:${teamId}`）而假红；这是测试侧缺陷，不是被测行为。补上 taskId 后重跑：
+  测试 1/2 红、测试 3 绿（task-8-e2e-red.log 的第一版输出）。
+- 迭代 1：修正两处测试侧定位错误（`style[-]` 字符串模板写法、agent 时间定位应落在
+  message-identity 而非 chat-bubble 内）后，用 §1 的 stash+重建流程重跑，得到**最终红**。
+  上面 §2 引用的就是这最后一次红跑的原文。
+- 环境自证：除 B12 外没有改动任何被测代码；`npx tsc --noEmit` 红跑时亦为 exit 0
+  （测试文本本身类型正确）。
+
+======================================================================
+5. 附带记录：既有 Todo14 flake（非本 todo 引入）
+======================================================================
+全量跑 `npx playwright test pages.spec.ts session-unification.spec.ts` 中
+Todo14 › 2.「非当前频道 chat.message.new 不改当前列表滚动」出现过 1 次失败
+（scrollTop 期望 0 实得 5762，首屏 150ms 补滚竞争）。为判定归属：
+  $ docker tag aiagents-web:with-b12-pre aiagents-web:latest && docker compose up -d --force-recreate web
+    （切回**改动前**镜像 86bb6580d971）
+  $ npx playwright test session-unification.spec.ts --project=session-unification \
+        -g "非当前频道 chat.message.new" --reporter=list   × 3
+  → 第 1 次失败、第 2/3 次通过（task-8-todo14-prechange.log）
+即该 flake 在改动前镜像上同样复现，与 B12 无关；重跑全量后 57 passed（绿证据 §6）。
+本次未修改该测试（不属于本 todo 范围）。
+
+======================================================================
+6. 红跑产物清单
+======================================================================
+  task-8-e2e-red.log              最终红跑（stash 后镜像 cf98acd827bc）
+  task-8-docker-build-red.txt     红构造：stash/build/up 与镜像 ID
+  task-8-docker-build-restore.txt 恢复产品文件并重建（POP_EXIT=0 / BUILD_EXIT=0 / UP_EXIT=0）
+  task-8-todo14-prechange.log     改动前镜像上的 Todo14 flake 复现（3 次重跑）
+  task-8-todo14-rerun.log         改动后镜像上 Todo14 describe 重跑（1 次通过 + 1 次同 flake）

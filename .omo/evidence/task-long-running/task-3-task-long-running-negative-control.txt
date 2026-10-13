@@ -1,0 +1,2 @@
+      ✕ 负向对照：同 seed 但非 longRunning → 仍叫醒、quietStreak 推进到 3、返回非 expire (1 ms)
+Tests:       8 failed, 33 passed, 41 total

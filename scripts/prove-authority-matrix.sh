@@ -56,12 +56,12 @@ X_WORKER_TOKEN="${X_WORKER_TOKEN:-compose-worker-token}"
 
 # db_query <sql> : single/multi-value DB query against the compose db (stdout).
 db_query() {
-  docker exec aiagents-compose-db mysql -uroot -paiagents-root -D aiagents --default-character-set=utf8mb4 -N -e "$1" 2>/dev/null \
-    || (cd "$REPO_ROOT" && docker compose exec -T db mysql -uroot -paiagents-root -D aiagents --default-character-set=utf8mb4 -N -e "$1" 2>/dev/null)
+  docker exec vteam-compose-db mysql -uroot -pvteam-root -D vteam --default-character-set=utf8mb4 -N -e "$1" 2>/dev/null \
+    || (cd "$REPO_ROOT" && docker compose exec -T db mysql -uroot -pvteam-root -D vteam --default-character-set=utf8mb4 -N -e "$1" 2>/dev/null)
 }
 db_exec() {
-  docker exec aiagents-compose-db mysql -uroot -paiagents-root -D aiagents --default-character-set=utf8mb4 -e "$1" 2>/dev/null \
-    || (cd "$REPO_ROOT" && docker compose exec -T db mysql -uroot -paiagents-root -D aiagents --default-character-set=utf8mb4 -e "$1" 2>/dev/null)
+  docker exec vteam-compose-db mysql -uroot -pvteam-root -D vteam --default-character-set=utf8mb4 -e "$1" 2>/dev/null \
+    || (cd "$REPO_ROOT" && docker compose exec -T db mysql -uroot -pvteam-root -D vteam --default-character-set=utf8mb4 -e "$1" 2>/dev/null)
 }
 
 # mcp_call <out-file> <id> <tool> <args-json> : POST tools/call, saves raw body.

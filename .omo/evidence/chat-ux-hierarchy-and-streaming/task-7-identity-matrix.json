@@ -1,0 +1,98 @@
+{
+  "rows": [
+    {
+      "testid": null,
+      "type": null,
+      "identity": 1,
+      "author": "Dev-1 · 开发者",
+      "roleLabel": "· 开发者",
+      "externalBadge": 0,
+      "mentionBadge": 0,
+      "rowText": "D Dev-1 · 开发者 · 10:00 矩阵-01 已解析 author",
+      "rowRawId": false
+    },
+    {
+      "testid": null,
+      "type": null,
+      "identity": 1,
+      "author": "计划员",
+      "roleLabel": null,
+      "externalBadge": 0,
+      "mentionBadge": 0,
+      "rowText": "P 计划员 · 10:01 矩阵-02 同值去重",
+      "rowRawId": false
+    },
+    {
+      "testid": null,
+      "type": null,
+      "identity": 1,
+      "author": "计划员",
+      "roleLabel": null,
+      "externalBadge": 0,
+      "mentionBadge": 0,
+      "rowText": "P 计划员 · 10:02 矩阵-03 未映射 agent",
+      "rowRawId": false
+    },
+    {
+      "testid": null,
+      "type": null,
+      "identity": 1,
+      "author": "开发者",
+      "roleLabel": null,
+      "externalBadge": 0,
+      "mentionBadge": 0,
+      "rowText": "D 开发者 · 10:03 矩阵-04 未映射成员",
+      "rowRawId": false
+    },
+    {
+      "testid": "chat-bubble",
+      "type": "agent",
+      "identity": 0,
+      "author": "开发者 外部渠道",
+      "roleLabel": null,
+      "externalBadge": 1,
+      "mentionBadge": 0,
+      "rowText": "D 开发者 外部渠道 · 10:04 矩阵-05 外部渠道",
+      "rowRawId": false
+    },
+    {
+      "testid": null,
+      "type": null,
+      "identity": 1,
+      "author": "Dev-1 · 开发者",
+      "roleLabel": "· 开发者",
+      "externalBadge": 0,
+      "mentionBadge": 1,
+      "rowText": "D Dev-1 · 开发者 · 10:05 ★ @你 矩阵-06 提及徽标",
+      "rowRawId": false
+    },
+    {
+      "testid": "chat-bubble",
+      "type": "user",
+      "identity": 0,
+      "author": null,
+      "roleLabel": null,
+      "externalBadge": 0,
+      "mentionBadge": 0,
+      "rowText": "矩阵-07 用户消息",
+      "rowRawId": false
+    },
+    {
+      "testid": "chat-bubble",
+      "type": "system",
+      "identity": 0,
+      "author": null,
+      "roleLabel": null,
+      "externalBadge": 0,
+      "mentionBadge": 0,
+      "rowText": "矩阵-08 系统消息",
+      "rowRawId": false
+    }
+  ],
+  "bodyRawId": false,
+  "bodyHits": [],
+  "errors": [
+    "console.error: Failed to load resource: net::ERR_FAILED",
+    "console.error: Failed to load resource: net::ERR_FAILED"
+  ]
+}

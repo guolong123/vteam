@@ -457,7 +457,7 @@ describe('T4a 命令分派（onCommands + dispatchCommands）', () => {
         payload: {
           credentials: [
             {
-              repoUrl: 'git@github.com:xishuhq/aiagents.git',
+              repoUrl: 'git@github.com:xishuhq/vteam.git',
               authType: 'ssh_key',
               key: '-----BEGIN OPENSSH PRIVATE KEY-----\nsecret',
               fingerprint: 'sha256:abcd',
@@ -479,7 +479,7 @@ describe('T4a 命令分派（onCommands + dispatchCommands）', () => {
     const logArgs = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
     expect(logArgs).toContain('git-credentials');
     expect(logArgs).toContain(
-      'git@github.com:xishuhq/aiagents.git, https://github.com/xishuhq/tools.git',
+      'git@github.com:xishuhq/vteam.git, https://github.com/xishuhq/tools.git',
     );
     // 安全：key 明文绝不进日志
     expect(logArgs).not.toContain('secret');
@@ -793,7 +793,7 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
 describe('handleGitCredentials（todo 3：凭证文件幂等落盘，不重启 serve）', () => {
   const KEY: GitCredentialEntry[] = [
     {
-      repoUrl: 'git@github.com:xishuhq/aiagents.git',
+      repoUrl: 'git@github.com:xishuhq/vteam.git',
       authType: 'ssh_key',
       key: '-----BEGIN OPENSSH PRIVATE KEY-----\nsecret',
       fingerprint: 'sha256:abcd',

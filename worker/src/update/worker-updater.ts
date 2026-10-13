@@ -24,7 +24,7 @@
  *                 清单不含它），故运行时配置天然安全。
  *   f) systemd   探测口径与 install-worker.sh 完全一致（systemctl 存在 + /run/systemd/system
  *                 是目录 + 用户级 unit 存在，否则系统级 unit 存在）→ `systemctl [--user]
- *                 restart aiagents-worker`。**无 systemd → 不重启、不 process.exit**，
+ *                 restart vteam-worker`。**无 systemd → 不重启、不 process.exit**，
  *                 落 `ready-manual` + 明确日志「已下载待手动重启」（决策⑤）。
  *
  * 自动回滚（计划决策②）：进程内 `registeredSinceUpdate`——执行完 e) 置 false，下一次
@@ -34,7 +34,7 @@
  *
  * 边界（计划 Must-NOT）：进程起不来的**硬崩溃**不做自动回滚——那种情况进程内状态已经
  * 随进程一起没了，自动回滚无从谈起；dist.prev 就是给人工恢复用的一行命令：
- *   `cd <installDir> && rm -rf dist.failed && mv dist dist.failed && mv dist.prev dist && systemctl --user restart aiagents-worker`
+ *   `cd <installDir> && rm -rf dist.failed && mv dist dist.failed && mv dist.prev dist && systemctl --user restart vteam-worker`
  */
 
 import { spawn } from 'child_process';
@@ -49,8 +49,14 @@ import {
   UpdateWorkerCommandPayload,
 } from '../protocol/worker-protocol';
 
-/** systemd unit 名（与 install-worker.sh 写入的 unit 文件名逐字一致）。 */
-export const WORKER_SYSTEMD_UNIT = 'aiagents-worker';
+/** systemd unit 名默认值（与 install-worker.sh 写入的 unit 文件名逐字一致）。 */
+export const DEFAULT_WORKER_SYSTEMD_UNIT = 'vteam-worker';
+/**
+ * systemd unit 名环境变量覆盖（本仓部署实测 unit 名随宿主变化：现网默认 vteam-worker，
+ * 旧安装为 aiagents-worker）。探测顺序：env 覆盖 → 'vteam-worker'（现网默认）→
+ * 'aiagents-worker'（旧安装兼容，线上现存 unit 名，探测到即用，不因改名失联）。
+ */
+export const WORKER_SYSTEMD_UNIT_ENV = 'WORKER_SYSTEMD_UNIT';
 /** systemd 运行时标记目录（install-worker.sh 的 `[ -d /run/systemd/system ]`）。 */
 export const SYSTEMD_RUNTIME_DIR = '/run/systemd/system';
 /** 发布包文件名（install-worker.sh / pack-worker.sh 的 tarball 名）。 */
@@ -99,7 +105,7 @@ export interface RunCommandOptions {
 }
 
 /**
- * 子进程执行器。**必须异步**：`systemctl restart aiagents-worker` 会给我们自己发 SIGTERM，
+ * 子进程执行器。**必须异步**：`systemctl restart vteam-worker` 会给我们自己发 SIGTERM，
  * 若用 spawnSync 阻塞事件循环，SIGTERM 无法被处理 → 优雅退出不执行 → systemctl 等不到
  * 进程退出 → 双方互等（死锁）。故默认实现走 spawn + Promise。
  */
@@ -292,6 +298,8 @@ export interface SystemdTarget {
   /** systemctl 可执行参数前缀（用户级为 ['--user']）。 */
   ctlArgs: string[];
   unitPath: string;
+  /** 探测命中的 unit 名（不含 .service；重启命令与日志提示用）。 */
+  unit: string;
 }
 
 export class WorkerUpdater {
@@ -323,6 +331,14 @@ export class WorkerUpdater {
   private consecutiveRegisterFailures = 0;
   /** 已尝试过自动回滚——只做一次，之后只告警（防震荡）。 */
   private rollbackAttempted = false;
+  /**
+   * deferred-idle 挂起的更新目标版本（指令到达时正忙 → 活跃会话归零后由
+   * retryPendingUpdate 续跑）。fs/backoff 失败路径不经过它（那些走 nextAttemptAt
+   * + server 侧重发）。终态落地/成功重启后清空。
+   */
+  private pendingRetryVersion: string | null = null;
+  /** ready-manual 是否还欠一次重启（新码已落盘、重启被活跃会话挡下）。 */
+  private pendingRestart = false;
 
   constructor(options: WorkerUpdaterOptions) {
     this.serverUrl = options.serverUrl;
@@ -434,13 +450,20 @@ export class WorkerUpdater {
 
     this.inFlight = true;
     try {
-      return await this.runUpdate(version);
+      const outcome = await this.runUpdate(version);
+      // 非 deferred 的结果都意味着「挂起版本已结清」：要么已应用（重启欠账另由
+      // pendingRestart 跟踪），要么失败（走 nextAttemptAt + server 侧重发）。
+      if (outcome !== 'deferred-idle') {
+        this.pendingRetryVersion = null;
+      }
+      return outcome;
     } catch (err) {
       // 兜底：执行链内部已各自处理失败并 warn，走到这里说明有未预期的异常
       // （例如 fs 端口行为异常）。仍必须停回 pending 而不是让 worker 崩掉。
       const message = err instanceof Error ? err.message : String(err);
       this.logger.warn(`[worker-update] 更新 ${version} 执行异常，停在 pending 待下轮重试: ${message}`);
       this.setState(WORKER_UPDATE_STATES.PENDING);
+      this.pendingRetryVersion = null;
       this.scheduleRetry();
       return 'aborted';
     } finally {
@@ -461,8 +484,11 @@ export class WorkerUpdater {
     this.setState(WORKER_UPDATE_STATES.PENDING);
     const sessions = this.activeSessionCount();
     if (sessions > 0) {
+      // 记下目标版本：指令是一次性的，旧实现在此直接返回 = 更新永久丢失
+      // （server 幂等挡回重发）。活跃会话归零时 retryPendingUpdate 续跑。
+      this.pendingRetryVersion = version ?? this.pendingRetryVersion;
       this.logger.debug(
-        `[worker-update] 存在 ${sessions} 个活跃会话，本轮跳过（保持 pending，空闲后下轮心跳重试）`,
+        `[worker-update] 存在 ${sessions} 个活跃会话，本轮跳过（已记挂起版本=${version ?? '降级执行'}，空闲后自动续跑）`,
       );
       return 'deferred-idle';
     }
@@ -578,43 +604,7 @@ export class WorkerUpdater {
       }
 
       // f) systemd 探测 + 重启（探测口径与 install-worker.sh 一致）。
-      const systemd = await this.detectSystemd();
-      if (systemd === null) {
-        this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
-        this.logger.warn(
-          `[worker-update] 未检测到可用的 systemd（${WORKER_SYSTEMD_UNIT} unit 不存在）——已下载待手动重启：` +
-            `cd ${this.installDir} && ./scripts/start.sh`,
-        );
-        return 'applied-ready-manual';
-      }
-
-      // 覆盖与重启之间可能刚好起了一个会话：此时不重启（绝不打断会话），落 ready-manual。
-      const sessionsBeforeRestart = this.activeSessionCount();
-      if (sessionsBeforeRestart > 0) {
-        this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
-        this.logger.warn(
-          `[worker-update] 覆盖完成但此刻有 ${sessionsBeforeRestart} 个活跃会话，跳过重启——已下载待手动重启：` +
-            `${systemd.ctlArgs.join(' ')} restart ${WORKER_SYSTEMD_UNIT}`,
-        );
-        return 'applied-ready-manual';
-      }
-
-      const restart = await this.run('systemctl', [...systemd.ctlArgs, 'restart', WORKER_SYSTEMD_UNIT], {
-        env: this.systemctlEnv(systemd.scope),
-        timeoutMs: 120_000,
-      });
-      if (restart.code !== 0) {
-        this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
-        this.logger.warn(
-          `systemctl restart ${WORKER_SYSTEMD_UNIT} 失败（退出码 ${restart.code}）：${(restart.stderr || restart.stdout).trim()}——已下载待手动重启`,
-        );
-        return 'applied-ready-manual';
-      }
-      this.setState(WORKER_UPDATE_STATES.RESTARTING);
-      this.logger.info(
-        `[worker-update] 新码已覆盖（dist.prev 已备份），systemctl ${systemd.ctlArgs.join(' ')} restart ${WORKER_SYSTEMD_UNIT} 已下发`,
-      );
-      return 'applied-restarting';
+      return await this.attemptRestart();
     } finally {
       // 临时目录（含未通过校验的 tarball）无论成败都清掉，不留垃圾占盘。
       await this.fsImpl.rm(stagingDir).catch((err: unknown) => {
@@ -622,6 +612,81 @@ export class WorkerUpdater {
         this.logger.warn(`[worker-update] 清理临时目录 ${stagingDir} 失败: ${message}`);
       });
     }
+  }
+
+  /**
+   * 重启段（从 runUpdate 抽出，供 ready-manual 空闲重试复用）：
+   * systemd 探测 → 活跃会话门禁（不打断会话）→ systemctl restart。
+   * 返回 ready-manual 的分支会置 pendingRestart，等活跃会话归零后由
+   * {@link retryPendingUpdate} 再次驱动（线上事故：跳过重启后从未有人重试，
+   * 新码躺磁盘、进程跑旧码，实时修复数周不生效）。
+   */
+  private async attemptRestart(): Promise<UpdateRunOutcome> {
+    const systemd = await this.detectSystemd();
+    if (systemd === null) {
+      this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
+      this.logger.warn(
+        `[worker-update] 未检测到可用的 systemd（候选 unit ${this.systemdUnitCandidates().join(' / ')} 均不存在）——已下载待手动重启：` +
+          `cd ${this.installDir} && ./scripts/start.sh`,
+      );
+      return 'applied-ready-manual';
+    }
+
+    // 覆盖与重启之间可能刚好起了一个会话：此时不重启（绝不打断会话），落 ready-manual
+    // 并记住「重启还欠着」——活跃会话归零（instance-tracker 空闲跃变）时重试。
+    const sessionsBeforeRestart = this.activeSessionCount();
+    if (sessionsBeforeRestart > 0) {
+      this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
+      this.pendingRestart = true;
+      this.logger.warn(
+        `[worker-update] 覆盖完成但此刻有 ${sessionsBeforeRestart} 个活跃会话，跳过重启——已下载，会话归零后自动重试：` +
+          `${systemd.ctlArgs.join(' ')} restart ${systemd.unit}`,
+      );
+      return 'applied-ready-manual';
+    }
+
+    const restart = await this.run('systemctl', [...systemd.ctlArgs, 'restart', systemd.unit], {
+      env: this.systemctlEnv(systemd.scope),
+      timeoutMs: 120_000,
+    });
+    if (restart.code !== 0) {
+      this.setState(WORKER_UPDATE_STATES.READY_MANUAL);
+      this.pendingRestart = true;
+      this.logger.warn(
+        `systemctl restart ${systemd.unit} 失败（退出码 ${restart.code}）：${(restart.stderr || restart.stdout).trim()}——已下载待手动重启`,
+      );
+      return 'applied-ready-manual';
+    }
+    this.pendingRestart = false;
+    this.setState(WORKER_UPDATE_STATES.RESTARTING);
+    this.logger.info(
+      `[worker-update] 新码已覆盖（dist.prev 已备份），systemctl ${systemd.ctlArgs.join(' ')} restart ${systemd.unit} 已下发`,
+    );
+    return 'applied-restarting';
+  }
+
+  /**
+   * 空闲驱动的更新/重启重试（index.ts 在活跃会话归零时调用）。
+   *
+   * 覆盖两类「卡住」的续跑：
+   * ① `deferred-idle`：更新指令到达时 worker 正忙被一次性消费，旧实现此后永久丢失
+   *    （线上 08:50 的指令即如此丢失，随后数小时的重发都被幂等判定挡回）；
+   * ② `ready-manual`：新码已落盘但重启被活跃会话挡下，记住 pendingRestart，
+   *    归零后重新走 attemptRestart。
+   * 无待续事件 → 返回 null（空调用无副作用）。退避/单飞锁语义与 handleVersion 一致。
+   */
+  async retryPendingUpdate(): Promise<UpdateRunOutcome | null> {
+    if (this.currentState === WORKER_UPDATE_STATES.READY_MANUAL && this.pendingRestart) {
+      this.logger.info('[worker-update] 活跃会话已归零，重试挂起的重启');
+      return await this.attemptRestart();
+    }
+    if (this.pendingRetryVersion !== null) {
+      const version = this.pendingRetryVersion;
+      this.pendingRetryVersion = null;
+      this.logger.info(`[worker-update] 活跃会话已归零，重试此前 deferred 的更新（目标版本=${version}）`);
+      return await this.handleVersion(version);
+    }
+    return null;
   }
 
   /**
@@ -702,13 +767,13 @@ export class WorkerUpdater {
     if (systemd !== null) {
       const restart = await this.run(
         'systemctl',
-        [...systemd.ctlArgs, 'restart', WORKER_SYSTEMD_UNIT],
+        [...systemd.ctlArgs, 'restart', systemd.unit],
         { env: this.systemctlEnv(systemd.scope), timeoutMs: 120_000 },
       );
       restarted = restart.code === 0;
       if (!restarted) {
         this.logger.warn(
-          `systemctl restart ${WORKER_SYSTEMD_UNIT} 失败（退出码 ${restart.code}）：${(restart.stderr || restart.stdout).trim()}`,
+          `systemctl restart ${systemd.unit} 失败（退出码 ${restart.code}）：${(restart.stderr || restart.stdout).trim()}`,
         );
       }
     } else {
@@ -861,6 +926,9 @@ export class WorkerUpdater {
    *   ② `[ -d /run/systemd/system ]`（systemd 必须是 PID 1，容器内通常不满足）；
    *   ③ unit 存在：先用户级 `~/.config/systemd/user/<unit>`（安装脚本默认作用域），
    *      再系统级 `/etc/systemd/system/<unit>`（--system-service）。
+   *    unit 名按候选顺序探测：env `WORKER_SYSTEMD_UNIT` 覆盖 → 默认
+   *    `vteam-worker` / `aiagents-worker`（实测各部署 unit 名不一致，硬编码单名会误判「无 systemd」，
+   *    更新永远停在 ready-manual 等人工重启——线上真实发生过）。
    * 三条任一不满足 → null（调用方据此走 ready-manual，绝不 process.exit）。
    */
   private async detectSystemd(): Promise<SystemdTarget | null> {
@@ -871,24 +939,34 @@ export class WorkerUpdater {
     if (!(await this.fsImpl.isDirectory(SYSTEMD_RUNTIME_DIR))) {
       return null;
     }
-    const userUnitPath = path.join(
-      this.env.HOME ?? os.homedir(),
-      '.config',
-      'systemd',
-      'user',
-      `${WORKER_SYSTEMD_UNIT}.service`,
-    );
-    if (await this.fsImpl.exists(userUnitPath)) {
-      return { scope: 'user', ctlArgs: ['--user'], unitPath: userUnitPath };
-    }
-    const systemUnitPath = path.join(
-      '/etc/systemd/system',
-      `${WORKER_SYSTEMD_UNIT}.service`,
-    );
-    if (await this.fsImpl.exists(systemUnitPath)) {
-      return { scope: 'system', ctlArgs: [], unitPath: systemUnitPath };
+    const candidates = this.systemdUnitCandidates();
+    for (const unit of candidates) {
+      const userUnitPath = path.join(
+        this.env.HOME ?? os.homedir(),
+        '.config',
+        'systemd',
+        'user',
+        `${unit}.service`,
+      );
+      if (await this.fsImpl.exists(userUnitPath)) {
+        return { scope: 'user', ctlArgs: ['--user'], unitPath: userUnitPath, unit };
+      }
+      const systemUnitPath = path.join('/etc/systemd/system', `${unit}.service`);
+      if (await this.fsImpl.exists(systemUnitPath)) {
+        return { scope: 'system', ctlArgs: [], unitPath: systemUnitPath, unit };
+      }
     }
     return null;
+  }
+
+  /** unit 候选顺序：env 覆盖（去空白）→ 'vteam-worker'（现网默认）→ 'aiagents-worker'（旧安装兼容）。 */
+  private systemdUnitCandidates(): string[] {
+    const override = (this.env[WORKER_SYSTEMD_UNIT_ENV] ?? '').trim();
+    const candidates = [DEFAULT_WORKER_SYSTEMD_UNIT, 'aiagents-worker'];
+    if (override) {
+      candidates.unshift(override);
+    }
+    return [...new Set(candidates)];
   }
 
   /**
@@ -913,7 +991,7 @@ export class WorkerUpdater {
   private manualRecoveryHint(): string {
     return (
       `cd ${this.installDir} && rm -rf dist.failed && mv dist dist.failed && ` +
-      `mv dist.prev dist && systemctl --user restart ${WORKER_SYSTEMD_UNIT}`
+      `mv dist.prev dist && systemctl --user restart ${this.systemdUnitCandidates()[0]}`
     );
   }
 }

@@ -1,0 +1,411 @@
+================================================================================
+F1 — PLAN & IMPLEMENTATION STRUCTURE COMPLIANCE AUDIT
+================================================================================
+work_id        : chat-ux-hierarchy-and-streaming-38db65ea
+plan           : .omo/plans/chat-ux-hierarchy-and-streaming.md
+registry       : .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+ledger         : .omo/ulw-execute/ledger.jsonl (143 lines)
+evidence dir   : .omo/evidence/chat-ux-hierarchy-and-streaming/
+verifier       : F1 (final wave), session ses_f24d88079ffeE5ypMrL7YdZt1G
+mode           : READ-ONLY audit; the ONLY write performed is this file.
+date           : 2026-09-26
+
+VERDICT    : PASS  (structural compliance confirmed; 0 blocking failures)
+CONFIDENCE : 0.90
+scope note : F1 covers structure/plan compliance + testid baselines + commit
+             file-set scope ONLY. No claim is made about F2 (gate),
+             F3 (playwright), F4 (manual) or F5 (scope/gates) results.
+
+================================================================================
+1. PASS/FAIL TABLE
+================================================================================
+# | Check                                                       | Result
+--+-------------------------------------------------------------+--------
+1 | Implementation rows exist at column zero as numbered        | PASS
+  | checkboxes: 14/14 are `- [x] N.` starting at column 0       |
+  | (lines 127,135,143,151,159,167,175,183,191,199,207,215,     |
+  | 223,231); zero indented/nested checkboxes anywhere          |
+  | (`grep -cE '^- \[[ x]\]'` = 19; nested grep = NONE)         |
+--+-------------------------------------------------------------+--------
+2 | Final rows are `- [ ] F<n>.` at column zero                 | PASS
+  | 5/5: F1(241) F2(245) F3(249) F4(253) F5(257), all unchecked |
+--+-------------------------------------------------------------+--------
+3 | Every implementation row has all six required sub-fields     | PASS
+  | References / Acceptance / QA happy / QA failure /           |
+  | Recommended task executor category / Commit: 14/14 present  |
+  | (programmatic field scan over all 19 top-level blocks)      |
+--+-------------------------------------------------------------+--------
+4 | QA happy contains a literal evidence path                    | PASS
+  | 14/14 rows cite `.omo/evidence/chat-ux-hierarchy-and-       |
+  | streaming/*.txt` in the QA happy line                        |
+--+-------------------------------------------------------------+--------
+5 | QA failure contains an evidence path                         | PASS (1 note)
+  | 13/14 literal paths. Row 1 (line 131) says `证据：同一 C0   |
+  | 文件` (anaphoric) — resolves unambiguously to the row's      |
+  | own Acceptance/QA-happy path                                |
+  | `.omo/evidence/chat-ux-hierarchy-and-streaming/             |
+  | c0-serve-incremental.txt`, which exists (line 90:           |
+  | `C0=FAIL`). Not a structural gap; hygiene note H3.           |
+--+-------------------------------------------------------------+--------
+6 | Declared implementation evidence files exist on disk         | PASS (2 notes)
+  | Rows 1-12,14: all 25 declared evidence files present.       |
+  | Row 13 (skipped C1): task-13-delta-semantics{,-failure}.txt |
+  | declared but absent — expected for a skipped conditional    |
+  | row; binding evidence is c0-serve-incremental.txt (exists). |
+  | final-f1..f5 absent at audit time (final wave in progress); |
+  | final-f1 is created by this run. Hygiene notes H1/H2.        |
+--+-------------------------------------------------------------+--------
+7 | Recommended task executor category + Commit on every impl row| PASS
+  | 14/14 categories (deep-low/visual-engineering/quick/        |
+  | deep-high/unspecified-high) and 14/14 Commit fields;        |
+  | row 1 `无（纯验证，不改代码）`, row 13 declares its        |
+  | fix(stream) subject but produced no commit (skipped).       |
+--+-------------------------------------------------------------+--------
+8 | Checkbox / task-id uniqueness                               | PASS
+  | Plan ids: 1..14 + F1..F5, 19 unique, 0 duplicates.          |
+  | Registry: 19 unique task ids, 0 duplicate step ids.         |
+  | No nested checkbox could shadow an id.                       |
+--+-------------------------------------------------------------+--------
+9 | Accounting: 12 committed impl checkboxes + skipped C1        | PASS
+  | 14 `[x]` rows = 12 committing implementation rows           |
+  | (2,3,4,5,6,7,8,9,10,11,12,14) + row 1 (C0 verification,     |
+  | no commit by design) + row 13 (C1 skipped, evidence-backed  |
+  | by C0=FAIL). 13 commits map 1:1..2 to those 12 rows.        |
+  | Full ledger in section 4.                                    |
+--+-------------------------------------------------------------+--------
+10| No testid disappeared between recorded before/after baselines| PASS (1 note)
+  | Plan-designated pair: `comm -23 sort(chat-testids-before)   |
+  | sort(chat-testids-after)` = EMPTY (23 vs 24 lines; only     |
+  | new id: data-testid="chat-bubble-time").                    |
+  | All 9 recorded pairs recomputed (section 5): 8 empty; only  |
+  | task-8 pair shows a literal delta (`loading-indicator` + a  |
+  | comment header line) which is a STATIC GREP ARTIFACT, not a |
+  | DOM disappearance — investigated and disproven (section 5). |
+  | All 10 plan-named critical testids present in latest        |
+  | recorded after (task-12-chat-testids-after.txt).            |
+--+-------------------------------------------------------------+--------
+11| No implementation commit contains unrelated dirty files      | PASS
+  | 13/13 commits scanned (`git show --name-only`): ZERO hits   |
+  | for .omo/, .opencode/, ledger.jsonl, boulder.json,          |
+  | phase5-t9-playwright, *.png/*.log/*.txt, test-results/,     |
+  | playwright-report/. Every committed path is under web/.      |
+--+-------------------------------------------------------------+--------
+12| Commit ↔ plan row binding and scope deviation disclosure      | PASS (3 notes)
+  | Each row's Commit subject matches `git log -1 --format=%s`  |
+  | exactly for all 12 committing rows; row 14 discloses its    |
+  | two commits in the row header, registry.history_deviation   |
+  | and ledger line 89. Deviations recorded in section 6.        |
+--+-------------------------------------------------------------+--------
+13| C0=FAIL / C1-skipped / C2-two-commit disclosures are present  | PASS
+  | Plan row 1 header `（结论：FAIL；C1 按计划跳过）`; row 13    |
+  | header `（skipped：C0=FAIL，详见 .../c0-serve-incremental.  |
+  | txt）`; row 14 header `（commits 8092b16 + a6139ec；两       |
+  | commit 原因见 ledger）`; registry task 13 status=skipped +  |
+  | skip_reason; ledger lines 78/81/82/89/141. No C0=PASS is    |
+  | claimed anywhere (only conditional-text occurrences).        |
+--+-------------------------------------------------------------+--------
+14| Adversarial classes covered (stale_state, dirty_worktree,    | PASS
+  | misleading_success_output, malformed_evidence, secrets)      |
+  | — see section 7. No blocking finding in any class.           |
+
+OVERALL: 14/14 checks PASS (0 FAIL, 6 non-blocking hygiene notes).
+
+================================================================================
+2. PLAN STRUCTURE EVIDENCE (exact)
+================================================================================
+Implementation rows (column zero, all checked):
+  L127 `- [x] 1.`   C0 real-serve verification   (结论 FAIL, C1 skipped)
+  L135 `- [x] 2.`   A1-A3  -> commit 31ff11f
+  L143 `- [x] 3.`   A4      -> commit 438a0b6
+  L151 `- [x] 4.`   B1      -> commit e750e32
+  L159 `- [x] 5.`   B2      -> commit cf08cf9
+  L167 `- [x] 6.`   B3/B4   -> commit 67e7442
+  L175 `- [x] 7.`   B5/B9   -> commit 9674e4c
+  L183 `- [x] 8.`   B12     -> commit 1433275
+  L191 `- [x] 9.`   B6      -> commit 129b761
+  L199 `- [x] 10.`  B7/B8   -> commit 1bef2e0
+  L207 `- [x] 11.`  B10     -> commit 9fcbf85
+  L215 `- [x] 12.`  B11     -> commit b27f4c7
+  L223 `- [x] 13.`  C1      -> SKIPPED (C0=FAIL), no commit
+  L231 `- [x] 14.`  C2      -> commits 8092b16 + a6139ec
+Final rows (column zero, all unchecked, `- [ ] F<n>.` form):
+  L241 F1  L245 F2  L249 F3  L253 F4  L257 F5
+Sub-fields are indented two spaces (`  - References:` ...); a sample
+`cat -e` dump of row 2 (L135-142) confirms indentation and field order.
+`grep -nE '^[[:space:]]+- \[[ x]\]'` -> NONE (no nested checkboxes).
+
+Per-row field matrix (programmatic scan, 19 blocks):
+  row : References Acceptance QA-happy QA-failure Category Commit QAhappy-path QAfail-path
+    1 :     OK         OK        OK        OK        OK      OK        OK        anaphoric(H3)
+    2 :     OK         OK        OK        OK        OK      OK        OK          OK
+    3 :     OK         OK        OK        OK        OK      OK        OK          OK
+    4 :     OK         OK        OK        OK        OK      OK        OK          OK
+    5 :     OK         OK        OK        OK        OK      OK        OK          OK
+    6 :     OK         OK        OK        OK        OK      OK        OK          OK
+    7 :     OK         OK        OK        OK        OK      OK        OK          OK
+    8 :     OK         OK        OK        OK        OK      OK        OK          OK
+    9 :     OK         OK        OK        OK        OK      OK        OK          OK
+   10 :     OK         OK        OK        OK        OK      OK        OK          OK
+   11 :     OK         OK        OK        OK        OK      OK        OK          OK
+   12 :     OK         OK        OK        OK        OK      OK        OK          OK
+   13 :     OK         OK        OK        OK        OK      OK        OK          OK
+   14 :     OK         OK        OK        OK        OK      OK        OK          OK
+  F1-F5 : (final rows) Recommended OK + Evidence OK for all 5.
+
+Note on row 13: its Commit field and QA paths are *declared* text for the
+conditional work. The row header marks it `skipped：C0=FAIL`; registry
+task 13 status="skipped", skip_reason="C0=FAIL confirmed; C1 is conditional
+and explicitly skipped."; ledger line 82 `task-skipped`. It is accounted
+for, NOT missing.
+
+================================================================================
+3. EVIDENCE FILE EXISTENCE (plan-declared paths)
+================================================================================
+PRESENT (27): c0-serve-incremental.txt, chat-testids-before.txt,
+  task-{2,3,4,5,6,7,8,9,10,11,12,14}-{happy,failure}.txt  (all 24)
+ABSENT (planned, non-blocking):
+  task-13-delta-semantics.txt / task-13-delta-semantics-failure.txt
+      -> skipped conditional row; binding evidence = c0-serve-incremental.txt   [H1]
+  final-f1..final-f5 -> final wave in progress; final-f1 written by this run   [H2]
+Also present but not plan-declared: 173 directory entries (per-task logs,
+pngs, per-task testid baselines, task-11-docs-decision.txt, etc.).
+
+================================================================================
+4. CHECKBOX ACCOUNTING (14 implementation rows)
+================================================================================
+COMMITTED IMPLEMENTATION ROWS — 12 rows, 13 commits:
+ row | registry status | registry commit      | git subject matches plan Commit field
+   2 | completed       | 31ff11f (full sha ..c0da0a) | YES `feat(chat): 放宽正文、tool I/O 与 thinking 密度阈值`
+   3 | completed       | 438a0b6 ...ee557     | YES `feat(chat): 建立正文、身份、元信息三级字号`
+   4 | completed       | e750e32              | YES `refactor(chat): 提取共享消息身份栏并移除 process 重复身份`
+   5 | completed       | cf08cf9              | YES `feat(chat): 连续同发送者消息复用身份栏`
+   6 | completed       | 67e7442              | YES `feat(chat): 增加跨天日期分隔并降低 system 行噪音`
+   7 | completed       | 9674e4c ...f7c7dd1   | YES `feat(chat): 并列展示 author 与角色并隐藏裸 id 兜底`
+   8 | completed       | 1433275 ...0c78513   | YES `fix(chat): 为 session-status 补容器并保留 system 时间`
+   9 | completed       | 129b761 ...e03a9844  | YES `fix(chat): 未知 part 默认可收起展示而非静默丢弃`
+  10 | completed       | 1bef2e0 ...8428e86   | YES `feat(chat): 增加用户消息状态并显示成员人名缩写`
+  11 | completed       | 9fcbf85              | YES `refactor(theme): 角色色统一走 light/dark CSS 变量`
+  12 | completed       | b27f4c7 ...9347d803a | YES `feat(chat): 统一低优先级折叠并保持错误中断可见`
+  14 | completed       | 8092b16 + a6139ec    | YES (+2nd commit disclosed, see §6)
+NON-COMMITTED ROWS — 2 rows, both accounted:
+ row 1  = C0 verification, completed_with_fail_verdict, `Commit: 无（纯验证）`.
+          Evidence c0-serve-incremental.txt line 90 `C0=FAIL`;
+          independent AdversarialVerify ledger line 80 recomputed
+          length_sequence "[0 x17, 865, 865, 865]" (constant => FAIL).
+ row 13 = C1, SKIPPED with evidence; `git log --since=2026-09-25` over
+          worker/src/driver/prompt-await.ts, worker/src/exec/exec-server.ts,
+          server/src/workers/worker-event.ingress.ts,
+          server/src/chat/message-parts.ts -> only pre-plan commit
+          9db2e71 (Tech debt remediation) => C1 genuinely NOT implemented.
+`git log 7c9765f..HEAD` = exactly 13 commits, i.e. no stray commits on top
+of the pre-plan baseline beyond the 13 plan commits.
+Registry progress {implementation_total:14, final_total:5, top_level_total:19,
+completed:13} is consistent with 13 completed (12 committed + C0) / 1 skipped.
+
+================================================================================
+5. TESTID DISAPPEARANCE RECOMPUTATION (comm -23)
+================================================================================
+Plan-designated baseline pair (plan L83-87):
+  .omo/evidence/chat-ux-hierarchy-and-streaming/chat-testids-before.txt (23 lines)
+  .omo/evidence/chat-ux-hierarchy-and-streaming/chat-testids-after.txt  (24 lines)
+  comm -23 (sort before, sort after) -> EMPTY   => zero disappearance  [PASS]
+  only addition: data-testid="chat-bubble-time"
+
+All recorded before/after pairs, `comm -23` (before-only = disappeared):
+  pair                      before after  disappeared
+  chat-testids                23     24    (none)
+  task-4-chat-testids         24     24    (none)
+  task-5-chat-testids         25     25    (none)
+  task-6-chat-testids         25     25    (none)
+  task-7-chat-testids         25     26    (none)
+  task-8-chat-testids         27     26    <# comment header line>
+                                              data-testid="loading-indicator"
+  task-9-chat-testids         24     26    (none)
+  task-10-chat-testids        27     28    (none)
+  task-12-chat-testids        27     36    (none)
+Cumulative: chat-testids-before vs task-12-chat-testids-after (latest
+recorded, 2026-09-26 08:24) -> only `data-testid="loading-indicator"`.
+
+INVESTIGATION OF `loading-indicator` (why this is NOT a disappearance):
+ 1. Commit 1433275 (B12) changed loading-indicator.tsx from the literal
+    `data-testid="loading-indicator"` to `data-testid={testid}` with
+    default `testid = "loading-indicator"` (live lines 27 and 76) and
+    default `LoadingDots` testid likewise (line 76).
+ 2. Runtime call sites:
+    web/app/(main)/teams/[id]/session/page.tsx:1446
+        {loadingLabel && <LoadingIndicator label={loadingLabel} />}
+      -> renders data-testid="loading-indicator" (default prop)
+    page.tsx:1449 uses testid="session-status" + dotsTestId=
+      "session-status-dots" only for the second (status) row, so the
+      original id is NOT shadowed away.
+ 3. e2e still locates it:
+    web/e2e/session-unification.spec.ts:1507,1562
+      page.locator('div[data-testid="loading-indicator"]');
+    task-8-status-container.txt:212-213 records the green run asserting
+      count 1; :202 documents the exact one-line static diff (`11d10`).
+ 4. Therefore the delta is an artifact of the plan's literal-string grep
+    (`grep -rhoE 'data-testid="..."'`) not matching a template-literal
+    testid. No DOM/testid contract was lost.
+LIVE RECOMPUTE (plan's exact grep against current tree, in-memory):
+  baseline-before minus live -> only `loading-indicator` (same artifact)
+  task-12-after minus live   -> EMPTY (latest recorded after == live)
+Plan-named critical testids all present in task-12-chat-testids-after.txt:
+  agent-avatar OK, chat-bubble-author OK, chat-bubble OK,
+  chat-bubble-content OK, chat-bubble-toggle OK, msg-thinking OK,
+  msg-tool OK, msg-error OK, msg-aborted OK, msg-streaming OK.
+=> Check 10 PASS. Hygiene note H4: chat-testids-after.txt was generated
+   2026-09-25 23:32 and predates tasks 4-14 (stale), and a naive rerun of
+   the plan's grep will "lose" loading-indicator — regenerate at F-wave or
+   rely on the runtime/e2e assertions already recorded.
+
+================================================================================
+6. COMMIT FILE SETS vs PLAN ROWS + SCOPE DEVIATIONS
+================================================================================
+All 13 commits touch ONLY web/ paths; no server/ or worker/ change (consistent
+with C1 skipped and with Scope OUT #1/#2/#3 for this plan's UI scope).
+
+row 2  31ff11f: web/e2e/chat-density.spec.ts (new), web/lib/chat-density.spec.ts
+         (new), web/src/components/chat/{msg-parts,msg-thinking}.tsx,
+         web/src/components/ui/chat-bubble.tsx,
+         ** web/playwright.config.ts (new `chat-density` Playwright project,
+            comment cites "复选框 2") ** -> DEVIATION D1: config file not
+         declared in row 2 References. Related test harness, adds no
+         dependency (Scope OUT #4 prohibits new runners/deps — none added),
+         but it is a third Playwright project beyond lib-unit/e2e, and row 2's
+         QA happy command does not mention it. Non-blocking for F1; flag F5.
+row 3  438a0b6: chat-density.spec/lib, chat-bubble.tsx, theme/tokens.ts — in row.
+row 4  e750e32: adds ui/message-identity.tsx + ui/index.ts (explicitly required
+         by row 4 Acceptance), msg-*.tsx, chat-bubble.tsx, chat-density.spec — in row.
+row 5  cf08cf9: adds lib/message-grouping{,.spec}.ts — anticipated by plan
+         Verification strategy ("提取了日期/分组/身份解析纯函数") + registry 5.1.
+row 6  67e7442: adds lib/date-separator{,.spec}.ts — same, anticipated.
+row 7  9674e4c: adds lib/author-role-display{,.spec}.ts, lib/display-author
+         {,.spec}.ts, msg-parts.tsx — same, anticipated ("身份解析纯函数").
+row 8  1433275: page.tsx, session-unification.spec.ts, loading-indicator.tsx,
+         chat-bubble.tsx — all four are exactly B12's declared surface.
+row 9  129b761: adds chat/msg-unknown-part.tsx + chat/index.ts re-export —
+         row 9 says "新增 msg-unknown-part 渲染分支" (file vs branch: equivalent).
+row 10 1bef2e0: adds lib/message-initials{,.spec}.ts (Unicode initials pure
+         function) — related, extracted per plan testing strategy.
+row 11 9fcbf85: tokens.ts, lib/role-theme.spec.ts, and
+         ** web/app/(main)/skills/page.tsx (2x `roleText[...] + "14"` ->
+            `color-mix(in srgb, ... 8%, transparent)`) **
+         -> DEVIATION D2: skills page is outside chat/row-11 References, but
+         is a direct consumer of roleText whose alpha-suffix concat breaks
+         once role colors become var(--color-role-*); same theme concern.
+         Related, small, disclosed in task brief as "B10 related skills/page
+         color-mix sites". Non-blocking for F1; flag F5.
+row 12 b27f4c7: adds ui/collapse-policy.ts (pure collapse-matrix logic) +
+         declared msg-*/chat-bubble surfaces — related, anticipated.
+row 14 8092b16 (page.tsx + session-unification.spec.ts) and a6139ec
+         (session-unification.spec.ts only) -> DEVIATION D3 (disclosed):
+         two commits for one todo because verified 31ff11f landed between
+         them; second subject uses type `test(chat):` which is outside the
+         Commit strategy's enumerated type list (feat/refactor/fix/
+         refactor(theme)/fix(stream)), though it keeps `type(scope): 中文摘要`
+         shape and touches only test files.
+         Disclosed in THREE places: plan row 14 header (L231),
+         registry `history_deviation` (row 14), ledger line 89
+         ("Both commits contain only todo-14 files; no evidence/dirty
+         files. Do not rebase/squash because task-2 evidence pins 31ff11f.").
+NO commit contains: .omo/**, .opencode/**, ledger.jsonl, boulder.json,
+phase5-t9-playwright.json, test-results/, playwright-report/, *.png, *.log,
+*.txt. (grep over all 13 `git show --name-only` outputs: zero hits.)
+
+================================================================================
+7. PRE-EXISTING DIRTY WORKTREE (recorded, untouched)
+================================================================================
+git status --short at audit time (read-only snapshot):
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M .opencode/opencode.json
+?? .omo/drafts/chat-ux-hierarchy-and-streaming.md
+?? .omo/evidence/chat-ux-hierarchy-and-streaming/
+?? .omo/notepads/chat-ux-hierarchy-and-streaming/
+?? .omo/plans/chat-ux-hierarchy-and-streaming.md
+?? .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+=> All 7 pre-existing modifications remain ` M` (still dirty, not reverted,
+   not `git checkout`-ed, not staged, and confirmed absent from all 13 plan
+   commits). The 5 untracked entries are this plan's own state artifacts.
+   Scope OUT #9 satisfied.
+
+================================================================================
+8. ADVERSARIAL CLASSES
+================================================================================
+stale_state:
+  - chat-testids-after.txt mtime 2026-09-25 23:32 predates tasks 4-14; the
+    true latest recorded after is task-12-chat-testids-after.txt (both used
+    above). See H4.
+  - registry phase wave-0 status "in_progress" although all 3 of its tasks
+    are completed; wave-3 status "pending" although its only task is
+    skipped. Cosmetic registry staleness; task-level statuses are correct.
+  - registry step F1.2 status "pending" at audit time — satisfied by this
+    run (recomputed in §5); registry intentionally NOT edited by F1.
+  - task-8-chat-testids-before.txt line 1 is a `# ...` comment header mixed
+    into a testid baseline file (inflates before count 27 vs 26). H5.
+dirty_worktree:
+  - 7 modified + 5 untracked, all preserved; zero leakage into commits
+    (§7, §6). No mutating command was run by this verifier.
+misleading_success_output:
+  - No ledger/registry record claims F1..F5 completion (grep for this
+    work_id + final/F1..F5: only goal/dispatch records lines 67,142,143).
+  - No C0=PASS claim exists anywhere; occurrences of the string are only
+    conditional template text in plan/registry. Evidence line 90 is
+    `C0=FAIL` and independent recomputation (ledger line 80) agrees.
+  - registry progress counters reconcile with reality (§4).
+  - C0 evidence reports `configured=no, length=0` for the serve password —
+    the FAIL verdict is not dressed up as success.
+malformed_evidence:
+  - H1: task-13-*.txt declared in plan row 13 + registry evidence[] but
+    absent (skipped row — non-blocking, but registry lists paths that do
+    not exist, which reads as if they do).
+  - H2: final-f1..f5 evidence absent pre-run (expected; f1 written here).
+  - H3: row 1 QA failure uses an anaphoric evidence reference instead of a
+    literal path (resolvable within the row).
+  - H4/H5: stale designated after-baseline; comment line in a baseline file.
+secrets:
+  - `grep -rniE 'authorization: basic <b64>|OPENCODE_SERVER_PASSWORD=...|
+    Bearer <token>'` over the whole plan evidence dir -> 0 hits.
+  - c0-serve-incremental.txt:11,20 contain only the placeholder
+    `opencode:<OPENCODE_SERVER_PASSWORD>` plus `length=0`; header/value
+    never printed. Plan text references the env var by name only.
+  - No secret in any commit message or file name.
+
+================================================================================
+9. HYGIENE NOTES (non-blocking) + REMEDIATION
+================================================================================
+H1 plan row 13 / registry declare task-13-delta-semantics{,-failure}.txt
+   which do not exist because C1 was legitimately skipped.
+H2 final-f2..final-f5 evidence files do not exist yet (final wave running).
+H3 plan row 1 (L131) QA failure evidence is anaphoric ("同一 C0 文件").
+H4 designated chat-testids-after.txt is stale and the plan's literal grep
+   would falsely flag `loading-indicator` if rerun today.
+H5 comment header line inside task-8-chat-testids-before.txt.
+H6 Next local docs `web/node_modules/next/dist/docs/` is ABSENT in this
+   checkout (Scope OUT #11 prerequisite) — recorded in
+   task-11-docs-decision.txt as DIST_DOCS_ABSENT with an approved fallback
+   to pinned Next v15.5.22 tag docs (commit 6ad9e56...). Documented
+   deviation, not silent; belongs to F5's scope review.
+
+REMEDIATION (F1 is structurally PASS — no blocking remediation required):
+ 1. Optional, before F5: regenerate chat-testids-after.txt with the plan's
+    grep AND annotate the `loading-indicator` template-literal caveat, or
+    record task-12-chat-testids-after.txt as the authoritative final
+    baseline (§5 gives both results).
+ 2. Optional: in a future plan edit (NOT done by F1), replace row 1's
+    `证据：同一 C0 文件` with the literal path, and either drop the
+    task-13 evidence paths or annotate them `n/a (skipped)` in registry.
+ 3. F5 should adjudicate deviations D1 (playwright.config.ts new project),
+    D2 (skills/page.tsx color-mix) and D3 (`test(chat):` type) plus H6.
+ 4. Do not mark any checkbox based on this file; plan checkbox F1 remains
+    for the orchestrator to tick after reading this verdict.
+
+================================================================================
+METHOD: Read/grep/glob only; `comm -23` via process substitution;
+`git show --name-only`, `git log -1 --format=%s`, `git status --short`;
+programmatic plan-field parser (python3, no writes). No lint/build/test run,
+no file modified other than this evidence file.

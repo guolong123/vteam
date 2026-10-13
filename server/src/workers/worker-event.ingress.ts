@@ -17,6 +17,7 @@ import {
   concatText,
   extractConclusionParts,
   hasRenderableContent,
+  mergePartsById,
   normalizeParts,
 } from '../chat/message-parts';
 import { inferErrorType } from './infer-error-type';
@@ -207,6 +208,12 @@ export class WorkerEventIngress {
   private readonly taskCompletedCallbacks: TaskCompletedCallback[] = [];
   private readonly agentStatusCallbacks: AgentStatusCallback[] = [];
   private readonly sessionActivityCallbacks: SessionActivityCallback[] = [];
+
+  /** message.part.delta 落库串行队列：`channelId|senderId`（= findFirst 定位身份）→ 在途 promise 链。
+   *  worker 侧 delta 不 await 连发、handleEvent 各 handler 并发执行，
+   *  findFirst(无行)→create 是典型 check-then-act，并发下会建出多条 processing 行
+   *  （UI 上同一段独白重复成多条消息）。按定位身份串行化即可关闭，无需 DB 唯一约束。 */
+  private readonly partDeltaChains = new Map<string, Promise<unknown>>();
 
   /** 会话最近输出活动时间（sessionId → Date.now()，空闲判死数据源）。
    *  仅 delta/task.completed/session.updated 三类「输出活动」刷新；agent.status
@@ -596,67 +603,81 @@ export class WorkerEventIngress {
       );
       return true;
     }
-    const hasExisting = await this.prisma.message.findFirst({
-      where: {
-        channelId,
-        senderType: SENDER_TYPE.agent,
-        status: MESSAGE_STATUS.processing,
-        ...(agentId ? { senderId: agentId } : {}),
+    // 落库段（findFirst → update/create）按定位身份串行化：worker 不 await 连发 delta
+    // 时，并发的 findFirst(无行)→create 会各建一条 processing 行（重复独白消息）。
+    const row = await this.runPartDeltaExclusive(
+      `${channelId}|${agentId ?? ''}`,
+      async () => {
+        const hasExisting = await this.prisma.message.findFirst({
+          where: {
+            channelId,
+            senderType: SENDER_TYPE.agent,
+            status: MESSAGE_STATUS.processing,
+            ...(agentId ? { senderId: agentId } : {}),
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, content: true },
+        });
+        // 只含 step-start/step-finish 等前端不渲染片段的增量：
+        // - 无 processing 行 → 不建行（否则消息开始时就落一条 UI 上的空消息）；
+        // - 已有行 → 不追加（避免内容被噪声撑大、终态化后仍无可渲染内容）。
+        if (!hasExisting && !hasRenderableContent(kept)) {
+          this.logger.debug(
+            `[ingress] message.part.delta 增量无可渲染内容且无 processing 行，跳过（channel=${channelId}）`,
+          );
+          return null;
+        }
+        if (hasExisting && !hasRenderableContent(kept)) {
+          this.logger.debug(
+            `[ingress] message.part.delta 增量无可渲染内容，不追加 message=${hasExisting.id}（channel=${channelId}）`,
+          );
+          return null;
+        }
+        if (hasExisting) {
+          const oldContent = (hasExisting.content ?? {}) as Record<
+            string,
+            unknown
+          >;
+          // 同 part.id 的新快照原地替换旧快照（worker 重发状态变化后同一 id 会重复上送；
+          // 无条件追加会让一次工具调用在 content.parts 里堆出多份快照）。
+          const merged = mergePartsById(oldContent.parts, kept);
+          const updated = await this.prisma.message.update({
+            where: { id: hasExisting.id },
+            data: {
+              content: {
+                text: concatText(merged),
+                parts: merged,
+              } as Prisma.InputJsonValue,
+            },
+          });
+          this.logger.debug(
+            `[ingress] message.part.delta 累积更新 message=${hasExisting.id} parts=${kept.length}（workerId=${dto.workerId}）`,
+          );
+          return updated;
+        }
+        const created = await this.prisma.message.create({
+          data: {
+            id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+            channelId,
+            senderType: SENDER_TYPE.agent,
+            senderId: agentId ?? null,
+            senderInstanceId: deltaSenderInstanceId ?? null,
+            content: {
+              text: concatText(kept),
+              parts: kept,
+            } as Prisma.InputJsonValue,
+            mentions: null,
+            status: MESSAGE_STATUS.processing,
+          },
+        });
+        this.logger.debug(
+          `[ingress] message.part.delta 新建 processing message=${created.id} parts=${kept.length}（workerId=${dto.workerId}）`,
+        );
+        return created;
       },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, content: true },
-    });
-    // 只含 step-start/step-finish 等前端不渲染片段的增量：
-    // - 无 processing 行 → 不建行（否则消息开始时就落一条 UI 上的空消息）；
-    // - 已有行 → 不追加（避免内容被噪声撑大、终态化后仍无可渲染内容）。
-    if (!hasExisting && !hasRenderableContent(kept)) {
-      this.logger.debug(
-        `[ingress] message.part.delta 增量无可渲染内容且无 processing 行，跳过（channel=${channelId}）`,
-      );
+    );
+    if (!row) {
       return true;
-    }
-    let row: MessageRow;
-    if (hasExisting && !hasRenderableContent(kept)) {
-      this.logger.debug(
-        `[ingress] message.part.delta 增量无可渲染内容，不追加 message=${hasExisting.id}（channel=${channelId}）`,
-      );
-      return true;
-    }
-    if (hasExisting) {
-      const oldContent = (hasExisting.content ?? {}) as Record<string, unknown>;
-      const oldParts = Array.isArray(oldContent.parts) ? oldContent.parts : [];
-      const merged = [...oldParts, ...kept];
-      row = await this.prisma.message.update({
-        where: { id: hasExisting.id },
-        data: {
-          content: {
-            text: concatText(merged),
-            parts: merged,
-          } as Prisma.InputJsonValue,
-        },
-      });
-      this.logger.debug(
-        `[ingress] message.part.delta 累积更新 message=${hasExisting.id} parts=${kept.length}（workerId=${dto.workerId}）`,
-      );
-    } else {
-      row = await this.prisma.message.create({
-        data: {
-          id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-          channelId,
-          senderType: SENDER_TYPE.agent,
-          senderId: agentId ?? null,
-          senderInstanceId: deltaSenderInstanceId ?? null,
-          content: {
-            text: concatText(kept),
-            parts: kept,
-          } as Prisma.InputJsonValue,
-          mentions: null,
-          status: MESSAGE_STATUS.processing,
-        },
-      });
-      this.logger.debug(
-        `[ingress] message.part.delta 新建 processing message=${row.id} parts=${kept.length}（workerId=${dto.workerId}）`,
-      );
     }
     await this.realtime.emit(
       EVENT_TYPES.MESSAGE_PART_DELTA,
@@ -672,6 +693,29 @@ export class WorkerEventIngress {
       agentId: agentId ?? this.str(raw.agentId),
     });
     return true;
+  }
+
+  /**
+   * 按 key 串行执行（同一 key 的前一个任务结束后才启动下一个）。前序失败不阻断后序，
+   * 队尾出链后清理 key（防内存泄漏）。
+   */
+  private runPartDeltaExclusive<T>(
+    key: string,
+    task: () => Promise<T>,
+  ): Promise<T> {
+    const prev = this.partDeltaChains.get(key) ?? Promise.resolve();
+    const run = prev.then(task, task);
+    const tail = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.partDeltaChains.set(key, tail);
+    void tail.then(() => {
+      if (this.partDeltaChains.get(key) === tail) {
+        this.partDeltaChains.delete(key);
+      }
+    });
+    return run;
   }
 
   /**

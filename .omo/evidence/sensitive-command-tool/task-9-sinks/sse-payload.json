@@ -1,0 +1,83 @@
+[
+  [
+    "agent.question",
+    {
+      "question": {
+        "id": "aq_secret",
+        "requestId": "que_platform_0000000001",
+        "sessionId": "s_1",
+        "taskId": "t_1",
+        "agentId": "a_1",
+        "kind": "secret_input",
+        "content": {
+          "source": "secret_input",
+          "template": "mysql -h db -u root -p{{DB_PASSWORD}}",
+          "variables": [
+            {
+              "name": "DB_PASSWORD",
+              "secret": true
+            }
+          ],
+          "reason": "导出订单表"
+        },
+        "status": "pending",
+        "answers": null,
+        "managedMode": false,
+        "createdAt": "2026-09-26T20:22:36.948Z",
+        "updatedAt": "2026-08-12T00:00:00.000Z"
+      },
+      "taskId": "t_1",
+      "agentId": "a_1",
+      "sessionId": "s_1"
+    },
+    {
+      "type": "team",
+      "id": "tm_1"
+    }
+  ],
+  [
+    "agent.question",
+    {
+      "question": {
+        "id": "aq_secret",
+        "requestId": "que_platform_0000000001",
+        "sessionId": "s_1",
+        "taskId": "t_1",
+        "agentId": "a_1",
+        "kind": "secret_input",
+        "content": {
+          "source": "secret_input",
+          "template": "mysql -h db -u root -p{{DB_PASSWORD}}",
+          "variables": [
+            {
+              "name": "DB_PASSWORD",
+              "secret": true
+            }
+          ],
+          "reason": "导出订单表"
+        },
+        "status": "resolved",
+        "answers": {
+          "provided": true,
+          "filled": [
+            "DB_PASSWORD"
+          ],
+          "actorType": "user",
+          "actorId": "u_1"
+        },
+        "managedMode": false,
+        "createdAt": "2026-09-26T20:22:36.948Z",
+        "updatedAt": "2026-08-12T00:00:00.000Z"
+      },
+      "taskId": "t_1",
+      "teamId": "tm_1",
+      "agentId": "a_1",
+      "sessionId": "s_1",
+      "resolved": true
+    },
+    {
+      "type": "team",
+      "id": "tm_1"
+    }
+  ]
+]

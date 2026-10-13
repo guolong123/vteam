@@ -1164,4 +1164,103 @@ describe('MessageDeltaTracker（T10：增量上送去重）', () => {
     expect(fresh).toHaveLength(1);
     expect(fresh[0]?.type).toBe('text');
   });
+
+  it('tool part 状态指纹重发：pending({})→running(带 input)→completed(带 output) 逐态上送', () => {
+    const tracker = new MessageDeltaTracker();
+    const tool = (state: Record<string, unknown>): ServePart =>
+      ({ id: 'prt_tool', type: 'tool', tool: 'bash', state }) as ServePart;
+    // 首发：pending + input {}（模型参数解析前的空壳，曾致 UI 永远 running + 输入 {}）
+    expect(
+      tracker.extractNewParts([asstMsg('a1', [tool({ status: 'pending', input: {} })])]),
+    ).toHaveLength(1);
+    // 同状态重复轮询 → 指纹不变，不重发
+    expect(
+      tracker.extractNewParts([asstMsg('a1', [tool({ status: 'pending', input: {} })])]),
+    ).toHaveLength(0);
+    // running：参数解析完成写入 input → 指纹变化，重发
+    expect(
+      tracker.extractNewParts([asstMsg('a1', [tool({ status: 'running', input: { command: 'ls' } })])]),
+    ).toHaveLength(1);
+    // completed：输出写入 output → 指纹变化，重发
+    expect(
+      tracker.extractNewParts([asstMsg('a1', [tool({ status: 'completed', input: { command: 'ls' }, output: 'a.txt' })])]),
+    ).toHaveLength(1);
+    // 终态后重复轮询 → 不再重发
+    expect(
+      tracker.extractNewParts([asstMsg('a1', [tool({ status: 'completed', input: { command: 'ls' }, output: 'a.txt' })])]),
+    ).toHaveLength(0);
+  });
+
+  it('text part 增长阈值重发：累计增长 <64 字符不重发，≥64 才重发（流式刷新 + 带宽受控）', () => {
+    const tracker = new MessageDeltaTracker();
+    const text = (s: string): ServePart => ({ id: 'prt_text', type: 'text', text: s }) as ServePart;
+    expect(tracker.extractNewParts([asstMsg('a1', [text('短思考')])])).toHaveLength(1); // 首发
+    expect(tracker.extractNewParts([asstMsg('a1', [text('短思考，又长了几个字')])])).toHaveLength(0); // 增长不足阈值
+    const grown = 'x'.repeat(80);
+    expect(tracker.extractNewParts([asstMsg('a1', [text(grown)])])).toHaveLength(1); // 累计 80-3=77 ≥64 → 重发
+    expect(tracker.extractNewParts([asstMsg('a1', [text(`${grown}又几个字`)])])).toHaveLength(0); // 再增长 4 <64
+    expect(tracker.extractNewParts([asstMsg('a1', [text(`${grown}又几个字${'y'.repeat(64)}`)])])).toHaveLength(1); // 再累计 ≥64 → 重发
+  });
+
+  it('reasoning part 增长重发：text / summary 等候选字段均计入长度', () => {
+    const tracker = new MessageDeltaTracker();
+    const reasoning = (s: string): ServePart => ({ id: 'prt_r', type: 'reasoning', text: s }) as ServePart;
+    expect(tracker.extractNewParts([asstMsg('a1', [reasoning('想')])])).toHaveLength(1); // 首发
+    expect(tracker.extractNewParts([asstMsg('a1', [reasoning('想'.repeat(10))])])).toHaveLength(0); // 增长不足
+    expect(tracker.extractNewParts([asstMsg('a1', [reasoning('想'.repeat(80))])])).toHaveLength(1); // 累计 ≥64
+    // summary 字段（部分 serve 模型 reasoning 内容落 summary）同样计入
+    const r1 = { id: 'prt_r2', type: 'reasoning', summary: '摘'.repeat(70) } as ServePart;
+    expect(tracker.extractNewParts([asstMsg('a1', [r1])])).toHaveLength(1); // 首发
+    const r2 = { id: 'prt_r2', type: 'reasoning', summary: '摘'.repeat(140) } as ServePart;
+    expect(tracker.extractNewParts([asstMsg('a1', [r2])])).toHaveLength(1); // 增长 70 ≥64 → 重发
+  });
+
+  it('reasoning 空壳（无任何文本字段）→ 首发后不再重发', () => {
+    const tracker = new MessageDeltaTracker();
+    const shell = { id: 'prt_r', type: 'reasoning' } as ServePart;
+    expect(tracker.extractNewParts([asstMsg('a1', [shell])])).toHaveLength(1); // 首发仍上送
+    expect(tracker.extractNewParts([asstMsg('a1', [shell])])).toHaveLength(0); // 空壳不重发
+  });
+
+  it('step-start/step-finish 等非 tool 非 text part：仅首次上送（回归增量语义）', () => {
+    const tracker = new MessageDeltaTracker();
+    const msg = asstMsg('a1', [{ id: 'prt_s', type: 'step-start' } as ServePart]);
+    expect(tracker.extractNewParts([msg])).toHaveLength(1);
+    expect(tracker.extractNewParts([msg])).toHaveLength(0);
+  });
+
+  it('双路协同：noteSent 记录 SSE 已发进度后，轮询旧快照被压制（不回退覆盖）', () => {
+    const tracker = new MessageDeltaTracker();
+    const tool = (status: string, extra: Record<string, unknown> = {}): ServePart =>
+      ({ id: 'prt_t', type: 'tool', tool: 'bash', state: { status, ...extra } }) as ServePart;
+    // SSE 路先送达 completed（快照外的实时事件）并记录基准
+    tracker.noteSent(tool('completed', { input: { command: 'ls' }, output: 'a.txt' }));
+    // 轮询路随后拿到**旧**快照（running，无 output）：进度值更小 → 压制，不重发
+    expect(tracker.extractNewParts([asstMsg('a1', [tool('running', { input: { command: 'ls' } })])])).toHaveLength(0);
+    // 轮询快照反而更新（terminal 后又写入更多 output）：进度更大 → 正常重发
+    expect(
+      tracker.extractNewParts([asstMsg('a1', [tool('completed', { input: { command: 'ls' }, output: 'a.txt\nb.txt' })])]),
+    ).toHaveLength(1);
+  });
+
+  it('双路协同：text 经 noteSent 记录长度后，旧/微增长快照不重发，大增长才重发', () => {
+    const tracker = new MessageDeltaTracker();
+    const text = (s: string): ServePart => ({ id: 'prt_t', type: 'text', text: s }) as ServePart;
+    tracker.noteSent(text('x'.repeat(80))); // SSE 已发到 80 字符
+    expect(tracker.extractNewParts([asstMsg('a1', [text('x'.repeat(84))])])).toHaveLength(0); // 增长 4 <64
+    expect(tracker.extractNewParts([asstMsg('a1', [text('y'.repeat(10))])])).toHaveLength(0); // 旧长度 10 <80
+    expect(tracker.extractNewParts([asstMsg('a1', [text('x'.repeat(200))])])).toHaveLength(1); // 增长 120 ≥64
+  });
+
+  it('tool 进度含 input/output 长度：参数写入（rank 不变）也触发重发', () => {
+    const tracker = new MessageDeltaTracker();
+    const tool = (state: Record<string, unknown>): ServePart =>
+      ({ id: 'prt_t', type: 'tool', tool: 'bash', state }) as ServePart;
+    // 首发：running + 空 input
+    expect(tracker.extractNewParts([asstMsg('a1', [tool({ status: 'running', input: {} })])])).toHaveLength(1);
+    // 同 rank 但 input 变长 → 进度推进 → 重发
+    expect(tracker.extractNewParts([asstMsg('a1', [tool({ status: 'running', input: { command: 'ls -la' } })])])).toHaveLength(1);
+    // 完全相同的快照 → 进度相等 → 不重发
+    expect(tracker.extractNewParts([asstMsg('a1', [tool({ status: 'running', input: { command: 'ls -la' } })])])).toHaveLength(0);
+  });
 });

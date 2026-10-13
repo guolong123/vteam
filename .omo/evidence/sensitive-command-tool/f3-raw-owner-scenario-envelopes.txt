@@ -1,0 +1,25 @@
+=== OWNER SCENARIO ENVELOPES (model-visible tool outputs, from messages table) ===
+extracted 2026-09-27T05:33:00Z (file mtime); rows m_0000000153/155/157/159
+runs 2026-09-26T22:12:37Z..22:20:34Z on bundle A: HEAD 16584d50,
+  server 8494b82821ef / web bacd04053a1e / worker 78dae6ef19f7
+
+--- m_0000000153 text='???????stdout: `deploy-ok {{REDACTED}}`????`variables[].secret` ???????????????????????????????????????'
+    tool=vteam_secret_command part_status=error output=''
+    tool=vteam_secret_command part_status=error output=''
+    tool=vteam_secret_command part_status=error output=''
+    tool=vteam_secret_command part_status=completed
+    envelope={"command": "echo \"deploy-ok {{TOKEN}}\"", "variables": [{"name": "TOKEN", "label": "?? Token", "secret": true, "required": true, "provided": true}], "status": "succeeded", "exitCode": 0, "signal": null, "timedOut": false, "durationMs": 15, "stdout": "deploy-ok {{REDACTED}}\n", "stderr": "", "stdoutTruncated": false, "stderrTruncated": false}
+
+--- m_0000000155 text='status=failed, exitCode=2?No such file or directory??'
+    tool=vteam_secret_command part_status=completed
+    envelope={"command": "ls /f3-does-not-exist/{{TOKEN}}", "variables": [{"name": "TOKEN", "label": "?? Token", "secret": true, "required": true, "provided": true}], "status": "failed", "exitCode": 2, "signal": null, "timedOut": false, "durationMs": 41, "stdout": "", "stderr": "ls: cannot access '/f3-does-not-exist/{{REDACTED}}': No such file or directory\n", "stdoutTruncated": false, "stderrTruncated": false}
+
+--- m_0000000157 text='status=cancelled?provided=false??????'
+    tool=vteam_secret_command part_status=completed
+    envelope={"command": "echo {{TOKEN}}", "variables": [{"name": "TOKEN", "label": "???? Token", "secret": true, "required": true, "provided": false}], "status": "cancelled", "exitCode": null, "signal": null, "timedOut": false, "durationMs": 0, "stdout": "", "stderr": "", "stdoutTruncated": false, "stderrTruncated": false}
+
+--- m_0000000159 text='status=timeout, timedOut=true, durationMs=6048?'
+    tool=vteam_secret_command part_status=completed
+    envelope={"command": "test -n \"{{TOKEN}}\" && sleep 30", "variables": [{"name": "TOKEN", "label": "???? Token", "secret": true, "required": true, "provided": true}], "status": "timeout", "exitCode": null, "signal": null, "timedOut": true, "durationMs": 6048, "stdout": "", "stderr": "", "stdoutTruncated": false, "stderrTruncated": false}
+
+SENTINEL-HITS tool_parts=0 whole_rows=0

@@ -1,0 +1,67 @@
+# task-2-density-failure — 复选框 2 failing-first characterization + QA failure 判据
+# 记录时间: 2026-09-25；所有命令在改动产品代码【之前】执行（此时阈值仍为 360/6/500/60）
+
+======================================================================
+1. failing-first：先写密度测试，确认在旧阈值上全红（证明测试真的咬住行为）
+======================================================================
+原始日志（未截断）:
+  .omo/evidence/chat-ux-hierarchy-and-streaming/task-2-density-red-lib.log
+  .omo/evidence/chat-ux-hierarchy-and-streaming/task-2-density-red-e2e.log
+
+命令 1（纯检查，lib-unit）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx playwright test lib/ --project=lib-unit
+退出码: 1（LIB_EXIT=1；3 failed / 2 passed——2 passed 为既有 lib/api.spec.ts）
+关键输出（旧值 vs 期望值）:
+  A1 metrics toEqual 失败:
+    - lineClamp: "10"   + lineClamp: "6"        （chat-bubble WebkitLineClamp 6）
+    - maxHeightEm: "16" + maxHeightEm: "9.6"     （maxHeight 9.6em）
+    - threshold: "800"  + threshold: "360"       （CHAT_COLLAPSE_THRESHOLD 360）
+    - clampLines: 1 = 1（该结构性判据改动前后恒为 1，见第 2 节）
+  A2 caps toEqual 失败:
+    - [2000, 2000]      + [500, 500]             （formatToolIO 字符串/JSON 两路径均 500）
+    - 计算校验 Expected: 1000 / Received: 2500   （3000-500=2500，2001+ 字符大量进 DOM）
+  A3 caps/title/省略号失败:
+    - [200, 2000]       + [60]                   （thinking 只有 60 字符摘录、无展开上限）
+    - Expected: 2800 / Received: 2940            （3000-60，折叠时 201+ 字符本应缺席 2800）
+    - not.toMatch(/title=\{text\.trim\(\)\}/) 失败（旧代码 title 挂完整 text，3000 字符进 DOM）
+    - not.toMatch(/\.length > \d+ \? "…"/) 失败（旧代码摘录尾随 "…"，DOM 61 字符 ≠ 200）
+
+命令 2（真实浏览器 DOM，chat-density 项目）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx playwright test chat-density.spec.ts --project=chat-density
+退出码: 1（E2E_EXIT=1；5 failed——5/5 全红，且全部是阈值型断言失败，无基础设施错误）
+关键输出（旧值 vs 期望值）:
+  A1 正文 900 字符（折叠快照 toEqual）:
+    - lineClamp: "10"        + "6"
+    - maxHeightStyle: "16em" + "9.6em"
+    - maxHeightInLines: 10   + 6          （9.6em ÷ (1.6×fontSize) = 6 行）
+    - visibleLines: 10       + 6          （实际裁剪高度 = 6 行）
+    - lineHeightRatio: 1.6 = 1.6，toggleAria: "false" = "false"（非阈值部分已正确）
+  A1 阈值边界（恰好 800 字符）:
+    toHaveCount(0) 失败：Expected 0 / Received 1（旧阈值 360 让 800 字符错误出现 toggle）
+  A2 tool 字符串 3000（折叠快照）:
+    hasFirst2000 false（只进了 500）/ exactFirst2000Span false / titleLen 501（500+"…"）
+  A2 tool JSON 3000（折叠快照）:
+    summaryIsInputFirst2000 false / titleLen 501 / inputSpanIs2000 false
+  A3 thinking 3000（折叠快照）:
+    excerptLen 61（60+"…"）≠ 200 / excerptIs200 false / titleLen 3000 ≠ 2000 / titleIs2000 false
+  （A3 展开态与 A2 展开态断言在首轮折叠断言处即中止，改动后同命令全绿复验。）
+
+结论: 测试在改动前对 360→800、6→10、9.6em→16em、500→2000、60→200 六个旧行为全部
+转红，characterization 成立；无 as any/ts-ignore，无隐藏失败。
+
+======================================================================
+2. 计划复选框 2 QA failure 判据（第 139 行）与复验
+======================================================================
+判据 1: grep -c 'WebkitLineClamp' web/src/components/ui/chat-bubble.tsx 必须为 1
+  改动前命令输出: 1  （结构性判据，改动前后都必须为 1）
+  改动后复验见 task-2-density.txt 第 6 节。
+
+判据 2: 900 字符正文必须出现 toggle 且折叠态为 10 行
+  改动前: toggle 出现 ✓ 但折叠态 6 行 ✗（visibleLines=6，failing-first 第 1 项红）
+  改动后: 见 task-2-density.txt 第 5 节绿跑（visibleLines=10、lineClamp="10"）。
+
+判据 3: 3000 字符 tool 输出必须显示前 2000 字符且第 2001 字符起不出现
+  改动前: 仅显示前 500 字符 ✗（titleLen 501，failing-first 第 3/4 项红）
+  改动后: 见 task-2-density.txt 第 5 节绿跑（hasFirst2000=true / hasAfter2000=false）。

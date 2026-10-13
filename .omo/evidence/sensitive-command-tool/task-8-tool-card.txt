@@ -1,0 +1,134 @@
+================================================================
+sensitive-command-tool · todo 8 · 工具卡 awaiting-input 证据
+date: 2026-09-27T03:08:49+08:00
+================================================================
+
+### 0) bundle provenance (web container rebuild)
+-- before rebuild --
+image=sha256:78302b9bb648bb6c70d7770bbd874286d05fc674c057256743395b3243d55c88 container=4ef2bb0bb3194b545c3dc84adefa2a4882bff9281ed3bbf7a950521457dccf30
+marker in served bundle BEFORE rebuild: 0 (0 => stale bundle, rebuild required)
+-- after rebuild: docker compose build web && docker compose up -d web --
+POSTBUILD image=sha256:f593bfdb147c7ce589d17cdc047f5fccf7bf38023903e58cb2b09b8b1bedbad0 container=a3e53a120a5de158a3f97168aa268e62b4985f477a81d21775e8bbe05af28094 status=running started=2026-09-26T19:05:27.036838303Z
+-- marker present in container chunk --
+.next/static/chunks/app/(main)/teams/[id]/session/page-655852a1137c2fcd.js
+.next/static/chunks/app/(main)/teams/[id]/session/page-655852a1137c2fcd.js
+-- sentinel scan inside built bundle (expect nothing) --
+(empty above = 0 hits)
+
+### 1) npx tsc --noEmit
+### 1) cd web && npx tsc --noEmit
+TSC_EXIT=0
+
+### 2) cd web && npx playwright test chat-density.spec.ts --project=chat-density --reporter=list
+  ✓   1 [chat-density] › e2e/chat-density.spec.ts:585:5 › A1 正文 900 字符：toggle 存在，折叠态 10 行 clamp/16em（行高 1.6 几何一致），展开后清除 (1.3s)
+  ✓   2 [chat-density] › e2e/chat-density.spec.ts:626:5 › A1 阈值边界：恰好 800 字符正文不出现 chat-bubble-toggle (286ms)
+  ✓   3 [chat-density] › e2e/chat-density.spec.ts:636:5 › A2 tool I/O 字符串路径 3000 字符：折叠与展开都只放前 2000 字符进 DOM (337ms)
+  ✓   4 [chat-density] › e2e/chat-density.spec.ts:669:5 › A2 tool I/O JSON 路径 3000 字符：序列化后同样 2000 封顶，2001+ 不进 DOM (321ms)
+  ✓   5 [chat-density] › e2e/chat-density.spec.ts:711:5 › A3 thinking 3000 字符：折叠摘录恰好 200，展开恰好完整 2000，2001+ 不进 DOM (400ms)
+  ✓   6 [chat-density] › e2e/chat-density.spec.ts:814:5 › A4 三级字号：正文 14px / 身份 12px·600 / 元信息 11px，时间戳为独立元信息元素 (309ms)
+  ✓   7 [chat-density] › e2e/chat-density.spec.ts:858:5 › A4 守门：全局 fontSize 档位不变（md=13），消息三级字号不写入全局档 (1.2s)
+  ✓   8 [chat-density] › e2e/chat-density.spec.ts:880:5 › B1 共享身份栏：reasoning+tool+text 单条 agent 消息只渲染一次头像/作者/时间 (1.4s)
+  ✓   9 [chat-density] › e2e/chat-density.spec.ts:917:5 › B6 未知 part：patch/step-start/step-finish/未识别 type 各渲染一个 msg-unknown-part，默认收起，已知分支不回归 (456ms)
+  ✓  10 [chat-density] › e2e/chat-density.spec.ts:970:5 › B6 展开/收起：展开显示受限 JSON 摘要，收起后摘要离开 DOM (422ms)
+  ✓  11 [chat-density] › e2e/chat-density.spec.ts:995:5 › B6 超长 payload：摘要恰封顶 400 字符，第 401 字符起不进 DOM (269ms)
+  ✓  12 [chat-density] › e2e/chat-density.spec.ts:1017:5 › B6 安全标签：恶意 type 不产生标记注入，data-part-type 只含安全字符 (319ms)
+  ✓  13 [chat-density] › e2e/chat-density.spec.ts:1055:5 › B7 状态矩阵：sending/sent/failed 各渲染 1 个 chat-bubble-status（data-status + 中文文案 + role=status），且在正文之外 (216ms)
+  ✓  14 [chat-density] › e2e/chat-density.spec.ts:1080:5 › B7 缺省状态与其它状态（pending/processing/completed/未知）：不渲染任何标记 (217ms)
+  ✓  15 [chat-density] › e2e/chat-density.spec.ts:1093:5 › B7 不遮挡正文：标记在气泡下沿之外、position static，正文与气泡几何与无状态时逐像素一致 (280ms)
+  ✓  16 [chat-density] › e2e/chat-density.spec.ts:1129:5 › B8 同角色两名成员（CJK 名）：头像缩写互不相同（张/李），可见名字与角色正确 (272ms)
+  ✓  17 [chat-density] › e2e/chat-density.spec.ts:1149:5 › B8 同角色两名成员（拉丁名）：头像缩写取前两字母且互不相同（AL/AA） (210ms)
+  ✓  18 [chat-density] › e2e/chat-density.spec.ts:1167:5 › B8 解析不到名字：回落角色字母，DOM 无裸 id，agent 消息不渲染用户状态标记 (199ms)
+  ✓  19 [chat-density] › e2e/chat-density.spec.ts:1184:5 › B8 ChatBubble 接受可选 initials：显式缩写优先，未传时回落角色字母 (212ms)
+  ✓  20 [chat-density] › e2e/chat-density.spec.ts:1224:5 › B11 低优先级默认收起：thinking/tool/unknown/长附件初始收起且可展开 (966ms)
+  ✓  21 [chat-density] › e2e/chat-density.spec.ts:1278:5 › B11 高优先级不折叠：正文/流式正文/system 长内容全文在 DOM 且元素可见 (220ms)
+  ✓  22 [chat-density] › e2e/chat-density.spec.ts:1310:5 › B11 error 超长 detail：默认展开可收起，标题/状态/操作始终可见 (672ms)
+  ✓  23 [chat-density] › e2e/chat-density.spec.ts:1358:5 › B11 aborted 超长 detail：pill 与摘要始终可见，detail 默认展开可收起 (298ms)
+  ✓  24 [chat-density] › e2e/chat-density.spec.ts:1384:5 › B11 短内容不引入折叠噪音：短 error/短 aborted/短附件无开关且内容原样可见 (232ms)
+  ✓  25 [chat-density] › e2e/chat-density.spec.ts:1407:5 › B11 折叠矩阵快照：八类内容的初始态与展开态逐行落盘 (1.2s)
+  ✓  26 [chat-density] › e2e/chat-density.spec.ts:1462:5 › B11 真机交互观察：长附件/error/aborted 三态点击截图与 DOM 快照 (3.0s)
+  ✓  27 [chat-density] › e2e/chat-density.spec.ts:1519:5 › todo8 awaiting-input 第四态：running secret_command 升级为「等待填写敏感信息」 (338ms)
+  ✓  28 [chat-density] › e2e/chat-density.spec.ts:1541:5 › todo8 派生门槛：非 secret_command 工具与终态 part 不进 awaiting-input (1.4s)
+  28 passed (18.0s)
+CHAT_DENSITY_EXIT=
+
+### 3) cd web && npx playwright test session-unification.spec.ts --project=session-unification --reporter=list (live :3001)
+  ✓   1 [setup] › e2e/auth.setup.ts:12:6 › 真实表单登录 seed-admin → storageState (981ms)
+  ✓   2 [session-unification] › e2e/session-unification.spec.ts:388:7 › Todo12 团队会话团队化 › 1. session-status 状态点随团队会话翻转 (2.6s)
+  ✓   3 [session-unification] › e2e/session-unification.spec.ts:405:7 › Todo12 团队会话团队化 › 2. 重置按钮调团队新路由 (1.1s)
+  ✓   4 [session-unification] › e2e/session-unification.spec.ts:424:7 › Todo12 团队会话团队化 › 3. 群消息任务分区列表不断裂 (750ms)
+  ✓   5 [session-unification] › e2e/session-unification.spec.ts:435:7 › Todo12 团队会话团队化 › QA-failure. 无会话成员兜底显示就绪 (743ms)
+  ✓   6 [session-unification] › e2e/session-unification.spec.ts:486:7 › Todo14 页面 delta 消费 / 滚动门控 / DM 轮询 › 1. 当前私聊 delta 滚到底，非当前私聊 delta 不滚动但未读收敛 (911ms)
+  ✓   7 [session-unification] › e2e/session-unification.spec.ts:511:7 › Todo14 页面 delta 消费 / 滚动门控 / DM 轮询 › 2. 非当前频道 chat.message.new 不改当前列表滚动 (854ms)
+  ✓   8 [session-unification] › e2e/session-unification.spec.ts:527:7 › Todo14 页面 delta 消费 / 滚动门控 / DM 轮询 › 3. 空缓存首个 delta 触发恰好一次补拉并渲染消息 (3.3s)
+  ✓   9 [session-unification] › e2e/session-unification.spec.ts:555:7 › Todo14 页面 delta 消费 / 滚动门控 / DM 轮询 › 3b. 初始历史请求挂起期间的首个 delta 不丢消息 (1.2s)
+  ✓  10 [session-unification] › e2e/session-unification.spec.ts:575:7 › Todo14 页面 delta 消费 / 滚动门控 / DM 轮询 › 4. DM 查询 30s 轮询兜底可观测 (2.4s)
+  ✓  11 [session-unification] › e2e/session-unification.spec.ts:587:7 › Todo14 页面 delta 消费 / 滚动门控 / DM 轮询 › 5. 终态消息不被旧 delta 覆盖 (1.1s)
+  ✓  12 [session-unification] › e2e/session-unification.spec.ts:603:7 › Todo14 页面 delta 消费 / 滚动门控 / DM 轮询 › 6. 群聊 Tab：群频道 delta 滚动，私聊频道 delta 不滚动但未读收敛 (677ms)
+  ✓  13 [session-unification] › e2e/session-unification.spec.ts:745:7 › B2 连续同发送者消息复用身份栏 › 1. 分组矩阵：同发送者连续复用身份，边界/跨日/空 senderId/缺 createdAt 全部独立 (1.0s)
+  ✓  14 [session-unification] › e2e/session-unification.spec.ts:769:7 › B2 连续同发送者消息复用身份栏 › 2. user/system 相邻消息独立气泡，且不吞掉相邻 agent 身份 (717ms)
+  ✓  15 [session-unification] › e2e/session-unification.spec.ts:794:7 › B2 连续同发送者消息复用身份栏 › 3. 分组态仍渲染正文与过程 testid（reasoning + tool + text 私聊） (976ms)
+  ✓  16 [session-unification] › e2e/session-unification.spec.ts:963:7 › B3 跨天日期分隔与 B4 system 行降噪 › 1. 单日列表零分隔，消息顺序与子元素数不变 (649ms)
+  ✓  17 [session-unification] › e2e/session-unification.spec.ts:984:7 › B3 跨天日期分隔与 B4 system 行降噪 › 2. 跨天列表恰好一条 chat-date-separator 落在交界处 (708ms)
+  ✓  18 [session-unification] › e2e/session-unification.spec.ts:1012:7 › B3 跨天日期分隔与 B4 system 行降噪 › 3. 多次跨天逐次插入分隔，消息顺序仍与夹具一致 (687ms)
+  ✓  19 [session-unification] › e2e/session-unification.spec.ts:1043:7 › B3 跨天日期分隔与 B4 system 行降噪 › 4. 缺失/非法 createdAt 不崩溃、不产生假分隔，跨天仍只一条 (759ms)
+  ✓  20 [session-unification] › e2e/session-unification.spec.ts:1066:7 › B3 跨天日期分隔与 B4 system 行降噪 › 5. 首条缺 createdAt 不在列表顶部插分隔，跨缺失行仍分隔 (678ms)
+  ✓  21 [session-unification] › e2e/session-unification.spec.ts:1086:7 › B3 跨天日期分隔与 B4 system 行降噪 › 6. system 行独立低对比居中容器，与 14px 正文非颜色区隔 (826ms)
+  ✓  22 [session-unification] › e2e/session-unification.spec.ts:1270:7 › B5 author 与角色并列，B9 禁止裸 id 兜底 › 1. 已解析 author 与角色标签并列展示，二者同值时只出现一次 (721ms)
+  ✓  23 [session-unification] › e2e/session-unification.spec.ts:1298:7 › B5 author 与角色并列，B9 禁止裸 id 兜底 › 2. 未映射 sender 只显示角色标签，可见 DOM 不含裸 a_/tmm_/ta_ id (782ms)
+  ✓  24 [session-unification] › e2e/session-unification.spec.ts:1328:7 › B5 author 与角色并列，B9 禁止裸 id 兜底 › 3. external 渠道徽标与 @你 提及徽标在身份改造后仍可见 (2.0s)
+  ✓  25 [session-unification] › e2e/session-unification.spec.ts:1351:7 › B5 author 与角色并列，B9 禁止裸 id 兜底 › 4. user/system 独立气泡与 B2 分组省略身份行为不受影响 (1.1s)
+  ✓  26 [session-unification] › e2e/session-unification.spec.ts:1455:7 › B12 session-status 容器与 system 消息时间 › 1. transient session-status 是与 LoadingIndicator 一致的可识别容器，且不混入消息数组 (939ms)
+  ✓  27 [session-unification] › e2e/session-unification.spec.ts:1515:7 › B12 session-status 容器与 system 消息时间 › 2. system 消息传入 time 时在 pill 内以元信息样式渲染，降噪契约不回退 (874ms)
+  ✓  28 [session-unification] › e2e/session-unification.spec.ts:1557:7 › B12 session-status 容器与 system 消息时间 › 3. loading/error 起落与终结事件下 status 行清理行为不变 (821ms)
+  ✓  29 [session-unification] › e2e/session-unification.spec.ts:1694:7 › sensitive-command-tool Todo7 敏感命令输入弹窗 › 1. SSE 注入 secret_input：只读模板/输入类型/必填门控/提交体，关闭后 DOM 无 sentinel (1.1s)
+  ✓  30 [session-unification] › e2e/session-unification.spec.ts:1743:7 › sensitive-command-tool Todo7 敏感命令输入弹窗 › 2. 取消按钮/遮罩/Esc 三条关闭路径都提交 {secrets:null}，已填值不外带 (1.3s)
+  ✓  31 [session-unification] › e2e/session-unification.spec.ts:1779:7 › sensitive-command-tool Todo7 敏感命令输入弹窗 › 3. 刷新补拉 pending secret 重开弹窗，多条 pending 队列逐个显示且不串值 (1.2s)
+  ✓  32 [session-unification] › e2e/session-unification.spec.ts:1813:7 › sensitive-command-tool Todo7 敏感命令输入弹窗 › 4. 已过期（410）静默关闭，DOM 无 sentinel (1.0s)
+  ✓  33 [session-unification] › e2e/session-unification.spec.ts:1829:7 › sensitive-command-tool Todo7 敏感命令输入弹窗 › 5. malformed 变量元数据不崩：模板只读可见、无输入框、确认提交 {secrets:{}}，模板按纯文本渲染 (974ms)
+  ✓  34 [session-unification] › e2e/session-unification.spec.ts:1928:7 › sensitive-command-tool Todo8 工具卡 awaiting-input › 1. SSE 注入同会话 pending secret_input → 卡片进 awaiting-input；resolved 后清除；DOM 无 sentinel (2.7s)
+  ✓  35 [session-unification] › e2e/session-unification.spec.ts:1969:7 › sensitive-command-tool Todo8 工具卡 awaiting-input › 2. 异会话 pending 不点亮；malformed（缺 sessionId/agentId）不点亮且不崩 (1.2s)
+  ✓  36 [session-unification] › e2e/session-unification.spec.ts:2007:7 › sensitive-command-tool Todo8 工具卡 awaiting-input › 3. GET /questions 补拉 pending 同样点亮；reply 成功（取消）后清除 (1.1s)
+  36 passed (42.9s)
+SESSION_UNIFICATION_EXIT=0
+
+### 4) 负证 QA（派生规则删除 → 断言必须变红，随后恢复绿）
+4a) page.tsx 派生短路 (secretAwaiting = false && ...) + 重建容器后跑 Todo8-1:
+    => 1 failed: toHaveAttribute data-status expected 'awaiting-input' received 'running'  ✔红
+4b) msg-parts.tsx 第四态分支短路 (if false && secretAwaiting ...) 跑 chat-density todo8:
+    => 1 failed: toHaveAttribute data-status expected 'awaiting-input' received 'running'  ✔红
+    两处均已恢复，最终复跑 28 passed / 36 passed。
+
+### 5) manual QA（__sseEmit 注入 running secret_command + 同 session pending secret_input）
+SSE 路径（session-unification Todo8-1）：
+  - 基线 msg-tool data-status=running，无 msg-tool-awaiting
+  - emitFrame agent.question kind=secret_input sessionId=s_1 agentId=a_developer
+    => 卡片 data-status=awaiting-input，msg-tool-awaiting 可见且含「等待填写敏感信息」
+  - 终态卡片（completed）不受影响 data-status=success，0 个 msg-tool-awaiting
+  - emitFrame 同 id resolved:true => 弹窗卸载 + 卡片回落 running + msg-tool-awaiting 计数 0
+GET /questions 补拉路径（Todo8-3）：挂载即点亮 awaiting-input，取消 reply {secrets:null} 成功后回落 running
+异会话（agentId=a_tester/sessionId=s_2）与 malformed（缺 sessionId/agentId）两条均不点亮、不崩
+
+-- 截图 --
+-rw-r--r--@ 1 mac  staff  157063 Sep 27 03:11 .omo/evidence/sensitive-command-tool/task-8-awaiting-input.png
+-rw-r--r--@ 1 mac  staff  136904 Sep 27 03:11 .omo/evidence/sensitive-command-tool/task-8-cleared.png
+
+### 6) sentinel 扫描（s3cr3t-A9f）
+web/src|app|lib|hooks 非测试文件命中数: 0（web/lib/secret-question.spec.ts 8 处为 todo7 既有测试代码）
+构建产物 .next/static 命中数: 0
+Playwright 断言：Todo8-1/2/3 均含 expect(await page.content()).not.toContain(SECRET_SENTINEL) 且通过
+工具卡 props 仅收 formatToolIO(st.input/output)（server 已脱敏），secret 值不进组件 props/DOM
+
+### 7) 对抗类记录
+stale_state: Todo8-1 resolved 先于 tool 终态（卡片回落 running）；Todo8-1 completed part 在 question 仍 pending 时保持 success（不回亮）
+malformed_input: Todo8-2 缺 sessionId/agentId → 键集合为空 → 不点亮、页面不崩
+dirty_worktree: 本 todo 仅改 6 个 web 文件，git status -- web/ 无其它脏文件；提交只含该 6 文件
+misleading_success_output: 断言用字面 data-status 四态 + 新 testid + 中文文案 + 计数 0，非仅 visibility
+cleanup: 负证注入的短路代码已全部恢复并复跑绿；容器为恢复后的最终镜像
+secrets: 见 §6 扫描
+prompt_injection: N/A（本 todo 无 LLM 提示注入面，仅组件状态渲染与 route mock 测试）
+no mutating lint: 未执行任何 --fix lint
+
+CHAT_DENSITY_EXIT=0 (re-run with explicit exit capture)
+  ✓  28 [chat-density] › e2e/chat-density.spec.ts:1541:5 › todo8 派生门槛：非 secret_command 工具与终态 part 不进 awaiting-input (358ms)
+
+  28 passed (16.2s)

@@ -1,0 +1,75 @@
+# task-4-identity-rail-failure — B1 身份栏失败通道（QA failure）
+# （chat-ux-hierarchy-and-streaming 复选框 4）
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 判据来源: 计划 .omo/plans/chat-ux-hierarchy-and-streaming.md:156
+#   「注入 3 个 process parts，若任一身份 testid/可见作者/时间计数 >1，或既有 testid 消失，
+#     则失败并回退本 todo 的实现，不修改测试契约。」
+
+======================================================================
+1. 失败通道（红）——改动前实跑，证明身份确实重复
+======================================================================
+命令:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx playwright test chat-density.spec.ts --project=chat-density --reporter=list -g "B1 共享身份栏"
+退出码: EXIT=1
+日志: .omo/evidence/chat-ux-hierarchy-and-streaming/task-4-red-run.log
+
+失败输出（identity 计数对象，expect(received).toEqual(expected)）:
+  Expected (本 todo 目标)      Received (改动前实际)
+  avatar          : 1       →  3      ← MsgThinking / MsgTool / ChatBubble 各带一个 AgentAvatar
+  authorTextLeaf  : 1       →  2      ← thinking 头部 author span + 正文 chat-bubble-author 内层 span
+  timeTextLeaf    : 1       →  3      ← thinking / tool / chat-bubble-time 各带一次时间
+  author          : 1       →  1
+  time            : 1       →  1
+
+同批（改动前）跑整个项目: 1 failed / 7 passed —— 既有 A1-A4 用例全绿，只有新增的 B1 结构用例红，
+即「身份重复」是唯一红点，且未破坏既有门。
+
+对应计划 §消息结构断言门 的 B1 断言：
+  「含 reasoning + tool + text 的单条 agent 消息，agent-avatar / chat-bubble-author / 时间元素
+    各只出现 1 次」——改动前 avatar=3、时间文本=3，明确不满足。
+
+======================================================================
+2. 触发即回退的失败判据（本 todo 的熔断条件）
+======================================================================
+F-1  reasoning+tool+text 夹具中 agent-avatar / chat-bubble-author / chat-bubble-time 任一计数 > 1 → 回退 B1 实现。
+F-2  作者名或时间的可见 leaf 计数 > 1（process part 仍在偷偷渲染身份）→ 回退。
+F-3  testid 基线 diff 出现消失项（既有 testid 被删/被改名）→ 回退，禁止改测试迁就。
+F-4  process 内容 testid（msg-thinking/msg-tool/msg-error/msg-aborted/msg-streaming/chat-bubble-content）
+     任一缺席或内容不可见 → 回退（降级身份不等于删除内容）。
+F-5  npx tsc --noEmit 或 check-only eslint 报 error → 回退。
+F-6  lib/chat-density.spec.ts 的 A1-A4 源码契约变红 → 回退（不得为迁就重构改该测试）。
+
+======================================================================
+3. 绿证（逐条对照熔断条件，均未触发）
+======================================================================
+命令与退出码（全部本会话实跑）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web
+  npx tsc --noEmit                                                       → EXIT=0  (task-4-tsc.log)
+  npx eslint <9 个改动文件 + e2e/chat-density.spec.ts>                    → EXIT=0  (task-4-eslint.log, 0 error)
+  npx playwright test chat-density.spec.ts --project=chat-density \
+    --reporter=list -g "B1 共享身份栏"                                    → EXIT=0  (task-4-b1-focused.log, 1 passed)
+  npx playwright test chat-density.spec.ts --project=chat-density --reporter=list
+                                                                          → EXIT=0  (task-4-green-e2e.log, 8 passed)
+  npx playwright test lib/ --project=lib-unit --reporter=list             → EXIT=0  (task-4-green-lib.log, 6 passed)
+
+F-1/F-2 结构计数（绿，来源：task-4-b1-focused.log + task-4-browser-observation.log）:
+  agent-avatar=1  message-identity=1  chat-bubble-author=1  chat-bubble-time=1
+  author-leaf(密度)=1  time-leaf(12:00)=1
+
+F-3 testid 门:
+  diff task-4-chat-testids-before.txt task-4-chat-testids-after.txt → EXIT=0（24 vs 24，零消失）
+  追加集合校验仅新增 message-identity（见 task-4-identity-rail.txt §5.2）
+
+F-4 process testid 与内容:
+  msg-thinking=1（含「已思考 · 点击展开 ▸」） msg-tool=1（含 identity_tool/成功徽章）
+  chat-bubble=1  chat-bubble-content=1（含「最终结论」）  msg-streaming=0（夹具非流式，符合预期）
+
+F-5/F-6: tsc=0、eslint=0（4 条既有 no-img-element warning 属 chat-bubble 附件区，未改动）、lib-unit 6 passed。
+
+======================================================================
+4. 结论
+======================================================================
+失败通道在改动前真实复现（EXIT=1，identity 三类计数 3/2/3 > 1），改动后同一命令 EXIT=0；
+未触发任何 F-1..F-6 回退条件，未修改任何既有测试契约，无需回退。
+真实浏览器复核截图: task-4-identity-rail.png；详细记录: task-4-identity-rail.txt。

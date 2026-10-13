@@ -1,0 +1,2 @@
+TypeError: Cannot set properties of undefined (setting 'before')
+    at main (/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/f4/f4-manual-2.cjs:196:14)

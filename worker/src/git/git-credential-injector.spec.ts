@@ -30,7 +30,7 @@ const CREDS_PATH = path.join(TMP_HOME, '.keta-git-creds.json');
 const FIXED_TS = '2026-08-12T08:30:00.000Z';
 
 const SSH_ENTRY: GitCredentialEntry = {
-  repoUrl: 'git@github.com:xishuhq/aiagents.git',
+  repoUrl: 'git@github.com:xishuhq/vteam.git',
   authType: 'ssh_key',
   key: '-----BEGIN OPENSSH PRIVATE KEY-----\nabc',
   fingerprint: 'sha256:abcd1234',
@@ -74,7 +74,7 @@ describe('buildGitCredsFile（{version:1, updatedAt, credentials} 稳定输出�
     expect(a).toBe(b);
     const parsed = JSON.parse(a) as { credentials: GitCredentialEntry[] };
     expect(parsed.credentials.map((c) => c.repoUrl)).toEqual([
-      'git@github.com:xishuhq/aiagents.git',
+      'git@github.com:xishuhq/vteam.git',
       'https://github.com/xishuhq/tools.git',
     ]);
   });
@@ -117,7 +117,7 @@ describe('writeGitCredsFile（600 权限 + $HOME/.keta-git-creds.json 路径）'
       credentials: GitCredentialEntry[];
     };
     expect(parsed.credentials.map((c) => c.repoUrl)).toEqual([
-      'git@github.com:xishuhq/aiagents.git',
+      'git@github.com:xishuhq/vteam.git',
       'https://github.com/xishuhq/tools.git',
     ]);
   });

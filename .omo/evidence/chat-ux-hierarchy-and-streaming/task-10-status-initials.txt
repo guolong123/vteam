@@ -1,0 +1,334 @@
+# task-10-status-initials — B7 用户消息状态标记 + B8 成员人名缩写（绿证据）
+# chat-ux-hierarchy-and-streaming 复选框 10
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:199-204（References / Acceptance / QA happy / QA failure）
+#      + :78-91 消息结构断言门 + Scope IN 第 8/9 条（B7/B8）+ Wave 2 :121 + Success criteria §6
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 红证据: 同目录 task-10-status-initials-failure.txt
+# Commit: 1bef2e0635c3146772e2abc14e22a285a8428e86 feat(chat): 增加用户消息状态并显示成员人名缩写
+
+======================================================================
+0. 结论
+======================================================================
+B7 + B8 落地：
+  - ChatBubble 新增可选 `status` 与 `initials`（既有调用方零改动，全部可选）；
+    MsgParts 新增可选 `initials` 透传共享身份栏；会话页把已解析 author 生成的
+    initials 与 msg.status 一起穿过页面/实时边界，user 消息身份保持 identity-free。
+  - user 消息在 status ∈ {sending, sent, failed} 时渲染 1 条 chat-bubble-status
+    （data-status、role="status"、11px 元信息级、文档流兄弟节点）；
+    缺省状态与 pending/processing/completed/未知状态一律 0 条；agent/system 消息 0 条。
+  - 头像缩写由 lib/message-initials.ts 从**已解析人名/别名**生成：
+    CJK 首码点、其余文字前两个字母大写、无字母时取首码点；裸 a_/tmm_/ta_ id
+    与「没有名字」都返回 undefined → AgentAvatar 回落角色字母（仅此时回落）。
+  - 同角色不同成员头像文本互不相同（张/李、AL/AA 实测），DOM 无任何裸 id。
+  - tsc exit 0；check-only eslint exit 0（6 个改动文件，0 error / 4 处既有 no-img-element warning）；
+    chat-density 聚焦绿 19/19 exit 0（红态 5 failed）；lib-unit 绿 37/37 exit 0（红态模块缺失）；
+    计划 QA happy 原命令 pages.spec.ts + session-unification.spec.ts 57 passed exit 0；
+    真实 Chromium 153 观察两态截图 + JSON（§8）。
+未做（本 todo 明确不碰）：B11 折叠策略、B10 角色色、B6 未知 part 行为、
+tokens.ts / globals.css / use-sse.ts / use-realtime.ts / worker / server / 移动端 CSS /
+playwright.config.ts / pages.spec.ts / plan / boulder / registry / 其它脏文件。
+
+======================================================================
+1. 文档决策（docs decision）
+======================================================================
+DIST_DOCS_ABSENT = TRUE
+  $ for d in web/node_modules/next/dist/docs node_modules/next/dist/docs; do [ -d $d ] && echo PRESENT || echo ABSENT; done
+    web/node_modules/next/dist/docs: ABSENT
+    node_modules/next/dist/docs: ABSENT
+  安装版本 next = 15.5.22（node -e "require('./web/node_modules/next/package.json').version"）。
+  web/AGENTS.md 的 nextjs-agent-rules 块在位（本轮又由工具重新注入一次，按 AGENTS 说明保留，未从 diff 中删除）。
+  → 按任务授权改用「用户批准的 v15.5.22 tag 文档」（commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775），
+    改产品代码前抓取并通读（curl raw.githubusercontent.com，全部 HTTP 200，落 $TMPDIR/next-docs-t10/）：
+    (1) docs/01-app/01-getting-started/05-server-and-client-components.mdx → 客户端/服务端组件边界与 props 传递
+    (2) docs/01-app/03-api-reference/01-directives/use-client.mdx          → 'use client' 与可序列化 props
+    (3) docs/01-app/01-getting-started/11-css.mdx                          → CSS 组织 /「Extract shared styles into shared components」
+    (4) docs/01-app/02-guides/testing/playwright.mdx                       → Playwright 运行模型（测试打到已在运行的服务）
+  决策：
+    - 05/use-client：本 todo 只在既有 `"use client"` 组件（chat-bubble.tsx）里加渲染分支，
+      新增 lib/message-initials.ts 是纯 TS 模块（无 React、无浏览器 API）→ 不需要新指令；
+      传入的新 props 只有 `status: string` 与 `initials: string`，均为可序列化值，符合文档模型。
+    - 11-css：不禁止 inline style；「共享样式抽到共享组件」支持本 todo 继续用 token
+      （messageFontSize.meta / neutral / fontFamily）而非新起一套颜色，故不碰 tokens.ts / globals.css；
+      failed 色沿用仓库既有 #DC2626（tokens 无 danger 语义色，页面 dm-tab-unread 已有同款注释）。
+    - playwright.mdx：与 playwright.config.ts:6-8「不自动起 webServer、测试打到已运行服务」一致（未改 config）。
+  文档与现有代码无冲突，无需停止。
+
+======================================================================
+2. 改动文件（仅本 todo；= commit 1bef2e0 的 6 个文件）
+======================================================================
+  web/lib/message-initials.ts            +58（新增）缩写生成纯函数（CJK/字母/裸 id 防御）
+  web/lib/message-initials.spec.ts       +76（新增）lib-unit 7 例
+  web/src/components/ui/chat-bubble.tsx   +45/-2  ChatBubbleProps.status/initials、userMessageStatus 白名单、
+                                          chat-bubble-status 标记、AgentAvatar 透传 initials、文件头 testid 文档
+  web/src/components/chat/msg-parts.tsx    +8/-2  MsgPartsProps.initials → 两处 MessageIdentity
+  web/app/(main)/teams/[id]/session/page.tsx +8/-1  import、const initials = messageInitials(author)、
+                                          external ChatBubble / MsgParts / 兜底 ChatBubble 三处透传 + status={msg.status}
+  web/e2e/chat-density.spec.ts          +229/-2 头部 B7/B8 覆盖说明、6 个 fixture kind、7 条测试、
+                                          expectNoRawIds 辅助（既有 12 条测试一行未改）
+未改动（对照 git show --stat 与 git status）：src/theme/tokens.ts、app/globals.css、
+src/components/ui/agent-avatar.tsx、src/components/ui/message-identity.tsx（B1 已预留 initials prop，
+本 todo 只由调用方填充，无需改组件）、hooks/use-realtime.ts（RealtimeChatMessage.status 本就存在）、
+hooks/use-sse.ts、msg-unknown-part 分支、worker/*、server/*、playwright.config.ts、
+e2e/pages.spec.ts、e2e/session-unification.spec.ts、移动端 CSS、.omo/**、.opencode/**。
+
+======================================================================
+3. 实现要点
+======================================================================
+lib/message-initials.ts
+  messageInitials(name: unknown): string | undefined
+    1. 非字符串 / trim 后为空 → undefined
+    2. RAW_SENDER_ID_PATTERN（display-author 导出的同一正则）命中 → undefined（B9 双保险）
+    3. 首码点 ∈ CJK（U+3040-30FF 假名、U+3400-4DBF/4E00-9FFF 汉字、U+F900-FAFF 兼容、
+       U+1100-11FF/U+3130-318F/U+AC00-D7AF 谚文、U+20000-2A6DF 扩展 B）→ 返回该单码点
+    4. 否则按码点扫描，取前两个 \p{L} 字母各自 toUpperCase()（扩张字形如 ß→SS 保留原字形，
+       恒 ≤2 码点）；一个字母都没有 → 首码点 toUpperCase()（名字派生，不回角色字母）
+    非全局正则 + Array.from(按码点) → 无 lastIndex 状态残留、不拆代理对。
+    注：裸 id 判定用正则而非 isRawSenderId 谓词——对已是 string 的值做 `value is string`
+    反向收窄会把剩余分支压成 never（tsc 实测，见红证据 §1）。
+chat-bubble.tsx
+  userMessageStatus(status)：逐值白名单（sending/sent/failed），不走 `in`（避原型链误命中）
+  → { key, label } | null；仅 isUser 且非 null 才渲染。
+  标记节点：data-testid="chat-bubble-status" data-status role="status"，
+  fontSize=messageFontSize.meta(11px)、color=neutral[400]（failed → #DC2626）、
+  位于列布局末位（气泡体之后）→ 文档流兄弟节点，无 position/z-index，不覆盖不挤压正文。
+  头像：<AgentAvatar role initials={initials} …>（未传时 AgentAvatar 内部回落角色字母）。
+session page.tsx
+  author = resolveDisplayAuthor([instanceNameById(senderInstanceId), agent.name, memberHit.name])（B5/B9 原样）
+  → const initials = messageInitials(author)（唯一生产调用点）
+  → external ChatBubble / MsgParts / 兜底 ChatBubble 三处透传；兜底处另加 status={msg.status}
+    （user 消息唯一渲染入口；system 分支与 session-status 行一行未动，B4/B12 语义不变）。
+身份边界：user 消息 author 恒 undefined（senderId 为 u_*，三路映射全落空）→ 无身份、无头像、无缩写，
+只有状态标记；agent 消息不渲染状态标记（实测 statusMarkerOnAgent=0）。
+
+======================================================================
+4. 状态矩阵（status matrix）
+======================================================================
+fixture 通道：chat-density 自包含测试缝（ChatBubble type="user"，正文 "用户消息正文"）
++ 真实 Chromium 观察（§8）。测得：
+
+| status 取值      | 标记节点 | data-status | 可见文案 | role    | 字号  | 颜色                 | 与正文几何 |
+|------------------|----------|-------------|----------|---------|-------|----------------------|-----------|
+| （缺省/不传）    | 0 个     | —           | —        | —       | —     | —                    | 正文逐像素不变 |
+| sending          | 1 个     | sending     | 发送中…  | status  | 11px  | rgb(148,163,184)     | bodyOverlap=false |
+| sent             | 1 个     | sent        | 已发送   | status  | 11px  | rgb(148,163,184)     | bodyOverlap=false |
+| failed           | 1 个     | failed      | 发送失败 | status  | 11px  | rgb(220,38,38) 红    | bodyOverlap=false |
+| pending          | 0 个     | —           | —        | —       | —     | —                    | 不变 |
+| processing       | 0 个     | —           | —        | —       | —     | —                    | 不变 |
+| completed        | 0 个     | —           | —        | —       | —     | —                    | 不变 |
+| unknown-state    | 0 个     | —           | —        | —       | —     | —                    | 不变 |
+| agent 消息(任意) | 0 个     | —           | —        | —       | —     | —                    | 不变 |
+| system 消息      | 0 个     | —           | —        | —       | —     | —                    | 不变（提前 return 分支未动） |
+
+几何判据（chat-density 断言 #15 + 观察 JSON）：
+  有无状态两次渲染的 chat-bubble-content 与气泡体 boundingBox 完全相等（逐像素）；
+  marker.y ≥ 气泡体下沿（例：bodyRect y=98 h=22 → markerRect y=137）；
+  computed position=static（非定位覆盖层）；标记不在 chat-bubble-content 内部（count 0）。
+
+======================================================================
+5. 人名缩写矩阵（initials matrix）
+======================================================================
+生成规则输入 = **已解析展示名**（页面 resolveDisplayAuthor 之后的 author），非 senderId/instanceId。
+
+| 输入（author）        | messageInitials | 渲染头像 | 角色     | 备注 |
+|-----------------------|-----------------|----------|----------|------|
+| 张伟                  | 张              | 张       | developer| CJK 首码点 |
+| 李静                  | 李              | 李       | developer| 与「张」不同 ✓ |
+| 田中太郎              | 田              | —        | —        | 单测 |
+| 김민수                 | 김              | —        | —        | 谚文 |
+| 𠮷野家（代理对）      | 𠮷（单码点）    | —        | —        | 不产生孤立代理项 |
+| Alice                 | AL              | AL       | developer| 前两字母大写 |
+| Aaron / aaron         | AA              | AA       | developer| 与「AL」不同 ✓ |
+| Bob                   | BO              | —        | —        | |
+| Dev-1                 | DE              | —        | —        | 连字符/数字跳过 |
+| Émile Zola            | ÉM              | —        | —        | 音标拉丁算字母 |
+| Ольга                 | ОЛ              | —        | —        | 其它字母文字 |
+| 123（无字母）         | 1               | —        | —        | 名字派生，非角色字母 |
+| undefined/""/空白/非串| undefined       | 角色字母 | tester 等| **只有**此时回落 |
+| a_developer/tmm_1/ta_1234567/a_x | undefined | 角色字母 | — | 裸 id 永不生成缩写 |
+
+渲染级实测（task-10-observe.json，真实 Chromium）：
+  avatars = [张/developer, 李/developer, AL/developer, AA/developer, T/tester]
+  → **4 个同为 developer 的成员头像文本两两不同**；第 5 条无名字 → 角色字母 T（tester）。
+  authors  = ["张伟· 开发者", "李静· 开发者", "Alice· 开发者", "Aaron· 开发者", "测试"]
+  identityCount = 5（每条 1 次身份，B1 不回退）；statusMarkerOnAgent = 0。
+
+======================================================================
+6. no-raw-id 扫描（B5/B9 契约在 B8 上的复检）
+======================================================================
+(a) 纯函数层：lib spec 4 条断言 → a_developer / tmm_1 / ta_1234567 / a_x 全部 undefined。
+(b) 生产调用点静态扫描：
+    $ grep -rn "messageInitials(" web/lib web/app web/src web/e2e | grep -v "^web/lib/message-initials.ts:"
+    生产代码唯一调用 = web/app/(main)/teams/[id]/session/page.tsx:1384 `messageInitials(author)`
+    （其余全是 spec/literal fixture）。author 的来源仍是 resolveDisplayAuthor 过滤后的字符串。
+    status 通路只有 msg.status 字符串，不含 senderId/instanceId。
+(c) DOM 层（渲染后 #root 的 innerHTML 与 innerText，排除注入的打包脚本）：
+    pattern = /(?:^|[^A-Za-z0-9_])(?:a|tmm|ta)_[0-9a-z]+/
+    chat-density 4 处 expectNoRawIds（CJK/拉丁/无名/显式缩写 fixture）→ 全部 false（0 命中）；
+    真实浏览器观察 JSON：status.rawIdHit=null、initials.rawIdHit=null、initials.rawIdHitHtml=null。
+    （扫描范围排除脚本正文：打包产物里含 display-author 的正则源码字面量，只扫渲染结果不误伤。）
+(d) 禁用写法扫描：
+    $ grep -n "as any|@ts-ignore|@ts-expect-error|eslint-disable" <6 个改动文件>
+    唯一命中 = page.tsx:2 既有 `/* eslint-disable @typescript-eslint/no-explicit-any */`（本次 diff 未触碰，非本 todo 引入）。
+    本 todo 未新增 as any / @ts-ignore / @ts-expect-error / eslint-disable。
+
+======================================================================
+7. 红 / 绿命令与退出码
+======================================================================
+环境：export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
+（focused 运行统一 --reporter=list，覆盖 config 的 reporter，故 .omo/evidence/phase5-t9-playwright.json 未被改写）
+
+RED（实现前，明细见 task-10-status-initials-failure.txt）
+  $ cd web && npx playwright test lib/message-initials.spec.ts --project=lib-unit --reporter=list
+    → RED_LIB_EXIT=1（Cannot find module './message-initials'）   日志 task-10-red-lib.log
+  $ cd web && npx playwright test chat-density.spec.ts --project=chat-density --reporter=list
+    → RED_E2E_EXIT=1（5 failed / 14 passed）                     日志 task-10-red-e2e.log
+
+GREEN（最终工作树 = 提交内容）
+  $ cd web && npx tsc --noEmit
+    → exit 0
+  $ cd web && npx eslint lib/message-initials.ts lib/message-initials.spec.ts \
+        src/components/ui/chat-bubble.tsx src/components/chat/msg-parts.tsx \
+        "app/(main)/teams/[id]/session/page.tsx" e2e/chat-density.spec.ts
+    → exit 0（check-only；未运行 npm run lint、未用 --fix）
+      0 error / 4 warning（全部为 chat-bubble.tsx:459,492,615,649 既有的 next/no-img-element，
+      与 task-8 记录的 4 处同源，仅因本次插入代码行号下移）        日志 task-10-eslint.log（1426 B）
+  $ cd web && npx playwright test chat-density.spec.ts --project=chat-density --reporter=list
+    → exit 0（19 passed / 7.1s）                                 日志 task-10-green-e2e.log
+  $ cd web && npx playwright test --project=lib-unit --reporter=list
+    → exit 0（37 passed / 2.7s）                                 日志 task-10-green-lib.log
+  $ cd web && npx playwright test pages.spec.ts session-unification.spec.ts --reporter=list
+    → exit 0（57 passed / 58.6s，基线 57）                       日志 task-10-prior-suites.log
+    注：该项目按 §8 用的是改动前 bundle，故它给的是「既有套件未被本 todo 破坏」的基线证据，
+       不是对本 todo 渲染的覆盖；本 todo 的行为覆盖由 chat-density + lib-unit 提供。
+未运行：npm run lint / --fix / next build / 全量 npx playwright test
+       （任务禁止与共享 dev server 竞争的全量构建；本轮无 next dev 进程在跑）。
+Playwright JSON reporter 共享文件：
+  before af9de50834c1d793ba61c3c1e7e6be130b3ea6b8
+  after  af9de50834c1d793ba61c3c1e7e6be130b3ea6b8（未变，focused 运行用 --reporter=list 覆盖了 reporter 列表）
+
+======================================================================
+8. 真实浏览器观察（adapted channel，如实说明）
+======================================================================
+通道说明（重要）：
+  - **没有走 live 消息数据**：服务端 web 是 compose standalone 构建，本 todo 的 page.tsx/
+    chat-bubble.tsx 改动不在已部署 bundle 内（§9 溯源实测），live 里也不会有
+    sending/failed 状态 fixture → 因此不声称 live 覆盖。
+  - **也没有走 route-mock**：e2e/session-unification.spec.ts 的假后端通道本次可用于跑既有套件
+    （API 经 :3001 相对路径 /api/v1 可达，见 §9 探针），但它同样渲染旧 bundle，
+    对本 todo 无覆盖力 → 未新增 route-mock 断言。
+  - **实际通道**：计划授权的 chat-density 自包含测试缝 + 一次临时人工观察——
+    esbuild-wasm 打包真实生产组件（MsgParts / ChatBubble / messageInitials）到空白页，
+    由 React 挂载，注入**真实 app 样式表**（取自在跑构建 /_next/static/css/0ee66ca9945f02af.css，
+    13134 B，使 --color-* 变量与线上一致），在系统 Chrome 153.0.8010.53 中渲染、量几何、截图。
+    这是真实浏览器 + 真实组件树 + 真实 app CSS，不依赖登录态/后端/bundle 版本。
+
+产出（临时脚本 $TMPDIR/opencode/task10-observe.mjs 运行后已删除，见 §11）：
+  task-10-observe.json（2912 B，stdout 同内容 = task-10-observe.log）
+  task-10-status-matrix.png（28690 B）
+  task-10-initials-matrix.png（35782 B）
+关键读数：
+  status: bubbles=5, markerCount=3, noMarkerBubble=2, rawIdHit=null
+    sending  label=发送中… role=status 11px static rgb(148,163,184) overlap=false
+    sent     label=已发送  role=status 11px static rgb(148,163,184) overlap=false
+    failed   label=发送失败 role=status 11px static rgb(220,38,38)   overlap=false
+    （对照组无状态、processing 状态两颗气泡无标记）
+  initials: avatars=[张/dev, 李/dev, AL/dev, AA/dev, T/tester]
+            authors=[张伟· 开发者, 李静· 开发者, Alice· 开发者, Aaron· 开发者, 测试]
+            identityCount=5, statusMarkerOnAgent=0, rawIdHit=null, rawIdHitHtml=null
+截图人工判读：
+  status-matrix.png：5 颗右对齐 teal 气泡；仅 sending/sent/failed 三颗下方有 11px 灰/红小字，
+    分别为「发送中…」「已发送」（灰）与「发送失败」（红），小字位于气泡外、不压正文；
+    首颗（无状态）与末颗（processing）下方无任何标记。
+  initials-matrix.png：四条 developer 消息头像依次为 张/李/AL/AA（互不相同），
+    可见名字张伟/李静/Alice/Aaron 与角色标签·开发者并列；第五条 tester 只有角色字母 T
+    与角色标签「测试」，无裸 id、无状态标记。
+
+======================================================================
+9. bundle 溯源与既有套件非回归
+======================================================================
+服务端 bundle 溯源（只读探测，未重建）：
+  容器 aiagents-compose-web = Up 3 hours (healthy)，0.0.0.0:13001->3000；
+  镜像 aiagents-web sha256:1c7f70f2f64f27d74a4ba9855157f9e8554767310f88bc3130f142fd83646b68
+        CreatedAt 2026-09-26 04:36:12 +0800；本 todo 开工前 HEAD=9fcbf85（04:43:24 +0800）。
+  $ docker exec aiagents-compose-web grep -rq "chat-bubble-status" /app/.next → NO
+  $ docker exec aiagents-compose-web grep -rq "message-initials"   /app/.next → NO
+  → 在跑 bundle **不含**本 todo 改动；按任务约束未执行全量构建（不与共享环境竞争），
+    因此页面级 E2E 对本 todo 的渲染覆盖为 0，这一点如实记录、不以旧 bundle 结果冒充。
+环境探针（解释为什么既有套件这次能跑）：
+  lib/api.ts 的 API_BASE_URL 是相对 "/api/v1"，浏览器走 :3001 桥接：
+  curl http://localhost:3001/api/v1/health → 200；POST /api/v1/auth/login（seed-admin）→ 200 token；
+  localhost:3000 直连仍拒绝（000）——task-9 以此判断「登录必失败」，本轮实测相对路径可达。
+既有套件非回归（每条对应计划 Success criteria §6 与 References）：
+  B1 共享身份栏   → chat-density「B1 共享身份栏」绿（同轮19/19 内）
+  B2 连续分组     → lib-unit message-grouping 7/7 绿；session-unification B2 段随 57 绿
+  B3 日期分隔     → lib-unit date-separator 7/7 绿；session-unification 随 57 绿
+  B4 system 降噪  → session-unification 内 B4 断言随 57 绿（改动前 bundle）；
+                    本 todo 对 page.tsx 的 diff 仅 4 处新增（§2），system 分支与
+                    chat-bubble 的 system 提前 return 一行未动（git show 可证）
+  B5/B9 author    → lib-unit author-role-display 3/3 + display-author 3/3 绿；B5 页面段随 57 绿
+  B6 未知 part    → chat-density B6 四条全绿
+  B10 角色色      → lib-unit role-theme 4/4 绿（含 light/dark 计算值门）
+  B12 状态容器    → session-unification B12 段随 57 绿；本 todo 未触碰
+                    LoadingIndicator/session-status 与 system time 代码路径
+  A1–A4 密度字号 → chat-density 7 条 + lib-unit chat-density 4 条全绿
+  testid 结构门   → §10
+另：本轮 pages.spec.ts + session-unification.spec.ts = 57 passed（与 task-8 基线 57 一致）。
+
+======================================================================
+10. testid 门（结构断言门 diff）与新 testid 文档
+======================================================================
+$ grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx \
+      web/src/components/ui/agent-avatar.tsx web/src/components/ui/message-identity.tsx | sort -u \
+  > .omo/evidence/chat-ux-hierarchy-and-streaming/task-10-chat-testids-{before,after}.txt
+$ diff before after → exit 1，只有新增、零消失：
+  > data-testid="chat-bubble-status"
+27 → 28 项。计划 §78-91 点名的关键 testid 逐项仍在（脚本核对 OK）：
+  agent-avatar / chat-bubble-author / chat-bubble / chat-bubble-content / chat-bubble-toggle /
+  msg-thinking / msg-tool / msg-error / msg-aborted / msg-streaming。
+新 testid 文档落点：
+  - chat-bubble-status 写在 web/src/components/ui/chat-bubble.tsx 文件头注释
+    （含 data-status / role="status" / 仅 user + sending|sent|failed 的渲染条件）；
+  - e2e/chat-density.spec.ts 头部「覆盖」列表同步列出 B7/B8 断言与该 testid；
+  - initials 无独立 testid：缩写是 agent-avatar 的文本内容，显式值经
+    ChatBubbleProps.initials / MsgPartsProps.initials 两个 prop 进入，避免再造冗余锚点。
+
+======================================================================
+11. 清理回执（cleanup receipts）
+======================================================================
+  $ rm /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/task10-observe.mjs
+    → 临时观察脚本已删除（证据目录只留 json/png/log 产物）
+  $ ls $TMPDIR/next-docs-t10/（4 篇 tag 文档抓取物）→ 临时目录，随会话清理，不入库
+  $ ls web/test-results → 空（绿跑无产物；红跑产物已被后续运行自动清理）
+  $ ls web/playwright-report → 不存在（本轮未生成 HTML 报告，未跑 --html）
+  $ .omo/evidence/phase5-t9-playwright.json 前后 hash 同值（§7）→ 未被本 todo 改写
+  未执行任何 git checkout / git stash / 路径级恢复；预存脏文件
+  （.omo/boulder.json、.omo/evidence/** 既有改动、.omo/ulw-execute/ledger.jsonl、
+   .opencode/opencode.json、.omo/plans|drafts|notepads|registry 未跟踪文件）原样保留；
+  本目录 task-10-* 全部证据保持未提交。
+
+======================================================================
+12. 风险与提交
+======================================================================
+风险（已知、可接受）：
+  1. **页面级覆盖缺口**：本 todo 的 page.tsx/组件改动要等下一次 web 构建才进 bundle；
+     在那之前 session/pages 套件跑的是旧 bundle。下一次构建后建议复跑
+     `npx playwright test pages.spec.ts session-unification.spec.ts` 与
+     真实私聊人工验收（F3/F4）确认 status/initials 在真页面出现。
+  2. 已发送标记会出现在**每条** user 消息下（DB 里 user 消息常态就是 sent）——
+     这是计划 Scope IN 第 8 条的既定取向（11px 元信息级、气泡外右侧），
+     若视觉噪音被否决，只需把 sent 从白名单摘除，不影响 sending/failed。
+  3. 缩写取「前两个字母」：名字前缀相同的成员仍可能撞缩写（如 Alice/Alicia）；
+     计划只要求「同角色不同成员不都显示同一个角色字母」，本 todo 用张/李、AL/AA 实测满足；
+     需要更强区分时可升级为「姓 + 名首字母」规则（纯函数在 lib，改动面极小）。
+  4. 非 CJK/拉丁文字（西里尔等）走「前两个字母」通用规则，计划只定义了 CJK/Latin，
+     该分支已在 lib spec 中显式锁定行为（Ольга → ОЛ）。
+  5. chat-density 测试缝是空白页 harness（无 globals.css 变量时 var(--color-*) 会算成继承色），
+     本次观察已显式注入真实 app CSS 规避；单测本身只断言字号/位置/文本，不依赖颜色变量。
+Commit: 1bef2e0635c3146772e2abc14e22a285a8428e86
+  feat(chat): 增加用户消息状态并显示成员人名缩写
+  $ git show --stat --name-only HEAD → 恰好 §2 六个文件（417 insertions / 7 deletions），
+    无 .omo/.opencode，无 B10/B11/plan/boulder/registry 文件；提交前逐个核对了
+    `git diff --cached --name-only`；本证据目录不纳入提交。
+
+=== post-verification carry-forward ===
+The current compose bundle predates this commit, so pages/session-unification 57-pass is baseline non-regression only. After the next web image rebuild, rerun those suites and a real DM smoke check for sent/failed markers and 张/李/AL/AA avatars. Residual non-blocking notes: prefix-name collisions (Alice/Alicia), NFC/NFD and Ext C/D initials variance, and permanent sent marker per plan Scope IN.

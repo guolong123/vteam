@@ -8,7 +8,7 @@
  * 本组件只留过程内容（状态 + 摘录 + 展开正文）。token 引用统一走 src/theme/tokens.ts。
  */
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import {
   neutral,
@@ -24,6 +24,42 @@ const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 /** 思考密度阈值（A3）：折叠摘录 200 字符；展开态与 title 最多 2000 字符进入 DOM。 */
 export const THINKING_EXCERPT_CHARS = 200;
 export const THINKING_MAX_CHARS = 2000;
+
+/**
+ * 折叠摘录的跑马灯 keyframes（溢出时向左滚动展示）。
+ * 位移量经 CSS 变量 --thinking-marquee-shift 注入（JS 实测 文本宽-视口宽），
+ * 速度按 ~70px/s 折算 duration，长短文本观感一致；alternate 双向滚动避免
+ * 循环跳变的撕裂感，展开态/未溢出不挂动画。
+ */
+const MARQUEE_KEYFRAMES = `
+@keyframes msg-thinking-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-1 * var(--thinking-marquee-shift, 0px))); }
+}
+.msg-thinking-marquee {
+  animation-name: msg-thinking-marquee;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg-thinking-marquee { animation: none; }
+}
+`;
+
+const MARQUEE_PX_PER_SECOND = 70;
+
+/** keyframes 一次性注入 document.head（模块级 guard：整页只插一个 style 标签）。 */
+let marqueeStyleInjected = false;
+function ensureMarqueeStyle(): void {
+  if (marqueeStyleInjected || typeof document === "undefined") {
+    return;
+  }
+  const el = document.createElement("style");
+  el.textContent = MARQUEE_KEYFRAMES;
+  document.head.appendChild(el);
+  marqueeStyleInjected = true;
+}
 
 export interface MsgThinkingProps {
   state: "pending" | "done";
@@ -41,6 +77,32 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
   const normalized = pending ? "" : text.replace(/\s+/g, " ").trim();
   const excerpt = normalized.slice(0, THINKING_EXCERPT_CHARS);
   const detail = text.slice(0, THINKING_MAX_CHARS);
+  // 折叠摘录跑马灯：溢出量实测（文本宽 - 视口宽），随摘录内容/容器宽度/展开态重测。
+  // 展开态不滚（正文已在下方全量展示，避免双份动态噪音）；未溢出不挂动画。
+  const viewportRef = useRef<HTMLSpanElement | null>(null);
+  const textRef = useRef<HTMLSpanElement | null>(null);
+  const [marqueeShift, setMarqueeShift] = useState(0);
+  useEffect(() => {
+    ensureMarqueeStyle();
+    const measure = (): void => {
+      const viewport = viewportRef.current;
+      const inner = textRef.current;
+      if (!viewport || !inner) {
+        setMarqueeShift(0);
+        return;
+      }
+      const shift = inner.scrollWidth - viewport.clientWidth;
+      setMarqueeShift(shift > 1 ? shift : 0);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [excerpt, open]);
+  const marqueeActive = marqueeShift > 0 && !open;
+  const marqueeSeconds = Math.max(
+    4,
+    Math.round(marqueeShift / MARQUEE_PX_PER_SECOND),
+  );
   return (
     <div
       data-testid="msg-thinking"
@@ -97,19 +159,41 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
           )}
           {!pending && excerpt && (
             <span
+              ref={viewportRef}
               title={detail}
               style={{
                 flex: 1,
                 minWidth: 0,
+                overflow: "hidden",
+                position: "relative",
                 fontSize: fontSize.xs,
                 color: neutral[400],
                 fontStyle: "italic",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
               }}
             >
-              {excerpt}
+              <span
+                ref={textRef}
+                className={marqueeActive ? "msg-thinking-marquee" : undefined}
+                style={
+                  marqueeActive
+                    ? {
+                        display: "inline-block",
+                        whiteSpace: "nowrap",
+                        // 位移量/时长由实测溢出量注入：匀速观感 + alternate 回滚
+                        ["--thinking-marquee-shift" as string]: `${marqueeShift}px`,
+                        animationDuration: `${marqueeSeconds}s`,
+                      }
+                    : {
+                        display: "inline-block",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        maxWidth: "100%",
+                      }
+                }
+              >
+                {excerpt}
+              </span>
             </span>
           )}
           {!pending && (

@@ -1,0 +1,26 @@
+[
+  [
+    {
+      "data": {
+        "id": "aq_0000000001",
+        "requestId": "que_platform_0000000001",
+        "sessionId": "s_main",
+        "taskId": "t_1",
+        "agentId": "a_1",
+        "kind": "secret_input",
+        "content": {
+          "source": "secret_input",
+          "template": "mysql -h db -u root -p{{DB_PASSWORD}}",
+          "variables": [
+            {
+              "name": "DB_PASSWORD",
+              "secret": true
+            }
+          ],
+          "reason": "导出订单表"
+        },
+        "status": "pending"
+      }
+    }
+  ]
+]

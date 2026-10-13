@@ -688,7 +688,6 @@ export function TeamMembersPanel({
                   </button>
                   {allModels
                     .filter((m) => !modelSearch || `${m.name} ${m.id}`.toLowerCase().includes(modelSearch.toLowerCase()))
-                    .slice(0, 20)
                     .map((m) => (
                       <button
                         key={m.id}

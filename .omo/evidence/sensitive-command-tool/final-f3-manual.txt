@@ -1,0 +1,747 @@
+================================================================================
+F3 · Real manual QA — LANE B (manual browser flow) · FINAL RUN
+Plan      : .omo/plans/sensitive-command-tool.md  →  F3
+Evidence  : .omo/evidence/sensitive-command-tool/final-f3-manual.txt   (this file, overwritten)
+Lane split: lane A owns final-f3-live.txt — this file does NOT cover lane A's scope
+Verifier  : Sisyphus-Junior subagent (manual-flow lane, final wave re-run)
+Head      : 0987980f0b0e3e10cece4aa87d88ebdb8d878db0 (0987980) — verified at start & end
+            fix(mcp): 阻塞工具调用期间维持长连接心跳 (2026-09-27T10:58:05+08:00)
+Window    : 2026-09-27 03:35:54Z → 03:49Z (2026-09-27 11:35:54 → 11:49 CST)
+Sentinel  : s3cr3t-A9f
+Supersedes: previous final-f3-manual.txt (HEAD 16584d5, window 07:34-08:55 CST), whose
+            DEFECT-A / DEFECT-B / DEFECT-C findings drove todos 11 / 12 / 13.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. VERDICT
+--------------------------------------------------------------------------------
+VERDICT    : PASS — all four required scenarios exercised on the real stack with a
+             real model + real worker; the todo-12 regression (modal from the live SSE
+             frame, NO page reload) is proven live; restart resync (todo 11) proven
+             live with zero P2002; sentinel leak count = 0 everywhere; browser console
+             has 0 uncaught page errors; cleanup + stack health restored.
+CONFIDENCE : HIGH for live-modal / DOM / gating / envelopes / cancel / sentinel /
+             console / cleanup (raw transcripts + screenshots below).
+             MEDIUM-HIGH for the success run's frame-level proof (harness was upgraded
+             mid-run: run 1 captured no SSE frame — see §4 caveat; runs 2-6 captured
+             the frame verbatim).
+RECOMMEND  : F3 lane B may be ticked. Two items stay explicitly NOT-EXERCISED (§8):
+             >600s long-wait (covered by todo-13 evidence, not repeated here) and the
+             live `awaiting-input` card state (brief window, covered by task-8 evidence).
+
+Scenario matrix (real model, real worker, none faked):
+  success     PASS   printf 'deploy-ok {{TOKEN}}' → status=succeeded exitCode=0 9ms
+  failure     PASS   ls /f3-final-missing/{{TOKEN}} → status=failed exitCode=2 34ms
+  cancel      PASS   Esc / 取消按钮 / 遮罩 三种方式 → {"secrets":null} → rejected, 不执行
+  timeout     PASS   timeoutSec=1 + sleep 30 → status=timeout timedOut=true 6019ms / 6059ms
+Restart resync (todo 11) : PASS (restart → que_platform_0000000002 … 008, 0 × P2002)
+Live SSE no-reload (todo 12): PASS (6/6 runs; 0 navigation + 0 GET /questions during wait)
+Sentinel grep (server/worker/web logs + session store + workdir + app fs + MySQL) : 0
+Browser console : 0 uncaught page errors in 8 page contexts (1 expected Chrome verbose
+                  notice per run: "Password field is not contained in a form")
+Worker processes: 0 live leftovers; 2 defunct [sleep] from the timeout runs cleared by
+                  worker restart at 03:47:09Z (receipt §11)
+Cleanup         : PASS (14 messages + 7 question rows removed, baseline restored, §12)
+Plan-caused defects found this run: NONE (previous three are fixed and re-verified)
+
+--------------------------------------------------------------------------------
+1. ENVIRONMENT / PREFLIGHT
+--------------------------------------------------------------------------------
+Topology   : localhost:3001 → throwaway TCP forwarder (…/T/opencode/pw-bridge/bridge.js,
+             "bridge listening on 3001 -> 13001", NOT a repo file) → compose web :13001
+             → Next middleware proxy API_PROXY_TARGET=http://server:3000
+             Alternative direct ports also verified live: web 13001 → 200,
+             server 13000 /api/v1/health → {"status":"ok",…}
+Containers (start of run, 2026-09-27T03:35Z):
+             aiagents-compose-server  Up/healthy, started 03:34:30Z, image built 10:52:33 CST
+             aiagents-compose-web     Up/healthy, container recreated 03:32:56Z by a
+                                      concurrent lane (image sha 9c239c31…), content
+                                      re-verified below
+             aiagents-compose-worker  Up, started 05:41:35 CST (no healthcheck by design)
+             aiagents-compose-db      Up/healthy, 47h
+Actions taken by this lane:
+             1) docker restart server  @03:36:22Z (healthy in <6s) — todo-11 resync test
+             2) docker restart worker  @03:47:09Z — clear 2 defunct [sleep] zombies
+             No image rebuild, no compose down, no DB schema change.
+Final-code markers (content-verified in the RUNNING containers, start & end —
+             f3f-marker-final.txt):
+             HEAD=0987980f0b0e3e10cece4aa87d88ebdb8d878db0
+             git status --porcelain -- server web worker  → empty (no product file touched)
+             server dist : /app/dist/src/platform-mcp/platform-mcp.controller.js contains
+                           MCP_HEARTBEAT_INTERVAL_MS            (0987980 / todo 13)
+                           /app/dist/src/questions/questions.service.js contains
+                           "teamId: createScope.type === 'team' …"  (1b31521 / todo 12)
+             web build   : .next/server/chunks/7965.js contains "payload?.teamId===" (todo 12)
+                           session/page.js contains "awaiting-input" (a8cedf4)
+             worker dist : /app/dist/exec/exec-server.js has the secret-command route,
+                           sensitive-command.js contains the REDACTED mask (c72d68f/0ea57ad)
+             Image build times precede their commit timestamps (built from the working
+             tree, committed minutes later) ⇒ content markers above are the authoritative
+             proof that the running stack carries HEAD's code.
+Credentials: real form login, repository seed admin used by the existing e2e setup
+             (web/e2e/auth.setup.ts → seed-admin / Admin@123456) → LOGIN ok → /teams
+Team/DM    : team tm_0000000001, main agent member tmm_0000000002 (a_project_manager),
+             pre-existing private DM channel c_0000000017 (created 2026-09-25, NOT created
+             by this lane), task t_0000000001
+Baseline   : messages in c_0000000017 = 56 (max m_0000000204), agent_questions = 1 row
+             (aq_0000000001, another lane's), pending = 0
+Harness    : .omo/evidence/sensitive-command-tool/f3f-run.js   (evidence-only, never committed)
+                           f3f-read.js    (read a tool card to terminal state)
+             headless Chrome via web/node_modules/playwright, node v24.14.0
+             Instrumentation: EventSource + fetch SSE tee, framenavigated/load counters,
+             GET /questions request counter, reply/post request capture, console + pageerror.
+
+--------------------------------------------------------------------------------
+2. PER-CHECK RESULTS
+--------------------------------------------------------------------------------
+#   Check                                                        Result
+--- ------------------------------------------------------------ --------
+C1  Real form login with repository seed admin                   PASS
+C2  Open private DM with main agent + explicit prompt            PASS (6/6 prompts → model
+                                                                  called secret_command, no
+                                                                  refusal, no proxying)
+C3  Modal appears from the LIVE SSE frame without page reload    PASS (see §4; todo-12
+                                                                  regression green)
+C4  Modal: read-only command template                            PASS (TEXTAREA readOnly=true,
+                                                                  value = template verbatim)
+C5  Modal: reason rendered                                       PASS ("申请原因：…")
+C6  Modal: masked password input                                 PASS (type=password,
+                                                                  autoComplete=new-password)
+C7  Modal: required gating                                       PASS (submit disabled when
+                                                                  empty → enabled after fill)
+C8  Fill sentinel s3cr3t-A9f + confirm → command executes        PASS (exitCode 0, 9ms)
+C9  Model-visible envelope: template + redacted output,          PASS (mask {{REDACTED}};
+     no secret / argv / cwd                                        no "cwd"/"argv", no sentinel)
+C10 Cancel via Esc → {"secrets":null}, no execution              PASS
+C11 Cancel via 取消 button → {"secrets":null}, no execution       PASS
+C12 Cancel via mask click → {"secrets":null}, no execution        PASS
+C13 Failure scenario (non-zero exit, redacted stderr)            PASS
+C14 Timeout scenario (timeoutSec=1 → killed, timedOut=true)      PASS
+C15 Restart → secret question renumber without P2002 (todo 11)   PASS
+C16 Browser console: 0 uncaught page errors                      PASS
+C17 Sentinel no-leak grep (logs + stores + DB)                   PASS (0 everywhere)
+C18 Worker process cleanup                                       PASS (0 live leftovers;
+                                                                  2 zombies cleared, §11)
+C19 Cleanup of temporary messages/questions + stack healthy       PASS (§12)
+--  Long-wait heartbeat >600s (todo 13)                          NOT-EXERCISED here —
+                                                                  covered by todo-13
+                                                                  evidence (§8)
+--  Live `awaiting-input` tool-card state                        NOT-EXERCISED (§8)
+--  Expiry / duplicate-submit 409 / concurrent second call       NOT-EXERCISED (§8)
+
+--------------------------------------------------------------------------------
+3. RAW INTERACTION TRANSCRIPT (condensed; full logs named inline)
+--------------------------------------------------------------------------------
+All six flows: login → /teams/tm_0000000001/session → private DM tab
+[data-testid="dm-tab-private-tmm_0000000002"] → fill [data-testid="message-input"] →
+click send → wait modal (bounded 150s, NO reload) → fill sentinel → act → read reply.
+
+--- RUN 1 · success (f3f-success.log, screenshots f3f-success-{modal,filled,after}.png) ---
+[03:36:50.497Z] SENT success : 请立即调用 vteam MCP 工具 secret_command，参数固定为：
+    taskId="t_0000000001"，selfInstanceId="tmm_0000000002"，
+    command="printf 'deploy-ok {{TOKEN}}\n'"，
+    variables=[{"name":"TOKEN","label":"部署 Token","secret":true}]，
+    reason="F3-FINAL success"。… 除了这次工具调用之外不要输出任何文字
+[03:36:50.747Z] step wait for LIVE secret modal (bounded 150s, NO reload)
+    LIVE_MODAL={"modalVisible":true,"modalWaitMs":13901,"navEventsDuringWait":[],
+      "reloadHappened":false,"questionsBackfillGetsDuringWait":[],"noBackfillGet":true}
+    (run 1 used a fetch-only SSE tee; the app uses native EventSource ⇒ frame not
+     captured in this run — harness upgraded before run 2, see §4)
+    DOM_FACTS={"template":"printf 'deploy-ok {{TOKEN}}\\n'","templateReadOnly":true,
+      "templateTag":"TEXTAREA","reasonText":"申请原因：F3-FINAL success",
+      "inputs":[{"testid":"question-secret-input-0","type":"password",
+                 "autoComplete":"new-password","readOnly":false,"valueLen":0}],
+      "submitDisabledBeforeFill":true,"submitLabel":"确认","cancelLabel":"取消",
+      "hasMask":true,"modalHasSentinel":false}
+    GATING={"submitDisabledEmpty":true,"submitDisabledAfterFill":false}
+    FILL_FACTS={"type":"password","valueLen":10,"inputMasked":true,
+      "modalHasSentinel":false,"bodyHasSentinel":true}
+[03:37:05.235Z] ACTION={"action":"submit"} → MODAL_GONE={"gone":true}
+    REPLY_REQUESTS=[{"url":"…/api/v1/questions/aq_0000000002/reply",
+      "postData":"{\"secrets\":{\"TOKEN\":\"s3cr3t-A9f\"}}","status":201,
+      "respBody":… "requestId":"que_platform_0000000002","status":"resolved",
+      "answers":{"filled":["TOKEN"],"actorId":"u_seed_admin","provided":true}}]
+    TOOL_IO (expanded card, input+output rows):
+      输入 {"reason":"F3-FINAL success","taskId":"t_0000000001",
+            "command":"printf 'deploy-ok {{TOKEN}}\n'",
+            "variables":[{"name":"TOKEN","label":"部署 Token"}],
+            "selfInstanceId":"tmm_0000000002"}
+      输出 {"command":"printf 'deploy-ok {{TOKEN}}\n'",
+            "variables":[{"name":"TOKEN","label":"部署 Token","secret":true,
+                          "required":true,"provided":true}],
+            "status":"succeeded","exitCode":0,"signal":null,"timedOut":false,
+            "durationMs":9,"stdout":"deploy-ok {{REDACTED}}\n","stderr":"",
+            "stdoutTruncated":false,"stderrTruncated":false}
+      ioHasSentinel=false  ioHasRenderedCwdOrArgv=false
+    AFTER_FACTS={"domHasSentinel":false,"modalCount":0}
+    PAGE_ERRORS=[] ; CONSOLE_MSGS=["[verbose] …Password field is not contained in a form…"]
+
+--- RUN 2 · cancel via Esc (f3f-cancel.log, f3f-cancel-{modal,filled,after}.png) ---
+[03:38:20.460Z] SENT cancel … command="printf '{{TOKEN}}\n'" reason="F3-FINAL cancel-esc"
+    LIVE_MODAL={"modalVisible":true,"modalWaitMs":3070,"tFrameFirst":1790480303820,
+      "frameBeforeModal":true,"questionFrameCount":1,"navEventsDuringWait":[],
+      "reloadHappened":false,"questionsBackfillGetsDuringWait":[],"noBackfillGet":true}
+    SSE_FRAMES=[{"via":"EventSource","frame":
+      {"id":"ev_0000002034","type":"agent.question","payload":{"question":{
+        "id":"aq_0000000003","requestId":"que_platform_0000000003",
+        "sessionId":"s_0000000011","taskId":"t_0000000001","agentId":"a_project_manager",
+        "kind":"secret_input","content":{"reason":"F3-FINAL cancel-esc",
+          "template":"printf '{{TOKEN}}\\n'","variables":[{"name":"TOKEN","secret":true}]},
+        "status":"pending","answers":null,"createdAt":"2026-09-27T03:38:23.794Z"},
+        "taskId":"t_0000000001","teamId":"tm_0000000001",   <-- todo-12 修复形状
+        "agentId":"a_project_manager","sessionId":"s_0000000011"},
+        "timestamp":"2026-09-27T03:38:23.801Z"}}]
+    (frame at t=…303820 precedes modal at t=…304093)
+[03:38:24.809Z] ACTION={"action":"Esc"} → MODAL_GONE={"gone":true}
+    REPLY … "postData":"{\"secrets\":null}","status":201 → "status":"rejected",
+           "answers":{"filled":[],"provided":false,"actorType":"user"}
+    TOOL_IO 输出 {"…","provided":false,"status":"cancelled","exitCode":null,
+           "signal":null,"timedOut":false,"durationMs":0,"stdout":"","stderr":""}
+    SERVER: [secret-command] 未执行 … status=cancelled
+            [questions] secret_input 终态 id=aq_0000000003 status=rejected filled=0
+    PAGE_ERRORS=[]
+
+--- RUN 3 · failure (f3f-failure.log, f3f-failure-{modal,filled,after}.png) ---
+[03:39:03.333Z] SENT failure … command="ls /f3-final-missing/{{TOKEN}}" reason="F3-FINAL failure"
+    LIVE_MODAL={"modalVisible":true,"modalWaitMs":2845,"frameBeforeModal":true,
+      "questionFrameCount":1,"navEventsDuringWait":[],"reloadHappened":false,
+      "noBackfillGet":true}   frame carries teamId=tm_0000000001 (ev_0000002047)
+    DOM_FACTS={"template":"ls /f3-final-missing/{{TOKEN}}","templateReadOnly":true,
+      "reasonText":"申请原因：F3-FINAL failure","submitDisabledBeforeFill":true}
+    GATING={"submitDisabledEmpty":true,"submitDisabledAfterFill":false}
+    ACTION={"action":"submit"} → MODAL_GONE=true
+    REPLY … aq_0000000004 {"secrets":{"TOKEN":"s3cr3t-A9f"}} 201 → status resolved
+    TOOL_IO 输出 {"command":"ls /f3-final-missing/{{TOKEN}}",
+      "variables":[{"name":"TOKEN",…,"provided":true}],"status":"failed","exitCode":2,
+      "signal":null,"timedOut":false,"durationMs":34,"stdout":"",
+      "stderr":"ls: cannot access '/f3-final-missing/{{REDACTED}}': No such file or directory\n",
+      "stdoutTruncated":false,"stderrTruncated":false}
+      ioHasSentinel=false  ioHasRenderedCwdOrArgv=false
+    SERVER: [secret-command] 执行完成 … status=failed exitCode=2 durationMs=34
+    PAGE_ERRORS=[]
+
+--- RUN 4 · timeout, attempt 1 (f3f-timeout.log, f3f-timeout-{modal,filled,after}.png) ---
+[03:39:32.821Z] SENT timeout … command="test -n \"{{TOKEN}}\" && sleep 30" timeoutSec=1
+    LIVE_MODAL={"modalVisible":true,"modalWaitMs":4691,"frameBeforeModal":true,
+      "questionFrameCount":1,"navEventsDuringWait":[],"reloadHappened":false,
+      "noBackfillGet":true}   frame ev_0000002060 with teamId=tm_0000000001
+    ACTION={"action":"submit"} → MODAL_GONE=true
+    REPLY … aq_0000000005 resolved (201)
+    NOTE: this run's terminal-state poll used the pre-fix predicate (any terminal card
+          in the 56-card history) and returned at 1.5s while the new card was still
+          running ⇒ harness fixed; attempt 2 below carries the complete evidence.
+    SERVER: [secret-command] 执行完成 … status=timeout exitCode=null durationMs=6019
+
+--- RUN 5 · cancel via 取消 button (f3f-cancel-btn.log, f3f-cancel-btn-*.png) ---
+[03:41:14.539Z] SENT cancel-btn … reason="F3-FINAL cancel-btn"
+    LIVE_MODAL={"modalVisible":true,"modalWaitMs":4033,"frameBeforeModal":true,
+      "questionFrameCount":1,"navEventsDuringWait":[],"reloadHappened":false,
+      "noBackfillGet":true}   frame ev_0000002073 with teamId=tm_0000000001
+    GATING={"submitDisabledEmpty":true,"submitDisabledAfterFill":false}
+[03:41:20.069Z] ACTION={"action":"取消按钮"} → MODAL_GONE=true
+    REPLY … "postData":"{\"secrets\":null}","status":201 → aq_0000000006 rejected
+    TOOL_IO 输出 {"…","provided":false,"status":"cancelled","exitCode":null,
+                  "durationMs":0,"stdout":"","stderr":""}
+    SERVER: [secret-command] 未执行 … status=cancelled
+    PAGE_ERRORS=[]
+
+--- RUN 6 · cancel via mask click (f3f-cancel-mask.log, f3f-cancel-mask-*.png) ---
+[03:41:43.217Z] SENT cancel-mask … reason="F3-FINAL cancel-mask"
+    LIVE_MODAL={"modalVisible":true,"modalWaitMs":3838,"frameBeforeModal":true,
+      "questionFrameCount":1,"navEventsDuringWait":[],"reloadHappened":false,
+      "noBackfillGet":true}   frame ev_0000002086 with teamId=tm_0000000001
+[03:41:49.261Z] ACTION={"action":"遮罩点击"} → MODAL_GONE=true
+    REPLY … "postData":"{\"secrets\":null}","status":201 → aq_0000000007 rejected
+    TOOL_IO 输出 status=cancelled, provided=false, exitCode=null, stdout=""
+    SERVER: [secret-command] 未执行 … status=cancelled
+    PAGE_ERRORS=[]
+
+--- RUN 7 · timeout, attempt 2 (f3f-timeout2.log + f3f-read-timeout.log) ---
+[03:42:09.248Z] SENT timeout (same payload as run 4) reason="F3-FINAL timeout"
+    LIVE_MODAL={"modalVisible":true,"modalWaitMs":3463,"frameBeforeModal":true,
+      "questionFrameCount":1,"navEventsDuringWait":[],"reloadHappened":false,
+      "noBackfillGet":true}   frame ev_0000002099 with teamId=tm_0000000001
+    ACTION={"action":"submit"} → MODAL_GONE=true; REPLY aq_0000000008 resolved (201)
+    Re-read of the card after terminal (f3f-read.js, f3f-read-timeout.log):
+    IO={"status":"success",
+        "ioRows":["输入{…timeoutSec:1…}","输出{\"command\":\"test -n \\\"{{TOKEN}}\\\" && sleep 30\",
+        \"variables\":[{\"name\":\"TOKEN\",…,\"provided\":true}],\"status\":\"timeout\",
+        \"exitCode\":null,\"signal\":null,\"timedOut\":true,\"durationMs\":6059,
+        \"stdout\":\"\",\"stderr\":\"\",\"stdoutTruncated\":false,\"stderrTruncated\":false}"],
+        "ioHasSentinel":false,"ioHasCwdOrArgv":false}
+    RUNNING_CARDS_REMAINING=[]   PAGE_ERRORS=[]
+    SERVER: [secret-command] 执行完成 … status=timeout exitCode=null durationMs=6059
+
+Server-side ledger for the whole window (f3f-secret-command-lines.txt, extracted from
+f3f-server.log; also serves as the per-scenario execution proof):
+  [questions] 平台创建 secret_input id=aq_0000000002 requestId=que_platform_0000000002 …
+  [questions] secret_input 终态 id=aq_0000000002 status=resolved filled=1 …
+  [secret-command] 执行完成 … status=succeeded exitCode=0 durationMs=9
+  id=aq_0000000003 → status=rejected filled=0 … [secret-command] 未执行 … status=cancelled
+  id=aq_0000000004 → status=resolved filled=1 … [secret-command] 执行完成 … status=failed exitCode=2 durationMs=34
+  id=aq_0000000005 → status=resolved filled=1 … [secret-command] 执行完成 … status=timeout exitCode=null durationMs=6019
+  id=aq_0000000006 → status=rejected filled=0 … [secret-command] 未执行 … status=cancelled
+  id=aq_0000000007 → status=rejected filled=0 … [secret-command] 未执行 … status=cancelled
+  id=aq_0000000008 → status=resolved filled=1 … [secret-command] 执行完成 … status=timeout exitCode=null durationMs=6059
+  (every create line reads “敏感输入，值不落库” and every terminal line “旁路，不转发 worker”
+   for cancelled rows ⇒ cancel never reaches the worker)
+
+--------------------------------------------------------------------------------
+4. CRITICAL REGRESSION — modal from the LIVE SSE frame, no reload (todo 12)
+--------------------------------------------------------------------------------
+Method (f3f-run.js): the harness NEVER calls page.reload() during the modal wait. It
+records, between tSend and modal-visible:
+  · navigation events (framenavigated + load)  → must be empty
+  · GET /api/v1/questions requests             → must be none (backfill would be a reload
+                                                 or a refetch; neither may happen)
+  · the raw agent.question SSE frame           → must arrive BEFORE the modal renders
+Results:
+  run            modalWaitMs  frame captured      frame→modal   nav  backfill GET
+  success        13901        (tee not yet ES-aware) n/a          0    0
+  cancel (Esc)    3070        ev_0000002034  ✓      273ms before  0    0
+  failure         2845        ev_0000002047  ✓       74ms before  0    0
+  timeout #1      4691        ev_0000002060  ✓      470ms before  0    0
+  cancel-btn      4033        ev_0000002073  ✓      869ms before  0    0
+  cancel-mask     3838        ev_0000002086  ✓      162ms before  0    0
+  timeout #2      3463        ev_0000002099  ✓      326ms before  0    0
+Every captured frame is the production shape fixed by todo 12:
+  {"type":"agent.question", … "taskId":"t_0000000001","teamId":"tm_0000000001", …}
+  → server create emit carries the top-level teamId (1b31521) and the client team: scope
+    fallback accepts it (web/hooks/use-sse.ts `|| payload.teamId === id`, verified present
+    in the running build: chunks/7965.js).
+Honesty caveat: in run 1 the harness only wrapped window.fetch, while use-sse.ts opens a
+  native EventSource ⇒ no frame was recorded for that run. Its no-reload proof therefore
+  rests on 0 navigation events + 0 GET /questions during the 13.9s wait + modal visible.
+  The EventSource wrapper was added before run 2; runs 2-7 supply the frame-level proof.
+Verdict: todo-12 regression GREEN — modal rendered from the live frame in 2.8–13.9s in
+  every run, with zero reloads and zero backfill fetches. (Prior lane needed 1 reload in
+  3/3 runs — DEFECT-B, now fixed.)
+
+--------------------------------------------------------------------------------
+5. MODAL DOM / GATING / MASK FACTS (identical across all runs)
+--------------------------------------------------------------------------------
+hasSecretBody           : true
+template                : TEXTAREA, readOnly=true, value = model template verbatim
+                          ("printf 'deploy-ok {{TOKEN}}\n'" / "ls /f3-final-missing/{{TOKEN}}" /
+                           "test -n \"{{TOKEN}}\" && sleep 30")
+reason                  : "申请原因：F3-FINAL <scenario>" (data-testid question-secret-reason)
+inputs                  : question-secret-input-0 type=password, autoComplete=new-password,
+                          readOnly=false, valueLen 0 → 10 after fill
+mask element            : question-modal-mask present (hasMask=true)
+gating                  : submitDisabledEmpty=true → submitDisabledAfterFill=false
+sentinel in modal text  : modalHasSentinel=false BEFORE and AFTER fill
+                          (value lives only in the password input's value attribute;
+                           FILL_FACTS.valueAttrHasSentinel=true is the input attribute itself)
+labels                  : submit="确认", cancel="取消"
+After action            : modalCount=0, domHasSentinel=false (AFTER_FACTS, every run)
+Screenshots             : f3f-<scenario>-{modal,filled,after}.png (19 files, §13)
+
+--------------------------------------------------------------------------------
+6. ENVELOPE / NO-LEAK DETAILS
+--------------------------------------------------------------------------------
+Model-visible tool-card input : raw args only — reason/taskId/command template/
+                                variables metadata/selfInstanceId. No secrets (the model
+                                never receives them; the reply POST body is the only place
+                                the sentinel appears, over HTTPS-less localhost to the API).
+Model-visible tool-card output (per scenario):
+  succeeded : status=succeeded exitCode=0  durationMs=9   stdout="deploy-ok {{REDACTED}}\n"
+  failed    : status=failed    exitCode=2  durationMs=34  stderr="ls: cannot access
+              '/f3-final-missing/{{REDACTED}}': No such file or directory\n"
+  timeout   : status=timeout   exitCode=null timedOut=true durationMs=6019 / 6059
+  cancelled : status=cancelled exitCode=null provided=false durationMs=0 stdout="" stderr=""
+Checks inside every expanded card: ioHasSentinel=false, ioHasRenderedCwdOrArgv=false
+  (regex /"cwd"|"argv"/), no rendered argv, no cwd, no pre-redaction message.
+Redaction glyph: the plan specifies exact-value redaction; the implementation constant is
+  worker/src/exec/sensitive-command.ts:42 `const REDACT_MASK = '{{REDACTED}}'` (plus a
+  residual {{PLACEHOLDER}} mask). So the output is masked with `{{REDACTED}}`, not the
+  literal `***` — same finding as the previous lane, plan-compliant (the plan never
+  mandates a glyph). Record, do not treat as a defect.
+Model's follow-up text (from messages before cleanup): "deploy-ok {{REDACTED}}？exitCode=0？",
+  "status=cancelled？provided=false？", "status=failed, exitCode=2？No such file or
+  directory？", "status=timeout, timedOut=true, durationMs=6019？" — no sentinel.
+
+--------------------------------------------------------------------------------
+7. RESTART RESYNC (todo 11) — LIVE
+--------------------------------------------------------------------------------
+Action  : docker restart aiagents-compose-server at 2026-09-27T03:36:22Z; healthy in <6s;
+          /api/v1/health → {"status":"ok"}.
+State before restart : max(agent_questions.request_id) = que_platform_0000000001,
+          pending = 0.
+First secret question AFTER the restart (my success run, 03:36:50Z) :
+          id=aq_0000000002 requestId=que_platform_0000000002  ← continued from the stored
+          request_id, not regenerated from a cold counter.
+Sequence then continued cleanly: …0000000003 … 0000000008 (7 creates, all mine).
+P2002 / "Unique constraint" / E11000 grep over the post-restart server log
+(f3f-server.log, also saved in f3f-final-sweep.txt) : 0 hits.
+Verdict: todo-11 acceptance ("重启后连续创建不再 P2002") is green on the real stack.
+
+--------------------------------------------------------------------------------
+8. NOT-EXERCISED ITEMS + EXACT REASONS (honesty)
+--------------------------------------------------------------------------------
+N1 Long-wait heartbeat during a >600s secret wait  → NOT-EXERCISED in this lane.
+   Reason: the todo-13 probe already proved it on the same build — “无心跳 → 289.9s 客户端
+   abort；30s 心跳 → 605.4s 无 abort，最终 JSON-RPC 正常解析” (.omo/evidence/
+   sensitive-command-tool/task-13-mcp-heartbeat.txt, HEAD 0987980). Repeating a >600s wait
+   was explicitly out of scope for this final run. Supporting ambient fact from this run:
+   a pending question stayed open >600s without a client abort (aq_0000000001 from another
+   lane was finalised `status=input_timeout` at 03:21:20Z after being created 03:12:20Z —
+   server log line “[secret-command] 未执行 … status=input_timeout”).
+N2 Live `awaiting-input` tool-card state       → NOT-EXERCISED here.
+   Reason: the live modal window is 2.8–13.9s in this build (todo-12 fix makes the state
+   almost invisible), and the awaiting-input state machine is covered by task-8 evidence
+   (task-8-tool-card.txt + screenshots) and the todo-8 tests. No claim is made here.
+N3 Input expiry driven by MY run (540s)         → NOT-EXERCISED (same as N1; the ambient
+   input_timeout line above is another lane's question, recorded as observation only).
+N4 Duplicate submit / concurrent second call 409 → NOT-EXERCISED (needs two simultaneous
+   model calls; not part of the four required scenarios).
+N5 Failure of the model to call the tool        → never happened: the model complied 6/6,
+   so "model refuses" is NOT-EXERCISED-by-absence (nothing to fake).
+
+--------------------------------------------------------------------------------
+9. BROWSER CONSOLE RESULTS
+--------------------------------------------------------------------------------
+8 page contexts (7 scenario runs + 1 card re-read):
+  PAGE_ERRORS=[] in 8/8            → 0 uncaught page errors
+  CONSOLE_MSGS: 7/7 scenario runs emitted exactly the same single Chrome verbose notice:
+      "[verbose] [DOM] Password field is not contained in a form: (More info:
+       https://goo.gl/9p2vKq)"
+    → expected (the secret input is intentionally outside any <form>), not an app warning.
+  card re-read run: CONSOLE_MSGS=[] .
+Server-side web container log (f3f-web.log) during the window contains ONLY the
+  consequences of my deliberate `docker restart server`:
+      TypeError: fetch failed … ECONNREFUSED 192.168.97.3:3000  (middleware proxy, transient)
+      ⨯ Error: Cannot append headers after they are sent to the client
+          at .next/server/app/_not-found/page.js (ERR_HTTP_HEADERS_SENT)
+  The web log carries no per-line timestamps, so these cannot be attributed more finely
+  than "inside the restart window"; they are server-side (Next) errors, NOT browser page
+  errors, and the browser saw none. Recorded as an observation (§10), not a pass/FAIL item.
+
+--------------------------------------------------------------------------------
+10. OBSERVATIONS / MINOR FINDINGS (recorded immediately, none blocking)
+--------------------------------------------------------------------------------
+O1 Worker zombies from the timeout scenario: two `[sleep] <defunct>` entries (ppid 1)
+   appeared after the two timeout runs — PID 1 (node dist/index.js) does not reap orphaned
+   grandchildren. Process was already dead (Z state), never a running leftover.
+   ACTION TAKEN: `docker restart aiagents-compose-worker` at 03:47:09Z cleared them;
+   post-restart `ps -eo stat` → 0 × Z, no live sh/sleep/ls/timeout processes (§11).
+   Residual product note: each future timeout kill will re-create one defunct entry until
+   PID 1 reaps or the container restarts. Same class as the zombie noted by the previous
+   lane. Not plan-violating, worth an implementer glance.
+O2 Tool-card `data-status` reflects the MCP tool-part completion, not the envelope status:
+   cancelled/failed/timeout calls render the card as “⚙… 成功” while the expanded 输出 row
+   shows status=cancelled/failed/timeout. Consistent with the previous lane's note; the
+   distinct outcomes ARE visible in the envelope (which is what the model and the user see
+   when expanded).
+O3 Redaction glyph is `{{REDACTED}}` (plan: exact-value redaction, glyph unspecified).
+O4 docker logs --since did not filter precisely on this host (the server dump includes a
+   pre-restart line at 03:12:20Z and the worker dump includes earlier completions). The
+   per-scenario attribution therefore uses pino `time` fields + harness timestamps, and the
+   worker's authoritative execution evidence is the server-side `[secret-command] 执行完成`
+   lines. Sentinel greps are unaffected (wider window = stricter).
+O5 A concurrent lane recreated the web container at 03:32:56Z (before my first run); all
+   todo-12/13 content markers were re-verified in the running containers afterwards (§1).
+
+--------------------------------------------------------------------------------
+11. WORKER PROCESS HYGIENE + RESTART RECEIPT
+--------------------------------------------------------------------------------
+Before (03:44Z, f3f-worker-ps.txt):
+    PID 1   node dist/index.js          (alive)
+    PID 50  opencode serve --port 4000   (alive)
+    PID 371 [sleep] <defunct>   ppid 1  elapsed 430s   ← timeout run #1
+    PID 467 [sleep] <defunct>   ppid 1  elapsed 274s   ← timeout run #2
+    live `sh -c` / `sleep` / `ls /f3…` / `timeout` processes: NONE
+Action (f3f-worker-restart-receipt.txt): docker restart aiagents-compose-worker @03:47:09Z
+After (03:47:34Z):
+    PID 1   node dist/index.js ; PID 51 opencode serve --port 4000
+    Z-state count (`ps -eo stat | grep -c ^Z`) = 0
+    no leftover shells/sleep/ls/timeout
+Re-registration: server log shows 16 × POST /api/v1/workers/w_compose_worker/heartbeat in
+    the 3 minutes after the restart; worker log has no further `secret-command` activity.
+No live processes from cancelled/timed-out commands remained at any point.
+
+--------------------------------------------------------------------------------
+12. CLEANUP RECEIPTS (f3f-cleanup-receipts.txt, f3f-final-sweep.txt)
+--------------------------------------------------------------------------------
+[pre]  messages in c_0000000017 = 70 (baseline 56 + my 14), agent_questions = 8, pending = 0
+[action 1] dumped the raw DM transcript BEFORE deletion → f3f-dm-transcript.jsonl (18 485 B,
+           0 sentinel hits; contains the model replies + tool-card JSON for the record)
+[action 2] DELETE message_receipts for m_0000000205..m_0000000218   (0 rows)
+[action 3] DELETE messages m_0000000205..m_0000000218 in c_0000000017 (14 rows: 7 prompts +
+           7 agent replies — all created by this lane between 03:36:50Z and 03:42:13Z)
+[action 4] DELETE agent_questions aq_0000000002..aq_0000000008 WHERE reason LIKE 'F3-FINAL%'
+           (7 rows; the reply payloads had already been captured in the run logs)
+[action 5] docker restart worker to clear the 2 defunct [sleep] (§11)
+[action 6] no temporary DM/channel created — c_0000000017 pre-existed 2026-09-25 and is
+           untouched; no file written outside .omo/evidence/sensitive-command-tool/
+           (no /tmp scratch, no repo edits)
+[post]  messages in c_0000000017 = 56 (== baseline), max id = m_0000000204 (== baseline)
+[post]  agent_questions = 1 (== baseline aq_0000000001, owned by another lane), pending = 0
+[post]  message_receipts for my ids = 0
+[kept]  evidence artifacts under .omo/evidence/sensitive-command-tool/ (deliverable;
+        .omo/** is never committed per the plan's commit strategy)
+[NOT touched] product source/test files — `git status --porcelain -- server web worker`
+        is empty; the only dirty entries are the pre-existing .omo/.opencode files.
+Stack health at 2026-09-27T03:47:52Z (f3f-final-sweep.txt):
+        web     Up 14 min (healthy)   → http://localhost:3001 = 200, :13001 = 200
+        server  Up 11 min (healthy)   → /api/v1/health = {"status":"ok"}
+        worker  Up (fresh)            → 16 heartbeats observed post-restart
+        db      Up 47 h (healthy)
+        pending questions = 0, no live exec processes
+
+--------------------------------------------------------------------------------
+13. SENTINEL (s3cr3t-A9f) NO-LEAK TABLE
+--------------------------------------------------------------------------------
+[1] container logs (docker logs, full history)
+      server  hits=0
+      worker  hits=0
+      web     hits=0
+    raw dumps: f3f-server.log (1 498 095 B) / f3f-worker.log (32 901 B) / f3f-web.log (11 176 B)
+[2] product session store (worker container)
+      /root/.local/share/opencode  (log/, opencode.db{,-wal,-shm}, storage/…)  hits=0
+      /data/vteam-worker (workdir, incl. .git)                                 hits=0
+[3] application filesystems
+      server /app (excl. node_modules)  hits=0
+      web    /app/.next                 hits=0
+[4] MySQL product stores
+      messages.content          hits=0
+      agent_questions.content   hits=0
+      agent_questions.answers   hits=0
+      realtime_events.payload   hits=0
+[5] browser DOM (page source after every action)
+      AFTER_FACTS.domHasSentinel=false in 7/7 runs; modal text never contains the sentinel
+[6] DM transcript captured before cleanup                                hits=0
+[7] reply POST bodies — the ONLY place the sentinel legitimately appears (browser → API),
+      recorded in the run logs; never persisted (answers column holds metadata only)
+TOTAL: 0 hits everywhere. (grep exit 1 = "no matches" = desired outcome.)
+
+--------------------------------------------------------------------------------
+14. ARTIFACT INDEX (all under .omo/evidence/sensitive-command-tool/)
+--------------------------------------------------------------------------------
+f3f-run.js                  harness: live-SSE, no-reload scenario runner (evidence-only)
+f3f-read.js                 tool-card terminal reader
+f3f-success.log             run 1 (success) raw transcript
+f3f-cancel.log              run 2 (Esc) raw transcript incl. captured SSE frame
+f3f-failure.log             run 3 (failure) raw transcript
+f3f-timeout.log             run 4 (timeout, attempt 1) raw transcript
+f3f-cancel-btn.log          run 5 (取消 button) raw transcript
+f3f-cancel-mask.log         run 6 (mask click) raw transcript
+f3f-timeout2.log            run 7 (timeout, attempt 2) raw transcript
+f3f-read-timeout.log        terminal re-read of the timeout card + running-card check
+f3f-success-{modal,filled,after}.png        screenshots (19 PNGs total)
+f3f-cancel-{modal,filled,after}.png
+f3f-cancel-btn-{modal,filled,after}.png
+f3f-cancel-mask-{modal,filled,after}.png
+f3f-failure-{modal,filled,after}.png
+f3f-timeout-{modal,filled,after}.png
+f3f-read-last.png           final card state (timeout envelope)
+f3f-dm-transcript.jsonl     full raw DM transcript BEFORE cleanup (14 messages)
+f3f-server.log              server container log for the window
+f3f-worker.log              worker container log for the window
+f3f-web.log                 web container log for the window
+f3f-secret-command-lines.txt [secret-command]/[questions] msg lines extracted from f3f-server.log
+f3f-worker-ps.txt           worker process table (zombies documented)
+f3f-worker-restart-receipt.txt worker restart + clean process table
+f3f-cleanup-receipts.txt    SQL before/after counts
+f3f-final-sweep.txt         final health + final sentinel sweep + git status
+f3f-marker-final.txt        HEAD + final-code markers in the running containers
+
+--------------------------------------------------------------------------------
+15. BLOCKERS / LIMITATIONS FOR THE OVERALL F3
+--------------------------------------------------------------------------------
+1. None blocking for lane B: the four scenarios, the todo-12 live-modal regression and the
+   todo-11 restart resync are all green on HEAD 0987980.
+2. Not exercised here (§8): >600s heartbeat (owned by todo-13 evidence), live
+   awaiting-input card, input-expiry driven by this lane, duplicate-submit/409. Do not
+   count them as passes from this file.
+3. Residual product notes (§10): defunct-`sleep` reaping by PID 1, card data-status vs
+   envelope status, `{{REDACTED}}` glyph, web ERR_HTTP_HEADERS_SENT during API downtime —
+   recorded for the implementer, none plan-blocking.
+4. This lane touched only .omo/evidence/...; no product/test/plan/state file was modified.
+================================================================================
+
+--------------------------------------------------------------------------------
+16. ADDENDUM — OWNER SEGMENT (appended 2026-09-27T06:29:46Z): complementary receipts,
+    state reconciliation, preserved superseded-defect record
+--------------------------------------------------------------------------------
+[scope] Sections 0-15 above were written by this lane's final-wave re-run (f3f-* harness,
+window 2026-09-27T03:35:54-03:49Z, file finalized 03:53:21Z) while this owner segment
+(checkpoint-resumed session, registry F3 executor ses_f205dcf68ffdfOG2VDMZdwvWx1) was
+completing the remaining cleanup. Nothing in sections 0-15 was modified; everything below
+is additive. Pre-append integrity: file = 40304 bytes, sha256 =
+587fe38b4d78c64de39c438660bf1627a272b9b7b59426bd7f35f4ba265bdbc3 (first 40304 bytes
+re-verified identical after append).
+
+16.1 CHECKS THAT SECTION 8 MARKED NOT-EXERCISED — EXERCISED BY THE OWNER LANE
+ (a) FIRST-TOKEN EXEMPTION (plan todo-9 criterion: a no-text secret_command must not be
+     killed before the input budget) — EXERCISED, real model + real worker:
+     distinguishing run "F3 exemption distinguishing run 2":
+       prompt m_0000000203 @03:12:15.326Z -> question aq_0000000001 created
+       03:12:20.157Z (server log) / 03:12:20.136Z (DB) -> finalised 03:21:20.270Z /
+       03:21:20.261Z = 540.113s (server log) / 540.125s (DB), i.e. the full 540s input
+       budget consumed, then status=input_timeout, filled=0, provided=false.
+       opencode store tool part prt_0e0d967b7001...: time.start=1790478739634
+       (03:12:19.634Z), time.end=1790479280328 (03:21:20.328Z) -> wall 540.694s with
+       ZERO intermediate part updates => no text streamed for the whole wait; the 300s
+       first-token liveness mark (03:17:19Z) passed with the session alive; envelope
+       returned normally: status=input_timeout, exitCode=null, timedOut=false,
+       durationMs=0 (command never executed), no secret, no rendered argv/cwd.
+       server lines: "[questions] 平台创建 secret_input …（敏感输入，值不落库）" /
+       "[secret-command] 未执行 … status=input_timeout" (f3-raw-server.log, hostname
+       6e5b19b09634 = FIXED-build container; todo-11/12/13 markers per f3f-marker-final.txt).
+     raw: f3-raw-opencode-distinguishing-run-parts.json (tool-part timeline),
+          f3-raw-opencode-session-messages-final.json (891365 B, 138 msgs / 357 parts,
+          dump 05:58:25Z; pre-dump snapshot kept as f3-raw-opencode-session-messages-0250Z.json),
+          f3-raw-agent-questions.txt (pre-delete row dump, 04:49:08Z)
+ (b) INPUT-BUDGET EXPIRY AT 540s (= section 8's N3) — EXERCISED, three receipts:
+       (1) run above: question open 540.125s -> status=input_timeout, nothing executed;
+       (2) isolation curl, host: TIME_TOTAL=540.164276, HTTP=200, JSON-RPC envelope
+           status=input_timeout (f3-isolation-host-540s.json, f3-isolation-host-timing.txt);
+       (3) isolation curl, in-container: TIME_TOTAL=540.261971, same envelope
+           (session transcript; no separate file).
+     => N3 is EXERCISED for the overall F3 evidence set. N1 (heartbeat during a >600s
+     wait) stays owned by todo-13 evidence (605.4s probe, task-13-mcp-heartbeat.txt);
+     this lane's longest wait was 540s.
+
+16.2 OWNER FOUR-SCENARIO ENVELOPES — pre-fix bundle (historical; section 3 re-ran all
+     four on the fixed build, which is authoritative for the verdict)
+     runs 2026-09-26T22:12:37Z -> 22:20:34Z, bundle A: HEAD 16584d50, images
+     server 8494b82821ef / web bacd04053a1e / worker 78dae6ef19f7, containers
+     d3915ce5db49 / 5d2a45fce3a9 / 5a5c8cdb134f. Full envelope JSON extracted from the
+     messages store -> f3-raw-owner-scenario-envelopes.txt (sentinel 0, no cwd/argv keys):
+       success m_0000000153: succeeded exitCode=0 durationMs=15,
+               stdout "deploy-ok {{REDACTED}}\n"
+       failure m_0000000155: failed exitCode=2 durationMs=41,
+               stderr "ls: cannot access '/f3-does-not-exist/{{REDACTED}}': No such file or directory\n"
+       cancel  m_0000000157: cancelled provided=false durationMs=0;
+               reply POST {"secrets":null} -> 201 (f3-run-cancel.log REPLY_REQUESTS)
+       timeout m_0000000159: timeout timedOut=true durationMs=6048
+     console (f3-run-*.log): PAGE_ERRORS(0) on 4/4 runs; CONSOLE_MSGS(1) = the benign
+       Chrome verbose notice "Password field is not contained in a form" per run.
+     ID note: sequence ids are re-seeded after cleanup — aq_0000000001 here
+       (2026-09-26T22:12:58Z) is a DIFFERENT row from section 8's aq_0000000001
+       (2026-09-27T03:12:20Z); disambiguate by created_at.
+
+16.3 timeoutSec -> EFFECTIVE KILL = timeoutSec + 5s (root cause of every 6019/6048/6059ms
+     durationMs in sections 0/3 and 16.2)
+     platform-mcp.service.ts:4361 adds SECRET_COMMAND_REQUEST_SLACK_MS = 5000
+     (platform-mcp.constants.ts:77) to the timeoutMs handed to the worker -> the worker's
+     kill window is timeoutSec + 5s (observed: timeoutSec=1 -> 6019 / 6048 / 6059 ms,
+     both lanes, both bundles). The slack is intentional per the inline comment (request
+     margin; client stacks a further 5s so the request is never cut before the command
+     ends), status=timeout / timedOut=true semantics unaffected, worst case 300s -> 305s,
+     still far inside the 900000ms MCP floor. Severity: informational; implementer to
+     confirm the +5s is meant as command-kill margin rather than request margin only.
+
+16.4 OWNER SENTINEL PASS #2 — independent of section 13
+     raw: f3-raw-owner-sentinel-final.txt, sweep 2026-09-27T04:43:02Z, re-verified
+     06:05:13Z; pattern s3cr3t-A9f. All product sinks 0 hits:
+       sink                                              bytes        hits
+       docker log aiagents-compose-server (stdout+stderr)  3704458      0
+       docker log aiagents-compose-worker                   34435      0
+       docker log aiagents-compose-web                      11176      0
+       worker /root/.local/share/opencode (session store)       -      0
+       worker /data/vteam-worker (workdir)                      -      0
+       server /app (excl node_modules)                          -      0
+       web /app/.next                                           -      0
+       MySQL messages.content / agent_questions.content /
+           answers / realtime_events.payload                    -   0/0/0/0
+       rendered-command probes (deploy-ok|echo|printf + sentinel):
+           server 0, worker 0
+     Harness transcripts f3-run-{success,failure,timeout}.log carry exactly 1 hit each =
+     the reply POST body (browser -> API input path; the carve-out in section 13[7]);
+     f3-run-cancel.log has 0 (payload is {"secrets":null}).
+
+16.5 FINAL CLEANUP RECEIPTS (owner) — raw: f3-raw-owner-final-state.txt
+     05:10:38Z  DELETE /api/v1/tasks/t_0000000001 -> HTTP 200 {"deleted":true}
+                (temp task "F3 exemption window", created 03:11:38Z for 16.1; product
+                 hard-delete removed task-level children incl. agent_questions row
+                 aq_0000000001 — full pre-delete dump: f3-raw-agent-questions.txt
+                 @04:49:08Z and f3-raw-owner-final-state.txt; server request log
+                 req id 2251, responseTime 100ms; no post-delete errors in server/worker
+                 logs through 06:05:13Z)
+     05:27:47Z  removed temp credential/scratch: f3-token.txt (u_admin JWT, 222 B, zero
+                harness references), f3-admin-token.tmp, del-task.json, q1.sql, q2.sql,
+                m204.json
+     KEPT DELIBERATELY: messages c_0000000017 rows m_0000000152-m_0000000165 and
+                m_0000000184-m_0000000204 (owner scenario/probe rows) — they are part of
+                the baseline recorded in sections 1/12 (56 rows, max m_0000000204);
+                deleting them would falsify those receipts; content is sentinel-free
+                (0 hits). Channel c_0000000017 is a pre-existing team resource (kept).
+                pw-bridge forwarder on :3001 kept: created Sep 24, pre-F3, shared by
+                concurrent lanes and cited by section 1's topology — not an F3 temp file.
+     STATE RECONCILIATION vs sections 1/12, as of 06:05:13Z:
+                tasks 1 -> 0 (t_0000000001 deleted 05:10:38Z);
+                agent_questions 1 -> 0 (aq_0000000001 cascade, owner = this lane);
+                aq_pending 0 = 0; messages c_0000000017 = 56, max m_0000000204 = UNCHANGED;
+                channel exists; pending questions = 0.
+                (Sections 1/12 counts were correct as of their 03:45-03:53Z timestamps.)
+     stack health @06:05:13Z: server /api/v1/health=200 {"status":"ok"}, web :13001=200,
+                web via bridge :3001=200; containers: server 6e5b19b09634 (healthy),
+                web be81f5d769d020db... (healthy), worker 5a5c8cdb134f (up),
+                db 801c4254196d (healthy); worker Z-state=0, live sleep/timeout procs=0,
+                heartbeats 490 lines 04:30-05:51Z at the 10s interval; 0 harness processes;
+                git status -- server web worker = clean, HEAD 0987980 (0 product files
+                modified by any F3 lane).
+
+16.6 BUNDLE PROVENANCE — both bundles, literal ids
+     bundle A (owner scenario runs + isolation curls, pre-fix discovery): HEAD 16584d50;
+       server image 8494b82821ef (container d3915ce5db49), web image bacd04053a1e
+       (container 5d2a45fce3a9), worker image 78dae6ef19f7 (container 5a5c8cdb134f);
+       both old images still on disk (docker image inspect OK) for re-verification.
+     bundle B (sections 0-15 + 16.1 run, current): HEAD 0987980 (git clean);
+       server image 7490e6274863 (container 6e5b19b09634, created 02:52:42Z),
+       web image 9c239c318857 (container be81f5d769d020db..., created 03:32:56Z),
+       worker image 78dae6ef19f7 (container 5a5c8cdb134f, created 2026-09-26T21:41:35Z,
+       restarted 03:47:09Z only), db 801c4254196d.
+     git diff 16584d50..0987980 touches server/ and web/ ONLY (no worker files) -> the
+       worker image is identical across both bundles, which is why it was never rebuilt;
+       content markers in the running containers were re-verified by f3f-marker-final.txt.
+
+16.7 RAW-DUMP REFRESH INCIDENT (disclosed, no result affected): the owner's first re-dump
+     at 03:29Z failed twice (docker not on the login PATH; then a wrong container-name
+     suffix "...-1") and overwrote f3-raw-{server,worker,web,agent-questions}*.txt with
+     shell error text; all four were re-generated correctly at 04:43-04:49Z (byte counts
+     in 16.4). Consequence: the pre-02:52Z server-log window of container d3915ce5db49
+     existed only in the clobbered copy and that container has since been removed, so
+     those raw bytes are no longer re-derivable. NO check result depends solely on them:
+     sentinel for that window is independently recorded 0-hit in f3m-sentinel-grep.txt
+     (full-log passes 00:43:40Z / 00:52:30Z) and final-f3-live.txt command #12; scenario
+     receipts live in f3-run-*.log + database envelopes (16.2) + 12 screenshots; the worker
+     container was never recreated, so f3-raw-worker.log covers the whole window
+     (11x "[exec] secret-command -> 完成" lines, both lanes).
+
+16.8 PRESERVED SUPERSEDED-DEFECT RECORD (repairs the plan References anchor)
+     .omo/plans/sensitive-command-tool.md todo-13 References cite THIS file for the
+     "294.5s abort and 60s phase" evidence; that text lived in the superseded previous
+     version of this file (HEAD 16584d5, window 07:34-08:55 CST), overwritten at
+     03:53:21Z by the final-wave re-run. Key facts preserved verbatim from that version:
+       DEFECT-C: client aborted a blocking tools/call after 294.5s ("The operation timed
+         out.", attempt started 00:08:29Z) while the question was still pending — root
+         cause opencode 1.18.32's ~240s timeout on the 60s scan phase aborting zero-byte
+         blocking calls; same-class concurrent-lane aborts at 278.2s / 293.3s / 246.4s
+         (tool parts of m_0000000161 / m_0000000163 / m_0000000165); server reacted
+         correctly (pending question -> rejected, "未执行 … cancelled", no ghost execution).
+         Fixed by todo-13 heartbeat (commit 0987980) — re-verified by
+         task-13-mcp-heartbeat.txt (no heartbeat -> 289.9s abort; 30s heartbeat -> 605.4s
+         no abort) and corroborated live in 16.1 (pre-fix runs aborted 246-293s; the
+         post-fix distinguishing run held 540.694s with no abort on container
+         6e5b19b09634).
+       DEFECT-A: post-restart que_platform_* P2002 id collision -> fixed todo-11
+         (commit a30397e), re-verified live in section 7 (renumbering, 0 x P2002).
+       DEFECT-B: live agent.question SSE frame dropped by the web matchesScope filter ->
+         fixed todo-12 (commit 1b31521), re-verified live in section 4 (6/6 modal from
+         frame, 0 reloads, 0 GET /questions backfills).
+     Also preserved in: plan todos 11/12/13 (What-to-do/References),
+     .omo/ulw-execute/ledger.jsonl ("294.5s despite plan >=900000ms floor"),
+     task-13-mcp-heartbeat.txt, and the f3m-*/f3-run-* raw artifacts in this directory.
+
+16.9 OWNER VERDICT: PASS — concurs with section 0.
+     Confidence HIGH for sections 0-15 (raw f3f-*.log transcripts, screenshots, DB
+     receipts, all in this directory), HIGH for 16.1-16.5 (raw artifacts named inline),
+     MEDIUM for the single lost raw slice disclosed in 16.7 (results independently
+     recorded; bytes unrecoverable).
+     Not exercised by anyone manually (unchanged, owned elsewhere): >600s heartbeat wait
+     (todo-13 probe evidence), live awaiting-input tool-card state (task-8 evidence),
+     duplicate-submit/409 (todo-6 tests), model-refusal path (never occurred: model
+     complied 6/6 in section 3).
+================================================================================

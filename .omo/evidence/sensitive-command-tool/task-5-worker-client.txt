@@ -1,0 +1,219 @@
+sensitive-command-tool / todo 5 — WorkerClient.runSecretCommand 显式超时客户端
+================================================================================
+Date: 2026-09-26
+Lane: .omo/plans/sensitive-command-tool.md todo 5（Wave 2，Blocked by 4）
+Product/test files changed (only these committed):
+  - server/src/workers/worker.client.ts
+  - server/src/workers/worker.client.spec.ts
+Evidence file: .omo/evidence/sensitive-command-tool/task-5-worker-client.txt (uncommitted)
+
+
+1. 实现要点
+--------------------------------------------------------------------------------
+- 新增 `WorkerClient.runSecretCommand(worker, opts)`：POST 到 exec 端点
+  `/secret-command`，headers `Content-Type: application/json` + `X-Worker-Token`
+  （复用既有 `requestExec` → `requestToUrl` 路径，Basic Auth/错误归一继承）。
+- **显式请求超时**：`requestTimeoutMs = resolveSecretCommandTimeout(opts.timeoutMs)
+  + SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS`（= 命令超时 + 5000）。
+  - 归一对齐 worker `normalizeTimeout`：缺省 60000，上限 600000（DEFAULT_SECRET_COMMAND_TIMEOUT_MS /
+    MAX_SECRET_COMMAND_TIMEOUT_MS）。
+  - 300s 命令 → 305000ms；缺省命令 → 65000ms；**两条路径都 > 默认 DEFAULT_REQUEST_TIMEOUT_MS(60000)，
+    绝不使用 4 参缺省的 60s**（第 4 个 requestExec 参数显式传入）。
+- 失败归一：非 2xx / 网络失败 / 超时 abort / 200 非 JSON / 200 缺 status
+  → 一律 `WorkerUnavailableException`（503），`httpStatus` 保留 worker 原码（400/409/500）。
+- 不泄露：请求体含明文 secrets → 方法内**零日志**；非 2xx 分支不读响应体、
+  异常 detail 只带状态码（`secret-command HTTP <status>`），不回显请求体/响应体。
+- `describeError(err, timeoutMs?)` 增加可选参数（默认值不变），超时文案报出
+  **真实生效超时**（`请求超时（>305000ms）`），不再误导为 60000ms；既有调用点与
+  既有断言（`请求超时（>60000ms）`）不受影响。
+- 类型：`SecretCommandRequest` / `SecretCommandResult` **双写**自
+  `worker/src/protocol/worker-protocol.ts` 的 `SecretCommandRequestPayload` /
+  `SecretCommandResponsePayload`（`SensitiveCommandInput`/`SensitiveCommandOutput` 派生）。
+
+  ⚠️ 决策（为什么双写而不是跨包 import）：实测 server tsconfig 无 rootDir/include，
+  一旦 `import type ... from '../../worker/src/protocol/worker-protocol'`，
+  tsc common root 从 `server/` 抬升到仓库根，输出布局由
+    /tmp/probe/src/main.js  →  /tmp/probe/server/src/main.js（且出现 worker/ 目录）
+  （命令：`npx tsc -p tsconfig.build.json --outDir /tmp/tsc-probe-* --listEmittedFiles`）
+  —— 会破坏 dist 布局与 nest/Docker 启动。仓库既有约定即双写 + 互通 spec
+  （`server/src/workers/dto/worker-dto.spec.ts:10`、`worker/src/protocol/contract.spec.ts:341+`）。
+  探针临时文件已删除，`npx tsc -p tsconfig.build.json --noEmit` exit 0。
+
+
+2. 命令与退出码（精确记录）
+--------------------------------------------------------------------------------
+[RED]   cd server && npx jest src/workers/worker.client.spec.ts --runInBand
+        EXIT=1  （先写测试后实现：TS2305 缺 2 个常量导出 + TS2339
+        `Property 'runSecretCommand' does not exist on type 'WorkerClient'`；
+        Test Suites: 1 failed, Tests: 0 total）
+[GREEN] cd server && npx jest src/workers/worker.client.spec.ts --runInBand
+        EXIT=0  （Test Suites: 1 passed, Tests: 63 passed, 63 total；基线 54 → 63，新增 9）
+[LINT]  cd server && npm run lint:check
+        EXIT=0  （✖ 66 problems (0 errors, 66 warnings)——与改动前基线完全一致 66/0，
+        worker.client.ts 仅剩既有 `model` unused-arg warning，无新增）
+[GATE]  cd server && npx jest src/workers src/chat/worker-dispatcher.spec.ts --runInBand
+        EXIT=0  （9 suites, 588 tests passed——保护共享 describeError 改动不伤邻接 lane）
+[TSC]   cd server && npx tsc -p tsconfig.build.json --noEmit
+        EXIT=0
+未运行 `npm run lint` / `--fix`（按任务约束禁止）。
+
+
+3. RED 原始日志摘录
+--------------------------------------------------------------------------------
+FAIL src/workers/worker.client.spec.ts
+  ● Test suite failed to run
+    src/workers/worker.client.spec.ts:6:3 - error TS2305: Module '"./worker.client"' has no exported member 'DEFAULT_SECRET_COMMAND_TIMEOUT_MS'.
+    src/workers/worker.client.spec.ts:7:3 - error TS2305: Module '"./worker.client"' has no exported member 'SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS'.
+    src/workers/worker.client.spec.ts:459:20 - error TS2339: Property 'runSecretCommand' does not exist on type 'WorkerClient'.
+Test Suites: 1 failed, 1 total
+Tests:       0 total
+
+
+4. 对抗性变异探针（反证 QA：改坏实现 → 对应断言必须变红，全部已恢复）
+--------------------------------------------------------------------------------
+Mutation A「请求超时回落默认 60s」：删除 requestExec 第 4 参 requestTimeoutMs
+  → EXIT=1，3 failed / 60 passed：
+    ✕ 命令 300s → 实际请求超时 305000ms（> 默认 60000，绝不回落默认 60s）
+    ✕ 缺省 timeoutMs → 请求超时 65000ms（对齐 worker 默认 60000 + 余量，仍 > 默认 60000）
+    ✕ 请求超时（abort）→ WorkerUnavailableException，消息带真实超时 305000ms（非默认 60000 文案）
+Mutation B「丢弃 X-Worker-Token」：从 secret-command headers 移除 token
+  → EXIT=1，1 failed / 62 passed：
+    ✕ POST /secret-command：exec 端点 URL + X-Worker-Token + Content-Type + 完整请求体
+Mutation C「异常回显响应体（含 secret 哨兵）」：非 2xx 分支读 res.text() 并拼进 detail
+  → EXIT=1，2 failed / 61 passed：
+    ✕ HTTP 非 2xx（500/400/409）→ WorkerUnavailableException，httpStatus 保留原码且异常不含响应体
+    ✕ 成功与失败路径都不把请求体/secret 写进日志（sentinel 0 命中）
+  （原始失败输出含哨兵，故此处仅记录摘要；sentinel 摘录已按 no-leak 约定不写入证据：
+    grep -c <SENTINEL> /tmp/task5-mutC.log = 4，本文件 = 0）
+三次变异后全部恢复，复跑 GREEN EXIT=0（63/63）。
+
+
+5. MANUAL QA（mocked fetch + 真实本地 stub server；临时 harness
+   server/src/workers/__task5.manual-qa.spec.ts 运行后已删除，仅保留本证据）
+--------------------------------------------------------------------------------
+QA 用例与结论（原始输出见文末附录 A）：
+  A. mocked fetch，300s 命令：
+     url=http://127.0.0.1:4198/secret-command（路径断言 /secret-command ✓）
+     header.Content-Type=application/json、header.X-Worker-Token=dev-worker-token ✓
+     header.Authorization=null（未配置 SERVER_PASSWORD，不注入）
+     setTimeoutDelays=[305000]，effectiveTimeout>60000=true（断言实际超时参数，非调用次数）✓
+     body(redacted) secrets 值 = [REDACTED]；bodyHasSentinel=true（线上确实携带 secret）
+     200 → 类型化结果原样返回 {requestId,status,exitCode,durationMs,stdout,stderr,truncated*} ✓
+  B. 本地 stub server 真实 HTTP 往返 200：
+     server 收到 method=POST url=/secret-command x-worker-token=dev-worker-token
+     content-type=application/json；server 侧 body 含哨兵（sentinelInBody=true，值未打印）
+     → 返回 typedResult {status:'failed',exitCode:1,stderrTruncated:true} 逐字段透传 ✓
+  C. stub server 500：
+     isWorkerUnavailable=true、httpStatus=500、
+     message=worker w_qa 不可用：secret-command HTTP 500、messageHasSentinel=false ✓
+  D. stub server hung（不回包）+ 命令 timeoutMs=500 → 请求超时 5500ms：
+     elapsedMs=5523 → 真实 abort → isWorkerUnavailable=true、
+     message=... 请求超时（>5500ms） ✓（壁钟证明，非 mock）
+  全程 Logger 调用数=0，sentinelInLogs=false ✓
+  Harness 运行退出码：EXIT=0（Tests: 4 passed, 4 total）。
+
+
+6. 对抗类别覆盖
+--------------------------------------------------------------------------------
+  hung/long command ....... PASS（300s → 305000ms；500s? 见归一上限 600000+5000；
+                             变体 A 反证红）
+  malformed_input ......... PASS（200 非 JSON → 503；200 缺 status → 503；
+                             非 2xx 400/409/500 → 503 + httpStatus 保留）
+  dirty_worktree .......... PASS（改动前后 git status 一致，仅 worker.client.ts 与
+                             worker.client.spec.ts 两个产品文件；.omo/.opencode 既有脏文件未触碰、
+                             不进 commit）
+  misleading_success_output PASS（断言真实 request options：URL/headers/body/
+                             setTimeout delay=305000，而非 mock 调用次数）
+  secrets ................. PASS（sentinel 仅存在于测试代码；日志 0 调用、异常消息 0 命中；
+                             变体 C 反证红；证据/正文均不落 sentinel 原值）
+  prompt injection ........ N/A（本 todo 无模型输入解析：只搬运结构化请求/响应，
+                             无字符串解释为指令的路径；注入面在 worker 模板执行与 todo 6 处理器，
+                             不在本客户端）
+  证据文件 sentinel 命中 ... grep -c <SENTINEL> <本文件> = 0（见第 4 节说明）
+
+
+7. 清理与残余风险
+--------------------------------------------------------------------------------
+  - 临时 harness server/src/workers/__task5.manual-qa.spec.ts 已删除（git status 无残留）。
+  - tsc 跨包探针临时文件 src/__crossroot_probe.ts 与 /tmp/tsc-probe-* 输出已删除。
+  - 未修改 worker 路由与 questions 文件（git status 佐证）。
+  - 残余风险：describeError 的超时文案仍按参数报出；若未来新增超时路径不传
+    timeoutMs，将回落 60000 文案（不影响正确性，仅文案）。
+
+
+8. 提交
+--------------------------------------------------------------------------------
+COMMIT_SHA=PENDING（提交后回填；evidence 不入 commit）
+
+附录 A：manual QA harness 原始输出（npx jest src/workers/__task5.manual-qa.spec.ts --runInBand，EXIT=0；文件已删除）
+--------------------------------------------------------------------------------
+  console.log
+    [QA-A] url=http://127.0.0.1:4198/secret-command
+    [QA-A] method=POST
+    [QA-A] header.Content-Type=application/json
+    [QA-A] header.X-Worker-Token=dev-worker-token
+    [QA-A] header.Authorization=null
+    [QA-A] setTimeoutDelays=[305000]
+    [QA-A] effectiveTimeout>60000=true
+    [QA-A] body(redacted)={"requestId":"scr_qa_1","commandTemplate":"echo {{TOKEN}} && sleep 300","secrets":{"TOKEN":"[REDACTED]"},"cwd":"tasks/t_1","timeoutMs":300000,"taskId":"t_qa","sessionId":"ses_qa"}
+    [QA-A] bodyHasSentinel=true
+    [QA-A] response={"requestId":"scr_qa_1","status":"succeeded","exitCode":0,"durationMs":42,"stdout":"REDACTED_OUTPUT","stderr":"","stdoutTruncated":false,"stderrTruncated":false}
+
+      at Object.<anonymous> (workers/__task5.manual-qa.spec.ts:94:15)
+
+  console.log
+    [QA-B] serverSaw.method=POST
+    [QA-B] serverSaw.url=/secret-command
+    [QA-B] serverSaw.x-worker-token=dev-worker-token
+    [QA-B] serverSaw.content-type=application/json
+    [QA-B] serverSaw.body(redacted)={"requestId":"scr_qa_2","commandTemplate":"echo {{TOKEN}}","secrets":{"TOKEN":"[REDACTED]"},"timeoutMs":300000}
+    [QA-B] serverSaw.bodyHasSentinel=true
+    [QA-B] typedResult={"requestId":"scr_qa_2","status":"failed","exitCode":1,"durationMs":7,"stdout":"","stderr":"REDACTED_STDERR","stdoutTruncated":false,"stderrTruncated":true}
+
+      at Object.<anonymous> (workers/__task5.manual-qa.spec.ts:200:15)
+
+  console.log
+    [QA-C] errClass=WorkerUnavailableException
+    [QA-C] isWorkerUnavailable=true
+    [QA-C] httpStatus=500
+    [QA-C] message=worker w_qa 不可用：secret-command HTTP 500
+    [QA-C] messageHasSentinel=false
+
+      at Object.<anonymous> (workers/__task5.manual-qa.spec.ts:235:15)
+
+  console.log
+    [QA-D] elapsedMs=5523
+    [QA-D] effectiveTimeout=5500 (=500+5000)
+    [QA-D] errClass=WorkerUnavailableException
+    [QA-D] isWorkerUnavailable=true
+    [QA-D] message=worker w_qa 不可用：请求超时（>5500ms）
+
+      at Object.<anonymous> (workers/__task5.manual-qa.spec.ts:268:15)
+
+  console.log
+    [QA] logger calls captured=0 sentinelInLogs=false
+
+      at Object.<anonymous> (workers/__task5.manual-qa.spec.ts:47:13)
+
+PASS src/workers/__task5.manual-qa.spec.ts (8.667 s)
+  task-5 manual QA：runSecretCommand 真实请求选项与响应处理
+    ✓ A. mocked fetch：300s 命令的原始请求选项（URL/头/超时）+ 200 响应处理 (10 ms)
+    B-D. local stub server（真实 HTTP 往返）
+      ✓ B. 200 → 类型化结果透传 (15 ms)
+      ✓ C. 500 → WorkerUnavailableException（不含响应体） (2 ms)
+      ✓ D. hung 响应 → 真实超时 abort → WorkerUnavailableException（命令 500ms → 请求 5500ms） (5526 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       4 passed, 4 total
+Snapshots:   0 total
+Time:        8.846 s
+Ran all test suites matching /src\/workers\/__task5.manual-qa.spec.ts/i.
+COMMIT_SHA=ed516bea353a8059219c54c3cd9752928d00610c (short ed516be)
+message: feat(server): 增加 secret-command worker 客户端
+git show --stat HEAD:
+    feat(server): 增加 secret-command worker 客户端
+
+ server/src/workers/worker.client.spec.ts | 260 ++++++++++++++++++++++++++++++-
+ server/src/workers/worker.client.ts      | 162 ++++++++++++++++++-
+ 2 files changed, 417 insertions(+), 5 deletions(-)
+pre-existing dirty files (unstaged, untouched): .omo/boulder.json .omo/evidence/phase5-t9-playwright.json .omo/ulw-execute/ledger.jsonl .opencode/opencode.json ... 保持原状

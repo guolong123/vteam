@@ -126,7 +126,7 @@ have_docker() {
 # (pre-Todo-9 init images reseed config unconditionally) and thus confound the proof.
 reload_worker() {
   docker_compose restart worker >/dev/null 2>&1 \
-    || docker restart aiagents-compose-worker >/dev/null 2>&1
+    || docker restart vteam-compose-worker >/dev/null 2>&1
 }
 
 # sha256_of <file> : prints the file's sha256 (coreutils/BSD compatible).
@@ -658,7 +658,7 @@ PY
 # pre-restart container cannot satisfy the poll below.
 wait_worker_restarted() {
   local started
-  started="$(docker inspect aiagents-compose-worker --format '{{.State.StartedAt}}' 2>/dev/null || true)"
+  started="$(docker inspect vteam-compose-worker --format '{{.State.StartedAt}}' 2>/dev/null || true)"
   [[ -n "$started" && "$started" > "$reload_requested_at" ]]
 }
 

@@ -1,0 +1,188 @@
+# task-12-collapse-policy-failure — B11 统一低优先级折叠（红证据 / QA failure 语义）
+# chat-ux-hierarchy-and-streaming 复选框 12 · QA failure 路径
+# 计划 QA failure 原文（.omo/plans/chat-ux-hierarchy-and-streaming.md:219）：
+#   「error/aborted 默认不可见、retry/quota action 丢失、streaming/system 正文被默认折叠、
+#     或 process/tool 无 toggle，均失败。证据：…/task-12-collapse-policy-failure.txt」
+# 绿证据: 同目录 task-12-collapse-policy.txt（Commit b27f4c706304a4b791fa2b6cdb5d90f9347d803a）
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+
+======================================================================
+0. 结论
+======================================================================
+tests-after 红态真实存在并被记录：产品代码停在 HEAD、测试为最终版时，
+chat-density 5 failed / 21 passed，`npx playwright test` exit 1。
+5 个红点全部落在本 todo 的新增能力上（长附件无开关、超长 error/aborted 无开关、
+thinking/tool 无具名展开区、短内容契约、真机观察依赖开关）。
+红态矩阵 task-12-collapse-matrix-red.json 与绿态 task-12-collapse-matrix.json
+逐格对照见绿证据 §5。
+
+======================================================================
+1. 红/绿命令与退出码（同一份测试文件，唯一变量是 6 个产品文件）
+======================================================================
+RED
+  $ cd /Volumes/SSD-Data/01work/git-project/vteam/web && \
+    npx playwright test chat-density.spec.ts --project=chat-density
+  → exit 1
+    5 failed / 21 passed (1.1m)
+  日志: .omo/evidence/chat-ux-hierarchy-and-streaming/task-12-red-e2e.log
+  矩阵: .omo/evidence/chat-ux-hierarchy-and-streaming/task-12-collapse-matrix-red.json
+
+GREEN
+  $ cd /Volumes/SSD-Data/01work/git-project/vteam/web && \
+    npx playwright test chat-density.spec.ts --project=chat-density
+  → exit 0
+    26 passed (12.5s)
+  日志: .omo/evidence/chat-ux-hierarchy-and-streaming/task-12-green-e2e.log
+  矩阵: .omo/evidence/chat-ux-hierarchy-and-streaming/task-12-collapse-matrix.json
+
+红态构造（只回退本 todo 自己改的 6 个文件，不动任何预存脏文件）：
+  1) cp 备份 6 个文件到 $TMPDIR/task12-bk/（web/src/components/chat/{msg-aborted,
+     msg-error,msg-parts,msg-thinking,msg-tool}.tsx、web/src/components/ui/chat-bubble.tsx）
+  2) git show HEAD:<每个文件> > <该文件>  ← 用 `git show` 重定向，不是 `git checkout`
+  3) 跑 RED → 记录日志与红矩阵
+  4) cp $TMPDIR/task12-bk/<文件> 回原路径 ← 逐文件 diff --stat 确认改动全部回来
+  5) tsc=0、eslint=0、GREEN 26/26 之后再提交
+  全程未执行路径级 git checkout / git stash，未触碰 .omo/.opencode 的既有脏改动。
+
+======================================================================
+2. 红跑失败清单（task-12-red-e2e.log 原文摘录）
+======================================================================
+  1) B11 低优先级默认收起：thinking/tool/unknown/长附件初始收起且可展开
+     Error: expect(locator).toHaveCount(expected) failed
+     Locator:  getByTestId('msg-thinking').getByTestId('msg-thinking-detail')
+     Expected: 1
+     Received: 0
+     24 × locator resolved to 0 elements
+     at e2e/chat-density.spec.ts:1182
+     → 红因：改动前展开区没有具名节点（aria-expanded 能翻 true，但 detail 计数恒 0），
+       「默认收起且**可展开**」的展开态不可断言；且 attachment 一格根本拿不到开关。
+
+  2) B11 error 超长 detail：默认展开可收起，标题/状态/操作始终可见
+     Error: expect(locator).toHaveCount(expected) failed
+     Locator:  getByTestId('msg-error-detail-toggle')
+     Expected: 1
+     Received: 0
+     → 红因：改动前 MsgError 把 600 字 detail 直接当标题铺开，
+       既没有「超长」判定，也没有默认展开的折叠开关。
+
+  3) B11 aborted 超长 detail：pill 与摘要始终可见，detail 默认展开可收起
+     Error: expect(locator).toHaveCount(expected) failed
+     Locator:  getByTestId('msg-aborted-detail-toggle')
+     Expected: 1
+     Received: 0
+     → 红因：同上，MsgAborted 只有 pill + 一行「处理被用户中断 — {detail}」。
+
+  4) B11 短内容不引入折叠噪音
+     Error: expect(locator).toHaveText(expected) failed
+     Locator: getByTestId('msg-error-title')
+     Expected: "模型繁忙 · 稍后自动重试"
+     Error: element(s) not found
+     → 红因：改动前没有 msg-error-title 这个恒可见的标题节点
+       （标题/详情没有被拆开 → 「标题始终可见」无从断言）。
+
+  5) B11 真机交互观察：长附件/error/aborted 三态点击截图与 DOM 快照
+     → 红因：拿不到 attachment-detail-toggle / msg-error-detail-toggle，
+       三态点击序列第一步就失败（无截图产出，符合预期）。
+
+  尾部原文：
+    5 failed
+      …上述 5 条…
+    21 passed (1.1m)
+
+======================================================================
+3. QA failure 条件 ↔ 拦截断言映射（逐条）
+======================================================================
+  (a) error/aborted 默认不可见
+      拦截: e2e/chat-density.spec.ts「B11 error 超长 detail…」
+              await expect(page.getByTestId("msg-error-title")).toContainText(ERROR_HEAD)
+              await expect(page.getByTestId("msg-error-detail")).toContainText(LONG_ERROR_DETAIL)
+            「B11 aborted 超长 detail…」
+              await expect(aborted).toContainText("已中断")
+              await expect(aborted).toContainText("处理被用户中断")
+              await expect(page.getByTestId("msg-aborted-detail")).toContainText(LONG_ABORTED_DETAIL)
+            「B11 短内容不引入折叠噪音」
+              await expect(page.getByTestId("msg-error-title")).toHaveText(SHORT_ERROR_DETAIL)
+            红态实证: 条件 (a) 的红点 = 失败 #2/#3/#4（msg-error-title /
+              msg-*-detail-toggle 计数 0 → 断言直接失败）。
+
+  (b) retry/quota action 丢失
+      拦截: await expect(page.getByTestId("msg-error-action")).toBeVisible()（在收起前、
+              收起后各断言一次）+ await expect(errToggle).click() 收起后
+              await expect(page.getByTestId("msg-error-action")).toBeVisible();
+              retry 分支另有 "RetryPart · attempt 1/3"、"APIError · isRetryable · 稍后自动重试"
+              failed 分支另有 "执行失败 · 可重新发送消息触发重试"，收起后再断言一次。
+            实现上这些节点排在 msg-error-detail 区**之外**，收起只摘 detail 区。
+            红态说明: 该条件在红态（HEAD 代码）本来就是满足的 → 这一格在红跑里是绿的，
+              它是**回归护栏**：一旦实现时把状态行/操作挪进折叠区，同一断言立即转红。
+
+  (c) streaming/system 正文被默认折叠
+      拦截: 「B11 高优先级不折叠」
+              await expect(streaming).toBeVisible()
+              expect(streamText).toContain(LONG_STREAM_TEXT)
+              await expect(streaming.locator("button[aria-expanded]")).toHaveCount(0)
+              await expect(system).toBeVisible()
+              expect(systemText).toContain(LONG_SYSTEM_TEXT)
+              await expect(system.getByTestId("chat-bubble-toggle")).toHaveCount(0)
+            红态说明: 同 (b)，红跑里已绿 → 回归护栏；
+              另有 session-unification.spec.ts:1101,1550 的
+              `systemRoot.getByTestId("chat-bubble-toggle")).toHaveCount(0)` 双保险（28 passed exit 0）。
+
+  (d) process/tool 无 toggle
+      拦截: 「B11 低优先级默认收起」
+              await expect(thinking.locator("button[aria-expanded]"))
+                .toHaveAttribute("aria-expanded", "false")   ← 初始收起
+              await expect(thinking.getByTestId("msg-thinking-detail")).toHaveCount(1) ← 展开有内容
+              tool 同款 msg-tool-io 两条
+            红态实证: 失败 #1（msg-thinking-detail Expected 1 / Received 0），
+              红矩阵 process/tool 两行 afterToggle.detailCount = 0。
+
+  另 (e) 主正文被默认折叠（Scope IN 第 11 条）
+      拦截: 「B11 高优先级不折叠」
+              await expect(content).toBeVisible()
+              expect(bodyText).toContain(BODY_900.slice(0, 100))
+              expect(bodyText).toContain(BODY_TAIL)
+            + A1 既有用例（19 条既有测试在红/绿两次跑里都全绿）
+            红态说明: 红绿两态 content 计数恒 1、全文恒在 DOM → 护栏，
+              并明确 A1 的 10 行 clamp 是视觉行上限，不是内容离 DOM 的折叠。
+
+======================================================================
+4. 红态矩阵（task-12-collapse-matrix-red.json 原值）
+======================================================================
+row                | 初始 {toggle, aria, detail} | 点一次后 {aria, detail}
+-------------------+-----------------------------+---------------------------
+process(thinking)  | 1, false, 0                 | true, 0      ← 展开区不存在，红
+tool               | 1, false, 0                 | true, 0      ← 展开区不存在，红
+unknown            | 1, false, 0                 | true, 1      （B6 既有，绿）
+attachment         | **0**, –, 1                 | –, 1         ← 无开关，链接直接摊开，红
+error              | **0**, –, 0                 | –, 0         ← 无开关/无 detail 区，红
+aborted            | **0**, –, 0                 | –, 0         ← 无开关/无 detail 区，红
+streaming          | 0, –, 1                     | –, 1         （护栏，绿）
+system             | 0, –, 1                     | –, 1         （护栏，绿）
+main-body          | 1, false, 1                 | true, 1      （A1 clamp 护栏，绿）
+
+红态真值含义：attachment/error/aborted 三行 toggleCount=0 →「没有折叠开关」；
+error/aborted detailCount=0 →「改动前根本没有 detail 这一层」，
+所以「默认展开」在红态是**无对象可断言**，而不是「默认收起」。
+绿态对应三行分别是 (1,false,0)→(true,1) 与 (1,true,1)→(false,0)。
+
+======================================================================
+5. 复现红态的步骤（可重放）
+======================================================================
+  cd /Volumes/SSD-Data/01work/git-project/vteam
+  for f in web/src/components/chat/msg-aborted.tsx web/src/components/chat/msg-error.tsx \
+           web/src/components/chat/msg-parts.tsx web/src/components/chat/msg-thinking.tsx \
+           web/src/components/chat/msg-tool.tsx web/src/components/ui/chat-bubble.tsx; do
+    git show "b27f4c7^:$f" > "$f"          # ← 用 b27f4c7^ 比当时的 HEAD 更稳
+  done
+  cd web && npx playwright test chat-density.spec.ts --project=chat-density   # → exit 1, 5 failed
+  git checkout b27f4c7 -- web/src/components/chat web/src/components/ui/chat-bubble.tsx
+                                                              # ← 恢复后必须重新跑绿再提交
+  注意：重放会覆盖工作区，务必在干净工作树上做；本 todo 只在自有 6 文件上执行过一次。
+
+======================================================================
+6. 清理回执（本文件相关）
+======================================================================
+  - 红跑新生成的 web/test-results（error-context.md / trace.zip）：绿跑后 `rm -rf` 清掉 ✓
+  - 红跑未产出截图（观察用例在第一步就红）→ 现存 task-12-*-state*.png 全部来自绿跑 ✓
+  - 报告 JSON：task-12-report-hash-before/after.txt 已记录前后 hash
+  - 本目录所有 task-12-* 证据文件均不入提交（.omo/evidence/** 整体 untracked）

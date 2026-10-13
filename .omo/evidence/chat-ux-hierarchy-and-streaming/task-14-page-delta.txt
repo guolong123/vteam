@@ -1,0 +1,199 @@
+task-14 · C2 页面消费 delta、限制滚动到当前私聊、补 DM 轮询兜底 —— QA happy
+======================================================================
+日期: 2026-09-25 (CST)
+Commit 意图: feat(chat): 私聊按选中频道消费 delta 并补轮询兜底
+改动文件 (仅这两个进入本次 commit):
+  - web/app/(main)/teams/[id]/session/page.tsx        (+92/-? 行)
+  - web/e2e/session-unification.spec.ts               (本 todo 拥有的测试接缝, +406)
+未改动 (硬约束复核): web/hooks/use-sse.ts、web/hooks/use-realtime.ts、
+  playwright.config.ts、worker/**、server/**、密度计划文件。
+
+--------------------------------------------------------------------------
+1. 文档决策 (docs decision)
+--------------------------------------------------------------------------
+$ ls web/node_modules/next/dist/docs/
+  → No such file or directory
+  → DIST_DOCS_ABSENT = TRUE (web/AGENTS.md 要求的本地指南目录在本安装中不存在)
+  web/node_modules/next 的版本: 15.5.22 (node -e require('next/package.json').version)
+按任务要求改读用户批准的、与安装版本一致的官方 tag 文档
+(commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775 = vercel/next.js v15.5.22, GitHub API 校验 200):
+  a) docs/01-app/01-getting-started/05-server-and-client-components.mdx  18338 bytes
+  b) docs/01-app/01-getting-started/08-updating-data.mdx                 14209 bytes
+  c) docs/01-app/02-guides/testing/playwright.mdx                         4398 bytes
+结论: 无冲突, 无需停下。
+  - 本页本就是 Client Component ("use client", 事件处理器/状态/hook),
+    新增逻辑全部落在客户端回调内, 不引入 Server Function、不改数据更新架构;
+  - 更新数据仍走既有 REST + TanStack Query, 页面只做客户端事件消费与一次 refetch();
+  - Playwright 指南与现有 web/playwright.config.ts 约定一致 (不自动起 server,
+    需外部栈监听 localhost:3001), 本次未改 config。
+
+--------------------------------------------------------------------------
+2. 运行环境 (localhost:3001 真实可达, 但需先重建镜像)
+--------------------------------------------------------------------------
+$ curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/  → 200
+$ lsof -nP -iTCP:3001 -sTCP:LISTEN
+  → node .../opencode/pw-bridge/bridge.js   (127.0.0.1:3001 → 127.0.0.1:13001)
+$ docker ps → aiagents-compose-web  Up (healthy)  0.0.0.0:13001->3000/tcp
+关键事实: 被测页面是 docker compose 的 next build 产物 (standalone), 不挂载源码,
+因此“改完源码直接跑 E2E”会命中陈旧 bundle (已实测, 见 failure 证据第 2 节)。
+$ docker compose build web            → BUILD_EXIT=0 (镜像 6eaa3201c902801cf2430f593656508a4f8715a0a4ac0db16662ac2b60a8eb7e,
+                                        内含 RUN npm run build → ✓ Compiled successfully in 17.3s)
+$ docker compose up -d web            → aiagents-compose-web Started, Up (healthy)
+时间校验: page.tsx mtime Sep 25 22:26:21 < 镜像 created 2026-09-25T14:30:00Z (=22:30 CST)
+  → 运行期 bundle 确实包含本 todo 的实现。
+后端可达: GET /api/v1/teams/... → 401 (需鉴权), 代理链路正常; 所有写路径 (POST /dm-channels)
+均由本 spec 的 route mock 拦截, 零真实写入。
+
+--------------------------------------------------------------------------
+3. 命令与退出码
+--------------------------------------------------------------------------
+(全程只用 check-only, 未运行 npm run lint, 未运行任何 --fix)
+$ cd web && npx tsc --noEmit
+  → TSC_EXIT=0  (最终)
+  过程记录: 中途一次 TSC_EXIT=2, 7 条错误全部来自并行密度计划的
+  web/e2e/chat-density.spec.ts (offsetHeight / Window.__density* 声明), 非本 todo 文件;
+  该文件随后由其 owner 修复, 复跑 TSC_EXIT=0。本 todo 两个文件全程 0 错误。
+$ cd web && npx eslint "app/(main)/teams/[id]/session/page.tsx" e2e/session-unification.spec.ts
+  → ESLINT_EXIT=0
+$ cd web && npx playwright test session-unification.spec.ts
+  → PW_EXIT=0, 11 passed (Todo12 4 个回归 + Todo14 7 个)
+$ cd web && npx playwright test pages.spec.ts session-unification.spec.ts   # 计划 QA happy
+  → PW_EXIT=0, 41 passed (49.1s), 0 failed
+共享报告前后 hash (web/playwright.config.ts 的 json reporter 必然重写):
+  before: 5d3b2c38f0bf9a6e38d16dadfc783fffad9494c0  .omo/evidence/phase5-t9-playwright.json
+  after : e3641d3e4952876a3af87ba40eef28bd3637bc82  .omo/evidence/phase5-t9-playwright.json
+  注: 该文件在我接手前已是脏状态 (M), 且与并行计划共享、会被其运行再次改写;
+  只做前后 hash 记录, 未 checkout/恢复, 未覆盖其他脏改动。
+
+--------------------------------------------------------------------------
+4. 可见频道矩阵 (visibleChannelId = isGroupTab ? channelId : activePrivateId)
+--------------------------------------------------------------------------
+事件/事件频道                 当前可见 Tab      滚动?   其他收敛行为
+----------------------------- ----------------- ------- --------------------------------
+chat.message.new  ch_group    群聊(ch_group)    滚      plans invalidate (不变)
+chat.message.new  ch_group    私聊 ch_dm_1      不滚    loading/error/session 收敛不变;
+                                                        群 Tab 无红点位, 不标未读 (原语义)
+chat.message.new  ch_dm_1     私聊 ch_dm_1      滚      正在看, 不标未读 (原语义)
+chat.message.new  ch_dm_2     私聊 ch_dm_1      不滚    dm-tab-unread-ta_2 出现 (原语义)
+message.part.delta ch_group   群聊(ch_group)    滚      群 delta 路由未改 (worker/server 未动)
+message.part.delta ch_group   私聊 ch_dm_1      不滚    无未读 (群 Tab), 私聊历史请求数 = 0
+message.part.delta ch_dm_1    私聊 ch_dm_1      滚      cache 无数据时恰好一次 refetch()
+message.part.delta ch_dm_2    私聊 ch_dm_1      不滚    dm-tab-unread-ta_2 出现
+测试覆盖: 矩阵每一行至少被一个断言覆盖 ——
+  行 3/4/7/8 → Todo14-1; 行 2 → Todo14-2; 行 5/6 → Todo14-6;
+  行 7 (cache 无数据分支) → Todo14-3 与 3b。
+
+--------------------------------------------------------------------------
+5. 滚动观测 (scroll observations)
+--------------------------------------------------------------------------
+容器: data-testid="chat-message-list"; 断言前先断言内容溢出
+      (scrollHeight > clientHeight + 200) 并把 scrollTop 归 0, 排除“不溢出导致恒 0”的假绿。
+实现前 (failing-first, 见 task-14-page-delta-failure.txt):
+  - 当前频道 delta   → Expected > 0, Received 0      (delta 根本没被消费)
+  - 非当前频道 message → Expected 0, Received 5348    (无条件滚到底)
+实现后 (41 passed):
+  - Todo14-1 当前私聊 delta → expect(scrollTop).toBeGreaterThan(0) PASS
+           非当前私聊 delta → expect(scrollTop).toBe(0) PASS, 且 dm-tab-unread-ta_2 可见
+  - Todo14-2 非当前私聊 chat.message.new → expect(scrollTop).toBe(0) PASS, 未读红点可见
+  - Todo14-6 群聊 Tab: 群频道 delta → scrollTop>0 PASS; 私聊频道 delta → scrollTop=0 PASS,
+           且 dm-tab-unread-ta_1 可见、私聊历史请求数恒 0
+截图: task-14-current-delta-scroll.png / task-14-other-delta-no-scroll.png /
+      task-14-empty-cache-refetch.png
+
+--------------------------------------------------------------------------
+6. 空缓存补拉的请求数证据
+--------------------------------------------------------------------------
+“目标 query cache 无数据”在本栈下唯一稳定可观察的状态是
+query 处于 error + fetchStatus=idle (data === undefined) —— 原因:
+  @tanstack/query-core/src/query.ts:405-415  fetching 中调用 refetch()
+  只有 state.data !== undefined 才 cancelRefetch 并重发; data undefined 时
+  直接 return this.#retryer.promise (内部并入既有请求, 不产生第二次 HTTP)。
+因此 harness 用 failPrivateHistoryAttempts=2 造出稳定空缓存 (staleTime=30s, retry=1)。
+
+Todo14-3 (私聊 ch_dm_1, Tab 激活, 空缓存):
+  阶段                      /channels/:id/session-history   /channels/:id/messages(回退)
+  ------------------------- ------------------------------ -----------------------------
+  初始 2 次尝试 (均 500)    2                              2        → 进入 error/idle
+  发出 1 个 delta 后        3   (+1, 恰好一次补拉)         2        (不变)
+  再发 1 个 delta (去重门)  3   (不变)                      2        (不变)
+  断言: expect(history).toBe(3) / expect(fallback).toBe(2) / 补拉结果渲染 DELTA_TEXT → 全 PASS
+  → “首个 delta 触发恰好一次 follow-up history request 并渲染消息” 成立。
+
+Todo14-3b (初始 history 请求被挂起、cache 恒 undefined 的原始竞态):
+  history 请求数 = 1 (被挂起), 放行后消息渲染可见, fallback = 0 → PASS
+  说明: 该形态下 refetch() 被 React Query 并入在途请求 (无第二次请求),
+        关键结果是“delta 不丢、消息最终可见”。
+
+Todo14-6 (群聊 Tab, 有 DM delta): privateHistory = 0 → 未选中私聊频道不触发任何私聊拉取。
+Todo14-5 (终态优先): 同 id 的旧 delta 之后, TERMINAL_TEXT 仍在、旧 delta 文本 0 处 → PASS
+  (upsertMessage 未被修改, git diff hooks/use-realtime.ts 为空)。
+
+--------------------------------------------------------------------------
+7. DM 30s 轮询证据 (非 timing-only, 用假时钟确定性推进)
+--------------------------------------------------------------------------
+page.clock.install() (goto 前) → 打开私聊 → 首次 history 请求 = 1 →
+page.clock.fastForward(31_000) → expect.poll(history).toBe(2)  PASS
+实现前同一步 Expected 2 / Received 1 (超时 10s) —— 即 interval 未配置时假时钟推进也不发请求。
+privateMessagesQuery 新增 refetchInterval: 30_000; messagesQuery(群聊) 未改动 (原本即 30_000)。
+
+--------------------------------------------------------------------------
+8. testid / 范围守卫
+--------------------------------------------------------------------------
+$ grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx \
+    web/src/components/ui/agent-avatar.tsx | sort -u > chat-testids-after.txt
+$ diff chat-testids-before.txt chat-testids-after.txt   → TESTID_DIFF_EXIT=0 (无增无减)
+本 todo 新测试只用页面级 testid (team-session-root / chat-message-list / dm-tab-group /
+dm-tab-private-* / dm-tab-unread-*), 未使用任何 chat 组件 testid (留给后续 UI todo)。
+scope 串、SSE 事件名与顶层 payload、storage/status 枚举、移动端 CSS 均未改动。
+
+--------------------------------------------------------------------------
+9. 清理回执 (cleanup receipts)
+--------------------------------------------------------------------------
+- web/playwright-report: 0 个条目 (目录空)。
+- web/test-results: 仅剩 Playwright 的 .last-run.json 标记 (status=passed, failedTests=[]),
+  无失败 trace/附件; 因该目录被并行密度计划共享运行, 未删除以免覆盖其在跑的运行
+  (本 todo 全部通过, trace: retain-on-failure 不产生产物)。
+- 未在仓库内创建任何临时脚本; 本次运行日志只落在
+  $TMPDIR(opencode)/t14-*.txt 与 t14-docker-build.txt (仓库外, 见交付说明)。
+- 证据目录中 task-2-density*、c0-serve-incremental.txt、chat-testids-before.txt
+  为其他 todo 所有, 未覆盖、未改名。
+- git add 只暂存本 todo 的两个文件; .omo/**、.opencode/**、playwright.config.ts、
+  chat-bubble.tsx、chat-density.spec.ts 一律不入 commit (staged 前先 git diff --cached --name-only)。
+
+--------------------------------------------------------------------------
+10. 风险 (risks)
+--------------------------------------------------------------------------
+R1 被测栈是构建产物: 任何 web 源码改动都要重建 aiagents-web 镜像才生效,
+   否则 E2E 会假红/假绿 (本次已实测并记录)。
+R2 空缓存补拉依赖 React Query 语义: 在途 fetch 期间 refetch() 会并入而非新发请求;
+   实现本身不受影响 (回调仍只调用一次), 但“请求数 +1”的断言必须建立在 error/idle 态上。
+R3 phase5 报告与 test-results 为多计划共享路径, hash/内容会随并行运行漂移。
+R4 群/私聊 unread 逻辑从 onMessage 内联块提取为 markUnreadForChannel(行为等价, 已由
+   Todo12 四个回归用例 + Todo14-1/2/6 共同守住)。
+R5 localhost:3001 若不可用, 需先确保 pw-bridge → 容器 13001 存活; 本次全程可用, 未降级为手动验收。
+
+--------------------------------------------------------------------------
+11. 交付与复核补充 (最终)
+--------------------------------------------------------------------------
+Commit:
+  8092b16 feat(chat): 私聊按选中频道消费 delta 并补轮询兜底   ← 本 todo 主提交
+          (web/app/(main)/teams/[id]/session/page.tsx, web/e2e/session-unification.spec.ts)
+  a6139ec test(chat): 滚动归零改状态收敛，修 Todo14 首屏 150ms 补滚竞争
+          (仅 web/e2e/session-unification.spec.ts; 主提交后并行计划已在其上提交 31ff11f,
+           无法 amend, 故以跟随提交交付测试加固 —— 见下)
+加固原因: 另一计划在 22:48 复跑本套件时, Todo14-1 出现 Expected 0 / Received 5348。
+  根因是产品既有的首屏滚底会在 rAF 后再补一次 setTimeout(150ms) 滚底
+  (page.tsx bottomTabRef 效果), 恰好落在测试“归零→读回”之间, 与产品行为无关
+  (镜像 6eaa3201c902 自 22:30 起未变, 含本 todo 实现; working tree page.tsx 亦含门控)。
+  修法: resetScroll 改为“归零→读回”循环直到 0 稳定 (有界 20 次, 事件驱动, 非 sleep)。
+
+最终 QA (加固后复跑):
+  $ npx playwright test session-unification.spec.ts --grep "Todo14" --repeat-each=4
+    → PW_EXIT=0, 29 passed (40.8s)   # 每个用例 4 次, 无 flake
+  $ npx playwright test pages.spec.ts session-unification.spec.ts
+    → PW_EXIT=0, 41 passed (49.9s)
+  $ npx tsc --noEmit → 0 ; npx eslint e2e/session-unification.spec.ts → 0
+共享报告 hash (最终): 791e9b36f31dea55a03418f54b5e879c61165cef .omo/evidence/phase5-t9-playwright.json
+  (与第 3 节 before/after 一并记录; 该文件仍为未提交的脏状态, 未被恢复)
+清理复核: web/test-results 仅剩 .last-run.json (status=passed, 无失败附件);
+  web/playwright-report 不存在; 未在仓库内留下临时文件。

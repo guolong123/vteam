@@ -1,0 +1,148 @@
+# task-9-unknown-part-failure — B6 未知 part（红证据 / failing-first）
+# chat-ux-hierarchy-and-streaming 复选框 9
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:191-196（QA failure 行）
+#      「注入未知 part 后列表仍无任何节点、默认展开导致噪音、或超长 payload 无上限，均失败」
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 绿证据: 同目录 task-9-unknown-part.txt
+# 绿 commit: 129b7612972a36397be0194d279bba40e03a9844
+
+======================================================================
+0. 红的定义与顺序
+======================================================================
+顺序：先读计划 → 读 web/AGENTS.md + 确认 DIST_DOCS_ABSENT → 抓取并通读 v15.5.22 tag
+文档（client rendering / use client / CSS / Playwright）→ 记录 testid before 基线 →
+只写测试（web/e2e/chat-density.spec.ts 新增 4 条 B6 断言 + 3 个 fixture kind）→
+跑红 → 再写实现（msg-unknown-part.tsx / msg-parts.tsx / index.ts）→ 跑绿。
+红态时产品代码 0 改动：`git diff -- web/src` 在红跑时为空。
+
+======================================================================
+1. 红命令与 exit code
+======================================================================
+$ cd web && npx tsc --noEmit
+  → exit 0（测试与既有实现类型自洽：红点来自断言，不是编译错误）
+$ cd web && npx playwright test chat-density.spec.ts --project=chat-density
+  → exit 1
+  汇总: Running 12 tests / 4 failed / 8 passed（49.6s）
+  日志: .omo/evidence/chat-ux-hierarchy-and-streaming/task-9-unknown-part-red.log（10611 B）
+  （node: nvm 24.14.0；playwright.config 未被本 todo 修改）
+
+======================================================================
+2. 四条红点逐条（红时的断言与实际值）
+======================================================================
+[1] chat-density.spec.ts:739  B6 未知 part：patch/step-start/step-finish/未识别 type
+    各渲染一个 msg-unknown-part，默认收起，已知分支不回归
+    Error: expect(locator).toHaveCount(expected) failed
+      Locator: getByTestId('msg-unknown-part')
+      Expected: 4
+      Received: 0
+      24 × locator resolved to 0 elements
+    → 正是 QA failure 第一句「注入未知 part 后列表仍无任何节点」：
+      旧代码 process 分发末尾 `return null`，patch/step-start/step-finish/恶意 type
+      四个 part 全部被静默丢弃。
+    该 test 后续还断言（同一次红里因首断言即停）：默认 4 个 aria-expanded=false、
+    msg-unknown-part-summary 计数 0、payload 标记不可见、已知分支 8 项计数、
+    data-part-type 三值精确匹配 —— 这些在红态无从验证，绿态全部通过（见绿证据 §5）。
+
+[2] chat-density.spec.ts:792  B6 展开/收起：展开显示受限 JSON 摘要，收起后摘要离开 DOM
+    Error: expect(locator).toHaveAttribute(expected) failed
+      Expected: "false"
+      Error: element(s) not found
+    → 无节点 → 无折叠开关 → 「默认收起」在红态不成立（不是「默认展开导致噪音」，
+      而是连节点都没有，属于更早的失败形态）。
+
+[3] chat-density.spec.ts:817  B6 超长 payload：摘要恰封顶 400 字符，第 401 字符起不进 DOM
+    Error: expect(locator).toHaveCount(expected) failed
+      Locator: getByTestId('msg-unknown-part')
+      Expected: 1
+      Received: 0
+    → QA failure 第三句「超长 payload 无上限」的前置条件（节点存在）在红态即失败；
+      红态无法证明「有上限」，因此实现后必须绿的正是这条。
+
+[4] chat-density.spec.ts:839  B6 安全标签：恶意 type 不产生标记注入，data-part-type 只含安全字符
+    Error: expect(locator).toHaveCount(expected) failed
+      Expected: 1
+      Received: 0
+    → 无节点即无 data-part-type，「安全的 part 类型名与 data-part-type」在红态缺失。
+
+======================================================================
+3. 红态 fixture 结果（投递通道）
+======================================================================
+通道：chat-density 项目（自包含 esbuild-wasm 测试缝，真实 MsgParts 组件树 + 真实 Chromium，
+不依赖后端/登录态）。route-mock 通道（session-unification 的 installHarness）在本机不可用：
+project=session-unification dependencies:["setup"] → e2e/auth.setup.ts 真实表单登录必须命中
+API；http://localhost:3000 连接被拒（curl exit 7，http_code 000），:3001 虽 200 但登录必失败。
+→ 如实记录：本 todo 的未知 part fixture 走的是计划授权的「现有 chat-density 项目」缝，
+  不是 route-mock；route-mock 未被改写、也未被伪称运行过。
+
+fixture kind（web/e2e/chat-density.spec.ts HARNESS_SOURCE，运行期编译、不入产品代码）：
+  "unknown"        [patch{path,diff}, step-start, step-finish,
+                    恶意 type `x"><img src=x onerror=window.__pwned=1>`,
+                    reasoning, tool{name:known_tool}, text]
+  "unknown-huge"   [patch{path:"big.ts", diff: 5000 个逐字唯一 CJK 码点}]
+  "unknown-hostile" [仅恶意 type]
+红态渲染结果（同一 harness）：
+  msg-unknown-part           = 0（期望 4）
+  msg-unknown-part-summary   = 0
+  已知分支（同一 fixture 内）  = msg-thinking 1 / msg-tool 1 / chat-bubble 1 /
+                                chat-bubble-content 含「已知正文分支」 → 红态已可见且正确
+                                （说明已知分支在改动前就正常，本 todo 不需改它们）
+
+======================================================================
+4. 红态已知分支非回归（8 passed）
+======================================================================
+红跑里同时绿的既有门（证明新增断言没有破坏旧契约，且红点只来自 B6）：
+  ✓ A1 正文 900 字符：toggle 存在，折叠态 10 行 clamp/16em（行高 1.6 几何一致），展开后清除
+  ✓ A1 阈值边界：恰好 800 字符正文不出现 chat-bubble-toggle
+  ✓ A2 tool I/O 字符串路径 3000 字符：折叠与展开都只放前 2000 字符进 DOM
+  ✓ A2 tool I/O JSON 路径 3000 字符：序列化后同样 2000 封顶，第 2001 字符起不进 DOM
+  ✓ A3 thinking 3000 字符：折叠摘录恰好 200，展开恰好完整 2000，2001+ 不进 DOM
+  ✓ A4 三级字号：正文 14px / 身份 12px·600 / 元信息 11px，时间戳为独立元信息元素
+  ✓ A4 守门：全局 fontSize 档位不变（md=13），消息三级字号不写入全局档
+  ✓ B1 共享身份栏：reasoning+tool+text 单条 agent 消息只渲染一次头像/作者/时间
+计划 §78-91 消息结构断言门：红态 testid before 基线 24 项全部存在（本 todo 在红跑前
+生成 task-9-chat-testids-before.txt），红跑期间 0 项消失。
+
+======================================================================
+5. 红态文档决策（与绿证据 §1 一致，红态即已满足）
+======================================================================
+DIST_DOCS_ABSENT = TRUE
+  $ ls -d web/node_modules/next/dist/docs → No such file or directory（exit 1）
+  $ ls -d node_modules/next/dist/docs（仓库根）→ No such file or directory（exit 1）
+  next = 15.5.22；web/AGENTS.md 的 nextjs-agent-rules 块仍在（line 1）。
+改产品代码前已抓取并通读（GitHub raw @ 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775，HTTP 200）：
+  05-server-and-client-components.mdx / use-client.mdx / 11-css.mdx / testing/playwright.mdx
+  （02-guides/css.mdx → 404，已改走 01-getting-started/11-css.mdx）
+结论：新组件是 Client Component（useState + onClick）且 props 可序列化 → 加 "use client"；
+样式走已有 token 不新增颜色源；Playwright 不自动起 webServer → 与 config 现状一致。
+文档与代码无冲突，无需停止。
+
+======================================================================
+6. QA failure 三条逐条对照
+======================================================================
+  「注入未知 part 后列表仍无任何节点」  → 红态复现：Expected 4 / Received 0（§2[1]）
+  「默认展开导致噪音」                 → 红态无法复现（节点都没有）；
+                                          绿态由 test 9 的 4×aria-expanded=false
+                                          与 test 10 的收起后摘要计数 0 双向锁死
+  「超长 payload 无上限」              → 红态前置失败（§2[3]）；绿态 test 11 断言
+                                          摘要长度恒等于 400 且 400 之后的码点不进 DOM
+  另加：安全标签 / data-part-type（§2[4]）与已知分支非回归（§4）
+
+======================================================================
+7. 红态清理回执
+======================================================================
+  红跑只产生日志与 playwright 临时目录，红→绿之间未做任何 git checkout/stash：
+  $ git status --porcelain -- web/（红态）→ 仅 web/e2e/chat-density.spec.ts（M）
+  绿态才出现 3 个产品文件改动 + 1 个新文件（见绿证据 §2）。
+  预存脏文件（.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、.opencode/opencode.json、
+  .omo/evidence/** 非本计划文件）在红绿两态均未被触碰。
+  task-9-chat-testids-before.txt 在红跑前生成，作为「改动前 testid 不少于 24 项」的基线。
+
+======================================================================
+8. 红→绿的最小修复面
+======================================================================
+  新增 web/src/components/chat/msg-unknown-part.tsx（组件 + safePartType +
+     summarizeUnknownPart，摘要 400 封顶、类型名 32 字符白名单）
+  web/src/components/chat/msg-parts.tsx 分发末尾 1 行：return null →
+     return <MsgUnknownPart key={i} part={p} />
+  web/src/components/chat/index.ts barrel +2 行
+  → 四条红点全部转绿（exit 0，12 passed），且 §4 的 8 条既有门无一回退。

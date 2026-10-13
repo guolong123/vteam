@@ -1,0 +1,6 @@
+
+Test Suites: 1 passed, 1 total
+Tests:       41 passed, 41 total
+Snapshots:   0 total
+Time:        2.221 s
+Ran all test suites matching /src\/tasks\/task-progression.scheduler.spec.ts/i.

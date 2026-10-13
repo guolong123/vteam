@@ -1,0 +1,242 @@
+[
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/teams/tm_0000000001/session",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/css/0ee66ca9945f02af.css",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/webpack-f25ff5fa97934ba6.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/4bd1b696-100b9d70ed4e49c1.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/1255-cf02c4775860a5ab.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/main-app-02706d7b7dbd5b20.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/5854-165cf4178f2d3e22.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/6969-76c86af964da1717.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/app/layout-13fbb20be1a146dd.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/4625-ddcfc3cd2353b490.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/3044-f55ca4ab50eb5605.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/app/(main)/layout-f934c7bc2439be88.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/bf2ff291-8014d24401c4f46a.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/993e5495-8f37b575f5ea4e90.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/2084-47d491699330de38.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/6149-9fee3bcb3b246ab7.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/3288-a0eb11acf897ba2a.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/4493-75740678d043e21e.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/7301-431448ed4b4dc500.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/8713-c294b3ebe0e30716.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/5152-9f257e68c1c6e6c0.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/2798-b784b6f1a90299e4.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/4649-c07cb979f8ee64ad.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/1299-06b31b296fb6d88b.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/4759-d5d3baf270455080.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/app/(main)/teams/%5Bid%5D/session/page-655852a1137c2fcd.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/_next/static/chunks/8986.88381fdd47777540.js",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/teams/tm_0000000001",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/channels?teamId=tm_0000000001",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/agents",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/questions?teamId=tm_0000000001&status=pending",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/tasks/t_su12",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/tasks/t_su12/artifacts?pageSize=50",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/tasks/t_su12/artifacts?category=%E8%AE%A1%E5%88%92&pageSize=50",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/tasks/t_su12/plan-docs",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/tasks/t_su12/plan-steps",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/issues?taskId=t_su12&page=1&pageSize=100",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/questions?taskId=t_su12&status=pending",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/agent-roles?page=1&pageSize=100",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/channels/ch_group/messages?limit=50",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/triggers?taskId=t_su12&page=1&pageSize=100",
+    "postData": ""
+  },
+  {
+    "method": "POST",
+    "url": "http://localhost:3001/api/v1/dm-channels",
+    "postData": "{\"teamId\":\"tm_0000000001\",\"teamMemberId\":\"tmm_1\"}"
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/channels/ch_dm_1/session-history",
+    "postData": ""
+  },
+  {
+    "method": "POST",
+    "url": "http://localhost:3001/api/v1/questions/aq_901/reply",
+    "postData": "{\"secrets\":{\"DB_PASSWORD\":\"***\"}}"
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/questions?taskId=t_su12&status=pending",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/questions?taskId=t_su12&status=pending",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/tasks/t_su12/plan-docs",
+    "postData": ""
+  },
+  {
+    "method": "GET",
+    "url": "http://localhost:3001/api/v1/tasks/t_su12/plan-steps",
+    "postData": ""
+  }
+]

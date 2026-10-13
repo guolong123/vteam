@@ -1,0 +1,12 @@
+# task-11 docs decision
+date: 2026-09-25T20:10:24Z
+installed next: 
+DIST_DOCS_ABSENT
+AGENTS.md read (nextjs-agent-rules block present): 1
+
+## Approved fallback docs (user-approved Next.js v15.5.22 tag, commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775)
+Read (raw.githubusercontent.com @ that commit):
+1. docs/01-app/01-getting-started/11-css.mdx  (CSS: Global CSS in app/globals.css imported by root layout; CSS ordering follows import order; dev applies CSS instantly, prod concatenates/minifies — confirms :root/.dark custom properties in globals.css are the single global source and are safe for client inline styles)
+2. docs/01-app/01-getting-started/05-server-and-client-components.mdx (client rendering: "use client" marks the boundary; all imports become client bundle; ThemeProvider pattern writes a class e.g. dark onto html from a client component — matches this app's theme-store -> html.dark)
+3. docs/01-app/02-guides/testing/playwright.mdx (Playwright: config baseURL, tests run against an already-running server, npx playwright test in another terminal; no webServer auto-start required)
+Local dist docs: web/node_modules/next/dist/docs/ => DIST_DOCS_ABSENT (AGENTS.md nextjs-agent-rules block points there; directory missing, so approved tag docs used as fallback)

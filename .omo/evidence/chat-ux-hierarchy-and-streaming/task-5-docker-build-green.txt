@@ -1,0 +1,238 @@
+ Image aiagents-web Building 
+ Image aiagents-init Building 
+ Image aiagents-server Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.42kB done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 2.00kB done
+#2 DONE 0.0s
+
+#3 resolve image config for docker-image://docker.ketaops.cc/docker/dockerfile:1
+#3 DONE 0.3s
+
+#4 docker-image://docker.ketaops.cc/docker/dockerfile:1@sha256:ecfaec9ed6d810b56388c508f4121597bfbba70d41a6dfeee4d8cad5f295fc32
+#4 CACHED
+
+#5 [internal] load metadata for docker.ketaops.cc/library/node:22-alpine
+#5 DONE 0.3s
+
+#6 [internal] load .dockerignore
+#6 transferring context: 294B done
+#6 DONE 0.0s
+
+#7 [build  1/11] FROM docker.ketaops.cc/library/node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 transferring context: 367.08kB 0.0s done
+#8 DONE 0.0s
+
+#9 [build  2/11] WORKDIR /app
+#9 CACHED
+
+#10 [build  3/11] COPY web/package.json web/package-lock.json ./web/
+#10 CACHED
+
+#11 [build  4/11] COPY web/scripts ./web/scripts
+#11 CACHED
+
+#12 [build  5/11] RUN cd web && npm ci
+#12 CACHED
+
+#13 [build  6/11] COPY web/ ./web/
+#13 DONE 0.3s
+
+#14 [build  7/11] COPY worker ./worker
+#14 DONE 0.1s
+
+#15 [build  8/11] COPY scripts/pack-worker.sh ./scripts/pack-worker.sh
+#15 DONE 0.1s
+
+#16 [build  9/11] RUN chmod +x scripts/pack-worker.sh     && cd worker && npm ci     && cd .. && ./scripts/pack-worker.sh     && rm -rf worker scripts
+#16 1.552 npm warn deprecated glob@7.2.3: Glob versions prior to v9 are no longer supported
+#16 1.553 npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+#16 2.467 
+#16 2.467 added 283 packages, and audited 284 packages in 2s
+#16 2.467 
+#16 2.467 34 packages are looking for funding
+#16 2.467   run `npm fund` for details
+#16 2.468 
+#16 2.468 found 0 vulnerabilities
+#16 2.475 [pack-worker] 构建 dist ...
+#16 2.535 
+#16 2.535 > worker@0.0.1 build
+#16 2.535 > tsc
+#16 2.535 
+#16 4.328 [pack-worker] 打包发布包 → /app/web/public/worker-src.tar.gz
+#16 4.355 [pack-worker] 完成：296.0K（记得部署 web 使其随静态服务发布）
+#16 DONE 4.7s
+
+#17 [build 10/11] WORKDIR /app/web
+#17 DONE 0.0s
+
+#18 [build 11/11] RUN npm run build
+#18 0.208 
+#18 0.208 > web@0.1.0 prebuild
+#18 0.208 > node scripts/check-task-status-single-source.mjs
+#18 0.208 
+#18 0.243 [check-task-status-single-source] OK: single declaration → src/types/task-status.ts:12:export type TaskApiStatus =
+#18 0.245 
+#18 0.245 > web@0.1.0 build
+#18 0.245 > next build
+#18 0.245 
+#18 0.983 Attention: Next.js now collects completely anonymous telemetry regarding usage.
+#18 0.983 This information is used to shape Next.js' roadmap and prioritize features.
+#18 0.983 You can learn more, including how to opt-out if you'd not like to participate in this anonymous program, by visiting the following URL:
+#18 0.983 https://nextjs.org/telemetry
+#18 0.983 
+#18 1.027    ▲ Next.js 15.5.22
+#18 1.027 
+#18 1.062    Creating an optimized production build ...
+#18 19.51  ✓ Compiled successfully in 17.0s
+#18 19.51    Linting and checking validity of types ...
+#18 25.01 
+#18 25.01 ./app/(main)/agents/page.tsx
+#18 25.01 1515:187  Warning: 'deleting' is defined but never used.  @typescript-eslint/no-unused-vars
+#18 25.01 2760:9  Warning: The 'agents' logical expression could make the dependencies of useMemo Hook (at line 2832) change on every render. To fix this, wrap the initialization of 'agents' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+#18 25.01 
+#18 25.01 ./app/(main)/git-repos/page.tsx
+#18 25.01 313:9  Warning: The 'repos' logical expression could make the dependencies of useMemo Hook (at line 340) change on every render. To fix this, wrap the initialization of 'repos' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+#18 25.01 
+#18 25.01 ./app/(main)/integrations/page.tsx
+#18 25.01 129:10  Warning: 'delCh' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+#18 25.01 129:17  Warning: 'setDelCh' is assigned a value but never used.  @typescript-eslint/no-unused-vars
+#18 25.01 
+#18 25.01 ./app/(main)/tasks/new/page.tsx
+#18 25.01 263:9  Warning: The 'teams' logical expression could make the dependencies of useMemo Hook (at line 264) change on every render. To fix this, wrap the initialization of 'teams' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+#18 25.01 
+#18 25.01 ./src/components/agents/AgentRolesTab.tsx
+#18 25.01 191:9  Warning: The 'roles' logical expression could make the dependencies of useEffect Hook (at line 238) change on every render. To fix this, wrap the initialization of 'roles' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+#18 25.01 
+#18 25.01 ./src/components/chat/question-modal.tsx
+#18 25.01 117:9  Warning: Expected an assignment or function call and instead saw an expression.  @typescript-eslint/no-unused-expressions
+#18 25.01 
+#18 25.01 ./src/components/layout/cmdk-panel.tsx
+#18 25.01 231:6  Warning: React Hook useEffect has a missing dependency: 'panelRef'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+#18 25.01 
+#18 25.01 ./src/components/teams/TeamMembersPanel.tsx
+#18 25.01 167:9  Warning: The 'roleItems' logical expression could make the dependencies of useMemo Hook (at line 170) change on every render. To fix this, wrap the initialization of 'roleItems' in its own useMemo() Hook.  react-hooks/exhaustive-deps
+#18 25.01 
+#18 25.01 ./src/components/teams/TeamRightPanel.tsx
+#18 25.01 24:15  Warning: 'TaskDetail' is defined but never used.  @typescript-eslint/no-unused-vars
+#18 25.01 
+#18 25.01 ./src/components/ui/chat-bubble.tsx
+#18 25.01 368:13  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+#18 25.01 401:15  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+#18 25.01 524:13  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+#18 25.01 558:15  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+#18 25.01 
+#18 25.01 ./src/features/docs-site/doc-explorer.tsx
+#18 25.01 27:9  Warning: Using `<img>` could result in slower LCP and higher bandwidth. Consider using `<Image />` from `next/image` or a custom image loader to automatically optimize images. This may incur additional usage or cost from your provider. See: https://nextjs.org/docs/messages/no-img-element  @next/next/no-img-element
+#18 25.01 64:6  Warning: React Hook useEffect has a missing dependency: 'findDoc'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+#18 25.01 73:6  Warning: React Hook useEffect has a missing dependency: 'childrenOf'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+#18 25.01 
+#18 25.01 ./src/features/docs-site/docs-markdown.tsx
+#18 25.01 301:5  Warning: React Hook useMemo has a missing dependency: 'taskId'. Either include it or remove the dependency array.  react-hooks/exhaustive-deps
+#18 25.01 
+#18 25.01 ./src/features/docs-site/prototype-sandbox.tsx
+#18 25.01 2:21  Warning: 'useRef' is defined but never used.  @typescript-eslint/no-unused-vars
+#18 25.01 
+#18 25.01 info  - Need to disable some ESLint rules? Learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules
+#18 28.27    Collecting page data ...
+#18 31.10    Generating static pages (0/30) ...
+#18 31.43    Generating static pages (7/30) 
+#18 31.50    Generating static pages (14/30) 
+#18 31.50    Generating static pages (22/30) 
+#18 31.59  ✓ Generating static pages (30/30)
+#18 31.95    Finalizing page optimization ...
+#18 31.95    Collecting build traces ...
+#18 39.13 
+#18 39.13 Route (app)                                 Size  First Load JS
+#18 39.13 ┌ ○ /                                    2.73 kB         107 kB
+#18 39.13 ├ ○ /_not-found                             1 kB         105 kB
+#18 39.13 ├ ○ /agents                                25 kB         191 kB
+#18 39.13 ├ ○ /artifacts                             604 B         105 kB
+#18 39.13 ├ ○ /board                               5.51 kB         181 kB
+#18 39.13 ├ ○ /docs                                  199 B         350 kB
+#18 39.13 ├ ƒ /docs/[taskId]                         829 B         351 kB
+#18 39.13 ├ ○ /git-repos                           9.99 kB         176 kB
+#18 39.13 ├ ○ /integrations                        11.9 kB         178 kB
+#18 39.13 ├ ○ /issues                               9.3 kB         180 kB
+#18 39.13 ├ ○ /login                               4.48 kB         116 kB
+#18 39.13 ├ ○ /memories                              141 B         104 kB
+#18 39.13 ├ ○ /models                              15.7 kB         181 kB
+#18 39.13 ├ ○ /providers                             141 B         104 kB
+#18 39.13 ├ ○ /register                            3.51 kB         116 kB
+#18 39.13 ├ ○ /roles                                 141 B         104 kB
+#18 39.13 ├ ○ /skills                              17.8 kB         184 kB
+#18 39.13 ├ ○ /system                                141 B         104 kB
+#18 39.13 ├ ○ /system/memories                     5.06 kB         171 kB
+#18 39.13 ├ ○ /system/roles                        9.96 kB         176 kB
+#18 39.13 ├ ○ /system/triggers                     5.88 kB         177 kB
+#18 39.13 ├ ○ /system/users                        9.33 kB         175 kB
+#18 39.13 ├ ○ /tasks/new                           7.61 kB         178 kB
+#18 39.13 ├ ○ /teams                                3.2 kB         169 kB
+#18 39.13 ├ ƒ /teams/[id]                          7.43 kB         179 kB
+#18 39.13 ├ ƒ /teams/[id]/session                  33.2 kB         391 kB
+#18 39.13 ├ ƒ /teams/[id]/tasks                    4.31 kB         182 kB
+#18 39.13 ├ ○ /teams/new                           6.48 kB         172 kB
+#18 39.13 ├ ○ /users                                 141 B         104 kB
+#18 39.13 ├ ○ /workers                             5.07 kB         179 kB
+#18 39.13 ├ ƒ /workers/[id]                        10.3 kB         132 kB
+#18 39.13 └ ○ /workers/install                     8.04 kB         112 kB
+#18 39.13 + First Load JS shared by all             104 kB
+#18 39.13   ├ chunks/1255-cf02c4775860a5ab.js        46 kB
+#18 39.13   ├ chunks/4bd1b696-100b9d70ed4e49c1.js  54.2 kB
+#18 39.13   └ other shared chunks (total)          3.72 kB
+#18 39.13 
+#18 39.13 
+#18 39.13 ○  (Static)   prerendered as static content
+#18 39.13 ƒ  (Dynamic)  server-rendered on demand
+#18 39.13 
+#18 DONE 39.6s
+
+#9 [build  2/11] WORKDIR /app
+#9 CACHED
+
+#19 [runner 3/6] COPY --from=build /app/web/.next/standalone ./
+#19 DONE 0.3s
+
+#20 [runner 4/6] COPY --from=build /app/web/.next/static ./.next/static
+#20 DONE 0.1s
+
+#21 [runner 5/6] COPY --from=build /app/web/public ./public
+#21 DONE 0.1s
+
+#22 [runner 6/6] COPY --from=build /app/web/next.config.ts ./next.config.ts
+#22 DONE 0.1s
+
+#23 exporting to image
+#23 exporting layers
+#23 exporting layers 0.3s done
+#23 writing image sha256:5471616bff85874ca86fa1e2c5f657c752ce63409ef20c268a469b37272a4054 done
+#23 naming to docker.io/library/aiagents-web done
+#23 DONE 0.3s
+
+#24 resolving provenance for metadata file
+#24 DONE 0.1s
+ Image aiagents-web Built 
+BUILD_EXIT=0
+ Container aiagents-compose-db Running 
+ Container aiagents-compose-server Running 
+ Container aiagents-compose-web Recreate 
+ Container aiagents-compose-web Recreated 
+ Container aiagents-compose-db Waiting 
+ Container aiagents-compose-db Healthy 
+ Container aiagents-compose-init Starting 
+ Container aiagents-compose-init Started 
+ Container aiagents-compose-db Waiting 
+ Container aiagents-compose-init Waiting 
+ Container aiagents-compose-db Healthy 
+ Container aiagents-compose-init Exited 
+ Container aiagents-compose-server Waiting 
+ Container aiagents-compose-server Healthy 
+ Container aiagents-compose-web Starting 
+ Container aiagents-compose-web Started 
+UP_EXIT=0

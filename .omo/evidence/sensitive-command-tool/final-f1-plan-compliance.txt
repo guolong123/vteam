@@ -1,0 +1,283 @@
+================================================================================
+F1 · Plan compliance audit — sensitive-command-tool  (FINAL / post-remediation)
+================================================================================
+Verifier   : F1 final verifier (read-only audit; THIS FILE is the only write)
+Date       : 2026-09-27
+HEAD       : 0987980f0b0e3e10cece4aa87d88ebdb8d878db0
+             fix(mcp): 阻塞工具调用期间维持长连接心跳
+Plan       : .omo/plans/sensitive-command-tool.md        (227 lines, 13 impl + F1-F4)
+Registry   : .omo/ulw-execute/sensitive-command-tool-registry.json
+Ledger     : .omo/ulw-execute/ledger.jsonl               (258 lines at audit time)
+Evidence   : .omo/evidence/sensitive-command-tool/
+Method     : recomputed independently with git log / rev-parse / show --name-only,
+             git grep, python3 json parsing, file-existence probes and plan
+             regex counts. Nothing was edited, staged, stashed, checked out,
+             reset, or marked. No lint/build/test was executed.
+
+OVERALL VERDICT : PASS
+CONFIDENCE      : 0.95
+Deviations      : 5 rulings (D1-D5), all disclosed + non-blocking
+Findings        : 2 non-blocking nits (E-1, S-2), remediation optional
+================================================================================
+
+
+--------------------------------------------------------------------------------
+1) PASS/FAIL TABLE — plan structure & per-implementation-row fields (13 rows)
+--------------------------------------------------------------------------------
+ID  Check                                                        Result  Recomputed basis
+P1  Plan top-level sections present                             PASS    8 x `## `: TL;DR(3) Scope(23)
+                                                                        Verification(50) Execution(58)
+                                                                        Todos(84) Final wave(204)
+                                                                        Commit strategy(211) Success(218)
+P2  Implementation rows = 13                                     PASS    grep '^- [x] '  = 13
+P3  Final-wave rows = 4 (F1-F4), all unchecked                   PASS    grep '^- [ ] '  = 4
+P4  Every impl row has `References:`                             PASS    13/13
+P5  Every impl row has `Acceptance criteria:`                    PASS    13/13
+P6  Every impl row has `QA scenarios:` with happy AND failure    PASS    13/13 QA, 13 `happy —`,
+                                                                        13 `failure —`
+P7  Every impl row has `Commit: Y` + prescribed subject          PASS    13/13; row 13 conditional
+                                                                        `Y（仅 idle-cap 修复时）`
+                                                                        satisfied — idle-cap proven
+                                                                        (ledger L252, task-13 evidence)
+P8  Every impl row has `Recommended task executor category:`     PASS    13/13, all non-empty;
+                                                                        5 distinct values:
+                                                                        deep-high x9, visual-eng x2,
+                                                                        unspecified-high, quick, writing
+P9  Every impl row declares an Evidence path                     PASS    13/13
+P10 All 13 referenced source paths in References resolve         PASS    13 refs lines, 0 missing files
+                                                                        (line numbers not re-validated;
+                                                                        F2 owns code-level review)
+P11 docs/secret-command-tool.md exists, sentinel-free           PASS    12,556 bytes; grep -c "s3cr3t" = 0
+
+
+--------------------------------------------------------------------------------
+2) PASS/FAIL TABLE — checkbox / registry / ledger count agreement (13 + 4)
+--------------------------------------------------------------------------------
+ID  Check                                                        Result  Recomputed basis
+C1  Plan checkboxes: 13 impl [x] + 4 final [ ] = 17              PASS    13 / 4 / sum 17
+C2  Registry progress: implementation_total=13                   PASS    parsed json
+                                final_total=4
+                                top_level_total=17
+                                completed=13, skipped=0
+C3  Registry per-task status = completed for tasks 1..13         PASS    13/13 across 4 waves
+C4  Registry final-wave F1-F4 status = in_progress               PASS    matches plan [ ] (not yet
+                                                                        declared); no F-task completed
+C5  Registry evidence paths 13/13 resolve                        PASS    python3 os.path.isfile 13/13
+C6  Registry task SHA == plan row SHA for 13/13                  PASS    byte-compare on short prefix
+C7  Ledger `task-completed` for impl tasks = 13 (unique 1..13)   PASS    13 entries, no F-task completed
+C8  Ledger task-completed evidence == registry evidence, exists  PASS    13/13
+C9  Ledger final-wave state agrees (post-remediation dispatch)   PASS    L258: F1,F2,F4 in_progress,
+                                                                        F3 re-runs after GATE GREEN
+                                                                        -> consistent with 4 unchecked
+C10 Final evidence files all present                            PASS    final-f1 27,3xx B (this file)
+                                                                        final-f2 1,261,828
+                                                                        final-f3-live 27,553
+                                                                        final-f3-manual 31,862
+                                                                        final-f4 40,339
+C11 Three-way count agreement (plan=registry=ledger=13+4)         PASS    no drift found
+
+
+--------------------------------------------------------------------------------
+3) PASS/FAIL TABLE — per-row evidence files (13)
+--------------------------------------------------------------------------------
+Todo  Evidence path (relative to .omo/evidence/sensitive-command-tool/)  Bytes   Result
+ 1    task-1-capability.txt                                              20,473  PASS  (34 pass markers, sha 8a87765)
+ 2    task-2-questions-no-echo.txt                                       24,012  PASS  (sha 353af23+ee3dc6c)
+ 3    task-3-worker-redaction.txt                                         6,240  PASS
+ 4    task-4-worker-route.txt                                            10,618  PASS
+ 5    task-5-worker-client.txt                                           13,861  PASS
+ 6    task-6-mcp-handler.txt                                             23,625  PASS
+ 7    task-7-web-modal.txt                                               29,408  PASS
+ 8    task-8-tool-card.txt                                               16,713  PASS*  (no recorded commit SHA — E-1)
+ 9    task-9-integration.txt                                             21,848  PASS  (cites superseded 0c683d8 — D-4)
+10    task-10-docs.txt                                                    8,680  PASS
+11    task-11-que-resync.txt                                             30,917  PASS  (line 515 `commit a30397e…`)
+12    task-12-team-scope.txt                                             12,361  PASS  (`git diff --cached` 5 files)
+13    task-13-mcp-heartbeat.txt                                          17,543  PASS  (idle-cap probe, 627s survival)
+All 13 non-empty and well-formed; auxiliary raw logs (incl. two 0-byte
+task-13-baseline *.log captures) are sidecar artifacts, not the todo evidence.
+
+
+--------------------------------------------------------------------------------
+4) PASS/FAIL TABLE — commits (recomputed from git, range b27f4c7..0987980)
+--------------------------------------------------------------------------------
+Recomputed commit set = exactly 14 commits (git log b27f4c7..0987980 | wc -l = 14),
+byte-identical to the 14 expected SHAs. No extra, no missing, no merge commits.
+
+Todo  Plan SHA   Resolved full SHA                             Exists  Subject == plan row  Scope (.omo/.opencode)
+ 1    8a87765    8a8776589c890aeae4643bf56727955497f1a7a7     PASS    PASS                 12 files, 0 forbidden
+ 2a   353af23    353af23e2293b56fa48dd20cb1ae1a2f54ca5b3f     PASS    PASS                  4 files, 0 forbidden
+ 2b   ee3dc6c    ee3dc6c657f90d8a9d2626c79ffa59c893b494cb     PASS    disclosed (D1)         2 files, 0 forbidden
+ 3    c72d68f    c72d68fafc914a1efbd1e412cf1a58ef93f97a94     PASS    PASS                  4 files, 0 forbidden
+ 4    0ea57ad    0ea57ad7af21f190dd5cae07149dd106cfc95a41     PASS    PASS                  2 files, 0 forbidden
+ 5    ed516be    ed516bea353a8059219c54c3cd9752928d00610c     PASS    PASS                  2 files, 0 forbidden
+ 6    4831c41    4831c41e7ba13a2654fe4468dcc1a91448f0faf4     PASS    PASS                 12 files, 0 forbidden
+ 7    7c9e307    7c9e30786afff77c70a93eaba3ae4db2f0b3b067     PASS    PASS                  8 files, 0 forbidden
+ 8    a8cedf4    a8cedf4ca61677c276e1e79d4d545206930286b1     PASS    PASS                  6 files, 0 forbidden
+ 9    16584d5    16584d50960e95931b61f3f5c632022672ce1c79     PASS    PASS (+amend note)     7 files, 0 forbidden
+10    c61cc64    c61cc6411c9e60d5b0cac30713c9c8088c07a9ce     PASS    PASS                  1 file,  0 forbidden
+11    a30397e    a30397e3f7129e2c8ac46089fb687f6d88d5c471     PASS    PASS                  5 files, 0 forbidden
+12    1b31521    1b3152103b38ccbd15d69ecb475eb32a2a8cfc95     PASS    PASS                  5 files, 0 forbidden
+13    0987980    0987980f0b0e3e10cece4aa87d88ebdb8d878db0     PASS    PASS (idle-cap branch) 2 files, 0 forbidden
+----                                     total 72 file entries across 14 commits
+
+
+--------------------------------------------------------------------------------
+5) PASS/FAIL TABLE — commit scope hygiene
+--------------------------------------------------------------------------------
+ID  Check                                                        Result  Recomputed basis
+S1  No commit touches .omo/**                                    PASS    git log --name-only
+                                                                        b27f4c7..0987980 |
+                                                                        grep '^(\.omo/|\.opencode/)' = NONE
+                                                                        + per-commit omobad = 0 x14
+S2  No commit touches .opencode/**                               PASS    same as S1
+S3  No evidence/plan/draft/boulder/ledger/registry committed     PASS    same as S1; those paths are
+                                                                        untracked (git check-ignore:
+                                                                        NOT ignored, but never staged)
+S4  No unrelated/pre-existing dirty file committed               PASS    current dirty set = 7 modified
+                                                                        (.omo x6 + .opencode/opencode.json)
+                                                                        + 10 untracked dirs, ALL under
+                                                                        .omo/.opencode; 0 tracked diffs
+                                                                        outside .omo/.opencode; 0
+                                                                        untracked outside .omo/.opencode
+S5  Touched top-level dirs are in-plan only                       PASS    {docs, server, web, worker}
+S6  Commit format `type(scope): 中文摘要`                         PASS    14/14 well-formed
+S7  Vocabulary vs plan L213 enumeration                          PASS*   feat(mcp|questions|worker|server|web),
+                                                                        test(secret-command),
+                                                                        docs(secret-command) match;
+                                                                        fix(questions)x2, fix(team-scope),
+                                                                        fix(mcp) are outside the stale
+                                                                        enumeration — see S-2
+S8  One todo = one atomic commit (except disclosed D1)            PASS*   only todo 2 spans 2 commits (D1);
+                                                                        todo 9 amend folded F2 lint fixes
+                                                                        into its own commit (disclosed)
+S9  Pre-existing dirty worktree protected                         PASS    no commit, no index write, no
+                                                                        checkout/reset/stash performed by
+                                                                        this audit; dirty set recorded
+                                                                        pre-audit and re-verified post-audit
+                                                                        byte-identical (7 modified + 10
+                                                                        untracked groups)
+
+
+--------------------------------------------------------------------------------
+6) PASS/FAIL TABLE — sentinel / secrets
+--------------------------------------------------------------------------------
+ID  Check                                                        Result  Recomputed basis
+X1  Sentinel `s3cr3t-A9f` in non-test product code = 0           PASS    git grep -l at HEAD excl. .omo/
+                                                                        .opencode = 9 files, ALL
+                                                                        *.spec.ts / e2e / *.test.mjs;
+                                                                        non-test count = 0
+X2  Per-commit added sentinel lines confined to test files        PASS    8 commits add sentinel; every
+                                                                        attributed file is a spec/e2e file
+                                                                        (353af23, c72d68f, 0ea57ad,
+                                                                        ed516be, 4831c41, 7c9e307,
+                                                                        a8cedf4, 16584d5); other 6 = NONE
+X3  docs/secret-command-tool.md sentinel                          PASS    grep -c "s3cr3t" = 0
+X4  Heuristic real-secret scan of all added lines                 PASS    2 hits, both test fixtures:
+                                                                        c72d68f regex-metachar password
+                                                                        literal (sensitive-command.spec.ts),
+                                                                        0ea57ad `{token:'anything'}` negative
+                                                                        auth test (exec-server.spec.ts)
+X5  Sentinel not in committed repo files                          PASS    evidence dir untracked, never
+                                                                        staged (see S3)
+
+
+--------------------------------------------------------------------------------
+7) PASS/FAIL TABLE — deviation disclosures
+--------------------------------------------------------------------------------
+ID  Deviation                                   Result  Where disclosed
+D1  Todo-2 two commits (353af23 + ee3dc6c)      PASS    plan row 2 headline "（commits `353af23` +
+                                                        `ee3dc6c`；两 commit 原因见 ledger）";
+                                                        registry `history_deviation` field;
+                                                        ledger L175 fix-result, L178
+                                                        history-deviation; prior F1 ruling D1
+D2  Todo-9 product file in a test todo          PASS    plan row 9 "What to do" includes the
+    (worker/src/driver/prompt-await.ts)                 first-token liveness acceptance;
+                                                        ledger L222 discovered-work deviation,
+                                                        L224 deviation_ruling ("justified by plan
+                                                        acceptance; flagged for F2"); task-9
+                                                        evidence §DEVIATION block (lines 201-202);
+                                                        prior F1 ruling D2
+D3  Todo-9 amend 0c683d8 -> 16584d5             PASS    plan row 9 headline "由 `0c683d8` amend
+                                                        并入 F2 lint 修复"; ledger L233 F2-final
+                                                        amendment, L235 F4-delta, L236 bookkeeping
+                                                        reconciling registry+boulder; registry task 9
+                                                        now 16584d5 (verified); 0c683d8 retained in
+                                                        ledger as history only
+D4  Wave-4 remediation todos 11-13 appended      PASS    plan TL;DR machine line 21 ("F3-discovered
+    post-plan (que resync / team scope /                 remediation"), Execution strategy Wave 4
+    MCP heartbeat)                                       (L63), dependency-matrix rows 11-12-13;
+                                                        registry phase `wave-4`; ledger L241
+                                                        discovered-work, L243 plan-append,
+                                                        L244 dispatch, L257 wave-complete
+                                                        final_head=0987980
+D5  "disclose in F5" routing (D1/D2 ledger text) PASS*   disclosures themselves are PRESENT and
+                                                        audited above, but the referenced F5 wave
+                                                        does not exist (plan has only F1-F4).
+                                                        Non-blocking: F1 stands in for that sink.
+
+
+--------------------------------------------------------------------------------
+8) ADVERSARIAL CLASS RESULTS
+--------------------------------------------------------------------------------
+stale_state               PASS (with note)
+    - plan row 9, registry task 9 and boulder all reconciled to 16584d5; 0c683d8 still
+      resolves as an object but is unreachable from HEAD (superseded amend).
+    - ledger intentionally retains historical 0c683d8 in DoneClaim /
+      AdversarialVerify / task-completed, reconciled at L236. Correct as history.
+    - registry final-wave = in_progress and plan F1-F4 = [ ] agree; no premature
+      completion state anywhere.
+dirty_worktree            PASS
+    - dirty set is exclusively pre-existing .omo/.opencode files; zero tracked diffs and
+      zero untracked entries outside those trees; audit performed no mutating git op.
+misleading_success_output PASS
+    - every todo evidence contains raw command transcripts with exit codes, Jest/Playwright
+      counts and byte sizes (pass markers 0-69 per file; failures intentionally present in
+      the RED-first QA sections).
+    - independent re-greps reproduce the evidence claims: sentinel-bearing files = 9
+      (matches carry-forward note that the earlier "8" count undercounted
+      web/lib/secret-question.spec.ts); docs sentinel = 0; forbidden-path commit grep = NONE.
+malformed_evidence        PASS (with nit E-1)
+    - 13/13 todo evidence + 5/5 final evidence files exist and are non-trivial.
+    - E-1: task-8-tool-card.txt does not record its commit SHA although Commit strategy
+      asks for the SHA in todo evidence (a8cedf4 is verified here from registry+git).
+secrets                   PASS
+    - sentinel confined to test code (0 non-test occurrences at HEAD); heuristic scan of
+      all 72 added-file lines yields only two obviously-fake test literals; no rendered
+      command/argv/raw output added to docs or logs in commits.
+
+
+--------------------------------------------------------------------------------
+9) FINDINGS & REMEDIATION (non-blocking — does not affect PASS)
+--------------------------------------------------------------------------------
+E-1  task-8-tool-card.txt omits its commit SHA (a8cedf4).
+     Remediation (optional): append `commit a8cedf4ca61677c276e1e79d4d545206930286b1`
+     to that evidence file at completion time.
+S-2  Plan L213 commit-vocabulary enumeration predates Wave 4 and does not list the
+     `fix(...)` scopes that rows 2b/11/12/13 prescribe. Rows themselves prescribe the
+     exact subjects, which match git byte-for-byte.
+     Remediation (optional): extend L213 with `fix(questions)`, `fix(team-scope)`, `fix(mcp)`.
+D-5  Ledger deviation notes route disclosure to "F5", a wave the plan does not define.
+     Remediation (recommended): at completion, surface D1/D2 explicitly to the user —
+     this F1 report is the de-facto F5 sink.
+
+
+--------------------------------------------------------------------------------
+10) FINAL RULING
+--------------------------------------------------------------------------------
+STRUCTURE            13/13 rows fully specified (References / Acceptance / QA happy+failure /
+                     Commit / Recommended category / Evidence)         -> PASS
+COUNTS               plan 13+4 = registry 13+4 = ledger 13 completed + 0 final -> PASS
+EVIDENCE             13/13 todo + 5/5 final paths exist, non-trivial, non-fabricated -> PASS
+COMMITS              14/14 recomputed, subjects byte-match rows, scope clean,
+                     no .omo/.opencode/unrelated file committed          -> PASS
+DEVIATIONS           D1, D2, D3, D4 disclosed; D5 stale routing noted     -> PASS
+SENTINEL             test-only (9 test files, 0 product, 0 docs)          -> PASS
+WORKTREE             pre-existing dirty files untouched                   -> PASS
+
+F1 VERDICT  : PASS
+CONFIDENCE  : 0.95
+SCOPE NOTE  : F1 verifies plan/record/evidence/scope compliance only. Code-quality
+              gates (F2), live behavioural QA (F3 re-run) and Scope-OUT fidelity (F4)
+              are separate lanes and are NOT re-asserted here.
+================================================================================

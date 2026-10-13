@@ -1,0 +1,328 @@
+==========================================================================
+task-9  跨包不回显、取消与超时集成覆盖（sensitive-command-tool todo 9） —— evidence
+plan          : .omo/plans/sensitive-command-tool.md (todo 9)
+date          : 2026-09-26T20:43:05Z  host: guolong-macdeMac-mini.local
+sentinel      : s3cr3t-A9f (fake, test-only; 只出现在测试代码)
+HEAD(before)  : a8cedf4ca61677c276e1e79d4d545206930286b1
+attemptDir    : .omo/evidence/sensitive-command-tool/   (evidence 全部不入库)
+==========================================================================
+
+### 0) 改动文件（除 1 处已报告的缺陷修复外全部为测试/证据 helper）
+
+ M server/src/chat/worker-dispatcher.spec.ts          | 111 +   (看门狗保活节奏 正证/反证)
+ M server/src/platform-mcp/platform-mcp.service.spec.ts | 263 +/-
+ M server/src/questions/questions.service.spec.ts      |  74 +   (全链路 sink 落盘 + 0 命中)
+ M web/e2e/session-unification.spec.ts                | 121 +   (UI 腿全链路不回显)
+ M worker/src/driver/prompt-await.spec.ts             |  61 +   (首字 300s 活性)
+ M worker/src/exec/exec-server.spec.ts                | 146 +   (幂等表淘汰边界 + 在途不淘汰)
+ M worker/src/driver/prompt-await.ts                  |  36 +-  <<PRODUCT FIX, 见 §6 缺陷报告>>
+ 7 files changed, 811 insertions(+), 3 deletions(-)   (commit 0c683d8)
+
+未触碰（保持脏、未 staged）: .omo/boulder.json .omo/evidence/** .omo/ulw-execute/ledger.jsonl
+                            .opencode/opencode.json .omo/drafts|plans|notepads/**
+
+
+### 1) 必跑命令与退出码（全部实跑）
+
+$ cd server && npm test
+  exit=0   Test Suites: 155 passed, 155 total
+           Tests:       3580 passed, 3580 total
+           Time:        27.772 s                       [raw: $TMP/task9-server-final.log]
+
+$ cd worker && npm test
+  exit=0   Test Suites: 25 passed, 25 total
+           Tests:       670 passed, 670 total
+           Time:        29.206 s                       [raw: $TMP/t9-worker-final.log]
+
+$ cd worker && npm run typecheck
+  exit=0   (tsc --noEmit, 无输出)                       [raw: $TMP/t9-worker-typecheck.log]
+
+$ cd web && npx tsc --noEmit
+  exit=0
+
+$ cd web && npx playwright test session-unification.spec.ts --project=session-unification --reporter=list
+  exit=0   37 passed (43.7s)  提交后对最终代码复跑 exit=0, 37 passed (43.4s)
+           ✓ 37 ... Todo9 全链路不回显 › SSE→弹窗→提交→工具卡→收敛：除 reply 请求体外全通道 0 sentinel (1.4s)
+           [raw: $TMP/t9-pw-final.log, $TMP/t9-pw-final2.log]
+
+$ npm run lint / --fix
+  NOT RUN（todo 明确禁止）
+
+$TMP = /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode
+
+
+### 2) sentinel sink 表（grep -R "s3cr3t-A9f"，LC_ALL=C）
+
+#  sink                                     命令/来源                                              hits  结论
+S1 服务器侧落盘产物（15 文件：13 文本 + 2 截图）
+     .omo/evidence/.../task-9-sinks/*       grep -R -n "s3cr3t-A9f" .omo/evidence/.../task-9-sinks  0     exit=1
+       - questions-server.log               server 日志（create/终态两行）                            0
+       - server-secret-command.log          server 日志（发起/执行完成，无 argv/secret）              0
+       - worker-exec.log                    worker 访问日志（就绪 + secret-command 完成 HTTP 200）    0
+       - sse-payload.json                   realtime.emit 全量帧（agent.question）                   0
+       - web-sse-capture.json               浏览器实际收到的每一帧 SSE 原文                          0
+       - question-answers.json              prisma.agentQuestion.update 入参（answers JSON）          0
+       - question-create.json               prisma.agentQuestion.create 入参（content 只有模板/变量） 0
+       - server-tool-result.json            MCP envelope（模型可见结果）                             0
+       - question-reply-result.json         questions.reply 返回 DTO                                 0
+       - worker-tool-result.json            worker /secret-command 响应 JSON                         0
+       - web-network.json                   全部浏览器请求（reply 体已按 *** 归一后落盘）             0
+       - web-storage.txt / web-dom.txt      localStorage+sessionStorage / DOM+URL                    0
+S2 产品代码（不含测试）
+     server/src worker/src web/src web/app  grep -R ... | grep -v "\.spec\.ts"                        0     exit=1
+S3 只有测试代码携带 sentinel（应为 8 个文件）
+     server/src/platform-mcp/platform-mcp.service.spec.ts
+     server/src/questions/questions.service.spec.ts
+     server/src/workers/worker.client.spec.ts
+     web/e2e/chat-density.spec.ts
+     web/e2e/session-unification.spec.ts
+     worker/src/exec/exec-server.spec.ts
+     worker/src/exec/sensitive-command.spec.ts
+     worker/src/protocol/contract.spec.ts
+S4 真实运行栈容器日志（live）
+     docker logs aiagents-compose-server | grep -c s3cr3t-A9f  -> 0
+     docker logs aiagents-compose-worker  | grep -c            -> 0
+     docker logs aiagents-compose-web     | grep -c            -> 0
+S5 产品路径的 opencode session store（worker 容器内 /root/.local/share/opencode）
+     docker exec aiagents-compose-worker grep -R -a -l "s3cr3t-A9f" /root/.local/share/opencode
+       -> 无命中文件；按文件 -c 过滤后输出 NO_HIT_FILES                            0
+S6 会话 store 目录（宿主 storage/ 载荷）
+     grep -R -a -c "s3cr3t-A9f" ~/.local/share/opencode/storage | grep -v ":0$"   0    exit=1 (1=0 命中)
+S7 宿主 ~/.local/share/opencode 全树（literal 命令，非 0，逐文件定性如下）
+     grep -R -a -l "s3cr3t-A9f" ~/.local/share/opencode
+       ~/.local/share/opencode/opencode.db        (681 hits)
+       ~/.local/share/opencode/opencode.db-wal    (75 hits)
+       ~/.local/share/opencode/log/opencode.log   (99 hits)
+     定性：三处都是 **agent 自身会话转录/日志**，不是产品路径产物（产品代码从不写宿主
+     opencode store；见 S5 产品路径 store = 0）。取样（log/opencode.log 前 3 条）：
+       "...independent AdversarialVerify, sentinel s3cr3t-A9f no-leak grep, GATE GREEN..."
+       "...&& grep -rn \"s3cr3t-A9f\" server/src | sed 's/:.*//' | sort -u; ..."
+       "...echo \"sentinel: s3cr3t-A9f (fake, test-only)\"..."
+     opencode.db 首个命中 offset=21313472911（23GB 库的尾部 = 最近会话），上下文：
+       "needs-fix): questions.service.ts:987-990 logs `(err as Error).message` verbatim from
+        the secret hook. PROBE-B empirically: hook throwing `Error('worker failed: s3cr3t-A9f')`..."
+       → 均为 agent 的任务文本/自跑命令/复盘记录（meta），无一条是 vteam 产品输出。
+     结论：产品路径 0 命中（S1-S6）；S7 的非 0 命中已逐条定性为 agent 转录，
+     **不作为产品泄露**，也不伪装成 0（如实记录）。
+
+
+### 3) 看门狗正证 + 反证（SILENT_SESSION_WAKE_MS 缩放 + keepalive = wake/10）
+
+生产常量未改（断言锁定）:
+  SECRET_COMMAND_KEEPALIVE_MS = 60_000 (生产 60s 间隔不变)
+  DEFAULT_SILENT_SESSION_WAKE_MS = 600_000
+  测试态: wakeMs = 10_000 / cadence = 1_000 = wakeMs/10 (worker-dispatcher.spec 里按 60:1
+          等比缩放，比值仍为 10:1；platform-mcp.spec 直接把模块常量临时缩到 wake/10)
+
+[platform-mcp.service.spec · 真实 WorkerDispatcher 集成（handler 生产 setInterval → 生产
+ keepAliveSession → 生产静默 watchdog → 生产唤醒/判败）]
+  ✓ 看门狗正证：SILENT_SESSION_WAKE_MS 调低 + 生产 keepalive 缩放 wake/10 → 等待+执行全周期
+    过期前 ≥1 次保活、0 次唤醒、0 次 silent_session_timeout (3 ms)
+      keepAliveBeforeExpiry >= 1 ; keepAliveAfterSettle >= 40 ; wakeDispatch 0 次;
+      broadcast 无「【自动恢复】」、无 silent_session_timeout; envelope succeeded; 0 sentinel
+  ✓ 看门狗反证：同一周期临时禁用 keepalive → 必然 3 次【自动恢复】唤醒 + silent_session_timeout
+    （正证三条断言全红） (7 ms)
+      keepAliveBeforeExpiry == 0
+      wakeDispatch == MAX_SILENT_WAKE_ATTEMPTS(3)，payload {kind:'wake',
+        text:'【自动恢复】检测到会话意外中断，已自动重试，请继续执行未完成的任务'}
+      wakeErrors[0] 匹配 /无事件回流/ ; agentErrors[0] errorType='silent_session_timeout'
+  ✓ 执行期间客户端断开 → 不取消已下发的命令（只调一次 worker，envelope 照常返回）
+  ✓ todo 9 sink：全链路 server 日志 / SSE 帧 / tool result 落盘且 0 命中
+
+  secret_command describe 汇总: Tests: 16 passed (266 skipped, 282 total)
+
+[worker-dispatcher.spec · 同一缩放节奏的单元级正证/反证]
+  ✓ 比例锁定 + 正证：节奏 = 窗口/10 跑满 5 个窗口（等待输入 + 执行）→ 过期前 ≥1 次保活、
+    0 次唤醒、0 次 silent_session_timeout (10 ms)   [keepalives >= 45]
+  ✓ 反证：同一缩放场景禁用保活 → 4 个窗口内 3 次唤醒 + silent_session_timeout (2 ms)
+  Tests: 2 passed (284 skipped, 286 total)
+
+$ npx jest -t "看门狗" (反证 QA: 正证临时改为禁用保活)  ->  exit=1  【红】
+    ✕ 看门狗正证 ... Expected: >= 1  Received: 0
+    ✓ 看门狗反证 ... (同一次运行里反证仍绿 = wake/timeout 确已发生)
+$ 恢复后 npx jest -t "secret_command"                    ->  exit=0  【绿】16 passed
+
+
+### 4) 幂等表淘汰边界刻画（worker/src/exec/exec-server.spec.ts, 真实 HTTP）
+
+$ npx jest src/exec/exec-server.spec.ts -t "淘汰"
+  ✓ 淘汰边界：settle 记录在恰好 256 个更新 requestId 内可回放；第 256 个把最旧 settle 记录
+    挤出（此后同 id 重新执行） (987 ms)
+      256 上限锁定: req_oldest 执行 1 次 → 灌入 255 个新 requestId（size=256，无淘汰）
+      → 字节级回放 + marker 仍 1 行 → 第 256 个新 id（size=257）→ 淘汰 req_oldest
+      → 同 id 再次回放 = 重新执行，marker = 2 行（幂等窗口随容量边界结束）
+  ✓ 在途记录永不淘汰：容量压力只淘汰 settle 记录，在途请求只执行一次且字节级回放 (387 ms)
+      闸门命令（不靠 sleep 竞态）+ 260 个新 requestId 分批并发灌入 →
+      cache.has(req_inflight)=true, settled=false, size<=256 → 放行 → 200 succeeded,
+      marker 1 行 → settle 后字节级回放, marker 仍 1 行（绝不二次执行）, raw 无 sentinel
+  Tests: 2 passed (118 skipped, 120 total)
+
+
+### 5) 取消 / 输入过期 / 命令超时 / 重复提交 / 并发 409 / cwd 越界（既有 + 新增全绿）
+
+  cancel        : hook secrets:null → cancelled 且 worker 0 调用；ctx.signal abort → 取消 pending
+                  question 且迟到提交不执行；【新增】执行期间 abort → 已下发命令不被取消
+  input expiry  : 输入超预算 540s → input_timeout + 取消 pending question，keepalive 停止
+  cmd timeout   : worker 非零 → failed；timeout → timeout+timedOut；worker 侧 sleep30/timeout300
+                  → 200 {status:timeout}（不等满时长）
+  duplicate     : 幂等：同 requestId 同归属字节级回放只执行一次；并发重复只执行一次
+  concurrent 409: 同会话并发第二次调用 → 409 SECRET_COMMAND_CONFLICT；worker 同 id 不同归属 → 409
+  cwd escape    : {cwd:'/etc'} / 'a/../../etc' → 400 SECRET_COMMAND_INVALID；worker 侧
+                  ../../etc、绝对路径、符号链接逃逸 → 400 固定文案不回显路径
+
+
+### 6) worker 首字 300s 活性 —— 发现并修复的 plan-caused 缺陷（必须人工知悉）
+
+探针（改前实测，未入库的 __probe.spec.ts，已删除）:
+  A. 模型先出 text 再调 secret_command → firstTokenAt 置位 → 无完成超时 → 不被误杀（OK）
+  B. 模型**没有** text/reasoning、只有 pending 的 tool part 且 serve 静止 →
+     首字窗口到期（生产 300s < 输入预算 540s）→ CompletionTimeoutError + abort ✗ 误杀
+
+判定：这是计划自身验收（“worker 首字等待活性判定不会在 secret 请求等待期间误杀会话”）
+无法成立的真实缺陷，属计划引入的 540s 阻塞等待与 300s 首字窗口的失配。
+
+修复（最小、白名单式）: worker/src/driver/prompt-await.ts
+  - 新增 hasInFlightTool(): assistant 消息里存在 state.status ∈ {pending, running} 的
+    tool part → 首字超时不触发（模型在等工具返回 ≠ 模型失联）
+  - 白名单而非黑名单：未知/缺失 status 不延长活性，既有判死语义不变
+  - 同步更新 awaitCompletion 的行为文档
+
+覆盖（worker/src/driver/prompt-await.spec.ts, 3 条）:
+  ✓ secret 等待：仅在途 tool part（无 text/reasoning）且 serve 静止 → 首字窗口过期不 abort，
+    直到工具返回
+  ✓ 工具已终态（completed）且无任何新输出 → 首字超时照常（豁免不掩护真 hang）
+  ✓ tool part 无 state（未知状态）→ 不享受在途豁免，首字超时照常
+  $ npx jest src/driver → Tests: 113 passed (2 suites)
+
+反证 QA-B（临时删除 `&& !hasInFlightTool(collected)`）:
+  exit=1 【红】✕ secret 等待 ... CompletionTimeoutError: 会话 ses_secret_wait 等待首字超时
+  恢复后 exit=0 【绿】Tests: 68 passed; cmp 与备份逐字节一致 RESTORE_B=identical
+
+>> DEVIATION（必须记录）: 本 todo 要求“只提交测试/helper”，但不提交该修复会让新测试在
+   其它工作副本上必红、且 todo 9 验收不成立；因此 prompt-await.ts 与测试同 commit 入库，
+   变更仅 36 行且全部落在首字活性判定这一处。
+
+
+### 7) failure QA（临时破坏 → 必须红 → 恢复 → 必须绿）
+
+  A  禁用看门狗保活        red exit=1 (正证 ✕ keepAliveBeforeExpiry 0<1, 反证仍 ✓ wake+timeout)
+                           restore cmp=identical ; green exit=0 (16 passed)
+  B  关闭在途工具豁免      red exit=1 (首字超时误杀) ; restore cmp=identical ; green exit=0 (68)
+  C  关闭 worker 精确脱敏  red exit=1 (10 failed) + grep 命中 sentinel 6 次
+                           ("+ s3cr3t-A9f" / 'Received: "s3cr3t-A9f"')
+                           restore cmp=identical ; green exit=0 (178 passed) + sentinel 命中 0
+  破坏脚本/备份/日志全部落在 $TMP（仓库外），无残留。
+
+
+### 8) 携带边界（carry-forward boundaries）—— 覆盖或文档化
+
+  [covered] worker timeout = timeoutSec + 5s
+            platform-mcp.service.spec: runSecretCommand 收到 timeoutMs=65_000（默认 60s 命令）
+            （SECRET_COMMAND_REQUEST_SLACK_MS=5000；超 60s 默认值由该断言锁死）
+  [covered+documented] 单会话单 in-flight 是 process-local
+            platform-mcp.service.spec: handler 自持 secretCommandSessions Set → 并发第二调用 409；
+            该门是**进程内**状态（无 DB/Redis 互斥）：跨进程/重启后不共享 —— 已在本证据记录为
+            部署边界（多副本需外层互斥；即便如此，重复调用方仍受 requestId 幂等与 409 保护）
+  [covered] 执行期间 abort 不取消已下发命令
+            新增测试：abort 后 workerClient.runSecretCommand 仍只调 1 次，envelope 照常 succeeded
+            （只有“拿到值之前”的断开会取消 pending question，杜绝幽灵执行）
+  [documented] 不得假设 requestId 无限期去重
+            淘汰边界测试锁定：恰好 256 个**更新的** requestId 会挤出最旧 settled 记录，
+            之后同 id 会**重新执行**。调用方必须每轮生成新 requestId（生产用 secmd_<uuid>，
+            每次调用唯一），不得复用跨尝试的 requestId。
+
+
+### 9) 对抗类结果（todo 9 涉及类别）
+
+  malformed_input      : 既有 400 分支全绿（模板/变量/cwd/timeout/坏 JSON/非对象体/缺 requestId）
+  hung/long command    : sleep30 + timeoutMs=300 → 200 timeout 且不等满时长；进程组 SIGKILL 既有覆盖
+  stale_state          : 幂等回放字节级相同；淘汰后重新执行（边界被显式锁定，见 §4/§8）
+  misleading_output    : 响应键集合精确断言；envelope 无 cwd/secrets/渲染命令；0 sentinel
+  secrets (leak)       : §2 全 sink 表 0 命中 + failure QA-C 反证（关脱敏立刻命中）
+  prompt injection     : 请求体是结构化 JSON（模板/secrets/幂等字段），无自然语言指令解释路径，
+                         与 todo 4 结论一致；未新增注入面
+  race/concurrency     : 并发重复 requestId 单次执行；260 并发容量压力下在途记录不被淘汰
+  cancellation         : 取消/过期/执行中断开三路均有确定状态（§5）
+
+
+### 10) bundle / 栈溯源（playwright 活体腿）
+
+  aiagents-compose-web    image=sha256:f593bfdb147c7ce589d17cdc047f5fccf7bf38023903e58cb2b09b8b1bedbad0
+                          container=a3e53a120a5de158a3f97168aa268e62b4985f477a81d21775e8bbe05af28094
+                          started=2026-09-26T19:05:27Z  status=running
+  aiagents-compose-server image=sha256:b0ce2b8e79efdf5bcebe6d4b15828b82d7738d2b42958d77fc9838ba5eb0b256
+  aiagents-compose-worker  image=sha256:11f5ee19fe1ba6c35447e7fc71a6d103cb549cd16fc614f0848add00df170c54
+  bundle 新鲜度（未重建，判定为不陈旧）:
+    docker exec aiagents-compose-web grep -rl 'msg-tool-awaiting' /app/.next
+      -> /app/.next/server/app/(main)/teams/[id]/session/page.js
+         /app/.next/static/chunks/app/(main)/teams/[id]/session/page-655852a1137c2fcd.js
+      （todo 8 的新 testid 已在服务中的 bundle → 无需 rebuild；本次仅新增 e2e 用例，
+       测试代码不进 bundle）
+  3001 -> 13001 由 /private/var/folders/.../opencode/pw-bridge/bridge.js 转发（仓库文件未改）
+
+
+### 11) 清理回执
+
+  - 临时探针 worker/src/driver/__probe.spec.ts                    已删除（git status 无该文件）
+  - 破坏备份 $TMP/t9_qa{A,B,C}.bak 与全部原始日志                在仓库外，非入库物
+  - 破坏脚本 $TMP/task9-failure-qa.sh                             在仓库外
+  - 证据 sink 目录 .omo/evidence/.../task-9-sinks/ (15 文件：13 文本 + 2 截图)
+                                                   未 staged、未提交
+  - playwright 附带产物 .omo/evidence/phase5-t9-playwright.json    既有脏文件，仍未 staged
+  - 提交前 `git diff --cached --name-only` 校验：只允许 §0 的 7 个文件
+
+
+### 12) 未运行 / 风险
+
+  NOT RUN:
+    - `npm run lint` / `--fix`（todo 明确禁止）
+    - `bash scripts/gate.sh`（属 F2，不在 todo 9 命令清单）
+    - 真实栈全链路手动跑（F3 职责）：server/worker 容器镜像仍是 34h 前的（不含 todo1-6 产品码），
+      因此本 todo 的“全链路”= 测试态全链路（真实 HTTP worker + 真实 questions/MCP 代码 +
+      活体 web UI），live 容器日志另行按 S4 grep = 0
+  RISK:
+    - S7 宿主 opencode 全树非 0（agent 自身转录），literal 0 命中在宿主全树上**不成立**；
+      产品路径（S1-S6）全部 0
+    - requestId 幂等窗口有界（256），跨尝试复用 id 会重新执行（§8）
+    - 单 in-flight 门是进程内的；多副本部署需外层互斥（§8）
+    - 首字活性豁免是白名单 {pending,running}；若 serve 改用其它进行态字符串需同步（白名单收紧
+      的后果是回到旧行为 = 会误杀，QA-B 已证明测试会红）
+
+
+### 13) 提交回执
+
+$ git diff --cached --name-only        # 提交前逐一核对（恰好 7 项，无 .omo/.opencode/evidence/plan）
+server/src/chat/worker-dispatcher.spec.ts
+server/src/platform-mcp/platform-mcp.service.spec.ts
+server/src/questions/questions.service.spec.ts
+web/e2e/session-unification.spec.ts
+worker/src/driver/prompt-await.spec.ts
+worker/src/driver/prompt-await.ts          << 产品修复，见 §6 DEVIATION >>
+worker/src/exec/exec-server.spec.ts
+
+$ git commit -m "test(secret-command): 补充不回显、取消与超时集成覆盖"
+commit 0c683d89f6be8652451675cb25b23a56d92cf513   (含一次 --amend：补 2 张 todo9 UI 截图行)
+ 7 files changed, 811 insertions(+), 3 deletions(-)
+
+$ git show --stat HEAD   → 与 staged 完全一致（7 文件）
+提交后 git status：.omo/boulder.json .omo/evidence/** .omo/ulw-execute/ledger.jsonl
+  .opencode/opencode.json .omo/{drafts,plans,notepads}/** 仍为未 staged 的既有脏文件；
+  本证据文件与其所在目录未入库（计划禁止 .omo/evidence 入库）。
+
+
+### 14) manual QA 产物（人工目视，非通过条件）
+
+  .omo/evidence/sensitive-command-tool/task-9-sinks/
+    task-9-awaiting-input.png   工具卡第四态「等待填写敏感信息」+ 只读模板弹窗（155 KB）
+    task-9-cleared.png          resolve 收敛后卡片回落 running、徽章离场（137 KB）
+    web-dom.txt                 sentinel_hits=0, url=/teams/tm_0000000001/session
+    web-network.json            全部浏览器请求（reply 体已 *** 归一）
+    web-sse-capture.json        页面实际收到的 SSE 帧原文
+    web-storage.txt             localStorage + sessionStorage 序列化
+  .omo/evidence/sensitive-command-tool/task-9-integration.txt   本文件
+  $TMP/t9-{server,worker,pw}-final*.log / t9_qa{A,B,C}_{red,green}.log   原始日志（仓库外）
+
+  提交后复跑（对最终代码）:
+    $ cd web && npx playwright test session-unification.spec.ts --project=session-unification
+               --reporter=list     → exit=0, 37 passed (43.4s)
+    $ grep -R -c "s3cr3t-A9f" .omo/evidence/.../task-9-sinks | grep -v ":0"   → 无输出（0 命中）

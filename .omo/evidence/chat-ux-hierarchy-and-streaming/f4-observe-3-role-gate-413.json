@@ -1,0 +1,569 @@
+{
+  "startedAt": "2026-09-26T02:21:34.490Z",
+  "steps": [
+    {
+      "t": "2026-09-26T02:21:37.533Z",
+      "name": "H.themeBefore",
+      "detail": null
+    },
+    {
+      "t": "2026-09-26T02:21:38.386Z",
+      "name": "H.roleColor.light",
+      "detail": {
+        "theme": "light",
+        "varColor": "#0891b2",
+        "varBg": "#ecfeff",
+        "varBorder": "#a5f3fc",
+        "varColorResolved": "rgb(8, 145, 178)",
+        "varBgResolved": "rgb(236, 254, 255)",
+        "varBorderResolved": "rgb(165, 243, 252)",
+        "authorColor": "rgb(8, 145, 178)",
+        "authorFs": "12px",
+        "authorFw": "600",
+        "avatarText": "项",
+        "avatarBg": "rgb(236, 254, 255)",
+        "avatarBorder": "rgb(165, 243, 252)",
+        "timeFs": "11px",
+        "roleVarRef": "rgb(71, 85, 105) | 12px",
+        "authorMatchesVar": true,
+        "avatarBgMatchesVar": true,
+        "avatarBorderMatchesVar": true
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:39.519Z",
+      "name": "H.roleColor.dark",
+      "detail": {
+        "theme": "dark",
+        "varColor": "#67e8f9",
+        "varBg": "#0891b22e",
+        "varBorder": "#a5f3fc59",
+        "varColorResolved": "rgb(103, 232, 249)",
+        "varBgResolved": "rgba(8, 145, 178, 0.18)",
+        "varBorderResolved": "rgba(165, 243, 252, 0.35)",
+        "authorColor": "rgb(103, 232, 249)",
+        "authorFs": "12px",
+        "authorFw": "600",
+        "avatarText": "项",
+        "avatarBg": "rgba(8, 145, 178, 0.18)",
+        "avatarBorder": "rgba(165, 243, 252, 0.35)",
+        "timeFs": "11px",
+        "roleVarRef": "rgb(203, 213, 225) | 12px",
+        "authorMatchesVar": true,
+        "avatarBgMatchesVar": true,
+        "avatarBorderMatchesVar": true
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:40.416Z",
+      "name": "H.themeRestored",
+      "detail": "{\"state\":{\"theme\":\"system\"},\"version\":0}"
+    },
+    {
+      "t": "2026-09-26T02:21:40.501Z",
+      "name": "I.dmChannel",
+      "detail": {
+        "status": 201,
+        "id": "c_0000000127"
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:41.404Z",
+      "name": "I.anchor",
+      "detail": {
+        "present": true,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "clientHeight": 576,
+        "childCount": 31,
+        "streaming": false
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:41.476Z",
+      "name": "I.postMessage",
+      "detail": {
+        "status": 201,
+        "id": "m_0000000136",
+        "triggers": []
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:50.581Z",
+      "name": "I.samples",
+      "detail": {
+        "n": 30,
+        "distinctScrollTops": [
+          2287
+        ],
+        "testerUnreadSeen": false,
+        "testerSpinSeen": false,
+        "first": {
+          "ms": 74,
+          "scrollTop": 2287,
+          "scrollHeight": 5718,
+          "testerSpin": false,
+          "testerUnread": false
+        },
+        "last": {
+          "ms": 8875,
+          "scrollTop": 2287,
+          "scrollHeight": 5718,
+          "testerSpin": false,
+          "testerUnread": false
+        }
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:50.703Z",
+      "name": "I.testerHistory",
+      "detail": {
+        "status": 200,
+        "n": 2,
+        "types": [
+          "user",
+          "system"
+        ]
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:50.705Z",
+      "name": "J.big.bytes",
+      "detail": 5662517
+    },
+    {
+      "t": "2026-09-26T02:21:50.848Z",
+      "name": "J.setMs",
+      "detail": 143
+    },
+    {
+      "t": "2026-09-26T02:21:52.351Z",
+      "name": "J.inputLen",
+      "detail": 5662517
+    },
+    {
+      "t": "2026-09-26T02:21:52.351Z",
+      "name": "J.btnBeforeClick",
+      "detail": {
+        "text": "发送",
+        "disabled": false
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:53.248Z",
+      "name": "J.banner",
+      "detail": {
+        "banner": "发送失败：request entity too large",
+        "elapsedMs": 897
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:53.248Z",
+      "name": "J.http4xx5xx",
+      "detail": [
+        {
+          "t": "2026-09-26T02:21:52.743Z",
+          "status": 413,
+          "url": "http://localhost:3001/api/v1/channels/c_0000000017/messages"
+        }
+      ]
+    },
+    {
+      "t": "2026-09-26T02:21:55.918Z",
+      "name": "J.afterReload",
+      "detail": {
+        "banner": false,
+        "inputLen": 0
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:55.988Z",
+      "name": "cleanup.deleteTesterChannel",
+      "detail": {
+        "id": "c_0000000127",
+        "status": 200,
+        "json": {
+          "id": "c_0000000127",
+          "deletedAt": "2026-09-26T02:21:55.960Z"
+        }
+      }
+    },
+    {
+      "t": "2026-09-26T02:21:56.020Z",
+      "name": "cleanup.privateChannelsAfter",
+      "detail": [
+        {
+          "id": "c_0000000089",
+          "agent": "a_product"
+        },
+        {
+          "id": "c_0000000088",
+          "agent": "a_plan"
+        },
+        {
+          "id": "c_0000000087",
+          "agent": "a_librarian"
+        },
+        {
+          "id": "c_0000000086",
+          "agent": "a_developer"
+        },
+        {
+          "id": "c_0000000017",
+          "agent": "a_project_manager"
+        },
+        {
+          "id": "c_0000000016",
+          "agent": "a_architect"
+        }
+      ]
+    },
+    {
+      "t": "2026-09-26T02:21:56.020Z",
+      "name": "Z.console",
+      "detail": [
+        {
+          "t": "2026-09-26T02:21:52.745Z",
+          "type": "error",
+          "text": "Failed to load resource: the server responded with a status of 413 (Payload Too Large)",
+          "url": "http://localhost:3001/api/v1/channels/c_0000000017/messages"
+        },
+        {
+          "t": "2026-09-26T02:21:52.745Z",
+          "type": "error",
+          "text": "[TeamSession] send message failed {teamId: tm_0000000001, channelId: c_0000000017, error: ApiError: request entity too large\n    at i (http://localhost:3001/_next/static/chunks/3044-f55ca4a…}",
+          "url": "http://localhost:3001/_next/static/chunks/app/(main)/teams/%5Bid%5D/session/page-762a0d5dca4e67f0.js"
+        }
+      ]
+    },
+    {
+      "t": "2026-09-26T02:21:56.020Z",
+      "name": "Z.pageerrors",
+      "detail": []
+    },
+    {
+      "t": "2026-09-26T02:21:56.020Z",
+      "name": "Z.requestfailed",
+      "detail": []
+    },
+    {
+      "t": "2026-09-26T02:21:56.020Z",
+      "name": "Z.http4xx5xx",
+      "detail": [
+        {
+          "t": "2026-09-26T02:21:52.743Z",
+          "status": 413,
+          "url": "http://localhost:3001/api/v1/channels/c_0000000017/messages"
+        }
+      ]
+    }
+  ],
+  "console": [
+    {
+      "t": "2026-09-26T02:21:52.745Z",
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 413 (Payload Too Large)",
+      "url": "http://localhost:3001/api/v1/channels/c_0000000017/messages"
+    },
+    {
+      "t": "2026-09-26T02:21:52.745Z",
+      "type": "error",
+      "text": "[TeamSession] send message failed {teamId: tm_0000000001, channelId: c_0000000017, error: ApiError: request entity too large\n    at i (http://localhost:3001/_next/static/chunks/3044-f55ca4a…}",
+      "url": "http://localhost:3001/_next/static/chunks/app/(main)/teams/%5Bid%5D/session/page-762a0d5dca4e67f0.js"
+    }
+  ],
+  "pageerrors": [],
+  "requestfailed": [],
+  "http4xx5xx": [
+    {
+      "t": "2026-09-26T02:21:52.743Z",
+      "status": 413,
+      "url": "http://localhost:3001/api/v1/channels/c_0000000017/messages"
+    }
+  ],
+  "shots": [
+    {
+      "t": "2026-09-26T02:21:38.525Z",
+      "name": "f4-24-role3-light.png",
+      "label": "role3-light"
+    },
+    {
+      "t": "2026-09-26T02:21:39.644Z",
+      "name": "f4-25-role3-dark.png",
+      "label": "role3-dark"
+    },
+    {
+      "t": "2026-09-26T02:21:50.670Z",
+      "name": "f4-26-noncurrent-scroll-gate.png",
+      "label": "noncurrent-scroll-gate"
+    },
+    {
+      "t": "2026-09-26T02:21:53.457Z",
+      "name": "f4-27-send-error.png",
+      "label": "send-error"
+    }
+  ],
+  "H_light": {
+    "theme": "light",
+    "varColor": "#0891b2",
+    "varBg": "#ecfeff",
+    "varBorder": "#a5f3fc",
+    "varColorResolved": "rgb(8, 145, 178)",
+    "varBgResolved": "rgb(236, 254, 255)",
+    "varBorderResolved": "rgb(165, 243, 252)",
+    "authorColor": "rgb(8, 145, 178)",
+    "authorFs": "12px",
+    "authorFw": "600",
+    "avatarText": "项",
+    "avatarBg": "rgb(236, 254, 255)",
+    "avatarBorder": "rgb(165, 243, 252)",
+    "timeFs": "11px",
+    "roleVarRef": "rgb(71, 85, 105) | 12px",
+    "authorMatchesVar": true,
+    "avatarBgMatchesVar": true,
+    "avatarBorderMatchesVar": true
+  },
+  "H_dark": {
+    "theme": "dark",
+    "varColor": "#67e8f9",
+    "varBg": "#0891b22e",
+    "varBorder": "#a5f3fc59",
+    "varColorResolved": "rgb(103, 232, 249)",
+    "varBgResolved": "rgba(8, 145, 178, 0.18)",
+    "varBorderResolved": "rgba(165, 243, 252, 0.35)",
+    "authorColor": "rgb(103, 232, 249)",
+    "authorFs": "12px",
+    "authorFw": "600",
+    "avatarText": "项",
+    "avatarBg": "rgba(8, 145, 178, 0.18)",
+    "avatarBorder": "rgba(165, 243, 252, 0.35)",
+    "timeFs": "11px",
+    "roleVarRef": "rgb(203, 213, 225) | 12px",
+    "authorMatchesVar": true,
+    "avatarBgMatchesVar": true,
+    "avatarBorderMatchesVar": true
+  },
+  "I": {
+    "anchor": {
+      "present": true,
+      "scrollTop": 2287,
+      "scrollHeight": 5718,
+      "clientHeight": 576,
+      "childCount": 31,
+      "streaming": false
+    },
+    "samples": [
+      {
+        "ms": 74,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 378,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 681,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 984,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 1289,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 1592,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 1896,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 2199,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 2501,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 2806,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 3110,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 3415,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 3720,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 4023,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 4327,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 4630,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 4933,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 5236,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 5539,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 5842,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 6146,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 6449,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 6753,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 7056,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 7358,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 7662,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 7965,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 8268,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 8572,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      },
+      {
+        "ms": 8875,
+        "scrollTop": 2287,
+        "scrollHeight": 5718,
+        "testerSpin": false,
+        "testerUnread": false
+      }
+    ]
+  },
+  "finishedAt": "2026-09-26T02:21:56.312Z"
+}

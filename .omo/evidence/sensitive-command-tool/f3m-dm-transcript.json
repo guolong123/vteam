@@ -1,0 +1,797 @@
+{
+ "channel": "c_0000000017",
+ "capturedAt": "2026-09-27T00:43Z",
+ "note": "lane-B F3 raw DM transcript captured BEFORE cleanup",
+ "messages": [
+  {
+   "id": "m_0000000166",
+   "channelId": "c_0000000017",
+   "senderType": "user",
+   "senderId": "u_seed_admin",
+   "senderInstanceId": null,
+   "content": {
+    "text": "请立即调用 vteam MCP 工具 secret_command，参数固定为：taskId=\"t_0000000001\"，selfInstanceId=\"tmm_0000000002\"，command=\"echo \\\"laneB-ok {{TOKEN}}\\\"\"，variables=[{\"name\":\"TOKEN\",\"label\":\"部署 Token\",\"secret\":true}]，reason=\"F3-LANE-B success\"。secret 必须是布尔 true。除了这次工具调用之外不要输出任何文字，不要做任何别的事。",
+    "parts": []
+   },
+   "mentions": [
+    {
+     "type": "agent",
+     "agentId": "a_project_manager"
+    }
+   ],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-26T23:49:47.573Z"
+  },
+  {
+   "id": "m_0000000167",
+   "channelId": "c_0000000017",
+   "senderType": "agent",
+   "senderId": "a_project_manager",
+   "senderInstanceId": "tmm_0000000002",
+   "content": {
+    "text": "调用失败：平台返回唯一约束冲突（`agent_questions_request_id_key`，前几次超时的待确认请求仍占位），本次未创建新的确认请求。",
+    "parts": [
+     {
+      "id": "prt_0e0201d15001uYn01UiISNV6nb",
+      "type": "step-start",
+      "messageID": "msg_0e01ffd6b001D6mXEFRsxsgw33",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0201d3b001FsHrIlKlVRCZEB",
+      "tool": "vteam_secret_command",
+      "type": "tool",
+      "state": {
+       "time": {
+        "end": 1790466596990,
+        "start": 1790466596501
+       },
+       "error": "MCP error -32603: \nInvalid `prisma.agentQuestion.create()` invocation:\n\n\nUnique constraint failed on the constraint: `agent_questions_request_id_key`",
+       "input": {
+        "reason": "F3-LANE-B success",
+        "taskId": "t_0000000001",
+        "command": "echo \"laneB-ok {{TOKEN}}\"",
+        "variables": [
+         {
+          "name": "TOKEN",
+          "label": "部署 Token"
+         }
+        ],
+        "selfInstanceId": "tmm_0000000002"
+       },
+       "status": "error"
+      },
+      "callID": "call_function_ik6jez0t1ioc_1",
+      "messageID": "msg_0e01ffd6b001D6mXEFRsxsgw33",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e020209c001KLRoKtgwuPt9pF",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "tool-calls",
+      "tokens": {
+       "cache": {
+        "read": 1939,
+        "write": 0
+       },
+       "input": 42586,
+       "total": 44643,
+       "output": 118,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e01ffd6b001D6mXEFRsxsgw33",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0202de4001CdA3XQm5FNhlqd",
+      "type": "step-start",
+      "messageID": "msg_0e02020df001hFJtOmy5lUIKD7",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0202dfb001pR1RwQlBpW2nr4",
+      "text": "The platform errored with a unique constraint on request id — because a prior request is still pending (the three timed-out calls left a pending agent_question with the same request id? Actually unique request_id — each call generates requestId; maybe the earlier timed-out call still holds a pending row, and now creation collides). Report failure honestly, no retry per 409/unique constraint rule.",
+      "time": {
+       "end": 1790466601598,
+       "start": 1790466600443
+      },
+      "type": "reasoning",
+      "messageID": "msg_0e02020df001hFJtOmy5lUIKD7",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0203286001qzUD96w9WpMqYW",
+      "text": "调用失败：平台返回唯一约束冲突（`agent_questions_request_id_key`，前几次超时的待确认请求仍占位），本次未创建新的确认请求。",
+      "time": {
+       "end": 1790466601841,
+       "start": 1790466601606
+      },
+      "type": "text",
+      "messageID": "msg_0e02020df001hFJtOmy5lUIKD7",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e02033740011OO897LziNXWj3",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 44641,
+        "write": 0
+       },
+       "input": 50,
+       "total": 44807,
+       "output": 35,
+       "reasoning": 81
+      },
+      "messageID": "msg_0e02020df001hFJtOmy5lUIKD7",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     }
+    ]
+   },
+   "mentions": [],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-26T23:49:56.447Z"
+  },
+  {
+   "id": "m_0000000168",
+   "channelId": "c_0000000017",
+   "senderType": "user",
+   "senderId": "u_seed_admin",
+   "senderInstanceId": null,
+   "content": {
+    "text": "请立即调用 vteam MCP 工具 secret_command，参数固定为：taskId=\"t_0000000001\"，selfInstanceId=\"tmm_0000000002\"，command=\"echo \\\"laneB-ok {{TOKEN}}\\\"\"，variables=[{\"name\":\"TOKEN\",\"label\":\"部署 Token\",\"secret\":true}]，reason=\"F3-LANE-B success\"。secret 必须是布尔 true。除了这次工具调用之外不要输出任何文字，不要做任何别的事。",
+    "parts": []
+   },
+   "mentions": [
+    {
+     "type": "agent",
+     "agentId": "a_project_manager"
+    }
+   ],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:08:24.510Z"
+  },
+  {
+   "id": "m_0000000169",
+   "channelId": "c_0000000017",
+   "senderType": "agent",
+   "senderId": "a_project_manager",
+   "senderInstanceId": "tmm_0000000002",
+   "content": {
+    "text": "工具调用超时，未取得执行结果。",
+    "parts": [
+     {
+      "id": "prt_0e031198c001p6hohH4YVh2Y2U",
+      "type": "step-start",
+      "messageID": "msg_0e0310b6c001fbLWbJffwZCo26",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e031199b001ue41kZbXJoHAsn",
+      "tool": "vteam_secret_command",
+      "type": "tool",
+      "state": {
+       "time": {
+        "end": 1790468004189,
+        "start": 1790467709678
+       },
+       "error": "The operation timed out.",
+       "input": {
+        "reason": "F3-LANE-B success",
+        "taskId": "t_0000000001",
+        "command": "echo \"laneB-ok {{TOKEN}}\"",
+        "variables": [
+         {
+          "name": "TOKEN",
+          "label": "部署 Token"
+         }
+        ],
+        "selfInstanceId": "tmm_0000000002"
+       },
+       "status": "error"
+      },
+      "callID": "call_function_dt7jyqty63nn_1",
+      "messageID": "msg_0e0310b6c001fbLWbJffwZCo26",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0359971001bhiHzBslwnVRHl",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "tool-calls",
+      "tokens": {
+       "cache": {
+        "read": 1939,
+        "write": 0
+       },
+       "input": 43025,
+       "total": 45082,
+       "output": 118,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e0310b6c001fbLWbJffwZCo26",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e035a592001wmKzI5viLqaCrN",
+      "type": "step-start",
+      "messageID": "msg_0e035998b001tNSMQhEY2zXInm",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e035a598001IyRqM2tifHQCBq",
+      "text": "工具调用超时，未取得执行结果。",
+      "time": {
+       "end": 1790468007387,
+       "start": 1790468007320
+      },
+      "type": "text",
+      "messageID": "msg_0e035998b001tNSMQhEY2zXInm",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e035a5dd0013ESu5gFpGw1WS3",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 45080,
+        "write": 0
+       },
+       "input": 21,
+       "total": 45110,
+       "output": 9,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e035998b001tNSMQhEY2zXInm",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     }
+    ]
+   },
+   "mentions": [],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:08:29.432Z"
+  },
+  {
+   "id": "m_0000000170",
+   "channelId": "c_0000000017",
+   "senderType": "user",
+   "senderId": "u_seed_admin",
+   "senderInstanceId": null,
+   "content": {
+    "text": "请立即调用 vteam MCP 工具 secret_command，参数固定为：taskId=\"t_0000000001\"，selfInstanceId=\"tmm_0000000002\"，command=\"echo \\\"laneB-ok {{TOKEN}}\\\"\"，variables=[{\"name\":\"TOKEN\",\"label\":\"部署 Token\",\"secret\":true}]，reason=\"F3-LANE-B success\"。secret 必须是布尔 true。除了这次工具调用之外不要输出任何文字，不要做任何别的事。",
+    "parts": []
+   },
+   "mentions": [
+    {
+     "type": "agent",
+     "agentId": "a_project_manager"
+    }
+   ],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:28:18.385Z"
+  },
+  {
+   "id": "m_0000000171",
+   "channelId": "c_0000000017",
+   "senderType": "agent",
+   "senderId": "a_project_manager",
+   "senderInstanceId": "tmm_0000000002",
+   "content": {
+    "text": "laneB-ok {{REDACTED}}，exitCode=0。",
+    "parts": [
+     {
+      "id": "prt_0e0434f26001Af8Y2MuG1x1xTR",
+      "type": "step-start",
+      "messageID": "msg_0e0433fa2001AZxyCmeqoQUO20",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0434f2e001hQ9LVPaYh48oV7",
+      "tool": "vteam_secret_command",
+      "type": "tool",
+      "state": {
+       "time": {
+        "end": 1790468910272,
+        "start": 1790468902969
+       },
+       "input": {
+        "reason": "F3-LANE-B success",
+        "taskId": "t_0000000001",
+        "command": "echo \"laneB-ok {{TOKEN}}\"",
+        "variables": [
+         {
+          "name": "TOKEN",
+          "label": "部署 Token"
+         }
+        ],
+        "selfInstanceId": "tmm_0000000002"
+       },
+       "title": "",
+       "output": "{\"command\":\"echo \\\"laneB-ok {{TOKEN}}\\\"\",\"variables\":[{\"name\":\"TOKEN\",\"label\":\"部署 Token\",\"secret\":true,\"required\":true,\"provided\":true}],\"status\":\"succeeded\",\"exitCode\":0,\"signal\":null,\"timedOut\":false,\"durationMs\":8,\"stdout\":\"laneB-ok {{REDACTED}}\\n\",\"stderr\":\"\",\"stdoutTruncated\":false,\"stderrTruncated\":false}",
+       "status": "completed",
+       "metadata": {
+        "truncated": false
+       }
+      },
+      "callID": "call_function_moo5gb4sxsqv_1",
+      "messageID": "msg_0e0433fa2001AZxyCmeqoQUO20",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0436cca001mXdLyVUAI6LuIn",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "tool-calls",
+      "tokens": {
+       "cache": {
+        "read": 1939,
+        "write": 0
+       },
+       "input": 43328,
+       "total": 45385,
+       "output": 118,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e0433fa2001AZxyCmeqoQUO20",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0437390001kzuBBbNzftB2T9",
+      "type": "step-start",
+      "messageID": "msg_0e0436ce4001dqpK3j9fhf4mrV",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0437394001bL7mu2B6AdYERE",
+      "text": "laneB-ok {{REDACTED}}，exitCode=0。",
+      "time": {
+       "end": 1790468912123,
+       "start": 1790468912020
+      },
+      "type": "text",
+      "messageID": "msg_0e0436ce4001dqpK3j9fhf4mrV",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04373fd0012OYt6hKiIcFXJw",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 45383,
+        "write": 0
+       },
+       "input": 108,
+       "total": 45507,
+       "output": 16,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e0436ce4001dqpK3j9fhf4mrV",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     }
+    ]
+   },
+   "mentions": [],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:28:23.047Z"
+  },
+  {
+   "id": "m_0000000172",
+   "channelId": "c_0000000017",
+   "senderType": "user",
+   "senderId": "u_seed_admin",
+   "senderInstanceId": null,
+   "content": {
+    "text": "再次调用 vteam MCP 工具 secret_command，参数固定为：taskId=\"t_0000000001\"，selfInstanceId=\"tmm_0000000002\"，command=\"ls /f3-laneb-missing/{{TOKEN}}\"，variables=[{\"name\":\"TOKEN\",\"label\":\"路径 Token\",\"secret\":true}]，reason=\"F3-LANE-B failure\"。secret 必须是布尔 true。不要输出任何其他文字。",
+    "parts": []
+   },
+   "mentions": [
+    {
+     "type": "agent",
+     "agentId": "a_project_manager"
+    }
+   ],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:34:16.650Z"
+  },
+  {
+   "id": "m_0000000173",
+   "channelId": "c_0000000017",
+   "senderType": "agent",
+   "senderId": "a_project_manager",
+   "senderInstanceId": "tmm_0000000002",
+   "content": {
+    "text": "status=failed, exitCode=2（No such file or directory）。",
+    "parts": [
+     {
+      "id": "prt_0e048c558001Xq1k7NY0TAVr4e",
+      "type": "step-start",
+      "messageID": "msg_0e048b74f001JpBrhq5HK5hZZY",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e048c560001XYIAoUFuMvNs6T",
+      "tool": "vteam_secret_command",
+      "type": "tool",
+      "state": {
+       "time": {
+        "end": 1790469297875,
+        "start": 1790469260931
+       },
+       "input": {
+        "reason": "F3-LANE-B failure",
+        "taskId": "t_0000000001",
+        "command": "ls /f3-laneb-missing/{{TOKEN}}",
+        "variables": [
+         {
+          "name": "TOKEN",
+          "label": "路径 Token"
+         }
+        ],
+        "selfInstanceId": "tmm_0000000002"
+       },
+       "title": "",
+       "output": "{\"command\":\"ls /f3-laneb-missing/{{TOKEN}}\",\"variables\":[{\"name\":\"TOKEN\",\"label\":\"路径 Token\",\"secret\":true,\"required\":true,\"provided\":true}],\"status\":\"failed\",\"exitCode\":2,\"signal\":null,\"timedOut\":false,\"durationMs\":39,\"stdout\":\"\",\"stderr\":\"ls: cannot access '/f3-laneb-missing/{{REDACTED}}': No such file or directory\\n\",\"stdoutTruncated\":false,\"stderrTruncated\":false}",
+       "status": "completed",
+       "metadata": {
+        "truncated": false
+       }
+      },
+      "callID": "call_function_d51jow83g3mw_1",
+      "messageID": "msg_0e048b74f001JpBrhq5HK5hZZY",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04956e6001niMVf2SrHEeSpR",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "tool-calls",
+      "tokens": {
+       "cache": {
+        "read": 45505,
+        "write": 0
+       },
+       "input": 152,
+       "total": 45778,
+       "output": 121,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e048b74f001JpBrhq5HK5hZZY",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0495d62001N0vckJBQBkwnnA",
+      "type": "step-start",
+      "messageID": "msg_0e0495709001mVGN7GTX2GHbGd",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0495d70001fR0hSNy7ecjE0S",
+      "text": "status=failed, exitCode=2（No such file or directory）。",
+      "time": {
+       "end": 1790469299988,
+       "start": 1790469299568
+      },
+      "type": "text",
+      "messageID": "msg_0e0495709001mVGN7GTX2GHbGd",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e0495f17001Oc6Sk7T21OVAc4",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 45776,
+        "write": 0
+       },
+       "input": 123,
+       "total": 45915,
+       "output": 16,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e0495709001mVGN7GTX2GHbGd",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     }
+    ]
+   },
+   "mentions": [],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:34:20.878Z"
+  },
+  {
+   "id": "m_0000000174",
+   "channelId": "c_0000000017",
+   "senderType": "user",
+   "senderId": "u_seed_admin",
+   "senderInstanceId": null,
+   "content": {
+    "text": "调用 vteam MCP 工具 secret_command，参数固定为：taskId=\"t_0000000001\"，selfInstanceId=\"tmm_0000000002\"，command=\"echo {{TOKEN}}\"，variables=[{\"name\":\"TOKEN\",\"label\":\"取消测试 Token\",\"secret\":true}]，reason=\"F3-LANE-B cancel\"。secret 必须是布尔 true。不要输出任何其他文字。",
+    "parts": []
+   },
+   "mentions": [
+    {
+     "type": "agent",
+     "agentId": "a_project_manager"
+    }
+   ],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:38:37.298Z"
+  },
+  {
+   "id": "m_0000000175",
+   "channelId": "c_0000000017",
+   "senderType": "agent",
+   "senderId": "a_project_manager",
+   "senderInstanceId": "tmm_0000000002",
+   "content": {
+    "text": "status=cancelled（provided=false）。",
+    "parts": [
+     {
+      "id": "prt_0e04cc0610019CwQo3gA0pzcpN",
+      "type": "step-start",
+      "messageID": "msg_0e04cb2c4001PKUVjqFKNj5db9",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04cc06d001BFCvFPos7hCO9C",
+      "tool": "vteam_secret_command",
+      "type": "tool",
+      "state": {
+       "time": {
+        "end": 1790469558362,
+        "start": 1790469521810
+       },
+       "input": {
+        "reason": "F3-LANE-B cancel",
+        "taskId": "t_0000000001",
+        "command": "echo {{TOKEN}}",
+        "variables": [
+         {
+          "name": "TOKEN",
+          "label": "取消测试 Token"
+         }
+        ],
+        "selfInstanceId": "tmm_0000000002"
+       },
+       "title": "",
+       "output": "{\"command\":\"echo {{TOKEN}}\",\"variables\":[{\"name\":\"TOKEN\",\"label\":\"取消测试 Token\",\"secret\":true,\"required\":true,\"provided\":false}],\"status\":\"cancelled\",\"exitCode\":null,\"signal\":null,\"timedOut\":false,\"durationMs\":0,\"stdout\":\"\",\"stderr\":\"\",\"stdoutTruncated\":false,\"stderrTruncated\":false}",
+       "status": "completed",
+       "metadata": {
+        "truncated": false
+       }
+      },
+      "callID": "call_function_9j757tborl4j_1",
+      "messageID": "msg_0e04cb2c4001PKUVjqFKNj5db9",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04d5071001UJh6WkS3Lfeqi0",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "tool-calls",
+      "tokens": {
+       "cache": {
+        "read": 45913,
+        "write": 0
+       },
+       "input": 144,
+       "total": 46171,
+       "output": 114,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e04cb2c4001PKUVjqFKNj5db9",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04d579b001yX0Lv9e3VVMIT2",
+      "type": "step-start",
+      "messageID": "msg_0e04d5098001SyDto3ZyGtn8f1",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04d57a2001kh5Jym4eH6haAd",
+      "text": "status=cancelled（provided=false）。",
+      "time": {
+       "end": 1790469560231,
+       "start": 1790469560227
+      },
+      "type": "text",
+      "messageID": "msg_0e04d5098001SyDto3ZyGtn8f1",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04d57ad001YsIS9iDfeEzfZw",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 46169,
+        "write": 0
+       },
+       "input": 93,
+       "total": 46270,
+       "output": 8,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e04d5098001SyDto3ZyGtn8f1",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     }
+    ]
+   },
+   "mentions": [],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:38:41.717Z"
+  },
+  {
+   "id": "m_0000000176",
+   "channelId": "c_0000000017",
+   "senderType": "user",
+   "senderId": "u_seed_admin",
+   "senderInstanceId": null,
+   "content": {
+    "text": "调用 vteam MCP 工具 secret_command，参数固定为：taskId=\"t_0000000001\"，selfInstanceId=\"tmm_0000000002\"，command=\"test -n \\\"{{TOKEN}}\\\" && sleep 30\"，variables=[{\"name\":\"TOKEN\",\"label\":\"超时测试 Token\",\"secret\":true}]，timeoutSec=1，reason=\"F3-LANE-B timeout\"。secret 必须是布尔 true。不要输出任何其他文字。",
+    "parts": []
+   },
+   "mentions": [
+    {
+     "type": "agent",
+     "agentId": "a_project_manager"
+    }
+   ],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:40:16.306Z"
+  },
+  {
+   "id": "m_0000000177",
+   "channelId": "c_0000000017",
+   "senderType": "agent",
+   "senderId": "a_project_manager",
+   "senderInstanceId": "tmm_0000000002",
+   "content": {
+    "text": "status=timeout, timedOut=true, durationMs=6028。",
+    "parts": [
+     {
+      "id": "prt_0e04e3c3500185Eip98Mqjox8w",
+      "type": "step-start",
+      "messageID": "msg_0e04e33eb001xjqX4JGLLJgLuO",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04e3c39001XVDMVLUx2bpKEp",
+      "tool": "vteam_secret_command",
+      "type": "tool",
+      "state": {
+       "time": {
+        "end": 1790469663540,
+        "start": 1790469619151
+       },
+       "input": {
+        "reason": "F3-LANE-B timeout",
+        "taskId": "t_0000000001",
+        "command": "test -n \"{{TOKEN}}\" && sleep 30",
+        "variables": [
+         {
+          "name": "TOKEN",
+          "label": "超时测试 Token"
+         }
+        ],
+        "timeoutSec": 1,
+        "selfInstanceId": "tmm_0000000002"
+       },
+       "title": "",
+       "output": "{\"command\":\"test -n \\\"{{TOKEN}}\\\" && sleep 30\",\"variables\":[{\"name\":\"TOKEN\",\"label\":\"超时测试 Token\",\"secret\":true,\"required\":true,\"provided\":true}],\"status\":\"timeout\",\"exitCode\":null,\"signal\":null,\"timedOut\":true,\"durationMs\":6028,\"stdout\":\"\",\"stderr\":\"\",\"stdoutTruncated\":false,\"stderrTruncated\":false}",
+       "status": "completed",
+       "metadata": {
+        "truncated": false
+       }
+      },
+      "callID": "call_function_5hwnza942f19_1",
+      "messageID": "msg_0e04e33eb001xjqX4JGLLJgLuO",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04eeb42001N08enhxRA7crno",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "tool-calls",
+      "tokens": {
+       "cache": {
+        "read": 46268,
+        "write": 0
+       },
+       "input": 157,
+       "total": 46556,
+       "output": 131,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e04e33eb001xjqX4JGLLJgLuO",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04ef242001Xmn4QM2qXP1xai",
+      "type": "step-start",
+      "messageID": "msg_0e04eeb6a001jggHd96HboH4FO",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04ef247001hPDzr5Z0E7qFYn",
+      "text": "status=timeout, timedOut=true, durationMs=6028。",
+      "time": {
+       "end": 1790469665516,
+       "start": 1790469665351
+      },
+      "type": "text",
+      "messageID": "msg_0e04eeb6a001jggHd96HboH4FO",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     },
+     {
+      "id": "prt_0e04ef2ef001eoAZz6bZccxxEd",
+      "cost": 0,
+      "type": "step-finish",
+      "reason": "stop",
+      "tokens": {
+       "cache": {
+        "read": 46554,
+        "write": 0
+       },
+       "input": 101,
+       "total": 46670,
+       "output": 15,
+       "reasoning": 0
+      },
+      "messageID": "msg_0e04eeb6a001jggHd96HboH4FO",
+      "sessionID": "ses_f2829acd3ffee1mfDDeSxL4X3l"
+     }
+    ]
+   },
+   "mentions": [],
+   "attachmentUrl": null,
+   "attachmentName": null,
+   "attachmentType": null,
+   "status": "sent",
+   "createdAt": "2026-09-27T00:40:19.221Z"
+  }
+ ]
+}

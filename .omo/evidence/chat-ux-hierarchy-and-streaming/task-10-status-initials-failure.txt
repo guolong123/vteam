@@ -1,0 +1,96 @@
+# task-10-status-initials-failure — B7/B8 红证据（失败先行）
+# chat-ux-hierarchy-and-streaming 复选框 10（B7 用户消息状态标记 + B8 成员人名缩写）
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:199-204（References / Acceptance / QA happy / QA failure）
+#      + :78-91 消息结构断言门 + Scope IN 第 8/9 条（B7/B8）+ 执行顺序 :121（Wave 2）
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 绿证据: 同目录 task-10-status-initials.txt
+# Commit: 1bef2e0635c3146772e2abc14e22a285a8428e86（已回填）
+
+======================================================================
+0. 结论（红）
+======================================================================
+按计划 QA failure 判据，实现前两条断言在真实 Chromium 里为红：
+  (1) "failed user 消息没有失败标记" → 实测 ChatBubble 没有 status prop：
+      status=failed 的 user 气泡下 chat-bubble-status 计数 0（sending/sent 同样 0）。
+  (2) "同角色不同成员仍都显示同一个字母" → 实测 MsgParts 不接收 initials：
+      张伟/李静/Alice/Aaron 四个 developer 头像文本全部是角色字母 "D"。
+  (3) "头像/状态标记改变正文布局" → 因标记根本不存在，几何断言（标记可见 + 位于气泡外）
+      在 toBeVisible() 处即红。
+第 (4)(5) 两条（缺省/其它状态不渲染标记、无名字回落角色字母）在实现前即绿——
+它们是护栏断言：锁定「不该出现的不出现」与「既有回落行为不回退」，实现后必须继续绿。
+
+红跑退出码 1；5 failed / 14 passed（12 条既有 A1–A4/B1/B6 门全绿）。
+
+======================================================================
+1. 红跑构造（先写测试，实现严格在红之后）
+======================================================================
+步骤与顺序（两条红各对应各自的实现缺口）：
+  1) 写 web/lib/message-initials.spec.ts（7 例）→ 立刻跑 → 红①：
+     模块不存在（Cannot find module './message-initials'）。
+  2) 写 web/e2e/chat-density.spec.ts 的 B7/B8 7 条测试 + 6 个 fixture kind
+     （此时 ChatBubble 仍无 status/initials、MsgParts 仍无 initials）。
+  3) 落 web/lib/message-initials.ts（纯函数，B8 的生成规则）——只为了让测试缝能打包，
+     **组件一行未改**；随后跑 chat-density → 红②（断言级红，见 §2）。
+  4) 最后才改 chat-bubble.tsx / msg-parts.tsx / session page.tsx → 绿。
+为什么分两段红：chat-density 的 HARNESS_SOURCE 用 esbuild-wasm 静态 import 生产组件与
+lib/message-initials；若连模块都没有，整份 harness 打包失败，红点会退化成「构建错误」而非
+「行为断言」。先落纯函数、后改组件，可以让 B7/B8 的**行为断言**在改动前逐条见红，
+同时 lib spec 自己的红（模块缺失）已经先行记录。两段红都不含任何产品组件改动。
+
+诚实说明（测试文本的一处笔误修正）：
+  lib spec 初稿把 messageInitials("aaron") 期望写成 "AR"（实为 a,a → "AA"），
+  在模块落地后的首轮 lib 跑里由 1 failed 暴露，按既定规则「前两个字母大写」改为 "AA"；
+  这是测试作者算术笔误，不涉及放宽任何 B7/B8 判据（distinctness 用 Alice/Aaron → AL/AA 仍然成立）。
+  修正后 lib 7/7 绿，此后 lib 测试文本不再变动。
+
+======================================================================
+2. 红命令与退出码
+======================================================================
+环境：export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"（node v24.14.0 / npm 11.9.0）
+
+RED①（纯函数模块缺失，实现前）
+  $ cd web && npx playwright test lib/message-initials.spec.ts --project=lib-unit --reporter=list
+    → RED_LIB_EXIT=1
+    日志: task-10-red-lib.log（939 B）
+    原文: Error: Cannot find module './message-initials'
+          Require stack: web/lib/message-initials.spec.ts:2
+
+RED②（组件未实现，message-initials 已存在，断言级红）
+  $ cd web && npx playwright test chat-density.spec.ts --project=chat-density --reporter=list
+    → RED_E2E_EXIT=1；5 failed / 14 passed（14901 B）
+    日志: task-10-red-e2e.log
+    失败明细（最终测试文本，与绿跑逐条对应）：
+      ✘ 13 B7 状态矩阵：sending/sent/failed 各渲染 1 个 chat-bubble-status
+           → expect(locator).toHaveCount(1) failed（Expected: 1 / Received: 0）
+      ✘ 15 B7 不遮挡正文：…几何与无状态时逐像素一致
+           → Error: expect(locator).toBeVisible() failed（标记不存在，几何无从测量）
+      ✘ 16 B8 同角色两名成员（CJK 名）：头像缩写互不相同（张/李）
+           → expect(locator).toHaveText("张") failed（Received: "D"）
+      ✘ 17 B8 同角色两名成员（拉丁名）：AL/AA
+           → expect(locator).toHaveText("AL") failed（Received: "D"）
+      ✘ 19 B8 ChatBubble 接受可选 initials：显式缩写优先
+           → expect(locator).toHaveText("ZZ") failed（Received: "D"）
+      ✓ 14 B7 缺省状态与其它状态不渲染标记（护栏，实现前即绿）
+      ✓ 18 B8 解析不到名字回落角色字母 + DOM 无裸 id + agent 消息无状态标记（护栏，实现前即绿）
+      ✓ 1–12 A1 正文 900/800、A2 tool 字符串+JSON 2000、A3 thinking 200/2000、
+           A4 三级字号 + 全局档位守门、B1 身份栏单实例、B6 未知 part 四条
+           → 同一轮红跑里全部绿，证明本 todo 没有靠改既有断言换红点
+
+======================================================================
+3. 红态 DOM 原样（失败断言的实测值）
+======================================================================
+status=failed 的 user 气泡：
+  [data-testid="chat-bubble-status"] 计数 = 0
+  气泡结构仍为 chat-bubble[data-type=user] > div(列) > div(气泡体) > chat-bubble-content
+agent 头像（author=张伟/李静/Alice/Aaron，role=developer）：
+  agent-avatar ×4，textContent 逐个 = "D"（AgentAvatar 的 initials ?? 角色字母 回落路径）
+  chat-bubble-author 可见文本已正确显示 张伟/李静/Alice/Aaron（B5 身份解析不受影响）
+  → 即「名字显示对了，但头像还是撞成同一个角色字母」= 计划 QA failure 的第 (2) 条。
+
+======================================================================
+4. 未做与边界（红态即已成立）
+======================================================================
+- 未触碰 tokens.ts / globals.css / use-sse.ts / worker / server / 移动端 CSS /
+  playwright.config.ts / pages.spec.ts / plan / boulder / registry。
+- 红跑不涉及 docker 构建（服务端 web 是 compose standalone 构建，见绿证据 §8 bundle 溯源）；
+  红态断言全部由自包含测试缝（esbuild-wasm + 真实 Chromium）给出，与 bundle 无关。

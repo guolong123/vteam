@@ -2,7 +2,7 @@
 """方案1闭环：临时把 compose worker 的 SERVER_URL 切到本地 EventsServer，
 execute_and_wait 收 task.completed，结束后恢复 compose 并重建 worker。
 
-前置：Docker 已跑 aiagents-compose-{server,worker}，.env 中 WORKER_TOKEN 一致。
+前置：Docker 已跑 vteam-compose-{server,worker}，.env 中 WORKER_TOKEN 一致。
 中断说明：会 recreate worker 容器，原在途任务丢失（卷数据保留）。
 """
 
@@ -31,7 +31,7 @@ DISK_WAIT_S = 30
 WORK_DIR = "/data/vteam-worker"
 COMPOSE = ROOT / "docker-compose.yml"
 COMPOSE_BAK = ROOT / "docker-compose.yml.e2e-bak"
-WORKER_NAME = "aiagents-compose-worker"
+WORKER_NAME = "vteam-compose-worker"
 
 # 资源 fixture：对齐 injector.ts SkillRecord/ToolRecord/McpServerRecord/AgentPolicyDefinition
 # tool 需 execution + schema.x-execution 才会落盘；agent permission 禁止 write 键

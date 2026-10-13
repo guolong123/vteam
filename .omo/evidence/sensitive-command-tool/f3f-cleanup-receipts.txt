@@ -1,0 +1,63 @@
+=== F3 FINAL cleanup receipts ===
+2026-09-27T03:45:54Z
+ERROR 1054 (42S22) at line 5: Unknown column 'message_id' in 'where clause'
++--------------+
+| msgs_c17_pre |
++--------------+
+|           70 |
++--------------+
++-------+
+| q_pre |
++-------+
+|     8 |
++-------+
++--------------+
+| receipts_pre |
++--------------+
+|            0 |
++--------------+
+[action] delete my messages m_0000000205..m_0000000218 (window 03:36-03:42Z, sender user/agent, all mine)
+ERROR 1054 (42S22) at line 3: Unknown column 'message_id' in 'where clause'
+[action] delete my agent_questions aq_0000000002..aq_0000000008 (reason F3-FINAL%)
+ERROR 1054 (42S22) at line 8: Unknown column 'message_id' in 'where clause'
++---------------+
+| msgs_c17_post |
++---------------+
+|            70 |
++---------------+
++--------------+
+| max_msg      |
++--------------+
+| m_0000000218 |
++--------------+
++--------+
+| q_post |
++--------+
+|      1 |
++--------+
++---------------+-------------------------+----------+
+| id            | request_id              | status   |
++---------------+-------------------------+----------+
+| aq_0000000001 | que_platform_0000000001 | rejected |
++---------------+-------------------------+----------+
++---------+
+| pending |
++---------+
+|       0 |
++---------+
++---------------+
+| receipts_post |
++---------------+
+|             0 |
++---------------+
+[retry] pre-state
+70
+0
+[action] delete message_receipts for m_0000000205..218
+[action] delete messages m_0000000205..218 in c_0000000017
+[post]
+56
+m_0000000204
+0
+1
+0

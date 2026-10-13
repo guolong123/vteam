@@ -1,0 +1,13 @@
+[action] restart worker to clear 2 defunct [sleep] zombies from my timeout runs
+2026-09-27T03:47:09Z
+aiagents-compose-worker
+t+2s status=running
+[post] worker process table:
+    PID    PPID ELAPSED COMMAND
+      1       0      14 node dist/index.js
+     51       1      13 opencode serve --port 4000 --hostname 0.0.0.0 --print-logs
+    141       0       0 sh -c ps -eo pid,ppid,etimes,args | sed -n "1,12p"
+    146     141       0 ps -eo pid,ppid,etimes,args
+    147     141       0 sed -n 1,12p
+[post] defunct count:
+2

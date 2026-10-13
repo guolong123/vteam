@@ -1,0 +1,30 @@
+      46 |
+    > 47 | const sql = () => fs.readFileSync(MIGRATION, 'utf8');
+         |                      ^
+      48 | const baselineSql = () => fs.readFileSync(BASELINE_MIGRATION, 'utf8');
+      49 | const schema = () => fs.readFileSync(SCHEMA, 'utf8');
+      50 |
+
+      at sql (prisma/task-long-running.migration.spec.ts:47:22)
+      at Object.<anonymous> (prisma/task-long-running.migration.spec.ts:120:12)
+
+  ● migration 20261001000000_task_long_running › 不删列（删列不可逆，且本仓库无 down-migration 约定）
+
+    ENOENT: no such file or directory, open '/Volumes/SSD-Data/01work/git-project/vteam/server/prisma/migrations/20261001000000_task_long_running/migration.sql'
+
+      45 | const SCHEMA = path.resolve(__dirname, '..', '..', 'prisma', 'schema.prisma');
+      46 |
+    > 47 | const sql = () => fs.readFileSync(MIGRATION, 'utf8');
+         |                      ^
+      48 | const baselineSql = () => fs.readFileSync(BASELINE_MIGRATION, 'utf8');
+      49 | const schema = () => fs.readFileSync(SCHEMA, 'utf8');
+      50 |
+
+      at sql (prisma/task-long-running.migration.spec.ts:47:22)
+      at Object.<anonymous> (prisma/task-long-running.migration.spec.ts:134:15)
+
+Test Suites: 1 failed, 1 total
+Tests:       6 failed, 6 total
+Snapshots:   0 total
+Time:        2.632 s
+Ran all test suites matching /src\/prisma\/task-long-running.migration.spec.ts/i.

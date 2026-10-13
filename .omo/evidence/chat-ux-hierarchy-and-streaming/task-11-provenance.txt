@@ -1,0 +1,15 @@
+## bundle / server provenance
+date_utc=2026-09-25T20:30:08Z
+playwright baseURL (playwright.config.ts): 6: * - baseURL：http://localhost:3001（web dev server，假定已运行；不配置 webServer 自启）
+30:    baseURL: "http://localhost:3001",
+listener on :3001 -> node    94825  mac   12u  IPv4 0xf5ede08efcef94f1      0t0  TCP 127.0.0.1:3001 (LISTEN)
+next version installed:   "version": "15.5.22",
+compose web (:13001) and api (:13000) served by: OrbStack  1500  mac  123u  IPv6  0x582c8d588a1e779      0t0  TCP *:13001 (LISTEN)
+docker cli: lrwxr-xr-x  1 root  wheel  53 Apr 23  2025 /usr/local/bin/docker -> /Applications/OrbStack.app/Contents/MacOS/xbin/docker
+compose web image rebuilt this run: NO — no E2E assertion targets :13001 (all runs use baseURL localhost:3001 dev server, hot-reloads tokens.ts); `next build` deliberately NOT run (must not race shared dev server)
+next dev pid cwd: /Volumes/SSD-Data/01work/git-project/vteam
+phase5 playwright.json sha BEFORE run: 45a51f4d5d77f371b3f55cd48dd3187b021bd2dc  ../.omo/evidence/phase5-t9-playwright.json
+phase5 playwright.json sha AFTER runs: 2990ec2a917197be818a475fd6ec166d5734205f  .omo/evidence/phase5-t9-playwright.json
+
+=== independent verifier hygiene note ===
+Acceptance-critical role mapping/computed evidence is independently confirmed. Non-blocking documentation issues: the deps-inclusive 35-test count lacks a surviving raw log because the JSON reporter overwrites; task-11-provenance.txt has a stale pre-rebuild "rebuilt: NO" line; a gitignored web/test-results/.last-run.json remained. No product defect.

@@ -1,0 +1,425 @@
+F3 — Playwright 全量 + 视觉/行为验收 (chat-ux-hierarchy-and-streaming)
+===============================================================
+date:            2026-09-26 08:52–09:40 CST (Asia/Shanghai)
+repo:            /Volumes/SSD-Data/01work/git-project/vteam
+plan row F3:     "在 localhost:3001 活栈上运行 `cd web && npx playwright test` → 不低于基线 125/125；
+                 重点检查长消息、同 sender 分组、跨天日期、system/error/aborted、用户状态、
+                 头像缩写、当前/非当前频道滚动"
+plan evidence:   .omo/evidence/chat-ux-hierarchy-and-streaming/final-f3-playwright.txt (本文件)
+executor:        F3 verifier (visual-engineering 类别)；未运行 F4 人工验收、未运行 F5 范围审计
+read-before-run: plan F3/F1–F5 行 + §Verification strategy（测试策略与可运行门、B1/B2 结构门、
+                 C0 门、环境与脏工作树约束）+ 全部 implementation evidence 尾部结论
+                 （c0, task-2..12,14, final-f1, final-f2, task-11-provenance, task-12-bundle-provenance）
+HEAD (run 时):   b27f4c706304a4b791fa2b6cdb5d90f9347d803a  feat(chat): 统一低优先级折叠并保持错误中断可见
+                 （提交链含 B10 9fcbf85、B7/B8 1bef2e0、B11 b27f4c7 —— 与计划 Context 一致）
+
+-- VERDICT (先给结论) --------------------------------------------------------
+AdversarialVerify verdict: **F3 PASS**（附 1 次环境型 run1 失败，已按字面如实分类，未隐藏）
+confidence: 高（87%→结论由三重证据支撑：字面测试输出 / 真实 Chrome DOM 测量 / 活栈探针）
+litmus:
+  · 全量套件 run2: 209/209 passed, 0 failed, 0 skipped, 0 flaky, exit code 0, 8.0m
+    → 高于计划基线 125/125（209>125；非 57 项 page 子集）
+  · run1（PATH 缺 docker）: 181 passed / 3 failed / 25 did not run, exit 1, 6.6m —— 原文保留见 §4
+  · 服务包 provenance: 重建前 STALE → 重建后 B11/B7/B10 三标记在容器内、HTTP 下发字节、
+    浏览器已加载脚本三处全部命中 → 绝未"静默测旧码"
+  · 12 项重点行为: 每项 = 套件内已执行断言 + 本次 ad-hoc 真实 Chrome DOM/视觉取证（§6）
+  · console: 活栈 0 error/0 pageerror/0 失败请求；mock 页 4×404 已定位为夹具合成任务 id 的
+    fallback 回源（非产品异常、活栈无此 404）（§7）
+不满足则 FAIL 的红线自检: 未触碰产品/测试/配置/计划/boulder/registry；未 checkout/restore；
+未跑 npm run lint/--fix；未把 57 子集当基线；未执行 F4/F5 → 全部满足。
+
+===============================================================================
+1. 运行前置：活栈确认
+===============================================================================
+$ lsof -nP -iTCP:3001 -sTCP:LISTEN
+  node 94825 ... TCP 127.0.0.1:3001 (LISTEN)
+  → 进程 = $TMPDIR/opencode/pw-bridge/bridge.js（"Throwaway TCP forwarder:
+    127.0.0.1:3001 -> 127.0.0.1:13001 ... Repo files are NOT modified"）
+    即 playwright.config.ts:30 硬编码的 baseURL :3001 只是转发到 compose 侧 web standalone :13001。
+$ curl -sS -o /dev/null -w "%{http_code}" http://localhost:3001/  → 200 (0.0065s)
+$ /usr/local/bin/docker compose ps   （F3 全程前后各取一次）
+  db     Up 21h (healthy) / server Up 15h (healthy) / worker Up 15h / web 见 §2
+  → :3001 在监听；后端 server/worker/db 全程未重启（见 §8 shared-runtime）。
+
+注意：本会话 shell 默认 PATH=/usr/bin:/bin:/usr/sbin:/sbin（无 docker、无 node）。
+node/npx 经 nvm 加载（v24.14.0，与 F2 attempt 2 相同），docker 用全路径 /usr/local/bin/docker
+或临时 export PATH="/usr/local/bin:$PATH"。该 PATH 缺口导致了 run1 的 3 个失败（§4）。
+
+===============================================================================
+2. 服务包 provenance：先证明新鲜，再开测
+===============================================================================
+2.1 判定 STALE（重建前事实，2026-09-26 08:56:38 +0800）
+  $ /usr/local/bin/docker inspect aiagents-web:latest --format '{{.Created}}'
+    2026-09-26T04:36:12.195672378+08:00      ← 镜像构建时刻
+  $ git log（commit 时刻）
+    b27f4c7 (B11) 2026-09-26T08:24:42+08:00
+    1bef2e0 (B7/B8) 2026-09-26T07:53:12+08:00
+    9fcbf85 (B10) 2026-09-26T04:43:24+08:00
+    129b761 (B6) 2026-09-26T04:23:28+08:00
+  → 镜像(04:36) ⊂ B6 之后、B10 之前 → 缺 B10/B7/B11 = STALE。
+  辅证（重建前下载 /login 页 11 个 chunk，539,145 bytes）：
+    grep "收起详情"     → 0 命中（B11 唯一标记）
+    grep "chat-bubble-status" → 0 命中（B7 唯一标记）
+  与既有 task-12-bundle-provenance.txt（08:20 采样 SERVED_BUNDLE_CONTAINS_B11=FALSE）一致。
+  → 明确记录：不静默测旧码，触发计划允许的重建。
+
+2.2 标记选取（先做唯一性校验，避免弱标记误判）
+  弱标记（弃用，已证实重建前就能命中）:
+    "发送中…"  → 1bef2e0^ 的 message-input.tsx:518 已存在（不唯一）
+    "var(--color-role-" → 9fcbf85^ 的 AgentRolesTab.tsx 已存在（不唯一）
+  选用的唯一标记（均以 git grep 在对应 commit^ 上验证 ABSENT）:
+    B11 (b27f4c7): 字符串 "收起详情"                    → git grep b27f4c7^ → 无命中
+    B7  (1bef2e0): testid "chat-bubble-status"           → git grep 1bef2e0^ → 无命中
+    B10 (9fcbf85): 正则 /产品经理.{0,60}var\(--color-role/（tokens.ts 的 label+var() 相邻）
+                                                     → git grep -q 9fcbf85^ → ABSENT
+    对照 A1: "收起 ▲"；对照 B6: "未知片段"
+
+2.3 重建（记录原始命令与 ID）
+  $ /usr/local/bin/docker compose build web        # = docker compose build web
+    exit 0, 54.75s, log: $TMPDIR/opencode/f3/build.log（scratch，未入仓库）
+    日志关键行: #18 0.243 > next build / ✓ Compiled successfully in 17.0s /
+                ✓ Generating static pages (30/30) / exporting image
+    旧镜像: sha256:1c7f70f2f64f27d74a4ba9855157f9e8554767310f88bc3130f142fd83646b68 (04:36:12)
+    新镜像: sha256:c0066ebadb77a4ff0341235d911c74a029ef0e616de65c5f3fb5561dd5eda9bb
+  $ /usr/local/bin/docker compose up -d web
+    exit 0（输出：init → Exited；server → Waiting→Healthy（仅健康等待，未重启）；web → Started）
+    旧容器: 4e9f19289b0468ff999402b82ab6536f716d011f467d6a52de43de6d6edc07f7
+    新容器: aiagents-compose-web = ee001a5211608092d310bcb03d2e1015ddca5edcecf8a40a21f10211587513d2
+            image=sha256:c006ebadb77a...（同上） started=2026-09-26T00:57:47Z(=08:57:47+08) health=healthy
+  git status 前后对照：web/ 下无任何 tracked 改动（git status -- web/ → 空）→ 构建源 = HEAD 工作树。
+
+2.4 三重"服务包含 B11/B7/B10"证明（全部在测试开始前完成）
+  (a) 容器内被服务文件（standalone/.next/static 就是 HTTP 下发的那套字节）:
+    $ docker exec aiagents-compose-web sh -c "grep -rl '收起详情' .next/static"
+      .next/static/chunks/4493-75740678d043e21e.js
+      .next/static/chunks/app/(main)/teams/[id]/session/page-762a0d5dca4e67f0.js
+    grep 'chat-bubble-status' → chunks/4493-75740678d043e21e.js
+    grep -El '产品经理.{0,60}var\(--color-role' → chunks/3044-f55ca4ab50eb5605.js, chunks/4493-..., system/layout-...
+  (b) 经 :3001 的 HTTP 字节（curl，均 HTTP 200）:
+    curl http://localhost:3001/_next/static/chunks/4493-75740678d043e21e.js   (34,819 bytes)
+    curl http://localhost:3001/_next/static/chunks/3044-f55ca4ab50eb5605.js    (8,035 bytes)
+    下载字节 grep: 收起详情→1 文件命中；chat-bubble-status→1；/产品经理.{0,60}var\(--color-role/→2
+    （session/page chunk 因 URL 含 [] 被 curl glob 拒绝一次，改由 (a)(c) 覆盖，属工具语法非服务问题）
+  (c) 真实浏览器已加载脚本扫描（登录后 /teams/tm_0000000001/session，performance 资源表）:
+    scannedScripts=25, scannedBytes=1,542,743
+    B11_收起详情=2  B7_chat_bubble_status=1  B10_label_var=2  A1_收起箭头=1  B6_未知片段=1
+    → SERVED_BUNDLE_FRESH = TRUE（B11/B7/B10 全部 >0）
+  → 后续一切测试/观察均打在含全部实现提交的新包上。
+
+===============================================================================
+3. 测试命令（逐字）
+===============================================================================
+环境:
+  export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"     # node v24.14.0, npx 可用
+  run2 额外: export PATH="/usr/local/bin:$PATH"        # 使 docker 可被 e2e 内 execFileSync 找到
+命令（仓库既有 config，未新建 runner、未改配置）:
+  cd /Volumes/SSD-Data/01work/git-project/vteam/web && npx playwright test
+配置事实（只读核对，git status web/ 无改动）:
+  web/playwright.config.ts: testDir ./e2e, workers 1, fullyParallel false, retries 0,
+  reporter [list] + [json → ../.omo/evidence/phase5-t9-playwright.json],
+  channel "chrome"（系统真实 Chrome）, baseURL http://localhost:3001, 无 webServer 自启。
+  项目选择 = 默认全量 15 个项目（未用 --grep/-g/--project 过滤）:
+  setup, lib-unit, chat-density, login, pages, docs, team-users, perf, guard, self-login,
+  engine-dependent, mock-api, mcp-status, session-unification（+ auth.setup 计入 setup）。
+
+===============================================================================
+4. 两次运行的字面结果（run1 不隐藏）
+===============================================================================
+--- RUN 1（默认 shell PATH，无 /usr/local/bin）---
+command: 同上 §3（环境差：PATH 缺 docker）
+PW_EXIT=1   duration 6.6m   Running 209 tests using 1 worker
+  181 passed
+    3 failed
+  25 did not run
+  0 flaky（retries=0，无 flaky 段）
+失败三项（原文）:
+  1) [docs] docs-unified.spec.ts:339 › 选择器 + 树：任务预填 + 自家 10 行
+  2) [self-login] native-rule-editor.spec.ts:399 › 7. 未知 effect 原样保留（不归一化）
+  3) [self-login] task-permission-editable.spec.ts:314 › 3. 控件仅暴露三档合法值…
+三项错误完全同源:
+  Error: spawnSync docker ENOENT
+    at providePrototypeFixture (web/e2e/docs-unified.spec.ts:109:15)
+    at injectUnknownEffect (web/e2e/native-rule-editor.spec.ts:151:15)
+    at injectTaskValue (web/e2e/task-permission-editable.spec.ts:155:15)
+  → 三个 spec 都用 execFileSync("docker", ...) 往 db 容器/上传夹具；默认 PATH 无 docker。
+分类: **环境/PATH 前置条件（确定性、非 flaky、非产品缺陷、非本计划改动引起）**。
+  证据链: (i) 错误发生在测试 helper 的进程 spawn 层，非断言；(ii) 同类问题在 F2 已有先例
+  （final-f2-gate.txt attempt1 = npx not found，PATH 加载后同命令全绿）；(iii) run2 只改 PATH、
+  同一命令同一工作树 → 三项全过；(iv) 三项所测功能（docs 原型、glob 规则、task 权限）
+  与本计划 chat UX 改动零交集。25 did not run = docs 17（同文件首项失败后的 skip 状态，JSON
+  status=skipped）+ engine-dependent 8（项目依赖 self-login，依赖失败即整组跳过）。
+  → 该 run 不作为验收依据，但按字面完整记录；未做任何 --grep 缩小来"制造"绿。
+
+--- RUN 2（唯一验收 run：PATH 补 /usr/local/bin 后重发同一条命令）---
+command: cd web && npx playwright test   （环境: nvm v24.14.0 + PATH 含 /usr/local/bin）
+PW_EXIT=0   duration 8.0m   Running 209 tests using 1 worker
+  **209 passed**   0 failed   0 skipped   0 flaky（retries=0，无重跑）
+日志: $TMPDIR/opencode/f3/pw-full-run2.log（scratch）尾部原文:
+  Running 209 tests using 1 worker
+  209 passed (8.0m)
+JSON 报告解析（python3，非人眼）: .omo/evidence/phase5-t9-playwright.json
+  total=209, statuses={'expected': 209}（0 unexpected / 0 skipped / 0 flaky）
+分项目 passed（逐行 ✓ 计数，和=209）:
+  setup 1 | lib-unit 37 | chat-density 26 | login 6 | pages 29 | docs 18 | team-users 1 |
+  perf 3 | guard 9 | self-login 33 | engine-dependent 8 | mock-api 10 | mcp-status 1 |
+  session-unification 27
+基线判定: 计划基线 125/125（plan Success criteria 1 与 registry 字面 "125/125，退出码 0"）。
+  本次 209/209 ≥ 125/125 且为**全量套件**（15 项目全跑，非 57 项 page 子集）→ 满足。
+
+shasum 前后（JSON reporter 必然重写，计划只要求记录、禁止 checkout 恢复）:
+  BEFORE（run1 前）: d3bb5c10fbd79d93a02a1ea3fd08738135ca869e  .omo/evidence/phase5-t9-playwright.json
+  中间（run1 后/ run2 前）: 6aa55483774549f26e0e9ad04f95fbd111fc3bdb（也记录在
+    $TMPDIR/opencode/f3/report-hash-run2-before.txt）
+  AFTER（全部结束后）: ae338740705f9ab751c8f4dcfec6d112f04b6649
+  → 仅 reporter 重写；未使用 git checkout/restore/reset/stash（git diff --cached 全程为空）。
+
+===============================================================================
+5. ad-hoc 视觉/行为观察方法（真实 Chrome，非源码推断）
+===============================================================================
+脚本: 一次性 $TMPDIR/opencode/f3/f3-observe.cjs（CommonJS，require web/node_modules/@playwright/test，
+      chromium channel="chrome" headless，viewport 1440×900）—— 运行结束已删除（§9 回执）。
+结构（两段）:
+  CTX-1 真实活栈（零 mock、零 SSE 注入）: storageState web/.auth/user.json（run2 setup 刚刷新）→
+    goto /teams/tm_0000000001/session → 截图 f3-01 + console 采集 + 已加载脚本 provenance 扫描。
+  CTX-2 富夹具（镜像 session-unification harness 的 page.route 拦截 + EventSource 桩，
+    渲染的仍是被测真实生产包）:
+    · group 频道夹具 11 条: system 行、同 sender×3(≤5min)、换 sender、user sending/sent/failed、
+      跨天(9-20→9-21) 同/异 sender；两名同为 developer 的成员 张伟/李静（测缩写）。
+    · DM 夹具: reasoning(2000+"ZZMARKTHINK"×20) + tool(input/output 各 2000+"ZZMARKTOOL"×200)
+      + 1200 字符正文（>800）同条消息；patch 未知 part；quota/failed 两个超 200 字符 error；
+      超 200 字符 aborted；40 条可滚动历史 + m_delta_live。
+    · SSE 档: __sseEmit 注入 message.part.delta 帧做滚动门控观测。
+    · 主题: 页面自身 theme-toggle → theme-option-light/dark（与真实用户同源，非手改 class）。
+  伴随探针（同一脚本 F3_MODE=scrollprobe + anchor 版）: 滚动状态的时间序列采样 +
+    elementFromPoint 锚点（截图瞬间的客观视口内容）。
+产物: f3-observe.json（全部测量原始值）+ f3-01..f3-16 共 16 张截图（manifest 见 §10）。
+
+===============================================================================
+6. 12 项重点行为逐项判定（套件已执行断言 × 本次 DOM/视觉取证）
+===============================================================================
+① 长正文 10 行 clamp/展开 toggle
+  套件: [chat-density] ✓#39 "A1 正文 900 字符：toggle 存在，折叠态 10 行 clamp/16em（行高 1.6
+        几何一致），展开后清除"（真 Chrome，esbuild-wasm 现场打包 HEAD 源码）
+  ad-hoc DOM（DM 夹具 1200 字符正文，生产包）:
+        collapsed: webkitLineClamp="10", maxHeight=224px(=16em×14px), contentHeight=224,
+                   fullTextLen=1200（全文在 DOM）, toggle 存在 aria-expanded=false 文案"展开 ▼"
+        expanded:  lineClamp="none", maxHeight="none", contentHeight=716.5, aria-expanded=true,
+                   文案"收起 ▲"
+  → PASS（DOM 测量 + 截图 f3-04）
+
+② tool I/O 2000 字符封顶
+  套件: ✓#41 "A2 字符串路径 3000：折叠与展开都只放前 2000 字符进 DOM"、✓#42 "A2 JSON 路径 3000：
+        序列化后同样 2000 封顶，2001+ 不进 DOM"
+  ad-hoc: collapsed msg-tool textLen=2020（≤2000 IO + 结构文字）; expanded msg-tool-io innerLen=4007
+        （input 2000 + output 2000 + 换行/结构）; **"ZZMARKTOOL"（第 2001+ 字符）在 msg-tool HTML
+        与整个 chat-message-list innerHTML 中均 0 命中**（折叠/展开两态都测）
+  → PASS
+
+③ thinking 200 / 2000
+  套件: ✓#43 "A3 thinking 3000 字符：折叠摘录恰好 200，展开恰好完整 2000，2001+ 不进 DOM"
+  ad-hoc: collapsed excerptLen=200（"理"×200）、aria-expanded=false、data-state=done；
+        expanded aria-expanded=true、textLen=2209（detail 2000 + excerpt 200 + 结构）、
+        "ZZMARKTHINK" 在 msg-thinking innerHTML **与 title 属性**均 0 命中
+  → PASS
+
+④ reasoning+tool+text 单条消息身份只出现一次
+  套件: ✓#46 "B1 共享身份栏：reasoning+tool+text 单条 agent 消息只渲染一次头像/作者/时间"
+  ad-hoc 行级计数（DM d1 行，包含三类 part）: message-identity=1, agent-avatar=1,
+        chat-bubble-author=1, chat-bubble-time=1; avatars=["张"], authors=["张伟· 开发者"],
+        times=["· 14:00"]; 行内无裸 a_/tmm_/ta_ id
+  → PASS
+
+⑤ 同 sender 分组 + 跨天日期分隔
+  套件: [session-unification] ✓#194 分组矩阵（同 sender 连续复用，边界/跨日/空 senderId/缺
+        createdAt 全部独立）、✓#195 user/system 相邻独立、✓#196 分组态仍渲染过程 testid；
+        ✓#197 单日零分隔、✓#198 跨天恰一条分隔落交界、✓#199 多次跨天逐次插入、
+        ✓#200/#201 缺 createdAt 不崩溃/不造假分隔
+  ad-hoc 行计数（11 条夹具逐条）:
+        g1 首条 identity1 → g2 identity0 → g3 identity0（同 sender≤5min 复用）
+        g4 换 sender identity1 → g5 identity0
+        g6 跨天(9-21)后同 sender identity1（跨日不折叠）→ g7 换 sender identity1
+        system/user 行 identity0；全部 rawIdInVisibleText=false
+        separators = [{dateKey:"2026-09-21", label:"2026/09/21"}]（恰一条、落在交界；9-20 首条不插）
+  → PASS（截图 f3-02/f3-03 含分隔条实拍）
+
+⑥ system 低噪行 + 时间
+  套件: ✓#202 "system 行独立低对比居中容器，与 14px 正文非颜色区隔"、✓#200/#199、
+        [B12] ✓#207-209 "transient session-status 容器"、"system 消息 time 在 pill 内以元信息
+        样式渲染（fontSize 11px/display block）"、"loading/error 起落清理不变"
+  ad-hoc: system 行 DOM: text="张伟 加入了频道\n09:58"（时间在行内）, time 元素计数=1,
+        容器=list 直接子级的独立 pill（chat-bubble[data-type=system]），正文 content=14px、
+        system pill=16px 容器 + 11px 时间（与正文非同字号/非同容器）
+  → PASS（截图 f3-02/f3-03 顶部区域外的行级取证 + 套件断言）
+
+⑦ 未知 part 默认收起 / 可展开
+  套件: [chat-density] ✓#58 "B11 低优先级默认收起：thinking/tool/unknown/长附件初始收起且可展开"
+        + chat-density 内 B6 未知 part 断言（msg-unknown-part/data-part-type/展开摘要 ≤400）
+  ad-hoc: collapsed: msg-unknown-part 存在, data-part-type="patch", 按钮 aria-expanded=false,
+        summary 节点不存在, 可见文本 "⋯ 未知片段 · patch 点击展开 ▸"
+        expanded: aria-expanded=true, msg-unknown-part-summary 存在且含
+        {"type":"patch","path":"src/app/page.tsx","diff":"XXXX...（JSON 摘要有界）
+  → PASS（截图 f3-05 / f3-06）
+
+⑧ error / aborted 标题·摘要·动作恒可见（默认展开策略）
+  套件: ✓#59 "B11 高优先级不折叠：正文/流式正文/system 长内容全文在 DOM 且元素可见"、
+        ✓#62 "短 error/短 aborted 无开关且内容原样可见"、✓#63 "折叠矩阵快照：八类内容初始态
+        与展开态逐行落盘"
+  ad-hoc（detail 均 >200 触发 overlong 分支）:
+        quota error: kind=quota, 标题=headChars(60)+"…", msg-error-detail-toggle aria-expanded=true
+          （默认展开）, msg-error-detail 可见 len=630, 动作控件 msg-error-action 存在
+          aria-label="查看升级方案", 状态行 "insufficient_quota · 不可重试" 可见
+        failed error: detail 可见 len=630, toggle aria-expanded=true, 状态行"执行失败…"可见
+        aborted: 标题 "处理被用户中断" 可见, toggle aria-expanded=true, detail 可见 len=420
+  → PASS（截图 f3-07）
+
+⑨ 用户消息 sending/sent/failed 标记
+  套件: ✓#51 "B7 状态矩阵：sending/sent/failed 各渲染 1 个 chat-bubble-status（data-status +
+        中文文案 + role=status），且在正文之外"
+  ad-hoc 行计数: u1 [{status:sending,label:"发送中…"}] / u2 [{status:sent,label:"已发送"}] /
+        u3 [{status:failed,label:"发送失败"}]（各恰 1 个）；DM 侧 user 占位消息同样显示"已发送"
+  → PASS（截图 f3-02/f3-03 右侧三枚标记 + f3-10 DM 侧）
+
+⑩ 同角色不同成员头像缩写相异
+  套件: ✓#54 "B8 同角色两名成员（CJK 名）：张/李 互不相同，可见名字与角色正确"、
+        ✓#55 拉丁名 AL/AA、✓#56 解析不到回落角色字母且无裸 id、✓#57 显式 initials 优先
+  ad-hoc: 两名 developer 成员: g1 avatar="张" author="张伟· 开发者"; g4 avatar="李"
+        author="李静· 开发者" → 缩写相异、角色同为开发者、DOM 无裸 id
+  → PASS
+
+⑪ 当前频道 delta 滚动 vs 非当前不滚动
+  套件: [session-unification] Todo14 7/7 ✓（#187 当前私聊 delta 滚到底、非当前不滚动但未读收敛；
+        #188 非当前 chat.message.new 不改滚动；#189/#190 空缓存补拉；#191 DM 30s 轮询；
+        #192 终态不被旧 delta 覆盖；#193 群 Tab 双向门控）
+  ad-hoc 时间序列（scrollProbe，同一活栈生产包）:
+        打开 DM 初始 scrollTop=5145（贴底）
+        reset 后=0；+1s=0
+        非当前 ch_dm_2 delta 后: +100ms=0, +300ms=0, +700ms=0, +2000ms=0, +4500ms=0
+          且截图瞬间 elementFromPoint(列表中心)="长正文内容…"、firstChild="私聊 · 仅你与该成员可见"
+          （视口锚定在列表顶部，客观证明未滚走）；dm-tab-unread-ta_2 isVisible=true（未读收敛）
+        当前 ch_dm_1 delta 后: +500ms=5145（全量 run 中为 7775，因 thinking/tool 已展开）→ 滚到底
+  → PASS（截图 f3-09 当前滚底 / f3-10+probe 组非当前停顶 + 锚点数据）
+
+⑫ 角色色 light/dark 来自 --color-role-*
+  套件: [engine-dependent] ✓#174 "dark 主题：选中 role-item 与警示块无浅色硬编码"、
+        ✓#175 "light 主题：同一位置等于原浅色 hex（无回归）"；lib-unit role-theme 4 项亦绿
+  ad-hoc computed style vs CSS 变量（同一页面切换真实 theme-toggle）:
+        light: var(--color-role-developer-color)=#059669 → authorColor=rgb(5,150,105) ✔相等
+               varBg=#ecfdf5 → avatarBg=rgb(236,253,245) ✔; varBorder=#a7f3d0 → avatarBorder ✔
+        dark:  var(--color-role-developer-color)=#6ee7b7 → authorColor=rgb(110,231,183) ✔
+               varBg=#0596692e → avatarBg=rgba(5,150,105,0.18) ✔(alpha 0x2e=46/255)
+               varBorder=#a7f3d059 → avatarBorder=rgba(167,243,208,0.35) ✔(0x59=89/255)
+        light≠dark（变量随主题翻转，非硬编码 hex）
+  → PASS（截图 f3-02 light / f3-03 dark / f3-08 DM dark）
+
+===============================================================================
+7. console / 未处理异常
+===============================================================================
+CTX-1（真实活栈、零 mock）:
+  console.error=[], pageerror=[], requestfailed=[], HTTP>=400=[]   → 全净
+CTX-2（富夹具 mock 页）:
+  pageerror=[]（无任何未捕获异常）, requestfailed=[]
+  console.error 4 条，已逐条定位（含 location.url）:
+    404 http://localhost:3001/api/v1/tasks/t_f3/plan-docs   ×2
+    404 http://localhost:3001/api/v1/tasks/t_f3/plan-steps  ×2
+  根因: 夹具任务 id "t_f3" 只存在于 route mock；plan-docs/plan-steps 两个端点未纳入 mock →
+  route.fallback() 回源真实后端 → 合成 id 404。属**本观察夹具自身产物**，非被测代码：
+  对照探针（同一活栈、只拦 /events、其余全走真实后端、无合成 id）HTTP>=400 列表为空。
+套件运行: 209/209 无任何 console/pageerror 类失败。
+→ 结论: 无新增未处理异常；404 分类为 harness artifact（非产品缺陷）。
+
+===============================================================================
+8. 对抗性探针（AdversarialVerify 清单）
+===============================================================================
+stale_state(bundle provenance): **命中并已修复** —— 04:36 镜像 < B10/B7/B11 提交时刻，
+  重建前 HTTP chunk 无 B11/B7 标记 → 重建 + 三重证明（§2）后才开测；run 时间线在重建完成
+  (08:57:47) 之后（run1 08:58 起、run2 09:06 起、观察 09:22–09:38）。
+dirty_worktree: git status --short 前/中/后 三次一致 = 预存 7 个脏文件
+  (.omo/boulder.json, .omo/evidence/phase5-t9-playwright.json, plan-review×2,
+   server-gate-removal task-9-matrix.json, .omo/ulw-execute/ledger.jsonl, .opencode/opencode.json)
+  + 本计划 untracked .omo 文档目录；**零新增脏文件、git diff --cached 为空、无 checkout/reset/stash**。
+  web/ tracked 改动 = 0（playwright.config.ts/产品/测试均未动）。
+  phase5-t9-playwright.json 仅按计划被 JSON reporter 重写（shasum 前后 §4 记录）。
+misleading_success_output: run1 exit 1 的 181/3/25 原文照录（§4），未折叠为"通过"；
+  209/209 仅来自 run2 的字面输出 + JSON 报告 209×expected 双源互证；未用 57 项子集冒充基线。
+flaky/timing: retries=0、报告 0 flaky。run1 三项失败=确定性 PATH 缺口（同错误串、同 spawn 层），
+  **不是 flake**：修复环境后同命令全绿、且失败功能与本计划零交集。run2 单 worker 8.0m 一次通过，
+  无重试、无跳过。
+cleanup: 见 §9 回执（仅清理本次生成物）。
+secrets: f3-observe.json/证据文件无 password/token/Authorization（grep 复核 0 命中）；
+  scratch pw-full-run2.log 仅含 mysql CLI 标准告警串（无口令值），且 scratch 不入仓库。
+  storageState web/.auth/user.json（gitignored，web/.gitignore:19）由套件 setup 正常刷新。
+shared-runtime interruption: 仅 web 容器被重建/重启；compose up 输出证明 server 只做
+  Waiting→Healthy 健康等待（未重启）；全程 db Up 21h、server/worker Up 15h 未中断；
+  重建窗口(08:56:39–08:57:47) 在 run1 之前，测试期间栈稳定；无其他 playwright/chrome 进程
+  （ps 复核），未观察到他人对共享栈的干扰；F4/F5 未执行。
+blocked-scope: 无（活栈、真实 Chrome、数据夹具全部可用；未 fabricate 任何通过项）。
+
+===============================================================================
+9. 清理回执（cleanup receipts）
+===============================================================================
+- $ rm -rf web/test-results            → DELETED（run 前为不存在状态，运行 run1/run2 后仅含
+  .last-run.json；已清，恢复 run 前状态）
+- web/playwright-report                → 从未创建（HTML reporter 未启用）
+- 一次性脚本 f3-observe.cjs / f3-404probe.cjs / f3-scroll-probe.cjs / f3-anchor-probe.cjs
+  （均位于 $TMPDIR/opencode/f3/，仓库外）→ 全部 DELETED
+- scratch 下重建前下载的 chunk/login.html 副本 → DELETED
+- 保留（仓库外 scratch，仅日志）: $TMPDIR/opencode/f3/{build.log, pw-full.log, pw-full-run2.log,
+  f3-observe.log, pre-rebuild.txt, report-hash-run2-before.txt}
+- 本仓库内仅新增 F3 证据: .omo/evidence/chat-ux-hierarchy-and-streaming/final-f3-playwright.txt
+  + f3-01..f3-16.png + f3-observe.json（均在该 untracked 证据目录内，按仓库惯例不入产品 commit）
+- 未改动: 产品源码、e2e/lib 测试、playwright.config.ts、plan、boulder、registry、
+  .omo/evidence/phase5-t9-playwright.json（除 reporter 自身重写）、任何预存脏文件
+- git status 收尾 = 与 run 前完全相同的 7 M + 5 ?? 集合；git diff --cached --name-only → 空
+- Docker 侧: 新镜像 c006ebadb77a... + 新容器 ee001a5211608092...（运行中 healthy）为本次
+  build/up 的直接产物；旧镜像 1c7f70f2f64f 变为 dangling（未手动清理，不动 with-b12/with-b4/
+  with-b2 等既有历史 tag）；无 docker image prune 等范围外操作。
+
+===============================================================================
+10. 截图 manifest（f3-*.png，均在证据目录，md5 供校验）
+===============================================================================
+f3-01-live-group-real.png            de3eb2d4b8e183a38397503fb96e3581  活栈真数据会话页（零 mock）
+f3-02-group-light.png                746c61a81ae17a220946e633f358cf17  群聊夹具 light：日期分隔/状态标记/身份
+f3-03-group-dark.png                 afce01f4e388f0a955d64a9fb966466c  同页 dark：角色色随变量翻转
+f3-04-dm-parts-light.png             3f5d7d02ebed4b1ee0c9270409034301  DM 打开（user 已发送标记 + delta 消息）
+f3-05-dm-unknown-collapsed.png       7ea5b224852a9241707e7b10bf384f03  未知 part 默认收起
+f3-06-dm-unknown-expanded.png        2e5d6646beb339a9a433b83ec0102805  未知 part 展开 JSON 摘要
+f3-07-dm-error-aborted.png           97e860e4b0ddeab297160a5d682143fb  error 标题/详情/查看升级方案动作
+f3-08-dm-dark.png                    0cced839f30cdd8790596e65042cc171  DM dark 主题
+f3-09-delta-current-scroll.png       47d202dfcd59d8bc23951486ff980425  当前频道 delta → 滚到底（scrollTop 7775）
+f3-10-delta-other-noscroll.png       2a9b3874d6a705b16aae8a3636b92a4a  非当前 delta 后（记录 scrollTop=0）
+f3-11-probe-after-reset-1s.png       a536ee4799d9904a090f21ca880f0720  probe: reset+1s=0
+f3-12-probe-other-delta-final.png    bce7113cf3698a2ae91455661597056f  probe: 非当前 delta 后（锚点=列表顶部）
+f3-13-probe-current-delta.png        b8e746780e1fc438d9f7fc5960a60a6e  probe: 当前 delta → 5145 滚底
+f3-14-probe-after-current.png        4d37846df5b2a0ec70f372117653e890  probe: 贴底稳定态
+f3-15-probe-replicates-f3-10.png     bce7113cf3698a2ae91455661597056f  复刻 f3-10 时序（锚点=顶部，与 f3-12 同像素）
+f3-16-probe-replicates-f3-10-plus1.8s.png  bce7113cf3698a2ae91455661597056f  +1.8s 仍为 0/顶部
+f3-observe.json                      ca5c72eab69b5637d135791662493d59  全部 DOM 测量原始值
+取证方法备注（如实记录，不夸大）:
+  · f3-12/15/16 三张字节相同（同状态同像素），其拍摄瞬间的客观视口内容由紧邻其前的
+    elementFromPoint 锚点记录（列表中心="长正文内容…"、首子元素="私聊 · 仅你与该成员可见"）。
+  · 本会话的图像读取工具在并列读取这批近似截图时出现过一次错位返回（同路径两次读到不同图），
+    故本文件的每项行为判定**以 DOM 测量/锚点 + 套件断言为准**，截图为佐证工件；文件本体
+    md5 如上，可独立复核。
+
+===============================================================================
+11. 判定与遗留
+===============================================================================
+F3 verdict: **PASS**，confidence=高。
+  · 基线: 209/209（run2, exit 0）≥ 125/125，全量 15 项目，0 flaky/skip。
+  · provenance: 重建前 STALE 已被识破并重建，B11/B7/B10 标记三重证明在服务字节中。
+  · 12 项重点行为全部拿到"套件已执行断言 + 真实 Chrome DOM/视觉"双证（§6）。
+  · console 无未处理异常；4 条 404 = 夹具合成 id 回源，已定位非产品。
+遗留/边界（不阻塞，如实转交）:
+  L1 run1 的 docker PATH 缺口属本机 shell 环境；后续复跑全量需确保 docker 在 PATH
+    （或沿用 F2 的环境前置记录方式），否则 docs/self-login 三项会以同一 ENOENT 复现。
+  L2 活栈真实群聊数据稀疏（无跨天/system 实数据，与 task-6 记录一致），故 ⑤⑥ 的富数据视觉
+    取证来自生产包上的 route-mock 夹具（与 session-unification 同一方法论）；真实数据观感
+    留给 F4 人工验收（本次不执行 F4）。
+  L3 计划 checkbox F1–F5 均保持未勾选——勾选是 orchestrator 读取本证据后的动作，F3 未代勾。
+  L4 docker 旧镜像 1c7f70f2f64f 现为 dangling，未清理（范围外）。
+
+-- 方法与边界声明 --
+METHOD: git 只读（log/show/grep/status）；docker compose build/up -d web（计划明确许可，记录
+全部 image/container id）；cd web && npx playwright test ×2（原配置）；一次性真 Chrome 观察脚本
+（仓库外、已删）；curl/HTTP 字节扫描；python3 解析 JSON 报告。未运行 lint、未 --fix、未安装依赖、
+未改任何产品/测试/配置/计划文件、未执行 F4/F5。

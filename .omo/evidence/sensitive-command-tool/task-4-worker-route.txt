@@ -1,0 +1,177 @@
+=== sensitive-command-tool todo 4: worker POST /secret-command route ===
+date: 2026-09-26 22:29:31 +0800  node: v22.15.0  host: guolong-macdeMac-mini  os: Darwin arm64
+repo: /Volumes/SSD-Data/01work/git-project/vteam  head: ee3dc6c fix(questions): 脱敏 secret_input 钩子错误日志
+
+--- dirty worktree BEFORE this todo (pre-existing, must stay untouched) ---
+   M .omo/boulder.json
+   M .omo/evidence/phase5-t9-playwright.json
+   M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+   M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+   M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+   M .omo/ulw-execute/ledger.jsonl
+   M .opencode/opencode.json
+   M worker/src/exec/exec-server.spec.ts
+   M worker/src/exec/exec-server.ts
+  ?? .omo/drafts/chat-ux-hierarchy-and-streaming.md
+  ?? .omo/drafts/sensitive-command-tool.md
+  ?? .omo/evidence/chat-ux-hierarchy-and-streaming/
+  ?? .omo/evidence/sensitive-command-tool/
+  ?? .omo/notepads/chat-ux-hierarchy-and-streaming/
+  ?? .omo/notepads/sensitive-command-tool/
+  ?? .omo/plans/chat-ux-hierarchy-and-streaming.md
+  ?? .omo/plans/sensitive-command-tool.md
+  ?? .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+  ?? .omo/ulw-execute/sensitive-command-tool-registry.json
+
+=== RED (implementation absent; new spec kept) ===
+[CMD-RED] cp worker/src/exec/exec-server.ts /tmp/exec-server.ts.new && git checkout -- worker/src/exec/exec-server.ts && cd worker && npx jest src/exec/exec-server.spec.ts --runInBand && cd .. && cp /tmp/exec-server.ts.new worker/src/exec/exec-server.ts
+  Test Suites: 1 failed, 1 total
+  Tests:       12 failed, 106 passed, 118 total
+  RED_EXIT=1 (12 new /secret-command tests failed: route 404; 106 pre-existing passed)
+
+=== GREEN (implementation landed) ===
+[CMD1] cd worker && npx jest src/exec/exec-server.spec.ts src/exec/sensitive-command.spec.ts src/protocol --runInBand
+  Test Suites: 3 passed, 3 total
+  Tests:       170 passed, 170 total
+  CMD1_EXIT=0
+[CMD2] cd worker && npm run typecheck
+  TYPECHECK_EXIT=0
+[CMD3] grep -n "secret-command" worker/src/exec/exec-server.ts
+  GREP_EXIT=0 (13 hits; route registration at line 513)
+  350:/** `/secret-command` 单次请求的最终回包（错误与成功共用同一暂存形状，供幂等回放）。 */
+  415:  /** `POST /secret-command` 幂等表：requestId → 归属 + 执行结果（同 requestId 绝不二次执行）。 */
+  513:    if (url.pathname === '/secret-command') {
+  1317:   * POST /secret-command：token 保护的敏感命令同步执行端点（sensitive-command-tool todo 4）。
+  1338:      this.logger.warn('[exec] secret-command -> 拒绝（X-Worker-Token 无效） (HTTP 401)');
+  1347:      this.logger.warn('[exec] secret-command -> 请求体超限 (HTTP 413)');
+  1355:      this.logger.warn('[exec] secret-command -> 请求体非法 JSON (HTTP 400)');
+  1360:      this.logger.warn('[exec] secret-command -> 请求体非对象 (HTTP 400)');
+  1366:      this.logger.warn('[exec] secret-command -> 缺少 requestId (HTTP 400)');
+  1375:        this.logger.warn('[exec] secret-command -> requestId 归属冲突 (HTTP 409)');
+  1410:      this.logger.info(`[exec] secret-command -> 完成 (HTTP ${outcome.status})`);
+  1452:        this.logger.warn(`[exec] secret-command -> 拒绝（${err.code}） (HTTP 400)`);
+  1462:      this.logger.warn('[exec] secret-command 执行异常 (HTTP 500)');
+[CMD4] cd worker && npx jest src/exec src/protocol src/resources --runInBand  (plan-level worker regression gate)
+  Test Suites: 10 passed, 10 total
+  Tests:       256 passed, 256 total
+  REGRESSION_EXIT=0
+
+=== MANUAL QA: real HTTP listener on ephemeral port (raw output below) ===
+[CMD5] cd worker && npx tsx ../.omo/evidence/sensitive-command-tool/task-4-manual-qa.ts
+  QA_EXIT=0
+workDir=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/t4-qa-syEHLR
+  [worker-log:info] [exec] 执行端点就绪: POST http://0.0.0.0:53117/execute
+  [worker-log:info] [exec] 文件端点就绪: GET http://0.0.0.0:53117/file?path=<绝对路径>（X-Worker-Token 鉴权）
+listening on 127.0.0.1:53117 (ephemeral port)
+
+>>> A. wrong method (GET) + valid token -> expect 405
+    HTTP 405 (8ms)
+    BODY {"error":"仅支持 POST，收到 GET"}
+
+  [worker-log:warn] [exec] secret-command -> 拒绝（X-Worker-Token 无效） (HTTP 401)
+>>> B. POST without token -> expect 401
+    HTTP 401 (1ms)
+    BODY {"error":"X-Worker-Token 无效"}
+
+  [worker-log:warn] [exec] secret-command -> 拒绝（X-Worker-Token 无效） (HTTP 401)
+>>> C. POST with wrong token -> expect 401
+    HTTP 401 (1ms)
+    BODY {"error":"X-Worker-Token 无效"}
+
+  [worker-log:info] [exec] secret-command -> 完成 (HTTP 200)
+>>> D. POST with right token (sentinel secret) -> expect 200
+    HTTP 200 (7ms)
+    BODY {"requestId":"req_qa_1","status":"succeeded","exitCode":0,"durationMs":7,"stdout":"{{REDACTED}}\n","stderr":"{{REDACTED}}\n","stdoutTruncated":false,"stderrTruncated":false}
+
+>>> E. same requestId + same ownership -> expect 200 replay (byte-identical)
+    HTTP 200 (1ms)
+    BODY {"requestId":"req_qa_1","status":"succeeded","exitCode":0,"durationMs":7,"stdout":"{{REDACTED}}\n","stderr":"{{REDACTED}}\n","stdoutTruncated":false,"stderrTruncated":false}
+
+  [worker-log:warn] [exec] secret-command -> requestId 归属冲突 (HTTP 409)
+>>> F. same requestId + different taskId -> expect 409
+    HTTP 409 (0ms)
+    BODY {"error":"requestId 已被其他归属使用"}
+
+  [worker-log:warn] [exec] secret-command -> 请求体非法 JSON (HTTP 400)
+>>> G. malformed JSON -> expect 400
+    HTTP 400 (0ms)
+    BODY {"error":"请求体必须是合法 JSON"}
+
+  [worker-log:warn] [exec] secret-command -> 请求体超限 (HTTP 413)
+>>> H. oversize body (> 2048 bytes) -> expect 413
+    HTTP 413 (1ms)
+    BODY {"error":"请求体超过 2048 bytes 上限"}
+
+  [worker-log:info] [exec] secret-command -> 完成 (HTTP 200)
+>>> I. hung command with timeoutMs=500 -> expect 200 {status:"timeout"}
+    HTTP 200 (504ms)
+    BODY {"requestId":"req_qa_timeout","status":"timeout","exitCode":null,"durationMs":503,"stdout":"","stderr":"","stdoutTruncated":false,"stderrTruncated":false}
+
+  [worker-log:warn] [exec] secret-command -> 拒绝（invalid_cwd） (HTTP 400)
+  [worker-log:info] [exec] secret-command -> 完成 (HTTP 400)
+>>> J. cwd escape ../../etc -> expect 400 fixed message
+    HTTP 400 (1ms)
+    BODY {"error":"cwd 必须是工作目录内的相对路径","code":"invalid_cwd"}
+
+>>> I1. side-effect executions (idem-hits.txt lines) = 1 (expect 1)
+
+=== SENTINEL SCAN (s3cr3t-A9f) ===
+hits in 10 HTTP response bodies : 0 (expect 0)
+hits in 11 worker log lines          : 0 (expect 0)
+'commandTemplate' occurrences in worker logs     : 0 (expect 0)
+rendered command "echo s3cr3t" in responses      : 0 (expect 0)
+"cwd" key in responses                          : 0 (expect 0)
+
+=== ADVERSARIAL CLASS RESULTS ===
+  malformed_input        PASS  GET->405, no/wrong token->401, bad JSON->400, oversize(>2048B)->413, non-object/missing requestId->400, cwd/timeout/secrets->400 fixed text
+  hung/long command      PASS  sleep 30 + timeoutMs=500 -> HTTP 200 {status:timeout, exitCode:null} in 504ms (process group SIGKILL, see sensitive-command.spec)
+  stale_state            PASS  same requestId+ownership replayed byte-identical 200; side-effect file = 1 execution; concurrent duplicate = 1 execution; different ownership -> 409 with no execution
+  dirty_worktree         PASS  only worker/src/exec/exec-server.ts + exec-server.spec.ts touched; pre-existing dirty files (server/*, .omo/*, .opencode/*) untouched - see status lists
+  misleading_success     PASS  literal HTTP statuses asserted (405/401/400/413/409/200) + exact response key set ['durationMs','exitCode','requestId','status','stderr','stderrTruncated','stdout','stdoutTruncated']
+  secrets (sentinel)     PASS  s3cr3t-A9f: 0 hits in 10 response bodies, 0 hits in 11 worker log lines, 0 'commandTemplate' in logs, 0 rendered command, 0 cwd key
+  prompt injection       N/A   request body is structured JSON (template/idempotency fields) with no natural-language interpretation path; the command template is by design fully caller-controlled, so 'injection' adds no attack surface beyond the accepted no-allowlist MVP risk
+
+=== SCOPE / COMMIT ===
+  product files only: worker/src/exec/exec-server.ts, worker/src/exec/exec-server.spec.ts
+  evidence + plan + pre-existing dirty files NOT staged (commit info appended below)
+
+=== COMMIT (product/test files only; evidence left uncommitted) ===
+[STAGE] git add worker/src/exec/exec-server.ts worker/src/exec/exec-server.spec.ts
+[VERIFY] git diff --cached --name-only
+  worker/src/exec/exec-server.spec.ts
+  worker/src/exec/exec-server.ts
+    0ea57ad7af21f190dd5cae07149dd106cfc95a41 feat(worker): 新增 token 保护的 /secret-command 路由
+  
+  worker/src/exec/exec-server.spec.ts
+  worker/src/exec/exec-server.ts
+[VERIFY] git show --stat HEAD
+   worker/src/exec/exec-server.spec.ts | 449 ++++++++++++++++++++++++++++++++++++
+   worker/src/exec/exec-server.ts      | 225 +++++++++++++++++-
+   2 files changed, 673 insertions(+), 1 deletion(-)
+  COMMIT_EXIT=0  SHA=0ea57ad7af21f190dd5cae07149dd106cfc95a41
+
+=== POST-COMMIT worktree (pre-existing dirty files untouched by this todo) ===
+   M .omo/boulder.json
+   M .omo/evidence/phase5-t9-playwright.json
+   M .omo/evidence/plan-review-execution-gates/task-12/asserts.json
+   M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+   M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+   M .omo/ulw-execute/ledger.jsonl
+   M .opencode/opencode.json
+  ?? .omo/drafts/chat-ux-hierarchy-and-streaming.md
+  ?? .omo/drafts/sensitive-command-tool.md
+  ?? .omo/evidence/chat-ux-hierarchy-and-streaming/
+  ?? .omo/evidence/sensitive-command-tool/
+  ?? .omo/notepads/chat-ux-hierarchy-and-streaming/
+  ?? .omo/notepads/sensitive-command-tool/
+  ?? .omo/plans/chat-ux-hierarchy-and-streaming.md
+  ?? .omo/plans/sensitive-command-tool.md
+  ?? .omo/ulw-execute/chat-ux-hierarchy-and-streaming-registry.json
+  ?? .omo/ulw-execute/sensitive-command-tool-registry.json
+(server/* dirty files listed before this todo were committed concurrently by todo-1 agent: 8a87765, ee3dc6c)
+
+=== CLEANUP ===
+  temp backup removed: rm /tmp/exec-server.ts.new
+  temp jest logs: /tmp/t4-red.log /tmp/g1.log /tmp/g2.log /tmp/g3.log /tmp/g4.log /tmp/t4-qa.log (outside repo)
+  QA helper script kept as evidence: .omo/evidence/sensitive-command-tool/task-4-manual-qa.ts (uncommitted)
+  no worker child processes left: 'sleep 30'/'sleep 10' groups SIGKILLed by module (see task-3 evidence)

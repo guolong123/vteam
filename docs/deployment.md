@@ -31,7 +31,7 @@ vteam 提供两套部署方式，按环境选择：
 
 | 变量 | 服务 | 默认/建议 | 说明 |
 |------|------|-----------|------|
-| `MYSQL_ROOT_PASSWORD` | db | `aiagents-root` | DB root 密码（init/server 共用） |
+| `MYSQL_ROOT_PASSWORD` | db | `vteam-root` | DB root 密码（init/server 共用） |
 | `DATABASE_URL` | init/server | `mysql://root:...@db:3306/aiagents` | compose 网络内服务名 `db` |
 | `JWT_SECRET` | server | compose 默认值 | 登录 JWT 签名密钥，生产用 `openssl rand -hex 32` |
 | `JWT_ACCESS_EXPIRES_IN` | server | `2h` | access token 时效 |

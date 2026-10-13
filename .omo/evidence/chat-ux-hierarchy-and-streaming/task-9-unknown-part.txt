@@ -1,0 +1,261 @@
+# task-9-unknown-part — B6 未知 part 默认可收起展示而非静默丢弃（绿证据）
+# chat-ux-hierarchy-and-streaming 复选框 9
+# 计划: .omo/plans/chat-ux-hierarchy-and-streaming.md:191-196（References / Acceptance / QA happy / QA failure）
+#      + :78-91 消息结构断言门 + Scope IN 第 7 条（B6）+ 执行顺序 :117（Wave 2）
+# 记录时间: 2026-09-26 (Asia/Shanghai)
+# 红证据: 同目录 task-9-unknown-part-failure.txt
+# Commit: 129b761 fix(chat): 未知 part 默认可收起展示而非静默丢弃（已回填）
+
+======================================================================
+0. 结论
+======================================================================
+B6 落地：process 分发末尾不再 `return null`，`patch` / `step-start` / `step-finish` /
+一切未识别 `PartShape.type` 现在渲染 `msg-unknown-part` 诊断行——
+  - 默认收起：4 个折叠开关全部 aria-expanded=false，摘要与 payload 一个字符都不进 DOM；
+  - 展开：只给 ≤400 字符的 JSON 摘要（5000 字符 payload → 恰 400，第 401 字符起不进 DOM）；
+  - 收起：摘要节点整体离开 DOM（不是 hidden），payload 再次不可见；
+  - 安全：可见标签与 data-part-type 共用 safePartType 清洗值（[A-Za-z0-9_.:-]、≤32 字符），
+    恶意 type 串 `x"><img src=x onerror=window.__pwned=1>` 被洗成 30 字符纯标识符，
+    DOM 0 个 <img>、0 个 [onerror]、window.__pwned 未被求值；
+  - 已知分支零改动：text / reasoning / tool / error / aborted / msg-streaming 的代码路径、
+    testid 与计数逐项不变（A1/A2/A3/A4/B1 八条既有门在同一红跑里就是绿的）。
+  - tsc exit 0；check-only eslint exit 0（4 个改动文件，0 error 0 warning，输出为空）；
+  - 聚焦 chat-density：绿 12/12 exit 0（红态 8 passed / 4 failed exit 1）；
+  - lib-unit：26 passed exit 0；
+  - 真实 Chromium 观察：收起 → 展开 → 再收起三态 JSON + 2 张截图（§8）。
+未做（本 todo 明确不碰）：B11 折叠策略、B7/B8、B10、author 变更、
+tokens.ts / agent-avatar.tsx / session/page.tsx / use-realtime.ts / use-sse.ts /
+worker / server / 移动端 CSS / playwright.config.ts / pages.spec.ts /
+session-unification.spec.ts / plan / boulder / registry。
+
+======================================================================
+1. 文档决策（docs decision）
+======================================================================
+DIST_DOCS_ABSENT = TRUE
+  $ ls -d web/node_modules/next/dist/docs → No such file or directory（exit 1）
+  $ ls -d node_modules/next/dist/docs（仓库根）→ No such file or directory（exit 1）
+  安装版本 next = 15.5.22（web/node_modules/next/package.json）。
+  web/AGENTS.md 的 nextjs-agent-rules 块存在（line 1），其指向的本地指南目录缺失 →
+  按任务授权改用「用户批准的 v15.5.22 tag 文档」
+  （commit 6ad9e56bbb6b1ebc17a3d35fa820800ac6419775）。
+改产品代码前抓取并通读的篇目（GitHub raw，全部 HTTP 200）：
+  (1) docs/01-app/01-getting-started/05-server-and-client-components.mdx  → 客户端渲染边界
+  (2) docs/01-app/03-api-reference/01-directives/use-client.mdx           → 'use client' 与可序列化 props
+  (3) docs/01-app/01-getting-started/11-css.mdx                           → CSS 组织与共享样式
+  (4) docs/01-app/02-guides/testing/playwright.mdx                        → Playwright 运行模型
+      （另试 docs/01-app/02-guides/css.mdx → 404，同 tag 目录清单确认 css 篇在 01-getting-started/11）
+决策：
+  - 05/use-client：本 todo 新增的是 Client Component（useState 折叠开关 + onClick），
+    `"use client"` 写在 msg-unknown-part.tsx 顶部；传入 props 只有 part（来自已解析的
+    JSON parts 数组）与 style/className，全是可序列化值 → 与文档模型一致。
+  - 11-css：不禁止 inline style，且其「Extract shared styles into shared components」
+    支持本 todo 只在组件内部自洽地用 token（neutral/space/radius/fontSize/fontFamily），
+    不新增第二套颜色源、不碰 tokens.ts。
+  - playwright.mdx：测试打到已在运行的服务、config 不自动起 webServer →
+    与 playwright.config.ts:6-8 现状一致（未改）；chat-density 项目自包含（不挂 dependencies），
+    正是本 todo fixture 的投递通道（§8）。
+  文档与现有代码无冲突，无需停止。
+
+======================================================================
+2. 改动文件（仅本 todo，见 §11 提交）
+======================================================================
+  web/src/components/chat/msg-unknown-part.tsx   +136（新增）诊断行组件 + 2 个纯函数
+  web/src/components/chat/msg-parts.tsx          +6/-3   分发末尾 return null → MsgUnknownPart
+                                                        （另更新文件头注释的 B6 行为说明）
+  web/src/components/chat/index.ts               +2      barrel 导出 MsgUnknownPart/safePartType/
+                                                        summarizeUnknownPart
+  web/e2e/chat-density.spec.ts                   +188/-2 4 条 B6 断言 + 3 个 fixture kind
+                                                        （既有 8 条测试一行未改）
+未触碰: src/theme/tokens.ts、src/components/ui/agent-avatar.tsx、
+        src/components/ui/chat-bubble.tsx、app/(main)/teams/[id]/session/page.tsx、
+        hooks/use-realtime.ts、hooks/use-sse.ts、worker/*、server/*、移动端 CSS、
+        playwright.config.ts、e2e/pages.spec.ts、e2e/session-unification.spec.ts、
+        .omo/plans、.omo/boulder.json、ulw-execute registry、web/AGENTS.md。
+        （并行 Wave-2 B10 的 web/lib/role-theme.spec.ts 为他人未跟踪文件，未纳入本次提交。）
+
+======================================================================
+3. 实现要点
+======================================================================
+msg-unknown-part.tsx
+  export const UNKNOWN_PART_SUMMARY_MAX_CHARS = 400   // JSON 摘要进 DOM 的硬上限
+  export const UNKNOWN_PART_TYPE_MAX_CHARS    = 32    // 安全类型名长度上限
+  const SAFE_TYPE_CHARS = /[^A-Za-z0-9_.:-]/g         // 类型名白名单（尖括号/引号/等号/空白全剔除）
+  safePartType(type): 非 string 或清洗后为空 → "unknown"
+  summarizeUnknownPart(part): JSON.stringify 失败兜底 '{"error":"unserializable"}'；
+      序列化结果 > 400 → slice(0,400)（不追加省略号，与 A2/A3 的 2000 封顶同一取向）
+  MsgUnknownPart: useState(false) 默认收起
+      root div  data-testid="msg-unknown-part" data-part-type={safePartType}
+      button    aria-expanded={open}（折叠开关，与 msg-thinking/msg-tool 同一交互契约）
+                可见标签 = "未知片段 · " + 安全类型名
+      {open && <pre data-testid="msg-unknown-part-summary">{summary}</pre>}
+      摘要只在展开时才序列化 → 折叠态既不进 DOM 也不做无谓的 stringify
+      样式全部取自 src/theme/tokens.ts（neutral[50]/[200]/[400]/[500]、space.xs/sm、
+      radius.md、fontSize.xs=11 元信息级、dashed 低对比边框）→ 低噪音、与
+      msg-thinking 折叠条同一视觉量级。
+
+msg-parts.tsx（唯一行为改动 1 行）
+  if (p.type === "error") { ... }
+  // B6：step-start/step-finish/patch 及一切未识别 type 不再静默丢弃
+  return <MsgUnknownPart key={i} part={p} />;
+  上方 reasoning/thinking / tool / error 三个分支与 aborted 早返回、text 过滤、
+  B2 分组、B1 共享身份栏、B12 终态收敛一行未动。
+
+======================================================================
+4. 未知 part 矩阵（unknown-part matrix）
+======================================================================
+| PartShape.type                    | 改动前        | 改动后 node            | data-part-type / 标签        |
+|-----------------------------------|---------------|------------------------|------------------------------|
+| patch                             | 丢弃(return null) | msg-unknown-part ×1 | patch / 未知片段 · patch      |
+| step-start                        | 丢弃          | msg-unknown-part ×1 | step-start                    |
+| step-finish                       | 丢弃          | msg-unknown-part ×1 | step-finish                   |
+| `x"><img src=x onerror=...>`（恶意） | 丢弃      | msg-unknown-part ×1 | ximgsrcxonerrorwindow.__pwned1（30 字符，纯 [A-Za-z0-9_.:-]） |
+| 非字符串 / 清洗后为空的 type       | 丢弃          | msg-unknown-part（组件契约） | unknown（safePartType 兜底，未单列 Playwright 断言，如实标注） |
+断言覆盖：test 9（4 节点 + 前 3 个 data-part-type 精确等于 patch/step-start/step-finish +
+第 4 个匹配安全正则）、test 10（展开/收起）、test 11（超长截断）、test 12（注入安全）。
+fixture 投递通道：chat-density 项目自包含 esbuild-wasm 测试缝（见 §8），未走 route-mock。
+
+======================================================================
+5. 已知分支非回归（known-branch non-regression）
+======================================================================
+同一 fixture（patch + step-start + step-finish + 恶意 type + reasoning + tool + text）断言：
+  msg-thinking 1 / msg-tool 1 / chat-bubble 1 / chat-bubble-content 1 / msg-streaming 0 /
+  agent-avatar 1 / chat-bubble-author 1 / chat-bubble-time 1
+  msg-thinking 含「已知推理分支」、msg-tool 含「known_tool」、
+  chat-bubble-content 含「已知正文分支」→ 计数与文案逐项不变。
+既有门在红跑（实现前）就是绿的，改动后继续绿：
+  A1 正文 900 字符 10 行 clamp/16em、A1 800 边界、A2 tool 字符串/JSON 2000 封顶、
+  A3 thinking 200/2000、A4 三级字号 + fontSize 档位守门、B1 共享身份栏单实例。
+错误/中断分支（msg-error / msg-aborted）代码未改（`git diff` 可证，见 §2），
+aborted 的独占早返回保持在分发之前，未知分支不可能插到中断行前面。
+lib-unit 26 passed（api / author-role-display / chat-density / date-separator /
+display-author / message-grouping）→ B2/B3/B5/B9 相关纯函数门未回归。
+
+======================================================================
+6. testid 门（结构断言门 diff）
+======================================================================
+$ grep -rhoE 'data-testid="[^"]+"' web/src/components/chat/ web/src/components/ui/chat-bubble.tsx \
+    web/src/components/ui/agent-avatar.tsx | sort -u \
+    > .omo/evidence/chat-ux-hierarchy-and-streaming/task-9-chat-testids-{before,after}.txt
+$ diff before after → exit 1，只有新增、零消失：
+  > data-testid="msg-unknown-part"
+  > data-testid="msg-unknown-part-summary"
+既有 24 项全部保留：agent-avatar / attachment-file / attachment-image / attachment-lightbox /
+chat-bubble / chat-bubble-author / chat-bubble-content / chat-bubble-time / chat-bubble-toggle /
+external-channel-badge / mention-me-badge / message-attachment / message-identity-role /
+msg-aborted / msg-error / msg-error-action / msg-streaming / msg-thinking / msg-tool /
+question-modal / question-modal-close / question-modal-mask / question-reject / question-submit。
+新 testid 的文档落点：
+  - msg-unknown-part 与 msg-unknown-part-summary 写在 msg-unknown-part.tsx 文件头注释；
+  - 折叠开关的形态标注为 button[aria-expanded]（同文件头注释）；
+  - e2e/chat-density.spec.ts 头部 B6 覆盖说明同步列出两个 testid。
+计划 §78-91 要求的关键 testid（agent-avatar、chat-bubble-author、chat-bubble、
+chat-bubble-content、chat-bubble-toggle、msg-thinking、msg-tool、msg-error、
+msg-aborted、msg-streaming）经 §5 计数断言确认仍可定位。
+
+======================================================================
+7. 红 / 绿命令与 exit code
+======================================================================
+RED（先写测试，实现前）：
+  $ cd web && npx playwright test chat-density.spec.ts --project=chat-density
+  → exit 1；4 failed（B6 四条）/ 8 passed（A1–A4、B1 已知分支门）
+    #9 Expected: 4  Received: 0   （msg-unknown-part 节点缺失 = 旧代码静默丢弃）
+    #10 toHaveAttribute aria-expanded "false" → element(s) not found
+    #11 Expected: 1  Received: 0
+    #12 Expected: 1  Received: 0
+  日志: task-9-unknown-part-red.log（10611 B）
+  说明：红态时 tsc --noEmit 已 exit 0（测试文件与既有实现类型自洽），
+        即红点来自断言而非编译错误。
+GREEN（实现后）：
+  $ cd web && npx tsc --noEmit
+  → exit 0
+  $ cd web && npx eslint src/components/chat/msg-parts.tsx src/components/chat/msg-unknown-part.tsx \
+        src/components/chat/index.ts e2e/chat-density.spec.ts
+  → exit 0（check-only，无 --fix、未运行 npm run lint；输出为空 = 0 error 0 warning）
+    日志: task-9-eslint.log（0 B）
+  $ cd web && npx playwright test chat-density.spec.ts --project=chat-density
+  → exit 0；12 passed
+    日志: task-9-unknown-part-green.log（2023 B）
+  $ cd web && npx playwright test --project=lib-unit
+  → exit 0；26 passed
+    日志: task-9-lib-unit.log（3405 B）
+  未运行：npm run lint / --fix / next build / 全量 npx playwright test
+  （任务禁止全量 build 与共享 dev server 竞争；:3001 dev 已在监听，:3000 API 未监听）
+Playwright JSON reporter 共享文件 hash（该文件被本计划所有运行重写）：
+  before ca4f79e9ceef5210962af118d266e9a7bca06aae
+  after  661e64065d8d590b69ea116826082afb00bed09d
+  注意：并行 Wave-2 B10 同时在跑 lib/role-theme.spec.ts，该 JSON 与 web/test-results
+  可能在本 todo 记录之后再次被对方改写；两个 hash 只作为本 todo 运行前后事实记录。
+
+======================================================================
+8. 真实浏览器观察（adapted channel，如实说明）
+======================================================================
+route-mock 通道为何没走：e2e/session-unification.spec.ts 的 installHarness（page.route 假后端）
+挂在 project=session-unification 上，而该项目 dependencies:["setup"]，setup 是真实表单登录
+（e2e/auth.setup.ts → /login → 跳 /teams），必须命中 API；
+本机 http://localhost:3000 连接被拒（curl exit 7 / http_code 000），:3001 虽 200 但登录必失败。
+→ 本 todo 未跑 route-mock 通道，改用计划授权的另一条缝：
+   「现有 web/e2e/chat-density.spec.ts 项目和/或一个窄归属的 lib seam」。
+   该缝用已声明依赖 esbuild-wasm 把真实产品组件 MsgParts 打进空白页由 React 挂载，
+   真实浏览器、真实组件树、不依赖后端与登录态。
+补充的人工观察（真实 Chromium，非断言）：临时脚本 $TMPDIR/task9-observe.mjs
+（createRequire(web) 取 esbuild-wasm + playwright，构建同一套 MsgParts 测试缝，
+三态截图 + DOM 快照），运行后脚本已删除（§10）。产出：
+  task-9-browser-observation.json（8247 B，stdout）
+  task-9-browser-observation.err（0 B，stderr）
+  task-9-unknown-collapsed.png（20235 B）
+  task-9-unknown-expanded.png（24064 B）
+关键读数：
+  collapsed:  unknownCount=3, partTypes=[patch, step-start, step-finish],
+              ariaExpanded=[false,false,false], summaryCount=0, diffInDom=false
+              labels=["⋯ 未知片段 · patch 点击展开 ▸", "⋯ 未知片段 · step-start 点击展开 ▸",
+                      "⋯ 未知片段 · step-finish 点击展开 ▸"]
+              known: thinking=1, bubble=1, author=1, body 末尾=「已知正文分支」
+  expanded:   ariaExpanded=[true,false,false], summaryCount=1, summaryLen=[69],
+              summaryText='{"type":"patch","path":"src/app/page.tsx","diff":"观察用 patch payload"}',
+              diffInDom=true（其余两个仍收起）
+  recollapsed: ariaExpanded=[false,false,false], summaryCount=0, diffInDom=false
+截图人工判读：收起态三行 11px 灰色虚线行、与 msg-thinking 折叠条同一视觉量级、
+不遮挡正文与身份栏；展开态 JSON 摘要在该行下方以 pre 块显示，标签同步为「▾ 收起」。
+（observation JSON 的 known.body 字段含 Markdown 组件注入的 <style>.md-render{...}</style>
+ 文本，是 textContent 采样把样式标签一并读出，非渲染缺陷。）
+
+======================================================================
+9. 范围与未提交内容
+======================================================================
+本 todo 产品/测试改动 = §2 四个文件；提交仅这四个。
+不提交：.omo/**（含本目录全部证据）、.opencode/**、并行 B10 的 web/lib/role-theme.spec.ts。
+未改动但被本计划其他 todo 占用的文件（Wave-2 并行，已刻意避开）：
+src/theme/tokens.ts、src/components/ui/agent-avatar.tsx、src/components/ui/chat-bubble.tsx。
+
+======================================================================
+10. 清理回执（cleanup receipts）
+======================================================================
+  $ rm /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/task9-observe.mjs
+  → 临时观察脚本已删除（本目录不落脚本，只有它产出的 json/png）
+  $ ls web/playwright-report → No such file or directory（本轮未生成 HTML 报告）
+  $ ls web/test-results → 只剩 role-theme-B10-* 三个目录（并行 B10 的产物）
+  → 本 todo 未删除 test-results：Playwright 每轮启动会清空该目录，
+    当前内容全部属于并行 B10，删掉会毁掉对方证据；本 todo 自己的 chat-density 产物
+    已被后续运行自动清理，目录内无 chat-density-* 残留，无需人工清理。
+  未执行任何 git checkout / git stash / 路径级恢复，预存脏文件
+  （.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、.opencode/opencode.json 等）原样保留。
+
+======================================================================
+11. 风险与提交
+======================================================================
+风险（已知、可接受）：
+  1. 真实 agent 回复若带 step-start/step-finish，会在每条过程消息下多出若干收起行；
+     这是 B6 的既定取向（可见但收起），B11 后续会统一折叠文案与策略。
+  2. 恶意 type 经白名单清洗后会丢失原始字符（可读性换安全性）；原始 payload 仍可
+     通过展开 JSON 摘要的前 400 字符诊断，但 type 字段本身的完整性不在保证范围。
+  3. JSON 摘要在展开时对整条 part 做一次 stringify：单条 part 极大时内存峰值为
+     「原对象 + 序列化串」，但 DOM 侧严格 ≤400 字符，不会造成布局/渲染失控。
+  4. 未跑 pages.spec.ts / session-unification.spec.ts（API :3000 未监听，setup 登录必失败）；
+     以 §5 的 fixture 静态核查替代：这两个 spec 的 parts fixture 只出现
+     reasoning/tool/text（grep 'type: "' → agent/all/custom/file/perf/reasoning/text/tool），
+     不含 patch/step-start 等未知 type，故本改动不会给它们的断言引入新节点。
+Commit: 129b7612972a36397be0194d279bba40e03a9844
+  $ git show --stat --name-only HEAD → 恰好 §2 四个文件，无 .omo/.opencode，无 B10 文件
+
+=== F5 boundary note ===
+The group-chat upstream text-only filter means B6 unknown diagnostic rows are primarily visible on the private/DM path; this is a pre-existing product boundary, not a B6 regression.

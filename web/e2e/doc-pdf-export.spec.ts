@@ -62,12 +62,15 @@ function sample(): HTMLElement {
   root.style.cssText = "background:var(--color-bg);color:var(--color-text);padding:24px;font-family:sans-serif;width:746px;box-sizing:border-box";
   const parts: string[] = [];
   parts.push("<h1 style=\\"color:var(--color-neutral-900);font-size:24px;margin:0 0 12px\\">暗色导出样例标题</h1>");
-  for (let i = 0; i < 40; i += 1) {
-    parts.push("<p style=\\"color:var(--color-neutral-700);font-size:14px;line-height:1.7;margin:0 0 10px\\">段落 " + i + "：验证正文文字导出后为深色可读，并制造跨页内容。</p>");
-  }
+  parts.push("<p id=\\"lead\\" style=\\"color:var(--color-neutral-700);font-size:14px;line-height:1.7;margin:0 0 10px\\">导言段：验证普通正文文字导出后为深色可读。</p>");
+  parts.push("<p style=\\"color:var(--color-neutral-700);font-size:14px;line-height:1.7;margin:0 0 10px\\">方法：<code id=\\"longchip\\" style=\\"background-color:var(--color-neutral-100);border-radius:6px;padding:2px 6px;color:var(--color-neutral-800);font-family:monospace;font-size:12px\\">ketacli curl / ketacli asset repo / ketacli search / ketacli mock / ketacli verify</code>，辅以 HTTP 接口与代码走查。</p>");
+  parts.push("<p style=\\"color:var(--color-neutral-700);font-size:14px;line-height:1.7;margin:0 0 10px\\">短芯片对照：<code id=\\"shortchip\\" style=\\"background-color:var(--color-neutral-100);border-radius:6px;padding:2px 6px;color:var(--color-neutral-800);font-family:monospace;font-size:12px\\">ketacli mock</code> 结束。</p>");
   parts.push("<table style=\\"border-collapse:collapse;width:100%;font-size:14px\\"><thead style=\\"background:var(--color-neutral-50)\\"><tr><th style=\\"border:1px solid var(--color-neutral-200);padding:6px;color:var(--color-neutral-800);text-align:left\\">检查项</th><th style=\\"border:1px solid var(--color-neutral-200);padding:6px;color:var(--color-neutral-800)\\">要求</th></tr></thead><tbody><tr><td style=\\"border:1px solid var(--color-neutral-200);padding:6px;color:var(--color-neutral-800)\\">JRE 21</td><td style=\\"border:1px solid var(--color-neutral-200);padding:6px;color:var(--color-neutral-800)\\">运行需 JRE 21</td></tr></tbody></table>");
   parts.push("<div style=\\"background:var(--color-neutral-100);border:1px solid var(--color-neutral-200);border-radius:8px;padding:12px;margin:12px 0\\"><pre style=\\"margin:0;color:var(--color-neutral-800);font-family:monospace;font-size:13px\\">java -version</pre></div>");
   parts.push("<blockquote style=\\"margin:12px 0;padding:8px 16px;border-left:3px solid var(--color-neutral-300);background:var(--color-neutral-50);color:var(--color-neutral-600)\\">引用块：验证浅底深字。</blockquote>");
+  for (let i = 0; i < 40; i += 1) {
+    parts.push("<p style=\\"color:var(--color-neutral-700);font-size:14px;line-height:1.7;margin:0 0 10px\\">段落 " + i + "：验证正文文字导出后为深色可读，并制造跨页内容。</p>");
+  }
   root.innerHTML = parts.join("");
   return root;
 }
@@ -76,13 +79,33 @@ function sample(): HTMLElement {
   document.documentElement.classList.toggle("dark", dark);
   const node = sample();
   document.body.appendChild(node);
-  const nodeRect = node.getBoundingClientRect();
+  // 探针必须按「克隆布局」测量：导出时克隆被定宽 794（PDF_WIDTH_PX），
+  // 内容重排后的纵向位置与原始 746 宽节点不同（用原节点坐标探测会得到空白假阴性）。
+  const replica = sample();
+  replica.style.position = "absolute";
+  replica.style.left = "-10000px";
+  replica.style.width = "794px";
+  replica.style.maxWidth = "794px";
+  document.body.appendChild(replica);
+  const repRect = replica.getBoundingClientRect();
   const rel = (el: Element | null) => {
     if (!el) return null;
     const r = el.getBoundingClientRect();
-    return { x: r.left - nodeRect.left, y: r.top - nodeRect.top, w: r.width, h: r.height };
+    return { x: r.left - repRect.left, y: r.top - repRect.top, w: r.width, h: r.height };
   };
-  const probe = { text: rel(node.querySelector("p")), code: rel(node.querySelector("pre")), nodeWidth: node.clientWidth };
+  const fxHost = document.createElement("div");
+  fxHost.style.cssText = "position:fixed;left:-9999px;top:0;width:794px;background:#ffffff;z-index:-1";
+  const fxClone = sample();
+  fxClone.style.background = "#ffffff";
+  fxClone.style.width = "794px";
+  fxClone.style.maxWidth = "794px";
+  fxClone.style.overflow = "visible";
+  fxHost.appendChild(fxClone);
+  document.body.appendChild(fxHost);
+  const fixtureCloneH = fxClone.getBoundingClientRect().height;
+  fxHost.remove();
+  const probe = { text: rel(replica.querySelector("p")), code: rel(replica.querySelector("pre")), chip: rel(replica.querySelector("#longchip")), shortChip: rel(replica.querySelector("#shortchip")), nodeWidth: replica.clientWidth, replicaH: replica.getBoundingClientRect().height, fixtureCloneH, scrollY: window.scrollY, winH: window.innerHeight };
+  replica.remove();
   await exportNodeToPdf(node, "smoke.pdf");
   node.remove();
   return { pages, probe };
@@ -143,7 +166,7 @@ test("暗色导出：文字深色可读 / 无深色块 / 页边距 / 页面高�
 
   type PdfPage = { dataUrl: string; x: number; y: number; w: number; h: number };
   type Rect = { x: number; y: number; w: number; h: number };
-  type Probe = { text: Rect | null; code: Rect | null; nodeWidth: number };
+  type Probe = { text: Rect | null; code: Rect | null; chip: Rect | null; shortChip: Rect | null; nodeWidth: number };
   const result = await page.evaluate(
     () => (window as unknown as { __runExport: (d: boolean) => Promise<{ pages: PdfPage[]; probe: Probe }> }).__runExport(true),
   );
@@ -212,11 +235,30 @@ test("暗色导出：文字深色可读 / 无深色块 / 页边距 / 页面高�
         if (x < 8 && y < 8 && l < 245) cornerWhite = false;
       }
     }
-    return { textMinLum, codeBgLum, veryDarkRatio: veryDark / total, cornerWhite };
+    const inkIn = (rect: Rect | null): number => {
+      if (!rect) return -1;
+      const x0 = Math.max(0, Math.round(rect.x * scale));
+      const y0 = Math.max(0, Math.round(rect.y * scale));
+      const x1 = Math.min(canvas.width, Math.round((rect.x + rect.w) * scale));
+      const y1 = Math.min(canvas.height, Math.round((rect.y + rect.h) * scale));
+      let ink = 0;
+      for (let y = y0; y < y1; y += 1) {
+        for (let x = x0; x < x1; x += 1) {
+          if (lumAt(x, y) < 120) ink += 1;
+        }
+      }
+      return ink;
+    };
+    return { canvasW: canvas.width, canvasH: canvas.height, textMinLum, codeBgLum, longChipInk: inkIn(probe.chip), shortChipInk: inkIn(probe.shortChip), veryDarkRatio: veryDark / total, cornerWhite };
   }, { first: pages[0], probe });
 
   expect(metrics.textMinLum).toBeLessThan(120);
   expect(metrics.codeBgLum).toBeGreaterThan(200);
+  console.log("METRICS", JSON.stringify({ ...metrics, cropChip: "omitted", cropCode: "omitted" }), "PROBE", JSON.stringify(probe));
+  const fs = await import("node:fs");
+  void fs;
+  expect(metrics.shortChipInk).toBeGreaterThan(0);
+  expect(metrics.longChipInk).toBeGreaterThan(0);
   expect(metrics.veryDarkRatio).toBeLessThan(0.08);
   expect(metrics.cornerWhite).toBe(true);
 });

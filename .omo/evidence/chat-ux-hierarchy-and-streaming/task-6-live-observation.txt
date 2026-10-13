@@ -1,0 +1,30 @@
+# task-6 真实页面观察（compose standalone 构建，无 route mock）
+# 时间: 2026-09-25T17:52:15.409Z   浏览器: channel=chrome
+
+{
+  "tag": "group",
+  "listChildCount": 1,
+  "separatorCount": 0,
+  "separatorTexts": [],
+  "separatorKeys": [],
+  "systemCount": 0,
+  "systemInnerStyles": [],
+  "bubbleTypeCounts": {},
+  "bodyContentFonts": [],
+  "timeTexts": []
+}
+
+{
+  "tag": "private-ta_1",
+  "listChildCount": 1,
+  "separatorCount": 0,
+  "separatorTexts": [],
+  "separatorKeys": [],
+  "systemCount": 0,
+  "systemInnerStyles": [],
+  "bubbleTypeCounts": {},
+  "bodyContentFonts": [],
+  "timeTexts": []
+}
+
+pageerrors/console.errors: (none)

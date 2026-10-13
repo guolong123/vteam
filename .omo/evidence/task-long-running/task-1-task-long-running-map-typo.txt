@@ -1,0 +1,7 @@
+    ✕ 本迁移 ADD COLUMN 的列在 schema.prisma 的 Task 里都存在（正向平价） (2 ms)
+    ✕ 反向平价：schema.prisma 的 Task 里确有 longRunning + @map("long_running") 字面量 (1 ms)
+    ✓ DDL 守卫：ADD COLUMN 的列在 baseline 里不存在（否则重复建列 → ERROR 1060） (1 ms)
+    ✓ 零回填：列定义 DEFAULT false，且迁移内无任何 UPDATE tasks
+    ✓ 单条 ALTER TABLE：无第二条语句、不建索引（无查询路径需要） (1 ms)
+    ✓ 不删列（删列不可逆，且本仓库无 down-migration 约定）
+Tests:       2 failed, 4 passed, 6 total
