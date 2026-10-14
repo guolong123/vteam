@@ -54,6 +54,10 @@ describe('WorkersService', () => {
     };
     teamMember: {
       findMany: jest.Mock;
+      updateMany: jest.Mock;
+    };
+    team: {
+      updateMany: jest.Mock;
     };
     gitRepoGrant: {
       findMany: jest.Mock;
@@ -132,6 +136,10 @@ describe('WorkersService', () => {
       },
       teamMember: {
         findMany: jest.fn(),
+        updateMany: jest.fn(),
+      },
+      team: {
+        updateMany: jest.fn(),
       },
       gitRepoGrant: {
         findMany: jest.fn(),
@@ -2052,11 +2060,12 @@ describe('WorkersService', () => {
 
       const result = await service.remove('w_0000000001');
 
-      // 事务 batch 数组顺序：availability 硬删 → instances 硬删 → sessions 置空 → agents 置空 → worker 删
+      // 事务 batch 数组顺序：availability 硬删 → instances 硬删 → sessions 置空 →
+      // teams/team_members 首选 worker 置空 → worker 删（Agent.workerId 列已摘除）
       const [txOps] = prisma.$transaction.mock.calls[0] as unknown as [
         Array<() => Promise<unknown>>,
       ];
-      expect(txOps).toHaveLength(5);
+      expect(txOps).toHaveLength(6);
       expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
         where: { workerId: 'w_0000000001' },
       });
@@ -2067,9 +2076,13 @@ describe('WorkersService', () => {
         where: { workerId: 'w_0000000001' },
         data: { workerId: null, instanceRef: null },
       });
-      expect(prisma.agent.updateMany).toHaveBeenCalledWith({
-        where: { workerId: 'w_0000000001' },
-        data: { workerId: null },
+      expect(prisma.team.updateMany).toHaveBeenCalledWith({
+        where: { preferredWorkerId: 'w_0000000001' },
+        data: { preferredWorkerId: null },
+      });
+      expect(prisma.teamMember.updateMany).toHaveBeenCalledWith({
+        where: { preferredWorkerId: 'w_0000000001' },
+        data: { preferredWorkerId: null },
       });
       expect(prisma.worker.delete).toHaveBeenCalledWith({
         where: { id: 'w_0000000001' },
@@ -2344,6 +2357,255 @@ describe('WorkersService', () => {
       await expect(
         service.assignWorker({ modelId: 'opencode/m1' }),
       ).resolves.toBeNull();
+    });
+  });
+
+  describe('assignWorker（首选 worker 置顶：候选内偏好 + 回退矩阵）', () => {
+    /** 置顶用例专用行：默认 online / 版本 1.18.32 / maxInstances=10 / 已上报 m1。 */
+    const pinRow = (over: Record<string, unknown> = {}) => ({
+      id: 'w_pin',
+      status: WORKER_STATUS.ONLINE,
+      opencodeVersion: '1.18.32',
+      defaultModelId: null,
+      capabilities: { maxInstances: 10 },
+      load: { instances: 0 },
+      modelAvailabilities: [
+        {
+          modelId: 'md_9',
+          model: { enabled: true, providerID: 'opencode', modelID: 'm1' },
+        },
+      ],
+      ...over,
+    });
+
+    let warnSpy: jest.SpyInstance;
+    beforeEach(() => {
+      warnSpy = jest
+        .spyOn(service['logger'], 'warn')
+        .mockImplementation(() => {});
+    });
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it('置顶在线且通过四过滤 → 命中置顶，且不受容量排序影响（置顶容量更低也照样选它）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({
+          id: 'w_big',
+          load: { instances: 0 },
+          capabilities: { maxInstances: 99 },
+        }),
+        pinRow({
+          id: 'w_pin',
+          load: { instances: 9 },
+          capabilities: { maxInstances: 10 },
+        }),
+      ]);
+
+      await expect(
+        service.assignWorker({ preferredWorkerId: 'w_pin' }),
+      ).resolves.toBe('w_pin');
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('无参调用 assignWorker() 零回归：候选集与顺序与今日一致（保护 9 处无参调用方）', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({ id: 'w_busy', load: { instances: 4 } }),
+        pinRow({ id: 'w_idle', load: { instances: 1 } }),
+        pinRow({
+          id: 'w_degraded',
+          status: WORKER_STATUS.DEGRADED,
+          load: { instances: 0 },
+        }),
+        pinRow({
+          id: 'w_offline',
+          status: WORKER_STATUS.OFFLINE,
+          load: { instances: 0 },
+        }),
+        pinRow({
+          id: 'w_v1',
+          opencodeVersion: '1.17.0',
+          load: { instances: 0 },
+        }),
+      ]);
+
+      // 今日行为：无参时过滤③不生效 → w_v1(容量10) 胜出；显式 opencodeVersion 时 w_v1 被过滤
+      // → w_idle(9) > w_busy(6)；degraded 永远排后；offline 被过滤①排除
+      await expect(service.assignWorker()).resolves.toBe('w_v1');
+      await expect(
+        service.assignWorker({ opencodeVersion: '1.18.32' }),
+      ).resolves.toBe('w_idle');
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('置顶 offline → 软回退到自动调度 + warn，且不抛异常', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({ id: 'w_pin', status: WORKER_STATUS.OFFLINE }),
+        pinRow({ id: 'w_other' }),
+      ]);
+
+      // 绝不能因置顶不可用而 throw
+      await expect(
+        service.assignWorker({ preferredWorkerId: 'w_pin' }),
+      ).resolves.toBe('w_other');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain('w_pin');
+      expect(String(warnSpy.mock.calls[0][0])).toContain('未命中');
+    });
+
+    it('置顶 degraded → 仍命中置顶（degraded 通过四过滤），但 warn 告知绕过了 online 优先排序', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({ id: 'w_online', load: { instances: 5 } }),
+        pinRow({ id: 'w_pin', status: WORKER_STATUS.DEGRADED }),
+      ]);
+
+      await expect(
+        service.assignWorker({ preferredWorkerId: 'w_pin' }),
+      ).resolves.toBe('w_pin');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain('degraded');
+    });
+
+    it('置顶 id 不在候选集（行缺失）→ 回退 + warn（文案不谎称行缺失与 offline 两种原因）', async () => {
+      prisma.worker.findMany.mockResolvedValue([pinRow({ id: 'w_other' })]);
+
+      await expect(
+        service.assignWorker({ preferredWorkerId: 'w_gone' }),
+      ).resolves.toBe('w_other');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain('w_gone');
+      expect(String(warnSpy.mock.calls[0][0])).toContain('不在候选集中');
+      expect(String(warnSpy.mock.calls[0][0])).toContain('不可区分');
+    });
+
+    it('置顶容量耗尽 → 回退 + warn', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({ id: 'w_pin', load: { instances: 10 } }),
+        pinRow({ id: 'w_other' }),
+      ]);
+
+      await expect(
+        service.assignWorker({ preferredWorkerId: 'w_pin' }),
+      ).resolves.toBe('w_other');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain('未通过既有过滤');
+    });
+
+    it('置顶 opencodeVersion 不符 → 回退 + warn', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({ id: 'w_pin', opencodeVersion: '1.17.0' }),
+        pinRow({ id: 'w_other', opencodeVersion: '1.18.32' }),
+      ]);
+
+      await expect(
+        service.assignWorker({
+          preferredWorkerId: 'w_pin',
+          opencodeVersion: '1.18.32',
+        }),
+      ).resolves.toBe('w_other');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain(
+        'opencodeVersion=1.17.0',
+      );
+    });
+
+    it('B1：modelId 非空且置顶 worker 从未上报模型能力（availability 为空）→ 视为未命中，回退 + warn', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({ id: 'w_pin', modelAvailabilities: [] }),
+        // w_other 容量更高，回退重排才不会被同容量的 w_pin 抢回（否则属计划所述
+        // 「回退后重排仍可能选回它」的有意行为，不是本例要断言的点）
+        pinRow({
+          id: 'w_other',
+          capabilities: { maxInstances: 99 },
+          modelAvailabilities: [
+            {
+              modelId: 'md_9',
+              model: { enabled: true, providerID: 'opencode', modelID: 'm1' },
+            },
+          ],
+        }),
+      ]);
+
+      await expect(
+        service.assignWorker({
+          preferredWorkerId: 'w_pin',
+          modelId: 'opencode/m1',
+        }),
+      ).resolves.toBe('w_other');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0][0])).toContain('B1');
+    });
+
+    it('B1 不误伤自动调度：同一「availability 为空」worker 在无置顶时仍按今日语义被选中', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({ id: 'w_legacy', modelAvailabilities: [] }),
+      ]);
+
+      await expect(
+        service.assignWorker({ modelId: 'opencode/m1' }),
+      ).resolves.toBe('w_legacy');
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('置顶有 availability 但全部不匹配 → 过滤④排除，回退 + warn', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({
+          id: 'w_pin',
+          modelAvailabilities: [
+            {
+              modelId: 'md_x',
+              model: {
+                enabled: true,
+                providerID: 'opencode',
+                modelID: 'other',
+              },
+            },
+          ],
+        }),
+        pinRow({ id: 'w_other' }),
+      ]);
+
+      await expect(
+        service.assignWorker({
+          preferredWorkerId: 'w_pin',
+          modelId: 'opencode/m1',
+        }),
+      ).resolves.toBe('w_other');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('置顶 availability 匹配但 enabled=false → 过滤④排除，回退 + warn', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({
+          id: 'w_pin',
+          modelAvailabilities: [
+            {
+              modelId: 'md_9',
+              model: { enabled: false, providerID: 'opencode', modelID: 'm1' },
+            },
+          ],
+        }),
+        pinRow({ id: 'w_other' }),
+      ]);
+
+      await expect(
+        service.assignWorker({
+          preferredWorkerId: 'w_pin',
+          modelId: 'opencode/m1',
+        }),
+      ).resolves.toBe('w_other');
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('置顶不可用且无任何候选 → 返回 null 而非 throw「无可用 worker」', async () => {
+      prisma.worker.findMany.mockResolvedValue([
+        pinRow({ id: 'w_pin', status: WORKER_STATUS.OFFLINE }),
+      ]);
+
+      await expect(
+        service.assignWorker({ preferredWorkerId: 'w_pin' }),
+      ).resolves.toBeNull();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
     });
   });
 
