@@ -2297,9 +2297,32 @@ export class WorkerDispatcher
       memberOverride ??
       request.taskContext?.overrideModelId ??
       (await this.resolveAgentModelId(target.agentId));
-    const assignmentReq: AssignmentRequirement = agentModelId
-      ? { modelId: agentModelId }
-      : {};
+
+    // ── 首选 worker 两级解析（team-worker-node Todo 5）────────────────────────
+    // 优先级链即用户决策：成员显式（TeamMember.preferredWorkerId）> 团队
+    // （Team.preferredWorkerId）> 未设（undefined，行为与引入本特性前逐字节一致）。
+    // 两个 resolver 均 fail-open：查询缺失/失败只 logger.warn 后返回 null，绝不
+    // 阻断分派，也不把失败升级成 fail-closed——置顶只是「候选内偏好」，能否生效
+    // 由 WorkersService.assignWorker 的四道既有过滤（在线/容量/opencodeVersion/
+    // 模型）裁决，未命中即被忽略并 warn 回退自动调度。
+    // ?? 短路：成员有值时不再查团队（省一次 DB 往返）。
+    const preferredWorkerId =
+      (await this.resolveMemberPreferredWorkerId(teamMemberId)) ??
+      (await this.resolveTeamPreferredWorkerId(teamId)) ??
+      undefined;
+    // modelId 行为保持不变：preferredWorkerId 未设时本对象与今日逐字节一致。
+    const assignmentReq: AssignmentRequirement = {
+      ...(agentModelId ? { modelId: agentModelId } : {}),
+      ...(preferredWorkerId ? { preferredWorkerId } : {}),
+    };
+
+    // 两条必须如实记住的语义（勿改）：
+    // ① 置顶**同时治理离线重分配**：下面离线分支里第二次 assignWorker 复用同一个
+    //    assignmentReq，因此已绑定会话在其节点离线（:2328 判定）后会被拉回置顶
+    //    节点——这不是新分支，只是同一对象被复用。
+    // ② 改设置**不主动重绑健康会话**：上面 :2282 的 `session.workerId` 复用优先，
+    //    已在线绑定的会话不会被推去重绑；置顶只影响后续新绑定与离线重分配
+    //    （强制重绑仍走既有 reset-session 入口）。
 
     if (!workerId || hasStalePending) {
       workerId = await this.workersService.assignWorker(assignmentReq);
@@ -2361,6 +2384,22 @@ export class WorkerDispatcher
       id: workerId,
       capabilities: workerRow.capabilities,
     };
+
+    // B2 可观测（team-worker-node Todo 5）：agentModelId === null（成员/任务/agent
+    // 链皆无模型）且置顶实际生效（最终 workerId 即 preferredWorkerId）时，下面兜底
+    // 表达式 `agentModelId ?? workerRow.defaultModelId ?? null` 的来源从「自动调度
+    // 选中的 worker」变成「置顶 worker」——兜底来源的这次切换必须可见，否则该
+    // worker 的模型表现变化无从归因。
+    if (
+      agentModelId === null &&
+      preferredWorkerId &&
+      workerId === preferredWorkerId
+    ) {
+      this.logger.warn(
+        `首选 worker ${workerId} 已生效，但成员/任务/agent 链均未解析出模型，` +
+          `最终模型取自该 worker 的 defaultModelId=${workerRow.defaultModelId ?? null}`,
+      );
+    }
 
     const model = this.toModelSelection(
       agentModelId ?? workerRow.defaultModelId ?? null,
@@ -3826,6 +3865,64 @@ export class WorkerDispatcher
       // 覆盖查询失败不阻断分派：回退 agent 默认模型（增强特性容错）
       this.logger.warn(
         `成员覆盖模型查询失败 teamMemberId=${teamMemberId}，回退 agent 默认模型：${this.describeError(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 成员级首选 worker（TeamMember.preferredWorkerId，team-worker-node Todo 5）：
+   * 成员在会话页显式选择的执行节点；null/空串 = 未设置（跟随团队 / 自动调度）。
+   *
+   * fail-open：查询缺失/失败不阻断分派，warn 后返回 null（形状完全照抄
+   * resolveMemberOverrideModelId 的增强特性容错范式——置顶是增强，不是主链路）。
+   * 置顶只是「候选内偏好」，最终可用性由 WorkersService.assignWorker 的四道既有
+   * 过滤裁决， resolver 失败绝不被升级成 fail-closed。
+   */
+  private async resolveMemberPreferredWorkerId(
+    teamMemberId: string,
+  ): Promise<string | null> {
+    const repo = (this.prisma as any).teamMember;
+    if (!repo || typeof repo.findFirst !== 'function') {
+      return null;
+    }
+    try {
+      const row = (await repo.findFirst({
+        where: { id: teamMemberId },
+        select: { preferredWorkerId: true },
+      })) as { preferredWorkerId: string | null } | null;
+      return row?.preferredWorkerId ?? null;
+    } catch (err) {
+      this.logger.warn(
+        `成员首选 worker 查询失败 teamMemberId=${teamMemberId}，回退自动调度：${this.describeError(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 团队级首选 worker（Team.preferredWorkerId，team-worker-node Todo 5）：
+   * 团队级默认执行节点；null/空串 = 未设置（自动调度）。
+   *
+   * 两级链（用户决策）在 dispatchForTeamTarget 组链：成员显式 > 团队 > 未设。
+   * fail-open 语义同 resolveMemberPreferredWorkerId（查询失败只 warn，不阻断分派）。
+   */
+  private async resolveTeamPreferredWorkerId(
+    teamId: string,
+  ): Promise<string | null> {
+    const repo = (this.prisma as any).team;
+    if (!repo || typeof repo.findFirst !== 'function') {
+      return null;
+    }
+    try {
+      const row = (await repo.findFirst({
+        where: { id: teamId },
+        select: { preferredWorkerId: true },
+      })) as { preferredWorkerId: string | null } | null;
+      return row?.preferredWorkerId ?? null;
+    } catch (err) {
+      this.logger.warn(
+        `团队首选 worker 查询失败 teamId=${teamId}，回退自动调度：${this.describeError(err)}`,
       );
       return null;
     }

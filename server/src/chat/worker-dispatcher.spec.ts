@@ -3274,6 +3274,217 @@ describe('WorkerDispatcher', () => {
         { providerID: 'opencode-go', modelID: 'deepseek-v4-flash' },
       );
     });
+
+    // ------------------------------------------------------------------
+    // 首选 worker 两级置顶（team-worker-node Todo 5）：成员 > 团队 > 未设
+    // 断言形状沿用本组既有范式：assignWorker toHaveBeenCalledWith({}) 零回归 +
+    // 离线重分配形状。teamMember.findFirst 按 select 字段分流（同
+    // 「opencode agent」用例的方式），team.findFirst 为本特性新增的 mock 键。
+    // ------------------------------------------------------------------
+
+    it('两级皆空（成员/团队均未设置）→ assignWorker 收到 {}（零回归，与引入置顶前逐字节一致）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+        baseAgentId: null,
+        type: 'template',
+      });
+      (prisma as any).teamMember.findFirst = jest
+        .fn()
+        .mockImplementation(async (q: any) =>
+          q?.select?.preferredWorkerId !== undefined
+            ? { preferredWorkerId: null }
+            : { overrideModelId: null },
+        );
+      (prisma as any).team.findFirst = jest
+        .fn()
+        .mockResolvedValue({ preferredWorkerId: null });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(workersService.assignWorker).toHaveBeenCalledWith({});
+    });
+
+    it('仅团队设置 → assignWorker 收到团队值', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+        baseAgentId: null,
+        type: 'template',
+      });
+      (prisma as any).teamMember.findFirst = jest
+        .fn()
+        .mockImplementation(async (q: any) =>
+          q?.select?.preferredWorkerId !== undefined
+            ? { preferredWorkerId: null }
+            : { overrideModelId: null },
+        );
+      (prisma as any).team.findFirst = jest
+        .fn()
+        .mockResolvedValue({ preferredWorkerId: 'w_a' });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      expect(workersService.assignWorker).toHaveBeenCalledWith({
+        preferredWorkerId: 'w_a',
+      });
+    });
+
+    it('成员与团队都设置 → assignWorker 收到成员值（优先级反转即红）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+        baseAgentId: null,
+        type: 'template',
+      });
+      (prisma as any).teamMember.findFirst = jest
+        .fn()
+        .mockImplementation(async (q: any) =>
+          q?.select?.preferredWorkerId !== undefined
+            ? { preferredWorkerId: 'w_b' }
+            : { overrideModelId: null },
+        );
+      (prisma as any).team.findFirst = jest
+        .fn()
+        .mockResolvedValue({ preferredWorkerId: 'w_a' });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      // 成员显式 > 团队；且 ?? 短路：成员有值不再查团队
+      expect(workersService.assignWorker).toHaveBeenCalledWith({
+        preferredWorkerId: 'w_b',
+      });
+      expect((prisma as any).team.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('回归：已绑定 offline 节点的会话重分配时 assignWorker 仍携带 preferredWorkerId', async () => {
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        workerId: 'w_offline',
+        instanceRef: 'ses_stale',
+        teamId: 'tm_0000000001',
+        teamMemberId: 'tmm_0000000001',
+      });
+      prisma.worker.findUnique
+        .mockResolvedValueOnce({
+          id: 'w_offline',
+          status: 'offline',
+          capabilities: {},
+        })
+        .mockResolvedValueOnce({
+          id: 'w_online',
+          status: 'online',
+          capabilities: {},
+          defaultModelId: null,
+        });
+      workersService.assignWorker.mockResolvedValue('w_online');
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+        baseAgentId: null,
+        type: 'template',
+      });
+      (prisma as any).teamMember.findFirst = jest
+        .fn()
+        .mockImplementation(async (q: any) =>
+          q?.select?.preferredWorkerId !== undefined
+            ? { preferredWorkerId: null }
+            : { overrideModelId: null },
+        );
+      (prisma as any).team.findFirst = jest
+        .fn()
+        .mockResolvedValue({ preferredWorkerId: 'w_a' });
+      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      // 解绑重分配复用同一 assignmentReq：同样带置顶
+      expect(workersService.assignWorker).toHaveBeenCalledTimes(1);
+      expect(workersService.assignWorker).toHaveBeenCalledWith({
+        preferredWorkerId: 'w_a',
+      });
+    });
+
+    it('fail-open：团队置顶查询抛错 → assignWorker 仍收到 {} 且分派继续（warn 记录，无异常上抛）', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+        baseAgentId: null,
+        type: 'template',
+      });
+      (prisma as any).teamMember.findFirst = jest
+        .fn()
+        .mockImplementation(async (q: any) =>
+          q?.select?.preferredWorkerId !== undefined
+            ? { preferredWorkerId: null }
+            : { overrideModelId: null },
+        );
+      (prisma as any).team.findFirst = jest
+        .fn()
+        .mockRejectedValue(new Error('db down'));
+      const d = createDispatcher();
+      const warnSpy = jest.spyOn(d['logger'], 'warn');
+
+      // 不 reject：resolver 失败不得升级为 fail-closed
+      await expect(d.dispatch(request)).resolves.toEqual({ replies: [] });
+
+      expect(workersService.assignWorker).toHaveBeenCalledWith({});
+      // 分派链路继续：createSession 仍被调用
+      expect(workerClient.createSession).toHaveBeenCalled();
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(
+        warned.some(
+          (m) =>
+            m.includes('团队首选 worker 查询失败') &&
+            m.includes('tm_0000000001'),
+        ),
+      ).toBe(true);
+      warnSpy.mockRestore();
+    });
+
+    it('B2 可观测：agentModelId 为 null 且置顶生效 → logger.warn 记录 resolved workerId 与 defaultModelId', async () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        defaultModelId: null,
+        baseAgentId: null,
+        type: 'template',
+      });
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: { maxInstances: 1 },
+        defaultModelId: 'opencode/deepseek-v4-pro',
+      });
+      (prisma as any).teamMember.findFirst = jest
+        .fn()
+        .mockImplementation(async (q: any) =>
+          q?.select?.preferredWorkerId !== undefined
+            ? { preferredWorkerId: null }
+            : { overrideModelId: null },
+        );
+      (prisma as any).team.findFirst = jest
+        .fn()
+        .mockResolvedValue({ preferredWorkerId: 'w_0000000001' });
+      const d = createDispatcher();
+      const warnSpy = jest.spyOn(d['logger'], 'warn');
+
+      await d.dispatch(request);
+
+      // 置顶命中（assignWorker 返回置顶 id）且全链无模型 → warn 必须可见
+      // （漏了本告警则兜底模型来源的变化不可归因）
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(
+        warned.some(
+          (m) =>
+            m.includes('w_0000000001') &&
+            m.includes('defaultModelId=opencode/deepseek-v4-pro'),
+        ),
+      ).toBe(true);
+      warnSpy.mockRestore();
+    });
   });
 
   // ------------------------------------------------------------------
