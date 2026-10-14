@@ -1,0 +1,102 @@
+# Independent Verifier — Todo 15 (team-worker-node reference-list gap)
+# Repo: /Volumes/SSD-Data/01work/git-project/vteam   |  Read-only; mutations only on a throwaway copy OUTSIDE the repo.
+
+VERDICT: CONFIRMED
+Confidence: 0.99
+Base-sha (HEAD): cb0ba6d1ab16571c0c979e41e40951000819f1c7  — UNCHANGED (git log --oneline -1 == cb0ba6d, no new commit).
+
+Todo 15 faithfully closes the one-line PAGE_SMOKE gap for route /teams/[id] without a
+phantom name, without a fabricated PAGES/audit entry, without moving the chip entries,
+and with no product-code change. All 9 falsification points reproduced below.
+
+────────────────────────────────────────────────────────────────────────
+[1] LINE EXISTS & WELL-FORMED
+$ sed -n '548,552p' web/e2e/reference/testids.ts
+  "/teams": ["teams-list-root", "team-card", "create-team-button"],
+  "/teams/[id]": ["team-detail-root", "team-worker-select", "enter-team-session", "team-save-name"],
+  "/tasks/new": [...],
+  → New key is at :551, immediately after "/teams" at :550. Same style as siblings
+    (double-quoted key, double-quoted string array, trailing comma; value is string[]).
+    Valid member of Record<string,string[]>. td: grep -n '"/teams/\[id\]"' → 551.
+
+[2] NO PHANTOM NAMES + all on SUCCESS surface (grep vs web/app/(main)/teams/[id]/page.tsx)
+  team-detail-root   → 274   (root <div> of success return)
+  team-save-name     → 285
+  enter-team-session → 288
+  team-worker-select → 347
+  Success-surface proof (guard clause ordering):
+    :264  if (teamQuery.isPending) return <div data-testid="team-detail-loading" .../>
+    :265  if (teamQuery.isError)   return (<div data-testid="team-detail-error" ...>)
+    :271  if (!team) return null;
+    :273  return ( <div data-testid="team-detail-root"> ... :285 :288 ... :347 team-worker-select ... )
+  → All four names live in the post-:273 success return, at/after the team-detail-root
+    marker (:274). None equals team-detail-loading/team-detail-error, so none is exclusive
+    to a loading/error branch. Executor's "all four after team-detail-root" claim: verified.
+
+[3] NO FABRICATED AUDIT ENTRY
+$ grep -n 'route: "/teams/\[id\]"' web/e2e/reference/testids.ts   → (no output) EXIT=1
+$ grep -nE "auditPage:.*team-detail|auditPage:.*详情" ...          → only 354: auditPage "2.9 task-detail（任务详情与文档库）"
+    (that is the *task*-detail page, NOT the *team* detail route)
+$ grep -cE "^    auditPage:" ... → 16 audit entries; none is a team-detail number.
+  → Adding only a PAGE_SMOKE key (no PAGES audit object) is the faithful choice.
+
+[4] SHARED-NAME JUDGEMENT (enter-team-session) — verdict: FAITHFUL, not duplication error
+  Real render sites:
+    web/app/(main)/teams/page.tsx:123       data-testid="enter-team-session"   (team LIST, per-card)
+    web/app/(main)/teams/[id]/page.tsx:288  data-testid="enter-team-session"   (team DETAIL)
+  Registrations:
+    PAGES 1.2 team-list testids (:82) = enter-team-session   (already there)
+    PAGE_SMOKE "/teams/[id]" (:551)  = enter-team-session    (new)
+  Two distinct routes, two genuine render sites → dual registration reflects reality.
+  /agents PAGES block does NOT contain it (awk :142-189 → no match). Not a dup error.
+
+[5] CHIP ENTRIES STAY PUT + deleted agent-worker-select has NOT reappeared
+  agent-worker-chip-<instanceId>        :238
+  agent-worker-option-<instanceId>-follow-team :239
+  agent-worker-option-<instanceId>-<workerId>  :240
+  All inside the team-session PAGES entry (object :189-242; testids array :193-241).
+  NOT in the /agents entry (which ends at :188). agent-worker-select was removed from
+  /agents (diff hunk @@ -156 +155,0 @@) and grep -c "agent-worker-select" testids.ts = 0.
+
+[6] STRING-ONLY FILE; tsc is NOT the gate
+$ grep -nE "^import |require\(|from ['\"]" web/e2e/reference/testids.ts → (none) EXIT=1
+  File = pure string-literal exports (const arrays + one interface); no imports.
+  tsc can only catch syntax/type errors; a phantom-but-valid string sails through it.
+  REAL gate = per-name grep of each documented testid against the serving page
+  (web/app/(main)/teams/[id]/page.tsx) — reproduced in [B] and the [7] mutation.
+
+[7] MUTATION ON A THROWAWAY COPY (real repo file never mutated)
+  BEFORE md5(web/e2e/reference/testids.ts) = 5757c94aaa4b88e676e4d72fd52293ca
+  cp → <tmp>/testids.copy.ts ; sed '551s/"team-worker-select"/"team-worker-select-typo"/'
+  copy :551 → "...team-worker-select-typo..." (phantom literal present in copy, count=1)
+  grep 'data-testid="team-worker-select-typo"' against REAL page → (no output) PHANTOM_EXIT=1  ← guard bites
+  grep 'data-testid="team-worker-select"'       against REAL page → 347  RESOLVE_EXIT=0      ← resolves
+  AFTER  md5(web/e2e/reference/testids.ts) = 5757c94aaa4b88e676e4d72fd52293ca  (byte-identical)
+  rm <tmp> copy → gone. find repo for testids.copy.ts / *.verify15.* → none.
+  Also: executor's own temp backup .omo/evidence/task-15-backup-testids.ts.tmp is ABSENT;
+        find .omo/evidence -name '*.tmp' → none. No temp backup left behind.
+
+[8] PLAN-REQUIRED COMMANDS
+$ cd web && npx tsc --noEmit; echo TSC_EXIT=$?   → TSC_EXIT=0   (not the gate for this file)
+$ git log --oneline -1  → cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+$ git diff --cached --name-only → (empty)  — nothing staged.
+
+[9] SCOPE
+  git diff testids.ts = 3 hunks, this todo's delta is ONLY the third:
+    @@ -156 +155,0 @@   ← delete agent-worker-select from /agents   (Todo 3, pre-existing UNCOMMITTED)
+    @@ -238,0 +238,3 @@  ← add 3 chip/option entries to session    (Todo 11, pre-existing UNCOMMITTED)
+    @@ -548,0 +551 @@    ← add "/teams/[id]" PAGE_SMOKE key        (Todo 15 — 1 insertion, 0 deletion)
+  shortstat: 1 file changed, 4 insertions(+), 1 deletion(-).
+  Earlier todo's uncommitted entries in this file are INTACT: chip at :238-240 (in train-session),
+  agent-worker-select still absent (=0). No product code (.tsx/.prisma/service) touched by this todo.
+  No sibling-owned path (server/src/memories/*, execution-policies/*, common/constants/*,
+  platform-mcp/*, seed.ts, scripts/) changed by THIS todo. platform-mcp/* are pre-existing dirty
+  (off-limits, present at open) and untouched by this fix. No pre-existing dirty file touched by this todo.
+  New artifact = .omo/evidence/task-15-team-worker-node.txt (untracked). Nothing staged. HEAD unchanged.
+
+────────────────────────────────────────────────────────────────────────
+NOTE (non-blocking): executor evidence §3[E] prose says "15 个审计页"; actual count is 16.
+Immaterial — the substantive claim (no team-detail audit number exists) is TRUE. Not a defect.
+
+CONCLUSION: Todo 15 is a correct, minimal, faithful one-line gap fix. Confirmed.
+# Real gate re-run (both directions): [2] all four resolve on the success surface; [7] phantom fails, real resolves.

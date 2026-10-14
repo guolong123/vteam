@@ -1,0 +1,722 @@
+=====================================================================
+INDEPENDENT VERIFICATION — Todo 7 (team-worker-node)
+Plan: .omo/plans/team-worker-node.md, todo 7 block = lines 176-188
+Binding Must-NOT list = lines 34-47
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Mode: READ-ONLY (mutations only on a throwaway copy; copy already deleted)
+
+VERDICT: CONFIRMED
+Confidence: 0.97
+=====================================================================
+
+SUMMARY OF RE-DERIVATION (nothing below is quoted from the executor's
+evidence file; every value was re-derived by this verifier):
+
+ 1. migration.sql  : exists, 69 lines, 3 backticked bare DDL statements
+ 2. no index/FK    : confirmed (only prose mention of CONSTRAINT, in header)
+ 3. no shadow col  : confirmed (3 ALTERs: 2 ADD preferred_worker_id, 1 DROP)
+ 4. DROP not split : confirmed (exactly 1 "DROP COLUMN" statement repo-wide)
+ 5. baseline       : porcelain EMPTY; hash-object == rev-parse HEAD
+                     == 3dc7533b9733e04b6947e289532bbe7ee7253950
+ 6. guard spec     : 9/9 passed on a clean re-run in the real repo
+ 7. mutations (a)+(b): BOTH go RED, on a throwaway copy outside the repo
+ 8. self-reported defect (assertion 8): CONFIRMED fixed; now neutral to the
+                     sibling migration and still catches dup dir + wrong ts
+ 9. offline diff   : Prisma's canonical output == the handwritten DDL
+                     (modulo NULL vs DEFAULT NULL, proven semantically identical)
+10. no-commit      : git log --oneline -1 == b6840d1 (unchanged)
+
+The single self-reported defect (over-strong "newest directory" assertion)
+is real, is fixed, and the fix does not weaken any contract condition. No
+new defect found. No POST-GATE/blocker issues.
+
+=====================================================================
+2. ITEM-BY-ITEM EVIDENCE
+=====================================================================
+
+---------------------------------------------------------------------
+ITEM 1 — migration file shape, counts, header wording
+---------------------------------------------------------------------
+COMMANDS
+  $ cd /Volumes/SSD-Data/01work/git-project/vteam
+  $ wc -l server/prisma/migrations/20261014000000_team_worker_node/migration.sql
+  $ grep -v '^--' .../migration.sql | grep -c "DROP COLUMN"
+  $ grep -v '^--' .../migration.sql | grep -c "ALTER TABLE"
+  $ grep -v '^--' .../migration.sql | grep -c '`agents`'
+  $ grep -v '^--' .../migration.sql | grep -c 'preferred_worker_id'
+  $ grep -v '^--' .../migration.sql
+  $ grep -ni "index\|foreign key\|constraint" .../migration.sql
+  $ for w in UPDATE INSERT "FOREIGN KEY" "IF EXISTS" "IF NOT EXISTS" \
+             preferred_worker_id worker_id; do
+        printf '%-20s => ' "$w"; grep -c -- "$w" migration.sql; done
+  $ grep '^--' migration.sql > /tmp/verify-t7-comments.txt
+    (then the same forbidden-word loop against the comments-only file)
+
+RAW OUTPUT
+     69 migration.sql
+  DROP COLUMN (comment-stripped)   = 1
+  ALTER TABLE (comment-stripped)   = 3
+  `agents`   (comment-stripped)    = 1
+  preferred_worker_id (stripped)   = 2
+
+  comment-stripped body (the ONLY executable lines):
+    ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+    ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+    ALTER TABLE `agents` DROP COLUMN `worker_id`;
+
+  index / "foreign key" / constraint over the WHOLE file: exactly one hit,
+  and it is prose inside the header comment:
+    22:--        的 :120-141 段）证明它是裸列：PRIMARY / UNIQUE / KEY / CONSTRAINT 段没有任何
+
+  literal counts over the WHOLE file (comments included):
+    UPDATE              => 0
+    INSERT              => 0
+    FOREIGN KEY         => 0
+    IF EXISTS           => 0
+    IF NOT EXISTS       => 0
+    preferred_worker_id => 2   (both on DDL lines 67/68, none in comments)
+    worker_id           => 3   (all on DDL lines, none new)
+
+  literal counts over COMMENT LINES ONLY (header reason block):
+    UPDATE                 => 0
+    INSERT                 => 0
+    FOREIGN KEY            => 0
+    IF EXISTS              => 0
+    IF NOT EXISTS          => 0
+    preferred_worker_id    => 0     <-- header uses the Chinese prose form instead
+
+ASSESSMENT
+  PASS. Exactly three bare DDL statements, all backtick-quoted in repo style
+  (`ALTER TABLE \`tbl\` ...;`), no trailing extra statements, no MODIFY, no
+  RENAME, no CREATE. All four required comment-stripped counts are 1 / 3 / 1 / 2.
+
+  Header inlines the one-way rollback contract (lines 47-57):
+    "-- 单向 DDL 回滚契约（内联写明，勿依赖外部引用；docs/tech-debt-rollback.md §1/§3）："
+    "本迁移**没有 down**，不可逆。回滚 = 两步，顺序不可颠倒："
+    "  1) 代码：`git reset --hard <last-green>`"
+    "  2) 数据：恢复**迁移前**的全库 dump，形如 ... < .omo/evidence/ddl-team-worker-node-<date>.sql"
+    "必须先代码后数据 ... restore 不是部分撤销 ... **迁移后的所有写入全部丢弃**。"
+  Order (code then data) and "restore discards later writes" are both stated.
+  PASS.
+
+---------------------------------------------------------------------
+ITEM 2 — no index, no FK, no shadow column, DROP not split
+---------------------------------------------------------------------
+COMMANDS
+  $ grep -v '^--' .../migration.sql            # full body printed above
+  $ grep -ni "index\|foreign key\|constraint" .../migration.sql
+  $ ls -la server/prisma/migrations/20261014000000_team_worker_node/
+  $ ls -d server/prisma/migrations/*team_worker_node
+  $ ls -d server/prisma/migrations/*/           # all 15 dirs
+
+RAW OUTPUT
+  index/FK/constraint hits in whole file: 1 (header prose only, see Item 1)
+  migration dir contents:
+    -rw-r--r--@ 1 mac  staff  6021 Oct 14 14:56 migration.sql
+    (nothing else — no backup file, no second .sql, no schema.prisma copy)
+  $ ls -d server/prisma/migrations/*team_worker_node
+    server/prisma/migrations/20261014000000_team_worker_node     (exactly 1)
+  all migration dirs (15):
+    20260925000000_squashed_baseline
+    20260926000000_secret_command_capability
+    20260929000000_capability_git_web_tier
+    20260930000000_capability_git_web_retire
+    20260930010000_memory_role_inject
+    20261001000000_task_long_running
+    20260907000000_message_external_chat_id   [as listed]
+    20261009010000_memory_refcount
+    20261009020000_capability_memory_org_tools
+    20261010010000_model_usage
+    20261010020000_worker_code_version
+    20261010030000_worker_update_state
+    20261014000000_team_worker_node            <-- this todo
+    20261014010000_memory_search_to_list      <-- UNRELATED sibling lane
+    migration_lock.toml
+
+ASSESSMENT
+  PASS. Zero ADD INDEX / ADD KEY / ADD CONSTRAINT / ADD FOREIGN KEY statements.
+  Zero *_old / *_backup / worker_id_backup shadow columns (the three ALTER lines
+  are the whole body). Exactly one DROP COLUMN statement in the entire repo
+  touching `agents`.`worker_id` (see Item 4 mutation "a" and assertion 2 for the
+  red-path proof), so the drop was not split into a second migration.
+
+---------------------------------------------------------------------
+ITEM 3 — baseline untouched (byte-identical to HEAD)
+---------------------------------------------------------------------
+COMMANDS
+  $ git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline
+  $ git hash-object server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+  $ git rev-parse HEAD:server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+  $ sed -n '118,147p' server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+
+RAW OUTPUT
+  (git status --porcelain -- ...)  -> EMPTY (no output at all)
+  3dc7533b9733e04b6947e289532bbe7ee7253950
+  3dc7533b9733e04b6947e289532bbe7ee7253950
+  (identical to each other and to the executor's recorded 3dc7533b9...)
+
+  baseline agents table, lines 118-141 (verbatim):
+   120 CREATE TABLE `agents` (
+   121   `id` varchar(191) ... NOT NULL,
+   122   `name` varchar(191) ... NOT NULL,
+   123   `type` varchar(191) ... NOT NULL,
+   124   `base_agent_id` varchar(191) ... DEFAULT NULL,
+   125   `prompt` text ... NOT NULL,
+   126   `default_model_id` varchar(191) ... DEFAULT NULL,
+   127   `created_by` varchar(191) ... NOT NULL,
+   128   `created_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+   129   `updated_at` datetime(3) NOT NULL,
+   130   `worker_id` varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+   131   `ack_message` varchar(191) ... DEFAULT NULL,
+   132   `persona` varchar(191) ... DEFAULT NULL,
+   133   `policy_id` varchar(191) ... DEFAULT NULL,
+   134   `agent_key` varchar(63) ... DEFAULT NULL,
+   135   PRIMARY KEY (`id`),
+   136   UNIQUE KEY `uk_agents_agent_key` (`agent_key`),
+   137   KEY `agents_base_agent_id_fkey` (`base_agent_id`),
+   138   KEY `agents_created_by_fkey` (`created_by`),
+   139   CONSTRAINT `agents_base_agent_id_fkey` FOREIGN KEY (`base_agent_id`)
+          REFERENCES `agents` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT,
+   140   CONSTRAINT `agents_created_by_fkey` FOREIGN KEY (`created_by`)
+          REFERENCES `users` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+   141 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ASSESSMENT
+  PASS.
+  - porcelain is empty AND hash-object == rev-parse HEAD == 3dc7533b9... ⇒ the
+    squashed baseline is byte-identical to HEAD; it was not edited (Must-NOT
+    line 39 satisfied).
+  - `agents.worker_id` really is declared at line 130 as a nullable
+    varchar(191) column.
+  - The PRIMARY/UNIQUE/KEY/CONSTRAINT block (135-141) mentions only `id`,
+    `agent_key`, `base_agent_id`, `created_by` — `worker_id` NEVER appears there.
+    ⇒ the DROP is safe (no index, no FK on the column) and Dropping is irreversible
+    with no constraint fallout. Both facts the plan requires are true in the file.
+
+---------------------------------------------------------------------
+ITEM 4 — guard spec content + live run (9 tests)
+---------------------------------------------------------------------
+COMMAND
+  $ cd /Volumes/SSD-Data/01work/git-project/vteam/server
+  $ npx jest src/prisma/team-worker-node.migration.spec.ts; echo JEST_EXIT=$?
+
+RAW OUTPUT (verbatim)
+PASS src/prisma/team-worker-node.migration.spec.ts
+  migration 20261014000000_team_worker_node
+    V 1. baseline must contain agents.worker_id (it is the target of this migration's DROP; dropping a non-existent column = ERROR 1091) (4 ms)
+    V 2. new migration must contain ALTER TABLE `agents` DROP COLUMN `worker_id`
+    V 3. new migration must contain the two ADD COLUMN preferred_worker_id (teams and team_members)
+    V 4. schema.prisma Agent block has no workerId, and preferred_worker_id appears exactly twice (1 ms)
+    V 5. zero UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS (after comment stripping) (1 ms)
+    V 6. baseline's agents.worker_id has no FK and no index (zero hits in the :135-141 constraint block)
+    V 7. the three DDLs are equivalent to the output produced by Prisma's migrate diff (column shape/order/table name)
+    V 8. exactly one migration directory, and lexicographically later than the previous migration batch (both existing/new-DB paths same order) (1 ms)
+    V 9. baseline must not be edited (the silent no-op defense of the reversed direction)
+
+Test Suites: 1 passed, 1 total
+Tests:       9 passed, 9 total
+Snapshots:   0 total
+Time:        1.311 s, estimated 2 s
+Ran all test suites matching /src\/prisma\/team-worker-node.migration.spec.ts/i.
+JEST_EXIT=0
+
+  ("V 1."..."V 9." = the spec's ①..⑨ glyphs; rendered as V by this terminal.)
+
+SPEC STRUCTURE / HELPER REUSE — confirmed by reading both files in full
+  model-usage.migration.spec.ts:55-64 defines
+    function statements(): string[] {
+      return sql().split('\n')
+        .filter((l) => !l.trim().startsWith('--'))
+        .join('\n').split(';')
+        .map((s) => s.trim()).filter((s) => s.length > 0);
+    }
+  team-worker-node.migration.spec.ts:85-93 defines the IDENTICAL shape
+    (same name, same three-step pipeline: drop comment lines -> split on ';' ->
+     trim -> drop empties), plus a sibling helper `executableSql()` that does the
+     same comment-strip without splitting (lines 96-101) so raw-substring
+     assertions can run on comments-stripped text.
+  => helper reuse confirmed: same source-of-truth trick (`fs.readFileSync` of the
+     real migration file), same comment-stripping discipline the plan demanded.
+
+ASSERTION DIRECTION — INVERTED as required (confirmed by reading lines 133-279)
+  * baseline MUST have the column  -> 1 (line 137) `expect(cols).toContain('`worker_id`')`
+                                    + line 139-141 column-shape regex
+  * new migration MUST drop it     -> 2 (line 145-147) `expect(executableSql()).toContain(
+                                       'ALTER TABLE `agents` DROP COLUMN `worker_id`;')`
+                                    + line 149 exactly 1 DROP COLUMN
+  * both ADDs present              -> 3 (lines 153-164) 2x ADD COLUMN `preferred_worker_id`
+                                    and both full statements
+  * schema declares preferred_worker_id exactly twice, no workerId in Agent -> 4
+    (line 170 Agent block `not.toMatch(/\bworkerId\b/)`; line 172 exactly 2 hits;
+     lines 174-177 one in Team block and one in TeamMember block, not both in one model)
+  * zero forbidden statements      -> 5 (lines 184-188 on comment-stripped DDL, plus a
+                                    SECOND pass over comment lines 190-203, plus
+                                    line 203 forbids the raw column name in the header)
+  * baseline has no FK/index on worker_id -> 6 (lines 209-217: every constraint
+                                    line must not contain 'worker_id'; and the block
+                                    is proven non-empty by asserting uk_agents_agent_key
+                                    and agents_base_agent_id_fkey ARE present —
+                                    this is what stops 6 from being vacuously green)
+  * plus two extras the plan did not demand but that add real value:
+    7 pins statement order/table-once/tables-unique (also the Prisma-diff equivalence),
+    9 pins baseline-not-edited and exactly-3-statements.
+
+ASSESSMENT
+  PASS. All six required coverage points are present, in the required (inverted)
+  direction, with anti-vacuity guards, and the suite is green: 9/9, JEST_EXIT=0.
+
+---------------------------------------------------------------------
+ITEM 5 — FALSIFICATION VIA MUTATION (mandatory)
+  Done on a THROWAWAY COPY only, under the approved temp dir
+  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/verify-t7
+  (now deleted). The repo was never mutated.
+
+SETUP
+  $ T=/private/var/folders/0y/.../T/opencode/verify-t7
+  $ rm -rf "$T"; mkdir -p "$T/server/src/prisma" "$T/server/test"
+  $ cp -R prisma "$T/server/prisma"                    # all 15 migration dirs incl. sibling
+  $ cp -R src/prisma/. "$T/server/src/prisma/"
+  $ cp jest.config.js tsconfig.json package.json "$T/server/"
+  $ cp test/setup-env.js "$T/server/test/"
+  $ ln -s <repo>/server/node_modules "$T/server/node_modules"
+  $ cd "$T/server" && npx jest src/prisma/team-worker-node.migration.spec.ts
+    -> PASS 9/9 (control run: the copy reproduces the green baseline)
+
+  md5 BEFORE (real repo files):
+    fe67b76a38d74c1364f4a5e32ebfc2fc  .../20261014000000_team_worker_node/migration.sql
+    4b9013300bafa27338992ae6af8b0d2f  .../server/src/prisma/team-worker-node.migration.spec.ts
+    9452d15d69280092ef9a0b447eb8d081  .../20260925000000_squashed_baseline/migration.sql
+    80b33b3e874ea99225040427d78afa0c  .../server/prisma/schema.prisma
+
+MUTATION (a) — comment out the DROP COLUMN statement
+  $ sed -i '' 's|^ALTER TABLE `agents` DROP COLUMN `worker_id`;|-- ALTER TABLE `agents` DROP COLUMN `worker_id`;|' "$M"
+  $ grep -v '^--' "$M"
+      ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+      ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+  $ cd "$T/server" && npx jest src/prisma/team-worker-node.migration.spec.ts --verbose
+
+  RAW OUTPUT (verbatim, abridged only where marked)
+    V 1. baseline must contain agents.worker_id ...        (2 ms)
+    X 2. new migration must contain ALTER TABLE `agents` DROP COLUMN `worker_id` (1 ms)
+    V 3. new migration must contain teams and team_members ADD COLUMN preferred_worker_id
+    V 4. schema.prisma Agent block has no workerId, and preferred_worker_id appears exactly twice (1 ms)
+    V 5. zero UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS (after comment stripping)
+    V 6. baseline's agents.worker_id has no FK and no index (zero hits in the :135-141 constraint block) (1 ms)
+    X 7. the three DDLs are equivalent to the output produced by Prisma's migrate diff ... (2 ms)
+    V 8. exactly one migration directory ... (1 ms)
+    X 9. baseline must not be edited (the silent no-op defense of the reversed direction)
+
+    ● migration 20261014000000_team_worker_node › 2. new migration must contain ALTER TABLE `agents` DROP COLUMN `worker_id`
+
+      expect(received).toContain(expected) // indexOf
+
+      Expected substring: "ALTER TABLE `agents` DROP COLUMN `worker_id`;"
+      Received string:    "
+      ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+      ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+      "
+
+        144 |
+        145 |     expect(executableSql()).toContain(
+            |                       ^
+        146 |       'ALTER TABLE `agents` DROP COLUMN `worker_id`;',
+        147 |     );
+
+    ● ... › 7. the three DDLs are equivalent ... (abridged diff)
+         Array [
+           "ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL",
+           "ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL",
+      -   "ALTER TABLE `agents` DROP COLUMN `worker_id`",
+         ]
+      at prisma/team-worker-node.migration.spec.ts:231:23
+
+    ● ... › 9. baseline must not be edited
+         expect(received).toHaveLength(expected)
+         Expected length: 3
+         Received length: 2
+      at prisma/team-worker-node.migration.spec.ts:278:26
+
+    Test Suites: 1 failed, 1 total
+    Tests:       3 failed, 6 passed, 9 total
+
+  => assertion 2 (the DROP assertion) goes RED. Assertions 7 and 9 also go RED on the
+     same injected fact (statement count / canonical order) — three views of one truth,
+     not three independent defects.
+
+MUTATION (b) — invert the baseline-contains-worker_id assertion
+  $ cp <repo>/.../migration.sql back into the copy        # restore copy to pristine
+  $ python3 - "$S" <<'PY'                                 # 1 occurrence, asserted
+    old="expect(cols).toContain('`worker_id`');"
+    new="expect(cols).not.toContain('`worker_id`');"
+    assert s.count(old)==1
+    ...
+  $ cd "$T/server" && npx jest src/prisma/team-worker-node.migration.spec.ts --verbose
+
+  RAW OUTPUT (verbatim, abridged only where marked)
+    X 1. baseline must contain agents.worker_id (it is the DROP target; dropping a non-existent column = ERROR 1091) (3 ms)
+    V 2. new migration must contain ALTER TABLE `agents` DROP COLUMN `worker_id`
+    V 3. ... ADD COLUMN preferred_worker_id
+    V 4. schema.prisma Agent block has no workerId ... (1 ms)
+    V 5. zero UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS (after comment stripping)
+    V 6. baseline's agents.worker_id has no FK and no index ...
+    V 7. the three DDLs are equivalent to the output produced by Prisma's migrate diff ...
+    V 8. exactly one migration directory, and lexicographically later than the previous migration batch ...
+    V 9. baseline must not be edited (the silent no-op defense of the reversed direction)
+
+      expect(received).not.toContain(expected) // indexOf
+
+      Expected value: not "`worker_id`"
+      Received array:     ["`id`", "`name`", "`type`", "`base_agent_id`", "`prompt`",
+                           "`default_model_id`", "`created_by`", "`created_at`",
+                           "`updated_at`", "`worker_id`", "`ack_message`", "`persona`",
+                           "`policy_id`", "`agent_key`"]
+
+      > 137 |     expect(cols).not.toContain('`worker_id`');
+      at prisma/team-worker-node.migration.spec.ts:137:23
+
+    Test Suites: 1 failed, 1 total
+    Tests:       1 failed, 8 passed, 9 total
+
+  => assertion 1 (baseline-contains-worker_id) goes RED, and the received array
+     proves it is neither vacuously green nor pinned to a constant: the 10th element
+     is `worker_id`.
+
+REPO INTEGRITY AFTER MUTATIONS
+  $ md5 -r <the four repo files>          # AFTER
+    fe67b76a38d74c1364f4a5e32ebfc2fc  .../20261014000000_team_worker_node/migration.sql
+    4b9013300bafa27338992ae6af8b0d2f  .../server/src/prisma/team-worker-node.migration.spec.ts
+    9452d15d69280092ef9a0b447eb8d081  .../20260925000000_squashed_baseline/migration.sql
+    80b33b3e874ea99225040427d78afa0c  .../server/prisma/schema.prisma
+  => identical to BEFORE (all four md5s match) ⇒ the repo is byte-for-byte untouched.
+  $ git status --porcelain | wc -l        -> 71  (same as at session start)
+  $ git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline
+    -> EMPTY
+  $ rm -rf "$T"; ls -d "$T"
+    -> ls: .../verify-t7: No such file or directory    (throwaway copy cleaned up)
+
+---------------------------------------------------------------------
+ITEM 6 — the self-reported defect: the old over-strong "newest dir" assertion
+---------------------------------------------------------------------
+WHAT THE OLD ASSERTION WAS
+  Executor's own evidence section 14 records it verbatim:
+    > 263 |     expect(all[all.length - 1]).toBe(MIGRATION_DIR_NAME);
+  i.e. "my migration is the repo's newest migration directory".
+
+DOES THE CURRENT SPEC STILL CONTAIN ANY SUCH ASSERTION?
+  $ grep -n "all\[all.length\|length - 1\|newest\|the last one" team-worker-node.migration.spec.ts
+    262:    // Deliberately **does NOT assert** "this migration is the repo's newest directory": that is an over-constraint unrelated to the contract,
+  (line 262 is a COMMENT saying it deliberately does not assert that; there is no code.)
+  $ grep -n "memory_search_to_list" team-worker-node.migration.spec.ts
+    266:    // (2026-10-14 real-world hit: after a sibling lane appended 20261014010000_memory_search_to_list ...
+  (line 266 is a COMMENT recording the incident; no code references the sibling.)
+
+  => NO executable assertion references the sibling lane at all. Assertion 8's three
+     live conditions are:
+       (a) dirs.filter(d => d.includes('team_worker_node')) toEqual [MIGRATION_DIR_NAME]
+       (b) all.indexOf(MIGRATION_DIR_NAME) > all.indexOf(PREVIOUS_MIGRATION_DIR_NAME)
+           (20261010030000_worker_update_state)
+       (c) all.indexOf(MIGRATION_DIR_NAME) > all.indexOf('20260925000000_squashed_baseline')
+       (d) all toContain PREVIOUS_MIGRATION_DIR_NAME (anti-vacuity guard: the
+           "previous batch" must actually exist, otherwise (b) is trivially true)
+
+IS THE CURRENT ASSERTION SET NEUTRAL TO AN UNRELATED LATER MIGRATION?
+  YES — verified empirically, not by reading alone. The real sibling
+  20261014010000_memory_search_to_list is present in the repo, and the spec is green
+  (9/9, Item 4). Additionally I injected a THIRD unrelated later migration into the
+  throwaway copy to prove neutrality is not a fluke of the one sibling:
+
+  TEST C — add dummy unrelated lane dir 20261114000000_zzz_unrelated_lane (+ sibling)
+    directories (tail):
+      .../20261014000000_team_worker_node/
+      .../20261014010000_memory_search_to_list/
+      .../20261114000000_zzz_unrelated_lane/
+    RAW OUTPUT: Tests: 9 passed, 9 total   (all green, incl. assertion 8)
+
+  => Neutral to unrelated later migrations. Confirmed.
+
+DID THE WEAKENING LOSE ANY REAL COVERAGE?
+  Two counter-mutation tests on the throwaway copy answer this directly:
+
+  TEST A — duplicate team_worker_node dir (cp -R to 20261014020000_team_worker_node)
+    RAW OUTPUT:
+      V 1..V 7 all pass
+      X 8. exactly one migration directory, and lexicographically later than the previous batch ... (1 ms)
+      V 9. baseline must not be edited ...
+      Tests: 1 failed, 8 passed, 9 total
+    => a DUPLICATE team_worker_node directory is still caught. Coverage retained.
+
+  TEST B — wrong timestamp (mv dir to 20260924000000_team_worker_node, i.e. it now
+            sorts BEFORE the baseline; spec constants updated to match)
+    RAW OUTPUT:
+      V 1..V 7 all pass
+      X 8. exactly one migration directory, and lexicographically later than the previous batch ... (1 ms)
+      V 9. baseline must not be edited ...
+      Expected: > 12
+      Received:   0
+      Tests: 1 failed, 8 passed, 9 total
+    => a WRONG TIMESTAMP (wrong position in the deploy order) is still caught.
+       Coverage retained.
+
+  CONCLUSION: the self-reported defect is real, the fix is correct, and the fix
+  removed only the "I am the newest directory" property — which is not a contract
+  condition and which any future migration from any lane would break forever.
+  The three real contract conditions (exactly one team_worker_node dir; sorts after
+  20261010030000_worker_update_state; sorts after the squashed baseline) all survive,
+  and both failure modes (duplicate dir, wrong timestamp) still turn the guard RED.
+  The weakening lost NO coverage that the plan required ("exactly 1 dir and
+  lexicographically after 20261010030000", acceptance criteria line 185 — which is
+  exactly assertions (a)+(b), both still live and both proven falsifiable).
+
+---------------------------------------------------------------------
+ITEM 7 — offline equivalence with Prisma's own migrate diff
+---------------------------------------------------------------------
+COMMANDS
+  $ git show HEAD:server/prisma/schema.prisma > /tmp/verify-pre.prisma
+  $ cd /Volumes/SSD-Data/01work/git-project/vteam/server
+  $ npx prisma migrate diff --from-schema-datamodel /tmp/verify-pre.prisma \
+      --to-schema-datamodel prisma/schema.prisma --script; echo DIFF_EXIT=$?
+
+RAW OUTPUT
+  warn The configuration property `package.json#prisma` is deprecated ... Prisma 7 ...
+  For more information, visit https://pris.ly/prisma-config
+
+  -- AlterTable
+  ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` VARCHAR(191) NULL;
+
+  -- AlterTable
+  ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` VARCHAR(191) NULL;
+
+  -- AlterTable
+  ALTER TABLE `agents` DROP COLUMN `worker_id`;
+
+  DIFF_EXIT=0
+
+RECONCILIATION AGAINST THE HAND-WRITTEN DDL
+  | # | Prisma emits                          | handwritten                                | verdict |
+  | 1 | ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` VARCHAR(191) NULL;   | ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL; | same table, column, type, width, order |
+  | 2 | same for `team_members`               | same                                       | idem |
+  | 3 | ALTER TABLE `agents` DROP COLUMN `worker_id`; | ALTER TABLE `agents` DROP COLUMN `worker_id`; | byte-identical |
+  3 statements = 3. No 4th statement. No index. No FK. Same order
+  (teams -> team_members -> agents).
+
+IS `NULL` (Prisma) SEMANTICALLY IDENTICAL TO `DEFAULT NULL` (handwritten)?
+  YES — this is the one legitimate difference and it is not a semantic difference.
+  * A nullable MySQL column with no explicit DEFAULT has NULL as its effective
+    default; `varchar(191) NULL` and `varchar(191) DEFAULT NULL` produce the same
+    column in information_schema (IS_NULLABLE='YES', COLUMN_DEFAULT=NULL in both).
+  * `DEFAULT NULL` is merely the explicit spelling of the implicit behavior, and it
+    is the repo's own house style for hand-written nullable ADD COLUMNs (the
+    20261010030000_worker_update_state migration is cited as that precedent in the
+    header comment, and it uses the same form).
+  * Case (`VARCHAR` vs `varchar`) is not significant in MySQL DDL.
+  So the hand-written DDL and Prisma's canonical output describe the SAME column.
+  This is also exactly what guard-spec assertion 7 pins: it normalizes whitespace
+  and asserts the three statements in order, treating NULL/DEFAULT NULL as equal
+  via the explicit expected strings — i.e. the equivalence is asserted, not assumed.
+
+  Cross-check performed (the one way this equivalence could have hidden a gap): I
+  ran the REVERSE diff (current -> pre) to see whether Prisma emits FK DDL in
+    $ npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma \
+        --to-schema-datamodel /tmp/verify-pre.prisma --script
+      -- AlterTable
+      ALTER TABLE `teams` DROP COLUMN `preferred_worker_id`;
+      -- AlterTable
+      ALTER TABLE `team_members` DROP COLUMN `preferred_worker_id`;
+      -- AlterTable
+      ALTER TABLE `agents` ADD COLUMN `worker_id` VARCHAR(191) NULL;
+  It emits no AddForeignKey / DropForeignKey either direction, so Prisma's
+  datamodel-to-datamodel diff in this repo does not emit constraint DDL — the
+  forward output of 3 statements is COMPLETE, and there is no missing
+  "ALTER TABLE agents DROP FOREIGN KEY" that the hand-written DDL should have had.
+  (The Agent->Worker relation in the pre-change schema was a schema-level relation
+  only; the baseline has no DB-level FK on agents.worker_id, as Item 3 proved, so
+  dropping the column leaves nothing dangling at the DB level either.)
+
+---------------------------------------------------------------------
+ITEM 8 — no-commit / attribution
+---------------------------------------------------------------------
+COMMAND
+  $ git log --oneline -1
+RAW OUTPUT
+  b6840d1 feat(chat): tools-card empty-shell governance + SSE real-time dual-stream + naming unification + thinking marquee + complete message display
+  => still b6840d1c (full sha verified earlier as b6840d1cd72cd536108457d3e78f6bcf54c548ec
+     in the executor's evidence; my `git log --oneline -1` shows the same short sha).
+  No commit was made by anyone for Todo 7. HEAD unchanged during this verification.
+
+ATTRIBUTION OF THE CONCURRENT UNRELATED WORK STREAM (explicitly EXCLUDED
+from Todo 7's verdict, per the task instructions):
+  M server/src/memories/*                      (dto, controller.spec, service.spec,
+                                                service, memory-importance,
+                                                memory-maintenance.service(.spec),
+                                                memory.constants)
+  M server/src/execution-policies/*            (8 files + snapshot)
+  M server/src/common/constants/*              (agent-role-prompts, agent.constants(.spec),
+                                                platform-capability)
+  M server/prisma/seed.ts
+  M scripts/e2e-role-boundaries.sh
+  M server/src/tasks/*                         (task-progression.scheduler, tasks.service)
+  ?? server/prisma/migrations/20261014010000_memory_search_to_list/   (sibling migration)
+  ?? server/src/prisma/memory-search-to-list.migration.spec.ts        (sibling guard spec)
+  => None of these were read as Todo 7 evidence, none were treated as Todo 7
+     defects, and none were treated as excuses for a real Todo 7 defect.
+  Concretely: `agents`.`worker_id` vs `vteam_memory_search` -> `vteam_memory_list`
+  are unrelated columns/tables; the sibling migration touches no table that this
+  migration touches (agents / teams / team_members) except none at all.
+
+  Known-sibling fallout observed while running the full prisma guard suite (NOT a
+  Todo 7 defect, recorded for completeness so it is not mis-attributed):
+    $ cd server && npx jest src/prisma
+      Test Suites: 1 failed, 21 passed, 22 total
+      Tests:       1 failed, 265 passed, 266 total
+    The single failure is `src/prisma/role-capabilities-web-parity.spec.ts`
+    ("capability catalog: server <-> web copy round-trip"), whose drift is
+      memory.search label: list/search team memory != search team memory
+      memory.search tools: vteam_memory_list != vteam_memory_search
+    i.e. exactly the sibling lane's in-flight rename. That spec does not reference
+    worker / preferredWorkerId / agents.worker_id at all, and Todo 7 touched
+    neither party of that comparison. Attribute to the sibling stream.
+
+=====================================================================
+3. DEFECTS
+=====================================================================
+NONE found in Todo 7's deliverables.
+
+The one defect that existed (the over-strong "newest directory" assertion in
+assertion 8) was:
+  - real (it was an unmaintainable global property, not a contract condition);
+  - self-reported by the executor;
+  - verified here as fixed, as neutral to the sibling migration, and as
+    still falsifiable for duplicate-dir and wrong-timestamp mutations (Item 6).
+  The smallest concrete fix has ALREADY been applied and requires no further action.
+
+No POST-GATE. No MEDIUM. No blocker. Do not fix anything.
+
+=====================================================================
+4. REPRO COMMANDS (exact, in order)
+=====================================================================
+  cd /Volumes/SSD-Data/01work/git-project/vteam
+
+  # Item 1 — counts + wording
+  M=server/prisma/migrations/20261014000000_team_worker_node/migration.sql
+  wc -l "$M"
+  grep -v '^--' "$M" | grep -c "DROP COLUMN"        # 1
+  grep -v '^--' "$M" | grep -c "ALTER TABLE"        # 3
+  grep -v '^--' "$M" | grep -c '`agents`'          # 1
+  grep -v '^--' "$M" | grep -c 'preferred_worker_id' # 2
+  grep -v '^--' "$M"                                # the 3 bare DDL lines
+  grep -ni "index\|foreign key\|constraint" "$M"    # 1 prose hit only
+  for w in UPDATE INSERT "FOREIGN KEY" "IF EXISTS" "IF NOT EXISTS" preferred_worker_id; do
+    printf '%-20s => ' "$w"; grep -c -- "$w" "$M"; done        # 0 ... 2
+  grep '^--' "$M" | grep -c 'preferred_worker_id'              # 0
+
+  # Item 3 — baseline untouched
+  git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline
+  git hash-object server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+  git rev-parse HEAD:server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+  sed -n '118,141p' server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+
+  # Item 4 — guard spec green
+  cd server && npx jest src/prisma/team-worker-node.migration.spec.ts; echo JEST_EXIT=$?
+
+  # Item 5 — falsification (throwaway copy; never the repo)
+  T=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/verify-t7
+  rm -rf "$T"; mkdir -p "$T/server/src/prisma" "$T/server/test"
+  cp -R server/prisma "$T/server/prisma"
+  cp -R server/src/prisma/. "$T/server/src/prisma/"
+  cp server/jest.config.js server/tsconfig.json server/package.json "$T/server/"
+  cp server/test/setup-env.js "$T/server/test/"
+  ln -s "$PWD/server/node_modules" "$T/server/node_modules"
+  md5 -r server/prisma/migrations/20261014000000_team_worker_node/migration.sql \
+         server/src/prisma/team-worker-node.migration.spec.ts
+  # (a)
+  sed -i '' 's|^ALTER TABLE `agents` DROP COLUMN `worker_id`;|-- ALTER TABLE `agents` DROP COLUMN `worker_id`;|' \
+    "$T/server/prisma/migrations/20261014000000_team_worker_node/migration.sql"
+  (cd "$T/server" && npx jest src/prisma/team-worker-node.migration.spec.ts --verbose)   # 3 failed (2,7,9)
+  # restore copy, then (b)
+  cp server/prisma/migrations/20261014000000_team_worker_node/migration.sql \
+     "$T/server/prisma/migrations/20261014000000_team_worker_node/migration.sql"
+  python3 - "$T/server/src/prisma/team-worker-node.migration.spec.ts" <<'PY'
+  import sys; p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+  old="expect(cols).toContain('`worker_id`');"
+  assert s.count(old)==1
+  open(p,'w',encoding='utf-8').write(s.replace(old,"expect(cols).not.toContain('`worker_id`');"))
+  PY
+  (cd "$T/server" && npx jest src/prisma/team-worker-node.migration.spec.ts --verbose)   # 1 failed (1)
+  # (c) neutrality to later migrations: add a dummy unrelated lane dir, re-run -> 9 green
+  # (d) duplicate team_worker_node dir -> assertion 8 red; wrong timestamp -> assertion 8 red
+  md5 -r server/prisma/migrations/20261014000000_team_worker_node/migration.sql \
+         server/src/prisma/team-worker-node.migration.spec.ts
+  rm -rf "$T"
+
+  # Item 7 — offline equivalence
+  git show HEAD:server/prisma/schema.prisma > /tmp/verify-pre.prisma
+  cd server && npx prisma migrate diff \
+    --from-schema-datamodel /tmp/verify-pre.prisma \
+    --to-schema-datamodel prisma/schema.prisma --script
+
+  # Item 8
+  git log --oneline -1
+
+=====================================================================
+5. CONFIDENCE
+=====================================================================
+0.97
+
+  Why high (everything in this verdict was re-derived from raw commands, not
+  accepted from the executor):
+    - 3/3 required counts (1 DROP / 3 ALTER / 1 agents) and 2 preferred_worker_id
+      re-derived independently;
+    - baseline byte-identity proven two independent ways (porcelain + blob hash
+      match against HEAD's own blob);
+    - guard spec green re-run in the real repo: 9/9, exit 0;
+    - both mandatory mutations reproduced RED on a throwaway copy, with the repo
+      md5-proven byte-identical before and after;
+    - the disputed assertion-8 claim settled empirically (3 extra experiments:
+      dummy later migration, duplicate dir, wrong timestamp);
+    - the one possible hole in the "Prisma-equivalent" claim (a missing DROP
+      FOREIGN KEY) was closed by running the reverse diff.
+
+  Why not 1.00:
+    - No MySQL is reachable in this environment, so the DDL was never executed
+      against a real server; correctness rests on the guard spec + offline diff
+      (this limitation is inherent to the plan's own strategy and is documented,
+      not hidden);
+    - The executor's evidence file could not be used as independent corroboration
+      (it is the artifact under verification), so all confirmation is primary;
+    - `role-capabilities-web-parity.spec.ts` is currently red due to the sibling
+      lane; that is out of Todo 7's scope, but it does mean a full
+      `jest src/prisma` gate cannot be green right now for reasons Todo 7 cannot fix.
+
+=====================================================================
+6. VERDICT (machine-readable mirror of the reply)
+=====================================================================
+{
+  "verdict": "confirmed",
+  "evidence": [
+    "migration.sql exists (69 lines, 6021 bytes), contains exactly three bare backticked DDL statements: ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL; / same on `team_members`; / ALTER TABLE `agents` DROP COLUMN `worker_id`;",
+    "comment-stripped counts re-derived: DROP COLUMN=1, ALTER TABLE=3, `agents`=1, preferred_worker_id=2 (matches the required 1/3/1/2)",
+    "header (lines 47-57) inlines the one-way rollback contract: no down migration; rollback = git reset --hard <last-green> THEN restore the pre-migration full dump (order non-interchangeable); restore discards all post-migration writes",
+    "header comment block contains zero occurrences of UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS and zero of the raw column name preferred_worker_id (all counts 0)",
+    "no index and no FK added: the only 'index|foreign key|constraint' hit in the whole file is prose in the header; the executable body is 3 ALTERs only; no *_old/*_backup shadow column; exactly one DROP COLUMN statement repo-wide so the drop was not split",
+    "baseline untouched: `git status --porcelain -- .../20260925000000_squashed_baseline` is EMPTY and `git hash-object` == `git rev-parse HEAD:...` == 3dc7533b9733e04b6947e289532bbe7ee7253950",
+    "baseline really declares `worker_id` at line 130 (varchar(191) ... DEFAULT NULL) and its PRIMARY/UNIQUE/KEY/CONSTRAINT block (135-141) never mentions worker_id (only id/agent_key/base_agent_id/created_by)",
+    "guard spec reuses model-usage.migration.spec.ts's comment-stripping statements() helper verbatim (plus an executableSql() sibling) and its assertions are inverted: baseline MUST have worker_id (1), new migration MUST contain the DROP (2), MUST contain both ADDs (3), schema must declare preferred_worker_id exactly twice and no workerId in the Agent block (4), zero forbidden statements (5), baseline has no FK/index on worker_id with an anti-vacuity guard (6), order/equivalence (7), baseline-not-edited (9)",
+    "raw jest run: PASS src/prisma/team-worker-node.migration.spec.ts, Tests: 9 passed, 9 total, JEST_EXIT=0",
+    "mutation (a) on a throwaway copy (comment out DROP COLUMN): Tests 3 failed, 6 passed — assertion 2 RED (plus 7 and 9, same fact)",
+    "mutation (b) on the throwaway copy (invert assertion 1 to not.toContain): Tests 1 failed, 8 passed — assertion 1 RED, with the received array showing `worker_id` as the 10th element",
+    "repo byte-identical after both mutations: md5 fe67b76a/4b901330/9452d15d/80b33b3e identical before and after; git status --porcelain count unchanged at 71; throwaway copy deleted",
+    "current spec has NO assertion that breaks merely because an unrelated later migration exists — the only mentions of the sibling 20261014010000_memory_search_to_list are comments (lines 266-267)",
+    "weakening lost no coverage: duplicate team_worker_node dir -> assertion 8 RED; timestamp moved before the baseline -> assertion 8 RED (Expected > 12, Received 0); adding a dummy unrelated later lane dir -> 9/9 green",
+    "offline diff output == the hand-written DDL: ALTER TABLE `teams`/`team_members` ADD COLUMN `preferred_worker_id` VARCHAR(191) NULL; + ALTER TABLE `agents` DROP COLUMN `worker_id`; (DIFF_EXIT=0), same order; NULL vs DEFAULT NULL is semantically identical for a nullable MySQL column (implicit default NULL, same information_schema column definition)",
+    "reverse diff (current -> pre) emits no AddForeignKey/DropForeignKey in either direction, proving the 3-statement output is complete and no DROP FOREIGN KEY is missing from the hand-written DDL",
+    "git log --oneline -1 is still b6840d1c; no commit/stash/checkout was executed by this verifier",
+    "sibling-stream files (server/src/memories/*, execution-policies/*, common/constants/*, prisma/seed.ts, scripts/e2e-role-boundaries.sh, server/src/tasks/*, 20261014010000_memory_search_to_list, memory-search-to-list.migration.spec.ts) attributed away from Todo 7; the one currently-red spec (role-capabilities-web-parity.spec.ts) fails only on memory.search label/tools drift from that sibling lane and references neither worker nor preferredWorkerId"
+  ],
+  "repro": "cd /Volumes/SSD-Data/01work/git-project/vteam && M=server/prisma/migrations/20261014000000_team_worker_node/migration.sql && grep -v '^--' \"$M\" | grep -c 'DROP COLUMN' && grep -v '^--' \"$M\" | grep -c 'ALTER TABLE' && git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline && git hash-object server/prisma/migrations/20260925000000_squashed_baseline/migration.sql && git rev-parse HEAD:server/prisma/migrations/20260925000000_squashed_baseline/migration.sql && git show HEAD:server/prisma/schema.prisma > /tmp/verify-pre.prisma && cd server && npx jest src/prisma/team-worker-node.migration.spec.ts; echo JEST_EXIT=$?; npx prisma migrate diff --from-schema-datamodel /tmp/verify-pre.prisma --to-schema-datamodel prisma/schema.prisma --script; git log --oneline -1",
+  "confidence": 0.97
+}
+
+Verifier: independent read-only subagent, Todo 7 of team-worker-node.
+Mutations performed ONLY inside a throwaway copy under the approved temp dir
+(/private/var/folders/0y/.../T/opencode/verify-t7), now deleted. Repo never mutated.
+No git add / commit / stash / checkout was executed at any point.

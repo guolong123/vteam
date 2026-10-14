@@ -1,0 +1,174 @@
+================================================================================
+TODO 11 — 成员面板 worker chip + 会话页接线 + testid 注册
+Plan: .omo/plans/team-worker-node.md (lines 233-244 + binding 22-47)
+Date: 2026-10-14 | HEAD: cb0ba6dab16571c0c979e41e40951000819f1c7 (unchanged, no commit made)
+================================================================================
+
+SCOPE CONFIRMED BEFORE EDITING
+- Todo 11 block (lines 233-244) and Must-have/Must-NOT-have (lines 22-47) read first.
+- Prior-todo types verified present, NOT re-added: web/src/api/teams.ts:20
+  (TeamMemberDto.preferredWorkerId) and task-detail-types.ts:139 (MemberView).
+
+================================================================================
+CHANGED FILES (only these 3 + this evidence file)
+================================================================================
+1) web/src/components/teams/TeamMembersPanel.tsx
+   - member element shape (+1 field): agents: {... overrideModelId?: string | null; preferredWorkerId?: string | null }
+   - destructure added: onChangeWorker (beside onChangeModel)
+   - prop contract added beside onChangeModel:
+       onChangeWorker?: (instanceId: string, workerId: string | null) => void
+   - state: workerPicker / workerSearch; outside-click effect extended to close workerPicker
+   - workers source: reuse EXISTING cache queryKey: ["workers"] (GET /workers, no new key/fetch),
+     online-first + name sort copied from teams/[id]/page.tsx:122-126
+   - dangling id echo: workerLabel(id) falls back to raw id when node missing (never renders 跟随团队)
+   - chip immediately beside model chip: data-testid={`agent-worker-chip-${a.instanceId ?? a.id}`},
+     aria-label="设置 Worker 节点", DASHED 「跟随团队」 when unset, SOLID node name when set
+     (two-state style mirrors model chip, was lines 464-498)
+   - expanding list after model picker: search box + FIRST entry 跟随团队
+     (data-testid=`agent-worker-option-${key}-follow-team`, calls onChangeWorker(id, null))
+     then node rows (data-testid=`agent-worker-option-${key}-${w.id}`, call onChangeWorker(id, nodeId),
+     collapse), each row shows name · id + 在线/离线 suffix + ✓ when selected
+2) web/app/(main)/teams/[id]/session/page.tsx
+   - SessionAgent type: + preferredWorkerId: string | null
+   - taskInstancesToSessionAgents: projects preferredWorkerId via `in`-narrowing
+     (TaskInstance web type has no such field — MemberView/TeamMemberDto do; mirrors the
+     opencodeAgentName handling in the same function; shared type intentionally NOT edited)
+   - teamAgentMembers mapping: + preferredWorkerId: m.preferredWorkerId ?? null  (BOTH mappings done)
+   - instanceWorkerMutation: api.patch(`/teams/${teamId}/members/${instanceId}`,
+     { preferredWorkerId: workerId ?? null }); onSuccess invalidates ["team", teamId] and,
+     when queueHeadTaskId exists, ["task", queueHeadTaskId] (comment mirrored from model mutation)
+   - <TeamMembersPanel ... onChangeWorker={(instanceId, workerId) => instanceWorkerMutation.mutate({ instanceId, workerId })}
+3) web/e2e/reference/testids.ts
+   - registered (session page section, where the chip actually renders):
+       "agent-worker-chip-<instanceId>"
+       "agent-worker-option-<instanceId>-follow-team"
+       "agent-worker-option-<instanceId>-<workerId>"
+
+================================================================================
+VERIFY — RAW OUTPUT (no pipes; zsh $? captured directly)
+================================================================================
+$ cd web && npx tsc --noEmit; echo TSC_EXIT=$?
+(no output)
+TSC_EXIT=0
+
+$ npm run lint; echo LINT_EXIT=$?
+✖ 729 problems (0 errors, 729 warnings)      <- warnings all pre-existing; none from my edits
+LINT_EXIT=0
+
+$ npm run build; echo BUILD_EXIT=$?
+> next build
+   ▲ Next.js 15.5.22
+   ✓ Compiled successfully in 8.7s
+   ✓ Generating static pages (30/30)
+   ... route table OK; /teams/[id]/session 45.6 kB ...
+BUILD_EXIT=0
+(build RUN, not skipped — nothing unverified on that axis)
+
+$ grep -n "agent-worker-chip" web/src/components/teams/TeamMembersPanel.tsx; echo CHIP_GREP_EXIT=$?
+528:                  data-testid={`agent-worker-chip-${a.instanceId ?? a.id}`}
+CHIP_GREP_EXIT=0
+
+$ grep -n "preferredWorkerId" "web/app/(main)/teams/[id]/session/page.tsx"; echo MUT_GREP_EXIT=$?
+59:  preferredWorkerId: string | null;                                    (SessionAgent type)
+74:    const preferredWorkerId =
+75:      "preferredWorkerId" in instance && typeof instance.preferredWorkerId === "string"
+76:        ? instance.preferredWorkerId
+87:      preferredWorkerId,                                                (task-instance mapping)
+442:        preferredWorkerId: m.preferredWorkerId ?? null,                 (team mapping)
+1143:      api.patch(`/teams/${teamId}/members/${instanceId}`, { preferredWorkerId: workerId ?? null }),
+MUT_GREP_EXIT=0
+$ grep -c "preferredWorkerId" "web/app/(main)/teams/[id]/session/page.tsx"
+7                                                                          (required ≥3)
+
+$ grep -n 'api.patch(`/teams/${teamId}/members/${instanceId}`, { preferredWorkerId' "web/app/(main)/teams/[id]/session/page.tsx"; echo ENDPOINT_EXIT=$?
+1143:      api.patch(`/teams/${teamId}/members/${instanceId}`, { preferredWorkerId: workerId ?? null }),
+ENDPOINT_EXIT=0
+
+instanceWorkerMutation onSuccess (raw sed -n '1138,1158p'):
+      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+      if (queueHeadTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
+      }
+(both invalidations present, queue one conditional)
+
+$ git log --oneline -1
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+
+================================================================================
+STATIC ROUND-TRIP ASSERTION (happy-path substitute; script kept OUTSIDE repo)
+================================================================================
+$ node /private/var/folders/.../T/opencode/task11-assert.cjs; echo ASSERT_EXIT=$?
+ASSERT_PASS: all checks green (mappings x2, wiring, mutation, dual invalidation, panel contract, cache reuse, testids)
+ASSERT_EXIT=0
+Checks: team-mapping projection (block-scoped slice of teamAgentMembers, not a bare grep) ·
+task-instance-mapping projection · onChangeWorker wired to <TeamMembersPanel> bound to
+instanceWorkerMutation · verbatim endpoint+field literal · ["team",teamId] invalidation ·
+conditional ["task",queueHeadTaskId] invalidation · panel prop contract · chip testid ·
+aria-label · 跟随团队 clear handler onChangeWorker(id,null) · node handler onChangeWorker(id,nodeId) ·
+member-shape field · ["workers"] cache reuse (rejects any ["workers", ...] second key) ·
+testids registered.
+
+================================================================================
+FAILURE / MUTATION CHECK — REAL mutation, zero-residue revert
+================================================================================
+Mutation applied: DELETED line 442 `preferredWorkerId: m.preferredWorkerId ?? null,`
+from the team-derived mapping (the exact recorded scar: only one of the two mappings).
+
+$ node task11-assert.cjs; echo ASSERT_EXIT=$?
+ASSERT_FAIL: team-derived member mapping lost preferredWorkerId projection (silent-null scar)
+ASSERT_EXIT=1
+
+Why this gate is non-trivial — tsc does NOT catch this drop (optional field on the panel's
+agents shape makes the omission assignable; that is precisely the silent-null scar):
+$ cd web && npx tsc --noEmit; echo TSC_WITH_DROP_EXIT=$?
+TSC_WITH_DROP_EXIT=0
+
+Revert: line restored byte-identical.
+$ node task11-assert.cjs; echo ASSERT_REVERT_EXIT=$?
+ASSERT_PASS: all checks green (mappings x2, wiring, mutation, dual invalidation, panel contract, cache reuse, testids)
+ASSERT_REVERT_EXIT=0
+
+Zero residue:
+$ grep -rn "TASK11_PROBE\|PROBE_TOKEN" web/src web/app web/e2e; echo PROBE_GREP_EXIT=$?
+PROBE_GREP_EXIT=1        (no matches = 0 probe tokens)
+$ cd web && npx tsc --noEmit; echo TSC_FINAL_EXIT=$?
+TSC_FINAL_EXIT=0
+
+Worktree: only my 3 files among tonight's task changes:
+ M web/app/(main)/teams/[id]/session/page.tsx   (+25)
+ M web/e2e/reference/testids.ts                 (+4/-1: my 3 entries + earlier todo's agent-worker-select removal)
+ M web/src/components/teams/TeamMembersPanel.tsx (+154/-4)
+All other dirty files were already dirty before I started (earlier todos + next dev
+AGENTS.md block); I touched none of them. No git add/commit/stash/checkout run.
+
+================================================================================
+MANUAL QA CHANNEL
+================================================================================
+LIVE STACK: NOT PRESENT on this machine — no web+API stack was running (nothing was
+listening on :3001/:13001), so the DOM-render half and the live-HTTP half were NOT
+performed. Explicitly: no real PATCH /teams/:id/members/:mid was driven, and no rendered
+DOM was inspected.
+SUBSTITUTE (labeled): static round-trip assertion over the rendered JSX source contract
+(chip testid/labels/two states/list handlers) plus tsc(0)/lint(0)/build(0) — all above.
+LIVE HALF CARRIER: named as Todo 12 (scripts/e2e-team-worker-node.sh, segment B asserts
+the PATCH really hits the member endpoint) per the plan's QA scenarios.
+
+================================================================================
+DEVIATIONS / NOTES FOR THE ORCHESTRATOR
+================================================================================
+1. testids placement: plan text said "adjacent to /agents section"; I registered in the
+   /teams/[id]/session section because that is where the chip actually renders (the panel
+   is only consumed by the session page). Registering a session-page chip under /agents
+   would make PAGES factually wrong. Also: team-worker-select is NOT present in
+   testids.ts (no /teams/[id] PAGES entry exists at all) — the task brief's claim that it
+   was already registered is inaccurate; per "add ONLY the new chip/list testids you
+   actually create" I did not add it (earlier todo's entry ownership respected).
+2. TaskInstance (web type) has no preferredWorkerId field — only MemberView:139 and
+   TeamMemberDto:20 do. Rather than edit the shared TaskInstance type (owned by the
+   task-detail surface, potentially sibling-edited), the task-instance mapping reads it
+   with the same `"x" in instance && typeof ...` narrowing already used for
+   opencodeAgentName in that exact function. Runtime behaviour identical.
+3. Chip label for set state shows node NAME (raw id echo if the node was deleted) —
+   never silently falls back to 跟随团队 for a dangling id.
+4. 跟随团队 clears to null (never 跟随模板); model chip behaviour untouched;
+   onChangeModel contract untouched; no new page/tab/nav; no server path touched.

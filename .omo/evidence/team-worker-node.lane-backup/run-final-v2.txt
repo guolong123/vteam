@@ -1,0 +1,218 @@
+[e2e] date=2026-10-14T14:58:22Z HEAD=cb0ba6d1ab16571c0c979e41e40951000819f1c7 branch=fix/doc-pdf-export
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/team-worker-node
+[e2e] W_A=w_compose_worker W_B=w_e2e_second W_NOPE=w_nope_e2e_dangling WORKER2_NAME=vteam-e2e-worker2
+[e2e] PRE-0 docker version (exit=0):
+[e2e]   Client:
+[e2e]    Version:           29.8.2
+[e2e]    API version:       1.56
+[e2e]    Go version:        go1.26.8
+[e2e]    Git commit:        7fc2dff
+[e2e]    Built:             Sun Oct 11 12:42:20 2026
+[e2e]    OS/Arch:           darwin/arm64
+[e2e]    Context:           orbstack
+[e2e]   
+[e2e]   Server: Docker Engine - Community
+[e2e]    Engine:
+[e2e]     Version:          29.8.2
+[e2e]     API version:      1.56 (minimum version 1.40)
+[e2e]     Go version:       go1.26.8
+[e2e]     Git commit:       8af9fe3
+[e2e]     Built:            Wed Sep 30 19:32:49 2026
+[e2e]     OS/Arch:          linux/arm64
+[e2e]     Experimental:     true
+[e2e]    containerd:
+[e2e]     Version:          v2.3.6
+[e2e]     GitCommit:        ee2735368117d2eb259779949d5e75cdafec9761
+[e2e]    runc:
+[e2e]     Version:          1.5.2
+[e2e]     GitCommit:        29dd3dc2b13b4123162e5fe132504bb4b15569f1
+[e2e]    docker-init:
+[e2e]     Version:          0.19.0
+[e2e]     GitCommit:        de40ad0
+[e2e] PRE-1 docker compose build server web (timeout 3600s)
+[e2e] build| #29 [server stage-2 3/6] COPY --from=build /app/dist ./dist
+[e2e] build| #29 CACHED
+[e2e] build| 
+[e2e] build| #30 [server deps 4/4] RUN npm config set registry https://registry.npmmirror.com && npm ci
+[e2e] build| #30 CACHED
+[e2e] build| 
+[e2e] build| #31 [server build 5/6] RUN npx prisma generate
+[e2e] build| #31 CACHED
+[e2e] build| 
+[e2e] build| #32 [server deps 3/4] COPY package.json package-lock.json ./
+[e2e] build| #32 CACHED
+[e2e] build| 
+[e2e] build| #33 [server build 4/6] COPY . .
+[e2e] build| #33 CACHED
+[e2e] build| 
+[e2e] build| #34 [server stage-2 4/6] COPY --from=build /app/node_modules ./node_modules
+[e2e] build| #34 CACHED
+[e2e] build| 
+[e2e] build| #35 [server build 6/6] RUN npm run build
+[e2e] build| #35 CACHED
+[e2e] build| 
+[e2e] build| #36 [server stage-2 5/6] COPY --from=build /app/package.json ./package.json
+[e2e] build| #36 CACHED
+[e2e] build| 
+[e2e] build| #13 [server build  2/11] WORKDIR /app
+[e2e] build| #13 CACHED
+[e2e] build| 
+[e2e] build| #37 [server stage-2 6/6] COPY --from=build /app/prisma ./prisma
+[e2e] build| #37 CACHED
+[e2e] build| 
+[e2e] build| #38 [server] exporting to image
+[e2e] build| #38 exporting layers done
+[e2e] build| #38 writing image sha256:bfa7160ac8a1c2a65bd06c72bed41bb6bc1e443865b326399db001c3c75c1bfa done
+[e2e] build| #38 naming to docker.io/library/vteam-server done
+[e2e] build| #38 DONE 0.0s
+[e2e] build| 
+[e2e] build| #39 [server] resolving provenance for metadata file
+[e2e] build| #39 DONE 0.0s
+[e2e] build|  Image vteam-server Built 
+[e2e] build|  Image vteam-web Built 
+[e2e] PRE-1 docker compose build server web exit=0 (full log: /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/tmp.CHmAr4zHlN is a temp file; last 40 lines above)
+[e2e] down|  Container vteam-compose-worker Stopping 
+[e2e] down|  Container vteam-compose-web Stopping 
+[e2e] down|  Container vteam-compose-web Stopped 
+[e2e] down|  Container vteam-compose-web Removing 
+[e2e] down|  Container vteam-compose-web Removed 
+[e2e] down|  Container vteam-compose-worker Stopped 
+[e2e] down|  Container vteam-compose-worker Removing 
+[e2e] down|  Container vteam-compose-worker Removed 
+[e2e] down|  Container vteam-compose-server Stopping 
+[e2e] down|  Container vteam-compose-server Stopped 
+[e2e] down|  Container vteam-compose-server Removing 
+[e2e] down|  Container vteam-compose-server Removed 
+[e2e] down|  Container vteam-compose-init Stopping 
+[e2e] down|  Container vteam-compose-init Stopped 
+[e2e] down|  Container vteam-compose-init Removing 
+[e2e] down|  Container vteam-compose-init Removed 
+[e2e] down|  Container vteam-compose-db Stopping 
+[e2e] down|  Container vteam-compose-db Stopped 
+[e2e] down|  Container vteam-compose-db Removing 
+[e2e] down|  Container vteam-compose-db Removed 
+[e2e] down|  Network vteam_vteam-net Removing 
+[e2e] down|  Network vteam_vteam-net Removed 
+[e2e] PRE-1 docker compose down exit=0
+[e2e] PRE-1 docker compose up -d
+[e2e] up|  Network vteam_vteam-net Creating 
+[e2e] up|  Network vteam_vteam-net Creating 
+[e2e] up|  Network vteam_vteam-net Created 
+[e2e] up|  Network vteam_vteam-net Created 
+[e2e] up|  Container vteam-compose-db Creating 
+[e2e] up|  Container vteam-compose-db Created 
+[e2e] up|  Container vteam-compose-init Creating 
+[e2e] up|  Container vteam-compose-init Created 
+[e2e] up|  Container vteam-compose-server Creating 
+[e2e] up|  Container vteam-compose-server Created 
+[e2e] up|  Container vteam-compose-worker Creating 
+[e2e] up|  Container vteam-compose-web Creating 
+[e2e] up|  Container vteam-compose-web Created 
+[e2e] up|  Container vteam-compose-worker Created 
+[e2e] up|  Container vteam-compose-db Starting 
+[e2e] up|  Container vteam-compose-db Started 
+[e2e] up|  Container vteam-compose-db Waiting 
+[e2e] up|  Container vteam-compose-db Healthy 
+[e2e] up|  Container vteam-compose-init Starting 
+[e2e] up|  Container vteam-compose-init Started 
+[e2e] up|  Container vteam-compose-init Waiting 
+[e2e] up|  Container vteam-compose-db Waiting 
+[e2e] up|  Container vteam-compose-db Healthy 
+[e2e] up|  Container vteam-compose-init Exited 
+[e2e] up|  Container vteam-compose-server Starting 
+[e2e] up|  Container vteam-compose-server Started 
+[e2e] up|  Container vteam-compose-server Waiting 
+[e2e] up|  Container vteam-compose-server Waiting 
+[e2e] up|  Container vteam-compose-server Healthy 
+[e2e] up|  Container vteam-compose-server Healthy 
+[e2e] up|  Container vteam-compose-worker Starting 
+[e2e] up|  Container vteam-compose-web Starting 
+[e2e] up|  Container vteam-compose-web Started 
+[e2e] up|  Container vteam-compose-worker Started 
+[e2e] PRE-1 docker compose up -d exit=0
+[e2e] PRE-1 waiting for server health (timeout 420s)
+[e2e] PRE-1 server healthy; docker compose ps:
+[e2e] ps| NAME                   IMAGE          COMMAND                  SERVICE   CREATED          STATUS                                     PORTS
+[e2e] ps| vteam-compose-db       mysql:8        "docker-entrypoint.s…"   db        13 seconds ago   Up 13 seconds (healthy)                    3306/tcp, 33060/tcp
+[e2e] ps| vteam-compose-server   vteam-server   "docker-entrypoint.s…"   server    13 seconds ago   Up 5 seconds (healthy)                     0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+[e2e] ps| vteam-compose-web      vteam-web      "docker-entrypoint.s…"   web       13 seconds ago   Up Less than a second (health: starting)   0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+[e2e] ps| vteam-compose-worker   vteam-worker   "docker-entrypoint.s…"   worker    13 seconds ago   Up Less than a second                      0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp
+[e2e] PRE-0 logged in as admin (token acquired, value not logged)
+[e2e] PRE-1b information_schema teams.preferred_worker_id count=1
+[e2e] PRE-1b information_schema team_members.preferred_worker_id count=1
+[e2e] PRE-1b schema guard PASS (both columns exist → migrations ran on this image)
+[e2e] PRE-2 ensuring a second REAL worker container (vteam-e2e-worker2, WORKER_ID=w_e2e_second)
+[e2e] run|  Container vteam-compose-db Running 
+[e2e] run|  Container vteam-compose-server Running 
+[e2e] run|  Container vteam-compose-db Waiting 
+[e2e] run|  Container vteam-compose-db Healthy 
+[e2e] run|  Container vteam-compose-init Starting 
+[e2e] run|  Container vteam-compose-init Started 
+[e2e] run|  Container vteam-compose-db Waiting 
+[e2e] run|  Container vteam-compose-init Waiting 
+[e2e] run|  Container vteam-compose-db Healthy 
+[e2e] run|  Container vteam-compose-init Exited 
+[e2e] run|  Container vteam-compose-server Waiting 
+[e2e] run|  Container vteam-compose-server Healthy 
+[e2e] run|  Container vteam-e2e-worker2 Creating 
+[e2e] run|  Container vteam-e2e-worker2 Created 
+[e2e] run| 59c05e2b8cf6ac03f47df74b21952e266f78aaee3eae73e678d85fced7c96153
+[e2e] PRE-2 docker compose run -d --name vteam-e2e-worker2 -e WORKER_ID=w_e2e_second -e WORKER_ADVERTISE_HOST=http://vteam-e2e-worker2 -v vteam_e2e_worker2_data:/data/vteam-worker -v vteam_e2e_worker2_home:/root worker exit=0
+[e2e] PRE-2 waiting for TWO online workers (timeout 420s)
+[e2e] PRE-2 two online workers confirmed (db):
+[e2e] db| w_compose_worker	online	1.19.0	2026-10-14 15:00:03.733
+[e2e] db| w_e2e_second	online	1.19.0	2026-10-14 15:00:05.933
+[e2e] PRE-0 logged in as admin (token acquired, value not logged)
+[e2e] PRE-2 capabilities.baseUrl: w_compose_worker=http://worker:4000 w_e2e_second=http://vteam-e2e-worker2:4000
+[e2e] PASS PRE-2 two real, addressable workers online with distinct baseUrls
+[e2e] setup role=ar_product agent=a_product (first agent with no default model, so the dispatch model chain stays empty and B1 cannot mask the pin)
+[e2e] setup team=tm_0000000002 member=tmm_0000000008 mainAgentMemberId=tmm_0000000008
+[e2e] A PATCH team preferredWorkerId=w_compose_worker → GET returns w_compose_worker
+[e2e] A PATCH team preferredWorkerId="" → GET returns null (automatic scheduling)
+[e2e] A PATCH team preferredWorkerId=null → GET returns null
+[e2e] PASS A team-level preferred worker set / cleared via PATCH + GET round trip
+[e2e] B team=w_compose_worker + member=w_e2e_second → GET /teams/:id member=w_e2e_second AND GET /tasks/:id instance=w_e2e_second (both w_e2e_second)
+[e2e] B member cleared → GET /teams/:id member= (null) AND GET /tasks/:id instance= (null), team still w_compose_worker
+[e2e] B NOTE the DTOs echo the member's raw slot (null = follow team); that the effect falls back to w_compose_worker — not to automatic scheduling — is proven by the dispatch in C1 below
+[e2e] PASS B member choice beats team in both projections and both agree after clearing
+[e2e] dispatch(C1): message POST -> HTTP 201 channel=c_0000000002 (fire-and-forget; the binding is read back from the DB)
+[e2e] C1 session bound worker=w_compose_worker (team pin w_compose_worker honored)
+[e2e] dispatch(C2): message POST -> HTTP 201 channel=c_0000000002 (fire-and-forget; the binding is read back from the DB)
+[e2e] C2 session bound worker=w_e2e_second (member pin w_e2e_second honored, team pin w_compose_worker overridden)
+[e2e] C3 docker stop vteam-e2e-worker2 -> ok; waiting for the DB row to flip offline (markStaleWorkersOffline, up to 120s)
+[e2e] C3 db: w_e2e_second -> offline
+[e2e] dispatch(C3): message POST -> HTTP 201 channel=c_0000000002 (fire-and-forget; the binding is read back from the DB)
+[e2e] C3 warn line: {"level":40,"time":1791990048365,"pid":1,"hostname":"85a8617c791f","req":{"id":137,"method":"POST","url":"/api/v1/channels/c_0000000002/messages","query":{},"params":{"0":"channels/c_0000000002/messages"},"headers":{"host":"localhost:13000","user-agent":"curl/8.7.1","accept":"*/*","authorization":"[Redacted]","content-type":"application/json","content-length":"72"},"remoteAddress":"::ffff:192.168.97.1","remotePort":45162},"context":"WorkersService","msg":"assignWorker 首选 worker w_e2e_second 未命中：不在候选集中（行缺失或已 offline，二者不可区分）；回退自动调度 w_compose_worker"}
+[e2e] C3 session bound worker=w_compose_worker (not the offline w_e2e_second); no 5xx-class dispatch failure in the server log slice
+[e2e] PASS C pinned node offline → soft fallback, no 5xx, pin-miss warning logged
+[e2e] D docker start vteam-e2e-worker2 -> ok; waiting for the DB row to leave offline (up to 120s)
+[e2e] D1 dangling member pin w_nope_e2e_dangling saved and round-tripped verbatim (HTTP 2xx, no existence check)
+[e2e] dispatch(D1): message POST -> HTTP 201 channel=c_0000000002 (fire-and-forget; the binding is read back from the DB)
+[e2e] D1 session bound worker=w_compose_worker (automatic scheduling, pin ignored); warn: {"level":40,"time":1791990057326,"pid":1,"hostname":"85a8617c791f","req":{"id":164,"method":"POST","url":"/api/v1/channels/c_0000000002/messages","query":{},"params":{"0":"channels/c_0000000002/messages"},"headers":{"host":"localhost:13000","user-agent":"curl/8.7.1","accept":"*/*","authorization":"[Redacted]","content-type":"application/json","content-length":"72"},"remoteAddress":"::ffff:192.168.97.1","remotePort":42196},"context":"WorkersService","msg":"assignWorker 首选 worker w_nope_e2e_dangling 未命中：不在候选集中（行缺失或已 offline，二者不可区分）；回退自动调度 w_compose_worker"}
+[e2e] dispatch(D2): message POST -> HTTP 201 channel=c_0000000002 (fire-and-forget; the binding is read back from the DB)
+[e2e] D2 team pin w_nope_e2e_dangling (dangling) → session bound worker=w_compose_worker; warn: {"level":40,"time":1791990057326,"pid":1,"hostname":"85a8617c791f","req":{"id":164,"method":"POST","url":"/api/v1/channels/c_0000000002/messages","query":{},"params":{"0":"channels/c_0000000002/messages"},"headers":{"host":"localhost:13000","user-agent":"curl/8.7.1","accept":"*/*","authorization":"[Redacted]","content-type":"application/json","content-length":"72"},"remoteAddress":"::ffff:192.168.97.1","remotePort":42196},"context":"WorkersService","msg":"assignWorker 首选 worker w_nope_e2e_dangling 未命中：不在候选集中（行缺失或已 offline，二者不可区分）；回退自动调度 w_compose_worker"}
+[e2e] PASS D unavailable/dangling pin (member and team) → dispatch still auto-schedules, no throw
+[e2e] final state: team pin='' member pin='' (both cleared)
+[e2e] OPTIONAL Playwright not requested (E2E_WITH_PLAYWRIGHT != 1). The DOM placeholder echo for a dangling id therefore has NO automatic guard this round — recorded as non-blocking, never a success criterion, and never part of scripts/gate.sh.
+[e2e] ----- assertions -----
+[e2e] [e2e] PASS PRE-2 two real, addressable workers online with distinct baseUrls
+[e2e] [e2e] PASS A team-level preferred worker set / cleared via PATCH + GET round trip
+[e2e] [e2e] PASS B member choice beats team in both projections and both agree after clearing
+[e2e] [e2e] PASS C pinned node offline → soft fallback, no 5xx, pin-miss warning logged
+[e2e] [e2e] PASS D unavailable/dangling pin (member and team) → dispatch still auto-schedules, no throw
+[e2e] all four segments (A/B/C/D) PASS against the live stack; evidence: /Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/team-worker-node/e2e.txt
+[e2e] workers at exit:
+[e2e] db| w_compose_worker	online
+[e2e] db| w_e2e_second	online
+[e2e] done
+[e2e] ----- cleanup receipt -----
+[e2e] cleanup: DELETE /tasks/t_0000000001 -> HTTP 200
+[e2e] cleanup: DELETE /teams/tm_0000000002 -> HTTP 200
+[e2e] cleanup: db rows left in teams for tm_0000000002 = 0
+[e2e] cleanup: db DELETE sessions by id ('s_0000000001''s_0000000002''s_0000000003''s_0000000004''s_0000000005') ok
+[e2e] cleanup: db DELETE sessions for member tmm_0000000008 ok
+[e2e] cleanup: db DELETE workers id=w_e2e_second ok (availabilities/instances/sessions cleared first)
+[e2e] cleanup: docker rm -f vteam-e2e-worker2 ok
+[e2e] cleanup: docker volume rm vteam_e2e_worker2_data vteam_e2e_worker2_home ok
+[e2e] cleanup: temp files removed
+[e2e] ----- exit code: 0 -----

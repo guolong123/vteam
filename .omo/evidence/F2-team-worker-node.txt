@@ -1,0 +1,110 @@
+# F2 — team-worker-node 代码质量对抗评审（反方立场，read-only）
+
+- 评审对象：`.omo/plans/team-worker-node.md` 的交付代码（工作区实现，HEAD=cb0ba6d1ab16571c0c979e41e40951000819f1c7）
+- 方法：全部结论开源码核对（非计划文本）；`npx jest` 实测 22 组 1108 例全绿、`tsc --noEmit` exit 0
+- **结论：0 BLOCKER，8 NOTE。verdict=approved**（无可复现缺陷、无被违反的验收标准、无正确性/安全/数据丢失风险）
+
+================================================================================
+## Q1 静默模型漂移 —— 无 BLOCKER，B2 warn 可达且同时点名 workerId 与 defaultModelId
+================================================================================
+代码路径（server/src/chat/worker-dispatcher.ts）：
+- :2296-2299 `const agentModelId = memberOverride ?? request.taskContext?.overrideModelId ?? (await this.resolveAgentModelId(target.agentId));`
+- :4036/:4042/:4046 `resolveAgentModelId` 全链无模型时返回 **null**（不是 undefined）⇒ `agentModelId === null` 在生产可达（唯一构造 taskContext 的生产调用方 chat.service.ts:1286 只传 taskId、不传 overrideModelId；成员 overrideModelId 落库前被 `?.trim() || null` 归一，空串不可能进链）⇒ B2 不是死码。
+- :2393-2402 B2 warn 原文：
+  `首选 worker ${workerId} 已生效，但成员/任务/agent 链均未解析出模型，最终模型取自该 worker 的 defaultModelId=${workerRow.defaultModelId ?? null}`
+  ——同时含 resolved workerId 与 defaultModelId，满足「两个 id 都点名」。
+- 该 warn 位于离线重分配分支（:2358-2381 重取 workerRow）**之后**，两条分派路径（首绑 :2328 / 重分配 :2358）命中置顶均被覆盖。
+静默漂移排查补强：
+- `agentModelId` 非空 ⇒ 模型恒为 agentModelId，pin 只选 worker，不改模型；且 pin 必须过 matchesModelRequirement。
+- `modelId` 非空 + 置顶 worker 从未上报能力 ⇒ B1（workers.service.ts:934-939）拒 pin，堵住 `avail.length===0 ⇒ true` 被 pin 变成确定性选择的静默击穿。
+- pin 未命中 ⇒ 模型来源与今日逐字节一致，无 warn 亦无漂移。
+- 会话复用路径（:2282）workerId 不变 ⇒ 模型来源不变；此时 B2 仍可能打一条（workerId===preferredWorkerId 且全链无模型），属无害冗余而非错误。
+⇒ 未发现「pin 改模型且零日志」的路径。B2 有可失败测试（worker-dispatcher.spec.ts:3449-3485，实测通过）。
+
+================================================================================
+## Q2 WARN 量级 —— NOTE-1（非 blocker：命中的是有自身上限的日志路径之外的情况）
+================================================================================
+- 置顶未命中 warn（workers.service.ts:923-925）每次 dispatch 恰好 1 条：assignWorker 全仓仅 9 个调用点（见 Q3），只有分派 2 处能带 preferredWorkerId，每次 dispatchForTeamTarget 最多调 assignWorker 2 次（首绑 + 离线重分配，互斥场景常态 1 次）。无定时器/重试回路放大，无 per-worker 循环。
+- 稳态量化：置顶节点消失的团队，其**每条触发消息**产生 1 条 warn（团队群聊高频时可达日均数十~数百条/团队）；resolver 失败 warn 仅在实际 DB 读失败时出现，不参与稳态。
+- 该日志路径自身无节流，但下游有硬上限：compose json-file 默认 max-size=10m×3 轮转、k8s 节点级轮转 ⇒ 不会撑爆磁盘；「warn every time」作为计划强制项是安全的，去重/限频属范围外改动，仅记为 NOTE。
+- B2 warn（:2398）与 pin-miss warn 互斥（pin 命中 vs 未命中），不会叠加。
+
+================================================================================
+## Q3 九处调用点逐一证明 —— 无行为变化，唯一例外即两处分派点
+================================================================================
+`assignWorker(req: AssignmentRequirement = {})`（workers.service.ts:876）；未传参时 `req.preferredWorkerId` 为 undefined，:912-914 `if (!req.preferredWorkerId) return fallbackId;` 而 `fallbackId = ranked[0]?.worker.id ?? null`（:911）与旧代码 return 逐字节一致；候选查询/四过滤/排序零 diff（git diff -U0 仅尾部 return 被改写）。逐个调用点：
+1. agents.service.ts:411 `const workerId = await this.workersService.assignWorker();` —— 无参，req={}
+2. agents.service.ts:459 `opts.workerId ?? (await this.workersService.assignWorker());` —— 无参
+3. agents.service.ts:497 同上无参
+4. agents.service.ts:533 同上无参
+5. agents.service.ts:573 同上无参
+6. agent-roles/opencode-agent-name.validator.ts:31 `const workerId = await this.workersService.assignWorker();` —— 无参
+7. teams.service.ts:933 `const workerId = await this.workersService.assignWorker();` —— 无参
+8. worker-dispatcher.ts:2328 `assignWorker(assignmentReq)` —— **携带 requirement（例外 1）**
+9. worker-dispatcher.ts:2358 `assignWorker(assignmentReq)`（离线重分配复用同一对象）—— **携带 requirement（例外 2）**
+正确例外陈述：全仓仅 worker-dispatcher.ts:2328/2358 两处向 assignWorker 传 requirement 对象；其余 7 处要么无参（1/6/7）、要么 `opts.workerId ?? assignWorker()` 的兜底写法（2-5），preferredWorkerId 恒 undefined ⇒ 行为不变。且 spec :2411-2439 有「无参零回归」测试钉住候选集与排序。
+
+================================================================================
+## Q4 弱校验 fallout —— 无硬失败路径；DELETE 清理在事务内且有测试
+================================================================================
+- 悬空 id 分派期：workers.service.ts:916-926 `ranked.find` 未命中 ⇒ warn + `return fallbackId`；:2600-2608 测试证明连唯一候选也 offline 时返回 null 而非 throw（上层「无可用 worker」抛错只在**全体**候选为空时发生，与 pin 无关）。
+- DB 级：schema.prisma:96/188 两列无 @relation/无 @@index；migration.sql 三条裸 ALTER。
+- DELETE 清理：workers.service.ts:1359-1377 事务内 `team.updateMany({where:{preferredWorkerId:id},data:{preferredWorkerId:null}})` + `teamMember.updateMany(...)`，与 availabilities/instances/sessions 清理同事务；spec :2055-2091 断言 txOps 长度 6 且两条 updateMany 参数逐字正确。worker 删除强制先 offline（:1353），在线误删被 409 挡住。
+- preferredWorkerId 的全部读取方（已全仓 grep）：worker-dispatcher.ts:3892/3920（resolver，fail-open）、teams.service.ts:1498/1533（投影 `?? null`）、tasks.service.ts:2037（投影 `?? null`）、web 三处（teams/[id]/page.tsx:131-133/365 悬空占位、TeamMembersPanel.tsx:244-247 workerLabel 回退原始 id、session/page.tsx:74-77 'in' 收窄兜底 null）。无其他读取方，无一条会因陈旧值硬失败。
+- 唯一允许悬空残留的窗口：绕过 remove() 直接删库行 ⇒ 软回退 + warn，即设计内「软引用」语义（计划明示）。
+
+================================================================================
+## Q5 空串语义 —— 端到端一致、有意且安全；附带 NOTE-3（member DTO 缺长度上限）
+================================================================================
+- DTO：update-team.dto.ts:49-53 `@IsOptional() @ValidateIf(o => o.preferredWorkerId !== null) @IsString() @MaxLength(191)`；add-member.dto.ts:74-76 `@IsOptional() @IsString()`（class-validator 的 @IsOptional 同时放行 null/undefined，空串过 @IsString）。
+- service：teams.service.ts:349-351 与 :831-832 均为 `data.preferredWorkerId = dto.preferredWorkerId?.trim() || null` ⇒ `""`/`"   "`/null 一律落 null（spec :748-774 与 :1810-1846 循环断言）。
+- resolver：DB 里只可能是 null 或非空串；空串从未落库，`?? null` 收尾。web：teams/[id]/page.tsx:202 `preferredWorkerId: workerId || null`（select 首项 value=""）；TeamMembersPanel.tsx:822 `onChangeWorker?.(id, null)`（「跟随团队」）。端到端一致。
+- NOTE-3：team DTO 有 @MaxLength(191) 而 member DTO 没有。>191 字符的直连接口载荷在 member 侧会穿过校验、撞 MySQL strict mode 报 500（team 侧为 400）。与仓库既有惯例一致（mainAgentMemberId/roleId/agentId 均无长度上限），UI 只能从清单选取，故非缺陷；最小修法：add-member.dto.ts:75 补 `@MaxLength(191)`（对称性，非必须）。
+
+================================================================================
+## Q6 类型声明漂移 —— NOTE-5（可接受的既有模式内债务，非潜伏 bug）
+================================================================================
+- server 事实：tasks.service.ts:2037 任务实例投影**返回** preferredWorkerId；TeamMemberView :64-65 已声明。
+- web 事实：task-detail-types.ts:12-27 `TaskInstance` **未**声明该字段；同文件 :128-140 `MemberView` 声明了（:138-139）。
+- 会话页读法：session/page.tsx:72-77 `"preferredWorkerId" in instance && typeof ... === "string" ? ... : null`，且 :72-73 注释明写「TaskInstance 类型未声明该字段（成员展示形状 MemberView 才有），照抄上一行 in 收窄读法，缺一层即回显丢失」——**逐字复刻同函数内 opencodeAgentName 的既有先例**（:68-71，同样未在 TaskInstance 上声明）。
+- 判定：这是本仓对该 DTO 投影面的既定模式（opencodeAgentName 同款暴露已存在），本轮边际风险≈0；服务端改名会被 tasks.service.spec.ts:5364-5418 的跨投影同值测试抓住，web 侧读取失败模式是软降级（chip 显示「跟随团队」）而非崩溃。判定为 NOTE：将来若有人统一给 TaskInstance 补全投影字段，应同批补这个字段，否则重构会静默丢值。
+
+================================================================================
+## Q7 测试三个承重墙 —— 均钉行为非同义反复；附 NOTE-2（B2 缺负例）
+================================================================================
+1. workers.service.spec.ts:2441「置顶 offline → 软回退 + warn，且不抛异常」
+   - 能抓：pin 被改成硬绑定（throw/等待/返回 null）、回退丢失、warn 消失。
+   - 不能抓：候选查询本身的变化（prisma mock 不执行 where）、B1 交互、真实 DB where 子句。
+2. worker-dispatcher.spec.ts:3335「成员与团队都设置 → assignWorker 收到成员值（优先级反转即红）」
+   - 能抓：优先级链反转、`??` 短路丢失（:3360 断言 team.findFirst 未被调用）。
+   - 不能抓：真实 Prisma select 形状错误（repo 被 `as any` 后由 mock 顶替，运行时才验证）、resolver 的 `typeof repo.findFirst !== 'function'` 兜底分支。
+3. worker-dispatcher.spec.ts:3449「B2 可观测：agentModelId 为 null 且置顶生效 → warn 记录 workerId 与 defaultModelId」
+   - 能抓：B2 warn 被删/变成死码（断言消息含 workerId 与 defaultModelId）。
+   - 不能抓：B2 条件被**放宽**（例如去掉 `workerId === preferredWorkerId`）——本用例中 assignWorker mock（beforeEach :368）恰好返回置顶 id，放宽后依然全绿 ⇒ 误报型 warn（pin 设置了但未生效时也告警）可悄悄上线。NOTE-2，最小修法：加一条负例（team pin=w_a、assignWorker mock 返回 w_other，断言 warn 不含 defaultModelId）。
+- 同义反复排查：三个用例均断言**外部可观测行为**（返回值/调用参数/日志内容），无一镜像实现。另 tasks.service.spec.ts:5380 的跨 DTO 同值测试同样是真行为断言（两侧共享同一成员行 fixture，缺一侧投影即红）。
+
+================================================================================
+## Q8 新增 any / lint 抑制 —— NOTE-4：两处 as any 有先例、判定成立
+================================================================================
+- diff 新增非 spec `as any` 恰两处，均在 fail-open resolver：worker-dispatcher.ts:3876 `const repo = (this.prisma as any).teamMember;`、:3913 `const repo = (this.prisma as any).team;`。
+- 判定：成立。同文件先例 resolveMemberOverrideModelId（:3854）与 resolveMemberOpencodeAgentName（:3943）是逐字同款（any repo + `typeof repo.findFirst !== 'function'` 守卫 + try/catch + `as {…} | null` 收窄）；本仓 PrismaService extends PrismaClient，若改类型化字面量反而会与该 resolver 家族的容错形状分叉，且 `typeof` 守卫需要 any。代价：select 字段名不受编译期检查；缓解：列真实存在（schema.prisma:96/188 + migration）+ 拼错时 Prisma 运行时抛错被 try/catch 兜底成 warn+null（仍 fail-open）。
+- 无 @ts-ignore/@ts-expect-error/eslint-disable 新增；spec 内 as any 为 mock 惯用。eslint（plugin:prettier/recommended）在两个 co-owned 文件上的 8 处 prettier error 全部位于计划 hunk 之外（worker-dispatcher.ts:170/2484/3266/3275、spec:3573-3577/4472），HEAD 版本同样违规 ⇒ 既存债，非本计划引入（该文件族 lint 基线 99→93 的 T16 结论与此一致）。
+
+================================================================================
+## Q9 范围相邻性 —— 确认未越界；共同拥有文件有明确理由
+================================================================================
+- 计划文件集（git 工作区 diff + 未跟踪清单归纳）：server/src/{workers,teams,agents,tasks}/{*.ts,*.spec.ts,dto/*}、server/src/chat/worker-dispatcher.{ts,spec.ts}、server/prisma/schema.prisma、server/prisma/migrations/20261014000000_team_worker_node/、server/src/prisma/team-worker-node.migration.spec.ts、web/{app,src,e2e} 六文件、scripts/e2e-team-worker-node.sh、docs 原型两文件。
+- 兄弟 lane 领地零出现：`git diff -- server/src/platform-mcp server/src/memories server/src/execution-policies server/src/common` 中 preferredWorkerId 命中数 = 0；platform-mcp 的 adopt/归属逻辑（:7296-7313、:7396-7423 区）工作区 diff 无计划改动（其脏文件属另一 lane 开工前即存的在途改动，T1 基线快照已排除）。
+- 合法共同拥有（另一 lane 的改动已在 cb0ba6d 提交，工作区 diff 在其之上**仅含本计划 hunk**，-U0 hunk 清单核对）：
+  * server/prisma/schema.prisma —— cb0ba6d 加 memory 相关列；本计划 +2 列 -1 列（hunks @95/@187/@654，互不重叠）。
+  * server/src/chat/worker-dispatcher.ts —— cb0ba6d 改 8 行（memory prompt 注入）；本计划 4 个 hunk（@2300/@2364/@3833， resolvers + 组链 + B2）。分派漏斗是两条流唯一的交汇点，共同修改不可避免。
+  * server/src/chat/worker-dispatcher.spec.ts —— 同上，本计划新增 :3277-3488 一组。
+  * server/src/tasks/tasks.service.ts —— cb0ba6d 2 行；本计划 2 hunk（@64 TeamMemberView 字段、@2034 实例投影）。任务实例投影正是计划 Must-have ⑥ 的三处同步点之一。
+- worker/ 目录、baseline 迁移、gate.sh：零改动。
+
+================================================================================
+## 总账
+================================================================================
+- BLOCKER：0
+- NOTE：Q2(warn 量级/不去重) / NOTE-2(B2 缺负例) / NOTE-3(member DTO 无 @MaxLength(191)) / NOTE-4(resolver as any 有先例) / NOTE-5(TaskInstance 未声明字段、沿袭 opencodeAgentName 先例) / Q4(绕过 remove() 直删可留悬空，设计内软引用) / Q9(共同拥有文件清单与理由) / 维护提示(TaskInstance 与 MemberView 双轨声明应在未来重构中合并)
+- 实测证据：server `npx jest src/workers src/chat src/teams src/tasks src/agents src/prisma/team-worker-node.migration.spec.ts` ⇒ 22 suites / 1108 tests 全绿；`npx tsc --noEmit` exit 0。

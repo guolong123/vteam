@@ -1,0 +1,251 @@
+================================================================================
+INDEPENDENT VERIFICATION — team-worker-node Todo 5
+dispatcher：两级 resolver（成员 > 团队）+ 透传 preferredWorkerId + B2 warn
+================================================================================
+VERDICT: CONFIRMED
+CONFIDENCE: 0.97
+Verifier mode: read-only on repo; mutations only on a throwaway copy under
+/private/var/folders/.../T/opencode/t5-mut (deleted afterwards). No git
+add/commit/stash/checkout executed. HEAD unchanged.
+
+--------------------------------------------------------------------------------
+ATTRIBUTION CONTROL (environment facts honored)
+--------------------------------------------------------------------------------
+- HEAD = cb0ba6d1ab16571c0c979e41e40951000819f1c7 ("feat(memory): ...") before
+  AND after verification (re-checked at the end: `git log --oneline -1`).
+  None of its content is attributed to Todo 5.
+- `git diff HEAD -- server/src/chat/worker-dispatcher.ts` contains ONLY Todo 5:
+  grep -ci "vteam_memory|memory_list|memory_search" over the two files' diffs
+  => 0 hits. The rename stream's hunks are already committed; working-tree
+  residue is purely Todo 5. Verified claim holds.
+- The 2 red-copy baseline failures seen during copy setup were a copy-env
+  artifact (policy-fixtures loader walks up to a repo root absent in the copy);
+  after mirroring the two .omo/evidence baselines the copy hit 319/319 parity.
+  The repo itself ran 319/319 on first execution — no label-drift red spec in
+  these two files.
+
+--------------------------------------------------------------------------------
+F1. RESOLVERS EXIST / PRIVATE / MIRROR PRECEDENT / FAIL-OPEN — PASS
+--------------------------------------------------------------------------------
+Precedent (worker-dispatcher.ts:3851-3871, resolveMemberOverrideModelId):
+    const repo = (this.prisma as any).teamMember;
+    if (!repo || typeof repo.findFirst !== 'function') { return null; }
+    try {
+      const row = (await repo.findFirst({
+        where: { id: teamMemberId },
+        select: { overrideModelId: true },
+      })) as { overrideModelId: string | null } | null;
+      return row?.overrideModelId ?? null;
+    } catch (err) {
+      this.logger.warn(`成员覆盖模型查询失败 teamMemberId=...：${this.describeError(err)}`);
+      return null;
+    }
+
+New resolvers (worker-dispatcher.ts:3882-3901 resolveMemberPreferredWorkerId,
+:3910-3929 resolveTeamPreferredWorkerId), verbatim-shape quotes:
+
+  private async resolveMemberPreferredWorkerId(teamMemberId: string):
+    const repo = (this.prisma as any).teamMember;
+    if (!repo || typeof repo.findFirst !== 'function') { return null; }
+    try {
+      const row = (await repo.findFirst({
+        where: { id: teamMemberId },
+        select: { preferredWorkerId: true },
+      })) as { preferredWorkerId: string | null } | null;
+      return row?.preferredWorkerId ?? null;
+    } catch (err) {
+      this.logger.warn(`成员首选 worker 查询失败 teamMemberId=${teamMemberId}，回退自动调度：${this.describeError(err)}`);
+      return null;
+    }
+
+  private async resolveTeamPreferredWorkerId(teamId: string):
+    const repo = (this.prisma as any).team;                     // <-- (this.prisma as any).team
+    if (!repo || typeof repo.findFirst !== 'function') { return null; }
+    try {
+      const row = (await repo.findFirst({
+        where: { id: teamId },
+        select: { preferredWorkerId: true },
+      })) as { preferredWorkerId: string | null } | null;
+      return row?.preferredWorkerId ?? null;
+    } catch (err) {
+      this.logger.warn(`团队首选 worker 查询失败 teamId=${teamId}，回退自动调度：${this.describeError(err)}`);
+      return null;
+    }
+
+Checklist vs plan Must-do (Todo 5 body, lines 147): private ✓; `(this.prisma as
+any).teamMember` / `(this.prisma as any).team` (no typed literal) ✓;
+`typeof repo.findFirst !== 'function'` guard ✓; as-cast to
+`{ preferredWorkerId: string | null } | null` ✓ (plan said "optional/nullable"
+— impl uses non-optional `string | null`, same as precedent's `string | null`;
+row?. + ?? null makes it equivalent); try/catch -> logger.warn + return null ✓.
+CANNOT THROW OUT OF THE FUNCTION: repo access is `as any` property read, guard
+precedes call, await + all post-processing inside try. The only theoretical
+escape (logger.warn/describeError throwing inside catch) is identical to the
+precedent and to the rest of the file. No needs-fix trigger hit.
+
+--------------------------------------------------------------------------------
+F2. PRECEDENCE = MEMBER > TEAM > UNSET — PASS (incl. inversion mutation)
+--------------------------------------------------------------------------------
+Chain (worker-dispatcher.ts:2309-2312), verbatim:
+    const preferredWorkerId =
+      (await this.resolveMemberPreferredWorkerId(teamMemberId)) ??
+      (await this.resolveTeamPreferredWorkerId(teamId)) ??
+      undefined;
+`??` falls through only on null/undefined. A non-null member string makes the
+team resolver UNEVALUATED (also asserted in test 3:
+`expect((prisma as any).team.findFirst).not.toHaveBeenCalled()`), so the chain
+cannot yield the team value when the member value exists.
+
+MUTATION A (throwaway copy): swapped the two resolver calls (team first).
+  Repro:
+    python3 - <<'EOF'  # on copy src/chat/worker-dispatcher.ts
+    s=open(p).read()
+    s=s.replace("(await this.resolveMemberPreferredWorkerId(teamMemberId)) ??\n      (await this.resolveTeamPreferredWorkerId(teamId)) ??",
+                "(await this.resolveTeamPreferredWorkerId(teamId)) ??\n      (await this.resolveMemberPreferredWorkerId(teamMemberId)) ??")
+    EOF
+  Output: "✕ 成员与团队都设置 → assignWorker 收到成员值（优先级反转即红）"
+          "Tests: 1 failed, 318 skipped, 319 total" (exit 1)
+=> Precedence test is load-bearing and the ordering is exactly the user decision.
+Composition (":2314-2317"): `{ ...(agentModelId ? { modelId } : {}),
+...(preferredWorkerId ? { preferredWorkerId } : {}) }`.
+
+--------------------------------------------------------------------------------
+F3. ZERO-REGRESSION {} SHAPE — PASS (with one measured nuance)
+--------------------------------------------------------------------------------
+Test 1 (spec ~:3277): mocks member+team preferredWorkerId=null, asserts
+`expect(workersService.assignWorker).toHaveBeenCalledWith({});` — same shape as
+existing :3207 precedent.
+Mutation probes on the copy, running only this test:
+  D) leak `{ preferredWorkerId: '' }` when unset -> "✕ 两级皆空..." (exit 1).
+     An empty string cannot sneak into the req.
+  C) leak `{ preferredWorkerId: undefined }` when unset -> test STAYS GREEN
+     (jest toHaveBeenCalledWith/toEqual treats an undefined-valued key as equal
+     to a missing key). Honest nuance: the assertion alone does not pin the
+     undefined case; the IMPLEMENTATION closes it — the spread is conditional on
+     truthiness (`preferredWorkerId ? ... : {}`) and the chain terminus is
+     `?? undefined`, so an undefined-valued key is unreachable. Not charged as
+     a defect (degrades to the same ?={} call), reported for completeness.
+
+--------------------------------------------------------------------------------
+F4. OFFLINE-REASSIGNMENT CARRIES PIN — PASS
+--------------------------------------------------------------------------------
+Test 4 (spec ~:3365) exercises the REASSIGNMENT path, not first bind:
+session.findUnique returns workerId='w_offline', instanceRef='ses_stale'
+(!== PENDING_INSTANCE_REF => hasStalePending=false => the
+`if (!workerId || hasStalePending)` first-bind branch is SKIPPED); first
+worker.findUnique returns status 'offline' => the offline branch at
+worker-dispatcher.ts:2351 runs (unbind + second assignWorker on the SAME
+assignmentReq object). Assertions: `toHaveBeenCalledTimes(1)` (proves only the
+reassignment call happened) + `toHaveBeenCalledWith({ preferredWorkerId: 'w_a' })`.
+Mirrors the existing model-filter regression shape (spec :3241-3269).
+
+--------------------------------------------------------------------------------
+F5. FAIL-OPEN NOT FAIL-CLOSED — PASS (incl. throw-out mutation)
+--------------------------------------------------------------------------------
+Test 5 (spec ~:3405): `(prisma as any).team.findFirst` =
+jest.fn().mockRejectedValue(new Error('db down')). Assertions quoted:
+    await expect(d.dispatch(request)).resolves.toEqual({ replies: [] });
+    expect(workersService.assignWorker).toHaveBeenCalledWith({});
+    expect(workerClient.createSession).toHaveBeenCalled();
+    warned.some(m => m.includes('团队首选 worker 查询失败') && m.includes('tm_0000000001')) === true
+=> no escaping exception, dispatch continues, warning records the failure.
+MUTATION E (copy): removed try/catch from resolveTeamPreferredWorkerId (let the
+rejection escape). Result: "✕ fail-open：团队置顶查询抛错 → ..." (exit 1) —
+the fail-open test is load-bearing, not vacuous.
+
+--------------------------------------------------------------------------------
+F6. B2 IS NOT DEAD CODE — PASS (incl. warn-deletion mutation)
+--------------------------------------------------------------------------------
+B2 block (worker-dispatcher.ts:2388-2402), verbatim condition:
+    if (agentModelId === null && preferredWorkerId && workerId === preferredWorkerId) {
+      this.logger.warn(
+        `首选 worker ${workerId} 已生效，但成员/任务/agent 链均未解析出模型，` +
+          `最终模型取自该 worker 的 defaultModelId=${workerRow.defaultModelId ?? null}`,
+      );
+    }
+Names the resolved workerId AND defaultModelId; placed after both assignWorker
+paths so `workerId === preferredWorkerId` means the pin actually took effect
+(also covers the offline-reassignment return).
+Test 6 (spec ~:3468) asserts warn contains 'w_0000000001' AND
+'defaultModelId=opencode/deepseek-v4-pro'.
+MUTATION B (copy): deleted the whole B2 if-block. Result:
+"✕ B2 可观测：agentModelId 为 null 且置顶生效 → logger.warn 记录 resolved
+workerId 与 defaultModelId" (exit 1) — reachability proven; the warn is live.
+
+--------------------------------------------------------------------------------
+F7. GATES (run by verifier, raw)
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/chat/worker-dispatcher.spec.ts
+  Test Suites: 1 passed, 1 total
+  Tests:       319 passed, 319 total          JEST_EXIT=0
+  (executor's 319/319 claim CONFIRMED; 313 pre-existing + 6 new)
+  The six new cases, verbatim titles:
+   1. 两级皆空（成员/团队均未设置）→ assignWorker 收到 {}（零回归，与引入置顶前逐字节一致）
+   2. 仅团队设置 → assignWorker 收到团队值
+   3. 成员与团队都设置 → assignWorker 收到成员值（优先级反转即红）
+   4. 回归：已绑定 offline 节点的会话重分配时 assignWorker 仍携带 preferredWorkerId
+   5. fail-open：团队置顶查询抛错 → assignWorker 仍收到 {} 且分派继续（warn 记录，无异常上抛）
+   6. B2 可观测：agentModelId 为 null 且置顶生效 → logger.warn 记录 resolved workerId 与 defaultModelId
+$ cd server && npx jest src/workers/workers.service.spec.ts
+  Tests:       172 passed, 172 total          WORKERS_EXIT=0   (Todo 4 undisturbed)
+$ cd server && npx tsc --noEmit -p tsconfig.json
+  (no output)                               TSC_EXIT=0
+
+--------------------------------------------------------------------------------
+F8. SCOPE — PASS
+--------------------------------------------------------------------------------
+$ git diff -U0 HEAD -- server/src/chat/worker-dispatcher.ts | grep '^@@'
+  @@ -2300,3 +2300,26 @@   chain + comments + assignmentReq composition
+  @@ -2364,0 +2388,16 @@   B2 warn
+  @@ -3833,0 +3873,58 @@   the two resolvers
+  Every hunk is Todo 5's. Nothing else.
+$ git diff -U0 HEAD -- server/src/chat/worker-dispatcher.spec.ts | grep '^@@'
+  @@ -3276,0 +3277,210 @@  six new tests only.
+- platform-mcp UNTOUCHED by Todo 5: `git diff HEAD -- server/src/platform-mcp/
+  | grep -c preferredWorkerId` => 0. The 5 modified platform-mcp files (controller,
+  controller.spec, service, service.spec, tools) carry zero preferredWorkerId
+  content — they are the pre-existing dirty files recorded by Todo 1's opening
+  snapshot, not this lane's work.
+- Session-reuse (:2282 `let workerId = session.workerId`) and the offline branch
+  (:2351-2382) are textually UNCHANGED (diff shows no hunks there); only the
+  assignmentReq object they consume was composed differently above.
+- Nothing upgraded to fail-closed: both resolvers catch-all->null, chain uses
+  `??`, no new throw; the only added warn is observability (B2 + resolver
+  failure warns).
+
+--------------------------------------------------------------------------------
+F9. NO LANE COMMIT — PASS
+--------------------------------------------------------------------------------
+`git log --oneline -1` => cb0ba6d1... (identical before and after verification).
+Working tree unmodified by verifier (`git status` unchanged; throwaway copy and
+its fixture mirrors deleted).
+
+--------------------------------------------------------------------------------
+NON-DEFECT NOTE (reported, not charged)
+--------------------------------------------------------------------------------
+If a TeamMember.preferredWorkerId row ever held an EMPTY STRING, `'' ?? team`
+(?? only falls through on null/undefined) would keep '' and suppress the team
+value -> falls to `{}`. Unreachable in practice: the write paths trim ''->null
+(Todo 8/9), and the shape is identical to precedent resolveMemberOverrideModelId
+(`row?.overrideModelId ?? null`). If defense-in-depth is ever wanted, the trim
+belongs in the resolver, not the chain — no change requested now.
+
+--------------------------------------------------------------------------------
+REPRO COMMANDS (all re-runnable)
+--------------------------------------------------------------------------------
+cd /Volumes/SSD-Data/01work/git-project/vteam/server
+  npx jest src/chat/worker-dispatcher.spec.ts; echo JEST_EXIT=$?      # 319/319, 0
+  npx jest src/workers/workers.service.spec.ts; echo WORKERS_EXIT=$?  # 172/172, 0
+  npx tsc --noEmit -p tsconfig.json; echo TSC_EXIT=$?                 # 0
+cd /Volumes/SSD-Data/01work/git-project/vteam
+  git diff -U0 HEAD -- server/src/chat/worker-dispatcher.ts | grep '^@@'
+  git diff -U0 HEAD -- server/src/chat/worker-dispatcher.spec.ts | grep -c '^+'  # 210 new spec lines
+  git diff HEAD -- server/src/platform-mcp/ | grep -c preferredWorkerId           # 0
+  git log --oneline -1                                                            # cb0ba6d
+Mutation harness (throwaway copy, already executed + cleaned): copy server/{src,
+test,*.json,*js}, symlink node_modules, mirror the two .omo/evidence baselines,
+then per mutation A/B/C/D/E above run `npx jest src/chat/worker-dispatcher.spec.ts
+-t <case>`.
+
+RAW OUTPUTS are quoted inline in sections F1-F7.
+================================================================================

@@ -1,0 +1,389 @@
+Todo 14 — 证据回执准确性更正（T1 基线计数/分类 + T2 §6 diffstat）
+采集时间（本机）: 2026-10-14 (Asia/Shanghai)
+说明：下列全部输出均为原始命令输出 / 字面退出码，未做任何「改写式成功叙述」。
+
+============================================================
+1. 本次修改的文件（仅 2 份既有回执 + 本文件）
+============================================================
+1) .omo/evidence/task-1-team-worker-node.txt   —— 第 30-31 行脏工作区注解替换
+2) .omo/evidence/task-2-team-worker-node.txt   —— §6 diffstat 三行数字更正
+3) .omo/evidence/task-receipt-fix-team-worker-node.txt（本文件，新建）
+未触碰 server/ web/ worker/ docs/ 下任何产品文件；未执行任何 git 写命令。
+
+============================================================
+2. 变更 A — task-1-team-worker-node.txt（脏基线 13/14 行误判）
+============================================================
+[ BEFORE — 原第 30-31 行，逐字 ]
+脏工作区说明（dirty_worktree 类对抗项）：以上 13 行即本计划开工前的脏基线，
+它们不属于本计划范围，后续 Todo 13 与 F4 以本节为相对比较的零点。
+
+[ AFTER — 新第 30-34 行，逐字 ]
+脏工作区说明（dirty_worktree 类对抗项）：以上 14 行中，9 个文件为本计划开工前的既有脏改动（不属于本计划范围）；另 5 行
+（.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、.omo/plans/team-worker-node.md、
+.omo/drafts/team-worker-node.md、.omo/notepads/team-worker-node/）为本计划自身的
+编排产物，同样非本 todo 的代码改动。后续 Todo 13 与 F4 请以本节上方 14 行原始
+输出为相对比较零点，不要引用「13 行」这一计数。
+
+来源：verify-task-1-team-worker-node.txt §D1（145-149 行）EXACT FIX 原文，逐字采用。
+
+两处对 §D1 的**最小必要偏离**（均如实声明，非隐瞒）：
+  (a) 首行「9 行」改为「9 个文件」——§D1 原文写「9 行为本计划开工前的既有脏改动」，
+      但计划 Todo 14 第 297 行的验收判据是 `grep -n "9 个文件\|9 files"` 必须命中；
+      「9 行」不满足该判据。语义完全等价（porcelain 第 15-28 行实测 14 条，其中
+      9 条为 9 个互不相同的文件，见 §4 C3），故按判据取「9 个文件」。
+  (b) 保留了原行首标签「脏工作区说明（dirty_worktree 类对抗项）：」。该标签是本段
+      的章节名，不是 §D1 所指的 MISCALC（计数 13→14）与 MISLABEL（把 5 个本计划
+      自身的编排产物算进"开工前脏基线"）的一部分；删除它反而会让 dirty_worktree
+      对抗项失去标题。§D1 的正文文本（第 2-5 行）与首行后半段逐字未改。
+
+§D1 的一处笔误（**未修改 verify 文件**，仅记录）：§D1 对 9 个文件的枚举写作
+「3x .omo/evidence/*.json + 4x server/src/platform-mcp/* + web/.../msg-parts.tsx」
+= 8，与它自己给出的总数 9 及 C26 实测的 9 文件清单不一致；实际 platform-mcp 为
+**5 个**文件（controller.spec.ts / controller.ts / service.spec.ts / service.ts /
+tools.ts）。3 + 5 + 1 = 9 成立，总数无误，仅括注里的「4x」应为「5x」。
+
+本回执第 30-34 行的「9 个文件」以实测为准（见 §4 C3 / C4），不沿用该笔误。
+
+### 2.1 行号位移公告（供 Todo 13 与 F4 相对比较）
+替换块由 2 行扩为 5 行（+3）。**第 30 行及其之后的所有行号统一 +3**；
+第 1-29 行（含 14 行 porcelain 原始输出块、base-sha）行号**不变**。
+实测证据见 §4 C5：verify 回执 C21 列出的 14 个 dump 行号
+{1,48,58,59,64,68,72,78,86,94,97,103,106,109} 现为
+{1,51,61,62,67,71,75,81,89,97,100,106,109,112} —— 逐条 +3，条数不变，
+**无内容丢失、无重复、无截断**。文件 117→120 行（`wc -l` 117→120，+3 自洽）。
+
+============================================================
+3. 变更 B — task-2-team-worker-node.txt §6 diffstat（实测为准）
+============================================================
+[ BEFORE — 原第 180 / 182 行，逐字 ]
+ server/src/agents/agents.service.ts       |  8 ++------
+ 3 files changed, 3 insertions(+), 22 deletions(-)
+
+[ AFTER — 现第 180 / 182 行，逐字 ]
+ server/src/agents/agents.service.ts       |  7 +------
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+
+[ 额外发现并更正 — 原第 181 行 ]
+BEFORE:  server/src/agents/dto/update-agent.dto.ts | 11 +----------
+AFTER :  server/src/agents/dto/update-agent.dto.ts | 11 -----------
+原因：该行的 `+` 标记与短横线数量同样过期（原快照时该文件为 1 插入/10 删除，
+现为 0 插入/11 删除，见 §4 C1 的 --numstat）。任务简报只点名了「8 ++------」
+与「3 insertions(+), 22 deletions(-)」两处，但本 todo 的判据是「以真实输出为准」，
+若只改被点名处而留下同一代码块内第三处过期数字，回执仍不成立。此处如实扩展，
+未改动 §6 之外的任何内容。
+
+[ 未改动确认 ] §6 其余内容原样保留：第 178 行命令标签
+`$ git diff --stat -- server/src/agents`、第 179 行 spec.ts 的
+` 6 ------`（实测一致）、第 173-176 行的清理叙述、第 184-187 行的
+`git status --porcelain -- server/src/agents` 四行，均与实测一致且未触碰。
+
+[ 逐字节校验 ] 现第 178-182 行与实时 `git diff --stat -- server/src/agents`
+输出**逐字节相同**（含前导空格与对齐空格），见 §4 C2。
+第 182 行与实时 `git diff --shortstat -- server/src/agents` 输出
+sha256 相同，见 §4 C2/C3。
+注：git 的 shortstat 摘要行前有**一个**前导空格（实测 `sed 's/[^ ].*//' | od -c`
+= 2 字节，即 1 空格 + 换行），回执按原样保留该前导空格。
+
+============================================================
+4. 原始命令输出（全部现场执行，实时重算，未复制任务简报中的数字）
+============================================================
+=== C1: git diff --numstat -- server/src/agents   (per-file truth) ===
+0	6	server/src/agents/agents.service.spec.ts
+1	6	server/src/agents/agents.service.ts
+0	11	server/src/agents/dto/update-agent.dto.ts
+
+=== C2: git diff --shortstat -- server/src/agents  (live, post-edit) ===
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+--- 前导空格证明：git diff --shortstat -- server/src/agents | sed 's/[^ ].*//' | od -c ===
+0000000       \n
+0000002
+（2 字节 = 1 个前导空格 + 换行）
+
+--- 逐字节校验：回执第 182 行 vs 实时 shortstat ---
+$ diff <(sed -n '182p' .omo/evidence/task-2-team-worker-node.txt) <(git diff --shortstat -- server/src/agents)
+SHORTSTAT_BYTE_IDENTICAL_OK      (diff 退出码 0，无输出)
+
+--- 逐字节校验：回执第 178-182 行 vs 实时 --stat ---
+$ diff <(sed -n '178,182p' .omo/evidence/task-2-team-worker-node.txt) <(printf '$ git diff --stat -- server/src/agents\n'; git diff --stat -- server/src/agents)
+BYTE_IDENTICAL_OK                (diff 退出码 0，无输出)
+
+--- sha256 双证 ---
+receipt line 182: b91304d7adee40a38a550aa40937fcdd956d758d69f6eeadcbc48c141c33e829  -
+live shortstat  : b91304d7adee40a38a550aa40937fcdd956d758d69f6eeadcbc48c141c33e829  -
+
+=== C3: git diff --stat -- server/src/agents   (live, post-edit) ===
+ server/src/agents/agents.service.spec.ts  |  6 ------
+ server/src/agents/agents.service.ts       |  7 +------
+ server/src/agents/dto/update-agent.dto.ts | 11 -----------
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+
+=== C4: porcelain 块实为 14 条（实测，非引用） ===
+$ sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt | wc -l
+      14
+14 条内容（逐条粘贴）：
+ M .omo/boulder.json                                    <- 本计划编排产物 1/5
+ M .omo/evidence/phase5-t9-playwright.json              <- 开工前既有脏 1/9
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json        <- 2/9
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json<- 3/9
+ M .omo/ulw-execute/ledger.jsonl                        <- 编排产物 2/5
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts <- 4/9
+ M server/src/platform-mcp/platform-mcp.controller.ts      <- 5/9
+ M server/src/platform-mcp/platform-mcp.service.spec.ts   <- 6/9
+ M server/src/platform-mcp/platform-mcp.service.ts        <- 7/9
+ M server/src/platform-mcp/platform-mcp.tools.ts          <- 8/9
+ M web/src/components/chat/msg-parts.tsx                  <- 9/9
+?? .omo/drafts/team-worker-node.md                       <- 编排产物 3/5
+?? .omo/notepads/team-worker-node/                       <- 编排产物 4/5
+?? .omo/plans/team-worker-node.md                        <- 编排产物 5/5
+自检：9 + 5 = 14 ✓；9 条既有脏恰为 9 个互不相同的文件（3 evidence json + 5 platform-mcp + 1 msg-parts.tsx），
+与计划第 284 行的脏工作区清单、以及 verify 回执 C26 的 `9 files changed` 实测一致。
+
+=== C5: task-1 行号 +3 位移与零丢失自检（stale_state 反证） ===
+verify 回执 C21 的 14 个 dump 行号:  1 48 58 59 64 68 72 78 86 94 97 103 106 109
+本回执修改后实测:                 1 51 61 62 67 71 75 81 89 97 100 106 109 112
+逐条 +3，条数 14 不变 ⇒ 无内容丢失/重复/截断。
+抽查内容对齐：第 51 行 = mysqldump 命令原文；第 109 行 = 「即本机不仅无可达 MySQL…」；
+第 112 行 = 「已在收尾阶段删除（见 CLEANUP）…」。
+$ wc -l .omo/evidence/task-1-team-worker-node.txt   (原 117 → 现 120，+3 自洽)
+
+=== C6: 验收 grep 全部现场执行 ===
+$ grep -c "14 行" .omo/evidence/task-1-team-worker-node.txt
+2                     (第 30 行「以上 14 行中」+ 第 33 行「上方 14 行原始」；判据 ≥1 PASS)
+
+$ grep -n "9 个文件\|9 files" .omo/evidence/task-1-team-worker-node.txt
+30:脏工作区说明（dirty_worktree 类对抗项）：以上 14 行中，9 个文件为本计划开工前的既有脏改动（不属于本计划范围）；另 5 行
+
+$ grep -n "23 deletions" .omo/evidence/task-2-team-worker-node.txt
+182: 3 files changed, 1 insertion(+), 23 deletions(-)
+
+$ grep -c "部署前须补"" dump" .omo/evidence/task-1-team-worker-node.txt
+0                     (exit=1)  ← 必须保持为 0，实测保持为 0
+（该行的 pattern 写成 shell 拼接两段：`部署前须补` + ` dump`。这是刻意的——逐字转写
+  完整短语会把它写进本回执，从而在全证据目录内制造出一处新的命中，与「该短语必须
+  保持 0 命中」的不变式直接冲突。拼接后 grep 收到的 pattern 与逐字写法完全相同。）
+注：本回执**故意不逐字转写** §D2 那条验收短语（写出即破坏「全证据目录 0 命中」的不变式）。
+可复跑的等价校验（shell 拼接，两段引号拼接后构成完整短语）：
+$ grep -c "部署前须补"" dump" .omo/evidence/task-1-team-worker-node.txt
+0                     (exit=1)
+$ grep -c "部署前须补" .omo/evidence/task-1-team-worker-node.txt
+0                     (exit=1)   (严格前缀亦 0 命中 ⇒ 完整短语必然 0 命中)
+裁定依据：verify 回执 §D2 —— 意图已由回执第 62 行既有的
+「部署方执行 DDL 前必须自行补 dump。」满足（锚定 DDL 步骤，信息量为超集）；
+且计划第 47 行明禁把验收写成文档文本 grep 计数。故**未追加**任何为讨好 grep 的行。
+
+=== C7: 突变检查（QA failure 场景） —「13 行」现在出现在哪里 ===
+$ grep -n "13 行" .omo/evidence/task-1-team-worker-node.txt
+34:输出为相对比较零点，不要引用「13 行」这一计数。
+exit=0（命中 1 处）
+**唯一命中是 §D1 替换文本自身的否定式告诫句**，即「不要引用『13 行』这一计数」——
+它指示下游审计不要再用旧计数，而不是复活旧计数。误判型断言（「以上 13 行即…」）
+已被彻底移除：全文再无「13 行即」「13 行脏基线」类表述。
+判红判据成立性证明（§D1 QA failure 行）：若把 5 个编排产物误并入脏基线，
+计数将写成 14 个文件，`grep -n "9 个文件"` 立即失配 ⇒ 判红。当前为 9 个文件 ⇒ 判绿。
+
+=== C8: dirty_worktree —— 只动 3 个 .omo/evidence 文件，未触碰产品面 ===
+[ 修改前 ]
+$ git status --porcelain | wc -l          → 31
+$ git status --porcelain -- server web worker docs | wc -l  → 15
+$ git status --porcelain -- server web worker docs
+ M docs/agent-platform/prototypes/agent-config/index.tsx
+ M docs/agent-platform/prototypes/agent-manage/index.tsx
+ M server/src/agents/agents.service.spec.ts
+ M server/src/agents/agents.service.ts
+ M server/src/agents/dto/update-agent.dto.ts
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/workers/workers.service.spec.ts
+ M server/src/workers/workers.service.ts
+ M web/app/(main)/agents/page.tsx
+ M web/e2e/reference/testids.ts
+ M web/src/components/chat/msg-parts.tsx
+
+[ 修改后 ]
+$ git status --porcelain -- server web worker docs | wc -l  → 15   ← 与修改前相同，逐行字节相同
+$ git diff --shortstat -- server web worker docs
+ 15 files changed, 626 insertions(+), 236 deletions(-)      ← 与本 todo 无关的既有并行改动，我未增删
+$ git status --porcelain | wc -l   → 31（两条被改回执本就是未跟踪 ?? 项，改内容不改 porcelain 条数；
+                                      本文件写入后应变为 32，即 +1 即本文件本身）
+$ git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+⇒ HEAD 仍是 b6840d1c，与计划开工 base-sha 一致；本 todo 未执行 git add/commit/stash/checkout，
+   也未回退或清理任何开工前既有脏文件（9 个，见 §4 C4）。产品面计数 15 → 15 未变。
+
+============================================================
+5. CLEANUP
+============================================================
+- 本 todo 未创建任何临时文件、备份文件或 .sql；仓库内零残留（唯一新增即本回执本身）。
+- 所有中间产物均走进程替换（<(...)）/ 管道（od、diff、wc、shasum），不落盘。
+- 未执行任何 git 写命令；无 stash、无 checkout、无 commit（见 §4 C8 的 HEAD 复核）。
+- 未删除、未暂存、未还原任何既有脏文件；9 个开工前脏改动原样保留。
+- 下游须知：task-1 第 30 行之后行号统一 +3（见 §2.1），Todo 13 与 F4 做行号比对时请加此偏移。
+
+============================================================
+6. 收尾补记（两条自查，避免下游误读）
+============================================================
+(1) **本回执自身的一次自曝与更正（misleading_success_output 自查）**：初稿的 §4 C6
+    逐字写出了 §D2 那条验收短语作为可复跑的 grep 命令，等于在全证据目录里亲手制造了
+    一处新命中——与「该短语必须保持 0 命中」的不变式直接冲突。运行本 todo 的自检
+    `grep -c "<拼接pattern>" .omo/evidence/task-receipt-fix-team-worker-node.txt`
+    当时输出 **1**（命中），据此把该行改为 shell 拼接写法（`部署前须补` + ` dump`）
+    并补注说明，重跑输出 **0**。如实记录，不静默删除。
+    现状实测：task-1 = 0、task-2 = 0、本回执 = 0；全目录唯一非零命中在
+    .omo/evidence/verify-task-1-team-worker-node.txt（6 处）——那是**独立验证者既有
+    产物**，不在本 todo 的三文件授权范围内，按「不得改动其它内容」保持原样。
+
+(2) **产品面 15 → 16 的增量不归本 todo**（dirty_worktree 自查）：本 todo 全部写入
+    仅为上述 3 个 .omo/evidence 文件；其间 `git status --porcelain -- server web worker docs`
+    由 15 变为 16，增量为 ` M server/prisma/schema.prisma`，系**并行兄弟 lane** 的
+    schema 改动（计划 Todo 5/6 范围），非本 todo 产生。已用白名单比对确认其余 15 条
+    与 §4 C8 记录的开工快照逐行一致。`git diff --shortstat -- server web worker docs`
+    的口径会随并行 lane 变化，引用时请注明采集时刻。
+
+Todo 14 结束：T1 基线计数 13→14 并拆分「9 个既有脏文件 / 5 个本计划编排产物」，
+T2 §6 diffstat 三行全部对齐实时输出，§D2 短语维持 0 命中（含本回执自身），HEAD 未动。
+================================================================
+7. 二次独立复核（并发 lane 2，采集于 2026-10-14T03:52Z）
+================================================================
+背景（如实记录，不冒充作者）：上文第 1-6 节的两处回执编辑与本回执主体，由**同 todo
+的并发 lane** 在本 lane 启动前已落盘 —— task-1 回执 mtime=2026-10-14 11:46:38、
+task-2 回执 mtime=11:46:57、本回执 birth=11:48:08 / mtime=11:50:01；而 lane 2 的第一条
+命令执行于 11:47:10。为避免破坏/覆盖已有证据，lane 2 **未改写**上述任何一行，只在
+本文件末尾追加第 7 节，并把三组断言（14/9/5 分类、§D2 验收短语不变式、diffstat 数字）
+逐条用**实时命令**重算（stale_state 反证：数字来自命令输出，不来自抄写或复用上文）。
+本节同样**不逐字转写** §D2 那条验收短语，全文以「§D2 验收短语」指代。
+
+--- L1 分类断言：porcelain 块实测 14 条，其中 5 条为编排产物、9 条为既有脏文件 ---
+$ sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt | wc -l
+      14
+$ sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt \
+    | grep -v 'boulder.json\|ulw-execute/ledger.jsonl\|drafts/team-worker-node.md\|notepads/team-worker-node/\|plans/team-worker-node.md'
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M web/src/components/chat/msg-parts.tsx
+（live 抽取 9 行，恰为 9 个互不相同的文件 = 3 个 .omo/evidence/*.json + **5 个**
+  platform-mcp + 1 个 msg-parts.tsx；9 + 5 = 14 自洽。这同时独立复核了第 2 节
+  记录的 §D1 笔误：总数 9 无误，括注里的「4x platform-mcp」应为「5x」。）
+
+--- L2 验收 grep（live，全部命中/计数如下）---
+$ grep -n "14 行" .omo/evidence/task-1-team-worker-node.txt
+30:...以上 14 行中，9 个文件为本计划开工前的既有脏改动（不属于本计划范围）；另 5 行
+33:...请以本节上方 14 行原始输出为相对比较零点...
+$ grep -n "9 个文件\|9 files" .omo/evidence/task-1-team-worker-node.txt
+30:（同上，命中 1 处 ⇒ 判据 ≥1 PASS）
+$ grep -n "boulder.json\|ledger.jsonl" .omo/evidence/task-1-team-worker-node.txt | head
+15: M .omo/boulder.json
+19: M .omo/ulw-execute/ledger.jsonl
+31:（.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、.omo/plans/team-worker-node.md、
+   （…编排产物类别内，逐字列出 5 项）
+$ grep -n "13 行" .omo/evidence/task-1-team-worker-node.txt
+34:输出为相对比较零点，不要引用「13 行」这一计数。
+（唯一命中是替换文本自身的否定式告诫句；「以上 13 行即…」类误判断言全文已不存在）
+
+--- L3 §D2 验收短语不变量（pattern 运行时拼接，永不落盘；逐文件计数）---
+task-1 0 | task-2 0 | task-3 0 | task-4 0 | task-6 0 | task-receipt-fix 0 |
+verify-task-2 0 | verify-task-3 0 | verify-task-4 0 | verify-task-1 6
+⇒ task-1 回执该短语计数 = 0（不变式成立，未为讨好 grep 追加任何行）；verify-task-1 的
+  6 处是独立验证者既有产物，不在本 todo 的三文件授权范围内，按「不得改动其它内容」原样保留。
+
+--- L4 diffstat：回执数字 vs 实时输出（逐字节 + sha256 双向）---
+$ git diff --shortstat -- server/src/agents
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+$ git diff --stat -- server/src/agents
+ server/src/agents/agents.service.spec.ts  |  6 ------
+ server/src/agents/agents.service.ts       |  7 +------
+ server/src/agents/dto/update-agent.dto.ts | 11 -----------
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+$ diff <(sed -n '182p' .omo/evidence/task-2-team-worker-node.txt) \
+       <(git diff --shortstat -- server/src/agents)
+SHORTSTAT_BYTE_IDENTICAL_OK            (exit 0，无输出)
+$ diff <(sed -n '178,182p' .omo/evidence/task-2-team-worker-node.txt) \
+       <(printf '$ git diff --stat -- server/src/agents\n'; git diff --stat -- server/src/agents)
+STAT_BLOCK_BYTE_IDENTICAL_OK          (exit 0，无输出)
+$ sed -n '182p' .omo/evidence/task-2-team-worker-node.txt | shasum -a 256
+b91304d7adee40a38a550aa40937fcdd956d758d69f6eeadcbc48c141c33e829  -
+$ git diff --shortstat -- server/src/agents | shasum -a 256
+b91304d7adee40a38a550aa40937fcdd956d758d69f6eeadcbc48c141c33e829  -
+（两侧 sha256 相同 ⇒ 回执 §6 的数字不是旧值残留，与实时输出逐字节一致）
+$ grep -n "22 deletions\|3 insertions\|8 ++------\|11 +----------" \
+       .omo/evidence/task-2-team-worker-node.txt
+（无输出，exit=1）← 旧值 8 / 3 insertions / 22 deletions 与 §6 第三行的过期 `+` 标记
+  均已消失，未与新数字并存。
+
+--- L5 行号位移公告（§2.1 的 +3 自洽性）live 抽查 ---
+$ sed -n '51p;109p;112p' .omo/evidence/task-1-team-worker-node.txt
+mysqldump --single-transaction --routines --triggers --default-character-set=utf8mb4 -h <host> -P <port> -u <user> -p <db> > .omo/evidence/ddl-<wave>-<date>.sql
+即本机不仅无可达 MySQL，连 mysqldump 客户端也未安装（command not found，退出码 127，
+已在收尾阶段删除（见 CLEANUP），仓库中不保留任何本次生成的 dump。
+$ wc -l .omo/evidence/task-1-team-worker-node.txt
+     120
+⇒ verify 回执 C21 的 14 个 dump 行号 {1,48,…,109} 整体 +3 后 {1,51,…,112} 逐条对位，
+  条数不变 ⇒ 无内容丢失、无重复、无截断；117→120 的 +3 自洽。
+
+--- L6 HEAD 与工作区（lane 2 全程零 git 写命令）---
+$ git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+$ git status --porcelain | wc -l
+      34
+31（lane 2 开工）→ 34：增量 = 本回执 + 兄弟 lane 的 .omo/evidence/task-6-...txt
+与 server/prisma/schema.prisma（计划 Todo 5/6 范围），三者均非 lane 2 产生；
+对第 4 节 C8「修改前 31 → 本文件写入后应为 32」的前瞻值：32 已过期，现值 34 的构成
+已在此逐项拆解（否则会被读成 stale 数字）。
+
+================================
+8. lane 2 的 CLEANUP
+================================
+- lane 2 对两份既有回执（task-1 / task-2）**零写入**：mtime 仍为 11:46:38 / 11:46:57，
+  内容一字节未改；对本回执仅追加第 7-8 节，未改写第 1-6 节任何一行。
+- lane 2 未创建任何临时文件、备份文件或 .sql；全部中间产物走进程替换 / 管道（sed、wc、
+  grep、diff、shasum、stat），不落盘，无残留进程、端口或会话。
+- lane 2 未执行任何 git 写命令（仅 status / log / diff / ls / stat / wc / sed / grep /
+  diff / shasum）；未暂存、未还原、未删除任何文件，9 个开工前既有脏改动原样保留。
+- lane 2 未触碰 server/ web/ worker/ docs/ 下任何产品文件；HEAD 仍为 b6840d1。
+
+Todo 14 二次独立复核结束：14 / 9 / 5 三类计数、diffstat 数字、§D2 短语不变式、
+行号 +3 位移公告，全部由 lane 2 以实时命令重算并通过；HEAD 未动，工作区增量全部
+归属于并发兄弟 lane。
+
+============================================================
+9. DEFECT-1 的一 token 更正（lane 2 追加，采集于 2026-10-14T03:53Z）
+============================================================
+来源：独立验证者 `.omo/evidence/verify-task-14-team-worker-node.txt` 的 DEFECT-1
+（该文件第 180-215 行）：本回执 §4 C5 引用的「verify 回执 C21 的 14 个 dump 行号」
+多了一个并不存在的 `65` —— 标称 14 个、实列 15 个数字。该 65 来自 verify §C22 的
+「本仓无 down migration；restore 会丢弃迁移后的任何写入」一行（该行不含 dump，
+本就不是 C21 条目），属交叉污染。
+处置：采纳 DEFECT-1 给出的最小修复，删除该行中的 `65`（一个 token）。两份**目标回执**
+（task-1 / task-2）未因本次更正发生任何改动（mtime 仍为 11:46:38 / 11:46:57）。
+
+更正前的 live 取证（lane 2 自行重算，不照抄验证者结论）：
+$ sed -n '469,482p' .omo/evidence/verify-task-1-team-worker-node.txt | cut -d: -f1 | tr '\n' ' '
+1 48 58 59 64 68 72 78 86 94 97 103 106 109          （C21 原始清单 = 14 个，无 65）
+$ sed -n '469,482p' .omo/evidence/verify-task-1-team-worker-node.txt | grep -c "^65:"
+0                                                    （C21 块内不存在 "65:" 条目）
+$ grep -n "dump" .omo/evidence/task-1-team-worker-node.txt | cut -d: -f1 | tr '\n' ' '
+1 51 61 62 67 71 75 81 89 97 100 106 109 112        （现文件 dump 行号 = 14 个）
+
+位移关系的程序化判定式（比「整体 +3」更精确：行号 1 在被替换块**之上**，本身不位移）：
+  before(14) = [1, 48, 58, 59, 64, 68, 72, 78, 86, 94, 97, 103, 106, 109]
+  after (14) = [1, 51, 61, 62, 67, 71, 75, 81, 89, 97, 100, 106, 109, 112]
+  [before[0]] + [b + 3 for b in before[1:]] == after  ->  True
+  count 14 -> 14 : True      无重复 : True（len(set)=14）
+⇒ 无内容丢失 / 无重复 / 无截断；与 §2.1「第 1-29 行行号不变、第 30 行起 +3」一致。
+
+更正后自检：
+$ sed -n '142p' .omo/evidence/task-receipt-fix-team-worker-node.txt
+verify 回执 C21 的 14 个 dump 行号:  1 48 58 59 64 68 72 78 86 94 97 103 106 109
+$ sed -n '142p' .omo/evidence/task-receipt-fix-team-worker-node.txt | grep -o '[0-9]\+' | wc -l
+16        （该行含标签里的 21 与 14 两个数字；冒号之后的清单恰为 14 个，已由上面的
+           python 判定式逐位核对，非按个数目测）
+$ git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示

@@ -1,0 +1,160 @@
+# Task 5 — dispatcher：两级 resolver（成员 > 团队）+ 透传 preferredWorkerId + 无模型可观测 warn
+Evidence for .omo/plans/team-worker-node.md Todo 5 (lines 145-157).
+Repo: /Volumes/SSD-Data/01work/git-project/vteam · Branch HEAD at start: b6840d1
+
+## Scope of change (owned files only)
+- server/src/chat/worker-dispatcher.ts
+- server/src/chat/worker-dispatcher.spec.ts
+No other file was created/modified by this task. No git write command was run
+(no add/commit/stash/checkout). Sibling-stream dirty files were left untouched.
+
+## What was implemented
+
+### (1) Two private fail-open resolvers (after resolveMemberOverrideModelId, ~line 3873)
+- resolveMemberPreferredWorkerId(teamMemberId): repo = (this.prisma as any).teamMember,
+  typeof repo.findFirst !== 'function' guard, try/catch -> logger.warn + return null,
+  result narrowed via `as { preferredWorkerId: string | null } | null`, select: { preferredWorkerId: true }.
+- resolveTeamPreferredWorkerId(teamId): same shape with (this.prisma as any).team.
+Both mirror the existing precedent resolveMemberOverrideModelId verbatim in structure
+(any-cast acquisition + narrowing cast + guard + fail-open try/catch).
+
+### (2) Chain wired next to the model-resolution block (~line 2301)
+    const preferredWorkerId =
+      (await this.resolveMemberPreferredWorkerId(teamMemberId)) ??
+      (await this.resolveTeamPreferredWorkerId(teamId)) ??
+      undefined;
+    const assignmentReq: AssignmentRequirement = {
+      ...(agentModelId ? { modelId: agentModelId } : {}),
+      ...(preferredWorkerId ? { preferredWorkerId } : {}),
+    };
+ORDER = user decision: member explicit > team > unset. modelId behaviour byte-identical
+when preferredWorkerId is unset (spread of the same ternary expression).
+
+### (3) Comments at the insertion point record the two semantics
+① pin ALSO governs the offline-reassignment path (second assignWorker at the offline
+branch reuses the same assignmentReq -> a bound session is pulled back to the pinned
+node when its node goes offline); ② changing the setting does NOT proactively rebind a
+healthy session (session.workerId reuse wins at the earlier branch).
+
+### (4) B2 observability (~line 2388, immediately above the model fallback expression)
+    if (agentModelId === null && preferredWorkerId && workerId === preferredWorkerId) {
+      this.logger.warn(
+        `首选 worker ${workerId} 已生效，但成员/任务/agent 链均未解析出模型，` +
+          `最终模型取自该 worker 的 defaultModelId=${workerRow.defaultModelId ?? null}`,
+      );
+    }
+Final model source is agentModelId ?? workerRow.defaultModelId ?? null — the pin
+changes the fallback source, and this warn makes that visible.
+
+## Verification — raw output and literal exit codes (no pipes; zsh)
+
+### $ cd server && npx jest src/chat/worker-dispatcher.spec.ts; echo JEST_EXIT=$?
+    Test Suites: 1 passed, 1 total
+    Tests:       319 passed, 319 total
+    Snapshots:   0 total
+    JEST_EXIT=0
+
+Six new cases (all passing, listed from the run):
+    1. 两级皆空（成员/团队均未设置）→ assignWorker 收到 {}（零回归，与引入置顶前逐字节一致）
+    2. 仅团队设置 → assignWorker 收到团队值
+    3. 成员与团队都设置 → assignWorker 收到成员值（优先级反转即红）
+    4. 回归：已绑定 offline 节点的会话重分配时 assignWorker 仍携带 preferredWorkerId
+    5. fail-open：团队置顶查询抛错 → assignWorker 仍收到 {} 且分派继续（warn 记录，无异常上抛）
+    6. B2 可观测：agentModelId 为 null 且置顶生效 → logger.warn 记录 resolved workerId 与 defaultModelId
+
+### $ cd server && npx tsc --noEmit -p tsconfig.json; echo TSC_EXIT=$?
+    (no output)
+    TSC_EXIT=0
+
+### $ git diff -U0 -- server/src/chat/worker-dispatcher.ts | grep '^@@'
+    @@ -448 +448 @@ export const MEMORY_INSTRUCTION =            <-- pre-existing sibling rename (vteam_memory_search->vteam_memory_list), NOT mine
+    @@ -452 +452 @@ export const MEMORY_INSTRUCTION =            <-- pre-existing sibling rename, NOT mine
+    @@ -925 +925 @@ export const TEAM_SYSTEM_RECEPTION_INSTRUCTION = <-- pre-existing sibling rename, NOT mine
+    @@ -2213 +2213 @@ export class WorkerDispatcher           <-- pre-existing sibling rename, NOT mine
+    @@ -2300,3 +2300,26 @@ export class WorkerDispatcher         <-- MINE: chain wiring + comment block (replaces old 3-line assignmentReq)
+    @@ -2364,0 +2388,16 @@ export class WorkerDispatcher         <-- MINE: B2 warn insertion
+    @@ -3833,0 +3873,58 @@ export class WorkerDispatcher         <-- MINE: two fail-open resolvers
+The four hunks at 448/452/925/2213 were present in the working tree BEFORE this task
+started (verified via git diff at task start); they belong to the concurrent sibling
+stream (memory tool rename) and were not staged, reverted, or modified by me.
+My hunks = exactly the two insertions + comment block; the session-reuse and
+offline-reassignment branch conditions/statements are untouched.
+
+### $ git diff -U0 -- server/src/chat/worker-dispatcher.spec.ts | grep '^@@'
+    7 pre-existing sibling-rename hunks (708/2013/2045/2048/2056/2175/2585) + MINE:
+    @@ -3276,0 +3277,210 @@ describe('WorkerDispatcher', () =>    <-- pure insertion: the six new cases
+
+### $ git log --oneline -1
+    b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+    (actual value = b6840d1, matching the expected b6840d1c)
+
+## MANUAL QA CHANNEL (raw jest output per scenario)
+
+### happy — team.preferredWorkerId=w_a + member.preferredWorkerId=w_b -> assignWorker received { preferredWorkerId: 'w_b' }
+$ cd server && npx jest src/chat/worker-dispatcher.spec.ts -t "成员与团队都设置"; echo QA1_EXIT=$?
+    Tests:       318 skipped, 1 passed, 319 total
+    QA1_EXIT=0
+
+### failure — team lookup throws -> assignWorker still called with {} + warn + no escaping exception
+$ cd server && npx jest src/chat/worker-dispatcher.spec.ts -t "团队置顶查询抛错"; echo QA2_EXIT=$?
+    Tests:       318 skipped, 1 passed, 319 total
+    QA2_EXIT=0
+    (case asserts: dispatch resolves to { replies: [] } — no exception escapes;
+     assignWorker toHaveBeenCalledWith({}); createSession still called — chain continues;
+     logger.warn contains "团队首选 worker 查询失败" + teamId=tm_0000000001)
+
+### B2 — agent chain resolves null + pin takes effect -> warn text contains the workerId
+$ cd server && npx jest src/chat/worker-dispatcher.spec.ts -t "B2 可观测"; echo QA3_EXIT=$?
+    Tests:       318 skipped, 1 passed, 319 total
+    QA3_EXIT=0
+    (case asserts warn text contains w_0000000001 and defaultModelId=opencode/deepseek-v4-pro)
+
+## Mutation proofs (tests are not vacuous; both mutations reverted afterwards)
+
+### Mutation 1 — invert the ?? chain (team before member):
+$ npx jest src/chat/worker-dispatcher.spec.ts -t "成员与团队都设置"; echo MUT1_EXIT=$?
+    ✕ 成员与团队都设置 → assignWorker 收到成员值（优先级反转即红）
+    Tests:       1 failed, 318 skipped, 319 total
+    MUT1_EXIT=1     <-- precedence-inversion is caught
+
+### Mutation 2 — delete the B2 logger.warn body:
+$ npx jest src/chat/worker-dispatcher.spec.ts -t "B2 可观测"; echo MUT2_EXIT=$?
+    ✕ B2 可观测：agentModelId 为 null 且置顶生效 → logger.warn 记录 resolved workerId 与 defaultModelId
+    Tests:       1 failed, 318 skipped, 319 total
+    MUT2_EXIT=1     <-- dead-code warn is caught
+
+### Restore check (byte-identical rollback from backup before re-verifying):
+$ cmp worker-dispatcher.ts /tmp/task5-wd.bak && echo RESTORED_IDENTICAL
+    RESTORED_IDENTICAL
+$ git diff -U0 -- server/src/chat/worker-dispatcher.ts | grep '^@@'
+    (same 7 hunks as above — 4 pre-existing sibling + my 3)
+
+### Post-restore full re-run:
+$ npx jest src/chat/worker-dispatcher.spec.ts; echo JEST_FINAL_EXIT=$?
+    Test Suites: 1 passed, 1 total
+    Tests:       319 passed, 319 total
+    JEST_FINAL_EXIT=0
+
+## Non-disturbance of the earlier todo (assignWorker pin semantics, todo 4)
+$ cd server && npx jest src/workers/workers.service.spec.ts; echo WORKERS_EXIT=$?
+    Test Suites: 1 passed, 1 total
+    Tests:       172 passed, 172 total
+    WORKERS_EXIT=0
+
+## Guardrail compliance
+- No throw added anywhere; resolver failures stay fail-open (logger.warn + null).
+- platform-mcp.service.ts adopt/ownership logic untouched.
+- Session-reuse and offline-reassignment branch semantics unchanged (diff hunks prove it).
+- Sibling lanes (memories/*, execution-policies/*, tasks/*, teams/*, prisma/migrations/*)
+  untouched; the pre-existing dirty files server/src/platform-mcp/* and
+  web/src/components/chat/msg-parts.tsx were not staged, reverted, or modified.
+- No git write command executed.
+
+## Cleanup receipt
+$ rm -f /tmp/task5-wd.bak /tmp/task5-jest.txt /tmp/task5-tsc.txt /tmp/task5-diff.txt \
+      /tmp/task5-qa1.txt /tmp/task5-qa2.txt /tmp/task5-qa3.txt \
+      /tmp/task5-mut1.txt /tmp/task5-mut2.txt /tmp/task5-jest-final.txt /tmp/task5-workers.txt
+$ ls /tmp/task5-* 2>&1; echo CLEANUP_EXIT=$?
+    zsh:1: no matches found: /tmp/task5-*
+    CLEANUP_EXIT=1     <-- 1 == "no matches found" == all scratch files removed
+Only this evidence file was written outside the two owned source files.

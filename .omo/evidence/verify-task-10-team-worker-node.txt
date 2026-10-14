@@ -1,0 +1,229 @@
+VERIFY TASK 10 — web 契约类型 + 团队详情页团队级控件 (team-worker-node)
+Independent verifier (read-only). Nothing below is copied from the executor's evidence;
+every claim was re-derived from the repo at verification time.
+
+VERDICT: confirmed
+CONFIDENCE: 0.95
+HEAD at verification start AND end: cb0ba6d1ab16571c0c979e41e40951000819f1c7 (unchanged)
+
+=============================================================
+0) SCOPE / COMMIT INTEGRITY
+=============================================================
+$ git log --oneline -1
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+$ git diff --cached --stat
+(empty → nothing staged)
+$ git stash list
+(empty → no stash entry; no stash/checkout/reset ran)
+$ git status --porcelain web/
+ M web/app/(main)/agents/page.tsx          <- earlier todo (todo 3), NOT todo 10
+ M web/app/(main)/teams/[id]/page.tsx      <- todo 10
+ M web/e2e/reference/testids.ts            <- earlier todo (todo 3), NOT todo 10
+ M web/src/api/teams.ts                    <- todo 10
+ M web/src/components/chat/msg-parts.tsx   <- PRE-EXISTING dirty (in todo-1 pre-edit snapshot)
+ M web/src/components/tasks/task-detail-types.ts  <- todo 10
+(0 untracked files under web/ → no new page/tab/nav file was created)
+$ git diff --stat -- web/
+ web/app/(main)/agents/page.tsx                | 63 +----------------------
+ web/app/(main)/teams/[id]/page.tsx            | 74 ++++++++++++++++++++++++++-
+ web/e2e/reference/testids.ts                  |  1 -
+ web/src/api/teams.ts                          |  6 +++
+ web/src/components/chat/msg-parts.tsx         | 26 +++++++---
+ web/src/components/tasks/task-detail-types.ts |  2 +
+ 6 files changed, 102 insertions(+), 70 deletions(-)
+
+=============================================================
+1) THE THREE TYPE ADDITIONS (+ the load-bearing 4th)
+=============================================================
+Read verbatim from web/src/api/teams.ts (line numbers = actual, not reported):
+  20:  preferredWorkerId?: string | null;   <- interface TeamMemberDto   [LOAD-BEARING for todo 11]
+  55:  preferredWorkerId?: string | null;   <- interface TeamDto
+  87:  preferredWorkerId?: string | null;   <- interface UpdateTeamPayload
+Each carries a Chinese JSDoc comment. All three are OPTIONAL (`?`) AND NULLABLE (`| null`) ✓
+Web member view type, web/src/components/tasks/task-detail-types.ts:
+ 139:  preferredWorkerId?: string | null;   <- interface MemberView  (optional + nullable ✓)
+$ grep -c preferredWorkerId web/src/api/teams.ts
+3
+=> The TeamMemberDto field todo 11 depends on (m.preferredWorkerId) EXISTS. Todo 11 is unblocked.
+
+=============================================================
+2) THE PAGE CONTROL — web/app/(main)/teams/[id]/page.tsx:344-375 (verbatim JSX)
+=============================================================
+ 344: <div data-testid="team-worker-section" style={{ ...gap: space.md, paddingTop: space.md, borderTop: `1px dashed ${neutral[200]}` }}>
+ 345:   <span ...>首选 Worker 节点</span>
+ 346:   <select
+ 347:     data-testid="team-worker-select"
+ 348:     value={team.preferredWorkerId ?? ""}
+ 349:     disabled={patchMutation.isPending}
+ 350:     onChange={(e) => handleSetPreferredWorker(e.target.value)}
+ 351:     aria-label="团队首选 Worker（未选则自动调度）"
+ 352-362: style={{ fontFamily, fontSize, color, backgroundColor, border, borderRadius, padding, cursor, minWidth: 220 }}
+ 363:   >
+ 364:     <option value="">自动调度（默认）</option>
+ 365:     {danglingWorkerId && <option value={danglingWorkerId}>{danglingWorkerId}</option>}
+ 366:     {sortedWorkers.map((w) => (
+ 367:       <option key={w.id} value={w.id}>
+ 368:         {w.name ?? w.id} · {w.status !== "offline" ? "在线" : "离线"}
+ 369:       </option>
+ 370:     ))}
+ 371:   </select>
+ 372-374: <span ...>未选则自动调度到任意可用节点；成员可在会话页覆盖</span>
+ 375: </div>
+Checks: native <select> ✓ | testid at :347 ✓ | Chinese aria-label ✓ |
+first option value is the EMPTY string with the automatic-scheduling wording ✓ |
+hint line present ✓ | placement directly below the 记忆开关 row (same dashed-top-row idiom) ✓
+
+Ordering convention vs agents/page.tsx (removed by todo 3, read out of its diff):
+  removed block was: if (a.status !== "offline" && b.status === "offline") return -1;
+                      if (a.status === "offline" && b.status !== "offline") return 1;
+                      return (a.name ?? a.id).localeCompare(b.name ?? b.id);
+  page.tsx:122-126 is byte-identical to that comparator, and :368 label text
+  `{w.name ?? w.id} · {在线/离线}` is byte-identical to the removed :2080-2087 option text. ✓
+
+=============================================================
+3) INLINE PAYLOAD WIDENING (decay point) — confirmed INLINE, not a type swap
+=============================================================
+$ git diff -U0 -- "web/app/(main)/teams/[id]/page.tsx" | grep '^[-+]'
+-    mutationFn: (payload: { name?: string; description?: string | null; reuseSession?: boolean; mainAgentMemberId?: string | null }) =>
++    mutationFn: (payload: { name?: string; description?: string | null; reuseSession?: boolean; mainAgentMemberId?: string | null; preferredWorkerId?: string | null }) =>
+All four pre-existing members are retained in the same inline structural type; only
+`preferredWorkerId?: string | null` was appended. It was NOT replaced by `UpdateTeamPayload`
+(which would also have carried `version`). Necessity of the widening is compile-proven: TSC_EXIT=0 below.
+
+=============================================================
+4) DANGLING-ID NULL-SAFETY — explicit, not incidental
+=============================================================
+page.tsx:130-133 (derived value, with comment) + :365 (placeholder render):
+ 130:  // 悬空软引用（节点已删除）：当前值不在清单里时仍以原始 id 渲染占位项，不得回退成空选中
+ 131:  const danglingWorkerId = team?.preferredWorkerId && !workers.some((w) => w.id === team.preferredWorkerId)
+ 132:    ? team.preferredWorkerId
+ 133:    : null;
+ 365:    {danglingWorkerId && <option value={danglingWorkerId}>{danglingWorkerId}</option>}
+Why it cannot crash or silently reset: the select's value is `team.preferredWorkerId ?? ""`,
+so a dangling id still matches an existing <option value=rawId> and renders that raw id as the
+selection. Edge behaviour verified by reading the code path:
+ - value "" / null → falsy → danglingWorkerId = null → first option selected (no reset bug).
+ - value present in workers list → only the mapped option renders (no duplicate option/key).
+ - value absent → only the raw-id placeholder renders.
+Compiled-output corroboration (see §7): the dangling branch exists in the real build artifact.
+
+=============================================================
+5) NO NEW MUTATION / NO NEW FETCH
+=============================================================
+Write path (single): handleSetPreferredWorker page.tsx:197-208 →
+  patchMutation.mutateAsync({ preferredWorkerId: workerId || null })   (EXISTING patchMutation)
+  → teamsApi.update(id, { ...payload, version: team?.version })       (PATCH /teams/:id + version)
+  → queryClient.invalidateQueries({ queryKey: ["team", id] })         (EXISTING invalidation)
+  → queryClient.invalidateQueries({ queryKey: ["teams"] })            (same shape as every sibling handler)
+No new useMutation was added; no new event/realtime hook; no optimistic write.
+Data source (page.tsx:114-120):
+  const workersQuery = useQuery({ queryKey: ["workers"], queryFn: () => api.get<ApiWorkerRow[]>("/workers"), enabled: !!id });
+Same key AND same GET shape as the pre-existing query on web/app/(main)/agents/page.tsx:2788-2793
+(queryKey ["workers"], api.get<ApiWorkerRow[]>("/workers")). The local ApiWorkerRow (id/name/status)
+is field-identical to the agents-page one; duplication is unavoidable because that interface is not exported.
+Agents page still intact (todo-3 guard held): workersQuery at :2788, restartMutation at :1062,
+16 × "restart" occurrences, `invalidateQueries({ queryKey: ["workers"] })` at :1071.
+
+=============================================================
+6) MUST-NOTs
+=============================================================
+- No new page/tab/nav entry: 0 untracked files under web/ (§0); diff touches 3 existing files only.
+- No third-party Select component: the only new import is `import { api } from "@/lib/api"`;
+  the control is a native <select> (repo convention, same as the add-member panel in the same file).
+- web/app/(main)/agents/page.tsx NOT touched by todo 10: its diff is deletion-only and matches
+  todo 3's documented scope; mtime 16:40:52 (todo-3 era) vs todo-10 edits at 20:04-20:12;
+  .omo/evidence/task-3-team-worker-node.txt marks both agents/page.tsx and testids.ts as MINE.
+- web/e2e/reference/testids.ts NOT touched by todo 10: mtime 16:40:52; current diff is a pure
+  deletion (`- "agent-worker-select"`, numstat 0/1) from todo 3. team-worker-select is correctly
+  NOT registered yet — todo 11 owns that registration.
+- web/src/components/chat/msg-parts.tsx: PRE-EXISTING dirty — listed as ` M web/src/components/chat/msg-parts.tsx`
+  in todo 1's pre-edit git status snapshot (taken 2026-10-14T02:43:53Z, before any plan edit). Untouched here.
+
+=============================================================
+7) GATES — re-run by the verifier, raw outputs
+=============================================================
+$ cd web && npx tsc --noEmit; echo TSC_EXIT=$?
+TSC_EXIT=0
+
+$ cd web && npm run lint; echo LINT_EXIT=$?
+✖ 729 problems (0 errors, 729 warnings)
+LINT_EXIT=0
+$ grep -nE "teams/\[id\]/page\.tsx|api/teams\.ts|task-detail-types\.ts" <lint.log>; echo EXIT=$?
+EXIT=1        # zero lint findings in the three files touched by this todo
+
+$ cd web && npm run build; echo BUILD_EXIT=$?
+...
+├ ƒ /teams/[id]                          7.84 kB         180 kB
+├ ƒ /teams/[id]/session                  45.5 kB         404 kB
+├ ƒ /teams/[id]/tasks                    4.33 kB        183 kB
+...
+BUILD_EXIT=0        # route sizes byte-identical to the executor's recorded artifact -> a real build ran
+$ git diff --check -- web/src/api/teams.ts web/src/components/tasks/task-detail-types.ts "web/app/(main)/teams/[id]/page.tsx"; echo CHECK_EXIT=$?
+CHECK_EXIT=0        # no whitespace errors
+
+Artifact corroboration that the executor's build was real (independent of my re-run):
+  web/.next/BUILD_ID                                     mtime 20:08:45
+  web/.next/server/app/(main)/teams/[id]/page.js         mtime 20:08:38
+  grep -rl "team-worker-select" .next  → server bundle, standalone bundle, client chunk, webpack packs
+  grep -rc "__qa_probe__" .next        → 0 (no probe ever entered a build)
+Compiled control region from web/.next/server/app/(main)/teams/[id]/page.js (RSC payload):
+  ..."首选 Worker 节点"}),(0,d.jsxs)("select",{"data-testid":"team-worker-select",
+   value:Q.preferredWorkerId??"",disabled:W.isPending,onChange:a=>Z(a.target.value),
+   "aria-label":"团队首选 Worker（未选则自动调度）",... minWidth:220,
+   children:[(0,d.jsx)("option",{value:"",children:"自动调度（默认）"}),
+             S&&(0,d.jsx)("option",{value:S,children:S}),
+             P.map(a=>(0,d.jsxs)("option",{value:a.id,children:[a.name??a.id," \xb7 ","offline"!==a.status?"在线":"离线"]},a.id))]})
+Mtime note and why it does not undermine the claim: the delivered source (20:12:50) is 4 min newer
+than the build (20:08:38). That gap is fully explained by the post-build probe/revert cycle (§8):
+all six distinctive literals of the delivered control are present in the 20:08 build AND the compiled
+dangling branch `S&&(0,d.jsx)("option",{value:S,children:S})` is present, and no probe token is in .next.
+My own fresh `npm run build` (BUILD_EXIT=0) closes the residual doubt completely.
+
+=============================================================
+8) HONESTY CHECK ON THE MANUAL QA
+=============================================================
+(a) No live stack — independently confirmed, so the substitution was honest rather than lazy:
+  $ docker compose ps                 → 0 running services (header only)
+  $ lsof -nP -iTCP -sTCP:LISTEN | grep -E ':(3000|3001|13000|13001)\b'
+      node 94825 127.0.0.1:3001  (LISTEN)
+  $ ps -p 94825 -o command=
+      node /private/var/folders/.../T/opencode/pw-bridge/bridge.js   ← opencode Playwright bridge, NOT the web app
+  $ curl -sS -m 3 -o /dev/null -w "%{http_code}" http://127.0.0.1:3001/
+      000   curl_exit=52 (Empty reply from server)
+  MINOR DISCREPANCY (does not change the conclusion): the executor recorded curl exit 7 (connection
+  refused) for :3001; today the same curl exits 52 (TCP accepted, empty reply). Either way there is no
+  web app on :3001, and nothing listens on :3000/:13000/:13001 → the happy-path rendered-DOM assertion
+  was genuinely not performable in this environment.
+(b) Probe truly reverted:
+  $ grep -rn "__qa_probe__" . (excluding node_modules/.next)
+      ./.omo/evidence/task-10-team-worker-node.txt:123   (executor's own quoted text)
+      ./.omo/evidence/task-10-team-worker-node.txt:136   (executor's own quoted text)
+      ./.omo/evidence/task-10-team-worker-node.txt:147   (executor's own quoted text)
+  → 0 hits in any source file; 0 hits in .next; verifier's own `npx tsc --noEmit` = 0.
+(c) The mutation assertion was non-trivial: with `<option value="__qa_probe__">自动调度（默认）</option>`
+  the assertion failed with "first option value is empty (missing: <option value="">自动调度（默认）</option>)"
+  AND a second, independent "probe contamination" check fired. That is a real first-option-empty test,
+  not a tautology. Documentation gap (not a functional defect): t10-assert.sh is not preserved anywhere
+  in the repo, so it is not directly re-runnable. I reconstructed the same 10 assertions with my own
+  grep round-trip against the DELIVERED file — all 10 PASS:
+  PASS select testid present / first option value is empty / aria-label present /
+       controlled value from team DTO / write-through uses null coalesce /
+       handler invalidates team cache / workers query reuses cache key + GET /workers /
+       dangling-id placeholder renders / label text / hint text
+LIGHT-TIER acceptance: SATISFIED. Static evidence (tsc 0, lint 0 errors + 0 findings in touched files,
+BUILD 0 with /teams/[id] compiled, verbatim JSX with line numbers, grep round-trip all PASS) plus a REAL
+failure-path mutation (injected → detected → reverted, 0 residue). The live-DOM happy path is explicitly
+deferred to the later smoke/e2e work (todo 12 / F3), which the plan itself designates as the carrier
+("或：…在 F3 冒烟里断言") and which is non-default-gate. The evidence labels the gap STATIC, not silent.
+
+=============================================================
+9) OBSERVATIONS (informational, no fix required)
+=============================================================
+- Local `ApiWorkerRow` (id/name/status) is duplicated in page.tsx because the agents-page copy is not
+  exported. Field-identical; consistent with existing repo convention.
+- While `workersQuery` is still in flight (workers = []), a VALID preferredWorkerId transiently renders
+  the raw-id placeholder; it self-corrects when the query resolves, and if the query permanently fails the
+  raw id is shown — which is the plan-mandated behaviour, never an empty selection.
+- `UpdateMemberPayload` in web/src/api/teams.ts was intentionally NOT extended here (todo 11 writes the
+  member endpoint through `api.patch(...)` with an inline payload), so no missing-field gap exists.
+No defects found; no fix proposed.

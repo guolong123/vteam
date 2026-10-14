@@ -1,0 +1,516 @@
+================================================================================
+INDEPENDENT VERIFICATION — Todo 3 (team-worker-node)
+「web 与原型删除 Agent『首选 Worker』下拉与 testid 清单条目」
+================================================================================
+Verifier lane : read-only independent verifier (did NOT implement Todo 3)
+Verified HEAD : b6840d1 ("feat(chat): 工具卡空壳治理 + SSE 实时流双路 + ...")
+Receipt under test : .omo/evidence/task-3-team-worker-node.txt
+Plan           : .omo/plans/team-worker-node.md (Todo 3 = lines 117-129;
+                  binding Must-NOT list = lines 34-47)
+Date           : 2026-10-14
+
+VERDICT: needs-fix   (low severity / cosmetic)
+  - Every enumerated deletion in Todo 3 was reproduced and is CORRECT.
+  - Every acceptance criterion in plan line 126 was re-run by me from scratch
+    and reproduces EXACTLY as the receipt claims.
+  - However 3 residual artifacts survive INSIDE the four authorized files.
+    All three are invisible to the plan's acceptance greps (they key on the
+    literal "agent-worker-select" / "首选 Worker" / "workerDraft|sortedWorkers"),
+    which is exactly the failure mode the plan warned about for the mock
+    `worker` keys ("否则留下死字段").
+  - No functional, type, lint, or behavior defect was found. Fixes are
+    one-line text edits. Reported, NOT fixed (lane is read-only).
+
+--------------------------------------------------------------------------------
+D1  DEFECT (real, low): web/e2e/reference/testids.ts:156 — entry blanked, not deleted
+--------------------------------------------------------------------------------
+Plan line 121 says 删 `"agent-worker-select"`. The string is gone (so the
+acceptance grep passes) but the LINE was replaced by 6 spaces, not deleted.
+This is not "deletion-only" as the receipt claims — numstat for this file is
+1 insertion / 1 deletion instead of 1 deletion / 0 insertions.
+
+  $ sed -n '154,158p' web/e2e/reference/testids.ts | sed -n l
+        "model-token-input",$
+        "model-credential-status",$
+        $                         <-- line 156: whitespace-only leftover
+        "model-stale-warning",$
+        "model-source-hint",$
+
+  $ git diff --check -- web/e2e/reference/testids.ts
+  web/e2e/reference/testids.ts:156: trailing whitespace.
+  +
+  CHECK_EXIT=2
+
+  Impact: none functionally (eslint has no no-trailing-spaces rule; gate.sh
+  has no `diff --check`). It is a cleanliness + "deletion-only" truthfulness
+  defect, and it will ship a stray blank-whitespace line into the testid
+  reference list.
+  SMALLEST FIX: delete web/e2e/reference/testids.ts line 156 entirely
+  (leaving the entry list contiguous), i.e. change
+        "model-credential-status",
+  -     "agent-worker-select",
+  +     <whitespace>
+        "model-stale-warning",
+  into
+        "model-credential-status",
+        "model-stale-warning",
+
+--------------------------------------------------------------------------------
+D2  DEFECT (real, low, user-visible text): agent-manage/index.tsx:817
+    Section ② sub-header still promises a removed "执行节点" field
+--------------------------------------------------------------------------------
+The todo edited this very element (changed gridTemplateColumns repeat(3,1fr)
+-> repeat(2,1fr)) and removed the `<Field label="首选 Worker">`, but left the
+section's `sub` copy naming the removed concept:
+
+  <Section index="②" title="运行参数" sub="模型 / 执行节点 / 性格 —— 都是 Agent 自己的属性，不属于岗位">
+    <div style={{ gridTemplateColumns: "repeat(2, 1fr)" }}>
+      <Field label="默认模型" value={agent.model} />
+      <Field label="性格 persona" ... />          <-- only 2 fields now
+
+  "执行节点" (execution node) was the plain-language label of the removed
+  worker field. The header at the same file's line 20 was correctly updated to
+  "② 运行参数：默认模型 / 性格" — this sibling line was missed.
+  Impact: prototype only (docs/, not compiled by web/tsconfig.json, not
+  linted). Cosmetically contradicts the removal the todo performed.
+  SMALLEST FIX: sub="模型 / 执行节点 / 性格 ..." -> sub="模型 / 性格 ..."
+
+--------------------------------------------------------------------------------
+D3  DEFECT (real, low, doc text): agent-manage/index.tsx:11 still lists workerId
+--------------------------------------------------------------------------------
+  defaultModelId / workerId / persona / policyId（★ 能力：权限与工具）
+`Agent.workerId` is being deleted repo-wide by this plan (Todo 2 already landed
+`server/src/agents/*` edits; Todo 6 drops the schema declaration), so this
+prototype header comment becomes factually wrong.
+The receipt self-flagged this at its lines 127-131 and correctly left it alone
+(it is not the literal "首选 Worker" and not enumerated in plan line 122).
+Reported here for Todo 13 / F4 bookkeeping, not for Todo 3.
+  SMALLEST FIX: delete `workerId / ` from that attribute list.
+
+--------------------------------------------------------------------------------
+RECEIPT INACCURACY (not a product defect)
+--------------------------------------------------------------------------------
+Receipt lines 58-59 claim: "729 pre-existing warnings, all outside my files:
+teams/, ui/chat-bubble.tsx, features/docs-site/*. none in agents/page.tsx".
+FALSE as to agents/page.tsx — my own `npm run lint` run reports 2 warnings in
+that file:
+  web/app/(main)/agents/page.tsx
+    1511:187  warning  'deleting' is defined but never used   @typescript-eslint/no-unused-vars
+    2701:9    warning  The 'agents' logical expression could make the dependencies
+                       of useMemo Hook (at line 2773) change on every render  react-hooks/exhaustive-deps
+Both are PRE-EXISTING and unrelated to this todo (the `deleting` prop and the
+AgentsPage useMemo were not touched by the diff), so the "0 errors" conclusion
+stands; only the receipt's prose is wrong.
+
+================================================================================
+PART 1 — RECEIPT CLAIMS AND MY INDEPENDENT VERDICT ON EACH
+================================================================================
+C1  "Change set = 4 files: web/app/(main)/agents/page.tsx,
+     web/e2e/reference/testids.ts, docs/.../agent-config/index.tsx,
+     docs/.../agent-manage/index.tsx; 6 insertions / 126 deletions"
+    -> CONFIRMED. Exact numstat match, and nothing else in web/app, web/e2e
+       or docs is modified.
+C2  "Deleted: AgentItem.workerId, UpdateAgentPayload.workerId, workerDraft
+     state, `workerId: workerDraft || null`, sortedWorkers, sub-header wording,
+     whole dropdown block (data-testid agent-worker-select)"
+    -> CONFIRMED, verified hunk by hunk against `git diff`.
+C3  "testids.ts entry deleted" -> PARTIALLY FALSE (D1: blanked, not deleted).
+C4  "agent-config header comment :8 + workerPool mock + :782-821 block removed"
+    -> CONFIRMED.
+C5  "agent-manage :20 comment + `worker: string` type field + <Field 首选 Worker>
+     + 9 mock `worker:` keys removed"
+    -> CONFIRMED (9 mock keys at old :133,150,167,184,201,218,235,253,270;
+       :106 type field; :829 Field). Residual "执行节点" (D2) and "workerId"
+     (D3) text not covered.
+C6  "KEPT: workersQuery, workers prop, ApiWorkerRow — still consumed by
+     EffectivePermissionSection restart-all-workers"
+    -> CONFIRMED, see PART 4.
+C7  "NOT added: any compatibility hint for silent no-op save"
+    -> CONFIRMED (plan Must-NOT line 123).
+C8  "No git write command executed" -> CONFIRMED. HEAD still b6840d1c; all
+    changes are working-tree only; nothing staged (`git diff --cached` empty,
+    verified below).
+C9  "Mutation check: reintroducing `workerDraft` -> TS2304, exit 2; reverted"
+    -> NOT RE-RUN (would require editing a product file = forbidden for this
+       lane). Residue check performed instead: `grep -c "_mut"` = 0 and
+       `grep -c "workerDraft\|sortedWorkers"` = 0 on the live file, and the file
+       still passes tsc (exit 0). The claim is consistent with the tree state.
+C10 "lint: 729 problems (0 errors, 729 warnings)" -> exit 0 CONFIRMED; the
+    "none in agents/page.tsx" sub-claim is FALSE (see above).
+
+================================================================================
+PART 2 — SCOPE FIDELITY (plan lines 119-123)
+================================================================================
+$ git diff --stat -- web/app web/e2e docs
+ .../prototypes/agent-config/index.tsx              | 52 +-----------------
+ .../prototypes/agent-manage/index.tsx              | 15 +-----
+ web/app/(main)/agents/page.tsx                     | 63 +---------------------
+ web/e2e/reference/testids.ts                       |  2 +-
+ 4 files changed, 6 insertions(+), 126 deletions(-)
+
+$ git diff --numstat -- web/app web/e2e docs
+1	51	docs/agent-platform/prototypes/agent-config/index.tsx
+2	13	docs/agent-platform/prototypes/agent-manage/index.tsx
+2	61	web/app/(main)/agents/page.tsx
+1	1	web/e2e/reference/testids.ts          <-- 1/1 not 0/1  => D1
+
+$ git diff -U0 -- web/app web/e2e docs | grep '^@@'
+@@ -8 +8 @@                                              <- agent-config  header comment
+@@ -161,7 +160,0 @@                                       <- agent-config  workerPool mock
+@@ -782,43 +774,0 @@ function ConfigPanel(...)             <- agent-config  whole UI block
+@@ -20 +20 @@                                              <- agent-manage  header comment :20
+@@ -106 +105,0 @@ interface AgentDef {                    <- `worker: string` type field
+@@ -133 +131,0 @@ const AGENTS ...                       \
+@@ -150 +147,0 @@ const AGENTS ...                        |
+@@ -167 +163,0 @@ const AGENTS ...                        |
+@@ -184 +179,0 @@ const AGENTS ...                        |  9 mock rows
+@@ -201 +195,0 @@ const AGENTS ...                        |
+@@ -218 +211,0 @@ const AGENTS ...                        |
+@@ -235 +227,0 @@ const AGENTS ...                        |
+@@ -253 +244,0 @@ const AGENTS ...                        |
+@@ -270 +260,0 @@ const AGENTS ...                       /
+@@ -827 +817 @@ function AgentManagePage() {              <- gridTemplateColumns 3fr->2fr
+@@ -829 +818,0 @@ function AgentManagePage() {            <- <Field label="首选 Worker">
+@@ -100,2 +99,0 @@ interface AgentItem {                  <- AgentItem.workerId
+@@ -126,2 +123,0 @@ interface UpdateAgentPayload {        <- UpdateAgentPayload.workerId
+@@ -1526 +1521,0 @@ function ConfigPanel(...)              <- workerDraft state
+@@ -1544 +1539 @@ function ConfigPanel(...)                <- comment prompt/模型/性格
+@@ -1548,2 +1542,0 @@ function ConfigPanel(...)            <- workerId payload line
+@@ -1563,7 +1555,0 @@ function ConfigPanel(...)            <- sortedWorkers
+@@ -1880 +1866 @@ function ConfigPanel(...)                <- sub-header 默认模型 · 凭据
+@@ -2048,45 +2033,0 @@ function ConfigPanel(...)            <- whole dropdown block
+@@ -156 +156 @@ export const PAGES: PageTestidRef[] = [   <- testids.ts entry
+
+Every hunk maps 1:1 onto an item enumerated in plan lines 119-122. No
+out-of-scope hunk, no unrelated refactor, no opportunistic cleanup.
+There is NO hunk in any worker/ server file, no schema file, no e2e spec, and
+no other testid line ("不得顺手清理其它 testid" respected).
+
+NOT ADDED: no compat/deprecation banner for the now-silently-ignored workerId
+payload field — correct per plan Must-NOT line 123.
+
+================================================================================
+PART 3 — ACCEPTANCE CRITERIA, RE-RUN FROM SCRATCH (plan line 126)
+================================================================================
+A1  $ cd web && npx tsc --noEmit
+    (raw stdout+stderr: EMPTY)
+    TSC_EXIT=0                                        [PASS]
+
+A2  $ cd web && npm run lint
+    ... (full file: /private/var/folders/.../v3-lint.txt)
+    /Volumes/SSD-Data/01work/git-project/vteam/web/src/components/ui/chat-bubble.tsx
+      635:13  warning  Using `<img>` ...
+      ...
+    /Volumes/SSD-Data/01work/git-project/vteam/web/src/features/docs-site/prototype-sandbox.tsx
+      2:21  warning  'useRef' is defined but never used  @typescript-eslint/no-unused-vars
+
+    ✖ 729 problems (0 errors, 729 warnings)
+    LINT_EXIT=0                                       [PASS — 0 errors]
+    NOTE: agents/page.tsx DOES appear in this output with 2 pre-existing
+    warnings (see "RECEIPT INACCURACY"). Not introduced by this todo.
+
+A3  $ grep -rn "agent-worker-select" web/app web/src web/e2e docs; echo "EXIT=$?"
+    (no output)
+    EXIT=1                                           [PASS — zero hits]
+
+A4  $ grep -rn "首选 Worker" "web/app/(main)/agents" web/src/components/agents \
+      docs/agent-platform; echo "EXIT=$?"
+    (no output)
+    EXIT=1                                           [PASS — zero hits]
+
+A5  $ grep -c "workerDraft\|sortedWorkers" "web/app/(main)/agents/page.tsx"
+    0                                                 [PASS — outputs 0]
+
+A6  (QA happy, line 127) restart-all-workers still present:
+    $ grep -c "restart" "web/app/(main)/agents/page.tsx"
+    16
+    $ git show HEAD:"web/app/(main)/agents/page.tsx" | grep -c "restart"
+    16                                               [PASS — unchanged vs HEAD]
+
+All five acceptance criteria reproduce independently. tsc+lint outputs above are
+RAW, pasted verbatim, and every one of my checks was executed by me, not copied
+from the receipt.
+
+================================================================================
+PART 4 — KEEP-LIST SURVIVAL (plan line 120; MUST NOT line 123
+                 "不得删『重启全部 worker』功能或其 testid")
+================================================================================
+$ grep -n "workersQuery\|ApiWorkerRow\|workers" "web/app/(main)/agents/page.tsx"
+168:/** GET /workers 条目（toWorkerView 子集：首选 worker 选择 + 在线态）。 */
+169:interface ApiWorkerRow {
+831: * GET /workers 全量（重启通知的作用域来源）...
+835:  workers: ApiWorkerRow[];
+854:function EffectivePermissionSection({ ..., workers }: EffectivePermissionSectionProps) {
+858:/** 本挂载内至少一次策略写盘成功 → 需要重启全部 worker 才生效 */
+1065:        workers.map((w) => api.post<{ workerId: string; queued: boolean }>(`/workers/${w.id}/restart`)),
+1071:      queryClient.invalidateQueries({ queryKey: ["workers"] });
+1405:          {workers.length === 0 ? (
+1411:              重启命令已下发（{workers.length} 个 worker）；...
+1491:/** 可用 worker 列表（GET /workers，首选 worker 选择数据源） */
+1492:  workers: ApiWorkerRow[];
+1511:function ConfigPanel({ ..., workers, ... }: ConfigPanelProps) {
+2105:          workers={workers}                      <- ConfigPanel -> EffectivePermissionSection
+2787:  // worker 列表：GET /workers（首选 worker 选择数据源，在线优先展示）
+2788:  const workersQuery = useQuery({
+2789:    queryKey: ["workers"],
+2790:    queryFn: () => api.get<ApiWorkerRow[]>("/workers"),
+2793:  const workers = workersQuery.data ?? [];
+3041:          workers={workers}                      <- AgentsPage -> ConfigPanel
+
+- workersQuery .......... PRESENT (:2788, HEAD had it at :2847-2852)  [KEEP OK]
+- workers prop .......... PRESENT (:835 :854 :1492 :2105 :3041)        [KEEP OK]
+- ApiWorkerRow ........... PRESENT (:169)                             [KEEP OK]
+- restart path consumes them: workers.map(...) at :1065 -> POST
+  /workers/{id}/restart, still wired to the EffectivePermissionSection
+  render at :2105                                        [KEEP OK]
+- `workers` is NOT an orphaned prop: it is destructured at :1511 and
+  immediately forwarded at :2105. tsc reports no unused-param error, so the
+  chain is genuinely live.
+
+Restart testids / copy ALL SURVIVE (unchanged vs HEAD):
+1383: data-testid="policy-restart-notice"
+1401: data-testid="policy-restart-hint"
+1406: data-testid="policy-restart-empty"
+1410: data-testid="policy-restart-done"
+1416: data-testid="policy-restart-action"
+1435: {restartMutation.isPending ? "重启中…" : "立即重启全部 worker"}
+
+PROOF the diff never touched the restart feature at all:
+$ git diff -- "web/app/(main)/agents/page.tsx" | grep -in "restart"
+(no output)   RESTART_DIFF_EXIT=1
+=> zero added/removed/context lines contain "restart".
+
+Other Must-NOT guards (plan line 43) — 取数 worker semantics PRESERVED:
+$ grep -n workerId web/src/components/agents/AgentRolesTab.tsx \
+                 web/src/components/agents/ExternalAgentsPanel.tsx
+AgentRolesTab.tsx:80:        workerId: string | null;
+AgentRolesTab.tsx:202:      // ...（与 ExternalAgentsPanel 同源同过滤；workerId 缺省由服务端自动选 worker）。
+ExternalAgentsPanel.tsx:17: * - 列表：`GET /agents/opencode`（workerId 缺省 → 服务端 assignWorker 自动选在线 worker）
+ExternalAgentsPanel.tsx:73:/** GET /agents/opencode 响应（workerId 缺省时由服务端自动选 worker）。*/
+ExternalAgentsPanel.tsx:76:  workerId: string | null;
+ExternalAgentsPanel.tsx:179: // 列表：不传 workerId（...）
+=> No mechanical workerId sweep happened. Correct.
+
+$ grep -n workerId "web/app/(main)/agents/page.tsx"
+1065:  workers.map((w) => api.post<{ workerId: string; queued: boolean }>(...))
+=> Exactly ONE remaining `workerId` in the whole agents page, and it is the
+   restart API's route param — i.e. the 取数/Worker-domain sense the plan
+   explicitly told me not to delete. The Agent-level field is fully gone.
+
+DEAD-READ CHECK on the deleted prototype type field (docs/ is not covered by
+web/tsconfig.json, so a stale read would be a silent runtime break):
+$ grep -n "agent\.worker\|\bworker\b" docs/.../agent-manage/index.tsx
+EXIT=1  (zero hits)   => no orphan reads of the deleted `worker` field.
+
+================================================================================
+PART 5 — ADVERSARIAL: does the narrowed scoping hide a real leftover?
+================================================================================
+Method: whole-repo grep from repo root, excluding ONLY web/.next and
+node_modules (i.e. NOT restricted to the acceptance path list).
+
+A) agent-worker-select, whole repo
+$ grep -rn --exclude-dir=.next --exclude-dir=node_modules "agent-worker-select" .
+  ./.omo/evidence/task-3-team-worker-node.txt:43, :61     <- the receipt itself
+  ./.omo/plans/model-management.md:82                     <- superseded plan text
+  ./.omo/plans/team-worker-node.md:119,121,126,274,286    <- this plan
+  ./.omo/drafts/team-worker-node.md:16,230,233             <- review draft
+  ./.omo/notepads/model-management/learnings.md:262,266,356,381 <- historical notes
+  (no hits under web/app, web/src, web/e2e, docs/, server/, scripts/)
+  => VERDICT: ZERO source-code leftovers. All remaining occurrences are
+     plan/draft/notepad/evidence prose describing the deletion itself.
+     Narrowing hides nothing.
+
+B) 首选 Worker, whole repo
+$ grep -rn --exclude-dir=.next --exclude-dir=node_modules "首选 Worker" .
+  ./.omo/evidence/task-3-team-worker-node.txt:1,9,42,46,64,130
+  ./.omo/plans/team-worker-node.md:5,62,117,119,122,126,127,128,221,274,275,276,309
+  ./.omo/drafts/team-worker-node.md:54,55,60,63,93
+  ./.omo/ulw-execute/ledger.jsonl:23
+  (no hits under web/ or docs/)
+  => VERDICT: ZERO source leftovers. Note this ALSO means the agents-narrowed
+     grep did not hide anything: there are currently zero `首选 Worker`
+     occurrences anywhere in web/ or docs/. (Todo 10 will legitimately add one
+     under web/app/(main)/teams/[id]/page.tsx — plan line 276 anticipates it.)
+
+C) workerDraft / sortedWorkers, whole repo
+$ grep -rn --exclude-dir=.next --exclude-dir=node_modules "workerDraft\|sortedWorkers" .
+  .omo/evidence/task-3-team-worker-node.txt:40,41,67,76,77,79,80,89   <- receipt
+  .omo/plans/team-worker-node.md:119,126,127                         <- plan
+  .omo/drafts/team-worker-node.md:231                                <- draft
+  web/app/(main)/models/providers-tab.tsx:454,635,888,1183           <- SOURCE HIT
+=> The only source hits are FOUR in web/app/(main)/models/providers-tab.tsx.
+   Inspected (:625-640, :448-458): it is a multi-select CHECKBOX list of
+   workers bound to a MODEL PROVIDER on the models page (`data-testid=
+   "provider-config-modal"`, `provider-credential-status`, etc.), with the
+   identical "online first, then name" sort. It is a DIFFERENT feature with its
+   own data source (provider worker binding), not the Agent 首选 Worker
+   dropdown, and it is untouched by this diff. NOT a leftover; correctly
+   outside Todo 3's enumerated deletions.
+
+D) workerId (context) across web/app + web/src, excluding .next/node_modules
+   -> all hits are Worker-domain: workers/install/page.tsx (worker self-registration
+      id), workers/[id]/* and workers/page.tsx (restart/shutdown/update/delete
+      route params), teams/[id]/session/page.tsx + workers/[id]/omo-panel.tsx
+      (opencode-agents/omo-config `?workerId=` query params), and the two
+      Must-NOT-protected files in web/src/components/agents.
+   -> ZERO Agent-level workerId left in web/. Correct.
+
+CONCLUSION: the deliberate narrowing hides NO real leftover. I searched a
+strictly larger surface than the acceptance criteria (whole repo, excluding
+only gitignored build output) and every hit is either plan prose or an
+unrelated feature.
+
+================================================================================
+PART 6 — ADVERSARIAL PROBES
+================================================================================
+[misleading_success_output]
+  Mitigated by pasting raw, self-produced output above rather than summaries:
+  tsc stdout/stderr was EMPTY with the literal line "TSC_EXIT=0" produced by
+  `npx tsc --noEmit > file 2>&1; echo "TSC_EXIT=$?" >> file` (a swallowed
+  exit code cannot be faked by a pipe through `tail`). lint's full 729-line
+  report was captured to a file and inspected, not tail-truncated to a summary
+  line; the "✖ 729 problems (0 errors, 729 warnings)" line was read out of the
+  REAL report. Every grep printed its own `EXIT=$?` (1 = no match), so a
+  "zero hits" claim is backed by an exit code, not by an empty-looking pipe.
+  The one place I did NOT take the receipt at face value (its lint
+  provenance sentence) turned out to be wrong and I corrected it above.
+
+[stale_state / web/.next]
+  web/.next IS stale build output and IS load-bearing for this verification:
+  $ ls -ld web/.next      -> drwxr-xr-x  22 mac staff  704 Oct 11 02:52 web/.next
+     (mtime Oct 11; this plan's edits are Oct 14 => the tree predates the
+      change by 3 days and still contains the deleted dropdown)
+  $ grep -rl "agent-worker-select" web/.next | wc -l   -> 15
+     (matches plan's "实测 18 处命中" ballpark — file count, not line count)
+  $ git check-ignore -v web/.next  -> web/.gitignore:22 /.next/   web/.next
+  $ git ls-files web/.next | wc -l -> 0      (0 tracked files)
+  CAN ANY CLAIM BE SATISFIED OR FALSIFIED ONLY BY .next?
+     - No. All five acceptance probes and both KEEP-list probes read files that
+       are tracked by git and live under web/app, web/src, web/e2e, docs/.
+       `git ls-files` confirms agents/page.tsx and testids.ts are tracked
+       working-tree files, not build copies.
+     - Concretely, had .next been consulted instead of source, A3 would report
+       15 stale "hit" files and A6 would report the OLD dropdown text — i.e.
+       .next would FALSIFY a correct change. Excluding it is mandatory, and
+       the plan's stated reason (line 123) is technically correct.
+     - Note web/eslint.config.mjs already ignores `.next/**`, and web/tsconfig
+       never includes it, so `npm run lint` and `tsc --noEmit` are structurally
+       immune to this trap. Only the naive grep would be poisoned.
+
+[dirty_worktree]
+  $ git log --oneline -1
+  b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+  -> Still b6840d1c as the receipt's base-sha claims. Nothing was committed.
+
+  Pre-existing dirt STILL dirty, still unstaged, still unmodified by Todo 3:
+  $ git status --porcelain -- <file>
+   M server/src/platform-mcp/platform-mcp.service.ts
+   M server/src/platform-mcp/platform-mcp.controller.ts
+   M server/src/platform-mcp/platform-mcp.tools.ts
+   M server/src/platform-mcp/platform-mcp.controller.spec.ts
+   M server/src/platform-mcp/platform-mcp.service.spec.ts
+   M web/src/components/chat/msg-parts.tsx
+  All six appear verbatim in the receipt's START-worktree snapshot (lines
+  19-24) and none of them appear in this todo's scoped diff
+  (`git diff -- web/app web/e2e docs`). Untouched. [PASS]
+
+  Sibling-todo files present in the tree and correctly NOT claimed by T3:
+   M server/src/agents/agents.service.ts / .spec.ts / dto/update-agent.dto.ts   (Todo 2)
+   M server/src/workers/workers.service.ts / .spec.ts                        (Todo 4)
+  T3's final status list accounts for each with the right attribution.
+
+  Staged index: clean (nothing in `git diff --cached`), so no `git add`
+  happened. No `git commit/stash/checkout` could have run without moving HEAD
+  or emptying the diff, and HEAD is unchanged at b6840d1c. [PASS]
+
+  Side effects I introduced this session: this file only
+  (.omo/evidence/verify-task-3-team-worker-node.txt). No product file edited;
+  `npx tsc`/`npm run lint` may refresh web/tsconfig.tsbuildinfo / .next
+  incremental caches, which are gitignored build state, not tracked content
+  (`git status --porcelain` shows no new tracked-file changes).
+
+================================================================================
+PART 7 — EXACT REPRO COMMANDS (run from
+         /Volumes/SSD-Data/01work/git-project/vteam unless noted)
+================================================================================
+# scope
+git log --oneline -1
+git diff --stat -- web/app web/e2e docs
+git diff --numstat -- web/app web/e2e docs
+git diff -U0 -- web/app web/e2e docs | grep '^@@'
+git diff -- web/app/'(main)'/agents/page.tsx web/e2e/reference/testids.ts
+git diff -- docs/agent-platform/prototypes/agent-config/index.tsx \
+            docs/agent-platform/prototypes/agent-manage/index.tsx
+
+# acceptance (plan line 126)
+cd web && npx tsc --noEmit; echo "TSC_EXIT=$?"
+cd web && npm run lint; echo "LINT_EXIT=$?"
+cd .. && grep -rn "agent-worker-select" web/app web/src web/e2e docs; echo "EXIT=$?"
+grep -rn "首选 Worker" "web/app/(main)/agents" web/src/components/agents docs/agent-platform; echo "EXIT=$?"
+grep -c "workerDraft\|sortedWorkers" "web/app/(main)/agents/page.tsx"
+
+# QA happy (plan line 127)
+grep -c "restart" "web/app/(main)/agents/page.tsx"
+git show HEAD:"web/app/(main)/agents/page.tsx" | grep -c "restart"
+git diff -- "web/app/(main)/agents/page.tsx" | grep -in "restart"
+
+# KEEP-list
+grep -n "workersQuery\|ApiWorkerRow\|workers" "web/app/(main)/agents/page.tsx"
+grep -n "restart" "web/app/(main)/agents/page.tsx"
+grep -n workerId web/src/components/agents/AgentRolesTab.tsx \
+                web/src/components/agents/ExternalAgentsPanel.tsx
+
+# adversarial (narrowing sanity)
+grep -rn --exclude-dir=.next --exclude-dir=node_modules "agent-worker-select" .
+grep -rn --exclude-dir=.next --exclude-dir=node_modules "首选 Worker" .
+grep -rn --exclude-dir=.next --exclude-dir=node_modules "workerDraft\|sortedWorkers" .
+grep -rn --exclude-dir=.next --exclude-dir=node_modules workerId web/app web/src
+grep -rn "agent\.worker\|\bworker\b" docs/agent-platform/prototypes/agent-manage/index.tsx
+
+# stale-state probe
+ls -ld web/.next
+grep -rl "agent-worker-select" web/.next | wc -l
+git check-ignore -v web/.next
+git ls-files web/.next | wc -l
+
+# defect repro
+sed -n '154,158p' web/e2e/reference/testids.ts | sed -n l
+git diff --check -- web/e2e/reference/testids.ts
+sed -n '815,820p' docs/agent-platform/prototypes/agent-manage/index.tsx
+sed -n '9,13p'   docs/agent-platform/prototypes/agent-manage/index.tsx
+
+# dirty-worktree probe
+git status --porcelain
+git diff --cached --stat
+
+================================================================================
+PART 8 — CONFIDENCE
+================================================================================
+Confidence: 0.93
+
+  Grounded (high confidence, ~0.97):
+   - the 5 acceptance criteria and the 2 KEEP-list criteria — re-executed by
+     me, raw outputs pasted, all reproduce.
+   - scope fidelity: exactly the 4 authorized files, every hunk enumerated.
+   - no source leftover hidden by the narrowed greps (whole-repo sweep).
+   - nothing committed, pre-existing dirt untouched.
+
+  Residual uncertainty (~0.93 not 1.0):
+   - I could not re-run the receipt's MUTATION check (C9): it requires editing
+     `web/app/(main)/agents/page.tsx`, which this lane forbids. I substituted a
+     residue check (`_mut`=0, workerDraft|sortedWorkers=0, tsc=0) which is
+     strong but does not prove the executor actually observed TS2304.
+   - I did not run Playwright / a live build. Plan Must-NOT line 47 and
+     scripts/gate.sh make Playwright out of scope for this todo, and Todo 13
+     owns the full gate; so "the page still renders correctly" is asserted only
+     via static analysis (tsc 0 + 0 lint errors + KEEP chain intact), not by
+     rendering it.
+   - Severity call on D2 is a judgement: "执行节点" is not the literal string
+     "首选 Worker", so it neither violates a letter of plan line 122 nor any
+     acceptance grep — I rate it a real leftover by intent (the same
+     "否则留下死字段" rationale the plan used for the mock keys), but a reviewer
+     could reasonably call it out of scope and defer to Todo 13.
+
+================================================================================
+END OF VERIFICATION
+================================================================================

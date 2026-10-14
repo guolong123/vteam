@@ -1,0 +1,751 @@
+Todo 7 — 迁移：追加目录 + 手写 DDL（2 ADD + 1 DROP，内联回滚契约）+ 反转守卫 spec
+采集时间（UTC）: 2026-10-14T07:00:00Z 附近（本机 Asia/Shanghai）
+说明：下列全部输出均为原始命令输出 / 字面退出码，未做任何「改写式成功叙述」。
+禁止事项自查：未执行任何 git add / commit / stash / checkout；未触碰
+server/src/platform-mcp/*、web/src/components/chat/msg-parts.tsx、
+server/src/chat/worker-dispatcher.ts、server/src/teams/*。
+
+============================================================
+0. 交付物清单（仅两个新文件 + 本证据文件）
+============================================================
+新增文件：
+  server/prisma/migrations/20261014000000_team_worker_node/migration.sql
+  server/src/prisma/team-worker-node.migration.spec.ts
+  .omo/evidence/task-7-team-worker-node.txt（本文件）
+未新增索引、未新增 FK、未保留影子列、未拆分 DROP、未编辑 baseline。
+
+============================================================
+1. 状态核验（依赖 Todo 6 已完成）
+============================================================
+命令：cd server && grep -n "preferred_worker_id\|preferredWorkerId" prisma/schema.prisma; echo GREP_EXIT=$?
+96:  preferredWorkerId  String?  @map("preferred_worker_id")
+188:  preferredWorkerId String? @map("preferred_worker_id")
+GREP_EXIT=0
+
+命令：cd server && awk '/model Agent /,/^}/' prisma/schema.prisma | grep -n "workerId"; echo AGENT_WORKERID_COUNT_EXIT=$?
+AGENT_WORKERID_COUNT_EXIT=1
+（grep 退出码 1 = 零命中 ⇒ Agent 段已无 workerId 声明）
+
+命令：git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+
+命令：git rev-parse HEAD
+b6840d1cd72cd536108457d3e78f6bcf54c548ec
+
+============================================================
+2. Deliverable 2 — 离线等价自证（prisma migrate diff）
+============================================================
+命令：git show HEAD:server/prisma/schema.prisma > /tmp/pre.prisma; echo SHOW_EXIT=$?
+SHOW_EXIT=0
+（迁移前 schema = 提交 b6840d1 的 schema.prisma：含 Agent.workerId，无 preferredWorkerId）
+
+命令：cd server && npx prisma migrate diff --from-schema-datamodel /tmp/pre.prisma --to-schema-datamodel prisma/schema.prisma --script
+--- 原始输出（含 stderr，未过滤任何行）---
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+-- AlterTable
+ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` VARCHAR(191) NULL;
+
+-- AlterTable
+ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` VARCHAR(191) NULL;
+
+-- AlterTable
+ALTER TABLE `agents` DROP COLUMN `worker_id`;
+DIFF_EXIT=0
+
+--- 与手写 DDL 的逐条对账（列类型 / 默认值 / 顺序）---
+| # | Prisma 自产 | 手写 DDL | 差异与判定 |
+| 1 | ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` VARCHAR(191) NULL; | ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL; | 同表、同列、同宽 191。Prisma 渲染 NULL，MySQL 对可空列的隐式默认即 NULL ⇒ `DEFAULT NULL` 与 `NULL` 同义（本仓手写迁移统一口径见 20261010030000_worker_update_state 的 varchar(191) 说明）。大小写不敏感，判定等价。 |
+| 2 | ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` VARCHAR(191) NULL; | ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL; | 同上，判定等价。 |
+| 3 | ALTER TABLE `agents` DROP COLUMN `worker_id`; | ALTER TABLE `agents` DROP COLUMN `worker_id`; | 逐字相同。 |
+
+顺序：teams → team_members → agents（手写与自产一致）。
+语句数：3 = 3。无第四条、无索引、无 FK。
+结论：等价性成立；本机无 MySQL，真跑 SQL 的机会为零，故该自证 + 守卫 spec 是唯一护栏。
+
+============================================================
+3. Deliverable 1 — 手写迁移全文（server/prisma/migrations/20261014000000_team_worker_node/migration.sql）
+============================================================
+时间戳 20261014000000 > 20261010030000（同日下一整齐段位）。
+-- 团队/成员首选 worker 列 + 删除从未生效的 Agent 首选 worker 列（team-worker-node Todo 7，2026-10-14）
+--
+-- 背景：团队要能指定「这个团队跑在哪个执行节点上」，团队里的每个成员也要能各自指定
+-- （未指定 = 「跟随团队」；谁都没指定 = 维持今天的自动调度）。同时把上一版 Agent 上
+-- 残留的同名设置彻底删掉——那个下拉自上线起从未被 `assignWorker` 读过（写入口也已在
+-- Todo 2 摘除），线上只是「看起来能配、其实不生效」的第二套开关；留着会让用户对执行
+-- 节点形成误判，故与两列新增放在同一次发布里一次切干净。
+--
+-- 逐列理由：
+--   1) `teams` 新增「首选 worker 列」：varchar(191) DEFAULT NULL
+--      - 可空而非 NOT NULL：NULL = 未指定 = 自动调度，语义与迁移前逐字节一致；存量团队
+--        一行都不该被这次迁移追认成任何具体节点，NOT NULL 会逼出一次假回填。
+--      - 191 = 本仓所有字符串列的统一宽度（与 default_model_id / code_version 同口径）。
+--      - 零回填：此前不存在「团队已选定节点」这一事实，任何回填值都是凭空断言。
+--   2) `team_members` 新增同名列（同形态）
+--      - NULL = 「跟随团队」而非「跟随现状」：团队设置非空时成员空值即继承团队值，
+--        「成员显式 > 团队 > 现状」这条链只在成员值非空时才停在本列。
+--      - 同样零回填：存量成员此前没有成员级选择这一事实。
+--   3) `agents` 删除原首选 worker 列
+--      - 该列是零读取死列：没有任何分派链路读它，唯一写入口已在 Todo 2 摘除。
+--      - baseline（server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+--        的 :120-141 段）证明它是裸列：PRIMARY / UNIQUE / KEY / CONSTRAINT 段没有任何
+--        一处提到它 ⇒ 删列不牵动任何索引或约束，不需要「先摘约束再摘列」的两段式操作。
+--      - 存量值随列丢弃：该列从未参与分派，无机读价值（本方案明确不做数据迁移与回填）。
+--
+-- 不建索引、不加约束：置顶只是「候选集内的偏好」，只在 `assignWorker` 已有的四道过滤
+--   （离线 / 容量 / opencodeVersion / 模型）里被优选，绝不绕过过滤；teams 与
+--   team_members 行数为个位数到两位数，两列只随整行读回，不参与任何 where/orderBy ⇒
+--   索引只有写放大没有收益。worker 删除时的悬空引用由 `WorkersService.remove()` 事务内
+--   清空（沿用「软引用 + 应用层清理」的既有惯例），不靠数据库层兜底。
+--
+-- why-not（为什么不是别的做法）：
+--   - 不保留影子列、不做双写过渡：旧列无读者，过渡只会让「哪一套设置在生效」继续歧义。
+--   - 不拆成第二个迁移：本轮一次切干净，回滚依赖全库 dump（见下方契约）。
+--   - 不加存在性校验：worker 是软引用，可用性属运行期事实，纯配置操作不应被节点状态阻断
+--     （与 mainAgentMemberId 的存在性校验故意分歧，理由写在 service 代码注释里）。
+--   - 不折进 baseline：见下一段。
+--
+-- 为什么是「追加迁移」而不是「改 baseline」（docs/migration-baseline.md:29-31）：
+--   基线是 2026-09-25 从整库 dump 折叠出来的历史事实，已部署库按目录顺序逐条记录
+
+--- 字面约束核验（HEADER WORDING CONSTRAINTS）---
+命令：M=server/prisma/migrations/20261014000000_team_worker_node/migration.sql
+      grep '^--' "$M" | grep -Enio '\b(UPDATE|INSERT|FOREIGN[[:space:]]+KEY|IF[[:space:]]+EXISTS|IF[[:space:]]+NOT[[:space:]]+EXISTS)\b|preferred_worker_id'; echo COMMENT_FORBIDDEN_EXIT=$?
+COMMENT_FORBIDDEN_EXIT=1
+（退出码 1 = 零命中：注释行不含 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS，
+  也不含裸列名 preferred_worker_id —— 已用中文「首选 worker 列」表述）
+
+命令：grep -Enio '\b(UPDATE|INSERT|FOREIGN[[:space:]]+KEY|IF[[:space:]]+EXISTS|IF[[:space:]]+NOT[[:space:]]+EXISTS)\b' "$M"; echo WHOLE_FORBIDDEN_EXIT=$?
+WHOLE_FORBIDDEN_EXIT=1
+（退出码 1 = 全文件零命中）
+
+--- 剔除注释后的语句计数（接受判据）---
+命令：grep -v '^--' "$M" | grep -c "DROP COLUMN"      → 1
+命令：grep -v '^--' "$M" | grep -c "ALTER TABLE"      → 3
+命令：grep -v '^--' "$M" | grep -c '`agents`'         → 1
+命令：grep -v '^--' "$M" | grep -c 'preferred_worker_id' → 2
+（四项与任务书要求的 1 / 3 / 1 / 2 完全一致）
+
+--- 剔除注释后的裸 DDL ---
+ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+ALTER TABLE `agents` DROP COLUMN `worker_id`;
+
+--- 内联单向回滚契约（已写入文件头，逐条对照 docs/tech-debt-rollback.md §1/§3）---
+  ☑ 本迁移没有 down、不可逆
+  ☑ 回滚 = `git reset --hard <last-green>`（代码）+ 恢复迁移前全库 dump（数据）
+  ☑ 顺序不可颠倒：先代码后数据（只回退代码不会撤销删列；只恢复 dump 会代码与库不一致）
+  ☑ restore 会丢弃迁移后的所有写入
+  ☑ 该不可逆性是有意的：含 DROP COLUMN，无「只退后来写入」的部分撤销形态
+  ☑ 本机/CI 无 MySQL ⇒ dump 由部署方在目标环境执行 DDL 前自行补齐
+    （承接 .omo/evidence/task-1-team-worker-node.txt 的预检结论）
+
+
+============================================================
+4. Deliverable 3 — 反转守卫 spec（server/src/prisma/team-worker-node.migration.spec.ts）
+============================================================
+结构照抄 model-usage.migration.spec.ts 的 helper 形状，断言方向按 DROP 反转。
+helper 复用（含注释剔除）：statements() 与 executableSql() 都先把
+trim 后以 '--' 开头的行丢掉，断言只跑在语句行上。
+
+九条断言（编号①-⑨）：
+  ① baseline 必须含 agents.worker_id（:130）——删一个不存在的列会 ERROR 1091
+  ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id`
+  ③ 新迁移必须含 teams 与 team_members 两条 ADD COLUMN preferred_worker_id
+  ④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处
+  ⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后，
+     并对理由头原始注释行做第二道同样判定）
+  ⑥ baseline 里 agents 的 worker_id 无 FK 无索引（:135-141 的约束段零命中，
+     且用 uk_agents_agent_key / agents_base_agent_id_fkey 证明约束段非空转）
+  ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名，逐条 toEqual）
+  ⑧ 迁移目录恰好一个，且字典序晚于 20261010030000_worker_update_state
+  ⑨ 不得编辑 baseline（baseline 的 agents 列声明行必须原样含 worker_id）
+
+spec 文件头已内联记录：
+  · 为什么「追加迁移」优于「编辑 baseline」——docs/migration-baseline.md:29-31
+    （基线是折叠出的历史事实；改它对已部署库是静默 no-op，只让文件与真实库永久漂移；
+      空库重建才读到新内容 ⇒ 同一份基线在存量库与新库两条路径给出两套 schema）
+  · server/src/prisma/agent-role-drop.migration.spec.ts:1-15 记录的是**相反**先例
+    （历史 drop 被折进 baseline、最终态由 spec 反述），本轮按上述理由故意不照做。
+
+--- 守卫 spec 全绿（首次运行修掉一个自造 bug：SCHEMA 路径少一层 '..'）---
+命令：cd server && npx jest src/prisma/team-worker-node.migration.spec.ts
+--- 原始输出 ---
+PASS src/prisma/team-worker-node.migration.spec.ts
+  migration 20261014000000_team_worker_node
+    ✓ ① baseline 必须含 agents.worker_id（它是本迁移的删除对象，删不存在的列会 ERROR 1091） (3 ms)
+    ✓ ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id` (1 ms)
+    ✓ ③ 新迁移必须含 teams 与 team_members 两条 ADD COLUMN preferred_worker_id (2 ms)
+    ✓ ④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处 (2 ms)
+    ✓ ⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后） (1 ms)
+    ✓ ⑥ baseline 里 agents.worker_id 无 FK 无索引（:135-141 的约束段零命中） (1 ms)
+    ✓ ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名） (1 ms)
+    ✓ ⑧ 迁移目录恰好一个，且字典序晚于上一批迁移（存量/新库两条路径同序） (3 ms)
+    ✓ ⑨ 不得编辑 baseline（反转方向的静默 no-op 防线） (3 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       9 passed, 9 total
+Snapshots:   0 total
+Time:        2.125 s
+Ran all test suites matching /src\/prisma\/team-worker-node.migration.spec.ts/i
+JEST_EXIT=0
+
+--- 回归：src/prisma 全量（含既有 20 个迁移守卫 spec）---
+命令：cd server && npx jest src/prisma
+--- 原始输出（尾部）---
+PASS src/prisma/capability-memory-org-tools-upgrade.spec.ts (8.135 s)
+
+Test Suites: 21 passed, 21 total
+Tests:       249 passed, 249 total
+Snapshots:   0 total
+Time:        8.946 s
+Ran all test suites matching /src\/prisma/i
+JEST_PRISMA_EXIT=0
+
+============================================================
+5. MANUAL QA CHANNEL — 突变校验 ①：注掉 DROP COLUMN 行 → 断言②转红
+============================================================
+突变方法：把 `ALTER TABLE \`agents\` DROP COLUMN \`worker_id\`;` 一行加 `-- ` 前缀
+（先 cp 到 /tmp/migration.sql.bak，突变后原样恢复；未用任何 git 命令）
+
+突变后剔除注释的裸 DDL：
+  ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+  ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+  （DROP 行已消失）
+
+命令：cd server && npx jest src/prisma/team-worker-node.migration.spec.ts
+--- 原始输出（完整）---
+FAIL src/prisma/team-worker-node.migration.spec.ts
+  migration 20261014000000_team_worker_node
+    ✓ ① baseline 必须含 agents.worker_id（它是本迁移的删除对象，删不存在的列会 ERROR 1091） (4 ms)
+    ✕ ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id` (1 ms)
+    ✓ ③ 新迁移必须含 teams 与 team_members 两条 ADD COLUMN preferred_worker_id (1 ms)
+    ✓ ④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处 (2 ms)
+    ✓ ⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后） (1 ms)
+    ✓ ⑥ baseline 里 agents.worker_id 无 FK 无索引（:135-141 的约束段零命中） (3 ms)
+    ✕ ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名） (1 ms)
+    ✓ ⑧ 迁移目录恰好一个，且字典序晚于上一批迁移（存量/新库两条路径同序） (1 ms)
+    ✕ ⑨ 不得编辑 baseline（反转方向的静默 no-op 防线） (1 ms)
+
+  ● migration 20261014000000_team_worker_node › ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id`
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected substring: "ALTER TABLE `agents` DROP COLUMN `worker_id`;"
+    Received string:    "
+    ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+    ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+    "
+
+      144 |
+      145 |     expect(executableSql()).toContain(
+          |                       ^
+      146 |       'ALTER TABLE `agents` DROP COLUMN `worker_id`;',
+      147 |     );
+      148 |     // 且只删这一处：不得把删除扩到别的表/别的列（顺手动 = 越界）。
+
+       at Object.<anonymous> (prisma/team-worker-node.migration.spec.ts:145:29)
+
+  ● migration 20261014000000_team_worker_node › ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名）
+
+    expect(received).toEqual(expected) // deep equality
+
+    - Expected  - 1
+    + Received  + 0
+
+      Array [
+        "ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL",
+        "ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL",
+    -   "ALTER TABLE `agents` DROP COLUMN `worker_id`",
+      ]
+
+    at Object.<anonymous> (prisma/team-worker-node.migration.spec.ts:231:23)
+
+  ● migration 20261014000000_team_worker_node › ⑨ 不得编辑 baseline（反转方向的静默 no-op 防线）
+
+    expect(received).toHaveLength(expected)
+
+    Expected length: 3
+    Received length: 2
+    Received array:  ["ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL", "ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL"]
+
+      271 |       '`worker_id` varchar(191)',
+    at Object.<anonymous> (prisma/team-worker-node.migration.spec.ts:273:26)
+
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 6 passed, 9 total
+Snapshots:   0 total
+Time:        1.985 s, estimated 2 s
+Ran all test suites matching /src\/prisma\/team-worker-node.migration.spec.ts/i
+JEST_EXIT=1
+
+突变校验结论：断言②如预期转红（exit=1），证明守卫真的在读 DDL 而不是恒绿。
+连带 ⑦/⑨ 也转红，属同一事实的三个切面（语句数/内容/顺序），非独立缺陷。
+恢复后重新捕获绿色见第 6 节。
+
+
+============================================================
+6. 突变①恢复 + MANUAL QA 突变②：反转断言① → 证明它「会红」
+============================================================
+恢复（cp /tmp/migration.sql.bak 回原路径，diff 判空）：
+命令：cp /tmp/migration.sql.bak server/prisma/migrations/20261014000000_team_worker_node/migration.sql; echo RESTORE_EXIT=$?
+RESTORE_EXIT=0
+命令：diff /tmp/migration.sql.bak <file>; echo DIFF_EXIT=$?
+DIFF_EXIT=0        （无差异 ⇒ 字节级还原）
+
+突变②：把断言①的 expect(cols).toContain('`worker_id`') 反转为
+        expect(cols).not.toContain('`worker_id`')（同样先备份 spec，之后还原）
+
+命令：cd server && npx jest src/prisma/team-worker-node.migration.spec.ts
+--- 原始输出（完整）---
+FAIL src/prisma/team-worker-node.migration.spec.ts
+  migration 20261014000000_team_worker_node
+    ✕ ① baseline 必须含 agents.worker_id（它是本迁移的删除对象，删不存在的列会 ERROR 1091） (3 ms)
+    ✓ ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id` (1 ms)
+    ✓ ③ 新迁移必须含 teams 与 team_members 两条 ADD COLUMN preferred_worker_id (1 ms)
+    ✓ ④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处 (2 ms)
+    ✓ ⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后） (1 ms)
+    ✓ ⑥ baseline 里 agents.worker_id 无 FK 无索引（:135-141 的约束段零命中） (1 ms)
+    ✓ ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名） (1 ms)
+    ✓ ⑧ 迁移目录恰好一个，且字典序晚于上一批迁移（存量/新库两条路径同序） (3 ms)
+    ✓ ⑨ 不得编辑 baseline（反转方向的静默 no-op 防线） (3 ms)
+
+  ● migration 20261014000000_team_worker_node › ① baseline 必须含 agents.worker_id（它是本迁移的删除对象，删不存在的列会 ERROR 1091）
+
+    expect(received).not.toContain(expected) // indexOf
+
+    Expected value: not "`worker_id`"
+    Received array:     ["`id`", "`name`", "`type`", "`base_agent_id`", "`prompt`", "`default_model_id`", "`created_by`", "`created_at`", "`updated_at`", "`worker_id`", "`ack_message`", "`persona`", "`policy_id`", "`agent_key`"]
+
+      135 |     // （否则 DDL 会在真实部署时炸），也证明「本迁移真的删了它」（见断言②）。
+    > 137 |     expect(cols).not.toContain('`worker_id`'); // [MUTATION QA] 断言①被反转
+      138 |     // 列形态与 schema 同口径：可空字符串列，宽 191。
+
+    at Object.<anonymous> (prisma/team-worker-node.migration.spec.ts:137:22)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 8 passed, 9 total
+Snapshots:   0 total
+Time:        1.949 s
+Ran all test suites matching /src\/prisma\/team-worker-node.migration.spec.ts/i
+JEST_EXIT=1
+
+突变②结论：断言①如预期转红（exit=1）。它读到的列数组里明确含 `worker_id`
+（第 9 个元素），证明该断言既不是恒绿也不是恒红——反例存在且可触发。
+
+恢复 spec（cp /tmp/spec.bak 回原路径，diff 判空）：
+命令：cp /tmp/spec.bak server/src/prisma/team-worker-node.migration.spec.ts; echo SPEC_RESTORE_EXIT=$?
+SPEC_RESTORE_EXIT=0
+命令：diff /tmp/spec.bak <spec>; echo SPEC_DIFF_EXIT=$?
+SPEC_DIFF_EXIT=0
+命令：grep -n "MUTATION QA" <spec> 与 <migration>; echo RESIDUAL_MUTATION_EXIT=$?
+RESIDUAL_MUTATION_EXIT=1   （两文件均无突变残留标记）
+
+--- 恢复后重新捕获绿色（最终态）---
+命令：cd server && npx jest src/prisma/team-worker-node.migration.spec.ts
+--- 原始输出 ---
+PASS src/prisma/team-worker-node.migration.spec.ts
+  migration 20261014000000_team_worker_node
+    ✓ ① baseline 必须含 agents.worker_id（它是本迁移的删除对象，删不存在的列会 ERROR 1091） (3 ms)
+    ✓ ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id` (1 ms)
+    ✓ ③ 新迁移必须含 teams 与 team_members 两条 ADD COLUMN preferred_worker_id (2 ms)
+    ✓ ④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处 (2 ms)
+    ✓ ⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后） (1 ms)
+    ✓ ⑥ baseline 里 agents.worker_id 无 FK 无索引（:135-141 的约束段零命中） (1 ms)
+    ✓ ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名） (1 ms)
+    ✓ ⑧ 迁移目录恰好一个，且字典序晚于上一批迁移（存量/新库两条路径同序） (3 ms)
+    ✓ ⑨ 不得编辑 baseline（反转方向的静默 no-op 防线） (3 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       9 passed, 9 total
+Snapshots:   0 total
+Time:        2.047 s
+Ran all test suites matching /src\/prisma\/team-worker-node.migration.spec.ts/i
+JEST_EXIT=0
+
+
+============================================================
+7. 对抗项 1 — stale_state：新库路径 vs 已迁移路径不得静默分叉
+============================================================
+风险：若把删列「折进 baseline」，存量库不会重跑 baseline（静默 no-op）而新库会
+⇒ 同一份代码在两类库上留下不同 schema。本迁移走「追加目录」，两条路径同序。
+
+命令：ls -1 server/prisma/migrations/
+20260925000000_squashed_baseline
+20260926000000_secret_command_capability
+20260929000000_capability_git_web_tier
+20260930000000_capability_git_web_retire
+20260930010000_memory_role_inject
+20261001000000_task_long_running
+20261009000000_message_external_chat_id
+20261009010000_memory_refcount
+20261009020000_capability_memory_org_tools
+20261010010000_model_usage
+20261010020000_worker_code_version
+20261010030000_worker_update_state
+20261014000000_team_worker_node
+migration_lock.toml
+（以上为**采集当时**的快照：13 个目录，本迁移是最后一个。
+  注意：此后兄弟 lane 追加了 20261014010000_memory_search_to_list，本任务的过强
+  断言⑧ 因此转红——完整事件、根因与修正见第 14 节。该目录清单保留原样以留存
+  「当时确实如此」的原始证据，不用后见之明改写历史。）
+
+命令：ls -d server/prisma/migrations/*team_worker_node
+server/prisma/migrations/20261014000000_team_worker_node
+LS_DIRS_EXIT=0
+命令：ls -d server/prisma/migrations/*team_worker_node | wc -l
+       1
+（恰好 1 个目录；时间戳 20261014000000 字典序 > 20261010030000，
+  即 `migrate deploy` 会把它排在 20261010030000_worker_update_state 之后应用）
+
+路径推演（源码级，非运行时）：
+  · 新库（空库 `migrate deploy`）：baseline 建 47 张表，其中 agents 建出 worker_id
+    （:130）→ …中间 12 个迁移… → 本迁移删掉 agents.worker_id 并加两列。
+  · 存量库（已应用至 20261010030000）：只跑本迁移一条，同样删掉 worker_id 并加两列。
+  · 两条路径终态一致：agents 无 worker_id；teams/team_members 各有首选 worker 列。
+  · 若改 baseline 则分叉：存量库永久保留 worker_id（DLL 不会再跑），新库没有该列。
+
+命令：git rev-parse HEAD:server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+3dc7533b9733e04b6947e289532bbe7ee7253950
+命令：git hash-object server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+3dc7533b9733e04b6947e289532bbe7ee7253950
+（两个 blob sha 逐字相同 ⇒ baseline 与 HEAD 提交版本字节级一致，未被编辑）
+
+命令：git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline
+（无输出）
+命令：git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline; echo BASELINE_STATUS_EXIT=$?
+BASELINE_STATUS_EXIT=0
+（空输出 ⇒ baseline 未被修改，接受判据满足）
+
+--- 生成客户端非陈旧（Todo 6 的 generate 仍然有效）---
+命令：cd server && awk '/model Agent /,/^}/' node_modules/.prisma/client/schema.prisma | grep -c workerId; echo EXIT=$?
+0
+EXIT=1
+（退出码 1 = 生成客户端的 Agent 段零 workerId；worker_id 仅存于 Session(325)/
+  WorkerModelAvailability(792)/TaskGroupInstance(939)，与本方案无关）
+
+命令：cd server && npx prisma validate
+--- 原始输出 ---
+Environment variables loaded from .env
+Prisma schema loaded from prisma/schema.prisma
+The schema at prisma/schema.prisma is valid 🚀
+VALIDATE_EXIT=0
+
+============================================================
+8. 对抗项 2 — misleading_success_output：只用原始输出 + 字面退出码
+============================================================
+本节所有判定均来自上列原始输出与字面退出码，未用任何「总结式成功」。
+关键退出码汇总（全部无管道，zsh 下 PIPESTATUS 会展开为空，故未使用）：
+  DIFF_EXIT=0        prisma migrate diff 成功
+  VALIDATE_EXIT=0    schema 合法
+  JEST_EXIT=0        守卫 spec 突变恢复后全绿
+  JEST_EXIT=1        突变①（注掉 DROP 行）转红
+  JEST_EXIT=1        突变②（反转断言①）转红
+  JEST_PRISMA_EXIT=0 src/prisma 全量 21 suites / 249 tests 全绿
+  BASELINE_STATUS_EXIT=0   baseline 无改动（空输出）
+  COMMENT_FORBIDDEN_EXIT=1  注释零禁用词面量
+  WHOLE_FORBIDDEN_EXIT=1   全文件零禁用词面量
+  LS_DIRS_EXIT=0    恰好一个 team_worker_node 迁移目录
+
+无 MySQL 的真实性声明（防「假绿」）：`nc -z localhost 3306` 不通，
+`prisma migrate deploy` 未被执行、也不可能在本机验证；本任务的正确性证明只有两个——
+离线 `migrate diff` 等价自证 + 反转守卫 spec。任何「迁移已成功应用」的叙述都不存在。
+
+
+============================================================
+9. 接受判据逐条核对（任务书 VERIFY 段）
+============================================================
+命令：ls server/prisma/migrations/ | tail -4
+20261010030000_worker_update_state
+20261014000000_team_worker_node
+migration_lock.toml
+（+ 其余 10 个目录，共 13 个目录 + 1 个 lock 文件）
+
+命令：ls -d server/prisma/migrations/*team_worker_node
+server/prisma/migrations/20261014000000_team_worker_node
+⇒ 恰好 1 个，字典序在 20261010030000_worker_update_state 之后。
+
+命令：cd server && npx jest src/prisma/team-worker-node.migration.spec.ts; echo JEST_EXIT=$?
+JEST_EXIT=0（完整原始输出见第 3、6 节；9 passed / 9 total）
+
+剔除注释计数（新 migration.sql）：
+  "DROP COLUMN"      = 1  ✓
+  "ALTER TABLE"      = 3  ✓
+  反引号表名 agents   = 1  ✓
+  preferred_worker_id = 2  ✓
+
+命令：git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline
+（空）⇒ baseline 未被触碰。✓
+
+命令：git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+（实际值，非占位；本任务未执行任何 git 写操作，HEAD 未变）
+
+============================================================
+10. Must NOT 自查（逐条）
+============================================================
+☑ 未编辑 baseline 迁移（blob sha 与 HEAD 逐字相同，porcelain 为空）
+☑ 未保留影子列 / 未做双写过渡
+☑ 未加任何 FK（全文件零 FOREIGN KEY 字面量）
+☑ 未加任何索引（三条 ALTER 均为裸 ADD/DROP COLUMN，无 KEY 语句）
+☑ 未把 DROP 拆成第二个迁移（断言⑦钉死三条同一目录语句、表名三张且不重复）
+☑ 未执行任何 git 写命令（无 add / commit / stash / checkout）
+☑ 未触碰 server/src/platform-mcp/*、web/src/components/chat/msg-parts.tsx
+☑ 未触碰兄弟 lane：server/src/chat/worker-dispatcher.ts、server/src/teams/*
+☑ 只写入两个新文件 + 本证据文件
+
+兄弟 lane / 既有脏文件当前状态（未经我改动，原文引用以备对账）：
+命令：git status --porcelain -- server/src/chat/worker-dispatcher.ts server/src/teams server/src/platform-mcp web/src/components/chat/msg-parts.tsx
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M web/src/components/chat/msg-parts.tsx
+（worker-dispatcher.ts 与 server/src/teams/* 零条目 ⇒ 兄弟 lane 未被触碰；
+  platform-mcp/* 与 msg-parts.tsx 的 6 项为开工前既有脏改动，与
+  .omo/evidence/task-1-team-worker-node.txt 的快照一致，非本任务产物）
+
+============================================================
+11. 清理收据（cleanup receipt）
+============================================================
+命令：rm -f /tmp/pre.prisma /tmp/migration.sql.bak /tmp/spec.bak /tmp/mut1.txt /tmp/mut2.txt /tmp/diff_out.txt; echo RM_EXIT=$?
+RM_EXIT=0
+命令：ls /tmp/pre.prisma /tmp/migration.sql.bak /tmp/spec.bak /tmp/mut1.txt /tmp/mut2.txt /tmp/diff_out.txt; echo LS_TMP_EXIT=$?
+LS_TMP_EXIT=1
+（无任何输出 + 退出码 1 = 上述临时文件均已不存在；仓库内未遗留任何突变备份。
+  注：此处字面退出码为 1 而非 2——zsh 内建 ls 对「全部参数均不存在」返回 1，
+  实际执行结果与第一次尝试的预期不同，按原始输出修正记录，不做改写式叙述。）
+
+--- 仓库内残留突变标记复核（必须全为零）---
+命令：grep -rn "MUTATION QA" server/prisma/migrations server/src/prisma; echo RESIDUAL_EXIT=$?
+RESIDUAL_EXIT=1
+（退出码 1 = 零命中：突变标记已全部清除）
+
+--- 最终文件状态 ---
+新增（untracked，本任务产物）：
+  ?? server/prisma/migrations/20261014000000_team_worker_node/
+  ?? server/src/prisma/team-worker-node.migration.spec.ts
+  ?? .omo/evidence/task-7-team-worker-node.txt
+既有脏改动（开工前存在，非本任务产物）：见第 10 节引用。
+无 stash、无 commit、无 reset：工作区历史未被改写。
+
+============================================================
+12. 结论
+============================================================
+Todo 7 完成：
+  · 新增迁移目录 20261014000000_team_worker_node（时间戳 > 20261010030000，恰好 1 个）；
+  · 手写 DDL 三条（2 ADD + 1 DROP），裸语句、反引号标识符、无索引无 FK、
+    零 UPDATE/INSERT/FOREIGN KEY/IF EXISTS/IF NOT EXISTS；
+  · 中文理由头含逐列论证 + why-not 段 + 内联单向 DDL 回滚契约，
+    且遵守禁用词面量约束（用中文「首选 worker 列」代替裸列名）；
+  · 与 Prisma 离线 migrate diff 输出逐条等价（第 2 节对账表）；
+  · 新增反转守卫 spec 九条断言，全绿；两次突变校验分别打红断言②与断言①后恢复；
+  · baseline 字节级未动（blob sha 相同 + porcelain 空）。
+
+============================================================
+13. 收据复核补记（清理执行后的字面复核）
+============================================================
+清理命令实际执行结果（第 11 节收据的复核，确保不是「计划中的清理」而是「已发生的清理」）：
+命令：rm -f /tmp/pre.prisma /tmp/migration.sql.bak /tmp/spec.bak /tmp/mut1.txt /tmp/mut2.txt /tmp/diff_out.txt; echo RM_EXIT=$?
+RM_EXIT=0
+命令：ls /tmp/pre.prisma /tmp/migration.sql.bak /tmp/spec.bak /tmp/mut1.txt /tmp/mut2.txt /tmp/diff_out.txt; echo LS_TMP_EXIT=$?
+LS_TMP_EXIT=1        （无输出，六个临时文件全部不存在）
+
+命令：grep -rn "MUTATION QA" server/prisma/migrations server/src/prisma; echo RESIDUAL_EXIT=$?
+RESIDUAL_EXIT=1      （零命中：迁移与 spec 中均无突变标记残留）
+
+--- 清理后守卫 spec 复跑（证明清理没有破坏交付物）---
+命令：cd server && npx jest src/prisma/team-worker-node.migration.spec.ts; echo JEST_EXIT=$?
+PASS src/prisma/team-worker-node.migration.spec.ts
+  migration 20261014000000_team_worker_node
+    ✓ ① baseline 必须含 agents.worker_id（它是本迁移的删除对象，删不存在的列会 ERROR 1091） (3 ms)
+    ✓ ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id` (1 ms)
+    ✓ ③ 新迁移必须含 teams 与 team_members 两条 ADD COLUMN preferred_worker_id (2 ms)
+    ✓ ④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处 (2 ms)
+    ✓ ⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后） (1 ms)
+    ✓ ⑥ baseline 里 agents.worker_id 无 FK 无索引（:135-141 的约束段零命中） (1 ms)
+    ✓ ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名） (1 ms)
+    ✓ ⑧ 迁移目录恰好一个，且字典序晚于上一批迁移（存量/新库两条路径同序） (3 ms)
+    ✓ ⑨ 不得编辑 baseline（反转方向的静默 no-op 防线） (3 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       9 passed, 9 total
+Snapshots:   0 total
+Time:        2.16 s
+Ran all test suites matching /src\/prisma\/team-worker-node.migration.spec.ts/i
+JEST_EXIT=0
+
+--- 迁移文件清理后终态（裸 DDL 三行，证明未被清理动作误伤）---
+ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+ALTER TABLE `agents` DROP COLUMN `worker_id`;
+
+============================================================
+14. 重要更正记录 —— stale_state 实战命中（本任务在真实并发下自曝一处过强断言）
+============================================================
+第 7 节与第 13 节的目录清单是**采集当时的真实快照**（13 个目录，本迁移为最后一个）。
+下面的复跑发生在其后：一个兄弟 lane 在本仓库追加了
+`20261014000000_team_worker_node` **之后**的新迁移目录
+`20261014010000_memory_search_to_list`（时间戳 20261014010000，依然 > 20261010030000）。
+
+命令：ls -1 server/prisma/migrations/ | tail -6
+20261010010000_model_usage
+20261010020000_worker_code_version
+20261010030000_worker_update_state
+20261014000000_team_worker_node
+20261014010000_memory_search_to_list
+migration_lock.toml
+
+命令：cd server && npx jest src/prisma/team-worker-node.migration.spec.ts; echo JEST_EXIT=$?
+--- 原始输出（真实失败，未修饰）---
+FAIL src/prisma/team-worker-node.migration.spec.ts
+  migration 20261014000000_team_worker_node
+    ✓ ① baseline 必须含 agents.worker_id（它是本迁移的删除对象，删不存在的列会 ERROR 1091） (1 ms)
+    ✓ ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id` (2 ms)
+    ✓ ③ 新迁移必须含 teams 与 team_members 两条 ADD COLUMN preferred_worker_id (1 ms)
+    ✓ ④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处 (2 ms)
+    ✓ ⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后） (1 ms)
+    ✓ ⑥ baseline 里 agents.worker_id 无 FK 无索引（:135-141 的约束段零命中） (1 ms)
+    ✓ ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名） (1 ms)
+    ✕ ⑧ 迁移目录恰好一个，且字典序晚于上一批迁移（存量/新库两条路径同序） (1 ms)
+    ✓ ⑨ 不得编辑 baseline（反转方向的静默 no-op 防线） (3 ms)
+
+  ● migration 20261014000000_team_worker_node › ⑧ 迁移目录恰好一个，且字典序晚于上一批迁移（存量/新库两条路径同序）
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "20261014000000_team_worker_node"
+    Received: "20261014010000_memory_search_to_list"
+
+    > 263 |     expect(all[all.length - 1]).toBe(MIGRATION_DIR_NAME);
+      264 |   });
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 8 passed, 9 total
+Time:        1.146 s, estimated 6 s
+Ran all test suites matching /src\/prisma\/team-worker-node.migration.spec.ts/i
+JEST_EXIT=1
+
+--- 根因（这是本任务的缺陷，不是兄弟 lane 的缺陷）---
+断言⑧ 里我写了 `expect(all[all.length - 1]).toBe(MIGRATION_DIR_NAME)`，
+即「本迁移必须是全仓最后一个迁移目录」。这不是契约：
+真实契约只有三条（与计划接受判据一致）：
+  (a) 全仓恰好一个 *team_worker_node* 目录；
+  (b) 它的字典序**晚于** 20261010030000_worker_update_state；
+  (c) 它的字典序**晚于** baseline。
+"最后" 是不可维持的全局断言：此后**任何人**追加任何迁移都会让本 spec 转红，
+与团队/agent 的删列语义毫无关系 ⇒ 护栏退化为持续噪音（这正是「misleading
+success output」的反面：假阴性噪音会训练人忽略守卫）。
+
+--- 修正动作（只减弱过强断言，不减弱任何真实契约）---
+删除 `expect(all[all.length - 1]).toBe(MIGRATION_DIR_NAME);`，
+改为 `expect(all).toContain(PREVIOUS_MIGRATION_DIR_NAME);`
+并在原处留中文注释记录该失败模式与日期。
+DDL、迁移文件头、其余八条断言**一字未改**。
+
+--- 修正后复跑（真实退出码）---
+命令：cd server && npx jest src/prisma/team-worker-node.migration.spec.ts; echo JEST_EXIT=$?
+PASS src/prisma/team-worker-node.migration.spec.ts
+  migration 20261014000000_team_worker_node
+    ✓ ① baseline 必须含 agents.worker_id（它是本迁移的删除对象，删不存在的列会 ERROR 1091） (3 ms)
+    ✓ ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id` (1 ms)
+    ✓ ③ 新迁移必须含 teams 与 team_members 两条 ADD COLUMN preferred_worker_id (1 ms)
+    ✓ ④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处 (2 ms)
+    ✓ ⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后） (1 ms)
+    ✓ ⑥ baseline 里 agents.worker_id 无 FK 无索引（:135-141 的约束段零命中） (1 ms)
+    ✓ ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名） (1 ms)
+    ✓ ⑧ 迁移目录恰好一个，且字典序晚于上一批迁移（存量/新库两条路径同序） (3 ms)
+    ✓ ⑨ 不得编辑 baseline（反转方向的静默 no-op 防线） (3 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       9 passed, 9 total
+Snapshots:   0 total
+Time:        2.126 s
+Ran all test suites matching /src\/prisma\/team-worker-node.migration.spec.ts/i
+JEST_EXIT=0
+
+--- 该事件对 stale_state 对抗项的意义（正面价值）---
+它不是噪音：它证明断言⑧ 确实在读文件系统目录、且随仓库真实状态变化，
+即守卫不是「写死期望值的恒绿断言」。本任务的两个突变校验（第 5、6 节）
+证明①/② 可被有意反转打红；本次并发事件证明⑧ 也会因真实仓库演进而打红。
+三条证据合起来说明：本 spec 的失败路径真实存在，绿色是挣来的。
+
+--- 对兄弟 lane 的中立性声明 ---
+本任务的任何断言都**不断言** `20261014010000_memory_search_to_list` 是否存在或内容为何；
+修正后的断言⑧ 对它的存在完全中立（既不要求它在，也不要求它不在）。
+它属于兄弟 lane 的交付物，本任务未读取、未修改、未写入其任何文件。
+
+============================================================
+15. 最终 VERIFY 段原始输出（任务书指定的最后四项核验）
+============================================================
+--- ls server/prisma/migrations/ ---
+20260925000000_squashed_baseline
+20260926000000_secret_command_capability
+20260929000000_capability_git_web_tier
+20260930000000_capability_git_web_retire
+20260930010000_memory_role_inject
+20261001000000_task_long_running
+20261009000000_message_external_chat_id
+20261009010000_memory_refcount
+20261009020000_capability_memory_org_tools
+20261010010000_model_usage
+20261010020000_worker_code_version
+20261010030000_worker_update_state
+20261014000000_team_worker_node
+20261014010000_memory_search_to_list   ← 兄弟 lane 的迁移（本任务未触碰）
+migration_lock.toml
+
+--- ls -d server/prisma/migrations/*team_worker_node（恰好 1） ---
+server/prisma/migrations/20261014000000_team_worker_node
+LS_DIRS_EXIT=0
+⇒ 恰好 1 个 team_worker_node 目录；兄弟 lane 的 memory_search_to_list 不影响本判据
+  （glob 精确匹配 *team_worker_node）。
+
+--- 剔除注释计数（新 migration.sql） ---
+DROP COLUMN        = 1    ✓（任务书要求 1）
+ALTER TABLE        = 3    ✓（任务书要求 3）
+backticked agents  = 1    ✓（任务书要求 1）
+preferred_worker_id= 2    ✓（任务书要求 2）
+
+--- git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline ---
+（无输出）
+BASELINE_STATUS_EXIT=0
+⇒ 必须为 EMPTY，实际为空。✓
+
+--- git log --oneline -1 ---
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+（实际值；本任务未执行任何 git 写命令，HEAD 未被本任务改变）
+
+--- 字节级追加证明（baseline 与 HEAD 版本逐字相同） ---
+git rev-parse HEAD:server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+3dc7533b9733e04b6947e289532bbe7ee7253950
+git hash-object server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+3dc7533b9733e04b6947e289532bbe7ee7253950
+⇒ 两个 blob sha 相同：baseline 未被编辑（文档要求的「不得编辑 baseline」已满足）。
+
+--- 守卫 spec 最终态 ---
+cd server && npx jest src/prisma/team-worker-node.migration.spec.ts; echo JEST_EXIT=$?
+Test Suites: 1 passed, 1 total
+Tests:       9 passed, 9 total
+JEST_EXIT=0
+
+============================================================
+16. 最终交付物与收据
+============================================================
+新增文件（3 个，全部为本任务产物）：
+  1. server/prisma/migrations/20261014000000_team_worker_node/migration.sql
+     （中文理由头：逐列论证 + why-not 段 + 内联单向 DDL 回滚契约；裸 DDL 三条）
+  2. server/src/prisma/team-worker-node.migration.spec.ts
+     （反转守卫 spec，九条断言，结构照抄 model-usage.migration.spec.ts）
+  3. .omo/evidence/task-7-team-worker-node.txt（本证据文件）
+
+Evidence 文件包含：命令、原始输出、migrate-diff 输出与对账表、
+两次突变校验（断言②红 / 断言①红）+ 恢复后绿色、stale_state 与
+misleading_success_output 两个对抗项的原始证据、清理收据。
+
+清理收据：/tmp/pre.prisma、/tmp/migration.sql.bak、/tmp/spec.bak、
+/tmp/mut1.txt、/tmp/mut2.txt、/tmp/diff_out.txt 全部已删除（RM_EXIT=0，
+复检 LS_TMP_EXIT=1 且无输出）；仓库内零 "MUTATION QA" 残留
+（RESIDUAL_EXIT=1，见第 13 节）。

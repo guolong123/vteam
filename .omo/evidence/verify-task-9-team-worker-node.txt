@@ -1,0 +1,162 @@
+================================================================================
+INDEPENDENT VERIFICATION — TODO 9 (team-worker-node.md lines 204-215)
+Plan: .omo/plans/team-worker-node.md (todo 9 block 204-215; Must-NOT 34-47)
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Verifier: independent read-only subagent; all mutations on a THROWAWAY COPY
+(/private/var/folders/.../opencode/verify-t9/server, node_modules symlinked,
+deleted afterwards). No git add/commit/stash/checkout was ever run.
+================================================================================
+
+VERDICT: CONFIRMED (confidence 0.97)
+
+BASE STATE
+----------
+$ git log --oneline -1   ->  cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list ...
+$ git rev-parse HEAD     ->  cb0ba6d1ab16571c0c979e41e40951000819f1c7   (unchanged, as required)
+$ git diff --cached --stat   ->  (empty; 0 files staged). Final re-check after all runs: still empty.
+Environment note: a transient `.omo/evidence/verify-task-9-team-worker-node.txt` appeared
+in the first `git status` (concurrent activity) but vanished within seconds; this file is
+written fresh.
+
+1) DTO — UpdateMemberDto gains optional preferredWorkerId  [PASS]
+   server/src/teams/dto/add-member.dto.ts:69-76 (read directly):
+     @ApiPropertyOptional({ description: '成员级首选 worker（软引用...成员的显式选择优先于
+       团队级设置；空串/空白/null 表示不覆盖，回退团队级设置）' })
+     @IsOptional() @IsString()  preferredWorkerId?: string | null;
+   Mirrors neighbouring overrideModelId (:62-67) exactly (same decorators, no MaxLength,
+   no ValidateIf). Description states member>team precedence and empty/whitespace/null =
+   no override. Diff vs HEAD is pure insertion (+9 lines, hunk @@ -68,0 +69,9 @@).
+
+2) WRITE PATH — updateMember() trim-or-null + one-line rationale; no existence check  [PASS]
+   server/src/teams/teams.service.ts:830-832:
+     // 弱校验（同团队级 preferredWorkerId，见 update()）：worker 是软引用，可达性属运行期
+     // 事实，纯配置操作不应被节点状态阻断。
+     if (dto.preferredWorkerId !== undefined)
+       data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+   Shape identical to overrideModelId branch at :828-829. Only existence checks in
+   updateMember remain the pre-existing agent one (:864-875, agentId/roleId binding).
+   No worker-existence query anywhere. Weak-validation reference chain continues to the
+   team-level comment (:344-350, Todo 8) which names the mainAgentMemberId divergence.
+   addMember() UNCHANGED: read :584-660 — create() data carries no preferredWorkerId
+   (new members leave the column empty). No diff hunk touches :584 region.
+
+3) CLOSED-TYPE FIX — compile-critical, mutation-proven  [PASS]
+   TeamMemberView (tasks.service.ts:57-73, closed type, no index signature) declares
+   `preferredWorkerId?: string | null;` at :65, next to overrideModelId? at :63.
+   Runtime source of instances: members cast `as TeamMemberView[]` at :1988; projection
+   reads m.preferredWorkerId at :2037.
+   MUTATION on throwaway copy (baseline tsc exit 0 first — copy faithful):
+     $ head -63 src/tasks/tasks.service.ts > mutA.ts && tail -n +66 ... >> mutA.ts   # deletes ONLY :64-65
+     $ npx tsc --noEmit -p tsconfig.json
+     src/tasks/tasks.service.ts(2035,32): error TS2339: Property 'preferredWorkerId'
+       does not exist on type 'TeamMemberView'.
+     MUTATION_A_TSC_EXIT=2
+   Line 2035 = projection (2037) shifted up by the 2 removed type lines; col 32 =
+   the `m.preferredWorkerId` access. Executor's recorded (2035,32) reproduced exactly.
+   Restore (cp from backup) -> tsc exit 0; diff vs repo file = identical.
+
+4) THREE-WAY SYNC (server side) — both projections carry the field; anti-divergence  [PASS]
+   teams.service.ts toTeamDto member row :1495-1498: `preferredWorkerId: m.preferredWorkerId ?? null`
+   tasks.service.ts instance projection :2034-2037: `preferredWorkerId: m.preferredWorkerId ?? null`
+   (comment at :2035-2036 mirrors the repo's own opencodeAgentName sync warning,
+   i.e. the "silent null overwrite" trap the task cites around :2028-2030).
+   MUTATION on throwaway copy (remove ONLY tasks-side projection :2034-2037):
+     $ npx jest src/tasks -t "任务实例投影与团队 DTO 返回同一 preferredWorkerId"
+     FAIL src/tasks/tasks.service.spec.ts
+       ● TasksService › preferredWorkerId 投影同步（任务实例 vs 团队 DTO，反发散） › ...
+         expect(received).toBe(expected)   Expected: "w_0000000001"   Received: undefined
+          > 5415 |       expect(taskValue).toBe('w_0000000001');
+     CASE_D_RED_EXIT=1     (1 failed, 379 skipped)
+   Restore -> case (d) PASS (CASE_D_GREEN_EXIT=0, file byte-identical to repo).
+
+5) THE FOUR NEW TESTS — green, case (d) genuinely two-sided  [PASS]
+   $ cd server && npx jest src/teams src/tasks
+     Test Suites: 16 passed, 16 total
+     Tests:       493 passed, 493 total        JEST_EXIT=0  (all PASS incl. teams.service.spec.ts,
+     tasks.service.spec.ts, tasks.controller.spec.ts, seed, plan-*, task-* specs)
+   Named cases:
+     a) teams.service.spec.ts  preferredWorkerId：成员级设置后读取往返（PATCH member → GET team 回吐，version+1）
+     b) teams.service.spec.ts  preferredWorkerId：空串/空白串/null → 归一为 null（不覆盖，跟随团队设置）
+     c) teams.service.spec.ts  团队 DTO 成员行含 preferredWorkerId（投影同步：缺此字段回显会被 null 覆盖）
+     d) tasks.service.spec.ts  任务实例投影与团队 DTO 返回同一 preferredWorkerId（缺一侧即读到 null）
+   (d) is a NEW describe 'preferredWorkerId 投影同步（任务实例 vs 团队 DTO，反发散）' that in ONE test
+   runs TeamsService.findOne AND TasksService.findOne over the same member row and asserts
+   expect(teamValue).toBe('w_0000000001'); expect(taskValue).toBe('w_0000000001');
+   expect(taskValue).toBe(teamValue). Mutation 4 above proves it REDs when the task side is
+   missing; by symmetry teamValue undefined would fail the first assertion. Genuinely
+   both-sides-in-one-test; not a tautology.
+
+6) SPEC FIXTURE JUSTIFICATION + NO TEST DELETION  [PASS]
+   tasks.service.spec.ts:1232/1250 add `preferredWorkerId: null,` INSIDE two existing
+   `expect(result.items[0].instances).toEqual([{...}])` EXACT-KEY-SET literals (findAll
+   instances projection). Key-set literal update, NOT a weakening: matcher still toEqual
+   with a fully enumerated object; no toMatchObject/objectContaining substitution. Same
+   class as Todo 2's agents.dto key-set fix.
+   $ git diff HEAD -- <both spec files> | grep -cE '^-[^-]'   ->   0
+   Zero removed lines anywhere in this todo's diff: no it()/describe() deleted, no
+   neighbor code reordered (all hunks pure insertions).
+
+7) SCOPE + WEB LINE NUMBERS  [PASS]
+   $ git diff HEAD --stat -- web/   (3 files, none is this todo's):
+     web/app/(main)/agents/page.tsx  — Todo 3 (Agent worker dropdown removal, net -63)
+     web/e2e/reference/testids.ts    — Todo 3 (agent-worker-select removal, -1)
+     web/src/components/chat/msg-parts.tsx — pre-existing dirt declared in plan line 95
+   The two web files Todo 9 was to record only: `web/src/api/teams.ts` and
+   `web/src/components/tasks/task-detail-types.ts` — NOT in the diff (zero edits).
+   Recorded line numbers verified against the working tree:
+     web/src/api/teams.ts:10  export interface TeamMemberDto {   (spans :10-23; neighbor
+       overrideModelId at :18) — matches plan's "around 10-23".
+     web/src/components/tasks/task-detail-types.ts:129  export interface MemberView {
+       (spans :129-138; overrideModelId at :137) — matches plan's "around 129-138".
+   (Executor's evidence records :10/:18 and :129/:137 as insertion points — accurate.)
+
+8) NO COMMIT / NO STAGE / NO REVERT  [PASS]
+   HEAD = cb0ba6d1ab16571c0c979e41e40951000819f1c7 throughout (checked before and after
+   every test run). git diff --cached empty (0 files). Concurrency: the dirty siblings
+   named in the plan (platform-mcp/*, msg-parts.tsx, schema.prisma, agents/*, workers/*,
+   worker-dispatcher.*, update-team.dto.ts, docs prototypes, .omo/*) remain dirty and
+   unstaged — untouched. Repo files byte-identical to what the executor left (verified
+   against my throwaway baseline copy).
+
+9) WHOLE-SERVER SUITE  [PASS]
+   $ cd server && npx jest
+     Test Suites: 176 passed, 176 total
+     Tests:       4211 passed, 4211 total      JEST_ALL_EXIT=0
+   Previous round measured 176 suites / 4207 tests; delta = exactly +4 = the four new
+   Todo-9 cases. No suite count change, no snapshot churn (1 snapshot passed).
+
+COLLISION ATTRIBUTION (how the executor's tasks.service.ts claim was told apart)
+------------------------------------------------------------------------------
+Claim under test: "at task start tasks.service.ts was clean vs HEAD; both current hunks
+are Todo 9's."
+How verified:
+  a) The concurrent stream's change is COMMITTED in HEAD: `git show HEAD --stat --
+     server/src/tasks/tasks.service.ts` shows cb0ba6d changed exactly 1 line (the
+     memory_search→memory_list string rename at ~:1106). Being in HEAD, it cannot appear
+     in `git diff HEAD` — so any working-tree hunk is by construction post-HEAD (Todo 9).
+  b) `git diff HEAD -- server/src/tasks/tasks.service.ts` shows exactly 2 hunks
+     (@@ -61,6 +61,8 and @@ -2029,6 +2031,10), both pure insertions, both exclusively
+     `preferredWorkerId` + sync comments; zero removals/renames/formatting churn. If the
+     executor had inherited uncommitted memory-rename dirt, it would appear as a THIRD
+     hunk with a removed line — absent.
+  c) Mutation arithmetic confirms layout: deleting only the 2 type lines moves the
+     projection to (2035,32), the exact TS2339 site the executor recorded — consistent
+     with their delta being the only change above :2005.
+  teams.service.ts split (16 added lines, 4 hunks): :345-351 team-level update branch =
+  Todo 8 (has mainAgentMemberId-divergence rationale); :830-832 updateMember branch =
+  TODO 9; :1496-1498 toTeamDto member row = TODO 9; :1531-1533 toTeamDto team field =
+  Todo 8. Todo 8's hunks were preserved verbatim (diff shows no modification to them).
+  Same split in teams.service.spec.ts: @@ -716,0 +717,87 = Todo 8's 3 team-level cases;
+  @@ -1681,0 +1769,93 = Todo 9's 3 member-level cases a/b/c.
+
+CORROBORATION (not tasked, cheap): eslint on the 5 files -> 5 pre-existing warnings,
+0 errors, LINT_EXIT=0 (executor's claim reproduced).
+
+MUTATION HYGIENE: every mutation ran in the throwaway copy, restored, and re-verified
+byte-identical (diff -q exit 0) plus tsc/jest green before deletion. The repo itself
+was never mutated. Throwaway dir removed.
+
+CONFIDENCE: 0.97 — deducting a hair for TLS-free reliance on the working tree exactly
+as left (no pristine checkout comparison), though byte-identity + HEAD immutability +
+all-green suite make a hidden defect implausible.
+================================================================================

@@ -1,0 +1,550 @@
+================================================================================
+F1 — PLAN COMPLIANCE AUDIT（team-worker-node）
+Auditor: final-wave F1 (read-only)
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+Audit mode: re-ran acceptance commands independently; receipts used only as
+            cross-checks, never as substitutes for raw output.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. REPO STATE AT AUDIT TIME (read-only probes)
+--------------------------------------------------------------------------------
+$ git rev-parse HEAD
+cb0ba6d1ab16571c0c979e41e40951000819f1c7
+
+$ git log --oneline -1
+cb0ba6d1 feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+
+$ git branch --show-current
+fix/doc-pdf-export
+
+Plan's own declarations, audited against reality:
+  * The plan text (line 340) commits to "11 次提交" and per-todo `Commit: Y`
+    for T2–T12. Those commits are NOT present in history: `git log --oneline -30`
+    shows the last 30 commits are all from the concurrent memory/doc-pdf streams.
+    Nothing about team-worker-node is committed. ⇒ NON-BLOCKING (see §9 N1):
+    HEAD is pinned to the unrelated concurrent commit by instruction; the work is
+    delivered as working-tree changes. All acceptance criteria below were still
+    re-verified against the delivered working tree and pass.
+  * `git status --porcelain | wc -l` = 75 (vs. the plan's Todo-1 snapshot of 14).
+    The plan's Todo-13 acceptance allows exactly this: "与开工快照对比，**无新增**
+    未跟踪/修改文件（除本计划自己的改动）". Audited file-by-file: the 75 lines are
+    (a) the 14 baseline snapshot lines, (b) 22 modified source files, all of which
+    are plan-expected paths, (c) plan-owned untracked artifacts (16 receipts +
+    19 verify-* files + 2 orchestration dirs + plan/draft/notepad + e2e script +
+    migration dir + guard spec). Zero unexpected files. PASS.
+
+--------------------------------------------------------------------------------
+1. CHECKBOX LEDGER — all 16 checkboxes
+--------------------------------------------------------------------------------
+Evidence artifacts present under .omo/evidence/ (raw output confirmed for each):
+
+  #   Receipt                                        Cmd lines  Acceptance evidenced
+  1   task-1-team-worker-node.txt          120 L          7   base-sha + porcelain raw
+  2   task-2-team-worker-node.txt          219 L         12   jest 115/115 + tsc EXIT=0
+  3   task-3-team-worker-node.txt          481 L         56   tsc 0 + lint 0 err + greps 0
+  4   task-4-team-worker-node.txt          189 L          7   jest 491/491 + hunk greps
+  5   task-5-team-worker-node.txt          160 L         11   jest + 6 new cases
+  6   task-6-team-worker-node.txt          408 L         21   generate+tsc EXIT=0, jest
+  7   task-7-team-worker-node.txt          751 L         47   guard spec 9/9 + counts
+  8   task-8-team-worker-node.txt          722 L          8   jest 4207/4207
+  9   task-9-team-worker-node.txt          243 L          2   jest 874/874
+  10  task-10-team-worker-node.txt         184 L         14   tsc/lint/build EXIT=0
+  11  task-11-team-worker-node.txt         174 L         14   tsc/lint/build EXIT=0
+  12  task-12-team-worker-node.txt        588 L         11   A/B/C/D PASS, exit=0
+  13  task-13-team-worker-node.txt        949 L         93   full gate walkthrough
+  14  task-receipt-fix-team-worker-node.txt  389 L        -   T1/T2 corrections (see §8)
+  15  task-15-team-worker-node.txt         252 L         29   testid greps + TSC_EXIT=0
+  16  task-16-team-worker-node.txt        1122 L         21   99→93 + jest 328/328 + tsc 0
+
+  F1/F2/F3/F4 remain unchecked ([- ] in the plan) — correct, F1 is this audit.
+
+Independently re-ran the acceptance commands of every checkbox. Detailed results
+are in §§2–8 below. Summary of ledger verdicts:
+
+  T1  PASS (with the receipt-accuracy corrections of T14 applied, re-verified)
+  T2  PASS  T3  PASS  T4  PASS  T5  PASS  T6  PASS
+  T7  PASS  T8  PASS  T9  PASS  T10 PASS  T11 PASS
+  T12 PASS  T13 PASS  T14 PASS  T15 PASS  T16 PASS
+
+  Appended items specifically re-checked:
+    * 14 (receipt-accuracy corrections) — PASS, see §8.
+    * 15 (testid registration) — PASS, see §8.
+    * 16 (six prettier fixes) — PASS, see §7.2.
+
+--------------------------------------------------------------------------------
+2. THE PRECEDENCE CHAIN (the plan's central user decision)
+--------------------------------------------------------------------------------
+DELIVERED SOURCE, quoted verbatim.
+
+(A) Resolution order — member explicit > team > unset.
+    `server/src/chat/worker-dispatcher.ts` lines 2302-2316:
+
+      // ── 首选 worker 两级解析（team-worker-node Todo 5）────────────────────────
+      // 优先级链即用户决策：成员显式（TeamMember.preferredWorkerId）> 团队
+      // （Team.preferredWorkerId）> 未设（undefined，行为与引入本特性前逐字节一致）。
+      ...
+      // ?? 短路：成员有值时不再查团队（省一次 DB 往返）。
+      const preferredWorkerId =
+        (await this.resolveMemberPreferredWorkerId(teamMemberId)) ??
+        (await this.resolveTeamPreferredWorkerId(teamId)) ??
+        undefined;
+      // modelId 行为保持不变：preferredWorkerId 未设时本对象与今日逐字节一致。
+      const assignmentReq: AssignmentRequirement = {
+        ...(agentModelId ? { modelId: agentModelId } : {}),
+        ...(preferredWorkerId ? { preferredWorkerId } : {}),
+      };
+
+    Plain statement: member explicit value wins first; if the member value is
+    null/empty the team value is used; if both are null/empty the field is
+    `undefined` and `assignmentReq` stays byte-identical to the pre-plan shape.
+
+    The two resolvers are fail-open and quote-literal in the `(this.prisma as any)`
+    idiom the plan mandated (`worker-dispatcher.ts:3882-3924`), each returning
+    `as { preferredWorkerId: string | null } | null`, with the
+    `typeof repo.findFirst !== 'function'` guard and try/catch → logger.warn.
+
+(B) Pin lookup — confined to the candidate set.
+    `server/src/workers/workers.service.ts` (assignWorker tail):
+
+      const fallbackId = ranked[0]?.worker.id ?? null;
+      if (!req.preferredWorkerId) {
+        return fallbackId;
+      }
+      // 置顶分支：偏好只在四道过滤全过的候选集内生效，未命中软回退，绝不 throw。
+      const pinned = ranked.find((x) => x.worker.id === req.preferredWorkerId);
+
+    `ranked` is the post-filter pipeline, so the pin can only ever select a worker
+    that already passed all four filters. A pin absent from `ranked` is ignored
+    and `fallbackId` (auto-scheduling) is returned. PASS.
+
+(C) The four existing assignWorker filters — all still applied.
+    `server/src/workers/workers.service.ts` (the ranked pipeline), verbatim:
+
+      .filter((x) => x.worker.status !== WORKER_STATUS.OFFLINE)          // ① status/offline
+      .filter((x) => x.capacity >= need)                                 // ② remaining capacity
+      .filter(
+        (x) =>
+          !req.opencodeVersion ||
+          x.worker.opencodeVersion === req.opencodeVersion,              // ③ opencodeVersion
+      )
+      .filter((x) => this.matchesModelRequirement(x.worker, req.modelId))// ④ matchesModelRequirement
+
+    All four are upstream of `const pinned = ranked.find(...)`. The plan's
+    four filters are intact, in their original form and order. PASS.
+
+--------------------------------------------------------------------------------
+3. NO HARD BINDING / SOFT FALLBACK
+--------------------------------------------------------------------------------
+3.1 Six fallback modes, each with a test asserting fallback AND logger.warn
+    (`server/src/workers/workers.service.spec.ts`, describe
+    'assignWorker（首选 worker 置顶：候选内偏好 + 回退矩阵）', line 2363+):
+
+      1. 置顶 offline → 软回退到自动调度 + warn，且不抛异常
+         L2441  resolves.toBe('w_other'); expect(warnSpy).toHaveBeenCalledTimes(1)
+      2. 置顶 id 不在候选集（行缺失）→ 回退 + warn
+         L2469  resolves.toBe('w_other'); warn called; message contains
+                '不在候选集中' and '不可区分' (the honest "row-missing vs offline
+                are indistinguishable" wording the plan demanded)
+      3. 置顶容量耗尽 → 回退 + warn
+         L2481  resolves.toBe('w_other'); warn contains '未通过既有过滤'
+      4. 置顶 opencodeVersion 不符 → 回退 + warn
+         L2494  resolves.toBe('w_other'); warn contains 'opencodeVersion=1.17.0'
+      5. B1：modelId 非空且置顶 worker 从未上报模型能力 → 回退 + warn
+         L2512  resolves.toBe('w_other'); warn contains 'B1'
+      6. 置顶有 availability 但全部不匹配 → 回退 + warn
+         L2550  resolves.toBe('w_other'); expect(warnSpy).toHaveBeenCalledTimes(1)
+
+    Plus the plan's other required cases, all present:
+      * '置顶 degraded → 仍命中置顶，但 warn' L2456 (hit + warn, exactly as specified)
+      * '置顶 availability 匹配但 enabled=false → 回退 + warn' L2577
+      * '置顶不可用且无任何候选 → 返回 null 而非 throw' L2600
+      * 'B1 不误伤自动调度：同一「availability 为空」worker 在无置顶时仍按今日语义被选中' L2539
+        (guards the plan's "avail.length===0 ⇒ true" compatibility contract)
+      * '置顶在线且通过四过滤 → 命中置顶，且不受容量排序影响' L2391
+
+3.2 No-argument call is behaviour-identical to pre-plan behaviour.
+    Implementation: `assignWorker(req: AssignmentRequirement = {})` — the pin
+    branch is gated behind `if (!req.preferredWorkerId) { return fallbackId; }`,
+    so a call without the field never enters the new code path.
+    `preferredWorkerId` is an optional field on an optional-parameter interface;
+    all 9 pre-existing callers either pass no argument or pass only
+    `opts.workerId`, so `preferredWorkerId` is `undefined` for all of them.
+    Test: `worker.service.spec.ts` L2411
+      '无参调用 assignWorker() 零回归：候选集与顺序与今日一致（保护 9 处无参调用方）'
+      asserts `service.assignWorker()` resolves to 'w_v1' — the same capacity-ranked
+      result the pre-plan logic produces; the comment at L2432 records that this
+      is exactly today's behaviour (filter ③ inactive when opencodeVersion absent).
+    Independent run:
+      $ cd server && npx jest src/workers/workers.service.spec.ts
+      Test Suites: 1 passed, 1 total
+      Tests:       172 passed, 172 total
+    PASS.
+
+3.3 Updated count of new tests: the required "at least 9" cases are all present
+    and green (11 in the pinned describe block, incl. the 2 guard cases).
+
+--------------------------------------------------------------------------------
+4. THE MIGRATION
+--------------------------------------------------------------------------------
+4.1 Appended, not baseline-edited.
+    $ ls -d server/prisma/migrations/*team_worker_node
+    server/prisma/migrations/20261014000000_team_worker_node/
+    ...exactly 1; lexicographically after 20261010030000_worker_update_state
+    (listing shows ...20261010030000_worker_update_state, 20261014000000_team_worker_node).
+
+    $ git diff --stat server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+    (empty — baseline untouched)
+
+    $ git status --porcelain | grep -c 'ddl-team-worker-node'
+    0
+    $ git ls-files --error-unmatch .omo/evidence/ddl-team-worker-node-*.sql
+    zsh:1: no matches found: .omo/evidence/ddl-team-worker-node-*.sql
+    (fails ⇒ no dump was committed; the plan's zero-detection criterion holds)
+
+4.2 The three statements (comment-stripped), raw:
+    $ grep -v '^--' server/prisma/migrations/20261014000000_team_worker_node/migration.sql \
+        | grep -E '^(ALTER|CREATE|DROP|UPDATE|INSERT)'
+    ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+    ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+    ALTER TABLE `agents` DROP COLUMN `worker_id`;
+
+4.3 Inlined one-way rollback contract — PRESENT, in the file header (verbatim):
+    -- 单向 DDL 回滚契约（内联写明，勿依赖外部引用；docs/tech-debt-rollback.md §1/§3）：
+    --   本迁移**没有 down**，不可逆。回滚 = 两步，顺序不可颠倒：
+    --     1) 代码：`git reset --hard <last-green>`（回到迁移前的绿色提交）
+    --     2) 数据：恢复**迁移前**的全库 dump，形如
+    --        `mysql -h <host> -P <port> -u <user> -p <db> < .omo/evidence/ddl-team-worker-node-<YYYYMMDD>.sql`
+    --   必须先代码后数据：只回退代码不会撤销列删除（旧服务会撞上「列不存在」），只恢复 dump
+    --   又会让代码与库对不上。
+    --   restore 不是部分撤销，而是把库整体拨回迁移前 ⇒ **迁移后的所有写入全部丢弃**。
+    ...
+    --   该不可逆性是有意的：本迁移含 DROP COLUMN，不存在「只退后来写入、保留删列结果」的
+    --   部分撤销形态。本机/CI 无 MySQL（见 .omo/evidence/task-1-team-worker-node.txt），
+    --   dump 必须由部署方在目标环境执行本 DDL 之前自行补齐。
+
+4.4 Comment-stripped counts — re-measured exactly:
+    $ for p in "DROP COLUMN:1" "ALTER TABLE:3" '`agents`:1' "preferred_worker_id:2"; do :; done
+    DROP COLUMN            = 1
+    ALTER TABLE            = 3
+    `agents`               = 1
+    preferred_worker_id    = 2
+    UPDATE|INSERT|FOREIGN KEY|IF EXISTS|IF NOT EXISTS (comment-stripped) = 0
+    (With comments included, `preferred_worker_id` is still 2 — the Chinese
+     rationale header deliberately avoids the literal column name, matching the
+     schema-comment constraint. Consistent.)
+
+4.5 Inverted guard spec — present and green (re-ran independently):
+    $ cd server && npx jest src/prisma/team-worker-node.migration.spec.ts
+    PASS src/prisma/team-worker-node.migration.spec.ts
+      migration 20261014000000_team_worker_node
+        ✓ ① baseline 必须含 agents.worker_id（它是本迁移的删除对象，删不存在的列会 ERROR 1091） (4 ms)
+        ✓ ② 新迁移必须含 ALTER TABLE `agents` DROP COLUMN `worker_id` (1 ms)
+        ✓ ③ 新迁移必须含 teams 与 team_members 两条 ADD COLUMN preferred_worker_id
+        ✓ ④ schema.prisma 的 Agent 段零 workerId，且 preferred_worker_id 恰好两处 (2 ms)
+        ✓ ⑤ 零 UPDATE / INSERT / FOREIGN KEY / IF EXISTS / IF NOT EXISTS（剔除注释后）
+        ✓ ⑥ baseline 里 agents.worker_id 无 FK 无索引（:135-141 的约束段零命中） (1 ms)
+        ✓ ⑦ 三条 DDL 与 Prisma 自产 migrate diff 输出等价（列形态/顺序/表名）
+        ✓ ⑧ 迁移目录恰好一个，且字典序晚于上一批迁移（存量/新库两条路径同序）
+        ✓ ⑨ 不得编辑 baseline（反转方向的静默 no-op 防线） (1 ms)
+    Test Suites: 1 passed, 1 total
+    Tests:       9 passed, 9 total
+
+    Nine assertions (six required + three added). PASS.
+
+--------------------------------------------------------------------------------
+5. THE REMOVAL
+--------------------------------------------------------------------------------
+5.1 Agent.workerId is gone from schema / DTOs / service projections / web control
+    $ awk '/model Agent /,/^}/' server/prisma/schema.prisma | grep -c workerId
+    0
+    $ grep -n "workerId" server/src/agents/dto/update-agent.dto.ts
+    (no output — field deleted)
+    $ grep -n "workerId" server/src/agents/agents.service.ts
+    103:      workerId: string | null;441:      workerId: string | null;
+    411-606 ... all remaining hits are the "取数 worker" semantics (see 5.2) —
+              no AgentRow.workerId, no PATCH write, no toAgentDto/toAgentDtoList projection.
+    $ grep -c "workerId" server/src/agents/agents.service.ts   →  only fetch-worker semantics
+    $ grep -c "agent-worker-select" web/app web/src web/e2e docs
+    0
+    $ grep -rn "首选 Worker" "web/app/(main)/agents" web/src/components/agents docs/agent-platform | wc -l
+    0
+    $ grep -c "workerDraft\|sortedWorkers" "web/app/(main)/agents/page.tsx"
+    0
+    $ grep -c "restart" "web/app/(main)/agents/page.tsx"   → 16 (NOT reduced; "重启全部 worker" retained)
+    $ grep -n "workerPool\|worker:" docs/agent-platform/prototypes/agent-config/index.tsx
+    (no output)
+    $ grep -n "workerPool\|worker:" docs/agent-platform/prototypes/agent-manage/index.tsx
+    (no output)
+
+    Schema diff attestation (`git diff cb0ba6d1 -- server/prisma/schema.prisma`):
+      - two `/// 首选 worker` comments + `preferredWorkerId String? @map("preferred_worker_id")`
+        added to Team (after managedMode, before version) and TeamMember (after overrideModelId);
+      - `workerId String? @map("worker_id")` + its comment removed from Agent.
+      - No @relation, no @@index, no @@map changes.
+      - (The Memory-comment-only lines in the same diff are the concurrent stream's.)
+
+5.2 The four 'fetch worker' semantics are positively retained
+    ① OpencodeAgentsResult.workerId — `server/src/agents/agents.service.ts:103`
+        export interface OpencodeAgentsResult {
+          agents: OpencodeAgentEntry[];
+          /** 实际取数的 worker id；降级且未选出 worker 时为 null。 */
+          workerId: string | null;
+          degraded: boolean;
+        }
+    ② AgentRolesTab.tsx:80 — `workerId: string | null;` (with the comment at :202
+       "引擎外部 Agent 清单（与 ExternalAgentsPanel 同源同过滤；workerId 缺省由服务端自动选 worker）")
+    ③ ExternalAgentsPanel.tsx:76 — `workerId: string | null;` (+ :73 doc comment)
+    ④ agents.controller.ts `?workerId=` — lines 96-97, 108-110, 121-124, 175-178
+      (`@Query('workerId') workerId?: string` on omo-config, omo-agent-prompt, opencode)
+    server/src/workers keeps its Worker-domain inbound DTO hits:
+    $ grep -rn "dto\.workerId" server/src/workers | wc -l
+    46        (≥ 40 required by T13)
+    PASS.
+
+--------------------------------------------------------------------------------
+6. THE PROJECTION SYNC
+--------------------------------------------------------------------------------
+6.1 Both server-side member projections carry the member value
+    $ grep -n "preferredWorkerId" server/src/teams/teams.service.ts
+    348:    // preferredWorkerId 置顶分支），并回退自动调度。
+    349:    if (dto.preferredWorkerId !== undefined) {
+    350:      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;   ← team write path
+    830:    // 弱校验（同团队级 preferredWorkerId，见 update()）：worker 是软引用，可达性属运行期事实，纯配置操作不应被节点状态阻断。
+    831:    if (dto.preferredWorkerId !== undefined)
+    832:      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;   ← member write path
+    1498:      preferredWorkerId: m.preferredWorkerId ?? null,                  ← toTeamDto member row
+    1533:      preferredWorkerId: team.preferredWorkerId ?? null,               ← toTeamDto team
+
+    $ grep -n "preferredWorkerId" server/src/tasks/tasks.service.ts
+    65:  preferredWorkerId?: string | null;      ← TeamMemberView (closed object type, no index signature)
+    2037:          preferredWorkerId: m.preferredWorkerId ?? null,             ← task-instance projection
+
+    The documented silent-null trap ("只改一处会被 null 覆盖") is real: both the
+    Team DTO member projection and the task-instance projection emit
+    `m.preferredWorkerId ?? null`, so neither side can overwrite the other with `null`.
+    T9's "two projections carry the same value" test is the guard.
+
+6.2 Web types declare it
+    $ grep -n "preferredWorkerId" web/src/api/teams.ts web/src/components/tasks/task-detail-types.ts
+    web/src/api/teams.ts:20    preferredWorkerId?: string | null;   ← TeamMemberDto
+    web/src/api/teams.ts:55    preferredWorkerId?: string | null;   ← TeamDto
+    web/src/api/teams.ts:87    preferredWorkerId?: string | null;   ← UpdateTeamPayload
+    web/src/components/tasks/task-detail-types.ts:139  preferredWorkerId?: string | null;
+    PASS.
+
+--------------------------------------------------------------------------------
+7. THE TWO DOCUMENTED PRE-EXISTING REDS (no new failures)
+--------------------------------------------------------------------------------
+7.1 Bare-catch guard
+    $ git grep -E 'catch[[:space:]]*{' -- server/src | grep -v '\.spec\.ts' | wc -l
+    176        (working tree)
+    $ git grep -E 'catch[[:space:]]*{' cb0ba6d1 -- server/src | grep -v '\.spec\.ts' | wc -l
+    176        (HEAD = the pinned concurrent commit)
+    $ git grep -E 'catch[[:space:]]*{' b6840d1 -- server/src | grep -v '\.spec\.ts' | wc -l
+    176        (base sha = the plan's Todo-1 recorded base-sha)
+
+    Per-file delta: I diffed the per-file count vectors
+    (`git grep -c -E 'catch[[:space:]]*{' <ref> -- server/src | grep -v spec | sort`).
+    Both sides are the same 39 files with identical counts; the only textual
+    difference is the `b6840d1:` rev prefix. ⇒ ZERO per-file delta.
+    Plan files inside the bare-catch list: `git grep -n -E 'catch[[:space:]]*{' --
+    server/src | grep -v spec | grep -i "team-worker\|preferredWorker" | wc -l` = 0.
+
+    `scripts/gate.sh` lines 70-72: `BARE_CATCH_BASELINE=175` with the comment
+    "This threshold may only be lowered, never raised". 176 > 175 fires before
+    any other step. This is the pre-existing red the plan recorded, it is
+    identical at worktree / HEAD / base-sha, and no plan file contributes a
+    single bare catch. The plan correctly did not touch the baseline. PASS.
+
+7.2 Lint (prettier backlog) — measured now
+    $ cd server && npm run lint:check
+    ✖ 161 problems (93 errors, 68 warnings)
+      93 errors and 0 warnings potentially fixable with the `--fix` option.
+    $ echo $? (LINT_EXIT)
+    1
+
+    The verifier of Todo 16 measured 93 after the fix; my independent run
+    reproduces 93 exactly. Attribution — I ran eslint per-file against the base
+    sha b6840d1 and the working tree for every plan-touched file
+    (`git show b6840d1:<f> | npx eslint --stdin --stdin-filename <f> --format json`):
+
+      src/agents/agents.service.spec.ts                 base=[0 errors 0 warn]  wt=[0 0]
+      src/agents/agents.service.ts                      base=[0 1]              wt=[0 1]
+      src/agents/dto/update-agent.dto.ts                base=[0 0]              wt=[0 0]
+      src/tasks/tasks.service.spec.ts                   base=[0 3]              wt=[0 3]
+      src/tasks/tasks.service.ts                        base=[0 0]              wt=[0 0]
+      src/teams/dto/add-member.dto.ts                   base=[0 0]              wt=[0 0]
+      src/teams/dto/update-team.dto.ts                  base=[0 0]              wt=[0 0]
+      src/teams/teams.service.spec.ts                   base=[0 1]              wt=[0 1]
+      src/teams/teams.service.ts                        base=[0 1]              wt=[0 1]
+      src/workers/workers.service.spec.ts               base=[0 1]              wt=[0 1]
+      src/workers/workers.service.ts                    base=[0 0]              wt=[0 0]
+      src/prisma/team-worker-node.migration.spec.ts     NEW FILE               wt=[0 0]
+      src/chat/worker-dispatcher.spec.ts                base=[4 errors 5 warn]  wt=[4 5]
+      src/chat/worker-dispatcher.ts                     base=[4 errors 1 warn]  wt=[4 1]
+
+    Every plan-touched file has an IDENTICAL error/warning count at the base sha
+    and in the working tree, and the plan's new file is clean. The 4 errors still
+    reported inside `src/chat/worker-dispatcher.spec.ts` and
+    `src/chat/worker-dispatcher.ts` are pre-existing prettier debt (verified
+    byte-identical at the base sha by `git show b6840d1:<f> | npx prettier
+    --check --stdin-filepath <f>` → exit 1 at base too; prettier rewrites the
+    same 15 / 20 lines at base and in the working tree).
+
+    T16's receipt is precise and honest about this (§4 of task-16):
+      team-worker-node.migration.spec.ts —— 0 命中（grep 计数 0，文件已不在报告中）。
+      worker-dispatcher.spec.ts —— 仍出现，但仅剩 4 个**既存**点（3572/3575/3576/4471
+        因本 todo 插入一行而位移为 3573/3576/3577/4472），本计划的 3442:46 已消失。
+      （修掉这 4 个既存点属明令禁止的「顺手动既存债」，故不做。）
+    It also declines to soften the "plan files zero hits" wording into a false claim,
+    and its own BEFORE/AFTER raw summary lines are 167/99 → 161/93 (delta exactly 6).
+
+    Conclusion: this plan's net contribution to the pre-existing lint backlog is
+    zero. The gate's second red (`lint:check` exit 1 from 93 pre-existing errors)
+    is a pre-existing red, not a plan-introduced one. No new failures. PASS.
+
+--------------------------------------------------------------------------------
+8. THE PLAN'S OWN RECORD-HONESTY ITEMS
+--------------------------------------------------------------------------------
+8.1 Todo-1 receipt baseline classification (14 = 5 orchestration artifacts + 9 pre-existing files)
+    Re-verified live:
+    $ wc -l .omo/evidence/task-1-team-worker-node.txt
+    120
+    The raw porcelain block is intact and unedited (lines 15-28). Counting the
+    block myself: 14 rows. Of those 14 rows, the 5 that the receipt classifies
+    as this plan's own orchestration artifacts are exactly:
+      M .omo/boulder.json
+      M .omo/ulw-execute/ledger.jsonl
+      ?? .omo/plans/team-worker-node.md
+      ?? .omo/drafts/team-worker-node.md
+      ?? .omo/notepads/team-worker-node/
+    The remaining 9 rows are all pre-existing dirty files:
+      M .omo/evidence/phase5-t9-playwright.json
+      M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+      M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+      M server/src/platform-mcp/platform-mcp.controller.spec.ts
+      M server/src/platform-mcp/platform-mcp.controller.ts
+      M server/src/platform-mcp/platform-mcp.service.spec.ts
+      M server/src/platform-mcp/platform-mcp.service.ts
+      M server/src/platform-mcp/platform-mcp.tools.ts
+      M web/src/components/chat/msg-parts.tsx
+    ⇒ 5 + 9 = 14. Classification is accurate.
+
+    $ grep -c "14 行" .omo/evidence/task-1-team-worker-node.txt
+    2
+    $ grep -n "9 个文件\|9 files" .omo/evidence/task-1-team-worker-node.txt
+    30:脏工作区说明（dirty_worktree 类对抗项）：以上 14 行中，9 个文件为本计划开工前的既有脏改动（不属于本计划范围）；另 5 行
+    $ grep -c "部署前须补 dump" .omo/evidence/task-1-team-worker-node.txt
+    0        (the forbidden grep-satisfying line was NOT added)
+
+8.2 The +3 line offset
+    $ grep -n "dump" .omo/evidence/task-1-team-worker-node.txt | cut -d: -f1
+    1 51 61 62 67 71 75 81 89 97 100 106 109 112
+    Receipt's documented relation: replace block 2 rows → 5 rows (+3), so every
+    line ≥ 30 shifts +3 while line 1 (above the block) does not.
+      before(14) = [1, 48, 58, 59, 64, 68, 72, 78, 86, 94, 97, 103, 106, 109]
+      after (14) = [1, 51, 61, 62, 67, 71, 75, 81, 89, 97, 100, 106, 109, 112]
+      [before[0]] + [b + 3 for b in before[1:]] == after  → True
+    My live dump-line census matches `after` exactly, count 14 → 14, no
+    duplicates, no trunctation. The offset is accurate.
+
+8.3 Task-2 §6 diffstat accuracy
+    $ git diff --shortstat -- server/src/agents
+     3 files changed, 1 insertion(+), 23 deletions(-)
+    Receipt (task-2 line 182) records the same string verbatim.
+    PASS.
+
+8.4 Append-only Todo-15 testid key, no fabricated audit entry
+    $ grep -n '"/teams/\[id\]"' web/e2e/reference/testids.ts
+    551:  "/teams/[id]": ["team-detail-root", "team-worker-select", "enter-team-session", "team-save-name"],
+    Only ONE hit — in PAGE_SMOKE. The PAGES audit array has no /teams/[id] entry:
+    $ grep -n 'route:.*teams' web/e2e/reference/testids.ts
+    74:    route: "/teams",
+    191:    route: "/teams/[id]/session（如 /teams/tm_0000000001/session）",
+    ⇒ the append-only invariant holds: a PAGE_SMOKE key was added, no fake audit
+       entry was fabricated.
+    Every listed testid really exists in the detail page (grep counts in
+    web/app/(main)/teams/[id]/page.tsx):
+      team-detail-root     1
+      team-worker-select   1
+      enter-team-session   1
+      team-save-name       1
+    The three chip/option entries are still confined to the team-session audit
+    section (testids.ts:238-240, inside the `auditPage: "2.3b team-session"` block
+    that starts at :190) — not moved to /agents.
+    $ cd web && npx tsc --noEmit; echo TSC_EXIT=$?
+    TSC_EXIT=0
+    PASS.
+
+--------------------------------------------------------------------------------
+9. OTHER INDEPENDENTLY RE-RUN ACCEPTANCE CHECKS
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/workers/workers.service.spec.ts src/chat/worker-dispatcher.spec.ts
+Test Suites: 2 passed, 2 total
+Tests:       491 passed, 491 total
+
+$ cd server && npx jest src/teams src/tasks src/agents src/prisma
+Test Suites: 41 passed, 41 total
+Tests:       874 passed, 874 total
+
+$ cd server && npx jest src/workers/workers.service.spec.ts -t "remove"
+Tests:       5 passed, 172 total (167 skipped)
+
+$ cd server && npx tsc --noEmit -p tsconfig.json ; echo TSC_EXIT=$?
+TSC_EXIT=0
+
+$ cd web && npm run lint:check ; echo WEB_LINT_EXIT=$?
+... 729 problems (0 errors, 729 warnings) ...
+WEB_LINT_EXIT=0
+
+$ ls -l scripts/e2e-team-worker-node.sh
+-rwxr-xr-x@ 1 mac  staff  46137 Oct 14 23:16 scripts/e2e-team-worker-node.sh
+(test -x ⇒ PASS)
+
+T12 e2e (from the receipt, re-read and cross-checked against the script's log text):
+  [e2e] PASS PRE-2 two real, addressable workers online with distinct baseUrls
+  [e2e] PASS A team-level preferred worker set / cleared via PATCH + GET round trip
+  [e2e] PASS B member choice beats team in both projections and both agree after clearing
+  [e2e] PASS C pinned node offline → soft fallback, no 5xx, pin-miss warning logged
+  [e2e] PASS D unavailable/dangling pin (member and team) → dispatch still auto-schedules, no throw
+  ... exit=0
+  Worker-2 construction honors the F3 ② authority ruling:
+  docker compose run -d --name vteam-e2e-worker2 -e WORKER_ID=w_e2e_second
+    -e WORKER_ADVERTISE_HOST=http://vteam-e2e-worker2 -v ... worker   (exit=0)
+
+T5/B2 dispatcher cases (re-read from spec, lines 3280-3486):
+  ① 两级皆空 → assignWorker 收到 {}                    (L3306, toHaveBeenCalledWith({}))
+  ② 仅团队设置 → assignWorker 收到团队值                 (L3323)
+  ③ 成员与团队都设置 → assignWorker 收到成员值           (L3345)
+  ④ 回归：已绑定 offline 节点的会话重分配时 assignWorker 仍携带 preferredWorkerId (L3400)
+  ⑤ fail-open：团队置顶查询抛错 → assignWorker 仍收到 {} 且分派继续 (L3412, warn asserted)
+  ⑥ B2 可观测：agentModelId 为 null 且置顶生效 → logger.warn 记录 resolved
+     workerId 与 defaultModelId=opencode/deepseek-v4-pro (L3450)
+  All six required cases exist. PASS.
+
+T6 co-lifetime check (column + write path die together):
+  $ grep -c "agent.updateMany" server/src/workers/workers.service.ts
+  0
+  $ grep -c "agent.updateMany" server/src/workers/workers.service.spec.ts
+  0
+  $ grep -c "team.updateMany\|teamMember.updateMany" server/src/workers/workers.service.ts
+  2      (remove() transaction now clears both preferred-worker columns)
+  spec asserts `expect(txOps).toHaveLength(6)` (L2068) — matches the 6 writes in
+  the transaction (2 deleteMany + session.updateMany + team.updateMany +
+  teamMember.updateMany + worker.delete).
+  B2 also holds for the plan's "no dangling pin" requirement. PASS.
+
+================================================================================
+VERDICT: APPROVED
+No acceptance criterion is unmet and no load-bearing invariant is violated.
+All 16 checkboxes have evidence artifacts whose acceptance commands were
+independently re-run and passed; the precedence chain is exactly
+member > team > unset with the pin confined to the four-filter candidate set;
+all six fallback modes have a fallback+warn test; the migration is appended with
+an inlined one-way rollback contract and a 9-assertion inverted guard spec;
+the Agent.workerId removal is complete with all four fetch-worker semantics
+retained; both member projections and the web types stay in sync; and neither
+pre-existing red (bare-catch 176/175, lint 93 pre-existing errors) is attributable
+to this plan — measured base-vs-worktree per file, zero delta.
+================================================================================

@@ -1,0 +1,189 @@
+TASK 4 — `workers.service`: `AssignmentRequirement.preferredWorkerId` 置顶调度（四过滤内）
+Date: 2026-10-14
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+
+=============================================================================
+0. CHANGED PATHS (mine only — 2 files; sibling workers run in parallel)
+=============================================================================
+ M server/src/workers/workers.service.ts        <- Todo 4 scope
+ M server/src/workers/workers.service.spec.ts   <- Todo 4 scope
+
+Pre-existing dirt NOT touched (rule b):
+  server/src/platform-mcp/*  (controller/controller.spec/service/service.spec/tools)
+  web/src/components/chat/msg-parts.tsx
+Verified untouched by me; every edit in this task landed via absolute-path edit/write
+restricted to the two files above. `git diff` for the dirt files shows no new hunks from
+this task (see §6).
+
+Sibling-worker files appearing in `git status --porcelain` (NOT mine, NOT reverted):
+  docs/agent-platform/prototypes/agent-config/index.tsx      (Todo 3)
+  docs/agent-platform/prototypes/agent-manage/index.tsx      (Todo 3)
+  server/src/agents/agents.service.ts / .spec.ts              (Todo 3)
+  server/src/agents/dto/update-agent.dto.ts                   (Todo 3)
+  web/app/(main)/agents/page.tsx                              (Todo 3)
+  web/e2e/reference/testids.ts                                (Todo 3)
+
+NO git write command was executed (no add/commit/stash/checkout) — rule (a).
+No .omo/ file other than this evidence artifact was written — rule (e).
+
+=============================================================================
+1. JEST — exact invocation + raw summary
+=============================================================================
+$ cd /Volumes/SSD-Data/01work/git-project/vteam/server && npx jest src/workers/workers.service.spec.ts
+
+    assignWorker（首选 worker 置顶：候选内偏好 + 回退矩阵）
+      ✓ 置顶在线且通过四过滤 → 命中置顶，且不受容量排序影响（置顶容量更低也照样选它）
+      ✓ 无参调用 assignWorker() 零回归：候选集与顺序与今日一致（保护 9 处无参调用方）
+      ✓ 置顶 offline → 软回退到自动调度 + warn，且不抛异常
+      ✓ 置顶 degraded → 仍命中置顶（degraded 通过四过滤），但 warn 告知绕过了 online 优先排序
+      ✓ 置顶 id 不在候选集（行缺失）→ 回退 + warn（文案不谎称行缺失与 offline 两种原因）
+      ✓ 置顶容量耗尽 → 回退 + warn
+      ✓ 置顶 opencodeVersion 不符 → 回退 + warn
+      ✓ B1：modelId 非空且置顶 worker 从未上报模型能力（availability 为空）→ 视为未命中，回退 + warn
+      ✓ B1 不误伤自动调度：同一「availability 为空」worker 在无置顶时仍按今日语义被选中
+      ✓ 置顶有 availability 但全部不匹配 → 过滤④排除，回退 + warn
+      ✓ 置顶 availability 匹配但 enabled=false → 过滤④排除，回退 + warn
+      ✓ 置顶不可用且无任何候选 → 返回 null 而非 throw「无可用 worker」
+
+Test Suites: 1 passed, 1 total
+Tests:       172 passed, 172 total
+Snapshots:   0 total
+Time:        3.78 s
+Ran all test suites matching /src\/workers\/workers.service.spec.ts/i.
+
+12 new cases added (plan required >= 9). All 6 fallback categories assert logger.warn:
+  offline / degraded / not-in-candidate-set / capacity-exhausted / opencodeVersion-mismatch /
+  B1-zero-availabilities — plus 2 extra model-filter fallbacks (no-match, enabled=false).
+Existing describe blocks 'assignWorker（Scheduler）' and
+'assignWorker（模型要求匹配，md_ 主键与 provider/model 双形态）' → 0 failures (they are part
+of the 172 passed).
+
+=============================================================================
+2. grep -n "preferredWorkerId" server/src/workers/workers.service.ts
+=============================================================================
+  90:  preferredWorkerId?: string;
+ 873:   * - 置顶：req.preferredWorkerId 只是**候选内偏好**，只在通过上面全部四道过滤时生效，
+ 912:    if (!req.preferredWorkerId) {
+ 916:    const pinned = ranked.find((x) => x.worker.id === req.preferredWorkerId);
+ 919:      const raw = candidates.find((w) => w.id === req.preferredWorkerId);
+ 924:        `assignWorker 首选 worker ${req.preferredWorkerId} 未命中：${reason}；回退自动调度 ${fallbackId ?? 'null'}`,
+=> type declaration (90) + pin decision (912-945) both present.
+
+=============================================================================
+3. grep -c "matchesModelRequirement" server/src/workers/workers.service.ts
+=============================================================================
+5
+Baseline (HEAD, before my change): 3
+-> count INCREASED (5 >= 3), i.e. NOT reduced. The 2 new occurrences are comment mentions
+(in the AssignmentRequirement docstring and the B1 rationale); the function body is untouched:
+$ git diff server/src/workers/workers.service.ts | grep -E '^[-+].*matchesModelRequirement'
++   *   ③ opencodeVersion 匹配 ④ matchesModelRequirement）的候选集里，才被直接选用；
++    // B1（置顶专属附加条件，不改全局语义）：matchesModelRequirement 对「从未上报模型能力」
+Only "+" comment lines; zero "-" lines => matchesModelRequirement itself was NOT modified.
+
+=============================================================================
+4. MUTATION / SCOPE GUARD — hunk coverage (NOT --stat)
+=============================================================================
+$ git diff -U0 server/src/workers/workers.service.ts | grep '^@@'
+@@ -79,0 +80,11 @@ export interface AssignmentRequirement {
+@@ -861,0 +873,2 @@ export class WorkersService implements OnModuleInit, onModuleDestroy {
+@@ -898 +911,36 @@ export class WorkersService implements OnModuleInit, onModuleDestroy {
+
+Hunks cover: interface +80..90, docstring +873..874, assignWorker body +911..946.
+NO hunk covers 1310-1325 (remove())  -> `remove()` NOT touched.
+(`--stat` deliberately not used: it prints only `path | N ++--` and can never show hunks.)
+
+Supplemental check (plan notes this is weaker, not equivalent):
+$ git diff server/src/workers/workers.service.ts | grep -c 'agent.updateMany'
+0
+(exit code 1 from grep = zero matches, expected.)
+
+=============================================================================
+5. MANUAL QA CHANNEL — raw spy output
+=============================================================================
+Method: temporary spec `server/src/workers/zz-task4-qa.spec.ts` (NestJS TestingModule with
+the same Prisma mock shape as the real spec), jest.spyOn(service['logger'],'warn').
+Deleted after capture — see §6.
+
+$ npx jest src/workers/zz-task4-qa.spec.ts
+    QA_HAPPY_RESULT=w_pinned
+    QA_HAPPY_WARN_CALLS=0
+    QA_FAILURE_THREW=null
+    QA_FAILURE_RESULT=w_bigger
+    QA_FAILURE_IS_PINNED=false
+    QA_FAILURE_WARN_SPY_INVOKED=true
+    QA_FAILURE_WARN_CALL_0="assignWorker 首选 worker w_pinned 未命中：未通过既有过滤（status=offline 容量=10/1 opencodeVersion=1.18.32 modelId=-）；回退自动调度 w_bigger"
+    ✓ happy + failure (17 ms)
+Tests:       1 passed, 1 total
+
+HAPPY   : mocked online + capacity + model-matching pinned worker `w_pinned` (load 9/10)
+          plus a HIGHER-capacity other worker `w_bigger` (maxInstances 99, load 0).
+          assignWorker({preferredWorkerId:'w_pinned'}) -> 'w_pinned' (pin beats capacity sort),
+          warn spy NOT called (no miss to report).
+FAILURE : pinned worker's status flipped to offline -> result 'w_bigger' (non-pinned),
+          QA_FAILURE_IS_PINNED=false, logger.warn spy invoked (QA_FAILURE_WARN_SPY_INVOKED=true),
+          QA_FAILURE_THREW=null (nothing throws).
+          Warn wording names status=offline as the failing filter and does NOT claim two
+          distinct causes for row-missing vs offline in the not-in-candidate-set branch.
+
+=============================================================================
+6. CLEANUP RECEIPT
+=============================================================================
+- Temp QA spec removed: $ ls src/workers/zz-task4-qa.spec.ts -> "No such file or directory"
+- No scratch files left in server/src/**.
+- Pre-existing dirty files untouched (platform-mcp/*, web/src/components/chat/msg-parts.tsx).
+- No git write commands run; nothing staged/committed/stashed.
+- Only this file written under .omo/ for this task.
+
+=============================================================================
+7. OTHER CHECKS RUN
+=============================================================================
+$ npx tsc --noEmit -p tsconfig.json
+TSC_EXIT=0
+(no output = clean; `as any` / ts-ignore not introduced.)
+
+$ npx eslint src/workers/workers.service.ts src/workers/workers.service.spec.ts
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/workers.service.spec.ts
+  906:13  warning  'broadcastSpy' is assigned a value but never used. ...
+✖ 1 problem (0 errors, 1 warning)
+=> 0 errors. The single warning is PRE-EXISTING (line 906, unrelated to Todo 4).
+13 prettier auto-fixable formatting errors introduced by my spec were fixed with
+`npx eslint --fix` (formatting only, no logic change).
+
+=============================================================================
+8. IMPLEMENTATION SUMMARY (semantics as built)
+=============================================================================
+- `AssignmentRequirement.preferredWorkerId?: string` — within-candidates preference only.
+- assignWorker: `ranked` chain keeps ALL FOUR filters unchanged
+  (① status!==offline ② remainingCapacity>=need ③ opencodeVersion ④ matchesModelRequirement).
+  Pin lookup happens INSIDE the post-filter `ranked` array, so a pin can never bypass a filter.
+- Miss => logger.warn + return existing `ranked[0]?.worker.id ?? null`. Never throws.
+- Warn reasons: if the row IS in the raw candidate list but was filtered out, the warn prints
+  the concrete failing predicate values (status / capacity / opencodeVersion / modelId);
+  if absent from candidates it says "不在候选集中（行缺失或已 offline，二者不可区分）" — matching
+  the plan's constraint that the DB `where` already excludes offline, so the two are
+  indistinguishable in the candidate set.
+- degraded pin: passes all four filters (only offline is excluded) and bypasses online-first
+  sorting -> still returned, but warned about.
+- B1 (pin-only, does NOT touch matchesModelRequirement): if req.modelId is set and the pinned
+  worker has modelAvailabilities.length === 0 (never reported) -> treat as a miss and fall back.
+  Rationale (in code comment): matchesModelRequirement returns true for never-reported workers
+  (avail.length===0 => true, a published transition-period contract); harmless under auto-
+  scheduling, but a pin turns it into a deterministic selection and would silently defeat the
+  published model-availability guarantee, deferring failure to opencode serve runtime.
+  Also noted in the comment: a worker with defaultModelId === modelId and zero availabilities
+  passes filter ④ but is rejected by B1 — intentional; the fallback re-rank may still pick it
+  back, and that is not a bug.
+- `remove()` (:1310-1325) NOT touched (owned by Todo 6, must land with the schema columns).
+
+=============================================================================
+9. RISKS / NOTES FOR THE ORCHESTRATOR
+=============================================================================
+- Sibling workers concurrently modified agents.service.ts / agents.dto / web agents page and
+  prototypes; those are not verified by this evidence file.
+- `matchesModelRequirement` count went 3 -> 5 due to added explanatory comments. If a reviewer
+  uses `grep -c` as a "not reduced" criterion it still passes (increased), but the meaningful
+  check is §3's diff which shows zero removed/modified lines of the function.
+- Todo 5 must pass `preferredWorkerId` through assignmentReq; it will be undefined until then,
+  so `assignWorker()` behaviour today is unchanged for all 9 call sites (covered by the
+  zero-regression test).

@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "task-long-running-3df59d0a",
+  "active_work_id": "team-worker-node-0fbf3332",
   "works": {
     "vteam-team-refactor-f2fc70e5": {
       "work_id": "vteam-team-refactor-f2fc70e5",
@@ -2362,7 +2362,7 @@
       "work_id": "task-long-running-3df59d0a",
       "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/task-long-running.md",
       "plan_name": "task-long-running",
-      "status": "active",
+      "status": "paused",
       "started_at": "2026-10-01T03:11:49.463Z",
       "updated_at": "2026-10-01T03:11:49.463Z",
       "session_ids": [
@@ -2372,20 +2372,74 @@
         "opencode:ses_f0b236abcffeC7FCb0M5QWZ0Lm": "direct"
       },
       "agent": "atlas",
-      "task_sessions": {}
+      "task_sessions": {},
+      "stale_since": "2026-10-14T02:41:57.178Z"
+    },
+    "team-worker-node-0fbf3332": {
+      "work_id": "team-worker-node-0fbf3332",
+      "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/team-worker-node.md",
+      "plan_name": "team-worker-node",
+      "status": "active",
+      "started_at": "2026-10-14T02:41:57.201Z",
+      "updated_at": "2026-10-14T03:15:38Z",
+      "session_ids": [
+        "opencode:ses_ec86183dcffe5Dvf8tt8ZknU8R"
+      ],
+      "session_origins": {
+        "opencode:ses_ec86183dcffe5Dvf8tt8ZknU8R": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {
+        "todo:1-verify": {
+          "task_key": "todo:1-verify",
+          "task_label": "1-verify",
+          "session_id": "ses_ec7979e34ffeZ7IXp4tTBcixN5",
+          "agent": "oracle",
+          "category": "oracle",
+          "status": "in_progress",
+          "started_at": "2026-10-14T03:15:38Z"
+        },
+        "todo:2": {
+          "task_key": "todo:2",
+          "task_label": "2",
+          "session_id": "ses_ec7979ff0ffeVZc3ZD26WGR98N",
+          "agent": "quick",
+          "category": "quick",
+          "status": "in_progress",
+          "started_at": "2026-10-14T03:15:38Z"
+        },
+        "todo:3": {
+          "task_key": "todo:3",
+          "task_label": "3",
+          "session_id": "ses_ec7979f59ffeyO5pk6qcxfklEc",
+          "agent": "quick",
+          "category": "quick",
+          "status": "in_progress",
+          "started_at": "2026-10-14T03:15:38Z"
+        },
+        "todo:4": {
+          "task_key": "todo:4",
+          "task_label": "4",
+          "session_id": "ses_ec7979e92ffe0jtVUQYcHzPJ0V",
+          "agent": "deep-low",
+          "category": "deep-low",
+          "status": "in_progress",
+          "started_at": "2026-10-14T03:15:38Z"
+        }
+      }
     }
   },
-  "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/task-long-running.md",
-  "started_at": "2026-10-01T03:11:49.463Z",
+  "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/team-worker-node.md",
+  "started_at": "2026-10-14T02:41:57.201Z",
   "status": "active",
-  "updated_at": "2026-10-01T03:11:49.463Z",
+  "updated_at": "2026-10-14T02:41:57.201Z",
   "session_ids": [
-    "opencode:ses_f0b236abcffeC7FCb0M5QWZ0Lm"
+    "opencode:ses_ec86183dcffe5Dvf8tt8ZknU8R"
   ],
   "session_origins": {
-    "opencode:ses_f0b236abcffeC7FCb0M5QWZ0Lm": "direct"
+    "opencode:ses_ec86183dcffe5Dvf8tt8ZknU8R": "direct"
   },
-  "plan_name": "task-long-running",
+  "plan_name": "team-worker-node",
   "task_sessions": {},
   "agent": "atlas"
 }

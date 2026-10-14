@@ -1,0 +1,243 @@
+================================================================================
+TASK 9 — 成员级写路径 + TeamMemberView 闭合类型修复 + 三处 DTO 投影同步（server 侧）
+Plan: .omo/plans/team-worker-node.md (todo 9 block: lines 204-215; binding Must/Must-NOT: 22-47)
+Repo: /Volumes/SSD-Data/01work/git-project/vteam
+================================================================================
+
+0) BASE / HEAD UNCHANGED (no commit, no git write command used)
+--------------------------------------------------------------------------------
+$ git log --oneline -1
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+$ git rev-parse HEAD
+cb0ba6d1ab16571c0c979e41e40951000819f1c7
+→ base sha == HEAD sha == cb0ba6d1ab16571c0c979e41e40951000819f1c7, unchanged. OK.
+
+1) CHANGED FILES (mine — 5 files)
+--------------------------------------------------------------------------------
+  server/src/teams/dto/add-member.dto.ts          (UpdateMemberDto.preferredWorkerId)
+  server/src/teams/teams.service.ts               (updateMember 写入 + toTeamDto 成员行投影)
+  server/src/tasks/tasks.service.ts               (TeamMemberView 闭合类型 + 实例投影)
+  server/src/teams/teams.service.spec.ts          (新用例 a/b/c)
+  server/src/tasks/tasks.service.spec.ts          (新用例 d + 既有精确键集断言补字段)
+NOT touched: server/src/memories/*, server/src/execution-policies/*,
+server/src/common/constants/*, server/src/platform-mcp/*, scripts/, worker/*, web/*.
+
+2) IMPLEMENTATION DETAIL (verbatim new content)
+--------------------------------------------------------------------------------
+2.1 server/src/teams/dto/add-member.dto.ts — UpdateMemberDto（镜像邻居 overrideModelId 的校验形状：
+    @IsOptional() @IsString()，无 MaxLength/无 ValidateIf；@ApiPropertyOptional 描述注明
+    「成员的显式选择优先于团队级设置」「空串/空白/null 表示不覆盖，回退团队级设置」）：
+
+  @ApiPropertyOptional({
+    description:
+      '成员级首选 worker（软引用，存 vteam_worker 的 id；成员的显式选择优先于团队级设置；' +
+      '空串/空白/null 表示不覆盖，回退团队级设置）',
+  })
+  @IsOptional()
+  @IsString()
+  preferredWorkerId?: string | null;
+
+2.2 server/src/teams/teams.service.ts updateMember()（形状照抄 :828-829 overrideModelId；
+    与成员字段的存在性校验（mainAgentMemberId :352-368）故意分歧，一行注释写明理由）：
+
+    // 弱校验（同团队级 preferredWorkerId，见 update()）：worker 是软引用，可达性属运行期事实，纯配置操作不应被节点状态阻断。
+    if (dto.preferredWorkerId !== undefined)
+      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+
+2.3 THE CLOSED-TYPE FIX — server/src/tasks/tasks.service.ts（TeamMemberView 无索引签名；
+    在 overrideModelId? 旁补字段，否则实例投影读取报 TS2339）：
+
+  /** 成员级首选 worker（软引用，成员显式 > 团队 > 自动调度；null/空 = 不覆盖，跟随团队）。 */
+  preferredWorkerId?: string | null;
+
+2.4 三处投影同步（server 两处；web 两处归 Todo 10/11，行号清单见 §7）：
+  a) teams.service.ts toTeamDto 成员行（:1495-1498）：
+      // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
+      // ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
+      preferredWorkerId: m.preferredWorkerId ?? null,
+  b) tasks.service.ts 实例投影（:2033-2037，沿用 :2028-2030 既有踩坑注释同款警示）：
+      // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
+      // ⚠️ 必须与 team DTO（teams.service.ts toTeamDto 成员行）同步返回，缺一处会让
+      // 正确值被 null 覆盖，表现为「切换后回显丢失」（同上方 opencodeAgentName 旧坑）。
+      preferredWorkerId: m.preferredWorkerId ?? null,
+
+  addMember() 未改动（grep 证明该函数体内无 preferredWorkerId ⇒ 新成员该列保持为空）：
+  $ awk '/async addMember\(/,/^  }$/' server/src/teams/teams.service.ts | grep -n preferredWorkerId
+  ADDMEMBER_HAS_FIELD_EXIT=1        （grep 无命中，退出 1）
+
+3) VERIFY — raw output + literal exit codes（无管道取退出码）
+--------------------------------------------------------------------------------
+3.1 $ cd server && npx jest src/teams src/tasks
+    （完整输出落盘 /private/var/folders/.../opencode/jest-final.log，摘要：）
+    PASS src/teams/teams.service.spec.ts
+    PASS src/teams/teams.controller.spec.ts
+    PASS src/teams/seed.spec.ts
+    PASS src/tasks/tasks.service.spec.ts
+    PASS src/tasks/tasks.controller.spec.ts
+    PASS src/tasks/tasks-remove.spec.ts
+    (+ plan-* / task-* 共 16 suites)
+    Test Suites: 16 passed, 16 total
+    Tests:       493 passed, 493 total
+    JEST_EXIT=0
+
+    四个新用例（--verbose 具名，均 ✓）：
+      teams.service.spec.ts（updateMember 边界，位于既有 '空更新 → 直接返回 findOne' 之前）：
+        ✓ preferredWorkerId：成员级设置后读取往返（PATCH member → GET team 回吐，version+1）        [用例 a]
+        ✓ preferredWorkerId：空串/空白串/null → 归一为 null（不覆盖，跟随团队设置）               [用例 b]
+        ✓ 团队 DTO 成员行含 preferredWorkerId（投影同步：缺此字段回显会被 null 覆盖）             [用例 c]
+      tasks.service.spec.ts（新 describe 'preferredWorkerId 投影同步（任务实例 vs 团队 DTO，反发散）'）：
+        ✓ 任务实例投影与团队 DTO 返回同一 preferredWorkerId（缺一侧即读到 null）                  [用例 d]
+    用例 d 内含反发散断言 expect(taskValue).toBe(teamValue)（先各自 assert 为 'w_0000000001'，
+    再断言两值相等）——只投影一侧 ⇒ 另一侧 undefined/null ⇒ 该断言转红。
+
+3.2 $ cd server && npx tsc --noEmit -p tsconfig.json
+    （无输出）
+    TSC_EXIT=0
+    → 这就是 TeamMemberView 闭合类型修复落地的决定性证据（见 §6 stale_state）。
+
+3.3 $ grep -n preferredWorkerId server/src/teams/teams.service.ts server/src/tasks/tasks.service.ts
+    server/src/teams/teams.service.ts:348:    // preferredWorkerId 置顶分支），并回退自动调度。
+    server/src/teams/teams.service.ts:349:    if (dto.preferredWorkerId !== undefined) {
+    server/src/teams/teams.service.ts:350:      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+    server/src/teams/teams.service.ts:830:    // 弱校验（同团队级 preferredWorkerId，见 update()）：worker 是软引用，可达性属运行期事实，纯配置操作不应被节点状态阻断。
+    server/src/teams/teams.service.ts:831:    if (dto.preferredWorkerId !== undefined)
+    server/src/teams/teams.service.ts:832:      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+    server/src/teams/teams.service.ts:1498:      preferredWorkerId: m.preferredWorkerId ?? null,
+    server/src/teams/teams.service.ts:1533:      preferredWorkerId: team.preferredWorkerId ?? null,
+    server/src/tasks/tasks.service.ts:65:  preferredWorkerId?: string | null;
+    server/src/tasks/tasks.service.ts:2037:          preferredWorkerId: m.preferredWorkerId ?? null,
+
+3.4 $ git diff -U0 -- server/src/teams/teams.service.ts server/src/tasks/tasks.service.ts | grep '^@@'
+    @@ -63,0 +64,2 @@ type TeamMemberView = {
+    @@ -2031,0 +2034,4 @@ export class TasksService implements OnModuleInit {
+    @@ -344,0 +345,7 @@ export class TeamsService implements OnModuleInit {
+    @@ -822,0 +830,3 @@ export class TeamsService implements OnModuleInit {
+    @@ -1485,0 +1496,3 @@ export class TeamsService implements OnModuleInit {
+    @@ -1517,0 +1531,3 @@ export class TeamsService implements OnModuleInit {
+
+    Hunk 归属（逐条）：
+      tasks.service.ts（该文件在本次任务开工时的 git status 里【不在】已修改清单中，即工作区
+      相对 HEAD cb0ba6d 干净；HEAD 提交 cb0ba6d 本身对该文件的 memory 改名改动属于既有历史，
+      不是工作区脏改动）：
+        @@ -63,0 +64,2 @@  = 我的（TeamMemberView：1 行 doc 注释 + 1 行字段）
+        @@ -2031,0 +2034,4 @@ = 我的（实例投影：3 行注释 + 1 行字段）
+        → tasks.service.ts 的 2 个 hunk 全部是我的，没有一个 hunk 早于我。
+      teams.service.ts（开工时该文件已在工作区被改脏——Todo 8 团队级写路径先我落地）：
+        @@ -344,0 +345,7 @@  = 非我的，早于我（Todo 8：update() 团队级分支，5 行注释 + 2 行代码），
+                                原样保留未改：
+                                  // 弱校验：与下方 mainAgentMemberId 的存在性校验（:352-368）故意分歧——
+                                  // worker 是软引用，其可用性（在线/离线/容量/模型）是运行期事实，纯配置操作不应
+                                  // 被节点状态阻断；置顶不可用时由分派期 warn 收敛（见 workers.assignWorker 的
+                                  // preferredWorkerId 置顶分支），并回退自动调度。
+                                  if (dto.preferredWorkerId !== undefined) {
+                                    data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+                                  }
+        @@ -822,0 +830,3 @@  = 我的（updateMember 分支：1 行注释 + 2 行代码）
+        @@ -1485,0 +1496,3 @@ = 我的（toTeamDto 成员行：2 行注释 + 1 行字段）
+        @@ -1517,0 +1531,3 @@ = 非我的，早于我（Todo 8：toTeamDto 团队级字段，2 行注释 + 1 行字段），
+                                原样保留未改：
+                                  // 团队级首选 worker（null = 自动调度）；成员级选择优先于本值（见 worker-dispatcher 两级 resolver）。
+                                  // 缺此字段会让页面上的选择被空值悄悄覆盖（既有陷阱，tasks.service.ts 亦有同形注释）。
+                                  preferredWorkerId: team.preferredWorkerId ?? null,
+    我没有重排/重格式化任何邻居代码；编辑全部为纯新增插入。
+
+    另外两个文件的 hunk（同命令未要求但一并留档）：
+      $ git diff -U0 -- server/src/teams/dto/add-member.dto.ts | grep '^@@'
+        @@ -68,0 +69,9 @@ export class UpdateMemberDto {        （全是我的）
+      $ git diff -U0 -- server/src/teams/teams.service.spec.ts | grep '^@@'
+        @@ -716,0 +717,87 @@ describe('TeamsService', () => {     （非我的，Todo 8 团队级 3 例，早于我）
+        @@ -1681,0 +1769,93 @@ describe('TeamsService', () => {   （我的，成员级 3 例 a/b/c）
+      $ git diff -U0 -- server/src/tasks/tasks.service.spec.ts | grep '^@@'
+        @@ -17,0 +18 @@ import { TasksService } from './tasks.service';        （我的：TeamsService import）
+        @@ -1229,0 +1231,2 @@                                               （我的：findAll 精确键集补字段 #1）
+        @@ -1245,0 +1249,2 @@                                               （我的：findAll 精确键集补字段 #2）
+        @@ -5357,0 +5363,57 @@                                             （我的：用例 d 新 describe）
+
+3.5 补充（gate 同款静态检查）：
+    $ npx eslint src/teams/teams.service.ts src/teams/dto/add-member.dto.ts \
+        src/tasks/tasks.service.ts src/teams/teams.service.spec.ts src/tasks/tasks.service.spec.ts
+    （仅 5 条 pre-existing warning：sanitizeWorkDirName 未用、mockCreateTx 未用、sCounter 未用、
+     callArgs 未用、teams.service.ts:109 team 未用——全部位于非我代码；0 error）
+    LINT_EXIT=0
+
+4) MANUAL QA CHANNEL
+--------------------------------------------------------------------------------
+happy（数据库实跑不存在——本机无 MySQL，故用 jest mock 在同一用例内同时驱动两侧投影，
+      等价于「GET /teams/:id 与任务实例投影都返回 w_y」）：
+  输入：成员行 preferredWorkerId='w_0000000001'（同一行同时喂 TeamsService.findOne 的
+        include members 与 TasksService.findOne→toTaskDto 的 teamMember.findMany）。
+  输出：teamDto.members[0].preferredWorkerId === 'w_0000000001'
+        taskDto.instances[i].preferredWorkerId === 'w_0000000001'
+        且 expect(taskValue).toBe(teamValue) 通过。
+  ✓ 任务实例投影与团队 DTO 返回同一 preferredWorkerId（缺一侧即读到 null） (4 ms)
+  GREEN_EXIT=0
+
+failure（反发散突变）：临时【只】删除 tasks.service.ts 实例投影的值行
+  （sed -i '' '2037d'，保留类型字段与全部注释），复跑用例 d：
+    $ npx jest src/tasks/tasks.service.spec.ts -t "任务实例投影与团队 DTO 返回同一 preferredWorkerId"
+    FAIL src/tasks/tasks.service.spec.ts
+      TasksService › preferredWorkerId 投影同步（任务实例 vs 团队 DTO，反发散） › 任务实例投影与团队 DTO 返回同一 preferredWorkerId（缺一侧即读到 null）
+        expect(received).toBe(expected) // Object.is equality
+        Expected: "w_0000000001"
+        Received: undefined
+        > 5413 |       expect(taskValue).toBe('w_0000000001');
+      Tests: 1 failed, 140 skipped, 141 total
+    RED_EXIT=1
+  随后从备份整文件还原（cp 回原文件，diff 校验 IDENTICAL_TO_POST_EDIT_BACKUP, DIFF_EXIT=0），复跑：
+      ✓ 任务实例投影与团队 DTO 返回同一 preferredWorkerId（缺一侧即读到 null） (4 ms)
+      Tests: 1 passed, 140 skipped, 141 total
+    GREEN_EXIT=0
+  → 证明用例 d 真的能抓住「只投影一侧」的既有踩坑，不是恒绿断言。
+
+  （过程中的一次操作失误如实记录：还原 cp 曾因工作目录已在 server/ 而路径写成
+   server/src/... 导致 cp 失败、文件仍处突变态；当即用正确相对路径 src/tasks/tasks.service.ts
+   重做还原并以 diff 校验字节一致，最终恢复绿色。未使用任何 git 写命令。）
+
+5) ADVERSARIAL CLASSES
+--------------------------------------------------------------------------------
+misleading_success_output：本节所有退出码均以「命令 ; echo XXX_EXIT=$?」原样捕获，
+  未经过管道（zsh 下 PIPESTATUS 为空，故一次早期 tail 管道取到的值已作废并重跑无管道版本）。
+  jest/tsc/eslint 的红与绿都有对应原文；突变态有 RED_EXIT=1 原文，不是口头描述。
+
+dirty_worktree：本次仅新增/修改上述 5 个文件（§1）。开工时就存在的兄弟流脏改动
+  （server/src/platform-mcp/*、msg-parts.tsx、agents/*、workers/*、worker-dispatcher.*、
+  update-team.dto.ts、schema.prisma、docs/agent-platform/*、web/*、.omo/* 等）我一个都没动、
+  没 stage、没 revert。索引为空：
+    $ git diff --cached --name-only        （无输出）
+    $ git diff --cached --stat | wc -l
+    0
+  （对 tasks.service.ts 的共享警告已按规程处理：编辑前重读当前内容、只做最小新增插入、
+   不重排邻居代码；该文件中早于我的内容为零——见 §3.4 归属表。）
+
+stale_state（TeamMemberView 是「派生/缓存形状」为何 tsc 是决定性证据）：
+  TeamMemberView 是 tasks.service.ts 内部手写闭合类型，不从 Prisma 客户端生成，也无索引签名；
+  它是「team_members 行 + agent 关联」的缓存镜像，运行期不会有任何东西替它补字段。实例投影
+  （toTaskDto）按结构读取 m.preferredWorkerId，缺字段只报类型错、运行期仍可悄悄产出 undefined
+  （jest 若不开诊断甚至可能放行）。因此「字段已加」不能靠 jest 绿证明，必须靠 tsc 全量类型检查：
+  我做了定向突变验证——只删类型字段、保留投影读取：
+    $ sed -i '' '64,65d' server/src/tasks/tasks.service.ts && npx tsc --noEmit -p tsconfig.json
+    src/tasks/tasks.service.ts(2035,32): error TS2339: Property 'preferredWorkerId' does not exist on type 'TeamMemberView'.
+    TSC_MUTANT_EXIT=2
+  还原后 TSC_RESTORED_EXIT=0。即：tsc 通过 ⇒ 闭合类型先于读取被更新；tsc 是唯一能证伪这一点的大门。
+
+6) WEB 侧行号清单（Todo 10/11 的消费点，本 todo 不编辑，仅列出）
+--------------------------------------------------------------------------------
+  web/src/api/teams.ts
+    :10  export interface TeamMemberDto {          → 需加 preferredWorkerId?: string | null
+    :18    overrideModelId?: string | null;         （邻居字段，紧邻其后插入）
+    :42  export interface TeamDto {                 （团队级，Todo 10）
+  web/src/components/tasks/task-detail-types.ts
+    :129 export interface MemberView {              （计划里标注的 :22/:128-137 区域实测为
+    :137   overrideModelId?: string | null;          :129-138 的 MemberView；紧邻 :137 后插入）
+  另：任务实例投影的同名消费点还出现在 web/src/components/tasks/task-detail-types.ts 之外
+  的会话页成员面板（currentTask.instances）。具体以 Todo 10/11 执行时重读为准。
+
+7) MUST-NOT 自检
+--------------------------------------------------------------------------------
+- addMember() 未改：新成员 preferredWorkerId 一律为空（§2 grep 退出 1 证明函数体内无该字段）。
+- resolveMemberBinding / 角色预填逻辑未动。
+- 未给成员字段加存在性校验（弱校验 + 一行注释，见 §2.2）。
+- web 文件零编辑（只读列行号）。
+- 兄弟占有的路径（memories/execution-policies/common-constants/platform-mcp/scripts/worker）零编辑。
+- 无任何 git 写命令（无 add/commit/stash/checkout/reset）。
+================================================================================

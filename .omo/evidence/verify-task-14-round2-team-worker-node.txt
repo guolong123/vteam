@@ -1,0 +1,348 @@
+================================================================================
+INDEPENDENT VERIFICATION — ROUND 2 — Todo 14 (team-worker-node.md)
+================================================================================
+VERDICT      : needs-fix
+CONFIDENCE   : 0.97
+VERIFIED BY  : read-only independent verifier (round 2)
+REPO         : /Volumes/SSD-Data/01work/git-project/vteam
+PLAN         : .omo/plans/team-worker-node.md  (Todo 14 block, immediately above
+               the "## Final verification wave" heading)
+DATE         : 2026-10-14
+HEAD         : b6840d1cd72cd536108457d3e78f6bcf54c548ec  (unchanged — no commit)
+SCOPE NOTE   : server/prisma/schema.prisma, server/src/workers/*, web/... and the
+               other .omo/evidence/*.txt files belong to CONCURRENT sibling lanes
+               (plan Todos 3/6). They are NOT attributed to Todo 14 and are NOT
+               treated as defects here.
+
+--------------------------------------------------------------------------------
+BOTTOM LINE
+--------------------------------------------------------------------------------
+The round-1 defect was PARTIALLY fixed: the `65` was removed from the §4 C5 quote
+(line 142), which is now byte-exact at 14 numbers, but the SAME 15-token list —
+`65` included — still survives at line 51 inside §2.1 (行号位移公告). §2.1's
+before-list therefore has 15 elements against a 14-element after-list, its
+"逐条 +3" claim is arithmetically false as written, and it directly contradicts
+§9's post-fix narrative and its own corrected restatement at line 376. The file
+now contradicts itself, which is a blocker under the round-2 scope rule (a
+cosmetic note would not be; this is a self-contradiction in the artifact under
+review).
+
+Smallest concrete fix (ONE token, 3 bytes, line 51 only):
+  sed -i '' '51s/,65,/,/' .omo/evidence/task-receipt-fix-team-worker-node.txt
+Resulting line 51:
+  {1,48,58,59,64,68,72,78,86,94,97,103,106,109} 现为
+This makes §2.1 lines 51-53 internally consistent (14 -> 14) and restores the
+documented invariant `[before[0]] + [b+3 for b in before[1:]] == after`.
+Verified by simulation below.
+
+--------------------------------------------------------------------------------
+FILE UNDER TEST — mtime / size
+--------------------------------------------------------------------------------
+$ stat -f 'name=%N size=%z mtime=%Sm' -t '%Y-%m-%d %H:%M:%S' <files>
+name=.omo/evidence/task-receipt-fix-team-worker-node.txt size=26843 mtime=2026-10-14 11:53:25
+name=.omo/evidence/task-1-team-worker-node.txt         size=6487  mtime=2026-10-14 11:46:38
+name=.omo/evidence/task-2-team-worker-node.txt         size=13373 mtime=2026-10-14 11:46:57
+
+Interpretation: receipt-fix mtime 11:53:25 matches §9's own stamp
+"采集于 2026-10-14T03:53Z" (11:53 local, UTC+8). The two TARGET receipts still
+carry mtimes 11:46:38 / 11:46:57 — i.e. unchanged since before the correction
+round, corroborating §8/§9's claim of "lane 2 对两份既有回执零写入". So the
+§9 narrative's timing story matches the bytes on disk. Only the correction's
+COMPLETENESS is wrong: it was applied at line 142 but not at line 51.
+
+$ wc -l <receipt-fix>   ->  389
+
+Section structure (no duplicated sections; sections 1-9 each appear once):
+  6:1. 本次修改的文件（仅 2 份既有回执 + 本文件）
+ 14:2. 变更 A — task-1-team-worker-node.txt（脏基线 13/14 行误判）
+ 47:### 2.1 行号位移公告（供 Todo 13 与 F4 相对比较）
+ 56:3. 变更 B — task-2-team-worker-node.txt §6 diffstat（实测为准）
+ 88:4. 原始命令输出（全部现场执行，实时重算，未复制任务简报中的数字）
+217:5. CLEANUP
+226:6. 收尾补记（两条自查，避免下游误读）
+248:7. 二次独立复核（并发 lane 2，采集于 2026-10-14T03:52Z）
+342:8. lane 2 的 CLEANUP
+357:9. DEFECT-1 的一 token 更正（lane 2 追加，采集于 2026-10-14T03:53Z）
+
+================================================================================
+CHECK 1 — IS THE DEFECT GONE?  ANSWER: PARTIALLY.  §4 C5 YES / §2.1 NO.
+================================================================================
+
+--- 1a. The §4 C5 quote (line 142) is byte-exact at 14 numbers, no `65` ---
+
+$ sed -n '142p' .omo/evidence/task-receipt-fix-team-worker-node.txt | od -c
+0000000    v   e   r   i   f   y      回  **  **  执  **  **   C   2
+0000020    1      的  **  **       1   4      个  **  **       d   u   m
+0000040    p      行  **  **  号  **  **   :           1       4   8
+0000060    5   8       5   9       6   4       6   8       7   2       7
+0000100    8       8   6   9   4   9   7   1   0   3       1
+0000120    0   6       1   0   9  \n
+0000127
+
+$ sed -n '142p' ... | sed 's/^[^:]*: *//' | tr ' ' '\n' | grep -c .
+14
+$ sed -n '142p' ... | sed 's/^[^:]*: *//' | tr ' ' '\n' | grep . | tr '\n' ' '
+1 48 58 59 64 68 72 78 86 94 97 103 106 109
+$ sed -n '142p' ... | sed 's/^[^:]*: *//' | tr ' ' '\n' | grep -x '65'; echo exit=$?
+exit=1                      <- no bare token 65 on that line. DEFECT CLEARED HERE.
+
+--- 1b. THE §2.1 QUOTE (line 51) STILL CARRIES THE `65` — 15 TOKENS ---
+
+Line 50-53 (verbatim read of the surrounding claim):
+ 50: 实测证据见 §4 C5：verify 回执 C21 列出的 14 个 dump 行号
+ 51: {1,48,58,59,64,65,68,72,78,86,94,97,103,106,109} 现为
+ 52: {1,51,61,62,67,71,75,81,89,97,100,106,109,112} —— 逐条 +3，条数不变，
+ 53: **无内容丢失、无重复、无截断**。文件 117→120 行（`wc -l` 117→120，+3 自洽）。
+
+$ sed -n '51p' .omo/evidence/task-receipt-fix-team-worker-node.txt | od -c
+0000000    {   1   ,   4   8   ,   5   8   ,   5   9   ,   6   4   ,   6
+0000020    5   ,   6   8   ,   7   2   ,   7   8   ,   8   6   ,   9   4
+0000040    ,   9   7   ,   1   0   3   ,   1   0   6   ,   1   0   9   }
+0000060       现  **  **  为  **  **  \n
+0000070
+
+$ sed -n '51p' ... | tr ',' '\n' | grep -c .
+15                                   <- 15 tokens while line 50 says "14 个"
+
+Bytes `6 5 ,` at offset 0000020-0000021 are the stray token, unambiguously
+present in the file (this is a byte-level read, not a rendered/parsed read).
+
+Note this is NOT a historical BEFORE-quote: sections 2 and 3 mark their
+historical blocks explicitly with `[ BEFORE — 原第 180 / 182 行，逐字 ]` /
+`[ AFTER — 现第 180 / 182 行，逐字 ]` (lines 58, 62) and lines 20/21 with
+`[ AFTER — 新第 30-34 行，逐字 ]`. §2.1 carries no such marker and uses the
+present-tense word 现为 ("is now"), so line 51 is a LIVE assertion.
+
+--- 1c. Line 51's "逐条 +3" claim is arithmetically false as written ---
+
+$ python3 -c "before=1,48,58,59,64,65,68,72,78,86,94,97,103,106,109 ;
+              after =1,51,61,62,67,71,75,81,89,97,100,106,109,112 ; ..."
+before len 15 after len 14
+elementwise deltas: [0, 3, 3, 3, 3, 6, 7, 9, 11, 11, 6, 9, 6, 6]
+all +3? False
+correct mapping [b0]+[b+3...] == [1, 51, 61, 62, 67, 68, 71, 75, 81, 89, 97, 100, 106, 109, 112]
+matches after? False
+
+So §2.1 simultaneously asserts (i) 14 numbers, (ii) prints 15, (iii) claims
+element-wise +3, which is false. Three-way self-contradiction inside one
+3-line paragraph.
+
+================================================================================
+CHECK 1 (cont.) — THE AUTHORITATIVE LIVE CENSUS AND THE +3 RELATIONSHIP
+================================================================================
+
+$ grep -n 'dump' .omo/evidence/task-1-team-worker-node.txt | cut -d: -f1 | tr '\n' ' '
+1 51 61 62 67 71 75 81 89 97 100 106 109 112
+$ ... | wc -l
+14
+
+Live census = [1, 51, 61, 62, 67, 71, 75, 81, 89, 97, 100, 106, 109, 112] (14).
+
+Corrected C21 quote at line 142 = [1, 48, 58, 59, 64, 68, 72, 78, 86, 94, 97,
+103, 106, 109] (14).
+
+Relationship (programmatic, line 376-378 of the receipt-fix file):
+  before = [1, 48, 58, 59, 64, 68, 72, 78, 86, 94, 97, 103, 106, 109]
+  after  = [1, 51, 61, 62, 67, 71, 75, 81, 89, 97, 100, 106, 109, 112]
+  deltas = [0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+  => [before[0]] + [b+3 for b in before[1:]] == after  ->  True
+  => count 14 -> 14, len(set) == 14  (no loss, no duplication, no truncation)
+
+Explanation of why the first element does NOT shift: the replaced block (the
+14-row porcelain block in task-1 §D1, replaced at lines 30-34) grew from 2 rows
+to 5 rows (+3 rows). The `dump` occurrence on line 1 of task-1 sits ABOVE that
+replaced block (line 1 is the file's first line), so it is untouched by the
+insertion and stays at 1. Every `dump` occurrence at line >= 48 lies BELOW the
+replaced block and shifts by exactly +3. This is exactly the rule §2.1 states at
+line 48-49 ("第 30 行及其之后的所有行号统一 +3；第 1-29 行（含 14 行 porcelain
+原始输出块、base-sha）行号不变") and line 53 ("文件 117→120，+3 自洽").
+
+The receipt-fix file's own re-derivation at lines 376-377 is byte-consistent with
+this, and line 328 (§7 L5) states the same rule in abbreviated form. So the
+SHIFT LOGIC is correct and reproducible; only line 51's before-list is corrupt.
+
+================================================================================
+CHECK 2 — COHERENCE AFTER MULTIPLE WRITERS
+================================================================================
+
+Structure: 9 numbered sections, each appearing exactly once — no duplicated
+section. §7, §8, §9 are explicitly lane-2 appendices with distinct collection
+stamps (03:52Z / 03:52Z / 03:53Z) and do not overlap the lane-1 body
+(sections 1-6). No interleaved/merged append corruption observed.
+
+Line references resolve:
+  - §9 line 360 points at "verify-task-14-team-worker-node.txt 第 180-215 行"
+    (DEFECT-1 region of round 1) — in range for a 20469-byte file.
+  - §9 line 368-371 re-derive the pre-correction C21 list via
+    `sed -n '469,482p' verify-task-1-team-worker-node.txt`; that line range is
+    in range for the 33688-byte verify file.
+  - §2.1 line 50 cites "§4 C5" and §4 spans lines 88-216 — consistent.
+
+Line 51/52 numerical self-contradiction: CONFIRMED DEFECT (see 1b/1c).
+
+Contradiction map (the file disagrees with itself in three places):
+  line  50/51 : "14 个" ... prints 15 tokens (STALE — the defect survives)
+  line 142    : 14 tokens, no 65 (CORRECT)
+  line 376    : before(14) = [1,48,58,59,64,68,72,78,86,94,97,103,106,109] (CORRECT)
+  line  52    : "逐条 +3，条数不变" (FALSE as printed on line 51; true on line 376)
+
+§9 narrative vs bytes: §9 says (line 364) "处置：采纳 DEFECT-1 给出的最小修复，
+删除该行中的 `65`（一个 token）" and self-checks ONLY line 142 (lines 383-384).
+§9's scope word is singular "该行" — the fix lane located one occurrence and
+fixed one occurrence, then declared the defect closed. The §9 self-check is
+itself reproducible and truthful about the line it checked:
+  $ sed -n '142p' ... | grep -o '[0-9]\+' | wc -l
+  16
+which correctly reconciles as "标签里的 21 与 14 两个数字；冒号之后的清单恰为
+14 个" (2 label numbers + 14 list items = 16). So §9 is internally honest — it
+simply did not sweep for the duplicate. This is an incomplete fix, not a
+false narrative.
+
+================================================================================
+CHECK 3 — THE TWO TARGET RECEIPTS REMAIN BYTE-CORRECT
+================================================================================
+
+--- 3a. task-1 porcelain block = 14 entries; 5 orchestration vs 9 baseline ---
+
+$ sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+$ sed -n '15,28p' ... | grep -c .
+14
+
+5 orchestration artifacts (this plan's own products), named separately:
+  .omo/boulder.json, .omo/ulw-execute/ledger.jsonl, .omo/plans/team-worker-node.md,
+  .omo/drafts/team-worker-node.md, .omo/notepads/team-worker-node/        -> 5
+9 pre-existing baseline dirty files:
+  phase5-t9-playwright.json, plan-review-execution-gates/task-9/probe.json,
+  server-gate-removal-tool-authority/task-9-matrix.json, platform-mcp x5,
+  web/src/components/chat/msg-parts.tsx                                  -> 9
+5 + 9 = 14. PASS. task-1 mtime 11:46:38 (untouched by the fix round).
+
+--- 3b. Anti-pandering assertion ---
+
+$ grep -c "部署前须补 dump" .omo/evidence/task-1-team-worker-node.txt
+0
+PASS (count is 0; the phrase does not occur anywhere in task-1).
+
+--- 3c. task-2 §6 diffstat byte-identical to live ---
+
+$ git diff --shortstat -- server/src/agents
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+$ git diff --stat -- server/src/agents
+ server/src/agents/agents.service.spec.ts  |  6 ------
+ server/src/agents/agents.service.ts       |  7 +------
+ server/src/agents/dto/update-agent.dto.ts | 11 -----------
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+
+$ sed -n '176,186p' .omo/evidence/task-2-team-worker-node.txt
+$ git diff --stat -- server/src/agents
+ server/src/agents/agents.service.spec.ts  |  6 ------
+ server/src/agents/agents.service.ts       |  7 +------
+ server/src/agents/dto/update-agent.dto.ts | 11 -----------
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+
+$ diff <(sed -n '179,182p' .omo/evidence/task-2-team-worker-node.txt) \
+       <(git diff --stat -- server/src/agents)
+IDENTICAL (diff exit=0)
+$ diff <(sed -n '182p' .omo/evidence/task-2-team-worker-node.txt) \
+       <(git diff --shortstat -- server/src/agents)
+IDENTICAL
+
+$ grep -n "22 deletions\|3 insertions\|8 ++------\|11 +----------" \
+       .omo/evidence/task-2-team-worker-node.txt
+exit=1                      <- no stale diffstat values survive.
+PASS. task-2 mtime 11:46:57 (untouched by the fix round).
+
+================================================================================
+CHECK 4 — NO-COMMIT / ATTRIBUTION
+================================================================================
+$ git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+$ git rev-parse HEAD
+b6840d1cd72cd536108457d3e78f6bcf54c548ec
+PASS — HEAD unchanged at b6840d1c.
+
+Working tree (git status --porcelain) contains M server/prisma/schema.prisma,
+M server/src/workers/workers.service.ts(+spec), M web/app/(main)/agents/page.tsx,
+M web/e2e/reference/testids.ts, and the sibling .omo/evidence/task-{3,4,6}-*.txt
+files. These are attributed to CONCURRENT sibling lanes (plan Todos 3/6) and are
+explicitly OUT OF SCOPE for Todo 14 per the verification brief — NOT defects.
+
+No git add / commit / stash / checkout was executed by this verifier. This
+verifier wrote exactly one file: this artifact.
+
+================================================================================
+MINIMAL FIX (if accepted) — pre-verified by simulation
+================================================================================
+$ sed -i '' '51s/,65,/,/' .omo/evidence/task-receipt-fix-team-worker-node.txt
+
+OLD  : {1,48,58,59,64,65,68,72,78,86,94,97,103,106,109} 现为
+NEW  : {1,48,58,59,64,68,72,78,86,94,97,103,106,109} 现为
+byte delta: 3 bytes shorter (one token)
+
+$ python3 simulation of the post-fix §2.1 paragraph:
+fixed before-list len 14 == after len 14 : True
+mapping holds: True
+deltas: [0, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+
+After this one-token edit the file has NO internal contradiction: every C21
+quote in the artifact (lines 51, 142, 376) carries the identical 14-element
+list, matches the live 14-element census under the documented "line 1 anchored /
+everything >= the replaced block shifts +3" rule, and §2.1's "条数不变 / 逐条 +3"
+claim becomes true. Optional (cosmetic, NOT required): §9 line 364 could say
+"两处引用" instead of the singular "该行" so the correction note records that
+both occurrences were addressed. Non-blocking either way.
+
+================================================================================
+EVIDENCE / REPRO COMMANDS (copy-paste, cwd = repo root)
+================================================================================
+git rev-parse HEAD
+git log --oneline -1
+F=.omo/evidence/task-receipt-fix-team-worker-node.txt
+sed -n '142p' "$F" | od -c
+sed -n '142p' "$F" | sed 's/^[^:]*: *//' | tr ' ' '\n' | grep -c .
+sed -n '142p' "$F" | sed 's/^[^:]*: *//' | tr ' ' '\n' | grep . | tr '\n' ' '
+sed -n '142p' "$F" | sed 's/^[^:]*: *//' | tr ' ' '\n' | grep -x '65'; echo exit=$?
+sed -n '51p' "$F" | od -c
+sed -n '51p' "$F" | tr ',' '\n' | grep -c .
+sed -n '51p' "$F" | tr ',' '\n' | sed 's/[{}]//g' | tr -d ' ' | grep . | tr '\n' ' '
+grep -n 'dump' .omo/evidence/task-1-team-worker-node.txt | cut -d: -f1 | tr '\n' ' '
+grep -n '\b65\b' "$F"
+stat -f 'name=%N size=%z mtime=%Sm' -t '%Y-%m-%d %H:%M:%S' "$F" \
+     .omo/evidence/task-1-team-worker-node.txt \
+     .omo/evidence/task-2-team-worker-node.txt
+grep -c "部署前须补 dump" .omo/evidence/task-1-team-worker-node.txt
+git diff --shortstat -- server/src/agents
+diff <(sed -n '179,182p' .omo/evidence/task-2-team-worker-node.txt) \
+     <(git diff --stat -- server/src/agents) && echo IDENTICAL
+sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt | grep -c .
+
+================================================================================
+CONFIDENCE : 0.97
+================================================================================
+All cited numbers were read from BYTES (od -c / tr / grep -c / diff), not from
+a rendered file view — deliberately, because the two prior lanes disagreed about
+what a rendered read of line 142/51 showed. The 15-token list at line 51 is
+confirmed by three independent byte-level methods (od -c showing the literal
+`6 5 ,` byte sequence; `tr ',' '\n' | grep -c .` = 15; and a python token
+parse). Checks 3 and 4 pass cleanly and are reproducible. Residual 0.03
+uncertainty: whether the plan owner considers §2.1's paragraph "in scope" for
+the round-1 defect (it quotes the same list under the same "14 个" label), but
+given the file now contradicts itself in three places, needs-fix is the only
+defensible verdict under the stated rule that self-contradiction is a blocker.
+================================================================================
+END OF ROUND-2 VERDICT
+================================================================================

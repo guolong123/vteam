@@ -1,0 +1,481 @@
+TASK 3 — web 与原型删除 Agent「首选 Worker」下拉与 testid 清单条目
+base-sha: b6840d1cd72cd536108457d3e78f6bcf54c548ec
+
+SCOPE NOTE (grep scoping — deliberately source-dir scoped):
+All greps below are scoped to source paths (web/app web/src web/e2e docs and the
+narrowed agents surface). They are NOT written as a bare `grep -rn ... web docs`,
+because web/.next/ is gitignored build output and yields 18 stale hits, which would
+make the acceptance criterion unsatisfiable and the mutation check meaningless.
+Similarly `首选 Worker` grep is narrowed to `web/app/(main)/agents` +
+web/src/components/agents + docs/agent-platform, because the teams surface will
+legitimately gain that wording in Todo 10/11.
+
+START WORKTREE (raw `git status --porcelain`, before my edits) — pre-existing dirt I did NOT touch:
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/evidence/task-1-team-worker-node.txt
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+
+BASELINE restart feature count:
+$ grep -c "restart" "web/app/(main)/agents/page.tsx"
+16
+
+CHANGES (4 files, deletion-only):
+  web/app/(main)/agents/page.tsx                     | 63 +---------------------
+  web/e2e/reference/testids.ts                       |  2 +-
+  docs/.../prototypes/agent-config/index.tsx        | 52 +-----------------
+  docs/.../prototypes/agent-manage/index.tsx        | 15 +-----
+ 4 files changed, 6 insertions(+), 126 deletions(-)
+Deleted: AgentItem.workerId, UpdateAgentPayload.workerId, workerDraft state,
+workerId: workerDraft || null payload line, sortedWorkers, sub-header
+"默认模型 · 凭据 · 首选 Worker" -> "默认模型 · 凭据", whole dropdown block
+(data-testid="agent-worker-select"), testids.ts "agent-worker-select" entry,
+agent-config header comment mention + workerPool mock + its UI block,
+agent-manage header comment mention (:20) + `worker: string` type field +
+<Field label="首选 Worker"> + 9 mock `worker:` keys.
+KEPT: workersQuery (:2847-2852 area), `workers` prop, ApiWorkerRow — still consumed
+by EffectivePermissionSection "restart all workers".
+NOT added: any compatibility hint for silent no-op save.
+
+--------------------------------------------------------------
+QA happy:
+$ cd /Volumes/SSD-Data/01work/git-project/vteam/web && npx tsc --noEmit; echo "TSC_EXIT=$?"
+TSC_EXIT=0
+
+$ cd /Volumes/SSD-Data/01work/git-project/vteam/web && npm run lint 2>&1 | tail -1
+✖ 729 problems (0 errors, 729 warnings)
+   (729 pre-existing warnings. 0 errors. NOT all outside my files: an independent
+    `npm run lint` reports 2 warnings IN web/app/(main)/agents/page.tsx —
+    1511:187 'deleting' is defined but never used and 2701:9 react-hooks/exhaustive-deps —
+    both PRE-EXISTING and untouched by this diff (line 1511 'deleting' is not part of the
+    removed 首选 Worker block; no warning references workerId/workerDraft/sortedWorkers).
+    Prototypes have 0 warnings.)
+
+$ grep -rn "agent-worker-select" web/app web/src web/e2e docs; echo "EXIT=$?"
+EXIT=1        (0 hits)
+
+$ grep -rn "首选 Worker" "web/app/(main)/agents" web/src/components/agents docs/agent-platform; echo "EXIT=$?"
+EXIT=1        (0 hits)
+
+$ grep -c "workerDraft\|sortedWorkers" "web/app/(main)/agents/page.tsx"
+0
+
+$ grep -c "restart" "web/app/(main)/agents/page.tsx"
+16      <- equals baseline 16; restart-all-workers feature intact
+
+--------------------------------------------------------------
+QA failure / mutation (prove group cleanup is required):
+Backup: cp "app/(main)/agents/page.tsx" "$TMPDIR/t3-page.bak"
+Mutation: reintroduce a single `workerDraft` reference as a statement
+  `const _mut = workerDraft;` before the `return (` of AgentConfigPanel.
+$ npx tsc --noEmit; echo "MUT_TSC_EXIT=$?"
+1556:  const _mut = workerDraft;
+app/(main)/agents/page.tsx(1556,16): error TS2304: Cannot find name 'workerDraft'.
+MUT_TSC_EXIT=2
+(First mutation attempt was malformed — `const staleModel = const _mut = ...;` —
+ and produced error TS1109: Expression expected; that was my scripting mistake, not
+ the intended signal. Redone with a clean standalone statement to get the real
+ TS2304 name-resolution error. Both are recorded here for honesty.)
+
+Cleanup / restore receipt:
+$ cp "$TMPDIR/t3-page.bak" "app/(main)/agents/page.tsx"
+$ grep -c "_mut\|workerDraft" "app/(main)/agents/page.tsx"
+0
+$ npx tsc --noEmit; echo "RESTORED_TSC_EXIT=$?"
+RESTORED_TSC_EXIT=0
+$ grep -c "restart" "web/app/(main)/agents/page.tsx"
+16
+Mutation fully reverted; no residue in the tree.
+
+--------------------------------------------------------------
+FINAL git status --porcelain (raw):
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M docs/agent-platform/prototypes/agent-config/index.tsx     <- MINE
+ M docs/agent-platform/prototypes/agent-manage/index.tsx     <- MINE
+ M server/src/agents/agents.service.spec.ts                   <- sibling worker (Todo 2)
+ M server/src/agents/agents.service.ts                        <- sibling worker (Todo 2)
+ M server/src/agents/dto/update-agent.dto.ts                  <- sibling worker (Todo 2)
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts    <- PRE-EXISTING dirt, untouched
+ M server/src/platform-mcp/platform-mcp.controller.ts          <- PRE-EXISTING dirt, untouched
+ M server/src/platform-mcp/platform-mcp.service.spec.ts        <- PRE-EXISTING dirt, untouched
+ M server/src/platform-mcp/platform-mcp.service.ts             <- PRE-EXISTING dirt, untouched
+ M server/src/platform-mcp/platform-mcp.tools.ts               <- PRE-EXISTING dirt, untouched
+ M server/src/workers/workers.service.spec.ts                 <- sibling worker (Todo 4)
+ M server/src/workers/workers.service.ts                      <- sibling worker (Todo 4)
+ M web/app/(main)/agents/page.tsx                              <- MINE
+ M web/e2e/reference/testids.ts                                <- MINE
+ M web/src/components/chat/msg-parts.tsx                      <- PRE-EXISTING dirt, untouched
+?? .omo/drafts/team-worker-node.md
+?? .omo/evidence/task-1-team-worker-node.txt
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+
+No git write command was executed (no add/commit/stash/checkout) — the
+orchestrator commits after independent verification.
+
+OUT-OF-SCOPE DEFECT OBSERVED, NOT FIXED (per rule c):
+docs/agent-platform/prototypes/agent-manage/index.tsx:11 still lists `workerId` in a
+header comment ("defaultModelId / workerId / persona / policyId"). That is not the
+literal string "首选 Worker" and was not in Todo 3's enumerated list, so I left it
+alone; flagging it for Todo 13 / the agent-config prototype pass.
+
+==============================================================
+FIX LOOP 1 (verifier-found defects D1-D4; no other file touched)
+==============================================================
+Scope discipline: the previous run's removals all passed and were NOT redone.
+Only the four defects below were repaired. No git write command was run
+(no add/commit/stash/checkout); HEAD is still the orchestrator's.
+
+--------------------------------------------------------------
+D1 (product, REAL): web/e2e/reference/testids.ts:156
+The previous run BLANKED the line to six spaces instead of deleting it,
+leaving a whitespace-only line inside the PAGES array.
+
+BEFORE:
+$ sed -n '150,160p' web/e2e/reference/testids.ts | sed -n l
+      "model-config",$
+      "model-select",$
+      "model-option-provider",$
+      "model-token-status",$
+      "model-token-input",$
+      "model-credential-status",$
+      $                        <-- whitespace-only line, the defect
+      "model-stale-warning",$
+      "model-source-hint",$
+      "skill-empty",$
+      "effective-permission-section",$
+$ git diff --numstat -- web/e2e/reference/testids.ts
+1	1	web/e2e/reference/testids.ts
+$ git diff --check -- web/e2e/reference/testids.ts; echo "exit=$?"
+web/e2e/reference/testids.ts:156: trailing whitespace.
++      
+exit=2
+
+FIX: delete line 156 entirely (no replacement line).
+
+AFTER:
+$ sed -n '152,158p' web/e2e/reference/testids.ts | sed -n l
+      "model-option-provider",$
+      "model-token-status",$
+      "model-token-input",$
+      "model-credential-status",$
+      "model-stale-warning",$
+      "model-source-hint",$
+      "skill-empty",$
+$ git diff --numstat -- web/e2e/reference/testids.ts
+0	1	web/e2e/reference/testids.ts
+$ git diff --check -- web/e2e/reference/testids.ts; echo "exit=$?"
+exit=0
+$ git diff -- web/e2e/reference/testids.ts
+diff --git a/web/e2e/reference/testids.ts b/web/e2e/reference/testids.ts
+index 91217e7..009a39d 100644
+--- a/web/e2e/reference/testids.ts
++++ b/web/e2e/reference/testids.ts
+@@ -153,7 +153,6 @@ export const PAGES: PageTestidRef[] = [
+       "model-token-status",
+       "model-token-input",
+       "model-credential-status",
+-      "agent-worker-select",
+       "model-stale-warning",
+       "model-source-hint",
+       "skill-empty",
+Single clean 1-line deletion; no gap, no stray testid removed.
+
+--------------------------------------------------------------
+D1 MUTATION CHECK (RED -> GREEN)
+First attempt was malformed: I prepended a space to line 156
+(`sed -i '' '156s/^/ /'`), which yields a LEADING-space line, not
+trailing whitespace -- so `git diff --check` correctly stayed green
+(exit=0) and numstat went to 1 2. That is NOT the defect shape.
+Reverted it (`156s/^ //` -> back to 0 1, exit=0) and mutated the
+correct way: insert a whitespace-only line (the original defect).
+
+RED:
+$ sed -i '' '155a\
+ ' web/e2e/reference/testids.ts
+$ sed -n '154,158p' web/e2e/reference/testids.ts | sed -n l
+      "model-token-input",$
+      "model-credential-status",$
+ $
+      "model-stale-warning",$
+      "model-source-hint",$
+$ git diff --check -- web/e2e/reference/testids.ts; echo "RED_exit=$?"
+web/e2e/reference/testids.ts:156: trailing whitespace.
++ 
+RED_exit=2
+$ git diff --numstat -- web/e2e/reference/testids.ts
+1	1	web/e2e/reference/testids.ts
+RED reproduces the exact signature the verifier reported (exit 2 +
+"trailing whitespace" at :156 + numstat 1 1), so the check has teeth.
+
+GREEN (reverted):
+$ sed -i '' '156d' web/e2e/reference/testids.ts
+$ sed -n '152,158p' web/e2e/reference/testids.ts | sed -n l
+      "model-option-provider",$
+      "model-token-status",$
+      "model-token-input",$
+      "model-credential-status",$
+      "model-stale-warning",$
+      "model-source-hint",$
+      "skill-empty",$
+$ git diff --numstat -- web/e2e/reference/testids.ts
+0	1	web/e2e/reference/testids.ts
+$ git diff --check -- web/e2e/reference/testids.ts; echo "GREEN_exit=$?"
+GREEN_exit=0
+
+--------------------------------------------------------------
+D2 (product, REAL): docs/agent-platform/prototypes/agent-manage/index.tsx:816
+"执行节点" was the plain-language label of the removed 首选 Worker field, so
+the section subtitle was a stale mention. The sibling header at :20 was
+already correctly updated to "② 运行参数：默认模型 / 性格"; :816 was missed.
+
+BEFORE:
+$ sed -n '816p' docs/agent-platform/prototypes/agent-manage/index.tsx
+            <Section index="②" title="运行参数" sub="模型 / 执行节点 / 性格 —— 都是 Agent 自己的属性，不属于岗位">
+
+AFTER:
+$ sed -n '816p' docs/agent-platform/prototypes/agent-manage/index.tsx
+            <Section index="②" title="运行参数" sub="模型 / 性格 —— 都是 Agent 自己的属性，不属于岗位">
+Only " / 执行节点" was removed; the rest of the sentence is byte-identical.
+$ grep -rn "执行节点" docs/agent-platform; echo "exit=$?"
+exit=1        (0 hits)
+
+--------------------------------------------------------------
+D3 (product, REAL): same file, header comment :11
+Enumerated `defaultModelId / workerId / persona / policyId（★ 能力：权限与工具）`.
+workerId is deleted repo-wide (Todo 2 removed all Agent.workerId reads; Todo 6
+drops the DB column), so the comment was factually wrong.
+
+BEFORE:
+ *           defaultModelId / workerId / persona / policyId（★ 能力：权限与工具）
+
+AFTER:
+$ sed -n '9,12p' docs/agent-platform/prototypes/agent-manage/index.tsx
+ *     属性：agentKey（引擎绑定名，= vteam-<key>）/ type（模板·自定义·克隆）
+ *           baseAgentId（克隆来源）/ prompt（操作者提示词，"我该怎么干"）
+ *           defaultModelId / persona / policyId（★ 能力：权限与工具）
+ *   岗位 AgentRole（agent-role 页）—— 「这是一个什么岗位」：key/name/description/
+$ grep -rn "workerId" docs/agent-platform/prototypes/agent-manage/index.tsx; echo "exit=$?"
+exit=1        (0 hits)
+
+--------------------------------------------------------------
+D4 (own receipt, REAL): corrected the provenance sentence at :58-63 (above).
+It had claimed all 729 warnings were "outside my files ... none in
+agents/page.tsx". That was wrong: 2 warnings ARE in agents/page.tsx. The
+0-errors conclusion stands; the two warnings are pre-existing.
+
+$ cd web && npm run lint 2>&1 | grep -A4 "app/(main)/agents/page.tsx"
+/Volumes/SSD-Data/01work/git-project/vteam/web/app/(main)/agents/page.tsx
+  1511:187  warning  'deleting' is defined but never used   @typescript-eslint/no-unused-vars
+  2701:9    warning  The 'agents' logical expression could make the dependencies of useMemo Hook (at line 2773) change on every render ...  react-hooks/exhaustive-deps
+$ npm run lint 2>&1 | tail -2
+✖ 729 problems (0 errors, 729 warnings)
+$LINT_EXIT=0
+
+Pre-existing proof (read-only `git show`, no git writes):
+$ git show HEAD:"web/app/(main)/agents/page.tsx" | grep -n "deleting"
+1510:  deleting: boolean;
+1515:function ConfigPanel({ ... onDelete, deleting, deleteError }: ConfigPanelProps) {
+3108:          deleting={deleteMutation.isPending}
+`deleting` exists at HEAD and is genuinely passed-but-unused at HEAD too.
+My hunks never cover it:
+$ git diff -U0 -- "web/app/(main)/agents/page.tsx" | grep '^@@'
+@@ -100,2 +99,0 @@ interface AgentItem {
+@@ -126,2 +123,0 @@ interface UpdateAgentPayload {
+@@ -1526 +1521,0 @@ function ConfigPanel({ ... 
+@@ -1544 +1539 @@ function ConfigPanel({ ...
+@@ -1548,2 +1542,0 @@ function ConfigPanel({ ...
+@@ -1563,7 +1555,0 @@ function ConfigPanel({ ...
+@@ -1880 +1866 @@ function ConfigPanel({ ...
+@@ -2048,45 +2033,0 @@ function ConfigPanel({ ...
+Old-side hunk starts are 100/126/1526/1544/1548/1563/1880/2048 -- none
+overlaps 1510-1515 (`deleting`) or 2701 (`agents`). Line 1511 today is the
+same HEAD:1515 ConfigPanel signature, merely shifted -4 by my deletions:
+$ sed -n '1511p;2701p' "web/app/(main)/agents/page.tsx"
+function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading, catalogByRef, workers, saving, saveError, onSave, onSaveToken, onClone, canCreate, canDelete, onDelete, deleting, deleteError }: ConfigPanelProps) {
+  const agents = data?.items ?? [];
+Neither warning references workerId/workerDraft/sortedWorkers/首选 Worker.
+
+--------------------------------------------------------------
+FIX LOOP 1 RE-VERIFICATION (raw)
+$ cd web && npx tsc --noEmit; echo "TSC_EXIT=$?"
+TSC_EXIT=0
+
+$ cd web && npm run lint 2>&1 | tail -2 ; echo "LINT_EXIT=$?"
+✖ 729 problems (0 errors, 729 warnings)
+LINT_EXIT=0
+
+$ grep -rn "首选 Worker" "web/app/(main)/agents" web/src/components/agents docs/agent-platform; echo "exit=$?"
+exit=1        (0 hits -- Agent surface still clean)
+
+$ grep -rn "agent-worker-select" web/app web/src web/e2e docs; echo "exit=$?"
+exit=1        (0 hits)
+
+$ grep -rn "workerId" docs/agent-platform/prototypes/agent-manage/index.tsx; echo "exit=$?"
+exit=1        (0 hits)
+
+$ grep -c "workerDraft\|sortedWorkers" "web/app/(main)/agents/page.tsx"
+0
+
+$ grep -c restart "web/app/(main)/agents/page.tsx"
+16      <- baseline 16, restart-all-workers feature intact
+
+$ git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+
+--------------------------------------------------------------
+STALE STATE: web/.next build artifact
+web/.next/ is gitignored (see web/.gitignore) and still contains the OLD
+compiled pages, so the deleted string "agent-worker-select" survives there.
+I deliberately did NOT grep web/.next and did NOT delete/rebuild it:
+the plan's Must NOT list (line 123) forbids a bare `grep -rn ... web docs`
+precisely because it hits that artifact (measured 18 hits) and makes the
+acceptance permanently unreachable. Every grep above is scoped to source
+paths only (web/app web/src web/e2e docs/agent-platform). No stale_state
+hit leaked into any acceptance criterion.
+
+--------------------------------------------------------------
+DIRTY WORKTREE
+Pre-existing sibling-lane dirt was present before this fix loop and was
+left untouched (server/src/platform-mcp/*, web/src/components/chat/msg-parts.tsx,
+.omo/boulder.json, .omo/ulw-execute/ledger.jsonl, .omo/evidence/*.json are
+other lanes'). This loop modified ONLY:
+  web/e2e/reference/testids.ts
+  docs/agent-platform/prototypes/agent-manage/index.tsx
+  .omo/evidence/task-3-team-worker-node.txt
+`git diff --check` on the three files I touched is clean (exit 0), and
+git status --porcelain shows no whitespace-only or unexpected path.
+==============================================================
+
+==============================================================
+FIX LOOP 2 — INDEPENDENT RE-VERIFICATION PASS (read-only tools)
+==============================================================
+Scope: THIS PASS CHANGED NO PRODUCT FILE. It only (a) re-read the live
+tree to confirm the three FIX LOOP 1 fixes are still in place, and
+(b) recorded the checks that this runtime could NOT re-run.
+
+TOOL-CAPABILITY DISCLOSURE (read this before trusting the block below):
+This runtime exposed NO shell/command-execution tool. I could not run
+`sed`, `git`, `npx tsc`, or `npm run lint` — not even read-only forms.
+I attempted to delegate the shell probes twice; both attempts failed
+(no nesting depth / tool unavailable), and a third attempt timed out
+with zero messages. Therefore:
+  * Everything under "A. VERIFIED IN THIS PASS" was re-checked with the
+    read-only file tools actually available (Read, Grep). Those results
+    are genuine and are labelled with the tool used.
+  * Everything shell-dependent (git numstat / diff --check exit codes,
+    the D1 mutation red/green pair, tsc, lint, the HEAD baseline) was
+    NOT re-executed here. Those numbers are CARRIED FORWARD from the
+    FIX LOOP 1 transcript above, which was captured by a shell-capable
+    run. I did not re-derive, re-estimate, or restate them as fresh.
+  * No output in this section is invented. Where a check could not be
+    run, it says so instead of printing a plausible-looking result.
+
+--------------------------------------------------------------
+A. VERIFIED IN THIS PASS (tool: Read / Grep — no shell)
+--------------------------------------------------------------
+D1 — web/e2e/reference/testids.ts
+$ [Read web/e2e/reference/testids.ts, offset 145 limit 20]
+   152:       "model-option-provider",
+   153:       "model-token-status",
+   154:       "model-token-input",
+   155:       "model-credential-status",
+   156:       "model-stale-warning",
+   157:       "model-source-hint",
+   158:       "skill-empty",
+  -> the "agent-worker-select" line is gone and 156 is now real content,
+     not a gap and not a whitespace-only line.
+
+$ [Grep "^[ \t]+$" web/e2e/reference/testids.ts]   ->  No matches found
+  -> the file contains ZERO whitespace-only lines, anywhere. This is the
+     strongest shell-free proof of D1: it does not depend on knowing the
+     exact line number, it is a whole-file invariant. (`git diff --check`
+     exit 0, recorded in FIX LOOP 1, remains the diff-scoped complement;
+     it could not be re-run here.)
+
+D2/D3 — docs/agent-platform/prototypes/agent-manage/index.tsx
+$ [Read docs/agent-platform/prototypes/agent-manage/index.tsx, lines 9-13]
+    9:  *     属性：agentKey（引擎绑定名，= vteam-<key>）/ type（模板·自定义·克隆）
+   10:  *           baseAgentId（克隆来源）/ prompt（操作者提示词，"我该怎么干"）
+   11:  *           defaultModelId / persona / policyId（★ 能力：权限与工具）
+   12:  *   岗位 AgentRole（agent-role 页）—— 「这是一个什么岗位」：key/name/description/
+   13:  *           type/defaultAgentId/rolePrompt/sortOrder；**无能力字段**。
+  -> :11 no longer enumerates workerId. D3 confirmed.
+
+$ [Read docs/agent-platform/prototypes/agent-manage/index.tsx, line 816]
+  816:             <Section index="②" title="运行参数" sub="模型 / 性格 —— 都是 Agent 自己的属性，不属于岗位">
+  -> no "执行节点". D2 confirmed.
+
+$ [Grep "workerId" docs/agent-platform/prototypes/agent-manage/index.tsx]
+  No matches found          (count = 0)
+
+$ [Grep "首选 Worker" web/app/(main)/agents]        ->  No matches found  (0)
+$ [Grep "首选 Worker" web/src/components/agents]    ->  No matches found  (0)
+$ [Grep "首选 Worker" docs/agent-platform]          ->  No matches found  (0)
+  -> 0 hits across all three source-scoped paths. Still no bare
+     `grep -rn ... web docs`, so the gitignored web/.next artifact was
+     never touched and cannot contaminate the result.
+
+$ [Grep "agent-worker-select" docs/agent-platform]  ->  No matches found  (0)
+
+$ [Grep "workerDraft|sortedWorkers|agent-worker-select" web/app/(main)/agents/page.tsx]
+  No matches found          (count = 0)
+
+$ [Grep "restart" web/app/(main)/agents/page.tsx]
+  Found 16 match(es) in 1 file(s):
+        16: web/app/(main)/agents/page.tsx
+  -> still 16, equal to the BASELINE recorded at the top of this receipt.
+     restart-all-workers is intact.
+
+--------------------------------------------------------------
+B. NOT RUN IN THIS PASS (no shell in this runtime)
+--------------------------------------------------------------
+These are the items the brief asked for as raw shell output. They were
+NOT executed and their values below are CARRIED FORWARD from the FIX
+LOOP 1 transcript above, not re-measured here:
+
+  git diff --numstat -- web/e2e/reference/testids.ts   ->  0	1   [carried]
+  git diff --check -- web/e2e/reference/testids.ts     ->  exit=0  [carried]
+  D1 mutation RED (trailing whitespace :156, exit=2)   ->  [carried]
+  D1 mutation GREEN (exit=0)                           ->  [carried]
+  cd web && npx tsc --noEmit                           ->  0      [carried]
+  cd web && npm run lint                                ->  0 errors, 729 warnings [carried]
+  git log --oneline -1                                  ->  b6840d1 [carried]
+
+SPECIFICALLY NOT ASSERTED, ON PURPOSE: the brief also asked that the
+"729 warnings / 0 errors" totals be stated as "unchanged from HEAD".
+I am NOT writing that claim. Establishing it requires running lint
+against a HEAD checkout of web/app/(main)/agents/page.tsx, which needs
+a shell and a git worktree operation; this runtime has neither. The
+FIX LOOP 1 transcript records 729/0 both before and after the fixes,
+which is consistent with "unchanged", but consistency is not the
+measurement. Flagging it rather than laundering an inference into the
+receipt. A shell-capable run should execute:
+      git stash list >/dev/null   # (no-op guard; no write intended)
+      git worktree add /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t3-head b6840d1c
+      cd <worktree>/web && npm run lint 2>&1 | tail -2
+and only then append "totals unchanged from HEAD".
+
+--------------------------------------------------------------
+C. STATE OF THIS PASS
+--------------------------------------------------------------
+Files modified by THIS pass: .omo/evidence/task-3-team-worker-node.txt
+only. No product file was opened for writing. No mutation was applied,
+so there is no mutation to revert and no residue to clean up. No git
+write command was run (this pass ran no git command at all).
+==============================================================
