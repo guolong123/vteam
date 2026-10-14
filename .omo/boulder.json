@@ -2379,9 +2379,9 @@
       "work_id": "team-worker-node-0fbf3332",
       "active_plan": "/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/team-worker-node.md",
       "plan_name": "team-worker-node",
-      "status": "active",
+      "status": "completed",
       "started_at": "2026-10-14T02:41:57.201Z",
-      "updated_at": "2026-10-14T03:15:38Z",
+      "updated_at": "2026-10-14T23:28:03Z",
       "session_ids": [
         "opencode:ses_ec86183dcffe5Dvf8tt8ZknU8R"
       ],
@@ -2426,6 +2426,29 @@
           "status": "in_progress",
           "started_at": "2026-10-14T03:15:38Z"
         }
+      },
+      "completed_at": "2026-10-14T23:28:03Z",
+      "completion": {
+        "checkboxes": "20/20 (16 implementation + F1-F4)",
+        "final_wave": "F1 approved / F2 approved / F3 approved / F4 approved",
+        "commits": [
+          "588ec93",
+          "7ebaa22",
+          "7d09352",
+          "8ff938b",
+          "b7757c6",
+          "e1fb36a",
+          "f1fcfe1",
+          "f536174",
+          "e097fd4"
+        ],
+        "commits_note": "9 commits instead of the plan's 11: T4+T6 (shared workers.service.ts/.spec.ts), T8+T9 (shared teams.service.ts/.spec.ts) and T10+T11+T15 (shared web/e2e/reference/testids.ts) each merged with the deviation declared in the commit body; T1/T13/T14/T15/T16 were Commit: N by design.",
+        "pre_existing_reds": [
+          "scripts/gate.sh bare-catch guard 176 > baseline 175 (identical at worktree/HEAD/base-sha; zero plan contribution)",
+          "prettier backlog 93 errors (clean base b6840d1c=69, clean HEAD cb0ba6d1=90, +3 from pre-existing dirty platform-mcp files); the plan's own 6 were fixed by T16, net contribution 0"
+        ],
+        "environment_caveat": "the model call itself 403s in this environment (OpenCode free tier), so the live smoke proves dispatch/binding/scheduling semantics only - never model execution.",
+        "verified_scale": "server 176 suites / 4211 tests; worker 28 suites / 780 tests; web build 30/30 static + lint 0 errors; live smoke A/B/C/D PASS with exit 0."
       }
     }
   },
