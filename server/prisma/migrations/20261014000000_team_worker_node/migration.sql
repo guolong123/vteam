@@ -1,0 +1,69 @@
+-- 团队/成员首选 worker 列 + 删除从未生效的 Agent 首选 worker 列（team-worker-node Todo 7，2026-10-14）
+--
+-- 背景：团队要能指定「这个团队跑在哪个执行节点上」，团队里的每个成员也要能各自指定
+-- （未指定 = 「跟随团队」；谁都没指定 = 维持今天的自动调度）。同时把上一版 Agent 上
+-- 残留的同名设置彻底删掉——那个下拉自上线起从未被 `assignWorker` 读过（写入口也已在
+-- Todo 2 摘除），线上只是「看起来能配、其实不生效」的第二套开关；留着会让用户对执行
+-- 节点形成误判，故与两列新增放在同一次发布里一次切干净。
+--
+-- 逐列理由：
+--   1) `teams` 新增「首选 worker 列」：varchar(191) DEFAULT NULL
+--      - 可空而非 NOT NULL：NULL = 未指定 = 自动调度，语义与迁移前逐字节一致；存量团队
+--        一行都不该被这次迁移追认成任何具体节点，NOT NULL 会逼出一次假回填。
+--      - 191 = 本仓所有字符串列的统一宽度（与 default_model_id / code_version 同口径）。
+--      - 零回填：此前不存在「团队已选定节点」这一事实，任何回填值都是凭空断言。
+--   2) `team_members` 新增同名列（同形态）
+--      - NULL = 「跟随团队」而非「跟随现状」：团队设置非空时成员空值即继承团队值，
+--        「成员显式 > 团队 > 现状」这条链只在成员值非空时才停在本列。
+--      - 同样零回填：存量成员此前没有成员级选择这一事实。
+--   3) `agents` 删除原首选 worker 列
+--      - 该列是零读取死列：没有任何分派链路读它，唯一写入口已在 Todo 2 摘除。
+--      - baseline（server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+--        的 :120-141 段）证明它是裸列：PRIMARY / UNIQUE / KEY / CONSTRAINT 段没有任何
+--        一处提到它 ⇒ 删列不牵动任何索引或约束，不需要「先摘约束再摘列」的两段式操作。
+--      - 存量值随列丢弃：该列从未参与分派，无机读价值（本方案明确不做数据迁移与回填）。
+--
+-- 不建索引、不加约束：置顶只是「候选集内的偏好」，只在 `assignWorker` 已有的四道过滤
+--   （离线 / 容量 / opencodeVersion / 模型）里被优选，绝不绕过过滤；teams 与
+--   team_members 行数为个位数到两位数，两列只随整行读回，不参与任何 where/orderBy ⇒
+--   索引只有写放大没有收益。worker 删除时的悬空引用由 `WorkersService.remove()` 事务内
+--   清空（沿用「软引用 + 应用层清理」的既有惯例），不靠数据库层兜底。
+--
+-- why-not（为什么不是别的做法）：
+--   - 不保留影子列、不做双写过渡：旧列无读者，过渡只会让「哪一套设置在生效」继续歧义。
+--   - 不拆成第二个迁移：本轮一次切干净，回滚依赖全库 dump（见下方契约）。
+--   - 不加存在性校验：worker 是软引用，可用性属运行期事实，纯配置操作不应被节点状态阻断
+--     （与 mainAgentMemberId 的存在性校验故意分歧，理由写在 service 代码注释里）。
+--   - 不折进 baseline：见下一段。
+--
+-- 为什么是「追加迁移」而不是「改 baseline」（docs/migration-baseline.md:29-31）：
+--   基线是 2026-09-25 从整库 dump 折叠出来的历史事实，已部署库按目录顺序逐条记录
+--   `_prisma_migrations`。回头改 baseline 对已部署库是**静默 no-op**（那几句 DDL 早已
+--   执行过、不会再跑），只会让文件与真实库永久漂移；而空库重建时才读到新内容，于是同
+--   一份基线在「存量库」和「新库」两条路径上给出两套 schema。追加新迁移则两条路径都干净。
+--   server/src/prisma/agent-role-drop.migration.spec.ts:1-15 记录了历史上的反例先例
+--   （drop 被折进基线、最终态由 spec 反述），本轮按上述理由**故意不照做**。
+--
+-- 单向 DDL 回滚契约（内联写明，勿依赖外部引用；docs/tech-debt-rollback.md §1/§3）：
+--   本迁移**没有 down**，不可逆。回滚 = 两步，顺序不可颠倒：
+--     1) 代码：`git reset --hard <last-green>`（回到迁移前的绿色提交）
+--     2) 数据：恢复**迁移前**的全库 dump，形如
+--        `mysql -h <host> -P <port> -u <user> -p <db> < .omo/evidence/ddl-team-worker-node-<YYYYMMDD>.sql`
+--   必须先代码后数据：只回退代码不会撤销列删除（旧服务会撞上「列不存在」），只恢复 dump
+--   又会让代码与库对不上。
+--   restore 不是部分撤销，而是把库整体拨回迁移前 ⇒ **迁移后的所有写入全部丢弃**。
+--   该不可逆性是有意的：本迁移含 DROP COLUMN，不存在「只退后来写入、保留删列结果」的
+--   部分撤销形态。本机/CI 无 MySQL（见 .omo/evidence/task-1-team-worker-node.txt），
+--   dump 必须由部署方在目标环境执行本 DDL 之前自行补齐。
+--
+-- 等价性自证：本机无 MySQL（`nc -z localhost 3306` 不通），本文件为手写 DDL；与 Prisma
+--   自产 `prisma migrate diff --from-schema-datamodel <迁移前 schema>
+--   --to-schema-datamodel prisma/schema.prisma --script` 的输出逐条等价：同为三条
+--   ALTER、同序（teams → team_members → agents）、同列形态（可空字符串列，宽 191）。
+--   Prisma 把可空列渲染成 `VARCHAR(191) NULL`，MySQL 对可空列的隐式默认即 NULL，与手写
+--   的 `DEFAULT NULL` 同义（本仓 2026-10-10 为 workers 加列的那次手写迁移即此口径）。
+--   等价性由 src/prisma/team-worker-node.migration.spec.ts 守卫。
+
+ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+ALTER TABLE `agents` DROP COLUMN `worker_id`;
