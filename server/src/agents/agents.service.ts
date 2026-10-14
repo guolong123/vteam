@@ -63,7 +63,6 @@ type AgentRow = {
   baseAgentId: string | null;
   defaultModelId: string | null;
   persona: string | null;
-  workerId: string | null;
   policyId: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -320,7 +319,7 @@ export class AgentsService implements OnModuleInit {
 
   /**
    * PATCH /agents/:id（is_0000000030 放开内置 agent 设置修改）：
-   * - template（内置）允许修改设置字段（name/prompt/defaultModelId/workerId/persona/
+   * - template（内置）允许修改设置字段（name/prompt/defaultModelId/persona/
    *   policyId + skillIds 关联重建），使内置 agent 可自定义配置；
    *   agentId/type 不可改（不在 DTO，天然安全红线）；
    * - clone/custom → 同规则更新；
@@ -358,7 +357,6 @@ export class AgentsService implements OnModuleInit {
             ...(dto.persona !== undefined
               ? { persona: dto.persona ?? null }
               : {}),
-            ...(dto.workerId !== undefined ? { workerId: dto.workerId } : {}),
             ...(dto.policyId !== undefined ? { policyId: dto.policyId } : {}),
           },
         });
@@ -625,7 +623,6 @@ export class AgentsService implements OnModuleInit {
     baseAgentId: string | null;
     defaultModelId: string | null;
     persona: string | null;
-    workerId: string | null;
     policyId: string | null;
     skillIds: string[];
     effectivePermission: ResolvedExecutionPolicy | null;
@@ -649,7 +646,6 @@ export class AgentsService implements OnModuleInit {
       baseAgentId: agent.baseAgentId,
       defaultModelId: agent.defaultModelId,
       persona: agent.persona,
-      workerId: agent.workerId,
       policyId: agent.policyId,
       skillIds: agent.skills.map((s) => s.skillId),
       effectivePermission,
@@ -675,7 +671,6 @@ export class AgentsService implements OnModuleInit {
       baseAgentId: agent.baseAgentId,
       defaultModelId: agent.defaultModelId,
       persona: agent.persona,
-      workerId: agent.workerId,
       policyId: agent.policyId,
       skillIds: agent.skills.map((s) => s.skillId),
       effectivePermission: permissions[i],

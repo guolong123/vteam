@@ -7,7 +7,6 @@ import {
   IsString,
   Matches,
   MaxLength,
-  ValidateIf,
 } from 'class-validator';
 import { PERSONA_LIBRARY } from '../persona.constants';
 import { AGENT_KEY_PATTERN } from '../../common/constants/agent.constants';
@@ -79,16 +78,6 @@ export class UpdateAgentDto {
       'defaultModelId 需为 provider/model 格式（如 opencode-go/deepseek-v4-flash）',
   })
   defaultModelId?: string;
-
-  @ApiPropertyOptional({
-    description: '首选 worker id（软绑定，可空 null=自动调度；C6）',
-    example: 'wkr_0000000001',
-    nullable: true,
-  })
-  @IsOptional()
-  @IsString()
-  @ValidateIf((o) => o.workerId !== null)
-  workerId?: string | null;
 
   @ApiPropertyOptional({
     description:
