@@ -15,6 +15,7 @@ import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import { TaskProgressionScheduler } from './task-progression.scheduler';
 import { PlanLifecycleService } from './plan-lifecycle.service';
 import { TasksService } from './tasks.service';
+import { TeamsService } from '../teams/teams.service';
 import { sanitizeWorkDirName } from './work-dir.util';
 
 describe('TasksService', () => {
@@ -1227,6 +1228,8 @@ describe('TasksService', () => {
           overrideModelId: null,
           // opencode 原生 agent 选择随 instances 下发（会话页成员面板优先读该来源）
           opencodeAgentName: null,
+          // 成员级首选 worker 随 instances 下发（必须与团队 DTO 同步，缺一侧回显被 null 覆盖）
+          preferredWorkerId: null,
           sessionStatus: null,
           sessionId: null,
         },
@@ -1243,6 +1246,8 @@ describe('TasksService', () => {
           overrideModelId: null,
           // opencode 原生 agent 选择随 instances 下发（会话页成员面板优先读该来源）
           opencodeAgentName: null,
+          // 成员级首选 worker 随 instances 下发（必须与团队 DTO 同步，缺一侧回显被 null 覆盖）
+          preferredWorkerId: null,
           sessionStatus: null,
           sessionId: null,
         },
@@ -5353,6 +5358,63 @@ describe('TasksService', () => {
       expect(tx.teamQueue.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ position: 1 }),
       });
+    });
+  });
+
+  describe('preferredWorkerId 投影同步（任务实例 vs 团队 DTO，反发散）', () => {
+    /** 同一成员行：团队 DTO 的 include members 与任务实例的 teamMember.findMany 的唯一派生源。 */
+    const syncedMemberRow = () => ({
+      id: 'tmm_0000000001',
+      teamId: 'tm_0000000001',
+      agentId: 'a_product',
+      alias: '产品经理-1',
+      seq: 1,
+      workDir: '/data/vteam-worker/产品经理',
+      overrideModelId: null,
+      opencodeAgentName: null,
+      preferredWorkerId: 'w_0000000001',
+      agent: { id: 'a_product', name: '产品经理' },
+      role: { id: 'r_product', key: 'product', name: '产品经理' },
+    });
+
+    it('任务实例投影与团队 DTO 返回同一 preferredWorkerId（缺一侧即读到 null）', async () => {
+      // 团队 DTO 投影侧：findOne include members（与任务 spec 共享同一 prisma mock）
+      const teams = new TeamsService(
+        prisma as any,
+        idGen as any,
+        realtime as any,
+        { listAgents: jest.fn().mockResolvedValue([]) } as any,
+        { assignWorker: jest.fn().mockResolvedValue(null) } as any,
+      );
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_0000000001',
+        name: 'team-alpha',
+        mainAgentMemberId: 'tmm_0000000001',
+        version: 1,
+        members: [syncedMemberRow()],
+        userMembers: [],
+        queues: [],
+      } as any);
+      // 任务实例投影侧：toTaskDto 经 teamMember.findMany 取同一批成员行
+      prisma.task.findUnique.mockResolvedValue(
+        row({ teamId: 'tm_0000000001' }),
+      );
+      prisma.teamMember.findMany.mockResolvedValue([syncedMemberRow()]);
+      (prisma.session as any).findMany = jest.fn().mockResolvedValue([]);
+
+      const teamDto: any = await teams.findOne('tm_0000000001');
+      const taskDto = await service.findOne('t_0000000001');
+
+      const teamValue = teamDto.members.find(
+        (m: any) => m.id === 'tmm_0000000001',
+      ).preferredWorkerId;
+      const taskValue = (taskDto.instances as any[]).find(
+        (i) => i.id === 'tmm_0000000001',
+      )!.preferredWorkerId;
+      expect(teamValue).toBe('w_0000000001');
+      expect(taskValue).toBe('w_0000000001');
+      // 反发散断言：两侧必须同值。只投影一处 ⇒ 另一侧读到 undefined/null ⇒ 本断言转红
+      expect(taskValue).toBe(teamValue);
     });
   });
 });

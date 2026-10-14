@@ -714,6 +714,93 @@ describe('TeamsService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
+    it('preferredWorkerId：设置后读取往返（PATCH → GET 回吐，version+1）', async () => {
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow({ version: 0 }))
+        .mockResolvedValueOnce(
+          teamRow({
+            preferredWorkerId: 'w_0000000001',
+            version: 1,
+            members: [],
+            queues: [],
+          }),
+        );
+      prisma.team.update.mockResolvedValue(
+        teamRow({ preferredWorkerId: 'w_0000000001', version: 1 }),
+      );
+      // 与 PATCH /teams/:id 的真实载荷一致：带当前 version 走乐观锁 updateMany
+      prisma.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const result: any = await service.update('tm_0000000001', {
+        preferredWorkerId: ' w_0000000001 ',
+        version: 0,
+      } as any);
+      expect(prisma.team.updateMany).toHaveBeenCalledWith({
+        where: { id: 'tm_0000000001', version: 0 },
+        data: expect.objectContaining({
+          preferredWorkerId: 'w_0000000001',
+          version: { increment: 1 },
+        }),
+      });
+      expect(result.preferredWorkerId).toBe('w_0000000001');
+      expect(result.version).toBe(1);
+    });
+
+    it('preferredWorkerId：空串/空白串/null → 归一为 null（自动调度）', async () => {
+      for (const raw of ['', '   ', null]) {
+        prisma.team.findUnique.mockReset();
+        prisma.team.update = jest
+          .fn()
+          .mockResolvedValue(teamRow({ preferredWorkerId: null }));
+        prisma.team.findUnique
+          .mockResolvedValueOnce(teamRow({ version: 0 }))
+          .mockResolvedValueOnce(
+            teamRow({
+              preferredWorkerId: null,
+              version: 1,
+              members: [],
+              queues: [],
+            }),
+          );
+        const result: any = await service.update('tm_0000000001', {
+          preferredWorkerId: raw,
+        } as any);
+        expect(prisma.team.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ preferredWorkerId: null }),
+          }),
+        );
+        expect(result.preferredWorkerId).toBeNull();
+      }
+    });
+
+    it('preferredWorkerId：不存在的 worker id 仍写入（弱校验：不做存在性检查）', async () => {
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow({ version: 0 }))
+        .mockResolvedValueOnce(
+          teamRow({
+            preferredWorkerId: 'w_nope',
+            version: 1,
+            members: [],
+            queues: [],
+          }),
+        );
+      prisma.team.update.mockResolvedValue(
+        teamRow({ preferredWorkerId: 'w_nope', version: 1 }),
+      );
+      const result: any = await service.update('tm_0000000001', {
+        preferredWorkerId: 'w_nope',
+      } as any);
+      // 不存在的 id 照样落库（软引用；可用性由分派期 warn 收敛）
+      expect(prisma.team.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ preferredWorkerId: 'w_nope' }),
+        }),
+      );
+      expect(result.preferredWorkerId).toBe('w_nope');
+      // 只有「团队存在」与「回读 findOne」两次查询 ⇒ 未做任何存在性校验查询
+      expect(prisma.team.findUnique).toHaveBeenCalledTimes(2);
+    });
+
     it('version 乐观锁冲突 409', async () => {
       prisma.team.findUnique.mockResolvedValue(teamRow({ version: 5 }));
       prisma.team.findUnique
@@ -1677,6 +1764,99 @@ describe('TeamsService', () => {
         where: { id: 'tmm_0000000001' },
         data: { opencodeAgentName: 'plan' },
       });
+    });
+
+    it('preferredWorkerId：成员级设置后读取往返（PATCH member → GET team 回吐，version+1）', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.teamMember.findUnique = jest
+        .fn()
+        .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
+      const updateMock = jest.fn().mockResolvedValue({ id: 'tmm_0000000001' });
+      const versionMock = jest.fn().mockResolvedValue({});
+      prisma.$transaction.mockImplementation(async (fn: any) =>
+        fn({
+          teamMember: { update: updateMock },
+          team: { update: versionMock },
+        }),
+      );
+      // 第 2 次 findUnique = updateMember 末尾回读 findOne（模拟落库后的成员行）
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(
+          teamRow({
+            members: [teamMemberRow({ preferredWorkerId: 'w_0000000001' })],
+            queues: [],
+          }),
+        );
+
+      const result: any = await service.updateMember(
+        'tm_0000000001',
+        'tmm_0000000001',
+        { preferredWorkerId: ' w_0000000001 ' } as any,
+      );
+
+      expect(updateMock).toHaveBeenCalledWith({
+        where: { id: 'tmm_0000000001' },
+        data: { preferredWorkerId: 'w_0000000001' },
+      });
+      expect(versionMock).toHaveBeenCalledWith({
+        where: { id: 'tm_0000000001' },
+        data: { version: { increment: 1 } },
+      });
+      // PATCH /teams/:id/members/:memberId 后 GET /teams/:id 回吐
+      expect(result.members[0].preferredWorkerId).toBe('w_0000000001');
+    });
+
+    it('preferredWorkerId：空串/空白串/null → 归一为 null（不覆盖，跟随团队设置）', async () => {
+      for (const raw of ['', '   ', null]) {
+        prisma.team.findUnique.mockReset();
+        prisma.teamMember.findUnique = jest
+          .fn()
+          .mockResolvedValue({ id: 'tmm_0000000001', teamId: 'tm_0000000001' });
+        const updateMock = jest
+          .fn()
+          .mockResolvedValue({ id: 'tmm_0000000001' });
+        prisma.$transaction.mockImplementation(async (fn: any) =>
+          fn({
+            teamMember: { update: updateMock },
+            team: { update: jest.fn().mockResolvedValue({}) },
+          }),
+        );
+        // 归一后按「未设置」读取：成员行回吐 null
+        prisma.team.findUnique
+          .mockResolvedValueOnce(teamRow())
+          .mockResolvedValueOnce(
+            teamRow({
+              members: [teamMemberRow({ preferredWorkerId: null })],
+              queues: [],
+            }),
+          );
+
+        const result: any = await service.updateMember(
+          'tm_0000000001',
+          'tmm_0000000001',
+          { preferredWorkerId: raw } as any,
+        );
+
+        expect(updateMock).toHaveBeenCalledWith({
+          where: { id: 'tmm_0000000001' },
+          data: { preferredWorkerId: null },
+        });
+        // null = 未设置 ⇒ 分派期按「跟随团队」处理，DTO 回吐 null
+        expect(result.members[0].preferredWorkerId).toBeNull();
+      }
+    });
+
+    it('团队 DTO 成员行含 preferredWorkerId（投影同步：缺此字段回显会被 null 覆盖）', async () => {
+      prisma.team.findUnique.mockResolvedValue(
+        teamRow({
+          members: [teamMemberRow({ preferredWorkerId: 'w_0000000001' })],
+        }),
+      );
+
+      const result: any = await service.findOne('tm_0000000001');
+
+      expect(result.members[0].preferredWorkerId).toBe('w_0000000001');
     });
 
     it('空更新 → 直接返回 findOne，不进事务', async () => {
