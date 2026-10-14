@@ -1,0 +1,330 @@
+================================================================================
+VERIFY — Todo 14 (证据回执准确性更正：T1 基线计数/分类 + T2 §6 diffstat)
+Independent verifier. READ-ONLY except this verdict file.
+Repo : /Volumes/SSD-Data/01work/git-project/vteam
+HEAD : b6840d1 (unchanged throughout)
+Date : 2026-10-14
+
+VERDICT: NEEDS-FIX  (one-token fix; single cosmetic defect in the receipt-fix file)
+
+  All 6 mandated verification items PASS. Both TARGET receipts are byte-correct,
+  uncorrupted, and complete. The ONLY defect is a single spurious token "65"
+  in the receipt-fix file's own §4 C5 quoted list. Smallest fix given below.
+
+================================================================================
+SECTION A — ITEM 1: task-1 porcelain block: 14 entries / 5 named / residue 9
+================================================================================
+PASS (all three sub-claims independently counted by me, not quoted)
+
+A1. Porcelain block is exactly lines 15-28 = 14 entries.
+    $ sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt | wc -l
+          14
+
+A2. Raw block, verbatim (sed -n, numbered):
+    15	 M .omo/boulder.json
+    16	 M .omo/evidence/phase5-t9-playwright.json
+    17	 M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+    18	 M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+    19	 M .omo/ulw-execute/ledger.jsonl
+    20	 M server/src/platform-mcp/platform-mcp.controller.spec.ts
+    21	 M server/src/platform-mcp/platform-mcp.controller.ts
+    22	 M server/src/platform-mcp/platform-mcp.service.spec.ts
+    23	 M server/src/platform-mcp/platform-mcp.service.ts
+    24	 M server/src/platform-mcp/platform-mcp.tools.ts
+    25	 M web/src/components/chat/msg-parts.tsx
+    26	?? .omo/drafts/team-worker-node.md
+    27	?? .omo/notepads/team-worker-node/
+    28	?? .omo/plans/team-worker-node.md
+
+A3. Corrected annotation, verbatim lines 30-34:
+    30	脏工作区说明（dirty_worktree 类对抗项）：以上 14 行中，9 个文件为本计划开工前的既有脏改动（不属于本计划范围）；另 5 行
+    31	（.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、.omo/plans/team-worker-node.md、
+    32	.drafts... -> .omo/drafts/team-worker-node.md、.omo/notepads/team-worker-node/）为本计划自身的
+    33	编排产物，同样非本 todo 的代码改动。后续 Todo 13 与 F4 请以本节上方 14 行原始
+    34	输出为相对比较零点，不要引用「13 行」这一计数。
+    (line 32 verbatim = ".omo/drafts/team-worker-node.md、.omo/notepads/team-worker-node/）为本计划自身的")
+
+  (a) count stated as 14 .......... PASS  "以上 14 行中" (L30) + "上方 14 行原始" (L33)
+  (b) five artifacts NAMED ......... PASS  all five named verbatim at L31-32
+  (c) baseline = 9 files, untouchable  PASS  "9 个文件为本计划开工前的既有脏改动（不属于本计划
+                                          范围）" (L30) + L36 "未执行也未允许 git checkout / git
+                                          stash / 任何清理动作，既有脏改动原样保留。"
+
+A4. MY OWN classification of the 14 entries (not copied from the receipt):
+    Plan orchestration artifacts (5) — each EXISTS on disk (test -e):
+       L15 .omo/boulder.json                         EXISTS
+       L19 .omo/ulw-execute/ledger.jsonl             EXISTS
+       L28 .omo/plans/team-worker-node.md            EXISTS
+       L26 .omo/drafts/team-worker-node.md           EXISTS
+       L27 .omo/notepads/team-worker-node/           EXISTS
+    Residue = 14 - 5 = 9 entries, and all 9 are DISTINCT files (no duplicates):
+       3x .omo/evidence/*.json  (L16,L17,L18)
+     + 5x server/src/platform-mcp/*  (L20-L24)
+     + 1x  web/src/components/chat/msg-parts.tsx (L25)
+     = 3 + 5 + 1 = 9   ✓ residue is 9, and is 9 distinct files ✓
+
+A5. "13 行" residue check — the only surviving occurrence is the NEGATION sentence
+    mandated by verify §D1 ("不要引用「13 行」这一计数"), which instructs downstream
+    audits not to reuse the stale count. The stale ASSERTION ("以上 13 行即…脏基线")
+    is fully gone.
+    $ grep -n "13 行\|13 files" .omo/evidence/task-1-team-worker-node.txt
+    34:输出为相对比较零点，不要引用「13 行」这一计数。
+
+================================================================================
+SECTION B — ITEM 2: FALSIFY anti-grep-pandering ("部署前须补 dump" must be 0)
+================================================================================
+PASS — phrase was NOT added.
+
+  $ grep -c "部署前须补 dump" .omo/evidence/task-1-team-worker-node.txt
+  0                      (exit=1)
+  $ grep -c "部署前须补" .omo/evidence/task-1-team-worker-node.txt
+  0                      (exit=1)   <- strict prefix also 0, so full phrase is necessarily 0
+
+  The §D2 anchor sentence SURVIVED the +3 line shift intact:
+    61	即 mysqldump 预检在本仓无法本地执行，dump 必须由部署方在目标环境补齐。
+    62	部署方执行 DDL 前必须自行补 dump。        <- the acceptance-intent sentence
+  (verify §D2 cited these as L58/L59; 58+3=61, 59+3=62 — shift applied correctly.)
+
+  Note: the phrase DOES appear inside .omo/evidence/verify-task-1-team-worker-node.txt
+  (lines 45,152,159,170,218,464). That is the pre-existing INDEPENDENT VERIFIER's own
+  receipt describing the check — it is not the receipt under test, and it predates
+  Todo 14. The mandated grep targets task-1-team-worker-node.txt only, and that is 0.
+
+  Anti-pandering technique (transparently disclosed by the implementer): the
+  receipt-fix file quotes the phrase via shell concatenation 部署前须补"" dump  so
+  that transcribing it does not itself create a new literal hit. Verified legitimate:
+  my literal grep over the whole evidence dir confirms task-1 = 0.
+
+================================================================================
+SECTION C — ITEM 3: task-2 §6 diffstat == LIVE git diff --shortstat
+================================================================================
+PASS — byte-for-byte identical; old wrong numbers are GONE (zero occurrences).
+
+  $ git diff --shortstat -- server/src/agents          <- MY live run
+   3 files changed, 1 insertion(+), 23 deletions(-)
+
+  Receipt lines 178-182, verbatim:
+  178	$ git diff --stat -- server/src/agents
+  179	 server/src/agents/agents.service.spec.ts  |  6 ------
+  180	 server/src/agents/agents.service.ts       |  7 +------
+  181	 server/src/agents/dto/update-agent.dto.ts | 11 -----------
+  182	 3 files changed, 1 insertion(+), 23 deletions(-)
+
+  C1. Summary line vs LIVE shortstat, character-for-character:
+  $ diff <(sed -n '182p' .omo/evidence/task-2-team-worker-node.txt) \
+         <(git diff --shortstat -- server/src/agents)
+  BYTE_IDENTICAL_OK   (diff exit 0, no output)
+
+  C2. Full 178-182 block vs LIVE --stat:
+  $ diff <(sed -n '178,182p' .omo/evidence/task-2-team-worker-node.txt) \
+         <(printf '$ git diff --stat -- server/src/agents\n'; git diff --stat -- server/src/agents)
+  BYTE_IDENTICAL_OK   (diff exit 0, no output)
+
+  C3. sha256 double-proof:
+  receipt L182 : b91304d7adee40a38a550aa40937fcdd956d758d69f6eeadcbc48c141c33e829  -
+  live shortstat: b91304d7adee40a38a550aa40937fcdd956d758d69f6eeadcbc48c141c33e829  -
+
+  C4. Old wrong numbers are REMOVED, not kept alongside:
+  $ grep -n "8 ++------\|22 deletions\|3 insertions" .omo/evidence/task-2-team-worker-node.txt
+  (no output, exit=1)   -> "8 ++------" ABSENT, "22 deletions" ABSENT
+
+  C5. SCOPE EXPANSION DISCLOSED AND JUSTIFIED: the implementer also corrected line
+      181 (update-agent.dto.ts) from "11 +----------" to "11 -----------", which the
+      brief did not name. Live --numstat confirms 0 insertions / 11 deletions for
+      that file, so the old "+" marker was stale too. Correct and required for §6 to
+      match live output; disclosed in receipt-fix §3 "额外发现并更正". Good judgement.
+
+================================================================================
+SECTION D — ITEM 4: receipt-fix file exists, coherent, numbers match
+================================================================================
+PASS with ONE DEFECT (see DEFECT-1).
+
+  File exists: .omo/evidence/task-receipt-fix-team-worker-node.txt (new, untracked ??).
+  Structure coherent: 5 sections (修改文件清单 / 变更A / 变更B / 原始命令 C1-C8 /
+  CLEANUP), before-after blocks present for BOTH edits, raw commands quoted.
+
+  D1. Cited line numbers ALL verified correct (every one MATCH):
+      task-1 L30  = dirty-baseline annotation head   ✓
+      task-1 L51  = mysqldump --single-transaction … ✓  (cited as 48+3)
+      task-1 L109 = 即本机不仅无可达 MySQL，连 mysqldump 客户端也未安装… ✓ (106+3)
+      task-1 L112 = 已在收尾阶段删除（见 CLEANUP）… ✓ (109+3)
+      task-1 L61/L62 = §D2 anchor sentences          ✓ (58+3 / 59+3)
+      task-2 L173-176 cleanup narrative              ✓ (unaltered, verbatim)
+      task-2 L178-182 diffstat block                 ✓ (byte-identical to live)
+      task-2 L184-187 porcelain list                 ✓ (unaltered, verbatim)
+      wc -l task-1 = 120                             ✓ (117+3, self-consistent)
+
+  D2. Numbers in the receipt-fix MATCH mine: 14 entries; 9 distinct residue files;
+      3 files / 1 insertion / 23 deletions; sha256 b91304d7…e829; HEAD b6840d1.
+
+  D3. Documented deviation (a) "9 行" -> "9 个文件": REQUIRED, not a shortcut.
+      verify §D1's verbatim text said "9 行"; the plan's Todo 14 acceptance criterion
+      mandates `grep -n "9 个文件\|9 files"` must hit. "9 行" would FAIL that grep.
+      The implementer chose the acceptance-satisfying wording and DECLARED it. This is
+      the correct resolution of a conflict between a prior advisory text and a binding
+      acceptance criterion.
+      Verified: $ grep -n "9 个文件\|9 files" .omo/evidence/task-1-team-worker-node.txt
+                30:…以上 14 行中，9 个文件为本计划开工前的既有脏改动…   -> HIT
+
+  D4. Documented deviation (b) keeping the leading label
+      "脏工作区说明（dirty_worktree 类对抗项）：" — reasonable: it is the section
+      heading, not part of the MISCALC/MISLABEL text §D1 targeted. Preserving it keeps
+      the dirty_worktree adversarial item titled. Declared by the implementer.
+
+  D5. §D1 typo correctly NOT propagated: verify §D1 wrote "4x server/src/platform-mcp/*"
+      (which + 3 json + 1 tsx = 8, contradicting its own stated total of 9). Real count
+      is 5 platform-mcp files. 3+5+1=9. The implementer used the measured value, did
+      NOT edit the verify file, and recorded the discrepancy. Correct.
+
+================================================================================
+DEFECT-1  (the only defect found)
+================================================================================
+SEVERITY: cosmetic / evidence-transcript only. Does NOT affect either target receipt,
+         does NOT invalidate the conclusion it supports (I re-verified that conclusion
+         independently and it is correct).
+
+FILE : .omo/evidence/task-receipt-fix-team-worker-node.txt, §4 C5
+LINE : the line beginning "verify 回执 C21 的 14 个 dump 行号:"
+DEFECT: the quoted "before" list contains a SPURIOUS element "65", making it 15
+        numbers while being labelled "14 个". Actual verify C21 list has 14.
+
+  Quoted in receipt-fix (WRONG — 15 numbers):
+    1 48 58 59 64 65 68 72 78 86 94 97 103 106 109
+  Real verify-task-1 C21 (lines 469-482, 14 numbers — no "65"):
+    1 48 58 59 64 68 72 78 86 94 97 103 106 109
+  PROVENANCE of the stray "65": it is cross-contaminated from verify §C22 line 491
+    "65:本仓无 down migration；restore 会丢弃迁移后的所有写入。"
+  which contains no "dump" and was therefore never a C21 entry.
+  PROOF it was never a dump line: the current post-edit line 68 (= former 65) reads
+    "本仓无 down migration；restore 会丢弃迁移后的所有写入。" — no "dump".
+
+  WHY THE CONCLUSION IS STILL CORRECT (I re-derived it myself, do not take their word):
+  Correct +3 mapping of the real 14 numbers:
+    1→1  48→51  58→61  59→62  64→67  68→71  72→75
+    78→81 86→89 94→97 97→100 103→106 106→109 109→112
+  MY OWN live dump census of the current file:
+  $ grep -n "dump" .omo/evidence/task-1-team-worker-node.txt | cut -d: -f1 | tr '\n' ' '
+    1 51 61 62 67 71 75 81 89 97 100 106 109 112      (count = 14)
+  This matches the receipt-fix's "after" list EXACTLY and is a true uniform +3 shift.
+  => 14 → 14, zero content lost, zero duplicated, zero truncated. Claim upheld.
+
+SMALLEST CONCRETE FIX (one token):
+  In .omo/evidence/task-receipt-fix-team-worker-node.txt, §4 C5, delete the standalone
+  "65 " from that line so it reads exactly:
+    verify 回执 C21 的 14 个 dump 行号:  1 48 58 59 64 68 72 78 86 94 97 103 106 109
+  No other line changes. No target receipt changes. No product file changes.
+
+================================================================================
+SECTION E — ITEM 5: no product file touched; no corruption of neighbours
+================================================================================
+PASS
+
+  E1. mtimes prove the Todo 14 window touched only the 3 receipt files. Todo 14 edits
+      are untracked .omo/evidence text files; they CANNOT alter server/ or web/ diffs.
+      $ stat -f "%Sm  %N"
+      2026-10-14 11:16:10  docs/agent-platform/prototypes/agent-config/index.tsx  <- before
+      2026-10-14 11:16:49  web/app/(main)/agents/page.tsx                        <- before
+      2026-10-14 11:17:30  server/src/agents/agents.service.ts                   <- before
+      2026-10-14 11:42:51  .omo/evidence/verify-task-2-team-worker-node.txt
+      2026-10-14 11:44:03  .omo/evidence/verify-task-1-team-worker-node.txt
+      2026-10-14 11:45:05  .omo/evidence/verify-task-4-team-worker-node.txt
+      2026-10-14 11:45:10  .omo/evidence/verify-task-3-team-worker-node.txt
+      2026-10-14 11:46:38  .omo/evidence/task-1-team-worker-node.txt             <- Todo14 A
+      2026-10-14 11:46:57  .omo/evidence/task-2-team-worker-node.txt             <- Todo14 B
+      2026-10-14 11:47:36  server/prisma/schema.prisma      <- CONCURRENT Todo 6 lane
+      2026-10-14 11:49:05  server/src/workers/workers.service.ts <- CONCURRENT Todo 6
+      2026-10-14 11:50:01  .omo/evidence/task-receipt-fix-team-worker-node.txt <- Todo14 new
+
+  E2. `git diff --stat -- server/src web/src web/app` shows 12 files, 648+/178-, but
+      NONE attributable to Todo 14:
+        - server/src/agents/*    = Todo 2's product work (mtime 11:17, pre-dates Todo 14)
+        - server/src/platform-mcp/*, web/src/components/chat/msg-parts.tsx,
+          docs/*, web/e2e/reference/testids.ts = PRE-EXISTING baseline dirt
+        - server/src/workers/*   = concurrent Todo 6 lane (mtime 11:49)
+      Todo 14's own diff is confined to 3 untracked .omo/evidence/*.txt files.
+
+  E3. Concurrent-lane exclusion honoured and PROVEN: server/prisma/schema.prisma's diff
+      is `+  preferredWorkerId String? @map("preferred_worker_id")` — Todo 6's
+      preferred-worker schema work, explicitly NOT attributed to Todo 14.
+
+  E4. No-corruption spot-check around both edits — I read the surrounding lines:
+      task-1 BEFORE edit (L1-14): title, UTC+local timestamps, "说明：" line, section-1
+        banner, `git rev-parse HEAD`, full base-sha
+        b6840d1cd72cd536108457d3e78f6bcf54c548ec, then `命令：git status --porcelain`.
+        All intact, no mangling.
+      task-1 AFTER edit (L35-48): timestamp/anti-git-write paragraph, blank, section-2
+        banner "2. MySQL 可达性探测", `nc -z localhost 3306; echo exit=$?`, exit=1,
+        prose, section-3 banner "3. 预检备份命令原文". Resumes cleanly.
+      Section headers task-1: 1..6 all present exactly once, in order, no duplicates.
+      Code fences: task-1 = 0, task-2 = 0 (both prose/plain-text receipts; balanced).
+      Section headers task-2: ## 0..## 7 all present exactly once, in order.
+      File length 117 -> 120 (+3) matches the 2-line -> 5-line expansion exactly.
+
+================================================================================
+SECTION F — ITEM 6: dirty_worktree / no-commit
+================================================================================
+PASS
+
+  $ git log --oneline -1
+  b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+  $ git rev-parse --short HEAD
+  b6840d1
+  HEAD unmoved; matches task-1's recorded base-sha
+  b6840d1cd72cd536108457d3e78f6bcf54c548ec (L12). No commit was made.
+
+  Concurrent-lane note: `git status --porcelain -- server web worker docs | wc -l` is
+  now 16, whereas receipt-fix §4 C8 recorded 15 at its run time. The delta is exactly
+  one entry — server/prisma/schema.prisma — which the Todo 6 lane opened after the
+  receipt-fix snapshot (mtime 11:47:36 > receipt-fix 11:50:01 capture window start).
+  This is NOT a Todo 14 regression and is explicitly out of scope per the brief.
+  Total porcelain is 33 vs 31 recorded: +task-receipt-fix (Todo 14's own file) and
+  +schema.prisma (Todo 6). Both accounted for.
+
+================================================================================
+SECTION G — Plan acceptance criteria, re-run by me verbatim
+================================================================================
+  $ grep -c "14 行" .omo/evidence/task-1-team-worker-node.txt
+  2                                        (>=1 PASS)
+  $ grep -n "9 个文件\|9 files" .omo/evidence/task-1-team-worker-node.txt
+  30:…以上 14 行中，9 个文件为本计划开工前的既有脏改动…   (HIT PASS)
+  $ grep -n "23 deletions" .omo/evidence/task-2-team-worker-node.txt
+  182: 3 files changed, 1 insertion(+), 23 deletions(-)  (HIT PASS)
+  $ git diff --shortstat -- server/src/agents
+   3 files changed, 1 insertion(+), 23 deletions(-)      (matches receipt verbatim)
+  $ grep -c "部署前须补 dump" .omo/evidence/task-1-team-worker-node.txt
+  0                                        (must remain 0 — PASS, confirmed by me)
+
+================================================================================
+SUMMARY TABLE
+================================================================================
+  #  Item                                                        Result
+  1  task-1: 14 entries / 5 named artifacts / 9-file baseline   PASS
+  2  Anti-grep-pandering: phrase absent, count 0                PASS
+  3  task-2 §6 diffstat == live shortstat, byte-identical       PASS
+  4  receipt-fix exists, coherent, cited line numbers match     PASS (1 cosmetic defect)
+  5  No product file touched; neighbours uncorrupted            PASS
+  6  HEAD still b6840d1; no git write commands                  PASS
+
+  DEFECTS: 1 (DEFECT-1, cosmetic, one-token fix, evidence file only)
+  BLOCKING: 0
+
+  Note for the plan owner: whether DEFECT-1 alone justifies a follow-up edit is a
+  judgement call. It is a genuine, reproducible factual misquote in an evidence
+  receipt, and Todo 14 exists precisely to eliminate receipt inaccuracies — so the
+  consistent action is the one-token fix. It is NOT a correctness problem in either
+  corrected receipt.
+
+================================================================================
+SCOPE / METHOD DECLARATION
+================================================================================
+  - Read-only. Only file written: this verdict artifact. No git add/commit/stash/
+    checkout/reset was executed at any point.
+  - All raw outputs above were produced by the verifier in this repo, live.
+  - Nested subagent delegation was unavailable (harness subagent depth limit = 1,
+    verifier itself runs as a subagent); every check was therefore executed directly,
+    which is the correct instrument anyway for byte-exact comparison.
+  - Confidence: 0.95 — HIGH. All findings are byte-reproducible via the commands
+    quoted. Residual 0.05 covers only the unknowable original bytes of the untracked
+    task-1/task-2 files (no git history exists for them, so "unchanged elsewhere"
+    rests on internal coherence + the +3 shift arithmetic, which I verified directly).
+================================================================================

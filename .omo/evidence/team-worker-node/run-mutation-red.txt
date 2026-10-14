@@ -1,0 +1,97 @@
+[e2e] date=2026-10-14T14:42:20Z HEAD=cb0ba6d1ab16571c0c979e41e40951000819f1c7 branch=fix/doc-pdf-export
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/team-worker-node
+[e2e] W_A=w_compose_worker W_B=w_e2e_second W_NOPE=w_nope_e2e_dangling WORKER2_NAME=vteam-e2e-worker2
+[e2e] PRE-0 docker version (exit=0):
+[e2e]   Client:
+[e2e]    Version:           29.8.2
+[e2e]    API version:       1.56
+[e2e]    Go version:        go1.26.8
+[e2e]    Git commit:        7fc2dff
+[e2e]    Built:             Sun Oct 11 12:42:20 2026
+[e2e]    OS/Arch:           darwin/arm64
+[e2e]    Context:           orbstack
+[e2e]   
+[e2e]   Server: Docker Engine - Community
+[e2e]    Engine:
+[e2e]     Version:          29.8.2
+[e2e]     API version:      1.56 (minimum version 1.40)
+[e2e]     Go version:       go1.26.8
+[e2e]     Git commit:       8af9fe3
+[e2e]     Built:            Wed Sep 30 19:32:49 2026
+[e2e]     OS/Arch:          linux/arm64
+[e2e]     Experimental:     true
+[e2e]    containerd:
+[e2e]     Version:          v2.3.6
+[e2e]     GitCommit:        ee2735368117d2eb259779949d5e75cdafec9761
+[e2e]    runc:
+[e2e]     Version:          1.5.2
+[e2e]     GitCommit:        29dd3dc2b13b4123162e5fe132504bb4b15569f1
+[e2e]    docker-init:
+[e2e]     Version:          0.19.0
+[e2e]     GitCommit:        de40ad0
+[e2e] PRE-1 SKIPPED (E2E_REBUILD=0)
+[e2e] PRE-1 STALE-IMAGE ACK: E2E_ACK_STALE_IMAGE=1 — accepted by the caller (mutation rerun). The PRE-1b schema guard below still proves the columns exist.
+[e2e] PRE-1 waiting for server health (timeout 420s)
+[e2e] PRE-1 server healthy; docker compose ps:
+[e2e] ps| NAME                   IMAGE          COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+[e2e] ps| vteam-compose-db       mysql:8        "docker-entrypoint.s…"   db        30 minutes ago   Up 30 minutes (healthy)   3306/tcp, 33060/tcp
+[e2e] ps| vteam-compose-server   vteam-server   "docker-entrypoint.s…"   server    2 minutes ago    Up 2 minutes (healthy)    0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+[e2e] ps| vteam-compose-web      vteam-web      "docker-entrypoint.s…"   web       30 minutes ago   Up 30 minutes (healthy)   0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+[e2e] ps| vteam-compose-worker   vteam-worker   "docker-entrypoint.s…"   worker    30 minutes ago   Up 30 minutes             0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, 0.0.0.0:14848->4848/tcp, [::]:14848->4848/tcp
+[e2e] PRE-0 logged in as admin (token acquired, value not logged)
+[e2e] PRE-1b information_schema teams.preferred_worker_id count=1
+[e2e] PRE-1b information_schema team_members.preferred_worker_id count=1
+[e2e] PRE-1b schema guard PASS (both columns exist → migrations ran on this image)
+[e2e] PRE-2 ensuring a second REAL worker container (vteam-e2e-worker2, WORKER_ID=w_e2e_second)
+[e2e] run|  Container vteam-compose-server Running 
+[e2e] run|  Container vteam-compose-db Running 
+[e2e] run|  Container vteam-compose-db Waiting 
+[e2e] run|  Container vteam-compose-db Healthy 
+[e2e] run|  Container vteam-compose-init Starting 
+[e2e] run|  Container vteam-compose-init Started 
+[e2e] run|  Container vteam-compose-init Waiting 
+[e2e] run|  Container vteam-compose-db Waiting 
+[e2e] run|  Container vteam-compose-db Healthy 
+[e2e] run|  Container vteam-compose-init Exited 
+[e2e] run|  Container vteam-compose-server Waiting 
+[e2e] run|  Container vteam-compose-server Healthy 
+[e2e] run|  Container vteam-e2e-worker2 Creating 
+[e2e] run|  Container vteam-e2e-worker2 Created 
+[e2e] run| af20860a7347e59299e145631b5a462aab6423350f9d943a6ad12d552131e232
+[e2e] PRE-2 docker compose run -d --name vteam-e2e-worker2 -e WORKER_ID=w_e2e_second -e WORKER_ADVERTISE_HOST=http://vteam-e2e-worker2 -v vteam_e2e_worker2_data:/data/vteam-worker -v vteam_e2e_worker2_home:/root worker exit=0
+[e2e] PRE-2 waiting for TWO online workers (timeout 420s)
+[e2e] PRE-2 two online workers confirmed (db):
+[e2e] db| w_compose_worker	online	1.19.0	2026-10-14 14:45:35.291
+[e2e] db| w_e2e_second	online	1.19.0	2026-10-14 14:45:37.298
+[e2e] PRE-0 logged in as admin (token acquired, value not logged)
+[e2e] PRE-2 capabilities.baseUrl: w_compose_worker=http://worker:4000 w_e2e_second=http://vteam-e2e-worker2:4000
+[e2e] PASS PRE-2 two real, addressable workers online with distinct baseUrls
+[e2e] setup role=ar_product agent=a_product (first agent with no default model, so the dispatch model chain stays empty and B1 cannot mask the pin)
+[e2e] setup team=tm_0000000002 member=tmm_0000000008 mainAgentMemberId=tmm_0000000008
+[e2e] A PATCH team preferredWorkerId=w_compose_worker → GET returns w_compose_worker
+[e2e] A PATCH team preferredWorkerId="" → GET returns null (automatic scheduling)
+[e2e] A PATCH team preferredWorkerId=null → GET returns null
+[e2e] PASS A team-level preferred worker set / cleared via PATCH + GET round trip
+[e2e] B team=w_compose_worker + member=w_e2e_second → GET /teams/:id member=w_e2e_second AND GET /tasks/:id instance=w_e2e_second (both w_e2e_second)
+[e2e] B member cleared → GET /teams/:id member= (null) AND GET /tasks/:id instance= (null), team still w_compose_worker
+[e2e] B NOTE the DTOs echo the member's raw slot (null = follow team); that the effect falls back to w_compose_worker — not to automatic scheduling — is proven by the dispatch in C1 below
+[e2e] PASS B member choice beats team in both projections and both agree after clearing
+[e2e] dispatch(C1): message POST -> HTTP 201 channel=c_0000000002 (fire-and-forget; the binding is read back from the DB)
+[e2e] C1 session bound worker=w_compose_worker (team pin w_compose_worker honored)
+[e2e] dispatch(C2): message POST -> HTTP 201 channel=c_0000000002 (fire-and-forget; the binding is read back from the DB)
+[e2e] C2 session bound worker=w_e2e_second (member pin w_e2e_second honored, team pin w_compose_worker overridden)
+[e2e] C3 docker stop vteam-e2e-worker2 -> ok; waiting for the DB row to flip offline (markStaleWorkersOffline, up to 120s)
+[e2e] C3 db: w_e2e_second -> offline
+[e2e] dispatch(C3): message POST -> HTTP 201 channel=c_0000000002 (fire-and-forget; the binding is read back from the DB)
+[e2e] FAIL step=C3 reason=no session bound within 60s after taking w_e2e_second offline (the dispatch failed instead of falling back)
+[e2e] ----- cleanup receipt -----
+[e2e] cleanup: DELETE /tasks/t_0000000001 -> HTTP 200
+[e2e] cleanup: DELETE /teams/tm_0000000002 -> HTTP 200
+[e2e] cleanup: db rows left in teams for tm_0000000002 = 0
+[e2e] cleanup: db DELETE sessions for member tmm_0000000008 ok
+[e2e] cleanup: db DELETE workers id=w_e2e_second ok (availabilities/instances/sessions cleared first)
+[e2e] cleanup: docker rm -f vteam-e2e-worker2 ok
+[e2e] cleanup: docker volume rm vteam_e2e_worker2_data vteam_e2e_worker2_home ok
+[e2e] cleanup: temp files removed
+[e2e] EXIT CODE OVERRIDDEN to 1: the summary guard never passed, so this run did NOT prove A/B/C/D — a skipped or unrun segment is never a pass
+[e2e] ----- exit code: 1 -----

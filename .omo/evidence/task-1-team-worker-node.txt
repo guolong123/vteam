@@ -1,0 +1,121 @@
+Todo 1 — 迁移前预检 dump + 单向 DDL 回滚契约落档
+采集时间（UTC）: 2026-10-14T02:43:53Z
+采集时间（本机）: 2026-10-14 10:43 (Asia/Shanghai)
+说明：下列全部输出均为原始命令输出 / 字面退出码，未做任何「改写式成功叙述」。
+
+============================================================
+1. 开工快照（本波 DDL 的 base-sha 与脏基线，取在任何编辑之前）
+============================================================
+命令：git rev-parse HEAD
+b6840d1cd72cd536108457d3e78f6bcf54c548ec
+
+base-sha = b6840d1cd72cd536108457d3e78f6bcf54c548ec
+
+命令：git status --porcelain
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+
+脏工作区说明（dirty_worktree 类对抗项）：以上 14 行中，9 个文件为本计划开工前的既有脏改动（不属于本计划范围）；另 5 行
+（.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、.omo/plans/team-worker-node.md、
+.omo/drafts/team-worker-node.md、.omo/notepads/team-worker-node/）为本计划自身的
+编排产物，同样非本 todo 的代码改动。后续 Todo 13 与 F4 请以本节上方 14 行原始
+输出为相对比较零点，不要引用「13 行」这一计数。
+时间戳 2026-10-14T02:43:53Z 早于本 todo 的任何文件写入；本 todo 未执行也未允许
+git checkout / git stash / 任何清理动作，既有脏改动原样保留。
+
+============================================================
+2. MySQL 可达性探测
+============================================================
+命令：nc -z localhost 3306; echo exit=$?
+exit=1
+
+exit=1 表示 3306 端口无监听，本机无可达 MySQL（本仓常态）。
+
+============================================================
+3. 预检备份命令原文（docs/tech-debt-rollback.md 第 2 节，逐字）
+============================================================
+mkdir -p .omo/evidence
+
+mysqldump --single-transaction --routines --triggers --default-character-set=utf8mb4 -h <host> -P <port> -u <user> -p <db> > .omo/evidence/ddl-<wave>-<date>.sql
+
+ls -lh .omo/evidence/ddl-<wave>-<date>.sql
+
+本波实际命名：.omo/evidence/ddl-team-worker-node-<YYYYMMDD>.sql
+占位符说明：<host>=localhost <port>=3306 <user>=root <db>=aiagents（取自
+chart/vteam/values.yaml 的 db 配置），口令一律使用 $MYSQL_ROOT_PASSWORD 形式，
+本文件不贴任何真实口令。
+
+结论：无可达 MySQL：本波 DDL 只在 compose/k8s 由 init 服务应用（docker-compose.yml:44-54）。
+即 mysqldump 预检在本仓无法本地执行，dump 必须由部署方在目标环境补齐。
+部署方执行 DDL 前必须自行补 dump。
+
+============================================================
+4. 回滚契约（顺序规则 + 不可逆事实）
+============================================================
+恢复 = 先 git reset --hard <last-green>（代码）再 mysql < dump.sql（数据），顺序不可颠倒；
+本仓无 down migration；restore 会丢弃迁移后的所有写入。
+
+不可逆性说明：本波为单向 DDL（含 DROP COLUMN）。DROP COLUMN 一旦由 migrate deploy
+应用，git 回退代码并不能撤销列删除；库侧只能靠 restore 全库 dump 回滚。restore 不是
+部分撤销，而是把库整体拨回迁移前状态，因此迁移之后的任何写入全部丢失，这是有意的设计。
+
+============================================================
+5. dump 未入库的检出能力（.sql 被 gitignore）
+============================================================
+命令：git check-ignore -v .omo/evidence/ddl-team-worker-node-$(date +%Y%m%d).sql
+.gitignore:45:.omo/evidence/**/*.sql	.omo/evidence/ddl-team-worker-node-20261014.sql
+exit=0
+
+命中 .gitignore:45 的 .omo/evidence/**/*.sql，dump 文件被忽略。
+
+命令：git ls-files --error-unmatch .omo/evidence/ddl-team-worker-node-$(date +%Y%m%d).sql
+error: pathspec '.omo/evidence/ddl-team-worker-node-20261014.sql' did not match any file(s) known to git
+Did you forget to 'git add'?
+exit=1
+
+一处说明：由于 .omo/evidence/**/*.sql 被 .gitignore:45 忽略，git status --porcelain
+对 dump 文件的计数恒为 0，属于零检出力的判据；真正能检出「dump 是否入库」的是
+git ls-files --error-unmatch（必须失败 = 未被跟踪入库）与 git check-ignore -v
+（命中 .gitignore:45 即证明被忽略）。
+
+============================================================
+6. 失败路径探测（真实执行，非叙述）
+============================================================
+命令：
+zsh -c 'mysqldump --single-transaction --routines --triggers --default-character-set=utf8mb4 -h localhost -P 65000 -u root -p"$MYSQL_ROOT_PASSWORD" aiagents > .omo/evidence/ddl-team-worker-node-$(date +%Y%m%d).sql'; echo exit=$?
+
+字面输出：
+zsh:1: command not found: mysqldump
+exit=127
+
+字面非零退出码：127
+
+补充事实（同样为原始输出）：
+命令：command -v mysqldump; echo which_exit=$?
+which_exit=1
+
+即本机不仅无可达 MySQL，连 mysqldump 客户端也未安装（command not found，退出码 127，
+非「连接被拒」）。因此 failure-path 的真实失败模式是「客户端缺失 + 无监听端口」，两者
+都非 0 退出。该次运行留下的 0 字节文件 .omo/evidence/ddl-team-worker-node-20261014.sql
+已在收尾阶段删除（见 CLEANUP），仓库中不保留任何本次生成的 dump。
+
+记录规则：预检失败 ⇒ STOP，不得进入 Todo 7。
+
+============================================================
+CLEANUP
+============================================================
+已删除失败路径探测产生的 0 字节文件 .omo/evidence/ddl-team-worker-node-20261014.sql。
+未创建任何新 .sql；目录中剩余的 ddl-W6/W7/W8/W9-*.sql 均为 2026-09-24 的历史产物，
+非本 todo 生成，未触碰。本 todo 未做任何 commit（计划标注 Commit: N）。

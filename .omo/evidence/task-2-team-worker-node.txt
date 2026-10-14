@@ -1,0 +1,220 @@
+================================================================
+TASK 2 — 服务端删除 Agent.workerId 读写与 DTO 字段（并修既有精确键集测试）
+Plan: .omo/plans/team-worker-node.md lines 104-115 (authoritative)
+base-sha: b6840d1cd72cd536108457d3e78f6bcf54c548ec
+Host: macOS (darwin), Asia/Shanghai
+================================================================
+
+## 0. 开工快照 / dirty_worktree 防护
+$ git status --porcelain   (BEFORE, 本任务开工时全仓原始输出)
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/evidence/task-1-team-worker-node.txt
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+
+→ 以上既有脏文件（含 server/src/platform-mcp/* 与 web/src/components/chat/msg-parts.tsx）
+  本任务**零接触**：未执行任何 git 写命令（无 add/commit/stash/checkout），
+  也未编辑这些文件。AFTER 段落新增的 docs/agent-platform/*、web/app/(main)/agents/page.tsx、
+  web/e2e/reference/testids.ts、server/src/workers/* 均来自**并行的兄弟 worker**
+  （Todo 3 / Todo 4），不是本任务的改动。
+
+## 1. 改动清单（逐条对应计划 :106-108）
+server/src/agents/agents.service.ts
+  - AgentRow.workerId                         (原 :66)   删除
+  - 注释「设置字段（name/prompt/defaultModelId/workerId/persona/…）」(原 :323) 去掉 workerId
+  - PATCH 写入分支 ...(dto.workerId !== undefined ? …) (原 :361) 删除
+  - toAgentDto 返回类型成员 workerId: string | null; (原 :628) 删除
+  - toAgentDto 的 workerId: agent.workerId,    (原 :652) 删除
+  - toAgentDtoList 的 workerId: agent.workerId, (原 :678) 删除
+server/src/agents/dto/update-agent.dto.ts
+  - workerId 字段块 + @ApiPropertyOptional 描述 (原 :83-91) 删除
+  - 连带：随之成为未使用的 `ValidateIf` import 一并删除（否则 lint:check 报 no-unused-vars）
+server/src/agents/agents.service.spec.ts
+  - 行夹具 workerId: null ×5 (:70/:86/:102/:118/:137) 删除
+  - 精确键集断言 Object.keys(result.items[0]).sort() 中的 'workerId' (:310) 删除 ← 硬失败点
+
+## 2. MUST NOT 遵守情况
+grep -rn "workerId" server/src/agents/agents.service.ts server/src/agents/dto/update-agent.dto.ts
+（改动后，39 行命中，全部为「取数 worker」/opts.workerId 语义；update-agent.dto.ts 零命中）
+  agents.service.ts:103:  workerId: string | null;                  <- OpencodeAgentsResult.workerId（保留，:96-104 区）
+  :412/413/417/421  availableModels 的 assignWorker 取数局部变量
+  :436/439/442/459-475  getOmoConfig(opts:{workerId?})            <- opts.workerId 保留
+  :485/489/497-516       setOmoConfig(opts:{workerId?})           <- opts.workerId 保留
+  :525/533-542           getOmoAgentPrompt(…, {workerId})          <- opts.workerId 保留
+  :560/569/573-607       listOpencodeAgents({workerId, directory})  <- opts.workerId 保留
+（逐行原文见下方 §5 原始输出）
+- 未删 OpencodeAgentsResult.workerId；未动 agents.controller.ts 的 ?workerId= 查询参数；
+  未动 server/src/workers/workers.service.ts（归 Todo 4）；未动 schema.prisma（归 Todo 6）；
+  未加任何兼容 shim（全局 ValidationPipe whitelist:true，旧客户端的 workerId 被静默剥离，设计内行为）。
+
+## 3. 验收命令与原始输出
+
+### 3.1 cd server && npx jest src/agents   → 全绿
+$ cd /Volumes/SSD-Data/01work/git-project/vteam/server && npx jest src/agents
+PASS src/agents/agents.service.spec.ts
+PASS src/agents/agents.controller.spec.ts
+PASS src/agents/persona.constants.spec.ts
+
+Test Suites: 3 passed, 3 total
+Tests:       115 passed, 115 total
+Snapshots:   0 total
+Time:        5.106 s
+Ran all test suites matching /src\/agents/i.
+ESLINT_EXIT 的同类原始退出码: JEST_EXIT=0
+
+### 3.2 npx tsc --noEmit -p tsconfig.json → 通过
+$ npx tsc --noEmit -p tsconfig.json
+TSC_EXIT=0
+
+### 3.3 eslint（本次改动文件）→ 0 error
+$ npx eslint src/agents/agents.service.ts src/agents/agents.service.spec.ts src/agents/dto/update-agent.dto.ts
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.service.ts
+  348:15  warning  'updated' is assigned a value but never used. …
+✖ 1 problem (0 errors, 1 warning)
+ESLINT_EXIT=0
+说明：348 行的 `const updated = await tx.agent.update(...)` 未使用是**既有缺陷**
+（HEAD 版本同处亦未引用，见 `git show HEAD:server/src/agents/agents.service.ts` 第 348 行），
+与本任务无关，按指令 (c) 只报告不修。
+
+## 4. MANUAL QA CHANNEL（真实表面 = agents.service.spec 的 findAll 键集断言）
+
+### 4.1 happy
+$ cd server && npx jest src/agents/agents.service.spec.ts -t "列表"
+Tests:       67 skipped, 10 passed, 77 total
+Test Suites: 1 passed, 1 total
+HAPPY_EXIT=0
+（键集断言 `Object.keys(result.items[0]).sort()` 现已不含 'workerId'，见 diff）
+
+### 4.2 failure / mutation（RED 证据 —— 突变校验）
+突变方式：临时把 `workerId: agent.workerId` 加回 toAgentDtoList，并临时补回 AgentRow.workerId
+（仅补字段以通过 ts 编译，模拟“漏删 DTO 字段”的真实失败路径）。
+
+$ npx jest src/agents/agents.service.spec.ts -t "列表"
+      ✕ 无参返回全部用户可见 Agent，含扩展字段（skillIds/policyId/effectivePermission/baseAgentId/defaultModelId） (14 ms)
+  ● AgentsService › findAll（列表：type 过滤 + 分页 + 扩展字段） › 无参返回全部用户可见 Agent，含扩展字段（…）
+    - Expected  - 0
+    + Received  + 1
+    +   "workerId",
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 67 skipped, 9 passed, 77 total
+
+→ 证明该精确键集断言是本次改动的**真实判据**（不是装饰性断言）。
+
+（首次突变尝试只加 toAgentDtoList 字段而未补 AgentRow 时，jest 直接编译失败：
+  `● Test suite failed to run` / `Test Suites: 1 failed, 1 total` / `Tests: 0 total`
+  —— 也印证了计划 :106 所述「漏删 AgentRow/返回类型成员 ⇒ tsc 报 missing」的门禁价值。）
+
+### 4.3 revert 后复跑 → 恢复绿
+$ npx jest src/agents/agents.service.spec.ts -t "列表"
+Test Suites: 1 passed, 1 total
+Tests:       67 skipped, 10 passed, 77 total
+
+$ npx jest src/agents
+Test Suites: 3 passed, 3 total
+Tests:       115 passed, 115 total
+
+## 5. grep 原始输出（改动后，仅剩取数语义 + opts.workerId）
+$ grep -rn "workerId" server/src/agents/agents.service.ts server/src/agents/dto/update-agent.dto.ts
+server/src/agents/agents.service.ts:103:  workerId: string | null;
+server/src/agents/agents.service.ts:412:      const workerId = await this.workersService.assignWorker();
+server/src/agents/agents.service.ts:413:      if (!workerId) return this.fallbackModels();
+server/src/agents/agents.service.ts:417:        where: { id: workerId },
+server/src/agents/agents.service.ts:421:        worker ?? { id: workerId },
+server/src/agents/agents.service.ts:436:   * workerId 显式传入则用之；缺省经 assignWorker 选一个可用 worker。
+server/src/agents/agents.service.ts:439:  async getOmoConfig(opts: { workerId?: string } = {}): Promise<{
+server/src/agents/agents.service.ts:442:    workerId: string | null;
+server/src/agents/agents.service.ts:459:      const workerId =
+server/src/agents/agents.service.ts:460:        opts.workerId ?? (await this.workersService.assignWorker());
+server/src/agents/agents.service.ts:461:      if (!workerId) {
+server/src/agents/agents.service.ts:462:        return { agents: {}, available: [], workerId: null, degraded: true };
+server/src/agents/agents.service.ts:467:        where: { id: workerId },
+server/src/agents/agents.service.ts:471:        worker ?? { id: workerId },
+server/src/agents/agents.service.ts:473:      return { ...result, workerId };
+server/src/agents/agents.service.ts:475:      return { agents: {}, available: [], workerId: null, degraded: true };
+server/src/agents/agents.service.ts:485:    opts: { workerId?: string; enabled?: boolean } = {},
+server/src/agents/agents.service.ts:489:    workerId: string;
+server/src/agents/agents.service.ts:497:    const workerId =
+server/src/agents/agents.service.ts:498:      opts.workerId ?? (await this.workersService.assignWorker());
+server/src/agents/agents.service.ts:499:    if (!workerId) {
+server/src/agents/agents.service.ts:505:      where: { id: workerId },
+server/src/agents/agents.service.ts:516:    return { ...result, workerId };
+server/src/agents/agents.service.ts:525:    opts: { workerId?: string } = {},
+server/src/agents/agents.service.ts:533:    const workerId =
+server/src/agents/agents.service.ts:534:      opts.workerId ?? (await this.workersService.assignWorker());
+server/src/agents/agents.service.ts:535:    if (!workerId) {
+server/src/agents/agents.service.ts:542:      where: { id: workerId },
+server/src/agents/agents.service.ts:560:   * - workerId 显式传入则用之；缺省经 assignWorker 选一个可用 worker。
+server/src/agents/agents.service.ts:569:    workerId?: string;
+server/src/agents/agents.service.ts:573:      const workerId =
+server/src/agents/agents.service.ts:574:        opts.workerId ?? (await this.workersService.assignWorker());
+server/src/agents/agents.service.ts:575:      if (!workerId) {
+server/src/agents/agents.service.ts:576:        return { agents: [], workerId: null, degraded: true };
+server/src/agents/agents.service.ts:584:      where: { id: workerId },
+server/src/agents/agents.service.ts:588:        worker ?? { id: workerId },
+server/src/agents/agents.service.ts:592:        return { agents: [], workerId, degraded: true };
+server/src/agents/agents.service.ts:603:      workerId,
+server/src/agents/agents.service.ts:607:      return { agents: [], workerId: null, degraded: true };
+（update-agent.dto.ts 零命中 —— 39 行全部来自 agents.service.ts）
+
+## 6. CLEANUP RECEIPT（清理回执）
+- 突变（RED 证据用）已 100% 回滚：AgentRow.workerId 与 toAgentDtoList.workerId 两处重新删除，
+  并按 prettier 规则清理了删除行遗留的空行。最终 `git diff -- server/src/agents` 只含 §1 所列 5+1+6 处删除，
+  无任何新增/残留行（见 §7 diffstat）。
+- 未创建任何临时文件于仓库内；/tmp/base_svc.ts（eslint 基线比对尝试，未生效）不在仓库内，可忽略。
+- 本任务在 .omo/ 下**只**写了本文件 .omo/evidence/task-2-team-worker-node.txt。
+- 未执行任何 git 写命令（git status / rev-parse / diff / show / stash list 均为只读）。
+
+$ git diff --stat -- server/src/agents
+ server/src/agents/agents.service.spec.ts  |  6 ------
+ server/src/agents/agents.service.ts       |  7 +------
+ server/src/agents/dto/update-agent.dto.ts | 11 -----------
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+
+$ git status --porcelain -- server/src/agents
+ M server/src/agents/agents.service.spec.ts
+ M server/src/agents/agents.service.ts
+ M server/src/agents/dto/update-agent.dto.ts
+
+$ git status --porcelain   (AFTER，全仓原始输出；新增行来自并行兄弟 worker)
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M docs/agent-platform/prototypes/agent-config/index.tsx      <- Todo 3
+ M docs/agent-platform/prototypes/agent-manage/index.tsx      <- Todo 3
+ M server/src/agents/agents.service.spec.ts                   <- 本任务
+ M server/src/agents/agents.service.ts                        <- 本任务
+ M server/src/agents/dto/update-agent.dto.ts                   <- 本任务
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/workers/workers.service.spec.ts                 <- Todo 4
+ M server/src/workers/workers.service.ts                      <- Todo 4
+ M web/app/(main)/agents/page.tsx                             <- Todo 3
+ M web/e2e/reference/testids.ts                              <- Todo 3
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/evidence/task-1-team-worker-node.txt
+?? .omo/evidence/task-2-team-worker-node.txt                   <- 本任务
+?? .omo/evidence/task-3-team-worker-node.txt
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+
+## 7. 报告给他人的既有缺陷（按指令 (c) 不修）
+1. server/src/agents/agents.service.ts:348 —— `const updated = await tx.agent.update(...)` 赋值后从未使用
+   （eslint no-unused-vars warning）。HEAD 即存在，与本任务无关。
+2. 提交由 orchestrator 在独立复核后执行；本任务按指令 (a) 未做任何 git 写操作。

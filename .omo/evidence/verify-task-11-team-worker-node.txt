@@ -1,0 +1,174 @@
+================================================================================
+VERIFY TODO 11 — 成员面板 worker chip + 会话页接线 + testid 注册（独立复核，read-only）
+Plan: .omo/plans/team-worker-node.md (todo 11 block lines 233-244; guardrail 34-47)
+Date: 2026-10-14 | HEAD: cb0ba6d1ab16571c0c979e41e40951000819f1c7 (unchanged, no commit by me)
+Verdict: PASS WITH 1 NON-BLOCKING GAP (testids: team-worker-select unregistered)
+================================================================================
+
+0. INDEPENDENCE
+   - No executor claim taken on trust. Every item below re-derived from files,
+     `git diff`, gates I ran myself, and web/.next artifacts.
+   - I performed NO git write (no add/commit/stash/checkout). I did re-run
+     `npm run lint` and `npm run build` (both permitted; gitignored artifacts),
+     and ran the line-442 probe on a THROWAWAY COPY outside the repo (deleted).
+
+1. CONCERN A — testids.ts placement / team-worker-select
+   FACTS (verified by reading web/e2e/reference/testids.ts in full, 563 lines):
+   - PAGES routes present: /login, /teams, /tasks/new, /board?teamId=…, /agents,
+     /teams/[id]/session, AppShell x3 (no own route), /system/roles, /skills,
+     /artifacts?teamId=…, /system/users, /workers/install, /workers, /models.
+     => NO entry whose route is the team DETAIL page "/teams/[id]". CONFIRMED.
+   - PAGE_SMOKE has "/teams/[id]/session" but NO "/teams/[id]" key either.
+   - `grep -rn "team-worker-select" web/app web/src web/e2e docs` → only ONE hit:
+     web/app/(main)/teams/[id]/page.tsx:347 (the live control created by Todo 10).
+     => The testid exists in the product but is UNREGISTERED in the reference list.
+     CONFIRMED.
+   - Executor's diff = +3 entries appended INSIDE the "2.3b team-session" entry
+     (route /teams/[id]/session), after "msg-tool-awaiting" (lines 236-240):
+       "agent-worker-chip-<instanceId>",
+       "agent-worker-option-<instanceId>-follow-team",
+       "agent-worker-option-<instanceId>-<workerId>"
+     (same diff also removes the stale "agent-worker-select" from the /agents
+      entry at :156 — that removal is Todo 3's, not Todo 11's.)
+   - `<TeamMembersPanel>` has exactly ONE render site in the whole repo:
+     web/app/(main)/teams/[id]/session/page.tsx:1334. The only other importer,
+     web/app/(main)/teams/[id]/tasks/page.tsx:16, imports just `toRole`. So the
+     chip renders ONLY on the session page → the placement is factually correct.
+   VERDICT: placement = FAITHFUL reading of intent (the file's own contract is a
+   per-route exhaustive list; putting a session-page chip under /agents would make
+   the reference list wrong). NOT a deviation — do not move it.
+   REMAINING GAP (real, minor, inherited from Todo 10): `team-worker-select` is
+   still unregistered, so the reference list is incomplete for that one new testid.
+   SMALLEST CONCRETE FIX (1 line, keeps the list honest without fabricating an
+   exhaustive page inventory that nobody audited) — append to PAGE_SMOKE next to
+   the other "/teams" keys (web/e2e/reference/testids.ts:554 area):
+     "/teams/[id]": ["team-detail-root", "team-worker-select", "enter-team-session", "team-save-name"],
+   (Alternative if the orchestrator insists on PAGES: a new PAGES entry with
+    auditPage "2.3a team-detail", route "/teams/[id]", root "team-detail-root" —
+    but that claims exhaustiveness for a page that was never in the Phase-0 audit,
+    so PAGE_SMOKE is the proportionate fix.)
+
+2. CONCERN B — in-narrowing for the task-instance mapping
+   FACTS:
+   - `TaskInstance` (web/src/components/tasks/task-detail-types.ts:12-27) has NO
+     `preferredWorkerId`. CONFIRMED (executor's claim true).
+   - `MemberView` (same file:129-140) DOES declare it (:139), `TeamMemberDto`
+     (web/src/api/teams.ts:20) declares it, and the panel element shape
+     (TeamMembersPanel.tsx:132) declares it. So only the task-instance type lags.
+   - Narrowing present at session/page.tsx:74-77, immediately after the
+     opencodeAgentName narrowing (:70-73), identical idiom:
+       const preferredWorkerId =
+         "preferredWorkerId" in instance && typeof instance.preferredWorkerId === "string"
+           ? instance.preferredWorkerId
+           : null;
+     A MISSING field (and null, and any non-string) yields `null`, projected at
+     :87 → SessionAgent.preferredWorkerId (declared :59). No undefined leaks.
+   - Team-derived mapping at :442 uses the direct read `m.preferredWorkerId ?? null`.
+   VERDICT: behaviourally CORRECT and fail-safe (fail-closed to null = "跟随团队",
+   never "undefined" in the projection). No behaviour bug; nothing to block.
+   JUDGEMENT ON F2: Yes — ask F2 to reconsider, as a HYGIENE item (Quick, 1 line):
+   the server task-instance projection DOES return the field (Todo 9,
+   tasks.service.ts), so `TaskInstance` under-declares a real API contract while
+   `MemberView` already declares it. Add `preferredWorkerId?: string | null` to
+   TaskInstance and collapse the narrowing to `instance.preferredWorkerId ?? null`.
+   NOT a Todo-11 defect: the executor's choice mirrors an established idiom in the
+   same function and avoids touching a shared, possibly sibling-edited type.
+
+3. WHAT ELSE FALSIFIED
+   1) CHIP (TeamMembersPanel.tsx):
+      - element shape +`preferredWorkerId?: string | null` (:132); prop
+        `onChangeWorker?: (instanceId: string, workerId: string | null) => void`
+        (:150-151) directly beside `onChangeModel`; destructured (:121).
+      - chip at :526-566: `data-testid={`agent-worker-chip-${a.instanceId ?? a.id}`}`
+        (:528, exactly as cited), `aria-label="设置 Worker 节点"`.
+      - two states mirror model chip (:503-519) one-for-one: unset = `1px dashed
+        neutral[300]` + transparent + neutral[500] + label 跟随团队; set =
+        `1px solid rgba(13,148,136,0.35)` + teal fill + #0D9488 + node name
+        (workerLabel → name, raw id if dangling, NEVER 跟随团队).
+   2) LIST: first entry :832-841 `data-testid=…-follow-team`, onClick →
+      `onChangeWorker?.(a.instanceId ?? a.id, null)` (CLEARS); node rows :843+ →
+      `onChangeWorker?.(…, w.id)` then `setWorkerPicker(null)`. Search box mirrors
+      model picker's ("搜索模型…"/"搜索节点…"). 跟随团队 ≠ 跟随模板: worker chip/list
+      use 跟随团队 everywhere; 跟随模板 remains only in model chip/list
+      (:501,:522,:752). Model chip behaviour and onChangeModel contract untouched.
+   3) MUTATION: :1141-1157 — `api.patch(`/teams/${teamId}/members/${instanceId}`,
+      { preferredWorkerId: workerId ?? null })` (:1143, verbatim match). onSuccess:
+      `invalidateQueries({ queryKey: ["team", teamId] })` (:1147) and, iff
+      `queueHeadTaskId`, `invalidateQueries({ queryKey: ["task", queueHeadTaskId] })`
+      (:1148-1150). Comment mirrors the model mutation at :1126-1140. Wired at
+      :1349 `onChangeWorker={(instanceId, workerId) => instanceWorkerMutation.mutate(...)}`.
+   4) BOTH MAPPINGS: team-derived :442 (`m.preferredWorkerId ?? null`);
+      task-instance-derived :74-77 + :87. End-to-end trace: `teamAgentMembers`
+      (:425-446) → taskInstancesToSessionAgents when `queueHeadTask.instances`
+      is non-empty, else the team mapping → passed to `<TeamMembersPanel agents>`
+      at :1335 → chip reads `a.preferredWorkerId` (:528). `panelAgentMembers`
+      (:448-451, same two paths) feeds TaskRightTabs at :1603. Both consumers
+      covered; invalidation of ["task", queueHeadTaskId] refreshes the
+      task-instance path (queueHeadTask = ["task", queueHeadTaskId], :218-223).
+   5) NO NEW FETCH / NO NEW PAGE: workers come from `queryKey: ["workers"]`
+      (TeamMembersPanel.tsx:230), the same key already used by app-shell:331,
+      agents page:2789, teams detail:116, models, workers page → shared cache.
+      No new route/page/tab/nav (git status: no untracked file under web/).
+      No third-party Select (imports unchanged: React/useEffect/useMemo/useState/
+      CSSProperties; no react-select/radix/headlessui/downshift).
+      Earlier-todo files untouched BY TODO 11: web/app/(main)/agents/page.tsx and
+      web/src/components/chat/msg-parts.tsx both still carry mtime 16:40:52, i.e.
+      before every Todo 8-11 edit (17:51/18:47/20:04/20:54) — nothing re-touched.
+      (msg-parts.tsx content is another lane's tool-card error fallback; contains
+      no worker/testid text; agents/page.tsx still satisfies Todo 3's greps:
+      agent-worker-select=0, workerDraft|sortedWorkers=0, 首选 Worker in agents
+      dirs=0.)
+   6) GATES (run by me, not quoted):
+      - `cd web && npx tsc --noEmit` → TSC_EXIT=0.
+      - `npm run lint` → LINT_EXIT=0 (729 warnings, 0 errors; all pre-existing;
+        only warning in TeamMembersPanel is :170 'roleItems', pre-existing code,
+        no warning at all in session/page.tsx).
+      - `npm run build` → BUILD_EXIT=0, "✓ Generating static pages (30/30)",
+        /teams/[id] and /teams/[id]/session both ƒ (dynamic), session route 45.6 kB.
+      - Real build confirmed independently of the log: web/.next/BUILD_ID and all
+        route artifacts carry today's build timestamp; the compiled
+        web/.next/server/app/(main)/teams/[id]/session/page.js contains
+        "change member worker failed" + preferredWorkerId x7, the session-page
+        static chunk contains agent-worker-chip-/agent-worker-option-/跟随团队, and
+        web/.next/server/app/(main)/teams/[id]/page.js contains team-worker-select.
+        (My re-run reproduces BUILD_EXIT=0 and 30/30, so the executor's 8.7s/30-30
+        claim is consistent with a real, code-current build.)
+   7) THE SCAR / PROBE: reproduced the tsc half on a throwaway copy (source rsync
+      + symlinked node_modules, OUTSIDE the repo, deleted afterwards):
+        baseline copy tsc                     → 0
+        copy with line 442 deleted, tsc       → 0   (scar invisible to tsc — CONFIRMED)
+      Repo today: line 442 present byte-intact (`preferredWorkerId: m.preferredWorkerId ?? null,`).
+      Probe residue: `grep -rn "TASK11_PROBE\|PROBE_TOKEN\|task11-assert\|assert.cjs"`
+      over the repo (excl node_modules/.next/.git) and over web/.next → hits ONLY
+      inside .omo/evidence/task-11-team-worker-node.txt (its own receipt), zero in
+      code, zero in build output.
+   8) NO COMMIT: `git log --oneline -1` = cb0ba6d (matches the mandated HEAD);
+      `git rev-parse HEAD` = cb0ba6d1ab16571c0c979e41e40951000819f1c7;
+      `git diff --cached --name-only | wc -l` = 0 (nothing staged); no sibling
+      commit above cb0ba6d; no path reverted/re-staged by me or observable.
+
+4. DIFFSTATS (match the executor's receipt exactly)
+   web/app/(main)/teams/[id]/session/page.tsx   +25
+   web/src/components/teams/TeamMembersPanel.tsx +154/-4
+   web/e2e/reference/testids.ts                  +4/-1
+
+5. NON-BLOCKING OBSERVATIONS (not defects, no fix required for Todo 11)
+   - Invalidation mirrors the model mutation, so the deep-linked case
+     (?task=<other task of same team>) refreshes ["task", queueHeadTaskId] but not
+     ["task", effectivePanelTaskId]: the chip can lag until another refresh. This is
+     a pre-existing pattern the plan told Todo 11 to copy verbatim, so it is
+     plan-faithful, not a Todo-11 regression.
+   - TeamMembersPanel header comment still claims "任务详情页 / 团队会话页复用"
+     while the only render site is the session page (stale but pre-existing).
+   - The executor's own "behavioral" gate was a static JSX-source contract
+     assertion; no live stack/DOM/HTTP was exercised (no :3001/:13001 existed).
+     The live half is correctly deferred to Todo 12 segment B — treat the DOM
+     confidence as static-analysis-grade until then.
+
+6. ESCALATION TRIGGERS (when to revisit)
+   - If a Playwright/e2e consumer needs team-worker-select locatable from the
+     reference file → apply the 1-line PAGE_SMOKE fix in §1.
+   - If TaskInstance is edited by the task-detail lane (F2) → collapse the
+     `in`-narrowing to `instance.preferredWorkerId ?? null` (see §2).
+   - If the members panel is ever consumed by a second route → re-register the
+     chip testids in THAT route's entry too (currently single-site).

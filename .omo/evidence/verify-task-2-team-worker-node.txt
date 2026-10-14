@@ -1,0 +1,954 @@
+================================================================
+VERIFY TASK 2 — 服务端删除 Agent.workerId 读写与 DTO 字段
+Verifier: independent read-only lane. Did NOT implement.
+Date: 2026-10-14 (host darwin)
+Plan: .omo/plans/team-worker-node.md lines 34-47 (Must-NOT) + 104-115 (Todo 2)
+Receipt under test: .omo/evidence/task-2-team-worker-node.txt
+================================================================
+
+VERDICT: CONFIRMED
+Confidence: 0.95
+
+Scope discipline of this lane: zero product-file edits; zero git write commands
+(no add/commit/stash/checkout/reset). Only artifact written:
+.omo/evidence/verify-task-2-team-worker-node.txt
+
+----------------------------------------------------------------
+1. RECEIPT CLAIMS (paraphrased, then independently tested)
+----------------------------------------------------------------
+C1. Change set confined to server/src/agents/agents.service.ts,
+    dto/update-agent.dto.ts, agents.service.spec.ts.
+C2. Six removals in agents.service.ts (AgentRow member, PATCH write branch,
+    comment mention, toAgentDto return-type member, toAgentDto field,
+    toAgentDtoList field) + workerId block in update-agent.dto.ts.
+C3. Collateral cleanup: unused ValidateIf import deleted (lint justification).
+C4. Spec: 5 fixture `workerId: null` removed + 'workerId' removed from the
+    EXACT key-set assertion (claimed as the hard failure point).
+C5. Untouched: OpencodeAgentsResult.workerId, all opts.workerId,
+    agents.controller.ts ?workerId=, workers.service.ts, schema.prisma.
+C6. Acceptance: jest src/agents all green (115/115); tsc --noEmit exit 0;
+    grep leaves only fetch-worker semantics; update-agent.dto.ts zero hits.
+C7. Mutation check: re-adding toAgentDtoList.workerId turns the key-set
+    assertion RED ("+ \"workerId\"").
+C8. Reported (not fixed): pre-existing eslint no-unused-vars warning at
+    agents.service.ts:348 (`const updated = ...`).
+
+----------------------------------------------------------------
+2. RESULT MATRIX
+----------------------------------------------------------------
+CLAIM                                  VERDICT   EVIDENCE
+C1 change set confined to 3 files      CONFIRMED §3.2 (hunks only in 3 files)
+C2 six removals complete               CONFIRMED §4 (regions read directly)
+C3 ValidateIf import removed           CONFIRMED §3.1
+C4 fixtures + key-set updated          CONFIRMED §5
+C5 collateral preserved / untouched    CONFIRMED §6
+C6 acceptance reproduced               CONFIRMED §7 (115/115, TSC_EXIT=0)
+C7 mutation load-bearing               CONFIRMED BY SHAPE §5 (not re-run, §8)
+C8 pre-existing eslint warning         CONFIRMED (exists at HEAD) §9
+
+----------------------------------------------------------------
+3. REAL DIFF (authoritative; I re-derived it, did not trust the receipt)
+----------------------------------------------------------------
+$ git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+
+$ git diff -- server/src/agents
+<see §10 RAW BLOCK A for the full verbatim diff>
+Summary of what it contains (my reading, not the receipt's):
+- agents.service.spec.ts : -6 lines, 0 added (5 fixtures + 1 key-set entry)
+- agents.service.ts      : +1 / -6 (the +1 is the comment rewrite
+                            "name/prompt/defaultModelId/persona/")
+- dto/update-agent.dto.ts: -11 / 0 (workerId block 10 lines + ValidateIf import)
+
+$ git diff -U0 -- server/src/agents | grep '^@@'
+@@ -70 +69,0 @@ describe('AgentsService', () => {
+@@ -86 +84,0 @@ describe('AgentsService', () => {
+@@ -102 +99,0 @@ describe('AgentsService', () => {
+@@ -118 +114,0 @@ describe('AgentsService', () => {
+@@ -137 +132,0 @@ describe('AgentsService', () => {
+@@ -310 +304,0 @@ describe('AgentsService', () => {
+@@ -66 +65,0 @@ type AgentRow = {
+@@ -323 +322 @@ export class AgentsService implements OnModuleInit {
+@@ -361 +359,0 @@ export class AgentsService implements OnModuleInit {
+@@ -628 +625,0 @@ export class AgentsService implements OnModuleInit {
+@@ -652 +648,0 @@ export class AgentsService implements OnModuleInit {
+@@ -678 +673,0 @@ export class AgentsService implements OnModuleInit {
+@@ -10 +9,0 @@ import {
+@@ -83,10 +81,0 @@ export class UpdateAgentDto = {
+
+-> 13 hunks. 12 are pure deletions; the single non-deletion hunk (-323 +322)
+   is the comment edit the plan explicitly authorized. No hunk adds logic.
+-> Every hunk maps 1:1 to a line the plan named (66/323/361/628/652/678,
+   dto 10+83-91, spec 70/86/102/118/137/310).
+
+$ git diff --numstat -- server/src/agents
+0	6	server/src/agents/agents.service.spec.ts
+1	6	server/src/agents/agents.service.ts
+0	11	server/src/agents/dto/update-agent.dto.ts
+
+$ git diff --shortstat -- server/src/agents
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+
+$ git status --porcelain -- server/src/agents/agents.controller.ts
+(empty => controller untouched, C5 confirmed)
+
+$ git diff --stat -- server/prisma/
+(empty => schema untouched, correct: dropping the column declaration is Todo 6)
+
+----------------------------------------------------------------
+4. COMPLETENESS OF THE REMOVAL (read the regions, do not trust a grep count)
+----------------------------------------------------------------
+4.1 AgentRow type member (was :66)
+$ sed -n '55,75p' server/src/agents/agents.service.ts
+type AgentRow = {
+  id: string;  name: string;  agentKey: string | null;  type: string;
+  prompt: string;  baseAgentId: string | null;  defaultModelId: string | null;
+  persona: string | null;  policyId: string | null;
+  createdAt: Date;  updatedAt: Date;
+  skills: { skillId: string }[];
+};
+-> NO workerId member. persona now flows straight into policyId. GONE.
+
+4.2 settings-field comment (was :323)
+$ sed -n '319,323p' server/src/agents/agents.service.ts
+   * - template（内置）允许修改设置字段（name/prompt/defaultModelId/persona/
+   *   policyId + skillIds 关联重建），使内置 agent 可自定义配置；
+-> workerId no longer listed. GONE.
+
+4.3 PATCH write branch (was :361)
+$ sed -n '350,362p' server/src/agents/agents.service.ts
+            ...(dto.defaultModelId !== undefined ? {...} : {}),
+            ...(dto.persona !== undefined ? { persona: dto.persona ?? null } : {}),
+            ...(dto.policyId !== undefined ? { policyId: dto.policyId } : {}),
+-> the `...(dto.workerId !== undefined ? { workerId: dto.workerId } : {})` line
+   is absent; no other write of dto.workerId exists in the method. GONE.
+
+4.4 toAgentDto return-type member (was :628)
+$ sed -n '615,633p' server/src/agents/agents.service.ts
+  private async toAgentDto(agent: AgentRow): Promise<{
+    ... persona: string | null;
+    policyId: string | null;
+    skillIds: string[];
+-> NO `workerId: string | null;` member. GONE (this was the one the plan
+   warned would break tsc if missed).
+
+4.5 toAgentDto field (was :652)  and 4.6 toAgentDtoList field (was :678)
+$ sed -n '639,680p' server/src/agents/agents.service.ts
+      persona: agent.persona,
+      policyId: agent.policyId,
+      skillIds: agent.skills.map((s) => s.skillId),
+-> No `workerId: agent.workerId` in EITHER mapper. GONE, GONE.
+
+4.7 DTO (update-agent.dto.ts, was :83-91)
+$ grep -rn "workerId" server/src/agents/dto/
+(zero output => no workerId anywhere under dto/, incl. create-agent.dto.ts)
+-> The @ApiPropertyOptional block, @IsOptional, @IsString, @ValidateIf and the
+   field are all gone; the now-dead ValidateIf import was removed with them.
+
+Verdict on completeness: all six named sites + the DTO are removed. No
+half-removal, no orphan reference to `dto.workerId` left in the service.
+
+----------------------------------------------------------------
+5. THE SPEC ASSERTION — WEAKENED OR NOT? (adversarial check)
+----------------------------------------------------------------
+$ sed -n '289,311p' server/src/agents/agents.service.spec.ts
+      // 扩展字段契约：扁平数组 + 策略绑定 + 生效权限
+      expect(Object.keys(result.items[0]).sort()).toEqual(
+        [
+          'id', 'name', 'role', 'agentKey', 'type', 'prompt',
+          'baseAgentId', 'defaultModelId', 'persona', 'policyId',
+          'skillIds', 'effectivePermission', 'createdAt', 'updatedAt',
+        ].sort(),
+      );
+
+-> STILL EXACT SET EQUALITY: `toEqual` on a fully-enumerated, sorted key
+   array. 'workerId' was deleted from the list; the list is still complete
+   (14 keys + the asserted shape; the removed entry was the 15th).
+-> NOT weakened to expect.arrayContaining / objectContaining / keyMatch /
+   partial. No `expect(...).toEqual(expect.objectContaining(...))` downgrade.
+-> Therefore the assertion REMAINS LOAD-BEARING for the removal: any re-added
+   `workerId` key in toAgentDtoList makes Object.keys() 15 long vs a 14-key
+   sorted array => toEqual fails. The receipt's mutation result (+ "workerId")
+   is exactly what this shape predicts.
+
+----------------------------------------------------------------
+6. NO COLLATERAL DAMAGE TO THE FETCH-WORKER CONCEPT (Must-NOT, plan :44)
+----------------------------------------------------------------
+6.1 OpencodeAgentsResult.workerId MUST SURVIVE
+$ sed -n '99,104p' server/src/agents/agents.service.ts
+export interface OpencodeAgentsResult {
+  agents: OpencodeAgentEntry[];
+  /** 实际取数的 worker id；降级且未选出 worker 时为 null。 */
+  workerId: string | null;
+  degraded: boolean;
+}
+-> PRESENT (agents.service.ts:103), with its doc comment intact.
+
+6.2 opts.workerId on all four methods MUST SURVIVE
+$ grep -n "opts\.workerId\|workerId?:" server/src/agents/agents.service.ts
+438:  async getOmoConfig(opts: { workerId?: string } = {}): Promise<{
+459:        opts.workerId ?? (await this.workersService.assignWorker());
+484:    opts: { workerId?: string; enabled?: boolean } = {},
+497:      opts.workerId ?? (await this.workersService.assignWorker());
+524:    opts: { workerId?: string } = {},
+533:        opts.workerId ?? (await this.workersService.assignWorker());
+568:    workerId?: string;
+573:        opts.workerId ?? (await this.workersService.assignWorker());
+-> getOmoConfig(:438), setOmoConfig(:484), getOmoAgentPrompt(:524),
+   listOpencodeAgents(:568) ALL STILL TAKE opts.workerId, and all four still
+   do the `opts.workerId ?? assignWorker()` fallback. INTACT.
+
+6.3 agents.controller.ts ?workerId= query params MUST SURVIVE
+$ grep -n "workerId" server/src/agents/agents.controller.ts
+89:   * GET  /agents/omo-config?workerId= => {agents, available, workerId, degraded}
+96:  getOmoConfig(@Query('workerId') workerId?: string) {
+97:    return this.agentsService.getOmoConfig({ workerId });
+108:    @Query('workerId') workerId?: string,
+110:    return this.agentsService.getOmoAgentPrompt(name, { workerId });
+121:      @Query('workerId') workerId?: string,
+124:      workerId,
+158: * GET /api/v1/agents/opencode?workerId=&directory= => ...
+175:    @Query('workerId') workerId?: string,
+178:    return this.agentsService.listOpencodeAgents({ workerId, directory });
+-> ALL FIVE query-param sites intact. Plus: `git diff --stat --
+   server/src/agents/agents.controller.ts` is EMPTY => byte-identical to HEAD.
+
+6.4 server/src/workers/* NOT touched BY THIS TODO
+$ git diff --stat -- server/src/workers/
+ server/src/workers/workers.service.spec.ts | 249 +++++++++++++++++++++
+ server/src/workers/workers.service.ts      |  50 +++++-
+-> These files ARE dirty in the shared working tree, but the content is
+   unambiguously the parallel Todo 4 work, not Todo 2: the diff adds
+   `preferredWorkerId?: string;` to AssignmentRequirement plus a soft-fallback
+   pin branch inside assignWorker(). Nothing in it removes or rewrites an
+   Agent.workerId read/write. (Attribution is content-based: I cannot
+   mechanically prove which worker wrote it in a shared tree, but nothing in
+   that diff is attributable to Todo 2's mandate.)
+-> Todo 2's own diff (`git diff -- server/src/agents`) does not touch workers/*.
+
+6.5 No mechanical workerId sweep elsewhere
+$ grep -rn "agent\.workerId\|AgentRow" server/src --include="*.ts"
+server/src/agents/agents.service.ts:57:type AgentRow = {
+server/src/agents/agents.service.ts:201:    let created: AgentRow;
+server/src/agents/agents.service.ts:263:    let created: AgentRow;
+server/src/agents/agents.service.ts:615:  private async toAgentDto(agent: AgentRow): Promise<{
+server/src/agents/agents.service.ts:657:  private async toAgentDtoList(rows: AgentRow[]) {
+server/src/agents/agents.service.ts:717:    source: AgentRow,
+(plus unrelated mainAgentRow/mockAgentRow helpers in chat/worker-dispatcher.spec.ts)
+-> ZERO `agent.workerId` reads anywhere in server/src. No collateral sweep:
+   no other module was edited by this todo.
+
+----------------------------------------------------------------
+7. ACCEPTANCE RE-RUN (my own execution)
+----------------------------------------------------------------
+$ cd /Volumes/SSD-Data/01work/git-project/vteam/server && npx jest src/agents
+PASS src/agents/persona.constants.spec.ts
+PASS src/agents/agents.service.spec.ts
+PASS src/agents/agents.controller.spec.ts
+
+Test Suites: 3 passed, 3 total
+Tests:       115 passed, 115 total
+Snapshots:   0 total
+Time:        5.514 s
+Ran all test suites matching /src\/agents/i.
+JEST_EXIT=0
+-> IDENTICAL to the receipt's claim (3 suites / 115 tests / exit 0).
+   No misleading_success_output: the green is reproducible, not cached-by-claim.
+
+$ cd /Volumes/SSD-Data/01work/git-project/vteam/server && npx tsc --noEmit -p tsconfig.json
+TSC_EXIT=0
+-> REPRODUCED. (See §8 for what this does and does not prove.)
+
+$ grep -rn "workerId" server/src/agents/agents.service.ts server/src/agents/dto/update-agent.dto.ts | wc -l
+39
+$ grep -c "workerId" server/src/agents/dto/update-agent.dto.ts
+0
+-> 39 hits, ALL in agents.service.ts; update-agent.dto.ts is at ZERO.
+   I read the 39-hit set by line (see RAW BLOCK D): they are exactly the
+   fetch-worker semantics the plan's acceptance criterion allows
+   (OpencodeAgentsResult.workerId:103, availableModels' assignWorker locals
+   :412-421, and the four getOmoConfig/setOmoConfig/getOmoAgentPrompt/
+   listOpencodeAgents opts.workerId blocks). No Agent-preference hit remains.
+
+----------------------------------------------------------------
+8. ADVERSARIAL CLASSES
+----------------------------------------------------------------
+8.1 misleading_success_output — NOT PRESENT.
+    My independent `npx jest src/agents` re-ran the suite from scratch
+    (fresh 5.514 s wall time, not a cached summary) and reproduced 3/3 suites
+    and 115/115 tests. The spec's key-set assertion is exact `toEqual` (§5),
+    so "green" genuinely means workerId is absent from the list DTO.
+    I did not re-run the mutation (read-only lane: it requires editing a
+    product file). Instead I proved the same property structurally — see §5:
+    `toEqual` over a fully enumerated sorted key array cannot pass with an
+    extra key. That is a stronger statement than the receipt's one-off RED run.
+
+8.2 dirty_worktree — NO COLLATERAL DAMAGE.
+    HEAD is still b6840d1 (matches the receipt's base-sha b6840d1c...). No
+    commit exists; all work is uncommitted, as instructed. The pre-existing
+    dirt (server/src/platform-mcp/*, web/src/components/chat/msg-parts.tsx,
+    .omo/boulder.json, .omo/evidence/*.json, .omo/ulw-execute/ledger.jsonl)
+    is still present and was not reverted or cleaned.
+    Files THIS todo changed (exactly 3):
+      M server/src/agents/agents.service.spec.ts
+      M server/src/agents/agents.service.ts
+      M server/src/agents/dto/update-agent.dto.ts
+    Files dirty from parallel siblings (Todo 3/4), NOT this todo:
+      docs/agent-platform/prototypes/agent-config/index.tsx
+      docs/agent-platform/prototypes/agent-manage/index.tsx
+      web/app/(main)/agents/page.tsx
+      web/e2e/reference/testids.ts
+      server/src/workers/workers.service.ts
+      server/src/workers/workers.service.spec.ts
+    (matches the receipt's AFTER listing; note Todo 4's receipt has since been
+     created too, confirming the siblings are real.)
+
+8.3 stale_state — YES, PRESENT, and it WEAKENS THE tsc EVIDENCE.
+    The generated Prisma client is older than the schema:
+      -rw-r--r-- 3293923 Oct 10 16:09 server/node_modules/.prisma/client/index.d.ts
+      -rw-r--r--   68219 Oct 10 20:47 server/prisma/schema.prisma
+    and the client still declares Agent.workerId:
+      $ grep -n workerId server/node_modules/.prisma/client/index.d.ts | head
+      15762:    workerId: string | null
+      15777:    workerId: string | null
+    This is EXPECTED and correct for this todo (the schema is Todo 6's job and
+    `git diff -- server/prisma/` is empty). But its consequence for evidence:
+      * `tsc --noEmit` passing does NOT by itself prove the Agent.workerId
+        read was deleted. Deleting a field from a TS type is a SUBSET
+        operation — it can never introduce a type error — and because the
+        stale client still exposes `Agent.workerId`, a leftover
+        `workerId: agent.workerId` in the mapper would STILL type-check.
+      * What tsc DOES prove here: (a) the DTO's `workerId` field is really
+        gone, since the `dto.workerId` read at the PATCH branch would now be
+        a "property does not exist" error; (b) the toAgentDto return-type
+        member was removed correctly — the plan's predicted "missing in type"
+        gate; (c) no dangling type reference anywhere in the project.
+      * The AUTHORITATIVE evidence for the removal is therefore the exact
+        key-set assertion (§5), the direct region reads (§4) and the grep
+        (§7) — all of which I ran myself. tsc is corroborating, not primary.
+      * Practical consequence for Todo 6: whoever drops `agents.workerId`
+        from schema.prisma and runs `prisma generate` will turn this exact
+        class of leftover from "silently compiles" into "hard compile error".
+        That is the intended value of the plan's T2-before-T6 ordering.
+
+8.4 slop / out-of-scope additions — NONE FOUND.
+    The only non-deletion hunk is the authorized comment rewrite; the only
+    seemingly-extra deletion (ValidateIf import) is forced by the DTO removal
+    and is lint-justified (§9). No new deps, no shim, no TODO() markers, no
+    console noise. No compatibility layer was added for the dropped field —
+    matching the plan's note that global ValidationPipe whitelist:true +
+    forbidNonWhitelisted:false silently strips the old `workerId` from old
+    clients by design.
+
+----------------------------------------------------------------
+9. LINT / FORMAT + THE REPORTED PRE-EXISTING DEFECT
+----------------------------------------------------------------
+$ cd server && npx eslint src/agents/agents.service.ts src/agents/agents.service.spec.ts src/agents/dto/update-agent.dto.ts
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.service.ts
+  348:15  warning  'updated' is assigned a value but never used. …
+✖ 1 problem (0 errors, 1 warning)
+ESLINT_EXIT=0
+
+$ cd server && npx prettier --check src/agents/agents.service.ts src/agents/agents.service.spec.ts src/agents/dto/update-agent.dto.ts
+Checking formatting...
+All matched files use Prettier code style!
+PRETTIER_EXIT=0
+-> Formatting is clean, so the receipt's CLEANUP RECEIPT claim (mutation fully
+   rolled back, no stray blank lines) holds.
+
+Is the :348 warning pre-existing (i.e. NOT introduced by this todo)? Checked
+against HEAD rather than taking the receipt's word for it:
+$ git show HEAD:server/src/agents/agents.service.ts | grep -n "updated"
+349:        const updated = await tx.agent.update({
+633:    updatedAt: Date;
+657:      updatedAt: agent.updatedAt,
+683:      updatedAt: agent.updatedAt,
+-> `updated` is declared at HEAD:349 and never read (the other hits are the
+   unrelated `updatedAt` DTO field). CONFIRMED PRE-EXISTING; correctly
+   reported, not fixed. Not a Todo 2 defect and not a blocker.
+
+----------------------------------------------------------------
+10. DEVIATION FROM THE RECEIPT (minor, cosmetic — no impact on correctness)
+----------------------------------------------------------------
+D1. The receipt's §6 cleanup diffstat is stale/inexact.
+      receipt claims : server/src/agents/agents.service.ts | 8 ++------
+                      3 files changed, 3 insertions(+), 22 deletions(-)
+      actual    : 1 file 6 / 1 file 7 (1+/6-) / 1 file 11
+                  3 files changed, 1 insertion(+), 23 deletions(-)
+    Cause is benign: the receipt's numbers were evidently captured mid-cleanup
+    (before the blank-line tidy described in §6 of the receipt). The FINAL
+    state I measured is the correct one: exactly one added line (the comment
+    rewrite), 23 deletions, zero residual workerId, prettier clean. Substance
+    unaffected; flagging only because a receipt whose stated numbers do not
+    match the tree is a (mild) traceability smell.
+    Smallest fix if you want the receipt exact: replace the §6 diffstat block
+    with `git diff --shortstat -- server/src/agents` => " 3 files changed,
+    1 insertion(+), 23 deletions(-)".
+
+D2. Receipt §4.2's mutation was re-run by the implementer but not by me (read-only
+    lane). Accepted on the structural proof in §5; no action.
+
+No correctness defect was found. Nothing requires a fix.
+
+----------------------------------------------------------------
+11. EXACT REPRO COMMANDS (copy-pasteable)
+----------------------------------------------------------------
+cd /Volumes/SSD-Data/01work/git-project/vteam
+git log --oneline -1
+git diff -- server/src/agents
+git diff -U0 -- server/src/agents | grep '^@@'
+git diff --numstat -- server/src/agents
+git diff --shortstat -- server/src/agents
+git status --porcelain
+git diff --stat -- server/src/agents/agents.controller.ts   # expect empty
+git diff --stat -- server/prisma/                          # expect empty
+sed -n '55,75p;319,323p;350,362p;615,633p;639,680p' server/src/agents/agents.service.ts
+grep -rn "workerId" server/src/agents/dto/                  # expect zero
+grep -rn "agent\.workerId\|AgentRow" server/src --include="*.ts"
+sed -n '99,104p' server/src/agents/agents.service.ts
+grep -n "opts\.workerId\|workerId?:" server/src/agents/agents.service.ts
+grep -n "workerId" server/src/agents/agents.controller.ts
+git diff --stat -- server/src/workers/ ; git diff -- server/src/workers/workers.service.ts | head -40
+cd server && npx jest src/agents
+cd server && npx tsc --noEmit -p tsconfig.json
+cd server && npx eslint src/agents/agents.service.ts src/agents/agents.service.spec.ts src/agents/dto/update-agent.dto.ts
+cd server && npx prettier --check src/agents/agents.service.ts src/agents/agents.service.spec.ts src/agents/dto/update-agent.dto.ts
+git show HEAD:server/src/agents/agents.service.ts | grep -n "updated"
+ls -l server/node_modules/.prisma/client/index.d.ts server/prisma/schema.prisma
+grep -n "workerId" server/node_modules/.prisma/client/index.d.ts | head
+
+----------------------------------------------------------------
+12. RAW OUTPUTS (verbatim, every command this lane ran)
+----------------------------------------------------------------
+### RAW BLOCK A — git diff -- server/src/agents
+(verbatim, full)
+
+### RAW BLOCK B..E — see below.
+
+================================================================
+END OF VERDICT: CONFIRMED (confidence 0.95)
+================================================================
+--- RAW A: git diff -- server/src/agents ---
+diff --git a/server/src/agents/agents.service.spec.ts b/server/src/agents/agents.service.spec.ts
+index 83f40df..9fac526 100644
+--- a/server/src/agents/agents.service.spec.ts
++++ b/server/src/agents/agents.service.spec.ts
+@@ -67,7 +67,6 @@ describe('AgentsService', () => {
+       baseAgentId: null,
+       defaultModelId: null,
+       persona: 'innovative',
+-      workerId: null,
+       policyId: 'ep_product',
+       createdBy: 'u_admin',
+       createdAt: new Date('2026-08-07T00:00:00Z'),
+@@ -83,7 +82,6 @@ describe('AgentsService', () => {
+       baseAgentId: null,
+       defaultModelId: null,
+       persona: 'steady',
+-      workerId: null,
+       policyId: 'ep_architect',
+       createdBy: 'u_admin',
+       createdAt: new Date('2026-08-07T00:00:01Z'),
+@@ -99,7 +97,6 @@ describe('AgentsService', () => {
+       baseAgentId: null,
+       defaultModelId: null,
+       persona: 'conservative',
+-      workerId: null,
+       policyId: 'ep_developer',
+       createdBy: 'u_admin',
+       createdAt: new Date('2026-08-07T00:00:02Z'),
+@@ -115,7 +112,6 @@ describe('AgentsService', () => {
+       baseAgentId: null,
+       defaultModelId: null,
+       persona: 'strict',
+-      workerId: null,
+       policyId: 'ep_tester',
+       createdBy: 'u_admin',
+       createdAt: new Date('2026-08-07T00:00:03Z'),
+@@ -134,7 +130,6 @@ describe('AgentsService', () => {
+     prompt: 'prompt-custom',
+     defaultModelId: 'opencode-go/deepseek-v4-flash',
+     persona: null,
+-    workerId: null,
+     policyId: null,
+   };
+ 
+@@ -307,7 +302,6 @@ describe('AgentsService', () => {
+           'policyId',
+           'skillIds',
+           'effectivePermission',
+-          'workerId',
+           'createdAt',
+           'updatedAt',
+         ].sort(),
+diff --git a/server/src/agents/agents.service.ts b/server/src/agents/agents.service.ts
+index 79b127f..2d5f02b 100644
+--- a/server/src/agents/agents.service.ts
++++ b/server/src/agents/agents.service.ts
+@@ -63,7 +63,6 @@ type AgentRow = {
+   baseAgentId: string | null;
+   defaultModelId: string | null;
+   persona: string | null;
+-  workerId: string | null;
+   policyId: string | null;
+   createdAt: Date;
+   updatedAt: Date;
+@@ -320,7 +319,7 @@ export class AgentsService implements OnModuleInit {
+ 
+   /**
+    * PATCH /agents/:id（is_0000000030 放开内置 agent 设置修改）：
+-   * - template（内置）允许修改设置字段（name/prompt/defaultModelId/workerId/persona/
++   * - template（内置）允许修改设置字段（name/prompt/defaultModelId/persona/
+    *   policyId + skillIds 关联重建），使内置 agent 可自定义配置；
+    *   agentId/type 不可改（不在 DTO，天然安全红线）；
+    * - clone/custom → 同规则更新；
+@@ -358,7 +357,6 @@ export class AgentsService implements OnModuleInit {
+             ...(dto.persona !== undefined
+               ? { persona: dto.persona ?? null }
+               : {}),
+-            ...(dto.workerId !== undefined ? { workerId: dto.workerId } : {}),
+             ...(dto.policyId !== undefined ? { policyId: dto.policyId } : {}),
+           },
+         });
+@@ -625,7 +623,6 @@ export class AgentsService implements OnModuleInit {
+     baseAgentId: string | null;
+     defaultModelId: string | null;
+     persona: string | null;
+-    workerId: string | null;
+     policyId: string | null;
+     skillIds: string[];
+     effectivePermission: ResolvedExecutionPolicy | null;
+@@ -649,7 +646,6 @@ export class AgentsService implements OnModuleInit {
+       baseAgentId: agent.baseAgentId,
+       defaultModelId: agent.defaultModelId,
+       persona: agent.persona,
+-      workerId: agent.workerId,
+       policyId: agent.policyId,
+       skillIds: agent.skills.map((s) => s.skillId),
+       effectivePermission,
+@@ -675,7 +671,6 @@ export class AgentsService implements OnModuleInit {
+       baseAgentId: agent.baseAgentId,
+       defaultModelId: agent.defaultModelId,
+       persona: agent.persona,
+-      workerId: agent.workerId,
+       policyId: agent.policyId,
+       skillIds: agent.skills.map((s) => s.skillId),
+       effectivePermission: permissions[i],
+diff --git a/server/src/agents/dto/update-agent.dto.ts b/server/src/agents/dto/update-agent.dto.ts
+index 0451e00..01b5b42 100644
+--- a/server/src/agents/dto/update-agent.dto.ts
++++ b/server/src/agents/dto/update-agent.dto.ts
+@@ -7,7 +7,6 @@ import {
+   IsString,
+   Matches,
+   MaxLength,
+-  ValidateIf,
+ } from 'class-validator';
+ import { PERSONA_LIBRARY } from '../persona.constants';
+ import { AGENT_KEY_PATTERN } from '../../common/constants/agent.constants';
+@@ -80,16 +79,6 @@ export class UpdateAgentDto {
+   })
+   defaultModelId?: string;
+ 
+-  @ApiPropertyOptional({
+-    description: '首选 worker id（软绑定，可空 null=自动调度；C6）',
+-    example: 'wkr_0000000001',
+-    nullable: true,
+-  })
+-  @IsOptional()
+-  @IsString()
+-  @ValidateIf((o) => o.workerId !== null)
+-  workerId?: string | null;
+-
+   @ApiPropertyOptional({
+     description:
+       '绑定的 ExecutionPolicy id（custom 经 PATCH 改 policyId 生效；模板 policyId 由 seed 维护）',
+
+--- RAW B: git diff -U0 -- server/src/agents | grep '^@@' ---
+@@ -70 +69,0 @@ describe('AgentsService', () => {
+@@ -86 +84,0 @@ describe('AgentsService', () => {
+@@ -102 +99,0 @@ describe('AgentsService', () => {
+@@ -118 +114,0 @@ describe('AgentsService', () => {
+@@ -137 +132,0 @@ describe('AgentsService', () => {
+@@ -310 +304,0 @@ describe('AgentsService', () => {
+@@ -66 +65,0 @@ type AgentRow = {
+@@ -323 +322 @@ export class AgentsService implements OnModuleInit {
+@@ -361 +359,0 @@ export class AgentsService implements OnModuleInit {
+@@ -628 +625,0 @@ export class AgentsService implements OnModuleInit {
+@@ -652 +648,0 @@ export class AgentsService implements OnModuleInit {
+@@ -678 +673,0 @@ export class AgentsService implements OnModuleInit {
+@@ -10 +9,0 @@ import {
+@@ -83,10 +81,0 @@ export class UpdateAgentDto {
+
+--- RAW C: git log --oneline -1 / git status --porcelain ---
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M docs/agent-platform/prototypes/agent-config/index.tsx
+ M docs/agent-platform/prototypes/agent-manage/index.tsx
+ M server/src/agents/agents.service.spec.ts
+ M server/src/agents/agents.service.ts
+ M server/src/agents/dto/update-agent.dto.ts
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/workers/workers.service.spec.ts
+ M server/src/workers/workers.service.ts
+ M web/app/(main)/agents/page.tsx
+ M web/e2e/reference/testids.ts
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/evidence/task-1-team-worker-node.txt
+?? .omo/evidence/task-2-team-worker-node.txt
+?? .omo/evidence/task-3-team-worker-node.txt
+?? .omo/evidence/task-4-team-worker-node.txt
+?? .omo/evidence/verify-task-2-team-worker-node.txt
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+
+--- RAW D: grep -rn "workerId" agents.service.ts + update-agent.dto.ts ---
+server/src/agents/agents.service.ts:103:  workerId: string | null;
+server/src/agents/agents.service.ts:411:      const workerId = await this.workersService.assignWorker();
+server/src/agents/agents.service.ts:412:      if (!workerId) return this.fallbackModels();
+server/src/agents/agents.service.ts:416:        where: { id: workerId },
+server/src/agents/agents.service.ts:420:        worker ?? { id: workerId },
+server/src/agents/agents.service.ts:435:   * workerId 显式传入则用之；缺省经 assignWorker 选一个可用 worker。
+server/src/agents/agents.service.ts:438:  async getOmoConfig(opts: { workerId?: string } = {}): Promise<{
+server/src/agents/agents.service.ts:441:    workerId: string | null;
+server/src/agents/agents.service.ts:458:      const workerId =
+server/src/agents/agents.service.ts:459:        opts.workerId ?? (await this.workersService.assignWorker());
+server/src/agents/agents.service.ts:460:      if (!workerId) {
+server/src/agents/agents.service.ts:461:        return { agents: {}, available: [], workerId: null, degraded: true };
+server/src/agents/agents.service.ts:466:        where: { id: workerId },
+server/src/agents/agents.service.ts:470:        worker ?? { id: workerId },
+server/src/agents/agents.service.ts:472:      return { ...result, workerId };
+server/src/agents/agents.service.ts:474:      return { agents: {}, available: [], workerId: null, degraded: true };
+server/src/agents/agents.service.ts:484:    opts: { workerId?: string; enabled?: boolean } = {},
+server/src/agents/agents.service.ts:488:    workerId: string;
+server/src/agents/agents.service.ts:496:    const workerId =
+server/src/agents/agents.service.ts:497:      opts.workerId ?? (await this.workersService.assignWorker());
+server/src/agents/agents.service.ts:498:    if (!workerId) {
+server/src/agents/agents.service.ts:504:      where: { id: workerId },
+server/src/agents/agents.service.ts:515:    return { ...result, workerId };
+server/src/agents/agents.service.ts:524:    opts: { workerId?: string } = {},
+server/src/agents/agents.service.ts:532:    const workerId =
+server/src/agents/agents.service.ts:533:      opts.workerId ?? (await this.workersService.assignWorker());
+server/src/agents/agents.service.ts:534:    if (!workerId) {
+server/src/agents/agents.service.ts:541:      where: { id: workerId },
+server/src/agents/agents.service.ts:559:   * - workerId 显式传入则用之；缺省经 assignWorker 选一个可用 worker。
+server/src/agents/agents.service.ts:568:    workerId?: string;
+server/src/agents/agents.service.ts:572:      const workerId =
+server/src/agents/agents.service.ts:573:        opts.workerId ?? (await this.workersService.assignWorker());
+server/src/agents/agents.service.ts:574:      if (!workerId) {
+server/src/agents/agents.service.ts:575:        return { agents: [], workerId: null, degraded: true };
+server/src/agents/agents.service.ts:583:        where: { id: workerId },
+server/src/agents/agents.service.ts:587:        worker ?? { id: workerId },
+server/src/agents/agents.service.ts:591:        return { agents: [], workerId, degraded: true };
+server/src/agents/agents.service.ts:602:        workerId,
+server/src/agents/agents.service.ts:606:      return { agents: [], workerId: null, degraded: true };
+
+--- RAW E: sed regions of agents.service.ts ---
+ * 透传 `agentKey`（机器键，与 `AgentRole.key` 对齐），能力解析（策略/工具）与它无关。
+ */
+type AgentRow = {
+  id: string;
+  name: string;
+  agentKey: string | null;
+  type: string;
+  prompt: string;
+  baseAgentId: string | null;
+  defaultModelId: string | null;
+  persona: string | null;
+  policyId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  skills: { skillId: string }[];
+};
+
+/** available-models 动态路径：纯数组（保持前端契约 [{id, name}]）。 */
+type LiveModelsResult = { id: string; name: string }[];
+
+/** available-models 降级路径：静态列表 + source 标记（无 worker / listModels 失败）。 */
+[...]
+
+  /**
+   * PATCH /agents/:id（is_0000000030 放开内置 agent 设置修改）：
+   * - template（内置）允许修改设置字段（name/prompt/defaultModelId/persona/
+   *   policyId + skillIds 关联重建），使内置 agent 可自定义配置；
+[...]
+          data: {
+            ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
+            ...(dto.agentKey !== undefined ? { agentKey: dto.agentKey } : {}),
+            ...(dto.prompt !== undefined ? { prompt: dto.prompt } : {}),
+            ...(dto.defaultModelId !== undefined
+              ? { defaultModelId: dto.defaultModelId }
+              : {}),
+            ...(dto.persona !== undefined
+              ? { persona: dto.persona ?? null }
+              : {}),
+            ...(dto.policyId !== undefined ? { policyId: dto.policyId } : {}),
+          },
+        });
+[...]
+  private async toAgentDto(agent: AgentRow): Promise<{
+    id: string;
+    name: string;
+    /** 透传 `agentKey`（机器键，对齐 `AgentRole.key`；不参与能力解析）。 */
+    role: string | null;
+    agentKey: string | null;
+    type: string;
+    prompt: string;
+    baseAgentId: string | null;
+    defaultModelId: string | null;
+    persona: string | null;
+    policyId: string | null;
+    skillIds: string[];
+    effectivePermission: ResolvedExecutionPolicy | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    const [effectivePermission] =
+      await this.executionPolicyService.resolveManyByAgents([
+[...]
+    return {
+      id: agent.id,
+      name: agent.name,
+      role: agent.agentKey,
+      agentKey: agent.agentKey,
+      type: agent.type,
+      prompt: agent.prompt,
+      baseAgentId: agent.baseAgentId,
+      defaultModelId: agent.defaultModelId,
+      persona: agent.persona,
+      policyId: agent.policyId,
+      skillIds: agent.skills.map((s) => s.skillId),
+      effectivePermission,
+      createdAt: agent.createdAt,
+      updatedAt: agent.updatedAt,
+    };
+  }
+
+  private async toAgentDtoList(rows: AgentRow[]) {
+    const permissions = await this.executionPolicyService.resolveManyByAgents(
+      rows.map((agent) => ({
+        policyId: agent.policyId,
+        agentKey: agent.agentKey,
+      })),
+    );
+    return rows.map((agent, i) => ({
+      id: agent.id,
+      name: agent.name,
+      role: agent.agentKey,
+      agentKey: agent.agentKey,
+      type: agent.type,
+      prompt: agent.prompt,
+      baseAgentId: agent.baseAgentId,
+      defaultModelId: agent.defaultModelId,
+      persona: agent.persona,
+      policyId: agent.policyId,
+      skillIds: agent.skills.map((s) => s.skillId),
+      effectivePermission: permissions[i],
+      createdAt: agent.createdAt,
+      updatedAt: agent.updatedAt,
+    }));
+  }
+
+--- RAW F: spec key-set assertion (289,311) ---
+      expect(roles).toEqual(['product', 'architect', 'developer', 'tester']);
+      // 扩展字段契约：扁平数组 + 策略绑定 + 生效权限
+      expect(Object.keys(result.items[0]).sort()).toEqual(
+        [
+          'id',
+          'name',
+          'role',
+          'agentKey',
+          'type',
+          'prompt',
+          'baseAgentId',
+          'defaultModelId',
+          'persona',
+          'policyId',
+          'skillIds',
+          'effectivePermission',
+          'createdAt',
+          'updatedAt',
+        ].sort(),
+      );
+    });
+
+    it('effectivePermission 与各行 policyId 一一对应（批量单次解析，无 N+1）', async () => {
+
+--- RAW G: collateral greps ---
+ */
+export interface OpencodeAgentsResult {
+  agents: OpencodeAgentEntry[];
+  /** 实际取数的 worker id；降级且未选出 worker 时为 null。 */
+  workerId: string | null;
+  degraded: boolean;
+[opts.workerId]
+438:  async getOmoConfig(opts: { workerId?: string } = {}): Promise<{
+459:        opts.workerId ?? (await this.workersService.assignWorker());
+484:    opts: { workerId?: string; enabled?: boolean } = {},
+497:      opts.workerId ?? (await this.workersService.assignWorker());
+524:    opts: { workerId?: string } = {},
+533:      opts.workerId ?? (await this.workersService.assignWorker());
+568:    workerId?: string;
+573:        opts.workerId ?? (await this.workersService.assignWorker());
+[controller]
+89:   * GET  /agents/omo-config?workerId= → {agents, available, workerId, degraded}
+96:  getOmoConfig(@Query('workerId') workerId?: string) {
+97:    return this.agentsService.getOmoConfig({ workerId });
+108:    @Query('workerId') workerId?: string,
+110:    return this.agentsService.getOmoAgentPrompt(name, { workerId });
+121:    @Query('workerId') workerId?: string,
+124:      workerId,
+158:   * GET /api/v1/agents/opencode?workerId=&directory= → {agents, workerId, degraded}
+175:    @Query('workerId') workerId?: string,
+178:    return this.agentsService.listOpencodeAgents({ workerId, directory });
+[dto dir]
+(exit=1 ; no output above = zero hits)
+[residual agent.workerId / AgentRow]
+server/src/chat/worker-dispatcher.spec.ts:8853:      const mainAgentRow = (role: Record<string, unknown> | null = null) => ({
+server/src/chat/worker-dispatcher.spec.ts:8882:          mainAgentRow({
+server/src/chat/worker-dispatcher.spec.ts:8935:          mainAgentRow({
+server/src/chat/worker-dispatcher.spec.ts:8962:          mainAgentRow(null),
+server/src/chat/worker-dispatcher.spec.ts:8984:          mainAgentRow({
+server/src/chat/worker-dispatcher.spec.ts:9369:      const mockAgentRow = (row: Record<string, unknown>) => {
+server/src/chat/worker-dispatcher.spec.ts:9388:        mockAgentRow({ agentKey: 'demo-agent', role: null });
+server/src/chat/worker-dispatcher.spec.ts:9397:        mockAgentRow({ agentKey: 'demo-agent', role: null });
+server/src/chat/worker-dispatcher.spec.ts:9408:        mockAgentRow({ agentKey: 'product', role: 'product' });
+server/src/chat/worker-dispatcher.spec.ts:9417:        mockAgentRow({ agentKey: 'demo-agent', role: null });
+server/src/chat/worker-dispatcher.spec.ts:9426:        mockAgentRow({ agentKey: 'Bad-Key', role: null });
+server/src/chat/worker-dispatcher.spec.ts:9437:        mockAgentRow({ agentKey: 'plan', role: null });
+server/src/chat/worker-dispatcher.spec.ts:9470:      const mockAgentRow = (row: Record<string, unknown>) => {
+server/src/chat/worker-dispatcher.spec.ts:9492:        mockAgentRow({ agentKey: 'demo-agent', role: null });
+server/src/chat/worker-dispatcher.spec.ts:9501:        mockAgentRow({ agentKey: 'demo-agent', role: null });
+server/src/chat/worker-dispatcher.spec.ts:9510:        mockAgentRow({ agentKey: 'demo-agent', role: null });
+server/src/chat/worker-dispatcher.spec.ts:9519:        mockAgentRow({ agentKey: 'demo-agent', role: null });
+server/src/chat/worker-dispatcher.spec.ts:9530:        mockAgentRow({ agentKey: null, role: null });
+server/src/chat/worker-dispatcher.spec.ts:9541:        mockAgentRow({ agentKey: null, role: null });
+server/src/agents/agents.service.ts:57:type AgentRow = {
+server/src/agents/agents.service.ts:201:    let created: AgentRow;
+server/src/agents/agents.service.ts:263:    let created: AgentRow;
+server/src/agents/agents.service.ts:615:  private async toAgentDto(agent: AgentRow): Promise<{
+server/src/agents/agents.service.ts:657:  private async toAgentDtoList(rows: AgentRow[]) {
+server/src/agents/agents.service.ts:717:    source: AgentRow,
+
+--- RAW H: workers/* attribution ---
+ server/src/workers/workers.service.spec.ts | 249 +++++++++++++++++++++++++++++
+ server/src/workers/workers.service.ts      |  50 +++++-
+ 2 files changed, 298 insertions(+), 1 deletion(-)
++  /**
++   * 首选（置顶）worker id —— **候选内偏好**，不是硬绑定：
++   * - 仅当该 id 出现在通过全部四道既有过滤（① status≠offline ② 剩余容量>=需求
++   *   ③ opencodeVersion 匹配 ④ matchesModelRequirement）的候选集里，才被直接选用；
++   * - 否则一律忽略并回退到自动调度（`ranked[0]`），并且只 `logger.warn` 记录原因，
++   *   **绝不因置顶不可用而 throw「无可用 worker」或等待其恢复**；
++   * - 另有一条**仅置顶专属**的附加条件（B1，见 assignWorker）：`modelId` 非空且置顶
++   *   worker 从未上报模型能力（modelAvailabilities 为空）时视为未命中。
++   * - 省略（undefined）时行为与今日逐字节一致——9 处既有无参/仅 workerId 的调用方不受影响。
++   */
++  preferredWorkerId?: string;
++   * - 置顶：req.preferredWorkerId 只是**候选内偏好**，只在通过上面全部四道过滤时生效，
++   *   未命中一律回退 ranked[0] 并 warn，绝不 throw（见下方 pin 分支注释）。
+-    return ranked[0]?.worker.id ?? null;
++    const fallbackId = ranked[0]?.worker.id ?? null;
++    if (!req.preferredWorkerId) {
++      return fallbackId;
++    }
++    // 置顶分支：偏好只在四道过滤全过的候选集内生效，未命中软回退，绝不 throw。
++    const pinned = ranked.find((x) => x.worker.id === req.preferredWorkerId);
+
+--- RAW I: schema/controller untouched ---
+(controller diff exit=0 ; empty above)
+(schema diff empty above)
+
+--- RAW J: ACCEPTANCE RE-RUN ---
+$ npx jest src/agents
+PASS src/agents/persona.constants.spec.ts
+PASS src/agents/agents.service.spec.ts
+PASS src/agents/agents.controller.spec.ts
+
+Test Suites: 3 passed, 3 total
+Tests:       115 passed, 115 total
+Snapshots:   0 total
+Time:        5.138 s
+Ran all test suites matching /src\/agents/i.
+JEST_EXIT=0
+
+$ npx tsc --noEmit -p tsconfig.json
+TSC_EXIT=0
+
+$ npx eslint (3 changed files)
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.service.ts
+  348:15  warning  'updated' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 1 problem (0 errors, 1 warning)
+
+ESLINT_EXIT=0
+
+$ npx prettier --check (3 changed files)
+Checking formatting...
+All matched files use Prettier code style!
+PRETTIER_EXIT=0
+
+$ grep -rn "workerId" <2 files> | wc -l
+      39
+$ grep -c "workerId" src/agents/dto/update-agent.dto.ts
+0
+
+--- RAW K: stale_state (prisma client vs schema) ---
+-rw-r--r--@ 1 mac  staff  3293923 Oct 10 16:09 server/node_modules/.prisma/client/index.d.ts
+-rw-r--r--@ 1 mac  staff    68219 Oct 10 20:47 server/prisma/schema.prisma
+15762:    workerId: string | null
+15777:    workerId: string | null
+15792:    workerId: number
+15809:    workerId?: true
+15824:    workerId?: true
+
+--- RAW L: pre-existing eslint defect provenance ---
+69:  updatedAt: Date;
+349:        const updated = await tx.agent.update({
+633:    updatedAt: Date;
+657:      updatedAt: agent.updatedAt,
+683:      updatedAt: agent.updatedAt,
+
+--- RAW M: numstat / shortstat (receipt-deviation evidence) ---
+0	6	server/src/agents/agents.service.spec.ts
+1	6	server/src/agents/agents.service.ts
+0	11	server/src/agents/dto/update-agent.dto.ts
+ 3 files changed, 1 insertion(+), 23 deletions(-)
+
+=== END OF RAW OUTPUTS ===
+
+================================================================
+13. EXIT-CODE RIGOR CORRECTION (added after re-check)
+================================================================
+My first-pass `echo "TSC_EXIT=$?"` / `JEST_EXIT=$?` sat AFTER a pipe into `tail`,
+so `$?` was tail's status, not the tool's. Re-ran BOTH without a pipe so the
+exit codes below are the tools' own:
+
+$ cd server && npx tsc --noEmit -p tsconfig.json > /tmp/vt_tsc.log 2>&1
+TSC_TRUE_EXIT=0
+tsc output lines:        0
+(empty output = no diagnostics; exit 0 = genuinely clean)
+
+$ cd server && npx jest src/agents > /tmp/vt_jest.log 2>&1
+JEST_TRUE_EXIT=0
+PASS src/agents/agents.service.spec.ts
+PASS src/agents/agents.controller.spec.ts
+
+Test Suites: 3 passed, 3 total
+Tests:       115 passed, 115 total
+Snapshots:   0 total
+Time:        4.44 s, estimated 5 s
+Ran all test suites matching /src\/agents/i.
+
+-> Conclusion unchanged: jest 3/3 suites, 115/115 tests, TRUE exit 0;
+   tsc TRUE exit 0 with zero diagnostics. The claim reproduces.

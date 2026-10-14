@@ -1,0 +1,1008 @@
+================================================================================
+INDEPENDENT VERIFICATION — Todo 6 (team-worker-node)
+schema: 两级 preferred_worker_id + 摘除 agents.workerId 声明 + 连带修复 + generate
+================================================================================
+Verifier role   : independent, read-only (only this artifact was written)
+Repo            : /Volumes/SSD-Data/01work/git-project/vteam
+Todo block      : .omo/plans/team-worker-node.md:159-174
+Binding Must-NOT: .omo/plans/team-worker-node.md:34-47
+Date            : 2026-10-14 (verification runs 11:53-11:56 local)
+Method          : every claim re-derived from primary sources. The executor's
+                  evidence file (.omo/evidence/task-6-team-worker-node.txt) was
+                  NOT used as evidence for any fact below; it was read only to
+                  locate which files to inspect.
+
+VERDICT: CONFIRMED
+Confidence: 0.97
+
+No defect found in the 7 falsification targets. One cosmetic residue noted in
+section 8 (dead `agent.updateMany` key in the spec mock) — dead code, zero
+behavioural impact, does NOT change the verdict.
+
+================================================================================
+1. SCHEMA — FALSIFIED AND CONFIRMED
+================================================================================
+
+--- CMD: grep -n preferred_worker_id server/prisma/schema.prisma ---
+96:  preferredWorkerId  String?  @map("preferred_worker_id")
+188:  preferredWorkerId String? @map("preferred_worker_id")
+EXIT=0
+
+--- CMD: grep -c preferred_worker_id server/prisma/schema.prisma ---
+2
+
+=> Exactly 2 hits, both are the two @map attributes (lines 96 and 188). The two
+   comments deliberately use the Chinese wording 「首选 worker」 and do NOT contain
+   the literal `preferred_worker_id`, so the acceptance predicate
+   `grep -n preferred_worker_id == exactly 2` holds (plan:171 constraint).
+
+--- CMD: awk '/model Agent /,/^}/' server/prisma/schema.prisma | grep -c workerId ---
+0
+
+=> Agent has no workerId. Verified positively too: the full model Agent block was
+   printed and contains no workerId field and no worker_id @map.
+
+--- CMD: awk '/^model Team /,/^}/' server/prisma/schema.prisma ---
+model Team {
+  id                 String   @id
+  name               String   @unique
+  description        String?  @db.Text
+  reuseSession       Boolean  @default(true) @map("reuse_session")
+  // 托管模式（session-unification Todo 6/9：从 tasks.managedMode 迁入，按团队行读取）
+  managedMode        Boolean  @default(false) @map("managed_mode")
+  currentTaskId      String?  @map("current_task_id")
+  mainAgentMemberId  String?  @map("main_agent_member_id")
+  /// 团队级首选 worker（软绑定单节点；成员显式选择优先；不可用自动回退，绝不阻塞）
+  preferredWorkerId  String?  @map("preferred_worker_id")
+  version            Int      @default(0) @map("version")
+  createdBy          String   @map("created_by")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  creator      User          @relation("TeamCreator", fields: [createdBy], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  currentTask  Task?         @relation("TeamCurrentTask", fields: [currentTaskId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  mainAgentMember TeamMember? @relation("TeamMainAgent", fields: [mainAgentMemberId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  members      TeamMember[]
+  userMembers  TeamUserMember[]
+  sessions     Session[]
+  taskGroupInstances TaskGroupInstance[]
+  queues       TeamQueue[]
+  tasks        Task[]        @relation("TaskTeam")
+  chatChannels ChatChannel[]
+  messageChannelLinks TeamMessageChannel[]
+  notificationChannelLinks TeamNotificationChannel[]
+
+  @@index([mainAgentMemberId], map: "idx_teams_main_agent_member")
+  @@map("teams")
+}
+
+--- CMD: awk '/^model TeamMember /,/^}/' server/prisma/schema.prisma ---
+model TeamMember {
+  id             String   @id
+  teamId         String   @map("team_id")
+  agentId        String   @map("agent_id")
+  alias          String?
+  seq            Int      @default(1)
+  workDir        String?  @map("work_dir")
+  overrideModelId String? @map("override_model_id")
+  /// 成员级首选 worker（软绑定单节点）：成员显式 > 团队 > 现状；null/空 = 不覆盖
+  preferredWorkerId String? @map("preferred_worker_id")
+  /// 成员角色（agent_roles）。onDelete: Restrict —— 在用角色不可静默删除，
+  /// 必须先解绑成员再删角色（FK 报错即显式拦截，绝不静默置空）。
+  roleId         String?  @map("role_id")
+  /// opencode 原步 agent 名（opencode.json 的 agent 节 key，如 build/plan/自定义名）。
+  /// null = 不指定（prompt_async 不带 agent 字段，用 serve 默认 agent）——存量行 NULL 行为不变。
+  /// 非 null 时 dispatch 下发 prompt_async 的 agent 字段，由 opencode 内核按该 agent 的
+  /// prompt/permission 执行（vteam 只传递，不自造 agent 语义）。
+  opencodeAgentName String? @map("opencode_agent_name")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  team         Team          @relation(fields: [teamId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  agent        Agent         @relation(fields: [agentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  role         AgentRole?    @relation(fields: [roleId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sessions     Session[]
+  taskGroupInstances TaskGroupInstance[]
+  chatChannels ChatChannel[]
+  mainForTeams Team[]        @relation("TeamMainAgent")
+
+  @@index([roleId], map: "idx_team_members_role")
+  @@unique([teamId, agentId, seq], map: "uk_team_members_team_agent_seq")
+  @@map("team_members")
+}
+
+--- CMD: grep -nE "@@|@relation" inside each model block ---
+  Team:        17 creator / 18 currentTask / 19 mainAgentMember / 25 tasks /
+               30 @@index([mainAgentMemberId], "idx_teams_main_agent_member") /
+               31 @@map("teams")
+  TeamMember:  21 team / 22 agent / 23 role / 27 mainForTeams /
+               29 @@index([roleId], "idx_team_members_role") /
+               30 @@unique([teamId, agentId, seq], ...) / 31 @@map("team_members")
+
+=> NO @relation and NO @@index was added for preferredWorkerId. Every relation and
+   index in both blocks is pre-existing (proved by the git diff below, which shows
+   zero added @@ lines). Satisfies plan:164 and Must-NOT:40 (软引用 + 无 FK/无索引).
+
+--- CMD: git diff -- server/prisma/schema.prisma ---
+@@ -92,6 +92,8 @@ model Team {
+   managedMode        Boolean  @default(false) @map("managed_mode")
+   currentTaskId      String?  @map("current_task_id")
+   mainAgentMemberId  String?  @map("main_agent_member_id")
++  /// 团队级首选 worker（软绑定单节点；成员显式选择优先；不可用自动回退，绝不阻塞）
++  preferredWorkerId  String?  @map("preferred_worker_id")
+   version            Int      @default(0) @map("version")
+   createdBy          String   @map("created_by")
+   createdAt          DateTime @default(now()) @map("created_at")
+@@ -182,6 +184,8 @@ model TeamMember {
+   seq            Int      @default(1)
+   workDir        String?  @map("work_dir")
+   overrideModelId String? @map("override_model_id")
++  /// 成员级首选 worker（软绑定单节点）：成员显式 > 团队 > 现状；null/空 = 不覆盖
++  preferredWorkerId String? @map("preferred_worker_id")
+   /// 成员角色（agent_roles）。onDelete: Restrict —— 在用角色不可静默删除，
+   // 必须先解绑成员再删角色（FK 报错即显式拦截，绝不静默置空）。
+   roleId         String?  @map("role_id")
+@@ -648,8 +652,6 @@ model Agent {
+   // ⚠️ 出厂默认提示词为多段长文本（16 篇 §3~§7 四方向结构），MySQL 需 TEXT 承载
+   prompt          String   @db.Text
+   defaultModelId  String?  @map("default_model_id")
+-  // 首选 worker 软绑定（可空，null=自动调度；离线自动回退，Metis R1）
+-  workerId        String?  @map("worker_id")
+   // @deprecated 2026-08-21 已下线：群聊 @Agent 自动回复“收到，正在处理…”机制已删除（模型不可用时无法区分）。
+   // 列保留以兼容存量 DB，业务层已不再读写；下次重建库可删。
+   ackMessage      String?  @map("ack_message")
+ server/prisma/schema.prisma | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+=> Exactly 3 hunks, +4/-2 lines total. Both the field AND its comment were removed
+   from Agent (plan:163 demanded both). Placement matches plan:161-162 (Team: after
+   managedMode/before version; TeamMember: immediately after overrideModelId).
+=> Minimal and surgical. Nothing else in the 1000+ line schema was touched.
+
+================================================================================
+2. TYPED REMAINDER — FALSIFIED AND CONFIRMED (read remove() body, not grep)
+================================================================================
+
+--- CMD: grep -c "agent.updateMany" server/src/workers/workers.service.ts ---
+0
+
+--- CMD: grep -c "team.updateMany\|teamMember.updateMany" server/src/workers/workers.service.ts ---
+2
+
+--- CMD: grep -n "updateMany" server/src/workers/workers.service.ts ---
+853:    const result = await this.prisma.worker.updateMany({
+1364:      this.prisma.session.updateMany({
+1368:      this.prisma.team.updateMany({
+1372:      this.prisma.teamMember.updateMany({
+
+--- CMD: sed -n '1325,1404p' server/src/workers/workers.service.ts (full remove() region) ---
+1330:  /**
+1331:   * DELETE /workers/:id 删除离线 worker（workers.delete 保护）。
+1332:   * - 不存在 → 404 WORKER_NOT_FOUND；
+1333:   * - 非 offline（online/degraded）→ 409 WORKER_ONLINE_NOT_REMOVABLE（防运行中误删，
+1334:   *   先经 shutdown/下线后再删）；
+1335:   * - offline → 事务内清理全部 workerId 外键引用（schema onDelete: Restrict，不依赖
+1336:   *   DB 级联）后物理删除：worker_model_availabilities 硬删、worker 会话实例关联硬删
+1337:   *   （软删 removedAt 不解除 FK Restrict，必须删行）、sessions.workerId/instanceRef 置空、
+1338:   *   teams.preferredWorkerId 与 team_members.preferredWorkerId 置空（团队/成员两级软绑定的
+1339:   *   「首选 worker」；列无 FK/无索引，按应用层清理惯例兜底）；成功同步清理该 worker 的
+1340:   *   workerMcpStatus/pendingCommands 内存态。
+1341:   */
+1342:  async remove(id: string) {
+1343:    const worker = await this.prisma.worker.findUnique({
+1344:      where: { id },
+1345:      select: { id: true, status: true },
+1346:    });
+1347:    if (!worker) {
+1348:      throw new NotFoundException({
+1349:        code: WORKER_ERRORS.WORKER_NOT_FOUND,
+1350:        message: `Worker ${id} 不存在`,
+1351:      });
+1352:    }
+1353:    if (worker.status !== WORKER_STATUS.OFFLINE) {
+1354:      throw new ConflictException({
+1355:        code: WORKER_ERRORS.WORKER_ONLINE_NOT_REMOVABLE,
+1356:        message: '仅离线 Worker 可删除，请先停止/下线',
+1357:      });
+1358:    }
+1359:    await this.prisma.$transaction([
+1360:      this.prisma.workerModelAvailability.deleteMany({
+1361:        where: { workerId: id },
+1362:      }),
+1363:      this.prisma.taskGroupInstance.deleteMany({ where: { workerId: id } }),
+1364:      this.prisma.session.updateMany({
+1365:        where: { workerId: id },
+1366:        data: { workerId: null, instanceRef: null },
+1367:      }),
+1368:      this.prisma.team.updateMany({
+1369:        where: { preferredWorkerId: id },
+1370:        data: { preferredWorkerId: null },
+1371:      }),
+1372:      this.prisma.teamMember.updateMany({
+1373:        where: { preferredWorkerId: id },
+1374:        data: { preferredWorkerId: null },
+1375:      }),
+1376:      this.prisma.worker.delete({ where: { id } }),
+1377:    ]);
+1378:    this.workerMcpStatus.delete(id);
+1379:    this.pendingCommands.delete(id);
+1380:    return { id, deleted: true };
+1381:  }
+
+=> Read as a whole body, not a grep count:
+   (a) agent.updateMany is GONE from the transaction entirely.
+   (b) team.updateMany and teamMember.updateMany are both present.
+   (c) They sit INSIDE the SAME `await this.prisma.$transaction([ ... ])` array,
+       between session.updateMany (1364-1367) and worker.delete (1376). Verified
+       by line range: 1368-1375 ⊂ the array opened at 1359 and closed at 1377.
+   (d) They are TYPED calls — no `(this.prisma as any)` cast, no `as any`
+       anywhere in the file's remove(). Satisfies Must-NOT:168 (禁止用
+       `(this.prisma as any)` 绕过类型错误).
+   (e) The doc comment (1330-1341) was rewritten: the stale
+       「agents.workerId 置空（软绑定"首选 worker"）」sentence is gone and replaced
+       with the two new columns. Satisfies plan:170's explicit requirement that the
+       remove() doc comment not contradict the code.
+
+================================================================================
+3. THE DECISIVE STALE-STATE CHECK — REGENERATED PRISMA CLIENT
+================================================================================
+
+--- CMD: stat -f "mtime=%Sm size=%z bytes  file=%N" -t "%Y-%m-%d %H:%M:%S" server/node_modules/.prisma/client/index.d.ts ---
+mtime=2026-10-14 11:50:43 size=3298754 bytes  file=server/node_modules/.prisma/client/index.d.ts
+
+--- CMD: stat -f "mtime=%Sm size=%z  %N" -t "%Y-%m-%d %H:%M:%S" server/prisma/schema.prisma ---
+mtime=2026-10-14 11:47:36 size=68423  server/prisma/schema.prisma
+
+=> Client mtime (11:50:43) is LATER than (a) the schema edit (11:47:36),
+   (b) the service edit (11:49:05), and (c) the spec edit (11:49:23).
+   `prisma generate` demonstrably ran AFTER every source edit. It cannot be a
+   stale pre-existing client.
+
+--- CMD: awk '/^model Agent \{/,/^\}/' server/node_modules/.prisma/client/schema.prisma | grep -c workerId ---
+0
+--- CMD: grep -c preferred_worker_id server/node_modules/.prisma/client/schema.prisma ---
+2
+=> The client's own embedded copy of the datamodel has Agent.workerId gone and both
+   preferred_worker_id columns present (at the very same line numbers 96 / 188 —
+   the only diffs vs the repo file are Prisma's own column-alignment reformatting,
+   which is expected). This proves generate consumed the edited schema.
+
+--- CMD: grep -n "workerId" server/node_modules/.prisma/client/index.d.ts | head -30 ---
+15790:    workerId: string | null
+15805:    workerId: string | null
+15820:    workerId: number
+15837:    workerId?: true
+15852:    workerId?: true
+15867:    workerId?: true
+15955:    workerId: string | null
+15987:    workerId?: boolean
+16009:    workerId?: boolean
+16017:  export type SessionOmit<...> = $Extensions.GetOmit<"id" | ... | "workerId" | "instanceRef" | ...>
+16042:      workerId: string | null
+16428:    readonly workerId: FieldRef<"Session", 'String'>
+33633:    workerId: string | null
+33638:    workerId: string | null
+33643:    workerId: number
+33650:    workerId?: true
+33655:    workerId?: true
+33660:    workerId?: true
+33738:    workerId: string
+33760:    workerId?: boolean
+33769:    workerId?: boolean
+33773:  export type WorkerModelAvailabilityOmit<...> = $Extensions.GetOmit<"workerId" | "modelId", ...>
+33786:      workerId: string
+33871:     * // Only select the `workerId`
+33872:     * // const workerModelAvailabilityWithWorkerIdOnly = await prisma.workerModelAvailability.findMany({ select: { workerId: true } })
+34159:    readonly workerId: FieldRef<"WorkerModelAvailability", 'String'>
+40213:    workerId: string | null
+40224:    workerId: string | null
+40235:    workerId: number
+40248:    workerId?: true
+TOTAL workerId lines: 118
+
+--- CMD: grep -n "preferredWorkerId" server/node_modules/.prisma/client/index.d.ts | head -30 ---
+7798:    preferredWorkerId: string | null
+7813:    preferredWorkerId: string | null
+7828:    preferredWorkerId: number
+7853:    preferredWorkerId?: true
+7868:    preferredWorkerId?: true
+7883:    preferredWorkerId?: true
+7985:    preferredWorkerId: string | null
+8019:    preferredWorkerId?: boolean
+8049:    preferredWorkerId?: boolean
+8056:  export type TeamOmit<...> = $Extensions.GetOmit<"id" | "name" | ... | "mainAgentMemberId" | "preferredWorkerId" | "version" | ...>
+8100:      preferredWorkerId: string | null
+8493:    readonly preferredWorkerId: FieldRef<"Team", 'String'>
+10280:    preferredWorkerId: string | null
+10294:    preferredWorkerId: string | null
+10308:    preferredWorkerId: number
+10332:    preferredWorkerId?: true
+10346:    preferredWorkerId?: true
+10360:    preferredWorkerId?: true
+10461:    preferredWorkerId: string | null
+10494:    preferredWorkerId?: boolean
+10518:    preferredWorkerId?: boolean
+10524:  export type TeamMemberOmit<...> = $Extensions.GetOmit<"id" | ... | "overrideModelId" | "preferredWorkerId" | "roleId" | "opencodeAgentName" | "createdAt", ...>
+10558:      preferredWorkerId: string | null
+10955:    readonly preferredWorkerId: FieldRef<"TeamMember", 'String'>
+55193:    preferredWorkerId: 'preferredWorkerId',
+55230:    preferredWorkerId: 'preferredWorkerId',
+56007:    preferredWorkerId: 'preferredWorkerId',
+56035:    preferredWorkerId: 'preferredWorkerId',
+56818:    preferredWorkerId?: StringNullableFilter<"Team"> | string | null
+56845:    preferredWorkerId?: SortOrderInput | SortOrder
+TOTAL preferredWorkerId lines: 148
+
+--- CMD: awk on index.d.ts, Agent input type blocks (verbatim) ---
+=== AgentWhereInput block (58559-58587) ===
+58559:   export type AgentWhereInput = {
+58560:     AND?: AgentWhereInput | AgentWhereInput[]
+58561:     OR?: AgentWhereInput[]
+58562:     NOT?: AgentWhereInput | AgentWhereInput[]
+58563:     id?: StringFilter<"Agent"> | string
+58564:     name?: StringFilter<"Agent"> | string
+58565:     type?: StringFilter<"Agent"> | string
+58566:     baseAgentId?: StringNullableFilter<"Agent"> | string | null
+58567:     agentKey?: StringNullableFilter<"Agent"> | string | null
+58568:     prompt?: StringFilter<"Agent"> | string
+58569:     defaultModelId?: StringNullableFilter<"Agent"> | string | null
+58570:     ackMessage?: StringNullableFilter<"Agent"> | string | null
+58571:     persona?: StringNullableFilter<"Agent"> | string | null
+58572:     policyId?: StringNullableFilter<"Agent"> | string | null
+58573:     createdBy?: StringFilter<"Agent"> | string
+58574:     createdAt?: DateTimeFilter<"Agent"> | Date | string
+58575:     updatedAt?: DateTimeFilter<"Agent"> | Date | string
+58576:     baseAgent?: XOR<AgentNullableScalarRelationFilter, AgentWhereInput> | null
+58577:     clones?: AgentListRelationFilter
+58578:     defaultForRoles?: AgentRoleListRelationFilter
+58579:     creator?: XOR<UserScalarRelationFilter, UserWhereInput>
+58580:     skills?: AgentSkillListRelationFilter
+58581:     teamMembers?: TeamMemberListRelationFilter
+58582:     sessions?: SessionListRelationFilter
+58583:     channels?: ChatChannelListRelationFilter
+58584:     authoredArtifacts?: ArtifactVersionListRelationFilter
+58585:     assignedIssues?: IssueAssigneeAgentListRelationFilter
+58586:     createdIssues?: IssueCreatorAgentListRelationFilter
+58587:   }
+=> ZERO workerId.
+
+=== AgentUpdateManyMutationInput block (63066-63078) ===
+63066:   export type AgentUpdateManyMutationInput = {
+63067:     id?: StringFieldUpdateOperationsInput | string
+63068:     name?: StringFieldUpdateOperationsInput | string
+63069:     type?: StringFieldUpdateOperationsInput | string
+63070:     agentKey?: NullableStringFieldUpdateOperationsInput | string | null
+63071:     prompt?: StringFieldUpdateOperationsInput | string
+63072:     defaultModelId?: NullableStringFieldUpdateOperationsInput | string | null
+63073:     ackMessage?: NullableStringFieldUpdateOperationsInput | string | null
+63074:     persona?: NullableStringFieldUpdateOperationsInput | string | null
+63075:     policyId?: NullableStringFieldUpdateOperationsInput | string | null
+63076:     createdAt?: DateTimeFieldUpdateOperationsInput | Date | string
+63077:     updatedAt?: DateTimeFieldUpdateOperationsInput | Date | string
+63078:   }
+=> ZERO workerId.
+
+=== AgentCreateInput block (62950-62973) ===
+62950:   export type AgentCreateInput = {
+62951:     id: string
+62952:     name: string
+62953:     type: string
+62954:     agentKey?: string | null
+62955:     prompt: string
+62956:     defaultModelId?: string | null
+62957:     ackMessage?: string | null
+62958:     persona?: string | null
+62959:     policyId?: string | null
+62960:     createdAt?: Date | string
+62961:     updatedAt?: Date | string
+62962:     baseAgent?: AgentCloneCreateNestedOneWithoutClonesInput
+62963:     clones?: AgentCloneCreateNestedManyWithoutBaseAgentInput
+62964:     defaultForRoles?: AgentRoleDefaultAgentCreateNestedManyWithoutDefaultAgentInput
+62965:     creator: UserCreateNestedOneWithoutAgentsCreatedInput
+62966:     skills?: AgentSkillCreateNestedManyWithoutAgentInput
+62967:     teamMembers?: TeamMemberCreateNestedManyWithoutAgentInput
+62968:     sessions?: SessionCreateNestedManyWithoutSessionInput
+62969:     channels?: ChatChannelCreateNestedManyWithoutChannelInput
+62970:     authoredArtifacts?: ArtifactVersionCreateNestedManyWithoutAuthorInput
+62971:     assignedIssues?: IssueCreateNestedManyWithoutIssueAssigneeAgentInput
+62972:     createdIssues?: IssueCreateNestedManyWithoutIssueCreatorAgentInput
+62973:   }
+=> ZERO workerId.
+
+=== TeamMemberWhereInput block (57034-57056) ===
+57045:     preferredWorkerId?: StringNullableFilter<"TeamMember"> | string | null
+=== TeamMemberUpdateManyMutationInput block (61362-61371) ===
+61368:     preferredWorkerId?: NullableStringFieldUpdateOperationsInput | string | null
+=== TeamUpdateManyMutationInput block (61134-61144) ===
+61140:     preferredWorkerId?: NullableStringFieldUpdateOperationsInput | string | null
+=> All three new-column call sites are type-representable.
+
+3.1 REASONING (the explicit "would it still compile?" question)
+    Given the regenerated types above: NO. `AgentWhereInput` has no `workerId`
+    member and carries no index signature, and `AgentUpdateManyMutationInput`
+    (nor `AgentUncheckedUpdateManyInput`) has none either. Re-adding
+    `this.prisma.agent.updateMany({ where: { workerId: id }, data: { workerId: null } })`
+    passes a fresh object literal, so TypeScript applies excess-property checking
+    against `AgentUpdateManyArgs` → TS2353. The stale call is now a HARD compile
+    error, not a silent pass. This is what makes section 6's tsc run strong evidence.
+
+3.2 LIVE REPRODUCTION OF TS2353 ON A THROWAWAY COPY OUTSIDE THE REPO
+    I reproduced it (not merely corroborated). Nothing in the repo was mutated;
+    the probe lived entirely under the approved temp root and was deleted after.
+
+    --- CMD: write /private/var/folders/.../T/opencode/ts2353-probe/probe.ts ---
+    import { PrismaClient } from '@prisma/client';
+    declare const prisma: PrismaClient;
+    // EXACT shape of the deleted typed call from workers.service.ts remove()
+    async function oldRemovedCall(id: string) {
+      await prisma.agent.updateMany({ where: { workerId: id }, data: { workerId: null } });
+    }
+    // the NEW calls added by todo 6
+    async function newCalls(id: string) {
+      await prisma.team.updateMany({ where: { preferredWorkerId: id }, data: { preferredWorkerId: null } });
+      await prisma.teamMember.updateMany({ where: { preferredWorkerId: id }, data: { preferredWorkerId: null } });
+    }
+    void oldRemovedCall; void newCalls;
+
+    --- CMD: tsconfig.json with paths -> <repo>/server/node_modules/.prisma/client/index.d.ts ---
+    --- CMD: ls -la $D ---
+    total 16
+    drwxr-xr-x@  4 mac  staff   128 Oct 14 11:54 .
+    drwxr-x--- 120 mac  staff  3840 Oct 14 11:54 ..
+    -rw-r--r--@  1 mac  staff   652 Oct 14 11:54 probe.ts
+    -rw-r--r--@  1 mac  staff   473 Oct 14 11:54 tsconfig.json
+
+    --- CMD: <repo>/server/node_modules/.bin/tsc --version ---
+    Version 5.9.3
+
+    --- CMD: <repo>/server/node_modules/.bin/tsc --noEmit -p $D/tsconfig.json ---
+    .../ts2353-probe/probe.ts(8,14): error TS2353: Object literal may only specify known properties, and 'workerId' does not exist in type 'AgentWhereInput'.
+    .../ts2353-probe/probe.ts(9,13): error TS2353: Object literal may only specify known properties, and 'workerId' does not exist in type '(Without<AgentUpdateManyMutationInput, AgentUncheckedUpdateManyInput> & AgentUncheckedUpdateManyInput) | (Without<...> & AgentUpdateManyMutationInput)'.
+    Exited with code 2
+
+    >>> The executor's claim ("TS2353 'workerId' does not exist in type
+        'AgentWhereInput'") is REPRODUCED VERBATIM. Not merely corroborated.
+
+    --- POSITIVE CONTROL: same tsconfig, probe2.ts containing ONLY the two new calls ---
+    --- CMD: <repo>/server/node_modules/.bin/tsc --noEmit -p tsconfig2.json ---
+    PROBE2_TSC_EXIT=0 (0 => the two new calls alone compile against the regenerated types)
+    => Isolates the failure to the removed column: the ONLY two errors are about
+       workerId; the new team/teamMember calls are clean.
+
+    --- CMD: rm -rf $D ; ls -d $D ---
+    ls: /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/ts2353-probe: No such file or directory
+    cleanup_exit=1   (i.e. the throwaway dir no longer exists)
+
+    No git add / commit / stash / checkout was executed at any point.
+
+================================================================================
+4. BEHAVIOUR + SPEC INTEGRITY
+================================================================================
+
+--- CMD: cd server && npx jest src/workers src/agents > out 2>&1; echo "JEST_EXIT=$?" ---
+JEST_EXIT=0
+Test Suites: 13 passed, 13 total
+Tests:       527 passed, 527 total
+Snapshots:   0 total
+Time:        9.835 s, estimated 11 s
+
+NOTE ON METHOD: my first jest invocation piped through `tail`, and the `$?` it
+reported came from `tail`, not from jest (`${PIPESTATUS[0]}` is a bash-ism that
+expands empty in zsh). I therefore RE-RAN jest writing to a file and capturing
+`$?` directly — that is the JEST_EXIT=0 reported above. Same for tsc in §6.
+The executor's claimed 13/13 suites and 527/527 tests are CONFIRMED, and the
+exit code is confirmed by an unpiped run rather than by assertion.
+
+--- CMD: grep -n "agent.updateMany\|agent: {" server/src/workers/workers.service.spec.ts ---
+49:    agent: {
+131:      agent: {
+=> Only two hits, both are the mock-object definitions. There is NO
+   `expect(prisma.agent.updateMany)...` assertion anywhere — the stale assertion is
+   GONE, as required by plan:165.
+--- CMD: grep -n "prisma\.agent" server/src/workers/workers.service.spec.ts ---
+EXIT=1 (1 = none)
+=> `prisma.agent` now has ZERO references in the spec.
+
+--- CMD: git diff -U0 -- server/src/workers/workers.service.spec.ts | grep '^@@' ---
+@@ -56,0 +57,4 @@ describe('WorkersService', () => {
+@@ -134,0 +139,4 @@ describe('WorkersService', () => {
+@@ -2055 +2063,2 @@ describe('WorkersService', () => {
+@@ -2059 +2068 @@ describe('WorkersService', () => {
+@@ -2070,3 +2079,7 @@ describe('WorkersService', () => {
+@@ -2349,0 +2363,249 @@ describe('WorkersService', () => {
+
+4.1 TRANSACTION ARITY — spec expectation vs REAL count (derived independently)
+    Plan:166 predicted "5 -> 4 -> 6 (以实际代码为准核对，不得照抄本文数字)". I
+    derived the truth myself and then compared.
+
+    --- CMD: awk 'NR>=1359 && NR<=1377' server/src/workers/workers.service.ts | grep -cE "^      this\.prisma\.[a-zA-Z]+\.[a-zA-Z]+\(" ---
+    6
+    --- CMD: the 6 calls (line offsets inside the $transaction array) ---
+    2:      this.prisma.workerModelAvailability.deleteMany({
+    5:      this.prisma.taskGroupInstance.deleteMany({ where: { workerId: id } }),
+    6:      this.prisma.session.updateMany({
+    10:      this.prisma.team.updateMany({
+    14:      this.prisma.teamMember.updateMany({
+    18:      this.prisma.worker.delete({ where: { id } }),
+    --- CMD: grep -n "toHaveLength(6)" server/src/workers/workers.service.spec.ts ---
+    2068:      expect(txOps).toHaveLength(6);
+
+    REAL = 6. SPEC = 6. MATCH. No mismatch.
+    (Chain check: 5 pre-existing − 1 removed agent.updateMany + 2 new = 6. The
+     executor landed on the plan's predicted 6 by derivation, not by transcription.)
+
+--- CMD: sed -n '2053,2088p' (the assertion block, verbatim) ---
+      // 事务 batch 数组顺序：availability 硬删 → instances 硬删 → sessions 置空 →
+      // teams/team_members 首选 worker 置空 → worker 删（Agent.workerId 列已摘除）
+      const [txOps] = prisma.$transaction.mock.calls[0] as unknown as [
+        Array<() => Promise<unknown>>,
+      ];
+      expect(txOps).toHaveLength(6);
+      expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
+        where: { workerId: 'w_0000000001' },
+      });
+      expect(prisma.taskGroupInstance.deleteMany).toHaveBeenCalledWith({
+        where: { workerId: 'w_0000000001' },
+      });
+      expect(prisma.session.updateMany).toHaveBeenCalledWith({
+        where: { workerId: 'w_0000000001' },
+        data: { workerId: null, instanceRef: null },
+      });
+      expect(prisma.team.updateMany).toHaveBeenCalledWith({
+        where: { preferredWorkerId: 'w_0000000001' },
+        data: { preferredWorkerId: null },
+      });
+      expect(prisma.teamMember.updateMany).toHaveBeenCalledWith({
+        where: { preferredWorkerId: 'w_0000000001' },
+        data: { preferredWorkerId: null },
+      });
+      expect(prisma.worker.delete).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+      });
+
+4.2 THE PRISMA MOCK: runtime object AND hand-written TS literal, in lockstep
+    The executor disclosed that forgetting the TS type literal yields TS2353/TS2339.
+    I verified BOTH sides, not just that tests pass.
+
+    --- CMD: sed -n '31,75p' (the hand-written type literal, verbatim) ---
+    31:  let prisma: {
+    32:    worker: { upsert/findUnique/findMany/update/updateMany/delete: jest.Mock };
+    40:    workerModelAvailability: { deleteMany: jest.Mock };
+    43:    taskGroupInstance: { deleteMany: jest.Mock };
+    46:    session: { updateMany: jest.Mock };
+    49:    agent: { updateMany: jest.Mock };
+    52:    modelCredential: { findMany: jest.Mock };
+    55:    teamMember: { findMany: jest.Mock; updateMany: jest.Mock };
+    59:    team: { updateMany: jest.Mock };
+    62:    gitRepoGrant: { findMany: jest.Mock };
+    65:    gitRepo: { findMany: jest.Mock; count: jest.Mock };
+    69:    gitCredential: { findMany: jest.Mock; count: jest.Mock };
+    73:    $transaction: jest.Mock;
+    74:    $queryRawUnsafe: jest.Mock;
+    75:  };
+
+    --- CMD: sed -n '112,155p' (the runtime mock object, verbatim) ---
+    112:    prisma = {
+    113:      worker: { upsert/findUnique/findMany/update/updateMany/delete: jest.fn() },
+    120:      workerModelAvailability: { deleteMany: jest.fn() },
+    124:      taskGroupInstance: { deleteMany: jest.fn() },
+    127:      session: { updateMany: jest.fn() },
+    131:      agent: { updateMany: jest.fn() },
+    134:      modelCredential: { findMany: jest.fn() },
+    137:      teamMember: { findMany: jest.fn(); updateMany: jest.fn() },
+    141:      team: { updateMany: jest.fn() },
+    144:      gitRepoGrant: { findMany: jest.fn() },
+    147:      gitRepo: { findMany: jest.fn(); count: jest.fn() },
+    155:      gitCredential: { findMany: jest.fn(); count: jest.fn() },
+    158:      $transaction: jest.fn(), $queryRawUnsafe: jest.fn(),
+    };
+
+    => The type literal (55-61) and the runtime object (137-143) were extended
+       TOGETHER: `team: { updateMany }` and `teamMember: { findMany, updateMany }`
+       on both sides. Consistent — no TS2353 / TS2339 risk. Confirmed by the spec's
+       two corresponding hunks (@@ -56,0 +57,4 @@ and @@ -134,0 +139,4 @@), which are
+       the +4-line insertions for `team:` on each side.
+
+4.3 All four `remove` cases (plan:166 names :2053/:2086/:2099/:2127) are present and
+    green: offline-cleanup, online→409, degraded→409, worker-missing→404, and the
+    memory-state cleanup case — 5 cases in the group, all within the 527 passing.
+
+================================================================================
+5. SCOPE DISCIPLINE
+================================================================================
+
+--- CMD: git diff -U0 -- server/src/workers/workers.service.ts | grep '^@@' ---
+@@ -79,0 +80,11 @@ export interface AssignmentRequirement {
+@@ -861,0 +873,2 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -898 +911,36 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -1290 +1338,2 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -1319,3 +1368,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+
+--- CMD: git diff --stat -- server/src/workers/workers.service.ts ---
+ server/src/workers/workers.service.ts | 63 ++++++++++++++++++++++++---
+ 1 file changed, 58 insertions(+), 5 deletions(-)
+
+HUNK-BY-HUNK ATTRIBUTION:
+  @@ -79,0  +80,11 @@  -> PRE-EXISTING, Todo 4 (AssignmentRequirement.preferredWorkerId + docstring). Matches verify-task-4's recorded hunk 1 byte-for-byte.
+  @@ -861,0 +873,2 @@  -> PRE-EXISTING, Todo 4 (assignWorker docstring, 2 lines). Matches verify-task-4's recorded hunk 2.
+  @@ -898  +911,36 @@  -> PRE-EXISTING, Todo 4 (pin branch replacing `return ranked[0]?.worker.id ?? null;`). Matches verify-task-4's recorded hunk 3.
+  @@ -1290 +1338,2 @@  -> THIS TODO. remove() doc comment rewrite (agents.workerId sentence -> teams/team_members preferredWorkerId sentence). Verbatim:
+       -   *   agents.workerId 置空（软绑定"首选 worker"）；成功同步清理该 worker 的
+       +   *   teams.preferredWorkerId 与 team_members.preferredWorkerId 置空（团队/成员两级软绑定的
+       +   *   「首选 worker」；列无 FK/无索引，按应用层清理惯例兜底）；成功同步清理该 worker 的
+  @@ -1319,3 +1368,7 @@  -> THIS TODO. The transaction element swap. Verbatim:
+       -      this.prisma.agent.updateMany({
+       -        where: { workerId: id },
+       -        data: { workerId: null },
+       +      this.prisma.team.updateMany({
+       +        where: { preferredWorkerId: id },
+       +        data: { preferredWorkerId: null },
+       +      }),
+       +      this.prisma.teamMember.updateMany({
+       +        where: { preferredWorkerId: id },
+       +        data: { preferredWorkerId: null },
+       }),
+       this.prisma.worker.delete({ where: { id } }),
+
+=> Exactly 5 hunks. Exactly 2 of them (@@1290, @@1319) are todo 6; the other 3 are
+   todo 4's, already independently verified by verify-task-4. No third region
+   touched. Scope discipline: CONFIRMED.
+
+5.1 assignWorker filter region / matchesModelRequirement carry ZERO bytes from THIS todo
+
+    (a) Structural: neither of todo 6's two hunks (HEAD lines 1290, 1319) is
+        anywhere near assignWorker (HEAD ~863-899) or matchesModelRequirement
+        (HEAD 901-938). Plan Must-NOT:38 (不得修改 matchesModelRequirement 既有
+        降级语义) and plan:137 (不得改 remove() except as owned here) both hold.
+
+    (b) Byte/md5 comparison against the value the EARLIER verifier recorded
+        (.omo/evidence/verify-task-4-team-worker-node.txt:62 ->
+         md5 = b069d78031b57a31c54622106ec084c5):
+
+        --- CMD: git show HEAD:...workers.service.ts | sed -n '909,937p'  ->  $T/a.txt ---
+        --- CMD: sed -n '957,985p' server/src/workers/workers.service.ts    ->  $T/b.txt ---
+        --- CMD: md5 -q $T/a.txt $T/b.txt ---
+        b069d78031b57a31c54622106ec084c5
+        b069d78031b57a31c54622106ec084c5
+        expected b069d78031b57a31c54622106ec084c5
+        --- CMD: diff $T/a.txt $T/b.txt ---
+        IDENTICAL
+
+        => matchesModelRequirement's full body (docstring excluded) is byte-identical
+           to HEAD, and its md5 still equals the EXACT value the earlier verifier
+           recorded. Zero bytes from todo 6. The degradation contract
+           `avail.length === 0 ⇒ true` (WT 973-976) is untouched.
+
+        --- CMD: awk from `  private matchesModelRequirement(` to closing `  }`, HEAD vs WT ---
+        30 lines (HEAD) / 30 lines (WT)
+        a67bb360a23479855c047ef87754e02b
+        a67bb360a23479855c047ef87754e02b
+        IDENTICAL
+
+        --- CMD: awk from `  async assignWorker(req: AssignmentRequirement` to closing `  }`, HEAD vs WT ---
+        37 lines (HEAD) / 72 lines (WT)
+        f130945cd8f425a161664904e1b035ab
+        f60856dfc3cad6fe9da5511dec760d2f
+        --- CMD: diff $T/aw.head.txt $T/aw.wt.txt | grep -E "^[<>]" | grep -E "filter|ranked|remainingCapacity" ---
+        <     return ranked[0]?.worker.id ?? null;
+        >     const fallbackId = ranked[0]?.worker.id ?? null;
+        >     const pinned = ranked.find((x) => x.worker.id === req.preferredWorkerId);
+        >         ? `未通过既有过滤（status=${raw.status} 容量=${this.remainingCapacity(raw)}/${need} ...`
+        >     // —— 这是**有意**的；回退后 ranked[0] 仍可能选回它，不要当 bug 修。
+
+        => The size change is todo 4's pin branch (expected, already verified).
+           Critically: NOT ONE `.filter(...)` line appears as a +/- — the four
+           filters are context lines, byte-unchanged:
+             .filter((x) => x.worker.status !== WORKER_STATUS.OFFLINE)   ①
+             .filter((x) => x.capacity >= need)                          ②
+             .filter((x) => !req.opencodeVersion || x.worker.opencodeVersion === req.opencodeVersion)  ③
+             .filter((x) => this.matchesModelRequirement(x.worker, req.modelId))  ④
+           Zero bytes from todo 6 in this region.
+
+5.2 MIGRATIONS — untouched (the DDL belongs to Todo 7)
+
+    --- CMD: ls server/prisma/migrations/ ---
+    20260925000000_squashed_baseline
+    20260926000000_secret_command_capability
+    20260929000000_capability_git_web_tier
+    20260930000000_capability_git_web_retire
+    20260930010000_memory_role_inject
+    20261001000000_task_long_running
+    20261009000000_message_external_chat_id
+    20261009010000_memory_refcount
+    20261009020000_capability_memory_org_tools
+    20261010010000_model_usage
+    20261010020000_worker_code_version
+    20261010030000_worker_update_state
+    migration_lock.toml
+    (12 directories, unchanged from plan:98's count)
+
+    --- CMD: ls -d server/prisma/migrations/*team_worker_node* ---
+    zsh:1: no matches found: server/prisma/migrations/*team_worker_node*
+    EXIT=1
+    => NO team_worker_node migration directory exists. The irreversible
+       `DROP COLUMN agents.worker_id` has NOT been written yet — correct, that is
+       Todo 7's exclusive ownership (plan:168, :182).
+
+    --- CMD: git status --porcelain -- server/prisma/migrations ---
+    (no output)  EXIT=0
+    => ZERO modifications under server/prisma/migrations. Not even the baseline
+       was edited (Must-NOT:39, docs/migration-baseline.md:29-31). CONFIRMED.
+
+================================================================================
+6. tsc --noEmit — STRONG EVIDENCE FOR THE EARLIER Agent.workerId REMOVAL
+================================================================================
+
+--- CMD: cd server && npx tsc --noEmit -p tsconfig.json > out 2>&1; echo "TSC_EXIT=$?" ---
+TSC_EXIT=0
+--- bytes of tsc output:        0 ---
+=> Zero errors, zero output. (Captured WITHOUT a pipe so `$?` is tsc's own exit
+   code; my earlier piped run reported `TSC_EXIT=0` too but that number came from
+   `tail`, so I redid it.)
+
+REASONING — why this tsc run is now STRONG evidence, unlike the earlier weak one:
+
+  Earlier (Todo 2's verification, before Todo 6): `tsc --noEmit` also passed, but it
+  was WEAK evidence. At that moment `schema.prisma` still DECLARED
+  `workerId String? @map("worker_id")` on Agent, and the generated client still
+  carried `AgentWhereInput.workerId` / `AgentUpdateManyMutationInput.workerId`.
+  A leftover typed read of Agent.workerId would therefore have compiled CLEANLY.
+  Passing tsc said nothing about whether the column had been removed; it only said
+  the code was internally consistent with the old schema.
+
+  Now: `AgentWhereInput` / `AgentUpdateManyMutationInput` / `AgentCreateInput` have
+  NO workerId (§3), proven to be a live hard error by the reproduced TS2353 (§3.2),
+  and the client is newer than every edit (§3 mtimes). Therefore any leftover TYPED
+  read of Agent.workerId anywhere in server/src would make tsc fail. It does not
+  fail. Hence the earlier Agent.workerId removal is now STRONGLY corroborated —
+  the column is genuinely gone from the compile-time surface, and nothing reads it.
+
+  Cross-check with a direct sweep:
+  --- CMD: grep -rn --include='*.ts' -E "agent\.updateMany|agent\.workerId|agent:\s*\{\s*workerId|workerId:\s*id.*agent" server/src | grep -v '\.spec\.ts' ---
+  EXIT=1 (1 = zero hits)
+  --- CMD: grep -n "workerId" server/src/agents/agents.service.ts server/src/agents/dto/update-agent.dto.ts ---
+  (30 hits, all in the PROTECTED 「取数 worker」 semantics: OpencodeAgentsResult.workerId
+   at :103, opts.workerId / this.workersService.assignWorker() locals at :411-606.)
+  update-agent.dto.ts: 0 hits.
+  => Exactly the Must-NOT:43 carve-out survives (opts.workerId query-param
+     semantics); no mechanical sweep was done and none should be. Zero
+     Agent.workerId reads remain.
+
+================================================================================
+7. DIRTY WORKTREE / NO COMMIT
+================================================================================
+
+--- CMD: git log --oneline -1 ---
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+--- CMD: git log --oneline -3 ---
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+143e13f docs(omo): doc-pdf-export-fix 终验完成勾选
+4483687 test(docs): 暗色 PDF 导出 Chromium 像素冒烟
+=> HEAD UNCHANGED at b6840d1. No commit was made (plan:173 declared "Commit: Y",
+   but the plan's own Wave/ledger discipline defers commits to the F wave; and the
+   task brief for this verification explicitly forbade committing). CONFIRMED:
+   no-commit holds.
+
+--- CMD: git status --porcelain (full raw, verbatim) ---
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M docs/agent-platform/prototypes/agent-config/index.tsx
+ M docs/agent-platform/prototypes/agent-manage/index.tsx
+ M server/prisma/schema.prisma
+ M server/src/agents/agents.service.spec.ts
+ M server/src/agents/agents.service.ts
+ M server/src/agents/dto/update-agent.dto.ts
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/workers/workers.service.spec.ts
+ M server/src/workers/workers.service.ts
+ M web/app/(main)/agents/page.tsx
+ M web/e2e/reference/testids.ts
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/evidence/task-1-team-worker-node.txt
+?? .omo/evidence/task-2-team-worker-node.txt
+?? .omo/evidence/task-3-team-worker-node.txt
+?? .omo/evidence/task-4-team-worker-node.txt
+?? .omo/evidence/task-6-team-worker-node.txt
+?? .omo/evidence/task-receipt-fix-team-worker-node.txt
+?? .omo/evidence/verify-task-1-team-worker-node.txt
+?? .omo/evidence/verify-task-14-round2-team-worker-node.txt
+?? .omo/evidence/verify-task-14-team-worker-node.txt
+?? .omo/evidence/verify-task-2-team-worker-node.txt
+?? .omo/evidence/verify-task-3-round2-team-worker-node.txt
+?? .omo/evidence/verify-task-3-team-worker-node.txt
+?? .omo/evidence/verify-task-4-team-worker-node.txt
+?? .omo/evidence/verify-task-6-team-worker-node.txt
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+
+Counts: 21 ` M` lines + 17 `??` lines = 38 entries.
+(The 17 untracked includes this verifier's own artifact
+ .omo/evidence/verify-task-6-team-worker-node.txt and the two files written
+ after the executor's todo-6 evidence: .omo/evidence/task-receipt-fix-*.txt
+ and .omo/evidence/verify-task-14-*.txt. None of them are source changes.)
+
+PRE-EXISTING DIRT UNTOUCHED. Compared against Todo 1's recorded snapshot
+(.omo/evidence/task-1-team-worker-node.txt:15-28, which is the authoritative
+relative-comparison zero point for Todos 13 and F4):
+
+  Todo-1 snapshot (14 entries)        -> current status
+  M .omo/boulder.json                 -> still M                       UNTOUCHED
+  M .omo/evidence/phase5-t9-playwright.json -> still M                  UNTOUCHED
+  M .omo/evidence/plan-review-execution-gates/task-9/probe.json -> still M UNTOUCHED
+  M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json -> still M UNTOUCHED
+  M .omo/ulw-execute/ledger.jsonl      -> still M                       UNTOUCHED
+  M server/src/platform-mcp/platform-mcp.controller.spec.ts -> still M    UNTOUCHED
+  M server/src/platform-mcp/platform-mcp.controller.ts -> still M         UNTOUCHED
+  M server/src/platform-mcp/platform-mcp.service.spec.ts -> still M       UNTOUCHED
+  M server/src/platform-mcp/platform-mcp.service.ts -> still M            UNTOUCHED
+  M server/src/platform-mcp/platform-mcp.tools.ts -> still M              UNTOUCHED
+  M web/src/components/chat/msg-parts.tsx -> still M                      UNTOUCHED
+  ?? .omo/drafts/team-worker-node.md  -> still ??                       UNTOUCHED
+  ?? .omo/notepads/team-worker-node/   -> still ??                       UNTOUCHED
+  ?? .omo/plans/team-worker-node.md    -> still ??                       UNTOUCHED
+
+  => All 14 still dirty, none reverted, none cleaned. `git checkout` / `git stash`
+     were never run (I ran none, and the mtimes of platform-mcp.service.ts
+     (18:42:25, previous day) and msg-parts.tsx (18:44:38, previous day) are far
+     older than this whole plan's session — they have not been written today).
+
+  Entries ADDED since Todo 1, attributed by mtime:
+    11:47:36  server/prisma/schema.prisma              <- THIS TODO
+    11:49:05  server/src/workers/workers.service.ts     <- THIS TODO (+ todo 4)
+    11:49:23  server/src/workers/workers.service.spec.ts <- THIS TODO (+ todo 4)
+    11:16:10  docs/agent-platform/prototypes/agent-config/index.tsx  <- todo 3 lane
+    11:16:49  web/app/(main)/agents/page.tsx           <- todo 3 lane
+    11:46:26  docs/agent-platform/prototypes/agent-manage/index.tsx  <- todo 3 lane
+    11:46:59  web/e2e/reference/testids.ts             <- todo 3 lane
+    11:46    server/src/agents/{agents.service.ts, agents.service.spec.ts,
+                                dto/update-agent.dto.ts}  <- todo 2 lane
+    11:19    server/src/workers/* (todo 4 portion)     <- todo 4 lane
+    .omo/evidence/*-team-worker-node.txt               <- evidence / other verifiers
+
+  => Todo 6 owns exactly 3 files: schema.prisma, workers.service.ts,
+     workers.service.spec.ts. It touched none of the other lanes' files
+     (web/app/(main)/agents/page.tsx, web/e2e/reference/testids.ts, docs
+     prototypes, agents.service*, update-agent.dto.ts) and none of the
+     pre-existing dirt. NONE of todo 6's 3 files appear in the Todo-1
+     pre-existing-dirt list, so there is zero collision risk.
+
+--- CMD: md5 + mtime of the 3 files this todo owns ---
+11:47:36  68423 bytes    cd5800520b5763ff6f240b0d5f2bdfdf  server/prisma/schema.prisma
+11:49:05  66210 bytes    f84f12c83d952d4c6481d4d8db3ab1e5  server/src/workers/workers.service.ts
+11:49:23 117645 bytes    0892b8b84bcd1034c3ab6e74e91a764b  server/src/workers/workers.service.spec.ts
+
+  Write order: schema (11:47:36) -> service (11:49:05) -> spec (11:49:23)
+  -> `prisma generate` (client 11:50:43). Correct dependency order, and the
+  generate genuinely came last (plan:167 requires generate BEFORE tsc/jest).
+  No file was written after the last verification re-run.
+
+================================================================================
+8. OBSERVATIONS (none block the verdict)
+================================================================================
+
+O1 (cosmetic, dead code — NOT a defect, does not need fixing now):
+    The spec's prisma mock still carries an unused `agent: { updateMany }` key in
+    BOTH the hand-written type literal (spec:49-51) and the runtime object
+    (spec:131-133). `prisma.agent` has zero references in the spec now
+    (`grep -n "prisma\.agent" ... -> EXIT=1`), so it is inert. The plan never
+    required its removal (plan:166 only required ADDING team/teamMember), and
+    keeping it is the conservative choice. Smallest possible cleanup, if Todo 13's
+    residual-reference sweep wants a clean slate: delete the 3 lines at spec:49-51
+    and the 3 lines at spec:131-133. I did NOT make this change (read-only scope).
+    Impact of leaving it: zero at compile time (tsc=0), zero at test time (527/527).
+
+O2 (correctly NOT done here, but flagging for the next todo):
+    No migration exists yet (verified in §5.2), so the code now selects/writes
+    `teams.preferred_worker_id` and `team_members.preferred_worker_id` against a
+    database that does not have those columns, and still HAS `agents.worker_id`.
+    The repo therefore compiles and unit-tests green (Prisma is fully mocked, and
+    the plan's Verification strategy line 51 notes there is no db push / no MySQL),
+    but the running system is mid-wave and will fail at runtime until Todo 7's DDL
+    lands. This is exactly the plan's designed Wave-2 intermediate state
+    (plan:60, :65, :78), not a Todo 6 defect. Todo 7 is now BLOCKING for any
+    runtime/e2e exercise — the plan's own e2e prerequisite (rebuild + migrate
+    deploy, plan:54) covers it.
+
+================================================================================
+9. SUMMARY TABLE — all 7 falsification targets
+================================================================================
+ #  Target                                          Result
+ 1  schema: +2 preferred_worker_id, -Agent.workerId,   FALSIFIED -> CONFIRMED
+    no @relation/@@index, literal appears exactly 2   (all four sub-checks pass)
+ 2  agent.updateMany gone; team/teamMember updateMany  FALSIFIED -> CONFIRMED
+    inside the SAME $transaction array; read as body    (array = 6 elements)
+ 3  Prisma client regenerated; Agent inputs lose       FALSIFIED -> CONFIRMED,
+    workerId, Team/TeamMember inputs gain it            TS2353 REPRODUCED LIVE
+ 4  jest green; arity spec==real==6; stale agent       FALSIFIED -> CONFIRMED
+    assertion gone; mock + TS literal in lockstep       (13/13, 527/527, exit 0)
+ 5  scope: only todo-4 + 2 remove() hunks; filter     FALSIFIED -> CONFIRMED
+    region & matchesModelRequirement untouched (md5);   (md5 b069d780... matches
+    no team_worker_node migration; migrations clean     the earlier verifier)
+ 6  tsc --noEmit exit 0, and it is now STRONG evidence  FALSIFIED -> CONFIRMED
+    for the earlier Agent.workerId removal              (0 errors, 0 bytes output)
+ 7  HEAD still b6840d1; pre-existing dirt intact;      FALSIFIED -> CONFIRMED
+    other lanes' files untouched
+
+================================================================================
+10. EXACT REPRO COMMANDS (paste-and-run from the repo root)
+================================================================================
+cd /Volumes/SSD-Data/01work/git-project/vteam
+
+# 1 schema
+grep -n preferred_worker_id server/prisma/schema.prisma            # => 2 hits (96,188)
+grep -c preferred_worker_id server/prisma/schema.prisma            # => 2
+awk '/model Agent /,/^}/' server/prisma/schema.prisma | grep -c workerId   # => 0
+awk '/^model Team /,/^}/' server/prisma/schema.prisma                    # no @relation/@@index on new field
+awk '/^model TeamMember /,/^}/' server/prisma/schema.prisma
+git diff -- server/prisma/schema.prisma                      # => 3 hunks, +4/-2
+
+# 2 typed remainder (read the body, don't trust counts)
+grep -c "agent.updateMany" server/src/workers/workers.service.ts        # => 0
+grep -c "team.updateMany\|teamMember.updateMany" server/src/workers/workers.service.ts  # => 2
+sed -n '1342,1381p' server/src/workers/workers.service.ts              # the whole remove()
+
+# 3 generated client
+stat -f "mtime=%Sm size=%z" -t "%Y-%m-%d %H:%M:%S" server/node_modules/.prisma/client/index.d.ts
+P=server/node_modules/.prisma/client/index.d.ts
+awk '/^  export type AgentWhereInput = \{/{f=1} f{print NR": "$0} f&&/^\  \}/{exit}' $P | grep -c workerId   # => 0
+awk '/^  export type AgentUpdateManyMutationInput = \{/{f=1} f{print NR": "$0} f&&/^\  \}/{exit}' $P | grep -c workerId   # => 0
+awk '/^  export type AgentCreateInput = \{/{f=1} f{print NR": "$0} f&&/^\  \}/{exit}' $P | grep -c workerId   # => 0
+awk '/^  export type TeamMemberWhereInput = \{/{f=1} f{print NR": "$0} f&&/^\  \}/{exit}' $P | grep -c preferredWorkerId  # => 1
+awk '/^  export type TeamMemberUpdateManyMutationInput = \{/{f=1} f{print NR": "$0} f&&/^\  \}/{exit}' $P | grep -c preferredWorkerId  # => 1
+awk '/^  export type TeamUpdateManyMutationInput = \{/{f=1} f{print NR": "$0} f&&/^\  \}/{exit}' $P | grep -c preferredWorkerId  # => 1
+awk '/^model Agent \{/,/^\}/' server/node_modules/.prisma/client/schema.prisma | grep -c workerId  # => 0
+
+# 3b live TS2353 reproduction (throwaway OUTSIDE the repo; run then rm)
+T=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode; D=$T/ts2353-probe
+mkdir -p $D && printf '%s\n' \
+ "import { PrismaClient } from '@prisma/client';" \
+ "declare const prisma: PrismaClient;" \
+ "async function f(id: string) {" \
+ "  await prisma.agent.updateMany({ where: { workerId: id }, data: { workerId: null } });" \
+ "}" "void f;" > $D/probe.ts
+printf '{"compilerOptions":{"strict":true,"noEmit":true,"target":"ES2021","module":"commonjs","moduleResolution":"node","skipLibCheck":true,"baseUrl":".","paths":{"@prisma/client":["/Volumes/SSD-Data/01work/git-project/vteam/server/node_modules/.prisma/client/index.d.ts"]}},"files":["probe.ts"]}' > $D/tsconfig.json
+server/node_modules/.bin/tsc --noEmit -p $D/tsconfig.json   # => TS2353 ... 'workerId' does not exist in type 'AgentWhereInput'
+rm -rf $D
+
+# 4 behaviour + spec
+cd server && npx jest src/workers src/agents; echo "JEST_EXIT=$?"   # => 13/13, 527/527, exit 0
+sed -n '2060,2090p' src/workers/workers.service.spec.ts             # expect(txOps).toHaveLength(6)
+sed -n '55,62p' src/workers/workers.service.spec.ts                 # TS literal team:
+sed -n '137,144p' src/workers/workers.service.spec.ts                # runtime mock team:
+grep -n "prisma\.agent" src/workers/workers.service.spec.ts; echo $?  # => 1 (none)
+awk 'NR>=1359 && NR<=1377' src/workers/workers.service.ts | grep -cE "^      this\.prisma\.[a-zA-Z]+\.[a-zA-Z]+\("  # => 6
+cd ..
+
+# 5 scope
+git diff -U0 -- server/src/workers/workers.service.ts | grep '^@@'   # => 5 hunks
+T=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode
+git show HEAD:server/src/workers/workers.service.ts > $T/ws.head.ts
+cp server/src/workers/workers.service.ts $T/ws.wt.ts
+awk '/^  (private )?matchesModelRequirement\(/{f=1} f{print} f&&/^  \}$/{exit}' $T/ws.head.ts > $T/m1.txt
+awk '/^  (private )?matchesModelRequirement\(/{f=1} f{print} f&&/^  \}$/{exit}' $T/ws.wt.ts   > $T/m2.txt
+md5 -q $T/m1.txt $T/m2.txt                # => a67bb360a23479855c047ef87754e02b (both)
+git show HEAD:server/src/workers/workers.service.ts | sed -n '909,937p' > $T/a.txt
+sed -n '957,985p' server/src/workers/workers.service.ts > $T/b.txt
+md5 -q $T/a.txt $T/b.txt                  # => b069d78031b57a31c54622106ec084c5 (both) == verify-task-4's record
+ls -d server/prisma/migrations/*team_worker_node* ; echo $?          # => 1
+git status --porcelain -- server/prisma/migrations ; echo $?          # => empty, 0
+
+# 6 tsc
+cd server && npx tsc --noEmit -p tsconfig.json; echo "TSC_EXIT=$?"     # => 0
+
+# 7 no-commit / dirty
+git log --oneline -1                                                  # => b6840d1
+git status --porcelain
+diff <(git show HEAD:server/src/workers/workers.service.ts | sed -n '909,937p') \
+     <(sed -n '957,985p' server/src/workers/workers.service.ts)        # => no output
+
+================================================================================
+END OF ARTIFACT
+================================================================================

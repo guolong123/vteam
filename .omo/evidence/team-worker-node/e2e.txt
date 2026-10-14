@@ -1,0 +1,40 @@
+[e2e] date=2026-10-14T15:52:25Z HEAD=cb0ba6d1ab16571c0c979e41e40951000819f1c7 branch=fix/doc-pdf-export
+[e2e] WEB_URL=http://localhost:13001 SERVER_URL=http://localhost:13000 EVIDENCE_DIR=/Volumes/SSD-Data/01work/git-project/vteam/.omo/evidence/team-worker-node
+[e2e] W_A=w_compose_worker W_B=w_e2e_second W_NOPE=w_nope_e2e_dangling WORKER2_NAME=vteam-e2e-worker2
+[e2e] PRE-0 docker version (exit=0):
+[e2e]   Client:
+[e2e]    Version:           29.8.2
+[e2e]    API version:       1.56
+[e2e]    Go version:        go1.26.8
+[e2e]    Git commit:        7fc2dff
+[e2e]    Built:             Sun Oct 11 12:42:20 2026
+[e2e]    OS/Arch:           darwin/arm64
+[e2e]    Context:           orbstack
+[e2e]   
+[e2e]   Server: Docker Engine - Community
+[e2e]    Engine:
+[e2e]     Version:          29.8.2
+[e2e]     API version:      1.56 (minimum version 1.40)
+[e2e]     Go version:       go1.26.8
+[e2e]     Git commit:       8af9fe3
+[e2e]     Built:            Wed Sep 30 19:32:49 2026
+[e2e]     OS/Arch:          linux/arm64
+[e2e]     Experimental:     true
+[e2e]    containerd:
+[e2e]     Version:          v2.3.6
+[e2e]     GitCommit:        ee2735368117d2eb259779949d5e75cdafec9761
+[e2e]    runc:
+[e2e]     Version:          1.5.2
+[e2e]     GitCommit:        29dd3dc2b13b4123162e5fe132504bb4b15569f1
+[e2e]    docker-init:
+[e2e]     Version:          0.19.0
+[e2e]     GitCommit:        de40ad0
+[e2e] PRE-1 SKIPPED (E2E_REBUILD=0)
+[e2e] FAIL step=pre1-stale reason=E2E_REBUILD=0 requires E2E_ACK_STALE_IMAGE=1. A bare up -d on a stale image means the migration is absent (teams/team_members.preferred_worker_id missing) and the new PATCH field is silently stripped by the whitelist ValidationPipe (no 400, a value that never round-trips). Re-run with the defaults, or pass E2E_REBUILD=0 E2E_ACK_STALE_IMAGE=1.
+[e2e] ----- cleanup receipt -----
+[e2e] cleanup: db DELETE workers id=w_e2e_second ok (availabilities/instances/sessions cleared first; 0 rows left)
+[e2e] cleanup: docker rm -f vteam-e2e-worker2 ok
+[e2e] cleanup: worker2 volumes absent (nothing to remove)
+[e2e] cleanup: temp files removed
+[e2e] EXIT CODE OVERRIDDEN to 1: the summary guard never passed, so this run did NOT prove A/B/C/D — a skipped or unrun segment is never a pass
+[e2e] ----- exit code: 1 -----

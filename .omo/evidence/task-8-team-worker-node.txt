@@ -1,0 +1,722 @@
+=============== task-8-team-worker-node : TEAM-LEVEL WRITE PATH ===============
+plan: .omo/plans/team-worker-node.md Todo 8 (lines 190-202)
+binding Must-have #1 (plan line 25) / Must-NOT-have (plan lines 40, 44)
+declared base sha: cb0ba6d1ab16571c0c979e41e40951000819f1c7
+lane made NO commit (no git write command used: only show/log/status/diff).
+
+### 1) FINAL HEAD — unchanged
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+full sha:
+cb0ba6d1ab16571c0c979e41e40951000819f1c7
+
+### 2) MY files (git status --porcelain -- server/src/teams/)
+ M server/src/teams/dto/update-team.dto.ts
+ M server/src/teams/teams.service.spec.ts
+ M server/src/teams/teams.service.ts
+
+### 3) diffstat — additions only, no deletion anywhere (no pre-existing test removed)
+ server/src/teams/dto/update-team.dto.ts | 10 ++++
+ server/src/teams/teams.service.spec.ts  | 87 +++++++++++++++++++++++++++++++++
+ server/src/teams/teams.service.ts       | 10 ++++
+ 3 files changed, 107 insertions(+)
+
+### 4) hunks confined to update() / toTeamDto() (teams.service.ts)
+@@ -344,0 +345,7 @@ export class TeamsService implements OnModuleInit {
+@@ -1517,0 +1525,3 @@ export class TeamsService implements OnModuleInit {
+-- update-team.dto.ts (adding a field to the class) --
+@@ -44,0 +45,10 @@ export class UpdateTeamDto {
+-- teams.service.spec.ts (inside describe('update')) --
+@@ -716,0 +717,87 @@ describe('TeamsService', () => {
+
+### 5) VERIFY: git diff -U0 -- teams.service.ts | grep '^@@'  (raw)
+@@ -344,0 +345,7 @@ export class TeamsService implements OnModuleInit {
+@@ -1517,0 +1525,3 @@ export class TeamsService implements OnModuleInit {
+grep_exit=0
+
+### 6) VERIFY: grep -n preferredWorkerId server/src/teams/teams.service.ts
+348:    // preferredWorkerId 置顶分支），并回退自动调度。
+349:    if (dto.preferredWorkerId !== undefined) {
+350:      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+1527:      preferredWorkerId: team.preferredWorkerId ?? null,
+
+### 7) full source diff (write path + DTO projection + comment)
+diff --git a/server/src/teams/dto/update-team.dto.ts b/server/src/teams/dto/update-team.dto.ts
+index 1034552..6d0f94b 100644
+--- a/server/src/teams/dto/update-team.dto.ts
++++ b/server/src/teams/dto/update-team.dto.ts
+@@ -42,6 +42,16 @@ export class UpdateTeamDto {
+   @IsString()
+   mainAgentMemberId?: string | null;
+ 
++  @ApiPropertyOptional({
++    description:
++      '团队级首选 worker（软引用，存 vteam_worker 的 id；空串/null = 自动调度；成员的显式选择优先于本值）',
++  })
++  @IsOptional()
++  @ValidateIf((o) => o.preferredWorkerId !== null)
++  @IsString()
++  @MaxLength(191)
++  preferredWorkerId?: string | null;
++
+   @ApiPropertyOptional({ description: '乐观锁版本号（并发写保护）' })
+   @IsOptional()
+   @IsInt()
+diff --git a/server/src/teams/teams.service.ts b/server/src/teams/teams.service.ts
+index 629207e..05ca180 100644
+--- a/server/src/teams/teams.service.ts
++++ b/server/src/teams/teams.service.ts
+@@ -342,6 +342,13 @@ export class TeamsService implements OnModuleInit {
+     if (dto.managedMode !== undefined) {
+       data.managedMode = dto.managedMode;
+     }
++    // 弱校验：与下方 mainAgentMemberId 的存在性校验（:352-368）故意分歧——
++    // worker 是软引用，其可用性（在线/离线/容量/模型）是运行期事实，纯配置操作不应
++    // 被节点状态阻断；置顶不可用时由分派期 warn 收敛（见 workers.assignWorker 的
++    // preferredWorkerId 置顶分支），并回退自动调度。
++    if (dto.preferredWorkerId !== undefined) {
++      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
++    }
+     if ((dto as any).mainAgentMemberId !== undefined) {
+       const raw = (dto as any).mainAgentMemberId;
+       if (raw === null || String(raw).trim() === '') {
+@@ -1515,6 +1522,9 @@ export class TeamsService implements OnModuleInit {
+       currentTaskTitle: currentTask?.title ?? null,
+       currentTaskStatus: currentTask?.status ?? null,
+       mainAgentMemberId: (team as any).mainAgentMemberId ?? null,
++      // 团队级首选 worker（null = 自动调度）；成员级选择优先于本值（见 worker-dispatcher 两级 resolver）。
++      // 缺此字段会让页面上的选择被空值悄悄覆盖（既有陷阱，tasks.service.ts 亦有同形注释）。
++      preferredWorkerId: team.preferredWorkerId ?? null,
+       version: team.version,
+       createdBy: team.createdBy,
+       createdAt: team.createdAt,
+
+### 8) VERIFY: cd server && npx jest src/teams ; echo JEST_EXIT=0
+PASS src/teams/seed.spec.ts
+PASS src/teams/teams.controller.spec.ts
+PASS src/teams/teams.service.spec.ts
+
+Test Suites: 3 passed, 3 total
+Tests:       110 passed, 110 total
+Snapshots:   0 total
+Time:        3.25 s, estimated 9 s
+Ran all test suites matching /src\/teams/i.
+JEST_EXIT=0
+
+### 9) VERIFY: new cases + optimistic-lock regression (--verbose, raw)
+PASS src/teams/seed.spec.ts
+  TeamsService seed续号（Todo 15：跳过非数字后缀 id）
+    ✓ fresh-seed 表态（tum_0000000001 + tum_admin_seed）→ 首个续号 id 为 tum_0000000002 (6 ms)
+    ✓ 全非数字表（仅 tum_admin_seed）→ 不抛错，计数器从 0 起首个 id 为 tum_0000000001 (1 ms)
+
+PASS src/teams/teams.service.spec.ts
+  TeamsService
+    create
+      ✓ 创建团队成功：校验 name 非空、生成 members seq/alias/workDir、广播 TEAM_CHANGED (8 ms)
+      ✓ 重名 409 TEAM_NAME_CONFLICT (25 ms)
+      ✓ 成员 agentId 不存在 404 AGENT_NOT_FOUND (1 ms)
+      ✓ alias 缺省按 <角色>-<seq>、workDir 缺省按 sanitize(agent.name) 且同 agent 多实例追加 -seq (1 ms)
+      ✓ 种子成员别名逐字节不变：roleId → AgentRole.name 与迁移前 ROLE_LABELS 同值（7 内置角色全断言） (2 ms)
+      ✓ roleId 指向不存在的角色 → 404 ROLE_NOT_FOUND（Q5：不再静默回退无岗位成员） (1 ms)
+      ✓ 同 agent 多实例两行：两次 FOR UPDATE seq 1/2 (1 ms)
+      ✓ seq 事务内 SELECT MAX(seq) FOR UPDATE 防并发重号（调用 $queryRawUnsafe）
+      ✓ createTeam 角色外部槽位：显式 agentId + defaultOpencodeAgentName → 成员行预填该外部名（规则 5） (1 ms)
+      ✓ createTeam 角色两槽位皆空（显式 agentId）→ 成员行 opencodeAgentName null（无回归） (1 ms)
+    findAll
+      ✓ 分页 + name 搜索 + total 正确 (1 ms)
+      ✓ pageSize 上限 100
+    findOne
+      ✓ 返回详情含 members+reuseSession+currentTaskId+queue (1 ms)
+      ✓ 不存在 404
+    update
+      ✓ PATCH managedMode 成功并透传到 toTeamDto（Todo9 团队托管开关） (1 ms)
+      ✓ PATCH name/description/reuseSession 成功并 version+1 + 广播
+      ✓ 重名 409 (1 ms)
+      ✓ preferredWorkerId：设置后读取往返（PATCH → GET 回吐，version+1） (1 ms)
+      ✓ preferredWorkerId：空串/空白串/null → 归一为 null（自动调度） (1 ms)
+      ✓ preferredWorkerId：不存在的 worker id 仍写入（弱校验：不做存在性检查） (1 ms)
+      ✓ version 乐观锁冲突 409
+    remove
+      ✓ 仅空闲且队列空时可删，成功广播 delete (1 ms)
+      ✓ 执行中任务（in_progress）→ 409 TEAM_TASK_RUNNING，不进事务 (1 ms)
+      ✓ 待评审任务（pending_review）→ 409 TEAM_TASK_RUNNING
+      ✓ 排队/待开始任务随团队级联删除（任务子表按序清，返回任务 id） (1 ms)
+      ✓ 团队级会话与任务会话并存 → remove 成功：本团队任务会话先删（防 team_member_key P2002），他团队残留再解绑 (1 ms)
+      ✓ 仅任务会话 → 同路径删除，不抛 P2002
+    members
+      ✓ addMember：校验 agent 存在、seq FOR UPDATE、alias/workDir 生成、version+1 (1 ms)
+      ✓ addMember 仅给 roleId → 用角色 defaultAgentId 预填 agentId 并持久化 roleId (1 ms)
+      ✓ addMember 同时给 agentId 与 roleId → 显式 agentId 胜出，不被角色默认覆盖
+      ✓ addMember 缺 roleId → 400 MEMBER_ROLE_REQUIRED（Q5：不支持无岗位成员） (1 ms)
+      ✓ addMember 仅给 roleId 且角色无默认 Agent → 400 ROLE_DEFAULT_AGENT_MISSING
+      ✓ addMember 仅给 roleId 且角色外部绑定 → agentId = 平台占位系统 Agent（不再要求另选执行 Agent） (1 ms)
+      ✓ addMember 角色外部槽位 → 成员行预填 defaultOpencodeAgentName（规则 5）
+      ✓ addMember 显式 opencodeAgentName 压过角色默认外部名（规则 5 镜像规则 1）
+      ✓ addMember 角色两槽位皆空 → 成员行 opencodeAgentName null（无回归） (1 ms)
+      ✓ removeMember 联动 updatedAt/version
+    resetSessions（Todo7 记忆开关）
+      ✓ 手动重置：批量 delete+create 新 s_ 行，soft-remove 先于 delete，广播 team.changed + chat.message.new (2 ms)
+      ✓ team_group 缺失：仍重置会话，但不回退其他频道类型且不写群消息 (1 ms)
+      ✓ 幂等：无会话需重置 → reset 0，不写消息
+      ✓ 团队不存在 → 404 (1 ms)
+    updateMember 边界
+      ✓ 成功更新 alias/workDir 并 version+1、双广播
+      ✓ opencodeAgentName：非空 → 落库原值（弱校验通过，不进事务失败） (1 ms)
+      ✓ opencodeAgentName：空串 → 归一为 null（清除选择，回 opencode 默认 agent） (1 ms)
+      ✓ opencodeAgentName：清单中不存在 → 仍写入（弱校验只告警，不阻断用户意图） (1 ms)
+      ✓ opencodeAgentName：弱校验抛错（worker 离线）不阻断写入
+      ✓ 空更新 → 直接返回 findOne，不进事务 (1 ms)
+      ✓ roleId 重绑 + 成员外部值为空 → 用角色默认外部名预填（prefill）
+      ✓ roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖（prefill ≠ override） (1 ms)
+      ✓ roleId 重绑 + 本次显式 opencodeAgentName → 显式值胜出，角色默认不参与
+      ✓ 显式 agentId + roleId 重绑 → 外部槽位仍按角色默认预填（成员值为空时）
+      ✓ 显式 agentId + roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖 (1 ms)
+      ✓ 仅改 alias（无 roleId/agentId）→ 不解析角色、不触碰 opencodeAgentName
+      ✓ 角色两槽位皆空 + roleId 重绑 → opencodeAgentName 保持 null（无回归） (1 ms)
+      ✓ 团队不存在 → 404
+      ✓ 成员不存在或不属该团队 → 404 MEMBER_NOT_FOUND
+    cancelQueue（FIFO 取消，仅 queued 可取消）
+      ✓ 成功取消：queued 任务删除队首、重排剩余 position、task pending、双广播 (1 ms)
+      ✓ 团队不存在 → 404
+      ✓ 队列条目不存在 → 409 TASK_NOT_QUEUED (1 ms)
+      ✓ 任务非 queued（pending）→ 409 TASK_NOT_QUEUED
+      ✓ 取消后剩余队列 position 已连续 → 不重排 (1 ms)
+    enqueueQueue（pending 孤儿重入队）
+      ✓ 成功排队：pending 任务 MAX+1 追加、状态同步 queued、双广播
+      ✓ 已有队列行 → 幂等返回不重复创建 (1 ms)
+      ✓ 非 pending（进行中）→ 409 TASK_NOT_PENDING
+      ✓ 队首任务 → 409（直接点开始，无需排队）
+    边界：空名/参数校验与 version 乐观锁
+      ✓ create name 为空 → 400 (1 ms)
+      ✓ create members agentId 缺失 → 400 (9 ms)
+      ✓ findOne 不存在 → 404 (1 ms)
+      ✓ update 空 dto → 直接返回，不触发广播
+      ✓ update name 同名不触发 dup 检查但仍 increment version
+      ✓ remove 不存在 → 404 (1 ms)
+      ✓ addMember 团队不存在 → 404
+      ✓ addMember agent 不存在 → 404 (1 ms)
+      ✓ removeMember 团队不存在 → 404，成员不存在 → 404
+    onModuleInit 与 seq 并发重号边界
+      ✓ onModuleInit 按最大 id 对齐各前缀 seed (1 ms)
+      ✓ 并发 seq 重号：SELECT MAX 返回 null 时 fallback aggregate 取 1
+      ✓ resetSessions 团队无成员 → reset 0 幂等
+    主 Agent 设置（Team.mainAgentMemberId）
+      ✓ create：指定主 Agent（索引）成功设置 mainAgentMemberId
+      ✓ create：主 Agent 非团队成员 → 400 MAIN_AGENT_NOT_MEMBER
+      ✓ update：设置主 Agent 成功并 version+1
+      ✓ update：主 Agent 非团队成员 → 400
+      ✓ removeMember：移除的是主 Agent → 清空 mainAgentMemberId (1 ms)
+      ✓ removeMember：移除非主 Agent → 不清空
+      ✓ findOne 返回包含 mainAgentMemberId (1 ms)
+    团队用户成员（team_user_members）
+      ✓ create 团队自动写入创建者 owner 成员行（同事务）
+      ✓ findOne/GET 返回 userMembers 数组（id/userId/role/joinedAt 形状） (1 ms)
+      ✓ addUserMember → removeUserMember 往返：成员写入后可移除，userMembers 先增后减 (1 ms)
+      ✓ addUserMember 重复添加 → 409（非 500） (1 ms)
+      ✓ addUserMember 并发竞态：create 报 P2002 → 重读命中 → 干净 409 USER_ALREADY_MEMBER（非 500）
+      ✓ addUserMember 团队/用户不存在 → 404 (1 ms)
+      ✓ removeUserMember 非成员 → 404
+    resetMemberSession（Todo11 团队路由）
+      ✓ happy：旧 s_ 行失效 + 新 s_ 行（taskId null），delete 先于 create (1 ms)
+      ✓ failure：未知成员 → 404 MEMBER_NOT_FOUND（不进事务） (1 ms)
+      ✓ failure：成员不属于该团队 → 404 MEMBER_NOT_FOUND (1 ms)
+      ✓ failure：未知团队 → 404 TEAM_NOT_FOUND (1 ms)
+
+PASS src/teams/teams.controller.spec.ts
+  TeamsController
+    ✓ POST /teams 转发 userId + dto 到 create (7 ms)
+    ✓ GET /teams 转发 query 到 findAll (1 ms)
+    ✓ GET /teams/:id 转发 id 到 findOne (1 ms)
+    ✓ PATCH /teams/:id 转发 id + dto 到 update
+    ✓ DELETE /teams/:id 转发到 remove (1 ms)
+    ✓ POST /teams/:id/members 转发到 addMember (1 ms)
+    ✓ DELETE /teams/:id/members/:memberId 转发到 removeMember
+    ✓ PATCH /teams/:id/members/:memberId 转发到 updateMember (1 ms)
+    ✓ POST /teams/:id/reset-sessions 转发到 resetSessions
+    ✓ Todo11：POST /teams/:id/members/:memberId/reset-session 转发到 resetMemberSession（空 body） (1 ms)
+    ✓ DELETE /teams/:id/queue/:taskId 转发到 cancelQueue (1 ms)
+    ✓ POST /teams/:id/users 转发到 addUserMember
+    ✓ DELETE /teams/:id/users/:userId 转发到 removeUserMember
+
+Test Suites: 3 passed, 3 total
+Tests:       110 passed, 110 total
+Snapshots:   0 total
+Time:        3.068 s
+Ran all test suites matching /src\/teams/i.
+
+### 10) VERIFY: npx tsc --noEmit -p tsconfig.json
+$ cd server && npx tsc --noEmit -p tsconfig.json ; echo TSC_EXIT=$?
+(no output = no type errors)
+TSC_EXIT=0
+
+===================================================================
+### MANUAL QA CHANNEL
+Env note: this repo has no reachable MySQL (plan :53 '本机/CI 无 MySQL'), so the
+HTTP surface is exercised through the existing teams spec harness, which mirrors
+the controller verbatim: PATCH /teams/:id -> TeamsService.update() (teams.controller.ts:61-69)
+and GET /teams/:id -> findOne(). The pre-existing 'update：设置主 Agent 成功并
+version+1' case is the copied harness shape — no new harness invented.
+
+--- HAPPY: PATCH /teams/:id {preferredWorkerId:'w_0000000001', version:0}
+    -> optimistic-lock updateMany writes preferredWorkerId + version+1;
+       follow-up findOne (GET) reads back 'w_0000000001' with version 1.
+    case: 'preferredWorkerId：设置后读取往返（PATCH → GET 回吐，version+1）'
+$ cd server && npx jest src/teams/teams.service.spec.ts -t "preferredWorkerId" --verbose ; echo QA1_EXIT=$?
+$ npx jest src/teams/teams.service.spec.ts -t "preferredWorkerId" --verbose
+PASS src/teams/teams.service.spec.ts
+  TeamsService
+    create
+      ○ skipped 创建团队成功：校验 name 非空、生成 members seq/alias/workDir、广播 TEAM_CHANGED
+      ○ skipped 重名 409 TEAM_NAME_CONFLICT
+      ○ skipped 成员 agentId 不存在 404 AGENT_NOT_FOUND
+      ○ skipped alias 缺省按 <角色>-<seq>、workDir 缺省按 sanitize(agent.name) 且同 agent 多实例追加 -seq
+      ○ skipped 种子成员别名逐字节不变：roleId → AgentRole.name 与迁移前 ROLE_LABELS 同值（7 内置角色全断言）
+      ○ skipped roleId 指向不存在的角色 → 404 ROLE_NOT_FOUND（Q5：不再静默回退无岗位成员）
+      ○ skipped 同 agent 多实例两行：两次 FOR UPDATE seq 1/2
+      ○ skipped seq 事务内 SELECT MAX(seq) FOR UPDATE 防并发重号（调用 $queryRawUnsafe）
+      ○ skipped createTeam 角色外部槽位：显式 agentId + defaultOpencodeAgentName → 成员行预填该外部名（规则 5）
+      ○ skipped createTeam 角色两槽位皆空（显式 agentId）→ 成员行 opencodeAgentName null（无回归）
+    findAll
+      ○ skipped 分页 + name 搜索 + total 正确
+      ○ skipped pageSize 上限 100
+    findOne
+      ○ skipped 返回详情含 members+reuseSession+currentTaskId+queue
+      ○ skipped 不存在 404
+    update
+      ✓ preferredWorkerId：设置后读取往返（PATCH → GET 回吐，version+1） (5 ms)
+      ✓ preferredWorkerId：空串/空白串/null → 归一为 null（自动调度） (1 ms)
+      ✓ preferredWorkerId：不存在的 worker id 仍写入（弱校验：不做存在性检查） (1 ms)
+      ○ skipped PATCH managedMode 成功并透传到 toTeamDto（Todo9 团队托管开关）
+      ○ skipped PATCH name/description/reuseSession 成功并 version+1 + 广播
+      ○ skipped 重名 409
+      ○ skipped version 乐观锁冲突 409
+    remove
+      ○ skipped 仅空闲且队列空时可删，成功广播 delete
+      ○ skipped 执行中任务（in_progress）→ 409 TEAM_TASK_RUNNING，不进事务
+      ○ skipped 待评审任务（pending_review）→ 409 TEAM_TASK_RUNNING
+      ○ skipped 排队/待开始任务随团队级联删除（任务子表按序清，返回任务 id）
+      ○ skipped 团队级会话与任务会话并存 → remove 成功：本团队任务会话先删（防 team_member_key P2002），他团队残留再解绑
+      ○ skipped 仅任务会话 → 同路径删除，不抛 P2002
+    members
+      ○ skipped addMember：校验 agent 存在、seq FOR UPDATE、alias/workDir 生成、version+1
+      ○ skipped addMember 仅给 roleId → 用角色 defaultAgentId 预填 agentId 并持久化 roleId
+      ○ skipped addMember 同时给 agentId 与 roleId → 显式 agentId 胜出，不被角色默认覆盖
+      ○ skipped addMember 缺 roleId → 400 MEMBER_ROLE_REQUIRED（Q5：不支持无岗位成员）
+      ○ skipped addMember 仅给 roleId 且角色无默认 Agent → 400 ROLE_DEFAULT_AGENT_MISSING
+      ○ skipped addMember 仅给 roleId 且角色外部绑定 → agentId = 平台占位系统 Agent（不再要求另选执行 Agent）
+      ○ skipped addMember 角色外部槽位 → 成员行预填 defaultOpencodeAgentName（规则 5）
+      ○ skipped addMember 显式 opencodeAgentName 压过角色默认外部名（规则 5 镜像规则 1）
+      ○ skipped addMember 角色两槽位皆空 → 成员行 opencodeAgentName null（无回归）
+      ○ skipped removeMember 联动 updatedAt/version
+    resetSessions（Todo7 记忆开关）
+      ○ skipped 手动重置：批量 delete+create 新 s_ 行，soft-remove 先于 delete，广播 team.changed + chat.message.new
+      ○ skipped team_group 缺失：仍重置会话，但不回退其他频道类型且不写群消息
+      ○ skipped 幂等：无会话需重置 → reset 0，不写消息
+      ○ skipped 团队不存在 → 404
+    updateMember 边界
+      ○ skipped 成功更新 alias/workDir 并 version+1、双广播
+      ○ skipped opencodeAgentName：非空 → 落库原值（弱校验通过，不进事务失败）
+      ○ skipped opencodeAgentName：空串 → 归一为 null（清除选择，回 opencode 默认 agent）
+      ○ skipped opencodeAgentName：清单中不存在 → 仍写入（弱校验只告警，不阻断用户意图）
+      ○ skipped opencodeAgentName：弱校验抛错（worker 离线）不阻断写入
+      ○ skipped 空更新 → 直接返回 findOne，不进事务
+      ○ skipped roleId 重绑 + 成员外部值为空 → 用角色默认外部名预填（prefill）
+      ○ skipped roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖（prefill ≠ override）
+      ○ skipped roleId 重绑 + 本次显式 opencodeAgentName → 显式值胜出，角色默认不参与
+      ○ skipped 显式 agentId + roleId 重绑 → 外部槽位仍按角色默认预填（成员值为空时）
+      ○ skipped 显式 agentId + roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖
+      ○ skipped 仅改 alias（无 roleId/agentId）→ 不解析角色、不触碰 opencodeAgentName
+      ○ skipped 角色两槽位皆空 + roleId 重绑 → opencodeAgentName 保持 null（无回归）
+      ○ skipped 团队不存在 → 404
+      ○ skipped 成员不存在或不属该团队 → 404 MEMBER_NOT_FOUND
+    cancelQueue（FIFO 取消，仅 queued 可取消）
+      ○ skipped 成功取消：queued 任务删除队首、重排剩余 position、task pending、双广播
+      ○ skipped 团队不存在 → 404
+      ○ skipped 队列条目不存在 → 409 TASK_NOT_QUEUED
+      ○ skipped 任务非 queued（pending）→ 409 TASK_NOT_QUEUED
+      ○ skipped 取消后剩余队列 position 已连续 → 不重排
+    enqueueQueue（pending 孤儿重入队）
+      ○ skipped 成功排队：pending 任务 MAX+1 追加、状态同步 queued、双广播
+      ○ skipped 已有队列行 → 幂等返回不重复创建
+      ○ skipped 非 pending（进行中）→ 409 TASK_NOT_PENDING
+      ○ skipped 队首任务 → 409（直接点开始，无需排队）
+    边界：空名/参数校验与 version 乐观锁
+      ○ skipped create name 为空 → 400
+      ○ skipped create members agentId 缺失 → 400
+      ○ skipped findOne 不存在 → 404
+      ○ skipped update 空 dto → 直接返回，不触发广播
+      ○ skipped update name 同名不触发 dup 检查但仍 increment version
+      ○ skipped remove 不存在 → 404
+      ○ skipped addMember 团队不存在 → 404
+      ○ skipped addMember agent 不存在 → 404
+      ○ skipped removeMember 团队不存在 → 404，成员不存在 → 404
+    onModuleInit 与 seq 并发重号边界
+      ○ skipped onModuleInit 按最大 id 对齐各前缀 seed
+      ○ skipped 并发 seq 重号：SELECT MAX 返回 null 时 fallback aggregate 取 1
+      ○ skipped resetSessions 团队无成员 → reset 0 幂等
+    主 Agent 设置（Team.mainAgentMemberId）
+      ○ skipped create：指定主 Agent（索引）成功设置 mainAgentMemberId
+      ○ skipped create：主 Agent 非团队成员 → 400 MAIN_AGENT_NOT_MEMBER
+      ○ skipped update：设置主 Agent 成功并 version+1
+      ○ skipped update：主 Agent 非团队成员 → 400
+      ○ skipped removeMember：移除的是主 Agent → 清空 mainAgentMemberId
+      ○ skipped removeMember：移除非主 Agent → 不清空
+      ○ skipped findOne 返回包含 mainAgentMemberId
+    团队用户成员（team_user_members）
+      ○ skipped create 团队自动写入创建者 owner 成员行（同事务）
+      ○ skipped findOne/GET 返回 userMembers 数组（id/userId/role/joinedAt 形状）
+      ○ skipped addUserMember → removeUserMember 往返：成员写入后可移除，userMembers 先增后减
+      ○ skipped addUserMember 重复添加 → 409（非 500）
+      ○ skipped addUserMember 并发竞态：create 报 P2002 → 重读命中 → 干净 409 USER_ALREADY_MEMBER（非 500）
+      ○ skipped addUserMember 团队/用户不存在 → 404
+      ○ skipped removeUserMember 非成员 → 404
+    resetMemberSession（Todo11 团队路由）
+      ○ skipped happy：旧 s_ 行失效 + 新 s_ 行（taskId null），delete 先于 create
+      ○ skipped failure：未知成员 → 404 MEMBER_NOT_FOUND（不进事务）
+      ○ skipped failure：成员不属于该团队 → 404 MEMBER_NOT_FOUND
+      ○ skipped failure：未知团队 → 404 TEAM_NOT_FOUND
+
+Test Suites: 1 passed, 1 total
+Tests:       92 skipped, 3 passed, 95 total
+Snapshots:   0 total
+Time:        2.058 s, estimated 9 s
+Ran all test suites matching /src\/teams\/teams.service.spec.ts/i with tests matching "preferredWorkerId".
+QA1_EXIT=0
+
+--- FAILURE 1 (no regression): stale version -> 409 VERSION_CONFLICT
+    case: 'version 乐观锁冲突 409' (pre-existing case, kept intact)
+$ cd server && npx jest src/teams/teams.service.spec.ts -t "version 乐观锁冲突" --verbose ; echo QA2_EXIT=$?
+$ npx jest src/teams/teams.service.spec.ts -t "version 乐观锁冲突" --verbose
+PASS src/teams/teams.service.spec.ts
+  TeamsService
+    create
+      ○ skipped 创建团队成功：校验 name 非空、生成 members seq/alias/workDir、广播 TEAM_CHANGED
+      ○ skipped 重名 409 TEAM_NAME_CONFLICT
+      ○ skipped 成员 agentId 不存在 404 AGENT_NOT_FOUND
+      ○ skipped alias 缺省按 <角色>-<seq>、workDir 缺省按 sanitize(agent.name) 且同 agent 多实例追加 -seq
+      ○ skipped 种子成员别名逐字节不变：roleId → AgentRole.name 与迁移前 ROLE_LABELS 同值（7 内置角色全断言）
+      ○ skipped roleId 指向不存在的角色 → 404 ROLE_NOT_FOUND（Q5：不再静默回退无岗位成员）
+      ○ skipped 同 agent 多实例两行：两次 FOR UPDATE seq 1/2
+      ○ skipped seq 事务内 SELECT MAX(seq) FOR UPDATE 防并发重号（调用 $queryRawUnsafe）
+      ○ skipped createTeam 角色外部槽位：显式 agentId + defaultOpencodeAgentName → 成员行预填该外部名（规则 5）
+      ○ skipped createTeam 角色两槽位皆空（显式 agentId）→ 成员行 opencodeAgentName null（无回归）
+    findAll
+      ○ skipped 分页 + name 搜索 + total 正确
+      ○ skipped pageSize 上限 100
+    findOne
+      ○ skipped 返回详情含 members+reuseSession+currentTaskId+queue
+      ○ skipped 不存在 404
+    update
+      ✓ version 乐观锁冲突 409 (25 ms)
+      ○ skipped PATCH managedMode 成功并透传到 toTeamDto（Todo9 团队托管开关）
+      ○ skipped PATCH name/description/reuseSession 成功并 version+1 + 广播
+      ○ skipped 重名 409
+      ○ skipped preferredWorkerId：设置后读取往返（PATCH → GET 回吐，version+1）
+      ○ skipped preferredWorkerId：空串/空白串/null → 归一为 null（自动调度）
+      ○ skipped preferredWorkerId：不存在的 worker id 仍写入（弱校验：不做存在性检查）
+    remove
+      ○ skipped 仅空闲且队列空时可删，成功广播 delete
+      ○ skipped 执行中任务（in_progress）→ 409 TEAM_TASK_RUNNING，不进事务
+      ○ skipped 待评审任务（pending_review）→ 409 TEAM_TASK_RUNNING
+      ○ skipped 排队/待开始任务随团队级联删除（任务子表按序清，返回任务 id）
+      ○ skipped 团队级会话与任务会话并存 → remove 成功：本团队任务会话先删（防 team_member_key P2002），他团队残留再解绑
+      ○ skipped 仅任务会话 → 同路径删除，不抛 P2002
+    members
+      ○ skipped addMember：校验 agent 存在、seq FOR UPDATE、alias/workDir 生成、version+1
+      ○ skipped addMember 仅给 roleId → 用角色 defaultAgentId 预填 agentId 并持久化 roleId
+      ○ skipped addMember 同时给 agentId 与 roleId → 显式 agentId 胜出，不被角色默认覆盖
+      ○ skipped addMember 缺 roleId → 400 MEMBER_ROLE_REQUIRED（Q5：不支持无岗位成员）
+      ○ skipped addMember 仅给 roleId 且角色无默认 Agent → 400 ROLE_DEFAULT_AGENT_MISSING
+      ○ skipped addMember 仅给 roleId 且角色外部绑定 → agentId = 平台占位系统 Agent（不再要求另选执行 Agent）
+      ○ skipped addMember 角色外部槽位 → 成员行预填 defaultOpencodeAgentName（规则 5）
+      ○ skipped addMember 显式 opencodeAgentName 压过角色默认外部名（规则 5 镜像规则 1）
+      ○ skipped addMember 角色两槽位皆空 → 成员行 opencodeAgentName null（无回归）
+      ○ skipped removeMember 联动 updatedAt/version
+    resetSessions（Todo7 记忆开关）
+      ○ skipped 手动重置：批量 delete+create 新 s_ 行，soft-remove 先于 delete，广播 team.changed + chat.message.new
+      ○ skipped team_group 缺失：仍重置会话，但不回退其他频道类型且不写群消息
+      ○ skipped 幂等：无会话需重置 → reset 0，不写消息
+      ○ skipped 团队不存在 → 404
+    updateMember 边界
+      ○ skipped 成功更新 alias/workDir 并 version+1、双广播
+      ○ skipped opencodeAgentName：非空 → 落库原值（弱校验通过，不进事务失败）
+      ○ skipped opencodeAgentName：空串 → 归一为 null（清除选择，回 opencode 默认 agent）
+      ○ skipped opencodeAgentName：清单中不存在 → 仍写入（弱校验只告警，不阻断用户意图）
+      ○ skipped opencodeAgentName：弱校验抛错（worker 离线）不阻断写入
+      ○ skipped 空更新 → 直接返回 findOne，不进事务
+      ○ skipped roleId 重绑 + 成员外部值为空 → 用角色默认外部名预填（prefill）
+      ○ skipped roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖（prefill ≠ override）
+      ○ skipped roleId 重绑 + 本次显式 opencodeAgentName → 显式值胜出，角色默认不参与
+      ○ skipped 显式 agentId + roleId 重绑 → 外部槽位仍按角色默认预填（成员值为空时）
+      ○ skipped 显式 agentId + roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖
+      ○ skipped 仅改 alias（无 roleId/agentId）→ 不解析角色、不触碰 opencodeAgentName
+      ○ skipped 角色两槽位皆空 + roleId 重绑 → opencodeAgentName 保持 null（无回归）
+      ○ skipped 团队不存在 → 404
+      ○ skipped 成员不存在或不属该团队 → 404 MEMBER_NOT_FOUND
+    cancelQueue（FIFO 取消，仅 queued 可取消）
+      ○ skipped 成功取消：queued 任务删除队首、重排剩余 position、task pending、双广播
+      ○ skipped 团队不存在 → 404
+      ○ skipped 队列条目不存在 → 409 TASK_NOT_QUEUED
+      ○ skipped 任务非 queued（pending）→ 409 TASK_NOT_QUEUED
+      ○ skipped 取消后剩余队列 position 已连续 → 不重排
+    enqueueQueue（pending 孤儿重入队）
+      ○ skipped 成功排队：pending 任务 MAX+1 追加、状态同步 queued、双广播
+      ○ skipped 已有队列行 → 幂等返回不重复创建
+      ○ skipped 非 pending（进行中）→ 409 TASK_NOT_PENDING
+      ○ skipped 队首任务 → 409（直接点开始，无需排队）
+    边界：空名/参数校验与 version 乐观锁
+      ○ skipped create name 为空 → 400
+      ○ skipped create members agentId 缺失 → 400
+      ○ skipped findOne 不存在 → 404
+      ○ skipped update 空 dto → 直接返回，不触发广播
+      ○ skipped update name 同名不触发 dup 检查但仍 increment version
+      ○ skipped remove 不存在 → 404
+      ○ skipped addMember 团队不存在 → 404
+      ○ skipped addMember agent 不存在 → 404
+      ○ skipped removeMember 团队不存在 → 404，成员不存在 → 404
+    onModuleInit 与 seq 并发重号边界
+      ○ skipped onModuleInit 按最大 id 对齐各前缀 seed
+      ○ skipped 并发 seq 重号：SELECT MAX 返回 null 时 fallback aggregate 取 1
+      ○ skipped resetSessions 团队无成员 → reset 0 幂等
+    主 Agent 设置（Team.mainAgentMemberId）
+      ○ skipped create：指定主 Agent（索引）成功设置 mainAgentMemberId
+      ○ skipped create：主 Agent 非团队成员 → 400 MAIN_AGENT_NOT_MEMBER
+      ○ skipped update：设置主 Agent 成功并 version+1
+      ○ skipped update：主 Agent 非团队成员 → 400
+      ○ skipped removeMember：移除的是主 Agent → 清空 mainAgentMemberId
+      ○ skipped removeMember：移除非主 Agent → 不清空
+      ○ skipped findOne 返回包含 mainAgentMemberId
+    团队用户成员（team_user_members）
+      ○ skipped create 团队自动写入创建者 owner 成员行（同事务）
+      ○ skipped findOne/GET 返回 userMembers 数组（id/userId/role/joinedAt 形状）
+      ○ skipped addUserMember → removeUserMember 往返：成员写入后可移除，userMembers 先增后减
+      ○ skipped addUserMember 重复添加 → 409（非 500）
+      ○ skipped addUserMember 并发竞态：create 报 P2002 → 重读命中 → 干净 409 USER_ALREADY_MEMBER（非 500）
+      ○ skipped addUserMember 团队/用户不存在 → 404
+      ○ skipped removeUserMember 非成员 → 404
+    resetMemberSession（Todo11 团队路由）
+      ○ skipped happy：旧 s_ 行失效 + 新 s_ 行（taskId null），delete 先于 create
+      ○ skipped failure：未知成员 → 404 MEMBER_NOT_FOUND（不进事务）
+      ○ skipped failure：成员不属于该团队 → 404 MEMBER_NOT_FOUND
+      ○ skipped failure：未知团队 → 404 TEAM_NOT_FOUND
+
+Test Suites: 1 passed, 1 total
+Tests:       94 skipped, 1 passed, 95 total
+Snapshots:   0 total
+Time:        1.361 s, estimated 2 s
+Ran all test suites matching /src\/teams\/teams.service.spec.ts/i with tests matching "version 乐观锁冲突".
+QA2_EXIT=0
+
+--- FAILURE 1b (VERSION_CONFLICT code asserted, TEAM_ERRORS constant)
+47-  USER_NOT_FOUND: 'USER_NOT_FOUND',
+48-  USER_ALREADY_MEMBER: 'USER_ALREADY_MEMBER',
+49:  VERSION_CONFLICT: 'VERSION_CONFLICT',
+50-  TASK_NOT_QUEUED: 'TASK_NOT_QUEUED',
+51-  TASK_NOT_PENDING: 'TASK_NOT_PENDING',
+52-  QUEUE_ENTRY_NOT_FOUND: 'QUEUE_ENTRY_NOT_FOUND',
+53-  MAIN_AGENT_NOT_MEMBER: 'MAIN_AGENT_NOT_MEMBER',
+54-} as const;
+55-
+
+--- FAILURE 2 (weak-validation evidence): unknown id 'w_nope' accepted + persisted.
+    Only 2 team.findUnique calls occur (team-exists + readback findOne), i.e.
+    ZERO existence-validation queries are issued:
+$ grep -n -A 30 '不存在的 worker id 仍写入' server/src/teams/teams.service.spec.ts
+776:    it('preferredWorkerId：不存在的 worker id 仍写入（弱校验：不做存在性检查）', async () => {
+777-      prisma.team.findUnique
+778-        .mockResolvedValueOnce(teamRow({ version: 0 }))
+779-        .mockResolvedValueOnce(
+780-          teamRow({
+781-            preferredWorkerId: 'w_nope',
+782-            version: 1,
+783-            members: [],
+784-            queues: [],
+785-          }),
+786-        );
+787-      prisma.team.update.mockResolvedValue(
+788-        teamRow({ preferredWorkerId: 'w_nope', version: 1 }),
+789-      );
+790-      const result: any = await service.update('tm_0000000001', {
+791-        preferredWorkerId: 'w_nope',
+792-      } as any);
+793-      // 不存在的 id 照样落库（软引用；可用性由分派期 warn 收敛）
+794-      expect(prisma.team.update).toHaveBeenCalledWith(
+795-        expect.objectContaining({
+796-          data: expect.objectContaining({ preferredWorkerId: 'w_nope' }),
+797-        }),
+798-      );
+799-      expect(result.preferredWorkerId).toBe('w_nope');
+800-      // 只有「团队存在」与「回读 findOne」两次查询 ⇒ 未做任何存在性校验查询
+801-      expect(prisma.team.findUnique).toHaveBeenCalledTimes(2);
+802-    });
+803-
+804-    it('version 乐观锁冲突 409', async () => {
+805-      prisma.team.findUnique.mockResolvedValue(teamRow({ version: 5 }));
+806-      prisma.team.findUnique
+
+--- CONTRAST (deliberate divergence per plan :44): mainAgentMemberId still validates
+    existence (400 MAIN_AGENT_NOT_MEMBER), preferredWorkerId does not validate at all:
+$ cd server && npx jest src/teams/teams.service.spec.ts -t "主 Agent" --verbose ; echo QA3_EXIT=$?
+$ npx jest src/teams/teams.service.spec.ts -t "主 Agent" --verbose
+PASS src/teams/teams.service.spec.ts
+  TeamsService
+    create
+      ○ skipped 创建团队成功：校验 name 非空、生成 members seq/alias/workDir、广播 TEAM_CHANGED
+      ○ skipped 重名 409 TEAM_NAME_CONFLICT
+      ○ skipped 成员 agentId 不存在 404 AGENT_NOT_FOUND
+      ○ skipped alias 缺省按 <角色>-<seq>、workDir 缺省按 sanitize(agent.name) 且同 agent 多实例追加 -seq
+      ○ skipped 种子成员别名逐字节不变：roleId → AgentRole.name 与迁移前 ROLE_LABELS 同值（7 内置角色全断言）
+      ○ skipped roleId 指向不存在的角色 → 404 ROLE_NOT_FOUND（Q5：不再静默回退无岗位成员）
+      ○ skipped 同 agent 多实例两行：两次 FOR UPDATE seq 1/2
+      ○ skipped seq 事务内 SELECT MAX(seq) FOR UPDATE 防并发重号（调用 $queryRawUnsafe）
+      ○ skipped createTeam 角色外部槽位：显式 agentId + defaultOpencodeAgentName → 成员行预填该外部名（规则 5）
+      ○ skipped createTeam 角色两槽位皆空（显式 agentId）→ 成员行 opencodeAgentName null（无回归）
+    findAll
+      ○ skipped 分页 + name 搜索 + total 正确
+      ○ skipped pageSize 上限 100
+    findOne
+      ○ skipped 返回详情含 members+reuseSession+currentTaskId+queue
+      ○ skipped 不存在 404
+    update
+      ○ skipped PATCH managedMode 成功并透传到 toTeamDto（Todo9 团队托管开关）
+      ○ skipped PATCH name/description/reuseSession 成功并 version+1 + 广播
+      ○ skipped 重名 409
+      ○ skipped preferredWorkerId：设置后读取往返（PATCH → GET 回吐，version+1）
+      ○ skipped preferredWorkerId：空串/空白串/null → 归一为 null（自动调度）
+      ○ skipped preferredWorkerId：不存在的 worker id 仍写入（弱校验：不做存在性检查）
+      ○ skipped version 乐观锁冲突 409
+    remove
+      ○ skipped 仅空闲且队列空时可删，成功广播 delete
+      ○ skipped 执行中任务（in_progress）→ 409 TEAM_TASK_RUNNING，不进事务
+      ○ skipped 待评审任务（pending_review）→ 409 TEAM_TASK_RUNNING
+      ○ skipped 排队/待开始任务随团队级联删除（任务子表按序清，返回任务 id）
+      ○ skipped 团队级会话与任务会话并存 → remove 成功：本团队任务会话先删（防 team_member_key P2002），他团队残留再解绑
+      ○ skipped 仅任务会话 → 同路径删除，不抛 P2002
+    members
+      ○ skipped addMember：校验 agent 存在、seq FOR UPDATE、alias/workDir 生成、version+1
+      ○ skipped addMember 仅给 roleId → 用角色 defaultAgentId 预填 agentId 并持久化 roleId
+      ○ skipped addMember 同时给 agentId 与 roleId → 显式 agentId 胜出，不被角色默认覆盖
+      ○ skipped addMember 缺 roleId → 400 MEMBER_ROLE_REQUIRED（Q5：不支持无岗位成员）
+      ○ skipped addMember 仅给 roleId 且角色无默认 Agent → 400 ROLE_DEFAULT_AGENT_MISSING
+      ○ skipped addMember 仅给 roleId 且角色外部绑定 → agentId = 平台占位系统 Agent（不再要求另选执行 Agent）
+      ○ skipped addMember 角色外部槽位 → 成员行预填 defaultOpencodeAgentName（规则 5）
+      ○ skipped addMember 显式 opencodeAgentName 压过角色默认外部名（规则 5 镜像规则 1）
+      ○ skipped addMember 角色两槽位皆空 → 成员行 opencodeAgentName null（无回归）
+      ○ skipped removeMember 联动 updatedAt/version
+    resetSessions（Todo7 记忆开关）
+      ○ skipped 手动重置：批量 delete+create 新 s_ 行，soft-remove 先于 delete，广播 team.changed + chat.message.new
+      ○ skipped team_group 缺失：仍重置会话，但不回退其他频道类型且不写群消息
+      ○ skipped 幂等：无会话需重置 → reset 0，不写消息
+      ○ skipped 团队不存在 → 404
+    updateMember 边界
+      ○ skipped 成功更新 alias/workDir 并 version+1、双广播
+      ○ skipped opencodeAgentName：非空 → 落库原值（弱校验通过，不进事务失败）
+      ○ skipped opencodeAgentName：空串 → 归一为 null（清除选择，回 opencode 默认 agent）
+      ○ skipped opencodeAgentName：清单中不存在 → 仍写入（弱校验只告警，不阻断用户意图）
+      ○ skipped opencodeAgentName：弱校验抛错（worker 离线）不阻断写入
+      ○ skipped 空更新 → 直接返回 findOne，不进事务
+      ○ skipped roleId 重绑 + 成员外部值为空 → 用角色默认外部名预填（prefill）
+      ○ skipped roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖（prefill ≠ override）
+      ○ skipped roleId 重绑 + 本次显式 opencodeAgentName → 显式值胜出，角色默认不参与
+      ○ skipped 显式 agentId + roleId 重绑 → 外部槽位仍按角色默认预填（成员值为空时）
+      ○ skipped 显式 agentId + roleId 重绑 + 成员已有非空外部值 → 不被角色默认覆盖
+      ○ skipped 仅改 alias（无 roleId/agentId）→ 不解析角色、不触碰 opencodeAgentName
+      ○ skipped 角色两槽位皆空 + roleId 重绑 → opencodeAgentName 保持 null（无回归）
+      ○ skipped 团队不存在 → 404
+      ○ skipped 成员不存在或不属该团队 → 404 MEMBER_NOT_FOUND
+    cancelQueue（FIFO 取消，仅 queued 可取消）
+      ○ skipped 成功取消：queued 任务删除队首、重排剩余 position、task pending、双广播
+      ○ skipped 团队不存在 → 404
+      ○ skipped 队列条目不存在 → 409 TASK_NOT_QUEUED
+      ○ skipped 任务非 queued（pending）→ 409 TASK_NOT_QUEUED
+      ○ skipped 取消后剩余队列 position 已连续 → 不重排
+    enqueueQueue（pending 孤儿重入队）
+      ○ skipped 成功排队：pending 任务 MAX+1 追加、状态同步 queued、双广播
+      ○ skipped 已有队列行 → 幂等返回不重复创建
+      ○ skipped 非 pending（进行中）→ 409 TASK_NOT_PENDING
+      ○ skipped 队首任务 → 409（直接点开始，无需排队）
+    边界：空名/参数校验与 version 乐观锁
+      ○ skipped create name 为空 → 400
+      ○ skipped create members agentId 缺失 → 400
+      ○ skipped findOne 不存在 → 404
+      ○ skipped update 空 dto → 直接返回，不触发广播
+      ○ skipped update name 同名不触发 dup 检查但仍 increment version
+      ○ skipped remove 不存在 → 404
+      ○ skipped addMember 团队不存在 → 404
+      ○ skipped addMember agent 不存在 → 404
+      ○ skipped removeMember 团队不存在 → 404，成员不存在 → 404
+    onModuleInit 与 seq 并发重号边界
+      ○ skipped onModuleInit 按最大 id 对齐各前缀 seed
+      ○ skipped 并发 seq 重号：SELECT MAX 返回 null 时 fallback aggregate 取 1
+      ○ skipped resetSessions 团队无成员 → reset 0 幂等
+    主 Agent 设置（Team.mainAgentMemberId）
+      ✓ create：指定主 Agent（索引）成功设置 mainAgentMemberId (5 ms)
+      ✓ create：主 Agent 非团队成员 → 400 MAIN_AGENT_NOT_MEMBER (19 ms)
+      ✓ update：设置主 Agent 成功并 version+1 (1 ms)
+      ✓ update：主 Agent 非团队成员 → 400
+      ✓ removeMember：移除的是主 Agent → 清空 mainAgentMemberId (1 ms)
+      ✓ removeMember：移除非主 Agent → 不清空 (1 ms)
+      ✓ findOne 返回包含 mainAgentMemberId
+    团队用户成员（team_user_members）
+      ○ skipped create 团队自动写入创建者 owner 成员行（同事务）
+      ○ skipped findOne/GET 返回 userMembers 数组（id/userId/role/joinedAt 形状）
+      ○ skipped addUserMember → removeUserMember 往返：成员写入后可移除，userMembers 先增后减
+      ○ skipped addUserMember 重复添加 → 409（非 500）
+      ○ skipped addUserMember 并发竞态：create 报 P2002 → 重读命中 → 干净 409 USER_ALREADY_MEMBER（非 500）
+      ○ skipped addUserMember 团队/用户不存在 → 404
+      ○ skipped removeUserMember 非成员 → 404
+    resetMemberSession（Todo11 团队路由）
+      ○ skipped happy：旧 s_ 行失效 + 新 s_ 行（taskId null），delete 先于 create
+      ○ skipped failure：未知成员 → 404 MEMBER_NOT_FOUND（不进事务）
+      ○ skipped failure：成员不属于该团队 → 404 MEMBER_NOT_FOUND
+      ○ skipped failure：未知团队 → 404 TEAM_NOT_FOUND
+
+Test Suites: 1 passed, 1 total
+Tests:       88 skipped, 7 passed, 95 total
+Snapshots:   0 total
+Time:        1.444 s, estimated 2 s
+Ran all test suites matching /src\/teams\/teams.service.spec.ts/i with tests matching "主 Agent".
+QA3_EXIT=0
+
+===================================================================
+### SUMMARY / GUARDRAIL COMPLIANCE
+DELIVERED:
+  1) dto/update-team.dto.ts : preferredWorkerId?: string | null with @ApiPropertyOptional
+     ('团队级首选 worker（软引用，存 vteam_worker 的 id；空串/null = 自动调度；成员的显式选择优先于本值）'),
+     @IsOptional + @ValidateIf(o => o.preferredWorkerId !== null) + @IsString + @MaxLength(191).
+  2) teams.service.ts :345-351 (after managedMode branch, before mainAgentMemberId):
+     if (dto.preferredWorkerId !== undefined) data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+     preceded by the plan-mandated comment recording the deliberate divergence from the
+     mainAgentMemberId existence check (:352-368) — soft reference, availability is a
+     runtime fact, pure configuration must not be blocked by node state, unavailability
+     converges as a dispatch-time warn.
+  3) teams.service.ts :1525-1527 (toTeamDto): preferredWorkerId: team.preferredWorkerId ?? null.
+  4) team.changed broadcasts + version optimistic lock UNCHANGED (see diff: no deletion,
+     no signature change, no new event).
+  5) 3 new cases in teams.service.spec.ts (describe('update')):
+       a) 设置后读取往返（PATCH → GET 回吐，version+1）— PATCH carries version, optimistic-lock
+          updateMany path, GET readback, version 0 -> 1.
+       b) 空串/空白串/null → 归一为 null（自动调度）.
+       c) 不存在的 worker id 仍写入（弱校验：不做存在性检查）— w_nope persisted, and
+          team.findUnique called exactly twice (zero validation queries).
+     it() count in spec: 92 (HEAD) -> 95 (now) = exactly +3; no pre-existing case removed.
+
+MUST NOT compliance:
+  - no existence check / no FK / no index added (schema.prisma stays as Todo 6 left it).
+  - optimistic-lock semantics and findOne include shape untouched.
+  - no new route / no new permission point (PATCH :id still @RequirePermission('teams.edit')).
+  - no dependency added; worker/ directory untouched.
+
+BROADER RUN (unrelated modules included; no failures to attribute):
+Test Suites: 176 passed, 176 total
+Tests:       4207 passed, 4207 total
+Snapshots:   1 passed, 1 total
+FULL_SERVER_JEST_EXIT=0
+
+dirty_worktree adversarial: only my 3 files under server/src/teams/ are modified by
+this lane; every other dirty/untracked path was already dirty at lane start
+(sibling-stream / pre-existing).
+
+FINAL HEAD:
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+git rev-parse HEAD:
+cb0ba6d1ab16571c0c979e41e40951000819f1c7

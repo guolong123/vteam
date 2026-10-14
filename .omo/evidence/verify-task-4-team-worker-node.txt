@@ -1,0 +1,328 @@
+VERDICT ARTIFACT — INDEPENDENT VERIFICATION OF TODO 4
+Plan:    .omo/plans/team-worker-node.md  (Todo 4 = lines 131-143; Must-NOT 34-47; SC3 = line 311)
+Subject: .omo/evidence/task-4-team-worker-node.txt  (the receipt under test)
+Verifier lane: independent, read-only. No product file was edited. No git add/commit/stash/checkout
+was run. Mutations were performed on a THROWAWAY COPY under
+/private/var/folders/.../T/opencode/t4verify/mut (repo `server/src` copied out, node_modules symlinked).
+
+================================================================================
+VERDICT: confirmed
+================================================================================
+Every hard Must-NOT in the plan holds, and the new tests are load-bearing (proved by 6 independent
+mutation runs, each of which turned the suite RED). Confidence 0.96. Two cosmetic/observability
+observations recorded in §6 are NOT defects and require no fix.
+
+--------------------------------------------------------------------------------
+1. RECEIPT CLAIMS AUDITED (13 claims, all independently re-checked)
+--------------------------------------------------------------------------------
+ C1  Only 2 files changed, pre-existing dirt untouched          -> CONFIRMED (see §5.4)
+ C2  jest `src/workers/workers.service.spec.ts` green, 172     -> CONFIRMED, reproduced (§4.1)
+ C3  12 new cases (plan required >= 9)                          -> CONFIRMED, all 12 RUN (§4.2)
+ C4  all 6 fallback categories assert logger.warn               -> CONFIRMED, 8/8 fallback+warn (§5.2)
+ C5  grep -n preferredWorkerId -> type decl + pin decision      -> CONFIRMED, byte-for-byte (§3)
+ C6  grep -c matchesModelRequirement 3 -> 5, zero "-" lines     -> CONFIRMED (§3)
+ C7  hunks = -79/+80, -861/+873, -898/+911, none over 1310-1325  -> CONFIRMED (§2)
+ C8  `agent.updateMany` count in diff == 0                      -> CONFIRMED (grep exit 1)
+ C9  temp QA spec zz-task4-qa.spec.ts removed                   -> CONFIRMED (ls: No such file)
+ C10 tsc --noEmit clean                                         -> CONFIRMED, TSC_EXIT=0, 0 lines
+ C11 eslint 0 errors, 1 pre-existing warning at spec:906        -> CONFIRMED (HEAD:906 is the
+                                                                    same `const broadcastSpy = jest`)
+ C12 no throw on pin unavailability                              -> CONFIRMED by code + M4 mutation
+ C13 B1 is pin-only, global degrade contract untouched           -> CONFIRMED, md5-identical (§2.3)
+
+--------------------------------------------------------------------------------
+2. THE REAL DIFF — HUNK LINE RANGES (independent, not taken from the receipt)
+--------------------------------------------------------------------------------
+$ git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+
+$ git diff --numstat -- server/src/workers/workers.service.ts server/src/workers/workers.service.spec.ts
+49      1       server/src/workers/workers.service.ts
+249     0       server/src/workers/workers.service.spec.ts
+
+workers.service.ts hunks (git diff -U0 | grep '^@@'):
+  @@ -79,0  +80,11 @@    -> NEW lines 80-90    : AssignmentRequirement.preferredWorkerId + docstring
+  @@ -861,0 +873,2  @@    -> NEW lines 873-874  : assignWorker docstring, 2 lines
+  @@ -898   +911,36 @@    -> OLD line 898 replaced by NEW lines 911-946 (pin branch)
+
+workers.service.spec.ts hunks (git diff -U0 | grep '^@@'):
+  @@ -2349,0 +2350,249 @@ -> PURE INSERTION of 249 lines at 2350-2598
+
+2.1 Invariant (c) — `remove()` UNTOUCHED.
+    No hunk covers HEAD lines 1310-1325. Byte-identity proved independently:
+      $ diff <(git show HEAD:...|sed -n '1293,1330p') <(sed -n '1341,1378p' WT)   -> no output
+    `remove()` still contains exactly the old cleanup set (workerModelAvailability.deleteMany,
+    taskGroupInstance.deleteMany, session.updateMany, agent.updateMany, worker.delete) and does
+    NOT yet clear teams/team_members — correct: that is Todo 6's exclusive ownership per plan line 64/137.
+
+2.2 Invariant (b) — `matchesModelRequirement` semantics UNCHANGED.
+    Plan cites HEAD :901-938. Hunks cover old lines 79 / 861 / 898 only — none reach 901-938.
+    Byte-identity proved independently:
+      $ diff <(git show HEAD:...|sed -n '909,937p') <(sed -n '957,985p' WT)   -> no output
+      md5 of both blocks = b069d78031b57a31c54622106ec084c5   (identical)
+    The degradation branch is byte-identical in the working tree (WT 972-975):
+          const avail = worker.modelAvailabilities ?? [];
+          if (avail.length === 0) {
+            return true;
+          }
+    `git diff | grep -E '^[-+].*matchesModelRequirement'` returns ONLY two "+" comment lines
+    (docstring line 83, B1 rationale line 928) and ZERO "-" lines.
+
+2.3 Invariant (d) — B1 is a PIN-ONLY extra condition; global contract unchanged.
+    WT 928-939 (inside the `if (!pinned) {...}` early-return block's sibling, after the pin miss
+    branch, before `return pinned.worker.id`):
+      if (req.modelId && (pinned.worker.modelAvailabilities ?? []).length === 0) { warn(...); return fallbackId; }
+    It is reachable ONLY when `req.preferredWorkerId` was set and the pin passed all four filters.
+    It sits inside the pin branch, never in `matchesModelRequirement`, never in the filter chain.
+    Stated as intentional in an adjacent comment (WT 932-933), including the explicit warning that
+    `defaultModelId === modelId` + zero availabilities passes ④ but is rejected by B1 on purpose.
+    Global degrade contract untouched — proven in §2.2 and by mutation M5 (§5.3).
+
+2.4 Invariant (a) — the pin can never bypass capacity / version / model / offline.
+    WT 894-910 builds `ranked` through the four existing filters, unchanged (context lines in the
+    diff, no +/-):
+        .filter((x) => x.worker.status !== WORKER_STATUS.OFFLINE)          // ①
+        .filter((x) => x.capacity >= need)                                  // ②
+        .filter((x) => !req.opencodeVersion || x.worker.opencodeVersion === req.opencodeVersion) // ③
+        .filter((x) => this.matchesModelRequirement(x.worker, req.modelId)) // ④
+        .sort(online-first, then capacity desc)
+    The pin lookup is `ranked.find((x) => x.worker.id === req.preferredWorkerId)` (WT 916) — i.e.
+    INSIDE the post-filter array. There is no code path from `req.preferredWorkerId` back to the
+    raw `candidates` array that can return a row. Mutation M4 (§5.3) proves it empirically.
+
+2.5 Invariant (e) — no-argument calls behave exactly as today.
+    WT 911-914:
+        const fallbackId = ranked[0]?.worker.id ?? null;
+        if (!req.preferredWorkerId) { return fallbackId; }
+    `fallbackId` is character-for-character the expression the old line 898 returned
+    (`ranked[0]?.worker.id ?? null`). The only code reached when `preferredWorkerId` is undefined
+    is that computation + that return: no warn, no extra query, no mutation.
+    All 9 named call sites verified still pin-free today:
+      src/chat/worker-dispatcher.ts:2305, :2335   -> assignWorker(assignmentReq)  (assignmentReq
+          currently only ever `{ modelId }` or `{}` — verified by reading :2298-2300; dispatcher.ts is
+          UNMODIFIED in git status, Todo 5 has not landed)
+      src/agents/agents.service.ts:411,459,497,533,573 -> assignWorker() / opts.workerId ?? assignWorker()
+      src/agent-roles/opencode-agent-name.validator.ts:31 -> assignWorker()
+      src/teams/teams.service.ts:923 -> assignWorker()
+    `grep -rn preferredWorkerId server/src web/app web/src` returns hits ONLY in
+    workers.service.ts and workers.service.spec.ts — no call site can pass it yet.
+
+2.6 Invariant (f) — the warn wording is honest.
+    WT 917-926. Two branches:
+      raw PRESENT  -> "未通过既有过滤（status=.. 容量=a/b opencodeVersion=.. modelId=..）"
+                      It prints the observed values and claims NO specific cause. Correct: the DB
+                      `where: { status: { not: offline } }` (WT 879) means a row present in
+                      `candidates` can only have failed ②③④.
+      raw ABSENT   -> "不在候选集中（行缺失或已 offline，二者不可区分）"
+                      Explicitly states the two causes are indistinguishable. It does NOT assert
+                      "row missing".
+    Neither branch asserts two distinct causes. The degraded branch (WT 940-945) separately warns
+    that degraded passes all four filters and bypasses online-first sorting, as the plan requires.
+    No secret material is interpolated (only id / status / capacity / opencodeVersion / modelId;
+    tokenHash is never printed).
+
+--------------------------------------------------------------------------------
+3. ACCEPTANCE CRITERIA RE-RUN INDEPENDENTLY
+--------------------------------------------------------------------------------
+3.1  grep -n "preferredWorkerId" server/src/workers/workers.service.ts
+       90:  preferredWorkerId?: string;
+      873:   * - 置顶：req.preferredWorkerId 只是**候选内偏好**，只在通过上面全部四道过滤时生效，
+      912:    if (!req.preferredWorkerId) {
+      916:    const pinned = ranked.find((x) => x.worker.id === req.preferredWorkerId);
+      919:      const raw = candidates.find((w) => w.id === req.preferredWorkerId);
+      924:        `assignWorker 首选 worker ${req.preferredWorkerId} 未命中：${reason}；回退自动调度 ${fallbackId ?? 'null'}`,
+     -> type declaration (90) + pin decision (912-945). EXACTLY matches the receipt.
+
+3.2  grep -c "matchesModelRequirement" server/src/workers/workers.service.ts   -> 5
+     git show HEAD:... | grep -c  -> 3   (NOT reduced)
+
+3.3  git diff -U0 ... | grep '^@@'  -> 3 hunks, listed in §2.  None over 1310-1325.
+     git diff ... | grep -c 'agent.updateMany'  -> 0  (grep exit 1, expected)
+
+--------------------------------------------------------------------------------
+4. JEST — RE-RUN BY THE VERIFIER
+--------------------------------------------------------------------------------
+4.1  $ cd /Volumes/SSD-Data/01work/git-project/vteam/server && npx jest src/workers/workers.service.spec.ts
+       Test Suites: 1 passed, 1 total
+       Tests:       172 passed, 172 total
+       Snapshots:   0 total
+       Time:        3.642 s
+     Receipt claimed 172 passed / 3.78 s. Reproduced.
+
+4.2  Proof the 12 new cases really RAN (not skipped/pending):
+     $ npx jest src/workers/workers.service.spec.ts -t '首选 worker 置顶'
+       assignWorker（首选 worker 置顶：候选内偏好 + 回退矩阵）
+         ✓ 置顶在线且通过四过滤 → 命中置顶，且不受容量排序影响（置顶容量更低也照样选它）
+         ✓ 无参调用 assignWorker() 零回归：候选集与顺序与今日一致（保护 9 处无参调用方）
+         ✓ 置顶 offline → 软回退到自动调度 + warn，且不抛异常
+         ✓ 置顶 degraded → 仍命中置顶（degraded 通过四过滤），但 warn 告知绕过了 online 优先排序
+         ✓ 置顶 id 不在候选集（行缺失）→ 回退 + warn（文案不谎称行缺失与 offline 两种原因）
+         ✓ 置顶容量耗尽 → 回退 + warn
+         ✓ 置顶 opencodeVersion 不符 → 回退 + warn
+         ✓ B1：modelId 非空且置顶 worker 从未上报模型能力（availability 为空）→ 视为未命中，回退 + warn
+         ✓ B1 不误伤自动调度：同一「availability 为空」worker 在无置顶时仍按今日语义被选中
+         ✓ 置顶有 availability 但全部不匹配 → 过滤④排除，回退 + warn
+         ✓ 置顶 availability 匹配但 enabled=false → 过滤④排除，回退 + warn
+         ✓ 置顶不可用且无任何候选 → 返回 null 而非 throw「无可用 worker」
+       Test Suites: 1 passed, 1 total
+       Tests:       160 skipped, 12 passed, 172 total
+     The 160 "skipped" are the `-t` name filter, not `.skip` in code:
+       `grep -nE '\.(skip|only)\(|xit\(|xtest\(|todo\(' workers.service.spec.ts` -> ZERO matches.
+
+4.3  $ npx tsc --noEmit -p tsconfig.json   -> TSC_EXIT=0, 0 lines of output.
+     $ npx eslint src/workers/workers.service.ts src/workers/workers.service.spec.ts
+         906:13  warning  'broadcastSpy' is assigned a value but never used
+         ✖ 1 problem (0 errors, 1 warning)
+     HEAD's spec line 906 is the same `const broadcastSpy = jest` -> the warning is pre-existing.
+
+--------------------------------------------------------------------------------
+5. ADVERSARIAL AUDIT OF THE NEW TESTS
+--------------------------------------------------------------------------------
+5.1  Were any existing tests weakened?  NO.
+     `git diff --numstat` on the spec = 249 insertions, 0 deletions, single hunk at +2350.
+     Nothing was removed, reworded or re-asserted. The pre-existing groups
+     `assignWorker（Scheduler）` and `assignWorker（模型要求匹配…）` are untouched context.
+
+5.2  Success criterion 3's six cases — coverage map (each row asserts a concrete returned id
+     AND a concrete logger.warn spy call):
+       SC3 case                                   | test                                       | warns?
+       ------------------------------------------- | ------------------------------------------ | ------
+       行缺失                                      | 置顶 id 不在候选集（行缺失）                  | 1, asserts '不在候选集中' + '不可区分'
+       offline                                     | 置顶 offline → 软回退                         | 1, asserts 'w_pin' + '未命中'
+       容量不足                                    | 置顶容量耗尽                                  | 1, asserts '未通过既有过滤'
+       opencodeVersion 不符                        | 置顶 opencodeVersion 不符                     | 1, asserts 'opencodeVersion=1.17.0'
+       有模型能力但无一匹配 (含 enabled=false)      | 置顶有 availability 但全部不匹配               | 1
+                                                    | 置顶 availability 匹配但 enabled=false        | 1
+       从未上报模型能力且 modelId 非空 (B1)         | B1：modelId 非空…视为未命中                    | 1, asserts 'B1'
+       degraded 被置顶（仍可用但必须留 warn 痕迹）   | 置顶 degraded → 仍命中置顶                      | 1, asserts 'degraded'
+     => 8 of the 9 new cases assert `logger.warn` (6 fallback categories + degraded + B1-no-harm);
+        2 assert `not.toHaveBeenCalled()`. NO case from SC3 is missing a test.
+     Non-mirroring check: each fallback test asserts a DISTINCT concrete id (`'w_other'`), and the
+     two hit-tests assert `'w_pin'` where a non-pinning implementation would return `'w_big'` /
+     `'w_online'` respectively. These cannot pass by echoing the implementation.
+
+5.3  MUTATION TESTING (the decisive evidence; run on a throwaway copy, repo untouched).
+     M1  PIN IGNORED — `if (!req.preferredWorkerId)` -> `if (true)`
+         => Tests: 10 failed, 162 passed  (all 10 pin-behaviour tests turn RED)
+     M2  B1 BLOCK DELETED
+         => Tests: 1 failed, 171 passed  ("B1：modelId 非空且…回退 + warn")
+     M3  DEGRADED WARN BLOCK DELETED
+         => Tests: 1 failed, 171 passed  ("置顶 degraded → 仍命中置顶…warn")
+     M4  PIN BYPASSES FILTERS — early `return p0.id` from the RAW `candidates` array, injected
+         before `const ranked = ...`
+         => Tests: 8 failed, 164 passed
+            (offline, degraded, 容量耗尽, opencodeVersion 不符, B1, 全不匹配, enabled=false, 无候选→null)
+     M5  GLOBAL DEGRADE CONTRACT BROKEN — `matchesModelRequirement`'s `avail.length===0` flipped
+         true -> false
+         => Tests: 3 failed, 169 passed
+            (pre-existing "C7 按模型过滤：从未上报…降级不受过滤约束" RED, plus both B1 tests RED)
+         -> proves the global contract is actively guarded, and that B1 lives OUTSIDE it.
+     M6  NO-ARG PATH REGRESSED — `if (!req.preferredWorkerId)` returns raw `candidates[0].id`
+         => Tests: 9 failed, 163 passed
+            (8 pre-existing Scheduler/C7 tests RED, plus "无参调用 assignWorker() 零回归" RED)
+         -> proves invariant (e) is genuinely guarded, not decorative.
+     After every mutation the sandbox file was restored from a pristine copy; the real repo file's
+     md5 is unchanged (30690c04e34e833b47235c46809bbed0, measured before and after the mutation
+     campaign).
+
+5.4  DIRTY WORKTREE / dirty_worktree adversarial class.
+     HEAD is still b6840d1cd72cd536108457d3e78f6bcf54c548ec — identical to the base-sha recorded in
+     .omo/evidence/task-1-team-worker-node.txt:12. Nothing was committed, nothing staged.
+     All 13 baseline dirty entries from task-1 §1 are still present, byte for byte; the only
+     additions are Todo 2/3/4 files plus the new .omo evidence receipts:
+       + server/src/workers/workers.service.ts, .spec.ts            (Todo 4)
+       + server/src/agents/agents.service.ts, .spec.ts, dto/update-agent.dto.ts  (Todo 2)
+       + docs/agent-platform/prototypes/agent-{config,manage}/index.tsx         (Todo 3)
+       + web/app/(main)/agents/page.tsx, web/e2e/reference/testids.ts            (Todo 3)
+     Todo 4's edits are confined to server/src/workers/* as claimed. No stray scratch files:
+     `ls server/src/workers/` contains no zz-* / temp spec; `zz-task4-qa.spec.ts` is absent.
+
+5.5  STALE STATE adversarial class — ANSWER: no type-level claim here can be stale, and none is
+     vacuous either.
+     `prisma/schema.prisma` contains NO `preferred_worker_id` yet (Todo 6 owns it), so the Prisma
+     client is irrelevant to this todo: `preferredWorkerId` is an optional member of an in-repo
+     TypeScript interface (`AssignmentRequirement`, WT 90), never a Prisma model field, and there is
+     no `select: { preferredWorkerId: true }` anywhere in server/src. `tsc --noEmit` passing is a
+     real signal here because the field is validated against local types, not generated ones.
+     Concretely: even if the generated client were regenerated for a schema that does not yet exist,
+     nothing in Todo 4 would change, fail, or become vacuous. The genuine staleness risk is deferred
+     to Todo 5 (`select: { preferredWorkerId: true }` on teamMember/team), which is blocked on Todo 6
+     per plan lines 77-78 — and Todo 5 has correctly not started.
+
+5.6  FLAKY adversarial class — none found.
+     All 12 new cases are single-shot mock resolutions (`prisma.worker.findMany.mockResolvedValue`),
+     no timers, no fake clocks, no `setImmediate`, no network, no DB, no `jest.useFakeTimers`, no
+     snapshot. The outer `beforeEach` (spec:106) rebuilds the TestingModule and the inner
+     `beforeEach` (spec:2369) attaches the warn spy afterwards, so the spy always binds to the live
+     instance; `afterEach` (spec:2374) restores it, so no cross-test logger pollution.
+     No dependence on `Array.prototype.sort` stability: in the zero-regression test the online
+     candidates have distinct capacities 6/9/10 and the degraded one (capacity 10) is separated by
+     the online-first comparator, so no tie-break order is assumed; the B1 test deliberately gives
+     the fallback worker capacity 99 so the post-B1 re-rank is unambiguous, and says so in a comment.
+
+--------------------------------------------------------------------------------
+6. OBSERVATIONS — NOT DEFECTS, NO FIX REQUIRED
+--------------------------------------------------------------------------------
+O1  The "置顶 offline" test necessarily takes the mock-only `raw`-present branch, because
+    `prisma.worker.findMany` is mocked and the `where: { status: { not: offline } }` clause is not
+    applied. In production an offline pinned worker lands in the "不在候选集中" branch instead.
+    Observable behaviour (soft fallback + one `logger.warn`) is identical either way, and the
+    production-shaped branch IS covered by the "行缺失" test, which additionally pins the
+    "不可区分" wording. Coverage is complete; only the *label* on the offline test is mock-shaped.
+
+O2  Receipt line 21 attributes `server/src/agents/agents.service.ts` / `.spec.ts` to "Todo 3";
+    those are Todo 2's files (Todo 3 is web + prototypes). Cosmetic mislabel in the receipt only —
+    the dirty-file list itself is correct.
+
+O3  `logger.warn` fires on EVERY dispatch while a pin is unresolvable (and on every dispatch to a
+    degraded pinned node). A team pinned to a permanently-offline node will therefore emit one warn
+    per session dispatch indefinitely. This is exactly what the plan mandates (SC3 requires a warn
+    trace for every fallback), so it is not a defect — but Todo 13 / the F-wave should know it is
+    steady-state volume, not an anomaly signal, before anyone adds dedup/rate-limiting.
+
+O4  `preferredWorkerId: ''` is falsy and is therefore treated as "unset" — silently no warn. This is
+    consistent with the plan's "若 req.preferredWorkerId 且…" phrasing and with the Todo 5 resolver's
+    `preferredWorkerId ? {...} : {}` shape. Recorded only so it is not later mistaken for a gap.
+
+--------------------------------------------------------------------------------
+7. EXACT REPRO COMMANDS (all read-only; safe to re-run verbatim)
+--------------------------------------------------------------------------------
+cd /Volumes/SSD-Data/01work/git-project/vteam
+git log --oneline -1
+git status --porcelain
+git diff --numstat -- server/src/workers/workers.service.ts server/src/workers/workers.service.spec.ts
+git diff -U0 -- server/src/workers/workers.service.ts | grep '^@@'
+git diff -U0 -- server/src/workers/workers.service.spec.ts | grep '^@@'
+git diff -- server/src/workers/workers.service.ts
+git diff -- server/src/workers/workers.service.spec.ts
+git diff -- server/src/workers/workers.service.ts | grep -E '^[-+].*matchesModelRequirement'
+git diff -- server/src/workers/workers.service.ts | grep -c 'agent.updateMany'    # -> 0, exit 1
+grep -n "preferredWorkerId" server/src/workers/workers.service.ts
+grep -c "matchesModelRequirement" server/src/workers/workers.service.ts            # -> 5
+grep -c "matchesModelRequirement" <(git show HEAD:server/src/workers/workers.service.ts) # -> 3
+grep -rn "preferredWorkerId" server/src web/app web/src                             # -> only workers/*
+grep -nE '\.(skip|only)\(|xit\(|xtest\(|todo\(' server/src/workers/workers.service.spec.ts  # -> none
+# byte-identity of the two forbidden regions (HEAD coords vs WT coords)
+T=$(mktemp -d); git show HEAD:server/src/workers/workers.service.ts > $T/head.ts
+diff <(sed -n '909,937p' $T/head.ts) <(sed -n '957,985p' server/src/workers/workers.service.ts)  # -> silent
+diff <(sed -n '1293,1330p' $T/head.ts) <(sed -n '1341,1378p' server/src/workers/workers.service.ts) # -> silent
+cd server && npx jest src/workers/workers.service.spec.ts
+cd server && npx jest src/workers/workers.service.spec.ts -t '首选 worker 置顶'
+cd server && npx tsc --noEmit -p tsconfig.json; echo "TSC_EXIT=$?"
+cd server && npx eslint src/workers/workers.service.ts src/workers/workers.service.spec.ts
+# mutation harness used in §5.3 (writes ONLY under $TMPDIR, never in the repo)
+T=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t4verify/mut
+mkdir -p $T && cd server && cp -R src $T/src && cp jest.config.js tsconfig.json package.json $T/ \
+  && mkdir -p $T/test && cp test/setup-env.js $T/test/ \
+  && ln -s "$PWD/node_modules" $T/node_modules && cd $T && npx jest src/workers/workers.service.spec.ts
+
+--------------------------------------------------------------------------------
+8. CONFIDENCE
+--------------------------------------------------------------------------------
+0.96. High. The two Must-NOTs that carry the most risk (matchesModelRequirement semantics and
+`remove()` ownership) are proven by byte-identical block diffs AND by the fact that the entire
+change set is 3 hunks that provably do not reach those line ranges. The scheduling semantics are
+proven behaviourally by 6 independent mutations, each of which turned a DIFFERENT, expected
+subset of the new suite red — so the tests are not mirrors of the implementation. Residual 0.04 is
+for the (unverifiable-from-here) possibility that sibling Todos 2/3/5/6 will later reintroduce one
+of these behaviours; that is outside this lane.

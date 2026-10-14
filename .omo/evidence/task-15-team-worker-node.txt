@@ -1,0 +1,252 @@
+# Todo 15 — 注册 team-worker-select 到 testids 参考清单
+
+Plan: .omo/plans/team-worker-node.md §Todos 15 (行 302-312)
+Evidence: .omo/evidence/task-15-team-worker-node.txt (本文件)
+Date: 2026-10-14
+Base-sha: cb0ba6d1ab16571c0c979e41e40951000819f1c7 (HEAD 未变，无提交)
+
+范围声明：本 todo 只改一个文件的一行，外加本证据文件。未改任何产品代码、
+未新增 PAGES 条目、未移动 chip/option 条目、未触碰规划中列出的兄弟路径
+（server/src/memories/*、execution-policies/*、common/constants/*、platform-mcp/*、
+seed.ts、scripts/）与开工前既存脏文件。未执行任何 git 写命令。
+
+## 1. 改动内容（唯一一行插入）
+
+文件: web/e2e/reference/testids.ts
+位置: PAGE_SMOKE 映射，紧邻 "/teams" 键之后（原 :550 "/teams"，新键落在 :551）
+插入内容:
+
+  "/teams/[id]": ["team-detail-root", "team-worker-select", "enter-team-session", "team-save-name"],
+
+设计取舍（对照 todo 15 的 Must NOT）:
+- 未在 PAGES 数组加 /teams/[id] 条目：PAGES auditPage 清单里确实没有 "team-detail"
+  编号（实测 auditPage 只有 1.1 login / 1.2 team-list / 1.3 task-create / 1.4 task-board /
+  2.1 agent-config / 2.3b team-session / 2.4 nav-cmdk / 2.5 nav-hybrid / 2.6 nav-rail /
+  2.7 role-permission / 2.8 skills-tools-manage / 2.9 task-detail / 2.11 user-management /
+  2.12 worker-install / 2.13 worker-list / 2.14 models-manage —— 2.2/2.3a/2.10 缺失，
+  团队详情页从未进入 Phase 0 审计）。凭空加条目等于谎称其穷尽性，故不加。
+- 未移动 agent-worker-chip / agent-worker-option：二者实测仍落在 2.3b team-session
+  条目的 testids 区间内（:238-240，条目范围 :189-242）。TeamMembersPanel 的唯一
+  渲染点是会话页，挪到 /agents 会让该文件的按路由契约变成事实错误。
+- 为使以上两点可被后续复核者独立验证，本节把「不加条目」与「不移动」都落成了
+  可执行判据（见 §3 E、§3 F），而不是文字声明。
+
+说明（非 testid 事实，但影响阅读）：`enter-team-session` 是一个跨路由共用的名
+——它同时真实存在于团队列表页 (/teams，:123，进某个团队的会话) 与团队详情页
+(/teams/[id]，:288，进本团队的会话)。它已登记在 PAGES 的 1.2 team-list 条目
+(:82) 中；本行把它同时登记给 /teams/[id]，因为详情页确实渲染该 testid。
+「同名出现在两条路由」不是登记错误，故保留。
+
+## 2. 改动前状态（缺口证据）
+
+$ grep -n "team-worker-select" web/e2e/reference/testids.ts
+（无输出）
+EXIT=1                    # 改动前为 0 命中 —— 即 Todo 11 遗留的一行缺口
+
+## 3. 验收原始输出
+
+### [A] grep -c "team-worker-select" web/e2e/reference/testids.ts   (须 >= 1)
+$ grep -c "team-worker-select" web/e2e/reference/testids.ts
+1
+EXIT=0                    # 1 >= 1 PASS
+
+### [B] grep -n '"/teams/\[id\]"' web/e2e/reference/testids.ts
+$ grep -n '"/teams/\[id\]"' web/e2e/reference/testids.ts
+551:  "/teams/[id]": ["team-detail-root", "team-worker-select", "enter-team-session", "team-save-name"],
+EXIT=0                    # 落在 :551，紧邻 :550 的 "/teams" 键
+
+### [C] 新键内每个 testid 逐条 grep 详情页（防幽灵名）
+
+$ grep -n 'data-testid="team-detail-root"' 'web/app/(main)/teams/[id]/page.tsx'
+274:    <div data-testid="team-detail-root" style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", padding: `${space.xl}px`, overflow: "auto" }}>
+EXIT=0
+
+$ grep -n 'data-testid="team-worker-select"' 'web/app/(main)/teams/[id]/page.tsx'
+347:            data-testid="team-worker-select"
+EXIT=0
+
+$ grep -n 'data-testid="enter-team-session"' 'web/app/(main)/teams/[id]/page.tsx'
+288:            data-testid="enter-team-session"
+EXIT=0
+
+$ grep -n 'data-testid="team-save-name"' 'web/app/(main)/teams/[id]/page.tsx'
+285:          <button type="button" data-testid="team-save-name" onClick={handleSaveName} disabled={patchMutation.isPending} style={{ ... }}>保存</button>
+EXIT=0
+
+四个名字全部命中，无一为幽灵名。渲染上下文已人工确认：四个 testid 都在
+teamQuery 成功分支内（:274 的 team-detail-root 容器 > :285 team-save-name /
+:288 enter-team-session / :347 team-worker-select），即页面加载成功后必然渲染，
+不存在仅在 error/loading 分支存在的名。
+
+### [D] grep -n "agent-worker-chip" web/e2e/reference/testids.ts   (须仍在会话段区间内)
+$ grep -n "agent-worker-chip" web/e2e/reference/testids.ts
+238:      "agent-worker-chip-<instanceId>",
+EXIT=0
+
+$ sed -n '189p;242p' web/e2e/reference/testids.ts
+  {
+  },
+
+会话段条目边界: 2.3b team-session 条目从 :189 起、到 :242 止（:190 auditPage、
+:191 route、:192 root、:193-241 testids、:242 闭合）。:238 落在该区间内。
+同段相邻的 agent-worker-option 两条实测在 :239/:240（同区间）：
+$ grep -n "agent-worker-option" web/e2e/reference/testids.ts
+239:      "agent-worker-option-<instanceId>-follow-team",
+240:      "agent-worker-option-<instanceId>-<workerId>",
+PASS —— 未移动。
+
+### [E] PAGES 数组仍无 /teams/[id] 条目
+$ grep -n 'route: "/teams/\[id\]"' web/e2e/reference/testids.ts
+（无输出）
+EXIT=1                    # 0 命中 => 未编造审计条目
+
+$ grep -n "auditPage:" web/e2e/reference/testids.ts
+37:  auditPage: string;
+49:    auditPage: "1.1 login（登录）",
+73:    auditPage: "1.2 team-list（团队列表，主工作台；项目列表已随项目维度拆除）",
+90:    auditPage: "1.3 task-create（创建任务）",
+121:    auditPage: "1.4 task-board（任务看板）",
+143:    auditPage: "2.1 agent-config（Agent 配置）",
+190:    auditPage: "2.3b team-session（团队会话，唯一聊天入口）",
+244:    auditPage: "2.4 nav-cmdk（导航变体 B）",
+259:    auditPage: "2.5 nav-hybrid（导航融合版）",
+280:    auditPage: "2.6 nav-rail（导航变体 A）",
+296:    auditPage: "2.7 role-permission（角色与权限）",
+324:    auditPage: "2.8 skills-tools-manage（技能与工具）",
+354:    auditPage: "2.9 task-detail（任务详情与文档库）",
+378:    auditPage: "2.11 user-management（用户管理）",
+426:    auditPage: "2.12 worker-install（新增 Worker）",
+450:    auditPage: "2.13 worker-list（Worker 节点管理）",
+477:    auditPage: "2.14 models-manage（模型管理：Provider 单一视图）",
+
+15 个审计页里没有任何 team-detail 编号（2.2/2.3a/2.10 亦缺失），佐证
+「标题页从未进入 Phase 0 审计」，故 PAGE_SMOKE 加键而不在 PAGES 加条目是对的。
+
+### [F] cd web && npx tsc --noEmit
+$ cd web && npx tsc --noEmit; echo TSC_EXIT=$?
+TSC_EXIT=0
+
+（TS 对本文件无校验力——它只是字符串字面量。真正的护栏是 [C] 的逐条 grep。
+tsc 在此的作用仅是证明「没有把文件改坏」。）
+
+### [G] git log --oneline -1
+$ git log --oneline -1
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+EXIT=0                    # 与 base-sha 一致，未提交
+
+### [H] 改动面（证明只加了一行）
+$ git diff -U0 -- web/e2e/reference/testids.ts | grep '^@@'
+@@ -156 +155,0 @@ export const PAGES: PageTestidRef[] = [
+@@ -238,0 +238,3 @@ export const PAGES: PageTestidRef[] = [
+@@ -548,0 +551 @@ PAGE_SMOKE: Record<string, string[]> = {
+
+三个 hunk 中，前两个是 Todo 11 的未提交产物（删 /agents 的 agent-worker-select 条目、
+加会话段三条 chip/option —— 本次开工前工作区既存），第三个 @@ -548,0 +551 @@
+是本 todo 的纯插入（0 删除）。
+
+$ git diff --stat -- web/e2e/reference/testids.ts
+ web/e2e/reference/testids.ts | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+$ git diff -U0 -- web/e2e/reference/testids.ts | grep '^+.*teams/\[id\]'
++  "/teams/[id]": ["team-detail-root", "team-worker-select", "enter-team-session", "team-save-name"],
+
+### [I] 索引为空（不得有暂存）
+$ git diff --cached --name-only
+（无输出）
+EXIT=0                    # 空 => 索引无任何暂存改动
+
+## 4. QA - happy（逐条 grep 往返）
+即 §3 [C]：新键的四个 testid 在 web/app/(main)/teams/[id]/page.tsx 全部命中，
+每条都有原始输出与 EXIT=0。happy 通过。
+
+## 5. QA - failure（突变校验）
+把新键里的 team-worker-select 改成幽灵名 team-worker-select-typo，复跑逐条
+grep，必须失配；随后还原并证明零残留。用 cp 备份/还原（不用 git checkout——本
+session 禁止任何 git 写命令，且 checkout 会连 Todo 11 的未提交产物一起回滚）。
+
+$ cp web/e2e/reference/testids.ts .omo/evidence/task-15-backup-testids.ts.tmp
+$ md5 -q web/e2e/reference/testids.ts
+5757c94aaa4b88e676e4d72fd52293ca          # before
+
+$ sed -i '' '551s/team-worker-select/team-worker-select-typo/' web/e2e/reference/testids.ts
+
+--- [M2] 突变后逐条 grep（必须失配） ---
+$ grep -n 'data-testid="team-worker-select-typo"' 'web/app/(main)/teams/[id]/page.tsx'
+（无输出）
+PHANTOM_GREP_EXIT=1                       # 详情页不存在该名 => 登记项被证明真的在读页面
+（同时 :551 变成
+  "/teams/[id]": ["team-detail-root", "team-worker-select-typo", "enter-team-session", "team-save-name"],
+ 即参考清单里出现了一个页面没有的名 —— 正是本条 guard 要拦的文档腐化形态。）
+
+--- [M3] 还原 ---
+$ cp .omo/evidence/task-15-backup-testids.ts.tmp web/e2e/reference/testids.ts
+$ md5 -q web/e2e/reference/testids.ts
+5757c94aaa4b88e676e4d72fd52293ca          # after == before
+
+--- [M4] 还原后复跑（必须命中） ---
+$ grep -n 'data-testid="team-worker-select"' 'web/app/(main)/teams/[id]/page.tsx'
+347:            data-testid="team-worker-select"
+RESOLVE_GREP_EXIT=0
+
+--- [M5] 零残留 ---
+$ diff .omo/evidence/task-15-backup-testids.ts.tmp web/e2e/reference/testids.ts
+（无输出）
+DIFF_EXIT=0
+
+--- [M6] 清理临时备份 ---
+$ rm -f .omo/evidence/task-15-backup-testids.ts.tmp
+$ ls .omo/evidence/task-15-backup-testids.ts.tmp
+（无输出）
+LS_EXIT=1
+
+突变校验通过：幽灵名失配（EXIT=1）、还原后命中（EXIT=0）、md5 逐字节一致、
+diff 零差异、临时备份已删除。
+
+## 6. 工作区状态（相对开工快照无新增）
+$ git status --porcelain | grep -c '^ M'
+34
+
+开工时（本 session 首条命令）的 ' M' 计数同为 34，且 34 个文件名逐一相同：
+.omo/boulder.json / .omo/evidence/phase5-t9-playwright.json /
+.omo/evidence/plan-review-execution-gates/task-9/probe.json /
+.omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json /
+.omo/ulw-execute/ledger.jsonl / docs/agent-platform/prototypes/agent-config/index.tsx /
+docs/agent-platform/prototypes/agent-manage/index.tsx / server/prisma/schema.prisma /
+server/src/agents/agents.service.spec.ts / server/src/agents/agents.service.ts /
+server/src/agents/dto/update-agent.dto.ts / server/src/chat/worker-dispatcher.spec.ts /
+server/src/chat/worker-dispatcher.ts / server/src/platform-mcp/platform-mcp.controller.spec.ts /
+server/src/platform-mcp/platform-mcp.controller.ts / server/src/platform-mcp/platform-mcp.service.spec.ts /
+server/src/platform-mcp/platform-mcp.service.ts / server/src/platform-mcp/platform-mcp.tools.ts /
+server/src/tasks/tasks.service.spec.ts / server/src/tasks/tasks.service.ts /
+server/src/teams/dto/add-member.dto.ts / server/src/teams/dto/update-team.dto.ts /
+server/src/teams/teams.service.spec.ts / server/src/teams/teams.service.ts /
+server/src/workers/workers.service.spec.ts / server/src/workers/workers.service.ts /
+web/app/(main)/agents/page.tsx / web/app/(main)/teams/[id]/page.tsx /
+web/app/(main)/teams/[id]/session/page.tsx / web/e2e/reference/testids.ts /
+web/src/api/teams.ts / web/src/components/chat/msg-parts.tsx /
+web/src/components/tasks/task-detail-types.ts / web/src/components/teams/TeamMembersPanel.tsx
+
+未跟踪面同样无新增（除本证据文件 .omo/evidence/task-15-team-worker-node.txt）：
+.drafts/team-worker-node.md / task-1..task-11 / task-receipt-fix / verify-task-* /
+.omo/notepads/team-worker-node/ / .omo/plans/team-worker-node.md /
+server/prisma/migrations/20261014000000_team_worker_node/ /
+server/src/prisma/team-worker-node.migration.spec.ts
+
+结论：被跟踪文件零新增修改（testids.ts 是本计划自己的未提交产物，只加了 §3 [H]
+的那一行）；兄弟路径与平台 mcp 脏文件零触碰；索引为空；HEAD 未动、无提交。
+
+## 7. 备注（AGENTS.md / Next.js 规则）
+web/AGENTS.md 要求在改 web 前读 node_modules/next/dist/docs/ 的版本差异。本
+todo 改的是 web/e2e/reference/testids.ts —— 一个无 import 的纯数据文件（已实测：
+grep -n "^import\|require(" web/e2e/reference/testids.ts 无输出，EXIT=1），不接触
+任何 Next.js API、页面、组件或构建产物，故该规则不适用。未对 AGENTS.md 本身
+做任何改动（其规则块由 next dev 自行维护，本 session 不提交，故不触碰）。
+
+AGENTS.md 另注：「committing it with your work keeps the tree clean」——本 session
+不提交任何东西，故无须处理该块。
+
+## 8. 结论
+Todo 15 完成：PAGE_SMOKE 新增 "/teams/[id]" 键并列出详情页四个真实存在的 testid；
+PAGES 未加条目；chip/option 未移动；产品代码零改动；tsc 通过；HEAD 仍为 cb0ba6d。
+真护栏是 §3 [C]/§5 的逐条 grep（参考清单是文档、会腐化，名是否能解析才是判据）。

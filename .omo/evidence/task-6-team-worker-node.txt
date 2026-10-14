@@ -1,0 +1,408 @@
+Todo 6 — schema：新增两级 preferred_worker_id + 摘除 agents.workerId 声明 + prisma generate
+repo: /Volumes/SSD-Data/01work/git-project/vteam
+base HEAD: b6840d1c（todo 1/2/3/4 的改动均未提交，仍在工作区；本 todo 不提交）
+说明：下列全部输出均为原始命令输出 / 字面退出码，未做「改写式成功叙述」。
+
+================================================================================
+0. 本 todo 修改的文件（仅 3 个；证据文件 1 个）
+================================================================================
+server/prisma/schema.prisma                      —— Team/TeamMember 各加 1 列，Agent 删 1 列声明
+server/src/workers/workers.service.ts            —— remove() 事务：删 agent.updateMany，加 team/teamMember 两条清理 + 改写文档注释
+server/src/workers/workers.service.spec.ts       —— prisma mock 补 2 键（含 TS 字面量类型）、删失效断言、条数 5→6
+.omo/evidence/task-6-team-worker-node.txt        —— 本文件
+
+未改动（明确遵守）: server/prisma/migrations/**（git status --porcelain -- server/prisma/migrations | wc -l = 0）；
+                   server/src/platform-mcp/*；web/src/components/chat/msg-parts.tsx（均为开工前既有脏改动）；
+                   Session/Worker/TaskGroupInstance 的 workerId；assignWorker / matchesModelRequirement 区域。
+
+================================================================================
+1. schema.prisma 改动（原始 diff）
+================================================================================
+diff --git a/server/prisma/schema.prisma b/server/prisma/schema.prisma
+index 9696ede..2ac2b74 100644
+--- a/server/prisma/schema.prisma
++++ b/server/prisma/schema.prisma
+@@ -92,6 +92,8 @@ model Team {
+   managedMode        Boolean  @default(false) @map("managed_mode")
+   currentTaskId      String?  @map("current_task_id")
+   mainAgentMemberId  String?  @map("main_agent_member_id")
++  /// 团队级首选 worker（软绑定单节点；成员显式选择优先；不可用自动回退，绝不阻塞）
++  preferredWorkerId  String?  @map("preferred_worker_id")
+   version            Int      @default(0) @map("version")
+   createdBy          String   @map("created_by")
+   createdAt          DateTime @default(now()) @map("created_at")
+@@ -182,6 +184,8 @@ model TeamMember {
+   seq            Int      @default(1)
+   workDir        String?  @map("work_dir")
+   overrideModelId String? @map("override_model_id")
++  /// 成员级首选 worker（软绑定单节点）：成员显式 > 团队 > 现状；null/空 = 不覆盖
++  preferredWorkerId String? @map("preferred_worker_id")
+   /// 成员角色（agent_roles）。onDelete: Restrict —— 在用角色不可静默删除，
+   /// 必须先解绑成员再删角色（FK 报错即显式拦截，绝不静默置空）。
+   roleId         String?  @map("role_id")
+@@ -648,8 +652,6 @@ model Agent {
+   // ⚠️ 出厂默认提示词为多段长文本（16 篇 §3~§7 四方向结构），MySQL 需 TEXT 承载
+   prompt          String   @db.Text
+   defaultModelId  String?  @map("default_model_id")
+-  // 首选 worker 软绑定（可空，null=自动调度；离线自动回退，Metis R1）
+-  workerId        String?  @map("worker_id")
+   // @deprecated 2026-08-21 已下线：群聊 @Agent 自动回复“收到，正在处理…”机制已删除（模型不可用时无法区分）。
+   // 列保留以兼容存量 DB，业务层已不再读写；下次重建库可删。
+   ackMessage      String?  @map("ack_message")
+说明：注释一律用中文「首选 worker」，两列均未声明 @relation / @@index（软引用 + 应用层清理惯例）。
+
+================================================================================
+2. workers.service.ts 改动（原始 diff，只看 remove() 两个 hunk）
+================================================================================
+@@ -1287,7 +1335,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+    * - offline → 事务内清理全部 workerId 外键引用（schema onDelete: Restrict，不依赖
+    *   DB 级联）后物理删除：worker_model_availabilities 硬删、worker 会话实例关联硬删
+    *   （软删 removedAt 不解除 FK Restrict，必须删行）、sessions.workerId/instanceRef 置空、
+-   *   agents.workerId 置空（软绑定"首选 worker"）；成功同步清理该 worker 的
++   *   teams.preferredWorkerId 与 team_members.preferredWorkerId 置空（团队/成员两级软绑定的
++   *   「首选 worker」；列无 FK/无索引，按应用层清理惯例兜底）；成功同步清理该 worker 的
+    *   workerMcpStatus/pendingCommands 内存态。
+    */
+   async remove(id: string) {
+@@ -1316,9 +1365,13 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+         where: { workerId: id },
+         data: { workerId: null, instanceRef: null },
+       }),
+-      this.prisma.agent.updateMany({
+-        where: { workerId: id },
+-        data: { workerId: null },
++      this.prisma.team.updateMany({
++        where: { preferredWorkerId: id },
++        data: { preferredWorkerId: null },
++      }),
++      this.prisma.teamMember.updateMany({
++        where: { preferredWorkerId: id },
++        data: { preferredWorkerId: null },
+       }),
+       this.prisma.worker.delete({ where: { id } }),
+     ]);
+
+================================================================================
+3. hunk 归属核对：确认本 todo 未触碰 assignWorker / matchesModelRequirement
+================================================================================
+$ git diff -U0 -- server/src/workers/workers.service.ts | grep '^@@'
+@@ -79,0 +80,11 @@ export interface AssignmentRequirement {
+@@ -861,0 +873,2 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -898 +911,36 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -1290 +1338,2 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -1319,3 +1368,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+归属判定：
+  @@ -79,0 +80,11 / @@ -861,0 +873,2 / @@ -898 +911,36   = Todo 4 的置顶调度（AssignmentRequirement + assignWorker pin 分支 + B1），
+                                                              本 todo 未改动其任何字节（工作区既有改动，非本 todo 产物）。
+  @@ -1290 +1338,2 / @@ -1319,3 +1368,7                  = 本 todo 的两个 hunk，全部落在 remove() 区间（原 :1290/:1319-1322）。
+                                                              863-938 的 assignWorker / matchesModelRequirement 区间不在本 todo 的 diff 内。
+
+================================================================================
+4. workers.service.spec.ts 改动（原始 diff，只看本 todo 的 4 个 hunk；第 5 个 hunk @@ -2348 +2361,253 = Todo 4 的置顶用例，未动）
+================================================================================
+diff --git a/server/src/workers/workers.service.spec.ts b/server/src/workers/workers.service.spec.ts
+index 62a5b45..1e18044 100644
+--- a/server/src/workers/workers.service.spec.ts
++++ b/server/src/workers/workers.service.spec.ts
+@@ -55,4 +55,8 @@ describe('WorkersService', () => {
+     teamMember: {
+       findMany: jest.Mock;
++      updateMany: jest.Mock;
++    };
++    team: {
++      updateMany: jest.Mock;
+     };
+     gitRepoGrant: {
+@@ -133,4 +137,8 @@ describe('WorkersService', () => {
+       teamMember: {
+         findMany: jest.fn(),
++        updateMany: jest.fn(),
++      },
++      team: {
++        updateMany: jest.fn(),
+       },
+       gitRepoGrant: {
+@@ -2053,9 +2061,10 @@ describe('WorkersService', () => {
+       const result = await service.remove('w_0000000001');
+ 
+-      // 事务 batch 数组顺序：availability 硬删 → instances 硬删 → sessions 置空 → agents 置空 → worker 删
++      // 事务 batch 数组顺序：availability 硬删 → instances 硬删 → sessions 置空 →
++      // teams/team_members 首选 worker 置空 → worker 删（Agent.workerId 列已摘除）
+       const [txOps] = prisma.$transaction.mock.calls[0] as unknown as [
+         Array<() => Promise<unknown>>,
+       ];
+-      expect(txOps).toHaveLength(5);
++      expect(txOps).toHaveLength(6);
+       expect(prisma.workerModelAvailability.deleteMany).toHaveBeenCalledWith({
+         where: { workerId: 'w_0000000001' },
+@@ -2068,7 +2077,11 @@ describe('WorkersService', () => {
+         data: { workerId: null, instanceRef: null },
+       });
+-      expect(prisma.agent.updateMany).toHaveBeenCalledWith({
+-        where: { workerId: 'w_0000000001' },
+-        data: { workerId: null },
++      expect(prisma.team.updateMany).toHaveBeenCalledWith({
++        where: { preferredWorkerId: 'w_0000000001' },
++        data: { preferredWorkerId: null },
++      });
++      expect(prisma.teamMember.updateMany).toHaveBeenCalledWith({
++        where: { preferredWorkerId: 'w_0000000001' },
++        data: { preferredWorkerId: null },
+       });
+       expect(prisma.worker.delete).toHaveBeenCalledWith({
+条数核对（以实际代码为准，未照抄计划数字）：
+  改动前 $transaction 数组 5 条：workerModelAvailability.deleteMany / taskGroupInstance.deleteMany /
+                                session.updateMany / agent.updateMany / worker.delete
+  删 agent.updateMany → 4 条；加 team.updateMany、teamMember.updateMany → 6 条。
+  断言改为 expect(txOps).toHaveLength(6)，实测通过（见 §7 的 5 个 remove 用例全绿）。
+  另：mock 的 TS 字面量类型（spec 顶部 `let prisma: {...}`）同步补了 team.updateMany / teamMember.updateMany ——
+  只改 mock 对象不改类型字面量会打红 TS2353/TS2339（本次真实踩到并修复，见 §7 前的记录）。
+
+过程留痕（本 todo 中途真实踩到并修复，非事后叙述）：
+  只改 mock 对象、漏改 spec 顶部 `let prisma: {...}` 的 TS 字面量类型时，第一次 generate 后的 tsc 原始输出：
+  $ npx prisma generate            -> PRISMA_EXIT=0
+  $ npx tsc --noEmit -p tsconfig.json
+  src/workers/workers.service.spec.ts(135,9): error TS2353: Object literal may only specify known properties, and 'updateMany' does not exist in type '{ findMany: Mock<any, any, any>; }'.
+  src/workers/workers.service.spec.ts(2075,21): error TS2339: Property 'team' does not exist on type '{ worker: {...}; ... 10 more ...; $queryRawUnsafe: Mock<...>; }'.
+  src/workers/workers.service.spec.ts(2079,32): error TS2339: Property 'updateMany' does not exist on type '{ findMany: Mock<any, any, any>; }'.
+  TSC_EXIT=2
+  -> 补齐类型字面量的 team/teamMember.updateMany 后复跑 TSC_EXIT=0（见 7.2）。
+
+================================================================================
+5. prisma generate（先于任何 tsc/jest）
+================================================================================
+$ npx prisma generate
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Environment variables loaded from .env
+Prisma schema loaded from prisma/schema.prisma
+┌─────────────────────────────────────────────────────────┐
+│  Update available 6.19.3 -> 8.0.0-rc.22                 │
+│                                                         │
+│  This is a major update - please follow the guide at    │
+│  https://pris.ly/d/major-version-upgrade                │
+│                                                         │
+│  Run the following to update                            │
+│    npm i --save-dev prisma@latest                       │
+│    npm i @prisma/client@latest                          │
+└─────────────────────────────────────────────────────────┘
+
+✔ Generated Prisma Client (v6.19.3) to ./node_modules/@prisma/client in 313ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Tip: Need your database queries to be 1000x faster? Accelerate offers you that and more: https://pris.ly/tip-2-accelerate
+
+PRISMA_EXIT=0
+
+$ ls -l node_modules/.prisma/client/index.d.ts  (regenerated client mtime)
+-rw-r--r--@ 1 mac  staff  3298754 Oct 14 11:50 node_modules/.prisma/client/index.d.ts
+
+$ npx tsc --noEmit -p tsconfig.json
+TSC_EXIT=0
+
+生成物时间戳（generated/cached artifact 声明）：
+  改动前 node_modules/.prisma/client/index.d.ts = Oct 10 16:09  3293923 bytes（陈旧客户端，含 Agent.workerId）
+  改动后                                            = Oct 14 11:50  3298754 bytes（本轮重新生成）
+  ⇒ 客户端确实是重新生成的产物，不是缓存残留。
+
+stale_state 对抗性核查（生成后读生成物本身，证明列真的没了 / 真的有了）：
+  AgentWhereInput            workerId=False preferredWorkerId=False   (len=1407)
+  AgentCreateInput           workerId=False preferredWorkerId=False   (len=1002)
+  AgentUpdateManyMutationInput workerId=False                         (len=763)
+  TeamCreateInput            preferredWorkerId=True                   (len=1049)
+  TeamWhereInput             preferredWorkerId=True                   (len=1479)
+  TeamMemberCreateInput      preferredWorkerId=True                   (len=708)
+  TeamMemberWhereInput       preferredWorkerId=True                   (len=1241)
+  ⇒ 任何残留的 Agent.workerId select/where 现在都会是硬编译错误（见 §6 (a) 的实证），不再静默。
+
+全仓源码扫描（schema 声明摘除前唯一还在读 Agent.workerId 的两处 + 1 处文档注释）：
+  $ grep -rn "agent\.workerId\|agent\.updateMany\|agents\.workerId\|worker_id" server/src
+  server/src/workers/worker-event.ingress.ts:197: * (worker_id, event_id) 唯一索引）；超窗口重放不幂等（worker 侧连接内有序不重发兜底）。   ← 无关注释（事件去重唯一索引）
+  server/src/workers/workers.service.ts:1338: *   agents.workerId 置空（软绑定"首选 worker"）；…          ← 本 todo 已改写
+  server/src/workers/workers.service.ts:1367:      this.prisma.agent.updateMany({                        ← 本 todo 已删除
+  server/src/workers/workers.service.spec.ts:2070:      expect(prisma.agent.updateMany).toHaveBeenCalledWith({  ← 本 todo 已删除
+  复查（改动后）：`grep -c "agent.updateMany" server/src/workers/workers.service.ts` = 0；spec 内 = 0。
+  Session.workerId / Worker / TaskGroupInstance.workerId 一律未动（本 todo 的 grep 只统计 Agent 侧调用形态）。
+
+================================================================================
+6. MANUAL QA —— 双向突变证明（原始输出，逐字）
+================================================================================
+
+--------------------------------------------------------------------------------
+6(a) 只删 schema 声明、保留 agent.updateMany  → tsc 必须报 workerId 不存在
+--------------------------------------------------------------------------------
+$ python3 - <<'PY'      # 在 remove() 事务里重新插回被删的那一行（schema 声明此时已无）
+      this.prisma.agent.updateMany({ where: { workerId: id }, data: { workerId: null } }),
+PY
+MUTATION (a) applied: agent.updateMany re-added
+$ npx tsc --noEmit -p tsconfig.json
+src/workers/workers.service.ts(1369,18): error TS2353: Object literal may only specify known properties, and 'workerId' does not exist in type 'AgentWhereInput'.
+src/workers/workers.service.ts(1370,17): error TS2353: Object literal may only specify known properties, and 'workerId' does not exist in type '(Without<AgentUpdateManyMutationInput, AgentUncheckedUpdateManyInput> & AgentUncheckedUpdateManyInput) | (Without<...> & AgentUpdateManyMutationInput)'.
+TSC_EXIT_QA_A=2
+⇒ 报错点名 workerId，且正是 AgentWhereInput / AgentUpdateManyMutationInput（列真没了）。
+  ⇒ 这是「删 schema 声明必须同一次提交里连带删这唯一写路径」的实证；也证明没有用 `(this.prisma as any)` 掩盖它。
+$ cp <备份> src/workers/workers.service.ts && grep -c "agent.updateMany" src/workers/workers.service.ts
+0
+
+--------------------------------------------------------------------------------
+6(b) 删了服务里的那行、但漏改 spec 的失效断言  → 该 remove() 用例必须转红
+--------------------------------------------------------------------------------
+$ python3 - <<'PY'      # 把 expect(prisma.agent.updateMany).toHaveBeenCalledWith({workerId:null}) 塞回 remove() 用例
+PY
+MUTATION (b) applied: stale agent.updateMany assertion restored
+$ npx jest src/workers/workers.service.spec.ts -t "remove"
+  ● WorkersService › remove（DELETE /workers/:id 删除离线 worker） › offline → 事务内清理全部关联后物理删除，返回 {id, deleted:true}
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: {"data": {"workerId": null}, "where": {"workerId": "w_0000000001"}}
+
+    Number of calls: 0
+
+      2077 |         data: { workerId: null, instanceRef: null },
+      2078 |       });
+    > 2079 |       expect(prisma.agent.updateMany).toHaveBeenCalledWith({
+         |                                       ^
+      2080 |         where: { workerId: 'w_0000000001' },
+      2081 |         data: { workerId: null },
+      2082 |       });
+
+      at Object.<anonymous> (workers/workers.service.spec.ts:2079:39)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 167 skipped, 4 passed, 172 total
+JEST_EXIT_QA_B=1
+⇒ 断言的红是被删调用真实触发的（0 次调用），不是环境问题；组内其余 4 例仍绿 ⇒ 精确归因。
+$ cp <备份> src/workers/workers.service.spec.ts && grep -c "agent.updateMany" src/workers/workers.service.spec.ts
+0
+⇒ 两次突变均已回滚（回滚件是从改动后状态取的备份，逐字节还原，不是手工重打）。
+
+================================================================================
+7. 最终态验证（全部在两次突变回滚之后重跑）
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1 remove() 用例组逐条（全部 5 条绿；计划点名的 4 处 :2053/:2086/:2099/:2127 均在内）
+--------------------------------------------------------------------------------
+$ npx jest src/workers/workers.service.spec.ts -t "remove（DELETE" --verbose
+    remove（DELETE /workers/:id 删除离线 worker）
+      ✓ offline → 事务内清理全部关联后物理删除，返回 {id, deleted:true} (5 ms)
+      ✓ online → 409 WORKER_ONLINE_NOT_REMOVABLE，不删除不清理
+      ✓ degraded → 409（仅 offline 可删）
+      ✓ worker 不存在 → 404 WORKER_NOT_FOUND
+      ✓ 删除成功同步清理 workerMcpStatus 与 pendingCommands 内存态 (1 ms)
+Test Suites: 1 passed, 1 total
+Tests:       167 skipped, 5 passed, 172 total
+EXIT=0
+
+--------------------------------------------------------------------------------
+7.2 tsc
+--------------------------------------------------------------------------------
+$ npx tsc --noEmit -p tsconfig.json
+TSC_EXIT=0
+
+--------------------------------------------------------------------------------
+7.3 jest（src/workers + src/agents）
+--------------------------------------------------------------------------------
+PASS src/agents/persona.constants.spec.ts (7.755 s)
+PASS src/workers/worker-token.guard.spec.ts (8.6 s)
+PASS src/workers/worker.client.spec.ts (8.896 s)
+PASS src/workers/worker-code-version.spec.ts
+PASS src/workers/worker-event.ingress.spec.ts
+PASS src/workers/worker-update-state.spec.ts
+PASS src/workers/session-lifecycle.spec.ts
+PASS src/workers/dto/worker-dto.spec.ts (9.954 s)
+PASS src/agents/agents.controller.spec.ts (10.222 s)
+PASS src/workers/worker-events.controller.spec.ts (10.213 s)
+PASS src/workers/workers.controller.spec.ts (10.234 s)
+PASS src/agents/agents.service.spec.ts (10.175 s)
+PASS src/workers/workers.service.spec.ts (10.415 s)
+Test Suites: 13 passed, 13 total
+Tests:       527 passed, 527 total
+Snapshots:   0 total
+Time:        11.23 s, estimated 31 s
+Ran all test suites matching /src\/workers|src\/agents/i.
+JEST_EXIT=0
+
+--------------------------------------------------------------------------------
+7.4 验收 grep（原始输出）
+--------------------------------------------------------------------------------
+$ grep -n "preferred_worker_id" server/prisma/schema.prisma
+96:  preferredWorkerId  String?  @map("preferred_worker_id")
+188:  preferredWorkerId String? @map("preferred_worker_id")
+$ grep -c 'preferred_worker_id' server/prisma/schema.prisma
+2                      ← 恰好 2（两处注释都只写中文「首选 worker」，未把该字面量写进注释）
+
+$ awk '/model Agent /,/^}/' server/prisma/schema.prisma | grep -c workerId
+0                      ← Agent 段零命中
+
+$ grep -c "agent.updateMany" server/src/workers/workers.service.ts
+0
+$ grep -c "team.updateMany\|teamMember.updateMany" server/src/workers/workers.service.ts
+2                      ← ≥2
+
+$ grep -rn "agent\.workerId\|agent\.updateMany\|agents\.workerId" server/src | grep -v worker-event.ingress
+（零命中）
+
+================================================================================
+8. dirty_worktree 收据
+================================================================================
+$ git log --oneline -1
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+
+$ git status --porcelain -- server/prisma/migrations | wc -l
+0                      ← 迁移目录零改动（DDL 是 Todo 7）
+$ ls -d server/prisma/migrations/*team_worker_node
+zsh:1: no matches found: server/prisma/migrations/*team_worker_node
+                      ← 新迁移目录尚不存在，属 Todo 7，本 todo 未创建
+
+本 todo 触碰的文件（相对开工快照新增的行）：
+  M server/prisma/schema.prisma
+  M server/src/workers/workers.service.ts        （其中 remove() 2 个 hunk 为本 todo；置顶调度 3 个 hunk 为 Todo 4 既有）
+  M server/src/workers/workers.service.spec.ts   （其中 mock 2 键 + remove 组为本 todo；置顶用例为 Todo 4 既有）
+  ?? .omo/evidence/task-6-team-worker-node.txt   （本文件，.omo/evidence 下本轮唯一新增）
+
+开工前即存在、本 todo 未碰的脏文件（保持原样，未 checkout / 未 stash）：
+  .omo/boulder.json, .omo/evidence/phase5-t9-playwright.json,
+  .omo/evidence/plan-review-execution-gates/task-9/probe.json,
+  .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json,
+  .omo/ulw-execute/ledger.jsonl,
+  docs/agent-platform/prototypes/agent-config/index.tsx,
+  docs/agent-platform/prototypes/agent-manage/index.tsx,
+  server/src/agents/agents.service.ts, agents.service.spec.ts, dto/update-agent.dto.ts,   ← Todo 2
+  server/src/platform-mcp/platform-mcp.service.ts, .controller.ts, .tools.ts,
+    platform-mcp.service.spec.ts, platform-mcp.controller.spec.ts,                          ← 受保护的 adopt/归属逻辑，未碰
+  server/src/workers/*（Todo 4 的置顶调度）
+  web/app/(main)/agents/page.tsx, web/e2e/reference/testids.ts,                            ← Todo 3
+  web/src/components/chat/msg-parts.tsx                                                    ← 受保护文件，未碰
+  .omo/drafts/team-worker-node.md, .omo/plans/team-worker-node.md, .omo/notepads/team-worker-node/,
+  .omo/evidence/task-{1,2,3,4}-team-worker-node.txt, .omo/evidence/verify-task-{1,2,3,4}-team-worker-node.txt
+
+并发观察（非本 todo 产物，仅记录）：执行期间工作区出现了
+  ?? .omo/evidence/task-receipt-fix-team-worker-node.txt （mtime 2026-10-14 11:50，内容为「Todo 14 证据回执更正」）
+  来自并行会话；本 todo 未读写该文件，.omo/evidence 下本轮只新增 task-6 一份。
+
+================================================================================
+9. cleanup 回执
+================================================================================
+  - 两处突变临时备份已删除：
+      /private/var/folders/.../T/opencode/t6-service.bak
+      /private/var/folders/.../T/opencode/t6-spec.bak
+    （回滚后复跑 tsc=0、jest src/workers src/agents=527 passed / 13 suites passed）
+  - 突变文件本身已从备份逐字节还原，事后 grep 双确认：
+      grep -c "agent.updateMany" server/src/workers/workers.service.ts      = 0
+      grep -c "agent.updateMany" server/src/workers/workers.service.spec.ts = 0
+  - 未新增任何依赖、未新增迁移目录、未新增 FK/索引、未保留影子列。
+  - 未使用 `(this.prisma as any)` 绕过任何类型错误（6(a) 的 TS2353 是硬证据）。
+  - 本 todo 未提交（HEAD 仍为 b6840d1c）；提交时机按计划由编排方在 F 波统一处理。
+
+================================================================================
+10. 交接给下游 todo 的依赖事实
+================================================================================
+  - Todo 5（dispatcher resolver）：现在可以合法写 `(this.prisma as any).teamMember.findFirst({ select: { preferredWorkerId: true } })`
+    这类取值；生成的类型已含该列（§5 的 TeamMemberCreateInput/TeamMemberWhereInput 检查为证）。
+    写 `this.prisma.teamMember.findFirst({ select: { preferredWorkerId: true } })` 仍会被 Prisma 泛型超集检查拒。
+  - Todo 7（DDL）：schema 已就位，尚未写迁移；`agents.worker_id` 的 DROP 列断言在 baseline :130。
+  - Todo 9：TeamMemberView 闭合类型需补 `preferredWorkerId?: string | null`，否则 tasks.service 读取报 TS2339。

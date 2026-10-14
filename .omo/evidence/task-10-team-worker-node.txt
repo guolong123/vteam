@@ -1,0 +1,184 @@
+TASK 10 — web 契约类型 + 团队详情页团队级控件（team-worker-node）
+repo: /Volumes/SSD-Data/01work/git-project/vteam
+HEAD (unchanged, no git write command issued): cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+
+============================================================
+1) FILES CHANGED (only these three + this evidence file)
+============================================================
+git diff --stat -- web/src/api/teams.ts web/src/components/tasks/task-detail-types.ts "web/app/(main)/teams/[id]/page.tsx"
+ web/app/(main)/teams/[id]/page.tsx            | 74 ++++++++++++++++++++++++++-
+ web/src/api/teams.ts                          |  6 +++
+ web/src/components/tasks/task-detail-types.ts |  2 +
+ 3 files changed, 81 insertions(+), 1 deletion(-)
+
+git status --porcelain | grep ' web/'          # M = modified in worktree
+ M web/app/(main)/agents/page.tsx              <- PRE-EXISTING dirty (earlier todo), NOT touched by this task
+ M web/app/(main)/teams/[id]/page.tsx          <- this task
+ M web/e2e/reference/testids.ts                <- PRE-EXISTING dirty (earlier todo), NOT touched by this task
+ M web/src/api/teams.ts                        <- this task
+ M web/src/components/chat/msg-parts.tsx       <- PRE-EXISTING dirty, NOT touched by this task
+ M web/src/components/tasks/task-detail-types.ts  <- this task
+
+Pre-dirty snapshot captured at session start (before any edit) already listed
+agents/page.tsx, testids.ts, msg-parts.tsx as ' M' — state before == state after for those
+paths; no edit-tool call or git command ever targeted them. HEAD still cb0ba6d (below),
+proving no add/commit/stash/checkout ran.
+
+============================================================
+2) VERIFICATION — raw output, literal exit codes (no pipes)
+============================================================
+$ cd web && npx tsc --noEmit; echo TSC_EXIT=$?
+TSC_EXIT=0
+
+$ cd web && npm run lint; echo LINT_EXIT=$?
+✖ 729 problems (0 errors, 729 warnings)
+LINT_EXIT=0
+(warnings are all pre-existing in unrelated files; zero warnings in the three
+files touched here — verified:)
+$ grep -n "teams/\[id\]/page.tsx\|api/teams.ts\|task-detail-types.ts" <lint-output-file>
+GREP_MYFILES_EXIT=1     # exit 1 = no match = none of my files produced any lint finding
+
+$ cd web && npm run build 2>&1 | tail -25; echo BUILD_EXIT=${pipestatus[1]}
+├ ƒ /teams/[id]                          7.84 kB         180 kB
+├ ƒ /teams/[id]/session                  45.5 kB         404 kB
+├ ƒ /teams/[id]/tasks                    4.33 kB         183 kB
+└ ○ /workers/install                     8.03 kB         112 kB
++ First Load JS shared by all             104 kB
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+BUILD_EXIT=0
+(The BUILD was NOT skipped — it ran to completion; /teams/[id] route compiled.)
+
+$ grep -n "team-worker-select" "web/app/(main)/teams/[id]/page.tsx"; echo "EXIT1=$?"
+347:            data-testid="team-worker-select"
+EXIT1=0
+
+$ grep -n preferredWorkerId web/src/api/teams.ts
+20:  preferredWorkerId?: string | null;
+55:  preferredWorkerId?: string | null;
+87:  preferredWorkerId?: string | null;
+$ grep -c preferredWorkerId web/src/api/teams.ts
+3
+(line 20 = TeamMemberDto, 55 = TeamDto, 87 = UpdateTeamPayload — 3 occurrences as required)
+
+$ grep -n preferredWorkerId web/src/components/tasks/task-detail-types.ts
+139:  preferredWorkerId?: string | null;
+
+$ git log --oneline -1
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+
+============================================================
+3) STATIC CONTRACT ASSERTION (grep-based round-trip acceptance)
+============================================================
+Baseline (real file as delivered):
+$ zsh t10-assert.sh; echo BASELINE_EXIT=$?
+PASS  select testid present
+PASS  first option value is empty
+PASS  aria-label present
+PASS  controlled value from team DTO
+PASS  write-through uses null coalesce
+PASS  handler invalidates team cache
+PASS  workers query reuses cache key
+PASS  dangling-id placeholder renders
+PASS  label text
+PASS  hint text
+ASSERTION_RESULT=PASS
+BASELINE_EXIT=0
+
+============================================================
+4) MANUAL QA CHANNEL
+============================================================
+HAPPY PATH (rendered-DOM assertion): NOT PERFORMED — live stack unavailable.
+Evidence for unavailability:
+  $ lsof -nP -iTCP:3001 -sTCP:LISTEN   -> node .../T/opencode/pw-bridge/bridge.js
+  (the only :3001 listener is the opencode Playwright bridge, NOT the web app)
+  $ curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3001/   -> 000 (exit 7, refused)
+No web app (:3000) or API backend is running, so the success branch of the page
+(fetch /teams/:id -> team data -> render select) cannot be reached in this environment.
+Substitute evidence captured instead (labelled STATIC, not real-surface):
+  (a) the rendered JSX region of the control, verbatim with line numbers:
+      344:        <div data-testid="team-worker-section" style={{ display: "flex", alignItems: "center", gap: space.md, paddingTop: space.md, borderTop: `1px dashed ${neutral[200]}` }}>
+      345:          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], whiteSpace: "nowrap" }}>首选 Worker 节点</span>
+      346:          <select
+      347:            data-testid="team-worker-select"
+      348:            value={team.preferredWorkerId ?? ""}
+      349:            disabled={patchMutation.isPending}
+      350:            onChange={(e) => handleSetPreferredWorker(e.target.value)}
+      351:            aria-label="团队首选 Worker（未选则自动调度）"
+      352-362:          style={{ fontFamily/fontSize/color/border/radius/padding/minWidth 220 }}
+      363:          >
+      364:            <option value="">自动调度（默认）</option>
+      365:            {danglingWorkerId && <option value={danglingWorkerId}>{danglingWorkerId}</option>}
+      366:            {sortedWorkers.map((w) => (
+      367:              <option key={w.id} value={w.id}>
+      368:                {w.name ?? w.id} · {w.status !== "offline" ? "在线" : "离线"}
+      371:          </select>
+      372-374:        <span ...>未选则自动调度到任意可用节点；成员可在会话页覆盖</span>
+  (b) tsc/lint/build evidence (section 2) proving the JSX compiles and typechecks;
+  (c) the grep-based assertion in section 3 (testid present, first option label
+      「自动调度（默认）」 present with value="").
+
+FAILURE PATH (mutation check) — REAL, executed on the actual file:
+  Step 1: temporarily changed the first option to a non-empty value:
+      <option value="__qa_probe__">自动调度（默认）</option>
+  Step 2: ran the same round-trip assertion:
+$ zsh t10-assert.sh; echo MUTATED_EXIT=$?
+PASS  select testid present
+FAIL  first option value is empty (missing: <option value="">自动调度（默认）</option>)
+PASS  aria-label present
+PASS  controlled value from team DTO
+PASS  write-through uses null coalesce
+PASS  handler invalidates team cache
+PASS  workers query reuses cache key
+PASS  dangling-id placeholder renders
+PASS  label text
+PASS  hint text
+FAIL  probe contamination: value="__qa_probe__" still present
+ASSERTION_RESULT=FAIL
+MUTATED_EXIT=1
+  => the detection channel works: a non-empty first-option value is caught and
+     the assertion exits 1.
+
+  Step 3: revert + re-verify:
+$ zsh t10-assert.sh; echo REVERTED_EXIT=$?
+... (all 10 PASS) ...
+ASSERTION_RESULT=PASS
+REVERTED_EXIT=0
+$ grep -c "__qa_probe__" "web/app/(main)/teams/[id]/page.tsx"
+0
+$ cd web && npx tsc --noEmit; echo TSC_AFTER_REVERT=$?
+TSC_AFTER_REVERT=0
+No probe residue remains; the delivered file is byte-identical to the passing baseline.
+
+QA honesty statement: the section-4 happy-path DOM assertion is STATIC-only
+(no live web/API stack); the section-4 failure-path mutation check is REAL
+(executed and reverted on the actual file). Sections 2-3 are real raw outputs.
+
+============================================================
+5) IMPLEMENTATION NOTES
+============================================================
+- Web contract: preferredWorkerId?: string | null added to TeamDto, UpdateTeamPayload,
+  TeamMemberDto (web/src/api/teams.ts) and MemberView
+  (web/src/components/tasks/task-detail-types.ts:129-140). Matches the server DTO
+  already shipped by todos 8/9 (server/src/teams/dto/update-team.dto.ts:53,
+  add-member.dto.ts:76).
+- patchMutation inline payload type (page.tsx:167-169) widened with
+  preferredWorkerId?: string | null — required or mutateAsync({ preferredWorkerId })
+  would not typecheck (verify: TSC_EXIT=0).
+- Data source reuses the EXISTING queryKey ["workers"] + GET /workers (page.tsx:115-119).
+  No new fetch shape. The agents page's workers query (load-bearing for the restart
+  feature) was NOT touched.
+- Sorting convention copied verbatim from the repo convention
+  (web/app/(main)/models/providers-tab.tsx:454-458 / removed agents-page block, seen in
+  `git diff -- web/app/(main)/agents/page.tsx`): online-first, then display name via
+  localeCompare. Option label: `{w.name ?? w.id} · {在线/离线}`.
+- Dangling-id handling: teams whose preferredWorkerId is absent from the workers list
+  (deleted node) render an extra option valued with the raw id and labelled with the
+  raw id (page.tsx:365), so the select neither crashes nor silently shows auto-schedule.
+- No new page/tab/nav entry; native <select> only (no third-party Select component);
+  no i18n framework; theme tokens (neutral/space/radius/fontSize/fontFamily) reused.
+- web/AGENTS.md Next.js docs stance: node_modules/next/dist/docs does not exist in this
+  installation (verified: `ls web/node_modules/next/dist/docs` -> No such file or directory),
+  so there were no guide pages to read; the change is a client-component JSX/edit
+  following in-file conventions (the same file already renders a native <select> at the
+  add-member panel), and `npm run build` compiled the route successfully.

@@ -1,0 +1,1122 @@
+Todo 16 — 修复本计划引入的 6 处 prettier lint 错误 + lint 基线与前后对照
+================================================================================
+仓库: /Volumes/SSD-Data/01work/git-project/vteam
+任务: Todo 16（.omo/plans/team-worker-node.md:314-326）。只修本计划引入的 6 处
+      prettier/prettier 错误；不动任何既存债、不动任何非本计划文件、不提交。
+本文所有输出均为原始命令输出与字面退出码。退出码一律不用管道捕获（zsh 下
+PIPESTATUS 是 bash-ism）。结论先行：修前 99 → 修后 93（恰好 −6，全是本计划
+文件里的 6 处）；既存 93 处**一条未动**，server lint:check 修后仍然 LINT=1
+（仍然红）。本 todo 对消除既存 lint 债的贡献为 0——只消除了本计划自己引入的 6 处。
+
+================================================================================
+0. 开工状态
+================================================================================
+$ git log --oneline -1
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+$ git rev-parse HEAD
+cb0ba6d1ab16571c0c979e41e40951000819f1c7
+
+$ git status --porcelain | wc -l
+73
+（本 todo 完成时为 74：唯一新增即本证据文件；34 个 M + 39 个 ?? 的构成未变，
+ 其中 server/src/chat/worker-dispatcher.spec.ts 本就为 M（本计划修改），
+ server/src/prisma/team-worker-node.migration.spec.ts 本就为 ??（Todo 7 新建、
+ 从未提交、从未 prettier 格式化）。本 todo 未执行任何 git 写命令；
+ base sha 的 lint 数据通过 detached worktree 取得，用完即删，见 §2。）
+
+================================================================================
+1. 修前基线证据：当前工作区 cd server && npm run lint:check
+================================================================================
+$ cd server && npm run lint:check; echo LINT=$?
+（原始输出已存于日志，此处粘全文；行末为字面退出码）
+
+> server@0.0.1 lint:check
+> eslint "{src,apps,libs,test}/**/*.ts"
+
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/agent-roles.service.ts
+  6:3  warning  'Logger' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.controller.spec.ts
+  202:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  203:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  216:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  217:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.service.ts
+  348:15  warning  'updated' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/chat.service.spec.ts
+  2201:13  warning  'result' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/message-parts.ts
+  49:25  error  Insert `⏎·····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.plan-hash.spec.ts
+  7:10  warning  'PlanLifecycleService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.spec.ts
+    11:10  warning  'ArtifactsService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                @typescript-eslint/no-unused-vars
+    24:10  warning  'SessionLifecycleService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                         @typescript-eslint/no-unused-vars
+    26:3   warning  'WorkerClient' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                    @typescript-eslint/no-unused-vars
+    29:10  warning  'WorkerEventIngress' is defined but never used. Allowed unused vars must match /^_/u                                                                                                              @typescript-eslint/no-unused-vars
+    30:10  warning  'WorkersService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                  @typescript-eslint/no-unused-vars
+  3442:46  error    Insert `⏎···········`                                                                                                                                                                             prettier/prettier
+  3572:15  error    Insert `⏎·········`                                                                                                                                                                               prettier/prettier
+  3575:24  error    Replace `updateCall![0]·as·{·data:·{·content:·{·text:·string;·parts:·unknown[]·}·}·}).data` with `⏎········updateCall![0]·as·{⏎··········data:·{·content:·{·text:·string;·parts:·unknown[]·}·};`  prettier/prettier
+  3576:9   error    Insert `}⏎······).data`                                                                                                                                                                           prettier/prettier
+  4471:34  error    Replace `⏎············p:·typeof·params,⏎············m:·unknown[],⏎··········` with `p:·typeof·params,·m:·unknown[]`                                                                               prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.ts
+    16:3   warning  'WecomAibotAdapter' is defined but never used. Allowed unused vars must match /^_/u                                                                                                               @typescript-eslint/no-unused-vars
+   170:16  error    Replace `⏎····typeof·raw·===·'object'·&&·raw·!==·null·?·raw·:·{}⏎··)·as·Record<string,·unknown` with `typeof·raw·===·'object'·&&·raw·!==·null·?·raw·:·{})·as·Record<⏎····string,⏎····unknown⏎··`  prettier/prettier
+  2484:23  error    Replace `·text:·prompt,·parts:·prevParts` with `⏎··············text:·prompt,⏎··············parts:·prevParts,⏎···········`                                                                         prettier/prettier
+  3266:25  error    Replace `'[usage]·本宿主未接入·modelUsage·delegate，跳过用量记账'` with `⏎········'[usage]·本宿主未接入·modelUsage·delegate，跳过用量记账',⏎······`                                                                         prettier/prettier
+  3275:59  error    Replace `·?·payload.taskId` with `⏎········?·payload.taskId⏎·······`                                                                                                                              prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/docs-site.controller.spec.ts
+  3:10  warning  'PrismaService' is defined but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+  4:10  warning  'PrototypesService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/prototypes.service.spec.ts
+   47:9   warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  147:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  295:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.controller.spec.ts
+  40:9  warning  'REQUIRED_BASH_DENY' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.custom-agents.spec.ts
+    7:3   warning  'ROLE_POLICY_DENY_TEMPLATE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  120:17  warning  'granted' is assigned a value but never used. Allowed unused vars must match /^_/u           @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.matrix.spec.ts
+    7:3   warning  'ROLE_BASH_DENY_PATTERNS' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  153:15  warning  'granted' is assigned a value but never used. Allowed unused vars must match /^_/u         @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-credentials.service.ts
+  121:5  warning  'userId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-repos.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  4:3  warning  'NotFoundException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/dto/query-issues.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/issues.service.spec.ts
+  893:19  warning  'action' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/mcp-servers/mcp-servers.service.spec.ts
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memories.controller.spec.ts
+   32:15  error  Replace `·team:·{·findUnique:·jest.fn().mockResolvedValue({·id:·'tm_1'·})·}` with `⏎······team:·{·findUnique:·jest.fn().mockResolvedValue({·id:·'tm_1'·})·},⏎···`                                                                                                         prettier/prettier
+  173:20  error  Replace `controller.maintain({·teamId:·'tm_nope'·})).rejects.toMatchObject(⏎········{·response:·{·code:·'TEAM_NOT_FOUND'·}·},⏎······` with `⏎········controller.maintain({·teamId:·'tm_nope'·}),⏎······).rejects.toMatchObject({·response:·{·code:·'TEAM_NOT_FOUND'·}·}`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memories.service.spec.ts
+  197:29  error  Replace `{·level:·'role',·roleId:·'ar_1'·},·{·id:·'u_admin'·}` with `⏎········{·level:·'role',·roleId:·'ar_1'·},⏎········{·id:·'u_admin'·},⏎······`  prettier/prettier
+  260:41  error  Replace `{·keyword:·'token'·},·{·id:·'u_admin'·}` with `⏎········{·keyword:·'token'·},⏎········{·id:·'u_admin'·},⏎······`                            prettier/prettier
+  694:46  error  Replace `⏎········archivedRow({·deletedAt:·null·}),⏎······` with `archivedRow({·deletedAt:·null·})`                                                  prettier/prettier
+  719:50  error  Replace `archivedRow({·deletedAt:·null·})` with `⏎········archivedRow({·deletedAt:·null·}),⏎······`                                                  prettier/prettier
+  817:34  error  Replace `·where:·expect.objectContaining({·deletedAt:·null·})` with `⏎··········where:·expect.objectContaining({·deletedAt:·null·}),⏎·······`        prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memories.service.ts
+   91:34  error  Replace `·?·[]` with `⏎······?·[]⏎·····`                                                                                                                                                                   prettier/prettier
+   94:34  error  Replace `·?·{·deletedAt:·{·not:·null·}·}` with `⏎········?·{·deletedAt:·{·not:·null·}·}⏎·······`                                                                                                           prettier/prettier
+  177:18  error  Insert `⏎·····`                                                                                                                                                                                            prettier/prettier
+  178:1   error  Insert `··`                                                                                                                                                                                                prettier/prettier
+  179:1   error  Insert `··`                                                                                                                                                                                                prettier/prettier
+  230:16  error  Replace `·id:·string;·level:·string;·teamId:·string·|·null;·contentHash:·string·|·null` with `⏎······id:·string;⏎······level:·string;⏎······teamId:·string·|·null;⏎······contentHash:·string·|·null;⏎···`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memory-importance.spec.ts
+  149:18  error  Replace `id:·string,·refCount:·number,·ageDays:·number,·lastUsedAt?:·Date·|·null` with `⏎····id:·string,⏎····refCount:·number,⏎····ageDays:·number,⏎····lastUsedAt?:·Date·|·null,⏎··`  prettier/prettier
+  186:19  error  Replace `⏎······named('a',·0,·2),⏎······named('b',·1,·2),⏎······named('c',·2,·2),⏎····` with `named('a',·0,·2),·named('b',·1,·2),·named('c',·2,·2)`                                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memory-maintenance.service.spec.ts
+   71:21  error  Replace `⏎········where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·};⏎·····` with `·where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·}`                                                                                         prettier/prettier
+  410:23  error  Replace `·where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·}` with `⏎··········where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·};⏎·······`                                                                                     prettier/prettier
+  436:49  error  Replace `·mainAgentMemberId:·'tmm_main'` with `⏎········mainAgentMemberId:·'tmm_main',⏎·····`                                                                                                                                     prettier/prettier
+  485:14  error  Replace `prisma.memory.findMany.mock.calls[1][0].where.createdAt.gt).toEqual(⏎········rows[19].createdAt,⏎······` with `⏎········prisma.memory.findMany.mock.calls[1][0].where.createdAt.gt,⏎······).toEqual(rows[19].createdAt`  prettier/prettier
+  513:32  error  Replace ``建于=${new·Date(Date.now()·-·DAY).toISOString().slice(0,·10)}`` with `⏎········`建于=${new·Date(Date.now()·-·DAY).toISOString().slice(0,·10)}`,⏎······`                                                                     prettier/prettier
+  589:42  error  Replace `'【记忆整理】发现·2·条新记忆，已派发整理'` with `⏎········'【记忆整理】发现·2·条新记忆，已派发整理',⏎······`                                                                                                                                                 prettier/prettier
+  630:23  error  Insert `⏎········`                                                                                                                                                                                                                prettier/prettier
+  631:9   error  Insert `··`                                                                                                                                                                                                                       prettier/prettier
+  632:7   error  Replace `}` with `··}⏎······`                                                                                                                                                                                                     prettier/prettier
+  696:40  error  Replace `⏎········expect.stringContaining('scope=tm_1'),⏎······` with `expect.stringContaining('scope=tm_1')`                                                                                                                     prettier/prettier
+  794:23  error  Replace `{·teamId:·'tm_1'·},·{·teamId:·'tm_2'·},·{·teamId:·'tm_3'·}` with `⏎······{·teamId:·'tm_1'·},⏎······{·teamId:·'tm_2'·},⏎······{·teamId:·'tm_3'·},⏎····`                                                                   prettier/prettier
+  881:14  error  Replace `⏎··········args.where.createdAt·?·[]·:·[newRow(`me_${args.where.teamId}`)]` with `·(args.where.createdAt·?·[]·:·[newRow(`me_${args.where.teamId}`)])`                                                                    prettier/prettier
+  916:4   error  Insert `⏎`                                                                                                                                                                                                                        prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memory-maintenance.service.ts
+  335:30  error  Replace `⏎······?·await·this.lastRunResult(teamId,·cursor)⏎·····` with `·?·await·this.lastRunResult(teamId,·cursor)`  prettier/prettier
+  582:2   error  Insert `⏎`                                                                                                            prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memory-state.ts
+  56:2  error  Insert `⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/message-channels/adapters/wecom-aibot.adapter.ts
+  521:11  warning  'maybeAny' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/message-channels/message-registry.service.spec.ts
+    9:23  error  Replace `.fn()` with `⏎········.fn()⏎········`                                                             prettier/prettier
+   10:9   error  Insert `··`                                                                                                prettier/prettier
+   11:1   error  Insert `··`                                                                                                prettier/prettier
+   38:44  error  Replace `·id:·channelId,·type:·'wecom_aibot'` with `⏎······id:·channelId,⏎······type:·'wecom_aibot',⏎···`  prettier/prettier
+   54:44  error  Replace `·id:·channelId,·type:·'wecom_aibot'` with `⏎······id:·channelId,⏎······type:·'wecom_aibot',⏎···`  prettier/prettier
+  105:44  error  Replace `·id:·channelId,·type:·'wecom_aibot'` with `⏎······id:·channelId,⏎······type:·'wecom_aibot',⏎···`  prettier/prettier
+  111:4   error  Insert `⏎`                                                                                                 prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/models/dto/set-model-credential.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/notifications/notification-channels.controller.ts
+  408:14  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.controller.spec.ts
+  190:31  warning  'args' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.gate.spec.ts
+  3:3  warning  'EVENT_TYPES' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  5:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+  4:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.spec.ts
+   170:7   warning  'plansService' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                                     @typescript-eslint/no-unused-vars
+   178:9   warning  'allowPolicy' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                                      @typescript-eslint/no-unused-vars
+  5089:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5100:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5111:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5169:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5185:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5323:15  error    Replace `·where,·data·}:·{·where:·{·id:·string·};·data:·{·deletedAt?:·Date·}` with `⏎··············where,⏎··············data,⏎············}:·{⏎··············where:·{·id:·string·};⏎··············data:·{·deletedAt?:·Date·};⏎···········`  prettier/prettier
+  5447:29  error    Insert `⏎···········`                                                                                                                                                                                                                       prettier/prettier
+  5497:24  error    Replace `service.memoryMerge(ctx,·mergeArgs)).rejects.toBeInstanceOf(⏎············NotFoundException,⏎··········` with `⏎············service.memoryMerge(ctx,·mergeArgs),⏎··········).rejects.toBeInstanceOf(NotFoundException`              prettier/prettier
+  5721:53  error    Insert `⏎············`                                                                                                                                                                                                                      prettier/prettier
+  5722:1   error    Replace `············Promise.resolve([...db.values()].filter((r)·=>·!r.deletedAt)` with `··············Promise.resolve(⏎················[...db.values()].filter((r)·=>·!r.deletedAt),⏎··············`                                       prettier/prettier
+  5731:23  error    Replace `·id?:·string·|·{·in:·string[]·};·deletedAt?:·Date·|·null` with `⏎················id?:·string·|·{·in:·string[]·};⏎················deletedAt?:·Date·|·null;⏎·············`                                                           prettier/prettier
+  5734:48  error    Insert `⏎···············`                                                                                                                                                                                                                   prettier/prettier
+  8834:48  error    Replace `'请显式传·teamId·与·selfInstanceId'` with `⏎········'请显式传·teamId·与·selfInstanceId',⏎······`                                                                                                                                             prettier/prettier
+  8835:47  error    Replace `'发送失败:·当前团队未绑定企业微信渠道'` with `⏎········'发送失败:·当前团队未绑定企业微信渠道',⏎······`                                                                                                                                                               prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.ts
+    92:3   warning  'containsTeamWideMention' is defined but never used. Allowed unused vars must match /^_/u                                        @typescript-eslint/no-unused-vars
+  4318:54  error    Replace `·where:·{·id:·memoryId·}` with `⏎······where:·{·id:·memoryId·},⏎···`                                                    prettier/prettier
+  6624:44  error    Insert `⏎·········`                                                                                                              prettier/prettier
+  7494:40  error    Replace `ctx,·effectiveSession,·args.selfInstanceId` with `⏎······ctx,⏎······effectiveSession,⏎······args.selfInstanceId,⏎····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.tools.ts
+    56:7   warning  'REQUIRE_TASK_OR_TEAM_MSG' is assigned a value but never used. Allowed unused vars must match /^_/u                                            @typescript-eslint/no-unused-vars
+   453:17  error    Replace `'level=role·时的目标岗位·id（ar_·前缀），必须已存在；level·非·role·时忽略'` with `⏎········'level=role·时的目标岗位·id（ar_·前缀），必须已存在；level·非·role·时忽略',⏎······`  prettier/prettier
+   518:14  error    Replace `.string()` with `⏎····.string()⏎····`                                                                                                 prettier/prettier
+  1166:30  error    Delete `⏎·······`                                                                                                                              prettier/prettier
+  1182:30  error    Delete `⏎·······`                                                                                                                              prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/memory-search-to-list.migration.spec.ts
+  159:35  error  Replace `⏎··········p.column·===·'name'·?·OLD_TOOL·:·OLD_ACTION,⏎········` with `p.column·===·'name'·?·OLD_TOOL·:·OLD_ACTION`                                                          prettier/prettier
+  172:22  error  Insert `⏎·······`                                                                                                                                                                      prettier/prettier
+  173:1   error  Replace `········` with `··········`                                                                                                                                                   prettier/prettier
+  174:1   error  Insert `··`                                                                                                                                                                            prettier/prettier
+  184:25  error  Replace `·/JSON_REMOVE\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'/.exec(⏎········body,⏎······` with `⏎········/JSON_REMOVE\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'/.exec(body`    prettier/prettier
+  191:8   error  Replace `"两条语句都只碰·`$.tools.<tool>`·路径，不碰·permission/correction"` with `'两条语句都只碰·`$.tools.<tool>`·路径，不碰·permission/correction'`                                                         prettier/prettier
+  208:8   error  Replace `"两条语句都以旧键在场为守卫·⇒·无·tools·对象/旧键的行零写入（绝不凭空建键）"` with `'两条语句都以旧键在场为守卫·⇒·无·tools·对象/旧键的行零写入（绝不凭空建键）'`                                                                             prettier/prettier
+  222:15  error  Insert `⏎·········`                                                                                                                                                                    prettier/prettier
+  231:15  error  Insert `⏎·········`                                                                                                                                                                    prettier/prettier
+  243:34  error  Replace `/^UPDATE\s+`execution_policies`\s+SET[\s\S]*WHERE\s+JSON_CONTAINS_PATH/` with `⏎··········/^UPDATE\s+`execution_policies`\s+SET[\s\S]*WHERE\s+JSON_CONTAINS_PATH/,⏎········`  prettier/prettier
+  299:22  error  Delete `⏎·········`                                                                                                                                                                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/model-usage.migration.spec.ts
+   72:24  error  Replace ``CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`).exec(⏎····sql(),⏎··` with `⏎····`CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`,⏎··).exec(sql()`               prettier/prettier
+   76:18  error  Replace `⏎····[...m[1].matchAll(/^\s*`(\w+)`\s+/gm)].map((x)·=>·x[1]),⏎··` with `[...m[1].matchAll(/^\s*`(\w+)`\s+/gm)].map((x)·=>·x[1])`                                                    prettier/prettier
+   83:24  error  Replace ``CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`).exec(⏎····sql(),⏎··` with `⏎····`CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`,⏎··).exec(sql()`               prettier/prettier
+   87:18  error  Replace `⏎····[...m[1].matchAll(/^\s*KEY·`(\w+)`\s*\(/gm)].map((x)·=>·x[1]),⏎··` with `[...m[1].matchAll(/^\s*KEY·`(\w+)`\s*\(/gm)].map((x)·=>·x[1])`                                        prettier/prettier
+  232:24  error  Replace `'Team',·'Session',·'ChatChannel',·'TeamMember',·'Task',·'Agent'` with `⏎······'Team',⏎······'Session',⏎······'ChatChannel',⏎······'TeamMember',⏎······'Task',⏎······'Agent',⏎····`  prettier/prettier
+  278:4   error  Insert `⏎`                                                                                                                                                                                   prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts
+   284:45  error    Replace `⏎········[...VTEAM_MCP_TOOL_NAMES].sort(),⏎······` with `[...VTEAM_MCP_TOOL_NAMES].sort()`  prettier/prettier
+  1576:16  warning  A `require()` style import is forbidden                                                              @typescript-eslint/no-require-imports
+  1577:18  warning  A `require()` style import is forbidden                                                              @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/team-worker-node.migration.spec.ts
+   66:37  error  Replace `__dirname,·'..',·'..',·'prisma',·'migrations'` with `⏎··__dirname,⏎··'..',⏎··'..',⏎··'prisma',⏎··'migrations',⏎`  prettier/prettier
+  105:67  error  Replace `baselineSql()` with `⏎····baselineSql(),⏎··`                                                                      prettier/prettier
+  153:40  error  Replace `⏎······/ADD·COLUMN·`preferred_worker_id`/g,⏎····` with `/ADD·COLUMN·`preferred_worker_id`/g`                      prettier/prettier
+  217:46  error  Replace `'CONSTRAINT·`agents_base_agent_id_fkey`'` with `⏎······'CONSTRAINT·`agents_base_agent_id_fkey`',⏎····`            prettier/prettier
+  260:40  error  Insert `⏎·······`                                                                                                          prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/worker-code-version.migration.spec.ts
+  174:4  error  Insert `⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/questions/questions.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/bind-message-channels.dto.ts
+  5:3  warning  'IsNotEmpty' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+  6:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  7:3  warning  'IsOptional' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/update-team.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/task-progression.scheduler.ts
+  8:3  warning  'forwardRef' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/tasks.service.spec.ts
+   19:10  warning  'sanitizeWorkDirName' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  320:9   warning  'mockCreateTx' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  493:11  warning  'sCounter' is assigned a value but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/dto/create-team.dto.ts
+  4:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.spec.ts
+  616:13  warning  'callArgs' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.ts
+  109:11  warning  'team' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook-failure.listener.spec.ts
+  2:10  warning  'Prisma' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook.service.ts
+  1277:7  warning  'TRIGGER_ID_PREFIX_VALUE' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/usage/usage.service.spec.ts
+  417:10  error  Replace `·id:·'tmb_a',·alias:·'测试-1',·agent:·{·name:·'开发者'·},·role:·{·name:·'开发'·}` with `⏎··········id:·'tmb_a',⏎··········alias:·'测试-1',⏎··········agent:·{·name:·'开发者'·},⏎··········role:·{·name:·'开发'·},⏎·······`  prettier/prettier
+  418:10  error  Replace `·id:·'tmb_b',·alias:·'测试-2',·agent:·{·name:·'开发者'·},·role:·{·name:·'开发'·}` with `⏎··········id:·'tmb_b',⏎··········alias:·'测试-2',⏎··········agent:·{·name:·'开发者'·},⏎··········role:·{·name:·'开发'·},⏎·······`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/users/admin-permission.ts
+  23:36  error  Replace `permissions:·AdminPermissionPayload` with `⏎··permissions:·AdminPermissionPayload,⏎`                                                                                              prettier/prettier
+  41:8   error  Replace `·enabled:·boolean;·role?:·{·permissions:·AdminPermissionPayload·}·|·null` with `⏎········enabled:·boolean;⏎········role?:·{·permissions:·AdminPermissionPayload·}·|·null;⏎·····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/dto/worker-dto.spec.ts
+  336:15  warning  'capabilities' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  341:15  warning  'load' is assigned a value but never used. Allowed unused vars must match /^_/u          @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-code-version.spec.ts
+  76:4  error  Insert `⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-code-version.ts
+  46:2  error  Insert `⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-event.ingress.ts
+    18:3  warning  'extractConclusionParts' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   146:6  warning  'ActivityCallback' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  1091:5  warning  'taskId' is defined but never used. Allowed unused args must match /^_/u                  @typescript-eslint/no-unused-vars
+  1092:5  warning  'agentId' is defined but never used. Allowed unused args must match /^_/u                 @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-or-jwt.guard.ts
+  10:10  warning  'Request' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-token.guard.spec.ts
+  2:10  warning  'ConfigService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker.client.ts
+  297:5  warning  'model' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/workers.service.spec.ts
+  914:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 167 problems (99 errors, 68 warnings)
+  99 errors and 0 warnings potentially fixable with the `--fix` option.
+
+LINT=1
+
+汇总行（原始）：✖ 167 problems (99 errors, 68 warnings)
+             99 errors and 0 warnings potentially fixable with the `--fix` option.
+→ 修前错误总数 = 99，退出码 1。
+
+修前 per-file error 计数（由上面原始报告按 file header 逐条累计，仅统计
+  形如 "  行:列  error  ...  prettier/prettier" 的行）：
+14 platform-mcp/platform-mcp.service.spec.ts
+13 memories/memory-maintenance.service.spec.ts
+11 prisma/memory-search-to-list.migration.spec.ts
+7 message-channels/message-registry.service.spec.ts
+6 prisma/model-usage.migration.spec.ts
+6 memories/memories.service.ts
+5 prisma/team-worker-node.migration.spec.ts
+5 memories/memories.service.spec.ts
+5 chat/worker-dispatcher.spec.ts
+4 platform-mcp/platform-mcp.tools.ts
+4 chat/worker-dispatcher.ts
+3 platform-mcp/platform-mcp.service.ts
+2 users/admin-permission.ts
+2 usage/usage.service.spec.ts
+2 memories/memory-maintenance.service.ts
+2 memories/memory-importance.spec.ts
+2 memories/memories.controller.spec.ts
+1 workers/worker-code-version.ts
+1 workers/worker-code-version.spec.ts
+1 prisma/worker-code-version.migration.spec.ts
+1 prisma/seed.spec.ts
+1 memories/memory-state.ts
+1 chat/message-parts.ts
+  合计（严格行匹配）= 99（与汇总行 99 一致）
+
+本计划两文件的修前命中（原始）：
+  server/src/prisma/team-worker-node.migration.spec.ts — 5 处：
+    66:37 / 105:67 / 153:40 / 217:46 / 260:40（均 prettier/prettier 折行）
+  server/src/chat/worker-dispatcher.spec.ts — 5 处：
+    3442:46（本计划 T5 新增 fail-open 用例的 CJK 折行超宽——本 todo 唯一该修的）
+    3572:15 / 3575:24 / 3576:9 / 4471:34（既有 4 处，属 pre-existing，
+      T13 §6 已归因：均落在本计划 hunk 区间 2245-2403/3873-3930 之外。
+
+================================================================================
+2. base-sha 基线的取数方法与实测（含与任务前提「93」的对账）
+================================================================================
+取数方法（未在主检出执行任何 checkout/stash）：
+  TMP=/private/var/folders/0y/.../T/opencode/t16-base-wt
+  git worktree add --detach "$TMP" b6840d1c            # 计划开工 base sha
+  ln -s .../vteam/server/node_modules "$TMP/server/node_modules"  # 让 eslint/prettier 可解析
+  cd "$TMP/server" && npm run lint:check; echo LINT=$?
+  （worktree 只读使用，测完 git worktree remove --force + prune，见 §7）
+
+$ git worktree add --detach <tmp> b6840d1c   → HEAD is now at b6840d1c
+$ cd <tmp>/server && npm run lint:check; echo LINT=$?   （原始输出）
+
+> server@0.0.1 lint:check
+> eslint "{src,apps,libs,test}/**/*.ts"
+
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/agent-roles/agent-roles.service.ts
+  6:3  warning  'Logger' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/agents/agents.controller.spec.ts
+  202:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  203:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  216:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  217:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/agents/agents.service.ts
+  349:15  warning  'updated' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/chat/chat.service.spec.ts
+  2201:13  warning  'result' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/chat/message-parts.ts
+  49:25  error  Insert `⏎·····`  prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/chat/worker-dispatcher.plan-hash.spec.ts
+  7:10  warning  'PlanLifecycleService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/chat/worker-dispatcher.spec.ts
+    11:10  warning  'ArtifactsService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                @typescript-eslint/no-unused-vars
+    24:10  warning  'SessionLifecycleService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                         @typescript-eslint/no-unused-vars
+    26:3   warning  'WorkerClient' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                    @typescript-eslint/no-unused-vars
+    29:10  warning  'WorkerEventIngress' is defined but never used. Allowed unused vars must match /^_/u                                                                                                              @typescript-eslint/no-unused-vars
+    30:10  warning  'WorkersService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                  @typescript-eslint/no-unused-vars
+  3362:15  error    Insert `⏎·········`                                                                                                                                                                               prettier/prettier
+  3365:24  error    Replace `updateCall![0]·as·{·data:·{·content:·{·text:·string;·parts:·unknown[]·}·}·}).data` with `⏎········updateCall![0]·as·{⏎··········data:·{·content:·{·text:·string;·parts:·unknown[]·}·};`  prettier/prettier
+  3366:9   error    Insert `}⏎······).data`                                                                                                                                                                           prettier/prettier
+  4261:34  error    Replace `⏎············p:·typeof·params,⏎············m:·unknown[],⏎··········` with `p:·typeof·params,·m:·unknown[]`                                                                               prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/chat/worker-dispatcher.ts
+    16:3   warning  'WecomAibotAdapter' is defined but never used. Allowed unused vars must match /^_/u                                                                                                               @typescript-eslint/no-unused-vars
+   170:16  error    Replace `⏎····typeof·raw·===·'object'·&&·raw·!==·null·?·raw·:·{}⏎··)·as·Record<string,·unknown` with `typeof·raw·===·'object'·&&·raw·!==·null·?·raw·:·{})·as·Record<⏎····string,⏎····unknown⏎··`  prettier/prettier
+  2445:23  error    Replace `·text:·prompt,·parts:·prevParts` with `⏎··············text:·prompt,⏎··············parts:·prevParts,⏎···········`                                                                         prettier/prettier
+  3227:25  error    Replace `'[usage]·本宿主未接入·modelUsage·delegate，跳过用量记账'` with `⏎········'[usage]·本宿主未接入·modelUsage·delegate，跳过用量记账',⏎······`                                                                         prettier/prettier
+  3236:59  error    Replace `·?·payload.taskId` with `⏎········?·payload.taskId⏎·······`                                                                                                                              prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/docs-site/docs-site.controller.spec.ts
+  3:10  warning  'PrismaService' is defined but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+  4:10  warning  'PrototypesService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/docs-site/prototypes.service.spec.ts
+   47:9   warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  147:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  295:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/execution-policies/agent-policies.controller.spec.ts
+  40:9  warning  'REQUIRED_BASH_DENY' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/execution-policies/agent-policies.custom-agents.spec.ts
+    7:3   warning  'ROLE_POLICY_DENY_TEMPLATE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  120:17  warning  'granted' is assigned a value but never used. Allowed unused vars must match /^_/u           @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/execution-policies/agent-policies.matrix.spec.ts
+    7:3   warning  'ROLE_BASH_DENY_PATTERNS' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  153:15  warning  'granted' is assigned a value but never used. Allowed unused vars must match /^_/u         @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/git-repos/git-credentials.service.ts
+  121:5  warning  'userId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/git-repos/git-repos.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  4:3  warning  'NotFoundException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/issues/dto/query-issues.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/issues/issues.service.spec.ts
+  893:19  warning  'action' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/mcp-servers/mcp-servers.service.spec.ts
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/memories/memories.controller.spec.ts
+   32:15  error  Replace `·team:·{·findUnique:·jest.fn().mockResolvedValue({·id:·'tm_1'·})·}` with `⏎······team:·{·findUnique:·jest.fn().mockResolvedValue({·id:·'tm_1'·})·},⏎···`                                                                                                         prettier/prettier
+  173:20  error  Replace `controller.maintain({·teamId:·'tm_nope'·})).rejects.toMatchObject(⏎········{·response:·{·code:·'TEAM_NOT_FOUND'·}·},⏎······` with `⏎········controller.maintain({·teamId:·'tm_nope'·}),⏎······).rejects.toMatchObject({·response:·{·code:·'TEAM_NOT_FOUND'·}·}`  prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/memories/memories.service.spec.ts
+  191:29  error  Replace `{·level:·'role',·roleId:·'ar_1'·},·{·id:·'u_admin'·}` with `⏎········{·level:·'role',·roleId:·'ar_1'·},⏎········{·id:·'u_admin'·},⏎······`  prettier/prettier
+  254:41  error  Replace `{·keyword:·'token'·},·{·id:·'u_admin'·}` with `⏎········{·keyword:·'token'·},⏎········{·id:·'u_admin'·},⏎······`                            prettier/prettier
+  688:46  error  Replace `⏎········archivedRow({·deletedAt:·null·}),⏎······` with `archivedRow({·deletedAt:·null·})`                                                  prettier/prettier
+  713:50  error  Replace `archivedRow({·deletedAt:·null·})` with `⏎········archivedRow({·deletedAt:·null·}),⏎······`                                                  prettier/prettier
+  811:34  error  Replace `·where:·expect.objectContaining({·deletedAt:·null·})` with `⏎··········where:·expect.objectContaining({·deletedAt:·null·}),⏎·······`        prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/memories/memories.service.ts
+  91:34  error  Replace `·?·[]` with `⏎······?·[]⏎·····`                                                          prettier/prettier
+  94:34  error  Replace `·?·{·deletedAt:·{·not:·null·}·}` with `⏎········?·{·deletedAt:·{·not:·null·}·}⏎·······`  prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/memories/memory-importance.spec.ts
+  149:18  error  Replace `id:·string,·refCount:·number,·ageDays:·number,·lastUsedAt?:·Date·|·null` with `⏎····id:·string,⏎····refCount:·number,⏎····ageDays:·number,⏎····lastUsedAt?:·Date·|·null,⏎··`  prettier/prettier
+  186:19  error  Replace `⏎······named('a',·0,·2),⏎······named('b',·1,·2),⏎······named('c',·2,·2),⏎····` with `named('a',·0,·2),·named('b',·1,·2),·named('c',·2,·2)`                                    prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/memories/memory-maintenance.service.spec.ts
+   71:21  error  Replace `⏎········where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·};⏎·····` with `·where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·}`                                                                                         prettier/prettier
+  410:23  error  Replace `·where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·}` with `⏎··········where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·};⏎·······`                                                                                     prettier/prettier
+  436:49  error  Replace `·mainAgentMemberId:·'tmm_main'` with `⏎········mainAgentMemberId:·'tmm_main',⏎·····`                                                                                                                                     prettier/prettier
+  485:14  error  Replace `prisma.memory.findMany.mock.calls[1][0].where.createdAt.gt).toEqual(⏎········rows[19].createdAt,⏎······` with `⏎········prisma.memory.findMany.mock.calls[1][0].where.createdAt.gt,⏎······).toEqual(rows[19].createdAt`  prettier/prettier
+  513:32  error  Replace ``建于=${new·Date(Date.now()·-·DAY).toISOString().slice(0,·10)}`` with `⏎········`建于=${new·Date(Date.now()·-·DAY).toISOString().slice(0,·10)}`,⏎······`                                                                     prettier/prettier
+  539:32  error  Replace `'合并·X·条·/·归档·Y·条·/·改标签·Z·条·/·判断为不该动·W·条'` with `⏎········'合并·X·条·/·归档·Y·条·/·改标签·Z·条·/·判断为不该动·W·条',⏎······`                                                                                                               prettier/prettier
+  583:42  error  Replace `'【记忆整理】发现·2·条新记忆，已派发整理'` with `⏎········'【记忆整理】发现·2·条新记忆，已派发整理',⏎······`                                                                                                                                                 prettier/prettier
+  624:23  error  Insert `⏎········`                                                                                                                                                                                                                prettier/prettier
+  625:9   error  Insert `··`                                                                                                                                                                                                                       prettier/prettier
+  626:7   error  Replace `}` with `··}⏎······`                                                                                                                                                                                                     prettier/prettier
+  690:40  error  Replace `⏎········expect.stringContaining('scope=tm_1'),⏎······` with `expect.stringContaining('scope=tm_1')`                                                                                                                     prettier/prettier
+  788:23  error  Replace `{·teamId:·'tm_1'·},·{·teamId:·'tm_2'·},·{·teamId:·'tm_3'·}` with `⏎······{·teamId:·'tm_1'·},⏎······{·teamId:·'tm_2'·},⏎······{·teamId:·'tm_3'·},⏎····`                                                                   prettier/prettier
+  875:14  error  Replace `⏎··········args.where.createdAt·?·[]·:·[newRow(`me_${args.where.teamId}`)]` with `·(args.where.createdAt·?·[]·:·[newRow(`me_${args.where.teamId}`)])`                                                                    prettier/prettier
+  910:4   error  Insert `⏎`                                                                                                                                                                                                                        prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/memories/memory-maintenance.service.ts
+  342:30  error  Replace `⏎······?·await·this.lastRunResult(teamId,·cursor)⏎·····` with `·?·await·this.lastRunResult(teamId,·cursor)`  prettier/prettier
+  591:2   error  Insert `⏎`                                                                                                            prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/memories/memory-state.ts
+  56:2  error  Insert `⏎`  prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/message-channels/adapters/wecom-aibot.adapter.ts
+  521:11  warning  'maybeAny' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/message-channels/message-registry.service.spec.ts
+    9:23  error  Replace `.fn()` with `⏎········.fn()⏎········`                                                             prettier/prettier
+   10:9   error  Insert `··`                                                                                                prettier/prettier
+   11:1   error  Insert `··`                                                                                                prettier/prettier
+   38:44  error  Replace `·id:·channelId,·type:·'wecom_aibot'` with `⏎······id:·channelId,⏎······type:·'wecom_aibot',⏎···`  prettier/prettier
+   54:44  error  Replace `·id:·channelId,·type:·'wecom_aibot'` with `⏎······id:·channelId,⏎······type:·'wecom_aibot',⏎···`  prettier/prettier
+  105:44  error  Replace `·id:·channelId,·type:·'wecom_aibot'` with `⏎······id:·channelId,⏎······type:·'wecom_aibot',⏎···`  prettier/prettier
+  111:4   error  Insert `⏎`                                                                                                 prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/models/dto/set-model-credential.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/notifications/notification-channels.controller.ts
+  408:14  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/platform-mcp/platform-mcp.controller.spec.ts
+  190:31  warning  'args' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/platform-mcp/platform-mcp.service.gate.spec.ts
+  3:3  warning  'EVENT_TYPES' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  5:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+  4:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/platform-mcp/platform-mcp.service.spec.ts
+   169:7   warning  'plansService' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                                     @typescript-eslint/no-unused-vars
+   177:9   warning  'allowPolicy' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                                      @typescript-eslint/no-unused-vars
+  5118:15  error    Replace `·where,·data·}:·{·where:·{·id:·string·};·data:·{·deletedAt?:·Date·}` with `⏎··············where,⏎··············data,⏎············}:·{⏎··············where:·{·id:·string·};⏎··············data:·{·deletedAt?:·Date·};⏎···········`  prettier/prettier
+  5242:29  error    Insert `⏎···········`                                                                                                                                                                                                                       prettier/prettier
+  5292:24  error    Replace `service.memoryMerge(ctx,·mergeArgs)).rejects.toBeInstanceOf(⏎············NotFoundException,⏎··········` with `⏎············service.memoryMerge(ctx,·mergeArgs),⏎··········).rejects.toBeInstanceOf(NotFoundException`              prettier/prettier
+  5516:53  error    Insert `⏎············`                                                                                                                                                                                                                      prettier/prettier
+  5517:1   error    Replace `············Promise.resolve([...db.values()].filter((r)·=>·!r.deletedAt)` with `··············Promise.resolve(⏎················[...db.values()].filter((r)·=>·!r.deletedAt),⏎··············`                                       prettier/prettier
+  5526:23  error    Replace `·id?:·string·|·{·in:·string[]·};·deletedAt?:·Date·|·null` with `⏎················id?:·string·|·{·in:·string[]·};⏎················deletedAt?:·Date·|·null;⏎·············`                                                           prettier/prettier
+  5529:48  error    Insert `⏎···············`                                                                                                                                                                                                                   prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/platform-mcp/platform-mcp.service.ts
+    92:3   warning  'containsTeamWideMention' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  4144:54  error    Replace `·where:·{·id:·memoryId·}` with `⏎······where:·{·id:·memoryId·},⏎···`              prettier/prettier
+  6444:44  error    Insert `⏎·········`                                                                        prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/platform-mcp/platform-mcp.tools.ts
+    46:7   warning  'REQUIRE_TASK_OR_TEAM_MSG' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   497:14  error    Replace `.string()` with `⏎····.string()⏎····`                                                       prettier/prettier
+  1161:30  error    Delete `⏎·······`                                                                                    prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/prisma/model-usage.migration.spec.ts
+   72:24  error  Replace ``CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`).exec(⏎····sql(),⏎··` with `⏎····`CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`,⏎··).exec(sql()`               prettier/prettier
+   76:18  error  Replace `⏎····[...m[1].matchAll(/^\s*`(\w+)`\s+/gm)].map((x)·=>·x[1]),⏎··` with `[...m[1].matchAll(/^\s*`(\w+)`\s+/gm)].map((x)·=>·x[1])`                                                    prettier/prettier
+   83:24  error  Replace ``CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`).exec(⏎····sql(),⏎··` with `⏎····`CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`,⏎··).exec(sql()`               prettier/prettier
+   87:18  error  Replace `⏎····[...m[1].matchAll(/^\s*KEY·`(\w+)`\s*\(/gm)].map((x)·=>·x[1]),⏎··` with `[...m[1].matchAll(/^\s*KEY·`(\w+)`\s*\(/gm)].map((x)·=>·x[1])`                                        prettier/prettier
+  232:24  error  Replace `'Team',·'Session',·'ChatChannel',·'TeamMember',·'Task',·'Agent'` with `⏎······'Team',⏎······'Session',⏎······'ChatChannel',⏎······'TeamMember',⏎······'Task',⏎······'Agent',⏎····`  prettier/prettier
+  278:4   error  Insert `⏎`                                                                                                                                                                                   prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/prisma/seed.spec.ts
+   284:45  error    Replace `⏎········[...VTEAM_MCP_TOOL_NAMES].sort(),⏎······` with `[...VTEAM_MCP_TOOL_NAMES].sort()`  prettier/prettier
+  1576:16  warning  A `require()` style import is forbidden                                                              @typescript-eslint/no-require-imports
+  1577:18  warning  A `require()` style import is forbidden                                                              @typescript-eslint/no-require-imports
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/prisma/worker-code-version.migration.spec.ts
+  174:4  error  Insert `⏎`  prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/questions/questions.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/tasks/dto/bind-message-channels.dto.ts
+  5:3  warning  'IsNotEmpty' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+  6:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  7:3  warning  'IsOptional' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/tasks/dto/update-team.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/tasks/task-progression.scheduler.ts
+  8:3  warning  'forwardRef' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/tasks/tasks.service.spec.ts
+   18:10  warning  'sanitizeWorkDirName' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  319:9   warning  'mockCreateTx' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  492:11  warning  'sCounter' is assigned a value but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/teams/dto/create-team.dto.ts
+  4:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/teams/teams.service.spec.ts
+  616:13  warning  'callArgs' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/teams/teams.service.ts
+  109:11  warning  'team' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/triggers/hook-failure.listener.spec.ts
+  2:10  warning  'Prisma' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/triggers/hook.service.ts
+  1277:7  warning  'TRIGGER_ID_PREFIX_VALUE' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/usage/usage.service.spec.ts
+  417:10  error  Replace `·id:·'tmb_a',·alias:·'测试-1',·agent:·{·name:·'开发者'·},·role:·{·name:·'开发'·}` with `⏎··········id:·'tmb_a',⏎··········alias:·'测试-1',⏎··········agent:·{·name:·'开发者'·},⏎··········role:·{·name:·'开发'·},⏎·······`  prettier/prettier
+  418:10  error  Replace `·id:·'tmb_b',·alias:·'测试-2',·agent:·{·name:·'开发者'·},·role:·{·name:·'开发'·}` with `⏎··········id:·'tmb_b',⏎··········alias:·'测试-2',⏎··········agent:·{·name:·'开发者'·},⏎··········role:·{·name:·'开发'·},⏎·······`  prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/users/admin-permission.ts
+  23:36  error  Replace `permissions:·AdminPermissionPayload` with `⏎··permissions:·AdminPermissionPayload,⏎`                                                                                              prettier/prettier
+  41:8   error  Replace `·enabled:·boolean;·role?:·{·permissions:·AdminPermissionPayload·}·|·null` with `⏎········enabled:·boolean;⏎········role?:·{·permissions:·AdminPermissionPayload·}·|·null;⏎·····`  prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/workers/dto/worker-dto.spec.ts
+  336:15  warning  'capabilities' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  341:15  warning  'load' is assigned a value but never used. Allowed unused vars must match /^_/u          @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/workers/worker-code-version.spec.ts
+  76:4  error  Insert `⏎`  prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/workers/worker-code-version.ts
+  46:2  error  Insert `⏎`  prettier/prettier
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/workers/worker-event.ingress.ts
+    18:3  warning  'extractConclusionParts' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   146:6  warning  'ActivityCallback' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  1091:5  warning  'taskId' is defined but never used. Allowed unused args must match /^_/u                  @typescript-eslint/no-unused-vars
+  1092:5  warning  'agentId' is defined but never used. Allowed unused args must match /^_/u                 @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/workers/worker-or-jwt.guard.ts
+  10:10  warning  'Request' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/workers/worker-token.guard.spec.ts
+  2:10  warning  'ConfigService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/workers/worker.client.ts
+  297:5  warning  'model' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/t16-base-wt/server/src/workers/workers.service.spec.ts
+  906:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 137 problems (69 errors, 68 warnings)
+  69 errors and 0 warnings potentially fixable with the `--fix` option.
+
+LINT=1
+
+→ base sha b6840d1c 的**干净检出**实测 = 69 errors（不是 93）。任务前提里
+ 「93 个既存、仓库在 base sha 处已红」的前半句成立（确实红，退出码同为 1），
+ 但「93 = base sha 计数」这一字面表述**未复现**：69 是 b6840d1c 干净检出的数，
+ 93 是「HEAD cb0ba6d1 内容 + 开工前既存脏改动」这一工作区状态的数。如实记录如下。
+
+为对账，额外在同一 way 下测了 HEAD 的干净检出：
+$ git worktree add --detach <tmp> cb0ba6d1...; cd <tmp>/server && npm run lint:check
+  （原始输出尾部）
+✖ 158 problems (90 errors, 68 warnings)
+  90 errors and 0 warnings potentially fixable with the `--fix` option.
+
+
+三者对账（全部可复算）：
+  69  b6840d1c 干净检出（计划的 base sha；此后 memory 特性提交 cb0ba6d1 才落地）
+  90  cb0ba6d1（HEAD）干净检出
+  +3  开工前既存的 platform-mcp 未提交改动所带的 error（task-1 开工快照即有的
+      9 个脏文件中的 platform-mcp 三件：HEAD 12+4+2=18 → 工作区脏版 14+4+3=21）
+  93  本计划开工瞬间工作区的 pre-existing error 总数（= T13 §6 的 A1 64 + A2 21
+      + A3 8）
+  99  本 todo 修前实测 = 93 pre-existing + 6 本计划引入
+  6   本计划引入 = 5（team-worker-node.migration.spec.ts 全新未格式化）
+      + 1（worker-dispatcher.spec.ts:3442 T5 新增用例）
+⇒ 修后预期 = 99 − 6 = 93。以下 §3-§4 证明该预期实测成立。
+
+================================================================================
+3. 修复内容（只动这 6 处；两文件 diff 全文）
+================================================================================
+3a. server/src/prisma/team-worker-node.migration.spec.ts（全新文件，5 处全属本计划，
+    故整体 prettier 格式化 = 恰好修这 5 处；$ npx prettier --write）：
+66c66,72
+< const MIGRATIONS_DIR = path.resolve(__dirname, '..', '..', 'prisma', 'migrations');
+---
+> const MIGRATIONS_DIR = path.resolve(
+>   __dirname,
+>   '..',
+>   '..',
+>   'prisma',
+>   'migrations',
+> );
+105c111,113
+<   const m = /CREATE TABLE `agents` \(([\s\S]*?)\n\) ENGINE=/.exec(baselineSql());
+---
+>   const m = /CREATE TABLE `agents` \(([\s\S]*?)\n\) ENGINE=/.exec(
+>     baselineSql(),
+>   );
+153,155c161
+<     const adds = executableSql().match(
+<       /ADD COLUMN `preferred_worker_id`/g,
+<     );
+---
+>     const adds = executableSql().match(/ADD COLUMN `preferred_worker_id`/g);
+217c223,225
+<     expect(constraints.join('\n')).toContain('CONSTRAINT `agents_base_agent_id_fkey`');
+---
+>     expect(constraints.join('\n')).toContain(
+>       'CONSTRAINT `agents_base_agent_id_fkey`',
+>     );
+260c268,269
+<       all.indexOf(MIGRATION_DIR_NAME) > all.indexOf('20260925000000_squashed_baseline'),
+---
+>       all.indexOf(MIGRATION_DIR_NAME) >
+>         all.indexOf('20260925000000_squashed_baseline'),
+3b. server/src/chat/worker-dispatcher.spec.ts（只修 3442 一处；刻意**不用**
+    prettier --write 整文件——那会连带修掉 3572/3575/3576/4471 四个既存点、
+    把总数打到 89。按报告要求最小折行，内容零变化）：
+$ diff <backup> server/src/chat/worker-dispatcher.spec.ts
+3442c3442,3443
+<             m.includes('团队首选 worker 查询失败') && m.includes('tm_0000000001'),
+---
+>             m.includes('团队首选 worker 查询失败') &&
+>             m.includes('tm_0000000001'),
+
+================================================================================
+4. 修后复跑：cd server && npm run lint:check; echo LINT=$?
+================================================================================
+
+> server@0.0.1 lint:check
+> eslint "{src,apps,libs,test}/**/*.ts"
+
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agent-roles/agent-roles.service.ts
+  6:3  warning  'Logger' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.controller.spec.ts
+  202:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  203:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  216:18  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  217:17  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/agents/agents.service.ts
+  348:15  warning  'updated' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/chat.service.spec.ts
+  2201:13  warning  'result' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/message-parts.ts
+  49:25  error  Insert `⏎·····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.plan-hash.spec.ts
+  7:10  warning  'PlanLifecycleService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.spec.ts
+    11:10  warning  'ArtifactsService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                @typescript-eslint/no-unused-vars
+    24:10  warning  'SessionLifecycleService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                         @typescript-eslint/no-unused-vars
+    26:3   warning  'WorkerClient' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                    @typescript-eslint/no-unused-vars
+    29:10  warning  'WorkerEventIngress' is defined but never used. Allowed unused vars must match /^_/u                                                                                                              @typescript-eslint/no-unused-vars
+    30:10  warning  'WorkersService' is defined but never used. Allowed unused vars must match /^_/u                                                                                                                  @typescript-eslint/no-unused-vars
+  3573:15  error    Insert `⏎·········`                                                                                                                                                                               prettier/prettier
+  3576:24  error    Replace `updateCall![0]·as·{·data:·{·content:·{·text:·string;·parts:·unknown[]·}·}·}).data` with `⏎········updateCall![0]·as·{⏎··········data:·{·content:·{·text:·string;·parts:·unknown[]·}·};`  prettier/prettier
+  3577:9   error    Insert `}⏎······).data`                                                                                                                                                                           prettier/prettier
+  4472:34  error    Replace `⏎············p:·typeof·params,⏎············m:·unknown[],⏎··········` with `p:·typeof·params,·m:·unknown[]`                                                                               prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/chat/worker-dispatcher.ts
+    16:3   warning  'WecomAibotAdapter' is defined but never used. Allowed unused vars must match /^_/u                                                                                                               @typescript-eslint/no-unused-vars
+   170:16  error    Replace `⏎····typeof·raw·===·'object'·&&·raw·!==·null·?·raw·:·{}⏎··)·as·Record<string,·unknown` with `typeof·raw·===·'object'·&&·raw·!==·null·?·raw·:·{})·as·Record<⏎····string,⏎····unknown⏎··`  prettier/prettier
+  2484:23  error    Replace `·text:·prompt,·parts:·prevParts` with `⏎··············text:·prompt,⏎··············parts:·prevParts,⏎···········`                                                                         prettier/prettier
+  3266:25  error    Replace `'[usage]·本宿主未接入·modelUsage·delegate，跳过用量记账'` with `⏎········'[usage]·本宿主未接入·modelUsage·delegate，跳过用量记账',⏎······`                                                                         prettier/prettier
+  3275:59  error    Replace `·?·payload.taskId` with `⏎········?·payload.taskId⏎·······`                                                                                                                              prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/docs-site.controller.spec.ts
+  3:10  warning  'PrismaService' is defined but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+  4:10  warning  'PrototypesService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/docs-site/prototypes.service.spec.ts
+   47:9   warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  147:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+  295:11  warning  A `require()` style import is forbidden  @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.controller.spec.ts
+  40:9  warning  'REQUIRED_BASH_DENY' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.custom-agents.spec.ts
+    7:3   warning  'ROLE_POLICY_DENY_TEMPLATE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  120:17  warning  'granted' is assigned a value but never used. Allowed unused vars must match /^_/u           @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/execution-policies/agent-policies.matrix.spec.ts
+    7:3   warning  'ROLE_BASH_DENY_PATTERNS' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  153:15  warning  'granted' is assigned a value but never used. Allowed unused vars must match /^_/u         @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-credentials.service.ts
+  121:5  warning  'userId' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/git-repos/git-repos.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  4:3  warning  'NotFoundException' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/dto/query-issues.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/issues/issues.service.spec.ts
+  893:19  warning  'action' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/mcp-servers/mcp-servers.service.spec.ts
+  3:3  warning  'ConflictException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memories.controller.spec.ts
+   32:15  error  Replace `·team:·{·findUnique:·jest.fn().mockResolvedValue({·id:·'tm_1'·})·}` with `⏎······team:·{·findUnique:·jest.fn().mockResolvedValue({·id:·'tm_1'·})·},⏎···`                                                                                                         prettier/prettier
+  173:20  error  Replace `controller.maintain({·teamId:·'tm_nope'·})).rejects.toMatchObject(⏎········{·response:·{·code:·'TEAM_NOT_FOUND'·}·},⏎······` with `⏎········controller.maintain({·teamId:·'tm_nope'·}),⏎······).rejects.toMatchObject({·response:·{·code:·'TEAM_NOT_FOUND'·}·}`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memories.service.spec.ts
+  197:29  error  Replace `{·level:·'role',·roleId:·'ar_1'·},·{·id:·'u_admin'·}` with `⏎········{·level:·'role',·roleId:·'ar_1'·},⏎········{·id:·'u_admin'·},⏎······`  prettier/prettier
+  260:41  error  Replace `{·keyword:·'token'·},·{·id:·'u_admin'·}` with `⏎········{·keyword:·'token'·},⏎········{·id:·'u_admin'·},⏎······`                            prettier/prettier
+  694:46  error  Replace `⏎········archivedRow({·deletedAt:·null·}),⏎······` with `archivedRow({·deletedAt:·null·})`                                                  prettier/prettier
+  719:50  error  Replace `archivedRow({·deletedAt:·null·})` with `⏎········archivedRow({·deletedAt:·null·}),⏎······`                                                  prettier/prettier
+  817:34  error  Replace `·where:·expect.objectContaining({·deletedAt:·null·})` with `⏎··········where:·expect.objectContaining({·deletedAt:·null·}),⏎·······`        prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memories.service.ts
+   91:34  error  Replace `·?·[]` with `⏎······?·[]⏎·····`                                                                                                                                                                   prettier/prettier
+   94:34  error  Replace `·?·{·deletedAt:·{·not:·null·}·}` with `⏎········?·{·deletedAt:·{·not:·null·}·}⏎·······`                                                                                                           prettier/prettier
+  177:18  error  Insert `⏎·····`                                                                                                                                                                                            prettier/prettier
+  178:1   error  Insert `··`                                                                                                                                                                                                prettier/prettier
+  179:1   error  Insert `··`                                                                                                                                                                                                prettier/prettier
+  230:16  error  Replace `·id:·string;·level:·string;·teamId:·string·|·null;·contentHash:·string·|·null` with `⏎······id:·string;⏎······level:·string;⏎······teamId:·string·|·null;⏎······contentHash:·string·|·null;⏎···`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memory-importance.spec.ts
+  149:18  error  Replace `id:·string,·refCount:·number,·ageDays:·number,·lastUsedAt?:·Date·|·null` with `⏎····id:·string,⏎····refCount:·number,⏎····ageDays:·number,⏎····lastUsedAt?:·Date·|·null,⏎··`  prettier/prettier
+  186:19  error  Replace `⏎······named('a',·0,·2),⏎······named('b',·1,·2),⏎······named('c',·2,·2),⏎····` with `named('a',·0,·2),·named('b',·1,·2),·named('c',·2,·2)`                                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memory-maintenance.service.spec.ts
+   71:21  error  Replace `⏎········where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·};⏎·····` with `·where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·}`                                                                                         prettier/prettier
+  410:23  error  Replace `·where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·}` with `⏎··········where:·{·teamId:·string;·createdAt?:·{·gt:·Date·}·};⏎·······`                                                                                     prettier/prettier
+  436:49  error  Replace `·mainAgentMemberId:·'tmm_main'` with `⏎········mainAgentMemberId:·'tmm_main',⏎·····`                                                                                                                                     prettier/prettier
+  485:14  error  Replace `prisma.memory.findMany.mock.calls[1][0].where.createdAt.gt).toEqual(⏎········rows[19].createdAt,⏎······` with `⏎········prisma.memory.findMany.mock.calls[1][0].where.createdAt.gt,⏎······).toEqual(rows[19].createdAt`  prettier/prettier
+  513:32  error  Replace ``建于=${new·Date(Date.now()·-·DAY).toISOString().slice(0,·10)}`` with `⏎········`建于=${new·Date(Date.now()·-·DAY).toISOString().slice(0,·10)}`,⏎······`                                                                     prettier/prettier
+  589:42  error  Replace `'【记忆整理】发现·2·条新记忆，已派发整理'` with `⏎········'【记忆整理】发现·2·条新记忆，已派发整理',⏎······`                                                                                                                                                 prettier/prettier
+  630:23  error  Insert `⏎········`                                                                                                                                                                                                                prettier/prettier
+  631:9   error  Insert `··`                                                                                                                                                                                                                       prettier/prettier
+  632:7   error  Replace `}` with `··}⏎······`                                                                                                                                                                                                     prettier/prettier
+  696:40  error  Replace `⏎········expect.stringContaining('scope=tm_1'),⏎······` with `expect.stringContaining('scope=tm_1')`                                                                                                                     prettier/prettier
+  794:23  error  Replace `{·teamId:·'tm_1'·},·{·teamId:·'tm_2'·},·{·teamId:·'tm_3'·}` with `⏎······{·teamId:·'tm_1'·},⏎······{·teamId:·'tm_2'·},⏎······{·teamId:·'tm_3'·},⏎····`                                                                   prettier/prettier
+  881:14  error  Replace `⏎··········args.where.createdAt·?·[]·:·[newRow(`me_${args.where.teamId}`)]` with `·(args.where.createdAt·?·[]·:·[newRow(`me_${args.where.teamId}`)])`                                                                    prettier/prettier
+  916:4   error  Insert `⏎`                                                                                                                                                                                                                        prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memory-maintenance.service.ts
+  335:30  error  Replace `⏎······?·await·this.lastRunResult(teamId,·cursor)⏎·····` with `·?·await·this.lastRunResult(teamId,·cursor)`  prettier/prettier
+  582:2   error  Insert `⏎`                                                                                                            prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/memories/memory-state.ts
+  56:2  error  Insert `⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/message-channels/adapters/wecom-aibot.adapter.ts
+  521:11  warning  'maybeAny' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/message-channels/message-registry.service.spec.ts
+    9:23  error  Replace `.fn()` with `⏎········.fn()⏎········`                                                             prettier/prettier
+   10:9   error  Insert `··`                                                                                                prettier/prettier
+   11:1   error  Insert `··`                                                                                                prettier/prettier
+   38:44  error  Replace `·id:·channelId,·type:·'wecom_aibot'` with `⏎······id:·channelId,⏎······type:·'wecom_aibot',⏎···`  prettier/prettier
+   54:44  error  Replace `·id:·channelId,·type:·'wecom_aibot'` with `⏎······id:·channelId,⏎······type:·'wecom_aibot',⏎···`  prettier/prettier
+  105:44  error  Replace `·id:·channelId,·type:·'wecom_aibot'` with `⏎······id:·channelId,⏎······type:·'wecom_aibot',⏎···`  prettier/prettier
+  111:4   error  Insert `⏎`                                                                                                 prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/models/dto/set-model-credential.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/notifications/notification-channels.controller.ts
+  408:14  warning  'e' is defined but never used  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.controller.spec.ts
+  190:31  warning  'args' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.gate.spec.ts
+  3:3  warning  'EVENT_TYPES' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  5:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.plan-hash.spec.ts
+  4:3  warning  'SENDER_TYPE' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.spec.ts
+   170:7   warning  'plansService' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                                     @typescript-eslint/no-unused-vars
+   178:9   warning  'allowPolicy' is assigned a value but never used. Allowed unused vars must match /^_/u                                                                                                                                                      @typescript-eslint/no-unused-vars
+  5089:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5100:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5111:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5169:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5185:54  error    Replace `·teamId:·'tm_1',·query:·'c'` with `⏎············teamId:·'tm_1',⏎············query:·'c',⏎·········`                                                                                                                                 prettier/prettier
+  5323:15  error    Replace `·where,·data·}:·{·where:·{·id:·string·};·data:·{·deletedAt?:·Date·}` with `⏎··············where,⏎··············data,⏎············}:·{⏎··············where:·{·id:·string·};⏎··············data:·{·deletedAt?:·Date·};⏎···········`  prettier/prettier
+  5447:29  error    Insert `⏎···········`                                                                                                                                                                                                                       prettier/prettier
+  5497:24  error    Replace `service.memoryMerge(ctx,·mergeArgs)).rejects.toBeInstanceOf(⏎············NotFoundException,⏎··········` with `⏎············service.memoryMerge(ctx,·mergeArgs),⏎··········).rejects.toBeInstanceOf(NotFoundException`              prettier/prettier
+  5721:53  error    Insert `⏎············`                                                                                                                                                                                                                      prettier/prettier
+  5722:1   error    Replace `············Promise.resolve([...db.values()].filter((r)·=>·!r.deletedAt)` with `··············Promise.resolve(⏎················[...db.values()].filter((r)·=>·!r.deletedAt),⏎··············`                                       prettier/prettier
+  5731:23  error    Replace `·id?:·string·|·{·in:·string[]·};·deletedAt?:·Date·|·null` with `⏎················id?:·string·|·{·in:·string[]·};⏎················deletedAt?:·Date·|·null;⏎·············`                                                           prettier/prettier
+  5734:48  error    Insert `⏎···············`                                                                                                                                                                                                                   prettier/prettier
+  8834:48  error    Replace `'请显式传·teamId·与·selfInstanceId'` with `⏎········'请显式传·teamId·与·selfInstanceId',⏎······`                                                                                                                                             prettier/prettier
+  8835:47  error    Replace `'发送失败:·当前团队未绑定企业微信渠道'` with `⏎········'发送失败:·当前团队未绑定企业微信渠道',⏎······`                                                                                                                                                               prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.service.ts
+    92:3   warning  'containsTeamWideMention' is defined but never used. Allowed unused vars must match /^_/u                                        @typescript-eslint/no-unused-vars
+  4318:54  error    Replace `·where:·{·id:·memoryId·}` with `⏎······where:·{·id:·memoryId·},⏎···`                                                    prettier/prettier
+  6624:44  error    Insert `⏎·········`                                                                                                              prettier/prettier
+  7494:40  error    Replace `ctx,·effectiveSession,·args.selfInstanceId` with `⏎······ctx,⏎······effectiveSession,⏎······args.selfInstanceId,⏎····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/platform-mcp/platform-mcp.tools.ts
+    56:7   warning  'REQUIRE_TASK_OR_TEAM_MSG' is assigned a value but never used. Allowed unused vars must match /^_/u                                            @typescript-eslint/no-unused-vars
+   453:17  error    Replace `'level=role·时的目标岗位·id（ar_·前缀），必须已存在；level·非·role·时忽略'` with `⏎········'level=role·时的目标岗位·id（ar_·前缀），必须已存在；level·非·role·时忽略',⏎······`  prettier/prettier
+   518:14  error    Replace `.string()` with `⏎····.string()⏎····`                                                                                                 prettier/prettier
+  1166:30  error    Delete `⏎·······`                                                                                                                              prettier/prettier
+  1182:30  error    Delete `⏎·······`                                                                                                                              prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/memory-search-to-list.migration.spec.ts
+  159:35  error  Replace `⏎··········p.column·===·'name'·?·OLD_TOOL·:·OLD_ACTION,⏎········` with `p.column·===·'name'·?·OLD_TOOL·:·OLD_ACTION`                                                          prettier/prettier
+  172:22  error  Insert `⏎·······`                                                                                                                                                                      prettier/prettier
+  173:1   error  Replace `········` with `··········`                                                                                                                                                   prettier/prettier
+  174:1   error  Insert `··`                                                                                                                                                                            prettier/prettier
+  184:25  error  Replace `·/JSON_REMOVE\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'/.exec(⏎········body,⏎······` with `⏎········/JSON_REMOVE\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'/.exec(body`    prettier/prettier
+  191:8   error  Replace `"两条语句都只碰·`$.tools.<tool>`·路径，不碰·permission/correction"` with `'两条语句都只碰·`$.tools.<tool>`·路径，不碰·permission/correction'`                                                         prettier/prettier
+  208:8   error  Replace `"两条语句都以旧键在场为守卫·⇒·无·tools·对象/旧键的行零写入（绝不凭空建键）"` with `'两条语句都以旧键在场为守卫·⇒·无·tools·对象/旧键的行零写入（绝不凭空建键）'`                                                                             prettier/prettier
+  222:15  error  Insert `⏎·········`                                                                                                                                                                    prettier/prettier
+  231:15  error  Insert `⏎·········`                                                                                                                                                                    prettier/prettier
+  243:34  error  Replace `/^UPDATE\s+`execution_policies`\s+SET[\s\S]*WHERE\s+JSON_CONTAINS_PATH/` with `⏎··········/^UPDATE\s+`execution_policies`\s+SET[\s\S]*WHERE\s+JSON_CONTAINS_PATH/,⏎········`  prettier/prettier
+  299:22  error  Delete `⏎·········`                                                                                                                                                                    prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/model-usage.migration.spec.ts
+   72:24  error  Replace ``CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`).exec(⏎····sql(),⏎··` with `⏎····`CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`,⏎··).exec(sql()`               prettier/prettier
+   76:18  error  Replace `⏎····[...m[1].matchAll(/^\s*`(\w+)`\s+/gm)].map((x)·=>·x[1]),⏎··` with `[...m[1].matchAll(/^\s*`(\w+)`\s+/gm)].map((x)·=>·x[1])`                                                    prettier/prettier
+   83:24  error  Replace ``CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`).exec(⏎····sql(),⏎··` with `⏎····`CREATE·TABLE·\`${table}\`·\\(([\\s\\S]*?)\\n\\)·ENGINE=`,⏎··).exec(sql()`               prettier/prettier
+   87:18  error  Replace `⏎····[...m[1].matchAll(/^\s*KEY·`(\w+)`\s*\(/gm)].map((x)·=>·x[1]),⏎··` with `[...m[1].matchAll(/^\s*KEY·`(\w+)`\s*\(/gm)].map((x)·=>·x[1])`                                        prettier/prettier
+  232:24  error  Replace `'Team',·'Session',·'ChatChannel',·'TeamMember',·'Task',·'Agent'` with `⏎······'Team',⏎······'Session',⏎······'ChatChannel',⏎······'TeamMember',⏎······'Task',⏎······'Agent',⏎····`  prettier/prettier
+  278:4   error  Insert `⏎`                                                                                                                                                                                   prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/seed.spec.ts
+   284:45  error    Replace `⏎········[...VTEAM_MCP_TOOL_NAMES].sort(),⏎······` with `[...VTEAM_MCP_TOOL_NAMES].sort()`  prettier/prettier
+  1576:16  warning  A `require()` style import is forbidden                                                              @typescript-eslint/no-require-imports
+  1577:18  warning  A `require()` style import is forbidden                                                              @typescript-eslint/no-require-imports
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/prisma/worker-code-version.migration.spec.ts
+  174:4  error  Insert `⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/questions/questions.service.spec.ts
+  2:3  warning  'BadRequestException' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/bind-message-channels.dto.ts
+  5:3  warning  'IsNotEmpty' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+  6:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  7:3  warning  'IsOptional' is defined but never used. Allowed unused vars must match /^_/u     @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/dto/update-team.dto.ts
+  1:10  warning  'ApiProperty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/task-progression.scheduler.ts
+  8:3  warning  'forwardRef' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/tasks/tasks.service.spec.ts
+   19:10  warning  'sanitizeWorkDirName' is defined but never used. Allowed unused vars must match /^_/u    @typescript-eslint/no-unused-vars
+  320:9   warning  'mockCreateTx' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  493:11  warning  'sCounter' is assigned a value but never used. Allowed unused vars must match /^_/u      @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/dto/create-team.dto.ts
+  4:3  warning  'ArrayNotEmpty' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.spec.ts
+  616:13  warning  'callArgs' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/teams/teams.service.ts
+  109:11  warning  'team' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook-failure.listener.spec.ts
+  2:10  warning  'Prisma' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/triggers/hook.service.ts
+  1277:7  warning  'TRIGGER_ID_PREFIX_VALUE' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/usage/usage.service.spec.ts
+  417:10  error  Replace `·id:·'tmb_a',·alias:·'测试-1',·agent:·{·name:·'开发者'·},·role:·{·name:·'开发'·}` with `⏎··········id:·'tmb_a',⏎··········alias:·'测试-1',⏎··········agent:·{·name:·'开发者'·},⏎··········role:·{·name:·'开发'·},⏎·······`  prettier/prettier
+  418:10  error  Replace `·id:·'tmb_b',·alias:·'测试-2',·agent:·{·name:·'开发者'·},·role:·{·name:·'开发'·}` with `⏎··········id:·'tmb_b',⏎··········alias:·'测试-2',⏎··········agent:·{·name:·'开发者'·},⏎··········role:·{·name:·'开发'·},⏎·······`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/users/admin-permission.ts
+  23:36  error  Replace `permissions:·AdminPermissionPayload` with `⏎··permissions:·AdminPermissionPayload,⏎`                                                                                              prettier/prettier
+  41:8   error  Replace `·enabled:·boolean;·role?:·{·permissions:·AdminPermissionPayload·}·|·null` with `⏎········enabled:·boolean;⏎········role?:·{·permissions:·AdminPermissionPayload·}·|·null;⏎·····`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/dto/worker-dto.spec.ts
+  336:15  warning  'capabilities' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+  341:15  warning  'load' is assigned a value but never used. Allowed unused vars must match /^_/u          @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-code-version.spec.ts
+  76:4  error  Insert `⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-code-version.ts
+  46:2  error  Insert `⏎`  prettier/prettier
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-event.ingress.ts
+    18:3  warning  'extractConclusionParts' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+   146:6  warning  'ActivityCallback' is defined but never used. Allowed unused vars must match /^_/u        @typescript-eslint/no-unused-vars
+  1091:5  warning  'taskId' is defined but never used. Allowed unused args must match /^_/u                  @typescript-eslint/no-unused-vars
+  1092:5  warning  'agentId' is defined but never used. Allowed unused args must match /^_/u                 @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-or-jwt.guard.ts
+  10:10  warning  'Request' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker-token.guard.spec.ts
+  2:10  warning  'ConfigService' is defined but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/worker.client.ts
+  297:5  warning  'model' is defined but never used. Allowed unused args must match /^_/u  @typescript-eslint/no-unused-vars
+
+/Volumes/SSD-Data/01work/git-project/vteam/server/src/workers/workers.service.spec.ts
+  914:13  warning  'broadcastSpy' is assigned a value but never used. Allowed unused vars must match /^_/u  @typescript-eslint/no-unused-vars
+
+✖ 161 problems (93 errors, 68 warnings)
+  93 errors and 0 warnings potentially fixable with the `--fix` option.
+
+LINT=1
+
+汇总行（原始）：✖ 161 problems (93 errors, 68 warnings)
+             93 errors and 0 warnings potentially fixable with the `--fix` option.
+→ 修后 = 93 errors，LINT=1（**仍然红**：既存债未动，本 todo 对它的贡献为 0）。
+
+前后对照（原始汇总行）：
+  BEFORE: ✖ 167 problems (99 errors, 68 warnings)   LINT=1
+  AFTER:  ✖ 161 problems (93 errors, 68 warnings)   LINT=1
+  delta = 99 − 93 = 6（warning 数 68 → 68 不变，无新增告警）。
+
+修后 per-file error 计数（原始报告逐条累计）：
+14 platform-mcp/platform-mcp.service.spec.ts
+13 memories/memory-maintenance.service.spec.ts
+11 prisma/memory-search-to-list.migration.spec.ts
+7 message-channels/message-registry.service.spec.ts
+6 prisma/model-usage.migration.spec.ts
+6 memories/memories.service.ts
+5 memories/memories.service.spec.ts
+4 platform-mcp/platform-mcp.tools.ts
+4 chat/worker-dispatcher.ts
+4 chat/worker-dispatcher.spec.ts
+3 platform-mcp/platform-mcp.service.ts
+2 users/admin-permission.ts
+2 usage/usage.service.spec.ts
+2 memories/memory-maintenance.service.ts
+2 memories/memory-importance.spec.ts
+2 memories/memories.controller.spec.ts
+1 workers/worker-code-version.ts
+1 workers/worker-code-version.spec.ts
+1 prisma/worker-code-version.migration.spec.ts
+1 prisma/seed.spec.ts
+1 memories/memory-state.ts
+1 chat/message-parts.ts
+  合计（严格行匹配）= 93
+
+本计划文件在修后报告中的命中：
+  team-worker-node.migration.spec.ts —— 0 命中（grep 计数 0，文件已不在报告中）。
+  worker-dispatcher.spec.ts —— 仍出现，但仅剩 4 个**既存**点（3572/3575/3576/4471
+    因本 todo 插入一行而位移为 3573/3576/3577/4472），本计划的 3442:46 已消失。
+  $ grep -n "team-worker-node.migration.spec" t16-after.txt   → 0 命中
+  $ grep -n "3442" t16-after.txt                              → 0 命中
+  （修掉这 4 个既存点属明令禁止的「顺手动既存债」，故不做。）
+
+================================================================================
+5. 无语义改变证明
+================================================================================
+$ cd server && npx jest src/prisma/team-worker-node.migration.spec.ts src/chat/worker-dispatcher.spec.ts
+PASS src/prisma/team-worker-node.migration.spec.ts
+PASS src/chat/worker-dispatcher.spec.ts
+Test Suites: 2 passed, 2 total
+Tests:       328 passed, 328 total
+Snapshots:   0 total
+JEST=0
+
+$ cd server && npx tsc --noEmit -p tsconfig.json
+（无输出）
+TSC=0
+
+================================================================================
+6. 失败通道（misleading_success_output / 突变校验）
+================================================================================
+把修好的 3442 一处临时改回超宽 CJK 单行（重接折行），复跑：
+$ npm run lint:check; echo LINT=$?（原始输出尾部）
+  94 errors and 0 warnings potentially fixable with the `--fix` option.
+
+LINT=1
+→ 94 errors（93 → 94，+1），且 worker-dispatcher.spec.ts 的 3442:46 在报告中
+  **重新出现**（原始命中行：`  3442:46  error    Insert `⏎···········``）。
+  证明该错误确由本计划引入、且修复有效（不是靠 ignore/ summary 掩盖）。
+
+随后原样改回折行，复跑：
+$ npm run lint:check; echo LINT=$?（原始输出尾部）
+  93 errors and 0 warnings potentially fixable with the `--fix` option.
+
+LINT=1
+→ 回到 93 errors；`grep -c 3442` = 0、`grep -c team-worker-node.migration.spec` = 0。
+无探针残留：终态与 §3 修复态逐字节一致（diff <backup> 见 §3b，仅那一个折行 hunk）。
+
+================================================================================
+7. 清理与污染检查
+================================================================================
+$ git worktree remove --force <t16-base-wt>; git worktree remove --force <t16-head-wt>; git worktree prune
+$ git worktree list
+/Volumes/SSD-Data/01work/git-project/vteam        cb0ba6d [fix/doc-pdf-export]
+/Volumes/SSD-Data/01work/git-project/vteam-fixes  b418103 [fix/platform-issues-4]
+（两条均为本仓既存 worktree，非本 todo 创建；两个临时 worktree 已不存在。）
+
+$ git log --oneline -1
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+$ git rev-parse HEAD
+cb0ba6d1ab16571c0c979e41e40951000819f1c7     （未提交，HEAD 未变）
+
+$ git diff --cached --stat
+（空）→ 无任何 staged 改动。
+$ git status --porcelain | wc -l → 74（开工时 73，唯一增量 = 本证据文件；
+   M 集合 34 个文件逐行未变）
+$ diff <backup> server/src/prisma/team-worker-node.migration.spec.ts → 仅 11+/12- 格式行
+$ diff <backup> server/src/chat/worker-dispatcher.spec.ts            → 仅 3442 折行 hunk
+$ ls -ld server/node_modules → drwxr-xr-x@ 591 ...（真实目录；symlink 只存在于
+   已删除的临时 worktree 内，主检出的 node_modules 未被改动）
+
+触碰清单（全部）：
+  格式化：server/src/prisma/team-worker-node.migration.spec.ts
+          server/src/chat/worker-dispatcher.spec.ts
+  证据：  .omo/evidence/task-16-team-worker-node.txt（本文件）
+  临时：  /private/var/folders/.../T/opencode/t16-*.txt（日志与备份，检出外）
+未触碰：任何既存 prettier 债（platform-mcp/*、memories/*、execution-policies/*、
+  common/constants/*、seed.ts、scripts/）、任何兄弟路径、任何 git 状态。
+
+================================================================================
+8. 结论
+================================================================================
+- 本计划引入的 6 处 prettier 错误全部修复（5 + 1），总数 99 → 93，恰好 −6。
+- 这 6 处之外零修复：剩下 93 处全部是 pre-existing，LINT 仍为 1（仍然红，
+  不是「绿了」）；server lint 的既存红不是本 todo 的目标也不是本 todo 的成果。
+- jest 328/328 绿、tsc 0：格式化未改任何语义。
+- HEAD 未变、无提交、无 staged、工作区除两文件格式化 + 本证据外零变化。

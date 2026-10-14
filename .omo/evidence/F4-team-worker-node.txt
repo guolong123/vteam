@@ -1,0 +1,715 @@
+================================================================================
+F4 — SCOPE FIDELITY AUDIT  ·  plan .omo/plans/team-worker-node.md
+Auditor: FINAL-WAVE F4 (read-only).  Repo: /Volumes/SSD-Data/01work/git-project/vteam
+HEAD at audit time: cb0ba6d1ab16571c0c979e41e40951000819f1c7  (cb0ba6d = the OTHER lane's memory-rename commit)
+Plan's recorded base-sha: b6840d1cd72cd536108457d3e78f6bcf54c548ec (parent of cb0ba6d)
+Method: worktree change set (git diff/diff --stat vs HEAD) ∩ plan-authorized file list;
+        co-owned files judged by -U0 hunk headers + hunk content (never whole-file diff).
+================================================================================
+
+### 0. WORKING-TREE CHANGE SET (git diff --stat)  [34 files]
+ .omo/boulder.json                                  |  72 +++++-
+ .omo/evidence/phase5-t9-playwright.json            | 116 ++++-----
+ .../plan-review-execution-gates/task-9/probe.json  |   2 +-
+ .../task-9-matrix.json                             |  18 +-
+ .omo/ulw-execute/ledger.jsonl                      |  89 +++++++
+ .../prototypes/agent-config/index.tsx              |  52 +---
+ .../prototypes/agent-manage/index.tsx              |  19 +-
+ server/prisma/schema.prisma                        |   6 +-
+ server/src/agents/agents.service.spec.ts           |   6 -
+ server/src/agents/agents.service.ts                |   7 +-
+ server/src/agents/dto/update-agent.dto.ts          |  11 -
+ server/src/chat/worker-dispatcher.spec.ts          | 211 ++++++++++++++++
+ server/src/chat/worker-dispatcher.ts               | 103 +++++++-
+ .../platform-mcp/platform-mcp.controller.spec.ts   |  73 ++++--
+ server/src/platform-mcp/platform-mcp.controller.ts |  16 +-
+ .../src/platform-mcp/platform-mcp.service.spec.ts  | 116 ++++++++-
+ server/src/platform-mcp/platform-mcp.service.ts    | 163 ++++++++----
+ server/src/platform-mcp/platform-mcp.tools.ts      |  10 +
+ server/src/tasks/tasks.service.spec.ts             |  62 +++++
+ server/src/tasks/tasks.service.ts                  |   6 +
+ server/src/teams/dto/add-member.dto.ts             |   9 +
+ server/src/teams/dto/update-team.dto.ts            |  10 +
+ server/src/teams/teams.service.spec.ts             | 180 ++++++++++++++
+ server/src/teams/teams.service.ts                  |  16 ++
+ server/src/workers/workers.service.spec.ts         | 272 ++++++++++++++++++++-
+ server/src/workers/workers.service.ts              |  63 ++++-
+ web/app/(main)/agents/page.tsx                     |  63 +----
+ web/app/(main)/teams/[id]/page.tsx                 |  74 +++++-
+ web/app/(main)/teams/[id]/session/page.tsx         |  25 ++
+ web/e2e/reference/testids.ts                       |   5 +-
+ web/src/api/teams.ts                               |   6 +
+ web/src/components/chat/msg-parts.tsx              |  26 +-
+ web/src/components/tasks/task-detail-types.ts      |   2 +
+ web/src/components/teams/TeamMembersPanel.tsx      | 158 +++++++++++-
+ 34 files changed, 1735 insertions(+), 332 deletions(-)
+
+### 0b. UNTRACKED (git status --porcelain -uall, non-.omo only)
+?? scripts/e2e-team-worker-node.sh
+?? server/prisma/migrations/20261014000000_team_worker_node/migration.sql
+?? server/src/prisma/team-worker-node.migration.spec.ts
+
+### 0c. cb0ba6d FILE LIST (the other lane's commit — NOT judged here)
+ .../baseline-agent-policies.json                   |  14 +-
+ scripts/e2e-role-boundaries.sh                     |   4 +-
+ .../migration.sql                                  |  93 +++++
+ server/prisma/schema.prisma                        |   6 +-
+ server/prisma/seed.ts                              |  24 +-
+ server/src/chat/worker-dispatcher.spec.ts          |  14 +-
+ server/src/chat/worker-dispatcher.ts               |   8 +-
+ .../constants/agent-role-prompts.constants.ts      |   2 +-
+ .../src/common/constants/agent.constants.spec.ts   |   4 +-
+ server/src/common/constants/agent.constants.ts     |  16 +-
+ .../constants/platform-capability.constants.ts     |   6 +-
+ .../agent-policies.custom-agents.spec.ts.snap      |  14 +-
+ .../agent-policies-db-driven.spec.ts               |   6 +-
+ .../agent-policies.matrix.spec.ts                  |   6 +-
+ .../agent-policies.native-only-payload.spec.ts     |   4 +-
+ .../agent-policy-fallback.spec.ts                  |   2 +-
+ .../execution-policies.controller.spec.ts          |   2 +-
+ .../execution-policy.service.spec.ts               |   2 +-
+ .../execution-policies/policy-canonical.spec.ts    |   4 +-
+ server/src/memories/dto/query-memories.dto.ts      |  36 +-
+ server/src/memories/memories.controller.spec.ts    |  23 ++
+ server/src/memories/memories.service.spec.ts       | 254 ++++++++++++++
+ server/src/memories/memories.service.ts            | 141 +++++++-
+ server/src/memories/memory-importance.ts           |   6 +-
+ .../memories/memory-maintenance.service.spec.ts    |  20 +-
+ server/src/memories/memory-maintenance.service.ts  |  27 +-
+ server/src/memories/memory.constants.ts            |   3 +
+ .../CONTRACT-tool-naming-and-identity.md           |   4 +-
+ .../platform-mcp/platform-mcp.controller.spec.ts   |  12 +-
+ .../src/platform-mcp/platform-mcp.service.spec.ts  | 303 +++++++++++++---
+ server/src/platform-mcp/platform-mcp.service.ts    | 254 +++++++++++---
+ .../platform-mcp/platform-mcp.tool-naming.spec.ts  |   2 +-
+ server/src/platform-mcp/platform-mcp.tools.ts      |  39 ++-
+ .../prisma/memory-search-to-list.migration.spec.ts | 332 ++++++++++++++++++
+ server/src/tasks/task-progression.scheduler.ts     |   4 +-
+ server/src/tasks/tasks.service.ts                  |   2 +-
+ web/app/(main)/skills/page.tsx                     |   2 +-
+ web/app/(main)/system/memories/page.tsx            | 390 ++++++++++++++++++++-
+ web/src/api/memories.ts                            |  34 +-
+ web/src/api/role-capabilities.ts                   |   4 +-
+ web/src/components/teams/memoryParts.tsx           |   2 +-
+ 41 files changed, 1887 insertions(+), 238 deletions(-)
+
+================================================================================
+### A. THE 8 'MUST HAVE' ITEMS (plan lines 24-32)
+================================================================================
+
+--- MUST #1  team-level preferred worker -------------------------------------
+[column]      server/prisma/schema.prisma:95-96
++  /// 团队级首选 worker（软绑定单节点；成员显式选择优先；不可用自动回退，绝不阻塞）
++  preferredWorkerId  String?  @map("preferred_worker_id")
+[DTO field]  server/src/teams/dto/update-team.dto.ts:49-53
+  @IsOptional()
+  @ValidateIf((o) => o.preferredWorkerId !== null)
+  @IsString()
+  @MaxLength(191)
+  preferredWorkerId?: string | null;
+
+[write path]  server/src/teams/teams.service.ts:347-351 (trim-or-null, no existence check)
+    // 被节点状态阻断；置顶不可用时由分派期 warn 收敛（见 workers.assignWorker 的
+    // preferredWorkerId 置顶分支），并回退自动调度。
+    if (dto.preferredWorkerId !== undefined) {
+      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+    }
+[projection]  server/src/teams/teams.service.ts:1531-1533
+      // 团队级首选 worker（null = 自动调度）；成员级选择优先于本值（见 worker-dispatcher 两级 resolver）。
+      // 缺此字段会让页面上的选择被空值悄悄覆盖（既有陷阱，tasks.service.ts 亦有同形注释）。
+      preferredWorkerId: team.preferredWorkerId ?? null,
+[endpoint]    PATCH /teams/:id reuses teams.edit — teams.controller.ts UNMODIFIED:
+(empty above = controller untouched)
+61:  @Patch(':id')
+62-  @UseGuards(PermissionGuard)
+63-  @RequirePermission('teams.edit')
+[web control] web/app/(main)/teams/[id]/page.tsx — data-testid=team-worker-select:
+345:          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], whiteSpace: "nowrap" }}>首选 Worker 节点</span>
+347:            data-testid="team-worker-select"
+364:            <option value="">自动调度（默认）</option>
+VERDICT: PRESENT ✓
+
+--- MUST #2  member-level preferred worker ----------------------------------
+[column]      server/prisma/schema.prisma:187-188
++  /// 成员级首选 worker（软绑定单节点）：成员显式 > 团队 > 现状；null/空 = 不覆盖
++  preferredWorkerId String? @map("preferred_worker_id")
+[DTO field]   server/src/teams/dto/add-member.dto.ts:69-76 (UpdateMemberDto)
+  @ApiPropertyOptional({
+    description:
+      '成员级首选 worker（软引用，存 vteam_worker 的 id；成员的显式选择优先于团队级设置；' +
+      '空串/空白/null 表示不覆盖，回退团队级设置）',
+  })
+  @IsOptional()
+  @IsString()
+  preferredWorkerId?: string | null;
+[write path]  server/src/teams/teams.service.ts:830-832 (mirrors overrideModelId :827-829)
+    if (dto.workDir !== undefined) data.workDir = dto.workDir?.trim() || null;
+    if (dto.overrideModelId !== undefined)
+      data.overrideModelId = dto.overrideModelId?.trim() || null;
+    // 弱校验（同团队级 preferredWorkerId，见 update()）：worker 是软引用，可达性属运行期事实，纯配置操作不应被节点状态阻断。
+    if (dto.preferredWorkerId !== undefined)
+      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+[projection]  server/src/teams/teams.service.ts:1496-1498
+      // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
+      // ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
+      preferredWorkerId: m.preferredWorkerId ?? null,
+[endpoint]    PATCH /teams/:id/members/:memberId (teams.edit) — controller untouched:
+90:  @Patch(':id/members/:memberId')
+91-  @UseGuards(PermissionGuard)
+92-  @RequirePermission('teams.edit')
+[member chip] web/src/components/teams/TeamMembersPanel.tsx — '跟随团队' default:
+149:  /** 成员级首选 worker 节点：null = 跟随团队级选择（chip 虚线态「跟随团队」）。 */
+243:  // 悬空软引用（节点已删除）：成员值不在清单里时 chip 仍回显原始 id，不得渲染成「跟随团队」
+528:                  data-testid={`agent-worker-chip-${a.instanceId ?? a.id}`}
+539:                      : "跟随团队（点击设置 Worker 节点）"
+560:                    {a.preferredWorkerId ? workerLabel(a.preferredWorkerId) : "跟随团队"}
+820:                    data-testid={`agent-worker-option-${a.instanceId ?? a.id}-follow-team`}
+835:                    跟随团队 {!a.preferredWorkerId && "✓"}
+843:                        data-testid={`agent-worker-option-${a.instanceId ?? a.id}-${w.id}`}
+VERDICT: PRESENT ✓
+
+--- MUST #3  precedence chain member > team > unset, both-unset == today ----
+worker-dispatcher.ts:2309-2317 (grouping chain, short-circuit ??):
+    const preferredWorkerId =
+      (await this.resolveMemberPreferredWorkerId(teamMemberId)) ??
+      (await this.resolveTeamPreferredWorkerId(teamId)) ??
+      undefined;
+    // modelId 行为保持不变：preferredWorkerId 未设时本对象与今日逐字节一致。
+    const assignmentReq: AssignmentRequirement = {
+      ...(agentModelId ? { modelId: agentModelId } : {}),
+      ...(preferredWorkerId ? { preferredWorkerId } : {}),
+    };
+workers.service.ts:910-914 (undefined pin => byte-identical early return):
+      });
+    const fallbackId = ranked[0]?.worker.id ?? null;
+    if (!req.preferredWorkerId) {
+      return fallbackId;
+    }
+jest proof (server/src/chat/worker-dispatcher.spec.ts, 6 new cases):
+      ✓ 未绑 session：assignWorker → bind(pending) → createSession → bind(真实) → promptAsync 全链 (4 ms)
+      ✓ 已绑 worker：复用（不 assignWorker/不 createSession），直接 promptAsync (2 ms)
+      ✓ Agent 显式 defaultModelId：assignWorker 携带 modelId 过滤 + createSession 用拆分模型 (1 ms)
+      ✓ 回归：绑定 offline worker 重分配时 assignWorker 仍携带模型过滤 (1 ms)
+      ✓ 两级皆空（成员/团队均未设置）→ assignWorker 收到 {}（零回归，与引入置顶前逐字节一致） (1 ms)
+      ✓ 仅团队设置 → assignWorker 收到团队值 (1 ms)
+      ✓ 成员与团队都设置 → assignWorker 收到成员值（优先级反转即红） (1 ms)
+      ✓ 回归：已绑定 offline 节点的会话重分配时 assignWorker 仍携带 preferredWorkerId (1 ms)
+      ✓ fail-open：团队置顶查询抛错 → assignWorker 仍收到 {} 且分派继续（warn 记录，无异常上抛） (2 ms)
+Tests:       310 skipped, 9 passed, 319 total
+VERDICT: PRESENT (chain = member ?? team ?? undefined; both-unset => assignWorker({}))
+
+--- MUST #4  soft fallback + observability ------------------------------------
+Pin is consumed ONLY inside assignWorker's four-filtered candidate set:
+90:  preferredWorkerId?: string;
+873:   * - 置顶：req.preferredWorkerId 只是**候选内偏好**，只在通过上面全部四道过滤时生效，
+912:    if (!req.preferredWorkerId) {
+916:    const pinned = ranked.find((x) => x.worker.id === req.preferredWorkerId);
+919:      const raw = candidates.find((w) => w.id === req.preferredWorkerId);
+924:        `assignWorker 首选 worker ${req.preferredWorkerId} 未命中：${reason}；回退自动调度 ${fallbackId ?? 'null'}`,
+1338:   *   teams.preferredWorkerId 与 team_members.preferredWorkerId 置空（团队/成员两级软绑定的
+1369:        where: { preferredWorkerId: id },
+1370:        data: { preferredWorkerId: null },
+1373:        where: { preferredWorkerId: id },
+1374:        data: { preferredWorkerId: null },
+Fallback + warn, no throw (workers.service.ts:916-928):
+    const pinned = ranked.find((x) => x.worker.id === req.preferredWorkerId);
+    if (!pinned) {
+      // DB where 已排除 offline，故「行缺失」与「offline」在候选集里不可区分，不谎称两种原因。
+      const raw = candidates.find((w) => w.id === req.preferredWorkerId);
+      const reason = raw
+        ? `未通过既有过滤（status=${raw.status} 容量=${this.remainingCapacity(raw)}/${need} opencodeVersion=${raw.opencodeVersion} modelId=${req.modelId ?? '-'}）`
+        : '不在候选集中（行缺失或已 offline，二者不可区分）';
+      this.logger.warn(
+        `assignWorker 首选 worker ${req.preferredWorkerId} 未命中：${reason}；回退自动调度 ${fallbackId ?? 'null'}`,
+      );
+      return fallbackId;
+    }
+    // B1（置顶专属附加条件，不改全局语义）：matchesModelRequirement 对「从未上报模型能力」
+grep: throw inside any pin path? -> 
+874-   *   未命中一律回退 ranked[0] 并 warn，绝不 throw（见下方 pin 分支注释）。
+915-    // 置顶分支：偏好只在四道过滤全过的候选集内生效，未命中软回退，绝不 throw。
+B2 dispatcher warn (worker-dispatcher.ts:2388-2400):
+    // B2 可观测（team-worker-node Todo 5）：agentModelId === null（成员/任务/agent
+    // 链皆无模型）且置顶实际生效（最终 workerId 即 preferredWorkerId）时，下面兜底
+    // 表达式 `agentModelId ?? workerRow.defaultModelId ?? null` 的来源从「自动调度
+    // 选中的 worker」变成「置顶 worker」——兜底来源的这次切换必须可见，否则该
+    // worker 的模型表现变化无从归因。
+    if (
+      agentModelId === null &&
+      preferredWorkerId &&
+      workerId === preferredWorkerId
+    ) {
+      this.logger.warn(
+        `首选 worker ${workerId} 已生效，但成员/任务/agent 链均未解析出模型，` +
+          `最终模型取自该 worker 的 defaultModelId=${workerRow.defaultModelId ?? null}`,
+VERDICT: PRESENT (six soft-fallback cases + degraded-honored warn, 12 new jest cases; B2 warn with a failing test)
+
+--- MUST #5  Agent.workerId removal end-to-end -------------------------------
+[schema decl REMOVED] awk "/model Agent /,/^}/" | grep -c workerId = 0
+[model rewrite hunk headers] 
+@@ -66 +65,0 @@ type AgentRow = {
+@@ -323 +322 @@ export class AgentsService implements OnModuleInit {
+@@ -361 +359,0 @@ export class AgentsService implements OnModuleInit {
+@@ -628 +625,0 @@ export class AgentsService implements OnModuleInit {
+@@ -652 +648,0 @@ export class AgentsService implements OnModuleInit {
+@@ -678 +673,0 @@ export class AgentsService implements OnModuleInit {
+[PATCH write removed] git diff | grep -c "dto.workerId !== undefined ? { workerId: dto.workerId }" = 1
+[UpdateAgentDto field] hunk headers: 
+@@ -10 +9,0 @@ import {
+@@ -83,10 +81,0 @@ export class UpdateAgentDto {
+[web control] grep -rn "agent-worker-select" web/app web/src web/e2e docs ->
+  ZERO HITS OK
+[web control] grep -rn "首选 Worker" "web/app/(main)/agents" web/src/components/agents docs/agent-platform ->
+  ZERO HITS OK
+[workerDraft|sortedWorkers in agents page] count = 0
+[testids entry deleted] testids.ts diff lines touching agent-worker-select:
+-      "agent-worker-select",
+[prototypes BOTH] diffstat:
+ .../prototypes/agent-config/index.tsx              | 52 +---------------------
+ .../prototypes/agent-manage/index.tsx              | 19 ++------
+ 2 files changed, 5 insertions(+), 66 deletions(-)
+[residual] agent-config workerPool/agent-worker-select: 0
+[residual] agent-manage worker/首选 Worker: 0
+[migration DROP COLUMN count (comments stripped)] = 1
+VERDICT: PRESENT
+
+--- MUST #6  projection sync in all three places ------------------------------
+(1) team DTO member row — server/src/teams/teams.service.ts:1496-1498:
+      // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
+      // ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
+      preferredWorkerId: m.preferredWorkerId ?? null,
+(2) task-instance DTO — server/src/tasks/tasks.service.ts:2034-2038 (+ TeamMemberView :64-65):
+          // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
+          // ⚠️ 必须与 team DTO（teams.service.ts toTeamDto 成员行）同步返回，缺一处会让
+          // 正确值被 null 覆盖，表现为「切换后回显丢失」（同上方 opencodeAgentName 旧坑）。
+          preferredWorkerId: m.preferredWorkerId ?? null,
+          sessionStatus: s?.status ?? null,
+  seq: number;
+  workDir?: string | null;
+  overrideModelId?: string | null;
+  /** 成员级首选 worker（软引用，成员显式 > 团队 > 自动调度；null/空 = 不覆盖，跟随团队）。 */
+  preferredWorkerId?: string | null;
+  /** opencode 原生 agent 选择（null = 用 opencode 默认 agent）。 */
+(3) web types — web/src/api/teams.ts (TeamMemberDto) + web/src/components/tasks/task-detail-types.ts (MemberView):
+web/src/api/teams.ts:20:  preferredWorkerId?: string | null;
+web/src/api/teams.ts:55:  preferredWorkerId?: string | null;
+web/src/api/teams.ts:87:  preferredWorkerId?: string | null;
+web/src/components/tasks/task-detail-types.ts:139:  preferredWorkerId?: string | null;
+Anti-divergence jest proof (tasks.service.spec.ts new describe):
+      ✓ 任务实例投影与团队 DTO 返回同一 preferredWorkerId（缺一侧即读到 null） (5 ms)
+Tests:       140 skipped, 1 passed, 141 total
+VERDICT: PRESENT (3/3 places, with a same-value anti-divergence test)
+
+--- MUST #7  dangling-reference cleanup in the worker-delete transaction -----
+server/src/workers/workers.service.ts:1366-1376 (remove() tx, replaces the old agent.updateMany):
+        data: { workerId: null, instanceRef: null },
+      }),
+      this.prisma.team.updateMany({
+        where: { preferredWorkerId: id },
+        data: { preferredWorkerId: null },
+      }),
+      this.prisma.teamMember.updateMany({
+        where: { preferredWorkerId: id },
+        data: { preferredWorkerId: null },
+      }),
+      this.prisma.worker.delete({ where: { id } }),
+spec sync (workers.service.spec.ts): txOps 5 -> 6, agent.updateMany assertion replaced by
+team.updateMany + teamMember.updateMany:
++      updateMany: jest.Mock;
++      updateMany: jest.Mock;
++        updateMany: jest.fn(),
++        updateMany: jest.fn(),
+-      expect(txOps).toHaveLength(5);
++      expect(txOps).toHaveLength(6);
+-      expect(prisma.agent.updateMany).toHaveBeenCalledWith({
++      expect(prisma.team.updateMany).toHaveBeenCalledWith({
++      expect(prisma.teamMember.updateMany).toHaveBeenCalledWith({
+jest proof (remove group):
+      ✓ offline → 事务内清理全部关联后物理删除，返回 {id, deleted:true} (4 ms)
+      ✓ online → 409 WORKER_ONLINE_NOT_REMOVABLE，不删除不清理 (2 ms)
+      ✓ degraded → 409（仅 offline 可删） (1 ms)
+      ✓ worker 不存在 → 404 WORKER_NOT_FOUND
+      ✓ 删除成功同步清理 workerMcpStatus 与 pendingCommands 内存态 (1 ms)
+Tests:       167 skipped, 5 passed, 172 total
+VERDICT: PRESENT
+
+--- MUST #8  verifiability ----------------------------------------------------
+[jest] new cases added by this plan:
+  workers.service.spec.ts : 12
+  worker-dispatcher.spec.ts: 6
+  teams.service.spec.ts   : 6
+  tasks.service.spec.ts   : 1
+[migration guard spec] server/src/prisma/team-worker-node.migration.spec.ts (9 it() blocks)
+[s] smoke script         ] scripts/e2e-team-worker-node.sh (A/B/C/D, test -x = yes)
+[gate criterion         ] scripts/gate.sh unmodified; --with-playwright opt-in only
+  migration guard spec it() count = 16
+  smoke script executable       = yes
+  team-worker-node in gate.sh   = 0 hits (0 = not wired into default gate)
+jest proof (guard + workers + dispatcher + teams + agents + tasks):
+
+Test Suites: 31 passed, 31 total
+Tests:       1348 passed, 1348 total
+Snapshots:   0 total
+Time:        10.502 s
+Ran all test suites matching /src\/workers|src\/chat\/worker-dispatcher.spec.ts|src\/teams|src\/agents|src\/tasks|src\/prisma\/team-worker-node.migration.spec.ts/i.
+VERDICT: PRESENT
+
+===============================================================================
+### B. THE 13 'MUST NOT HAVE' GUARDRAILS (plan lines 35-47)
+===============================================================================
+
+MN1  no hard binding (no throw/wait when a pin is unavailable) ......... PASS
+     Evidence: workers.service.ts pin branch only logger.warn + return fallbackId;
+     `git diff -U0 -- server/src/workers/workers.service.ts | grep '^@@'` shows no hunk
+     touching any throw site. The two pre-existing '无可用 worker' throws in
+     worker-dispatcher.ts:2331/2361 fire only when assignWorker() returns null
+     (no worker at all) — unchanged, and never caused by the pin.
+@@ -2300,3 +2300,26 @@ export class WorkerDispatcher
+@@ -2364,0 +2388,16 @@ export class WorkerDispatcher
+@@ -3833,0 +3873,58 @@ export class WorkerDispatcher
+
+MN2  platform-mcp adopt/ownership logic untouched ...................... PASS
+     Working-tree diff of server/src/platform-mcp/ contains only the other lane's
+     'resolvedContext' dirt; zero plan tokens:
+     grep -rn preferredWorkerId|preferred_worker_id in server/src/platform-mcp/ ->        0 files with hits
+     adoptOrphanedSession() method body: identical between HEAD and worktree (diff = empty);
+     no +/- line anywhere in the platform-mcp diff mentions adoptOrphaned. The hunks near
+     :7427-7540 are the OTHER lane's in-flight anti-impersonation/resolvedContext work
+     (sessionSelect 抽取 + resolveSessionToCaller + fail-closed 403), zero plan tokens.
+
+MN3  no team-awareness added to /agents/* global endpoints .............. PASS
+     server/src/agents/agents.controller.ts: git status --porcelain = (empty, untouched)
+     grep team|Team in agents.controller.ts -> only prose comments
+     grep teamId|teamMemberId|preferredWorker in agents.service.ts -> NONE
+     OpencodeAgentsResult.workerId (agents.service.ts:100-104), opts.workerId
+     (agents.service.ts:459/497/533/573) and the ?workerId= query params all preserved.
+
+MN4  matchesModelRequirement degrade semantics unchanged ................ PASS
+     Diff of the whole function between HEAD and worktree: IDENTICAL.
+     `git diff -U0 -- server/src/workers/workers.service.ts | grep '^@@'`:
+@@ -79,0 +80,11 @@ export interface AssignmentRequirement {
+@@ -861,0 +873,2 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -898 +911,36 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -1290 +1338,2 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -1319,3 +1368,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+     no hunk old-side range covers :901-938 (matchesModelRequirement at :909 in HEAD);
+     B1 lives only inside the pin branch (workers.service.ts:933-944).
+
+MN5  squashed baseline NOT edited (blob equality) ...................... PASS
+     blob @b6840d1 = blob @cb0ba6d = blob in index = blob in worktree
+       = 3dc7533b9733e04b6947e289532bbe7ee7253950
+     `git diff b6840d1 -- <baseline>` = empty. Only ONE new migration dir exists.
+
+MN6  no new FK and no new index on the two new columns .................. PASS
+     migration.sql (comments stripped): FOREIGN KEY hits = 0; ADD COLUMN = 2; DROP COLUMN = 1.
+     schema.prisma Team/TeamMember blocks: preferredWorkerId carries only @map(...),
+     no @relation, no @@index. Team block's only @@index remains the pre-existing
+     idx_teams_main_agent_member; TeamMember's only @@index remains idx_team_members_role.
+
+MN7  no node pool/allowlist/capability routing; worker/ untouched; no new dep  PASS
+     git status --porcelain --untracked-files=all -- worker/ = (empty)
+     git status --porcelain over every package.json / lockfile = (empty)
+     Pin is a single scalar string in AssignmentRequirement — no collection type, no
+     allowlist, no pool. No new dependency.
+
+MN8  no proactive rebinding of healthy sessions ........................ PASS
+     worker-dispatcher.ts:2282 `let workerId = session.workerId;` reuse is untouched;
+     the diff's only change to that block is appending the pin to the already-built
+     assignmentReq. No session reset/unbind path was added or reordered.
+
+MN9  no mechanical workerId sweep damaging the four fetch-worker semantics . PASS
+     Preserved & verified: OpencodeAgentsResult.workerId (agents.service.ts:100-104);
+     agents.controller.ts ?workerId= (getOmoConfig/getOmoAgentPrompt/listOpencodeAgents);
+     web/src/components/agents/AgentRolesTab.tsx:80 and ExternalAgentsPanel.tsx:76
+     (both files untouched: git status --porcelain over web/src/components/agents = empty).
+     `grep -rn "dto\.workerId" server/src/workers | wc -l` = 46 (>= 40 baseline kept).
+     `grep -rn "agent\.workerId" server/src` = 0; `grep -rn "dto\.workerId" server/src/agents` = 0.
+
+MN10 no existence check / FK for the two new columns (weak, documented)  PASS
+     teams.service.ts update()/updateMember() contain zero worker.* lookups
+     (awk over both methods | grep 'worker\.' = NONE); the deliberate divergence from
+     the mainAgentMemberId existence check is documented in-code at :347-350 and :830.
+     DTOs use only @IsOptional/@IsString/@MaxLength(191) shape validation.
+
+MN11 no Agent-level worker preference retained anywhere ................ PASS
+     schema Agent block workerId hits = 0; agents.service.ts/spec/dto carry no
+     workerId in the persisted shape; web agents page has 1 residual 'workerId'
+     occurrence and it is the restart-all response type, not a preference.
+     Prototypes clean. No rename-to-preferredWorkerId smuggling.
+
+MN12 no data migration / backfill ........................................ PASS
+     Comments-stripped migration: UPDATE hits = 0, INSERT hits = 0.
+     Both new columns are nullable with no default value and no backfill statement.
+
+MN13 acceptance criteria not doc-text grep counts / no human clicks /
+     Playwright not in the default gate ............................... PASS
+     scripts/gate.sh: untouched (git status --porcelain over scripts/ shows only the
+     new e2e script); --with-playwright is opt-in and requires :3001.
+     scripts/e2e-team-worker-node.sh keeps the Playwright branch optional
+     (E2E_WITH_PLAYWRIGHT=1) and explicitly records it as non-gating.
+
+===============================================================================
+### C. EXTRA SCOPE PROBES
+===============================================================================
+
+C1  Full enumeration + classification of the working-tree change set
+    (34 modified + 3 new product files). Every entry classified:
+
+  [PLAN-AUTHORIZED — modified, 23 files]
+    server/prisma/schema.prisma                        (M6: +2 cols, -Agent.workerId)
+    server/src/agents/agents.service.ts                (M5)
+    server/src/agents/agents.service.spec.ts           (M5 key-set + fixtures)
+    server/src/agents/dto/update-agent.dto.ts          (M5)
+    server/src/chat/worker-dispatcher.ts               (M3/M4; co-owned file)
+    server/src/chat/worker-dispatcher.spec.ts          (M3/M4 jest; co-owned file)
+    server/src/tasks/tasks.service.ts                  (M6 projection #2; co-owned file)
+    server/src/tasks/tasks.service.spec.ts             (M6 anti-divergence; co-owned file)
+    server/src/teams/dto/add-member.dto.ts             (M2)
+    server/src/teams/dto/update-team.dto.ts            (M1)
+    server/src/teams/teams.service.ts                  (M1/M2/M6/M10)
+    server/src/teams/teams.service.spec.ts             (M1/M2/M6/M8 jest)
+    server/src/workers/workers.service.ts              (M4/M7)
+    server/src/workers/workers.service.spec.ts         (M4/M7 jest)
+    web/app/(main)/agents/page.tsx                     (M5 removal)
+    web/app/(main)/teams/[id]/page.tsx                 (M1 web control)
+    web/app/(main)/teams/[id]/session/page.tsx         (M2 chip wiring)
+    web/e2e/reference/testids.ts                       (M5 removal + M2 registration + T15)
+    web/src/api/teams.ts                               (M6 projection #3)
+    web/src/components/tasks/task-detail-types.ts      (M6 projection #3)
+    web/src/components/teams/TeamMembersPanel.tsx      (M2 chip)
+    docs/agent-platform/prototypes/agent-config/index.tsx   (M5)
+    docs/agent-platform/prototypes/agent-manage/index.tsx   (M5)
+
+  [PLAN-AUTHORIZED — new, 3 files]
+    scripts/e2e-team-worker-node.sh                    (T12)
+    server/prisma/migrations/20261014000000_team_worker_node/migration.sql  (T7)
+    server/src/prisma/team-worker-node.migration.spec.ts                     (T7)
+
+  [PRE-EXISTING DIRT — other lane, not touched by this plan, 11 files]
+    server/src/platform-mcp/platform-mcp.service.ts / .controller.ts /
+      .controller.spec.ts / .service.spec.ts / .tools.ts
+    web/src/components/chat/msg-parts.tsx
+    .omo/boulder.json / .omo/ulw-execute/ledger.jsonl (orchestration, legitimately live)
+    .omo/evidence/phase5-t9-playwright.json
+    .omo/evidence/plan-review-execution-gates/task-9/probe.json
+    .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+    (All 11 present in the T1 base-sha snapshot; all 11 still present now — nothing
+     was cleaned, nothing new appeared.)
+
+  [OTHER-STREAM (already committed in cb0ba6d) — not in the worktree diff]
+    server/src/memories/**, server/src/execution-policies/**, server/src/common/**,
+    server/prisma/seed.ts, scripts/e2e-role-boundaries.sh, platform-mcp/*, and the
+    committed hunks inside schema.prisma / worker-dispatcher.ts / worker-dispatcher.spec.ts /
+    tasks.service.ts.
+
+  VERDICT: no file outside the plan-authorized list was modified BY THIS PLAN.
+  The only untracked product files are the 3 authorized ones.
+
+  Co-owned-file proof (hunk headers, -U0) — each contains ONLY plan hunks:
+    server/prisma/schema.prisma
+        @@ -94,0 +95,2 @@ model Team {
+        @@ -184,0 +187,2 @@ model TeamMember {
+        @@ -651,2 +654,0 @@ model Agent {
+    server/src/chat/worker-dispatcher.ts
+        @@ -2300,3 +2300,26 @@ export class WorkerDispatcher
+        @@ -2364,0 +2388,16 @@ export class WorkerDispatcher
+        @@ -3833,0 +3873,58 @@ export class WorkerDispatcher
+    server/src/chat/worker-dispatcher.spec.ts
+        @@ -3276,0 +3277,211 @@ describe('WorkerDispatcher', () => {
+    server/src/tasks/tasks.service.ts
+        @@ -63,0 +64,2 @@ type TeamMemberView = {
+        @@ -2031,0 +2034,4 @@ export class TasksService implements OnModuleInit {
+    server/src/tasks/tasks.service.spec.ts
+        @@ -17,0 +18 @@ import { TasksService } from './tasks.service';
+        @@ -1229,0 +1231,2 @@ describe('TasksService', () => {
+        @@ -1245,0 +1249,2 @@ describe('TasksService', () => {
+        @@ -5357,0 +5363,57 @@ describe('TasksService', () => {
+
+C2  The three appended items (14 / 15 / 16) — scope-appropriate?
+    T14 (evidence receipt accuracy: T1 porcelain block 13->14 lines / 9 pre-existing dirty
+        files separation, T2 §6 diffstat 8/3 -> "3 files changed, 1 insertion(+), 23
+        deletions(-)") ...... IN SPIRIT: receipt-accuracy correction. Only .omo/evidence
+        text files touched; no product code; explicitly forbids adding a grep-satisfying
+        line. SCOPE-APPROPRIATE.
+    T15 (register "team-worker-select" + the /agents-removed entry's neighbours to
+        web/e2e/reference/testids.ts) ... IN SPIRIT: reference-list registration for a
+        testid THIS plan created in T10. Single-file, additive; product code untouched.
+        SCOPE-APPROPRIATE.
+    T16 (prettier-fix the 6 lint errors this plan introduced in
+        team-worker-node.migration.spec.ts + worker-dispatcher.spec.ts:3442, and re-record
+        the lint criterion as "no new failures") ... IN SPIRIT: fixing debt created by this
+        plan's own new files only. Verified: server lint:check now reports 93 errors
+        (was 99), and plan-touched files appear in the report only as pre-existing-style
+        no-unused-vars WARNINGS, never as errors. No existing prettier debt in the other
+        lane's files was touched. SCOPE-APPROPRIATE.
+
+C3  Implicit forbids — nothing added that the plan's Must-NOT implies
+    - No new page / tab / nav item: no untracked files under web/ at all; teams/[id]/page.tsx
+      only gains one <section> row inside the existing detail page.
+    - No third-party component: exactly ONE new import across all web changes
+      (web/app/(main)/teams/[id]/page.tsx: `import { api } from "@/lib/api"` — an internal
+      helper). All new UI is native <select>/<button>. No new dependency in any package.json.
+    - No new fetch shape: both new worker lists reuse GET /workers under the existing
+      ["workers"] query key (teams/[id]/page.tsx and TeamMembersPanel.tsx); the member write
+      reuses PATCH /teams/:id/members/:memberId with the new DTO field.
+    - No new route / permission point: teams.controller.ts untouched.
+    - No new realtime event: team.changed broadcast and version optimistic lock untouched.
+
+  => BLOCKERS: 0
+
+===============================================================================
+### D. NON-BLOCKING NOTES (delivery is in scope; these are observations only)
+===============================================================================
+N1  `UpdateMemberDto.preferredWorkerId` has @IsOptional/@IsString but no @MaxLength(191),
+    while `UpdateTeamDto.preferredWorkerId` has @MaxLength(191). Shape-only asymmetry; the
+    column is varchar(191) and MySQL/Prisma will error on an over-long value. Cosmetic,
+    not a scope deviation (the plan specified only the DTO field + description).
+N2  `AssignmentRequirement.preferredWorkerId` is a single scalar; there is no collection
+    anywhere. Correct per the plan (explicitly no pool/allowlist), recorded here only so a
+    future reader does not mistake the absence for an oversight.
+N3  The two evidence log directories .omo/evidence/team-worker-node/ and
+    .omo/evidence/team-worker-node.lane-backup/ contain overlapping copies of the same
+    e2e/mutation run logs (lane-backup duplicates e2e.txt + 4 run-final*.txt). Logs only,
+    no product code; they are the artefacts the plan itself asked the executor to keep.
+N4  The plan's own file (.omo/plans/team-worker-node.md), .omo/drafts/ and .omo/notepads/
+    entries, and 30+ .omo/evidence/*.txt receipts are untracked additions. These are the
+    plan's mandated evidence mechanism (Todo 1: "Evidence root .omo/evidence/task-<N>-…",
+    Commit: N "evidence folded into the F wave"), so they are in-scope by construction.
+
+===============================================================================
+### E. FINAL TALLY
+===============================================================================
+Must-have 1..8 ...................... ALL PRESENT (8/8)
+Must-NOT 1..13 ....................... ALL PASS (13/13)
+Out-of-scope product modifications ... NONE
+Missing authorized items ............. NONE
+Extra/forbidden items ................ NONE
+BLOCKERS .............................. 0
+
+AUDIT METHOD / COMMANDS USED (all read-only)
+  git rev-parse HEAD; git log --oneline; git status --porcelain -uall; git diff --stat;
+  git diff -U0 <file> | grep '^@@';  git show cb0ba6d:<path>;
+  git diff b6840d1 -- <baseline>;  git rev-parse / git hash-object for blob equality;
+  grep -rn over web/app web/src web/e2e docs and server/src;
+  cd server && npx jest src/workers src/chat src/teams src/agents src/tasks
+    src/prisma/team-worker-node.migration.spec.ts   (all green)
+  cd server && npm run lint:check  -> 93 errors / 68 warnings (plan files: 0 errors)
+No git add/commit/stash/checkout was executed. Only this report file was written.
+===============================================================================
+
+===============================================================================
+### F. SUPPLEMENTARY RAW VERIFICATIONS (run during this audit)
+===============================================================================
+F1  T15 testids registrations are faithful — every testid in the new "/teams/[id]"
+    PAGE_SMOKE key exists exactly once on the real page:
+    team-detail-root     occurrences in web/app/(main)/teams/[id]/page.tsx = 1
+    team-worker-select   occurrences in web/app/(main)/teams/[id]/page.tsx = 1
+    enter-team-session   occurrences in web/app/(main)/teams/[id]/page.tsx = 1
+    team-save-name       occurrences in web/app/(main)/teams/[id]/page.tsx = 1
+    The agent-worker-chip/option entries stay inside the team-session PAGES entry
+    (route at testids.ts:191, entries at :238-240) — NOT moved into /agents.
+    PAGES array still carries no "/teams/[id]" audit entry (only the pre-existing
+    "/teams", "/agents", "/teams/[id]/session" routes).
+
+F2  Co-owned file hunk headers (raw, -U0):
+    $ git diff -U0 -- server/prisma/schema.prisma | grep '^@@'
+        @@ -94,0 +95,2 @@ model Team {
+        @@ -184,0 +187,2 @@ model TeamMember {
+        @@ -651,2 +654,0 @@ model Agent {
+    $ git diff -U0 -- server/src/chat/worker-dispatcher.ts | grep '^@@'
+        @@ -2300,3 +2300,26 @@ export class WorkerDispatcher
+        @@ -2364,0 +2388,16 @@ export class WorkerDispatcher
+        @@ -3833,0 +3873,58 @@ export class WorkerDispatcher
+    $ git diff -U0 -- server/src/tasks/tasks.service.ts | grep '^@@'
+        @@ -63,0 +64,2 @@ type TeamMemberView = {
+        @@ -2031,0 +2034,4 @@ export class TasksService implements OnModuleInit {
+
+F3  Pre-existing-dirt baseline is intact (T1 snapshot vs now): the 11 dirty entries
+    recorded at base-sha are the same 11 present now — nothing cleaned, nothing new.
+    The 3 other .json/.omo orchestration files remain dirty and untouched by this plan.
+
+===============================================================================
+### G. RAW OUTPUTS THAT BACK THE VERDICT
+===============================================================================
+--- git diff --stat (whole worktree) ---
+ .omo/boulder.json                                  |  72 +++++-
+ .omo/evidence/phase5-t9-playwright.json            | 116 ++++-----
+ .../plan-review-execution-gates/task-9/probe.json  |   2 +-
+ .../task-9-matrix.json                             |  18 +-
+ .omo/ulw-execute/ledger.jsonl                      |  89 +++++++
+ .../prototypes/agent-config/index.tsx              |  52 +---
+ .../prototypes/agent-manage/index.tsx              |  19 +-
+ server/prisma/schema.prisma                        |   6 +-
+ server/src/agents/agents.service.spec.ts           |   6 -
+ server/src/agents/agents.service.ts                |   7 +-
+ server/src/agents/dto/update-agent.dto.ts          |  11 -
+ server/src/chat/worker-dispatcher.spec.ts          | 211 ++++++++++++++++
+ server/src/chat/worker-dispatcher.ts               | 103 +++++++-
+ .../platform-mcp/platform-mcp.controller.spec.ts   |  73 ++++--
+ server/src/platform-mcp/platform-mcp.controller.ts |  16 +-
+ .../src/platform-mcp/platform-mcp.service.spec.ts  | 116 ++++++++-
+ server/src/platform-mcp/platform-mcp.service.ts    | 163 ++++++++----
+ server/src/platform-mcp/platform-mcp.tools.ts      |  10 +
+ server/src/tasks/tasks.service.spec.ts             |  62 +++++
+ server/src/tasks/tasks.service.ts                  |   6 +
+ server/src/teams/dto/add-member.dto.ts             |   9 +
+ server/src/teams/dto/update-team.dto.ts            |  10 +
+ server/src/teams/teams.service.spec.ts             | 180 ++++++++++++++
+ server/src/teams/teams.service.ts                  |  16 ++
+ server/src/workers/workers.service.spec.ts         | 272 ++++++++++++++++++++-
+ server/src/workers/workers.service.ts              |  63 ++++-
+ web/app/(main)/agents/page.tsx                     |  63 +----
+ web/app/(main)/teams/[id]/page.tsx                 |  74 +++++-
+ web/app/(main)/teams/[id]/session/page.tsx         |  25 ++
+ web/e2e/reference/testids.ts                       |   5 +-
+ web/src/api/teams.ts                               |   6 +
+ web/src/components/chat/msg-parts.tsx              |  26 +-
+ web/src/components/tasks/task-detail-types.ts      |   2 +
+ web/src/components/teams/TeamMembersPanel.tsx      | 158 +++++++++++-
+ 34 files changed, 1735 insertions(+), 332 deletions(-)
+
+--- git diff -U0 -- server/src/workers/workers.service.ts | grep '^@@' ---
+@@ -79,0 +80,11 @@ export interface AssignmentRequirement {
+@@ -861,0 +873,2 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -898 +911,36 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -1290 +1338,2 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+@@ -1319,3 +1368,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
+
+--- whole-function diff: matchesModelRequirement (HEAD vs worktree) ---
+    (identical)
+
+--- baseline migration blob equality ---
+    @b6840d1 : 3dc7533b9733e04b6947e289532bbe7ee7253950
+    @cb0ba6d : 3dc7533b9733e04b6947e289532bbe7ee7253950
+    index    : 3dc7533b9733e04b6947e289532bbe7ee7253950
+    worktree : 3dc7533b9733e04b6947e289532bbe7ee7253950
+    git diff b6840d1 -- server/prisma/migrations/20260925000000_squashed_baseline/migration.sql => (empty)
+
+--- comment-stripped migration counts ---
+    DROP COLUMN      = 1
+    ALTER TABLE     = 3
+    ADD COLUMN x2   = 2
+    preferred_worker_id = 2
+    \`agents\`          = 1
+    UPDATE/INSERT/FK/IF EXISTS/IF NOT EXISTS = 0
+
+--- jest (all plan-touched suites) ---
+
+Test Suites: 31 passed, 31 total
+Tests:       1348 passed, 1348 total
+Snapshots:   0 total
+Time:        9.155 s, estimated 10 s
+Ran all test suites matching /src\/workers|src\/chat\/worker-dispatcher.spec.ts|src\/teams|src\/agents|src\/tasks|src\/prisma\/team-worker-node.migration.spec.ts/i.
+
+--- server lint:check ---
+  93 errors and 0 warnings potentially fixable with the `--fix` option.
+
+
+===============================================================================
+### H. ONE-LINE VERDICT
+===============================================================================
+  APPROVED — the working-tree delivery is EXACTLY the plan's authorized scope:
+  8/8 Must-have present with file:line evidence, 13/13 Must-NOT guardrails passed,
+  0 out-of-scope product modifications, 0 missing authorized items, 0 blockers.
+  Report artifact: .omo/evidence/F4-team-worker-node.txt (this file).
+===============================================================================

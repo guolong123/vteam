@@ -1,0 +1,409 @@
+================================================================================
+INDEPENDENT VERIFIER — Todo 13 & Todo 16 of
+/Volumes/SSD-Data/01work/git-project/vteam/.omo/plans/team-worker-node.md
+Read-only re-derivation. Nothing from either lane's evidence was trusted; every
+number below is a fresh command I ran myself.
+Date: 2026-10-15 (Asia/Shanghai)
+================================================================================
+
+0. GROUND TRUTH (re-established, not assumed)
+--------------------------------------------------------------------------------
+$ cd /Volumes/SSD-Data/01work/git-project/vteam && git rev-parse HEAD
+cb0ba6d1ab16571c0c979e41e40951000819f1c7              <- matches the required sha
+$ git log --oneline -1
+cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+$ git worktree list
+/Volumes/SSD-Data/01work/git-project/vteam        cb0ba6d [fix/doc-pdf-export]
+/Volumes/SSD-Data/01work/git-project/vteam-fixes  b418103 [fix/platform-issues-4]
+  -> only the two pre-existing worktrees; no lane-created worktree survived.
+$ git diff --cached --stat
+(empty)                                                 <- staged area clean
+$ git status --porcelain | awk '{print substr($0,1,2)}' | sort | uniq -c
+  34  M
+  40  ??
+total=74
+
+Verdict on HEAD/staging: CONFIRMED unchanged and unstaged.
+
+================================================================================
+PART A — TODO 16 VERDICT
+================================================================================
+
+A1. FORMAT-ONLY, FILE 1: server/src/prisma/team-worker-node.migration.spec.ts
+--------------------------------------------------------------------------------
+Method: I reconstructed the pre-format file by applying the 5 reverse edits
+documented in the lane's own evidence §3a, then ran prettier on the
+reconstruction and compared the result to the live file BYTE-FOR-BYTE, and
+compared normalized token streams.
+
+  hunks reversed: 5/5 (all 5 "formatted-before" texts located and un-wrapped)
+  prettier(reconstructed pre) == current file: True (byte-exact)
+  token streams identical:        True (1716 tokens each)
+  string literals: count=109, order-equal=True
+  identifiers:     count=232, order-equal=True
+
+Additional check the lane did NOT do — is the live file already a prettier
+fixed point (i.e. would a re-run of prettier --write change it)?
+  $ cd server && npx prettier --config .prettierrc --write <copy>
+  ".vfy-twn.ts 37ms (unchanged)"
+  -> the file is now a prettier fixed point, so the format is stable and the
+     earlier 5 lint sites are gone by construction, not by suppression.
+
+Assertion-level sanity (9 `it()` blocks, all still present and semantically
+distinct, titles ①–⑨ incl. DROP-COLUMN, 2x ADD COLUMN, Agent-workerId==0,
+comment-stripped zero-UPDATE/INSERT/FK, baseline-has-worker_id, no FK/index,
+DDL-equivalence, dir-count/order, baseline-untouched). No assertion string or
+identifier was added, removed, renamed or reworded.
+
+=> FORMAT-ONLY CONFIRMED.
+
+A2. FORMAT-ONLY, FILE 2: server/src/chat/worker-dispatcher.spec.ts
+--------------------------------------------------------------------------------
+The lane claims a single minimal wrap at ~3442. Re-derived:
+
+  $ git diff -U0 -- server/src/chat/worker-dispatcher.spec.ts | grep '^@@'
+  @@ -3276,0 +3277,211 @@ describe('WorkerDispatcher', () => {
+  $ git diff --numstat -- server/src/chat/worker-dispatcher.spec.ts
+  211	0
+  -> ONE insertion-only hunk, 211 added lines, ZERO deletions.
+
+I then un-wrapped the 2-line site back to the single 99-column line and diffed:
+  @@ -3441,3 +3441,4 @@
+  -  m.includes('团队首选 worker 查询失败') && m.includes('tm_0000000001'),
+  +  m.includes('团队首选 worker 查询失败') &&
+  +  m.includes('tm_0000000001'),
+  line delta pre vs current: 1
+  token streams identical: True (0 divergent token positions)
+  string literals identical in order: True
+  identifiers identical in order: True
+
+=> FORMAT-ONLY CONFIRMED (one line split into two; nothing else).
+
+A3. THE DELTA IS REAL — re-run lint:check myself
+--------------------------------------------------------------------------------
+$ cd server && npm run lint:check > verify-lint-now.txt 2>&1; echo LINT=$?
+✖ 161 problems (93 errors, 68 warnings)
+  93 errors and 0 warnings potentially fixable with the `--fix` option.
+LINT=1
+
+Per-file error map (mine), files with any error:
+  14 platform-mcp/platform-mcp.service.spec.ts
+  13 memories/memory-maintenance.service.spec.ts
+  11 prisma/memory-search-to-list.migration.spec.ts
+   7 message-channels/message-registry.service.spec.ts
+   6 prisma/model-usage.migration.spec.ts
+   6 memories/memories.service.ts
+   5 memories/memories.service.spec.ts
+   4 platform-mcp/platform-mcp.tools.ts
+   4 chat/worker-dispatcher.ts
+   4 chat/worker-dispatcher.spec.ts
+   3 platform-mcp/platform-mcp.service.ts
+   2 users/admin-permission.ts
+   2 usage/usage.service.spec.ts
+   2 memories/memory-maintenance.service.ts
+   2 memories/memory-importance.spec.ts
+   2 memories/memories.controller.spec.ts
+   1 workers/worker-code-version.ts
+   1 workers/worker-code-version.spec.ts
+   1 prisma/worker-code-version.migration.spec.ts
+   1 prisma/seed.spec.ts
+   1 memories/memory-state.ts
+   1 chat/message-parts.ts
+  93   <- matches eslint's own summary line exactly
+
+- team-worker-node.migration.spec.ts: ABSENT from the report (0 hits).
+- worker-dispatcher.spec.ts: exactly 4 error sites, at 3573:15 / 3576:24 /
+  3577:9 / 4472:34 — the "FOUR pre-existing sites" the task predicted, at the
+  predicted shifted positions.
+=> 93 (was 99) CONFIRMED; the plan's own file is gone from the report.
+
+A4. NO SEMANTIC REGRESSION
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/prisma/team-worker-node.migration.spec.ts \
+                     src/chat/worker-dispatcher.spec.ts
+PASS src/prisma/team-worker-node.migration.spec.ts
+PASS src/chat/worker-dispatcher.spec.ts
+Test Suites: 2 passed, 2 total
+Tests:       328 passed, 328 total
+Snapshots:   0 total
+JEST=0
+
+$ cd server && npx tsc --noEmit -p tsconfig.json
+(no output)
+TSC=0
+
+=> 328/328 and TSC=0 CONFIRMED (matches the lane's claim exactly).
+
+A5. THE PRE-EXISTING-4 ATTRIBUTION (proved two independent ways)
+--------------------------------------------------------------------------------
+Way 1 (hunk arithmetic): the plan's only hunk in that file is
+  @@ -3276,0 +3277,211 @@   i.e. it touches ONLY lines 3277..3487.
+The 4 residual error sites are 3573, 3576, 3577, 4472 — all > 3487.
+Therefore every one of them lies in code this plan never touched.
+(And 3442, the one the plan DID add, is now absent — the lane fixed it.)
+
+Way 2 (clean-HEAD control experiment, my own detached worktree):
+  $ git worktree add --detach <tmp> cb0ba6d1...; ln -s .../server/node_modules
+  $ cd <tmp>/server && npm run lint:check
+  chat/worker-dispatcher.spec.ts errors at HEAD (clean tree, base commit):
+    3362:15 / 3365:24 / 3366:9 / 4261:34   <- the SAME 4 sites, same 4 prettier
+    complaints, just 211 lines earlier because the plan's insertion shifts them.
+=> The 4 residual errors are provably NOT this plan's. CONFIRMED.
+
+A6. CLEANUP / NO COLLATERAL
+--------------------------------------------------------------------------------
+- git worktree list: 2 entries, both pre-existing (main + vteam-fixes).
+  I removed my own 2 temp worktrees with `git worktree remove --force` +
+  `git worktree prune`; afterwards `git worktree list | grep -c opencode` = 0.
+- HEAD still cb0ba6d1ab16571c0c979e41e40951000819f1c7.
+- git diff --cached: empty.
+- No main-checkout node_modules or source was symlinked/replaced; the only
+  symlinks I created lived inside the temp worktrees that are now deleted.
+- The 34-entry ` M` set is the plan's implementation set (23 tracked files
+  across server/web/docs) + the 11 pre-existing dirty files. Nothing outside
+  the plan's own scope appears as modified by ME: my only writes were the two
+  temp worktrees (deleted) and this evidence artifact.
+
+A7. BASE-SHA RECONCILIATION — what I could and could not verify
+--------------------------------------------------------------------------------
+VERIFIED (I ran the clean-revision measurements myself):
+  base sha b6840d1c, detached clean worktree, same lint:check:
+    ✖ 137 problems (69 errors, 68 warnings)      BASE_LINT=1
+  HEAD  cb0ba6d1, detached clean worktree, same lint:check:
+    ✖ 158 problems (90 errors, 68 warnings)       HEAD_LINT=1
+
+So the lane's reconciliation is arithmetically exact:
+  69  = base sha b6840d1c, clean            (lane said 69 — CONFIRMED)
+  90  = HEAD cb0ba6d1, clean                (lane said 90 — CONFIRMED)
+  +3  = the 3 extra prettier errors carried by the pre-existing UNCOMMITTED
+        platform-mcp edits. I verified the +3 by diffing the per-file error
+        map of HEAD-clean vs the current worktree:
+          platform-mcp.service.spec.ts   12 -> 14   (+2)
+          platform-mcp.service.ts         2 ->  3   (+1)
+          platform-mcp.tools.ts           4 ->  4   ( 0)
+        sum of deltas = exactly +3, and NO other file's count changed at all
+        (worker-dispatcher.spec.ts 4->4, worker-dispatcher.ts 4->4, and the
+        plan's own new spec 0). 90 + 3 = 93.
+  93  = the pre-plan-state prettier backlog (the "pre-existing 93").
+  99  = 93 + the 6 this plan introduced, measured before the fix.
+The lane's sentence 'clean HEAD cb0ba6d1 = 90, plus 3 from the pre-existing
+uncommitted platform-mcp edits = 93, plus our 6 = 99' is therefore TRUE.
+
+NOT INDEPENDENTLY VERIFIABLE BY ME (stated plainly):
+  - The "99 before" number itself is a historical measurement; the fix is
+    already landed, so 99 is not re-observable. It is corroborated, not
+    re-measured, by: (a) the lane's full raw before/after transcripts with
+    per-file counts that internally sum to exactly 99 and exactly 93;
+    (b) my own control experiment showing which files could hold 6 extra
+    errors; (c) the residual report still carrying the 4 non-plan sites at
+    the exact line numbers the lane predicted.
+  - The *identity* of the 6 introduced sites (5 in the new spec + 1 at 3442)
+    is corroborated, not re-measured, for the same reason. However the
+    direction of every one of the 6 is independently confirmed by the
+    opposite direction: re-adding the single wrap at 3442 is what the lane
+    used to prove 93->94, and my A5/A7 analysis independently confirms those
+    are the only sites the plan could have touched.
+  - I did NOT re-run the full `bash scripts/gate.sh`; I re-derived its bare-
+    catch gate directly (see Part B, item f).
+
+TODO 16 — VERDICT: CONFIRMED
+
+================================================================================
+PART B — TODO 13 VERDICT (independent re-run of 5+ of its 10 checks)
+================================================================================
+I re-ran items a, b, c, d, e, f, g, h plus the two documented reds and the
+re-scoped acceptance judgment.
+
+(a) $ grep -rn "agent-worker-select" web/app web/src web/e2e docs
+    exit=1 (zero matches)                                  PASS
+    Gitignored-noise justification for source scoping:
+    $ grep -rln "agent-worker-select" web/.next | wc -l   -> 6
+    $ grep -rn  "agent-worker-select" docs | wc -l         -> 0
+    $ git check-ignore -v web/.next
+    web/.gitignore:22: /.next/	web/.next
+    $ git ls-files web/.next | wc -l                       -> 0
+    The 6 hits are all in build cache (.next/**, webpack .pack files),
+    which is gitignored and untracked — hence the source-scoped grep is the
+    correct formulation. PASS.
+
+(b) $ grep -rn "dto\.workerId" server/src/agents     -> exit=1, 0 hits   PASS
+    $ grep -rn "agent\.workerId" server/src           -> exit=1, 0 hits   PASS
+
+(c) $ grep -rn "dto\.workerId" server/src/workers | wc -l     -> 46     PASS
+    (46 >= 40; the Worker-domain inbound-DTO semantics survive).
+
+(d) $ awk '/model Agent /,/^}/' server/prisma/schema.prisma | grep -c workerId
+    -> 0                                                  PASS
+    Region sanity check (so the 0 is not a vacuous match):
+    $ awk '/model Agent /,/^}/' server/prisma/schema.prisma | grep -n "worker\|preferred"
+    (no output)
+    $ grep -n "^model Agent " server/prisma/schema.prisma -> 641:model Agent {
+    region is 33 lines and genuinely contains no workerId.
+
+(e) Comment-stripped migration counts, on
+    server/prisma/migrations/20261014000000_team_worker_node/migration.sql:
+      DROP COLUMN            -> 1    PASS
+      ALTER TABLE            -> 3    PASS  (2 ADD + 1 DROP)
+      backticked `agents`    -> 1    PASS
+      preferred_worker_id    -> 2    PASS  (one per ADD)
+    Residual executable DDL is exactly:
+      ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+      ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+      ALTER TABLE `agents` DROP COLUMN `worker_id`;
+    Appended-not-edited proof:
+      $ git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+      (empty)                              PASS
+      $ git ls-tree   HEAD .../migration.sql
+      100644 blob 3dc7533b9733e04b6947e289532bbe7ee7253950
+      $ git hash-object .../migration.sql
+      3dc7533b9733e04b6947e289532bbe7ee7253950   -> EQUAL  PASS
+      (baseline is byte-identical to HEAD's blob, so it was appended to, not edited.)
+    Also confirmed: exactly one *team_worker_node dir, and it sorts after
+    20261010030000_worker_update_state (…20261014000000_team_worker_node, then
+    20261014010000_memory_search_to_list).
+
+(f) Bare-catch guard — reproduced myself, three revisions:
+    $ { grep -rn --include='*.ts' -E 'catch[[:space:]]*\{' server/src || true; } \
+        | grep -v '\.spec\.ts' | wc -l
+    176
+    $ git grep -n -E 'catch[[:space:]]*\{' HEAD -- 'server/src/*.ts' | grep -v '\.spec\.ts' | wc -l
+    176
+    $ git grep -n -E 'catch[[:space:]]*\{' b6840d1c -- 'server/src/*.ts' | grep -v '\.spec\.ts' | wc -l
+    176
+    Per-file diff base-sha vs HEAD:  IDENTICAL (no delta at all)
+    Per-file diff HEAD vs worktree:   IDENTICAL (no delta at all)
+    gate.sh baseline is 175, so 176 > 175 and the guard fires — but with ZERO
+    per-file delta in either direction. PASS as "pre-existing, not this plan's".
+
+(g) $ git ls-files --error-unmatch '.omo/evidence/ddl-team-worker-node-*.sql'
+    error: pathspec '.omo/evidence/ddl-team-worker-node-*.sql' did not match any file(s) known to git
+    Did you forget to 'git add'?
+    exit=1                                                PASS (must fail, does)
+    $ git check-ignore -v .omo/evidence/ddl-team-worker-node-20261015.sql
+    .gitignore:45:.omo/evidence/**/*.sql	.omo/evidence/ddl-team-worker-node-20261015.sql
+    -> the reason it fails: the file class is gitignored, so the porcelain
+       count `git status --porcelain | grep -c 'ddl-team-worker-node'` = 0 is a
+       zero-detection criterion and cannot be used. PASS.
+    (No ddl-team-worker-node-*.sql exists on disk at all.)
+
+(h) Task-1 receipt (Todo 13 item h, re-derived):
+    $ sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt | wc -l
+    14                                        <- porcelain block is 14 entries
+    The 14 entries: 5 orchestration artifacts named SEPARATELY from the 9-file
+    baseline, exactly as required:
+      orchestration (5): .omo/boulder.json, .omo/ulw-execute/ledger.jsonl,
+        .omo/plans/team-worker-node.md, .omo/drafts/team-worker-node.md,
+        .omo/notepads/team-worker-node/
+      pre-existing dirty baseline (9): .omo/evidence/phase5-t9-playwright.json,
+        .omo/evidence/plan-review-execution-gates/task-9/probe.json,
+        .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json,
+        server/src/platform-mcp/{platform-mcp.controller.spec.ts,
+        platform-mcp.controller.ts, platform-mcp.service.spec.ts,
+        platform-mcp.service.ts, platform-mcp.tools.ts},
+        web/src/components/chat/msg-parts.tsx
+    $ grep -n "13 行" .omo/evidence/task-1-team-worker-node.txt
+    34:输出为相对比较零点，不要引用「13 行」这一计数。
+    -> "13 行" appears EXACTLY ONCE, and only inside the mandated negating
+       clause ("do not cite this count"). PASS.
+    $ wc -l .omo/evidence/task-1-team-worker-node.txt
+    120
+    +3 offset for lines >= 30 holds: the file is 120 lines, and the negating
+    clause now sits at line 34 where the pre-fix version had it at 31
+    (117 -> 120 lines, +3 for everything at/after line 30; the porcelain block
+    at lines 15-28 is entirely before line 30 and therefore unaffected). PASS.
+    $ grep -c "部署前须补 dump" .omo/evidence/task-1-team-worker-node.txt  -> 0
+    (the forbidden line was never added to please the grep) PASS.
+
+TWO INDEPENDENT REDS — both re-measured, both confirmed pre-existing
+--------------------------------------------------------------------------------
+RED 1 (bare catch): 176 vs baseline 175. Verified above: identical per-file
+  map at b6840d1c, cb0ba6d1 and the worktree. gate.sh:70-71 forbids raising
+  the threshold. Not a defect of this plan.
+RED 2 (prettier backlog): 93 errors. Verified above via a 3-revision control:
+      base sha b6840d1c clean : 69
+      HEAD     cb0ba6d1 clean : 90
+      current worktree       : 93  (= 90 + 3 from pre-existing uncommitted
+                                     platform-mcp edits; per-file delta is
+                                     exactly +2/+1/0 on the 3 platform-mcp
+                                     files and 0 everywhere else)
+  Todo 16 removed this plan's 6. Not a defect of this plan.
+Plus web lint:check, re-run by me: `✖ 729 problems (0 errors, 729 warnings)`
+  WEB_LINT=0 — green, matching the lane's claim.
+
+RE-SCOPED ACCEPTANCE JUDGMENT ("no NEW failures"; only the two documented
+pre-existing reds)
+--------------------------------------------------------------------------------
+With Todo 16 landed:
+  - bare-catch: 176 == 176 == 176, zero per-file delta in either direction.
+    NOT attributable to this plan.
+  - prettier backlog: 93, and the per-file attribution is airtight:
+      * 64 errors sit in 17 files whose content is byte-identical to HEAD
+        (I verified the worktree-vs-HEAD-clean per-file map is identical for
+        every one of them).
+      * 21 errors sit in the 3 platform-mcp files that were dirty BEFORE the
+        plan started (pre-existing uncommitted edits, +3 over HEAD-clean).
+      * 8 errors sit in worker-dispatcher.ts (4) and worker-dispatcher.spec.ts
+        (4); I proved all 4 in the .spec.ts sit outside the plan's only hunk
+        (lines 3277-3487), and all 4 in the .ts sit outside its hunks
+        (2300-2325, 2388-2403, 3873-3930 vs error lines 170/2484/3266/3275).
+        Two independent confirmations: hunk arithmetic, plus the HEAD-clean
+        control run showing the same 4 sites at 3362/3365/3366/4261.
+      * team-worker-node.migration.spec.ts: 0 errors.
+  - Therefore the number of remaining lint errors attributable to THIS plan
+    is ZERO. The 6 that were attributable were fixed by Todo 16, exactly.
+
+CONCLUSION: Todo 13's re-scoped acceptance ("no NEW failures; the only reds are
+the two documented pre-existing ones, bare catch and the prettier backlog of
+93") IS SATISFIED. No red remains attributable to this plan.
+
+================================================================================
+PART C — DEFECTS FOUND (none blocking; both are documentation-level)
+================================================================================
+D1. Todo 13's evidence §5 contains an admitted self-correction about a first
+    differential that printed 40 false CHANGED lines (it says so itself, and
+    the corrected version is what I independently reproduced: zero changes).
+    This is honest reporting, not a defect — but note the lane's §5 bare-catch
+    paragraph is the one place where its draft numbers were wrong.
+    No fix needed.
+
+D2. Todo 13's evidence §6 (its attribution of the 99) states the arithmetic
+    "A1 64 + A2 21 + A3 9 + 新文件 5 = 99" and separately "worker-dispatcher.ts
+    的 4 个全部 pre-existing；worker-dispatcher.spec.ts 的 5 个里 4 个
+    pre-existing、1 个（3442）本计划新增". Both are correct, and A3=9 = 4 (.ts)
+    + 5 (.spec.ts) — but a reader must notice that .ts's 4 are inside A3 and
+    NOT in the "6 introduced" bucket. The lane's own final line gets this
+    right ("其中 pre-existing = 64 + 21 + 4 + 4 = 93，本计划新增 = 1 + 5 = 6").
+    I confirmed this arithmetic is exactly right. No fix needed.
+
+D3. MINOR (documentation only, non-blocking): the plan text at line 47 and
+    Todo 3's scope note cite "实测 18 处命中" for `agent-worker-select` in the
+    gitignored build output, while the current measurement is 6 hits in
+    web/.next. The source-scoped criterion is unaffected (0 hits either way),
+    so this is a stale figure in a comment, not a wrong verdict.
+    Smallest fix if desired: update the "18" to "6" (or make it
+    "N 处" without a number) in the plan's line-123 note.
+
+================================================================================
+PART D — FINAL VERDICTS
+================================================================================
+TODO 16: CONFIRMED
+  - both files' diffs are FORMAT-ONLY (proved by byte-exact prettier
+    round-trip on a reconstructed pre-file + identical normalized token
+    streams: 1716/109/232 tokens; and 1-line wrap with 0 token divergence)
+  - the delta is real: 93 errors now, team-worker-node.migration.spec.ts
+    absent, worker-dispatcher.spec.ts down to its 4 pre-existing sites
+  - no semantic regression: 328/328 jest, tsc=0
+  - the pre-existing-4 attribution is proved two ways (hunk arithmetic +
+    HEAD-clean control)
+  - cleanup is clean: no leftover worktrees, HEAD unchanged, index empty
+  - base-sha reconciliation verified: 69 / 90 / +3 / 93 / 99, all correct
+
+TODO 13: CONFIRMED
+  - all re-run checks (a)-(h) pass with raw output above
+  - both documented pre-existing reds re-measured and confirmed at identical
+    values with zero per-file delta
+  - with Todo 16 landed, the re-scoped "no NEW failures" acceptance is
+    satisfied; ZERO remaining red is attributable to this plan
+  - (Caveat on confidence: Todo 13's own claim that it ran all 10 checks is
+    partly self-reported; I independently re-derived 8 of them, including the
+    two reds and the acceptance judgment, which is where its verdict lives.)

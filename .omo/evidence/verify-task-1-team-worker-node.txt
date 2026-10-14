@@ -1,0 +1,627 @@
+================================================================================
+INDEPENDENT VERIFIER RECEIPT — Todo 1 (team-worker-node.md lines 90-102)
+================================================================================
+Verifier lane : read-only independent reproduction. I did not implement Todo 1.
+Verdict       : CONFIRMED (with 2 documented NON-BLOCKING defects — see D1/D2)
+Confidence    : 0.92
+Verifier file : .omo/evidence/verify-task-1-team-worker-node.txt (this file)
+Constraints honoured: no product file edited; no `git add/commit/stash/checkout`
+  executed; only this artifact was written.
+
+--------------------------------------------------------------------------------
+SECTION A — WHAT THE RECEIPT CLAIMS, AND WHICH RAW OUTPUTS IT EMBEDS
+--------------------------------------------------------------------------------
+Receipt under test: .omo/evidence/task-1-team-worker-node.txt (118 lines).
+Embedded raw outputs (verbatim, NOT narrated):
+  A1 lines 9-12   `git rev-parse HEAD` -> b6840d1cd72cd536108457d3e78f6bcf54c548ec
+                  + explicit "base-sha =" line.
+  A2 lines 14-28  `git status --porcelain` complete raw block (14 lines).
+  A3 line 30-33   Annotation: "以上 13 行即本计划开工前的脏基线…不属于本计划范围".
+  A4 lines 38-41  `nc -z localhost 3306; echo exit=$?` -> exit=1.
+  A5 lines 46-50  mysqldump + ls -lh command text, claimed "docs/tech-debt-rollback.md
+                  第 2 节，逐字" (verbatim).
+  A6 lines 57-59  Conclusion "无可达 MySQL" + "部署方执行 DDL 前必须自行补 dump".
+  A7 lines 64-69  Rollback contract: code-first-then-data order + irreversibility.
+  A8 lines 74-78  `git check-ignore -v ...` -> .gitignore:45 hit, exit=0.
+  A9 lines 80-83  `git ls-files --error-unmatch ...` -> exit=1, "did not match any
+                  file(s) known to git".
+  A10 lines 85-88 Zero-detection-power explanation for porcelain counting.
+  A11 lines 93-100 Failure-path probe -> "zsh:1: command not found: mysqldump",
+                  "exit=127", labelled "真实执行，非叙述".
+  A12 lines 103-104 `command -v mysqldump` -> which_exit=1.
+  A13 lines 111   "预检失败 ⇒ STOP，不得进入 Todo 7".
+  A14 lines 114-118 CLEANUP: 0-byte dump deleted, no commit made.
+
+--------------------------------------------------------------------------------
+SECTION B — ACCEPTANCE CRITERIA (plan line 99) ITEM BY ITEM
+--------------------------------------------------------------------------------
+Required element                          | Present | Reproduced by me
+-------------------------------------------|---------|------------------------------
+git rev-parse HEAD base-sha 原文           |  YES    | C1  -> identical sha
+git status --porcelain 完整原始输出        |  YES    | C23 -> faithful subset (D1)
+mysqldump 命令原文                          |  YES    | C18 -> verbatim vs runbook
+「无可达 MySQL」结论                         |  YES    | C4  -> exit=1, no listener
+(dump ls -lh 非空)  — CONDITIONAL on MySQL |  N/A   | C4/C7 -> no MySQL, no client
+「部署前须补 dump」(literal string)        | LEXICAL| C20 -> grep exit=1 (D2)
+git ls-files --error-unmatch MUST fail      |  YES    | C5/C5b -> both exit=1
+git check-ignore -v output pasted           |  YES    | C6  -> byte-identical line
+"porcelain 计数零检出" rationale            |  YES    | C6/C10/C25 -> rationale sound
+代码先、数据后 顺序规则                      |  YES    | plan line 94 -> receipt 64
+restore 丢弃迁移后所有写入                    |  YES    | plan line 94 -> receipt 65
+
+Plan line 94 (回滚契约) and line 100 (failure QA scenario) are also both satisfied:
+  - rollback order + irreversibility present at lines 64-69;
+  - failure scenario probed with a REAL non-zero exit recorded via `zsh -c …; echo
+    exit=$?` at line 94, exactly the mechanism the plan mandated.
+MISSING ELEMENTS: none. No acceptance criterion is absent from the receipt.
+
+--------------------------------------------------------------------------------
+SECTION C — ADVERSARIAL CLASS PROBES (each with an observable)
+--------------------------------------------------------------------------------
+C1 dirty_worktree  -> MISLABELLED (non-blocking). See D1 below.
+   Observable that the pre-existing dirt SURVIVED intact (no checkout/stash):
+     C26 `git diff --stat` over the 9 genuine pre-existing files = 9 files changed,
+     380 insertions(+), 144 deletions(-) -> non-empty, so nothing was reverted.
+     C27 `git stash list` -> empty output.
+   The receipt's RAW BLOCK is faithful: C23 diff shows the receipt's 14 lines are a
+   strict SUBSET of today's porcelain — every receipt line still exists with an
+   identical status code, and the 13 later additions are Todo 2/3/4 work plus
+   task-1..4 receipts plus a task-2 verify receipt. No line was fabricated,
+   dropped, or reworded. The snapshot was genuinely taken before any write.
+
+C2 misleading_success_output -> NOT PRESENT; the probe was real.
+   The receipt claims exit=127 caused by an ABSENT mysqldump CLIENT, explicitly
+   "非「连接被拒」". Independently reproduced:
+     C13 zsh -c 'mysqldump --single-transaction … -h localhost -P 65000 -u root
+        -p"$MYSQL_ROOT_PASSWORD" aiagents > /dev/null'  -> zsh:1: command not found:
+        mysqldump ; exit=127
+     C14 zsh -c 'mysqldump --version' -> zsh:1: command not found: mysqldump ; exit=127
+     C7  command -v mysqldump -> (absent) exit=1
+     C8  command -v mysql     -> (absent) exit=1
+   CLAIM VERIFIED: the client is genuinely absent on this machine, so 127
+   (command-not-found) is the honest failure mode and NOT "connection refused".
+   I deliberately re-ran the probe with output redirected to /dev/null instead of
+   the receipt's repo path, so that reproducing it writes nothing into the repo.
+   The mechanism (exit code from command resolution, independent of redirection)
+   is identical, and I flag this substitution explicitly rather than hiding it.
+   The receipt's own `command -v mysqldump` (which_exit=1) corroborates it in-band.
+
+C3 stale_state -> n/a for the receipt's conclusions, with one downstream caveat.
+   C12 `find . -name 'ddl-team-worker-node-*.sql'` -> no output => the 0-byte
+   artifact from the failure probe really was deleted; no stale dump lingers.
+   C9/C9b `ls -lh .omo/evidence/*.sql` -> 7 files, all mtime "Sep 24", matching the
+   receipt's "2026-09-24 的历史产物" claim.
+   CAVEAT (plan-correct, not a defect): C30 shows the receipt itself is UNTRACKED,
+   because plan line 101 declares "Commit: N" deferred to the F wave. Any consumer
+   using `git ls-files` to discover the receipt will not find it yet.
+
+C4 no-commit discipline -> PROVEN, not asserted.
+   C1 HEAD == b6840d1cd72cd536108457d3e78f6bcf54c548ec == receipt base-sha, and
+   C29 `git log --oneline b6840d1..HEAD` -> empty => zero commits since base-sha.
+
+C5 no-plaintext-password -> CLEAN.
+   C28b(a): the only two "password" tokens in the receipt are at lines 54 and 94,
+   both `$MYSQL_ROOT_PASSWORD`. C28b(c) secret-assignment scan -> grep exit=1.
+   C16 shows `.gitignore:45` is exactly `.omo/evidence/**/*.sql` (line-number
+   arithmetic confirmed: sed 40-50 renumbered item 6 == file line 45), and C6 shows
+   git itself attributes the ignore to `.gitignore:45` — the receipt's citation and
+   its claimed exit=0 are both exact.
+
+C6 citation accuracy (spot-checked, all three correct):
+   C17 docker-compose.yml:44-54 -> line 44 = `init:`, line 47 =
+   `npx prisma migrate deploy && node dist/prisma/seed.js`. Receipt's citation is
+   accurate.
+   C18 docs/tech-debt-rollback.md §2 -> the receipt's lines 46-50 match the runbook
+   code block character-for-character, INCLUDING the generic `ddl-<wave>-<date>.sql`
+   placeholder. The receipt's "逐字" claim is TRUE. Note the plan's own inline
+   command used a concrete `ddl-team-worker-node-$(date +%Y%m%d).sql`; the receipt
+   kept the runbook's generic template and documented the concrete name separately
+   (line 52). That is MORE faithful to the cited source, not less.
+   C19 values.yaml: the receipt says the `<db>=aiagents` default came from
+   chart/vteam/values.yaml but, correctly, cites NO line number. The plan's own
+   reference (line 98 -> values.yaml:221-223) is stale — those lines hold
+   platformMcpUrl/backoffLimit/ttlSecondsAfterFinished. The receipt did not
+   propagate that bad citation; the doc (chart/vteam/values.yaml:48-54) confirms
+   `aiagents`/`3306` is the real default.
+
+--------------------------------------------------------------------------------
+SECTION D — DEFECTS FOUND (both NON-BLOCKING; neither fails an acceptance item)
+--------------------------------------------------------------------------------
+D1 (accuracy, in the annotation — NOT in the raw output): the receipt mislabels
+   its own dirty baseline. Receipt line 30 asserts "以上 13 行即本计划开工前的脏
+   基线，它们不属于本计划范围".
+     - MISCALC: C24 proves the block is 14 lines (sed 15,28 | wc -l = 14), not 13.
+     - MISLABEL: 5 of those 14 are this plan's OWN orchestration artifacts, not
+       pre-existing dirt — .omo/boulder.json, .omo/ulw-execute/ledger.jsonl,
+       .omo/plans/team-worker-node.md, .omo/drafts/team-worker-node.md,
+       .omo/notepads/team-worker-node/. The genuine pre-existing dirt is 9 files
+       (3x .omo/evidence/*.json + 4x server/src/platform-mcp/* +
+       web/src/components/chat/msg-parts.tsx), which exactly matches plan line 95.
+   WHY NON-BLOCKING: plan line 95 asks only that the COMPLETE RAW OUTPUT be written
+   into the evidence file, and C23 proves it was, faithfully. The wrong "13 行"
+   gloss is the implementer's own commentary, not a required element, and the raw
+   block above it remains the authoritative baseline.
+   EXACT FIX (one line, replaces receipt line 30): replace lines 30-31 with —
+     "以上 14 行中，9 行为本计划开工前的既有脏改动（不属于本计划范围）；另 5 行
+      （.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、.omo/plans/team-worker-node.md、
+      .omo/drafts/team-worker-node.md、.omo/notepads/team-worker-node/）为本计划自身的
+      编排产物，同样非本 todo 的代码改动。后续 Todo 13 与 F4 请以本节上方 14 行原始
+      输出为相对比较零点，不要引用「13 行」这一计数。"
+
+D2 (lexical, acceptance-intent question I was asked to rule on): plan line 99 lists
+   the literal phrase 「部署前须补 dump」 among required receipt contents. C20 grep
+   shows that exact string is ABSENT (exit=1). The receipt instead carries, at
+   line 58, "dump 必须由部署方在目标环境补齐" and at line 59,
+   "部署方执行 DDL 前必须自行补 dump。"
+   RULING: ACCEPTANCE INTENT MET — this is not a gap.
+   - Plan line 93 (the imperative "What to do") mandates recording, verbatim,
+     「部署方执行 DDL 前必须自行补 dump」. The receipt reproduces the plan's own
+     mandated sentence EXACTLY. The shorter 「部署前须补 dump」 appears only in
+     line 99's compressed acceptance summary as an abbreviated label.
+   - Operationally equivalent in this repo: per C17, DDL is applied by the init
+     service's `prisma migrate deploy` during deploy, so "执行 DDL 前" and "部署前"
+     denote the same gate. The receipt's wording is the MORE precise of the two
+     (it anchors to the DDL step, which is where the obligation actually bites).
+   - The information content is a superset, not a subset — a grader reading the
+     receipt learns the deployer must self-supply the dump before DDL.
+   - Reinforcing: plan line 47 binds "验收标准不得写成文档文本 grep 计数", i.e. the
+     plan itself forbids text-matching as the acceptance mechanism.
+   OPTIONAL (only if a strict-literal grader must pass): append one line —
+     "（验收短语）部署前须补 dump。"
+   My judgment: do NOT add it. It would be a redundant line inserted solely to
+   satisfy a string match, which plan line 47 explicitly disallows as a criterion.
+
+--------------------------------------------------------------------------------
+SECTION E — UNVERIFIABLE-ON-THIS-MACHINE / OUT-OF-SCOPE ITEMS (declared, not skipped)
+--------------------------------------------------------------------------------
+E1 The happy-path mysqldump could not be exercised: no MySQL listener (C4 exit=1)
+   and no client binary (C7/C8 absent). Plan line 99 makes the dump-content
+   criterion conditional on MySQL existing, so this is a legitimate N/A — but it
+   does mean Todo 7's precondition ("不得在无 dump 的情况下继续") is satisfied only
+   as a CONTRACT, not by an actual dump. This is exactly what the plan anticipated.
+E2 The 2026-09-24 provenance of the 7 pre-existing .sql files was verified only by
+   mtime (C9b, all "Sep 24"), not by git provenance — they are untracked+ignored,
+   so no commit can date them. The receipt's "历史产物，非本 todo 生成" claim is
+   consistent with the evidence but not independently provable.
+E3 I did not re-run the failure probe writing into `.omo/evidence/` (the receipt's
+   exact form) because that would create a file, violating my read-only scope. See
+   C2 for the /dev/null substitution and why it is equivalent.
+
+--------------------------------------------------------------------------------
+SECTION F — REPRO COMMANDS (run from /Volumes/SSD-Data/01work/git-project/vteam)
+--------------------------------------------------------------------------------
+git rev-parse HEAD
+git status --porcelain
+nc -z localhost 3306; echo exit=$?
+git ls-files --error-unmatch .omo/evidence/ddl-team-worker-node-*.sql
+git ls-files --error-unmatch .omo/evidence/ddl-team-worker-node-$(date +%Y%m%d).sql
+git check-ignore -v .omo/evidence/ddl-team-worker-node-$(date +%Y%m%d).sql
+command -v mysqldump; echo exit=$?
+command -v mysql; echo exit=$?
+ls .omo/evidence/*.sql
+ls -lh .omo/evidence/*.sql
+git ls-files .omo/evidence/*.sql
+git log --oneline -1
+zsh -c 'mysqldump --single-transaction --routines --triggers --default-character-set=utf8mb4 -h localhost -P 65000 -u root -p"$MYSQL_ROOT_PASSWORD" aiagents > /dev/null'; echo exit=$?
+zsh -c 'mysqldump --version'; echo exit=$?
+bash -c 'ls -lh .omo/evidence/ddl-team-worker-node-*.sql 2>/dev/null || true'
+find . -name 'ddl-team-worker-node-*.sql' -not -path './node_modules/*'
+git stash list
+git log --oneline b6840d1cd72cd536108457d3e78f6bcf54c548ec..HEAD
+sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt | wc -l
+sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt | diff - <(git status --porcelain)
+git diff --stat -- <the 9 pre-existing dirty paths>
+sed -n '40,50p' .gitignore
+sed -n '44,54p' docker-compose.yml
+sed -n '1,90p' docs/tech-debt-rollback.md
+sed -n '218,225p' chart/vteam/values.yaml
+grep -n "部署前须补 dump" .omo/evidence/task-1-team-worker-node.txt; echo exit=$?
+git check-ignore -v .omo/evidence/probe-zero-level.sql
+git check-ignore -v .omo/evidence/compose-deploy/backup-20260907-1156.sql
+
+--------------------------------------------------------------------------------
+SECTION G — RAW OUTPUT OF EVERY COMMAND I RAN
+--------------------------------------------------------------------------------
+=== C1: git rev-parse HEAD ===
+b6840d1cd72cd536108457d3e78f6bcf54c548ec
+exit=0
+
+=== C2: git log --oneline -1 ===
+b6840d1 feat(chat): 工具卡空壳治理 + SSE 实时流双路 + 命名统一 + 思考跑马灯 + 完整消息展示
+exit=0
+
+=== C3: git status --porcelain ===
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M docs/agent-platform/prototypes/agent-config/index.tsx
+ M docs/agent-platform/prototypes/agent-manage/index.tsx
+ M server/src/agents/agents.service.spec.ts
+ M server/src/agents/agents.service.ts
+ M server/src/agents/dto/update-agent.dto.ts
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/workers/workers.service.spec.ts
+ M server/src/workers/workers.service.ts
+ M web/app/(main)/agents/page.tsx
+ M web/e2e/reference/testids.ts
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/evidence/task-1-team-worker-node.txt
+?? .omo/evidence/task-2-team-worker-node.txt
+?? .omo/evidence/task-3-team-worker-node.txt
+?? .omo/evidence/task-4-team-worker-node.txt
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+exit=0
+--- line count (wc -l) ---
+      27
+exit=0
+
+=== C4: nc -z localhost 3306 ===
+exit=1
+
+=== C5: git ls-files --error-unmatch .omo/evidence/ddl-team-worker-node-*.sql  (GLOB FORM, plan literal) ===
+zsh:3: no matches found: .omo/evidence/ddl-team-worker-node-*.sql
+exit=1
+
+=== C5b: git ls-files --error-unmatch .omo/evidence/ddl-team-worker-node-$(date +%Y%m%d).sql (CONCRETE FORM, receipt form) ===
+error: pathspec '.omo/evidence/ddl-team-worker-node-20261014.sql' did not match any file(s) known to git
+Did you forget to 'git add'?
+exit=1
+
+=== C6: git check-ignore -v .omo/evidence/ddl-team-worker-node-$(date +%Y%m%d).sql ===
+.gitignore:45:.omo/evidence/**/*.sql	.omo/evidence/ddl-team-worker-node-20261014.sql
+exit=0
+
+=== C7: command -v mysqldump ===
+exit=1
+
+=== C8: command -v mysql ===
+exit=1
+
+=== C9: ls .omo/evidence/*.sql ===
+.omo/evidence/ddl-W6-20260924-pre.sql
+.omo/evidence/ddl-W6-20260924.sql
+.omo/evidence/ddl-W6-task38-20260924.sql
+.omo/evidence/ddl-W7-20260924.sql
+.omo/evidence/ddl-W7-todo42-20260924-pre.sql
+.omo/evidence/ddl-W8-task43-20260924.sql
+.omo/evidence/ddl-W9-todo47-sessions-20260924.sql
+exit=0
+
+=== C9b: ls -lh .omo/evidence/*.sql  (dates claim: 2026-09-24 historical) ===
+-rw-r--r--@ 1 mac  staff    25M Sep 24 15:47 .omo/evidence/ddl-W6-20260924-pre.sql
+-rw-r--r--@ 1 mac  staff    25M Sep 24 14:37 .omo/evidence/ddl-W6-20260924.sql
+-rw-r--r--@ 1 mac  staff    25M Sep 24 17:00 .omo/evidence/ddl-W6-task38-20260924.sql
+-rw-r--r--@ 1 mac  staff    25M Sep 24 17:08 .omo/evidence/ddl-W7-20260924.sql
+-rw-r--r--@ 1 mac  staff    25M Sep 24 17:48 .omo/evidence/ddl-W7-todo42-20260924-pre.sql
+-rw-r--r--@ 1 mac  staff    25M Sep 24 18:10 .omo/evidence/ddl-W8-task43-20260924.sql
+-rw-r--r--@ 1 mac  staff   4.8K Sep 24 18:57 .omo/evidence/ddl-W9-todo47-sessions-20260924.sql
+exit=0
+
+=== C10: git ls-files .omo/evidence/*.sql  (tracked .sql in evidence dir) ===
+exit=0
+
+=== C11: plan acceptance literal — bash -c 'ls -lh .omo/evidence/ddl-team-worker-node-*.sql 2>/dev/null || true' ===
+exit=0
+--- (empty above = no dump file present, as expected) ---
+
+=== C12: any file in repo matching ddl-team-worker-node-*.sql anywhere ===
+find_exit=0
+(no output)
+
+=== C13: SAFE repro of failure-path probe (redirect to /dev/null, no repo write) ===
+zsh:1: command not found: mysqldump
+exit=127
+
+=== C14: same, bare command form ===
+zsh:1: command not found: mysqldump
+exit=127
+
+=== C15: mysqldump / mysql presence summary ===
+mysqldump -> (absent)
+mysql -> (absent)
+mariadb-dump -> (absent)
+docker -> /usr/local/bin/docker
+
+=== C16: .gitignore line 45 ===
+     1	.gstack/
+     2	
+     3	# DB backups (deploy-time mysqldump, hundreds of MB — never versioned).
+     4	# NOTE: scoped to .omo/evidence on purpose — prisma migrations (*.sql) MUST stay committable,
+     5	# and several legacy evidence .sql backups are already tracked. Do NOT add a blanket *.sql here.
+     6	.omo/evidence/**/*.sql
+     7	
+     8	# md-docs: standalone git repo (own remote gitee.com/guojongg/mddocs), not part of this tree
+     9	md-docs/
+    10	
+    11	# 本地部署核对留存的运行凭据（登录 JWT / worker token），严禁入库
+(renumbered 1-11 = file lines 40-50, so item 6 == line 45 == .omo/evidence/**/*.sql)
+
+=== C17: docker-compose.yml lines 44-54 (init service citation) ===
+  init:
+    build: ./server
+    container_name: vteam-compose-init
+    command: sh -c "npx prisma migrate deploy && node dist/prisma/seed.js"
+    environment: &server-env
+      DATABASE_URL: mysql://root:${MYSQL_ROOT_PASSWORD:-vteam-root}@db:3306/vteam
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - vteam-net
+
+=== C18: docs/tech-debt-rollback.md §1-§2 (verbatim-command claim) ===
+# Tech-Debt Rollback Runbook (W6–W9 DDL waves)
+
+> **Migrations were squashed on 2026-09-25.** `server/prisma/migrations/` now
+> contains exactly one baseline,
+> `20260925000000_squashed_baseline/migration.sql`. The 81 original migrations —
+> including the two cited below — are archived **outside git** at
+> `.omo/evidence/tech-debt-remediation/legacy-migrations/`.
+> See `docs/migration-baseline.md` for how to baseline an existing database and
+> for the archive's durability risk.
+
+> This is the ONLY recovery path for the four one-way DDL waves. The repo has
+> NO down-migrations anywhere under `server/prisma/migrations/` — the stated
+> rollback in `20260907000001_drop_task_agent_domain/migration.sql:20`
+> and `20260919000010_drop_agents_role/migration.sql:35-42`
+> (now at `.omo/evidence/tech-debt-remediation/legacy-migrations/<name>/migration.sql`,
+> same line numbers) is dump-restore. Todos 32/39/43/47 take the preflight dump;
+> todos 36/38/42/44 are the one-way DDL steps that depend on it.
+
+## 1. Rollback trigger (green gate)
+
+Any red gate, any failed preflight probe, or any failed DDL → STOP immediately,
+do NOT start the next todo, execute the two-step rollback below, and report.
+Do NOT attempt an in-place fix-forward on a DDL wave.
+
+```bash
+# 1. Record where you are, then return the tree to the last green commit.
+git log --oneline -5
+git reset --hard <last-green-commit>
+
+# 2. If a DDL wave already ran (migrate deploy applied), ALSO restore the dump
+#    (section 3 below). Code reset alone does NOT undo a DROP COLUMN.
+# 3. Re-run the gate to prove recovery:
+bash scripts/gate.sh
+```
+
+Rule: recovery from a bad DDL is `git reset --hard <last-green-commit>` PLUS
+`mysql -h ... < dump.sql` — both, in that order (code first, then data).
+
+## 2. Preflight backup (mandatory before every DDL wave)
+
+Run BEFORE any schema change in the wave. Verify the dump is non-empty and
+restorable into a scratch DB before proceeding.
+
+```bash
+mkdir -p .omo/evidence
+
+mysqldump --single-transaction --routines --triggers --default-character-set=utf8mb4 -h <host> -P <port> -u <user> -p <db> > .omo/evidence/ddl-<wave>-<date>.sql
+
+ls -lh .omo/evidence/ddl-<wave>-<date>.sql
+```
+
+Defaults from `chart/vteam/values.yaml:48-54`: database `aiagents`, port `3306`
+(`db.database: aiagents`, `db.port: 3306`, `db.enabled: true` = built-in MySQL 8
+StatefulSet). Compose likewise uses `mysql:8`. Use placeholders above — never
+paste real passwords; prefer compose variable names (e.g. `$MYSQL_ROOT_PASSWORD`)
+or `<host> / <port> / <user> / <db>` when documenting.
+
+Example naming: `.omo/evidence/ddl-W6-20260924.sql`,
+`.omo/evidence/ddl-W7-20260924.sql`, etc. — one dump per wave, taken by the
+preflight todo (W6: todo 32, W7: todo 39, W8: todo 43, W9: todo 47).
+
+## 3. Restore (discards everything written after the migration)
+
+```bash
+mysql -h <host> -P <port> -u <user> -p <db> < .omo/evidence/ddl-<wave>-<date>.sql
+```
+
+Notes:
+
+- Restore returns the database to the pre-migration state; any writes made
+  after the bad migration are discarded. That is intentional — there is no
+  partial "undo" for `DROP COLUMN`.
+- After restore, re-run the gate to confirm the tree is green:
+
+```bash
+bash scripts/gate.sh
+```
+
+- The migration files themselves document this same contract inline (not by
+  reference). Pre-squash those were
+  `20260907000001_drop_task_agent_domain/migration.sql:1-40`
+  ("生产先有本迁移前 mysqldump 备份") and
+  `20260919000010_drop_agents_role/migration.sql:35-42`
+  ("回滚 = 恢复迁移前全库 dump" + literal dump/restore commands). After the
+  2026-09-25 squash they live at
+  `.omo/evidence/tech-debt-remediation/legacy-migrations/<name>/migration.sql`
+  (line numbers unchanged). **That archive is not in git** — if it is gone, the
+  inline contracts these notes point at are gone with it.
+
+## 4. Helm rollback (K8s release recovery)
+
+=== C19: chart/vteam/values.yaml 221-223 (db name claim) ===
+  ##     （K8s 下 server 服务名，seed 默认 compose 的 server:3000 不可用）；
+  ## 显式设置时用该值（如外部自定义服务名/路径）。
+  platformMcpUrl: ""
+  backoffLimit: 6
+  ## Job 完成后自动清理（默认 300s）
+  ttlSecondsAfterFinished: 300
+  resources:
+    requests:
+(FINDING: the plan's citation values.yaml:221-223 does NOT contain db config. The
+ receipt cited no line number, so it did not propagate this stale citation.)
+
+=== C20: literal acceptance phrase 「部署前须补 dump」 in receipt ===
+grep_exit=1
+(no match — string absent)
+
+=== C21: all 'dump' occurrences in receipt (semantic presence check) ===
+1:Todo 1 — 迁移前预检 dump + 单向 DDL 回滚契约落档
+48:mysqldump --single-transaction --routines --triggers --default-character-set=utf8mb4 -h <host> -P <port> -u <user> -p <db> > .omo/evidence/ddl-<wave>-<date>.sql
+58:即 mysqldump 预检在本仓无法本地执行，dump 必须由部署方在目标环境补齐。
+59:部署方执行 DDL 前必须自行补 dump。
+64:恢复 = 先 git reset --hard <last-green>（代码）再 mysql < dump.sql（数据），顺序不可颠倒；
+68:应用，git 回退代码并不能撤销列删除；库侧只能靠 restore 全库 dump 回滚。restore 不是
+72:5. dump 未入库的检出能力（.sql 被 gitignore）
+78:命中 .gitignore:45 的 .omo/evidence/**/*.sql，dump 文件被忽略。
+86:对 dump 文件的计数恒为 0，属于零检出力的判据；真正能检出「dump 是否入库」的是
+94:zsh -c 'mysqldump --single-transaction --routines --triggers --default-character-set=utf8mb4 -h localhost -P 65000 -u root -p"$MYSQL_ROOT_PASSWORD" aiagents > .omo/evidence/ddl-team-worker-node-$(date +%Y%m%d).sql'; echo exit=$?
+97:zsh:1: command not found: mysqldump
+103:命令：command -v mysqldump; echo which_exit=$?
+106:即本机不仅无可达 MySQL，连 mysqldump 客户端也未安装（command not found，退出码 127，
+109:已在收尾阶段删除（见 CLEANUP），仓库中不保留任何本次生成的 dump。
+
+=== C22: other acceptance keywords ===
+=== 无可达 MySQL ===
+41:exit=1 表示 3306 端口无监听，本机无可达 MySQL（本仓常态）。
+57:结论：无可达 MySQL：本波 DDL 只在 compose/k8s 由 init 服务应用（docker-compose.yml:44-54）。
+106:即本机不仅无可达 MySQL，连 mysqldump 客户端也未安装（command not found，退出码 127，
+exit=0
+=== restore 会丢弃迁移后的所有写入 ===
+65:本仓无 down migration；restore 会丢弃迁移后的所有写入。
+exit=0
+=== 先 git reset ===
+64:恢复 = 先 git reset --hard <last-green>（代码）再 mysql < dump.sql（数据），顺序不可颠倒；
+exit=0
+=== STOP ===
+111:记录规则：预检失败 ⇒ STOP，不得进入 Todo 7。
+exit=0
+=== base-sha ===
+7:1. 开工快照（本波 DDL 的 base-sha 与脏基线，取在任何编辑之前）
+12:base-sha = b6840d1cd72cd536108457d3e78f6bcf54c548ec
+exit=0
+
+=== C23: extract receipt porcelain block (lines 15-28) and diff vs CURRENT porcelain ===
+--- receipt block line count ---
+      14
+--- receipt block raw ---
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+--- diff (receipt < > current) — '<' = only in receipt, '>' = only in current ---
+5a6,10
+>  M docs/agent-platform/prototypes/agent-config/index.tsx
+>  M docs/agent-platform/prototypes/agent-manage/index.tsx
+>  M server/src/agents/agents.service.spec.ts
+>  M server/src/agents/agents.service.ts
+>  M server/src/agents/dto/update-agent.dto.ts
+10a16,19
+>  M server/src/workers/workers.service.spec.ts
+>  M server/src/workers/workers.service.ts
+>  M web/app/(main)/agents/page.tsx
+>  M web/e2e/reference/testids.ts
+12a22,26
+>  ?? .omo/evidence/task-1-team-worker-node.txt
+>  ?? .omo/evidence/task-2-team-worker-node.txt
+>  ?? .omo/evidence/task-3-team-worker-node.txt
+>  ?? .omo/evidence/task-4-team-worker-node.txt
+>  ?? .omo/evidence/verify-task-2-team-worker-node.txt
+diff_exit=1
+(INTERPRETATION: zero '<' lines. The receipt block is a strict, unmodified SUBSET
+ of today's porcelain — no fabricated, dropped, or reworded entry. All 13 later
+ additions are attributable: 9 are Todo 2/3/4 source edits, 4 are task receipts,
+ 1 is the task-2 verify receipt. This proves the snapshot predates any write.)
+
+=== C24: receipt's own claim '13 行' vs actual block size ===
+actual lines in receipt porcelain block =       14
+receipt text says: 以上 13 行
+
+=== C25: tracked .sql under .omo/evidence (git ls-files, count) ===
+3
+exit=0
+.omo/evidence/compose-deploy/backup-20260907-1156.sql
+.omo/evidence/remove-project-dimension/t9-backup-aiagents-20260907.sql
+.omo/evidence/session-unification/su6-backup-20260907-213137.sql
+exit=0
+(INTERPRETATION: this reconciles C10's empty result — legacy tracked .sql live in
+ SUBDIRECTORIES, so the C10 glob `.omo/evidence/*.sql` could not match them. It
+ also confirms the .gitignore:43-44 comment "several legacy evidence .sql backups
+ are already tracked" is accurate, not stale. Neither affects Todo 1: the dump
+ would sit directly in .omo/evidence/ and IS ignored, per C6/C31.)
+
+=== C26: are the 9 pre-existing dirty files STILL dirty (not reverted/stashed)? ===
+ .omo/evidence/phase5-t9-playwright.json            | 116 +++++++--------
+ .../plan-review-execution-gates/task-9/probe.json  |   2 +-
+ .../task-9-matrix.json                             |   2 +-
+ .../platform-mcp/platform-mcp.controller.spec.ts   |  73 ++++++---
+ server/src/platform-mcp/platform-mcp.controller.ts |  16 +-
+ .../src/platform-mcp/platform-mcp.service.spec.ts   | 116 ++++++++++++++-
+ .../platform-mcp/platform-mcp.service.ts           | 163 +++++++++++++++------
+ .../platform-mcp/platform-mcp.tools.ts              |  10 ++++
+ web/src/components/chat/msg-parts.tsx              |  26 +++-
+ 9 files changed, 380 insertions(+), 144 deletions(-)
+exit=0
+--- non-empty above => pre-existing dirt survived intact (no checkout/stash) ---
+
+=== C27: stash list must be empty (proves no stash was used) ===
+exit=0 (empty output = no stash entries)
+
+=== C28: no plaintext password in receipt (FIRST ATTEMPT — REGEX TOO LOOSE, DISCARDED) ===
+9:命令：git rev-parse HEAD
+14:命令：git status --porcelain
+16: M .omo/evidence/phase5-t9-playwright.json
+25: M web/src/components/chat/msg-parts.tsx
+85:一处说明：由于 .omo/evidence/**/*.sql 被 .gitignore:45 忽略，git status --porcelain
+107:非「连接被拒」）。因此 failure-path 的真实失败模式是「客户端缺失 + 无监听端口」，两者
+grep_exit=0
+(SELF-CORRECTION: this first scan was INVALID — the `-p[a-zA-Z0]{3,}` alternative
+ matched the substring "porcelain" in `--porcelain`, and `pass...=` matched the
+ word "pass" inside "paths". I discarded it and re-ran tightly as C28b. Reporting
+ the bad run rather than quietly deleting it.)
+
+=== C28b: TIGHT plaintext-password scan of receipt ===
+--- (a) every occurrence of the literal token 'password' ---
+54:PASSWORD
+94:PASSWORD"
+exit=0
+--- (b) every '-p' flag on the mysqldump lines ---
+46:mkdir -p .omo/evidence
+48:mysqldump --single-transaction --routines --triggers --default-character-set=utf8mb4 -h <host> -P <port> -u <user> -p <db> > .omo/evidence/ddl-<wave>-<date>.sql
+exit=0
+--- (c) any high-entropy/quoted secret-looking assignment ---
+exit=1 (1 = clean)
+(VERDICT: line 54 and line 94 are both `$MYSQL_ROOT_PASSWORD`. No plaintext secret.)
+
+=== C29: no commit made since base-sha (HEAD unchanged) ===
+b6840d1cd72cd536108457d3e78f6bcf54c548ec
+base_sha_in_receipt = b6840d1cd72cd536108457d3e78f6bcf54c548ec
+commits_since_base_exit=0 (empty = no new commit)
+
+=== C30: is the receipt itself tracked by git? (Commit: N deferred to F wave) ===
+error: pathspec '.omo/evidence/task-1-team-worker-node.txt' did not match any file(s) known to git
+Did you forget to 'git add'?
+exit=1 (1 = untracked, as expected for Commit: N)
+
+=== C31: does '.omo/evidence/**/*.sql' also ignore a DIRECT-level .sql (zero-dir **)? ===
+.gitignore:45:.omo/evidence/**/*.sql	.omo/evidence/probe-zero-level.sql
+exit=0
+(Confirms the receipt's central detection claim: a dump written directly into
+ .omo/evidence/ is ignored, hence absent from porcelain — a zero-detection metric.)
+
+=== C32: stale_state — tracked .sql live in SUBDIRS (explains earlier empty glob) ===
+exit=1 (1 = NOT ignored => already-tracked legacy backups remain tracked; .gitignore comment at :43-44 is accurate)
+
+================================================================================
+END OF VERIFIER RECEIPT — verdict CONFIRMED, confidence 0.92
+================================================================================

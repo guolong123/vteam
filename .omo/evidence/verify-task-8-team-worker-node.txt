@@ -1,0 +1,310 @@
+Verify Todo 8 — 团队级写路径：`UpdateTeamDto` + `update()` + `toTeamDto`
+独立复核（read-only verifier，重新推导，不采信 executor 叙述）
+计划：.omo/plans/team-worker-node.md  Todo 8 块（L190-202）+ Must-NOT L34-47
+复核时间：2026-10-14（本机 Asia/Shanghai）
+
+=====================================================================
+0. 结论 / VERDICT
+=====================================================================
+VERDICT: confirmed
+CONFIDENCE: 0.96
+
+Todo 8 的四处交付物（DTO 字段 / update() 写路径 + 弱校验注释 / toTeamDto 投影 /
+乐观锁零回归）全部独立复核通过；可反驳项（spec 计数、409 回归、hunk 范围、
+无 FK/索引/存在性校验）均以原始命令输出逐条核实，未发现缺陷。
+
+唯一非阻塞观察：`update()` 路径的「主 Agent 非成员 → 400」先例在 spec 中已有
+覆盖（`update：主 Agent 非团队成员 → 400`，L2630），contrast 判据成立；但 Todo 8
+没有为 preferredWorkerId 单独写「与 mainAgentMemberId 同批提交时仍不校验」的
+组合用例——计划未要求，不构成缺陷。
+
+=====================================================================
+1. THE DTO FIELD
+=====================================================================
+命令：git diff -- server/src/teams/dto/update-team.dto.ts
+原始输出（节选，全文见下）：
+
++  @ApiPropertyOptional({
++    description:
++      '团队级首选 worker（软引用，存 vteam_worker 的 id；空串/null = 自动调度；成员的显式选择优先于本值）',
++  })
++  @IsOptional()
++  @ValidateIf((o) => o.preferredWorkerId !== null)
++  @IsString()
++  @MaxLength(191)
++  preferredWorkerId?: string | null;
+
+判定：
+- 字段存在，类型 `string | null` 可选 ✓
+- @ApiPropertyOptional 描述三要素齐备：① 团队级首选 worker；② 空串/null = 自动调度；
+  ③ 成员的显式选择优先于本值 ✓
+- 校验形状与同文件 mainAgentMemberId（L37-43）完全同形：@IsOptional +
+  @ValidateIf(o => o.x !== null) + @IsString；`@MaxLength(191)` 与 varchar(191)
+  列宽一致 ✓
+- numstat：`10 0 server/src/teams/dto/update-team.dto.ts`（纯新增 10 行，零删除）✓
+
+=====================================================================
+2. THE WRITE PATH IS WEAK-VALIDATION BY DESIGN
+=====================================================================
+命令：git diff -U3 -- server/src/teams/teams.service.ts
+原始输出（update 段）：
+
+@@ -342,6 +342,13 @@ export class TeamsService implements OnModuleInit {
+     if (dto.managedMode !== undefined) {
+       data.managedMode = dto.managedMode;
+     }
++    // 弱校验：与下方 mainAgentMemberId 的存在性校验（:352-368）故意分歧——
++    // worker 是软引用，其可用性（在线/离线/容量/模型）是运行期事实，纯配置操作不应
++    // 被节点状态阻断；置顶不可用时由分派期 warn 收敛（见 workers.assignWorker 的
++    // preferredWorkerId 置顶分支），并回退自动调度。
++    if (dto.preferredWorkerId !== undefined) {
++      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
++    }
+     if ((dto as any).mainAgentMemberId !== undefined) {
+       const raw = (dto as any).mainAgentMemberId;
+       ...
+
+(a) 代码行为
+    - 位置：`teams.service.ts:349-351`，紧跟 `managedMode` 分支之后、`mainAgentMemberId`
+      分支之前，与计划 L193 指定位置一致。
+    - 写入语句逐字为 `data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;`
+      → trim 已做；`|| null` 使空串与纯空白串与 null 三者归一为 null ✓
+    - 分支内**没有任何**查询调用（无 prisma.worker / teamMember / exists）✓
+(b) 注释存在且写明分歧理由
+    - `teams.service.ts:345-348` 四行中文注释，逐字点名「与下方 mainAgentMemberId
+      的存在性校验（:352-368）故意分歧」，并给出理由链：软引用 / 可用性是运行期事实 /
+      纯配置操作不应被节点状态阻断 / 不可用由分派期 warn 收敛 / 回退自动调度。
+      计划 L44 与 L193 的双重要求（必须在注释里写明理由）满足 ✓
+    - 注释里的行号标注 `:352-368` 与实际 mainAgentMemberId 分支位置一致 ✓
+(c) 分歧是真实的（读对侧分支）
+    `teams.service.ts:352-368` 原文：
+      if ((dto as any).mainAgentMemberId !== undefined) {
+        const raw = (dto as any).mainAgentMemberId;
+        if (raw === null || String(raw).trim() === '') {
+          data.mainAgentMemberId = null;
+        } else {
+          const memberId = String(raw).trim();
+          const member = await this.prisma.teamMember.findUnique({ where: { id: memberId } });
+          if (!member || member.teamId !== id) {
+            throw new BadRequestException({
+              code: TEAM_ERRORS.MAIN_AGENT_NOT_MEMBER,
+              message: '主 Agent 必须是团队成员',
+            });
+          }
+          data.mainAgentMemberId = member.id;
+        }
+      }
+    → mainAgentMemberId 做**存在性 + 归属**双重校验并抛 400 MAIN_AGENT_NOT_MEMBER；
+      preferredWorkerId 一个查询都不做。分歧真实存在且是计划 L44 明确要求的方向 ✓
+
+=====================================================================
+3. THE OPTIMISTIC LOCK IS UNTOUCHED（重点复核 executor 自述的误删事故）
+=====================================================================
+命令：git diff --numstat -- server/src/teams/teams.service.spec.ts
+原始输出：
+10      0       server/src/teams/dto/update-team.dto.ts
+87      0       server/src/teams/teams.service.spec.ts
+10      0       server/src/teams/teams.service.ts
+→ spec 为 **+87 / -0**：零删除行。「误删后重打」会表现为 -N/+M churn；
+  终态零删除即证明不存在任何被删后重打的测试。
+
+命令：git diff -- server/src/teams/teams.service.spec.ts | grep '^-' | grep -v '^---'
+原始输出：（空，exit 1 = 无匹配）
+→ 没有任何被删除的 `it(` / `describe(` 行，也没有任何被删除的描述行。
+
+(a) 409 VERSION_CONFLICT 用例存在且 PASS
+    命令：cd server && npx jest src/teams/teams.service.spec.ts -t "version 乐观锁冲突 409"
+    原始输出：Tests: 94 skipped, 1 passed, 95 total / Test Suites: 1 passed, 1 total
+    （用例位于 `teams.service.spec.ts:804-814`；断言 `updateMany` 返回 count:0 时
+    抛 ConflictException；虽然该用例用 ConflictException 而非
+    TEAM_ERRORS.VERSION_CONFLICT 字面量断言 code，但服务端
+    `teams.service.ts:381-385` 抛出的正是 code=TEAM_ERRORS.VERSION_CONFLICT。）
+
+    额外字节级证明「误删后重打」未留下痕迹：
+      sed -n '/it(.version 乐观锁冲突 409/,/^    });/p' /tmp/head-spec.ts | md5
+      57b7f481ec7d7f7f079aa28067ae19ac
+      sed -n '/it(.version 乐观锁冲突 409/,/^    });/p' src/teams/teams.service.spec.ts | md5
+      57b7f481ec7d7f7f079aa28067ae19ac
+    → 与 HEAD 版本逐字节一致。（HEAD 中该用例原在 :717，新增 87 行后落在 :804。）
+
+(b) spec 总 it() 计数
+    命令：grep -c "^\s*it(" src/teams/teams.service.spec.ts      → 95
+    命令：git show HEAD:./src/teams/... | grep -c "^\s*it("      → 92
+    命令：grep -c "it(" src/teams/teams.service.spec.ts          → 96
+    命令：git show HEAD:... | grep -c "it("                      → 93
+    → 92 → 95，净 +3，与新增的三个 preferredWorkerId 用例精确吻合；
+      `it(` 宽计数 93 → 96 同增 3（另一个 it( 出现在注释文本中）。92/95 属实 ✓
+    describe 计数同为 16（无新增/删除 describe）✓
+
+(c) 无预存测试被删
+    见上：numstat -0 + 87，删除行 grep 为空，409 用例字节一致 ✓
+
+(d) 乐观锁语义字节级未变
+    命令：awk 'NR>=374 && NR<=392' /tmp/head-teams.service.ts | md5
+          cdab7e98ddfa2df00f8c34e45db83d0d
+          awk 'NR>=381 && NR<=399' src/teams/teams.service.ts | md5
+          cdab7e98ddfa2df00f8c34e45db83d0d
+    → update() 全窗口 diff 只有新增分支一处；乐观锁整块（updateMany({where:{id,version},
+      data:{...,version:{increment:1}}}) → count===0 → ConflictException(VERSION_CONFLICT)）
+      与 HEAD 逐字节一致 ✓
+
+=====================================================================
+4. THE PROJECTION
+=====================================================================
+命令：git diff -U3 -- server/src/teams/teams.service.ts（toTeamDto 段）
+    @@ -1515,6 +1522,9 @@
+          currentTaskStatus: currentTask?.status ?? null,
+          mainAgentMemberId: (team as any).mainAgentMemberId ?? null,
+    +     // 团队级首选 worker（null = 自动调度）；成员级选择优先于本值（见 worker-dispatcher 两级 resolver）。
+    +     // 缺此字段会让页面上的选择被空值悄悄覆盖（既有陷阱，tasks.service.ts 亦有同形注释）。
+    +     preferredWorkerId: team.preferredWorkerId ?? null,
+          version: team.version,
+判定：
+- `toTeamDto()` 返回 `preferredWorkerId: team.preferredWorkerId ?? null`，null-coalesced ✓
+  （实际落点 `teams.service.ts:1527`，计划引用 :1476-1523 区间内）
+- 注释点明「缺此字段会让页面选择被空值悄悄覆盖」，与计划 Scope §6 的既有陷阱对齐 ✓
+- findOne 的 include 形状：`teams.service.ts:285-311` 未出现在任何 hunk 中，
+  diff hunks 仅 :345 与 :1525 两处 → include 形状零改动 ✓
+- 事件：`update()` 的两处 realtime.broadcast（EVENT_TYPES.TEAM_CHANGED /
+  TEAM_UPDATED）位于 :395-404，未被任何 hunk 覆盖 → 未新增/未改动事件 ✓
+- 路由/权限点：`git diff -- server/src/teams/teams.controller.ts` 输出为空
+  → controller 零改动，未新增 route / 权限点 / @RequirePermission ✓
+
+=====================================================================
+5. NO FK, NO EXISTENCE CHECK, NO INDEX
+=====================================================================
+命令：git diff -- '*.ts' '*.tsx' '*.prisma' '*.sql' '*.sh' \
+        | grep -nEi '^\+.*(FOREIGN KEY|@relation|@@index|References|createIndex|RequirePermission|@Post|@Get|@Patch|@Put|@Delete|EVENT_TYPES\.)'
+原始输出：（空，exit 1 = 无匹配）
+→ 整个工作区 diff（含同流其他 todo 的改动）没有新增 FK / 索引 / 路由 / 权限点 / 事件。
+  注：先前一次全量 sweep 唯一的命中在 `.omo/ulw-execute/ledger.jsonl`（上一轮
+  verify-task-6 的 verdict JSON 文本），非代码，已排除。
+
+命令：grep -n "preferredWorkerId" prisma/schema.prisma
+    96:  preferredWorkerId  String?  @map("preferred_worker_id")     # model Team
+    188:  preferredWorkerId String? @map("preferred_worker_id")     # model TeamMember
+→ 两处列声明均**无** @relation、无 @@index（Todo 6 产物，仅作交叉验证）✓
+命令（Todo 8 自身）：grep -c "prisma.worker\|worker.findUnique\|exists" 相关查询
+    在新增写路径分支内为零 —— 唯一查询次数证据见 §6 第三个新用例的
+  `expect(prisma.team.findUnique).toHaveBeenCalledTimes(2)`（= 团队存在性 1 次 +
+  findOne 回读 1 次，无 worker 存在性查询）✓
+
+=====================================================================
+6. TESTS — 原始输出 / 三个新用例名 / 覆盖与 contrast
+=====================================================================
+命令：cd server && npx jest src/teams; echo JEST_EXIT=$?
+原始输出：
+
+PASS src/teams/seed.spec.ts
+PASS src/teams/teams.service.spec.ts
+PASS src/teams/teams.controller.spec.ts
+
+Test Suites: 3 passed, 3 total
+Tests:       110 passed, 110 total
+Snapshots:   0 total
+Time:        2.165 s, estimated 4 s
+Ran all test suites matching /src\/teams/i.
+JEST_EXIT=0
+
+三个新用例（`teams.service.spec.ts` update describe 内，:717-802）：
+  1. preferredWorkerId：设置后读取往返（PATCH → GET 回吐，version+1）
+  2. preferredWorkerId：空串/空白串/null → 归一为 null（自动调度）
+  3. preferredWorkerId：不存在的 worker id 仍写入（弱校验：不做存在性检查）
+
+覆盖核对：
+  ① 巡回写/读 + version 递增 —— 用例 1 断言
+     `prisma.team.updateMany` 以 `{where:{id,version:0}, data:expect.objectContaining({
+       preferredWorkerId:'w_0000000001', version:{increment:1}})}` 被调用
+     （输入是 ' w_0000000001 '，落库为 trim 后值），
+     且 `result.preferredWorkerId === 'w_0000000001'`、`result.version === 1` ✓
+  ② ""/"   "/null → null —— 用例 2 对三种输入 for-loop，断言
+     `prisma.team.update` 收到 `data.preferredWorkerId: null` 且返回 null ✓
+  ③ 未知 id 被接受并落库 —— 用例 3 以 'w_nope' 提交，断言 update 数据里就是
+     'w_nope'、回读 result 也是 'w_nope'，并以 findUnique 恰好 2 次调用反证
+     「未做任何存在性校验查询」✓
+
+contrast 判据：
+  命令：cd server && npx jest src/teams/teams.service.spec.ts -t "主 Agent 非团队成员" --verbose
+  原始输出：
+        ✓ create：主 Agent 非团队成员 → 400 MAIN_AGENT_NOT_MEMBER (26 ms)
+        ✓ update：主 Agent 非团队成员 → 400 (1 ms)
+        Test Suites: 1 passed, 1 total
+        Tests:       93 skipped, 2 passed, 95 total
+  → mainAgentMemberId 的 400 MAIN_AGENT_NOT_MEMBER 校验在 create 与 update 两条路径上
+    都仍是红的对立面（即：被真实执行且被测试钉住）；preferredWorkerId 一侧无任何同类
+    校验。弱校验契约成立 ✓
+
+=====================================================================
+7. SCOPE + NO COMMIT
+=====================================================================
+命令：git diff -U0 -- server/src/teams/teams.service.ts | grep '^@@'
+原始输出：
+    @@ -344,0 +345,7 @@ export class TeamsService implements OnModuleInit {
+    @@ -1517,0 +1525,3 @@ export class TeamsService implements OnModuleInit {
+→ 与 executor 自述的 @@ -344,0 +345,7 与 @@ -1517,0 +1525,3 **完全一致**；
+  只有 update() 与 toTeamDto() 两个 hunk，无第三处 ✓
+
+命令：git log --oneline -1
+原始输出：
+    cb0ba6d feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+命令：git rev-parse HEAD
+    cb0ba6d1ab16571c0c979e41e40951000819f1c7
+→ HEAD 仍是 cb0ba6d（无关并发流的 memory rename），未被 Todo 8 改动 ✓
+  注：Todo 1 证据记录的开工 base-sha 是 b6840d1c，HEAD 由并发流推进到 cb0ba6d，
+  这是同流提交，不是 Todo 8 的提交。
+
+命令：git diff --cached --stat
+原始输出：（空，0 行）→ **没有任何东西被 staged** ✓
+（全程只跑了只读命令：git diff / git status / git log / git show / grep / awk /
+ md5 / jest / tsc；未执行 git add / commit / stash / checkout / reset。）
+
+命令：git status --porcelain=v1（关键节选）
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts   ← 同流既有脏文件（开工快照内在列）
+ M server/src/platform-mcp/platform-mcp.controller.ts        ← 同上
+ M server/src/platform-mcp/platform-mcp.service.spec.ts      ← 同上
+ M server/src/platform-mcp/platform-mcp.service.ts           ← 同上
+ M server/src/platform-mcp/platform-mcp.tools.ts             ← 同上
+ M web/src/components/chat/msg-parts.tsx                     ← 同上
+ M server/src/teams/dto/update-team.dto.ts                   ← Todo 8
+ M server/src/teams/teams.service.spec.ts                   ← Todo 8
+ M server/src/teams/teams.service.ts                        ← Todo 8
+ ?? server/prisma/migrations/20261014000000_team_worker_node/ ← Todo 7
+ ?? server/src/prisma/team-worker-node.migration.spec.ts      ← Todo 7
+→ 开工快照里的 6 个同流脏文件一个都没被 revert / stage；本计划 Todo 1-7 的残留
+  （evidence/、migration dir、migration guard spec、workers/agents/chat 改动）原样在位；
+  Todo 8 恰好只碰 teams 三个文件 ✓
+
+=====================================================================
+8. BROADER HEALTH（实跑）
+=====================================================================
+命令：cd server && npx jest; echo JEST_ALL_EXIT=$?
+原始输出（尾部）：
+
+Test Suites: 176 passed, 176 total
+Tests:       4207 passed, 4207 total
+Snapshots:   1 passed, 1 total
+Time:        16.553 s, estimated 17 s
+Ran all test suites.
+JEST_ALL_EXIT=0
+
+→ executor 自述的「176 suites / 4207 tests, exit 0」**逐字复现**，不是转述 ✓
+
+命令：cd server && npx tsc --noEmit -p tsconfig.json
+原始输出：（空）
+TSC_EXIT=0
+→ 全仓库类型检查零错误（ts-jest diagnostics 开启的前提下，176 suites 绿 + tsc 绿
+  已构成强证据：新字段在 Prisma 生成类型中真实存在）✓
+
+=====================================================================
+9. 缺陷清单
+=====================================================================
+无阻塞缺陷。
+
+可选后续（不属 Todo 8 范围，最多 2 条，均不建议本轮做）：
+1. `update()` 路径亦可补一条「mainAgentMemberId 与 preferredWorkerId 同时提交时，
+   前者仍 400 / 后者仍直写」的组合用例，把「故意的分歧」钉成一个断言。计划未要求。
+2. `preferredWorkerId` 的 DTO 未加 `@Length(<=191)` 之外的形如 cuid 的格式约束；
+   这是弱校验的应有形态（软引用），勿「顺手补强」。
+
+复核方法说明：本文件所有判定均来自对当前工作区文件与 HEAD 的独立读取与原始命令
+输出；未采信 executor 的 task-8-team-worker-node.txt 叙述，仅在 §3 用其作交叉引用。

@@ -1,0 +1,949 @@
+Todo 13 — 收口：全仓残留引用复核 + gate 全步骤退出码
+采集人: Sisyphus-Junior (subagent)
+Evidence: .omo/evidence/task-13-team-worker-node.txt  +  .omo/evidence/task-13-gate.log
+Commit: N（本 todo 只做复核与取证，不产出提交；未执行任何 git 写命令）
+
+======================================================================
+0. 前置：HEAD 未被改动 / 未执行任何 git 写命令
+======================================================================
+
+$ git rev-parse HEAD
+cb0ba6d1ab16571c0c979e41e40951000819f1c7
+
+$ git log -1 --format='%H %s'
+cb0ba6d1ab16571c0c979e41e40951000819f1c7 feat(memory): 记忆范围可改 + memory_search→memory_list + 整理提示词去固定标签
+
+HEAD 与开工要求一致（cb0ba6d）。本 todo 全程只用：git rev-parse / git log / git grep /
+git show / git ls-files / git cat-file / git status / git diff / git check-ignore ——
+全部为只读命令。未 add / 未 commit / 未 stash / 未 checkout / 未 reset / 未 revert / 未 clean。
+
+======================================================================
+1. 开工 vs 收工：34-entry 工作区未被本扫描改变（dirty_worktree 类）
+======================================================================
+
+$ git status --porcelain
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M docs/agent-platform/prototypes/agent-config/index.tsx
+ M docs/agent-platform/prototypes/agent-manage/index.tsx
+ M server/prisma/schema.prisma
+ M server/src/agents/agents.service.spec.ts
+ M server/src/agents/agents.service.ts
+ M server/src/agents/dto/update-agent.dto.ts
+ M server/src/chat/worker-dispatcher.spec.ts
+ M server/src/chat/worker-dispatcher.ts
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/tasks/tasks.service.spec.ts
+ M server/src/tasks/tasks.service.ts
+ M server/src/teams/dto/add-member.dto.ts
+ M server/src/teams/dto/update-team.dto.ts
+ M server/src/teams/teams.service.spec.ts
+ M server/src/teams/teams.service.ts
+ M server/src/workers/workers.service.spec.ts
+ M server/src/workers/workers.service.ts
+ M web/app/(main)/agents/page.tsx
+ M web/app/(main)/teams/[id]/page.tsx
+ M web/app/(main)/teams/[id]/session/page.tsx
+ M web/e2e/reference/testids.ts
+ M web/src/api/teams.ts
+ M web/src/components/chat/msg-parts.tsx
+ M web/src/components/tasks/task-detail-types.ts
+ M web/src/components/teams/TeamMembersPanel.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/evidence/task-1-team-worker-node.txt
+?? .omo/evidence/task-10-team-worker-node.txt
+?? .omo/evidence/task-11-team-worker-node.txt
+?? .omo/evidence/task-12-team-worker-node.txt
+?? .omo/evidence/task-15-team-worker-node.txt
+?? .omo/evidence/task-2-team-worker-node.txt
+?? .omo/evidence/task-3-team-worker-node.txt
+?? .omo/evidence/task-4-team-worker-node.txt
+?? .omo/evidence/task-5-team-worker-node.txt
+?? .omo/evidence/task-6-team-worker-node.txt
+?? .omo/evidence/task-7-team-worker-node.txt
+?? .omo/evidence/task-8-team-worker-node.txt
+?? .omo/evidence/task-9-team-worker-node.txt
+?? .omo/evidence/task-receipt-fix-team-worker-node.txt
+?? .omo/evidence/team-worker-node.lane-backup/
+?? .omo/evidence/team-worker-node/
+?? .omo/evidence/verify-task-1-team-worker-node.txt
+?? .omo/evidence/verify-task-10-team-worker-node.txt
+?? .omo/evidence/verify-task-11-team-worker-node.txt
+?? .omo/evidence/verify-task-12-team-worker-node.txt
+?? .omo/evidence/verify-task-14-round2-team-worker-node.txt
+?? .omo/evidence/verify-task-14-team-worker-node.txt
+?? .omo/evidence/verify-task-15-team-worker-node.txt
+?? .omo/evidence/verify-task-2-team-worker-node.txt
+?? .omo/evidence/verify-task-3-round2-team-worker-node.txt
+?? .omo/evidence/verify-task-3-team-worker-node.txt
+?? .omo/evidence/verify-task-4-team-worker-node.txt
+?? .omo/evidence/verify-task-5-team-worker-node.txt
+?? .omo/evidence/verify-task-6-team-worker-node.txt
+?? .omo/evidence/verify-task-7-team-worker-node.txt
+?? .omo/evidence/verify-task-8-team-worker-node.txt
+?? .omo/evidence/verify-task-9-team-worker-node.txt
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+?? scripts/e2e-team-worker-node.sh
+?? server/prisma/migrations/20261014000000_team_worker_node/
+?? server/src/prisma/team-worker-node.migration.spec.ts
+
+--- counts ---
+$ git diff --cached --name-only | wc -l
+0                       <- 暂存区为空：未被本扫描污染
+$ git diff --name-only | wc -l
+34                      <- 已跟踪改动 34 条（与开工快照一致）
+$ git ls-files --others --exclude-standard | wc -l
+56                      <- 未跟踪 56 条
+
+--- 与本 todo 开工时快照逐字节比对 ---
+前后两次快照共 72 行，diff 无任何输出（exit 0）：
+=> 本 todo 的扫描（含 l. l. 唯一的临时探测及其还原）没有改变工作区任何一项。
+
+======================================================================
+1b. 9-file 预存在脏基线 + 5 orchestration 产物：分离复核
+======================================================================
+Task-1 回执给出开工快照 14 行。收工时刻仍逐字节一致：
+
+对比对象：.omo/boulder.json / .omo/evidence/phase5-t9-playwright.json /
+         .omo/evidence/plan-review-execution-gates/task-9/probe.json /
+         .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json /
+         .omo/ulw-execute/ledger.jsonl / .omo/drafts/team-worker-node.md /
+         .omo/notepads/team-worker-node/ / .omo/plans/team-worker-node.md
+=> comm -13 与 comm -12 的对照输出为空（无新增、无消失、无路径变化）。
+   本计划未触碰这 5 个 orchestration 产物中的任何一个（它们随执行合法变动，由编排方负责）。
+
+真正的开工前脏基线（9 个文件，禁止触碰项）在收工时刻仍逐字节一致：
+  server/src/platform-mcp/platform-mcp.controller.spec.ts
+  server/src/platform-mcp/platform-mcp.controller.ts
+  server/src/platform-mcp/platform-mcp.service.spec.ts
+  server/src/platform-mcp/platform-mcp.service.ts
+  server/src/platform-mcp/platform-mcp.tools.ts
+  web/src/components/chat/msg-parts.tsx
+  .omo/evidence/phase5-t9-playwright.json
+  .omo/evidence/plan-review-execution-gates/task-9/probe.json
+  .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+=> comm 对照输出为空，9 个文件无一被本计划改写。
+
+======================================================================
+2. 并发流提交的 cb0ba6d：证明"本计划自己"没有碰它的路径
+    （不用全区间 diff —— 那个 diff 已包含 cb0ba6d 本身）
+======================================================================
+
+并发流（cb0ba6d）自己的改动清单（41 个路径，来自该提交本身）：
+$ git show --name-only --format= cb0ba6d1ab16571c0c979e41e40951000819f1c7 | sort
+  → 见下方 §3a 的 41 行原文
+
+从开工快照中扣除 5 个 orchestration 产物，得到"本计划自己的脏条目"（58 项）后，
+与并发流的 41 个路径求差集：
+
+$ comm -12 <plan-own> <sibling-paths>
+server/prisma/schema.prisma
+server/src/chat/worker-dispatcher.spec.ts
+server/src/chat/worker-dispatcher.ts
+server/src/tasks/tasks.service.ts
+
+这 4 条是"本计划与并发流共同改写的文件"，属正常共写（本计划的本职工作）。
+剔除这 4 个共写文件后，并发流的"专属路径"37 个：
+
+server/prisma/migrations/20261014010000_memory_search_to_list/migration.sql
+server/prisma/seed.ts
+server/src/common/constants/agent-role-prompts.constants.ts
+server/src/common/constants/agent.constants.spec.ts
+server/src/common/constants/agent.constants.ts
+server/src/common/constants/platform-capability.constants.ts
+server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap
+server/src/execution-policies/agent-policies-db-driven.spec.ts
+server/src/execution-policies/agent-policies.matrix.spec.ts
+server/src/execution-policies/agent-policies.native-only-payload.spec.ts
+server/src/execution-policies/agent-policy-fallback.spec.ts
+server/src/execution-policies/execution-policies.controller.spec.ts
+server/src/execution-policies/execution-policy.service.spec.ts
+server/src/execution-policies/policy-canonical.spec.ts
+server/src/memories/dto/query-memories.dto.ts
+server/src/memories/memories.controller.spec.ts
+server/src/memories/memories.service.spec.ts
+server/src/memories/memories.service.ts
+server/src/memories/memory-importance.spec.ts
+server/src/memories/memory-maintenance.service.spec.ts
+server/src/memories/memory-maintenance.service.ts
+server/src/memories/memories.constants.ts
+server/src/platform-mcp/CONTRACT-tool-naming-and-identity.md
+server/src/platform-mcp/platform-mcp.controller.spec.ts
+server/src/platform-mcp/platform-mcp.service.spec.ts
+server/src/platform-mcp/platform-mcp.service.ts
+server/src/platform-mcp/platform-mcp.tool-naming.spec.ts
+server/src/platform-mcp/platform-mcp.tools.ts
+server/src/prisma/memory-search-to-list.migration.spec.ts
+server/src/tasks/task-progression.scheduler.ts
+web/app/(main)/skills/page.tsx
+web/app/(main)/system/memories/page.tsx
+web/src/api/memories.ts
+web/src/api/role-capabilities.ts
+web/src/components/teams/memoryParts.tsx
+
+$ comm -12 <plan-own> <sibling-dedicated>
+[END — no output above = EMPTY]
+
+=> 交集为空。本计划自己的改动没有触及并发流的任何专属路径。
+   （注：memories 目录下的干净 worker-tree 文件带 lint 错误一事，属并发流自身的
+     pre-existing 状态，见 §6；本计划未改写它们 —— 它们在收工快照里同样是干净的。）
+
+======================================================================
+3a. 并发流提交 cb0ba6d 的 41 个路径（原文，供 §2 引用）
+======================================================================
+$ git show --name-only --format= cb0ba6d1ab16571c0c979e41e40951000819f1c7 | sort
+.omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json
+scripts/e2e-role-boundaries.sh
+server/prisma/migrations/20261014010000_memory_search_to_list/migration.sql
+server/prisma/schema.prisma
+server/prisma/seed.ts
+server/src/chat/worker-dispatcher.spec.ts
+server/src/chat/worker-dispatcher.ts
+server/src/common/constants/agent-role-prompts.constants.ts
+server/src/common/constants/agent.constants.spec.ts
+server/src/common/constants/agent.constants.ts
+server/src/common/constants/platform-capability.constants.ts
+server/src/execution-policies/__snapshots__/agent-policies.custom-agents.spec.ts.snap
+server/src/execution-policies/agent-policies-db-driven.spec.ts
+server/src/execution-policies/agent-policies.matrix.spec.ts
+server/src/execution-policies/agent-policies.native-only-payload.spec.ts
+server/src/execution-policies/agent-policy-fallback.spec.ts
+server/src/execution-policies/execution-policies.controller.spec.ts
+server/src/execution-policies/execution-policy.service.spec.ts
+server/src/execution-policies/policy-canonical.spec.ts
+server/src/memories/dto/query-memories.dto.ts
+server/src/memories/memories.controller.spec.ts
+server/src/memories/memories.service.spec.ts
+server/src/memories/memories.service.ts
+server/src/memories/memory-importance.ts
+server/src/memories/memory-maintenance.service.spec.ts
+server/src/memories/memory-maintenance.service.ts
+server/src/memories/memory.constants.ts
+server/src/platform-mcp/CONTRACT-tool-naming-and-identity.md
+server/src/platform-mcp/platform-mcp.controller.spec.ts
+server/src/platform-mcp/platform-mcp.service.spec.ts
+server/src/platform-mcp/platform-mcp.service.ts
+server/src/platform-mcp/platform-mcp.tools.ts
+server/src/prisma/memory-search-to-list.migration.spec.ts
+server/src/tasks/task-progression.scheduler.ts
+server/src/tasks/tasks.service.ts
+web/app/(main)/skills/page.tsx
+web/app/(main)/system/memories/page.tsx
+web/src/api/memories.ts
+web/src/api/role-capabilities.ts
+web/src/components/teams/memoryParts.tsx
+
+======================================================================
+3. 残留引用复核（Deliverable 1）—— 每条含命令与原始输出
+   三条硬性约束贯穿全部：
+   ① grep 限定源码路径，绝不裸扫 web+docs（否则命中 web/.next 陈旧产物）
+   ② 计数类先 grep -v '^--' 剔除注释行（迁移的中文理由头合法重复表名/列名）
+   ③ 范围收窄到本计划真正删除的那一面（不得误伤 Worker 域 inbound DTO 语义）
+======================================================================
+
+--------------------------------------------------------------------
+(a) agent-worker-select 四处绝迹
+--------------------------------------------------------------------
+$ grep -rn "agent-worker-select" web/app web/src web/e2e docs
+exit=1  → 零命中。（1 = grep 无匹配，符合"必须 0 命中"）
+
+--------------------------------------------------------------------
+(b) Agent 面文案消失（收窄到 agents 面，不误伤 teams 面新文案）
+--------------------------------------------------------------------
+$ grep -rn "首选 Worker" "web/app/(main)/agents" web/src/components/agents docs/agent-platform
+exit=1  → 零命中。
+（注意：这正是不收窄的代价 —— 收窄后 teams 面才能合法保留同名字样，见 (c)。）
+
+--------------------------------------------------------------------
+(c) 正面断言：新功能文案必须还在
+--------------------------------------------------------------------
+$ grep -c "首选 Worker" "web/app/(main)/teams/[id]/page.tsx"
+2
+exit=0  → 2 ≥ 1，通过（T10 新写的标签还在）。
+
+命中行原文（证明它真是新功能的标签，而不是巧合）：
+$ grep -n "首选 Worker" "web/app/(main)/teams/[id]/page.tsx"
+345:          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], whiteSpace: "nowrap" }}>首选 Worker 节点</span>
+351:            aria-label="团队首选 Worker（未选则自动调度）"
+
+--------------------------------------------------------------------
+(d) 删除面拆成两条，各自可满足
+--------------------------------------------------------------------
+$ grep -rn "dto\.workerId" server/src/agents
+exit=1  → 零命中。（agents 面上的 inbound-DTO workerId 语义已清除）
+
+$ grep -rn "agent\.workerId" server/src
+exit=1  → 零命中。（整个 server/src 都不再有 Agent.workerId 读写）
+
+--------------------------------------------------------------------
+(e) 已知保留：Worker 域入站 DTO 语义 + 四处"取数 worker"仍在
+--------------------------------------------------------------------
+$ grep -rn "dto\.workerId" server/src/workers | wc -l
+46
+→ 46 ≥ 40，通过（RegisterWorkerDto/HeartbeatWorkerDto/WorkerEventDto 的 Worker 域语义未被误删）。
+  （计划写"≥40"；实测 46，满足。这些不是 Agent.workerId 的残留，是同名不同物。）
+
+四处取数 worker 逐一正面断言：
+
+① OpencodeAgentsResult.workerId（server/src/agents/agents.service.ts）
+$ sed -n '96,105p' server/src/agents/agents.service.ts
+ * degraded=true 表示未能取到真实清单（无在线 worker / worker 离线 / 旧版无端点），
+ * agents 为空数组——前端据此提示"暂不可用"而非展示空列表误导用户。
+ * 条目在引擎元数据之上附 `governed`（vteam 是否治理该 agent），wire 形状向后兼容。
+ */
+export interface OpencodeAgentsResult {
+  agents: OpencodeAgentEntry[];
+  /** 实际取数的 worker id；降级且未选出 worker 时为 null。 */
+  workerId: string | null;
+  degraded: boolean;
+}
+
+$ grep -n "workerId" server/src/agents/agents.service.ts | head -20
+103:  workerId: string | null;
+411:      const workerId = await this.workersService.assignWorker();
+412:      if (!workerId) return this.fallbackModels();
+416:        where: { id: workerId },
+420:        worker ?? { id: workerId },
+435:  * workerId 显式传入则用之；缺省经 assignWorker 选一个可用 worker。
+438:  async getOmoConfig(opts: { workerId?: string } = {}): Promise<{
+441:    workerId: string | null;
+458:      const workerId =
+459:        opts.workerId ?? (await this.workersService.assignWorker());
+460:      if (!workerId) {
+461:        return { agents: {}, available: [], workerId: null, degraded: true };
+466:        where: { id: workerId },
+470:        worker ?? { id: workerId },
+472:      return { ...result, workerId };
+474:      return { agents: {}, available: [], workerId: null, degraded: true };
+484:    opts: { workerId?: string; enabled?: boolean } = {},
+488:    workerId: string;
+496:    const workerId =
+497:      opts.workerId ?? (await this.workersService.assignWorker());
+→ 全部为 opts.workerId / assignWorker 取数语义，零 Agent.workerId 残留。
+
+② web/src/components/agents/AgentRolesTab.tsx:78-82
+$ sed -n '78,82p' web/src/components/agents/AgentRolesTab.tsx
+interface OpencodeAgentsResponse {
+  agents: OpencodeAgentEntry[];
+  workerId: string | null;
+  degraded: boolean;
+}
+
+③ web/src/components/agents/ExternalAgentsPanel.tsx:73-77
+$ sed -n '73,77p' web/src/components/agents/ExternalAgentsPanel.tsx
+/** GET /agents/opencode 响应（workerId 缺省时由服务端自动选 worker）。 */
+interface OpencodeAgentsResponse {
+  agents: ExternalAgentItem[];
+  workerId: string | null;
+  degraded: boolean;
+}
+
+④ agents.controller.ts 的 ?workerId= 查询参数
+$ grep -n "workerId" server/src/agents/agents.controller.ts | head -20
+89:  * GET  /agents/omo-config?workerId= → {agents, available, workerId, degraded}
+96:  getOmoConfig(@Query('workerId') workerId?: string) {
+97:    return this.agentsService.getOmoConfig({ workerId });
+108:    @Query('workerId') workerId?: string,
+110:    return this.agentsService.getOmoAgentPrompt(name, { workerId });
+121:    @Query('workerId') workerId?: string,
+124:      workerId,
+158:  * GET /api/v1/agents/opencode?workerId=&directory= → {agents, workerId, degraded}
+175:    @Query('workerId') workerId?: string,
+178:    return this.agentsService.listOpencodeAgents({ workerId, directory });
+→ 五处 ?workerId= 查询参数全部健在，未被机械清扫。
+
+--------------------------------------------------------------------
+(f) schema 的 Agent 段零 workerId
+--------------------------------------------------------------------
+$ awk '/model Agent /,/^}/' server/prisma/schema.prisma | grep -c workerId
+0
+exit=1（grep 无匹配）→ 0，通过。
+
+反向验证 awk 区间没走空（确认它确实圈到了 Agent 模型、且 Agent 里确实没有
+worker/preferred 字样，而不是 region 匹配失败造成假阴性）：
+$ awk '/model Agent /,/^}/' server/prisma/schema.prisma | grep -n "worker\|preferred"
+（无输出）
+$ awk '/model Agent /,/^}/' server/prisma/schema.prisma | wc -l
+33
+$ grep -n "^model Agent " server/prisma/schema.prisma
+662:model Agent {
+→ region 有效（33 行），Agent 模型内确实无 workerId / preferredWorkerId。
+
+--------------------------------------------------------------------
+(g) 迁移计数（先剔除注释行）
+--------------------------------------------------------------------
+$ MIG=server/prisma/migrations/20261014000000_team_worker_node
+$ grep -v '^--' $MIG/migration.sql | grep -c "DROP COLUMN"
+1                                   → == 1，通过
+$ grep -v '^--' $MIG/migration.sql | grep -c "ALTER TABLE"
+3                                   → == 3（2 ADD + 1 DROP），通过
+$ grep -v '^--' $MIG/migration.sql | grep -c '\`agents\`'
+1                                   → == 1，通过
+$ grep -v '^--' $MIG/migration.sql | grep -c "preferred_worker_id"
+2                                   → == 2（两条 ADD 各一次），通过
+
+"先剔注释"的必要性证明（同一把尺子、不剔注释会怎样）：
+$ for p in "DROP COLUMN" "ALTER TABLE" '`agents`' "preferred_worker_id"; do ... grep -c "$p"; done
+raw count of [DROP COLUMN]: 2
+raw count of [ALTER TABLE]: 3
+raw count of [`agents`]: 2
+raw count of [preferred_worker_id]: 2
+→ 不剔注释时 DROP COLUMN、`agents` 都会被顶到 2，判据必然误判。
+  这两处多出来的命中全部来自中文理由头：
+$ grep -n '^--' $MIG/migration.sql | grep -E "DROP COLUMN|ALTER TABLE|agents|preferred_worker_id"
+19:--   3) `agents` 删除原首选 worker 列
+55:--   该不可逆性是有意的：本迁移含 DROP COLUMN，不存在「只退后来写入、保留删列结果」的
+62:--   ALTER、同序（teams → team_members → agents）、同列形态（可空字符串列，宽 191）。
+
+剔除注释后剩下的裸 DDL（只有这三行，别无其它）：
+ALTER TABLE `teams` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+ALTER TABLE `team_members` ADD COLUMN `preferred_worker_id` varchar(191) DEFAULT NULL;
+ALTER TABLE `agents` DROP COLUMN `worker_id`;
+→ 与"2 ADD + 1 DROP、零 UPDATE/INSERT/FOREIGN KEY/IF EXISTS"完全一致。
+
+--------------------------------------------------------------------
+(h) 迁移是"追加"而非"改基线"
+--------------------------------------------------------------------
+$ git status --porcelain -- server/prisma/migrations/20260925000000_squashed_baseline
+exit=0，无任何输出  → 空，通过（基线目录在工作区零改动）。
+
+基线 blob 在 HEAD 和工作区逐字节相同：
+$ git hash-object server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+3dc7533b9733e04b6947e289532bbe7ee7253950
+$ git rev-parse HEAD:server/prisma/migrations/20260925000000_squashed_baseline/migration.sql
+3dc7533b9733e04b6947e289532bbe7ee7253950
+→ 相等，md5 级别的追加证明。
+
+附：迁移目录顺序（字典序在 20261010030000_worker_update_state 之后）：
+$ ls -1 server/prisma/migrations/ | tail -8
+20261009010000_memory_refcount
+20261009020000_capability_memory_org_tools
+20261010010000_model_usage
+20261010020000_worker_code_version
+20261010030000_worker_update_state
+20261014000000_team_worker_node
+20261014010000_memory_search_to_list
+migration_lock.toml
+$ ls -d server/prisma/migrations/*team_worker_node
+server/prisma/migrations/20261014000000_team_worker_node      → 恰好 1 个
+
+--------------------------------------------------------------------
+(i) Dump 未入库 —— 用"必须失败"的 ls-files，不用零检出力的 porcelain 计数
+--------------------------------------------------------------------
+$ git ls-files --error-unmatch .omo/evidence/ddl-team-worker-node-*.sql
+zsh:1: no matches found: .omo/evidence/ddl-team-worker-node-*.sql
+exit=1
+（glob 未展开 —— 磁盘上没有任何 ddl-team-worker-node-*.sql。Todo 1 的失败路径探测
+  留下的 0 字节文件已在 Todo 1 的 CLEANUP 阶段删除。）
+
+再用带引号的 glob，让 git 自己收到这个 pattern，明确打出它的报错：
+$ git ls-files --error-unmatch '.omo/evidence/ddl-team-worker-node-*.sql'
+error: pathspec '.omo/evidence/ddl-team-worker-node-*.sql' did not match any file(s) known to git
+Did you forget to 'git add'?
+exit=1
+→ 必须失败，而它确实失败 = dump 未入库，验收通过。
+
+为什么不用 porcelain 计数（零检出力的实证）：
+$ git status --porcelain | grep -c 'ddl-team-worker-node'
+0
+→ 计数为 0。但这个 0 毫无意义，因为：
+$ git check-ignore -v .omo/evidence/ddl-team-worker-node-20261014.sql
+.gitignore:45:.omo/evidence/**/*.sql	.omo/evidence/ddl-team-worker-node-20261014.sql
+exit=0
+→ .gitignore:45 命中 `.omo/evidence/**/*.sql`。这一类文件无论存在与否、存在几个，
+  porcelain 都恒为 0，所以它俩（ls-files 必须失败）才是唯一有检出能力的判据。
+
+（补充事实：.omo/evidence 下确实有 3 个被跟踪的历史 .sql —— compose-deploy/backup-20260907-1156.sql、
+ remove-project-dimension/t9-backup-aiagents-20260907.sql、session-unification/su6-backup-20260907-213137.sql。
+ 它们都是 2026-09-07 的旧产物，在 :45 规则生效前入库；与本次 DDL dump 无关，
+ 且本次没有新增任何 .sql：$ ls -lh .omo/evidence/ddl-team-worker-node-*.sql 报 no matches found（exit 1）。）
+
+--------------------------------------------------------------------
+(j) Task-1 回执的 line-offset 说明：117 → 120 行，第 30 行起全部 +3
+--------------------------------------------------------------------
+$ wc -l .omo/evidence/task-1-team-worker-node.txt
+120 .omo/evidence/task-1-team-worker-node.txt
+→ 120 行（不是 117）。它与 todo 14 的修正在 Todo 14 已并入，本条只复核它的现状。
+
+porcelain 块仍是 14 条：
+$ sed -n '15,28p' .omo/evidence/task-1-team-worker-node.txt | wc -l
+      14
+
+14 条原文（其中 5 个 orchestration 产物、9 个开工前脏基线，两类分开列）：
+ M .omo/boulder.json
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/drafts/team-worker-node.md
+?? .omo/notepads/team-worker-node/
+?? .omo/plans/team-worker-node.md
+
+回执里对这两类的分离表述（原文，第 30-34 行）：
+$ sed -n '30,36p' .omo/evidence/task-1-team-worker-node.txt
+脏工作区说明（dirty_worktree 类对抗项）：以上 14 行中，9 个文件为本计划开工前的既有脏改动（不属于本计划范围）；另 5 行
+（.omo/boulder.json、.omo/ulw-execute/ledger.jsonl、.omo/plans/team-worker-node.md、
+.omo/drafts/team-worker-node.md、.omo/notepads/team-worker-node/）为本计划自身的
+编排产物，同样非本 todo 的代码改动。后续 Todo 13 与 F4 请以本节上方 14 行原始
+输出为相对比较零点，不要引用「13 行」这一计数。
+时间戳 2026-10-14T02:43:53Z 早于本 todo 的任何文件写入；本 todo 未执行也未允许
+git checkout / git stash / 任何清理动作，既有脏改动原样保留。
+
+"13 行"这个字符串只在上面那句否定语里出现一次（它是被明令"不要引用"的旧计数，
+不是一个仍然成立的数字 —— 按 brief 的要求，我读了它，不把它当作复活值上报）：
+$ grep -n "13 行" .omo/evidence/task-1-team-worker-node.txt
+34:输出为相对比较零点，不要引用「13 行」这一计数。
+→ 仅 1 处，位于 negating clause 内，通过。
+
+line-offset 的算术核对：117 → 120 行意味着第 30 行及以后整体 +3。上面引用的 negating
+clause 现在位于第 34 行 —— 与原 117 行版本中的第 31 行正好 +3，与 brief 的预测一致；
+（该 +3 位移不影响 15-28 的 porcelain 块，因为它整块都在第 30 行之前。）
+
+======================================================================
+4. Deliverable 2 —— 门禁逐步骤，字面退出码（无 PIPESTATUS、无 pipe 收码）
+======================================================================
+脚本本身（scripts/gate.sh:1-105 读得的步骤与顺序）：
+  67-81  bare-catch 守卫（在任何其它步骤之前 exit 1）
+  84      server: npx prisma generate
+  85      server: npm run lint:check
+  86      server: npm test
+  87      server: npm run test:e2e
+  88      server: npm run build
+  90      worker: npm run typecheck
+  91      worker: npm test
+  92      worker: npm run build
+  94      web:    npm run lint:check
+  95      web:    npm run build
+  97-102  --with-playwright（opt-in，本计划不得加）
+
+--------------------------------------------------------------------
+4.1 整脚本跑一次 —— 只为留下"它在守卫处退出、且是 exit 1"的原文
+--------------------------------------------------------------------
+$ bash scripts/gate.sh > .omo/evidence/task-13-gate.log 2>&1; echo GATE_EXIT=$?
+GATE_EXIT=1
+（log 内的原文：）
++ [server bare-catch guard] (count bare 'catch {' in server/src, excluding *.spec.ts)
+bare-catch count: 176 (baseline 175)
+FAIL: server bare-catch guard (count 176 exceeded baseline 175)
+GATE_EXIT=1
+→ 整脚本 exit 1，且失败点是 bare-catch 守卫、在任何其它步骤之前。
+  这与开工前完全同形（F1 ⑥ 的权威判据），属预存在红。本 todo 不改基线、不抬阈值。
+
+--------------------------------------------------------------------
+4.2 逐步骤（字面退出码，全部用 echo 捕获、无 pipe 收码）
+--------------------------------------------------------------------
+$ cd server && npx prisma generate >> $LOG 2>&1; echo PRISMA=$?
+PRISMA=0
+
+$ npm run lint:check >> $LOG 2>&1; echo LINT=$?
+LINT=1          ← 预存在 prettier 错误（详见 §6），见下
+
+$ npm test >> $LOG 2>&1; echo TEST=$?
+TEST=0
+
+$ npm run test:e2e >> $LOG 2>&1; echo TESTE2E=$?
+TESTE2E=0
+
+$ npm run build >> $LOG 2>&1; echo BUILD=$?
+BUILD=0
+
+$ cd ../worker && npm run typecheck >> $LOG 2>&1; echo WORKER_TYPECHECK=$?
+WORKER_TYPECHECK=0
+
+$ npm test >> $LOG 2>&1; echo WORKER_TEST=$?
+WORKER_TEST=0
+
+$ npm run build >> $LOG 2>&1; echo WORKER_BUILD=$?
+WORKER_BUILD=0
+
+$ cd ../web && npm run lint:check >> $LOG 2>&1; echo WEB_LINT=$?
+WEB_LINT=0
+
+$ npm run build >> $LOG 2>&1; echo WEB_BUILD=$?
+WEB_BUILD=0
+
+ 一段说明：第一次跑 build 时我在 repo root 下执行 npm run build，得到
+ BUILD=254（npm 找不到 package.json）—— 那是我的调用失误，不是构建失败。
+ 已弃置该块，并以 AUTHORITATIVE 标注重跑，得到 BUILD=0。两段都留在 task-13-gate.log 里，
+ 包括那一行 "the previous ... block is voided" 的说明，不掩盖。
+
+--------------------------------------------------------------------
+4.3 测试真的跑了（不是 0 例通过的假绿）
+--------------------------------------------------------------------
+$ grep -nE "^(Tests:|Test Suites:|Snapshots:|Time:|Ran all)" task-13-gate.log
+5926:Test Suites: 176 passed, 176 total
+5927:Tests:       4211 passed, 4211 total
+5928:Snapshots:   1 passed, 1 total
+5929:Time:        18.687 s, estimated 147 s
+5930:Ran all test suites.
+5953:Test Suites: 1 passed, 1 total
+5954:Tests:       10 passed, 10 total
+5955:Snapshots:   0 total
+5956:Time:        1.674 s
+5957:Ran all test suites.
+... 6417:Test Suites: 28 passed, 28 total
+... 6418:Tests:       780 passed, 780 total
+→ server jest 176 套件 4211 例、e2e 1 套件 10 例、worker 28 套件 780 例，全通过；
+  没有任何一步是"0 例通过"的空跑。
+
+$ grep -c "✕" task-13-gate.log
+0
+→ 零失败用例标记（jest 的 ✕）。
+
+$ grep -n "FAIL" task-13-gate.log
+4:FAIL: server bare-catch guard (count 176 exceeded baseline 175)
+→ 整份 gate.log 里唯一的 FAIL 就是第 4 行的 bare-catch 守卫（来自整脚本那次跑），
+  逐步骤的 9 个命令没有任何 FAIL。
+
+$ grep "Test Suites:" task-13-gate.log
+Test Suites: 176 passed, 176 total
+Test Suites: 1 passed, 1 total
+Test Suites: 28 passed, 28 total
+→ 三条汇总全部是"N passed, N total"，零 failed 套件。
+
+关于夹带 ERROR/WARN 的说明（不掩盖，但要说清它们不是失败）：
+log 里有 18 行含 "failed"/"ERROR"/"WARN" 字样的 Nest 日志行，例如
+  [WorkerDispatcher] agent a_pr...（12 行）
+  [WecomAibotAdapter] ...（2 行）
+  [NotificationDispatcherService] ...（1 行）
+  [MessageRegistryService] ...（1 行）
+它们是单测**故意**构造的失败路径日志（fail-open resolver 抛错、通知投递失败、
+消息注册失败等），全部由对应断言覆盖，不是门禁失败。反证：jest 汇总的
+Test Suites / Tests 均为 0 failed，且 npm test 的退出码是 0。
+
+web 构建产物（证明 web build 真跑完）：
+$ tail -20 task-13-gate.log
+├ ○ /teams                            3.21 kB        169 kB
+├ ƒ /teams/[id]                        7.84 kB        180 kB
+├ ƒ /teams/[id]/session                45.6 kB       404 kB
+├ ƒ /teams/[id]/tasks                  4.33 kB       183 kB
+├ ○ /teams/new                        6.48 kB        173 kB
+├ ○ /users                             141 B         104 kB
+├ ƒ /workers                          5.69 kB        180 kB
+├ ƒ /workers/[id]                      10.3 kB        132 kB
+├ ○ /workers/install                  8.03 kB        112 kB
+└ ○  (Static)   prerendered as static content
+   ƒ  (Dynamic)  server-rendered on demand
+
+======================================================================
+5. Bare-catch 守卫复现 —— 它是 176（预存在），不是更高
+======================================================================
+命令（与 gate.sh:76 逐字相同，含 grep -v '\.spec\.ts'）：
+$ grep -rn --include='*.ts' -E 'catch[[:space:]]*\{' server/src | grep -v '\.spec\.ts' | wc -l
+176
+→ 176 == 176（开工前既存值），不是 177。本计划没有新增任何 bare catch。
+
+同一计数在 pipe-free 方式下复核（本 shell 是 zsh，PIPESTATUS 展开为空，所以不用）：
+$ grep -rn --include='*.ts' -E 'catch[[:space:]]*\{' server/src > /tmp/bc.txt
+grep_step1_exit=0
+$ N=$(grep -v '\.spec\.ts' /tmp/bc.txt | wc -l); echo "non_spec_matches=$N"
+non_spec_matches=     176
+
+换个 revision 再取一次，确认 176 不是我本地工作区的偶发：
+$ git grep -n -E 'catch[[:space:]]*\{' cb0ba6d1ab16571c0c979e41e40951000819f1c7 -- 'server/src/*.ts' | grep -v '\.spec\.ts' | wc -l
+176          <- HEAD 处也是 176
+
+$ git grep -n -E 'catch[[:space:]]*\{' b6840d1cd72cd536108457d3e78f6bcf54c548ec -- 'server/src/*.ts' | grep -v '\.spec\.ts' | wc -l
+176          <- 计划开工前的 base-sha 处也是 176（这正是 gate.sh:70-71
+               说的"只能降低、不得抬高"的既存红：base-sha 处就已经是 176 > 175）
+
+最细粒度：逐文件比较 base-sha 与工作区，只列出计数变化的文件：
+$ for f in $(git ls-files server/src | grep '\.ts$' | grep -v '\.spec\.ts$'); do
+>   a=$(git grep -c -E 'catch[[:space:]]*\{' $BASE -- "$f" 2>/dev/null | awk -F: '{print $NF}'); a=${a:-0}
+>   b=$(grep -c -E 'catch[[:space:]]*\{' "$f" 2>/dev/null); b=${b:-0}
+>   if [ "$a" != "$b" ]; then echo "CHANGED  $f  base=$a  now=$b"; fi
+> done
+[end of block — no CHANGED lines above = the plan added ZERO bare catches]
+$ echo "TOTAL base=$TOTAL_A worktree=$TOTAL_B"
+TOTAL non-spec bare catches: base=176  worktree=176
+→ 没有任何一个文件的变化，176 = 176 = 176。本计划未抬基线、未降基线。
+
+（排查过程的自我校正，如实记录：第一版差分用 awk -F: '{print $2}' 取 git grep -c 的
+ 计数，取到的是路径而非计数，于是打出 40 行假 CHANGED。已改用 $NF 重跑，上面这段是
+ 重跑后的真实结果。原始误报不删除逻辑，只以本节更正版为准。）
+
+======================================================================
+6. LINT=1 的归因（唯一一处非守卫红，必须如实拆清）
+======================================================================
+server 全量 lint:check：99 errors / 68 warnings，全部是 prettier/prettier 排版。
+归因方法：把 eslint 的 per-file 报错按"该文件在工作区的脏净"与"该文件在 base-sha
+的 prettier 状态"分类，避免把并发流/platform-mcp 的 pre-existing 排版问题算到本计划。
+
+$ awk ... task-13-gate.log   # 把每条 error 归属到它的 file header
+total errors: 99
+
+A) 93 个 error 与本计划引入无关，进一步分成两类（逐条可复算）：
+
+      A1) 64 个 error 在 17 个"工作区干净（== HEAD 内容）"的文件里：这些文件本计划一行
+       未改（§2 的 comm -12 已证明本计划与并发流的专属路径交集为空），所以它们的
+       prettier-dirty 状态在开工前的 base-sha 处就成立。
+       17 个干净文件及各自 error 数：
+        13  server/src/memories/memory-maintenance.service.spec.ts
+        11  server/src/prisma/memory-search-to-list.migration.spec.ts
+         7  server/src/message-channels/message-registry.service.spec.ts
+         6  server/src/prisma/model-usage.migration.spec.ts
+         6  server/src/memories/memories.service.ts
+         5  server/src/memories/memories.service.spec.ts
+         2  server/src/users/admin-permission.ts
+         2  server/src/usage/usage.service.spec.ts
+         2  server/src/memories/memory-maintenance.service.ts
+         2  server/src/memories/memory-importance.spec.ts
+         2  server/src/memories/memories.controller.spec.ts
+         1  server/src/workers/worker-code-version.ts
+         1  server/src/workers/worker-code-version.spec.ts
+         1  server/src/prisma/worker-code-version.migration.spec.ts
+         1  server/src/prisma/seed.spec.ts
+         1  server/src/memories/memory-state.ts
+         1  server/src/chat/message-parts.ts
+        （合计 64）
+
+   A2) 21 个 error 在 3 个"工作区脏、且属开工前既存"的文件里 —— 它们就是第 1b 节
+       那 9 个文件中的 3 个 platform-mcp 文件。本计划一行未改（§1b 逐字节一致、
+       §2 交集为空），不得清理：
+        14  platform-mcp.service.spec.ts
+         4  platform-mcp.tools.ts
+         3  platform-mcp.service.ts
+        （合计 21）
+
+   A3) 剩下 2 个脏文件是本计划自己改过的：worker-dispatcher.ts（4）与
+       worker-dispatcher.spec.ts（5），合计 9 个 error。逐条比对见下方 ——
+       结论：worker-dispatcher.ts 的 4 个全部 pre-existing；
+       worker-dispatcher.spec.ts 的 5 个里 4 个 pre-existing、1 个（3442）本计划新增。
+
+   总数验算：A1 64 + A2 21 + A3 9 + 新文件 5 = 99 ✓ （与 eslint 的 99 errors 相符）
+   其中 pre-existing = 64 + 21 + 4 + 4 = 93，本计划新增 = 1（3442）+ 5（新 spec）= 6。
+   - 其余属本计划改过的文件，但错点是**改动之前就存在**的排版位：
+     server/src/chat/worker-dispatcher.ts
+       prettier_check at BASE(b6840d1)=1、at HEAD(cb0ba6d)=1、at WORKTREE=1
+       prettier_would_change_lines: BASE=20 / HEAD=20 / WORKTREE=20
+       → 该文件在开工前就是 prettier-dirty；本计划的 hunk（@@ -2300,3 +2300,26 @@ /
+         @@ -2364,0 +2388,16 @@ / @@ -3833,0 +3873,58 @@）全部落在 2245-2403 与
+         3873-3930 两个区间，而 4 个报错点（170/2484/3266/3275）全部在区间之外。
+         diff_lines 20→18→20 不增反降 → 未新增脏点。
+     server/src/chat/worker-dispatcher.spec.ts
+       prettier_check at BASE=1、HEAD=1、WORKTREE=1；BASE diff_lines=15、WORKTREE=18
+       本计划唯一 hunk：@@ -3276,0 +3277,210 @@，5 个报错点中 4 个（3572/3575/3576/4471）
+       在 hunk 之外 = pre-existing；只有 3442（+3 行是新增测试代码）落在 hunk 之内
+       → 3442 这一处是本计划新增的脏点（详见 D 段）。
+
+B) 与本计划直接相关、必须点名的 3 个文件（合计 14 errors）：
+$ npx eslint src/chat/worker-dispatcher.ts src/chat/worker-dispatcher.spec.ts src/prisma/team-worker-node.migration.spec.ts
+✖ 20 problems (14 errors, 6 warnings)
+
+  src/chat/worker-dispatcher.ts        → 4 errors，全部 pre-existing（区间外，见 A）
+  src/chat/worker-dispatcher.spec.ts   → 5 errors，其中 3442:46 是本计划新增
+  src/prisma/team-worker-node.migration.spec.ts → 5 errors，全部本计划新增（新文件未跑 prettier）
+
+D) "本计划新增脏点"的正面取证（不是"没细看就说没有"）：
+$ sed -n '3438,3446p' server/src/chat/worker-dispatcher.spec.ts
+      const warned = warnSpy.mock.calls.map((c) => String(c[0]));
+      expect(
+        warned.some(
+          (m) =>
+            m.includes('团队首选 worker 查询失败') && m.includes('tm_0000000001'),
+        ),
+      ).toBe(true);
+      warnSpy.mockRestore();
+    });
+→ 3442 行（第 5 行）正是 Todo 5 的 fail-open resolver 测试，line 超 80 列（CJK 宽字符
+  让 prettier 判定需折行）。属本计划引入的 1 个 prettier 脏点。
+
+  server/src/prisma/team-worker-node.migration.spec.ts 的 5 个报错点：
+    66:37 / 105:67 / 153:40 / 217:46 / 260:40 —— 全部在这个新文件里，全属本计划引入。
+
+=> 本计划共引入 **6** 个 prettier 脏点（5 在新守卫 spec + 1 在 worker-dispatcher.spec.ts），
+   其余 93 个属开工前既存。它们把 LINT 从"绿"变成 1。
+   这 6 个都不需要改业务逻辑，一条 prettier --write 即可；但本 todo 的权限边界是
+   "只写我自己的证据文件、不碰产品路径"，所以我不代改，如实上交给编排方裁决
+   （Todo 13 的 Must-NOT 同时禁止"为让门禁变绿而放宽 lint 基线或跳过用例"）。
+   这 6 个都不需要改业务逻辑，一条 prettier --write 即可；但本 todo 的权限边界是
+   "只写我自己的证据文件、不碰产品路径"，所以我不代改，如实上交给编排方裁决
+   （Todo 13 的 Must-NOT 同时禁止"为让门禁变绿而放宽 lint 基线或跳过用例"）。
+
+   （web 侧 lint:check = 0 errors / 729 warnings，与开工一致；本计划对 web 的 6 个
+     改动文件没有引入任何 web eslint error。）
+
+======================================================================
+7. MANUAL QA —— 失败路径证明（mandatory，真实执行）
+======================================================================
+7.1 必要性证明：在源码目录故意留下一处 agent-worker-select，复核项必须因此变红
+     步骤：备份 → 注入探测串 → 复跑 (a) → 显示非零 → 还原 → 显示归零 → 探测 token 全树归零
+
+$ cp "web/e2e/reference/testids.ts" $BK          # 备份
+backup md5: 5757c94aaa4b88e676e4d72fd52293ca
+target  md5: 5757c94aaa4b88e676e4d72fd52293ca
+
+### STEP 1: introduce ONE probe string in a SOURCE file (web/e2e/reference/testids.ts)
+$ printf '\n// PROBE-TASK13: agent-worker-select\n' >> "web/e2e/reference/testids.ts"
+$ tail -3 "web/e2e/reference/testids.ts"
+};
+
+// PROBE-TASK13: agent-worker-select
+
+### STEP 2: re-run check (a) verbatim
+$ grep -rn "agent-worker-select" web/app web/src web/e2e docs
+web/e2e/reference/testids.ts:566:// PROBE-TASK13: agent-worker-select
+grep_exit=0  (0 = HITS FOUND = check FAILS)
+hit count:        1
+→ 复核项真的在检：注入 1 个源码 hit，(a) 立刻从"零命中"变成 1，判据可失败。
+
+### STEP 3: revert from byte-exact backup
+$ cp "$BK" "web/e2e/reference/testids.ts"
+restored md5: 5757c94aaa4b88e676e4d72fd52293ca
+backup   md5: 5757c94aaa4b88e676e4d72fd52293ca
+
+### STEP 4: check (a) must return to ZERO hits
+$ grep -rn "agent-worker-select" web/app web/src web/e2e docs
+grep_exit=1  (1 = zero hits)
+hit count:        0
+→ 还原后归零。
+
+### STEP 5: probe token must be gone tree-wide
+$ grep -rn "PROBE-TASK13" web/app web/src web/e2e docs server/src worker 2>/dev/null | wc -l
+       0
+→ 探测 token 已从工作区彻底消失。
+
+### STEP 6: file must be byte-identical to the pre-probe state
+$ git diff -- "web/e2e/reference/testids.ts" | wc -l
+30          <- 这 30 行 diff 是"本计划自己的"testids.ts 改动（T3/T11/T15），不是探测残留
+$ git diff --stat -- "web/e2e/reference/testids.ts"
+ web/e2e/reference/testids.ts | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+这 30 行 diff 的原文，逐段可辨它正是 T3/T11/T15：
+@@ -153,7 +153,6 @@       <- T3：删掉 /agents 段的 "agent-worker-select" 清单项
+-      "agent-worker-select",
+@@ -236,6 +235,9 @@       <- T11：会话段注册三个 chip/option testid
++      "agent-worker-chip-<instanceId>",
++      "agent-worker-option-<instanceId>-follow-team",
++      "agent-worker-option-<instanceId>-<workerId>",
+@@ -546,6 +548,7 @@       <- T15：新增 "/teams/[id]" 详情页 key
++  "/teams/[id]": ["team-detail-root", "team-worker-select", "enter-team-session", "team-save-name"],
+=> sed -n '3438,3446p' 之外的每条追加/删除都能在本计划 todo 里对上，探测串不在其中。
+
+7.2 stale_state 证明：为什么 (a) 必须限定源码路径（否则判据被 .next 淹没）
+$ grep -rn "agent-worker-select" web docs | wc -l        ← 计划禁止的"裸扫 web+docs"
+6
+$ grep -rn "agent-worker-select" web/.next | wc -l       ← 归因：全部来自 .next
+6
+$ grep -rn "agent-worker-select" docs | wc -l
+0
+=> 若按"裸扫 web+docs"来验收 (a)，即使源码零命中，它也会因为 .next 里的陈旧产物而
+   报出 6 个 hit —— 判据从"可满足"变成"永远不可达"，而且突变校验（7.1）也会被这 6 个
+   噪声淹没，失去证明力。这正是 brief 要求"证明源码 scoping 必要性"的一侧。
+
+   .next 是 gitignore 的构建产物（web/.gitignore:22: /.next/），且零文件被跟踪：
+$ git check-ignore -v web/.next
+web/.gitignore:22: /.next/	web/.next
+$ git ls-files web/.next | wc -l
+0
+   携带陈旧 token 的具体文件（构建缓存，webpack pack）：
+$ grep -rln "agent-worker-select" web/.next
+web/.next/cache/webpack/client-production/19.pack
+web/.next/cache/webpack/client-production/35.pack
+web/.next/cache/webpack/client-production/13.pack
+web/.next/cache/webpack/client-production/25.pack
+web/.next/cache/webpack/client-production/27.pack
+web/.next/server-production/26.pack
+
+   反向证明 scoping 本身是稳的（跑完 npm run build 之后复测，构建产物刷新也不影响）：
+$ grep -rn "agent-worker-select" web/app web/src web/e2e docs | wc -l
+0
+$ grep -rn "agent-worker-select" web/.next | wc -l
+6
+=> 6 个 stale hit 仍在 .next（构建缓存未被清），但源码侧仍是 0 —— 判据稳定成立。
+
+======================================================================
+8. 计划第 285 行验收标准逐条对照
+======================================================================
+① 门禁按"无新增失败"判定，不以 exit 0 为判据 —— 已满足：
+   bash scripts/gate.sh = exit 1（bare-catch 守卫，开工前同形）；逐步骤码见 §4.2。
+   bare-catch = 176 在 worktree/HEAD/base-sha 三处一致、逐文件零差异（§5）。
+   → 作为"预存在"红如实记录，未改基线、未抬阈值、未跳过任何用例。
+② 逐步骤跑 prisma generate/lint:check/test/test:e2e/build + worker + web：
+   PRISMA=0 / LINT=1 / TEST=0 / TESTE2E=0 / BUILD=0 /
+   W_TYPECHECK=0 / W_TEST=0 / W_BUILD=0 / WEB_LINT=0 / WEB_BUILD=0
+   → **未尽"除守卫外全绿"**：LINT=1。归因见 §6：93 个 pre-existing + 6 个本计划引入的
+     prettier 脏点。这是本 todo 唯一的实质偏差，如实上移，不用 summary 掩盖。
+③ base-sha 处 bare-catch 实测命令与输出原文 —— §5 已贴（176 = 176 = 176）。
+④ 全部 grep 复核的命令与原始输出 —— §3 (a)-(j) 已逐条粘贴，未作摘要；
+   每条都满足：注释剔除后的计数、agents 面收窄、Worker 域正面保留断言。
+⑤ git status --porcelain | grep -c 'ddl-team-worker-node' = 0：
+$ git status --porcelain | grep -c 'ddl-team-worker-node'
+0
+   → 通过（同时 §1 证明该计数零检出，真正的判据是 §i 的 ls-files 失败）。
+⑥ git status --porcelain 与开工快照对比，无新增改动 —— §1 已逐字节比对，diff 为空。
+
+======================================================================
+9. CLEANUP / 未越界声明
+======================================================================
+- 未执行任何 git 写命令（no add / commit / stash / checkout / reset / revert / clean）。
+  本 todo 写入的只有 .omo/evidence/task-13-team-worker-node.txt 与 .omo/evidence/task-13-gate.log
+  两个证据文件；其余读操作不落地任何文件（临时文件全部在 /tmp 下）。
+- 7.1 的探测串已还原，探测 token 全树归零（STEP 5 = 0）。
+- 未清理/未回滚任何开工前既存脏文件（§1b 的 9 个文件逐字节一致）。
+- 未起新 docker 栈：docker compose ps 只是只读查询，栈保持 Todo 12 留下的 5 容器
+  （db / server / web / worker + 已退出的 init），未 down、未 build、未 up。
+- 未新增、未修改任何产品代码；LINT=1 的 6 个 prettier 脏点（§6）按"不碰产品路径"
+  的边界留给编排方/Todo 7 侧处理，未代改。
+- 未跳过任何测试、未为变绿放宽任何基线。
+
+======================================================================
+10. 附：未起新栈（只读确认）+ 冒烟脚本归 F3 所有
+======================================================================
+本 todo 的每一项复核都不需要 live 栈，因此没有 build/down/up。只读确认栈仍是 Todo 12
+留下的 5 个容器（含已退出的 init Job）：
+$ docker compose ps -a
+NAME                   IMAGE          COMMAND                  SERVICE   CREATED             STATUS                         PORTS
+vteam-compose-db       mysql:8        "docker-entrypoint.s…"   db        About an hour ago   Up About an hour (healthy)     3306/tcp, 33060/tcp
+vteam-compose-init     vteam-init     "docker-entrypoint.s…"   init      About an hour ago   Exited (0) About an hour ago
+vteam-compose-server   vteam-server   "docker-entrypoint.s…"   server    About an hour ago   Up About an hour (healthy)     0.0.0.0:13000->3000/tcp, [::]:13000->3000/tcp
+vteam-compose-web      vteam-web      "docker-entrypoint.s…"   web       About an hour ago   Up About an hour (healthy)     0.0.0.0:13001->3000/tcp, [::]:13001->3000/tcp
+vteam-compose-worker   vteam-worker   "docker-entrypoint.s…"   worker    About an hour ago   Up About an hour               0.0.0.0:14000->4000/tcp, [::]:14000->4000/tcp, ...
+→ 未 down、未 build、未 up；init Job 保持"已完成退出"，migrate deploy 早已应用。
+
+冒烟脚本 scripts/e2e-team-worker-node.sh（Todo 12 交付，本 todo 只确认在位可执行）：
+$ ls -l scripts/e2e-team-worker-node.sh
+-rwxr-xr-x@ 1 mac  staff  46137 Oct 14 23:16 scripts/e2e-team-worker-node.sh
+$ test -x scripts/e2e-team-worker-node.sh; echo "test_-x_exit=$?"
+test_-x_exit=0
+→ 重跑 A/B/C/D 属 F3（Real manual QA）的职责，不在本 todo 范围内；本 todo 不重跑，
+  以免在 F3 重建栈之前制造一次可能误导的中间态。
+
+======================================================================
+11. gate.log 与本文的关系
+======================================================================
+.omo/evidence/task-13-gate.log（7347 行）保存了 §4 每一步的完整原始 transcript：
+  - bash scripts/gate.sh 的完整输出（含 FAIL 行与 GATE_EXIT=1）
+  - 9 个门禁步骤的完整 stdout/stderr
+  - 顶部写死了 §4.2 的退出码汇总与 §5 的 bare-catch 复现（176 / 176 / 176）
+本文档只粘每步的"命令 + 字面退出码 + 关键摘要行"，完整输出以 gate.log 为准。
+
+======================================================================
+12. 本 todo 结论（DoneClaim 摘要）
+======================================================================
+复核结果：
+  · 残留引用 (a)-(j) 十条全部满足其判据（§3）。
+  · 门禁：bare-catch 守卫 176 == 176 == 176（worktree/HEAD/base-sha，逐文件零差异），
+    是开工前既存红，本计划未抬基线、未新增 bare catch。
+  · 逐步骤退出码：PRISMA=0 / LINT=1 / TEST=0 / TESTE2E=0 / BUILD=0 /
+    W_TYPECHECK=0 / W_TEST=0 / W_BUILD=0 / WEB_LINT=0 / WEB_BUILD=0。
+  · 唯一非守卫红 = LINT=1（99 个 prettier 排版错误）。归因：93 个开工前既存 +
+    6 个本计划引入（5 个在新守卫 spec server/src/prisma/team-worker-node.migration.spec.ts
+    + 1 个在 worker-dispatcher.spec.ts:3442）。本 todo 按"只写证据、不碰产品路径"
+    的边界不代改，如实上报给编排方。
+  · 工作区未被本 todo 改变（72 条 porcelain 逐字节一致），无任何暂存，HEAD 未动。
