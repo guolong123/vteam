@@ -342,6 +342,13 @@ export class TeamsService implements OnModuleInit {
     if (dto.managedMode !== undefined) {
       data.managedMode = dto.managedMode;
     }
+    // 弱校验：与下方 mainAgentMemberId 的存在性校验（:352-368）故意分歧——
+    // worker 是软引用，其可用性（在线/离线/容量/模型）是运行期事实，纯配置操作不应
+    // 被节点状态阻断；置顶不可用时由分派期 warn 收敛（见 workers.assignWorker 的
+    // preferredWorkerId 置顶分支），并回退自动调度。
+    if (dto.preferredWorkerId !== undefined) {
+      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+    }
     if ((dto as any).mainAgentMemberId !== undefined) {
       const raw = (dto as any).mainAgentMemberId;
       if (raw === null || String(raw).trim() === '') {
@@ -820,6 +827,9 @@ export class TeamsService implements OnModuleInit {
     if (dto.workDir !== undefined) data.workDir = dto.workDir?.trim() || null;
     if (dto.overrideModelId !== undefined)
       data.overrideModelId = dto.overrideModelId?.trim() || null;
+    // 弱校验（同团队级 preferredWorkerId，见 update()）：worker 是软引用，可达性属运行期事实，纯配置操作不应被节点状态阻断。
+    if (dto.preferredWorkerId !== undefined)
+      data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
     /** 角色重绑解析出的外部槽位默认值（规则 5）；仅在成员当前值为空时才应用（prefill ≠ override）。 */
     let prefilledOpencodeAgentName: string | null = null;
     if (dto.agentId !== undefined || dto.roleId !== undefined) {
@@ -1483,6 +1493,9 @@ export class TeamsService implements OnModuleInit {
       seq: m.seq,
       workDir: m.workDir,
       overrideModelId: m.overrideModelId,
+      // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
+      // ⚠️ 必须与 tasks.service.ts 任务实例投影同步返回，缺一处会让正确值被 null 覆盖（既有踩坑）。
+      preferredWorkerId: m.preferredWorkerId ?? null,
       // opencode 原生 agent 选择（null = 用 opencode 默认 agent）——前端成员面板据此
       // 渲染/高亮当前选择；缺此字段会导致「切换后回显丢失」。
       opencodeAgentName: m.opencodeAgentName,
@@ -1515,6 +1528,9 @@ export class TeamsService implements OnModuleInit {
       currentTaskTitle: currentTask?.title ?? null,
       currentTaskStatus: currentTask?.status ?? null,
       mainAgentMemberId: (team as any).mainAgentMemberId ?? null,
+      // 团队级首选 worker（null = 自动调度）；成员级选择优先于本值（见 worker-dispatcher 两级 resolver）。
+      // 缺此字段会让页面上的选择被空值悄悄覆盖（既有陷阱，tasks.service.ts 亦有同形注释）。
+      preferredWorkerId: team.preferredWorkerId ?? null,
       version: team.version,
       createdBy: team.createdBy,
       createdAt: team.createdAt,

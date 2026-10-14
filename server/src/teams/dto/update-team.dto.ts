@@ -42,6 +42,16 @@ export class UpdateTeamDto {
   @IsString()
   mainAgentMemberId?: string | null;
 
+  @ApiPropertyOptional({
+    description:
+      '团队级首选 worker（软引用，存 vteam_worker 的 id；空串/null = 自动调度；成员的显式选择优先于本值）',
+  })
+  @IsOptional()
+  @ValidateIf((o) => o.preferredWorkerId !== null)
+  @IsString()
+  @MaxLength(191)
+  preferredWorkerId?: string | null;
+
   @ApiPropertyOptional({ description: '乐观锁版本号（并发写保护）' })
   @IsOptional()
   @IsInt()

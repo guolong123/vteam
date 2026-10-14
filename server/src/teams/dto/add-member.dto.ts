@@ -68,6 +68,15 @@ export class UpdateMemberDto {
 
   @ApiPropertyOptional({
     description:
+      '成员级首选 worker（软引用，存 vteam_worker 的 id；成员的显式选择优先于团队级设置；' +
+      '空串/空白/null 表示不覆盖，回退团队级设置）',
+  })
+  @IsOptional()
+  @IsString()
+  preferredWorkerId?: string | null;
+
+  @ApiPropertyOptional({
+    description:
       'opencode 原生 agent 名（如 build/plan；空字符串或 null 表示不指定，用 opencode 默认 agent）',
   })
   @IsOptional()

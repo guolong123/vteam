@@ -61,6 +61,8 @@ type TeamMemberView = {
   seq: number;
   workDir?: string | null;
   overrideModelId?: string | null;
+  /** 成员级首选 worker（软引用，成员显式 > 团队 > 自动调度；null/空 = 不覆盖，跟随团队）。 */
+  preferredWorkerId?: string | null;
   /** opencode 原生 agent 选择（null = 用 opencode 默认 agent）。 */
   opencodeAgentName?: string | null;
   agent: { id: string; name: string };
@@ -2029,6 +2031,10 @@ export class TasksService implements OnModuleInit {
           // （web session/page.tsx agentMembers），任务 DTO 缺此字段会把团队侧的正确值
           // 覆盖成 null，表现为「切换后徽章回显丢失」（实测踩坑，同 overrideModelId 旧坑）。
           opencodeAgentName: m.opencodeAgentName ?? null,
+          // 成员级首选 worker（null = 跟随团队设置；成员的显式选择优先于团队级）。
+          // ⚠️ 必须与 team DTO（teams.service.ts toTeamDto 成员行）同步返回，缺一处会让
+          // 正确值被 null 覆盖，表现为「切换后回显丢失」（同上方 opencodeAgentName 旧坑）。
+          preferredWorkerId: m.preferredWorkerId ?? null,
           sessionStatus: s?.status ?? null,
           sessionId: s?.id ?? null,
         };
