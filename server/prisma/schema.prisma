@@ -92,6 +92,8 @@ model Team {
   managedMode        Boolean  @default(false) @map("managed_mode")
   currentTaskId      String?  @map("current_task_id")
   mainAgentMemberId  String?  @map("main_agent_member_id")
+  /// 团队级首选 worker（软绑定单节点；成员显式选择优先；不可用自动回退，绝不阻塞）
+  preferredWorkerId  String?  @map("preferred_worker_id")
   version            Int      @default(0) @map("version")
   createdBy          String   @map("created_by")
   createdAt          DateTime @default(now()) @map("created_at")
@@ -182,6 +184,8 @@ model TeamMember {
   seq            Int      @default(1)
   workDir        String?  @map("work_dir")
   overrideModelId String? @map("override_model_id")
+  /// 成员级首选 worker（软绑定单节点）：成员显式 > 团队 > 现状；null/空 = 不覆盖
+  preferredWorkerId String? @map("preferred_worker_id")
   /// 成员角色（agent_roles）。onDelete: Restrict —— 在用角色不可静默删除，
   /// 必须先解绑成员再删角色（FK 报错即显式拦截，绝不静默置空）。
   roleId         String?  @map("role_id")
@@ -648,8 +652,6 @@ model Agent {
   // ⚠️ 出厂默认提示词为多段长文本（16 篇 §3~§7 四方向结构），MySQL 需 TEXT 承载
   prompt          String   @db.Text
   defaultModelId  String?  @map("default_model_id")
-  // 首选 worker 软绑定（可空，null=自动调度；离线自动回退，Metis R1）
-  workerId        String?  @map("worker_id")
   // @deprecated 2026-08-21 已下线：群聊 @Agent 自动回复“收到，正在处理…”机制已删除（模型不可用时无法区分）。
   // 列保留以兼容存量 DB，业务层已不再读写；下次重建库可删。
   ackMessage      String?  @map("ack_message")

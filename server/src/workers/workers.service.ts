@@ -77,6 +77,17 @@ export interface AssignmentRequirement {
    * （availability 无行）降级不受过滤约束（过渡期兼容）。
    */
   modelId?: string;
+  /**
+   * 首选（置顶）worker id —— **候选内偏好**，不是硬绑定：
+   * - 仅当该 id 出现在通过全部四道既有过滤（① status≠offline ② 剩余容量>=需求
+   *   ③ opencodeVersion 匹配 ④ matchesModelRequirement）的候选集里，才被直接选用；
+   * - 否则一律忽略并回退到自动调度（`ranked[0]`），并且只 `logger.warn` 记录原因，
+   *   **绝不因置顶不可用而 throw「无可用 worker」或等待其恢复**；
+   * - 另有一条**仅置顶专属**的附加条件（B1，见 assignWorker）：`modelId` 非空且置顶
+   *   worker 从未上报模型能力（modelAvailabilities 为空）时视为未命中。
+   * - 省略（undefined）时行为与今日逐字节一致——9 处既有无参/仅 workerId 的调用方不受影响。
+   */
+  preferredWorkerId?: string;
 }
 
 /** 下行命令 type 枚举（T4a 命令通道；09 §3.9 预留 {command?}，pull 模型心跳携带）。 */
@@ -859,6 +870,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * - 候选：status != offline（online 优先，degraded 降权排后）
    * - 匹配：opencodeVersion 精确匹配（req.opencodeVersion 提供时）+ 剩余容量 >= 需求槽位
    * - 排序：online 优先；同状态内剩余容量（maxInstances - instances）降序 → 负载最少者优先
+   * - 置顶：req.preferredWorkerId 只是**候选内偏好**，只在通过上面全部四道过滤时生效，
+   *   未命中一律回退 ranked[0] 并 warn，绝不 throw（见下方 pin 分支注释）。
    */
   async assignWorker(req: AssignmentRequirement = {}): Promise<string | null> {
     const need = Math.max(1, req.instances ?? 1);
@@ -895,7 +908,42 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         if (aOnline !== bOnline) return bOnline - aOnline;
         return b.capacity - a.capacity;
       });
-    return ranked[0]?.worker.id ?? null;
+    const fallbackId = ranked[0]?.worker.id ?? null;
+    if (!req.preferredWorkerId) {
+      return fallbackId;
+    }
+    // 置顶分支：偏好只在四道过滤全过的候选集内生效，未命中软回退，绝不 throw。
+    const pinned = ranked.find((x) => x.worker.id === req.preferredWorkerId);
+    if (!pinned) {
+      // DB where 已排除 offline，故「行缺失」与「offline」在候选集里不可区分，不谎称两种原因。
+      const raw = candidates.find((w) => w.id === req.preferredWorkerId);
+      const reason = raw
+        ? `未通过既有过滤（status=${raw.status} 容量=${this.remainingCapacity(raw)}/${need} opencodeVersion=${raw.opencodeVersion} modelId=${req.modelId ?? '-'}）`
+        : '不在候选集中（行缺失或已 offline，二者不可区分）';
+      this.logger.warn(
+        `assignWorker 首选 worker ${req.preferredWorkerId} 未命中：${reason}；回退自动调度 ${fallbackId ?? 'null'}`,
+      );
+      return fallbackId;
+    }
+    // B1（置顶专属附加条件，不改全局语义）：matchesModelRequirement 对「从未上报模型能力」
+    // 的 worker 返回 true（avail.length===0 ⇒ true，过渡期兼容契约）。自动调度下这无害，
+    // 但置顶会把它变成确定性选择，静默击穿已发布的模型可用性保证（失败推迟到 opencode serve
+    // 运行期），故仅在置顶分支内附加该条件并回退。
+    // 注意：某 worker defaultModelId === modelId 但 availabilities 为空时，过滤④会放行而 B1 会拒
+    // —— 这是**有意**的；回退后 ranked[0] 仍可能选回它，不要当 bug 修。
+    if (req.modelId && (pinned.worker.modelAvailabilities ?? []).length === 0) {
+      this.logger.warn(
+        `assignWorker 首选 worker ${pinned.worker.id} 命中候选但从未上报模型能力（modelAvailabilities 为空），modelId=${req.modelId} 下按 B1 视为未命中；回退自动调度 ${fallbackId ?? 'null'}`,
+      );
+      return fallbackId;
+    }
+    if (pinned.worker.status === WORKER_STATUS.DEGRADED) {
+      // 四道过滤只挡 offline，degraded 会通过全部过滤并绕过 online 优先排序——需被告知。
+      this.logger.warn(
+        `assignWorker 首选 worker ${pinned.worker.id} 状态为 degraded，仍按置顶选用（已绕过 online 优先排序）`,
+      );
+    }
+    return pinned.worker.id;
   }
 
   /**
@@ -1287,7 +1335,8 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * - offline → 事务内清理全部 workerId 外键引用（schema onDelete: Restrict，不依赖
    *   DB 级联）后物理删除：worker_model_availabilities 硬删、worker 会话实例关联硬删
    *   （软删 removedAt 不解除 FK Restrict，必须删行）、sessions.workerId/instanceRef 置空、
-   *   agents.workerId 置空（软绑定"首选 worker"）；成功同步清理该 worker 的
+   *   teams.preferredWorkerId 与 team_members.preferredWorkerId 置空（团队/成员两级软绑定的
+   *   「首选 worker」；列无 FK/无索引，按应用层清理惯例兜底）；成功同步清理该 worker 的
    *   workerMcpStatus/pendingCommands 内存态。
    */
   async remove(id: string) {
@@ -1316,9 +1365,13 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         where: { workerId: id },
         data: { workerId: null, instanceRef: null },
       }),
-      this.prisma.agent.updateMany({
-        where: { workerId: id },
-        data: { workerId: null },
+      this.prisma.team.updateMany({
+        where: { preferredWorkerId: id },
+        data: { preferredWorkerId: null },
+      }),
+      this.prisma.teamMember.updateMany({
+        where: { preferredWorkerId: id },
+        data: { preferredWorkerId: null },
       }),
       this.prisma.worker.delete({ where: { id } }),
     ]);
