@@ -16,6 +16,8 @@ export interface TeamMemberDto {
   seq: number;
   workDir: string;
   overrideModelId?: string | null;
+  /** 成员级首选 worker id（null = 跟随团队级选择）。 */
+  preferredWorkerId?: string | null;
   /** opencode 原生 agent 名（null = 不指定，用引擎默认 agent）。 */
   opencodeAgentName?: string | null;
   agent?: { id: string; name: string; role: string | null };
@@ -49,6 +51,8 @@ export interface TeamDto {
   currentTaskTitle?: string | null;
   currentTaskStatus?: string | null;
   mainAgentMemberId: string | null;
+  /** 团队级首选 worker id（null = 自动调度到任意可用节点；节点删除后为悬空软引用）。 */
+  preferredWorkerId?: string | null;
   version: number;
   createdBy: string;
   createdAt: string;
@@ -79,6 +83,8 @@ export interface UpdateTeamPayload {
   reuseSession?: boolean;
   managedMode?: boolean;
   mainAgentMemberId?: string | null;
+  /** 团队级首选 worker id（显式 null / 空串 = 清除选择，回自动调度；弱校验不校验节点存在性）。 */
+  preferredWorkerId?: string | null;
   version?: number;
 }
 

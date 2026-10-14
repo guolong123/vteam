@@ -56,6 +56,7 @@ type SessionAgent = {
   main: boolean;
   enabled: boolean | null;
   overrideModelId: string | null;
+  preferredWorkerId: string | null;
   opencodeAgentName: string | null;
 };
 
@@ -68,6 +69,12 @@ function taskInstancesToSessionAgents(instances: TaskInstance[]): SessionAgent[]
       "opencodeAgentName" in instance && typeof instance.opencodeAgentName === "string"
         ? instance.opencodeAgentName
         : null;
+    // 任务实例 DTO 的成员级首选 worker（服务端 tasks.service 投影与团队 DTO 同值返回）；
+    // TaskInstance 类型未声明该字段（成员展示形状 MemberView 才有），照抄上一行 in 收窄读法，缺一层即回显丢失。
+    const preferredWorkerId =
+      "preferredWorkerId" in instance && typeof instance.preferredWorkerId === "string"
+        ? instance.preferredWorkerId
+        : null;
     return {
       id: instance.agentId,
       instanceId: instance.id,
@@ -77,6 +84,7 @@ function taskInstancesToSessionAgents(instances: TaskInstance[]): SessionAgent[]
       main: instance.main,
       enabled: instance.enabled ?? true,
       overrideModelId: instance.overrideModelId ?? null,
+      preferredWorkerId,
       opencodeAgentName,
     };
   });
@@ -431,6 +439,7 @@ export default function TeamSessionPage() {
         main: isMain,
         enabled: true,
         overrideModelId: m.overrideModelId ?? null,
+        preferredWorkerId: m.preferredWorkerId ?? null,
         opencodeAgentName: (m as { opencodeAgentName?: string | null }).opencodeAgentName ?? null,
       };
     });
@@ -1129,6 +1138,21 @@ export default function TeamSessionPage() {
       console.error("[TeamSession] change member model failed", { teamId, error: err });
     },
   });
+  const instanceWorkerMutation = useMutation({
+    mutationFn: ({ instanceId, workerId }: { instanceId: string; workerId: string | null }) =>
+      api.patch(`/teams/${teamId}/members/${instanceId}`, { preferredWorkerId: workerId ?? null }),
+    onSuccess: () => {
+      // 会话页 teamAgentMembers 有任务实例时优先读队首任务实例（["task", effectivePanelTaskId]），
+      // 仅失效 team 缓存 UI 不刷新——需同时失效 task 缓存（成员 worker 覆盖展示断链修复）。
+      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+      if (queueHeadTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
+      }
+    },
+    onError: (err) => {
+      console.error("[TeamSession] change member worker failed", { teamId, error: err });
+    },
+  });
   const resetSessionMutation = useMutation({
     mutationFn: ({ memberId }: { instanceId: string; memberId: string }) =>
       api.post<{ teamId: string; memberId: string; session: unknown }>(
@@ -1323,6 +1347,7 @@ export default function TeamSessionPage() {
           onResetSession={hasQueueHeadTask ? handleResetSession : undefined}
           resetPendingInstanceId={resetPendingInstanceId}
           onChangeModel={(instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId })}
+          onChangeWorker={(instanceId: string, workerId: string | null) => instanceWorkerMutation.mutate({ instanceId, workerId })}
           onSetMainAgent={(memberId: string) => { if (!setMainAgentMutation.isPending) setMainAgentMutation.mutate(memberId); }}
           onSelectMember={(instanceId) => handlePrivateTab(instanceId)}
           selectedKey={selectedMemberKey}

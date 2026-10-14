@@ -123,12 +123,13 @@ export function TeamMembersPanel({
   onResetSession,
   resetPendingInstanceId,
   onChangeModel,
+  onChangeWorker,
   onSetMainAgent,
   onSelectMember,
   selectedKey,
   footerText,
 }: {
-  agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean; enabled?: boolean | null; overrideModelId?: string | null }[];
+  agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean; enabled?: boolean | null; overrideModelId?: string | null; preferredWorkerId?: string | null }[];
   loadingAgentIds: Set<string>;
   sessionStatusByAgent: Record<string, string>;
   teamEditable: boolean;
@@ -145,6 +146,8 @@ export function TeamMembersPanel({
   /** 正在重置会话的实例 key（instanceId ?? id）：该项菜单显示「重置中…」并禁用，防重复提交。 */
   resetPendingInstanceId?: string | null;
   onChangeModel?: (instanceId: string, modelId: string | null) => void;
+  /** 成员级首选 worker 节点：null = 跟随团队级选择（chip 虚线态「跟随团队」）。 */
+  onChangeWorker?: (instanceId: string, workerId: string | null) => void;
   onSetMainAgent?: (memberId: string) => void;
   onSelectMember?: (instanceId: string, agentId: string) => void;
   selectedKey?: string | null;
@@ -191,14 +194,16 @@ export function TeamMembersPanel({
 
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [modelPicker, setModelPicker] = useState<string | null>(null);
+  const [workerPicker, setWorkerPicker] = useState<string | null>(null);
   const [modelSearch, setModelSearch] = useState("");
+  const [workerSearch, setWorkerSearch] = useState("");
 
   useEffect(() => {
-    if (!openMenu && !modelPicker) return;
-    const h = () => { setOpenMenu(null); setModelPicker(null); };
+    if (!openMenu && !modelPicker && !workerPicker) return;
+    const h = () => { setOpenMenu(null); setModelPicker(null); setWorkerPicker(null); };
     window.addEventListener("click", h);
     return () => window.removeEventListener("click", h);
-  }, [openMenu, modelPicker]);
+  }, [openMenu, modelPicker, workerPicker]);
 
   // 模型选择：与 Agent 配置同源（GET /agents/:id/available-models，仅可用模型；
   // 目录 enabled + worker 在线可用 + 凭据齐全，空目录时 worker pull/静态兜底）
@@ -218,6 +223,28 @@ export function TeamMembersPanel({
   const allModels: { id: string; name: string }[] = Array.isArray(modelsData)
     ? modelsData
     : (modelsData?.models ?? []);
+
+  // worker 节点清单：复用 ["workers"] 缓存（GET /workers，与团队详情页/agents 页同 key 共享，不新造请求）。
+  // 在线优先 + 名称排序（与 teams/[id]/page.tsx 团队首选 Worker 选择同一口径）。
+  const workersQuery = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => api.get<{ id: string; name: string | null; status: string }[]>("/workers"),
+    retry: false,
+  });
+  const sortedWorkers = useMemo(
+    () =>
+      [...(workersQuery.data ?? [])].sort((x, y) => {
+        if (x.status !== "offline" && y.status === "offline") return -1;
+        if (x.status === "offline" && y.status !== "offline") return 1;
+        return (x.name ?? x.id).localeCompare(y.name ?? y.id);
+      }),
+    [workersQuery.data],
+  );
+  // 悬空软引用（节点已删除）：成员值不在清单里时 chip 仍回显原始 id，不得渲染成「跟随团队」
+  const workerLabel = (id: string): string => {
+    const w = (workersQuery.data ?? []).find((x) => x.id === id);
+    return w ? (w.name ?? w.id) : id;
+  };
 
   // 模板默认模型：成员未单独设模型时 chip 显示模板实际生效模型（GET /agents，与添加页同 key 共享缓存）
   const agentsDirQuery = useQuery({
@@ -496,6 +523,44 @@ export function TeamMembersPanel({
                   </span>
                   <span style={{ fontSize: 8 }}>▼</span>
                 </button>
+                <button
+                  type="button"
+                  data-testid={`agent-worker-chip-${a.instanceId ?? a.id}`}
+                  aria-label="设置 Worker 节点"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setWorkerPicker(workerPicker === (a.instanceId ?? a.id) ? null : (a.instanceId ?? a.id));
+                    setModelPicker(null);
+                    setOpenMenu(null);
+                  }}
+                  title={
+                    a.preferredWorkerId
+                      ? `Worker 节点：${workerLabel(a.preferredWorkerId)}（点击更换）`
+                      : "跟随团队（点击设置 Worker 节点）"
+                  }
+                  style={{
+                    marginTop: 4,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "1px 6px",
+                    borderRadius: radius.pill,
+                    border: a.preferredWorkerId ? `1px solid rgba(13,148,136,0.35)` : `1px dashed ${neutral[300]}`,
+                    backgroundColor: a.preferredWorkerId ? "rgba(13,148,136,0.12)" : "transparent",
+                    color: a.preferredWorkerId ? "#0D9488" : neutral[500],
+                    fontSize: 10,
+                    maxWidth: "100%",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    cursor: "pointer",
+                  }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {a.preferredWorkerId ? workerLabel(a.preferredWorkerId) : "跟随团队"}
+                  </span>
+                  <span style={{ fontSize: 8 }}>▼</span>
+                </button>
               </span>
               <span style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, position: "relative" }}>
                 <button
@@ -718,6 +783,91 @@ export function TeamMembersPanel({
                   {modelsQuery.isPending && <span style={{ fontSize: fontSize.xs, color: neutral[400], padding: 6 }}>加载中…</span>}
                   {!modelsQuery.isPending && allModels.length === 0 && (
                     <span style={{ fontSize: fontSize.xs, color: neutral[400], padding: 6 }}>暂无模型</span>
+                  )}
+                </div>
+              </div>
+            )}
+            {workerPicker === (a.instanceId ?? a.id) && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  margin: `0 ${space.sm}px`,
+                  padding: 8,
+                  border: `1px solid ${neutral[200]}`,
+                  borderRadius: radius.md,
+                  backgroundColor: "var(--color-surface)",
+                  boxShadow: shadow.md,
+                }}
+              >
+                <input
+                  autoFocus
+                  placeholder="搜索节点…"
+                  value={workerSearch}
+                  onChange={(e) => setWorkerSearch(e.target.value)}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: `6px 8px`,
+                    borderRadius: radius.sm,
+                    border: `1px solid ${neutral[200]}`,
+                    fontSize: fontSize.sm,
+                    marginBottom: 6,
+                  }}
+                />
+                <div style={{ maxHeight: 160, overflowY: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+                  <button
+                    type="button"
+                    data-testid={`agent-worker-option-${a.instanceId ?? a.id}-follow-team`}
+                    onClick={() => {
+                      onChangeWorker?.(a.instanceId ?? a.id, null);
+                      setWorkerPicker(null);
+                    }}
+                    style={{
+                      textAlign: "left",
+                      padding: `6px 8px`,
+                      borderRadius: radius.sm,
+                      border: !a.preferredWorkerId ? `1px solid #0D9488` : `1px solid transparent`,
+                      backgroundColor: !a.preferredWorkerId ? "rgba(13,148,136,0.12)" : "transparent",
+                      cursor: "pointer",
+                      fontSize: fontSize.sm,
+                    }}
+                  >
+                    跟随团队 {!a.preferredWorkerId && "✓"}
+                  </button>
+                  {sortedWorkers
+                    .filter((w) => !workerSearch || `${w.name ?? ""} ${w.id}`.toLowerCase().includes(workerSearch.toLowerCase()))
+                    .map((w) => (
+                      <button
+                        key={w.id}
+                        type="button"
+                        data-testid={`agent-worker-option-${a.instanceId ?? a.id}-${w.id}`}
+                        onClick={() => {
+                          onChangeWorker?.(a.instanceId ?? a.id, w.id);
+                          setWorkerPicker(null);
+                        }}
+                        style={{
+                          textAlign: "left",
+                          padding: `6px 8px`,
+                          borderRadius: radius.sm,
+                          border: a.preferredWorkerId === w.id ? `1px solid #0D9488` : `1px solid transparent`,
+                          backgroundColor: a.preferredWorkerId === w.id ? "rgba(13,148,136,0.12)" : "transparent",
+                          cursor: "pointer",
+                          fontSize: fontSize.sm,
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 8,
+                        }}
+                      >
+                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {w.name ?? w.id} <span style={{ color: neutral[400], fontSize: 10 }}>{w.id}</span>
+                        </span>
+                        <span style={{ color: neutral[400], fontSize: 10, flexShrink: 0 }}>{w.status !== "offline" ? "在线" : "离线"}</span>
+                        {a.preferredWorkerId === w.id && "✓"}
+                      </button>
+                    ))}
+                  {workersQuery.isPending && <span style={{ fontSize: fontSize.xs, color: neutral[400], padding: 6 }}>加载中…</span>}
+                  {!workersQuery.isPending && sortedWorkers.length === 0 && (
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400], padding: 6 }}>暂无节点</span>
                   )}
                 </div>
               </div>

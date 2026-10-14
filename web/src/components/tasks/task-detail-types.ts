@@ -135,4 +135,6 @@ export interface MemberView {
   main?: boolean;
   enabled?: boolean | null;
   overrideModelId?: string | null;
+  /** 成员级首选 worker id（null = 跟随团队级选择）。 */
+  preferredWorkerId?: string | null;
 }
