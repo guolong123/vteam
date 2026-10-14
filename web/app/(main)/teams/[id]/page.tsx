@@ -17,6 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRealtimeEvents } from "@/hooks/use-realtime";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { isApiError } from "@/lib/errors";
+import { api } from "@/lib/api";
 import { teamsApi, type TeamDto, type TeamMemberDto, type TeamQueueDto } from "@/src/api/teams";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import { UserMembersSection } from "./user-members";
@@ -34,6 +35,14 @@ import {
 } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
+
+/** GET /workers 条目（团队首选 worker 选择 + 在线态）。 */
+interface ApiWorkerRow {
+  id: string;
+  name: string | null;
+  status: string;
+}
+
 function toAvatarRole(role: string | null): RoleKey {
   return role && (ROLE_KEYS as readonly string[]).includes(role as RoleKey) ? (role as RoleKey) : "developer";
 }
@@ -102,8 +111,26 @@ export default function TeamDetailPage() {
   const roleLabelOf = (r: AgentRoleDto): string =>
     r.defaultAgentId ? `${r.name}` : r.defaultOpencodeAgentName ? `${r.name}（外部）` : r.name;
 
+  // worker 列表：GET /workers（团队首选 worker 选择数据源，复用 ["workers"] 缓存，不新造请求）
+  const workersQuery = useQuery({
+    queryKey: ["workers"],
+    queryFn: () => api.get<ApiWorkerRow[]>("/workers"),
+    enabled: !!id,
+  });
+  const workers = workersQuery.data ?? [];
+  // 在线优先 + 展示名排序（与 agents 页/模型页同一惯例）
+  const sortedWorkers = [...workers].sort((a, b) => {
+    if (a.status !== "offline" && b.status === "offline") return -1;
+    if (a.status === "offline" && b.status !== "offline") return 1;
+    return (a.name ?? a.id).localeCompare(b.name ?? b.id);
+  });
+
   const team: TeamDto | undefined = teamQuery.data;
   const currentTaskId = team?.currentTaskId ?? null;
+  // 悬空软引用（节点已删除）：当前值不在清单里时仍以原始 id 渲染占位项，不得回退成空选中
+  const danglingWorkerId = team?.preferredWorkerId && !workers.some((w) => w.id === team.preferredWorkerId)
+    ? team.preferredWorkerId
+    : null;
 
   useRealtimeEvents({
     scope: `team:${id},global`,
@@ -139,7 +166,7 @@ export default function TeamDetailPage() {
   const deletable = !!team && !hasRunningTask;
 
   const patchMutation = useMutation({
-    mutationFn: (payload: { name?: string; description?: string | null; reuseSession?: boolean; mainAgentMemberId?: string | null }) =>
+    mutationFn: (payload: { name?: string; description?: string | null; reuseSession?: boolean; mainAgentMemberId?: string | null; preferredWorkerId?: string | null }) =>
       teamsApi.update(id, { ...payload, version: team?.version }),
   });
 
@@ -160,6 +187,19 @@ export default function TeamDetailPage() {
     setActionError(null);
     try {
       await patchMutation.mutateAsync({ reuseSession: !team.reuseSession });
+      queryClient.invalidateQueries({ queryKey: ["team", id] });
+      queryClient.invalidateQueries({ queryKey: ["teams"] });
+    } catch (err) {
+      setActionError(isApiError(err) ? err.message : "更新失败");
+    }
+  };
+
+  // 团队级首选 worker：写既有 PATCH /teams/:id（带 version），成功后按既有键失效回显。
+  const handleSetPreferredWorker = async (workerId: string) => {
+    if (!team) return;
+    setActionError(null);
+    try {
+      await patchMutation.mutateAsync({ preferredWorkerId: workerId || null });
       queryClient.invalidateQueries({ queryKey: ["team", id] });
       queryClient.invalidateQueries({ queryKey: ["teams"] });
     } catch (err) {
@@ -299,6 +339,38 @@ export default function TeamDetailPage() {
           </span>
           <span role="switch" aria-checked={team.reuseSession} data-testid="reuse-toggle" onClick={handleToggleReuse} style={{ width: 36, height: 20, borderRadius: 10, backgroundColor: team.reuseSession ? "#0D9488" : neutral[300], position: "relative", cursor: "pointer", flexShrink: 0 }}>
             <span style={{ position: "absolute", top: 2, left: team.reuseSession ? 18 : 2, width: 16, height: 16, borderRadius: "50%", backgroundColor: "#FFF", transition: "left .2s" }} />
+          </span>
+        </div>
+        <div data-testid="team-worker-section" style={{ display: "flex", alignItems: "center", gap: space.md, paddingTop: space.md, borderTop: `1px dashed ${neutral[200]}` }}>
+          <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700], whiteSpace: "nowrap" }}>首选 Worker 节点</span>
+          <select
+            data-testid="team-worker-select"
+            value={team.preferredWorkerId ?? ""}
+            disabled={patchMutation.isPending}
+            onChange={(e) => handleSetPreferredWorker(e.target.value)}
+            aria-label="团队首选 Worker（未选则自动调度）"
+            style={{
+              fontFamily: fontFamily.body,
+              fontSize: fontSize.sm,
+              color: neutral[800],
+              backgroundColor: "var(--color-surface)",
+              border: `1px solid ${neutral[300]}`,
+              borderRadius: radius.md,
+              padding: `${space.xs}px ${space.sm}px`,
+              cursor: "pointer",
+              minWidth: 220,
+            }}
+          >
+            <option value="">自动调度（默认）</option>
+            {danglingWorkerId && <option value={danglingWorkerId}>{danglingWorkerId}</option>}
+            {sortedWorkers.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name ?? w.id} · {w.status !== "offline" ? "在线" : "离线"}
+              </option>
+            ))}
+          </select>
+          <span style={{ fontSize: fontSize.xs, color: neutral[500], flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            未选则自动调度到任意可用节点；成员可在会话页覆盖
           </span>
         </div>
       </section>
