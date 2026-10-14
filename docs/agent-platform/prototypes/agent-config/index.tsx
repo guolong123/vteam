@@ -5,7 +5,7 @@
  * - 默认模型（FR-47）：模型下拉 mock 平台目录 enabled 模型（选项「provider / 模型名」，如
  *   "opencode-go / DeepSeek V4 Flash"），来源标注模型目录（worker 上报合并入库）；
  *   模型凭据行 mock 已配置（绿徽章 + 脱敏 fingerprint）/ 未配置（token 输入框）双态，
- *   联动模型选择切换（受控，mock 不落库）；首选 Worker 软绑定（未选自动调度）。
+ *   联动模型选择切换（受控，mock 不落库）。
  * - 纯静态展示：勾选/开关/编辑均为示意，无交互逻辑（模型下拉联动凭据态除外）。
  * - 导航融合方案（T17）：深色 Sidebar 已替换为 NavDock 悬浮导航 + 浅色 NavTopBar + Cmd+K 命令面板，
  *   与 nav-hybrid 融合版心智一致（命令面板 z-40，Dock z-50，两者共存不冲突）。
@@ -157,13 +157,6 @@ const credentialTheme = {
 /** 目录 lookup：按模型 id 取目录项（未知 id 兜底首个） */
 const modelById = (id: string): ModelCatalogItem =>
   modelCatalog.find((m) => m.id === id) ?? modelCatalog[0];
-
-/** 首选 worker 池（mock）：未选 = 自动调度到任意可用 worker（软绑定，离线自动回退） */
-const workerPool = [
-  { id: "wkr-linux-01", name: "worker-linux-01", online: true },
-  { id: "wkr-linux-02", name: "worker-linux-02", online: true },
-  { id: "wkr-mac-01", name: "worker-mac-01", online: false },
-];
 
 const agentTemplates: AgentInfo[] = [
   {
@@ -776,49 +769,6 @@ function ConfigPanel({ agent }: { agent: AgentInfo }) {
             {selectedModel.credential === "configured"
               ? "凭据已配置 · 按 provider 粒度生效（C4）"
               : "保存后即时下发到 worker（C5）"}
-          </span>
-        </div>
-
-        {/* 首选 Worker：软绑定，未选则自动调度到任意可用 worker（离线自动回退） */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: space.md,
-            padding: space.md,
-            borderRadius: radius.md,
-            backgroundColor: neutral[50],
-            border: `1px solid ${neutral[200]}`,
-          }}
-        >
-          <span style={{ fontSize: fontSize.sm, color: neutral[600], flexShrink: 0 }}>
-            首选 Worker
-          </span>
-          <select
-            data-testid="agent-worker-select"
-            defaultValue=""
-            aria-label="首选 Worker（未选则自动调度）"
-            style={{
-              fontFamily: fontFamily.body,
-              fontSize: fontSize.sm,
-              color: neutral[800],
-              backgroundColor: "#FFFFFF",
-              border: `1px solid ${neutral[300]}`,
-              borderRadius: radius.md,
-              padding: `${space.xs}px ${space.sm}px`,
-              cursor: "pointer",
-              minWidth: 220,
-            }}
-          >
-            <option value="">自动调度（默认）</option>
-            {workerPool.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name} · {w.online ? "在线" : "离线"}
-              </option>
-            ))}
-          </select>
-          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            未选则自动调度到任意可用 worker（软绑定）
           </span>
         </div>
 

@@ -97,8 +97,6 @@ interface AgentItem {
   prompt: string;
   baseAgentId: string | null;
   defaultModelId: string | null;
-  /** 首选 worker id（软绑定，可空 null=自动调度，C1/C6） */
-  workerId: string | null;
   /** 绑定的 ExecutionPolicy id（ep_<role>；null=未绑定） */
   policyId: string | null;
   /** 技能 id 数组（关联 skills 表） */
@@ -123,8 +121,6 @@ interface AgentsResponse {
 interface UpdateAgentPayload {
   prompt?: string;
   defaultModelId?: string;
-  /** 首选 worker id（软绑定；显式 null=自动调度） */
-  workerId?: string | null;
   /** Agent 性格（显式 null 清除） */
   persona?: string | null;
 }
@@ -1523,7 +1519,6 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
   const [promptDraft, setPromptDraft] = useState(agent.prompt ?? "");
   const [personaDraft, setPersonaDraft] = useState<string | null>(agent.persona ?? null);
   const [modelDraft, setModelDraft] = useState<string | null>(agent.defaultModelId ?? null);
-  const [workerDraft, setWorkerDraft] = useState<string>(agent.workerId ?? "");
 
   // token 输入（POST /models/:mdId/credentials，type=password）
   const [tokenInput, setTokenInput] = useState("");
@@ -1541,12 +1536,10 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
 
   const handleSave = () => {
     // is_0000000030：内置（template）agent 设置也可修改（后端已放开，agentId/type 不可改）；
-    // 提交可编辑设置字段（prompt/模型/worker/性格）；层②权限矩阵经执行策略独立提交
+    // 提交可编辑设置字段（prompt/模型/性格）；层②权限矩阵经执行策略独立提交
     const payload: UpdateAgentPayload = {
       prompt: promptDraft.trim(),
       defaultModelId: modelDraft ?? undefined,
-      // 软绑定首选 worker：显式提交（空=自动调度，null 清除绑定）
-      workerId: workerDraft || null,
       persona: personaDraft,
     };
     onSave(payload);
@@ -1559,13 +1552,6 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
 
   // 存量兼容校验：defaultModelId 非空但不在目录（停用/遗留）→ 警告保留不阻断保存
   const staleModel = !!modelDraft && !catalogByRef.has(modelDraft);
-
-  // 在线 worker 优先排序（首选 worker 选择器选项顺序）
-  const sortedWorkers = [...workers].sort((a, b) => {
-    if (a.status !== "offline" && b.status === "offline") return -1;
-    if (a.status === "offline" && b.status !== "offline") return 1;
-    return (a.name ?? a.id).localeCompare(b.name ?? b.id);
-  });
 
   return (
     <section
@@ -1877,7 +1863,7 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
             模型与工具配置
           </span>
           <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            默认模型 · 凭据 · 首选 Worker
+            默认模型 · 凭据
           </span>
         </div>
         <div
@@ -2042,51 +2028,6 @@ function ConfigPanel({ agent, readOnly, models, mcpServers, mcpTools, mcpLoading
             {tokenConfigured
               ? "凭据已配置 · 按服务商粒度生效"
               : "保存后即时下发到 Worker"}
-          </span>
-        </div>
-
-        {/* 首选 Worker：软绑定（C1 字段，可空 null=自动调度，离线自动回退） */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: space.md,
-            padding: space.md,
-            borderRadius: radius.md,
-            backgroundColor: neutral[50],
-            border: `1px solid ${neutral[200]}`,
-          }}
-        >
-          <span style={{ fontSize: fontSize.sm, color: neutral[600], flexShrink: 0 }}>
-            首选 Worker
-          </span>
-          <select
-            data-testid="agent-worker-select"
-            value={workerDraft}
-            disabled={readOnly}
-            onChange={(e) => setWorkerDraft(e.target.value)}
-            aria-label="首选 Worker（未选则自动调度）"
-            style={{
-              fontFamily: fontFamily.body,
-              fontSize: fontSize.sm,
-              color: neutral[800],
-              backgroundColor: "var(--color-surface)",
-              border: `1px solid ${neutral[300]}`,
-              borderRadius: radius.md,
-              padding: `${space.xs}px ${space.sm}px`,
-              cursor: "pointer",
-              minWidth: 220,
-            }}
-          >
-            <option value="">自动调度（默认）</option>
-            {sortedWorkers.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name ?? w.id} · {w.status !== "offline" ? "在线" : "离线"}
-              </option>
-            ))}
-          </select>
-          <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-            未选则自动调度到任意可用 worker（软绑定）
           </span>
         </div>
 

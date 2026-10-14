@@ -8,7 +8,7 @@
  *   Agent（本页）—— 可执行单元：「用什么跑、怎么干、能做什么」
  *     属性：agentKey（引擎绑定名，= vteam-<key>）/ type（模板·自定义·克隆）
  *           baseAgentId（克隆来源）/ prompt（操作者提示词，"我该怎么干"）
- *           defaultModelId / workerId / persona / policyId（★ 能力：权限与工具）
+ *           defaultModelId / persona / policyId（★ 能力：权限与工具）
  *   岗位 AgentRole（agent-role 页）—— 「这是一个什么岗位」：key/name/description/
  *           type/defaultAgentId/rolePrompt/sortOrder；**无能力字段**。
  *
@@ -17,7 +17,7 @@
  * - 左栏：Agent 列表（模板 / 自定义 / 克隆），支持搜索 + 类型筛选。
  * - 右栏：Agent 详情，按属性分组：
  *   · ① 身份：agentKey / 类型 / 绑定岗位 / 克隆来源
- *   · ② 运行参数：默认模型 / 首选 Worker / 性格
+ *   · ② 运行参数：默认模型 / 性格
  *   · ③ 操作者提示词 prompt（"我该怎么干"）
  *   · ④ 能力（policyId）：原生权限 4 行 + MCP 工具三态矩阵（本次计划核心）
  * - 新建弹窗：能力档选择器（选档级即继承其权限与工具）。
@@ -103,7 +103,6 @@ interface AgentDef {
   agentKey: string;
   baseAgent?: string;
   model: string;
-  worker: string;
   persona: string;
   prompt: string;
   /** 本 Agent 实际写范围一行说明 */
@@ -130,7 +129,6 @@ const AGENTS: AgentDef[] = [
     type: "template",
     agentKey: "librarian",
     model: "DeepSeek V4 Flash",
-    worker: "自动调度",
     persona: "",
     prompt: "外部资料检索、文档归档与引用整理；不主动通知、不写文件。",
     tierNote: "无写权限 · 只读检索",
@@ -147,7 +145,6 @@ const AGENTS: AgentDef[] = [
     type: "template",
     agentKey: "plan",
     model: "DeepSeek V4 Pro",
-    worker: "自动调度",
     persona: "steady",
     prompt: "起草计划文档、汇总评审意见、按轮次收敛；只写计划目录，不实现。",
     tierNote: "仅 .opencode/plans 可写",
@@ -164,7 +161,6 @@ const AGENTS: AgentDef[] = [
     type: "template",
     agentKey: "product",
     model: "DeepSeek V4 Pro",
-    worker: "自动调度",
     persona: "steady",
     prompt: "澄清需求边界，产出需求文档与原型说明；不写实现代码。",
     tierNote: "可写 prototypes + docs",
@@ -181,7 +177,6 @@ const AGENTS: AgentDef[] = [
     type: "template",
     agentKey: "architect",
     model: "DeepSeek V4 Pro",
-    worker: "自动调度",
     persona: "conservative",
     prompt: "输出技术方案与设计文档；只读核对仓库现状，不改实现。",
     tierNote: "仅 docs 可写",
@@ -198,7 +193,6 @@ const AGENTS: AgentDef[] = [
     type: "template",
     agentKey: "tester",
     model: "DeepSeek V4 Flash",
-    worker: "worker-linux-02",
     persona: "strict",
     prompt: "设计用例、执行验证、输出可复现的结论与缺陷；不改实现。",
     tierNote: "可写 tests + docs",
@@ -215,7 +209,6 @@ const AGENTS: AgentDef[] = [
     type: "template",
     agentKey: "project_manager",
     model: "DeepSeek V4 Flash",
-    worker: "worker-linux-01",
     persona: "strict",
     prompt: "编排任务节奏、维护计划状态、识别阻塞并推动收敛。",
     tierNote: "无写权限 · 禁止执行命令",
@@ -232,7 +225,6 @@ const AGENTS: AgentDef[] = [
     type: "template",
     agentKey: "developer",
     model: "DeepSeek V4 Flash",
-    worker: "worker-linux-01",
     persona: "aggressive",
     prompt: "按方案完成代码实现，提交产出物与实现说明；不做需求判定。",
     tierNote: "整个任务目录可写 · 含 git",
@@ -250,7 +242,6 @@ const AGENTS: AgentDef[] = [
     agentKey: "release-checker",
     baseAgent: "开发者 Agent",
     model: "DeepSeek V4 Flash",
-    worker: "worker-linux-02",
     persona: "conservative",
     prompt: "发布前检查清单、记录变更、核对回滚方案；不改业务实现。",
     tierNote: "克隆自开发者，能力再收窄",
@@ -267,7 +258,6 @@ const AGENTS: AgentDef[] = [
     type: "custom",
     agentKey: "doc-helper",
     model: "DeepSeek V4 Flash Free",
-    worker: "自动调度",
     persona: "steady",
     prompt: "整理会议纪要与文档归档；只读代码，不提交实现。",
     tierNote: "自定义",
@@ -823,10 +813,9 @@ function AgentManagePage() {
               </div>
             </Section>
 
-            <Section index="②" title="运行参数" sub="模型 / 执行节点 / 性格 —— 都是 Agent 自己的属性，不属于岗位">
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: space.lg }}>
+            <Section index="②" title="运行参数" sub="模型 / 性格 —— 都是 Agent 自己的属性，不属于岗位">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: space.lg }}>
                 <Field label="默认模型" value={agent.model} />
-                <Field label="首选 Worker" value={agent.worker} hint="软绑定；离线自动回退" />
                 <Field label="性格 persona" value={PERSONA_LABEL[agent.persona] ?? agent.persona} />
               </div>
             </Section>
