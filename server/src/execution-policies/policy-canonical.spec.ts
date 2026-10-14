@@ -131,12 +131,12 @@ describe('policy canonical emission + per-field db resolution (Todo 2)', () => {
           vteam_group_post: 'allow',
           bogus_tool: 'whatever',
           another_bad: 42,
-          vteam_memory_search: 'ask',
+          vteam_memory_list: 'ask',
         },
       });
       expect(resolved.tools).toEqual({
         vteam_group_post: 'allow',
-        vteam_memory_search: 'ask',
+        vteam_memory_list: 'ask',
       });
       expect(resolved.tools).not.toHaveProperty('bogus_tool');
       expect(resolved.tools).not.toHaveProperty('another_bad');

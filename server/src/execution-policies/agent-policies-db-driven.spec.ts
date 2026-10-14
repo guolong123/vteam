@@ -39,14 +39,14 @@ describe('agent-policies db-driven builtins (Todo 15 proof)', () => {
   /** 编辑对象：`vteam-product`——DB `tools` 与 `permission` 都刻意偏离常量。 */
   const EDITED: VteamAgentName = 'vteam-product';
   const DB_TOOLS = {
-    vteam_memory_search: 'ask',
+    vteam_memory_list: 'ask',
     vteam_group_post: 'deny',
     vteam_hook_cancel: 'deny',
   } as const;
-  /** canonical 序（product `toolAllows` 声明序：group_post → memory_search → hook_cancel）。 */
+  /** canonical 序（product `toolAllows` 声明序：group_post → memory_list → hook_cancel）。 */
   const DB_TOOLS_CANONICAL = {
     vteam_group_post: 'deny',
-    vteam_memory_search: 'ask',
+    vteam_memory_list: 'ask',
     vteam_hook_cancel: 'deny',
   };
 

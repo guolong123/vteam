@@ -213,9 +213,9 @@ export const ROLE_CAPABILITIES: readonly RoleCapability[] = [
   },
   {
     key: "memory.search",
-    label: "检索团队记忆",
+    label: "列出/检索团队记忆",
     group: "memory",
-    tools: ["vteam_memory_search"],
+    tools: ["vteam_memory_list"],
     factoryDefault: true,
   },
   {

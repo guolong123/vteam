@@ -20,6 +20,9 @@ describe('MemoriesService', () => {
       findUnique: jest.Mock;
       findMany: jest.Mock;
     };
+    agentRole: {
+      findUnique: jest.Mock;
+    };
     user: {
       findUnique: jest.Mock;
     };
@@ -58,6 +61,9 @@ describe('MemoriesService', () => {
       teamUserMember: {
         findUnique: jest.fn(),
         findMany: jest.fn(),
+      },
+      agentRole: {
+        findUnique: jest.fn(),
       },
       user: {
         findUnique: jest.fn(),
@@ -992,9 +998,11 @@ describe('MemoriesService', () => {
       id: 'me_0000000001',
       level: 'team',
       teamId: 'tm_1',
+      roleId: null,
       content: '旧经验',
       description: '旧摘要',
       tags: null,
+      contentHash: 'hash-old',
       deletedAt: null,
       ...overrides,
     });
@@ -1147,6 +1155,252 @@ describe('MemoriesService', () => {
       expect(prisma.memory.update).toHaveBeenCalledWith({
         where: { id: 'me_0000000001' },
         data: { description: '新摘要' },
+      });
+    });
+  });
+
+  describe('update（scope 改范围：level/teamId/roleId）', () => {
+    const row = (overrides: Record<string, unknown> = {}) => ({
+      id: 'me_0000000001',
+      level: 'team',
+      teamId: 'tm_1',
+      roleId: null,
+      content: '旧经验',
+      description: '旧摘要',
+      tags: null,
+      contentHash: 'hash-old',
+      deletedAt: null,
+      ...overrides,
+    });
+
+    it('仅传 level=global 即为有效更新（全空校验含 level）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.memory.findFirst.mockResolvedValue(null);
+      prisma.memory.update.mockResolvedValue(
+        row({ level: 'global', teamId: null }),
+      );
+
+      await expect(
+        service.update('me_0000000001', { level: 'global' }, { id: 'u_admin' }),
+      ).resolves.toMatchObject({ level: 'global', teamId: null });
+    });
+
+    it('team → global：level/teamId=null/roleId=null 落库，不查目标成员表', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.memory.findFirst.mockResolvedValue(null);
+      prisma.memory.update.mockResolvedValue({ id: 'me_0000000001' });
+
+      await service.update(
+        'me_0000000001',
+        { level: 'global' },
+        { id: 'u_admin' },
+      );
+
+      expect(prisma.teamUserMember.findUnique).not.toHaveBeenCalled();
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: { level: 'global', teamId: null, roleId: null },
+      });
+    });
+
+    it('改范围 + 改内容：data 同时带 content/contentHash 与新 scope', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.memory.findFirst.mockResolvedValue(null);
+      prisma.memory.update.mockResolvedValue({ id: 'me_0000000001' });
+
+      await service.update(
+        'me_0000000001',
+        { level: 'team', teamId: 'tm_2', content: '新经验' },
+        { id: 'u_1' },
+      );
+
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: {
+          content: '新经验',
+          contentHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+          level: 'team',
+          teamId: 'tm_2',
+          roleId: null,
+        },
+      });
+    });
+
+    it('level=role 缺 teamId 且存量行为 global → 400 MEMORY_LEVEL_INVALID', async () => {
+      prisma.memory.findUnique.mockResolvedValue(
+        row({ level: 'global', teamId: null }),
+      );
+
+      await expect(
+        service.update(
+          'me_0000000001',
+          { level: 'role', roleId: 'ar_1' },
+          { id: 'u_admin' },
+        ),
+      ).rejects.toMatchObject({ response: { code: 'MEMORY_LEVEL_INVALID' } });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('level=role 缺 roleId → 400 MEMORY_LEVEL_INVALID（不更新）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+
+      await expect(
+        service.update('me_0000000001', { level: 'role' }, { id: 'u_1' }),
+      ).rejects.toMatchObject({ response: { code: 'MEMORY_LEVEL_INVALID' } });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+      // teamId 沿用存量行 tm_1 已解析成功，因缺 roleId 而 400，不应触达 AgentRole 表
+      expect(prisma.agentRole.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('非法 level → 400 MEMORY_LEVEL_INVALID（不更新）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+
+      await expect(
+        service.update(
+          'me_0000000001',
+          { level: 'task' as never },
+          { id: 'u_1' },
+        ),
+      ).rejects.toMatchObject({ response: { code: 'MEMORY_LEVEL_INVALID' } });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('目标岗位不存在 → 400 MEMORY_LEVEL_INVALID', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.agentRole.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.update(
+          'me_0000000001',
+          { level: 'role', roleId: 'ar_nope' },
+          { id: 'u_1' },
+        ),
+      ).rejects.toMatchObject({ response: { code: 'MEMORY_LEVEL_INVALID' } });
+      expect(prisma.agentRole.findUnique).toHaveBeenCalledWith({
+        where: { id: 'ar_nope' },
+        select: { id: true },
+      });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('level=role 成功：校验 AgentRole 存在后按目标 scope 落库', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.agentRole.findUnique.mockResolvedValue({ id: 'ar_1' });
+      prisma.memory.findFirst.mockResolvedValue(null);
+      prisma.memory.update.mockResolvedValue({ id: 'me_0000000001' });
+
+      await service.update(
+        'me_0000000001',
+        { level: 'role', roleId: 'ar_1' },
+        { id: 'u_1' },
+      );
+
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: { level: 'role', teamId: 'tm_1', roleId: 'ar_1' },
+      });
+    });
+
+    it('scope 变更撞目标范围活跃同 hash 行 → 409 MEMORY_DUPLICATE', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.memory.findFirst.mockResolvedValue({ id: 'me_dup' });
+
+      await expect(
+        service.update('me_0000000001', { level: 'global' }, { id: 'u_admin' }),
+      ).rejects.toMatchObject({
+        status: 409,
+        response: {
+          code: 'MEMORY_DUPLICATE',
+          message: '目标范围内已存在同内容记忆',
+        },
+      });
+      // 查重条件：同 level/teamId/roleId/contentHash、deletedAt null、id 不同
+      expect(prisma.memory.findFirst).toHaveBeenCalledWith({
+        where: {
+          id: { not: 'me_0000000001' },
+          deletedAt: null,
+          level: 'global',
+          teamId: null,
+          roleId: null,
+          contentHash: 'hash-old',
+        },
+        select: { id: true },
+      });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('scope 变更 + 新内容时查重用重算 hash（非存量 contentHash）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.memory.findFirst.mockResolvedValue({ id: 'me_dup' });
+
+      await expect(
+        service.update(
+          'me_0000000001',
+          { level: 'global', content: '新经验' },
+          { id: 'u_admin' },
+        ),
+      ).rejects.toMatchObject({ response: { code: 'MEMORY_DUPLICATE' } });
+
+      const where = prisma.memory.findFirst.mock.calls[0][0].where;
+      expect(where.contentHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(where.contentHash).not.toBe('hash-old');
+    });
+
+    it('存量 contentHash 为 null 时跳过查重（避免误报 409）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row({ contentHash: null }));
+      prisma.memory.update.mockResolvedValue({ id: 'me_0000000001' });
+
+      await service.update(
+        'me_0000000001',
+        { level: 'global' },
+        { id: 'u_admin' },
+      );
+
+      expect(prisma.memory.findFirst).not.toHaveBeenCalled();
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: { level: 'global', teamId: null, roleId: null },
+      });
+    });
+
+    it('viewer 非目标团队成员 → 403 PERMISSION_TEAM_NOT_MEMBER（兜底防线）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.update(
+          'me_0000000001',
+          { level: 'team', teamId: 'tm_other' },
+          { id: 'u_stranger' },
+        ),
+      ).rejects.toMatchObject({
+        response: { code: 'PERMISSION_TEAM_NOT_MEMBER' },
+      });
+      expect(prisma.teamUserMember.findUnique).toHaveBeenCalledWith({
+        where: { teamId_userId: { teamId: 'tm_other', userId: 'u_stranger' } },
+        select: { id: true },
+      });
+      expect(prisma.memory.update).not.toHaveBeenCalled();
+    });
+
+    it('viewer 是目标团队成员 → 放行（team→team 迁团）', async () => {
+      prisma.memory.findUnique.mockResolvedValue(row());
+      prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
+      prisma.memory.findFirst.mockResolvedValue(null);
+      prisma.memory.update.mockResolvedValue({ id: 'me_0000000001' });
+
+      await service.update(
+        'me_0000000001',
+        { level: 'team', teamId: 'tm_2' },
+        { id: 'u_1' },
+      );
+
+      expect(prisma.memory.update).toHaveBeenCalledWith({
+        where: { id: 'me_0000000001' },
+        data: { level: 'team', teamId: 'tm_2', roleId: null },
       });
     });
   });

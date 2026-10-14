@@ -49,7 +49,7 @@ describe('MemoryMaintenanceService', () => {
   const daysAgo = (n: number): Date => new Date(Date.now() - n * DAY);
 
   /**
-   * team 级活跃记忆行（默认：合规标签 + 被引用过 + 建档于 1 天前 → 首轮算「新」）。
+   * team 级活跃记忆行（默认：带标签 + 被引用过 + 建档于 1 天前 → 首轮算「新」）。
    * 服务端零检测下**没有**「脏/干净」之分：只要行活跃就是事实清单的一行。
    */
   const newRow = (id: string, over: Record<string, unknown> = {}) => ({
@@ -522,21 +522,27 @@ describe('MemoryMaintenanceService', () => {
       expect(prompt).toContain('拿不准就不动');
     });
 
-    it('引用 agent 侧工具名并给标签词表', async () => {
+    it('引用 agent 侧工具名（vteam_memory_list / merge / archive），标签自由无词表', async () => {
       await service.runOnce();
       const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
-      expect(prompt).toContain('vteam_memory_search');
+      expect(prompt).toContain('vteam_memory_list');
+      expect(prompt).not.toContain('vteam_memory_search');
       expect(prompt).toContain('vteam_memory_merge');
       expect(prompt).toContain('vteam_memory_archive');
-      expect(prompt).toContain('vteam_memory_update');
-      expect(prompt).toContain('howto / pitfall / constraint');
       expect(prompt).toContain('信息最全的一条');
+      expect(prompt).not.toContain('howto / pitfall / constraint');
+      expect(prompt).not.toContain('只改标签');
+      expect(prompt).not.toContain('vteam_memory_update');
+      expect(prompt).not.toContain('标签是否规范');
+      expect(prompt).toContain('④ 清单是本轮新记忆的主体');
+      expect(prompt).not.toContain('③ 标签');
     });
 
-    it('收尾汇报格式：合并/归档/改标签/不动', async () => {
+    it('收尾汇报格式：合并/归档/不动（不再有改标签）', async () => {
       await service.runOnce();
       const prompt = dispatcher.dispatchAgentMention.mock.calls[0][0].text;
-      expect(prompt).toContain('合并 X 条 / 归档 Y 条 / 改标签 Z 条 / 判断为不该动 W 条');
+      expect(prompt).toContain('合并 X 条 / 归档 Y 条 / 判断为不该动 W 条');
+      expect(prompt).not.toContain('改标签');
     });
 
     it('单轮上限常量进 prompt', async () => {

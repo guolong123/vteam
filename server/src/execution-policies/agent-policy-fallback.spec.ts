@@ -76,7 +76,7 @@ describe('unified agent policy fallback (Todo 5)', () => {
   });
 
   it('DB 行存在且 config 完整时仍胜出（行优先于常量回退）', async () => {
-    const dbTools = { vteam_group_post: 'deny', vteam_memory_search: 'ask' };
+    const dbTools = { vteam_group_post: 'deny', vteam_memory_list: 'ask' };
     const resolved = await serviceWith({
       id: 'ep_product',
       name: 'db-product',

@@ -145,7 +145,7 @@ evidence file under `identity_table`. Summary of the cases todo 3 must handle:
   `selfInstanceId`. Caller identity is therefore only the “most recent session on
   this worker” — which is not necessarily the session that invoked the tool.
 - **4 tools omit `selfInstanceId` but require `taskId`** — `doclib`, `task_context`,
-  `read_file`, `team_view` (plus `memory_search`, team-scoped, no `selfInstanceId`).
+  `read_file`, `team_view` (plus `memory_list`, team-scoped, no `selfInstanceId`).
   `assertWorkerTask` still returns the session's `teamMemberId ?? agentId`.
 - **`wecom_reply`** exposes `selfInstanceId` and `teamId` as optional identity/context fields. `teamId` comes from the arguments or the worker's most recent session (`session.teamId`); legacy task sessions fall back through `session.taskId → task.teamId`. `selfInstanceId` resolves to the bound team member. The tool does not require or depend on `taskId`; legacy `taskId` input is stripped by the schema.
 
@@ -160,7 +160,7 @@ Applied per case:
 | --- | --- |
 | No `x-worker-id` | already 403 `MISSING_WORKER_ID` today — keep; do not add a second check |
 | Worker not bound to the task/team | already 403 `FORBIDDEN` — keep |
-| `selfInstanceId` missing (`channel_send`, `memory_search`, the 4 task-bound read tools, `wecom_reply`) | resolve via the existing session lookup; if no member resolves, **403** |
+| `selfInstanceId` missing (`channel_send`, `memory_list`, the 4 task-bound read tools, `wecom_reply`) | resolve via the existing session lookup; if no member resolves, **403** |
 | Tool maps to **no capability** (unknown/retired tool) | **403** (unknown surface is fail-closed) |
 | Member resolves but `TeamMember.roleId IS NULL` | **403** (no post ⇒ no authority) |
 | Capability key present and explicitly `false` on the role | **403** |

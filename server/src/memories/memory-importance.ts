@@ -2,7 +2,7 @@
  * 记忆重要度公式（无 I/O、无副作用）。
  *
  * ## 为什么需要它
- * 记忆检索（`vteam_memory_search`）与每轮自动注入此前都按时间倒序取前 N，
+ * 记忆检索（`vteam_memory_list`）与每轮自动注入此前都按时间倒序取前 N，
  * 于是「老但高频被引用」的记忆必然沉底，而「刚建但没人用过的」记忆永远占位。
  * 重要度把两个正交信号合成一个可排序的标量：
  *
@@ -21,7 +21,7 @@
  *   从未被引用的行 `lastUsedAt` 为 NULL，退回创建时间。
  * - **注入路径不计 refCount**（见 worker-dispatcher 的 `buildTeamMemoryIndex`）：
  *   每轮自动注入都计会让主 Agent 一次会话把指标刷爆，指标随即失去意义。
- *   只有 agent 主动 `memory_search` 命中才 +1。
+ *   只有 agent 主动 `memory_list` 命中才 +1。
  * - 本模块**不做**分类/合并判断，也不参与过滤：它只给已通过 where 条件的
  *   候选行打分，排序由同模块的 `sortMemoriesByImportance` 统一给出
  *   （降序，同分时新者优先），避免各处各抄一份口径不同的比较器。
@@ -112,7 +112,7 @@ export function computeMemoryImportance(
 }
 
 /**
- * 按重要度降序排序候选记忆（检索 `memory_search` 与每轮自动注入共用）。
+ * 按重要度降序排序候选记忆（检索 `memory_list` 与每轮自动注入共用）。
  *
  * - **`now` 每次调用只求值一次**并透传给全部行：若让
  *   {@link computeMemoryImportance} 的默认 `new Date()` 在比较器里逐次求值，

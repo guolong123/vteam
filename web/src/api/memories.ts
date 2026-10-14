@@ -2,7 +2,8 @@
  * 记忆 API 封装（记忆域）
  * =============================================
  * 对齐 server/src/memories：GET /memories 分页检索（level / teamId / roleId /
- * archived / keyword / page / pageSize）、PATCH /memories/:id（autoInject）、
+ * archived / keyword / page / pageSize）、PATCH /memories/:id（AdminGuard：level /
+ * teamId / roleId / content / description / tags / autoInject）、
  * DELETE /memories/:id（**软删 = 归档**）、POST /memories/:id/restore（恢复）、
  * POST /memories/:id/purge（**硬删，不可恢复**）、POST /memories/maintain（手动跑一轮整理）。
  * 所有方法经 web/lib/api 统一鉴权与错误归一。
@@ -21,7 +22,7 @@ export interface MemoryItem {
   tags: string[] | null;
   createdBy: string;
   createdAt: string;
-  /** 是否参与每轮自动注入（单条记忆属性；false = 仅 memory_search 按需检索）。 */
+  /** 是否参与每轮自动注入（单条记忆属性；false = 仅 memory_list 按需检索）。 */
   autoInject: boolean;
   /** 角色级记忆的归属岗位（ar_ 前缀 → AgentRole.id）；仅 level=role 时非空。 */
   roleId?: string | null;
@@ -58,6 +59,23 @@ export type MemoriesListParams = {
   page?: number;
   pageSize?: number;
 };
+
+/**
+ * PATCH /memories/:id 载荷（AdminGuard）。改级别时的作用域约束由服务端校验：
+ * - level='global' → teamId/roleId 必须为 null（省略即不传）；
+ * - level='team'   → teamId 必填，roleId 省略；
+ * - level='role'   → teamId + roleId 必填。
+ * 目标作用域已存在同内容活跃记忆 → 409 MEMORY_DUPLICATE。
+ */
+export interface MemoryUpdatePayload {
+  level?: MemoryLevel;
+  teamId?: string;
+  roleId?: string;
+  content?: string;
+  description?: string;
+  tags?: string[];
+  autoInject?: boolean;
+}
 
 /**
  * 记忆列表共享查询键（对齐 TeamRightPanel 的 triggersQueryKey 导出模式）：
@@ -105,9 +123,17 @@ export const memoriesApi = {
   purge(id: string): Promise<MemoryItem> {
     return api.post<MemoryItem>(`/memories/${id}/purge`);
   },
-  /** 切换单条记忆的自动注入开关。 */
+  /**
+   * 更新单条记忆（PATCH /memories/:id，AdminGuard）：级别 / 归属（teamId/roleId）/
+   * 正文 / 描述 / 标签 / 自动注入。改级别的作用域约束与 409 MEMORY_DUPLICATE 见
+   * {@link MemoryUpdatePayload}。
+   */
+  update(id: string, payload: MemoryUpdatePayload): Promise<MemoryItem> {
+    return api.patch<MemoryItem>(`/memories/${id}`, payload);
+  },
+  /** 切换单条记忆的自动注入开关（委托 update）。 */
   setAutoInject(id: string, autoInject: boolean): Promise<MemoryItem> {
-    return api.patch<MemoryItem>(`/memories/${id}`, { autoInject });
+    return memoriesApi.update(id, { autoInject });
   },
   /**
    * 手动跑一轮记忆整理（AdminGuard）：取「自上次整理以来的新记忆」→ 群内落灰色 system 条 →

@@ -120,6 +120,7 @@ describe('PlatformMcpService', () => {
       updateMany: jest.Mock;
     };
     agent: { findUnique: jest.Mock };
+    agentRole: { findUnique: jest.Mock };
     agentQuestion: { findMany: jest.Mock };
     plan: {
       findUnique: jest.Mock;
@@ -273,6 +274,7 @@ describe('PlatformMcpService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       agent: { findUnique: jest.fn() },
+      agentRole: { findUnique: jest.fn() },
       agentQuestion: { findMany: jest.fn() },
       plan: {
         findUnique: jest.fn(),
@@ -3739,7 +3741,7 @@ describe('PlatformMcpService', () => {
     });
   });
 
-  describe('memory_save / memory_search（记忆存取，memory-management Todo 2）', () => {
+  describe('memory_save / memory_list（记忆存取，memory-management Todo 2）', () => {
     const taskTeamId = 'tm_0000000001';
     const taskRow = (overrides: Record<string, unknown> = {}) => ({
       teamId: taskTeamId,
@@ -3965,7 +3967,7 @@ describe('PlatformMcpService', () => {
       });
 
       describe('autoInject 开关（单条记忆属性）', () => {
-        it('缺省落库 false（不进每轮 prompt，仅 memory_search 按需检索）', async () => {
+        it('缺省落库 false（不进每轮 prompt，仅 memory_list 按需检索）', async () => {
           allowWorker();
           prisma.task.findUnique.mockResolvedValue(taskRow());
           prisma.memory.findFirst.mockResolvedValue(null);
@@ -4457,6 +4459,196 @@ describe('PlatformMcpService', () => {
         expect(prisma.memory.update).not.toHaveBeenCalled();
       });
 
+      describe('scope（level）变更：改范围 + 目标范围鉴权 + 去重', () => {
+        const HASH = 'a'.repeat(64);
+
+        it('team→global（主成员）：data 带 level/teamId=null/roleId=null，并按目标范围查重', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.memory.findUnique.mockResolvedValue(
+            memoryRow({ contentHash: HASH }),
+          );
+          prisma.team.findUnique.mockResolvedValue({
+            mainAgentMemberId: senderInstanceId,
+          });
+          prisma.memory.findFirst.mockResolvedValue(null);
+          prisma.memory.update.mockResolvedValue({
+            id: 'me_0000000001',
+            level: 'global',
+          } as never);
+
+          const out = await service.memoryUpdate(ctx, {
+            taskId,
+            selfInstanceId: senderInstanceId,
+            memoryId: 'me_0000000001',
+            level: 'global',
+          });
+
+          expect(prisma.memory.findFirst).toHaveBeenCalledWith({
+            where: {
+              id: { not: 'me_0000000001' },
+              deletedAt: null,
+              level: 'global',
+              teamId: null,
+              roleId: null,
+              contentHash: HASH,
+            },
+            select: { id: true },
+          });
+          expect(prisma.memory.update).toHaveBeenCalledWith({
+            where: { id: 'me_0000000001' },
+            data: expect.objectContaining({
+              level: 'global',
+              teamId: null,
+              roleId: null,
+            }),
+          });
+          expect(out).toEqual({
+            memoryId: 'me_0000000001',
+            level: 'global',
+            status: 'updated',
+          });
+        });
+
+        it('team→global 非主成员 403：涉及 global 级仅主 Agent 可变更', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.memory.findUnique.mockResolvedValue(
+            memoryRow({ contentHash: HASH }),
+          );
+          prisma.team.findUnique.mockResolvedValue({
+            mainAgentMemberId: 'tmm_other',
+          });
+          await expectCode(
+            service.memoryUpdate(ctx, {
+              taskId,
+              selfInstanceId: senderInstanceId,
+              memoryId: 'me_0000000001',
+              level: 'global',
+            }),
+            ForbiddenException,
+            PLATFORM_MCP_ERRORS.FORBIDDEN,
+          );
+          expect(prisma.memory.update).not.toHaveBeenCalled();
+        });
+
+        it('level=role 缺 roleId → 400 MEMORY_INVALID（不落库）', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.memory.findUnique.mockResolvedValue(memoryRow());
+          await expectCode(
+            service.memoryUpdate(ctx, {
+              taskId,
+              selfInstanceId: senderInstanceId,
+              memoryId: 'me_0000000001',
+              level: 'role',
+            }),
+            BadRequestException,
+            PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+          );
+          expect(prisma.memory.update).not.toHaveBeenCalled();
+        });
+
+        it('team→role（团队内）：校验 AgentRole 存在后按目标 scope 落库', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.memory.findUnique.mockResolvedValue(
+            memoryRow({ contentHash: HASH }),
+          );
+          prisma.agentRole.findUnique.mockResolvedValue({ id: 'ar_dev' });
+          prisma.memory.findFirst.mockResolvedValue(null);
+          prisma.memory.update.mockResolvedValue({
+            id: 'me_0000000001',
+            level: 'role',
+          } as never);
+
+          await service.memoryUpdate(ctx, {
+            taskId,
+            selfInstanceId: senderInstanceId,
+            memoryId: 'me_0000000001',
+            level: 'role',
+            roleId: 'ar_dev',
+          });
+
+          expect(prisma.agentRole.findUnique).toHaveBeenCalledWith({
+            where: { id: 'ar_dev' },
+            select: { id: true },
+          });
+          expect(prisma.memory.update).toHaveBeenCalledWith({
+            where: { id: 'me_0000000001' },
+            data: expect.objectContaining({
+              level: 'role',
+              teamId: taskTeamId,
+              roleId: 'ar_dev',
+            }),
+          });
+        });
+
+        it('scope 变更撞目标范围活跃同 hash 行 → 409 MEMORY_DUPLICATE（不落库）', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.memory.findUnique.mockResolvedValue(
+            memoryRow({ contentHash: HASH }),
+          );
+          prisma.team.findUnique.mockResolvedValue({
+            mainAgentMemberId: senderInstanceId,
+          });
+          prisma.memory.findFirst.mockResolvedValue({ id: 'me_dup' });
+
+          await service
+            .memoryUpdate(ctx, {
+              taskId,
+              selfInstanceId: senderInstanceId,
+              memoryId: 'me_0000000001',
+              level: 'global',
+            })
+            .then(
+              () => {
+                throw new Error('应当抛出 409');
+              },
+              (err: unknown) => {
+                expect(err).toBeInstanceOf(ConflictException);
+                expect(
+                  (err as { getResponse(): unknown }).getResponse(),
+                ).toMatchObject({ code: 'MEMORY_DUPLICATE' });
+              },
+            );
+          expect(prisma.memory.update).not.toHaveBeenCalled();
+        });
+
+        it('global→team（主成员）：目标 teamId=执行团队、roleId=null', async () => {
+          allowWorker();
+          prisma.task.findUnique.mockResolvedValue(taskRow());
+          prisma.memory.findUnique.mockResolvedValue(
+            memoryRow({ level: 'global', teamId: null, contentHash: HASH }),
+          );
+          prisma.team.findUnique.mockResolvedValue({
+            mainAgentMemberId: senderInstanceId,
+          });
+          prisma.memory.findFirst.mockResolvedValue(null);
+          prisma.memory.update.mockResolvedValue({
+            id: 'me_0000000001',
+            level: 'team',
+          } as never);
+
+          await service.memoryUpdate(ctx, {
+            taskId,
+            selfInstanceId: senderInstanceId,
+            memoryId: 'me_0000000001',
+            level: 'team',
+          });
+
+          expect(prisma.memory.update).toHaveBeenCalledWith({
+            where: { id: 'me_0000000001' },
+            data: expect.objectContaining({
+              level: 'team',
+              teamId: taskTeamId,
+              roleId: null,
+            }),
+          });
+        });
+      });
+
       it('schema 前置：memoryId 必填 + content/description/tags 至少一个（tools/call -32602 路径）', () => {
         expect(
           memoryUpdateSchema.safeParse({
@@ -4483,7 +4675,7 @@ describe('PlatformMcpService', () => {
       });
     });
 
-    describe('memory_search', () => {
+    describe('memory_list', () => {
       /** 团队维度归属通过：该 worker 有该团队会话（绑定成员 tmm_1，主成员同值）。 */
       const allowTeamWorker = (memberId = 'tmm_1', mainId = 'tmm_1') => {
         prisma.session.findFirst.mockResolvedValue({
@@ -4582,7 +4774,7 @@ describe('PlatformMcpService', () => {
       it('Todo9 任务上下文 level=task → 400 MEMORY_LEVEL_INVALID（任务级记忆已删除，不触达 findMany）', async () => {
         allowWorker();
         await expectCode(
-          service.memorySearch(ctx, { taskId, level: 'task' as never }),
+          service.memoryList(ctx, { taskId, level: 'task' as never }),
           BadRequestException,
           PLATFORM_MCP_ERRORS.MEMORY_LEVEL_INVALID,
         );
@@ -4597,21 +4789,35 @@ describe('PlatformMcpService', () => {
             id: 'me_0000000002',
             level: 'global',
             content: '平台约定',
+            description: null,
             tags: null,
             createdBy: 'tmm_main',
             createdAt: new Date('2026-08-08T00:00:02Z'),
+            refCount: 0,
+            lastUsedAt: null,
+            autoInject: false,
+            mergedIntoId: null,
+            teamId: null,
+            roleId: null,
           },
           {
             id: 'me_0000000001',
             level: 'team',
             content: '团队结论',
+            description: null,
             tags: ['结论'],
             createdBy: senderInstanceId,
             createdAt: new Date('2026-08-08T00:00:01Z'),
+            refCount: 0,
+            lastUsedAt: null,
+            autoInject: false,
+            mergedIntoId: null,
+            teamId: taskTeamId,
+            roleId: null,
           },
         ]);
 
-        const out = await service.memorySearch(ctx, { taskId });
+        const out = await service.memoryList(ctx, { taskId });
 
         expect(prisma.task.findUnique).toHaveBeenCalledWith({
           where: { id: taskId },
@@ -4624,38 +4830,36 @@ describe('PlatformMcpService', () => {
           },
           orderBy: { createdAt: 'desc' },
         });
+        // 无任何过滤参数 = 列出模式：只回元信息（不含 content），且不计引用计数。
         expect(out).toEqual([
           {
             id: 'me_0000000002',
             level: 'global',
-            content: '平台约定',
             description: null,
             tags: null,
-            createdBy: 'tmm_main',
+            refCount: 0,
+            lastUsedAt: null,
             createdAt: '2026-08-08T00:00:02.000Z',
-            sourceAgentId: null,
-            sourceInstanceId: null,
-            sourceType: null,
-            sessionId: null,
-            sessionTitle: null,
-            channelId: null,
+            autoInject: false,
+            mergedIntoId: null,
+            teamId: null,
+            roleId: null,
           },
           {
             id: 'me_0000000001',
             level: 'team',
-            content: '团队结论',
             description: null,
             tags: ['结论'],
-            createdBy: senderInstanceId,
+            refCount: 0,
+            lastUsedAt: null,
             createdAt: '2026-08-08T00:00:01.000Z',
-            sourceAgentId: null,
-            sourceInstanceId: null,
-            sourceType: null,
-            sessionId: null,
-            sessionTitle: null,
-            channelId: null,
+            autoInject: false,
+            mergedIntoId: null,
+            teamId: taskTeamId,
+            roleId: null,
           },
         ]);
+        expect(prisma.memory.updateMany).not.toHaveBeenCalled();
       });
 
       it('query → content/description OR contains 透传 prisma 层过滤', async () => {
@@ -4663,7 +4867,7 @@ describe('PlatformMcpService', () => {
         prisma.task.findUnique.mockResolvedValue({ teamId: taskTeamId });
         prisma.memory.findMany.mockResolvedValue([]);
 
-        await service.memorySearch(ctx, { taskId, query: '事务' });
+        await service.memoryList(ctx, { taskId, query: '事务' });
 
         expect(prisma.memory.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -4712,7 +4916,7 @@ describe('PlatformMcpService', () => {
           },
         ]);
 
-        const out = await service.memorySearch(ctx, {
+        const out = await service.memoryList(ctx, {
           taskId,
           tags: ['x', 'y'],
           limit: 2,
@@ -4726,7 +4930,7 @@ describe('PlatformMcpService', () => {
         prisma.task.findUnique.mockResolvedValue({ teamId: taskTeamId });
         prisma.memory.findMany.mockResolvedValue([]);
 
-        await service.memorySearch(ctx, { taskId, level: 'team' });
+        await service.memoryList(ctx, { taskId, level: 'team' });
 
         expect(prisma.memory.findMany).toHaveBeenCalledWith({
           where: {
@@ -4740,7 +4944,7 @@ describe('PlatformMcpService', () => {
       it('level=project 已下线 → 400 MEMORY_INVALID（不触达 findMany）', async () => {
         allowWorker();
         await expectCode(
-          service.memorySearch(ctx, { taskId, level: 'project' as never }),
+          service.memoryList(ctx, { taskId, level: 'project' as never }),
           BadRequestException,
           PLATFORM_MCP_ERRORS.MEMORY_INVALID,
         );
@@ -4751,7 +4955,7 @@ describe('PlatformMcpService', () => {
         allowWorker();
         prisma.task.findUnique.mockResolvedValue(null);
         await expectCode(
-          service.memorySearch(ctx, { taskId }),
+          service.memoryList(ctx, { taskId }),
           NotFoundException,
           PLATFORM_MCP_ERRORS.TASK_NOT_FOUND,
         );
@@ -4761,7 +4965,7 @@ describe('PlatformMcpService', () => {
       it('只读归属校验：无 Session → 403 PLATFORM_MCP_FORBIDDEN', async () => {
         denyWorker();
         await expectCode(
-          service.memorySearch(ctx, { taskId }),
+          service.memoryList(ctx, { taskId }),
           ForbiddenException,
           PLATFORM_MCP_ERRORS.FORBIDDEN,
         );
@@ -4772,7 +4976,7 @@ describe('PlatformMcpService', () => {
         prisma.task.findUnique.mockResolvedValue({ teamId: null });
 
         await expectCode(
-          service.memorySearch(ctx, { taskId, level: 'team' }),
+          service.memoryList(ctx, { taskId, level: 'team' }),
           ForbiddenException,
           PLATFORM_MCP_ERRORS.FORBIDDEN,
         );
@@ -4785,7 +4989,7 @@ describe('PlatformMcpService', () => {
         prisma.memory.findMany.mockResolvedValue([]);
 
         await expectCode(
-          service.memorySearch(ctx, { taskId }),
+          service.memoryList(ctx, { taskId }),
           ForbiddenException,
           PLATFORM_MCP_ERRORS.FORBIDDEN,
         );
@@ -4796,7 +5000,7 @@ describe('PlatformMcpService', () => {
         allowTeamWorker();
         prisma.memory.findMany.mockResolvedValue([]);
 
-        await service.memorySearch(ctx, { teamId: 'tm_1' });
+        await service.memoryList(ctx, { teamId: 'tm_1' });
 
         expect(prisma.memory.findMany).toHaveBeenCalledWith({
           where: {
@@ -4811,7 +5015,7 @@ describe('PlatformMcpService', () => {
         allowTeamWorker();
         prisma.memory.findMany.mockResolvedValue([]);
 
-        await service.memorySearch(ctx, { teamId: 'tm_1', level: 'team' });
+        await service.memoryList(ctx, { teamId: 'tm_1', level: 'team' });
 
         expect(prisma.memory.findMany).toHaveBeenCalledWith({
           where: {
@@ -4825,7 +5029,7 @@ describe('PlatformMcpService', () => {
       it('团队上下文 level=task → 400 MEMORY_LEVEL_INVALID（任务级记忆已删除）', async () => {
         allowTeamWorker();
         await expectCode(
-          service.memorySearch(ctx, { teamId: 'tm_1', level: 'task' as never }),
+          service.memoryList(ctx, { teamId: 'tm_1', level: 'task' as never }),
           BadRequestException,
           PLATFORM_MCP_ERRORS.MEMORY_LEVEL_INVALID,
         );
@@ -4835,7 +5039,7 @@ describe('PlatformMcpService', () => {
       it('跨团队 teamId 检索 → 403（无该团队会话）', async () => {
         denyWorker();
         await expectCode(
-          service.memorySearch(ctx, { teamId: 'tm_other' }),
+          service.memoryList(ctx, { teamId: 'tm_other' }),
           ForbiddenException,
           PLATFORM_MCP_ERRORS.FORBIDDEN,
         );
@@ -4882,7 +5086,7 @@ describe('PlatformMcpService', () => {
             row('me_hot', 1, { refCount: 3 }),
           ]);
 
-          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
 
           expect(out.map((r) => r.id)).toEqual(['me_hot', 'me_fresh']);
         });
@@ -4893,7 +5097,7 @@ describe('PlatformMcpService', () => {
             row('me_used', 180, { lastUsedAt: daysAgo(1) }),
           ]);
 
-          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
 
           expect(out.map((r) => r.id)).toEqual(['me_used', 'me_stale']);
         });
@@ -4904,7 +5108,7 @@ describe('PlatformMcpService', () => {
             row('me_b', 2),
           ]);
 
-          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
 
           expect(out.map((r) => r.id)).toEqual(['me_b', 'me_a']);
         });
@@ -4916,8 +5120,9 @@ describe('PlatformMcpService', () => {
             row('me_3', 2),
           ]);
 
-          const out = await service.memorySearch(ctx, {
+          const out = await service.memoryList(ctx, {
             teamId: 'tm_1',
+            query: 'c',
             limit: 2,
           });
 
@@ -4932,7 +5137,7 @@ describe('PlatformMcpService', () => {
             row('me_3', 2),
           ]);
 
-          await service.memorySearch(ctx, { teamId: 'tm_1' });
+          await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
 
           expect(prisma.memory.updateMany).toHaveBeenCalledTimes(1);
           expect(countedIds()).toEqual(['me_1', 'me_2', 'me_3']);
@@ -4948,7 +5153,7 @@ describe('PlatformMcpService', () => {
             row('me_drop', 1, { tags: ['x'] }),
           ]);
 
-          const out = await service.memorySearch(ctx, {
+          const out = await service.memoryList(ctx, {
             teamId: 'tm_1',
             tags: ['x', 'y'],
           });
@@ -4961,7 +5166,7 @@ describe('PlatformMcpService', () => {
         it('计数：无结果时 updateMany 不调用', async () => {
           prisma.memory.findMany.mockResolvedValue([]);
 
-          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
 
           expect(out).toEqual([]);
           expect(prisma.memory.updateMany).not.toHaveBeenCalled();
@@ -4977,13 +5182,13 @@ describe('PlatformMcpService', () => {
           ]);
           prisma.memory.updateMany.mockRejectedValue(new Error('db down'));
 
-          const out = await service.memorySearch(ctx, { teamId: 'tm_1' });
+          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
           // fire-and-forget：让被拒绝的 promise 的 catch 微任务队列跑完。
           await new Promise((resolve) => setImmediate(resolve));
 
           expect(out.map((r) => r.id)).toEqual(['me_1', 'me_2']);
           expect(warnSpy).toHaveBeenCalledWith(
-            expect.stringContaining('memory_search 引用计数失败'),
+            expect.stringContaining('memory_list 引用计数失败'),
           );
           warnSpy.mockRestore();
         });
@@ -5103,7 +5308,7 @@ describe('PlatformMcpService', () => {
           });
         });
 
-        it('归档后 memorySearch 不再返回该行（软删落点被检索过滤）', async () => {
+        it('归档后 memoryList 不再返回该行（软删落点被检索过滤）', async () => {
           allowTeamWorker();
           // 有状态内存 DB（findUnique 读当前行 / update 真落 deletedAt / findMany 滤软删行），
           // 使「归档 → 检索消失」成为一条端到端链路而非两个孤立断言。
@@ -5127,7 +5332,7 @@ describe('PlatformMcpService', () => {
           });
 
           await service.memoryArchive(ctx, archiveArgs);
-          const out = await service.memorySearch(ctx, { teamId });
+          const out = await service.memoryList(ctx, { teamId });
 
           expect(db.get('me_a')?.deletedAt).toBeInstanceOf(Date);
           expect(out).toEqual([]);
@@ -5312,7 +5517,7 @@ describe('PlatformMcpService', () => {
             }) => {
               if (select?.refCount) {
                 hits += 1;
-                // claim 之后：期间一次 memory_search 命中计数 +1 已提交
+                // claim 之后：期间一次 memory_list 命中计数 +1 已提交
                 return Promise.resolve({ refCount: 4 }) as never;
               }
               return Promise.resolve(
@@ -5481,7 +5686,7 @@ describe('PlatformMcpService', () => {
           ).toBe(false);
         });
 
-        it('归档后不再出现在 memorySearch 结果（source 软删、target 留存且引用计数已转移）', async () => {
+        it('归档后不再出现在 memoryList 结果（source 软删、target 留存且引用计数已转移）', async () => {
           allowTeamWorker();
           const db = new Map<string, Record<string, unknown>>([
             ['me_a', teamRow('me_a', { refCount: 3 })],
@@ -5516,7 +5721,7 @@ describe('PlatformMcpService', () => {
           prisma.memory.findMany.mockImplementation(() =>
             Promise.resolve([...db.values()].filter((r) => !r.deletedAt)) as never,
           );
-          // claim 与 memory_search 的命中计数共用 updateMany：前者按 deletedAt:null
+          // claim 与 memory_list 的命中计数共用 updateMany：前者按 deletedAt:null
           // 条件落 deletedAt/mergedIntoId，后者在本用例里不改内存 DB。
           prisma.memory.updateMany.mockImplementation(
             ({
@@ -5535,7 +5740,7 @@ describe('PlatformMcpService', () => {
           );
 
           await service.memoryMerge(ctx, mergeArgs);
-          const out = await service.memorySearch(ctx, { teamId });
+          const out = await service.memoryList(ctx, { teamId });
 
           expect(out.map((r) => r.id)).toEqual(['me_b']);
           expect(db.get('me_b')?.refCount).toBe(8);
@@ -7064,7 +7269,7 @@ describe('PlatformMcpService', () => {
         'group_post',
         'notify_agent',
         'memory_save',
-        'memory_search',
+        'memory_list',
       ]) {
         const tool = tools.find((t) => t.name === name)!;
         const schema = tool.inputSchema as unknown as {

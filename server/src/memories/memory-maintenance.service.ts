@@ -28,16 +28,9 @@ export const DEFAULT_MEMORY_MAINTENANCE_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
 /** 派给 Agent 的单轮处理上限：超出留待下轮（游标续跑，见 `organizedAtByTeam`）。 */
 export const MEMORY_MAINTENANCE_PROMPT_ITEM_LIMIT = 20;
 
-/** 合法标签词表（复用既有约定，worker-dispatcher MEMORY_INSTRUCTION / web TYPE_TAGS 同值）。 */
-export const MEMORY_ORG_ALLOWED_TAGS: ReadonlySet<string> = new Set([
-  'howto',
-  'pitfall',
-  'constraint',
-]);
-
 /**
  * 单条新记忆的**事实**行（服务端只列事实，不做任何判断）。
- * 重复/低价值/标签是否规范一律由 Agent 侧判定（平台不做语义检测，见类注释）。
+ * 重复/低价值一律由 Agent 侧判定（平台不做语义检测，见类注释）。
  */
 export interface MemoryOrgFact {
   id: string;
@@ -63,12 +56,12 @@ const EXCERPT_MAX = 160;
  * 记忆定时整理管线（memory-enhancement Todo 9）。
  *
  * ## 分工边界：服务端零检测（决策修订，替代原「服务端列候选」设计）
- * 平台**不调 LLM、不做语义相似/重复判定、不判断低价值与标签是否规范、不硬删**。
+ * 平台**不调 LLM、不做语义相似/重复判定、不判断低价值、不硬删**。
  * 服务端只做两件确定性的事——
  * ① **闸门**：「该团队自上次整理以来是否有新记忆」（每团队独立游标，无则静默跳过）；
  * ② **呈事实**：把新记忆的 id / 内容节选 / 标签 / 引用次数 / 时间列给 Agent。
- * 判断与执行全在 Agent 侧（`vteam_memory_search` 逐条核对 → `vteam_memory_merge` /
- * `vteam_memory_archive` / `vteam_memory_update`）。这是「平台不做 LLM 摘要/提取」护栏的延伸：
+ * 判断与执行全在 Agent 侧（`vteam_memory_list` 逐条核对 → `vteam_memory_merge` /
+ * `vteam_memory_archive`）。标签为自由格式，prompt 不限定词表。这是「平台不做 LLM 摘要/提取」护栏的延伸：
  * 代码做不了语义去重，硬做只会给出误导性的「疑似重复」清单。
  *
  * ## 每团队游标（`organizedAtByTeam`，进程内内存态，无新列）
@@ -542,19 +535,17 @@ export class MemoryMaintenanceService implements OnModuleInit {
     return (
       `【记忆整理】本团队自上次整理后新增 ${teamNewCount} 条记忆（下方清单）。\n` +
       '平台只负责**列事实**：下面每条仅是 id / 标签 / 被引用次数 / 建档与最近命中时间 / 内容节选。' +
-      '平台不做任何判断——哪条重复、哪条过时、哪条该归档、标签是否规范，全部由你判断后再动手。\n' +
+      '平台不做任何判断——哪条重复、哪条过时、哪条该归档，全部由你判断后再动手。\n' +
       '执行步骤：\n' +
-      '① 逐条用 vteam_memory_search 检索本团队既有记忆，与这条新记忆逐条对比（不要只凭内容节选下手）；\n' +
+      '① 逐条用 vteam_memory_list 检索本团队既有记忆，与这条新记忆逐条对比（不要只凭内容节选下手）；\n' +
       '② 语义重复（同一件事的不同说法、或被更完整表述覆盖）的：保留信息最全的一条作 target，' +
       '用 vteam_memory_merge 把其余并入（引用计数自动累加，source 自动归档）；\n' +
-      `③ 标签缺失或不在 ${[...MEMORY_ORG_ALLOWED_TAGS].join(' / ')} 之内的：` +
-      '用 vteam_memory_update 只改标签，不动内容；\n' +
-      '④ 结合 refCount、建档与最近命中时间、内容本身，自行判断低价值或已过时的：' +
+      '③ 结合 refCount、建档与最近命中时间、内容本身，自行判断低价值或已过时的：' +
       '用 vteam_memory_archive 归档（可恢复，不是删除）；**拿不准就不动**——保持你已建立的「不该动就不动」纪律，' +
       '宁可下轮再判，也不要为凑数而改；\n' +
-      '⑤ 清单是本轮新记忆的主体；处理清单之外你顺手发现的历史语义重复，也可一并处理。\n' +
+      '④ 清单是本轮新记忆的主体；处理清单之外你顺手发现的历史语义重复，也可一并处理。\n' +
       '只整理本团队的 team 级记忆，不要动 global/role 级。处理完简要汇报：' +
-      '合并 X 条 / 归档 Y 条 / 改标签 Z 条 / 判断为不该动 W 条（附一句原因）。\n' +
+      '合并 X 条 / 归档 Y 条 / 判断为不该动 W 条（附一句原因）。\n' +
       `本轮共 ${teamNewCount} 条新记忆，单轮上限 ${MEMORY_MAINTENANCE_PROMPT_ITEM_LIMIT} 条，` +
       (deferred > 0
         ? `已列出前 ${facts.length} 条，还有 ${deferred} 条留待下轮，不要赶工。\n`

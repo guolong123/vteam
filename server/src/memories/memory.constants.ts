@@ -29,12 +29,15 @@ export type MemoryLevel = (typeof MEMORY_LEVELS)[keyof typeof MEMORY_LEVELS];
  * - 行级鉴权失败（memory-enhancement Todo 2：团队行非成员 / 全局行非管理员）→ 403 MEMORY_FORBIDDEN
  * - 恢复撞同 scope 活跃同 hash 行（restore）→ 409 MEMORY_RESTORE_DUPLICATE
  * - 恢复已合并行（restore，mergedIntoId 非空）→ 409 MEMORY_RESTORE_MERGED
+ * - 改 scope（level 变更）撞目标 scope 活跃同 contentHash 行 → 409 MEMORY_DUPLICATE
+ *   （记忆范围可修改：team→global 等；目标 scope 已有同内容活跃行则拒绝，防跨 scope 重复）
  */
 export const MEMORY_ERRORS = {
   MEMORY_NOT_FOUND: 'MEMORY_NOT_FOUND',
   MEMORY_LEVEL_INVALID: 'MEMORY_LEVEL_INVALID',
   MEMORY_UPDATE_EMPTY: 'MEMORY_UPDATE_EMPTY',
   MEMORY_FORBIDDEN: 'MEMORY_FORBIDDEN',
+  MEMORY_DUPLICATE: 'MEMORY_DUPLICATE',
   MEMORY_RESTORE_DUPLICATE: 'MEMORY_RESTORE_DUPLICATE',
   MEMORY_RESTORE_MERGED: 'MEMORY_RESTORE_MERGED',
 } as const;

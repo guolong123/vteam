@@ -705,7 +705,7 @@ describe('WorkerDispatcher', () => {
         system: string;
       };
       expect(execArgs.system).not.toContain('【记忆管理】');
-      expect(execArgs.system).not.toContain('vteam_memory_search');
+      expect(execArgs.system).not.toContain('vteam_memory_list');
       expect(execArgs.system).not.toContain('vteam_memory_save');
       // 非记忆段不受影响
       expect(execArgs.system).toContain('【持久化目录】');
@@ -2010,7 +2010,7 @@ describe('WorkerDispatcher', () => {
         'vteam_group_post',
         'vteam_notify_agent',
         'vteam_issue_*',
-        'vteam_memory_search',
+        'vteam_memory_list',
         'vteam_memory_save',
       ]) {
         expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain(name);
@@ -2042,10 +2042,10 @@ describe('WorkerDispatcher', () => {
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('wecom_reply');
     });
 
-    it('GLOBAL 常量含【记忆管理】段：引导经 memory_search/memory_save 按需存取记忆（21 篇按需注入哲学）', () => {
+    it('GLOBAL 常量含【记忆管理】段：引导经 memory_list/memory_save 按需存取记忆（21 篇按需注入哲学）', () => {
       // 三个 sentinel 全部在 join 后的 GLOBAL prompt 中（机器可断言，非"模型会调用工具"行为）
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('【记忆管理】');
-      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('vteam_memory_search');
+      expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('vteam_memory_list');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('vteam_memory_save');
       // P1：压缩为 2 行（只存可复用经验 howto/pitfall/constraint + 存取调用一句，limit≤5）
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('只存可复用经验');
@@ -2053,7 +2053,7 @@ describe('WorkerDispatcher', () => {
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('pitfall');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('constraint');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain(
-        '调 vteam_memory_search 检索，沉淀时调 vteam_memory_save 保存',
+        '调 vteam_memory_list 检索，沉淀时调 vteam_memory_save 保存',
       );
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).toContain('参数细节查工具 schema');
       expect(GLOBAL_SYSTEM_INSTRUCTIONS).not.toContain('{taskId, query?');
@@ -2172,7 +2172,7 @@ describe('WorkerDispatcher', () => {
       const s = buildSystemInstructions(plan, { resolvedTools: planTools });
       expect(s).not.toContain(MEMORY_INSTRUCTION);
       expect(s).not.toContain('【记忆管理】');
-      expect(s).not.toContain('vteam_memory_search');
+      expect(s).not.toContain('vteam_memory_list');
       expect(s).not.toContain('vteam_memory_save');
       // 非记忆段不受影响
       expect(s).toContain('【持久化目录】');
@@ -2582,7 +2582,7 @@ describe('WorkerDispatcher', () => {
 
     it('短工具名批量改真实名：面向模型的自然语言指引无裸短名（协议/注释除外）', () => {
       const noBareShort =
-        /(?<!vteam_)(group_post|notify_agent|chat_history|wecom_reply|submit_artifact|task_context|task_transition|question_confirm|task_create|memory_search|memory_save|team_view|my_profile|doclib|issue_create|issue_list|issue_get|issue_update|issue_transition)/;
+        /(?<!vteam_)(group_post|notify_agent|chat_history|wecom_reply|submit_artifact|task_context|task_transition|question_confirm|task_create|memory_list|memory_save|team_view|my_profile|doclib|issue_create|issue_list|issue_get|issue_update|issue_transition)/;
       for (const text of [
         GROUP_TRIGGER_INSTRUCTION,
         TEAM_GROUP_TRIGGER_INSTRUCTION,
