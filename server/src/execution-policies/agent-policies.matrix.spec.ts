@@ -78,10 +78,10 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
     }
   });
 
-  it('vteam-plan：具 vteam_notify_agent + vteam_memory_search（读/通知）与 vteam_submit_artifact（可主动归档计划）', () => {
+  it('vteam-plan：具 vteam_notify_agent + vteam_memory_list（读/通知）与 vteam_submit_artifact（可主动归档计划）', () => {
     const plan = ROLE_BOUNDARIES['vteam-plan'].toolAllows;
     expect(plan).toHaveProperty('vteam_notify_agent', 'allow');
-    expect(plan).toHaveProperty('vteam_memory_search', 'allow');
+    expect(plan).toHaveProperty('vteam_memory_list', 'allow');
     expect(plan).toHaveProperty('vteam_submit_artifact', 'allow');
     // vteam-librarian 防环：仍无 notify_agent / submit_artifact（刻意拒绝，不随 plan 改动）
     expect(ROLE_BOUNDARIES['vteam-librarian'].toolAllows).not.toHaveProperty(
@@ -91,7 +91,7 @@ describe('agent-policies matrix self-check (Todo 24 anti-drift)', () => {
       'vteam_submit_artifact',
     );
     expect(ROLE_BOUNDARIES['vteam-librarian'].toolAllows).toHaveProperty(
-      'vteam_memory_search',
+      'vteam_memory_list',
       'allow',
     );
   });

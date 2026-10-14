@@ -181,6 +181,8 @@ export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
   },
   // 团队记忆 3 点（同批拆分原组能力点 memory.manage：plan/librarian 只放行检索，
   // 拆分后重获 memory.search，写入/更新点仍按各自 toolAllows 判定）。
+  // 2026-10-14：底层 MCP 工具改名 vteam_memory_search → vteam_memory_list（语义由「检索」
+  // 扩展为「列出/检索」）；能力点键 memory.search 保持不变（岗位矩阵/迁移不随工具名漂移）。
   {
     key: 'memory.save',
     label: '写入团队记忆',
@@ -189,8 +191,8 @@ export const PLATFORM_CAPABILITIES: readonly PlatformCapability[] = [
   },
   {
     key: 'memory.search',
-    label: '检索团队记忆',
-    tools: ['vteam_memory_search'],
+    label: '列出/检索团队记忆',
+    tools: ['vteam_memory_list'],
     defaultDeny: false,
   },
   {

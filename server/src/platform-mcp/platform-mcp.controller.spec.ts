@@ -275,7 +275,7 @@ describe('PlatformMcpController (HTTP)', () => {
   });
 
   describe('tools/list', () => {
-    it('→ 返回 34 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_search/memory_update + memory_archive/memory_merge + team_view/my_profile + team_add_member + plan_complete/plan_finalize/plan_confirm + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel + secret_command；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
+    it('→ 返回 34 个工具（含 notify_agent/submit_artifact + 5 个 issue_* + task_transition + question_confirm + memory_save/memory_list/memory_update + memory_archive/memory_merge + team_view/my_profile + team_add_member + plan_complete/plan_finalize/plan_confirm + channel_send + wecom_reply + task_create + skill_create + git_repos_list + hook_register + hook_cancel + secret_command；自造 plan 域 5 工具已下线，plan_complete 为完工闭环）且 inputSchema 为 JSON Schema', async () => {
       const res = await mcpPost()
         .set('x-worker-id', 'w_0001')
         .send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
@@ -308,7 +308,7 @@ describe('PlatformMcpController (HTTP)', () => {
         'question_confirm',
         'memory_save',
         'memory_update',
-        'memory_search',
+        'memory_list',
         'memory_archive',
         'memory_merge',
         'team_view',
@@ -436,10 +436,10 @@ describe('PlatformMcpController (HTTP)', () => {
         type: 'boolean',
       });
       expect(memorySave.inputSchema.required).not.toContain('autoInject');
-      // memory_search：taskId/teamId 双可选，query/level/tags/limit 可选
-      const memorySearch = tools.find((t) => t.name === 'memory_search')!;
-      expect(memorySearch.inputSchema.required).toEqual([]);
-      expect(memorySearch.inputSchema.properties.limit).toEqual({
+      // memory_list：taskId/teamId 双可选，query/level/tags/limit 可选
+      const memoryList = tools.find((t) => t.name === 'memory_list')!;
+      expect(memoryList.inputSchema.required).toEqual([]);
+      expect(memoryList.inputSchema.properties.limit).toEqual({
         type: 'number',
       });
       // memory_update：selfInstanceId/memoryId 必填，taskId/teamId 双可选，content/description/tags 可选（至少一个）

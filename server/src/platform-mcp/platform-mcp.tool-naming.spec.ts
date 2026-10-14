@@ -112,7 +112,7 @@ describe('platform-mcp tool naming contract', () => {
         teamId: OPTIONAL,
         taskId: OPTIONAL,
       },
-      memory_search: {
+      memory_list: {
         selfInstanceId: ABSENT,
         teamId: OPTIONAL,
         taskId: OPTIONAL,

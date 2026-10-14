@@ -202,7 +202,7 @@ describe('agents[].permission native-only payload (todo 4)', () => {
           bash: 'allow',
           task: 'deny',
           vteam_group_post: 'deny',
-          vteam_memory_search: 'ask',
+          vteam_memory_list: 'ask',
         },
         correction: { scopeSummary: 'demo' },
         tools: { vteam_group_post: 'allow' },
@@ -239,7 +239,7 @@ describe('agents[].permission native-only payload (todo 4)', () => {
       task: 'deny',
     });
     expect(role.permission).toHaveProperty('vteam_group_post', 'deny');
-    expect(role.permission).toHaveProperty('vteam_memory_search', 'ask');
+    expect(role.permission).toHaveProperty('vteam_memory_list', 'ask');
     expect(Object.keys(role)).toEqual(['permission']);
   });
 

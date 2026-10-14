@@ -920,7 +920,7 @@ const VTEAM_TOOL_DESC: Record<string, string> = {
   task_transition: "流转任务状态（开始/验收/归档）",
   question_confirm: "回复 Agent 提问或权限确认",
   memory_save: "保存可复用经验记忆",
-  memory_search: "检索平台记忆",
+  memory_list: "列出/检索平台记忆",
   team_view: "查看团队信息与队列",
   my_profile: "查看自身实例信息",
   team_add_member: "添加团队成员",

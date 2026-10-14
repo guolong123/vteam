@@ -50,6 +50,8 @@ import {
   type MemoriesListParams,
   type MemoriesResponse,
   type MemoryItem,
+  type MemoryLevel,
+  type MemoryUpdatePayload,
 } from "@/src/api/memories";
 import { teamsApi } from "@/src/api/teams";
 import {
@@ -157,6 +159,16 @@ const LEVEL_AUDIENCE: Record<MemoryItem["level"], string> = {
   role: "自动注入给本团队该岗位的全部 agent",
   global: "自动注入给各团队主 Agent",
 };
+
+/**
+ * 级别/范围编辑弹窗的级别选项（team / role / global 三档，与 LEVEL_TABS 同标签口径）。
+ * 本页为 admin-only，故三档全部可选（服务端 PATCH 的 level 取值）。
+ */
+const LEVEL_EDIT_TABS: { key: MemoryLevel; label: string }[] = [
+  { key: "team", label: LEVEL_META.team.label },
+  { key: "role", label: LEVEL_META.role.label },
+  { key: "global", label: LEVEL_META.global.label },
+];
 
 /* ------------------------------ 类型标签（记忆分类法） ------------------------------ */
 
@@ -576,7 +588,7 @@ function AutoInjectSwitch({
       title={
         on
           ? `已开启自动注入（${LEVEL_AUDIENCE[memory.level]}）——点击关闭，改为仅按需检索`
-          : `已关闭自动注入（仅 memory_search 按需检索）——点击开启，每轮注入（${LEVEL_AUDIENCE[memory.level]}）`
+          : `已关闭自动注入（仅 memory_list 按需检索）——点击开启，每轮注入（${LEVEL_AUDIENCE[memory.level]}）`
       }
       style={{
         display: "inline-flex",
@@ -651,6 +663,7 @@ interface MemoryCardProps {
   rowPending: boolean;
   onOpen: (id: string) => void;
   onToggleInject: (memory: MemoryItem) => void;
+  onEditScope: (memory: MemoryItem) => void;
   onRestore: (memory: MemoryItem) => void;
   onRequestPurge: (memory: MemoryItem) => void;
 }
@@ -666,6 +679,7 @@ function MemoryCard({
   rowPending,
   onOpen,
   onToggleInject,
+  onEditScope,
   onRestore,
   onRequestPurge,
 }: MemoryCardProps) {
@@ -807,11 +821,34 @@ function MemoryCard({
               </button>
             </div>
           ) : (
-            <AutoInjectSwitch
-              memory={memory}
-              disabled={injectDisabled}
-              onToggle={onToggleInject}
-            />
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: space.sm,
+                flexShrink: 0,
+              }}
+            >
+              <button
+                type="button"
+                data-testid="memory-card-edit-scope"
+                data-memory-id={memory.id}
+                disabled={rowPending}
+                title="编辑该记忆的级别/范围"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEditScope(memory);
+                }}
+                style={actionStyle(rowPending)}
+              >
+                改级别
+              </button>
+              <AutoInjectSwitch
+                memory={memory}
+                disabled={injectDisabled}
+                onToggle={onToggleInject}
+              />
+            </div>
           )}
         </div>
 
@@ -923,6 +960,7 @@ interface MemoryDetailDrawerProps {
   /** 该行有 mutation 在途（恢复 / 硬删）。 */
   rowPending: boolean;
   onToggleInject: (memory: MemoryItem) => void;
+  onEditScope: (memory: MemoryItem) => void;
   onArchive: (memory: MemoryItem) => void;
   onRestore: (memory: MemoryItem) => void;
   onRequestPurge: (memory: MemoryItem) => void;
@@ -942,6 +980,7 @@ function MemoryDetailDrawer({
   archived,
   rowPending,
   onToggleInject,
+  onEditScope,
   onArchive,
   onRestore,
   onRequestPurge,
@@ -1161,6 +1200,39 @@ function MemoryDetailDrawer({
           ) : null}
         </div>
 
+        {/* 级别/范围编辑行（admin 页；改级别 → team / role / global + 归属） */}
+        <div
+          data-testid="memory-scope-row"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: space.sm,
+            padding: `${space.sm}px ${space.lg}px`,
+            borderRadius: radius.md,
+            backgroundColor: neutral[50],
+            border: `1px solid ${neutral[100]}`,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
+            <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
+              级别/范围
+            </span>
+            <LevelBadge level={memory.level} />
+          </div>
+          <button
+            type="button"
+            data-testid="memory-drawer-edit-scope"
+            data-memory-id={memory.id}
+            disabled={rowPending}
+            title="编辑该记忆的级别/范围"
+            onClick={() => onEditScope(memory)}
+            style={actionStyle(rowPending)}
+          >
+            改级别
+          </button>
+        </div>
+
         {/* 正文全文（Markdown；超长内部滚动） */}
         <div
           data-testid="memory-drawer-body"
@@ -1269,6 +1341,278 @@ function MemoryDetailDrawer({
           )}
         </div>
       </aside>
+    </div>
+  );
+}
+
+/* ================================ 级别/范围编辑弹窗 ================================ */
+
+interface ScopeEditDialogProps {
+  /** 待编辑记忆（null = 弹窗关闭）。 */
+  memory: MemoryItem | null;
+  /** 团队选项（复用页面 teamsQuery，不新增接口）。 */
+  teams: { id: string; name: string }[];
+  /** 岗位选项（复用页面 rolesQuery，不新增接口）。 */
+  roles: { id: string; name: string }[];
+  submitting: boolean;
+  /** 提交失败错误（409 MEMORY_DUPLICATE 等；isApiError → 直显后端 message）。 */
+  error: unknown;
+  onClose: () => void;
+  onSubmit: (id: string, payload: MemoryUpdatePayload) => void;
+}
+
+/**
+ * 级别/范围编辑弹窗（本页 admin-only → team / role / global 三档全部可选）：
+ * - 目标 = team：选团队；目标 = role：再选岗位；目标 = global：不选归属（不传 teamId/roleId）。
+ * - 复用 SegmentedTabs 选级别 + 原生 select 选团队/岗位（与 triggers 页团队选择器同式）。
+ * - 结构对齐 ConfirmDialog：absolute 浮层 + 遮罩点击关闭 + Esc 关闭。
+ */
+function ScopeEditDialog({
+  memory,
+  teams,
+  roles,
+  submitting,
+  error,
+  onClose,
+  onSubmit,
+}: ScopeEditDialogProps) {
+  const [level, setLevel] = useState<MemoryLevel>("team");
+  const [teamId, setTeamId] = useState("");
+  const [roleId, setRoleId] = useState("");
+
+  // 打开 / 切换目标记忆时，重置为该记忆当前的级别与归属
+  useEffect(() => {
+    if (!memory) return;
+    setLevel(memory.level);
+    setTeamId(memory.teamId ?? "");
+    setRoleId(memory.roleId ?? "");
+  }, [memory]);
+
+  useEffect(() => {
+    if (!memory) return;
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [memory, onClose]);
+
+  if (!memory) return null;
+
+  const valid =
+    level === "global" ||
+    (level === "team" && teamId !== "") ||
+    (level === "role" && teamId !== "" && roleId !== "");
+  const changed =
+    level !== memory.level ||
+    (level !== "global" && teamId !== (memory.teamId ?? "")) ||
+    (level === "role" && roleId !== (memory.roleId ?? ""));
+
+  const selectStyle: CSSProperties = {
+    width: "100%",
+    padding: `${space.sm}px ${space.md}px`,
+    borderRadius: radius.md,
+    border: `1px solid ${neutral[200]}`,
+    backgroundColor: surface,
+    color: neutral[800],
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.body,
+  };
+  const fieldLabel: CSSProperties = { fontSize: fontSize.xs, color: neutral[400] };
+  const dialogError: CSSProperties = {
+    fontSize: fontSize.sm,
+    color: "#DC2626",
+    display: "flex",
+    alignItems: "center",
+    gap: space.xs,
+    padding: `${space.sm}px ${space.md}px`,
+    borderRadius: radius.md,
+    backgroundColor: "rgba(239,68,68,0.10)",
+    border: `1px solid rgba(239,68,68,0.22)`,
+  };
+
+  const submit = () => {
+    if (!valid) return;
+    const payload: MemoryUpdatePayload = { level };
+    if (level === "team") {
+      payload.teamId = teamId;
+    } else if (level === "role") {
+      payload.teamId = teamId;
+      payload.roleId = roleId;
+    }
+    onSubmit(memory.id, payload);
+  };
+
+  return (
+    <div
+      data-testid="memory-scope-modal"
+      data-memory-id={memory.id}
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 60,
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "center",
+        paddingTop: "10%",
+        ...baseFont,
+      }}
+    >
+      <div
+        aria-hidden
+        data-testid="memory-scope-mask"
+        onClick={onClose}
+        style={{
+          position: "absolute",
+          inset: 0,
+          backgroundColor: "rgba(15,23,42,.32)",
+        }}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="编辑记忆级别"
+        style={{
+          position: "relative",
+          width: 400,
+          maxWidth: "calc(100% - 48px)",
+          display: "flex",
+          flexDirection: "column",
+          gap: space.md,
+          padding: `${space.xl}px`,
+          borderRadius: radius.lg,
+          backgroundColor: surface,
+          border: `1px solid ${neutral[200]}`,
+          boxShadow: shadow.lg,
+        }}
+      >
+        <div
+          style={{
+            fontSize: fontSize.xl,
+            fontWeight: 600,
+            color: neutral[900],
+            lineHeight: 1.3,
+          }}
+        >
+          编辑级别/范围
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          <span style={fieldLabel}>级别</span>
+          <SegmentedTabs
+            items={LEVEL_EDIT_TABS}
+            active={level}
+            onChange={(k) => setLevel(k as MemoryLevel)}
+            testId="memory-scope-level-tabs"
+            optionTestId="memory-scope-level-tab"
+          />
+        </div>
+
+        {level !== "global" && (
+          <label style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            <span style={fieldLabel}>团队</span>
+            <select
+              data-testid="memory-scope-team"
+              value={teamId}
+              onChange={(e) => setTeamId(e.target.value)}
+              aria-label="团队"
+              style={selectStyle}
+            >
+              <option value="">选择团队…</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {level === "role" && (
+          <label style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+            <span style={fieldLabel}>岗位</span>
+            <select
+              data-testid="memory-scope-role"
+              value={roleId}
+              onChange={(e) => setRoleId(e.target.value)}
+              aria-label="岗位"
+              style={selectStyle}
+            >
+              <option value="">选择岗位…</option>
+              {roles.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {level === "global" && (
+          <span style={{ fontSize: fontSize.sm, color: neutral[500], lineHeight: 1.6 }}>
+            全局记忆不归属任何团队，各团队主 Agent 均可注入。
+          </span>
+        )}
+
+        {!!error && (
+          <div data-testid="memory-scope-error" role="alert" style={dialogError}>
+            <span aria-hidden style={{ fontWeight: 700 }}>
+              !
+            </span>
+            {isApiError(error) ? error.message : "更新级别失败，请重试"}
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: space.sm,
+            marginTop: space.sm,
+          }}
+        >
+          <button
+            type="button"
+            data-testid="memory-scope-cancel"
+            onClick={onClose}
+            disabled={submitting}
+            style={{
+              padding: `${space.sm + 1}px ${space.lg}px`,
+              borderRadius: radius.pill,
+              border: `1px solid ${neutral[200]}`,
+              backgroundColor: surface,
+              color: neutral[600],
+              fontSize: fontSize.md,
+              cursor: submitting ? "default" : "pointer",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            data-testid="memory-scope-confirm"
+            onClick={submit}
+            disabled={submitting || !valid || !changed}
+            style={{
+              padding: `${space.sm + 1}px ${space.lg}px`,
+              borderRadius: radius.pill,
+              border: "none",
+              backgroundColor: "#0D9488",
+              color: "#FFFFFF",
+              fontSize: fontSize.md,
+              fontWeight: 500,
+              cursor: submitting || !valid || !changed ? "default" : "pointer",
+              opacity: submitting || !valid || !changed ? 0.6 : 1,
+              boxShadow: "0 6px 16px rgba(13,148,136,.3)",
+              fontFamily: fontFamily.body,
+            }}
+          >
+            {submitting ? "保存中…" : "保存"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1400,6 +1744,24 @@ export default function MemoriesPage() {
     const timer = setTimeout(() => setNotice(null), 5000);
     return () => clearTimeout(timer);
   }, [notice]);
+
+  /* ---------- 级别/范围编辑（PATCH /memories/:id，AdminGuard；409 MEMORY_DUPLICATE 直显） ---------- */
+  const [scopeTarget, setScopeTarget] = useState<MemoryItem | null>(null);
+  const scopeMutation = useMutation({
+    mutationFn: (input: { id: string; payload: MemoryUpdatePayload }) =>
+      memoriesApi.update(input.id, input.payload),
+    onMutate: (input) => setPendingRowId(input.id),
+    onSuccess: () => {
+      invalidateMemories();
+      setScopeTarget(null);
+      setNotice("已更新记忆级别/范围。");
+    },
+    onSettled: clearPendingRow,
+  });
+  const handleEditScope = (memory: MemoryItem) => {
+    scopeMutation.reset();
+    setScopeTarget(memory);
+  };
 
   /* ---------- 归档（DELETE = 软删，可恢复；确认弹窗说明归档语义） ---------- */
   const [archiveTarget, setArchiveTarget] = useState<MemoryItem | null>(null);
@@ -1721,6 +2083,7 @@ export default function MemoriesPage() {
                       rowPending={isRowPending(item.id)}
                       onOpen={setSelectedId}
                       onToggleInject={toggleInject}
+                      onEditScope={handleEditScope}
                       onRestore={handleRestore}
                       onRequestPurge={handleRequestPurge}
                     />
@@ -1881,6 +2244,7 @@ export default function MemoriesPage() {
         archived={archived}
         rowPending={!!selected && isRowPending(selected.id)}
         onToggleInject={toggleInject}
+        onEditScope={handleEditScope}
         onArchive={handleArchive}
         onRestore={handleRestore}
         onRequestPurge={handleRequestPurge}
@@ -1923,6 +2287,20 @@ export default function MemoriesPage() {
         onConfirm={() => {
           if (purgeTarget) purgeMutation.mutate(purgeTarget.id);
         }}
+      />
+
+      {/* 级别/范围编辑弹窗（AdminGuard PATCH；409 MEMORY_DUPLICATE 在弹窗内直显） */}
+      <ScopeEditDialog
+        memory={scopeTarget}
+        teams={teamsQuery.data?.items ?? []}
+        roles={rolesQuery.data?.items ?? []}
+        submitting={scopeMutation.isPending}
+        error={scopeMutation.error}
+        onClose={() => {
+          setScopeTarget(null);
+          scopeMutation.reset();
+        }}
+        onSubmit={(id, payload) => scopeMutation.mutate({ id, payload })}
       />
     </div>
   );

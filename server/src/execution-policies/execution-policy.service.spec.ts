@@ -103,7 +103,7 @@ describe('ExecutionPolicyService（真实 service，FINDING-5）', () => {
         correction: { scopeSummary: 'scope' },
         tools: {
           vteam_group_post: 'deny' as const,
-          vteam_memory_search: 'ask' as const,
+          vteam_memory_list: 'ask' as const,
         },
       };
       const updated = await service.update('ep_product', {

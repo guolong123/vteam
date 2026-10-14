@@ -391,12 +391,12 @@ export const memorySaveSchema = z.object({
     .array(z.string())
     .max(20)
     .optional()
-    .describe('记忆标签（≤20 个，memory_search 按标签过滤命中）'),
+    .describe('记忆标签（≤20 个，memory_list 按标签过滤命中）'),
   autoInject: z
     .boolean()
     .optional()
     .describe(
-      '是否让这条记忆每轮自动注入 prompt，省去你主动 search（默认 false = 仅可通过 vteam_memory_search 按需检索）。注入受众按 level 决定：team/global → 本团队主 Agent；role → 本团队该岗位全部 agent。仅对高价值、每轮都该记住的条目开 true——注入会占用 prompt 预算。',
+      '是否让这条记忆每轮自动注入 prompt，省去你主动 list/search（默认 false = 仅可通过 vteam_memory_list 按需检索）。注入受众按 level 决定：team/global → 本团队主 Agent；role → 本团队该岗位全部 agent。仅对高价值、每轮都该记住的条目开 true——注入会占用 prompt 预算。',
     ),
 });
 
@@ -431,22 +431,33 @@ export const memoryUpdateSchema = z
       .boolean()
       .optional()
       .describe('是否参与每轮自动注入（不传则保留原设置）'),
+    level: z
+      .enum(['team', 'role', 'global'])
+      .optional()
+      .describe(
+        '目标可见范围（scope 变更）：team=移到本团队级（teamId 取执行上下文团队）、role=移到本团队该岗位级（须同时传 roleId）、global=移到平台级（teamId/roleId 清空，仅主 Agent 可操作）；与当前 level 相同则视为无变更；不传则保持原范围',
+      ),
+    roleId: z
+      .string()
+      .optional()
+      .describe('level=role 时的目标岗位 id（ar_ 前缀），必须已存在；level 非 role 时忽略'),
   })
   .refine(
     (d) =>
       d.content !== undefined ||
       d.description !== undefined ||
       d.tags !== undefined ||
-      d.autoInject !== undefined,
+      d.autoInject !== undefined ||
+      d.level !== undefined,
     {
-      message: '至少提供 content/description/tags/autoInject 之一',
+      message: '至少提供 content/description/tags/autoInject/level 之一',
       path: ['content'],
     },
   );
 
 type MemoryUpdateArgs = z.infer<typeof memoryUpdateSchema>;
 
-const memorySearchSchema = z.object({
+const memoryListSchema = z.object({
   taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
   teamId: z.string().optional().describe(TEAM_ID_DESC),
   query: z
@@ -484,7 +495,7 @@ const memorySearchSchema = z.object({
     .describe('返回条数上限（默认 20，最多 50，按创建时间倒序）'),
 });
 
-type MemorySearchArgs = z.infer<typeof memorySearchSchema>;
+type MemoryListArgs = z.infer<typeof memoryListSchema>;
 
 /** memory_archive 入参**只有** id 与身份：refCount / mergedIntoId / deletedAt 等服务端
  * 不变量字段一律不接受（防 Agent 污染指标与合并可追溯性）。 */
@@ -494,7 +505,7 @@ export const memoryArchiveSchema = z.object({
   selfInstanceId: z
     .string()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  memoryId: z.string().describe('记忆条目 id（me_ 前缀，vteam_memory_search 返回值）'),
+  memoryId: z.string().describe('记忆条目 id（me_ 前缀，vteam_memory_list 返回值）'),
 });
 
 type MemoryArchiveArgs = z.infer<typeof memoryArchiveSchema>;
@@ -1132,23 +1143,23 @@ export function buildPlatformMcpTools(
     {
       name: 'memory_update',
       description:
-        '按 id 更新平台记忆（content/description/tags 部分更新，至少传一个；content 更新同步重算去重键）。team 级记忆仅归属团队可改（跨团队 403）；global 级仅主 Agent 可改；已删除条目 404。返回 {memoryId, level, status:"updated"}。',
+        '按 id 更新平台记忆（content/description/tags 部分更新，至少传一个；content 更新同步重算去重键）。team 级记忆仅归属团队可改（跨团队 403）；global 级仅主 Agent 可改；也可单独用 level 变更可见范围（team=本团队级 / role=本岗位级须同时传 roleId / global=平台级仅主 Agent 可操作，目标范围已存在同内容记忆返回 409）。已删除条目 404。返回 {memoryId, level, status:"updated"}。',
       inputSchema: memoryUpdateSchema,
       handler: (ctx, args) =>
         service.memoryUpdate(ctx, args as MemoryUpdateArgs),
     },
     {
-      name: 'memory_search',
+      name: 'memory_list',
       description:
-        '检索平台记忆（按需检索，替代自动注入）。默认聚合当前任务可见的 team+global 两级记忆（已软删不返回），可按 query(level/content/description)/tags 过滤，结果按创建时间倒序。返回 [{id, level, content, description, tags, createdBy, createdAt}]。首屏用 description 索引，按需拉 content。',
-      inputSchema: memorySearchSchema,
+        '平台记忆的元信息索引与按需检索（双模一体）。传任一过滤参数（query/level/tags/sourceInstanceId/sourceAgentId/sessionId）= 按需检索：返回含 content 的完整记忆，按重要度（引用次数 + 新鲜度衰减）排序，计入 refCount 引用计数，默认 20 条最多 50 条。不传任何过滤参数 = 列出当前可见的全部记忆元信息：仅含 id/level/description(标题)/tags/refCount/lastUsedAt/createdAt/autoInject/mergedIntoId/teamId/roleId，不含 content，也不计引用计数。先用 description 索引找到目标，再传 query 拉正文。默认聚合当前可见的 team + 本人所属岗位 role + global 三级（已软删不返回），role 级只见你所属岗位的。',
+      inputSchema: memoryListSchema,
       handler: (ctx, args) =>
-        service.memorySearch(ctx, args as MemorySearchArgs),
+        service.memoryList(ctx, args as MemoryListArgs),
     },
     {
       name: 'memory_archive',
       description:
-        '归档一条团队级记忆（可恢复软删，不硬删）：从 vteam_memory_search 检索结果与每轮自动注入中立即消失，内容仍在库中可由平台恢复。适用于低效/过期/被证伪的记忆。只能归档**本团队 team 级**记忆（跨团队 / global / role 级返回 403）。仅整理派给团队主 Agent，普通成员岗位无此工具。返回 {memoryId, level, status:"archived"}。',
+        '归档一条团队级记忆（可恢复软删，不硬删）：从 vteam_memory_list 检索结果与每轮自动注入中立即消失，内容仍在库中可由平台恢复。适用于低效/过期/被证伪的记忆。只能归档**本团队 team 级**记忆（跨团队 / global / role 级返回 403）。仅整理派给团队主 Agent，普通成员岗位无此工具。返回 {memoryId, level, status:"archived"}。',
       inputSchema: memoryArchiveSchema,
       handler: (ctx, args) =>
         service.memoryArchive(ctx, args as MemoryArchiveArgs),
@@ -1156,7 +1167,7 @@ export function buildPlatformMcpTools(
     {
       name: 'memory_merge',
       description:
-        '合并两条语义重复的团队级记忆：把 sourceId 的内容并入 targetId，引用计数累加转移，source 自动归档（软删，可追溯「已合并至」）。适用于同一坑/同一做法被多次沉淀成多条记忆的情形——先 vteam_memory_search 核对内容，保留更完整/更常被引用的一条作 target。仅本团队 team 级记忆可合并（跨团队 / global / role 级 403），source 已归档或与 target 同 id 返回 404 / 400。返回 {merged:true, targetId, transferredRef}。',
+        '合并两条语义重复的团队级记忆：把 sourceId 的内容并入 targetId，引用计数累加转移，source 自动归档（软删，可追溯「已合并至」）。适用于同一坑/同一做法被多次沉淀成多条记忆的情形——先 vteam_memory_list 核对内容，保留更完整/更常被引用的一条作 target。仅本团队 team 级记忆可合并（跨团队 / global / role 级 403），source 已归档或与 target 同 id 返回 404 / 400。返回 {merged:true, targetId, transferredRef}。',
       inputSchema: memoryMergeSchema,
       handler: (ctx, args) =>
         service.memoryMerge(ctx, args as MemoryMergeArgs),

@@ -1106,7 +1106,7 @@ export class TasksService implements OnModuleInit {
           fields: { pendingReviewAt: new Date() },
           sysMessage: () => '任务已提交待验收',
           privateMessage: () =>
-            '任务已提交待验收。作为主 Agent，请牵头收集本任务各 Agent 在执行过程中遇到的问题、解决办法及用户提示，整理后调用 vteam MCP 的 memory_save 工具沉淀为记忆：先用 memory_search 回顾已有记忆避免重复，再按问题/解决/用户提示分类保存（level: "task" 写本任务沉淀，level: "project" 写跨任务复用价值，level: "global" 仅平台通用知识，tags 标注问题类型如 bugfix/workflow/prompt）。如暂无可沉淀内容可跳过，不影响验收流程。',
+            '任务已提交待验收。作为主 Agent，请牵头收集本任务各 Agent 在执行过程中遇到的问题、解决办法及用户提示，整理后调用 vteam MCP 的 memory_save 工具沉淀为记忆：先用 memory_list 回顾已有记忆避免重复，再按问题/解决/用户提示分类保存（level: "task" 写本任务沉淀，level: "project" 写跨任务复用价值，level: "global" 仅平台通用知识，tags 标注问题类型如 bugfix/workflow/prompt）。如暂无可沉淀内容可跳过，不影响验收流程。',
         };
       case 'accept': {
         let acceptTeamId: string | null = null;

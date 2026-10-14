@@ -51,7 +51,7 @@ const VTEAM_MCP_TOOL_NAMES: readonly string[] = [
   'vteam_task_transition',
   'vteam_question_confirm',
   'vteam_memory_save',
-  'vteam_memory_search',
+  'vteam_memory_list',
   'vteam_memory_update',
   'vteam_memory_archive',
   'vteam_memory_merge',
@@ -134,7 +134,7 @@ const PLATFORM_CAPABILITIES: readonly PlatformCapabilityMirror[] = [
     defaultDeny: true,
   },
   { key: 'memory.save', tools: ['vteam_memory_save'], defaultDeny: false },
-  { key: 'memory.search', tools: ['vteam_memory_search'], defaultDeny: false },
+  { key: 'memory.search', tools: ['vteam_memory_list'], defaultDeny: false },
   { key: 'memory.update', tools: ['vteam_memory_update'], defaultDeny: false },
   { key: 'memory.archive', tools: ['vteam_memory_archive'], defaultDeny: false },
   { key: 'memory.merge', tools: ['vteam_memory_merge'], defaultDeny: false },
@@ -252,7 +252,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
-      vteam_memory_search: 'allow',
+      vteam_memory_list: 'allow',
       vteam_memory_update: 'allow',
       vteam_read_file: 'allow',
       vteam_task_context: 'allow',
@@ -289,7 +289,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
-      vteam_memory_search: 'allow',
+      vteam_memory_list: 'allow',
       vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
@@ -331,7 +331,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
-      vteam_memory_search: 'allow',
+      vteam_memory_list: 'allow',
       vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
@@ -385,7 +385,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
       vteam_memory_save: 'allow',
-      vteam_memory_search: 'allow',
+      vteam_memory_list: 'allow',
       vteam_memory_update: 'allow',
       vteam_task_context: 'allow',
       vteam_chat_history: 'allow',
@@ -438,7 +438,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_question_confirm: 'allow',
       vteam_skill_create: 'allow',
       vteam_memory_save: 'allow',
-      vteam_memory_search: 'allow',
+      vteam_memory_list: 'allow',
       vteam_memory_update: 'allow',
       vteam_memory_archive: 'allow',
       vteam_memory_merge: 'allow',
@@ -479,7 +479,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_wecom_reply: 'allow',
       vteam_group_post: 'allow',
       vteam_notify_agent: 'allow',
-      vteam_memory_search: 'allow',
+      vteam_memory_list: 'allow',
       vteam_plan_complete: 'allow',
       vteam_plan_finalize: 'allow',
       vteam_plan_confirm: 'allow',
@@ -509,7 +509,7 @@ const ROLE_BOUNDARIES: Record<VteamAgentName, RoleBoundary> = {
       vteam_task_context: 'allow',
       vteam_doclib: 'allow',
       vteam_read_file: 'allow',
-      vteam_memory_search: 'allow',
+      vteam_memory_list: 'allow',
       vteam_team_view: 'allow',
       vteam_my_profile: 'allow',
       vteam_group_post: 'allow',
@@ -658,7 +658,7 @@ const BUILTIN_ROLE_PROMPTS: Record<string, string> = {
     '你是任务虚拟团队中的知识管理员 Agent，只回答已沉淀的私域知识。\n' +
     '\n' +
     '## 职责\n' +
-    '- 只读问答：依据团队已沉淀知识回答提问，检索顺序为 vteam_memory_search → vteam_doclib → vteam_read_file → 授权仓库只读核对（git_clone / git_pull / git_fetch / git_status / git_diff / git_log）。\n' +
+    '- 只读问答：依据团队已沉淀知识回答提问，检索顺序为 vteam_memory_list → vteam_doclib → vteam_read_file → 授权仓库只读核对（git_clone / git_pull / git_fetch / git_status / git_diff / git_log）。\n' +
     '- 回答格式固定三段：结论 + 出处（记忆条目 id / 产出物 artifactId + 版本 / 文件路径 fileRef）+ 置信度；每条结论必须有出处对应。\n' +
     '- 无出处固定认不知：沉淀知识中找不到依据时，一律回复固定话术「不知——已检索沉淀知识（记忆/文档库/文件/授权仓库），未找到相关出处。」不编造出处，不推测作答。\n' +
     '- 职责边界：不编写实现代码、不设计技术方案、不编写测试用例、不作出验收判定、不沉淀新知识（不写记忆、不提交产出物、不创建 issue）。\n' +
@@ -1634,8 +1634,8 @@ async function main() {
       description: '写入平台记忆（task/team/global 三级）',
     },
     {
-      action: 'memory_search',
-      name: 'vteam_memory_search',
+      action: 'memory_list',
+      name: 'vteam_memory_list',
       description: '检索平台记忆',
     },
     {

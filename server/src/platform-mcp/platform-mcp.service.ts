@@ -518,6 +518,38 @@ const SKILL_CREATE_MAX_BYTES = 100 * 1024;
 /** hook_register 缺省生命周期：expiresInMs 未传时 hook 自注册起 24h 过期（无无限 hook）。 */
 const HOOK_DEFAULT_EXPIRES_MS = 24 * 60 * 60 * 1000;
 
+/** memory_list 检索模式的返回项（按需检索，含 content）。 */
+interface MemorySearchItem {
+  id: string;
+  level: string;
+  content: string;
+  description: string | null;
+  tags: Prisma.JsonValue | null;
+  createdBy: string;
+  createdAt: string;
+  sourceAgentId: string | null;
+  sourceInstanceId: string | null;
+  sourceType: string | null;
+  sessionId: string | null;
+  sessionTitle: string | null;
+  channelId: string | null;
+}
+
+/** memory_list 列出模式的返回项（无过滤参数）：仅元信息，不含 content，不计引用计数。 */
+interface MemoryListItem {
+  id: string;
+  level: string;
+  description: string | null;
+  tags: Prisma.JsonValue | null;
+  refCount: number;
+  lastUsedAt: string | null;
+  createdAt: string;
+  autoInject: boolean;
+  mergedIntoId: string | null;
+  teamId: string | null;
+  roleId: string | null;
+}
+
 /**
  * 平台 MCP 工具实现（阶段 1）。
  *
@@ -3417,7 +3449,7 @@ export class PlatformMcpService implements OnModuleInit {
    * roleId=调用方岗位，未绑岗位 → 400）；global 级仅团队主 Agent 可写
    * （成员 === team.mainAgentMemberId，否则 403）。
    * 落库 taskId 置空（团队记忆无任务归属），createdBy = 团队成员 id。
-   * autoInject 由 agent 自行决定（缺省 false = 仅 memory_search 按需检索）。
+   * autoInject 由 agent 自行决定（缺省 false = 仅 memory_list 按需检索）。
    * T4：先按 contentHash 精确去重（含 roleId 归属），命中即返 {status:'duplicate'} 不落库。
    */
   private async memorySaveForTeam(
@@ -3717,14 +3749,19 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * memory_update：按 id 更新平台记忆（T4 记忆演进，content/description/tags 部分更新）。
+   * memory_update：按 id 更新平台记忆（T4 记忆演进，content/description/tags 部分更新；
+   * 2026-10-14 起支持 scope（level）变更：team/role/global 之间迁移，见下方 scope 段）。
    * 1. 双上下文归属校验（resolveExecContext：worker 会话 + selfInstanceId 防冒充，
    *    复用 assertWorkerTask/Team）。
    * 2. 先读行：不存在/已软删 → 404 MEMORY_NOT_FOUND。
    * 3. 团队所有权：team 级行要求行 teamId === 执行团队（task 维度取任务所属团队），
    *    否则 403；global 级行仅执行团队主 Agent 可改（mirror save 的主门），否则 403；
    *    存量 task 级行要求同任务，否则 403。
-   * 4. 全空 → 400；content 传空字串/空白 → 400（防空内容覆盖有效记忆）；
+   * 4. scope 变更（args.level 与 row.level 不同时）：目标范围解析（global → teamId/roleId
+   *    置空；team → teamId=执行团队；role → teamId=执行团队 + 已存在的 AgentRole 行），
+   *    目标范围鉴权（任一端是 global → 主 Agent，否则要求行归属执行团队），
+   *    目标范围内同 contentHash 活跃行 → 409 MEMORY_DUPLICATE。
+   * 5. 全空 → 400；content 传空字串/空白 → 400（防空内容覆盖有效记忆）；
    *    content 更新同步重算 contentHash。
    * 返回 {memoryId, level, status:'updated'}。
    */
@@ -3739,6 +3776,8 @@ export class PlatformMcpService implements OnModuleInit {
       description?: string;
       tags?: string[];
       autoInject?: boolean;
+      level?: MemoryLevel;
+      roleId?: string;
     },
   ): Promise<{
     memoryId: string;
@@ -3799,15 +3838,117 @@ export class PlatformMcpService implements OnModuleInit {
         message: '仅归属任务可更新该记忆，禁止跨任务更新',
       });
     }
+
+    // scope（level）变更：目标范围解析 → 目标范围鉴权 → 目标范围内同内容撞车 409。
+    // level 与当前一致（或不传）时不走此路径，退化为常规字段更新。
+    let targetLevel: string | null = null;
+    let targetTeamId: string | null = null;
+    let targetRoleId: string | null = null;
+    if (args.level !== undefined && args.level !== row.level) {
+      if (args.level === MEMORY_LEVELS.global) {
+        targetLevel = MEMORY_LEVELS.global;
+        targetTeamId = null;
+        targetRoleId = null;
+      } else if (args.level === MEMORY_LEVELS.team) {
+        if (!execTeamId) {
+          throw new BadRequestException({
+            code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+            message: '当前执行上下文无团队归属，无法将记忆改为 team 级',
+          });
+        }
+        targetLevel = MEMORY_LEVELS.team;
+        targetTeamId = execTeamId;
+        targetRoleId = null;
+      } else if (args.level === MEMORY_LEVELS.role) {
+        if (!execTeamId) {
+          throw new BadRequestException({
+            code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+            message: '当前执行上下文无团队归属，无法将记忆改为 role 级',
+          });
+        }
+        if (!args.roleId) {
+          throw new BadRequestException({
+            code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
+            message: 'level=role 必须提供 roleId（目标岗位 id，ar_ 前缀）',
+          });
+        }
+        const role = await this.prisma.agentRole.findUnique({
+          where: { id: args.roleId },
+          select: { id: true },
+        });
+        if (!role) {
+          throw new BadRequestException({
+            code: PLATFORM_MCP_ERRORS.MEMORY_LEVEL_INVALID,
+            message: '目标岗位不存在（roleId 无效），请确认岗位 id 后重试',
+          });
+        }
+        targetLevel = MEMORY_LEVELS.role;
+        targetTeamId = execTeamId;
+        targetRoleId = args.roleId;
+      }
+
+      // 鉴权：「来源或目标」任一端是 global → 必须为执行团队主 Agent（与本方法既有
+      // global 门、memorySave 的 global 门同口径）；否则（team↔role）要求行归属执行团队。
+      if (
+        row.level === MEMORY_LEVELS.global ||
+        targetLevel === MEMORY_LEVELS.global
+      ) {
+        const mainTeam = execTeamId
+          ? await this.prisma.team.findUnique({
+              where: { id: execTeamId },
+              select: { mainAgentMemberId: true },
+            })
+          : null;
+        if (!mainTeam || mainTeam.mainAgentMemberId !== exec.callerId) {
+          throw new ForbiddenException({
+            code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+            message: '仅主 Agent 可变更记忆可见范围（涉及 global 级）',
+          });
+        }
+      } else if (!execTeamId || row.teamId !== execTeamId) {
+        throw new ForbiddenException({
+          code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+          message: '仅归属团队可变更记忆可见范围，禁止跨团队',
+        });
+      }
+
+      // 去重：content 未更新时沿用原去重键；目标范围内（非本行、未软删、同 level +
+      // 同归属）已有同 hash 活跃行 → 409 MEMORY_DUPLICATE。
+      const newHash =
+        args.content !== undefined
+          ? computeMemoryContentHash(args.content)
+          : row.contentHash;
+      if (newHash) {
+        const duplicate = await this.prisma.memory.findFirst({
+          where: {
+            id: { not: row.id },
+            deletedAt: null,
+            level: targetLevel,
+            teamId: targetTeamId,
+            roleId: targetRoleId,
+            contentHash: newHash,
+          },
+          select: { id: true },
+        });
+        if (duplicate) {
+          throw new ConflictException({
+            code: MEMORY_ERRORS.MEMORY_DUPLICATE,
+            message: '目标范围内已存在同内容记忆',
+          });
+        }
+      }
+    }
+
     if (
       args.content === undefined &&
       args.description === undefined &&
       args.tags === undefined &&
-      args.autoInject === undefined
+      args.autoInject === undefined &&
+      args.level === undefined
     ) {
       throw new BadRequestException({
         code: PLATFORM_MCP_ERRORS.MEMORY_INVALID,
-        message: '至少提供 content/description/tags/autoInject 之一',
+        message: '至少提供 content/description/tags/autoInject/level 之一',
       });
     }
     if (args.content !== undefined && args.content.trim().length === 0) {
@@ -3832,6 +3973,11 @@ export class PlatformMcpService implements OnModuleInit {
     if (args.autoInject !== undefined) {
       data.autoInject = args.autoInject;
     }
+    if (targetLevel !== null) {
+      data.level = targetLevel;
+      data.teamId = targetTeamId;
+      data.roleId = targetRoleId;
+    }
     const updated = await this.prisma.memory.update({
       where: { id: row.id },
       data,
@@ -3840,25 +3986,24 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * memory_search：检索平台记忆（按需检索，替代自动注入；只读，无 selfInstanceId）。
-   * 1. 归属校验（无 selfInstanceId，仅校验 worker 有该任务会话）。
-   * 2. 解析 task 行 teamId（任务不存在 → 404；project 级已下线 → 400；
-   *    session-unification Todo 9 起仅 team/global 可见，level=task → 400
-   *    MEMORY_LEVEL_INVALID，task 分支已删除）。
-   * 3. `memory.findMany({where: {deletedAt: null, OR: [team级(teamId)/global]}})`——
-   *    **软删过滤必须**（Metis M7）；可选 level 入参收窄到单级。
-   * 4. query → content contains（prisma 层过滤）；tags → 取回后内存过滤
-   *    （tags 为 Json 列，prisma 无 contains 支持）。
-   * 5. tags 过滤后按 `sortMemoriesByImportance` 降序重排（memory-enhancement
-   *    Todo 4）：重要度 = ln(1+refCount) + 指数衰减项，计龄基准 `lastUsedAt ?? createdAt`；
-   *    同分时同一基准新者优先，仍相同则靠 `Array.prototype.sort` 稳定性保留 prisma 侧的
-   *    `createdAt desc` 次序，故 prisma 的 orderBy 只作全平时的兜底观感，不参与定序），
-   *    再 limit 截断（默认 20，max 50）。
-   * 6. 对**实际返回**的 id fire-and-forget 计 `refCount+1` / `lastUsedAt`
-   *    （仅主动检索计数；注入与管理端 GET 不计）。
-   * 返回 [{id, level, content, tags, createdBy, createdAt}]。
+   * memory_list：平台记忆的元信息索引与按需检索（双模一体，替代自动注入；只读，无 selfInstanceId）。
+   *
+   * **双模判定**——传任一过滤参数即检索模式，一个都不传即列出模式：
+   * - 检索模式（`query` 非空 / `level` / `tags` 非空 / `sourceInstanceId` /
+   *   `sourceAgentId` / `sessionId` 任一存在）：既有行为原样保留——where 内叠加
+   *   token/source 过滤、`sortMemoriesByImportance` 重要度排序、limit 截断
+   *   （缺省 20，1~50）、对**实际返回**的 id fire-and-forget 计 `refCount+1`，
+   *   返回含 `content` 的完整条目。
+   * - 列出模式（无任何过滤参数）：复用**同一份可见范围计算**（team+本人岗位 role+global），
+   *   `findMany({deletedAt:null, OR: whereOr})` 后仅做重要度排序（不截断），
+   *   返回**元信息**（id/level/description/tags/refCount/lastUsedAt/createdAt/
+   *   autoInject/mergedIntoId/teamId/roleId）——**不含 content、不计 refCount**
+   *   （首屏列表不该把引用计数刷成虚高，正文按需用 query 再拉）。
+   *
+   * 其余约束（归属校验、project 级已下线 400、level=task 400、任务不存在 404、
+   * 无可见范围返回 []）两模式共用，保持不变。
    */
-  async memorySearch(
+  async memoryList(
     ctx: PlatformMcpContext,
     args: {
       taskId?: string;
@@ -3871,23 +4016,7 @@ export class PlatformMcpService implements OnModuleInit {
       sessionId?: string;
       limit?: number;
     },
-  ): Promise<
-    Array<{
-      id: string;
-      level: string;
-      content: string;
-      description: string | null;
-      tags: Prisma.JsonValue | null;
-      createdBy: string;
-      createdAt: string;
-      sourceAgentId: string | null;
-      sourceInstanceId: string | null;
-      sourceType: string | null;
-      sessionId: string | null;
-      sessionTitle: string | null;
-      channelId: string | null;
-    }>
-  > {
+  ): Promise<Array<MemorySearchItem | MemoryListItem>> {
     const exec = await this.resolveExecContext(ctx, args);
 
     // project 级已下线（zod schema 已拒绝，此处防绕过 schema 直调 service）。
@@ -3975,6 +4104,39 @@ export class PlatformMcpService implements OnModuleInit {
       return [];
     }
 
+    // 双模判定：任一过滤参数（query/level/tags/source*）→ 检索模式（含 content、重要度
+    // 排序、命中计 refCount，保持既有行为不变）；一个都没传 → 列出模式（只要元信息，
+    // 不截断、不计数）。
+    const hasFilter =
+      (args.query !== undefined && args.query.trim().length > 0) ||
+      args.level !== undefined ||
+      (args.tags !== undefined && args.tags.length > 0) ||
+      Boolean(args.sourceInstanceId) ||
+      Boolean(args.sourceAgentId) ||
+      Boolean(args.sessionId);
+
+    if (!hasFilter) {
+      const rows = await this.prisma.memory.findMany({
+        where: { deletedAt: null, OR: whereOr },
+        orderBy: { createdAt: 'desc' },
+      });
+      // 与检索模式同一把重要度尺子排序，但不做 limit 截断（列出全部可见）
+      // 且不计 refCount（首屏列表不该把「翻了一遍」刷成被引用）。
+      return sortMemoriesByImportance(rows).map((row) => ({
+        id: row.id,
+        level: row.level,
+        description: row.description ?? null,
+        tags: row.tags,
+        refCount: row.refCount,
+        lastUsedAt: row.lastUsedAt ? row.lastUsedAt.toISOString() : null,
+        createdAt: row.createdAt.toISOString(),
+        autoInject: row.autoInject,
+        mergedIntoId: row.mergedIntoId ?? null,
+        teamId: row.teamId ?? null,
+        roleId: row.roleId ?? null,
+      }));
+    }
+
     const tokens = args.query
       ? args.query.trim().split(/\s+/).filter(Boolean)
       : [];
@@ -4018,7 +4180,7 @@ export class PlatformMcpService implements OnModuleInit {
         })
         .catch((err: unknown) => {
           this.logger.warn(
-            `memory_search 引用计数失败（不影响返回） ids=${hitIds.length}：${err instanceof Error ? err.message : String(err)}`,
+            `memory_list 引用计数失败（不影响返回） ids=${hitIds.length}：${err instanceof Error ? err.message : String(err)}`,
           );
         });
     }
@@ -4069,7 +4231,7 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * memory_merge：语义重复记忆合并（Todo 8a）。先 vteam_memory_search 核对内容，
+   * memory_merge：语义重复记忆合并（Todo 8a）。先 vteam_memory_list 核对内容，
    * 由 Agent 判断哪条留作 target，服务端只守不变量：
    * 1. 两行定位（任一不存在/已软删 → 404；source 已归档再合并即命中此路径）；
    * 2. 同 id → 400（自合并无意义，且会让 refCount 翻倍）；
@@ -4123,7 +4285,7 @@ export class PlatformMcpService implements OnModuleInit {
         });
       }
       // 转移量在事务内、claim 之后读：此刻 source 已被本事务独占（他人 claim 必为 0），
-      // 读到的 refCount 含 claim 前已提交的并发 +1（memory_search 命中计数），
+      // 读到的 refCount 含 claim 前已提交的并发 +1（memory_list 命中计数），
       // 事务外读会把这部分增量丢掉。
       const claimed = await tx.memory.findUnique({
         where: { id: source.id },
@@ -4173,7 +4335,7 @@ export class PlatformMcpService implements OnModuleInit {
    * team_view：任务团队实时视图（只读，vteam-team-collaboration Todo 3）。
    * 与 task_context 的差异增量：会话实时状态（sessionStatus/sessionId，复用 toTaskDto
    * instances 构造逻辑）+ 全量角色视图。
-   * 1. 归属校验（无 selfInstanceId，仅校验 worker 有该任务会话——对齐 memorySearch 只读先例）。
+   * 1. 归属校验（无 selfInstanceId，仅校验 worker 有该任务会话——对齐 memoryList 只读先例）。
    * 2. task 行校验存在（404）。
    * 3. 并行查：task_agents（未 removed，含 agent 关联 + 各自 sessions）。
    * 4. members：{id, agentId, alias, role, seq, main, sessionStatus, sessionId}。
@@ -7681,14 +7843,14 @@ export class PlatformMcpService implements OnModuleInit {
     return Math.min(Math.max(Math.floor(l), 1), CHAT_HISTORY_MAX_LIMIT);
   }
 
-  /** memory_search limit 归一：缺省 20，收敛 1~50（与 memorySearchSchema 对齐）。 */
+  /** memory_list limit 归一：缺省 20，收敛 1~50（与 memoryListSchema 对齐）。 */
   private normalizeMemoryLimit(limit?: number): number {
     const l = Number(limit ?? 20);
     if (!Number.isFinite(l)) return 20;
     return Math.min(Math.max(Math.floor(l), 1), 50);
   }
 
-  /** memory_search tags 内存过滤（Json 列无 prisma contains 支持）：须包含全部查询标签。 */
+  /** memory_list tags 内存过滤（Json 列无 prisma contains 支持）：须包含全部查询标签。 */
   private filterMemoryByTags<T extends { tags: Prisma.JsonValue | null }>(
     rows: T[],
     tags?: string[],

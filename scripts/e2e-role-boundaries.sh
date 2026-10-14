@@ -587,10 +587,10 @@ import json,sys
 orig = json.load(open(sys.argv[1])); restore = sys.argv[2]; edited = sys.argv[3]
 json.dump({"config": orig["config"]}, open(restore, "w"), ensure_ascii=False)
 cfg = orig["config"]
-# Edit the guard tool state: deny group_post, ask memory_search, deny hook_cancel.
+# Edit the guard tool state: deny group_post, ask memory_list, deny hook_cancel.
 tools = dict(cfg.get("tools") or {})
 tools["vteam_group_post"] = "deny"
-tools["vteam_memory_search"] = "ask"
+tools["vteam_memory_list"] = "ask"
 tools["vteam_hook_cancel"] = "deny"
 cfg["tools"] = tools
 # Edit layer-1 permission too (proves DB drives the opencode.json agent entry).

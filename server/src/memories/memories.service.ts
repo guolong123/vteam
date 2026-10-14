@@ -137,12 +137,21 @@ export class MemoriesService implements OnModuleInit {
   }
 
   /**
-   * PATCH /memories/:id：部分更新 content/description/tags/autoInject（T4 记忆演进；
-   * 2026-09-30 增 autoInject，记忆页行内开关走此处）。
+   * PATCH /memories/:id：部分更新 content/description/tags/autoInject / level（T4 记忆演进；
+   * 2026-09-30 增 autoInject 与 scope 改范围，记忆页行内开关/「改范围」走此处）。
    * 不存在（含已软删）→ 404 MEMORY_NOT_FOUND；全空 → 400 MEMORY_UPDATE_EMPTY；
    * team/role 级行要求调用者是该团队成员（403 PERMISSION_TEAM_NOT_MEMBER，AdminGuard
    * 已前置，此处叠加团队归属）；global 级行仅管理员可改（AdminGuard 已保证）。
    * content 更新时同步重算 contentHash（去重键与正文一致）。
+   *
+   * scope 改范围（dto.level !== undefined）：
+   *   - level 非法（非 team/role/global）→ 400 MEMORY_LEVEL_INVALID
+   *   - global → 目标 scope（teamId=null, roleId=null）；team → teamId 解析（dto.teamId
+   *     缺省沿用现有行，两者皆无 → 400）；role → teamId + roleId（缺一 → 400，
+   *     且目标 AgentRole 必须存在否则 400）
+   *   - 目标团队归属校验下沉 service 兜底（targetTeamId 非空且 viewer 非成员 → 403
+   *     TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER；AdminGuard 仍是前置 admin 门）
+   *   - 目标范围已有同 contentHash 活跃行 → 409 MEMORY_DUPLICATE
    */
   async update(id: string, dto: UpdateMemoryDto, viewer?: { id: string }) {
     const existing = await this.prisma.memory.findUnique({ where: { id } });
@@ -156,14 +165,20 @@ export class MemoriesService implements OnModuleInit {
       dto.content === undefined &&
       dto.description === undefined &&
       dto.tags === undefined &&
-      dto.autoInject === undefined
+      dto.autoInject === undefined &&
+      dto.level === undefined
     ) {
       throw new BadRequestException({
         code: MEMORY_ERRORS.MEMORY_UPDATE_EMPTY,
-        message: '至少提供 content/description/tags/autoInject 之一',
+        message: '至少提供 content/description/tags/autoInject/level 之一',
       });
     }
-    if (existing.teamId) {
+    // scope 改范围：level 校验 → 目标 scope 解析 → 目标团队归属兜底 → 目标范围查重。
+    const scope = dto.level !== undefined
+      ? await this.resolveMemoryScopeTarget(existing, dto, viewer)
+      : null;
+    if (!scope && existing.teamId) {
+      // 非 scope 变更的既有团队归属校验（保持不变）。
       const member = viewer?.id
         ? await this.prisma.teamUserMember.findUnique({
             where: {
@@ -193,7 +208,123 @@ export class MemoriesService implements OnModuleInit {
     if (dto.autoInject !== undefined) {
       data.autoInject = dto.autoInject;
     }
+    if (scope) {
+      data.level = scope.level;
+      data.teamId = scope.teamId;
+      data.roleId = scope.roleId;
+    }
     return this.prisma.memory.update({ where: { id }, data });
+  }
+
+  /**
+   * PATCH scope 改范围：解析 dto.level 的目标 scope 并做落地前校验。
+   * - level 非法 → 400 MEMORY_LEVEL_INVALID
+   * - team：targetTeamId = dto.teamId ?? existing.teamId（无 → 400：level=team 需指定 teamId），
+   *   targetRoleId = null
+   * - role：targetTeamId 同上（无 → 400），targetRoleId = dto.roleId（缺 → 400）；
+   *   目标 AgentRole 不存在 → 400
+   * - 目标 scope 已有同 contentHash 活跃行 → 409 MEMORY_DUPLICATE
+   * - viewer 非目标团队成员（targetTeamId 非空时）→ 403 TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER
+   */
+  private async resolveMemoryScopeTarget(
+    existing: { id: string; level: string; teamId: string | null; contentHash: string | null },
+    dto: UpdateMemoryDto,
+    viewer?: { id: string },
+  ): Promise<{ level: string; teamId: string | null; roleId: string | null }> {
+    if (
+      dto.level !== MEMORY_LEVELS.team &&
+      dto.level !== MEMORY_LEVELS.role &&
+      dto.level !== MEMORY_LEVELS.global
+    ) {
+      throw new BadRequestException({
+        code: MEMORY_ERRORS.MEMORY_LEVEL_INVALID,
+        message: `非法记忆级别：${dto.level}（仅支持 team/role/global，任务级记忆已删除）`,
+      });
+    }
+    let targetTeamId: string | null;
+    let targetRoleId: string | null;
+    if (dto.level === MEMORY_LEVELS.global) {
+      targetTeamId = null;
+      targetRoleId = null;
+    } else if (dto.level === MEMORY_LEVELS.team) {
+      targetTeamId = dto.teamId ?? existing.teamId;
+      if (!targetTeamId) {
+        throw new BadRequestException({
+          code: MEMORY_ERRORS.MEMORY_LEVEL_INVALID,
+          message: 'level=team 需指定 teamId',
+        });
+      }
+      targetRoleId = null;
+    } else {
+      targetTeamId = dto.teamId ?? existing.teamId;
+      if (!targetTeamId) {
+        throw new BadRequestException({
+          code: MEMORY_ERRORS.MEMORY_LEVEL_INVALID,
+          message: 'level=role 需指定 teamId',
+        });
+      }
+      targetRoleId = dto.roleId ?? null;
+      if (!targetRoleId) {
+        throw new BadRequestException({
+          code: MEMORY_ERRORS.MEMORY_LEVEL_INVALID,
+          message: 'level=role 需指定 roleId',
+        });
+      }
+      const role = await this.prisma.agentRole.findUnique({
+        where: { id: targetRoleId },
+        select: { id: true },
+      });
+      if (!role) {
+        throw new BadRequestException({
+          code: MEMORY_ERRORS.MEMORY_LEVEL_INVALID,
+          message: `目标岗位不存在：${targetRoleId}`,
+        });
+      }
+    }
+    // 目标团队归属兜底（controller 仍有 AdminGuard 前置，这里是第二道防线）：
+    // targetTeamId 非空时 viewer 必须是该团队成员，否则 403 PERMISSION_TEAM_NOT_MEMBER。
+    if (targetTeamId) {
+      const member = viewer?.id
+        ? await this.prisma.teamUserMember.findUnique({
+            where: {
+              teamId_userId: { teamId: targetTeamId, userId: viewer.id },
+            },
+            select: { id: true },
+          })
+        : null;
+      if (!member) {
+        throw new ForbiddenException({
+          code: TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER,
+          message: '您不是该团队成员',
+        });
+      }
+    }
+    // 查重：目标范围内（level/teamId/roleId 一致）已有同 contentHash 活跃行 → 409。
+    // contentHash 为 null 的存量行没有去重键，跳过查重（否则会命中任意无 hash 行 → 误报 409）。
+    const newHash =
+      dto.content !== undefined
+        ? computeMemoryContentHash(dto.content)
+        : existing.contentHash;
+    if (newHash) {
+      const duplicate = await this.prisma.memory.findFirst({
+        where: {
+          id: { not: existing.id },
+          deletedAt: null,
+          level: dto.level,
+          teamId: targetTeamId,
+          roleId: targetRoleId,
+          contentHash: newHash,
+        },
+        select: { id: true },
+      });
+      if (duplicate) {
+        throw new ConflictException({
+          code: MEMORY_ERRORS.MEMORY_DUPLICATE,
+          message: '目标范围内已存在同内容记忆',
+        });
+      }
+    }
+    return { level: dto.level, teamId: targetTeamId, roleId: targetRoleId };
   }
 
   /**

@@ -1041,14 +1041,14 @@ model Memory {
   /// 角色级记忆归属岗位（ar_ 前缀 → AgentRole.id）；仅 level=role 时非空（2026-09-30）
   roleId           String?   @map("role_id")
   /// 是否参与每轮自动注入（2026-09-30）。由 agent 建记忆时自行决定，**新建默认 false**：
-  /// false = 仅能经 memory_search 按需检索，不进 prompt；true = 按 level 的受众规则注入。
+  /// false = 仅能经 memory_list 按需检索，不进 prompt；true = 按 level 的受众规则注入。
   /// 受众：global/team → 本团队主 Agent；role → 本团队该岗位全部 agent。
   autoInject       Boolean   @default(false) @map("auto_inject")
-  /// 主动检索引用计数（2026-10-09）：agent 经 memory_search 命中 +1。
+  /// 主动检索引用计数（2026-10-09）：agent 经 memory_list 命中 +1。
   /// **仅主动检索计数**——每轮自动注入不计（否则主 Agent 每轮刷新即刷爆指标）。
   /// 新建记忆恒为 0（存量行不回填，迁移只 ADD COLUMN）。
   refCount         Int       @default(0) @map("ref_count")
-  /// 最近一次被 memory_search 命中的时刻；NULL = 从未被引用过。
+  /// 最近一次被 memory_list 命中的时刻；NULL = 从未被引用过。
   /// 重要度计龄基准 = lastUsedAt ?? createdAt（见 memory-importance.ts）。
   lastUsedAt       DateTime? @map("last_used_at")
   /// 合并追溯：本行已被并入哪条记忆（vteam_memory_merge 写，source 行软删）。

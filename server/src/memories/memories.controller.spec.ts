@@ -270,6 +270,29 @@ describe('MemoriesController', () => {
       expect(out).toMatchObject({ id: 'me_0000000001' });
     });
 
+    it('PATCH /memories/:id 透传 scope 改范围字段 level/teamId/roleId 到 update', async () => {
+      service.update.mockResolvedValue({
+        id: 'me_0000000001',
+        level: 'role',
+        teamId: 'tm_1',
+        roleId: 'ar_1',
+      });
+      const req = { user: { id: 'u_admin' } };
+
+      const out = await controller.update(
+        'me_0000000001',
+        { level: 'role', teamId: 'tm_1', roleId: 'ar_1' },
+        req as never,
+      );
+
+      expect(service.update).toHaveBeenCalledWith(
+        'me_0000000001',
+        { level: 'role', teamId: 'tm_1', roleId: 'ar_1' },
+        { id: 'u_admin' },
+      );
+      expect(out).toMatchObject({ level: 'role', roleId: 'ar_1' });
+    });
+
     it('service 抛 404 MEMORY_NOT_FOUND 时透传给客户端', async () => {
       service.remove.mockRejectedValue(
         new NotFoundException({

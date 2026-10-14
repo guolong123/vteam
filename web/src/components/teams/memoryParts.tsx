@@ -202,7 +202,7 @@ export function AutoInjectBadge({ on }: { on: boolean }) {
     <span
       data-testid="team-memory-inject-badge"
       data-auto-inject={on ? "true" : "false"}
-      title={on ? "每轮自动注入给 Agent" : "仅 memory_search 按需检索"}
+      title={on ? "每轮自动注入给 Agent" : "仅 memory_list 按需检索"}
       style={{
         display: "inline-flex",
         alignItems: "center",

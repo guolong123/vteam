@@ -123,10 +123,17 @@ export class MaintainMemoriesDto {
 }
 
 /**
- * PATCH /memories/:id 部分更新体（T4 记忆演进；2026-09-30 增 autoInject 开关）。
- * content/description/tags/autoInject 至少传一个（全空 → 400 MEMORY_UPDATE_EMPTY）；
+ * PATCH /memories/:id 部分更新体（T4 记忆演进；2026-09-30 增 autoInject 开关与 scope 改范围）。
+ * content/description/tags/autoInject/level 至少传一个（全空 → 400 MEMORY_UPDATE_EMPTY）；
  * content 更新时服务端同步重算 contentHash（精确去重键保持与正文一致）。
  * autoInject 是**单条记忆**的属性（记忆页行内开关），非团队/全局开关。
+ *
+ * scope（level）改范围：传 level=team/role/global 即把记忆迁移到目标范围——
+ *   - level=global：目标 scope 为全局（teamId/roleId 置空，忽略传入的 teamId/roleId）
+ *   - level=team：目标 scope 为该团队（teamId，缺省沿用现有 teamId）→ 400 需指定 teamId
+ *   - level=role：目标 scope 为该团队该岗位（teamId + roleId，ar_ 前缀；
+ *     roleId 缺省 → 400）→ 目标 AgentRole 不存在 → 400
+ * 目标范围已有同 contentHash 活跃行 → 409 MEMORY_DUPLICATE。
  */
 export class UpdateMemoryDto {
   @ApiPropertyOptional({ description: '记忆正文（更新后重算去重键）' })
@@ -159,4 +166,29 @@ export class UpdateMemoryDto {
   @Type(() => Boolean)
   @IsBoolean()
   autoInject?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      '记忆级别（改范围用）：team/role/global。global=全局；team=团队级（可配 teamId）；role=角色级（需 teamId + roleId）',
+    enum: Object.values(MEMORY_LEVELS),
+  })
+  @IsOptional()
+  @IsIn(Object.values(MEMORY_LEVELS))
+  level?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '目标团队 ID（scope 改范围，level=team/role 时）：缺省沿用现有 teamId；两者皆无 → 400',
+  })
+  @IsOptional()
+  @IsString()
+  teamId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '目标岗位 ID（scope 改范围，level=role 时必填，ar_ 前缀）；不存在 → 400',
+  })
+  @IsOptional()
+  @IsString()
+  roleId?: string;
 }

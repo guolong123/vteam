@@ -445,11 +445,11 @@ export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
  */
 export const MEMORY_INSTRUCTION =
   '【记忆管理】只存可复用经验：怎么做（howto）、坑与规避（pitfall）、平台硬约束（constraint），不存会话总结。\n' +
-  '开始任务/需要经验时调 vteam_memory_search 检索，沉淀时调 vteam_memory_save 保存；参数细节查工具 schema，文档查 doclib。\n' +
+  '开始任务/需要经验时调 vteam_memory_list 检索，沉淀时调 vteam_memory_save 保存；参数细节查工具 schema，文档查 doclib。\n' +
   '【记忆分级与自动注入】level=role 写你当前岗位的专属经验（自动注入给本团队该岗位全体 agent）；' +
   'level=team 写团队共识；level=global 写跨团队经验（仅主 Agent 可写）。' +
   'autoInject=true 让这条记忆每轮自动进你的 prompt、省去主动 search——只对每轮都该记住的高价值条目开；' +
-  '其余留 false，靠 vteam_memory_search 按需检索（注入占 prompt 预算）。' +
+  '其余留 false，靠 vteam_memory_list 按需检索（注入占 prompt 预算）。' +
   '受众：team/global → 本团队主 Agent；role → 本团队该岗位全体 agent。';
 
 /** GLOBAL 前 6 行（【记忆管理】之前的不变段；与 MEMORY_INSTRUCTION 拼出完整 GLOBAL）。 */
@@ -922,7 +922,7 @@ export const TEAM_SYSTEM_RECEPTION_INSTRUCTION =
   '（之后才允许派活给子 agent）；所在团队不明确 → 先问用户用哪个团队，绝不猜测归属、绝不创建任务；' +
   '用户意图不明 → 普通回复追问（做什么/验收标准），禁止创建任务、' +
   '禁止走 QuestionModal（问题确认弹窗仅任务内可用）。' +
-  '参数规则：vteam_chat_history、vteam_group_post、vteam_notify_agent、vteam_wecom_reply、vteam_memory_save、vteam_memory_search 这 6 个工具在团队直聊下传 teamId，绝不传 taskId' +
+  '参数规则：vteam_chat_history、vteam_group_post、vteam_notify_agent、vteam_wecom_reply、vteam_memory_save、vteam_memory_list 这 6 个工具在团队直聊下传 teamId，绝不传 taskId' +
   '（团队直聊没有 taskId，传了必 403）；selfInstanceId 填写 system 身份段中的团队成员 id（tmm_ 前缀）；' +
   'vteam_my_profile、vteam_team_view 与 delivery 相关工具需要任务上下文，团队直聊下不可用（如需任务，先 vteam_task_create 建任务）。';
 
@@ -2210,7 +2210,7 @@ export class WorkerDispatcher
         `【自动注入记忆 ${scopeCnt} 条${topTags.length ? ` Top tags:${topTags.join(',')}` : ''}】\n` +
         (lines.length
           ? lines.join('\n') +
-            '\n按需用 vteam_memory_search 拉正文，摘要命中再取 content。'
+            '\n按需用 vteam_memory_list 拉正文，摘要命中再取 content。'
           : '暂无记忆正文。');
       if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
       return memoryIndex;

@@ -190,7 +190,7 @@ describe('ExecutionPoliciesController', () => {
       ...templateRow.config,
       tools: {
         vteam_group_post: 'deny' as const,
-        vteam_memory_search: 'ask' as const,
+        vteam_memory_list: 'ask' as const,
       },
     };
     const patched = await controller.update('ep_product', {
