@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
@@ -156,6 +156,116 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>{label}</span>
       <span style={{ fontSize: fontSize.md, fontWeight: 500, color: neutral[800] }}>{value}</span>
+    </div>
+  );
+}
+
+/** 并发上限可选值（对齐 install 页能力声明下拉的候选集）。 */
+const MAX_INSTANCE_PRESETS = [2, 4, 6, 8, 12, 16];
+
+/** 内联下拉样式（对齐 install 页 inputStyle 色值/圆角，内联场景收紧间距与字号）。 */
+const maxInstancesSelectStyle: CSSProperties = {
+  padding: `${space.xs}px ${space.sm}px`,
+  borderRadius: radius.md,
+  border: `1px solid ${neutral[200]}`,
+  backgroundColor: "var(--color-surface)",
+  color: neutral[800],
+  fontSize: fontSize.sm,
+  fontFamily: fontFamily.mono,
+  cursor: "pointer",
+};
+
+/**
+ * 并发上限行：只读值 + 内联下拉编辑（PATCH /workers/:id { maxInstances }）。
+ * - capabilities 缺失（从未上报）仍允许设置，读显「未上报」（对齐列表页语义）；
+ * - 提交中禁用下拉并乐观显示所选值；失败回退服务端值并内联报错；
+ * - 成功后失效 ["worker", workerId]，联动基本信息、负载卡（instances/maxInstances）刷新。
+ */
+function MaxInstancesControl({
+  workerId,
+  reported,
+  maxInstances,
+}: {
+  workerId: string;
+  reported: boolean;
+  maxInstances: number;
+}) {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState<string | null>(null);
+  /** 乐观值：提交后立即回显所选值，待 refetch 落地 / 出错回退后再清空。 */
+  const [optimistic, setOptimistic] = useState<number | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: (value: number) =>
+      api.patch<WorkerDetail>(`/workers/${workerId}`, { maxInstances: value }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["worker", workerId] });
+      setOptimistic(null);
+    },
+    onError: (err: unknown) => {
+      setOptimistic(null);
+      setError(isApiError(err) ? err.message : "保存失败，请稍后重试");
+    },
+  });
+
+  const effective = optimistic ?? maxInstances;
+  const valueReported = reported || optimistic !== null;
+  /* 保留非预设当前值（如历史 5 并发 / 未上报的 0）为可选项，避免静默改写。 */
+  const options = MAX_INSTANCE_PRESETS.includes(effective)
+    ? [...MAX_INSTANCE_PRESETS]
+    : reported
+      ? [...MAX_INSTANCE_PRESETS, effective]
+      : [effective, ...MAX_INSTANCE_PRESETS];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>并发上限</span>
+      <div style={{ display: "flex", alignItems: "center", gap: space.sm, flexWrap: "wrap" }}>
+        <span
+          data-testid="worker-max-instances-value"
+          data-reported={reported ? "true" : "false"}
+          data-max-instances={effective}
+          title={reported ? undefined : "该节点本次未携带能力声明（可能从未上报），非 0 并发"}
+          style={{
+            fontSize: fontSize.md,
+            fontWeight: 500,
+            color: valueReported ? neutral[800] : neutral[400],
+          }}
+        >
+          {valueReported ? `${effective} 并发` : "未上报"}
+        </span>
+        <select
+          data-testid="worker-max-instances-select"
+          aria-label="并发上限"
+          value={effective}
+          disabled={mutation.isPending}
+          onChange={(e) => {
+            setError(null);
+            setOptimistic(Number(e.target.value));
+            mutation.mutate(Number(e.target.value));
+          }}
+          style={{
+            ...maxInstancesSelectStyle,
+            cursor: mutation.isPending ? "not-allowed" : "pointer",
+            opacity: mutation.isPending ? 0.6 : 1,
+          }}
+        >
+          {options.map((n) => (
+            <option key={n} value={n}>
+              {n === 0 && !reported ? "未上报" : `${n} 并发`}
+            </option>
+          ))}
+        </select>
+      </div>
+      {error && (
+        <span
+          data-testid="worker-max-instances-error"
+          role="alert"
+          style={{ fontSize: fontSize.xs, color: "#DC2626" }}
+        >
+          {error}
+        </span>
+      )}
     </div>
   );
 }
@@ -431,7 +541,11 @@ export default function WorkerDetailPage() {
                 value={worker.capabilities?.port !== undefined ? String(worker.capabilities.port) : "未上报"}
               />
               <InfoRow label="baseUrl" value={worker.capabilities?.baseUrl ?? "未上报"} />
-              <InfoRow label="并发上限" value={`${worker.capabilities?.maxInstances ?? 0} 并发`} />
+              <MaxInstancesControl
+                workerId={workerId}
+                reported={worker.capabilities !== undefined}
+                maxInstances={worker.capabilities?.maxInstances ?? 0}
+              />
             </div>
           </section>
 
