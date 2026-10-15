@@ -1,0 +1,619 @@
+================================================================================
+incident-delta-write-amplification.txt
+TASK: cut per-delta write amplification in server/src/workers/worker-event.ingress.ts
+ROOT CAUSE: on EVERY message.part.delta the ingress merged the increment into the
+  in-memory assembled state AND wrote the FULL accumulated content back to the
+  `messages` row. Measured today: messages.ibd 3.57 GB / 2848 rows (~1.25 MB/row);
+  MySQL row-based binlog ~1 GB every 2-3 min (~20-30 GB/hour) because each UPDATE
+  rewrites the whole row; that filled a shared 983 GB NFS volume to 100% →
+  mysqld died `posix_fallocate ... error number 28` (ENOSPC) + signal 6,
+  crash-looped, whole app returned HTTP 500.
+  Emergency mitigation (NOT a fix) was already applied: 235 binlogs deleted
+  (233 GB freed) + binlog_expire_logs_seconds=7200. ~231 GB free buys 8-11 h.
+--------------------------------------------------------------------------------
+CHOSEN DESIGN (3 parts)
+--------------------------------------------------------------------------------
+1. THROTTLE / COALESCE  —  `export const DELTA_PERSIST_INTERVAL_MS = 1000`
+   The cache entry became a ledger (`AssemblingEntry`):
+     parts      = in-memory TRUTH (post-merge, every delta)
+     dirty      = true  <=> memory leads the DB row (skipped increments exist)
+     lastFlushAt= Date.now() of last successful DB write
+     row        = row returned by that last write (DB-side broadcast fields)
+   Cache-HIT delta: merge into `parts`; if `Date.now() - lastFlushAt <
+   DELTA_PERSIST_INTERVAL_MS` → SKIP the DB write, set dirty=true, and STILL
+   broadcast, building the frame from `{...cached.row, content: <in-memory>}`.
+   The MISS branch is deliberately NOT throttled (it re-establishes cache + needs
+   a full DB row for the frame; it runs once per stream per process).
+   WHY 1000 ms: 7-35 deltas/s → 7..35 increments coalesced into 1 write
+   (write-count /7 worst case, /35 best); SSE unaffected (1 frame per delta,
+   payload synthesised from the same state the next write will persist); REST
+   history at most 1 s stale (only visible if the user reloads mid-stream);
+   crash exposure bounded to the last <1 s of increments and the leftover row
+   stays status=processing so the D2 sweep fails it instead of presenting a
+   truncated message as complete.
+
+2. GUARANTEED FINAL FLUSH on every terminal path
+   - task.completed            → `await this.flushAndDropDeltaStream(key)`
+   - agent.status{status:error}→ `await this.flushAndDropDeltaStream(key)`  (D1)
+   - dispatcher watchdog/stale-row sweep
+                               → `invalidateDeltaStream()` guarded flush     (D2)
+   `flushAndDropDeltaStream` runs INSIDE the stream key's own exclusive chain
+   (`runPartDeltaExclusive`), so an in-flight delta write lands first, the flush
+   then sees the freshest assembled state, and the cache invalidation (delete)
+   also happens inside the chain — a queued same-key delta necessarily MISSes
+   after it. Both ordered paths flush BEFORE `notify(...)`/`realtime.emit`, i.e.
+   before the dispatcher finalises the row, so they use plain `message.update`.
+   `invalidateDeltaStream` is a SYNC hook whose caller (worker-dispatcher
+   dispatchAgentMention stale-row sweep) marks the row `failed`/deletes it
+   BEFORE calling it → its flush is `updateMany({where:{id, status:processing}})`
+   (GUARDED): already-final rows are 0-row no-ops, so streaming content can
+   never be written over a `failed` row (the D1/D2 corruption class the
+   pre-existing regression tests pin).
+
+3. STALENESS HAZARD (mid-stream MISS cannot silently lose a middle chunk)
+   Design = FLUSH-BEFORE-EVICT + RECOVERABLE-BY-CONSTRUCTION:
+   - `cacheAssembled` no longer drops the oldest entry silently. If it is dirty
+     it is flushed first, and the flush is enqueued on the EVICTED KEY'S OWN
+     chain: while that chain entry exists, any same-key delta queues BEHIND the
+     flush (its MISS read therefore sees the fully-flushed row); if the chain
+     has already self-cleaned, the flush had already landed. Either way the
+     subsequent MISS cannot read a row that is missing the tail.
+   - The eviction/D2 flush is guarded (status=processing): if the stream was
+     already finalised, the write is a 0-row no-op (nothing to preserve).
+   - On flush FAILURE the tail is dropped with an error log and the entry is NOT
+     re-inserted (re-inserting would let a later delta HIT the cache and
+     `message.update` a possibly-finalised row — reopening the D1/D2 hole).
+     This degrades exactly to the codebase's documented "event replay is
+     best-effort" posture instead of corrupting a final row.
+   - RESIDUAL EXPOSURE (process restart): the cache is in-memory, so a crash can
+     still lose at most the last <1 s of increments for streams that were
+     mid-flight at that instant. This is unrecoverable in-memory by construction
+     (any durable recovery would require writing every delta, i.e. the very
+     amplification being removed). Bounded by the 1 s window; the leftover row
+     stays `processing` and is failed by the existing D2 sweep rather than being
+     presented as complete.
+=== FILE INVENTORY / REPO STATE (raw) ==========================================
+$ git rev-parse HEAD
+2689d372f5ca8764c5e89cb3b0f26d8dada06e02
+exit=0
+
+NOTE (asserted honestly): task rule (d) says HEAD must remain a78d3b9. At the
+start of this session HEAD WAS a78d3b92a92c148dad0d21c11e00e344a9b45803. During the
+session a CONCURRENT session advanced HEAD with 3 commits (reflog below). This
+subagent ran NO git write command; its changes are uncommitted working-tree edits.
+
+$ git reflog -5
+2689d37 HEAD@{0}: commit: docs(omo): 归档 OOM/磁盘事故的回执、后续加固项与资源释放策略
+d09f40a HEAD@{1}: commit: fix(chart): 给 ibtmp1 临时表空间封顶（autoextend:max:2G）
+f320f7a HEAD@{2}: commit: fix(chart): 资源释放策略（binlog 1h 过期、server limit 回 2Gi）+ 磁盘事故复盘
+a78d3b9 HEAD@{3}: commit: fix(chart): server 内存 limit 2Gi→8Gi（切换期余量，非修复）
+d6437ee HEAD@{4}: commit: fix(workers): delta 组装态缓存 + 错误终局/看门狗终局的缓存失效
+exit=0
+
+$ git diff --stat a78d3b9 HEAD   (what the 3 intervening commits touched)
+ .omo/evidence/incident-delta-allocation-fix.txt    |  246 +
+ .../incident-delta-cache-error-invalidation.txt    |  299 ++
+ .../incident-delta-cache-watchdog-invalidation.txt |  262 ++
+ .omo/evidence/incident-realtime-log-byte-cap.txt   |  312 ++
+ .omo/evidence/incident-realtime-replay-fix.txt     | 4758 ++++++++++++++++++++
+ .../verify-incident-delta-allocation-fix.txt       |  240 +
+ .../evidence/verify-incident-delta-cache-final.txt |  160 +
+ .omo/evidence/verify-incident-realtime-final.txt   |  357 ++
+ .../verify-incident-realtime-replay-fix.txt        |  211 +
+ .omo/plans/team-worker-node.md                     |   34 +
+ .omo/ulw-execute/ledger.jsonl                      |   22 +
+ chart/vteam/templates/statefulset-mysql.yaml       |    9 +
+ chart/vteam/values.yaml                            |   14 +-
+ 13 files changed, 6921 insertions(+), 3 deletions(-)
+exit=0
+
+$ git diff --stat a78d3b9 HEAD -- server/src/workers/worker-event.ingress.ts server/src/workers/worker-event.ingress.spec.ts
+exit=0  (no output above => the intervening commits do NOT touch my 2 files,
+          so my diff baseline is byte-identical at a78d3b9 and at HEAD)
+
+$ git status --porcelain
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/workers/worker-event.ingress.spec.ts
+ M server/src/workers/worker-event.ingress.ts
+ M web/app/(main)/teams/[id]/session/page.tsx
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/evidence/incident-delta-write-amplification.txt
+exit=0
+(only server/src/workers/worker-event.ingress.ts + .spec.ts are mine;
+ platform-mcp/*, web msg-parts.tsx were pre-existing dirty;
+ web/app/(main)/teams/[id]/session/page.tsx appeared mid-session from the
+ concurrent session - not touched by this task)
+
+
+--------------------------------------------------------------------------------
+VERIFY 1: cd server && npx jest src/workers src/chat; echo JEST=$?
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/workers src/chat; echo JEST=$?
+JEST=0
+
+--- raw result block ---
+Test Suites: 23 passed, 23 total
+Tests:       979 passed, 979 total
+Snapshots:   0 total
+Time:        14.689 s
+--- suites ---
+   1 PASS src/chat/chat.controller.spec.ts
+   1 PASS src/chat/chat.service.spec.ts (11.355 s)
+   1 PASS src/chat/mention-throttle.spec.ts
+   1 PASS src/chat/message-receipt.constants.spec.ts
+   1 PASS src/chat/message-receipts.service.spec.ts
+   1 PASS src/chat/receipt-nudge.handler.spec.ts
+   1 PASS src/chat/review-dispatch-triplet.spec.ts
+   1 PASS src/chat/review-round-timeout.handler.spec.ts
+   1 PASS src/chat/worker-dispatcher.gate.spec.ts
+   1 PASS src/chat/worker-dispatcher.integration.spec.ts (11.652 s)
+--- failing-test lines (grep -c, exit 1 = none) ---
+0
+grep-exit=1
+
+$ cd server && npx jest src/workers/worker-event.ingress.spec.ts --verbose; echo JEST=$?
+JEST=0
+--- the 5 NEW cases (raw verbose lines) ---
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_thr parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_thr parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_thr parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_thr parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_thr parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_thr parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_thr parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_thr parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_thr parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_tc parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[32m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [32m    LOG[39m [38;5;3m[WorkerEventIngress] [39m[32m[ingress] 终态 flush 补写未落库尾段 message=m_tc parts=2（stream=c_dm|a_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_err parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[32m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [32m    LOG[39m [38;5;3m[WorkerEventIngress] [39m[32m[ingress] 终态 flush 补写未落库尾段 message=m_err parts=2（stream=c_dm|a_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_d2 parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m01/15/2027, 4:00:00 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=m_evict_1 parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[95m[Nest] 87771  - [39m10/15/2026, 4:40:05 PM [95m  DEBUG[39m [38;5;3m[WorkerEventIngress] [39m[95m[ingress] message.part.delta(cached) 节流跳过落库 message=te_0000000042 parts=1（1000ms 窗口内，未落库尾段待 flush，workerId=w_1）[39m
+[32m[Nest] 87771  - [39m10/15/2026, 4:40:05 PM [32m    LOG[39m [38;5;3m[WorkerEventIngress] [39m[32m[ingress] 终态 flush 补写未落库尾段 message=te_0000000042 parts=2（stream=c_dm|a_1）[39m
+      ✓ 节流：窗口内 N 个 delta 至多 1 次落库，但每个 delta 都广播一帧（帧内容=到该 delta 为止的全量累积） (1 ms)
+      ✓ 终态 flush①（task.completed）：回调前补写窗口内跳过的尾段，DB 内容不截断 (1 ms)
+      ✓ 终态 flush②（agent.status{error} D1 路径）：失效前补写尾段，且不覆盖已 failed 行
+      ✓ 终态 flush③（D2 判死清扫 invalidateDeltaStream）：补写尾段且带 status=processing 守卫（不覆盖已 failed 行） (1 ms)
+      ✓ 中段不丢失（淘汰路径）：缓存超限淘汰前先 flush 未落库尾段，同键 delta MISS 回读到全量 (5 ms)
+--- totals ---
+Test Suites: 1 passed, 1 total
+Tests:       87 passed, 87 total
+
+--------------------------------------------------------------------------------
+VERIFY 2: npx tsc --noEmit -p tsconfig.json; echo TSC=$?
+--------------------------------------------------------------------------------
+$ cd server && npx tsc --noEmit -p tsconfig.json; echo TSC=$?
+TSC=0
+
+--------------------------------------------------------------------------------
+MUTATION PROOFS (b) + (c) — THROWAWAY COPY OUTSIDE THE REPO
+--------------------------------------------------------------------------------
+Harness: rsync of server/ (no node_modules, no .git) into
+  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/delta-mutation/server
+with node_modules symlinked back. Baseline there: 87/87 green (JEST=0).
+Each mutation edits ONLY worker-event.ingress.ts in the throwaway copy, runs the
+pinned test, then the file is RESTORED from the repo file and its sha256 is compared.
+
+SOURCE-OF-TRUTH sha256 (never mutated):
+ecdb73c91af976161d7b0443dea97c0fc601b1f7c61393b1e55797c413279b68  server/src/workers/worker-event.ingress.ts
+36c82e7848133b7606d6a52fc00c594d9ea8e3ce6b0659f8cc8c990d0e5920f7  server/src/workers/worker-event.ingress.spec.ts
+
+=== THROWAWAY BASELINE ===
+$ npx jest src/workers/worker-event.ingress.spec.ts
+JEST=0   Tests: 87 passed, 87 total   (see harness log; identical to repo run)
+
+================================================================================
+MUTATION PROOF (b1) — revert the task.completed terminal-flush guard
+  mutation:  `await this.flushAndDropDeltaStream(doneStreamKey);`
+          -> `this.assemblingMessages.delete(doneStreamKey);`   (pre-fix line)
+================================================================================
+mutated-file sha256 (throwaway copy):
+  7d7896f2effa991e671b78524135a55e4ae9823aca77e9ccab8214a0936800ed  worker-event.ingress.ts
+
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '终态 flush①'   # expect RED
+      ○ skipped 团队会话 permission（payload.taskId 空）→ team scope + payload 补 team:<id>/teamId（前端可见性与 scope 过滤放行）
+  ● WorkerEventIngress › message.part.delta → 流式累积落库 + 广播（方案 A worker 主动推） › 终态 flush①（task.completed）：回调前补写窗口内跳过的尾段，DB 内容不截断
+    expect(jest.fn()).toHaveBeenCalledTimes(expected)
+    Expected number of calls: 1
+    Received number of calls: 0
+    > 1207 |       expect(prisma.message.update).toHaveBeenCalledTimes(1);
+      1208 |       expect(prisma.message.update).toHaveBeenCalledWith({
+      at Object.<anonymous> (workers/worker-event.ingress.spec.ts:1207:37)
+Tests:       1 failed, 86 skipped, 87 total
+>>> JEST EXIT CODE = 1   (literal, captured without pipes)
+
+--- RESTORE: copy repo file back into throwaway, verify sha256 ---
+$ cp <repo>/server/src/workers/worker-event.ingress.ts <throwaway>/src/workers/worker-event.ingress.ts
+$ sha256sum <throwaway>/src/workers/worker-event.ingress.ts
+  ecdb73c91af976161d7b0443dea97c0fc601b1f7c61393b1e55797c413279b68  src/workers/worker-event.ingress.ts
+  (== source-of-truth sha256 => byte-identical restore)
+
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '终态 flush①'   # expect GREEN
+      ✓ 终态 flush①（task.completed）：回调前补写窗口内跳过的尾段，DB 内容不截断 (3 ms)
+Tests:       86 skipped, 1 passed, 87 total
+>>> JEST EXIT CODE = 0
+
+================================================================================
+MUTATION PROOF (b2) — revert the agent.status{error} (D1) flush guard
+  mutation:  `await this.flushAndDropDeltaStream(errorStreamKey);`
+          -> `this.assemblingMessages.delete(errorStreamKey);`   (pre-fix line)
+================================================================================
+mutated-file sha256 (throwaway copy):
+  5892312ab3558fb611910e43c2cd593ca3ae28baf39546d30185d661ae817c3a  worker-event.ingress.ts
+
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '终态 flush②'   # expect RED
+  ● WorkerEventIngress › message.part.delta → 流式累积落库 + 广播（方案 A worker 主动推） › 终态 flush②（agent.status{error} D1 路径）：失效前补写尾段，且不覆盖已 failed 行
+    expect(received).toBe(expected) // Object.is equality
+    Expected: 1
+    Received: 0
+    > 1303 |       expect(updatesWhenErrorEmitted).toBe(1);
+      1304 |       expect(prisma.message.update).toHaveBeenCalledTimes(1);
+      1305 |       expect(prisma.message.update).toHaveBeenCalledWith({
+      at Object.<anonymous> (workers/worker-event.ingress.spec.ts:1303:39)
+Tests:       1 failed, 86 skipped, 87 total
+>>> JEST EXIT CODE = 1
+
+--- RESTORE + sha256 verify ---
+$ sha256sum <throwaway>/src/workers/worker-event.ingress.ts
+  ecdb73c91af976161d7b0443dea97c0fc601b1f7c61393b1e55797c413279b68  src/workers/worker-event.ingress.ts   (== source of truth)
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '终态 flush②'   # expect GREEN
+      ✓ 终态 flush②（agent.status{error} D1 路径）：失效前补写尾段，且不覆盖已 failed 行 (4 ms)
+Tests:       86 skipped, 1 passed, 87 total
+>>> JEST EXIT CODE = 0
+
+================================================================================
+MUTATION PROOF (b3) — revert the D2 invalidateDeltaStream guarded flush
+  mutation:  `if (!entry?.dirty) { return; }`  ->  `if (entry) { return; }`
+              (i.e. never flush on the watchdog/stale-row sweep path)
+================================================================================
+mutated-file sha256 (throwaway copy):
+  cae900d5cbada00405984dd3e64137badd3fe509e79501f6ce3b10ccbe31d44e  worker-event.ingress.ts
+
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '终态 flush③'   # expect RED
+  ● WorkerEventIngress › message.part.delta → 流式累积落库 + 广播（方案 A worker 主动推） › 终态 flush③（D2 判死清扫 invalidateDeltaStream）：补写尾段且带 status=processing 守卫（不覆盖已 failed 行）
+    expect(jest.fn()).toHaveBeenCalledTimes(expected)
+    Expected number of calls: 1
+    Received number of calls: 0
+    > 1395 |       expect(prisma.message.updateMany).toHaveBeenCalledTimes(1);
+      1396 |       expect(prisma.message.updateMany).toHaveBeenCalledWith({
+      at Object.<anonymous> (workers/worker-event.ingress.spec.ts:1395:41)
+Tests:       1 failed, 86 skipped, 87 total
+>>> JEST EXIT CODE = 1
+
+--- RESTORE + sha256 verify ---
+$ sha256sum <throwaway>/src/workers/worker-event.ingress.ts
+  ecdb73c91af976161d7b0443dea97c0fc601b1f7c61393b1e55797c413279b68  src/workers/worker-event.ingress.ts   (== source of truth)
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '终态 flush③'   # expect GREEN
+      ✓ 终态 flush③（D2 判死清扫 invalidateDeltaStream）：补写尾段且带 status=processing 守卫（不覆盖已 failed 行） (3 ms)
+Tests:       86 skipped, 1 passed, 87 total
+>>> JEST EXIT CODE = 0
+
+================================================================================
+MUTATION PROOF (c) — invert the eviction-flush guard (mid-stream-MISS hazard)
+  mutation:  `if (!entry.dirty) { return; }`  ->  `if (entry.dirty) { return; }`
+              (i.e. a dirty entry is dropped WITHOUT flushing -> next same-key delta
+               MISSes and re-reads a DB row that is missing the un-flushed middle)
+================================================================================
+mutated-file sha256 (throwaway copy):
+  caa5f8ad183d08e72c265c746b7b99661bc7c92e4424f9ad5144a0c202e356b1  worker-event.ingress.ts
+
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '中段不丢失'   # expect RED
+FAIL src/workers/worker-event.ingress.spec.ts
+    message.part.delta → 流式累积落库 + 广播（方案 A worker 主动推）
+    session.updated → 更新 Session.status + emit
+    判死 watchdog 活动源（onSessionActivity + sessionActivity 刷新）
+    session.question / session.permission → AgentQuestion 落库 + emit AGENT_QUESTION
+    Todo7 ingress 收敛 team-only（delta/question/completed）
+  ● WorkerEventIngress › message.part.delta → 流式累积落库 + 广播（方案 A worker 主动推） › 中段不丢失（淘汰路径）：缓存超限淘汰前先 flush 未落库尾段，同键 delta MISS 回读到全量
+    expect(received).toEqual(expected) // deep equality
+    - Expected  - 6
+    + Received  + 1
+    @@ -3,13 +3,8 @@
+            "synthetic": false,
+            "text": "V0",
+            "type": "text",
+          },
+    -     Object {
+    -       "synthetic": false,
+    -       "text": "V1",
+    -       "type": "text",
+    -     },
+    -   "text": "V0V1",
+    +   "text": "V0",
+      }
+    > 1501 |       expect((rows.get('m_evict_1') as Row).content).toEqual({
+      1504 |           { type: 'text', text: 'V0', synthetic: false },
+      at Object.<anonymous> (workers/worker-event.ingress.spec.ts:1501:54)
+Tests:       1 failed, 86 skipped, 87 total
+Ran all test suites matching /src\/workers\/worker-event.ingress.spec.ts/i with tests matching "中段不丢失".
+>>> JEST EXIT CODE = 1
+>>> NOTE: the diff above IS the hazard materialising — with the guard inverted the
+          DB row stays at text "V0"; the whole "V1" chunk is missing from the
+          row the next MISS re-reads, i.e. the middle of the message is dropped.
+
+--- RESTORE + sha256 verify ---
+$ sha256sum <throwaway>/src/workers/worker-event.ingress.ts
+  ecdb73c91af976161d7b0443dea97c0fc601b1f7c61393b1e55797c413279b68  src/workers/worker-event.ingress.ts   (== source of truth)
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '中段不丢失'   # expect GREEN
+      ✓ 中段不丢失（淘汰路径）：缓存超限淘汰前先 flush 未落库尾段，同键 delta MISS 回读到全量 (16 ms)
+Tests:       86 skipped, 1 passed, 87 total
+>>> JEST EXIT CODE = 0
+
+================================================================================
+MUTATION PROOF (a, bonus) — disable the throttle itself
+  mutation:  `< DELTA_PERSIST_INTERVAL_MS` -> `< 0`  (every delta writes again)
+================================================================================
+mutated-file sha256 (throwaway copy):
+  cde210b427df5bb3f85f47daa84c135479539e8dae649586d9be603cab73cf59  worker-event.ingress.ts
+
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '节流：窗口内'   # expect RED
+  ● WorkerEventIngress › message.part.delta → 流式累积落库 + 广播（方案 A worker 主动推） › 节流：窗口内 N 个 delta 至多 1 次落库，但每个 delta 都广播一帧（帧内容=到该 delta 为止的全量累积）
+    expect(jest.fn()).not.toHaveBeenCalled()
+    Expected number of calls: 0
+    Received number of calls: 9
+    1: {"data": {"content": {"parts": [{"synthetic": false, "text": "A", "type": "text"}, {"synthetic": false, "text": "B", "type": "text"}], "text": "AB"}}, "where": {"id": "m_thr"}}
+    2: {"data": {"content": {"parts": [{"synthetic": false, "text": "A", "type": "text"}, {"synthetic": false, "text": "B", "type": "text"}, {"synthetic": false, "text": "C", "type": "text"}], "text": "ABC"}}, "where": {"id": "m_thr"}}
+    3: {"data": {"content": {"parts": [{"synthetic": false, "text": "A", "type": "text"}, {"synthetic": false, "text": "B", "type": "text"}, {"synthetic": false, "text": "C", "type": "text"}, {"synthetic": false, "text": "D", "type": "text"}], "text": "ABCD"}}, "where": {"id": "m_thr"}}
+      1098 |       expect(prisma.message.create).toHaveBeenCalledTimes(1);
+    > 1099 |       expect(prisma.message.update).not.toHaveBeenCalled();
+      1100 |       expect(writtenContents).toHaveLength(1);
+      at Object.<anonymous> (workers/worker-event.ingress.spec.ts:1099:41)
+Tests:       1 failed, 86 skipped, 87 total
+>>> JEST EXIT CODE = 1   (9 full-row writes for 9 in-window deltas = the old amplifier)
+
+--- RESTORE + sha256 verify ---
+$ sha256sum <throwaway>/src/workers/worker-event.ingress.ts
+  ecdb73c91af976161d7b0443dea97c0fc601b1f7c61393b1e55797c413279b68  src/workers/worker-event.ingress.ts   (== source of truth)
+$ npx jest src/workers/worker-event.ingress.spec.ts -t '节流：窗口内'   # expect GREEN
+      ✓ 节流：窗口内 N 个 delta 至多 1 次落库，但每个 delta 都广播一帧（帧内容=到该 delta 为止的全量累积） (5 ms)
+Tests:       86 skipped, 1 passed, 87 total
+>>> JEST EXIT CODE = 0
+
+
+--------------------------------------------------------------------------------
+QUANTIFICATION — representative 50-delta stream, measured on the REAL ingress
+--------------------------------------------------------------------------------
+Method: THROWAWAY-ONLY harness src/workers/measure-delta-amp.spec.ts (verified absent
+from the repo: `find . -name measure-delta-amp.spec.ts -not -path "*/node_modules/*"`
+returns nothing). It drives the real WorkerEventIngress with a byte-accounting prisma
+mock: 50 deltas, each adding one 20,000-char text part (final row ~2.0 MB; measured
+production row is ~1.25 MB/row so these absolute numbers are CONSERVATIVE), the fake
+clock steps 1000/RATE ms per delta so the throttle window is exercised realistically,
+then a task.completed terminal flush. BEFORE = throttle disabled in the throwaway copy.
+
+### rate = 7 deltas/s (window = 1000 ms => 7 deltas coalesced per write)
+
+  BEFORE (throttle OFF) raw console.log:
+    dbWrites=50  messageUpdateCalls=49  totalBytesWritten=51057150 (48.692 MB)  sseBroadcastFrames=50
+    writeTrace (t_ms, bytes) = [[0,40065],[143,80109],[286,120153],[429,160197],[571,200241],[714,240285],[857,280329],[1000,320373],[1143,360417],[1286,400461],[1429,440505],[1571,480549],[1714,520593],[1857,560637],[2000,600681],[2143,640725],[2286,680769],[2429,720813],[2571,760857],[2714,800901],[2857,840945],[3000,880989],[3143,921033],[3286,961077],[3429,1001121],[3571,1041165],[3714,1081209],[3857,1121253],[4000,1161297],[4143,1201341],[4286,1241385],[4429,1281429],[4571,1321473],[4714,1361517],[4857,1401561],[5000,1441605],[5143,1481649],[5286,1521693],[5429,1561737],[5571,1601781],[5714,1641825],[5857,1681869],[6000,1721913],[6143,1761957],[6286,1802001],[6429,1842045],[6571,1882089],[6714,1922133],[6857,1962177],[7000,2002221]]
+
+  AFTER (throttle ON) raw console.log:
+    dbWrites=8  messageUpdateCalls=7  totalBytesWritten=8169144 (7.791 MB)  sseBroadcastFrames=50
+    writeTrace (t_ms, bytes) = [[0,40065],[1000,320373],[2000,600681],[3000,880989],[4000,1161297],[5000,1441605],[6000,1721913],[7000,2002221]]
+
+  deltas                                  50                50
+  message.update calls                    49               7
+  total bytes written to messages         51057150         8169144
+                                           (48.692 MB)          (7.791 MB)
+  SSE MESSAGE_PART_DELTA frames           50                50   <- UNCHANGED (one frame per delta)
+  write-count reduction                                       6.25x
+  byte reduction                                                 6.25x
+
+### rate = 35 deltas/s (window = 1000 ms => 35 deltas coalesced per write)
+
+  BEFORE (throttle OFF) raw console.log:
+    dbWrites=50  messageUpdateCalls=49  totalBytesWritten=51057150 (48.692 MB)  sseBroadcastFrames=50
+    writeTrace (t_ms, bytes) = [[0,40065],[29,80109],[57,120153],[86,160197],[114,200241],[143,240285],[171,280329],[200,320373],[229,360417],[257,400461],[286,440505],[314,480549],[343,520593],[371,560637],[400,600681],[429,640725],[457,680769],[486,720813],[514,760857],[543,800901],[571,840945],[600,880989],[629,921033],[657,961077],[686,1001121],[714,1041165],[743,1081209],[771,1121253],[800,1161297],[829,1201341],[857,1241385],[886,1281429],[914,1321473],[943,1361517],[971,1401561],[1000,1441605],[1029,1481649],[1057,1521693],[1086,1561737],[1114,1601781],[1143,1641825],[1171,1681869],[1200,1721913],[1229,1761957],[1257,1802001],[1286,1842045],[1314,1882089],[1343,1922133],[1371,1962177],[1400,2002221]]
+
+  AFTER (throttle ON) raw console.log:
+    dbWrites=3  messageUpdateCalls=2  totalBytesWritten=3483891 (3.322 MB)  sseBroadcastFrames=50
+    writeTrace (t_ms, bytes) = [[0,40065],[1000,1441605],[1428.6,2002221]]
+
+  deltas                                  50                50
+  message.update calls                    49               2
+  total bytes written to messages         51057150         3483891
+                                           (48.692 MB)          (3.322 MB)
+  SSE MESSAGE_PART_DELTA frames           50                50   <- UNCHANGED (one frame per delta)
+  write-count reduction                                       16.67x
+  byte reduction                                                 14.66x
+
+ANALYTICAL CROSS-CHECK (matches the measured write traces exactly):
+  AFTER writes land at delta k = 1, 1+R, 1+2R, ... plus the terminal flush.
+    R=7  -> k = 1,8,15,22,29,36,43,50        => 8 writes, bytes = (1+8+15+22+29+36+43+50)*40045
+    R=35 -> k = 1,36,50                      => 3 writes, bytes = (1+36+50)*40045
+  BEFORE is rate-independent in write count: EVERY delta writes (quadratic bytes).
+
+BINLOG EXTRAPOLATION (row-based binlog records the whole updated row, so binlog
+volume is directly proportional to the bytes measured above):
+  Measured production binlog = ~20-30 GB/hour (BEFORE behaviour).
+  Byte-reduction factor measured = 6.25x (at 7/s) ... 14.66x (at 35/s) for a 50-delta
+  stream; asymptotically (long streams) the factor converges to the delta rate R,
+  because BEFORE bytes ~ d*N^2/2 while AFTER bytes ~ d*N^2/(2R).
+  => binlog AFTER ~= 20-30 GB/hour / 6.25 (worst case, 7/s) = 3.2 - 4.8 GB/hour
+     binlog AFTER ~= 20-30 GB/hour / 14.66 (at 35/s)            = 1.4 - 2.0 GB/hour
+  Headroom on the 231 GB free NFS volume:
+     BEFORE: 231 GB / (20-30 GB/h)              = 8 - 11 h   (matches the incident)
+     AFTER : 231 GB / (1.4 - 4.8 GB/h)          = 48 - 165 h  (2 - 7 days)
+  Side effect (same mechanism, not claimed as measured): ~6-15x fewer full-row
+  rewrites also means ~6-15x less undo-log/free-list churn on messages.ibd.
+
+
+--------------------------------------------------------------------------------
+VERIFY 3: git diff -U0 -- src/workers/worker-event.ingress.ts | grep '^@@'
+         with per-hunk justification (26 hunks, ALL NEW LANE — none pre-existing)
+--------------------------------------------------------------------------------
+$ git diff -U0 -- src/workers/worker-event.ingress.ts | grep '^@@'
+
+PRE-EXISTING LANE WORK: none. repo HEAD (2689d37) == a78d3b9 for this file (proved
+above with `git diff --stat a78d3b9 HEAD -- <file>` = empty), and the file was NOT in
+the pre-existing dirty set (that set is server/src/platform-mcp/* and
+web/src/components/chat/msg-parts.tsx). Every hunk below is this task's delta
+write-amplification fix.
+
+  HUNK JUSTIFICATIONS (old→new line ranges; every one is this task)
+  @@ -158,2 +158,2   ASSEMBLING_CACHE_MAX doc comment: eviction is no longer a silent
+                     drop — it now flushes the un-flushed tail first. doc-only.
+  @@ -161,0 +162,24  NEW: exported `DELTA_PERSIST_INTERVAL_MS = 1000` + rationale
+                     (required named constant: incident root cause + why 1000ms
+                     against 7-35 deltas/s and REST-history staleness).
+  @@ -178,0 +203,18  NEW: `AssemblingEntry` type — the cache item becomes the throttle
+                     ledger (parts/dirty/lastFlushAt/row).
+  @@ -192,2 +234,3   Class-level doc: message.part.delta semantics now say "bounded-rate"
+                     persistence with terminal/eviction flush.
+  @@ -224 +267      `assemblingMessages` field type → `AssemblingEntry`.
+  @@ -227,0 +271,4  + field doc: dirty entries are never silently dropped.
+  @@ -229,4 +276    field declaration collapsed to one line (new type name).
+  @@ -472,0 +517,3  handleAgentStatus: +3 comment lines explaining flush-before-
+                     invalidate on the D1 error path.
+  @@ -481 +528      handleAgentStatus D1 path: `assemblingMessages.delete(key)` →
+                     `await this.flushAndDropDeltaStream(key)`  [GUARANTEED FINAL FLUSH]
+  @@ -540,0 +588,4  handleMessagePartDelta doc: + bounded-rate persistence paragraph.
+  @@ -541,0 +593,2  handleMessagePartDelta doc: + "every delta still broadcasts" note.
+  @@ -653,0 +707,23 handleMessagePartDelta cache-HIT branch: hoist `content` + insert the
+                     throttle branch (skip DB write, keep frame)  [THROTTLE/COALESCE]
+  @@ -656,6 +732,8 cache-HIT write branch: entry rebuilt with dirty=false /
+                     lastFlushAt=Date.now() / row=<db row>.
+  @@ -663 +740,0   cache-HIT: removed the old `cacheAssembled(messageId, parts)` call
+                     (superseded by the two entry-shaped calls above).
+  @@ -678,0 +756,3 cache-HIT: + comment that the MISS branch is deliberately unthrottled.
+  @@ -711 +791,7   MISS branch (existing processing row): entry rebuilt with the ledger.
+  @@ -732 +818,7   MISS branch (create): entry rebuilt with the ledger.
+  @@ -848,6 +940,2 cacheAssembled: signature (streamKey, entry) + eviction now routes to
+                     flushEvictedStream  [STALENESS HAZARD FIX]
+  @@ -856,0 +945   (same statement, second line of the rewritten method.)
+  @@ -857,0 +947,71 NEW: `flushAssembled` (guarded/unguarded full-row write) +
+                     `flushAndDropDeltaStream` (ordered terminal flush inside the
+                     stream key's exclusive chain)  [GUARANTEED FINAL FLUSH]
+  @@ -858,0 +1019,19 NEW: `flushEvictedStream` (flush-before-evict, guarded, on the
+                     evicted key's own chain)  [STALENESS HAZARD FIX]
+  @@ -859,0 +1039,14 (continuation of the above helper block.)
+  @@ -873,0 +1067,7 invalidateDeltaStream doc: + flush semantics for the D2 sweep path.
+  @@ -879 +1079,19 invalidateDeltaStream body: plain delete → guarded flush on the
+                     stream key's chain  [GUARANTEED FINAL FLUSH, D2]
+  @@ -889,2 +1107,7 handleTaskCompleted doc: flush-before-invalidate rationale.
+  @@ -899 +1122    handleTaskCompleted: `assemblingMessages.delete(key)` →
+                     `await this.flushAndDropDeltaStream(key)`  [GUARANTEED FINAL FLUSH]
+
+--------------------------------------------------------------------------------
+FILES CHANGED (raw) + SSE WIRE SHAPE UNCHANGED PROOF
+--------------------------------------------------------------------------------
+$ git status --porcelain -- server/src/workers/ web/src/components/chat/
+ M server/src/workers/worker-event.ingress.spec.ts
+ M server/src/workers/worker-event.ingress.ts
+ M web/src/components/chat/msg-parts.tsx
+
+$ git diff --stat (my 2 files only)
+ server/src/workers/worker-event.ingress.spec.ts | 528 +++++++++++++++++++++++-
+ server/src/workers/worker-event.ingress.ts      | 281 +++++++++++--
+ 2 files changed, 778 insertions(+), 31 deletions(-)
+
+Untouched by rule (c) — server/src/realtime/* and server/prisma/*:
+  (empty above = untouched)
+
+SSE emit call site (UNCHANGED signature/shape — same event, same payload keys,
+same channel scope); only WHERE `row` comes from differs on throttled deltas:
+835-      EVENT_TYPES.MESSAGE_PART_DELTA,
+836-      { message: this.toMessageDto(row), delta: kept },
+837-      { type: 'channel', id: channelId },
+838-    );
+--
+
+Public surface added to worker-event.ingress.ts (checked against callers):
+server/src/chat/worker-dispatcher.ts:2672:      this.ingress.invalidateDeltaStream(cleanupChannel.id, target.agentId);
+  -> signature unchanged (channelId, agentId): void ; dispatcher needs no edit
+
+--------------------------------------------------------------------------------
+TEST INVENTORY (new cases, run counts)
+--------------------------------------------------------------------------------
+      ✓ 节流：窗口内 N 个 delta 至多 1 次落库，但每个 delta 都广播一帧（帧内容=到该 delta 为止的全量累积） (1 ms)
+      ✓ 终态 flush①（task.completed）：回调前补写窗口内跳过的尾段，DB 内容不截断 (1 ms)
+      ✓ 终态 flush②（agent.status{error} D1 路径）：失效前补写尾段，且不覆盖已 failed 行
+      ✓ 终态 flush③（D2 判死清扫 invalidateDeltaStream）：补写尾段且带 status=processing 守卫（不覆盖已 failed 行） (1 ms)
+      ✓ 中段不丢失（淘汰路径）：缓存超限淘汰前先 flush 未落库尾段，同键 delta MISS 回读到全量 (5 ms)
+
+Modified pre-existing cases (clock-stepped so their original intent is preserved
+under the new throttle; no assertion weakened):
+  - '稳态 delta 命中组装态缓存...'            (+tickPersistWindow between the 2 deltas)
+  - 'D1 回归：agent.status{error}...'         (+useFakeClock/tickPersistWindow)
+  - 'D2 对照组（未失效时的腐败形态）...'       (+useFakeClock/tickPersistWindow)
+  - '并发 delta（worker 不 await 连发）...'    (useAutoAdvancingClock; concurrency kept)
+  - prisma mock: + message.updateMany
+
+Throwaway-only artefacts (NOT in the repo, verified absent):
+  (empty = absent)
+$ ls throwaway harness root
+measure-delta-amp.spec.ts
+session-lifecycle.spec.ts
+worker-code-version.spec.ts
+worker-event.ingress.spec.ts
+worker-events.controller.spec.ts
+worker-token.guard.spec.ts
+worker-update-state.spec.ts
+worker.client.spec.ts
+workers.controller.spec.ts
+workers.service.spec.ts
+
+================================================================================
+END OF EVIDENCE
+================================================================================
+
+--------------------------------------------------------------------------------
+LINT NOTE (honest, measured) — npx eslint on my 2 files
+--------------------------------------------------------------------------------
+$ npx eslint src/workers/worker-event.ingress.ts src/workers/worker-event.ingress.spec.ts
+  MINE   : impl 133 errors / 4 warnings   spec 2 errors / 0 warnings
+  HEAD   : impl  94 errors / 4 warnings   spec 2 errors / 0 warnings
+            (measured by linting `git show HEAD:<file>` copies)
+  => the only NEW violations are prettier/prettier INDENTATION inside my new code.
+  Lint is NOT in this task's gate list and the file is 94 errors deep at HEAD.
+  The new-code lines follow the file's EXISTING conventions deliberately:
+    - `runPartDeltaExclusive(
+  streamKey,
+  async () => {` arg-per-line style
+      exists verbatim at HEAD (line 642-644 of the HEAD version);
+    - the spec's 2 prettier errors are the same one-line
+      `chatChannel.findUnique.mockResolvedValue({ id: 'c_dm', type: 'private' });`
+      that appears twice at HEAD.
+  Running `prettier --write` would re-indent ~140 PRE-EXISTING lines inside the
+  same exclusive block and make the diff unreviewable, so it was deliberately NOT
+  run. No unused-variable / correctness lint rule was introduced (the 4 impl
+  warnings, extractConclusionParts + ActivityCallback, are pre-existing at HEAD).
+
+--------------------------------------------------------------------------------
+SUMMARY
+--------------------------------------------------------------------------------
+  root cause removed : per-delta FULL-row write to `messages` on the cache-HIT path
+  throttle           : DELTA_PERSIST_INTERVAL_MS = 1000 (one write per second per
+                       stream key; 7..35 deltas coalesced per write)
+  broadcast          : UNCHANGED — one MESSAGE_PART_DELTA frame per delta, same
+                       event / payload keys / channel scope; on throttled deltas the
+                       message field is synthesised from the last written row + the
+                       in-memory assembled state (i.e. exactly what the next write
+                       persists)
+  final flush        : task.completed, agent.status{error} (ordered, unguarded
+                       message.update, awaited BEFORE notify/emit) and
+                       invalidateDeltaStream / eviction (guarded updateMany with
+                       status=processing so a failed/removed row is never overwritten)
+  staleness hazard   : flush-before-evict on the evicted key's own exclusive chain
+                       => a later same-key MISS can never read a row missing the
+                       un-flushed middle; residual exposure is process restart only,
+                       bounded to <1 s and the leftover row stays status=processing
+                       so the D2 sweep fails it instead of truncating silently
+  measured           : 50-delta stream, real ingress: 49 -> 7 message.update calls at
+                       7/s and 49 -> 2 at 35/s; bytes 51,057,150 -> 8,169,144 (7/s)
+                       and -> 3,483,891 (35/s); SSE frames 50 -> 50 in both modes
+  binlog             : 20-30 GB/h -> ~1.4-4.8 GB/h  =>  8-11 h headroom becomes
+                       48-165 h on the 231 GB free NFS volume
+  gates              : JEST=0 (979/979, 23 suites), TSC=0, 5 mutation proofs RED with
+                       sha256-verified restore + GREEN, HEAD asserted (see note at top)
+================================================================================
+END OF EVIDENCE
+================================================================================

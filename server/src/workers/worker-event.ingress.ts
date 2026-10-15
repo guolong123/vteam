@@ -155,9 +155,33 @@ const MESSAGE_ID_PREFIX = 'm';
 /** 内存去重窗口上限（D4：seq 单调递增下保留最近 N 条即可覆盖连接内有序重发）。 */
 const DEDUP_WINDOW = 1000;
 
-/** message.part.delta 组装态缓存上限（有界；超限淘汰最旧仅触发一次 findFirst
- *  MISS 回退，不影响正确性——未命中恒以 DB 为准重新定位）。 */
+/** message.part.delta 组装态缓存上限（有界；超限淘汰最旧——淘汰前会先把该条目
+ *  未落库的尾段 flush 掉，见 cacheAssembled/flushEvictedStream）。 */
 const ASSEMBLING_CACHE_MAX = 256;
+
+/**
+ * message.part.delta **落库节流窗口**（毫秒）：同一流式键在该窗口内至多落库一次。
+ *
+ * 事故背景（生产 OOM + 磁盘打满双事故）：worker 以 7-35 delta/s 上送，旧实现对
+ * **每个** delta 都把全量累积 content 写回 messages 行 —— 行归档增长，单行实测
+ * 1.25MB/行；MySQL 行格式 binlog 每次记录整个更新后的行 → binlog 20-30GB/h
+ * → 共享 NFS 983GB 被打满 → mysqld `posix_fallocate ... error 28`(ENOSPC)
+ * crash-loop → 全站 HTTP 500。
+ *
+ * 为什么取 1000ms：
+ * - 对观察到的 7-35 delta/s：最松散 35 个增量合并成 1 次写（写次数 ÷35）、
+ *   最密 7 个增量合并成 1 次写（写次数 ÷7），两个量级都显著下降；
+ * - SSE 广播**不受影响**——每个 delta 仍广播一帧（payload 由内存组装态合成，
+ *   与逐 delta 落库时的帧同形），前端流式体验逐字不变；
+ * - REST 历史最多滞后 1s：只有流式中刷新页面才可能观察到，肉眼不可感知；
+ * - 进程崩溃的最坏暴露 = 最近 1s 的增量；且残留行仍为 status=processing，
+ *   会被 D2 清扫标 failed（不会把截断内容当成完整消息呈现）。
+ *
+ * 节流只影响**稳态写频率**，不影响最终一致性：终态（task.completed /
+ * agent.status{error} / dispatcher 判死清扫钩子 invalidateDeltaStream）与淘汰
+ * （ASSEMBLING_CACHE_MAX）都会强制 flush 未落库尾段。
+ */
+export const DELTA_PERSIST_INTERVAL_MS = 1000;
 
 /** Session.status 允许的流转值（SESSION_STATUS.created 为 bind 前初始态，worker 不回流该值）。 */
 const SESSION_STATUS_ALLOWED: Set<string> = new Set(
@@ -177,6 +201,24 @@ type MessageRow = {
 };
 
 /**
+ * message.part.delta 组装态缓存项 = messages 行的内存镜像 + 节流账本。
+ *
+ * `parts` 是**真理源**（每个 delta 合并后的最新态）；DB 行可能滞后 `parts`
+ * （节流跳过的增量）。`dirty` 标记滞后的存在，`lastFlushAt` 是节流闸门，
+ * `row` 是上次成功落库返回的行（节流跳过的 delta 靠它合成广播帧的 DB 侧字段）。
+ */
+type AssemblingEntry = {
+  messageId: string;
+  parts: Array<Record<string, unknown>>;
+  /** true = 有尚未落库的增量（节流跳过 / 上次写失败）→ 淘汰与终态必须 flush。 */
+  dirty: boolean;
+  /** 上次成功落库的 Date.now()（DELTA_PERSIST_INTERVAL_MS 闸门基准）。 */
+  lastFlushAt: number;
+  /** 上次成功落库返回的行（广播 DTO 的 DB 侧字段来源）。 */
+  row: MessageRow;
+};
+
+/**
  * Worker 事件回流入口（T9，架构决策 D1 全 push 三通道之事件回调）。
  *
  * 职责边界（D5 铁律，防双写）：
@@ -189,8 +231,9 @@ type MessageRow = {
  * - worker.heartbeat → 忽略（心跳走单独端点 POST /workers/:id/heartbeat）
  * - instance.created → 仅日志确认（TaskGroupInstance 已在 T12 bindSessionToWorker 时落库）
  * - session.updated → 更新 Session.status + emit `session.updated`（RealtimeService 先落库后广播）
- * - message.part.delta → 流式中间态累积落库（processing 消息，private / team_group
- *   来源均写目标私聊频道的全量 parts）+ emit `message.part.delta`（scope=channel）
+ * - message.part.delta → 流式中间态**有界频率**累积落库（processing 消息，private /
+ *   team_group 来源均写目标私聊频道的全量 parts；同一流式键 DELTA_PERSIST_INTERVAL_MS
+ *   内至多写一次，尾段由终态/淘汰强制 flush）+ emit `message.part.delta`（scope=channel）
  * - agent.status → emit `agent.loading` / `agent.error`（映射 phase/status/error）+ onAgentStatus 回调
  * - task.completed → 最高优先级：解析 payload → onTaskCompleted 回调（T10 注册做
  *   落库+广播+emitFinal）；Ingress 自身不 emit task.completed
@@ -221,15 +264,16 @@ export class WorkerEventIngress {
 
   /**
    * message.part.delta 组装态缓存：流式键 `channelId|agentId` → 当前 processing 消息的
-   * `{messageId, parts}`（避免每 delta 重读整条消息历史导致的 O(N²) 内存放大）。
+   * `AssemblingEntry`（避免每 delta 重读整条消息历史导致的 O(N²) 内存放大）。
    * 命中即用内存组装态增量合并，跳过 message.findFirst 全量 content 回读 + 从 DB
    * 重新推导整条消息；未命中仍以 DB 为准（findFirst → create/update）。key 中的 channelId
    * 指**落库目标频道**（private 独白，见 resolveDeltaStreamKey）；task.completed 时按同键精准失效。
+   *
+   * 缓存项同时是节流账本：`dirty` 为 true 表示内存组装态领先 DB 行（窗口内跳过的增量）。
+   * 因此**带病条目绝不被静默丢弃**——淘汰前先 flush（见 cacheAssembled/flushEvictedStream），
+   * 否则下一条同键 delta 走 MISS 从 DB 回读时会丢掉未落库的中段。
    */
-  private readonly assemblingMessages = new Map<
-    string,
-    { messageId: string; parts: Array<Record<string, unknown>> }
-  >();
+  private readonly assemblingMessages = new Map<string, AssemblingEntry>();
 
   /** 会话最近输出活动时间（sessionId → Date.now()，空闲判死数据源）。
    *  仅 delta/task.completed/session.updated 三类「输出活动」刷新；agent.status
@@ -470,6 +514,9 @@ export class WorkerEventIngress {
       // 不失效则同频道同 agent 的用户重试首 delta 命中残留缓存，把已被
       // WorkerDispatcher.failTeamProcessingMessage 标 failed 的消息行 update
       // 成新内容（失败行被静默覆盖）。
+      // 节流后追加「先 flush 再失效」：窗口内跳过的增量只活在内存组装态里，失效前
+      // 必须补写，否则失败行被永久截断。本方法在 notify（dispatcher failMessage
+      // 标 failed）之前 await，顺序确定，用无守卫的 message.update。
       const errorStreamKey = await this.resolveDeltaStreamKey(
         this.str(payload.channelId),
         this.str(payload.sessionId),
@@ -478,7 +525,7 @@ export class WorkerEventIngress {
         payload.agentId,
       );
       if (errorStreamKey) {
-        this.assemblingMessages.delete(errorStreamKey);
+        await this.flushAndDropDeltaStream(errorStreamKey);
       }
       await this.realtime.emit(
         EVENT_TYPES.AGENT_ERROR,
@@ -538,7 +585,13 @@ export class WorkerEventIngress {
    *   （parts 追加 + text 重新拼接）；无 processing 消息 → 新建（status=processing）。
    *   Message 表无 sessionId 列，以 channelId+senderId 唯一定位——同一 agent 在频道内
    *   同时仅一条流式消息（历史教训：每 delta 新建消息会撑爆 DB，必须聚合累积）。
+   * - **落库频率有界**（DELTA_PERSIST_INTERVAL_MS）：稳态命中的 delta 在窗口内不写
+   *   messages，只更新内存组装态；DB 与内存的差由 `AssemblingEntry.dirty` 记账，终态
+   *   （task.completed / agent.status{error} / invalidateDeltaStream）与淘汰
+   *   （ASSEMBLING_CACHE_MAX）强制补写，故 DB 不会永久滞后。
    * - 广播 payload：`{message: toMessageDto(最新消息), delta: <本次新增 parts>}`，scope=channel。
+   *   **每个 delta 都广播**（节流只省 DB 写，不省帧）；窗口内跳过的 delta 用上次落库
+   *   返回的行 + 内存组装态合成 message 字段，与逐 delta 落库时的帧同形。
    */
   private async handleMessagePartDelta(dto: WorkerEventDto): Promise<boolean> {
     const raw = dto.payload as MessagePartDeltaPayload;
@@ -651,16 +704,40 @@ export class WorkerEventIngress {
             return null;
           }
           const merged = mergePartsById(cached.parts, kept);
+          const content = {
+            text: concatText(merged),
+            parts: merged,
+          } as Prisma.InputJsonValue;
+          // 节流：窗口内至多落库一次。跳过的 delta 只更新内存组装态并置 dirty，
+          // 落库由「窗口到期后的下一次 delta / 终态 flush / 淘汰前 flush」补上
+          // ——DB 不会永久滞后于内存（见 flushAndDropDeltaStream / flushEvictedStream）。
+          if (Date.now() - cached.lastFlushAt < DELTA_PERSIST_INTERVAL_MS) {
+            this.cacheAssembled(streamKey, {
+              ...cached,
+              parts: merged,
+              dirty: true,
+            });
+            this.logger.debug(
+              `[ingress] message.part.delta(cached) 节流跳过落库 message=${cached.messageId} parts=${kept.length}（${DELTA_PERSIST_INTERVAL_MS}ms 窗口内，未落库尾段待 flush，workerId=${dto.workerId}）`,
+            );
+            // 广播一帧都不能少：DB 侧字段取上次落库返回的真实行，content 取内存组装态
+            // （= 下一次落库会写的内容）→ 与逐 delta 落库时的帧同形，前端逐字不变。
+            return {
+              ...cached.row,
+              content: content as Prisma.JsonValue,
+            };
+          }
           const updated = await this.prisma.message.update({
             where: { id: cached.messageId },
-            data: {
-              content: {
-                text: concatText(merged),
-                parts: merged,
-              } as Prisma.InputJsonValue,
-            },
+            data: { content },
           });
-          this.cacheAssembled(streamKey, cached.messageId, merged);
+          this.cacheAssembled(streamKey, {
+            messageId: cached.messageId,
+            parts: merged,
+            dirty: false,
+            lastFlushAt: Date.now(),
+            row: updated,
+          });
           this.logger.debug(
             `[ingress] message.part.delta(cached) 累积更新 message=${cached.messageId} parts=${kept.length}（workerId=${dto.workerId}）`,
           );
@@ -676,6 +753,9 @@ export class WorkerEventIngress {
           orderBy: { createdAt: 'desc' },
           select: { id: true, content: true },
         });
+        // MISS 分支**不节流、必落库**：它每进程每条流只走一次（重建缓存项 + 广播需要
+        // 一行完整 DB 行），且它是「缓存丢失后以 DB 为权威重新定位」的唯一入口——
+        // 这里必须写，才能保证刚回读的累积内容与本次增量一起成为新的权威。
         // 只含 step-start/step-finish 等前端不渲染片段的增量：
         // - 无 processing 行 → 不建行（否则消息开始时就落一条 UI 上的空消息）；
         // - 已有行 → 不追加（避免内容被噪声撑大、终态化后仍无可渲染内容）。
@@ -708,7 +788,13 @@ export class WorkerEventIngress {
               } as Prisma.InputJsonValue,
             },
           });
-          this.cacheAssembled(streamKey, hasExisting.id, merged);
+          this.cacheAssembled(streamKey, {
+            messageId: hasExisting.id,
+            parts: merged,
+            dirty: false,
+            lastFlushAt: Date.now(),
+            row: updated,
+          });
           this.logger.debug(
             `[ingress] message.part.delta 累积更新 message=${hasExisting.id} parts=${kept.length}（workerId=${dto.workerId}）`,
           );
@@ -729,7 +815,13 @@ export class WorkerEventIngress {
             status: MESSAGE_STATUS.processing,
           },
         });
-        this.cacheAssembled(streamKey, created.id, kept);
+        this.cacheAssembled(streamKey, {
+          messageId: created.id,
+          parts: kept,
+          dirty: false,
+          lastFlushAt: Date.now(),
+          row: created,
+        });
         this.logger.debug(
           `[ingress] message.part.delta 新建 processing message=${created.id} parts=${kept.length}（workerId=${dto.workerId}）`,
         );
@@ -845,18 +937,119 @@ export class WorkerEventIngress {
     return run;
   }
 
-  private cacheAssembled(
-    streamKey: string,
-    messageId: string,
-    parts: Array<Record<string, unknown>>,
-  ): void {
-    this.assemblingMessages.set(streamKey, { messageId, parts });
+  private cacheAssembled(streamKey: string, entry: AssemblingEntry): void {
+    this.assemblingMessages.set(streamKey, entry);
     if (this.assemblingMessages.size > ASSEMBLING_CACHE_MAX) {
       const oldest = this.assemblingMessages.keys().next().value;
       if (oldest !== undefined && oldest !== streamKey) {
+        const evicting = this.assemblingMessages.get(oldest);
         this.assemblingMessages.delete(oldest);
+        if (evicting) {
+          this.flushEvictedStream(oldest, evicting);
+        }
       }
     }
+  }
+
+  /**
+   * 把组装态**全量**写回 messages 行（补写节流窗口内跳过的尾段）。
+   *
+   * `guarded=true` 走 `updateMany` 且带 `status=processing` 守卫：行已被终态化
+   * （failed/sent）或已删除 → 0 行不写。用于**顺序不可控**的路径（淘汰前 flush /
+   * dispatcher 判死清扫钩子 invalidateDeltaStream）——那些调用方可能已经把行标了
+   * failed，无守卫补写会把已终态行覆盖成流式内容（D1/D2 同型腐败，有测例钳制）。
+   * `guarded=false` 走 `message.update`，调用方已保证先于 dispatcher 终态化
+   * （task.completed / agent.status{error} 都在 notify 回调之前 await 本 flush）。
+   *
+   * 返回值 = 是否真的写了行（guarded 时 count>0）。
+   */
+  private async flushAssembled(
+    entry: AssemblingEntry,
+    guarded: boolean,
+  ): Promise<boolean> {
+    const content = {
+      text: concatText(entry.parts),
+      parts: entry.parts,
+    } as Prisma.InputJsonValue;
+    if (guarded) {
+      const res = await this.prisma.message.updateMany({
+        where: { id: entry.messageId, status: MESSAGE_STATUS.processing },
+        data: { content },
+      });
+      return res.count > 0;
+    }
+    await this.prisma.message.update({
+      where: { id: entry.messageId },
+      data: { content },
+    });
+    return true;
+  }
+
+  /**
+   * 终态强制 flush + 失效组装态缓存（task.completed / agent.status{error} 两条有序终态路径）。
+   *
+   * 为什么必须 flush：节流窗口内跳过的 delta 只活在内存组装态里，DB 行停在上一次
+   * 落库的内容；终态不补写 → 用户消息在 DB 里被永久截断（SSE 帧是全的，但 REST
+   * 历史 / 刷新后少一截）。
+   *
+   * 顺序保证：整段跑在该流式键的串行链上——在途 delta 的写先落地，本 flush 才拿得到
+   * 最新组装态；失效（delete）也在链内完成，排队中的同键 delta 必然排在其后 MISS
+   * 回读，不会撞上「已 flush 未失效」的中间态。
+   */
+  private async flushAndDropDeltaStream(streamKey: string): Promise<void> {
+    await this.runPartDeltaExclusive(streamKey, async () => {
+      const entry = this.assemblingMessages.get(streamKey);
+      if (!entry) {
+        return;
+      }
+      if (entry.dirty) {
+        try {
+          await this.flushAssembled(entry, false);
+          this.logger.log(
+            `[ingress] 终态 flush 补写未落库尾段 message=${entry.messageId} parts=${entry.parts.length}（stream=${streamKey}）`,
+          );
+        } catch (err) {
+          // 落库失败不阻断终态流转（事件回流尽力而为）；缓存项仍按终态纪律失效，
+          // 防止后续 delta 命中并对已被 dispatcher 终态化的行 message.update。
+          this.logger.error(
+            `[ingress] 终态 flush 失败 message=${entry.messageId}（stream=${streamKey}）: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+      this.assemblingMessages.delete(streamKey);
+    });
+  }
+
+  /**
+   * 淘汰前 flush（ASSEMBLING_CACHE_MAX 有界淘汰的唯一安全出口）。
+   *
+   * 为什么必须 flush：节流让 DB 滞后于内存组装态，而 MISS 分支是**从 DB 回读**累积
+   * 内容再合并。带病（dirty）条目被静默丢弃 → 下一条同键 delta 走 MISS 时从缺了中段
+   * 的 DB 行继续合并 → 中段被永久丢弃（本任务要堵的第二个洞）。
+   *
+   * 为什么安全：整段跑在被淘汰键**自己**的串行链上——链尚未自清理前到达的同键 delta
+   * 会排在本 flush 之后，其 MISS 回读必然看到已补写的全量内容；链已自清理则说明 flush
+   * 早已落地。用 guarded（status=processing）写：该流若已被终态化/删除，补写 0 行，
+   * 绝不用流式内容覆盖已 failed 行。
+   */
+  private flushEvictedStream(streamKey: string, entry: AssemblingEntry): void {
+    if (!entry.dirty) {
+      return;
+    }
+    void this.runPartDeltaExclusive(streamKey, async () => {
+      try {
+        const persisted = await this.flushAssembled(entry, true);
+        this.logger.log(
+          `[ingress] 淘汰前 flush stream=${streamKey} message=${entry.messageId} parts=${entry.parts.length} persisted=${persisted}`,
+        );
+      } catch (err) {
+        // 写失败只记错误并放弃该尾段，**不**把条目放回缓存：那会让后续 delta 命中缓存后
+        // 对可能已被终态化的行 message.update，反而打开 D1/D2 腐败面。
+        this.logger.error(
+          `[ingress] 淘汰前 flush 失败（放弃未落库尾段）stream=${streamKey} message=${entry.messageId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    });
   }
 
   /**
@@ -871,12 +1064,37 @@ export class WorkerEventIngress {
    * 若缓存项残留，重试轮首 delta 命中它即对**已 failed / 已删除**的消息行 message.update
    * （与 D1 同型的 correctness 缺陷）。
    *
+   * 节流后的终态 flush：带病（dirty）条目被丢弃前先补写未落库尾段。本方法是**同步**钩子
+   * 且无法与调用方（worker-dispatcher stale-row sweep）的「标 failed / 删除」定序，故补写
+   * 用 guarded（status=processing）形式——行已终态则 0 行不写，绝不会把已 failed 行覆盖成
+   * 流式内容；补写跑在该键自己的串行链上，在途 delta 的写先落地、后续同键 delta 的 MISS
+   * 回读也看得到本次补写。写失败只记错误并放弃该尾段（不把条目放回缓存，理由同
+   * flushEvictedStream：避免后续 delta 命中缓存后 update 可能已终态的行）。
+   *
    * 刻意不含 partDeltaChains：该 Map 每条链尾 settle 后即自清理（runPartDeltaExclusive），
    * 不存在跨轮残留；且在途 delta 执行中删键会解除同一键的串行化，重新打开
    * findFirst→create 的 check-then-act 竞态（重复 processing 行）。
    */
   invalidateDeltaStream(channelId: string, agentId: string | null): void {
-    this.assemblingMessages.delete(`${channelId}|${agentId ?? ''}`);
+    const streamKey = `${channelId}|${agentId ?? ''}`;
+    const entry = this.assemblingMessages.get(streamKey);
+    this.assemblingMessages.delete(streamKey);
+    if (!entry?.dirty) {
+      return;
+    }
+    const captured = entry;
+    void this.runPartDeltaExclusive(streamKey, async () => {
+      try {
+        const persisted = await this.flushAssembled(captured, true);
+        this.logger.log(
+          `[ingress] 判死清扫 flush stream=${streamKey} message=${captured.messageId} parts=${captured.parts.length} persisted=${persisted}`,
+        );
+      } catch (err) {
+        this.logger.error(
+          `[ingress] 判死清扫 flush 失败（放弃未落库尾段）stream=${streamKey} message=${captured.messageId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    });
   }
 
   /**
@@ -886,8 +1104,13 @@ export class WorkerEventIngress {
    */
   private async handleTaskCompleted(dto: WorkerEventDto): Promise<boolean> {
     const raw = dto.payload as Record<string, unknown>;
-    // 终态事件：本轮流式已结束，精准失效其组装态缓存（同 resolveDeltaStreamKey 键）——
-    // 下一条流式首 delta 重新以 DB 定位，防止命中已终态化消息的 messageId 并 update 到 sent。
+    // 终态事件：本轮流式已结束，先补写未落库尾段再精准失效其组装态缓存（同
+    // resolveDeltaStreamKey 键）——下一条流式首 delta 重新以 DB 定位，防止命中已终态化
+    // 消息的 messageId 并 update 到 sent。
+    // 节流后追加「先 flush 再失效」（flushAndDropDeltaStream）：窗口内跳过的增量只在
+    // 内存组装态里，直接 delete 会把它们永久丢掉 → 用户消息在 DB 里被截断。本方法在
+    // notify（dispatcher 落库终态 + 广播 chat.message.new）之前 await，顺序确定，
+    // 用无守卫的 message.update。
     const doneStreamKey = await this.resolveDeltaStreamKey(
       this.str(raw.channelId),
       this.str(raw.sessionId),
@@ -896,7 +1119,7 @@ export class WorkerEventIngress {
       this.str(raw.agentId),
     );
     if (doneStreamKey) {
-      this.assemblingMessages.delete(doneStreamKey);
+      await this.flushAndDropDeltaStream(doneStreamKey);
     }
     // wave1 对齐：sessionId 统一经 resolvePlatformSessionId 归一（s_ 前缀透传；ses_ 前缀
     // opencode 会话 id 经 instanceRef 反查映射；查不到留空，由回调内 sessionId 反查 agentId

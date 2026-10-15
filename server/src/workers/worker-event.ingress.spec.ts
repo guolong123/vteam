@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import {
   AgentStatusPayload,
+  DELTA_PERSIST_INTERVAL_MS,
   SessionActivityPayload,
   TaskCompletedPayload,
   WorkerEventIngress,
@@ -39,7 +40,12 @@ describe('WorkerEventIngress', () => {
     };
     taskEvent: { create: jest.Mock };
     chatChannel: { findUnique: jest.Mock; findFirst: jest.Mock };
-    message: { findFirst: jest.Mock; create: jest.Mock; update: jest.Mock };
+    message: {
+      findFirst: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+    };
     agentQuestion: {
       findUnique: jest.Mock;
       create: jest.Mock;
@@ -70,6 +76,7 @@ describe('WorkerEventIngress', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
         update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       agentQuestion: {
         findUnique: jest.fn().mockResolvedValue(null),
@@ -174,6 +181,35 @@ describe('WorkerEventIngress', () => {
     /** 构造 delta 事件（eventId 唯一防去重）。 */
     const deltaEvent = (seq: number, payload: Record<string, unknown>) =>
       event('w_1', `evw_d${seq}`, 'message.part.delta', payload);
+
+    /**
+     * 可控时钟：生产码以 Date.now() 为 DELTA_PERSIST_INTERVAL_MS 节流闸门，
+     * 用 spy 换一个可推进的时钟，避免测试里真实等待 1s。
+     */
+    let clockNow = 0;
+    let dateNowSpy: jest.SpyInstance | undefined;
+    const useFakeClock = () => {
+      clockNow = 1_800_000_000_000;
+      dateNowSpy = jest.spyOn(Date, 'now').mockImplementation(() => clockNow);
+    };
+    /** 推进跨过节流窗口（默认正好 +INTERVAL，闸门判定用 >= 放行下一次落库）。 */
+    const tickPersistWindow = (ms: number = DELTA_PERSIST_INTERVAL_MS) => {
+      clockNow += ms;
+    };
+    /**
+     * 并发用例专用：每次 Date.now() 自增一个窗口。串行链上后到的 delta 必然跨过
+     * 节流闸门（否则同窗口内被合并，测不到「第二个 findFirst 看到已建行 → update」）。
+     */
+    const useAutoAdvancingClock = () => {
+      clockNow = 1_800_000_000_000;
+      dateNowSpy = jest
+        .spyOn(Date, 'now')
+        .mockImplementation(() => (clockNow += DELTA_PERSIST_INTERVAL_MS));
+    };
+    afterEach(() => {
+      dateNowSpy?.mockRestore();
+      dateNowSpy = undefined;
+    });
 
     it('private 频道：delta 全量 parts 落库 processing（含 reasoning/tool）+ 广播 MESSAGE_PART_DELTA（channel scope）', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
@@ -311,6 +347,7 @@ describe('WorkerEventIngress', () => {
       });
 
       // 首轮：delta → delta（第二次命中组装态缓存，update 同一行）
+      useFakeClock();
       await ingress.handleEvent(
         deltaEvent(201, {
           taskId: 't_1',
@@ -320,6 +357,7 @@ describe('WorkerEventIngress', () => {
           parts: [{ type: 'text', text: '第一段', synthetic: false }],
         }),
       );
+      tickPersistWindow();
       await ingress.handleEvent(
         deltaEvent(202, {
           taskId: 't_1',
@@ -499,6 +537,7 @@ describe('WorkerEventIngress', () => {
       });
 
       // 判死轮 delta → 建缓存；随后**不做**失效（即未打 dispatcher 钩子时的形态）
+      useFakeClock();
       await ingress.handleEvent(
         deltaEvent(311, {
           taskId: 't_1',
@@ -508,6 +547,7 @@ describe('WorkerEventIngress', () => {
           parts: [{ type: 'text', text: '第一段', synthetic: false }],
         }),
       );
+      tickPersistWindow();
       // 重试首 delta：命中 turn A 残留缓存 → update 已 failed 行（缺陷形态，被上一例钳制）
       await ingress.handleEvent(
         deltaEvent(312, {
@@ -932,6 +972,7 @@ describe('WorkerEventIngress', () => {
 
     it('稳态 delta 命中组装态缓存 → 不再每 delta 回读消息历史（message.findFirst 每条流只 1 次）', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({ id: 'c_dm', type: 'private' });
+      useFakeClock();
       // 首 delta：无 processing 行 → findFirst(1) 返回 null → create 并写入组装态缓存
       prisma.message.findFirst.mockResolvedValue(null);
       prisma.message.create.mockResolvedValue({
@@ -975,7 +1016,9 @@ describe('WorkerEventIngress', () => {
           }),
         ),
       ).toBe(true);
-      // 第二条 delta：命中组装态缓存 → message.update，不再 findFirst 回读整条消息历史
+      // 推进跨过节流窗口（DELTA_PERSIST_INTERVAL_MS）后，第二条 delta 命中组装态缓存
+      // → message.update，不再 findFirst 回读整条消息历史
+      tickPersistWindow();
       expect(
         await ingress.handleEvent(
           deltaEvent(51, {
@@ -1002,6 +1045,486 @@ describe('WorkerEventIngress', () => {
             ],
           },
         },
+      });
+    });
+
+    // ---- 写放大修复：DELTA_PERSIST_INTERVAL_MS 节流 + 终态/淘汰强制 flush ----
+
+    it('节流：窗口内 N 个 delta 至多 1 次落库，但每个 delta 都广播一帧（帧内容=到该 delta 为止的全量累积）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const createdAt = new Date('2026-08-10T00:00:00Z');
+      const rowOf = (content: unknown) => ({
+        id: 'm_thr',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt,
+      });
+      const writtenContents: unknown[] = [];
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.create.mockImplementation(async (args: any) => {
+        writtenContents.push(args.data.content);
+        return rowOf(args.data.content);
+      });
+      prisma.message.update.mockImplementation(async (args: any) => {
+        writtenContents.push(args.data.content);
+        return rowOf(args.data.content);
+      });
+      useFakeClock();
+
+      const chunks = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+      for (let i = 0; i < chunks.length; i++) {
+        expect(
+          await ingress.handleEvent(
+            deltaEvent(400 + i, {
+              taskId: 't_1',
+              agentId: 'a_1',
+              sessionId: 's_1',
+              channelId: 'c_dm',
+              parts: [{ type: 'text', text: chunks[i], synthetic: false }],
+            }),
+          ),
+        ).toBe(true);
+      }
+
+      // 判据①（写放大被砍掉）：10 个 delta 挤在同一个窗口内 → 只有首条 create 落库，
+      // message.update 一次都没有（旧实现这里会是 10 次全量行写 → binlog 放大根因）。
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+      expect(prisma.message.update).not.toHaveBeenCalled();
+      expect(writtenContents).toHaveLength(1);
+
+      // 判据②（广播一帧不少）：每个 delta 都广播一帧 MESSAGE_PART_DELTA
+      const emits = realtime.emit.mock.calls.filter(
+        (c) => c[0] === EVENT_TYPES.MESSAGE_PART_DELTA,
+      );
+      expect(emits).toHaveLength(chunks.length);
+      // 判据③（帧与逐 delta 落库时同形）：每帧 message.content 都是到该 delta 为止的全量累积
+      for (let i = 0; i < chunks.length; i++) {
+        const accumulated = chunks
+          .slice(0, i + 1)
+          .map((t) => ({ type: 'text', text: t, synthetic: false }));
+        expect(emits[i][1].message.content).toEqual({
+          text: chunks.slice(0, i + 1).join(''),
+          parts: accumulated,
+        });
+        expect(emits[i][1].delta).toEqual([
+          { type: 'text', text: chunks[i], synthetic: false },
+        ]);
+        expect(emits[i][2]).toEqual({ type: 'channel', id: 'c_dm' });
+      }
+
+      // 窗口到期后才放行下一次落库，且写的是全量（不是只有最后一个增量）
+      tickPersistWindow();
+      await ingress.handleEvent(
+        deltaEvent(420, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: 'K', synthetic: false }],
+        }),
+      );
+      expect(prisma.message.update).toHaveBeenCalledTimes(1);
+      expect(prisma.message.update.mock.calls[0][0].data.content).toEqual({
+        text: 'ABCDEFGHIJK',
+        parts: chunks
+          .map((t) => ({ type: 'text', text: t, synthetic: false }))
+          .concat([{ type: 'text', text: 'K', synthetic: false }]),
+      });
+    });
+
+    it('终态 flush①（task.completed）：回调前补写窗口内跳过的尾段，DB 内容不截断', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const createdAt = new Date('2026-08-10T00:00:00Z');
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.create.mockImplementation(async (args: any) => ({
+        id: 'm_tc',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: args.data.content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt,
+      }));
+      prisma.message.update.mockImplementation(async (args: any) => ({
+        id: 'm_tc',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: args.data.content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt,
+      }));
+      // 回调触发时尾段必须已落库（顺序证据：flush 先于 notify）
+      let updatesWhenCallbackFired = -1;
+      ingress.onTaskCompleted(() => {
+        updatesWhenCallbackFired = prisma.message.update.mock.calls.length;
+      });
+      useFakeClock();
+
+      await ingress.handleEvent(
+        deltaEvent(500, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '第一段', synthetic: false }],
+        }),
+      );
+      await ingress.handleEvent(
+        deltaEvent(501, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '第二段', synthetic: false }],
+        }),
+      );
+      // 第二条在窗口内 → 只进内存组装态（dirty），DB 停在 '第一段'
+      expect(prisma.message.update).not.toHaveBeenCalled();
+
+      await ingress.handleEvent(
+        event('w_1', 'evw_tc_flush', 'task.completed', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+        }),
+      );
+
+      // 终态 flush：未落库尾段被补写为**全量**（少这次写 = 用户消息在 DB 里永久截断）
+      expect(prisma.message.update).toHaveBeenCalledTimes(1);
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_tc' },
+        data: {
+          content: {
+            text: '第一段第二段',
+            parts: [
+              { type: 'text', text: '第一段', synthetic: false },
+              { type: 'text', text: '第二段', synthetic: false },
+            ],
+          },
+        },
+      });
+      expect(updatesWhenCallbackFired).toBe(1);
+      // 终态纪律不变：缓存已失效，下一条流式首 delta 重新以 DB 定位
+      await ingress.handleEvent(
+        deltaEvent(502, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '第三段', synthetic: false }],
+        }),
+      );
+      expect(prisma.message.findFirst).toHaveBeenCalledTimes(2);
+    });
+
+    it('终态 flush②（agent.status{error} D1 路径）：失效前补写尾段，且不覆盖已 failed 行', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const createdAt = new Date('2026-08-10T00:00:00Z');
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.create.mockImplementation(async (args: any) => ({
+        id: 'm_err',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: args.data.content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt,
+      }));
+      prisma.message.update.mockImplementation(async (args: any) => ({
+        id: 'm_err',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: args.data.content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt,
+      }));
+      useFakeClock();
+
+      await ingress.handleEvent(
+        deltaEvent(510, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '前半', synthetic: false }],
+        }),
+      );
+      await ingress.handleEvent(
+        deltaEvent(511, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '后半', synthetic: false }],
+        }),
+      );
+      expect(prisma.message.update).not.toHaveBeenCalled();
+
+      let updatesWhenErrorEmitted = -1;
+      realtime.emit.mockImplementation(async (type: string) => {
+        if (type === EVENT_TYPES.AGENT_ERROR) {
+          updatesWhenErrorEmitted = prisma.message.update.mock.calls.length;
+        }
+        return { id: 'ev_1' };
+      });
+
+      await ingress.handleEvent(
+        event('w_1', 'evw_err_flush', 'agent.status', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          status: 'error',
+          error: 'worker 执行失败',
+        }),
+      );
+
+      // 广播 agent.error 之前，尾段已补写（顺序证据）
+      expect(updatesWhenErrorEmitted).toBe(1);
+      expect(prisma.message.update).toHaveBeenCalledTimes(1);
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_err' },
+        data: {
+          content: {
+            text: '前半后半',
+            parts: [
+              { type: 'text', text: '前半', synthetic: false },
+              { type: 'text', text: '后半', synthetic: false },
+            ],
+          },
+        },
+      });
+      // error 后重试：缓存已失效 → 重新以 DB 定位（DB 已无 processing 行 → 新建，不碰 m_err）
+      await ingress.handleEvent(
+        deltaEvent(512, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '重试', synthetic: false }],
+        }),
+      );
+      expect(prisma.message.findFirst).toHaveBeenCalledTimes(2);
+      // flush 之外没有任何额外 update（陈旧残留缓存的腐败形态：对旧行反复 update）
+      expect(prisma.message.update).toHaveBeenCalledTimes(1);
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('终态 flush③（D2 判死清扫 invalidateDeltaStream）：补写尾段且带 status=processing 守卫（不覆盖已 failed 行）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const createdAt = new Date('2026-08-10T00:00:00Z');
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.create.mockImplementation(async (args: any) => ({
+        id: 'm_d2',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: args.data.content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt,
+      }));
+      prisma.message.update.mockImplementation(async (args: any) => ({
+        id: 'm_d2',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: args.data.content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt,
+      }));
+      useFakeClock();
+
+      await ingress.handleEvent(
+        deltaEvent(520, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '判死轮', synthetic: false }],
+        }),
+      );
+      await ingress.handleEvent(
+        deltaEvent(521, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '尾段', synthetic: false }],
+        }),
+      );
+      expect(prisma.message.update).not.toHaveBeenCalled();
+
+      // dispatcher 判死后重派清扫（同步钩子）→ 带病条目被丢弃前先补写
+      ingress.invalidateDeltaStream('c_dm', 'a_1');
+      // 同键 delta 的 MISS 回读排在 flush 之后（串行链）→ await 之后 flush 必已落地
+      await ingress.handleEvent(
+        deltaEvent(522, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '重试', synthetic: false }],
+        }),
+      );
+
+      expect(prisma.message.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.message.updateMany).toHaveBeenCalledWith({
+        // 守卫：行已被标 failed / 已删除 → 0 行不写，绝不用流式内容覆盖已终态行
+        where: { id: 'm_d2', status: MESSAGE_STATUS.processing },
+        data: {
+          content: {
+            text: '判死轮尾段',
+            parts: [
+              { type: 'text', text: '判死轮', synthetic: false },
+              { type: 'text', text: '尾段', synthetic: false },
+            ],
+          },
+        },
+      });
+    });
+
+    it('中段不丢失（淘汰路径）：缓存超限淘汰前先 flush 未落库尾段，同键 delta MISS 回读到全量', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      type Row = {
+        id: string;
+        channelId: string;
+        senderType: string;
+        senderId: string | null;
+        content: unknown;
+        status: string;
+        createdAt: Date;
+        mentions: null;
+      };
+      // 迷你内存 DB：写全部真实落到 rows，findFirst 从 rows 回读（复现 MISS 语义）
+      const rows = new Map<string, Row>();
+      let seq = 0;
+      idGen.nextId.mockImplementation(async () => `m_evict_${++seq}`);
+      prisma.message.findFirst.mockImplementation(async (args: any) => {
+        const w = args?.where ?? {};
+        const hit = [...rows.values()]
+          .filter(
+            (r) =>
+              r.channelId === w.channelId &&
+              r.senderType === w.senderType &&
+              r.status === w.status &&
+              (!w.senderId || r.senderId === w.senderId),
+          )
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+        return hit ? { id: hit.id, content: hit.content } : null;
+      });
+      prisma.message.create.mockImplementation(async (args: any) => {
+        const d = args.data;
+        const row: Row = {
+          id: d.id,
+          channelId: d.channelId,
+          senderType: d.senderType,
+          senderId: d.senderId ?? null,
+          content: d.content,
+          status: d.status,
+          createdAt: new Date(),
+          mentions: null,
+        };
+        rows.set(row.id, row);
+        return row;
+      });
+      prisma.message.update.mockImplementation(async (args: any) => {
+        const row = rows.get(args.where.id);
+        if (row) row.content = args.data.content;
+        return row;
+      });
+      prisma.message.updateMany.mockImplementation(async (args: any) => {
+        let count = 0;
+        for (const row of rows.values()) {
+          if (args.where.id && row.id !== args.where.id) continue;
+          if (args.where.status && row.status !== args.where.status) continue;
+          row.content = args.data.content;
+          count += 1;
+        }
+        return { count };
+      });
+      useFakeClock();
+
+      const send = (n: number, agentId: string, text: string) =>
+        ingress.handleEvent(
+          deltaEvent(n, {
+            taskId: 't_1',
+            agentId,
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [{ type: 'text', text, synthetic: false }],
+          }),
+        );
+
+      // 受害流 a_v：首 delta 落库 'V0'，第二条落在窗口内 → 只进内存组装态（dirty）
+      await send(700, 'a_v', 'V0');
+      await send(701, 'a_v', 'V1');
+      expect((rows.get('m_evict_1') as Row).content).toEqual({
+        text: 'V0',
+        parts: [{ type: 'text', text: 'V0', synthetic: false }],
+      });
+
+      // 灌满其它流式键，把最旧（受害）条目挤出 ASSEMBLING_CACHE_MAX=256
+      for (let i = 1; i <= 256; i++) {
+        await send(1000 + i, `a_f${i}`, `F${i}`);
+      }
+      // 排空 fire-and-forget 的淘汰前 flush
+      await new Promise((r) => setImmediate(r));
+      // 淘汰前 flush 已把未落库尾段 'V1' 补写（否则 DB 停在 'V0' → 中段丢失）
+      expect((rows.get('m_evict_1') as Row).content).toEqual({
+        text: 'V0V1',
+        parts: [
+          { type: 'text', text: 'V0', synthetic: false },
+          { type: 'text', text: 'V1', synthetic: false },
+        ],
+      });
+
+      // 受害流下一条 delta：缓存已丢 → MISS 从 DB 回读 → 合并后不得丢中段
+      await send(702, 'a_v', 'V2');
+      expect((rows.get('m_evict_1') as Row).content).toEqual({
+        text: 'V0V1V2',
+        parts: [
+          { type: 'text', text: 'V0', synthetic: false },
+          { type: 'text', text: 'V1', synthetic: false },
+          { type: 'text', text: 'V2', synthetic: false },
+        ],
+      });
+
+      // flush 形态：guarded（status=processing）→ 已终态/已删除的行 0 行不写
+      const flushCall = prisma.message.updateMany.mock.calls.find(
+        (c) => c[0]?.where?.id === 'm_evict_1',
+      );
+      expect(flushCall).toBeDefined();
+      expect(flushCall![0].where).toEqual({
+        id: 'm_evict_1',
+        status: MESSAGE_STATUS.processing,
       });
     });
 
@@ -1229,6 +1752,7 @@ describe('WorkerEventIngress', () => {
       });
       // 两个 handler 若并发：两者 findFirst 都在对方的 create 之前进入（快照均为 null）
       // → 各建一行。串行化后第二个 findFirst 进入时第一行已存在 → 走 update。
+      useAutoAdvancingClock();
       let created = false;
       prisma.message.findFirst.mockImplementation(async () => {
         // 同步快照此刻的可见性，再让出事件循环逼出真实并发
