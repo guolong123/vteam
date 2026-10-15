@@ -859,6 +859,11 @@ describe('WorkerDispatcher', () => {
       const productSystem = workerClient.execute.mock.calls[0][1]
         .system as string;
       expect(productSystem).toContain(ISSUE_FULL_INSTRUCTION);
+      d.unregisterExecution(
+        'w_0000000001',
+        'team:tm_0000000001',
+        'tmm_0000000001',
+      );
 
       workerClient.execute.mockClear();
       prisma.agent.findUnique.mockResolvedValue({
@@ -8384,6 +8389,11 @@ describe('WorkerDispatcher', () => {
         expect.anything(),
         expect.objectContaining({ sessionId: 'ses_team_001' }),
       );
+      d.unregisterExecution(
+        'w_0000000001',
+        'team:tm_0000000001',
+        'tmm_0000000001',
+      );
       // 第二次 dispatch 同一 sessionId 仍复用
       await d.dispatch(request);
       expect(workerClient.createSession).not.toHaveBeenCalled();
@@ -8997,6 +9007,11 @@ describe('WorkerDispatcher', () => {
         providerID: 'overprov',
         modelID: 'overmodel',
       });
+      d.unregisterExecution(
+        'w_0000000001',
+        'team:tm_0000000001',
+        'tmm_0000000001',
+      );
 
       workerClient.execute.mockClear();
       await d.dispatch(
@@ -9546,6 +9561,11 @@ describe('WorkerDispatcher', () => {
         expect(Object.prototype.hasOwnProperty.call(gated, 'agent')).toBe(
           false,
         );
+        d.unregisterExecution(
+          'w_0000000001',
+          'team:tm_0000000001',
+          'tmm_0000000001',
+        );
         // 同角色、无能力位字段的基线 payload 必须逐字节一致
         workerClient.execute.mockClear();
         prisma.worker.findUnique.mockResolvedValue({
@@ -9566,6 +9586,11 @@ describe('WorkerDispatcher', () => {
         const fallback = execPayload();
         expect(Object.prototype.hasOwnProperty.call(fallback, 'agent')).toBe(
           false,
+        );
+        d.unregisterExecution(
+          'w_0000000001',
+          'team:tm_0000000001',
+          'tmm_0000000001',
         );
         workerClient.execute.mockClear();
         prisma.worker.findUnique.mockResolvedValue({
@@ -10074,6 +10099,132 @@ describe('WorkerDispatcher', () => {
       });
       const system = workerClient.execute.mock.calls[0][1].system as string;
       expect(system).toContain(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
+    });
+
+    describe('在飞守卫：同成员并发丢弃 + 泄漏释放', () => {
+      const GUARD_WORKER = 'w_0000000001';
+      const GUARD_SCOPE = 'team:tm_0000000001';
+      const GUARD_MEMBER = 'tmm_0000000001';
+
+      it('同成员已有在飞执行 → 第二次分派被丢弃，不再下发 execute 且不抛错', async () => {
+        const d = createDispatcher();
+        const first = await d.dispatch(teamRequest() as any);
+        expect(first).toEqual({ replies: [] });
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+
+        const second = await d.dispatch(teamRequest() as any);
+        expect(second).toEqual({ replies: [] });
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+        expect(d.isAgentExecuting(GUARD_WORKER, GUARD_SCOPE)).toEqual(
+          new Set([GUARD_MEMBER]),
+        );
+      });
+
+      it('注销后在飞标记清除 → 下一次分派放行（execute 再次下发）', async () => {
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+
+        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(2);
+      });
+
+      it('不同成员并发 → 各自独立放行（互不阻塞）', async () => {
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+
+        prisma.session.findUnique.mockResolvedValue({
+          id: 's_team_0000000002',
+          workerId: null,
+          instanceRef: null,
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000002',
+        } as any);
+        await d.dispatch(
+          teamRequest({
+            targets: [
+              {
+                agentId: 'a_developer',
+                instanceId: 'tmm_0000000002',
+                sessionId: null,
+              },
+            ],
+          }) as any,
+        );
+
+        expect(workerClient.execute).toHaveBeenCalledTimes(2);
+        expect(d.isAgentExecuting(GUARD_WORKER, GUARD_SCOPE)).toEqual(
+          new Set(['tmm_0000000001', 'tmm_0000000002']),
+        );
+      });
+
+      it('execute 抛错 → 释放登记，紧接的下一次分派放行（execute 共 2 次）', async () => {
+        workerClient.execute.mockRejectedValueOnce(new Error('execute boom'));
+        const d = createDispatcher();
+        const errors: unknown[] = [];
+        d.onError((e) => errors.push(e));
+
+        await d.dispatch(teamRequest() as any);
+        expect(errors).toHaveLength(1);
+        expect(d.isAgentExecuting(GUARD_WORKER, GUARD_SCOPE)).toBeNull();
+
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(2);
+      });
+
+      it('TTL 过期（超过 30min）→ 视为不活跃放行', async () => {
+        const realNow = Date.now();
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+
+        const nowSpy = jest
+          .spyOn(Date, 'now')
+          .mockReturnValue(realNow + 31 * 60 * 1000);
+        try {
+          await d.dispatch(teamRequest() as any);
+          expect(workerClient.execute).toHaveBeenCalledTimes(2);
+        } finally {
+          nowSpy.mockRestore();
+        }
+      });
+
+      it('节点离线重绑到新 worker → 守卫键随 workerId 变化，放行', async () => {
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+
+        prisma.session.findUnique.mockResolvedValue({
+          id: 's_team_0000001',
+          workerId: 'w_0000000001',
+          instanceRef: 'ses_team_1',
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
+        } as any);
+        prisma.worker.findUnique
+          .mockResolvedValueOnce({
+            id: 'w_0000000001',
+            status: 'offline',
+            capabilities: { maxInstances: 1 },
+            defaultModelId: null,
+          } as any)
+          .mockResolvedValueOnce({
+            id: 'w_0000000002',
+            status: 'online',
+            capabilities: { maxInstances: 1 },
+            defaultModelId: null,
+          } as any);
+        workersService.assignWorker.mockResolvedValue('w_0000000002');
+
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(2);
+        expect(workerClient.execute.mock.calls[1][0]).toEqual({
+          id: 'w_0000000002',
+          capabilities: { maxInstances: 1 },
+        });
+      });
     });
   });
 
