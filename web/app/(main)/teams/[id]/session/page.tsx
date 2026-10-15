@@ -34,6 +34,7 @@ import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
 import { TaskInfoEditModal } from "@/src/components/tasks/TaskInfoEditModal";
 import { TeamMembersPanel, roleOptionsOf, customAgentsOf, type AgentItem, type AddInstancePayload } from "@/src/components/teams/TeamMembersPanel";
 import { ResizeHandle } from "@/src/components/teams/ResizeHandle";
+import { TeamSwitcher } from "@/src/components/teams/TeamSwitcher";
 import { TaskRightTabs, type PlanStepItem } from "@/src/components/teams/TeamRightPanel";
 import { useResizableWidth } from "@/src/hooks/use-resizable";
 import type {
@@ -1289,7 +1290,8 @@ export default function TeamSessionPage() {
       <header style={{ height: 64, flexShrink: 0, display: "flex", alignItems: "center", gap: space.md, padding: `0 ${space.xl}px`, backgroundColor: "var(--color-surface)", borderBottom: `1px solid ${neutral[200]}` }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-            <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>{team.name} · 团队会话</span>
+            <TeamSwitcher currentTeamId={teamId} currentTeamName={team.name} />
+            <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>· 团队会话</span>
             {panelTask ? (
               <button
                 type="button"
