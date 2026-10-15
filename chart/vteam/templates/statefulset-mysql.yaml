@@ -38,6 +38,12 @@ spec:
         - name: mysql
           image: {{ printf "%s:%s" .Values.db.image.repository (.Values.db.image.tag | default "8" | toString) }}
           imagePullPolicy: {{ .Values.db.image.pullPolicy | default .Values.image.pullPolicy }}
+          # 2026-10-15 事故：binlog 无界累积到 251GB（255 个 × ~1GB），把共享 NFS 写到 100%，
+          # mysqld 以 ENOSPC（posix_fallocate error 28）崩溃并 CrashLoopBackOff → 全站 500。
+          # 本参数是 binlog 的释放策略（按时间自动过期），声明在 chart 里而非只靠运行时 SET PERSIST，
+          # 这样 PVC 重建或换环境后策略依然生效。取值理由见 values.yaml 的 binlogExpireLogsSeconds。
+          args:
+            - --binlog-expire-logs-seconds={{ .Values.db.binlogExpireLogsSeconds | default 3600 }}
           env:
             - name: MYSQL_ROOT_PASSWORD
               valueFrom:
