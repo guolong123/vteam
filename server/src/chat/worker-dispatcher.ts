@@ -1649,7 +1649,7 @@ export class WorkerDispatcher
     private readonly sessionLifecycle: SessionLifecycleService,
     private readonly artifactsService: ArtifactsService,
     config: ConfigService,
-    ingress: WorkerEventIngress,
+    private readonly ingress: WorkerEventIngress,
     @Optional()
     private readonly moduleRef?: ModuleRef,
     // 静默 watchdog 的 durable deadline（trigger-unification todo-9）：
@@ -2662,6 +2662,14 @@ export class WorkerDispatcher
           });
         }
       }
+      // 分派即失效该流式键的组装态缓存（ingress assemblingMessages）：上面的清扫可能已把
+      // 上一轮残留 processing 行标 failed / 删除，缓存项若残留，重试轮首 delta 会命中它
+      // 并对已 failed/已删除的消息行 message.update（D1 同型——worker 崩溃/静默 watchdog
+      // 判死路径无 agent.status{error} 回流，ingress 自身的 task.completed / agent.status
+      // 失效都覆盖不到，这是唯一可达的第三条终态路径）。无残留时同键 delete 是幂等空操作；
+      // 竞态下的多退一次仅让在途 delta 回读 DB 重新定位，不影响正确性。键口径同
+      // worker-event.ingress.ts 的 `<目标频道>|<agentId>` 定位键（resolveDeltaStreamKey 同源）。
+      this.ingress.invalidateDeltaStream(cleanupChannel.id, target.agentId);
     }
     const imageAttach = await this.resolveImageAttachments(request.messageId);
     const finalPrompt = imageAttach

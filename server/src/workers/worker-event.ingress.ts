@@ -155,6 +155,10 @@ const MESSAGE_ID_PREFIX = 'm';
 /** 内存去重窗口上限（D4：seq 单调递增下保留最近 N 条即可覆盖连接内有序重发）。 */
 const DEDUP_WINDOW = 1000;
 
+/** message.part.delta 组装态缓存上限（有界；超限淘汰最旧仅触发一次 findFirst
+ *  MISS 回退，不影响正确性——未命中恒以 DB 为准重新定位）。 */
+const ASSEMBLING_CACHE_MAX = 256;
+
 /** Session.status 允许的流转值（SESSION_STATUS.created 为 bind 前初始态，worker 不回流该值）。 */
 const SESSION_STATUS_ALLOWED: Set<string> = new Set(
   Object.values(SESSION_STATUS),
@@ -214,6 +218,18 @@ export class WorkerEventIngress {
    *  findFirst(无行)→create 是典型 check-then-act，并发下会建出多条 processing 行
    *  （UI 上同一段独白重复成多条消息）。按定位身份串行化即可关闭，无需 DB 唯一约束。 */
   private readonly partDeltaChains = new Map<string, Promise<unknown>>();
+
+  /**
+   * message.part.delta 组装态缓存：流式键 `channelId|agentId` → 当前 processing 消息的
+   * `{messageId, parts}`（避免每 delta 重读整条消息历史导致的 O(N²) 内存放大）。
+   * 命中即用内存组装态增量合并，跳过 message.findFirst 全量 content 回读 + 从 DB
+   * 重新推导整条消息；未命中仍以 DB 为准（findFirst → create/update）。key 中的 channelId
+   * 指**落库目标频道**（private 独白，见 resolveDeltaStreamKey）；task.completed 时按同键精准失效。
+   */
+  private readonly assemblingMessages = new Map<
+    string,
+    { messageId: string; parts: Array<Record<string, unknown>> }
+  >();
 
   /** 会话最近输出活动时间（sessionId → Date.now()，空闲判死数据源）。
    *  仅 delta/task.completed/session.updated 三类「输出活动」刷新；agent.status
@@ -447,6 +463,23 @@ export class WorkerEventIngress {
       payload.status === 'error' ||
       (typeof payload.error === 'string' && payload.error.length > 0);
     if (isError) {
+      // 终态事件（worker 失败路径）：本轮流式已中断，精准失效其组装态缓存（同
+      // resolveDeltaStreamKey 键，与 task.completed 处理保持同键纪律）——
+      // worker/src/exec/exec-server.ts 失败路径只上送 agent.status{error} +
+      // session.updated{failed}，永不上送 task.completed（唯一 emitter 在成功路径），
+      // 不失效则同频道同 agent 的用户重试首 delta 命中残留缓存，把已被
+      // WorkerDispatcher.failTeamProcessingMessage 标 failed 的消息行 update
+      // 成新内容（失败行被静默覆盖）。
+      const errorStreamKey = await this.resolveDeltaStreamKey(
+        this.str(payload.channelId),
+        this.str(payload.sessionId),
+        dto.workerId,
+        payload.taskId,
+        payload.agentId,
+      );
+      if (errorStreamKey) {
+        this.assemblingMessages.delete(errorStreamKey);
+      }
       await this.realtime.emit(
         EVENT_TYPES.AGENT_ERROR,
         {
@@ -605,9 +638,34 @@ export class WorkerEventIngress {
     }
     // 落库段（findFirst → update/create）按定位身份串行化：worker 不 await 连发 delta
     // 时，并发的 findFirst(无行)→create 会各建一条 processing 行（重复独白消息）。
+    const streamKey = `${channelId}|${agentId ?? ''}`;
     const row = await this.runPartDeltaExclusive(
-      `${channelId}|${agentId ?? ''}`,
+      streamKey,
       async () => {
+        const cached = this.assemblingMessages.get(streamKey);
+        if (cached) {
+          if (!hasRenderableContent(kept)) {
+            this.logger.debug(
+              `[ingress] message.part.delta(cached) 增量无可渲染内容，不追加 message=${cached.messageId}（channel=${channelId}）`,
+            );
+            return null;
+          }
+          const merged = mergePartsById(cached.parts, kept);
+          const updated = await this.prisma.message.update({
+            where: { id: cached.messageId },
+            data: {
+              content: {
+                text: concatText(merged),
+                parts: merged,
+              } as Prisma.InputJsonValue,
+            },
+          });
+          this.cacheAssembled(streamKey, cached.messageId, merged);
+          this.logger.debug(
+            `[ingress] message.part.delta(cached) 累积更新 message=${cached.messageId} parts=${kept.length}（workerId=${dto.workerId}）`,
+          );
+          return updated;
+        }
         const hasExisting = await this.prisma.message.findFirst({
           where: {
             channelId,
@@ -650,6 +708,7 @@ export class WorkerEventIngress {
               } as Prisma.InputJsonValue,
             },
           });
+          this.cacheAssembled(streamKey, hasExisting.id, merged);
           this.logger.debug(
             `[ingress] message.part.delta 累积更新 message=${hasExisting.id} parts=${kept.length}（workerId=${dto.workerId}）`,
           );
@@ -670,6 +729,7 @@ export class WorkerEventIngress {
             status: MESSAGE_STATUS.processing,
           },
         });
+        this.cacheAssembled(streamKey, created.id, kept);
         this.logger.debug(
           `[ingress] message.part.delta 新建 processing message=${created.id} parts=${kept.length}（workerId=${dto.workerId}）`,
         );
@@ -696,6 +756,73 @@ export class WorkerEventIngress {
   }
 
   /**
+   * 计算 message.part.delta 组装态缓存键（= 落库目标频道 + 定位 agentId），与
+   * handleMessagePartDelta 的落库键一致，供 task.completed 精准失效同一流式消息。
+   * 解析不出（缺 channelId / 频道不存在或非 private/team_group）→ null（该 delta 不会
+   * 建缓存项，无从失效）。读失败吞错返 null（失效尽力而为）。
+   */
+  private async resolveDeltaStreamKey(
+    sourceChannelId: string | undefined,
+    sessionIdRaw: string | undefined,
+    workerId?: string,
+    taskId?: string,
+    agentIdRaw?: string,
+  ): Promise<string | null> {
+    try {
+      if (!sourceChannelId) {
+        return null;
+      }
+      const source = await this.prisma.chatChannel.findUnique({
+        where: { id: sourceChannelId },
+        select: { id: true, type: true },
+      });
+      if (
+        !source ||
+        (source.type !== CHANNEL_TYPE.private &&
+          source.type !== CHANNEL_TYPE.team_group)
+      ) {
+        return null;
+      }
+      const sessionId = await this.resolvePlatformSessionId(
+        sessionIdRaw,
+        workerId,
+        taskId,
+        agentIdRaw,
+      );
+      let agentId = agentIdRaw;
+      if (!agentId && sessionId) {
+        const session = await this.prisma.session.findUnique({
+          where: { id: sessionId },
+          select: { agentId: true },
+        });
+        agentId = session?.agentId;
+      }
+      let targetChannelId = source.id;
+      if (sessionId) {
+        const sRow = await this.prisma.session.findUnique({
+          where: { id: sessionId },
+          select: { teamId: true, teamMemberId: true },
+        });
+        const teamId = (sRow as { teamId?: string | null })?.teamId ?? null;
+        const teamMemberId =
+          (sRow as { teamMemberId?: string | null })?.teamMemberId ?? null;
+        if (source.type === CHANNEL_TYPE.team_group && teamId && teamMemberId) {
+          const privateTarget = await this.prisma.chatChannel.findFirst({
+            where: { teamId, teamMemberId, type: CHANNEL_TYPE.private },
+            select: { id: true },
+          });
+          if (privateTarget) {
+            targetChannelId = privateTarget.id;
+          }
+        }
+      }
+      return `${targetChannelId}|${agentId ?? ''}`;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * 按 key 串行执行（同一 key 的前一个任务结束后才启动下一个）。前序失败不阻断后序，
    * 队尾出链后清理 key（防内存泄漏）。
    */
@@ -718,6 +845,40 @@ export class WorkerEventIngress {
     return run;
   }
 
+  private cacheAssembled(
+    streamKey: string,
+    messageId: string,
+    parts: Array<Record<string, unknown>>,
+  ): void {
+    this.assemblingMessages.set(streamKey, { messageId, parts });
+    if (this.assemblingMessages.size > ASSEMBLING_CACHE_MAX) {
+      const oldest = this.assemblingMessages.keys().next().value;
+      if (oldest !== undefined && oldest !== streamKey) {
+        this.assemblingMessages.delete(oldest);
+      }
+    }
+  }
+
+  /**
+   * 供 WorkerDispatcher 终态清扫失效该流式键的组装态缓存（公开方法，dispatcher 是唯一调用方）。
+   * 键口径与 handleMessagePartDelta 的定位键 / resolveDeltaStreamKey 完全一致：
+   * `<落库目标频道>|<agentId>`。
+   *
+   * 为什么需要它：ingress 自身只在 task.completed / agent.status{error} 两个终态失效缓存，
+   * 而第三条终态路径**不经过 ingress**——worker 崩溃或静默 watchdog 判死
+   * （markSessionIdleDead，只写 Session.status=failed 并 best-effort abort，无任何回流事件），
+   * 用户重试时 dispatcher 的重派清扫把上一轮残留 processing 行标 failed（或删除空行）。
+   * 若缓存项残留，重试轮首 delta 命中它即对**已 failed / 已删除**的消息行 message.update
+   * （与 D1 同型的 correctness 缺陷）。
+   *
+   * 刻意不含 partDeltaChains：该 Map 每条链尾 settle 后即自清理（runPartDeltaExclusive），
+   * 不存在跨轮残留；且在途 delta 执行中删键会解除同一键的串行化，重新打开
+   * findFirst→create 的 check-then-act 竞态（重复 processing 行）。
+   */
+  invalidateDeltaStream(channelId: string, agentId: string | null): void {
+    this.assemblingMessages.delete(`${channelId}|${agentId ?? ''}`);
+  }
+
   /**
    * task.completed：最高优先级事件。解析 step-finish 负载 → 通知全部注册回调
    * （T10 WorkerDispatcher 注册 handler 做落库+广播 chat.message.new+emitFinal——
@@ -725,6 +886,18 @@ export class WorkerEventIngress {
    */
   private async handleTaskCompleted(dto: WorkerEventDto): Promise<boolean> {
     const raw = dto.payload as Record<string, unknown>;
+    // 终态事件：本轮流式已结束，精准失效其组装态缓存（同 resolveDeltaStreamKey 键）——
+    // 下一条流式首 delta 重新以 DB 定位，防止命中已终态化消息的 messageId 并 update 到 sent。
+    const doneStreamKey = await this.resolveDeltaStreamKey(
+      this.str(raw.channelId),
+      this.str(raw.sessionId),
+      dto.workerId,
+      this.str(raw.taskId),
+      this.str(raw.agentId),
+    );
+    if (doneStreamKey) {
+      this.assemblingMessages.delete(doneStreamKey);
+    }
     // wave1 对齐：sessionId 统一经 resolvePlatformSessionId 归一（s_ 前缀透传；ses_ 前缀
     // opencode 会话 id 经 instanceRef 反查映射；查不到留空，由回调内 sessionId 反查 agentId
     // 的兜底逻辑接管）。F3 缺陷②：ses_ 反查未命中（worker 404 重建新会话）→ 回写

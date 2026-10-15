@@ -262,6 +262,274 @@ describe('WorkerEventIngress', () => {
       );
     });
 
+    it('D1 回归：agent.status{error} → 同键组装态缓存失效，重试 delta 不得 update 已 failed 行', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const staleRowDate = new Date('2026-08-10T00:00:00Z');
+      // delta 1：无缓存 → DB 无 processing 行 → 新建（建立组装态缓存项）
+      prisma.message.create
+        .mockResolvedValueOnce({
+          id: 'm_stream',
+          channelId: 'c_dm',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_1',
+          content: {
+            text: '第一段',
+            parts: [{ type: 'text', text: '第一段', synthetic: false }],
+          },
+          mentions: null,
+          status: MESSAGE_STATUS.processing,
+          createdAt: staleRowDate,
+        })
+        // delta 3（error 后的重试）：缓存已失效 → 重新以 DB 定位（无 processing 行）→ 新建
+        .mockResolvedValueOnce({
+          id: 'm_retry',
+          channelId: 'c_dm',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_1',
+          content: {
+            text: '重试',
+            parts: [{ type: 'text', text: '重试', synthetic: false }],
+          },
+          mentions: null,
+          status: MESSAGE_STATUS.processing,
+          createdAt: new Date('2026-08-10T00:01:00Z'),
+        });
+      // delta 2（缓存命中）走 update；该行已被 dispatcher 标 failed，DB 无 processing 行
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.update.mockResolvedValue({
+        id: 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '第一段第二段', parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.failed,
+        createdAt: staleRowDate,
+      });
+
+      // 首轮：delta → delta（第二次命中组装态缓存，update 同一行）
+      await ingress.handleEvent(
+        deltaEvent(201, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '第一段', synthetic: false }],
+        }),
+      );
+      await ingress.handleEvent(
+        deltaEvent(202, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '第二段', synthetic: false }],
+        }),
+      );
+      // worker 失败路径：只上送 agent.status{error}（+ session.updated{failed}），
+      // 永不上送 task.completed（唯一 emitter 在成功路径 exec-server.ts:1592）
+      await ingress.handleEvent(
+        event('w_1', 'evw_d1_err', 'agent.status', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          status: 'error',
+          error: 'worker 执行失败',
+        }),
+      );
+      // 用户在同频道同 agent 重试：首 delta 必须重新以 DB 定位（不得命中残留缓存）
+      await ingress.handleEvent(
+        deltaEvent(203, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '重试', synthetic: false }],
+        }),
+      );
+
+      // delta 2 的那一次 update 属 error 之前的正常累积；error 之后不得再 update
+      expect(prisma.message.update).toHaveBeenCalledTimes(1);
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_stream' },
+        data: expect.objectContaining({
+          content: expect.objectContaining({ text: '第一段第二段' }),
+        }),
+      });
+      // error 后 delta 重新以 DB 定位（findFirst）×2（delta 2 命中缓存不查）；
+      // 未失效时 delta 3 也走缓存 → findFirst 只 1 次
+      expect(prisma.message.findFirst).toHaveBeenCalledTimes(2);
+      // 重试轮新建 processing 行，而不是把已 failed 行覆盖成新内容
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);
+      expect(prisma.message.create).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            channelId: 'c_dm',
+            status: MESSAGE_STATUS.processing,
+            content: expect.objectContaining({ text: '重试' }),
+          }),
+        }),
+      );
+      // SSE emit 载荷不变：agent.error 照常广播（修复不改变回调/广播行为）
+      expect(realtime.emit).toHaveBeenCalledWith(
+        'agent.error',
+        expect.objectContaining({ error: 'worker 执行失败' }),
+        { type: 'task', id: 't_1' },
+      );
+    });
+
+    it('D2 回归：worker 崩溃/静默 watchdog 判死后重试 → 清扫失效组装态缓存，不得 update 已 failed 行', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const turnADate = new Date('2026-08-10T00:00:00Z');
+      // 判死轮（turn A）：delta 建立组装态缓存项 + processing 行 m_A
+      prisma.message.create
+        .mockResolvedValueOnce({
+          id: 'm_A',
+          channelId: 'c_dm',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_1',
+          content: {
+            text: '第一段',
+            parts: [{ type: 'text', text: '第一段', synthetic: false }],
+          },
+          mentions: null,
+          status: MESSAGE_STATUS.processing,
+          createdAt: turnADate,
+        })
+        // 重试轮（turn B）首 delta：缓存已失效 → DB 无 processing 行 → 新建
+        .mockResolvedValueOnce({
+          id: 'm_B',
+          channelId: 'c_dm',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_1',
+          content: {
+            text: '重试',
+            parts: [{ type: 'text', text: '重试', synthetic: false }],
+          },
+          mentions: null,
+          status: MESSAGE_STATUS.processing,
+          createdAt: new Date('2026-08-10T00:01:00Z'),
+        });
+      // markSessionIdleDead + 重派清扫后：m_A 已被标 failed，DB 中该频道该 agent
+      // 不再有 processing 行（worker 崩溃/静默 watchdog 路径无任何 agent.status 回流）
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.update.mockResolvedValue({
+        id: 'm_A',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '第一段', parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.failed,
+        createdAt: turnADate,
+      });
+
+      // (i) turn A：delta → 建缓存（worker 随后崩溃/静默，无 task.completed/agent.status 回流）
+      await ingress.handleEvent(
+        deltaEvent(301, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '第一段', synthetic: false }],
+        }),
+      );
+      // (ii) dispatcher 判死后重派清扫（markSessionIdleDead 无回流事件）→ 失效同键缓存
+      //      （等价于 dispatchAgentMention 的 stale-row sweep 调用的公开钩子）
+      ingress.invalidateDeltaStream('c_dm', 'a_1');
+      // (iii) turn B 重试首 delta：必须重新以 DB 定位（不得命中 turn A 的残留缓存）
+      await ingress.handleEvent(
+        deltaEvent(302, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '重试', synthetic: false }],
+        }),
+      );
+
+      // turn A 的那一次 create 之外，没有任何 message.update——已 failed 的 m_A 不被覆盖
+      expect(prisma.message.update).not.toHaveBeenCalled();
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);
+      expect(prisma.message.findFirst).toHaveBeenCalledTimes(2);
+      // 重试轮新建 processing 行（不是改 m_A）
+      expect(prisma.message.create).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            channelId: 'c_dm',
+            status: MESSAGE_STATUS.processing,
+            content: expect.objectContaining({ text: '重试' }),
+          }),
+        }),
+      );
+    });
+
+    it('D2 对照组（未失效时的腐败形态）：残留缓存命中 → message.update 覆盖已 failed 行', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      prisma.message.create.mockResolvedValue({
+        id: 'm_A',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '第一段', parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.update.mockResolvedValue({
+        id: 'm_A',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: '第一段重试', parts: [] },
+        mentions: null,
+        status: MESSAGE_STATUS.failed,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      // 判死轮 delta → 建缓存；随后**不做**失效（即未打 dispatcher 钩子时的形态）
+      await ingress.handleEvent(
+        deltaEvent(311, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '第一段', synthetic: false }],
+        }),
+      );
+      // 重试首 delta：命中 turn A 残留缓存 → update 已 failed 行（缺陷形态，被上一例钳制）
+      await ingress.handleEvent(
+        deltaEvent(312, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: '重试', synthetic: false }],
+        }),
+      );
+
+      // 缺陷形态的原始证据：message.update 作用在已 failed 行 m_A 上
+      expect(prisma.message.update).toHaveBeenCalledTimes(1);
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_A' },
+        data: expect.objectContaining({
+          content: expect.objectContaining({ text: '第一段重试' }),
+        }),
+      });
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);
+    });
+
     it('非 private/team_group 来源 → 拒绝 message.part.delta，不查私聊、不落库、不广播', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: 'c_unsupported',
@@ -660,6 +928,149 @@ describe('WorkerEventIngress', () => {
         }),
         { type: 'channel', id: 'c_dm' },
       );
+    });
+
+    it('稳态 delta 命中组装态缓存 → 不再每 delta 回读消息历史（message.findFirst 每条流只 1 次）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({ id: 'c_dm', type: 'private' });
+      // 首 delta：无 processing 行 → findFirst(1) 返回 null → create 并写入组装态缓存
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.create.mockResolvedValue({
+        id: 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: {
+          text: 'A',
+          parts: [{ type: 'text', text: 'A', synthetic: false }],
+        },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+      prisma.message.update.mockResolvedValue({
+        id: 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: {
+          text: 'AB',
+          parts: [
+            { type: 'text', text: 'A', synthetic: false },
+            { type: 'text', text: 'B', synthetic: false },
+          ],
+        },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(50, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [{ type: 'text', text: 'A', synthetic: false }],
+          }),
+        ),
+      ).toBe(true);
+      // 第二条 delta：命中组装态缓存 → message.update，不再 findFirst 回读整条消息历史
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(51, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [{ type: 'text', text: 'B', synthetic: false }],
+          }),
+        ),
+      ).toBe(true);
+
+      // 关键判据（若回到「每 delta findFirst 全量回读 + 从 DB 重新推导」的老路 → 本断言失败）
+      expect(prisma.message.findFirst).toHaveBeenCalledTimes(1);
+      // 稳态累积仍从缓存组装态正确合并
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_stream' },
+        data: {
+          content: {
+            text: 'AB',
+            parts: [
+              { type: 'text', text: 'A', synthetic: false },
+              { type: 'text', text: 'B', synthetic: false },
+            ],
+          },
+        },
+      });
+    });
+
+    it('task.completed 终态化 → 清组装态缓存，下一条流式重新以 DB 定位（findFirst 再次被调用）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({ id: 'c_dm', type: 'private' });
+      prisma.message.findFirst.mockResolvedValue(null);
+      prisma.message.create.mockImplementation(async (args: any) => ({
+        id: args?.data?.id ?? 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: args?.data?.content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      }));
+      prisma.message.update.mockImplementation(async (args: any) => ({
+        id: args?.where?.id ?? 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: args?.data?.content,
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      }));
+
+      await ingress.handleEvent(
+        deltaEvent(60, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: 'A', synthetic: false }],
+        }),
+      );
+      await ingress.handleEvent(
+        deltaEvent(61, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: 'B', synthetic: false }],
+        }),
+      );
+      // 两条 delta 共用一条 processing 消息 → findFirst 仅首条命中一次
+      expect(prisma.message.findFirst).toHaveBeenCalledTimes(1);
+
+      // 本轮流式结束：task.completed（携带同 channelId 使失效键与落库键一致）清掉该键
+      await ingress.handleEvent(
+        event('w_1', 'evw_tc_1', 'task.completed', {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+        }),
+      );
+
+      // 下一条流式的首 delta：缓存已清 → MISS → 重新 findFirst 定位
+      await ingress.handleEvent(
+        deltaEvent(62, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [{ type: 'text', text: 'C', synthetic: false }],
+        }),
+      );
+      expect(prisma.message.findFirst).toHaveBeenCalledTimes(2);
     });
 
     it('同 part.id 重发快照 → 原地替换该 part（last-write-wins），不追加重复快照', async () => {
