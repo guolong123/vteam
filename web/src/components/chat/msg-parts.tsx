@@ -202,10 +202,20 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
    * 存量脏数据里成片「永久运行中 + 输入 {}」的卡片对用户零价值，且消息终态收敛后不会自愈。
    * 两条豁免：① 仍在流式推进的当前消息上的 running 卡（进度反馈不能闪断）；
    * ② `secret_command` 等待填写卡（用户唯一的操作入口）。
+   *
+   * 失败卡兜底：serve 对**出错的工具调用**只落 `state.error`、没有 `state.output`
+   * （实测 2026-10-13：MCP -32602 校验错误 → part status=error + error 字段）。
+   * 此前只渲染 output，导致「失败卡 +（无输出）」把错误原因整个丢掉——出错时
+   * 用 error 文本充当输出展示（MCP 错误文案对模型/用户都是唯一线索）。
    */
   const toolView = (
     p: PartShape,
-  ): { name: string; status: MsgToolStatus; state: Record<string, unknown> | undefined } | null => {
+  ): {
+    name: string;
+    status: MsgToolStatus;
+    input: string;
+    output: string;
+  } | null => {
     const rawState = p.state;
     const state =
       rawState !== undefined && rawState !== null && typeof rawState === "object"
@@ -221,15 +231,18 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
       status = "awaiting-input";
     }
     const live = status === "running" && (streaming === true || messageStatus === "processing");
+    const errorText = typeof state?.error === "string" ? state.error : "";
+    const input = formatToolIO(state?.input);
+    const output = formatToolIO(state?.output) || errorText;
     if (
       status !== "awaiting-input" &&
       !live &&
-      isEmptyToolIO(formatToolIO(state?.input)) &&
-      isEmptyToolIO(formatToolIO(state?.output))
+      isEmptyToolIO(input) &&
+      isEmptyToolIO(output)
     ) {
       return null;
     }
-    return { name, status, state };
+    return { name, status, input, output };
   };
 
   // 可渲染内容 = 正文 / 附件 / 可渲染过程 part（tool/error 恒可渲染；
@@ -274,14 +287,13 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
           if (p.type === "tool") {
             const view = toolView(p);
             if (!view) return null;
-            const st = view.state;
             return (
               <MsgTool
                 key={i}
                 name={view.name}
                 status={view.status}
-                input={formatToolIO(st?.input)}
-                output={formatToolIO(st?.output)}
+                input={view.input}
+                output={view.output}
               />
             );
           }
