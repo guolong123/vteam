@@ -130,6 +130,15 @@ export const WORKER_COMMAND_TYPES = {
    * rolledBack 上报经 heartbeat 的收敛规则闭环）。
    */
   UPDATE_WORKER: 'update-worker',
+  /**
+   * 管理员服务端改并发上限——PATCH /workers/:id 携带 maxInstances 时：先写
+   * Worker.capabilities.maxInstances（服务端容量数学即刻生效），再经 T4a 心跳命令
+   * 通道把新值推给在线 worker（worker 侧持久化到本地并按新上限运行）。
+   *
+   * 走既有 commands 通道（与 model-credentials 同形），payload 为 `{ maxInstances }`。
+   * 命令一次有效：心跳取出即清空；离线 worker 排队，恢复上线后由心跳取出执行。
+   */
+  SET_MAX_INSTANCES: 'set-max-instances',
 } as const;
 
 export type WorkerCommandType =
@@ -186,6 +195,14 @@ export interface GitCredentialsPayload {
 }
 
 /**
+ * set-max-instances 命令负载（对齐 worker SetMaxInstancesPayload，双端字段名逐字一致）。
+ * maxInstances = 管理员在 PATCH /workers/:id 设定的并发上限（≥1）。
+ */
+export interface SetMaxInstancesPayload {
+  maxInstances: number;
+}
+
+/**
  * 心跳响应携带的下行命令（T4a）。
  * 设计为通用 commands 数组（复用点：AgentsModule 配置变更重启也走此通道，09 §3.7），
  * 命令仅一次有效：心跳取出即清空，worker 离线期间的命令丢弃（上线后由注册/重拉对齐）。
@@ -194,8 +211,11 @@ export interface WorkerCommand {
   type: WorkerCommandType;
   /** 资源版本号：T1/T2 变更时递增，worker 侧据此判断是否需重拉注入 */
   resourceVersion: string;
-  /** 命令负载：model-credentials 或 git-credentials 携带（其余 type 不携带） */
-  payload?: ModelCredentialsPayload | GitCredentialsPayload;
+  /** 命令负载：model-credentials / git-credentials / set-max-instances 携带（其余 type 不携带） */
+  payload?:
+    | ModelCredentialsPayload
+    | GitCredentialsPayload
+    | SetMaxInstancesPayload;
 }
 
 /** 原生 setInterval 句柄（不引入 @nestjs/schedule 依赖，等价 @Interval 语义）。 */
@@ -1167,11 +1187,15 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
    * - defaultModelId 非空须存在于 models 目录且 enabled=true（findCatalogByRef 查
    *   providerID/modelID @@unique，defaultModelId 即该格式）→ 否则 400 MODEL_NOT_FOUND；
    * - null/缺省 → 清除/幂等跳过；返回更新后的 WorkerView（含 defaultModelId）。
+   *
+   * 扩展：dto.maxInstances 提供（非 undefined/null）时，把新并发上限合并进
+   * Worker.capabilities（保留其余键），并经 T4a 心跳命令通道下发 set-max-instances
+   * 给在线 worker；两者可同时提供，互不影响。
    */
   async updateDefaultModel(id: string, dto: UpdateWorkerModelDto) {
     const existing = await this.prisma.worker.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, capabilities: true },
     });
     if (!existing) {
       throw new NotFoundException({
@@ -1179,7 +1203,7 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         message: `Worker ${id} 不存在`,
       });
     }
-    const { defaultModelId } = dto;
+    const { defaultModelId, maxInstances } = dto;
     if (
       defaultModelId !== null &&
       defaultModelId !== undefined &&
@@ -1193,13 +1217,36 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
+    const changesMaxInstances =
+      maxInstances !== undefined && maxInstances !== null;
+    const nextCapabilities = changesMaxInstances
+      ? {
+          ...((existing.capabilities &&
+          typeof existing.capabilities === 'object' &&
+          !Array.isArray(existing.capabilities)
+            ? existing.capabilities
+            : {}) as Record<string, unknown>),
+          maxInstances,
+        }
+      : undefined;
     const row = await this.prisma.worker.update({
       where: { id },
-      data:
-        defaultModelId === undefined
+      data: {
+        ...(defaultModelId === undefined
           ? {}
-          : { defaultModelId: defaultModelId || null },
+          : { defaultModelId: defaultModelId || null }),
+        ...(nextCapabilities !== undefined
+          ? { capabilities: nextCapabilities as Prisma.InputJsonValue }
+          : {}),
+      },
     });
+    if (changesMaxInstances) {
+      this.enqueueCommand(id, {
+        type: WORKER_COMMAND_TYPES.SET_MAX_INSTANCES,
+        resourceVersion: 'set-max-instances',
+        payload: { maxInstances },
+      });
+    }
     return this.toWorkerView(row);
   }
 
