@@ -2385,6 +2385,16 @@ export class WorkerDispatcher
       capabilities: workerRow.capabilities,
     };
 
+    // 分发守卫：同一团队成员同一时刻只允许一次在飞执行（防止同会话并发 /execute 造成负载虚高）。
+    // 检查 + 登记同步完成（中间无 await），并发分派无法同时通过检查。
+    if (this.isAgentExecuting(workerId, scope)?.has(teamMemberId)) {
+      this.logger.warn(
+        `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId} worker=${workerId}）已有执行在飞，丢弃本次分派`,
+      );
+      return;
+    }
+    this.registerExecution(workerId, scope, teamMemberId);
+
     // B2 可观测（team-worker-node Todo 5）：agentModelId === null（成员/任务/agent
     // 链皆无模型）且置顶实际生效（最终 workerId 即 preferredWorkerId）时，下面兜底
     // 表达式 `agentModelId ?? workerRow.defaultModelId ?? null` 的来源从「自动调度
@@ -2528,6 +2538,7 @@ export class WorkerDispatcher
           .catch((rbErr: unknown) =>
             this.logger.error(`回滚绑定失败: ${this.describeError(rbErr)}`),
           );
+        this.unregisterExecution(workerId, scope, teamMemberId);
         throw err;
       }
     }
@@ -2745,18 +2756,23 @@ export class WorkerDispatcher
     if (boundarySection) {
       systemOpts.boundarySection = boundarySection;
     }
-    await this.workerClient.execute(worker, {
-      prompt: [{ type: 'text', text: finalPrompt }],
-      model,
-      directory: teamWorkDir,
-      taskId: request.taskContext?.taskId ?? '',
-      agentId: target.agentId,
-      channelId: request.channelId,
-      sessionId: opencodeSessionId,
-      ...(resolvedAgentName ? { agent: resolvedAgentName } : {}),
-      ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
-      system: buildSystemInstructions(agentIdentity, systemOpts),
-    });
+    try {
+      await this.workerClient.execute(worker, {
+        prompt: [{ type: 'text', text: finalPrompt }],
+        model,
+        directory: teamWorkDir,
+        taskId: request.taskContext?.taskId ?? '',
+        agentId: target.agentId,
+        channelId: request.channelId,
+        sessionId: opencodeSessionId,
+        ...(resolvedAgentName ? { agent: resolvedAgentName } : {}),
+        ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
+        system: buildSystemInstructions(agentIdentity, systemOpts),
+      });
+    } catch (err) {
+      this.unregisterExecution(workerId, scope, teamMemberId);
+      throw err;
+    }
     // is_7：execute 202 受理后暂存原始分派快照（恢复重放用；wake 重放文本不覆盖）。
     this.saveDispatchSnapshot({
       text: request.text,
