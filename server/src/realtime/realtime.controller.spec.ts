@@ -14,7 +14,12 @@ import {
   RealtimeController,
   HEARTBEAT_INTERVAL_MS,
 } from './realtime.controller';
-import { RealtimeService, REALTIME_REPLAY_MAX } from './realtime.service';
+import {
+  RealtimeEvent,
+  RealtimeEventListener,
+  RealtimeService,
+  REALTIME_REPLAY_MAX,
+} from './realtime.service';
 
 describe('RealtimeController（SSE 端点）', () => {
   let controller: RealtimeController;
@@ -547,6 +552,50 @@ describe('RealtimeController（SSE 端点）', () => {
         orderBy: { id: 'asc' },
         take: REALTIME_REPLAY_MAX,
       });
+    });
+  });
+
+  describe('补拉失败后重放期必须结束（incident-livebuffer-finally）', () => {
+    it('getEventsSince 拒绝：replaying 复位为 false，后续实时帧直通而非继续进 liveBuffer', async () => {
+      grantAccess();
+      // 补拉查询直接拒绝（模拟 DB 故障 / 连接池耗尽）
+      prisma.realtimeEvent.findMany.mockRejectedValue(new Error('db down'));
+
+      let capturedListener: RealtimeEventListener | undefined;
+      const subscribeSpy = jest
+        .spyOn(realtime, 'subscribe')
+        .mockImplementation((listener) => {
+          capturedListener = listener;
+          return () => {};
+        });
+
+      const obs = await controller.events(undefined, 'global', accessToken);
+      // 订阅并等待补拉失败冒泡为 subscriber.error（与线上 catch 路径一致）
+      await new Promise<void>((resolve) => {
+        obs.subscribe({ next: () => {}, error: () => resolve() });
+      });
+
+      // 此刻补拉尝试已（以失败）结束：liveBuffer 必须已停止累积。
+      // 直接驱动监听器推一帧实时事件：
+      // - 有 finally：replaying=false → 帧走直通分支（toMessageEvent 被调用）
+      // - 无 finally：replaying 仍为 true → 帧被静默推进 liveBuffer（toMessageEvent 不被调用）
+      const toMessageEventSpy = jest.spyOn(
+        controller as unknown as { toMessageEvent: (e: RealtimeEvent) => MessageEvent },
+        'toMessageEvent',
+      );
+      const liveFrame: RealtimeEvent = {
+        id: 'ev_0000000009',
+        type: 'chat.message.new',
+        payload: { messageId: 'm_live' },
+        timestamp: '2026-10-15T00:00:00.000Z',
+        scopeType: 'global',
+        scopeId: null,
+      };
+      capturedListener!(liveFrame);
+      expect(toMessageEventSpy).toHaveBeenCalledWith(liveFrame);
+
+      toMessageEventSpy.mockRestore();
+      subscribeSpy.mockRestore();
     });
   });
 

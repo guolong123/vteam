@@ -104,21 +104,31 @@ export class RealtimeController {
 
       // 1) 先补拉历史（id > since，以 DB 为准），再对齐续拉期缓冲
       void (async () => {
-        const backlog = await this.realtime.getEventsSince(
-          since !== undefined && since !== '' ? since : undefined,
-          parsedScopes,
-          visibleTeamIds,
-        );
-        replaying = false;
-        const seen = new Set(backlog.map((e) => e.id));
-        for (const event of backlog) {
-          subscriber.next(this.toMessageEvent(event));
-        }
-        // 2) 续拉期间到达的事件（去重对齐历史游标）
-        for (const event of liveBuffer) {
-          if (!seen.has(event.id)) {
+        try {
+          const backlog = await this.realtime.getEventsSince(
+            since !== undefined && since !== '' ? since : undefined,
+            parsedScopes,
+            visibleTeamIds,
+          );
+          replaying = false;
+          const seen = new Set(backlog.map((e) => e.id));
+          for (const event of backlog) {
             subscriber.next(this.toMessageEvent(event));
           }
+          // 2) 续拉期间到达的事件（去重对齐历史游标）
+          for (const event of liveBuffer) {
+            if (!seen.has(event.id)) {
+              subscriber.next(this.toMessageEvent(event));
+            }
+          }
+        } finally {
+          // 补拉尝试结束（无论 resolve / throw / 中途 return）都必须复位重放期标志。
+          // incident-livebuffer-finally：原先仅成功路径置 false，一旦 getEventsSince 抛错，
+          // catch 只负责 subscriber.error(err)，replaying 永久停在 true → 后续实时帧全被
+          // 推进 liveBuffer 静默累积（帧含全量 accumulated message，~250KB-1MB/帧），
+          // 且无任何日志（NestJS catchError 吞噬该 error），是无声无界内存增长路径。
+          // 幂等赋值：成功路径语义与原先完全一致（false 已被提前置过，此处重复无副作用）。
+          replaying = false;
         }
       })().catch((err) => subscriber.error(err));
 
