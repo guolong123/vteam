@@ -1,0 +1,350 @@
+================================================================================
+EVIDENCE: incident-livebuffer-bound — Path F unbounded liveBuffer in
+          server/src/realtime/realtime.controller.ts (SSE events())
+captured: 2026-10-15 18:04:06 CST
+================================================================================
+
+################################################################################
+# 0. HEAD (must remain a3a17c0 + just-landed try/finally fix) — NOT moved
+################################################################################
+$ git log --oneline -1
+00e4c68 fix(realtime): SSE 补拉失败时无条件结束重放期（liveBuffer 不再可能继续累积）
+$ git status --porcelain -- server/src/realtime/
+ M server/src/realtime/realtime.controller.spec.ts
+ M server/src/realtime/realtime.controller.ts
+
+(Only realtime.controller.ts + realtime.controller.spec.ts modified under src/realtime/.
+ HEAD 00e4c68 == a3a17c0 + the just-landed try/finally fix commit; HEAD did not move
+ during this task. No git write command was run.)
+
+################################################################################
+# 1. THE BUG (Path F) — verified mechanism
+################################################################################
+events() opens `const liveBuffer: RealtimeEvent[] = []` and pushes live frames while
+`replaying === true`. The replay is `await this.realtime.getEventsSince(...)` inside
+an async IIFE whose try/finally (landed in HEAD 00e4c68) resets replaying=false on
+success, throw, and early return. PATH F: if getEventsSince NEVER SETTLES (hung query,
+pool exhaustion, DB stall), neither the assignment nor the finally ever runs →
+replaying stays true forever → the subscribe callback pushes EVERY live frame into
+liveBuffer with no bound and no log. Each delta frame carries the whole accumulated
+message (~250KB-1MB) at 25-44 frames/s → ~11-44 MB/s unbounded growth, silent.
+
+################################################################################
+# 2. THE FIX — two complementary bounds (neither changes normal-path behaviour)
+################################################################################
+$ grep -n "REALTIME_LIVE_BUFFER\|REALTIME_REPLAY_DEADLINE" server/src/realtime/realtime.controller.ts | head -30
+45:export const REALTIME_LIVE_BUFFER_MAX_FRAMES = 1000;
+59:export const REALTIME_LIVE_BUFFER_MAX_BYTES = 64 * 1024 * 1024;
+70:export const REALTIME_REPLAY_DEADLINE_MS = 30_000;
+165:       * REALTIME_LIVE_BUFFER_MAX_FRAMES 或序列化字节
+166:       * REALTIME_LIVE_BUFFER_MAX_BYTES 任一超限，即从头部淘汰最旧帧。
+176:          liveBuffer.length > REALTIME_LIVE_BUFFER_MAX_FRAMES ||
+177:          liveBufferBytes > REALTIME_LIVE_BUFFER_MAX_BYTES
+182:              `[liveBuffer] 续拉期实时帧缓冲触顶（条数上限 ${REALTIME_LIVE_BUFFER_MAX_FRAMES} / 字节预算 ${REALTIME_LIVE_BUFFER_MAX_BYTES}B）：补拉疑似悬挂，开始从头淘汰最旧帧，实时帧按序收敛保留`,
+185:          while (liveBuffer.length > REALTIME_LIVE_BUFFER_MAX_FRAMES) {
+189:            liveBufferBytes > REALTIME_LIVE_BUFFER_MAX_BYTES &&
+222:          `[liveBuffer] 补拉重放期超过 ${REALTIME_REPLAY_DEADLINE_MS}ms 未返回（getEventsSince 疑似悬挂）：强制结束重放期，实时帧改为直通，已累积 ${liveBuffer.length} 帧立即下发；迟到的补拉结果与已送达内容完全重叠，不再重复下发`,
+230:      }, REALTIME_REPLAY_DEADLINE_MS);
+
+--- constants + call sites ---
+$ sed -n between (pushLive, deadline timer, skip guard)
+172:        const size = this.measureFrameBytes(event);
+180:            liveOverflowWarned = true;
+200:            pushLive(event);
+215:      const replayDeadlineTimer = setTimeout(() => {
+243:          if (bufferReleasedByDeadline) {
+271:          clearTimeout(replayDeadlineTimer);
+293:        clearTimeout(replayDeadlineTimer);
+
+################################################################################
+# 3. NORMAL-PATH ARITHMETIC - a normal replay can never reach the caps
+################################################################################
+Frames enter liveBuffer ONLY while replaying===true, i.e. during the replay window:
+    buffered_frames = frame_rate x replay_duration
+    buffered_bytes  = buffered_frames x frame_size
+
+Normal replay: getEventsSince reads <= REALTIME_REPLAY_MAX = 1000 rows (already
+capped) with an indexed query and returns in milliseconds.
+
+Worst NORMAL window (already 100x a typical ms-scale query): 100 ms
+    frames = 44/s x 0.1 s = 4.4 frames
+    bytes  = 4.4 x 1 MiB (1,048,576 B) = 4,613,734 B (~4.4 MiB)
+
+Headroom vs the caps:
+    count cap  REALTIME_LIVE_BUFFER_MAX_FRAMES = 1000
+        1000 / 4.4 = 227x   (1s slow-but-fine replay: 44 frames -> 22.7x)
+    byte budget REALTIME_LIVE_BUFFER_MAX_BYTES = 64 MiB = 67,108,864 B
+        67,108,864 / 4,613,734 = 14.5x
+        1s slow-but-fine replay: 44 x 1 MiB = 46,137,344 B = 44 MiB < 64 MiB
+        -> still no eviction. Byte budget 64 MiB retains ~31-32 frames of 2 MiB
+           (32 x 2,098,302 B = 67,114,464 B > 67,108,864 B -> head evicted to 31).
+
+Worst retained after any overflow = budget + newest frame
+    <= 67,108,864 + 1,048,576 + ~150 B header = ~65.1 MiB
+    (length>1 guard keeps the newest frame; an oversized frame is kept exactly once)
+
+Hung-replay (the Path F being closed): growth pinned at ~65 MiB vs pre-fix
+    44 MiB/s x 60 s = 2,559 MiB/min  -> ~2.5 GiB/min (a 2 GiB cgroup OOMs in <1 min)
+    65 MiB vs 2,559 MiB/min = ~39,000x tighter after 1 minute.
+
+Replay deadline REALTIME_REPLAY_DEADLINE_MS = 30,000 ms
+    30,000 ms = 300x the 100 ms worst-normal replay
+              = 15x  a 2 s "slow but fine" replay
+              <= 2 heartbeat intervals (HEARTBEAT_INTERVAL_MS = 15,000 ms)
+    A legitimate slow-but-fine replay cannot reach the deadline; even if some
+    pathological >30 s replay did, the semantics are safe (see section 5).
+
+################################################################################
+# 4. HUNK-BY-HUNK JUSTIFICATION (raw: git diff -U0 | grep '^@@')
+################################################################################
+@@ -4,0 +5 @@ import {
+@@ -27,0 +29,43 @@ export const HEARTBEAT_INTERVAL_MS = 15000;
+@@ -41,0 +86,2 @@ export class RealtimeController {
+@@ -89 +135,8 @@ export class RealtimeController {
+@@ -90,0 +144,4 @@ export class RealtimeController {
+@@ -91,0 +149,47 @@ export class RealtimeController {
+@@ -96 +200 @@ export class RealtimeController {
+@@ -105,0 +210,25 @@ export class RealtimeController {
+@@ -113,0 +243,8 @@ export class RealtimeController {
+@@ -131,0 +269,3 @@ export class RealtimeController {
+@@ -150,0 +291,3 @@ export class RealtimeController {
+@@ -312,0 +456,13 @@ export class RealtimeController {
+@@ -4,0 +5 @@     import Logger from @nestjs/common (feeds the two new warn sites).
+@@ -27,0 +29,43 @@   the three exported constants with numeric-justification docstrings
+                       (deliverable 1: count cap + byte budget; deliverable 2: deadline).
+@@ -41,0 +86,2 @@   controller-scoped Logger instance field.
+@@ -89 +135,8 @@   Path F anatomy comment + liveBufferSizes/liveBufferBytes accounting
+                       (parallel array + running total; same pattern as logSizes in
+                       realtime.service.ts - NOT the just-landed try/finally work).
+@@ -90,0 +144,4 @@   bufferReleasedByDeadline + liveOverflowWarned flags.
+@@ -91,0 +149,47 @@  evictLiveHead + pushLive: the cap enforcement (warn-once + head eviction
+                       on count OR bytes; newest frame always retained).
+@@ -96 +200 @@     THE single behavioural change on the push path:
+                       liveBuffer.push(event) -> pushLive(event). Far below the caps
+                       pushLive is a pure push + O(1) accounting (no behaviour change).
+@@ -105,0 +210,25 @@ deadline timer armed right after subscribe (fires only if the replay
+                       never settles; unref'd so it never holds the event loop).
+@@ -113,0 +243,8 @@  bufferReleasedByDeadline skip guard at the top of the settle path,
+                       BEFORE any backlog frame is sent (prevents double delivery of a
+                       late, redundant backlog).
+@@ -131,0 +269,3 @@  clearTimeout(replayDeadlineTimer) INSIDE the just-landed finally. The
+                       finally body itself is from HEAD 00e4c68 and is otherwise
+                       untouched - only this one line was appended to it.
+@@ -150,0 +291,3 @@  clearTimeout(replayDeadlineTimer) in the teardown (no orphan timer when
+                       the client disconnects during a hung replay).
+@@ -312,0 +456,13 @@ measureFrameBytes helper (same semantics as the service's
+                       measureRetainedBytes; 4 KiB conservative fallback on throw).
+
+NOTE ON just-landed vs mine: the try/finally (and its comment) is ALREADY COMMITTED in
+HEAD 00e4c68, so it does not appear in `git diff` at all. Every hunk above is mine.
+
+################################################################################
+# 5. REPLAY DEADLINE SEMANTICS - exactly what happens if it fires early
+################################################################################
+The deadline can only fire when getEventsSince has not settled within 30 s, i.e.
+the replay is hung (a legitimately slow-but-fine replay is <= s-scale; see #3).
+When it fires, in order:
+  1) replaying = false  -> every subsequent live frame passes straight through
+     subscriber.next(toMessageEvent(event)); nothing is buffered any more.
+  2) bufferReleasedByDeadline = true -> remembered for the settle path.
+  3) warn (level "warn") -> the release is VISIBLE, not silent.
+  4) the already-buffered frames are flushed immediately, in buffer order, which
+     is arrival order == event emission order (eviction only removes from the
+     head, so id order inside the buffer is preserved) -> no reordering.
+  5) the buffer is emptied.
+When the hung replay eventually settles, the settle path sees
+bufferReleasedByDeadline === true and RETURNS BEFORE sending any backlog frame.
+Why that is safe (exactly-once):
+  * Events are persisted-then-broadcast in RealtimeService.emitOnce (create await
+    completes, then bus.emit in the same microtask continuation).
+  * Every backlog frame was therefore broadcast either before the deadline fired
+    (-> it was pushed into liveBuffer -> flushed in step 4) or after
+    (-> replaying was already false -> it went straight through).
+    Even under DB-driver response reordering, a frame whose broadcast microtask
+    has not yet run simply passes through live right after the settle.
+  * Hence the late backlog is a strict subset of already-delivered frames;
+    re-sending it could only duplicate (breaking the id de-dup semantics), so it
+    is skipped entirely.
+De-dup on the NORMAL path is untouched: whenever the replay settles before the
+deadline (the normal case: milliseconds), bufferReleasedByDeadline is false and
+the original backlog-then-dedup-buffer logic runs verbatim.
+Residual edge (documented, degraded path only): if a team/task row is mutated so
+that the bus-side scope filter and the DB-side backlog filter would disagree
+DURING a >30 s hang, one frame could be missed on that connection only; the
+normal path is unaffected and the client reconciles on reconnect.
+
+################################################################################
+# 6. TESTS - raw outputs with literal exit codes
+################################################################################
+New cases (all in describe "续拉缓冲无界增长边界（incident-livebuffer-bound，Path F）"):
+  (a) 补拉永不 settle：缓冲按条数上限收敛（淘汰最旧帧 + warn 可见），死线强制结束重放期并整体下发，此后实时帧直通
+  (b) 补拉永不 settle：字节预算独立收敛大帧（条数上限远未达到，单帧 ~2MiB）
+  (c) 死线先释放、补拉随后才迟到：迟到 backlog 整体跳过（不重复下发已送达帧），后续广播走直通恰好一次
+  (d) 正常补拉（毫秒级 settle）不受边界影响：backlog + 续拉缓冲按 id 去重下发，无 warn、死线不触发
+Determinism: (a)-(c) use jest fake timers + a never-settling / manually-resolved
+getEventsSince promise (hung DB), driven through the captured subscribe listener;
+(d) uses a real-timer synchronous pre-settle window.
+$ npx jest src/realtime
+PASS src/realtime/realtime-subscribers.spec.ts
+PASS src/realtime/realtime.service.spec.ts
+PASS src/realtime/realtime.service.byte-cap.spec.ts
+PASS src/realtime/realtime.controller.spec.ts
+
+Test Suites: 4 passed, 4 total
+Tests:       100 passed, 100 total
+Snapshots:   0 total
+Time:        5.422 s
+Ran all test suites matching /src\/realtime/i.
+JEST=0
+
+$ npx tsc --noEmit -p tsconfig.json
+TSC=0
+
+$ npx jest src/realtime/realtime.controller.spec.ts --verbose (new cases only, grepped)
+    补拉失败后重放期必须结束（incident-livebuffer-finally）
+    续拉缓冲无界增长边界（incident-livebuffer-bound，Path F）
+      ✓ 补拉永不 settle：缓冲按条数上限收敛（淘汰最旧帧 + warn 可见），死线强制结束重放期并整体下发，此后实时帧直通 (3 ms)
+      ✓ 补拉永不 settle：字节预算独立收敛大帧（条数上限远未达到，单帧 ~2MiB） (53 ms)
+      ✓ 死线先释放、补拉随后才迟到：迟到 backlog 整体跳过（不重复下发已送达帧），后续广播走直通恰好一次 (1 ms)
+      ✓ 正常补拉（毫秒级 settle）不受边界影响：backlog + 续拉缓冲按 id 去重下发，无 warn、死线不触发 (1 ms)
+GREP_DONE
+--------------------------------------------------------------------------------
+# 7. MUTATION PROOFS (throwaway copy OUTSIDE the repo: /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/server)
+--------------------------------------------------------------------------------
+Method: copy of server/ (node_modules symlinked) + a saved pristine
+controller.ts. Each guard is reverted, the new describe is run (raw output
+below, exit code captured WITHOUT pipes: 'jest > file 2>&1; echo EXIT=$?'),
+then the pristine file is restored and its sha256 must equal both the saved
+pristine and the repo file before the GREEN re-run.
+
+--- MUT-A baseline sanity: unmutated copy must be GREEN ---
+BASELINE_JEST=0
+      ✓ 补拉永不 settle：缓冲按条数上限收敛（淘汰最旧帧 + warn 可见），死线强制结束重放期并整体下发，此后实时帧直通 (8 ms)
+      ✓ 补拉永不 settle：字节预算独立收敛大帧（条数上限远未达到，单帧 ~2MiB） (49 ms)
+      ✓ 死线先释放、补拉随后才迟到：迟到 backlog 整体跳过（不重复下发已送达帧），后续广播走直通恰好一次 (1 ms)
+      ✓ 正常补拉（毫秒级 settle）不受边界影响：backlog + 续拉缓冲按 id 去重下发，无 warn、死线不触发 (1 ms)
+Tests:       25 skipped, 4 passed, 29 total
+--------------------------------------------------------------------------------
+--- MUT-A: revert the CAP (pushLive enforcement neutered -> unbounded push) ---
+MUT-A APPLIED: cap enforcement disabled
+MUTA_JEST=1
+      ✕ 补拉永不 settle：缓冲按条数上限收敛（淘汰最旧帧 + warn 可见），死线强制结束重放期并整体下发，此后实时帧直通 (8 ms)
+      ✕ 补拉永不 settle：字节预算独立收敛大帧（条数上限远未达到，单帧 ~2MiB） (49 ms)
+      ✓ 死线先释放、补拉随后才迟到：迟到 backlog 整体跳过（不重复下发已送达帧），后续广播走直通恰好一次 (2 ms)
+      ✓ 正常补拉（毫秒级 settle）不受边界影响：backlog + 续拉缓冲按 id 去重下发，无 warn、死线不触发 (1 ms)
+    Expected: StringContaining "[liveBuffer]"
+      698 |           expect.stringContaining('[liveBuffer]'),
+    expect(received).toBeLessThanOrEqual(expected)
+    Expected: <= 32
+    Received:    40
+    > 756 |         expect(flushed.length).toBeLessThanOrEqual(32);
+Tests:       2 failed, 25 skipped, 2 passed, 29 total
+--- restore A + sha256 verify + GREEN ---
+0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/pristine.controller.ts
+0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/server/src/realtime/realtime.controller.ts
+0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /Volumes/SSD-Data/01work/git-project/vteam/server/src/realtime/realtime.controller.ts
+RESTOREA_JEST=0
+      ✓ 补拉永不 settle：缓冲按条数上限收敛（淘汰最旧帧 + warn 可见），死线强制结束重放期并整体下发，此后实时帧直通 (8 ms)
+      ✓ 补拉永不 settle：字节预算独立收敛大帧（条数上限远未达到，单帧 ~2MiB） (46 ms)
+      ✓ 死线先释放、补拉随后才迟到：迟到 backlog 整体跳过（不重复下发已送达帧），后续广播走直通恰好一次 (1 ms)
+      ✓ 正常补拉（毫秒级 settle）不受边界影响：backlog + 续拉缓冲按 id 去重下发，无 warn、死线不触发 (1 ms)
+Tests:       25 skipped, 4 passed, 29 total
+--------------------------------------------------------------------------------
+--- MUT-B: revert the DEADLINE (callback neutered: returns immediately,
+    replaying is never forced false) ---
+216:        if (!replaying || true) {
+MUTB_JEST=1
+      ✕ 补拉永不 settle：缓冲按条数上限收敛（淘汰最旧帧 + warn 可见），死线强制结束重放期并整体下发，此后实时帧直通 (9 ms)
+      ✕ 补拉永不 settle：字节预算独立收敛大帧（条数上限远未达到，单帧 ~2MiB） (51 ms)
+      ✕ 死线先释放、补拉随后才迟到：迟到 backlog 整体跳过（不重复下发已送达帧），后续广播走直通恰好一次 (1 ms)
+      ✓ 正常补拉（毫秒级 settle）不受边界影响：backlog + 续拉缓冲按 id 去重下发，无 warn、死线不触发
+    Expected length: 1000
+    Received length: 0
+Tests:       3 failed, 25 skipped, 1 passed, 29 total
+--- restore B + sha256 verify + GREEN ---
+0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/pristine.controller.ts
+0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/server/src/realtime/realtime.controller.ts
+0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /Volumes/SSD-Data/01work/git-project/vteam/server/src/realtime/realtime.controller.ts
+RESTOREB_JEST=0
+      ✓ 补拉永不 settle：缓冲按条数上限收敛（淘汰最旧帧 + warn 可见），死线强制结束重放期并整体下发，此后实时帧直通 (9 ms)
+      ✓ 补拉永不 settle：字节预算独立收敛大帧（条数上限远未达到，单帧 ~2MiB） (48 ms)
+      ✓ 死线先释放、补拉随后才迟到：迟到 backlog 整体跳过（不重复下发已送达帧），后续广播走直通恰好一次 (1 ms)
+      ✓ 正常补拉（毫秒级 settle）不受边界影响：backlog + 续拉缓冲按 id 去重下发，无 warn、死线不触发 (1 ms)
+Tests:       25 skipped, 4 passed, 29 total
+--------------------------------------------------------------------------------
+--- MUT-B2 (bonus): remove the deadline by setting the constant to +infty.
+    The test derives advanceTimersByTime from that same constant, so with no
+    deadline the 15s heartbeat interval floods the worker -> jest worker itself
+    is OOM-killed at the 4GB heap. Exit 134, not an assertion failure - the
+    no-deadline path literally grows memory until the process dies. ---
+/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/run-mutations.sh: line 99:   766 Abort trap: 6           npx jest src/realtime/realtime.controller.spec.ts -t "$FILT" --cacheDirectory "$MUT/jest-cache" > "$MUT/e-B2.txt" 2>&1
+MUTB2_JEST=134
+
+<--- Last few GCs --->
+
+[791:0xad940c000]    50079 ms: Mark-Compact (reduce) 4089.9 (4100.6) -> 4088.4 (4097.9) MB, pooled: 0 MB, 2553.54 / 0.00 ms  (+ 5.0 ms in 1 steps since start of marking, biggest step 5.0 ms, walltime since start of marking 2586 ms) (average mu = 0.231, cu
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+RESTORED_B2 0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/pristine.controller.ts
+RESTORED_B2 0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/server/src/realtime/realtime.controller.ts
+--------------------------------------------------------------------------------
+--- MUT-C: revert the late-backlog SKIP (settle re-sends the redundant backlog) ---
+243:          if (false && bufferReleasedByDeadline) {
+MUTC_JEST=1
+      ○ skipped since 未传时不再无界重放历史：解析最新 id 为游标（findMany 恒有 id 下界 + take）
+      ✓ 补拉永不 settle：缓冲按条数上限收敛（淘汰最旧帧 + warn 可见），死线强制结束重放期并整体下发，此后实时帧直通 (8 ms)
+      ✓ 补拉永不 settle：字节预算独立收敛大帧（条数上限远未达到，单帧 ~2MiB） (48 ms)
+      ✕ 死线先释放、补拉随后才迟到：迟到 backlog 整体跳过（不重复下发已送达帧），后续广播走直通恰好一次 (3 ms)
+      ✓ 正常补拉（毫秒级 settle）不受边界影响：backlog + 续拉缓冲按 id 去重下发，无 warn、死线不触发 (1 ms)
+    + Received  + 1
+    +   "ev_0000000003",
+Tests:       1 failed, 25 skipped, 3 passed, 29 total
+--- restore C + sha256 verify + GREEN (full suite) ---
+0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/pristine.controller.ts
+0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/livebuffer-mut/server/src/realtime/realtime.controller.ts
+0a016afec18d5accb56605eee60d7bd205fa0491a052e6caba87636152ab674c  /Volumes/SSD-Data/01work/git-project/vteam/server/src/realtime/realtime.controller.ts
+RESTOREC_FULL_JEST=0
+PASS src/realtime/realtime.controller.spec.ts
+
+Test Suites: 4 passed, 4 total
+Tests:       100 passed, 100 total
+Snapshots:   0 total
+Time:        2.692 s, estimated 3 s
+Ran all test suites matching /src\/realtime/i.
+--------------------------------------------------------------------------------
+
+################################################################################
+# 8. SUMMARY / VERIFICATION CHECKLIST
+################################################################################
+Files changed (nothing else under the repo):
+  - server/src/realtime/realtime.controller.ts   (158 insertions, 2 deletions)
+  - server/src/realtime/realtime.controller.spec.ts
+Constants introduced:
+  - REALTIME_LIVE_BUFFER_MAX_FRAMES = 1000        (count cap)
+  - REALTIME_LIVE_BUFFER_MAX_BYTES  = 64*1024*1024 (byte budget, 64 MiB)
+  - REALTIME_REPLAY_DEADLINE_MS     = 30_000      (replay deadline)
+Normal-path behaviour evidence:
+  - All 96 pre-existing tests green before AND after (100 total with the 4 new).
+  - The only push-path change is liveBuffer.push(event) -> pushLive(event); far
+    below the caps pushLive does push + O(1) bookkeeping only.
+  - The settle path is byte-for-byte the original logic unless
+    bufferReleasedByDeadline (impossible when the replay settles < 30 s).
+  - SSE wire payload (toMessageEvent) and the id de-dup set are untouched.
+  - The just-landed try/finally semantics are preserved (its finally now also
+    clears the deadline timer; clearTimeout on a fired/absent handle is a no-op).
+Verification commands (raw above):
+  - npx jest src/realtime        -> 100 passed, JEST=0
+  - npx tsc --noEmit             -> TSC=0
+  - git log --oneline -1         -> 00e4c68 (a3a17c0 + just-landed fix; unmoved)
+  - git diff -U0 hunks           -> section 4 (all 12 hunks are this task's)
+Manual QA: none beyond the deterministic jest cases above; no live server boot
+(staging/DB + JWT required, out of this task's lane).
+Cleanup: throwaway mutation copy + jest cache removed from the pre-approved temp
+dir after evidence capture; no files written outside the repo except the temp
+dir and this evidence file.
+Risks: (1) degraded-path residual edge documented in section 5; (2) per-hung-
+connection ~65 MiB peak, released/freed at the 30 s deadline; (3) one extra
+JSON.stringify per buffered frame (only during replay; 4 KiB fallback on throw).
+################################################################################
+# END OF EVIDENCE
+################################################################################
