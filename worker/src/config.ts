@@ -66,6 +66,12 @@ export interface WorkerConfig {
    */
   workerMaxInstances: number;
   /**
+   * worker 执行总时长上限 ms（env WORKER_TOTAL_TIMEOUT_MS，opt-in）。自 awaitCompletion
+   * 开始计时，首字出现后到期限仍无完成（step-finish）→ abort + 抛「执行总时长超限」。
+   * 默认 0 = 禁用（保持既有「首字后无完成超时」契约，判死由 server 空闲 watchdog 负责）。
+   */
+  workerTotalTimeoutMs: number;
+  /**
    * 独立模式（env WORKER_STANDALONE）：true = 跳过控制面注册/心跳/资源拉取，
    * serve + 执行端点照常启动（无 SERVER_URL 可达也能起）。默认 false = 现行注册模式。
    */
@@ -180,6 +186,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
       300000,
     ),
     workerMaxInstances: parsePositiveInt('WORKER_MAX_INSTANCES', env.WORKER_MAX_INSTANCES, 5),
+    workerTotalTimeoutMs: parseNonNegativeInt(
+      'WORKER_TOTAL_TIMEOUT_MS',
+      env.WORKER_TOTAL_TIMEOUT_MS,
+      0,
+    ),
     standalone: parseBool('WORKER_STANDALONE', env.WORKER_STANDALONE, false),
   };
 }

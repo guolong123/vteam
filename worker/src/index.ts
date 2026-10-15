@@ -41,6 +41,7 @@ import {
   GitCredentialsPayload,
   ModelCredentialsPayload,
   ModelProviderConfigEntry,
+  SetMaxInstancesPayload,
   WorkerCapabilities,
   WorkerCommand,
   WorkerCommandType,
@@ -157,8 +158,89 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
         `[worker] 收到命令 update-worker（目标版本=${readUpdateCommandVersion(command) ?? '未携带'}），分派自更新执行器`,
       );
     }
+    if (command.type === WORKER_COMMAND_TYPES.SET_MAX_INSTANCES) {
+      console.log(
+        `[worker] 收到命令 set-max-instances（resourceVersion=${command.resourceVersion}），分派动态并发上限更新`,
+      );
+    }
   }
   void commandHandler?.(commands);
+}
+
+/** 运行时配置文件名（workDir 下；set-max-instances 持久化落点，重启后本地优先 env）。 */
+export const RUNTIME_CONFIG_FILE = '.worker-runtime-config.json';
+
+/**
+ * set-max-instances：解析启动时的有效并发上限（**本地文件 > env**）。
+ * server 下发的动态上限持久化到 <workDir>/.worker-runtime-config.json；重启后本地文件
+ * 仍生效（覆盖 WORKER_MAX_INSTANCES）。文件缺失（首次启动，静默）/损坏/值非法（非整数
+ * 或 <1）→ 回落 env 值并 warn，绝不阻断启动。
+ */
+export function resolveRuntimeMaxInstances(workDir: string, envValue: number): number {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(workDir, RUNTIME_CONFIG_FILE), 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(
+        `[worker] 读取运行时配置失败（忽略，回落 WORKER_MAX_INSTANCES=${envValue}）: ${(err as Error).message}`,
+      );
+    }
+    return envValue;
+  }
+  try {
+    const parsed = JSON.parse(raw) as { maxInstances?: unknown };
+    const value = parsed?.maxInstances;
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 1) {
+      console.log(
+        `[worker] 运行时配置生效：maxInstances=${value}（本地文件优先于 WORKER_MAX_INSTANCES=${envValue}）`,
+      );
+      return value;
+    }
+    console.warn(
+      `[worker] 运行时配置 maxInstances 非法（忽略，回落 WORKER_MAX_INSTANCES=${envValue}）`,
+    );
+  } catch (err) {
+    console.warn(
+      `[worker] 运行时配置解析失败（忽略，回落 WORKER_MAX_INSTANCES=${envValue}）: ${(err as Error).message}`,
+    );
+  }
+  return envValue;
+}
+
+/** set-max-instances：持久化有效并发上限到 <workDir>/.worker-runtime-config.json（mkdir -p + JSON 写）。 */
+export function persistRuntimeMaxInstances(workDir: string, maxInstances: number): void {
+  fs.mkdirSync(workDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(workDir, RUNTIME_CONFIG_FILE),
+    JSON.stringify({ maxInstances }, null, 2),
+    'utf8',
+  );
+}
+
+/**
+ * set-max-instances：校验负载（正整数）→ 更新内存有效值并本地持久化（持久化失败不影响
+ * 内存生效）。返回新有效值（非法负载返回原值）；调用方据此更新 effectiveMaxInstances，
+ * 下次注册/心跳起下发给 server，无需重启 serve。
+ */
+export function applySetMaxInstances(
+  payload: SetMaxInstancesPayload | undefined,
+  current: number,
+  workDir: string,
+  log: (message: string) => void = (message) => console.log(message),
+): number {
+  const value = payload?.maxInstances;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    log(`[worker] set-max-instances 负载非法（maxInstances=${String(value)}），忽略（保持 ${current}）`);
+    return current;
+  }
+  try {
+    persistRuntimeMaxInstances(workDir, value);
+  } catch (err) {
+    console.warn(`[worker] set-max-instances 持久化失败（内存值仍生效）: ${(err as Error).message}`);
+  }
+  log(`[worker] set-max-instances = ${value}（无需重启 serve）`);
+  return value;
 }
 
 /** handleModelCredentials 的依赖注入面（单测可 mock 文件 IO 与重启协调）。 */
@@ -340,6 +422,7 @@ function printStartup(config: WorkerConfig, opencodeVersion: string): void {
   workerAdvertiseHost = ${config.workerAdvertiseHost}
   heartbeatIntervalMs = ${config.heartbeatIntervalMs}
   workerMaxInstances  = ${config.workerMaxInstances}
+  workerTotalTimeoutMs = ${config.workerTotalTimeoutMs === 0 ? '0（禁用：首字后无完成超时）' : config.workerTotalTimeoutMs}
   logLevel            = ${config.logLevel}
   opencodeVersion     = ${opencodeVersion}
   agentBrowser        = ${browserInfo}`);
@@ -574,6 +657,8 @@ export async function buildCapabilities(
  * 注册/reRegister 携带真实 skills/tools 清单，保证 worker 详情页数据非陈旧。
  * C2：models 透传 buildCapabilities（resolveModels 结果，失败 undefined 不带）；
  * defaultModelId 来自 config.defaultModelId（env WORKER_DEFAULT_MODEL），未配置不携带。
+ * CHANGE 3：maxInstances 可传运行时有效值（本地文件/set-max-instances 覆盖），缺省回落
+ * config.workerMaxInstances（env）——既有调用方（单测）行为不变。
  */
 export async function buildRegisterOptions(
   config: WorkerConfig,
@@ -584,6 +669,7 @@ export async function buildRegisterOptions(
   models?: string[],
   execPort?: number,
   executableModels?: string[],
+  maxInstances?: number,
 ): Promise<RegistryClientOptions> {
   const capabilities = await buildCapabilities(
     port,
@@ -591,7 +677,7 @@ export async function buildRegisterOptions(
     injected,
     models,
     execPort,
-    config.workerMaxInstances,
+    maxInstances ?? config.workerMaxInstances,
     executableModels,
   );
   return {
@@ -1021,6 +1107,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     sender: eventSender,
     workerToken: config.workerToken,
     firstTokenTimeoutMs: config.workerFirstTokenTimeoutMs,
+    totalTimeoutMs: config.workerTotalTimeoutMs,
     serverBaseUrl: config.serverUrl,
     browserProfileRoot: config.workDir,
     // 独立模式（WORKER_STANDALONE）下挂载 POST /config/* 本地配置下推；注册模式不挂载

@@ -172,6 +172,13 @@ export const WORKER_COMMAND_TYPES = {
    * 执行器见 update/worker-updater.ts；命令一次有效，取出后由 server 侧收敛规则清理。
    */
   UPDATE_WORKER: 'update-worker',
+  /**
+   * 动态并发上限下发：server 经下行命令把新的 maxInstances 推给 worker，worker 立即
+   * 生效（后续注册/心跳 capabilities.maxInstances 与新容量据此）并**本地持久化**
+   * （<workDir>/.worker-runtime-config.json，重启后本地优先 env，见 index.ts），
+   * **不重启 serve**。旧 worker 不识别本 type → 静默忽略（向后兼容）。
+   */
+  SET_MAX_INSTANCES: 'set-max-instances',
 } as const;
 
 /**
@@ -309,6 +316,14 @@ export interface UpdateWorkerCommandPayload {
 }
 
 /**
+ * set-max-instances 命令负载：动态并发上限（正整数）。
+ * worker 收到后立即生效并本地持久化；非法值（非整数/<1）忽略。
+ */
+export interface SetMaxInstancesPayload {
+  maxInstances: number;
+}
+
+/**
  * 心跳响应携带的下行命令（T4a，对齐 server WorkerCommand）。
  * 设计为通用 commands 数组（复用点：AgentsModule 配置变更重启也走此通道）。
  */
@@ -320,7 +335,8 @@ export interface WorkerCommand {
   payload?:
     | ModelCredentialsPayload
     | GitCredentialsPayload
-    | UpdateWorkerCommandPayload;
+    | UpdateWorkerCommandPayload
+    | SetMaxInstancesPayload;
 }
 
 /** POST /workers/:id/heartbeat 成功响应（对齐 server workers.service.ts heartbeat 返回）。 */

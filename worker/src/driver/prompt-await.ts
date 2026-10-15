@@ -27,6 +27,14 @@ export interface AwaitCompletionOptions {
    * 首字出现后无完成超时（持续等待 step-finish，不 abort）。
    */
   firstTokenTimeoutMs?: number;
+  /**
+   * 执行总时长上限 ms（opt-in，默认禁用）。自 awaitCompletion 开始计时；**首字出现后**
+   * 若到期限仍无 step-finish（无完成）→ abort + 抛 CompletionTimeoutError（文案前缀
+   * 「执行总时长超限」）。与首字超时独立：首字超时管「模型完全没响应」，本项管「模型有
+   * 响应但整体跑太久」。<=0/缺省 = 禁用（保持既有「首字后无完成超时」契约，判死仍由上层
+   * server 空闲 watchdog 负责）。
+   */
+  totalTimeoutMs?: number;
   /** 轮询间隔 ms；默认 500（计划 D8） */
   pollMs?: number;
   /** 每次轮询后的回调（调试/进度上报用，T6 事件上送可在此挂钩） */
@@ -304,13 +312,16 @@ export class CompletionTimeoutError extends Error {
     messages?: ServeMessage[],
     serveErrorText?: string,
     serveLogTail?: string[],
+    timeoutKind: 'first-token' | 'total' = 'first-token',
   ) {
     const reason = describeTimeoutReason(messages ?? [], serveErrorText, serveLogTail);
-    super(
-      typeof serveErrorText === 'string' && serveErrorText.trim() !== ''
-        ? `[prompt-await] 会话 ${sessionID} 模型调用失败：${reason}`
-        : `[prompt-await] 会话 ${sessionID} 等待首字超时：${reason}`,
-    );
+    const prefix =
+      timeoutKind === 'total'
+        ? `[prompt-await] 会话 ${sessionID} 执行总时长超限：${reason}`
+        : typeof serveErrorText === 'string' && serveErrorText.trim() !== ''
+          ? `[prompt-await] 会话 ${sessionID} 模型调用失败：${reason}`
+          : `[prompt-await] 会话 ${sessionID} 等待首字超时：${reason}`;
+    super(prefix);
     this.name = 'CompletionTimeoutError';
     this.sessionID = sessionID;
     this.result = result;
@@ -524,7 +535,7 @@ export async function awaitCompletion(
   sessionID: string,
   options: AwaitCompletionOptions = {},
 ): Promise<CompletionResult> {
-  const { firstTokenTimeoutMs = 300_000, pollMs = 500, onPoll, baselineIds, onServeError, serveErrorReader, serveLogReader, serveLogTailLines = 20 } = options;
+  const { firstTokenTimeoutMs = 300_000, totalTimeoutMs = 0, pollMs = 500, onPoll, baselineIds, onServeError, serveErrorReader, serveLogReader, serveLogTailLines = 20 } = options;
   const startedAt = Date.now();
   let firstTokenAt: number | null = null;
   let collected: ServeMessage[] = [];
@@ -541,6 +552,7 @@ export async function awaitCompletion(
   const hasServeErrorDetection = serveErrorReader !== undefined && onServeError !== undefined;
 
   let finish: ServePart | undefined;
+  let totalTimedOut = false;
   while (true) {
     const messages = await driver.getMessages(sessionID);
     // P1：只处理基线之后新增的消息（复用会话不混入历史轮次）
@@ -602,6 +614,12 @@ export async function awaitCompletion(
     if (firstTokenTimeoutMs > 0 && firstTokenAt === null && !hasInFlightTool(collected) && Date.now() - Math.max(startedAt, lastActivityAt) >= firstTokenTimeoutMs) {
       break;
     }
+    // 总时长上限（opt-in）：首字已出现但到期限仍无 step-finish → 触发（复用下方 !finish 的
+    // abort + CompletionTimeoutError 路径）。无 hasInFlightTool 豁免——上限是硬预算。
+    if (totalTimeoutMs > 0 && Date.now() - startedAt >= totalTimeoutMs) {
+      totalTimedOut = true;
+      break;
+    }
     await sleep(pollMs);
   }
 
@@ -612,7 +630,7 @@ export async function awaitCompletion(
     } catch {
       // abort 失败不掩盖超时错误（双保险中 HTTP abort 已尽力）
     }
-    throw new CompletionTimeoutError(sessionID, result, collected, serveErrorText ?? undefined, serveLogTail);
+    throw new CompletionTimeoutError(sessionID, result, collected, serveErrorText ?? undefined, serveLogTail, totalTimedOut ? 'total' : 'first-token');
   }
   return result;
 }

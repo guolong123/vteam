@@ -18,11 +18,15 @@ import {
 } from './git/git-credential-injector';
 import { WorkerCommand } from './protocol/worker-protocol';
 import { InjectReport } from './resources/injector';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import {
   buildAuthJson,
   DEFAULT_OPENCODE_CONFIG_PATH,
 } from './credentials/model-credential-injector';
 import {
+  applySetMaxInstances,
   buildCapabilities,
   buildRegisterOptions,
   dispatchCommands,
@@ -30,8 +34,11 @@ import {
   handleGitCredentials,
   handleModelCredentials,
   onCommands,
+  persistRuntimeMaxInstances,
   resolveExecutableModels,
   resolveModels,
+  resolveRuntimeMaxInstances,
+  RUNTIME_CONFIG_FILE,
   warnLoopbackAdvertiseHost,
 } from './index';
 import { readUpdateCommandVersion } from './update/worker-updater';
@@ -55,6 +62,7 @@ const CONFIG: WorkerConfig = {
   workerExecPort: 4198,
   workerFirstTokenTimeoutMs: 300000,
   workerMaxInstances: 5,
+  workerTotalTimeoutMs: 0,
   standalone: false,
 };
 
@@ -587,6 +595,101 @@ describe('T4a 命令分派（onCommands + dispatchCommands）', () => {
     expect(logSpy).not.toHaveBeenCalledWith(
       expect.stringContaining('update-worker'),
     );
+  });
+});
+
+describe('CHANGE 3：set-max-instances 动态并发上限（本地持久化 + 重启优先）', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worker-runtime-config-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('合法负载：更新有效值并持久化（resolveRuntimeMaxInstances 可读回）', () => {
+    const next = applySetMaxInstances({ maxInstances: 8 }, 5, dir, () => {});
+    expect(next).toBe(8);
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(dir, RUNTIME_CONFIG_FILE), 'utf8'),
+    ) as { maxInstances: number };
+    expect(persisted).toEqual({ maxInstances: 8 });
+    expect(resolveRuntimeMaxInstances(dir, 5)).toBe(8);
+  });
+
+  it('非法负载（缺失/≤0/非整数/非数字）：忽略并保持当前值，不落盘', () => {
+    const cases = [
+      undefined,
+      { maxInstances: 0 },
+      { maxInstances: -1 },
+      { maxInstances: 1.5 },
+      { maxInstances: 'x' as unknown as number },
+    ];
+    for (const payload of cases) {
+      expect(
+        applySetMaxInstances(payload as { maxInstances: number } | undefined, 5, dir, () => {}),
+      ).toBe(5);
+    }
+    expect(fs.existsSync(path.join(dir, RUNTIME_CONFIG_FILE))).toBe(false);
+  });
+
+  it('启动时本地运行时文件优先于 env（server 下发落盘后重启仍生效）', () => {
+    persistRuntimeMaxInstances(dir, 9);
+    expect(resolveRuntimeMaxInstances(dir, 3)).toBe(9);
+  });
+
+  it('本地文件缺失：回落 env 值（不抛错）', () => {
+    expect(resolveRuntimeMaxInstances(dir, 7)).toBe(7);
+  });
+
+  it('本地文件损坏/值非法：回落 env 值并 warn（不抛错）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      fs.writeFileSync(path.join(dir, RUNTIME_CONFIG_FILE), 'not-json', 'utf8');
+      expect(resolveRuntimeMaxInstances(dir, 3)).toBe(3);
+      fs.writeFileSync(
+        path.join(dir, RUNTIME_CONFIG_FILE),
+        JSON.stringify({ maxInstances: 0 }),
+        'utf8',
+      );
+      expect(resolveRuntimeMaxInstances(dir, 3)).toBe(3);
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('dispatchCommands：set-max-instances 打命令日志并透传回调', () => {
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const handler = jest.fn();
+      onCommands(handler);
+      const commands: WorkerCommand[] = [
+        { type: 'set-max-instances', resourceVersion: 'v1', payload: { maxInstances: 6 } },
+      ];
+      dispatchCommands(commands);
+      expect(handler).toHaveBeenCalledWith(commands);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('set-max-instances'));
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('buildRegisterOptions：显式 maxInstances 覆盖 env（运行时有效值随注册上报）', async () => {
+    const opts = await buildRegisterOptions(
+      CONFIG,
+      4199,
+      '1.18.15',
+      'cli-version',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      9,
+    );
+    expect(opts.capabilities.maxInstances).toBe(9);
   });
 });
 
