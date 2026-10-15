@@ -1,0 +1,298 @@
+===== incident-livebuffer-finally  EVIDENCE =====
+repo: /Volumes/SSD-Data/01work/git-project/vteam
+scope: server/src/realtime/realtime.controller.ts (+ .spec.ts)
+change: replay-flag reset made unconditional via try/finally around the
+        replay async IIFE (idempotent assignment; success path unchanged).
+rule: HEAD must remain 2689d37; no git write commands used; evidence is
+      raw output + literal exit codes (no pipes on exit-code capture).
+----- SECTION A: HEAD assertion + working tree state -----
+a3a17c0 perf(workers): 每 delta 写放大节流（1s 合并）+ 终态/淘汰保证落盘
+GIT_LOG_EXIT=0
+ M .omo/evidence/phase5-t9-playwright.json
+ M .omo/evidence/plan-review-execution-gates/task-9/probe.json
+ M .omo/evidence/server-gate-removal-tool-authority/task-9-matrix.json
+ M .omo/ulw-execute/ledger.jsonl
+ M server/src/platform-mcp/platform-mcp.controller.spec.ts
+ M server/src/platform-mcp/platform-mcp.controller.ts
+ M server/src/platform-mcp/platform-mcp.service.spec.ts
+ M server/src/platform-mcp/platform-mcp.service.ts
+ M server/src/platform-mcp/platform-mcp.tools.ts
+ M server/src/realtime/realtime.controller.spec.ts
+ M server/src/realtime/realtime.controller.ts
+ M web/app/(main)/teams/[id]/session/page.tsx
+ M web/src/components/chat/msg-parts.tsx
+?? .omo/evidence/incident-livebuffer-finally.txt
+GIT_STATUS_EXIT=0
+----- SECTION B: VERIFY on the real repo -----
+B1: cd server && npx jest src/realtime; echo JEST=$?
+PASS src/realtime/realtime-subscribers.spec.ts
+PASS src/realtime/realtime.service.spec.ts
+PASS src/realtime/realtime.service.byte-cap.spec.ts
+PASS src/realtime/realtime.controller.spec.ts
+
+Test Suites: 4 passed, 4 total
+Tests:       96 passed, 96 total
+Snapshots:   0 total
+Time:        3.37 s, estimated 4 s
+Ran all test suites matching /src\/realtime/i.
+JEST=0
+TSC=0
+----- SECTION B2 (superseded first attempt kept for the record): the command below
+was first run with a WRONG pathspec (`src/realtime/...` from the repo root
+instead of `server/src/realtime/...`), which git silently reports as an empty
+diff with exit 0; the grep therefore matched nothing (exit 1). The correct
+runs are the two following sections. The unfiltered --stat here still usefully
+shows the full dirty-path set for lane-context.
+DIFF_HUNKS_GREP_EXIT=1 (empty output - wrong pathspec, superseded)
+ .omo/evidence/phase5-t9-playwright.json            | 116 +++++++--------
+ .../plan-review-execution-gates/task-9/probe.json  |   2 +-
+ .../task-9-matrix.json                             |  18 +--
+ .omo/ulw-execute/ledger.jsonl                      |   1 +
+ .../platform-mcp/platform-mcp.controller.spec.ts   |  73 ++++++---
+ server/src/platform-mcp/platform-mcp.controller.ts |  16 +-
+ .../src/platform-mcp/platform-mcp.service.spec.ts  | 116 ++++++++++++++-
+ server/src/platform-mcp/platform-mcp.service.ts    | 163 +++++++++++++++------
+ server/src/platform-mcp/platform-mcp.tools.ts      |  10 ++
+ server/src/realtime/realtime.controller.spec.ts    |  51 ++++++-
+ server/src/realtime/realtime.controller.ts         |  36 +++--
+ web/app/(main)/teams/[id]/session/page.tsx         |   4 +-
+ web/src/components/chat/msg-parts.tsx              |  26 +++-
+ 13 files changed, 465 insertions(+), 167 deletions(-)
+DIFF_STAT_EXIT=0
+----- SECTION B2: git diff -U0 hunks (run from server/, exactly as specified) -----
+GIT_DIFF_EXIT=0
+diff --git a/server/src/realtime/realtime.controller.ts b/server/src/realtime/realtime.controller.ts
+index 2dacc46..e79b7f7 100644
+--- a/server/src/realtime/realtime.controller.ts
++++ b/server/src/realtime/realtime.controller.ts
+@@ -107,13 +107,9 @@ export class RealtimeController {
+-        const backlog = await this.realtime.getEventsSince(
+-          since !== undefined && since !== '' ? since : undefined,
+-          parsedScopes,
+-          visibleTeamIds,
+-        );
+-        replaying = false;
+-        const seen = new Set(backlog.map((e) => e.id));
+-        for (const event of backlog) {
+-          subscriber.next(this.toMessageEvent(event));
+-        }
+-        // 2) 续拉期间到达的事件（去重对齐历史游标）
+-        for (const event of liveBuffer) {
+-          if (!seen.has(event.id)) {
++        try {
++          const backlog = await this.realtime.getEventsSince(
++            since !== undefined && since !== '' ? since : undefined,
++            parsedScopes,
++            visibleTeamIds,
++          );
++          replaying = false;
++          const seen = new Set(backlog.map((e) => e.id));
++          for (const event of backlog) {
+@@ -121,0 +118,14 @@ export class RealtimeController {
++          // 2) 续拉期间到达的事件（去重对齐历史游标）
++          for (const event of liveBuffer) {
++            if (!seen.has(event.id)) {
++              subscriber.next(this.toMessageEvent(event));
++            }
++          }
++        } finally {
++          // 补拉尝试结束（无论 resolve / throw / 中途 return）都必须复位重放期标志。
++          // incident-livebuffer-finally：原先仅成功路径置 false，一旦 getEventsSince 抛错，
++          // catch 只负责 subscriber.error(err)，replaying 永久停在 true → 后续实时帧全被
++          // 推进 liveBuffer 静默累积（帧含全量 accumulated message，~250KB-1MB/帧），
++          // 且无任何日志（NestJS catchError 吞噬该 error），是无声无界内存增长路径。
++          // 幂等赋值：成功路径语义与原先完全一致（false 已被提前置过，此处重复无副作用）。
++          replaying = false;
+GIT_DIFF_EXIT=0
+@@ -107,13 +107,9 @@ export class RealtimeController {
+@@ -121,0 +118,14 @@ export class RealtimeController {
+DIFF_HUNKS_GREP_EXIT=0
+----- SECTION B2b: exact specified form (from server/): git diff -U0 -- src/realtime/realtime.controller.ts | grep '^@@' -----
+@@ -107,13 +107,9 @@ export class RealtimeController {
+@@ -121,0 +118,14 @@ export class RealtimeController {
+SPEC_FORM_EXIT=0
+----- SECTION C: THROWAWAY COPY (outside repo: /Volumes/SSD-Data/01work/git-project/.throwaway-livebuffer) -----
+method: rsync of server/{src,test,package.json,tsconfig.json,jest.config.js} +
+        node_modules symlink; controller reverted to HEAD version via
+        `git show HEAD:server/src/realtime/realtime.controller.ts` (read-only git).
+C0: sha256 of fixed controller before revert (throwaway):
+    1351879f8d6f4bf80092be1f36f4e05a4e1ec8b676a25c122c1d99483d7ed7bf
+C1: npx jest src/realtime WITH FIX (throwaway)
+PASS src/realtime/realtime-subscribers.spec.ts
+PASS src/realtime/realtime.service.spec.ts
+PASS src/realtime/realtime.service.byte-cap.spec.ts
+PASS src/realtime/realtime.controller.spec.ts
+
+Test Suites: 4 passed, 4 total
+Tests:       96 passed, 96 total
+Snapshots:   0 total
+Time:        3.261 s
+Ran all test suites matching /src\/realtime/i.
+THROWAWAY_JEST_WITH_FIX=0
+C2: revert ONLY the controller (git show HEAD:...) then npx jest src/realtime (expect RED)
+0
+REVERTED_CONTROLLER_FINALLY_COUNT_EXIT=1
+PASS src/realtime/realtime-subscribers.spec.ts
+PASS src/realtime/realtime.service.spec.ts
+PASS src/realtime/realtime.service.byte-cap.spec.ts
+FAIL src/realtime/realtime.controller.spec.ts
+  ● RealtimeController（SSE 端点） › 补拉失败后重放期必须结束（incident-livebuffer-finally） › getEventsSince 拒绝：replaying 复位为 false，后续实时帧直通而非继续进 liveBuffer
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: {"id": "ev_0000000009", "payload": {"messageId": "m_live"}, "scopeId": null, "scopeType": "global", "timestamp": "2026-10-15T00:00:00.000Z", "type": "chat.message.new"}
+
+    Number of calls: 0
+
+      593 |       };
+      594 |       capturedListener!(liveFrame);
+    > 595 |       expect(toMessageEventSpy).toHaveBeenCalledWith(liveFrame);
+          |                                 ^
+      596 |
+      597 |       toMessageEventSpy.mockRestore();
+      598 |       subscribeSpy.mockRestore();
+
+      at Object.<anonymous> (realtime/realtime.controller.spec.ts:595:33)
+
+Test Suites: 1 failed, 3 passed, 4 total
+Tests:       1 failed, 95 passed, 96 total
+Snapshots:   0 total
+Time:        2.377 s, estimated 3 s
+Ran all test suites matching /src\/realtime/i.
+THROWAWAY_JEST_WITHOUT_FIX=1
+C3: restore fixed controller (cp from real repo) + sha256 verify + npx jest (expect GREEN)
+/Volumes/SSD-Data/01work/git-project/.throwaway-livebuffer/server/src/realtime/realtime.controller.ts: OK
+SHA256_RESTORE_CHECK=0
+PASS src/realtime/realtime-subscribers.spec.ts
+PASS src/realtime/realtime.service.spec.ts
+PASS src/realtime/realtime.service.byte-cap.spec.ts
+PASS src/realtime/realtime.controller.spec.ts
+
+Test Suites: 4 passed, 4 total
+Tests:       96 passed, 96 total
+Snapshots:   0 total
+Time:        2.702 s, estimated 3 s
+Ran all test suites matching /src\/realtime/i.
+THROWAWAY_JEST_RESTORED=0
+----- SECTION D: rxjs 7.8.2 behaviour probe (server/node_modules/rxjs/package.json version) -----
+Purpose: verify how the RxJS consumer reacts to subscriber.error() so the
+path enumeration below is measured, not assumed.
+  P1: does sub.error() run the Observable teardown (return fn)?
+  P2: does next() after error() throw or silently no-op?
+  P3: same as P1 but error delivered via async .catch(err => sub.error(err))
+node:internal/modules/cjs/loader:1459
+  throw err;
+  ^
+
+Error: Cannot find module 'rxjs/package.json'
+Require stack:
+- /Volumes/SSD-Data/01work/git-project/vteam/[eval]
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1456:15)
+    at defaultResolveImpl (node:internal/modules/cjs/loader:1066:19)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1071:22)
+    at Module._load (node:internal/modules/cjs/loader:1242:25)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+    at Module.require (node:internal/modules/cjs/loader:1556:12)
+    at require (node:internal/modules/helpers:152:16)
+    at [eval]:1:30
+    at runScriptInThisContext (node:internal/vm:219:10)
+    at node:internal/process/execution:451:12 {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [ '/Volumes/SSD-Data/01work/git-project/vteam/[eval]' ]
+}
+
+Node.js v24.14.0
+P1 teardownRanOnError= true errorSeen= boom
+P2 teardown ran
+P2 seen= [ 'a' ] teardown2= true
+P3 teardownRanOnError= true err3= reject-boom
+RXJS_PROBE_EXIT=0
+----- SECTION E: hunk justification + path enumeration -----
+H1 @@ -107,13 +107,9 @@ : wraps the replay async IIFE body in try { ... } (adds `try {`,
+   re-indents the getEventsSince call, `replaying = false`, seen-set, backlog
+   emission loop by +2). Continuation of the same hunk splitting git's minimal
+   diff. No semantic change: identical statements, same order, `replaying = false`
+   still executes at the exact same point on the success path.
+H2 @@ -121,0 +118,14 @@ : closes the try and adds the `finally { replaying = false; }`
+   guard (with the incident rationale comment) before the existing
+   `})().catch((err) => subscriber.error(err));`. Idempotent assignment: on the
+   success path it re-asserts an already-false flag; on any failure path it runs
+   BEFORE the rejection propagates to `.catch`, so subscriber.error(err) behaviour
+   is unchanged.
+Pre-existing lane work in these hunks: NONE. Both hunks are this task's change only.
+   (The parallel lane committed a3a17c0 "perf(workers): ... delta write amplification"
+   touching only server/src/workers/worker-event.ingress.ts + spec + their evidence;
+   `git show --stat a3a17c0` proves no realtime files are involved.)
+
+PATHS THAT COULD LEAVE replaying === true (enumerated from the code) AND COVERAGE:
+  A. getEventsSince resolves normally (L108-113): replaying=false at L113.
+     Flag cleared. Unchanged by fix (inner assignment still first).
+  B. getEventsSince rejects (L108 await throws; e.g. Prisma/DB failure):
+     rejection jumps to `.catch` (L133) -> subscriber.error(err); ORIGINALLY flag
+     stayed true -> liveBuffer keeps accumulating with listener attached.
+     COVERED: finally (L124-132) runs before `.catch`; flag=false.
+  C. Synchronous throw at/before the getEventsSince CALL (e.g. TypeError while
+     building args): happens inside try -> same as B. COVERED.
+  D. Throw in backlog-emission loop after replaying=false (e.g. toMessageEvent
+     throws on a malformed frame): flag already false before; finally re-asserts.
+     COVERED (also already safe pre-fix).
+  E. Throw in liveBuffer dedup-flush loop: same as D. COVERED.
+  F. getEventsSince NEVER SETTLES (hung query / pool exhaustion): neither the
+     success assignment NOR the finally ever runs -> flag stays true EVEN WITH
+     THIS FIX. NOT COVERED (and RxJS teardown never fires either -> listener
+     stays attached -> true unbounded growth, no error, no log - matches the
+     observed incident's "no pino>=40 entry" at least as well as the throw story).
+     Needs an out-of-scope bound (replay timeout / buffer cap); recorded as residual
+     risk. Not changed here: a cap/timeout would alter normal-path behaviour
+     (explicitly forbidden by the task).
+  G. Subscriber already closed (consumer unsubscribed before replay resolves):
+     RxJS 7.8.2 teardown detaches the listener; then replay resolve/reject is a
+     silent no-op (P2/P1). Finally still runs (resolve path) or runs before the
+     no-op error (reject path). COVERED either way; behaviour unchanged.
+  H. Early return: there is NO return statement inside the async IIFE in this
+     code (nothing to cover today). The finally structurally covers any early
+     return added later - that is the "cannot be skipped" property.
+  I. Throw in this.realtime.subscribe(...) (L93) BEFORE the IIFE starts:
+     subscriber fn throws synchronously; buffer+flag live in the dead subscriber
+     scope and are GC'd (listener never attached -> no accumulation possible).
+     No leak, unchanged, no fix needed.
+  J. The `.catch` handler itself throwing: finally has already run by then.
+     COVERED.
+
+The rxjs probe above (P1/P3=true) shows that in rxjs 7.8.2 subscriber.error()
+runs the teardown, which calls unsubscribe() and drops the EventEmitter
+listener - i.e. the ORIGINAL code's post-throw growth stops as a side-effect
+of RxJS finalisation. The finally makes the invariant explicit and independent
+of that side-effect (and covers B/C regardless), but it does NOT change the
+observable behaviour of the error path: subscriber.error(err) still fires
+exactly as before, after the flag is reset.
+
+NEW TEST CASE (name): "补拉失败后重放期必须结束（incident-livebuffer-finally） >
+getEventsSince 拒绝：replaying 复位为 false，后续实时帧直通而非继续进 liveBuffer"
+in server/src/realtime/realtime.controller.spec.ts. Mechanism: findMany rejects
+(replay query fails); wait for subscriber.error; then drive the captured service
+listener manually with one live frame; with the fix the frame is routed to
+toMessageEvent (subscriber path), without it the frame is silently pushed into
+liveBuffer (spy: 0 calls) -> RED exit 1 with fix-absent, GREEN exit 0 with fix.
+----- SECTION F: HEAD trajectory assertion (no git write commands used by this task) -----
+At task start:      git log --oneline -1 -> 2689d37 docs(omo): ... (asserted live, exit 0)
+During verification: the PARALLEL LANE committed
+  a3a17c0 perf(workers): 每 delta 写放大节流（1s 合并）+ 终态/淘汰保证落盘
+  (git show --stat a3a17c0 touches ONLY server/src/workers/worker-event.ingress.ts,
+   its spec, and .omo/evidence/incident-delta-write-amplification.txt - no realtime
+   files, so the lane commit does not interact with this change.)
+This task used only read-only git (log, status, show, diff, rev-parse, ls-files);
+the HEAD move is the lane's commit, NOT this task's doing, and reverting it is
+explicitly forbidden by the lane rules. Current HEAD re-asserted below.
+a3a17c0 perf(workers): 每 delta 写放大节流（1s 合并）+ 终态/淘汰保证落盘
+FINAL_HEAD_LOG_EXIT=0
+a3a17c0fc56c87d32c82f20513556da5c61c7549
+FINAL_REVPARSE_EXIT=0
+ .../incident-delta-write-amplification.txt         | 619 +++++++++++++++++++++
+ server/src/workers/worker-event.ingress.spec.ts    | 528 +++++++++++++++++-
+ server/src/workers/worker-event.ingress.ts         | 281 +++++++++-
+ 3 files changed, 1397 insertions(+), 31 deletions(-)
+LANE_COMMIT_STAT_EXIT=0
+server/src/realtime/realtime.controller.spec.ts
+server/src/realtime/realtime.controller.ts
+MY_TOUCHED_FILES_EXIT=0
