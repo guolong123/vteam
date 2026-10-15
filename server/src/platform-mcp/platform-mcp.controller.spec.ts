@@ -586,7 +586,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.chatHistory).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { taskId: 't_0000000001' },
       );
       // handler 把结果 JSON.stringify 后作为 text 内容返回
@@ -621,7 +622,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.chatHistory).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { taskId: 't_1', sinceId: 'm_10', limit: 20 },
       );
     });
@@ -652,7 +654,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.resolveToolCallerWithContext).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           teamId: 'tm_1',
           selfInstanceId: 'tmm_sender',
@@ -660,7 +663,8 @@ describe('PlatformMcpController (HTTP)', () => {
         },
       );
       expect(service.wecomReply).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           teamId: 'tm_1',
           selfInstanceId: 'tmm_sender',
@@ -694,7 +698,8 @@ describe('PlatformMcpController (HTTP)', () => {
         '团队会话请传 teamId，不要传 taskId',
       );
       expect(service.wecomReply).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { text: 'legacy' },
       );
     });
@@ -719,7 +724,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.groupPost).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           content: '结论',
@@ -748,7 +754,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.readFile).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { taskId: 't_1', fileRef: '/uploads/a.pdf', maxBytes: 1024 },
       );
     });
@@ -773,7 +780,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.notifyAgent).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           targetInstanceId: 'ta_tester',
@@ -813,7 +821,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.submitArtifact).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           type: 'text',
@@ -852,7 +861,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.submitArtifact).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           type: 'text',
@@ -882,7 +892,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.teamView).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { taskId: 't_1' },
       );
       const text = res.body.result.content[0].text as string;
@@ -908,7 +919,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.myProfile).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { taskId: 't_1', selfInstanceId: 'ta_sender' },
       );
       const text = res.body.result.content[0].text as string;
@@ -940,7 +952,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.teamAddMember).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           selfInstanceId: 'ta_main',
@@ -976,7 +989,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.planComplete).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           selfInstanceId: 'ta_main',
@@ -1005,7 +1019,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.planFinalize).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { taskId: 't_1', selfInstanceId: 'ta_main' },
       );
       const text = res.body.result.content[0].text as string;
@@ -1032,7 +1047,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.planConfirm).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { taskId: 't_1', selfInstanceId: 'ta_main' },
       );
       const text = res.body.result.content[0].text as string;
@@ -1066,7 +1082,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.skillCreate).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           selfInstanceId: 'ta_main',
@@ -1102,7 +1119,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.memoryUpdate).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           selfInstanceId: 'ta_main',
@@ -1149,7 +1167,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.gitReposList).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           selfInstanceId: 'tmm_dev1',
@@ -1189,7 +1208,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.chatHistory).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         {
           taskId: 't_1',
           teamMemberId: 'tmm_dev1',
@@ -1213,7 +1233,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.channelSend).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { target: 'nc_0001', text: 'hello' },
       );
       const text = res.body.result.content[0].text as string;
@@ -1258,7 +1279,8 @@ describe('PlatformMcpController (HTTP)', () => {
 
       expect(res.body.error).toBeUndefined();
       expect(service.chatHistory).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { taskId: 't_backfilled' },
       );
     });
@@ -1308,7 +1330,8 @@ describe('PlatformMcpController (HTTP)', () => {
         .expect(200);
 
       expect(service.chatHistory).toHaveBeenCalledWith(
-        { workerId: 'w_0001' },
+        // handler ctx 现额外携带 resolvedContext（回填溯源）——断言只锚定 workerId
+        expect.objectContaining({ workerId: 'w_0001' }),
         { taskId: 't_explicit' },
       );
     });
@@ -1497,7 +1520,9 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(service.secretCommand).toHaveBeenCalledTimes(1);
       const [handlerCtx, handlerArgs, signal] =
         service.secretCommand.mock.calls[0];
-      expect(handlerCtx).toEqual({ workerId: 'w_0001' });
+      expect(handlerCtx).toEqual(
+        expect.objectContaining({ workerId: 'w_0001' }),
+      );
       expect(signal).toBeInstanceOf(AbortSignal);
       expect(signal.aborted).toBe(false);
       expect(handlerArgs).toMatchObject({ taskId: 't_0000000001' });
