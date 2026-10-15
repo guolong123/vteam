@@ -52,6 +52,13 @@ db:
     url: ""                # 例：mysql://user:pass@external-mysql:3306/aiagents
   database: aiagents
   port: 3306
+  ## binlog 释放策略（2026-10-15 磁盘写满事故后新增，声明化以便 PVC 重建/换环境后依然生效）。
+  ## 事故复盘：binlog 无界累积到 251GB（255 个 × ~1GB），把共享的 983GB NFS 写到 100%，
+  ## mysqld 以 ENOSPC（posix_fallocate error 28 + signal 6）崩溃并 CrashLoopBackOff，全站 500。
+  ## 本环境无副本、不做 PITR，故保留窗口取 1 小时即可：即便按事故期的 ~20-30GB/小时 写入速率，
+  ## 稳态占用也被压在 ~20-30GB；每 delta 写放大修复落地后应进一步降到数 GB 级。
+  ## 将来若确需更长的 PITR 窗口再调大，并同步确认共享存储余量。
+  binlogExpireLogsSeconds: 3600
   image:
     repository: docker.ketaops.cc/library/mysql
     tag: "8"
@@ -109,9 +116,10 @@ server:
       ##   · 回放封顶 1000 + 24h 保留任务 + createdAt 索引（commit ee27da3）；
       ##   · 内存事件日志 8MiB 字节封顶 + message.part.delta 零落库（同上）；
       ##   · delta 组装态缓存（含错误终局与看门狗终局的失效）。
-      ## 8Gi 仅为切换期余量：修复生效后实际驻留应降到数百 MB 量级，观察稳定后应下调回 2Gi
-      ## 左右，让 OOM 重新成为「可见信号」而不是被余量掩盖。
-      memory: 8Gi
+      ## 8Gi 仅为切换期余量。修复上线后实测（30 分钟、20 秒粒度采样）：RSS 在 300–680MB 之间
+      ## 锯齿震荡、GC 逐次回收、峰值 676MB 保持 25 分钟未再抬升、restartCount 0，不再单调爬升。
+      ## 故按「不占用过多资源」原则下调回 2Gi（约 3× 余量），让 OOM 重新成为可见信号。
+      memory: 2Gi
   ## 探针：/api/v1/health，容器 node 内置 fetch（对齐 compose healthcheck）
   probes:
     startup:
