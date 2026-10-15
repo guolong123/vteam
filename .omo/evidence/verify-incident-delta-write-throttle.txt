@@ -1,0 +1,189 @@
+================================================================================
+verify-incident-delta-write-throttle.txt
+INDEPENDENT VERIFICATION (read-only) of the per-delta write-amplification throttle
+file: server/src/workers/worker-event.ingress.ts  (throttle lane + spec + evidence)
+VERDICT: confirmed          CONFIDENCE: 0.92
+NO BLOCKER. One disclosure to carry forward: the shared working tree had (and a
+concurrent session committed) UNRELATED realtime.controller.ts changes; they are
+not part of the throttle commit and did not affect gates/scope.
+================================================================================
+
+HOW I VERIFIED (all mutations on a THROWAWAY COPY outside the repo; repo read-only;
+no git add/commit/stash/checkout). Throwaway copy: source rsync'd (node_modules
+SYMLINKED) under /private/var/folders/.../T/opencode/verify-delta-throttle/server,
+baseline green 87/87, ingress sha256 == ecdb73c9 (repo). Copy deleted; real
+node_modules verified intact; repo working tree byte-unchanged (ingress still
+ecdb73c9) after I finished.
+
+--------------------------------------------------------------------------------
+1. THE MEASUREMENT IS REAL  — CONFIRMED, byte-identical to the author's evidence
+--------------------------------------------------------------------------------
+I wrote MY OWN harness (not the author's), src/workers/zz-verify-amp.spec.ts,
+driving the real WorkerEventIngress with a byte-accounting prisma mock: 50 deltas,
+each one 20,000-char text part, controllable Date.now() step, terminal task.completed.
+
+REPRO (on throwaway copy):  cd <copy>/server && npx jest src/workers/zz-verify-amp.spec.ts
+raw console.log lines (throttle ON, DELTA_PERSIST_INTERVAL_MS=1000):
+  VERIFY_AMP {"label":"after7","createCalls":1,"updateCalls":7,"updateManyCalls":0,"dbWrites":8,"bytes":8169144,"sseFrames":50,"lastTextLen":1000000,"lastParts":50}
+  VERIFY_AMP {"label":"after35","createCalls":1,"updateCalls":2,"updateManyCalls":0,"dbWrites":3,"bytes":3483891,"sseFrames":50,"lastTextLen":1000000,"lastParts":50}
+  VERIFY_AMP {"label":"before_hugestep","createCalls":1,"updateCalls":49,"updateManyCalls":0,"dbWrites":50,"bytes":51057150,"sseFrames":50,"lastTextLen":1000000,"lastParts":50}
+=> 49->7 @7/s (48.692MB->7.791MB, 6.25x); 49->2 @35/s (48.692MB->3.322MB, 16.67x writes).
+=> SSE frames = 50 in EVERY mode (a throttled write never swallows a frame).
+=> lastTextLen=1000000 + lastParts=50 in ALL modes => the tail is persisted, never truncated.
+
+THROTTLE-OFF via source mutation (per the stated method) on the throwaway copy:
+  perl -0pi -e 's/< DELTA_PERSIST_INTERVAL_MS\)/< 0)/' src/workers/worker-event.ingress.ts
+  mutated sha256 = cde210b427df5bb3f85f47daa84c135479539e8dae649586d9be603cab73cf59
+    (== the author's own mutation-(a) sha256, byte-identical mutation)
+  harness under throttle OFF: updateCalls=49 / bytes=51057150 / sseFrames=50 for ALL rates.
+  RESTORE: sha256 == ecdb73c9 (source-of-truth).
+
+--------------------------------------------------------------------------------
+2. BROADCAST SEMANTICALLY UNCHANGED  — CONFIRMED (quotes below)
+--------------------------------------------------------------------------------
+Throttled/skipped delta still returns a synthesized DB row, so handleMessagePartDelta's
+`if (!row) return true` (skip-broadcast branch) is NOT taken; emit always fires.
+Synthesis (ingress.ts ~L725):
+    return { ...cached.row, content: content as Prisma.JsonValue };   // content = {text:concatText(merged), parts:merged}
+Frame mapped by ingress toMessageDto (~L1437) => {id,channelId,senderType,senderId,content,mentions,status,createdAt}:
+identical field SET whether the content came from in-memory (throttled) or a DB read-back.
+VALUE is identical (same merged parts + concatText); only prospective JSON key order can differ.
+
+Consumers (all read by NAME, none positional / none inspect provenance):
+- web/hooks/use-realtime.ts L378-383:
+      case EVENT.MESSAGE_PART_DELTA: { const payload = ev.payload as MessagePartDeltaEvent;
+        upsertMessage(queryClient, payload.message); onMessagePartDelta?.(payload, ev); }
+    upsertMessage (L418-431) reads message.channelId / message.id / message.status only;
+    content.text / content.parts read by the renderer. Key order irrelevant.
+- web/hooks/use-sse.ts matchesScope L82-85 (channel) + L103-110 (team) for message.part.delta
+    depend ONLY on ev.type and payload.message.channelId — both present, unchanged.
+- server/src/realtime/realtime.controller.ts toMessageEvent L319-329 bundles {id,type,payload,timestamp};
+    JSON-serialised; browser JSON.parse -> object accessed by key. Wire key order is cosmetic.
+=> NO consumer can be affected by key order or provenance; the frame still carries every
+   field a subscriber needs. (senderInstanceId is absent on delta frames, but that is the
+   PRE-EXISTING toMessageDto shape, unchanged by the throttle; both before/after are identical.)
+
+--------------------------------------------------------------------------------
+3. TERMINAL FLUSHES CANNOT BE SKIPPED  — CONFIRMED (mutation RED -> sha256 restore -> GREEN)
+--------------------------------------------------------------------------------
+All three exist and are ordered before notify/emit inside the stream key's chain:
+- task.completed:  handleTaskCompleted L1122  await flushAndDropDeltaStream(doneStreamKey)
+  BEFORE this.notify(taskCompletedCallbacks) L1167.
+- agent.status{error}: handleAgentStatus L528 await flushAndDropDeltaStream(errorStreamKey)
+  BEFORE realtime.emit(AGENT_ERROR) L530 and before notify(agentStatusCallbacks) L546.
+- D2 sweep: worker-dispatcher L2672 ingress.invalidateDeltaStream(...) -> guarded flush on the key's chain.
+- flushAndDropDeltaStream body runs INSIDE runPartDeltaExclusive(key) (L1000); delete also in-chain (L1019).
+
+MUTATION PROOF m-tc (remove task.completed flush): mutated sha256 71c93081...
+  pinned test 终态 flush① -> RED:  "expect(prisma.message.update).toHaveBeenCalledTimes(1)" Received 0
+  (i.e. the in-window tail is silently NOT persisted -> DB truncation).
+  RESTORE sha256 == ecdb73c9; 终态 flush① -> GREEN (JEST=0).
+MUTATION PROOF m-err (remove agent.status{error} flush): mutated sha256 fae847d8...
+  pinned test 终态 flush② -> RED:  "expect(updatesWhenErrorEmitted).toBe(1)" Received 0 (no flush before emit).
+  RESTORE sha256 == ecdb73c9; 终态 flush② -> GREEN (JEST=0).
+
+--------------------------------------------------------------------------------
+4. D1/D2 CORRUPTION CLASS STAYS CLOSED  — CONFIRMED
+--------------------------------------------------------------------------------
+(a) GUARDED flush is a verified 0-row no-op on an already-failed row (independent spec
+    zz-verify-guard.spec.ts, faithful updateMany that applies the where filter):
+      FAILED row  -> updateMany({where:{id,status:processing}}) matched 0 rows; failed content byte-identical (NOT overwritten).
+      PROCESSING  -> same guard DID persist the tail (positive control).  (2/2 GREEN)
+(b) Path audit for "flush writes streaming content over a terminal row":  the ONLY unguarded
+    content-write is flushAssembled(entry,false) inside flushAndDropDeltaStream. Its target is
+    the CURRENT round's processing row and every finalizer is strictly downstream of it:
+      - task.completed residual ->sent:         worker-dispatcher L3216 (via onTaskCompleted callback, after flush)
+      - failTeamProcessingMessage ->failed:      worker-dispatcher L3464 (via onAgentStatus callback, after flush)
+      - dispatch stale sweep ->failed + invalidate: worker-dispatcher L2659/2672 (PREVIOUS round; cache invalidated
+        synchronously right after, and markSessionIdleDead does NOT finalize message rows directly; also vetoed
+        during active rounds via isAgentExecuting at L4750-4760).
+    Eviction/D2 flushes are GUARDED (status=processing) => 0-row no-op on terminal rows.
+    => No reachable path overwrites a terminal (failed/sent) row. Class stays closed.
+
+--------------------------------------------------------------------------------
+5. MID-STREAM MISS HAZARD IS CLOSED  — CONFIRMED (flush is load-bearing; chain is correct)
+     (load-bearing = flush EXISTENCE; own-chain = correct defense-in-depth)
+--------------------------------------------------------------------------------
+code: cacheAssembled deletes the oldest KEY then flushEvictedStream(oldest, entry) enqueues
+void runPartDeltaExclusive(streamKey /* = the EVICTED key */, flushGuarded). So a same-key delta
+arriving while that chain is alive queues BEHIND the flush; if the chain self-cleaned, the flush
+(in that same tail) had already landed. No wrong-key bug (streamKey IS the evicted key); no
+self-clean race (self-clean deletes the chain only after the flush tail settles).
+MUTATION (c) — eviction flush returns on DIRTY (skip the tail): mutated sha256 caa5f8ad183d...
+  (== the author's own mutation-(c) sha256). My no-drain test AND the pinned 中段不丢失 test both
+  -> RED losing exactly the middle chunk: content became "V0V2" (V1 gone). RESTORE sha256 ecdb73c9 -> GREEN.
+CONTROL: I also re-keyed the eviction flush to a DIFFERENT chain (mutated sha256 17c3dbbb) — the
+  test still RECOVERED V0V1V2, because the fire-and-forget flush lands during the intervening
+  awaits regardless of chain. So the "own chain" is correct-by-design/defense-in-depth, not the
+  sole load-bearing element; what is load-bearing is flushing before evict (proved by mutation (c)).
+  => No middle-chunk loss is reachable.
+
+--------------------------------------------------------------------------------
+6. 1-SECOND STALENESS HAS NO MISLED READER  — CONFIRMED (lagging, never wrong)
+--------------------------------------------------------------------------------
+Readers of a mid-stream processing row:
+  - chat.service.findMessages (L372 findMany/orderBy/lim): returns processing rows as-is ->
+    a mid-stream page reload shows up to ~1s-old content. LAGGING, not wrong; converges on terminal flush.
+  - chat.service.getSessionHistory (L401.., last assistant w/o step-finish marked processing L573-578):
+    same — lagging only.
+  - SSE message.part.delta: uses in-memory synthesis, NOT the DB row -> UNAFFECTED (exact).
+  - worker-dispatcher stale sweep (L2628-2672) / residual ->sent (L3216): row SELECTION is by
+    status=processing (a lag-independent fact); the throttle delays only content recency, not status.
+    Their action (delete empty vs mark failed/sent) is not made WRONG by a 1s-lag row; and the
+    row being finalised by the current round was flushed-complete before notify.
+  - hasRenderableContent / isStaleToolOnlyContent: shape checks that converge within 1s; they gate
+    delete-vs-fail of EMPTY rows, not correctness of a live read.
+The throttle never changes WHICH rows are processing, only content recency by <=1s. => no wrong result.
+
+--------------------------------------------------------------------------------
+7. LINT REGRESSION CHARACTERISED  — CONFIRMED exactly (non-gate; gate already red at HEAD)
+--------------------------------------------------------------------------------
+eslint --format json (lint:check; I did NOT run prettier/eslint --fix):
+  CURRENT HEAD: worker-event.ingress.ts = 133 errors, worker-event.ingress.spec.ts = 2 errors.
+  PARENT 2689d37: worker-event.ingress.ts =  94 errors, worker-event.ingress.spec.ts = 2 errors.
+  DELTA = +39, ALL new violations are rule prettier/prettier (indentation); no-unused-vars warnings
+  UNCHANGED at 4 (pre-existing). spec.ts unchanged.
+  Locations: every new prettier violation is on the throttle lane's NEW/MODIFIED lines. The file
+  was ALREADY non-prettier at HEAD (94 pre-existing prettier errors); the new code follows the
+  file's established style, and NO pre-existing unrelated lines were reindented (diff is +281/-31,
+  all in the throttle lane; the deletions are the semantic doc/type edits, not whitespace churn).
+  Because the lint check was ALREADY failing at HEAD, this change does not turn a green gate red.
+
+--------------------------------------------------------------------------------
+8. SCOPE + GATES  — CONFIRMED
+--------------------------------------------------------------------------------
+HEAD lineage: 2689d37 <- a3a17c0 (throttle) ; both are ancestors of current HEAD. Current HEAD
+advanced to 00e4c6 (a3a17c68 "fix(realtime): SSE 补拉失败..." — a CONCURRENT session) which touched
+ONLY realtime.controller.ts(+spec)+evidence; worker-event.ingress.ts at current HEAD == ecdb73c9.
+Throttle commit a3a17c0 touched EXACTLY 3 files (git show --stat):
+  .omo/evidence/incident-delta-write-amplification.txt, worker-event.ingress.ts, worker-event.ingress.spec.ts
+=> server/src/realtime/*, server/prisma/*, server/src/platform-mcp/*, web/.../msg-parts.tsx are NOT
+   in the throttle commit. (platform-mcp/*, msg-parts.tsx, and a concurrent-committed realtime.*
+   are pre-existing/other work, unrelated to the throttle.)
+
+GATES (raw), run on the deployable tree:
+  $ cd server && npx jest src/workers src/chat; echo JEST=$?
+    Test Suites: 23 passed, 23 total
+    Tests:       979 passed, 979 total
+    JEST=0
+  $ npx tsc --noEmit -p tsconfig.json; echo TSC=$?
+    (empty output)  TSC=0
+  (re-run at current HEAD 00e4c689: identical 23/979 JEST=0, tsc TSC=0, throttle lint 133/2.)
+
+--------------------------------------------------------------------------------
+NOTES (non-blocking, for human awareness)
+--------------------------------------------------------------------------------
+N1. Working-tree concurrency: realtime.controller.ts(+spec) were dirty and a concurrent session
+    committed them (00e4c68) mid-verification. Unrelated to the throttle; gates/scope unaffected.
+    The author's two "untouched" claims hold for the THROTTLE COMMIT.
+N2. The unguarded terminal flush relies on ordering (flush before the dispatcher's notify-driven
+    finalisation). I verified all finalisers are downstream and the idle-watchdog cannot touch a
+    live round (isAgentExecuting veto). Residual = a sub-millisecond, then-unreachable interleave;
+    the guarded eviction/D2 flushes + synchronous cache invalidation close it in practice.
+N3. Empirical: even a mis-keyed eviction flush recovered the middle (fire-and-forget lands during
+    awaits). Own-chain ordering is correct-by-design; the guaranteed-durability element is
+    flush-before-evict (proved by mutation (c)). Content is not lost mid-stream.
+
+OVERALL: measurement real & reproduced byte-identically; broadcast semantically unchanged;
+terminal + guarded flushes proven; D1/D2 class closed; no mid-stream loss; 1s staleness lag-only;
+lint +39 confined to new throttle lines & non-gate; gates green; scope clean. CONFIRMED, no blocker.

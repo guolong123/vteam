@@ -1,0 +1,187 @@
+================================================================================
+INDEPENDENT VERIFICATION — incident-livebuffer-bound (SSE liveBuffer 封顶 + 重放死线)
+================================================================================
+Verifier : independent read-only subagent (adversarial review, not the author)
+Target   : server/src/realtime/realtime.controller.ts
+Commit   : 381791840a0407bbb2a38af63e190c380bee47a7  (HEAD; RECORDED)
+           "fix(realtime): SSE 补拉缓冲封顶 + 重放截止时间（堵住唯一剩余的无界增长路径）"
+Previous : 00e4c68 (try/finally, replaying=false 无条件化)  a3a17c0 (delta 写放大节流, 已部署)
+Date     : 2026-10-15
+Method   : 静态推演 + 门禁复跑 + 仓库外替身副本变异（3 组 mutation + 1 组对照 + 2 条对抗用例）
+
+--------------------------------------------------------------------------------
+VERDICT: CONFIRMED（附 3 条 note；无 blocker）
+--------------------------------------------------------------------------------
+接受Criteria逐条核验：
+  ✓ 双封顶（1000 条 / 64MiB）在健康补拉路径上不可达（算术独立复算，见 E1）
+  ✓ 封顶在补拉悬挂时确实收敛内存（变异 + OOM 实证，见 E2）
+  ✓ 死线幂等、finally 与 teardown 均清定时器，断连不泄漏（对抗用例实证，见 E6）
+  ✓ 正常路径零变化：wire 载荷形状 / 去重语义 / 96 条既有用例原样（见 E5）
+  ✓ 门禁 JEST=0 / TSC=0（原样粘贴，见 E7）
+Note（非 blocker）：
+  N1 「迟到 backlog ⊂ 已送达」的论证在「已发生淘汰」时不成立——被淘汰的、
+     已落库的非 delta 帧会被随迟到 backlog 一起整体跳过而永不下发（实证见 E3）。
+     但：仅悬挂 ≥30s 且 30s 内 ≥1000 帧/64MiB（≈33 帧/s 持续）才可达；有 warn 日志，
+     非静默；非正常客户端路径。按 blocker 定义（静默 + 正常路径）不构成 blocker。
+  N2 作者「5 条新用例」实为 4 条（100 = 96 + 4）；「1s 退化不触顶」成立，但
+     2s 慢补拉 × 44 帧/s × 1MB ≈ 88MB > 64MiB——字节顶在「慢但正常」的峰值
+     速率+峰值帧体下可触达；后果为淘汰最旧帧 + 一行 warn，非 delta 帧仍经 DB
+     backlog 去重补回、delta 帧由终帧 chat.message.new + REST 历史覆盖，
+     无消息内容损失。属措辞夸张，非缺陷。
+  N3 节流（a3a17c0）与本题正交：1s 滞后只发生在 messages 表，realtime_events
+     的写→广播顺序不受影响（见 E4），子集论证（模淘汰）依然成立。
+
+--------------------------------------------------------------------------------
+E1 算术独立复算（封顶在健康补拉不可达）
+--------------------------------------------------------------------------------
+帧来源：每条 message.part.delta 经 realtime.emit 广播一帧（worker-event.ingress.ts:834），
+无合批；事故实测帧率 7/s 与 35/s（a3a17c0），44/s 为峰值包络；帧体 = 全量 accumulated
+message（incident 记录 ~250KB-1MB）。
+补拉耗时：getEventsSince = findFirst + findMany(id 索引, take 1000)，正常 ms 级；100ms
+为宽松的 worst-normal 上界。
+  100ms × 44/s = 4.4 帧；4.4 × 1MB = 4.4MiB
+  1000 / 4.4 ≈ 227× 余量；64MiB / 4.4MiB ≈ 14.5× 余量
+  1000 帧需 22.7s（44/s）才会触条数顶；64MiB 需 1.45s（1MB/帧）才会触字节顶
+  → 健康补拉（ms-100ms 级）不可能触顶；只有悬挂/降级补拉才收敛。作者算术复核为真。
+  反向边界（N2）：2s 慢补拉 × 44/s × 1MB = 88MB > 64MiB ⇒ 字节顶在「慢但正常」的
+  峰值组合下可触达一次；后果 = 淘汰最旧帧 + 1 行 warn；非 delta 被淘汰帧仍在 DB
+  backlog 中经 seen 去重补回，delta 被淘汰帧由终帧 + REST 覆盖 ⇒ 无消息损失。
+
+--------------------------------------------------------------------------------
+E2 变异实证（仓库外替身副本 /private/var/.../opencode/verify-livebuffer，已删除）
+--------------------------------------------------------------------------------
+副本构建：rsync server/（排除 node_modules/dist）+ 符号链接 node_modules；
+未变异基线 npx jest src/realtime → 100 passed（与仓库一致）。
+Mutation A（只摘条数+字节封顶与 warn，保留死线）：
+  Tests: 2 failed, 27 passed, 29 total（controller spec 29 条）
+  RED 断言：overflow warn 0 次调用 + 死线下发长度 ≠ 1000 ⇒ 封顶守卫是承重墙。
+Mutation B（只熄死线 setTimeout→2^31-1，保留封顶）：
+  Tests: 3 failed, 26 passed ⇒ 死线守卫是承重墙。
+Control（只留封顶、无死线 + 6000 帧各自独立 ~2MiB 载荷 ≈ 12GB 标称）：
+  NODE_OPTIONS=--max-old-space-size=4096 npx jest --runInBand → EXIT=0, 1 passed
+  ⇒ 64MiB 字节顶独立于死线即有界。
+Mutation C（摘封顶+熄死线 = 修复前状态）+ 2300 帧独立 ~2MiB 载荷 + 4GB 堆：
+  JEST_EXIT=134
+  FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed -
+  JavaScript heap out of memory
+  HEAP_LIMIT_MB=4288
+  ⇒ 作者「jest worker 自身在 4GB 堆被 OOM 杀死（exit 134）」的 striking claim 复现成功；
+     未封顶路径确实无界。（说明：真实修复前代码连 measureFrameBytes 都没有，
+     累积更纯粹；本复现仍保留 JSON.stringify 记账，OOM 栈可见 JsonStringify，
+     不影响「无界」结论。）
+
+--------------------------------------------------------------------------------
+E3 死线早触语义对抗审查（最高风险项）
+--------------------------------------------------------------------------------
+代码事实（realtime.controller.ts:215-273）：
+  - 到点：replaying=false；按数组序（= 广播插入序）下发已累积缓冲；清空缓冲；
+  - 迟到 settle：bufferReleasedByDeadline=true ⇒ **整体 return，backlog 一帧不发**；
+  - 论证原文「迟到 backlog ⊆ 已送达集合」依赖：落库先于广播 + Node 单线程微序。
+(a) 补拉永不 settle：订阅者得到 [订阅, T+30s] 窗口内经封顶收敛的缓冲（最旧淘汰），
+    此后的实时帧直通。丢失 = 请求的 (since, 订阅时刻] 全部历史 + 被淘汰帧。
+(b) 补拉在死线后 settle：整个迟到 backlog 被跳过，丢失同 (a)（且无淘汰也全丢）。
+收敛性：EventSource onerror 重连带 since=lastId，而 lastId 已被缓冲/直播帧推过
+    丢失区间 ⇒ 重连不会补拉缺失历史；消息内容经 REST 历史收敛（web/hooks/use-sse.ts
+    首连恒 since=latest、历史由各页 REST 加载，即设计如此）；非消息类事件
+    （task.status.changed 等）要等页面 REST 重载才恢复。
+静默性：不静默——死线回调 warn 一行「[liveBuffer] 补拉重放期超过 30000ms 未返回…」。
+对抗用例（替身副本实证，2/2 通过）：
+  T1 断连不泄漏：hung 补拉中 unsubscribe → 推进 2×死线时长，warn 0 次、0 下发、
+     监听器已摘 ⇒ teardown clearTimeout 有效（另有 unref 兜底）。
+  T2 淘汰+跳过迟到 backlog = 具体丢帧：hung → 推 1005 帧（淘汰 ev_1..ev_5）→ 死线
+     下发 ev_6..ev_1005 → 迟到 backlog = [ev_3]（已落库、从未送达）⇒ 终态 received
+     不含 ev_3 且游标已越过 ev_3。
+     结论：` ⊂ 已送达` 的精确表述应为 `⊂ 已送达 ∪ 已淘汰`。可达条件 = 悬挂 ≥30s
+     ∧ 30s 内 ≥1000 帧（≈33 帧/s 持续）∧ 丢失事件为非 delta 落库事件。降级路径 +
+     warn 可见 ⇒ 按任务定义的 blocker 判据（静默 ∧ 正常路径）不成立，记 note N1。
+
+--------------------------------------------------------------------------------
+E4 与已部署节流（a3a17c0）的交互
+--------------------------------------------------------------------------------
+节流只作用于 prisma.message.update（worker-event.ingress.ts:714，messages 表，≤1s 滞后）；
+realtime_events 的写入统一走 RealtimeService.emit → emitOnce：先 await
+prisma.realtimeEvent.create 再 this.bus.emit（realtime.service.ts:236-249），节流不
+触碰该路径；message.part.delta 根本不在 realtime_events（REALTIME_NON_RETAINED_TYPES），
+backlog 不可能含 delta。终态事件先 flushAndDropDeltaStream 再 emit（ingress:528-530/1122）。
+⇒ 「DB 滞后广播 ≤1s」不削弱子集论证：backlog 的权威源（realtime_events）保持
+「先落库后广播」顺序；1s 滞后只影响 REST 历史收敛的新鲜度，且该代价已在 a3a17c0 显式
+披露，与本改动无关。
+
+--------------------------------------------------------------------------------
+E5 正常路径零变化
+--------------------------------------------------------------------------------
+- toMessageEvent / 心跳 / 正常路径（backlog → seen 去重 → liveBuffer 补齐）零改动；
+  唯一新增分支 if (bufferReleasedByDeadline) return 在正常路径恒 false（死线未触发）。
+- wire 载荷形状 {id, type, payload, timestamp} 与 SSE id 游标语义不变。
+- 既有 96 条用例原样：git diff 00e4c68→3817918 -- spec 删除行数 = 0（纯新增 240 行）。
+- 新用例实为 4 条（100 = 96 + 4）；提交信息写「5 条」，记 note N2（文档偏差，非功能问题）。
+
+--------------------------------------------------------------------------------
+E6 定时器泄漏
+--------------------------------------------------------------------------------
+死线句柄：finally clearTimeout（:271）+ teardown clearTimeout（:293）+ unref 兜底（:233）。
+对抗用例 T1 实证：补拉悬挂中断开订阅 → 推进 2×死线，warn 0 次、0 下发 ⇒ 无孤儿回调、
+无缓冲残留引用（监听器已随 unsubscribe 摘除，buffer 随闭包可回收）。
+
+--------------------------------------------------------------------------------
+E7 门禁（仓库内复跑，原样粘贴）+ Hunk 归属 + 范围
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/realtime
+PASS src/realtime/realtime.service.spec.ts
+PASS src/realtime/realtime-subscribers.spec.ts
+PASS src/realtime/realtime.service.byte-cap.spec.ts
+PASS src/realtime/realtime.controller.spec.ts
+Test Suites: 4 passed, 4 total
+Tests:       100 passed, 100 total
+JEST=0
+$ npx tsc --noEmit -p tsconfig.json
+TSC=0
+
+Hunk 归属（3817918 vs 其父 00e4c68）：
+  00e4c68（既往 try/finally 工作，非本次）：replay IIFE 包 try/finally + finally 内
+    replaying=false（现 :236-273 的 try/finally 骨架与 :268 赋值）。
+  3817918（本次新增）：
+    + Logger import/logger 字段
+    + 常量 REALTIME_LIVE_BUFFER_MAX_FRAMES=1000 / MAX_BYTES=64MiB / REPLAY_DEADLINE_MS=30000
+    + liveBufferSizes/liveBufferBytes/bufferReleasedByDeadline/liveOverflowWarned 状态
+    + evictLiveHead / pushLive 双上限收敛 + 首帧 warn
+    + replayDeadlineTimer（arm/unref/回调内 flush+warn/清缓冲）
+    + bufferReleasedByDeadline 早退分支（:243-250）
+    + finally 内 clearTimeout（:271）；teardown 内 clearTimeout（:293）
+    + measureFrameBytes（:460-467）
+范围核验（git diff 00e4c68 3817918 --name-only）：
+  仅 .omo/evidence/incident-livebuffer-bound.txt、realtime.controller.spec.ts、
+  realtime.controller.ts。
+  realtime.service.ts / prisma/* / worker-event.ingress.ts 本 commit 零改动
+  （ingress 的改动属于更早的 a3a17c0，题目已声明为先部署）。
+  预置 dirty 路径 platform-mcp/*、msg-parts.tsx：grep 无任何 realtime/liveBuffer 引用。
+  并发 lane 新增 dirty（worker-dispatcher.ts、platform-mcp.tool-naming.spec.ts、
+  CONVERT md）经查同样与 realtime 无关。git diff HEAD -- server/src/realtime/ 为空
+  ⇒ 受审代码与 HEAD 完全一致。HEAD 未移动（仍为 3817918）。
+
+--------------------------------------------------------------------------------
+复现命令
+--------------------------------------------------------------------------------
+cd /Volumes/SSD-Data/01work/git-project/vteam/server
+npx jest src/realtime; echo JEST=$?            # 100 passed
+npx tsc --noEmit -p tsconfig.json; echo TSC=$?
+# 变异（仓库外副本，用完即删）：
+SCRATCH=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/verify-livebuffer
+rsync -a --exclude node_modules --exclude dist server/ "$SCRATCH"/ \
+  && ln -s "$PWD/server/node_modules" "$SCRATCH"/node_modules
+# A：删除 pushLive 内 eviction 块（保留死线）→ controller spec 2 RED
+# B：setTimeout 回调替换为 no-op（保留封顶）→ 3 RED
+# C：A+B（修复前态）+ hung replay + 2300 帧独立 2MiB 载荷：
+NODE_OPTIONS=--max-old-space-size=4096 npx jest src/realtime/oom-repro.spec.ts --runInBand
+#   → JEST_EXIT=134, "JavaScript heap out of memory", HEAP_LIMIT_MB=4288
+# 对照（只留封顶、无死线、6000 帧独立 2MiB）→ EXIT=0
+# 对抗（未变异码）：断连无泄漏；淘汰+迟到 backlog 跳过 ⇒ ev_3 永不下发
+
+--------------------------------------------------------------------------------
+置信度: 0.93
+--------------------------------------------------------------------------------
+已独立复现：算术、双变异 RED、OOM(134)、封顶对照有界、断连无泄漏、淘汰丢帧、门禁、
+96 条原样、范围。未能独立实测的仅 44/s 与 1MB 帧体（取自事故记录），但结论对
+该包络内任意 (速率, 帧体) 组合符号成立；OOM 复现使用 2MiB 帧（高于声称上限），
+只会更强不会更弱。
+================================================================================
