@@ -6557,7 +6557,7 @@ describe('PlatformMcpService', () => {
       expect(result.isError).toBe(false);
     });
 
-    it('失败：dispatcher 抛 channel not found → 返回 发送失败: xxx, isError false, 不抛异常', async () => {
+    it('失败：dispatcher 抛 channel not found → 返回 发送失败: xxx, isError true, 不抛异常', async () => {
       prisma.task.findUnique.mockResolvedValue({ teamId: 'tm_1' } as any);
       prisma.session.findFirst.mockResolvedValueOnce({
         taskId,
@@ -6578,7 +6578,7 @@ describe('PlatformMcpService', () => {
         text: 'hi',
       });
 
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBe(true);
       expect(result.content[0].text).toMatch(/发送失败:.*channel not found/);
     });
 
@@ -6606,7 +6606,7 @@ describe('PlatformMcpService', () => {
       expect(result.content[0].text).toBe(
         '发送失败: channel direction does not support outbound',
       );
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBe(true);
     });
 
     it('失败：project 隔离 Forbidden → 返回 发送失败, 不抛异常', async () => {
@@ -6633,7 +6633,7 @@ describe('PlatformMcpService', () => {
       expect(result.content[0].text).toMatch(
         /发送失败:.*channel project mismatch/,
       );
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBe(true);
     });
 
     it('text 越界 (>4000) → 返回发送失败, 不调用 dispatcher', async () => {
@@ -6644,7 +6644,7 @@ describe('PlatformMcpService', () => {
       });
 
       expect(result.content[0].text).toMatch(/发送失败:.*4000/);
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBe(true);
       expect(outboundDispatcher.sendToChannelByIdOrName).not.toHaveBeenCalled();
     });
 
@@ -6659,7 +6659,7 @@ describe('PlatformMcpService', () => {
       expect(result.content[0].text).toMatch(
         /发送失败:.*无法解析当前任务上下文/,
       );
-      expect(result.isError).toBe(false);
+      expect(result.isError).toBe(true);
       expect(outboundDispatcher.sendToChannelByIdOrName).not.toHaveBeenCalled();
     });
 
@@ -8883,6 +8883,110 @@ describe('PlatformMcpService', () => {
 
       expect(result.wecomSent).toBe(false);
       expect(result.content[0].text).toContain('file 发送失败');
+    });
+  });
+
+  describe('回填溯源与自有会话优先（2026-10-13 值班群事故修复）', () => {
+    it('团队上下文为回填推断且该团队未绑定企微 → 报「回填推断 + 请显式传参」并 isError:true（不再误导为「当前团队未绑定」）', async () => {
+      prisma.session.findFirst.mockReset();
+      prisma.session.findFirst.mockResolvedValue({
+        taskId: null,
+        teamId: 'tm_x',
+        teamMemberId: senderInstanceId,
+        agentId: senderAgentId,
+      });
+      prisma.teamMessageChannel.findMany.mockResolvedValue([]);
+
+      const result = await service.wecomReply(
+        {
+          workerId,
+          resolvedContext: { teamId: 'tm_x', fromFallback: true },
+        } as never,
+        { text: 'hi' },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('回填推断');
+      expect(result.content[0].text).toContain('请显式传 teamId 与 selfInstanceId');
+      expect(result.content[0].text).not.toBe('发送失败: 当前团队未绑定企业微信渠道');
+    });
+
+    it('显式传 teamId 时即使未绑定也保持原文案（不误标为回填）', async () => {
+      prisma.teamMessageChannel.findMany.mockResolvedValue([]);
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_x',
+        taskId: null,
+        teamId: 'tm_explicit',
+        teamMemberId: senderInstanceId,
+        agentId: senderAgentId,
+      });
+
+      const result = await service.wecomReply(
+        { workerId, resolvedContext: { fromFallback: false } } as never,
+        { teamId: 'tm_explicit', selfInstanceId: senderInstanceId, text: 'hi' },
+      );
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toBe(
+        '发送失败: 当前团队未绑定企业微信渠道',
+      );
+    });
+
+    it('双空上下文回退：有 selfInstanceId 时按该成员**自己的**会话解析团队，不取 worker 最近会话', async () => {
+      prisma.session.findFirst.mockReset();
+      prisma.session.findFirst.mockImplementation(
+        async (q: { where?: Record<string, unknown> }) => {
+          const w = q.where ?? {};
+          // 自有会话解析：{teamMemberId, workerId}（无 teamId）→ 命中正确团队
+          if (w.teamMemberId === senderInstanceId && w.teamId === undefined) {
+            return {
+              taskId: null,
+              teamId: 'tm_own',
+              teamMemberId: senderInstanceId,
+              agentId: senderAgentId,
+            };
+          }
+          // assertWorkerTeam：{teamId, workerId[, teamMemberId]}
+          if (w.teamId === 'tm_own') {
+            return { id: 's_own', teamMemberId: senderInstanceId };
+          }
+          return null;
+        },
+      );
+
+      const resolved = await service.resolveToolCallerWithContext(
+        { workerId },
+        { selfInstanceId: senderInstanceId },
+      );
+
+      expect(resolved.callerId).toBe(senderInstanceId);
+      expect(resolved.teamId).toBe('tm_own');
+    });
+
+    it('双空上下文回退：selfInstanceId 与回退命中的会话成员不一致 → 403 要求显式传参（不再静默误归属）', async () => {
+      prisma.session.findFirst.mockReset();
+      prisma.session.findFirst.mockImplementation(
+        async (q: { where?: Record<string, unknown> }) => {
+          const w = q.where ?? {};
+          if (w.teamMemberId === senderInstanceId && w.teamId === undefined) {
+            return null; // 自有会话未命中
+          }
+          // worker 最近会话属于**别的成员/团队**
+          return {
+            taskId: null,
+            teamId: 'tm_other',
+            teamMemberId: 'tmm_other',
+            agentId: 'a_other',
+          };
+        },
+      );
+
+      await expect(
+        service.resolveToolCallerWithContext(
+          { workerId },
+          { selfInstanceId: senderInstanceId },
+        ),
+      ).rejects.toThrow(/无法可靠解析调用上下文/);
     });
   });
 

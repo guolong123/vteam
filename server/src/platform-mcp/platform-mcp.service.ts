@@ -300,6 +300,18 @@ function startsWithTargetMention(content: string, targetName: string): boolean {
 /** MCP 工具调用上下文：workerId 来自请求 header `x-worker-id`（controller 解析后闭包注入）。 */
 export interface PlatformMcpContext {
   workerId: string;
+  /**
+   * 双空上下文回填的解析结果（controller 在 handler 前合并入参时注入）：
+   * fromFallback=true 表示入参的 taskId/teamId 是**按 worker 最近会话推断**的，
+   * 而非调用方显式所传——多团队 worker 上可能推断到非当前会话的团队。
+   * 工具据此对失败给出精确指引（要求显式传参），而不是把「推断错团队」
+   * 伪装成「目标团队未绑定/未配置」这类误导性报错（线上事故 2026-10-13）。
+   */
+  resolvedContext?: {
+    taskId?: string;
+    teamId?: string;
+    fromFallback: boolean;
+  };
 }
 
 /**
@@ -5497,13 +5509,13 @@ export class PlatformMcpService implements OnModuleInit {
     if ((msgtype === 'text' || msgtype === 'markdown') && !rawText) {
       return {
         content: [{ type: 'text', text: '发送失败: text 不能为空' }],
-        isError: false,
+        isError: true,
       };
     }
     if (rawText.length > 4000) {
       return {
         content: [{ type: 'text', text: '发送失败: text 长度超过 4000 字符' }],
-        isError: false,
+        isError: true,
       };
     }
     if (msgtype === 'template_card' && !args.card) {
@@ -5511,7 +5523,7 @@ export class PlatformMcpService implements OnModuleInit {
         content: [
           { type: 'text', text: '发送失败: template_card 需要 card 参数' },
         ],
-        isError: false,
+        isError: true,
       };
     }
     if (
@@ -5526,7 +5538,7 @@ export class PlatformMcpService implements OnModuleInit {
             text: `发送失败: ${msgtype} 需要 media(文件路径) 或 mediaId 参数`,
           },
         ],
-        isError: false,
+        isError: true,
       };
     }
     if (msgtype === 'mpnews') {
@@ -5562,7 +5574,7 @@ export class PlatformMcpService implements OnModuleInit {
               text: '发送失败: mpnews 需要 articles(≥1 篇) 或 mpnews 参数',
             },
           ],
-          isError: false,
+          isError: true,
         };
       }
     }
@@ -5608,7 +5620,7 @@ export class PlatformMcpService implements OnModuleInit {
             text: '发送失败: 无法解析团队上下文（请传 teamId）',
           },
         ],
-        isError: false,
+        isError: true,
       };
     }
     let instanceId: string;
@@ -5623,7 +5635,7 @@ export class PlatformMcpService implements OnModuleInit {
       const msg = err instanceof Error ? err.message : String(err);
       return {
         content: [{ type: 'text', text: `发送失败: ${msg}` }],
-        isError: false,
+        isError: true,
       };
     }
     const replyScopeId = teamId;
@@ -5645,11 +5657,17 @@ export class PlatformMcpService implements OnModuleInit {
       }
     } catch {}
     if (boundWecomChannelIds.length === 0) {
+      // 区分「显式指定团队确实未绑定」与「团队上下文是回填推断出来的」——后者在多团队
+      // worker 上可能根本不是当前会话的团队（线上事故 2026-10-13：值班群调用被推断成
+      // 无企微绑定的另一团队，报「当前团队未绑定」把模型引向错误方向）。回填场景给出
+      // 明确指引：显式传 teamId/selfInstanceId 后重试。
+      const viaFallback = ctx.resolvedContext?.fromFallback === true;
+      const text = viaFallback
+        ? `发送失败: 无法可靠解析团队上下文——回填推断为 ${teamId}（可能非当前会话所属团队），该团队未绑定企业微信渠道。请显式传 teamId 与 selfInstanceId 后重试。`
+        : '发送失败: 当前团队未绑定企业微信渠道';
       return {
-        content: [
-          { type: 'text', text: '发送失败: 当前团队未绑定企业微信渠道' },
-        ],
-        isError: false,
+        content: [{ type: 'text', text }],
+        isError: true,
       };
     }
     let wecomChannelId: string | null = boundWecomChannelIds[0] ?? null;
@@ -5672,7 +5690,7 @@ export class PlatformMcpService implements OnModuleInit {
     if (!adapter || typeof adapter.sendNewMessage !== 'function') {
       return {
         content: [{ type: 'text', text: '发送失败: WeCom 适配器未就绪' }],
-        isError: false,
+        isError: true,
       };
     }
 
@@ -6974,7 +6992,7 @@ export class PlatformMcpService implements OnModuleInit {
           text: `已同步到团队群聊（企微发送失败，请检查 WeCom 通道绑定与在线状态）。${failDetail}重要：回复已同步，请直接结束本轮，不要再输出重复回复。`.trim(),
         },
       ],
-      isError: false,
+      isError: true,
       messageId: mirrorMessageId ?? undefined,
       channelId: groupChannelId,
       wecomSent: false,
@@ -6986,7 +7004,10 @@ export class PlatformMcpService implements OnModuleInit {
    * - 入参仅 target(id/name, nc_ 前缀) + text(≤4000)，taskId 从 worker 会话上下文解析（当前任务边界）。
    * - text 越界 → 返回结构化错误文本（不抛断会话）。
    * - outboundDispatcher.sendToChannelByIdOrName 按任务所属团队查询 NotificationChannel (nc_) + TeamNotificationChannel 绑定；
-   *   失败返回错误文本 isError:false，避免 abort agent session。
+   *   失败返回错误文本 + isError:true——UI/客户端据此正确判失败（历史误解：曾认为
+   *   isError:true 会 abort agent session，2026-10-13 值班群事故实证不会：MCP -32602
+   *   错误（part status=error）后 agent 照常继续整轮）。错误文本仍作为 content 返回，
+   *   模型可自行重试或改道。
    */
   async channelSend(
     ctx: PlatformMcpContext,
@@ -7000,25 +7021,25 @@ export class PlatformMcpService implements OnModuleInit {
     if (!target) {
       return {
         content: [{ type: 'text', text: '发送失败: target 不能为空' }],
-        isError: false,
+        isError: true,
       };
     }
     if (text.length > 4000) {
       return {
         content: [{ type: 'text', text: '发送失败: text 长度超过 4000 字符' }],
-        isError: false,
+        isError: true,
       };
     }
     if (!text) {
       return {
         content: [{ type: 'text', text: '发送失败: text 不能为空' }],
-        isError: false,
+        isError: true,
       };
     }
     if (!this.outboundDispatcher) {
       return {
         content: [{ type: 'text', text: '发送失败: 出站分发器未就绪' }],
-        isError: false,
+        isError: true,
       };
     }
     let taskId: string | null = null;
@@ -7033,7 +7054,7 @@ export class PlatformMcpService implements OnModuleInit {
     if (!taskId) {
       return {
         content: [{ type: 'text', text: '发送失败: 无法解析当前任务上下文' }],
-        isError: false,
+        isError: true,
       };
     }
     try {
@@ -7042,7 +7063,7 @@ export class PlatformMcpService implements OnModuleInit {
       const msg = err instanceof Error ? err.message : String(err);
       return {
         content: [{ type: 'text', text: `发送失败: ${msg}` }],
-        isError: false,
+        isError: true,
       };
     }
     try {
@@ -7088,7 +7109,7 @@ export class PlatformMcpService implements OnModuleInit {
       }
       return {
         content: [{ type: 'text', text: `发送失败: ${msg}` }],
-        isError: false,
+        isError: true,
       };
     }
   }
@@ -7425,15 +7446,33 @@ export class PlatformMcpService implements OnModuleInit {
     ctx: PlatformMcpContext,
     args: { selfInstanceId?: string },
   ): Promise<{ callerId: string; taskId?: string; teamId?: string }> {
+    const sessionSelect = {
+      taskId: true,
+      teamId: true,
+      teamMemberId: true,
+      agentId: true,
+    } as const;
+
+    // ① selfInstanceId 精确维度（治本）：先按调用方**自己的**会话解析上下文。
+    //    跨团队 worker 上「最近会话」可能属于别的成员/团队——线上事故 2026-10-13：
+    //    值班群 tm_0000000002 的企微回复被回填成 tm_0000000008（该团队无企微绑定），
+    //    报错却写成「当前团队未绑定企业微信渠道」，把模型引向完全错误的方向。
+    //    有 selfInstanceId 时优先自己的会话，团队必然正确（成员跨团队多会话时取最近）。
+    if (args.selfInstanceId) {
+      const own = await this.prisma.session.findFirst({
+        where: { teamMemberId: args.selfInstanceId, workerId: ctx.workerId },
+        orderBy: { createdAt: 'desc' },
+        select: sessionSelect,
+      });
+      if (own) {
+        return this.resolveSessionToCaller(ctx, own, args.selfInstanceId);
+      }
+    }
+
     const session = await this.prisma.session.findFirst({
       where: { workerId: ctx.workerId },
       orderBy: { createdAt: 'desc' },
-      select: {
-        taskId: true,
-        teamId: true,
-        teamMemberId: true,
-        agentId: true,
-      },
+      select: sessionSelect,
     });
     // 任务关闭后会话 workerId 被 reset 清空，回退路径同样兜底 adopt 一次
     // （teamMemberId 全局唯一，按 selfInstanceId 精确匹配且必须唯一）。
@@ -7441,12 +7480,7 @@ export class PlatformMcpService implements OnModuleInit {
     if (!fallbackSession && args.selfInstanceId !== undefined) {
       const orphans = await this.prisma.session.findMany({
         where: { teamMemberId: args.selfInstanceId, workerId: null },
-        select: {
-          taskId: true,
-          teamId: true,
-          teamMemberId: true,
-          agentId: true,
-        },
+        select: sessionSelect,
         take: 2,
       });
       if (orphans.length === 1) {
@@ -7461,33 +7495,70 @@ export class PlatformMcpService implements OnModuleInit {
       }
     }
     const effectiveSession = fallbackSession ?? session;
-    if (effectiveSession?.taskId) {
+    // ② 防误归属（治本）：显式给了 selfInstanceId，但回退命中的会话属于**别的成员**
+    //    ——宁可 fail-closed 要求显式传参，也不静默把调用归属到他人/他的团队
+    //    （归属错误会连带误导后续所有权限判定与业务动作）。
+    if (
+      args.selfInstanceId &&
+      effectiveSession?.teamMemberId &&
+      effectiveSession.teamMemberId !== args.selfInstanceId
+    ) {
+      throw new ForbiddenException({
+        code: PLATFORM_MCP_ERRORS.FORBIDDEN,
+        message:
+          `无法可靠解析调用上下文：该 worker 最近会话属于成员 ${effectiveSession.teamMemberId}` +
+          `${effectiveSession.teamId ? `（团队 ${effectiveSession.teamId}）` : ''}，` +
+          `与调用方 ${args.selfInstanceId} 不一致。请显式传 teamId（建议同时传 selfInstanceId）后重试。`,
+      });
+    }
+    return this.resolveSessionToCaller(ctx, effectiveSession, args.selfInstanceId);
+  }
+
+  /**
+   * 会话行 → 调用方身份（precedence：taskId > teamId > teamMemberId > fail-closed 403）。
+   * `resolveSessionFallback` 的两条会话来源（自有会话 / 最近会话回退）共用本段，
+   * 保证同一套 anti-impersonation 与 fail-closed 语义。
+   */
+  private async resolveSessionToCaller(
+    ctx: PlatformMcpContext,
+    session:
+      | {
+          taskId: string | null;
+          teamId: string | null;
+          teamMemberId: string | null;
+          agentId: string | null;
+        }
+      | null
+      | undefined,
+    selfInstanceId?: string,
+  ): Promise<{ callerId: string; taskId?: string; teamId?: string }> {
+    if (session?.taskId) {
       const callerId = await this.assertWorkerTask(
         ctx,
-        effectiveSession.taskId,
-        args.selfInstanceId,
+        session.taskId,
+        selfInstanceId,
       );
-      return { callerId, taskId: effectiveSession.taskId };
+      return { callerId, taskId: session.taskId };
     }
-    if (effectiveSession?.teamId) {
+    if (session?.teamId) {
       const { memberId } = await this.assertWorkerTeam(
         ctx,
-        effectiveSession.teamId,
-        args.selfInstanceId,
+        session.teamId,
+        selfInstanceId,
       );
-      return { callerId: memberId, teamId: effectiveSession.teamId };
+      return { callerId: memberId, teamId: session.teamId };
     }
-    if (effectiveSession?.teamMemberId) {
+    if (session?.teamMemberId) {
       if (
-        args.selfInstanceId !== undefined &&
-        args.selfInstanceId !== effectiveSession.teamMemberId
+        selfInstanceId !== undefined &&
+        selfInstanceId !== session.teamMemberId
       ) {
         throw new ForbiddenException({
           code: PLATFORM_MCP_ERRORS.FORBIDDEN,
-          message: `selfInstanceId 与该 worker 最近会话成员（${effectiveSession.teamMemberId}）不一致，禁止冒充`,
+          message: `selfInstanceId 与该 worker 最近会话成员（${session.teamMemberId}）不一致，禁止冒充`,
         });
       }
-      return { callerId: effectiveSession.teamMemberId };
+      return { callerId: session.teamMemberId };
     }
     throw new ForbiddenException({
       code: PLATFORM_MCP_ERRORS.TOOL_NOT_PERMITTED,

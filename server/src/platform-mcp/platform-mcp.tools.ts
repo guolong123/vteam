@@ -24,6 +24,16 @@ import type { PlatformMcpService } from './platform-mcp.service';
 /** 工具 handler 上下文：workerId 透传（归属校验在 service 内做）。 */
 export interface PlatformMcpToolContext {
   workerId: string;
+  /**
+   * 双空上下文回填的解析结果（controller 注入，与 service 的 PlatformMcpContext
+   * 同字段同义）：fromFallback=true 表示 taskId/teamId 是按 worker 最近会话**推断**的，
+   * 工具可据此在失败时给出「请显式传参」的精确指引而非误导性的「目标未绑定」报错。
+   */
+  resolvedContext?: {
+    taskId?: string;
+    teamId?: string;
+    fromFallback: boolean;
+  };
 }
 
 /**

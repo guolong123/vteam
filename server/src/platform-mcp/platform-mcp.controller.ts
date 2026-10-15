@@ -358,6 +358,9 @@ export class PlatformMcpController {
         teamId?: string;
         selfInstanceId?: string;
       };
+      // 回填前先记录「调用方是否显式传了上下文」——input 是 parsed.data 的同一引用，
+      // 回填写入会就地改写它，故必须在此刻快照。
+      const fromFallback = !input.taskId && !input.teamId;
       const resolved = await this.service.resolveToolCallerWithContext(
         { workerId },
         input,
@@ -365,7 +368,18 @@ export class PlatformMcpController {
       if (!input.taskId && resolved.taskId) input.taskId = resolved.taskId;
       if (!input.teamId && resolved.teamId) input.teamId = resolved.teamId;
       await this.toolPermission.assertToolAllowed(resolved.callerId, tool.name);
-      const result = await tool.handler({ workerId }, input, signal);
+      const result = await tool.handler(
+        {
+          workerId,
+          resolvedContext: {
+            ...(resolved.taskId ? { taskId: resolved.taskId } : {}),
+            ...(resolved.teamId ? { teamId: resolved.teamId } : {}),
+            fromFallback,
+          },
+        },
+        input,
+        signal,
+      );
       return this.result(id, {
         content: [{ type: 'text', text: JSON.stringify(result) }],
       });
