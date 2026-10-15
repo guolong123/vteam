@@ -262,8 +262,9 @@ export class V1Driver {
    * （带 model → 400，空 body → 200）——模型选择在 sendMessage（prompt_async）的
    * input.model 时指定（该端点接受 model）。此处签名保留 `model?` 参数仅为兼容
    * 调用方（server 侧 WorkerClient.createSession 同构），body 恒为 {}。
-   * 接线点（F2 M4）：T10 会话执行接入后此处成功后调 trackInstanceStart()；
-   * abort/完成（task.completed）处调 trackInstanceEnd()，驱动心跳 load 计数。
+   * 说明（metric）：实例计数由 exec-server.runExecution 统一驱动
+   * （trackInstanceStart/trackInstanceRekey/trackInstanceEnd，按 opencode 会话键去重计数）——
+   * **本方法不调用 trackInstanceStart**，避免 createSession 与 runExecution 双重计数。
    */
   async createSession(model?: DriverModelRef | null): Promise<string> {
     const res = await this.request('/session', {

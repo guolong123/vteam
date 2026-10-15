@@ -56,6 +56,32 @@ describe('WORKER_MAX_INSTANCES（F4：worker 并发上限配置化）', () => {
   });
 });
 
+describe('WORKER_TOTAL_TIMEOUT_MS（CHANGE 2：执行总时长上限，opt-in）', () => {
+  it('缺省/空串/空白：默认 0（禁用——保持「首字后无完成超时」契约）', () => {
+    expect(loadConfig(BASE_ENV).workerTotalTimeoutMs).toBe(0);
+    expect(loadConfig({ ...BASE_ENV, WORKER_TOTAL_TIMEOUT_MS: '' }).workerTotalTimeoutMs).toBe(0);
+    expect(loadConfig({ ...BASE_ENV, WORKER_TOTAL_TIMEOUT_MS: '   ' }).workerTotalTimeoutMs).toBe(0);
+  });
+
+  it('env 覆盖：WORKER_TOTAL_TIMEOUT_MS=600000 → 600000', () => {
+    expect(
+      loadConfig({ ...BASE_ENV, WORKER_TOTAL_TIMEOUT_MS: '600000' }).workerTotalTimeoutMs,
+    ).toBe(600000);
+  });
+
+  it('显式 0 = 禁用（合法值，非缺省兜底）', () => {
+    expect(loadConfig({ ...BASE_ENV, WORKER_TOTAL_TIMEOUT_MS: '0' }).workerTotalTimeoutMs).toBe(0);
+  });
+
+  it('非法值（负数/NaN/非整数）抛错（parseNonNegativeInt 快速失败语义，区别于并发上限的兜底语义）', () => {
+    for (const raw of ['-1', 'abc', '1.5']) {
+      expect(() =>
+        loadConfig({ ...BASE_ENV, WORKER_TOTAL_TIMEOUT_MS: raw }),
+      ).toThrow(/WORKER_TOTAL_TIMEOUT_MS/);
+    }
+  });
+});
+
 describe('WORKER_ADVERTISE_HOST 显式标记（外部/跨机 worker 可达地址引导）', () => {
   afterEach(() => {
     jest.clearAllMocks();

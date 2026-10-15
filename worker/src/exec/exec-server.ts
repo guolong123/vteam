@@ -49,7 +49,11 @@ import {
   ensureBrowserProfileDir,
   resolveBrowserScopeId,
 } from '../browser/browser-tools';
-import { trackInstanceEnd, trackInstanceStart } from '../instance-tracker';
+import {
+  trackInstanceEnd,
+  trackInstanceRekey,
+  trackInstanceStart,
+} from '../instance-tracker';
 import {
   isOmoBundled,
   readOmoEnabled,
@@ -189,6 +193,12 @@ export interface ExecServerOptions {
    * 默认 300000（env WORKER_FIRST_TOKEN_TIMEOUT_MS 可配）。首字出现后无完成超时。
    */
   firstTokenTimeoutMs?: number;
+  /**
+   * 执行总时长上限 ms（透传 awaitCompletion；opt-in，默认 0 = 禁用）。首字出现后到期限
+   * 仍无完成（step-finish）→ abort + 抛「执行总时长超限」；<=0/缺省保持既有
+   * 「首字后无完成超时」契约。env WORKER_TOTAL_TIMEOUT_MS 可配。
+   */
+  totalTimeoutMs?: number;
   /** 完成判定轮询间隔 ms（透传 awaitCompletion；缺省其默认 500）。 */
   pollMs?: number;
   /**
@@ -426,6 +436,7 @@ export class ExecServer {
   private readonly sender: EventSender;
   private readonly workerToken: string;
   private readonly firstTokenTimeoutMs: number;
+  private readonly totalTimeoutMs: number;
   private readonly pollMs: number;
   private readonly serveErrorReader: ((sessionID: string) => string[]) | undefined;
   private readonly serveLogReader: ((sessionID: string) => string[]) | undefined;
@@ -451,6 +462,7 @@ export class ExecServer {
     this.sender = options.sender;
     this.workerToken = options.workerToken ?? '';
     this.firstTokenTimeoutMs = options.firstTokenTimeoutMs ?? 300_000;
+    this.totalTimeoutMs = options.totalTimeoutMs ?? 0;
     this.pollMs = options.pollMs ?? 500;
     this.serveErrorReader = options.serveErrorReader;
     this.serveLogReader = options.serveLogReader;
@@ -1499,7 +1511,12 @@ export class ExecServer {
    * 收敛为 error 事件 + session.updated(failed)；绝不向上抛（异步任务无捕获方）。
    */
   private async runExecution(payload: ExecuteRequestPayload): Promise<void> {
-    trackInstanceStart();
+    // metric：load.instances = 去重活跃会话数，必须有稳定的会话键。执行开始时优先用
+    // 请求 sessionId；无请求会话（新建）用临时 anon 键先入账，createSession 成功后再
+    // 重键到真实 opencode 会话 id（见下方 trackInstanceRekey），finally 用最终键 end。
+    let sessionKey =
+      payload.sessionId || `anon-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    trackInstanceStart(sessionKey);
     let opencodeSessionId = payload.sessionId ?? '';
     try {
       // is_0000000010：worker 侧兜底创建目录（server 与 worker 可能不共享文件系统，
@@ -1520,6 +1537,9 @@ export class ExecServer {
       }
       if (!opencodeSessionId) {
         opencodeSessionId = await this.driver.createSession(payload.model);
+        // metric：临时 anon 键迁移到真实 opencode 会话 id，保证 finally 能用同一键 end。
+        trackInstanceRekey(sessionKey, opencodeSessionId);
+        sessionKey = opencodeSessionId;
       }
       // Per-agent browser isolation (option A)：按 opencode 会话预建 profile
       // 落点 browser-profiles/<scope>/（scope 派生规则见 browser-tools.ts
@@ -1573,6 +1593,9 @@ export class ExecServer {
           // 会话并重试一次；新建也失败 → 外层 error 收敛。
           this.logger.warn(`[exec] 复用会话 ${opencodeSessionId} 会话不存在（HTTP 404），新建会话重试一次`);
           opencodeSessionId = await this.driver.createSession(payload.model);
+          // metric：旧键迁移到新建的真实 opencode 会话 id（仍保持 1 个去重活跃会话）。
+          trackInstanceRekey(sessionKey, opencodeSessionId);
+          sessionKey = opencodeSessionId;
           ctx.sessionId = opencodeSessionId;
           result = await this.runSendAndAwait(payload, opencodeSessionId, ctx);
         } else {
@@ -1620,7 +1643,7 @@ export class ExecServer {
         status: 'failed',
       });
     } finally {
-      trackInstanceEnd();
+      trackInstanceEnd(sessionKey);
     }
   }
 
@@ -1844,6 +1867,7 @@ export class ExecServer {
       },
       {
         firstTokenTimeoutMs: this.firstTokenTimeoutMs,
+        totalTimeoutMs: this.totalTimeoutMs,
         pollMs: this.pollMs,
         serveErrorReader: this.serveErrorReader,
         serveLogReader: this.serveLogReader,

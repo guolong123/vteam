@@ -424,6 +424,38 @@ describe('awaitCompletion', () => {
     expect(calls).toBeGreaterThan(10);
   });
 
+  it('总时长超限 → abort + 抛 CompletionTimeoutError（执行总时长超限）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    // 首字立即出现（text part），但永不 step-finish → 总时长上限触发（首字超时禁用，隔离本路径）
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('partial', 100)])]);
+
+    const promise = awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 0,
+      totalTimeoutMs: 30,
+      pollMs: 5,
+    });
+    await expect(promise).rejects.toBeInstanceOf(CompletionTimeoutError);
+    await expect(promise).rejects.toThrow(/执行总时长超限/);
+    expect(abort).toHaveBeenCalledWith('ses_1');
+    // 已收集文本随错误携带（不丢部分回复）
+    const err = (await promise.catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err.result.text).toBe('partial');
+  });
+
+  it('总时长上限缺省 = 禁用：首字出现后长轮询不被总时长误杀（default 0 契约）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      if (calls <= 10) return [asstMsg('a1', [textPart('x', 100)])];
+      return [asstMsg('a1', [textPart('x', 100), stepFinishPart()])];
+    });
+
+    const result = await awaitCompletion(driver, 'ses_1', { totalTimeoutMs: 0, pollMs: 5 });
+    expect(result.text).toBe('x');
+    expect(abort).not.toHaveBeenCalled();
+  });
+
   it('仅 reasoning（无 text）→ reasoning 算首字，不超时，持续轮询直到 step-finish 完成', async () => {
     const { driver, getMessages, abort } = mockDriver();
     let calls = 0;
