@@ -1,11 +1,14 @@
 import { NotFoundException, NotImplementedException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
 import { PrismaService } from '../prisma/prisma.service';
 import { McpServersService } from '../mcp-servers/mcp-servers.service';
 import { CredentialCryptoService } from '../common/credential-crypto.service';
 import { ModelsService } from '../models/models.service';
 import { HeartbeatWorkerDto } from './dto/heartbeat-worker.dto';
 import { RegisterWorkerDto } from './dto/register-worker.dto';
+import { UpdateWorkerModelDto } from './dto/update-worker-model.dto';
 import {
   WORKER_ERRORS,
   WORKER_HEARTBEAT_INTERVAL_MS,
@@ -1938,6 +1941,162 @@ describe('WorkersService', () => {
       ).rejects.toBeInstanceOf(NotFoundException);
       expect(modelsService.findCatalogByRef).not.toHaveBeenCalled();
       expect(prisma.worker.update).not.toHaveBeenCalled();
+    });
+
+    it('maxInstances 提供 → 合并进 capabilities.maxInstances（保留其余键）并下发一条 set-max-instances 命令', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: { maxInstances: 2, skills: ['coding'], tools: ['git'] },
+      });
+      prisma.worker.update.mockResolvedValue(
+        workerRow({
+          capabilities: { maxInstances: 8, skills: ['coding'], tools: ['git'] },
+        }),
+      );
+
+      const view = await service.updateDefaultModel('w_0000000001', {
+        maxInstances: 8,
+      });
+
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+        data: {
+          capabilities: { maxInstances: 8, skills: ['coding'], tools: ['git'] },
+        },
+      });
+      expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+        {
+          type: 'set-max-instances',
+          resourceVersion: 'set-max-instances',
+          payload: { maxInstances: 8 },
+        },
+      ]);
+      expect(view.capabilities).toEqual({
+        maxInstances: 8,
+        skills: ['coding'],
+        tools: ['git'],
+      });
+    });
+
+    it('maxInstances=null → 视为不修改（不写 capabilities、不下发命令）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: { maxInstances: 5, skills: ['coding'] },
+      });
+      prisma.worker.update.mockResolvedValue(workerRow());
+
+      await service.updateDefaultModel('w_0000000001', { maxInstances: null });
+
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+        data: {},
+      });
+      expect(service['pendingCommands'].has('w_0000000001')).toBe(false);
+    });
+
+    it('defaultModelId 与 maxInstances 同时提供 → 两者都落库且各自生效', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: { maxInstances: 2, skills: ['coding'] },
+      });
+      prisma.worker.update.mockResolvedValue(
+        workerRow({
+          defaultModelId: 'opencode-go/deepseek-v4-flash',
+          capabilities: { maxInstances: 7, skills: ['coding'] },
+        }),
+      );
+
+      const view = await service.updateDefaultModel('w_0000000001', {
+        defaultModelId: 'opencode-go/deepseek-v4-flash',
+        maxInstances: 7,
+      });
+
+      expect(modelsService.findCatalogByRef).toHaveBeenCalledWith(
+        'opencode-go/deepseek-v4-flash',
+      );
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+        data: {
+          defaultModelId: 'opencode-go/deepseek-v4-flash',
+          capabilities: { maxInstances: 7, skills: ['coding'] },
+        },
+      });
+      expect(service['pendingCommands'].get('w_0000000001')).toEqual([
+        {
+          type: 'set-max-instances',
+          resourceVersion: 'set-max-instances',
+          payload: { maxInstances: 7 },
+        },
+      ]);
+      expect(view.defaultModelId).toBe('opencode-go/deepseek-v4-flash');
+    });
+
+    it('capabilities 为 null → maxInstances 合并进空对象（不抛错）', async () => {
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_0000000001',
+        capabilities: null,
+      });
+      prisma.worker.update.mockResolvedValue(
+        workerRow({ capabilities: { maxInstances: 3 } }),
+      );
+
+      await service.updateDefaultModel('w_0000000001', { maxInstances: 3 });
+
+      expect(prisma.worker.update).toHaveBeenCalledWith({
+        where: { id: 'w_0000000001' },
+        data: { capabilities: { maxInstances: 3 } },
+      });
+    });
+
+    it('maxInstances 提供但 worker 不存在 → 404，不落库不下发', async () => {
+      prisma.worker.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateDefaultModel('w_unknown', { maxInstances: 4 }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.worker.update).not.toHaveBeenCalled();
+      expect(service['pendingCommands'].has('w_unknown')).toBe(false);
+    });
+
+    it('命令类型字面量 set-max-instances（双端契约：worker 按此字符串分发）', () => {
+      expect(WORKER_COMMAND_TYPES.SET_MAX_INSTANCES).toBe('set-max-instances');
+    });
+
+    describe('UpdateWorkerModelDto 校验（maxInstances 1..64 整数）', () => {
+      const invalidProps = async (obj: object) =>
+        (await validate(plainToInstance(UpdateWorkerModelDto, obj))).map(
+          (e) => e.property,
+        );
+
+      it('maxInstances=0 → 拒绝（@Min(1)）', async () => {
+        expect(await invalidProps({ maxInstances: 0 })).toContain(
+          'maxInstances',
+        );
+      });
+
+      it('maxInstances=65 → 拒绝（@Max(64)）', async () => {
+        expect(await invalidProps({ maxInstances: 65 })).toContain(
+          'maxInstances',
+        );
+      });
+
+      it('maxInstances 非整数（3.5 / 字符串）→ 拒绝（@IsInt）', async () => {
+        expect(await invalidProps({ maxInstances: 3.5 })).toContain(
+          'maxInstances',
+        );
+        expect(await invalidProps({ maxInstances: '3' })).toContain(
+          'maxInstances',
+        );
+      });
+
+      it('maxInstances 边界 1/64 与 null/缺省 → 通过', async () => {
+        expect(await invalidProps({ maxInstances: 1 })).toEqual([]);
+        expect(await invalidProps({ maxInstances: 64 })).toEqual([]);
+        expect(await invalidProps({ maxInstances: null })).toEqual([]);
+        expect(
+          await invalidProps({ defaultModelId: 'opencode-go/deepseek-v4-flash' }),
+        ).toEqual([]);
+      });
     });
   });
 

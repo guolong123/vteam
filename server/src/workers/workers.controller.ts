@@ -104,14 +104,18 @@ export class WorkersController {
   }
 
   /**
-   * PATCH /api/v1/workers/:id：配置/清除 worker 默认模型（C8，workers.edit）。
-   * body {defaultModelId: string | null}——须存在于 models 目录且 enabled（否则 400），
-   * null=清除；返回更新后的 WorkerView（含 defaultModelId）。
+   * PATCH /api/v1/workers/:id：配置/清除 worker 默认模型（C8）+ 改并发上限（workers.edit）。
+   * body {defaultModelId?: string | null, maxInstances?: number | null}——
+   * defaultModelId 非空须存在于 models 目录且 enabled（否则 400），null=清除；
+   * maxInstances（1..64，null=不修改）写 capabilities 并经心跳命令下发 worker。
+   * 返回更新后的 WorkerView。
    */
   @Patch(':id')
   @UseGuards(PermissionGuard)
   @RequirePermission('workers.edit')
-  @ApiOperation({ summary: '配置 worker 默认模型（workers.edit；null=清除）' })
+  @ApiOperation({
+    summary: '配置 worker 默认模型 / 并发上限（workers.edit；null=清除/不修改）',
+  })
   updateDefaultModel(
     @Param('id') id: string,
     @Body() dto: UpdateWorkerModelDto,
