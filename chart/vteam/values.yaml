@@ -98,7 +98,10 @@ server:
       cpu: 200m
       memory: 256Mi
     limits:
-      memory: 1Gi
+      ## 2026-10-15：1Gi 下 server 启动约 30s 即 OOMKilled（exitCode 137 → CrashLoopBackOff，
+      ## 且 liveness/readiness 探针同时超时）；提高到 2Gi。注意：更早一版在 2Gi 下也发生过
+      ## 14 次 OOMKilled，若再现需继续上调或排查内存增长（本行是「可调」而非「已足」）。
+      memory: 2Gi
   ## 探针：/api/v1/health，容器 node 内置 fetch（对齐 compose healthcheck）
   probes:
     startup:
