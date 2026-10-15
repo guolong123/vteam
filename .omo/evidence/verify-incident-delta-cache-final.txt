@@ -1,0 +1,160 @@
+================================================================================
+INDEPENDENT VERIFICATION — delta assembly-cache LIFECYCLE fix (D1 + D2)
+Files: server/src/workers/worker-event.ingress.ts, server/src/chat/worker-dispatcher.ts
+Date: 2026-10-15   Verifier: independent (read-only; mutation only on throwaway copy)
+================================================================================
+
+VERDICT: CONFIRMED
+
+HEAD (recorded): ee27da3 fix(realtime): 封顶历史回放与内存日志、delta 不再落库（线上 OOM 事故修复）
+git status: server/src/realtime/* and server/prisma/* → NO uncommitted change (committed in HEAD).
+Pre-existing dirt untouched: server/src/platform-mcp/* (5 files), web/src/components/chat/msg-parts.tsx.
+No scratch files in tree (untracked = .omo/evidence/* only).
+
+--------------------------------------------------------------------------------
+1. D2 REACHABILITY IS REAL — CONFIRMED
+--------------------------------------------------------------------------------
+Control-group case (worker-event.ingress.spec.ts): "D2 对照组（未失效时的腐败形态）：
+残留缓存命中 → message.update 覆盖已 failed 行" — PASSES and asserts the corruption:
+  prisma.message.update called 1x, where {id:'m_A'}, content.text '第一段重试'
+  prisma.message.create only 1x  (turn-B content landed on turn-A's row)
+Faithfulness to the REAL dispatcher sequence: FAITHFUL.
+  - Real sequence: sweep marks leftover row failed (worker-dispatcher.ts:2659-2661
+    updateMany status:failed) BEFORE workerClient.execute (:2748); worker-dead path
+    emits no event, so the ingress cache entry `c_dm|a_1 → m_A` survives the turn end.
+  - Test models exactly the mechanically-relevant production path: stale cache entry
+    survives; retry first delta; cache-hit branch (ingress.ts:645-663) runs
+    prisma.message.update({where:{id: cached.messageId}}) DIRECTLY, bypassing the
+    status=processing findFirst filter — the update is unconditional on row status.
+  - The one step not executed in-process (the sweep's updateMany→failed) is separately
+    asserted in worker-dispatcher.spec.ts D2 case ("updateMany ... status: failed" AND
+    "invalidateDeltaStream('c_dm_target','a_product')"). Not a weaker simulation.
+
+--------------------------------------------------------------------------------
+2. FIX PREVENTS IT — CONFIRMED (throwaway copy mutation)
+--------------------------------------------------------------------------------
+Copy: cp -cR repo → $TMP/opencode/vteam-mut (outside repo); sha256 (4f368915...) match verified.
+Mutation: removed `this.ingress.invalidateDeltaStream(cleanupChannel.id, target.agentId);`
+  (worker-dispatcher.ts:2672) on the copy only.
+MUTATED (RED):
+  ✕ D2 回归：重派清扫把上一轮残留 processing 行标 failed → 同步失效该流式键的组装态缓存
+  ✕ D2 边界：无残留 processing 行 → 仍失效同键缓存（幂等 delete，不抛错）
+  raw: expect(jest.fn()).toHaveBeenCalledWith(...)  Expected: "c_dm_target", "a_product"
+       Number of calls: 0     (chat/worker-dispatcher.spec.ts:1892, :1908)
+  Test Suites: 1 failed, 1 total   Tests: 2 failed, 319 passed, 321 total
+RESTORED (GREEN): original file copied back, sha256 re-verified identical (4f368915...).
+  Test Suites: 2 passed, 2 total   Tests: 403 passed, 403 total
+Copy deleted afterwards (rm -rf verified).
+
+--------------------------------------------------------------------------------
+3. FIELD PROMOTION IS PURE — CONFIRMED
+--------------------------------------------------------------------------------
+Constructor param 9: `ingress: WorkerEventIngress` → `private readonly ingress: WorkerEventIngress`
+  (worker-dispatcher.ts:1652). Same position, same type, same DI resolution (WorkersModule
+  exports WorkerEventIngress; ChatModule imports WorkersModule). TypeScript parameter-property
+  modifier only — no metadata/order effect. The three registrations it already serves are
+  byte-identical and in the same order: ingress.onTaskCompleted (:1712), ingress.onAgentStatus
+  (:1719), ingress.onSessionActivity (:1724). No construction-order change, no double-registration.
+  tsc --noEmit = 0.
+
+--------------------------------------------------------------------------------
+4. CALL SITE CORRECTLY SCOPED — CONFIRMED
+--------------------------------------------------------------------------------
+(a) Single execute site: workerClient.execute only at worker-dispatcher.ts:2748 inside
+    dispatchForTeamTarget. All dispatch paths funnel through it: dispatch() → :1781;
+    dispatchAgentMention() → dispatch() (:1902); tryAutoRestart() → dispatchAgentMention.
+    The invalidate sits at the END of `if (cleanupChannel)` (:2627-2673), after the sweep.
+    cleanupChannel falsy ⟺ resolveTeamChannel (:2084) finds neither a {teamId,teamMemberId}
+    channel row nor a team_group channel for the team. A delta stream CANNOT start in that
+    state: every delta requires privateTarget = channel{teamId,teamMemberId,type:private}
+    (ingress handleMessagePartDelta; team_group source without privateTarget is skipped),
+    and that row necessarily matches resolveTeamChannel's first query → cleanupChannel non-null.
+    ⇒ the invalidate runs on every dispatch that can precede a delta stream.
+(b) Concurrent turns (same channel+agent): verified against the cache-hit branch. Without the
+    delete, in-flight turn-A deltas would keep updating the row turn-B's sweep just marked
+    failed = corruption. With the delete, turn-A's next in-flight delta MISSES → findFirst
+    (status=processing) → failed row not matched → creates a fresh processing row and re-caches;
+    subsequent deltas hit it; turn-A's completion finalizes it. Cost = one extra findFirst
+    re-read (worst case +1 findFirst for non-renderable deltas, +1 create). No correctness or
+    data-loss change. (Executor's "only one extra findFirst" slightly understated; still a note.)
+
+--------------------------------------------------------------------------------
+5. partDeltaChains EXCLUSION — SOUND
+--------------------------------------------------------------------------------
+Claim 1 verified: runPartDeltaExclusive (ingress.ts:829-847) deletes the chain key on tail
+  settle (`if (get(key)===tail) delete`), re-set by newer arrivals → no cross-turn residue.
+Claim 2 verified: deleting partDeltaChains mid-flight would drop serialization between an old
+  turn's in-flight delta and the retry's first delta → concurrent findFirst(null)→create →
+  duplicate processing rows (the exact race the chain exists for). partDeltaChains holds no
+  messageId, so it cannot leave a stale-row corruption of the same class. Exclusion is sound.
+
+--------------------------------------------------------------------------------
+6. CROSS-MODULE CONTRACT — no sixth LIVE path
+--------------------------------------------------------------------------------
+Enumerated every row/session-terminalising path in WorkerDispatcher:
+  (a) task.completed → rows→sent/create + residual sweep (:3131,:3216) — ingress
+      handleTaskCompleted invalidates BEFORE dispatcher callback. COVERED.
+  (b) agent.status{error} → failTeamProcessingMessage rows→failed (:3462) — ingress
+      handleAgentStatus isError branch invalidates BEFORE notify. COVERED (D1).
+  (c) session.updated{failed} — ingress handler writes Session.status only; NO invalidation
+      of its own. COVERED transitively: worker always pairs it with agent.status{error}
+      (exec-server.ts catch path), and the dispatch-level backstop covers any unpaired case.
+  (d) watchdog/idle-dead markSessionIdleDead (:4728) — Session.status=failed only, NO row
+      write, NO event to ingress. COVERED by the new dispatch-level invalidate (D2).
+  (e) cancellation — no user-facing cancel endpoint exists; trigger-cancel/abortStuckWorkerSession
+      belong to (d) and never touch message rows. Nothing to cover.
+  (f) dispatch sweep itself (:2659-2661 rows→failed / :2654 deleteMany) — COVERED by its own
+      trailing invalidate.
+  (g) reapSilenceDeadline (silent timeout, :4277) — failedSessions + errors only, no row write.
+      COVERED by dispatch-level invalidate on the next dispatch.
+SIXTH PATH SEARCH: none live. Closest latent candidate: dispatcher self-poll
+  pollForCompletion→handleTaskCompleted→handleTeamTaskCompleted (:3508/:3628) would terminalize
+  rows to sent WITHOUT invalidating — but `this.pollForCompletion` has ZERO production callers
+  (dispatch no longer starts polling; only specs call it). Even if revived, the retry's
+  unconditional dispatch-level delete still invalidates before any new delta, so the universal
+  backstop "every delta stream is preceded by a dispatch through dispatchForTeamTarget" closes it.
+Invariant "any future terminalising path must call this": DOCUMENTED ONLY (invalidateDeltaStream
+  docstring, ingress.ts:~860). No type/lint/CI enforcement. Not a blocker given the backstop.
+
+--------------------------------------------------------------------------------
+7. WIRE / GATES / SCOPE
+--------------------------------------------------------------------------------
+SSE payload shape unchanged: diff contains ZERO modified realtime.emit/broadcast call sites
+  (the single emit line in the diff is pre-diff context of the unchanged AGENT_ERROR emit).
+  Delta emit `{message: toMessageDto(row), delta: kept}` and scope {type:'channel', id} identical.
+Gates: cd server && npx jest src/workers src/chat  →  Test Suites: 23 passed, 23 total;
+  Tests: 974 passed, 974 total;  JEST=0
+  npx tsc --noEmit -p tsconfig.json → no output;  TSC=0
+New cases (all PASS): ingress — D1 回归 (agent.status{error} invalidate), D2 回归 (watchdog
+  retry), D2 对照组 (corruption shape), 稳态 cache-hit (findFirst once), task.completed 清缓存;
+  dispatcher — D2 回归 (sweep failed + invalidateDeltaStream('c_dm_target','a_product')),
+  D2 边界 (idempotent delete with no stale rows).
+Dispatcher diff = EXACTLY the two claimed hunks: single-line field promotion
+  (@@ -1649,7 +1649,7 @@) and the 8-line hunk @@ -2662,6 +2662,14 @@ (7 comment lines + the call).
+  Nothing else.
+Realtime/prisma: no uncommitted change. Pre-existing dirt (platform-mcp/*, msg-parts.tsx):
+  untouched. No scratch files.
+
+--------------------------------------------------------------------------------
+REJECTED ALTERNATIVE (turn-identity in cache key) — REJECTION ARGUMENT CONFIRMED
+--------------------------------------------------------------------------------
+taskId is '' for team direct chat at both ends: dispatcher dispatchAgentMention
+  `taskId: taskIdForDispatch ?? ''` (:1906) and execute `taskId: request.taskContext?.taskId ?? ''`
+  (:2751); the worker's delta ctx.taskId likewise ''. A taskId-keyed cache key is therefore
+  constant across every turn of a direct chat → zero cross-turn isolation exactly where the bug
+  lives. Additionally, in task mode a retry reuses the SAME taskId → still no isolation.
+  Rejection is sound.
+
+--------------------------------------------------------------------------------
+NOTES (non-blocking)
+--------------------------------------------------------------------------------
+N1. Concurrent-turn cost claim slightly understated: worst case one extra findFirst + one
+    create (in-flight delta re-locates to a new processing row); correctness unaffected.
+N2. session.updated{failed} alone does not invalidate; relies on agent.status{error} pairing +
+    dispatch-level backstop.
+N3. Dead self-poll path (pollForCompletion) would terminalize rows without invalidating if ever
+    re-enabled; currently unreachable, and still backstopped by the dispatch-level delete.
+N4. "Future terminalising paths must call invalidateDeltaStream" is documented, not enforced.
+
+CONFIDENCE: 0.94
+================================================================================

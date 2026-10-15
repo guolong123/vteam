@@ -1,0 +1,211 @@
+================================================================================
+INDEPENDENT VERIFICATION — incident realtime-replay fix (read-only verifier)
+repo: /Volumes/SSD-Data/01work/git-project/vteam   date: Thu Oct 15 2026
+Executed independently; nothing the executor claimed was taken on trust.
+Mutations run ONLY on a throwaway rsync copy outside the repo (node_modules
+symlinked). Real working tree was NOT mutated. No git add/commit/stash/checkout.
+================================================================================
+
+VERDICT: CONFIRMED
+CONFIDENCE: 0.95
+
+--------------------------------------------------------------------------------
+GATES (re-run by verifier, raw)
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/realtime src/prisma ; echo JEST=$?
+  Test Suites: 26 passed, 26 total
+  Tests:       362 passed, 362 total
+  JEST_EXIT=0
+  (non-fatal Jest note: "worker process has failed to exit gracefully" — the
+   retention timer is .unref()'d so it cannot be the cause; exit code is 0.)
+
+$ npx tsc --noEmit -p tsconfig.json ; echo TSC=$?
+  TSC_EXIT=0   (no output = clean)
+
+--------------------------------------------------------------------------------
+[1] THE CAP IS REAL AND UNREMOVABLE
+--------------------------------------------------------------------------------
+server/src/realtime/realtime.service.ts:
+  L61  export const REALTIME_REPLAY_MAX = 1000;
+  L290 const rows = await this.prisma.realtimeEvent.findMany({
+  L292   orderBy: skipReplay ? { id: 'asc' } : { id: 'desc' },
+  L293   take: REALTIME_REPLAY_MAX,
+       });
+  -> ONE single findMany in getEventsSince; `take` is unconditional, so BOTH the
+     explicit-cursor path (skipReplay=false, desc) AND the absent/empty path
+     (skipReplay=true, asc) carry the bound. No code path skips it.
+
+Tests asserting the cap on BOTH paths:
+  * "CAP 守卫：显式游标补拉的 findMany 恒带 take: REALTIME_REPLAY_MAX（去掉上限 / 退回 asc 此断言即红）"      (explicit cursor, L605)
+  * "since 空串等同于缺省：解析最新游标，不再无界全量重放"                                                          (empty cursor, L648)
+  * "since 缺省时解析最新游标、绝不重放历史（危险路径已消除：等同 latest）"                                            (absent cursor, L631)
+
+MUTATION 1 (throwaway copy: delete the `take: REALTIME_REPLAY_MAX,` line):
+  $ npx jest src/realtime/realtime.service.spec.ts -t "CAP 守卫"
+    ✕ CAP 守卫：显式游标补拉的 findMany 恒带 take: REALTIME_REPLAY_MAX（...）
+       expect(arg.take).toBe(REALTIME_REPLAY_MAX)
+       Expected: 1000   Received: undefined
+    MUT1_CAP_EXIT=1
+  $ npx jest src/realtime/realtime.service.spec.ts -t "since 空串等同于缺省"
+    ✕ since 空串等同于缺省：解析最新游标，不再无界全量重放
+       Expected: 1000   Received: undefined
+    MUT1_EMPTY_EXIT=1
+  => Removing take turns BOTH cap tests RED. Cap is load-bearing on both paths.
+
+--------------------------------------------------------------------------------
+[2] THE DANGEROUS PATH IS GONE
+--------------------------------------------------------------------------------
+realtime.controller.ts L107-108:
+  const backlog = await this.realtime.getEventsSince(
+    since !== undefined && since !== '' ? since : undefined, ...);
+  -> missing OR '' since  =>  undefined  =>  skipReplay=true.
+service getEventsSince L271-287: skipReplay resolves latest id first
+  const latest = findFirst({ orderBy:{id:'desc'}, select:{id:true} });
+  if (latest) where.id = { gt: latest.id };
+  -> where always gets an id lower-bound (id > global max), so replay of history
+     is impossible; only post-connect events are returned.
+Precise caveat: the sole case without an id bound is an EMPTY table (latest===null);
+then findFirst returned nothing so there is nothing to read, and `take` caps it
+regardless. Documentation matches: ApiQuery `since` (L66-71) + service JSDoc
+(L251-262) both state absent/empty/latest => skip replay, explicit => newest ≤1000.
+Controller test "since 未传时不再无界重放历史：解析最新 id 为游标（findMany 恒有 id 下界 + take）" (L536) asserts findMany {id:{gt:latest}} + take.
+
+--------------------------------------------------------------------------------
+[3] ORDERING SEMANTICS (+ trade-off)
+--------------------------------------------------------------------------------
+service L292/L297-299: explicit cursor = orderBy id DESC + take, then events.reverse()
+ to deliver ascending.  absent/latest = orderBy id ASC (natural increment), no reverse.
+Asserted by: "降序取后 reverse 成升序下发（客户端收到的是 id 升序帧）" (L615) and
+ "以 DB 为准返回 id 大于 since 的历史事件（显式游标：降序取最新 N 条 + reverse 升序下发）" (L588).
+MUTATION 2 (throwaway copy: force orderBy -> { id:'asc' }, keep take):
+  $ npx jest src/realtime/realtime.service.spec.ts -t "以 DB 为准返回 id 大于 since"
+    ✕ 以 DB 为准返回 id 大于 since 的历史事件（显式游标：降序取最新 N 条 + reverse 升序下发）
+       - Expected  "id":"desc"     + Received  "id":"asc"
+    MUT2_ORDER_EXIT=1
+  => descending-take semantics is genuinely test-enforced.
+
+TRADE-OFF (stated, not silently accepted): a client reconnecting with an explicit
+cursor that is ≤ REALTIME_REPLAY_MAX (1000) behind receives a COMPLETE, gap-free
+replay. A client >1000 behind receives only the newest 1000 events; the older
+events between since and (latest-1000) are DROPPED (documented "让落后太多的客户端
+从最新状态续接"). This is a deliberate correctness-vs-memory trade-off: bounded
+memory instead of at-least-once catch-up. Acceptable for the live-increment use
+case; would be a data-gap only for a consumer needing full historical replay via
+the SSE replay path. NOT a defect (bounded, documented, intended) — flagged as design.
+
+--------------------------------------------------------------------------------
+[4] RETENTION
+--------------------------------------------------------------------------------
+service L319-329 pruneExpiredEvents: window<=0 -> return 0 (no deleteMany);
+ cutoff = now - retentionWindowMs; deleteMany({ where:{ createdAt:{ lt:cutoff } }}).
+ L68  default window = 24h; L69 env REALTIME_EVENTS_RETENTION_WINDOW_MS overrides (L353-358).
+ L73/74 env REALTIME_EVENTS_RETENTION_INTERVAL_MS overrides the 1h sweep.
+ Lifecycle: onModuleInit->ensureRetentionInterval (L114,332-347): setInterval + .unref();
+   interval<=0 -> don't start; idempotent. Callback catch->logger.error (no crash).
+ onModuleDestroy (L117-122): clearInterval + unset handle.
+=> window<=0 disables deletion; timer unref'd + cleared on destroy; cannot hang tests/process.
+Tests (all pass in main gate): 
+  "RETENTION：deleteMany 以 cutoff = now - 默认 24h 为谓词删除旧事件"
+  "RETENTION：窗口 env 覆盖会改变 cutoff（REALTIME_EVENTS_RETENTION_WINDOW_MS=60000）"
+  "RETENTION：窗口 ≤ 0（env 覆盖为 0）= 停清理，不发 deleteMany"
+  "RETENTION：onModuleInit 预置游标后仍能起周期，onModuleDestroy 清理句柄不抛"
+Note (style, not defect): class declares `implements OnModuleInit` only (L87) yet
+ defines onModuleDestroy; NestJS invokes it by duck-typing, so it fires correctly.
+
+--------------------------------------------------------------------------------
+[5] MIGRATION + GUARD SPEC
+--------------------------------------------------------------------------------
+prisma/migrations/20261015000000_realtime_events_retention/migration.sql (full, 2 code lines):
+  CREATE INDEX `idx_realtime_events_created_at` ON `realtime_events` (`created_at`);
+  -> ONLY the createdAt index; name/table/columns verified. Comment-stripped body has
+     NO IF EXISTS / FOREIGN KEY / CONSTRAINT / ALTER / DROP / RENAME / TRUNCATE / ADD COLUMN.
+  Sort order: 20261015000000_realtime_events_retention  >  20261014010000_memory_search_to_list  (confirmed in migrations dir).
+  Baseline 20260925000000_squashed_baseline: idx_realtime_events_scope_id present (1),
+     idx_realtime_events_created_at ABSENT (0) — no duplicate-index ERROR 1061.
+  schema.prisma RealtimeEvent: @@index([createdAt], map:"idx_realtime_events_created_at") added (1-line diff).
+
+Guard spec realtime-events-retention.migration.spec.ts:
+  - parses statements comment-stripped (nonComment()/statements());
+  - asserts squashed baseline does NOT already contain the index (L121);
+  - asserts the new migration CREATES it (createdIndexes(), L125/135/142);
+  - schema<->DDL parity BOTH ways (forward L125-133, reverse L142-152); baseline-index + scope_id checks (L154).
+  MUTATION 3 (throwaway copy: INDEX expectation -> 'idx_realtime_events_created_at_TYPO'):
+    $ npx jest src/prisma/realtime-events-retention.migration.spec.ts
+      ✕ 索引三元组正确：名字/表名/被索引列都锁死（...）         Expected ..._TYPO / Received ...
+      ✕ 反向平价：schema.prisma 声明的 idx_realtime_events_created_at 真被本迁移建出来 (...)  toContain fail
+      ✕ 不重复建 baseline 已有的 idx_realtime_events_scope_id (...)                          set mismatch
+      ✕ 只建一条索引：comment-stripped 后恰一条 CREATE INDEX 语句 (...)                       substring fail
+      Tests: 4 failed, 5 passed
+      MUT3_GUARD_EXIT=1
+  => guard genuinely pins the index name/parity; not a rubber stamp.
+
+--------------------------------------------------------------------------------
+[6] GATES — see top. JEST 362/362 exit 0 ; TSC exit 0.
+
+--------------------------------------------------------------------------------
+[7] SCOPE / ATTRIBUTION
+--------------------------------------------------------------------------------
+HEAD: 92f75846bf8387f63f7c3ebe86a319308ae6fd01  (== claimed base). Confirmed.
+Working tree is SHARED by multiple concurrent lanes; git status is the union.
+This lane's (realtime-replay) changed set — confined to:
+  M server/src/realtime/realtime.service.ts
+  M server/src/realtime/realtime.controller.ts
+  M server/src/realtime/realtime.service.spec.ts
+  M server/src/realtime/realtime.controller.spec.ts
+  M server/prisma/schema.prisma                 (only the @@index line added)
+  ?? server/prisma/migrations/20261015000000_realtime_events_retention/   (migration.sql)
+  ?? server/src/prisma/realtime-events-retention.migration.spec.ts
+  ?? .omo/evidence/incident-realtime-replay-fix.txt   (executor's own artifact)
+worker-event.ingress.ts (.ts + .spec.ts) IS modified in the shared tree — ATTRIBUTION
+ VERIFIED to OTHER lane: diff is 100% message.part.delta in-memory assembly cache
+ (ASSEMBLING_CACHE_MAX, assemblingMessages, resolveDeltaStreamKey); grep of the diff for
+ replay/retention/created_at/REALTIME_REPLAY/getEventsSince/pruneExpired = NONE. No overlap.
+server/.bench-delta.js (untracked) — VERIFIED OTHER lane: micro-benchmark of OLD(re-read DB)
+ vs NEW(in-memory delta cache) over dist/src/chat/message-parts.js; same ingress change.
+Also present in tree, OUTSIDE this lane's declared set, attributable to OTHER lanes:
+  - server/src/platform-mcp/{controller,service,tools}.ts(+specs)   (platform-mcp feature; unrelated)
+  - web/src/components/chat/msg-parts.tsx                            (web chat parts; unrelated)
+  - .omo/evidence/*.json, .omo/ulw-execute/ledger.jsonl              (orchestration/meta)
+None of the above contain replay/cap/retention content; none belong to this lane.
+No scope violation attributable to the realtime-replay lane.
+
+--------------------------------------------------------------------------------
+[8] BEHAVIOR CHANGE + IN-REPO CLIENTS
+--------------------------------------------------------------------------------
+Documented in BOTH: service JSDoc L251-262 and controller ApiQuery L66-71 (+ module doc L13).
+Consumers of /api/v1/events:
+  server: ONLY realtime.controller -> getEventsSince (single caller).
+  web SOURCE (non-build): ONLY web/hooks/use-sse.ts (via use-realtime.ts). First connect
+    sends since=latest when skipHistory (default true); NO caller sets skipHistory:false
+    (grep NONE). Reconnect sends since=lastId. => no client depends on absent-cursor replay.
+  web/e2e/perf.spec.ts:207 opens EventSource with NO since + scope=channel:<id>, but consumes
+    only the freshly-POSTed chat.message.new (round-trip latency); asserts nothing on replayed
+    history => behavior change does not break it (skipping history is strictly cleaner for it).
+    Its L204 comment "事件帧插在 backlog 重放流中先到" is now stale wording (cosmetic).
+CONCLUSION: absent-cursor connections no longer replay history; every in-repo consumer
+ already opts into since=latest (or tolerates no-replay). No breakage.
+
+--------------------------------------------------------------------------------
+NON-BLOCKING NOTES (no reproducible defect / unmet acceptance / data-loss risk)
+--------------------------------------------------------------------------------
+N1 (design trade-off, [3]): explicit-cursor clients >1000 events behind silently drop the
+   middle (since..latest-1000) to bound memory. Documented + intended; only matters if a
+   consumer needs full historical replay over SSE.
+N2 (style): RealtimeService `implements OnModuleInit` only, though onModuleDestroy is defined
+   and correctly invoked by Nest. Suggest also declaring OnModuleDestroy.
+N3 (test-clarity): controller.spec.ts L454 title "global 连接（无 since）收到已广播的存量
+   事件（DB 补拉）" is now stale — absent-since no longer replays; it passes only because
+   findFirst is unmocked (undefined -> empty-DB branch). Harmless; rename to avoid confusion.
+N4 (e2e doc): perf.spec.ts L204 "backlog 重放流" wording stale; logic unaffected.
+
+ESCALATION TRIGGERS (would warrant re-review / more complex solution):
+ - A requirement for guaranteed no-gap historical catch-up over SSE (would need paged
+   replay via cursor pagination rather than newest-N + cap).
+ - A consumer that intentionally relies on absent-cursor full replay.
+ - retention window shrunk so aggressively that a live long-stream reply's needed events
+   are pruned mid-stream (24h default is far above any real reply latency).
+
+REPRO COMMANDS (verbatim):
+  cd /Volumes/SSD-Data/01work/git-project/vteam/server && npx jest src/realtime src/prisma; echo JEST=$?
+  npx tsc --noEmit -p tsconfig.json; echo TSC=$?
+  # mutations were run on a throwaway rsync copy (node_modules symlinked), never the repo

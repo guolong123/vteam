@@ -350,3 +350,37 @@ Your next move: 直接开始执行（在 worker 会话里用 `$ulw-execute team-
 4. `Agent.workerId` 在产品面上彻底消失：schema 无声明、DB 无列（迁移含 `DROP COLUMN`）、DTO 无字段、web 与原型无控件、testid 清单无条目；且四处「取数 worker」语义未被误删。
 5. 迁移安全网成立：守卫 spec 六条断言全绿，且突变校验（注释掉 DROP）能转红；预检 dump 命令留档并明确「部署前须补 dump」。
 6. `scripts/e2e-team-worker-node.sh` 的 **A/B/C/D 四项 PASS**（含为 C/D 准备的第二个真实在线 worker），且门禁相对开工基线**无新增失败**：`scripts/gate.sh` 的各步骤（server `prisma generate`/lint/test/e2e/build + worker + web）逐条绿，唯一的红是**预存在**的 bare-catch 守卫（176 > 基线 175，`<base-sha>` 处已红，本计划未新增 bare catch、未改基线）；全程无人工点击环节。
+
+## 部署后登记的后续加固项（2026-10-15）
+
+本计划的 16 项实现与 F1–F4 全部完成后，线上服务端仍持续 `OOMKilled`（exitCode 137）。排查出三处与「每个 delta 的分配/驻留」相关的放大源并修复：**A** 回放封顶 + 保留任务、**B** 组装态缓存、**C** 内存日志字节封顶 + delta 不落库。修复过程中独立验证者暴露了下面两条**不在本次部署范围**的加固项，登记于此，不阻塞部署。
+
+1. **`ev_` 序号空洞（C 引入；用户 2026-10-15 明确决定「接受并部署，记为后续加固项」）**
+   - 现象：`message.part.delta` 移入非保留集合后**消耗持久 id 但不落库**，客户端游标因此长期**越过** DB max；服务重启时计数器从 DB max 重播种，于是会在 `ev_<游标>` 上发出一个**可回放**的 `chat.message.new`，而该客户端请求 `id > 游标` 得到空 ⇒ 这条持久帧对它**不可见**，直到出现更高 id。
+   - 为何判非阻塞（验证者按既定准则的字面定义判定）：窗口仅数秒即闭合（洪流下每秒数十个 id）、P2002 自愈防硬重复、客户端由 REST 历史 + 终态帧收敛；**无截断载荷、latest-id 游标不漂移**。
+   - **相对当前线上版本这是新行为**：线上 delta 落库，DB max 一直追得上游标。
+   - 加固方向：让非保留事件不消耗持久 id 空间（或把重播种改为 `max(DB max, 本进程已发出的最大 id)`），使客户端游标不越过 DB max；代价是触及 delta 帧的 id 语义与前端按 id 去重，**需独立验证**。
+   - 证据：`.omo/evidence/verify-incident-realtime-final.txt`。
+2. **键错配（两位独立验证者各自收敛；今日不可达）**
+   - `worker-event.ingress.handleMessagePartDelta` 对**任何团队上下文源**做私有目标改道，而 `resolveDeltaStreamKey` **只对 `team_group`** 做 ⇒ 二者可能算出不同键。
+   - 今日不可达：`uk_channels_team_member(team_id, team_member_id)` 唯一，私有源必是成员唯一的团队私有频道。
+   - 加固方向：两处统一改道判据（低成本）。
+
+## 资源释放策略（2026-10-15 磁盘写满事故后确立）
+
+事故：MySQL binlog 无界累积到 **251GB**（255 个 × ~1GB），把**共享的 983GB NFS** 写到 **100%**，mysqld 以 ENOSPC（`posix_fallocate ... error number 28` + `signal 6`）崩溃并 CrashLoopBackOff → 全站 500。当时 vteam 命名空间总占用仅 ~25GB（MySQL 251GB 是唯一大头）。
+
+**原则：只保证自己不被写满、不碰他人数据；所有会增长的资源都必须有声明式的封顶或释放策略。**
+
+| 资源 | 策略 | 位置 | 封顶效果 |
+|---|---|---|---|
+| MySQL binlog | **按时间自动过期 3600s** | chart `db.binlogExpireLogsSeconds` → statefulset `args` | 稳态 ~20–30GB（事故期速率）；写放大修复后应降到数 GB 级 |
+| `realtime_events` | 24h 保留任务（每小时裁一次） | 应用内保留任务 | 洪流下实测 30 分钟仅 +88 行，不再随 delta 增长 |
+| 内存事件日志 | **8MiB 字节封顶** + 1000 条上限 | `realtime.service.ts` `REALTIME_LOG_MAX_BYTES` | 驻留 ~9MiB（原最坏 ~1GB） |
+| delta 组装态缓存 | 256 条 FIFO 上限 | `worker-event.ingress.ts` `ASSEMBLING_CACHE_MAX` | 有界 |
+| server 内存 | **limit 2Gi**（实测峰值 676MB，约 3× 余量） | chart `server.resources.limits.memory` | 不占过多资源 |
+| `messages` 表膨胀 | 手动 `OPTIMIZE TABLE messages` | 运维步骤 | 实测 3.57GB → 68MB |
+
+**踩过的坑（务必记住）**：MySQL 的 `SET PERSIST` 会写入 `mysqld-auto.cnf`，并**覆盖命令行参数** —— 必须先 `RESET PERSIST` 才能让 chart 成为唯一事实来源，否则在 chart 里改了也不生效（本次实测：chart 传 3600，运行时仍读 7200）。
+
+**尚未自动化**：`messages` 的膨胀回收目前是手动步骤；若需定期化，需加 CronJob 或 MySQL EVENT。另：worker 的 `limits.memory` 为 8Gi / request 1Gi（既有配置，非本次设定），当前 `replicaCount.worker: 0` 故不占资源；若将来常开 worker，应重新评估该值。

@@ -1,0 +1,246 @@
+================================================================================
+INCIDENT: per-event memory allocation OOMKilling the server (message.part.delta)
+Base sha: 92f75846  |  Branch: fix/doc-pdf-export  |  Date: 2026-10-15
+Scope (this lane): server/src/workers/worker-event.ingress.ts  (+ .spec.ts)
+NOT touched (binding rules): server/src/realtime/realtime.service.ts (parallel lane
+owns replay cap + retention — needed change REPORTED at bottom), server/src/memories/*,
+execution-policies/*, common/constants/*, platform-mcp/*, web/*, and all pre-existing
+dirty files (platform-mcp/*, web/src/components/chat/msg-parts.tsx, .omo/evidence/*,
+.omo/ulw-execute/ledger.jsonl).
+================================================================================
+
+--------------------------------------------------------------------------------
+1. DIAGNOSIS  (file:line evidence; line numbers are PRE-fix @ base 92f7584)
+--------------------------------------------------------------------------------
+The per-delta path (event type message.part.delta):
+  server/src/workers/worker-event.ingress.ts:322   case 'message.part.delta'
+  server/src/workers/worker-event.ingress.ts:510   handleMessagePartDelta(dto)
+
+For EVERY incoming delta the handler re-touches the WHOLE accumulated message
+(~6 content-sized passes/delta). Each pass is O(currentMessageSize):
+
+  [READ full content — why each delta is O(messageSize)]
+  :611  prisma.message.findFirst({ ... where:{channelId, senderType:agent,
+        status:processing, senderId:agentId}, select:{ id:true, content:true } })
+        -> returns & the Prisma client DESERIALIZES the entire accumulated content
+           (text + all parts). One full-content DB read + JSON parse PER DELTA.
+        This is the "re-reading the message history per delta" shape.
+
+  [RE-ASSEMBLE the whole message from that DB read]
+  :643  const merged = mergePartsById(oldContent.parts, kept)
+        (server/src/chat/message-parts.ts:88 dedupes by id, last-write-wins) — still
+        rebuilds the full parts array every delta from a fresh DB read.
+  :648  text: concatText(merged)   (message-parts.ts:184) — rebuilds the full text
+        string (O(totalText)) every delta.
+
+  [SERIALIZE the full message to DB  — "double JSON round-trip" #1]
+  :644  prisma.message.update({ where:{id}, data:{ content:{ text, parts: merged } } })
+        writes the ENTIRE message to the messages table every delta. (First delta
+        creates the processing row at :658.)
+
+  [SERIALIZE the full message AGAIN via the realtime bus — round-trip #2 + fan-out]
+  :682  this.realtime.emit(EVENT_TYPES.MESSAGE_PART_DELTA,
+          { message: this.toMessageDto(row), delta: kept }, { type:'channel', id })
+        The broadcast payload carries the FULL message snapshot (toMessageDto -> :1041
+        content = {text, parts}) plus delta. Inside realtime.service.ts:
+          :117-136 emitOnce -> prisma.realtimeEvent.create({ payload: {message,delta} })
+                    -> serializes the FULL snapshot to realtime_events EVERY delta
+                    (the 200 recent rows being 100% message.part.delta are these).
+          :138-141 log.push(event)  -> a 1000-entry in-memory ring buffer (maxLog=1000)
+                    that RETAINS ~1000 full-message snapshots (strong refs, GC-pinned;
+                    ~1000 * avgSnapshot — hundreds of MB under load). EXTERNAL/heap.
+          :142     bus.emit('event', event) -> every SSE subscriber serializes the full
+                    snapshot again (server/src/realtime/realtime.controller.ts:98
+                    toMessageEvent -> JSON.stringify per subscriber, per delta).
+
+  [Also redundant small per-delta reads (Ruled OUT as the MB driver, but confirm the
+   "at most N reads" invariant):]
+  :516 resolvePlatformSessionId  :529 session.findUnique(teamId,teamMemberId)
+  :544 chatChannel.findUnique(type)  :565 session.findUnique(agentId fallback)
+  :577 chatChannel.findFirst(privateTarget)  :289 isWorkerRegistered(worker.findUnique)
+  These return a handful of scalar fields (not MB), but they DO run every delta.
+
+RULED OUT (checked, not the allocator):
+  - Per-delta query returning many rows: none in the delta path (all findUnique/findFirst
+    returning <=1 row). getEventsSince findMany is reconnect-replay only.
+  - Unbounded in-memory buffer/array in ingress: the dedup window (isDuplicate :972) is
+    bounded (DEDUP_WINDOW=1000) and partDeltaChains self-clean (:713). mergePartsById
+    dedupes by id so content.parts does NOT accumulate duplicate snapshots.
+  - WeCom relay / accumulating WeCom stream buffers: the delta-triggered callback
+    worker-dispatcher.ts:4595 handleSessionActivity only re-arms watchdogs + persists a
+    tiny session column. WeCom bridge (worker-dispatcher.ts:270/2098) is fed by FINALIZE
+    (task.completed), not per delta. NOT in the delta path.
+  - Per-subscriber copy of the payload: bus passes by reference; the cost is the
+    per-subscriber JSON.stringify in toMessageEvent (SSE), still O(messageSize) each.
+
+WHY it OOMs: RSS grew LINEARLY and was "largely OUTSIDE the V8 heap". Dominant retained
+(external) drivers: (a) realtimeEvent.create persisting one FULL snapshot per delta, and
+(b) the 1000-entry in-memory log ring buffer pinning ~1000 full snapshots. Under sustained
+~35 events/s these prevent GC from reclaiming the transient, so the multiple per-delta
+full-message encodes (read + merge + concat + 2 DB serializes + SSE) pile up until the
+2 GiB cgroup limit. ~4 MB/delta == ~6x a ~0.6-1 MB streaming answer (see bench: a 512 KB
+stream already costs 1793 KB/delta on the OLD path).
+
+--------------------------------------------------------------------------------
+2. IS THE DELTA STREAM LEGITIMATE?  (NOT a runaway loop)
+--------------------------------------------------------------------------------
+Evidence (worker producer): server/src/driver/serve-event-stream.ts
+  :223   if (!partID || !delta) return;         // empty deltas dropped -> strictly non-empty text
+  :234   buf.text += delta;                     // monotonic accumulation
+  :237-243 re-emits { id: partID, type, text: buf.text }  // SAME part id, GROWING text
+So each delta carries the full-so-far text of a FIXED part id (text grows monotonically).
+=> This is ONE long model answer streaming normally. The "same part id repeats" is BY
+DESIGN (last-write-wins), not an error/retry loop. mergePartsById (message-parts.ts:88)
+keeps one snapshot per id, so the message does not leak duplicates. The problem is purely
+ALGORITHMIC: re-reading + re-serializing the whole-so-far message on every delta (O(N^2)
+work for one answer), amplified 6x and by unbounded realtime retention.
+
+--------------------------------------------------------------------------------
+3. FIX  (server/src/workers/worker-event.ingress.ts — surgical, in-memory assembled state)
+--------------------------------------------------------------------------------
+Add an in-memory assembled-state cache keyed `${targetChannelId}|${agentId}` (identically
+to the existing serialization key), so the steady-state delta path does NOT re-read the
+message from the DB and does NOT re-derive the whole message from a fresh DB read:
+
+  * streamKey = `${channelId}|${agentId ?? ''}` (:624) hoisted (also the runPartDeltaExclusive key).
+  * HIT fast-path (:628-650): if assemblingMessages has the key, merge the small `kept`
+    delta into the cached parts -> message.update -> refresh cache. NO message.findFirst,
+    NO merge-from-DB-read. Gates (hasRenderableContent) preserved.
+  * MISS (:652-719): unchanged original findFirst -> merge/create, PLUS populate cache
+    (cacheAssembled at :694 update + :715 create). MISS = first delta / restart / after
+    task.completed, so a cold/restarted stream still resolves from the DB (correct).
+  * cacheAssembled (:765-777): bounded (ASSEMBLING_CACHE_MAX=256); eviction of the oldest
+    is SAFE — a later delta simply MISSes and re-reads from the DB.
+  * invalidation (:787-795 + resolveDeltaStreamKey :741-815): on task.completed, compute
+    the SAME target key (resolveChannel-equivalent) and delete ONLY that entry, so the next
+    turn's first delta re-resolves from the DB (prevents updating a finalized 'sent' row).
+
+The SSE/broadcast payload `{ message: toMessageDto(row), delta: kept }` is UNCHANGED ->
+the visible streaming result is IDENTICAL (frontend use-realtime.ts:378-380 upsertMessage
+still receives the full accumulated message each delta). Visible behaviour + DB persistence
+cadence unchanged; only the redundant per-delta DB re-read + whole-message re-derivation are
+eliminated ("reuse a cached assembled state").
+
+Per-delta DB READS for the messages table drop to 0 on steady state (only the necessary
+message.update WRITE remains). Routing reads (session/channel scoped to the stream) are left
+as-is (small, and caching them risks the security + routing test invariants for ~no MB gain).
+
+--------------------------------------------------------------------------------
+4. TEST that pins the fix (server/src/workers/worker-event.ingress.spec.ts)
+--------------------------------------------------------------------------------
+New cases inside describe('message.part.delta -> 流式累积落库 + 广播'):
+  (a) "稳态 delta 命中组装态缓存 → 不再每 delta 回读消息历史（message.findFirst 每条流只 1 次）"
+      -> 2 same-key deltas; asserts prisma.message.findFirst.toHaveBeenCalledTimes(1) and
+         that message.update still carries the correctly-accumulated content ({text:'AB'}).
+  (b) "task.completed 终态化 → 清组装态缓存，下一条流式重新以 DB 定位（findFirst 再次被调用）"
+      -> 2 deltas (findFirst x1) -> task.completed -> a new delta asserts findFirst x2.
+These FAIL if the heavy path returns: verified by temporarily forcing the cache to always
+miss, which drives findFirst to 2 for a 2-delta stream -> "Expected number of calls: 1 /
+Received number of calls: 2" for BOTH cases (raw output below). Reverted after.
+
+================================================================================
+RAW OUTPUTS  (PIPESTATUS-safe: captured without pipes where exit codes matter)
+================================================================================
+
+--- jest src/workers src/chat ---
+$ cd server && npx jest src/workers src/chat; echo JEST=$?
+Test Suites: 23 passed, 23 total
+Tests:       969 passed, 969 total
+JEST=0
+
+--- targeted new cases (green) ---
+$ npx jest src/workers/worker-event.ingress.spec.ts -t "组装态缓存"
+✓ 稳态 delta 命中组装态缓存 → 不再每 delta 回读消息历史（message.findFirst 每条流只 1 次）
+✓ task.completed 终态化 → 清组装态缓存，下一条流式重新以 DB 定位（findFirst 再次被调用）
+Tests: 2 passed (79 total in suite)
+
+--- proof the pins catch the heavy path (temporary cached=undefined) ---
+$ npx jest ... -t "组装态缓存"
+✕ 稳态 delta 命中组装态缓存 ...   ✕ task.completed 终态化 ...
+Expected number of calls: 1
+Received number of calls: 2
+Expected number of calls: 1
+Received number of calls: 2
+Tests:       2 failed, 77 skipped, 79 total
+(the `=== undefined` override was reverted; grep TEMP-VERIFY-OLD server/src => CLEAN)
+
+--- tsc ---
+$ npx tsc --noEmit -p tsconfig.json; echo TSC=$?
+TSC=0
+
+--- micro-benchmark (node --expose-gc; real message-parts helpers from dist) ---
+model: 1500 deltas, streaming text grows to 512 KB (worker re-sends full-so-far each delta)
+OLD (findFirst re-read + re-derive every delta): accounted=2754.0 MB  per-delta=1793 KB  wall=1751ms
+NEW (cached assembled state, no per-delta read):  accounted=1968.0 MB  per-delta=1281 KB  wall=856ms
+reduction in content-sized serialize/deserialize traffic: 29% (2754.0 MB -> 1968.0 MB)
+(BENCH exit 0; script removed after run). The 29% is exactly the per-delta FULL-content
+DB re-read + re-derivation removed. The remaining ~1281 KB/delta is the DOUBLE full-message
+serialization (messages.update + realtime_events) which is inherent to the per-delta
+full-snapshot design and is addressed by the realtime.service lane (below).
+
+--- git diff hunks (worker-event.ingress.ts), each justified ---
+$ git diff -U0 -- server/src/workers/worker-event.ingress.ts | grep '^@@'
+@@ -157,0 +158,4 @@   +ASSEMBLING_CACHE_MAX=256  (bound the cache; eviction-only-on-overflow, safe)
+@@ -217,0 +222,12 @@   +assemblingMessages Map field + doc
+@@ -607,0 +624 @@      +streamKey hoist (reused as exclusive key)
+@@ -609 +626 @@        runPartDeltaExclusive now takes streamKey (dedup the concat)
+@@ -610,0 +628,24 @@   +cache HIT fast-path (findFirst skipped; merge into cache; update; refresh)
+@@ -652,0 +694 @@      +cacheAssembled on MISS->update path (populate cache)
+@@ -672,0 +715 @@      +cacheAssembled on MISS->create path (populate cache)
+@@ -697,0 +741,67 @@   +resolveDeltaStreamKey() helper (task.completed invalidation key)
+@@ -720,0 +831,14 @@   +cacheAssembled() helper (bounded set + oldest eviction)
+@@ -727,0 +852,12 @@   +precise invalidation in handleTaskCompleted (delete the turn's key)
+
+--- changed files ---
+$ git status --porcelain -- server/src/workers/
+ M server/src/workers/worker-event.ingress.spec.ts   (+143 lines: 2 new pinning cases)
+ M server/src/workers/worker-event.ingress.ts        (+62/-1)
+
+--------------------------------------------------------------------------------
+5. REPORTED NEEDED CHANGE (NOT made by me — server/src/realtime/realtime.service.ts is a
+   PARALLEL-LANE-OWNED file; binding rule b)
+--------------------------------------------------------------------------------
+The SSE/UI contract REQUIRES the full {message:{content:{text,parts}}, delta} snapshot per
+delta (frontend web/hooks/use-realtime.ts:378-380 upsertMessage replaces its cache with
+payload.message). So the payload SIZE is fixed by the contract and CANNOT be shrunk in
+ingress without breaking live streaming. The remaining dominant allocators are entirely in
+realtime.service.ts (the replay-cap + retention lane):
+
+  NEEDED CHANGE (realtime.service.ts):
+   (1) emitOnce (:128-136) must NOT persist the full per-delta message snapshot to
+       realtime_events. For type === MESSAGE_PART_DELTA persist a COMPACT/coalesced row
+       (id/scope + delta, stripping message.content), and synthesize the current snapshot on
+       reconnect replay (getEventsSince :235) by coalescing deltas up to the last snapshot /
+       chat.message.new. This stops realtime_events growing one full snapshot per delta.
+   (2) The in-memory `log` ring buffer (:62,:138-141) must NOT pin full-content delta
+       payloads: either skip buffering delta events (rely on DB replay) or cap by TOTAL
+       BYTES, not a fixed count of 1000 — otherwise it retains ~1000 full snapshots
+       (~hundreds of MB, GC-pinned) which is the LINEAR RSS growth driver.
+   (3) Add realtime_events retention (the lane's stated task).
+  The `bus.emit` (:142) full broadcast to SSE subscribers stays unchanged (UI needs it);
+  per-subscriber serialization (realtime.controller.ts:98) is inherent to SSE delivery.
+
+With my ingress cache (removes the per-delta message re-read/re-derive = 29% less traffic)
+PLUS the realtime.service retention/compact-persist lane (removes the retained full-snapshot
+growth), the per-delta path stops amplifying memory and the OOM is eliminated while the
+live streaming UI is byte-for-byte identical.
+
+================================================================================
+DONE CLAIM (mirrored to caller):
+{"task":"delta-allocation-fix",
+ "changed_files":[
+   "server/src/workers/worker-event.ingress.ts",
+   "server/src/workers/worker-event.ingress.spec.ts"],
+ "tests":[
+   "npx jest src/workers src/chat -> 969 passed, JEST=0",
+   "npx tsc --noEmit -p tsconfig.json -> TSC=0",
+   "new pin cases: '稳态 delta 命中组装态缓存...(findFirst 每条流只 1 次)' + 'task.completed 终态化→findFirst 再次被调用' (both fail on heavy path: findFirst 2 vs 1)"],
+ "manual_qa":[
+   "micro-bench: OLD 2754MB/1793KB-per-delta vs NEW 1968MB/1281KB-per-delta = -29% (removes per-delta full message re-read/re-derive)",
+   "SSE broadcast payload {message,delta} unchanged -> visible streaming identical"],
+ "cleanup":["removed scratch server/.bench-delta.js","temp cached=undefined override reverted (TEMP-VERIFY-OLD grep CLEAN)"],
+ "risks":[
+   "task.completed payload without channelId + s_/ses_ session cannot resolve the target key -> that entry expires only via cap eviction then self-corrects (MISS re-reads) — benign, streaming correct.",
+   "concurrent streams of the SAME agent in the SAME target channel share one cache entry (design guarantees a single processing message per agent per channel; serialized by runPartDeltaExclusive).",
+   "realtime.service.ts retention/compact-persist lane is REQUIRED to fully stop the OOM — REPORTED, not edited."]}
+================================================================================

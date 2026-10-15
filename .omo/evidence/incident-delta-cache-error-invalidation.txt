@@ -1,0 +1,299 @@
+================================================================================
+EVIDENCE — delta-cache error invalidation (D1 correctness blocker)
+Target: server/src/workers/worker-event.ingress.ts (+ its spec)
+Repo:   /Volumes/SSD-Data/01work/git-project/vteam
+Date:   2026-10-15
+================================================================================
+
+0. BASE SHA ASSERTION (rule f)
+--------------------------------------------------------------------------------
+$ git rev-parse HEAD
+92f75846bf8387f63f7c3ebe86a319308ae6fd01
+→ asserted equal to the required base 92f75846bf8387f63f7c3ebe86a319308ae6fd01. No git
+write command was executed at any point (no add/commit/stash/checkout).
+
+FILE IDENTITY (rule d — sole writer attribution)
+--------------------------------------------------------------------------------
+$ shasum server/src/workers/worker-event.ingress.ts
+Before edit: 500f6e6c804b5f413067161e9a71081f22d6eba7
+After  edit: b289e5c2f06e45d782bfb0504a57b54c746fad13
+$ shasum server/src/workers/worker-event.ingress.spec.ts
+Before edit: 2014c6a388ff5136f872efd9d7265bebc3f35ed7
+
+IMPORTANT PRE-EXISTING DIRTY STATE (attribution): the delta-assembly cache itself
+(`assemblingMessages`, ASSEMBLING_CACHE_MAX, resolveDeltaStreamKey, cacheAssembled,
+task.completed invalidation) is UNCOMMITTED work already present in the working tree
+before this task. Proof — the following are absent from HEAD and present in the working
+tree file:
+$ git show HEAD:server/src/workers/worker-event.ingress.ts | grep -c "assemblingMessages"
+0
+$ git show HEAD:server/src/workers/worker-event.ingress.ts | grep -c "resolveDeltaStreamKey"
+0
+Therefore `git diff` vs HEAD shows the whole uncommitted set; MY hunks are identified by
+line numbers in §7.
+
+1. THE FIX (only production-code change, 17 added lines)
+--------------------------------------------------------------------------------
+server/src/workers/worker-event.ingress.ts, inside `handleAgentStatus`, at the top of
+the already-computed `if (isError)` branch:
+
+    if (isError) {
+      // 终态事件（worker 失败路径）：本轮流式已中断，精准失效其组装态缓存（同
+      // resolveDeltaStreamKey 键，与 task.completed 处理保持同键纪律）——
+      // worker/src/exec/exec-server.ts 失败路径只上送 agent.status{error} +
+      // session.updated{failed}，永不上送 task.completed（唯一 emitter 在成功路径），
+      // 不失效则同频道同 agent 的用户重试首 delta 命中残留缓存，把已被
+      // WorkerDispatcher.failTeamProcessingMessage 标 failed 的消息行 update
+      // 成新内容（失败行被静默覆盖）。
+      const errorStreamKey = await this.resolveDeltaStreamKey(
+        this.str(payload.channelId),
+        this.str(payload.sessionId),
+        dto.workerId,
+        payload.taskId,
+        payload.agentId,
+      );
+      if (errorStreamKey) {
+        this.assemblingMessages.delete(errorStreamKey);
+      }
+      await this.realtime.emit(
+        EVENT_TYPES.AGENT_ERROR,
+
+Key discipline is identical to handleTaskCompleted (:854-863): same
+resolveDeltaStreamKey(...) arguments order, same null-guard before delete → the
+deletion cannot throw when the key resolves to null.
+
+No SSE emit payload changed, no callback payload changed, delta path untouched on a
+normal turn (agent.status loading branch is byte-identical).
+
+2. ENUMERATION OF TERMINAL PATHS (deliverable 3)
+--------------------------------------------------------------------------------
+First, the complete set of worker→server event senders in the repo:
+$ grep -rln "sender.send" worker/src | grep -v spec
+worker/src/exec/exec-server.ts
+→ exec-server.ts is the ONLY emitter for cache-relevant events. Complete list:
+  1548  SESSION_UPDATED  { status: 'running' }   (pre-execute)
+  1558  AGENT_STATUS     { status: 'loading', phase: 'thinking' }
+  1583  SESSION_UPDATED  { status: 'idle' }      (SUCCESS path)
+  1592  TASK_COMPLETED                          (SUCCESS path) — only emitter in repo
+  1607  AGENT_STATUS     { status: 'error', error } (FAILURE catch)
+  1615  SESSION_UPDATED  { status: 'failed' }       (FAILURE catch)
+  (+ 1881 MESSAGE_PART_DELTA — the streaming producer, non-terminal by definition)
+
+Path-by-path:
+
+(a) task.completed  [REACHABLE, already invalidated]
+    Ingress handleTaskCompleted :854-863 deletes resolveDeltaStreamKey(...) before the
+    callback fan-out. No change needed. Verified by the pre-existing green case
+    "task.completed 终态化 → 清组装态缓存，下一条流式重新以 DB 定位".
+
+(b) agent.status{status:'error'}  [REACHABLE, STALE-ENTRY-PRODUCING → FIXED HERE]
+    exec-server.ts:1607 (failure catch). worker-dispatcher.ts:3399-3417 sees the same
+    `isError` predicate, calls failTeamProcessingMessage → the streaming row is
+    `message.update({status: MESSAGE_STATUS.failed})` (:3456) / created failed (:3468).
+    No task.completed follows ⇒ the cache entry survived ⇒ retry's first delta hits it and
+    `message.update`s the failed row. Fixed by this change; regression test in §5.
+
+(c) session.updated{status:'failed'}  [REACHABLE but NOT INDEPENDENT → covered by (b)]
+    The only producer is exec-server.ts:1615, in the SAME catch block as (b), sent
+    immediately after the agent.status{error} event :1607 (see raw snippet in §2.1).
+    There is no path that emits session.updated{failed} without the preceding
+    agent.status{error}. Note that keying the invalidation off session.updated instead
+    would be strictly weaker (event ordering / dropped-event dependent); keying off
+    agent.status{error} — the event that also drives failTeamProcessingMessage server-side
+    — is the consistent choice (worker-dispatcher.ts:4605 already treats
+    agent.status{error} as TERMINAL).
+    session.updated{status:'running'} (:1548) and {'idle'} (:1583) are non-terminal for
+    the cache: 'idle' is emitted in the success path BEFORE task.completed and the
+    streaming row is still `processing`, so cache and DB agree; invalidating there would
+    be a no-op at best.
+    session.updated{status:'frozen'|'archived'} [UNREACHABLE]: grep over the only sender
+    (exec-server.ts) shows exactly three session.updated emissions — 'running', 'idle',
+    'failed' — so frozen/archived can never arrive from a worker. Also note
+    ingress mapSessionStatus (:1144-1149) only whitelists SESSION_STATUS values and never
+    itself originates 'failed'.
+
+(d) worker crash / silence-watchdog / idle-dead timeout  [REACHABLE, STALE-ENTRY-PRODUCING,
+    NOT FIXABLE IN THIS FILE — explicit residual note]
+    markSessionIdleDead (worker-dispatcher.ts:4720) writes
+    `prisma.session.update({ data: { status: SESSION_STATUS.failed } })` (:4794) directly
+    from the server-side watchdog; it emits NO worker event into ingress, so there is
+    nothing for ingress to hook. It additionally best-effort aborts the worker session
+    (abortStuckWorkerSession :4871). Two reasons this is survivable but not fixed:
+      * The dispatcher does own the row lifecycle: at the NEXT dispatch in the same
+        private channel, worker-dispatcher.ts:2636-2661 finds the leftover `processing`
+        rows, DELETES the empty ones and marks the non-empty ones
+        `MESSAGE_STATUS.failed` — i.e. the very row a surviving cache entry would hit.
+      * Fixing it requires calling a new public invalidation hook on
+        WorkerEventIngress from WorkerDispatcher (markSessionIdleDead), i.e. editing
+        server/src/chat/worker-dispatcher.ts — forbidden by the task's edit scope
+        (only worker-event.ingress.ts + its spec). It is therefore reported, not fixed,
+        to avoid over-engineering/refactoring beyond the mandated change.
+      * Worst case is identical in shape to (b) but requires an additional server-side
+        watchdog timeout + no agent.status{error} (dead worker) + user retry; and the
+        cache is in-memory, so a server restart self-heals it. Fifo size eviction
+        (cacheAssembled :837-842, ASSEMBLING_CACHE_MAX=256) bounds the leak to at most
+        256 stale keys.
+
+(e) user cancellation  [UNREACHABLE for this cache]
+    The only abort call site is workerClient.abort(...) → abortStuckWorkerSession
+    (worker-dispatcher.ts:4801-4806), which is itself only called from markSessionIdleDead
+    (case d). It goes over HTTP to the worker; it does not produce a worker→server
+    event. A cancelled serve request makes the worker's runSendAndAwait reject, which
+    lands in exec-server's catch → (b) → cache invalidated. No user-facing
+    "stop generation" event path exists in the controller/REST layer.
+
+(f) dispatch-time stale-row cleanup (worker-dispatcher.ts:2636-2661)
+    [NOT an ingress event path — explained here because it is what makes a surviving
+    entry dangerous; see (d).] Runs at the beginning of the next dispatch in the same
+    channel; cannot be hooked from ingress.
+
+2.1 raw evidence for (b)/(c)
+--------------------------------------------------------------------------------
+$ sed -n 1605,1623p worker/src/exec/exec-server.ts
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`[exec] 执行失败 session=${opencodeSessionId}: ${message}`);
+      await this.sender.send(WORKER_EVENT_TYPES.AGENT_STATUS, {
+        taskId: payload.taskId,
+        agentId: payload.agentId,
+        sessionId: opencodeSessionId,
+        channelId: payload.channelId,
+        status: 'error',
+        error: err instanceof CompletionTimeoutError ? `执行失败：${message}` : message,
+      });
+      await this.sender.send(WORKER_EVENT_TYPES.SESSION_UPDATED, {
+        taskId: payload.taskId,
+        agentId: payload.agentId,
+        sessionId: opencodeSessionId,
+        channelId: payload.channelId,
+        status: 'failed',
+      });
+    } finally {
+      trackInstanceEnd();
+    }
+
+3. THROWAWAY COPY SETUP (outside the repo)
+--------------------------------------------------------------------------------
+Copy dir: /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/d1-redproof
+    cp -R server/src server/test server/jest.config.js server/tsconfig.json \
+          server/package.json <copy>/ ; ln -s <repo>/server/node_modules <copy>/node_modules
+The copy is OUTSIDE the repo. After the RED run I restored the invalidation block in the
+copy and re-ran; the restored copy was then verified byte-identical to the repo files:
+$ diff -q <copy>/src/workers/worker-event.ingress.ts      server/src/workers/worker-event.ingress.ts
+DIFF_INGRESS_RC=0
+$ diff -q <copy>/src/workers/worker-event.ingress.spec.ts server/src/workers/worker-event.ingress.spec.ts
+DIFF_SPEC_RC=0
+(so the RED/GREEN difference is attributable to exactly the 17-line block, nothing else)
+CLEANUP: the throwaway copy was deleted after both runs were captured
+($ rm -rf /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/d1-redproof → exit 0);
+only this evidence file (raw outputs) remains.
+
+4. PROOF 1 — RED (invalidation line reverted, new test present)
+--------------------------------------------------------------------------------
+$ cd <copy> && npx jest src/workers/worker-event.ingress.spec.ts -t "D1 回归"
+  ● WorkerEventIngress › message.part.delta → 流式累积落库 + 广播（方案 A worker 主动推） › D1 回归：agent.status{error} → 同键组装态缓存失效，重试 delta 不得 update 已 failed 行
+
+    expect(jest.fn()).toHaveBeenCalledTimes(expected)
+
+    Expected number of calls: 1
+    Received number of calls: 2
+
+      354 |
+      355 |       // delta 2 的那一次 update 属 error 之前的正常累积；error 之后不得再 update
+    > 356 |       expect(prisma.message.update).toHaveBeenCalledTimes(1);
+          |                                     ^
+      357 |       expect(prisma.message.update).toHaveBeenCalledWith({
+      358 |         where: { id: 'm_stream' },
+      359 |         data: expect.objectContaining({
+
+    at Object.<anonymous> (workers/worker-event.ingress.spec.ts:356:37)
+
+Test Suites: 1 failed, 1 total
+Tests:       1 failed, 79 skipped, 80 total
+JEST_EXIT=1
+→ Without the fix the post-error delta took the cached branch: message.update was called
+a SECOND time on the row that the failure path had already marked failed (exactly the
+reproduced defect: 2 calls instead of 1).
+
+5. PROOF 2 — GREEN (invalidation restored, same copy)
+--------------------------------------------------------------------------------
+$ cd <copy> && npx jest src/workers/worker-event.ingress.spec.ts -t "D1 回归"
+      ✓ D1 回归：agent.status{error} → 同键组装态缓存失效，重试 delta 不得 update 已 failed 行 (2 ms)
+Test Suites: 1 passed, 1 total
+Tests:       79 skipped, 1 passed, 80 total
+JEST_EXIT=0
+
+Test scenario (deliverable 4): delta → delta (second one hits the cache, updates m_stream)
+→ agent.status{status:'error', error:'worker 执行失败', channelId:'c_dm'} → delta.
+Post-error delta assertions, all of which are RED-without-fix discriminators:
+  * prisma.message.findFirst called 2× — state is re-resolved from the DB
+    (delta 2 hit the cache and did not query; without the fix delta 3 also skips it → 1×)
+  * prisma.message.create called 2× (new `processing` row for the retry; 1× without fix)
+  * prisma.message.update called exactly 1× — never applied to the failed row
+  * the last create writes content {text:'重试'} with status processing
+  * realtime.emit still emits 'agent.error' (SSE payload unchanged by the fix)
+
+6. IN-REPO VERIFICATION (raw outputs, literal exit codes, no pipes)
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/workers
+PASS src/workers/worker-event.ingress.spec.ts
+PASS src/workers/workers.controller.spec.ts
+PASS src/workers/worker-events.controller.spec.ts
+PASS src/workers/workers.service.spec.ts
+Test Suites: 10 passed, 10 total
+Tests:       415 passed, 415 total
+JEST=0
+→ new green case named:
+  "D1 回归：agent.status{error} → 同键组装态缓存失效，重试 delta 不得 update 已 failed 行"
+  (full file run of the spec: Tests: 80 passed, 80 total — includes the pre-existing
+   neighbours "稳态 delta 命中组装态缓存 → 不再每 delta 回读消息历史" and
+   "task.completed 终态化 → 清组装态缓存…", so the normal-turn behaviour is proven unchanged)
+
+$ cd server && npx tsc --noEmit -p tsconfig.json
+(no output)
+TSC=0
+
+7. HUNK INVENTORY (deliverable: list hunks, justify each)
+--------------------------------------------------------------------------------
+$ cd server && git diff -U0 -- src/workers/worker-event.ingress.ts | grep '^@@'
+@@ -157,0 +158,4 @@  const DEDUP_WINDOW = 1000;              → PRE-EXISTING (ASSEMBLING_CACHE_MAX const)
+@@ -217,0 +222,12 @@ export class WorkerEventIngress {      → PRE-EXISTING (assemblingMessages field + doc)
+@@ -449,0 +466,17 @@ export class WorkerEventIngress {      → *** MINE: handleAgentStatus error-path invalidation (17 lines) ***
+@@ -607,0 +641 @@     export class WorkerEventIngress {      → PRE-EXISTING (delta path debug log)
+@@ -609 +643 @@      export class WorkerEventIngress {      → PRE-EXISTING
+@@ -610,0 +645,24 @@  export class WorkerEventIngress {      → PRE-EXISTING (delta path streamKey + cache use)
+@@ -652,0 +711 @@     export class WorkerEventIngress {      → PRE-EXISTING
+@@ -672,0 +732 @@     export class WorkerEventIngress {      → PRE-EXISTING
+@@ -697,0 +758,67 @@ export class WorkerEventIngress {      → PRE-EXISTING (resolveDeltaStreamKey)
+@@ -720,0 +848,14 @@ export class WorkerEventIngress {      → PRE-EXISTING (cacheAssembled + eviction)
+@@ -727,0 +869,12 @@ export class WorkerEventIngress {      → PRE-EXISTING (task.completed invalidation)
+
+Spec hunks:
+$ cd server && git diff -U0 -- src/workers/worker-event.ingress.spec.ts | grep '^@@'
+@@ -264,0 +265,120 @@ describe('WorkerEventIngress', () => {   → *** MINE: the new D1 regression case (120 lines) ***
+@@ -664,0 +785,143 @@ describe('WorkerEventIngress', () => {   → PRE-EXISTING uncommitted spec work
+      (the two cache-behaviour cases; both are absent from HEAD:
+       git show HEAD:...spec.ts | grep -c "稳态 delta 命中组装态缓存" → 0)
+
+Justification per hunk: the single production hunk is the minimal invocation of the
+already-existing private helper resolveDeltaStreamKey with the identical argument
+discipline already used by handleTaskCompleted, guarded by the same null check. Every
+other hunk predates this task (uncommitted OOM-fix work) and is untouched by me.
+
+8. SCOPE COMPLIANCE
+--------------------------------------------------------------------------------
+* Edited files: server/src/workers/worker-event.ingress.ts, server/src/workers/worker-event.ingress.spec.ts ONLY.
+* Not touched (read-only): server/src/realtime/*, server/src/memories/*,
+  execution-policies/*, common/constants/*, platform-mcp/*, and every other pre-existing
+  dirty file (omo evidence jsons, schema.prisma, web/src/components/chat/msg-parts.tsx).
+* No git write command executed; HEAD still 92f75846bf8387f63f7c3ebe86a319308ae6fd01.
+
+9. RESIDUAL RISK / KNOWN GAP (see §2(d))
+--------------------------------------------------------------------------------
+worker crash / idle-dead watchdog path cannot emit an ingress event, so its cache entry
+survives until the next dispatch-time cleanup marks the row failed + the first retry
+delta re-resolves from the DB (which — with the next dispatch's cleanup — will find no
+`processing` row and therefore CREATE a fresh one; the risk window is a retry dispatched
+without the dispatcher's stale-row sweep, bounded to 256 keys, self-healing on restart).
+Recommended follow-up owned by whoever owns worker-dispatcher.ts: add a public
+`invalidateDeltaStream(channelId, sessionId, workerId, taskId, agentId)` on
+WorkerEventIngress and call it from markSessionIdleDead.

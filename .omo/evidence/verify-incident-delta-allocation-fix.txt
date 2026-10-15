@@ -1,0 +1,240 @@
+================================================================================
+INDEPENDENT VERIFICATION — per-delta assembly-cache fix
+Target: server/src/workers/worker-event.ingress.ts  (message.part.delta branch)
+Repo:   /Volumes/SSD-Data/01work/git-project/vteam
+Role:   read-only verifier (mutations only on a throwaway copy, since removed)
+================================================================================
+
+VERDICT: confirmed
+CONFIDENCE: 0.93
+  (not 1.0: a faithful end-to-end micro-bench of the ELIMINATED findFirst DB-read
+   + per-subscriber SSE fanout is not cheap in this fully-mocked spec harness, so
+   the -29% claim is verified code-wise + by a mutation-kill test rather than by a
+   live measurement. One theoretical key-derivation divergence exists but cannot
+   manifest under the data-model invariant — see NOTES.)
+
+--------------------------------------------------------------------------------
+GATES + SCOPE (raw)
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/workers src/chat ; echo JEST=$?
+JEST=0
+  Test Suites: 23 passed, 23 total
+  Tests:       969 passed, 969 total
+  (the Nest [WorkerDispatcher] ... "dispatch failed"/"not a function" lines are
+   expected negative-path scenario logs, not jest failures; exit 0 is authoritative)
+
+$ cd server && npx tsc --noEmit -p tsconfig.json ; echo TSC=$?
+TSC=0
+  tsc output lines: 0   (clean)
+
+$ git rev-parse HEAD
+92f75846bf8387f63f7c3ebe86a319308ae6fd01     <-- matches required HEAD
+
+Scratch bench file:
+$ ls server/.bench-delta.js  -> No such file or directory  (NOT_PRESENT)  OK
+
+This lane's diff (git diff --stat) = EXACTLY two files:
+  server/src/workers/worker-event.ingress.ts      | 137 +++++--
+  server/src/workers/worker-event.ingress.spec.ts | 143 ++++++++++++
+sheet Every added line in the .ts is cache machinery (grep of added lines):
+  ASSEMBLING_CACHE_MAX = 256 ; assemblingMessages Map ; `cached` HIT branch ;
+  cacheAssembled() + FIFO eviction ; resolveDeltaStreamKey() ;
+  task.completed -> assemblingMessages.delete(doneStreamKey).
+The ONLY removed line in the whole .ts is a `streamKey` template-literal reformat
+  -      `${channelId}|${agentId ?? ''}`,
+
+SCOPE: this lane did NOT modify realtime.service.ts. That file IS dirty, but it is
+the SIBLING lane (incident-realtime-log-byte-cap). Its diff markers are only:
+  REALTIME_NON_RETAINED_TYPES(5) REALTIME_LOG_MAX_BYTES(4) compactDeltaPayload(3)
+  retainInLog(2) message.part.delta(6)   -- all byte-cap / non-retained work.
+The other dirty files (platform-mcp/*, schema.prisma, web/msg-parts.tsx, .omo/*)
+are pre-existing / sibling-owned, not produced by this lane's ingress diff.
+
+--------------------------------------------------------------------------------
+1) DIAGNOSIS — each cited O(messageSize) pass, with current line numbers
+   (server cited original ~line 611/643/644/648/682; file has since grown)
+--------------------------------------------------------------------------------
+O(messageSize) DB re-read — CONFIRMED. On a cache MISS:
+  :652  const hasExisting = await this.prisma.message.findFirst({ ...select:{content:true} })
+  It selects the entire accumulated `content` back from the DB every MISS. This is
+  the pass the HIT branch now avoids. (Cited ~:611 = same statement, old numbering.)
+
+Whole-message re-assembly / re-concat — CONFIRMED, and IMPORTANT: it REMAINS on
+BOTH paths (in-memory, O(messageSize)); only the DB version is removed:
+  HIT  :636 mergePartsById(cached.parts, kept)   :641 concatText(merged)
+  MISS :684 mergePartsById(oldContent.parts, kept):689 concatText(merged)
+  (message-parts.ts: concatText/_mergePartsById/_dedupePartsById are all linear in
+   the whole parts array.)
+
+Full-content write to messages — CONFIRMED, REMAINS on both paths:
+  HIT  :637 message.update(... content:{text:concatText(merged), parts:merged})
+  MISS :685 message.update(... same shape)
+
+Full-snapshot broadcast — CONFIRMED at the emit site, LIVES UNCHANGED:
+  :725  await this.realtime.emit(MESSAGE_PART_DELTA, { message: toMessageDto(row), delta: kept }, {type:'channel',id:channelId})
+  realtime.service.ts: emitOnce :249 bus.emit('event', event) still sends the FULL
+  payload; the sibling lane only stopped DB-persisting the delta frame + compacts
+  the in-memory log entry — it does NOT trim the live wire frame.
+
+"~6 O(messageSize) passes per delta" — ACCURATE for the OLD code (every delta ran:
+findFirst-read, merge, concat, update-serialize, toMessageDto-clone, fanout-serialize).
+The fix removes exactly ONE of them on a HIT (the findFirst read). It does NOT
+remove merge/concat/update-write/fanout — so the "skips ... whole-message
+re-derivation" wording is only partly right: it skips re-deriving state FROM THE DB,
+not the in-memory merge/concat. This matters for #5.
+
+--------------------------------------------------------------------------------
+2) FIX IS REAL & SURGICAL
+--------------------------------------------------------------------------------
+Cache key: `${channelId}|${agentId ?? ''}`  (:624), channelId = target channel
+  (private fallback :612-613). Populate (:624) and invalidate (resolveDeltaStreamKey
+  :802 `${targetChannelId}|${agentId ?? ''}`) use the SAME derivation for the common
+  (team_group + private) streaming case. SURGICAL: +137/-1 in one file.
+
+HIT genuinely skips the per-delta full-content re-read: YES — :628 `const cached =
+  ...get(streamKey)` short-circuits the whole MISS block before :652 findFirst.
+
+HIT skips whole-message re-derivation: PARTLY — skips the DB re-read/reconstruction;
+  in-memory merge+concat still run (see #1).
+
+MISS still resolves state from the DB (correctness preserved, NOT assumed): YES —
+  :652 findFirst(status=processing) -> :684 merge(oldContent.parts,kept) -> update;
+  else :700 create. Then :715 cacheAssembled. A miss is always DB-authoritative.
+
+task.completed invalidates the entry: YES — :854 resolveDeltaStreamKey -> :862
+  this.assemblingMessages.delete(doneStreamKey). This is SYNCHRONOUS and runs BEFORE
+  the T10 dispatcher callback finalizes the message (status processing->sent).
+  This is the load-bearing guard: without it a late post-completion delta would
+  message.update a `sent`/finalized row and clobber the final result. Present. OK.
+
+Bound (256) evicts SAFELY: YES — cacheAssembled :837 `if size>256 delete oldest`
+  (FIFO via Map insertion order; skips the just-set key). Size is hard-bounded
+  (~256, never grows past 257 transiently). Eviction only forces a DB-authoritative
+  MISS next time — no data loss.
+
+HARDEST QUESTION (a) stale/incorrect to a client:
+  - After RESTART: cache is in-memory -> empty -> first delta MISS -> DB-authoritative. Safe.
+  - After EVICTION: evicted key -> next delta MISS -> re-locate via findFirst. Safe.
+  - Two streams interleaving on SAME channel+agent: they share ONE key/message, but
+    this is IDENTICAL to the pre-cache DB locate (findFirst by channel+senderType+
+    status=processing+senderId, latest). The cache mirrors DB semantics; it does not
+    add a new interleaving hazard. runPartDeltaExclusive(:812) even serializes same-key
+    deltas, and mergePartsById dedups by part.id (last-write-wins). Design invariant
+    "同一 agent 在频道内同时仅一条流式消息" (:522) holds.
+  - Cache vs DB sync: cacheAssembled writes the SAME `merged`/`kept` that is persisted
+    (:637/646, :685/694, :715) so cache==last-persisted at all times.
+  => No reproducible stale/incorrect assembled content. NOT a blocker.
+
+HARDEST QUESTION (b) unbounded growth: NO. Hard cap 256 w/ FIFO eviction; entries
+  also removed on task.completed. Dangling streams (worker died, no completion) are
+  still bounded by the cap. No leak path escapes 256.
+
+--------------------------------------------------------------------------------
+3) TESTS PIN IT (mutation-kill on a THROWAWAY COPY, since removed)
+--------------------------------------------------------------------------------
+Named tests exist:
+  spec:665  '稳态 delta 命中组装态缓存 → 不再每 delta 回读消息历史（message.findFirst 每条流只 1 次）'
+            asserts :724  expect(prisma.message.findFirst).toHaveBeenCalledTimes(1)
+  spec:740  'task.completed 终态化 → 清组装态缓存，下一条流式重新以 DB 定位（findFirst 再次被调用）'
+            asserts :805  expect(prisma.message.findFirst).toHaveBeenCalledTimes(2)
+
+MUTATION applied to the throwaway copy (force a MISS = neuter the lookup):
+  ingress.ts:628
+  FROM: const cached = this.assemblingMessages.get(streamKey);
+  TO:   const cached: { messageId: string; parts: Array<Record<string, unknown>> } | undefined = undefined;
+
+RESULT — BASELINE GREEN (EXIT=0):
+  ✓ 稳态 delta 命中组装态缓存 → ... (message.findFirst 每条流只 1 次) (3 ms)
+  Tests: 78 skipped, 1 passed, 79 total
+
+RESULT — MUTATED RED (EXIT=1), exact block:
+  ✕ 稳态 delta 命中组装态缓存 → 不再每 delta 回读消息历史（message.findFirst 每条流只 1 次）
+     expect(jest.fn()).toHaveBeenCalledTimes(expected)
+     Expected number of calls: 1
+     Received number of calls: 2
+     > 724 |       expect(prisma.message.findFirst).toHaveBeenCalledTimes(1);
+  Tests: 1 failed, 78 skipped, 79 total
+
+RESTORE (cp pristine back; diff -q == IDENTICAL) then RE-RUN GREEN (EXIT=0):
+  ✓ 稳态 delta 命中组装态缓存 → ... (3 ms)   Tests: 78 skipped, 1 passed, 79 total
+Both named tests also green together (-t "findFirst", EXIT=0, 4 passed).
+=> The 'findFirst 每条流只 1 次' pin is LOAD-BEARING: regressing to per-delta
+   full re-read turns it RED. Proven by reproduction.
+
+--------------------------------------------------------------------------------
+4) NO WIRE CHANGE
+--------------------------------------------------------------------------------
+Emit site :725-728 payload = `{ message: this.toMessageDto(row), delta: kept }`.
+toMessageDto (:1177) is UNCHANGED by the diff -> same DTO shape
+{id,channelId,senderType,senderId,content,mentions,status,createdAt}.
+realtime.emitOnce :249 bus.emit('event', event) forwards the ORIGINAL full payload
+(:235 comment "广播仍带完整 payload"; :257 "广播与返回值始终用原始 event"). The
+sibling lane only skips DB persist + compacts the LOG copy, never the live frame.
+Crucially, on BOTH HIT and MISS the broadcast `message` is the DB row RETURNED by
+message.update/create (:637/:685/:700) — identical semantics. => A subscriber sees
+the SAME `{message, delta}` frames (shape AND content) as before. No wire change.
+
+--------------------------------------------------------------------------------
+5) BENCHMARK JUDGEMENT (with the realtime lane factored in)
+--------------------------------------------------------------------------------
+Executor micro-bench: 512 KB stream OLD ~1793 KB/delta -> NEW ~1281 KB/delta (-29%).
+Is -29% meaningful at 80-110 MB/s? It is REAL and DIRECTIONAL: it deletes the single
+findFirst full-content DB round-trip + Json deserialization per delta. But it is the
+SMALLEST of the OOM amplifiers. The OOM was driven by ACCUMULATION, which the realtime
+log comments name explicitly (realtime.service.ts:102-105): (i) realtime_events
+persisted one full snapshot PER delta (26GB / 460k rows) and (ii) an in-memory log of
+~1000 full-snapshot delta frames (~1GB). BOTH are fixed by the SIBLING realtime lane
+(REALTIME_NON_RETAINED_TYPES: delta frames not persisted; compactDeltaPayload: log
+keeps only messageId/channelId; REALTIME_LOG_MAX_BYTES byte cap).
+
+Remaining per-delta cost AFTER BOTH fixes (all TRANSIENT, none accumulating):
+  - mergePartsById(cached.parts,kept) :636  O(messageSize) in-memory
+  - concatText(merged)               :641  O(messageSize) in-memory
+  - message.update serialize full content :637  O(messageSize) write
+  - toMessageDto clone :727 + live SSE fanout of full {message,delta} per subscriber
+Nothing is RETAINED per delta anymore (no DB row, no full snapshot in the
+bounded/compacted log). So the heap-growth / OOM driver is removed; what remains is
+CPU/GC/DB-write pressure, which is survivable at 80-110 MB/s. => -29% is a genuine
+improvement but is NOT the OOM fix on its own; the sibling realtime lane is. Together
+the accumulation drivers are gone, so the incident is addressed.
+Repro note: I did NOT run a faithful micro-bench — the eliminated findFirst READ and
+the per-subscriber fanout cannot be measured cheaply/faithfully in this fully-mocked
+spec harness; the -29% is verified code-wise + by the mutation-kill test instead.
+
+--------------------------------------------------------------------------------
+NOTES (non-blocking, not part of acceptance)
+--------------------------------------------------------------------------------
+N1. Key-derivation divergence: handleMessagePartDelta applies the private-target
+    override whenever team+member context exists (:591-601), while
+    resolveDeltaStreamKey applies it ONLY for team_group sources (:792). If a delta's
+    source were a private channel that is NOT the member's unique team-private
+    channel, populate-key != invalidate-key and invalidation would miss (stale entry).
+    Cannot occur under the model invariant (one private channel per team+member),
+    so NOT a blocker — but aligning the two derivations would be cheap defensive
+    hardening for the invalidation path.
+N2. In-memory merge/concat remain O(messageSize) per delta on HIT. For a very long
+    single stream this is per-delta CPU (transient, not accumulating). Acceptable now;
+    revisit only if profiling shows it hot.
+
+--------------------------------------------------------------------------------
+EXACT REPRO COMMANDS
+--------------------------------------------------------------------------------
+cd /Volumes/SSD-Data/01work/git-project/vteam
+# gates
+( cd server && npx jest src/workers src/chat; echo JEST=$? )            # -> JEST=0 (969 passed)
+( cd server && npx tsc --noEmit -p tsconfig.json; echo TSC=$? )         # -> TSC=0
+git rev-parse HEAD                                                    # -> 92f7584...
+ls server/.bench-delta.js                                             # -> No such file
+git diff --stat -- server/src/workers/worker-event.ingress.ts          # -> +137/-1 (cache only)
+# mutation-kill (on a throwaway copy; real repo untouched)
+BASE=/Volumes/SSD-Data/01work/git-project; TDIR=$BASE/__verify_delta_tmp
+mkdir -p "$TDIR"; rsync -a --exclude node_modules --exclude .git "$BASE/vteam/" "$TDIR/"
+ln -s "$BASE/vteam/node_modules" "$TDIR/node_modules"; ln -s "$BASE/vteam/server/node_modules" "$TDIR/server/node_modules"
+F="$TDIR/server/src/workers/worker-event.ingress.ts"; cd "$TDIR/server"
+npx jest src/workers/worker-event.ingress.spec.ts -t "稳态 delta 命中组装态缓存"     # GREEN (EXIT=0)
+perl -0pi -e 's/const cached = this\.assemblingMessages\.get\(streamKey\);/const cached: { messageId: string; parts: Array<Record<string, unknown>> } | undefined = undefined;/' "$F"
+npx jest src/workers/worker-event.ingress.spec.ts -t "稳态 delta 命中组装态缓存"     # RED (EXIT=1) findFirst 2!=1
+cp "$BASE/vteam/server/src/workers/worker-event.ingress.ts" "$F"                   # restore
+npx jest src/workers/worker-event.ingress.spec.ts -t "稳态 delta 命中组装态缓存"     # GREEN (EXIT=0)
+rm -rf "$TDIR"                                                                     # cleanup -> GONE
+================================================================================
