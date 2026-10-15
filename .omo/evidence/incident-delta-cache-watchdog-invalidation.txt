@@ -1,0 +1,262 @@
+================================================================================
+EVIDENCE (sibling of incident-delta-cache-error-invalidation.txt) —
+D2: watchdog / retry-dispatch path left a STALE delta-assembly cache entry
+Question settled: is it REACHABLE (does the first retry delta HIT the stale entry and
+message.update the already-failed row)?  →  YES, REACHABLE.
+Fix: design (a) — public invalidation hook on WorkerEventIngress, called from the
+retry-dispatch stale-row sweep in WorkerDispatcher. Design (b) rejected (unsound, §3).
+Repo:   /Volumes/SSD-Data/01work/git-project/vteam
+Date:   2026-10-15
+================================================================================
+
+0. BASE SHA + SCOPE
+--------------------------------------------------------------------------------
+$ git rev-parse HEAD
+92f75846bf8387f63f7c3ebe86a319308ae6fd01   → asserted equal to required base. Unchanged.
+No git write command executed (no add/commit/stash/checkout).
+
+Files touched (this continuation):
+  server/src/workers/worker-event.ingress.ts        (+invalidateDeltaStream public hook)
+  server/src/chat/worker-dispatcher.ts             (+call it on every dispatch sweep)
+  server/src/workers/worker-event.ingress.spec.ts  (+2 D2 cases)
+  server/src/chat/worker-dispatcher.spec.ts        (+2 D2 cases, mock field + type)
+NOT touched: server/src/realtime/*, server/prisma/*, server/src/platform-mcp/*,
+web/src/components/chat/msg-parts.tsx (all read-only for this task).
+
+1. REACHABILITY — RAW CODE CHAIN (why the first retry delta HITS the stale entry)
+--------------------------------------------------------------------------------
+(i) The cache key does NOT contain any turn identity — it is `<落库目标频道>|<agentId>`:
+  server/src/workers/worker-event.ingress.ts:624
+    const streamKey = `${channelId}|${agentId ?? ''}`;
+  same key returned by resolveDeltaStreamKey (:802).
+
+(ii) turn A: worker crashes / goes silent. Consequences in code:
+   - no task.completed (sole emitter worker/src/exec/exec-server.ts:1592, SUCCESS path only)
+   - no agent.status{error} (sole failure emitter exec-server.ts:1607, only in its catch)
+   ⇒ NEITHER of the two ingress-side invalidations fires. Cache entry survives.
+   - markSessionIdleDead (worker-dispatcher.ts:4720) is the server-side verdict:
+     server/src/chat/worker-dispatcher.ts:4794
+       await this.prisma.session.update({ where: { id: sessionId }, data: { status: SESSION_STATUS.failed } });
+     It emits NO worker event into ingress (it only aborts the worker session via
+     workerClient.abort, :4877) ⇒ nothing for ingress to hook. The message row stays `processing`.
+
+(iii) user retries in the same DM. dispatchAgentMention's stale-row sweep marks the
+     leftover row failed BEFORE the worker is even called (sweep :2626-2665 precedes
+     `await this.workerClient.execute(...)` at :2740):
+       server/src/chat/worker-dispatcher.ts:2661
+         data: { status: MESSAGE_STATUS.failed },     ← row m_A becomes `failed`
+         (empty rows are DELETEd instead, :2653-2656)
+
+(iv) retry's first delta arrives at ingress with the SAME key → cache HIT →
+     server/src/workers/worker-event.ingress.ts:637
+       const updated = await this.prisma.message.update({ where: { id: cached.messageId }, ...
+     → the already-`failed` row m_A is overwritten with new content, and no new
+     `processing` row is created for the retry turn. This is the D1 corruption,
+     reached through the second terminal path. (failTeamProcessingMessage, :3409, is
+     reached only via agent.status{error}, which a crashed worker never sends.)
+
+REPRO raw output (ingress-level, exact DB state left by (ii)+(iii)):
+  see §4 case "D2 对照组（未失效时的腐败形态）" — message.update IS applied to the
+  already-failed row m_A (raw output in §4).
+
+2. DESIGN DECISION — (b) rejected as UNSOUND, (a) chosen
+--------------------------------------------------------------------------------
+(b) "put taskId in the cache key" is unsound. Proof from code:
+  - delta/task.completed payloads are both `{...ctx, ...}` from the SAME ctx built per
+    execute invocation (worker/src/exec/exec-server.ts:1538-1547; deltas spread it at
+    :1877-1881) ⇒ within a turn they agree. That part is fine.
+  - BUT the taskId is empty for the very case the bug lives in (team direct chat / DM):
+      server/src/chat/worker-dispatcher.ts:2744   taskId: request.taskContext?.taskId ?? '',
+      server/src/chat/worker-dispatcher.ts:1907-1909 ...(taskIdForDispatch ? { taskContext: { taskId: taskIdForDispatch } } : {}),
+      (taskIdForDispatch = input.taskId, :1868 — set only for the task/execution kind)
+    ⇒ for a direct-chat retry the delta payload's taskId is `''` on EVERY turn, so the
+    key would be identical across turns ⇒ ZERO cross-turn isolation exactly where D1/D2 live.
+  - and for task-driven turns the taskId is per-dispatch data that a follow-up message can
+    legitimately reuse ⇒ no guaranteed isolation either.
+  ⇒ (b) does not eliminate the class; it only narrows it. REJECTED.
+
+(a) chosen: one public method on WorkerEventIngress + one call from the point that
+    actually terminalises the row. Smaller (8 lines in dispatcher, 34 in ingress incl.
+    doc) and complete for this path.
+    Placement decision: the call is UNCONDITIONAL inside `if (cleanupChannel)` (not inside
+    `if (staleIds.length > 0)`) so the invariant is local — "every dispatch in this
+    channel starts with a cold streaming cache". When there are no stale rows the delete
+    is an idempotent no-op; the only cost in a mid-stream race is one findFirst re-read.
+    partDeltaChains is deliberately NOT invalidated: it self-cleans on every chain-tail
+    settle (worker-event.ingress.ts:823-827) and deleting a key while a delta task is
+    in flight would re-open the findFirst→create check-then-act race the map exists to
+    close (this corrects the overstated "partDeltaChains has the same lifecycle gap"
+    note in the D1 evidence file — raw proof:
+      private runPartDeltaExclusive<T>(...)
+        ... void tail.then(() => { if (this.partDeltaChains.get(key) === tail) {
+        this.partDeltaChains.delete(key); } });
+    ).
+
+3. RAW REPRO OUTPUT — ingress level (2 new cases)
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/workers/worker-event.ingress.spec.ts -t "D2"
+      ✓ D2 回归：worker 崩溃/静默 watchdog 判死后重试 → 清扫失效组装态缓存，不得 update 已 failed 行 (2 ms)
+      ✓ D2 对照组（未失效时的腐败形态）：残留缓存命中 → message.update 覆盖已 failed 行
+Test Suites: 1 passed, 1 total
+Tests:       80 skipped, 2 passed, 82 total
+JEST_D2_INGRESS=0
+
+Scenario of the guard case (raw): (i) delta → turn-A cache entry + row m_A;
+(ii) invalidateDeltaStream('c_dm','a_1') ≡ what the dispatcher sweep now calls;
+(iii) retry first delta.
+      expect(prisma.message.update).not.toHaveBeenCalled();       ← failed row untouched
+      expect(prisma.message.create).toHaveBeenCalledTimes(2);     ← new processing row
+      expect(prisma.message.findFirst).toHaveBeenCalledTimes(2);  ← state re-resolved from DB
+Scenario of the control case (the corruption, raw): same sequence WITHOUT step (ii) →
+      expect(prisma.message.update).toHaveBeenCalledTimes(1);
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_A' },
+        data: expect.objectContaining({
+          content: expect.objectContaining({ text: '第一段重试' }),   ← failed row overwritten
+        }),
+      });
+      expect(prisma.message.create).toHaveBeenCalledTimes(1);      ← no new row for retry
+
+4. RAW REPRO OUTPUT — dispatcher level (2 new cases, real dispatch chain)
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/chat/worker-dispatcher.spec.ts -t "D2"
+      ✓ D2 回归：重派清扫把上一轮残留 processing 行标 failed → 同步失效该流式键的组装态缓存 (5 ms)
+      ✓ D2 边界：无残留 processing 行 → 仍失效同键缓存（幂等 delete，不抛错） (2 ms)
+Test Suites: 1 passed, 1 total
+Tests:       319 skipped, 2 passed, 321 total
+JEST_D2_DISPATCHER=0
+The first case proves causality: `prisma.message.updateMany` really marked m_prev_stream
+failed AND `ingress.invalidateDeltaStream` was called with ('c_dm_target','a_product'),
+i.e. the invalidation is tied to an actually-terminalised row.
+
+5. RED/GREEN PROOF ON A THROWAWAY COPY OUTSIDE THE REPO
+--------------------------------------------------------------------------------
+Copy: /var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/d2-redproof
+      (server/{src,test,jest.config.js,tsconfig.json,package.json} + symlinked node_modules)
+Revert = remove ONLY the call line `this.ingress.invalidateDeltaStream(cleanupChannel.id,
+target.agentId);` from worker-dispatcher.ts (method + tests kept, so the RED is attributable
+to exactly one line).
+
+RED:
+$ cd <copy> && npx jest src/chat/worker-dispatcher.spec.ts -t "D2"
+      ✕ D2 回归：重派清扫把上一轮残留 processing 行标 failed → 同步失效该流式键的组装态缓存 (7 ms)
+      ✕ D2 边界：无残留 processing 行 → 仍失效同键缓存（幂等 delete，不抛错） (1 ms)
+Tests:       2 failed, 319 skipped, 321 total
+JEST_EXIT=1
+  ● WorkerDispatcher › dispatch：分配 worker 全链 › D2 回归：重派清扫把上一轮残留 processing 行标 failed → 同步失效该流式键的组装态缓存
+
+    expect(jest.fn()).toHaveBeenCalledWith(...expected)
+
+    Expected: "c_dm_target", "a_product"
+
+    Number of calls: 0
+
+      1890 |       // 并同步失效 ingress 组装态缓存，键 = <目标频道>|<agentId>（与 delta 定位键一致）。
+      1891 |       // 若不失效：重试轮首 delta 命中残留缓存，对已 failed 行 message.update。
+    > 1892 |       expect(ingress.invalidateDeltaStream).toHaveBeenCalledWith(
+      1893 |         'c_dm_target',
+      1894 |         'a_product',
+      1895 |       );
+
+    at Object.<anonymous> (chat/worker-dispatcher.spec.ts:1892:45)
+
+RESTORE + sha256 identity check:
+$ cd <copy> && cp <repo>/server/src/chat/worker-dispatcher.ts src/chat/worker-dispatcher.ts
+$ sha256sum <copy>/src/chat/worker-dispatcher.ts <repo>/server/src/chat/worker-dispatcher.ts
+4f368915612fc0411820bf7600001f9b7df78c92443154c6cd75c311ffcc4882  <copy>/src/chat/worker-dispatcher.ts
+4f368915612fc0411820bf7600001f9b7df78c92443154c6cd75c311ffcc4882  <repo>/server/src/chat/worker-dispatcher.ts
+$ diff -q (all four touched files, copy vs repo)
+IDENTICAL src/chat/worker-dispatcher.ts
+IDENTICAL src/chat/worker-dispatcher.spec.ts
+IDENTICAL src/workers/worker-event.ingress.ts
+IDENTICAL src/workers/worker-event.ingress.spec.ts
+
+GREEN (restored):
+$ cd <copy> && npx jest src/chat/worker-dispatcher.spec.ts -t "D2"
+      ✓ D2 回归：重派清扫把上一轮残留 processing 行标 failed → 同步失效该流式键的组装态缓存 (9 ms)
+      ✓ D2 边界：无残留 processing 行 → 仍失效同键缓存（幂等 delete，不抛错） (2 ms)
+Tests:       319 skipped, 2 passed, 321 total
+JEST_EXIT=0
+CLEANUP: rm -rf <copy> executed (exit 0) after both runs were captured.
+
+6. IN-REPO VERIFICATION (raw output, literal exit codes, exit codes captured WITHOUT pipes)
+--------------------------------------------------------------------------------
+$ cd server && npx jest src/workers src/chat > /tmp/out 2>&1; echo "JEST=$?"
+Test Suites: 23 passed, 23 total
+Tests:       974 passed, 974 total
+Snapshots:   0 total
+JEST=0
+New cases (both green):
+  - src/workers/worker-event.ingress.spec.ts
+      "D2 回归：worker 崩溃/静默 watchdog 判死后重试 → 清扫失效组装态缓存，不得 update 已 failed 行"
+      "D2 对照组（未失效时的腐败形态）：残留缓存命中 → message.update 覆盖已 failed 行"
+  - src/chat/worker-dispatcher.spec.ts
+      "D2 回归：重派清扫把上一轮残留 processing 行标 failed → 同步失效该流式键的组装态缓存"
+      "D2 边界：无残留 processing 行 → 仍失效同键缓存（幂等 delete，不抛错）"
+  (D1 case from the previous step remains green: "D1 回归：agent.status{error} → 同键组装态缓存失效，重试 delta 不得 update 已 failed 行")
+
+$ cd server && npx tsc --noEmit -p tsconfig.json > /tmp/out 2>&1; echo "TSC=$?"
+TSC=0
+
+7. HUNK INVENTORY (MINE vs pre-existing)
+--------------------------------------------------------------------------------
+$ cd server && git diff -U0 -- src/workers/worker-event.ingress.ts | grep '^@@'
+@@ -157,0 +158,4 @@  → PRE-EXISTING (uncommitted OOM cache work: ASSEMBLING_CACHE_MAX)
+@@ -217,0 +222,12 @@ → PRE-EXISTING (assemblingMessages field)
+@@ -449,0 +466,17 @@ → MINE, D1 step (handleAgentStatus error-path invalidation)
+@@ -607,0 +641 / -609 +643 / -610,0 +645,24 / -652,0 +711 / -672,0 +732 / -697,0 +758,67 / -727,0 +889,12
+                      → PRE-EXISTING (delta path / resolveDeltaStreamKey / cacheAssembled / task.completed invalidation)
+@@ -720,0 +848,34 @@ → MINE, D2 step (invalidateDeltaStream public method, 34 lines incl. doc)
+
+$ cd server && git diff -U0 -- src/chat/worker-dispatcher.ts | grep '^@@'
+@@ -1652 +1652 @@ → MINE: constructor param `ingress` → `private readonly ingress` (1 line; the class
+                    already used `ingress` for its three on* registrations in the ctor body, so
+                    this only promotes an existing injected param to a field — no wiring change)
+@@ -2664,0 +2665,8 @@ → MINE: 7 comment lines + the invalidateDeltaStream call (8 lines)
+
+$ cd server && git diff -U0 -- src/chat/worker-dispatcher.spec.ts | grep '^@@'
+@@ -128,0 +129,2 @@  → MINE: widen ingress mock type with invalidateDeltaStream: jest.Mock
+@@ -287,0 +290,2 @@  → MINE: add invalidateDeltaStream: jest.fn() to the harness mock
+@@ -1861,0 +1866,47 @@ → MINE: the two D2 dispatcher cases (47 lines)
+
+$ cd server && git diff -U0 -- src/workers/worker-event.ingress.spec.ts | grep '^@@'
+@@ -264,0 +265,268 @@ → MINE: D1 case (120 lines) + D2 guard/control cases (148 lines)
+@@ -664,0 +933,143 @@ → PRE-EXISTING uncommitted lane-B work (absent from HEAD:
+                        git show HEAD:...spec.ts | grep -c "稳态 delta 命中组装态缓存" → 0)
+
+8. SETTLING THE (c) CLAIM — session.updated{failed} ordering / crash-between-sends window
+--------------------------------------------------------------------------------
+Ordering IS guaranteed by construction. worker/src/client/event-client.ts:97-121 —
+`send()` awaits its own delivery (`const task = this.deliver(event); ... await task;`,
+deliver = POST /worker/events with exponential-backoff retries), and the failure catch
+does two sequential awaited sends:
+  worker/src/exec/exec-server.ts:1606-1613  AGENT_STATUS{status:'error', error}   (first)
+  worker/src/exec/exec-server.ts:1614-1621  SESSION_UPDATED{status:'failed'}       (second)
+⇒ agent.status{error} is fully delivered (POST returned ok, or retries exhausted) before
+session.updated{failed} is even issued; seq is monotonic per event and eventId unique.
+
+Crash BETWEEN the two sends (agent.status{error} delivered, session.updated{failed} lost):
+does it leave an uncovered cache window?  NO. Because the event that matters for the cache
+is the FIRST one:
+  - agent.status{error} is what drives WorkerDispatcher.handleAgentStatus →
+    failTeamProcessingMessage (worker-dispatcher.ts:3409-3417) → row m_A → failed;
+  - the same event runs the D1 invalidation (handleAgentStatus, :466-482) → cache entry gone.
+So the row is terminalised AND the cache is invalidated by the very event that survived.
+The only residue is a Session row left `running`, which is exactly what the idle-dead
+watchdog is built to clean (markSessionIdleDead requires status === running, :4740) — and
+the D2 hook now invalidates the cache on that path's retry dispatch too.
+The reverse inversion (session.updated{failed} arriving first) is equally harmless: it has
+no cache effect, and agent.status{error} still invalidates when it arrives. A cache
+invalidation keyed on session.updated would have been order-sensitive; keying on
+agent.status{error} is not — which is why D1 hooked the agent.status event.
+
+9. RESIDUAL RISKS
+--------------------------------------------------------------------------------
+- None newly introduced by D2 beyond the D1 notes. The unconditional per-dispatch delete
+  can delete a key mid-stream in the (rare) case of two concurrent turns for the same
+  channel+agent; the effect is one findFirst re-read on the next delta, not a correctness
+  change (documented at the call site).
+- If a future caller adds a third row-terminalising path in WorkerDispatcher, they must
+  call this.ingress.invalidateDeltaStream(<target channel>, <agentId>) there too; the
+  docstring on the method states the invariant.
+- Server restart / 256-key FIFO eviction remain the last-resort bounds (unchanged from D1).

@@ -1,0 +1,312 @@
+================================================================================
+INCIDENT (final piece): retained-memory growth in the realtime layer — 内存日志
+按字节收敛 + delta 帧不再保留/落库全量快照
+repo: /Volumes/SSD-Data/01work/git-project/vteam   date: Thu Oct 15 2026
+Base sha: 92f75846bf8387f63f7c3ebe86a319308ae6fd01 (HEAD, unchanged — asserted below)
+Lane: realtime-log-byte-cap
+Files changed by THIS lane (only these two):
+  M server/src/realtime/realtime.service.ts            (byte cap + delta skip)
+  ?? server/src/realtime/realtime.service.byte-cap.spec.ts  (8 new pinning cases)
+NOT touched: server/src/workers/worker-event.ingress.ts (other lane, frozen),
+  realtime.controller.ts + *.spec.ts, realtime.service.spec.ts (parallel lane),
+  server/prisma/*, common/constants/*, platform-mcp/*, web/*, pre-existing dirty files.
+================================================================================
+
+--------------------------------------------------------------------------------
+0. WHAT WAS ALREADY DONE (read first, NOT undone)
+--------------------------------------------------------------------------------
+Parallel lane (incident-realtime-replay-fix, verified in
+.omo/evidence/verify-incident-realtime-replay-fix.txt):
+  - REALTIME_REPLAY_MAX = 1000 (L62) applied via unconditional `take` in
+    getEventsSince; absent/empty cursor now resolves a latest cursor (no full replay)
+  - retention job (24h window, 1h sweep, .unref) + createdAt index + migration +
+    guard spec
+That cap is BY COUNT. The in-memory log still held up to 1000 FULL per-delta
+snapshots (~1 MB each for a long streaming answer ⇒ ~1 GB retained, GC-pinned),
+and every delta was still written to realtime_events with that full snapshot
+(table had reached 460,481 rows / 26 GB, 100% message.part.delta, before truncation).
+This lane removes the retained growth at the root.
+
+--------------------------------------------------------------------------------
+1. DELIVERABLE 1 — BYTE BUDGET ON THE IN-MEMORY LOG
+--------------------------------------------------------------------------------
+  L95  export const REALTIME_LOG_MAX_BYTES = 8 * 1024 * 1024;   // 8 MiB
+  L149+ private readonly logSizes: number[] = [];                // 与 log 平行的每条字节数
+        private logBytesTotal = 0;                              // 摊销 O(1) 记账
+  L282+ retainInLog(): push 后
+          (1) 条数上限 maxLog=1000（既有语义，先收敛）
+          (2) 字节预算：Σ JSON.stringify(entry).length(UTF-8) > REALTIME_LOG_MAX_BYTES
+              → 从**头部**淘汰最旧条目（evictLogHead 同步扣账），直到低于预算
+  淘汰只从头部删 ⇒ 数组其余项相对顺序不变（id 升序不破坏）；恒保留最新条目
+  ⇒ getLatestId() 的 latest-id 游标语义不丢失（单条即超预算时该条仍保留，长度 ≥ 1）。
+
+--------------------------------------------------------------------------------
+2. DELIVERABLE 2 — DELTA FRAMES NO LONGER RETAIN/PERSIST FULL SNAPSHOTS
+--------------------------------------------------------------------------------
+选择（最小变更）：
+  message.part.delta（REALTIME_NON_RETAINED_TYPES, L126）**只广播、不落库、不全量保留**：
+   - L236  if (!REALTIME_NON_RETAINED_TYPES.has(type)) { realtimeEvent.create(...) }
+          → delta 一行都不写 realtime_events（26GB 表的来源被掐断；终帧
+            chat.message.new 由 worker-dispatcher.ts:3220 broadcast 照常落库）
+   - L248  this.retainInLog(this.toLogEntry(event))
+          → delta 进日志时 compactDeltaPayload 只留 {messageId, channelId}
+            （剥掉 message.content 全量快照与 delta 正文），日志一条 ≈ 200B
+   - bus.emit('event', event) 与 emit() 返回值仍用**原始全量 event 对象**
+     ⇒ 在线 SSE 订阅者收到的帧逐字节不变（wire 契约未动；binding rule e 未触发）
+
+取舍（显式声明）：
+  - 断线重连的客户端不再经 SSE 补拉到流式中遗漏的 delta 帧。重连后依赖：
+      (1) **REST 历史路径**——ingress 每 delta 都把 messages 行更新为最新累积内容
+          （message.update 每 delta 落库 processing 行），重连页面拉历史即得最新进度；
+      (2) 终帧 chat.message.new 的重放（该帧照常落库，payload.message 为完整快照）。
+  - delta 帧消耗的 ev_ 序号在 realtime_events 中留空洞；进程重启后 id 计数器按库内
+    最大值重新起号（onModuleInit seed；P2002 PRIMARY 自愈兜底 DB 冲突），极端情况下
+    （滚动更新 + 超长流式叠加）落后客户端的游标去重可能跳过极少事件。
+  - 曾评估「落紧凑行 + 重放」并被否决：前端 web/hooks/use-realtime.ts:378-383 的
+    message.part.delta 分支要求 payload.message 是完整 RealtimeChatMessage
+    （upsertMessage 直读 message.channelId / message.id，L418-430），任何非全量
+    重放帧都会击穿 UI，且 web/ 由其他 lane 持有、不能改。
+
+--------------------------------------------------------------------------------
+3. GATES (raw output, exit codes captured WITHOUT pipes)
+--------------------------------------------------------------------------------
+--- required verify #1 ---
+$ cd server && npx jest src/realtime; echo JEST=$?
+PASS src/realtime/realtime.service.spec.ts
+PASS src/realtime/realtime.service.byte-cap.spec.ts
+PASS src/realtime/realtime-subscribers.spec.ts
+PASS src/realtime/realtime.controller.spec.ts
+
+Test Suites: 4 passed, 4 total
+Tests:       95 passed, 95 total
+Snapshots:   0 total
+Time:        5.057 s
+Ran all test suites matching /src\/realtime/i.
+JEST=0
+
+--- new cases only (8) ---
+$ npx jest src/realtime/realtime.service.byte-cap.spec.ts; echo JEST=$?
+PASS src/realtime/realtime.service.byte-cap.spec.ts
+  RealtimeService 内存日志字节预算（incident-realtime-log-byte-cap）
+    ✓ 字节预算：压入远超预算的大事件后，保留的序列化总字节 ≤ REALTIME_LOG_MAX_BYTES（且确实发生了头部淘汰） (44 ms)
+    ✓ 字节淘汰后仍保留最新条目：id 升序不被破坏，getLatestId 与最后一条同源 (25 ms)
+    ✓ 条数上限仍在：1200 条小事件 → 只保留最近 1000 条，最新 id 不丢 (5 ms)
+    ✓ 单条事件即超预算：仍保留最新条目（latest-id 语义不因字节淘汰丢失），下一条压入再淘汰它 (13 ms)
+  RealtimeService delta 帧不保留全量快照（incident-realtime-log-byte-cap）
+    ✓ message.part.delta 零落库 + 内存日志只留识别字段：全量快照一个字都不进 realtime_events / log（回到全量快照路径此断言即红） (1 ms)
+    ✓ delta 的实时广播载荷与上线订阅者收到的一致（{message, delta} 全量，逐字节不变） (1 ms)
+    ✓ 跳过只作用于 message.part.delta：非 delta 事件照常落库全量 payload (1 ms)
+    ✓ 长流式累计：50 条 delta 后内存日志保留的字节仍远低于字节预算（每条 ~200B 帧+识别字段） (1 ms)
+
+Test Suites: 1 passed, 1 total
+Tests:       8 passed, 8 total
+JEST=0
+
+--- required verify #2 ---
+$ npx tsc --noEmit -p tsconfig.json; echo TSC=$?
+TSC=0
+(LSP typescript server NOT INSTALLED — user previously declined; tsc --noEmit is the
+ type gate. 两个改动文件均无 diagnostics 可读，改用 tsc 结论如上。)
+
+--- adjacent suites (consumers of realtime: prisma guard / workers / chat) ---
+$ npx jest src/prisma src/workers src/chat --silent; echo JEST=$?
+Test Suites: 46 passed, 46 total
+Tests:       1244 passed, 1244 total
+JEST=0
+
+--------------------------------------------------------------------------------
+4. MUTATION PROOFS (new tests really pin; 备份/恢复 + sha256 校验，无 git 写操作)
+--------------------------------------------------------------------------------
+MUT1 — 让全量快照路径回归（REALTIME_NON_RETAINED_TYPES 置空集）:
+$ cp src/realtime/realtime.service.ts <backup>   # sha256 17c6472a...
+$ node -e "... set emptied ..."   → MUT1_APPLIED
+$ npx jest src/realtime/realtime.service.byte-cap.spec.ts; echo MUT1_JEST=$?
+  RealtimeService 内存日志字节预算（incident-realtime-log-byte-cap）
+    ✓ 字节预算：压入远超预算的大事件后，保留的序列化总字节 ≤ REALTIME_LOG_MAX_BYTES（且确实发生了头部淘汰） (29 ms)
+    ✓ 字节淘汰后仍保留最新条目：id 升序不被破坏，getLatestId 与最后一条同源 (18 ms)
+    ✓ 条数上限仍在：1200 条小事件 → 只保留最近 1000 条，最新 id 不丢 (3 ms)
+    ✓ 单条事件即超预算：仍保留最新条目（latest-id 语义不因字节淘汰丢失），下一条压入再淘汰它 (11 ms)
+  RealtimeService delta 帧不保留全量快照（incident-realtime-log-byte-cap）
+    ✕ message.part.delta 零落库 + 内存日志只留识别字段：全量快照一个字都不进 realtime_events / log（回到全量快照路径此断言即红） (1 ms)
+    ✓ delta 的实时广播载荷与上线订阅者收到的一致（{message, delta} 全量，逐字节不变） (1 ms)
+    ✕ 跳过只作用于 message.part.delta：非 delta 事件照常落库全量 payload (1 ms)
+    ✕ 长流式累计：50 条 delta 后内存日志保留的字节仍远低于字节预算（每条 ~90B 识别字段） (1 ms)
+
+  ● ... › message.part.delta 零落库 + 内存日志只留识别字段 ...
+    expect(jest.fn()).not.toHaveBeenCalled()
+    Expected number of calls: 0
+    Received number of calls: 1
+    1: {"data": {"id": "ev_0000000001", "payload": {"delta": [{"id": "prt_1", "text": "AAAA...(4096)", "type": "text"}],
+        "message": {"channelId": "c_1", "content": {"parts": [Array], "text": "AAAA...(4096)"},
+        "id": "m_stream_1", "senderId": "ag_1", "senderType": "agent", "status": "processing"}},
+        "scopeId": "c_1", "scopeType": "channel", "type": "message.part.delta"}}
+      > 226 |     expect(prisma.realtimeEvent.create).not.toHaveBeenCalled();
+
+  ● ... › 长流式累计：50 条 delta 后 ...
+    expect(received).toBeLessThan(expected)
+    Expected: < 16384
+    Received:    633500            ← 全量快照路径下 50 条 delta 保留 633,500B（其中 12,700 一次快照）
+    （对比修复后 9,800B ≈ 196B/条）
+
+Test Suites: 1 failed, 1 total
+Tests:       3 failed, 5 passed, 8 total
+MUT1_JEST=1
+$ cp <backup> src/realtime/realtime.service.ts   → RESTORED  sha256 17c6472a... (一致)
+
+MUT2 — 关掉字节收敛（while (false && logBytesTotal > REALTIME_LOG_MAX_BYTES && ...)）:
+$ npx jest src/realtime/realtime.service.byte-cap.spec.ts; echo MUT2_JEST=$?
+    ✕ 字节预算：压入远超预算的大事件后，保留的序列化总字节 ≤ REALTIME_LOG_MAX_BYTES（且确实发生了头部淘汰） (26 ms)
+    ✓ 字节淘汰后仍保留最新条目：id 升序不被破坏，getLatestId 与最后一条同源 (26 ms)
+    ✓ 条数上限仍在：1200 条小事件 → 只保留最近 1000 条，最新 id 不丢 (3 ms)
+    ✕ 单条事件即超预算：仍保留最新条目（latest-id 语义不因字节淘汰丢失），下一条压入再淘汰它 (13 ms)
+    ✓ message.part.delta 零落库 + 内存日志只留识别字段 (1 ms)
+    ✓ delta 的实时广播载荷与上线订阅者收到的一致（{message, delta} 全量，逐字节不变） (1 ms)
+    ✓ 跳过只作用于 message.part.delta：非 delta 事件照常落库全量 payload (1 ms)
+    ✓ 长流式累计：50 条 delta 后内存日志保留的字节仍远低于字节预算 (1 ms)
+
+  ● ... › 字节预算：压入远超预算的大事件后 ...
+    expect(received).toBeLessThanOrEqual(expected)
+    Expected: <= 8388608
+    Received:    15740690         ← 60 × 256KiB 全量保留（条数上限 1000 根本不触发）
+      > 109 |     expect(totalBytes(log)).toBeLessThanOrEqual(REALTIME_LOG_MAX_BYTES);
+
+Test Suites: 1 failed, 1 total
+Tests:       2 failed, 6 passed, 8 total
+MUT2_JEST=1
+$ cp <backup> src/realtime/realtime.service.ts   → RESTORED  sha256 17c6472a... (一致)
+$ npx jest src/realtime/realtime.service.byte-cap.spec.ts --silent; echo RESTORE_JEST=$?
+PASS ... Tests:       8 passed, 8 total
+RESTORE_JEST=0
+
+--------------------------------------------------------------------------------
+5. REQUIRED GREP (raw)
+--------------------------------------------------------------------------------
+$ grep -n "REALTIME_LOG_MAX_BYTES\|REALTIME_REPLAY_MAX" src/realtime/realtime.service.ts
+62:export const REALTIME_REPLAY_MAX = 1000;
+95:export const REALTIME_LOG_MAX_BYTES = 8 * 1024 * 1024;
+138: *    REALTIME_LOG_MAX_BYTES），补拉以 DB 为准
+287:   *  2) 字节预算 REALTIME_LOG_MAX_BYTES：保留的序列化总字节超预算时，从
+302:      this.logBytesTotal > REALTIME_LOG_MAX_BYTES &&
+392:   * 以 DB 为准补拉历史事件（断线续拉，09 篇 §4.4）。**至多返回 REALTIME_REPLAY_MAX 条**，
+395:   *    硬上限 REALTIME_REPLAY_MAX 条且**优先最新**——降序 take 后 reverse 成升序，让落后
+429:    // 两条路径都 take 到 REALTIME_REPLAY_MAX 硬上限，杜绝无界读把进程 OOM。
+433:      take: REALTIME_REPLAY_MAX,
+
+--- delta 路径（本 lane 的改动点）---
+$ grep -n "REALTIME_NON_RETAINED_TYPES\|message.part.delta\|compactDeltaPayload\|toLogEntry" src/realtime/realtime.service.ts
+126:const REALTIME_NON_RETAINED_TYPES: ReadonlySet<string> = new Set<string>([
+236:    if (!REALTIME_NON_RETAINED_TYPES.has(type)) {
+248:    this.retainInLog(this.toLogEntry(event));
+259:  private toLogEntry(event: RealtimeEvent): RealtimeEvent {
+260:    if (!REALTIME_NON_RETAINED_TYPES.has(event.type)) {
+263:    return { ...event, payload: this.compactDeltaPayload(event.payload) };
+267:  private compactDeltaPayload(payload: unknown): {
+
+--------------------------------------------------------------------------------
+6. HUNKS (raw `git diff -U0` vs HEAD 92f7584 — 与并行 lane 未提交改动混合，逐条归属)
+--------------------------------------------------------------------------------
+$ git diff -U0 -- src/realtime/realtime.service.ts | grep '^@@'
+@@ -1 +1,6 @@                                            ← 并行 lane：@nestjs/common import 补 Logger/OnModuleDestroy
+@@ -3,0 +9 @@ import { Prisma } from '@prisma/client';  ← 本 lane：+import { EVENT_TYPES } from '../common/constants/event.constants'（只读依赖，未编辑该文件）
+@@ -47,0 +54,76 @@ const DEFAULT_MAX_LOG = 1000;                 ← 混合：并行 lane 的 REALTIME_REPLAY_MAX/retention 常量（+58行）+ 本 lane 的 REALTIME_LOG_MAX_BYTES / REALTIME_NON_RETAINED_TYPES 常量（+76 行含文档）
+@@ -55 +137,2 @@ const DEFAULT_MAX_LOG = 1000;                ← 混合：类 JSDoc「最近 maxLog 条」→本 lane 改为「maxLog 条且 ≤ REALTIME_LOG_MAX_BYTES」（+并行 lane 补 OnModuleDestroy 等）
+@@ -65,0 +149,14 @@ export class RealtimeService implements OnModuleInit;  ← 混合：并行 lane retentionTimer/ensureRetentionInterval 字段 + 本 lane logSizes/logBytesTotal 记账字段（9 行，其中 2 行属本 lane：@@ -94,0 +149,9）
+@@ -71 +168 @@                                          ← 并行 lane：onModuleInit 起 retention 周期
+@@ -79,0 +177,8 @@                                          ← 并行 lane：onModuleDestroy 清理句柄
+@@ -128,13 +233,13 @@                                      ← 混合：emitOnce —— 并行 lane 未改此函数；本 lane：create 包进 !REALTIME_NON_RETAINED_TYPES.has(type) 守卫、log.push/shift → retainInLog(toLogEntry(event))
+@@ -141,0 +247,2 @@                                      ← 并行 lane：log 字段 doc（属其 maxLog 说明）
+@@ -145,0 +253,75 @@                                      ← 本 lane：toLogEntry / compactDeltaPayload / retainInLog / evictLogHead / measureRetainedBytes（+75 行）
+@@ -210,5 +392,10 @@                                     ← 并行 lane：getEventsSince skipReplay + take REALTIME_REPLAY_MAX
+@@ -223 +410,7 @@                                        ← 并行 lane：getEventsSince JSDoc
+@@ -227,0 +421 @@                                          ← 并行 lane：where.id = { gt: latest.id }
+@@ -231,3 +425,2 @@                                      ← 并行 lane：findMany orderBy/take
+@@ -234,0 +428,2 @@                                      ← 并行 lane：events.reverse()
+@@ -237 +432,2 @@                                        ← 并行 lane：attachEventTeams/teamFilter 分支
+@@ -239,0 +436,4 @@                                      ← 并行 lane：visibleTeamIds 过滤
+@@ -251,0 +452,65 @@                                      ← 并行 lane：pruneExpiredEvents + 保留清理区块
+
+归属证明（把「HEAD + 并行 lane」重建稿与当前文件对比，只剩本 lane 的 7 个 hunk）：
+$ node reconstruct.js   # 逐条逆向本 lane 的改动 → pre-my-change.service.ts
+$ grep -c "REALTIME_REPLAY_MAX" pre-my-change.service.ts          → 5     （并行 lane 常量在）
+$ grep -c "pruneExpiredEvents\|ensureRetentionInterval" pre-my-change.service.ts → 4 （并行 lane retention 在）
+$ npx jest src/realtime/realtime.service.spec.ts src/realtime/realtime.controller.spec.ts (对重建稿)
+Test Suites: 2 passed, 2 total / Tests: 74 passed, 74 total / RECON_JEST=0
+$ diff -U0 pre-my-change.service.ts src/realtime/realtime.service.ts | grep -E '^@@'
+@@ -8,0 +9 @@        ← 本 lane #1: +import EVENT_TYPES
+@@ -77,0 +79,52 @@   ← 本 lane #2: +REALTIME_LOG_MAX_BYTES（+22 文档/常量）
+@@ -84 +137,2 @@    ← 本 lane #3: 类 JSDoc 补字节预算说明
+@@ -94,0 +149,9 @@   ← 本 lane #4: +logSizes/logBytesTotal 记账字段
+@@ -170,13 +233,13 @@ ← 本 lane #5: emitOnce（create 守卫 + retainInLog/toLogEntry）
+@@ -183,0 +247,2 @@  ← 本 lane #6: retainInLog 调用行
+@@ -187,0 +253,75 @@ ← 本 lane #7: +toLogEntry/compactDeltaPayload/retainInLog/evictLogHead/measureRetainedBytes
+   （另 1 处纯注释订正：~90B → ≈200B，已计入 #2/#7 的文档行）
+
+--------------------------------------------------------------------------------
+7. 最坏保留字节 BEFORE vs AFTER（计算）
+--------------------------------------------------------------------------------
+输入（均为实测/事故数据）：
+  - DEFAULT_MAX_LOG = 1000（条数上限，并行 lane 保留）
+  - 长流式回复的单份全量 message 快照 ≈ 1 MiB（事故证据：per-delta 分配 1.2–4MB；
+    512KB 流的快照即为此量级；事故前表 26GB/460,481 行 ⇒ 平均 58KB/行、长答案行 ~1MB）
+  - delta 事件率 ~35/s（事故证据）
+
+BEFORE（本 lane 修复前：只按条数收敛 + 每 delta 落全量快照）：
+  内存日志最坏保留   = 1000 × 1 MiB            = 1024 MiB ≈ 1073 MB ≈ 1 GiB
+                     （≈ 2GiB cgroup 上限的 52%，且被强引用钉住，不随流结束释放）
+  realtime_events     = 每 delta 一行全量快照，无保留 ⇒ 实测 460,481 行 / 26 GB
+                     （~35 事件/s ⇒ 未截断前每天 +300 万行级别）
+
+AFTER（本 lane 修复后：字节预算 + delta 不落库/不全量保留）：
+  内存日志最坏保留   = REALTIME_LOG_MAX_BYTES + 最新一条的体积
+                     = 8,388,608 + 1,048,576   = 9,437,184 B ≈ 9 MiB
+                     （≈ 2GiB 上限的 0.45%；delta 条目 ≈196B/条，实测 50 条 9,800B）
+  实测（MUT2 同载荷）：60 × 256KiB 事件 —— 修复前保留 15,740,690 B，
+                      修复后 ≤ 8,388,608 B（= -46.7%，且与条数无关地有硬顶）
+  实测（MUT1 同载荷）：50 条 delta —— 全量快照路径保留 633,500 B + 50 行，
+                      修复后 9,800 B + 0 行
+  realtime_events     = delta 行 0（掐断 26GB 来源）；非 delta 事件由并行 lane 的
+                     24h 保留窗口 + createdAt 索引收敛（数十行/小时 × ~200B ≈ MB 级）
+
+  缩减比：1024 MiB → ~9 MiB ≈ 113×（日志侧）；表侧：460,481 行 → delta 0 行。
+  与并行 lane（ingress 缓存 -29%、replay cap、retention）叠加后，per-delta 路径不再
+  线性放大 retained 内存/表体积，OOM 驱动因素全部收敛。
+
+--------------------------------------------------------------------------------
+8. SCOPE / 合规
+--------------------------------------------------------------------------------
+- HEAD 断言：git rev-parse HEAD → 92f75846bf8387f63f7c3ebe86a319308ae6fd01（== base，未变）
+- 未执行任何 git 写操作（无 add/commit/stash/checkout）；变异测试用文件备份 + sha256 校验恢复。
+- 未编辑 worker-event.ingress.ts、realtime.controller*、realtime.service.spec.ts、
+  common/constants/*、memories/*、execution-policies/*、platform-mcp/*、web/*。
+- SSE wire 契约：bus.emit 与 emit() 返回值携带的 delta payload 与改动前逐字节一致
+  （测试 'delta 的实时广播载荷与上线订阅者收到的一致' 断言同一对象引用 + 深相等）。
+  binding rule (e) 未触发——在线订阅者收到的内容不变；变化仅限「保留/落库」侧，
+  即任务 Deliverable 2 明确授权的选项（skip persisting delta events entirely）。
+- 新测试放在新文件 realtime.service.byte-cap.spec.ts（未动并行 lane 的 pre-existing
+  dirty spec 文件）。
+
+================================================================================
+DONE CLAIM (mirrored to caller):
+{"task":"realtime-log-byte-cap",
+ "changed_files":["server/src/realtime/realtime.service.ts","server/src/realtime/realtime.service.byte-cap.spec.ts"],
+ "tests":[
+   "npx jest src/realtime -> 4 suites / 95 passed, JEST=0",
+   "npx jest src/realtime/realtime.service.byte-cap.spec.ts -> 8 passed, JEST=0",
+   "npx tsc --noEmit -p tsconfig.json -> TSC=0 (LSP 未安装，用户此前拒绝)",
+   "npx jest src/prisma src/workers src/chat -> 46 suites / 1244 passed, JEST=0",
+   "new cases: '字节预算：压入远超预算的大事件后…≤ REALTIME_LOG_MAX_BYTES' / '字节淘汰后仍保留最新条目：id 升序…' / '条数上限仍在：1200 条小事件…' / '单条事件即超预算…' / 'message.part.delta 零落库 + 内存日志只留识别字段…' / 'delta 的实时广播载荷与上线订阅者收到的一致…' / '跳过只作用于 message.part.delta…' / '长流式累计：50 条 delta…'",
+   "mutations: MUT1 (恢复全量快照路径) -> 3 red (create 收到全量 payload / 633,500B 保留); MUT2 (关掉字节收敛) -> 2 red (15,740,690B > 8,388,608B); restore 后 sha256 一致且 8 passed"],
+ "manual_qa":[
+   "read .omo/evidence/incident-delta-allocation-fix.txt + verify-incident-realtime-replay-fix.txt 后才动手；并行 lane 的 REALTIME_REPLAY_MAX/retention/migration 原样保留（重建稿跑其 74 个既有测试 RECON_JEST=0）",
+   "wire 契约核对：realtime.controller.ts toMessageEvent + web use-realtime.ts/use-sse.ts 阅读确认在线广播载荷不变；紧凑行+重放方案因前端要求 payload.message 完整被否决",
+   "worst-case retained: BEFORE 1024MiB (1000 × 1MiB 快照) vs AFTER 9MiB (8MiB 预算 + 最新一条 ~1MiB) ≈ 113×; 表侧 delta 行 26GB/460k → 0 行",
+   "HEAD 未变: 92f75846bf8387f63f7c3ebe86a319308ae6fd01"],
+ "cleanup":[
+   "变异测试备份 pre-my-change.service.ts / service.bak.ts / *.log 均在 /private/var/folders/.../T/opencode/rt/（repo 外），repo 内无临时文件；两次恢复后 sha256 = 17c6472a…/3afcc91c… 与备份一致",
+   "无 git 写操作；未碰任何 sibling-owned / pre-existing dirty 文件"],
+ "risks":[
+   "重连客户端不再补拉流式中遗漏的 delta 帧 → 依赖 REST 历史（messages 行每 delta 更新）+ 终帧 chat.message.new 重放；已在常量注释与 receipt 显式声明",
+   "delta 消耗的 ev_ 序号在表中留空洞，重启后按库内 max 重新起号 → 滚动更新+超长流式叠加时，落后客户端游标去重可能跳过极少事件（P2002 自愈只兜底 DB 主键冲突）",
+   "单条事件 > 8MiB 预算时该条仍被保留（latest-id 语义优先），最坏保留 = 预算 + 最新一条体积；当前 webhook/事件面单帧远小于此",
+   "字节计量用 JSON.stringify(entry) UTF-8 长度作为保留占地近似（与落库/下发同形），非 V8 精确堆占用；对循环引用等不可 JSON 化载荷回退 4KB 保守估算，不打断事件流"]}
+================================================================================

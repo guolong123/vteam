@@ -1,0 +1,357 @@
+=========================================================================
+INDEPENDENT VERIFIER ARTIFACT — FINAL STATE, realtime.service.ts
+Target: /Volumes/SSD-Data/01work/git-project/vteam/server/src/realtime/realtime.service.ts
+HEAD  : 92f75846bf8387f63f7c3ebe86a319308ae6fd01 (unchanged)
+Mode  : read-only on the repo; mutations only on a throwaway copy (deleted)
+Lanes : A (replay cap + retention) re-verified in THIS file, C (byte cap +
+        delta diet) verified for the first time against the current revision
+=========================================================================
+
+VERDICT: CONFIRMED  (no blocker; 1 disclosed trade-off reproduced, not a defect)
+CONFIDENCE: 0.93
+
+-------------------------------------------------------------------------
+1. BYTE CAP IS REAL  (C)
+-------------------------------------------------------------------------
+Code path: realtime.service.ts:293-316 (retainInLog / evictLogHead) with the
+parallel bookkeeping fields at :151-156 and the measurement helper at :319-326.
+
+* BOTH caps enforced, head-first. retainInLog pushes, then runs two sequential
+  loops:
+      while (this.log.length > this.maxLog)            this.evictLogHead();   // :298-300  (count cap, DEFAULT_MAX_LOG=1000 :52)
+      while (this.logBytesTotal > REALTIME_LOG_MAX_BYTES
+             && this.log.length > 1)                   this.evictLogHead();   // :301-306 (byte cap, 8 MiB :95)
+  Eviction is exclusively `log.shift()` + `logSizes.shift()` at :311-316 — head
+  only, so the surviving segment preserves relative order (id ascending, since
+  ev_ ids are zero-padded and lexicographic == numeric).
+
+* Newest entry always retained. Both loops run AFTER the push, and the byte
+  loop carries the guard `this.log.length > 1` (:303). A single entry larger
+  than the 8 MiB budget is therefore still kept; log length is never 0 after
+  the first emit. Asserted by byte-cap.spec.ts:152-170.
+
+* getLatestId() cursor survives. getLatestId (:518-523) reads
+  `this.log[this.log.length - 1].id`. Because eviction is head-only and always
+  leaves >=1 entry, the tail is always the newest emitted id. byte-cap.spec.ts:
+  121-136 and :145-149 pin it.
+
+* Parallel-array accounting cannot drift. logSizes.push happens in the SAME
+  synchronous statement block as log.push (:294-297), and evictLogHead is the
+  only remover, shifting BOTH arrays in lockstep (:311-315). There is no other
+  mutation site for either array (grep-verified). logBytesTotal is a running
+  sum: += the measured size on push, -= the shifted size on evict — it can
+  never go negative because only previously-added sizes are subtracted, and it
+  can never double-count because each entry is subtracted exactly once.
+  Independent-recompute cross-check exists at byte-cap.spec.ts:112-116:
+      logSizesOf(service).reduce((a,b)=>a+b,0) === totalBytes(log)
+      (service as any).logBytesTotal            === totalBytes(log)
+
+* Non-JSON-serialisable payloads: measureRetainedBytes (:319-326) wraps
+  `Buffer.byteLength(JSON.stringify(value) ?? '', 'utf8')` in try/catch and
+  returns the conservative 4096 B fallback (:323-325). JSON.stringify throws
+  TypeError on circular refs and on BigInt — both land in the 4 KB branch.
+  (JSON.stringify(undefined) returns undefined, not a throw; the `?? ''` keeps
+  that at 0 B.) Overflow/NaN never occur: byteLength is a byte count, always a
+  finite integer. So accounting can never throw into the event stream.
+
+MUTATION MUT-2 (proves the byte loop is load-bearing; throwaway copy only,
+restored and verified byte-identical afterwards):
+  disabled the `logBytesTotal > REALTIME_LOG_MAX_BYTES` eviction loop.
+  → 2 RED in realtime.service.byte-cap.spec.ts:
+      ✕ 字节预算：... ≤ REALTIME_LOG_MAX_BYTES（且确实发生了头部淘汰）
+          Expected: <= 8388608    Received: 15740690
+      ✕ 单条事件即超预算：仍保留最新条目...（下一条压入再淘汰它）
+          Expected length: 1       Received length: 2
+  (Matches the executor's 15,740,690 B figure exactly.)
+  After restore: 4 suites / 95 tests green.
+
+-------------------------------------------------------------------------
+2. DELTA IS NOT RETAINED  (C)
+-------------------------------------------------------------------------
+Donor site (DB write): emitOnce:236-246
+      if (!REALTIME_NON_RETAINED_TYPES.has(type)) { await this.prisma.realtimeEvent.create(...) }
+  REALTIME_NON_RETAINED_TYPES (:126-128) contains exactly
+  EVENT_TYPES.MESSAGE_PART_DELTA = 'message.part.delta' (event.constants.ts:25).
+  → message.part.delta takes ZERO calls to realtimeEvent.create.
+
+Log compaction site: toLogEntry:259-264 → compactDeltaPayload:267-282.
+  For a non-retained type it returns `{...event, payload: {messageId, channelId}}`
+  — messageId from payload.message.id, channelId from payload.message.channelId,
+  both `typeof === 'string'`-guarded, else null. No `content`, no `parts`, no
+  `delta` body. The 4 KB payload in the spec round-trips to ~196 B.
+  byte-cap.spec.ts:237-238 asserts `utf8Bytes(log[0]) < 200` AND that the
+  serialised payload contains no 64-char run of the blob.
+
+MUTATION MUT-1 (the one the executor claimed; throwaway copy only):
+  replaced the set body with an empty `new Set<string>([])` — restoring the
+  pre-lane-C "full snapshot + DB row" path.
+  → EXACTLY 3 RED, 5 green:
+      ✕ message.part.delta 零落库 + 内存日志只留识别字段...
+          (realtimeEvent.create called 1x, expected 0)
+      ✕ 跳过只作用于 message.part.delta：非 delta 事件照常落库全量 payload
+          (create called 2x, expected 1)
+      ✕ 长流式累计：50 条 delta 后内存日志保留的字节仍远低于字节预算
+          Expected: < 16384      Received: 633500     <-- the retained-bytes assertion
+  Full src/realtime under MUT-1: 3 failed / 92 passed, 1 suite failed of 4.
+  Detail: the "delta 的实时广播载荷..." case stayed GREEN under MUT-1, which is
+  correct — that case asserts the LIVE path, which MUT-1 does not touch.
+  After restore (diff verified IDENTICAL to the repo file): 4 suites / 95 tests
+  green.
+
+-------------------------------------------------------------------------
+3. THE WIRE CONTRACT IS UNCHANGED  (C)  [highest-risk item — NO BLOCKER]
+-------------------------------------------------------------------------
+Traced all three paths that can hand an event to a subscriber:
+
+(a) LIVE broadcast — emitOnce:248-250
+        this.retainInLog(this.toLogEntry(event));   // compaction only ever
+        this.bus.emit('event', event);              // touches the COPY
+    toLogEntry returns a NEW object for deltas (`{...event, payload: ...}` at
+    :263). `bus.emit` hands out the ORIGINAL `event` reference. So the bus
+    listener, the return value of emit(), and `broadcast()` all carry the full
+    `{message, delta}` payload — byte-identical to pre-lane-C.
+    byte-cap.spec.ts:244-260 proves it at the object level:
+        expect(received[0].payload).toBe(original);      // same reference
+        expect(received[0].payload).toEqual(original);    // deep equality
+        expect(utf8Bytes(received[0].payload)).toBeGreaterThan(4096);
+
+(b) Replay after reconnect — controller.events():105-123
+        backlog = await getEventsSince(...)             // DB rows via fromRow (:526-542)
+        for (const e of backlog)  subscriber.next(this.toMessageEvent(e));   // :114-116
+    getEventsSince NEVER reads the in-memory log. Its rows come from
+    `prisma.realtimeEvent.findMany` (:430-434) mapped through `fromRow`
+    (:435). The in-memory `log` array has exactly one reader in the whole
+    service — `getLatestId()` at :518-523, which uses only `.id`, never
+    `.payload` (grep-verified: `this.log` appears at :294/:311 (write/shift),
+    :519-522 (length + tail .id) and nowhere else).
+    => A compacted log entry is STRUCTURALLY UNABLE to reach a subscriber.
+    delta replay is not even possible through this path since no delta row is
+    ever written (see item 2).
+
+(c) Replay buffering — controller:90, 93-103, 113-122
+    liveBuffer collects frames from the same bus listener (full payloads) and
+    de-dupes against the DB backlog by id. No compaction anywhere.
+
+Consumers checked:
+  - server/src/realtime/realtime.controller.ts:309-319 toMessageEvent serialises
+    {id, type, payload, timestamp}; `data.payload = event.payload` (reference,
+    not a re-write).
+  - web/hooks/use-sse.ts matchesScope is payload-shape-based but reads
+    `ev.payload.message.channelId` for both delta and chat.message.new
+    (:82-85, :103-105) — unchanged full-snapshot shape still satisfies it.
+  - web/hooks/use-realtime.ts:378-382 EVENTS.MESSAGE_PART_DELTA →
+    `upsertMessage(queryClient, payload.message)` (:418-431), which reads
+    message.channelId and message.id. This is precisely the reason the code
+    comment at :121-124 says a compacted replay frame "would break the UI";
+    since no delta row persists, the UI branch is only ever fed the full frame.
+
+Also verified: no bus listener anywhere in the server mutates the event object
+(grep for `event.<field> =` across the 6 subscribe() sites). Ordering at
+:248-249 (log -> emit) means a listener sees the fully-formed original.
+
+-------------------------------------------------------------------------
+4. THE DOCUMENTED TRADE-OFF IS HONEST  (C)
+-------------------------------------------------------------------------
+Stated in code, in three places, unambiguously:
+  - :114-119  "代价（显式声明）：断线重连的客户端不再经 SSE 补拉到流式中遗漏的
+               delta 帧。" plus the two fallback legs and the id-gap note.
+  - :107-113  why compact rows were rejected ("前端 use-realtime.ts 的
+               message.part.delta 分支要求 payload.message 是完整 RealtimeChatMessage").
+
+Fallback leg (1) — REST history: real, and updates the SAME messages row per
+delta. worker-event.ingress.ts handleMessagePartDelta (:526-739):
+  - cached path: `prisma.message.update` with merged parts at :640-647
+  - existing-row path: `prisma.message.update` at :686-694
+  - no-row path: `prisma.message.create` with status=processing at :701-713
+  and then broadcasts the delta with `message: this.toMessageDto(row)` at
+  :725-730. So the message row always holds the latest accumulated content.
+
+Fallback leg (2) — persisted terminal frame: real. `chat.message.new` is NOT in
+REALTIME_NON_RETAINED_TYPES, so it goes through emitOnce:237-246 → a
+realtime_events row is written → it is replayable. Emitted at
+  - chat/worker-dispatcher.ts:3220-3224 (broadcast CHAT_MESSAGE_NEW, terminal)
+  and ~15 other emit sites (chat.service.ts:1005/1011/1041/1047/1186/1191/
+  1318/1324/1586/1591, platform-mcp.service.ts:1460/1989/2608/6909/6932, …).
+
+&&&&  NON-BLOCKING FINDING (reproduced, disclosed, bounded) &&&&
+The id-gap consequence at :117-119 is real and I reproduced it, but it is
+pre-existing-by-construction and the code names it verbatim.
+  PROBE (throwaway spec, 1 test): client's lastEventId = a delta id
+  ev_0000000004 (not in DB); DB max after that delta = ev_0000000003.
+  After "restart", the re-seeded counter emits a durable chat.message.new at
+  ev_0000000004. getEventsSince('ev_0000000004') returns [] — the durable
+  frame is invisible to that client until a higher id appears.
+  Why this is NOT a blocker per the rubric: (i) it is not a truncated payload
+  reaching a subscriber (item 3 proves that impossible); (ii) the log's
+  latest-id cursor does not drift; (iii) it is explicitly declared in the code
+  as the accepted cost; (iv) the P2002 self-heal at :329-336 + :339-347 prevents
+  a HARD duplicate, and once the counter passes the client's cursor the stream
+  self-corrects; (v) the affected client recovers via REST history + the next
+  durable terminal frame. Classified as a note, matching the repo's own
+  convention of recording disclosed trade-offs.
+
+-------------------------------------------------------------------------
+5. LANE A STILL HOLDS IN THIS FILE  (re-verified against the current revision)
+-------------------------------------------------------------------------
+(a) take on every replay findMany:
+    getEventsSince contains exactly ONE `realtimeEvent.findMany` (:430-434) and
+    it carries `take: REALTIME_REPLAY_MAX` (:433). Both branches share it —
+      skipReplay  (latest / undefined / null / '') → orderBy id 'asc'   (:432)
+      explicit since                             → orderBy id 'desc'  (:432), then reverse (:437-439)
+    There is no second findMany on realtime_events in the method. (The other
+    findMany calls in the file, :679 and :758, are chatChannel/task lookups for
+    team attribution — not replay.)
+    MUTATION MUT-3 (throwaway): deleted the `take` line → 6 RED including
+      ✕ CAP 守卫：显式游标补拉的 findMany 恒带 take: REALTIME_REPLAY_MAX
+         Expected: 1000   Received: undefined
+      ✕ since 缺省时解析最新游标、绝不重放历史   (Expected 1000, got undefined)
+      ✕ since 空串等同于缺省…                     (Expected 1000, got undefined)
+    Restored → 95/95 green.
+
+(b) absent/empty cursor resolves a latest cursor FIRST:
+      :411-416  skipReplay = latest | undefined | null | ''
+      :417-421  `findFirst({orderBy:{id:'desc'}})` → latest
+      :423      `where.id = { gt: latest.id }`   (no id condition when table empty)
+    Controller passes it through: controller.events():107-111 sends
+    `since !== undefined && since !== '' ? since : undefined`. ApiQuery doc at
+    controller:69-70 updated to match.
+
+(c) retention intact:
+      window constant   REALTIME_EVENTS_RETENTION_WINDOW_MS_DEFAULT = 24h   :69
+      interval constant REALTIME_EVENTS_RETENTION_INTERVAL_MS_DEFAULT = 1h  :74
+      env override      readMsEnv :508-515 (undefined/''/non-finite → default)
+                        window env REALTIME_EVENTS_RETENTION_WINDOW_MS   :70-71
+                        interval env REALTIME_EVENTS_RETENTION_INTERVAL_MS :75-76
+      <= 0 disables     pruneExpiredEvents:460-462 returns 0, no deleteMany;
+                        ensureRetentionInterval:473-475 returns early, no timer
+      cutoff            `createdAt < now - windowMs`  :464-467, deleteMany
+      timer             setInterval at :479-485, `.unref?.()` at :486
+      destroy           onModuleDestroy :180-185 clearInterval + undefined
+      4 RETENTION tests pass (realtime.service.spec.ts, "RETENTION：" ×4)
+
+(d) Lane A tests re-run in the current file: all present and green (see item 6).
+
+-------------------------------------------------------------------------
+6. GATES  (raw summaries)
+-------------------------------------------------------------------------
+$ cd server && npx jest src/realtime src/prisma
+  Test Suites: 27 passed, 27 total
+  Tests:       370 passed, 370 total
+  Snapshots:   0 total
+  JEST=0
+  (PASS list: realtime.service.spec / realtime.service.byte-cap.spec /
+   realtime.controller.spec / realtime-subscribers.spec + 23 src/prisma suites)
+
+$ npx tsc --noEmit -p tsconfig.json
+  (no output)
+  TSC=0
+
+NEW / RELEVANT CASE NAMES (src/realtime, 95 total)
+
+realtime.service.spec.ts (lane A, still present in this revision):
+  ✓ CAP 守卫：显式游标补拉的 findMany 恒带 take: REALTIME_REPLAY_MAX（去掉上限 / 退回 asc 此断言即红）
+  ✓ 降序取后 reverse 成升序下发（客户端收到的是 id 升序帧）
+  ✓ since 缺省时解析最新游标、绝不重放历史（危险路径已消除：等同 latest）
+  ✓ since 空串等同于缺省：解析最新游标，不再无界全量重放
+  ✓ since=latest 时以最新已落库事件 id 为游标，仅返回其后新事件（首连跳过历史）
+  ✓ since=latest 且库空时不过滤 DB 查询（findMany 自然返回空，仍 take 上限）
+  ✓ RETENTION：deleteMany 以 cutoff = now - 默认 24h 为谓词删除旧事件
+  ✓ RETENTION：窗口 env 覆盖会改变 cutoff（REALTIME_EVENTS_RETENTION_WINDOW_MS=60000）
+  ✓ RETENTION：窗口 ≤ 0（env 覆盖为 0）= 停清理，不发 deleteMany
+  ✓ RETENTION：onModuleInit 预置游标后仍能起周期，onModuleDestroy 清理句柄不抛
+
+realtime.service.byte-cap.spec.ts (lane C, NEW — 8 cases):
+  字节预算 group (4):
+  ✓ 字节预算：压入远超预算的大事件后，保留的序列化总字节 ≤ REALTIME_LOG_MAX_BYTES（且确实发生了头部淘汰）
+  ✓ 字节淘汰后仍保留最新条目：id 升序不被破坏，getLatestId 与最后一条同源
+  ✓ 条数上限仍在：1200 条小事件 → 只保留最近 1000 条，最新 id 不丢
+  ✓ 单条事件即超预算：仍保留最新条目（latest-id 语义不因字节淘汰丢失），下一条压入再淘汰它
+  delta-not-retained group (4):
+  ✓ message.part.delta 零落库 + 内存日志只留识别字段：全量快照一个字都不进 realtime_events / log（回到全量快照路径此断言即红）
+  ✓ delta 的实时广播载荷与上线订阅者收到的一致（{message, delta} 全量，逐字节不变）
+  ✓ 跳过只作用于 message.part.delta：非 delta 事件照常落库全量 payload
+  ✓ 长流式累计：50 条 delta 后内存日志保留的字节仍远低于字节预算（每条 ~200B 帧+识别字段）
+
+realtime.controller.spec.ts (lane A):
+  ✓ since 未传时不再无界重放历史：解析最新 id 为游标（findMany 恒有 id 下界 + take）
+
+src/prisma/realtime-events-retention.migration.spec.ts (lane A guard, 9/9 PASS):
+  ✓ schema.prisma 声明 model RealtimeEvent 且 @@map 到 realtime_events
+  ✓ 被索引的 created_at 列已存在于 schema（本迁移只建索引不加列）
+  ✓ DDL 守卫：baseline 迁移里不含 idx_realtime_events_created_at（否则重复建索引 → ERROR 1061）
+  ✓ 本迁移 CREATE INDEX 的索引名在 schema.prisma 的 RealtimeEvent @@index 里有声明（正向平价）
+  ✓ 索引三元组正确：名字/表名/被索引列都锁死（idx ON realtime_events (created_at)）
+  ✓ 反向平价：schema.prisma 声明的 idx_realtime_events_created_at 真被本迁移建出来（漏建 → 静默全表扫描）
+  ✓ 不重复建 baseline 已有的 idx_realtime_events_scope_id（同列族 → ERROR 1061）
+  ✓ 零回填：迁移无任何 UPDATE / INSERT / DELETE（删除归服务层周期 + 存量已 TRUNCATE）
+  ✓ 只建一条索引：comment-stripped 后恰一条 CREATE INDEX 语句，无其它杂项 DDL
+
+-------------------------------------------------------------------------
+7. SCOPE
+-------------------------------------------------------------------------
+HEAD: 92f75846bf8387f63f7c3ebe86a319308ae6fd01 — MATCHES the required pin.
+git status count 25 (unchanged set; the only new entry, verify-incident-delta-
+allocation-fix.txt, belongs to the parallel delta-allocation verifier).
+
+realtime.service.ts diff (291 insertions, 26 deletions across 16 hunks) is
+exclusively lane A + lane C content:
+  - Constants/blocks: REALTIME_REPLAY_MAX, three RETENTION_* constants,
+    REALTIME_LOG_MAX_BYTES, REALTIME_NON_RETAINED_TYPES.
+  - Fields: logSizes, logBytesTotal, logger, retentionTimer.
+  - Methods: onModuleDestroy, emitOnce (non-retained DB guard), toLogEntry,
+    compactDeltaPayload, retainInLog, evictLogHead, measureRetainedBytes,
+    pruneExpiredEvents, ensureRetentionInterval, retentionWindowMs,
+    retentionIntervalMs, readMsEnv, describeError, getEventsSince rewrite.
+  - NO ingress / worker / platform-mcp / schema code. The only "ingress" and
+    "worker" tokens inside the diff are prose inside JSDoc comments
+    (e.g. :109-117, :160, :471, :482) — no executable statement, no import.
+  - Import additions are only `Logger`, `OnModuleDestroy` and `EVENT_TYPES`.
+
+Sibling-owned / pre-existing paths: NOT touched by me, and not by lanes A/C:
+  - server/src/workers/worker-event.ingress{,.spec}.ts  (mtime 11:18-11:21 —
+    lane B, which finished before lane C's 12:16-12:27)
+  - server/src/platform-mcp/*  and  web/src/components/chat/msg-parts.tsx
+    (mtimes 2026-10-14 16:40 — pre-existing dirt, predating this incident work)
+  - server/prisma/schema.prisma  (mtime 10:41:45, lane A's index, verified
+    alongside the migration; single `@@index([createdAt])` line)
+
+Lane A artefacts untouched and still passing:
+  - server/prisma/migrations/20261015000000_realtime_events_retention/
+    migration.sql: a single CREATE INDEX idx_realtime_events_created_at ON
+    realtime_events(created_at); no ALTER/DROP/FK/UPDATE/INSERT/DELETE.
+  - server/src/prisma/realtime-events-retention.migration.spec.ts: 9/9 PASS.
+  - schema.prisma ↔ migration parity confirmed in BOTH directions by the guard.
+
+No git add/commit/stash/checkout was run at any point. Throwaway copy
+(/tmp/verify-throwaway) created, mutated, restored, verified byte-identical,
+and deleted — repo working tree untouched.
+
+-------------------------------------------------------------------------
+REPRO COMMANDS (exact)
+-------------------------------------------------------------------------
+# gates (run from /Volumes/SSD-Data/01work/git-project/vteam/server)
+cd server && npx jest src/realtime src/prisma; echo JEST=$?
+npx tsc --noEmit -p tsconfig.json; echo TSC=$?
+
+# MUT-1 : empty the non-retained set (restore pre-C full-snapshot path)
+cp -R server/src /tmp/c/server/src && cp -R server/test /tmp/c/server/test \
+  && ln -s <repo>/server/node_modules /tmp/c/server/node_modules
+python3 - <<'EOF'
+p="/tmp/c/server/src/realtime/realtime.service.ts"; s=open(p).read()
+s=s.replace("""const REALTIME_NON_RETAINED_TYPES: ReadonlySet<string> = new Set<string>([
+  EVENT_TYPES.MESSAGE_PART_DELTA,
+]);""","""const REALTIME_NON_RETAINED_TYPES: ReadonlySet<string> = new Set<string>([]);""")
+open(p,"w").write(s)
+EOF
+cd /tmp/c/server && npx jest src/realtime/realtime.service.byte-cap.spec.ts
+# expect: 3 failed / 5 passed; 长流式累计 Expected <16384 Received 633500
+# restore: reverse the replacement, then
+diff /tmp/c/server/src/realtime/realtime.service.ts <repo>/server/src/realtime/realtime.service.ts
+cd /tmp/c/server && npx jest src/realtime     # 4 suites / 95 tests green
+
+# MUT-2 : disable the byte-eviction loop   -> 2 red (15,740,690 B > 8,388,608 B)
+# MUT-3 : delete `take: REALTIME_REPLAY_MAX,` from the findMany at :433
+#         -> 6 red in realtime.service.spec.ts ("Expected: 1000 Received: undefined")
+
+# cleanup
+rm -rf /tmp/c
