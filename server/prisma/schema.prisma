@@ -962,6 +962,7 @@ model RealtimeEvent {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([scopeType, scopeId, id], map: "idx_realtime_events_scope_id")
+  @@index([createdAt], map: "idx_realtime_events_created_at")
   @@map("realtime_events")
 }
 

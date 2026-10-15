@@ -4,6 +4,8 @@ import {
   RealtimeService,
   RealtimeEvent,
   RealtimeScope,
+  REALTIME_REPLAY_MAX,
+  REALTIME_EVENTS_RETENTION_WINDOW_MS_DEFAULT,
 } from './realtime.service';
 
 describe('RealtimeService（内部事件总线 + 持久化）', () => {
@@ -13,6 +15,7 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       findFirst: jest.Mock;
       create: jest.Mock;
       findMany: jest.Mock;
+      deleteMany: jest.Mock;
     };
     task: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock };
     chatChannel: { findUnique: jest.Mock; findMany: jest.Mock };
@@ -49,6 +52,7 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
           }),
         ),
         findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
       task: {
         findUnique: jest.fn(),
@@ -581,7 +585,7 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
   });
 
   describe('getEventsSince（DB 补拉，断线续拉）', () => {
-    it('以 DB 为准返回 id 大于 since 的历史事件', async () => {
+    it('以 DB 为准返回 id 大于 since 的历史事件（显式游标：降序取最新 N 条 + reverse 升序下发）', async () => {
       prisma.realtimeEvent.findMany.mockResolvedValue([
         row('ev_0000000003', 'c'),
       ]);
@@ -590,54 +594,96 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
 
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: { id: { gt: 'ev_0000000002' } },
-        orderBy: { id: 'asc' },
+        orderBy: { id: 'desc' },
+        take: REALTIME_REPLAY_MAX,
       });
       expect(events).toHaveLength(1);
       expect(events[0].id).toBe('ev_0000000003');
       expect(events[0].scopeType).toBe('global');
     });
 
-    it('since 未指定时返回 scope 下全部事件（全新连接）', async () => {
+    it('CAP 守卫：显式游标补拉的 findMany 恒带 take: REALTIME_REPLAY_MAX（去掉上限 / 退回 asc 此断言即红）', async () => {
+      prisma.realtimeEvent.findMany.mockResolvedValue([]);
+
+      await service.getEventsSince('ev_0000000001');
+
+      const arg = prisma.realtimeEvent.findMany.mock.calls[0][0];
+      expect(arg.take).toBe(REALTIME_REPLAY_MAX);
+      expect(arg.orderBy).toEqual({ id: 'desc' });
+    });
+
+    it('降序取后 reverse 成升序下发（客户端收到的是 id 升序帧）', async () => {
       prisma.realtimeEvent.findMany.mockResolvedValue([
-        row('ev_0000000001', 'a'),
-        row('ev_0000000002', 'b'),
+        row('ev_0000000005', 'e'),
+        row('ev_0000000004', 'd'),
+        row('ev_0000000003', 'c'),
       ]);
 
-      const events = await service.getEventsSince();
+      const events = await service.getEventsSince('ev_0000000002');
 
-      expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
-        where: {},
-        orderBy: { id: 'asc' },
-      });
       expect(events.map((e) => e.id)).toEqual([
-        'ev_0000000001',
-        'ev_0000000002',
+        'ev_0000000003',
+        'ev_0000000004',
+        'ev_0000000005',
       ]);
     });
 
-    it('带 scope 时按 scope_type + scope_id 过滤 DB 查询', async () => {
+    it('since 缺省时解析最新游标、绝不重放历史（危险路径已消除：等同 latest）', async () => {
+      prisma.realtimeEvent.findFirst.mockResolvedValue({ id: 'ev_0000000009' });
+
+      const events = await service.getEventsSince();
+
+      expect(prisma.realtimeEvent.findFirst).toHaveBeenCalledWith({
+        orderBy: { id: 'desc' },
+        select: { id: true },
+      });
+      expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
+        where: { id: { gt: 'ev_0000000009' } },
+        orderBy: { id: 'asc' },
+        take: REALTIME_REPLAY_MAX,
+      });
+      expect(events).toEqual([]);
+    });
+
+    it('since 空串等同于缺省：解析最新游标，不再无界全量重放', async () => {
+      prisma.realtimeEvent.findFirst.mockResolvedValue({ id: 'ev_0000000042' });
+
+      await service.getEventsSince('');
+
+      const arg = prisma.realtimeEvent.findMany.mock.calls[0][0];
+      expect(arg.where).toEqual({ id: { gt: 'ev_0000000042' } });
+      expect(arg.take).toBe(REALTIME_REPLAY_MAX);
+    });
+
+    it('带 scope 时按 scope_type + scope_id 过滤 DB 查询（absent-since 仍解析最新游标 + take 上限）', async () => {
+      prisma.realtimeEvent.findFirst.mockResolvedValue({ id: 'ev_0000000005' });
       const events = await service.getEventsSince(undefined, {
         type: 'task',
         id: 't_1',
       });
 
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
-        where: { OR: [{ scopeType: 'task', scopeId: 't_1' }] },
+        where: {
+          OR: [{ scopeType: 'task', scopeId: 't_1' }],
+          id: { gt: 'ev_0000000005' },
+        },
         orderBy: { id: 'asc' },
+        take: REALTIME_REPLAY_MAX,
       });
       expect(events).toEqual([]);
     });
 
-    it('全局 scope 时仅取 global 事件', async () => {
+    it('全局 scope 时仅取 global 事件（显式游标降序 + take 上限）', async () => {
       await service.getEventsSince('ev_0000000001', { type: 'global' });
 
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: { OR: [{ scopeType: 'global' }], id: { gt: 'ev_0000000001' } },
-        orderBy: { id: 'asc' },
+        orderBy: { id: 'desc' },
+        take: REALTIME_REPLAY_MAX,
       });
     });
 
-    it('多 scope 以 OR 组合 DB 查询（task + global 混用）', async () => {
+    it('多 scope 以 OR 组合 DB 查询（task + global 混用，降序 + take 上限）', async () => {
       const events = await service.getEventsSince('ev_0000000001', [
         { type: 'task', id: 't_1' },
         { type: 'global' },
@@ -648,17 +694,19 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
           OR: [{ scopeType: 'task', scopeId: 't_1' }, { scopeType: 'global' }],
           id: { gt: 'ev_0000000001' },
         },
-        orderBy: { id: 'asc' },
+        orderBy: { id: 'desc' },
+        take: REALTIME_REPLAY_MAX,
       });
       expect(events).toEqual([]);
     });
 
-    it('visibleTeamIds 为 null 时不过滤（保持既有查询行为）', async () => {
+    it('visibleTeamIds 为 null 时不过滤（保持既有查询，显式游标降序 + take 上限）', async () => {
       await service.getEventsSince('ev_0000000001', { type: 'global' }, null);
 
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: { OR: [{ scopeType: 'global' }], id: { gt: 'ev_0000000001' } },
-        orderBy: { id: 'asc' },
+        orderBy: { id: 'desc' },
+        take: REALTIME_REPLAY_MAX,
       });
     });
 
@@ -721,11 +769,12 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: { id: { gt: 'ev_0000000004' } },
         orderBy: { id: 'asc' },
+        take: REALTIME_REPLAY_MAX,
       });
       expect(events.map((e) => e.id)).toEqual(['ev_0000000005']);
     });
 
-    it('since=latest 且库空时不过滤 DB 查询（findMany 自然返回空）', async () => {
+    it('since=latest 且库空时不过滤 DB 查询（findMany 自然返回空，仍 take 上限）', async () => {
       prisma.realtimeEvent.findFirst.mockResolvedValue(null);
 
       const events = await service.getEventsSince('latest');
@@ -733,6 +782,7 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: {},
         orderBy: { id: 'asc' },
+        take: REALTIME_REPLAY_MAX,
       });
       expect(events).toEqual([]);
     });
@@ -782,6 +832,57 @@ describe('RealtimeService（内部事件总线 + 持久化）', () => {
       await service.broadcast('a', { n: 1 });
       await service.broadcast('b', { n: 2 });
       expect(service.getLatestId()).toBe('ev_0000000002');
+    });
+  });
+
+  describe('保留清理（retention: pruneExpiredEvents 周期 deleteMany）', () => {
+    afterEach(() => {
+      delete process.env.REALTIME_EVENTS_RETENTION_WINDOW_MS;
+    });
+
+    it('RETENTION：deleteMany 以 cutoff = now - 默认 24h 为谓词删除旧事件', async () => {
+      const now = new Date('2026-10-15T12:00:00.000Z');
+      const expectedCutoff = new Date(
+        now.getTime() - REALTIME_EVENTS_RETENTION_WINDOW_MS_DEFAULT,
+      );
+      prisma.realtimeEvent.deleteMany.mockResolvedValue({ count: 7 });
+
+      const removed = await service.pruneExpiredEvents(now);
+
+      expect(prisma.realtimeEvent.deleteMany).toHaveBeenCalledWith({
+        where: { createdAt: { lt: expectedCutoff } },
+      });
+      expect(removed).toBe(7);
+    });
+
+    it('RETENTION：窗口 env 覆盖会改变 cutoff（REALTIME_EVENTS_RETENTION_WINDOW_MS=60000）', async () => {
+      process.env.REALTIME_EVENTS_RETENTION_WINDOW_MS = '60000';
+      const now = new Date('2026-10-15T12:00:00.000Z');
+      const expectedCutoff = new Date(now.getTime() - 60_000);
+      prisma.realtimeEvent.deleteMany.mockResolvedValue({ count: 0 });
+
+      await service.pruneExpiredEvents(now);
+
+      expect(prisma.realtimeEvent.deleteMany).toHaveBeenCalledWith({
+        where: { createdAt: { lt: expectedCutoff } },
+      });
+    });
+
+    it('RETENTION：窗口 ≤ 0（env 覆盖为 0）= 停清理，不发 deleteMany', async () => {
+      process.env.REALTIME_EVENTS_RETENTION_WINDOW_MS = '0';
+
+      const removed = await service.pruneExpiredEvents(
+        new Date('2026-10-15T12:00:00.000Z'),
+      );
+
+      expect(removed).toBe(0);
+      expect(prisma.realtimeEvent.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('RETENTION：onModuleInit 预置游标后仍能起周期，onModuleDestroy 清理句柄不抛', async () => {
+      prisma.realtimeEvent.findFirst.mockResolvedValue(null);
+      await service.onModuleInit();
+      expect(() => service.onModuleDestroy()).not.toThrow();
     });
   });
 });

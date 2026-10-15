@@ -14,7 +14,7 @@ import {
   RealtimeController,
   HEARTBEAT_INTERVAL_MS,
 } from './realtime.controller';
-import { RealtimeService } from './realtime.service';
+import { RealtimeService, REALTIME_REPLAY_MAX } from './realtime.service';
 
 describe('RealtimeController（SSE 端点）', () => {
   let controller: RealtimeController;
@@ -292,7 +292,7 @@ describe('RealtimeController（SSE 端点）', () => {
             (e.data as { payload: { messageId: string } }).payload.messageId,
         ),
       ).toEqual(['m_1', 'm_2']);
-      // 补拉按多 scope OR 查询
+      // 补拉按多 scope OR 查询（absent-since 仍解析最新游标 + take 硬上限）
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: {
           OR: [
@@ -302,6 +302,7 @@ describe('RealtimeController（SSE 端点）', () => {
           ],
         },
         orderBy: { id: 'asc' },
+        take: REALTIME_REPLAY_MAX,
       });
     });
 
@@ -370,7 +371,8 @@ describe('RealtimeController（SSE 端点）', () => {
         where: {
           id: { gt: 'ev_0000000002' },
         },
-        orderBy: { id: 'asc' },
+        orderBy: { id: 'desc' },
+        take: REALTIME_REPLAY_MAX,
       });
     });
 
@@ -495,9 +497,10 @@ describe('RealtimeController（SSE 端点）', () => {
   describe('since 断线续拉（DB 为准）', () => {
     it('since=ev_0000000002 时仅返回 id>2 的遗漏事件', async () => {
       grantAccess();
+      // 显式游标路径降序取最新；mock 按 DB 降序返回，服务 reverse 成升序下发。
       prisma.realtimeEvent.findMany.mockResolvedValue([
-        dbRow('ev_0000000003', 'c'),
         dbRow('ev_0000000004', 'd'),
+        dbRow('ev_0000000003', 'c'),
       ]);
 
       const obs = await controller.events(
@@ -512,10 +515,10 @@ describe('RealtimeController（SSE 端点）', () => {
       ]);
       expect((events[0].data as { type: string }).type).toBe('c');
       expect((events[1].data as { type: string }).type).toBe('d');
-      // 查询按 scope + since 过滤
       expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
         where: { OR: [{ scopeType: 'global' }], id: { gt: 'ev_0000000002' } },
-        orderBy: { id: 'asc' },
+        orderBy: { id: 'desc' },
+        take: REALTIME_REPLAY_MAX,
       });
     });
 
@@ -530,19 +533,20 @@ describe('RealtimeController（SSE 端点）', () => {
       expect(events).toHaveLength(0);
     });
 
-    it('since 未传时返回全部存量事件（全新连接）', async () => {
+    it('since 未传时不再无界重放历史：解析最新 id 为游标（findMany 恒有 id 下界 + take）', async () => {
       grantAccess();
-      prisma.realtimeEvent.findMany.mockResolvedValue([
-        dbRow('ev_0000000001', 'a'),
-        dbRow('ev_0000000002', 'b'),
-      ]);
+      prisma.realtimeEvent.findFirst.mockResolvedValue({ id: 'ev_0000000010' });
+      prisma.realtimeEvent.findMany.mockResolvedValue([]);
 
       const obs = await controller.events(undefined, 'global', accessToken);
-      const events = await collectEvents(obs, 2);
-      expect(events.map((e) => e.id)).toEqual([
-        'ev_0000000001',
-        'ev_0000000002',
-      ]);
+      await collectEvents(obs, 0);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(prisma.realtimeEvent.findMany).toHaveBeenCalledWith({
+        where: { OR: [{ scopeType: 'global' }], id: { gt: 'ev_0000000010' } },
+        orderBy: { id: 'asc' },
+        take: REALTIME_REPLAY_MAX,
+      });
     });
   });
 

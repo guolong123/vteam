@@ -1,0 +1,32 @@
+-- realtime_events 保留策略：created_at 索引辅助 24h 滚动清理（incident-realtime-replay-fix，2026-10-15）
+--
+-- 背景：SSE 事件表 realtime_events 无任何保留策略，payload 绝大多数是 message.part.delta
+-- 增量帧（一次流式回复可派生成百上千行），线上已涨到 460,481 行 / 26GB，server 被反复
+-- OOMKilled。本次事故两处止血（缺一不可）：
+--   1) 服务层 getEventsSince 硬上限补拉 + 无游标连接不再重放历史（见 realtime.service.ts
+--      REALTIME_REPLAY_MAX），杜绝一次读爆内存；
+--   2) 本迁移 + RealtimeService 周期清理把行数/体积按 created_at 收敛回 24h 窗口，从源头
+--      阻止表再次无界增长。
+--
+-- 只建索引、零回填、不动既有列/索引/外键：
+--   - 清理谓词是 `created_at < cutoff`（RealtimeService.pruneExpiredEvents）。无索引则每次
+--     deleteMany 退化为 26GB 全表扫描 + 删除，清理本身就能把 DB 拖垮。故建二级索引。
+--   - created_at 列已存在（schema `createdAt DateTime @default(now()) @map("created_at")`，
+--     baseline `created_at datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)`），本迁移
+--     **不加列**，只在既有列上 CREATE INDEX。
+--   - 既有索引 idx_realtime_events_scope_id（scope_type, scope_id, id）是补拉过滤主力，
+--     本迁移**不重建**（同列族重复 CREATE INDEX → ERROR 1061 duplicate key name）。
+--   - 不建外键：realtime_events 是纯追加事件流，无跨表引用，清理只按时间删，软关联零耦合。
+--
+-- 零回填/零 DELETE：存量数据的删除时机与批大小属服务层周期决策（RealtimeService 周期
+-- deleteMany），迁移层不内联 DELETE；且运维已在事故当口 TRUNCATE 清空存量（见事故记录），
+-- 迁移只需保证「清理谓词有索引可走」。
+--
+-- 手写 DDL：本机/CI 无 MySQL（`nc -z localhost 3306` 不通），本文件为手写，等价于
+-- `prisma migrate diff --from-schema-datamodel <迁移前 schema> --to-schema-datamodel
+-- prisma/schema.prisma --script` 的输出：
+--   CREATE INDEX `idx_realtime_events_created_at` ON `realtime_events`(`created_at`);
+-- 等价性由 src/prisma/realtime-events-retention.migration.spec.ts 守卫。
+
+CREATE INDEX `idx_realtime_events_created_at`
+  ON `realtime_events` (`created_at`);
