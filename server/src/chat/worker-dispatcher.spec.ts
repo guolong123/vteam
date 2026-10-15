@@ -126,6 +126,8 @@ describe('WorkerDispatcher', () => {
     onTaskCompleted: jest.Mock;
     onAgentStatus: jest.Mock;
     onSessionActivity: jest.Mock;
+    // D2：判死/重派清扫终态化时失效 ingress 组装态缓存（公开钩子）
+    invalidateDeltaStream: jest.Mock;
   };
   /** F3 MINOR-3：每次测试独立的临时任务工作目录根（config WORK_DIR 指向），afterEach 清理。 */
   let workRoot: string;
@@ -285,6 +287,8 @@ describe('WorkerDispatcher', () => {
       onTaskCompleted: jest.fn().mockReturnThis(),
       onAgentStatus: jest.fn().mockReturnThis(),
       onSessionActivity: jest.fn().mockReturnThis(),
+      // 判死/重派清扫终态化时的组装态缓存失效钩子（D2）
+      invalidateDeltaStream: jest.fn(),
     };
   });
 
@@ -1857,6 +1861,53 @@ describe('WorkerDispatcher', () => {
       expect(workerClient.execute).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ sessionId: 'ses_0001' }),
+      );
+    });
+
+    it('D2 回归：重派清扫把上一轮残留 processing 行标 failed → 同步失效该流式键的组装态缓存', async () => {
+      // 上一轮（worker 崩溃/静默 watchdog 判死，无任何 agent.status 回流）留下的
+      // 有内容 processing 行：清扫会把它标 failed
+      // DM 私有频道（resolveTeamChannel 命中）——即 delta 的落库目标频道
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_dm_target' });
+      prisma.message.findMany.mockResolvedValue([
+        {
+          id: 'm_prev_stream',
+          content: {
+            text: '上一轮流式片段',
+            parts: [{ type: 'text', text: '上一轮流式片段' }],
+          },
+        },
+      ]);
+      const d = createDispatcher();
+
+      await d.dispatch(request);
+
+      // 清扫确实把残留行标了 failed（D1/D2 的共同前提：行已终态）
+      expect(prisma.message.updateMany).toHaveBeenCalledWith({
+        where: { id: { in: ['m_prev_stream'] } },
+        data: { status: MESSAGE_STATUS.failed },
+      });
+      // 并同步失效 ingress 组装态缓存，键 = <目标频道>|<agentId>（与 delta 定位键一致）。
+      // 若不失效：重试轮首 delta 命中残留缓存，对已 failed 行 message.update。
+      expect(ingress.invalidateDeltaStream).toHaveBeenCalledWith(
+        'c_dm_target',
+        'a_product',
+      );
+    });
+
+    it('D2 边界：无残留 processing 行 → 仍失效同键缓存（幂等 delete，不抛错）', async () => {
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_dm_target' });
+      prisma.message.findMany.mockResolvedValue([]);
+      const d = createDispatcher();
+
+      await expect(d.dispatch(request)).resolves.toEqual({ replies: [] });
+
+      expect(prisma.message.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: { status: MESSAGE_STATUS.failed } }),
+      );
+      expect(ingress.invalidateDeltaStream).toHaveBeenCalledWith(
+        'c_dm_target',
+        'a_product',
       );
     });
   });
