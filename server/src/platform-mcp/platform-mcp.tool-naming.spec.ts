@@ -237,6 +237,16 @@ describe('platform-mcp tool naming contract', () => {
       data: { text: 'legacy' },
     });
     expect(parsedLegacy).not.toMatchObject({ data: { taskId: 't_1' } });
+
+    const parsedReplyTo = tool?.inputSchema.safeParse({
+      teamId: 'tm_1',
+      text: 'x',
+      replyToUser: 'Alice',
+    });
+    expect(parsedReplyTo).toMatchObject({
+      success: true,
+      data: { replyToUser: 'Alice' },
+    });
   });
   // ==================================================================
   // T8 验收②：`confirmByAgent` 对 `secret_input` 三道独立防线（落点 1/3：tool schema 层）

@@ -504,7 +504,7 @@ export const NON_MAIN_AGENT_NOTE =
 
 /** 企微系统段（仅企微渠道注入；dispatch 侧按正文 [WeCom:] 标记判定后经 opts.isWecomChannel 传入）。 */
 export const WECOM_SYSTEM_INSTRUCTION =
-  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名|from 群聊/私聊] 标记，来源部分说明该消息来自群聊还是私聊）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到团队群聊，确保用户在企微端收到回复。回复场景请与来源一致：私聊来的消息直接答复该用户；群聊来的消息在群内答复并 @ 该用户。';
+  '【企业微信】当消息来自企业微信（正文含 [WeCom:用户名|from 群聊/私聊] 标记，来源部分说明该消息来自群聊还是私聊）时，请使用 vteam_wecom_reply 工具回复，不要用 vteam_group_post；vteam_wecom_reply 会同时发送到企微会话（群聊自动@该用户，私聊直回）并同步到团队群聊，确保用户在企微端收到回复。回复场景请与来源一致：私聊来的消息直接答复该用户；群聊来的消息在群内答复并 @ 该用户。若多名用户短时间内先后发言，回复时务必在 vteam_wecom_reply 传 replyToUser=<该用户显示名>，以精确回复到目标用户（否则默认取最近一条企微消息的发送者，可能@错人）。';
 
 /**
  * 平台级共享块（agent-role-entity 计划 todo 3）：原在 seed 的 7 个 prompt 内各抄一份，
@@ -895,7 +895,7 @@ export const TEAM_GROUP_TRIGGER_INSTRUCTION =
   '群聊只会显示你通过 vteam_group_post 发布的内容，完整处理过程保留在你的私聊会话。' +
   '如需通知其他成员：调用 vteam_notify_agent；' +
   '需要群聊历史时调用 vteam_chat_history（传 teamId）。' +
-  '收到企业微信消息时调用 vteam_wecom_reply 并传 teamId；' +
+  '收到企业微信消息时调用 vteam_wecom_reply 并传 teamId（多名用户短时间内先后发言时传 replyToUser=<该用户显示名> 以精确回复）；' +
   '团队直聊没有 taskId，其他团队工具不要传 taskId。' +
   'vteam_my_profile、vteam_team_view、vteam_doclib、vteam_issue_*、vteam_task_transition 类工具需要任务上下文，团队直聊下不要调用（如需任务，先调用 vteam_task_create 创建真实任务）。' +
   '如需向群聊发送文件：直接调用 vteam_group_post 并携带 fileRef，文件将作为群聊附件。';
@@ -2455,7 +2455,7 @@ export class WorkerDispatcher
           : '';
       const sourceNote = sourceRaw ? `（来源：${sourceRaw}）` : '';
       const tailored = wecomUserLabel
-        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel}${sourceNote} via WeCom，请务必使用 vteam_wecom_reply 工具回复，不要使用 vteam_group_post，以确保用户在企微端收到@回复。`
+        ? `【企微消息】此消息来自企业微信用户 ${wecomUserLabel}${sourceNote} via WeCom，请务必使用 vteam_wecom_reply 工具回复（并传 replyToUser="${wecomUserLabel}" 精确回复该用户），不要使用 vteam_group_post，以确保用户在企微端收到@回复。`
         : WECOM_TRIGGER_INSTRUCTION;
       promptBlocks.push(tailored);
     }

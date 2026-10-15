@@ -8242,6 +8242,82 @@ describe('PlatformMcpService', () => {
       );
     });
 
+    it('replyToUser 指定回复对象：即使更晚有他人发言也精确 @ 目标用户', async () => {
+      const adapter = arrangeTeamChannel();
+      const aliceMessage = {
+        id: 'm_external_alice',
+        content: { text: '[WeCom:Alice] hi' },
+        createdAt: new Date(Date.now() - 5_000),
+      };
+      const bobMessage = {
+        id: 'm_external_bob',
+        content: { text: '[WeCom:Bob] hi' },
+        createdAt: new Date(Date.now() - 1_000),
+      };
+      prisma.message.findMany.mockImplementation(
+        async (query: { where?: { senderId?: string } }) =>
+          query.where?.senderId === 'Alice'
+            ? [aliceMessage]
+            : [bobMessage, aliceMessage],
+      );
+      prisma.message.findFirst.mockImplementation(
+        async (query: { where?: { senderType?: unknown } }) =>
+          query.where?.senderType === SENDER_TYPE.external
+            ? aliceMessage
+            : null,
+      );
+      adapter.getStream.mockImplementation((id: string) =>
+        id === 'm_external_alice'
+          ? { fromUserName: 'Alice', chattype: 'group', channelId: 'mc_team_1' }
+          : { fromUserName: 'Bob', chattype: 'group', channelId: 'mc_team_1' },
+      );
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+        replyToUser: 'Alice',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(prisma.message.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ senderId: 'Alice' }),
+        }),
+      );
+      expect(adapter.getStream).toHaveBeenCalledWith('m_external_alice');
+      expect(adapter.finishStream).toHaveBeenCalledWith(
+        'm_external_alice',
+        '@Alice hello',
+      );
+    });
+
+    it('replyToUser 以 userid 传入时回落按活跃流身份匹配', async () => {
+      const adapter = arrangeTeamChannel();
+      prisma.message.findMany.mockImplementation(
+        async (query: { where?: { senderId?: string } }) =>
+          query.where?.senderId ? [] : [externalMessage],
+      );
+      adapter.getStream.mockImplementation((id: string) =>
+        id === 'm_external_1'
+          ? { fromUserId: 'w_alice', fromUserName: 'Alice', chattype: 'group' }
+          : undefined,
+      );
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: 'hello',
+        replyToUser: 'w_alice',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(adapter.finishStream).toHaveBeenCalledWith(
+        'm_external_1',
+        '@Alice hello',
+      );
+    });
+
     it('当前团队未绑定企微渠道时返回既有未绑定文案', async () => {
       arrangeTeamChannel();
       prisma.teamMessageChannel.findMany.mockResolvedValue([]);

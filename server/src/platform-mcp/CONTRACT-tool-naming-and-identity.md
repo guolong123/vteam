@@ -147,7 +147,7 @@ evidence file under `identity_table`. Summary of the cases todo 3 must handle:
 - **4 tools omit `selfInstanceId` but require `taskId`** — `doclib`, `task_context`,
   `read_file`, `team_view` (plus `memory_list`, team-scoped, no `selfInstanceId`).
   `assertWorkerTask` still returns the session's `teamMemberId ?? agentId`.
-- **`wecom_reply`** exposes `selfInstanceId` and `teamId` as optional identity/context fields. `teamId` comes from the arguments or the worker's most recent session (`session.teamId`); legacy task sessions fall back through `session.taskId → task.teamId`. `selfInstanceId` resolves to the bound team member. The tool does not require or depend on `taskId`; legacy `taskId` input is stripped by the schema.
+- **`wecom_reply`** exposes `selfInstanceId` and `teamId` as optional identity/context fields. `teamId` comes from the arguments or the worker's most recent session (`session.teamId`); legacy task sessions fall back through `session.taskId → task.teamId`. `selfInstanceId` resolves to the bound team member. The tool does not require or depend on `taskId`; legacy `taskId` input is stripped by the schema. It also accepts an optional `replyToUser` (WeCom display name or userid) that pins the reply to a specific inbound user/message — required for precision when several users speak in the same group within a short window (otherwise the newest inbound message wins).
 
 ## 4. Unresolvable-identity policy (binding for todo 3)
 

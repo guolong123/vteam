@@ -5461,6 +5461,7 @@ export class PlatformMcpService implements OnModuleInit {
       msgtype?: string;
       text?: string;
       atUser?: boolean;
+      replyToUser?: string;
       card?: unknown;
       media?: string;
       mediaId?: string;
@@ -5675,6 +5676,7 @@ export class PlatformMcpService implements OnModuleInit {
       };
     }
 
+    const replyToUser = args.replyToUser?.trim() || null;
     let fromName: string | null = null;
     let chattype: string | null = null;
     let activeExternal:
@@ -5687,9 +5689,22 @@ export class PlatformMcpService implements OnModuleInit {
       pending = legacyTaskId
         ? (adapter as any).getPendingOperatorForTask?.(legacyTaskId)
         : null;
+      // 显式指定回复对象时：pending 操作者若与目标不符，让位给按用户精确定位。
+      if (
+        replyToUser &&
+        pending &&
+        pending.fromUserName !== replyToUser &&
+        pending.fromUserId !== replyToUser
+      ) {
+        pending = null;
+      }
       activeExternal = pending
         ? null
-        : await this.findActiveTeamExternalMessage(teamId, adapter);
+        : await this.findActiveTeamExternalMessage(
+            teamId,
+            adapter,
+            replyToUser,
+          );
       if (pending) {
         fromName = pending.fromUserName ?? pending.fromUserId ?? null;
         chattype = pending.chattype ?? null;
@@ -5700,6 +5715,11 @@ export class PlatformMcpService implements OnModuleInit {
           null;
         chattype = activeExternal.stream.chattype ?? null;
       }
+      // 显式指定回复对象却未匹配到活跃流（流过期/进程重启）：仍以指定名 @，
+      // 避免漏 @；会话路由由下方 chatid 锚点回退兜底。
+      if (replyToUser && !fromName) {
+        fromName = replyToUser;
+      }
     } catch {}
 
     // 出站目标会话：优先入站消息自己的 chatid（多群共用 bot 时唯一可靠来源）；
@@ -5708,7 +5728,7 @@ export class PlatformMcpService implements OnModuleInit {
       pending?.chatid ?? activeExternal?.stream?.chatid ?? null;
     if (!inboundChatId) {
       // 内存流（10 分钟 TTL）已失效/重启丢失：回退持久化的 chatid 锚点
-      inboundChatId = await this.latestExternalChatId(teamId);
+      inboundChatId = await this.latestExternalChatId(teamId, replyToUser);
     }
 
     // 回复须回到用户当初发言的那个机器人：同一 team 绑定多个 wecom 渠道时，
@@ -7580,6 +7600,7 @@ export class PlatformMcpService implements OnModuleInit {
   private async findActiveTeamExternalMessage(
     teamId: string,
     adapter: unknown,
+    targetUser?: string | null,
   ): Promise<
     (WecomExternalMessage & { readonly stream: WecomStreamInfo }) | null
   > {
@@ -7587,24 +7608,49 @@ export class PlatformMcpService implements OnModuleInit {
       const groupChannel = await this.findTeamGroupChannel(teamId);
       const getStream = getWecomStreamReader(adapter);
       if (!groupChannel || !getStream) return null;
-      const candidates = (await (this.prisma as any).message.findMany({
-        where: {
-          channelId: groupChannel.id,
-          senderType: SENDER_TYPE.external,
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        select: { id: true, content: true, createdAt: true },
-      })) as WecomExternalMessage[];
-      const now = Date.now();
-      for (const candidate of candidates) {
-        if (!candidate.createdAt) continue;
-        const ageMs = now - candidate.createdAt.getTime();
-        if (ageMs < 0 || ageMs > WECOM_OPERATOR_TTL_MS) continue;
-        const stream = getStream(candidate.id);
-        if (stream) return { ...candidate, stream };
+      const baseWhere = {
+        channelId: groupChannel.id,
+        senderType: SENDER_TYPE.external,
+      };
+      const pick = async (
+        where: Record<string, unknown>,
+        take: number,
+        streamMatches?: (stream: WecomStreamInfo) => boolean,
+      ): Promise<
+        (WecomExternalMessage & { readonly stream: WecomStreamInfo }) | null
+      > => {
+        const candidates = (await (this.prisma as any).message.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          take,
+          select: { id: true, content: true, createdAt: true },
+        })) as WecomExternalMessage[];
+        const now = Date.now();
+        for (const candidate of candidates) {
+          if (!candidate.createdAt) continue;
+          const ageMs = now - candidate.createdAt.getTime();
+          if (ageMs < 0 || ageMs > WECOM_OPERATOR_TTL_MS) continue;
+          const stream = getStream(candidate.id);
+          if (!stream) continue;
+          if (streamMatches && !streamMatches(stream)) continue;
+          return { ...candidate, stream };
+        }
+        return null;
+      };
+      if (targetUser) {
+        // 精确回复：先按落库 senderId（= 入站展示名/userid）过滤，命中不到再按
+        // 活跃流内身份兜底，兼容调用方以 userid 而非展示名传参。
+        const exact = await pick({ ...baseWhere, senderId: targetUser }, 50);
+        if (exact) return exact;
+        return await pick(
+          baseWhere,
+          50,
+          (stream) =>
+            stream.fromUserId === targetUser ||
+            stream.fromUserName === targetUser,
+        );
       }
-      return null;
+      return await pick(baseWhere, 20);
     } catch {
       return null;
     }
@@ -7615,7 +7661,10 @@ export class PlatformMcpService implements OnModuleInit {
    * 仅在内存流取不到时使用（窗口见 WECOM_CHAT_ANCHOR_TTL_MS）。缺值/异常一律
    * null，调用方回退渠道级 lastChatid（既有行为，不劣化）。
    */
-  private async latestExternalChatId(teamId: string): Promise<string | null> {
+  private async latestExternalChatId(
+    teamId: string,
+    targetUser?: string | null,
+  ): Promise<string | null> {
     try {
       const groupChannel = await this.findTeamGroupChannel(teamId);
       if (!groupChannel) return null;
@@ -7625,6 +7674,7 @@ export class PlatformMcpService implements OnModuleInit {
           senderType: SENDER_TYPE.external,
           createdAt: { gte: new Date(Date.now() - WECOM_CHAT_ANCHOR_TTL_MS) },
           externalChatId: { not: null },
+          ...(targetUser ? { senderId: targetUser } : {}),
         },
         orderBy: { createdAt: 'desc' },
         take: 1,
@@ -7633,7 +7683,7 @@ export class PlatformMcpService implements OnModuleInit {
       const chatId = rows[0]?.externalChatId ?? null;
       if (chatId) {
         this.logger.log(
-          `wecom_reply chatid 锚点回退 teamId=${teamId} chatId=${chatId}（内存流不可用）`,
+          `wecom_reply chatid 锚点回退 teamId=${teamId} chatId=${chatId}${targetUser ? ` replyToUser=${targetUser}` : ''}（内存流不可用）`,
         );
       }
       return chatId;
