@@ -98,10 +98,20 @@ server:
       cpu: 200m
       memory: 256Mi
     limits:
-      ## 2026-10-15：1Gi 下 server 启动约 30s 即 OOMKilled（exitCode 137 → CrashLoopBackOff，
-      ## 且 liveness/readiness 探针同时超时）；提高到 2Gi。注意：更早一版在 2Gi 下也发生过
-      ## 14 次 OOMKilled，若再现需继续上调或排查内存增长（本行是「可调」而非「已足」）。
-      memory: 2Gi
+      ## 2026-10-15 OOM 事故实录（本行是「过渡余量」，不是修复）：
+      ##   1Gi → 启动约 30s 即 OOMKilled（exitCode 137 → CrashLoopBackOff，探针同时超时）；
+      ##   2Gi → 仍累计 14 次 OOMKilled；
+      ##   4Gi（直接 patch deployment，未走 helm）→ 仍持续 OOMKilled：17 分钟内重启 6 次，
+      ##         BackOff x27/14m，VmHWM 已达 ~2.0GB 且单调爬升，约每 3 分钟被顶穿一次。
+      ## 结论：**这是「加内存赢不了的竞赛」**——增长来自「每个 delta 的驻留」而非峰值抖动，
+      ## 任何内存上限都只是把时间往后推。真正的修复是代码侧（见 .omo/plans/team-worker-node.md
+      ## 「部署后登记的后续加固项」）：
+      ##   · 回放封顶 1000 + 24h 保留任务 + createdAt 索引（commit ee27da3）；
+      ##   · 内存事件日志 8MiB 字节封顶 + message.part.delta 零落库（同上）；
+      ##   · delta 组装态缓存（含错误终局与看门狗终局的失效）。
+      ## 8Gi 仅为切换期余量：修复生效后实际驻留应降到数百 MB 量级，观察稳定后应下调回 2Gi
+      ## 左右，让 OOM 重新成为「可见信号」而不是被余量掩盖。
+      memory: 8Gi
   ## 探针：/api/v1/health，容器 node 内置 fetch（对齐 compose healthcheck）
   probes:
     startup:
