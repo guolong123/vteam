@@ -44,6 +44,9 @@ spec:
           # 这样 PVC 重建或换环境后策略依然生效。取值理由见 values.yaml 的 binlogExpireLogsSeconds。
           args:
             - --binlog-expire-logs-seconds={{ .Values.db.binlogExpireLogsSeconds | default 3600 }}
+            # ibtmp1 默认 autoextend 且无上限：一旦出现大排序/大临时表就会一直涨到把共享盘写满
+            # （与 2026-10-15 磁盘写满同一失效模式）。此处给它封顶，宁可让那条查询失败也不拖垮存储。
+            - --innodb-temp-data-file-path=ibtmp1:12M:autoextend:max:2G
           env:
             - name: MYSQL_ROOT_PASSWORD
               valueFrom:
