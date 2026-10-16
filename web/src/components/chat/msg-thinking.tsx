@@ -2,9 +2,11 @@
  * MsgThinking：思考中消息（reasoning part，FR-18 内部过程折叠展示）
  * =============================================
  * 从 docs/agent-platform/prototypes/group-chat/index.tsx 迁移：
- * - state=pending：思考中（三连点 + 「思考中…」，不可折叠）
+ * - state=pending：思考中（三连点 + 「思考中…」 + **单行跑马灯**流式展示进行中推理，不可折叠、
+ *   恒定单行——不再渲染多行 msg-thinking-detail 正文）
  * - state=done：已完成，默认折叠（「已思考 · 点击展开 ▸」），点击展开/收起
- * data-testid=msg-thinking；身份（B1）：头像/作者/时间统一由 MsgParts 共享身份栏渲染，
+ * data-testid=msg-thinking；pending 态无 msg-thinking-detail，仅 done+展开态才挂该节点。
+ * 身份（B1）：头像/作者/时间统一由 MsgParts 共享身份栏渲染，
  * 本组件只留过程内容（状态 + 摘录 + 展开正文）。token 引用统一走 src/theme/tokens.ts。
  */
 "use client";
@@ -72,13 +74,18 @@ export interface MsgThinkingProps {
 export function MsgThinking({ state, text, style, className }: MsgThinkingProps) {
   const [open, setOpen] = useState(state === "done" ? false : true);
   const pending = state === "pending";
-  // 折叠态单行缩略：空白归一后取前 200 字符（无内容时仅显示"已思考"）；
+  // 空白归一（与摘录同口径）：折叠摘录取前 200 字符；
+  // pending 单行跑马灯取归一化全文的前 2000 字符（第 2001 字符起不进入 DOM，DOM 有界）；
   // 展开正文与 title 统一截到前 2000 字符——第 2001 字符起不进入 DOM，不追加省略号。
-  const normalized = pending ? "" : text.replace(/\s+/g, " ").trim();
-  const excerpt = normalized.slice(0, THINKING_EXCERPT_CHARS);
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const excerpt = pending ? "" : normalized.slice(0, THINKING_EXCERPT_CHARS);
   const detail = text.slice(0, THINKING_MAX_CHARS);
-  // 折叠摘录跑马灯：溢出量实测（文本宽 - 视口宽），随摘录内容/容器宽度/展开态重测。
-  // 展开态不滚（正文已在下方全量展示，避免双份动态噪音）；未溢出不挂动画。
+  // 单行跑马灯文本：pending = 进行中推理（≤2000，随 delta 增长）；done = 折叠摘录（≤200）。
+  const marqueeText = pending ? normalized.slice(0, THINKING_MAX_CHARS) : excerpt;
+  // 多行正文只在 done+展开态存在：pending 恒定单行（不可折叠）。
+  const bodyExpanded = open && !pending;
+  // 跑马灯：溢出量实测（文本宽 - 视口宽），随跑马灯文本/容器宽度/展开态重测。
+  // done 展开态不滚（正文已在下方全量展示，避免双份动态噪音）；未溢出不挂动画。
   const viewportRef = useRef<HTMLSpanElement | null>(null);
   const textRef = useRef<HTMLSpanElement | null>(null);
   const [marqueeShift, setMarqueeShift] = useState(0);
@@ -97,8 +104,9 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [excerpt, open]);
-  const marqueeActive = marqueeShift > 0 && !open;
+  }, [marqueeText, open, pending]);
+  // pending 恒滚（进行中推理单行展示的唯一出口）；done 仅折叠态滚（展开态正文全量可见）。
+  const marqueeActive = marqueeShift > 0 && (pending || !open);
   const marqueeSeconds = Math.max(
     4,
     Math.round(marqueeShift / MARQUEE_PX_PER_SECOND),
@@ -136,7 +144,7 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
           fontSize: fontSize.sm,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginBottom: open ? space.xs : 0, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: space.sm, marginBottom: bodyExpanded ? space.xs : 0, minWidth: 0 }}>
           {pending ? (
             <LoadingDots color={neutral[400]} />
           ) : (
@@ -157,7 +165,7 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
               思考中…
             </span>
           )}
-          {!pending && excerpt && (
+          {marqueeText && (
             <span
               ref={viewportRef}
               title={detail}
@@ -169,6 +177,7 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
                 fontSize: fontSize.xs,
                 color: neutral[400],
                 fontStyle: "italic",
+                whiteSpace: pending ? "nowrap" : undefined,
               }}
             >
               <span
@@ -192,7 +201,7 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
                       }
                 }
               >
-                {excerpt}
+                {marqueeText}
               </span>
             </span>
           )}
@@ -202,19 +211,19 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
             </span>
           )}
         </div>
-        {(open || pending) && (
+        {bodyExpanded && (
           <div
             data-testid="msg-thinking-detail"
             style={{
               fontSize: fontSize.md,
-              color: pending ? neutral[400] : neutral[600],
+              color: neutral[600],
               fontStyle: "italic",
               lineHeight: 1.6,
               whiteSpace: "pre-wrap",
               wordBreak: "break-word",
             }}
           >
-            {pending ? detail : text.trim() ? detail : "（无详细思考内容）"}
+            {text.trim() ? detail : "（无详细思考内容）"}
           </div>
         )}
       </button>
