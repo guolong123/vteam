@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { EVENT_TYPES } from '../common/constants/event.constants';
 import { CHANNEL_TYPE } from '../common/constants/event.constants';
 import { IdGeneratorService } from '../common/id-generator';
@@ -8,6 +13,15 @@ import { RealtimeService } from '../realtime/realtime.service';
 
 /** 回执主键前缀（mr_；resyncIdPrefix 续号用，防重启后主键冲突）。 */
 const MESSAGE_RECEIPT_ID_PREFIX = 'mr';
+
+/**
+ * 到期清账扫描周期（ms）缺省 1 分钟：足够把僵死 pending 及时清为 expired
+ * （fan-out drain 不再永久搁置主 Agent），又不会对 message_receipts 造成压力。
+ * env `RECEIPT_EXPIRY_SWEEP_INTERVAL_MS` 覆盖；0/负值=停周期（不启动 setInterval）。
+ */
+export const RECEIPT_EXPIRY_SWEEP_INTERVAL_MS_DEFAULT = 60_000;
+export const RECEIPT_EXPIRY_SWEEP_INTERVAL_MS_ENV =
+  'RECEIPT_EXPIRY_SWEEP_INTERVAL_MS';
 
 export interface ReceiptEventPayload {
   receiptId: string;
@@ -69,11 +83,17 @@ export type ReceiptSettledHook = (row: {
  * 订阅者清单见 realtime/realtime-subscriptions.ts。
  */
 @Injectable()
-export class MessageReceiptsService implements OnModuleInit {
+export class MessageReceiptsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MessageReceiptsService.name);
 
   /** reply-join drain hook：回执离开 pending 后由订阅方注册（PlatformMcpService）。 */
   private settledHook: ReceiptSettledHook | null = null;
+
+  /** 到期清账周期句柄（workers.service/trigger-reconciler 同款：原生 setInterval + unref）。 */
+  private sweepTimer: NodeJS.Timeout | null = null;
+
+  /** 重入护栏：上一轮扫描未结束则跳过本轮（防重叠 tick 双清账 / 双广播）。 */
+  private sweepInFlight = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -112,6 +132,73 @@ export class MessageReceiptsService implements OnModuleInit {
       MESSAGE_RECEIPT_ID_PREFIX,
       this.idGen,
     );
+    this.ensureExpirySweepTicker();
+  }
+
+  onModuleDestroy(): void {
+    if (this.sweepTimer) {
+      clearInterval(this.sweepTimer);
+      this.sweepTimer = null;
+    }
+  }
+
+  /**
+   * 到期清账周期任务（幂等，重入护栏）。
+   *
+   * 关键接线：`expireDue()` 每条 pending→expired 后经 `fireSettledHook` →
+   * PlatformMcpService 的 `checkAndDrainFanOut`，重新检查该主 Agent 剩余待回执
+   * 是否收敛为 0。故过期一条僵死回执同样能解除 fan-out 阻塞、唤醒被永久搁置的
+   * 主 Agent——这是「单条 stale pending 堵死 drain」事故的补偿环。
+   */
+  async sweepExpiredReceipts(now: Date = new Date()): Promise<number> {
+    if (this.sweepInFlight) {
+      this.logger.debug('[receipts] 到期扫描仍在进行，跳过本轮');
+      return 0;
+    }
+    this.sweepInFlight = true;
+    try {
+      const rows = await this.expireDue(now);
+      const expired = rows?.length ?? 0;
+      if (expired > 0) {
+        this.logger.log(`[receipts] 到期清账：${expired} 条 pending→expired`);
+      } else {
+        this.logger.debug('[receipts] 到期清账：本轮无到期回执');
+      }
+      return expired;
+    } finally {
+      this.sweepInFlight = false;
+    }
+  }
+
+  /**
+   * 启动到期清账周期（onModuleInit eager；`RECEIPT_EXPIRY_SWEEP_INTERVAL_MS=0` 禁用）。
+   * 原生 setInterval + unref（@nestjs/schedule 未安装；同 workers.service healthTimer）。
+   */
+  private ensureExpirySweepTicker(): void {
+    const intervalMs = this.sweepIntervalMs();
+    if (intervalMs <= 0) {
+      return;
+    }
+    if (this.sweepTimer) {
+      return;
+    }
+    this.sweepTimer = setInterval(() => {
+      void this.sweepExpiredReceipts().catch((err: unknown) =>
+        this.logger.error(
+          `[receipts] 到期扫描失败: ${err instanceof Error ? err.message : String(err)}`,
+        ),
+      );
+    }, intervalMs);
+    this.sweepTimer.unref?.();
+  }
+
+  private sweepIntervalMs(): number {
+    const raw = process.env[RECEIPT_EXPIRY_SWEEP_INTERVAL_MS_ENV];
+    if (raw === undefined || raw === '') {
+      return RECEIPT_EXPIRY_SWEEP_INTERVAL_MS_DEFAULT;
+    }
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : RECEIPT_EXPIRY_SWEEP_INTERVAL_MS_DEFAULT;
   }
 
   /**
@@ -269,6 +356,10 @@ export class MessageReceiptsService implements OnModuleInit {
    * reply-join 口径：按 fromInstanceId + teamId 统计 pending 回执数
    * （fan-out drain 检查用。fromInstanceId 即主 Agent 成员 id，对应其派发给
    * 所有子 Agent 的待回执数）。覆盖索引 idx_message_receipts_from_status。
+   *
+   * 防御纵深：仅「未到期」pending 计入未决——`expiresAt <= now` 的僵死行
+   * （到期清账周期缺席/滞后时残留）不再阻塞 drain，单条 stale 回执永不
+   * 永久搁置主 Agent。expiresAt 为非空列，无 NULL 语义歧义。只读计数，不改行。
    */
   async countPendingFor(filter: {
     fromInstanceId: string;
@@ -279,6 +370,7 @@ export class MessageReceiptsService implements OnModuleInit {
         fromInstanceId: filter.fromInstanceId,
         teamId: filter.teamId,
         status: 'pending',
+        expiresAt: { gt: new Date() },
       },
     });
   }

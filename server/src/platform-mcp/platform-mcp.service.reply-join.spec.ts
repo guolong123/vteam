@@ -98,6 +98,7 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     const receiptsSvc = {
       ackPendingFor: jest.fn().mockResolvedValue(1),
       countPendingFor: jest.fn().mockResolvedValue(0),
+      registerSettledHook: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -481,6 +482,32 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
 
     await jest.runAllTimersAsync();
     expect(wakeSpy).not.toHaveBeenCalled();
+  });
+
+  it('settled hook 接线：onModuleInit 注册 → 回执结算（过期/ack）触发 drain → 唤醒主 Agent', async () => {
+    jest.useFakeTimers();
+    await service.onModuleInit();
+
+    const registerSettledHook =
+      receipts.registerSettledHook as unknown as jest.Mock;
+    expect(registerSettledHook).toHaveBeenCalledTimes(1);
+    const hook = registerSettledHook.mock.calls[0][0] as (row: {
+      fromInstanceId: string;
+      teamId: string;
+    }) => Promise<void>;
+
+    jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(0);
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
+
+    await hook({ fromInstanceId: mainInstanceId, teamId });
+    await jest.runAllTimersAsync();
+
+    expect(wakeSpy).toHaveBeenCalledTimes(1);
   });
 
   it('regression: sub1 answer/end pending=1 → join 抑制 + 不唤醒主 Agent', async () => {
