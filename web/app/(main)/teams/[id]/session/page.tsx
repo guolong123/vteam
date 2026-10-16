@@ -1223,20 +1223,26 @@ export default function TeamSessionPage() {
       setAddError(null);
       queryClient.setQueryData<TeamDto>(["team", teamId], updated);
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+      // 成员面板优先读 queueHeadTask.instances（由团队成员派生），需刷新任务维度缓存。
+      if (queueHeadTaskId) queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
     },
     onError: (err) => {
       console.error("[TeamSession] add team member failed", { teamId, error: err });
       setAddError(isApiError(err) ? err.message : "添加实例失败，请稍后重试");
     },
   });
+  // 与 server tasksService.updateTeam 的状态校验保持一致：仅 pending/in_progress 可走任务接口。
+  const taskTeamApiEditable =
+    queueHeadTask?.status === "pending" || queueHeadTask?.status === "in_progress";
   const handleAddInstance = async (payload: AddInstancePayload): Promise<boolean> => {
     if (addInstanceMutation.isPending || addTeamMemberMutation.isPending) return false;
     if (!payload.roleId && !payload.agentId) return false;
     setAddError(null);
     return new Promise((resolve) => {
       const callbacks = { onSuccess: () => resolve(true), onError: () => resolve(false) };
-      // 分流：有当前任务 → 任务接口（保留群系统消息/任务实例）；空闲 → 团队级成员接口。
-      if (queueHeadTaskId) addInstanceMutation.mutate(payload, callbacks);
+      // 任务维度接口仅在任务可编辑（pending/in_progress）时使用；任务待验收/已完成/已归档或团队空闲时
+      // 一律走团队级接口（成员增员与任务状态无关）。
+      if (queueHeadTaskId && taskTeamApiEditable) addInstanceMutation.mutate(payload, callbacks);
       else addTeamMemberMutation.mutate(payload, callbacks);
     });
   };
