@@ -836,17 +836,26 @@ test.describe("B2 连续同发送者消息复用身份栏", () => {
     const first = nodes.nth(1);
     await expect(first.getByTestId("message-identity")).toHaveCount(1);
     await expect(first.getByTestId("agent-avatar")).toHaveCount(1);
-    await expect(first.getByTestId("msg-thinking")).toHaveCount(1);
+    // 私聊 agent 消息走 variant="line"：每个 part 一个单行盒，按原顺序 reasoning→tool→text
+    const firstBoxes = first.getByTestId("msg-line-box");
+    await expect(firstBoxes).toHaveCount(2);
+    await expect(firstBoxes.nth(0)).toHaveAttribute("data-tone", "thinking");
+    await expect(firstBoxes.nth(1)).toHaveAttribute("data-tone", "body");
     await expect(first.getByTestId("msg-tool")).toHaveCount(1);
-    await expect(first.getByTestId("chat-bubble")).toHaveCount(1);
+    // line 模式不再出现 ChatBubble / 流式块 / 旧思考行
+    await expect(first.getByTestId("chat-bubble")).toHaveCount(0);
+    await expect(first.getByTestId("msg-thinking")).toHaveCount(0);
+    await expect(first.getByTestId("msg-streaming")).toHaveCount(0);
 
     const second = nodes.nth(2);
+    // 分组态：共享身份栏与头像都被省略（= 上一条同发送者）
     await expect(second.getByTestId("message-identity")).toHaveCount(0);
     await expect(second.getByTestId("agent-avatar")).toHaveCount(0);
-    await expect(second.getByTestId("chat-bubble-author")).toHaveCount(0);
-    await expect(second.getByTestId("msg-thinking")).toHaveCount(1);
+    const secondBoxes = second.getByTestId("msg-line-box");
+    await expect(secondBoxes).toHaveCount(2);
+    await expect(secondBoxes.nth(0)).toHaveAttribute("data-tone", "thinking");
+    await expect(secondBoxes.nth(1)).toHaveAttribute("data-tone", "body");
     await expect(second.getByTestId("msg-tool")).toHaveCount(1);
-    await expect(second.getByTestId("chat-bubble")).toHaveCount(1);
     await expect(second.getByTestId("msg-streaming")).toHaveCount(0);
     await expect(second).toContainText("过程分组-02 分组复用身份");
     await page.screenshot({ path: path.join(B2_DIR, "task-5-grouping-parts.png") });
@@ -1970,7 +1979,7 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
     await expect(cards).toHaveCount(2);
 
     // 基线：未注入 question 时 running 卡片保持 running，且不带新 testid
-    const running = page.getByTestId("msg-live-stream").getByTestId("msg-tool");
+    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"]');
     await expect(running).toHaveAttribute("data-status", "running");
     await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
 
@@ -2008,7 +2017,7 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
 
   test("2. 异会话 pending 不点亮；malformed（缺 sessionId/agentId）不点亮且不崩", async ({ page }) => {
     await openSecretToolSession(page);
-    const running = page.getByTestId("msg-live-stream").getByTestId("msg-tool");
+    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"]');
     await expect(running).toHaveAttribute("data-status", "running");
 
     // 同 agent 群里另一个会话（ta_2 / a_tester）的 pending：不得点亮 a_developer 的卡片
@@ -2060,7 +2069,7 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
     await page.getByTestId("dm-tab-private-ta_1").evaluate((el: HTMLElement) => el.click());
     await expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(1);
 
-    const running = page.getByTestId("msg-live-stream").getByTestId("msg-tool");
+    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"]');
 
     // 补拉路径（刷新后仅凭 GET /questions，SSE 一帧不发）也必须点亮：
     // 弹窗在挂载时已入队，所以历史一落地卡片就是第四态（没有 running 基线可断言）。
@@ -2125,7 +2134,7 @@ test.describe("sensitive-command-tool Todo9 全链路不回显", () => {
     await page.getByTestId("dm-tab-private-ta_1").click();
     await expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(1);
 
-    const running = page.getByTestId("msg-live-stream").getByTestId("msg-tool");
+    const running = page.locator('[data-testid="msg-tool"][data-status="running"], [data-testid="msg-tool"][data-status="awaiting-input"]');
     await expect(running).toHaveAttribute("data-status", "running");
 
     const seed: SecretQuestionSeed = {
