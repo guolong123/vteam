@@ -27,7 +27,7 @@ import type { AgentStatusEvent, ChannelMessagesCache, RealtimeQuestionEvent, Ses
 import { AgentAvatar, ChatBubble, MessageInput } from "@/src/components/ui";
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
-import { LoadingIndicator, MsgError, QuestionModal, MsgParts } from "@/src/components/chat";
+import { LoadingIndicator, MsgError, QuestionModal, MsgParts, MsgLiveStream } from "@/src/components/chat";
 import type { QuestionModalData, QuestionModalSubmitPayload } from "@/src/components/chat";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
@@ -1275,14 +1275,70 @@ export default function TeamSessionPage() {
     );
   }
 
-  const messages: RealtimeChatMessage[] = isGroupTab
+  const allMessages: RealtimeChatMessage[] = isGroupTab
     ? (messagesQuery.data?.items ?? [])
     : (privateMessagesQuery.data?.items ?? []);
+  // status=processing 的 agent 消息（in-flight 回合）置底独立渲染：其 createdAt 冻结在
+  // 回合起点、会混排进历史中段。群聊恒空数组 —— 群 Tab 渲染路径逐字节不变。filter/sort
+  // 均作用于新副本，不改动 react-query 缓存数组。
+  const liveMessages: RealtimeChatMessage[] = isGroupTab
+    ? []
+    : allMessages
+        .filter((m) => m.senderType === "agent" && m.status === "processing")
+        .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+  // 剩余消息（非 live 集合）仍按原顺序喂给既有 map / 分组 / 跨天分隔。
+  const messages: RealtimeChatMessage[] = liveMessages.length
+    ? allMessages.filter((m) => !(m.senderType === "agent" && m.status === "processing"))
+    : allMessages;
   const nextCursor = isGroupTab
     ? (messagesQuery.data?.nextCursor ?? null)
     : (privateMessagesQuery.data?.nextCursor ?? null);
   const dateSeparatorFlagsByIndex = dateSeparatorFlags(messages);
   const teamEditable = !!queueHeadTask && (queueHeadTask.status === "pending" || queueHeadTask.status === "in_progress" || queueHeadTask.status === "blocked");
+
+  /** 单条消息展示解析（角色/作者/缩写/parts/附件/@我/发送实例）：历史 map 与置底 live 行共用。 */
+  const resolveMessage = (msg: RealtimeChatMessage) => {
+    const agent = msg.senderId ? agentMap.get(msg.senderId) : undefined;
+    const memberHit = msg.senderId ? teamMemberById.get(msg.senderId) : undefined;
+    // 外部渠道（企微）消息：senderId 承载的是**外部发送者展示名**（见
+    // message-inbound.service.ts），不是 agentId/成员 id —— 不可拿它查业务
+    // 映射或推断角色，否则查不到就回落成硬编码 "developer"（曾把企微消息
+    // 误显示为「开发者」）。此处直接用其作作者名，角色标签走中性 external。
+    const isExternal = (msg as unknown as { senderType: string }).senderType === "external";
+    const role: RoleKey =
+      agent?.role ?? memberHit?.role ?? (msg.senderId ? toRole(msg.senderId) : null) ?? "developer";
+    const senderInstanceId = (msg as unknown as { senderInstanceId?: string }).senderInstanceId;
+    // B5/B9：三路业务映射先解析出展示名，裸 sender/成员/实例 id 一律被过滤，
+    // 全部落空时不传 author（由 MessageIdentity/ChatBubble 回落角色标签）
+    const author = resolveDisplayAuthor([
+      senderInstanceId ? instanceNameById.get(senderInstanceId) : undefined,
+      isExternal ? msg.senderId : undefined,
+      agent?.name,
+      memberHit?.name,
+    ]);
+    // B8：头像缩写只从已解析的人名/别名生成（裸 id 已在 resolveDisplayAuthor 被丢弃），
+    // 解析不到名字 → undefined → AgentAvatar 回落角色字母，同角色不同成员因此不撞字母
+    const initials = messageInitials(author);
+    // 过程片段：群聊（平台表，只有 group_post 发布的结论）仅保留 text；
+    // 私聊（session-history，serve 完整会话）全量透传 reasoning/thinking/tool，
+    // 与旧 messages/[id] 私聊页一致，后端已做 synthetic/过程 part 策展
+    const rawParts = (msg as unknown as { content?: { parts?: unknown } })?.content?.parts;
+    const parts = Array.isArray(rawParts)
+      ? isGroupTab
+        ? (rawParts as unknown[]).filter(
+            (p) => (p as { type?: string; synthetic?: boolean }).type === "text"
+              && !(p as { type?: string; synthetic?: boolean }).synthetic,
+          )
+        : (rawParts as unknown[])
+      : [];
+    const isMentionMe = Array.isArray((msg as unknown as { mentions?: unknown }).mentions) &&
+      (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) ||
+        (msg as unknown as { mentions: { type?: string }[] }).mentions.some((m) => m.type === "all")));
+    const attachment = msg.attachmentUrl
+      ? { url: msg.attachmentUrl, name: msg.attachmentName ?? msg.attachmentUrl, ext: msg.attachmentType ?? "" }
+      : undefined;
+    return { isExternal, role, author, initials, parts, isMentionMe, attachment, senderInstanceId };
+  };
 
   return (
     <div data-testid="team-session-root" style={{ flex: 1, minHeight: 0, height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", ...baseFont }}>
@@ -1462,46 +1518,8 @@ export default function TeamSessionPage() {
                   </React.Fragment>
                 );
               };
-              const agent = msg.senderId ? agentMap.get(msg.senderId) : undefined;
-              const memberHit = msg.senderId ? teamMemberById.get(msg.senderId) : undefined;
-              const isExternal = (msg as unknown as { senderType: string }).senderType === "external";
-              // 外部渠道（企微）消息：senderId 承载的是**外部发送者展示名**（见
-              // message-inbound.service.ts），不是 agentId/成员 id —— 不可拿它查业务
-              // 映射或推断角色，否则查不到就回落成硬编码 "developer"（曾把企微消息
-              // 误显示为「开发者」）。此处直接用其作作者名，角色标签走中性 external。
-              const role: RoleKey =
-                agent?.role ?? memberHit?.role ?? (msg.senderId ? toRole(msg.senderId) : null) ?? "developer";
-              // B5/B9：三路业务映射先解析出展示名，裸 sender/成员/实例 id 一律被过滤，
-              // 全部落空时不传 author（由 MessageIdentity/ChatBubble 回落角色标签）
-              const senderInstanceId = (msg as unknown as { senderInstanceId?: string }).senderInstanceId;
-              const author = resolveDisplayAuthor([
-                senderInstanceId ? instanceNameById.get(senderInstanceId) : undefined,
-                isExternal ? msg.senderId : undefined,
-                agent?.name,
-                memberHit?.name,
-              ]);
-              // B8：头像缩写只从已解析的人名/别名生成（裸 id 已在 resolveDisplayAuthor 被丢弃），
-              // 解析不到名字 → undefined → AgentAvatar 回落角色字母，同角色不同成员因此不撞字母
-              const initials = messageInitials(author);
-              // 过程片段：群聊（平台表，只有 group_post 发布的结论）仅保留 text；
-              // 私聊（session-history，serve 完整会话）全量透传 reasoning/thinking/tool，
-              // 与旧 messages/[id] 私聊页一致，后端已做 synthetic/过程 part 策展
-              const rawParts = (msg as unknown as { content?: { parts?: unknown } })?.content?.parts;
-              const parts = Array.isArray(rawParts)
-                ? isGroupTab
-                  ? (rawParts as unknown[]).filter(
-                      (p) => (p as { type?: string; synthetic?: boolean }).type === "text"
-                        && !(p as { type?: string; synthetic?: boolean }).synthetic,
-                    )
-                  : (rawParts as unknown[])
-                : [];
-              const isMentionMe = Array.isArray((msg as unknown as { mentions?: unknown }).mentions) &&
-                (((msg as unknown as { mentions: { type?: string; userId?: string }[] }).mentions.some((m) => m.type === "user" && m.userId === useAuthStore.getState().user?.id) ||
-                  (msg as unknown as { mentions: { type?: string }[] }).mentions.some((m) => m.type === "all")));
-              const attachment = msg.attachmentUrl
-                ? { url: msg.attachmentUrl, name: msg.attachmentName ?? msg.attachmentUrl, ext: msg.attachmentType ?? "" }
-                : undefined;
-              if ((msg as unknown as { senderType: string }).senderType === "external") {
+              const { isExternal, role, author, initials, parts, isMentionMe, attachment, senderInstanceId } = resolveMessage(msg);
+              if (isExternal) {
                 return withSeparator(
                   <ChatBubble
                     key={msg.id}
@@ -1544,6 +1562,23 @@ export default function TeamSessionPage() {
               }
               return withSeparator(
                 <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachment={attachment} initials={initials} status={msg.status} />,
+              );
+            })}
+            {liveMessages.map((msg) => {
+              const { role, author, initials, parts, isMentionMe, attachment, senderInstanceId } = resolveMessage(msg);
+              return (
+                <MsgLiveStream
+                  key={msg.id}
+                  parts={parts}
+                  bodyText={((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string}
+                  author={author}
+                  role={role}
+                  time={formatTime(msg.createdAt)}
+                  initials={initials}
+                  secretAwaiting={secretAwaitingFor(msg.senderId, senderInstanceId)}
+                  isMentionMe={isMentionMe}
+                  attachment={attachment}
+                />
               );
             })}
             {loadingLabel && <LoadingIndicator label={loadingLabel} />}

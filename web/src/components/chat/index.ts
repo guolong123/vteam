@@ -23,5 +23,7 @@ export { MsgUnknownPart, safePartType, summarizeUnknownPart } from "./msg-unknow
 export type { MsgUnknownPartProps } from "./msg-unknown-part";
 export { MsgParts } from "./msg-parts";
 export type { MsgPartsProps, PartShape } from "./msg-parts";
+export { MsgLiveStream } from "./msg-live-stream";
+export type { MsgLiveStreamProps } from "./msg-live-stream";
 export { QuestionModal } from "./question-modal";
 export type { QuestionModalProps, QuestionModalData, QuestionModalSubmitPayload } from "./question-modal";
