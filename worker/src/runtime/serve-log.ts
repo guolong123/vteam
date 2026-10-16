@@ -24,8 +24,12 @@ import * as path from 'path';
  * ⚠️ 本表**只决定"收集哪些行"**，不决定"是否 abort"——abort 判据是下方 SERVE_FATAL_KEYWORDS。
  * 保持宽口径：`stream error`（外层包装）、裸 `429`、`subscribe`（子域 share subscriber 失败）
  * 都收，供全局尸检；把宽表直接当 abort 判据会误杀健康会话（2026-09-22 线上事故）。
+ *
+ * 模型下架（ProviderModelNotFoundError / `Model not found`）也在此收集：serve 对
+ * `prompt_async failed … cause="Cause([Die(ProviderModelNotFoundError: Model not found: …)])"`
+ * 同样只写 stderr，worker 需先收集该行才能交给致命判定/失败证据（否则不识别 → 空等首字超时）。
  */
-export const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe/i;
+export const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429|subscribe|ProviderModelNotFoundError|Model not found/i;
 
 /**
  * 致命关键词（**abort 判据专用，严**，2026-09-22 误杀复查后从宽表中拆出）。
@@ -37,9 +41,13 @@ export const SERVE_ERROR_KEYWORDS = /stream error|AI_APICallError|Rate limit|Fre
  *   永不 abort（线上 08:18 一行双杀 PM+architect 根因），故它只该进证据、不该致命；
  * - `429` 要求 HTTP 状态语义：结构化门只挡得住 INFO 行，`level=ERROR` 行里随机 id
  *   （`messageID=msg_0a429eb…`）碰巧含 `429` 仍会中招。
+ * - `ProviderModelNotFoundError` / `Model not found`：模型在 provider 中已不存在
+ *   （`prompt_async failed … cause="Cause([Die(ProviderModelNotFoundError: Model not found: …)])"`），
+ *   重试同一模型必然继续失败，等满首字超时无意义——顶层（会话自身）命中即快速失败。
+ *   子域 `share subscriber failed` 形态由下方 isServeFatalLine 排除（子 agent 域失败，主循环存活）。
  */
 export const SERVE_FATAL_KEYWORDS =
-  /AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|429\s+Too\s+Many\s+Requests|status(?:Code)?["'\s]*[:=]["'\s]*429\b/i;
+  /AI_APICallError|Rate limit|Free usage|quota|Invalid API key|Unauthorized|ProviderModelNotFoundError|Model not found|429\s+Too\s+Many\s+Requests|status(?:Code)?["'\s]*[:=]["'\s]*429\b/i;
 
 /** 结构化错误门之一：opencode 日志级别字段（真实模型错误恒为 ERROR）。 */
 const SERVE_ERROR_LEVEL_RE = /\blevel=ERROR\b/;
@@ -49,6 +57,24 @@ const SERVE_ERROR_FIELD_RE = /\berror\.(error|name|message|code)=/;
 const SESSION_ID_RE = /session\.?id=(\S+)/i;
 /** 日志文件尾部读取上限（只读最近 64KB，避免把 100MB+ 日志整体载入内存）。 */
 export const SERVE_LOG_TAIL_BYTES = 64 * 1024;
+
+/**
+ * 顶层致命行判定（**abort 判据**，供 exec-server onServeError 使用）：
+ *   1. 排除子域 `share subscriber failed` 行——子 agent 域失败，主循环存活可自恢复，
+ *      **永不 abort**（线上 08:18 一行子域 Model-not-found 秒杀 PM+architect 根因）；
+ *   2. 结构化错误门：`level=ERROR` 或显式 `error.<field>=` 字段（杜绝正常 INFO 行误触发）；
+ *   3. SERVE_FATAL_KEYWORDS 命中具体致命原因。
+ * 三段语义与 exec-server 原内联判据完全一致（拆出纯函数仅为可单测）。
+ */
+export function isServeFatalLine(text: string): boolean {
+  if (/share subscriber/i.test(text)) {
+    return false;
+  }
+  if (!SERVE_ERROR_LEVEL_RE.test(text) && !SERVE_ERROR_FIELD_RE.test(text)) {
+    return false;
+  }
+  return SERVE_FATAL_KEYWORDS.test(text);
+}
 
 /**
  * serve 日志文件的默认路径（次级错误源）：opencode 把诊断日志写
