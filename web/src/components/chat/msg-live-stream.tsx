@@ -10,10 +10,11 @@
  * - 标题行：`生成中` + 三连点 + 折叠开关（data-testid=msg-live-stream-toggle，aria-expanded）；
  *   文案 `▾ 收起`（展开）/ `▸ 生成中 · 点击展开`（折叠）；
  * - 默认展开（streaming），点击折叠；折叠态只有开关，不再回显正文摘录；
- * - 展开体复用 MsgParts（grouped=true，身份不重复），**只喂非 text part**：流式过程中
- *   本行只展示过程（思考跑马灯行 + 工具卡），不回显不断增长的多行正文；外层限高 40vh
- *   并随过程内容增长自动滚底。回合结束（status=sent）后正文作为普通消息出现在历史列表
- *   （page.tsx 的 messages.map → MsgParts → ChatBubble，与本行无关）。
+ * - 展开体复用 MsgParts（grouped=true，身份不重复），喂**非 text part**（思考跑马灯行 + 工具卡），
+ *   并在其下另起一块**普通多行正文**（data-testid=msg-live-stream-text）回显不断增长的 agent
+ *   正文：正文经 useTypewriter **逐字揭示**（非一次性 dump、非单行跑马灯）。外层限高 40vh
+ *   并随过程/正文增长自动滚底。回合结束（status=sent）后正文作为普通消息出现在历史列表
+ *   （page.tsx 的 messages.map → MsgParts → ChatBubble，与本行无关，无 typewriter）。
  *
  * data-testid=msg-live-stream（根，置底行）——折叠开关只存在于本行，**不进 MsgParts**：
  * e2e/chat-density.spec.ts 断言 msg-streaming 内不得出现 button[aria-expanded]，本组件的
@@ -35,6 +36,7 @@ import { MessageIdentity } from "@/src/components/ui";
 import type { ChatBubbleAttachment } from "@/src/components/ui";
 import { LoadingDots } from "./loading-indicator";
 import { MsgParts } from "./msg-parts";
+import { useTypewriter } from "@/src/lib/use-typewriter";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -52,8 +54,8 @@ const secondaryRows: CSSProperties = {
 export interface MsgLiveStreamProps {
   parts: unknown[];
   /**
-   * @deprecated 流式正文不再进入本行渲染（回合结束后作为普通消息出现在历史列表）。
-   * 仅为调用方兼容保留，组件内部忽略。
+   * 流式正文（text part join 优先，缺省回落 content.text）：展开态下以**普通多行块**逐字揭示，
+   * 不再被忽略；回合结束后由历史列表的 ChatBubble 渲染完整正文。
    */
   bodyText?: string;
   /** 已解析的展示作者名（容器剔除裸 id）；缺省时由共享身份栏回落角色标签 */
@@ -86,6 +88,7 @@ function contentSignature(parts: unknown[]): string {
 /** 私聊流式「生成中」独立行：置底 + 可折叠 + 展开体自滚动。 */
 export function MsgLiveStream({
   parts,
+  bodyText,
   author,
   role,
   time,
@@ -98,12 +101,27 @@ export function MsgLiveStream({
 }: MsgLiveStreamProps) {
   const [open, setOpen] = useState(true);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  // 只保留过程 part：text part 不进入本行（流式正文不回显，回合结束后由历史列表渲染）。
+  // 只保留过程 part：text part 不进 MsgParts（正文改由下方独立多行块逐字揭示）。
   const procParts = useMemo(
     () => (parts ?? []).filter((p) => (p as { type?: string } | null)?.type !== "text"),
     [parts],
   );
-  const signature = useMemo(() => contentSignature(procParts), [procParts]);
+  // 流式正文：text part join 优先（与 MsgParts 同口径），缺省回落 content.text。
+  const streamedText = useMemo(() => {
+    const list = (parts ?? []) as { type?: string; text?: string }[];
+    const joined = list
+      .filter((p) => p?.type === "text")
+      .map((p) => p.text ?? "")
+      .join("\n");
+    return joined || bodyText || "";
+  }, [parts, bodyText]);
+  // 逐字揭示：追上当前已到达的正文（粗粒度 delta 也逐字补齐，非一次性 dump）。
+  const revealedBody = useTypewriter(streamedText);
+  // 内容签名含已揭示正文长度：正文逐字增长时同样把展开体滚到底，最新一行始终可见。
+  const signature = useMemo(
+    () => `${contentSignature(procParts)}:${revealedBody.length}`,
+    [procParts, revealedBody.length],
+  );
   // 展开体自身滚动跟随：内容签名变化时把内部 scrollTop 顶到 scrollHeight，
   // 保证最新一行流式输出可见（外层列表由页面 scrollToBottom 负责）。
   useEffect(() => {
@@ -173,6 +191,27 @@ export function MsgLiveStream({
               time={time}
               initials={initials}
             />
+            {revealedBody ? (
+              <div
+                data-testid="msg-live-stream-text"
+                style={{
+                  marginTop: space.sm,
+                  maxWidth: "78%",
+                  padding: `${space.sm}px ${space.md}px`,
+                  borderRadius: radius.md,
+                  backgroundColor: "var(--color-surface)",
+                  border: `1px solid ${neutral[200]}`,
+                  fontSize: fontSize.md,
+                  color: neutral[700],
+                  lineHeight: 1.6,
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  ...baseFont,
+                }}
+              >
+                {revealedBody}
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
