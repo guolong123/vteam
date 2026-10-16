@@ -1192,26 +1192,8 @@ export default function TeamSessionPage() {
   const resetPendingInstanceId = resetSessionMutation.isPending
     ? (resetSessionMutation.variables?.instanceId ?? null)
     : null;
-  // 任务维度增员：保持 POST /tasks/:id/team（保留群系统消息与任务实例语义）。
-  const addInstanceMutation = useMutation({
-    mutationFn: (payload: AddInstancePayload) =>
-      api.post<TaskDetail>(`/tasks/${queueHeadTaskId}/team`, {
-        addInstances: [{ ...(payload.roleId ? { roleId: payload.roleId } : {}), ...(payload.agentId ? { agentId: payload.agentId } : {}), ...(payload.alias ? { alias: payload.alias } : {}) }],
-        removeInstanceIds: [],
-      }),
-    onSuccess: (updated) => {
-      setAddError(null);
-      queryClient.setQueryData<TaskDetail>(["task", queueHeadTaskId], updated);
-      queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
-    },
-    onError: (err) => {
-      console.error("[TeamSession] add instance failed", { teamId, taskId: queueHeadTaskId, error: err });
-      setAddError(isApiError(err) ? err.message : "添加实例失败，请稍后重试");
-    },
-  });
-  // 团队维度增员：团队空闲（无 queueHeadTask）时改走团队级 POST /teams/:id/members。
-  // 成员增员本质是团队级操作：TeamMember（tmm_）是不依附任务的持久单元，任务路径带的
-  // 「群系统消息 + 任务实例」语义在空闲态无处可挂。
+  // 成员增员是团队级操作：TeamMember（tmm_）是不依附任务的持久单元，恒走 POST /teams/:id/members，
+  // 与任务状态无关（服务端在此处写入「{alias} 已加入团队」群系统消息）。
   const addTeamMemberMutation = useMutation({
     mutationFn: (payload: AddInstancePayload) =>
       teamsApi.addMember(teamId, {
@@ -1223,7 +1205,7 @@ export default function TeamSessionPage() {
       setAddError(null);
       queryClient.setQueryData<TeamDto>(["team", teamId], updated);
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      // 成员面板优先读 queueHeadTask.instances（由团队成员派生），需刷新任务维度缓存。
+      // 成员面板优先读 queueHeadTask.instances（服务端由团队成员派生），需刷新任务维度缓存。
       if (queueHeadTaskId) queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
     },
     onError: (err) => {
@@ -1231,19 +1213,14 @@ export default function TeamSessionPage() {
       setAddError(isApiError(err) ? err.message : "添加实例失败，请稍后重试");
     },
   });
-  // 与 server tasksService.updateTeam 的状态校验保持一致：仅 pending/in_progress 可走任务接口。
-  const taskTeamApiEditable =
-    queueHeadTask?.status === "pending" || queueHeadTask?.status === "in_progress";
   const handleAddInstance = async (payload: AddInstancePayload): Promise<boolean> => {
-    if (addInstanceMutation.isPending || addTeamMemberMutation.isPending) return false;
+    if (addTeamMemberMutation.isPending) return false;
     if (!payload.roleId && !payload.agentId) return false;
     setAddError(null);
     return new Promise((resolve) => {
       const callbacks = { onSuccess: () => resolve(true), onError: () => resolve(false) };
-      // 任务维度接口仅在任务可编辑（pending/in_progress）时使用；任务待验收/已完成/已归档或团队空闲时
-      // 一律走团队级接口（成员增员与任务状态无关）。
-      if (queueHeadTaskId && taskTeamApiEditable) addInstanceMutation.mutate(payload, callbacks);
-      else addTeamMemberMutation.mutate(payload, callbacks);
+      // 成员增员是团队级操作，与任务状态无关，恒走 POST /teams/:id/members。
+      addTeamMemberMutation.mutate(payload, callbacks);
     });
   };
 
@@ -1413,7 +1390,7 @@ export default function TeamSessionPage() {
           sessionStatusByAgent={sessionByAgent}
           agentOptions={roleOptionsOf(agentsQuery.data?.items ?? [])}
           customAgents={customAgentsOf(agentsQuery.data?.items ?? [])}
-          adding={addInstanceMutation.isPending || addTeamMemberMutation.isPending}
+          adding={addTeamMemberMutation.isPending}
           addError={addError}
           onAddInstance={handleAddInstance}
           width={membersPanel.width}
