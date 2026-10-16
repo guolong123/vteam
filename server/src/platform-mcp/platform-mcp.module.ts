@@ -7,6 +7,7 @@ import { IssuesModule } from '../issues/issues.module';
 import { QuestionsModule } from '../questions/questions.module';
 import { RealtimeModule } from '../realtime/realtime.module';
 import { TasksModule } from '../tasks/tasks.module';
+import { TeamsModule } from '../teams/teams.module';
 import { TimersModule } from '../timers/timers.module';
 import { WorkersModule } from '../workers/workers.module';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
@@ -60,6 +61,9 @@ import { SkillsModule } from '../skills/skills.module';
     IssuesModule,
     TasksModule,
     QuestionsModule,
+    // team_add_member 团队维度：TeamsModule 导出 TeamsService（addMember）；TeamsModule
+    // 仅 import RealtimeModule/WorkersModule（本模块已 import，均不反向依赖本模块），无环。
+    TeamsModule,
     NotificationChannelsModule,
     TimersModule,
     // F2-M4：SkillsService 改由 SkillsModule 导出（单实例复用）；

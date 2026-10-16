@@ -111,7 +111,6 @@ export function TeamMembersPanel({
   agents,
   loadingAgentIds,
   sessionStatusByAgent,
-  teamEditable,
   agentOptions,
   customAgents,
   adding,
@@ -132,7 +131,6 @@ export function TeamMembersPanel({
   agents: { id: string; instanceId?: string; name: string; role: RoleKey; seq?: number; main?: boolean; enabled?: boolean | null; overrideModelId?: string | null; preferredWorkerId?: string | null }[];
   loadingAgentIds: Set<string>;
   sessionStatusByAgent: Record<string, string>;
-  teamEditable: boolean;
   agentOptions: AgentOption[];
   customAgents: AgentItem[];
   adding: boolean;
@@ -291,7 +289,7 @@ export function TeamMembersPanel({
   };
 
   const openPanel = () => {
-    if (!teamEditable || adding) return;
+    if (adding) return;
     setSelectedRoleId(null);
     setAgentTouched(false);
     setSelectedAgentId("");
@@ -881,9 +879,9 @@ export function TeamMembersPanel({
           type="button"
           data-testid="add-instance-entry"
           aria-label="添加实例"
-          title={teamEditable ? "为任务添加 Agent 实例（自动建会话并绑定）" : "任务待验收/已完成/已归档后不允许调整团队"}
+          title={adding ? "正在添加…" : "为团队添加成员（自动建会话并绑定）"}
           onClick={openPanel}
-          disabled={!teamEditable || adding}
+          disabled={adding}
           style={{
             display: "flex",
             alignItems: "center",
@@ -891,12 +889,12 @@ export function TeamMembersPanel({
             gap: space.xs,
             padding: `${space.sm - 1}px ${space.md}px`,
             borderRadius: radius.md,
-            border: `1.5px dashed ${teamEditable ? neutral[300] : neutral[200]}`,
+            border: `1.5px dashed ${neutral[300]}`,
             backgroundColor: "color-mix(in srgb, var(--color-surface) 70%, transparent)",
-            color: teamEditable ? "#0D9488" : neutral[300],
+            color: "#0D9488",
             fontSize: fontSize.sm,
             fontWeight: 500,
-            cursor: teamEditable ? "pointer" : "not-allowed",
+            cursor: "pointer",
             fontFamily: fontFamily.body,
             transition: "border-color .15s ease, color .15s ease",
           }}

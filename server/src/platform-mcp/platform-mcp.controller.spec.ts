@@ -475,13 +475,18 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(planComplete.inputSchema.properties.selfInstanceId).toEqual({
         type: 'string',
       });
-      // team_add_member：taskId/selfInstanceId/agentId 必填，alias/workDir 可选
+      // team_add_member：team-free —— taskId/teamId 双可选，selfInstanceId/agentId 必填，alias/workDir 可选
       const teamAddMember = tools.find((t) => t.name === 'team_add_member')!;
       expect(teamAddMember.inputSchema.required).toEqual([
-        'taskId',
         'selfInstanceId',
         'agentId',
       ]);
+      expect(teamAddMember.inputSchema.properties.taskId).toEqual({
+        type: 'string',
+      });
+      expect(teamAddMember.inputSchema.properties.teamId).toEqual({
+        type: 'string',
+      });
       expect(teamAddMember.inputSchema.properties.alias).toEqual({
         type: 'string',
       });

@@ -686,7 +686,11 @@ export class QuestionsService {
    * - content.requesterInstanceId：创建时记录真实发起者实例 id（options.requesterInstanceId），
    *   供 confirmByAgent 的自批校验比对（sessionId 只是主成员会话占位，反映不了发起者）。
    *   缺省 null（无发起者身份的历史/占位调用），校验回退会话比对，不静默放宽；
-   * - sessionId 用任务主 Agent 会话占位（仅满足非空约束，平台 question 不实际转发 worker）；
+   * - sessionId 用主 Agent 会话占位（仅满足非空约束，平台 question 不实际转发 worker）：
+   *   任务维度取任务所属团队主成员会话；团队维度（options.teamId）取该团队主成员会话；
+   * - options.teamId：团队维度归属（无任务增员）。taskId 列非空，团队维度落 `team:<teamId>`
+   *   （与 confirmByAgent 的 team:<id> 域一致），sessionId 取真实团队会话使 teamIdOf 经会话
+   *   解析出团队（create/resolve 广播才能带上 team scope，弹窗不丢帧）；
    * - requestId 用 que_platform_ 前缀（区别于 serve 下发的 que_ id，防唯一键碰撞）；
    * - options.onResolved：终态（确认/拒绝）时触发的执行钩子（按 requestId 注册）。
    */
@@ -695,6 +699,7 @@ export class QuestionsService {
     question: { question: string; header?: string; options?: string[] },
     options: {
       agentId?: string;
+      teamId?: string;
       requesterInstanceId?: string;
       onResolved?: PlatformResolveHook;
     } = {},
@@ -716,12 +721,17 @@ export class QuestionsService {
       source: PLATFORM_QUESTION_SOURCE,
       requesterInstanceId: options.requesterInstanceId ?? null,
     } as unknown as Prisma.InputJsonValue;
+    const teamScopeId = options.teamId?.trim() || null;
+    const storedTaskId = teamScopeId ? `team:${teamScopeId}` : taskId;
+    const sessionId = teamScopeId
+      ? ((await this.mainAgentSessionOfTeam(teamScopeId)) ?? 's_placeholder')
+      : ((await this.mainAgentSessionOf(taskId)) ?? 's_placeholder');
     const row = await this.prisma.agentQuestion.create({
       data: {
         id,
         requestId,
-        sessionId: (await this.mainAgentSessionOf(taskId)) ?? 's_placeholder',
-        taskId,
+        sessionId,
+        taskId: storedTaskId,
         agentId: options.agentId ?? '',
         kind: AGENT_QUESTION_KINDS.QUESTION,
         content,
@@ -749,7 +759,7 @@ export class QuestionsService {
       createScope,
     );
     this.logger.log(
-      `[questions] 平台创建 question id=${row.id} requestId=${requestId} taskId=${taskId}（确认门）`,
+      `[questions] 平台创建 question id=${row.id} requestId=${requestId} taskId=${storedTaskId}（确认门）`,
     );
     return this.toDto(row, await this.managedModeOf(row.taskId, row.sessionId));
   }
