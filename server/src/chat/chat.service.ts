@@ -27,6 +27,11 @@ import { CreateDmChannelDto } from './dto/create-dm-channel.dto';
 import { CreateMessageDto, MentionInput } from './dto/create-message.dto';
 import { QueryMessagesDto } from './dto/query-messages.dto';
 import { MessageDispatcher } from './message-dispatcher';
+import {
+  concatText,
+  isInjectedPromptPart,
+  stripInjectedPromptParts,
+} from './message-parts';
 
 /** 消息主键前缀（15 篇 §2.2：m_<零填充序号>，数值序 == 字典序，兼作历史游标）。 */
 const MESSAGE_ID_PREFIX = 'm';
@@ -588,7 +593,14 @@ export class ChatService {
    * - session agent 项仅当未被 DB 引用时保留：DB agent 行 content.parts[].messageID
    *   == worker info.id 即已落库（含 reasoning/tool parts），DB 行为准；无引用
    *   （流式中/未落库，含无 info.id 的 ses- 合成项）则作为增补保留过程渲染。
-   * - 合并按 createdAt 升序（稳定排序，同刻 DB 优先）。
+   * - 去重加固：DB 存在 processing 聚合行（单行累积整轮流式内容，status=processing）
+   *   时，取其最早 createdAt（聚合行 createdAt 冻结于轮次首次 delta，恒定不变）为界，
+   *   会话中 createdAt >= 该时刻的 agent 增补项均已吸收进聚合行，直接丢弃；
+   *   无 processing 行时增补逻辑原样不动。
+   * - 排序：先按 createdAt 升序（稳定排序，同刻 DB 优先），再二次稳定分区：
+   *   status=processing 行一律钉到列表末尾（保持彼此相对 createdAt 顺序），
+   *   非 processing 行顺序不变。流式聚合行 createdAt 冻结在轮次起点，若不后置
+   *   会被后续落库消息压在下方，出现「流式块卡在列表中部、新消息堆在下面」。
    */
   private async mergeSessionWithPlatform(
     channelId: string,
@@ -611,16 +623,44 @@ export class ChatService {
         if (typeof mid === 'string' && mid) persisted.add(mid);
       }
     }
+    // DB 侧 processing 聚合行（流式轮次的单行累积表示）的最早 createdAt：
+    // 该时刻之后 serve 会话产生的 agent 增量都已落进聚合行，重复保留即双渲染
+    const processingRows = dbItems.filter(
+      (item) => item.status === MESSAGE_STATUS.processing,
+    );
+    const firstProcessingAt =
+      processingRows.length > 0
+        ? Math.min(
+            ...processingRows.map((item) =>
+              Date.parse(item.createdAt as string),
+            ),
+          )
+        : null;
     const supplement = sessionItems.filter((item) => {
       if (item.senderType !== SENDER_TYPE.agent) return false;
-      return typeof item.id !== 'string' || !persisted.has(item.id);
+      if (typeof item.id === 'string' && persisted.has(item.id)) return false;
+      if (firstProcessingAt !== null) {
+        const createdAt = Date.parse(item.createdAt as string);
+        if (!Number.isNaN(createdAt) && createdAt >= firstProcessingAt) {
+          return false;
+        }
+      }
+      return true;
     });
     const merged = [...dbItems, ...supplement];
     merged.sort(
       (a, b) =>
         Date.parse(a.createdAt as string) - Date.parse(b.createdAt as string),
     );
-    return merged;
+    // 稳定分区：processing 行（进行中的流式轮次）钉到末尾，其余行保持
+    // createdAt 升序不动；聚合行后置后前端轮询始终能看到最新流式块
+    const live = merged.filter(
+      (item) => item.status === MESSAGE_STATUS.processing,
+    );
+    const rest = merged.filter(
+      (item) => item.status !== MESSAGE_STATUS.processing,
+    );
+    return [...rest, ...live];
   }
 
   /** 错误信息归一（worker 拉取失败时用于日志）。 */
@@ -1991,13 +2031,43 @@ export class ChatService {
       senderType: row.senderType,
       senderId: row.senderId,
       senderInstanceId: row.senderInstanceId ?? null,
-      content: row.content,
+      content: this.sanitizeInjectedAgentContent(row.senderType, row.content),
       mentions: row.mentions ?? [],
       attachmentUrl: row.attachmentUrl,
       attachmentName: row.attachmentName,
       attachmentType: row.attachmentType,
       status: row.status,
       createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  /**
+   * 读取期注入提示清洗（无需数据迁移即可修复历史脏数据）：**agent 行** content.parts
+   * 里的「注入提示」part（worker 误把服务端拼好的整段用户提示当流式增量回送并落库）
+   * 在 DTO 层剔除，并按剩余非 synthetic text part 重算 content.text——
+   * 否则正文仍含整段注入块。仅 agent 行：user 行的注入块是服务端**有意**存储的
+   * 组装消息展示（见 worker-dispatcher 组装消息回写注释），清洗即为回归。
+   */
+  private sanitizeInjectedAgentContent(
+    senderType: string,
+    content: unknown,
+  ): unknown {
+    if (senderType !== SENDER_TYPE.agent) return content;
+    if (content === null || typeof content !== 'object') return content;
+    const parts = (content as { parts?: unknown }).parts;
+    if (!Array.isArray(parts)) return content;
+    const hasInjected = parts.some(
+      (p) =>
+        p !== null &&
+        typeof p === 'object' &&
+        isInjectedPromptPart(p as Record<string, unknown>),
+    );
+    if (!hasInjected) return content;
+    const kept = stripInjectedPromptParts(parts);
+    return {
+      ...(content as Record<string, unknown>),
+      text: concatText(kept),
+      parts: kept,
     };
   }
 

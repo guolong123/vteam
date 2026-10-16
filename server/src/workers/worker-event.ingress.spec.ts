@@ -298,6 +298,63 @@ describe('WorkerEventIngress', () => {
       );
     });
 
+    it('注入提示防护：delta 含「注入提示」text part → 落库/广播均剔除，只留 agent 正常 part', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      prisma.message.create.mockResolvedValue({
+        id: 'm_0000000099',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: {
+          text: '你好',
+          parts: [{ type: 'text', text: '你好', synthetic: false }],
+        },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      await ingress.handleEvent(
+        deltaEvent(99, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [
+            {
+              type: 'text',
+              text: '【任务上下文】你的当前任务 ID：t_1。需要群聊历史时调用工具。',
+            },
+            { type: 'text', text: '你好', synthetic: false },
+          ],
+          status: 'streaming',
+        }),
+      );
+
+      // 注入提示 part 被剔除后只剩 agent 正文（text 重算不含注入块）
+      expect(prisma.message.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            content: {
+              text: '你好',
+              parts: [{ type: 'text', text: '你好', synthetic: false }],
+            },
+          }),
+        }),
+      );
+      // 广播 delta 也不得携带注入 part
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.MESSAGE_PART_DELTA,
+        expect.objectContaining({
+          delta: [{ type: 'text', text: '你好', synthetic: false }],
+        }),
+        { type: 'channel', id: 'c_dm' },
+      );
+    });
+
     it('D1 回归：agent.status{error} → 同键组装态缓存失效，重试 delta 不得 update 已 failed 行', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: 'c_dm',

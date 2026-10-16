@@ -77,7 +77,7 @@ import {
 import {
   hasRenderableContent,
   isStaleToolOnlyContent,
-  normalizeParts,
+  stripInjectedPromptParts,
 } from './message-parts';
 import {
   AGENT_QUESTION_KINDS,
@@ -3124,7 +3124,9 @@ export class WorkerDispatcher
     // 私聊独白落库：group_post 声明剥离（协议标签不入独白）；parts 全量保留
     // （reasoning/tool 前端折叠展示）；流式 processing 消息终态化为 sent 防双消息
     const rawParts = Array.isArray(payload.parts) ? payload.parts : [];
-    const finalParts = normalizeParts(rawParts);
+    // 终态注入提示防护：worker 可能把服务端注入的整段用户提示当正文 part 回送，
+    // 终态落库前剔除，避免 processing 行被收敛成带注入块的 sent 行。
+    const finalParts = stripInjectedPromptParts(rawParts);
     const groupPost = extractGroupPost(text);
     const displayText =
       groupPost !== null ? stripGroupPostDeclarations(text) : text;

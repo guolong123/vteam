@@ -21,6 +21,38 @@ export function normalizeParts(parts: unknown): Array<Record<string, unknown>> {
 }
 
 /**
+ * 注入提示块标记（由服务端 worker-dispatcher 组装 prompt 时前置，见
+ * worker-dispatcher.ts 的【任务上下文】/【团队上下文】/【群聊回复要求】拼接）。
+ * 正常情况下这些块只存在于 user 触发消息（服务端有意回写展示）；当 worker 异常
+ * 地把「拼好的整段用户提示」当流式增量回送时，其 text 即以这些标记开头。
+ */
+export const INJECTED_PROMPT_MARKERS = [
+  '【任务上下文】',
+  '【团队上下文】',
+  '【群聊回复要求】',
+] as const;
+
+/**
+ * 是否「注入提示」part：type==='text' 且**去除首尾空白后**的文本以任一注入标记
+ * **开头**——即服务端注入块 + 用户原文拼接成的整段提示被误当正文。
+ * 仅精确标记前缀命中才算，正文里出现相似字样（如 '【重要】...'）或标记不在开头
+ * 的 text 一律不匹配，避免误杀 agent 正常输出。
+ */
+export function isInjectedPromptPart(p: Record<string, unknown>): boolean {
+  if (p.type !== 'text') return false;
+  const text = typeof p.text === 'string' ? p.text : '';
+  const trimmed = text.trim();
+  return INJECTED_PROMPT_MARKERS.some((marker) => trimmed.startsWith(marker));
+}
+
+/** 归一化 parts 后剔除注入提示 part（agent 消息不得把服务端注入 prompt 当正文渲染）。 */
+export function stripInjectedPromptParts(
+  parts: unknown,
+): Array<Record<string, unknown>> {
+  return normalizeParts(parts).filter((p) => !isInjectedPromptPart(p));
+}
+
+/**
  * 可渲染 part 类型：与前端 MsgParts 分发口径一致（text 正文 + reasoning/tool/error
  * 过程卡片）。step-start/step-finish/snapshot/patch 等内部片段前端不渲染——
  * 只含这些类型的「消息」在 UI 上是空消息，不应建行/应清理。

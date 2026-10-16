@@ -1230,6 +1230,66 @@ describe('ChatService', () => {
       expect(asst2.senderType).toBe('agent');
     });
 
+    it('读取期注入提示清洗：agent 行剔除注入 part 并重算 text；user 行（有意存注入块）原样不动', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      // 无 serve 增补，只验证 DB 行的读取期清洗
+      workerClient.getMessages.mockResolvedValue([]);
+      // DB 行（id 降序）：agent 脏行（注入 part + 正文）在上，user 行（有意存注入块）在下
+      prisma.message.findMany.mockResolvedValue([
+        messageRow({
+          id: 'm_0000000010',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: {
+            text: '【任务上下文】你的当前任务 ID：t_1。结论如下',
+            parts: [
+              {
+                type: 'text',
+                text: '【任务上下文】你的当前任务 ID：t_1。需要群聊历史时调用工具。',
+              },
+              { type: 'text', text: '结论如下', synthetic: false },
+            ],
+          },
+          createdAt: new Date(2000),
+        }),
+        messageRow({
+          id: 'm_0000000009',
+          senderType: SENDER_TYPE.user,
+          senderId: userId,
+          content: {
+            text: '【任务上下文】你的当前任务 ID：t_1。请问怎么处理？',
+            parts: [],
+          },
+          createdAt: new Date(1000),
+        }),
+      ]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+      const items = result.items as Array<Record<string, any>>;
+
+      const agent = items.find((m) => m.id === 'm_0000000010');
+      expect(agent.senderType).toBe('agent');
+      // 注入 part 剔除，parts 只剩 agent 正文；text 按剩余 text part 重算
+      expect(agent.content.parts).toEqual([
+        { type: 'text', text: '结论如下', synthetic: false },
+      ]);
+      expect(agent.content.text).toBe('结论如下');
+
+      const user = items.find((m) => m.id === 'm_0000000009');
+      expect(user.senderType).toBe('user');
+      // user 行注入块是服务端有意存储 → 读取期不得清洗
+      expect(user.content.text).toBe(
+        '【任务上下文】你的当前任务 ID：t_1。请问怎么处理？',
+      );
+    });
+
     it('serve 消息按 time.created 升序（乱序输入 → 输出时间正序）', async () => {
       allowAccess(privateChannel());
       (prisma.session as any).findMany = jest
@@ -1457,6 +1517,215 @@ describe('ChatService', () => {
         'ses_abc',
       );
       expect(result.source).toBe('session');
+    });
+
+    it('流式聚合行（processing）createdAt 最早 → 排序后钉到列表末尾', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.getMessages.mockResolvedValue([]);
+      // DB（id 降序 mock）：用户追问(5000,sent) + 已落库 agent(3000,sent) +
+      // 流式聚合行(1000,processing，createdAt 冻结在轮次起点)
+      prisma.message.findMany.mockResolvedValue([
+        messageRow({
+          id: 'm_0000000003',
+          senderType: SENDER_TYPE.user,
+          senderId: userId,
+          content: { text: '追问', parts: [] },
+          createdAt: new Date(5000),
+        }),
+        messageRow({
+          id: 'm_0000000002',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: {
+            text: '上一轮回复',
+            parts: [{ type: 'text', text: '上一轮回复', messageID: 'msg_old' }],
+          },
+          status: MESSAGE_STATUS.sent,
+          createdAt: new Date(3000),
+        }),
+        messageRow({
+          id: 'm_0000000001',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: {
+            text: '流式中',
+            parts: [{ type: 'text', text: '流式中', messageID: 'msg_live' }],
+          },
+          status: MESSAGE_STATUS.processing,
+          createdAt: new Date(1000),
+        }),
+      ]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      const items = result.items as Array<Record<string, any>>;
+      // 非 processing 行保持 createdAt 升序，processing 聚合行钉到末尾
+      expect(items.map((m) => m.id)).toEqual([
+        'm_0000000002',
+        'm_0000000003',
+        'm_0000000001',
+      ]);
+      expect(items[2].status).toBe(MESSAGE_STATUS.processing);
+    });
+
+    it('多条 processing 行 → 全部钉到末尾且保持彼此 createdAt 升序', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.getMessages.mockResolvedValue([]);
+      // DB：sent(3000) + processing(1000) + processing(4000) + user(6000)
+      prisma.message.findMany.mockResolvedValue([
+        messageRow({
+          id: 'm_0000000004',
+          senderType: SENDER_TYPE.user,
+          senderId: userId,
+          content: { text: '最新消息', parts: [] },
+          createdAt: new Date(6000),
+        }),
+        messageRow({
+          id: 'm_0000000003',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: { text: '后一轮流式', parts: [] },
+          status: MESSAGE_STATUS.processing,
+          createdAt: new Date(4000),
+        }),
+        messageRow({
+          id: 'm_0000000002',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: { text: '终态回复', parts: [] },
+          status: MESSAGE_STATUS.sent,
+          createdAt: new Date(3000),
+        }),
+        messageRow({
+          id: 'm_0000000001',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: { text: '先一轮流式', parts: [] },
+          status: MESSAGE_STATUS.processing,
+          createdAt: new Date(1000),
+        }),
+      ]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      const items = result.items as Array<Record<string, any>>;
+      // sent(3000) < user(6000) 保持原序；processing(1000) < processing(4000) 钉尾升序
+      expect(items.map((m) => m.id)).toEqual([
+        'm_0000000002',
+        'm_0000000004',
+        'm_0000000001',
+        'm_0000000003',
+      ]);
+    });
+
+    it('DB 存在 processing 聚合行 → serve 中 createdAt >= 它的 agent 增补项被抑制（已吸收）', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.getMessages.mockResolvedValue([
+        {
+          info: { id: 'msg_asst_early', role: 'assistant', time: { created: 2000 } },
+          parts: [{ type: 'text', text: '早于聚合行', synthetic: false }],
+        },
+        {
+          info: { id: 'msg_asst_late', role: 'assistant', time: { created: 3000 } },
+          parts: [{ type: 'text', text: '已被聚合行吸收', synthetic: false }],
+        },
+      ]);
+      // DB：用户提问(1000,sent) + 流式聚合行(2500,processing)
+      prisma.message.findMany.mockResolvedValue([
+        messageRow({
+          id: 'm_0000000002',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: { text: '流式聚合', parts: [] },
+          status: MESSAGE_STATUS.processing,
+          createdAt: new Date(2500),
+        }),
+        messageRow({
+          id: 'm_0000000001',
+          senderType: SENDER_TYPE.user,
+          senderId: userId,
+          content: { text: '提问', parts: [] },
+          createdAt: new Date(1000),
+        }),
+      ]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      const items = result.items as Array<Record<string, any>>;
+      // msg_asst_late(3000) >= 聚合行(2500) → 抑制；msg_asst_early(2000) < 2500 → 保留
+      expect(items.map((m) => m.id)).toEqual([
+        'm_0000000001',
+        'msg_asst_early',
+        'm_0000000002',
+      ]);
+    });
+
+    it('DB 无 processing 行 → 增补逻辑不变（晚于 DB 行的 serve agent 增补保留）', async () => {
+      allowAccess(privateChannel());
+      (prisma.session as any).findMany = jest
+        .fn()
+        .mockResolvedValue([boundSession()]);
+      prisma.worker.findUnique.mockResolvedValue({
+        id: 'w_1',
+        capabilities: {},
+      });
+      workerClient.getMessages.mockResolvedValue([
+        {
+          info: { id: 'msg_asst_live', role: 'assistant', time: { created: 3000 } },
+          parts: [{ type: 'text', text: '流式增补', synthetic: false }],
+        },
+      ]);
+      // DB 全为 sent：增补项不受 processing 时间界约束
+      prisma.message.findMany.mockResolvedValue([
+        messageRow({
+          id: 'm_0000000002',
+          senderType: SENDER_TYPE.agent,
+          senderId: 'a_product',
+          content: {
+            text: '已落库',
+            parts: [{ type: 'text', text: '已落库', messageID: 'msg_old' }],
+          },
+          status: MESSAGE_STATUS.sent,
+          createdAt: new Date(2500),
+        }),
+        messageRow({
+          id: 'm_0000000001',
+          senderType: SENDER_TYPE.user,
+          senderId: userId,
+          content: { text: '提问', parts: [] },
+          createdAt: new Date(1500),
+        }),
+      ]);
+
+      const result = await service.getSessionHistory(channelId, userId);
+
+      const items = result.items as Array<Record<string, any>>;
+      expect(items.map((m) => m.id)).toEqual([
+        'm_0000000001',
+        'm_0000000002',
+        'msg_asst_live',
+      ]);
     });
   });
 
