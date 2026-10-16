@@ -423,9 +423,53 @@ function upsertMessage(queryClient: QueryClient, message: RealtimeChatMessage): 
       const idx = old.items.findIndex((m) => m.id === message.id);
       if (idx === -1) return { ...old, items: [...old.items, message] };
       if (old.items[idx].status !== "processing") return old; // 终态优先：补拉重放不覆盖
+      // 流式单调守卫（defense-in-depth，后端已是权威）：processing 期间不让同一 part.id
+      // 的 text/reasoning 文本变短——乱序/回退帧不得把已渲染的更长文本替换掉。
+      if (message.status === "processing" && regressesTextualParts(old.items[idx], message)) {
+        return old;
+      }
       const items = [...old.items];
       items[idx] = message;
       return { ...old, items };
     },
   );
+}
+
+/** 文本类 part 的候选文本字段（与后端 partTextualValue 同口径）。 */
+function textualPartValue(part: unknown): string {
+  if (part === null || typeof part !== "object") return "";
+  const p = part as Record<string, unknown>;
+  if (p.type !== "text" && p.type !== "reasoning" && p.type !== "thinking") return "";
+  let out = "";
+  for (const key of ["text", "summary", "thoughts", "detail"] as const) {
+    const v = p[key];
+    if (typeof v === "string") out += v;
+  }
+  return out;
+}
+
+/**
+ * 新消息是否让某个同 id 的 text/reasoning part 文本变短（回退）。
+ * 只比长度：更短即回退（后端已保证非回退帧是真前缀/后缀扩展，这里是最廉价的兜底）。
+ */
+function regressesTextualParts(
+  oldMsg: RealtimeChatMessage,
+  newMsg: RealtimeChatMessage,
+): boolean {
+  const oldById = new Map<string, number>();
+  for (const part of oldMsg.content?.parts ?? []) {
+    const p = part as Record<string, unknown> | null;
+    const id = p && typeof p.id === "string" && p.id.length > 0 ? p.id : undefined;
+    if (id !== undefined) oldById.set(id, textualPartValue(part).length);
+  }
+  if (oldById.size === 0) return false;
+  for (const part of newMsg.content?.parts ?? []) {
+    const p = part as Record<string, unknown> | null;
+    const id = p && typeof p.id === "string" && p.id.length > 0 ? p.id : undefined;
+    if (id === undefined) continue;
+    const prevLen = oldById.get(id);
+    if (prevLen === undefined) continue;
+    if (textualPartValue(part).length < prevLen) return true;
+  }
+  return false;
 }

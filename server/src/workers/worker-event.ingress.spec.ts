@@ -1762,6 +1762,96 @@ describe('WorkerEventIngress', () => {
       });
     });
 
+    it('单调守卫：同 part.id 更短文本快照被丢弃，DB 保留更长旧文本（修流式回退闪烁）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const fullPart = {
+        id: 'prt_t',
+        type: 'text',
+        text: 'hello world',
+        synthetic: false,
+      };
+      // SSE 晚于轮询建立时合成的更短后缀片段（无包含关系的前缀回退形态）
+      const stalePart = {
+        id: 'prt_t',
+        type: 'text',
+        text: 'hello',
+        synthetic: false,
+      };
+      prisma.message.findFirst.mockResolvedValueOnce({
+        id: 'm_stream',
+        content: { text: 'hello world', parts: [fullPart] },
+      });
+      prisma.message.update.mockResolvedValue({
+        id: 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: 'hello world', parts: [fullPart] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      expect(
+        await ingress.handleEvent(
+          deltaEvent(33, {
+            taskId: 't_1',
+            agentId: 'a_1',
+            sessionId: 's_1',
+            channelId: 'c_dm',
+            parts: [stalePart],
+          }),
+        ),
+      ).toBe(true);
+
+      // 更短快照被丢弃：落库内容仍是更长旧文本（不回退）
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_stream' },
+        data: { content: { text: 'hello world', parts: [fullPart] } },
+      });
+    });
+
+    it('单调守卫：更长前缀扩展快照仍被接受（不阻断正常流式累积）', async () => {
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
+      const v1 = { id: 'prt_t', type: 'text', text: 'hello', synthetic: false };
+      const v2 = { id: 'prt_t', type: 'text', text: 'hello world', synthetic: false };
+      prisma.message.findFirst.mockResolvedValueOnce({
+        id: 'm_stream',
+        content: { text: 'hello', parts: [v1] },
+      });
+      prisma.message.update.mockResolvedValue({
+        id: 'm_stream',
+        channelId: 'c_dm',
+        senderType: SENDER_TYPE.agent,
+        senderId: 'a_1',
+        content: { text: 'hello world', parts: [v2] },
+        mentions: null,
+        status: MESSAGE_STATUS.processing,
+        createdAt: new Date('2026-08-10T00:00:00Z'),
+      });
+
+      await ingress.handleEvent(
+        deltaEvent(34, {
+          taskId: 't_1',
+          agentId: 'a_1',
+          sessionId: 's_1',
+          channelId: 'c_dm',
+          parts: [v2],
+        }),
+      );
+
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_stream' },
+        data: { content: { text: 'hello world', parts: [v2] } },
+      });
+    });
+
     it('无 id 的 part 保持追加语义（不因合并逻辑被覆盖）', async () => {
       prisma.chatChannel.findUnique.mockResolvedValue({
         id: 'c_dm',

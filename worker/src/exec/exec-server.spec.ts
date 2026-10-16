@@ -3504,4 +3504,59 @@ describe('ExecServer：SSE 转发 onPart 过滤（严格 assistant-only）', () 
       await sse.close();
     }
   });
+
+  it('anchoring：未见过整快照的 delta 被丢弃；见过 text-start 整快照后 delta 正常上送', async () => {
+    const { driver, getMessages } = mockDriver();
+    let finish = false;
+    getMessages.mockImplementation(async () => (finish ? FINISH_MSGS : []));
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await sse.waitForConnection();
+      sse.push({ type: 'message.updated', properties: { info: { id: 'msg_asst', role: 'assistant' } } });
+      // ① 该 part 的权威整快照尚未到达 → 增量片段必须丢弃（连接晚于 part 开始的不完整后缀）
+      sse.push({
+        type: 'message.part.delta',
+        properties: { sessionID: 'ses_1', messageID: 'msg_asst', partID: 'prt_t', field: 'text', delta: '片段' },
+      });
+      // ② text-start 整快照 → 记录该 part，后续增量可放行
+      sse.push(ssePart({ id: 'prt_t', type: 'text', sessionID: 'ses_1', messageID: 'msg_asst', text: '' }));
+      sse.push({
+        type: 'message.part.delta',
+        properties: { sessionID: 'ses_1', messageID: 'msg_asst', partID: 'prt_t', field: 'text', delta: '你好' },
+      });
+
+      await waitFor(() =>
+        sent.some(
+          (s) =>
+            s.type === 'message.part.delta' &&
+            (s.payload.parts as ServePart[]).some((p) => p.id === 'prt_t' && p.text === '你好'),
+        ),
+      );
+
+      const prtT = sent
+        .filter((s) => s.type === 'message.part.delta')
+        .flatMap((s) => (s.payload.parts as ServePart[]))
+        .filter((p) => p.id === 'prt_t');
+      expect(prtT.some((p) => p.text === '片段')).toBe(false);
+      expect(prtT.some((p) => p.text === '你好')).toBe(true);
+
+      finish = true;
+      await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
 });

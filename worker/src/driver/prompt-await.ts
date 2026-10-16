@@ -874,6 +874,53 @@ export class MessageDeltaTracker {
     this.sentPartKeys.set(part.id ?? `<noid>:${fingerprintOf(part)}`, fingerprintOf(part));
   }
 
+  /**
+   * SSE 实时路**单调准入**：仅当 part 对同一 part.id 而言是「新增或推进」的快照才放行
+   * 并更新基准；否则丢弃且**不降低**已记录基准。与 extractNewParts 共用 sentPartKeys
+   * 单一基准（双路不会互相回退覆盖）。返回 true = 可上送。
+   *
+   * 为什么需要：serve /event 不重放历史帧，SSE 连接**晚于**同轮轮询建立时，delta 缓冲
+   * 从零累积——合成 part 的文本会**短于**轮询路已上送的全文（且是全文的后缀片段）。
+   * 旧实现（noteSent 无条件记录 + 无条件上送）会把该短快照发出去，经 server
+   * last-write-wins 合并 / 前端整条替换覆盖更长文本 → 渲染回退（先出现→消失→再出现）。
+   *
+   * 规则：
+   * - tool：进度值严格大于已记录 → 放行（pending→running→completed；旧快照不回退）
+   * - text/reasoning：`kind=delta`（增量合成，可能是不完整后缀）要求文本累计长度**严格增长**；
+   *   `kind=update`（权威整快照）允许**等长**替换（如 reasoning 终态修正 type/time），
+   *   但仍拒绝更短快照
+   * - 其余类型：仅首次出现放行
+   */
+  admitSsePart(part: ServePart, kind: 'update' | 'delta' = 'delta'): boolean {
+    const key = part.id ?? `<noid>:${fingerprintOf(part)}`;
+    const prev = this.sentPartKeys.get(key);
+    const fp = fingerprintOf(part);
+    if (prev === undefined) {
+      this.sentPartKeys.set(key, fp);
+      return true;
+    }
+    if (part.type === 'tool') {
+      if (Number(fp) > Number(prev)) {
+        this.sentPartKeys.set(key, fp);
+        return true;
+      }
+      return false;
+    }
+    if (part.type === 'text' || part.type === 'reasoning') {
+      if (fp === '') {
+        return false;
+      }
+      const prevLen = prev.startsWith('L') ? Number(prev.slice(1)) : 0;
+      const curLen = Number(fp.slice(1));
+      if (curLen > prevLen || (kind === 'update' && curLen === prevLen)) {
+        this.sentPartKeys.set(key, fp);
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+
   /** 重置已上送集合（多轮执行复用实例时隔离）。 */
   reset(): void {
     this.sentPartKeys.clear();

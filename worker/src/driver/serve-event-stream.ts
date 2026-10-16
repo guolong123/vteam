@@ -37,13 +37,20 @@ export interface ServeStreamPart {
   [key: string]: unknown;
 }
 
+/** 回调来源：`update` = `message.part.updated` 整 part 快照（权威）；`delta` = `message.part.delta` 累积合成 part。 */
+export type ServePartKind = 'update' | 'delta';
+
 export interface ServeEventStreamOptions {
   /** serve baseUrl（http://127.0.0.1:<port>） */
   baseUrl: string;
   /** serve Basic Auth 密码（空 = 不鉴权） */
   serverPassword?: string;
-  /** part 更新回调（已按会话过滤由调用方负责） */
-  onPart: (part: ServeStreamPart) => void;
+  /**
+   * part 更新回调（已按会话过滤由调用方负责）。
+   * `kind` 区分权威整快照（update）与增量合成（delta）：调用方据此做单调准入——
+   * update 允许等长替换（类型/终态修正），delta 要求严格增长（拒绝重连后从零累积的短片段）。
+   */
+  onPart: (part: ServeStreamPart, kind: ServePartKind) => void;
   /** message.updated 回调：建立 assistant 消息集合（info.id + info.role） */
   onMessageInfo?: (info: { id?: unknown; role?: unknown }) => void;
   /** 连接成活（收到首帧 server.connected） */
@@ -110,6 +117,13 @@ export class ServeEventStream {
   private reconnectTimer: NodeJS.Timeout | null = null;
   /** (partID) → 累积 delta 文本（message.part.delta 流式增量合成用；同 part 的 field 视为稳定）。 */
   private readonly deltaBuffers = new Map<string, { sessionID: string; messageID: string; field: string; text: string }>();
+  /**
+   * (partID) → 该 part 的类型（由 `message.part.updated` 整快照建立）。
+   * delta 帧**不含** part 类型（serve 1.19 reasoning 增量同样以 field=text 下发），
+   * 只有整快照带 type——据此把增量合成成正确的 text/reasoning，避免把 reasoning
+   * 内容错标成 text（前端会把思考内容渲染成正文）。缺省（未见过快照）回落 text。
+   */
+  private readonly deltaPartTypes = new Map<string, string>();
 
   constructor(opts: ServeEventStreamOptions) {
     this.opts = opts;
@@ -133,10 +147,16 @@ export class ServeEventStream {
     this.controller?.abort();
     this.controller = null;
     this.deltaBuffers.clear();
+    this.deltaPartTypes.clear();
   }
 
   private async connect(): Promise<void> {
     if (this.closed) return;
+    // (重)连接：serve /event 是**实时总线**，不重放历史帧。旧连接缓冲的 delta 只是
+    // 已经流过的文本片段，跨连接不得续用——清空后新连接从零累积（未见过
+    // part.updated 的 part 由调用方按 kind=delta 单调准入拦截，不回退已上送全文）。
+    this.deltaBuffers.clear();
+    this.deltaPartTypes.clear();
     const controller = new AbortController();
     this.controller = controller;
     const url = `${this.opts.baseUrl.replace(/\/+$/, '')}/event`;
@@ -210,9 +230,11 @@ export class ServeEventStream {
     if (type === 'message.part.updated') {
       const part = props.part as ServeStreamPart | undefined;
       if (part && typeof part.id === 'string' && typeof part.type === 'string') {
-        // 整快照到达：清除该 part 的 delta 累积缓冲（权威覆盖，旧增量作废）
+        // 整快照到达：清除该 part 的 delta 累积缓冲（权威覆盖，旧增量作废），
+        // 并记录其类型供后续 delta 帧合成（delta 帧本身不带 type）。
         this.deltaBuffers.delete(part.id);
-        this.opts.onPart(part);
+        this.deltaPartTypes.set(part.id, part.type);
+        this.opts.onPart(part, 'update');
       }
       return;
     }
@@ -233,14 +255,19 @@ export class ServeEventStream {
             };
       buf.text += delta;
       this.deltaBuffers.set(partID, buf);
-      // 合成 part：text/reasoning 的增量字段统一成 text（前端取 part.text）
-      this.opts.onPart({
-        id: partID,
-        type: field === 'reasoning' ? 'reasoning' : 'text',
-        sessionID: buf.sessionID,
-        messageID: buf.messageID,
-        text: buf.text,
-      });
+      // 合成 part：类型取该 part 整快照记录的类型（reasoning 增量 field 亦为 text，
+      // 只能靠快照区分），未知时回落 text；调用方按 kind=delta 单调准入。
+      const trackedType = this.deltaPartTypes.get(partID);
+      this.opts.onPart(
+        {
+          id: partID,
+          type: trackedType === 'reasoning' || trackedType === 'thinking' ? trackedType : 'text',
+          sessionID: buf.sessionID,
+          messageID: buf.messageID,
+          text: buf.text,
+        },
+        'delta',
+      );
       return;
     }
     // 其余事件（session.idle / permission.asked / question.asked 等）本路不消费：
