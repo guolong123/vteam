@@ -5,7 +5,12 @@ import {
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { IdGeneratorService } from '../common/id-generator';
-import { CHANNEL_TYPE, EVENT_TYPES } from '../common/constants/event.constants';
+import {
+  CHANNEL_TYPE,
+  EVENT_TYPES,
+  MESSAGE_STATUS,
+  SENDER_TYPE,
+} from '../common/constants/event.constants';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { TeamsService } from './teams.service';
@@ -115,6 +120,7 @@ describe('TeamsService', () => {
       user: { findUnique: jest.fn() },
       agent: { findUnique: jest.fn() },
       agentRole: { findUnique: jest.fn() },
+      chatChannel: { findFirst: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(),
       $queryRawUnsafe: jest.fn(),
     };
@@ -1105,6 +1111,89 @@ describe('TeamsService', () => {
         { type: 'global' },
       );
       expect(result.members).toBeDefined();
+    });
+
+    it('addMember：事务内写「{alias} 已加入团队」群系统消息并广播 chat.message.new', async () => {
+      prisma.team.findUnique.mockResolvedValue(teamRow());
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_product',
+        name: '产品经理',
+        role: 'product',
+      });
+      (prisma as any).chatChannel.findFirst.mockResolvedValue({ id: 'c_1' });
+      idGen.nextId.mockImplementation(async (p: string) => `${p}_0000000099`);
+      const tx: any = {
+        $queryRawUnsafe: jest.fn().mockResolvedValue([{ maxSeq: 1 }]),
+        teamMember: {
+          create: jest.fn().mockResolvedValue({
+            id: 'tmm_0000000002',
+            teamId: 'tm_0000000001',
+            agentId: 'a_product',
+            alias: '产品经理-2',
+            seq: 2,
+          }),
+          aggregate: jest.fn().mockResolvedValue({ _max: { seq: 1 } }),
+        },
+        team: { update: jest.fn().mockResolvedValue({}) },
+        message: {
+          create: jest.fn().mockImplementation(({ data }: any) =>
+            Promise.resolve({
+              id: data.id,
+              channelId: data.channelId,
+              senderType: data.senderType,
+              senderId: data.senderId,
+              content: data.content,
+              mentions: data.mentions,
+              status: data.status,
+              createdAt: new Date(),
+            }),
+          ),
+        },
+      };
+      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
+      prisma.team.findUnique
+        .mockResolvedValueOnce(teamRow())
+        .mockResolvedValueOnce(
+          teamRow({
+            members: [
+              teamMemberRow(),
+              teamMemberRow({ id: 'tmm_0000000002', seq: 2 }),
+            ],
+            queues: [],
+          }),
+        );
+
+      await service.addMember('tm_0000000001', {
+        agentId: 'a_product',
+        roleId: 'ar_product',
+      } as any);
+
+      expect(prisma.chatChannel.findFirst).toHaveBeenCalledWith({
+        where: { teamId: 'tm_0000000001', type: CHANNEL_TYPE.team_group },
+        select: { id: true },
+      });
+      expect(tx.message.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          id: 'm_0000000099',
+          channelId: 'c_1',
+          senderType: SENDER_TYPE.system,
+          senderId: null,
+          content: { text: '产品经理-2 已加入团队', parts: [] },
+          mentions: null,
+          status: MESSAGE_STATUS.sent,
+        }),
+      });
+      expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        expect.objectContaining({
+          message: expect.objectContaining({
+            channelId: 'c_1',
+            senderType: SENDER_TYPE.system,
+            content: { text: '产品经理-2 已加入团队', parts: [] },
+          }),
+        }),
+        { type: 'channel', id: 'c_1' },
+      );
     });
 
     it('addMember 仅给 roleId → 用角色 defaultAgentId 预填 agentId 并持久化 roleId', async () => {

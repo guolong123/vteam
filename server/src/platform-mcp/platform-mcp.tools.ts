@@ -556,11 +556,14 @@ type MyProfileArgs = z.infer<typeof myProfileSchema>;
 
 /**
  * team_add_member：申请将 Agent 加入团队（L2 自治确认门，vteam-team-collaboration
- * Todo 8）。调用权限由角色工具权限决定；创建平台 question 确认请求（question_confirm
- * 确认门），用户确认后才会真正加入团队并写 team_add 审计。
+ * Todo 8）。team-free-chat 约定：taskId（任务维度）或 teamId（团队维度，免任务）
+ * 双可选，双空时按 worker 最近会话回填；调用权限由角色工具权限决定；创建平台
+ * question 确认请求（question_confirm 确认门），用户确认后才会真正加入团队——
+ * 任务维度写 team_add 审计，团队维度经 teamsService.addMember 落团队级系统消息。
  */
 export const teamAddMemberSchema = z.object({
-  taskId: z.string().describe('任务 ID'),
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
@@ -1205,7 +1208,7 @@ export function buildPlatformMcpTools(
     {
       name: 'team_add_member',
       description:
-        '申请将 Agent 加入团队（L2 自治确认门）：调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。创建用户确认请求（question_confirm 确认门，question 弹窗「是否确认」），用户确认后才真正加入团队并写 team_add 审计；重复申请（已加入/有 pending 申请）被拒绝。返回 {requestId, taskId, agentId, alias}。',
+        '申请将 Agent 加入团队（L2 自治确认门）：可传 taskId（任务维度）或 teamId（团队维度，免任务），双空时按你（x-worker-id）的最近会话回填；调用权限由你的角色工具权限决定（不再由服务端按主实例身份判定）。创建用户确认请求（question_confirm 确认门，question 弹窗「是否确认」），用户确认后才真正加入团队——任务维度写 team_add 审计，团队维度经团队级接口落库；重复申请（已加入/有 pending 申请）被拒绝。返回 {requestId, taskId, agentId, alias}（团队维度 taskId 为 "team:<teamId>"）。',
       inputSchema: teamAddMemberSchema,
       handler: (ctx, args) =>
         service.teamAddMember(ctx, args as TeamAddMemberArgs),

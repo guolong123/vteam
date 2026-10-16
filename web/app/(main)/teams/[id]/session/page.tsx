@@ -1192,6 +1192,7 @@ export default function TeamSessionPage() {
   const resetPendingInstanceId = resetSessionMutation.isPending
     ? (resetSessionMutation.variables?.instanceId ?? null)
     : null;
+  // 任务维度增员：保持 POST /tasks/:id/team（保留群系统消息与任务实例语义）。
   const addInstanceMutation = useMutation({
     mutationFn: (payload: AddInstancePayload) =>
       api.post<TaskDetail>(`/tasks/${queueHeadTaskId}/team`, {
@@ -1208,15 +1209,35 @@ export default function TeamSessionPage() {
       setAddError(isApiError(err) ? err.message : "添加实例失败，请稍后重试");
     },
   });
+  // 团队维度增员：团队空闲（无 queueHeadTask）时改走团队级 POST /teams/:id/members。
+  // 成员增员本质是团队级操作：TeamMember（tmm_）是不依附任务的持久单元，任务路径带的
+  // 「群系统消息 + 任务实例」语义在空闲态无处可挂。
+  const addTeamMemberMutation = useMutation({
+    mutationFn: (payload: AddInstancePayload) =>
+      teamsApi.addMember(teamId, {
+        ...(payload.roleId ? { roleId: payload.roleId } : {}),
+        ...(payload.agentId ? { agentId: payload.agentId } : {}),
+        ...(payload.alias ? { alias: payload.alias } : {}),
+      }),
+    onSuccess: (updated) => {
+      setAddError(null);
+      queryClient.setQueryData<TeamDto>(["team", teamId], updated);
+      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+    },
+    onError: (err) => {
+      console.error("[TeamSession] add team member failed", { teamId, error: err });
+      setAddError(isApiError(err) ? err.message : "添加实例失败，请稍后重试");
+    },
+  });
   const handleAddInstance = async (payload: AddInstancePayload): Promise<boolean> => {
-    if (addInstanceMutation.isPending) return false;
+    if (addInstanceMutation.isPending || addTeamMemberMutation.isPending) return false;
     if (!payload.roleId && !payload.agentId) return false;
     setAddError(null);
     return new Promise((resolve) => {
-      addInstanceMutation.mutate(
-        payload,
-        { onSuccess: () => resolve(true), onError: () => resolve(false) },
-      );
+      const callbacks = { onSuccess: () => resolve(true), onError: () => resolve(false) };
+      // 分流：有当前任务 → 任务接口（保留群系统消息/任务实例）；空闲 → 团队级成员接口。
+      if (queueHeadTaskId) addInstanceMutation.mutate(payload, callbacks);
+      else addTeamMemberMutation.mutate(payload, callbacks);
     });
   };
 
@@ -1294,7 +1315,6 @@ export default function TeamSessionPage() {
     ? (messagesQuery.data?.nextCursor ?? null)
     : (privateMessagesQuery.data?.nextCursor ?? null);
   const dateSeparatorFlagsByIndex = dateSeparatorFlags(messages);
-  const teamEditable = !!queueHeadTask && (queueHeadTask.status === "pending" || queueHeadTask.status === "in_progress" || queueHeadTask.status === "blocked");
 
   /** 单条消息展示解析（角色/作者/缩写/parts/附件/@我/发送实例）：历史 map 与置底 live 行共用。 */
   const resolveMessage = (msg: RealtimeChatMessage) => {
@@ -1393,10 +1413,9 @@ export default function TeamSessionPage() {
           agents={teamAgentMembers}
           loadingAgentIds={loadingAgentIds}
           sessionStatusByAgent={sessionByAgent}
-          teamEditable={teamEditable}
           agentOptions={roleOptionsOf(agentsQuery.data?.items ?? [])}
           customAgents={customAgentsOf(agentsQuery.data?.items ?? [])}
-          adding={addInstanceMutation.isPending}
+          adding={addInstanceMutation.isPending || addTeamMemberMutation.isPending}
           addError={addError}
           onAddInstance={handleAddInstance}
           width={membersPanel.width}

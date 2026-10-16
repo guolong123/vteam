@@ -135,8 +135,8 @@ describe('platform-mcp tool naming contract', () => {
       },
       team_add_member: {
         selfInstanceId: REQUIRED,
-        teamId: ABSENT,
-        taskId: REQUIRED,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
       },
       plan_complete: {
         selfInstanceId: REQUIRED,

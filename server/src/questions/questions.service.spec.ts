@@ -695,6 +695,42 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
       });
       expect(prisma.session.findFirst).not.toHaveBeenCalled();
     });
+
+    it('团队维度（options.teamId）：taskId 落 team:<teamId> + sessionId 取团队主成员会话 + emit 团队作用域', async () => {
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_9',
+        mainAgentMemberId: 'tmm_main',
+        managedMode: false,
+      });
+      prisma.session.findFirst.mockResolvedValue({ id: 's_team_main' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_9' });
+      prisma.agentQuestion.create.mockResolvedValue(
+        platformRow({ taskId: 'team:tm_9', sessionId: 's_team_main' }),
+      );
+
+      const result = await service.createForPlatform(
+        '',
+        {
+          question: '申请将 开发者 加入团队，是否确认？',
+          header: '团队增员确认',
+          options: ['确认', '拒绝'],
+        },
+        { agentId: 'a_1', teamId: 'tm_9', requesterInstanceId: 'tmm_main' },
+      );
+
+      expect(prisma.agentQuestion.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          taskId: 'team:tm_9',
+          sessionId: 's_team_main',
+        }),
+      });
+      expect(realtime.emit).toHaveBeenCalledWith(
+        EVENT_TYPES.AGENT_QUESTION,
+        expect.objectContaining({ taskId: 'team:tm_9', teamId: 'tm_9' }),
+        { type: 'team', id: 'tm_9' },
+      );
+      expect(result.taskId).toBe('team:tm_9');
+    });
   });
 
   describe('平台 question 短路（Oracle R2 旁路：不转发 worker）', () => {
@@ -894,6 +930,40 @@ describe('QuestionsService（AgentQuestion 读/回复：worker 转发 + 落库 +
         expect.objectContaining({ resolved: true, taskId: 'team:tm_9' }),
         { type: 'team', id: 'tm_9' },
       );
+    });
+
+    it('confirmByAgent 团队维度任务形态自批（请求 team:<teamId> + 发起者 == 确认者）→ 403 SELF_CONFIRMATION_FORBIDDEN', async () => {
+      prisma.team.findUnique.mockResolvedValue({ id: 'tm_9' });
+      prisma.session.findUnique.mockResolvedValue({ teamId: 'tm_9' });
+      prisma.agentQuestion.findUnique.mockResolvedValue(
+        platformRow({
+          taskId: 'team:tm_9',
+          sessionId: 's_team',
+          content: {
+            questions: [],
+            source: 'platform',
+            requesterInstanceId: 'tmm_main',
+          },
+        }),
+      );
+
+      const err = await service
+        .confirmByAgent({
+          taskId: 'team:tm_9',
+          instanceId: 'tmm_main',
+          requestId: 'que_platform_0000000001',
+          kind: 'question',
+          answers: [['确认']],
+        })
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(err).toBeInstanceOf(ForbiddenException);
+      expect((err as ForbiddenException).getResponse()).toMatchObject({
+        code: QUESTION_CONFIRM_INTEGRITY_ERRORS.SELF_CONFIRMATION_FORBIDDEN,
+      });
+      expect(prisma.agentQuestion.update).not.toHaveBeenCalled();
     });
 
     it('confirmByAgent team:<id> 形态但行会话归属他团队 → 403 CROSS_TASK_FORBIDDEN', async () => {

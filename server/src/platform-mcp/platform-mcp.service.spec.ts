@@ -58,6 +58,7 @@ import {
 } from './platform-mcp.tools';
 import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
+import { TeamsService } from '../teams/teams.service';
 import { QuestionsService } from '../questions/questions.service';
 import {
   QUESTION_CONFIRM_INTEGRITY_ERRORS,
@@ -159,6 +160,7 @@ describe('PlatformMcpService', () => {
     updateTeam: jest.Mock;
     createByAgent: jest.Mock;
   };
+  let teamsService: { addMember: jest.Mock };
   let questionsService: {
     confirmByAgent: jest.Mock;
     createForPlatform: jest.Mock;
@@ -321,6 +323,9 @@ describe('PlatformMcpService', () => {
       updateTeam: jest.fn(),
       createByAgent: jest.fn(),
     };
+    teamsService = {
+      addMember: jest.fn().mockResolvedValue({ id: 'tmm_new' }),
+    };
     questionsService = {
       confirmByAgent: jest.fn(),
       createForPlatform: jest.fn(),
@@ -357,6 +362,7 @@ describe('PlatformMcpService', () => {
         { provide: ArtifactsService, useValue: artifactsService },
         { provide: IssuesService, useValue: issuesService },
         { provide: TasksService, useValue: tasksService },
+        { provide: TeamsService, useValue: teamsService },
         { provide: QuestionsService, useValue: questionsService },
         {
           provide: NotificationDispatcherService,
@@ -6413,6 +6419,113 @@ describe('PlatformMcpService', () => {
       await expect(
         getHook()!({ answers: [['确认']], actor: { type: 'user', id: 'u_1' } }),
       ).resolves.toBeUndefined();
+    });
+
+    const allowTeamWorkerAs = (instanceId: string) => {
+      prisma.session.findFirst.mockResolvedValue({
+        id: 's_team_1',
+        teamMemberId: instanceId,
+      });
+    };
+    const mockTeamBaseline = () => {
+      prisma.agent.findUnique.mockResolvedValue({
+        id: 'a_developer',
+        name: '开发者',
+        role: 'developer',
+      });
+      prisma.teamMember.findFirst.mockResolvedValue(null);
+      prisma.agentQuestion.findMany.mockResolvedValue([]);
+    };
+
+    it('团队维度（无任务）：teamId + selfInstanceId → 创建 team:<teamId> 作用域确认请求', async () => {
+      allowTeamWorkerAs(mainInstanceId);
+      mockTeamBaseline();
+      const getHook = captureHook();
+
+      const result = await service.teamAddMember(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: mainInstanceId,
+        agentId: 'a_developer',
+        alias: '开发者-2',
+      });
+
+      expect(questionsService.createForPlatform).toHaveBeenCalledWith(
+        '',
+        {
+          question: '申请将 开发者（别名 开发者-2）加入团队，是否确认？',
+          header: '团队增员确认',
+          options: ['确认', '拒绝'],
+        },
+        expect.objectContaining({
+          agentId: 'a_developer',
+          teamId: 'tm_1',
+          requesterInstanceId: mainInstanceId,
+          onResolved: expect.any(Function),
+        }),
+      );
+      expect(result).toEqual({
+        requestId: 'que_platform_0000000001',
+        taskId: 'team:tm_1',
+        agentId: 'a_developer',
+        alias: '开发者-2',
+      });
+
+      await getHook()!({
+        answers: [['确认']],
+        actor: { type: 'user', id: 'u_1' },
+      });
+
+      expect(teamsService.addMember).toHaveBeenCalledWith('tm_1', {
+        agentId: 'a_developer',
+        alias: '开发者-2',
+      });
+      expect(tasksService.updateTeam).not.toHaveBeenCalled();
+    });
+
+    it('团队维度：重复加入（已在团队）→ 400 AGENT_ALREADY_IN_TEAM（不创建确认请求）', async () => {
+      allowTeamWorkerAs(mainInstanceId);
+      mockTeamBaseline();
+      prisma.teamMember.findFirst.mockResolvedValue({ id: 'tmm_existing' });
+      await expectCode(
+        service.teamAddMember(ctx, {
+          teamId: 'tm_1',
+          selfInstanceId: mainInstanceId,
+          agentId: 'a_developer',
+        }),
+        BadRequestException,
+        PLATFORM_MCP_ERRORS.AGENT_ALREADY_IN_TEAM,
+      );
+      expect(questionsService.createForPlatform).not.toHaveBeenCalled();
+    });
+
+    it('团队维度：pending 重复申请 → 409 PENDING_APPLICATION（按 team:<teamId> 作用域键查询）', async () => {
+      allowTeamWorkerAs(mainInstanceId);
+      mockTeamBaseline();
+      prisma.agentQuestion.findMany.mockResolvedValue([
+        {
+          requestId: 'que_platform_0000000002',
+          content: {
+            source: 'platform',
+            action: 'team_add_member',
+            agentId: 'a_developer',
+          },
+        },
+      ]);
+      await expectCode(
+        service.teamAddMember(ctx, {
+          teamId: 'tm_1',
+          selfInstanceId: mainInstanceId,
+          agentId: 'a_developer',
+        }),
+        ConflictException,
+        PLATFORM_MCP_ERRORS.PENDING_APPLICATION,
+      );
+      expect(prisma.agentQuestion.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { taskId: 'team:tm_1', status: 'pending' },
+        }),
+      );
+      expect(questionsService.createForPlatform).not.toHaveBeenCalled();
     });
   });
 

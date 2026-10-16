@@ -32,6 +32,7 @@ const ID_PREFIX = {
   teamUserMember: 'tum',
   teamQueue: 'tq',
   channel: 'c',
+  message: 'm',
 } as const;
 
 const TEAM_ERRORS = {
@@ -602,6 +603,16 @@ export class TeamsService implements OnModuleInit {
       });
     }
 
+    // 查找团队群聊频道（若不存在则仍建成员但不写系统消息），口径同 resetSessions。
+    const teamChannel = await (this.prisma as any).chatChannel
+      .findFirst({
+        where: { teamId, type: CHANNEL_TYPE.team_group },
+        select: { id: true },
+      })
+      .catch(() => null);
+    const channelId: string | null = teamChannel?.id ?? null;
+
+    let sysMsg: any = null;
     const member = await this.prisma.$transaction(async (tx) => {
       const seq = await this.nextSeqForUpdate(tx, teamId, binding.agentId);
       const alias =
@@ -631,9 +642,43 @@ export class TeamsService implements OnModuleInit {
         where: { id: teamId },
         data: { version: { increment: 1 } },
       });
+      // 群聊系统消息：团队级「已加入团队」，对齐任务级（tasksService.updateTeam）文案与落库口径。
+      // 写在同一事务内，add 失败时不留下孤儿消息。
+      if (channelId) {
+        sysMsg = await tx.message.create({
+          data: {
+            id: await this.idGen.nextId(ID_PREFIX.message),
+            channelId,
+            senderType: SENDER_TYPE.system,
+            senderId: null,
+            content: { text: `${created.alias} 已加入团队`, parts: [] },
+            mentions: null,
+            status: MESSAGE_STATUS.sent,
+          },
+        });
+      }
       return created;
     });
 
+    if (sysMsg) {
+      await this.realtime.broadcast(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        {
+          message: {
+            id: sysMsg.id,
+            channelId: sysMsg.channelId,
+            senderType: sysMsg.senderType,
+            senderId: sysMsg.senderId,
+            content: sysMsg.content,
+            mentions: sysMsg.mentions ?? [],
+            status: sysMsg.status,
+            createdAt:
+              sysMsg.createdAt?.toISOString?.() ?? new Date().toISOString(),
+          },
+        },
+        { type: 'channel', id: sysMsg.channelId },
+      );
+    }
     await this.realtime.broadcast(
       EVENT_TYPES.TEAM_CHANGED,
       {
