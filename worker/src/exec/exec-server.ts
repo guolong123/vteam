@@ -1829,15 +1829,17 @@ export class ExecServer {
         },
         onPart: (part) => {
           // 全局总线过滤：① sessionID 匹配本任务会话（缺失时放行由消息集合兜底）；
-          // ② messageID 属于 assistant 消息（集合非空时强校验；user 回复的 part 不带
-          // role，只有 message.updated 的 info.role 能区分）。
+          // ② **严格 assistant-only**：messageID 必须存在且属于已知 assistant 消息。
+          //    part 本身不带 role，只有 message.updated 的 info.role 能区分——user/system
+          //    part（含注入的 prompt 上下文块：任务上下文/群聊回复要求 + 用户原文）绝不
+          //    进入流式 delta。旧实现在 assistant 集合为空时存在「逃逸口」，导致首条
+          //    assistant message.updated 到达前的任意 part（即 user 注入文本）被当 delta 上送。
+          // ③ assistant 消息在其 message.updated 之前到达的 part：本路直接丢弃，由轮询快照路
+          //    （extractNewParts，按 role=assistant 过滤）回填——丢帧不会永久丢失。
           if (part.sessionID && part.sessionID !== sessionID) {
             return;
           }
-          if (
-            assistantMsgIds.size > 0 &&
-            (!part.messageID || !assistantMsgIds.has(part.messageID))
-          ) {
+          if (!part.messageID || !assistantMsgIds.has(part.messageID)) {
             return;
           }
           enqueueParts([part as unknown as ServePart]);

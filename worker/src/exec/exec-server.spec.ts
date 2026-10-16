@@ -3347,3 +3347,124 @@ describe('ExecServer：POST /secret-command（token 保护的敏感命令同步�
     }
   });
 });
+
+describe('ExecServer：SSE 转发 onPart 过滤（严格 assistant-only）', () => {
+  /** 可控的假 serve /event SSE 服务器：连接后保持打开，push() 逐帧下发。 */
+  async function startFakeSseServer(): Promise<{
+    baseUrl: string;
+    push: (obj: unknown) => void;
+    waitForConnection: () => Promise<void>;
+    close: () => Promise<void>;
+  }> {
+    let resolveConn: () => void = () => undefined;
+    const connected = new Promise<void>((resolve) => {
+      resolveConn = resolve;
+    });
+    let clientRes: http.ServerResponse | null = null;
+    const server = http.createServer((req, res) => {
+      if (req.url !== '/event') {
+        res.statusCode = 404;
+        res.end();
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      });
+      res.write('data: {"type":"server.connected","properties":{}}\n\n');
+      clientRes = res;
+      resolveConn();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as { port: number };
+    return {
+      baseUrl: `http://127.0.0.1:${port}`,
+      push: (obj) => {
+        try {
+          clientRes?.write(`data: ${JSON.stringify(obj)}\n\n`);
+        } catch {
+          // 客户端已断开：忽略（测试收尾竞态）
+        }
+      },
+      waitForConnection: () => connected,
+      close: () =>
+        new Promise<void>((resolve) => {
+          clientRes?.end();
+          server.closeAllConnections?.();
+          server.close(() => resolve());
+        }),
+    };
+  }
+
+  function ssePart(part: Record<string, unknown>): unknown {
+    return { type: 'message.part.updated', properties: { part } };
+  }
+
+  it('assistant 集合建立前到达的 user part 绝不上送 delta；集合建立后 assistant part 正常上送', async () => {
+    const { driver, getMessages } = mockDriver();
+    // 轮询路先持续返回空会话（任务不完成），由 SSE 路产生 delta；断言完成后放行 finish。
+    let finish = false;
+    getMessages.mockImplementation(async () => (finish ? FINISH_MSGS : []));
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await sse.waitForConnection();
+
+      // ① assistant 集合尚为空时到达的 user part（注入 prompt 上下文 + 用户原文）——必须丢弃
+      sse.push(
+        ssePart({
+          id: 'prt_user',
+          type: 'text',
+          sessionID: 'ses_1',
+          messageID: 'msg_user',
+          text: '【任务上下文】...【群聊回复要求】...用户原文',
+        }),
+      );
+      // ② message.updated 建立 assistant 集合
+      sse.push({ type: 'message.updated', properties: { info: { id: 'msg_asst', role: 'assistant' } } });
+      // ③ 属于该 assistant 消息的 part——必须上送
+      sse.push(
+        ssePart({
+          id: 'prt_asst',
+          type: 'text',
+          sessionID: 'ses_1',
+          messageID: 'msg_asst',
+          text: 'assistant reply',
+        }),
+      );
+
+      // 等 assistant part 经 SSE 路上送（证明三帧已按序处理完）
+      await waitFor(() =>
+        sent.some(
+          (s) =>
+            s.type === 'message.part.delta' &&
+            (s.payload.parts as ServePart[]).some((p) => p.id === 'prt_asst'),
+        ),
+      );
+
+      const forwardedIds = sent
+        .filter((s) => s.type === 'message.part.delta')
+        .flatMap((s) => (s.payload.parts as ServePart[]).map((p) => p.id));
+      expect(forwardedIds).toContain('prt_asst');
+      expect(forwardedIds).not.toContain('prt_user');
+
+      finish = true;
+      await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+});
