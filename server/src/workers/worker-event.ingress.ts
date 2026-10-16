@@ -18,7 +18,7 @@ import {
   extractConclusionParts,
   hasRenderableContent,
   mergePartsById,
-  normalizeParts,
+  stripInjectedPromptParts,
 } from '../chat/message-parts';
 import { inferErrorType } from './infer-error-type';
 
@@ -681,7 +681,10 @@ export class WorkerEventIngress {
     }
     const target = privateTarget ?? source;
     const channelId = target.id;
-    const kept = normalizeParts(raw.parts);
+    // 注入提示防护：worker 异常时会把服务端注入的整段用户提示当流式增量回送，
+    // 该 part 会污染 agent 处理行并被 UI 当成 agent 正文。此处先剔除注入提示
+    // part，保证它既不建行也不累积进已有 processing 行（终态/读取期另有清洗）。
+    const kept = stripInjectedPromptParts(raw.parts);
     if (kept.length === 0) {
       // 无保留 parts（纯非对象条目）→ 中间态无内容，不落库不广播
       this.logger.debug(

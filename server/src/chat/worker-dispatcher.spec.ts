@@ -4080,6 +4080,36 @@ describe('WorkerDispatcher', () => {
       ]);
     });
 
+    it('注入提示防护：task.completed parts 含「注入提示」→ 终态化落库前剔除（agent sent 行不含注入块）', async () => {
+      prisma.message.findFirst.mockResolvedValue({ id: 'm_stream_1' });
+      prisma.message.update.mockResolvedValue(
+        messageRow({ id: 'm_stream_1', status: MESSAGE_STATUS.sent }),
+      );
+      const d = createDispatcher();
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '结论',
+        parts: [
+          {
+            type: 'text',
+            text: '【团队上下文】你当前在团队 tm_1 直聊（无任务）。',
+          },
+          { type: 'text', text: '结论', synthetic: false },
+        ],
+      });
+
+      expect(prisma.message.update).toHaveBeenCalledWith({
+        where: { id: 'm_stream_1' },
+        data: expect.objectContaining({
+          content: { text: '结论', parts: [{ type: 'text', text: '结论', synthetic: false }] },
+          status: MESSAGE_STATUS.sent,
+        }),
+      });
+    });
+
     it('残留清扫：仅含非终态空 tool 卡的残留行 → 删除（不收敛为 sent，UI 不留永久 running 卡）', async () => {
       prisma.message.findFirst.mockResolvedValue({ id: 'm_main' });
       prisma.message.update.mockResolvedValue(
