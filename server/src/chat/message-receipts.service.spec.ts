@@ -132,6 +132,219 @@ describe('MessageReceiptsService（plan-review-execution-gates Todo 5）', () =>
         status: 'expired',
       });
     });
+
+    it('清账后触发 settled hook（fromInstanceId=派发方主 Agent），供 drain 重查', async () => {
+      prisma.messageReceipt.findMany.mockResolvedValue([
+        {
+          id: 'mr_2',
+          messageId: 'm_2',
+          taskId: 't_1',
+          teamId: 'tm_1',
+          fromInstanceId: 'tmm_pm',
+          toInstanceId: 'tmm_dev',
+          status: 'pending',
+          nudgeCount: 1,
+        },
+      ]);
+      prisma.messageReceipt.update.mockImplementation(({ data }: any) =>
+        Promise.resolve({ status: 'expired', ...data }),
+      );
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+      const hook = jest.fn();
+      service.registerSettledHook(hook);
+
+      await service.expireDue(new Date('2026-09-16T00:00:00Z'));
+
+      expect(hook).toHaveBeenCalledWith({
+        fromInstanceId: 'tmm_pm',
+        teamId: 'tm_1',
+      });
+    });
+  });
+
+  describe('sweepExpiredReceipts（C1 周期到期清账）', () => {
+    it('清账到期回执并返回条数', async () => {
+      prisma.messageReceipt.findMany.mockResolvedValue([
+        {
+          id: 'mr_2',
+          messageId: 'm_2',
+          taskId: 't_1',
+          teamId: 'tm_1',
+          fromInstanceId: 'tmm_pm',
+          toInstanceId: 'tmm_dev',
+          status: 'pending',
+          nudgeCount: 0,
+        },
+      ]);
+      prisma.messageReceipt.update.mockImplementation(({ data }: any) =>
+        Promise.resolve({ status: 'expired', ...data }),
+      );
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+
+      await expect(
+        service.sweepExpiredReceipts(new Date('2026-09-16T00:00:00Z')),
+      ).resolves.toBe(1);
+    });
+
+    it('重入护栏：首轮未结束则跳过并发轮（不双清账）', async () => {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      prisma.messageReceipt.findMany.mockImplementation(() =>
+        gate.then(() => [] as unknown),
+      );
+
+      const first = service.sweepExpiredReceipts();
+      const second = await service.sweepExpiredReceipts();
+
+      expect(second).toBe(0);
+      release();
+      await expect(first).resolves.toBe(0);
+    });
+  });
+
+  describe('countPendingFor（C2 到期过滤，drain 防御纵深）', () => {
+    interface StoreRow {
+      id: string;
+      messageId: string | null;
+      taskId: string | null;
+      teamId: string;
+      fromInstanceId: string;
+      toInstanceId: string;
+      status: string;
+      nudgeCount: number;
+      expiresAt: Date;
+    }
+    let store: StoreRow[];
+
+    beforeEach(() => {
+      store = [];
+      prisma.messageReceipt.count.mockImplementation(
+        (args: {
+          where: {
+            status?: string;
+            fromInstanceId?: string;
+            teamId?: string;
+            expiresAt?: { gt: Date };
+          };
+        }) =>
+          Promise.resolve(
+            store.filter(
+              (r) =>
+                (args.where.status === undefined ||
+                  r.status === args.where.status) &&
+                (args.where.fromInstanceId === undefined ||
+                  r.fromInstanceId === args.where.fromInstanceId) &&
+                (args.where.teamId === undefined ||
+                  r.teamId === args.where.teamId) &&
+                (args.where.expiresAt === undefined ||
+                  r.expiresAt.getTime() > args.where.expiresAt.gt.getTime()),
+            ).length,
+          ),
+      );
+      prisma.messageReceipt.findUnique.mockImplementation(
+        (args: { where: { id: string } }) =>
+          Promise.resolve(store.find((r) => r.id === args.where.id) ?? null),
+      );
+      prisma.messageReceipt.update.mockImplementation(
+        (args: { where: { id: string }; data: Record<string, unknown> }) => {
+          const row = store.find((r) => r.id === args.where.id);
+          if (!row) return Promise.resolve(null);
+          Object.assign(row, args.data);
+          return Promise.resolve(row);
+        },
+      );
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+    });
+
+    it('排除 expiresAt<=now，计入 expiresAt>now（where 带 expiresAt.gt）', async () => {
+      store.push(
+        {
+          id: 'mr_stale',
+          messageId: 'm_s',
+          taskId: null,
+          teamId: 'tm_x',
+          fromInstanceId: 'tmm_main',
+          toInstanceId: 'tmm_dead',
+          status: 'pending',
+          nudgeCount: 0,
+          expiresAt: new Date('2000-01-01T00:00:00Z'),
+        },
+        {
+          id: 'mr_live',
+          messageId: 'm_l',
+          taskId: null,
+          teamId: 'tm_x',
+          fromInstanceId: 'tmm_main',
+          toInstanceId: 'tmm_live',
+          status: 'pending',
+          nudgeCount: 0,
+          expiresAt: new Date('2100-01-01T00:00:00Z'),
+        },
+      );
+
+      await expect(
+        service.countPendingFor({ fromInstanceId: 'tmm_main', teamId: 'tm_x' }),
+      ).resolves.toBe(1);
+      expect(prisma.messageReceipt.count).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          fromInstanceId: 'tmm_main',
+          teamId: 'tm_x',
+          status: 'pending',
+          expiresAt: { gt: expect.any(Date) },
+        }),
+      });
+    });
+
+    it('事故镜像：一条 stale pending（已过期未清）+ fresh 被 ack → drain 计数 0 → 主 Agent 被唤醒', async () => {
+      store.push(
+        {
+          id: 'mr_stale',
+          messageId: 'm_s',
+          taskId: null,
+          teamId: 'tm_x',
+          fromInstanceId: 'tmm_main',
+          toInstanceId: 'tmm_dead',
+          status: 'pending',
+          nudgeCount: 0,
+          // 真实事故：expires_at 早于 now 却仍是 pending（清账周期缺席）。
+          expiresAt: new Date('2000-01-01T00:00:00Z'),
+        },
+        {
+          id: 'mr_fresh',
+          messageId: 'm_f',
+          taskId: null,
+          teamId: 'tm_x',
+          fromInstanceId: 'tmm_main',
+          toInstanceId: 'tmm_live',
+          status: 'pending',
+          nudgeCount: 0,
+          expiresAt: new Date('2100-01-01T00:00:00Z'),
+        },
+      );
+
+      const wake = jest.fn();
+      // 复刻 PlatformMcpService.registerSettledHook → checkAndDrainFanOut 的口径。
+      service.registerSettledHook(async (row) => {
+        const pending = await service.countPendingFor({
+          fromInstanceId: row.fromInstanceId,
+          teamId: row.teamId,
+        });
+        if (pending === 0) wake();
+      });
+
+      // stale 已过期 → 被排除：此刻计数=1（只剩 fresh；未修复时 stale 计入为 2）。
+      await expect(
+        service.countPendingFor({ fromInstanceId: 'tmm_main', teamId: 'tm_x' }),
+      ).resolves.toBe(1);
+
+      // fresh 被 ack → settled hook → drain 计数 0 → 主 Agent 被唤醒。
+      await service.ack('mr_fresh');
+      await new Promise((r) => setImmediate(r));
+
+      expect(wake).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('countPending', () => {
