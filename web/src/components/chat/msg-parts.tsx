@@ -41,6 +41,7 @@ import type { MsgToolStatus } from "./msg-tool";
 import { MsgError } from "./msg-error";
 import { MsgAborted } from "./msg-aborted";
 import { MsgUnknownPart } from "./msg-unknown-part";
+import { MsgLineBox } from "./msg-line-box";
 import { stripInjectedContext } from "@/lib/strip-injected-context";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -60,6 +61,8 @@ export interface PartShape {
   id?: string;
   state?: "pending" | "done";
   text?: string;
+  /** serve 合成片段标记（如注入上下文）：line 模式的 text 盒跳过 synthetic 片段 */
+  synthetic?: boolean;
   /** reasoning 兜底字段：部分 serve 模型 reasoning 内容落在 summary/thoughts/detail 而非 text。 */
   summary?: string;
   thoughts?: string;
@@ -154,9 +157,17 @@ export interface MsgPartsProps {
    * 落终态时调用方把该 prop 收回（或本层因终态自然不命中），状态即清除。
    */
   secretAwaiting?: boolean;
+  /**
+   * 渲染变体：
+   * - `"bubble"`（默认）= 既有群聊/回归路径：reasoning→MsgThinking、text→ChatBubble/流式块，字节不变；
+   * - `"line"` = 私聊路径：把去重后的 part **按原顺序**逐个渲染成单行盒
+   *   （reasoning→MsgLineBox tone=thinking、text→MsgLineBox tone=body、tool→MsgTool），
+   *   streaming 与 sent 共用同一渲染，无 ChatBubble、无 msg-streaming、无「生成中」包裹层。
+   */
+  variant?: "bubble" | "line";
 }
 
-export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting }: MsgPartsProps) {
+export function MsgParts({ parts, bodyText, author, role, time, streaming, attachment, isMentionMe, style, className, messageStatus, grouped, initials, secretAwaiting, variant = "bubble" }: MsgPartsProps) {
   const list = (parts ?? []) as PartShape[];
   /** 终态收敛：消息已 sent/failed 但 part 仍 pending/running → sent 收敛成功，failed 收敛失败 */
   const terminal = messageStatus === "sent" || messageStatus === "failed";
@@ -178,11 +189,11 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
   const textParts = list.filter((p) => p.type === "text");
   // 按 part.id 去重，保留最后一次快照（顺序取最后一次出现的位置）：
   // 历史脏数据里同一次工具调用会重复落多个快照，逐个渲染会让同一次调用出现多张卡。
-  const procPartsDeduped = (() => {
+  const dedupeById = (items: PartShape[]): PartShape[] => {
     const seen = new Set<string>();
     const out: PartShape[] = [];
-    for (let i = procParts.length - 1; i >= 0; i -= 1) {
-      const p = procParts[i];
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const p = items[i];
       const id = typeof p.id === "string" && p.id.length > 0 ? p.id : undefined;
       if (id !== undefined) {
         if (seen.has(id)) continue;
@@ -191,7 +202,10 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
       out.push(p);
     }
     return out.reverse();
-  })();
+  };
+  const procPartsDeduped = dedupeById(procParts);
+  // line 模式：对**全部** part（含 text）按原顺序去重，一个 part 一个盒。
+  const linePartsDeduped = dedupeById(list);
   const body = textParts.map((t) => t.text ?? "").join("\n") || bodyText || "";
   const cleanBody = stripInjectedContext(body);
 
@@ -279,10 +293,31 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
     }
     return -1;
   })();
+  /** line 模式：part 文本（reasoning 兜底字段同 bubble 口径）。 */
+  const partText = (p: PartShape): string => p.text ?? p.summary ?? p.thoughts ?? p.detail ?? "";
+  const isSyntheticText = (p: PartShape): boolean => p.synthetic === true;
+  /** line 模式：text 盒展示文本（剥离注入上下文）；reasoning 盒原样。 */
+  const lineText = (p: PartShape): string => stripInjectedContext(partText(p));
+  /** line 模式：该 part 是否渲染出可见盒（tool 走 toolView 空卡兜底，unknown 不渲染）。 */
+  const lineRenderable = (p: PartShape): boolean => {
+    const t = p.type ?? "";
+    if (t === "reasoning" || t === "thinking") return partText(p).trim().length > 0;
+    if (t === "text") return !isSyntheticText(p) && lineText(p).trim().length > 0;
+    if (t === "tool") return toolView(p) !== null;
+    return t === "error";
+  };
+  // line 模式兜底：parts 无 text 片段（或全被跳过）时，正文回落 content.text，
+  // 否则仅含 content.text 的历史私聊消息会整条消失（T10 落库 { text, parts } 两者可能其一为空）。
+  const hasRenderableText = linePartsDeduped.some(lineRenderable);
+  const lineBodyFallback = !hasRenderableText && cleanBody.length > 0 ? cleanBody : "";
   const hasContent =
-    cleanBody.length > 0 ||
-    Boolean(attachment) ||
-    procPartsDeduped.some(procRenderable);
+    variant === "line"
+      ? Boolean(attachment) ||
+        linePartsDeduped.some(lineRenderable) ||
+        lineBodyFallback.length > 0
+      : cleanBody.length > 0 ||
+        Boolean(attachment) ||
+        procPartsDeduped.some(procRenderable);
 
   if (!hasContent) {
     return null;
@@ -291,81 +326,126 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
     <div className={className} style={{ display: "flex", flexDirection: "column", gap: space.sm, ...style }}>
       {!grouped && <MessageIdentity author={author} role={role} time={time} initials={initials} />}
       <div style={secondaryRows}>
-        {procPartsDeduped.map((p, i) => {
-          if (p.type === "reasoning" || p.type === "thinking") {
-            if (!procRenderable(p)) return null;
-            return (
-              <MsgThinking
-                key={i}
-                state={p.state ?? (isStreaming && i === lastReasoningIndex ? "pending" : "done")}
-                text={p.text ?? p.summary ?? p.thoughts ?? p.detail ?? ""}
-              />
-            );
-          }
-          if (p.type === "tool") {
-            const view = toolView(p);
-            if (!view) return null;
-            return (
-              <MsgTool
-                key={i}
-                name={view.name}
-                status={view.status}
-                input={view.input}
-                output={view.output}
-              />
-            );
-          }
-          if (p.type === "error") {
-            return <MsgError key={i} kind={p.kind ?? "retry"} detail={p.detail ?? "处理失败"} />;
-          }
-          // step-start/step-finish/patch 等内部过程 part 不渲染（过程噪声）。
-          // 已在分发层显式处理之外的未识别 type 同样不渲染。
-          return null;
-        })}
-        {body ? (
-          streaming ? (
-            <div
-              data-testid="msg-streaming"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: space.sm,
-                maxWidth: "78%",
-                alignSelf: "flex-start",
-                padding: `${space.sm}px ${space.md}px`,
-                borderRadius: radius.md,
-                backgroundColor: "var(--color-surface)",
-                border: `1px solid ${neutral[200]}`,
-                ...baseFont,
-              }}
-            >
-              <span
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  fontSize: fontSize.md,
-                  color: neutral[700],
-                  lineHeight: 1.6,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                }}
-              >
-                {/* 流式正文 markdown 渲染（is_0000000019，终态走 ChatBubble 同链路） */}
-                <Markdown>{cleanBody}</Markdown>
-              </span>
-              <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
-                <LoadingDots color={neutral[400]} testid="msg-streaming-dots" />
-                <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>生成中</span>
-              </span>
-            </div>
-          ) : messageStatus === "failed" ? (
-            <MsgError kind="failed" detail={cleanBody} />
-          ) : (
-            <ChatBubble showIdentity={false} text={cleanBody} type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
-          )
-        ) : attachment ? (
-          <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
-        ) : null}
+        {variant === "line" ? (
+          <>
+            {linePartsDeduped.map((p, i) => {
+              const key = p.id ?? i;
+              const t = p.type ?? "";
+              if (t === "reasoning" || t === "thinking") {
+                const text = partText(p);
+                if (text.trim().length === 0) return null;
+                return <MsgLineBox key={key} tone="thinking" text={text} />;
+              }
+              if (t === "text") {
+                if (isSyntheticText(p)) return null;
+                const text = lineText(p);
+                if (text.trim().length === 0) return null;
+                return <MsgLineBox key={key} tone="body" text={text} />;
+              }
+              if (t === "tool") {
+                const view = toolView(p);
+                if (!view) return null;
+                return (
+                  <MsgTool
+                    key={key}
+                    name={view.name}
+                    status={view.status}
+                    input={view.input}
+                    output={view.output}
+                  />
+                );
+              }
+              if (t === "error") {
+                return <MsgError key={key} kind={p.kind ?? "retry"} detail={p.detail ?? "处理失败"} />;
+              }
+              return null;
+            })}
+            {lineBodyFallback ? (
+              <MsgLineBox key="line-body-fallback" tone="body" text={lineBodyFallback} />
+            ) : null}
+            {attachment ? (
+              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
+            ) : null}
+          </>
+        ) : (
+          <>
+            {procPartsDeduped.map((p, i) => {
+              if (p.type === "reasoning" || p.type === "thinking") {
+                if (!procRenderable(p)) return null;
+                return (
+                  <MsgThinking
+                    key={i}
+                    state={p.state ?? (isStreaming && i === lastReasoningIndex ? "pending" : "done")}
+                    text={p.text ?? p.summary ?? p.thoughts ?? p.detail ?? ""}
+                  />
+                );
+              }
+              if (p.type === "tool") {
+                const view = toolView(p);
+                if (!view) return null;
+                return (
+                  <MsgTool
+                    key={i}
+                    name={view.name}
+                    status={view.status}
+                    input={view.input}
+                    output={view.output}
+                  />
+                );
+              }
+              if (p.type === "error") {
+                return <MsgError key={i} kind={p.kind ?? "retry"} detail={p.detail ?? "处理失败"} />;
+              }
+              // step-start/step-finish/patch 等内部过程 part 不渲染（过程噪声）。
+              // 已在分发层显式处理之外的未识别 type 同样不渲染。
+              return null;
+            })}
+            {body ? (
+              streaming ? (
+                <div
+                  data-testid="msg-streaming"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: space.sm,
+                    maxWidth: "78%",
+                    alignSelf: "flex-start",
+                    padding: `${space.sm}px ${space.md}px`,
+                    borderRadius: radius.md,
+                    backgroundColor: "var(--color-surface)",
+                    border: `1px solid ${neutral[200]}`,
+                    ...baseFont,
+                  }}
+                >
+                  <span
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontSize: fontSize.md,
+                      color: neutral[700],
+                      lineHeight: 1.6,
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {/* 流式正文 markdown 渲染（is_0000000019，终态走 ChatBubble 同链路） */}
+                    <Markdown>{cleanBody}</Markdown>
+                  </span>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: space.xs, flexShrink: 0 }}>
+                    <LoadingDots color={neutral[400]} testid="msg-streaming-dots" />
+                    <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>生成中</span>
+                  </span>
+                </div>
+              ) : messageStatus === "failed" ? (
+                <MsgError kind="failed" detail={cleanBody} />
+              ) : (
+                <ChatBubble showIdentity={false} text={cleanBody} type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
+              )
+            ) : attachment ? (
+              <ChatBubble showIdentity={false} text="" type="agent" author={author} role={role} time={time} attachment={attachment} isMentionMe={isMentionMe} />
+            ) : null}
+          </>
+        )}
       </div>
     </div>
   );

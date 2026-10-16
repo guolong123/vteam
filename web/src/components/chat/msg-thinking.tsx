@@ -3,8 +3,8 @@
  * =============================================
  * 从 docs/agent-platform/prototypes/group-chat/index.tsx 迁移：
  * - state=pending：思考中（三连点 + 「思考中…」 + **单行跑马灯**流式展示进行中推理，不可折叠、
- *   恒定单行——不再渲染多行 msg-thinking-detail 正文）；跑马灯文本经 useTypewriter
- *   **逐字揭示**（粗粒度 reasoning delta 到达后客户端补齐，溢出时继续滚动）。
+ *   恒定单行——不再渲染多行 msg-thinking-detail 正文）；跑马灯文本直接展示归一化全文
+ *   （不做客户端逐字揭示，溢出时按既有 keyframe marquee 滚动）。
  * - state=done：已完成，默认折叠（「已思考 · 点击展开 ▸」），点击展开/收起
  * data-testid=msg-thinking；pending 态无 msg-thinking-detail，仅 done+展开态才挂该节点。
  * 身份（B1）：头像/作者/时间统一由 MsgParts 共享身份栏渲染，
@@ -21,7 +21,6 @@ import {
   fontFamily,
 } from "@/src/theme/tokens";
 import { LoadingDots } from "./loading-indicator";
-import { useTypewriter } from "@/src/lib/use-typewriter";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
 
@@ -83,15 +82,13 @@ export function MsgThinking({ state, text, style, className }: MsgThinkingProps)
   const excerpt = pending ? "" : normalized.slice(0, THINKING_EXCERPT_CHARS);
   const detail = text.slice(0, THINKING_MAX_CHARS);
   // 单行跑马灯文本目标：pending = 归一化全文前 2000 字符（随 delta 增长）；done = 折叠摘录（≤200）。
-  // pending 文本经 useTypewriter 逐字揭示（done 传空串静默，不启动动画）。
   const pendingMarqueeTarget = normalized.slice(0, THINKING_MAX_CHARS);
-  const revealedPending = useTypewriter(pending ? pendingMarqueeTarget : "");
-  const marqueeText = pending ? revealedPending : excerpt;
+  const marqueeText = pending ? pendingMarqueeTarget : excerpt;
   // 多行正文只在 done+展开态存在：pending 恒定单行（不可折叠）。
   const bodyExpanded = open && !pending;
   // 跑马灯：溢出量实测（文本宽 - 视口宽），随跑马灯文本/容器宽度/展开态重测。
-  // marqueeText 在 pending 下随 useTypewriter 逐帧增长，故测量 effect 依赖它 →
-  // 揭示过程中持续重测，文本一溢出即挂滚动动画。
+  // marqueeText 在 pending 下随 delta 增长，故测量 effect 依赖它 →
+  // 文本一溢出即挂滚动动画。
   // done 展开态不滚（正文已在下方全量展示，避免双份动态噪音）；未溢出不挂动画。
   const viewportRef = useRef<HTMLSpanElement | null>(null);
   const textRef = useRef<HTMLSpanElement | null>(null);

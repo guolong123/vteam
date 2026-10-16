@@ -27,7 +27,7 @@ import type { AgentStatusEvent, ChannelMessagesCache, RealtimeQuestionEvent, Ses
 import { AgentAvatar, ChatBubble, MessageInput } from "@/src/components/ui";
 import type { MentionableAgent, SendMessagePayload } from "@/src/components/ui";
 import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
-import { LoadingIndicator, MsgError, QuestionModal, MsgParts, MsgLiveStream } from "@/src/components/chat";
+import { LoadingIndicator, MsgError, QuestionModal, MsgParts } from "@/src/components/chat";
 import type { QuestionModalData, QuestionModalSubmitPayload } from "@/src/components/chat";
 import { IssueDetailModal } from "@/src/components/tasks/issue-detail-modal";
 import { TaskDetailDrawer } from "@/src/components/tasks/TaskDetailDrawer";
@@ -1299,18 +1299,10 @@ export default function TeamSessionPage() {
   const allMessages: RealtimeChatMessage[] = isGroupTab
     ? (messagesQuery.data?.items ?? [])
     : (privateMessagesQuery.data?.items ?? []);
-  // status=processing 的 agent 消息（in-flight 回合）置底独立渲染：其 createdAt 冻结在
-  // 回合起点、会混排进历史中段。群聊恒空数组 —— 群 Tab 渲染路径逐字节不变。filter/sort
-  // 均作用于新副本，不改动 react-query 缓存数组。
-  const liveMessages: RealtimeChatMessage[] = isGroupTab
-    ? []
-    : allMessages
-        .filter((m) => m.senderType === "agent" && m.status === "processing")
-        .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
-  // 剩余消息（非 live 集合）仍按原顺序喂给既有 map / 分组 / 跨天分隔。
-  const messages: RealtimeChatMessage[] = liveMessages.length
-    ? allMessages.filter((m) => !(m.senderType === "agent" && m.status === "processing"))
-    : allMessages;
+  // in-flight（status=processing）agent 消息不再抽出独立渲染：私聊与终态消息共用同一条
+  // MsgParts variant="line" 渲染路径（服务端 mergeSessionWithPlatform 已把 processing 行
+  // 并入会话末尾）。群聊 Tab 渲染路径逐字节不变。
+  const messages: RealtimeChatMessage[] = allMessages;
   const nextCursor = isGroupTab
     ? (messagesQuery.data?.nextCursor ?? null)
     : (privateMessagesQuery.data?.nextCursor ?? null);
@@ -1560,6 +1552,7 @@ export default function TeamSessionPage() {
                   <MsgParts
                     key={msg.id}
                     parts={parts}
+                    variant={isGroupTab ? "bubble" : "line"}
                     messageStatus={msg.status}
                     secretAwaiting={secretAwaiting}
                     bodyText={((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string}
@@ -1581,23 +1574,6 @@ export default function TeamSessionPage() {
               }
               return withSeparator(
                 <ChatBubble key={msg.id} text={(msg.content?.text ?? "") as string} type={msg.senderType === "user" ? "user" : "agent"} author={msg.senderType === "user" ? undefined : author} role={role} time={formatTime(msg.createdAt)} isMentionMe={isMentionMe} attachment={attachment} initials={initials} status={msg.status} />,
-              );
-            })}
-            {liveMessages.map((msg) => {
-              const { role, author, initials, parts, isMentionMe, attachment, senderInstanceId } = resolveMessage(msg);
-              return (
-                <MsgLiveStream
-                  key={msg.id}
-                  parts={parts}
-                  bodyText={((msg as unknown as { content?: { text?: string } })?.content?.text ?? "") as string}
-                  author={author}
-                  role={role}
-                  time={formatTime(msg.createdAt)}
-                  initials={initials}
-                  secretAwaiting={secretAwaitingFor(msg.senderId, senderInstanceId)}
-                  isMentionMe={isMentionMe}
-                  attachment={attachment}
-                />
               );
             })}
             {loadingLabel && <LoadingIndicator label={loadingLabel} />}
