@@ -261,6 +261,24 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
     }
     return t === "error" || t === "aborted";
   };
+  /**
+   * reasoning 状态推断：`state` 字段只存在于 serve 的 tool part，reasoning part 无 state，
+   * 若直接 `p.state ?? "done"` 则流式中的思考行永远显示「已思考」。此处按**位置**推断：
+   * 仍在流式推进（streaming / messageStatus=processing）的消息上，最后一条**有内容**的
+   * reasoning 即进行中（pending）；其余（含更早的 reasoning 与终态消息）一律 done。
+   * 只看 deduped 列表（同 id 重复快照已去重），末条为空思考占位（serve text=""）时
+   * 回退到前一条有内容的思考，保证进行中态不会因尾部空 part 丢失。
+   */
+  const isStreaming = streaming === true || messageStatus === "processing";
+  const lastReasoningIndex = (() => {
+    for (let i = procPartsDeduped.length - 1; i >= 0; i -= 1) {
+      const t = procPartsDeduped[i].type;
+      if ((t === "reasoning" || t === "thinking") && procRenderable(procPartsDeduped[i])) {
+        return i;
+      }
+    }
+    return -1;
+  })();
   const hasContent =
     cleanBody.length > 0 ||
     Boolean(attachment) ||
@@ -279,7 +297,7 @@ export function MsgParts({ parts, bodyText, author, role, time, streaming, attac
             return (
               <MsgThinking
                 key={i}
-                state={p.state ?? "done"}
+                state={p.state ?? (isStreaming && i === lastReasoningIndex ? "pending" : "done")}
                 text={p.text ?? p.summary ?? p.thoughts ?? p.detail ?? ""}
               />
             );
