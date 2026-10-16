@@ -195,8 +195,10 @@ type WecomStreamInfo = {
   readonly fromUserId?: string;
   readonly fromUserName?: string;
   readonly chattype?: string;
-  /** 入站消息所属会话（群聊 chatid；单聊无此字段）：出站主动推送按它定位，
-   *  避免多群共用 bot 时被渠道级 lastChatid 带偏到别的群。 */
+  /** 企微主动推送该会话所需的地址：群聊 = 群 chatid，单聊 = 发送者 userid
+   *  （协议上单聊入站帧不返回 chatid，注册流时以 fromUserId 回退填入）。出站按它定位，
+   *  否则只能落到渠道级 lastChatid（每条入站覆盖）——多群共用 bot 发错群、单聊发错人，
+   *  见 2026-10-16 私聊误投事故。 */
   readonly chatid?: string;
   /** 入站消息实际到达的渠道，决定回信路由；运行时存在但此前未声明 */
   readonly channelId?: string;
@@ -5767,8 +5769,9 @@ export class PlatformMcpService implements OnModuleInit {
           null;
         chattype = activeExternal.stream.chattype ?? null;
       }
-      // 显式指定回复对象却未匹配到活跃流（流过期/进程重启）：仍以指定名 @，
-      // 避免漏 @；会话路由由下方 chatid 锚点回退兜底。
+      // 显式指定回复对象却未匹配到活跃流（流过期/进程重启）：群聊镜像仍以指定名 @，
+      // 避免漏 @。目标可定位性由下方 chatid 锚点守卫先行证明——定位不到就直接中止，
+      // 压根走不到发送，所以这里的 fromName 是已验证收件人的名字，而非捏造的成功。
       if (replyToUser && !fromName) {
         fromName = replyToUser;
       }
@@ -5782,6 +5785,43 @@ export class PlatformMcpService implements OnModuleInit {
       // 内存流（10 分钟 TTL）已失效/重启丢失：回退持久化的 chatid 锚点
       inboundChatId = await this.latestExternalChatId(teamId, replyToUser);
     }
+
+    // 被动回复（finishStream / replyMedia / replyTemplateCard）带入站帧上下文，天然按消息
+    // 定位到人；只有主动推送依赖 chatid。file 无被动通道，永远走主动推送。
+    const passiveCapable =
+      msgtype === 'text' ||
+      msgtype === 'markdown' ||
+      msgtype === 'image' ||
+      msgtype === 'template_card' ||
+      msgtype === 'mpnews';
+    const targetResolvable =
+      !!inboundChatId || (passiveCapable && !!activeExternal);
+    // 2026-10-16 私聊误投事故：指定了回复对象却定位不到其会话时，旧逻辑照样推送，
+    // 适配器回退渠道级 lastChatid（= 最后一个发言的人），文件被投给了另一个人，却
+    // 因 fromName 被捏造成 replyToUser 而回报 wecomSent:true。此处在任何上传/发送/群
+    // 镜像之前硬中止，宁可失败也不误投。
+    if (replyToUser && !targetResolvable) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `发送失败: 指定回复对象 ${replyToUser}，但未能定位其企微会话（无活跃入站流，且该用户在锚点窗口内没有可用记录）。为避免误投给其他用户，本次已中止发送。请让该用户先发一条消息后重试，或改用 vteam_group_post 在群内回复。`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // 主动推送的会话地址：显式指定了回复对象时，地址必须来自该用户的入站锚点，
+    // 解析不到即中止——绝不回退渠道级 lastChatid（那是最后一个发言的人，多用户并发
+    // 时会把消息投给另一个人，见 2026-10-16 私聊误投事故）。未指定回复对象时保持旧行为。
+    const pushAddress = (): string | undefined => {
+      if (inboundChatId) return inboundChatId;
+      if (!replyToUser) return undefined;
+      throw new Error(
+        `指定回复对象 ${replyToUser} 后未能定位其企微会话，已中止主动推送以免误投给其他用户。`,
+      );
+    };
 
     // 回复须回到用户当初发言的那个机器人：同一 team 绑定多个 wecom 渠道时，
     // 取第一个绑定会把回信发到用户没发言的群里。仅当入站渠道不可考时才回退首个绑定。
@@ -5842,7 +5882,7 @@ export class PlatformMcpService implements OnModuleInit {
           wecomSent = await (adapter as any).sendNewMessage(
             wecomChannelId,
             wecomText,
-            inboundChatId ?? undefined,
+            pushAddress(),
           );
         }
         if (
@@ -5852,6 +5892,7 @@ export class PlatformMcpService implements OnModuleInit {
           wecomSent = await (adapter as any).sendFallbackMessage(
             wecomChannelId,
             wecomText,
+            pushAddress(),
           );
         }
         mirrorContent = { text: mirrorText, msgtype, parts: [] };
@@ -6453,13 +6494,18 @@ export class PlatformMcpService implements OnModuleInit {
           !wecomSent &&
           typeof (adapter as any).sendTemplateCard === 'function'
         ) {
+          // 主动推送卡片必须带上被指定用户的会话地址（旧实现无此参数，只能落到
+          // lastChatid）。放在 try 外，让 pushAddress 的中止冒泡到外层 catch，
+          // 错误原因才能随 isError 回给模型。
+          const targetChatId = pushAddress();
           try {
             this.logger.log(
-              `wecom_reply trying sendTemplateCard channel=${wecomChannelId} chatId hint resolved via adapter teamId=${teamId}`,
+              `wecom_reply trying sendTemplateCard channel=${wecomChannelId} chatId=${targetChatId ?? 'lastChatid'} teamId=${teamId}`,
             );
             wecomSent = await (adapter as any).sendTemplateCard(
               wecomChannelId,
               cardObj,
+              targetChatId,
             );
           } catch (e) {
             this.logger.warn(
@@ -6646,13 +6692,16 @@ export class PlatformMcpService implements OnModuleInit {
           !wecomSent &&
           typeof (adapter as any).sendTemplateCard === 'function'
         ) {
+          // 同 template_card：mpnews 也走主动推送兜底，必须带目标会话地址。
+          const targetChatId = pushAddress();
           try {
             this.logger.log(
-              `wecom_reply mpnews trying sendTemplateCard channel=${wecomChannelId} teamId=${teamId}`,
+              `wecom_reply mpnews trying sendTemplateCard channel=${wecomChannelId} chatId=${targetChatId ?? 'lastChatid'} teamId=${teamId}`,
             );
             wecomSent = await (adapter as any).sendTemplateCard(
               wecomChannelId,
               cardObj,
+              targetChatId,
             );
           } catch (e) {
             this.logger.warn(
@@ -6821,7 +6870,7 @@ export class PlatformMcpService implements OnModuleInit {
             wecomChannelId,
             mediaKind,
             mediaIdToSend,
-            inboundChatId ?? undefined,
+            pushAddress(),
           );
         }
         if (!wecomSent) {

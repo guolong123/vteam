@@ -318,14 +318,19 @@ export class MessageInboundService implements MessageHost {
                   chattype: chattype ?? null,
                 }
               : null;
+            // 主动推送的会话锚点：企微推送 API 的 chatid 语义是「群聊填群 chatid，
+            // 单聊填接收人 userid」，而入站帧的 chatid 仅群聊返回 ⇒ 私聊此前恒无锚点，
+            // 出站解析器只能回落到频道级「最后说话人」地址，多用户并发时错投。
+            // 故群聊取 chatid，私聊取发送者 userid（wecomUserId 已含 senderExternalId 兜底）；
+            // 全缺则整字段不下发，避免落库空串被出站误判为「已锚定」。
+            const pushChatId: string | null =
+              cmdAny.chatid || wecomUserId || null;
             const res = await this.chatService.createMessage(
               groupChannel.id,
               '__external__',
               {
                 text: inboundText,
-                ...(cmdAny.chatid
-                  ? { externalChatId: String(cmdAny.chatid) }
-                  : {}),
+                ...(pushChatId ? { externalChatId: String(pushChatId) } : {}),
                 ...(cmdAny.attachmentUrl
                   ? {
                       attachmentUrl: cmdAny.attachmentUrl,
