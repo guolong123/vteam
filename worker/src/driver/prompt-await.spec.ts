@@ -305,6 +305,30 @@ describe('describeTimeoutReason（首字超时根因诊断）', () => {
     expect(describeTimeoutReason(msgs, '   ')).toBe('模型调用报错：Invalid API key. (HTTP 401)');
   });
 
+  it('serveErrorText 为模型下架（Model not found）→ 明确「模型不可用」+ 提示更换成员模型', () => {
+    const reason = describeTimeoutReason(
+      [],
+      'Model not found: opencode-go/space-bunny-free. Did you mean: space-bunny, cat-jam-free?',
+    );
+    expect(reason).toContain('模型不可用');
+    expect(reason).toContain('更换可用的模型');
+    expect(reason).toContain('opencode-go/space-bunny-free');
+    expect(reason).not.toContain('模型调用报错');
+  });
+
+  it('info.error 为模型下架（ProviderModelNotFoundError）同样产出可执行提示', () => {
+    const msgs = [
+      asstErrMsg('a1', {
+        name: 'ProviderModelNotFoundError',
+        data: { message: 'Model not found: opencode/gone' },
+      }),
+    ];
+    const reason = describeTimeoutReason(msgs);
+    expect(reason).toContain('模型不可用');
+    expect(reason).toContain('更换可用的模型');
+    expect(reason).toContain('opencode/gone');
+  });
+
   it('serveLogTail 提供且无其它证据 → 兜底原因附原始日志行（失败必带证据，不只一句笼统话）', () => {
     const tail = [
       'level=INFO message=loading path=/root/.config/opencode/opencode.json',
@@ -994,6 +1018,14 @@ describe('extractServeError（转义引号）', () => {
         'message="stream error" error.error="AI_APICallError: Rate limit exceeded. Please try again later."',
       ),
     ).toBe('Rate limit exceeded. Please try again later.');
+  });
+
+  it('顶层 prompt_async failed 的 Cause([Die(ProviderModelNotFoundError: …)]) → 剥包装并去类型前缀', () => {
+    const line =
+      'level=ERROR message="prompt_async failed" sessionID=ses_mine cause="Cause([Die(ProviderModelNotFoundError: Model not found: opencode-go/space-bunny-free. Did you mean: space-bunny, cat-jam-free, longcat-2.5-preview-free?)])"';
+    expect(extractServeError(line)).toBe(
+      'Model not found: opencode-go/space-bunny-free. Did you mean: space-bunny, cat-jam-free, longcat-2.5-preview-free?',
+    );
   });
 });
 

@@ -29,7 +29,7 @@ import {
   sendAndAwait,
 } from '../driver/prompt-await';
 import { ServeEventStream } from '../driver/serve-event-stream';
-import { SERVE_FATAL_KEYWORDS } from '../runtime/serve-log';
+import { isServeFatalLine } from '../runtime/serve-log';
 import { ResourceInjector } from '../resources/injector';
 import {
   LOCAL_CONFIG_KINDS,
@@ -1881,9 +1881,9 @@ export class ExecServer {
         // 永不触发 abort——只认顶层致命（prompt_async failed / process error /
         // 本会话 stream error）。线上实测 08:18：一行子域 Model-not-found 秒杀
         // PM+architect 两个健康主 agent（step=6，group_post 在途）。
-        onServeError: (text) => !/share subscriber/i.test(text) &&
-          (/level=ERROR\b|error\.(error|name|message|code)=/.test(text) &&
-          SERVE_FATAL_KEYWORDS.test(text)),
+        // 含模型下架（ProviderModelNotFoundError / Model not found）：顶层命中即快速失败
+        // （重试同一模型必然继续失败，空等首字超时无意义）；子域形态由 isServeFatalLine 排除。
+        onServeError: (text) => isServeFatalLine(text),
         onPoll: (messages: ServeMessage[], _elapsedMs: number) => {
           enqueueDelta(messages);
           // question/权限确认旁路检测：serve 侧 pending 时上送事件（不 abort，等用户）

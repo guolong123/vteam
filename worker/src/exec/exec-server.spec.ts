@@ -644,6 +644,43 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
+  it('顶层 serve 日志模型下架（prompt_async failed + ProviderModelNotFoundError）→ 快速 abort 且错误文本告知更换成员模型（不等首字超时）', async () => {
+    const { driver, getMessages, abort } = mockDriver();
+    // 首字超时给到 300s（默认量级）却快速失败 → 证明是模型下架快检而非空等首字超时
+    getMessages.mockResolvedValueOnce([]).mockResolvedValue(STEP_START_ONLY);
+    const { sender, sent } = createSender();
+    const modelNotFoundLine =
+      'timestamp=t level=ERROR run=x message="prompt_async failed" sessionID=ses_1 cause="Cause([Die(ProviderModelNotFoundError: Model not found: opencode-go/space-bunny-free. Did you mean: space-bunny, cat-jam-free?)])"';
+    // T17-stale：本轮运行中新追加（send 前基线快照时尚无）
+    let reads = 0;
+    const serveErrorReader = jest.fn(() => (reads++ === 0 ? [] : [modelNotFoundLine]));
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 300000,
+      pollMs: 5,
+      serveErrorReader,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', prompt: 'go' });
+      await waitFor(() => sent.length >= 4);
+      // 首轮 poll 即失败（非多轮空等）
+      expect(getMessages.mock.calls.length).toBeLessThanOrEqual(2);
+      const terminal = sent.filter((s) => s.type !== 'message.part.delta');
+      const errText = String(terminal[2].payload.error);
+      expect(errText).toContain('模型不可用');
+      expect(errText).toContain('更换可用的模型');
+      expect(errText).toContain('opencode-go/space-bunny-free');
+      expect(errText).not.toContain('等待首字超时');
+      expect(abort).toHaveBeenCalledWith('ses_1');
+    } finally {
+      await exec.stop();
+    }
+  });
+
   it('serve 日志仅子域 share subscriber 失败行 → 不提前 abort 主会话（主循环自恢复优先，线上 08:18 双杀根因）', async () => {
     const { driver, getMessages, abort } = mockDriver();
     // 永无首字（仅 step-start），60ms 首字超时远大于单轮耗时——若快检误触发会首轮即失败；

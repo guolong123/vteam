@@ -207,9 +207,11 @@ function extractMessageError(messages: ServeMessage[]): string | null {
  * 实测两种形态：
  *   a) `message="stream error" ... error.error="AI_APICallError: Rate limit exceeded. Please try again later."`
  *   b) `message="share subscriber failed" ... cause="Cause([Fail(ProviderModelNotFoundError: Model not found: …)])"`
+ *   c) `level=ERROR message="prompt_async failed" sessionID=ses_… cause="Cause([Die(ProviderModelNotFoundError: Model not found: …)])"`
+ *      （顶层模型下架：`Die(` 与子域 `Fail(` 同为 Cause 包装形态，需一并剥离）
  * 提取优先级（取**最深可用细节**，避免把整行结构化日志当原因）：
  *   1. `error.error="..."`（APIError 承载具体模型调用错误）
- *   2. `cause="..."`（流/订阅失败的嵌套原因；剥掉 `Cause([Fail(` / `)])` 包装）
+ *   2. `cause="..."`（流/订阅失败的嵌套原因；剥掉 `Cause([Fail(` / `Cause([Die(` / `)])` 包装）
  *   3. `message="..."`（如 "stream error"）
  *   4. 整行 trim（结构化字段全缺时的兜底）
  * 再去掉错误类型前缀（`AI_APICallError: ` / `APIError: ` 等），对齐前端展示习惯。
@@ -226,10 +228,29 @@ export function extractServeError(line: string): string {
   const raw = (errorValue ?? causeValue ?? messageValue ?? line).trim();
   const unescaped = raw.replace(/\\"/g, '"');
   const unwrapped = unescaped
-    .replace(/^Cause\(\[Fail\(/, '')
+    .replace(/^Cause\(\[(?:Fail|Die)\(/, '')
     .replace(/\)\]\)?$/, '')
     .trim();
   return unwrapped.replace(/^[A-Za-z_]+:\s*/, '').trim();
+}
+
+/**
+ * 模型下架判定（serve 错误文本）：ProviderModelNotFoundError / `Model not found`。
+ * 命中 → 该模型在 provider 中已不存在/下架，重试同一模型必然继续失败：文案需明确告知
+ * 用户**为该成员更换可用模型**（而非笼统「模型调用失败」/「等待首字超时」）。
+ */
+export function isModelNotFoundError(text: string): boolean {
+  return /ProviderModelNotFoundError|Model not found/i.test(text);
+}
+
+/** 模型下架的可执行修复提示（附在错误原因后：告知用户改成员模型即可恢复）。 */
+const MODEL_NOT_FOUND_HINT = '（该模型可能已在 provider 中下架；请为该成员更换可用的模型后重试）';
+
+/** 模型下架 → 明确「模型不可用」+ 更换模型提示；否则原样「模型调用报错」。 */
+function describeModelError(detail: string): string {
+  return isModelNotFoundError(detail)
+    ? `模型不可用：${detail}${MODEL_NOT_FOUND_HINT}`
+    : `模型调用报错：${detail}`;
 }
 
 /**
@@ -259,16 +280,16 @@ export function describeTimeoutReason(
     .flatMap((m) => m.parts ?? []);
 
   // 0. serve 日志错误（最高优先级）：Rate limit/Free usage 等不透传 message.info.error——
-  //    这是唯一能拿到该错误的通道
+  //    这是唯一能拿到该错误的通道；模型下架（Model not found）→ 明确「模型不可用」+ 换模型提示
   if (typeof serveErrorText === 'string' && serveErrorText.trim() !== '') {
-    return `模型调用报错：${serveErrorText.trim()}`;
+    return describeModelError(serveErrorText.trim());
   }
 
   // 1. info.error（serve 直接透传的模型调用错误）：APIError 消息 parts=[]，
   //    只在这里能拿到「Invalid API key.」等具体报错
   const messageError = extractMessageError(messages);
   if (messageError !== null) {
-    return `模型调用报错：${messageError}`;
+    return describeModelError(messageError);
   }
 
   // 2. serve 实际错误：error part 或 step-finish(reason=error)
@@ -315,12 +336,15 @@ export class CompletionTimeoutError extends Error {
     timeoutKind: 'first-token' | 'total' = 'first-token',
   ) {
     const reason = describeTimeoutReason(messages ?? [], serveErrorText, serveLogTail);
+    const modelNotFound = typeof serveErrorText === 'string' && isModelNotFoundError(serveErrorText);
     const prefix =
       timeoutKind === 'total'
         ? `[prompt-await] 会话 ${sessionID} 执行总时长超限：${reason}`
-        : typeof serveErrorText === 'string' && serveErrorText.trim() !== ''
-          ? `[prompt-await] 会话 ${sessionID} 模型调用失败：${reason}`
-          : `[prompt-await] 会话 ${sessionID} 等待首字超时：${reason}`;
+        : modelNotFound
+          ? `[prompt-await] 会话 ${sessionID} ${reason}`
+          : typeof serveErrorText === 'string' && serveErrorText.trim() !== ''
+            ? `[prompt-await] 会话 ${sessionID} 模型调用失败：${reason}`
+            : `[prompt-await] 会话 ${sessionID} 等待首字超时：${reason}`;
     super(prefix);
     this.name = 'CompletionTimeoutError';
     this.sessionID = sessionID;
