@@ -117,10 +117,70 @@ function dedupePartsById(
  * 背景：worker 改为「重发状态变化」后，同一 part.id 会随每轮快照重复上送，
  * 旧实现 `[...old, ...new]` 无条件追加 → 同一 part 在 content.parts 里堆出多份
  * 快照（UI 上表现为重复的工具卡/重复正文）。
+ *
+ * `options.monotonicText`：**流式单调守卫**——仅对同 id 的 text/reasoning/thinking
+ * part 生效，拒绝会让文本回退的快照（更短、或与旧文本无前后缀包含关系），保留更长/
+ * 更完整的旧快照；tool/step-* 等非文本 part 一律保持 last-write-wins（工具状态流转、
+ * 终态替换不受影响）。开启方仅限 ingress message.part.delta 累积路径（见
+ * worker-event.ingress handleMessagePartDelta）；终态化（task.completed）走
+ * worker-dispatcher 的整段 content 覆写，不经本函数。
  */
+export interface MergePartsOptions {
+  monotonicText?: boolean;
+}
+
+/** 会随流式生成累积增长的文本类 part 类型（单调守卫作用域）。 */
+const TEXTUAL_PART_TYPES: ReadonlySet<string> = new Set(['text', 'reasoning', 'thinking']);
+
+/** 文本类 part 的候选文本字段拼接（与 worker textGrowthFingerprint 同口径）。 */
+function partTextualValue(p: Record<string, unknown>): string {
+  let out = '';
+  for (const key of ['text', 'summary', 'thoughts', 'detail'] as const) {
+    const v = p[key];
+    if (typeof v === 'string') out += v;
+  }
+  return out;
+}
+
+/**
+ * 流式单调守卫：同 id 的文本类快照 `newPart` 是否可覆盖 `oldPart`。
+ * - 任一非文本类 → true（tool 状态流转等保持 last-write-wins）
+ * - 类型不同（同 id 文本 part 类型不应变化；如 reasoning 增量被合成标成 text）→
+ *   只在新快照文本**更长**（更完整，可顺带修正类型）时接受，否则保留旧类型
+ * - 类型同：新更短 → 拒绝；等长 → 仅文本相同才接受；更长 → 需为前缀扩展
+ *   （append-only 累积）或旧文本为其后缀（新快照是更完整全文、旧的是重连后截断的
+ *   后缀片段）才接受；否则拒绝（防止无关改写/回退覆盖已渲染的更长文本）
+ */
+function mayReplaceTextualPart(
+  oldPart: Record<string, unknown>,
+  newPart: Record<string, unknown>,
+): boolean {
+  const oldType = typeof oldPart.type === 'string' ? oldPart.type : '';
+  const newType = typeof newPart.type === 'string' ? newPart.type : '';
+  if (!TEXTUAL_PART_TYPES.has(oldType) || !TEXTUAL_PART_TYPES.has(newType)) {
+    return true;
+  }
+  const oldText = partTextualValue(oldPart);
+  const newText = partTextualValue(newPart);
+  if (oldType !== newType) {
+    return newText.length > oldText.length;
+  }
+  if (newText.length < oldText.length) {
+    return false;
+  }
+  if (newText.length === oldText.length) {
+    return newText === oldText;
+  }
+  if (oldText.length === 0) {
+    return true;
+  }
+  return newText.startsWith(oldText) || newText.endsWith(oldText);
+}
+
 export function mergePartsById(
   oldParts: unknown,
   newParts: unknown,
+  options: MergePartsOptions = {},
 ): Array<Record<string, unknown>> {
   const merged = dedupePartsById(normalizeParts(oldParts));
   const incoming = normalizeParts(newParts);
@@ -134,6 +194,9 @@ export function mergePartsById(
     if (id !== undefined) {
       const at = indexById.get(id);
       if (at !== undefined) {
+        if (options.monotonicText && !mayReplaceTextualPart(merged[at], p)) {
+          continue;
+        }
         merged[at] = p;
         continue;
       }

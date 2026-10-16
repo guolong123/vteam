@@ -133,6 +133,58 @@ describe('ServeEventStream（serve /event SSE 实时订阅）', () => {
     stream.close();
   });
 
+  it('delta 合成类型跟随整快照记录的 part 类型（reasoning 增量 field=text 亦标 reasoning）', async () => {
+    const parts: ServeStreamPart[] = [];
+    const kinds: string[] = [];
+    global.fetch = jest.fn().mockResolvedValue(
+      sseResponse([
+        partUpdated({ id: 'prt_r', type: 'reasoning', sessionID: 'ses_a', messageID: 'msg_1', text: '' }),
+        frame({
+          type: 'message.part.delta',
+          properties: { sessionID: 'ses_a', messageID: 'msg_1', partID: 'prt_r', field: 'text', delta: '思考中' },
+        }),
+      ]),
+    ) as unknown as typeof fetch;
+    const stream = new ServeEventStream({
+      baseUrl: 'http://127.0.0.1:4096',
+      onPart: (p, k) => {
+        parts.push(p);
+        kinds.push(k);
+      },
+    });
+    stream.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(kinds).toEqual(['update', 'delta']);
+    expect(parts[0]).toMatchObject({ id: 'prt_r', type: 'reasoning' });
+    expect(parts[1]).toMatchObject({ id: 'prt_r', type: 'reasoning', text: '思考中' });
+    stream.close();
+  });
+
+  it('未见过整快照的 delta：类型回落 text（kind=delta 供调用方做单调准入）', async () => {
+    const parts: ServeStreamPart[] = [];
+    const kinds: string[] = [];
+    global.fetch = jest.fn().mockResolvedValue(
+      sseResponse([
+        frame({
+          type: 'message.part.delta',
+          properties: { sessionID: 'ses_a', messageID: 'msg_1', partID: 'prt_x', field: 'text', delta: 'hi' },
+        }),
+      ]),
+    ) as unknown as typeof fetch;
+    const stream = new ServeEventStream({
+      baseUrl: 'http://127.0.0.1:4096',
+      onPart: (p, k) => {
+        parts.push(p);
+        kinds.push(k);
+      },
+    });
+    stream.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(parts[0]).toMatchObject({ id: 'prt_x', type: 'text', text: 'hi' });
+    expect(kinds).toEqual(['delta']);
+    stream.close();
+  });
+
   it('message.updated → onMessageInfo 透传 info（assistant 集合建立源）', async () => {
     const infos: Array<{ id?: unknown; role?: unknown }> = [];
     global.fetch = jest.fn().mockResolvedValue(
