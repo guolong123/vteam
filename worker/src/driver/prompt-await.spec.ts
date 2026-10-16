@@ -1328,3 +1328,70 @@ describe('MessageDeltaTracker（T10：增量上送去重）', () => {
     expect(tracker.extractNewParts([asstMsg('a1', [tool({ status: 'running', input: { command: 'ls -la' } })])])).toHaveLength(0);
   });
 });
+
+describe('MessageDeltaTracker.admitSsePart（SSE 路单调准入：拒绝回退快照）', () => {
+  const text = (body: string): ServePart =>
+    ({ id: 'prt_t', type: 'text', text: body }) as ServePart;
+  const tool = (state: Record<string, unknown>): ServePart =>
+    ({ id: 'prt_tool', type: 'tool', tool: 'bash', state }) as ServePart;
+
+  it('首次出现放行并记录基准；同长度 delta 不重发（要求严格增长）', () => {
+    const tracker = new MessageDeltaTracker();
+    expect(tracker.admitSsePart(text('你好'), 'delta')).toBe(true);
+    expect(tracker.admitSsePart(text('你好'), 'delta')).toBe(false); // 等长非 update → 拒绝
+  });
+
+  it('回归护栏：轮询已发全文后，SSE 重连片段（更短）被拒绝且不降低基准', () => {
+    const tracker = new MessageDeltaTracker();
+    // 轮询路先上送全文（player: 已发 100 字符）
+    expect(
+      tracker.extractNewParts([asstMsg('a1', [text('x'.repeat(100))])]),
+    ).toHaveLength(1);
+    // SSE 路（重连后 delta 缓冲从零累积）拿到的是更短的后缀片段 → 拒绝（不覆盖全文）
+    expect(tracker.admitSsePart(text('x'.repeat(10)), 'delta')).toBe(false);
+    // 基准未被降低：随后轮询的更大全量快照仍能上送
+    expect(
+      tracker.extractNewParts([asstMsg('a1', [text('x'.repeat(200))])]),
+    ).toHaveLength(1);
+  });
+
+  it('advancing delta（严格增长）放行；kind=update 允许等长替换（权威快照修正）', () => {
+    const tracker = new MessageDeltaTracker();
+    expect(tracker.admitSsePart(text('a'), 'delta')).toBe(true);
+    expect(tracker.admitSsePart(text('ab'), 'delta')).toBe(true); // 增长 → 放行
+    expect(tracker.admitSsePart(text('ab'), 'update')).toBe(true); // 等长 update → 放行（修正 time/type）
+    expect(tracker.admitSsePart(text('a'), 'update')).toBe(false); // 更短 → 即使 update 也拒绝
+  });
+
+  it('text 空壳（无文本字段）不重发；其余类型仅首次放行', () => {
+    const tracker = new MessageDeltaTracker();
+    const shell = { id: 'prt_r', type: 'reasoning' } as ServePart;
+    expect(tracker.admitSsePart(shell, 'update')).toBe(true); // 首发
+    expect(tracker.admitSsePart(shell, 'delta')).toBe(false); // 空壳不重发
+    const step = { id: 'prt_s', type: 'step-start' } as ServePart;
+    expect(tracker.admitSsePart(step, 'update')).toBe(true);
+    expect(tracker.admitSsePart(step, 'update')).toBe(false);
+  });
+
+  it('tool part：进度推进（pending→running→completed）放行；旧快照回退被拒绝', () => {
+    const tracker = new MessageDeltaTracker();
+    expect(tracker.admitSsePart(tool({ status: 'pending', input: {} }), 'update')).toBe(true);
+    expect(
+      tracker.admitSsePart(tool({ status: 'running', input: { command: 'ls' } }), 'update'),
+    ).toBe(true);
+    expect(
+      tracker.admitSsePart(tool({ status: 'completed', input: { command: 'ls' }, output: 'a.txt' }), 'update'),
+    ).toBe(true);
+    // 旧快照（更小进度）到达 → 拒绝，不回退卡片
+    expect(
+      tracker.admitSsePart(tool({ status: 'running', input: { command: 'ls' } }), 'update'),
+    ).toBe(false);
+  });
+
+  it('reset 清空基准后 admitSsePart 重新接受首帧（多轮隔离契约不回退）', () => {
+    const tracker = new MessageDeltaTracker();
+    expect(tracker.admitSsePart(text('abc'), 'delta')).toBe(true);
+    tracker.reset();
+    expect(tracker.admitSsePart(text('a'), 'delta')).toBe(true);
+  });
+});

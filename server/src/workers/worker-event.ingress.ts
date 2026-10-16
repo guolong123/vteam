@@ -704,7 +704,7 @@ export class WorkerEventIngress {
           );
           return null;
         }
-        const merged = mergePartsById(cached.parts, kept);
+        const merged = mergePartsById(cached.parts, kept, { monotonicText: true });
         const content = {
           text: concatText(merged),
           parts: merged,
@@ -778,8 +778,10 @@ export class WorkerEventIngress {
           unknown
         >;
         // 同 part.id 的新快照原地替换旧快照（worker 重发状态变化后同一 id 会重复上送；
-        // 无条件追加会让一次工具调用在 content.parts 里堆出多份快照）。
-        const merged = mergePartsById(oldContent.parts, kept);
+        // 无条件追加会让一次工具调用在 content.parts 里堆出多份快照）。`monotonicText`
+        // 单调守卫：同 id 的 text/reasoning 快照不得回退（更短/无包含关系 → 丢弃，
+        // 保留更长旧快照）——修流式文本「出现→消失→再出现」的回退闪烁。
+        const merged = mergePartsById(oldContent.parts, kept, { monotonicText: true });
         const updated = await this.prisma.message.update({
           where: { id: hasExisting.id },
           data: {

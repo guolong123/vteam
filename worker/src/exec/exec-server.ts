@@ -1841,18 +1841,18 @@ export class ExecServer {
         });
     };
     // SSE 实时路（serve GET /event 订阅）：part 事件零阈值、零轮询延迟直接上送，
-    // 并经 tracker.noteSent 记录进度基准——后续轮询快照对同一 part 的比较以此为基线，
-    // 旧快照（单调量更小）自动被压制，双路不会互相回覆盖。全局总线事件按 sessionID +
-    // assistant 消息集合过滤后才入链（其它会话/角色的事件直接丢弃）。
-    const enqueueParts = (freshParts: ServePart[]): void => {
-      if (freshParts.length === 0) {
+    // 并经 tracker.admitSsePart 单调准入（推进才发、更新共享基准）——轮询快照对同一
+    // part 的比较以该基准为底线，旧/更短快照被压制，双路不会互相回覆盖。全局总线
+    // 事件按 sessionID + assistant 消息集合过滤后才入链（其它会话/角色的事件直接丢弃）。
+    const enqueueParts = (freshParts: ServePart[], kind: 'update' | 'delta'): void => {
+      // 单调准入：SSE 重连/晚于轮询建立时，delta 合成的 part 文本可能**短于**轮询路
+      // 已上送的全文——admitSsePart 对同 part.id 拒绝回退快照且不降低基准（见 tracker）。
+      const admitted = freshParts.filter((p) => tracker.admitSsePart(p, kind));
+      if (admitted.length === 0) {
         return;
       }
-      for (const p of freshParts) {
-        tracker.noteSent(p);
-      }
       deltaChain = deltaChain
-        .then(() => this.sendDelta(ctx, freshParts))
+        .then(() => this.sendDelta(ctx, admitted))
         .catch((err: unknown) => {
           this.logger.warn(`message.part.delta（SSE）上送失败（不影响主流程）: ${String(err)}`);
         });
@@ -1860,6 +1860,10 @@ export class ExecServer {
     // SSE 路开关：默认开（VTEAM_SSE_FORWARD=0/false 关，退回纯轮询兜底路）。
     const sseEnabled = !/^(0|false|no)$/i.test(process.env.VTEAM_SSE_FORWARD ?? '');
     const assistantMsgIds = new Set<string>();
+    // SSE 连接建立后已见过**权威整快照**（message.part.updated）的 part id——增量合成
+    // （delta）只对这些 id 放行。连接晚于 part 开始时，delta 缓冲只含「连接后的片段」，
+    // 上送会把不完整后缀当成全文；本集合拦截它们，交给轮询全量快照兜底（(重)连接清空）。
+    const sseKnownPartIds = new Set<string>();
     let sseStream: ServeEventStream | null = null;
     if (sseEnabled && this.driver.baseUrl) {
       sseStream = new ServeEventStream({
@@ -1871,7 +1875,7 @@ export class ExecServer {
             assistantMsgIds.add(info.id);
           }
         },
-        onPart: (part) => {
+        onPart: (part, kind) => {
           // 全局总线过滤：① sessionID 匹配本任务会话（缺失时放行由消息集合兜底）；
           // ② **严格 assistant-only**：messageID 必须存在且属于已知 assistant 消息。
           //    part 本身不带 role，只有 message.updated 的 info.role 能区分——user/system
@@ -1886,14 +1890,24 @@ export class ExecServer {
           if (!part.messageID || !assistantMsgIds.has(part.messageID)) {
             return;
           }
-          enqueueParts([part as unknown as ServePart]);
+          // ④ 增量合成（delta）只对已见过权威整快照的 part 放行：连接晚于 part 开始时，
+          //    缓冲仅为「连接后的后缀片段」，不可当全文上送（见 sseKnownPartIds）。
+          if (kind === 'delta' && !sseKnownPartIds.has(part.id)) {
+            return;
+          }
+          if (kind === 'update') {
+            sseKnownPartIds.add(part.id);
+          }
+          enqueueParts([part as unknown as ServePart], kind);
         },
         onOpen: () => {
-          // 连接成活（首帧 server.connected）：清空去重基准，下一轮 poll 以全量当前
-          // 快照对账一次——SSE 连接建立前 poll 可能已发过更旧的内容，对账保证不丢
-          // （server 按 part.id 合并，重复快照无害）。
-          tracker.reset();
-          this.logger.info(`[sse-forward] serve /event 已订阅（session=${sessionID}），下一轮 poll 对账`);
+          // 连接成活（首帧 server.connected）。**刻意不 reset 去重基准**：/event 不重放
+          // 历史帧，若清空基准，重连后的首个 delta 缓冲（仅含连接后的片段）会被当成
+          // 新快照上送并覆盖轮询已发全文 → 渲染回退。保留基准后，admitSsePart 的单调
+          // 准入会丢弃这些更短/非推进的片段；轮询路持续以全量快照兜底，不丢内容。
+          // 清空已见 part 集合：重连后须重新见过整快照才放行该 part 的增量。
+          sseKnownPartIds.clear();
+          this.logger.info(`[sse-forward] serve /event 已订阅（session=${sessionID}），增量按单调准入上送`);
         },
         onClose: (reason) => {
           this.logger.warn(`[sse-forward] serve /event 断开（${reason}），轮询兜底路接管，将自动重连`);
