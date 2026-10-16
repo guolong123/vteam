@@ -298,6 +298,106 @@ describe('MessageInboundService', () => {
       expect(res.results[0].ok).toBe(true);
     });
 
+    describe('externalChatId = 主动推送会话锚点（群聊 chatid / 私聊发送者 userid）', () => {
+      beforeEach(() => {
+        prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
+        prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
+        prisma.chatChannel.findFirst.mockResolvedValue({
+          id: groupChannelId,
+          type: 'team_group',
+          teamId,
+        });
+        chatService.createMessage.mockResolvedValue({
+          message: { id: 'm_push' },
+          triggers: [],
+        });
+      });
+
+      const messagePayload = (callIndex = 0): Record<string, any> =>
+        chatService.createMessage.mock.calls[callIndex][2];
+
+      it('群聊：chatid 优先，即使同时带 wecomUserId 也不取 userid', async () => {
+        await service.submitInbound(channelId, [
+          {
+            kind: 'post_message',
+            text: 'group msg',
+            dedupKey: 'k_push_group',
+            senderExternalId: 'GuoLong',
+            senderName: 'GuoLong',
+            wecomUserId: 'GuoLong',
+            wecomUserName: 'GuoLong',
+            chattype: 'group',
+            chatid: 'wriGjxCgAA_groupA',
+          } as any,
+        ]);
+
+        expect(messagePayload()).toEqual(
+          expect.objectContaining({ externalChatId: 'wriGjxCgAA_groupA' }),
+        );
+      });
+
+      it('私聊：无 chatid 时取 wecomUserId 作为推送地址', async () => {
+        await service.submitInbound(channelId, [
+          {
+            kind: 'post_message',
+            text: 'single msg',
+            dedupKey: 'k_push_single',
+            senderExternalId: 'Long',
+            senderName: 'Long',
+            wecomUserId: 'Long',
+            wecomUserName: 'Long',
+            chattype: 'single',
+          } as any,
+        ]);
+
+        expect(chatService.createMessage).toHaveBeenCalledWith(
+          groupChannelId,
+          '__external__',
+          {
+            text: '[WeCom:Long|from 私聊] single msg',
+            externalChatId: 'Long',
+          },
+          { senderType: SENDER_TYPE.external, senderId: 'Long' },
+        );
+      });
+
+      it('私聊：缺 wecomUserId 时回退 senderExternalId', async () => {
+        await service.submitInbound(channelId, [
+          {
+            kind: 'post_message',
+            text: 'fallback msg',
+            dedupKey: 'k_push_fallback',
+            senderExternalId: 'Yang',
+            senderName: 'Yang',
+            chattype: 'single',
+          } as any,
+        ]);
+
+        expect(messagePayload()).toEqual(
+          expect.objectContaining({ externalChatId: 'Yang' }),
+        );
+      });
+
+      it('两者皆缺：整字段不下发（不落空串 / undefined）', async () => {
+        await service.submitInbound(channelId, [
+          {
+            kind: 'post_message',
+            text: 'no anchor',
+            dedupKey: 'k_push_none',
+          } as any,
+        ]);
+
+        const payload = messagePayload();
+        expect(payload).not.toHaveProperty('externalChatId');
+        expect(chatService.createMessage).toHaveBeenCalledWith(
+          groupChannelId,
+          '__external__',
+          { text: 'no anchor' },
+          { senderType: SENDER_TYPE.external, senderId: null },
+        );
+      });
+    });
+
     it('wecom single chattype → 前缀为 from 私聊（chattype 缺失亦按私聊）', async () => {
       prisma.messageChannel.findUnique.mockResolvedValue(baseChannel);
       prisma.teamMessageChannel.findMany.mockResolvedValue([{ teamId }]);
@@ -326,7 +426,11 @@ describe('MessageInboundService', () => {
       expect(chatService.createMessage).toHaveBeenCalledWith(
         groupChannelId,
         '__external__',
-        { text: '[WeCom:GuoLong|from 私聊] private msg' },
+        {
+          text: '[WeCom:GuoLong|from 私聊] private msg',
+          // 私聊入站帧无 chatid，锚点取发送者 userid（推送 API 单聊 chatid 语义 = userid）
+          externalChatId: 'GuoLong',
+        },
         { senderType: SENDER_TYPE.external, senderId: 'GuoLong' },
       );
 
@@ -342,7 +446,10 @@ describe('MessageInboundService', () => {
       expect(chatService.createMessage).toHaveBeenLastCalledWith(
         groupChannelId,
         '__external__',
-        { text: '[WeCom:GuoLong|from 私聊] no chattype' },
+        {
+          text: '[WeCom:GuoLong|from 私聊] no chattype',
+          externalChatId: 'GuoLong',
+        },
         { senderType: SENDER_TYPE.external, senderId: 'GuoLong' },
       );
     });
