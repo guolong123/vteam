@@ -1970,7 +1970,7 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
     await expect(cards).toHaveCount(2);
 
     // 基线：未注入 question 时 running 卡片保持 running，且不带新 testid
-    const running = cards.first();
+    const running = page.getByTestId("msg-live-stream").getByTestId("msg-tool");
     await expect(running).toHaveAttribute("data-status", "running");
     await expect(running.getByTestId("msg-tool-awaiting")).toHaveCount(0);
 
@@ -1990,8 +1990,9 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
     await expect(running).toContainText("vteam_secret_command");
 
     // 终态卡片不受 question 影响（stale_state：part 已 completed 就不得回亮）
-    await expect(cards.nth(1)).toHaveAttribute("data-status", "success");
-    await expect(cards.nth(1).getByTestId("msg-tool-awaiting")).toHaveCount(0);
+    const done = page.locator('[data-testid="msg-tool"][data-status="success"]');
+    await expect(done).toHaveAttribute("data-status", "success");
+    await expect(done.getByTestId("msg-tool-awaiting")).toHaveCount(0);
 
     await page.screenshot({ path: path.join(SECRET_TASK7_DIR, "task-8-awaiting-input.png") });
     expect(await page.content()).not.toContain(SECRET_SENTINEL);
@@ -2007,7 +2008,7 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
 
   test("2. 异会话 pending 不点亮；malformed（缺 sessionId/agentId）不点亮且不崩", async ({ page }) => {
     await openSecretToolSession(page);
-    const running = page.getByTestId("msg-tool").first();
+    const running = page.getByTestId("msg-live-stream").getByTestId("msg-tool");
     await expect(running).toHaveAttribute("data-status", "running");
 
     // 同 agent 群里另一个会话（ta_2 / a_tester）的 pending：不得点亮 a_developer 的卡片
@@ -2059,7 +2060,7 @@ test.describe("sensitive-command-tool Todo8 工具卡 awaiting-input", () => {
     await page.getByTestId("dm-tab-private-ta_1").evaluate((el: HTMLElement) => el.click());
     await expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(1);
 
-    const running = page.getByTestId("msg-tool").first();
+    const running = page.getByTestId("msg-live-stream").getByTestId("msg-tool");
 
     // 补拉路径（刷新后仅凭 GET /questions，SSE 一帧不发）也必须点亮：
     // 弹窗在挂载时已入队，所以历史一落地卡片就是第四态（没有 running 基线可断言）。
@@ -2124,7 +2125,7 @@ test.describe("sensitive-command-tool Todo9 全链路不回显", () => {
     await page.getByTestId("dm-tab-private-ta_1").click();
     await expect.poll(() => harness.privateHistory.length, { timeout: 10_000 }).toBe(1);
 
-    const running = page.getByTestId("msg-tool").first();
+    const running = page.getByTestId("msg-live-stream").getByTestId("msg-tool");
     await expect(running).toHaveAttribute("data-status", "running");
 
     const seed: SecretQuestionSeed = {
