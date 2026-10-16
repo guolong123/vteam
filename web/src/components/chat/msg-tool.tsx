@@ -56,9 +56,11 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
   const failed = status === "failed";
   const awaiting = status === "awaiting-input";
   const [open, setOpen] = useState(false);
-  // 单值 I/O 展开为值原文（不包 JSON）：{"command":"…"} → 直接显示命令；
-  // 多键才保留 JSON 序列化的紧凑形态（换行原样保留）。
-  const displayValue = (raw: string): string => {
+  // 单值 I/O 展开为值原文（不包 JSON）：{"command":"…"} → 直接显示命令。
+  // 多键/数组按调用场景分两种序列化：
+  // - 标题行（pretty 缺省）保持单行紧凑，配合 whiteSpace:nowrap + ellipsis 截断；
+  // - 展开区（pretty=true）2 空格缩进多行输出，像普通多行消息一样可读（换行原样保留）。
+  const displayValue = (raw: string, opts?: { pretty?: boolean }): string => {
     const t = raw.trim();
     if (
       (t.startsWith("{") && t.endsWith("}")) ||
@@ -79,7 +81,9 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
               return String(entries[0][1]);
             }
           }
-          return JSON.stringify(parsed);
+          return opts?.pretty
+            ? JSON.stringify(parsed, null, 2)
+            : JSON.stringify(parsed);
         }
       } catch {
         /* 非 JSON，按原文返回 */
@@ -89,12 +93,13 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
   };
   const summary = input || output || "（无输入输出）";
   // "{}"/"[]" 空对象无信息量：摘要回退输出，两者皆空则不显示占位串
-  const displayValue2 = (raw: string): string => {
-    const v = displayValue(raw);
+  const displayValue2 = (raw: string, opts?: { pretty?: boolean }): string => {
+    const v = displayValue(raw, opts);
     const t = v.trim();
     return t === "{}" || t === "[]" ? "" : v;
   };
   // 展开态直接展示完整 2000 字符输入/输出原文（换行保留，不压缩为单行）；
+  // 多键 JSON 在此 pretty 化（2 空格缩进），标题行仍用紧凑单行；
   // DOM 封顶约束仍由上游 formatToolIO 保证（A2：字符串/JSON 两路径各截 2000）。
   const detailFont: CSSProperties = {
     fontFamily: fontFamily.mono,
@@ -107,9 +112,10 @@ export function MsgTool({ name, status, input, output, style, className }: MsgTo
   const summaryText = displayValue2(input) || displayValue2(output);
   // 标题行摘要：优先有效输入，回退有效输出；皆空（如 {}/running 无输出）→ 空串
   const titleText = summaryText;
-  // 展开区输入/输出与标题同一口径：空串 / 字面 {} / [] 一律折成空（不再打印「输入 {}」）
-  const detailInput = displayValue2(input);
-  const detailOutput = displayValue2(output);
+  // 展开区输入/输出与标题同一口径（同样的空串/单值拆包），仅多键 JSON 转为缩进多行；
+  // 空串 / 字面 {} / [] 一律折成空（不再打印「输入 {}」）
+  const detailInput = displayValue2(input, { pretty: true });
+  const detailOutput = displayValue2(output, { pretty: true });
   const noIO = detailInput.length === 0 && detailOutput.length === 0;
   return (
     <div
