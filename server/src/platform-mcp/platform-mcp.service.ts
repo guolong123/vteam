@@ -14,7 +14,6 @@ import {
 import { Prisma } from '@prisma/client';
 import { createHash, randomUUID } from 'crypto';
 import {
-  ACTOR_TYPE,
   CHANNEL_TYPE,
   EVENT_TYPES,
   MESSAGE_STATUS,
@@ -4590,18 +4589,21 @@ export class PlatformMcpService implements OnModuleInit {
 
   /**
    * team_add_member：申请增员（L2 自治确认门，vteam-team-collaboration Todo 8）。
-   * team-free-chat 约定：taskId（任务维度）或 teamId（团队维度，免任务）双可选，
-   * 双空时按 worker 最近会话回填；归属校验经 resolveExecContext 统一完成
-   * （assertWorkerTask / assertWorkerTeam，防冒充/跨任务）。目标团队：任务维度取任务
-   * 归属 teamId（findTaskTeamGate，任务不存在 → 404），团队维度直接用 exec.teamId。
-   * 幂等（已加入 400 / pending 重复申请 409，按解析出的作用域键）→ createForPlatform
-   * 创建平台确认请求（question=「是否确认」，options=['确认','拒绝']，content.source='platform'；
-   * 团队维度落 team:<teamId> 作用域）。
+   *
+   * **团队级操作，与任务状态无关**（用户决策）：taskId/teamId 仅用于定位**调用方身份**与
+   * **目标团队**（agent 在任务会话内调用时通常传 taskId，双空时按 worker 最近会话回填），
+   * 不构成执行路径分流。归属校验经 resolveExecContext 统一完成（assertWorkerTask /
+   * assertWorkerTeam，防冒充/跨任务）。目标团队：任务维度取任务归属 teamId
+   * （findTaskTeamGate，任务不存在 → 404），团队维度直接用 exec.teamId；解析不到团队
+   * （如未归属团队的任务）→ 400，绝不静默继续。
+   * 幂等（已加入 400 / pending 重复申请 409，均按解析出的团队作用域键 team:<teamId>）→
+   * createForPlatform 创建平台确认请求（question=「是否确认」，options=['确认','拒绝']，
+   * content.source='platform'；恒以团队作用域落库）。
    * 身份门禁（原「仅主成员」403）已移除：调用权限由调用方 ROLE 的 toolAllows 决定，
    * 任何被授权的角色实例均可发起；发起者以 exec.callerId（= 绑定的 selfInstanceId）
    * 记入 content.requesterInstanceId，供 question_confirm 的自批校验拒绝本人确认。
-   * 用户/其他成员确认后 onResolved 钩子执行 handleTeamAddResolved（任务维度
-   * updateTeam + team_add 审计；团队维度 teamsService.addMember）。
+   * 确认后 onResolved 钩子执行 handleTeamAddResolved → teamsService.addMember（恒团队级；
+   * 「{alias} 已加入团队」群系统消息由 TeamsService 自行落库，本工具不写 task_event）。
    */
   async teamAddMember(
     ctx: PlatformMcpContext,
@@ -4626,8 +4628,13 @@ export class PlatformMcpService implements OnModuleInit {
       exec.kind === 'team'
         ? exec.teamId
         : (await this.findTaskTeamGate(exec.taskId)).teamId;
-    // 作用域键：与平台 question 落库口径一致（任务维度 = 任务 id；团队维度 = team:<teamId>）。
-    const scopeKey = exec.kind === 'team' ? `team:${exec.teamId}` : exec.taskId;
+    if (!addTeamId) {
+      throw new BadRequestException(
+        '无法解析目标团队：该任务未归属任何团队；增员是团队级操作，请传 teamId 或在团队会话内调用',
+      );
+    }
+    // 作用域键：恒为团队作用域（与 createForPlatform 团队维度落库口径一致）。
+    const scopeKey = `team:${addTeamId}`;
 
     const agentRow = await this.prisma.agent.findUnique({
       where: { id: args.agentId },
@@ -4640,16 +4647,14 @@ export class PlatformMcpService implements OnModuleInit {
       });
     }
 
-    const existing = addTeamId
-      ? await this.prisma.teamMember.findFirst({
-          where: { teamId: addTeamId, agentId: args.agentId },
-          select: { id: true },
-        })
-      : null;
+    const existing = await this.prisma.teamMember.findFirst({
+      where: { teamId: addTeamId, agentId: args.agentId },
+      select: { id: true },
+    });
     if (existing) {
       throw new BadRequestException({
         code: PLATFORM_MCP_ERRORS.AGENT_ALREADY_IN_TEAM,
-        message: `Agent ${agentRow.name} 已在任务团队中，无需重复申请`,
+        message: `Agent ${agentRow.name} 已在团队中，无需重复申请`,
       });
     }
 
@@ -4683,7 +4688,7 @@ export class PlatformMcpService implements OnModuleInit {
       ? `申请将 ${agentRow.name}${aliasText}加入团队，是否确认？`
       : `申请将 ${agentRow.name} 加入团队，是否确认？`;
     const created = await this.questionsService.createForPlatform(
-      exec.kind === 'task' ? exec.taskId : '',
+      '',
       {
         question,
         header: '团队增员确认',
@@ -4691,13 +4696,11 @@ export class PlatformMcpService implements OnModuleInit {
       },
       {
         agentId: args.agentId,
+        teamId: addTeamId,
         requesterInstanceId: callerId,
-        ...(exec.kind === 'team' ? { teamId: exec.teamId } : {}),
         onResolved: async (resolved) => {
           await this.handleTeamAddResolved({
-            ...(exec.kind === 'task'
-              ? { taskId: exec.taskId }
-              : { teamId: exec.teamId }),
+            teamId: addTeamId,
             agentId: args.agentId,
             alias: explicitAlias ?? undefined,
             workDir: args.workDir,
@@ -7136,82 +7139,37 @@ export class PlatformMcpService implements OnModuleInit {
   }
 
   /**
-   * team_add_member 确认回调执行：确认（answers 首项=「确认」）→ 执行增员；拒绝 → 不执行。
-   * - 任务维度（taskId）：tasksService.updateTeam（原样，保留 task_event team_add 审计与
-   *   「（经主 Agent 申请、X 确认）」群系统消息后缀）；确认回调时任务已终态（非
-   *   pending/in_progress）→ updateTeam 409，显式记录并忽略。
-   * - 团队维度（teamId）：teamsService.addMember（团队级；「{alias} 已加入团队」系统消息由
-   *   TeamsService 自行落库广播，此处不重复，无 task_event）。
+   * team_add_member 确认回调执行（**恒团队级**）：确认（answers 首项=「确认」）→
+   * teamsService.addMember(teamId, {agentId, alias?, workDir?})；拒绝 → 不执行。
+   * 「{alias} 已加入团队」群系统消息由 TeamsService 自行落库广播，此处不重复；
+   * 增员与任务状态无关，不再走 tasksService.updateTeam，也无 task_event 审计。
    */
   private async handleTeamAddResolved(args: {
-    taskId?: string;
-    teamId?: string;
+    teamId: string;
     agentId: string;
     alias?: string;
     workDir?: string;
     answers: string[][] | null;
     actor: { type: string; id: string };
   }): Promise<void> {
-    const scope = args.teamId ? `team:${args.teamId}` : args.taskId;
     const confirmed = args.answers?.[0]?.[0] === '确认';
     if (!confirmed) {
       this.logger.log(
-        `[team-add] 增员被拒绝，不执行：scope=${scope} agent=${args.agentId}`,
+        `[team-add] 增员被拒绝，不执行：team=${args.teamId} agent=${args.agentId}`,
       );
       return;
     }
-    if (args.teamId) {
-      if (!this.teamsService) {
-        throw new ServiceUnavailableException('团队服务未就绪，无法执行增员');
-      }
-      await this.teamsService.addMember(args.teamId, {
-        agentId: args.agentId,
-        ...(args.alias ? { alias: args.alias } : {}),
-        ...(args.workDir ? { workDir: args.workDir } : {}),
-      });
-      this.logger.log(
-        `[team-add] 增员确认执行（团队维度）：team=${args.teamId} agent=${args.agentId} 已加入团队（actorType=${args.actor.type}）`,
-      );
-      return;
+    if (!this.teamsService) {
+      throw new ServiceUnavailableException('团队服务未就绪，无法执行增员');
     }
-    if (!args.taskId) {
-      this.logger.warn(
-        `[team-add] 确认回调缺少作用域（taskId/teamId），忽略：agent=${args.agentId}`,
-      );
-      return;
-    }
-    try {
-      await this.tasksService.updateTeam(
-        args.taskId,
-        {
-          addInstances: [
-            {
-              agentId: args.agentId,
-              ...(args.alias ? { alias: args.alias } : {}),
-              ...(args.workDir ? { workDir: args.workDir } : {}),
-            },
-          ],
-        },
-        args.actor.type === ACTOR_TYPE.user ? args.actor.id : undefined,
-        {
-          actorType: args.actor.type,
-          actorId: args.actor.id,
-          confirmedBy:
-            args.actor.type === ACTOR_TYPE.user ? '用户' : '主 Agent',
-        },
-      );
-      this.logger.log(
-        `[team-add] 增员确认执行：task=${args.taskId} agent=${args.agentId} 已加入团队（actorType=${args.actor.type}）`,
-      );
-    } catch (err) {
-      if (err instanceof ConflictException) {
-        this.logger.warn(
-          `[team-add] 确认回调时任务已终态，增员忽略：task=${args.taskId} agent=${args.agentId}（${(err as Error).message}）`,
-        );
-        return;
-      }
-      throw err;
-    }
+    await this.teamsService.addMember(args.teamId, {
+      agentId: args.agentId,
+      ...(args.alias ? { alias: args.alias } : {}),
+      ...(args.workDir ? { workDir: args.workDir } : {}),
+    });
+    this.logger.log(
+      `[team-add] 增员确认执行：team=${args.teamId} agent=${args.agentId} 已加入团队（actorType=${args.actor.type}）`,
+    );
   }
 
   /** submit_artifact doc/file 路径：worker 拉取（read_file 抛错语义）→ 落盘 uploads → 归档。 */

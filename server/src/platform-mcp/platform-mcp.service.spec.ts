@@ -6189,7 +6189,7 @@ describe('PlatformMcpService', () => {
       return () => hook;
     };
 
-    it('非主成员不再被身份门拒绝 → 创建确认请求（原 403 已移除）', async () => {
+    it('非主成员不再被身份门拒绝 → 创建确认请求（原 403 已移除）；requesterInstanceId=调用方（自批校验输入）', async () => {
       allowWorker();
       mockBaseline();
       questionsService.createForPlatform.mockResolvedValue({
@@ -6203,10 +6203,18 @@ describe('PlatformMcpService', () => {
       });
       expect(result).toMatchObject({
         requestId: 'que_platform_0000000001',
-        taskId,
+        taskId: 'team:tm_1',
         agentId: 'a_developer',
       });
       expect(questionsService.createForPlatform).toHaveBeenCalledTimes(1);
+      expect(questionsService.createForPlatform).toHaveBeenCalledWith(
+        '',
+        expect.anything(),
+        expect.objectContaining({
+          teamId: 'tm_1',
+          requesterInstanceId: senderInstanceId,
+        }),
+      );
     });
 
     it('申请成功：createForPlatform 创建确认请求（question 文案/options/onResolved 注册）→ 返回 requestId', async () => {
@@ -6226,7 +6234,7 @@ describe('PlatformMcpService', () => {
       });
 
       expect(questionsService.createForPlatform).toHaveBeenCalledWith(
-        taskId,
+        '',
         {
           question: '申请将 开发者（别名 开发者-2）加入团队，是否确认？',
           header: '团队增员确认',
@@ -6234,13 +6242,14 @@ describe('PlatformMcpService', () => {
         },
         expect.objectContaining({
           agentId: 'a_developer',
+          teamId: 'tm_1',
           requesterInstanceId: mainInstanceId,
           onResolved: expect.any(Function),
         }),
       );
       expect(result).toEqual({
         requestId: 'que_platform_0000000001',
-        taskId,
+        taskId: 'team:tm_1',
         agentId: 'a_developer',
         alias: '开发者-2',
       });
@@ -6261,12 +6270,29 @@ describe('PlatformMcpService', () => {
       });
 
       expect(questionsService.createForPlatform).toHaveBeenCalledWith(
-        taskId,
+        '',
         expect.objectContaining({
           question: '申请将 开发者 加入团队，是否确认？',
         }),
-        expect.any(Object),
+        expect.objectContaining({ teamId: 'tm_1' }),
       );
+    });
+
+    it('任务不属于任何团队（findTaskTeamGate 返回 null teamId）→ 400（不静默继续）', async () => {
+      // 命中内存活跃集合快路径：assertWorkerTask 提前放行，使「无团队任务」能走到本工具的团队解析。
+      workerDispatcher.isAgentExecuting.mockReturnValue(
+        new Set([mainInstanceId]),
+      );
+      prisma.task.findUnique.mockResolvedValue({ id: taskId, teamId: null });
+      await expect(
+        service.teamAddMember(ctx, {
+          taskId,
+          selfInstanceId: mainInstanceId,
+          agentId: 'a_developer',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+      expect(questionsService.createForPlatform).not.toHaveBeenCalled();
+      expect(prisma.teamMember.findFirst).not.toHaveBeenCalled();
     });
 
     it('重复加入（该 agent 已在团队）→ 400 AGENT_ALREADY_IN_TEAM（不创建确认请求）', async () => {
@@ -6307,6 +6333,11 @@ describe('PlatformMcpService', () => {
         ConflictException,
         PLATFORM_MCP_ERRORS.PENDING_APPLICATION,
       );
+      expect(prisma.agentQuestion.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { taskId: 'team:tm_1', status: 'pending' },
+        }),
+      );
       expect(questionsService.createForPlatform).not.toHaveBeenCalled();
     });
 
@@ -6337,7 +6368,7 @@ describe('PlatformMcpService', () => {
       expect(questionsService.createForPlatform).toHaveBeenCalled();
     });
 
-    it('确认回调（answers=[["确认"]]，用户确认）→ updateTeam 调用 + user 审计参数', async () => {
+    it('确认回调（任务上下文）→ 经 findTaskTeamGate 解析团队后 addMember 落库（不走 updateTeam）', async () => {
       allowMainWorker();
       mockBaseline();
       const getHook = captureHook();
@@ -6353,15 +6384,17 @@ describe('PlatformMcpService', () => {
         actor: { type: 'user', id: 'u_1' },
       });
 
-      expect(tasksService.updateTeam).toHaveBeenCalledWith(
-        taskId,
-        { addInstances: [{ agentId: 'a_developer', alias: '开发者-2' }] },
-        'u_1',
-        { actorType: 'user', actorId: 'u_1', confirmedBy: '用户' },
+      expect(prisma.task.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: taskId } }),
       );
+      expect(teamsService.addMember).toHaveBeenCalledWith('tm_1', {
+        agentId: 'a_developer',
+        alias: '开发者-2',
+      });
+      expect(tasksService.updateTeam).not.toHaveBeenCalled();
     });
 
-    it('主 Agent 确认（actor=agent/主实例）→ updateTeam 审计传 agent/主实例', async () => {
+    it('确认回调携带 workDir → addMember 透传（actor 不参与落库，主 Agent/用户同路径）', async () => {
       allowMainWorker();
       mockBaseline();
       const getHook = captureHook();
@@ -6369,6 +6402,7 @@ describe('PlatformMcpService', () => {
         taskId,
         selfInstanceId: mainInstanceId,
         agentId: 'a_developer',
+        workDir: '/data/vteam-worker/dev2',
       });
 
       await getHook()!({
@@ -6376,19 +6410,14 @@ describe('PlatformMcpService', () => {
         actor: { type: 'agent', id: mainInstanceId },
       });
 
-      expect(tasksService.updateTeam).toHaveBeenCalledWith(
-        taskId,
-        { addInstances: [{ agentId: 'a_developer' }] },
-        undefined,
-        {
-          actorType: 'agent',
-          actorId: mainInstanceId,
-          confirmedBy: '主 Agent',
-        },
-      );
+      expect(teamsService.addMember).toHaveBeenCalledWith('tm_1', {
+        agentId: 'a_developer',
+        workDir: '/data/vteam-worker/dev2',
+      });
+      expect(tasksService.updateTeam).not.toHaveBeenCalled();
     });
 
-    it('拒绝（answers=null）→ 不执行（updateTeam 不调用）', async () => {
+    it('拒绝（answers=null）→ 不执行（addMember 不调用）', async () => {
       allowMainWorker();
       mockBaseline();
       const getHook = captureHook();
@@ -6400,10 +6429,11 @@ describe('PlatformMcpService', () => {
 
       await getHook()!({ answers: null, actor: { type: 'user', id: 'u_1' } });
 
+      expect(teamsService.addMember).not.toHaveBeenCalled();
       expect(tasksService.updateTeam).not.toHaveBeenCalled();
     });
 
-    it('确认回调但任务已终态（updateTeam 409）→ 显式记录并忽略（不向上抛）', async () => {
+    it('addMember 抛错 → 向上传播（不再吞掉任何任务终态 409）', async () => {
       allowMainWorker();
       mockBaseline();
       const getHook = captureHook();
@@ -6413,12 +6443,13 @@ describe('PlatformMcpService', () => {
         agentId: 'a_developer',
       });
 
-      tasksService.updateTeam.mockRejectedValue(
-        new ConflictException({ code: 'TASK_TEAM_NOT_ALLOWED' }),
+      teamsService.addMember.mockRejectedValueOnce(
+        new ConflictException({ code: 'TEAM_CONFLICT' }),
       );
       await expect(
         getHook()!({ answers: [['确认']], actor: { type: 'user', id: 'u_1' } }),
-      ).resolves.toBeUndefined();
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(tasksService.updateTeam).not.toHaveBeenCalled();
     });
 
     const allowTeamWorkerAs = (instanceId: string) => {
