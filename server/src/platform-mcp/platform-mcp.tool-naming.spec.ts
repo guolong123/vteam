@@ -99,8 +99,8 @@ describe('platform-mcp tool naming contract', () => {
       },
       question_confirm: {
         selfInstanceId: REQUIRED,
-        teamId: ABSENT,
-        taskId: REQUIRED,
+        teamId: OPTIONAL,
+        taskId: OPTIONAL,
       },
       memory_save: {
         selfInstanceId: REQUIRED,

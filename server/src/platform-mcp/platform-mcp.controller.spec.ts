@@ -420,6 +420,20 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(issueTransition.inputSchema.properties.action).toEqual({
         type: 'string',
       });
+      // question_confirm：selfInstanceId/requestId/kind 必填，taskId/teamId 双可选
+      // （双作用域：任务级传 taskId / 团队级请求如团队增员确认传 teamId）
+      const questionConfirm = tools.find((t) => t.name === 'question_confirm')!;
+      expect(questionConfirm.inputSchema.required).toEqual([
+        'selfInstanceId',
+        'requestId',
+        'kind',
+      ]);
+      expect(questionConfirm.inputSchema.properties.teamId).toEqual({
+        type: 'string',
+      });
+      expect(questionConfirm.inputSchema.properties.taskId).toEqual({
+        type: 'string',
+      });
       // memory_save：selfInstanceId/level/content 必填，taskId/teamId 双可选，tags 可选；level 枚举归为 string
       const memorySave = tools.find((t) => t.name === 'memory_save')!;
       expect(memorySave.inputSchema.required).toEqual([

@@ -45,7 +45,8 @@ export interface PlatformMcpToolContext {
  * 已知启发式局限：同一 worker 并发多会话时最近会话回填可能误归属（与 `channel_send`
  * 既有取舍一致）；显式传参恒优先。
  * delivery-family 工具（doclib、task_context、submit_artifact、issue 系列、
- * task_transition、question_confirm、team_view、my_profile 等）保持 taskId 必填，不用此语义.
+ * task_transition、team_view、my_profile 等）保持 taskId 必填，不用此语义
+ * （question_confirm 为双作用域：taskId/teamId 双可选，见其 schema）.
  */
 const OPTIONAL_TASK_ID_DESC =
   '任务 ID（可选；缺省时服务端按 worker 最近会话回填，taskId 优先，无 taskId 时用 teamId 定位团队会话；回填不到 → 403）';
@@ -351,9 +352,12 @@ const taskTransitionSchema = z.object({
 type TaskTransitionArgs = z.infer<typeof taskTransitionSchema>;
 
 const questionConfirmSchema = z.object({
-  // team-free-chat todo-4：question_confirm 保持 taskId 必填（agent_questions.task_id 非空，
-  // 无团队维度可确认），不加入可选 5 工具。
-  taskId: z.string().describe('任务 ID'),
+  // 双作用域确认：团队维度请求（如团队增员确认）的落库作用域键恒为
+  // `team:<teamId>`（agent_questions.task_id 仍非空，落库口径不变），任务维度仍为
+  // 任务 id。两个作用域经 resolveExecContext 解析（taskId 优先，无 taskId 时走团队
+  // 维度；跨作用域无回退，mismatch → 403），故 taskId/teamId 均可选。
+  taskId: z.string().optional().describe(OPTIONAL_TASK_ID_DESC),
+  teamId: z.string().optional().describe(TEAM_ID_DESC),
   selfInstanceId: z
     .string()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
@@ -1147,7 +1151,7 @@ export function buildPlatformMcpTools(
     {
       name: 'question_confirm',
       description:
-        '托管模式下确认成员请求：kind=question 传 answers（label 数组，answers=null 拒绝）；kind=permission 传 response(once/always/reject)。请求 requestId 来自托管确认消息。调用权限由你的角色工具权限决定；请求发起者本人不可自行确认，跨任务确认会被拒绝。返回更新后的确认记录。',
+        '托管模式下确认成员请求：kind=question 传 answers（label 数组，answers=null 拒绝）；kind=permission 传 response(once/always/reject)。请求 requestId 来自托管确认消息。任务级请求传 taskId，团队级请求（如团队增员确认）传 teamId，二者按调用方上下文解析（taskId 优先，无 taskId 时用 teamId 定位团队）。调用权限由你的角色工具权限决定；请求发起者本人不可自行确认，跨任务/跨团队确认会被拒绝。返回更新后的确认记录。',
       inputSchema: questionConfirmSchema,
       handler: (ctx, args) =>
         service.questionConfirm(ctx, args as QuestionConfirmArgs),

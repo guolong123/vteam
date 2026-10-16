@@ -40,7 +40,7 @@ import { SkillsModule } from '../skills/skills.module';
  * - TasksModule 导出 TasksService（task_transition 工具经其做主实例校验与五态状态机流转）
  *   与 PlanStepsService（vteam_todo 工具经其读写 plan_tasks 执行步骤）；
  *   TasksModule imports RealtimeModule/WorkersModule，不反向依赖本模块，无环。
- * - QuestionsModule 导出 QuestionsService（question_confirm 工具经其做主实例校验与
+ * - QuestionsModule 导出 QuestionsService（question_confirm 工具经其做归属/完整性校验与
  *   question/permission 确认转发）；QuestionsModule imports RealtimeModule/WorkersModule，
  *   不反向依赖本模块，无环。
  * - ReviewRoundTimeoutHandler（review-round-open 超时消费者，文件落 chat 域、

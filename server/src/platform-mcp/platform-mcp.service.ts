@@ -3261,11 +3261,21 @@ export class PlatformMcpService implements OnModuleInit {
     );
   }
 
-  /** question_confirm：托管模式下主 Agent 确认成员请求（仅主实例可调，复用 task_transition 权限模式）。 */
+  /**
+   * question_confirm：托管模式下确认成员请求（权限由调用方 ROLE 的 toolAllows 决定，
+   * 复用 task_transition 权限模式）。
+   *
+   * 双作用域：任务级请求传 taskId（任务维度）；团队级请求（如团队增员确认）传 teamId
+   * （团队维度）。归属/防冒充经 resolveExecContext 解析（taskId 优先，无 taskId 时走团队
+   * 维度，跨作用域无回退）。`confirmByAgent` 按落库作用域键校验：团队维度请求落库为
+   * `team:<teamId>`（`confirmByAgent` 已内建 `team:` 前缀分支），故此处按 `exec.kind`
+   * 还原同一作用域键，并以解析出的调用方身份 `exec.callerId` 作为 instanceId。
+   */
   async questionConfirm(
     ctx: PlatformMcpContext,
     args: {
-      taskId: string;
+      taskId?: string;
+      teamId?: string;
       selfInstanceId: string;
       requestId: string;
       kind: 'question' | 'permission';
@@ -3273,10 +3283,10 @@ export class PlatformMcpService implements OnModuleInit {
       response?: 'once' | 'always' | 'reject';
     },
   ) {
-    await this.assertWorkerTask(ctx, args.taskId, args.selfInstanceId);
+    const exec = await this.resolveExecContext(ctx, args);
     return this.questionsService.confirmByAgent({
-      taskId: args.taskId,
-      instanceId: args.selfInstanceId,
+      taskId: exec.kind === 'task' ? exec.taskId : `team:${exec.teamId}`,
+      instanceId: exec.callerId,
       requestId: args.requestId,
       kind: args.kind,
       answers: args.answers,

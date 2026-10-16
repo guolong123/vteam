@@ -8173,6 +8173,49 @@ describe('PlatformMcpService', () => {
         expect.objectContaining({ taskId, instanceId: senderInstanceId }),
       );
     });
+
+    it('questionConfirm 团队维度：{ teamId } → confirmByAgent 以落库作用域键 taskId=team:<teamId> + 解析出的 callerId 确认', async () => {
+      allowWorker();
+      questionsService.confirmByAgent.mockResolvedValue({ id: 'aq_1' } as never);
+
+      await service.questionConfirm(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        requestId: 'que_x',
+        kind: 'question',
+        answers: [['确认']],
+      });
+
+      // 团队维度：作用域键还原为 `team:<teamId>`，instanceId 为 resolveExecContext 解析的
+      // 调用方身份（团队会话成员），与 selfInstanceId 同源（防冒充已在校验内守住）。
+      expect(questionsService.confirmByAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId: 'team:tm_1',
+          instanceId: senderInstanceId,
+          requestId: 'que_x',
+          kind: 'question',
+        }),
+      );
+      // 团队维度不查任务表（任务维度专属）。
+      expect(prisma.task.findUnique).not.toHaveBeenCalled();
+    });
+
+    it('questionConfirm 团队维度防冒充：selfInstanceId 与团队会话成员不一致 → 403，不触达 confirmByAgent', async () => {
+      allowWorkerAs('tmm_other');
+
+      await expectCode(
+        service.questionConfirm(ctx, {
+          teamId: 'tm_1',
+          selfInstanceId: senderInstanceId,
+          requestId: 'que_x',
+          kind: 'question',
+          answers: [['确认']],
+        }),
+        ForbiddenException,
+        PLATFORM_MCP_ERRORS.FORBIDDEN,
+      );
+      expect(questionsService.confirmByAgent).not.toHaveBeenCalled();
+    });
   });
 
   describe('wecom_reply 团队维度', () => {
