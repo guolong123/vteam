@@ -1259,4 +1259,148 @@ describe('WecomAibotAdapter (message-channels)', () => {
       }
     });
   });
+
+  /**
+   * 单聊主动推送地址回归（2026-10-16 生产事故）。
+   *
+   * 企微协议：入站帧群聊带 chatid、单聊不带；单聊主动推送的地址就是发送者 userid
+   * （README「会话 ID，单聊填用户的 userid」）。原实现只透传 body.chatid，单聊注册
+   * 出来的 stream.chatid 是 undefined，于是出站 sendMediaMessage 回退渠道级
+   * lastChatid——那值每条入站都覆盖，Long 要的文件被推给了最后发言的 Yang。
+   */
+  describe('单聊主动推送地址（stream.chatid 缺省时回退 userid）', () => {
+    const driveTextInbound = async (body: any, internalMessageId: string) => {
+      const host = makeHost([{ id: 'mc_a' }]);
+      host.submitInbound.mockResolvedValue({
+        results: [{ ok: true, internalMessageId }],
+      });
+      await adapter.start(host);
+      const handler = mockClients[0].on.mock.calls.find(
+        (c: any[]) => c[0] === 'message.text',
+      )?.[1];
+      expect(typeof handler).toBe('function');
+      await handler({ headers: { req_id: 'r1' }, body });
+    };
+
+    it('单聊入站（无 body.chatid）注册的 chatid = 发送者 userid', async () => {
+      await driveTextInbound(
+        {
+          msgid: 'm_single_1',
+          from: { userid: 'u_long' },
+          text: { content: '把文件发我' },
+          chattype: 'single',
+        },
+        'm_single_1',
+      );
+      const stream = adapter.getStream('m_single_1');
+      expect(stream?.chatid).toBe('u_long');
+      expect(stream?.chattype).toBe('single');
+      expect(stream?.fromUserId).toBe('u_long');
+    });
+
+    it('群聊入站仍保留真实 body.chatid（回归护栏）', async () => {
+      await driveTextInbound(
+        {
+          msgid: 'm_group_1',
+          from: { userid: 'u_group_user' },
+          text: { content: '@bot hi' },
+          chattype: 'group',
+          chatid: 'gid_1',
+        },
+        'm_group_1',
+      );
+      expect(adapter.getStream('m_group_1')).toMatchObject({
+        chattype: 'group',
+        chatid: 'gid_1',
+      });
+    });
+
+    it('sendTemplateCard 显式 targetChatId 覆盖渠道级 lastChatid', async () => {
+      const mockClient: any = {
+        sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+      };
+      const getChannel = jest
+        .fn()
+        .mockResolvedValue({ id: 'mc_a', config: { lastChatid: 'u_yang' } });
+      (adapter as any).clients.set('mc_a', mockClient);
+      (adapter as any).hosts.set('mc_a', { getChannel });
+
+      const ok = await adapter.sendTemplateCard(
+        'mc_a',
+        { card_type: 'text_notice', main_title: { title: '文件' } },
+        'u_long',
+      );
+
+      expect(ok).toBe(true);
+      expect(mockClient.sendMessage).toHaveBeenCalledWith(
+        'u_long',
+        expect.objectContaining({ msgtype: 'template_card' }),
+      );
+      // 给了 target 就不该再去读渠道级 lastChatid（它每条入站都覆盖，会发错人）
+      expect(getChannel).not.toHaveBeenCalled();
+    });
+
+    it('sendTemplateCard 不给 targetChatId 时仍回退渠道级 lastChatid', async () => {
+      const mockClient: any = {
+        sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+      };
+      (adapter as any).clients.set('mc_a', mockClient);
+      (adapter as any).hosts.set('mc_a', {
+        getChannel: jest
+          .fn()
+          .mockResolvedValue({ id: 'mc_a', config: { lastChatid: 'u_yang' } }),
+      });
+
+      const ok = await adapter.sendTemplateCard('mc_a', {
+        card_type: 'text_notice',
+        main_title: { title: '文件' },
+      });
+
+      expect(ok).toBe(true);
+      expect(mockClient.sendMessage).toHaveBeenCalledWith(
+        'u_yang',
+        expect.objectContaining({ msgtype: 'template_card' }),
+      );
+    });
+
+    it('sendFallbackMessage 显式 targetChatId 跳过 lastChatid 解析', async () => {
+      const mockClient: any = {
+        sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+      };
+      const getChannel = jest
+        .fn()
+        .mockResolvedValue({ id: 'mc_a', config: { lastChatid: 'u_yang' } });
+      (adapter as any).clients.set('mc_a', mockClient);
+      (adapter as any).hosts.set('mc_a', { getChannel });
+
+      const ok = await adapter.sendFallbackMessage('mc_a', '兜底文案', 'u_long');
+
+      expect(ok).toBe(true);
+      expect(mockClient.sendMessage).toHaveBeenCalledWith('u_long', {
+        msgtype: 'markdown',
+        markdown: { content: '兜底文案' },
+      });
+      expect(getChannel).not.toHaveBeenCalled();
+    });
+
+    it('sendFallbackMessage 不给 targetChatId 时仍走 lastChatid 解析', async () => {
+      const mockClient: any = {
+        sendMessage: jest.fn().mockResolvedValue({ errcode: 0 }),
+      };
+      (adapter as any).clients.set('mc_a', mockClient);
+      (adapter as any).hosts.set('mc_a', {
+        getChannel: jest
+          .fn()
+          .mockResolvedValue({ id: 'mc_a', config: { lastChatid: 'u_yang' } }),
+      });
+
+      const ok = await adapter.sendFallbackMessage('mc_a', '兜底文案');
+
+      expect(ok).toBe(true);
+      expect(mockClient.sendMessage).toHaveBeenCalledWith('u_yang', {
+        msgtype: 'markdown',
+        markdown: { content: '兜底文案' },
+      });
+    });
+  });
 });

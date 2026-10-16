@@ -9071,6 +9071,155 @@ describe('PlatformMcpService', () => {
       expect(result.wecomSent).toBe(false);
       expect(result.content[0].text).toContain('file 发送失败');
     });
+
+    /**
+     * 2026-10-16 私聊误投事故：replyToUser 指定 Long，file 却因私聊入站帧无 chatid
+     * 而落到渠道级 lastChatid（Yang），工具还因 fromName 捏造回报了成功。
+     * 以下 4 条钉死「指定回复对象 → 地址必须可验证，否则中止」。
+     */
+    it('replyToUser + 私聊 stream 锚点 → file 推送到该用户地址（非渠道 lastChatid）', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue({
+        fromUserName: '企微用户-Long',
+        chattype: 'single',
+        chatid: 'u_long',
+        channelId: 'mc_team_1',
+      });
+      (adapter as any).uploadMediaBuffer = jest.fn();
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_long_1',
+        replyToUser: '企微用户-Long',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect((adapter as any).sendMediaMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        'file',
+        'media_long_1',
+        'u_long',
+      );
+    });
+
+    it('replyToUser + 无活跃流无锚点 + file → isError 且零发送（不误投 lastChatid）', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue(undefined);
+      (adapter as any).uploadMediaBuffer = jest.fn();
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+      prisma.message.findMany.mockResolvedValue([]);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_long_2',
+        replyToUser: '企微用户-Long',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('企微用户-Long');
+      expect(result.content[0].text).toContain('未能定位其企微会话');
+      expect((adapter as any).sendMediaMessage).not.toHaveBeenCalled();
+      expect((adapter as any).replyMedia).not.toHaveBeenCalled();
+      expect((adapter as any).uploadMediaBuffer).not.toHaveBeenCalled();
+      // 群聊镜像同样不写：收件人未经验证时不该留下「已回复」痕迹
+      expect(prisma.message.create).not.toHaveBeenCalled();
+      expect(prisma.message.update).not.toHaveBeenCalled();
+    });
+
+    it('未指定 replyToUser + 无锚点 → 仍回退 lastChatid（undefined），旧行为不变', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue(undefined);
+      (adapter as any).uploadMediaBuffer = jest.fn();
+      (adapter as any).replyMedia = jest.fn();
+      (adapter as any).sendMediaMessage = jest.fn().mockResolvedValue(true);
+      prisma.message.findMany.mockResolvedValue([]);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'file',
+        mediaId: 'media_none_1',
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(result.wecomSent).toBe(true);
+      expect((adapter as any).sendMediaMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        'file',
+        'media_none_1',
+        undefined,
+      );
+    });
+
+    it('template_card 被动失败后主动推送，第 3 参带被指定用户的会话地址', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.getStream.mockReturnValue({
+        fromUserName: '企微用户-Long',
+        chattype: 'single',
+        chatid: 'u_long',
+        channelId: 'mc_team_1',
+      });
+      (adapter as any).replyTemplateCard = jest.fn().mockResolvedValue(false);
+      (adapter as any).sendTemplateCard = jest.fn().mockResolvedValue(true);
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        msgtype: 'template_card',
+        replyToUser: '企微用户-Long',
+        card: {
+          card_type: 'text_notice',
+          main_title: { title: '季度报告', desc: '已生成' },
+          sub_title_text: '详情请查看',
+        },
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect((adapter as any).replyTemplateCard).toHaveBeenCalled();
+      expect((adapter as any).sendTemplateCard).toHaveBeenCalledWith(
+        'mc_team_1',
+        expect.any(Object),
+        'u_long',
+      );
+    });
+
+    it('指定 replyToUser 时 sendFallbackMessage 同样带目标地址（不落到 lastChatid）', async () => {
+      const adapter = arrangeTeamChannel();
+      adapter.finishStream.mockResolvedValue(false);
+      adapter.sendNewMessage.mockResolvedValue(false);
+      adapter.getStream.mockReturnValue({
+        fromUserName: '企微用户-Long',
+        chattype: 'single',
+        chatid: 'u_long',
+        channelId: 'mc_team_1',
+      });
+
+      const result = await service.wecomReply(ctx, {
+        teamId: 'tm_1',
+        selfInstanceId: senderInstanceId,
+        text: '收到',
+        replyToUser: '企微用户-Long',
+      });
+
+      expect(result.wecomSent).toBe(true);
+      expect(adapter.sendNewMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        expect.any(String),
+        'u_long',
+      );
+      expect(adapter.sendFallbackMessage).toHaveBeenCalledWith(
+        'mc_team_1',
+        expect.any(String),
+        'u_long',
+      );
+    });
   });
 
   describe('回填溯源与自有会话优先（2026-10-13 值班群事故修复）', () => {

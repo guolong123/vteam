@@ -289,8 +289,9 @@ export class WecomAibotAdapter extends MessageAdapter {
       fromUserId?: string;
       fromUserName?: string;
       chattype?: string;
-      /** 入站消息所属会话（群聊 chatid / 单聊无此字段）：出站主动推送按它定位，
-       *  避免多群共用 bot 时被渠道级 lastChatid（每条入站覆盖）带偏到别的群。 */
+      /** 企微主动推送该会话所需的地址：群聊 = 群 chatid，单聊 = 发送者 userid
+       *  （协议上单聊入站不返回 chatid，故回退 fromUserId）。缺了它就只能落到渠道级
+       *  lastChatid（每条入站都覆盖）——多群共用 bot 会发错群，单聊会发错人。 */
       chatid?: string;
       spinnerTimer?: NodeJS.Timeout | null;
     },
@@ -328,6 +329,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         fromUserId?: string;
         fromUserName?: string;
         chattype?: string;
+        chatid?: string;
         spinnerTimer?: NodeJS.Timeout | null;
       }
     | undefined {
@@ -802,7 +804,7 @@ export class WecomAibotAdapter extends MessageAdapter {
           fromUserId,
           fromUserName,
           chattype,
-          chatid: body.chatid,
+          chatid: body.chatid ?? fromUserId ?? null,
           spinnerTimer,
         });
         try {
@@ -818,7 +820,7 @@ export class WecomAibotAdapter extends MessageAdapter {
                 fromUserId,
                 fromUserName,
                 chattype,
-                chatid: body.chatid,
+                chatid: body.chatid ?? fromUserId ?? null,
                 spinnerTimer,
               } as any,
             );
@@ -1153,7 +1155,8 @@ export class WecomAibotAdapter extends MessageAdapter {
         operatorExternalId,
       );
       const operatorChattype = body?.chattype;
-      const operatorChatId = body?.chatid as string | undefined;
+      const operatorChatId =
+        (body?.chatid as string | undefined) ?? operatorExternalId;
       this.logger.log(
         `wecom template_card_event operator userid=${operatorExternalId ?? ''} name=${operatorExternalName ?? ''} chattype=${operatorChattype ?? ''}`,
       );
@@ -1830,7 +1833,11 @@ export class WecomAibotAdapter extends MessageAdapter {
     return true;
   }
 
-  async sendFallbackMessage(channelId: string, text: string): Promise<boolean> {
+  async sendFallbackMessage(
+    channelId: string,
+    text: string,
+    targetChatId?: string,
+  ): Promise<boolean> {
     const client = this.clients.get(channelId);
     if (!client) {
       this.logger.warn(
@@ -1839,8 +1846,8 @@ export class WecomAibotAdapter extends MessageAdapter {
       return false;
     }
     const host = this.hosts.get(channelId) ?? this.attachedHost;
-    let fallbackChatId: string | null = null;
-    if (host?.getChannel) {
+    let fallbackChatId: string | null = targetChatId ?? null;
+    if (!fallbackChatId && host?.getChannel) {
       try {
         const ch = await host.getChannel(channelId);
         const cfg = (ch?.config ?? {}) as Record<string, unknown>;
@@ -1895,7 +1902,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         markdown: { content: text },
       } as unknown as Parameters<WSClient['sendMessage']>[1]);
       this.logger.log(
-        `wecom sendFallbackMessage ok channelId=${channelId} chatId=${fallbackChatId} textLen=${text.length}`,
+        `wecom sendFallbackMessage ok channelId=${channelId} chatId=${fallbackChatId} target=${targetChatId ? 'explicit' : 'lastChatid'} textLen=${text.length}`,
       );
       return true;
     } catch (e) {
@@ -1947,6 +1954,8 @@ export class WecomAibotAdapter extends MessageAdapter {
     chatid?: string,
   ): Promise<void> {
     const frameHeaders = (f as { headers?: unknown }).headers ?? f;
+    // 企微单聊入站不返回 chatid，主动推送地址就是发送者 userid
+    const effectiveChatId = chatid ?? fromUserId ?? null;
     const streamId = generateReqId('stream');
     const spinnerFrames = WecomAibotAdapter.SPINNER_FRAMES;
     let spinnerIndex = 0;
@@ -2040,7 +2049,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         fromUserId,
         fromUserName,
         chattype,
-        chatid,
+        chatid: effectiveChatId,
         spinnerTimer,
       });
       try {
@@ -2056,7 +2065,7 @@ export class WecomAibotAdapter extends MessageAdapter {
               fromUserId,
               fromUserName,
               chattype,
-              chatid,
+              chatid: effectiveChatId,
               spinnerTimer,
             } as any,
           );
@@ -2333,7 +2342,11 @@ export class WecomAibotAdapter extends MessageAdapter {
     return null;
   }
 
-  async sendTemplateCard(channelId: string, card: unknown): Promise<boolean> {
+  async sendTemplateCard(
+    channelId: string,
+    card: unknown,
+    targetChatId?: string,
+  ): Promise<boolean> {
     const client = this.clients.get(channelId);
     if (!client) {
       this.logger.warn(
@@ -2341,7 +2354,8 @@ export class WecomAibotAdapter extends MessageAdapter {
       );
       return false;
     }
-    const chatId = await this.resolveChatId(channelId);
+    // 调用方给的会话地址（入站 stream.chatid）优先；缺省才回退渠道级 lastChatid
+    const chatId = targetChatId ?? (await this.resolveChatId(channelId));
     if (!chatId) {
       this.logger.warn(
         `wecom sendTemplateCard no chatId channelId=${channelId} card=${JSON.stringify(card).slice(0, 1200)}`,
@@ -2572,7 +2586,7 @@ export class WecomAibotAdapter extends MessageAdapter {
         return false;
       }
       this.logger.log(
-        `wecom sendTemplateCard ok channelId=${channelId} chatId=${chatId} card_type=${cardObj.card_type} res=${JSON.stringify(res ?? {}).slice(0, 500)}`,
+        `wecom sendTemplateCard ok channelId=${channelId} chatId=${chatId} target=${targetChatId ? 'explicit' : 'lastChatid'} card_type=${cardObj.card_type} res=${JSON.stringify(res ?? {}).slice(0, 500)}`,
       );
       return true;
     } catch (e) {

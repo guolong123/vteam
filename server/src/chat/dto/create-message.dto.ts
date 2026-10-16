@@ -58,7 +58,7 @@ export class CreateMessageDto {
 
   @ApiPropertyOptional({
     description:
-      '外部渠道会话 id（仅企微入站，群聊有值）：出站按它锚定目标会话，避免多群共用 bot 时错投',
+      '外部会话地址（企微：群聊 chatid / 私聊发送者 userid）：出站主动推送按它锚定目标会话，避免多群/多人共用 bot 时错投',
   })
   @IsOptional()
   @IsString()
