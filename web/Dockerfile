@@ -1,7 +1,10 @@
 # syntax=docker.ketaops.cc/docker/dockerfile:1
 
+# 基础镜像可覆盖：CI 在拉不到内网镜像源时传 --build-arg NODE_IMAGE=docker.io/library/node:22-alpine
+ARG NODE_IMAGE=docker.ketaops.cc/library/node:22-alpine
+
 # ---------- build：web 依赖 + worker 发布包 + next build（standalone 产物） ----------
-FROM docker.ketaops.cc/library/node:22-alpine AS build
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 # 布局对齐仓库：web/ 与 worker/ 并存，pack-worker.sh 的 ROOT 推导不变
 #（compose build context 已改为仓库根，见 docker-compose.yml web 服务）。
@@ -30,7 +33,7 @@ WORKDIR /app/web
 RUN npm run build
 
 # ---------- runner：standalone 运行 ----------
-FROM docker.ketaops.cc/library/node:22-alpine AS runner
+FROM ${NODE_IMAGE} AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 # standalone 产物（server.js + 精简 node_modules）

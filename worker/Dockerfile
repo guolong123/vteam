@@ -6,8 +6,11 @@
 # 基座说明：原 node:22-alpine (musl) 跑不了 Chrome(glibc)，切到 debian bookworm-slim；
 # Chrome 依赖由 `agent-browser install --with-deps` 自动补齐（apt）。
 
+# 基础镜像可覆盖：CI 在拉不到内网镜像源时传 --build-arg NODE_IMAGE=docker.io/library/node:22-bookworm-slim
+ARG NODE_IMAGE=docker.ketaops.cc/library/node:22-bookworm-slim
+
 # ---- 阶段 1：build ----
-FROM docker.ketaops.cc/library/node:22-bookworm-slim AS build
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm config set registry https://registry.npmmirror.com && npm ci
@@ -16,7 +19,7 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 # ---- 阶段 2：runner ----
-FROM docker.ketaops.cc/library/node:22-bookworm-slim
+FROM ${NODE_IMAGE}
 # 国内源加速（apt：阿里云镜像）
 RUN apt-get update && apt-get install -y ca-certificates && \
     sed -i 's|http://deb.debian.org|https://mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \

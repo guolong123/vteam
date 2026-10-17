@@ -1,0 +1,214 @@
+# 发布 vteam 三个镜像到 Docker Hub，linux/amd64 + linux/arm64 双架构。
+#
+# 设计要点：
+# - 触发：push tag v*（正式发布）或手动 workflow_dispatch（试跑/补发）。
+# - 双架构**不用 QEMU**：amd64 跑 ubuntu-latest，arm64 跑 ubuntu-24.04-arm（public 仓库免费）。
+#   worker/Dockerfile 里 bun / Chrome 在 QEMU 模拟下已知会失败，原生 runner 可绕开。
+# - 每个 (镜像 × 架构) 是独立 job，并行产出 <image>:<version>-<arch>；
+#   收尾 manifest job 用 `docker buildx imagetools create` 合成多架构 <image>:<version>，
+#   正式 tag 时额外更新 :latest。
+# - 基础镜像默认走 docker.ketaops.cc 镜像源；runner 拉不到时自动回退 docker.io
+#   （Dockerfile 已参数化 NODE_IMAGE）。
+# - 层缓存按 镜像-架构 分 scope（type=gha），避免不同镜像互相污染。
+name: Release Images
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '镜像版本 tag（如 v1.2.3）'
+        required: true
+        default: 'v0.0.0-manual'
+      update_latest:
+        description: '同时更新 :latest'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAMESPACE: guojongg
+
+concurrency:
+  group: release-images-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  meta:
+    name: resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      update_latest: ${{ steps.resolve.outputs.update_latest }}
+    steps:
+      - id: resolve
+        name: Resolve version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            LATEST="${{ inputs.update_latest }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+            # 仅形如 v1.2.3 的正式 tag 更新 latest；v1.2.3-rc1 之类预发布不更新
+            case "$VERSION" in
+              v[0-9]*.[0-9]*.[0-9]*) LATEST=true ;;
+              *) LATEST=false ;;
+            esac
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "update_latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION} update_latest=${LATEST}"
+
+  build:
+    name: ${{ matrix.image }} · ${{ matrix.arch }}
+    needs: meta
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: server
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            dockerfile: server/Dockerfile
+            context: server
+            node_tag: 22-alpine
+            free_disk: false
+          - image: server
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            dockerfile: server/Dockerfile
+            context: server
+            node_tag: 22-alpine
+            free_disk: false
+          - image: web
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            dockerfile: web/Dockerfile
+            context: .
+            node_tag: 22-alpine
+            free_disk: false
+          - image: web
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            dockerfile: web/Dockerfile
+            context: .
+            node_tag: 22-alpine
+            free_disk: false
+          - image: worker
+            arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            dockerfile: worker/Dockerfile
+            context: worker
+            node_tag: 22-bookworm-slim
+            free_disk: true
+          - image: worker
+            arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            dockerfile: worker/Dockerfile
+            context: worker
+            node_tag: 22-bookworm-slim
+            free_disk: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space (worker 镜像较大)
+        if: matrix.free_disk
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Resolve base image
+        id: base
+        shell: bash
+        run: |
+          set -euo pipefail
+          MIRROR="docker.ketaops.cc/library/node:${{ matrix.node_tag }}"
+          UPSTREAM="docker.io/library/node:${{ matrix.node_tag }}"
+          if timeout 30 docker manifest inspect "$MIRROR" >/dev/null 2>&1; then
+            echo "image=$MIRROR" >> "$GITHUB_OUTPUT"
+            echo "base image: $MIRROR"
+          else
+            echo "image=$UPSTREAM" >> "$GITHUB_OUTPUT"
+            echo "::warning::mirror unreachable, falling back to $UPSTREAM"
+          fi
+
+      - name: Build and push ${{ matrix.image }} (${{ matrix.arch }})
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE_NAMESPACE }}/vteam-${{ matrix.image }}:${{ needs.meta.outputs.version }}-${{ matrix.arch }}
+          build-args: |
+            NODE_IMAGE=${{ steps.base.outputs.image }}
+            CODE_VERSION=${{ needs.meta.outputs.version }}
+          cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
+
+  manifest:
+    name: merge multi-arch manifests
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Create multi-arch manifests
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          UPDATE_LATEST: ${{ needs.meta.outputs.update_latest }}
+        run: |
+          set -euo pipefail
+          for img in server web worker; do
+            REF="${IMAGE_NAMESPACE}/vteam-${img}"
+            docker buildx imagetools create -t "${REF}:${VERSION}" "${REF}:${VERSION}-amd64" "${REF}:${VERSION}-arm64"
+            if [ "${UPDATE_LATEST}" = "true" ]; then
+              docker buildx imagetools create -t "${REF}:latest" "${REF}:${VERSION}-amd64" "${REF}:${VERSION}-arm64"
+            fi
+          done
+
+      - name: Verify manifests
+        shell: bash
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          for img in server web worker; do
+            echo "--- ${IMAGE_NAMESPACE}/vteam-${img}:${VERSION}"
+            docker buildx imagetools inspect "${IMAGE_NAMESPACE}/vteam-${img}:${VERSION}"
+          done

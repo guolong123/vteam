@@ -1,13 +1,16 @@
 # syntax=docker.ketaops.cc/docker/dockerfile:1
 
+# 基础镜像可覆盖：CI 在拉不到内网镜像源时传 --build-arg NODE_IMAGE=docker.io/library/node:22-alpine
+ARG NODE_IMAGE=docker.ketaops.cc/library/node:22-alpine
+
 # ---------- deps：安装全量依赖（含 devDeps，供 nest build / prisma generate） ----------
-FROM docker.ketaops.cc/library/node:22-alpine AS deps
+FROM ${NODE_IMAGE} AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm config set registry https://registry.npmmirror.com && npm ci
 
 # ---------- build：编译 NestJS 产物 + 生成 Prisma Client ----------
-FROM docker.ketaops.cc/library/node:22-alpine AS build
+FROM ${NODE_IMAGE} AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -18,7 +21,7 @@ RUN npx prisma generate
 RUN npm run build
 
 # ---------- runner：生产运行（标准 NestJS 进程，非 standalone） ----------
-FROM docker.ketaops.cc/library/node:22-alpine
+FROM ${NODE_IMAGE}
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/dist ./dist
