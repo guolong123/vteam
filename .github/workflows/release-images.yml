@@ -4,9 +4,10 @@
 # - 触发：push tag v*（正式发布）或手动 workflow_dispatch（试跑/补发）。
 # - 双架构**不用 QEMU**：amd64 跑 ubuntu-latest，arm64 跑 ubuntu-24.04-arm（public 仓库免费）。
 #   worker/Dockerfile 里 bun / Chrome 在 QEMU 模拟下已知会失败，原生 runner 可绕开。
-# - 每个 (镜像 × 架构) 是独立 job，并行产出 <image>:<version>-<arch>；
-#   收尾 manifest job 用 `docker buildx imagetools create` 合成多架构 <image>:<version>，
-#   正式 tag 时额外更新 :latest。
+# - 每个 (镜像 × 架构) 是独立 job，并行构建；**单架构只推 blob 不带 tag**
+#   （push-by-digest），digest 经 artifact 传给收尾 job，
+#   由 `docker buildx imagetools create` 合成唯一的多架构 <image>:<version>；
+#   正式 tag 时额外更新 :latest。仓库里不会出现 -amd64 / -arm64 之类中间 tag。
 # - 基础镜像在 CI 固定用 docker.io（runner 在海外直连最快）；本地构建仍用 Dockerfile 里
 #   ARG NODE_IMAGE 的默认值 docker.ketaops.cc。
 # - 层缓存按 镜像-架构 分 scope（type=gha），避免不同镜像互相污染。
@@ -146,20 +147,37 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push ${{ matrix.image }} (${{ matrix.arch }})
+      - name: Build ${{ matrix.image }} (${{ matrix.arch }})
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platform }}
-          push: true
+          # 只推 blob、不打 tag：单架构镜像不进 tag 列表，最终只留多架构 <version>
+          outputs: type=image,name=${{ env.IMAGE_NAMESPACE }}/vteam-${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           provenance: false
-          tags: ${{ env.IMAGE_NAMESPACE }}/vteam-${{ matrix.image }}:${{ needs.meta.outputs.version }}-${{ matrix.arch }}
           build-args: |
             NODE_IMAGE=docker.io/library/node:${{ matrix.node_tag }}
             CODE_VERSION=${{ needs.meta.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
+
+      - name: Export digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
 
   manifest:
     name: merge multi-arch manifests
@@ -173,6 +191,11 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+
       - name: Create multi-arch manifests
         shell: bash
         env:
@@ -181,10 +204,21 @@ jobs:
         run: |
           set -euo pipefail
           for img in server web worker; do
-            REF="${IMAGE_NAMESPACE}/vteam-${img}"
-            docker buildx imagetools create -t "${REF}:${VERSION}" "${REF}:${VERSION}-amd64" "${REF}:${VERSION}-arm64"
+            ref="${IMAGE_NAMESPACE}/vteam-${img}"
+            srcs=()
+            for arch in amd64 arm64; do
+              dir="/tmp/digests/digest-${img}-${arch}"
+              f="$(find "$dir" -maxdepth 1 -type f | head -1)"
+              if [ -z "$f" ]; then
+                echo "::error::missing digest for ${img}/${arch} (looked in ${dir})"
+                exit 1
+              fi
+              srcs+=("${ref}@sha256:$(basename "$f")")
+            done
+            echo "creating ${ref}:${VERSION} <- ${srcs[*]}"
+            docker buildx imagetools create -t "${ref}:${VERSION}" "${srcs[@]}"
             if [ "${UPDATE_LATEST}" = "true" ]; then
-              docker buildx imagetools create -t "${REF}:latest" "${REF}:${VERSION}-amd64" "${REF}:${VERSION}-arm64"
+              docker buildx imagetools create -t "${ref}:latest" "${srcs[@]}"
             fi
           done
 
