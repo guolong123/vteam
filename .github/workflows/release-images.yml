@@ -7,8 +7,8 @@
 # - 每个 (镜像 × 架构) 是独立 job，并行产出 <image>:<version>-<arch>；
 #   收尾 manifest job 用 `docker buildx imagetools create` 合成多架构 <image>:<version>，
 #   正式 tag 时额外更新 :latest。
-# - 基础镜像默认走 docker.ketaops.cc 镜像源；runner 拉不到时自动回退 docker.io
-#   （Dockerfile 已参数化 NODE_IMAGE）。
+# - 基础镜像在 CI 固定用 docker.io（runner 在海外直连最快）；本地构建仍用 Dockerfile 里
+#   ARG NODE_IMAGE 的默认值 docker.ketaops.cc。
 # - 层缓存按 镜像-架构 分 scope（type=gha），避免不同镜像互相污染。
 name: Release Images
 
@@ -125,7 +125,7 @@ jobs:
             node_tag: 22-bookworm-slim
             free_disk: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Free disk space (worker 镜像较大)
         if: matrix.free_disk
@@ -139,30 +139,15 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Resolve base image
-        id: base
-        shell: bash
-        run: |
-          set -euo pipefail
-          MIRROR="docker.ketaops.cc/library/node:${{ matrix.node_tag }}"
-          UPSTREAM="docker.io/library/node:${{ matrix.node_tag }}"
-          if timeout 30 docker manifest inspect "$MIRROR" >/dev/null 2>&1; then
-            echo "image=$MIRROR" >> "$GITHUB_OUTPUT"
-            echo "base image: $MIRROR"
-          else
-            echo "image=$UPSTREAM" >> "$GITHUB_OUTPUT"
-            echo "::warning::mirror unreachable, falling back to $UPSTREAM"
-          fi
-
       - name: Build and push ${{ matrix.image }} (${{ matrix.arch }})
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -171,7 +156,7 @@ jobs:
           provenance: false
           tags: ${{ env.IMAGE_NAMESPACE }}/vteam-${{ matrix.image }}:${{ needs.meta.outputs.version }}-${{ matrix.arch }}
           build-args: |
-            NODE_IMAGE=${{ steps.base.outputs.image }}
+            NODE_IMAGE=docker.io/library/node:${{ matrix.node_tag }}
             CODE_VERSION=${{ needs.meta.outputs.version }}
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}-${{ matrix.arch }}
@@ -181,9 +166,9 @@ jobs:
     needs: [meta, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}

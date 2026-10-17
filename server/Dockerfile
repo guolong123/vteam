@@ -1,5 +1,3 @@
-# syntax=docker.ketaops.cc/docker/dockerfile:1
-
 # 基础镜像可覆盖：CI 在拉不到内网镜像源时传 --build-arg NODE_IMAGE=docker.io/library/node:22-alpine
 ARG NODE_IMAGE=docker.ketaops.cc/library/node:22-alpine
 
