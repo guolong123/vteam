@@ -232,3 +232,28 @@ jobs:
             echo "--- ${IMAGE_NAMESPACE}/vteam-${img}:${VERSION}"
             docker buildx imagetools inspect "${IMAGE_NAMESPACE}/vteam-${img}:${VERSION}"
           done
+
+      - name: Verify tag list (no intermediate arch tags)
+        shell: bash
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          # 用 registry API 列出真实 tag：证明仓库里只有多架构 tag，没有 -amd64/-arm64 中间产物。
+          for img in server web worker; do
+            repo="${IMAGE_NAMESPACE}/vteam-${img}"
+            token="$(curl -fsSL -u "${DOCKERHUB_USERNAME}:${DOCKERHUB_TOKEN}" \
+              "https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repo}:pull" \
+              | jq -r .token)"
+            tags="$(curl -fsSL -H "Authorization: Bearer ${token}" \
+              "https://registry-1.docker.io/v2/${repo}/tags/list?n=100" | jq -r '.tags[]' | sort)"
+            echo "--- ${repo} tags:"
+            echo "${tags}"
+            if echo "${tags}" | grep -qE -- '-amd64$|-arm64$'; then
+              echo "::error::found intermediate arch tag in ${repo}"
+              exit 1
+            fi
+            echo "${tags}" | grep -qx "${VERSION}" || { echo "::error::${repo} missing tag ${VERSION}"; exit 1; }
+          done
