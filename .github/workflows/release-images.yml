@@ -251,8 +251,9 @@ jobs:
               "https://registry-1.docker.io/v2/${repo}/tags/list?n=100" | jq -r '.tags[]' | sort)"
             echo "--- ${repo} tags:"
             echo "${tags}"
-            if echo "${tags}" | grep -qE -- '-amd64$|-arm64$'; then
-              echo "::error::found intermediate arch tag in ${repo}"
+            # 只断言本次 version 无中间 tag：更早的历史遗留 tag 不阻断发布
+            if echo "${tags}" | grep -qE -- "^${VERSION}-(amd64|arm64)$"; then
+              echo "::error::found intermediate arch tag for ${VERSION} in ${repo}"
               exit 1
             fi
             echo "${tags}" | grep -qx "${VERSION}" || { echo "::error::${repo} missing tag ${VERSION}"; exit 1; }
