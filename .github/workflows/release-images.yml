@@ -56,11 +56,12 @@ jobs:
             LATEST="${{ inputs.update_latest }}"
           else
             VERSION="${GITHUB_REF_NAME}"
-            # 仅形如 v1.2.3 的正式 tag 更新 latest；v1.2.3-rc1 之类预发布不更新
-            case "$VERSION" in
-              v[0-9]*.[0-9]*.[0-9]*) LATEST=true ;;
-              *) LATEST=false ;;
-            esac
+            # 仅严格 semver 的正式 tag（v1.2.3）更新 latest；v1.2.3-rc1 / v0.1.0-test1 等预发布不更新
+            if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              LATEST=true
+            else
+              LATEST=false
+            fi
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "update_latest=${LATEST}" >> "$GITHUB_OUTPUT"
