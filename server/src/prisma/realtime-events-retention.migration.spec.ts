@@ -134,9 +134,7 @@ describe('migration 20261015000000_realtime_events_retention', () => {
 
   it('索引三元组正确：名字/表名/被索引列都锁死（idx ON realtime_events (created_at)）', () => {
     const created = createdIndexes();
-    expect(created).toEqual([
-      { name: INDEX, table: TABLE, columns: [COLUMN] },
-    ]);
+    expect(created).toEqual([{ name: INDEX, table: TABLE, columns: [COLUMN] }]);
   });
 
   it('反向平价：schema.prisma 声明的 idx_realtime_events_created_at 真被本迁移建出来（漏建 → 静默全表扫描）', () => {

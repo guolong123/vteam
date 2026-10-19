@@ -78,7 +78,8 @@ function reasoningHasContent(p: Record<string, unknown>): boolean {
 export function hasRenderableContent(parts: unknown): boolean {
   return normalizeParts(parts).some((p) => {
     const type = typeof p.type === 'string' ? p.type : '';
-    if (type === 'text') return !p.synthetic && typeof p.text === 'string' && p.text.length > 0;
+    if (type === 'text')
+      return !p.synthetic && typeof p.text === 'string' && p.text.length > 0;
     if (type === 'reasoning' || type === 'thinking') {
       return reasoningHasContent(p);
     }

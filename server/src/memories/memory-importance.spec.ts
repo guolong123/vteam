@@ -146,7 +146,12 @@ describe('computeMemoryImportance', () => {
 });
 
 describe('sortMemoriesByImportance', () => {
-  const named = (id: string, refCount: number, ageDays: number, lastUsedAt?: Date | null) => ({
+  const named = (
+    id: string,
+    refCount: number,
+    ageDays: number,
+    lastUsedAt?: Date | null,
+  ) => ({
     id,
     ...row(refCount, ageDays, lastUsedAt),
   });
@@ -183,11 +188,7 @@ describe('sortMemoriesByImportance', () => {
   });
 
   it('now 只求值一次：冻结时钟下同一批候选反复排序结果稳定', () => {
-    const rows = [
-      named('a', 0, 2),
-      named('b', 1, 2),
-      named('c', 2, 2),
-    ];
+    const rows = [named('a', 0, 2), named('b', 1, 2), named('c', 2, 2)];
     const frozen = new Date(NOW.getTime());
     const first = sortMemoriesByImportance(rows, frozen).map((r) => r.id);
     // 若 now 在比较器里逐次求值，跨一次时钟跳动会让同分行的次序漂移；

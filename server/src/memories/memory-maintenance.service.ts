@@ -332,9 +332,7 @@ export class MemoryMaintenanceService implements OnModuleInit {
       return;
     }
     // 上轮实际结果的统计窗口 = 该团队本轮**之前**的游标（首轮无游标 → null → 省略从句）。
-    const lastResult = cursor
-      ? await this.lastRunResult(teamId, cursor)
-      : null;
+    const lastResult = cursor ? await this.lastRunResult(teamId, cursor) : null;
     const shown = facts.slice(0, MEMORY_MAINTENANCE_PROMPT_ITEM_LIMIT);
     await this.postMaintenanceNotice(teamId, facts.length, lastResult);
     await this.dispatcher.dispatchAgentMention({

@@ -281,9 +281,7 @@ describe('seed（模板 Agent 预置 + 角色策略）', () => {
       const otherKeys = Object.keys(permission).filter(
         (key) => !['edit', 'read', 'bash', 'task'].includes(key),
       );
-      expect([...otherKeys].sort()).toEqual(
-        [...VTEAM_MCP_TOOL_NAMES].sort(),
-      );
+      expect([...otherKeys].sort()).toEqual([...VTEAM_MCP_TOOL_NAMES].sort());
       for (const key of otherKeys) {
         expect(key.startsWith('vteam_')).toBe(true);
         expect(permission[key]).toBe('allow');

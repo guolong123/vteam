@@ -167,9 +167,10 @@ function usageTokenCount(value: unknown): number {
  * 字段缺失而整条写不进去。
  */
 export function parseUsageTokens(raw: unknown): UsageTokenCounts {
-  const bag = (
-    typeof raw === 'object' && raw !== null ? raw : {}
-  ) as Record<string, unknown>;
+  const bag = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<
+    string,
+    unknown
+  >;
   const cache = (
     typeof bag.cache === 'object' && bag.cache !== null ? bag.cache : {}
   ) as Record<string, unknown>;
@@ -2491,7 +2492,10 @@ export class WorkerDispatcher
         await this.prisma.message.update({
           where: { id: request.messageId },
           data: {
-            content: { text: prompt, parts: prevParts } as Prisma.InputJsonValue,
+            content: {
+              text: prompt,
+              parts: prevParts,
+            } as Prisma.InputJsonValue,
           },
         });
       } catch (err) {
@@ -3289,7 +3293,9 @@ export class WorkerDispatcher
     // 防御：未接入 modelUsage delegate 的宿主（灰度/裁剪部署）跳过记账，不打断主链路。
     const usageStore = this.prisma.modelUsage;
     if (!usageStore) {
-      this.logger.debug('[usage] 本宿主未接入 modelUsage delegate，跳过用量记账');
+      this.logger.debug(
+        '[usage] 本宿主未接入 modelUsage delegate，跳过用量记账',
+      );
       return;
     }
     const { payload } = args;
@@ -3298,7 +3304,9 @@ export class WorkerDispatcher
         ? payload.sessionId
         : null;
     const taskId =
-      typeof payload.taskId === 'string' && payload.taskId ? payload.taskId : null;
+      typeof payload.taskId === 'string' && payload.taskId
+        ? payload.taskId
+        : null;
     const counts = parseUsageTokens(payload.tokens);
     const cost =
       typeof payload.cost === 'number' && Number.isFinite(payload.cost)

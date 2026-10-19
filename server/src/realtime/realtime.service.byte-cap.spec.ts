@@ -110,7 +110,9 @@ describe('RealtimeService 内存日志字节预算（incident-realtime-log-byte-
     expect(log.length).toBeLessThan(emitted);
     expect(log.length).toBeGreaterThan(0);
     // 摊销记账与独立重算一致（logSizes 与 log 平行、logBytesTotal 无漂移）
-    expect(logSizesOf(service).reduce((a, b) => a + b, 0)).toBe(totalBytes(log));
+    expect(logSizesOf(service).reduce((a, b) => a + b, 0)).toBe(
+      totalBytes(log),
+    );
     expect(
       (service as unknown as { logBytesTotal: number }).logBytesTotal,
     ).toBe(totalBytes(log));
@@ -129,9 +131,9 @@ describe('RealtimeService 内存日志字节预算（incident-realtime-log-byte-
     expect(ids).toEqual([...ids].sort());
     expect(ids[ids.length - 1]).toBe(`ev_${String(60).padStart(10, '0')}`);
     // 最新一条正是刚压入的事件（内容未被误淘汰/错位）
-    expect((log[log.length - 1].payload as { message: { id: string } }).message.id).toBe(
-      'm_59',
-    );
+    expect(
+      (log[log.length - 1].payload as { message: { id: string } }).message.id,
+    ).toBe('m_59');
     // latest-id 游标语义：最新已发事件 id
     expect(service.getLatestId()).toBe(`ev_${String(60).padStart(10, '0')}`);
   });
@@ -142,16 +144,18 @@ describe('RealtimeService 内存日志字节预算（incident-realtime-log-byte-
     }
     const log = logOf(service);
     expect(log).toHaveLength(1000);
-    expect(service.getLatestId()).toBe(
-      `ev_${String(1200).padStart(10, '0')}`,
-    );
+    expect(service.getLatestId()).toBe(`ev_${String(1200).padStart(10, '0')}`);
     // 1200 条小事件远低于字节预算 → 由条数上限收敛（证明两个上限并存）
     expect(totalBytes(log)).toBeLessThanOrEqual(REALTIME_LOG_MAX_BYTES);
   });
 
   it('单条事件即超预算：仍保留最新条目（latest-id 语义不因字节淘汰丢失），下一条压入再淘汰它', async () => {
     await service.emit('chat.message.new', {
-      message: { id: 'm_huge', channelId: 'c_1', blob: 'y'.repeat(9 * 1024 * 1024) },
+      message: {
+        id: 'm_huge',
+        channelId: 'c_1',
+        blob: 'y'.repeat(9 * 1024 * 1024),
+      },
     });
 
     let log = logOf(service);
@@ -216,11 +220,10 @@ describe('RealtimeService delta 帧不保留全量快照（incident-realtime-log
   });
 
   it('message.part.delta 零落库 + 内存日志只留识别字段：全量快照一个字都不进 realtime_events / log（回到全量快照路径此断言即红）', async () => {
-    const ev = await service.emit(
-      'message.part.delta',
-      deltaPayload(),
-      { type: 'channel', id: 'c_1' },
-    );
+    const ev = await service.emit('message.part.delta', deltaPayload(), {
+      type: 'channel',
+      id: 'c_1',
+    });
 
     // (1) 不落库：realtimeEvent.create 一次都不发（事故前每 delta 一行全量快照）
     expect(prisma.realtimeEvent.create).not.toHaveBeenCalled();
@@ -300,8 +303,6 @@ describe('RealtimeService delta 帧不保留全量快照（incident-realtime-log
     expect(totalBytes(log)).toBeLessThan(50 * 4 * 1024);
     expect(totalBytes(log)).toBeLessThanOrEqual(REALTIME_LOG_MAX_BYTES);
     expect(prisma.realtimeEvent.create).not.toHaveBeenCalled();
-    expect(service.getLatestId()).toBe(
-      `ev_${String(50).padStart(10, '0')}`,
-    );
+    expect(service.getLatestId()).toBe(`ev_${String(50).padStart(10, '0')}`);
   });
 });

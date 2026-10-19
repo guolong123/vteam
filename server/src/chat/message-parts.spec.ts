@@ -61,8 +61,8 @@ describe('注入提示 part 识别 / 剔除（isInjectedPromptPart / stripInject
   it('stripInjectedPromptParts：非数组 → []；剔除 null/非对象条目', () => {
     expect(stripInjectedPromptParts(undefined)).toEqual([]);
     expect(stripInjectedPromptParts('x')).toEqual([]);
-    expect(stripInjectedPromptParts([null, 1, { type: 'text', text: 'ok' }])).toEqual(
-      [{ type: 'text', text: 'ok' }],
-    );
+    expect(
+      stripInjectedPromptParts([null, 1, { type: 'text', text: 'ok' }]),
+    ).toEqual([{ type: 'text', text: 'ok' }]);
   });
 });

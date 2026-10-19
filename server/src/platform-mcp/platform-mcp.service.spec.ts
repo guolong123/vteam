@@ -5092,7 +5092,10 @@ describe('PlatformMcpService', () => {
             row('me_hot', 1, { refCount: 3 }),
           ]);
 
-          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
+          const out = await service.memoryList(ctx, {
+            teamId: 'tm_1',
+            query: 'c',
+          });
 
           expect(out.map((r) => r.id)).toEqual(['me_hot', 'me_fresh']);
         });
@@ -5103,7 +5106,10 @@ describe('PlatformMcpService', () => {
             row('me_used', 180, { lastUsedAt: daysAgo(1) }),
           ]);
 
-          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
+          const out = await service.memoryList(ctx, {
+            teamId: 'tm_1',
+            query: 'c',
+          });
 
           expect(out.map((r) => r.id)).toEqual(['me_used', 'me_stale']);
         });
@@ -5114,7 +5120,10 @@ describe('PlatformMcpService', () => {
             row('me_b', 2),
           ]);
 
-          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
+          const out = await service.memoryList(ctx, {
+            teamId: 'tm_1',
+            query: 'c',
+          });
 
           expect(out.map((r) => r.id)).toEqual(['me_b', 'me_a']);
         });
@@ -5172,7 +5181,10 @@ describe('PlatformMcpService', () => {
         it('计数：无结果时 updateMany 不调用', async () => {
           prisma.memory.findMany.mockResolvedValue([]);
 
-          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
+          const out = await service.memoryList(ctx, {
+            teamId: 'tm_1',
+            query: 'c',
+          });
 
           expect(out).toEqual([]);
           expect(prisma.memory.updateMany).not.toHaveBeenCalled();
@@ -5188,7 +5200,10 @@ describe('PlatformMcpService', () => {
           ]);
           prisma.memory.updateMany.mockRejectedValue(new Error('db down'));
 
-          const out = await service.memoryList(ctx, { teamId: 'tm_1', query: 'c' });
+          const out = await service.memoryList(ctx, {
+            teamId: 'tm_1',
+            query: 'c',
+          });
           // fire-and-forget：让被拒绝的 promise 的 catch 微任务队列跑完。
           await new Promise((resolve) => setImmediate(resolve));
 
@@ -5326,7 +5341,13 @@ describe('PlatformMcpService', () => {
               Promise.resolve({ ...(db.get(where.id) ?? null) }) as never,
           );
           prisma.memory.update.mockImplementation(
-            ({ where, data }: { where: { id: string }; data: { deletedAt?: Date } }) => {
+            ({
+              where,
+              data,
+            }: {
+              where: { id: string };
+              data: { deletedAt?: Date };
+            }) => {
               const row = { ...db.get(where.id), ...data };
               db.set(where.id, row);
               return Promise.resolve({ ...row }) as never;
@@ -5450,7 +5471,8 @@ describe('PlatformMcpService', () => {
             where: { id: 'me_a' },
             select: { refCount: true },
           });
-          const claimOrder = prisma.memory.updateMany.mock.invocationCallOrder[0];
+          const claimOrder =
+            prisma.memory.updateMany.mock.invocationCallOrder[0];
           const readOrder =
             prisma.memory.findUnique.mock.invocationCallOrder.at(-1)!;
           const transferOrder =
@@ -5500,9 +5522,9 @@ describe('PlatformMcpService', () => {
             .mockResolvedValueOnce({ count: 0 });
 
           const first = await service.memoryMerge(ctx, mergeArgs);
-          await expect(service.memoryMerge(ctx, mergeArgs)).rejects.toBeInstanceOf(
-            NotFoundException,
-          );
+          await expect(
+            service.memoryMerge(ctx, mergeArgs),
+          ).rejects.toBeInstanceOf(NotFoundException);
 
           expect(first.transferredRef).toBe(4);
           expect(updates()).toEqual([
@@ -5724,8 +5746,11 @@ describe('PlatformMcpService', () => {
               return Promise.resolve({ ...row }) as never;
             },
           );
-          prisma.memory.findMany.mockImplementation(() =>
-            Promise.resolve([...db.values()].filter((r) => !r.deletedAt)) as never,
+          prisma.memory.findMany.mockImplementation(
+            () =>
+              Promise.resolve(
+                [...db.values()].filter((r) => !r.deletedAt),
+              ) as never,
           );
           // claim 与 memory_list 的命中计数共用 updateMany：前者按 deletedAt:null
           // 条件落 deletedAt/mergedIntoId，后者在本用例里不改内存 DB。
@@ -5734,10 +5759,14 @@ describe('PlatformMcpService', () => {
               where,
               data,
             }: {
-              where: { id?: string | { in: string[] }; deletedAt?: Date | null };
+              where: {
+                id?: string | { in: string[] };
+                deletedAt?: Date | null;
+              };
               data: { mergedIntoId?: string; deletedAt?: Date };
             }) => {
-              if (typeof where.id !== 'string') return Promise.resolve({ count: 0 });
+              if (typeof where.id !== 'string')
+                return Promise.resolve({ count: 0 });
               const prev = db.get(where.id);
               if (!prev || prev.deletedAt) return Promise.resolve({ count: 0 });
               db.set(where.id, { ...prev, ...data });
@@ -8176,7 +8205,9 @@ describe('PlatformMcpService', () => {
 
     it('questionConfirm 团队维度：{ teamId } → confirmByAgent 以落库作用域键 taskId=team:<teamId> + 解析出的 callerId 确认', async () => {
       allowWorker();
-      questionsService.confirmByAgent.mockResolvedValue({ id: 'aq_1' } as never);
+      questionsService.confirmByAgent.mockResolvedValue({
+        id: 'aq_1',
+      } as never);
 
       await service.questionConfirm(ctx, {
         teamId: 'tm_1',
@@ -9243,8 +9274,12 @@ describe('PlatformMcpService', () => {
 
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain('回填推断');
-      expect(result.content[0].text).toContain('请显式传 teamId 与 selfInstanceId');
-      expect(result.content[0].text).not.toBe('发送失败: 当前团队未绑定企业微信渠道');
+      expect(result.content[0].text).toContain(
+        '请显式传 teamId 与 selfInstanceId',
+      );
+      expect(result.content[0].text).not.toBe(
+        '发送失败: 当前团队未绑定企业微信渠道',
+      );
     });
 
     it('显式传 teamId 时即使未绑定也保持原文案（不误标为回填）', async () => {

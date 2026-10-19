@@ -454,7 +454,9 @@ export const memoryUpdateSchema = z
     roleId: z
       .string()
       .optional()
-      .describe('level=role 时的目标岗位 id（ar_ 前缀），必须已存在；level 非 role 时忽略'),
+      .describe(
+        'level=role 时的目标岗位 id（ar_ 前缀），必须已存在；level 非 role 时忽略',
+      ),
   })
   .refine(
     (d) =>
@@ -519,7 +521,9 @@ export const memoryArchiveSchema = z.object({
   selfInstanceId: z
     .string()
     .describe('调用方成员 id（tmm_ 前缀，你的成员身份，由系统提示注入）'),
-  memoryId: z.string().describe('记忆条目 id（me_ 前缀，vteam_memory_list 返回值）'),
+  memoryId: z
+    .string()
+    .describe('记忆条目 id（me_ 前缀，vteam_memory_list 返回值）'),
 });
 
 type MemoryArchiveArgs = z.infer<typeof memoryArchiveSchema>;
@@ -1176,8 +1180,7 @@ export function buildPlatformMcpTools(
       description:
         '平台记忆的元信息索引与按需检索（双模一体）。传任一过滤参数（query/level/tags/sourceInstanceId/sourceAgentId/sessionId）= 按需检索：返回含 content 的完整记忆，按重要度（引用次数 + 新鲜度衰减）排序，计入 refCount 引用计数，默认 20 条最多 50 条。不传任何过滤参数 = 列出当前可见的全部记忆元信息：仅含 id/level/description(标题)/tags/refCount/lastUsedAt/createdAt/autoInject/mergedIntoId/teamId/roleId，不含 content，也不计引用计数。先用 description 索引找到目标，再传 query 拉正文。默认聚合当前可见的 team + 本人所属岗位 role + global 三级（已软删不返回），role 级只见你所属岗位的。',
       inputSchema: memoryListSchema,
-      handler: (ctx, args) =>
-        service.memoryList(ctx, args as MemoryListArgs),
+      handler: (ctx, args) => service.memoryList(ctx, args as MemoryListArgs),
     },
     {
       name: 'memory_archive',
@@ -1192,8 +1195,7 @@ export function buildPlatformMcpTools(
       description:
         '合并两条语义重复的团队级记忆：把 sourceId 的内容并入 targetId，引用计数累加转移，source 自动归档（软删，可追溯「已合并至」）。适用于同一坑/同一做法被多次沉淀成多条记忆的情形——先 vteam_memory_list 核对内容，保留更完整/更常被引用的一条作 target。仅本团队 team 级记忆可合并（跨团队 / global / role 级 403），source 已归档或与 target 同 id 返回 404 / 400。返回 {merged:true, targetId, transferredRef}。',
       inputSchema: memoryMergeSchema,
-      handler: (ctx, args) =>
-        service.memoryMerge(ctx, args as MemoryMergeArgs),
+      handler: (ctx, args) => service.memoryMerge(ctx, args as MemoryMergeArgs),
     },
     {
       name: 'team_view',

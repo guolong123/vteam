@@ -1643,11 +1643,19 @@ describe('ChatService', () => {
       });
       workerClient.getMessages.mockResolvedValue([
         {
-          info: { id: 'msg_asst_early', role: 'assistant', time: { created: 2000 } },
+          info: {
+            id: 'msg_asst_early',
+            role: 'assistant',
+            time: { created: 2000 },
+          },
           parts: [{ type: 'text', text: '早于聚合行', synthetic: false }],
         },
         {
-          info: { id: 'msg_asst_late', role: 'assistant', time: { created: 3000 } },
+          info: {
+            id: 'msg_asst_late',
+            role: 'assistant',
+            time: { created: 3000 },
+          },
           parts: [{ type: 'text', text: '已被聚合行吸收', synthetic: false }],
         },
       ]);
@@ -1692,7 +1700,11 @@ describe('ChatService', () => {
       });
       workerClient.getMessages.mockResolvedValue([
         {
-          info: { id: 'msg_asst_live', role: 'assistant', time: { created: 3000 } },
+          info: {
+            id: 'msg_asst_live',
+            role: 'assistant',
+            time: { created: 3000 },
+          },
           parts: [{ type: 'text', text: '流式增补', synthetic: false }],
         },
       ]);

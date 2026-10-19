@@ -213,9 +213,7 @@ export interface WorkerCommand {
   resourceVersion: string;
   /** 命令负载：model-credentials / git-credentials / set-max-instances 携带（其余 type 不携带） */
   payload?:
-    | ModelCredentialsPayload
-    | GitCredentialsPayload
-    | SetMaxInstancesPayload;
+    ModelCredentialsPayload | GitCredentialsPayload | SetMaxInstancesPayload;
 }
 
 /** 原生 setInterval 句柄（不引入 @nestjs/schedule 依赖，等价 @Interval 语义）。 */

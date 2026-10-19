@@ -583,7 +583,9 @@ describe('RealtimeController（SSE 端点）', () => {
       // - 有 finally：replaying=false → 帧走直通分支（toMessageEvent 被调用）
       // - 无 finally：replaying 仍为 true → 帧被静默推进 liveBuffer（toMessageEvent 不被调用）
       const toMessageEventSpy = jest.spyOn(
-        controller as unknown as { toMessageEvent: (e: RealtimeEvent) => MessageEvent },
+        controller as unknown as {
+          toMessageEvent: (e: RealtimeEvent) => MessageEvent;
+        },
         'toMessageEvent',
       );
       const liveFrame: RealtimeEvent = {
@@ -649,9 +651,8 @@ describe('RealtimeController（SSE 端点）', () => {
         });
       const warnSpy = jest
         .spyOn(
-          (
-            controller as unknown as { logger: { warn: (m: string) => void } }
-          ).logger,
+          (controller as unknown as { logger: { warn: (m: string) => void } })
+            .logger,
           'warn',
         )
         .mockImplementation(() => {});

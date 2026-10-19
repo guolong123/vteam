@@ -29,7 +29,9 @@ describe('MemoriesController', () => {
       purge: jest.fn(),
     };
     maintenance = { runOnce: jest.fn() };
-    prisma = { team: { findUnique: jest.fn().mockResolvedValue({ id: 'tm_1' }) } };
+    prisma = {
+      team: { findUnique: jest.fn().mockResolvedValue({ id: 'tm_1' }) },
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [MemoriesController],
@@ -170,9 +172,9 @@ describe('MemoriesController', () => {
     it('POST /memories/maintain 未知 teamId → 404 TEAM_NOT_FOUND 且不整理', async () => {
       prisma.team.findUnique.mockResolvedValue(null);
 
-      await expect(controller.maintain({ teamId: 'tm_nope' })).rejects.toMatchObject(
-        { response: { code: 'TEAM_NOT_FOUND' } },
-      );
+      await expect(
+        controller.maintain({ teamId: 'tm_nope' }),
+      ).rejects.toMatchObject({ response: { code: 'TEAM_NOT_FOUND' } });
       expect(maintenance.runOnce).not.toHaveBeenCalled();
     });
 

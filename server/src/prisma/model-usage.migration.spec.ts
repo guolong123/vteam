@@ -69,24 +69,20 @@ const createdTables = (): string[] =>
 
 /** 本迁移 `CREATE TABLE` 语句块的全部列名（`PRIMARY KEY`/`KEY` 行不计）。 */
 function createdColumns(table: string): Set<string> {
-  const m = new RegExp(`CREATE TABLE \`${table}\` \\(([\\s\\S]*?)\\n\\) ENGINE=`).exec(
-    sql(),
-  );
+  const m = new RegExp(
+    `CREATE TABLE \`${table}\` \\(([\\s\\S]*?)\\n\\) ENGINE=`,
+  ).exec(sql());
   if (!m) throw new Error(`迁移未找到 ${table} 建表语句`);
-  return new Set(
-    [...m[1].matchAll(/^\s*`(\w+)`\s+/gm)].map((x) => x[1]),
-  );
+  return new Set([...m[1].matchAll(/^\s*`(\w+)`\s+/gm)].map((x) => x[1]));
 }
 
 /** 本迁移建的索引名集合（CREATE TABLE 内的 `KEY \`name\` (...)` 行）。 */
 function createdIndexes(table: string): Set<string> {
-  const m = new RegExp(`CREATE TABLE \`${table}\` \\(([\\s\\S]*?)\\n\\) ENGINE=`).exec(
-    sql(),
-  );
+  const m = new RegExp(
+    `CREATE TABLE \`${table}\` \\(([\\s\\S]*?)\\n\\) ENGINE=`,
+  ).exec(sql());
   if (!m) throw new Error(`迁移未找到 ${table} 建表语句`);
-  return new Set(
-    [...m[1].matchAll(/^\s*KEY `(\w+)`\s*\(/gm)].map((x) => x[1]),
-  );
+  return new Set([...m[1].matchAll(/^\s*KEY `(\w+)`\s*\(/gm)].map((x) => x[1]));
 }
 
 /** schema.prisma 里 `model ModelUsage` 的**数据库列名**集合（@map 优先，否则字段名）。 */
@@ -229,7 +225,14 @@ describe('migration 20261010010000_model_usage', () => {
 
     // schema 侧：ModelUsage 无 relations 字段（否则 Prisma 会要求被引用模型反向声明）。
     const m = /^model ModelUsage \{([\s\S]*?)^\}/m.exec(schema());
-    for (const rel of ['Team', 'Session', 'ChatChannel', 'TeamMember', 'Task', 'Agent']) {
+    for (const rel of [
+      'Team',
+      'Session',
+      'ChatChannel',
+      'TeamMember',
+      'Task',
+      'Agent',
+    ]) {
       expect(m?.[1]).not.toMatch(new RegExp(`\\b${rel}\\s+${rel}`));
     }
   });

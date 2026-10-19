@@ -414,8 +414,18 @@ describe('UsageService', () => {
         groupRow('tmb_b', 'openai/gpt-5', { totalTokens: 20 }),
       ]);
       prisma.teamMember.findMany.mockResolvedValue([
-        { id: 'tmb_a', alias: '测试-1', agent: { name: '开发者' }, role: { name: '开发' } },
-        { id: 'tmb_b', alias: '测试-2', agent: { name: '开发者' }, role: { name: '开发' } },
+        {
+          id: 'tmb_a',
+          alias: '测试-1',
+          agent: { name: '开发者' },
+          role: { name: '开发' },
+        },
+        {
+          id: 'tmb_b',
+          alias: '测试-2',
+          agent: { name: '开发者' },
+          role: { name: '开发' },
+        },
       ]);
 
       const out = await service.getTeamUsage('tm_1', viewer);

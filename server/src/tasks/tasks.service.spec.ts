@@ -551,7 +551,12 @@ describe('TasksService', () => {
       };
       prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
       prisma.task.findUnique.mockResolvedValue(
-        row({ id: taskId, teamId, status: 'pending', title: '排队任务' }) as any,
+        row({
+          id: taskId,
+          teamId,
+          status: 'pending',
+          title: '排队任务',
+        }) as any,
       );
       return tx;
     };
