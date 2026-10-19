@@ -194,7 +194,10 @@ describe('MemoriesService', () => {
       prisma.memory.count.mockResolvedValue(0);
       prisma.memory.findMany.mockResolvedValue([]);
 
-      await service.findAll({ level: 'role', roleId: 'ar_1' }, { id: 'u_admin' });
+      await service.findAll(
+        { level: 'role', roleId: 'ar_1' },
+        { id: 'u_admin' },
+      );
 
       expect(prisma.memory.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -257,7 +260,10 @@ describe('MemoriesService', () => {
         { id: 'me_1', description: 'token刷新' },
       ]);
 
-      const out = await service.findAll({ keyword: 'token' }, { id: 'u_admin' });
+      const out = await service.findAll(
+        { keyword: 'token' },
+        { id: 'u_admin' },
+      );
 
       expect(out.items[0].description).toBe('token刷新');
       expect(prisma.memory.count).toHaveBeenCalledWith(
@@ -691,9 +697,7 @@ describe('MemoriesService', () => {
       prisma.memory.findUnique.mockResolvedValue(archivedRow());
       prisma.teamUserMember.findUnique.mockResolvedValue({ id: 'tum_1' });
       prisma.memory.findFirst.mockResolvedValue(null);
-      prisma.memory.update.mockResolvedValue(
-        archivedRow({ deletedAt: null }),
-      );
+      prisma.memory.update.mockResolvedValue(archivedRow({ deletedAt: null }));
 
       const out = await service.restore('me_0000000001', { id: 'u_member' });
 
@@ -716,7 +720,9 @@ describe('MemoriesService', () => {
     });
 
     it('本就活跃的行 → 404 MEMORY_NOT_FOUND（不重复恢复）', async () => {
-      prisma.memory.findUnique.mockResolvedValue(archivedRow({ deletedAt: null }));
+      prisma.memory.findUnique.mockResolvedValue(
+        archivedRow({ deletedAt: null }),
+      );
 
       await expect(
         service.restore('me_0000000001', { id: 'u_member' }),
@@ -814,7 +820,9 @@ describe('MemoriesService', () => {
 
       expect(active.items).toHaveLength(1);
       expect(prisma.memory.count).toHaveBeenLastCalledWith(
-        expect.objectContaining({ where: expect.objectContaining({ deletedAt: null }) }),
+        expect.objectContaining({
+          where: expect.objectContaining({ deletedAt: null }),
+        }),
       );
     });
 

@@ -68,9 +68,7 @@ describe('MemoryMaintenanceService', () => {
   /** 认游标的 findMany（不认游标的 mock 会让第二轮凭空又冒出「首轮全量」）。 */
   const memoriesHonouringCursor = () =>
     prisma.memory.findMany.mockImplementation(
-      async (args: {
-        where: { teamId: string; createdAt?: { gt: Date } };
-      }) => {
+      async (args: { where: { teamId: string; createdAt?: { gt: Date } } }) => {
         const gt = args.where.createdAt?.gt;
         return twoRows().filter((r) => !gt || r.createdAt > gt);
       },
@@ -407,7 +405,9 @@ describe('MemoryMaintenanceService', () => {
       ]);
       // 每团队首批都算新，第二轮 A 空、B 仍有新
       prisma.memory.findMany.mockImplementation(
-        async (args: { where: { teamId: string; createdAt?: { gt: Date } } }) =>
+        async (args: {
+          where: { teamId: string; createdAt?: { gt: Date } };
+        }) =>
           args.where.teamId === 'tm_b' || !args.where.createdAt
             ? [newRow(`me_${args.where.teamId}`)]
             : [],
@@ -433,7 +433,9 @@ describe('MemoryMaintenanceService', () => {
         expect.stringContaining('mainAgentMemberId'),
       );
 
-      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: 'tmm_main' });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: 'tmm_main',
+      });
       const second = await service.runOnce();
       expect(second).toEqual({ teams: 1, newMemories: 2 });
     });
@@ -482,9 +484,9 @@ describe('MemoryMaintenanceService', () => {
       expect(prompt).toContain('me_24');
       expect(prompt).toContain('已全部列出');
       // 游标落在 me_19 的 createdAt（本例 createdAt = now-5min）
-      expect(prisma.memory.findMany.mock.calls[1][0].where.createdAt.gt).toEqual(
-        rows[19].createdAt,
-      );
+      expect(
+        prisma.memory.findMany.mock.calls[1][0].where.createdAt.gt,
+      ).toEqual(rows[19].createdAt);
     });
 
     it('摘要条数按团队新记忆总数计（截断时 summary 仍报全量 25）', async () => {
@@ -510,7 +512,9 @@ describe('MemoryMaintenanceService', () => {
       expect(prompt).toContain('tags=note');
       expect(prompt).toContain('refCount=0');
       expect(prompt).toContain('最近命中=从未');
-      expect(prompt).toContain(`建于=${new Date(Date.now() - DAY).toISOString().slice(0, 10)}`);
+      expect(prompt).toContain(
+        `建于=${new Date(Date.now() - DAY).toISOString().slice(0, 10)}`,
+      );
       expect(prompt).not.toContain('建议动作');
     });
 
@@ -586,7 +590,9 @@ describe('MemoryMaintenanceService', () => {
       const arg = prisma.message.create.mock.calls[0][0];
       expect(arg.data.senderType).toBe('system');
       expect(arg.data.channelId).toBe('c_group');
-      expect(arg.data.content.text).toBe('【记忆整理】发现 2 条新记忆，已派发整理');
+      expect(arg.data.content.text).toBe(
+        '【记忆整理】发现 2 条新记忆，已派发整理',
+      );
       expect(realtime.broadcast).toHaveBeenCalledWith(
         'chat.message.new',
         expect.objectContaining({
@@ -627,9 +633,11 @@ describe('MemoryMaintenanceService', () => {
         }),
       });
       // 统计窗口起点 = 第二轮的查询游标（同一次读，避免两处 Date.now 漂移）
-      const cursor = (prisma.memory.findMany.mock.calls[0][0].where as {
-        createdAt: { gt: Date };
-      }).createdAt.gt;
+      const cursor = (
+        prisma.memory.findMany.mock.calls[0][0].where as {
+          createdAt: { gt: Date };
+        }
+      ).createdAt.gt;
       expect(prisma.memory.count).toHaveBeenCalledWith({
         where: expect.objectContaining({ updatedAt: { gte: cursor } }),
       });
@@ -693,9 +701,7 @@ describe('MemoryMaintenanceService', () => {
       expect(log).toHaveBeenCalledWith(
         expect.stringContaining('单轮完成 teams=1 新记忆=2'),
       );
-      expect(log).toHaveBeenCalledWith(
-        expect.stringContaining('scope=tm_1'),
-      );
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('scope=tm_1'));
     });
 
     it('无新记忆也只记一行摘要（teams=0 新记忆=0）', async () => {
@@ -791,7 +797,11 @@ describe('MemoryMaintenanceService', () => {
   });
 
   describe('单团队范围（点谁整理谁）', () => {
-    const allTeams = [{ teamId: 'tm_1' }, { teamId: 'tm_2' }, { teamId: 'tm_3' }];
+    const allTeams = [
+      { teamId: 'tm_1' },
+      { teamId: 'tm_2' },
+      { teamId: 'tm_3' },
+    ];
     // groupBy mock 按 where 语义过滤：只有范围真的进了 where，收窄才成立。
     const groupByHonouringWhere = () =>
       prisma.memory.groupBy.mockImplementation(
@@ -878,8 +888,7 @@ describe('MemoryMaintenanceService', () => {
       prisma.memory.findMany.mockImplementation(
         async (args: {
           where: { teamId: string; createdAt?: { gt: Date } };
-        }) =>
-          args.where.createdAt ? [] : [newRow(`me_${args.where.teamId}`)],
+        }) => (args.where.createdAt ? [] : [newRow(`me_${args.where.teamId}`)]),
       );
 
       const summary = await service.runOnce();

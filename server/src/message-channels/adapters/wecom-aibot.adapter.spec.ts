@@ -1373,7 +1373,11 @@ describe('WecomAibotAdapter (message-channels)', () => {
       (adapter as any).clients.set('mc_a', mockClient);
       (adapter as any).hosts.set('mc_a', { getChannel });
 
-      const ok = await adapter.sendFallbackMessage('mc_a', '兜底文案', 'u_long');
+      const ok = await adapter.sendFallbackMessage(
+        'mc_a',
+        '兜底文案',
+        'u_long',
+      );
 
       expect(ok).toBe(true);
       expect(mockClient.sendMessage).toHaveBeenCalledWith('u_long', {

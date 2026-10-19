@@ -1028,7 +1028,10 @@ describe('WorkerEventIngress', () => {
     });
 
     it('稳态 delta 命中组装态缓存 → 不再每 delta 回读消息历史（message.findFirst 每条流只 1 次）', async () => {
-      prisma.chatChannel.findUnique.mockResolvedValue({ id: 'c_dm', type: 'private' });
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
       useFakeClock();
       // 首 delta：无 processing 行 → findFirst(1) 返回 null → create 并写入组装态缓存
       prisma.message.findFirst.mockResolvedValue(null);
@@ -1586,7 +1589,10 @@ describe('WorkerEventIngress', () => {
     });
 
     it('task.completed 终态化 → 清组装态缓存，下一条流式重新以 DB 定位（findFirst 再次被调用）', async () => {
-      prisma.chatChannel.findUnique.mockResolvedValue({ id: 'c_dm', type: 'private' });
+      prisma.chatChannel.findUnique.mockResolvedValue({
+        id: 'c_dm',
+        type: 'private',
+      });
       prisma.message.findFirst.mockResolvedValue(null);
       prisma.message.create.mockImplementation(async (args: any) => ({
         id: args?.data?.id ?? 'm_stream',

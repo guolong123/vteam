@@ -306,7 +306,7 @@ export class TasksService implements OnModuleInit {
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       const taskId = await this.idGen.nextId(ID_PREFIX.task);
-      let createdStatus: string = TASK_STATUS.pending;
+      const createdStatus: string = TASK_STATUS.pending;
       let createdTask: any = null;
       try {
         createdTask = await this.prisma.$transaction(async (tx: any) => {
@@ -550,7 +550,12 @@ export class TasksService implements OnModuleInit {
       if (!team) {
         team = await tx.team.findUnique({
           where: { id: teamId },
-          select: { id: true, version: true, currentTaskId: true, maxConcurrentTasks: true },
+          select: {
+            id: true,
+            version: true,
+            currentTaskId: true,
+            maxConcurrentTasks: true,
+          },
         });
       }
       // 团队行缺失与原 claim 路径同口径：不认领也不校验，直接放行（FK Restrict 下仅剩竞态边缘）

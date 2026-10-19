@@ -52,9 +52,7 @@ describe('migration 20261019000000_parallel_tasks', () => {
   });
 
   it('正向平价：ADD COLUMN max_concurrent_tasks 的列在 schema.prisma 的 Team 里存在', () => {
-    const added = [...sql().matchAll(/ADD COLUMN\s+`(\w+)`/g)].map(
-      (m) => m[1],
-    );
+    const added = [...sql().matchAll(/ADD COLUMN\s+`(\w+)`/g)].map((m) => m[1]);
     expect(added).toEqual(['max_concurrent_tasks']);
 
     const m = /^model Team \{([\s\S]*?)^\}/m.exec(schema());
@@ -67,9 +65,7 @@ describe('migration 20261019000000_parallel_tasks', () => {
     expect(schema()).toMatch(
       /maxConcurrentTasks\s+Int\?\s+@map\("max_concurrent_tasks"\)/,
     );
-    expect(sql()).toMatch(
-      /ADD COLUMN\s+`max_concurrent_tasks`\s+int\s+NULL/i,
-    );
+    expect(sql()).toMatch(/ADD COLUMN\s+`max_concurrent_tasks`\s+int\s+NULL/i);
   });
 
   it('ADD COLUMN 的列在 baseline 的 teams 建表里不存在（否则重复建列 → ERROR 1060）', () => {
@@ -77,9 +73,7 @@ describe('migration 20261019000000_parallel_tasks', () => {
       baselineSql(),
     );
     expect(m).not.toBeNull();
-    const cols = new Set(
-      [...m![1].matchAll(/^\s*`(\w+)`/gm)].map((x) => x[1]),
-    );
+    const cols = new Set([...m![1].matchAll(/^\s*`(\w+)`/gm)].map((x) => x[1]));
     expect(cols.has('max_concurrent_tasks')).toBe(false);
   });
 

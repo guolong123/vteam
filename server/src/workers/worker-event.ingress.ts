@@ -695,142 +695,139 @@ export class WorkerEventIngress {
     // 落库段（findFirst → update/create）按定位身份串行化：worker 不 await 连发 delta
     // 时，并发的 findFirst(无行)→create 会各建一条 processing 行（重复独白消息）。
     const streamKey = `${channelId}|${agentId ?? ''}`;
-    const row = await this.runPartDeltaExclusive(
-      streamKey,
-      async () => {
-        const cached = this.assemblingMessages.get(streamKey);
-        if (cached) {
-          if (!hasRenderableContent(kept)) {
-            this.logger.debug(
-              `[ingress] message.part.delta(cached) 增量无可渲染内容，不追加 message=${cached.messageId}（channel=${channelId}）`,
-            );
-            return null;
-          }
-          const merged = mergePartsById(cached.parts, kept);
-          const content = {
-            text: concatText(merged),
-            parts: merged,
-          } as Prisma.InputJsonValue;
-          // 节流：窗口内至多落库一次。跳过的 delta 只更新内存组装态并置 dirty，
-          // 落库由「窗口到期后的下一次 delta / 终态 flush / 淘汰前 flush」补上
-          // ——DB 不会永久滞后于内存（见 flushAndDropDeltaStream / flushEvictedStream）。
-          if (Date.now() - cached.lastFlushAt < DELTA_PERSIST_INTERVAL_MS) {
-            this.cacheAssembled(streamKey, {
-              ...cached,
-              parts: merged,
-              dirty: true,
-            });
-            this.logger.debug(
-              `[ingress] message.part.delta(cached) 节流跳过落库 message=${cached.messageId} parts=${kept.length}（${DELTA_PERSIST_INTERVAL_MS}ms 窗口内，未落库尾段待 flush，workerId=${dto.workerId}）`,
-            );
-            // 广播一帧都不能少：DB 侧字段取上次落库返回的真实行，content 取内存组装态
-            // （= 下一次落库会写的内容）→ 与逐 delta 落库时的帧同形，前端逐字不变。
-            return {
-              ...cached.row,
-              content: content as Prisma.JsonValue,
-            };
-          }
-          const updated = await this.prisma.message.update({
-            where: { id: cached.messageId },
-            data: { content },
-          });
+    const row = await this.runPartDeltaExclusive(streamKey, async () => {
+      const cached = this.assemblingMessages.get(streamKey);
+      if (cached) {
+        if (!hasRenderableContent(kept)) {
+          this.logger.debug(
+            `[ingress] message.part.delta(cached) 增量无可渲染内容，不追加 message=${cached.messageId}（channel=${channelId}）`,
+          );
+          return null;
+        }
+        const merged = mergePartsById(cached.parts, kept);
+        const content = {
+          text: concatText(merged),
+          parts: merged,
+        } as Prisma.InputJsonValue;
+        // 节流：窗口内至多落库一次。跳过的 delta 只更新内存组装态并置 dirty，
+        // 落库由「窗口到期后的下一次 delta / 终态 flush / 淘汰前 flush」补上
+        // ——DB 不会永久滞后于内存（见 flushAndDropDeltaStream / flushEvictedStream）。
+        if (Date.now() - cached.lastFlushAt < DELTA_PERSIST_INTERVAL_MS) {
           this.cacheAssembled(streamKey, {
-            messageId: cached.messageId,
+            ...cached,
             parts: merged,
-            dirty: false,
-            lastFlushAt: Date.now(),
-            row: updated,
+            dirty: true,
           });
           this.logger.debug(
-            `[ingress] message.part.delta(cached) 累积更新 message=${cached.messageId} parts=${kept.length}（workerId=${dto.workerId}）`,
+            `[ingress] message.part.delta(cached) 节流跳过落库 message=${cached.messageId} parts=${kept.length}（${DELTA_PERSIST_INTERVAL_MS}ms 窗口内，未落库尾段待 flush，workerId=${dto.workerId}）`,
           );
-          return updated;
+          // 广播一帧都不能少：DB 侧字段取上次落库返回的真实行，content 取内存组装态
+          // （= 下一次落库会写的内容）→ 与逐 delta 落库时的帧同形，前端逐字不变。
+          return {
+            ...cached.row,
+            content: content as Prisma.JsonValue,
+          };
         }
-        const hasExisting = await this.prisma.message.findFirst({
-          where: {
-            channelId,
-            senderType: SENDER_TYPE.agent,
-            status: MESSAGE_STATUS.processing,
-            ...(agentId ? { senderId: agentId } : {}),
-          },
-          orderBy: { createdAt: 'desc' },
-          select: { id: true, content: true },
+        const updated = await this.prisma.message.update({
+          where: { id: cached.messageId },
+          data: { content },
         });
-        // MISS 分支**不节流、必落库**：它每进程每条流只走一次（重建缓存项 + 广播需要
-        // 一行完整 DB 行），且它是「缓存丢失后以 DB 为权威重新定位」的唯一入口——
-        // 这里必须写，才能保证刚回读的累积内容与本次增量一起成为新的权威。
-        // 只含 step-start/step-finish 等前端不渲染片段的增量：
-        // - 无 processing 行 → 不建行（否则消息开始时就落一条 UI 上的空消息）；
-        // - 已有行 → 不追加（避免内容被噪声撑大、终态化后仍无可渲染内容）。
-        if (!hasExisting && !hasRenderableContent(kept)) {
-          this.logger.debug(
-            `[ingress] message.part.delta 增量无可渲染内容且无 processing 行，跳过（channel=${channelId}）`,
-          );
-          return null;
-        }
-        if (hasExisting && !hasRenderableContent(kept)) {
-          this.logger.debug(
-            `[ingress] message.part.delta 增量无可渲染内容，不追加 message=${hasExisting.id}（channel=${channelId}）`,
-          );
-          return null;
-        }
-        if (hasExisting) {
-          const oldContent = (hasExisting.content ?? {}) as Record<
-            string,
-            unknown
-          >;
-          // 同 part.id 的新快照原地替换旧快照（worker 重发状态变化后同一 id 会重复上送；
-          // 无条件追加会让一次工具调用在 content.parts 里堆出多份快照）。
-          const merged = mergePartsById(oldContent.parts, kept);
-          const updated = await this.prisma.message.update({
-            where: { id: hasExisting.id },
-            data: {
-              content: {
-                text: concatText(merged),
-                parts: merged,
-              } as Prisma.InputJsonValue,
-            },
-          });
-          this.cacheAssembled(streamKey, {
-            messageId: hasExisting.id,
-            parts: merged,
-            dirty: false,
-            lastFlushAt: Date.now(),
-            row: updated,
-          });
-          this.logger.debug(
-            `[ingress] message.part.delta 累积更新 message=${hasExisting.id} parts=${kept.length}（workerId=${dto.workerId}）`,
-          );
-          return updated;
-        }
-        const created = await this.prisma.message.create({
+        this.cacheAssembled(streamKey, {
+          messageId: cached.messageId,
+          parts: merged,
+          dirty: false,
+          lastFlushAt: Date.now(),
+          row: updated,
+        });
+        this.logger.debug(
+          `[ingress] message.part.delta(cached) 累积更新 message=${cached.messageId} parts=${kept.length}（workerId=${dto.workerId}）`,
+        );
+        return updated;
+      }
+      const hasExisting = await this.prisma.message.findFirst({
+        where: {
+          channelId,
+          senderType: SENDER_TYPE.agent,
+          status: MESSAGE_STATUS.processing,
+          ...(agentId ? { senderId: agentId } : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, content: true },
+      });
+      // MISS 分支**不节流、必落库**：它每进程每条流只走一次（重建缓存项 + 广播需要
+      // 一行完整 DB 行），且它是「缓存丢失后以 DB 为权威重新定位」的唯一入口——
+      // 这里必须写，才能保证刚回读的累积内容与本次增量一起成为新的权威。
+      // 只含 step-start/step-finish 等前端不渲染片段的增量：
+      // - 无 processing 行 → 不建行（否则消息开始时就落一条 UI 上的空消息）；
+      // - 已有行 → 不追加（避免内容被噪声撑大、终态化后仍无可渲染内容）。
+      if (!hasExisting && !hasRenderableContent(kept)) {
+        this.logger.debug(
+          `[ingress] message.part.delta 增量无可渲染内容且无 processing 行，跳过（channel=${channelId}）`,
+        );
+        return null;
+      }
+      if (hasExisting && !hasRenderableContent(kept)) {
+        this.logger.debug(
+          `[ingress] message.part.delta 增量无可渲染内容，不追加 message=${hasExisting.id}（channel=${channelId}）`,
+        );
+        return null;
+      }
+      if (hasExisting) {
+        const oldContent = (hasExisting.content ?? {}) as Record<
+          string,
+          unknown
+        >;
+        // 同 part.id 的新快照原地替换旧快照（worker 重发状态变化后同一 id 会重复上送；
+        // 无条件追加会让一次工具调用在 content.parts 里堆出多份快照）。
+        const merged = mergePartsById(oldContent.parts, kept);
+        const updated = await this.prisma.message.update({
+          where: { id: hasExisting.id },
           data: {
-            id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-            channelId,
-            senderType: SENDER_TYPE.agent,
-            senderId: agentId ?? null,
-            senderInstanceId: deltaSenderInstanceId ?? null,
             content: {
-              text: concatText(kept),
-              parts: kept,
+              text: concatText(merged),
+              parts: merged,
             } as Prisma.InputJsonValue,
-            mentions: null,
-            status: MESSAGE_STATUS.processing,
           },
         });
         this.cacheAssembled(streamKey, {
-          messageId: created.id,
-          parts: kept,
+          messageId: hasExisting.id,
+          parts: merged,
           dirty: false,
           lastFlushAt: Date.now(),
-          row: created,
+          row: updated,
         });
         this.logger.debug(
-          `[ingress] message.part.delta 新建 processing message=${created.id} parts=${kept.length}（workerId=${dto.workerId}）`,
+          `[ingress] message.part.delta 累积更新 message=${hasExisting.id} parts=${kept.length}（workerId=${dto.workerId}）`,
         );
-        return created;
-      },
-    );
+        return updated;
+      }
+      const created = await this.prisma.message.create({
+        data: {
+          id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+          channelId,
+          senderType: SENDER_TYPE.agent,
+          senderId: agentId ?? null,
+          senderInstanceId: deltaSenderInstanceId ?? null,
+          content: {
+            text: concatText(kept),
+            parts: kept,
+          } as Prisma.InputJsonValue,
+          mentions: null,
+          status: MESSAGE_STATUS.processing,
+        },
+      });
+      this.cacheAssembled(streamKey, {
+        messageId: created.id,
+        parts: kept,
+        dirty: false,
+        lastFlushAt: Date.now(),
+        row: created,
+      });
+      this.logger.debug(
+        `[ingress] message.part.delta 新建 processing message=${created.id} parts=${kept.length}（workerId=${dto.workerId}）`,
+      );
+      return created;
+    });
     if (!row) {
       return true;
     }

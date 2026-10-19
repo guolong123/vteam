@@ -114,7 +114,8 @@ export class WorkersController {
   @UseGuards(PermissionGuard)
   @RequirePermission('workers.edit')
   @ApiOperation({
-    summary: '配置 worker 默认模型 / 并发上限（workers.edit；null=清除/不修改）',
+    summary:
+      '配置 worker 默认模型 / 并发上限（workers.edit；null=清除/不修改）',
   })
   updateDefaultModel(
     @Param('id') id: string,

@@ -20,7 +20,9 @@ import type { PrismaService } from '../prisma/prisma.service';
 export type AdminPermissionPayload = unknown;
 
 /** 判定角色权限 JSON 是否满足平台管理员口径。 */
-export function hasAdminPermission(permissions: AdminPermissionPayload): boolean {
+export function hasAdminPermission(
+  permissions: AdminPermissionPayload,
+): boolean {
   if (!permissions || typeof permissions !== 'object') {
     return false;
   }
@@ -38,7 +40,10 @@ export function hasAdminPermission(permissions: AdminPermissionPayload): boolean
  */
 export function isPlatformAdminUser(
   user:
-    | { enabled: boolean; role?: { permissions: AdminPermissionPayload } | null }
+    | {
+        enabled: boolean;
+        role?: { permissions: AdminPermissionPayload } | null;
+      }
     | null
     | undefined,
 ): boolean {

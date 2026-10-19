@@ -270,9 +270,7 @@ export class RealtimeService implements OnModuleInit {
   } {
     const message = (
       payload as
-        | { message?: { id?: unknown; channelId?: unknown } }
-        | null
-        | undefined
+        { message?: { id?: unknown; channelId?: unknown } } | null | undefined
     )?.message;
     return {
       messageId: typeof message?.id === 'string' ? message.id : null,
@@ -298,10 +296,7 @@ export class RealtimeService implements OnModuleInit {
     while (this.log.length > this.maxLog) {
       this.evictLogHead();
     }
-    while (
-      this.logBytesTotal > REALTIME_LOG_MAX_BYTES &&
-      this.log.length > 1
-    ) {
+    while (this.logBytesTotal > REALTIME_LOG_MAX_BYTES && this.log.length > 1) {
       this.evictLogHead();
     }
   }

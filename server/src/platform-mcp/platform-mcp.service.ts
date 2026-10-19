@@ -4332,7 +4332,9 @@ export class PlatformMcpService implements OnModuleInit {
 
   /** 记忆行定位（不存在或已软删 → 404 MEMORY_NOT_FOUND；memory_update 同款口径）。 */
   private async findMemoryRowOrThrow(memoryId: string) {
-    const row = await this.prisma.memory.findUnique({ where: { id: memoryId } });
+    const row = await this.prisma.memory.findUnique({
+      where: { id: memoryId },
+    });
     if (!row || row.deletedAt) {
       throw new NotFoundException({
         code: MEMORY_ERRORS.MEMORY_NOT_FOUND,
@@ -6724,7 +6726,8 @@ export class PlatformMcpService implements OnModuleInit {
       } else if (msgtype === 'image' || msgtype === 'file') {
         // image/file 共用媒体链路：buffer 解析 → uploadMediaBuffer → replyMedia
         // （被动）→ sendMediaMessage（主动）回退；仅上传 mediaType 不同。
-        const mediaKind: 'image' | 'file' = msgtype === 'file' ? 'file' : 'image';
+        const mediaKind: 'image' | 'file' =
+          msgtype === 'file' ? 'file' : 'image';
         const defaultName = mediaKind === 'file' ? 'file.bin' : 'image.png';
         let mediaIdToSend: string | null = args.mediaId?.trim() || null;
         const resolvedFilename = (args.filename?.trim() ||
@@ -7575,7 +7578,11 @@ export class PlatformMcpService implements OnModuleInit {
           `与调用方 ${args.selfInstanceId} 不一致。请显式传 teamId（建议同时传 selfInstanceId）后重试。`,
       });
     }
-    return this.resolveSessionToCaller(ctx, effectiveSession, args.selfInstanceId);
+    return this.resolveSessionToCaller(
+      ctx,
+      effectiveSession,
+      args.selfInstanceId,
+    );
   }
 
   /**

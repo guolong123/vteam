@@ -88,10 +88,14 @@ export class MemoriesService implements OnModuleInit {
     const pageSize = this.normalizePageSize(query.pageSize);
     const isAdmin = await this.resolvePlatformAdmin(viewer);
     // 非管理员的可见团队集：无 viewer（如未认证直入 service）视为空集 → 只剩 global 行（fail closed）。
-    const viewerTeamIds = isAdmin ? [] : await this.loadViewerTeamIds(viewer?.id);
+    const viewerTeamIds = isAdmin
+      ? []
+      : await this.loadViewerTeamIds(viewer?.id);
     const where: Prisma.MemoryWhereInput = {
       // 归档三态：显式 archived=true → 已归档；缺省/false → 活跃（软删不可见，对齐 issue 列表语义）。
-      ...(query.archived === true ? { deletedAt: { not: null } } : { deletedAt: null }),
+      ...(query.archived === true
+        ? { deletedAt: { not: null } }
+        : { deletedAt: null }),
       ...(query.level ? { level: query.level } : {}),
       ...(query.teamId ? { teamId: query.teamId } : {}),
       ...(query.roleId ? { roleId: query.roleId } : {}),
@@ -174,9 +178,10 @@ export class MemoriesService implements OnModuleInit {
       });
     }
     // scope 改范围：level 校验 → 目标 scope 解析 → 目标团队归属兜底 → 目标范围查重。
-    const scope = dto.level !== undefined
-      ? await this.resolveMemoryScopeTarget(existing, dto, viewer)
-      : null;
+    const scope =
+      dto.level !== undefined
+        ? await this.resolveMemoryScopeTarget(existing, dto, viewer)
+        : null;
     if (!scope && existing.teamId) {
       // 非 scope 变更的既有团队归属校验（保持不变）。
       const member = viewer?.id
@@ -227,7 +232,12 @@ export class MemoriesService implements OnModuleInit {
    * - viewer 非目标团队成员（targetTeamId 非空时）→ 403 TEAM_MEMBERSHIP_ERRORS.NOT_MEMBER
    */
   private async resolveMemoryScopeTarget(
-    existing: { id: string; level: string; teamId: string | null; contentHash: string | null },
+    existing: {
+      id: string;
+      level: string;
+      teamId: string | null;
+      contentHash: string | null;
+    },
     dto: UpdateMemoryDto,
     viewer?: { id: string },
   ): Promise<{ level: string; teamId: string | null; roleId: string | null }> {

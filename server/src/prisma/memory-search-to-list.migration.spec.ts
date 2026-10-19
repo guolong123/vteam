@@ -156,9 +156,7 @@ describe('MCP 工具改名迁移 20261014010000', () => {
       }
       const parsed = toolsUpdates();
       for (const p of parsed) {
-        expect(p.whereValue).toBe(
-          p.column === 'name' ? OLD_TOOL : OLD_ACTION,
-        );
+        expect(p.whereValue).toBe(p.column === 'name' ? OLD_TOOL : OLD_ACTION);
         expect(p.newValue).toBe(p.column === 'name' ? NEW_TOOL : NEW_ACTION);
         // 写入值 ≠ 守卫值（否则是自赋值空转）。
         expect(p.newValue).not.toBe(p.whereValue);
@@ -169,9 +167,10 @@ describe('MCP 工具改名迁移 20261014010000', () => {
   describe('③ execution_policies.config.tools JSON 键 rename', () => {
     it('先 JSON_SET 新键（值 = 旧键 JSON 标量原样搬移），后 JSON_REMOVE 旧键', () => {
       const body = executableSql();
-      const setStmt = /JSON_SET\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'\s*,\s*JSON_EXTRACT\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'\s*\)/.exec(
-        body,
-      );
+      const setStmt =
+        /JSON_SET\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'\s*,\s*JSON_EXTRACT\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'\s*\)/.exec(
+          body,
+        );
       expect(setStmt).not.toBeNull();
       expect((setStmt as RegExpExecArray)[1]).toBe(NEW_TOOL);
       // 值保全：第三参数必须是旧键的 JSON_EXTRACT，不是字面量——
@@ -181,14 +180,13 @@ describe('MCP 工具改名迁移 20261014010000', () => {
         /JSON_SET\(\s*`config`\s*,\s*'\$\."tools"\."[^"]+"'\s*,\s*'(allow|ask|deny)'/,
       );
 
-      const removeStmt = /JSON_REMOVE\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'/.exec(
-        body,
-      );
+      const removeStmt =
+        /JSON_REMOVE\(\s*`config`\s*,\s*'\$\."tools"\."([^"]+)"'/.exec(body);
       expect(removeStmt).not.toBeNull();
       expect((removeStmt as RegExpExecArray)[1]).toBe(OLD_TOOL);
     });
 
-    it("两条语句都只碰 `$.tools.<tool>` 路径，不碰 permission/correction", () => {
+    it('两条语句都只碰 `$.tools.<tool>` 路径，不碰 permission/correction', () => {
       const setPaths = [
         ...executableSql().matchAll(/JSON_SET\(\s*`config`\s*,\s*'([^']*)'/g),
       ].map((m) => m[1]);
@@ -205,7 +203,7 @@ describe('MCP 工具改名迁移 20261014010000', () => {
       expect(executableSql()).not.toContain('"$.correction');
     });
 
-    it("两条语句都以旧键在场为守卫 ⇒ 无 tools 对象/旧键的行零写入（绝不凭空建键）", () => {
+    it('两条语句都以旧键在场为守卫 ⇒ 无 tools 对象/旧键的行零写入（绝不凭空建键）', () => {
       const policyStmts = statements().filter((s) =>
         /^UPDATE\s+`execution_policies`/.test(s),
       );
@@ -219,7 +217,8 @@ describe('MCP 工具改名迁移 20261014010000', () => {
 
     it('JSON_SET 另带「新键不存在」守卫：两步之间中断后重跑仍收敛', () => {
       const setStmt = statements().find(
-        (s) => /^UPDATE\s+`execution_policies`/.test(s) && s.includes('JSON_SET'),
+        (s) =>
+          /^UPDATE\s+`execution_policies`/.test(s) && s.includes('JSON_SET'),
       );
       expect(setStmt).toBeDefined();
       expect(setStmt).toContain(
@@ -228,7 +227,8 @@ describe('MCP 工具改名迁移 20261014010000', () => {
       // 收敛性：第 1 步写新键后重跑，JSON_SET 被 =0 守卫挡住（不覆盖），
       // JSON_REMOVE 收掉旧键 ⇒ 终态恒定「只有新键」。
       const removeStmt = statements().find(
-        (s) => /^UPDATE\s+`execution_policies`/.test(s) && s.includes('JSON_REMOVE'),
+        (s) =>
+          /^UPDATE\s+`execution_policies`/.test(s) && s.includes('JSON_REMOVE'),
       );
       expect(removeStmt).toBeDefined();
     });
@@ -240,7 +240,9 @@ describe('MCP 工具改名迁移 20261014010000', () => {
       for (const stmt of policyStmts) {
         expect(stmt).toContain("`type` = 'template'");
         // 不得退化为「全表按旧键 rename」（custom 行同键会被顺带改掉）。
-        expect(stmt).not.toMatch(/^UPDATE\s+`execution_policies`\s+SET[\s\S]*WHERE\s+JSON_CONTAINS_PATH/);
+        expect(stmt).not.toMatch(
+          /^UPDATE\s+`execution_policies`\s+SET[\s\S]*WHERE\s+JSON_CONTAINS_PATH/,
+        );
       }
     });
   });
@@ -296,8 +298,7 @@ describe('MCP 工具改名迁移 20261014010000', () => {
           ),
         ].map((m) => m[1] as string);
         expect(columns.length).toBeGreaterThan(0);
-        const known =
-          table === 'tools' ? toolsColumns : policyColumns;
+        const known = table === 'tools' ? toolsColumns : policyColumns;
         for (const column of columns) {
           expect(known.has(column)).toBe(true);
         }

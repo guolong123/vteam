@@ -2094,7 +2094,9 @@ describe('WorkersService', () => {
         expect(await invalidProps({ maxInstances: 64 })).toEqual([]);
         expect(await invalidProps({ maxInstances: null })).toEqual([]);
         expect(
-          await invalidProps({ defaultModelId: 'opencode-go/deepseek-v4-flash' }),
+          await invalidProps({
+            defaultModelId: 'opencode-go/deepseek-v4-flash',
+          }),
         ).toEqual([]);
       });
     });

@@ -6,9 +6,11 @@ function makePrisma(row: FakeRow) {
   return {
     messageChannel: {
       findMany: jest.fn().mockResolvedValue([]),
-      findUnique: jest.fn().mockImplementation(async ({ where }: any) =>
-        row && row.id === where.id ? row : null,
-      ),
+      findUnique: jest
+        .fn()
+        .mockImplementation(async ({ where }: any) =>
+          row && row.id === where.id ? row : null,
+        ),
       update: jest.fn().mockResolvedValue({}),
     },
   } as any;
@@ -35,7 +37,10 @@ describe('MessageRegistryService.requestStop', () => {
       stop: jest.fn().mockResolvedValue(undefined),
       stopChannel: jest.fn().mockResolvedValue(undefined),
     };
-    const registry = await build(adapter, { id: channelId, type: 'wecom_aibot' });
+    const registry = await build(adapter, {
+      id: channelId,
+      type: 'wecom_aibot',
+    });
 
     await registry.requestStop(channelId);
 
@@ -51,7 +56,10 @@ describe('MessageRegistryService.requestStop', () => {
       start: jest.fn().mockResolvedValue(undefined),
       stop: jest.fn().mockResolvedValue(undefined),
     };
-    const registry = await build(adapter, { id: channelId, type: 'wecom_aibot' });
+    const registry = await build(adapter, {
+      id: channelId,
+      type: 'wecom_aibot',
+    });
 
     await registry.requestStop(channelId);
 
@@ -102,7 +110,10 @@ describe('MessageRegistryService.requestStop', () => {
       stop: jest.fn().mockResolvedValue(undefined),
       stopChannel: jest.fn().mockRejectedValue(new Error('disconnect failed')),
     };
-    const registry = await build(adapter, { id: channelId, type: 'wecom_aibot' });
+    const registry = await build(adapter, {
+      id: channelId,
+      type: 'wecom_aibot',
+    });
 
     await expect(registry.requestStop(channelId)).resolves.toBeUndefined();
 

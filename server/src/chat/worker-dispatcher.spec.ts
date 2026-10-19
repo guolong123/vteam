@@ -3626,11 +3626,15 @@ describe('WorkerDispatcher', () => {
       await d.dispatch(request);
 
       const updateCall = prisma.message.update.mock.calls.find(
-        (c) => (c[0] as { where: { id: string } }).where.id === request.messageId,
+        (c) =>
+          (c[0] as { where: { id: string } }).where.id === request.messageId,
       );
       expect(updateCall).toBeDefined();
-      const written = (updateCall![0] as { data: { content: { text: string; parts: unknown[] } } }).data
-        .content;
+      const written = (
+        updateCall![0] as {
+          data: { content: { text: string; parts: unknown[] } };
+        }
+      ).data.content;
       expect(written.text).toContain('【任务上下文】');
       expect(written.text).toContain(request.text);
       // parts 原样保留（user 行恒 []）
@@ -4104,7 +4108,10 @@ describe('WorkerDispatcher', () => {
       expect(prisma.message.update).toHaveBeenCalledWith({
         where: { id: 'm_stream_1' },
         data: expect.objectContaining({
-          content: { text: '结论', parts: [{ type: 'text', text: '结论', synthetic: false }] },
+          content: {
+            text: '结论',
+            parts: [{ type: 'text', text: '结论', synthetic: false }],
+          },
           status: MESSAGE_STATUS.sent,
         }),
       });
@@ -4555,10 +4562,7 @@ describe('WorkerDispatcher', () => {
     ) =>
       (
         d as unknown as {
-          handlePolledCompletion(
-            p: typeof params,
-            m: unknown[],
-          ): Promise<void>;
+          handlePolledCompletion(p: typeof params, m: unknown[]): Promise<void>;
         }
       ).handlePolledCompletion(params, messages);
 
