@@ -185,6 +185,8 @@ export interface ExecuteOptions {
    * serverBaseUrl 拼接下载，绝不接受 file:// 本地路径（防路径穿越）。
    */
   attachments?: ExecuteAttachment[];
+  /** 在飞注入标志（同 ses 已有运行：worker 侧仅追加 prompt，不建跟踪/不出终态事件）。 */
+  inFlight?: boolean;
 }
 
 /**
@@ -382,6 +384,7 @@ export class WorkerClient {
           ? { executionConfig: opts.executionConfig }
           : {}),
         ...(opts.attachments ? { attachments: opts.attachments } : {}),
+        ...(opts.inFlight ? { inFlight: true } : {}),
         prompt: opts.prompt,
       }),
     });

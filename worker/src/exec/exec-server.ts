@@ -109,6 +109,8 @@ export interface ExecuteRequestPayload {
   system?: string;
   /** 执行策略配置（服务端 ExecutionPolicy 下发，worker 盲翻成 opencode 配置，A1 通道①）。 */
   executionConfig?: ExecutionConfig;
+  /** 在飞注入标志（双写镜像 server 语义：同 ses 已有运行，仅追加 prompt，不建跟踪/不出终态事件）。 */
+  inFlight?: boolean;
 }
 
 /**
@@ -944,7 +946,48 @@ export class ExecServer {
       return;
     }
     sendJson(res, 202, { accepted: true });
+    // 在飞直送分流（in-flight inject）：注入路径完全位于 runExecution 之外——
+    // 不做 trackInstanceStart/End 计数、不出 task.completed / AGENT_STATUS /
+    // instance 生命周期事件（归属由原在飞执行统一收口，其完成回调在最后一个
+    // step-finish 后出终态，server 端一次注销收口）。
+    if (payload.inFlight && payload.sessionId) {
+      void this.runInFlightPrompt(payload);
+      return;
+    }
     void this.runExecution(payload);
+  }
+
+  /**
+   * 在飞注入（轻路径）：把新消息以追加 user prompt 直送正在运行的 opencode 会话。
+   * opencode 1.x 运行循环每 step 重读消息库，本 user 消息将于下一 step 边界被消化，
+   * 完成事件由原在飞执行统一收口——本路径不复用 runExecution：不建 load 跟踪、
+   * 不做 baselineIds 快照、不做 completion 轮询/首字等待、不建 delta tracker
+   * （流式输出由原执行的 SSE/poll 覆盖）。parts 组装复用常规路径的
+   * prepareAttachmentParts（图片附件照常落盘并入 file part）；sendMessage 仅
+   * fire-and-forget，失败仅 logger.warn 不重试、不上送事件、绝不上抛（异步任务无捕获方）。
+   */
+  private async runInFlightPrompt(payload: ExecuteRequestPayload): Promise<void> {
+    const sessionId = payload.sessionId ?? '';
+    try {
+      const { fileParts, notes } = await this.prepareAttachmentParts(payload);
+      const parts: unknown[] = [
+        ...normalizeParts(payload.prompt),
+        ...fileParts,
+        ...(notes.length > 0 ? [{ type: 'text', text: notes.join('\n') }] : []),
+      ];
+      await this.driver.sendMessage(sessionId, {
+        model: payload.model ?? null,
+        agent: payload.agent,
+        parts,
+        directory: payload.directory,
+        system: payload.system,
+      });
+      this.logger.info(`[exec] 在飞注入 -> ${sessionId} parts=${parts.length}`);
+    } catch (err) {
+      this.logger.warn(
+        `[exec] 在飞注入失败 session=${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**

@@ -43,6 +43,7 @@ import {
   stripGroupPostDeclarations,
   GLOBAL_SYSTEM_INSTRUCTIONS,
   GROUP_TRIGGER_INSTRUCTION,
+  IN_FLIGHT_INJECT_NOTICE,
   isVteamAgentName,
   roleNeedsIssueDetail,
   MAIN_AGENT_INSTRUCTION,
@@ -10133,146 +10134,131 @@ describe('WorkerDispatcher', () => {
       expect(system).toContain(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
     });
 
-    describe('在飞守卫：延后入队 + 注销重派（defer-and-drain）', () => {
+    describe('在飞守卫：直送在飞会话（in-flight inject）', () => {
       const GUARD_WORKER = 'w_0000000001';
       const GUARD_SCOPE = 'team:tm_0000000001';
       const GUARD_MEMBER = 'tmm_0000000001';
-      // flush：注销点 fire-and-forget 的 drain 链全为微任务级 mock，连等三个宏任务
-      // 确保整链落地（失败路径的 reject→回滚→广播链多出若干 await 跳数）
-      const flush = async () => {
-        for (let i = 0; i < 3; i += 1) {
-          await new Promise((r) => setTimeout(r, 0));
-        }
+      // 注入命中要求 instanceRef 已绑定（常规首派经 createSession → bind 写入
+      // 真实 ses_ id），此后 findUnique 覆写为已绑定形态。
+      const boundSession = () => {
+        prisma.session.findUnique.mockResolvedValue({
+          id: 's_team_0000000001',
+          workerId: 'w_0000000001',
+          instanceRef: 'ses_team_1',
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
+        } as any);
       };
 
-      it('同成员已有在飞执行 → 第二次分派延后入队（不下发 execute）；前次执行注销后 drain 重派 execute', async () => {
+      it('同成员已有在飞执行 → 直送在飞会话：execute 照常下发且 payload 含 inFlight:true +注入说明，不重复登记、不写分派快照', async () => {
         const d = createDispatcher();
-        const first = await d.dispatch(teamRequest() as any);
-        expect(first).toEqual({ replies: [] });
+        await d.dispatch(teamRequest() as any);
         expect(workerClient.execute).toHaveBeenCalledTimes(1);
+        boundSession();
+        const registerSpy = jest.spyOn(d, 'registerExecution');
 
-        const second = await d.dispatch(teamRequest() as any);
-        expect(second).toEqual({ replies: [] });
-        // 延后半段：execute 仍 1 次、在飞登记保持（未提前放行）
-        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+        await d.dispatch(
+          teamRequest({
+            text: '第二条注入消息',
+            messageId: 'm_0000000002',
+          }) as any,
+        );
+        const calls = workerClient.execute.mock.calls;
+        expect(calls).toHaveLength(2);
+        const first = calls[0][1] as Record<string, unknown>;
+        const second = calls[1][1] as Record<string, unknown>;
+        expect(first.inFlight).toBeUndefined();
+        expect(second.inFlight).toBe(true);
+        expect(second.sessionId).toBe('ses_team_1');
+        const injectedPrompt = (second.prompt as Array<{ text: string }>)[0]
+          .text;
+        expect(injectedPrompt).toContain(IN_FLIGHT_INJECT_NOTICE);
+        expect(injectedPrompt).toContain('第二条注入消息');
+        // 注入模式不重复登记在飞集合（集合值不变），也不写分派快照（首派快照保留）
+        expect(registerSpy).not.toHaveBeenCalled();
         expect(d.isAgentExecuting(GUARD_WORKER, GUARD_SCOPE)).toEqual(
           new Set([GUARD_MEMBER]),
         );
-
-        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
-        await flush();
-        // drain 重派：execute 第 2 次下发，且重派自身完成在飞登记
-        expect(workerClient.execute).toHaveBeenCalledTimes(2);
-        expect(d.isAgentExecuting(GUARD_WORKER, GUARD_SCOPE)).toEqual(
-          new Set([GUARD_MEMBER]),
-        );
+        const snapshots = (
+          d as unknown as {
+            dispatchSnapshots: Map<string, { text: string }>;
+          }
+        ).dispatchSnapshots;
+        expect(snapshots.size).toBe(1);
+        expect(
+          snapshots.get('team:tm_0000000001:member:tmm_0000000001')?.text,
+        ).toBe('你好，请帮忙看看');
       });
 
-      it('FIFO：两条依次入队 → 注销后按多余入队序依次下发 execute（前次执行以 mock 注销模拟完成）', async () => {
+      it('在飞注入 execute 失败 → 在飞登记保留，后续分派仍命中守卫继续注入', async () => {
         const d = createDispatcher();
         await d.dispatch(teamRequest() as any);
         expect(workerClient.execute).toHaveBeenCalledTimes(1);
-        await d.dispatch(
-          teamRequest({ text: '第二条', messageId: 'm_0000000002' }) as any,
-        );
-        await d.dispatch(
-          teamRequest({ text: '第三条', messageId: 'm_0000000003' }) as any,
-        );
-        expect(workerClient.execute).toHaveBeenCalledTimes(1);
-
-        // 模拟 worker 端 task.completed：execute 被调即注销（同步触发下一轮 drain 链）
-        workerClient.execute.mockImplementation(async () => {
-          void d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
-          return undefined;
-        });
-
-        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
-        await flush();
-
-        expect(workerClient.execute).toHaveBeenCalledTimes(3);
-        const prompts = workerClient.execute.mock.calls.map(
-          (c) => (c[1] as { prompt: Array<{ text: string }> }).prompt[0].text,
-        );
-        expect(prompts[1]).toContain('第二条');
-        expect(prompts[2]).toContain('第三条');
-      });
-
-      it('双重注销幂等：drain 后再注销两次不额外重派', async () => {
-        const d = createDispatcher();
-        await d.dispatch(teamRequest() as any);
-        await d.dispatch(teamRequest() as any);
-        expect(workerClient.execute).toHaveBeenCalledTimes(1);
-
-        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
-        await flush();
-        expect(workerClient.execute).toHaveBeenCalledTimes(2);
-
-        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
-        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
-        await flush();
-        expect(workerClient.execute).toHaveBeenCalledTimes(2);
-      });
-
-      it('TTL 过期条目不重派：延后超 30min 后注销 → 条目放弃', async () => {
-        const realNow = Date.now();
-        const d = createDispatcher();
-        await d.dispatch(teamRequest() as any);
-        expect(workerClient.execute).toHaveBeenCalledTimes(1);
-        await d.dispatch(teamRequest() as any);
-        expect(workerClient.execute).toHaveBeenCalledTimes(1);
-
-        const nowSpy = jest
-          .spyOn(Date, 'now')
-          .mockReturnValue(realNow + 31 * 60 * 1000);
-        try {
-          d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
-          await flush();
-          expect(workerClient.execute).toHaveBeenCalledTimes(1);
-        } finally {
-          nowSpy.mockRestore();
-        }
-      });
-
-      it('drain 中单条 execute 失败 → 该条记 error 事件，不影响后续条目重派', async () => {
-        const d = createDispatcher();
-        await d.dispatch(teamRequest() as any);
-        expect(workerClient.execute).toHaveBeenCalledTimes(1);
-        await d.dispatch(
-          teamRequest({ text: '第二条', messageId: 'm_0000000002' }) as any,
-        );
-        await d.dispatch(
-          teamRequest({ text: '第三条', messageId: 'm_0000000003' }) as any,
-        );
+        boundSession();
+        workerClient.execute.mockRejectedValueOnce(new Error('execute boom'));
         const errors: unknown[] = [];
         d.onError((e) => errors.push(e));
-        // 仅第二条的 execute 失败（首个 drain 重派调用）
-        workerClient.execute.mockRejectedValueOnce(new Error('execute boom'));
 
-        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
-        await flush();
-        await flush();
-
-        expect(workerClient.execute).toHaveBeenCalledTimes(3);
-        expect(errors).toHaveLength(1);
-        const prompts = workerClient.execute.mock.calls.map(
-          (c) => (c[1] as { prompt: Array<{ text: string }> }).prompt[0].text,
+        await d.dispatch(
+          teamRequest({
+            text: '第二条注入消息',
+            messageId: 'm_0000000002',
+          }) as any,
         );
-        expect(prompts[2]).toContain('第三条');
+        expect(errors).toHaveLength(1);
+        // 注入失败不注销：在飞条目保留（后续消息不重建执行）
+        expect(d.isAgentExecuting(GUARD_WORKER, GUARD_SCOPE)).toEqual(
+          new Set([GUARD_MEMBER]),
+        );
+
+        await d.dispatch(
+          teamRequest({
+            text: '第三条注入消息',
+            messageId: 'm_0000000003',
+          }) as any,
+        );
+        const calls = workerClient.execute.mock.calls;
+        expect(calls).toHaveLength(3);
+        expect((calls[2][1] as Record<string, unknown>).inFlight).toBe(true);
+        expect(
+          (calls[2][1] as { prompt: Array<{ text: string }> }).prompt[0].text,
+        ).toContain('第三条注入消息');
       });
 
-      it('不相关成员注销不触发 drain：延后队列保留，真正成员注销后才重派', async () => {
+      it('在飞但会话实例引用缺失（异常态）→ 兜底回退常规派发：登记 + createSession + 快照照常', async () => {
         const d = createDispatcher();
         await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+        workerClient.createSession.mockClear();
+
+        // 仍是 instanceRef null（会话未绑定实例 ref 的异常态）→ 常规派发
+        prisma.session.findUnique.mockResolvedValue({
+          id: 's_team_0000000001',
+          workerId: 'w_0000000001',
+          instanceRef: null,
+          teamId: 'tm_0000000001',
+          teamMemberId: 'tmm_0000000001',
+        } as any);
         await d.dispatch(teamRequest() as any);
-        expect(workerClient.execute).toHaveBeenCalledTimes(1);
-
-        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, 'tmm_0000000999');
-        await flush();
-        expect(workerClient.execute).toHaveBeenCalledTimes(1);
-
-        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
-        await flush();
         expect(workerClient.execute).toHaveBeenCalledTimes(2);
+        const second = workerClient.execute.mock.calls[1][1] as Record<
+          string,
+          unknown
+        >;
+        expect(second.inFlight).toBeUndefined();
+        expect(second.sessionId).toBe('ses_team_1');
+        expect(d.isAgentExecuting(GUARD_WORKER, GUARD_SCOPE)).toEqual(
+          new Set([GUARD_MEMBER]),
+        );
+        expect(workerClient.createSession).toHaveBeenCalledTimes(1);
+        const snapshots = (
+          d as unknown as {
+            dispatchSnapshots: Map<string, { text: string }>;
+          }
+        ).dispatchSnapshots;
+        expect(
+          snapshots.get('team:tm_0000000001:member:tmm_0000000001')?.text,
+        ).toBe('你好，请帮忙看看');
       });
 
       it('注销后在飞标记清除 → 下一次分派放行（execute 再次下发）', async () => {
