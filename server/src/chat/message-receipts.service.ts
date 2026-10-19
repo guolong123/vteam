@@ -65,9 +65,11 @@ export interface PendingReceiptCounts {
 
 /**
  * 回执离开 pending 状态后的回调（ack / expireDue / expireAfterAutoNudge 均调用）。
- * 用于 reply-join fan-out drain：当一条 MAIN→SUB 回执过期（而非 ack）时，
- * 仍需重新检查 MAIN 剩余待回执是否收敛为 0，惟其上帐则过期回执会 strand 主 Agent。
- * 回调收到离开 pending 的行（row.fromInstanceId 即 MAIN，按回执派发方向固定）。
+ * 用于 reply-join fan-out drain：settledHook 仅对 fan-out 派发行有意义——回执方向
+ * 固定为主 Agent→子 Agent（from = 团队主 Agent 成员 id），回调按 row.fromInstanceId
+ * 作为 drain 轴（= 主 Agent）重查其剩余 pending 是否收敛为 0，收敛即唤醒主 Agent。
+ * 过期（而非 ack）同样触发：若只认 ack，一条过期回执会使主 Agent 被 strand。
+ * 完成/失败链的批量清账（ackPendingFor）逐行触发本 hook。
  */
 export type ReceiptSettledHook = (row: {
   fromInstanceId: string;

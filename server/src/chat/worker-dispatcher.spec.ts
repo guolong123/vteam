@@ -7,6 +7,7 @@ import {
   EVENT_TYPES,
   MESSAGE_STATUS,
   SENDER_TYPE,
+  SESSION_STATUS,
 } from '../common/constants/event.constants';
 import { ROLE_BOUNDARIES } from '../common/constants/agent.constants';
 import {
@@ -103,6 +104,8 @@ describe('WorkerDispatcher', () => {
     taskMessageChannel: { findMany: jest.Mock };
     memory: { count: jest.Mock; findMany: jest.Mock };
     task: { findUnique: jest.Mock };
+    // 团队归属（v1.0.3 履职收口清账）：默认无主成员（beforeEach 经 as any 注入）
+    team: { findUnique: jest.Mock };
     modelUsage: { create: jest.Mock };
   };
   let idGen: { nextId: jest.Mock };
@@ -180,7 +183,10 @@ describe('WorkerDispatcher', () => {
     resolveByAgent?: jest.Mock;
   };
 
-  const createDispatcher = (policyService?: PolicyResolverStub) =>
+  const createDispatcher = (
+    policyService?: PolicyResolverStub,
+    receipts?: { ackPendingFor: jest.Mock },
+  ) =>
     new WorkerDispatcher(
       prisma as any,
       idGen as any,
@@ -194,6 +200,7 @@ describe('WorkerDispatcher', () => {
       undefined,
       undefined,
       policyService as unknown as ExecutionPolicyService,
+      receipts as any,
     );
 
   beforeEach(() => {
@@ -352,6 +359,176 @@ describe('WorkerDispatcher', () => {
       expect(() =>
         cb({ taskId: request.taskId, agentId: 'a_product', text: 'x' }),
       ).not.toThrow();
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 履职收口（v1.0.3 fan-out 收敛健壮性 D1/D2）：
+  // 自然完成 / 失败链 / 空闲判死 → 结清成员名下 fan-out 回执 → settledHook → drain 重查
+  // ------------------------------------------------------------------
+
+  describe('履职收口：fan-out 回执清账挂接（v1.0.3 D1/D2）', () => {
+    const teamId = 'tm_0000000001';
+    const memberId = 'tmm_0000000001';
+    const teamMainId = 'tmm_main';
+
+    const makeReceipts = () => ({
+      ackPendingFor: jest.fn().mockResolvedValue(2),
+    });
+
+    const setupCompletion = () => {
+      prisma.chatChannel.findUnique.mockResolvedValue(null);
+      prisma.chatChannel.findFirst.mockResolvedValue({ id: request.channelId });
+      prisma.message.create.mockResolvedValue(messageRow());
+      prisma.session.findUnique.mockResolvedValue({
+        agentId: 'a_product',
+        teamId,
+        teamMemberId: memberId,
+      });
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: teamMainId,
+      });
+    };
+
+    it('① 自然完成 → ackPendingFor(from=团队主 Agent, to=成员) 被调用，完成链照常落库', async () => {
+      setupCompletion();
+      const receipts = makeReceipts();
+      const d = createDispatcher(undefined, receipts);
+      const finals: unknown[] = [];
+      d.onFinal((e) => finals.push(e));
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '完成',
+      });
+
+      expect(receipts.ackPendingFor).toHaveBeenCalledTimes(1);
+      expect(receipts.ackPendingFor).toHaveBeenCalledWith({
+        fromInstanceId: teamMainId,
+        toInstanceId: memberId,
+        teamId,
+      });
+      // 完成主链不受清账影响：消息落库 + emitFinal 照常
+      expect(prisma.message.create).toHaveBeenCalled();
+      expect(finals).toHaveLength(1);
+    });
+
+    it('② 完成成员即团队主 Agent 自身 → 不触发清账（无 fan-out 债）', async () => {
+      setupCompletion();
+      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: memberId });
+      const receipts = makeReceipts();
+      const d = createDispatcher(undefined, receipts);
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '完成',
+      });
+
+      expect(receipts.ackPendingFor).not.toHaveBeenCalled();
+    });
+
+    it('②b 团队未设置主成员（mainAgentMemberId=null）→ 不触发清账', async () => {
+      setupCompletion();
+      prisma.team.findUnique.mockResolvedValue({ mainAgentMemberId: null });
+      const receipts = makeReceipts();
+      const d = createDispatcher(undefined, receipts);
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '完成',
+      });
+
+      expect(receipts.ackPendingFor).not.toHaveBeenCalled();
+    });
+
+    it('③a agent.status error（失败链）→ 结清回执', async () => {
+      setupCompletion();
+      const receipts = makeReceipts();
+      const d = createDispatcher(undefined, receipts);
+
+      await d.handleAgentStatus({
+        sessionId: 's_0000000001',
+        agentId: 'a_product',
+        status: 'error',
+        error: '执行崩溃',
+      });
+
+      expect(receipts.ackPendingFor).toHaveBeenCalledWith({
+        fromInstanceId: teamMainId,
+        toInstanceId: memberId,
+        teamId,
+      });
+    });
+
+    it('③b 空闲判死（markSessionIdleDead）→ 结清回执（判死即履职终点）', async () => {
+      const receipts = makeReceipts();
+      const d = createDispatcher(undefined, receipts);
+      prisma.team.findUnique.mockResolvedValue({
+        mainAgentMemberId: teamMainId,
+      });
+      prisma.session.findUnique.mockResolvedValue({
+        id: 's_0000000001',
+        status: SESSION_STATUS.running,
+        taskId: null,
+        teamId,
+        teamMemberId: memberId,
+        agentId: 'a_product',
+        // 无 workerId → 跳过在飞否决与 stop-first 中止（聚焦回执清账断言）
+        workerId: null,
+        instanceRef: null,
+      });
+      // 无频道 → tryAutoRestart 到「未知 channel 即跳过」，避免额外派发噪音
+      prisma.chatChannel.findFirst.mockResolvedValue(null);
+
+      await (
+        d as unknown as { markSessionIdleDead: (id: string) => Promise<void> }
+      ).markSessionIdleDead('s_0000000001');
+
+      expect(receipts.ackPendingFor).toHaveBeenCalledWith({
+        fromInstanceId: teamMainId,
+        toInstanceId: memberId,
+        teamId,
+      });
+      expect(prisma.session.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 's_0000000001' },
+          data: { status: SESSION_STATUS.failed },
+        }),
+      );
+    });
+
+    it('④ 回执服务抛错 → 仅告警，完成链完全不受影响', async () => {
+      setupCompletion();
+      const receipts = {
+        ackPendingFor: jest.fn().mockRejectedValue(new Error('boom')),
+      };
+      const d = createDispatcher(undefined, receipts);
+      const warnSpy = jest
+        .spyOn((d as unknown as { logger: { warn: jest.Mock } }).logger, 'warn')
+        .mockImplementation((() => undefined) as unknown as jest.Mock);
+      const finals: unknown[] = [];
+      d.onFinal((e) => finals.push(e));
+
+      await d.handleTaskCompleted({
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        text: '完成',
+      });
+
+      expect(receipts.ackPendingFor).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('履职收口失败'),
+      );
+      // 主链不受清账异常波及：落库 + emitFinal 照常
+      expect(prisma.message.create).toHaveBeenCalled();
+      expect(finals).toHaveLength(1);
     });
   });
 

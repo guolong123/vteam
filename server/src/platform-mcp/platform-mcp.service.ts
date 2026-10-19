@@ -108,6 +108,7 @@ import {
 import {
   normalizeReceiptTimeoutMin,
   RECEIPT_NUDGE_KIND,
+  RECEIPT_TIMEOUT_DEFAULT_MIN,
   ReceiptNudgePayload,
 } from '../chat/receipt-nudge.handler';
 import {
@@ -1687,7 +1688,7 @@ export class PlatformMcpService implements OnModuleInit {
        * 与冻结哈希不一致即 plan-gated 拦截；缺省 → 哈希门禁未武装（原门禁语义不变）。
        */
       planHash?: string;
-      /** 回执超时分钟数（缺省 10，范围 1-1440；仅 execution 派发记账并排平台自动催办）。 */
+      /** 回执超时分钟数（缺省 30，与 RECEIPT_TIMEOUT_DEFAULT_MIN 同源；范围 1-1440；仅 execution 派发记账并排平台自动催办）。 */
       receiptTimeoutMin?: number;
     },
   ): Promise<NotifyAgentResult> {
@@ -2071,19 +2072,36 @@ export class PlatformMcpService implements OnModuleInit {
       }
     }
     if (kind === 'execution') {
-      await this.scheduleReceiptNudge({
-        messageId: message.id,
-        channelId: channel.id,
-        taskId: effTaskId,
-        teamId: notifyTeamId,
-        fromInstanceId: args.selfInstanceId,
-        toInstanceId: args.targetInstanceId,
-        assigneeName: targetName,
-        fromName: senderName,
-        content: args.content,
-        issueId: args.issueId ?? null,
-        receiptTimeoutMin: args.receiptTimeoutMin,
-      });
+      if (isJoinReport) {
+        // join 报告行审计记账（v1.0.3 D4/D5）：sub→main 回执照落，但落库即 acked
+        //（纯审计）——不 pending、不排自动催办、不入 fan-out pending 计数、
+        // 不参与到期扫描与 settledHook 错误轴向（from=sub）的幽灵 drain。
+        // 否则主 Agent 的收敛计数被 join 行污染：settle/drain 既等不到它的 ack
+        // 路径，又必须等它过期才收敛。
+        await this.writeJoinAuditReceipt({
+          messageId: message.id,
+          taskId: effTaskId,
+          teamId: notifyTeamId,
+          fromInstanceId: args.selfInstanceId,
+          toInstanceId: args.targetInstanceId,
+          content: args.content,
+          issueId: args.issueId ?? null,
+        });
+      } else {
+        await this.scheduleReceiptNudge({
+          messageId: message.id,
+          channelId: channel.id,
+          taskId: effTaskId,
+          teamId: notifyTeamId,
+          fromInstanceId: args.selfInstanceId,
+          toInstanceId: args.targetInstanceId,
+          assigneeName: targetName,
+          fromName: senderName,
+          content: args.content,
+          issueId: args.issueId ?? null,
+          receiptTimeoutMin: args.receiptTimeoutMin,
+        });
+      }
     }
 
     if (teamMainId && args.selfInstanceId !== teamMainId) {
@@ -2283,9 +2301,14 @@ export class PlatformMcpService implements OnModuleInit {
         teamId,
       });
       if (pending > 0) {
+        // 未收敛 → 停止任何挂起的 busy-veto 重查（后续 ack / settledHook 会排新 drain）
+        this.cancelDrainRecheck(teamId);
         return;
       }
-      // busy-veto：主会话 pending / running / executing → 跳过
+      // busy-veto：主会话 pending / running / executing → 排一次性重查后跳过
+      //（v1.0.3 D3：veto 原为裸 return，唤醒信号在主会话忙窗口内蒸发，收敛需再等
+      // 一次无关被 ack/过期才有机会补救。重查 120s 进程内定时；pending>0 即停，
+      // 连续 veto 超上限放弃——到期扫描与后续 ack 仍是持久化兜底环。）
       const mainSession = await this.prisma.session.findFirst({
         where: { teamMemberId: mainMemberId },
         select: { id: true, status: true, workerId: true },
@@ -2293,9 +2316,11 @@ export class PlatformMcpService implements OnModuleInit {
       });
       if (mainSession) {
         if (mainSession.status === 'running') {
+          this.armDrainRecheck(teamId, mainMemberId, text);
           return;
         }
         if (this.workerDispatcher.isSessionPending(mainSession.id)) {
+          this.armDrainRecheck(teamId, mainMemberId, text);
           return;
         }
         if (
@@ -2304,6 +2329,7 @@ export class PlatformMcpService implements OnModuleInit {
             .isAgentExecuting(mainSession.workerId, `team:${teamId}`)
             ?.has(mainMemberId)
         ) {
+          this.armDrainRecheck(teamId, mainMemberId, text);
           return;
         }
       }
@@ -2315,12 +2341,72 @@ export class PlatformMcpService implements OnModuleInit {
         reason: 'drain',
         text,
       });
+      // 成功唤醒 → 撤销该团队挂起的重查（防重查与后续 ack 重复触发）
+      this.cancelDrainRecheck(teamId);
     } catch (err) {
       this.logger.warn(
         `[mcp] drain wake 失败 team=${teamId}（不阻断）：${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
       this.drainClaims.delete(teamId);
+    }
+  }
+
+  /** busy-veto 一次性重查句柄（per-team，进程内）：定时 + 连续 veto 计数 + drain 轴上下文。 */
+  private readonly drainRecheckTimers = new Map<
+    string,
+    {
+      timer: ReturnType<typeof setTimeout>;
+      vetoes: number;
+      mainMemberId: string;
+      text: string;
+    }
+  >();
+  /** busy-veto 重查间隔 ms（120s）：主会话忙窗口内收敛信号不再蒸发（v1 单副本，多副本由到期扫描兜底）。 */
+  private readonly DRAIN_RECHECK_MS = 120_000;
+  /** 连续 busy-veto 重查上限：超限即告警放弃本轮（防死循环计时；后续 ack/到期仍是兜底环）。 */
+  private readonly DRAIN_RECHECK_MAX_VETOES = 10;
+
+  /**
+   * busy-veto → 排一次性重查（D3）：120s 后重跑 drain 检查（经既有 debounce
+   * 全链，若主会话届时仍忙，在 executeDrainWake 内续排下一轮）。同团队重复
+   * veto 复用同一条定时器并累加 veto 计数；连续 veto 超上限 → 告警并放弃。
+   */
+  private armDrainRecheck(
+    teamId: string,
+    mainMemberId: string,
+    text: string,
+  ): void {
+    const existing = this.drainRecheckTimers.get(teamId);
+    const vetoes = (existing?.vetoes ?? 0) + 1;
+    if (vetoes > this.DRAIN_RECHECK_MAX_VETOES) {
+      this.logger.warn(
+        `[mcp] drain busy-veto 连续 ${this.DRAIN_RECHECK_MAX_VETOES} 次未消散，放弃本轮重查 team=${teamId}（后续 ack/到期扫描兜底）`,
+      );
+      if (existing) {
+        clearTimeout(existing.timer);
+        this.drainRecheckTimers.delete(teamId);
+      }
+      return;
+    }
+    if (existing) {
+      clearTimeout(existing.timer);
+    }
+    const timer = setTimeout(() => {
+      // 只重跑既有 drain 全链（debounce 200ms）；结果三分支（pending>0 取消 / 再 veto
+      // 续排并在 armDrainRecheck 内累加计数 / 唤醒取消）全部在 executeDrainWake 内收敛，
+      // 此处不清 entry——veto 计数须跨轮存活才能命中超限放弃。
+      void this.checkAndDrainFanOut({ teamId, mainMemberId, text });
+    }, this.DRAIN_RECHECK_MS);
+    this.drainRecheckTimers.set(teamId, { timer, vetoes, mainMemberId, text });
+  }
+
+  /** 撤销该团队的挂起重查（成功唤醒 / 未收敛时调用，防与新 drain 计时双触发）。 */
+  private cancelDrainRecheck(teamId: string): void {
+    const existing = this.drainRecheckTimers.get(teamId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      this.drainRecheckTimers.delete(teamId);
     }
   }
 
@@ -2659,6 +2745,65 @@ export class PlatformMcpService implements OnModuleInit {
         `[mcp] 冻结哈希读取失败 task=${taskId}，哈希门禁未武装：${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
+    }
+  }
+
+  /**
+   * join 报告行审计记账（v1.0.3 D4/D5）：sub→main 的 answer 报告不立 pending 债，
+   * 落库即 acked（纯审计行）——不排自动催办 timer、不入 fan-out pending 计数、
+   * 不参与到期扫描；消灭回执错误轴向（from=sub）触发的幽灵 drain 与 join 行
+   * nudge 引信（D5）。写失败仅告警，绝不阻断已落库的 join 报告。
+   * dedup_key 永久唯一（与常规派发行同族组键）：同内容重复报告撞 P2002 →
+   * 审计行已存在，跳过即可（行本身已无 pending 语义）。
+   */
+  private async writeJoinAuditReceipt(input: {
+    messageId: string;
+    taskId: string | null;
+    teamId: string | null;
+    fromInstanceId: string;
+    toInstanceId: string;
+    content: string;
+    issueId: string | null;
+  }): Promise<void> {
+    try {
+      if (!input.teamId) {
+        this.logger.warn(
+          `[mcp] join 审计行缺团队归属 message=${input.messageId}，跳过记账`,
+        );
+        return;
+      }
+      await this.prisma.messageReceipt.create({
+        data: {
+          id: await this.idGen.nextId('mr'),
+          messageId: input.messageId,
+          fromInstanceId: input.fromInstanceId,
+          toInstanceId: input.toInstanceId,
+          taskId: input.taskId,
+          teamId: input.teamId,
+          summary: input.content.slice(0, 100),
+          status: MESSAGE_RECEIPT_STATUSES.acked,
+          ackedAt: new Date(),
+          dedupKey: buildMessageReceiptDedupKey({
+            fromInstanceId: input.fromInstanceId,
+            toInstanceId: input.toInstanceId,
+            content: input.content,
+          }),
+          issueId: input.issueId,
+          // audit-only 行无到期语义；expiresAt 非空列，按缺省 30min 形式化填值
+          expiresAt: new Date(
+            Date.now() + RECEIPT_TIMEOUT_DEFAULT_MIN * 60_000,
+          ),
+          kind: MESSAGE_RECEIPT_KINDS.dispatch,
+        },
+      });
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (code !== 'P2002') {
+        this.logger.warn(
+          `[mcp] join 审计行落库失败 message=${input.messageId}（不阻断报告）：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      // P2002（含主键冲突极端形态）→ 同内容报告重复，审计行已存在，静默跳过
     }
   }
 
