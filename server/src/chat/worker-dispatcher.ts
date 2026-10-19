@@ -885,6 +885,15 @@ export const GROUP_TRIGGER_INSTRUCTION =
   '如需向群聊发送文件：直接调用 vteam_group_post 并携带 fileRef，文件将作为群聊附件并自动归档为产出物。';
 
 /**
+ * 在飞直送机内说明（仅注入模式携带，prepend 到 prompt 首行）：同成员已有执行在飞时，
+ * 守卫不再排队/丢弃，而是把新消息直接注入该成员正在跑的 opencode 会话——opencode 1.x
+ * 运行循环每 step 重读消息库，本 user 消息将在其下一 step 边界被消化。给 agent 一句
+ * 机内提示，避免它把追加消息误判为新一轮独立任务的开工指令。
+ */
+export const IN_FLIGHT_INJECT_NOTICE =
+  '【追加消息】用户在任务执行中发来新消息并已直接送达本会话：处理完当前动作后请接着处理本条内容。';
+
+/**
  * 团队直聊群聊触发指令（仅 dispatchForTeamTarget 的 team_group 频道注入）：
  * 团队维度传参（group_post、notify_agent、chat_history 均传 teamId；selfInstanceId
  * 为 system 身份段中的团队成员 id，tmm_ 前缀）；团队直聊无 taskId，禁传 taskId；
@@ -1271,30 +1280,6 @@ export function dispatchSnapshotKey(
   return `team:${teamId}:member:${teamMemberId}`;
 }
 
-/** 在飞守卫丢弃的延后续派 TTL（ms）：与 executionTtlMs（30min）同窗，防泄漏。 */
-export const DEFERRED_DISPATCH_TTL_MS = 30 * 60 * 1000;
-/** 单成员延后队列上限：极端刷屏下 FIFO 丢弃最旧，防无限膨胀。 */
-export const MAX_DEFERRED_DISPATCH_ITEMS = 20;
-
-/**
- * guard 丢弃的延后续派条目：原始请求浅拷贝 + 被丢弃的单目标。
- * 在飞守卫命中时不再静默丢分派（消息 UI 可见但 agent 永远收不到，不可恢复），
- * 改为延后入队，成员前次执行注销（unregisterExecution）时按序重派。
- */
-interface DeferredTeamDispatch {
-  /** 原始请求浅拷贝（重派时 targets 覆写为被丢弃单目标）。 */
-  request: DispatchRequest;
-  /** 被丢弃的单目标（agentId / sessionId / instanceId）。 */
-  target: {
-    agentId: string;
-    sessionId: string | null;
-    instanceId?: string | null;
-  };
-  teamId: string;
-  /** 延后时间戳（ms epoch，TTL 依据）。 */
-  deferredAt: number;
-}
-
 /**
  * 从文本定位 type 字段值并提取完整 JSON 对象：先找 `"type":"<value>"` 位置 → 向前
  * 回溯最近的 `{` → 向后深度配对 `}`（支持字段乱序/嵌套/多对象并存）。
@@ -1591,24 +1576,10 @@ export class WorkerDispatcher
     string,
     { agents: Set<string>; at: number }
   >();
-  /**
-   * 在飞守卫丢弃的延后续派队列（`${scope}:${teamMemberId}` → FIFO 队列）：
-   * 守卫命中时入队代替静默丢弃，unregisterExecution 统一 drain（take-then-fire，
-   * 重复/无关注销天然幂等）。TTL / 队列上限见 DEFERRED_DISPATCH_TTL_MS /
-   * MAX_DEFERRED_DISPATCH_ITEMS，均防内存泄漏。
-   */
-  private readonly deferredDispatches = new Map<
-    string,
-    DeferredTeamDispatch[]
-  >();
   /** 执行注册 TTL（ms）：worker 崩溃/回流丢失时防活跃记录泄漏，超时视为不活跃。 */
   private readonly executionTtlMs = 30 * 60 * 1000;
   private executionKey(workerId: string, scope: string): string {
     return `${workerId}:${scope}`;
-  }
-
-  private deferredKey(scope: string, teamMemberId: string): string {
-    return `${scope}:${teamMemberId}`;
   }
 
   /**
@@ -1645,81 +1616,6 @@ export class WorkerDispatcher
       entry.agents.delete(ref);
       if (entry.agents.size === 0) {
         this.activeExecutions.delete(key);
-      }
-    }
-    // 统一 drain 点：五处注销点（会话建失败回滚 / execute 抛错 / task.completed /
-    // agent.status error / watchdog 超时）全经本方法，此处 fire-and-forget 重派
-    // guard 延后的分派；take-then-fire 使重复/无关注销天然幂等（队列已空即空跑）。
-    void this.drainDeferredDispatches(workerId, scope, ref);
-  }
-
-  /**
-   * 守卫命中时把被丢单目标延后入队：先全表按 TTL 剪枝（空队整键删除），再入队，
-   * 超过 MAX_DEFERRED_DISPATCH_ITEMS 时 FIFO 丢弃最旧（极端刷屏防膨胀）。
-   */
-  private deferTeamDispatch(
-    teamId: string,
-    teamMemberId: string,
-    request: DispatchRequest,
-    target: {
-      agentId: string;
-      sessionId: string | null;
-      instanceId?: string | null;
-    },
-  ): void {
-    const now = Date.now();
-    for (const [key, items] of this.deferredDispatches) {
-      const fresh = items.filter(
-        (item) => now - item.deferredAt <= DEFERRED_DISPATCH_TTL_MS,
-      );
-      if (fresh.length === 0) {
-        this.deferredDispatches.delete(key);
-      } else if (fresh.length !== items.length) {
-        this.deferredDispatches.set(key, fresh);
-      }
-    }
-    const key = this.deferredKey(toExecutionScope(null, teamId), teamMemberId);
-    const queue = this.deferredDispatches.get(key) ?? [];
-    while (queue.length >= MAX_DEFERRED_DISPATCH_ITEMS) {
-      queue.shift();
-      this.logger.warn(
-        `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId}）延后队列已满（${MAX_DEFERRED_DISPATCH_ITEMS}），丢弃最旧条目`,
-      );
-    }
-    queue.push({ request, target, teamId, deferredAt: now });
-    this.deferredDispatches.set(key, queue);
-  }
-
-  /**
-   * 注销后按序重派该成员 guard 延后的分派（take-then-fire：整队先取先删再逐条，
-   * 重复触发不重复派）。逐条过 TTL 防过期重派（延后久等的上下文已失真）；单条
-   * 失败不阻断后续。注意：派出的下一轮若又遇在飞（前一条执行尚未完成）会再次被
-   * 守卫延后入队，前次执行结束时再 drain——人为形成逐条串行。
-   */
-  private async drainDeferredDispatches(
-    workerId: string,
-    scope: string,
-    ref: string,
-  ): Promise<void> {
-    const key = this.deferredKey(scope, ref);
-    const items = this.deferredDispatches.get(key);
-    if (!items?.length) {
-      return;
-    }
-    this.deferredDispatches.delete(key);
-    for (const item of items) {
-      if (Date.now() - item.deferredAt > DEFERRED_DISPATCH_TTL_MS) {
-        this.logger.warn(
-          `[dispatch-guard] 成员 ${ref}（team=${item.teamId}）延后条目已过 TTL（${DEFERRED_DISPATCH_TTL_MS}ms），放弃重派`,
-        );
-        continue;
-      }
-      try {
-        await this.dispatch({ ...item.request, targets: [item.target] });
-      } catch (err) {
-        this.logger.warn(
-          `[dispatch-guard] 成员 ${ref}（team=${item.teamId}）延后重派失败，继续下一条: ${this.describeError(err)}`,
-        );
       }
     }
   }
@@ -2499,15 +2395,25 @@ export class WorkerDispatcher
     };
 
     // 分发守卫：同一团队成员同一时刻只允许一次在飞执行（防止同会话并发 /execute 造成负载虚高）。
-    // 检查 + 登记同步完成（中间无 await），并发分派无法同时通过检查。
-    if (this.isAgentExecuting(workerId, scope)?.has(teamMemberId)) {
+    // 守卫命中（busyInFlight）不排队、不丢弃：后续组装照走，在 execute 分叉点以注入
+    // 模式把消息直送进在飞的 opencode 会话（opencode 1.x 运行循环下一 step 消化）。
+    // 仅当在飞会话的实例引用缺失（异常态，无法定位注入目标）时兜底回退常规派发。
+    const busyInFlight =
+      this.isAgentExecuting(workerId, scope)?.has(teamMemberId) === true;
+    const injectFlight = busyInFlight && !!opencodeSessionId;
+    if (busyInFlight && !opencodeSessionId) {
       this.logger.warn(
-        `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId} worker=${workerId}）已有执行在飞，本次分派已延后，前次执行结束后重派`,
+        `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId} worker=${workerId}）已有执行在飞，但会话实例引用缺失，回退常规派发`,
       );
-      this.deferTeamDispatch(teamId, teamMemberId, request, target);
-      return;
     }
-    this.registerExecution(workerId, scope, teamMemberId);
+    if (injectFlight) {
+      this.logger.warn(
+        `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId} worker=${workerId}）已有执行在飞，本次消息直送在飞 opencode 会话（session=${opencodeSessionId}）`,
+      );
+    }
+    if (!injectFlight) {
+      this.registerExecution(workerId, scope, teamMemberId);
+    }
 
     // B2 可观测（team-worker-node Todo 5）：agentModelId === null（成员/任务/agent
     // 链皆无模型）且置顶实际生效（最终 workerId 即 preferredWorkerId）时，下面兜底
@@ -2750,8 +2656,15 @@ export class WorkerDispatcher
           capabilities: selfRoleRow.capabilities ?? null,
         }
       : null;
-    this.registerExecution(workerId, scope, teamMemberId);
-    const cleanupChannel = await this.resolveTeamChannel(teamId, teamMemberId);
+    // 注入模式不重复登记：在飞登记由原执行持有（保护「注入失败不释放原登记」语义）。
+    if (!injectFlight) {
+      this.registerExecution(workerId, scope, teamMemberId);
+    }
+    // 注入模式跳过 stale 行清扫：在飞执行可能正在同频道流式写入 processing 行，
+    // 清扫会把在途消息行标 failed/删除，并误失效在飞 delta 的组装缓存。
+    const cleanupChannel = injectFlight
+      ? null
+      : await this.resolveTeamChannel(teamId, teamMemberId);
     if (cleanupChannel) {
       const staleRows = await this.prisma.message.findMany({
         where: {
@@ -2800,9 +2713,14 @@ export class WorkerDispatcher
       this.ingress.invalidateDeltaStream(cleanupChannel.id, target.agentId);
     }
     const imageAttach = await this.resolveImageAttachments(request.messageId);
-    const finalPrompt = imageAttach
-      ? `${prompt}\n\n${imageAttach.pointer}`
+    // 注入模式在执行提示词首行前置机内说明；消息回写仍用不带说明的 prompt
+    //（注入说明只随 execute 载荷下发，见 IN_FLIGHT_INJECT_NOTICE 注释）。
+    const promptForExec = injectFlight
+      ? `${IN_FLIGHT_INJECT_NOTICE}\n\n${prompt}`
       : prompt;
+    const finalPrompt = imageAttach
+      ? `${promptForExec}\n\n${imageAttach.pointer}`
+      : promptForExec;
     const memoryIndex = taskIdForPrompt
       ? await this.buildTeamMemoryIndex(teamId, {
           isMainAgent,
@@ -2882,34 +2800,49 @@ export class WorkerDispatcher
         agentId: target.agentId,
         channelId: request.channelId,
         sessionId: opencodeSessionId,
+        // 注入模式：worker 侧仅追加 prompt 到在飞会话，不建跟踪/不出终态事件。
+        ...(injectFlight ? { inFlight: true } : {}),
         ...(resolvedAgentName ? { agent: resolvedAgentName } : {}),
         ...(imageAttach ? { attachments: imageAttach.attachments } : {}),
         system: buildSystemInstructions(agentIdentity, systemOpts),
       });
     } catch (err) {
-      this.unregisterExecution(workerId, scope, teamMemberId);
+      if (injectFlight) {
+        // 注入失败仅告警，不注销原执行的在飞登记（守卫/防冒充语义依赖该登记）；
+        // 错误仍向上抛，由 dispatch() 统一 emitError + 广播 agent.error。
+        this.logger.warn(
+          `在飞注入失败 member=${teamMemberId}（worker=${workerId} session=${opencodeSessionId}），保留在飞登记: ${this.describeError(err)}`,
+        );
+      } else {
+        this.unregisterExecution(workerId, scope, teamMemberId);
+      }
       throw err;
     }
-    // is_7：execute 202 受理后暂存原始分派快照（恢复重放用；wake 重放文本不覆盖）。
-    this.saveDispatchSnapshot({
-      text: request.text,
-      messageId: request.messageId,
-      channelId: request.channelId,
-      taskId: request.taskContext?.taskId ?? '',
-      teamId,
-      teamMemberId,
-      agentId: target.agentId,
-      createdAt: Date.now(),
-    });
-    this.snapshotSessionIndex.set(
-      sessionId,
-      dispatchSnapshotKey(teamId, teamMemberId),
-    );
+    // 注入模式跳过快照/回流幂等/watchdog 归账： 在飞的原执行本身持有这些归属
+    // （哨兵不重复挂号、终态由原执行统一收口）。
+    if (!injectFlight) {
+      // is_7：execute 202 受理后暂存原始分派快照（恢复重放用；wake 重放文本不覆盖）。
+      this.saveDispatchSnapshot({
+        text: request.text,
+        messageId: request.messageId,
+        channelId: request.channelId,
+        taskId: request.taskContext?.taskId ?? '',
+        teamId,
+        teamMemberId,
+        agentId: target.agentId,
+        createdAt: Date.now(),
+      });
+      this.snapshotSessionIndex.set(
+        sessionId,
+        dispatchSnapshotKey(teamId, teamMemberId),
+      );
 
-    this.completedSessions.delete(sessionId);
-    this.failedSessions.delete(sessionId);
+      this.completedSessions.delete(sessionId);
+      this.failedSessions.delete(sessionId);
+    }
 
-    // 7. loading(operating) + 回流超时 watchdog（team: 作用域 key）
+    // 7. loading(operating) + 回流超时 watchdog（team: 作用域 key；注入模式不重复
+    // 挂 watchdog，超时归属由在飞原执行持有）
     await this.realtime.broadcast(
       EVENT_TYPES.AGENT_LOADING,
       {
@@ -2928,13 +2861,15 @@ export class WorkerDispatcher
       sessionId,
       phase: 'operating',
     });
-    this.startPendingWatchdog(
-      scope,
-      target.agentId,
-      sessionId,
-      workerId,
-      teamMemberId,
-    );
+    if (!injectFlight) {
+      this.startPendingWatchdog(
+        scope,
+        target.agentId,
+        sessionId,
+        workerId,
+        teamMemberId,
+      );
+    }
   }
 
   // ------------------------------------------------------------------

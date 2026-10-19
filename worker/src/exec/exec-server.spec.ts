@@ -291,6 +291,76 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
     }
   });
 
+  it('在飞直送（inFlight + sessionId）→ 仅追加 prompt 到同会话：无 createSession、无 completion 轮询、无任何事件上送', async () => {
+    const { driver, createSession, sendMessage, getMessages } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      const res = await postExecute(bound, {
+        taskId: 't_1',
+        sessionId: 'ses_flight',
+        prompt: '追加消息',
+        directory: '/data/wd',
+        inFlight: true,
+      });
+      expect(res.status).toBe(202);
+      expect(res.body).toEqual({ accepted: true });
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      // 同 sessionId + directory 透传（prompt_async fire-and-forget）
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith('ses_flight', {
+        model: null,
+        agent: undefined,
+        parts: [{ type: 'text', text: '追加消息' }],
+        directory: '/data/wd',
+        system: undefined,
+      });
+      // 不建跟踪/不出终态事件：无 completion 轮询、无生命周期事件、load 不受影响
+      expect(createSession).not.toHaveBeenCalled();
+      expect(getMessages).not.toHaveBeenCalled();
+      expect(sent).toEqual([]);
+      expect(getLoad()).toEqual({ instances: 0 });
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('在飞直送 sendMessage 失败 → 仅 logger.warn，不上送任何事件（fire-and-forget）', async () => {
+    const { driver, sendMessage } = mockDriver();
+    sendMessage.mockRejectedValue(new DriverRequestError('prompt_async HTTP 500', 500));
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      const res = await postExecute(bound, { taskId: 't_1', sessionId: 'ses_flight', prompt: 'go', inFlight: true });
+      expect(res.status).toBe(202);
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      // 失败仅告警：静置一段时间确认没有 error 事件混出
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(sent).toEqual([]);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('在飞直送不带附件文件（inFlight 缺 sessionId）→ 回退常规 runExecution（createSession + 完整终态事件）', async () => {
+    const { driver, createSession } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    try {
+      const res = await postExecute(bound, { taskId: 't_1', prompt: 'go', inFlight: true });
+      expect(res.status).toBe(202);
+      await waitFor(() => sent.length >= 5);
+      expect(createSession).toHaveBeenCalledTimes(1);
+      const completed = sent.find((s) => s.type === 'task.completed');
+      expect(completed).toBeDefined();
+    } finally {
+      await exec.stop();
+    }
+  });
+
   it('复用会话 404（serve 重启后旧会话丢失）→ 自动 createSession 新建 → 重试成功，事件用新 sessionId', async () => {
     const { driver, createSession, sendMessage } = mockDriver();
     createSession.mockResolvedValue('ses_new');
@@ -949,6 +1019,38 @@ describe('ExecServer：POST /execute 图片附件（问题二：图片进执行�
       expect(String(file?.url)).toMatch(/^file:\/\//);
       expect(fs.existsSync(join(workDir, 'attachments', 'a.png'))).toBe(true);
       await waitFor(() => sent.length >= 5);
+    } finally {
+      await exec.stop();
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('在飞直送复用附件组装：attachments 照常下载落盘并入 file part，且无事件上送（Momus 修正 5）', async () => {
+    stubDownload(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const { driver, sendMessage, getMessages } = mockDriver();
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({ port: 0, driver, sender, firstTokenTimeoutMs: 1000, serverBaseUrl: 'http://server:3000', logger: SILENT_LOGGER });
+    const bound = await exec.start();
+    const workDir = fs.mkdtempSync(join(os.tmpdir(), 'exec-attach-flight-'));
+    try {
+      const res = await postExecute(bound, {
+        taskId: 't_1',
+        sessionId: 'ses_flight',
+        prompt: '看看图',
+        directory: workDir,
+        attachments: [{ url: '/uploads/a.png', mime: 'image/png', filename: 'a.png' }],
+        inFlight: true,
+      });
+      expect(res.status).toBe(202);
+      await waitFor(() => sendMessage.mock.calls.length > 0);
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      const parts = (sendMessage.mock.calls[0][1] as { parts: Array<Record<string, unknown>> }).parts;
+      const file = parts.find((p) => p.type === 'file') as Record<string, unknown> | undefined;
+      expect(file).toMatchObject({ type: 'file', mime: 'image/png', filename: 'a.png' });
+      expect(fs.existsSync(join(workDir, 'attachments', 'a.png'))).toBe(true);
+      // 注入路径不建 tracker / 不出终态事件
+      expect(getMessages).not.toHaveBeenCalled();
+      expect(sent).toEqual([]);
     } finally {
       await exec.stop();
       fs.rmSync(workDir, { recursive: true, force: true });
