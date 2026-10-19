@@ -10135,12 +10135,19 @@ describe('WorkerDispatcher', () => {
       expect(system).toContain(TEAM_SYSTEM_RECEPTION_INSTRUCTION);
     });
 
-    describe('在飞守卫：同成员并发丢弃 + 泄漏释放', () => {
+    describe('在飞守卫：延后入队 + 注销重派（defer-and-drain）', () => {
       const GUARD_WORKER = 'w_0000000001';
       const GUARD_SCOPE = 'team:tm_0000000001';
       const GUARD_MEMBER = 'tmm_0000000001';
+      // flush：注销点 fire-and-forget 的 drain 链全为微任务级 mock，连等三个宏任务
+      // 确保整链落地（失败路径的 reject→回滚→广播链多出若干 await 跳数）
+      const flush = async () => {
+        for (let i = 0; i < 3; i += 1) {
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      };
 
-      it('同成员已有在飞执行 → 第二次分派被丢弃，不再下发 execute 且不抛错', async () => {
+      it('同成员已有在飞执行 → 第二次分派延后入队（不下发 execute）；前次执行注销后 drain 重派 execute', async () => {
         const d = createDispatcher();
         const first = await d.dispatch(teamRequest() as any);
         expect(first).toEqual({ replies: [] });
@@ -10148,10 +10155,126 @@ describe('WorkerDispatcher', () => {
 
         const second = await d.dispatch(teamRequest() as any);
         expect(second).toEqual({ replies: [] });
+        // 延后半段：execute 仍 1 次、在飞登记保持（未提前放行）
         expect(workerClient.execute).toHaveBeenCalledTimes(1);
         expect(d.isAgentExecuting(GUARD_WORKER, GUARD_SCOPE)).toEqual(
           new Set([GUARD_MEMBER]),
         );
+
+        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+        await flush();
+        // drain 重派：execute 第 2 次下发，且重派自身完成在飞登记
+        expect(workerClient.execute).toHaveBeenCalledTimes(2);
+        expect(d.isAgentExecuting(GUARD_WORKER, GUARD_SCOPE)).toEqual(
+          new Set([GUARD_MEMBER]),
+        );
+      });
+
+      it('FIFO：两条依次入队 → 注销后按多余入队序依次下发 execute（前次执行以 mock 注销模拟完成）', async () => {
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+        await d.dispatch(
+          teamRequest({ text: '第二条', messageId: 'm_0000000002' }) as any,
+        );
+        await d.dispatch(
+          teamRequest({ text: '第三条', messageId: 'm_0000000003' }) as any,
+        );
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+
+        // 模拟 worker 端 task.completed：execute 被调即注销（同步触发下一轮 drain 链）
+        workerClient.execute.mockImplementation(async () => {
+          void d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+          return undefined;
+        });
+
+        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+        await flush();
+
+        expect(workerClient.execute).toHaveBeenCalledTimes(3);
+        const prompts = workerClient.execute.mock.calls.map(
+          (c) => (c[1] as { prompt: Array<{ text: string }> }).prompt[0].text,
+        );
+        expect(prompts[1]).toContain('第二条');
+        expect(prompts[2]).toContain('第三条');
+      });
+
+      it('双重注销幂等：drain 后再注销两次不额外重派', async () => {
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+
+        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+        await flush();
+        expect(workerClient.execute).toHaveBeenCalledTimes(2);
+
+        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+        await flush();
+        expect(workerClient.execute).toHaveBeenCalledTimes(2);
+      });
+
+      it('TTL 过期条目不重派：延后超 30min 后注销 → 条目放弃', async () => {
+        const realNow = Date.now();
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+
+        const nowSpy = jest
+          .spyOn(Date, 'now')
+          .mockReturnValue(realNow + 31 * 60 * 1000);
+        try {
+          d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+          await flush();
+          expect(workerClient.execute).toHaveBeenCalledTimes(1);
+        } finally {
+          nowSpy.mockRestore();
+        }
+      });
+
+      it('drain 中单条 execute 失败 → 该条记 error 事件，不影响后续条目重派', async () => {
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+        await d.dispatch(
+          teamRequest({ text: '第二条', messageId: 'm_0000000002' }) as any,
+        );
+        await d.dispatch(
+          teamRequest({ text: '第三条', messageId: 'm_0000000003' }) as any,
+        );
+        const errors: unknown[] = [];
+        d.onError((e) => errors.push(e));
+        // 仅第二条的 execute 失败（首个 drain 重派调用）
+        workerClient.execute.mockRejectedValueOnce(new Error('execute boom'));
+
+        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+        await flush();
+        await flush();
+
+        expect(workerClient.execute).toHaveBeenCalledTimes(3);
+        expect(errors).toHaveLength(1);
+        const prompts = workerClient.execute.mock.calls.map(
+          (c) => (c[1] as { prompt: Array<{ text: string }> }).prompt[0].text,
+        );
+        expect(prompts[2]).toContain('第三条');
+      });
+
+      it('不相关成员注销不触发 drain：延后队列保留，真正成员注销后才重派', async () => {
+        const d = createDispatcher();
+        await d.dispatch(teamRequest() as any);
+        await d.dispatch(teamRequest() as any);
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+
+        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, 'tmm_0000000999');
+        await flush();
+        expect(workerClient.execute).toHaveBeenCalledTimes(1);
+
+        d.unregisterExecution(GUARD_WORKER, GUARD_SCOPE, GUARD_MEMBER);
+        await flush();
+        expect(workerClient.execute).toHaveBeenCalledTimes(2);
       });
 
       it('注销后在飞标记清除 → 下一次分派放行（execute 再次下发）', async () => {
