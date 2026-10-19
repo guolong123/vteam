@@ -8,7 +8,6 @@ import {
   MESSAGE_STATUS,
   SENDER_TYPE,
 } from '../common/constants/event.constants';
-import { ArtifactsService } from '../artifacts/artifacts.service';
 import { ROLE_BOUNDARIES } from '../common/constants/agent.constants';
 import {
   ExecutionPolicyService,
@@ -21,7 +20,6 @@ import {
 } from '../execution-policies/__fixtures__/policy-fixtures';
 import { TRIGGER_KIND } from '../common/constants/trigger.constants';
 import { SECRET_COMMAND_KEEPALIVE_MS } from '../platform-mcp/platform-mcp.constants';
-import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import {
   WorkerClient,
   WorkerUnavailableException,
