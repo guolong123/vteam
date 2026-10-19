@@ -82,6 +82,27 @@ describe('WORKER_TOTAL_TIMEOUT_MS（CHANGE 2：执行总时长上限，opt-in）
   });
 });
 
+describe('WORKER_FIRST_TOKEN_TIMEOUT_MS（执行端点首字超时，缺省禁用）', () => {
+  it('缺省/空串：默认 0（禁用首字超时——长脚本/等权限不误杀；env 可 opt-in）', () => {
+    expect(loadConfig(BASE_ENV).workerFirstTokenTimeoutMs).toBe(0);
+    expect(loadConfig({ ...BASE_ENV, WORKER_FIRST_TOKEN_TIMEOUT_MS: '' }).workerFirstTokenTimeoutMs).toBe(0);
+  });
+
+  it('env 覆盖：WORKER_FIRST_TOKEN_TIMEOUT_MS=300000 → 300000', () => {
+    expect(
+      loadConfig({ ...BASE_ENV, WORKER_FIRST_TOKEN_TIMEOUT_MS: '300000' })
+        .workerFirstTokenTimeoutMs,
+    ).toBe(300000);
+  });
+
+  it('显式 0 = 禁用（合法值，非缺省兜底）', () => {
+    expect(
+      loadConfig({ ...BASE_ENV, WORKER_FIRST_TOKEN_TIMEOUT_MS: '0' })
+        .workerFirstTokenTimeoutMs,
+    ).toBe(0);
+  });
+});
+
 describe('WORKER_ADVERTISE_HOST 显式标记（外部/跨机 worker 可达地址引导）', () => {
   afterEach(() => {
     jest.clearAllMocks();

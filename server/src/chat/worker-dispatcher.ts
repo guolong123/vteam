@@ -969,8 +969,9 @@ export const DEFAULT_SILENT_SESSION_WAKE_MS = 600_000;
 export const MAX_SILENT_WAKE_ATTEMPTS = 3;
 
 /** 空闲判死：session 进入 running 后无任何输出活动（delta/agent.status/task.completed）超时 →
- *  判死（session 标 failed + agent.error）。env AGENT_IDLE_TIMEOUT_MS 可配。 */
-export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
+ *  判死（session 标 failed + agent.error）。缺省 0=关闭空闲判死扫描（线上误杀长脚本/等权限，
+ *  无真实 hang 证据）；env AGENT_IDLE_TIMEOUT_MS 可 opt-in 打开。 */
+export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 0;
 
 /** 空闲判死扫描周期（定期执行 DB 侧扫描，检查超时会话）。 */
 export const IDLE_SCAN_INTERVAL_MS = 60_000;
@@ -1642,7 +1643,7 @@ export class WorkerDispatcher
   public dispatchTimeoutMs: number;
   /** 事件静默窗口 ms（env SILENT_SESSION_WAKE_MS，缺省 600s，滑动重武装）：距最近事件超窗 → 唤醒/判败。 */
   public silentSessionWakeMs: number;
-  /** 空闲判死 ms（env AGENT_IDLE_TIMEOUT_MS，缺省 30min）：running 后无输出活动超时 → 判死。 */
+  /** 空闲判死 ms（env AGENT_IDLE_TIMEOUT_MS，缺省 0=关闭扫描）：running 后无输出活动超时 → 判死。 */
   public agentIdleTimeoutMs: number;
   /** F3 MINOR-3：任务工作目录根（env WORK_DIR，缺省 /data/vteam-worker-tasks）。 */
   public taskWorkDirRoot: string;
@@ -1703,7 +1704,7 @@ export class WorkerDispatcher
       silentWake,
       DEFAULT_SILENT_SESSION_WAKE_MS,
     );
-    // 空闲判死（AGENT_IDLE_TIMEOUT_MS，缺省 30min）——running 后无输出活动超时判死
+    // 空闲判死（AGENT_IDLE_TIMEOUT_MS，缺省 0=关闭扫描）——running 后无输出活动超时判死
     const idleTimeout = config.get('AGENT_IDLE_TIMEOUT_MS');
     this.agentIdleTimeoutMs = parseTimeoutMs(
       idleTimeout,

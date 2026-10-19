@@ -38,7 +38,7 @@ vteam 提供两套部署方式，按环境选择：
 | `JWT_REFRESH_EXPIRES_IN` | server | `7d` | refresh token 时效 |
 | `WORKER_TOKEN` | server/worker | compose 默认值 | worker 注册/事件鉴权 token，两端必须一致 |
 | `MODEL_CREDENTIAL_KEY` | server | **必填**（未设置启动报错） | 模型凭据 AES-256-GCM 主密钥，32 字节，`openssl rand -hex 32` 生成 |
-| `SILENT_SESSION_WAKE_MS` | server | `600000` | 事件静默自愈窗口（滑动）：距最近一次回流事件 600s 无事件判一次「静默」→ worker 心跳在线则经 `tryAutoRestart` 自动唤醒重试，最多 `MAX_SILENT_WAKE_ATTEMPTS = 3` 次（每次重武装完整 600s 窗口），心跳已离线则立即失败不唤醒；唤醒耗尽仍无响应才 emitError + agent.error（`silent_session_timeout`）。阈值 600000 > worker 首字 300000，server 永不抢跑 worker 的诊断路径 |
+| `SILENT_SESSION_WAKE_MS` | server | `600000` | 事件静默自愈窗口（滑动）：距最近一次回流事件 600s 无事件判一次「静默」→ worker 心跳在线则经 `tryAutoRestart` 自动唤醒重试，最多 `MAX_SILENT_WAKE_ATTEMPTS = 3` 次（每次重武装完整 600s 窗口），心跳已离线则立即失败不唤醒；唤醒耗尽仍无响应才 emitError + agent.error（`silent_session_timeout`）。worker 首字超时缺省禁用（`WORKER_FIRST_TOKEN_TIMEOUT_MS=0`），server 永不抢跑 worker 的诊断路径 |
 | `API_PROXY_TARGET` | web | `http://server:3000` | 运行时代理目标（middleware.ts 读取），compose 下为服务名 `server` |
 | `X_WORKER_TOKEN` | worker | 同 `WORKER_TOKEN` | worker 侧鉴权 |
 | `SERVER_URL` | worker | `http://server:3000` | 注册/心跳的 server 地址 |
@@ -47,12 +47,13 @@ vteam 提供两套部署方式，按环境选择：
 | `OPENCODE_SERVE_PORT` | worker | `4000` | serve 固定端口 |
 | `WORKER_ADVERTISE_HOST` | worker | `http://worker` | 上报给 server 的 baseUrl（compose 服务名） |
 | `WORKER_DEFAULT_MODEL` | worker | 空 | Agent 未配模型时的默认模型兜底 |
-| `WORKER_FIRST_TOKEN_TIMEOUT_MS` | worker | `300000` | worker 侧首字超时——首字/模型诊断唯一归 worker（时限内无首字即 abort 并上报）；server 侧不再有 token 探测，对应机制为 `SILENT_SESSION_WAKE_MS`（600000 滑动事件静默自愈） |
+| `WORKER_FIRST_TOKEN_TIMEOUT_MS` | worker | `0`（禁用，可 opt-in） | worker 侧首字超时——时限内无首字即 abort 并上报；缺省 0=禁用（线上误杀长脚本/等权限，无真实 hang 证据），env 设正值打开；server 侧不再有 token 探测，对应机制为 `SILENT_SESSION_WAKE_MS`（600000 滑动事件静默自愈） |
+| `AGENT_IDLE_TIMEOUT_MS` | server | `0`（禁用，可 opt-in） | server 空闲判死扫描——running 会话超时无任何输出活动 → 判死；缺省 0=关闭扫描（同上，避免误杀长任务），env 设正值打开（如 `1800000`=30min） |
 | `WORK_DIR` | worker | `/data/vteam-worker` | 持久化工作目录（serve cwd、.opencode 注入、git clone 仓库） |
 
 > **三条探活路径（worker / server / 心跳，各司其职）**：
-> - **worker 首字探测 300s**（`WORKER_FIRST_TOKEN_TIMEOUT_MS`，默认 300000）：首字/模型诊断唯一归 worker——worker 直接观察 awaitCompletion 轮询，时限内无首字即 abort 并上报 `等待首字超时`，是知情方（可中止会话、附带 serve 诊断）。首字出现后无完成超时，长任务由 worker 自行推进（`worker/src/driver/prompt-await.ts`、`worker/src/exec/exec-server.ts`）。
-> - **server 事件静默自愈 600s 滑动 ×3**（`SILENT_SESSION_WAKE_MS`，默认 600000）：窗口按「距最近一次回流事件」滑动重武装（每个事件都重置计时），覆盖首字之后的中途静默（首字后无完成超时 + `AGENT_IDLE_TIMEOUT_MS=0` 时空闲判死亦禁用的空档）。600000 > worker 300000，server 永不抢跑 worker 的诊断路径；到期先查 worker 心跳——在线则 `tryAutoRestart` 自动唤醒（最多 `MAX_SILENT_WAKE_ATTEMPTS = 3` 次，每次重武装完整 600s 窗口），已离线则立即失败不空转；唤醒耗尽才 emitError + agent.error（`silent_session_timeout`）。
+> - **worker 首字探测（`WORKER_FIRST_TOKEN_TIMEOUT_MS`，缺省 0=禁用）**：首字/模型诊断唯一归 worker——worker 直接观察 awaitCompletion 轮询，时限内无首字即 abort 并上报 `等待首字超时`，是知情方（可中止会话、附带 serve 诊断）。缺省禁用（长脚本/等权限不被误杀；线上 kill 均为误报），需要时 env 设正值打开。首字出现后无完成超时，长任务由 worker 自行推进（`worker/src/driver/prompt-await.ts`、`worker/src/exec/exec-server.ts`）。
+> - **server 事件静默自愈 600s 滑动 ×3**（`SILENT_SESSION_WAKE_MS`，默认 600000）：窗口按「距最近一次回流事件」滑动重武装（每个事件都重置计时），覆盖首字之后的中途静默（首字超时与空闲判死均缺省禁用，此为当前唯一判定路径）。到期先查 worker 心跳——在线则 `tryAutoRestart` 自动唤醒（最多 `MAX_SILENT_WAKE_ATTEMPTS = 3` 次，每次重武装完整 600s 窗口），已离线则立即失败不空转；唤醒耗尽才 emitError + agent.error（`silent_session_timeout`）。
 > - **心跳探活 10s/30s**（`WORKER_HEARTBEAT_INTERVAL_MS = 10_000`，`server/src/workers/workers.constants.ts`）：worker 每 10s 上报心跳，`HealthChecker` 将 `lastHeartbeatAt < now - 30s` 的 worker 标为 `offline`（`server/src/workers/workers.service.ts`）——进程死亡走这条路；server 的静默唤醒在 worker 已离线时直接失败（不发起无意义的唤醒）。
 
 ### 2.3 卷
