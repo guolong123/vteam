@@ -558,10 +558,6 @@ function mockTransitionTx(prisma: Record<string, any>): Record<string, any> {
     taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
     session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     team: { findUnique: jest.fn().mockResolvedValue(null) },
-    teamQueue: {
-      findFirst: jest.fn().mockResolvedValue(null),
-      findMany: jest.fn().mockResolvedValue([]),
-    },
     artifact: { findMany: jest.fn().mockResolvedValue([]) },
     artifactVersion: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     message: {

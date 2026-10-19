@@ -59,7 +59,6 @@ function teamFixture() {
       { id: "tmm_3", teamId: TEAM_ID, agentId: "a_architect", alias: "Arch-1", seq: 1, workDir: "/tmp/su12", agent: { id: "a_architect", name: "架构师", role: "architect" } },
     ],
     userMembers: [],
-    queue: [],
   };
 }
 

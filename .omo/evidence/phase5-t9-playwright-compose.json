@@ -1,0 +1,1125 @@
+{
+  "config": {
+    "argv": [
+      "/Users/mac/.nvm/versions/node/v24.14.0/bin/node",
+      "/Volumes/SSD-Data/01work/git-project/vteam/web/node_modules/.bin/playwright",
+      "test",
+      "--config",
+      "playwright.compose.config.ts",
+      "--project=docs",
+      "--project=team-users",
+      "--project=mcp-status"
+    ],
+    "configFile": "/Volumes/SSD-Data/01work/git-project/vteam/web/playwright.compose.config.ts",
+    "rootDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "setup",
+        "name": "setup",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/auth\\.setup\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "lib-unit",
+        "name": "lib-unit",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/lib",
+        "testIgnore": [],
+        "testMatch": [
+          "/.*\\.spec\\.ts$/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "chat-density",
+        "name": "chat-density",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/chat-density\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "doc-pdf-export",
+        "name": "doc-pdf-export",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/doc-pdf-export\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "login",
+        "name": "login",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/login\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "pages",
+        "name": "pages",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/pages\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "docs",
+        "name": "docs",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/docs-unified\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "team-users",
+        "name": "team-users",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/team-user-members\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "perf",
+        "name": "perf",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/perf\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "guard",
+        "name": "guard",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/guard\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "self-login",
+        "name": "self-login",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/create-agent-role\\.spec\\.ts/",
+          "/native-rule-editor\\.spec\\.ts/",
+          "/no-agent-picker\\.spec\\.ts/",
+          "/policy-restart-notice\\.spec\\.ts/",
+          "/policy-serialize\\.spec\\.ts/",
+          "/role-first-member-add\\.spec\\.ts/",
+          "/task-permission-editable\\.spec\\.ts/",
+          "/team-create-role-list\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "engine-dependent",
+        "name": "engine-dependent",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/dark-mode-role-warning\\.spec\\.ts/",
+          "/roles-members\\.spec\\.ts/",
+          "/third-party-agents\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "mock-api",
+        "name": "mock-api",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/plan-archive\\.spec\\.ts/",
+          "/plan-finalize\\.spec\\.ts/",
+          "/plan-status\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "mcp-status",
+        "name": "mcp-status",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/mcp-status\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "session-unification",
+        "name": "session-unification",
+        "testDir": "/Volumes/SSD-Data/01work/git-project/vteam/web/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "/session-unification\\.spec\\.ts/"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "json",
+        {
+          "outputFile": "../.omo/evidence/phase5-t9-playwright-compose.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.62.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "auth.setup.ts",
+      "file": "auth.setup.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "真实表单登录 seed-admin → storageState",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "setup",
+              "projectName": "setup",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 866,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-19T03:05:33.947Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "17e3fe6f4d9d8bd79c6b-e1e904a976db5985c890",
+          "file": "auth.setup.ts",
+          "line": 12,
+          "column": 6
+        }
+      ]
+    },
+    {
+      "title": "docs-unified.spec.ts",
+      "file": "docs-unified.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "happy：选择器→chips→树→查看器→版本→删除→深链",
+          "file": "docs-unified.spec.ts",
+          "line": 338,
+          "column": 6,
+          "specs": [
+            {
+              "title": "选择器 + 树：任务预填 + 自家 10 行",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 764,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [
+                        {
+                          "buffer": ""
+                        }
+                      ],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:35.418Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-55623f664cd278d1aad4",
+              "file": "docs-unified.spec.ts",
+              "line": 339,
+              "column": 7
+            },
+            {
+              "title": "chips：分类过滤 + data-active 契约",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 847,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:37.054Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-79a8287f25064edc55e1",
+              "file": "docs-unified.spec.ts",
+              "line": 348,
+              "column": 7
+            },
+            {
+              "title": "树→查看器：md 渲染 + ?doc= 回写",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1231,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:37.911Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-76d6d6c3fb1686e1a81e",
+              "file": "docs-unified.spec.ts",
+              "line": 371,
+              "column": 7
+            },
+            {
+              "title": "版本查看器：v2 默认 + 切 v1",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 881,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:39.148Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-4448d2ac8a45acbc17fa",
+              "file": "docs-unified.spec.ts",
+              "line": 383,
+              "column": 7
+            },
+            {
+              "title": "删除：UI 删 scratch 行 + API 404",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 929,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:40.042Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-4ac7247bd5512a659e38",
+              "file": "docs-unified.spec.ts",
+              "line": 394,
+              "column": 7
+            },
+            {
+              "title": "?doc= 深链：直达查看器",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1550,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:40.989Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-6c3f1da5175118d999b4",
+              "file": "docs-unified.spec.ts",
+              "line": 415,
+              "column": 7
+            }
+          ]
+        },
+        {
+          "title": "prototypes：徽标→tab→深链→团队级聚合（T16）",
+          "file": "docs-unified.spec.ts",
+          "line": 430,
+          "column": 6,
+          "specs": [
+            {
+              "title": "徽标 + tab：原型非空",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1857,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:42.553Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-1556e36e605899c5f8d7",
+              "file": "docs-unified.spec.ts",
+              "line": 431,
+              "column": 7
+            },
+            {
+              "title": "?proto= 深链：直达选中",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 722,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:44.418Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-1f36b77d5b8a69820283",
+              "file": "docs-unified.spec.ts",
+              "line": 450,
+              "column": 7
+            },
+            {
+              "title": "返回按钮：从会话页进入文档站后可返回",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 908,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:45.152Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-f77c869ded41b69c3356",
+              "file": "docs-unified.spec.ts",
+              "line": 463,
+              "column": 7
+            },
+            {
+              "title": "团队级（task=all）：原型 tab 可用 + 跨任务列表",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1064,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:46.069Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-318daa939aaa536ddcf3",
+              "file": "docs-unified.spec.ts",
+              "line": 473,
+              "column": 7
+            },
+            {
+              "title": "团队级（task=all）：?proto= 深链直达选中",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 685,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:47.138Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-6ebd4103cb644075b7f8",
+              "file": "docs-unified.spec.ts",
+              "line": 489,
+              "column": 7
+            }
+          ]
+        },
+        {
+          "title": "edge：txt/csv/json 预览 + pdf 沙箱 + docx 下载卡 + ghost",
+          "file": "docs-unified.spec.ts",
+          "line": 503,
+          "column": 6,
+          "specs": [
+            {
+              "title": "txt→<pre> 预览 + 下载兜底",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 803,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:47.834Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-01a83c13bb6f309c7a21",
+              "file": "docs-unified.spec.ts",
+              "line": 504,
+              "column": 7
+            },
+            {
+              "title": "pdf→沙箱 iframe（无 allow-scripts）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 814,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:48.645Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-028ce64ccc0d9828119e",
+              "file": "docs-unified.spec.ts",
+              "line": 517,
+              "column": 7
+            },
+            {
+              "title": "docx→下载卡 + 零 iframe",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 793,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:49.468Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-004dc1346e2c4c42dff6",
+              "file": "docs-unified.spec.ts",
+              "line": 535,
+              "column": 7
+            },
+            {
+              "title": "ghost 不可访问引用→降级",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 742,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:50.277Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-ab7c2d1215eb7f912441",
+              "file": "docs-unified.spec.ts",
+              "line": 548,
+              "column": 7
+            }
+          ]
+        },
+        {
+          "title": "failure：未知 doc + 无 teamId",
+          "file": "docs-unified.spec.ts",
+          "line": 561,
+          "column": 6,
+          "specs": [
+            {
+              "title": "未知 ?doc= → 空态（不 404 不崩）",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 633,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:51.028Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-bde9b97e874f4d82491c",
+              "file": "docs-unified.spec.ts",
+              "line": 562,
+              "column": 7
+            },
+            {
+              "title": "无 teamId → 团队选择器 → 可进站",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 777,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:51.668Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-bbc83359c8452208dd2a",
+              "file": "docs-unified.spec.ts",
+              "line": 568,
+              "column": 7
+            }
+          ]
+        },
+        {
+          "title": "XSS：脚本剥离 + 链接白名单 + 零执行",
+          "file": "docs-unified.spec.ts",
+          "line": 579,
+          "column": 6,
+          "specs": [
+            {
+              "title": "text→md：script 零元素 + javascript: 零 href + 安全链接保留",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "docs",
+                  "projectName": "docs",
+                  "results": [
+                    {
+                      "workerIndex": 1,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 768,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [
+                        {
+                          "buffer": ""
+                        }
+                      ],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:52.452Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "240ec98872e5fad1452b-4e2293f155c47f93e6ef",
+              "file": "docs-unified.spec.ts",
+              "line": 580,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "team-user-members.spec.ts",
+      "file": "team-user-members.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "team-user-members 团队用户成员管理",
+          "file": "team-user-members.spec.ts",
+          "line": 10,
+          "column": 6,
+          "specs": [
+            {
+              "title": "team-user-members 添加/移除往返",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "team-users",
+                  "projectName": "team-users",
+                  "results": [
+                    {
+                      "workerIndex": 2,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1209,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-10-19T03:05:53.873Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "f89c328cd73c19981185-a733de214656976e0d6c",
+              "file": "team-user-members.spec.ts",
+              "line": 11,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "mcp-status.spec.ts",
+      "file": "mcp-status.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "skills 页 MCP 子 Tab 显示真实三态（T8c）",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "mcp-status",
+              "projectName": "mcp-status",
+              "results": [
+                {
+                  "workerIndex": 3,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 903,
+                  "errors": [],
+                  "stdout": [
+                    {
+                      "text": "mcp-tool-item data-status = connected\n"
+                    }
+                  ],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-10-19T03:05:55.566Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "79e53f4c8a554ebc589b-e4ca5223a41a99e96900",
+          "file": "mcp-status.spec.ts",
+          "line": 12,
+          "column": 5
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-19T03:05:33.681Z",
+    "duration": 23082.763000000003,
+    "expected": 21,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

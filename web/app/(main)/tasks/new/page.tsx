@@ -120,7 +120,7 @@ function TaskForm({
       </div>
       <div style={{ display: "flex", alignItems: "flex-start", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: neutral[50], border: `1px solid ${neutral[200]}`, fontSize: fontSize.sm, color: neutral[500], lineHeight: 1.6 }}>
         <span aria-hidden style={{ color: "#0D9488", fontWeight: 700, lineHeight: 1.6 }}>i</span>
-        任务创建后进入「待开始」或「排队中」状态；团队忙时自动排队，完成按序拉起。
+        任务创建后进入「待开始」状态；同一团队支持多任务并行执行（可由团队并发上限约束）。
       </div>
     </section>
   );
@@ -234,7 +234,7 @@ function TeamSelectPanel({
       {createError && <div data-testid="create-error" role="alert" style={{ display: "flex", alignItems: "flex-start", gap: space.xs, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", fontSize: fontSize.sm, color: "#B91C1C", lineHeight: 1.6 }}><span aria-hidden style={{ fontWeight: 700 }}>!</span>{createError}</div>}
       <div data-testid="create-hint" role="note" style={{ display: "flex", alignItems: "flex-start", gap: space.sm, padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: pendingBg, border: `1px solid ${pendingBorder}`, fontSize: fontSize.sm, color: neutral[600], lineHeight: 1.6 }}>
         <span aria-hidden style={{ color: pendingColor, fontWeight: 700, lineHeight: 1.6 }}>⏱</span>
-        <span>团队忙时任务自动<span style={{ fontWeight: 600, color: pendingColor }}>「排队中」</span>，完成后队首自动拉起；群聊按团队复用，历史跨任务可见。</span>
+        <span>同一团队支持多任务<span style={{ fontWeight: 600, color: pendingColor }}>并行执行</span>；群聊按团队复用，历史跨任务可见。</span>
       </div>
     </section>
   );

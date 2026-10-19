@@ -24,16 +24,6 @@ export interface TeamMemberDto {
   createdAt?: string;
 }
 
-export interface TeamQueueDto {
-  id: string;
-  teamId: string;
-  taskId: string;
-  position: number;
-  enqueuedAt: string;
-  taskTitle?: string | null;
-  taskStatus?: string | null;
-}
-
 export interface TeamUserMemberDto {
   id: string;
   userId: string;
@@ -50,6 +40,10 @@ export interface TeamDto {
   currentTaskId: string | null;
   currentTaskTitle?: string | null;
   currentTaskStatus?: string | null;
+  /** 当前活跃任务数（in_progress + blocked，并行调度顶栏计数用）。 */
+  activeTaskCount?: number;
+  /** 团队并发上限（null = 不限；start 时后端校验 TEAM_PARALLEL_LIMIT）。 */
+  maxConcurrentTasks?: number | null;
   mainAgentMemberId: string | null;
   /** 团队级首选 worker id（null = 自动调度到任意可用节点；节点删除后为悬空软引用）。 */
   preferredWorkerId?: string | null;
@@ -59,7 +53,6 @@ export interface TeamDto {
   updatedAt: string;
   members: TeamMemberDto[];
   userMembers: TeamUserMemberDto[];
-  queue: TeamQueueDto[];
 }
 
 export interface TeamsPage {
@@ -143,11 +136,5 @@ export const teamsApi = {
   },
   resetSessions(teamId: string): Promise<{ reset: number; teamId: string }> {
     return api.post<{ reset: number; teamId: string }>(`/teams/${teamId}/reset-sessions`);
-  },
-  cancelQueue(teamId: string, taskId: string): Promise<TeamDto> {
-    return api.delete<TeamDto>(`/teams/${teamId}/queue/${taskId}`);
-  },
-  enqueue(teamId: string, taskId: string): Promise<TeamDto> {
-    return api.post<TeamDto>(`/teams/${teamId}/queue`, { taskId });
   },
 };

@@ -5,7 +5,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
 import { useAuthStore } from "@/lib/stores/authStore";
-import { teamsApi, type TeamDto, type TeamQueueDto } from "@/src/api/teams";
+import { teamsApi, type TeamDto } from "@/src/api/teams";
+import { useSSE } from "@/hooks/use-sse";
+import { STATUS_LABEL } from "@/src/types/task-status";
 import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
 import { TaskStatusActions } from "@/src/components/tasks/task-status-actions";
 import {
@@ -39,54 +41,138 @@ import {
 } from "@/src/components/tasks/task-detail-types";
 
 /* ------------------------------------------------------------------ */
-/* 团队队列卡片                                                         */
+/* 团队任务列表卡片（任务 Tab · 状态子页；并行化替代原团队队列卡）          */
 /* ------------------------------------------------------------------ */
-export function TeamQueueCard({
+
+interface TeamTaskListItem {
+  id: string;
+  title: string;
+  status: TaskApiStatus;
+  createdAt: string;
+  startedAt?: string | null;
+  pendingReviewAt?: string | null;
+  completedAt?: string | null;
+}
+
+/** 列表排序：活跃态在前（各自按相关时间倒序），完成/退役 queued /归档沉底。 */
+function sortTeamTaskItems(items: TeamTaskListItem[]): TeamTaskListItem[] {
+  const rank: Record<string, number> = {
+    in_progress: 0,
+    blocked: 1,
+    pending_review: 2,
+    pending: 3,
+    completed: 4,
+    queued: 4,
+    archived: 5,
+  };
+  const ts = (t: TeamTaskListItem) =>
+    new Date((t.status === "pending_review" ? t.pendingReviewAt : t.startedAt) ?? t.createdAt).getTime();
+  return items.slice().sort((a, b) => {
+    const ra = rank[a.status] ?? 4;
+    const rb = rank[b.status] ?? 4;
+    if (ra !== rb) return ra - rb;
+    return ts(b) - ts(a);
+  });
+}
+
+/** 状态徽标主题（teal 描边=活跃执行，对齐会话页顶栏「进行中」胶囊）。 */
+const TEAM_TASK_STATUS_THEME: Record<TaskApiStatus, { color: string; bg: string; border: string }> = {
+  in_progress: { color: "#0D9488", bg: "rgba(13,148,136,0.08)", border: "rgba(13,148,136,0.28)" },
+  blocked: { color: "#B91C1C", bg: "rgba(239,68,68,0.08)", border: "rgba(239,68,68,0.22)" },
+  pending_review: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.22)" },
+  pending: { color: neutral[600], bg: neutral[100], border: neutral[300] },
+  completed: { color: "#059669", bg: "rgba(5,150,105,0.08)", border: "rgba(5,150,105,0.22)" },
+  queued: { color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.22)" },
+  archived: { color: neutral[400], bg: neutral[100], border: neutral[200] },
+};
+
+/** 活跃行呼吸点 keyframes（与顶栏胶囊一致的存在感信号；模块级一次注入）。 */
+const TEAM_TASK_BREATHE_STYLE = (
+  <style>{`@keyframes team-task-breathe { 0%,100%{opacity:.25} 50%{opacity:1} }`}</style>
+);
+
+function formatDateOnly(iso: string | null | undefined): string {
+  const t = iso ? new Date(iso).getTime() : NaN;
+  if (!Number.isFinite(t)) return "—";
+  return new Date(t).toLocaleDateString("zh-CN");
+}
+
+export function TeamTaskListCard({
   team,
-  taskId,
+  selectedTaskId,
+  onSelectTask,
+  onOpenTaskDetail,
 }: {
   team: TeamDto | null | undefined;
-  taskId: string;
+  selectedTaskId?: string | null;
+  onSelectTask?: (taskId: string) => void;
+  onOpenTaskDetail?: (taskId: string) => void;
 }) {
   const queryClient = useQueryClient();
-  const [queueError, setQueueError] = useState<string | null>(null);
-  const cancelMutation = useMutation({
-    mutationFn: (tid: string) => teamsApi.cancelQueue(team!.id, tid),
-    onSuccess: () => {
-      setQueueError(null);
-      if (team) {
-        queryClient.invalidateQueries({ queryKey: ["team", team.id] });
-        queryClient.invalidateQueries({ queryKey: ["teams"] });
+  const [actionError, setActionError] = useState<string | null>(null);
+  const teamId = team?.id ?? "";
+
+  /** 与 teams/[id]/tasks/page.tsx 共用同一 query key，缓存互通。 */
+  const tasksQuery = useQuery({
+    queryKey: ["team-tasks", teamId],
+    queryFn: () =>
+      api.get<{ items: TeamTaskListItem[] }>("/tasks", {
+        query: { teamId, page: 1, pageSize: 100 },
+      }),
+    enabled: !!teamId,
+  });
+
+  // SSE 驱动刷新：task.status.changed 全局广播 → 失效团队任务列表 + 团队活跃计数
+  useSSE({
+    scope: "global",
+    enabled: !!teamId,
+    onEvent: (ev) => {
+      if (ev.type === "task.status.changed") {
+        queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] });
+        queryClient.invalidateQueries({ queryKey: ["team", teamId] });
       }
-      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
-    },
-    onError: (err) => {
-      const msg = isApiError(err) ? err.message : "取消失败";
-      const is409 = isApiError(err) && err.status === 409;
-      setQueueError(is409 ? `${msg}（仅排队中的任务可取消）` : msg);
     },
   });
-  if (!team) return null;
-  const queuedEntry = team.queue.find((q) => q.taskId === taskId);
-  const isQueued = !!queuedEntry;
-  const isCurrent = team.currentTaskId === taskId;
+
+  /** 行内快捷动作：pending→start / pending_review→accept+reject（对齐 TaskStatusActions 端点）。 */
+  const quickActionMutation = useMutation({
+    mutationFn: ({ taskId, action }: { taskId: string; action: "start" | "accept" | "reject" }) =>
+      api.post(`/tasks/${taskId}/${action}`),
+    onError: (err) => {
+      // TEAM_PARALLEL_LIMIT 409：服务端 message 已附上限文案（"并行任务数已达上限 N"）
+      setActionError(isApiError(err) ? err.message : "操作失败，请稍后重试");
+    },
+    onSuccess: () => setActionError(null),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["team-tasks", teamId] });
+      queryClient.invalidateQueries({ queryKey: ["team", teamId] });
+    },
+  });
+
+  const rows = (() => {
+    const items = tasksQuery.data?.items ?? [];
+    const archived = items.filter((t) => t.status === "archived");
+    return sortTeamTaskItems([
+      ...items.filter((t) => t.status !== "archived"),
+      ...archived.slice(0, 3),
+    ]);
+  })();
+
   return (
     <div
-      data-testid="team-queue-card"
+      data-testid="team-task-list-card"
       style={{
         padding: `${space.md}px ${space.lg}px`,
         borderRadius: radius.md,
-        backgroundColor: isQueued
-          ? "rgba(245,158,11,0.10)"
-          : isCurrent
-            ? "rgba(13,148,136,0.08)"
-            : neutral[50],
-        border: `1px solid ${isQueued ? "rgba(245,158,11,0.28)" : isCurrent ? "rgba(13,148,136,0.22)" : neutral[200]}`,
+        backgroundColor: neutral[50],
+        border: `1px solid ${neutral[200]}`,
         display: "flex",
         flexDirection: "column",
         gap: space.sm,
       }}
     >
+      {TEAM_TASK_BREATHE_STYLE}
       <div
         style={{
           display: "flex",
@@ -94,178 +180,92 @@ export function TeamQueueCard({
           justifyContent: "space-between",
         }}
       >
-        <span style={{ display: "flex", alignItems: "center", gap: space.xs }}>
-          <span
-            style={{
-              fontSize: fontSize.sm,
-              fontWeight: 600,
-              color: neutral[700],
-            }}
-          >
-            团队队列
-          </span>
-          <span
-            style={{
-              fontSize: 10,
-              color: "#D97706",
-              backgroundColor: "rgba(245,158,11,0.10)",
-              border: "1px solid rgba(245,158,11,0.22)",
-              padding: "0 5px",
-              borderRadius: radius.pill,
-              fontWeight: 600,
-            }}
-          >
-            FIFO
-          </span>
+        <span style={{ fontSize: fontSize.sm, fontWeight: 600, color: neutral[700] }}>
+          团队任务
         </span>
         <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-          {team.queue.length} 排队 ·{" "}
-          {team.currentTaskId
-            ? `当前 ${team.currentTaskId.slice(0, 8)}…`
-            : "空闲"}
+          {rows.length} 个 · 点击行切换聚焦
         </span>
       </div>
-      <div style={{ fontSize: 10, color: neutral[400], lineHeight: 1.5 }}>
-        按入队时间 FIFO，仅排队中可取消，不支持拖拽重排。
-      </div>
-      {isQueued && queuedEntry ? (
-        <div
-          data-testid="queue-position"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: space.sm,
-            fontSize: fontSize.sm,
-            color: "#D97706",
-            fontWeight: 600,
-            flexWrap: "wrap",
-          }}
-        >
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 22,
-              height: 22,
-              borderRadius: "50%",
-              backgroundColor: "#F59E0B",
-              color: "#FFF",
-              fontSize: fontSize.xs,
-              fontWeight: 700,
-            }}
-          >
-            #{queuedEntry.position}
-          </span>
-          排队中 · 位置 {queuedEntry.position}
-          <span
-            style={{
-              fontSize: fontSize.xs,
-              color: neutral[400],
-              fontWeight: 400,
-            }}
-          >
-            · 队列共 {team.queue.length} 个
-          </span>
-          <button
-            type="button"
-            data-testid="queue-cancel-current"
-            data-task-id={taskId}
-            disabled={cancelMutation.isPending}
-            onClick={() => cancelMutation.mutate(taskId)}
-            style={{
-              marginLeft: "auto",
-              padding: `${space.xs}px ${space.sm}px`,
-              borderRadius: radius.pill,
-              border: "1px solid rgba(239,68,68,0.22)",
-              backgroundColor: "rgba(239,68,68,0.06)",
-              color: "#DC2626",
-              fontSize: fontSize.xs,
-              fontWeight: 500,
-              cursor: cancelMutation.isPending ? "default" : "pointer",
-              opacity: cancelMutation.isPending ? 0.6 : 1,
-              fontFamily: fontFamily.body,
-            }}
-          >
-            {cancelMutation.isPending ? "取消中…" : "取消排队"}
-          </button>
+      {tasksQuery.isPending ? (
+        <div style={{ fontSize: fontSize.xs, color: neutral[400], padding: `${space.md}px`, textAlign: "center" }}>
+          加载中…
         </div>
-      ) : isCurrent ? (
+      ) : tasksQuery.isError ? (
         <div
-          data-testid="queue-current"
-          style={{ fontSize: fontSize.sm, color: "#0D9488", fontWeight: 500 }}
-        >
-          当前执行中（队首）
-        </div>
-      ) : (
-        <div style={{ fontSize: fontSize.xs, color: neutral[400] }}>
-          未在队列中 · 群聊按团队复用，历史跨任务可见
-        </div>
-      )}
-      {queueError && (
-        <div
-          data-testid="queue-cancel-error"
+          data-testid="team-task-list-error"
           role="alert"
+          style={{ fontSize: fontSize.xs, color: "#DC2626", padding: `${space.sm}px`, textAlign: "center" }}
+        >
+          {isApiError(tasksQuery.error) ? tasksQuery.error.message : "任务列表加载失败"}
+        </div>
+      ) : rows.length === 0 ? (
+        <div
+          data-testid="team-task-list-empty"
           style={{
             fontSize: fontSize.xs,
-            color: "#DC2626",
-            backgroundColor: "rgba(239,68,68,0.08)",
-            border: "1px solid rgba(239,68,68,0.14)",
+            color: neutral[400],
+            padding: `${space.md}px`,
+            border: `1px dashed ${neutral[200]}`,
             borderRadius: radius.sm,
-            padding: `${space.xs}px ${space.sm}px`,
+            textAlign: "center",
           }}
         >
-          {queueError}
+          暂无任务
         </div>
-      )}
-      {team.queue.length > 0 ? (
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: space.xs,
-            marginTop: space.xs,
-          }}
-        >
-          {team.queue.map((q) => {
-            const isSelf = q.taskId === taskId;
-            const qTitle = q.taskTitle ?? null;
-            const qStatus = q.taskStatus ?? "queued";
-            const canCancel = qStatus === "queued";
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
+          {rows.map((row) => {
+            const theme = TEAM_TASK_STATUS_THEME[row.status] ?? TEAM_TASK_STATUS_THEME.pending;
+            const isActiveStatus = row.status === "in_progress" || row.status === "blocked";
+            const selected = row.id === selectedTaskId;
+            const meta = [
+              `创建于 ${formatDateOnly(row.createdAt)}`,
+              row.completedAt ? `完成于 ${formatDateOnly(row.completedAt)}` : row.pendingReviewAt ? `提交于 ${formatDateOnly(row.pendingReviewAt)}` : row.startedAt ? `开始于 ${formatDateOnly(row.startedAt)}` : null,
+            ].filter(Boolean) as string[];
             return (
               <div
-                key={q.id}
-                data-testid="team-queue-item"
-                data-task-id={q.taskId}
-                data-position={q.position}
+                key={row.id}
+                data-testid="team-task-item"
+                data-task-id={row.id}
+                data-status={row.status}
+                data-selected={selected ? "true" : "false"}
+                onClick={() => (isActiveStatus && onOpenTaskDetail ? onOpenTaskDetail(row.id) : onSelectTask?.(row.id))}
                 style={{
                   display: "flex",
                   alignItems: "center",
                   gap: space.sm,
                   padding: `${space.xs}px ${space.sm}px`,
                   borderRadius: radius.sm,
-                  backgroundColor: isSelf
-                    ? "rgba(245,158,11,0.12)"
-                    : "var(--color-surface)",
-                  border: `1px solid ${isSelf ? "rgba(245,158,11,0.28)" : neutral[200]}`,
+                  backgroundColor: isActiveStatus
+                    ? "rgba(13,148,136,0.06)"
+                    : selected
+                      ? "rgba(13,148,136,0.10)"
+                      : "var(--color-surface)",
+                  border: `1px solid ${
+                    isActiveStatus
+                      ? "rgba(13,148,136,0.28)"
+                      : selected
+                        ? "rgba(13,148,136,0.22)"
+                        : neutral[200]
+                  }`,
+                  cursor: onOpenTaskDetail || onSelectTask ? "pointer" : "default",
                 }}
               >
                 <span
                   style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    width: 20,
-                    height: 20,
-                    borderRadius: "50%",
-                    backgroundColor: isSelf ? "#F59E0B" : neutral[400],
-                    color: "#FFF",
                     fontSize: 10,
-                    fontWeight: 700,
+                    color: theme.color,
+                    backgroundColor: theme.bg,
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: radius.pill,
+                    padding: "0 5px",
+                    fontWeight: 600,
                     flexShrink: 0,
+                    whiteSpace: "nowrap",
                   }}
                 >
-                  {q.position}
+                  {STATUS_LABEL[row.status]}
                 </span>
                 <div
                   style={{
@@ -283,107 +283,205 @@ export function TeamQueueCard({
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
-                    }}
-                  >
-                    {qTitle ?? q.taskId}
-                  </span>
-                  <span
-                    style={{
                       display: "flex",
                       alignItems: "center",
                       gap: space.xs,
-                      minWidth: 0,
                     }}
                   >
-                    <span
-                      data-testid="queue-item-status"
-                      style={{
-                        flexShrink: 0,
-                        whiteSpace: "nowrap",
-                        fontSize: 10,
-                        color: canCancel ? "#D97706" : neutral[500],
-                        backgroundColor: canCancel
-                          ? "rgba(245,158,11,0.10)"
-                          : neutral[100],
-                        border: `1px solid ${canCancel ? "rgba(245,158,11,0.22)" : neutral[200]}`,
-                        borderRadius: radius.pill,
-                        padding: "0 4px",
-                        fontWeight: 600,
-                      }}
-                    >
-                      {canCancel ? "排队中" : qStatus}
-                    </span>
-                    <span
-                      style={{
-                        fontFamily: fontFamily.mono,
-                        fontSize: 10,
-                        color: neutral[400],
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {q.taskId.slice(0, 10)}…
-                    </span>
+                    {isActiveStatus && (
+                      <span
+                        aria-hidden
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: "50%",
+                          flexShrink: 0,
+                          backgroundColor: row.status === "blocked" ? "#B91C1C" : "#10B981",
+                          animation: "team-task-breathe 1.6s ease-in-out infinite",
+                        }}
+                      />
+                    )}
+                    {row.title}
                   </span>
+                  {selected && <span style={{ fontSize: 10, color: "#0D9488" }}>✓ 当前聚焦</span>}
                 </div>
+                {row.status === "pending" && (
+                  <button
+                    type="button"
+                    data-testid="team-task-start"
+                    disabled={quickActionMutation.isPending}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setActionError(null);
+                      quickActionMutation.mutate({ taskId: row.id, action: "start" });
+                    }}
+                    style={{
+                      padding: "2px 8px",
+                      borderRadius: radius.pill,
+                      border: "none",
+                      backgroundColor: "#0D9488",
+                      color: "#FFF",
+                      fontSize: 10,
+                      fontWeight: 600,
+                      cursor: quickActionMutation.isPending ? "default" : "pointer",
+                      opacity: quickActionMutation.isPending ? 0.6 : 1,
+                      fontFamily: fontFamily.body,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {quickActionMutation.isPending && quickActionMutation.variables?.taskId === row.id ? "启动中…" : "开始"}
+                  </button>
+                )}
+                {row.status === "pending_review" && (
+                  <span style={{ display: "inline-flex", gap: space.xs, flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      data-testid="team-task-accept"
+                      disabled={quickActionMutation.isPending}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActionError(null);
+                        quickActionMutation.mutate({ taskId: row.id, action: "accept" });
+                      }}
+                      style={{
+                        padding: "2px 8px",
+                        borderRadius: radius.pill,
+                        border: "1px solid rgba(5,150,105,0.28)",
+                        backgroundColor: "rgba(5,150,105,0.08)",
+                        color: "#059669",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        cursor: quickActionMutation.isPending ? "default" : "pointer",
+                        fontFamily: fontFamily.body,
+                      }}
+                    >
+                      验收通过
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="team-task-reject"
+                      disabled={quickActionMutation.isPending}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActionError(null);
+                        quickActionMutation.mutate({ taskId: row.id, action: "reject" });
+                      }}
+                      style={{
+                        padding: "2px 8px",
+                        borderRadius: radius.pill,
+                        border: "1px solid rgba(245,158,11,0.28)",
+                        backgroundColor: "rgba(245,158,11,0.08)",
+                        color: "#D97706",
+                        fontSize: 10,
+                        fontWeight: 600,
+                        cursor: quickActionMutation.isPending ? "default" : "pointer",
+                        fontFamily: fontFamily.body,
+                      }}
+                    >
+                      驳回
+                    </button>
+                  </span>
+                )}
                 <span
-                  style={{ fontSize: 10, color: neutral[400], flexShrink: 0 }}
+                  style={{ fontSize: 10, color: neutral[400], flexShrink: 0, whiteSpace: "nowrap" }}
                 >
-                  {new Date(q.enqueuedAt).toLocaleDateString("zh-CN")}
+                  {meta.join(" · ")}
                 </span>
-                <button
-                  type="button"
-                  data-testid="queue-cancel"
-                  data-task-id={q.taskId}
-                  disabled={!canCancel || cancelMutation.isPending}
-                  title={!canCancel ? "仅排队中的任务可取消" : "取消排队"}
-                  onClick={() => canCancel && cancelMutation.mutate(q.taskId)}
-                  style={{
-                    padding: "2px 8px",
-                    borderRadius: radius.pill,
-                    border: `1px solid ${!canCancel ? neutral[200] : "rgba(239,68,68,0.22)"}`,
-                    backgroundColor: !canCancel
-                      ? neutral[100]
-                      : "rgba(239,68,68,0.06)",
-                    color: !canCancel ? neutral[400] : "#DC2626",
-                    fontSize: 10,
-                    fontWeight: 500,
-                    cursor:
-                      !canCancel || cancelMutation.isPending
-                        ? "not-allowed"
-                        : "pointer",
-                    opacity: !canCancel ? 0.6 : 1,
-                    fontFamily: fontFamily.body,
-                    flexShrink: 0,
-                  }}
-                >
-                  取消
-                </button>
               </div>
             );
           })}
         </div>
-      ) : (
+      )}
+      {actionError && (
         <div
-          data-testid="queue-empty"
+          data-testid="team-task-action-error"
+          role="alert"
           style={{
             fontSize: fontSize.xs,
-            color: neutral[400],
-            padding: `${space.sm}px`,
-            border: `1px dashed ${neutral[200]}`,
+            color: "#DC2626",
+            backgroundColor: "rgba(239,68,68,0.08)",
+            border: "1px solid rgba(239,68,68,0.14)",
             borderRadius: radius.sm,
-            textAlign: "center",
-            lineHeight: 1.6,
+            padding: `${space.xs}px ${space.sm}px`,
           }}
         >
-          暂无排队任务
-          <div style={{ fontSize: 10, marginTop: 2 }}>
-            群聊按团队复用，历史跨任务可见
-          </div>
+          {actionError}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * 子 Tab 任务筛选下拉（计划/产出/触发头部右侧）：换绑聚焦任务——与会话页
+ * `?task=` 参数共用同一状态源，切换后所有子 Tab 同步。
+ */
+function TaskPickerSelect({
+  team,
+  selectedTaskId,
+  onSelectTask,
+  testid,
+}: {
+  team: TeamDto | null | undefined;
+  selectedTaskId?: string | null;
+  onSelectTask?: (taskId: string) => void;
+  testid: string;
+}) {
+  const teamId = team?.id ?? "";
+  const tasksQuery = useQuery({
+    queryKey: ["team-tasks", teamId],
+    queryFn: () =>
+      api.get<{ items: TeamTaskListItem[] }>("/tasks", {
+        query: { teamId, page: 1, pageSize: 100 },
+      }),
+    enabled: !!teamId,
+  });
+  const interactive = !!onSelectTask && !!teamId;
+  const options = (() => {
+    const items = tasksQuery.data?.items ?? [];
+    const activeFirst = sortTeamTaskItems(items).filter(
+      (t) => t.status !== "completed" && t.status !== "archived",
+    );
+    const recentDone = items
+      .filter((t) => t.status === "completed")
+      .sort((a, b) => new Date(b.completedAt ?? b.createdAt).getTime() - new Date(a.completedAt ?? a.createdAt).getTime())
+      .slice(0, 5);
+    const merged = [...activeFirst, ...recentDone];
+    if (selectedTaskId && !merged.some((t) => t.id === selectedTaskId)) {
+      const sel = items.find((t) => t.id === selectedTaskId);
+      if (sel) merged.push(sel);
+    }
+    return merged;
+  })();
+  return (
+    <select
+      data-testid={testid}
+      aria-label="切换单一任务（所有子 Tab 同步）"
+      value={selectedTaskId ?? ""}
+      disabled={!interactive}
+      onChange={(e) => {
+        if (e.target.value) onSelectTask?.(e.target.value);
+      }}
+      style={{
+        maxWidth: 200,
+        fontSize: fontSize.xs,
+        color: neutral[700],
+        backgroundColor: "var(--color-surface)",
+        border: `1px solid ${neutral[200]}`,
+        borderRadius: radius.md,
+        padding: "2px 6px",
+        cursor: interactive ? "pointer" : "not-allowed",
+        fontFamily: fontFamily.body,
+      }}
+    >
+      {!selectedTaskId && <option value="">未指定（显示兜底任务）</option>}
+      {options.length === 0 && selectedTaskId != null && <option value="">暂无任务</option>}
+      {options.map((t) => (
+        <option key={t.id} value={t.id}>
+          [{STATUS_LABEL[t.status]}] {t.title}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -2560,6 +2658,9 @@ function TaskSubTabs({
   onUploadPlanDoc,
   planDocsQuery,
   planStepsQuery,
+  selectedTaskId,
+  onSelectTask,
+  onOpenTaskDetail,
   subTab: controlledSub,
   onSubTabChange,
 }: {
@@ -2581,6 +2682,12 @@ function TaskSubTabs({
   planDocsQuery?: any;
   /** 执行步骤查询（GET /tasks/:id/plan-steps，由会话页提供，30s 轮询）。 */
   planStepsQuery?: any;
+  /** 聚焦任务 id（会话页 effectivePanelTaskId；列表/下拉选中态与筛选换绑依据）。 */
+  selectedTaskId?: string | null;
+  /** 切换聚焦任务（写会话页 `?task=` 参数，所有子 Tab 同步）。 */
+  onSelectTask?: (taskId: string) => void;
+  /** 打开任务详情抽屉（会话页提供；活跃行点击触发）。 */
+  onOpenTaskDetail?: (taskId: string) => void;
   subTab?: TaskSubTab;
   onSubTabChange?: (t: TaskSubTab) => void;
 }) {
@@ -2635,9 +2742,6 @@ function TaskSubTabs({
   const planSteps: PlanStepItem[] = planStepsQuery?.data?.steps ?? [];
   const planStepsDegraded: boolean = planStepsQuery?.data?.degraded ?? false;
   const planStepsPending: boolean = !!planStepsQuery?.isPending;
-  const waiting = (team?.queue ?? []).filter(
-    (q: TeamQueueDto) => q.taskStatus === "queued" || !q.taskStatus,
-  ).length;
   const isCurrent = team?.currentTaskId === taskId;
   const teamScopeId: string = team?.id ?? "";
   const triggersQuery = useTaskTriggers(taskId, teamScopeId);
@@ -2690,7 +2794,7 @@ function TaskSubTabs({
           {
             key: "status" as const,
             label: "状态",
-            badge: waiting > 0 ? String(waiting) : null,
+            badge: null as string | null,
           },
           {
             key: "plan" as const,
@@ -2750,6 +2854,27 @@ function TaskSubTabs({
           gap: space.lg,
         }}
       >
+        {subTab !== "status" && (
+          <div
+            data-testid="task-picker-row"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-end",
+              gap: space.xs,
+            }}
+          >
+            <span style={{ fontSize: fontSize.xs, color: neutral[400], flexShrink: 0 }}>
+              查看任务
+            </span>
+            <TaskPickerSelect
+              team={team}
+              selectedTaskId={selectedTaskId ?? taskId}
+              onSelectTask={onSelectTask}
+              testid={`task-picker-${subTab}`}
+            />
+          </div>
+        )}
         {subTab === "status" && (
           <div
             style={{ display: "flex", flexDirection: "column", gap: space.lg }}
@@ -2763,10 +2888,8 @@ function TaskSubTabs({
                 borderRadius: radius.md,
                 backgroundColor: isCurrent
                   ? "rgba(13,148,136,0.06)"
-                  : waiting > 0
-                    ? "rgba(245,158,11,0.06)"
-                    : "var(--color-surface)",
-                border: `1px solid ${isCurrent ? "rgba(13,148,136,0.14)" : waiting > 0 ? "rgba(245,158,11,0.14)" : neutral[200]}`,
+                  : "var(--color-surface)",
+                border: `1px solid ${isCurrent ? "rgba(13,148,136,0.14)" : neutral[200]}`,
               }}
             >
               <div
@@ -2885,7 +3008,12 @@ function TaskSubTabs({
                 </div>
               )}
             </div>
-            <TeamQueueCard team={team} taskId={taskId} />
+            <TeamTaskListCard
+              team={team}
+              selectedTaskId={selectedTaskId ?? taskId}
+              onSelectTask={onSelectTask}
+              onOpenTaskDetail={onOpenTaskDetail}
+            />
           </div>
         )}
         {subTab === "plan" && (
@@ -3753,6 +3881,9 @@ export function TaskRightTabs({
   onUploadPlanDoc,
   planDocsQuery,
   planStepsQuery,
+  selectedTaskId,
+  onSelectTask,
+  onOpenTaskDetail,
 }: {
   team: any;
   task: any;
@@ -3772,6 +3903,10 @@ export function TaskRightTabs({
   /** 计划文档/执行步骤查询（计划 Tab 用；会话页提供并轮询）。 */
   planDocsQuery?: any;
   planStepsQuery?: any;
+  /** 聚焦任务 id + 切换/打开详情回调（状态 Tab 列表与子 Tab 下拉共用）。 */
+  selectedTaskId?: string | null;
+  onSelectTask?: (taskId: string) => void;
+  onOpenTaskDetail?: (taskId: string) => void;
 }) {
   const hasTask = !!task;
   const userPickedTabRef = React.useRef(false);
@@ -3896,6 +4031,9 @@ export function TaskRightTabs({
             onUploadPlanDoc={onUploadPlanDoc}
             planDocsQuery={planDocsQuery}
             planStepsQuery={planStepsQuery}
+            selectedTaskId={selectedTaskId}
+            onSelectTask={onSelectTask}
+            onOpenTaskDetail={onOpenTaskDetail}
             subTab={taskSubTab}
             onSubTabChange={setTaskSubTab}
           />

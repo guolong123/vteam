@@ -190,12 +190,14 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     }
     await expect(page.getByTestId("task-subtab-triggers")).toBeVisible();
     await expect(panel.getByRole("button", { name: "配置", exact: true })).toHaveCount(0);
-    // 团队 2 子页：切团队 Tab → 只有概览/渠道；设置/记忆/操作不再出现
+    // 团队 2+2 子页：切团队 Tab → 概览/渠道 + 记忆（52eae1b 起回归的功能子页）/统计（d6e542d）；
+    // 设置/操作已拆除不再出现
     await panel.getByRole("button", { name: "团队", exact: true }).click();
     await expect(page.getByTestId("team-subtab-scroll")).toBeVisible();
     await expect(panel.getByRole("button", { name: "概览" })).toBeVisible();
     await expect(panel.getByRole("button", { name: "渠道" })).toBeVisible();
-    for (const name of ["设置", "记忆", "操作"]) {
+    await expect(panel.getByRole("button", { name: "记忆", exact: true })).toBeVisible();
+    for (const name of ["设置", "操作"]) {
       await expect(panel.getByRole("button", { name, exact: true })).toHaveCount(0);
     }
     // 切回任务 Tab
@@ -575,13 +577,7 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
     await expect(page.getByTestId("team-subtab-scroll")).toHaveCount(0);
   });
 
-  test("T24 状态卡三层 + 队列空态（团队当前任务）", async ({ page, request }) => {
-    await page.route(`**/api/v1/teams/${PAGES_TEAM_ID}`, async (r) => {
-      const res = await r.fetch();
-      const json = await res.json();
-      json.queue = [];
-      await r.fulfill({ response: res, json });
-    });
+  test("T24 状态卡三层 + 团队任务列表（团队当前任务）", async ({ page, request }) => {
     await page.goto(`/teams/${PAGES_TEAM_ID}/session`);
     await expectNavShell(page);
     const scroll = page.getByTestId("task-subtab-scroll");
@@ -625,17 +621,16 @@ test.describe("18 页 testid 断言（seed-admin 登录态）", () => {
       // 单操作状态（start/resume/archive）：无并排容器，按钮整行即可
       await expect(
         card.locator(
-          '[data-testid="task-accept"], [data-testid="task-reject"], [data-testid="start-task-button"], [data-testid="task-submit-review"], [data-testid="task-archive"], [data-testid="task-block"], [data-testid="task-resume"], [data-testid="enqueue-task-button"]',
+          '[data-testid="task-accept"], [data-testid="task-reject"], [data-testid="start-task-button"], [data-testid="task-submit-review"], [data-testid="task-archive"], [data-testid="task-block"], [data-testid="task-resume"]',
         ).first(),
       ).toBeVisible();
     }
-    // 状态卡内不含队列摘要行文案（队列卡是兄弟节点）
+    // 状态卡内无队列卡文案残留（队列卡已由任务列表卡替代）
     await expect(card.getByText("暂无排队任务")).toHaveCount(0);
     await expect(card.getByText("当前执行中（队首）")).toHaveCount(0);
-    // 队列卡兄弟节点存在；种子团队队列为空 → queue-empty 可见
-    await expect(page.getByTestId("team-queue-card")).toBeVisible();
-    await expect(page.getByTestId("queue-empty")).toBeVisible();
-    await expect(page.getByTestId("queue-empty")).toContainText("暂无排队任务");
+    // 任务列表卡兄弟节点存在；种子团队任务非空 → 行列表可见
+    await expect(page.getByTestId("team-task-list-card")).toBeVisible();
+    await expect(page.getByTestId("team-task-item").first()).toBeVisible();
   });
 
   test("T24 触发子页可达（空触发器）", async ({ page }) => {

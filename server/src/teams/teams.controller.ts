@@ -17,7 +17,6 @@ import {
   AuthenticatedUser,
 } from '../common/decorators/current-user.decorator';
 import { CreateTeamDto } from './dto/create-team.dto';
-import { EnqueueTaskDto } from './dto/enqueue-task.dto';
 import { QueryTeamsDto } from './dto/query-teams.dto';
 import { UpdateTeamDto } from './dto/update-team.dto';
 import { AddMemberDto, UpdateMemberDto } from './dto/add-member.dto';
@@ -52,7 +51,8 @@ export class TeamsController {
   @UseGuards(PermissionGuard)
   @RequirePermission('teams.view')
   @ApiOperation({
-    summary: '团队详情（含 members + reuseSession + currentTaskId + queue）',
+    summary:
+      '团队详情（含 members + reuseSession + currentTaskId + activeTaskCount）',
   })
   findOne(@Param('id') id: string) {
     return this.teamsService.findOne(id);
@@ -147,25 +147,5 @@ export class TeamsController {
     @Param('memberId') memberId: string,
   ) {
     return this.teamsService.resetMemberSession(id, memberId);
-  }
-
-  @Post(':id/queue')
-  @UseGuards(PermissionGuard)
-  @RequirePermission('teams.edit')
-  @ApiOperation({
-    summary: '排队等待（pending 孤儿重入队，仅 pending 可排，FIFO 追加）',
-  })
-  enqueueQueue(@Param('id') id: string, @Body() dto: EnqueueTaskDto) {
-    return this.teamsService.enqueueQueue(id, dto.taskId);
-  }
-
-  @Delete(':id/queue/:taskId')
-  @UseGuards(PermissionGuard)
-  @RequirePermission('teams.edit')
-  @ApiOperation({
-    summary: '取消排队（仅 queued 可取消，FIFO 重排，非 queued 409）',
-  })
-  cancelQueue(@Param('id') id: string, @Param('taskId') taskId: string) {
-    return this.teamsService.cancelQueue(id, taskId);
   }
 }

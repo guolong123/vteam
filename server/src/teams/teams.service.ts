@@ -14,6 +14,7 @@ import {
 } from '../common/constants/event.constants';
 import { roleKeyOf, roleLabelOf } from '../common/agent-role-label';
 import { EXTERNAL_SYSTEM_AGENT_ID } from '../common/constants/agent-role.constants';
+import { TASK_STATUS } from '../common/constants/task.constants';
 import { IdGeneratorService } from '../common/id-generator';
 import { resyncIdPrefix } from '../common/id-resync';
 import { PrismaService } from '../prisma/prisma.service';
@@ -30,6 +31,7 @@ const ID_PREFIX = {
   team: 'tm',
   teamMember: 'tmm',
   teamUserMember: 'tum',
+  // teamQueue='tq' 为历史前缀记录保留；队列退役后无新 tq_ 行产生。
   teamQueue: 'tq',
   channel: 'c',
   message: 'm',
@@ -48,8 +50,16 @@ const TEAM_ERRORS = {
   USER_NOT_FOUND: 'USER_NOT_FOUND',
   USER_ALREADY_MEMBER: 'USER_ALREADY_MEMBER',
   VERSION_CONFLICT: 'VERSION_CONFLICT',
+  /** 团队设置并发上限（D1）：maxConcurrentTasks 非正整数且非 null → 400。 */
+  TEAM_PARALLEL_LIMIT_INVALID: 'TEAM_PARALLEL_LIMIT_INVALID',
+  /**
+   * @deprecated 已随队列退役（parallel-tasks 计计划 D3）：排队端点已移除，不再抛出；
+   * 保留导出仅为兼容历史读取。
+   */
   TASK_NOT_QUEUED: 'TASK_NOT_QUEUED',
+  /** @deprecated 已随队列退役：enqueueQueue 已移除，不再抛出；保留导出仅为兼容历史读取。 */
   TASK_NOT_PENDING: 'TASK_NOT_PENDING',
+  /** @deprecated 已随队列退役：cancelQueue 已移除，不再抛出；保留导出仅为兼容历史读取。 */
   QUEUE_ENTRY_NOT_FOUND: 'QUEUE_ENTRY_NOT_FOUND',
   MAIN_AGENT_NOT_MEMBER: 'MAIN_AGENT_NOT_MEMBER',
 } as const;
@@ -77,11 +87,6 @@ export class TeamsService implements OnModuleInit {
     await resyncIdPrefix(
       (this.prisma as any).teamUserMember,
       ID_PREFIX.teamUserMember,
-      this.idGen,
-    );
-    await resyncIdPrefix(
-      (this.prisma as any).teamQueue,
-      ID_PREFIX.teamQueue,
       this.idGen,
     );
   }
@@ -251,7 +256,7 @@ export class TeamsService implements OnModuleInit {
     if (query.name?.trim()) {
       where.name = { contains: query.name.trim() };
     }
-    const [total, items] = await this.prisma.$transaction([
+    const [total, rows] = await this.prisma.$transaction([
       this.prisma.team.count({ where }),
       this.prisma.team.findMany({
         where,
@@ -264,10 +269,6 @@ export class TeamsService implements OnModuleInit {
             orderBy: [{ seq: 'asc' }, { id: 'asc' }],
           },
           userMembers: { orderBy: { joinedAt: 'asc' } },
-          queues: {
-            include: { task: { select: { title: true, status: true } } },
-            orderBy: { position: 'asc' },
-          },
           currentTask: { select: { id: true, title: true, status: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -275,12 +276,33 @@ export class TeamsService implements OnModuleInit {
         take: pageSize,
       }),
     ]);
+    const activeCounts = await this.activeTaskCounts(rows);
     return {
-      items: items.map((t) => this.toTeamDto(t)),
+      items: rows.map((t) => this.toTeamDto(t, activeCounts.get(t.id) ?? 0)),
       total,
       page,
       pageSize,
     };
+  }
+
+  /** 团队活跃任务计数（in_progress + blocked；pending_review 不计，与 start 占用口径一致）。 */
+  private async activeTaskCounts(
+    teams: { id: string }[],
+  ): Promise<Map<string, number>> {
+    if (teams.length === 0) return new Map();
+    const grouped = await this.prisma.task.groupBy({
+      by: ['teamId'],
+      where: {
+        teamId: { in: teams.map((t) => t.id) },
+        status: { in: [TASK_STATUS.in_progress, TASK_STATUS.blocked] },
+      },
+      _count: { _all: true },
+    });
+    return new Map(
+      grouped
+        .filter((g): g is typeof g & { teamId: string } => g.teamId != null)
+        .map((g) => [g.teamId, g._count._all]),
+    );
   }
 
   async findOne(id: string) {
@@ -295,10 +317,6 @@ export class TeamsService implements OnModuleInit {
           orderBy: [{ agentId: 'asc' }, { seq: 'asc' }],
         },
         userMembers: { orderBy: { joinedAt: 'asc' } },
-        queues: {
-          include: { task: { select: { title: true, status: true } } },
-          orderBy: { position: 'asc' },
-        },
         currentTask: { select: { id: true, title: true, status: true } },
       },
     });
@@ -308,7 +326,8 @@ export class TeamsService implements OnModuleInit {
         message: '团队不存在',
       });
     }
-    return this.toTeamDto(team);
+    const activeCounts = await this.activeTaskCounts([team]);
+    return this.toTeamDto(team, activeCounts.get(id) ?? 0);
   }
 
   async update(id: string, dto: UpdateTeamDto) {
@@ -349,6 +368,17 @@ export class TeamsService implements OnModuleInit {
     // preferredWorkerId 置顶分支），并回退自动调度。
     if (dto.preferredWorkerId !== undefined) {
       data.preferredWorkerId = dto.preferredWorkerId?.trim() || null;
+    }
+    // 并发上限（D1）：null = 不限；正整数 = 活跃占用（in_progress+blocked）上限。
+    if (dto.maxConcurrentTasks !== undefined) {
+      const max = dto.maxConcurrentTasks;
+      if (max !== null && (!Number.isInteger(max) || max < 1)) {
+        throw new BadRequestException({
+          code: TEAM_ERRORS.TEAM_PARALLEL_LIMIT_INVALID,
+          message: 'maxConcurrentTasks 必须为正整数或 null（null = 不限并发）',
+        });
+      }
+      data.maxConcurrentTasks = max;
     }
     if ((dto as any).mainAgentMemberId !== undefined) {
       const raw = (dto as any).mainAgentMemberId;
@@ -410,7 +440,6 @@ export class TeamsService implements OnModuleInit {
     const team = await this.prisma.team.findUnique({
       where: { id },
       include: {
-        queues: true,
         currentTask: { select: { id: true, status: true } },
       },
     });
@@ -435,8 +464,7 @@ export class TeamsService implements OnModuleInit {
         details: { taskId: runningTask.id, status: runningTask.status },
       });
     }
-    // 待删任务：当前任务 + 队列任务 + 归属该团队的其余任务（执行中已在上方拦截，此处均为可删态）。
-    const queuedTaskIds = (team.queues ?? []).map((q: any) => q.taskId);
+    // 待删任务：当前任务 + 归属该团队的其余任务（执行中已在上方拦截，此处均为可删态）。
     const ownedTasks = await this.prisma.task.findMany({
       where: { teamId: id },
       select: { id: true },
@@ -445,7 +473,6 @@ export class TeamsService implements OnModuleInit {
       ...new Set(
         [
           team.currentTaskId,
-          ...queuedTaskIds,
           ...ownedTasks.map((t: { id: string }) => t.id),
         ].filter(Boolean) as string[],
       ),
@@ -523,7 +550,6 @@ export class TeamsService implements OnModuleInit {
           where: { taskId: { in: taskIds } },
           data: { taskId: null },
         });
-        await tx.teamQueue.deleteMany({ where: { taskId: { in: taskIds } } });
         await tx.task.deleteMany({ where: { id: { in: taskIds } } });
       }
       // 级联清理（子表对 team/teamMember 全为 Restrict，必须先清否则 500）：
@@ -1189,165 +1215,6 @@ export class TeamsService implements OnModuleInit {
   }
 
   /**
-   * 取消排队（仅 queued 可取消，Do NOT 拖拽重排）：
-   * - FIFO 删除队内条目并重排 position 1..N
-   * - 非 queued（无队列行或 task.status !== queued）→ 409 TASK_NOT_QUEUED
-   * - 成功后广播 team.queue.changed（team + global）
-   * - 同步将任务状态 queued → pending 避免孤儿 queued 无队列行（保证重入队顺序正确，即原队首空位被压缩）
-   */
-  async cancelQueue(teamId: string, taskId: string) {
-    const team = await this.prisma.team.findUnique({ where: { id: teamId } });
-    if (!team) {
-      throw new NotFoundException({
-        code: TEAM_ERRORS.TEAM_NOT_FOUND,
-        message: '团队不存在',
-      });
-    }
-    const queueEntry: any = await (this.prisma as any).teamQueue.findFirst({
-      where: { teamId, taskId },
-    });
-    if (!queueEntry) {
-      throw new ConflictException({
-        code: TEAM_ERRORS.TASK_NOT_QUEUED,
-        message: '仅排队中的任务可取消',
-      });
-    }
-    const task: any = await (this.prisma as any).task.findUnique({
-      where: { id: taskId },
-      select: { id: true, status: true, teamId: true },
-    });
-    if (!task || task.teamId !== teamId || task.status !== 'queued') {
-      throw new ConflictException({
-        code: TEAM_ERRORS.TASK_NOT_QUEUED,
-        message: '仅排队中的任务可取消',
-      });
-    }
-    await this.prisma.$transaction(async (tx: any) => {
-      await tx.teamQueue.delete({ where: { id: queueEntry.id } });
-      // 孤儿 queued → pending，避免无队列行仍为 queued
-      try {
-        await tx.task.update({
-          where: { id: taskId },
-          data: { status: 'pending' },
-        });
-      } catch {}
-      const remaining: any[] = await tx.teamQueue.findMany({
-        where: { teamId },
-        orderBy: { position: 'asc' },
-      });
-      for (let i = 0; i < remaining.length; i++) {
-        const expected = i + 1;
-        if (remaining[i].position !== expected) {
-          await tx.teamQueue.update({
-            where: { id: remaining[i].id },
-            data: { position: expected },
-          });
-        }
-      }
-    });
-    await this.realtime.broadcast(
-      EVENT_TYPES.TEAM_QUEUE_CHANGED,
-      { teamId, taskId, action: 'cancel' },
-      { type: 'team', id: teamId },
-    );
-    await this.realtime.broadcast(
-      EVENT_TYPES.TEAM_CHANGED,
-      { teamId, action: 'queue_cancel', taskId },
-      { type: 'global' },
-    );
-    return this.findOne(teamId);
-  }
-
-  /**
-   * 排队等待（pending 孤儿重入队）：
-   * - 仅 pending 可排队（queued/进行中/已完成等 409）；队首任务直接点开始，无需排队；
-   * - 任务须归属本团队；已有队列行 → 幂等返回；
-   * - 位置 MAX(position)+1 行锁追加（FIFO），任务状态同步 queued。
-   * - 成功后广播 team.queue.changed（team + global）
-   */
-  async enqueueQueue(teamId: string, taskId: string) {
-    const team = await this.prisma.team.findUnique({ where: { id: teamId } });
-    if (!team) {
-      throw new NotFoundException({
-        code: TEAM_ERRORS.TEAM_NOT_FOUND,
-        message: '团队不存在',
-      });
-    }
-    const task: any = await this.prisma.task.findUnique({
-      where: { id: taskId },
-    });
-    if (!task || task.teamId !== teamId) {
-      throw new NotFoundException({
-        code: TEAM_ERRORS.TASK_NOT_QUEUED,
-        message: '任务不存在或不归属本团队',
-      });
-    }
-    if ((team as any).currentTaskId === taskId) {
-      throw new ConflictException({
-        code: TEAM_ERRORS.TASK_NOT_PENDING,
-        message: '队首任务请直接开始，无需排队',
-      });
-    }
-    if (task.status !== 'pending') {
-      throw new ConflictException({
-        code: TEAM_ERRORS.TASK_NOT_PENDING,
-        message: '仅待开始任务可排队等待',
-      });
-    }
-    const existing = await (this.prisma as any).teamQueue.findFirst({
-      where: { teamId, taskId },
-    });
-    if (existing) {
-      return this.findOne(teamId);
-    }
-    await this.prisma.$transaction(async (tx: any) => {
-      let maxPos = 0;
-      try {
-        const qRows: any[] = await tx.$queryRawUnsafe(
-          'SELECT MAX(position) as maxPos FROM team_queues WHERE team_id = ? FOR UPDATE',
-          teamId,
-        );
-        const v = qRows?.[0]?.maxPos;
-        maxPos = typeof v === 'number' ? v : v != null ? Number(v) : 0;
-        if (!Number.isFinite(maxPos)) maxPos = 0;
-      } catch {
-        try {
-          const agg = await tx.teamQueue.aggregate({
-            _max: { position: true },
-            where: { teamId },
-          });
-          maxPos = agg._max.position ?? 0;
-        } catch {
-          maxPos = 0;
-        }
-      }
-      await tx.teamQueue.create({
-        data: {
-          id: await this.idGen.nextId(ID_PREFIX.teamQueue),
-          teamId,
-          taskId,
-          position: maxPos + 1,
-        },
-      });
-      await tx.task.update({
-        where: { id: taskId },
-        data: { status: 'queued' },
-      });
-    });
-    await this.realtime.broadcast(
-      EVENT_TYPES.TEAM_QUEUE_CHANGED,
-      { teamId, taskId, action: 'enqueue' },
-      { type: 'team', id: teamId },
-    );
-    await this.realtime.broadcast(
-      EVENT_TYPES.TEAM_CHANGED,
-      { teamId, action: 'queue_enqueue', taskId },
-      { type: 'global' },
-    );
-    return this.findOne(teamId);
-  }
-
-  /**
    * 成员 ⇄ 角色绑定解析（唯一优先级判定点，agent-role-entity todo 7 + opencode-native todo 7）。
    *
    * **优先级规则（全流程唯一事实来源）**：
@@ -1528,7 +1395,7 @@ export class TeamsService implements OnModuleInit {
       : `/data/vteam-worker/${base}`;
   }
 
-  private toTeamDto(team: any) {
+  private toTeamDto(team: any, activeTaskCount = 0) {
     const members = (team.members ?? []).map((m: any) => ({
       id: m.id,
       teamId: m.teamId,
@@ -1576,21 +1443,14 @@ export class TeamsService implements OnModuleInit {
       // 团队级首选 worker（null = 自动调度）；成员级选择优先于本值（见 worker-dispatcher 两级 resolver）。
       // 缺此字段会让页面上的选择被空值悄悄覆盖（既有陷阱，tasks.service.ts 亦有同形注释）。
       preferredWorkerId: team.preferredWorkerId ?? null,
+      maxConcurrentTasks: team.maxConcurrentTasks ?? null,
+      activeTaskCount,
       version: team.version,
       createdBy: team.createdBy,
       createdAt: team.createdAt,
       updatedAt: team.updatedAt,
       members,
       userMembers,
-      queue: (team.queues ?? []).map((q: any) => ({
-        id: q.id,
-        teamId: q.teamId,
-        taskId: q.taskId,
-        position: q.position,
-        enqueuedAt: q.enqueuedAt,
-        taskTitle: q.task?.title ?? null,
-        taskStatus: q.task?.status ?? null,
-      })),
     };
   }
 

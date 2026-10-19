@@ -11,6 +11,7 @@
  * - pending_review → 验收通过（POST /tasks/:id/accept）+ 驳回（POST /tasks/:id/reject，可带原因）
  * - completed      → 归档（POST /tasks/:id/archive）
  * - archived       → 终态，无操作
+ * （queued 为退役历史态：任务可全部直接 start，不再产生排队动作）
  * 全部操作 onSettled 后失效 ["tasks"] 与 ["task", id] 缓存（SSE task.status.changed
  * 亦会失效，双保险）；reject 原因弹窗复用项目 Modal 模式（absolute 相对宿主 + 遮罩 +
  * Esc 关闭，铁律 T15：无 fixed / 100vh / 100vw）。
@@ -23,7 +24,6 @@ import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { isApiError } from "@/lib/errors";
-import { teamsApi } from "@/src/api/teams";
 import { neutral, space, radius, fontSize, fontFamily, shadow } from "@/src/theme/tokens";
 
 const baseFont: CSSProperties = { fontFamily: fontFamily.body };
@@ -193,26 +193,11 @@ export function TaskStatusActions({ taskId, status, layout = "column" }: TaskSta
     ? taskDetail.instances.some((i: { main?: boolean }) => i.main === true)
     : false;
 
-  // 排队等待 mutation 必须位于 early return 之前（hooks 顺序规则）；teamId 取自任务详情查询
-  const teamId: string | null = taskDetail?.teamId ?? null;
-  const enqueueMutation = useMutation({
-    mutationFn: () => teamsApi.enqueue(teamId!, taskId),
-    onError: (err) => {
-      setActionError(isApiError(err) ? err.message : "排队失败，请稍后重试");
-    },
-    onSuccess: () => setActionError(null),
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      queryClient.invalidateQueries({ queryKey: ["task", taskId] });
-      if (teamId) queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-    },
-  });
-
   const actions = ACTION_SETS[status];
   if (!actions) return null;
 
   const pending = actionMutation.isPending;
-  // 排队等待：pending 孤儿重入队（有团队才展示，无团队的任务先去详情指派）
+  // 开始前检查：仅 pending 状态展示（有团队才展示，无团队的任务先去详情指派）
   const showStartHint = status === "pending" && (pending || !!actionError);
   const showErrorBar = status !== "pending" && !!actionError;
   const errText: string = actionError ?? "";
@@ -288,39 +273,6 @@ export function TaskStatusActions({ taskId, status, layout = "column" }: TaskSta
       ) : (
         actionButtons
       )}
-      {status === "pending" && teamId && (
-        <button
-          type="button"
-          data-testid="enqueue-task-button"
-          disabled={pending || enqueueMutation.isPending}
-          onClick={(e) => {
-            e.stopPropagation();
-            setActionError(null);
-            enqueueMutation.mutate();
-          }}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: space.xs,
-            padding: `${space.sm + 2}px ${space.lg}px`,
-            borderRadius: radius.md,
-            border: `1px solid ${neutral[200]}`,
-            backgroundColor: "var(--color-surface)",
-            color: "#D97706",
-            fontSize: fontSize.md,
-            fontWeight: 600,
-            cursor: pending || enqueueMutation.isPending ? "default" : "pointer",
-            opacity: pending || enqueueMutation.isPending ? 0.65 : 1,
-            fontFamily: fontFamily.body,
-            transition: "background-color .15s ease",
-            width: "100%",
-          }}
-        >
-          {enqueueMutation.isPending ? "排队中…" : "排队等待"}
-        </button>
-      )}
-
       {showStartHint && (
         <div
           data-testid="start-task-hint"

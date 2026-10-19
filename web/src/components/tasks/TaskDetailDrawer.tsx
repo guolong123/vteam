@@ -284,11 +284,6 @@ export function TaskDetailDrawer({ taskId, onClose }: TaskDetailDrawerProps) {
                 ))}
               </span>
             </div>
-            {team && team.queue.length > 0 ? (
-              <div data-testid="task-drawer-queue" style={{ fontSize: fontSize.sm, color: neutral[500] }}>
-                团队队列：{team.queue.length} 个等待任务{team.currentTaskId === task.id ? "（本任务为队首）" : ""}
-              </div>
-            ) : null}
 
             <div style={{ display: "flex", flexDirection: "column", gap: space.sm }}>
               <SectionTitle>产出物（{artifactsQuery.data?.total ?? artifacts.length}）</SectionTitle>

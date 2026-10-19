@@ -54,7 +54,8 @@ function loadMatchesScope() {
   // matchesScope 依赖同文件 helpers（isReceiptRoundPlanEvent + 前缀表）：一并提取进 sandbox，
   // 测的仍是 shipped 文件本身，非拷贝。
   const helpers = [
-    extractBlock(src, "const TEAM_SCOPE_WHITELISTED_EVENTS"),
+    // 并行任务改版：TEAM_SCOPE_WHITELISTED_EVENTS 白名单已随 team.queue.changed 退役删除，
+    // team scope 的非聊天/非回执事件统一走通用 payload.teamId 匹配（退役由 server 端不再广播保证）。
     extractBlock(src, "export const RECEIPT_ROUND_PLAN_PREFIXES"),
     extractBlock(src, "export function isReceiptRoundPlanEvent"),
     extractMatchesScope(src),
@@ -83,7 +84,10 @@ test("team: scope drops agent.loading for another team", () => {
   assert.equal(matchesScope(ev("agent.loading", { taskId: "team:tm_OTHER" }), "team:tm_0000000001"), false);
 });
 
-test("team: scope filters queue events by payload.teamId", () => {
+test("team: scope retires queue events via generic teamId matching (parallel-tasks)", () => {
+  // 并行任务改版：team.queue.changed 已在 server 端退役（TASK 不再广播）；前端删除
+  // TEAM_SCOPE_WHITELISTED_EVENTS 后，该事件类型若残留仍会走通用 payload.teamId
+  // 匹配——此处只固化"匹配行为与普通 teamId 事件一致"，不再要求过滤白名单。
   assert.equal(matchesScope(ev("team.queue.changed", { teamId: "tm_0000000001" }), "team:tm_0000000001"), true);
   assert.equal(matchesScope(ev("team.queue.changed", { teamId: "tm_OTHER" }), "team:tm_0000000001"), false);
   assert.equal(matchesScope(ev("team.queue.changed", {}), "team:tm_0000000001"), false);

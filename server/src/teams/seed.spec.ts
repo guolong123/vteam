@@ -47,7 +47,6 @@ describe('TeamsService seed续号（Todo 15：跳过非数字后缀 id）', () =
       team: delegate('team'),
       teamMember: delegate('teamMember'),
       teamUserMember: delegate('teamUserMember'),
-      teamQueue: delegate('teamQueue'),
     };
   };
 
