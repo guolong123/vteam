@@ -690,6 +690,168 @@ describe('PlatformMcpService reply-join fan-out JOIN', () => {
     expect(wakeSpy).not.toHaveBeenCalled();
   });
 
+  it('join 报告 kind=execution → 回执行落库即 acked（纯审计），不排催办 timer（D4/D5）', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
+    jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(1);
+
+    const result = await service.notifyAgent(ctx, {
+      ...baseArgs,
+      type: 'answer',
+      stage: 'end',
+      kind: 'execution',
+    });
+
+    expect(result.triggered).toBe(false);
+    expect(result.reason).toBe('join-pending');
+    // 回执行照落（审计不丢），但状态即 acked + ackedAt，非 pending
+    expect(prisma.messageReceipt.create).toHaveBeenCalledTimes(1);
+    expect(prisma.messageReceipt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        fromInstanceId: sub1,
+        toInstanceId: mainInstanceId,
+        status: 'acked',
+        ackedAt: expect.any(Date),
+      }),
+    });
+    // 不排催办（join 行无 nudge 引信，D5）
+    expect(timers.schedule).not.toHaveBeenCalled();
+  });
+
+  it('busy-veto 重查（D3）：主会话忙 → 排 120s 重查；重查时主会话空闲 → 恰好唤醒一次', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
+    jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(0);
+    prisma.session.findFirst.mockImplementation(
+      (args: { where?: { teamMemberId?: string } }) => {
+        const memberId = args?.where?.teamMemberId ?? sub1;
+        const isMain = memberId === mainInstanceId;
+        if (isMain)
+          return Promise.resolve({
+            id: 's_main',
+            status: 'running',
+            workerId: 'w_0000000001',
+            teamMemberId: mainInstanceId,
+            agentId: 'a_main',
+          });
+        return Promise.resolve({
+          id: 's_sub',
+          status: 'idle',
+          workerId: 'w_0000000001',
+          teamMemberId: memberId,
+          agentId: 'a_sub',
+        });
+      },
+    );
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
+
+    await service.notifyAgent(ctx, {
+      ...baseArgs,
+      type: 'answer',
+      stage: 'end',
+    });
+    // debounce 强制 veto（主会话 running）
+    await jest.advanceTimersByTimeAsync(300);
+    expect(wakeSpy).not.toHaveBeenCalled();
+    // 主会话恢复空闲 → 120s 重查命中
+    prisma.session.findFirst.mockImplementation(
+      (args: { where?: { teamMemberId?: string } }) =>
+        Promise.resolve({
+          id: args?.where?.teamMemberId === mainInstanceId ? 's_main' : 's_sub',
+          status: 'idle',
+          workerId: 'w_0000000001',
+          teamMemberId: args?.where?.teamMemberId ?? sub1,
+          agentId: 'a_main',
+        }),
+    );
+    await jest.advanceTimersByTimeAsync(120_000 + 300);
+    expect(wakeSpy).toHaveBeenCalledTimes(1);
+    // 成功唤醒后撤销重查 → 再推进亦无二次唤醒
+    await jest.advanceTimersByTimeAsync(5 * 120_000);
+    expect(wakeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('busy-veto 重查：重查时 pending>0 → 不唤醒且不再续排重查', async () => {
+    jest.useFakeTimers();
+    const countSpy = jest
+      .spyOn(receipts, 'countPendingFor')
+      .mockResolvedValue(0);
+    jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
+    prisma.session.findFirst.mockImplementation(
+      (args: { where?: { teamMemberId?: string } }) =>
+        Promise.resolve({
+          id: args?.where?.teamMemberId === mainInstanceId ? 's_main' : 's_sub',
+          status:
+            args?.where?.teamMemberId === mainInstanceId ? 'running' : 'idle',
+          workerId: 'w_0000000001',
+          teamMemberId: args?.where?.teamMemberId ?? sub1,
+          agentId: 'a_main',
+        }),
+    );
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
+
+    await service.notifyAgent(ctx, {
+      ...baseArgs,
+      type: 'answer',
+      stage: 'end',
+    });
+    await jest.advanceTimersByTimeAsync(300);
+    expect(wakeSpy).not.toHaveBeenCalled();
+    // 重查时刻计数口径翻转为未收敛 → 停止重查（不唤醒、不续排）
+    countSpy.mockResolvedValue(1);
+    await jest.advanceTimersByTimeAsync(120_000 + 300);
+    expect(wakeSpy).not.toHaveBeenCalled();
+    // 不再续排：多个重查周期过去依旧安静
+    await jest.advanceTimersByTimeAsync(10 * 120_000);
+    expect(wakeSpy).not.toHaveBeenCalled();
+  });
+
+  it('busy-veto 重查：连续 veto 超上限（10 次）→ 告警并放弃重查', async () => {
+    jest.useFakeTimers();
+    jest.spyOn(receipts, 'ackPendingFor').mockResolvedValue(1);
+    jest.spyOn(receipts, 'countPendingFor').mockResolvedValue(0);
+    prisma.session.findFirst.mockImplementation(
+      (args: { where?: { teamMemberId?: string } }) =>
+        Promise.resolve({
+          id: args?.where?.teamMemberId === mainInstanceId ? 's_main' : 's_sub',
+          status:
+            args?.where?.teamMemberId === mainInstanceId ? 'running' : 'idle',
+          workerId: 'w_0000000001',
+          teamMemberId: args?.where?.teamMemberId ?? sub1,
+          agentId: 'a_main',
+        }),
+    );
+    const wakeSpy = jest
+      .spyOn(
+        service as unknown as { wakeMainAgent: jest.Mock },
+        'wakeMainAgent',
+      )
+      .mockResolvedValue(undefined);
+
+    await service.notifyAgent(ctx, {
+      ...baseArgs,
+      type: 'answer',
+      stage: 'end',
+    });
+    // 10 次上限：首轮 veto + 每轮 120s 重查续 veto，超限即放弃（约 10×120200ms）
+    await jest.advanceTimersByTimeAsync(11 * 120_000 + 1_000);
+    // 主会话始终忙 → 从未唤醒
+    expect(wakeSpy).not.toHaveBeenCalled();
+    expect(loggerWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('放弃本轮重查'),
+    );
+  });
+
   it('todo 10: 非主→非主 reply 上报不绕过路由门 → 403 PLATFORM_MCP_NOTIFY_ROUTING_VIOLATION（零 join 记账）', async () => {
     const err = await service
       .notifyAgent(ctx, {

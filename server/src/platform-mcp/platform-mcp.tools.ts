@@ -225,7 +225,7 @@ const notifyAgentSchema = z.object({
     .number()
     .optional()
     .describe(
-      '回执超时分钟数（缺省 10，对齐被 @ 后 10 分钟回执规则；范围 1-1440，非法输入服务端回落缺省；仅 execution 派发记账并排平台自动催办 timer，review/nudge/wake 永不记账）',
+      '回执超时分钟数（缺省 30，2026-09-16 由 10 上调：10min 内 agent 常仍在正常干活，催办属噪音，30min 未回执才更可能是真的遗漏；范围 1-1440，非法输入服务端回落缺省；仅 execution 派发记账并排平台自动催办 timer，review/nudge/wake 永不记账）',
     ),
 });
 

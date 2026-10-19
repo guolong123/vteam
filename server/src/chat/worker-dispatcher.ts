@@ -62,6 +62,7 @@ import {
   WorkersService,
 } from '../workers/workers.service';
 import { renderPersonaSection } from '../agents/persona.constants';
+import { MessageReceiptsService } from './message-receipts.service';
 import {
   DispatchRequest,
   DispatchResult,
@@ -1639,6 +1640,48 @@ export class WorkerDispatcher
     return entry.agents;
   }
 
+  /**
+   * 履职收口（v1.0.3 fan-out 收敛健壮性 D1/D2）：该成员的在飞履职到终点
+   * （自然完成 task.completed / 失败链 agent.status error·静默判败·空闲判死）时，
+   * 结清其名下 fan-out 回执（ackPendingFor from=团队主 Agent → to=该成员）。
+   * ack 每行 → MessageReceiptsService settledHook → PlatformMcpService
+   * checkAndDrainFanOut 自动完成 drain 重查/唤醒，本方法不新增 drain 接线。
+   * 安全边界：永不抛错——回执清账失败仅告警，绝不阻断完成/失败主链路；
+   * receipts 未装配（单测/旧装配）或成员即主 Agent 自身 → 直接跳过。
+   */
+  private async settleReceiptsOnDutyEnd(
+    teamId: string,
+    teamMemberId: string,
+  ): Promise<void> {
+    if (!this.receipts) return;
+    try {
+      const team = await (this.prisma as any).team?.findUnique?.({
+        where: { id: teamId },
+        select: { mainAgentMemberId: true },
+      });
+      const mainMemberId =
+        (team as { mainAgentMemberId?: string | null } | null)
+          ?.mainAgentMemberId ?? null;
+      if (!mainMemberId || mainMemberId === teamMemberId) {
+        return;
+      }
+      const acked = await this.receipts.ackPendingFor({
+        fromInstanceId: mainMemberId,
+        toInstanceId: teamMemberId,
+        teamId,
+      });
+      if (acked > 0) {
+        this.logger.log(
+          `履职收口：结清成员 ${teamMemberId} 名下 fan-out 回执 ${acked} 条（team=${teamId}）`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `履职收口失败（不阻断主链路）：成员 ${teamMemberId} fan-out 回执结清异常 team=${teamId}: ${this.describeError(err)}`,
+      );
+    }
+  }
+
   /** F3 MINOR-3：回流超时 ms（env DISPATCH_TIMEOUT_MS，缺省 DISPATCH_TIMEOUT_MS=120s）。 */
   public dispatchTimeoutMs: number;
   /** 事件静默窗口 ms（env SILENT_SESSION_WAKE_MS，缺省 600s，滑动重武装）：距最近事件超窗 → 唤醒/判败。 */
@@ -1674,6 +1717,13 @@ export class WorkerDispatcher
     @Optional()
     @Inject(ExecutionPolicyService)
     private readonly executionPolicyService?: ExecutionPolicyService,
+    // 回执结账（v1.0.3 fan-out 收敛健壮性）：自然完成/失败链/空闲判死时结清该成员
+    // 名下 fan-out 回执 → settledHook → PlatformMcpService drain 重查。
+    // 缺省可空——单测/旧装配直接 new 未提供时跳过清账，不阻断派发主链路；
+    // 生产装配经 ChatModule 提供（MessageReceiptsService 同模块，构造期可达）。
+    @Optional()
+    @Inject(MessageReceiptsService)
+    private readonly receipts?: MessageReceiptsService,
   ) {
     super();
     const maxBytes = config.get<number>('DOCLIB_MAX_BYTES');
@@ -3142,6 +3192,9 @@ export class WorkerDispatcher
       this.unregisterExecution(payload.workerId, scope, teamMemberId);
     }
     this.clearPendingWatchdog(scope, agentId);
+    // 履职收口（v1.0.3 D1）：自然完成即履职终点，结清该成员名下 fan-out 回执
+    // → settledHook → drain 重查自动复位主 Agent（失败仅告警，不阻断完成链）。
+    await this.settleReceiptsOnDutyEnd(teamId, teamMemberId);
     const channel = await this.resolveTeamChannel(teamId, teamMemberId);
     if (!channel) {
       this.logger.error(
@@ -3489,6 +3542,9 @@ export class WorkerDispatcher
       if (typeof payload.workerId === 'string' && payload.workerId) {
         this.unregisterExecution(payload.workerId, scope, teamMemberId);
       }
+      // 履职收口（v1.0.3 D2）：失败即履职终点，结清该成员名下 fan-out 回执
+      //（settleReceiptsOnDutyEnd 自吞异常，不阻断失败回放链）。
+      await this.settleReceiptsOnDutyEnd(teamId, teamMemberId);
       await this.failTeamProcessingMessage(
         teamId,
         teamMemberId,
@@ -4358,6 +4414,8 @@ export class WorkerDispatcher
     teamMemberId: string;
   }): Promise<void> {
     const { key, scope, agentId, sessionId, workerId, teamMemberId } = args;
+    // scope 恒 `team:<teamId>`（toExecutionScope）；截取回 teamId 供回执收口用。
+    const teamId = scope.startsWith('team:') ? scope.slice(5) : null;
     // 已判败（空闲判死/轮询快速失败/前次收割）→ 清残余 pending，不重复广播。
     if (this.failedSessions.has(sessionId)) {
       if (key !== undefined) {
@@ -4375,6 +4433,11 @@ export class WorkerDispatcher
       // F2 MINOR：超时标记失败会话——迟到的回流（ingress/轮询）跳过落库仅记日志
       this.failedSessions.add(sessionId);
       this.unregisterExecution(workerId, scope, teamMemberId);
+      // 履职收口（v1.0.3 D2）：静默判败同样结清该成员名下 fan-out 回执
+      //（fire-and-forget；settleReceiptsOnDutyEnd 自吞异常，不重复 catch）。
+      if (teamId) {
+        void this.settleReceiptsOnDutyEnd(teamId, teamMemberId);
+      }
       this.logger.error(`agent ${agentId} ${error}`);
       this.emitError({ taskId: scope, agentId, error });
       void this.broadcastAgentError({
@@ -4895,6 +4958,10 @@ export class WorkerDispatcher
       if (!teamId || !teamMemberId || !agentId) return;
       const scope = toExecutionScope(null, teamId);
       const taskId = row.taskId ?? null;
+      // 履职收口（v1.0.3 D2）：空闲判死即履职终点，结清该成员名下 fan-out 回执
+      // → settledHook → drain 重查自动复位主 Agent（置于 quota/transient 分支之前，
+      // 判死口径统一；永不抛错，不阻断后续恢复链）。
+      await this.settleReceiptsOnDutyEnd(teamId, teamMemberId);
       if (forensicsError && isQuotaError(forensicsType)) {
         const quotaMsg = `agent 额度不足已暂停（${forensicsError}），请补充额度或更换模型后重试`;
         this.logger.error(`session ${sessionId} ${quotaMsg}`);
