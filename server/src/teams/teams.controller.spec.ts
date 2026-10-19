@@ -19,7 +19,6 @@ describe('TeamsController', () => {
     updateMember: jest.Mock;
     resetSessions: jest.Mock;
     resetMemberSession: jest.Mock;
-    cancelQueue: jest.Mock;
   };
 
   beforeEach(async () => {
@@ -36,7 +35,6 @@ describe('TeamsController', () => {
       updateMember: jest.fn(),
       resetSessions: jest.fn(),
       resetMemberSession: jest.fn(),
-      cancelQueue: jest.fn(),
     };
     const module: TestingModule = await Test.createTestingModule({
       controllers: [TeamsController],
@@ -142,13 +140,6 @@ describe('TeamsController', () => {
       memberId: 'tmm_1',
       session: { id: 's_1' },
     });
-  });
-
-  it('DELETE /teams/:id/queue/:taskId 转发到 cancelQueue', async () => {
-    service.cancelQueue.mockResolvedValue({ id: 'tm_1' });
-    const result = await controller.cancelQueue('tm_1', 't_1');
-    expect(service.cancelQueue).toHaveBeenCalledWith('tm_1', 't_1');
-    expect(result).toEqual({ id: 'tm_1' });
   });
 
   it('POST /teams/:id/users 转发到 addUserMember', async () => {

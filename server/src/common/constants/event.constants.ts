@@ -15,6 +15,10 @@ export const EVENT_TYPES = {
   TEAM_CREATED: 'team.created',
   TEAM_UPDATED: 'team.updated',
   TEAM_DELETED: 'team.deleted',
+  /**
+   * @deprecated 已随队列退役（parallel-tasks 计划 §7）：server 不再广播此事件，
+   * 常量保留仅为兼容历史订阅读取；新代码禁止 emit。
+   */
   TEAM_QUEUE_CHANGED: 'team.queue.changed',
   ARTIFACT_SUBMITTED: 'artifact.submitted',
   // issue 变更（create/update/transition，task scope，is_0000000020 右侧面板实时刷新）

@@ -1249,125 +1249,30 @@ export class ChatService {
       }
     }
 
-    // FIFO 排队拦截：team_group 频道下，queued 或非队首任务不应触发模型 dispatch
-    // 最小修复：消息仍落库可见，但不触发 dispatcher；前端依 triggers 空提示“排队中”
-    let shouldDispatch = true;
-    let queueHint: { position: number; currentTaskId: string | null } | null =
-      null;
-    if (channel.teamId && effectiveTaskId && isTeamGroup) {
-      // 优先用 task.status 判定 queued；其次校验队首一致性（防 pending 双头脏数据）
-      if (task.status === TASK_STATUS.queued) {
-        shouldDispatch = false;
-        try {
-          const q = await (this.prisma as any).teamQueue.findUnique({
-            where: { taskId: effectiveTaskId },
-            select: { position: true },
-          });
-          const team = await (this.prisma as any).team.findUnique({
-            where: { id: channel.teamId },
-            select: { currentTaskId: true },
-          });
-          queueHint = {
-            position: q?.position ?? -1,
-            currentTaskId: team?.currentTaskId ?? null,
-          };
-        } catch {}
-      } else if ((task as any).teamId) {
-        try {
-          const team = await (this.prisma as any).team.findUnique({
-            where: { id: (task as any).teamId },
-            select: { currentTaskId: true },
-          });
-          if (team?.currentTaskId && team.currentTaskId !== effectiveTaskId) {
-            const inQueue = await (this.prisma as any).teamQueue.findUnique({
-              where: { taskId: effectiveTaskId },
-              select: { position: true },
-            });
-            if (inQueue) {
-              shouldDispatch = false;
-              queueHint = {
-                position: inQueue.position,
-                currentTaskId: team.currentTaskId,
-              };
-            }
-          }
-        } catch {}
-      }
-      if (!shouldDispatch) {
-        // 将 dispatched 改为排队提示，避免前端 loading 悬空
-        for (const t of triggers) {
-          if ((t as any).status === 'dispatched')
-            (t as any).status = 'queued' as any;
-        }
-        // 可选系统提示（不落库，仅日志；如需落库可插入 system 消息）
-        this.logger.log(
-          `team_group queued 拦截: task=${effectiveTaskId} position=${queueHint?.position} current=${queueHint?.currentTaskId}`,
-        );
-      }
-    }
-
-    if (shouldDispatch) {
-      const targets = triggers.filter((t) => t.status === 'dispatched');
-      // 团队私聊恒走 team-mode（taskId 置空 + teamId 透传）：task-mode 会话/
-      // 快照与群聊优先的终态落库均不适用于 DM 对端直聊。
-      const dispatchTaskId = isTeamPrivate
-        ? ''
-        : (effectiveTaskId ??
-          (channel as any).taskId ??
-          (task as any).id ??
-          '');
-      void this.dispatcher
-        .dispatch({
-          messageId: message.id,
-          channelId,
-          taskId: dispatchTaskId,
-          ...(channel.teamId ? { teamId: channel.teamId } : {}),
-          ...(dispatchTaskId
-            ? { taskContext: { taskId: dispatchTaskId } }
-            : {}),
-          text: dto.text,
-          targets: targets.map((t) => ({
-            agentId: t.agentId,
-            instanceId: t.instanceId,
-            sessionId: t.sessionId,
-          })),
-        })
-        .catch((err: Error) =>
-          this.logger.error(`dispatch failed: ${err.message}`, err.stack),
-        );
-    } else if (queueHint) {
-      // 排队提示系统消息（taskId 分区，team_group 内可见）
-      try {
-        const hintText =
-          queueHint.position > 0
-            ? `任务排队中（位置 ${queueHint.position}），队首 ${queueHint.currentTaskId?.slice(0, 8)}… 执行中，完成前暂不触发模型。消息已保存，晋升后可重试。`
-            : `任务排队中，暂不触发模型。消息已保存。`;
-        const hint = await this.prisma.message.create({
-          data: {
-            id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
-            channelId,
-            taskId: effectiveTaskId!,
-            senderType: SENDER_TYPE.system,
-            senderId: null,
-            content: { text: hintText, parts: [] } as Prisma.InputJsonValue,
-            mentions: [] as Prisma.InputJsonValue,
-            status: MESSAGE_STATUS.sent,
-          },
-        });
-        await this.realtime.broadcast(
-          EVENT_TYPES.CHAT_MESSAGE_NEW,
-          { message: this.toMessageDto(hint as any) },
-          { type: 'channel', id: channelId },
-        );
-        if (channel.teamId) {
-          await this.realtime.broadcast(
-            EVENT_TYPES.CHAT_MESSAGE_NEW,
-            { message: this.toMessageDto(hint as any) },
-            { type: 'team', id: channel.teamId } as any,
-          );
-        }
-      } catch {}
-    }
+    // 排队拦截已随 FIFO 队列退役（parallel-tasks）：team_group 消息直接落库并派发。
+    const targets = triggers.filter((t) => t.status === 'dispatched');
+    // 团队私聊恒走 team-mode（taskId 置空 + teamId 透传）：task-mode 会话/
+    // 快照与群聊优先的终态落库均不适用于 DM 对端直聊。
+    const dispatchTaskId = isTeamPrivate
+      ? ''
+      : (effectiveTaskId ?? (channel as any).taskId ?? (task as any).id ?? '');
+    void this.dispatcher
+      .dispatch({
+        messageId: message.id,
+        channelId,
+        taskId: dispatchTaskId,
+        ...(channel.teamId ? { teamId: channel.teamId } : {}),
+        ...(dispatchTaskId ? { taskContext: { taskId: dispatchTaskId } } : {}),
+        text: dto.text,
+        targets: targets.map((t) => ({
+          agentId: t.agentId,
+          instanceId: t.instanceId,
+          sessionId: t.sessionId,
+        })),
+      })
+      .catch((err: Error) =>
+        this.logger.error(`dispatch failed: ${err.message}`, err.stack),
+      );
 
     return {
       message: this.toMessageDto(message as any),

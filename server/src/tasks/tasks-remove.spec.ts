@@ -76,7 +76,6 @@ describe('TasksService.remove（DELETE /api/v1/tasks/:id）', () => {
         updateMany: del('session.updateMany'),
       },
       taskGroupInstance: { updateMany: del('taskGroupInstance.updateMany') },
-      teamQueue: { deleteMany: del('teamQueue.deleteMany') },
       team: { updateMany: del('team.updateMany') },
       $transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(prisma),
     };
@@ -154,7 +153,6 @@ describe('TasksService.remove（DELETE /api/v1/tasks/:id）', () => {
       'memory.deleteMany',
       'agentQuestion.deleteMany',
       'message.deleteMany',
-      'teamQueue.deleteMany',
     ]) {
       expect(calls.indexOf(dep)).toBeLessThan(calls.indexOf('task.delete'));
     }

@@ -52,6 +52,15 @@ export class UpdateTeamDto {
   @MaxLength(191)
   preferredWorkerId?: string | null;
 
+  @ApiPropertyOptional({
+    description:
+      '并行任务并发上限（parallel-tasks D1）：正整数 = 进行中/阻塞任务数上限；null/不传 = 不限',
+  })
+  @IsOptional()
+  @ValidateIf((o) => o.maxConcurrentTasks !== null)
+  @IsInt()
+  maxConcurrentTasks?: number | null;
+
   @ApiPropertyOptional({ description: '乐观锁版本号（并发写保护）' })
   @IsOptional()
   @IsInt()

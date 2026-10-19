@@ -28,6 +28,7 @@ describe('TasksService', () => {
       findUnique: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
+      groupBy: jest.Mock;
     };
     chatChannel: { create: jest.Mock; findFirst: jest.Mock };
     taskEvent: { create: jest.Mock };
@@ -51,12 +52,6 @@ describe('TasksService', () => {
       create: jest.Mock;
       delete: jest.Mock;
       count: jest.Mock;
-    };
-    teamQueue: {
-      create: jest.Mock;
-      aggregate: jest.Mock;
-      findFirst: jest.Mock;
-      deleteMany: jest.Mock;
     };
     $transaction: jest.Mock;
     $queryRawUnsafe: jest.Mock;
@@ -203,6 +198,7 @@ describe('TasksService', () => {
         findUnique: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn(),
+        groupBy: jest.fn().mockResolvedValue([]),
       },
       chatChannel: { create: jest.fn(), findFirst: jest.fn() },
       taskEvent: { create: jest.fn() },
@@ -250,12 +246,6 @@ describe('TasksService', () => {
         create: jest.fn(),
         delete: jest.fn(),
         count: jest.fn(),
-      },
-      teamQueue: {
-        create: jest.fn(),
-        aggregate: jest.fn(),
-        findFirst: jest.fn(),
-        deleteMany: jest.fn(),
       },
       $transaction: jest.fn(),
       $queryRawUnsafe: jest.fn(),
@@ -352,11 +342,11 @@ describe('TasksService', () => {
       task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
       session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
-      // 队首晋升默认无团队（accept/archive/reject 后 promote 空转；晋升用例各自覆写）
-      team: { findUnique: jest.fn().mockResolvedValue(null) },
-      teamQueue: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        findMany: jest.fn().mockResolvedValue([]),
+      // 并发占位校验（reserveStartSlotInTx）默认无团队行：直接放行，不校验不预约
+      // （占用上限/指针兜底用例各自覆写 tx.team / tx.task.count）。
+      team: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       artifact: { findMany: jest.fn().mockResolvedValue([]) },
       artifactVersion: {
@@ -375,6 +365,10 @@ describe('TasksService', () => {
         })),
       },
       plan: { update: jest.fn().mockResolvedValue({ id: 'pl_1' }) },
+      // sqlite 环境 FOR UPDATE 不可用：默认 raw 查询失败 → 降级 tx.team.findUnique
+      $queryRawUnsafe: jest
+        .fn()
+        .mockRejectedValue(new Error('mock raw fallback')),
     };
     prisma.$transaction.mockImplementation(async (fn: any) => fn(txModels));
     return txModels;
@@ -480,7 +474,6 @@ describe('TasksService', () => {
           c: 'c_0000000001',
           s: 's_0000000001',
           te: 'te_0000000001',
-          tq: 'tq_0000000001',
         };
         // fallback per prefix counter
         if (map[prefix]) {
@@ -497,10 +490,6 @@ describe('TasksService', () => {
           updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         },
         teamMember: { findMany: jest.fn().mockResolvedValue(mockMembers) },
-        teamQueue: {
-          create: jest.fn().mockResolvedValue({ id: 'tq_0000000001' }),
-          aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }),
-        },
         task: {
           create: jest
             .fn()
@@ -529,7 +518,7 @@ describe('TasksService', () => {
       return tx;
     };
 
-    const setupTxBusy = (taskId: string, maxPos: number) => {
+    const setupTxBusy = (taskId: string) => {
       prisma.teamUserMember.findUnique.mockResolvedValue({
         id: 'tum_1',
       } as any);
@@ -542,12 +531,6 @@ describe('TasksService', () => {
           updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         },
         teamMember: { findMany: jest.fn().mockResolvedValue(mockMembers) },
-        teamQueue: {
-          create: jest.fn().mockResolvedValue({ id: 'tq_0000000002' }),
-          aggregate: jest
-            .fn()
-            .mockResolvedValue({ _max: { position: maxPos } }),
-        },
         task: {
           create: jest
             .fn()
@@ -568,7 +551,7 @@ describe('TasksService', () => {
       };
       prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
       prisma.task.findUnique.mockResolvedValue(
-        row({ id: taskId, teamId, status: 'queued', title: '排队任务' }) as any,
+        row({ id: taskId, teamId, status: 'pending', title: '排队任务' }) as any,
       );
       return tx;
     };
@@ -612,8 +595,8 @@ describe('TasksService', () => {
         { type: 'global' },
       );
       expect(realtime.broadcast).toHaveBeenCalledWith(
-        EVENT_TYPES.TEAM_QUEUE_CHANGED,
-        expect.objectContaining({ teamId, taskId, status: 'pending' }),
+        EVENT_TYPES.TASK_STATUS_CHANGED,
+        expect.objectContaining({ taskId, to: 'pending' }),
         { type: 'team', id: teamId },
       );
     });
@@ -679,15 +662,14 @@ describe('TasksService', () => {
       expect(createData).not.toHaveProperty('executionMode');
     });
 
-    it('忙时团队：创建 queued 任务，写入 TeamQueue position=MAX+1 FOR UPDATE，currentTaskId 不变', async () => {
+    it('忙时团队：创建也直接 pending，无 queued 语义、无 TeamQueue 写、无队尾广播（D2）', async () => {
       const taskId = 't_0000000002';
-      const tx = setupTxBusy(taskId, 1);
+      const tx = setupTxBusy(taskId);
       idGen.nextId
         .mockResolvedValueOnce(taskId)
         .mockResolvedValueOnce('c_0000000001')
         .mockResolvedValueOnce('tmm_0000000001')
         .mockResolvedValueOnce('tmm_0000000002')
-        .mockResolvedValueOnce('tq_0000000002')
         .mockResolvedValueOnce('te_0000000001');
 
       const result = await service.create(userId, {
@@ -695,23 +677,21 @@ describe('TasksService', () => {
         teamId,
       } as any);
 
-      expect(result).toMatchObject({ status: 'queued' });
+      expect(result).toMatchObject({ status: 'pending' });
       expect(tx.task.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ status: 'queued' }),
+          data: expect.objectContaining({ status: 'pending' }),
         }),
       );
-      expect(tx.teamQueue.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ teamId, taskId, position: 2 }),
-      });
+      // 忙时不清占用指针（isIdle=false），仅 version 递增
       expect(tx.team.updateMany).toHaveBeenCalledWith({
         where: { id: teamId, version: 1 },
         data: { version: { increment: 1 } },
       });
       expect(tx.session.create).not.toHaveBeenCalled();
       expect(realtime.broadcast).toHaveBeenCalledWith(
-        EVENT_TYPES.TEAM_QUEUE_CHANGED,
-        expect.objectContaining({ position: 2, status: 'queued' }),
+        EVENT_TYPES.TASK_STATUS_CHANGED,
+        expect.objectContaining({ taskId, to: 'pending' }),
         { type: 'team', id: teamId },
       );
     });
@@ -731,42 +711,6 @@ describe('TasksService', () => {
         ).rejects.toThrow('lock wait timeout exceeded');
         expect(tx.team.findUnique).not.toHaveBeenCalled();
         expect(tx.task.create).not.toHaveBeenCalled();
-      } finally {
-        if (prevDbType === undefined) delete process.env.DB_TYPE;
-        else process.env.DB_TYPE = prevDbType;
-        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
-        else process.env.DATABASE_URL = prevDbUrl;
-      }
-    });
-
-    it('createTaskInternal FIFO position（site :364）：非 sqlite 引擎锁查询与 aggregate 双失败时直接抛出，不伪造 position = 1', async () => {
-      const prevDbType = process.env.DB_TYPE;
-      const prevDbUrl = process.env.DATABASE_URL;
-      process.env.DB_TYPE = 'mysql';
-      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
-      try {
-        const taskId = 't_0000000023';
-        const tx = setupTxBusy(taskId, 5);
-        const lockFailure = new Error('lock wait timeout exceeded');
-        tx.$queryRawUnsafe
-          .mockResolvedValueOnce([
-            {
-              id: teamId,
-              version: 1,
-              currentTaskId: 't_0000000009',
-              reuseSession: 1,
-              mainAgentMemberId: null,
-            },
-          ])
-          .mockRejectedValue(lockFailure);
-        tx.teamQueue.aggregate.mockRejectedValue(
-          new Error('aggregate unavailable'),
-        );
-        await expect(
-          service.create(userId, { title: '双失败', teamId }),
-        ).rejects.toThrow('lock wait timeout exceeded');
-        expect(tx.task.create).not.toHaveBeenCalled();
-        expect(tx.teamQueue.create).not.toHaveBeenCalled();
       } finally {
         if (prevDbType === undefined) delete process.env.DB_TYPE;
         else process.env.DB_TYPE = prevDbType;
@@ -823,7 +767,7 @@ describe('TasksService', () => {
       });
     });
 
-    it('并发：version CAS 重试3次，最终仅一个 pending 其余 queued（模拟首试冲突后重试成功）', async () => {
+    it('并发：version CAS 重试3次，首试冲突后重试成功（busy 团队也落 pending）', async () => {
       const taskId = 't_0000000003';
       prisma.teamUserMember.findUnique.mockResolvedValue({
         id: 'tum_1',
@@ -839,10 +783,6 @@ describe('TasksService', () => {
               updateMany: jest.fn().mockResolvedValue({ count: 0 }),
             },
             teamMember: { findMany: jest.fn().mockResolvedValue(mockMembers) },
-            teamQueue: {
-              create: jest.fn(),
-              aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }),
-            },
             task: { create: jest.fn().mockResolvedValue({ id: taskId }) },
             chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
             session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
@@ -857,14 +797,10 @@ describe('TasksService', () => {
             updateMany: jest.fn().mockResolvedValue({ count: 1 }),
           },
           teamMember: { findMany: jest.fn().mockResolvedValue(mockMembers) },
-          teamQueue: {
-            create: jest.fn().mockResolvedValue({ id: 'tq_0000000002' }),
-            aggregate: jest.fn().mockResolvedValue({ _max: { position: 1 } }),
-          },
           task: {
             create: jest
               .fn()
-              .mockResolvedValue({ id: taskId, status: 'queued' }),
+              .mockImplementation(({ data }: any) => Promise.resolve(data)),
           },
           chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
           session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
@@ -875,14 +811,14 @@ describe('TasksService', () => {
       });
       idGen.nextId.mockResolvedValue(taskId);
       prisma.task.findUnique.mockResolvedValue(
-        row({ id: taskId, teamId, status: 'queued' }) as any,
+        row({ id: taskId, teamId, status: 'pending' }) as any,
       );
 
       const result = await service.create(userId, {
         title: '并发任务',
         teamId,
       } as any);
-      expect(result.status).toBe('queued');
+      expect(result.status).toBe('pending');
       expect(attempt).toBe(2);
     });
 
@@ -990,10 +926,6 @@ describe('TasksService', () => {
             },
           ]),
         },
-        teamQueue: {
-          create: jest.fn().mockResolvedValue({ id: 'tq_0000000001' }),
-          aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }),
-        },
         task: {
           create: jest
             .fn()
@@ -1077,10 +1009,6 @@ describe('TasksService', () => {
               agent: { id: 'a_product', name: '产品经理', role: 'product' },
             },
           ]),
-        },
-        teamQueue: {
-          create: jest.fn(),
-          aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }),
         },
         task: {
           create: jest.fn().mockImplementation(({ data }: any) => {
@@ -1918,7 +1846,7 @@ describe('TasksService', () => {
       expect(txModels.message.create).toHaveBeenCalledTimes(2);
     });
 
-    it('start：团队空闲 + 孤儿 pending → 认领队首后启动（取消排队死锁自愈）', async () => {
+    it('start：团队空闲 + 孤儿 pending → 指针兜底指向本任务（D4 缺省聚焦）', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(
           row({
@@ -1935,21 +1863,11 @@ describe('TasksService', () => {
             startedAt: new Date(),
           }),
         );
-      // transition() 检查读到空闲 → 认领；其后 preflight 重读到已认领（生产 DB 真实推进，此处 mock 模拟）
-      (prisma.team.findUnique as jest.Mock)
-        .mockResolvedValueOnce({
-          id: 'tm_1',
-          version: 0,
-          currentTaskId: null,
-          mainAgentMemberId: 'tmm_0000000001',
-        })
-        .mockResolvedValue({
-          id: 'tm_1',
-          version: 1,
-          currentTaskId: 't_0000000001',
-          mainAgentMemberId: 'tmm_0000000001',
-        });
-      (prisma.team.updateMany as jest.Mock).mockResolvedValue({ count: 1 });
+      prisma.team.findUnique.mockResolvedValue({
+        id: 'tm_1',
+        mainAgentMemberId: 'tmm_0000000001',
+      });
+      prisma.teamMember.count.mockResolvedValue(2);
       prisma.chatChannel.findFirst
         .mockResolvedValueOnce({ id: 'c_0000000001' })
         .mockResolvedValueOnce({ id: 'c_0000000002' });
@@ -1958,10 +1876,19 @@ describe('TasksService', () => {
         .mockResolvedValueOnce('m_0000000001')
         .mockResolvedValueOnce('m_0000000002');
       const txModels = mockTransitionTx();
+      txModels.team.findUnique = jest.fn().mockResolvedValue({
+        id: 'tm_1',
+        version: 0,
+        currentTaskId: null,
+        maxConcurrentTasks: null,
+      }) as any;
+      (txModels.team as any).updateMany = jest
+        .fn()
+        .mockResolvedValue({ count: 1 });
 
       const result = await service.start('t_0000000001', userId);
 
-      expect(prisma.team.updateMany).toHaveBeenCalledWith({
+      expect(txModels.team.updateMany).toHaveBeenCalledWith({
         where: { id: 'tm_1', currentTaskId: null, version: 0 },
         data: { currentTaskId: 't_0000000001', version: { increment: 1 } },
       });
@@ -1976,50 +1903,34 @@ describe('TasksService', () => {
       expect(result.status).toBe('in_progress');
     });
 
-    it('start：团队忙碌且非队首 → 409 TEAM_NOT_QUEUE_HEAD（认领仅限空闲）', async () => {
+    it('start：指针占用 CAS 冲突 → 409 VERSION_CONFLICT（tx 内重试 3 次）', async () => {
       prisma.task.findUnique.mockResolvedValue(
         row({
           status: 'pending',
           teamId: 'tm_1',
         }),
       );
-      (prisma.team.findUnique as jest.Mock).mockResolvedValue({
+      prisma.team.findUnique.mockResolvedValue({
         id: 'tm_1',
-        version: 1,
-        currentTaskId: 't_0000000009',
+        mainAgentMemberId: 'tmm_0000000001',
       });
-
-      try {
-        await service.start('t_0000000001', userId);
-        fail('应抛出 ConflictException');
-      } catch (e) {
-        expect(e).toBeInstanceOf(ConflictException);
-        expect((e as ConflictException).getResponse()).toMatchObject({
-          code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
-        });
-      }
-      expect(prisma.team.updateMany).not.toHaveBeenCalled();
-      expect(prisma.$transaction).not.toHaveBeenCalled();
-    });
-
-    it('start：空闲认领并发冲突 → 409 VERSION_CONFLICT（可重试）', async () => {
-      prisma.task.findUnique.mockResolvedValue(
-        row({
-          status: 'pending',
-          teamId: 'tm_1',
-        }),
-      );
-      (prisma.team.findUnique as jest.Mock).mockResolvedValue({
+      prisma.teamMember.count.mockResolvedValue(2);
+      const txModels = mockTransitionTx();
+      txModels.team.findUnique = jest.fn().mockResolvedValue({
         id: 'tm_1',
         version: 0,
         currentTaskId: null,
-      });
-      (prisma.team.updateMany as jest.Mock).mockResolvedValue({ count: 0 });
+        maxConcurrentTasks: null,
+      }) as any;
+      (txModels.team as any).updateMany = jest
+        .fn()
+        .mockResolvedValue({ count: 0 });
 
       await expect(service.start('t_0000000001', userId)).rejects.toThrow(
         '团队并发冲突，请重试',
       );
-      expect(prisma.$transaction).not.toHaveBeenCalled();
+      expect(txModels.team.updateMany).toHaveBeenCalledTimes(3);
+      expect(txModels.task.updateMany).not.toHaveBeenCalled();
     });
 
     it('mark-pending-review：in_progress → pending_review，写 pendingReviewAt + 事件 + 广播 + 系统消息「任务已提交待验收」', async () => {
@@ -2683,6 +2594,8 @@ describe('TasksService', () => {
         task: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
         taskEvent: { create: jest.fn() },
         session: { updateMany: jest.fn() },
+        team: { findUnique: jest.fn().mockResolvedValue(null) },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
       };
       prisma.$transaction.mockImplementation(async (fn: any) => fn(txModels));
 
@@ -2764,6 +2677,11 @@ describe('TasksService', () => {
           })),
         },
         plan: { update: jest.fn().mockResolvedValue({ id: 'pl_1' }) },
+        team: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
       };
       prisma.$transaction.mockImplementation(async (fn: any) => fn(txModels));
       idGen.nextId
@@ -4412,9 +4330,78 @@ describe('TasksService', () => {
     });
   });
 
-  describe('queued 状态机扩展 queued 与自动拉起（promoteNext，含锁）', () => {
+  describe('并行执行（parallel-tasks）：无队首门槛、容量上限、完工刷新广播', () => {
     const teamId = 'tm_0000000001';
-    it('accept：事务内 FOR UPDATE 锁 team 行 promoteNext，队首 queued→pending，队列删除队首重排，广播 TEAM_QUEUE_CHANGED', async () => {
+
+    /** start 用例公共 mock：preflight 主成员放行；tx 团队默认指针指向 t_0000000009、无上限。 */
+    const setupStartWithTeam = (
+      taskId: string,
+      fromVersion: number,
+      teamOverrides: Record<string, unknown> = {},
+    ) => {
+      prisma.task.findUnique
+        .mockResolvedValueOnce(
+          row({ id: taskId, status: 'pending', version: fromVersion, teamId }),
+        )
+        .mockResolvedValue(
+          row({
+            id: taskId,
+            status: 'in_progress',
+            version: fromVersion + 1,
+            teamId,
+            startedAt: new Date(),
+          }),
+        );
+      prisma.team.findUnique.mockResolvedValue({
+        id: teamId,
+        mainAgentMemberId: 'tmm_0000000001',
+      });
+      prisma.teamMember.count.mockResolvedValue(2);
+      prisma.chatChannel.findFirst
+        .mockResolvedValueOnce({ id: 'c_0000000001' })
+        .mockResolvedValueOnce({ id: 'c_0000000002' });
+      idGen.nextId
+        .mockResolvedValueOnce('te_0000000001')
+        .mockResolvedValueOnce('m_0000000001')
+        .mockResolvedValueOnce('m_0000000002');
+      const tx: any = {
+        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
+        session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        message: {
+          create: jest.fn().mockImplementation(({ data }: any) => ({
+            id: data.id,
+            channelId: data.channelId,
+            senderType: data.senderType,
+            senderId: data.senderId,
+            content: data.content,
+            mentions: data.mentions,
+            status: data.status,
+            createdAt: new Date(),
+          })),
+        },
+        plan: { update: jest.fn() },
+        artifact: { findMany: jest.fn().mockResolvedValue([]) },
+        artifactVersion: {
+          updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        team: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: teamId,
+            version: 1,
+            currentTaskId: 't_0000000009',
+            maxConcurrentTasks: null,
+            ...teamOverrides,
+          }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
+        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
+      };
+      prisma.$transaction.mockImplementationOnce(async (fn: any) => fn(tx));
+      return tx;
+    };
+
+    it('accept：不再晋升队首/清队列，改广播 team.changed（task_accepted）', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(
           row({
@@ -4461,143 +4448,36 @@ describe('TasksService', () => {
         team: {
           findUnique: jest.fn().mockResolvedValue({
             id: teamId,
-            version: 2,
-            currentTaskId: 't_0000000001',
+            reuseSession: true,
           }),
-        },
-        teamQueue: {
-          findFirst: jest
-            .fn()
-            .mockResolvedValue({ taskId: 't_0000000002', position: 1 }),
-          findMany: jest
-            .fn()
-            .mockResolvedValue([
-              { id: 'tq_0000000003', position: 2, taskId: 't_0000000003' },
-            ]),
-          deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
-          update: jest.fn().mockResolvedValue({ id: 'tq_0000000003' }),
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         },
         $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
       };
-      // team updateMany + task queued→pending
-      tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
-      tx.task.updateMany = jest.fn().mockImplementation(async (args: any) => {
-        if (args.where?.status === 'queued') return { count: 1 };
-        return { count: 1 };
-      });
       prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
 
       await service.accept('t_0000000001', userId);
 
-      expect(tx.team.updateMany).toHaveBeenCalledWith({
-        where: { id: teamId, version: 2 },
-        data: { currentTaskId: 't_0000000002', version: { increment: 1 } },
-      });
-      expect(tx.teamQueue.deleteMany).toHaveBeenCalledWith({
-        where: { taskId: 't_0000000002' },
-      });
-      expect(tx.task.updateMany).toHaveBeenCalledWith({
-        where: { id: 't_0000000002', status: 'queued' },
-        data: { status: 'pending' },
-      });
+      // 并行执行后无队首可晋升：team 指针/队列零写
+      expect(tx.team.updateMany).not.toHaveBeenCalled();
+      expect(
+        tx.task.updateMany.mock.calls.every(
+          (c: any[]) => c[0].where?.status !== 'queued',
+        ),
+      ).toBe(true);
       expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.TEAM_CHANGED,
+        { teamId, taskId: 't_0000000001', action: 'task_accepted' },
+        { type: 'global' },
+      );
+      expect(realtime.broadcast).not.toHaveBeenCalledWith(
         EVENT_TYPES.TEAM_QUEUE_CHANGED,
-        expect.objectContaining({
-          teamId,
-          taskId: 't_0000000002',
-          status: 'promoted',
-        }),
-        { type: 'team', id: teamId },
+        expect.anything(),
+        expect.anything(),
       );
     });
 
-    it('promoteNextInTx team-row lock（site :590）：非 sqlite 引擎通用锁失败直接抛出，不走无锁 findUnique 降级', async () => {
-      const prevDbType = process.env.DB_TYPE;
-      const prevDbUrl = process.env.DATABASE_URL;
-      process.env.DB_TYPE = 'mysql';
-      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
-      try {
-        const lockFailure = new Error('connection reset by peer');
-        const tx: any = {
-          team: {
-            findUnique: jest.fn().mockResolvedValue({
-              id: teamId,
-              version: 2,
-              currentTaskId: 't_0000000001',
-            }),
-            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-          },
-          teamQueue: {
-            findFirst: jest.fn().mockResolvedValue(null),
-            findMany: jest.fn().mockResolvedValue([]),
-            deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-            update: jest.fn(),
-          },
-          task: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
-          $queryRawUnsafe: jest.fn().mockRejectedValue(lockFailure),
-        };
-        prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
-        await expect(service.promoteNext(teamId)).rejects.toThrow(
-          'connection reset by peer',
-        );
-        expect(tx.team.findUnique).not.toHaveBeenCalled();
-        expect(tx.team.updateMany).not.toHaveBeenCalled();
-      } finally {
-        if (prevDbType === undefined) delete process.env.DB_TYPE;
-        else process.env.DB_TYPE = prevDbType;
-        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
-        else process.env.DATABASE_URL = prevDbUrl;
-      }
-    });
-
-    it('promoteNextInTx team-queue lock（site :607）：非 sqlite 引擎队首锁查询失败直接抛出，不走无锁 findFirst 降级', async () => {
-      const prevDbType = process.env.DB_TYPE;
-      const prevDbUrl = process.env.DATABASE_URL;
-      process.env.DB_TYPE = 'mysql';
-      process.env.DATABASE_URL = 'mysql://localhost:3306/vteam';
-      try {
-        const lockFailure = new Error('queue lock wait timeout exceeded');
-        const tx: any = {
-          team: {
-            findUnique: jest.fn().mockResolvedValue({
-              id: teamId,
-              version: 2,
-              currentTaskId: 't_0000000001',
-            }),
-            updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-          },
-          teamQueue: {
-            findFirst: jest
-              .fn()
-              .mockResolvedValue({ taskId: 't_0000000002', position: 1 }),
-            findMany: jest.fn().mockResolvedValue([]),
-            deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
-            update: jest.fn(),
-          },
-          task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-          // 首个锁查询（team 行锁）成功，第二个锁查询（队首锁）失败
-          $queryRawUnsafe: jest
-            .fn()
-            .mockResolvedValueOnce([{ id: teamId, version: 2 }])
-            .mockRejectedValue(lockFailure),
-        };
-        prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
-        // 锁失败必须上浮：旧代码会吞错走无锁 findFirst 并静默晋升队首
-        await expect(service.promoteNext(teamId)).rejects.toThrow(
-          'queue lock wait timeout exceeded',
-        );
-        expect(tx.teamQueue.findFirst).not.toHaveBeenCalled();
-        expect(tx.team.updateMany).not.toHaveBeenCalled();
-        expect(tx.task.updateMany).not.toHaveBeenCalled();
-      } finally {
-        if (prevDbType === undefined) delete process.env.DB_TYPE;
-        else process.env.DB_TYPE = prevDbType;
-        if (prevDbUrl === undefined) delete process.env.DATABASE_URL;
-        else process.env.DATABASE_URL = prevDbUrl;
-      }
-    });
-
-    it('archive：队列空则 currentTaskId=null，广播 idle', async () => {
+    it('archive：不再清 currentTaskId/晋升队列，改广播 team.changed（task_archived）', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(
           row({
@@ -4642,13 +4522,8 @@ describe('TasksService', () => {
             id: teamId,
             version: 5,
             currentTaskId: 't_0000000001',
+            reuseSession: true,
           }),
-        },
-        teamQueue: {
-          findFirst: jest.fn().mockResolvedValue(null),
-          findMany: jest.fn().mockResolvedValue([]),
-          deleteMany: jest.fn(),
-          update: jest.fn(),
         },
         $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
       };
@@ -4657,134 +4532,149 @@ describe('TasksService', () => {
 
       await service.archive('t_0000000001', userId);
 
-      expect(tx.team.updateMany).toHaveBeenCalledWith({
-        where: { id: teamId, version: 5 },
-        data: { currentTaskId: null, version: { increment: 1 } },
-      });
+      expect(tx.team.updateMany).not.toHaveBeenCalled();
       expect(realtime.broadcast).toHaveBeenCalledWith(
+        EVENT_TYPES.TEAM_CHANGED,
+        { teamId, taskId: 't_0000000001', action: 'task_archived' },
+        { type: 'global' },
+      );
+      expect(realtime.broadcast).not.toHaveBeenCalledWith(
         EVENT_TYPES.TEAM_QUEUE_CHANGED,
-        expect.objectContaining({ teamId, action: 'idle' }),
-        { type: 'team', id: teamId },
+        expect.anything(),
+        expect.anything(),
       );
     });
 
-    it('start：非队首 409 TEAM_NOT_QUEUE_HEAD（pending 但非 currentTaskId）', async () => {
-      prisma.task.findUnique.mockResolvedValue(
-        row({
-          id: 't_0000000002',
-          status: 'pending',
-          version: 0,
-          teamId,
-        } as any),
-      );
-      (prisma as any).team = {
-        findUnique: jest.fn().mockResolvedValue({
-          id: teamId,
-          currentTaskId: 't_0000000001',
-          version: 0,
-        }),
-      };
-
-      try {
-        await service.start('t_0000000002', userId);
-        fail('应抛出 ConflictException');
-      } catch (e) {
-        expect(e).toBeInstanceOf(ConflictException);
-        expect((e as ConflictException).getResponse()).toMatchObject({
-          code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
-        });
-      }
-      expect(prisma.$transaction).not.toHaveBeenCalled();
-    });
-
-    it('start：queued 非队首 409 TEAM_NOT_QUEUE_HEAD', async () => {
-      prisma.task.findUnique.mockResolvedValue(
-        row({
-          id: 't_0000000003',
-          status: 'queued',
-          version: 0,
-          teamId,
-        } as any),
-      );
-      (prisma as any).team = {
-        findUnique: jest.fn().mockResolvedValue({
-          id: teamId,
-          currentTaskId: 't_0000000001',
-          version: 0,
-        }),
-      };
-
-      try {
-        await service.start('t_0000000003', userId);
-        fail('应抛出 ConflictException');
-      } catch (e) {
-        expect(e).toBeInstanceOf(ConflictException);
-        expect((e as ConflictException).getResponse()).toMatchObject({
-          code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
-        });
-      }
-    });
-
-    it('start：队首 pending 可 start 成功', async () => {
+    it('并行启动：指针占用下 两个 pending 均可 start 到 in_progress（无队首门槛，D2）', async () => {
+      const tx1 = setupStartWithTeam('t_0000000001', 3);
+      const tx2 = setupStartWithTeam('t_0000000002', 0);
+      // 两次 setup 的 Once/默认 mock 链不可叠加：重置后按两次 start 各 2 次读重建队列
+      prisma.task.findUnique.mockReset();
       prisma.task.findUnique
         .mockResolvedValueOnce(
           row({
             id: 't_0000000001',
             status: 'pending',
-            version: 0,
+            version: 3,
             teamId,
-          } as any),
+          }),
         )
-        .mockResolvedValue(
+        .mockResolvedValueOnce(
           row({
             id: 't_0000000001',
             status: 'in_progress',
+            version: 4,
+            teamId,
+            startedAt: new Date(),
+          }),
+        )
+        .mockResolvedValueOnce(
+          row({
+            id: 't_0000000002',
+            status: 'pending',
+            version: 0,
+            teamId,
+          }),
+        )
+        .mockResolvedValueOnce(
+          row({
+            id: 't_0000000002',
+            status: 'in_progress',
             version: 1,
             teamId,
-          } as any),
+            startedAt: new Date(),
+          }),
         );
-      (prisma as any).team = {
-        findUnique: jest.fn().mockResolvedValue({
+
+      const r1 = await service.start('t_0000000001', userId);
+      const r2 = await service.start('t_0000000002', userId);
+
+      expect(r1.status).toBe('in_progress');
+      expect(r2.status).toBe('in_progress');
+      // start 预约保留现有占用指针：不指向本任务、也不清空
+      expect(tx1.team.updateMany).toHaveBeenCalledWith({
+        where: {
           id: teamId,
-          currentTaskId: 't_0000000001',
-          version: 0,
-          mainAgentMemberId: 'tmm_0000000001',
-        }),
-      };
-      prisma.chatChannel.findFirst.mockResolvedValue({ id: 'c_0000000001' });
-      idGen.nextId
-        .mockResolvedValueOnce('te_0000000001')
-        .mockResolvedValueOnce('m_0000000001')
-        .mockResolvedValueOnce('m_0000000002');
-      const tx: any = {
-        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
-        session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
-        message: {
-          create: jest.fn().mockImplementation(({ data }: any) => ({
-            id: data.id,
-            channelId: data.channelId,
-            senderType: data.senderType,
-            senderId: data.senderId,
-            content: data.content,
-            mentions: data.mentions,
-            status: data.status,
-            createdAt: new Date(),
-          })),
+          currentTaskId: 't_0000000009',
+          version: 1,
         },
-        plan: { update: jest.fn() },
-      };
-      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
-      // mock second team lookup inside transition head check (same id)
-      prisma.team.findUnique = jest.fn().mockResolvedValue({
-        id: teamId,
+        data: {
+          currentTaskId: 't_0000000009',
+          version: { increment: 1 },
+        },
+      });
+      expect(tx2.task.updateMany).toHaveBeenCalledWith({
+        where: { id: 't_0000000002', status: 'pending', version: 0 },
+        data: {
+          status: 'in_progress',
+          version: { increment: 1 },
+          startedAt: expect.any(Date),
+        },
+      });
+    });
+
+    it('start：maxConcurrentTasks=1 且 in_progress+blocked 占满 → 409 TEAM_PARALLEL_LIMIT', async () => {
+      const tx = setupStartWithTeam('t_0000000001', 3, {
+        maxConcurrentTasks: 1,
+      });
+      tx.task.count = jest.fn().mockResolvedValue(1);
+
+      try {
+        await service.start('t_0000000001', userId);
+        fail('应抛出 ConflictException');
+      } catch (e) {
+        expect(e).toBeInstanceOf(ConflictException);
+        expect((e as ConflictException).getResponse()).toMatchObject({
+          code: TASK_ERRORS.TEAM_PARALLEL_LIMIT,
+          message: '并行任务数已达上限',
+          details: { max: 1 },
+        });
+      }
+      // 占用口径：in_progress + blocked（D1）
+      expect(tx.team.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: teamId } }),
+      );
+      expect(tx.task.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('start：占用口径只数 in_progress+blocked，pending_review 不计 → 放行（D1）', async () => {
+      const tx = setupStartWithTeam('t_0000000001', 3, {
+        maxConcurrentTasks: 1,
+      });
+      tx.task.count = jest.fn().mockResolvedValue(0);
+
+      const result = await service.start('t_0000000001', userId);
+
+      expect(result.status).toBe('in_progress');
+      expect(tx.team.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: {
+            id: true,
+            version: true,
+            currentTaskId: true,
+            maxConcurrentTasks: true,
+          },
+        }),
+      );
+      expect(tx.task.updateMany).toHaveBeenCalledWith({
+        where: { id: 't_0000000001', status: 'pending', version: 3 },
+        data: {
+          status: 'in_progress',
+          version: { increment: 1 },
+          startedAt: expect.any(Date),
+        },
+      });
+    });
+
+    it('start：占用指针指向本任务可 start 成功', async () => {
+      const tx = setupStartWithTeam('t_0000000001', 0, {
         currentTaskId: 't_0000000001',
         version: 0,
-        mainAgentMemberId: 'tmm_0000000001',
-      } as any);
+      });
 
       const result = await service.start('t_0000000001', userId);
       expect(result.status).toBe('in_progress');
+      expect(tx.task.updateMany).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -4837,12 +4727,6 @@ describe('TasksService', () => {
         plan: { update: jest.fn() },
         team: {
           findUnique: jest.fn().mockResolvedValue({ reuseSession: true }),
-        },
-        teamQueue: {
-          findFirst: jest.fn().mockResolvedValue(null),
-          findMany: jest.fn().mockResolvedValue([]),
-          deleteMany: jest.fn(),
-          update: jest.fn(),
         },
         $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
       };
@@ -4913,12 +4797,6 @@ describe('TasksService', () => {
         team: {
           findUnique: jest.fn().mockResolvedValue({ reuseSession: false }),
         },
-        teamQueue: {
-          findFirst: jest.fn().mockResolvedValue(null),
-          findMany: jest.fn().mockResolvedValue([]),
-          deleteMany: jest.fn(),
-          update: jest.fn(),
-        },
         $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
       };
       tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
@@ -4988,12 +4866,6 @@ describe('TasksService', () => {
         team: {
           findUnique: jest.fn().mockResolvedValue({ reuseSession: true }),
         },
-        teamQueue: {
-          findFirst: jest.fn().mockResolvedValue(null),
-          findMany: jest.fn().mockResolvedValue([]),
-          deleteMany: jest.fn(),
-          update: jest.fn(),
-        },
         $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
       };
       tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
@@ -5054,21 +4926,8 @@ describe('TasksService', () => {
         artifactVersion: { updateMany: jest.fn() },
         plan: { update: jest.fn() },
         team: {
-          // promoteNext 事务内回退读成功一次，随后的记忆开关查询失败
-          findUnique: jest
-            .fn()
-            .mockResolvedValueOnce({
-              id: teamId,
-              version: 2,
-              currentTaskId: 't_0000000001',
-            })
-            .mockRejectedValue(lookupFailure),
-        },
-        teamQueue: {
-          findFirst: jest.fn().mockResolvedValue(null),
-          findMany: jest.fn().mockResolvedValue([]),
-          deleteMany: jest.fn(),
-          update: jest.fn(),
+          // accept 内仅剩记忆开关事务按需读 team（reuseSession）：失败必须上浮
+          findUnique: jest.fn().mockRejectedValue(lookupFailure),
         },
         $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
       };
@@ -5084,7 +4943,7 @@ describe('TasksService', () => {
       expect(resetInTx).not.toHaveBeenCalled();
     });
 
-    it('reject 不再 promoteNext：不清 currentTaskId、不广播 idle', async () => {
+    it('reject：任务回到 in_progress，不清指针、无团队刷新广播、无 promoteNext', async () => {
       prisma.task.findUnique
         .mockResolvedValueOnce(
           row({
@@ -5131,21 +4990,17 @@ describe('TasksService', () => {
             currentTaskId: 't_0000000001',
           }),
         },
-        teamQueue: {
-          findFirst: jest.fn().mockResolvedValue(null),
-          findMany: jest.fn().mockResolvedValue([]),
-        },
         $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
       };
       tx.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
       prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
       await service.reject('t_0000000001', userId, { reason: 'nope' });
-      // reject 后任务回到 in_progress 仍是队首占用：不应清 currentTaskId、不应广播 idle
+      // 任务回到 in_progress 仍是活跃占用：不应清 currentTaskId、不应发团队刷新广播
       expect(tx.team.updateMany).not.toHaveBeenCalled();
       expect(realtime.broadcast).not.toHaveBeenCalledWith(
-        EVENT_TYPES.TEAM_QUEUE_CHANGED,
-        expect.objectContaining({ teamId, action: 'idle' }),
-        { type: 'team', id: teamId },
+        EVENT_TYPES.TEAM_CHANGED,
+        expect.objectContaining({ teamId, taskId: 't_0000000001' }),
+        expect.anything(),
       );
     });
   });
@@ -5180,10 +5035,6 @@ describe('TasksService', () => {
                 agent: { id: 'a_product', name: '产品经理', role: 'product' },
               },
             ]),
-          },
-          teamQueue: {
-            create: jest.fn(),
-            aggregate: jest.fn().mockResolvedValue({ _max: { position: 0 } }),
           },
           task: { create: jest.fn().mockResolvedValue({ id: 't_0000000001' }) },
           chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
@@ -5223,141 +5074,11 @@ describe('TasksService', () => {
       (prisma.session as any).findMany = jest
         .fn()
         .mockResolvedValue([{ id: 's_0000000006' }]);
-      (prisma as any).teamQueue = {
-        findMany: jest.fn().mockResolvedValue([{ id: 'tq_0000000001' }]),
-      };
       await service.onModuleInit();
       expect(idGen.seed).toHaveBeenCalledWith('t', 9);
       expect(idGen.seed).toHaveBeenCalledWith('c', 3);
       expect(idGen.seed).not.toHaveBeenCalledWith('pl', expect.anything());
       expect(idGen.seed).not.toHaveBeenCalledWith('ta', expect.anything());
-    });
-
-    it('promoteNext 独立事务入口：队首晋升与 idle 双分支', async () => {
-      const teamId = 'tm_0000000001';
-      const tx1: any = {
-        team: {
-          findUnique: jest.fn().mockResolvedValue({
-            id: teamId,
-            version: 0,
-            currentTaskId: 't_old',
-          }),
-        },
-        teamQueue: {
-          findFirst: jest
-            .fn()
-            .mockResolvedValue({ taskId: 't_0000000002', position: 1 }),
-          findMany: jest.fn().mockResolvedValue([]),
-          deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
-          update: jest.fn(),
-        },
-        task: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
-        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
-      };
-      tx1.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
-      tx1.task.updateMany = jest.fn().mockResolvedValue({ count: 1 });
-      tx1.teamQueue.update = jest.fn().mockResolvedValue({});
-      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx1));
-      await service.promoteNext(teamId);
-      expect(tx1.teamQueue.deleteMany).toHaveBeenCalledWith({
-        where: { taskId: 't_0000000002' },
-      });
-      const tx2: any = {
-        team: {
-          findUnique: jest.fn().mockResolvedValue({
-            id: teamId,
-            version: 1,
-            currentTaskId: 't_0000000002',
-          }),
-        },
-        teamQueue: {
-          findFirst: jest.fn().mockResolvedValue(null),
-          findMany: jest.fn().mockResolvedValue([]),
-          deleteMany: jest.fn(),
-          update: jest.fn(),
-        },
-        task: { updateMany: jest.fn() },
-        $queryRawUnsafe: jest.fn().mockRejectedValue(new Error('fallback')),
-      };
-      tx2.team.updateMany = jest.fn().mockResolvedValue({ count: 1 });
-      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx2));
-      await service.promoteNext(teamId);
-      expect(tx2.team.updateMany).toHaveBeenCalledWith({
-        where: { id: teamId, version: 1 },
-        data: { currentTaskId: null, version: { increment: 1 } },
-      });
-    });
-
-    it('create：MAX(position) NaN 不 finite → 回落 0，仍 queued position=1', async () => {
-      prisma.teamUserMember.findUnique.mockResolvedValue({
-        id: 'tum_1',
-      } as any);
-      const tx: any = {
-        team: {
-          findUnique: jest.fn().mockResolvedValue({
-            id: 'tm_0000000001',
-            version: 0,
-            currentTaskId: 't_busy',
-            reuseSession: true,
-          }),
-          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        },
-        teamMember: {
-          findMany: jest.fn().mockResolvedValue([
-            {
-              id: 'tmm_1',
-              teamId: 'tm_0000000001',
-              agentId: 'a_product',
-              alias: '产品经理-1',
-              seq: 1,
-              workDir: '/data/a',
-              agent: { id: 'a_product', name: '产品经理', role: 'product' },
-            },
-          ]),
-        },
-        teamQueue: {
-          create: jest.fn().mockResolvedValue({ id: 'tq_1' }),
-          aggregate: jest.fn().mockResolvedValue({ _max: { position: NaN } }),
-        },
-        task: {
-          create: jest
-            .fn()
-            .mockResolvedValue({ id: 't_0000000001', status: 'queued' }),
-        },
-        chatChannel: { create: jest.fn().mockResolvedValue({ id: 'c_1' }) },
-        session: { create: jest.fn().mockResolvedValue({ id: 's_1' }) },
-        taskEvent: { create: jest.fn().mockResolvedValue({ id: 'te_1' }) },
-        $queryRawUnsafe: jest.fn().mockImplementation(async (sql: string) => {
-          if (sql.includes('FROM teams'))
-            return [
-              {
-                id: 'tm_0000000001',
-                version: 0,
-                currentTaskId: 't_busy',
-                reuseSession: 1,
-              },
-            ];
-          if (sql.includes('FROM team_queues')) return [{ maxPos: 'nan' }];
-          return [];
-        }),
-      };
-      prisma.$transaction.mockImplementation(async (fn: any) => fn(tx));
-      idGen.nextId.mockResolvedValue('t_0000000001');
-      prisma.task.findUnique.mockResolvedValue(
-        row({
-          id: 't_0000000001',
-          teamId: 'tm_0000000001',
-          status: 'queued',
-        }) as any,
-      );
-      const result = await service.create(userId, {
-        title: 'queued-nan',
-        teamId: 'tm_0000000001',
-      } as any);
-      expect(result.status).toBe('queued');
-      expect(tx.teamQueue.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({ position: 1 }),
-      });
     });
   });
 
@@ -5393,7 +5114,6 @@ describe('TasksService', () => {
         version: 1,
         members: [syncedMemberRow()],
         userMembers: [],
-        queues: [],
       } as any);
       // 任务实例投影侧：toTaskDto 经 teamMember.findMany 取同一批成员行
       prisma.task.findUnique.mockResolvedValue(

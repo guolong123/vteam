@@ -94,6 +94,8 @@ model Team {
   mainAgentMemberId  String?  @map("main_agent_member_id")
   /// 团队级首选 worker（软绑定单节点；成员显式选择优先；不可用自动回退，绝不阻塞）
   preferredWorkerId  String?  @map("preferred_worker_id")
+  /// 并行任务并发上限（并行任务计划 D1）：NULL = 不限；start 时校验活跃占用（in_progress+blocked）。
+  maxConcurrentTasks Int?     @map("max_concurrent_tasks")
   version            Int      @default(0) @map("version")
   createdBy          String   @map("created_by")
   createdAt          DateTime @default(now()) @map("created_at")

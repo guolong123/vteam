@@ -483,7 +483,7 @@ export default function TaskBoardPage() {
                     router.push(`/board?teamId=${encodeURIComponent(team.id)}`);
                   }} style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: space.xs, padding: space.lg, borderRadius: radius.lg, border: `1px solid ${neutral[200]}`, backgroundColor: "var(--color-surface)", color: neutral[800], textAlign: "left", cursor: "pointer", fontFamily: fontFamily.body }}>
                   <span style={{ fontSize: fontSize.md, fontWeight: 600 }}>{team.name}</span>
-                  <span style={{ fontSize: fontSize.sm, color: neutral[500] }}>{team.members.length} 成员 · {team.queue.length} 排队</span>
+                  <span style={{ fontSize: fontSize.sm, color: neutral[500] }}>{team.members.length} 成员 · {team.activeTaskCount ?? 0} 进行中</span>
                 </button>
               ))}
             </div>

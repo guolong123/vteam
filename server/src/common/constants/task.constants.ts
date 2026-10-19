@@ -77,6 +77,13 @@ export const TASK_ERRORS = {
   /** accept/archive 用户路径完工预检未通过（409，message 枚举未完成项，force=true 可强制通过）。 */
   TASK_COMPLETION_PREFLIGHT_FAILED: 'TASK_COMPLETION_PREFLIGHT_FAILED',
   TEAM_NOT_FOUND: 'TEAM_NOT_FOUND',
+  /** 并行执行 start 前置校验（409）：团队活跃占用（in_progress + blocked；pending_review 不计）
+   *  达到 `Team.maxConcurrentTasks` 上限（NULL = 不限不校验）。错误体 details.max 同传上限值。 */
+  TEAM_PARALLEL_LIMIT: 'TEAM_PARALLEL_LIMIT',
+  /**
+   * @deprecated 已随队首门摘除（parallel-tasks 计划 D2）：任务并行执行后不存在「队首」，
+   * 不再抛出此码。保留导出仅为兼容历史数据/错误体的读取，新代码禁止引用。
+   */
   TEAM_NOT_QUEUE_HEAD: 'TEAM_NOT_QUEUE_HEAD',
   TEAM_REQUIRED: 'TEAM_REQUIRED',
   /** 删除前置校验：in_progress / pending_review 不可删（前者 worker 执行中会变孤儿，后者待人工验收，删除即丢评审态），409。

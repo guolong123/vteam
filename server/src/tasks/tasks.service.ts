@@ -42,7 +42,7 @@ import { PlanArchiveService } from './plan-archive.service';
 import { PlanLifecycleService } from './plan-lifecycle.service';
 import { sanitizeWorkDirName } from './work-dir.util';
 
-/** 任务域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。 */
+/** 任务域主键前缀（15 篇 §2.2：<prefix>_<零填充序号>）。teamQueue=tq 仅为历史前缀记录保留。 */
 const ID_PREFIX = {
   task: 't',
   channel: 'c',
@@ -192,11 +192,6 @@ export class TasksService implements OnModuleInit {
     );
     await resyncIdPrefix(this.prisma.message, ID_PREFIX.message, this.idGen);
     await resyncIdPrefix(this.prisma.session, ID_PREFIX.session, this.idGen);
-    await resyncIdPrefix(
-      (this.prisma as any).teamQueue,
-      ID_PREFIX.teamQueue,
-      this.idGen,
-    );
     // 看门狗停滞回调：连续静默达上限 → 系统置阻塞 + 群公告（actor=system）。
     // progression 为本类已注入依赖，无循环引用；spec mock 缺该方法时可选调用。
     try {
@@ -221,12 +216,14 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
-   * 创建任务（团队门 + FIFO 串行排队，双保险行锁+版本CAS重试3次）。
-   * 事务内：SELECT team FOR UPDATE + version CAS → 校验 teamUserMember 团队成员
-   * → 空闲则 currentTaskId=新task pending，否则 TeamQueue position MAX+1 queued
-   * → 任务只作为数据行（实例唯一来源为团队成员 TeamMember，不写任务侧快照）
-   * → Message.taskId 分区（本期仅任务侧，后续 ChatService 复用 team_group 时带 taskId 分隔）
-   * → 广播 TASK_STATUS_CHANGED + TEAM_QUEUE_CHANGED。
+   * 创建任务（并行执行版，parallel-tasks 计划 §4.3，D2/D4）：
+   * 新任务一律 status=pending 直接落地，不再 FIFO 排队（queued 退役、无 TeamQueue 写入）；
+   * 并发上限在 start 前置校验（TEAM_PARALLEL_LIMIT），不在这里挡创建。
+   * 行锁 + version CAS 重试 3 次降级为写入安全（防并发重插/重复校验漂移）。
+   * 事务内：SELECT team FOR UPDATE + version CAS → 校验团队成员
+   * → currentTaskId 为空时指向新任务（D4 缺省聚焦指针，不参与调度）
+   * → 任务只作为数据行（实例唯一来源为团队成员 TeamMember）
+   * → 广播 TASK_STATUS_CHANGED（global + team scope）。
    */
   async create(userId: string, dto: CreateTaskDto) {
     const teamId = this.requireCreateTeam(dto);
@@ -310,11 +307,10 @@ export class TasksService implements OnModuleInit {
     for (let attempt = 0; attempt < 3; attempt++) {
       const taskId = await this.idGen.nextId(ID_PREFIX.task);
       let createdStatus: string = TASK_STATUS.pending;
-      let queuePosition: number | null = null;
       let createdTask: any = null;
       try {
         createdTask = await this.prisma.$transaction(async (tx: any) => {
-          // 行锁：SELECT team FOR UPDATE（双保险之一）
+          // 行锁：SELECT team FOR UPDATE（写入安全之锁）
           let team: any = null;
           try {
             const rows: any[] = await tx.$queryRawUnsafe(
@@ -347,7 +343,7 @@ export class TasksService implements OnModuleInit {
             }
           } catch (err) {
             // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出，
-            // 否则静默降级会丢失行锁、打开 double-promote 竞态（Todo 22）。
+            // 否则静默降级会丢失行锁、打开写冲突竞态（Todo 22 纪律沿用）。
             if (!this.isRowLockUnsupportedEngine()) throw err;
             team = await tx.team.findUnique({ where: { id: teamId } });
           }
@@ -358,37 +354,9 @@ export class TasksService implements OnModuleInit {
             });
           }
 
-          // 队首活跃判定：currentTaskId 非空即忙（queued/in_progress/pending 都算忙，避免两人同时抢队首）
+          // 队首/忙碌判定退役（D2/D4）：isIdle 只用于缺省聚焦指针兜底
           const isIdle = !team.currentTaskId;
-
-          // 行锁：SELECT MAX(position) FOR UPDATE（FIFO 位置双保险）
-          let maxPos = 0;
-          if (!isIdle) {
-            try {
-              const qRows: any[] = await tx.$queryRawUnsafe(
-                'SELECT MAX(position) as maxPos FROM team_queues WHERE team_id = ? FOR UPDATE',
-                teamId,
-              );
-              const v = qRows?.[0]?.maxPos;
-              maxPos = typeof v === 'number' ? v : v != null ? Number(v) : 0;
-              if (!Number.isFinite(maxPos)) maxPos = 0;
-            } catch (err) {
-              // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁 aggregate；支持行锁的引擎上
-              // 锁查询失败必须直接抛出——双失败时禁止 maxPos = 0 伪造 position = 1，
-              // 否则静默破坏 FIFO 队列顺序（Todo 23）。aggregate 自身失败一律向上抛出，
-              // 位置永不虚构。
-              if (!this.isRowLockUnsupportedEngine()) throw err;
-              const agg = await tx.teamQueue.aggregate({
-                _max: { position: true },
-                where: { teamId },
-              });
-              maxPos = agg._max.position ?? 0;
-            }
-          }
-
-          const status = isIdle ? TASK_STATUS.pending : TASK_STATUS.queued;
-          createdStatus = status;
-          queuePosition = isIdle ? null : maxPos + 1;
+          const status = TASK_STATUS.pending;
 
           const members: any[] = await tx.teamMember.findMany({
             where: { teamId },
@@ -458,37 +426,20 @@ export class TasksService implements OnModuleInit {
             }
           }
 
-          // FIFO + 版本双保险
-          if (isIdle) {
-            const upd: any = await tx.team.updateMany({
-              where: { id: teamId, version: team.version },
-              data: { currentTaskId: taskId, version: { increment: 1 } },
+          // 写入安全（行锁 + CAS）：无入队分支——唯一写为 version 递增；isIdle
+          // （原队首判定）仅在指针为空时把新任务写入 currentTaskId（D4 缺省聚焦）。
+          const upd: any = await tx.team.updateMany({
+            where: { id: teamId, version: team.version },
+            data: {
+              version: { increment: 1 },
+              ...(isIdle ? { currentTaskId: taskId } : {}),
+            },
+          });
+          if (upd.count === 0) {
+            throw new ConflictException({
+              code: 'VERSION_CONFLICT',
+              message: '团队并发冲突，请重试',
             });
-            if (upd.count === 0) {
-              throw new ConflictException({
-                code: 'VERSION_CONFLICT',
-                message: '团队并发冲突，请重试',
-              });
-            }
-          } else {
-            await tx.teamQueue.create({
-              data: {
-                id: await this.idGen.nextId(ID_PREFIX.teamQueue),
-                teamId,
-                taskId,
-                position: queuePosition!,
-              },
-            });
-            const upd: any = await tx.team.updateMany({
-              where: { id: teamId, version: team.version },
-              data: { version: { increment: 1 } },
-            });
-            if (upd.count === 0) {
-              throw new ConflictException({
-                code: 'VERSION_CONFLICT',
-                message: '团队并发冲突，请重试',
-              });
-            }
           }
 
           await tx.taskEvent.create({
@@ -517,13 +468,16 @@ export class TasksService implements OnModuleInit {
           },
           { type: 'global' },
         );
+        // team scope 同步广播（原 TEAM_QUEUE_CHANGED 的刷新面：任务列表/团队侧以
+        // task.status.changed 收敛刷新，parallel-tasks 计划 §7）。
         await this.realtime.broadcast(
-          EVENT_TYPES.TEAM_QUEUE_CHANGED,
+          EVENT_TYPES.TASK_STATUS_CHANGED,
           {
-            teamId,
             taskId,
-            status: createdStatus,
-            position: queuePosition,
+            from: null,
+            to: createdStatus,
+            actorType: opts.actorType,
+            actorId: opts.actorId ?? opts.createdBy,
           },
           { type: 'team', id: teamId },
         );
@@ -555,105 +509,122 @@ export class TasksService implements OnModuleInit {
   }
 
   /**
-   * 事务内拉起队首（FOR UPDATE 双保险）：
-   * SELECT team FOR UPDATE → 队首 queued→pending → TeamQueue 删除队首并重排剩余 position → currentTaskId 指向队首或 null → 广播 TEAM_QUEUE_CHANGED。
-   * 由 accept/archive/reject 的 afterCommit 在同一事务内调用，亦可独立调用（独立事务兜底）。
+   * start 并发占位校验（parallel-tasks 计划 §4.4，事务内执行）：
+   * 支持行锁的引擎 → SELECT team FOR UPDATE 后按锁内快照判定；不支持（sqlite）→
+   * 退化为 team.version CAS 预约（对齐原 claim 路径），冲突重试 3 次后 409 失败。
+   * 占用口径：in_progress + blocked 计入，pending_review 不计（非执行态，D1 明示决策）；
+   * Team.maxConcurrentTasks = NULL 时无上限、不校验（但指针兜底仍执行）。
+   * currentTaskId 兜底（D4）：start 成功路径上若指针为空，指向本任务（缺省聚焦）。
    */
-  private async promoteNextInTx(tx: any, teamId: string): Promise<void> {
-    let team: any = null;
-    try {
-      const rows: any[] = await tx.$queryRawUnsafe(
-        'SELECT id, version FROM teams WHERE id = ? FOR UPDATE',
-        teamId,
-      );
-      team = rows?.[0]
-        ? await tx.team.findUnique({ where: { id: teamId } })
-        : await tx.team.findUnique({ where: { id: teamId } });
-      if (team && rows?.[0]) team.version = rows[0].version;
-    } catch (err) {
-      // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出，
-      // 否则静默降级会丢失行锁、打开 double-promote 竞态（Todo 22）。
-      if (!this.isRowLockUnsupportedEngine()) throw err;
-      team = await tx.team.findUnique({ where: { id: teamId } });
-    }
-    if (!team) return;
-    let next: any = null;
-    try {
-      const qRows: any[] = await tx.$queryRawUnsafe(
-        'SELECT task_id as taskId, position FROM team_queues WHERE team_id = ? ORDER BY position ASC LIMIT 1 FOR UPDATE',
-        teamId,
-      );
-      if (qRows?.[0]?.taskId) next = { taskId: qRows[0].taskId };
-      else
-        next = await tx.teamQueue.findFirst({
-          where: { teamId },
-          orderBy: { position: 'asc' },
-        });
-    } catch (err) {
-      // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出，
-      // 否则静默降级会丢失队首锁、打开 double-promote 竞态（Todo 25）。
-      if (!this.isRowLockUnsupportedEngine()) throw err;
-      next = await tx.teamQueue.findFirst({
-        where: { teamId },
-        orderBy: { position: 'asc' },
-      });
-    }
-    if (next) {
-      await tx.team.updateMany({
-        where: { id: teamId, version: team.version },
-        data: { currentTaskId: next.taskId, version: { increment: 1 } },
-      });
-      await tx.task.updateMany({
-        where: { id: next.taskId, status: TASK_STATUS.queued },
-        data: { status: TASK_STATUS.pending },
-      });
-      await tx.teamQueue.deleteMany({ where: { taskId: next.taskId } });
-      // 重排剩余队列 position 连续化（删除队首后剩余按原 position 升序重编号 1..N）
+  private async reserveStartSlotInTx(
+    tx: any,
+    taskId: string,
+    teamId: string,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let team: any = null;
+      // locked = 行锁生效：FOR UPDATE 已串行化团队行，锁内判定直接作数，无需再 CAS
+      let locked = false;
       try {
-        const remaining: any[] = await tx.teamQueue.findMany({
-          where: { teamId },
-          orderBy: { position: 'asc' },
-        });
-        for (let i = 0; i < remaining.length; i++) {
-          const expected = i + 1;
-          if (remaining[i].position !== expected) {
-            await tx.teamQueue.update({
-              where: { id: remaining[i].id },
-              data: { position: expected },
-            });
-          }
-        }
-      } catch (err: unknown) {
-        // sqlite fallback 无碍，position 仍可用 MAX+1 保持 FIFO
-        this.logger.warn(
-          `队列 position 重排失败 teamId=${teamId}（无碍，仍可用 MAX+1 保持 FIFO）: ${err instanceof Error ? err.message : String(err)}`,
+        const rows: any[] = await tx.$queryRawUnsafe(
+          'SELECT id, version, current_task_id as currentTaskId, max_concurrent_tasks as maxConcurrentTasks FROM teams WHERE id = ? FOR UPDATE',
+          teamId,
         );
+        if (rows && rows.length > 0) {
+          locked = !this.isRowLockUnsupportedEngine();
+          team = {
+            id: teamId,
+            version: rows[0].version,
+            currentTaskId: rows[0].currentTaskId ?? null,
+            maxConcurrentTasks:
+              rows[0].maxConcurrentTasks != null
+                ? Number(rows[0].maxConcurrentTasks)
+                : null,
+          };
+        }
+      } catch (err) {
+        // sqlite 引擎不支持 FOR UPDATE：允许降级为无锁读；其他引擎锁失败必须抛出
+        // （Todo 22 纪律），否则静默无锁读会打开超卖竞态。
+        if (!this.isRowLockUnsupportedEngine()) throw err;
       }
-      await this.realtime.broadcast(
-        EVENT_TYPES.TEAM_QUEUE_CHANGED,
-        { teamId, taskId: next.taskId, status: 'promoted', action: 'promote' },
-        { type: 'team', id: teamId } as any,
-      );
-    } else {
-      await tx.team.updateMany({
-        where: { id: teamId, version: team.version },
-        data: { currentTaskId: null, version: { increment: 1 } },
+      if (!team) {
+        team = await tx.team.findUnique({
+          where: { id: teamId },
+          select: { id: true, version: true, currentTaskId: true, maxConcurrentTasks: true },
+        });
+      }
+      // 团队行缺失与原 claim 路径同口径：不认领也不校验，直接放行（FK Restrict 下仅剩竞态边缘）
+      if (!team) return;
+
+      const max = team.maxConcurrentTasks ?? null;
+      if (max != null) {
+        const occupied = await tx.task.count({
+          where: {
+            teamId,
+            status: { in: [TASK_STATUS.in_progress, TASK_STATUS.blocked] },
+          },
+        });
+        if (occupied >= max) {
+          throw new ConflictException({
+            code: TASK_ERRORS.TEAM_PARALLEL_LIMIT,
+            message: '并行任务数已达上限',
+            details: { max },
+          });
+        }
+      }
+
+      if (locked) {
+        if (!team.currentTaskId) {
+          await tx.team.updateMany({
+            where: { id: teamId, currentTaskId: null },
+            data: { currentTaskId: taskId, version: { increment: 1 } },
+          });
+        }
+        return;
+      }
+      // 无行锁引擎：version CAS 预约串行化（where 携带当前 currentTaskId 以防同刻指针被并发改写）
+      const nextCurrentTaskId: string | null = team.currentTaskId ?? taskId;
+      const reserved = await tx.team.updateMany({
+        where: {
+          id: teamId,
+          currentTaskId: team.currentTaskId ?? null,
+          version: team.version,
+        },
+        data: {
+          currentTaskId: nextCurrentTaskId,
+          version: { increment: 1 },
+        },
       });
-      await this.realtime.broadcast(
-        EVENT_TYPES.TEAM_QUEUE_CHANGED,
-        { teamId, action: 'idle' },
-        { type: 'team', id: teamId } as any,
-      );
+      if (reserved.count > 0) return;
+      // CAS 冲突 → 重读重试；3 次均失败按原 claim 路径抛 409 VERSION_CONFLICT
     }
+    throw new ConflictException({
+      code: 'VERSION_CONFLICT',
+      message: '团队并发冲突，请重试',
+    });
   }
 
   /**
-   * 拉起队首（独立事务入口，供外部直接调用；事务内复用 promoteNextInTx）。
+   * accept/archive 完工后的团队刷新广播（原队首晋升广播的替代，parallel-tasks 计划 §4.5）：
+   * 并行执行后无队首可晋升，改用既有 team.changed 通道在事务内通知团队侧刷新
+   * （活跃任务计数/任务列表）。广播失败仅 warn：DB 已提交，不因广播回滚完工。
    */
-  async promoteNext(teamId: string): Promise<void> {
-    await this.prisma.$transaction(async (tx: any) => {
-      await this.promoteNextInTx(tx, teamId);
-    });
+  private async notifyTeamParallelChangedInTx(
+    teamId: string,
+    taskId: string,
+    action: 'task_accepted' | 'task_archived',
+  ): Promise<void> {
+    try {
+      await this.realtime.broadcast(
+        EVENT_TYPES.TEAM_CHANGED,
+        { teamId, taskId, action },
+        { type: 'global' },
+      );
+    } catch (err: unknown) {
+      this.logger.warn(
+        `team.changed 广播失败 taskId=${taskId} teamId=${teamId}（DB 已提交，仅广播丢失）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /** 看板列表：团队作用域（teamId 可选）+ 五态/优先级筛选 + 分页（page 默认 1、pageSize 默认 20 上限 100），created_at desc。 */
@@ -1038,15 +1009,11 @@ export class TasksService implements OnModuleInit {
             const preTeamId = (task as any).teamId ?? null;
             let preMainMemberId: string | null = null;
             if (preTeamId) {
+              // 队首门已随并行执行退役（parallel-tasks 计划 §4.4）；并发上限在
+              // 事务内 reserveStartSlotInTx 校验，preflight 只保留主 Agent/成员存在性。
               const team = await this.prisma.team.findUnique({
                 where: { id: preTeamId },
               } as any);
-              if (team && (team as any).currentTaskId !== task.id) {
-                throw new ConflictException({
-                  code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
-                  message: '仅队首任务可启动',
-                });
-              }
               preMainMemberId =
                 (team as any)?.mainAgentMemberId ??
                 (await this.resolveTeamFallbackMainId(preTeamId));
@@ -1146,7 +1113,12 @@ export class TasksService implements OnModuleInit {
                 data: { acceptedFlag: true },
               });
             }
-            if (acceptTeamId) await this.promoteNextInTx(tx, acceptTeamId);
+            if (acceptTeamId)
+              await this.notifyTeamParallelChangedInTx(
+                acceptTeamId,
+                id,
+                'task_accepted',
+              );
           },
           // 10 篇 §8.1：强调 accepted_flag 基线锁定（FR-04）
           sysMessage: () => '任务已验收完成，产出物基线已锁定',
@@ -1206,7 +1178,12 @@ export class TasksService implements OnModuleInit {
               where: { taskId: id },
               data: { status: SESSION_STATUS.archived },
             });
-            if (archiveTeamId) await this.promoteNextInTx(tx, archiveTeamId);
+            if (archiveTeamId)
+              await this.notifyTeamParallelChangedInTx(
+                archiveTeamId,
+                id,
+                'task_archived',
+              );
           },
           // 10 篇 §8.1：明确内容保留（FR-05）；记忆管理（mem-trigger）补充提示：任务级记忆已随验收沉淀
           sysMessage: () =>
@@ -1487,7 +1464,6 @@ export class TasksService implements OnModuleInit {
         where: { taskId: id },
         data: { taskId: null },
       });
-      await tx.teamQueue.deleteMany({ where: { taskId: id } });
       await tx.team.updateMany({
         where: { currentTaskId: id },
         data: { currentTaskId: null },
@@ -1682,58 +1658,6 @@ export class TasksService implements OnModuleInit {
     if (task.status === to) {
       return this.toTaskDto(task);
     }
-    if (action === 'start' && (task as any).teamId) {
-      const teamHead = await (this.prisma as any).team.findUnique({
-        where: { id: (task as any).teamId },
-      });
-      if (teamHead && teamHead.currentTaskId !== id) {
-        // 空闲认领：团队无当前任务且本任务为 pending（取消排队后的孤儿 pending）→ 直接认领队首后启动，
-        // 否则一旦 currentTaskId 为空将没有任何任务可启动（死锁）。忙碌中非队首仍 409。
-        if (!teamHead.currentTaskId && task.status === TASK_STATUS.pending) {
-          const claimed = await (this.prisma as any).team.updateMany({
-            where: {
-              id: (task as any).teamId,
-              currentTaskId: null,
-              version: teamHead.version,
-            },
-            data: { currentTaskId: id, version: { increment: 1 } },
-          });
-          if (claimed.count === 0) {
-            throw new ConflictException({
-              code: 'VERSION_CONFLICT',
-              message: '团队并发冲突，请重试',
-            });
-          }
-          try {
-            await this.realtime.broadcast(
-              EVENT_TYPES.TEAM_QUEUE_CHANGED,
-              {
-                teamId: (task as any).teamId,
-                taskId: id,
-                status: 'claimed',
-                action: 'claim',
-              },
-              { type: 'team', id: (task as any).teamId } as any,
-            );
-          } catch (err: unknown) {
-            this.logger.warn(
-              `认领广播失败 taskId=${id} teamId=${teamHead.id}（DB 已提交，仅广播丢失）: ${err instanceof Error ? err.message : String(err)}`,
-            );
-          }
-        } else {
-          throw new ConflictException({
-            code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
-            message: '仅队首任务可启动',
-          });
-        }
-      }
-      if (task.status === TASK_STATUS.queued) {
-        throw new ConflictException({
-          code: TASK_ERRORS.TEAM_NOT_QUEUE_HEAD,
-          message: '仅队首任务可启动',
-        });
-      }
-    }
     if (task.status !== from) {
       throw new ConflictException({
         code: TASK_ERRORS.TASK_INVALID_TRANSITION,
@@ -1802,6 +1726,11 @@ export class TasksService implements OnModuleInit {
 
     const sysMessages: SysMessageRow[] = [];
     const casFailed = await this.prisma.$transaction(async (tx) => {
+      // start 并发占位 + 指针兜底（parallel-tasks 计划 §4.4）：占用校验失败 409 时
+      // 本事务尚未写任务行，直接回滚无副作用。
+      if (action === 'start' && taskTeamId) {
+        await this.reserveStartSlotInTx(tx, id, taskTeamId);
+      }
       const updated = await tx.task.updateMany({
         where: { id, status: from, version: task.version },
         data: { status: to, version: { increment: 1 }, ...opts.fields },

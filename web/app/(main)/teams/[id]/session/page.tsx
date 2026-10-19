@@ -131,6 +131,23 @@ interface AgentsResponse {
   total: number;
 }
 
+/** 团队任务列表行（GET /tasks?teamId=；与右侧面板/teams/[id]/tasks 共用缓存形状）。 */
+interface TeamTaskListItem {
+  id: string;
+  title: string;
+  status: string;
+  createdAt: string;
+  startedAt?: string | null;
+  pendingReviewAt?: string | null;
+  completedAt?: string | null;
+}
+interface TeamTaskListResponse {
+  items: TeamTaskListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 /**
  * GET /tasks/:id/plan-docs 响应：任务目录 `.opencode/plans/*.md` 的实时同步。
  * degraded=true 表示读不到（非"没有计划"）；directory 是服务端定位的任务目录。
@@ -181,6 +198,8 @@ export default function TeamSessionPage() {
   const [detailIssueId, setDetailIssueId] = useState<string | null>(null);
   const [taskEditOpen, setTaskEditOpen] = useState(false);
   const [taskDetailOpen, setTaskDetailOpen] = useState(false);
+  /** 详情抽屉目标任务 id（顶栏胶囊/任务列表行点击写入，与聚焦任务解耦）。 */
+  const [taskDetailTaskId, setTaskDetailTaskId] = useState<string | null>(null);
   /** 计划文件上传：隐藏 input 触发（无原生控件样式依赖）+ 错误提示。 */
   const planUploadInputRef = useRef<HTMLInputElement | null>(null);
   const [planUploadError, setPlanUploadError] = useState<string | null>(null);
@@ -208,20 +227,17 @@ export default function TeamSessionPage() {
     direction: "inverse",
   });
 
-  /* ---------- 团队 + 当前任务 ---------- */
+  /* ---------- 团队 + 任务列表 + 聚焦任务 ---------- */
   const teamQuery = useQuery({
     queryKey: ["team", teamId],
     queryFn: () => teamsApi.get(teamId),
     enabled: !!teamId && !!user?.id,
   });
   const team: TeamDto | undefined = teamQuery.data;
-  const queueHeadTaskId = team?.currentTaskId ?? null;
-  const queueHeadTaskQuery = useQuery({
-    queryKey: ["task", queueHeadTaskId],
-    queryFn: () => api.get<TaskDetail>(`/tasks/${queueHeadTaskId}`),
-    enabled: !!queueHeadTaskId && !!user?.id,
-  });
-  const queueHeadTask = queueHeadTaskQuery.data ?? null;
+
+  const [pickedTaskId, setPickedTaskId] = useState<string | null>(null);
+  /** 顶栏「+N」展开的活跃任务列表开合（hook 必须早于渲染守卫声明）。 */
+  const [activeListOpen, setActiveListOpen] = useState(false);
 
   const searchParams = useSearchParams();
   const requestedTaskParam = searchParams.get("task");
@@ -232,25 +248,59 @@ export default function TeamSessionPage() {
     enabled: !!requestedTaskId && !!user?.id,
   });
   const requestedTaskBelongsToTeam = requestedTaskQuery.data?.teamId === teamId;
+
+  /** 团队任务列表（与 teams/[id]/tasks 与右侧面板共用 ["team-tasks", teamId] 缓存）。 */
+  const teamTasksQuery = useQuery({
+    queryKey: ["team-tasks", teamId],
+    queryFn: () => api.get<TeamTaskListResponse>("/tasks", { query: { teamId, page: 1, pageSize: 100 } }),
+    enabled: !!teamId && !!user?.id,
+  });
+  const teamTaskItems = useMemo(() => teamTasksQuery.data?.items ?? [], [teamTasksQuery.data]);
+
+  /** 兜底聚焦任务（并行化后不依赖 team.currentTaskId 调度语义）：
+   *  优先级：最近 in_progress → blocked → pending_review → pending → null；同级按相关时间倒序。 */
+  const fallbackPanelTaskId = useMemo(() => {
+    const inList = (statuses: string[]) => teamTaskItems.filter((t) => statuses.includes(t.status));
+    const ts = (t: TeamTaskListItem, key: "startedAt" | "pendingReviewAt" | "createdAt") =>
+      new Date((t[key] as string | null) ?? t.createdAt).getTime();
+    const pick = (statuses: string[], key: "startedAt" | "pendingReviewAt" | "createdAt") =>
+      inList(statuses).sort((a, b) => ts(b, key) - ts(a, key))[0] ?? null;
+    return (
+      pick(["in_progress"], "startedAt") ??
+      pick(["blocked"], "startedAt") ??
+      pick(["pending_review"], "pendingReviewAt") ??
+      pick(["pending"], "createdAt")
+    )?.id ?? null;
+  }, [teamTaskItems]);
+
   const effectivePanelTaskId =
-    requestedTaskId && requestedTaskQuery.isSuccess && requestedTaskBelongsToTeam
+    pickedTaskId ??
+    (requestedTaskId && requestedTaskQuery.isSuccess && requestedTaskBelongsToTeam
       ? requestedTaskId
-      : queueHeadTaskId;
+      : null) ??
+    fallbackPanelTaskId;
+  const handleSelectPanelTask = useCallback((taskId: string) => {
+    setPickedTaskId(taskId);
+    router.replace(`/teams/${teamId}/session?task=${taskId}`, { scroll: false });
+  }, [router, teamId]);
   const panelTaskQuery = useQuery({
     queryKey: ["task", effectivePanelTaskId],
     queryFn: () => api.get<TaskDetail>(`/tasks/${effectivePanelTaskId}`),
     enabled: !!effectivePanelTaskId && !!user?.id,
   });
   const panelTask = panelTaskQuery.data ?? null;
+  /** 面板聚焦任务活跃判据（群聊 pinned taskId / 任务列表“查看详情”以此为准）。 */
+  const panelTaskActive =
+    !!panelTask && (panelTask.status === "in_progress" || panelTask.status === "blocked");
   const taskParamError =
     requestedTaskParam === null
       ? null
       : !isTaskParam(requestedTaskParam)
-        ? "任务参数无效，已显示队首任务"
+        ? "任务参数无效，已显示最近进行中任务"
         : requestedTaskQuery.isError
-          ? "任务参数无效，已显示队首任务"
+          ? "任务参数无效，已显示最近进行中任务"
           : requestedTaskQuery.isSuccess && !requestedTaskBelongsToTeam
-            ? "该任务不属于当前团队，已显示队首任务"
+            ? "该任务不属于当前团队，已显示最近进行中任务"
             : null;
 
   /* ---------- 群聊频道 ---------- */
@@ -424,7 +474,7 @@ export default function TeamSessionPage() {
   }, [questionsQuery.data]);
 
   const teamAgentMembers = useMemo(() => {
-    const instances = queueHeadTask?.instances ?? [];
+    const instances = panelTask?.instances ?? [];
     if (instances.length > 0) return taskInstancesToSessionAgents(instances);
     return (team?.members ?? []).map((m: TeamMemberDto) => {
       const role = m.agent?.role && (ROLE_KEYS as readonly string[]).includes(m.agent.role)
@@ -444,7 +494,7 @@ export default function TeamSessionPage() {
         opencodeAgentName: (m as { opencodeAgentName?: string | null }).opencodeAgentName ?? null,
       };
     });
-  }, [queueHeadTask, team]);
+  }, [panelTask, team]);
 
   const panelAgentMembers = useMemo(() => {
     const instances = panelTask?.instances ?? [];
@@ -530,10 +580,8 @@ export default function TeamSessionPage() {
     );
     if (pending.length === 0) return keys;
     const instBySession = new Map<string, TaskInstance>();
-    for (const task of [queueHeadTask, panelTask]) {
-      for (const inst of task?.instances ?? []) {
-        if (inst.sessionId) instBySession.set(inst.sessionId, inst);
-      }
+    for (const inst of panelTask?.instances ?? []) {
+      if (inst.sessionId) instBySession.set(inst.sessionId, inst);
     }
     for (const q of pending) {
       const inst = q.sessionId ? instBySession.get(q.sessionId) : undefined;
@@ -542,7 +590,7 @@ export default function TeamSessionPage() {
       for (const key of agentKeysFor({ instanceId, agentId: agentId || null })) keys.add(key);
     }
     return keys;
-  }, [questionQueue, queueHeadTask, panelTask, agentKeysFor]);
+  }, [questionQueue, panelTask, agentKeysFor]);
 
   /** 该消息发送方是否命中 pending secret_input 会话（空键集合恒 false，不产生额外渲染）。 */
   const secretAwaitingFor = useCallback(
@@ -713,11 +761,11 @@ export default function TeamSessionPage() {
   /* ---------- 会话状态初始快照 ---------- */
   const sessionSeedRef = useRef(false);
   useEffect(() => {
-    if (!queueHeadTask?.instances?.length || sessionSeedRef.current) return;
+    if (!panelTask?.instances?.length || sessionSeedRef.current) return;
     sessionSeedRef.current = true;
     setSessionByAgent((prev) => {
       let next: Record<string, string> | null = null;
-      for (const inst of queueHeadTask.instances) {
+      for (const inst of panelTask.instances) {
         if (inst.sessionStatus && !(inst.id in prev)) {
           if (!next) next = { ...prev };
           next[inst.id] = inst.sessionStatus;
@@ -725,13 +773,13 @@ export default function TeamSessionPage() {
       }
       return next ?? prev;
     });
-    for (const inst of queueHeadTask.instances) {
+    for (const inst of panelTask.instances) {
       if (inst.sessionId) {
         agentIdBySessionRef.current[inst.sessionId] = inst.agentId;
         instanceIdBySessionRef.current[inst.sessionId] = inst.id;
       }
     }
-  }, [queueHeadTask]);
+  }, [panelTask]);
 
   /* ---------- 实时（team + channel + task + global） ---------- */
   // 初次加载/切换 Tab 时滚到底；加载更多（头部插入历史）不打断阅读位置
@@ -1051,7 +1099,7 @@ export default function TeamSessionPage() {
               attachmentType: payload.attachment.ext,
             }
           : {}),
-        ...(isGroupTab && queueHeadTaskId ? { taskId: queueHeadTaskId } : {}),
+        ...(isGroupTab && panelTaskActive ? { taskId: panelTask!.id } : {}),
       }),
     onSuccess: () => {
       setInput("");
@@ -1101,19 +1149,19 @@ export default function TeamSessionPage() {
     }
   }, [isGroupTab, messagesQuery, privateMessagesQuery, channelId, activePrivateId, loadingMore, queryClient, teamId]);
 
-  /* ---------- 成员管理（挂当前任务实例维度；无当前任务时只读） ---------- */
-  const hasQueueHeadTask = !!queueHeadTaskId;
+  /* ---------- 成员管理（挂聚焦任务实例维度；无聚焦任务时只读） ---------- */
+  const hasPanelTask = !!effectivePanelTaskId;
   const toggleEnabledMutation = useMutation({
     mutationFn: ({ instanceId, enabled }: { instanceId: string; enabled: boolean }) =>
-      api.patch<TaskDetail>(`/tasks/${queueHeadTaskId}/instances/${instanceId}`, { enabled }),
+      api.patch<TaskDetail>(`/tasks/${effectivePanelTaskId}/instances/${instanceId}`, { enabled }),
     onSuccess: (updated, variables) => {
-      queryClient.setQueryData<TaskDetail>(["task", queueHeadTaskId], updated);
-      queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
+      queryClient.setQueryData<TaskDetail>(["task", effectivePanelTaskId], updated);
+      queryClient.invalidateQueries({ queryKey: ["task", effectivePanelTaskId] });
       const name = teamAgentMembers.find((a) => (a.instanceId ?? a.id) === variables.instanceId)?.name;
       setNotice({ kind: "success", text: name ? `${variables.enabled ? "已启用" : "已禁用"}「${name}」` : `已切换「${variables.instanceId}」状态` });
     },
     onError: (err) => {
-      console.error("[TeamSession] toggle instance failed", { teamId, taskId: queueHeadTaskId, error: err });
+      console.error("[TeamSession] toggle instance failed", { teamId, taskId: effectivePanelTaskId, error: err });
       setNotice({ kind: "error", text: isApiError(err) ? err.message : "切换成员状态失败，请稍后重试" });
     },
   });
@@ -1128,11 +1176,11 @@ export default function TeamSessionPage() {
     mutationFn: ({ instanceId, modelId }: { instanceId: string; modelId: string | null }) =>
       api.patch(`/teams/${teamId}/members/${instanceId}`, { overrideModelId: modelId ?? null }),
     onSuccess: () => {
-      // 会话页 teamAgentMembers 有任务实例时优先读队首任务实例（["task", effectivePanelTaskId]），
+      // 会话页 teamAgentMembers 有任务实例时优先读聚焦任务实例（["task", effectivePanelTaskId]），
       // 仅失效 team 缓存 UI 不刷新——需同时失效 task 缓存（成员模型覆盖展示断链修复）。
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      if (queueHeadTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
+      if (effectivePanelTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["task", effectivePanelTaskId] });
       }
     },
     onError: (err) => {
@@ -1143,11 +1191,11 @@ export default function TeamSessionPage() {
     mutationFn: ({ instanceId, workerId }: { instanceId: string; workerId: string | null }) =>
       api.patch(`/teams/${teamId}/members/${instanceId}`, { preferredWorkerId: workerId ?? null }),
     onSuccess: () => {
-      // 会话页 teamAgentMembers 有任务实例时优先读队首任务实例（["task", effectivePanelTaskId]），
+      // 会话页 teamAgentMembers 有任务实例时优先读聚焦任务实例（["task", effectivePanelTaskId]），
       // 仅失效 team 缓存 UI 不刷新——需同时失效 task 缓存（成员 worker 覆盖展示断链修复）。
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      if (queueHeadTaskId) {
-        queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
+      if (effectivePanelTaskId) {
+        queryClient.invalidateQueries({ queryKey: ["task", effectivePanelTaskId] });
       }
     },
     onError: (err) => {
@@ -1163,7 +1211,7 @@ export default function TeamSessionPage() {
       const name = teamAgentMembers.find((a) => (a.instanceId ?? a.id) === variables.instanceId)?.name;
       setNotice({ kind: "success", text: name ? `已重置「${name}」的会话` : "已重置该成员的会话" });
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      if (queueHeadTaskId) queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
+      if (effectivePanelTaskId) queryClient.invalidateQueries({ queryKey: ["task", effectivePanelTaskId] });
     },
     onError: (err) => {
       console.error("[TeamSession] reset session failed", { teamId, error: err });
@@ -1205,8 +1253,8 @@ export default function TeamSessionPage() {
       setAddError(null);
       queryClient.setQueryData<TeamDto>(["team", teamId], updated);
       queryClient.invalidateQueries({ queryKey: ["team", teamId] });
-      // 成员面板优先读 queueHeadTask.instances（服务端由团队成员派生），需刷新任务维度缓存。
-      if (queueHeadTaskId) queryClient.invalidateQueries({ queryKey: ["task", queueHeadTaskId] });
+      // 成员面板优先读聚焦任务 task.instances（服务端由团队成员派生），需刷新任务维度缓存。
+      if (effectivePanelTaskId) queryClient.invalidateQueries({ queryKey: ["task", effectivePanelTaskId] });
     },
     onError: (err) => {
       console.error("[TeamSession] add team member failed", { teamId, error: err });
@@ -1337,28 +1385,130 @@ export default function TeamSessionPage() {
 
   return (
     <div data-testid="team-session-root" style={{ flex: 1, minHeight: 0, height: "100%", overflow: "hidden", display: "flex", flexDirection: "column", ...baseFont }}>
-      {/* 顶栏：团队名 + 当前任务 + 队列 + 刷新 + 头像组 */}
+      {/* 顶栏：团队名 + 活跃任务胶囊组 + 活跃/待开始计数 + 刷新 + 头像组 */}
       <header style={{ height: 64, flexShrink: 0, display: "flex", alignItems: "center", gap: space.md, padding: `0 ${space.xl}px`, backgroundColor: "var(--color-surface)", borderBottom: `1px solid ${neutral[200]}` }}>
+        <style>{`@keyframes team-task-breathe { 0%,100%{opacity:.25} 50%{opacity:1} }`}</style>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
             <TeamSwitcher currentTeamId={teamId} currentTeamName={team.name} />
             <span style={{ fontSize: fontSize.lg, fontWeight: 600, color: neutral[900] }}>· 团队会话</span>
-            {panelTask ? (
-              <button
-                type="button"
-                data-testid="team-session-current-task"
-                data-task-id={panelTask.id}
-                onClick={() => setTaskDetailOpen(true)}
-                title="打开任务详情抽屉"
-                style={{ fontSize: fontSize.xs, color: "#0D9488", backgroundColor: "rgba(13,148,136,0.08)", border: "1px solid rgba(13,148,136,0.22)", padding: "1px 8px", borderRadius: radius.pill, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 240 }}
-              >
-                {panelTask.title}
-              </button>
-            ) : (
-              <span style={{ fontSize: fontSize.xs, color: neutral[400] }}>团队空闲</span>
-            )}
+            {(() => {
+              const activeTasks = teamTaskItems
+                .filter((t) => t.status === "in_progress" || t.status === "blocked")
+                .sort((a, b) => new Date(b.startedAt ?? b.createdAt).getTime() - new Date(a.startedAt ?? a.createdAt).getTime());
+              const selectedNotInPills = !!panelTask && !activeTasks.some((t) => t.id === panelTask.id);
+              const pillBtnStyle = (selected: boolean): CSSProperties => ({
+                fontSize: fontSize.xs, color: "#0D9488", backgroundColor: selected ? "#0D9488" : "rgba(13,148,136,0.08)", border: `1px solid ${selected ? "#0D9488" : "rgba(13,148,136,0.22)"}`, padding: "1px 8px", borderRadius: radius.pill, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 240, display: "inline-flex", alignItems: "center", gap: space.xs,
+              });
+              const openDetail = (taskId: string) => {
+                setTaskDetailTaskId(taskId);
+                setTaskDetailOpen(true);
+              };
+              return (
+                <>
+                  {selectedNotInPills && (
+                    <button
+                      type="button"
+                      data-testid="team-session-current-task"
+                      data-task-id={panelTask!.id}
+                      onClick={() => openDetail(panelTask!.id)}
+                      title="打开任务详情抽屉"
+                      style={{ fontSize: fontSize.xs, color: neutral[600], backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[300]}`, padding: "1px 8px", borderRadius: radius.pill, cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 240 }}
+                    >
+                      {panelTask!.title}
+                    </button>
+                  )}
+                  {activeTasks.slice(0, 2).map((t) => {
+                    const selected = t.id === effectivePanelTaskId;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        data-testid={selected ? "team-session-current-task" : "team-session-active-task"}
+                        data-task-id={t.id}
+                        data-status={t.status}
+                        onClick={() => openDetail(t.id)}
+                        title="打开任务详情抽屉"
+                        style={pillBtnStyle(selected)}
+                      >
+                        <span
+                          aria-hidden
+                          style={{
+                            width: 7,
+                            height: 7,
+                            borderRadius: "50%",
+                            flexShrink: 0,
+                            backgroundColor: t.status === "blocked" ? "#B91C1C" : "#10B981",
+                            animation: t.status === "in_progress" ? "team-task-breathe 1.6s ease-in-out infinite" : undefined,
+                          }}
+                        />
+                        {t.title}
+                      </button>
+                    );
+                  })}
+                  {activeTasks.length > 2 && (
+                    <span style={{ position: "relative", display: "inline-flex" }}>
+                      <button
+                        type="button"
+                        data-testid="team-session-active-more"
+                        onClick={() => setActiveListOpen((o) => !o)}
+                        title="展开全部活跃任务"
+                        style={{ fontSize: fontSize.xs, color: "#0D9488", backgroundColor: "rgba(13,148,136,0.08)", border: "1px solid rgba(13,148,136,0.22)", padding: "1px 8px", borderRadius: radius.pill, cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 }}
+                      >
+                        +{activeTasks.length - 2}
+                      </button>
+                      {activeListOpen && (
+                        <div
+                          data-testid="team-session-active-list"
+                          style={{
+                            position: "absolute",
+                            top: "calc(100% + 4px)",
+                            left: 0,
+                            zIndex: 60,
+                            minWidth: 260,
+                            maxHeight: 280,
+                            overflowY: "auto",
+                            backgroundColor: "var(--color-surface)",
+                            border: `1px solid ${neutral[200]}`,
+                            borderRadius: radius.md,
+                            boxShadow: "0 8px 24px rgba(15,23,42,.12)",
+                            padding: space.sm,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: space.xs,
+                          }}
+                        >
+                          {activeTasks.map((t) => {
+                            const selected = t.id === effectivePanelTaskId;
+                            return (
+                              <button
+                                key={t.id}
+                                type="button"
+                                data-testid="team-session-active-list-item"
+                                data-task-id={t.id}
+                                onClick={() => {
+                                  setActiveListOpen(false);
+                                  openDetail(t.id);
+                                }}
+                                style={{ display: "flex", alignItems: "center", gap: space.xs, padding: `${space.xs}px ${space.sm}px`, borderRadius: radius.sm, border: `1px solid ${selected ? "rgba(13,148,136,0.28)" : neutral[200]}`, backgroundColor: selected ? "rgba(13,148,136,0.08)" : "var(--color-surface)", color: neutral[700], fontSize: fontSize.sm, cursor: "pointer", textAlign: "left", fontFamily: fontFamily.body, minWidth: 0 }}
+                              >
+                                <span aria-hidden style={{ width: 7, height: 7, borderRadius: "50%", flexShrink: 0, backgroundColor: t.status === "blocked" ? "#B91C1C" : "#10B981", animation: t.status === "in_progress" ? "team-task-breathe 1.6s ease-in-out infinite" : undefined }} />
+                                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{selected ? "✓ " : ""}{t.title}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </span>
+                  )}
+                  {activeTasks.length === 0 && !selectedNotInPills && (
+                    <span data-testid="team-session-idle" style={{ fontSize: fontSize.xs, color: neutral[400] }}>团队空闲</span>
+                  )}
+                </>
+              );
+            })()}
           </div>
-          <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>常驻群聊 · 按团队复用，切任务不切群 · {(team.members ?? []).length} 成员 · 等待队列 {(team.queue ?? []).length} 个</div>
+          <div style={{ fontSize: fontSize.xs, color: neutral[400], marginTop: 2 }}>常驻群聊 · 按团队复用，切任务不切群 · {(team.members ?? []).length} 成员 · 进行中 {team.activeTaskCount ?? teamTaskItems.filter((t) => t.status === "in_progress" || t.status === "blocked").length} · 待开始 {teamTaskItems.filter((t) => t.status === "pending").length}</div>
         </div>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: space.sm }}>
           <button type="button" data-testid="team-session-refresh" aria-label="刷新会话" onClick={() => { queryClient.invalidateQueries({ queryKey: ["channel", channelId, "messages"] }); queryClient.invalidateQueries({ queryKey: ["channels", "team_group", teamId] }); queryClient.invalidateQueries({ queryKey: ["team", teamId] }); }} style={{ width: 32, height: 32, borderRadius: radius.md, border: `1px solid ${neutral[200]}`, background: "var(--color-surface)", color: neutral[500], cursor: "pointer" }}>↻</button>
@@ -1394,9 +1544,9 @@ export default function TeamSessionPage() {
           addError={addError}
           onAddInstance={handleAddInstance}
           width={membersPanel.width}
-          onToggleEnabled={hasQueueHeadTask ? handleToggleEnabled : undefined}
+          onToggleEnabled={hasPanelTask ? handleToggleEnabled : undefined}
           togglePendingInstanceId={togglePendingInstanceId}
-          onResetSession={hasQueueHeadTask ? handleResetSession : undefined}
+          onResetSession={hasPanelTask ? handleResetSession : undefined}
           resetPendingInstanceId={resetPendingInstanceId}
           onChangeModel={(instanceId: string, modelId: string | null) => instanceModelMutation.mutate({ instanceId, modelId })}
           onChangeWorker={(instanceId: string, workerId: string | null) => instanceWorkerMutation.mutate({ instanceId, workerId })}
@@ -1577,7 +1727,7 @@ export default function TeamSessionPage() {
               onSend={handleSend}
               mentionable={mentionable}
               sending={sendMutation.isPending}
-              taskId={queueHeadTaskId ?? undefined}
+              taskId={panelTaskActive ? panelTask!.id : undefined}
               placeholder={isGroupTab ? "输入消息，@ 成员或 @all 广播…" : `发送私聊给 ${teamAgentMembers.find((m) => `private:${privateChannelMap.get(m.instanceId ?? m.id)}` === activeTab)?.name ?? "私聊对象"}…`}
             />
             <div style={{ marginTop: space.xs, fontSize: fontSize.xs, color: neutral[400] }}>按团队复用 · 群聊消息按当前任务分区归属 {team.name}</div>
@@ -1610,6 +1760,12 @@ export default function TeamSessionPage() {
             team={team}
             task={panelTask}
             taskId={panelTask?.id ?? ""}
+            selectedTaskId={effectivePanelTaskId}
+            onSelectTask={handleSelectPanelTask}
+            onOpenTaskDetail={(tid: string) => {
+              setTaskDetailTaskId(tid);
+              setTaskDetailOpen(true);
+            }}
             artifactsQuery={artifactsQuery}
             planArtifactsQuery={planArtifactsQuery}
             planDocsQuery={planDocsQuery}
@@ -1652,8 +1808,8 @@ export default function TeamSessionPage() {
         ) : null}
 
         {/* 任务详情抽屉（替代已删除的 /tasks/:id 路由页） */}
-        {panelTask && taskDetailOpen ? (
-          <TaskDetailDrawer taskId={panelTask.id} onClose={() => setTaskDetailOpen(false)} />
+        {taskDetailTaskId && taskDetailOpen ? (
+          <TaskDetailDrawer taskId={taskDetailTaskId} onClose={() => setTaskDetailOpen(false)} />
         ) : null}
 
         {/* Issue 详情弹窗 */}

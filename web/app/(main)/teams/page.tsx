@@ -95,7 +95,7 @@ function TeamCard({ team, onOpen }: { team: TeamDto; onOpen: () => void }) {
         <div style={{ display: "flex", alignItems: "center", gap: space.xs, fontSize: fontSize.sm, color: neutral[400], minWidth: 0, overflow: "hidden", whiteSpace: "nowrap" }}>
           <span style={{ fontWeight: 700, color: neutral[700] }}>{team.members.length}</span> 成员
           <span style={{ color: neutral[300] }}>·</span>
-          <span style={{ color: team.queue.length > 0 ? "#D97706" : neutral[400] }}>{team.queue.length} 排队</span>
+          <span style={{ color: "#D97706", fontWeight: 600 }}>{(team.activeTaskCount ?? 0) > 0 ? `${team.activeTaskCount} 进行中` : "空闲"}</span>
           {team.currentTaskId && (
             <>
               <span style={{ color: neutral[300] }}>·</span>

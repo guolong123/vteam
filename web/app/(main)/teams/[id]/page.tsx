@@ -5,7 +5,7 @@
  * =============================================
  * - 团队信息（name/description/reuseSession 开关 version 乐观锁）
  * - 当前任务卡片（currentTaskId）
- * - 队列预览（queue position/taskId/enqueuedAt）
+ * - 当前任务卡（currentTaskId 聚焦指针 + 状态徽章；并行化后无队列预览）
  * - 成员列表（alias/workDir 行内编辑，增删改；多实例支持）
  * - 删除团队（执行中任务时禁用；其余关联任务随团队级联删除，确认框列出任务）
  * - 添加成员：ROLE-first 岗位选择（来源 GET /agent-roles；role-only 提交，
@@ -18,7 +18,7 @@ import { useRealtimeEvents } from "@/hooks/use-realtime";
 import { useAuthStore } from "@/lib/stores/authStore";
 import { isApiError } from "@/lib/errors";
 import { api } from "@/lib/api";
-import { teamsApi, type TeamDto, type TeamMemberDto, type TeamQueueDto } from "@/src/api/teams";
+import { teamsApi, type TeamDto, type TeamMemberDto } from "@/src/api/teams";
 import { agentRolesApi, type AgentRoleDto } from "@/src/api/agent-roles";
 import { UserMembersSection } from "./user-members";
 import { AgentAvatar, ConfirmDialog } from "@/src/components/ui";
@@ -162,7 +162,7 @@ export default function TeamDetailPage() {
 
   const RUNNING_TASK_STATUS = ["in_progress", "blocked", "pending_review"];
   const hasRunningTask = !!team && RUNNING_TASK_STATUS.includes(team.currentTaskStatus ?? "");
-  const hasTasks = !!team && (!!team.currentTaskId || team.queue.length > 0);
+  const hasTasks = !!team && !!team.currentTaskId;
   const deletable = !!team && !hasRunningTask;
 
   const patchMutation = useMutation({
@@ -245,22 +245,6 @@ export default function TeamDetailPage() {
 
   const deleteMutation = useMutation({ mutationFn: () => teamsApi.remove(id) });
 
-  const cancelQueueMutation = useMutation({
-    mutationFn: (taskId: string) => teamsApi.cancelQueue(id, taskId),
-  });
-  const handleCancelQueue = async (taskId: string) => {
-    setActionError(null);
-    try {
-      await cancelQueueMutation.mutateAsync(taskId);
-      queryClient.invalidateQueries({ queryKey: ["team", id] });
-      queryClient.invalidateQueries({ queryKey: ["teams"] });
-    } catch (err) {
-      const msg = isApiError(err) ? err.message : "取消失败";
-      const is409 = isApiError(err) && err.status === 409;
-      setActionError(is409 ? `${msg}（仅排队中的任务可取消）` : msg);
-    }
-  };
-
   if (teamQuery.isPending) return <div data-testid="team-detail-loading" style={{ padding: space.xl, color: neutral[400], ...baseFont }}>加载中…</div>;
   if (teamQuery.isError) return (
     <div data-testid="team-detail-error" role="alert" style={{ padding: space.xl, ...baseFont, display: "flex", flexDirection: "column", gap: space.md }}>
@@ -328,7 +312,7 @@ export default function TeamDetailPage() {
           <span>v{team.version}</span>
           <span>{new Date(team.updatedAt).toLocaleString()}</span>
           <span style={{ color: "#0D9488", fontWeight: 600 }}>{team.members.length} 成员</span>
-          <span style={{ color: team.queue.length > 0 ? "#D97706" : neutral[400], fontWeight: 600 }}>{team.queue.length} 排队</span>
+          <span style={{ color: (team.activeTaskCount ?? 0) > 0 ? "#D97706" : neutral[400], fontWeight: 600 }}>{team.activeTaskCount ?? 0} 进行中</span>
           {hasRunningTask && <span data-testid="delete-disabled-hint" style={{ color: neutral[400] }}>· 有执行中的任务，不可删除</span>}
           {!hasRunningTask && hasTasks && <span data-testid="delete-cascade-hint" style={{ color: "#D97706" }}>· 删除将一并删除关联任务</span>}
         </div>
@@ -377,20 +361,17 @@ export default function TeamDetailPage() {
 
       {actionError && <div data-testid="team-action-error" role="alert" style={{ padding: `${space.md}px ${space.lg}px`, borderRadius: radius.md, backgroundColor: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.22)", color: "#B91C1C", fontSize: fontSize.sm }}>{actionError}</div>}
 
-      {/* 两栏：当前任务 + 队列 */}
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,5fr) minmax(0,7fr)", gap: space.lg, alignItems: "start" }}>
-        {/* 当前任务卡片 — 顶部当前任务卡明确显示“当前执行”+ 状态徽章，queued 脏数据兼容橙徽 */}
+      {/* 当前任务卡（并行化后无队列预览，聚焦指针 + 状态徽章） */}
+      <div style={{ display: "flex", flexDirection: "column", gap: space.lg }}>
+        {/* 当前任务卡片 — 顶部当前任务卡明确显示“当前执行”+ 状态徽章 */}
         {(() => {
-          const rawStatus: string | null = (team as unknown as { currentTaskStatus?: string | null }).currentTaskStatus ?? null;
-          const queueMatch = team.currentTaskId ? team.queue.find((q) => q.taskId === team.currentTaskId) : undefined;
-          const effectiveStatus = rawStatus ?? queueMatch?.taskStatus ?? null;
-          const isQueued = effectiveStatus === "queued";
+          const effectiveStatus: string | null = (team as unknown as { currentTaskStatus?: string | null }).currentTaskStatus ?? null;
           let badgeLabel = "执行中";
           let badgeStyle: CSSProperties = { color: "#0D9488", backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.22)" };
-          if (isQueued) {
-            badgeLabel = "当前排队中";
-            badgeStyle = { color: "#D97706", backgroundColor: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.28)" };
-          } else if (effectiveStatus === "pending") {
+          if (effectiveStatus === "pending") {
+            badgeLabel = "待开始";
+            badgeStyle = { color: "#0D9488", backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.22)" };
+          } else if (effectiveStatus === "in_progress") {
             badgeLabel = "待开始";
             badgeStyle = { color: "#0D9488", backgroundColor: "rgba(13,148,136,0.10)", border: "1px solid rgba(13,148,136,0.22)" };
           } else if (effectiveStatus === "in_progress") {
@@ -456,88 +437,11 @@ export default function TeamDetailPage() {
                     {(team as unknown as { currentTaskTitle?: string | null }).currentTaskTitle ?? "任务"}
                   </div>
                   <div style={{ fontFamily: fontFamily.mono, fontSize: 11, color: neutral[400], marginTop: 2 }}>{team.currentTaskId}</div>
-                  {isQueued && (
-                    <div style={{ fontSize: fontSize.xs, color: "#D97706", marginTop: space.xs }}>⚠ 该任务当前为排队中（脏数据兼容）</div>
-                  )}
                 </div>
               ) : (
                 <div data-testid="no-current-task" style={{ fontSize: fontSize.sm, color: neutral[400] }}>暂无进行中任务（空闲）</div>
               )}
             </section>
-          );
-        })()}
-
-        {/* 队列预览 — FIFO 展示 + 取消排队（仅 queued 可取消） */}
-        {(() => {
-          const waitingQueue = team.queue.filter((q: TeamQueueDto) => {
-            const s = q.taskStatus;
-            return !s || s === "queued";
-          });
-          const waitingCount = waitingQueue.length;
-          return (
-            <section data-testid="queue-preview" style={{ padding: space.lg, borderRadius: radius.lg, backgroundColor: "var(--color-surface)", border: `1px solid ${neutral[200]}`, boxShadow: shadow.sm, display: "flex", flexDirection: "column", gap: space.sm }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: space.sm }}>
-                  <div style={{ fontSize: fontSize.md, fontWeight: 700, color: neutral[800] }}>等待队列（{waitingCount}）</div>
-                  <span style={{ fontSize: 10, color: "#D97706", backgroundColor: "rgba(245,158,11,0.10)", border: "1px solid rgba(245,158,11,0.22)", padding: "1px 6px", borderRadius: radius.pill, fontWeight: 600 }}>FIFO</span>
-                </div>
-                {waitingCount === 0 ? (
-                  <span data-testid="queue-count-empty" style={{ fontSize: fontSize.xs, color: neutral[400] }}>暂无等待</span>
-                ) : (
-                  <span data-testid="queue-count" style={{ fontSize: fontSize.xs, color: neutral[500] }}>等待中 {waitingCount} 个 · 队首优先</span>
-                )}
-              </div>
-              <div style={{ fontSize: fontSize.xs, color: neutral[400], lineHeight: 1.5, backgroundColor: neutral[50], border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, padding: `${space.xs}px ${space.sm}px` }}>
-                按入队时间 FIFO 排队，仅 <span style={{ color: "#D97706", fontWeight: 600 }}>排队中</span> 可取消；不支持拖拽重排。
-              </div>
-              {waitingCount === 0 ? (
-                <div data-testid="queue-empty" style={{ fontSize: fontSize.sm, color: neutral[400], padding: `${space.md}px ${space.md}px`, textAlign: "center", border: `1px dashed ${neutral[200]}`, borderRadius: radius.md, backgroundColor: neutral[50], lineHeight: 1.6 }}>
-                  暂无等待，当前任务可直接执行
-                </div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: space.xs }}>
-                  {waitingQueue.map((q: TeamQueueDto) => {
-                const isQueued = q.taskStatus ? q.taskStatus === "queued" : true;
-                return (
-                  <div key={q.id} data-testid="queue-item" data-task-id={q.taskId} data-position={q.position} style={{ display: "flex", alignItems: "center", gap: space.sm, padding: `${space.sm}px ${space.md}px`, borderRadius: radius.md, backgroundColor: isQueued ? "rgba(245,158,11,0.06)" : neutral[50], border: `1px solid ${isQueued ? "rgba(245,158,11,0.18)" : neutral[200]}` }}>
-                    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 22, height: 22, borderRadius: "50%", backgroundColor: "#F59E0B", color: "#FFF", fontSize: fontSize.xs, fontWeight: 700, flexShrink: 0 }}>{q.position}</span>
-                    <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-                      <span data-testid="queue-task-title" style={{ fontSize: fontSize.sm, color: neutral[800], fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.taskTitle ?? q.taskId}</span>
-                      <span style={{ display: "flex", alignItems: "center", gap: space.xs, marginTop: 1 }}>
-                        <span data-testid="queue-task-status" style={{ fontSize: 10, color: isQueued ? "#D97706" : neutral[500], backgroundColor: isQueued ? "rgba(245,158,11,0.12)" : neutral[100], border: `1px solid ${isQueued ? "rgba(245,158,11,0.22)" : neutral[200]}`, padding: "0 5px", borderRadius: radius.pill, fontWeight: 600 }}>{q.taskStatus === "queued" ? "排队中" : q.taskStatus ?? "排队中"}</span>
-                        <span style={{ fontFamily: fontFamily.mono, fontSize: 10, color: neutral[400], overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{q.taskId.slice(0, 10)}…</span>
-                      </span>
-                    </div>
-                    <span style={{ fontSize: 10, color: neutral[400], flexShrink: 0, textAlign: "right", lineHeight: 1.3 }}>{new Date(q.enqueuedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
-                    <button
-                      type="button"
-                      data-testid="queue-cancel"
-                      data-task-id={q.taskId}
-                      disabled={!isQueued || cancelQueueMutation.isPending}
-                      onClick={() => handleCancelQueue(q.taskId)}
-                      title={!isQueued ? "仅排队中的任务可取消" : "取消排队"}
-                      style={{
-                        padding: `${space.xs}px ${space.sm}px`,
-                        borderRadius: radius.pill,
-                        border: `1px solid ${!isQueued ? neutral[200] : "rgba(239,68,68,0.22)"}`,
-                        backgroundColor: !isQueued ? neutral[100] : "rgba(239,68,68,0.06)",
-                        color: !isQueued ? neutral[400] : "#DC2626",
-                        fontSize: fontSize.xs,
-                        fontWeight: 500,
-                        cursor: !isQueued || cancelQueueMutation.isPending ? "not-allowed" : "pointer",
-                        opacity: !isQueued ? 0.6 : 1,
-                        fontFamily: fontFamily.body,
-                        flexShrink: 0,
-                      }}
-                    >
-                      取消
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
           );
         })()}
       </div>
@@ -607,7 +511,6 @@ export default function TeamDetailPage() {
         description={(() => {
           const taskNames: string[] = [];
           if (team.currentTaskId) taskNames.push(team.currentTaskTitle ?? team.currentTaskId);
-          for (const q of team.queue) taskNames.push(q.taskTitle ?? q.taskId);
           const taskPart = taskNames.length > 0
             ? `以下 ${taskNames.length} 个关联任务将一并删除：${taskNames.slice(0, 5).join("、")}${taskNames.length > 5 ? "…" : ""}。`
             : "无关联任务。";

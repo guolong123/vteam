@@ -27,7 +27,6 @@ const EVENT = {
   AGENT_ERROR: "agent.error",
   TASK_STATUS_CHANGED: "task.status.changed",
   TEAM_CHANGED: "team.changed",
-  TEAM_QUEUE_CHANGED: "team.queue.changed",
   ARTIFACT_SUBMITTED: "artifact.submitted",
   ISSUE_CHANGED: "issue.changed",
   SESSION_UPDATED: "session.updated",
@@ -358,9 +357,6 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions): void {
           onAgentError?.(ev.payload as AgentErrorEvent, ev as SSEEvent<AgentErrorEvent>);
           break;
         case EVENT.TEAM_CHANGED:
-          onTeamChanged?.(ev.payload as TeamChangedEvent, ev as SSEEvent<TeamChangedEvent>);
-          break;
-        case EVENT.TEAM_QUEUE_CHANGED:
           onTeamChanged?.(ev.payload as TeamChangedEvent, ev as SSEEvent<TeamChangedEvent>);
           break;
         case EVENT.ARTIFACT_SUBMITTED:

@@ -57,7 +57,6 @@ function teamJson(taskId: string) {
     members: TEAM_MEMBERS,
     mainAgentMemberId: "tmm_0000000001",
     currentTaskId: taskId,
-    queue: [],
     reuseSession: true,
     managedMode: false,
   };
