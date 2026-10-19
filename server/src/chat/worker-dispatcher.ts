@@ -1271,6 +1271,30 @@ export function dispatchSnapshotKey(
   return `team:${teamId}:member:${teamMemberId}`;
 }
 
+/** 在飞守卫丢弃的延后续派 TTL（ms）：与 executionTtlMs（30min）同窗，防泄漏。 */
+export const DEFERRED_DISPATCH_TTL_MS = 30 * 60 * 1000;
+/** 单成员延后队列上限：极端刷屏下 FIFO 丢弃最旧，防无限膨胀。 */
+export const MAX_DEFERRED_DISPATCH_ITEMS = 20;
+
+/**
+ * guard 丢弃的延后续派条目：原始请求浅拷贝 + 被丢弃的单目标。
+ * 在飞守卫命中时不再静默丢分派（消息 UI 可见但 agent 永远收不到，不可恢复），
+ * 改为延后入队，成员前次执行注销（unregisterExecution）时按序重派。
+ */
+interface DeferredTeamDispatch {
+  /** 原始请求浅拷贝（重派时 targets 覆写为被丢弃单目标）。 */
+  request: DispatchRequest;
+  /** 被丢弃的单目标（agentId / sessionId / instanceId）。 */
+  target: {
+    agentId: string;
+    sessionId: string | null;
+    instanceId?: string | null;
+  };
+  teamId: string;
+  /** 延后时间戳（ms epoch，TTL 依据）。 */
+  deferredAt: number;
+}
+
 /**
  * 从文本定位 type 字段值并提取完整 JSON 对象：先找 `"type":"<value>"` 位置 → 向前
  * 回溯最近的 `{` → 向后深度配对 `}`（支持字段乱序/嵌套/多对象并存）。
@@ -1567,10 +1591,24 @@ export class WorkerDispatcher
     string,
     { agents: Set<string>; at: number }
   >();
+  /**
+   * 在飞守卫丢弃的延后续派队列（`${scope}:${teamMemberId}` → FIFO 队列）：
+   * 守卫命中时入队代替静默丢弃，unregisterExecution 统一 drain（take-then-fire，
+   * 重复/无关注销天然幂等）。TTL / 队列上限见 DEFERRED_DISPATCH_TTL_MS /
+   * MAX_DEFERRED_DISPATCH_ITEMS，均防内存泄漏。
+   */
+  private readonly deferredDispatches = new Map<
+    string,
+    DeferredTeamDispatch[]
+  >();
   /** 执行注册 TTL（ms）：worker 崩溃/回流丢失时防活跃记录泄漏，超时视为不活跃。 */
   private readonly executionTtlMs = 30 * 60 * 1000;
   private executionKey(workerId: string, scope: string): string {
     return `${workerId}:${scope}`;
+  }
+
+  private deferredKey(scope: string, teamMemberId: string): string {
+    return `${scope}:${teamMemberId}`;
   }
 
   /**
@@ -1603,12 +1641,86 @@ export class WorkerDispatcher
   unregisterExecution(workerId: string, scope: string, ref: string): void {
     const key = this.executionKey(workerId, scope);
     const entry = this.activeExecutions.get(key);
-    if (!entry) {
+    if (entry) {
+      entry.agents.delete(ref);
+      if (entry.agents.size === 0) {
+        this.activeExecutions.delete(key);
+      }
+    }
+    // 统一 drain 点：五处注销点（会话建失败回滚 / execute 抛错 / task.completed /
+    // agent.status error / watchdog 超时）全经本方法，此处 fire-and-forget 重派
+    // guard 延后的分派；take-then-fire 使重复/无关注销天然幂等（队列已空即空跑）。
+    void this.drainDeferredDispatches(workerId, scope, ref);
+  }
+
+  /**
+   * 守卫命中时把被丢单目标延后入队：先全表按 TTL 剪枝（空队整键删除），再入队，
+   * 超过 MAX_DEFERRED_DISPATCH_ITEMS 时 FIFO 丢弃最旧（极端刷屏防膨胀）。
+   */
+  private deferTeamDispatch(
+    teamId: string,
+    teamMemberId: string,
+    request: DispatchRequest,
+    target: {
+      agentId: string;
+      sessionId: string | null;
+      instanceId?: string | null;
+    },
+  ): void {
+    const now = Date.now();
+    for (const [key, items] of this.deferredDispatches) {
+      const fresh = items.filter(
+        (item) => now - item.deferredAt <= DEFERRED_DISPATCH_TTL_MS,
+      );
+      if (fresh.length === 0) {
+        this.deferredDispatches.delete(key);
+      } else if (fresh.length !== items.length) {
+        this.deferredDispatches.set(key, fresh);
+      }
+    }
+    const key = this.deferredKey(toExecutionScope(null, teamId), teamMemberId);
+    const queue = this.deferredDispatches.get(key) ?? [];
+    while (queue.length >= MAX_DEFERRED_DISPATCH_ITEMS) {
+      queue.shift();
+      this.logger.warn(
+        `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId}）延后队列已满（${MAX_DEFERRED_DISPATCH_ITEMS}），丢弃最旧条目`,
+      );
+    }
+    queue.push({ request, target, teamId, deferredAt: now });
+    this.deferredDispatches.set(key, queue);
+  }
+
+  /**
+   * 注销后按序重派该成员 guard 延后的分派（take-then-fire：整队先取先删再逐条，
+   * 重复触发不重复派）。逐条过 TTL 防过期重派（延后久等的上下文已失真）；单条
+   * 失败不阻断后续。注意：派出的下一轮若又遇在飞（前一条执行尚未完成）会再次被
+   * 守卫延后入队，前次执行结束时再 drain——人为形成逐条串行。
+   */
+  private async drainDeferredDispatches(
+    workerId: string,
+    scope: string,
+    ref: string,
+  ): Promise<void> {
+    const key = this.deferredKey(scope, ref);
+    const items = this.deferredDispatches.get(key);
+    if (!items?.length) {
       return;
     }
-    entry.agents.delete(ref);
-    if (entry.agents.size === 0) {
-      this.activeExecutions.delete(key);
+    this.deferredDispatches.delete(key);
+    for (const item of items) {
+      if (Date.now() - item.deferredAt > DEFERRED_DISPATCH_TTL_MS) {
+        this.logger.warn(
+          `[dispatch-guard] 成员 ${ref}（team=${item.teamId}）延后条目已过 TTL（${DEFERRED_DISPATCH_TTL_MS}ms），放弃重派`,
+        );
+        continue;
+      }
+      try {
+        await this.dispatch({ ...item.request, targets: [item.target] });
+      } catch (err) {
+        this.logger.warn(
+          `[dispatch-guard] 成员 ${ref}（team=${item.teamId}）延后重派失败，继续下一条: ${this.describeError(err)}`,
+        );
+      }
     }
   }
 
@@ -2390,8 +2502,9 @@ export class WorkerDispatcher
     // 检查 + 登记同步完成（中间无 await），并发分派无法同时通过检查。
     if (this.isAgentExecuting(workerId, scope)?.has(teamMemberId)) {
       this.logger.warn(
-        `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId} worker=${workerId}）已有执行在飞，丢弃本次分派`,
+        `[dispatch-guard] 成员 ${teamMemberId}（team=${teamId} worker=${workerId}）已有执行在飞，本次分派已延后，前次执行结束后重派`,
       );
+      this.deferTeamDispatch(teamId, teamMemberId, request, target);
       return;
     }
     this.registerExecution(workerId, scope, teamMemberId);
