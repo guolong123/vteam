@@ -297,7 +297,7 @@ Worker 与 Server 之间共有 **5 条 HTTP 通道**：
 **URL 解析**：`capabilities.execBaseUrl` → 否则 serve 基址 origin + `capabilities.execPort`（默认 4198）。
 
 **执行流程**：Worker 驱动 serve 执行，事件经通道②回流；Server 不再自持轮询。
-首字超时（默认 300s）abort；空闲判死由 `instance-tracker` 负责。
+首字超时（`WORKER_FIRST_TOKEN_TIMEOUT_MS`，缺省 0=禁用）abort；空闲判死由 `instance-tracker` 负责。
 
 ### 6.2 `POST /question-reply` 请求体
 
@@ -468,4 +468,4 @@ Server ──SSE──▶ Web 前端
 | — | `WORKER_DEFAULT_MODEL` | 默认模型 id |
 | — | `WORKER_MAX_INSTANCES` | 最大并发（默认 5） |
 | — | `HEARTBEAT_INTERVAL_MS` | 心跳间隔（默认 10000） |
-| — | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 首字超时（默认 300000） |
+| — | `WORKER_FIRST_TOKEN_TIMEOUT_MS` | 首字超时（默认 0=禁用，env 可 opt-in） |

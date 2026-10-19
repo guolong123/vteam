@@ -5334,6 +5334,14 @@ describe('WorkerDispatcher', () => {
         defaultModelId: null,
       });
       prisma.artifact.findMany.mockResolvedValue([]);
+      // 缺省 0=扫描禁用：空闲判死行为用例显式 opt-in（逻辑覆盖不受默认改动影响）
+      config.get.mockImplementation((key: string) =>
+        key === 'AGENT_IDLE_TIMEOUT_MS'
+          ? String(30 * 60_000)
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
       const d = createDispatcher();
       let staleReturned = false;
       prisma.session.findMany.mockImplementation(
@@ -5363,7 +5371,7 @@ describe('WorkerDispatcher', () => {
 
       // 推进超过 idle 超时 + 一个扫描周期（触发 interval 回调）
       await jest.advanceTimersByTimeAsync(
-        DEFAULT_AGENT_IDLE_TIMEOUT_MS + IDLE_SCAN_INTERVAL_MS + 1000,
+        30 * 60_000 + IDLE_SCAN_INTERVAL_MS + 1000,
       );
       await jest.advanceTimersByTimeAsync(0);
 
@@ -5419,6 +5427,14 @@ describe('WorkerDispatcher', () => {
         defaultModelId: null,
       });
       prisma.artifact.findMany.mockResolvedValue([]);
+      // 缺省 0=扫描禁用：空闲判死行为用例显式 opt-in（逻辑覆盖不受默认改动影响）
+      config.get.mockImplementation((key: string) =>
+        key === 'AGENT_IDLE_TIMEOUT_MS'
+          ? String(30 * 60_000)
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
       const d = createDispatcher();
       const errors: unknown[] = [];
       d.onError((e) => errors.push(e));
@@ -5432,7 +5448,7 @@ describe('WorkerDispatcher', () => {
       });
 
       // 推进接近 idle 超时（未到）
-      await jest.advanceTimersByTimeAsync(DEFAULT_AGENT_IDLE_TIMEOUT_MS - 5000);
+      await jest.advanceTimersByTimeAsync(30 * 60_000 - 5000);
       // 中途 delta 到达 → 刷新 lastActivityAt（有活动不误杀）
       activityCb({ type: 'message.part.delta', sessionId: 's_0000000001' });
       // 再推进一个扫描周期（此时距 delta 仅 65s，远未到 30min）
@@ -6106,6 +6122,14 @@ describe('WorkerDispatcher', () => {
     });
 
     it('DB 侧检出：DB 有 stale running → 判死', async () => {
+      // 缺省 0=扫描禁用：显式 opt-in 使扫描逻辑可测
+      config.get.mockImplementation((key: string) =>
+        key === 'AGENT_IDLE_TIMEOUT_MS'
+          ? String(30 * 60_000)
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
       const d = createDispatcher();
       prisma.session.findMany.mockResolvedValue([{ id: 's_stale_1' }]);
       prisma.session.findUnique.mockResolvedValue(staleRow());
@@ -6131,6 +6155,14 @@ describe('WorkerDispatcher', () => {
     });
 
     it('DB 侧检出覆盖 NULL lastActivityAt：running + 旧 updatedAt 仍被返回并判死', async () => {
+      // 缺省 0=扫描禁用：显式 opt-in 使扫描逻辑可测
+      config.get.mockImplementation((key: string) =>
+        key === 'AGENT_IDLE_TIMEOUT_MS'
+          ? String(30 * 60_000)
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
       const d = createDispatcher();
       const oldUpdatedAt = new Date('2020-01-01T00:00:00.000Z');
       const nullActivitySession = {
@@ -6184,6 +6216,14 @@ describe('WorkerDispatcher', () => {
     });
 
     it('DB 侧检出 + 首事件等待否决：pending 且 activitySeen=false 的会话不判死', async () => {
+      // 缺省 0=扫描禁用：显式 opt-in 使否决覆盖真实生效（0=全跳过，非否决路径）
+      config.get.mockImplementation((key: string) =>
+        key === 'AGENT_IDLE_TIMEOUT_MS'
+          ? String(30 * 60_000)
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
       const d = createDispatcher();
       (d as any).startPendingWatchdog(
         'team:tm_0000000001',
@@ -6220,6 +6260,14 @@ describe('WorkerDispatcher', () => {
     });
 
     it('DB 检出 fail-open：findMany 抛错 → 扫描不抛，继续返回', async () => {
+      // 缺省 0=扫描禁用：显式 opt-in 使 fail-open 分支真实可达
+      config.get.mockImplementation((key: string) =>
+        key === 'AGENT_IDLE_TIMEOUT_MS'
+          ? String(30 * 60_000)
+          : key === 'WORK_DIR'
+            ? workRoot
+            : undefined,
+      );
       const d = createDispatcher();
       prisma.session.findMany.mockRejectedValueOnce(new Error('db down'));
 
@@ -7727,9 +7775,10 @@ describe('WorkerDispatcher', () => {
       expect(configured.dispatchTimeoutMs).toBe(30_000);
     });
 
-    it('判死超时默认值：事件静默 600s / 空闲 30min，env SILENT_SESSION_WAKE_MS / AGENT_IDLE_TIMEOUT_MS 可配（STRING env 解析）', async () => {
+    it('判死超时默认值：事件静默 600s / 空闲 0=禁用，env SILENT_SESSION_WAKE_MS / AGENT_IDLE_TIMEOUT_MS 可配（STRING env 解析）', async () => {
       expect(DEFAULT_SILENT_SESSION_WAKE_MS).toBe(600_000);
-      expect(DEFAULT_AGENT_IDLE_TIMEOUT_MS).toBe(30 * 60_000);
+      // 空闲判死默认禁用（线上误杀长脚本/等权限，无真实 hang 证据）；env 可 opt-in
+      expect(DEFAULT_AGENT_IDLE_TIMEOUT_MS).toBe(0);
       // 默认
       const d = createDispatcher();
       expect(d.silentSessionWakeMs).toBe(DEFAULT_SILENT_SESSION_WAKE_MS);
@@ -7747,6 +7796,17 @@ describe('WorkerDispatcher', () => {
       const configured = createDispatcher();
       expect(configured.silentSessionWakeMs).toBe(10_000);
       expect(configured.agentIdleTimeoutMs).toBe(5 * 60_000);
+    });
+
+    it('空闲判死默认 0 = 禁用：startIdleScan 不启动定时器（推进扫描周期不触发 DB 检出）', async () => {
+      jest.useFakeTimers();
+      const d = createDispatcher();
+      expect(d.agentIdleTimeoutMs).toBe(0);
+      // 推进多个扫描周期：agentIdleTimeoutMs<=0 时 startIdleScan 不启动，
+      // scanIdleSessions 不会被触发（DB 侧检出查询永不执行）
+      await jest.advanceTimersByTimeAsync(IDLE_SCAN_INTERVAL_MS * 3 + 1000);
+      expect(prisma.session.findMany).not.toHaveBeenCalled();
+      jest.useRealTimers();
     });
 
     it('超时 env 解析：parse("0") → disabled；"600000" → 600000；未设/垃圾 → 600000；idle 同理', async () => {
@@ -7784,7 +7844,11 @@ describe('WorkerDispatcher', () => {
         key === 'WORK_DIR' ? workRoot : undefined,
       );
       expect(createDispatcher().silentSessionWakeMs).toBe(600_000);
-      // idle 同理：STRING "0" → disabled；垃圾 → 默认 30min
+      // idle 同理：未设 → 默认 0（disabled）；STRING "0" → disabled；垃圾 → 默认 0
+      config.get.mockImplementation((key: string) =>
+        key === 'WORK_DIR' ? workRoot : undefined,
+      );
+      expect(createDispatcher().agentIdleTimeoutMs).toBe(0);
       config.get.mockImplementation((key: string) =>
         key === 'AGENT_IDLE_TIMEOUT_MS'
           ? '0'
