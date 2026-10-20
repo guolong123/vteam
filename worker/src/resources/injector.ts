@@ -72,6 +72,12 @@ export interface ResourceInjectorOptions {
 export interface InjectReport {
   skills: string[];
   tools: string[];
+  /**
+   * 工具注入**明细**（让「0 tools」可解释）。
+   *
+   * ⚠️ 缺省 = 旧形态报告（没有明细）⇒ 消费方必须容忍 undefined。
+   */
+  toolBreakdown?: ToolInjectionBreakdown;
   mcpServers: string[];
   /**
    * agent 策略注入结果（Todo 14 上报能力位的成功/报告信号）：
@@ -79,6 +85,29 @@ export interface InjectReport {
    * - 失败中性化（拉取失败或角色集为空）→ `{ enabled: false, names: [] }`。
    */
   agentPolicies: { enabled: boolean; names: string[] };
+}
+
+/**
+ * 工具注入的**明细**（控制面工具目录 → 实际渲染成 opencode 工具插件的账）。
+ *
+ * ⚠️ **为什么需要它**：控制面的 `GET /tools` 返回的是**工具目录**
+ * （= 能力/权限点目录：opencode 原生工具 + MCP 服务器的工具条目 + 平台自定义工具），
+ * 而 worker 注入的是**自定义工具插件**（落 `<workDir>/.opencode/plugins/<action>.ts`）。
+ * **两个数不是同一个类别**——目录里的条目数 ≠ 插件数。
+ * 没有这份明细，日志里那个「0 tools」既可能是"平台没有自定义工具"、
+ * 也可能是"拉取失败"、还可能是"有但都不可注入"——三者无法区分（静默失败）。
+ */
+export interface ToolInjectionBreakdown {
+  /** 控制面返回的**启用**工具条数（拉取成功口径；停用工具被 `enabled=true` 过滤掉）。 */
+  fetched: number;
+  /** 其中 `execution=mcp` 的条数（由 `mcp.servers` 配置节承载，不渲染为插件）。 */
+  mcpType: number;
+  /** 其中 `source=builtin` 的条数（opencode 原生工具的目录项，不渲染为插件）。 */
+  builtin: number;
+  /** 其中缺少执行细节（`x-execution`）而未渲染的条数（**真实缺口**，非 builtin）。 */
+  missingExecution: number;
+  /** 实际渲染成 opencode 工具插件的条数。 */
+  injected: number;
 }
 
 /** 控制面资源记录最小形态（来自 GET /skills、/tools、/mcp-servers；本地写入亦复用）。 */
@@ -97,6 +126,12 @@ export interface ToolRecord {
   name: string;
   execution: string;
   schema: Record<string, unknown> | null;
+  /**
+   * 工具来源（`builtin` / `custom` / `mcp`；控制面 `tools` 表的列）。
+   *
+   * ⚠️ 缺省 = 未知来源（按 `custom` 处理 ⇒ 缺执行细节会告警）。
+   */
+  source?: string;
 }
 export interface McpServerRecord {
   id: string;
@@ -306,6 +341,17 @@ export class ResourceInjector {
   }
 
   /**
+   * 是否接了日志出口。
+   *
+   * ⚠️ **未接 = 静默失败**：注入器自己的诊断（拉取失败、跳过原因、中性化）
+   * 全部走 `this.logger`——不接线 ⇒ 这些告警**一条都不会打印**，
+   * 平台只看到"注入完成：0 tools"，却不知道是"本来就没有"还是"拉取炸了"。
+   */
+  get hasLogger(): boolean {
+    return this.logger !== undefined;
+  }
+
+  /**
    * 注入全部四类资源，返回报告。
    *
    * 单写者保证：`opencode.json` 全程只有 `injectMcpAndAgents()` 内的一次
@@ -314,10 +360,19 @@ export class ResourceInjector {
    */
   async injectAll(): Promise<InjectReport> {
     const policiesPromise = this.fetchAgentPoliciesSafe();
-    const [skills, tools] = await Promise.all([this.injectSkills(), this.injectTools()]);
+    const [skills, toolResult] = await Promise.all([
+      this.injectSkills(),
+      this.injectToolsDetailed(),
+    ]);
     const policies = await policiesPromise;
     const { mcpServers, agentPolicies } = await this.injectMcpAndAgents(policies);
-    return { skills, tools, mcpServers, agentPolicies };
+    return {
+      skills,
+      tools: toolResult.actions,
+      toolBreakdown: toolResult.breakdown,
+      mcpServers,
+      agentPolicies,
+    };
   }
 
   /**
@@ -385,7 +440,35 @@ export class ResourceInjector {
 
   /** 注入启用工具（控制面拉取）：GET /tools → applyTools。 */
   async injectTools(): Promise<string[]> {
-    return this.applyTools(await this.fetchAll<ToolRecord>('/tools', { enabled: 'true' }));
+    return (await this.injectToolsDetailed()).actions;
+  }
+
+  /**
+   * 同 {@link injectTools}，但额外给出**明细**（谁被跳过、为什么）。
+   *
+   * ⚠️ 明细 + 一条汇总日志是「0 tools」可解释的**唯一**依据：控制面目录里的
+   * mcp 型条目（由 `mcp.servers` 承载）、builtin 条目（opencode 原生工具目录项）
+   * 都不是"注入失败"；真正要人看的是 `missingExecution`（自定义工具缺执行细节）。
+   */
+  async injectToolsDetailed(): Promise<{
+    actions: string[];
+    breakdown: ToolInjectionBreakdown;
+  }> {
+    const fetched = await this.fetchAll<ToolRecord>('/tools', { enabled: 'true' });
+    const result = this.applyToolsDetailed(fetched);
+    const b = result.breakdown;
+    this.logger?.info?.(
+      `[inject] 工具清单：控制面返回 ${b.fetched} 条（enabled=true）→ 渲染为 opencode 工具插件 ` +
+        `${b.injected} 条（mcp 型 ${b.mcpType} 条由 mcp 配置节承载、builtin ${b.builtin} 条是 opencode ` +
+        `原生工具目录项，均不渲染为插件；缺少执行细节 ${b.missingExecution} 条未渲染）`,
+    );
+    if (b.fetched === 0) {
+      this.logger?.info?.(
+        '[inject] 工具清单为空：控制面当前没有启用的工具定义（平台没有可注入的自定义工具）' +
+          '——这不是拉取失败（拉取失败会抛错并中止本轮注入）',
+      );
+    }
+    return result;
   }
 
   /**
@@ -396,15 +479,39 @@ export class ResourceInjector {
    * 声明式替换（manifest 记录的上次文件清理）；mcp 型工具跳过（由 mcp-servers 配置节承载）。
    */
   applyTools(tools: ToolRecord[]): string[] {
+    return this.applyToolsDetailed(tools).actions;
+  }
+
+  /** 同 {@link applyTools}，但额外给出**明细**（拉取条数 / 各类跳过数 / 实际渲染数）。 */
+  applyToolsDetailed(tools: ToolRecord[]): {
+    actions: string[];
+    breakdown: ToolInjectionBreakdown;
+  } {
     const writtenFiles: string[] = [];
     const actions: string[] = [];
+    const breakdown: ToolInjectionBreakdown = {
+      fetched: tools.length,
+      mcpType: 0,
+      builtin: 0,
+      missingExecution: 0,
+      injected: 0,
+    };
     for (const tool of tools) {
       if (tool.execution === 'mcp') {
         // MCP 工具不渲染为自定义工具文件——由 mcp-servers 配置节注入
+        breakdown.mcpType += 1;
         continue;
       }
       const def = this.buildToolDef(tool);
       if (!def) {
+        if (tool.source === 'builtin') {
+          // builtin 条目 = opencode 原生工具的**目录项**（bash/read/edit/…），
+          // 平台只是把它登记成权限点；opencode 自己就有这些工具，
+          // 渲染成平台自定义工具插件反而是错的 ⇒ 不算缺口、不告警，只计数。
+          breakdown.builtin += 1;
+          continue;
+        }
+        breakdown.missingExecution += 1;
         this.logger?.warn?.(
           `[inject] 工具 ${tool.action} 缺少执行细节（execution=${tool.execution}），跳过注入`,
         );
@@ -416,10 +523,11 @@ export class ResourceInjector {
       fs.writeFileSync(filePath, renderCustomToolPlugin(def), 'utf8');
       writtenFiles.push(fileName);
       actions.push(tool.action);
+      breakdown.injected += 1;
     }
     this.cleanupByManifest('toolPlugins', writtenFiles);
     this.cleanupByManifest('legacyTools', []);
-    return actions;
+    return { actions, breakdown };
   }
 
   /**

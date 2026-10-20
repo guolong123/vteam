@@ -32,9 +32,12 @@ import {
   applySetMaxInstances,
   buildCapabilities,
   buildRegisterOptions,
+  createResourceInjector,
+  createEventSender,
   dispatchCommands,
   DEFAULT_AUTH_JSON_PATH,
   ensureStandaloneProjectConfig,
+  formatToolInjectionSummary,
   handleGitCredentials,
   handleModelCredentials,
   handleModelCredentialsCommand,
@@ -1424,6 +1427,165 @@ describe('T18：独立模式补写项目配置（防 browser 工具被内置插�
     } finally {
       warnSpy.mockRestore();
       logSpy.mockRestore();
+    }
+  });
+});
+
+describe('注入工具数口径（「0 tools」可解释，不与拉取失败混淆）', () => {
+  const report = (patch: Partial<InjectReport>): InjectReport => ({
+    skills: [],
+    tools: [],
+    mcpServers: [],
+    agentPolicies: { enabled: false, names: [] },
+    ...patch,
+  });
+
+  it('目录有 232 条、实际渲染 0 条：日志同时报出两个数与跳过原因', () => {
+    const text = formatToolInjectionSummary(
+      report({
+        tools: [],
+        toolBreakdown: {
+          fetched: 232,
+          mcpType: 225,
+          builtin: 6,
+          missingExecution: 0,
+          injected: 0,
+        },
+      }),
+    );
+
+    expect(text).toContain('0 个自定义工具插件');
+    expect(text).toContain('控制面工具目录 232 条');
+    expect(text).toContain('mcp 型 225 条');
+    expect(text).toContain('builtin 6 条');
+  });
+
+  it('目录为空：明说"平台没有启用的工具定义"，且声明这不是拉取失败', () => {
+    const text = formatToolInjectionSummary(
+      report({
+        tools: [],
+        toolBreakdown: {
+          fetched: 0,
+          mcpType: 0,
+          builtin: 0,
+          missingExecution: 0,
+          injected: 0,
+        },
+      }),
+    );
+
+    expect(text).toContain('控制面工具目录 0 条');
+    expect(text).toContain('平台当前没有启用的工具定义');
+    expect(text).toContain('不是拉取失败');
+  });
+
+  it('有工具被跳过：报出缺执行细节的条数（真实缺口）', () => {
+    const text = formatToolInjectionSummary(
+      report({
+        tools: ['gitee-issue'],
+        toolBreakdown: {
+          fetched: 3,
+          mcpType: 1,
+          builtin: 0,
+          missingExecution: 1,
+          injected: 1,
+        },
+      }),
+    );
+
+    expect(text).toContain('1 个自定义工具插件');
+    expect(text).toContain('缺少执行细节 1 条未渲染');
+  });
+
+  it('旧形态报告（无明细）：只报渲染数，不炸', () => {
+    const text = formatToolInjectionSummary(report({ tools: ['a', 'b'] }));
+    expect(text).toBe('2 个自定义工具插件');
+  });
+});
+
+describe('注入器必须接日志出口（否则注入器自身的告警被静默丢弃）', () => {
+  it('createResourceInjector 产出的注入器带 logger', () => {
+    const injector = createResourceInjector({
+      serverUrl: 'http://server:3000',
+      workerToken: 'tok',
+      workerId: 'w_1',
+      workDir: fs.mkdtempSync(path.join(os.tmpdir(), 'vteam-injector-logger-')),
+    });
+
+    expect(injector.hasLogger).toBe(true);
+  });
+
+  it('注入器的告警真的会打到 console（不是被吞掉的闭包）', async () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vteam-injector-warn-'));
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const injector = createResourceInjector({
+        serverUrl: 'http://server:3000',
+        workerToken: 'tok',
+        workerId: 'w_1',
+        workDir,
+        fetchImpl: jest.fn(async () => ({
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({
+            items: [
+              {
+                id: 'tl_1',
+                action: 'jenkins-build',
+                name: 'Jenkins 构建',
+                source: 'custom',
+                execution: 'cli',
+                schema: { type: 'object', properties: {} },
+              },
+            ],
+            total: 1,
+            page: 1,
+            pageSize: 100,
+          }),
+        })) as unknown as typeof fetch,
+      });
+
+      await injector.injectToolsDetailed();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('缺少执行细节'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+});
+
+describe('事件上送必须接日志出口（否则事件丢失完全无声）', () => {
+  it('投递失败会告警并报出事件 id（EventSender 只记日志不抛 ⇒ 日志是唯一信号）', async () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const sender = createEventSender({
+        serverUrl: 'http://server:3000',
+        workerId: 'w_1',
+        workerToken: 'tok',
+        maxRetries: 1,
+        retryBaseDelayMs: 1,
+        fetchImpl: jest.fn(async () => {
+          throw new Error('network down');
+        }) as unknown as typeof fetch,
+      });
+
+      await sender.send('task.completed', { taskId: 't_1' });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[event]'),
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('重试 1 次仍失败，丢弃'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
     }
   });
 });

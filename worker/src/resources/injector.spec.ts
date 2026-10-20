@@ -341,6 +341,197 @@ describe('ResourceInjector.injectTools', () => {
   });
 });
 
+describe('ResourceInjector 工具注入明细（「0 tools」可解释）', () => {
+  /** 控制面工具目录的四种典型条目（与真实 `tools` 表的分布一致）。 */
+  const TOOL_CATALOGUE = {
+    items: [
+      {
+        id: 'tl_builtin_bash',
+        action: 'bash',
+        name: 'Bash 命令',
+        source: 'builtin',
+        execution: 'code',
+        schema: null,
+      },
+      {
+        id: 'tl_mcp_1',
+        action: 'jira-search',
+        name: 'Jira 搜索',
+        source: 'mcp',
+        execution: 'mcp',
+        schema: null,
+      },
+      {
+        id: 'tl_custom_gap',
+        action: 'jenkins-build',
+        name: 'Jenkins 构建',
+        source: 'custom',
+        execution: 'cli',
+        schema: { type: 'object', properties: {} },
+      },
+      {
+        id: 'tl_custom_ok',
+        action: 'gitee-issue',
+        name: 'Gitee Issue',
+        source: 'custom',
+        execution: 'cli',
+        schema: {
+          type: 'object',
+          properties: { repo: { type: 'string' } },
+          'x-execution': { command: ['gitee', 'issue'] },
+        },
+      },
+    ],
+    total: 4,
+    page: 1,
+    pageSize: 100,
+  };
+
+  it('明细区分 mcp 型 / builtin / 缺执行细节 / 实际渲染（目录条数 ≠ 插件条数）', async () => {
+    const workDir = workDirFor();
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({ '/api/v1/tools': () => TOOL_CATALOGUE }),
+    });
+
+    const { actions, breakdown } = await injector.injectToolsDetailed();
+
+    expect(actions).toEqual(['gitee-issue']);
+    expect(breakdown).toEqual({
+      fetched: 4,
+      mcpType: 1,
+      builtin: 1,
+      missingExecution: 1,
+      injected: 1,
+    });
+  });
+
+  it('缺执行细节的**自定义**工具必须留下可见告警（否则真实缺口被静默吞掉）', async () => {
+    const workDir = workDirFor();
+    const warnings: string[] = [];
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({ '/api/v1/tools': () => TOOL_CATALOGUE }),
+      logger: {
+        info: () => undefined,
+        warn: (message: string) => {
+          warnings.push(message);
+        },
+      },
+    });
+
+    await injector.injectToolsDetailed();
+
+    expect(warnings.join('\n')).toContain('jenkins-build');
+    expect(warnings.join('\n')).toContain('缺少执行细节');
+  });
+
+  it('builtin 条目不告警（opencode 原生工具目录项，本就不该渲染成平台插件）', async () => {
+    const workDir = workDirFor();
+    const warnings: string[] = [];
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({ '/api/v1/tools': () => TOOL_CATALOGUE }),
+      logger: {
+        info: () => undefined,
+        warn: (message: string) => {
+          warnings.push(message);
+        },
+      },
+    });
+
+    await injector.injectToolsDetailed();
+
+    expect(warnings.join('\n')).not.toContain('bash');
+  });
+
+  it('工具目录为空：明确说"平台没有启用的工具定义"，且与拉取失败可区分', async () => {
+    const workDir = workDirFor();
+    const infos: string[] = [];
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({
+        '/api/v1/tools': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
+      }),
+      logger: {
+        info: (message: string) => {
+          infos.push(message);
+        },
+        warn: () => undefined,
+      },
+    });
+
+    const { actions, breakdown } = await injector.injectToolsDetailed();
+
+    expect(actions).toEqual([]);
+    expect(breakdown.fetched).toBe(0);
+    expect(infos.join('\n')).toContain('控制面当前没有启用的工具定义');
+    expect(infos.join('\n')).toContain('不是拉取失败');
+  });
+
+  it('拉取失败：抛错（而不是静默返回 0 条）', async () => {
+    const workDir = workDirFor();
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: jest.fn(async () => ({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        json: async () => ({}),
+      })) as unknown as typeof fetch,
+    });
+
+    await expect(injector.injectToolsDetailed()).rejects.toThrow(/资源拉取失败/);
+  });
+
+  it('injectAll 报告带明细（消费方据此解释工具数）', async () => {
+    const workDir = workDirFor();
+    const injector = new ResourceInjector({
+      serverUrl: 'http://localhost:3000',
+      workerToken: 'tok',
+      workerId: 'w_test',
+      workDir,
+      fetchImpl: makeFetch({
+        '/api/v1/tools': () => TOOL_CATALOGUE,
+        '/api/v1/skills': () => ({ items: [], total: 0, page: 1, pageSize: 100 }),
+        '/api/v1/mcp-servers': () => ({
+          items: [],
+          total: 0,
+          page: 1,
+          pageSize: 100,
+        }),
+        '/api/v1/agent-policies': () => ({ agents: [] }),
+      }),
+    });
+
+    const report = await injector.injectAll();
+
+    expect(report.tools).toEqual(['gitee-issue']);
+    expect(report.toolBreakdown).toEqual({
+      fetched: 4,
+      mcpType: 1,
+      builtin: 1,
+      missingExecution: 1,
+      injected: 1,
+    });
+  });
+});
+
 describe('ResourceInjector.injectMcp', () => {
   it('生成 opencode.json **mcp.servers** 节（v2 原生形；合并保留其他配置节 + local/remote 两型）', async () => {
     const workDir = workDirFor();

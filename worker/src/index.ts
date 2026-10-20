@@ -62,7 +62,8 @@ import {
   OpencodeVersionInfo,
 } from './runtime/opencode-version';
 import { ExecServer } from './exec/exec-server';
-import { InjectReport, ResourceInjector } from './resources/injector';import { readOmoEnabled } from './resources/omo-enabled';
+import { InjectReport, ResourceInjector } from './resources/injector';
+import { readOmoEnabled } from './resources/omo-enabled';
 import { seedOmoAgentModels } from './resources/omo-config';
 import { RestartCoordinator } from './restart/restart-coordinator';
 import {
@@ -96,6 +97,84 @@ const EMPTY_INJECT_REPORT: InjectReport = {
   mcpServers: [],
   agentPolicies: { enabled: false, names: [] },
 };
+
+/**
+ * 构造资源注入器（**接线日志出口**）。
+ *
+ * ⚠️ 注入器自己的诊断（资源拉取失败、跳过原因、`/agent-policies` 中性化）**全部**走
+ * 它的 `logger`；不接线 ⇒ 这些告警一条都不会打印 ⇒ 平台只看到「注入完成：0 tools」，
+ * 分不清"平台本来就没有自定义工具"与"拉取炸了/注入被跳过"——这正是**静默失败**的典型形态。
+ * 故本工厂是注入器的**唯一**构造入口。
+ */
+export function createResourceInjector(options: {
+  serverUrl: string;
+  workerToken: string;
+  workerId: string;
+  workDir: string;
+  fetchImpl?: typeof fetch;
+}): ResourceInjector {
+  return new ResourceInjector({
+    ...options,
+    logger: {
+      info: (message: string) => console.log(message),
+      warn: (message: string) => console.warn(message),
+    },
+  });
+}
+
+/**
+ * 构造事件上送客户端（**接线日志出口**）。
+ *
+ * ⚠️ `EventSender.deliver` 的契约是「重试耗尽 ⇒ **记日志不抛**」（事件可丢，靠 server 侧
+ * 去重兜底）——不接线日志 ⇒ **事件丢失完全无声**，控制面收不到 `task.completed` /
+ * 正文增量 / 工具 part，页面只显示"还在跑"。故本工厂是 EventSender 的**唯一**构造入口。
+ */
+export function createEventSender(options: {
+  serverUrl: string;
+  workerId: string;
+  workerToken: string;
+  fetchImpl?: typeof fetch;
+  maxRetries?: number;
+  retryBaseDelayMs?: number;
+}): EventSender {
+  return new EventSender({
+    ...options,
+    logger: {
+      warn: (message: string) => console.warn(message),
+      error: (message: string) => console.error(message),
+    },
+  });
+}
+
+/**
+ * 注入报告里的「工具」口径渲染（**让 0 可解释**）。
+ *
+ * ⚠️ 控制面 `GET /tools` 返回的是**工具目录**（= 能力/权限点目录：opencode 原生工具 +
+ * MCP 服务器的工具条目 + 平台自定义工具），而 worker 注入的是**自定义工具插件**
+ * （落 `<workDir>/.opencode/plugins/<action>.ts`）——**两个数不是同一个类别**
+ * （目录里的条目数 ≠ 插件数）。这里把两个数都报出来，读者才能分清：
+ * - 「平台没有可注入的自定义工具」；
+ * - 「拉取失败」（拉取失败会抛错并中止本轮注入，日志里是「注入失败」那条）；
+ * - 「有工具定义但都不可注入」（缺执行细节 ⇒ 真实缺口，注入器另有逐条告警）。
+ */
+export function formatToolInjectionSummary(report: InjectReport): string {
+  const injected = report.tools.length;
+  const breakdown = report.toolBreakdown;
+  if (!breakdown) {
+    return `${injected} 个自定义工具插件`;
+  }
+  if (breakdown.fetched === 0) {
+    return (
+      `${injected} 个自定义工具插件（控制面工具目录 0 条：平台当前没有启用的工具定义；` +
+      '这不是拉取失败——拉取失败会中止本轮注入并打印失败原因）'
+    );
+  }
+  return (
+    `${injected} 个自定义工具插件（控制面工具目录 ${breakdown.fetched} 条：` +
+    `mcp 型 ${breakdown.mcpType} 条由 mcp 配置节承载、builtin ${breakdown.builtin} 条是 opencode 原生工具目录项，` +
+    `均不渲染为插件；缺少执行细节 ${breakdown.missingExecution} 条未渲染）`
+  );
+}
 
 /**
  * 探测 opencode CLI 版本（T1：与 `runtime/opencode-server.ts` 共用同一个解析器，
@@ -499,7 +578,7 @@ export async function handleReloadConfigCommand(
     const report = await deps.injectAll();
     deps.onInjectReport(report);
     deps.log(
-      `[worker] reload-config：资源重注入完成（${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers）`,
+      `[worker] reload-config：资源重注入完成（${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers）`,
     );
     await deps.applyConfigChange(
       { reason: `reload-config（resourceVersion=${command.resourceVersion}）` },
@@ -1019,7 +1098,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   // T4b：资源注入执行器——serve 启动前拉取控制面 skills/tools/mcp-servers 注入
   // <workDir>（.opencode/skills/ + .opencode/tools/ + opencode.json mcp 节），
   // 心跳命令 reload-config 回调复用同一注入器重拉（T4c 重启后生效）。
-  const injector = new ResourceInjector({
+  const injector = createResourceInjector({
     serverUrl: config.serverUrl,
     workerToken: config.workerToken,
     workerId: config.workerId,
@@ -1142,7 +1221,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
         const report = await injector.injectAll();
         lastInjectReport = report;
         console.log(
-          `[worker] 注册后全量重注入完成: ${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers`,
+          `[worker] 注册后全量重注入完成: ${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers`,
         );
       } catch (err) {
         console.warn(`[worker] 注册后重注入失败: ${(err as Error).message}`);
@@ -1468,7 +1547,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
 
   // T6：事件上送通道（进程内单例，seq 从 1 起单调递增 + F2 M1 bootId 区分重启）。
   // 事件产生（session.updated/task.completed 等）待 T10 回流接线（C1 并行任务）。
-  const eventSender = new EventSender({
+  const eventSender = createEventSender({
     serverUrl: config.serverUrl,
     workerId: config.workerId,
     workerToken: config.workerToken,
@@ -1578,7 +1657,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       // T9：首次注入清单作为注册时上报的真实 skills/tools
       lastInjectReport = report;
       console.log(
-        `[worker] 平台资源注入完成: ${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers`,
+        `[worker] 平台资源注入完成: ${report.skills.length} skills, ${formatToolInjectionSummary(report)}, ${report.mcpServers.length} mcp servers`,
       );
       // omo 子代理模型种子：新数据卷无配置文件时写入内置默认（已有则跳过，用户页面/API 修改优先）
       try {
