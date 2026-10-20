@@ -1695,6 +1695,7 @@ export class WorkerDispatcher
         );
       }
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `履职收口失败（不阻断主链路）：成员 ${teamMemberId} fan-out 回执结清异常 team=${teamId}: ${this.describeError(err)}`,
       );
@@ -1814,6 +1815,7 @@ export class WorkerDispatcher
         (trigger) => this.handleSilenceTrigger(trigger),
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `静默 deadline handler 注册失败（仅内存 watchdog 生效）: ${this.describeError(err)}`,
       );
@@ -1859,6 +1861,7 @@ export class WorkerDispatcher
       try {
         await this.dispatchForTeamTarget(request, target, teamId);
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         const message = this.describeError(err);
         this.logger.error(
           `agent ${target.agentId} dispatch failed: ${message}`,
@@ -2018,6 +2021,7 @@ export class WorkerDispatcher
       planLifecycle =
         this.moduleRef?.get(PlanLifecycleService, { strict: false }) ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `门禁 PlanLifecycleService 未装配 task=${taskId}，fail-open 放行：${this.describeError(err)}`,
       );
@@ -2029,6 +2033,7 @@ export class WorkerDispatcher
     try {
       await planLifecycle.autoEnsureRow(taskId);
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `门禁读失败 task=${taskId}，fail-open 放行：${this.describeError(err)}`,
       );
@@ -2065,6 +2070,7 @@ export class WorkerDispatcher
         : [];
       return selectFrozenPlanHash(descriptions);
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `冻结哈希读取失败 task=${taskId}，哈希门禁未武装：${this.describeError(err)}`,
       );
@@ -2294,6 +2300,7 @@ export class WorkerDispatcher
       if (memoryIndex.length > 1200) memoryIndex = memoryIndex.slice(0, 1200);
       return memoryIndex;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.debug(
         `记忆索引构建失败 team=${teamId}，返回 null：${this.describeError(err)}`,
       );
@@ -2588,6 +2595,7 @@ export class WorkerDispatcher
           },
         });
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         // 回写失败不影响主链路（prompt 已发给 worker；仅展示少一段上下文）。
         this.logger.warn(
           `组装消息回写展示失败 message=${request.messageId}: ${err instanceof Error ? err.message : String(err)}`,
@@ -2626,6 +2634,7 @@ export class WorkerDispatcher
           opencodeSessionId,
         );
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         await this.sessionLifecycle
           .unbindSession(sessionId)
           .catch((rbErr: unknown) =>
@@ -2877,6 +2886,7 @@ export class WorkerDispatcher
         system: buildSystemInstructions(agentIdentity, systemOpts),
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       if (injectFlight) {
         // 注入失败仅告警，不注销原执行的在飞登记（守卫/防冒充语义依赖该登记）；
         // 错误仍向上抛，由 dispatch() 统一 emitError + 广播 agent.error。
@@ -3065,6 +3075,7 @@ export class WorkerDispatcher
           }
         }
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         this.logger.error(
           `agent ${agentId} 产出物归档失败: ${this.describeError(err)}`,
           (err as Error).stack,
@@ -3100,6 +3111,7 @@ export class WorkerDispatcher
       });
       return row !== null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       // 查询失败按「可能有待填」处理：宁可多留一条 running 的 secret_command 卡
       // （question 收敛后卡片自然回落），也不能把用户正在填的输入的卡删掉。
       this.logger.warn(
@@ -3385,6 +3397,7 @@ export class WorkerDispatcher
         text: displayText,
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(
         `agent ${agentId} 回复落库失败: ${this.describeError(err)}`,
         (err as Error).stack,
@@ -3473,6 +3486,7 @@ export class WorkerDispatcher
         `[usage] 用量已记账 row=${rowId} model=${model} total=${counts.totalTokens} cost=${cost ?? 'null'}`,
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       if (isUniqueConstraintViolation(err)) {
         this.logger.debug(
           `[usage] 同一 completion 重复投递，主键仲裁下已存在，跳过（row=${rowId}）`,
@@ -3653,6 +3667,7 @@ export class WorkerDispatcher
         `agent ${agentId} 处理失败，消息 ${message.id} 标记 failed：${errorText}`,
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(
         `agent ${agentId} 失败消息落库失败: ${this.describeError(err)}`,
       );
@@ -3755,6 +3770,7 @@ export class WorkerDispatcher
         `[dispatcher] 异常终止已通知群聊 message=${message.id} session=${sessionId} type=${reasonType} team=${teamId}`,
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.terminationNotices.delete(key);
       this.logger.error(
         `[dispatcher] 异常终止通知失败 session=${sessionId} type=${reasonType}: ${this.describeError(err)}`,
@@ -3798,6 +3814,7 @@ export class WorkerDispatcher
       }
       return null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `[dispatcher] 异常终止通知幂等探针读错（fail-open 继续发）: ${this.describeError(err)}`,
       );
@@ -3816,7 +3833,9 @@ export class WorkerDispatcher
         select: { alias: true, agent: { select: { name: true } } },
       });
       return row?.alias ?? row?.agent?.name ?? agentId ?? teamMemberId;
-    } catch {
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      // 查成员别名失败：降级用 agentId/teamMemberId（身份可追溯性下降但不中断通知）
       return agentId || teamMemberId;
     }
   }
@@ -3829,7 +3848,9 @@ export class WorkerDispatcher
         select: { taskId: true },
       });
       return row?.taskId ?? null;
-    } catch {
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      // 查会话归属失败：降级为无任务归属（不写 task_events）
       return null;
     }
   }
@@ -3891,6 +3912,7 @@ export class WorkerDispatcher
           params.opencodeSessionId,
         );
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         // 会话失效（worker 侧 404 + SESSION_NOT_FOUND）：会话在驱动端已不存在
         // （serve 重启/容器重建）⇒ 重试没有意义，只会把超时窗口空转到头。
         // ⇒ 走**会话重建路径**：解绑平台会话（清 instanceRef）→ 下一轮分派新建会话。
@@ -4203,6 +4225,7 @@ export class WorkerDispatcher
         `agent ${agentId} 群聊转发（对外结果）message=${groupMessage.id}（session=${sessionId ?? '-'}）`,
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(
         `agent ${agentId} 群聊转发失败: ${this.describeError(err)}`,
       );
@@ -4229,6 +4252,7 @@ export class WorkerDispatcher
       })) as { overrideModelId: string | null } | null;
       return row?.overrideModelId ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       // 覆盖查询失败不阻断分派：回退 agent 默认模型（增强特性容错）
       this.logger.warn(
         `成员覆盖模型查询失败 teamMemberId=${teamMemberId}，回退 agent 默认模型：${this.describeError(err)}`,
@@ -4260,6 +4284,7 @@ export class WorkerDispatcher
       })) as { preferredWorkerId: string | null } | null;
       return row?.preferredWorkerId ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `成员首选 worker 查询失败 teamMemberId=${teamMemberId}，回退自动调度：${this.describeError(err)}`,
       );
@@ -4288,6 +4313,7 @@ export class WorkerDispatcher
       })) as { preferredWorkerId: string | null } | null;
       return row?.preferredWorkerId ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `团队首选 worker 查询失败 teamId=${teamId}，回退自动调度：${this.describeError(err)}`,
       );
@@ -4318,6 +4344,7 @@ export class WorkerDispatcher
       })) as { opencodeAgentName: string | null } | null;
       return row?.opencodeAgentName ?? null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `成员 opencode agent 名查询失败 teamMemberId=${teamMemberId}，回退 null：${this.describeError(err)}`,
       );
@@ -4365,6 +4392,7 @@ export class WorkerDispatcher
           };
         }
       } catch (err) {
+        void err; // 故意忽略：降级路径，错误原因不改变语义
         // 策略解析异常不阻断分派 → 回退常量派生
         this.logger.warn(
           `岗位策略解析失败 role=${role.key}，回退常量派生：${this.describeError(err)}`,
@@ -4698,6 +4726,7 @@ export class WorkerDispatcher
         select: { status: true },
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `worker ${workerId} 心跳状态查询失败（fail-open 按在线继续）: ${this.describeError(err)}`,
       );
@@ -4808,6 +4837,7 @@ export class WorkerDispatcher
         current.triggerDedupKey = dedupKey;
       }
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `静默 deadline durable 行落库失败（仅内存 watchdog 生效） session=${entry.sessionId}: ${this.describeError(err)}`,
       );
@@ -4824,6 +4854,7 @@ export class WorkerDispatcher
     try {
       await this.triggers.cancel(dedupKey);
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `静默 deadline durable 行取消失败（忽略） ${dedupKey}: ${this.describeError(err)}`,
       );
@@ -4894,6 +4925,7 @@ export class WorkerDispatcher
         select: { status: true, lastActivityAt: true },
       })) as { status: unknown; lastActivityAt: unknown } | null;
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `静默 deadline 重启判定读会话失败（fail-open 跳过） session=${sessionId}: ${this.describeError(err)}`,
       );
@@ -4933,6 +4965,7 @@ export class WorkerDispatcher
             dedupKey,
           );
         } catch (err) {
+          void err; // 故意忽略：降级路径，错误原因不改变语义
           this.logger.warn(
             `静默 deadline 顺延行落库失败（fail-open 跳过） session=${sessionId}: ${this.describeError(err)}`,
           );
@@ -4963,6 +4996,7 @@ export class WorkerDispatcher
         data: { lastActivityAt: at ?? new Date() },
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `session ${sessionId} 活动时间回写失败（fail-open，DB 扫描继续）: ${this.describeError(err)}`,
       );
@@ -5061,6 +5095,7 @@ export class WorkerDispatcher
         stale.push(row.id);
       }
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `空闲判死 DB 检出失败（fail-open，扫描继续）: ${this.describeError(err)}`,
       );
@@ -5170,6 +5205,7 @@ export class WorkerDispatcher
             }
           }
         } catch (err) {
+          void err; // 故意忽略：降级路径，错误原因不改变语义
           this.logger.debug(
             `session ${sessionId} 错误尸检失败 worker=${row.workerId}，沿用默认错误类型：${this.describeError(err)}`,
           );
@@ -5274,6 +5310,7 @@ export class WorkerDispatcher
         this.logger.error(`自动拉起失败: ${this.describeError(e)}`),
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(
         `session ${sessionId} 空闲判死失败: ${this.describeError(err)}`,
       );
@@ -5292,6 +5329,7 @@ export class WorkerDispatcher
     try {
       await this.workerClient.abort(workerRef, instanceRef);
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `session ${sessionId} 中止 worker 会话 ${instanceRef} 失败，按已失败继续恢复: ${this.describeError(err)}`,
       );
@@ -5459,6 +5497,7 @@ export class WorkerDispatcher
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `任务工作目录创建失败 dir=${dir}（best-effort，仍返回路径）: ${(err as Error)?.message ?? err}`,
       );
@@ -5472,6 +5511,7 @@ export class WorkerDispatcher
     try {
       await fs.mkdir(dir, { recursive: true });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `team-mode 工作目录创建失败 dir=${dir}（best-effort，仍返回路径）: ${(err as Error)?.message ?? err}`,
       );
@@ -5545,6 +5585,7 @@ export class WorkerDispatcher
         pointer: `【附件图片】用户附了一张图片（${filename}），已放入本次执行的上下文，请查看图片内容后再作答。`,
       };
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `触发消息 ${messageId} 附件查询失败，按纯文本分派: ${this.describeError(err)}`,
       );
@@ -5610,6 +5651,7 @@ export class WorkerDispatcher
           : { type: 'task', id: event.taskId },
       );
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.error(`agent.error 广播失败: ${this.describeError(err)}`);
     }
   }

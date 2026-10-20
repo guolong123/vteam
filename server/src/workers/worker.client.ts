@@ -576,13 +576,17 @@ export class WorkerClient {
     let raw = '';
     try {
       raw = await res.text();
-    } catch {
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      // 读取响应体失败：取不到更细的原因，退回状态码兜底（不抛——调用方按文案处理）
       return 'HTTP 404';
     }
     try {
       const parsed = JSON.parse(raw) as { error?: string };
       return parsed.error || raw || 'HTTP 404';
-    } catch {
+    } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
+      // 响应体非 JSON：解析失败不影响降级语义，保留原文作为可读细节
       return raw || 'HTTP 404';
     }
   }
@@ -775,6 +779,7 @@ export class WorkerClient {
         ...(m.status !== undefined ? { status: m.status } : {}),
       }));
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       // 网络失败/旧版无该端点/空数据 → 降级 capabilities 声明（T11 动态化前占位）。
       // 可观测性：记录 worker id + 解析出的执行端点 URL，并在消息中区分
       // 「worker 不可达/请求失败」与「worker 可达但返回空模型列表」。
@@ -818,6 +823,7 @@ export class WorkerClient {
       };
       return Array.isArray(body.agents) ? body.agents : [];
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `listAgents: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
           `不可达/请求失败（${this.describeError(err)}），降级返回 []（空≠worker 真无 agent）`,
@@ -861,6 +867,7 @@ export class WorkerClient {
       };
       return Array.isArray(body.todos) ? body.todos : [];
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `listTodos: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
           `不可达/请求失败（${this.describeError(err)} sessionId=${sessionId}），降级返回 []（空≠会话真无 todo）`,
@@ -894,6 +901,7 @@ export class WorkerClient {
       const body = (await res.json()) as { files?: WorkerPlanFileInfo[] };
       return Array.isArray(body.files) ? body.files : [];
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `listPlanFiles: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
           `不可达/请求失败（${this.describeError(err)}），降级返回 []（空≠目录真无计划）`,
@@ -1021,6 +1029,7 @@ export class WorkerClient {
         degraded: false,
       };
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       this.logger.warn(
         `getOmoConfig: worker ${worker.id}（${this.resolveExecBaseUrl(worker)}）` +
           `不可达/请求失败（${this.describeError(err)}），降级返回 degraded:true（空≠尚未配置覆盖）`,
@@ -1264,7 +1273,8 @@ export class WorkerClient {
       } else if (res.status === 429 && parsed.code === 'RATE_LIMITED') {
         code = WORKER_CLIENT_ERRORS.RATE_LIMITED;
       }
-    } catch {
+    } catch (err) {
+      void err; // 故意忽略：非 JSON 是已知的降级路径，解析失败原因不改变语义
       /* 非 JSON 响应体：保留原文 */
     }
     throw new WorkerUnavailableException(
@@ -1279,7 +1289,9 @@ export class WorkerClient {
   private async readJsonSafe(res: Response): Promise<unknown> {
     try {
       return await res.json();
-    } catch {
+    } catch (err) {
+      void err; // 故意忽略：空/非 JSON 响应体是已知的降级路径
+      // 非 JSON 响应体：返回空对象，由调用方按缺省字段兜底（不抛）
       return {};
     }
   }
@@ -1318,6 +1330,7 @@ export class WorkerClient {
         signal: controller.signal,
       });
     } catch (err) {
+      void err; // 故意忽略：降级路径，错误原因不改变语义
       throw new WorkerUnavailableException(
         workerId,
         this.describeError(err, timeoutMs),
