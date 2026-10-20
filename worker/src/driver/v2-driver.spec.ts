@@ -1426,6 +1426,121 @@ describe('V2Driver 鉴权 / 错误归一', () => {
   });
 });
 
+describe('V2Driver 凭据不外泄（provider settings.apiKey 不得进入返回值 / 日志 / 错误）', () => {
+  /**
+   * ⚠️ opencode v2 的 `GET /api/model` 与 `GET /api/provider` **明文**返回
+   * provider 的 `settings.apiKey`（实测 2.0.32：`{"settings":{"apiKey":"<明文>",…}}`）。
+   * ⇒ 驱动层必须在**类型边界**上把它丢掉（`DriverModelInfo` 只有 id/name/providerID/
+   * modelID/status），且**任何**路径都不得把响应体原样打进日志或错误消息。
+   *
+   * 本套件把这条"当前无泄漏"的结论**钉死**：将来若有人为了"方便排查"把原始响应体
+   * 打进日志，这里立刻红。
+   */
+  const API_KEY = 'sk-live-DO-NOT-LOG-0123456789abcdef';
+
+  it('listModels：模型项带 settings.apiKey → 返回值与日志都不含 key', async () => {
+    const server = await startFakeV2Server({
+      'GET /api/model': {
+        body: {
+          location: { directory: '/data/work' },
+          data: [
+            {
+              id: 'm1',
+              modelID: 'm1',
+              providerID: 'keta-qwen',
+              name: 'M1',
+              status: 'active',
+              enabled: true,
+              settings: { apiKey: API_KEY, baseURL: 'https://api.example.com/v1' },
+            },
+          ],
+        },
+      },
+    });
+    const logs: string[] = [];
+    const driver = new V2Driver({
+      baseUrl: server.baseUrl,
+      logger: {
+        info: (m: string) => logs.push(m),
+        warn: (m: string) => logs.push(m),
+        error: (m: string) => logs.push(m),
+      },
+    });
+
+    const models = await driver.listModels();
+
+    expect(JSON.stringify(models)).not.toContain(API_KEY);
+    expect(logs.join('\n')).not.toContain(API_KEY);
+    await server.close();
+  });
+
+  it('listModels 失败（HTTP 500）：错误消息不含响应体里的 key', async () => {
+    const server = await startFakeV2Server({
+      'GET /api/model': {
+        status: 500,
+        body: { _tag: 'InternalError', settings: { apiKey: API_KEY } },
+      },
+    });
+    const logs: string[] = [];
+    const driver = new V2Driver({
+      baseUrl: server.baseUrl,
+      logger: {
+        info: (m: string) => logs.push(m),
+        warn: (m: string) => logs.push(m),
+        error: (m: string) => logs.push(m),
+      },
+    });
+
+    try {
+      const err = await driver.listModels().then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+      expect(err).toBeInstanceOf(DriverRequestError);
+      expect((err as Error).message).toContain('HTTP 500');
+      expect((err as Error).message).not.toContain(API_KEY);
+      expect(logs.join('\n')).not.toContain(API_KEY);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('响应不是 JSON（web SPA 陷阱）：错误消息只带 Content-Type，不带响应体', async () => {
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<html>${API_KEY}</html>`);
+      void req;
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const logs: string[] = [];
+    const driver = new V2Driver({
+      baseUrl: `http://127.0.0.1:${port}`,
+      logger: {
+        info: (m: string) => logs.push(m),
+        warn: (m: string) => logs.push(m),
+        error: (m: string) => logs.push(m),
+      },
+    });
+
+    try {
+      const err = await driver.listModels().then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+      expect(err).toBeInstanceOf(DriverRequestError);
+      expect((err as Error).message).toContain('不是 JSON');
+      expect((err as Error).message).not.toContain(API_KEY);
+      expect(logs.join('\n')).not.toContain(API_KEY);
+    } finally {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
 describe('V2 形状翻译纯函数', () => {
   it('unwrapV2List：{data:[…]} 与裸数组都认；其余 → []', () => {
     expect(unwrapV2List({ data: [1, 2] })).toEqual([1, 2]);
