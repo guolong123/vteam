@@ -277,8 +277,14 @@ export function renderBrowserToolsFile(): string {
  *
  * @returns 写入的文件完整路径；agent-browser 不可用时返回 null（跳过注入）。
  */
-export function installBrowserTools(workDir: string): string | null {
-  if (!isAgentBrowserAvailable()) {
+export function installBrowserTools(
+  workDir: string,
+  options?: { isAvailable?: () => boolean },
+): string | null {
+  // 可用性探针可注入：CI 环境没有 agent-browser 二进制，若在此硬依赖它，
+  // 「清掉升级前 v1 形态残留」这条清理逻辑将永远不执行（提前 return）。
+  const available = options?.isAvailable ?? isAgentBrowserAvailable;
+  if (!available()) {
     return null;
   }
   const toolsDir = path.join(workDir, BROWSER_TOOLS_REL_DIR);

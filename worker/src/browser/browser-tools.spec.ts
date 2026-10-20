@@ -110,7 +110,7 @@ describe('browser shim 隔离注入（renderBrowserToolsFile）', () => {
   it('installBrowserTools 落盘文件即隔离版（含 --session 注入）', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'keta-btools-'));
     try {
-      const filePath = installBrowserTools(root);
+      const filePath = installBrowserTools(root, { isAvailable: () => true });
       if (filePath === null) {
         // 本地 dev 无 agent-browser CLI：安装门跳过属预期，渲染版本已由上组断言覆盖
         expect(renderBrowserToolsFile()).toContain('"--session"');
@@ -132,7 +132,7 @@ describe('browser shim 隔离注入（renderBrowserToolsFile）', () => {
       const legacy = path.join(root, BROWSER_TOOLS_LEGACY_REL_DIR, 'browser.ts');
       fs.mkdirSync(path.dirname(legacy), { recursive: true });
       fs.writeFileSync(legacy, '// legacy v1 tool file\n', 'utf8');
-      installBrowserTools(root);
+      installBrowserTools(root, { isAvailable: () => true });
       expect(fs.existsSync(legacy)).toBe(false);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
