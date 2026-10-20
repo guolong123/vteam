@@ -1,0 +1,9 @@
+session = ses_ea8e85b6effe6tmcSHfsCuEpMN
+=== recorded model requests ===
+Traceback (most recent call last):
+  File "<stdin>", line 2, in <module>
+FileNotFoundError: [Errno 2] No such file or directory: 'out/requests.jsonl'
+=== session.instructions.updated delta (if any) ===
+{"sessionID": "ses_ea8e85b6effe6tmcSHfsCuEpMN", "delta": {"core/codemode": "e6428fd7742161f6c3a6c86e53cbbe2c6e4dcc462bbf1a1a07bc4fcbeb9e0b0b", "core/skill-guidance": "8394362d28c82fa4d13c7a9f5568c05680f6687e07db8f426a0e3c92f3027dc9", "core/date": "ca7509e2ab26589ce8a6dc0b35cc4ceee89848e9dae352e97c68a3bac01cc63c", "core/environment": "508bc05a34a221b35603ac1c232d169967361e635fa7a868cddc81989e2170d8"}}
+./lib.sh: line 12: 12268 Terminated: 15          ( curl -sN -u "opencode:spikepass" "http://127.0.0.1:$PORT/api/event" > out/sse-t4hook.log 2>&1 )
+serve on 45990 stopped

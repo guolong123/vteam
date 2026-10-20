@@ -1,0 +1,47 @@
+######## T6-G' OPENCODE_CONFIG=provider-only (does it replace global+project config?)
+  env: OPENCODE_CONFIG=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/spike/t6d/provider-only.json   project-extra: <none>
+  plugins: total=90 non-builtin=[('global-spike', 'local'), ('vteam-plugin', 'local')]
+    system(len=8840): GLOBAL_PLUGIN=True VTEAM_PLUGIN=True GLOBAL_AGENTS=True PROJECT_AGENTS=True
+
+######## T6-H' OPENCODE_CONFIG_CONTENT=provider-only
+  env: OPENCODE_CONFIG_CONTENT={
+  "$schema": "https://opencode.ai/config.json",
+  "model": "spike-mock/spike-model",
+  "providers": {
+    "spike-mock": {
+      "name": "Spike Mock",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:45981/v1" },
+      "models": {
+        "spike-model": {
+          "name": "spike-model",
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
+          "limit": { "context": 8192, "output": 1024 }
+        }
+      }
+    }
+  }
+}   project-extra: <none>
+  plugins: total=90 non-builtin=[('global-spike', 'local'), ('vteam-plugin', 'local')]
+    system(len=8840): GLOBAL_PLUGIN=True VTEAM_PLUGIN=True GLOBAL_AGENTS=True PROJECT_AGENTS=True
+
+######## T6-J project plugins: ['-global-spike'] + our own plugin (auto-discovered .opencode/plugins)
+  env:    project-extra: {"plugins":["-global-spike"]}
+  plugins: total=89 non-builtin=[('vteam-plugin', 'local')]
+    system(len=8795): GLOBAL_PLUGIN=False VTEAM_PLUGIN=True GLOBAL_AGENTS=True PROJECT_AGENTS=True
+
+######## T6-K project plugins: ['-*','opencode.agent',...] (re-enable by explicit id)
+  env:    project-extra: {"plugins":["-*","opencode.agent","opencode.prompt.*","opencode.provider.*"]}
+  plugins: total=41 non-builtin=[]
+    (no model request)
+
+######## T6-L project plugins: ['-*','opencode.*'] (re-enable ALL builtin opencode.* plugins)
+  env:    project-extra: {"plugins":["-*","opencode.*"]}
+  plugins: total=88 non-builtin=[]
+    system(len=8750): GLOBAL_PLUGIN=False VTEAM_PLUGIN=False GLOBAL_AGENTS=True PROJECT_AGENTS=True
+
+######## T6-M project plugins: ['-*','opencode.*'] + OPENCODE_DISABLE_PROJECT_CONFIG=1
+  env: OPENCODE_DISABLE_PROJECT_CONFIG=1   project-extra: {"plugins":["-*","opencode.*"]}
+  plugins: total=89 non-builtin=[('global-spike', 'local')]
+    system(len=8640): GLOBAL_PLUGIN=True VTEAM_PLUGIN=False GLOBAL_AGENTS=True PROJECT_AGENTS=False
+

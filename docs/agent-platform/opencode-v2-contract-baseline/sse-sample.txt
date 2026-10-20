@@ -1,0 +1,70 @@
+data: {"id":"evt_156f538fe001RvjqumVJzSHwO3","type":"server.connected","data":{}}
+
+: heartbeat
+
+data: {"id":"evt_156f540f2001L8082kQpK4DiVg","created":1792460275954,"type":"session.created","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{"sessionID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","slug":"quick-mountain","version":"2.0.28","projectID":"b500b33b53a69aab9482a4ca31800a0ec2f4858b","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"subpath":""},"durable":{"aggregateID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","seq":0,"version":1}}
+
+data: {"id":"evt_156f5410a0010JUBWDdu0Zp2UP","created":1792460275978,"type":"project.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{"id":"b500b33b53a69aab9482a4ca31800a0ec2f4858b","canonical":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project","time":{"created":1792460275952,"updated":1792460275952,"active":1792460275977},"sandboxes":[]}}
+
+data: {"id":"evt_156f54185001gUGdaxDfdqBX2d","created":1792460276101,"type":"mcp.status.changed","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{"server":"vteam"}}
+
+data: {"id":"evt_156f54186001u33iQ6nXMlQRKx","created":1792460276102,"type":"integration.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f54187001vS0kc37H4lpAhN","created":1792460276103,"type":"provider.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f5418a001sE9eYOpAu35J66","created":1792460276106,"type":"model.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f5418b001ItMl9Ogcvf6XxB","created":1792460276107,"type":"agent.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f5418b002ZOhiyDK1jq8CHr","created":1792460276107,"type":"command.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f5418b003ALDCnuWSkltS3e","created":1792460276107,"type":"skill.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f5418c001BHLIefD5ZfrP65","created":1792460276108,"type":"websearch.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f54193002zN7cUqAm6oa2Rg","created":1792460276115,"type":"reference.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f54193003bEzAniE4P4ASZQ","created":1792460276115,"type":"plugin.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f541c3001wmubp4sh4or1hr","created":1792460276163,"type":"mcp.status.changed","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{"server":"vteam"}}
+
+data: {"id":"evt_156f546b3001YHBMJwJxhejCS4","created":1792460277427,"type":"models-dev.refreshed","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f546dc001miA4cPEu8IVR0K","created":1792460277469,"type":"integration.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f546f2001oRYYzYSJ8wcPRt","created":1792460277490,"type":"provider.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f546f8001oFfmJ6NIe88nHO","created":1792460277496,"type":"model.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+: heartbeat
+
+data: {"id":"evt_156f5855e0014nvFLFT91D2f0E","created":1792460293470,"type":"skill.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f58561001V5J1FoILZP6yxN","created":1792460293473,"type":"provider.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f58564001ztaslEiFKNB4GY","created":1792460293476,"type":"model.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f58565001Fi6FzdN7TEurO4","created":1792460293477,"type":"websearch.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f58565002jZJi0GGqjTFxZY","created":1792460293477,"type":"integration.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f58566001MCo5vZh79Kcu50","created":1792460293478,"type":"command.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f5856c001LGToH33lj0VjyP","created":1792460293484,"type":"agent.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f5856c002CV1qKeNb1avVRv","created":1792460293484,"type":"reference.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f5856c0040hLLhuI3Y4rxiB","created":1792460293484,"type":"plugin.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{}}
+
+data: {"id":"evt_156f5856d001FelISOLMgAtdC9","created":1792460293485,"type":"session.inbox.enqueued","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{"inboxID":"msg_156f54123001NSwqsG8PGDE343","sessionID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","item":{"type":"user","payload":{"text":"contract baseline probe"},"delivery":"steer"}},"durable":{"aggregateID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","seq":1,"version":1}}
+
+data: {"id":"evt_156f585bf00148nwpNRblBj7r6","created":1792460293567,"type":"session.execution.started","data":{"sessionID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO"},"durable":{"aggregateID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","seq":2,"version":1}}
+
+data: {"id":"evt_156f585c5001cWMtTcoaSWE4R3","created":1792460293573,"metadata":{"instructions":{"initial":true}},"type":"session.instructions.updated","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{"sessionID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","delta":{"core/codemode":"e6428fd7742161f6c3a6c86e53cbbe2c6e4dcc462bbf1a1a07bc4fcbeb9e0b0b","core/skill-guidance":"8394362d28c82fa4d13c7a9f5568c05680f6687e07db8f426a0e3c92f3027dc9","core/date":"ca7509e2ab26589ce8a6dc0b35cc4ceee89848e9dae352e97c68a3bac01cc63c","core/environment":"bb572f1063223b1836d06dbd9bde1df6dd02a0f11ec39458ce5a343dfbbd5e06"}},"durable":{"aggregateID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","seq":3,"version":2}}
+
+data: {"id":"evt_156f585c6001DDEIxb3RSbkQkX","created":1792460293574,"type":"session.inbox.delivered","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{"sessionID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","inboxID":"msg_156f54123001NSwqsG8PGDE343"},"durable":{"aggregateID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","seq":4,"version":1}}
+
+data: {"id":"evt_156f58a7e001LLDVgo6GSuaT54","created":1792460294782,"type":"session.usage.updated","data":{"sessionID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","cost":0,"tokens":{"input":516,"output":4,"reasoning":0,"cache":{"read":187,"write":0}}}}
+
+data: {"id":"evt_156f58a800012salx1jVOwDsMp","created":1792460294784,"type":"session.renamed","location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/baseline/project"},"data":{"sessionID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","title":"Contract baseline probe"},"durable":{"aggregateID":"ses_ea90abf15ffeKfHbPAGZfeQ2JO","seq":6,"version":1}}
+

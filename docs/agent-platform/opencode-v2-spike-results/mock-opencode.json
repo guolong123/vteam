@@ -1,0 +1,28 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "spike-mock/spike-model",
+  "providers": {
+    "spike-mock": {
+      "name": "Spike Mock",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://127.0.0.1:45981/v1" },
+      "models": {
+        "spike-model": {
+          "name": "spike-model",
+          "capabilities": { "tools": true, "input": ["text"], "output": ["text"] },
+          "limit": { "context": 8192, "output": 1024 }
+        }
+      }
+    }
+  },
+  "agents": {
+    "vteam-sys": {
+      "description": "spike role agent",
+      "system": "ROLE_PROMPT_MARKER_VTEAM_SYS :: you are the vteam system-role agent"
+    },
+    "vteam-prom": {
+      "description": "spike prometheus role agent",
+      "system": "ROLE_PROMPT_MARKER_VTEAM_PROM :: you are the vteam prometheus role agent"
+    }
+  }
+}

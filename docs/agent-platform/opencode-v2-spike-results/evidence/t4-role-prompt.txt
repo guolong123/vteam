@@ -1,0 +1,33 @@
+### case 1: explicit agent switch (POST /api/session/{id}/agent)
+session=ses_ea8f1e895ffex215ixR9RIHTJK
+204 <- HTTP status
+### case 2: prompt body agents:[{name: vteam-prom}] attachment (no explicit switch)
+session=ses_ea8f1d3a5ffeLsaiMzINkAYxpF
+### case 3: session created WITH agent: vteam-prom
+session=ses_ea8f1bfb9ffetZltfAK8kV7fBg
+
+=== per-session analysis ===
+session ses_ea8f1e895ffex215ixR9RIHTJK:
+   req#2 SYS_MARKER=True PROM_MARKER=False | ROLE_PROMPT_MARKER_VTEAM_SYS :: you are the vteam system-role agent\n# Your Model
+session ses_ea8f1d3a5ffeLsaiMzINkAYxpF:
+   req#4 SYS_MARKER=False PROM_MARKER=False | You are an AI agent running in OpenCode, a coding agent harness. Help the user a
+session ses_ea8f1bfb9ffetZltfAK8kV7fBg:
+   req#6 SYS_MARKER=False PROM_MARKER=True | ROLE_PROMPT_MARKER_VTEAM_PROM :: you are the vteam prometheus role agent\n# Your 
+
+=== session.agent.selected events ===
+   {"sessionID": "ses_ea8f1e895ffex215ixR9RIHTJK", "agent": "vteam-sys"}
+
+=== messages of ses_ea8f1e895ffex215ixR9RIHTJK ===
+   type=idle             id=msg_1570e18b1002nN11G6pZiC5v4g {}
+   type=assistant        id=msg_1570e189e0019N8MzamU9YJV1P {"agent": "vteam-sys"}
+   type=user             id=msg_1570e183b001BQwCZeG3kamLDA {"text": "CASE1"}
+   type=agent-switched   id=msg_1570e17ce001WXz65RYY9P4uUC {"agent": "vteam-sys"}
+=== messages of ses_ea8f1d3a5ffeLsaiMzINkAYxpF ===
+   type=idle             id=msg_1570e2cac001HbsYqv2ZM04DPo {}
+   type=assistant        id=msg_1570e2c97001tpK85g9yqRzV9c {"agent": "build"}
+   type=user             id=msg_1570e2c7d0012RPImEpFBfjlWM {"text": "CASE2"}
+=== messages of ses_ea8f1bfb9ffetZltfAK8kV7fBg ===
+   type=idle             id=msg_1570e4097001m8480dOmGH0dvY {}
+   type=assistant        id=msg_1570e4081001nmVJJ4VLN53u0O {"agent": "vteam-prom"}
+   type=user             id=msg_1570e406b001jAf57gf1SdnwtH {"text": "CASE3"}
+./lib.sh: line 12:  9314 Terminated: 15          ( curl -sN -u "opencode:spikepass" "http://127.0.0.1:$PORT/api/event" > out/sse-t4b.log 2>&1 )

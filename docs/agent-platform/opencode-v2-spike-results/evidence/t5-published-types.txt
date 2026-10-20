@@ -1,0 +1,207 @@
+# Published type definitions read from @opencode/plugin@2.0.32 / @opencode/schema@2.0.32
+# (npm pack @opencode/plugin@2.0.32 / npm pack @opencode/schema@2.0.32)
+
+===== package/dist/promise/plugin.d.ts (Context + Plugin) =====
+import type { OpenCodeClient } from "@opencode/client";
+import type { CredentialApi, GenerateApi, PluginApi } from "@opencode/client/promise/api";
+import type { Location } from "@opencode/schema/location";
+import type { PluginOptions } from "../options.js";
+import type { App } from "../app.js";
+import type { AgentDomain } from "./agent.js";
+import type { AISDKDomain } from "./aisdk.js";
+import type { CommandDomain } from "./command.js";
+import type { EventDomain } from "./event.js";
+import type { IntegrationDomain } from "./integration.js";
+import type { MCPDomain } from "./mcp.js";
+import type { ModelDomain } from "./model.js";
+import type { PermissionDomain } from "./permission.js";
+import type { ProviderDomain } from "./provider.js";
+import type { ReferenceDomain } from "./reference.js";
+import type { RpcDomain } from "./rpc.js";
+import type { SessionDomain } from "./session.js";
+import type { ShellDomain } from "./shell.js";
+import type { SkillDomain } from "./skill.js";
+import type { StorageDomain } from "./storage.js";
+import type { ToolDomain } from "./tool.js";
+import type { VcsDomain } from "./vcs.js";
+import type { WebSearchDomain } from "./websearch.js";
+import type { WorktreeDomain } from "./worktree.js";
+export interface Context {
+    readonly app: App;
+    readonly location: Location.Info;
+    readonly options: PluginOptions;
+    readonly agent: AgentDomain;
+    readonly aisdk: AISDKDomain;
+    readonly command: CommandDomain;
+    readonly credential: Pick<CredentialApi, "activate">;
+    readonly event: EventDomain;
+    readonly experimental: {
+        readonly terminal: Pick<OpenCodeClient["experimental"]["persistentPty"], "read">;
+    };
+    readonly integration: IntegrationDomain;
+    readonly mcp: MCPDomain;
+    readonly model: ModelDomain;
+    readonly generate: GenerateApi;
+    readonly permission: PermissionDomain;
+    readonly plugin: Pick<PluginApi, "list">;
+    readonly provider: ProviderDomain;
+    readonly reference: ReferenceDomain;
+    readonly rpc: RpcDomain;
+    readonly session: SessionDomain;
+    readonly shell: ShellDomain;
+    readonly skill: SkillDomain;
+    readonly storage: StorageDomain;
+    readonly tool: ToolDomain;
+    readonly vcs: VcsDomain;
+    readonly websearch: WebSearchDomain;
+    readonly worktree: WorktreeDomain;
+}
+export type Cleanup = () => Promise<void> | void;
+export interface Plugin {
+    readonly id: string;
+    readonly setup: (context: Context) => Promise<Cleanup | void> | Cleanup | void;
+}
+export declare function define(plugin: Plugin): Plugin;
+
+===== package/dist/promise/tool.d.ts (ToolDomain + ToolEditor) =====
+export { CallID, Error } from "@opencode/schema/tool";
+export type { Metadata, Options, Result } from "@opencode/schema/tool";
+import { Tool } from "@opencode/schema/tool";
+import type { Agent } from "@opencode/schema/agent";
+import type { Session } from "@opencode/schema/session";
+import type { SessionMessage } from "@opencode/schema/session-message";
+import type { Types } from "effect";
+import type { Hooks, Transform } from "./registration.js";
+export interface ToolContext extends Omit<Tool.Context, "progress"> {
+    readonly signal: AbortSignal;
+    readonly progress: (update: Tool.Metadata) => Promise<void>;
+}
+export type Info<Input extends Tool.ValueSchema<any> = Tool.ValueSchema<any>, Output extends Tool.ValueSchema<any> | undefined = Tool.ValueSchema<any> | undefined> = Omit<Tool.Info<Input, Output>, "execute"> & {
+    readonly execute: (input: Parameters<Tool.Info<Input, Output>["execute"]>[0], context: ToolContext) => Promise<Tool.Result<Output>>;
+};
+export interface ToolEditor {
+    list(): readonly (Info & {
+        readonly id: string;
+    })[];
+    get(id: string): (Info & {
+        readonly id: string;
+    }) | undefined;
+    namespace(namespace: Tool.Namespace): void;
+    add<Input extends Tool.ValueSchema<any>, Output extends Tool.ValueSchema<any> | undefined>(tool: Info<Input, Output>): void;
+    /** Updates an existing tool; missing IDs are ignored. */
+    update(id: string, update: (tool: Types.Mutable<Info>) => void): void;
+    remove(id: string): void;
+}
+interface ToolHooks {
+    readonly "execute.before": {
+        tool: string;
+        readonly sessionID: Session.ID;
+        readonly agent: Agent.ID;
+        readonly messageID: SessionMessage.ID;
+        readonly id: Tool.CallID;
+        input: unknown;
+    };
+    readonly "execute.after": {
+        readonly tool: string;
+        readonly sessionID: Session.ID;
+        readonly agent: Agent.ID;
+        readonly messageID: SessionMessage.ID;
+        readonly id: Tool.CallID;
+        readonly input: unknown;
+    } & ({
+        readonly status: "completed";
+        result: Tool.Result;
+    } | {
+        readonly status: "error";
+        error: Tool.Error;
+    });
+}
+export interface ToolDomain {
+    readonly transform: Transform<ToolEditor>;
+    readonly reload: () => Promise<void>;
+    /** Currently registered tools, after every transform, keyed by effective name. */
+    readonly list: () => Promise<readonly (Info & {
+        readonly id: string;
+    })[]>;
+    readonly hook: Hooks<ToolHooks>;
+}
+
+===== @opencode/schema/dist/tool.d.ts (Tool.Context / Tool.Info / Tool.Result) =====
+export * as Tool from "./tool.js";
+import { Effect, JsonSchema, Schema } from "effect";
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+import type { Agent } from "./agent.js";
+import type { Session } from "./session.js";
+import type { SessionMessage } from "./session-message.js";
+export type Metadata = Readonly<Record<string, any>>;
+export declare const CallID: Schema.brand<Schema.String, "Tool.CallID">;
+export type CallID = typeof CallID.Type;
+export interface Context {
+    readonly sessionID: Session.ID;
+    readonly agent: Agent.ID;
+    readonly messageID: SessionMessage.ID;
+    readonly id: CallID;
+    readonly progress: (update: Metadata) => Effect.Effect<void>;
+}
+export interface Namespace {
+    readonly name: string;
+    readonly description: string;
+}
+interface BaseOptions {
+    readonly namespace?: string;
+    readonly permission?: string;
+}
+export type Options = BaseOptions & ({
+    readonly codemode?: true;
+    readonly pinned?: boolean;
+} | {
+    readonly codemode: boolean;
+    readonly pinned?: never;
+});
+export type ValueSchema<A = unknown> = Schema.Codec<A, any> | StandardSchemaV1<any, A> | JsonSchema.JsonSchema;
+type InputValue<S> = 0 extends 1 & S ? any : S extends Schema.Codec<infer A, any> ? A : S extends StandardSchemaV1<any, infer A> ? A : unknown;
+type OutputValue<S> = S extends undefined ? never : S extends Schema.Codec<infer A, any> ? A : S extends StandardSchemaV1<infer A, any> ? A : any;
+declare const Error_base: Schema.Class<Error, Schema.TaggedStruct<"Tool.Error", {
+    readonly message: Schema.String;
+    readonly error: Schema.optional<Schema.Defect>;
+    readonly metadata: Schema.optional<Schema.$Record<Schema.String, Schema.Unknown>>;
+}>, import("effect/Cause").YieldableError>;
+export declare class Error extends Error_base {
+}
+export interface TextContent extends Schema.Schema.Type<typeof TextContent> {
+}
+export declare const TextContent: Schema.Struct<{
+    readonly type: Schema.Literal<"text">;
+    readonly text: Schema.String;
+}>;
+export interface FileContent extends Schema.Schema.Type<typeof FileContent> {
+}
+export declare const FileContent: Schema.Struct<{
+    readonly type: Schema.Literal<"file">;
+    readonly uri: Schema.String;
+    readonly mime: Schema.String;
+    readonly name: Schema.optional<Schema.String>;
+}>;
+export declare const Content: Schema.Union<readonly [Schema.Struct<{
+    readonly type: Schema.Literal<"text">;
+    readonly text: Schema.String;
+}>, Schema.Struct<{
+    readonly type: Schema.Literal<"file">;
+    readonly uri: Schema.String;
+    readonly mime: Schema.String;
+    readonly name: Schema.optional<Schema.String>;
+}>]>;
+export type Content = Schema.Schema.Type<typeof Content>;
+export interface Result<Output extends ValueSchema<any> | undefined = ValueSchema<any> | undefined> {
+    readonly output?: OutputValue<Output>;
+    readonly content?: string | ReadonlyArray<Content>;
+    readonly metadata?: Metadata;
+}
+export type Info<Input extends ValueSchema<any> = ValueSchema<any>, Output extends ValueSchema<any> | undefined = ValueSchema<any> | undefined> = {
+    readonly name: string;
+    readonly input: Input;
+    readonly description: string;
+    readonly execute: (input: InputValue<Input>, context: Context) => Effect.Effect<Result<Output>, Error>;
+    readonly output?: Output;
+    readonly options?: Options;
+};
