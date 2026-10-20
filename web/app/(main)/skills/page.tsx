@@ -32,7 +32,7 @@
  *     信息 → 显示「未绑定」）。
  *   - Tool{name/action/source/execution/mcpServer/schema/initCommand/enabled}：desc 显示
  *     「调用标识 <action>」；MCP 工具展示 <server>_<action>，server type/连接状态（T8c）从 GET /mcp-servers 真实
- *     拉取（worker 心跳节流探测上报的三态 connected/failed/needs_auth，11 篇 §5.8）；
+ *     拉取（worker 心跳节流探测上报的五态 connected/pending/disabled/failed/needs_auth）；
  *     无上报数据 → 中性默认 remote/未连接。
  * - 导航（NavTopBar/NavDock/CmdKPanel）由 AppShell 提供，本页仅渲染内容区；
  *   原型 NavDock 的统计子面板（技能/内置/MCP/依赖缺失计数）随 AppShell
@@ -110,12 +110,22 @@ const builtinReadyTheme = { color: "#0D9488", bg: "rgba(13,148,136,0.10)", borde
 type McpType = "local" | "remote";
 
 /**
- * MCP 连接状态五态（T8c 对齐 11 篇 §5.8 三态 + 前端过渡态）：
- * - 真实三态（来自 GET /mcp-servers 的 status，worker 心跳节流探测上报）：
- *   connected 已连接 / failed 连接失败 / needs_auth 待授权（OAuth 未授权，引导到 worker 本地执行 auth）
- * - 过渡/缺省态：connecting 连接中（原型保留）/ disconnected 未连接（后端无上报数据时的中性默认）
+ * MCP 连接状态（后端五态 + 前端过渡态）：
+ * - 真实五态（来自 GET /mcp-servers 的 status，worker 心跳节流探测上报）：
+ *   connected 已连接 / pending 连接中（还在连） / disabled 已停用（配了但关着）/
+ *   failed 连接失败 / needs_auth 待授权（OAuth 未授权，引导到 worker 本地执行 auth）
+ * - 前端过渡/缺省态：connecting 连接中（原型保留）/ disconnected 未连接（后端无上报数据时的中性默认）
+ *
+ * ⚠️ `pending` 与 `disabled` **都不是 `failed`**（折叠即谎报），故各自独立成态。
  */
-type McpStatus = "connected" | "failed" | "needs_auth" | "disconnected" | "connecting";
+type McpStatus =
+  | "connected"
+  | "pending"
+  | "disabled"
+  | "failed"
+  | "needs_auth"
+  | "disconnected"
+  | "connecting";
 
 /** 类型徽章主题：Local=本地二进制（蓝系）/ Remote=远程服务（紫系，与 v2 标识同族） */
 const mcpTypeTheme: Record<McpType, { label: string; color: string; bg: string; border: string }> = {
@@ -124,15 +134,18 @@ const mcpTypeTheme: Record<McpType, { label: string; color: string; bg: string; 
 };
 
 /**
- * 连接状态主题（T8c 五态）：
- * - connected=绿 ✅ 已连接 / failed=红 ✗ 连接失败 / needs_auth=琥珀 🔑 待授权（11 §5.8 三态）
- * - disconnected=灰 ⚠️ 未连接（无上报数据的中性默认）/ connecting=蓝 ◐ 连接中（过渡动画）
+ * 连接状态主题（后端五态 + 前端两态）：
+ * - connected=绿 ✅ 已连接 / failed=红 ✗ 连接失败 / needs_auth=琥珀 🔑 待授权
+ * - pending=青 ◐ 连接中（瞬态，还在连）/ disabled=灰 ○ 已停用（配了但关着，非故障）
+ * - disconnected=灰 ⚠️ 未连接（无上报数据的中性默认）/ connecting=青 ◐ 连接中（原型过渡态）
  */
 const mcpStatusTheme: Record<
   McpStatus,
   { label: string; mark: string; color: string; bg: string; border: string }
 > = {
   connected: { label: "已连接", mark: "✅", color: "#059669", bg: "rgba(16,185,129,0.10)", border: "rgba(16,185,129,0.28)" },
+  pending: { label: "连接中", mark: "◐", color: "#0D9488", bg: "rgba(13,148,136,0.10)", border: "rgba(13,148,136,0.22)" },
+  disabled: { label: "已停用", mark: "○", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
   failed: { label: "连接失败", mark: "✗", color: "#DC2626", bg: "rgba(239,68,68,0.10)", border: "rgba(239,68,68,0.22)" },
   needs_auth: { label: "待授权", mark: "🔑", color: "#D97706", bg: "rgba(245,158,11,0.10)", border: "rgba(245,158,11,0.28)" },
   disconnected: { label: "未连接", mark: "⚠️", color: "var(--color-neutral-500)", bg: "var(--color-neutral-100)", border: "var(--color-neutral-200)" },
@@ -195,7 +208,7 @@ interface ApiMcpServer {
   headers: Record<string, string> | null;
   oauth: unknown;
   enabled: boolean;
-  /** T8c：connected / failed / needs_auth；未上报 → null */
+  /** 五态 connected/pending/disabled/failed/needs_auth；未上报 → null */
   status: string | null;
   /** 已同步物化的工具行数（后端聚合；老版本无此字段时按 undefined 容错） */
   toolCount?: number;
@@ -256,7 +269,7 @@ interface McpToolItem {
   roles: RoleKey[];
   /** server 类型：Local 本地二进制 / Remote 远程服务（T8c 从 GET /mcp-servers 真实拉取） */
   type: McpType;
-  /** 连接状态（T8c 真实三态 connected/failed/needs_auth；无上报 → disconnected 中性默认） */
+  /** 连接状态（后端五态 connected/pending/disabled/failed/needs_auth；无上报 → disconnected 中性默认） */
   status: McpStatus;
   enabled: EnableKey;
 }
@@ -320,13 +333,23 @@ function toBuiltinTool(t: ApiTool): BuiltinTool {
 }
 
 /**
- * T8c：后端三态/缺省值 → 前端展示态。
- * connected/failed/needs_auth 直接透传（真实三态）；null（未上报）→ disconnected 中性默认。
+ * 后端五态/缺省值 → 前端展示态。
+ * - connected / failed / needs_auth：直接透传。
+ * - pending（还在连）→ connecting（前端"连接中"过渡态，同一语义）。
+ * - disabled（配了但关着）→ disabled（独立展示态，**不折叠成 disconnected**：折叠会
+ *   把"人为关掉"说成"没连上"，把配置选择说成故障）。
+ * - null（未上报）/ 未知值 → disconnected 中性默认。
  */
 function toFrontendStatus(status: string | null | undefined): McpStatus {
-  if (status === "connected" || status === "failed" || status === "needs_auth") {
+  if (
+    status === "connected" ||
+    status === "failed" ||
+    status === "needs_auth" ||
+    status === "disabled"
+  ) {
     return status;
   }
+  if (status === "pending") return "connecting";
   return "disconnected";
 }
 

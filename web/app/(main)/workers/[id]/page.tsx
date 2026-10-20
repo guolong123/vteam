@@ -9,8 +9,8 @@
  * - 负载：当前活跃会话数 load.instances + 占用率进度条（loadColor 档位，对齐列表页）
  * - skills：capabilities.skills 真实注入清单（T9），空态提示
  * - tools：capabilities.tools = 内置 git 7 工具 + 自定义工具（T9），内置/自定义徽章区分，空态提示
- * - MCP 状态：mcpStatus 每次心跳刷新（connected/failed/needs_auth 三态徽章，对齐 skills 页
- *   mcpStatusTheme），空态提示
+ * - MCP 状态：mcpStatus 每次心跳刷新（connected/pending/disabled/failed/needs_auth
+ *   五态徽章，对齐 skills 页 mcpStatusTheme），空态提示
  * - 数据是注册+心跳快照：skills/tools 在注册/reload-config 后刷新，mcpStatus 每次心跳刷新
  * - 布局/文案/token 对齐列表页（白卡片 + neutral 色板 + 共享 ./shared.tsx 定义）
  * - 铁律（T15）：无 fixed / 100vh / 100vw，高度由 AppShell main 接管，本页 flex:1 + overflowY auto
@@ -69,7 +69,7 @@ function splitModelRef(ref: string): { providerID: string; modelID: string } {
 
 /* ------------------------------ 子组件 ------------------------------ */
 
-/** MCP 服务器状态徽章（三态：已连接/连接失败/待授权，对齐 skills 页 mcpStatusTheme）。 */
+/** MCP 服务器状态徽章（五态：已连接/连接中/已停用/连接失败/待授权，对齐 skills 页 mcpStatusTheme）。 */
 function McpStatusBadge({ status }: { status: WorkerDetail["mcpStatus"][number]["status"] }) {
   const theme = MCP_STATUS_THEME[status];
   return (
@@ -647,7 +647,7 @@ export default function WorkerDetailPage() {
             )}
           </section>
 
-          {/* MCP 状态卡：每次心跳刷新（connected/failed/needs_auth 三态）；mcpStatus 为
+          {/* MCP 状态卡：每次心跳刷新（connected/pending/disabled/failed/needs_auth 五态）；mcpStatus 为
               T9 字段，旧后端/未上报时缺省空数组（?. 防御，与列表页 WorkerItem 同源容错） */}
           <section data-testid="worker-detail-mcp" style={cardStyle()}>
             <SectionHeader icon="◈" title="MCP 服务器" count={worker.mcpStatus?.length ?? 0} />
