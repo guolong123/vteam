@@ -99,6 +99,17 @@ import { sortMemoriesByImportance } from '../memories/memory-importance';
 /** 消息主键前缀：与 ChatService 共享 IdGeneratorService 的 'm' 计数（重启续号同源）。 */
 const MESSAGE_ID_PREFIX = 'm';
 
+/** task_events 主键前缀（与 tasks.service / worker-event.ingress 同源）。 */
+const TASK_EVENT_ID_PREFIX = 'te';
+
+/**
+ * 异常终止通知（缺陷 5）的幂等探针窗口与扫描行数：
+ * 进程重启后内存去重失效，靠群聊内同 (sessionId, 终止类型) 标记扫描兜底；
+ * 窗口取 30min（覆盖事件重投递/断线重连的典型间隔），窗口过后允许新一轮终止再通知。
+ */
+const TERMINATION_NOTICE_WINDOW_MS = 30 * 60 * 1000;
+const TERMINATION_NOTICE_SCAN_LIMIT = 100;
+
 // ==================================================================
 // 用量落库（token-usage-stats Todo 3 usage-sink）
 //
@@ -1552,6 +1563,13 @@ export class WorkerDispatcher
   private readonly failedSessions = new Set<string>();
 
   /**
+   * 异常终止通知去重键（`<sessionId>:<reasonType>`，缺陷 5）：
+   * 同一会话的同一类异常终止只发一次群聊通知；新一轮派发时按 sessionId 清空
+   * （与 failedSessions 同步，见 dispatch 路径）。
+   */
+  private readonly terminationNotices = new Set<string>();
+
+  /**
    * 事件静默唤醒计数（sessionId → 已发 wake 次数）：deadline 到期且持续静默 +1 并重武装；
    * 仅在完成/判败/换会话时清 0（非终态活动事件不清——计数跨事件保留）；达到
    * MAX_SILENT_WAKE_ATTEMPTS 后仍静默 → 走失败路径。teardown 清空。
@@ -2891,6 +2909,11 @@ export class WorkerDispatcher
 
       this.completedSessions.delete(sessionId);
       this.failedSessions.delete(sessionId);
+      // 新一轮派发：清该会话的异常终止通知去重键（新一轮终止要能再通知一次）
+      for (const key of this.terminationNotices) {
+        if (key.startsWith(`${sessionId}:`))
+          this.terminationNotices.delete(key);
+      }
     }
 
     // 7. loading(operating) + 回流超时 watchdog（team: 作用域 key；注入模式不重复
@@ -3552,6 +3575,19 @@ export class WorkerDispatcher
         resolvedAgentId,
         payload.error?.trim() || 'agent 处理失败',
       );
+      // 异常终止通知（缺陷 5）：worker 上报的失败（v2 durable 事件 session.execution.failed
+      // 经事件表映射为 agent.status{error}；权限被拒导致的失败亦走此路）此前只留一个
+      // 内部 failed 状态，群聊/任务事件无痕 → 主动落一条带原因与 sessionId 的可见通知。
+      if (emitSessionId) {
+        await this.publishTerminationNotice({
+          sessionId: emitSessionId,
+          teamId,
+          teamMemberId,
+          agentId: resolvedAgentId,
+          reason: payload.error?.trim() || 'agent 处理失败',
+          reasonType: 'agent_error',
+        });
+      }
       this.emitError({
         taskId: scope,
         agentId: resolvedAgentId,
@@ -3620,6 +3656,181 @@ export class WorkerDispatcher
       this.logger.error(
         `agent ${agentId} 失败消息落库失败: ${this.describeError(err)}`,
       );
+    }
+  }
+
+  /**
+   * 异常终止通知（缺陷 5）：成员会话**异常终止**（执行失败 / 事件静默判败 / 空闲判死）
+   * 时，主动在**团队群聊**落一条系统消息（带终止原因 + sessionId），有任务时另落一条
+   * task_event —— 让主 Agent 与人类用户都能追溯，而不是只留下一个静默的 idle/failed 状态。
+   *
+   * 幂等：同一 (sessionId, reasonType) 只发一次——内存去重（新一轮派发即清，
+   * 与 failedSessions 同步）+ 群聊内同标记扫描（进程重启后内存去重失效时的兜底）。
+   * 正常完成不经过本方法（完工走回执），故不会与回执重复通知。
+   */
+  private async publishTerminationNotice(params: {
+    sessionId: string;
+    teamId: string;
+    teamMemberId: string;
+    agentId: string;
+    reason: string;
+    reasonType: string;
+  }): Promise<void> {
+    const { sessionId, teamId, teamMemberId, agentId, reason, reasonType } =
+      params;
+    const key = `${sessionId}:${reasonType}`;
+    if (this.terminationNotices.has(key)) {
+      return;
+    }
+    this.terminationNotices.add(key);
+    try {
+      const channel = await this.prisma.chatChannel.findFirst({
+        where: { teamId, type: CHANNEL_TYPE.team_group, deletedAt: null },
+        select: { id: true },
+      });
+      if (!channel) {
+        this.logger.warn(
+          `[dispatcher] 异常终止通知跳过：团队 ${teamId} 无群聊频道 session=${sessionId} type=${reasonType}`,
+        );
+        return;
+      }
+      // 任务归属取会话行的 taskId（事件负载里的 taskId 可能是 `team:<id>` 伪 scope，
+      // 不能直接写 task_events 的外键列）。
+      const taskId = await this.taskIdOfSession(sessionId);
+      const alias = await this.memberAlias(teamMemberId, agentId);
+      const text =
+        `【成员会话异常终止】${alias}（session ${sessionId}，终止类型 ${reasonType}）：` +
+        `${reason}。请主 Agent 复核该成员本轮产出与回执，决定是否重新派发。`;
+      const existing = await this.findTerminationNotice(
+        channel.id,
+        sessionId,
+        reasonType,
+      );
+      if (existing) {
+        this.logger.warn(
+          `[dispatcher] 异常终止通知已存在（幂等跳过）message=${existing} session=${sessionId} type=${reasonType}`,
+        );
+        return;
+      }
+      const message = await this.prisma.message.create({
+        data: {
+          id: await this.idGen.nextId(MESSAGE_ID_PREFIX),
+          channelId: channel.id,
+          taskId: taskId ?? null,
+          senderType: SENDER_TYPE.system,
+          senderId: null,
+          senderInstanceId: null,
+          content: { text, parts: [] } as Prisma.InputJsonValue,
+          mentions: null,
+          status: MESSAGE_STATUS.sent,
+        } as any,
+      });
+      await this.realtime.broadcast(
+        EVENT_TYPES.CHAT_MESSAGE_NEW,
+        { message: this.toMessageDto(message) },
+        { type: 'channel', id: channel.id },
+      );
+      if (taskId) {
+        await this.prisma.taskEvent.create({
+          data: {
+            id: await this.idGen.nextId(TASK_EVENT_ID_PREFIX),
+            taskId,
+            eventType: 'session.terminated',
+            fromStatus: null,
+            toStatus: null,
+            actorType: 'system',
+            actorId: null,
+            metadata: {
+              sessionId,
+              reason,
+              reasonType,
+              agentId,
+              teamMemberId,
+              teamId,
+            } as Prisma.InputJsonValue,
+          },
+        });
+      }
+      this.logger.warn(
+        `[dispatcher] 异常终止已通知群聊 message=${message.id} session=${sessionId} type=${reasonType} team=${teamId}`,
+      );
+    } catch (err) {
+      this.terminationNotices.delete(key);
+      this.logger.error(
+        `[dispatcher] 异常终止通知失败 session=${sessionId} type=${reasonType}: ${this.describeError(err)}`,
+      );
+    }
+  }
+
+  /** 群聊内既有同 (sessionId, reasonType) 终止通知 → 返回其 messageId（幂等兜底；无则 null）。 */
+  private async findTerminationNotice(
+    channelId: string,
+    sessionId: string,
+    reasonType: string,
+  ): Promise<string | null> {
+    try {
+      const rows = await this.prisma.message.findMany({
+        where: {
+          channelId,
+          senderType: SENDER_TYPE.system,
+          createdAt: {
+            gte: new Date(Date.now() - TERMINATION_NOTICE_WINDOW_MS),
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: TERMINATION_NOTICE_SCAN_LIMIT,
+        select: { id: true, content: true },
+      });
+      for (const row of (rows ?? []) as Array<{
+        id: string;
+        content: unknown;
+      }>) {
+        const text = this.extractHistoryMessageText(
+          row.content as Prisma.JsonValue,
+        );
+        if (!text) continue;
+        if (
+          text.includes(`session ${sessionId}`) &&
+          text.includes(`终止类型 ${reasonType}`)
+        ) {
+          return row.id;
+        }
+      }
+      return null;
+    } catch (err) {
+      this.logger.warn(
+        `[dispatcher] 异常终止通知幂等探针读错（fail-open 继续发）: ${this.describeError(err)}`,
+      );
+      return null;
+    }
+  }
+
+  /** 成员别名（teamMember.alias → agent.name → agentId 兜底）。 */
+  private async memberAlias(
+    teamMemberId: string,
+    agentId: string,
+  ): Promise<string> {
+    try {
+      const row = await (this.prisma as any).teamMember?.findUnique?.({
+        where: { id: teamMemberId },
+        select: { alias: true, agent: { select: { name: true } } },
+      });
+      return row?.alias ?? row?.agent?.name ?? agentId ?? teamMemberId;
+    } catch {
+      return agentId || teamMemberId;
+    }
+  }
+
+  /** 会话行的任务归属（null = 团队会话无任务锚点；读错按 null 处理，不阻断通知）。 */
+  private async taskIdOfSession(sessionId: string): Promise<string | null> {
+    try {
+      const row = await this.prisma.session.findUnique({
+        where: { id: sessionId },
+        select: { taskId: true },
+      });
+      return row?.taskId ?? null;
+    } catch {
+      return null;
     }
   }
 
@@ -4441,7 +4652,7 @@ export class WorkerDispatcher
       this.pendingBySession.delete(sessionId);
       return;
     }
-    const fail = (error: string): void => {
+    const fail = async (error: string): Promise<void> => {
       if (key !== undefined) {
         this.pending.delete(key);
       }
@@ -4454,6 +4665,18 @@ export class WorkerDispatcher
       //（fire-and-forget；settleReceiptsOnDutyEnd 自吞异常，不重复 catch）。
       if (teamId) {
         void this.settleReceiptsOnDutyEnd(teamId, teamMemberId);
+      }
+      // 异常终止通知（缺陷 5）：静默判败此前只有 SSE agent.error（不落库、用户看不到），
+      // 平台表面只剩一个静默的 failed 状态 → 主动落一条带原因与 sessionId 的群聊通知。
+      if (teamId) {
+        await this.publishTerminationNotice({
+          sessionId,
+          teamId,
+          teamMemberId,
+          agentId,
+          reason: error,
+          reasonType: 'silent_session_timeout',
+        });
       }
       this.logger.error(`agent ${agentId} ${error}`);
       this.emitError({ taskId: scope, agentId, error });
@@ -4484,7 +4707,7 @@ export class WorkerDispatcher
       !workerLookupFailed &&
       (!workerRow || workerRow.status === WORKER_STATUS.OFFLINE)
     ) {
-      fail(
+      await fail(
         `agent 无响应（${this.silentSessionWakeMs / 1000}s 无事件回流，worker 心跳已离线），不再唤醒直接失败，请检查 worker 状态`,
       );
       return;
@@ -4509,7 +4732,7 @@ export class WorkerDispatcher
       );
       return;
     }
-    fail(
+    await fail(
       `agent 无响应（${this.silentSessionWakeMs / 1000}s 无事件回流，worker 心跳正常），已尝试 ${MAX_SILENT_WAKE_ATTEMPTS} 次自动唤醒仍未恢复，请稍后重试或检查 worker 状态`,
     );
   }
@@ -4979,9 +5202,19 @@ export class WorkerDispatcher
       // → settledHook → drain 重查自动复位主 Agent（置于 quota/transient 分支之前，
       // 判死口径统一；永不抛错，不阻断后续恢复链）。
       await this.settleReceiptsOnDutyEnd(teamId, teamMemberId);
+      // 异常终止通知（缺陷 5）：空闲判死此前只有 SSE agent.error（不落库），平台表面
+      // 只剩一个静默的 idle/failed 状态 → 主动落一条带原因与 sessionId 的群聊通知。
       if (forensicsError && isQuotaError(forensicsType)) {
         const quotaMsg = `agent 额度不足已暂停（${forensicsError}），请补充额度或更换模型后重试`;
         this.logger.error(`session ${sessionId} ${quotaMsg}`);
+        await this.publishTerminationNotice({
+          sessionId,
+          teamId,
+          teamMemberId,
+          agentId,
+          reason: quotaMsg,
+          reasonType: 'quota_exceeded',
+        });
         this.emitError({ taskId: scope, agentId, error: quotaMsg });
         void this.broadcastAgentError({
           taskId: scope,
@@ -4996,6 +5229,14 @@ export class WorkerDispatcher
       if (forensicsError) {
         const transientMsg = `agent 意外中断（${forensicsError}），已自动重试`;
         this.logger.warn(`session ${sessionId} ${transientMsg}，尝试自动拉起`);
+        await this.publishTerminationNotice({
+          sessionId,
+          teamId,
+          teamMemberId,
+          agentId,
+          reason: transientMsg,
+          reasonType: 'session_error',
+        });
         this.emitError({ taskId: scope, agentId, error: transientMsg });
         void this.broadcastAgentError({
           taskId: scope,
@@ -5012,6 +5253,14 @@ export class WorkerDispatcher
       }
       const idleMsg = `agent 长时间无活动（超过 ${this.agentIdleTimeoutMs / 60000}min），已判死`;
       this.logger.error(`session ${sessionId} ${idleMsg}`);
+      await this.publishTerminationNotice({
+        sessionId,
+        teamId,
+        teamMemberId,
+        agentId,
+        reason: idleMsg,
+        reasonType: 'agent_idle_timeout',
+      });
       this.emitError({ taskId: scope, agentId, error: idleMsg });
       void this.broadcastAgentError({
         taskId: scope,

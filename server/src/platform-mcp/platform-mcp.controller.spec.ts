@@ -4,6 +4,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { EventEmitter } from 'node:events';
 import * as request from 'supertest';
 import { WorkerTokenGuard } from '../workers/worker-token.guard';
+import { ARTIFACT_CATEGORIES } from '../artifacts/artifacts.constants';
 import { PlatformMcpController } from './platform-mcp.controller';
 import { PlatformMcpService } from './platform-mcp.service';
 import {
@@ -379,7 +380,9 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(notifyAgent.inputSchema.properties.issueId).toEqual({
         type: 'string',
       });
-      // submit_artifact：taskId/selfInstanceId/type/title 必填，content/fileRef/category 可选；type/category 枚举归为 string
+      // submit_artifact：taskId/selfInstanceId/type/title 必填，content/fileRef/category 可选；
+      // type/category 为枚举：schema 附带 enum 取值全集（缺陷 4：此前塌成裸 string，
+      // 合法取值只能从运行时校验报错里得知）
       const submitArtifact = tools.find((t) => t.name === 'submit_artifact')!;
       expect(submitArtifact.inputSchema.required).toEqual([
         'taskId',
@@ -389,9 +392,11 @@ describe('PlatformMcpController (HTTP)', () => {
       ]);
       expect(submitArtifact.inputSchema.properties.type).toEqual({
         type: 'string',
+        enum: ['text', 'doc', 'file'],
       });
       expect(submitArtifact.inputSchema.properties.category).toEqual({
         type: 'string',
+        enum: ARTIFACT_CATEGORIES,
       });
       // issue_create：taskId/selfInstanceId/title 必填，description/tags/assigneeInstanceId 可选；tags 数组归为 array
       const issueCreate = tools.find((t) => t.name === 'issue_create')!;
@@ -409,7 +414,7 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(issueCreate.inputSchema.properties.assigneeInstanceId).toEqual({
         type: 'string',
       });
-      // issue_transition：taskId/selfInstanceId/issueId/action 全必填；action 枚举归为 string
+      // issue_transition：taskId/selfInstanceId/issueId/action 全必填；action 为枚举（附带取值全集）
       const issueTransition = tools.find((t) => t.name === 'issue_transition')!;
       expect(issueTransition.inputSchema.required).toEqual([
         'taskId',
@@ -419,6 +424,7 @@ describe('PlatformMcpController (HTTP)', () => {
       ]);
       expect(issueTransition.inputSchema.properties.action).toEqual({
         type: 'string',
+        enum: ['start', 'resolve', 'close', 'reopen', 'reject'],
       });
       // question_confirm：selfInstanceId/requestId/kind 必填，taskId/teamId 双可选
       // （双作用域：任务级传 taskId / 团队级请求如团队增员确认传 teamId）
@@ -434,7 +440,7 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(questionConfirm.inputSchema.properties.taskId).toEqual({
         type: 'string',
       });
-      // memory_save：selfInstanceId/level/content 必填，taskId/teamId 双可选，tags 可选；level 枚举归为 string
+      // memory_save：selfInstanceId/level/content 必填，taskId/teamId 双可选，tags 可选；level 为枚举（附带取值全集）
       const memorySave = tools.find((t) => t.name === 'memory_save')!;
       expect(memorySave.inputSchema.required).toEqual([
         'selfInstanceId',
@@ -443,6 +449,7 @@ describe('PlatformMcpController (HTTP)', () => {
       ]);
       expect(memorySave.inputSchema.properties.level).toEqual({
         type: 'string',
+        enum: ['team', 'role', 'global'],
       });
       expect(memorySave.inputSchema.properties.tags).toEqual({ type: 'array' });
       // 2026-09-30：autoInject 可选布尔（单条记忆的自动注入开关，默认 false）
@@ -547,7 +554,7 @@ describe('PlatformMcpController (HTTP)', () => {
       expect(chatHistory.inputSchema.properties.teamMemberId).toEqual({
         type: 'string',
       });
-      // hook_register：selfInstanceId/kind/wakeText 必填，taskId/teamId 双可选；kind/delayMs 枚举数字归为 string/number
+      // hook_register：selfInstanceId/kind/wakeText 必填，taskId/teamId 双可选；kind 为枚举（附带取值全集）
       const hookRegister = tools.find((t) => t.name === 'hook_register')!;
       expect(hookRegister.inputSchema.required).toEqual([
         'selfInstanceId',
@@ -556,6 +563,7 @@ describe('PlatformMcpController (HTTP)', () => {
       ]);
       expect(hookRegister.inputSchema.properties.kind).toEqual({
         type: 'string',
+        enum: ['time', 'all_idle'],
       });
       expect(hookRegister.inputSchema.properties.delayMs).toEqual({
         type: 'number',

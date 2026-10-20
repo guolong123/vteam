@@ -6936,14 +6936,30 @@ describe('WorkerDispatcher', () => {
       expect(errors[0]).toEqual(
         expect.objectContaining({ error: expect.stringMatching(/无响应/) }),
       );
-      // 迟到回流（ingress/轮询）跳过落库仅记日志
+      // 迟到回流（ingress/轮询）跳过落库仅记日志；
+      // ⚠️ 缺陷 5 修复后本路径**会**多落一条「异常终止通知」系统消息（静默判败此前
+      // 无任何可见痕迹，平台表面只剩一个静默 failed 状态）——断言收窄为「不落**回复**行」。
       await d.handleTaskCompleted({
         taskId: request.taskId,
         agentId: 'a_product',
         sessionId: 's_0000000001',
         text: '迟到回复',
       });
-      expect(prisma.message.create).not.toHaveBeenCalled();
+      const createdContents = (
+        prisma.message.create.mock.calls as Array<
+          [{ data: { content: { text: string } } }]
+        >
+      ).map((c) => c[0].data.content.text);
+      expect(
+        createdContents.filter((t) => t.includes('迟到回复')),
+      ).toHaveLength(0);
+      expect(
+        createdContents.some(
+          (t) =>
+            t.includes('【成员会话异常终止】') &&
+            t.includes('session s_0000000001'),
+        ),
+      ).toBe(true);
       jest.useRealTimers();
     });
 

@@ -58,6 +58,10 @@ import {
 } from './platform-mcp.tools';
 import { IssuesService } from '../issues/issues.service';
 import { TasksService } from '../tasks/tasks.service';
+import {
+  NotificationChannelNotBoundError,
+  NotificationChannelNotFoundError,
+} from '../notifications/notification-dispatcher.service';
 import { TeamsService } from '../teams/teams.service';
 import { QuestionsService } from '../questions/questions.service';
 import {
@@ -6691,10 +6695,12 @@ describe('PlatformMcpService', () => {
         text: 'hello world',
       });
 
+      // 第四参为解析出的作用域（团队级渠道绑定；无任务时由团队兜底）
       expect(outboundDispatcher.sendToChannelByIdOrName).toHaveBeenCalledWith(
         taskId,
         'nc_0000000001',
         'hello world',
+        { teamId: null },
       );
       expect(result).toEqual({
         content: [
@@ -6834,6 +6840,95 @@ describe('PlatformMcpService', () => {
       );
       expect(result.isError).toBe(true);
       expect(outboundDispatcher.sendToChannelByIdOrName).not.toHaveBeenCalled();
+    });
+
+    // 缺陷 2：channel_send 报错文案误导 —— 「渠道未绑定」与「渠道名不存在」此前
+    // 被笼统报成「无法解析当前任务上下文」，模型无从判断该去查任务上下文还是渠道绑定。
+    it('失败：团队未绑定任何通知渠道 → 报错点名「未绑定」且不再提任务上下文', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId: null,
+        teamId: 'tm_1',
+        agentId: senderAgentId,
+        teamMemberId: senderInstanceId,
+      });
+      prisma.session.findFirst.mockResolvedValueOnce({
+        id: 's_1',
+        agentId: senderAgentId,
+        teamMemberId: senderInstanceId,
+      });
+      outboundDispatcher.sendToChannelByIdOrName.mockRejectedValue(
+        new NotificationChannelNotBoundError('tm_1', []),
+      );
+
+      const result = await service.channelSend(ctx, {
+        target: 'nc_1',
+        text: 'hi',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('未绑定任何通知渠道');
+      expect(result.content[0].text).not.toContain('无法解析当前任务上下文');
+    });
+
+    it('失败：渠道名不存在 → 报错与「未绑定」不同，且列出该团队可用渠道', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId: null,
+        teamId: 'tm_1',
+        agentId: senderAgentId,
+        teamMemberId: senderInstanceId,
+      });
+      prisma.session.findFirst.mockResolvedValueOnce({
+        id: 's_1',
+        agentId: senderAgentId,
+        teamMemberId: senderInstanceId,
+      });
+      outboundDispatcher.sendToChannelByIdOrName.mockRejectedValue(
+        new NotificationChannelNotFoundError('tm_1', 'nope', [
+          'nc_1(运维群)',
+          'nc_2(告警群)',
+        ]),
+      );
+
+      const result = await service.channelSend(ctx, {
+        target: 'nope',
+        text: 'hi',
+      });
+
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain('不存在或未绑定');
+      expect(result.content[0].text).toContain('nc_1(运维群)');
+      expect(result.content[0].text).toContain('nc_2(告警群)');
+      expect(result.content[0].text).not.toContain('无法解析当前任务上下文');
+      expect(result.content[0].text).not.toContain('未绑定任何通知渠道');
+    });
+
+    it('成功：团队会话（无任务）→ 按团队作用域发送，不再要求任务上下文', async () => {
+      prisma.session.findFirst.mockResolvedValueOnce({
+        taskId: null,
+        teamId: 'tm_1',
+        agentId: senderAgentId,
+        teamMemberId: senderInstanceId,
+      });
+      prisma.session.findFirst.mockResolvedValueOnce({
+        id: 's_1',
+        agentId: senderAgentId,
+        teamMemberId: senderInstanceId,
+      });
+      outboundDispatcher.sendToChannelByIdOrName.mockResolvedValue(undefined);
+
+      const result = await service.channelSend(ctx, {
+        target: 'nc_1',
+        text: 'hello',
+      });
+
+      expect(outboundDispatcher.sendToChannelByIdOrName).toHaveBeenCalledWith(
+        null,
+        'nc_1',
+        'hello',
+        { teamId: 'tm_1' },
+      );
+      expect(result.isError).toBe(false);
+      expect(result.content[0].text).toContain('已发送至渠道 nc_1');
     });
 
     it('未提供 outboundDispatcher → 返回 发送失败: 出站分发器未就绪', async () => {
