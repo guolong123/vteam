@@ -52,7 +52,7 @@ describe('parseMcpStatusPayload（v2 五态 → 线契约五态，1:1）', () =>
     expect(parsed.unnamedCount).toBe(0);
   });
 
-  it('裸数组形态（2.0.32 spec 形态漂移）同样解析', () => {
+  it('裸数组形态（防御性容忍，非已知版本差异）同样解析', () => {
     const parsed = parseMcpStatusPayload([
       { name: 'vteam', status: { status: 'connected' } },
     ]);

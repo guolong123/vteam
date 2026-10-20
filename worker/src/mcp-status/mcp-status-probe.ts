@@ -9,7 +9,8 @@
  * ⇒ 本探针改为**直接读 worker 自己那个 serve 的 `GET /api/mcp`**（Basic Auth 用 serve 密码）。
  *
  * - 数据源：`GET /api/mcp`（v2 契约 `Mcp.Server[]`：`{name, status:{status,error?}, integrationID?}`）
- * - 响应形态：v2 返回 `{location, data:[...]}`；**裸数组**也容忍（复用驱动的 `unwrapV2List`）
+ * - 响应形态：v2 返回 `{location, data:[...]}`；**裸数组**也容忍（复用驱动的 `unwrapV2List`——
+ *   **防御性容忍**，2.0.28 与 2.0.32 实测/发布类型都是 `{location, data}`，**无已知版本差异**）
  * - 五态（v2 契约 `Mcp.Status.*`）：`connected` / `failed` / `needs_auth` / `pending` / `disabled`
  * - 探测结局（**探针层面**，与上面的服务器状态是两个维度）：
  *   `ok`（读到合法列表）/ `probe_failed`（**探针自身失败**：HTTP 失败 / 响应不是 v2 形状 / 非法 JSON）
@@ -214,8 +215,8 @@ function readStatusText(status: unknown): string {
 /**
  * 解析 serve `GET /api/mcp` 的响应体为状态条目。
  *
- * - **形态容忍**：`{location, data:[...]}`（v2 实测）与**裸数组**都认
- *   （复用驱动的 `unwrapV2List`——基线漂移的单一收敛点）；
+ * - **形态容忍**：`{location, data:[...]}`（v2 实测；2.0.28 与 2.0.32 一致）与**裸数组**都认
+ *   （复用驱动的 `unwrapV2List`——**防御性容忍**，非已知的版本差异）；
  * - **五态 1:1 映射**（见 `V2_STATUS_TO_VTEAM`）；未知状态 → 保守兜底 `failed` + 记入
  *   `unknownStatuses`（显式，不静默）；
  * - 名字缺失/空 ⇒ 不产出条目（线契约要求 `serverName` 非空），但**计数上报**（不静默）。

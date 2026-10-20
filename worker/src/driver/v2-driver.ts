@@ -200,8 +200,15 @@ interface V2FileAttachment {
 }
 
 /**
- * 解包 v2 的列表响应：容忍 `{location, data:[...]}`（2.0.28 实测）与**裸数组**
- * （2.0.32 spec 里 `GET /api/model` 已改为裸数组）——基线漂移的单一收敛点。
+ * 解包 v2 的列表响应：接受 `{location, data:[...]}`。
+ *
+ * **2.0.28 与 2.0.32 的 `GET /api/model` 形态一致**（都是 `{location, data}`）——
+ * 已对**发布的 `@opencode/client@2.0.32` 类型定义**核实：`ModelListOutput = { location, data }`
+ * （`dist/promise/generated/types.d.ts`），**与 2.0.28 实测没有差异**。
+ *
+ * ⇒ 这里的**裸数组分支是防御性容忍**（万一将来出现新形态，不至于静默解包失败），
+ * **不是**已知的版本漂移——⚠️ **不要据此把代码改成只认一种形态**，也不要把这段注释
+ * 当成"2.0.32 与 2.0.28 契约不同"的依据。
  */
 export function unwrapV2List<T>(body: unknown): T[] {
   if (Array.isArray(body)) {
@@ -815,6 +822,19 @@ export class V2Driver implements OpenCodeDriver {
    * ⚠️ **body 键名变了**：v1 是 `{reply:"once"|"always"|"reject"}`，v2 是
    * `{decision:"once"|"always"|"reject", message?}`——用错键名不会报错，但**权限答复不生效**
    * （静默失败点，故在此显式标注）。
+   *
+   * ⚠️⚠️ **`reject` 必须带 `message`**（v1→v2 迁移回归的根因，实测 2.0.28 / 2.0.32）：
+   * v2 对「拒绝」的两种回复形状**语义完全不同**——
+   *
+   * | reply body | v2 的工具结果 | 本轮执行 |
+   * |---|---|---|
+   * | `{decision:"reject"}`（无 message） | 工具报错 `{type:"aborted", message:"The user declined this tool call"}` | **整轮被中断**（`session.execution.interrupted`）——模型拿不到任何后续输出 |
+   * | `{decision:"reject", message:"<原因>"}` | 工具报错 `{type:"permission.rejected", message:"<原因>"}` | **继续**（`session.execution.succeeded`）——模型读到原因后可降级执行 |
+   *
+   * ⇒ 无 message 的 reject 会让「被拒绝的那一步」升级成「整轮失败」：worker 侧
+   * 终态闸门判 `interrupted` → 不发 `task.completed` → 平台**收不到回执**（空回执）、
+   * 会话被判 failed——**正是缺陷 2 的现象**。v1 的拒绝只是一个工具错误（循环能吸收），
+   * v2 不是 ⇒ **迁移回归**，必须由本层补齐 message。
    */
   async replyPermission(
     sessionID: string,
@@ -822,13 +842,55 @@ export class V2Driver implements OpenCodeDriver {
     response: DriverPermissionResponse,
   ): Promise<void> {
     const path = `/api/session/${encodeURIComponent(sessionID)}/permission/${encodeURIComponent(permissionID)}/reply`;
+    const body: { decision: DriverPermissionResponse; message?: string } = {
+      decision: response,
+    };
+    if (response === 'reject') {
+      // reject 必须带可读原因：见上方「v2 对拒绝的两种形状」实测表。
+      body.message = await this.buildRejectionReason(sessionID, permissionID);
+    }
     await this.request(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ decision: response }),
+      body: JSON.stringify(body),
     });
     this.logger.info(
-      `[v2-driver] replyPermission -> ${sessionID}/${permissionID}=${response} (HTTP 204)`,
+      `[v2-driver] replyPermission -> ${sessionID}/${permissionID}=${response}` +
+        (body.message !== undefined ? '（reject 带可读原因：模型可降级继续）' : '') +
+        ' (HTTP 204)',
+    );
+  }
+
+  /**
+   * 拒绝原因文案（v2 `message` 字段的内容）。
+   *
+   * - **带上动作与资源**（从 serve 的 pending 权限请求里取）：被拒的是
+   *   `external_directory / /tmp/*` 还是 `shell / rm -rf`，对模型接下来的降级动作
+   *   影响很大——只说「被拒绝」等于让模型瞎猜。
+   * - **取不到 pending 也不放弃原因**（会话已消失/列表接口失败）：退回通用文案，
+   *   绝不因为查不到细节就退回「无 message 的 reject」（那会中断整轮）。
+   */
+  private async buildRejectionReason(
+    sessionID: string,
+    permissionID: string,
+  ): Promise<string> {
+    let detail = '';
+    try {
+      const pending = await this.listPermissions(sessionID);
+      const hit = pending.find((p) => p.id === permissionID);
+      if (hit) {
+        const resources = (hit.resources ?? []).filter((r) => r !== '').join('、');
+        const action = hit.action && hit.action !== '' ? hit.action : '未知动作';
+        detail = `（动作：${action}${resources ? `，资源：${resources}` : ''}）`;
+      }
+    } catch (err) {
+      this.logger.warn(
+        `[v2-driver] 取 pending 权限失败（退回通用拒绝原因）: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    return (
+      `权限请求被拒绝${detail}：本次操作未获授权，请勿重试同一操作；` +
+      '请改用其它方案继续推进，并在回复中说明该操作已被拒绝。'
     );
   }
 
@@ -926,8 +988,10 @@ export class V2Driver implements OpenCodeDriver {
   /**
    * GET /api/model：列出模型目录。
    *
-   * 响应形态有**基线漂移**：2.0.28 实测 `{location, data:[...]}`，2.0.32 spec 改为**裸数组**
-   * ——两种都容忍（收敛在 `unwrapV2List` 一处）。
+   * **2.0.28 与 2.0.32 的响应形态一致**：都是 `{location, data:[...]}`（2.0.28 实测；
+   * 2.0.32 见**发布的 `@opencode/client@2.0.32`** `ModelListOutput = { location, data }`）
+   * ——**不存在已知的版本差异**。`unwrapV2List` 里的**裸数组分支是无害的防御性容忍**
+   * （针对假想的未来形态），**不是**版本漂移的证据。
    *
    * 映射：`id` = `providerID/modelID`（vteam 口径）；`status` 透传 v2 的
    * `status`（active/beta/alpha/deprecated，缺失视为 active）；v2 独有的 `enabled:false`

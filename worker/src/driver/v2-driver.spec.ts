@@ -1207,6 +1207,56 @@ describe('V2Driver question / permission 通道', () => {
     expect(JSON.stringify(req?.body)).not.toContain('reply');
     await server.close();
   });
+
+  it('once/always 不带 message（放行语义与 v2 契约一致，body 形状不变）', async () => {
+    const server = await startFakeV2Server();
+    const driver = new V2Driver({ baseUrl: server.baseUrl });
+    await driver.replyPermission('ses_1', 'per_1', 'once');
+    const req = findRequest(server.requests, 'POST', '/permission/per_1/reply');
+    expect(req?.body).toEqual({ decision: 'once' });
+    await server.close();
+  });
+
+  it('reject **必须带可读 message**（v2 无 message 的 reject 会中断整轮执行）', async () => {
+    const server = await startFakeV2Server({
+      'GET /api/session/ses_1/permission': {
+        body: {
+          data: [
+            {
+              id: 'per_1',
+              sessionID: 'ses_1',
+              action: 'external_directory',
+              resources: ['/tmp/*'],
+            },
+          ],
+        },
+      },
+    });
+    const driver = new V2Driver({ baseUrl: server.baseUrl });
+    await driver.replyPermission('ses_1', 'per_1', 'reject');
+    const req = findRequest(server.requests, 'POST', '/permission/per_1/reply');
+    const body = req?.body as { decision?: string; message?: string };
+    expect(body.decision).toBe('reject');
+    expect(typeof body.message).toBe('string');
+    expect((body.message ?? '').trim()).not.toBe('');
+    expect(body.message).toContain('external_directory');
+    expect(body.message).toContain('/tmp/*');
+    await server.close();
+  });
+
+  it('reject：取不到 pending 权限（列表接口失败）→ 仍给通用可读原因，绝不退化为无 message', async () => {
+    const server = await startFakeV2Server({
+      'GET /api/session/ses_1/permission': { status: 500, body: { error: 'boom' } },
+    });
+    const driver = new V2Driver({ baseUrl: server.baseUrl });
+    await driver.replyPermission('ses_1', 'per_1', 'reject');
+    const req = findRequest(server.requests, 'POST', '/permission/per_1/reply');
+    const body = req?.body as { decision?: string; message?: string };
+    expect(body.decision).toBe('reject');
+    expect((body.message ?? '').trim()).not.toBe('');
+    expect(body.message).toContain('被拒绝');
+    await server.close();
+  });
 });
 
 describe('V2Driver abort / listAgents / listModels / listTodos / isHealthy', () => {
@@ -1297,7 +1347,7 @@ describe('V2Driver abort / listAgents / listModels / listTodos / isHealthy', () 
     await server.close();
   });
 
-  it('listModels：裸数组形态（2.0.32 spec）同样容忍', async () => {
+  it('listModels：裸数组形态（防御性容忍，非已知版本差异）同样容忍', async () => {
     const server = await startFakeV2Server({
       'GET /api/model': {
         body: [{ id: 'm1', modelID: 'm1', providerID: 'opencode', name: 'M1', status: 'active' }],
