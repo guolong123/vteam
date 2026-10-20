@@ -130,7 +130,11 @@ export interface MergePartsOptions {
 }
 
 /** 会随流式生成累积增长的文本类 part 类型（单调守卫作用域）。 */
-const TEXTUAL_PART_TYPES: ReadonlySet<string> = new Set(['text', 'reasoning', 'thinking']);
+const TEXTUAL_PART_TYPES: ReadonlySet<string> = new Set([
+  'text',
+  'reasoning',
+  'thinking',
+]);
 
 /** 文本类 part 的候选文本字段拼接（与 worker textGrowthFingerprint 同口径）。 */
 function partTextualValue(p: Record<string, unknown>): string {

@@ -1826,7 +1826,12 @@ describe('WorkerEventIngress', () => {
         type: 'private',
       });
       const v1 = { id: 'prt_t', type: 'text', text: 'hello', synthetic: false };
-      const v2 = { id: 'prt_t', type: 'text', text: 'hello world', synthetic: false };
+      const v2 = {
+        id: 'prt_t',
+        type: 'text',
+        text: 'hello world',
+        synthetic: false,
+      };
       prisma.message.findFirst.mockResolvedValueOnce({
         id: 'm_stream',
         content: { text: 'hello', parts: [v1] },
