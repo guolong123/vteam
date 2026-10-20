@@ -56,27 +56,35 @@ interface ExclusiveBindingConflict {
  * 产生成对消息 id、两个 project_manager 会话同时回复）。
  *
  * 缺省不静默抢占：抛 409 让前端弹确认框，用户确认后带 `replaceExisting=true` 重提。
+ *
+ * ⚠️ **`channelIdField` 必须随 linkTable 一起变**（回归修复）：两张绑定表的渠道外键
+ * **字段名不同**——`team_message_channels.message_channel_id` vs
+ * `team_notification_channels.notification_channel_id`（见 `prisma/schema.prisma`）。
+ * 早先这里把 `messageChannelId` **写死**，于是通知渠道路径（`teamNotificationChannel`）
+ * 拿一个模型上不存在的字段去查 ⇒ Prisma 抛 `Unknown argument 'messageChannelId'`
+ * ⇒ **POST /teams/:teamId/notification-channels 恒 500**（消息渠道路径不受影响，
+ * 因为字段名恰好对上）。口径与 `releaseConflictingBindings` 的 `channelIdField` 参数一致。
  */
 async function findExclusiveBindingConflicts(
   prisma: PrismaService,
   teamId: string,
   linkTable: 'teamMessageChannel' | 'teamNotificationChannel',
+  channelIdField: 'messageChannelId' | 'notificationChannelId',
   channelIds: string[],
 ): Promise<ExclusiveBindingConflict[]> {
   if (channelIds.length === 0) return [];
   const model = (prisma as any)[linkTable];
   const links = await model.findMany({
-    where: { messageChannelId: { in: channelIds }, teamId: { not: teamId } },
-    select: { messageChannelId: true, teamId: true },
+    where: { [channelIdField]: { in: channelIds }, teamId: { not: teamId } },
+    select: { [channelIdField]: true, teamId: true },
   });
   const byChannel = new Map<string, Set<string>>();
-  for (const l of links as Array<{
-    messageChannelId: string;
-    teamId: string;
-  }>) {
-    if (!byChannel.has(l.messageChannelId))
-      byChannel.set(l.messageChannelId, new Set());
-    byChannel.get(l.messageChannelId)!.add(l.teamId);
+  for (const l of links as Array<Record<string, string>>) {
+    const channelId = l[channelIdField];
+    const linkTeamId = l.teamId;
+    if (!channelId) continue;
+    if (!byChannel.has(channelId)) byChannel.set(channelId, new Set());
+    byChannel.get(channelId)!.add(linkTeamId);
   }
   if (byChannel.size === 0) return [];
 
@@ -208,6 +216,7 @@ export class TeamChannelBindingsController {
       this.prisma,
       teamId,
       'teamMessageChannel',
+      'messageChannelId',
       ids,
     );
     if (conflicts.length > 0 && dto.replaceExisting !== true) {
@@ -324,6 +333,7 @@ export class TeamChannelBindingsController {
       this.prisma,
       teamId,
       'teamNotificationChannel',
+      'notificationChannelId',
       ids,
     );
     if (conflicts.length > 0 && dto.replaceExisting !== true) {
