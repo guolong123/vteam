@@ -1095,7 +1095,7 @@ describe('ChatService', () => {
       ...overrides,
     });
 
-    /** serve GET /session/{id}/message 返回的会话消息（info/parts 形状对齐 v1-driver ServeMessage）。 */
+    /** worker GET /sessions/:id/messages 返回的会话消息（info/parts 形状 = vteam 渲染模型）。 */
     const serveMessages = () => [
       {
         info: { id: 'msg_user_1', role: 'user', time: { created: 1000 } },
@@ -1139,7 +1139,7 @@ describe('ChatService', () => {
 
       const result = await service.getSessionHistory(channelId, userId);
 
-      // 调 worker serve GET /session/{id}/message（worker 引用 + instanceRef）
+      // 调 worker GET /sessions/:id/messages（worker 引用 + instanceRef）
       expect(workerClient.getMessages).toHaveBeenCalledWith(
         { id: 'w_1', capabilities: { baseUrl: 'http://worker' } },
         'ses_abc',

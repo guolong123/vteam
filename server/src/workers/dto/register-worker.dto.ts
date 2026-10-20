@@ -86,7 +86,7 @@ export class WorkerCapabilitiesDto {
 
   @ApiPropertyOptional({
     description:
-      'models-truth：worker 可执行模型 id 列表（`opencode models` CLI 输出，鉴权过滤后的真实可用集；缺省时 sync 回退 /api/model 拉取）',
+      'models-truth：worker 可执行模型 id 列表（**worker 自己 serve 的 `GET /api/model`** —— v2 下 `opencode models` CLI 绑的是共享后台服务、读的是另一个作用域，不能用作真值源；缺省时 sync 回退 worker 执行端点的模型目录）',
     type: [String],
   })
   @IsOptional()

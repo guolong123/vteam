@@ -46,6 +46,7 @@ import { WORKER_STATUS } from '../workers/workers.constants';
 import { SessionLifecycleService } from '../workers/session-lifecycle.service';
 import {
   ExecuteAttachment,
+  isWorkerSessionInvalid,
   WorkerClient,
   WorkerEndpointRef,
   WorkerUnavailableException,
@@ -437,7 +438,7 @@ export const DEFAULT_DOCLIB_TOTAL_BYTES = 128 * 1024;
 export const DEFAULT_CHAT_HISTORY_MAX_BYTES = 32 * 1024;
 
 /**
- * P7：全局系统提示（注入 prompt_async 顶层 system 字段，serve 拼入 LLM system message）：
+ * P7：全局系统提示（经 worker 执行端点的顶层 system 字段下发，由驱动端落进 LLM system message）：
  * 产出物协议 + @定向机制说明——Agent 默认知晓如何声明可归档产出物，无需每条消息显式要求。
  * 经 system 通道注入（非 parts 文本）→ 不进入会话 user 消息，不会出现在聊天记录回复中。
  *
@@ -684,7 +685,7 @@ export interface BuildSystemInstructionsOptions {
   taskInstanceId?: string | null;
   /** 当前 agent 的实例别名（默认「<角色中文名>-<seq>」）；缺省回退 agent.name。 */
   selfAlias?: string | null;
-  /** 任务级独立工作目录（<WORK_DIR>/tasks/<taskId>，prompt_async directory）；注入
+  /** 任务级独立工作目录（<WORK_DIR>/tasks/<taskId>，下发时的 directory）；注入
    *  提示词作为运行时持久化目录（k8s 只有该目录重启后保留），引导 agent 把工作文件写入。 */
   persistentWorkDir?: string;
   /** 可用记忆索引块（team/global 计数+Top tags+description 列表，已按预算截断 <400 token）；缺省不注入。 */
@@ -1001,7 +1002,7 @@ export function parseTimeoutMs(raw: unknown, fallback: number): number {
 
 /** F3 MINOR-3：任务工作目录根（env WORK_DIR，默认 /data/vteam-worker）。
  *  任务级独立工作目录 = <根>/tasks/<taskId>（server 侧 mkdir -p 保证存在），
- *  作为 prompt_async 的 directory 传入——防模型在仓库根真实写文件污染（F4 零污染关键）。
+ *  作为下发的 directory 传入——防模型在仓库根真实写文件污染（F4 零污染关键）。
  *  实现与常量已下沉到 ../tasks/work-dir.util（plan-docs.service 要用同一拼法，
  *  从本文件导入会造成 tasks ↔ chat 循环依赖）；此处 re-export 保持既有导入方兼容。 */
 export { DEFAULT_TASK_WORK_DIR };
@@ -1009,7 +1010,7 @@ export { DEFAULT_TASK_WORK_DIR };
 /** 自持轮询间隔 ms（F2 C1：对齐 worker 侧 prompt-await.ts pollMs=500，计划 D8）。 */
 export const POLL_INTERVAL_MS = 500;
 
-/** opencode serve GET /session/{id}/message 消息最小形状（判定/聚合只取所需字段）。 */
+/** worker GET /sessions/:id/messages 的消息最小形状（判定/聚合只取所需字段）。 */
 interface PollMessageShape {
   info?: { role?: string; id?: string };
   parts?: Array<{
@@ -1509,7 +1510,7 @@ export function toExecutionScope(
 /**
  * Phase 4 真实分派器（18 篇 §8.3，替换 Phase 2 mock 分派器的核心，M4 主链路心脏）：
  * dispatch → 定位/分配 worker（T12 bindSessionToWorker）→ doclib 上下文注入（12 篇 §8）
- * → WorkerClient 下发（T8 createSession/promptAsync）→ 回流处理（D5：落库 + broadcast
+ * → WorkerClient 下发（T8 createSession/promptSession）→ 回流处理（D5：落库 + broadcast
  * chat.message.new + emitFinal 归本类）。
  *
  * 与 Phase 2 mock 分派器的关键差异：
@@ -2600,7 +2601,7 @@ export class WorkerDispatcher
     if (!opencodeSessionId) {
       try {
         const created = await this.workerClient.createSession(worker, model);
-        opencodeSessionId = created.sessionID;
+        opencodeSessionId = created.sessionId;
         await this.sessionLifecycle.bindSessionToWorker(
           sessionId,
           workerId,
@@ -3627,8 +3628,8 @@ export class WorkerDispatcher
   // ------------------------------------------------------------------
 
   /**
-   * F2 C1（CRITICAL）+ F3 MAJOR-1（增量检测）：自持轮询完成判定——promptAsync 后 server
-   * 侧每 500ms 拉取 GET /session/{id}/message，**只检测本轮 dispatch 之后新增的消息**中
+   * F2 C1（CRITICAL）+ F3 MAJOR-1（增量检测）：自持轮询完成判定——下发 prompt 后 server
+   * 侧每 500ms 拉取 worker GET /sessions/:id/messages，**只检测本轮 dispatch 之后新增的消息**中
    * 是否出现 step-finish(reason=stop)（pollCursors 记录已消费到的最新消息 id，复用会话
    * 时不误命中上一次会话的 step-finish）→ handlePolledCompletion 落库+广播+emitFinal。
    * 默认超时（dispatchTimeoutMs）→ failedSessions 标记防迟到回流；emitError 由 watchdog
@@ -3649,7 +3650,7 @@ export class WorkerDispatcher
     channelId?: string;
     startedAt?: number;
     /**
-     * F3 MAJOR-1 残留修复：promptAsync 前基线 cursor（dispatch 前置取定，此时 serve
+     * F3 MAJOR-1 残留修复：下发 prompt 前基线 cursor（dispatch 前置取定，此时驱动端
      * 尚未创建本次 assistant 占位消息，不会落在占位上）。null=无历史（首次会话，
      * messagesAfter(null) 返回全部）；undefined=未提供（前置取基线失败）→ 回退既有
      * 游标或兜底首轮自取。
@@ -3658,7 +3659,7 @@ export class WorkerDispatcher
   }): Promise<void> {
     const deadline = Date.now() + this.dispatchTimeoutMs;
     // F3 MAJOR-1：增量 poll 游标——上次已消费到的最新消息 id；复用会话第二次 dispatch
-    // 时从上次已消费位置继续。F3 残留修复：优先使用 dispatch 在 promptAsync 前取的
+    // 时从上次已消费位置继续。F3 残留修复：优先使用 dispatch 在下发 prompt 前取的
     // 基线（绝对正确，无占位污染）；未提供才回退 pollCursors 既有游标（跨轮续接）。
     let cursor: string | null | undefined;
     if (params.baselineCursor !== undefined) {
@@ -3679,6 +3680,22 @@ export class WorkerDispatcher
           params.opencodeSessionId,
         );
       } catch (err) {
+        // 会话失效（worker 侧 404 + SESSION_NOT_FOUND）：会话在驱动端已不存在
+        // （serve 重启/容器重建）⇒ 重试没有意义，只会把超时窗口空转到头。
+        // ⇒ 走**会话重建路径**：解绑平台会话（清 instanceRef）→ 下一轮分派新建会话。
+        if (isWorkerSessionInvalid(err)) {
+          this.logger.warn(
+            `agent ${params.agentId} 轮询 getMessages：会话已失效（${params.opencodeSessionId}），解绑会话待重建: ${this.describeError(err)}`,
+          );
+          await this.sessionLifecycle
+            .unbindSession(params.sessionId)
+            .catch((unbindErr: unknown) =>
+              this.logger.error(
+                `会话失效解绑失败 session=${params.sessionId}: ${this.describeError(unbindErr)}`,
+              ),
+            );
+          return;
+        }
         // getMessages 失败（worker 暂时不可达）：超时窗口内继续重试
         this.logger.warn(
           `agent ${params.agentId} 轮询 getMessages 失败: ${this.describeError(err)}`,
@@ -3689,7 +3706,7 @@ export class WorkerDispatcher
       const lastId = this.lastMessageId(messages);
       if (!initialized) {
         // F3 MAJOR-1 残留修复：兜底首轮基线（前置基线失败/无既有游标场景）——用
-        // baselineId 跳过空 assistant 占位（promptAsync 后 serve 创建的本次回复占位，
+        // baselineId 跳过空 assistant 占位（下发 prompt 后驱动端创建的本次回复占位，
         // parts=[]），基线落在本次 user prompt 消息（或更早）上，防 messagesAfter
         // 永空（m_37 超时根因）；不检测本轮。
         cursor = this.baselineId(messages);
@@ -4070,7 +4087,7 @@ export class WorkerDispatcher
   /**
    * 团队成员选择的 opencode 原生 agent 名（TeamMember.opencodeAgentName）。
    *
-   * 非空 → 分派时下发 prompt_async 的 `agent` 字段，由 opencode 内核按该 agent 的
+   * 非空 → 分派时下发 `agent` 字段，由 opencode 内核按该 agent 的
    * prompt/permission 执行（vteam 只做传递，不自造 agent 语义）；null → 不带该字段，
    * 行为与引入本特性前逐字节一致（零回归）。
    *
@@ -5157,7 +5174,7 @@ export class WorkerDispatcher
 
   /**
    * F3 MAJOR-1 残留修复：兜底基线消息 id——最后一条**非空 assistant 占位**消息 id。
-   * promptAsync 后 serve 为本次回复创建 assistant 占位消息（parts=[]，未填充）；若基线
+   * 下发 prompt 后驱动端为本次回复创建 assistant 占位消息（parts=[]，未填充）；若基线
    * 取到它 → messagesAfter(cursor) 永空 → 永不命中 step-finish（m_37 超时根因）。兜底
    * 路径（前置基线失败后首轮自取）跳过占位，基线落在本次 user prompt（或更早）上；
    * 无消息/全为占位 → null（messagesAfter(null) 返回全部）。

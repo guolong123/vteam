@@ -37,6 +37,10 @@ import {
   resolveExpectedCodeVersion,
 } from './worker-code-version';
 import {
+  isSameOpencodeVersion,
+  normalizeOpencodeVersion,
+} from './worker-version';
+import {
   computeUpdateAvailable,
   isCodeVersionAligned,
   normalizeReportedUpdateState,
@@ -329,7 +333,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
     const reportedUpdateState = normalizeReportedUpdateState(dto.updateState);
     const data = {
       name: dto.name ?? null,
-      opencodeVersion: dto.opencodeVersion,
+      // T18：落库前归一成 semver 串（worker 已按 T1 上报归一值，这里再收一道：
+      // 旧 worker 可能上报原始串 `opencode v2.0.28`）——调度器按版本过滤时
+      // 两端格式必须一致，否则 worker 会**静默不可调度**（什么都派不出去、无报错）。
+      opencodeVersion: normalizeOpencodeVersion(dto.opencodeVersion),
       capabilities: capabilities as Prisma.InputJsonValue,
       load: dto.load as unknown as Prisma.InputJsonValue,
       // C2：worker 上报默认模型——仅显式提供时更新（旧 worker 不携带时保留已有值，不误清 C8/PATCH 配置）
@@ -917,7 +924,10 @@ export class WorkersService implements OnModuleInit, OnModuleDestroy {
       .filter(
         (x) =>
           !req.opencodeVersion ||
-          x.worker.opencodeVersion === req.opencodeVersion,
+          // 两侧都归一后再比（双写自 worker 的 normalizeOpencodeVersion）：
+          // worker 上报 `2.0.28`，需求可能写成 `opencode v2.0.28`——精确串相等会
+          // 匹配不上 ⇒ worker 变不可调度 ⇒ **静默的总停摆**（什么都不派发、无报错）。
+          isSameOpencodeVersion(x.worker.opencodeVersion, req.opencodeVersion),
       )
       .filter((x) => this.matchesModelRequirement(x.worker, req.modelId))
       .sort((a, b) => {

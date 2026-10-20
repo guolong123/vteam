@@ -176,7 +176,7 @@ export class TasksController {
    * GET /api/v1/tasks/:id/plan-steps → {steps, workerId, degraded}
    *
    * 定位链：任务 → 团队主 Agent 成员 session（workerId + instanceRef）→
-   * worker GET /todos → serve GET /session/{id}/todo。任一环节缺失 → degraded，
+   * worker GET /todos（→ 驱动端的会话步骤接口）。任一环节缺失 → degraded，
    * 不抛错（列表类端点不阻断页面）。步骤状态只由 agent 经 opencode todo 工具推进，
    * vteam 不写。
    */

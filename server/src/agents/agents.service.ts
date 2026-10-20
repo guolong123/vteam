@@ -550,11 +550,12 @@ export class AgentsService implements OnModuleInit {
   /**
    * GET /agents/opencode：列出 opencode 原生 agent（vteam 同步/展示/切换的数据源）。
    *
-   * 数据来自 worker 执行端点 `GET /agents`（→ opencode serve `GET /agent`），非硬编码：
+   * 数据来自 **worker 执行端点** `GET /agents`（T18：代理链 = 控制面 → worker → 驱动端；
+   * 控制面**不再**持有 opencode 的 agent 列表 wire 形状），非硬编码：
    * vteam 只做「同步 + 展示 + 切换」，agent 的 prompt/permission 语义完全由 opencode 侧
    * 定义并强制执行（如内置 plan agent 的 edit/bash 受限）。
    *
-   * - `directory` 必须与执行期 prompt_async 的 directory 同值：serve 按目录发现
+   * - `directory` 必须与执行期下发的 directory 同值：驱动端按目录发现
    *   `opencode.json` 的 agent 节（per-directory 隔离，不需要重启 serve）。
    * - workerId 显式传入则用之；缺省经 assignWorker 选一个可用 worker。
    * - 每个条目附 `governed`：与策略下发**同源**（`buildAgentPolicies().agents` 的名字
@@ -575,10 +576,10 @@ export class AgentsService implements OnModuleInit {
         return { agents: [], workerId: null, degraded: true };
       }
       // ⚠️ 必须查 worker 行取 capabilities 再传入：exec 端点 baseUrl 从
-      // capabilities.execBaseUrl（或 capabilities.baseUrl + execPort）解析；只传 { id }
-      // 会回退到 WORKER_BASE_URL（默认 localhost:4199）——server 与 worker 分处不同容器
-      // 时必然连不上，而 listAgents 的降级 catch 会静默返回 []，症状只是 degraded=true，
-      // 极难定位（本地部署实测踩坑）。
+      // capabilities.execBaseUrl（或 worker 公布主机 + capabilities.execPort）解析；
+      // 只传 { id } 会回退到 WORKER_BASE_URL（默认 localhost:4199）——server 与 worker
+      // 分处不同容器时必然连不上，而 listAgents 的降级 catch 会静默返回 []，症状只是
+      // degraded=true，极难定位（本地部署实测踩坑）。
       const worker = await this.prisma.worker.findUnique({
         where: { id: workerId },
         select: { id: true, capabilities: true },

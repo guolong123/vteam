@@ -93,7 +93,7 @@ describe('WorkerDispatcher dispatch snapshot (is_7)', () => {
       persona: null,
       agentKey: 'product',
     });
-    workerClient.createSession.mockResolvedValue({ sessionID: 'ses_0001' });
+    workerClient.createSession.mockResolvedValue({ sessionId: 'ses_0001' });
   };
 
   beforeEach(() => {

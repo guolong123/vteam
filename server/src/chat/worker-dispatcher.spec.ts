@@ -113,7 +113,7 @@ describe('WorkerDispatcher', () => {
   let workersService: { assignWorker: jest.Mock };
   let workerClient: {
     createSession: jest.Mock;
-    promptAsync: jest.Mock;
+    promptSession: jest.Mock;
     getMessages: jest.Mock;
     execute: jest.Mock;
     abort: jest.Mock;
@@ -265,7 +265,7 @@ describe('WorkerDispatcher', () => {
     workersService = { assignWorker: jest.fn() };
     workerClient = {
       createSession: jest.fn(),
-      promptAsync: jest.fn().mockResolvedValue(undefined),
+      promptSession: jest.fn().mockResolvedValue(undefined),
       // F2 C1：dispatch 启动自持轮询（后台），默认永不完成（[]）→ 超时路径不进断言
       getMessages: jest.fn().mockResolvedValue([]),
       // 方案 A：dispatch 调 worker 执行端点 POST /execute（202 即成功，fire-and-forget）
@@ -555,10 +555,10 @@ describe('WorkerDispatcher', () => {
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
       prisma.artifact.findMany.mockResolvedValue([]);
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_0001' });
+      workerClient.createSession.mockResolvedValue({ sessionId: 'ses_0001' });
     });
 
-    it('未绑 session：assignWorker → bind(pending) → createSession → bind(真实) → promptAsync 全链', async () => {
+    it('未绑 session：assignWorker → bind(pending) → createSession → bind(真实) → promptSession 全链', async () => {
       const d = createDispatcher();
       const result = await d.dispatch(request);
 
@@ -596,8 +596,8 @@ describe('WorkerDispatcher', () => {
           sessionId: 'ses_0001',
         }),
       );
-      // 方案 A：dispatch 不再直连 serve（promptAsync 停用），不启动自持轮询
-      expect(workerClient.promptAsync).not.toHaveBeenCalled();
+      // 方案 A：dispatch 不再直连驱动端（promptSession 停用），不启动自持轮询
+      expect(workerClient.promptSession).not.toHaveBeenCalled();
       expect(workerClient.getMessages).not.toHaveBeenCalled();
     });
 
@@ -1737,7 +1737,7 @@ describe('WorkerDispatcher', () => {
         },
       ]);
       expect(workerClient.createSession).not.toHaveBeenCalled();
-      expect(workerClient.promptAsync).not.toHaveBeenCalled();
+      expect(workerClient.promptSession).not.toHaveBeenCalled();
       expect(workerClient.execute).not.toHaveBeenCalled();
       expect(
         realtime.broadcast.mock.calls.some(
@@ -1746,7 +1746,7 @@ describe('WorkerDispatcher', () => {
       ).toBe(true);
     });
 
-    it('已绑 worker：复用（不 assignWorker/不 createSession），直接 promptAsync', async () => {
+    it('已绑 worker：复用（不 assignWorker/不 createSession），直接 promptSession', async () => {
       prisma.session.findUnique.mockResolvedValue({
         id: 's_0000000001',
         workerId: 'w_0000000001',
@@ -1830,7 +1830,7 @@ describe('WorkerDispatcher', () => {
         defaultModelId: null,
       });
       prisma.artifact.findMany.mockResolvedValue([]);
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
+      workerClient.createSession.mockResolvedValue({ sessionId: 'ses_online' });
       const d = createDispatcher();
 
       await d.dispatch(request);
@@ -1886,7 +1886,7 @@ describe('WorkerDispatcher', () => {
         defaultModelId: null,
       });
       prisma.artifact.findMany.mockResolvedValue([]);
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
+      workerClient.createSession.mockResolvedValue({ sessionId: 'ses_online' });
       const d = createDispatcher();
 
       await d.dispatch(request);
@@ -1962,7 +1962,7 @@ describe('WorkerDispatcher', () => {
         's_0000000001',
       );
       expect(errors).toHaveLength(1);
-      expect(workerClient.promptAsync).not.toHaveBeenCalled();
+      expect(workerClient.promptSession).not.toHaveBeenCalled();
       expect(workerClient.execute).not.toHaveBeenCalled();
     });
 
@@ -1984,7 +1984,7 @@ describe('WorkerDispatcher', () => {
         defaultModelId: null,
       });
       prisma.artifact.findMany.mockResolvedValue([]);
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_fresh' });
+      workerClient.createSession.mockResolvedValue({ sessionId: 'ses_fresh' });
       const d = createDispatcher();
 
       await d.dispatch(request);
@@ -3363,7 +3363,7 @@ describe('WorkerDispatcher', () => {
         capabilities: { maxInstances: 1 },
       });
       prisma.artifact.findMany.mockResolvedValue([]);
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_0001' });
+      workerClient.createSession.mockResolvedValue({ sessionId: 'ses_0001' });
     });
 
     it('Agent 显式 defaultModelId：assignWorker 携带 modelId 过滤 + createSession 用拆分模型', async () => {
@@ -3491,7 +3491,7 @@ describe('WorkerDispatcher', () => {
         id: 'a_product',
         defaultModelId: 'opencode-go/deepseek-v4-flash',
       });
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
+      workerClient.createSession.mockResolvedValue({ sessionId: 'ses_online' });
       const d = createDispatcher();
 
       await d.dispatch(request);
@@ -3629,7 +3629,7 @@ describe('WorkerDispatcher', () => {
       (prisma as any).team.findFirst = jest
         .fn()
         .mockResolvedValue({ preferredWorkerId: 'w_a' });
-      workerClient.createSession.mockResolvedValue({ sessionID: 'ses_online' });
+      workerClient.createSession.mockResolvedValue({ sessionId: 'ses_online' });
       const d = createDispatcher();
 
       await d.dispatch(request);
@@ -6761,6 +6761,42 @@ describe('WorkerDispatcher', () => {
       prisma.message.create.mockResolvedValue(messageRow());
     };
 
+    it('T18：getMessages 返回会话失效（404 + SESSION_NOT_FOUND）→ 解绑会话待重建（不空转到超时）', async () => {
+      jest.useFakeTimers();
+      pollSetup();
+      // worker 侧会话已不存在（serve 重启/容器重建）→ 客户端抛「会话失效」异常
+      workerClient.getMessages.mockRejectedValue(
+        new WorkerUnavailableException(
+          'w_0000000001',
+          'getMessages HTTP 404: session not found',
+          404,
+          'SESSION_NOT_FOUND',
+        ),
+      );
+      const d = createDispatcher();
+
+      void d['pollForCompletion']({
+        worker: { id: 'w_0000000001', capabilities: {} },
+        opencodeSessionId: 'ses_0001',
+        taskId: request.taskId,
+        agentId: 'a_product',
+        sessionId: 's_0000000001',
+        channelId: request.channelId,
+        startedAt: Date.now(),
+        baselineCursor: null,
+      });
+      await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+      await jest.advanceTimersByTimeAsync(0);
+
+      // 会话重建路径：解绑平台会话（清 instanceRef）→ 下一轮分派新建会话
+      expect(sessionLifecycle.unbindSession).toHaveBeenCalledWith(
+        's_0000000001',
+      );
+      // 不再空转重试（否则把超时窗口耗尽才报错）
+      expect(workerClient.getMessages).toHaveBeenCalledTimes(1);
+      jest.useRealTimers();
+    });
+
     it('getMessages 命中 step-finish(reason=stop) → 落库+广播+emitFinal（不依赖 ingress）', async () => {
       jest.useFakeTimers();
       pollSetup();
@@ -6831,7 +6867,7 @@ describe('WorkerDispatcher', () => {
     it('幂等：ingress task.completed 先落库 → 轮询完成时跳过（不重复落库）', async () => {
       jest.useFakeTimers();
       pollSetup();
-      // 前置基线（promptAsync 前，无历史）→ poll 第1轮无 finish 挂起 → ingress 先落库
+      // 前置基线（下发 prompt 前，无历史）→ poll 第1轮无 finish 挂起 → ingress 先落库
       // → poll 次轮命中但 completedSessions 已含该会话 → 跳过（不重复落库）
       workerClient.getMessages
         .mockResolvedValueOnce([])
@@ -7593,10 +7629,10 @@ describe('WorkerDispatcher', () => {
       jest.useRealTimers();
     });
 
-    it('F3 残留：promptAsync 后出现 assistant 占位消息（parts=[]）→ 前置基线仍检测到 step-finish 并回流（不超时）', async () => {
+    it('F3 残留：下发 prompt 后出现 assistant 占位消息（parts=[]）→ 前置基线仍检测到 step-finish 并回流（不超时）', async () => {
       jest.useFakeTimers();
       pollSetup();
-      // 复用会话：前置基线在 promptAsync 前取（历史最后消息 msg_1），此时 serve 尚无本次占位
+      // 复用会话：前置基线在下发 prompt 前取（历史最后消息 msg_1），此时 serve 尚无本次占位
       workerClient.getMessages
         .mockResolvedValueOnce([
           { info: { role: 'user', id: 'msg_0' }, parts: [] },
@@ -7662,7 +7698,7 @@ describe('WorkerDispatcher', () => {
       await jest.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
       await jest.advanceTimersByTimeAsync(0);
 
-      // 修复后：基线=msg_1（promptAsync 前），messagesAfter 检测到 msg_2/msg_3 → 回流
+      // 修复后：基线=msg_1（下发 prompt 前），messagesAfter 检测到 msg_2/msg_3 → 回流
       expect(prisma.message.create).toHaveBeenCalledTimes(1);
       expect(prisma.message.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -8521,7 +8557,7 @@ describe('WorkerDispatcher', () => {
       } as any);
       workersService.assignWorker.mockResolvedValue('w_0000000001');
       workerClient.createSession.mockResolvedValue({
-        sessionID: 'ses_team_001',
+        sessionId: 'ses_team_001',
       });
       prisma.agent.findUnique.mockResolvedValue({
         id: 'a_product',
@@ -8809,7 +8845,7 @@ describe('WorkerDispatcher', () => {
       } as any);
       prisma.artifact.findMany.mockResolvedValue([]);
       workerClient.createSession.mockResolvedValue({
-        sessionID: 'ses_1',
+        sessionId: 'ses_1',
       } as any);
       const d = createDispatcher();
       const errors: unknown[] = [];
@@ -8884,7 +8920,7 @@ describe('WorkerDispatcher', () => {
         .mockRejectedValueOnce(
           new WorkerUnavailableException('w_0000000001', '503'),
         )
-        .mockResolvedValueOnce({ sessionID: 'ses_2' } as any);
+        .mockResolvedValueOnce({ sessionId: 'ses_2' } as any);
       const d = createDispatcher();
       const errors: unknown[] = [];
       d.onError((e) => errors.push(e));
@@ -9048,7 +9084,7 @@ describe('WorkerDispatcher', () => {
         findUnique: jest.fn().mockResolvedValue({ mainAgentMemberId: null }),
       };
       workerClient.createSession.mockResolvedValue({
-        sessionID: 'ses_team_1',
+        sessionId: 'ses_team_1',
       } as any);
     });
 

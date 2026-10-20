@@ -198,6 +198,36 @@ describe('workers 协议 DTO（T1 契约基座）', () => {
     expect(wire.mcpStatus).toBeUndefined();
   });
 
+  it('T8c：mcpStatus 接受 v2 的**五态**（契约两端同步扩展：worker 侧 McpServerStatus 同值）', async () => {
+    const errors = await validate(
+      plainToInstance(HeartbeatWorkerDto, {
+        workerId: 'w_0000000001',
+        load: { instances: 0 },
+        health: 'ok',
+        mcpStatus: [
+          { serverName: 'vteam', status: 'connected' },
+          { serverName: 'x', status: 'failed' },
+          { serverName: 'y', status: 'needs_auth' },
+          { serverName: 'z', status: 'pending' },
+          { serverName: 'w', status: 'disabled' },
+        ],
+      }),
+    );
+    expect(errors).toHaveLength(0);
+  });
+
+  it('T8c：mcpStatus 的未知状态 → 校验失败（@IsIn 钉死取值集合，不静默收下脏值）', async () => {
+    const errors = await validate(
+      plainToInstance(HeartbeatWorkerDto, {
+        workerId: 'w_0000000001',
+        load: { instances: 0 },
+        health: 'ok',
+        mcpStatus: [{ serverName: 'x', status: 'reconnecting' }],
+      }),
+    );
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
   // worker-self-update Todo 2：codeVersion 是**加法可选**字段——旧 worker 不携带时
   // 序列化结果必须与加字段之前逐键相同（否则旧 worker 的报文本身会变形）。
   describe('codeVersion（worker-self-update Todo 2：可选，旧 worker 缺席不炸）', () => {

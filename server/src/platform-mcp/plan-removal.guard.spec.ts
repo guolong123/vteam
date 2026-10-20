@@ -5,7 +5,7 @@
  * plan_submit/plan_review/plan_task_transition/plan_get/plan_assign_reviewer 五个 MCP 工具
  * + executionMode=plan 的服务端硬门禁 + 大段系统提示词），靠提示词约束模型行为，
  * 无内核级强制。现已改为**只传递**：由团队成员选择 opencode 原生 agent
- * （TeamMember.opencodeAgentName → prompt_async 的 agent 字段），计划动作交由
+ * （TeamMember.opencodeAgentName → 下发时的 agent 字段），计划动作交由
  * opencode 内核（内置 `plan` agent 或自定义 agent 的 permission）执行。
  *
  * 本 spec 以「源码级断言」防止该域被无意重新引入。若确需恢复某项能力，请先确认它

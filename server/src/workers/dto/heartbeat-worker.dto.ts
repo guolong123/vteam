@@ -43,7 +43,9 @@ export class HeartbeatWorkerDto {
   health: WorkerHealth;
 
   @ApiPropertyOptional({
-    description: 'MCP 服务器三态快照（T8c：worker 节流探测结果，可选）',
+    description:
+      'MCP 服务器状态快照（T8c：worker 节流探测结果，可选；v2 的五态——' +
+      'connected / failed / needs_auth / pending / disabled）',
     type: [McpStatusEntryDto],
   })
   @IsOptional()

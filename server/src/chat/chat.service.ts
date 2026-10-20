@@ -397,7 +397,7 @@ export class ChatService {
    *
    * private 频道且其 Session（teamMember 维度按 teamMemberId 查；无成员维度
    * 回退平台表，任务锚定分支已删）已绑定 worker+instanceRef → 调 worker serve
-   * `GET /session/{id}/message` 拉会话消息，转换后与 DB 合并返回
+   * worker `GET /sessions/:id/messages` 拉会话消息，转换后与 DB 合并返回
    * `{items, source:'session'}`（items 时间正序，无游标——前端游标参数忽略）；
    * 未绑定 / worker 不可用 → 回退平台 messages 表（`{items, nextCursor, source:'db'}`，
    * 复用 findMessages 首页语义）。群聊（team_group）不支持 → 400
