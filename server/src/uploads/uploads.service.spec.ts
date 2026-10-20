@@ -196,6 +196,95 @@ describe('FileStorageService（文件存储基础：文件名生成 / 白名单 
     });
   });
 
+  describe('readUploadedFile（归档内容读取：/uploads 落盘文件 + 内联正文）', () => {
+    const originalUploadDir = process.env.UPLOAD_DIR;
+
+    afterEach(() => {
+      if (originalUploadDir === undefined) {
+        delete process.env.UPLOAD_DIR;
+      } else {
+        process.env.UPLOAD_DIR = originalUploadDir;
+      }
+      jest.restoreAllMocks();
+    });
+
+    it('/uploads/<name> → 读控制面落盘文件（既有行为不变）', async () => {
+      const dir = 'uploads-test-tmp';
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(`${dir}/abc.md`, '落盘正文', 'utf8');
+      process.env.UPLOAD_DIR = dir;
+
+      const buffer =
+        await FileStorageService.readUploadedFile('/uploads/abc.md');
+      expect(buffer.toString('utf8')).toBe('落盘正文');
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('内联正文（text 类产出物：contentRef 存的就是正文）→ 直接返回字节', async () => {
+      const body = '# 产出物正文\n\n第一段内容。\n\n- 列表项\n';
+      const buffer = await FileStorageService.readUploadedFile(body);
+      expect(buffer.toString('utf8')).toBe(body);
+    });
+
+    it('内联正文：短正文（无换行无空格）也能读到（不判死）', async () => {
+      const buffer = await FileStorageService.readUploadedFile('已完成');
+      expect(buffer.toString('utf8')).toBe('已完成');
+    });
+
+    it('内联正文：正文里出现「像文件名」的片段（如 "见 issue.update"）仍按正文返回', async () => {
+      // normalizeFileRef 会把这类正文映射成 /uploads/<basename> → 判读顺序必须先判内联正文
+      const body = '## 1. permission 拒绝\n\n- 见 issue.update 的处理\n';
+      const buffer = await FileStorageService.readUploadedFile(body);
+      expect(buffer.toString('utf8')).toBe(body);
+    });
+
+    it('worker 工作区原始路径（文件引用形态）→ 读不到就报错（不被当成正文返回）', async () => {
+      await expect(
+        FileStorageService.readUploadedFile(
+          '/data/vteam-worker/tasks/t_1/docs/a.md',
+        ),
+      ).rejects.toThrow();
+    });
+
+    it('形如 name.ext 的文件引用 → 读不到就报错（不被当成正文返回）', async () => {
+      await expect(
+        FileStorageService.readUploadedFile('docs/a.md'),
+      ).rejects.toThrow();
+      await expect(
+        FileStorageService.readUploadedFile('a.md'),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe('isInlineContentRef（contentRef 是内联正文还是文件引用）', () => {
+    it('绝对路径 / Windows 盘符 / URL → 文件引用', () => {
+      expect(FileStorageService.isInlineContentRef('/uploads/abc.md')).toBe(
+        false,
+      );
+      expect(
+        FileStorageService.isInlineContentRef('/data/workspace/a.md'),
+      ).toBe(false);
+      expect(FileStorageService.isInlineContentRef('C:\\ws\\a.md')).toBe(false);
+      expect(
+        FileStorageService.isInlineContentRef('https://x.example.com/a.md'),
+      ).toBe(false);
+    });
+
+    it('带扩展名的文件名（含相对路径）→ 文件引用', () => {
+      expect(FileStorageService.isInlineContentRef('a.md')).toBe(false);
+      expect(FileStorageService.isInlineContentRef('docs/a.md')).toBe(false);
+    });
+
+    it('其余（多行正文 / 短句 / 中文正文）→ 内联正文', () => {
+      expect(FileStorageService.isInlineContentRef('# 标题\n正文')).toBe(true);
+      expect(FileStorageService.isInlineContentRef('已完成')).toBe(true);
+      expect(FileStorageService.isInlineContentRef('设计稿见 design.md')).toBe(
+        false,
+      );
+      expect(FileStorageService.isInlineContentRef('')).toBe(false);
+    });
+  });
+
   describe('describeFileRef（归一化 fileRef 派生展示元数据，FILE-02）', () => {
     afterEach(() => {
       jest.restoreAllMocks();

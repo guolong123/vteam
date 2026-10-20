@@ -8,6 +8,7 @@ import {
   isWorkerSessionInvalid,
   SECRET_COMMAND_REQUEST_TIMEOUT_SLACK_MS,
   WorkerClient,
+  WorkerFileNotFoundException,
   WorkerUnavailableException,
 } from './worker.client';
 import type {
@@ -416,16 +417,36 @@ describe('WorkerClient', () => {
       expect(url).toBe('http://worker:4198/file?path=%2Ftmp%2Fx.txt');
     });
 
-    it('HTTP 非 2xx（404 文件不存在）→ WorkerUnavailableException（503，带 workerId）', async () => {
+    it('HTTP 404（worker 上没有这个文件）→ WorkerFileNotFoundException（404，**不是**「worker 不可用」）', async () => {
       const client = makeClient();
-      mockFetch.mockResolvedValue(response({ ok: false, status: 404 }));
+      mockFetch.mockResolvedValue(
+        response({
+          ok: false,
+          status: 404,
+          text: jest.fn(async () =>
+            JSON.stringify({ error: '文件不存在: /tmp/missing.txt' }),
+          ),
+        }),
+      );
 
-      await expect(
-        client.fetchFile(execWorkerWithPort, '/tmp/missing.txt'),
-      ).rejects.toMatchObject({
-        workerId: 'w_1',
-        status: 503,
-      });
+      const err = await client
+        .fetchFile(execWorkerWithPort, '/tmp/missing.txt')
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WorkerFileNotFoundException);
+      // 状态语义 = 找不到（404），不是节点故障（503）
+      expect((err as WorkerUnavailableException).getStatus()).toBe(404);
+      expect((err as WorkerUnavailableException).httpStatus).toBe(404);
+      expect((err as WorkerUnavailableException).code).toBe('FILE_NOT_FOUND');
+      expect((err as WorkerUnavailableException).message).not.toContain(
+        '不可用',
+      );
+      expect((err as WorkerUnavailableException).message).toContain(
+        '/tmp/missing.txt',
+      );
+      // 仍是 WorkerUnavailableException 的子类：platform-mcp 的多候选路径回退
+      // 按 `instanceof WorkerUnavailableException && httpStatus === 404` 换下一个候选
+      expect(err).toBeInstanceOf(WorkerUnavailableException);
     });
 
     it('fetch 抛错（连接失败）→ WorkerUnavailableException（503，带 workerId）', async () => {
@@ -438,6 +459,20 @@ describe('WorkerClient', () => {
         workerId: 'w_1',
         status: 503,
       });
+    });
+
+    it('worker 真不可达 → 仍是「worker 不可用」（503），与 404 区分开', async () => {
+      const client = makeClient();
+      mockFetch.mockRejectedValue(new TypeError('ECONNREFUSED'));
+
+      const err = await client
+        .fetchFile(execWorkerWithPort, '/tmp/x.txt')
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(WorkerUnavailableException);
+      expect(err).not.toBeInstanceOf(WorkerFileNotFoundException);
+      expect((err as WorkerUnavailableException).getStatus()).toBe(503);
+      expect((err as WorkerUnavailableException).message).toContain('不可用');
     });
   });
 

@@ -27,11 +27,15 @@ import type {
  * - SESSION_NOT_FOUND：worker 侧 404 + `code:'SESSION_NOT_FOUND'` ⇒ **会话已失效**
  *   （被驱动端重启/会话被删）⇒ 调用方走「重建会话」路径，而不是把它当「worker 挂了」。
  * - RATE_LIMITED：worker 侧 429 + `code:'RATE_LIMITED'` ⇒ **上游限流** ⇒ 调用方退避重试。
+ * - FILE_NOT_FOUND：worker 侧 `GET /file` 的 404 ⇒ **该 worker 工作区没有这个文件**
+ *   （worker 好好地回答了「我没有」）。它**不是**「worker 不可用」——两者混同会让
+ *   调用方（与 agent）去查节点状态，而不是查引用本身。
  */
 export const WORKER_CLIENT_ERRORS = {
   WORKER_UNAVAILABLE: 'WORKER_UNAVAILABLE',
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   RATE_LIMITED: 'RATE_LIMITED',
+  FILE_NOT_FOUND: 'FILE_NOT_FOUND',
 } as const;
 
 /** 错误码 → 异常 message 前缀（各码的语义不同，不能一律说「不可用」）。 */
@@ -42,6 +46,8 @@ const WORKER_ERROR_MESSAGES: Record<string, (workerId: string) => string> = {
     `worker ${workerId} 会话已失效：`,
   [WORKER_CLIENT_ERRORS.RATE_LIMITED]: (workerId) =>
     `worker ${workerId} 上游限流：`,
+  [WORKER_CLIENT_ERRORS.FILE_NOT_FOUND]: (workerId) =>
+    `worker ${workerId} 上未找到该文件：`,
 };
 
 /**
@@ -97,6 +103,28 @@ export function isWorkerRateLimited(err: unknown): boolean {
     err instanceof WorkerUnavailableException &&
     err.code === WORKER_CLIENT_ERRORS.RATE_LIMITED
   );
+}
+
+/**
+ * worker 侧「文件不存在」（`GET /file` 的 404）。
+ *
+ * 与「worker 不可用」严格分开：worker 好好地回答了「这个文件我没有」，
+ * 把它说成「worker 不可用」会让调用方（与 agent）去查节点状态，而不是查引用本身
+ * （缺陷 1 的错误语义冲突：id 不存在 ⇒ 报「worker 不可用」）。
+ *
+ * ⚠️ 仍继承 WorkerUnavailableException：调用方（platform-mcp 的多候选路径回退）
+ * 按 `instanceof WorkerUnavailableException && httpStatus === 404` 判定「换下一个候选
+ * 路径」——继承关系不能断，否则相对路径只试第一个候选。
+ * 但 HTTP 状态覆写为 404 ⇒ 上层（MCP 协议层）把它映射成「找不到」而不是「内部错误」。
+ */
+export class WorkerFileNotFoundException extends WorkerUnavailableException {
+  constructor(workerId: string, detail: string) {
+    super(workerId, detail, 404, WORKER_CLIENT_ERRORS.FILE_NOT_FOUND);
+  }
+
+  override getStatus(): number {
+    return 404;
+  }
 }
 
 /**
@@ -508,7 +536,11 @@ export class WorkerClient {
    * FR-41：GET /file?path=<绝对路径>——从 worker 工作区拉取文件内容（二进制安全）。
    * 走 exec 端点（resolveExecBaseUrl），带 X-Worker-Token 鉴权（worker 端校验）。
    * 网络错误/超时 → WorkerUnavailableException（requestToUrl 归一）；HTTP 非 2xx
-   * （401/404/413/400）→ WorkerUnavailableException（fetchFile 内判断，调用方降级）。
+   * （401/413/400）→ WorkerUnavailableException（fetchFile 内判断，调用方降级）。
+   *
+   * ⚠️ **404 单独成类**（`WorkerFileNotFoundException`）：worker 说「这个文件我没有」
+   * 与「worker 不可用」是两件事——前者是引用/产出物不存在（404），后者是节点故障
+   * （503）。混同成「worker 不可用」会让调用方与 agent 去查节点状态（缺陷 1）。
    */
   async fetchFile(
     worker: WorkerEndpointRef,
@@ -524,6 +556,12 @@ export class WorkerClient {
       DEFAULT_FILE_FETCH_TIMEOUT_MS,
     );
     if (!res.ok) {
+      if (res.status === 404) {
+        throw new WorkerFileNotFoundException(
+          worker.id,
+          `${filePath}（${await this.readErrorDetail(res)}）`,
+        );
+      }
       throw new WorkerUnavailableException(
         worker.id,
         `file fetch HTTP ${res.status}`,
@@ -531,6 +569,22 @@ export class WorkerClient {
       );
     }
     return Buffer.from(await res.arrayBuffer());
+  }
+
+  /** 非 2xx 响应体的可读细节（JSON {error} 优先；非 JSON 保留原文；读失败不抛错）。 */
+  private async readErrorDetail(res: Response): Promise<string> {
+    let raw = '';
+    try {
+      raw = await res.text();
+    } catch {
+      return 'HTTP 404';
+    }
+    try {
+      const parsed = JSON.parse(raw) as { error?: string };
+      return parsed.error || raw || 'HTTP 404';
+    } catch {
+      return raw || 'HTTP 404';
+    }
   }
 
   /**
