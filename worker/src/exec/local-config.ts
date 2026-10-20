@@ -6,8 +6,10 @@
  *   POST /config/skills | /config/tools | /config/mcp-servers | /config/agent-policies
  *   POST /config/model-credentials | /config/git-credentials
  *
- * 语义：**声明式替换**——每类资源本次请求即完整集合（传空数组清空）。写后不自动重启，
- * 响应 restart:'required' 提示调用方按需触发 POST /config/restart。
+ * 语义：**声明式替换**——每类资源本次请求即完整集合（传空数组清空）。写后不自动生效，
+ * 响应 restart:'required' 提示调用方按需触发生效动作：
+ * **POST /config/reload**（opencode v2 热重载，**不重启 serve** —— 首选）或
+ * POST /config/restart（真重启，仅在确实需要换进程时用）。
  */
 
 import * as fs from 'fs';

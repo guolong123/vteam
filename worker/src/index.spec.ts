@@ -37,8 +37,11 @@ import {
   ensureStandaloneProjectConfig,
   handleGitCredentials,
   handleModelCredentials,
+  handleModelCredentialsCommand,
+  handleReloadConfigCommand,
   onCommands,
   persistRuntimeMaxInstances,
+  ReloadConfigCommandDeps,
   resolveExecutableModels,
   resolveModels,
   resolveRuntimeMaxInstances,
@@ -324,7 +327,7 @@ describe('resolveExecutableModels（models-truth：读 **worker 自己那个 ser
     expect(await resolveExecutableModels(async () => WRAPPED_PAYLOAD)).toEqual(EXPECTED_IDS);
   });
 
-  it('2.0.32 裸数组形态 → 同样解析（基线漂移容忍）', async () => {
+  it('裸数组形态 → 同样解析（防御性容忍；2.0.28 与 2.0.32 实为同一形态）', async () => {
     expect(await resolveExecutableModels(async () => WRAPPED_PAYLOAD.data)).toEqual(EXPECTED_IDS);
   });
 
@@ -770,13 +773,17 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
       writeOpencodeConfig: jest
         .fn()
         .mockReturnValue({ changed: false, path: DEFAULT_OPENCODE_CONFIG_PATH }),
-      requestRestart: jest.fn().mockResolvedValue('executed'),
+      /**
+       * 生效动作（**热重载优先**）。原实现这里是 `requestRestart`——配置类变更不再
+       * 重启 serve（热重载路径见 reload/config-reloader.ts）。
+       */
+      applyConfigChange: jest.fn().mockResolvedValue('reloaded'),
       log: jest.fn(),
       warn: jest.fn(),
     };
   }
 
-  it('auth.json 与 opencode.json 均未变化 → 不写盘、不重启 serve（切断回放循环）', async () => {
+  it('auth.json 与 opencode.json 均未变化 → 不写盘、不做生效动作（切断回放循环）', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson(KEY));
     // 现有 config 已含相同 provider 段 → merge 结果与现有内容一致
@@ -800,15 +807,15 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
 
     expect(deps.writeAuthJson).not.toHaveBeenCalled();
     expect(deps.writeOpencodeConfig).not.toHaveBeenCalled();
-    expect(deps.requestRestart).not.toHaveBeenCalled();
+    expect(deps.applyConfigChange).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
     expect(result.configChanged).toBe(false);
     expect(deps.log).toHaveBeenCalledWith(
-      expect.stringContaining('凭据未变化，跳过注入与重启'),
+      expect.stringContaining('凭据未变化，跳过注入与生效动作'),
     );
   });
 
-  it('现有 auth.json 内容不同 → 清理旧文件 + 写盘 + 重启 serve（凭据变更）', async () => {
+  it('现有 auth.json 内容不同 → 清理旧文件 + 写盘 + **热重载**（凭据变更，不再重启 serve）', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(
       buildAuthJson([{ providerID: 'opencode-go', key: 'sk-old-secret' }]),
@@ -825,13 +832,13 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
     expect(deps.writeAuthJson).toHaveBeenCalledWith(KEY);
     expect(deps.cleanupAuthJson).toHaveBeenCalledWith(DEFAULT_AUTH_JSON_PATH);
     expect(deps.writeOpencodeConfig).not.toHaveBeenCalled();
-    expect(deps.requestRestart).toHaveBeenCalledWith(
-      expect.stringContaining('model-credentials'),
+    expect(deps.applyConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining('model-credentials') }),
     );
     expect(result.changed).toBe(true);
   });
 
-  it('无现有 auth.json（容器重启后）→ 写盘 + 重启 serve（恢复路径，不清理）', async () => {
+  it('无现有 auth.json（容器重启后）→ 写盘 + 热重载（恢复路径，不清理）', async () => {
     const deps = makeDeps();
 
     const result = await handleModelCredentials(
@@ -844,14 +851,14 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
 
     expect(deps.writeAuthJson).toHaveBeenCalledWith(KEY);
     expect(deps.cleanupAuthJson).not.toHaveBeenCalled();
-    expect(deps.requestRestart).toHaveBeenCalledWith(
-      expect.stringContaining('model-credentials'),
+    expect(deps.applyConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining('model-credentials') }),
     );
     expect(result.changed).toBe(true);
     expect(result.authJsonPath).toBe(DEFAULT_AUTH_JSON_PATH);
   });
 
-  it('C6：providerConfigs 携带且 config 缺失 → 写 opencode.json + 重启（auth 同变只重启一次）', async () => {
+  it('C6：providerConfigs 携带且 config 缺失 → 写 opencode.json + 热重载（auth 同变只生效一次）', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson([{ providerID: 'a', key: 'old' }]));
     const providerPayload = {
@@ -872,12 +879,12 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
       null,
       buildProviderSection(providerPayload),
     );
-    expect(deps.requestRestart).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
     expect(result.changed).toBe(true);
     expect(result.configPath).toBe(DEFAULT_OPENCODE_CONFIG_PATH);
   });
 
-  it('C6：auth 未变、config 变化 → 只写 opencode.json + 重启', async () => {
+  it('C6：auth 未变、config 变化 → 只写 opencode.json + 热重载', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson(KEY));
 
@@ -891,12 +898,12 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
 
     expect(deps.writeAuthJson).not.toHaveBeenCalled();
     expect(deps.writeOpencodeConfig).toHaveBeenCalled();
-    expect(deps.requestRestart).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
     expect(result.changed).toBe(true);
     expect(result.configChanged).toBe(true);
   });
 
-  it('C6：providerConfigs 为空对象 → 删除现有 provider 段（清空）+ 重启', async () => {
+  it('C6：providerConfigs 为空对象 → 删除现有 provider 段（清空）+ 热重载', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson(KEY));
     deps.readConfig.mockResolvedValue(
@@ -918,7 +925,7 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
       expect.stringContaining('"provider"'),
       {},
     );
-    expect(deps.requestRestart).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
   });
 
   it('C6：providerConfigs=undefined（旧 server 负载）→ 不触碰 opencode.json', async () => {
@@ -935,6 +942,139 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
 
     expect(deps.writeOpencodeConfig).not.toHaveBeenCalled();
     expect(result.configPath).toBe(DEFAULT_OPENCODE_CONFIG_PATH);
+  });
+
+  it('**不重启 serve**：生效动作走 applyConfigChange（热重载），依赖面里没有重启钩子', async () => {
+    const deps = makeDeps();
+    deps.readContent.mockResolvedValue(buildAuthJson([{ providerID: 'a', key: 'old' }]));
+
+    await handleModelCredentials(
+      [{ providerID: 'a', key: 'new' }],
+      undefined,
+      DEFAULT_AUTH_JSON_PATH,
+      DEFAULT_OPENCODE_CONFIG_PATH,
+      deps,
+    );
+
+    // 依赖面里**不存在** requestRestart（类型层面就杜绝了「加凭据即重启 serve」）
+    expect(Object.keys(deps)).not.toContain('requestRestart');
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('handleReloadConfigCommand（配置变更走**热重载**，不重启 serve）', () => {
+  const COMMAND: WorkerCommand = {
+    type: 'reload-config',
+    resourceVersion: 'rv-7',
+  } as WorkerCommand;
+
+  function makeDeps() {
+    return {
+      injectAll: jest.fn().mockResolvedValue({
+        skills: ['skill-a'],
+        tools: ['tool-a'],
+        mcpServers: ['mcp-a'],
+        agentPolicies: { enabled: true, names: ['agent-a'] },
+      } as InjectReport),
+      onInjectReport: jest.fn(),
+      applyConfigChange: jest.fn().mockResolvedValue('reloaded'),
+      serveEndpoint: jest.fn().mockReturnValue({ baseUrl: 'http://127.0.0.1:4000', password: 'pw' }),
+      log: jest.fn(),
+      warn: jest.fn(),
+    };
+  }
+
+  it('重注入后走 applyConfigChange（热重载），**没有**任何重启钩子', async () => {
+    const deps = makeDeps();
+    await handleReloadConfigCommand(COMMAND, deps as unknown as ReloadConfigCommandDeps);
+
+    expect(deps.injectAll).toHaveBeenCalledTimes(1);
+    expect(deps.onInjectReport).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledTimes(1);
+    expect(deps.applyConfigChange).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: expect.stringContaining('reload-config') }),
+      expect.any(Function),
+    );
+    // 依赖面里没有 requestRestart（类型层面杜绝「配置变更即重启 serve」）
+    expect(Object.keys(deps)).not.toContain('requestRestart');
+  });
+
+  it('效果确认交给调用方注入的校验器（MCP server + skill 可见性）', async () => {
+    const deps = makeDeps();
+    await handleReloadConfigCommand(COMMAND, deps as unknown as ReloadConfigCommandDeps);
+    const verify = deps.applyConfigChange.mock.calls[0][1] as () => Promise<{
+      ok: boolean;
+      detail: string;
+    }>;
+    expect(typeof verify).toBe('function');
+  });
+
+  it('注入失败 → warn 且不触发生效动作', async () => {
+    const deps = makeDeps();
+    deps.injectAll.mockRejectedValue(new Error('拉取失败'));
+    await handleReloadConfigCommand(COMMAND, deps as unknown as ReloadConfigCommandDeps);
+    expect(deps.applyConfigChange).not.toHaveBeenCalled();
+    expect(deps.warn).toHaveBeenCalledWith(expect.stringContaining('资源重注入失败'));
+  });
+});
+
+describe('handleModelCredentialsCommand（加凭据走**热重载**，不重启 serve）', () => {
+  const COMMAND: WorkerCommand = {
+    type: 'model-credentials',
+    resourceVersion: 'rv-8',
+    payload: {
+      providerKeys: [{ providerID: 'p1', key: 'k1' }],
+      providerConfigs: { p1: { baseUrl: 'http://127.0.0.1:11434/v1', models: ['m1'] } },
+    },
+  } as WorkerCommand;
+
+  function makeDeps() {
+    return {
+      injectCredentials: jest.fn().mockResolvedValue({
+        authJsonPath: '/iso/auth.json',
+        configPath: '/iso/opencode.json',
+        configChanged: true,
+      }),
+      onInjectedPaths: jest.fn(),
+      onProviderConfigChanged: jest.fn(),
+      log: jest.fn(),
+      warn: jest.fn(),
+    };
+  }
+
+  it('注入后走注入回调（内部热重载），**没有**重启钩子', async () => {
+    const deps = makeDeps();
+    await handleModelCredentialsCommand(COMMAND, null, null, deps);
+
+    expect(deps.injectCredentials).toHaveBeenCalledTimes(1);
+    expect(deps.injectCredentials).toHaveBeenCalledWith(
+      [{ providerID: 'p1', key: 'k1' }],
+      { p1: { baseUrl: 'http://127.0.0.1:11434/v1', models: ['m1'] } },
+      null,
+      null,
+    );
+    expect(deps.onInjectedPaths).toHaveBeenCalledWith('/iso/auth.json', '/iso/opencode.json');
+    expect(deps.onProviderConfigChanged).toHaveBeenCalledTimes(1);
+    expect(Object.keys(deps)).not.toContain('requestRestart');
+  });
+
+  it('缺 providerKeys 负载 → warn 跳过', async () => {
+    const deps = makeDeps();
+    await handleModelCredentialsCommand(
+      { type: 'model-credentials', payload: {} } as WorkerCommand,
+      null,
+      null,
+      deps,
+    );
+    expect(deps.injectCredentials).not.toHaveBeenCalled();
+    expect(deps.warn).toHaveBeenCalledWith(expect.stringContaining('缺少 providerKeys 负载'));
+  });
+
+  it('注入抛错 → warn 吞掉（不让 worker 下线）', async () => {
+    const deps = makeDeps();
+    deps.injectCredentials.mockRejectedValue(new Error('写盘失败'));
+    await handleModelCredentialsCommand(COMMAND, null, null, deps);
+    expect(deps.warn).toHaveBeenCalledWith(expect.stringContaining('注入失败'));
   });
 });
 

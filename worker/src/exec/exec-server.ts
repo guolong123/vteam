@@ -53,6 +53,13 @@ import {
   LocalConfigError,
   LocalConfigKind,
 } from './local-config';
+import { ConfigReloadOutcome } from '../reload/config-reloader';
+import {
+  PendingRequestSnapshot,
+  detectPendingRequests,
+  fetchPendingForms,
+  fetchPendingPermissions,
+} from '../reload/pending-requests';
 import {
   DriverModelRef,
   DriverRequestError,
@@ -204,6 +211,16 @@ export const PLAN_DOC_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.\-]*\.md$/;
 export const MAX_IMAGE_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 
 /**
+ * 待答复项检测的**会话范围上限**（FIFO 淘汰最旧的）。
+ *
+ * 为什么要界：检测是**逐会话**的（`GET /api/session/{id}/form` 与 `/permission`），
+ * 成本 = 2×会话数的本地 HTTP 往返；会话数无界会让一次配置变更越等越久。
+ * 取 100：待答复项属于「用户正在交互」的会话（必然是近期的），
+ * 100 个会话的检测成本 ≈ 200 次本地往返（亚秒级）。
+ */
+export const KNOWN_SESSIONS_LIMIT = 100;
+
+/**
  * T14：**终态宽限期** ms（事件路 ↔ 轮询路合流时的等待上限）。
  *
  * 轮询路判定完成（见到 step-finish）后，若事件路还没给出终态，等这么久让它补齐——
@@ -284,6 +301,18 @@ export interface ExecServerOptions {
    * 已挂起等归零）。缺省不注入 = 保存后不重启（配置留待下次自然重启生效）。
    */
   restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
+  /**
+   * 配置热重载执行器（**不重启 serve 进程**；index.ts 注入 ConfigReloader.reload）。
+   *
+   * 与 `restartServe` 的分工：
+   * - `restartServe` = **真重启**（二进制升级 / 运维重启 / 崩溃恢复）；
+   * - `reloadServe`  = **热重载**（配置类变更：skills/tools/MCP/agent 策略/模型凭据）。
+   *
+   * 返回值：热重载结局（'reloaded' 已生效 / 'deferred' 有待答复项故延后，改走文件监听
+   * 路径 / 'failed' 调用失败 / 'unverified' 重载成功但效果未确认 ⇒ 调用方回退真重启）。
+   * 缺省不注入 = /config/reload 返回 503（与 /config/restart 同款契约）。
+   */
+  reloadServe?: (reason: string) => Promise<ConfigReloadOutcome>;
   /**
    * 独立模式（WORKER_STANDALONE）：挂载 POST /config/* 本地配置下推端点。
    * 缺省 false = 不挂载（注册模式的配置一律走控制面下发，避免双事实源）。
@@ -597,6 +626,8 @@ export class ExecServer {
   private readonly workDir: string;
   /** OmO 配置保存后的 serve 重启回调（缺省 undefined = 不重启）。 */
   private readonly restartServe?: (reason: string) => Promise<'executed' | 'pending'>;
+  /** 配置热重载回调（缺省 undefined = /config/reload 返回 503）。 */
+  private readonly reloadServe?: (reason: string) => Promise<ConfigReloadOutcome>;
   /** 独立模式：挂载 POST /config/* 本地配置下推（注册模式不挂载，避免双事实源）。 */
   private readonly standalone: boolean;
   /** 本地配置下推执行器（standalone=true 且注入 resourceInjector 时可用）。 */
@@ -604,6 +635,19 @@ export class ExecServer {
   private readonly logger: Logger;
   /** `POST /secret-command` 幂等表：requestId → 归属 + 执行结果（同 requestId 绝不二次执行）。 */
   private readonly secretCommands = new Map<string, SecretCommandRecord>();
+  /**
+   * 本 worker 接触过的 opencode 会话 id（新建 + 复用）——待答复项检测的会话范围。
+   *
+   * 为什么必须**逐会话**查：`POST /api/location/reload` 会取消**所有 location** 的
+   * pending 项（实测 v2.0.28），而全局端点 `GET /api/form` 是**按 location 作用域**的
+   * （会话 move 到任务目录后查不到）⇒ 用全局端点当闸门会漏判 ⇒ 静默销毁用户正在
+   * 作答的问题。逐会话查与 location 无关。
+   *
+   * ⚠️ **有界**：只保留最近 {@link KNOWN_SESSIONS_LIMIT} 个会话（FIFO 淘汰）——
+   * 待答复项属于「用户正在交互」的会话（必然是近期的），而逐会话检测的成本是
+   * 2×会话数的本地 HTTP 往返，无界会让一次配置变更越等越久。
+   */
+  private readonly knownSessions = new Set<string>();
   private server: http.Server | null = null;
 
   constructor(options: ExecServerOptions) {
@@ -621,6 +665,7 @@ export class ExecServer {
     this.browserProfileRoot = options.browserProfileRoot ?? '';
     this.workDir = options.workDir ?? '';
     this.restartServe = options.restartServe;
+    this.reloadServe = options.reloadServe;
     this.logger = options.logger ?? console;
     this.standalone = options.standalone ?? false;
     this.localConfig =
@@ -634,6 +679,34 @@ export class ExecServer {
     return this.server?.address() && typeof this.server.address() === 'object'
       ? (this.server.address() as { port: number }).port
       : null;
+  }
+
+  /** 记住一个 opencode 会话（待答复项检测的会话范围；FIFO 有界）。 */
+  private rememberSession(sessionID: string): void {
+    const id = typeof sessionID === 'string' ? sessionID.trim() : '';
+    if (id === '') {
+      return;
+    }
+    this.knownSessions.delete(id);
+    this.knownSessions.add(id);
+    while (this.knownSessions.size > KNOWN_SESSIONS_LIMIT) {
+      const oldest = this.knownSessions.values().next();
+      if (oldest.done) {
+        break;
+      }
+      this.knownSessions.delete(oldest.value);
+    }
+  }
+
+  /**
+   * 检测当前是否存在**待答复的表单/权限**（逐会话查；location 无关）。
+   *
+   * 供配置热重载的安全闸门使用：`POST /api/location/reload` 会取消 pending 项，
+   * ⇒ 有 pending 时**不得**重载。检测失败（结论不完整）时返回 `incomplete: true`
+   * ⇒ 调用方走保守分支（不重载）。
+   */
+  async detectPendingRequests(): Promise<PendingRequestSnapshot> {
+    return detectPendingRequests(this.driver, this.knownSessions);
   }
 
   /** 是否已监听。 */
@@ -984,7 +1057,7 @@ export class ExecServer {
   }
 
   /**
-   * /config/<kind> 与 /config/restart（仅独立模式）：本地配置下推。
+   * /config/<kind>、/config/restart 与 /config/reload（仅独立模式）：本地配置下推。
    * 注册模式返回 404 + 引导（配置一律经控制面下发，避免双事实源）。
    */
   private async handleConfigRoute(
@@ -1001,6 +1074,10 @@ export class ExecServer {
     }
     if (kind === 'restart') {
       await this.handleConfigRestart(req, res);
+      return;
+    }
+    if (kind === 'reload') {
+      await this.handleConfigReload(req, res);
       return;
     }
     if (!(LOCAL_CONFIG_KINDS as readonly string[]).includes(kind)) {
@@ -1086,6 +1163,44 @@ export class ExecServer {
     }
   }
 
+  /**
+   * POST /config/reload：触发 serve **热重载**使已下推配置生效（**不重启 serve 进程**）。
+   *
+   * 与 `/config/restart` 的分工：配置类变更走本端点（无端口漂移、无会话排空、
+   * 无 serve 不可用窗口）；`/config/restart` 保留给真正需要换进程的场景。
+   *
+   * 响应体 `{ reload: 'reloaded' | 'deferred' | 'failed' | 'unverified' }`：
+   * - `deferred` = 有待答复的表单/权限，热重载被跳过（改走文件监听路径）；
+   * - `failed` / `unverified` = 热重载没成功（调用方可回退到真重启）。
+   */
+  private async handleConfigReload(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    if (req.method !== 'POST') {
+      sendJson(res, 405, { error: `仅支持 POST，收到 ${req.method}` });
+      return;
+    }
+    const token = req.headers['x-worker-token'];
+    if (!this.workerToken || typeof token !== 'string' || token !== this.workerToken) {
+      sendJson(res, 401, { error: 'X-Worker-Token 无效' });
+      return;
+    }
+    await drainRequest(req);
+    if (!this.reloadServe) {
+      sendJson(res, 503, { error: '热重载回调未注入，无法热重载' });
+      return;
+    }
+    try {
+      const reload = await this.reloadServe('exec /config/reload（本地配置下推）');
+      sendJson(res, 200, { reload });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn(`[exec] /config/reload 失败: ${message} (HTTP 502)`);
+      sendJson(res, 502, { error: message });
+    }
+  }
+
   /** POST /execute：校验 prompt → 202 {accepted:true} → fire-and-forget 驱动 serve。 */
   private async handleExecute(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     if (req.method !== 'POST') {
@@ -1133,6 +1248,7 @@ export class ExecServer {
    */
   private async runInFlightPrompt(payload: ExecuteRequestPayload): Promise<void> {
     const sessionId = payload.sessionId ?? '';
+    this.rememberSession(sessionId);
     try {
       const { fileParts, notes } = await this.prepareAttachmentParts(payload);
       const parts: unknown[] = [
@@ -1611,6 +1727,7 @@ export class ExecServer {
     }
     try {
       const sessionId = await this.driver.createSession(model);
+      this.rememberSession(sessionId);
       sendJson(res, 200, { sessionId });
       this.logger.info(`[exec] session create -> ${sessionId}`);
     } catch (err) {
@@ -2412,6 +2529,7 @@ export class ExecServer {
     gate: RunTerminalGate,
   ): Promise<CompletionResult> {
     const tracker = new MessageDeltaTracker();
+    this.rememberSession(sessionID);
     // 每次任务独立 pending 检测器（去重集 + 防重入按任务隔离，任务结束即释放——
     // 实例级标志会跨任务残留 true，导致后续任务检测全部跳过）。
     const detector = new PendingQuestionDetector(this.driver, this.sender, this.logger);
@@ -2704,7 +2822,7 @@ class PendingQuestionDetector {
     }
     this.detecting = true;
     try {
-      const questions = await this.driver.listQuestions(sessionID);
+      const questions = await fetchPendingForms(this.driver, sessionID);
       for (const q of questions) {
         const key = `q:${q.id}`;
         if (this.reported.has(key)) {
@@ -2721,7 +2839,7 @@ class PendingQuestionDetector {
           upstream: { eventId: q.id },
         });
       }
-      const permissions = await this.driver.listPermissions(sessionID);
+      const permissions = await fetchPendingPermissions(this.driver, sessionID);
       for (const p of permissions) {
         const key = `p:${p.id}`;
         if (this.reported.has(key)) {

@@ -64,10 +64,16 @@ import {
 import { ExecServer } from './exec/exec-server';
 import { InjectReport, ResourceInjector } from './resources/injector';import { readOmoEnabled } from './resources/omo-enabled';
 import { seedOmoAgentModels } from './resources/omo-config';
+import { RestartCoordinator } from './restart/restart-coordinator';
 import {
-  RestartCoordinator,
-  RestartDecision,
-} from './restart/restart-coordinator';
+  ConfigReloadOutcome,
+  ConfigReloader,
+  ConfigVerification,
+  combineVerifiers,
+  verifyMcpServersVisible,
+  verifyProvidersVisible,
+  verifySkillsVisible,
+} from './reload/config-reloader';
 import { readUpdateCommandVersion, WorkerUpdater } from './update/worker-updater';
 import { resolveCodeVersion } from './code-version';
 import {
@@ -139,7 +145,7 @@ export function onCommands(handler: CommandHandler): void {
   commandHandler = handler;
 }
 
-/** T4a：命令分派——reload-config/model-credentials 打入口日志 + 透传注册回调（T4b 注入 + T4c 重启执行）。 */
+/** T4a：命令分派——reload-config/model-credentials 打入口日志 + 透传注册回调（注入 + **热重载**，不重启 serve）。 */
 export function dispatchCommands(commands: WorkerCommand[]): void {
   if (!commands || commands.length === 0) {
     return;
@@ -147,7 +153,7 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
   for (const command of commands) {
     if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
       console.log(
-        `[worker] 收到命令 reload-config（resourceVersion=${command.resourceVersion}），分派注入+重启`,
+        `[worker] 收到命令 reload-config（resourceVersion=${command.resourceVersion}），分派注入+热重载`,
       );
     }
     if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
@@ -161,7 +167,7 @@ export function dispatchCommands(commands: WorkerCommand[]): void {
           ? `，providerConfigs=[${Object.keys(modelPayload.providerConfigs).join(', ')}]`
           : '';
       console.log(
-        `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]${cfgIDs}），分派 auth.json/opencode.json 注入+重启`,
+        `[worker] 收到命令 model-credentials（providerKeys=[${providerIDs}]${cfgIDs}），分派 auth.json/opencode.json 注入+热重载`,
       );
     }
     if (command.type === WORKER_COMMAND_TYPES.GIT_CREDENTIALS) {
@@ -292,9 +298,25 @@ export interface ModelCredentialsHandlingDeps {
    * 缺省 = 默认隔离域（`<HOME>/.opencode-iso`）——与 serve 的作用域一致。
    */
   scope?: OpencodeIsolationScope;
-  requestRestart: (reason: string) => Promise<RestartDecision>;
+  /**
+   * 让已落盘的凭据配置在 serve 里**生效**（**热重载优先**：无进程重启、无端口漂移、
+   * 无会话排空）。实现方负责：热重载 → 失败/未确认时**回退到真实重启**并记日志。
+   * 返回值 = 热重载结局（'reloaded' / 'deferred' / 'failed' / 'unverified'）。
+   */
+  applyConfigChange: (request: ConfigChangeRequest) => Promise<ConfigReloadOutcome>;
   log: (message: string) => void;
   warn: (message: string) => void;
+}
+
+/**
+ * 一次「让配置生效」的请求。
+ *
+ * - `reason`：人类可读原因（进日志）。
+ * - `providerIDs`：期望在 serve 侧**可见**的 provider id（效果确认用；空 = 不确认）。
+ */
+export interface ConfigChangeRequest {
+  reason: string;
+  providerIDs?: string[];
 }
 
 /**
@@ -310,9 +332,11 @@ export const DEFAULT_AUTH_JSON_PATH = INJECTOR_DEFAULT_AUTH_JSON_PATH;
  *   cleanup 旧文件 → 写新。
  * - opencode.json：provider 段（C6，仅 payload 携带 providerConfigs 时）合并进
  *   现有内容，相同不写；section 为空对象 → 删除 provider key（清空）。
- * - 两文件均未变化 → 跳过写盘 + 不重启 serve（server 无条件回放场景下切断
- *   “重启 → reRegister → 回放 → 心跳 → 再重启”无限循环）
- * - 任一变化 → 写变化项 → 重启 serve 一次（凭据/配置变更/容器重启后恢复）
+ * - 两文件均未变化 → 跳过写盘 + 不做生效动作（server 无条件回放场景下切断
+ *   “生效 → 回放 → 心跳 → 再生效”无限循环）
+ * - 任一变化 → 写变化项 → 交由 `applyConfigChange` 让 serve 生效
+ *   （**热重载优先**：不重启 serve ⇒ 无端口漂移、无会话排空、无不可用窗口；
+ *    热重载失败/未确认时由该回调回退到真实重启）。
  * 返回 { changed, authJsonPath, configPath }（两个路径均供调用方记录下次对比）。
  */
 export async function handleModelCredentials(
@@ -350,7 +374,7 @@ export async function handleModelCredentials(
   const configChanged = newConfig !== existingConfig;
 
   if (!authChanged && !configChanged) {
-    deps.log('[worker] model-credentials：凭据未变化，跳过注入与重启');
+    deps.log('[worker] model-credentials：凭据未变化，跳过注入与生效动作');
     return {
       changed: false,
       configChanged: false,
@@ -377,11 +401,13 @@ export async function handleModelCredentials(
       ).join(', ')}]，baseUrl 明细见 ${configPath}）`,
     );
   }
-  // 任一文件变化 → 重启 serve 一次生效（auth 与 config 同时变也只重启一次）。
-  const decision = await deps.requestRestart('model-credentials（凭据注入）');
-  if (decision === 'pending') {
-    deps.log('[worker] model-credentials：存在活跃会话，重启挂起（会话归零后自动执行）');
-  }
+  // 文件已落盘 ⇒ 让 serve 生效：**热重载**（不重启进程）。热重载失败或效果未确认时，
+  // 由 applyConfigChange 的实现回退到真实重启（并记日志）——静默失败会让 worker
+  // 声称一份 serve 从未加载的配置。
+  await deps.applyConfigChange({
+    reason: 'model-credentials（凭据注入）',
+    providerIDs: Object.keys(section ?? {}),
+  });
   return { changed: true, configChanged, authJsonPath: authPath, configPath };
 }
 
@@ -436,6 +462,113 @@ export async function handleGitCredentials(
   const result = deps.writeContent(entries);
   deps.log(`[worker] git-credentials：凭证文件已更新（${validCount} 条）`);
   return { changed: true, path: result.path };
+}
+
+/** reload-config 命令的依赖面（单测可整体 mock）。 */
+export interface ReloadConfigCommandDeps {
+  /** 资源重注入（拉控制面资源 → 落盘）。 */
+  injectAll: () => Promise<InjectReport>;
+  /** 注入报告回写（更新上报用的 skills/tools 清单）。 */
+  onInjectReport: (report: InjectReport) => void;
+  /** 让配置在 serve 里生效（热重载优先；失败/未确认时回退真实重启）。 */
+  applyConfigChange: (
+    request: ConfigChangeRequest,
+    extraVerify?: () => Promise<ConfigVerification>,
+  ) => Promise<ConfigReloadOutcome>;
+  /** serve 端点（效果确认读 /api/mcp 与 /api/skill 用）。 */
+  serveEndpoint: () => { baseUrl: string; password: string | null };
+  log: (message: string) => void;
+  warn: (message: string) => void;
+}
+
+/**
+ * reload-config 命令：重拉资源 → 落盘 → **热重载**（**不重启 serve**）。
+ *
+ * ⚠️ 这条路径**不再**请求重启：重启会带来端口漂移（要重新注册）、活跃会话排空
+ * （无上界延迟）、serve 不可用窗口——而 v2 的文件监听 + `location/reload` 两条路
+ * 都能让新配置生效，且**不动 serve 进程**。
+ *
+ * 效果确认：注入的 MCP server 与 skill 必须在 serve 侧可见；确认失败由
+ * `applyConfigChange` 回退到真实重启（静默失败 = worker 声称的配置 serve 从未加载）。
+ */
+export async function handleReloadConfigCommand(
+  command: WorkerCommand,
+  deps: ReloadConfigCommandDeps,
+): Promise<void> {
+  try {
+    const report = await deps.injectAll();
+    deps.onInjectReport(report);
+    deps.log(
+      `[worker] reload-config：资源重注入完成（${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers）`,
+    );
+    await deps.applyConfigChange(
+      { reason: `reload-config（resourceVersion=${command.resourceVersion}）` },
+      async () => {
+        const mcp = await verifyMcpServersVisible(deps.serveEndpoint(), report.mcpServers);
+        if (!mcp.ok) {
+          return mcp;
+        }
+        return verifySkillsVisible(deps.serveEndpoint(), report.skills);
+      },
+    );
+  } catch (err) {
+    deps.warn(`[worker] reload-config 资源重注入失败: ${(err as Error).message}`);
+  }
+}
+
+/** model-credentials 命令的依赖面（单测可整体 mock）。 */
+export interface ModelCredentialsCommandDeps {
+  /** 注入凭据（auth.json + opencode.json，幂等）；返回落盘路径与变更标记。 */
+  injectCredentials: (
+    providerKeys: ModelCredentialEntry[],
+    providerConfigs: Record<string, ModelProviderConfigEntry> | undefined,
+    injectedAuthJsonPath: string | null,
+    injectedConfigPath: string | null,
+  ) => Promise<{
+    authJsonPath: string;
+    configPath: string;
+    configChanged: boolean;
+  }>;
+  /** 记录本次注入的落盘路径（下次写入前 cleanup 明文凭据）。 */
+  onInjectedPaths: (authJsonPath: string, configPath: string) => void;
+  /** provider 配置段实际变更（下次**真重启**后的 reRegister 需全量重探）。 */
+  onProviderConfigChanged: () => void;
+  log: (message: string) => void;
+  warn: (message: string) => void;
+}
+
+/**
+ * model-credentials 命令：注入凭据文件 → **热重载**（**不重启 serve**）。
+ *
+ * ⚠️ 这条路径**不再**请求重启（原来每次加凭据都重启整个 serve：端口可能漂移、
+ * 活跃会话必须先排空、serve 有不可用窗口）。生效动作由 `injectCredentials` 内部的
+ * `applyConfigChange` 承担（热重载 → 失败/未确认时回退真重启）。
+ */
+export async function handleModelCredentialsCommand(
+  command: WorkerCommand,
+  injectedAuthJsonPath: string | null,
+  injectedConfigPath: string | null,
+  deps: ModelCredentialsCommandDeps,
+): Promise<void> {
+  const payload = command.payload as ModelCredentialsPayload | undefined;
+  if (!payload?.providerKeys) {
+    deps.warn('[worker] model-credentials 命令缺少 providerKeys 负载，跳过注入');
+    return;
+  }
+  try {
+    const result = await deps.injectCredentials(
+      payload.providerKeys,
+      payload.providerConfigs,
+      injectedAuthJsonPath,
+      injectedConfigPath,
+    );
+    deps.onInjectedPaths(result.authJsonPath, result.configPath);
+    if (result.configChanged) {
+      deps.onProviderConfigChanged();
+    }
+  } catch (err) {
+    deps.warn(`[worker] model-credentials 注入失败: ${(err as Error).message}`);
+  }
 }
 
 function printStartup(config: WorkerConfig, opencodeVersion: string): void {
@@ -648,9 +781,10 @@ interface ServeModelInfo {
 /**
  * 解析 serve 的模型目录响应 → vteam 口径的 `providerID/modelID` id 列表。
  *
- * - **响应形态两种都认**：`{location, data:[...]}`（v2 实测）与**裸数组**（2.0.32 spec
- *   里 `GET /api/model` 改为裸数组）——复用驱动的 `unwrapV2List`（基线漂移的单一收敛点，
- *   不另写一份）。
+ * - **响应形态两种都认**：`{location, data:[...]}`（**2.0.28 与 2.0.32 都是这个形态**——
+ *   2.0.32 见**发布的 `@opencode/client@2.0.32`** `ModelListOutput = { location, data }`）
+ *   与**裸数组**（**防御性容忍**：针对假想的未来形态，**并非已知的版本差异**）——复用驱动的
+ *   `unwrapV2List`（解包逻辑的单一收敛点，不另写一份）。
  * - **id 口径**：`providerID/modelID`（控制面的过滤按这个格式判定）。
  * - **非法行丢弃**：无 provider 段 / 无 model 段 / 含空白 → 不进上报
  *   （与控制面 `models.service.ts` 的 `indexOf('/') > 0 && !/\s/` 口径一致）。
@@ -1039,8 +1173,9 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     console.log(`[worker] 重启后重新注册成功: workerId=${result.workerId}`);
   };
 
-  // T4c：重启协调器——无活跃会话才重启（单 serve 实例，重启会中断会话）；
-  // 有活跃会话则挂起，等会话归零后自动执行。
+  // T4c：重启协调器——**只用于真正需要换进程的场景**（运维重启 / 二进制升级 /
+  // 崩溃恢复 / 热重载兜底）。配置类变更（skills/tools/MCP/agent 策略/模型凭据）
+  // 一律走下面的热重载路径（不重启 serve ⇒ 无端口漂移、无会话排空、无不可用窗口）。
   const restartCoordinator = new RestartCoordinator({
     activeSessionCount: () => getLoad().instances,
     // B1 配套：serve 重启（随机端口可能变化）后须同步 driver.baseUrl——否则
@@ -1060,6 +1195,81 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
       error: (message: string) => console.error(`[worker] ${message}`),
     },
   });
+
+  // ── 配置热重载（opencode v2 原生；**不重启 serve 进程**）────────────────────
+  // serve 端点**每次调用时读取**（serve 重启可能换端口）；密码取 serve 的**实际配置**
+  // （effectiveServerPassword = 配置密码或 v2 自动生成的密码）——不从环境变量另读
+  // 一份（会与 serve 的真实鉴权漂移 ⇒ 全线 401）。与 mcp-status-probe 同一套做法。
+  const serveEndpoint = (): { baseUrl: string; password: string | null } => ({
+    baseUrl: serveServer.baseUrl ?? '',
+    password: serveServer.effectiveServerPassword,
+  });
+
+  // 执行端点（pending 闸门的数据源）：命令处理器注册在它之前创建 ⇒ 用 holder 打破 TDZ。
+  let execServerRef: ExecServer | null = null;
+
+  const configReloader = new ConfigReloader({
+    endpoint: serveEndpoint,
+    // pending 闸门：`POST /api/location/reload` 会**取消**待答复的表单/权限
+    // （实测 opencode v2.0.28）⇒ 有 pending 时绝不重载，改走文件监听路径。
+    // 检测能力复用 exec-server 的同一份（逐会话、与 location 无关）。
+    // 执行端点尚未就绪 ⇒ 结论不完整 ⇒ 保守地不重载。
+    pendingProbe: async () =>
+      execServerRef
+        ? execServerRef.detectPendingRequests()
+        : { forms: 0, permissions: 0, sessions: [], incomplete: true },
+    logger: {
+      info: (message: string) => console.log(message),
+      warn: (message: string) => console.warn(message),
+      error: (message: string) => console.error(message),
+    },
+  });
+
+  /**
+   * 让已落盘的配置在 serve 里生效：**热重载优先**（不重启进程）。
+   *
+   * 三条出路（互斥，按序）：
+   * 1. 热重载成功（且效果已确认）→ 结束（serve 进程、端口、会话全不变）；
+   * 2. 有待答复的表单/权限 → **不重载**（改由文件监听路径生效，不取消任何待答复项）；
+   * 3. 热重载失败 / 效果未确认 → **回退到真实重启**（并记日志）——
+   *    静默失败会让 worker 声称一份 serve 从未加载的配置。
+   */
+  const applyConfigChange = async (
+    request: ConfigChangeRequest,
+    extraVerify?: () => Promise<ConfigVerification>,
+  ): Promise<ConfigReloadOutcome> => {
+    const providerIDs = request.providerIDs ?? [];
+    const verify = combineVerifiers([
+      providerIDs.length > 0
+        ? () => verifyProvidersVisible(serveEndpoint(), providerIDs)
+        : undefined,
+      extraVerify,
+    ]);
+    const result = await configReloader.reload(request.reason, verify);
+    if (result.outcome === 'reloaded') {
+      console.log(
+        `[worker] ${request.reason}：serve 已热重载（serve 进程未重启，端口与会话不变）`,
+      );
+      return result.outcome;
+    }
+    if (result.outcome === 'deferred') {
+      console.warn(
+        `[worker] ${request.reason}：存在待答复的表单/权限，location/reload 会取消它们 ⇒ ` +
+          '已跳过确定性热重载；改由 opencode v2 的文件监听路径生效（不取消任何待答复项）',
+      );
+      return result.outcome;
+    }
+    console.warn(
+      `[worker] ${request.reason}：热重载未生效（${result.detail}）⇒ 回退到真实重启`,
+    );
+    const decision = await restartCoordinator.requestRestart(
+      `${request.reason}（热重载兜底）`,
+    );
+    if (decision === 'pending') {
+      console.log(`[worker] ${request.reason}：存在活跃会话，重启挂起（会话归零后自动执行）`);
+    }
+    return result.outcome;
+  };
 
   // T8c：MCP 状态探测器（30s 节流——不能每 10s 心跳都打一次 serve，Metis 高优补项 7）。
   // 数据源 = **worker 自己那个 serve** 的 `GET /api/mcp`（Basic Auth 用 serve 密码）。
@@ -1112,7 +1322,7 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   };
 
   // T4b：注册命令处理回调（T4a 挂载点）——reload-config 触发资源重拉 + 注入 +
-  // T4c 重启判定（无活跃会话立即重启 serve 使新配置生效，有活跃会话则挂起）。
+  // **热重载**（不再重启 serve；有待答复项时改走文件监听路径）。
   // C5b：记录上一次注入的 auth.json 路径（下次写入前 cleanup，不留存旧凭据明文）。
   // C6：同理记录 opencode.json（config 无明文凭据，写盘幂等，不需 cleanup）。
   let injectedAuthJsonPath: string | null = null;
@@ -1125,74 +1335,66 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
   onCommands(async (commands) => {
     for (const command of commands) {
       if (command.type === WORKER_COMMAND_TYPES.RELOAD_CONFIG) {
-        try {
-          const report = await injector.injectAll();
+        await handleReloadConfigCommand(command, {
+          injectAll: () => injector.injectAll(),
           // T9：重注入后更新注入清单，重启后的 reRegister 上报最新 skills/tools
-          lastInjectReport = report;
-          console.log(
-            `[worker] reload-config：资源重注入完成（${report.skills.length} skills, ${report.tools.length} tools, ${report.mcpServers.length} mcp servers）`,
-          );
-          const decision = await restartCoordinator.requestRestart(
-            `reload-config（resourceVersion=${command.resourceVersion}）`,
-          );
-          if (decision === 'pending') {
-            console.log('[worker] reload-config：存在活跃会话，重启挂起（会话归零后自动执行）');
-          }
-        } catch (err) {
-          console.warn(`[worker] reload-config 资源重注入失败: ${(err as Error).message}`);
-        }
+          onInjectReport: (report) => {
+            lastInjectReport = report;
+          },
+          applyConfigChange,
+          serveEndpoint,
+          log: (message) => console.log(message),
+          warn: (message) => console.warn(message),
+        });
       }
       if (command.type === WORKER_COMMAND_TYPES.MODEL_CREDENTIALS) {
-        const payload = command.payload as ModelCredentialsPayload | undefined;
-        if (!payload?.providerKeys) {
-          console.warn('[worker] model-credentials 命令缺少 providerKeys 负载，跳过注入');
-          continue;
-        }
-        try {
-          // F3 防循环：内容幂等注入——auth.json 与 opencode.json（C6）内容均未
-          // 变化时跳过写盘与重启 serve，切断“server 无条件回放 → 重启 →
-          // reRegister → 回放 → 再重启”无限循环。
-          const result = await handleModelCredentials(
-            payload.providerKeys,
-            payload.providerConfigs,
-            injectedAuthJsonPath,
-            injectedConfigPath,
-            {
-              readContent: async (authJsonPath) => {
-                try {
-                  return await fs.promises.readFile(authJsonPath, 'utf8');
-                } catch {
-                  return null;
-                }
-              },
-              writeAuthJson: (keys) => writeAuthJson(keys, config.isolationScope),
-              cleanupAuthJson,
-              readConfig: async (configPath) => {
-                try {
-                  return await fs.promises.readFile(configPath, 'utf8');
-                } catch {
-                  return null;
-                }
-              },
-              writeOpencodeConfig: (existingRaw, section) =>
-                writeOpencodeConfig(existingRaw, section, config.isolationScope),
-              scope: config.isolationScope,
-              requestRestart: (reason) =>
-                restartCoordinator.requestRestart(reason),
-              log: (message) => console.log(message),
-              warn: (message) => console.warn(message),
+        await handleModelCredentialsCommand(
+          command,
+          injectedAuthJsonPath,
+          injectedConfigPath,
+          {
+            // F3 防循环：内容幂等注入——auth.json 与 opencode.json（C6）内容均未
+            // 变化时跳过写盘与生效动作，切断“server 无条件回放 → 生效 → 回放”
+            // 无限循环。
+            injectCredentials: (keys, providerConfigs, authPath, cfgPath) =>
+              handleModelCredentials(keys, providerConfigs, authPath, cfgPath, {
+                readContent: async (authJsonPath) => {
+                  try {
+                    return await fs.promises.readFile(authJsonPath, 'utf8');
+                  } catch {
+                    return null;
+                  }
+                },
+                writeAuthJson: (providerKeys) =>
+                  writeAuthJson(providerKeys, config.isolationScope),
+                cleanupAuthJson,
+                readConfig: async (configPath) => {
+                  try {
+                    return await fs.promises.readFile(configPath, 'utf8');
+                  } catch {
+                    return null;
+                  }
+                },
+                writeOpencodeConfig: (existingRaw, section) =>
+                  writeOpencodeConfig(existingRaw, section, config.isolationScope),
+                scope: config.isolationScope,
+                applyConfigChange,
+                log: (message) => console.log(message),
+                warn: (message) => console.warn(message),
+              }),
+            onInjectedPaths: (authPath, cfgPath) => {
+              injectedAuthJsonPath = authPath;
+              injectedConfigPath = cfgPath;
             },
-          );
-          injectedAuthJsonPath = result.authJsonPath;
-          injectedConfigPath = result.configPath;
-          // C6：provider 配置段实际变更 → 重启后的 reRegister 必须全量重探
-          // （新模型进目录 / baseUrl 变化，快路径复用会漏报）
-          if (result.configChanged) {
-            configChangedSinceRegister = true;
-          }
-        } catch (err) {
-          console.warn(`[worker] model-credentials 注入失败: ${(err as Error).message}`);
-        }
+            // C6：provider 配置段实际变更 → **下次**真重启后的 reRegister 必须全量重探
+            // （新模型进目录 / baseUrl 变化，快路径复用会漏报）
+            onProviderConfigChanged: () => {
+              configChangedSinceRegister = true;
+            },
+            log: (message) => console.log(message),
+            warn: (message) => console.warn(message),
+          },
+        );
       }
       if (command.type === WORKER_COMMAND_TYPES.GIT_CREDENTIALS) {
         const payload = command.payload as GitCredentialsPayload | undefined;
@@ -1299,7 +1501,16 @@ export function main(env: NodeJS.ProcessEnv = process.env): void {
     // OmO 配置保存后重启 serve：opencode 只在启动时读 OmO 配置，不重启则新会话仍用旧模型。
     // 复用 RestartCoordinator（无活跃会话立即重启 / 有则挂起等归零），故不会打断进行中的会话。
     restartServe: (reason: string) => restartCoordinator.requestRestart(reason),
+    // 配置热重载（**不重启 serve 进程**）：独立模式的 POST /config/reload 用。
+    // 注册模式的配置变更走心跳命令路径（reload-config / model-credentials）。
+    reloadServe: async (reason: string): Promise<ConfigReloadOutcome> =>
+      applyConfigChange({ reason }).catch((err: unknown) => {
+        console.warn(`[worker] ${reason}：热重载异常: ${String(err)}`);
+        return 'failed' as ConfigReloadOutcome;
+      }),
   });
+  // 执行端点就绪引用（配置热重载的 pending 闸门数据源；命令处理器注册在它之前）
+  execServerRef = execServer;
   // T10：执行端点上报端口（start 成功 = 实际监听端口；失败置 undefined，注册不带 execPort）
   let execPort: number | undefined = config.workerExecPort;
 

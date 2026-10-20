@@ -29,6 +29,7 @@ import {
 import { getLoad, resetInstanceCount } from '../instance-tracker';
 import {
   ExecServer,
+  KNOWN_SESSIONS_LIMIT,
   MAX_FILE_FETCH_BYTES,
   MAX_IMAGE_ATTACHMENT_BYTES,
   MAX_PLAN_DOC_BYTES,
@@ -4083,6 +4084,356 @@ describe('ExecServer：终态协调（事件路 ↔ 轮询路合流，T14）', (
     } finally {
       await exec.stop();
       await sse.close();
+    }
+  });
+});
+describe('ExecServer：POST /config/reload 与 /config/restart（独立模式的生效动作）', () => {
+  function postConfig(
+    port: number,
+    kind: string,
+    token?: string,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    return new Promise((resolve, reject) => {
+      const headers: Record<string, string> = {};
+      if (token !== undefined) {
+        headers['X-Worker-Token'] = token;
+      }
+      const req = http.request(
+        { host: '127.0.0.1', port, path: `/config/${kind}`, method: 'POST', headers },
+        (res) => {
+          let chunks = '';
+          res.on('data', (c: Buffer) => {
+            chunks += c.toString('utf8');
+          });
+          res.on('end', () =>
+            resolve({ status: res.statusCode ?? 0, body: JSON.parse(chunks || '{}') }),
+          );
+        },
+      );
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  it('/config/reload → 调用热重载回调并回显结局（**不重启 serve**）', async () => {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const reloadServe = jest.fn().mockResolvedValue('reloaded');
+    const restartServe = jest.fn().mockResolvedValue('executed');
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      standalone: true,
+      reloadServe,
+      restartServe,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postConfig(bound, 'reload', 'tok');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ reload: 'reloaded' });
+      expect(reloadServe).toHaveBeenCalledTimes(1);
+      // 热重载路径**不碰**重启回调
+      expect(restartServe).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('/config/reload：延后结局（有待答复项）原样回显 200', async () => {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const reloadServe = jest.fn().mockResolvedValue('deferred');
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      standalone: true,
+      reloadServe,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postConfig(bound, 'reload', 'tok');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ reload: 'deferred' });
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('/config/reload：未注入热重载回调 → 503', async () => {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      standalone: true,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postConfig(bound, 'reload', 'tok');
+      expect(res.status).toBe(503);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('/config/reload：token 无效 → 401', async () => {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const reloadServe = jest.fn().mockResolvedValue('reloaded');
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      standalone: true,
+      reloadServe,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postConfig(bound, 'reload', 'wrong');
+      expect(res.status).toBe(401);
+      expect(reloadServe).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('/config/restart：**仍然走真重启**（未注入重启回调 → 503）', async () => {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const reloadServe = jest.fn().mockResolvedValue('reloaded');
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      standalone: true,
+      reloadServe,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postConfig(bound, 'restart', 'tok');
+      expect(res.status).toBe(503);
+      expect(reloadServe).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('/config/restart：注入重启回调 → 200 且不碰热重载回调', async () => {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const reloadServe = jest.fn().mockResolvedValue('reloaded');
+    const restartServe = jest.fn().mockResolvedValue('executed');
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      standalone: true,
+      reloadServe,
+      restartServe,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const res = await postConfig(bound, 'restart', 'tok');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ restart: 'executed' });
+      expect(restartServe).toHaveBeenCalledTimes(1);
+      expect(reloadServe).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('注册模式（standalone=false）→ /config/* 全部 404 + 引导（配置一律经控制面下发）', async () => {
+    const { driver } = mockDriver();
+    const { sender } = createSender();
+    const reloadServe = jest.fn().mockResolvedValue('reloaded');
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      standalone: false,
+      reloadServe,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const reloadRes = await postConfig(bound, 'reload', 'tok');
+      expect(reloadRes.status).toBe(404);
+      expect(String(reloadRes.body.error)).toContain('独立模式');
+      const restartRes = await postConfig(bound, 'restart', 'tok');
+      expect(restartRes.status).toBe(404);
+      expect(reloadServe).not.toHaveBeenCalled();
+    } finally {
+      await exec.stop();
+    }
+  });
+});
+
+describe('ExecServer：detectPendingRequests（配置热重载的安全闸门数据源）', () => {
+  it('记住会话并逐会话查待答复项（**与 location 无关**）', async () => {
+    const { driver } = mockDriver();
+    const listQuestions = jest.fn().mockResolvedValue([
+      { id: 'frm_1', sessionId: 'ses_1', questions: [] },
+    ]);
+    const listPermissions = jest.fn().mockResolvedValue([
+      { id: 'per_1', sessionId: 'ses_1', action: 'shell', resources: [] },
+    ]);
+    (driver as unknown as { listQuestions: unknown }).listQuestions = listQuestions;
+    (driver as unknown as { listPermissions: unknown }).listPermissions = listPermissions;
+    const { sender } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      // 建会话（POST /sessions）⇒ worker 必须记住它（否则闸门查不到它的待答复项）
+      const created = await new Promise<{ status: number; body: Record<string, unknown> }>(
+        (resolve, reject) => {
+          const req = http.request(
+            {
+              host: '127.0.0.1',
+              port: bound,
+              path: '/sessions',
+              method: 'POST',
+              headers: { 'X-Worker-Token': 'tok', 'Content-Type': 'application/json' },
+            },
+            (res) => {
+              let chunks = '';
+              res.on('data', (c: Buffer) => {
+                chunks += c.toString('utf8');
+              });
+              res.on('end', () =>
+                resolve({ status: res.statusCode ?? 0, body: JSON.parse(chunks || '{}') }),
+              );
+            },
+          );
+          req.on('error', reject);
+          req.end('{}');
+        },
+      );
+      expect(created.status).toBe(200);
+      const sessionId = String(created.body.sessionId);
+
+      const snapshot = await exec.detectPendingRequests();
+      expect(listQuestions).toHaveBeenCalledWith(sessionId);
+      expect(listPermissions).toHaveBeenCalledWith(sessionId);
+      expect(snapshot.forms).toBe(1);
+      expect(snapshot.permissions).toBe(1);
+      expect(snapshot.sessions).toEqual([sessionId]);
+      expect(snapshot.incomplete).toBe(false);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('会话范围有界：超过上限后只保留最近的会话（FIFO）', async () => {
+    const { driver, createSession } = mockDriver();
+    let seq = 0;
+    createSession.mockImplementation(async () => `ses_bounded_${++seq}`);
+    const listQuestions = jest.fn().mockResolvedValue([]);
+    (driver as unknown as { listQuestions: unknown }).listQuestions = listQuestions;
+    (driver as unknown as { listPermissions: unknown }).listPermissions = jest
+      .fn()
+      .mockResolvedValue([]);
+    const { sender } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      // 建 KNOWN_SESSIONS_LIMIT+10 个会话 ⇒ 最旧的 10 个应被淘汰
+      for (let i = 0; i < KNOWN_SESSIONS_LIMIT + 10; i++) {
+        await new Promise<void>((resolve, reject) => {
+          const req = http.request(
+            {
+              host: '127.0.0.1',
+              port: bound,
+              path: '/sessions',
+              method: 'POST',
+              headers: { 'X-Worker-Token': 'tok', 'Content-Type': 'application/json' },
+            },
+            (res) => {
+              res.resume();
+              res.on('end', () => resolve());
+            },
+          );
+          req.on('error', reject);
+          req.end('{}');
+        });
+      }
+      await exec.detectPendingRequests();
+      const queried = listQuestions.mock.calls.map((c) => c[0] as string);
+      expect(queried.length).toBe(KNOWN_SESSIONS_LIMIT);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('查询失败 ⇒ incomplete=true（结论不完整 ⇒ 调用方不得放行重载）', async () => {
+    const { driver } = mockDriver();
+    (driver as unknown as { listQuestions: unknown }).listQuestions = jest
+      .fn()
+      .mockRejectedValue(new Error('serve 不可达'));
+    (driver as unknown as { listPermissions: unknown }).listPermissions = jest
+      .fn()
+      .mockResolvedValue([]);
+    const { sender } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      workerToken: 'tok',
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const req = http.request(
+          {
+            host: '127.0.0.1',
+            port: bound,
+            path: '/sessions',
+            method: 'POST',
+            headers: { 'X-Worker-Token': 'tok', 'Content-Type': 'application/json' },
+          },
+          (res) => {
+            res.resume();
+            res.on('end', () => resolve());
+          },
+        );
+        req.on('error', reject);
+        req.end('{}');
+      });
+
+      const snapshot = await exec.detectPendingRequests();
+      expect(snapshot.incomplete).toBe(true);
+    } finally {
+      await exec.stop();
     }
   });
 });
