@@ -17,13 +17,16 @@ import {
   GitCredentialEntry,
 } from './git/git-credential-injector';
 import { WorkerCommand } from './protocol/worker-protocol';
-import { InjectReport } from './resources/injector';
+import { InjectReport, ResourceInjector } from './resources/injector';
+import { resolveIsolationScope } from './config';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
   buildAuthJson,
+  buildProviderSection,
   DEFAULT_OPENCODE_CONFIG_PATH,
+  mergeProviderSection,
 } from './credentials/model-credential-injector';
 import {
   applySetMaxInstances,
@@ -31,6 +34,7 @@ import {
   buildRegisterOptions,
   dispatchCommands,
   DEFAULT_AUTH_JSON_PATH,
+  ensureStandaloneProjectConfig,
   handleGitCredentials,
   handleModelCredentials,
   onCommands,
@@ -51,6 +55,8 @@ const CONFIG: WorkerConfig = {
   workerName: 'host',
   opencodeServePort: 0,
   serverPassword: '',
+  allowGeneratedPassword: false,
+  opencodeV2Enabled: true,
   heartbeatIntervalMs: 10000,
   logLevel: 'info',
   workDir: '/tmp/w',
@@ -64,6 +70,7 @@ const CONFIG: WorkerConfig = {
   workerMaxInstances: 5,
   workerTotalTimeoutMs: 0,
   standalone: false,
+  isolationScope: resolveIsolationScope({ HOME: '/tmp/worker-home' }),
 };
 
 describe('buildCapabilities（D2：serve 对 server 公布 baseUrl）', () => {
@@ -289,45 +296,101 @@ describe('resolveModels（C2：serve 模型列表探测与降级）', () => {
   });
 });
 
-describe('resolveExecutableModels（models-truth：opencode models CLI 可执行集）', () => {
-  const CLI_OUT = [
+describe('resolveExecutableModels（models-truth：读 **worker 自己那个 serve** 的模型目录）', () => {
+  /**
+   * v2 serve 的 `GET /api/model` 实测响应（**2.0.28 包裹形态**：`{location, data:[...]}`）。
+   * ⚠️ v2 的 CLI 不是真值源——CLI 绑共享后台服务（49374），读的是另一个配置作用域。
+   */
+  const WRAPPED_PAYLOAD = {
+    location: { directory: '/data/vteam-worker' },
+    data: [
+      { id: 'big-pickle', modelID: 'big-pickle', providerID: 'opencode', enabled: true },
+      { id: 'ling-3.0-flash-fin-free', modelID: 'ling-3.0-flash-fin-free', providerID: 'opencode', enabled: true },
+      { id: 'mimo-v2.5-free', modelID: 'mimo-v2.5-free', providerID: 'opencode', enabled: true },
+      { id: 'nemotron-3-ultra-free', modelID: 'nemotron-3-ultra-free', providerID: 'opencode', enabled: true },
+      { id: 'nemotron-3.5-lightning-free', modelID: 'nemotron-3.5-lightning-free', providerID: 'opencode', enabled: true },
+    ],
+  };
+
+  const EXPECTED_IDS = [
     'opencode/big-pickle',
     'opencode/ling-3.0-flash-fin-free',
     'opencode/mimo-v2.5-free',
-    'opencode/muse-spark-1.2-contributor-free',
-    'opencode/muse-spark-1.3-contributor-free',
     'opencode/nemotron-3-ultra-free',
     'opencode/nemotron-3.5-lightning-free',
-  ].join('\n');
+  ];
 
-  it('成功：逐行解析 providerID/modelID，去重保序', () => {
-    expect(resolveExecutableModels(() => `${CLI_OUT}\nopencode/big-pickle\n`)).toEqual([
+  it('2.0.28 包裹形态 `{location, data}` → providerID/modelID 列表', async () => {
+    expect(await resolveExecutableModels(async () => WRAPPED_PAYLOAD)).toEqual(EXPECTED_IDS);
+  });
+
+  it('2.0.32 裸数组形态 → 同样解析（基线漂移容忍）', async () => {
+    expect(await resolveExecutableModels(async () => WRAPPED_PAYLOAD.data)).toEqual(EXPECTED_IDS);
+  });
+
+  it('生产数据源（driver 的 listModels() 输出）同样解析', async () => {
+    const driverModels = [
+      { id: 'opencode/big-pickle', name: 'Big Pickle', providerID: 'opencode', modelID: 'big-pickle', status: 'active' },
+      { id: 'opencode/mimo-v2.5-free', name: 'MIMO', providerID: 'opencode', modelID: 'mimo-v2.5-free', status: 'active' },
+    ];
+    expect(await resolveExecutableModels(async () => driverModels)).toEqual([
       'opencode/big-pickle',
-      'opencode/ling-3.0-flash-fin-free',
       'opencode/mimo-v2.5-free',
-      'opencode/muse-spark-1.2-contributor-free',
-      'opencode/muse-spark-1.3-contributor-free',
-      'opencode/nemotron-3-ultra-free',
-      'opencode/nemotron-3.5-lightning-free',
     ]);
   });
 
-  it('非法行丢弃：空行/无斜杠/含空白不进入上报', () => {
-    expect(
-      resolveExecutableModels(() => 'opencode/big-pickle\n\njunk\ntwo words/x\n'),
-    ).toEqual(['opencode/big-pickle']);
+  it('去重保序（重复项只留首次出现的位置）', async () => {
+    const payload = {
+      data: [
+        { modelID: 'a', providerID: 'p' },
+        { modelID: 'b', providerID: 'p' },
+        { modelID: 'a', providerID: 'p' },
+      ],
+    };
+    expect(await resolveExecutableModels(async () => payload)).toEqual(['p/a', 'p/b']);
   });
 
-  it('探测抛错/空输出 → undefined（不携带，server 回退拉取，不阻断注册）', () => {
+  it('非法行丢弃：无 provider 段 / 无 model 段 / 含空白不进上报', async () => {
+    const payload = {
+      data: [
+        { modelID: 'ok', providerID: 'p' },
+        { modelID: 'no-provider' },
+        { providerID: 'p' },
+        { modelID: 'has space', providerID: 'p' },
+      ],
+    };
+    expect(await resolveExecutableModels(async () => payload)).toEqual(['p/ok']);
+  });
+
+  it('`enabled:false` 的模型不算可执行（v2 的"该模型不可用"标记）', async () => {
+    const payload = {
+      data: [
+        { modelID: 'usable', providerID: 'p', enabled: true },
+        { modelID: 'unusable', providerID: 'p', enabled: false },
+      ],
+    };
+    expect(await resolveExecutableModels(async () => payload)).toEqual(['p/usable']);
+  });
+
+  it('空响应/非法响应 → undefined（**不断言零可用**）', async () => {
+    expect(await resolveExecutableModels(async () => undefined)).toBeUndefined();
+    expect(await resolveExecutableModels(async () => ({ location: {}, data: [] }))).toBeUndefined();
+    expect(await resolveExecutableModels(async () => ({}))).toBeUndefined();
+    expect(await resolveExecutableModels(async () => 'not a payload')).toBeUndefined();
+    expect(
+      await resolveExecutableModels(async () => ({ data: [{ modelID: 'no-provider' }] })),
+    ).toBeUndefined();
+  });
+
+  it('探测抛错 → undefined（不携带，server 回退拉取，不阻断注册）', async () => {
     const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       expect(
-        resolveExecutableModels(() => {
-          throw new Error('opencode: command not found');
+        await resolveExecutableModels(async () => {
+          throw new Error('serve 未就绪');
         }),
       ).toBeUndefined();
-      expect(resolveExecutableModels(() => '')).toBeUndefined();
-      expect(resolveExecutableModels(() => '  \njunk\n')).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('可执行模型探测失败'));
     } finally {
       warnSpy.mockRestore();
     }
@@ -718,31 +781,18 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
     deps.readContent.mockResolvedValue(buildAuthJson(KEY));
     // 现有 config 已含相同 provider 段 → merge 结果与现有内容一致
     // （必须与 mergeProviderSection 的 JSON.stringify(base, null, 2) 字节一致才判未变化）
+    // 现有内容由生产构造器派生（不硬编码 provider 段形态）——provider 段形态随 opencode
+    // 版本演进（v1 npm/options → v2 package/settings），硬编码会让本用例与契约无关地失败。
+    const providerPayload = {
+      'my-local': { baseUrl: 'http://127.0.0.1:11434/v1', models: ['qwen:latest'] },
+    };
     deps.readConfig.mockResolvedValue(
-      JSON.stringify(
-        {
-          provider: {
-            'my-local': {
-              npm: '@ai-sdk/openai-compatible',
-              name: 'my-local',
-              options: { baseURL: 'http://127.0.0.1:11434/v1' },
-              models: { 'qwen:latest': {} },
-            },
-          },
-        },
-        null,
-        2,
-      ),
+      mergeProviderSection(null, buildProviderSection(providerPayload))!,
     );
 
     const result = await handleModelCredentials(
       KEY,
-      {
-        'my-local': {
-          baseUrl: 'http://127.0.0.1:11434/v1',
-          models: ['qwen:latest'],
-        },
-      },
+      providerPayload,
       DEFAULT_AUTH_JSON_PATH,
       DEFAULT_OPENCODE_CONFIG_PATH,
       deps,
@@ -804,28 +854,23 @@ describe('handleModelCredentials（F3 防循环 + C6：auth.json/opencode.json �
   it('C6：providerConfigs 携带且 config 缺失 → 写 opencode.json + 重启（auth 同变只重启一次）', async () => {
     const deps = makeDeps();
     deps.readContent.mockResolvedValue(buildAuthJson([{ providerID: 'a', key: 'old' }]));
+    const providerPayload = {
+      'my-local': { baseUrl: 'http://127.0.0.1:11434/v1', models: ['qwen:latest'] },
+    };
 
     const result = await handleModelCredentials(
       [{ providerID: 'a', key: 'new' }],
-      {
-        'my-local': { baseUrl: 'http://127.0.0.1:11434/v1', models: ['qwen:latest'] },
-      },
+      providerPayload,
       DEFAULT_AUTH_JSON_PATH,
       null,
       deps,
     );
 
     expect(deps.writeAuthJson).toHaveBeenCalledTimes(1);
+    // 写入内容 = 生产构造器产出的 provider 段（形态随 opencode 版本演进，不在本用例硬编码）
     expect(deps.writeOpencodeConfig).toHaveBeenCalledWith(
       null,
-      {
-        'my-local': {
-          npm: '@ai-sdk/openai-compatible',
-          name: 'my-local',
-          options: { baseURL: 'http://127.0.0.1:11434/v1' },
-          models: { 'qwen:latest': {} },
-        },
-      },
+      buildProviderSection(providerPayload),
     );
     expect(deps.requestRestart).toHaveBeenCalledTimes(1);
     expect(result.changed).toBe(true);
@@ -1032,6 +1077,13 @@ describe('buildRegisterOptions（T4c：重启后重新注册携带新端口）',
     expect((await buildRegisterOptions(CONFIG, null, 'unknown', 'fallback')).opencodeVersion).toBe('fallback');
   });
 
+  it('T1：上报值规范化为 semver 串（控制面按精确串相等过滤 worker）', async () => {
+    // v2 原始输出全文 → 2.0.28（不能上报 `opencode v2.0.28` 全文）
+    expect((await buildRegisterOptions(CONFIG, null, 'opencode v2.0.28', 'cli')).opencodeVersion).toBe('2.0.28');
+    expect((await buildRegisterOptions(CONFIG, null, 'unknown', 'opencode v2.0.28')).opencodeVersion).toBe('2.0.28');
+    expect((await buildRegisterOptions(CONFIG, null, '2.0.28', 'cli')).opencodeVersion).toBe('2.0.28');
+  });
+
   it('serve 未就绪（port=null）：capabilities 不含 port/baseUrl（不报死地址）', async () => {
     const opts = await buildRegisterOptions(CONFIG, null, 'unknown', 'cli-version');
     expect(opts.capabilities.port).toBeUndefined();
@@ -1191,6 +1243,44 @@ describe('warnLoopbackAdvertiseHost（上报地址启动提示）', () => {
       warnLoopbackAdvertiseHost(CONFIG);
       expect(warnSpy).not.toHaveBeenCalled();
       expect(logSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+});
+
+describe('T18：独立模式补写项目配置（防 browser 工具被内置插件静默遮蔽）', () => {
+  /** 独立模式跳过控制面注入 ⇒ 注入器不写 `plugins` 段 ⇒ 必须由启动链补写。 */
+  it('ensureStandaloneProjectConfig 把 "-opencode.browser" 写进 <workDir>/opencode.json 的 plugins 段', () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vteam-standalone-'));
+    const injector = new ResourceInjector({
+      serverUrl: 'http://server:3000',
+      workerToken: 'tok',
+      workerId: 'w_1',
+      workDir,
+    });
+    ensureStandaloneProjectConfig(injector);
+
+    const cfg = JSON.parse(
+      fs.readFileSync(path.join(workDir, 'opencode.json'), 'utf8'),
+    ) as { plugins?: string[] };
+    expect(cfg.plugins).toContain('-opencode.browser');
+  });
+
+  it('补写失败只告警、不抛错（配置问题不阻断 worker 启动）', () => {
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const broken = {
+        applyMcpServers: () => {
+          throw new Error('boom');
+        },
+      } as unknown as ResourceInjector;
+      expect(() => ensureStandaloneProjectConfig(broken)).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('独立模式：项目配置补写失败'),
+      );
     } finally {
       warnSpy.mockRestore();
       logSpy.mockRestore();

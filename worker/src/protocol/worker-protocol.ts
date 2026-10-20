@@ -40,9 +40,14 @@ export interface WorkerCapabilities {
    */
   models?: string[];
   /**
-   * worker 可执行模型 id 列表（`opencode models` CLI 输出解析，Provider.list() 鉴权过滤后
-   * 的真实可用集，id 格式 providerID/modelID；探测失败/为空时缺省——server 侧 sync 以此为
-   * live 真值优先采用，缺省回退 serve /api/model 拉取）。
+   * worker 可执行模型 id 列表（**读 worker 自己那个 serve 的 `GET /api/model`**，
+   * serve 作用域 = 与 agent 实际执行同一份配置；id 格式 providerID/modelID；
+   * 探测失败/为空时缺省——server 侧 sync 以此为 live 真值优先采用，缺省回退
+   * serve /api/model 拉取）。
+   *
+   * ⚠️ **v2 下不再是 `opencode models` CLI 的输出**：v2 的 CLI 子命令绑**共享后台服务**
+   * （端口 49374），读的是**另一个配置作用域** ⇒ CLI 的答案既不含 vteam 自配模型，
+   * 也与 serve 的真实状态不一致（且实测退出码 1 ⇒ 注册降级不带本字段）。
    */
   executableModels?: string[];
   /**
@@ -75,10 +80,24 @@ export interface WorkerLoad {
 }
 
 /**
- * MCP 服务器可用性三态（11 篇 §5.8：needs_auth / connected / failed）。
- * worker 经 `opencode mcp list --pure` 探测（30-60s 节流），随心跳上报控制面。
+ * MCP 服务器可用性状态（**v2 的五态**，随心跳上报控制面）。
+ *
+ * ⚠️ **v2 线契约扩展（两端同步）**：v2 的 `GET /api/mcp` 有五个状态
+ * （`connected` / `failed` / `needs_auth` / **`pending`** / **`disabled`**），
+ * 后两个在旧三态里**无法忠实表达**（`pending`=还在连接中、`disabled`=已配置但停用，
+ * 都不是 `failed`）⇒ 折叠进旧三态等于谎报 ⇒ 线契约**两端同时**扩到五态：
+ * 本类型 ↔ server 的 `MCP_STATUS`（mcp-servers/dto/mcp-status.dto.ts 的 `@IsIn`）。
+ * **server 侧不同步 ⇒ 整个心跳被 400 拒（worker 掉线）**——升级顺序：先 server 后 worker。
+ *
+ * worker 侧的数据源：**worker 自己那个 serve** 的 `GET /api/mcp`（不是 opencode CLI——
+ * v2 的 CLI 绑共享后台服务，读的是另一个配置作用域）。
  */
-export type McpServerStatus = 'connected' | 'failed' | 'needs_auth';
+export type McpServerStatus =
+  | 'connected'
+  | 'failed'
+  | 'needs_auth'
+  | 'pending'
+  | 'disabled';
 
 /** 单台 MCP 服务器状态上报条目（serverName 与 mcp_servers.name 对应）。 */
 export interface McpStatusEntry {
@@ -223,9 +242,23 @@ export interface ModelCredentialEntry {
 
 /**
  * C8：per-model 能力声明（对齐 server ModelCapabilities 双写，内部 camelCase）。
- * worker 在 buildProviderSection 里翻译为 opencode 配置的 snake_case 输出形状
- * （limit → limit{context,output}；toolCall → tool_call；options 原样透传）。
- * 字段取舍依据见 server models.constants.ts 同名类型注释（v1.18.31 实测）。
+ *
+ * 本类型是**下行负载的输入契约**（server → worker，字段仍是 camelCase，不变）；
+ * 翻译为 opencode 配置的**输出形状**发生在
+ * `credentials/model-credential-injector.ts` 的 buildModelEntry / buildV2Capabilities
+ * ——**v2 目标形状**（opencode v2.0.28 实测）：
+ * - `toolCall` → `capabilities.tools`（未声明 → true）
+ * - `modalities.input` / `modalities.output` → `capabilities.input` / `capabilities.output`
+ * - `attachment: true` → 并入 `capabilities.input`（v2 无附件布尔键）
+ * - `options` → `settings`（v2 把 SDK 选项改叫 settings）
+ * - `limit` → `limit`（v2 要求 context+output 同时存在，残缺则整体丢弃）
+ * - `reasoning` / `temperature` → **不写**（v2 归一化会把这两个键剥掉，写出去只会
+ *   造成「看着声明了、实际没生效」的假象；思考强度经 options.reasoningEffort →
+ *   settings.reasoningEffort 生效）
+ * ⚠️ v2 会**静默丢弃** v1 的 legacy 键（tool_call / attachment / modalities 等），
+ * 只留一行 `configuration normalization diagnostic` WARN——故输出必须直接写成 v2 形状。
+ *
+ * 字段取舍依据见 server models.constants.ts 同名类型注释（wire 契约来源）。
  */
 export interface ModelCapabilities {
   limit?: { context?: number; output?: number };
@@ -372,12 +405,50 @@ export interface ExecutionConfig {
 export const UNKNOWN_MODEL_KEY = 'unknown';
 
 /**
+ * 上游身份（v2 事件去重身份；T12 引入）。
+ *
+ * 为什么需要：worker→server 的传输 id（`evw_<bootId>_<seq>`）是**进程内**的——
+ * worker 重启后 bootId 变化、seq 归零，同一个上游事件会被当成新事件再发一遍。
+ * 而 v2 事件自带**跨进程稳定**的身份：帧 id（`evt_…`）、durable 游标
+ * （`aggregateID` + `seq`）、内容序号（`ordinal`）。把这层身份随事件体带上去，
+ * server 侧就能按「上游身份」而不是「传输 id」去重——**跨 worker 重启也成立**。
+ *
+ * 载体：`WorkerEventPayload.payload.upstream`（**载荷内**的附加字段，不改信封形状）。
+ */
+export interface UpstreamEventIdentity {
+  /**
+   * 上游事件 id（v2 帧的 `id`，形如 `evt_…`）。
+   *
+   * 例外：**拉取派生**的事件（权限/问题的 pending 列表拉取）没有自己的事件帧，
+   * 此时填**上游对象 id**（权限请求 id / 表单 id）——那才是该事件在服务端可去重的
+   * 稳定标识（一次触发可能拉取出多条请求，用触发事件 id 会把它们折叠成一条）。
+   */
+  eventId: string;
+  /** durable 聚合 id（v2 帧 `durable.aggregateID`；会话级事件即会话 id）。 */
+  aggregateId?: string;
+  /** durable 序号（v2 帧 `durable.seq`）：同一聚合内单调递增 → 可作幂等键。 */
+  seq?: number;
+  /**
+   * 内容序号（v2 帧 `data.ordinal`）。
+   *
+   * ⚠️ **不是逐帧计数器**（opencode v2.0.28 实机抓帧：同一条 assistant 消息的
+   * 多帧 `session.text.delta` 全是同一个 ordinal）——它是「同类内容流」的序号。
+   * ⇒ 只作参考信息，**不得**当逐帧单调量用（否则同一消息的多帧会被折叠成一条）。
+   */
+  ordinal?: number;
+}
+
+/**
  * POST /worker/events 请求体（对齐 server WorkerEventDto）。
  *
  * `payload` 为各事件自定义负载（逐事件形状由 exec-server 构造处与 server
  * WorkerEventDto/dto 约定）；`task.completed` 额外携带 `model`
  * （`providerID/modelID`，缺失为 `UNKNOWN_MODEL_KEY`）与 step-finish 实测的
  * `tokens`/`cost`。
+ *
+ * ⚠️ **上游身份**：v2 事件映射出的事件会在 `payload.upstream` 里附带
+ * `UpstreamEventIdentity`（见上）——传输 id（`eventId` 字段）是 worker 进程内
+ * 的，跨重启不复用；上游身份才跨重启稳定。
  */
 export interface WorkerEventPayload {
   workerId: string;
@@ -492,4 +563,250 @@ export interface SessionPermissionPayload {
   pattern?: string | string[];
   /** 权限标题（对齐 Permission.title）。 */
   title: string;
+}
+
+/* ============================================================================
+ * T10 worker exec 端点契约（计划 T10 / 决策 D3：控制面彻底不直连 opencode）
+ * ============================================================================
+ *
+ * 这组类型描述 **worker 执行端点**（`worker/src/exec/exec-server.ts`）新挂的五个
+ * 会话/模型端点：
+ *
+ * | 方法 | 路径 | 用途 |
+ * |---|---|---|
+ * | POST | `/sessions` | 创建会话 |
+ * | POST | `/sessions/:id/prompt` | 下发提示（**入队式**，非同步执行） |
+ * | POST | `/sessions/:id/abort` | 中断会话（**幂等**） |
+ * | GET  | `/sessions/:id/messages` | 读会话消息（可分页） |
+ * | GET  | `/models` | 模型目录 |
+ *
+ * 为什么要有它们（决策 D3）：
+ * - 此前控制面（`server/src/workers/worker.client.ts`）**直连 opencode 的 HTTP 面**
+ *   （5 个调用点），违反架构决策 07 §11.5「控制面从不直连 opencode」。
+ * - 直连的代价已经兑现过一次：控制面拼的 prompt body **漏了 `system` 字段**
+ *   （worker 的驱动拼了）——两处 prompt 构造器静默分叉；收进 worker 后全仓只剩
+ *   **一个** prompt 构造点。
+ * - 收进 worker 之后，控制面只认**本文件这组 vteam 自有形状**，不再知道被驱动端的
+ *   任何 wire 细节（`{location,data}` 包装、`parts[]` vs `content[]`、
+ *   `abort` vs `interrupt` …）。
+ *
+ * ⚠️ **双写提醒**：server 侧的同形状副本由 **T18** 落地（`server/src/workers/` 一侧）。
+ * 本文件是 **worker 侧的一半**；改任一端必须同步另一端。
+ */
+
+/**
+ * 模型目录项（vteam 口径；`GET /models` 的返回项）。
+ *
+ * ⚠️ 刻意**不是**被驱动端的原始包装（v2 是 `{location, data}`，v1 是 `{data}`）——
+ * 那是被驱动端的 wire 形状，控制面不该知道它（D3）。worker 在此把驱动层的模型
+ * 条目归一成**这个**形状。
+ */
+export interface WorkerModelInfo {
+  /** 模型 id（`providerID/modelID`）。 */
+  id: string;
+  /** 展示名。 */
+  name: string;
+  /** provider 段。 */
+  providerID: string;
+  /** model 段。 */
+  modelID: string;
+  /** 可用状态（缺失视为可用）。 */
+  status?: string;
+}
+
+/**
+ * GET /models 响应体（模型目录**信封**）。
+ *
+ * ⚠️ 信封**只有一个键** `models`（刻意**不**返回被驱动端的 `{location,data}` 包装——
+ * 那是被驱动端的 wire 形状，控制面不该知道它，见 `WorkerModelInfo` 的说明）。
+ *
+ * 此前这个信封**只在运行时断言**、不在双写类型里 ⇒ 形状漂移（例如控制面读 `model`）
+ * 不会被任何静态检查发现。现在它是**双写契约**的一部分（server 侧同形状副本见
+ * `server/src/workers/worker-session-protocol.ts`）。
+ */
+export interface WorkerModelsResponsePayload {
+  /** 模型目录（vteam 口径的条目数组）。 */
+  models: WorkerModelInfo[];
+}
+
+/** 模型引用（vteam 口径：`providerID/modelID`）。 */
+export interface WorkerModelRef {
+  providerID: string;
+  modelID: string;
+}
+
+/**
+ * 投递策略（vteam 侧语义）。
+ *
+ * - `steer`：插队（打断当前轮，按新指令重跑）；
+ * - `queue`：排队（当前轮结束后再消化）。
+ *
+ * ⚠️ 被驱动端若无此概念则**忽略**该字段（v1 即如此）——调用方不得依赖它一定生效。
+ */
+export type WorkerDeliveryMode = 'steer' | 'queue';
+
+/** POST /sessions 请求体（创建会话；body 可为空）。 */
+export interface CreateSessionRequestPayload {
+  /** 模型选择（可选；缺省用被驱动端默认模型）。 */
+  model?: WorkerModelRef | null;
+}
+
+/** POST /sessions 响应体（创建会话）。 */
+export interface CreateSessionResponsePayload {
+  /** 新建的会话 id（被驱动端会话 id）。 */
+  sessionId: string;
+}
+
+/** POST /sessions/:id/prompt 请求体（下发提示）。 */
+export interface SessionPromptRequestPayload {
+  /** 提示内容：字符串（归一为单条文本内容单元）或内容单元数组。 */
+  prompt: string | unknown[];
+  /** 模型选择（可选；缺省用被驱动端默认模型）。 */
+  model?: WorkerModelRef | null;
+  /** agent 选择（可选；缺省用被驱动端默认 agent）。 */
+  agent?: string;
+  /** 会话工作目录（可选）。 */
+  directory?: string;
+  /** 顶层系统提示（产出物协议/@机制等；可选）。 */
+  system?: string;
+  /** 投递策略（可选；缺省 = 被驱动端默认）。 */
+  delivery?: WorkerDeliveryMode;
+}
+
+/**
+ * POST /sessions/:id/prompt 响应体。
+ *
+ * ⚠️ **语义边界**：本端点是「**持久化入队**」，**不是**「同步执行」——响应里
+ * **没有任何**「agent 已答复」的含义。终态只能看事件（`session.execution.*`）
+ * 或再读 `GET /sessions/:id/messages`。
+ */
+export interface SessionPromptResponsePayload {
+  /** 目标会话 id。 */
+  sessionId: string;
+  /**
+   * 被驱动端回执的**收件条目 id**（被驱动端的 inbox item id）。
+   * 被驱动端无回执概念时**缺席**（不编造）。
+   */
+  messageId?: string;
+  /**
+   * **实际生效**的投递策略（以驱动回执为准——被驱动端可能调整过；驱动不回报时
+   * 退回本次请求的值；两者都无 → 缺席 = 被驱动端默认）。
+   */
+  delivery?: WorkerDeliveryMode;
+  /**
+   * true = 已被**持久化入队**（admitted）。
+   * ⚠️ 它**不代表** agent 已答复，更不代表本轮已完成。
+   */
+  admitted: boolean;
+}
+
+/**
+ * POST /sessions/:id/abort 响应体。
+ *
+ * `interrupted`：true = 确实打断了一轮正在执行的 run；false = 没有（会话空闲/未知）。
+ *
+ * ⚠️ 驱动契约的 `abort` **无回执细节**（被驱动端的中断结果由驱动内部消化），
+ * 故该字段多数情况为 false——它是**弱信号**，**幂等语义不依赖它**
+ * （对未知/已结束的会话调用一律 200 成功）。
+ */
+export interface SessionAbortResponsePayload {
+  sessionId: string;
+  interrupted: boolean;
+}
+
+/** token 用量（vteam 上报口径）。 */
+export interface SessionTokenUsage {
+  total?: number;
+  input?: number;
+  output?: number;
+  reasoning?: number;
+  cache?: { read?: number; write?: number };
+}
+
+/**
+ * 会话消息内容单元（vteam 侧渲染模型）。
+ *
+ * 字段口径 = vteam 渲染层/事件信封的 part 形状（`messageID`/`type`/`text`/
+ * `summary`/`thoughts`/`detail`/`state`/`tool`/`synthetic`/`time`）——**不是**某一版
+ * 被驱动端 wire 字段名的照搬。
+ */
+export interface SessionMessageContent {
+  /** 内容单元 id（增量去重键）。 */
+  id?: string;
+  /** 所属会话 id。 */
+  sessionID?: string;
+  /** 所属消息 id（控制面按此关联消息，勿改名）。 */
+  messageID?: string;
+  /** 内容类别（text/reasoning/tool/error/…）。 */
+  type: string;
+  /** 文本正文。 */
+  text?: string;
+  /** 思考摘要。 */
+  summary?: string;
+  /** 思考明细。 */
+  thoughts?: string;
+  /** 明细。 */
+  detail?: string;
+  /** 结算/结束原因（stop / tool-calls / error）。 */
+  reason?: string;
+  /** 成本。 */
+  cost?: number;
+  /** token 用量。 */
+  tokens?: SessionTokenUsage;
+  /** 时间戳（部分内容为 null）。 */
+  time?: { start?: number; end?: number; created?: number } | null;
+  /** true = 合成文本（工具调用占位，非模型真实输出），聚合时排除。 */
+  synthetic?: boolean;
+  /** 工具名（tool 类内容）。 */
+  tool?: string;
+  /** 工具执行状态（tool 类内容），原样透传。 */
+  state?: unknown;
+  /** 错误详情（error 类内容），原样透传。 */
+  error?: unknown;
+  /** 其余原始字段原样透传（渲染兜底/诊断用；vteam 不解释其语义）。 */
+  [key: string]: unknown;
+}
+
+/** 会话消息元信息（vteam 侧）。 */
+export interface SessionMessageInfo {
+  id: string;
+  role: 'user' | 'assistant';
+  /** 消息时间戳。 */
+  time?: { created?: number; completed?: number };
+  /** 消息级错误（模型调用失败等）。 */
+  error?: unknown;
+  /** 实际使用模型的 provider 段（缺失 = 未回报）。 */
+  providerID?: string;
+  /** 实际使用模型的 model 段（缺失 = 未回报）。 */
+  modelID?: string;
+  [key: string]: unknown;
+}
+
+/** 一条会话消息（vteam 侧）。 */
+export interface SessionMessage {
+  info: SessionMessageInfo;
+  parts: SessionMessageContent[];
+}
+
+/**
+ * GET /sessions/:id/messages 的分页 query（vteam 口径）。
+ *
+ * 与被驱动端上游的 `limit` / `order` / `cursor` 三个参数同名同义——但**形状是
+ * vteam 自己的**：控制面只需要能翻页，不需要知道上游的分页返回体长什么样。
+ */
+export interface SessionMessagesQuery {
+  /** 单页条数上限（缺省 = 被驱动端默认）。 */
+  limit?: number;
+  /** 排序方向（缺省 = 被驱动端默认）。 */
+  order?: 'asc' | 'desc';
+  /** 游标（缺省 = 从头翻）。 */
+  cursor?: string;
+}
+
+/** GET /sessions/:id/messages 响应体（读会话消息）。 */
+export interface SessionMessagesResponsePayload {
+  /** 目标会话 id。 */
+  sessionId: string;
+  /** 消息列表（vteam 渲染模型形状）。 */
+  messages: SessionMessage[];
 }

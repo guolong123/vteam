@@ -1,10 +1,16 @@
 /**
- * 平台内置 git 工具族定义与注入机制（T5，17 篇 §4）。
+ * 平台内置 git 工具族定义与注入机制（T5，17 篇 §4；T19 改为 v2 插件形态）。
  *
  * 工具清单对齐 17 篇 §4.1（git_clone/git_pull/git_fetch/git_status/git_diff/git_log/git_push）；
- * 注入落点：worker 实例侧 .opencode/tools/git.ts（17 篇 §4.2 路径①：目录扫描自动注册）。
- * 单文件具名导出，工具名 = <文件名>_<导出名>（git.ts 导出 clone → git_clone），
- * 工具名即权限 action。
+ * 注入落点：worker 实例侧 **.opencode/plugins/git.ts**（T19：v2 已移除 `.opencode/tools/`
+ * 的文件自动发现，工具**只能**经插件 `ctx.tool.transform` 注册；v1 同样扫描
+ * `.opencode/plugins/` ⇒ **同一份产物**在两代 serve 下都能被加载）。
+ * 单文件多工具，工具名 = `git_<导出名>`（git.ts 导出 clone → git_clone），工具名即权限 action。
+ *
+ * 产物形态（T19）：**v1/v2 双形态插件模块**——
+ * - v2：`Plugin.define({ id, setup(ctx) { ctx.tool.transform(...) } })`，入参 JSON Schema、
+ *   返回 `{ content }`、**必写** `options: { codemode: false }`；
+ * - v1：`async server()` 返回 `{ tool: { git_clone: tool({...}) } }`（Zod 入参、字符串返回）。
  *
  * todo 4（凭证注入升级）：renderGitToolsFile 生成的 git.ts 为自包含文件（不 import worker 源码，
  * 由 opencode serve 独立执行）。clone/pull/fetch/push 执行时读取平台下发的凭证白名单
@@ -18,11 +24,19 @@ import * as child_process from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import {
+  CustomToolArg,
+  PluginToolSpec,
+  renderPluginModule,
+} from '../resources/custom-tool';
 
-/** 注入目标目录（相对 opencode serve 工作目录，17 篇 §4.2）。 */
-export const GIT_TOOLS_REL_DIR = path.join('.opencode', 'tools');
+/** 注入目标目录（相对 opencode serve 工作目录，17 篇 §4.2；T19：v2 插件目录）。 */
+export const GIT_TOOLS_REL_DIR = path.join('.opencode', 'plugins');
 
-/** 工具文件名（17 篇 §4.2 单文件具名导出形态）。 */
+/** 历史落点（v1 形态工具文件）：T19 升级后必须清掉（v2 不再发现 `.opencode/tools/`）。 */
+export const GIT_TOOLS_LEGACY_REL_DIR = path.join('.opencode', 'tools');
+
+/** 工具文件名（17 篇 §4.2 单文件多工具形态）。 */
 export const GIT_TOOL_FILE = 'git.ts';
 
 /** 平台 git 凭证落盘路径（todo 3 契约；渲染产物内联同名常量）。 */
@@ -210,17 +224,21 @@ export function normalizeSshKey(key: string): string {
     return Buffer.concat([Buffer.from([0x30]), derLen(body.length), body]);
   };
   // 模逆（扩展欧几里得，BigInt）。
+  // BigInt(...) 包裹是**必要的**：本函数经 toString() 内联进渲染产物时 TS 注解会被抹掉
+  // （产物里 `let oldR = ((a % m) + m) % m` 的 a/m 退化成 any → oldR 被推成 number → 与
+  // bigint 字面量混算报 TS2365/TS2367）。BigInt() 在运行时是恒等（bigint 进 bigint 出），
+  // 但能让编译产物保持 bigint 推断 → 渲染产物能过 tsc 的类型检查。
   const modInverse = (a: bigint, m: bigint): bigint => {
-    let oldR = ((a % m) + m) % m;
-    let r = m;
-    let oldS = 1n;
-    let s = 0n;
-    while (r !== 0n) {
+    let oldR = BigInt(((a % m) + m) % m);
+    let r = BigInt(m);
+    let oldS = BigInt(1);
+    let s = BigInt(0);
+    while (r !== BigInt(0)) {
       const q = oldR / r;
       [oldR, r] = [r, oldR - q * r];
       [oldS, s] = [s, oldS - q * s];
     }
-    if (oldR !== 1n) {
+    if (oldR !== BigInt(1)) {
       throw new Error('cannot build pkcs1 private key: no modular inverse for q mod p');
     }
     return ((oldS % m) + m) % m;
@@ -629,23 +647,17 @@ export const GIT_TOOLS: readonly GitToolDef[] = [
 const REMOTE_EXPORT_NAMES = ['clone', 'pull', 'fetch', 'push'] as const;
 
 /**
- * 渲染 .opencode/tools/git.ts 文件内容（opencode 自定义工具具名导出格式）。
- * 导出名 → 工具名 <文件名>_<导出名>；生成的 git.ts 自包含：凭证辅助函数经 toString()
- * 内联（本文件实现 = 渲染产物实现），不 import worker 源码。
+ * 渲染 **v1/v2 双形态插件模块** `.opencode/plugins/git.ts`。
+ *
+ * 导出名 → 工具名 `git_<导出名>`（`git_clone` 等，权限 action 不变）；
+ * 生成的 git.ts 自包含：凭证辅助函数经 toString() 内联（本文件实现 = 渲染产物实现），
+ * 不 import worker 源码。
  */
 export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): string {
-  const renderArgSchema = (arg: GitToolArg): string => {
-    const schemaType = arg.type === 'integer' ? 'number' : arg.type;
-    const base = `tool.schema.${schemaType}()`;
-    const schema = arg.required ? base : `${base}.optional()`;
-    return `${schema}.describe(${JSON.stringify(arg.description)})`;
-  };
-
-  const renderTool = (def: GitToolDef): string => {
-    const argLines = def.args
-      .map((arg) => `    ${arg.name}: ${renderArgSchema(arg)},`)
-      .join('\n');
-
+  const renderTool = (
+    def: GitToolDef,
+    index: number,
+  ): { spec: PluginToolSpec; impl: string[] } => {
     const isRemote = (REMOTE_EXPORT_NAMES as readonly string[]).includes(def.exportName);
     let executeLines: string[];
     if (isRemote) {
@@ -717,92 +729,106 @@ export function renderGitToolsFile(defs: readonly GitToolDef[] = GIT_TOOLS): str
         'return runGit(gitArgs, {}, workdir);',
       ];
     }
-    const executeBody = executeLines.map((line) => `    ${line}`).join('\n');
 
-    return [
-      `export const ${def.exportName} = tool({`,
-      `  description: ${JSON.stringify(def.description)},`,
-      `  args: {`,
-      argLines,
-      `  },`,
-      `  async execute(args) {`,
-      `    // ${def.executeHint}`,
-      executeBody,
-      `  },`,
-      `});`,
-    ].join('\n');
+    const execFn = `__vteam_exec_${index + 1}`;
+    const impl = [
+      `/** ${def.name} 的共享实现（v1/v2 两侧共用）。 */`,
+      `async function ${execFn}(args: any): Promise<string> {`,
+      `  // ${def.executeHint}`,
+      ...executeLines.map((line) => `  ${line}`),
+      '}',
+    ];
+
+    const args: CustomToolArg[] = def.args.map((arg) => ({
+      name: arg.name,
+      type: arg.type,
+      required: arg.required,
+      description: arg.description,
+    }));
+
+    return {
+      impl,
+      spec: {
+        name: def.name,
+        description: def.description,
+        args,
+        execFn,
+        v2Call: `${execFn}(input)`,
+        v1Call: `${execFn}(args)`,
+      },
+    };
   };
 
-  return [
-    '/**',
-    ' * 平台内置 git 工具族（17 篇 §4.1）——由 worker T5 自动注入。',
-    ' * 工具名 = <文件名>_<导出名>（如 git_clone），即权限 action。',
-    ' * execute：clone/pull/fetch 无匹配凭证时直接直连（公开仓库零配置），有匹配走凭证白名单',
-    ' * （~/.keta-git-creds.json），push 仍严格要求凭证 + write 授权；',
-    ' * SSH 走 GIT_SSH_COMMAND 临时 key / HTTPS 走 GIT_ASKPASS 临时脚本，try/finally 清理；',
-    ' * push 额外校验 write 授权；status/diff/log 本地只读不加载凭证。',
-    ' * 凭证面由 server 下发白名单控制，错误信息不含明文 key。',
-    ' */',
-    'import { tool } from "@opencode-ai/plugin";',
-    'import * as child_process from "node:child_process";',
-    'import * as crypto from "node:crypto";',
-    'import * as fs from "node:fs";',
-    'import * as os from "node:os";',
-    'import * as path from "node:path";',
-    '',
-    'const GIT_CREDS_FILE = path.join(os.homedir(), ".keta-git-creds.json");',
-    '',
-    'interface GitCredentialEntry {',
-    '  repoUrl: string;',
-    '  authType: string;',
-    '  key: string;',
-    '  fingerprint?: string;',
-    '  permission?: string;',
-    '}',
-    '',
+  const rendered = defs.map(renderTool);
+
+  const preamble: string[] = [
+    [
+      'const GIT_CREDS_FILE = path.join(os.homedir(), ".keta-git-creds.json");',
+      '',
+      'interface GitCredentialEntry {',
+      '  repoUrl: string;',
+      '  authType: string;',
+      '  key: string;',
+      '  fingerprint?: string;',
+      '  permission?: string;',
+      '}',
+    ].join('\n'),
     normalizeRepoUrl.toString(),
-    '',
     loadCredential.toString(),
-    '',
     tryLoadCredential.toString(),
-    '',
     normalizeSshKey.toString(),
-    '',
     writeTempKey.toString(),
-    '',
     writeAskpass.toString(),
-    '',
     cleanupTemp.toString(),
-    '',
     buildGitEnv.toString(),
-    '',
     runGit.toString(),
-    '',
     cwdOrigin.toString(),
-    '',
     defaultRepoName.toString(),
-    '',
     resolveCloneTarget.toString(),
-    '',
     isSameRepoCheckout.toString(),
-    '',
     prepareCloneTarget.toString(),
-    '',
     _buildGitArgs.toString(),
-    '',
-    ...defs.map(renderTool),
-    '',
-  ].join('\n');
+    ...rendered.map((r) => r.impl.join('\n')),
+  ];
+
+  return renderPluginModule({
+    id: 'vteam-tools-git',
+    header: [
+      '平台内置 git 工具族（17 篇 §4.1）——由 worker T5 自动注入。',
+      '产物形态（T19）：**v1/v2 双形态插件模块**（`.opencode/plugins/git.ts`）。',
+      '工具名 = git_<导出名>（如 git_clone），即权限 action；v1/v2 两侧完全一致。',
+      'execute：clone/pull/fetch 无匹配凭证时直接直连（公开仓库零配置），有匹配走凭证白名单',
+      '（~/.keta-git-creds.json），push 仍严格要求凭证 + write 授权；',
+      'SSH 走 GIT_SSH_COMMAND 临时 key / HTTPS 走 GIT_ASKPASS 临时脚本，try/finally 清理；',
+      'push 额外校验 write 授权；status/diff/log 本地只读不加载凭证。',
+      '凭证面由 server 下发白名单控制，错误信息不含明文 key。',
+    ],
+    imports: [
+      'import * as child_process from "node:child_process";',
+      'import * as crypto from "node:crypto";',
+      'import * as fs from "node:fs";',
+      'import * as os from "node:os";',
+      'import * as path from "node:path";',
+    ],
+    preamble,
+    tools: rendered.map((r) => r.spec),
+  });
 }
 
 /**
  * 把 git 工具族注入到 opencode serve 工作目录（worker 启动时调用，17 篇 §4.2）。
- * 写入 <workDir>/.opencode/tools/git.ts，返回写入的文件完整路径。
+ *
+ * 写入 `<workDir>/.opencode/plugins/git.ts`（v2 的插件发现路径；v1 也扫描该目录 ⇒
+ * 同一份产物两代通用），并清掉升级前的 v1 形态残留 `<workDir>/.opencode/tools/git.ts`
+ * （v2 已不发现该目录，留着只会误导读者与清理逻辑）。
+ *
+ * @returns 写入的文件完整路径。
  */
 export function installGitTools(workDir: string, defs: readonly GitToolDef[] = GIT_TOOLS): string {
   const toolsDir = path.join(workDir, GIT_TOOLS_REL_DIR);
   fs.mkdirSync(toolsDir, { recursive: true });
   const filePath = path.join(toolsDir, GIT_TOOL_FILE);
   fs.writeFileSync(filePath, renderGitToolsFile(defs), 'utf8');
+  fs.rmSync(path.join(workDir, GIT_TOOLS_LEGACY_REL_DIR, GIT_TOOL_FILE), { force: true });
   return filePath;
 }

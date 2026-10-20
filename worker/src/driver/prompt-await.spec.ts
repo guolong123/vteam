@@ -1,7 +1,7 @@
 /**
- * prompt-await 单元测试（T4，D2 完成判定铁律）。
+ * prompt-await 单元测试（T4 + T14，D2 完成判定铁律）。
  *
- * mock V1Driver，覆盖：
+ * mock 驱动接缝（OpenCodeDriver 的三个方法），覆盖：
  * - 完成判定：assistant 消息含 step-finish(reason=stop) → 返回文本/tokens/cost
  * - 实际模型：info.providerID/modelID → CompletionResult.model（缺失/半截/非字符串 → undefined）
  * - 无 step-finish 持续轮询（getMessages 多次调用）
@@ -13,20 +13,40 @@
  * - 文本聚合：多段按时间排序、messageID 分组、排除 synthetic 合成文本
  * - findFinish：user 消息带 step-finish 不判定（必须 assistant）
  * - sendAndAwait：sendMessage → awaitCompletion 组合
+ *
+ * T14（v2 语义）覆盖：
+ * - 五条语义逐条对齐 v1 口径：完成判定 / 首字 / 在飞工具态 / 文本聚合 / 错误抽取
+ * - **真 V2Driver + 假 v2 server**：把 v2 的 wire 消息喂给真驱动，再喂给语义层——
+ *   证明「v1 形状的 part 契约在 v2 上继续成立」（完成判定/聚合/错误抽取都验一遍）
+ * - 终态与事件路合流：轮询路**先问闸门、记下自己的证据**，一轮只收口一次
  */
 
+import * as http from 'http';
 import {
   awaitCompletion,
   sendAndAwait,
   aggregateText,
   findFinish,
   findAssistantModel,
+  isFirstTokenEvent,
   CompletionTimeoutError,
+  RunTerminalError,
   describeTimeoutReason,
   extractServeError,
   MessageDeltaTracker,
 } from './prompt-await';
-import { V1Driver, ServeMessage, ServePart } from './v1-driver';
+import type { EventSignal, RunOutcome } from './prompt-await';
+import { RunTerminalGate } from './v2-event-map';
+import { V2Driver } from './v2-driver';
+import type {
+  DriverContent,
+  DriverMessage,
+  OpenCodeDriver,
+} from './opencode-driver';
+
+/** vteam 侧的 part / message 类型（接缝文件自有；T18 起不再经 v1 driver 的兼容别名）。 */
+type ServePart = DriverContent;
+type ServeMessage = DriverMessage;
 
 function userMsg(parts: ServePart[] = []): ServeMessage {
   return { info: { id: 'm_user', role: 'user' }, parts };
@@ -63,7 +83,7 @@ function stepFinishPart(over: { reason?: string; cost?: number; tokens?: unknown
 }
 
 function mockDriver(): {
-  driver: V1Driver;
+  driver: OpenCodeDriver;
   getMessages: jest.Mock;
   abort: jest.Mock;
   sendMessage: jest.Mock;
@@ -71,7 +91,23 @@ function mockDriver(): {
   const getMessages = jest.fn();
   const abort = jest.fn();
   const sendMessage = jest.fn();
-  const driver = { getMessages, abort, sendMessage } as unknown as V1Driver;
+  const driver: OpenCodeDriver = {
+    baseUrl: 'http://127.0.0.1:4199',
+    authPassword: '',
+    createSession: jest.fn().mockResolvedValue('ses_stub'),
+    sendMessage,
+    getMessages,
+    listQuestions: jest.fn().mockResolvedValue([]),
+    replyQuestion: jest.fn().mockResolvedValue(undefined),
+    rejectQuestion: jest.fn().mockResolvedValue(undefined),
+    listPermissions: jest.fn().mockResolvedValue([]),
+    replyPermission: jest.fn().mockResolvedValue(undefined),
+    abort,
+    listAgents: jest.fn().mockResolvedValue([]),
+    listTodos: jest.fn().mockResolvedValue([]),
+    listModels: jest.fn().mockResolvedValue([]),
+    isHealthy: jest.fn().mockResolvedValue(true),
+  };
   return { driver, getMessages, abort, sendMessage };
 }
 
@@ -1393,5 +1429,592 @@ describe('MessageDeltaTracker.admitSsePart（SSE 路单调准入：拒绝回退�
     expect(tracker.admitSsePart(text('abc'), 'delta')).toBe(true);
     tracker.reset();
     expect(tracker.admitSsePart(text('a'), 'delta')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T14：v2 语义（五条语义逐条对齐 v1 口径 + 终态与事件路合流）
+// ---------------------------------------------------------------------------
+
+/** 假 v2 server：`GET /api/session/:id/message` 返回预置的 **v2 wire 消息**。 */
+async function startFakeV2MessageServer(messages: unknown[]): Promise<{
+  baseUrl: string;
+  close(): Promise<void>;
+}> {
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+      const send = (status: number, payload: unknown): void => {
+        const text = JSON.stringify(payload);
+        res.writeHead(status, {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(text),
+        });
+        res.end(text);
+      };
+      if (req.method === 'GET' && /^\/api\/session\/[^/]+\/message$/.test(url.pathname)) {
+        send(200, { data: messages, cursor: { previous: null, next: null } });
+        return;
+      }
+      if (req.method === 'POST' && /^\/api\/session\/[^/]+\/interrupt$/.test(url.pathname)) {
+        send(200, { data: { interrupted: false } });
+        return;
+      }
+      send(404, { error: 'not found' });
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address !== null ? address.port : 0;
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+/** v2 的 assistant 消息（wire 形状；`finish` 缺省 = 该步还没结束）。 */
+function v2Assistant(
+  over: {
+    id?: string;
+    content?: unknown[];
+    finish?: string;
+    cost?: number;
+    tokens?: unknown;
+    error?: unknown;
+    created?: number;
+    completed?: number;
+  } = {},
+): Record<string, unknown> {
+  const created = over.created ?? 1000;
+  return {
+    id: over.id ?? 'msg_a1',
+    type: 'assistant',
+    time: { created, ...(over.completed !== undefined ? { completed: over.completed } : {}) },
+    agent: 'build',
+    model: { id: 'spike-model', providerID: 'spike-mock' },
+    ...(over.finish !== undefined ? { finish: over.finish, rawFinish: over.finish } : {}),
+    ...(over.cost !== undefined ? { cost: over.cost } : {}),
+    ...(over.tokens !== undefined ? { tokens: over.tokens } : {}),
+    ...(over.error !== undefined ? { error: over.error } : {}),
+    ...(over.content !== undefined ? { content: over.content } : {}),
+  };
+}
+
+/** 事件路信号的可控替身（结构上等价 v2 的 `RunTerminalGate` + 一个首字标志）。 */
+class FakeEventSignal implements EventSignal {
+  private outcome: RunOutcome | null = null;
+  /** 轮询路记进闸门的证据（用于断言「轮询路也留了痕」）。 */
+  readonly pollingEvidence: RunOutcome[] = [];
+  firstTokenSeen = false;
+
+  peek(): RunOutcome | null {
+    return this.outcome;
+  }
+
+  notePolling(outcome: RunOutcome): void {
+    this.pollingEvidence.push(outcome);
+  }
+
+  firstToken(): boolean {
+    return this.firstTokenSeen;
+  }
+
+  /** 事件路送来终态证据。 */
+  setTerminal(outcome: RunOutcome | null): void {
+    this.outcome = outcome;
+  }
+}
+
+describe('T14 完成判定（v2）', () => {
+  it('有 assistant 正文但无终态信号 → 不判完成（v1 铁律在 v2 继续成立）', async () => {
+    const server = await startFakeV2MessageServer([
+      // 消息已产出正文，但**没有 finish** ⇒ 驱动不合成 step-finish ⇒ 不是终态
+      v2Assistant({ content: [{ type: 'text', text: 'MOCK_OK' }] }),
+    ]);
+    try {
+      const driver = new V2Driver({ baseUrl: server.baseUrl });
+      const messages = await driver.getMessages('ses_1');
+      expect(findFinish(messages)).toBeUndefined();
+      expect(aggregateText(messages)).toBe('MOCK_OK');
+      // 轮询路也不会把它当完成（首字已出现 → 无首字超时，只能靠总时长上限收尾）
+      const err = (await awaitCompletion(driver, 'ses_1', {
+        firstTokenTimeoutMs: 30,
+        totalTimeoutMs: 120,
+        pollMs: 5,
+      }).catch((e: unknown) => e)) as CompletionTimeoutError;
+      expect(err).toBeInstanceOf(CompletionTimeoutError);
+      expect(err.message).toContain('执行总时长超限');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('消息带 finish=stop → 驱动合成 step-finish(reason=stop) → 判完成，正文/用量/模型齐出', async () => {
+    const server = await startFakeV2MessageServer([
+      v2Assistant({
+        content: [{ type: 'text', text: 'MOCK_OK' }],
+        finish: 'stop',
+        cost: 0.25,
+        tokens: { input: 50, output: 8 },
+        completed: 2000,
+      }),
+    ]);
+    try {
+      const driver = new V2Driver({ baseUrl: server.baseUrl });
+      const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 1000, pollMs: 5 });
+      expect(result.text).toBe('MOCK_OK');
+      expect(result.cost).toBe(0.25);
+      expect(result.tokens).toEqual({ input: 50, output: 8 });
+      expect(result.model).toEqual({ providerID: 'spike-mock', modelID: 'spike-model' });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('finish=tool-calls → 不判完成（tool-calls 不是 stop；v2 实测中间步骤就是它）', async () => {
+    const server = await startFakeV2MessageServer([
+      v2Assistant({
+        content: [{ type: 'tool', id: 'call_1', name: 'spike_probe', executed: false }],
+        finish: 'tool-calls',
+      }),
+    ]);
+    try {
+      const driver = new V2Driver({ baseUrl: server.baseUrl });
+      const messages = await driver.getMessages('ses_1');
+      expect(findFinish(messages)).toBeUndefined();
+      await expect(
+        awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 40, pollMs: 5 }),
+      ).rejects.toBeInstanceOf(CompletionTimeoutError);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('事件路 session.execution.succeeded → 判完成（v2 的 run 级结果只在事件路有）', async () => {
+    const { driver, getMessages } = mockDriver();
+    // 轮询路**永远**看不到 step-finish（v2 的 idle 消息被驱动丢弃，轮询路看不到 outcome）
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('MOCK_OK', 100)])]);
+    const signal = new FakeEventSignal();
+    signal.setTerminal({ verdict: 'succeeded' });
+
+    const result = await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      eventSignal: signal,
+    });
+    expect(result.text).toBe('MOCK_OK');
+    expect(result.terminalEvidence).toBe('event');
+  });
+});
+
+describe('T14 首字判定（v2：轮询路四例 + 事件路四例）', () => {
+  const cases: { name: string; parts: ServePart[]; expected: boolean }[] = [
+    { name: '非空 text part', parts: [textPart('你好', 100)], expected: true },
+    { name: '仅 reasoning part（思考也算已响应）', parts: [{ id: 'p1', type: 'reasoning', text: '' }], expected: true },
+    { name: '空 text part（空文本不算首字）', parts: [textPart('   ', 100)], expected: false },
+    { name: '无任何输出', parts: [{ id: 'p1', type: 'step-start' }], expected: false },
+  ];
+
+  it.each(cases)('轮询路：$name', async ({ parts, expected }) => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', parts)]);
+    // 用**总时长上限**收尾（首字出现后没有完成超时，否则本例会永远轮询下去）：
+    // 判据 = 触发的是「执行总时长超限」（首字已出现）还是「等待首字超时」（首字没出现）。
+    const err = (await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 30,
+      totalTimeoutMs: 120,
+      pollMs: 5,
+    }).catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err).toBeInstanceOf(CompletionTimeoutError);
+    if (expected) {
+      expect(err.message).toContain('执行总时长超限');
+      expect(err.message).not.toContain('等待首字超时');
+    } else {
+      expect(err.message).toContain('等待首字超时');
+    }
+  });
+
+  it('事件路四例：非空 text.delta / 任意 reasoning 事件 / 空 text.delta / 无事件', () => {
+    // v1 的「非空 text」对应事件路的**非空** text.delta
+    expect(isFirstTokenEvent({ type: 'session.text.delta', data: { delta: '你好' } })).toBe(true);
+    // v1 的「仅 reasoning」对应事件路的 reasoning.started / reasoning.delta（任意都算）
+    expect(isFirstTokenEvent({ type: 'session.reasoning.started', data: {} })).toBe(true);
+    expect(isFirstTokenEvent({ type: 'session.reasoning.delta', data: { delta: '想…' } })).toBe(true);
+    // v1 的「空 text」对应事件路的空 text.delta / text.started（空文本不算首字）
+    expect(isFirstTokenEvent({ type: 'session.text.delta', data: { delta: '' } })).toBe(false);
+    expect(isFirstTokenEvent({ type: 'session.text.started', data: {} })).toBe(false);
+    // v1 的「无任何输出」= 没有任何相关事件
+    expect(isFirstTokenEvent({ type: 'session.execution.started', data: {} })).toBe(false);
+    expect(isFirstTokenEvent({})).toBe(false);
+  });
+
+  it('事件路首字 → 不触发首字超时（纯思考/纯事件流不被误杀）', async () => {
+    const { driver, getMessages } = mockDriver();
+    // 轮询路**看不到**任何输出（v2 的 reasoning 尚未落进消息快照）
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
+    const signal = new FakeEventSignal();
+    signal.firstTokenSeen = true;
+
+    const err = (await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 30,
+      totalTimeoutMs: 120,
+      pollMs: 5,
+      eventSignal: signal,
+    }).catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err).toBeInstanceOf(CompletionTimeoutError);
+    // 首字已出现（事件路给的）⇒ 触发的不是「等待首字超时」
+    expect(err.message).not.toContain('等待首字超时');
+    expect(err.message).toContain('执行总时长超限');
+  });
+});
+
+describe('T14 在飞工具态（v2 无 pending）', () => {
+  const inFlight: { status: string; expected: boolean }[] = [
+    { status: 'running', expected: true },
+    { status: 'streaming', expected: true },
+    { status: 'completed', expected: false },
+    { status: 'error', expected: false },
+    // v1 形态仍在集合里（回退路径不退化）；v2 上游**不会**产出它
+    { status: 'pending', expected: true },
+  ];
+
+  it.each(inFlight)('state.status=$status → 首字超时豁免=$expected', async ({ status, expected }) => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([
+      asstMsg('a1', [
+        { id: 'tp1', type: 'tool', tool: 'vteam_secret_command', state: { status, time: { start: 1 } } },
+      ]),
+    ]);
+    // 判据同上：在飞 ⇒ 触发的是总时长上限（首字超时没触发）；不在飞 ⇒ 触发首字超时
+    const err = (await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 30,
+      totalTimeoutMs: 120,
+      pollMs: 5,
+    }).catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err).toBeInstanceOf(CompletionTimeoutError);
+    if (expected) {
+      expect(err.message).toContain('执行总时长超限');
+      expect(err.message).not.toContain('等待首字超时');
+    } else {
+      expect(err.message).toContain('等待首字超时');
+    }
+  });
+
+  it('v2 形状的工具 part（只有 running → completed）→ 在飞窗口内豁免生效', async () => {
+    const server = await startFakeV2MessageServer([
+      v2Assistant({
+        content: [
+          {
+            type: 'tool',
+            id: 'call_1',
+            name: 'spike_probe',
+            executed: false,
+            state: { status: 'running', input: { ms: 6000 } },
+            time: { created: 1000, ran: 1001 },
+          },
+        ],
+      }),
+    ]);
+    try {
+      const driver = new V2Driver({ baseUrl: server.baseUrl });
+      const err = (await awaitCompletion(driver, 'ses_1', {
+        firstTokenTimeoutMs: 30,
+        totalTimeoutMs: 120,
+        pollMs: 5,
+      }).catch((e: unknown) => e)) as CompletionTimeoutError;
+      expect(err).toBeInstanceOf(CompletionTimeoutError);
+      // 工具在飞 ⇒ 豁免 ⇒ 不 abort（错误来自「首字后无完成超时」而非首字超时）
+      expect(err.message).not.toContain('等待首字超时');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('大小写不敏感（OpenAPI 的类型名形态 Running/Streaming 也算在飞）', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([
+      asstMsg('a1', [
+        { id: 'tp1', type: 'tool', tool: 'x', state: { status: 'Running', time: { start: 1 } } },
+      ]),
+    ]);
+    const err = (await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 30,
+      totalTimeoutMs: 120,
+      pollMs: 5,
+    }).catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err).toBeInstanceOf(CompletionTimeoutError);
+    expect(err.message).not.toContain('等待首字超时');
+  });
+});
+
+describe('T14 文本聚合（v2）', () => {
+  it('同一条消息的多段文本按 content 顺序拼接（v2 的 content[] 本身有序）', async () => {
+    const server = await startFakeV2MessageServer([
+      v2Assistant({
+        content: [
+          { type: 'text', text: '第一段' },
+          { type: 'text', text: '第二段' },
+        ],
+        finish: 'stop',
+        completed: 2000,
+      }),
+    ]);
+    try {
+      const driver = new V2Driver({ baseUrl: server.baseUrl });
+      const messages = await driver.getMessages('ses_1');
+      expect(aggregateText(messages)).toBe('第一段第二段');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('工具调用的输出不进回复正文（v2：工具是独立的 content 项，输出在 state.output 里）', async () => {
+    const server = await startFakeV2MessageServer([
+      v2Assistant({
+        id: 'msg_a1',
+        content: [
+          {
+            type: 'tool',
+            id: 'call_1',
+            name: 'spike_probe',
+            executed: false,
+            state: {
+              status: 'completed',
+              input: { note: 'hi' },
+              content: [{ type: 'text', text: 'SPIKE_PROBE_OK' }],
+            },
+            time: { created: 1000, ran: 1001, completed: 1002 },
+          },
+        ],
+        finish: 'tool-calls',
+      }),
+      v2Assistant({
+        id: 'msg_a2',
+        content: [{ type: 'text', text: 'MOCK_OK' }],
+        finish: 'stop',
+        created: 2000,
+        completed: 3000,
+      }),
+    ]);
+    try {
+      const driver = new V2Driver({ baseUrl: server.baseUrl });
+      const messages = await driver.getMessages('ses_1');
+      // 工具输出（SPIKE_PROBE_OK）不污染正文
+      expect(aggregateText(messages)).toBe('MOCK_OK');
+      // 调工具那条消息不是完成（tool-calls），最后一条才是（stop）
+      expect(findFinish(messages)?.reason).toBe('stop');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('synthetic 过滤在 v2 下是空操作（驱动从不设置该标记）→ 聚合结果不变', async () => {
+    const server = await startFakeV2MessageServer([
+      v2Assistant({ content: [{ type: 'text', text: '模型正文' }], finish: 'stop' }),
+    ]);
+    try {
+      const driver = new V2Driver({ baseUrl: server.baseUrl });
+      const messages = await driver.getMessages('ses_1');
+      const texts = messages.flatMap((m) => m.parts ?? []).filter((p) => p.type === 'text');
+      expect(texts).toHaveLength(1);
+      expect(texts[0]?.synthetic).toBeUndefined();
+      expect(aggregateText(messages)).toBe('模型正文');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('vteam 注入的 synthetic 文本仍被排除（该过滤的真实用途）', () => {
+    const msgs = [
+      asstMsg('a1', [textPart('注入上下文', 100, { synthetic: true }), textPart('模型正文', 200)]),
+    ];
+    expect(aggregateText(msgs)).toBe('模型正文');
+  });
+});
+
+describe('T14 错误抽取（v2 结构化错误 + 事件载荷 + 日志兜底）', () => {
+  it('v2 结构化错误 {type,message,status} → 透传 message 并附 HTTP 码', () => {
+    const msgs = [
+      asstErrMsg('a1', {
+        type: 'provider.auth',
+        message: 'Invalid API key.',
+        status: 401,
+        response: { body: '{"error":{"message":"Invalid API key."}}' },
+      }),
+    ];
+    expect(describeTimeoutReason(msgs)).toBe('模型调用报错：Invalid API key. (HTTP 401)');
+  });
+
+  it('v2 的失败消息**没有 content**（= parts=[]），错误只在 info.error → 提前失败并带详情', async () => {
+    const server = await startFakeV2MessageServer([
+      v2Assistant({
+        finish: 'error',
+        error: {
+          type: 'provider.auth',
+          message: 'Invalid API key.',
+          status: 401,
+          response: { body: '{"error":{"message":"Invalid API key."}}' },
+        },
+      }),
+    ]);
+    try {
+      const driver = new V2Driver({ baseUrl: server.baseUrl });
+      const messages = await driver.getMessages('ses_1');
+      // 失败消息的内容为空（v1 的 parts=[] 等价形态）——错误只在 info.error
+      expect(messages[0]?.parts.filter((p) => p.type === 'text')).toHaveLength(0);
+      const err = (await awaitCompletion(driver, 'ses_1', {
+        firstTokenTimeoutMs: 1000,
+        pollMs: 5,
+      }).catch((e: unknown) => e)) as CompletionTimeoutError;
+      expect(err).toBeInstanceOf(CompletionTimeoutError);
+      expect(err.message).toContain('Invalid API key.');
+      expect(err.message).toContain('HTTP 401');
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('事件路的 session.execution.failed 载荷 → 错误详情优先于轮询路的抽取', async () => {
+    const { driver, getMessages } = mockDriver();
+    // 轮询路只看到「没有内容的失败消息」，抽不出细节
+    getMessages.mockResolvedValue([asstErrMsg('a1', { type: 'provider.auth', message: '' })]);
+    const signal = new FakeEventSignal();
+    signal.setTerminal({ verdict: 'failed', error: 'Invalid API key.' });
+
+    const err = (await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      eventSignal: signal,
+    }).catch((e: unknown) => e)) as RunTerminalError;
+    expect(err).toBeInstanceOf(RunTerminalError);
+    expect(err.verdict).toBe('failed');
+    expect(err.message).toContain('Invalid API key.');
+  });
+
+  it('事件路与日志都还没到 → serve 日志兜底仍是最后一道（v1 行为不变）', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [{ id: 'p1', type: 'step-start' }])]);
+    const err = (await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      serveErrorReader: () => [
+        'message="stream error" error.error="AI_APICallError: Rate limit exceeded. Please try again later."',
+      ],
+      onServeError: (text) => /Rate limit/.test(text),
+    }).catch((e: unknown) => e)) as CompletionTimeoutError;
+    expect(err).toBeInstanceOf(CompletionTimeoutError);
+    expect(err.message).toContain('Rate limit exceeded. Please try again later.');
+  });
+});
+
+describe('T14 终态收口（与 RunTerminalGate 合流：一轮只收口一次）', () => {
+  it('轮询路与事件路都看到完成 → settle() 第二次返回 null（控制面只收一个 task.completed）', async () => {
+    const gate = new RunTerminalGate();
+    gate.noteEvent({ verdict: 'succeeded' });
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
+
+    const result = await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      eventSignal: gate,
+      eventGraceMs: 50,
+    });
+    expect(result.text).toBe('ok');
+    // 事件证据与轮询证据一致 → 证据来源标成 event
+    expect(result.terminalEvidence).toBe('event');
+    // 一次性收口：第一次拿到判定，第二次为空 ⇒ 终态事件只允许发一次
+    expect(gate.settle()).toEqual({ verdict: 'succeeded' });
+    expect(gate.settle()).toBeNull();
+  });
+
+  it('轮询路**不消耗**闸门的一次性收口（settle 由调用方做）', async () => {
+    const gate = new RunTerminalGate();
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
+
+    await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      eventSignal: gate,
+      eventGraceMs: 0,
+    });
+    // 轮询路把**自己的**证据记进了闸门，但没有把闸门收口掉
+    expect(gate.settle()).toEqual({ verdict: 'succeeded' });
+  });
+
+  it('事件路已判失败 → 轮询路不宣告成功（事件证据优先），且不再轮询', async () => {
+    const gate = new RunTerminalGate();
+    gate.noteEvent({ verdict: 'failed', error: 'Invalid API key.' });
+    const { driver, getMessages, abort } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
+
+    const err = (await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      eventSignal: gate,
+    }).catch((e: unknown) => e)) as RunTerminalError;
+    expect(err).toBeInstanceOf(RunTerminalError);
+    expect(err.verdict).toBe('failed');
+    expect(err.message).toContain('Invalid API key.');
+    // 事件证据优先 ⇒ 轮询路连消息都不拉（不可能宣告成功）
+    expect(getMessages).not.toHaveBeenCalled();
+    expect(abort).toHaveBeenCalledWith('ses_1');
+  });
+
+  it('轮询路先看到完成、事件路在宽限期内判失败 → 与「事件先到」同一个结论（事件证据优先）', async () => {
+    const gate = new RunTerminalGate();
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
+    const timer = setTimeout(() => gate.noteEvent({ verdict: 'failed', error: 'Invalid API key.' }), 20);
+
+    const err = (await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      eventSignal: gate,
+      eventGraceMs: 500,
+    }).catch((e: unknown) => e)) as RunTerminalError;
+    clearTimeout(timer);
+    expect(err).toBeInstanceOf(RunTerminalError);
+    expect(err.message).toContain('Invalid API key.');
+  });
+
+  it('陈旧的 durable seq 不能覆盖更新的终态证据（轮询路跟着新证据走）', async () => {
+    const gate = new RunTerminalGate();
+    // 新证据（seq 12）先到
+    gate.noteEvent({ verdict: 'failed', error: '新证据' }, { eventId: 'evt_2', aggregateId: 'ses_1', seq: 12 });
+    // 陈旧证据（seq 9）后到 → 闸门拒绝采纳
+    expect(
+      gate.noteEvent({ verdict: 'succeeded' }, { eventId: 'evt_1', aggregateId: 'ses_1', seq: 9 }),
+    ).toBe(false);
+
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
+    const err = (await awaitCompletion(driver, 'ses_1', {
+      firstTokenTimeoutMs: 1000,
+      pollMs: 5,
+      eventSignal: gate,
+    }).catch((e: unknown) => e)) as RunTerminalError;
+    expect(err).toBeInstanceOf(RunTerminalError);
+    expect(err.message).toContain('新证据');
+  });
+
+  it('证据来源写进结果（分歧可诊断）：轮询路独自判完成 → evidence=polling', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
+    const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 1000, pollMs: 5 });
+    expect(result.terminalEvidence).toBe('polling');
+  });
+
+  it('没有事件路（v1 回退路径）→ 行为零变化：不等待宽限期、证据=polling', async () => {
+    const { driver, getMessages } = mockDriver();
+    getMessages.mockResolvedValue([asstMsg('a1', [textPart('ok', 100), stepFinishPart()])]);
+    const started = Date.now();
+    const result = await awaitCompletion(driver, 'ses_1', { firstTokenTimeoutMs: 1000, pollMs: 5 });
+    expect(result.terminalEvidence).toBe('polling');
+    // 没有事件路就没有宽限期（不加延迟）
+    expect(Date.now() - started).toBeLessThan(200);
   });
 });

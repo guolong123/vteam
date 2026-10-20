@@ -7,6 +7,7 @@ import {
   GIT_TOOLS,
   GIT_TOOL_FILE,
   GIT_TOOLS_REL_DIR,
+  GIT_TOOLS_LEGACY_REL_DIR,
   installGitTools,
   renderGitToolsFile,
   GitToolDef,
@@ -25,6 +26,14 @@ import {
   cleanupTemp,
   runGit,
 } from './git-tools';
+
+/** 截取某个工具的共享实现体（按 executeHint 注释定位；v1/v2 两侧共用同一份实现）。 */
+function sliceImpl(content: string, hint: string): string {
+  const at = content.indexOf(`  // ${hint}`);
+  expect(at).toBeGreaterThan(-1);
+  const end = content.indexOf('\n}\n', at);
+  return content.slice(at, end > at ? end : content.length);
+}
 
 // loadCredential 单测需拦截 fs.readFileSync；jest.spyOn 在本环境对 Node 内置 fs 无效
 // （__importStar 生成模块副本），故模块级部分 mock：仅 readFileSync 为 jest.fn，其余真实。
@@ -130,43 +139,76 @@ describe('GIT_TOOLS 工具清单（17 篇 §4.1 七工具）', () => {
   });
 });
 
-describe('installGitTools / renderGitToolsFile（注入机制，17 篇 §4.2）', () => {
+describe('installGitTools / renderGitToolsFile（注入机制，17 篇 §4.2；T19 产物形态=插件）', () => {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'keta-git-tools-spec-'));
 
-  it('写入 <workDir>/.opencode/tools/git.ts 并返回完整路径', () => {
+  it('写入 <workDir>/.opencode/plugins/git.ts 并返回完整路径（v2 的插件发现路径）', () => {
     const filePath = installGitTools(workDir);
     expect(filePath).toBe(path.join(workDir, GIT_TOOLS_REL_DIR, GIT_TOOL_FILE));
     expect(fs.existsSync(filePath)).toBe(true);
+    expect(GIT_TOOLS_REL_DIR).toBe(path.join('.opencode', 'plugins'));
   });
 
-  it('生成内容为 opencode 自定义工具具名导出格式', () => {
+  it('升级前的 v1 形态残留 .opencode/tools/git.ts 被清掉', () => {
+    const legacy = path.join(workDir, GIT_TOOLS_LEGACY_REL_DIR, GIT_TOOL_FILE);
+    fs.mkdirSync(path.dirname(legacy), { recursive: true });
+    fs.writeFileSync(legacy, '// legacy v1 tool file\n', 'utf8');
+    installGitTools(workDir);
+    expect(fs.existsSync(legacy)).toBe(false);
+  });
+
+  it('生成内容为 v1/v2 双形态插件模块（Plugin.define + setup + server）', () => {
     const content = renderGitToolsFile();
-    expect(content).toContain('import { tool } from "@opencode-ai/plugin";');
+    expect(content).toContain('Plugin.define');
+    expect(content).toContain('id: "vteam-tools-git"');
+    expect(content).toContain('async setup(ctx: any)');
+    expect(content).toContain('ctx.tool.transform');
+    expect(content).toContain('async server()');
     expect(content).toContain('import * as child_process from "node:child_process";');
+    expect(content).toContain('function runGit(');
+  });
+
+  it('工具名规则不变：具名导出 → git_<导出名>（权限 action 不变）', () => {
+    const content = renderGitToolsFile();
     for (const tool of GIT_TOOLS) {
-      expect(content).toContain(`export const ${tool.exportName} = tool({`);
+      expect(content).toContain(`name: ${JSON.stringify(tool.name)},`);
       expect(content).toContain(`description: ${JSON.stringify(tool.description)},`);
     }
-    expect(content).toContain('function runGit(');
-    // 回归：remote 工具的 origin 解析必须带 workdir（否则 worker cwd 非仓库 → null → 误报未授权）
-    expect(content).toContain('cwdOrigin(workdir)');
-    expect(content).not.toContain('cwdOrigin();');
-    // workdir 必须先于 repoUrl 绑定（cwdOrigin(workdir) 依赖它）
-    for (const name of ['export const push = tool({', 'export const pull = tool({', 'export const fetch = tool({']) {
-      const at = content.indexOf(name);
-      expect(at).toBeGreaterThan(-1);
-      const body = content.slice(at, content.indexOf('});', at));
-      expect(body.indexOf('const workdir =')).toBeLessThan(
-        body.indexOf('cwdOrigin(workdir)'),
-      );
-    }
   });
 
-  it('生成内容含全部参数 schema（inputSchema）', () => {
+  it('每个工具注册都带 options: { codemode: false }（否则模型只能经 Code Mode 调）', () => {
+    const content = renderGitToolsFile();
+    expect(content.split('editor.add({').length - 1).toBe(GIT_TOOLS.length);
+    expect(content.split('options: { codemode: false },').length - 1).toBe(GIT_TOOLS.length);
+  });
+
+  it('v2 分支带 setup 防呆护栏（v1 也会调用 setup，其 ctx 没有 ctx.tool）', () => {
+    const content = renderGitToolsFile();
+    expect(content).toContain('if (!ctx?.tool?.transform) return');
+  });
+
+  it('插件 API 用动态 import（v1 二进制没有 @opencode/plugin，静态 import 会让模块加载失败）', () => {
+    const content = renderGitToolsFile();
+    expect(content).toContain('await import("@opencode/plugin")');
+    expect(content).not.toMatch(/^import \{ Plugin \} from "@opencode\/plugin"/m);
+  });
+
+  it('v2 入参是 JSON Schema（不是 Zod），返回 { content }', () => {
+    const content = renderGitToolsFile();
+    expect(content).toContain('type: "object"');
+    expect(content).toContain('required: ["repo_url"],');
+    expect(content).toContain('additionalProperties: false,');
+    expect(content).toContain('content: await');
+  });
+
+  it('生成内容含全部参数 schema（v1 形 Zod + v2 形 JSON Schema）', () => {
     const content = renderGitToolsFile();
     for (const tool of GIT_TOOLS) {
       for (const arg of tool.args) {
         expect(content).toContain(`${arg.name}: tool.schema.`);
+        expect(content).toContain(
+          `${JSON.stringify(arg.name)}: { type: "${arg.type === 'integer' ? 'number' : arg.type}", description: ${JSON.stringify(arg.description)} },`,
+        );
       }
     }
   });
@@ -213,9 +255,7 @@ describe('渲染产物凭证注入升级（todo 4，自包含 git.ts）', () => 
   it('status/diff/log 本地只读工具 execute 不加载凭证', () => {
     const content = renderGitToolsFile();
     for (const tool of ['status', 'diff', 'log']) {
-      const start = content.indexOf(`export const ${tool} = tool({`);
-      const end = content.indexOf('});', start);
-      const toolBody = content.slice(start, end);
+      const toolBody = sliceImpl(content, GIT_TOOLS.find((t) => t.exportName === tool)!.executeHint);
       expect(toolBody).not.toContain('loadCredential');
       expect(toolBody).toContain('return runGit(gitArgs, {}, workdir);');
     }
@@ -223,10 +263,10 @@ describe('渲染产物凭证注入升级（todo 4，自包含 git.ts）', () => 
 
   it('clone/pull/fetch execute 用 tryLoadCredential + 无凭证直接直连分支；push 仍走 loadCredential', () => {
     const content = renderGitToolsFile();
+    const hintOf = (name: string): string =>
+      GIT_TOOLS.find((t) => t.exportName === name)!.executeHint;
     for (const tool of ['pull', 'fetch']) {
-      const start = content.indexOf(`export const ${tool} = tool({`);
-      const end = content.indexOf('\n});', start);
-      const toolBody = content.slice(start, end);
+      const toolBody = sliceImpl(content, hintOf(tool));
       expect(toolBody).toContain('tryLoadCredential');
       expect(toolBody).not.toContain('loadCredential(repoUrl)');
       expect(toolBody).toContain('if (!entry)');
@@ -236,9 +276,7 @@ describe('渲染产物凭证注入升级（todo 4，自包含 git.ts）', () => 
     }
     {
       // clone 独立分支：中央库复用 + 绝对路径回吐，双凭证路径均经 cloneArgs（含解析后 target）
-      const start = content.indexOf('export const clone = tool({');
-      const end = content.indexOf('\n});', start);
-      const toolBody = content.slice(start, end);
+      const toolBody = sliceImpl(content, hintOf('clone'));
       expect(toolBody).toContain('tryLoadCredential(repoUrl)');
       expect(toolBody).not.toContain('loadCredential(repoUrl)');
       expect(toolBody).toContain('if (!entry)');
@@ -247,9 +285,7 @@ describe('渲染产物凭证注入升级（todo 4，自包含 git.ts）', () => 
       expect(toolBody).toContain('buildGitEnv(entry)');
       expect(toolBody).toContain('cleanupTemp(p)');
     }
-    const pushStart = content.indexOf('export const push = tool({');
-    const pushEnd = content.indexOf('\n});', pushStart);
-    const pushBody = content.slice(pushStart, pushEnd);
+    const pushBody = sliceImpl(content, hintOf('push'));
     expect(pushBody).toContain('loadCredential(repoUrl)');
     expect(pushBody).not.toContain('tryLoadCredential');
     expect(pushBody).not.toContain('if (!entry)');
@@ -259,9 +295,10 @@ describe('渲染产物凭证注入升级（todo 4，自包含 git.ts）', () => 
 
   it('push execute 含 write 授权校验', () => {
     const content = renderGitToolsFile();
-    const start = content.indexOf('export const push = tool({');
-    const end = content.indexOf('});', start);
-    const pushBody = content.slice(start, end);
+    const pushBody = sliceImpl(
+      content,
+      GIT_TOOLS.find((t) => t.exportName === 'push')!.executeHint,
+    );
     expect(pushBody).toContain('permission !== "write"');
     expect(pushBody).toContain('禁止 push');
   });
@@ -450,8 +487,10 @@ describe('git 凭证辅助函数（渲染产物内联实现，todo 4）', () => 
       (fs.readFileSync as jest.Mock).mockReset();
     }
     const content = renderGitToolsFile();
-    const start = content.indexOf('export const push = tool({');
-    const pushBody = content.slice(start, content.indexOf('});', start));
+    const pushBody = sliceImpl(
+      content,
+      GIT_TOOLS.find((t) => t.exportName === 'push')!.executeHint,
+    );
     expect(pushBody).toContain('loadCredential(repoUrl)');
     expect(pushBody).toContain('permission !== "write"');
   });
@@ -791,13 +830,12 @@ describe('workdir 可选参数（仓库子目录执行）', () => {
 
   it('渲染产物：远端工具（clone/pull/fetch/push）execute 含 workdir 透传', () => {
     const content = renderGitToolsFile();
+    const hintOf = (name: string): string =>
+      GIT_TOOLS.find((t) => t.exportName === name)!.executeHint;
     for (const tool of ['clone', 'pull', 'fetch', 'push']) {
-      const start = content.indexOf(`export const ${tool} = tool({`);
-      const end = content.indexOf('\n});', start);
-      const toolBody = content.slice(start, end);
+      const toolBody = sliceImpl(content, hintOf(tool));
       expect(toolBody).toContain('const workdir = args.workdir ? String(args.workdir) : undefined;');
       expect(toolBody).toContain('workdir');
-      expect(toolBody).toContain('workdir: tool.schema.string().optional()');
     }
     expect(content).toContain('const cloneArgs = _buildGitArgs("clone", { ...args, target: absTarget });');
     expect(content).toContain('runGit(cloneArgs, {}, workdir)');
@@ -807,28 +845,27 @@ describe('workdir 可选参数（仓库子目录执行）', () => {
 
   it('渲染产物：本地工具（status/diff/log）execute 含 workdir 透传', () => {
     const content = renderGitToolsFile();
+    const hintOf = (name: string): string =>
+      GIT_TOOLS.find((t) => t.exportName === name)!.executeHint;
     for (const tool of ['status', 'diff', 'log']) {
-      const start = content.indexOf(`export const ${tool} = tool({`);
-      const end = content.indexOf('\n});', start);
-      const toolBody = content.slice(start, end);
+      const toolBody = sliceImpl(content, hintOf(tool));
       expect(toolBody).toContain('const workdir = args.workdir ? String(args.workdir) : undefined;');
       expect(toolBody).toContain('return runGit(gitArgs, {}, workdir);');
-      expect(toolBody).toContain('workdir: tool.schema.string().optional()');
     }
   });
 
   it('push 守卫 + fallback 语义不变（workdir 仅透传 cwd）', () => {
     const content = renderGitToolsFile();
-    const pushStart = content.indexOf('export const push = tool({');
-    const pushBody = content.slice(pushStart, content.indexOf('\n});', pushStart));
+    const hintOf = (name: string): string =>
+      GIT_TOOLS.find((t) => t.exportName === name)!.executeHint;
+    const pushBody = sliceImpl(content, hintOf('push'));
     expect(pushBody).toContain('loadCredential(repoUrl)');
     expect(pushBody).not.toContain('tryLoadCredential');
     expect(pushBody).toContain('permission !== "write"');
     expect(pushBody).toContain('禁止 push');
     expect(pushBody).toContain('tmp.env, workdir');
     for (const tool of ['clone', 'pull', 'fetch']) {
-      const start = content.indexOf(`export const ${tool} = tool({`);
-      const toolBody = content.slice(start, content.indexOf('\n});', start));
+      const toolBody = sliceImpl(content, hintOf(tool));
       expect(toolBody).toContain('tryLoadCredential(repoUrl)');
       expect(toolBody).toContain('if (!entry)');
     }
@@ -925,9 +962,10 @@ describe('git_clone 中央库默认落点与复用（WORK_DIR/repos）', () => {
 
   it('渲染产物 clone 分支：中央库复用 + 绝对路径回吐 + 异仓占位报错，不自动拉取', () => {
     const content = renderGitToolsFile();
-    const start = content.indexOf('export const clone = tool({');
-    const end = content.indexOf('\n});', start);
-    const toolBody = content.slice(start, end);
+    const toolBody = sliceImpl(
+      content,
+      GIT_TOOLS.find((t) => t.exportName === 'clone')!.executeHint,
+    );
     expect(toolBody).toContain('prepareCloneTarget(repoUrl, args.target ? String(args.target) : undefined)');
     expect(toolBody).toContain('已存在相同仓库，直接复用');
     expect(toolBody).toContain('未执行拉取');

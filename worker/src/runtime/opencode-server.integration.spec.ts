@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
     *) shift ;;
   esac
 done
-echo "opencode server listening on http://127.0.0.1:\${PORT}"
+echo "server listening on http://127.0.0.1:\${PORT}"
 node -e "const http=require('http');http.createServer((q,r)=>{r.writeHead(200);r.end('ok');}).listen(\${PORT},'127.0.0.1');" &
 wait
 `;
@@ -79,6 +79,8 @@ describe('OpencodeServer 真实 spawn 集成', () => {
     const server = new OpencodeServer({
       command: script,
       port: 0,
+      // v2 恒开鉴权：密码为空时 worker 侧 fail-fast（假 serve 不校验鉴权，给一个占位密码）
+      serverPassword: 'integration-test-pw',
       healthCheckTimeoutMs: 8000,
       healthCheckIntervalMs: 100,
     });
@@ -116,6 +118,7 @@ describe('OpencodeServer 真实 spawn 集成', () => {
       const server = new OpencodeServer({
         command: script,
         port: basePort,
+        serverPassword: 'integration-test-pw',
         healthCheckTimeoutMs: 8000,
         healthCheckIntervalMs: 100,
       });
@@ -132,7 +135,7 @@ describe('OpencodeServer 真实 spawn 集成', () => {
 
   it('stop 幂等：重复调用无副作用', async () => {
     const script = writeFakeServeScript();
-    const server = new OpencodeServer({ command: script, port: 0 });
+    const server = new OpencodeServer({ command: script, port: 0, serverPassword: 'integration-test-pw' });
     await server.start();
     await server.stop();
     await server.stop();

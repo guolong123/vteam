@@ -1,23 +1,84 @@
 /**
- * T4 prompt 发送 + 轮询完成判定（D2 最重要铁律）。
+ * T14 prompt 发送 + 轮询完成判定（语义层；**v1 回退路与 v2 共用同一套判定**）。
  *
- * 完成判定（Oracle 实测）：轮询 GET /session/{id}/message，**判定条件 = 存在含
- * `step-finish` part（reason=stop）的 assistant 消息**。不能是"有消息"——实测
- * assistant 消息在 step-start 之前就已出现（parts=[]），abort 后消息只有
- * step-start+reasoning（无 text/step-finish），按"有消息"会被误判为完整回复。
+ * 本文件是 worker 侧**唯一**回答「这一轮跑完了吗 / 正文是什么 / 出了什么错」的地方。
+ * 上游两代形态的差异全部收敛在这里，调用方（exec-server）只认 vteam 自有类型。
  *
- * 文本聚合：按 messageID 分组 → 过滤 type=text（排除 synthetic 合成文本，工具
- * 调用占位非模型输出）→ 按 part.time.start 时间戳排序 → 串接（D2 多段拼接规则）。
+ * ## 五条语义：v1 口径 → v2 口径
  *
- * 超时：**首字超时**（时限内既无非空 text part、也无 reasoning part → 调 abort +
- * 抛 CompletionTimeoutError，携带已收集文本）。reasoning part **存在即算已响应**
- * （opencode 实测先建 reasoning 空壳、思考结束才一次性写入文本，故不能要求文本非空），
- * 长时间纯思考不被误杀。首字出现后**无完成超时**（长期任务持续轮询到 step-finish，
- * 判死由上层 server AGENT_IDLE_TIMEOUT_MS 负责，worker 只管「有活动就继续」）——只有
- * 「模型完全没响应」才报错。
+ * | 语义 | v1 | v2（本文件的实现） |
+ * |---|---|---|
+ * | 完成判定 | assistant 消息含 `step-finish(reason=stop)` | **同**——v2 驱动把消息的 `finish` 合成成 `step-finish` part，而 v2 的 `finish` 取值与 v1 **同名**（实测 2.0.28：`stop`/`tool-calls`/`error`）；**另加事件路**（durable 的 `session.execution.succeeded`）为同等权威来源 |
+ * | 首字 | 非空 text part 或**任意** reasoning part | **同**（轮询路看累积后的 content）+ 事件路等价物（`session.text.delta` 非空 / 任意 reasoning 事件） |
+ * | 在飞工具豁免 | `state.status ∈ {pending, running}` | `state.status ∈ {running, streaming}`——**v2 没有 `pending`**（实测 2.0.28：v2 工具只会 `running` → `completed`/`error`）；`pending` 仍留在集合里（v1 回退路径不能退化） |
+ * | 文本聚合 | text 且非 synthetic，按 `time.start` 升序 | **同**——v2 的 `content[]` 本身有序，且驱动给同一条消息的各 part 同一时间戳 ⇒ 排序退化为「按消息时间 + 消息内原序」，与 v2 的 content 序一致 |
+ * | 错误抽取 | `info.error = {name, data:{message, statusCode}}` | **两代形状都认**：v1 的 `{name, data:{message,statusCode}}` 与 v2 的 `{type, message, status, response{body}}`（实测 2.0.28） |
+ *
+ * ## 三条不能破的规矩
+ *
+ * 1. **「有文本」不等于「完成」**（v1 实测铁律，v2 继续成立）：assistant 消息在 step-start
+ *    之前就已出现（parts=[]），abort 后消息只有 step-start+reasoning（无 text/step-finish）
+ *    ——按「有消息」判会把没跑完的会话误判成完整回复。完成必须有**终态信号**：轮询路的
+ *    `step-finish(reason=stop)`，或事件路的 `session.execution.succeeded`。
+ * 2. **终态只有一个出口**：事件路（durable `session.execution.*`）与轮询路（消息终态）**都**
+ *    能判出终态，不收口就会发两次 `task.completed`。收口在 `RunTerminalGate`
+ *    （`v2-event-map.ts`）：事件证据优先于轮询证据、`settle()` 一次性、陈旧 durable `seq`
+ *    不覆盖新证据。⇒ **本文件不自己发终态事件**，只负责①把自己的判定**记进同一个闸门**
+ *    （`notePolling`）②在判定前**先问闸门**（`peek`）——事件路已判失败/中断时，轮询路
+ *    **不得**宣告成功（事件证据优先）。
+ * 3. **首字之后没有完成超时**：长期任务持续轮询到终态，判死由上层 server 的空闲 watchdog
+ *    负责；只有「模型完全没响应」才报错。
+ *
+ * 首字超时：时限内既无非空 text part、也无 reasoning part → 调 abort + 抛
+ * CompletionTimeoutError，携带已收集文本。reasoning part **存在即算已响应**（opencode
+ * 实测先建 reasoning 空壳、思考结束才一次性写入文本，故不能要求文本非空），长时间纯思考
+ * 不被误杀。
  */
 
-import { V1Driver, ServeMessage, ServePart, ServeTokens, DriverModelRef } from './v1-driver';
+import {
+  OpenCodeDriver,
+  DriverMessage,
+  DriverContent,
+  DriverTokenUsage,
+  DriverModelRef,
+  Logger,
+} from './opencode-driver';
+
+/** 终态判定（vteam 口径；与 v2 事件路的 `RunTerminalVerdict` 同名同义）。 */
+export type RunVerdict = 'succeeded' | 'failed' | 'interrupted';
+
+/** 终态判定详情（与 v2 事件路的 `RunTerminalOutcome` 同形：判定 + 可读原因）。 */
+export interface RunOutcome {
+  /** 判定结果。 */
+  verdict: RunVerdict;
+  /** 失败/中断原因（可读文本）。 */
+  error?: string;
+}
+
+/**
+ * 事件路信号（**结构化接口**；v2 事件路的 `RunTerminalGate` 天然满足前两个方法）。
+ *
+ * 为什么语义层需要它：v2 的 **run 级结果只在事件路有**——`session.execution.succeeded /
+ * failed / interrupted` 是 durable 事件；而承载 run 结果的 `idle` 消息（`outcome` 字段）
+ * 被 v2 驱动**丢弃**（vteam 的 role 模型只有 user/assistant 二值）⇒ 轮询路**看不到**
+ * 「这一轮整体成功还是失败」，只能看到「某一步以 stop 收尾」。两条路必须合流到**同一个
+ * 闸门**，否则会发两次 `task.completed`（或把失败判成成功）。
+ *
+ * 契约：
+ * - `peek()`：窥视**已有**的终态证据（**不**消耗闸门的一次性收口；那由调用方做）；
+ *   未到达 = null。
+ * - `notePolling()`：把**轮询路**的终态证据记进同一个闸门（事件证据优先于轮询证据）。
+ * - `firstToken()`（可选）：事件路是否已出现「首字」；缺省 = 事件路不提供该信号
+ *   （判定纯由轮询路做，见 `isFirstTokenEvent`）。
+ */
+export interface EventSignal {
+  /** 窥视已有终态证据（不消耗一次性收口）。 */
+  peek(): RunOutcome | null;
+  /** 记录轮询路的终态证据（首次生效；事件证据优先）。 */
+  notePolling(outcome: RunOutcome): void;
+  /** 事件路是否已出现「首字」（可选）。 */
+  firstToken?(): boolean;
+}
 
 export interface AwaitCompletionOptions {
   /**
@@ -38,7 +99,7 @@ export interface AwaitCompletionOptions {
   /** 轮询间隔 ms；默认 500（计划 D8） */
   pollMs?: number;
   /** 每次轮询后的回调（调试/进度上报用，T6 事件上送可在此挂钩） */
-  onPoll?: (messages: ServeMessage[], elapsedMs: number) => void;
+  onPoll?: (messages: DriverMessage[], elapsedMs: number) => void;
   /**
    * P1 会话复用修复：基线消息 id 集合——sendMessage **前**拉取的会话现有消息 id。
    * 复用同一 opencode 会话时，完成判定/文本聚合/首字判定/onPoll 只处理基线之后
@@ -77,6 +138,31 @@ export interface AwaitCompletionOptions {
    * 直接调 awaitCompletion（无基线）→ 首轮读到的行即可触发（保持原快检语义，存量单测不变）。
    */
   baselineServeErrorLines?: Set<string> | string[];
+  /**
+   * T14：**事件路信号**（v2 事件桥提供的只读视图；缺省 = 无事件路，纯轮询）。
+   *
+   * 给了它，轮询路就与事件路**合流到同一个终态闸门**（见 `EventSignal`）：轮询路判定完成
+   * 时把证据记进闸门（`notePolling`），判定前先问闸门（`peek`）——事件路已判失败/中断时
+   * 轮询路不宣告成功；事件路给出 `succeeded` 时**也算完成**（v2 的 run 级结果只在事件路有）。
+   */
+  eventSignal?: EventSignal;
+  /**
+   * T14：**终态宽限期** ms（默认 500）。
+   *
+   * 轮询路判定完成（见到 `step-finish(reason=stop)`）后，若事件路还没给出终态，等这么久
+   * 让它补齐——目的是让「轮询先到」与「事件先到」两种顺序**得到同一个结论**（事件证据
+   * 优先：若事件路在这段时间里给出 failed/interrupted，轮询路不得宣告成功）。
+   *
+   * 只在**提供了 `eventSignal`** 时生效（无事件路 → 没什么可等，不加延迟）；0 = 不等待。
+   */
+  eventGraceMs?: number;
+  /**
+   * T14：日志输出（可选；缺省 = 不打日志 → v1 回退路径与既有行为零变化）。
+   *
+   * 只在**事件路参与了判定**时记一条（谁判的完成 / 两路是否分歧）——分歧必须可诊断：
+   * 线上「到底是模型失败还是我们的判定错了」只能靠这条记录回答。
+   */
+  logger?: Logger;
 }
 
 /** 会话完成聚合结果。 */
@@ -84,9 +170,9 @@ export interface CompletionResult {
   /** 全部 text part 按时间排序拼接的最终回复 */
   text: string;
   /** 原始 parts（含 reasoning/tool 等，T6 事件上送直接透传） */
-  parts: ServePart[];
+  parts: DriverContent[];
   /** step-finish 的 tokens（实测含 total/input/output/reasoning/cache） */
-  tokens?: ServeTokens;
+  tokens?: DriverTokenUsage;
   /** step-finish 的 cost */
   cost?: number;
   /**
@@ -96,13 +182,24 @@ export interface CompletionResult {
    * 与显式配置的优先级由 exec-server 决定。
    */
   model?: DriverModelRef;
+  /**
+   * T14：**终态证据来源**（谁判的完成）。
+   *
+   * - `event`：事件路（durable 的 `session.execution.succeeded`）——权威；
+   * - `polling`：轮询路（`step-finish(reason=stop)`）——兜底；
+   * - 缺省 = 本轮**没走到**完成判定（超时/失败路径，结果随错误一起带出）。
+   *
+   * 为什么要带出：两条路都到得了终态，**分歧必须可诊断**——线上「到底是模型失败，还是
+   * 我们的判定错了」只能靠这条证据（配合 `AwaitCompletionOptions.logger` 的一条记录）回答。
+   */
+  terminalEvidence?: 'event' | 'polling';
 }
 
 /**
  * 从 assistant 消息 `info` 取实际使用模型。沿用 info.error 的索引签名安全访问：
  * 两个字段都必须是非空字符串才认可（任一缺失/空白/非字符串 → undefined，绝不半截拼接）。
  */
-function extractModelInfo(m: ServeMessage): DriverModelRef | undefined {
+function extractModelInfo(m: DriverMessage): DriverModelRef | undefined {
   const providerID = m.info?.providerID;
   const modelID = m.info?.modelID;
   if (typeof providerID !== 'string' || providerID.trim() === '') {
@@ -119,7 +216,7 @@ function extractModelInfo(m: ServeMessage): DriverModelRef | undefined {
  * info（= 最后一次真实模型调用的归属消息，工具循环换模型时也以它为准）；无 finish
  * （超时路径）则退化为最后一条 assistant 消息。
  */
-export function findAssistantModel(messages: ServeMessage[]): DriverModelRef | undefined {
+export function findAssistantModel(messages: DriverMessage[]): DriverModelRef | undefined {
   const assistants = messages.filter((m) => m.info?.role === 'assistant');
   const owner =
     assistants.find((m) =>
@@ -132,7 +229,7 @@ export function findAssistantModel(messages: ServeMessage[]): DriverModelRef | u
  * 从 serve part 提取实际错误详情（防御：part.error 可能缺失/非对象，text 可能缺失）。
  * 优先级：error.message > part.text（error/step-finish part 的 text 通常承载具体报错）> 兜底。
  */
-function extractPartError(p: ServePart): string {
+function extractPartError(p: DriverContent): string {
   const err = p.error;
   if (err && typeof err === 'object') {
     const message = (err as { message?: unknown }).message;
@@ -151,20 +248,27 @@ const TOOL_LOOP_REASON =
   '模型长时间在工具调用阶段（tool-calls 循环）未产出正文——可能模型卡在工具调用循环或模型输出异常';
 
 /**
- * 从 assistant 消息的 `info.error`（serve 直接透传的模型调用错误，如 APIError）提取
- * 首个非 Aborted 的错误文本；无模型错误/仅 Aborted → null。
+ * 从 assistant 消息的 `info.error` 提取首个非 Aborted 的错误文本；无模型错误/仅 Aborted → null。
  *
  * 背景（实测）：serve 用错误凭据调用模型时，assistant 消息 **parts=[]**（无 error part、
- * 无 step-finish），错误落在 `message.info.error`（如
- * `{name:'APIError', data:{message:'Invalid API key.', statusCode:401, isRetryable:false}}`）
- * ——原实现只查 parts 漏了该字段，导致用户只见笼统「模型无任何输出」。
+ * 无 step-finish），错误落在 `message.info.error` ——原实现只查 parts 漏了该字段，
+ * 导致用户只见笼统「模型无任何输出」。
  *
- * - Aborted（MessageAbortedError）**跳过**：aborted 会话可复用（用户确认），非模型调用
- *   失败，不当作可抛错误（awaitCompletion 据此不提前抛）。
- * - 提取优先级：`error.data?.message` > `error.message` > `error.name`（对齐 APIError
- *   {name, data:{message, statusCode}} 结构）；statusCode 存在时附 ` (HTTP <code>)`。
+ * **v2 的等价形态已实测确认**：模型调用失败时 assistant 消息**同样没有 content**
+ * （= vteam 内部模型的 parts=[]），错误落在 `info.error`——只是**形状变了**。
+ *
+ * | 代 | 形状 | 消息 | HTTP 码 | 类型名 |
+ * |---|---|---|---|---|
+ * | v1 | `{name:'APIError', data:{message, statusCode, isRetryable}}` | `data.message` | `data.statusCode` | `name` |
+ * | v2 | `{type:'provider.auth', message, status, response:{body}}` | 顶层 `message` | 顶层 `status` | `type` |
+ *
+ * 提取优先级：`data.message`（v1）> 顶层 `message`（v2）> 类型名（`name` / `type`）。
+ * HTTP 码：`data.statusCode`（v1）> 顶层 `status`（v2）——存在时附 ` (HTTP <code>)`。
+ *
+ * - Aborted（v1 `MessageAbortedError` / v2 的 `*aborted*`）**跳过**：aborted 会话可复用
+ *   （用户确认），非模型调用失败，不当作可抛错误（awaitCompletion 据此不提前抛）。
  */
-function extractMessageError(messages: ServeMessage[]): string | null {
+function extractMessageError(messages: DriverMessage[]): string | null {
   for (const m of messages) {
     if (m.info?.role !== 'assistant') {
       continue;
@@ -173,10 +277,19 @@ function extractMessageError(messages: ServeMessage[]): string | null {
     if (!err || typeof err !== 'object') {
       continue;
     }
-    const record = err as { name?: unknown; data?: unknown; message?: unknown };
+    const record = err as {
+      name?: unknown;
+      type?: unknown;
+      data?: unknown;
+      message?: unknown;
+      status?: unknown;
+      statusCode?: unknown;
+    };
     const name = typeof record.name === 'string' ? record.name : '';
+    const type = typeof record.type === 'string' ? record.type : '';
     // Aborted 跳过（aborted 会话可复用，非模型调用失败，不提前抛）
-    if (name.toLowerCase().includes('aborted')) {
+    // v1 的错误类型名在 `name`，v2 的在 `type`（如 `provider.auth`）——两处都查。
+    if (name.toLowerCase().includes('aborted') || type.toLowerCase().includes('aborted')) {
       continue;
     }
     const data =
@@ -191,12 +304,17 @@ function extractMessageError(messages: ServeMessage[]): string | null {
         ? record.message.trim()
         : undefined,
       name !== '' ? name : undefined,
+      type !== '' ? type : undefined,
     ].find((v): v is string => v !== undefined);
     if (detail === undefined) {
       continue;
     }
     const statusCode =
-      data && typeof data.statusCode === 'number' ? data.statusCode : undefined;
+      data && typeof data.statusCode === 'number'
+        ? data.statusCode
+        : typeof record.status === 'number'
+          ? record.status
+          : undefined;
     return statusCode !== undefined ? `${detail} (HTTP ${statusCode})` : detail;
   }
   return null;
@@ -259,7 +377,13 @@ function describeModelError(detail: string): string {
  *    的 serve stderr 模型调用错误（Rate limit / Free usage 等只写 stderr，不透传
  *    message.info.error）→ 透传 serve 错误文本。
  * 1. **info.error 模型调用错误**：assistant 消息的 info.error（serve 直接透传的 APIError，
- *    如凭据错误）→ 透传 error 详情（parts=[] 时唯一错误来源）。
+ *    如凭据错误）→ 透传 error 详情（parts=[] 时唯一错误来源）。**v1 与 v2 的形状都认**
+ *    （v1 `{name,data:{message,statusCode}}` / v2 `{type,message,status}`，见
+ *    `extractMessageError`）——v2 实测：凭据错误时 assistant 消息**没有 content**，
+ *    错误只在 `info.error` 里，与 v1 同一个坑。
+ *    ⚠️ v2 还有**更好的来源**：durable 事件 `session.execution.failed` 的
+ *    `error{type,message,status,response{body}}`（走事件路，见 `EventSignal`）——
+ *    它带 HTTP 码与响应体，比消息里的错误更全。
  * 2. **serve 实际错误**：assistant 消息含 type:'error' part，或 step-finish 且
  *    reason==='error' → 透传 part.error.message / part.text（serve 无凭据时通常为
  *    "No authentication/credential" 类认证错误）。
@@ -271,7 +395,7 @@ function describeModelError(detail: string): string {
  *    拿到信息不该直接丢弃成一句笼统话；有证据就不允许只报「模型无任何输出」）。
  */
 export function describeTimeoutReason(
-  messages: ServeMessage[],
+  messages: DriverMessage[],
   serveErrorText?: string,
   serveLogTail?: string[],
 ): string {
@@ -330,7 +454,7 @@ export class CompletionTimeoutError extends Error {
   constructor(
     sessionID: string,
     result: CompletionResult,
-    messages?: ServeMessage[],
+    messages?: DriverMessage[],
     serveErrorText?: string,
     serveLogTail?: string[],
     timeoutKind: 'first-token' | 'total' = 'first-token',
@@ -362,7 +486,7 @@ function sleep(ms: number): Promise<void> {
  * （非增量），且同一条 assistant 消息的 parts 会在完成过程中逐步填充——
  * 按 info.id 用最新版本整体替换，避免聚合重复/过期 parts。
  */
-function mergeMessages(collected: ServeMessage[], incoming: ServeMessage[]): ServeMessage[] {
+function mergeMessages(collected: DriverMessage[], incoming: DriverMessage[]): DriverMessage[] {
   const byId = new Map(collected.map((m) => [m.info?.id, m]));
   for (const m of incoming) {
     byId.set(m.info?.id, m);
@@ -376,15 +500,34 @@ function mergeMessages(collected: ServeMessage[], incoming: ServeMessage[]): Ser
  * - 非空 → 仅保留 id 不在基线中的消息（复用会话时历史轮次的
  *   user prompt 注入内容/step-finish/回复被排除，不混入本轮）。
  */
-function filterFresh(messages: ServeMessage[], baselineIds?: Set<string>): ServeMessage[] {
+function filterFresh(messages: DriverMessage[], baselineIds?: Set<string>): DriverMessage[] {
   if (!baselineIds || baselineIds.size === 0) {
     return messages;
   }
   return messages.filter((m) => m.info?.id && !baselineIds.has(m.info.id));
 }
 
-/** 完成判定核心：遍历 assistant 消息找含 step-finish(reason=stop) 的 part。 */
-export function findFinish(messages: ServeMessage[]): ServePart | undefined {
+/**
+ * 完成判定核心：遍历 assistant 消息找含 `step-finish(reason=stop)` 的 part。
+ *
+ * ## v1 / v2 同规则（v2 驱动把终态合成成同名 part）
+ *
+ * v2 上游**没有** `step-finish` 这个 part（升级成了 `session.step.*` 事件），但 v2 驱动
+ * **从 assistant 消息的 `finish` 字段合成**一个同形状的 part（`v2-driver.ts` 的
+ * `mapMessage`）——而 v2 的 `finish` 取值与 v1 **同名**（实测 2.0.28：`stop`/`tool-calls`/
+ * `error`；`rawFinish` 才是下划线形态 `tool_calls`，驱动不用它）。⇒ 本判定**逐字适用**。
+ *
+ * ## 两条不能破的规则
+ *
+ * 1. **只有 `stop` 才算完成**：`tool-calls`（这一轮只是去调工具、正文还没产出）与 `error`
+ *    都**不是**完成——v1/v2 同理（v2 实测：中间步骤的 `finish` 就是 `tool-calls`）。
+ * 2. **「有消息」不算完成**：assistant 消息在 step 结束前就已存在（parts=[]），按「有消息」
+ *    判会把没跑完的会话误判成完整回复（v1 实测铁律）。
+ *
+ * ⚠️ 事件路（durable 的 `session.execution.succeeded`）是**同等权威**的完成来源，但**不在
+ * 这里判**——终态只有一个出口（`RunTerminalGate`），见 `awaitCompletion` 的事件路合流。
+ */
+export function findFinish(messages: DriverMessage[]): DriverContent | undefined {
   for (const m of messages) {
     if (m.info?.role !== 'assistant') {
       continue;
@@ -401,10 +544,24 @@ export function findFinish(messages: ServeMessage[]): ServePart | undefined {
 /**
  * 文本聚合（D2 多段拼接规则）：
  * 只取 assistant 消息（模型输出；user 输入不应进入最终回复），
- * 过滤 type=text 且非 synthetic（合成文本=工具调用占位，排除避免污染最终回复），
+ * 过滤 type=text 且非 synthetic（合成文本=工具调用占位/注入上下文，排除避免污染最终回复），
  * 按 part.time.start 时间戳升序串接。
+ *
+ * ## v2 的等价性（口径不变）
+ *
+ * - **顺序**：v2 的 `content[]` 本身就是有序的；v2 驱动给**同一条消息的各 part 同一个
+ *   时间戳**（消息级 created/completed）⇒ 这里的排序在消息内**退化**为「原序」、
+ *   在消息间按创建时间——与 v2 的 content 序一致（`Array.prototype.sort` 稳定，
+ *   同键时保持原序）。
+ * - **`synthetic` 过滤在 v2 下是空操作**：v2 的 `content[]` 项**没有** `synthetic` 字段，
+ *   驱动也从不设置它（v1 同样不设置——实测 v1 会话 dump 里没有一项带 `synthetic`）。
+ *   它防的是 **vteam 自己注入**的占位/上下文块（`[群聊历史消息]`/`<doclib>`）。
+ *   ⚠️ v1 担心的「工具调用占位文本」在 v2 **结构上不存在**：v2 里工具调用是**独立的
+ *   `content` 项（`type:'tool'`）**，与模型写的 `type:'text'` 项**互斥**
+ *   （实测 2.0.28：调工具的那条 assistant 消息**只有** tool 项，**没有**文本占位）——
+ *   所以工具占位污染回复这条路在 v2 是**封死**的，无需再靠标记位区分。
  */
-export function aggregateText(messages: ServeMessage[]): string {
+export function aggregateText(messages: DriverMessage[]): string {
   const texts = messages
     .filter((m) => m.info?.role === 'assistant')
     .flatMap((m) => m.parts ?? [])
@@ -414,7 +571,10 @@ export function aggregateText(messages: ServeMessage[]): string {
 }
 
 /** 从已收集消息构建聚合结果（tokens/cost 取 step-finish part，model 取 finish 归属消息的 info）。 */
-function buildResult(messages: ServeMessage[]): CompletionResult {
+function buildResult(
+  messages: DriverMessage[],
+  terminalEvidence?: 'event' | 'polling',
+): CompletionResult {
   const finish = findFinish(messages);
   const model = findAssistantModel(messages);
   return {
@@ -428,12 +588,14 @@ function buildResult(messages: ServeMessage[]): CompletionResult {
     ...(finish?.tokens ? { tokens: finish.tokens } : {}),
     ...(finish?.cost !== undefined ? { cost: finish.cost } : {}),
     ...(model ? { model } : {}),
+    ...(terminalEvidence !== undefined ? { terminalEvidence } : {}),
   };
 }
 
 /**
- * 首字判定：存在任一 assistant 输出 part（非空 text，或**任意** reasoning）即视为已响应。
- * - text：排除 synthetic 合成文本（工具调用占位，非模型输出）
+ * 首字判定（**轮询路**）：存在任一 assistant 输出 part（非空 text，或**任意** reasoning）
+ * 即视为已响应。
+ * - text：排除 synthetic 合成文本（vteam 注入的占位/上下文块，非模型输出）
  * - reasoning：模型思考内容。**part 存在即算首字，不要求文本非空**——opencode 实测
  *   （1.18.32 + 免费 provider，线上 ses_f339ae60）：reasoning part 在思考开始时创建，
  *   但其文本要等 step 结束才**一次性**落盘，思考期间 `text` 恒为空字符串
@@ -441,8 +603,11 @@ function buildResult(messages: ServeMessage[]): CompletionResult {
  *   期间 5 分钟零更新）。若要求「文本非空」，长时间纯思考会被误判「模型无任何输出」
  *   而 abort 误杀（模型其实一直在干活）。part 存在 = opencode 已收到模型的思考内容。
  *   代价：思考开始后即无完成超时，判死交给上层 server 的静默/空闲 watchdog。
+ *
+ * ⚠️ **v2 逐字适用**：v2 驱动把 `content[]` 的 `text`/`reasoning` 项映射成同名 part
+ * （`type`/`text` 都一样），故这四例矩阵在 v2 上一一对应。
  */
-function hasFirstToken(messages: ServeMessage[]): boolean {
+function hasFirstToken(messages: DriverMessage[]): boolean {
   for (const m of messages) {
     if (m.info?.role !== 'assistant') {
       continue;
@@ -460,14 +625,63 @@ function hasFirstToken(messages: ServeMessage[]): boolean {
 }
 
 /**
+ * 首字判定（**事件路**等价物）：v2 的 `session.text.delta` / `session.reasoning.*` 事件。
+ *
+ * 与轮询路的四例矩阵**逐条对齐**（事件路到达得比轮询早，故它是首字的主信号）：
+ *
+ * | v1（轮询） | v2（事件） | 算首字？ |
+ * |---|---|---|
+ * | 非空 text part | `session.text.delta` 且 `delta` 非空 | ✅ |
+ * | 仅 reasoning part | `session.reasoning.started` / `session.reasoning.delta` | ✅（**任意** reasoning 事件都算——与「reasoning part 存在即算」同义） |
+ * | 空 text part | `session.text.started`（空文本流开始） | ❌（空文本不算首字） |
+ * | 无任何输出 | 无相关事件 | ❌ |
+ *
+ * ⚠️ 增量字段名是 **`delta`**（不是 v1 的 `text`）；`session.text.ended` 带的是**权威全文**
+ * （`data.text`）——它是**收尾**事件而非首字信号（此刻正文已全部到齐，不该再当「刚开始」）。
+ */
+export function isFirstTokenEvent(event: {
+  type?: string;
+  data?: Record<string, unknown>;
+}): boolean {
+  const type = typeof event.type === 'string' ? event.type : '';
+  const data =
+    event.data !== null && typeof event.data === 'object' ? event.data : ({} as Record<string, unknown>);
+  if (type === 'session.reasoning.started' || type === 'session.reasoning.delta') {
+    return true;
+  }
+  if (type === 'session.text.delta') {
+    const delta = data.delta;
+    return typeof delta === 'string' && delta.trim() !== '';
+  }
+  return false;
+}
+
+/**
  * 在途工具态（`state.status` 白名单）：模型正被外部依赖卡住——典型是 `secret_command`
  * 等用户填敏感值（输入预算 540s > 首字窗口 300s）。这种「无 text/reasoning 且 serve
  * 静止」不是模型没输出，而是模型在等工具返回；此时首字超时不得 abort。
  * 白名单而非黑名单：未知/缺失 status 不延长活性（保持既有判死语义）。
+ *
+ * ## 两代取值（**取值是小写**；OpenAPI 里的 `Running`/`Streaming` 是类型名不是取值）
+ *
+ * | status | v1 | v2 | 语义 |
+ * |---|---|---|---|
+ * | `pending` | ✅ | ❌ **没有** | v1：工具 part 在参数解析完成前先以 `{status:'pending', input:{}}` 空壳落盘 |
+ * | `running` | ✅ | ✅ | 在飞（两代同名） |
+ * | `streaming` | ❌ | ✅ | v2 的独立在飞变体（输出流式回传中） |
+ * | `completed` / `error` | ✅ | ✅ | 终态（**不**享受豁免） |
+ *
+ * ⚠️ **v2 没有 `pending`**（实测 2.0.28：v2 工具只会 `running` → `completed`/`error`，
+ * 从未出现 `pending`）——v1 那个「已排队未开跑」的窗口在 v2 **没有对应表示**：
+ * v2 在工具调用**发出**的那一刻就把 state 标成 `running`（`session.tool.input.started`），
+ * 之后才是 `session.tool.called` → `session.tool.success`。
+ * ⇒ **v1 的豁免窗口在 v2 被压缩进 `running`**：豁免语义**不丢**（模型在等工具返回时
+ * 首字超时照样不触发），且窗口比 v1 更早开始（v1 要等参数解析完才 running）。
+ * `pending` 仍留在集合里，是为了**v1 回退路径不退化**（v1 的 secret 等待场景正落在它上面）。
  */
-const IN_FLIGHT_TOOL_STATES = new Set(['pending', 'running']);
+const IN_FLIGHT_TOOL_STATES = new Set(['pending', 'running', 'streaming']);
 
-function hasInFlightTool(messages: ServeMessage[]): boolean {
+function hasInFlightTool(messages: DriverMessage[]): boolean {
   for (const m of messages) {
     if (m.info?.role !== 'assistant') {
       continue;
@@ -481,7 +695,8 @@ function hasInFlightTool(messages: ServeMessage[]): boolean {
         state !== undefined && state !== null && typeof state === 'object'
           ? state.status
           : undefined;
-      if (typeof status === 'string' && IN_FLIGHT_TOOL_STATES.has(status)) {
+      // 大小写不敏感（防御 OpenAPI 的类型名形态 `Running`/`Streaming` 被当真值传上来）
+      if (typeof status === 'string' && IN_FLIGHT_TOOL_STATES.has(status.toLowerCase())) {
         return true;
       }
     }
@@ -508,7 +723,7 @@ function sampleHash(s: string): number {
  * 全部用 O(1) 标量投影（字符串取有界采样哈希，不做 JSON.stringify），避免每轮 poll 对大 tool 输出
  * 做全量序列化。
  */
-function activitySignature(messages: ServeMessage[]): string {
+function activitySignature(messages: DriverMessage[]): string {
   let parts = 0;
   let scalar = 0;
   for (const m of messages) {
@@ -542,6 +757,45 @@ function activitySignature(messages: ServeMessage[]): string {
 }
 
 /**
+ * 事件路终态失败（durable 的 `session.execution.failed` / `interrupted`）。
+ *
+ * 为什么单独一个类型：它**不是**超时，也不是轮询路的判定——是上游事件路给出的**权威**
+ * 终态（凭据错误 / 模型报错 / 被中断）。消息文本直接透传事件载荷里的错误详情
+ * （v2 的 `error{type,message,status,response{body}}` → 取 `message`），让上层能区分
+ * 「上游判死的」与「我们没等到（超时）」——两者的处置完全不同。
+ */
+export class RunTerminalError extends Error {
+  readonly sessionID: string;
+  /** 终态判定（failed / interrupted）。 */
+  readonly verdict: 'failed' | 'interrupted';
+  /** 上游给出的错误详情（可读文本）。 */
+  readonly error?: string;
+  /** 已收集到的聚合结果（失败也带正文，便于前端展示部分输出）。 */
+  readonly result: CompletionResult;
+
+  constructor(sessionID: string, outcome: RunOutcome, result: CompletionResult) {
+    // 归一：只有 failed/interrupted 会走到这里（succeeded 不是失败路径）；
+    // 未知取值按 failed 处理（宁可报错也不静默当成功）。
+    const verdict: 'failed' | 'interrupted' =
+      outcome.verdict === 'interrupted' ? 'interrupted' : 'failed';
+    const detail =
+      typeof outcome.error === 'string' && outcome.error.trim() !== ''
+        ? outcome.error.trim()
+        : '（上游未给出错误详情）';
+    super(
+      verdict === 'interrupted'
+        ? `[prompt-await] 会话 ${sessionID} 执行被中断（事件路判定）：${detail}`
+        : `[prompt-await] 会话 ${sessionID} 执行失败（事件路判定）：${detail}`,
+    );
+    this.name = 'RunTerminalError';
+    this.sessionID = sessionID;
+    this.verdict = verdict;
+    this.error = outcome.error;
+    this.result = result;
+  }
+}
+
+/**
  * 轮询等待会话完成：默认 500ms 间隔 / 300s 首字超时。
  * 完成（step-finish）→ 返回聚合结果；首字超时（时限内既无 text 也无 reasoning part）→
  * abort + 抛 CompletionTimeoutError（带已收集文本）。首字（非空 text 或 reasoning part）
@@ -550,19 +804,45 @@ function activitySignature(messages: ServeMessage[]): string {
  *
  * 活性顺延：即使 text/reasoning 尚未出现，只要 serve 侧持续追加/推进 parts（主循环在
  * 推进，如长 tool-calls 循环），首字 deadline 顺延——只有「无首字**且**无任何新输出」
- * 满时限才 abort。在途工具豁免：存在 `state.status=pending/running` 的 tool part（模型在
- * 等工具返回，如 `secret_command` 阻塞等待用户填敏感值，输入预算 540s > 首字 300s）时，
- * serve 静止不等于模型失联，首字超时不触发。纯 tool 循环被误杀是线上主 agent 中断的另一来源（与 T17 子域秒杀并列）。
+ * 满时限才 abort。在途工具豁免：存在 `state.status ∈ {pending, running, streaming}` 的
+ * tool part（模型在等工具返回，如 `secret_command` 阻塞等待用户填敏感值，输入预算 540s >
+ * 首字 300s）时，serve 静止不等于模型失联，首字超时不触发。纯 tool 循环被误杀是线上主
+ * agent 中断的另一来源（与 T17 子域秒杀并列）。
+ *
+ * ## 终态与事件路合流（T14）
+ *
+ * 两条路都能判出终态，**必须**合流到同一个闸门，否则会发两次 `task.completed`（或把
+ * 失败判成成功）。本函数的职责只有三件，**不自己发终态事件**：
+ * 1. **先问闸门**：每轮开始读 `eventSignal.peek()`——事件路已判 failed/interrupted 时
+ *    轮询路**不得**宣告成功（事件证据优先）；事件路已判 succeeded 时**也算完成**
+ *    （v2 的 run 级结果只在事件路有，轮询路看不到 `idle` 消息的 outcome）。
+ * 2. **记下自己的证据**：轮询路判定完成时 `eventSignal.notePolling({verdict:'succeeded'})`
+ *    ——一次性收口（`settle()`）仍由调用方做，本函数**不消耗**它。
+ * 3. **给事件路一个宽限期**（`eventGraceMs`）：轮询路先看到完成、事件路还没到时，等一小段
+ *    让它补齐——这样「轮询先到」与「事件先到」两种顺序**得到同一个结论**。
  */
 export async function awaitCompletion(
-  driver: V1Driver,
+  driver: OpenCodeDriver,
   sessionID: string,
   options: AwaitCompletionOptions = {},
 ): Promise<CompletionResult> {
-  const { firstTokenTimeoutMs = 0, totalTimeoutMs = 0, pollMs = 500, onPoll, baselineIds, onServeError, serveErrorReader, serveLogReader, serveLogTailLines = 20 } = options;
+  const {
+    firstTokenTimeoutMs = 0,
+    totalTimeoutMs = 0,
+    pollMs = 500,
+    onPoll,
+    baselineIds,
+    onServeError,
+    serveErrorReader,
+    serveLogReader,
+    serveLogTailLines = 20,
+    eventSignal,
+    eventGraceMs = 500,
+    logger,
+  } = options;
   const startedAt = Date.now();
   let firstTokenAt: number | null = null;
-  let collected: ServeMessage[] = [];
+  let collected: DriverMessage[] = [];
   /** T17：serve 日志中提取的模型错误文本（onServeError 命中行）；有值 → 抛错文案用该文本 */
   let serveErrorText: string | null = null;
   /** 兜底证据：最近一次轮询读到的原始 serve 日志尾部（无模型错误可提取时附进原因） */
@@ -575,9 +855,37 @@ export async function awaitCompletion(
   let lastActivityAt = startedAt;
   const hasServeErrorDetection = serveErrorReader !== undefined && onServeError !== undefined;
 
-  let finish: ServePart | undefined;
+  let finish: DriverContent | undefined;
   let totalTimedOut = false;
+  /** T14：本轮是否已判定完成（轮询路的 step-finish，或事件路的 succeeded）。 */
+  let completed = false;
+  /** T14：终态证据来源（写进结果，供调用方记日志/排障）。 */
+  let terminalEvidence: 'event' | 'polling' | undefined;
+  /** T14：事件路判死（failed/interrupted）时的终态；null = 未判死。 */
+  let eventFailure: RunOutcome | null = null;
+
+  /** 拉一次消息快照并合并进 collected（终态判定后补拉用：终态那一刻内容才落齐）。 */
+  const refresh = async (): Promise<void> => {
+    const messages = await driver.getMessages(sessionID);
+    const fresh = filterFresh(messages, baselineIds);
+    collected = mergeMessages(collected, fresh);
+    onPoll?.(fresh, Date.now() - startedAt);
+  };
+
   while (true) {
+    // ① 事件路终态优先：上游已判失败/中断时，轮询路不得宣告成功（事件证据优先）。
+    //    v2 的 run 级结果只在事件路有（idle 消息的 outcome 被驱动丢弃），故这里是
+    //    「失败」的唯一权威来源；轮询路只能看到「某一步以 stop 收尾」。
+    const eventOutcome = eventSignal?.peek() ?? null;
+    if (eventOutcome !== null && eventOutcome.verdict !== 'succeeded') {
+      eventFailure = eventOutcome;
+      logger?.info(
+        `[prompt-await] 会话 ${sessionID} 事件路判定本轮${
+          eventOutcome.verdict === 'interrupted' ? '被中断' : '失败'
+        }（证据=event）：${eventOutcome.error ?? '-'}`,
+      );
+      break;
+    }
     const messages = await driver.getMessages(sessionID);
     // P1：只处理基线之后新增的消息（复用会话不混入历史轮次）
     const fresh = filterFresh(messages, baselineIds);
@@ -585,12 +893,66 @@ export async function awaitCompletion(
     onPoll?.(fresh, Date.now() - startedAt);
     finish = findFinish(collected);
     if (finish) {
+      // ② 轮询路判定完成 → 先给事件路一个**有界宽限期**补齐终态：让「轮询先到」与
+      //    「事件先到」得到**同一个结论**（事件证据优先）。
+      //    ⚠️ 顺序很关键：宽限期**内**不能先 `notePolling`——闸门的 `peek()` 返回的是
+      //    「事件证据 ?? 轮询证据」，一旦记下自己的证据，`peek()` 就再也分不出
+      //    「事件路还没说话」与「事件路说了 succeeded」→ 宽限期会立刻结束、事件路的
+      //    迟到失败就被丢掉（把失败判成成功）。故：**先问、后记**。
+      let outcome: RunOutcome | null = null;
+      if (eventSignal !== undefined) {
+        const graceDeadline = Date.now() + Math.max(0, eventGraceMs);
+        for (;;) {
+          outcome = eventSignal.peek();
+          if (outcome !== null || Date.now() >= graceDeadline) {
+            break;
+          }
+          await sleep(Math.min(pollMs, Math.max(1, graceDeadline - Date.now())));
+        }
+      }
+      if (outcome === null) {
+        // 事件路没说话（或压根没有事件路）→ 轮询路的证据生效
+        terminalEvidence = 'polling';
+        eventSignal?.notePolling({ verdict: 'succeeded' });
+      } else if (outcome.verdict === 'succeeded') {
+        terminalEvidence = 'event';
+        eventSignal?.notePolling({ verdict: 'succeeded' });
+      } else {
+        // 分歧：轮询路看到完成，事件路说失败/中断 —— 事件证据优先，轮询路不宣告成功。
+        eventFailure = outcome;
+        eventSignal?.notePolling({
+          verdict: 'failed',
+          ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+        });
+        logger?.warn(
+          `[prompt-await] 会话 ${sessionID} 轮询路与事件路判定分歧（轮询=完成 事件=${
+            outcome.verdict
+          }），按事件路判定：${outcome.error ?? '-'}`,
+        );
+      }
+      completed = eventFailure === null;
+      break;
+    }
+    // ③ 事件路已判成功但轮询路还没看到 step-finish —— 事件路同样是权威的完成来源
+    //    （v2 的 run 级结果只在事件路有）。补拉一次快照把终态内容取齐后完成。
+    if (eventOutcome !== null && eventOutcome.verdict === 'succeeded') {
+      await refresh();
+      finish = findFinish(collected);
+      terminalEvidence = 'event';
+      completed = true;
+      eventSignal?.notePolling({ verdict: 'succeeded' });
+      logger?.info(`[prompt-await] 会话 ${sessionID} 事件路判定完成（证据=event）`);
       break;
     }
     // T15：模型调用错误（info.error 非 Aborted）提前失败——serve 实测 APIError 消息
     // parts=[]（首字永不出现，也无 step-finish），等满 firstTokenTimeoutMs 超时无意义；
     // 立即走超时路径（abort + 抛 CompletionTimeoutError，文案带 info.error 详情）
     if (extractMessageError(collected) !== null) {
+      // 事件路已给出失败判定时用它（证据更全：带 HTTP 码与响应体），否则用轮询路自己的抽取。
+      const failed = eventSignal?.peek() ?? null;
+      if (failed !== null && failed.verdict !== 'succeeded') {
+        eventFailure = failed;
+      }
       break;
     }
     // T17：serve 日志模型错误提前失败——serve 对 Rate limit/Free usage 等 APIError 只写
@@ -622,7 +984,11 @@ export async function awaitCompletion(
         serveLogTail = tail.slice(-serveLogTailLines);
       }
     }
-    if (firstTokenAt === null && hasFirstToken(collected)) {
+    // 首字：轮询路（非空 text / 任意 reasoning）+ 事件路（非空 text.delta / 任意 reasoning 事件）
+    if (
+      firstTokenAt === null &&
+      (hasFirstToken(collected) || eventSignal?.firstToken?.() === true)
+    ) {
       firstTokenAt = Date.now();
     }
     // 活性记录：指纹变化即主循环在推进（新增 part / 文本增长 / tool 状态与耗时推进 / 消息时间推进），
@@ -647,8 +1013,17 @@ export async function awaitCompletion(
     await sleep(pollMs);
   }
 
-  const result = buildResult(collected);
-  if (!finish) {
+  const result = buildResult(collected, terminalEvidence);
+  // 事件路判死：上游已给出权威失败/中断 → 失败优先于轮询路的任何完成迹象。
+  if (eventFailure !== null) {
+    try {
+      await driver.abort(sessionID);
+    } catch {
+      // abort 失败不掩盖终态错误（双保险中 HTTP abort 已尽力）
+    }
+    throw new RunTerminalError(sessionID, eventFailure, result);
+  }
+  if (!completed) {
     try {
       await driver.abort(sessionID);
     } catch {
@@ -656,14 +1031,17 @@ export async function awaitCompletion(
     }
     throw new CompletionTimeoutError(sessionID, result, collected, serveErrorText ?? undefined, serveLogTail, totalTimedOut ? 'total' : 'first-token');
   }
+  logger?.info(
+    `[prompt-await] 会话 ${sessionID} 判定完成（证据=${terminalEvidence ?? 'polling'}）`,
+  );
   return result;
 }
 
 /** sendMessage → awaitCompletion 组合（T6 单次下发的标准入口）。 */
 export async function sendAndAwait(
-  driver: V1Driver,
+  driver: OpenCodeDriver,
   sessionID: string,
-  input: Parameters<V1Driver['sendMessage']>[1],
+  input: Parameters<OpenCodeDriver['sendMessage']>[1],
   options: AwaitCompletionOptions = {},
 ): Promise<CompletionResult> {
   // P1：sendMessage 前取基线（会话现有消息 id）——复用会话时 awaitCompletion
@@ -725,29 +1103,60 @@ export async function sendAndAwait(
  * serve 快照天然可能比 SSE 事件旧（轮询间隙），用状态字符串直接比较会regress
  * （completed 快照晚到反而把卡片打回 running）。rank：pending=0 / running=1 /
  * 其余（completed/error/未知终态）=2。input/output 长度单调增长（append-only）。
+ *
+ * **v2 的取值是小写**（实测 2.0.28：`running` → `completed`/`error`；`Running`/`Completed`
+ * 只是 OpenAPI 的**类型名**不是取值）——这里再取一次 `toLowerCase()` 兜底（万一上游把
+ * 类型名当值传上来）。`pending`/`queued` 是 v1 的形态，留在表里不回退。
  */
 const TOOL_STATUS_RANK: Record<string, number> = {
   pending: 0,
   queued: 0,
   running: 1,
   streaming: 1,
+  completed: 2,
+  error: 2,
 };
 const TOOL_PROGRESS_BASE = 1e12;
 const TOOL_INPUT_WEIGHT = 1e6;
 
-function toolProgress(part: ServePart): string {
+/**
+ * 工具输出长度：vteam 内部模型里是 `state.output`（**字符串**）；v2 的 wire 形态是
+ * `state.content`（**数组**）。两种都认——驱动已在边界把 content[] 归一成 output
+ * （`normalizeV2ToolState`），这里再兜一层，避免「未归一的 part」让指纹算不出长度
+ * （长度算不出 = 进度不涨 = 卡片不刷新）。
+ */
+function toolOutputLength(state: { output?: unknown; content?: unknown }): number {
+  if (typeof state.output === 'string') {
+    return state.output.length;
+  }
+  if (Array.isArray(state.content)) {
+    let len = 0;
+    for (const item of state.content) {
+      if (item === null || typeof item !== 'object') {
+        continue;
+      }
+      const text = (item as { text?: unknown }).text;
+      if (typeof text === 'string') {
+        len += text.length;
+      }
+    }
+    return len;
+  }
+  return safeJsonLength(state.output);
+}
+
+function toolProgress(part: DriverContent): string {
   const state = part.state as
-    | { status?: unknown; input?: unknown; output?: unknown }
+    | { status?: unknown; input?: unknown; output?: unknown; content?: unknown }
     | undefined
     | null;
   if (state === undefined || state === null || typeof state !== 'object') {
     return String(TOOL_PROGRESS_BASE * 2);
   }
-  const status = typeof state.status === 'string' ? state.status : '';
+  const status = typeof state.status === 'string' ? state.status.toLowerCase() : '';
   const rank = TOOL_STATUS_RANK[status] ?? 2;
   const inLen = typeof state.input === 'string' ? state.input.length : safeJsonLength(state.input);
-  const outLen =
-    typeof state.output === 'string' ? state.output.length : safeJsonLength(state.output);
+  const outLen = toolOutputLength(state);
   return String(rank * TOOL_PROGRESS_BASE + inLen * TOOL_INPUT_WEIGHT + outLen);
 }
 
@@ -774,7 +1183,7 @@ export const TEXT_GROWTH_MIN_CHARS = 64;
  * text/reasoning part 指纹 = 候选文本字段总长度（`L<len>`，append-only 单调增长）；
  * 无任何文本字段 → ''（维持首次即发一次，如空壳占位）。
  */
-function textGrowthFingerprint(part: ServePart): string {
+function textGrowthFingerprint(part: DriverContent): string {
   const p = part as {
     text?: unknown;
     summary?: unknown;
@@ -792,7 +1201,7 @@ function textGrowthFingerprint(part: ServePart): string {
 }
 
 /** 首发/记录基准指纹：tool → 单调进度值；text/reasoning → 增长长度；其余 → ''（仅首发）。 */
-function fingerprintOf(part: ServePart): string {
+function fingerprintOf(part: DriverContent): string {
   if (part.type === 'tool') {
     return toolProgress(part);
   }
@@ -812,8 +1221,8 @@ export class MessageDeltaTracker {
    *  doclib 上下文）绝不进入流式回复，杜绝聊天记录显示注入重复内容。
    *  双路并发（SSE 实时 + 轮询快照）：轮询快照可能比 SSE 事件旧——tool 进度值、
    *  text 长度均为**单调**量，旧快照永远小于已记录值，不会回覆盖（见 noteSent）。 */
-  extractNewParts(messages: ServeMessage[]): ServePart[] {
-    const fresh: ServePart[] = [];
+  extractNewParts(messages: DriverMessage[]): DriverContent[] {
+    const fresh: DriverContent[] = [];
     for (const m of messages) {
       if (m.info?.role !== 'assistant') {
         continue;
@@ -870,7 +1279,7 @@ export class MessageDeltaTracker {
    * 使后续轮询快照对同一 part 的比较以 SSE 已发进度为基准——旧快照压下不回退，
    * 更新的快照仍可继续推进。与 extractNewParts 共用同一套指纹口径。
    */
-  noteSent(part: ServePart): void {
+  noteSent(part: DriverContent): void {
     this.sentPartKeys.set(part.id ?? `<noid>:${fingerprintOf(part)}`, fingerprintOf(part));
   }
 
@@ -891,7 +1300,7 @@ export class MessageDeltaTracker {
    *   但仍拒绝更短快照
    * - 其余类型：仅首次出现放行
    */
-  admitSsePart(part: ServePart, kind: 'update' | 'delta' = 'delta'): boolean {
+  admitSsePart(part: DriverContent, kind: 'update' | 'delta' = 'delta'): boolean {
     const key = part.id ?? `<noid>:${fingerprintOf(part)}`;
     const prev = this.sentPartKeys.get(key);
     const fp = fingerprintOf(part);

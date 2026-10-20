@@ -1,7 +1,7 @@
 /**
  * T10 执行端点测试（node:http POST /execute + FR-41 GET /file）。
  *
- * mock V1Driver + EventSender（fetch 注入收集），真实启动 ExecServer（port 0 随机），
+ * mock 驱动接缝 + EventSender（fetch 注入收集），真实启动 ExecServer（port 0 随机），
  * 覆盖：
  * - /execute 返回 202 {accepted:true} 且驱动 serve（createSession + sendMessage + awaitCompletion）
  * - 事件按序上送：session.updated(running) → message.part.delta（增量去重）→
@@ -21,11 +21,11 @@ import * as os from 'os';
 import { join } from 'path';
 import { EventSender } from '../client/event-client';
 import {
-  V1Driver,
-  ServeMessage,
-  ServePart,
+  DriverContent,
+  DriverMessage,
   DriverRequestError,
-} from '../driver/v1-driver';
+  OpenCodeDriver,
+} from '../driver/opencode-driver';
 import { getLoad, resetInstanceCount } from '../instance-tracker';
 import {
   ExecServer,
@@ -36,18 +36,18 @@ import {
   resolveUsageModelKey,
 } from './exec-server';
 
-function asstMsg(id: string, parts: ServePart[]): ServeMessage {
+function asstMsg(id: string, parts: DriverContent[]): DriverMessage {
   return { info: { id, role: 'assistant' }, parts };
 }
 
-function finishMsgWithModel(modelInfo: Record<string, unknown>): ServeMessage {
+function finishMsgWithModel(modelInfo: Record<string, unknown>): DriverMessage {
   const msg = asstMsg('a1', [textPart('Hello'), stepFinishPart()]);
   Object.assign(msg.info, modelInfo);
   return msg;
 }
 
 /** 覆盖 getMessages：前 2 次（sendAndAwait 基线快照）返回空会话，之后返回指定 msgs。 */
-function serveMessages(getMessages: jest.Mock, msgs: ServeMessage[]): void {
+function serveMessages(getMessages: jest.Mock, msgs: DriverMessage[]): void {
   let calls = 0;
   getMessages.mockImplementation(async () => {
     calls += 1;
@@ -55,35 +55,35 @@ function serveMessages(getMessages: jest.Mock, msgs: ServeMessage[]): void {
   });
 }
 
-function textPart(text: string): ServePart {
+function textPart(text: string): DriverContent {
   return { id: `p_${text}`, type: 'text', text };
 }
 
-function stepFinishPart(): ServePart {
+function stepFinishPart(): DriverContent {
   return { id: 'p_fin', type: 'step-finish', reason: 'stop', cost: 0.5, tokens: { input: 10, output: 2 } };
 }
 
 /** 首轮即完成的 serve messages（含 step-finish）。 */
-const FINISH_MSGS: ServeMessage[] = [
+const FINISH_MSGS: DriverMessage[] = [
   asstMsg('a1', [textPart('Hello'), stepFinishPart()]),
 ];
 
 /** 两轮完成：首轮无 finish（触发增量轮询），次轮追加 finish。 */
-const PARTIAL_MSGS: ServeMessage[] = [
+const PARTIAL_MSGS: DriverMessage[] = [
   asstMsg('a1', [{ id: 'p_start', type: 'step-start' }, textPart('Hello')]),
 ];
-const FINISH_MSGS_2: ServeMessage[] = [
+const FINISH_MSGS_2: DriverMessage[] = [
   ...PARTIAL_MSGS,
   asstMsg('a2', [textPart(' done'), stepFinishPart()]),
 ];
 
 /** 永无首字（仅 step-start，无 text part → 首字超时路径）。 */
-const STEP_START_ONLY: ServeMessage[] = [
+const STEP_START_ONLY: DriverMessage[] = [
   asstMsg('a1', [{ id: 'p_start', type: 'step-start' }]),
 ];
 
 function mockDriver(): {
-  driver: V1Driver;
+  driver: OpenCodeDriver;
   createSession: jest.Mock;
   sendMessage: jest.Mock;
   getMessages: jest.Mock;
@@ -99,7 +99,7 @@ function mockDriver(): {
     return baseCalls <= 2 ? [] : FINISH_MSGS;
   }) as jest.Mock;
   const abort = jest.fn().mockResolvedValue(undefined);
-  const driver = { createSession, sendMessage, getMessages, abort } as unknown as V1Driver;
+  const driver = { createSession, sendMessage, getMessages, abort } as unknown as OpenCodeDriver;
   return { driver, createSession, sendMessage, getMessages, abort };
 }
 
@@ -208,6 +208,80 @@ function getFile(
   });
 }
 
+/**
+ * 可控的假 serve /api/event SSE 服务器：连接后保持打开，push() 逐帧下发。
+ *
+ * `delivered` 在 push() 后延时兑现——帧写进 socket ≠ 订阅方已解析（解析发生在订阅方的
+ * 读循环里）。测试用它把「事件先到」做成**可复现**的（否则只能靠 sleep 赌时序）。
+ */
+async function startFakeSseServer(): Promise<{
+  baseUrl: string;
+  push: (obj: unknown) => void;
+  drop: () => void;
+  connectionCount: () => number;
+  waitForConnection: () => Promise<void>;
+  delivered: Promise<void>;
+  close: () => Promise<void>;
+}> {
+  let resolveConn: () => void = () => undefined;
+  const connected = new Promise<void>((resolve) => {
+    resolveConn = resolve;
+  });
+  let resolveDelivered: () => void = () => undefined;
+  const delivered = new Promise<void>((resolve) => {
+    resolveDelivered = resolve;
+  });
+  let clientRes: http.ServerResponse | null = null;
+  let connections = 0;
+  const server = http.createServer((req, res) => {
+    if (req.url !== '/api/event') {
+      res.statusCode = 404;
+      res.end();
+      return;
+    }
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    // v2 的连接成活帧（**没有** event: 行，类型在 data.type）
+    res.write('data: {"id":"evt_connected","type":"server.connected","data":{}}\n\n');
+    clientRes = res;
+    connections += 1;
+    resolveConn();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  return {
+    baseUrl: `http://127.0.0.1:${port}`,
+    push: (obj) => {
+      try {
+        clientRes?.write(`data: ${JSON.stringify(obj)}\n\n`);
+      } catch {
+        // 客户端已断开：忽略（测试收尾竞态）
+      }
+      setTimeout(() => resolveDelivered(), 30);
+    },
+    drop: () => {
+      try {
+        clientRes?.end();
+      } catch {
+        // 已断开
+      }
+      clientRes = null;
+    },
+    connectionCount: () => connections,
+    waitForConnection: () => connected,
+    delivered,
+    close: () =>
+      new Promise<void>((resolve) => {
+        clientRes?.end();
+        server.closeAllConnections?.();
+        server.close(() => resolve());
+      }),
+  };
+}
+
 describe('ExecServer：POST /execute（T10 执行端点）', () => {
   beforeEach(() => {
     resetInstanceCount();
@@ -224,11 +298,14 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
       expect(res.body).toEqual({ accepted: true });
       await waitFor(() => sent.length >= 5);
       expect(createSession).toHaveBeenCalled();
+      // 常规下发的投递策略也**显式**为 steer（不依赖驱动端默认值）
       expect(sendMessage).toHaveBeenCalledWith('ses_1', {
         model: null,
         agent: undefined,
         parts: [{ type: 'text', text: 'hello' }],
         directory: undefined,
+        system: undefined,
+        delivery: 'steer',
       });
     } finally {
       await exec.stop();
@@ -307,7 +384,8 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
       expect(res.status).toBe(202);
       expect(res.body).toEqual({ accepted: true });
       await waitFor(() => sendMessage.mock.calls.length > 0);
-      // 同 sessionId + directory 透传（prompt_async fire-and-forget）
+      // 同 sessionId + directory 透传；**投递策略显式为 steer**（插队打断当前轮，
+      // 不依赖驱动端默认值——默认值变了行为就静默漂移）
       expect(sendMessage).toHaveBeenCalledTimes(1);
       expect(sendMessage).toHaveBeenCalledWith('ses_flight', {
         model: null,
@@ -315,6 +393,7 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
         parts: [{ type: 'text', text: '追加消息' }],
         directory: '/data/wd',
         system: undefined,
+        delivery: 'steer',
       });
       // 不建跟踪/不出终态事件：无 completion 轮询、无生命周期事件、load 不受影响
       expect(createSession).not.toHaveBeenCalled();
@@ -484,8 +563,8 @@ describe('ExecServer：POST /execute（T10 执行端点）', () => {
       });
       // 增量 delta：第一轮只含消息 a1 的 parts，第二轮只含新消息 a2 的 parts（按消息 id 去重）
       expect(sent[2].payload).toMatchObject({ status: 'streaming' });
-      expect((sent[2].payload.parts as ServePart[]).map((p) => p.type)).toEqual(['step-start', 'text']);
-      expect((sent[3].payload.parts as ServePart[]).map((p) => p.type)).toEqual(['text', 'step-finish']);
+      expect((sent[2].payload.parts as DriverContent[]).map((p) => p.type)).toEqual(['step-start', 'text']);
+      expect((sent[3].payload.parts as DriverContent[]).map((p) => p.type)).toEqual(['text', 'step-finish']);
       // idle + completed（text 聚合 Hello done）
       expect(sent[4].payload).toMatchObject({ sessionId: 'ses_1', status: 'idle' });
       expect(sent[5].payload).toMatchObject({
@@ -1526,7 +1605,7 @@ describe('ExecServer：GET /todos（opencode 会话 todo 步骤端点）', () =>
 
 describe('ExecServer：question/权限确认旁路检测（onPoll 轮询 pending 上送）', () => {
   function mockDriverWithPending(): {
-    driver: V1Driver;
+    driver: OpenCodeDriver;
     getMessages: jest.Mock;
     listQuestions: jest.Mock;
     listPermissions: jest.Mock;
@@ -1548,7 +1627,7 @@ describe('ExecServer：question/权限确认旁路检测（onPoll 轮询 pending
       abort,
       listQuestions,
       listPermissions,
-    } as unknown as V1Driver;
+    } as unknown as OpenCodeDriver;
     return { driver, getMessages, listQuestions, listPermissions };
   }
 
@@ -3487,62 +3566,35 @@ describe('ExecServer：POST /secret-command（token 保护的敏感命令同步�
   });
 });
 
-describe('ExecServer：SSE 转发 onPart 过滤（严格 assistant-only）', () => {
-  /** 可控的假 serve /event SSE 服务器：连接后保持打开，push() 逐帧下发。 */
-  async function startFakeSseServer(): Promise<{
-    baseUrl: string;
-    push: (obj: unknown) => void;
-    waitForConnection: () => Promise<void>;
-    close: () => Promise<void>;
-  }> {
-    let resolveConn: () => void = () => undefined;
-    const connected = new Promise<void>((resolve) => {
-      resolveConn = resolve;
-    });
-    let clientRes: http.ServerResponse | null = null;
-    const server = http.createServer((req, res) => {
-      if (req.url !== '/event') {
-        res.statusCode = 404;
-        res.end();
-        return;
-      }
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      });
-      res.write('data: {"type":"server.connected","properties":{}}\n\n');
-      clientRes = res;
-      resolveConn();
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const { port } = server.address() as { port: number };
+describe('ExecServer：v2 事件路（SSE → vteam 事件）', () => {
+  /** v2 文本增量帧（实测形态：扁平 data + delta 字段 + ordinal，无 durable 块）。 */
+  function textDeltaFrame(sessionID: string, messageID: string, ordinal: number, delta: string): unknown {
     return {
-      baseUrl: `http://127.0.0.1:${port}`,
-      push: (obj) => {
-        try {
-          clientRes?.write(`data: ${JSON.stringify(obj)}\n\n`);
-        } catch {
-          // 客户端已断开：忽略（测试收尾竞态）
-        }
-      },
-      waitForConnection: () => connected,
-      close: () =>
-        new Promise<void>((resolve) => {
-          clientRes?.end();
-          server.closeAllConnections?.();
-          server.close(() => resolve());
-        }),
+      id: `evt_delta_${ordinal}`,
+      created: 1792462754408,
+      type: 'session.text.delta',
+      data: { sessionID, assistantMessageID: messageID, ordinal, delta },
     };
   }
 
-  function ssePart(part: Record<string, unknown>): unknown {
-    return { type: 'message.part.updated', properties: { part } };
+  /** 收集日志的 logger（用于断言「重连后状态重同步」可观测）。 */
+  function captureLogger(): {
+    logger: { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void };
+    lines: string[];
+  } {
+    const lines: string[] = [];
+    return {
+      logger: {
+        info: (m: string) => lines.push(m),
+        warn: (m: string) => lines.push(m),
+        error: (m: string) => lines.push(m),
+      },
+      lines,
+    };
   }
 
-  it('assistant 集合建立前到达的 user part 绝不上送 delta；集合建立后 assistant part 正常上送', async () => {
+  it('v2 文本增量 → message.part.delta（附上游身份；part id 与轮询路统一）', async () => {
     const { driver, getMessages } = mockDriver();
-    // 轮询路先持续返回空会话（任务不完成），由 SSE 路产生 delta；断言完成后放行 finish。
     let finish = false;
     getMessages.mockImplementation(async () => (finish ? FINISH_MSGS : []));
     const sse = await startFakeSseServer();
@@ -3560,44 +3612,29 @@ describe('ExecServer：SSE 转发 onPart 过滤（严格 assistant-only）', () 
     try {
       await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
       await sse.waitForConnection();
+      sse.push(textDeltaFrame('ses_1', 'msg_asst', 0, '你好'));
 
-      // ① assistant 集合尚为空时到达的 user part（注入 prompt 上下文 + 用户原文）——必须丢弃
-      sse.push(
-        ssePart({
-          id: 'prt_user',
-          type: 'text',
-          sessionID: 'ses_1',
-          messageID: 'msg_user',
-          text: '【任务上下文】...【群聊回复要求】...用户原文',
-        }),
-      );
-      // ② message.updated 建立 assistant 集合
-      sse.push({ type: 'message.updated', properties: { info: { id: 'msg_asst', role: 'assistant' } } });
-      // ③ 属于该 assistant 消息的 part——必须上送
-      sse.push(
-        ssePart({
-          id: 'prt_asst',
-          type: 'text',
-          sessionID: 'ses_1',
-          messageID: 'msg_asst',
-          text: 'assistant reply',
-        }),
-      );
-
-      // 等 assistant part 经 SSE 路上送（证明三帧已按序处理完）
       await waitFor(() =>
         sent.some(
           (s) =>
             s.type === 'message.part.delta' &&
-            (s.payload.parts as ServePart[]).some((p) => p.id === 'prt_asst'),
+            (s.payload.parts as DriverContent[]).some((p) => p.text === '你好'),
         ),
       );
-
-      const forwardedIds = sent
-        .filter((s) => s.type === 'message.part.delta')
-        .flatMap((s) => (s.payload.parts as ServePart[]).map((p) => p.id));
-      expect(forwardedIds).toContain('prt_asst');
-      expect(forwardedIds).not.toContain('prt_user');
+      const delta = sent.find(
+        (s) =>
+          s.type === 'message.part.delta' &&
+          (s.payload.parts as DriverContent[]).some((p) => p.text === '你好'),
+      );
+      const part = (delta?.payload.parts as DriverContent[]).find((p) => p.text === '你好');
+      // part id 与轮询路统一（否则 server 按 id 合并会存成两个 part）
+      expect(part?.id).toBe('msg_asst:text');
+      expect(part?.type).toBe('text');
+      // 上游身份（去重键的原料）
+      expect(delta?.payload.upstream).toEqual({
+        eventId: 'evt_delta_0',
+        ordinal: 0,
+      });
 
       finish = true;
       await waitFor(() => sent.some((s) => s.type === 'task.completed'));
@@ -3607,7 +3644,7 @@ describe('ExecServer：SSE 转发 onPart 过滤（严格 assistant-only）', () 
     }
   });
 
-  it('anchoring：未见过整快照的 delta 被丢弃；见过 text-start 整快照后 delta 正常上送', async () => {
+  it('别的会话的事件不入流式输出；用户 prompt 原文（inbox.enqueued）也不入', async () => {
     const { driver, getMessages } = mockDriver();
     let finish = false;
     getMessages.mockImplementation(async () => (finish ? FINISH_MSGS : []));
@@ -3626,36 +3663,423 @@ describe('ExecServer：SSE 转发 onPart 过滤（严格 assistant-only）', () 
     try {
       await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
       await sse.waitForConnection();
-      sse.push({ type: 'message.updated', properties: { info: { id: 'msg_asst', role: 'assistant' } } });
-      // ① 该 part 的权威整快照尚未到达 → 增量片段必须丢弃（连接晚于 part 开始的不完整后缀）
+      // ① 别的会话的增量 → 丢弃
+      sse.push(textDeltaFrame('ses_other', 'msg_other', 0, '别人的内容'));
+      // ② 用户 prompt 原文（入队事件）→ 已知未支持，绝不入流式输出
       sse.push({
-        type: 'message.part.delta',
-        properties: { sessionID: 'ses_1', messageID: 'msg_asst', partID: 'prt_t', field: 'text', delta: '片段' },
-      });
-      // ② text-start 整快照 → 记录该 part，后续增量可放行
-      sse.push(ssePart({ id: 'prt_t', type: 'text', sessionID: 'ses_1', messageID: 'msg_asst', text: '' }));
-      sse.push({
-        type: 'message.part.delta',
-        properties: { sessionID: 'ses_1', messageID: 'msg_asst', partID: 'prt_t', field: 'text', delta: '你好' },
+        id: 'evt_inbox',
+        type: 'session.inbox.enqueued',
+        data: {
+          inboxID: 'msg_inbox_1',
+          sessionID: 'ses_1',
+          item: { type: 'user', payload: { text: '用户原文泄漏？' }, delivery: 'steer' },
+        },
+        durable: { aggregateID: 'ses_1', seq: 1, version: 1 },
       });
 
-      await waitFor(() =>
-        sent.some(
-          (s) =>
-            s.type === 'message.part.delta' &&
-            (s.payload.parts as ServePart[]).some((p) => p.id === 'prt_t' && p.text === '你好'),
-        ),
-      );
-
-      const prtT = sent
+      await waitFor(() => sent.some((s) => s.type === 'session.updated'));
+      const streamed = sent
         .filter((s) => s.type === 'message.part.delta')
-        .flatMap((s) => (s.payload.parts as ServePart[]))
-        .filter((p) => p.id === 'prt_t');
-      expect(prtT.some((p) => p.text === '片段')).toBe(false);
-      expect(prtT.some((p) => p.text === '你好')).toBe(true);
+        .flatMap((s) => (s.payload.parts as DriverContent[]).map((p) => p.text));
+      expect(streamed).not.toContain('别人的内容');
+      expect(streamed.join('')).not.toContain('用户原文');
 
       finish = true;
       await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+
+  it('断线 → 退避重连 → 清空增量缓冲 + 从驱动重同步状态（可观测）', async () => {
+    const { driver, getMessages } = mockDriver();
+    // 断线前：轮询路一直空；重连后的读取返回权威快照（模拟断线期间产生的正文）
+    let reconnected = false;
+    let finish = false;
+    getMessages.mockImplementation(async () => {
+      if (finish) {
+        return FINISH_MSGS;
+      }
+      if (reconnected) {
+        return [
+          {
+            info: { id: 'msg_asst', role: 'assistant' },
+            parts: [{ id: 'msg_asst:0', type: 'text', text: '断线期间产生的正文' }],
+          },
+        ];
+      }
+      return [];
+    });
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    const { sender, sent } = createSender();
+    const { logger, lines } = captureLogger();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await sse.waitForConnection();
+      // 断线（v2 的 volatile 契约：断线期间的事件会丢）
+      sse.drop();
+      // 等退避重连（1s）
+      await waitFor(() => sse.connectionCount() >= 2, 5000);
+      reconnected = true;
+
+      // 重连后：清空增量缓冲 + 从驱动重同步 → 断线期间产生的正文被补发
+      await waitFor(
+        () =>
+          sent.some(
+            (s) =>
+              s.type === 'message.part.delta' &&
+              (s.payload.parts as DriverContent[]).some((p) => p.text === '断线期间产生的正文'),
+          ),
+        5000,
+      );
+      // 可观测：重连与重同步都有日志
+      expect(lines.some((l) => l.includes('事件流重连'))).toBe(true);
+      expect(lines.some((l) => l.includes('已清空增量缓冲'))).toBe(true);
+      expect(lines.some((l) => l.includes('状态重同步'))).toBe(true);
+
+      // 收尾：让本轮正常结束（否则执行仍在飞，会挂住定时器）
+      finish = true;
+      await waitFor(() => sent.some((s) => s.type === 'task.completed'), 5000);
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+
+  it('终态只发一次：事件路 succeeded + 轮询路完成 → 只有一条 task.completed', async () => {
+    const { driver, getMessages } = mockDriver();
+    let finish = false;
+    getMessages.mockImplementation(async () => (finish ? FINISH_MSGS : []));
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await sse.waitForConnection();
+      // 事件路先到：durable 的执行成功
+      sse.push({
+        id: 'evt_done',
+        type: 'session.execution.succeeded',
+        data: { sessionID: 'ses_1' },
+        durable: { aggregateID: 'ses_1', seq: 18, version: 1 },
+      });
+      finish = true;
+      await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(sent.filter((s) => s.type === 'task.completed')).toHaveLength(1);
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+
+  it('事件路判失败 → 不发 task.completed，改发 agent.status(error)', async () => {
+    const { driver, getMessages } = mockDriver();
+    let finish = false;
+    getMessages.mockImplementation(async () => (finish ? FINISH_MSGS : []));
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await sse.waitForConnection();
+      sse.push({
+        id: 'evt_fail',
+        type: 'session.execution.failed',
+        data: { sessionID: 'ses_1', error: { type: 'ProviderModelNotFoundError', message: '模型不存在' } },
+        durable: { aggregateID: 'ses_1', seq: 20, version: 1 },
+      });
+      finish = true;
+      await waitFor(() => sent.some((s) => s.type === 'agent.status'));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(sent.filter((s) => s.type === 'task.completed')).toHaveLength(0);
+      const status = sent.find((s) => s.type === 'agent.status' && s.payload.status === 'error');
+      expect(status?.payload.error).toBe('模型不存在');
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+});
+
+describe('ExecServer：终态协调（事件路 ↔ 轮询路合流，T14）', () => {
+  /** 终态帧（durable）：事件路的权威判定（v2 实测形态：扁平 data + durable 游标）。 */
+  function executionFrame(
+    verdict: 'succeeded' | 'failed',
+    seq: number,
+    error?: string,
+  ): unknown {
+    return {
+      id: `evt_exec_${seq}`,
+      type: `session.execution.${verdict}`,
+      data: {
+        sessionID: 'ses_1',
+        ...(error !== undefined ? { error: { type: 'ProviderAuthError', message: error } } : {}),
+      },
+      durable: { aggregateID: 'ses_1', seq, version: 1 },
+    };
+  }
+
+  /** 收集日志的 logger（终态分歧必须可诊断——靠它断言「谁判的完成」）。 */
+  function captureLogger(): {
+    logger: { info: (m: string) => void; warn: (m: string) => void; error: (m: string) => void };
+    lines: string[];
+  } {
+    const lines: string[] = [];
+    return {
+      logger: {
+        info: (m: string) => lines.push(m),
+        warn: (m: string) => lines.push(m),
+        error: (m: string) => lines.push(m),
+      },
+      lines,
+    };
+  }
+
+  it('两条路都看到完成 → 一轮只发一个终态事件（一条 task.completed + 一条 idle）', async () => {
+    const { driver, getMessages } = mockDriver();
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return [];
+      }
+      if (calls === 2) {
+        // 轮询路这一轮看到 step-finish；同时事件路给出成功（两条路都到得了终态）
+        await sse.waitForConnection();
+        sse.push(executionFrame('succeeded', 18));
+      }
+      return FINISH_MSGS;
+    });
+    const { sender, sent } = createSender();
+    const { logger, lines } = captureLogger();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+      await new Promise((r) => setTimeout(r, 50));
+      // 终态只有一个出口：一条 task.completed + 一条 session.updated(idle)，无失败态、无重复
+      expect(sent.filter((s) => s.type === 'task.completed')).toHaveLength(1);
+      expect(sent.filter((s) => s.type === 'session.updated' && s.payload.status === 'idle')).toHaveLength(1);
+      expect(sent.filter((s) => s.type === 'session.updated' && s.payload.status === 'failed')).toHaveLength(0);
+      expect(sent.filter((s) => s.type === 'agent.status' && s.payload.status === 'error')).toHaveLength(0);
+      // 事件序列与既有行为一致
+      expect(sent.map((s) => s.type)).toEqual([
+        'session.updated',
+        'agent.status',
+        'message.part.delta',
+        'session.updated',
+        'task.completed',
+      ]);
+      // 轮询路问过闸门并采纳了事件证据（证据=event ⇒ 两条路合流到同一个闸门）
+      expect(lines.some((l) => l.includes('判定完成（证据=event）'))).toBe(true);
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+
+  it('事件路先判失败 → 轮询路不宣告成功（不发 task.completed，报失败并带上游错误）', async () => {
+    const { driver, getMessages } = mockDriver();
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        // 基线快照：等事件证据落地（让「事件先到」可复现，而不是靠 sleep 赌时序）
+        await sse.delivered;
+        return [];
+      }
+      // 轮询路的快照里有 step-finish——它本来会判成功，事件路的失败必须压过它
+      return FINISH_MSGS;
+    });
+    const { sender, sent } = createSender();
+    const { logger, lines } = captureLogger();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await sse.waitForConnection();
+      sse.push(executionFrame('failed', 20, 'Invalid API key.'));
+      await sse.delivered;
+      await waitFor(() => sent.some((s) => s.type === 'agent.status' && s.payload.status === 'error'));
+      await new Promise((r) => setTimeout(r, 50));
+      // 事件证据优先：轮询路不得宣告成功 ⇒ 没有 task.completed
+      expect(sent.filter((s) => s.type === 'task.completed')).toHaveLength(0);
+      const status = sent.find((s) => s.type === 'agent.status' && s.payload.status === 'error');
+      expect(status?.payload.error).toBe('Invalid API key.');
+      expect(sent.filter((s) => s.type === 'session.updated' && s.payload.status === 'failed')).toHaveLength(1);
+      // 可诊断：语义层在轮询路宣告成功**之前**就按事件证据短路了（证据=event）
+      expect(
+        lines.some((l) => l.includes('[prompt-await]') && l.includes('事件路判定本轮失败')),
+      ).toBe(true);
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+
+  it('轮询路先看到完成、事件路在宽限期内迟到失败 → 与「事件先到」同一个结论', async () => {
+    const { driver, getMessages } = mockDriver();
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    let calls = 0;
+    getMessages.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return [];
+      }
+      if (calls === 2) {
+        // 轮询路这一轮看到 step-finish；事件路的失败**迟到**（落在宽限期内）
+        await sse.waitForConnection();
+        sse.push(executionFrame('failed', 21, 'Invalid API key.'));
+      }
+      return FINISH_MSGS;
+    });
+    const { sender, sent } = createSender();
+    const { logger, lines } = captureLogger();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await waitFor(() => sent.some((s) => s.type === 'agent.status' && s.payload.status === 'error'));
+      await new Promise((r) => setTimeout(r, 50));
+      // 与「事件先到」同一个结论：失败、不发 task.completed、错误文案一致
+      expect(sent.filter((s) => s.type === 'task.completed')).toHaveLength(0);
+      const status = sent.find((s) => s.type === 'agent.status' && s.payload.status === 'error');
+      expect(status?.payload.error).toBe('Invalid API key.');
+      expect(sent.filter((s) => s.type === 'session.updated' && s.payload.status === 'failed')).toHaveLength(1);
+      // 可诊断：两路分歧被记录（轮询=完成 事件=failed，按事件路判定）
+      expect(lines.some((l) => l.includes('轮询路与事件路判定分歧'))).toBe(true);
+    } finally {
+      await exec.stop();
+      await sse.close();
+    }
+  });
+
+  it('无事件路（驱动未注入 baseUrl ⇒ 无事件信号）：不等待宽限期 + 事件序列与既有行为一致', async () => {
+    // T18：v1 驱动已删除，「没有事件总线」的驱动实现不再存在；事件路的判据只剩
+    // 「驱动是否已注入 baseUrl」——未注入 ⇒ 无事件信号 ⇒ 轮询路不等待宽限期。
+    const { driver, getMessages } = mockDriver();
+    let calls = 0;
+    getMessages.mockImplementation(async () => (calls++ === 0 ? [] : FINISH_MSGS));
+    const { sender, sent } = createSender();
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      const started = Date.now();
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await waitFor(() => sent.some((s) => s.type === 'task.completed'));
+      const elapsed = Date.now() - started;
+      // 没有事件信号 ⇒ 轮询路不等待宽限期（否则 ≥ 500ms）
+      expect(elapsed).toBeLessThan(200);
+      // 事件序列与既有行为一致（无事件路的终态：idle + task.completed）
+      expect(sent.map((s) => s.type)).toEqual([
+        'session.updated',
+        'agent.status',
+        'message.part.delta',
+        'session.updated',
+        'task.completed',
+      ]);
+      expect(sent.filter((s) => s.type === 'task.completed')).toHaveLength(1);
+    } finally {
+      await exec.stop();
+    }
+  });
+
+  it('成功路径发终态时上送失败 → 不再补发终态（一轮只有一条终态事件）', async () => {
+    const { driver, getMessages } = mockDriver();
+    const sse = await startFakeSseServer();
+    driver.baseUrl = sse.baseUrl;
+    let calls = 0;
+    getMessages.mockImplementation(async () => (calls++ === 0 ? [] : FINISH_MSGS));
+    const { sender, sent } = createSender();
+    // 终态事件上送失败（模拟控制面不可达）：成功路径在发 session.updated(idle) 时抛错
+    const rawSend = sender.send.bind(sender);
+    sender.send = (async (type: string, payload: Record<string, unknown>) => {
+      if (type === 'session.updated' && payload.status === 'idle') {
+        throw new Error('控制面不可达');
+      }
+      return rawSend(type as never, payload);
+    }) as EventSender['send'];
+    const exec = new ExecServer({
+      port: 0,
+      driver,
+      sender,
+      firstTokenTimeoutMs: 20000,
+      pollMs: 5,
+      logger: SILENT_LOGGER,
+    });
+    const bound = await exec.start();
+    try {
+      await postExecute(bound, { taskId: 't_1', agentId: 'a_1', sessionId: 'ses_1', prompt: 'go' });
+      await waitFor(() => sent.some((s) => s.type === 'session.updated' && s.payload.status === 'failed'));
+      await new Promise((r) => setTimeout(r, 50));
+      // 终态已开始上送 ⇒ 兜底路径不补发（一轮不会出现第二条 idle / 重复的 task.completed）
+      expect(sent.filter((s) => s.type === 'session.updated' && s.payload.status === 'idle')).toHaveLength(0);
+      expect(sent.filter((s) => s.type === 'task.completed')).toHaveLength(0);
+      expect(sent.filter((s) => s.type === 'session.updated' && s.payload.status === 'failed')).toHaveLength(1);
     } finally {
       await exec.stop();
       await sse.close();

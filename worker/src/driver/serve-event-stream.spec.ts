@@ -1,4 +1,18 @@
-import { ServeEventStream, ServeStreamPart } from './serve-event-stream';
+/**
+ * T11 SSE 帧解析器测试（v2 帧格式）。
+ *
+ * 覆盖计划 T11 的五条验收标准 + 两条风险对策：
+ * 1. 真实抓帧（`docs/agent-platform/opencode-v2-contract-baseline/sse-sample.txt` 与
+ *    T4 spike 抓帧）能解析出 type / durable；
+ * 2. **不要求 `event:` 行**（v2 运行时不发它——OpenAPI schema 声明必填是错的）；
+ * 3. `event:` 行存在时优先取它；
+ * 4. 心跳注释行不报错，且计入「连接成活」；
+ * 5. 多行 `data:` 拼接与空行分帧正确；
+ * 6. **解析失败的帧计数 + 告警，不静默丢、不抛**。
+ */
+
+import { ServeEventStream, parseV2EventFrame } from './serve-event-stream';
+import type { V2EventFrame } from './v2-event-map';
 
 /** 构造一次性的 SSE 响应体（ReadableStream，按帧推入后关闭）。 */
 function sseResponse(frames: string[]): Response {
@@ -14,16 +28,106 @@ function sseResponse(frames: string[]): Response {
   return new Response(body, { status: 200 });
 }
 
-/** 把事件对象包成 SSE data 帧（空行结尾）。 */
+/** 把事件对象包成 SSE data 帧（空行结尾）——v2 形态：**没有** event: 行。 */
 function frame(obj: unknown): string {
   return `data: ${JSON.stringify(obj)}\n\n`;
 }
 
-function partUpdated(part: Record<string, unknown>): string {
-  return frame({ type: 'message.part.updated', properties: { part, time: Date.now() } });
-}
+/** 实机抓帧（v2.0.28）：文本增量。 */
+const REAL_TEXT_DELTA =
+  'data: {"id":"evt_1571b1268001K7PnDkKSWqkYu9","created":1792462754408,"type":"session.text.delta",' +
+  '"location":{"directory":"/tmp/x"},"data":{"sessionID":"ses_ea8e4faa7ffeLwZGHdvHNdLXEL",' +
+  '"assistantMessageID":"msg_1571b1262001G29sNnwsKHmcTE","ordinal":0,"delta":"MOCK_OK"}}\n\n';
 
-describe('ServeEventStream（serve /event SSE 实时订阅）', () => {
+/** 实机抓帧（v2.0.28）：step 结束（带 finish/cost/tokens + durable 游标）。 */
+const REAL_STEP_ENDED =
+  'data: {"id":"evt_1571b125c001LXQpVc0f5Pg7kj","created":1792462754396,"type":"session.step.ended",' +
+  '"location":{"directory":"/tmp/x"},"data":{"sessionID":"ses_ea8e4faa7ffeLwZGHdvHNdLXEL",' +
+  '"assistantMessageID":"msg_1571b1262001G29sNnwsKHmcTE","finish":"tool-calls","rawFinish":"tool_calls",' +
+  '"cost":0,"tokens":{"input":1,"output":1,"reasoning":0,"cache":{"read":0,"write":0}}},' +
+  '"durable":{"aggregateID":"ses_ea8e4faa7ffeLwZGHdvHNdLXEL","seq":12,"version":1}}\n\n';
+
+describe('parseV2EventFrame（v2 帧信封解析）', () => {
+  it('真实抓帧 → 解析出 type / data / durable / created', () => {
+    const parsed = parseV2EventFrame(
+      REAL_TEXT_DELTA.slice('data: '.length, -2),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.frame.type).toBe('session.text.delta');
+    expect(parsed.frame.id).toBe('evt_1571b1268001K7PnDkKSWqkYu9');
+    expect(parsed.frame.created).toBe(1792462754408);
+    // data 是**扁平**的（不是 v1 的 properties 嵌套）
+    expect(parsed.frame.data).toMatchObject({
+      sessionID: 'ses_ea8e4faa7ffeLwZGHdvHNdLXEL',
+      assistantMessageID: 'msg_1571b1262001G29sNnwsKHmcTE',
+      ordinal: 0,
+      delta: 'MOCK_OK',
+    });
+    // 文本增量**没有** durable 块（⇒ ephemeral）
+    expect(parsed.frame.durable).toBeUndefined();
+    expect(parsed.typeSource).toBe('data');
+  });
+
+  it('durable 帧 → 解析出 durable 游标（aggregateID/seq/version）', () => {
+    const parsed = parseV2EventFrame(REAL_STEP_ENDED.slice('data: '.length, -2));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.frame.type).toBe('session.step.ended');
+    expect(parsed.frame.durable).toEqual({
+      aggregateID: 'ses_ea8e4faa7ffeLwZGHdvHNdLXEL',
+      seq: 12,
+      version: 1,
+    });
+    expect(parsed.frame.data.finish).toBe('tool-calls');
+    expect(parsed.frame.location?.directory).toBe('/tmp/x');
+  });
+
+  it('无 event: 行也能解析（v2 运行时不发该行——解析器不得要求它）', () => {
+    const parsed = parseV2EventFrame('{"id":"evt_1","type":"session.created","data":{}}');
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.frame.type).toBe('session.created');
+    expect(parsed.typeSource).toBe('data');
+  });
+
+  it('有 event: 行时优先取它（缺失时回退 data.type）', () => {
+    const withEvent = parseV2EventFrame(
+      '{"id":"evt_1","type":"session.text.delta","data":{}}',
+      'session.text.delta',
+    );
+    expect(withEvent.ok).toBe(true);
+    if (!withEvent.ok) return;
+    expect(withEvent.typeSource).toBe('event');
+    expect(withEvent.frame.type).toBe('session.text.delta');
+
+    // event: 行与 data.type 冲突 → 以 event: 为准（防御性口径），但 dataType 原样带出
+    const conflict = parseV2EventFrame(
+      '{"id":"evt_1","type":"session.text.delta","data":{}}',
+      'message.part.delta',
+    );
+    expect(conflict.ok).toBe(true);
+    if (!conflict.ok) return;
+    expect(conflict.frame.type).toBe('message.part.delta');
+    expect(conflict.dataType).toBe('session.text.delta');
+  });
+
+  it('非 JSON 帧 → 失败原因（非抛），不产出帧', () => {
+    const parsed = parseV2EventFrame('not-json');
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.reason).toContain('非 JSON');
+  });
+
+  it('缺 type 的帧 → 失败原因（event: 行也没有）', () => {
+    const parsed = parseV2EventFrame('{"id":"evt_1","data":{}}');
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.reason).toContain('缺少类型');
+  });
+});
+
+describe('ServeEventStream（v2 /api/event SSE 实时订阅）', () => {
   const originalFetch = global.fetch;
 
   afterEach(() => {
@@ -31,15 +135,65 @@ describe('ServeEventStream（serve /event SSE 实时订阅）', () => {
     jest.useRealTimers();
   });
 
-  it('server.connected 首帧 → onOpen 成活', async () => {
-    const parts: ServeStreamPart[] = [];
-    let opened = 0;
+  it('真实抓帧 → 派发已解析的 v2 帧', async () => {
+    const frames: V2EventFrame[] = [];
     global.fetch = jest.fn().mockResolvedValue(
-      sseResponse([frame({ type: 'server.connected', properties: {} })]),
+      sseResponse([REAL_TEXT_DELTA, REAL_STEP_ENDED]),
     ) as unknown as typeof fetch;
     const stream = new ServeEventStream({
       baseUrl: 'http://127.0.0.1:4096',
-      onPart: (p) => parts.push(p),
+      onEvent: (f) => frames.push(f),
+    });
+    stream.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(frames).toHaveLength(2);
+    expect(frames[0].type).toBe('session.text.delta');
+    expect(frames[1].type).toBe('session.step.ended');
+    expect(frames[1].durable?.seq).toBe(12);
+    stream.close();
+  });
+
+  it('订阅路径是 v2 的 /api/event（不是 v1 的 /event）', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(sseResponse([]));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const stream = new ServeEventStream({ baseUrl: 'http://127.0.0.1:4096/' });
+    stream.start();
+    await new Promise((r) => setTimeout(r, 20));
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:4096/api/event');
+    stream.close();
+  });
+
+  it('server.connected 首帧 → onOpen 成活（且不进事件映射）', async () => {
+    const frames: V2EventFrame[] = [];
+    let opened = 0;
+    global.fetch = jest.fn().mockResolvedValue(
+      sseResponse([frame({ id: 'evt_c', type: 'server.connected', data: {} })]),
+    ) as unknown as typeof fetch;
+    const stream = new ServeEventStream({
+      baseUrl: 'http://127.0.0.1:4096',
+      onEvent: (f) => frames.push(f),
+      onOpen: () => {
+        opened += 1;
+      },
+    });
+    stream.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(opened).toBe(1);
+    expect(frames).toHaveLength(0);
+    stream.close();
+  });
+
+  it('心跳注释行（: heartbeat）不报错，且计入「连接成活」', async () => {
+    let opened = 0;
+    global.fetch = jest.fn().mockResolvedValue(
+      sseResponse([': heartbeat\n\n', ': heartbeat\n\n']),
+    ) as unknown as typeof fetch;
+    const stream = new ServeEventStream({
+      baseUrl: 'http://127.0.0.1:4096',
+      onEvent: () => {
+        throw new Error('心跳不应产生事件');
+      },
       onOpen: () => {
         opened += 1;
       },
@@ -50,215 +204,173 @@ describe('ServeEventStream（serve /event SSE 实时订阅）', () => {
     stream.close();
   });
 
-  it('message.part.updated → 整 part 快照透传 onPart', async () => {
-    const parts: ServeStreamPart[] = [];
-    global.fetch = jest.fn().mockResolvedValue(
-      sseResponse([
-        frame({ type: 'server.connected', properties: {} }),
-        partUpdated({ id: 'prt_1', type: 'text', sessionID: 'ses_a', messageID: 'msg_1', text: 'hello' }),
-        partUpdated({
-          id: 'prt_2',
-          type: 'tool',
-          sessionID: 'ses_a',
-          messageID: 'msg_1',
-          tool: 'bash',
-          state: { status: 'completed', input: { command: 'ls' }, output: 'a.txt' },
-        }),
-      ]),
-    ) as unknown as typeof fetch;
-    const stream = new ServeEventStream({
-      baseUrl: 'http://127.0.0.1:4096',
-      onPart: (p) => parts.push(p),
-    });
-    stream.start();
-    await new Promise((r) => setTimeout(r, 30));
-    expect(parts).toHaveLength(2);
-    expect(parts[0]).toMatchObject({ id: 'prt_1', type: 'text', text: 'hello' });
-    expect(parts[1]).toMatchObject({ id: 'prt_2', type: 'tool' });
-    stream.close();
-  });
-
-  it('message.part.delta → 按 partID 累积成合成 text part，逐次增长', async () => {
-    const parts: ServeStreamPart[] = [];
-    global.fetch = jest.fn().mockResolvedValue(
-      sseResponse([
-        frame({
-          type: 'message.part.delta',
-          properties: { sessionID: 'ses_a', messageID: 'msg_1', partID: 'prt_t', field: 'text', delta: '你好' },
-        }),
-        frame({
-          type: 'message.part.delta',
-          properties: { sessionID: 'ses_a', messageID: 'msg_1', partID: 'prt_t', field: 'text', delta: '世界' },
-        }),
-      ]),
-    ) as unknown as typeof fetch;
-    const stream = new ServeEventStream({
-      baseUrl: 'http://127.0.0.1:4096',
-      onPart: (p) => parts.push(p),
-    });
-    stream.start();
-    await new Promise((r) => setTimeout(r, 30));
-    expect(parts).toHaveLength(2);
-    expect(parts[0]).toMatchObject({ id: 'prt_t', type: 'text', text: '你好' });
-    expect(parts[1]).toMatchObject({ id: 'prt_t', type: 'text', text: '你好世界' });
-    stream.close();
-  });
-
-  it('part.updated 到达 → 清除同 partID 的 delta 累积缓冲（权威快照覆盖）', async () => {
-    const parts: ServeStreamPart[] = [];
-    global.fetch = jest.fn().mockResolvedValue(
-      sseResponse([
-        frame({
-          type: 'message.part.delta',
-          properties: { sessionID: 'ses_a', messageID: 'msg_1', partID: 'prt_t', field: 'text', delta: '旧增量' },
-        }),
-        // 整快照覆盖后 buffered 的「旧增量」作废：后续 delta 从零累积
-        partUpdated({ id: 'prt_t', type: 'text', sessionID: 'ses_a', messageID: 'msg_1', text: '完整文本' }),
-        frame({
-          type: 'message.part.delta',
-          properties: { sessionID: 'ses_a', messageID: 'msg_1', partID: 'prt_t', field: 'text', delta: '续' },
-        }),
-      ]),
-    ) as unknown as typeof fetch;
-    const stream = new ServeEventStream({
-      baseUrl: 'http://127.0.0.1:4096',
-      onPart: (p) => parts.push(p),
-    });
-    stream.start();
-    await new Promise((r) => setTimeout(r, 30));
-    expect(parts).toHaveLength(3);
-    expect(parts[0].text).toBe('旧增量');
-    expect(parts[1].text).toBe('完整文本');
-    expect(parts[2].text).toBe('续'); // 缓冲已清，不是「旧增量续」
-    stream.close();
-  });
-
-  it('delta 合成类型跟随整快照记录的 part 类型（reasoning 增量 field=text 亦标 reasoning）', async () => {
-    const parts: ServeStreamPart[] = [];
-    const kinds: string[] = [];
-    global.fetch = jest.fn().mockResolvedValue(
-      sseResponse([
-        partUpdated({ id: 'prt_r', type: 'reasoning', sessionID: 'ses_a', messageID: 'msg_1', text: '' }),
-        frame({
-          type: 'message.part.delta',
-          properties: { sessionID: 'ses_a', messageID: 'msg_1', partID: 'prt_r', field: 'text', delta: '思考中' },
-        }),
-      ]),
-    ) as unknown as typeof fetch;
-    const stream = new ServeEventStream({
-      baseUrl: 'http://127.0.0.1:4096',
-      onPart: (p, k) => {
-        parts.push(p);
-        kinds.push(k);
-      },
-    });
-    stream.start();
-    await new Promise((r) => setTimeout(r, 30));
-    expect(kinds).toEqual(['update', 'delta']);
-    expect(parts[0]).toMatchObject({ id: 'prt_r', type: 'reasoning' });
-    expect(parts[1]).toMatchObject({ id: 'prt_r', type: 'reasoning', text: '思考中' });
-    stream.close();
-  });
-
-  it('未见过整快照的 delta：类型回落 text（kind=delta 供调用方做单调准入）', async () => {
-    const parts: ServeStreamPart[] = [];
-    const kinds: string[] = [];
-    global.fetch = jest.fn().mockResolvedValue(
-      sseResponse([
-        frame({
-          type: 'message.part.delta',
-          properties: { sessionID: 'ses_a', messageID: 'msg_1', partID: 'prt_x', field: 'text', delta: 'hi' },
-        }),
-      ]),
-    ) as unknown as typeof fetch;
-    const stream = new ServeEventStream({
-      baseUrl: 'http://127.0.0.1:4096',
-      onPart: (p, k) => {
-        parts.push(p);
-        kinds.push(k);
-      },
-    });
-    stream.start();
-    await new Promise((r) => setTimeout(r, 30));
-    expect(parts[0]).toMatchObject({ id: 'prt_x', type: 'text', text: 'hi' });
-    expect(kinds).toEqual(['delta']);
-    stream.close();
-  });
-
-  it('message.updated → onMessageInfo 透传 info（assistant 集合建立源）', async () => {
-    const infos: Array<{ id?: unknown; role?: unknown }> = [];
-    global.fetch = jest.fn().mockResolvedValue(
-      sseResponse([
-        frame({ type: 'message.updated', properties: { info: { id: 'msg_1', role: 'assistant' } } }),
-        frame({ type: 'message.updated', properties: { info: { id: 'msg_u', role: 'user' } } }),
-      ]),
-    ) as unknown as typeof fetch;
-    const stream = new ServeEventStream({
-      baseUrl: 'http://127.0.0.1:4096',
-      onPart: () => {},
-      onMessageInfo: (i) => infos.push(i),
-    });
-    stream.start();
-    await new Promise((r) => setTimeout(r, 30));
-    expect(infos).toHaveLength(2);
-    expect(infos[0]).toEqual({ id: 'msg_1', role: 'assistant' });
-    expect(infos[1]).toEqual({ id: 'msg_u', role: 'user' });
-    stream.close();
-  });
-
-  it('非 JSON 帧与未知事件类型：忽略不抛错、不中断流', async () => {
-    const parts: ServeStreamPart[] = [];
+  it('非 JSON 帧 → 计数 + 告警，不抛、不中断流（后续帧照常派发）', async () => {
+    const frames: V2EventFrame[] = [];
+    const malformed: Array<{ reason: string; count: number }> = [];
+    const warns: string[] = [];
     global.fetch = jest.fn().mockResolvedValue(
       sseResponse([
         'data: not-json\n\n',
-        frame({ type: 'session.idle', properties: { sessionID: 'ses_a' } }),
-        partUpdated({ id: 'prt_ok', type: 'text', sessionID: 'ses_a', messageID: 'msg_1', text: 'ok' }),
+        frame({ id: 'evt_ok', type: 'session.text.delta', data: { delta: 'x' } }),
       ]),
     ) as unknown as typeof fetch;
     const stream = new ServeEventStream({
       baseUrl: 'http://127.0.0.1:4096',
-      onPart: (p) => parts.push(p),
+      onEvent: (f) => frames.push(f),
+      onMalformed: (info) => malformed.push({ reason: info.reason, count: info.count }),
+      logger: { warn: (m) => warns.push(m) },
     });
     stream.start();
     await new Promise((r) => setTimeout(r, 30));
-    expect(parts).toHaveLength(1);
-    expect(parts[0]).toMatchObject({ id: 'prt_ok', text: 'ok' });
+    expect(malformed).toHaveLength(1);
+    expect(malformed[0].count).toBe(1);
+    expect(malformed[0].reason).toContain('非 JSON');
+    expect(warns.some((w) => w.includes('解析失败'))).toBe(true);
+    expect(stream.malformedFrames).toBe(1);
+    // 后续帧照常派发（解析失败不中断流）
+    expect(frames).toHaveLength(1);
+    expect(frames[0].type).toBe('session.text.delta');
     stream.close();
   });
 
-  it('多行 data 帧按 \\n 拼接解析', async () => {
-    const parts: ServeStreamPart[] = [];
-    const multi = `data: {"type":"message.part.updated",\n` + `data: "properties":{"part":{"id":"prt_m","type":"text","text":"x"}}}\n\n`;
-    global.fetch = jest.fn().mockResolvedValue(sseResponse([multi])) as unknown as typeof fetch;
+  it('缺 type 的帧 → 计数 + 告警，不抛', async () => {
+    const malformed: string[] = [];
+    global.fetch = jest.fn().mockResolvedValue(
+      sseResponse(['data: {"id":"evt_1","data":{}}\n\n']),
+    ) as unknown as typeof fetch;
     const stream = new ServeEventStream({
       baseUrl: 'http://127.0.0.1:4096',
-      onPart: (p) => parts.push(p),
+      onEvent: () => {},
+      onMalformed: (info) => malformed.push(info.reason),
     });
     stream.start();
     await new Promise((r) => setTimeout(r, 30));
-    expect(parts).toHaveLength(1);
-    expect(parts[0]).toMatchObject({ id: 'prt_m', text: 'x' });
+    expect(malformed).toHaveLength(1);
+    expect(malformed[0]).toContain('缺少类型');
+    expect(stream.malformedFrames).toBe(1);
+    stream.close();
+  });
+
+  it('多行 data 帧按 \\n 拼接解析 + 空行分帧', async () => {
+    const frames: V2EventFrame[] = [];
+    const multi =
+      `data: {"id":"evt_m","type":"session.text.delta",\n` +
+      `data: "data":{"delta":"你好"}}\n\n`;
+    global.fetch = jest.fn().mockResolvedValue(sseResponse([multi])) as unknown as typeof fetch;
+    const stream = new ServeEventStream({
+      baseUrl: 'http://127.0.0.1:4096',
+      onEvent: (f) => frames.push(f),
+    });
+    stream.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(frames).toHaveLength(1);
+    expect(frames[0].type).toBe('session.text.delta');
+    expect(frames[0].data.delta).toBe('你好');
+    stream.close();
+  });
+
+  it('记录 durable 游标（断线补齐的锚点）：同一聚合取最大 seq', async () => {
+    global.fetch = jest.fn().mockResolvedValue(
+      sseResponse([
+        frame({
+          id: 'evt_1',
+          type: 'session.step.ended',
+          data: { assistantMessageID: 'msg_1', finish: 'stop' },
+          durable: { aggregateID: 'ses_a', seq: 3, version: 1 },
+        }),
+        frame({
+          id: 'evt_2',
+          type: 'session.step.ended',
+          data: { assistantMessageID: 'msg_1', finish: 'stop' },
+          durable: { aggregateID: 'ses_a', seq: 9, version: 1 },
+        }),
+        frame({
+          id: 'evt_3',
+          type: 'session.step.ended',
+          data: { assistantMessageID: 'msg_1', finish: 'stop' },
+          durable: { aggregateID: 'ses_a', seq: 5, version: 1 },
+        }),
+      ]),
+    ) as unknown as typeof fetch;
+    const stream = new ServeEventStream({ baseUrl: 'http://127.0.0.1:4096' });
+    stream.start();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(stream.lastSeq('ses_a')).toBe(9);
     stream.close();
   });
 
   it('流对端关闭 → onClose 回调 + 退避重连（新 fetch 调用）', async () => {
     jest.useFakeTimers();
-    const closes: string[] = [];
-    const fetchMock = jest.fn()
-      .mockResolvedValueOnce(sseResponse([frame({ type: 'server.connected', properties: {} })]))
+    const closes: Array<{ reason: string; frames: number }> = [];
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(sseResponse([frame({ id: 'evt_c', type: 'server.connected', data: {} })]))
       .mockImplementation(() => new Promise<Response>(() => {})); // 重连后挂起
     global.fetch = fetchMock as unknown as typeof fetch;
     const stream = new ServeEventStream({
       baseUrl: 'http://127.0.0.1:4096',
-      onPart: () => {},
-      onClose: (r) => closes.push(r),
+      onClose: (reason, info) => closes.push({ reason, frames: info.frames }),
     });
     stream.start();
     await jest.advanceTimersByTimeAsync(50);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await jest.advanceTimersByTimeAsync(1200); // 退避 1s 后重连
-    expect(closes).toEqual(['stream-closed']);
+    expect(closes[0].reason).toBe('stream-closed');
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    stream.close();
+  });
+
+  it('重连成功 → onReconnect 被调用（重连后状态重同步的钩子）', async () => {
+    jest.useFakeTimers();
+    const reconnects: number[] = [];
+    // 第二次连接：响应头已到、body 保持打开（连接建立成功但不再断）
+    const hangingBody = new ReadableStream<Uint8Array>({
+      start() {
+        /* 永不结束 */
+      },
+    });
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(sseResponse([]))
+      .mockResolvedValue(new Response(hangingBody, { status: 200 }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const stream = new ServeEventStream({
+      baseUrl: 'http://127.0.0.1:4096',
+      onReconnect: (info) => {
+        reconnects.push(info.attempt);
+      },
+    });
+    stream.start();
+    await jest.advanceTimersByTimeAsync(50);
+    await jest.advanceTimersByTimeAsync(1200);
+    expect(reconnects).toEqual([1]);
+    stream.close();
+  });
+
+  it('onReconnect 返回的 Promise 未兑现前不派发新帧（补齐先于新帧）', async () => {
+    jest.useFakeTimers();
+    const events: string[] = [];
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValueOnce(sseResponse([]))
+      .mockImplementation(() => new Promise<Response>(() => {}));
+    global.fetch = fetchMock as unknown as typeof fetch;
+    const stream = new ServeEventStream({
+      baseUrl: 'http://127.0.0.1:4096',
+      onReconnect: () => gate,
+      onEvent: (f) => events.push(f.type),
+    });
+    stream.start();
+    await jest.advanceTimersByTimeAsync(50);
+    await jest.advanceTimersByTimeAsync(1200);
+    // 重连已发起但被闸门挡住：此时不应有任何新帧被派发
+    expect(events).toHaveLength(0);
+    release();
+    await jest.advanceTimersByTimeAsync(10);
     stream.close();
   });
 
@@ -266,10 +378,7 @@ describe('ServeEventStream（serve /event SSE 实时订阅）', () => {
     jest.useFakeTimers();
     const fetchMock = jest.fn().mockResolvedValue(sseResponse([]));
     global.fetch = fetchMock as unknown as typeof fetch;
-    const stream = new ServeEventStream({
-      baseUrl: 'http://127.0.0.1:4096',
-      onPart: () => {},
-    });
+    const stream = new ServeEventStream({ baseUrl: 'http://127.0.0.1:4096' });
     stream.start();
     await jest.advanceTimersByTimeAsync(50);
     stream.close();
@@ -280,14 +389,14 @@ describe('ServeEventStream（serve /event SSE 实时订阅）', () => {
   it('fetch 抛错（HTTP 非 2xx/网络错）→ onClose + 重连，不抛出到调用方', async () => {
     jest.useFakeTimers();
     const closes: string[] = [];
-    const fetchMock = jest.fn()
+    const fetchMock = jest
+      .fn()
       .mockResolvedValueOnce(new Response('nope', { status: 503 }))
       .mockImplementation(() => new Promise<Response>(() => {}));
     global.fetch = fetchMock as unknown as typeof fetch;
     const stream = new ServeEventStream({
       baseUrl: 'http://127.0.0.1:4096',
-      onPart: () => {},
-      onClose: (r) => closes.push(r),
+      onClose: (reason) => closes.push(reason),
     });
     stream.start();
     await jest.advanceTimersByTimeAsync(50);
@@ -303,12 +412,11 @@ describe('ServeEventStream（serve /event SSE 实时订阅）', () => {
     const stream = new ServeEventStream({
       baseUrl: 'http://127.0.0.1:4096/',
       serverPassword: 'pw',
-      onPart: () => {},
     });
     stream.start();
     await new Promise((r) => setTimeout(r, 20));
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://127.0.0.1:4096/event'); // baseUrl 尾部斜线归一
+    expect(url).toBe('http://127.0.0.1:4096/api/event');
     expect(init.headers.Authorization).toBe(`Basic ${Buffer.from('opencode:pw').toString('base64')}`);
     stream.close();
   });

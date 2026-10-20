@@ -6,7 +6,9 @@
  * 与 server 约定：SERVER_URL 默认 http://localhost:3000（nest 默认端口）。
  */
 
+import * as fs from 'fs';
 import * as os from 'os';
+import * as path from 'path';
 
 export interface WorkerConfig {
   /** 注册鉴权 token（对齐协议 X-Worker-Token header，D1）；必填 */
@@ -19,8 +21,26 @@ export interface WorkerConfig {
   workerName: string;
   /** opencode serve 端口；0 = 随机端口（D2 端口冲突重试策略的随机起点，T3 由 OS 分配空闲端口） */
   opencodeServePort: number;
-  /** opencode serve 认证密码（OPENCODE_SERVER_PASSWORD，Basic Auth username=opencode，D2）；空 = 不设鉴权 */
+  /**
+   * opencode serve 认证密码（OPENCODE_SERVER_PASSWORD，Basic Auth username=opencode，D2）。
+   * ⚠️ v2 **恒开鉴权**：为空时 opencode 会自动生成随机密码并打到 stdout，worker 不解析它
+   * 就会全线 401 → 默认 **fail-fast**（见 allowGeneratedPassword 的逃生开关）。
+   */
   serverPassword: string;
+  /**
+   * 逃生开关（env OPENCODE_ALLOW_GENERATED_PASSWORD）：允许在**未配置**密码时，从 serve stdout
+   * 的 `server password <pw>` 行捕获 opencode 自动生成的密码并采用。
+   * 默认 false（v2 恒开鉴权 → 密码为空即 fail-fast，给出可操作错误）。
+   */
+  allowGeneratedPassword: boolean;
+  /**
+   * 驱动模式开关（env OPENCODE_V2_ENABLED）：**恒为 true**（T18 起单轨）。
+   *
+   * ⚠️ 显式 false（`OPENCODE_V2_ENABLED=false`）在 `loadConfig` 阶段**直接抛错**：
+   * v1 驱动已随 v2 切换删除（计划 §9.3 的回滚保险用尽），留一个「看起来能切、实际切不了」
+   * 的开关 = 故障时按错方向排查。唯一有效回退是回滚镜像/代码到 v1.0.x（并回滚数据卷）。
+   */
+  opencodeV2Enabled: boolean;
   /** 心跳间隔 ms；默认 10000（D1：10s 心跳，server 30s=3 周期判 offline） */
   heartbeatIntervalMs: number;
   /** 日志级别；默认 info */
@@ -76,6 +96,143 @@ export interface WorkerConfig {
    * serve + 执行端点照常启动（无 SERVER_URL 可达也能起）。默认 false = 现行注册模式。
    */
   standalone: boolean;
+  /**
+   * opencode 隔离配置域（T16b）：serve 子进程的 HOME / XDG_* 全部指向它，
+   * 宿主机的全局配置、全局插件、全局 AGENTS.md 不在作用域内。
+   */
+  isolationScope: OpencodeIsolationScope;
+}
+
+/* -------------------------------------------------------------------------- *
+ * 隔离配置域（T16b：T6 结论「v2 没有 --pure 等价物」的落地）
+ * -------------------------------------------------------------------------- */
+
+/**
+ * 隔离根目录的 env 名（运维可覆盖；缺省 = `<HOME>/.opencode-iso`）。
+ *
+ * 为什么需要它：opencode **v2 删掉了 `--pure`**（T6 实测 13 例矩阵），
+ * `plugins: []` / `instructions: []` / `experimental` / `OPENCODE_CONFIG*` **全部无效**
+ * （`plugins` 是跨配置**合并**语义、`instructions` 只能**追加**），
+ * `OPENCODE_DISABLE_PROJECT_CONFIG=1` 会连**项目 `opencode.json`** 一起杀掉（vteam 不能用），
+ * `plugins: ["-*"]` 会把内置 agent/provider 一起关掉（`Agent not found: "build"`）——
+ * ⇒ **唯一可靠手段 = 隔离配置发现路径**：给 serve 一个自己的 `HOME` / `XDG_CONFIG_HOME`，
+ * 宿主机的全局配置、全局插件、全局 `AGENTS.md` 全部不在作用域内。
+ */
+export const OPENCODE_ISOLATION_ROOT_ENV = 'OPENCODE_ISOLATION_ROOT';
+
+/** 隔离根目录的默认目录名（挂在 worker 自己的 HOME 下）。 */
+const ISOLATION_ROOT_DIR_NAME = '.opencode-iso';
+
+/**
+ * opencode 隔离配置域的目录布局（T16b）。
+ *
+ * 布局（全部在**同一个持久化卷**上）：
+ * ```
+ * <root>/                        隔离根（= <HOME>/.opencode-iso，落在 worker_home 卷上）
+ *   home/                        子进程 HOME（**空目录** → 任何 $HOME 兜底路径都落在隔离域内）
+ *   config/opencode/opencode.json  全局配置（provider 段）      ← XDG_CONFIG_HOME=<root>/config
+ *   data/opencode/auth.json        模型凭据                      ← XDG_DATA_HOME=<root>/data
+ *   data/opencode/opencode.db      v2 会话库（SQLite）            ← 同上
+ *   data/opencode/log/opencode.log serve 诊断日志                ← 同上
+ *   state/opencode/                状态                          ← XDG_STATE_HOME=<root>/state
+ *   cache/opencode/                缓存                          ← XDG_CACHE_HOME=<root>/cache
+ * ```
+ *
+ * ⚠️ **为什么落在 worker 的 HOME 下（而不是 workDir 下）**：
+ * ① workDir 是 **opencode 的项目作用域**（serve cwd = workDir，vteam 的项目 `opencode.json`
+ *    与 `.opencode/` 注入物都在那儿）——把"全局作用域"塞进项目作用域会让两层的边界变模糊；
+ * ② worker 的 HOME **本来就是**部署里为 opencode 数据持久化预留的卷
+ *    （compose：`worker_home:/root`，注释明写"opencode.db 会话库、auth.json 模型凭据、log"；
+ *    chart：`HOME=/root` + `worker-home` PVC）——⇒ 隔离根默认落在这块已有持久化卷上，
+ *    **部署侧零改动**，且与 v1 的旧数据（`<HOME>/.local/share/opencode/`）天然隔离
+ *    （不复用 v1 数据卷，符合计划 T16b 的"回滚关系"）。
+ */
+export interface OpencodeIsolationScope {
+  /** 隔离根目录（启动日志打印的就是它；不含任何密文） */
+  root: string;
+  /** 子进程 HOME（空目录 → 宿主的 ~/.config、~/.local/share 一律不在作用域内） */
+  home: string;
+  /** 子进程 XDG_CONFIG_HOME（全局配置 / 全局插件 / 全局 AGENTS.md 的作用域） */
+  configHome: string;
+  /** 子进程 XDG_DATA_HOME（auth.json / 会话库 / 日志） */
+  dataHome: string;
+  /** 子进程 XDG_STATE_HOME */
+  stateHome: string;
+  /** 子进程 XDG_CACHE_HOME */
+  cacheHome: string;
+  /** 全局 opencode 配置文件（provider 段的落点） */
+  configFile: string;
+  /** 模型凭据文件（auth.json 的落点） */
+  authJsonFile: string;
+  /** serve 诊断日志文件（次级错误源） */
+  logFile: string;
+  /** v2 会话库（SQLite；**绝不可删**——D11 铁律） */
+  dbFile: string;
+}
+
+/**
+ * 解析隔离配置域。
+ *
+ * - 根目录：`env.OPENCODE_ISOLATION_ROOT`（非空则用它）→ 缺省 `<HOME>/.opencode-iso`；
+ * - `HOME` 取 `os.homedir()`（POSIX 下它本身就优先读 `$HOME`；用 os 而非 env 是为了让
+ *   单测能 mock 住 home——`exec/local-config.ts` 也走同一套默认落点）。
+ *
+ * 纯函数（不碰文件系统），单测可直接断言布局。
+ */
+export function resolveIsolationScope(
+  env: NodeJS.ProcessEnv = process.env,
+): OpencodeIsolationScope {
+  const rawRoot = (env[OPENCODE_ISOLATION_ROOT_ENV] ?? '').trim();
+  const root =
+    rawRoot !== '' ? path.resolve(rawRoot) : path.join(os.homedir(), ISOLATION_ROOT_DIR_NAME);
+  const home = path.join(root, 'home');
+  const configHome = path.join(root, 'config');
+  const dataHome = path.join(root, 'data');
+  const stateHome = path.join(root, 'state');
+  const cacheHome = path.join(root, 'cache');
+  return {
+    root,
+    home,
+    configHome,
+    dataHome,
+    stateHome,
+    cacheHome,
+    configFile: path.join(configHome, 'opencode', 'opencode.json'),
+    authJsonFile: path.join(dataHome, 'opencode', 'auth.json'),
+    logFile: path.join(dataHome, 'opencode', 'log', 'opencode.log'),
+    dbFile: path.join(dataHome, 'opencode', 'opencode.db'),
+  };
+}
+
+/**
+ * 物化隔离配置域的目录（mkdir -p 五个落点）。
+ *
+ * 为什么由 worker 显式建：serve 的 `HOME` / `XDG_*` 全部指向这里，空目录会让部分
+ * 依赖 HOME 存在的路径解析失败；提前建好也让"隔离域落在哪个卷"在启动日志里一眼可见。
+ * 失败**不阻断启动**（opencode 自己也会按需创建），只告警。
+ *
+ * @returns 实际创建的目录列表（失败时返回已成功的部分）。
+ */
+export function ensureIsolationScope(scope: OpencodeIsolationScope): string[] {
+  const created: string[] = [];
+  for (const dir of [
+    scope.root,
+    scope.home,
+    scope.configHome,
+    scope.dataHome,
+    scope.stateHome,
+    scope.cacheHome,
+  ]) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      created.push(dir);
+    } catch (err) {
+      console.warn(
+        `[config] 隔离配置域目录创建失败（忽略，serve 会自行按需创建）: ${dir} (${(err as Error).message})`,
+      );
+    }
+  }
+  return created;
 }
 
 /**
@@ -147,6 +304,24 @@ function parseBool(name: string, raw: string | undefined, fallback: boolean): bo
   return fallback;
 }
 
+/**
+ * 驱动模式开关解析（T18 起单轨）。
+ *
+ * 显式 false → **抛错**（响亮失败，绝不静默）：v1 驱动已随 v2 切换删除，
+ * `OPENCODE_V2_ENABLED=false` 不再有第二个实现可选——静默继续跑只会让故障现场更难解释。
+ * 错误文案直接指向真正的回退手段（回滚镜像/代码到 v1.0.x + 回滚数据卷）。
+ */
+function parseDriverModeSwitch(name: string, raw: string | undefined): boolean {
+  const enabled = parseBool(name, raw, true);
+  if (!enabled) {
+    throw new Error(
+      `[config] ${name}=false 已不再支持：v1 驱动已随 v2 切换移除（T18 单轨收口）；` +
+        '回退请回滚镜像/代码到 v1.0.x（并一并回滚 opencode 数据卷——v2 启动时已就地迁移该卷）。',
+    );
+  }
+  return enabled;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
   const workerToken = (env.X_WORKER_TOKEN ?? '').trim();
   if (!workerToken) {
@@ -170,6 +345,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     workerName,
     opencodeServePort: parseNonNegativeInt('OPENCODE_SERVE_PORT', env.OPENCODE_SERVE_PORT, 0),
     serverPassword: (env.OPENCODE_SERVER_PASSWORD ?? '').trim(),
+    allowGeneratedPassword: parseBool(
+      'OPENCODE_ALLOW_GENERATED_PASSWORD',
+      env.OPENCODE_ALLOW_GENERATED_PASSWORD,
+      false,
+    ),
+    opencodeV2Enabled: parseDriverModeSwitch(
+      'OPENCODE_V2_ENABLED',
+      env.OPENCODE_V2_ENABLED,
+    ),
     heartbeatIntervalMs: parseNonNegativeInt('HEARTBEAT_INTERVAL_MS', env.HEARTBEAT_INTERVAL_MS, 10000),
     logLevel: (env.LOG_LEVEL ?? '').trim() || 'info',
     workDir: (env.WORK_DIR ?? '').trim() || '/data/vteam-worker',
@@ -192,5 +376,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
       0,
     ),
     standalone: parseBool('WORKER_STANDALONE', env.WORKER_STANDALONE, false),
+    isolationScope: resolveIsolationScope(env),
   };
 }
