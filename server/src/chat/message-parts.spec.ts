@@ -72,7 +72,10 @@ describe('mergePartsById 流式单调守卫（monotonicText）', () => {
   const text = (id: string, body: string) => ({ id, type: 'text', text: body });
 
   it('默认（不开启）保持 last-write-wins：更短快照照样覆盖（回归原语义）', () => {
-    const merged = mergePartsById([text('p1', 'hello world')], [text('p1', 'hi')]);
+    const merged = mergePartsById(
+      [text('p1', 'hello world')],
+      [text('p1', 'hi')],
+    );
     expect(merged).toEqual([text('p1', 'hi')]);
   });
 
@@ -139,15 +142,17 @@ describe('mergePartsById 流式单调守卫（monotonicText）', () => {
       tool: 'bash',
       state: { status: 'completed', input: { command: 'ls' }, output: 'a.txt' },
     };
-    expect(mergePartsById([running], [done], { monotonicText: true })).toEqual([done]);
+    expect(mergePartsById([running], [done], { monotonicText: true })).toEqual([
+      done,
+    ]);
   });
 
   it('开启后：reasoning 的 summary/thoughts 候选字段同样计入单调比较', () => {
     const older = { id: 'r1', type: 'reasoning', summary: '想'.repeat(80) };
     const shorter = { id: 'r1', type: 'reasoning', summary: '想'.repeat(10) };
-    expect(mergePartsById([older], [shorter], { monotonicText: true })).toEqual([
-      older,
-    ]);
+    expect(mergePartsById([older], [shorter], { monotonicText: true })).toEqual(
+      [older],
+    );
   });
 
   it('开启后：新 id 仍按到达顺序追加', () => {
