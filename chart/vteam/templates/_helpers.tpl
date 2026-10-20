@@ -114,6 +114,17 @@ secret.yaml 与 configmap.yaml（拼装 DATABASE_URL）必须引用同一个生�
 {{- end }}
 
 {{/*
+opencode serve 密码（OPENCODE_SERVER_PASSWORD）。
+生成策略与 jwtSecret / workerToken / modelKey 同款（randAlphaNum 32），
+但**不设明文入口**（values.yaml 放明文 = 泄露面，且会进 helm 命令行 / values 仓库）——
+运维自控密码走 secret.existingSecret（该 Secret 须含同名 key）。
+*/}}
+{{- define "vteam.opencodeServerPassword" -}}
+{{- $_ := set . "vteamOpencodeServerPassword" (default (randAlphaNum 32) .vteamOpencodeServerPassword) }}
+{{- .vteamOpencodeServerPassword }}
+{{- end }}
+
+{{/*
 镜像完整名：registry 前缀已含在 repository（如 docker.ketaops.cc/ketaops/vteam-server）。
 */}}
 {{- define "vteam.image" -}}

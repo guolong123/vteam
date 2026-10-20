@@ -58,6 +58,9 @@ FROZEN_BASELINE_SHA256="${FROZEN_BASELINE_SHA256:-22aaf9e1322ae333d461733162d1a1
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVIDENCE_DIR="${EVIDENCE_DIR:-$REPO_ROOT/.omo/evidence/agent-native-permission-editor}"
 T8_DIR="$EVIDENCE_DIR/task-8"
+# v2 注入配置的形状读取器（**唯一一份**，三个证明脚本共用）。
+VT_SHAPE_LIB="$REPO_ROOT/scripts"
+export VT_SHAPE_LIB
 if [[ -z "$BASELINE_POLICIES" ]]; then
   BASELINE_POLICIES="$REPO_ROOT/.omo/evidence/opencode-native-permissions-and-fixes/baseline-agent-policies.json"
 fi
@@ -134,29 +137,41 @@ read_artifacts() {
     || docker exec vteam-compose-worker cat "$WORKER_WORK_DIR/opencode.json" >"$oc"
 }
 
-# probe_in_artifact <opencode.json> : exit 0 iff vteam-product's injected permission.edit
-# carries the probe with the pre-existing globs intact.
+# probe_in_artifact <opencode.json> : exit 0 iff vteam-product's injected edit rules
+# carry the probe with the pre-existing globs intact.
+# v2: `agent` → `agents` 段，`permission` 对象 → `permissions[]` 规则数组
+# （`edit` 的 resource 即 glob；效果按**最后一条命中**取，findLast）。
 probe_in_artifact() {
   python3 - "$1" "$PROBE_MARKER" <<'EOF'
-import json,sys
+import json,os,sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 oc=json.load(open(sys.argv[1])); probe=sys.argv[2]
-entry=((oc.get("agent") or {}).get("vteam-product") or {}).get("permission") or {}
-edit=entry.get("edit")
-assert isinstance(edit,dict), "vteam-product.permission.edit missing/not object"
-assert edit.get(probe)=="allow", "probe %r not allow in injected edit: %r" % (probe, edit)
-assert edit.get("*")=="deny", "catch-all not deny in injected edit: %r" % (edit,)
+entry=v2.agent_section(oc, required=True, where="injected opencode.json").get("vteam-product") or {}
+rules=v2.permissions_of(entry, where="agent vteam-product")
+edit=v2.rules_for(rules, "edit")
+assert edit, "vteam-product has no edit rules"
+def effect_of(resource):
+    r=v2.effective_rule(rules, "edit", resource)
+    return None if r is None else r["effect"]
+assert effect_of(probe)=="allow", "probe %r not allow in injected edit: %r" % (probe, edit)
+assert effect_of("*")=="deny", "catch-all not deny in injected edit: %r" % (edit,)
 for g in ("**tasks/*/prototypes/**","**tasks/*/docs/**"):
-    assert edit.get(g)=="allow", "pre-existing glob %s lost: %r" % (g, edit)
+    assert effect_of(g)=="allow", "pre-existing glob %s lost: %r" % (g, edit)
 EOF
 }
 
 # probe_absent_artifact <opencode.json> : exit 0 iff the probe is gone from vteam-product.
 probe_absent_artifact() {
   python3 - "$1" "$PROBE_MARKER" <<'EOF'
-import json,sys
+import json,os,sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 oc=json.load(open(sys.argv[1])); probe=sys.argv[2]
-edit=(((oc.get("agent") or {}).get("vteam-product") or {}).get("permission") or {}).get("edit") or {}
-assert probe not in edit, "probe %r still present after restore: %r" % (probe, edit)
+entry=v2.agent_section(oc, required=True, where="injected opencode.json").get("vteam-product") or {}
+rules=v2.permissions_of(entry, where="agent vteam-product")
+assert v2.effective_rule(rules, "edit", probe) is None, \
+  "probe %r still present after restore: %r" % (probe, v2.rules_for(rules, "edit"))
 EOF
 }
 
@@ -306,18 +321,22 @@ pass "b3 (injected opencode.json carries the edited rule; auto-propagated, no re
 
 # 4a. Probe present in vteam-product edit; per-agent permission stays native-only; no guard artifact.
 python3 - "$T8_DIR/injected-opencode.json" "$PROBE_MARKER" <<'EOF' || fail "b" "injected artifact shape assertion failed"
-import json,sys
+import json,os,sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 oc=json.load(open(sys.argv[1])); probe=sys.argv[2]
-edit=(((oc.get("agent") or {}).get("vteam-product") or {}).get("permission") or {}).get("edit") or {}
-assert edit.get(probe)=="allow", "probe missing: %r" % (edit,)
-assert probe not in [k for k in edit if k.startswith("vteam_")] + list(oc), "probe leaked into a non-edit slot"
-ag=(oc.get("agent") or {}).get("vteam-product") or {}
-perm=ag.get("permission") or {}
-leak=[k for k in perm if k.startswith("vteam_")]
-assert not leak, "vteam-product permission carries vteam_ keys: %r" % (leak,)
-assert not any(isinstance(p,str) and "vteam-role-guard" in p for p in (oc.get("plugin") or [])), \
+agents=v2.agent_section(oc, required=True, where="injected opencode.json")
+entry=agents.get("vteam-product") or {}
+rules=v2.permissions_of(entry, where="agent vteam-product")
+edit=v2.rules_for(rules, "edit")
+assert v2.effective_rule(rules, "edit", probe) is not None, "probe missing: %r" % (edit,)
+assert not any(r["resource"]==probe and r["action"]!="edit" for r in rules), "probe leaked into a non-edit slot"
+declared=set(v2.declared_actions(rules))
+leak=sorted(a for a in declared if a.startswith("vteam_"))
+assert not leak, "vteam-product permission carries vteam_ actions: %r" % (leak,)
+assert not any("vteam-role-guard" in p for p in v2.plugin_entries(oc)), \
   "injected opencode.json still registers vteam-role-guard"
-print("injected: probe present in opencode.json edit; permission native-only; no guard plugin entry")
+print("injected: probe present in opencode.json edit rules; permission native-only; no guard plugin entry")
 EOF
 pass "b4 (injected opencode.json well-formed; native-only permission; no guard artifact)"
 

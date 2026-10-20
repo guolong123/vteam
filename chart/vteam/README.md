@@ -24,7 +24,7 @@ chart/vteam/
 └── templates/
     ├── _helpers.tpl        # 名称/标签/selector/env/探针命令 辅助模板
     ├── configmap.yaml      # 共享配置（DATABASE_URL 拼装、非敏感 env）
-    ├── secret.yaml         # 敏感项（JWT_SECRET/WORKER_TOKEN/MODEL_CREDENTIAL_KEY/DB_PASSWORD）
+    ├── secret.yaml         # 敏感项（JWT_SECRET/WORKER_TOKEN/MODEL_CREDENTIAL_KEY/DB_PASSWORD/OPENCODE_SERVER_PASSWORD）
     ├── deployment-server.yaml
     ├── deployment-web.yaml
     ├── statefulset-worker.yaml     # StatefulSet + volumeClaimTemplates（每副本独立 PVC）
@@ -98,10 +98,13 @@ helm install vteam chart/vteam \
 | `secret.workerToken` | worker 注册/事件鉴权 token | `openssl rand -hex 32` |
 | `secret.modelCredentialKey` | 模型凭据 AES-256-GCM 主密钥（32 字节） | `openssl rand -hex 32` |
 | `secret.dbPassword` | MySQL root 密码（内置 DB 时） | `openssl rand -hex 16` |
+| `OPENCODE_SERVER_PASSWORD` | opencode serve 鉴权密码（**v2 恒开鉴权，worker 必需**，未下发 worker 起不来）；**只注入 worker 容器**（控制面不再直连 serve，见「Secret 管理」） | chart 自动生成（32 字符随机）；自控密码见下方 `secret.existingSecret` |
 
 - 留空 → chart 自动生成随机值并写入 Secret（`<release>-vteam-secret`），NOTES 会提示生产环境显式设置。
-- 外部 Secret 注入：`--set secret.existingSecret=<name>`，模板不再自建 Secret，各组件从该 Secret 读取同名 key（`JWT_SECRET` / `WORKER_TOKEN` / `MODEL_CREDENTIAL_KEY` / `DB_PASSWORD`）。
+- 外部 Secret 注入：`--set secret.existingSecret=<name>`，模板不再自建 Secret，各组件从该 Secret 读取同名 key（`JWT_SECRET` / `WORKER_TOKEN` / `MODEL_CREDENTIAL_KEY` / `DB_PASSWORD` / `OPENCODE_SERVER_PASSWORD`）。
   ⚠️ 若同时启用内置 MySQL 且使用 existingSecret，须一并提供 `secret.dbPassword`（configmap 拼装 DATABASE_URL 需要明文密码）。
+  ⚠️ `OPENCODE_SERVER_PASSWORD` **无明文 values 入口**（明文落 values.yaml = 泄露面，且会进 helm 命令行）：缺省由 chart 生成随机值写入 Secret（升级经 lookup 复用，不轮换）；自控密码只能用 `secret.existingSecret` 指向自己的 Secret（其 data 须含 `OPENCODE_SERVER_PASSWORD` key）。
+  ⚠️ **该密码只由 worker 容器持有**：控制面自 v2 适配起**不再直连 opencode serve**（决策 D3）——它只调 worker 的执行端点（`POST /sessions`、`POST /sessions/:id/prompt`、`GET /sessions/:id/messages`、`POST /sessions/:id/abort`、`GET /models`），鉴权用 `X-Worker-Token`（= Secret 的 `WORKER_TOKEN` key）。⇒ **server 容器不再注入 `SERVER_PASSWORD`**，两个值**不需要**同值（旧文档里「必须同值否则全线 401」的说法已随 v2 适配失效）。
 
 ## 关键 values
 
@@ -120,7 +123,7 @@ helm install vteam chart/vteam \
 | `worker.updateStrategy.partition` | 空 | StatefulSet 滚动更新 partition：空 = 全量滚动（默认）；数字 = 仅更新 ordinal ≥ partition 的副本 |
 | `initJob.platformMcpUrl` | 空（自动） | 内置 `vteam` MCP 的 URL（seed 写入 mcp_servers 表）。空 = 按 server Service 名拼 `http://<fullname>-server:3000/api/v1/platform-mcp`（K8s 下 server 服务名，seed 的 compose 默认 `http://server:3000` 不通）；显式设置时用该值 |
 | `persistence.{uploads,mysql}.{enabled,size,storageClass}` | 全部启用 | uploads / mysql 卷（worker 卷见上） |
-| `secret.*` / `secret.existingSecret` | 自动生成 | 敏感配置 |
+| `secret.*` / `secret.existingSecret` | 自动生成 | 敏感配置（`OPENCODE_SERVER_PASSWORD` 无明文入口，见「Secret 管理」） |
 | `ingress.enabled` | `false` | Ingress（`/api/v1`→server，`/`→web） |
 | `extraEnv` | 空 | 透传额外 env 到 server/web/worker |
 
@@ -172,6 +175,20 @@ worker 卷用 `--set worker.persistence.<name>.storageClass=<sc>`。
 > StatefulSet 独立卷替代，升级后不再被引用；如已无引用数据可按需删除，
 > 无需要求则保留（不影响运行）。
 
+## 升级与回滚（OpenCode v1 → v2 切换）
+
+从 v1 线切到 v2 线的那次上线（换协议 / 换 CLI 版本 / 换数据存储形态）**不是**一次普通
+`helm upgrade`：
+
+- **没有代码级开关能退回 v1**：`OPENCODE_V2_ENABLED=false` 会让 worker 在启动阶段直接抛错
+  （v1 驱动已随 v2 切换删除）。
+- **server 与 worker 必须一起换**：v2 的控制面↔opencode 通道换成了 worker 的执行端点，
+  v1 server + v2 worker / v2 server + v1 worker **都不能互通**。
+- **数据卷快照是前置条件**：回滚 = 回滚镜像到 `v1.0.4` **+ 恢复迁移前的数据卷**。
+
+完整的交付顺序、灰度闸门、观察项清单、回滚命令与数据影响见
+**`docs/deployment.md` 的「八、OpenCode v2 灰度与回滚」**。
+
 ## 卸载
 
 ```bash
@@ -182,7 +199,8 @@ kubectl delete pvc -l app.kubernetes.io/instance=vteam
 
 ## 与 docker-compose 的对齐点
 
-- env：DATABASE_URL / NODE_ENV / PORT / JWT_* / WORKER_TOKEN / MODEL_CREDENTIAL_KEY / SILENT_SESSION_WAKE_MS / X_WORKER_TOKEN / SERVER_URL / OPENCODE_SERVE_* / WORKER_ADVERTISE_HOST / WORKER_DEFAULT_MODEL / WORK_DIR 全部对齐 compose。
+- env：DATABASE_URL / NODE_ENV / PORT / JWT_* / WORKER_TOKEN / MODEL_CREDENTIAL_KEY / SILENT_SESSION_WAKE_MS / X_WORKER_TOKEN / SERVER_URL / OPENCODE_SERVE_* / OPENCODE_SERVER_PASSWORD（**仅 worker**）/ WORKER_ADVERTISE_HOST / WORKER_DEFAULT_MODEL / WORK_DIR 全部对齐 compose。
+- serve 鉴权密码：worker 容器注入 `OPENCODE_SERVER_PASSWORD`；**server 容器不再注入 `SERVER_PASSWORD`**——控制面自 v2 适配起只经 worker 执行端点通信（鉴权 `X-Worker-Token`），不再直连 serve ⇒ 两个值不需要同值。
 - PLATFORM_MCP_URL：仅 init Job 注入（seed 用），指向本 release 的 server Service（`http://<fullname>-server:3000/api/v1/platform-mcp`），避免 vteam MCP 仍注册 compose 的 `server:3000` 导致 worker 连接失败。
 - WORKER_ID：**不**在 ConfigMap 下发，由 worker StatefulSet 经 downward API 注入 pod 名（`w_<pod 名>`，pod 名 `<release>-worker-<ordinal>` 全局唯一）——多副本时每个 pod 唯一，避免共享同一 ID 相互覆盖注册；compose 单副本仍走 `w_<hostname>` 默认。
 - 探针：server `/api/v1/health`、web `fetch($HOSTNAME:3000)`，均为容器 node 内置 fetch（node:22-alpine 无 curl/wget）。

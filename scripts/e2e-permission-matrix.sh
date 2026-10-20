@@ -14,9 +14,29 @@
 #      (dist/role-guard/policy.js + .vteam-role-guard/roles.json) no longer exists.
 #      NO literal tool list and NO literal count appear in this script — the
 #      expectation is read from source, the decision from the production gate.
-#   2) layer ① (injected opencode.json agent[*].permission) carries exactly the
-#      native keys (edit/read/bash/task, todo 4) and NO `vteam_*` key; mcpDenies
-#      matrix detail lives in the DB policy row consumed by the server gate.
+#   2) layer ① (injected opencode.json **agents[*].permissions[]**, v2 形状) carries
+#      exactly the native actions (edit/read/**shell**(←bash)/**subagent**(←task),
+#      todo 4) plus the worker's `external_directory` ask rule, and NO `vteam_*`
+#      action; mcpDenies matrix detail lives in the DB policy row consumed by the
+#      server gate.
+#      ⚠️ **v2 形状（2026-10-20）**：注入物是 **v2 形态**——段名 `agents`（v1 `agent`
+#      已废弃）、权限是**有序数组** `permissions:[{action,resource,effect}]`（v1 是
+#      对象）、action 改名 `bash`→`shell` / `task`→`subagent`、插件段 `plugins`
+#      （v1 `plugin`）。**规则顺序即优先级**：引擎按 `findLast` 求值（最后一条命中
+#      者生效）⇒ 重建「某 action 的有效权限」必须取最后一条命中规则（v1 `.at(-1)`
+#      的等价语义），deny-then-allow。
+#      v2 的形状读取器是**唯一**一份：`scripts/opencode_v2_shape.py`（本脚本与
+#      `scripts/e2e-third-party-no-policy-leak.sh` 共用 ⇒ 两个证明脚本的形状口径
+#      不会各自漂移）。
+#   2b) ⚠️ **v2 口径（2026-10-20；已采纳决策见 07 篇 §3.2）**：本脚本比的是
+#      「注入的 opencode.json」与「源码常量」，**不**断言引擎对**未声明 action**
+#      的默认值。opencode v2 的每个 agent 内置规则集以
+#      `{action:"*",resource:"*",effect:"allow"}` 开头、配置规则**追加其后**、
+#      按 `findLast` 求值 ⇒ 未声明的 action（webfetch/glob/grep/todowrite/skill/
+#      websearch 及全部 MCP 工具）在**引擎层放行**（v1 下落到引擎的逐 action
+#      ask/deny 默认）。平台已**明确接受**该放宽（**不**补 catch-all ask、
+#      **不**加逐 action 默认表）⇒ 本脚本的断言口径**不因此改变**：它从不断言
+#      「未声明 action 会被引擎问/拒」，只断言「注入配置 == 源码常量」。
 #   3) server identity refusals are ABSENT: a NON-MAIN instance reaches the
 #      TOOL-PERMISSION decision (not an identity gate) — an allowlisted tool the
 #      role holds succeeds (my_profile), and a non-allowlisted one is refused by
@@ -90,6 +110,12 @@ fail() { # $1 = step, $2 = reason
   printf '[e2e] \033[31mFAIL\033[0m step=%s reason=%s\n' "$1" "$2" | tee -a "$E2E_LOG"
   exit 1
 }
+
+# v2 注入配置的形状读取器（**唯一一份**，两个证明脚本共用）：
+#   scripts/opencode_v2_shape.py —— 段名 `agents` / 权限数组 `permissions[]` /
+#   action 改名表（bash→shell、task→subagent）/ findLast 求值语义。
+VT_SHAPE_LIB="$REPO_ROOT/scripts"
+export VT_SHAPE_LIB
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || { printf '[e2e] missing required command: %s\n' "$1" | tee -a "$E2E_LOG"; exit 2; }
@@ -205,6 +231,23 @@ print("source-of-truth: %d roles, %d MCP + %d git + %d browser tools, retired ga
       % (len(src["roles"]), len(src["mcpToolNames"]), len(src["gitToolNames"]),
          len(src["browserToolNames"]), src["retiredServerGated"]))
 EOF
+# 控制面**声明的原生 permission 键集**（`NATIVE_PERMISSION_KEYS`，server dist 导出）——
+# 注入配置的期望动作集由它推导（再经 v2 改名表 bash→shell / task→subagent）。
+# **一律**从运行中的 server 编译产物读：覆盖文件（SOURCE_CONSTANTS_JSON）里没有这一项，
+# 也不该有（它是控制面源码的事实，不是调用方的输入）。
+NATIVE_JSON="$EVIDENCE_DIR/source-native-keys.json"
+(cd "$REPO_ROOT" && docker compose exec -T server node -e '
+const P = require("/app/dist/src/execution-policies/execution-policy.service.js");
+process.stdout.write(JSON.stringify({ nativePermissionKeys: P.NATIVE_PERMISSION_KEYS }));
+' >"$NATIVE_JSON") || fail "0-source" "could not read NATIVE_PERMISSION_KEYS from server dist"
+python3 - "$SRC_JSON" "$NATIVE_JSON" <<'EOF' || fail "0-source" "NATIVE_PERMISSION_KEYS read failed (raw: $NATIVE_JSON)"
+import json,sys
+src=json.load(open(sys.argv[1])); native=json.load(open(sys.argv[2]))
+assert native.get("nativePermissionKeys"), "no NATIVE_PERMISSION_KEYS in server dist"
+src["nativePermissionKeys"]=native["nativePermissionKeys"]
+json.dump(src, open(sys.argv[1],"w"), ensure_ascii=False)
+print("control-plane declared native permission keys: %r" % (src["nativePermissionKeys"],))
+EOF
 log "source constants: $SRC_JSON"
 
 # ---------------------------------------------------------------- step 0b: freshness (injected opencode.json)
@@ -213,18 +256,25 @@ injected_matches_source() {
   (cd "$REPO_ROOT" && docker compose cp worker:/data/vteam-worker/opencode.json "$EVIDENCE_DIR/injected-opencode.json" >/dev/null 2>&1) \
     || return 1
   python3 - "$SRC_JSON" "$EVIDENCE_DIR/injected-opencode.json" <<'EOF'
-import json,sys
+import json,os,sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 src=json.load(open(sys.argv[1])); oc=json.load(open(sys.argv[2]))
-agents=(oc.get("agent") or {})
-for name in src["roles"]:
-    if name not in agents:
-        raise SystemExit("injected opencode.json missing %s" % name)
-    perm=agents[name].get("permission") or {}
-    leak=[k for k in perm if k.startswith("vteam_")]
-    if leak:
-        raise SystemExit("agent %s still carries vteam_ keys: %r" % (name, leak))
-# todo 5: no role-guard artifact may be registered.
-if any(isinstance(p,str) and "vteam-role-guard" in p for p in (oc.get("plugin") or [])):
+try:
+    # v2 段名：`agents`（v1 `agent` 已废弃）。缺段 ⇒ 注入物不是 v2 形态 ⇒ 判为陈旧
+    # （触发 worker 重启重注入），**不是**"没泄漏/没漂移"（空过）。
+    agents=v2.agent_section(oc, required=True, where="injected opencode.json")
+    for name in src["roles"]:
+        if name not in agents:
+            raise SystemExit("injected opencode.json missing %s" % name)
+        rules=v2.permissions_of(agents[name], where="agent %s" % name)
+        leak=[r["action"] for r in rules if r["action"].startswith("vteam_")]
+        if leak:
+            raise SystemExit("agent %s still carries vteam_ actions: %r" % (name, leak))
+except v2.ShapeError as e:
+    raise SystemExit("injected opencode.json is not v2-shaped: %s" % e)
+# todo 5: no role-guard artifact may be registered（v2 段名 `plugins`；v1 `plugin` 残留也查）。
+if any("vteam-role-guard" in p for p in v2.plugin_entries(oc)):
     raise SystemExit("injected opencode.json still registers vteam-role-guard")
 EOF
 }
@@ -333,39 +383,82 @@ fi
 pass "1 (derived role×tool matrix via the LIVE server gate: every cell matches source toolAllows)"
 
 # ---------------------------------------------------------------- step 2: layer ① native-only, zero vteam_ leak
-log "--- step 2: injected opencode.json layer-① permission is native-only (todo 4/5) ---"
+log "--- step 2: injected opencode.json layer-① permission is native-only, v2 shape (todo 4/5) ---"
 INJECTED_OUT="$EVIDENCE_DIR/injected-opencode.json"
 (cd "$REPO_ROOT" && docker compose cp worker:/data/vteam-worker/opencode.json "$INJECTED_OUT" >/dev/null) \
   || fail "2-layer1" "docker compose cp worker opencode.json failed"
 if ! python3 - "$SRC_JSON" "$INJECTED_OUT" <<'EOF'
-import json,sys
+# --- injected opencode.json v2 layer-① proof (agents[*].permissions[]) ---
+import json,os,sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 src=json.load(open(sys.argv[1])); d=json.load(open(sys.argv[2]))
-agents=d.get("agent") or {}
-assert agents, "injected opencode.json has no agent section"
-NATIVE={"edit","read","bash","task"}
-for name in src["roles"]:
-    assert name in agents, "injected opencode.json lacks built-in %s" % name
-    perm=agents[name].get("permission") or {}
-    assert "write" not in perm, "agent %s carries legacy write key" % name
-    vk=sorted(k for k in perm if k.startswith("vteam_"))
-    assert not vk, "agent %s still carries vteam_ keys: %r" % (name, vk)
-    assert set(perm) == NATIVE, "agent %s permission keys %r != native %r" % (name, sorted(perm), sorted(NATIVE))
-    assert isinstance(perm.get("edit"),dict) and perm["edit"].get("*")=="deny", \
-      "agent %s edit lacks '*':deny default: %r" % (name,perm.get("edit"))
-    assert isinstance(perm.get("read"),dict) and perm["read"].get("*")=="allow", \
-      "agent %s read lacks '*':allow: %r" % (name,perm.get("read"))
-    assert perm.get("bash") in ("allow","ask","deny"), "agent %s bash=%r" % (name,perm.get("bash"))
-    assert perm.get("task") in ("allow","ask","deny"), "agent %s task=%r" % (name,perm.get("task"))
-# todo 5: no role-guard registration survives.
-assert not any(isinstance(p,str) and "vteam-role-guard" in p for p in (d.get("plugin") or [])), \
+# 控制面**声明的原生键集**（从运行中的 server 编译产物读，step 0）→ v2 action 名。
+# 改名表在 v2.ACTION_RENAME_V1_TO_V2：`bash`→`shell`、`task`→`subagent`（其余同名）。
+native=[v2.to_v2_action(k) for k in src["nativePermissionKeys"]]
+# `external_directory` 是 **worker 补的**规则（v1「访问项目目录之外需询问」在 v2 下默认
+# 放行 ⇒ 必须显式补 ask），**不在**控制面声明的键集里 ⇒ 期望集 = 原生键集 ∪ {它}。
+expected=set(native) | {v2.EXTERNAL_DIRECTORY_ACTION}
+# 控制面登记的 vteam MCP 工具名：发射投影（projectNativePermission）会**剔除**它们
+# ⇒ 注入配置里出现任何一个都是漂移。
+mcp_tools=set(src["mcpToolNames"])
+try:
+    agents=v2.agent_section(d, required=True, where="injected opencode.json")
+    for name in src["roles"]:
+        assert name in agents, "injected opencode.json lacks built-in %s" % name
+        rules=v2.permissions_of(agents[name], where="agent %s" % name)
+        # ① 声明的动作集 == 控制面原生键集（改名后）+ external_directory（v1 语义补规则）
+        declared=set(v2.declared_actions(rules))
+        assert declared == expected, \
+          "agent %s declares actions %r != expected %r (native %r + %s)" % (
+            name, sorted(declared), sorted(expected), sorted(native), v2.EXTERNAL_DIRECTORY_ACTION)
+        # ② vteam_* 动作不得出现（控制面投影掉了它们；出现即漂移）
+        vk=sorted(a for a in declared if a.startswith("vteam_"))
+        assert not vk, "agent %s still carries vteam_ actions: %r" % (name, vk)
+        assert not (declared & mcp_tools), \
+          "agent %s declares control-plane MCP tool actions: %r" % (name, sorted(declared & mcp_tools))
+        # ③ v2 无 write/patch action（已并入 edit；出现即第二道写闸门 = 漂移）
+        assert not (declared & set(v2.REJECTED_WRITE_ACTIONS)), \
+          "agent %s declares write/patch actions: %r" % (name, sorted(declared & set(v2.REJECTED_WRITE_ACTIONS)))
+        # ④ edit：恰好一条 '*' 规则且为 deny（层①唯一写闸门默认关）
+        edit_rules=v2.rules_for(rules, "edit")
+        wildcards=[r for r in edit_rules if r["resource"]=="*"]
+        assert len(wildcards)==1, "agent %s edit must carry exactly one '*' rule: %r" % (name, edit_rules)
+        assert wildcards[0]["effect"]=="deny", \
+          "agent %s edit lacks '*':deny default: %r" % (name, wildcards[0])
+        # ⑤ 顺序即优先级（v2 findLast）：'*' 的 deny 必须在更具体的 allow **之前**
+        deny_idx=rules.index(wildcards[0])
+        for r in edit_rules:
+            if r is wildcards[0]:
+                continue
+            assert rules.index(r) > deny_idx, \
+              "agent %s edit rules are not deny-then-allow (findLast would pick the wrong one): %r" % (name, edit_rules)
+        # ⑥ read：'*' 规则为 allow（读默认开）
+        read_rules=v2.rules_for(rules, "read")
+        assert any(r["resource"]=="*" and r["effect"]=="allow" for r in read_rules), \
+          "agent %s read lacks '*':allow: %r" % (name, read_rules)
+        # ⑦ shell（v1 bash）/ subagent（v1 task）：有效效果三态（值可被 DB 覆盖 ⇒ 只查形状）
+        for v2_action, v1_action in (("shell","bash"), ("subagent","task")):
+            effect=v2.effective_effect(rules, v2_action)
+            assert effect in v2.EFFECTS, \
+              "agent %s %s (v1 %s)=%r" % (name, v2_action, v1_action, effect)
+        # ⑧ external_directory：worker 补的 ask 规则（恢复 v1「越界访问需询问」语义）
+        ext=v2.effective_effect(rules, v2.EXTERNAL_DIRECTORY_ACTION)
+        assert ext=="ask", \
+          "agent %s %s=%r (want ask: v2 defaults it to allow)" % (name, v2.EXTERNAL_DIRECTORY_ACTION, ext)
+except v2.ShapeError as e:
+    raise AssertionError("injected opencode.json is not v2-shaped: %s" % e)
+# todo 5: no role-guard registration survives（v2 `plugins` 段 + v1 `plugin` 残留）。
+assert not any("vteam-role-guard" in p for p in v2.plugin_entries(d)), \
   "injected opencode.json still registers vteam-role-guard"
-print("layer-1: %d agents native-only (edit/read/bash/task), zero vteam_ keys, no guard plugin entry"
-      % len(src["roles"]))
+print("layer-1 (v2): %d agents, actions=%s (native %r = v1 %r, + %s), zero vteam_ actions, no guard plugin entry"
+      % (len(src["roles"]), sorted(expected), sorted(native),
+         sorted(v2.to_v1_action(a) for a in native), v2.EXTERNAL_DIRECTORY_ACTION))
 EOF
 then
   fail "2-layer1" "layer-1 native-only assertion failed (raw: $INJECTED_OUT)"
 fi
-pass "2 (layer-① permission is native-only; zero vteam_ keys; no guard plugin entry)"
+pass "2 (layer-① v2 permissions[] is native-only; zero vteam_ actions; no guard plugin entry)"
 
 # ---------------------------------------------------------------- step 3: server identity refusals ABSENT
 log "--- step 3: former server identity refusals are ABSENT (non-main over real HTTP) ---"

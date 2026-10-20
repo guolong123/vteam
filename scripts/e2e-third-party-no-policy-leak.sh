@@ -12,15 +12,31 @@
 #        (c) endpoint !governed && !hidden     == serve non-vteam-* && !hidden  (the UI set)
 #        (d) endpoint governed:true            == GET /api/v1/agent-policies agents[].name
 #   B. The injected artifacts carry NO external name in any agent-name slot:
-#        - <workDir>/opencode.json            -> `agent` object keys
-#        - <workDir>/.vteam-role-guard/roles.json -> `roles` object keys
+#        - <workDir>/opencode.json            -> `agents` object keys (v2 原生段名；v1
+#          `agent` 残留段同样按槽位查)
+#        - <workDir>/.vteam-role-guard/roles.json -> `roles` object keys (已删除层，
+#          脚本断言其**不存在**)
 #        - guard session mappings (.vteam-role-guard/sessions/*.json `agent` value)
-#      plus a classified raw-text scan (allow-list: correction.handoff task-type
-#      mapping keys like "plan": "vteam-plan" are NOT agent-name slots).
+#      plus a classified raw-text scan (a quoted external name that is not
+#      attributable to a walked JSON hit is residue ⇒ fail).
+#      ⚠️ **要查的段缺失 ⇒ 响亮失败**：`<workDir>/opencode.json` 是 vteam 自己写的
+#      策略注入物，**必然**带 `agents` 段；读不到它就说明本脚本什么也没查
+#      （空过 = 假阴性，比没有证明更糟）⇒ 缺段时脚本 FAIL，不当"没有泄漏"放过。
+#      （HOME 里的 model-credential 配置不是策略注入物，那里 `agents` 段**可选**。）
 #   C. A negative control proves the structural check is discriminating: a real
 #      external name injected into a /tmp COPY of each artifact is DETECTED;
 #      the copies are then discarded and the live artifacts re-hashed unchanged.
 #   D. The frozen baseline sha and worker/** are untouched.
+#
+# ⚠️ **v2 口径（2026-10-20；已采纳决策见 07 篇 §3.2）**：本脚本断言的是
+# **agent-name slot**（哪些 agent 被写进了 vteam 的策略槽位），**不是** action
+# 级别的引擎默认值。opencode v2 的每个 agent 内置 catch-all
+# `{action:"*",resource:"*",effect:"allow"}`（配置规则追加其后、`findLast` 求值）⇒
+# **未声明**的 action 在**引擎层放行**（v1 下落到引擎的逐 action ask/deny 默认），
+# 平台已**明确接受**该放宽（**不**补 catch-all ask、**不**加逐 action 默认表）。
+# ⇒ 本脚本的期望**不因此改变**：vteam 依旧只把策略写进**自己受管**的 agent，
+# 外部 agent 名不会出现在任何 agent-name slot 里（引擎自带的宽松默认是 opencode
+# 自身的默认，**不是** vteam 泄漏策略）。
 #
 # Independent engine sources (D1):
 #   PRIMARY  — opencode serve direct HTTP from INSIDE the worker container:
@@ -28,7 +44,7 @@
 #              Path: container -> serve. NO vteam code in between, whereas the
 #              endpoint goes server -> worker exec endpoint -> serve. Equality is
 #              therefore a real cross-path check, not self-grading.
-#   SECONDARY— the injected opencode.json `agent` keys (the file opencode consumes).
+#   SECONDARY— the injected opencode.json `agents` keys (the file opencode consumes).
 #   REJECTED — `opencode agent list` CLI: observed NON-DETERMINISTIC truncation
 #              (24/24/21/16/24 entries across runs of the same live stack; missing
 #              vteam-* names) — it must NOT be used as an assertion source (D1).
@@ -49,6 +65,11 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+# v2 注入配置的形状读取器（**唯一一份**，与 e2e-permission-matrix.sh 共用）：
+#   scripts/opencode_v2_shape.py —— 段名 `agents` / 权限数组 `permissions[]` /
+#   action 改名表（bash→shell、task→subagent）/ findLast 求值语义。
+VT_SHAPE_LIB="$REPO_ROOT/scripts"
+export VT_SHAPE_LIB
 WEB_URL="${WEB_URL:-http://localhost:13001}"
 SERVER_URL="${SERVER_URL:-http://localhost:13000}"
 WORKER_CONTAINER="${WORKER_CONTAINER:-vteam-compose-worker}"
@@ -110,7 +131,7 @@ log "[A0] independent source (primary): opencode serve direct HTTP from INSIDE t
 log "[A0]   command: docker exec $WORKER_CONTAINER sh -c \"curl -sS http://127.0.0.1:$SERVE_PORT/agent?directory=$WORK_DIR\""
 log "[A0]   why independent: container -> serve with NO vteam code in between; the endpoint path is server -> worker exec endpoint -> serve, so equality is a cross-path check, not self-grading"
 log "[A0]   servePort=$SERVE_PORT (source: $SERVE_PORT_SOURCE), workDir=$WORK_DIR (worker env WORK_DIR)"
-log "[A0] independent source (secondary): injected opencode.json 'agent' keys (the file opencode itself consumes)"
+log "[A0] independent source (secondary): injected opencode.json 'agents' keys (the file opencode itself consumes)"
 log "[A0] source REJECTED: 'opencode agent list' CLI — non-deterministic truncation observed 2026-09-19 on the SAME live stack (24/24/21/16/24 entries across 5 runs; 21-run missed vteam-product,vteam-project_manager,vteam-tester; 16-run missed all 8 vteam-* names). Not used as an assertion source (D1)."
 log "[A0] worker container StartedAt=$WORKER_STARTED_AT workerId=$WORKER_ID_ENV"
 
@@ -203,15 +224,27 @@ log "[B0] sha256 opencode.json = $(shasum -a 256 "$TMP_DIR/live/opencode.json" |
 log "[B0] guard artifacts (roles.json / session mappings) absent by construction (todo 5 deletion)"
 log "[B0] policy-set equality (freshness signal): comparing artifact keys vs /agent-policies names"
 
-python3 - "$TMP_DIR/endpoint.json" "$TMP_DIR/live/opencode.json" <<'PY' | tee -a "$EVIDENCE_FILE"
-import json, sys
+if ! python3 - "$TMP_DIR/endpoint.json" "$TMP_DIR/live/opencode.json" <<'PY' | tee -a "$EVIDENCE_FILE"
+import json, os, sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 ep = json.load(open(sys.argv[1])); oc = json.load(open(sys.argv[2]))
 policies = {a["name"] for a in ep["agents"] if a.get("governed")}
-oc_keys = set((oc.get("agent") or {}).keys())
-print(f"[B1] opencode.json agent keys ({len(oc_keys)}) == /agent-policies governed names: {oc_keys == policies}")
+# v2 原生段名是 `agents`（v1 `agent` 已废弃）——读 v1 段会读到空值 ⇒ 空过（假阴性）。
+try:
+    oc_keys = set(v2.agent_section(oc, required=True, where="injected opencode.json").keys())
+except v2.ShapeError as e:
+    raise SystemExit("[B1] ERROR: %s" % e)
+print(f"[B1] opencode.json agents keys ({len(oc_keys)}) == /agent-policies governed names: {oc_keys == policies}")
 if oc_keys != policies: print(f"[B1]   divergence: extra={sorted(oc_keys-policies)} missing={sorted(policies-oc_keys)} (stale injection? no state was mutated by this script)")
+legacy = v2.legacy_agent_section(oc)
+if legacy:
+    print(f"[B1]   WARNING: legacy v1 `agent` section still present ({len(legacy)} entries) — not migrated to v2 `agents`")
 print("[B1] guard artifacts (roles.json / session mappings) absent by construction (todo 5 deletion)")
 PY
+then
+  fail "B1" "injected opencode.json has no readable v2 `agents` section (nothing could be checked)"
+fi
 
 # external name list is ENGINE-DERIVED at runtime (never hardcoded as source of truth)
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps(sorted(a["name"] for a in d["agents"] if a.get("governed") is False), ensure_ascii=False))' \
@@ -222,21 +255,31 @@ log "[B2] external names (engine-derived, $RUNTIME_EXT_COUNT): $(cat "$TMP_DIR/e
 # structural checker (same code used for the negative control in C)
 cat >"$TMP_DIR/check.py" <<'PY'
 #!/usr/bin/env python3
-"""Structural leak checker for injected opencode artifacts.
+"""Structural leak checker for injected opencode artifacts (opencode v2 shape).
 
 A name is a LEAK only in an agent-name SLOT:
-  - kind=opencode / opencode-home : top-level key of the root `agent` object
-  - kind=roles                    : top-level key of the root `roles` object
-Any other hit must be explicitly justifiable; the only allow-listed shape is the
-roles.json `correction.handoff` task-type -> governed-agent mapping key
-(e.g. "plan": "vteam-plan"), whose value MUST be a vteam-* name. Everything else
-is reported as UNEXPLAINED and makes the check fail. A raw-text residue check
-(quoted-token occurrences not attributable to a walked JSON hit) fails too.
-Exit 0 = clean, 1 = leak/unexplained.
+  - kind=opencode      : top-level key of the root v2 `agents` object (the section
+                         vteam's policy injector writes). **REQUIRED**: this file IS
+                         the policy-injected artefact, so a missing `agents` section
+                         means "nothing was checked" -> exit 2 (loud failure), never
+                         a vacuous pass.
+  - kind=opencode-home : the HOME model-credential config is NOT a policy-injected
+                         artefact, so its `agents` section is optional; when present
+                         it is checked exactly like the canonical one.
+  The legacy v1 `agent` section (migration residue) is checked as a slot root too:
+  a name hiding there is a leak as well.
+Any other hit is reported as UNEXPLAINED and makes the check fail. A raw-text
+residue check (quoted-token occurrences not attributable to a walked JSON hit)
+fails too.
+Exit 0 = clean, 1 = leak/unexplained, 2 = the section to inspect is missing.
 """
-import json, re, sys
+import json, os, sys
 
-HANDOFF_RE = re.compile(r"^roles/[^/]+/correction/handoff/[^/]+$")
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
+
+#: agent-name slot 的根段（v2 原生段 + v1 残留段）。
+SLOT_ROOTS = (v2.AGENT_SECTION, v2.LEGACY_AGENT_SECTION)
 
 def walk(node, path, ext, hits):
     if isinstance(node, dict):
@@ -253,24 +296,13 @@ def walk(node, path, ext, hits):
     return hits
 
 def is_slot(kind, hit):
-    """An agent-name SLOT = a TOP-LEVEL key of the root `agent`/`roles` object.
+    """An agent-name SLOT = a TOP-LEVEL key of the root `agents`/`agent` object.
 
-    Exact depth-2 check (`agent/<name>` / `roles/<name>`): a nested occurrence
-    (e.g. the roles.json `correction.handoff` task-type mapping key `plan`) is
-    NOT an agent-name slot and must be justified separately.
+    Exact depth-2 check (`agents/<name>`): a nested occurrence is NOT an
+    agent-name slot and is reported as unexplained.
     """
     parts = hit["path"].split("/")
-    if kind in ("opencode", "opencode-home"):
-        return len(parts) == 2 and parts[0] == "agent"
-    if kind == "roles":
-        return len(parts) == 2 and parts[0] == "roles"
-    return False
-
-def is_justified(kind, hit):
-    if kind == "roles" and hit["kind"] == "key" and HANDOFF_RE.match(hit["path"]):
-        v = hit.get("value")
-        return isinstance(v, str) and v.startswith("vteam-")
-    return False
+    return len(parts) == 2 and parts[0] in SLOT_ROOTS
 
 def main():
     path, kind, ext_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -278,13 +310,24 @@ def main():
     raw = open(path, encoding="utf-8").read()
     doc = json.loads(raw)
     ext = set(json.load(open(ext_path, encoding="utf-8")))
+    print(f"[check] {display} kind={kind} bytes={len(raw)}")
+    # The section to inspect MUST exist for the canonical injected artefact:
+    # reading an absent section would prove nothing (vacuous pass = false negative).
+    if kind == "opencode":
+        try:
+            v2.agent_section(doc, required=True, where=display)
+        except v2.ShapeError as e:
+            print(f"[MISSING-SECTION] {e}")
+            print("[check]   result: NOT-CHECKED (agent-slot assertion could not run)")
+            sys.exit(2)
+    else:
+        section = v2.agent_section(doc, where=display)
+        if not section:
+            print(f"[check]   note: no `{v2.AGENT_SECTION}` section (not a policy-injected artefact)")
     hits = walk(doc, "", ext, [])
     slots = [h for h in hits if is_slot(kind, h)]
     nonslots = [h for h in hits if not is_slot(kind, h)]
-    justified = [h for h in nonslots if is_justified(kind, h)]
-    unexplained = [h for h in nonslots if not is_justified(kind, h)]
-    root_key = "roles" if kind == "roles" else "agent"
-    has_section = isinstance(doc.get(root_key), dict)
+    unexplained = nonslots
     residue = []
     for n in sorted(ext):
         token = '"' + n + '"'
@@ -293,15 +336,10 @@ def main():
         if cnt > wcnt:
             i = raw.find(token)
             residue.append({"name": n, "rawCount": cnt, "walkCount": wcnt, "context": raw[max(0, i - 60):i + 60]})
-    print(f"[check] {display} kind={kind} bytes={len(raw)}")
-    if not has_section:
-        print(f"[check]   note: no `{root_key}` section present (agent-slot assertion is vacuously clean for this file)")
     print(f"[check]   agent-name slot hits: {len(slots)}")
     for h in slots:
         print(f"[LEAK]    slot={h['path']} kind={h['kind']} value={json.dumps(h['value'], ensure_ascii=False)}")
-    print(f"[check]   non-slot hits: {len(nonslots)} (justified={len(justified)}, unexplained={len(unexplained)})")
-    for h in justified:
-        print(f"[hit]     path={h['path']} kind={h['kind']} value={json.dumps(h['value'], ensure_ascii=False)} classification=handoff-task-type-mapping(justified)")
+    print(f"[check]   non-slot hits: {len(nonslots)} (unexplained={len(unexplained)})")
     for h in unexplained:
         print(f"[UNEXPLAINED] path={h['path']} kind={h['kind']} value={json.dumps(h['value'], ensure_ascii=False)}")
     for r in residue:
@@ -320,11 +358,24 @@ check_artifact() { # <path> <kind> <display>
   return $rc
 }
 
-check_artifact "$TMP_DIR/live/opencode.json" opencode "$WORK_DIR/opencode.json" \
-  || fail "B-oc" "opencode.json has an agent-slot leak / unexplained hit"
+# rc=2 ⇒ 要查的段缺失（**什么都没查**）⇒ 响亮失败，绝不当"没有泄漏"放过。
+rc=0
+check_artifact "$TMP_DIR/live/opencode.json" opencode "$WORK_DIR/opencode.json" || rc=$?
+if [[ "$rc" -eq 2 ]]; then
+  fail "B-oc" "injected opencode.json has no v2 `agents` section — the agent-slot leak check could not run (refusing to pass vacuously)"
+fi
+if [[ "$rc" -ne 0 ]]; then
+  fail "B-oc" "opencode.json has an agent-slot leak / unexplained hit"
+fi
 if [[ -f "$TMP_DIR/live/opencode-home.json" ]]; then
-  check_artifact "$TMP_DIR/live/opencode-home.json" opencode-home "/root/.config/opencode/opencode.json" \
-    || fail "B-home" "HOME opencode.json has an agent-slot leak / unexplained hit"
+  rc=0
+  check_artifact "$TMP_DIR/live/opencode-home.json" opencode-home "/root/.config/opencode/opencode.json" || rc=$?
+  if [[ "$rc" -eq 2 ]]; then
+    fail "B-home" "HOME opencode.json has a malformed `agents` section — the leak check could not run"
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    fail "B-home" "HOME opencode.json has an agent-slot leak / unexplained hit"
+  fi
 fi
 pass "B (structural leak check clean on $CANON_COUNT files; slotHits=0; unexplainedHits=0)"
 
@@ -342,12 +393,16 @@ NC_NAME="$(python3 -c 'import json,sys; e=json.load(open(sys.argv[1])); print("p
 log "[C1] chosen real external name (engine-derived): $(printf '%s' "$NC_NAME")"
 mkdir -p "$TMP_DIR/nc"
 python3 - "$TMP_DIR/live/opencode.json" "$TMP_DIR/nc" "$NC_NAME" <<'PY'
-import json, sys
+import json, os, sys
+sys.path.insert(0, os.environ["VT_SHAPE_LIB"])
+import opencode_v2_shape as v2
 oc_path, out_dir, name = sys.argv[1:4]
 oc = json.load(open(oc_path))
-oc.setdefault("agent", {})[name] = {"mode": "primary", "description": "negative-control injection"}
+# v2 原生段名 `agents`（v1 `agent` 段已废弃）——负控必须打在**引擎真读**的那个段上，
+# 否则检不出 = 检查不具判别力。
+oc.setdefault(v2.AGENT_SECTION, {})[name] = {"mode": "primary", "description": "negative-control injection"}
 json.dump(oc, open(f"{out_dir}/opencode.json", "w"), ensure_ascii=False, indent=2)
-print(f"[C2] injected {name!r} as a top-level key of opencode.json `agent` (TMP COPY ONLY)")
+print(f"[C2] injected {name!r} as a top-level key of opencode.json `{v2.AGENT_SECTION}` (TMP COPY ONLY)")
 PY
 NC_OC_RC=0
 python3 "$TMP_DIR/check.py" "$TMP_DIR/nc/opencode.json" opencode "$TMP_DIR/externals.json" "NC copy opencode.json" >"$TMP_DIR/nc-oc.txt" 2>&1 || NC_OC_RC=$?

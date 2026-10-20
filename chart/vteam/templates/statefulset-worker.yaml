@@ -59,6 +59,19 @@ spec:
                 secretKeyRef:
                   name: {{ include "vteam.secretName" . }}
                   key: WORKER_TOKEN
+            # opencode serve 密码（**v2 恒开鉴权**：opencode v2 的 serve 恒开鉴权，
+            # 密码为空则 worker 启动即 fail-fast——「v2 恒开鉴权，请设置
+            # OPENCODE_SERVER_PASSWORD」）。密文经 Secret 下发，**明文不进 values.yaml
+            # / extraEnv**；缺省由 chart 自动生成随机值写入 Secret（升级复用）。
+            # optional: true —— 外部 Secret（secret.existingSecret）漏该 key 时不阻断
+            # pod 启动（避免把 worker 侧配置问题升级成 server 一起下线），
+            # 此时由 worker 自身 fail-fast 给出可操作报错。
+            - name: OPENCODE_SERVER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vteam.secretName" . }}
+                  key: OPENCODE_SERVER_PASSWORD
+                  optional: true
             - name: HOME
               value: /root
             # WORKER_ID 唯一化：StatefulSet pod 名 <release>-worker-<ordinal>（如

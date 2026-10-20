@@ -1,5 +1,6 @@
 # vteam 共享配置（非敏感 env + DATABASE_URL 拼装）
-# 敏感项（JWT_SECRET / WORKER_TOKEN / MODEL_CREDENTIAL_KEY / DB_PASSWORD）在 Secret。
+# 敏感项（JWT_SECRET / WORKER_TOKEN / MODEL_CREDENTIAL_KEY / DB_PASSWORD /
+# OPENCODE_SERVER_PASSWORD）在 Secret。
 apiVersion: v1
 kind: ConfigMap
 metadata:

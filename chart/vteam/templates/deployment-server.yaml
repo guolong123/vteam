@@ -113,6 +113,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "vteam.secretName" . }}
                   key: MODEL_CREDENTIAL_KEY
+            # ⚠️ 这里**不注入** SERVER_PASSWORD：控制面自 v2 适配起**不再直连 opencode serve**
+            # （决策 D3）——它只调 worker 的执行端点（POST /sessions、POST /sessions/:id/prompt、
+            # GET /sessions/:id/messages、POST /sessions/:id/abort、GET /models），鉴权用
+            # X-Worker-Token（= Secret 的 WORKER_TOKEN key）。
+            # ⇒ serve 的 Basic Auth 密码（OPENCODE_SERVER_PASSWORD）只由 worker 容器持有，
+            # 控制面不需要知道它；两端不同值也不会再导致 401。
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
