@@ -529,7 +529,7 @@ Worker 节点
 > | 项 | 值 |
 > |---|---|
 > | 实测二进制 | `opencode v2.0.28`（`opencode --version`）；锁版目标 `@opencode/cli@2.0.32` |
-> | 契约基线 | `docs/agent-platform/opencode-v2-contract-baseline/`（OpenAPI 3.1 spec：276KB / **118 paths** / **142 ops** / 285 schemas；原始 SSE 字节；配置归一化回显） |
+> | 契约基线 | `docs/agent-platform/opencode-v2-contract-baseline/`（OpenAPI 3.1 spec：276KB / **118 paths** / **142 ops** / 285 schemas；原始 SSE 字节；配置归一化回显）——⚠️ **该快照由上面的 2.0.28 二进制生成**，**不是**锁版 2.0.32 的基线（锁版后需按该目录 README 的命令重跑） |
 > | Spike 结论 | `docs/agent-platform/opencode-v2-spike-results.md`（T4 / T5 / T6；可一键复现 `bash docs/agent-platform/opencode-v2-spike-results/repro.sh`） |
 > | 迁移计划 / 执行记录 | `.omo/plans/opencode-v2-adaptation.md`（D1–D13 决策、§9 交付链与回滚）/ `.omo/plans/opencode-v2-progress.md` |
 
@@ -723,7 +723,7 @@ MCP 明明 connected——**两个都是静默错误答案**（不报错、只�
 
 | 探什么 | 端点 | 备注 |
 |---|---|---|
-| 模型清单（可执行集） | `GET /api/model` | 两种响应形态（2.0.28 `{location,data}` / 2.0.32 裸数组）都要容错；`enabled:false` 不算可执行；空/非法响应 ⇒ `undefined`（**不断言"零可用"**） |
+| 模型清单（可执行集） | `GET /api/model` | 响应形态 **2.0.28 与 2.0.32 都是 `{location,data}`**（2.0.32 见发布的 `@opencode/client@2.0.32` `ModelListOutput = { location, data }`）；解包用容错实现（裸数组分支为**防御性容忍**，**非**已知版本差异）；`enabled:false` 不算可执行；空/非法响应 ⇒ `undefined`（**不断言"零可用"**） |
 | MCP 状态 | `GET /api/mcp` | **五态**，见 §12.10.2 |
 
 > ⇒ **平台结论**：worker 侧**两个 CLI 探针都不留兜底**（留兜底 = 让作用域错配重新变成"正常路径"）；

@@ -1,0 +1,110 @@
+==============================================================================
+Artifact 06 — 隔离的全局配置（$XDG_CONFIG_HOME/opencode/opencode.json）—— 改即生效
+==============================================================================
+what      : 改隔离全局配置，加一个带 settings.apiKey 的 provider，再 GET /api/provider + /api/model
+when      : 2026-10-20T15:20:39.757Z
+binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
+serve     : http://127.0.0.1:61277  (pid 84513)
+isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
+scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+commands  :
+  $ cat > "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/opencode.json" <<'JSON'
+  $   {
+  $     "$schema": "https://opencode.ai/config.json",
+  $     "providers": {
+  $       "hotreload-global": {
+  $         "name": "Hot Reload Global",
+  $         "package": "aisdk:@ai-sdk/openai-compatible",
+  $         "settings": { "baseURL": "http://127.0.0.1:45999/v1", "apiKey": "sk-hot-reload-PROBE-NOT-A-REAL-KEY" },
+  $         "models": { "hotreload-global-model": { "name": "hotreload-global-model" } }
+  $       }
+  $     }
+  $   }
+  $ JSON
+  $ curl -s -u "opencode:$PW" -G "http://127.0.0.1:61277/api/provider" --data-urlencode "location[directory]=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"
+  $ curl -s -u "opencode:$PW" -G "http://127.0.0.1:61277/api/model"    --data-urlencode "location[directory]=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"
+------------------------------------------------------------------------------
+--- 观察：改**隔离的全局配置**之后，只有 GET，没有任何「触发」调用 ------------
+  全局配置路径                : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config/opencode/opencode.json
+  改文件时刻                 : 2026-10-20T15:20:39.469Z
+  观察到新 provider         : 改后 209 ms
+  窗口内 POST 数            : 0
+
+--- 改之前：GET /api/provider --------------------------------------------
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":[{"id":"opencode","integrationID":"opencode","name":"OpenCode","activation":"enabled","package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"public","baseURL":"https://opencode.ai/inference/openai/v1"}}]}
+
+--- 轮询时间线 -----------------------------------------------------------
+  t=+    0ms  providers=[]
+  t=+  103ms  providers=[]
+  t=+  207ms  providers=["hotreload-global"]
+
+--- 改之后：GET /api/provider --------------------------------------------
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":[{"id":"opencode","integrationID":"opencode","name":"OpenCode","activation":"enabled","package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"public","baseURL":"https://opencode.ai/inference/openai/v1"}},{"id":"hotreload-global","name":"Hot Reload Global","activation":"enabled","package":"@opencode/ai/providers/openai-compatible","settings":{"apiKey":"sk-hot-reload-PROBE-NOT-A-REAL-KEY","baseURL":"http://127.0.0.1:45999/v1","provider":"hotreload-global"}}]}
+
+--- 改之后：GET /api/model（只列 hotreload-global 的条目）-------------------
+HTTP 200
+[
+  {
+    "id": "hotreload-global-model",
+    "modelID": "hotreload-global-model",
+    "providerID": "hotreload-global",
+    "name": "hotreload-global-model",
+    "package": "@opencode/ai/providers/openai-compatible",
+    "settings": {
+      "apiKey": "sk-hot-reload-PROBE-NOT-A-REAL-KEY",
+      "baseURL": "http://127.0.0.1:45999/v1",
+      "provider": "hotreload-global"
+    },
+    "capabilities": {
+      "tools": true,
+      "input": [
+        "text",
+        "image"
+      ],
+      "output": [
+        "text"
+      ]
+    },
+    "variants": [
+      {
+        "id": "low",
+        "settings": {
+          "reasoningEffort": "low"
+        }
+      },
+      {
+        "id": "medium",
+        "settings": {
+          "reasoningEffort": "medium"
+        }
+      },
+      {
+        "id": "high",
+        "settings": {
+          "reasoningEffort": "high"
+        }
+      }
+    ],
+    "time": {
+      "released": 0
+    },
+    "cost": [],
+    "status": "active",
+    "enabled": true,
+    "limit": {
+      "context": 200000,
+      "output": 32000
+    }
+  }
+]
+
+--- 观察：apiKey 的呈现方式 ----------------------------------------------
+provider 响应里的 settings.apiKey = "sk-hot-reload-PROBE-NOT-A-REAL-KEY"
+⇒ **v2.0.28 并没有把 apiKey 脱敏**：`GET /api/provider` / `GET /api/provider/{id}` /
+  `GET /api/model` 都**明文回显** `settings.apiKey`。
+  （本证据里的 key 是**合成的假串**，不是任何真实凭据。）
+  ⇒ 因此本证据证明的是「全局配置里的 provider 段被热重载看见了」，
+    **并且**（附带地）证明「apiKey 的值原样回显」——这一条与「脱敏」的预期不同，
+    已在 README 的「与预期不符的一处」里登记。

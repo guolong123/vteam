@@ -1,0 +1,68 @@
+==============================================================================
+Artifact 04 — .opencode/plugins/<f>.ts —— 新增后 setup() 被调用（marker 出现）
+==============================================================================
+what      : 新增 <proj>/.opencode/plugins/hotreload-probe.ts，其 setup() 写 marker 文件
+when      : 2026-10-20T15:20:39.261Z
+binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
+serve     : http://127.0.0.1:61277  (pid 84513)
+isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
+scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+commands  :
+  $ cat > "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/plugins/hotreload-probe.ts" <<'TS'
+  $   import { Plugin } from "@opencode/plugin"
+  $   import { writeFileSync, existsSync, readFileSync } from "node:fs"
+  $   const MARKER = "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/marker-plugin.txt"
+  $   export default Plugin.define({
+  $     id: "hotreload-probe",
+  $     async setup(ctx: any) { /* 写 marker，计数自增 */ },
+  $   })
+  $ TS
+  $ cat "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/marker-plugin.txt"   # setup() 的产物
+  $ grep 'loading plugin' "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/serve.log"
+------------------------------------------------------------------------------
+--- 观察：新增插件文件之后，只有 GET，没有任何「触发」调用 ------------------
+  新增文件时刻                : 2026-10-20T15:20:38.954Z
+  setup() 首次被调用         : 新增后 306 ms
+  窗口内 POST 数            : 0
+
+--- 新增的插件文件 -------------------------------------------------------
+path: /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/plugins/hotreload-probe.ts
+---- 8< ----
+import { Plugin } from "@opencode/plugin"
+import { writeFileSync, existsSync, readFileSync } from "node:fs"
+
+const MARKER = "/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/marker-plugin.txt"
+
+export default Plugin.define({
+  id: "hotreload-probe",
+  async setup(ctx: any) {
+    let count = 0
+    if (existsSync(MARKER)) {
+      const m = readFileSync(MARKER, "utf8").match(/count=(\d+)/)
+      if (m) count = Number(m[1])
+    }
+    count += 1
+    writeFileSync(
+      MARKER,
+      "count=" + count + " tag=V1 pid=" + process.pid +
+        " location=" + (ctx?.location?.directory ?? "?") +
+        " ts=" + new Date().toISOString() + "\n",
+    )
+  },
+})
+---- 8< ----
+
+--- marker（setup() 写出的）---------------------------------------------
+新增之前：
+(marker 不存在)
+新增之后：
+count=1 tag=V1 pid=84513 location=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj ts=2026-10-20T15:20:39.220Z
+
+--- 轮询时间线 -----------------------------------------------------------
+  t=+    0ms  marker=""
+  t=+  102ms  marker=""
+  t=+  204ms  marker=""
+  t=+  306ms  marker="count=1 tag=V1 pid=84513 location=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj ts=2026-10-20T15:20:39.220Z"
+
+--- serve 日志：本次动作期间新增的 loading plugin 行 ----------------------
+timestamp=2026-10-20T15:20:39.215Z level=INFO run=f8afcc2c msg="loading plugin" id=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/plugins/hotreload-probe.ts entrypoint=file:///private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/.opencode/plugins/hotreload-probe.ts http.span=2235 role=server

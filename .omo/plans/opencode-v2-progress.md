@@ -139,7 +139,7 @@ D6 / D7 / D8 / D12 / T4 / T5 / T6 / T15 / T16 / T19 / §7.3 / §8.1 / §8.2 / §
 
 - 新增 `worker/src/driver/v2-driver.ts` + `v2-driver.conformance.spec.ts`（接入**共享**契约套件，**断言一行未改**）+ `v2-driver.spec.ts`（51 单测 + 8 条**真 v2 server** 契约测试，二进制缺失时整组 skip）。
 - 工厂：v2 模式默认构造**真 V2Driver**；拿不到 v2 驱动 → **fail-fast**（危险静默回退已删）。v1 驱动加**内容类型守卫**（拿到非 JSON → 明确报错点破"v2 已移除 legacy 路由"）。
-- 关键实现细节：`unwrapV2List/Object` 容忍 `{location,data}` 与裸数组两种形态；游标翻页**不得再带 `order`**（否则 400 `InvalidCursorError`）；`move` 仅在首次下发前；`GET /api/agent` 用 `location[directory]=` **deepObject**（扁平写法 400）。
+- 关键实现细节：`unwrapV2List/Object` 容忍 `{location,data}` 与裸数组两种形态（**裸数组只是防御性容忍**——2.0.28 与 2.0.32 实测/发布类型都是 `{location,data}`，无已知版本差异）；游标翻页**不得再带 `order`**（否则 400 `InvalidCursorError`）；`move` 仅在首次下发前；`GET /api/agent` 用 `location[directory]=` **deepObject**（扁平写法 400）。
 - 形状翻译的**有损点**（已逐一记录在代码注释与报告里）：消息联合体只映射 user/assistant（`idle`/`synthetic`/… 丢弃，`outcome` 留给 T14 从事件流取）；form→question **一字段=一问题**（integer/number/boolean 类型语义、`required`/`hidden`/`when` 条件丢失）；tool `state.content[]`→`state.output`(string) 需拼接；v2 无 `native` 字段 → 按内置 id 集合启发式判定。
 
 ### ⭐ 本轮最重要的发现：v2 的 `system` 无处安放（**语义降级，需 T15 决策**）
@@ -379,7 +379,7 @@ DB `workers` 行：`status=online`、`opencode_version=2.0.32`、`JSON_LENGTH(ca
 
 ## v2 CLI 探针已修为 serve 作用域（真栈验过）
 
-- **模型探针**：`spawnSync('opencode', ['models'])` **删除**（连超时常量一起删，**不留 CLI 兜底** —— 兜底会让作用域错配重新变成"正常路径"）。改为走 **driver 的 `listModels()`**（= serve 的 `GET /api/model`，与 agent 实际执行同一作用域）。两种响应形态（2.0.28 `{location,data}` / 2.0.32 裸数组）用既有的容错助手 `unwrapV2List`；`enabled:false` 的模型不算"可执行"；空/非法响应 ⇒ `undefined`（**不断言"零可用"**）。
+- **模型探针**：`spawnSync('opencode', ['models'])` **删除**（连超时常量一起删，**不留 CLI 兜底** —— 兜底会让作用域错配重新变成"正常路径"）。改为走 **driver 的 `listModels()`**（= serve 的 `GET /api/model`，与 agent 实际执行同一作用域）。响应形态 **2.0.28 与 2.0.32 都是 `{location,data}`**（2.0.32 见发布的 `@opencode/client@2.0.32` `ModelListOutput`），用既有的容错助手 `unwrapV2List` 解包（其裸数组分支为**防御性容忍**，**非**已知版本差异）；`enabled:false` 的模型不算"可执行"；空/非法响应 ⇒ `undefined`（**不断言"零可用"**）。
 - **MCP 探针**：改为查 serve 的 `GET /api/mcp`（Basic 鉴权），**端点与口令从 serve 对象读**（serve 换端口重启会自动跟上，不从 env 重读）。加了**形态闸门**（不是 v2 `/api/mcp` 形状 ⇒ `probe_failed`，绝不报"没有 MCP"）+ 5s 超时 + "不 shell out 到 opencode CLI"的**回归守卫**。
 - ⭐ **五态 1:1，不折叠**：`connected/failed/needs_auth` 之外新增 **`pending`**（还在连接）与 **`disabled`**（配了但关着）—— 它们**都不是 `failed`**（把"即将连上"报成"连接失败"、把"故意关掉"报成"故障"都是撒谎）⇒ **两端契约同步扩到五态**（worker `McpServerStatus` ↔ server `MCP_STATUS` + `@IsIn`）。未知/缺失 `status` ⇒ 保守落 `failed` **并响亮告警**（带原始状态串），**不静默丢服务器**、不静默报健康。
 - **真栈验证**：worker 日志**不再有** `可执行模型探测失败` / `Location plugins did not finish activating`；注册载荷**带上了 `executableModels` = 10 个 id**（与 serve 的 `GET /api/model` **完全一致**）；MCP 探针报 `vteam` **connected**（与 serve 一致）；server jest **4368 通过 0 失败**。
@@ -425,6 +425,69 @@ DB `workers` 行：`status=online`、`opencode_version=2.0.32`、`JSON_LENGTH(ca
 - **另一残留**：location 尚未启动插件时的**首次**派发回落前缀（安全，不丢）；生产流里 session `move` 会先启动 location，故首次即走插件路（已实机验证）。
 - 测试：worker **1211**（1205 + 6 opt-in 跳过），server 4368 不变；`npm run typecheck` clean。
 - 计划 **1392 → 1543 行**；D6 关闭，新增 **Q17/Q18/Q19（已关闭）**、**Q20（开放·未来优化）**；§10 共 **24 项：9 关闭 / 15 开放**；spike 文档 **844 行**。
+
+## ⚠️ 订正两处**我这边的事实错误**（Agent 独立复核后发出）
+
+1. **"2.0.32 的 `GET /api/model` 改成裸数组" —— 是错的。** 已对**发布的 `@opencode/client@2.0.32` 类型**核实：
+   `ModelListOutput = { location: LocationPublicRef; data: Array<ModelInfo> }` ⇒ **2.0.28 与 2.0.32 形态完全一致**（都是 `{location,data}`）。
+   错误来源：先前 librarian 对 `/v2/openapi.json` 快照的转述。
+   ⇒ 代码里 `unwrapV2List` **容忍裸数组是无害的防御性**，**不是**已知版本漂移。已订正 **9 处计划 + 2 处进度日志 + doc 07 两处 + 3 处源码注释 + 3 个测试标题**，**代码零改动**。
+2. **基线快照其实是 2.0.28 生成的**，不是锁定的 2.0.32（README 原文把它标成 2.0.32）⇒ 已改口径，并保留"锁版即锁契约基线"的原则作为后续动作。
+
+**教训**：跨版本差异这类断言，必须对**发布版的类型定义**核实，不能只依赖二手转述 —— 这次差点让后人按错误前提去"修"代码。
+
+## ⭐ 逆分析完成：vteam 自研 vs v2 原生（15 项逐条核完）
+
+判定分布：**redundant 3**（R1 steer 投递、R4 改配置→重启 serve、R11 写 auth.json）· **partially-redundant 6** · **different-scope 4** · **still-needed 2**（R8 计划步骤、R12 平台 MCP）+ 另 6 项明确列入「勿误退役」。
+
+- **🥇 最值得退役**：配置/凭据变更 → **热重载**（v2 实测自动热重载 + `POST /api/location/reload`）⇒ 消掉「端口漂移→reRegister」「活跃会话排空」「重启窗口不可用」三个连锁成本。**实施中**。
+- **🥈** 停止写 `auth.json`（v2 实测不读；"为 v1 兼容"的理由已随 v1 驱动删除失效）。
+- **🥉** MCP 状态 30s 轮询 → 事件触发 + 兜底轮询（⚠️ 五态契约两端双写，不同步 ⇒ 整个心跳 400 ⇒ worker 掉线）。
+- **关键陷阱**：v2 原生能力**全在 opencode 进程内**，vteam 是**三层进程**（server / worker / serve-in-worker）⇒ 想覆盖 server 侧逻辑**必须先有 worker 侧代理端点**。这条决定了大部分"冗余"其实**不可直接退役**。
+- 顺带查清 **v2 的后台执行机制**：`shell`/`subagent` 的 `background: true` → 进程托管（`Shell.Info{pid,file,status,exit}`）+ **完成结果写进会话历史**（`Session.Message.Shell` / `.Synthetic`）+ durable 事件 ⇒ **"唤醒"不是推事件，而是把结果写进会话**，因此天然可重放、跨断线不丢。
+- 已落成仓库文档 `docs/agent-platform/opencode-v2-自研机制与v2原生能力对照.md`（**已交付**，见下条）。
+
+## ⭐ 逆分析文档已交付：vteam 自研机制 vs v2 原生能力对照
+
+**产物**：`docs/agent-platform/opencode-v2-自研机制与v2原生能力对照.md`（**零源码改动**；只新增这一篇文档 + 改计划 §10 + 本进度日志）。
+
+- **结构**：§0 读法 / §1 证据分级（A 实测 · B 发布类型/文档 · C 源码 · D 未验证）+ 契约基线版本口径 + 事件耐久度速查 → §2 结论速览（判定分布 / **15 行一页纸对照表（带证据列）** / **§2.3 明确未验证的 7 条**）→ §3 逐行详述 R1–R15（每行带 `file:line` + v2 侧契约出处 + 判定 + 置信度 + 理由）→ §4 **「请勿误退役」护栏表**（7 条 + 2 条易误认）→ §5 **最值得退役的三件事**（🥇/🥈/🥉，各带「下一步 + caveat 清单」）→ §6 **契约陷阱 7 条**（跨进程 / 双写 / v1 回滚已不存在 / experimental 不稳定 / durable-vs-ephemeral / 基线版本口径 / 后台执行的唤醒语义）→ §7 **本次没覆盖到的** → §8 本次核对过的 v2 原生能力清单（端点 / 插件域 / CLI / 后台执行）。
+- **15 行判定与调查轮完全一致**：redundant 3（R1 R4 R11）· partially-redundant 6（R2 R5 R6 R7 R10 R15）· different-scope 4（R3 R9 R13 R14）· still-needed 2（R8 R12）。**没有一条被改判**。
+- **逐条复核了行号**：53 处 `file:line` 全部重新核对（当前工作树）；⚠️ **`worker/src/exec/exec-server.ts` 在成稿期间被并行的热重载工作流改写、行号漂移过一次**（`runInFlightPrompt` 1134→1184 等）⇒ 文档里**每处行号都配了符号名**，并在开头写明「行号是快照、符号名才是耐久引用」。
+- **独立复核的 v2 事实**（对**已发布**的 `@opencode/*@2.0.32` 类型求证，非二手转述）：`Transform<Input> = (cb) => Promise<Registration>` / `Registration.dispose()`；七个 editor 的形状（**`AgentEditor` 没有 `add`**）；`mcp.status.changed` **只带 `{server}` 不带状态**（⇒ R2 判 partially-redundant 的直接依据）；`credential` 以 **`integrationID`** 为键（⇒ R3 判 different-scope 的直接依据）；`ModelListOutput = {location, data}`（两版形态一致，**裸数组分支只是防御性**）；`Session.Message.Shell` / `.Synthetic` 的字段；`rpc.<rpcID>.<event>` 信封；事件清单 104 个（44 durable / 60 ephemeral）。
+- **对 v2 官方文档求证**：`shell` / `subagent` 的 `background: true` 原文（"return immediately and notify …"）、`/api/location/reload` 的 OpenAPI 描述原文（"**Pending permissions and forms are cancelled**"）。
+- **诚实登记的未验证项（§2.3，7 条）**：其中 **U-a 是自我纠偏**——热重载那条的**原始实测证据没有落成仓库文件**（只有调查轮的现场记录）⇒ 文档里把它标成「已确证、实施中」并要求**实施时补证据**；**U-b**（`location/reload` 的 2.0.32 行为未验）、**U-c**（凭据表 integration 语义未穷举）、**U-d**（log 的 `?after=` 补齐未端到端验）、**U-e**（form→question 有损映射未逐字段列）、**U-f**（`ctx.permission.hook` 未做原型）、**U-g**（收益全是定性判断，无基准测量）。
+
+**计划 §10 未决问题同步**（表格列结构不变）：
+
+| 动作 | 项 | 依据 |
+|---|---|---|
+| **关闭** | **Q8** | 契约基线 118 paths 逐条枚举 ⇒ 含 `todo` 的路径数 = **0**；v2 **删掉**了 todo（不是"没提供"）⇒ vteam 的 `plan_tasks` + `vteam_todo` MCP 是唯一承载（逆分析 R8） |
+| **部分解答** | **Q14** | 契约形态已逐字确认（`after`=seq、`follow`=true/false、`text/event-stream` + `SessionLogItemEncoded`）；**残余**：活栈验证 `?after=<seq>` 真能补齐断线期间事件（⇒ 逆分析 §2.3 U-d） |
+| **新增（开放）** | **U10 ~ U14** | U10 provider 段凭据的最终归属（架构决策）· U11 `location/reload` 的 2.0.32 行为 · U12 自动热重载的逐项实测**与证据入库** · U13 是否要给 worker 建「v2 原生能力代理端点」· U14 form→question 的有损映射表 |
+| **计数** | 24 → **29 项** | **已关闭 9 → 10 项**；**仍开放 15 → 19 项** |
+
+
+## ⭐ 热重载证据已入库（2026-10-20）
+
+`docs/agent-platform/opencode-v2-hot-reload-evidence/`（204KB 纯文本 + **63KB 可复现脚本** `repro.mjs`，自清理、无依赖）—— 11 份原始捕获：
+配置改 agent.system（311ms 可见、窗口内 0 次 POST）· 加 mcp.server（211ms）· 加 skill · 加插件（setup 触发）· **原地改插件（setup 再次触发，注入器依赖的那一行）** · 改隔离域全局配置 · `location/reload`（204、**PID 前后一致**、会话存活、**+24ms 单次读仍是旧快照、+123ms 新值可见** ⇒ 重建异步）· **pending 表单+权限被 reload 取消（两个 location 都取消）** · 对照组（不 reload ⇒ pending 存活 8s）· 文件监听路 **pending 保留** · **无需 watcher 开关**（v2 的 `watcher` 只有 `ignore`；`{"enabled":false}` 被静默丢弃）。
+- 文档侧：对照文档 §2.3 **U-a → 已闭环**（指向证据目录）并新增 U-a′（2.0.32 复测项）；计划 §7.3 新增热重载行、§10 **U12 → 已闭环**（29 项：**11 关闭 / 18 开放**）。
+- ⚠️ **顺带纠正一条我此前说错的**：**`settings.apiKey` 在 v2.0.28 的 `/api/provider`、`/api/provider/{id}`、`/api/model` 里是明文返回**（不是脱敏）。vteam 的 driver 解析成 `DriverModelInfo`（不含 settings）⇒ 正常路径不落库，但**任何把原始响应打进日志的地方会泄漏明文 key** ⇒ 收尾时需核这条路径。
+- 另记两个测量陷阱：v2 的 location 查询是 **deepObject**（`location%5Bdirectory%5D`）；**location 惰性加载** —— 目录 location 未起时显式 location 查询会**静默回落到默认 location**，权限求值从 `ask` 变 `deny`。
+
+## 缺陷 2/3/4/5 已修（Agent）—— server 4368 → **4402** tests（新增 20 例）
+
+| # | 根因 | 改法 |
+|---|---|---|
+| 2 channel_send 文案误导 | `channelSend` **只按任务**解析作用域，而渠道绑定是**团队级**概念 ⇒ 生产栈所有会话 `task_id` 均为 NULL，模型永远被引去查任务上下文，**真正的渠道问题从未浮现** | 作用域改「任务优先、退团队」；新增两个可辨错误类（`NotificationChannelNotBoundError` / `NotFoundError`），**都携带该团队可用渠道清单** |
+| 3 回执 200 截断 | `wakeMainAgent` 硬切 `slice(0,200)`，且**整条唤醒链没传 messageId** ⇒ 接收方无从定位原文 | **上限不变**（尊重「只发增量」铁律与计划 §6.3），但把落库后的 `message.id` 贯穿全链，截断时尾附「（已截断，详见群聊消息 m_xxx）」，未截断也带指针 |
+| 4 枚举调用前不可见 | `zodObjectToJsonSchema` 把 `ZodEnum` **一律塌成 `{type:'string'}`**（连 JSON Schema 都不带取值），描述又是手写散文 | 新增 `enumValuesOf`/`describeToolEnums`/`withEnumCatalogue`，**从同一份 zod schema 取值**：描述**首行**贴「【参数枚举全集】」+ inputSchema 附 `enum` ⇒ 同源、不会漂移。12 个带枚举的工具生效 |
+| 5 会话异常终止无感知 | **worker 侧翻译是完整的**（`session.execution.failed` → `agent.status{error}`），缺的是**服务端把已收到的事件转成用户可见产物**这一步（只标 `failedSessions` + 广播一条**不落库**的 SSE） | 新增 `publishTerminationNotice`，覆盖三条异常终止路径（worker 上报失败 / 静默判败 / 空闲判死三分支）⇒ **落团队群聊系统消息**（带别名、sessionId、终止类型、原因）+ 任务归属时另落 `task_events`（`session.terminated`）。幂等：`(sessionId, reasonType)` 内存去重 + 群聊 30min/100 行扫描兜进程重启 |
+
+- ⭐ **它否证了我的假设**：缺陷 5 **不是** v2 迁移遗留 —— `failTeamProcessingMessage`/`handleAgentStatus` 早于迁移（Phase 0-4 基线即有），迁移提交 `818177f` 对 `worker-dispatcher.ts` 的 diff **未出现这两个符号**。是**既有共性缺口**。缺陷 5 **不需要 worker 侧改动**。
+- 5 处既有断言被更新 —— 原本**编码了缺陷的错误行为**（枚举塌成裸 string；静默判败断言"不落任何行"）。
+- ⚠️ **顺带发现一个独立缺陷（未修）**：`POST /api/v1/teams/:teamId/notification-channels`（`team-channel-bindings.controller.ts`）用 `messageChannelId` 查表 ⇒ Prisma 报 `Unknown argument 'messageChannelId'` → **500** ⇒ **平台自身无法把通知渠道绑到团队** ⇒ 缺陷 2 的兜底（"先绑定渠道再用"）在 UI 路径上是**坏的**。agent 只能直写 DB 才完成活栈绑定。**建议单独排期。**
 
 ## T23 文档订正已落地（Agent V）—— 19 篇文档，零源码改动
 
@@ -664,6 +727,25 @@ T1 的版本闸门是"major < 2 → fail-fast"，这让计划 §9.3 的 **v1 回
 - `opencode mcp list --pure` → **exit 1**（响亮失败，不是静默）
 - v2 配置归一化会丢弃 legacy 键，只发 `level=WARN ... message="configuration normalization diagnostic" path=$.… kind=unsupported action="omitted unsupported legacy setting"`
 - v1 线已冻结：`opencode-ai@latest` = `@opencode-ai/sdk` = 1.19.3；v2 = `@opencode/cli` / `@opencode/sdk` = 2.0.32
+
+## ⭐ 热重载证据已入库（2026-10-20）—— `docs/agent-platform/opencode-v2-hot-reload-evidence/`
+
+**做了什么**：把「自动文件热重载」此前只存在于调查轮现场记录的结论，变成**可复现的原始证据**（闭环 `opencode-v2-自研机制与v2原生能力对照.md` §2.3 的 **U-a**）。
+
+- **目录**：`docs/agent-platform/opencode-v2-hot-reload-evidence/`
+  —— **11 份逐条原始输出**（`01`~`11`）+ `README.md`（版本/环境/复现方式/claim→artifact 对照表/2.0.32 复检清单）+ **`repro.mjs`**（生成这 11 份文件的脚本本身，node 内置 `fetch`、无第三方依赖、可一键复跑）。
+- **实测版本**：`opencode v2.0.28`（**不是**锁版的 2.0.32）；隔离 `HOME`/`XDG_CONFIG_HOME`/`XDG_DATA_HOME`；临时目录在 `$TMPDIR/opencode/`（**不在仓库里**）；**无凭据、不连外网**；脚本跑完杀掉自己起的 serve（收尾打印 `pgrep -fl "opencode serve"` 核对，只剩用户自己 4096 端口的实例）。
+- **覆盖的结论**（每条都有原始 HTTP 响应 + serve 日志）：
+  ① `agents.<name>.system` / `mcp.servers.<name>` / `.opencode/skills/<name>/SKILL.md` / `.opencode/plugins/<f>.ts`（**新增**与**原地编辑 → `setup()` 重入**）/ 隔离全局配置的 provider 段 —— **改文件即生效**、**serve PID 不变**、**观察窗口内 0 次 POST**；
+  ② `POST /api/location/reload` → **204**、PID 不变、会话存活；
+  ③ **有 pending 时 reload 会取消 pending form + permission**（**所有 location**）+ **对照组：无 reload 时 pending 存活 8 s** + **文件监听路径保留 pending**；
+  ④ **不需要任何 `watcher` 开关**（v2 的 `watcher` 段只有 `ignore`；写 `enabled` 会被静默丢弃）。
+- **两条实现相关的事实**（已写进 `README.md` §4，**后续维护者不许弄丢**）：
+  - `GET /api/form` / `GET /api/permission/request` 是 **location 作用域**的（会话在任务子目录 ⇒ 默认 location 查不到），而 `location/reload` 取消的是**所有 location** ⇒ 闸门必须**逐会话**查，**绝不能**用全局端点。
+  - `location/reload` 之后的重建是**异步**的（2.0.28 实测：单次读读到旧快照，新值 **~100 ms** 后才可见）⇒ 效果确认必须走**有界 settle 窗口**，否则误判"未生效"并触发**不必要的真实重启**。
+- **⚠️ 一处与预期不符**：任务预期"`apiKey` 在 provider 响应里是脱敏的"——**实测 2.0.28 是明文回显**（`GET /api/provider` / `.../model`）。证据里的 key 是**合成假串**，不是真凭据。已登记进 `README.md` §6。
+- **文档同步**：逆分析文档 §1.1 / §2.3（**U-a 闭环 + 新增 U-a′**）/ §3.4 / §5.1 已指向本目录；计划 §7.3 验收矩阵新增「热重载」行、§10 的 **U12 已闭环**、**U11 仍开放**（2.0.32 复检清单见本目录 `README.md` §5）。
+- **零源码改动**：本轮**没有**碰 `worker/src/`、`server/src/`、`web/`、`chart/`；只动了文档与本目录（新增）。
 
 ## 待办提醒
 

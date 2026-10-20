@@ -1,0 +1,51 @@
+==============================================================================
+Artifact 09 — 对照组 —— **不** reload 时 pending form / permission 存活
+==============================================================================
+what      : 造 pending form + pending permission，然后什么都不做，等 8 秒再看
+when      : 2026-10-20T15:20:57.350Z
+binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
+serve     : http://127.0.0.1:61277  (pid 84513)
+isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
+scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+commands  :
+  $ curl -s -u "opencode:$PW" -X POST "http://127.0.0.1:61277/api/session/<sid>/form" -H 'content-type: application/json' -d '{"title":"...","fields":[{"key":"answer","type":"string","required":true}]}'
+  $ sleep 8
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/session/<sid>/form"
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/session/<sid>/permission"
+------------------------------------------------------------------------------
+--- 对照组：造了 pending form / permission 之后**不做任何 reload**------------
+  会话                    : ses_ea619643effegiffi10VHBZcVO
+  等待时长                  : 8003 ms
+  本对照窗口内 location/reload 调用次数: 0
+  pending form          : **存活**
+  pending permission    : **存活**
+
+--- 造出来：POST .../form -----------------------------------------------
+HTTP 200
+{"data":{"id":"frm_159e69fba001kXpknp5lQW0x3K","sessionID":"ses_ea619643effegiffi10VHBZcVO","title":"Pending form (control: no reload)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}}
+
+--- 造出来：POST .../permission ------------------------------------------
+HTTP 200
+{"data":{"id":"per_159e69fbc001tUcnkY0jRSdNls","effect":"ask"}}
+
+--- 等待前：GET /api/session/<sid>/form -----------------------------------
+HTTP 200
+{"data":[{"id":"frm_159e69fba001kXpknp5lQW0x3K","sessionID":"ses_ea619643effegiffi10VHBZcVO","title":"Pending form (control: no reload)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+--- 等待前：GET /api/session/<sid>/permission ------------------------------
+HTTP 200
+{"data":[{"id":"per_159e69fbc001tUcnkY0jRSdNls","sessionID":"ses_ea619643effegiffi10VHBZcVO","action":"read","resources":[".env"]}]}
+
+--- 等待 8003 ms（无 reload）后：GET /api/session/<sid>/form -----------
+HTTP 200
+{"data":[{"id":"frm_159e69fba001kXpknp5lQW0x3K","sessionID":"ses_ea619643effegiffi10VHBZcVO","title":"Pending form (control: no reload)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+   ⇒ **仍然存活** ⇒ pending 项不是「自然过期」消失的
+
+--- 等待后：GET /api/session/<sid>/permission ------------------------------
+HTTP 200
+{"data":[{"id":"per_159e69fbc001tUcnkY0jRSdNls","sessionID":"ses_ea619643effegiffi10VHBZcVO","action":"read","resources":[".env"]}]}
+   ⇒ **仍然存活**
+
+--- 结论 -----------------------------------------------------------------
+  ⇒ 08 里 pending 项的消失**只能**归因于 `location/reload`，不是自然过期。
+  ⇒ 因此热重载的 pending 闸门是**必需**的（`deferred` 分支有存在理由）。

@@ -1,0 +1,113 @@
+==============================================================================
+Artifact 08 — pending form + pending permission —— 被 location/reload 取消（**所有** location）
+==============================================================================
+what      : 造 pending form + pending permission（默认 location 与任务子目录各一套），再 POST /api/location/reload
+when      : 2026-10-20T15:20:47.808Z
+binary    : opencode v2.0.28  (/Users/mac/.opencode/bin/opencode)
+serve     : http://127.0.0.1:61277  (pid 84513)
+isolation : HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg  XDG_CONFIG_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/.config  XDG_DATA_HOME=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/xdg/data
+scratch   : /private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z
+commands  :
+  $ curl -s -u "opencode:$PW" -X POST "http://127.0.0.1:61277/api/session/ses_ea6198e91ffe6Tjft7WUa5Xn1f/form" -H 'content-type: application/json' -d '{"title":"...","fields":[{"key":"answer","type":"string","required":true}]}'
+  $ curl -s -u "opencode:$PW" -X POST "http://127.0.0.1:61277/api/session/ses_ea6198e91ffe6Tjft7WUa5Xn1f/permission" -H 'content-type: application/json' -d '{"action":"read","resources":[".env"]}'
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/session/ses_ea6198e91ffe6Tjft7WUa5Xn1f/form"
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/form"                                  # 默认 location
+  $ curl -s -u "opencode:$PW" -G "http://127.0.0.1:61277/api/form" --data-urlencode "location[directory]=/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/tasks/task-1"
+  $ curl -s -o /dev/null -w '%{http_code}\n' -u "opencode:$PW" -X POST "http://127.0.0.1:61277/api/location/reload"
+  $ curl -s -u "opencode:$PW" "http://127.0.0.1:61277/api/session/ses_ea6198e91ffe6Tjft7WUa5Xn1f/form"                  # 重载后
+------------------------------------------------------------------------------
+--- 造 pending 项 --------------------------------------------------------
+  默认 location 会话        : ses_ea6198e91ffe6Tjft7WUa5Xn1f
+  任务子目录会话               : ses_ea6197b30ffeRUBD1dz0T5Axiy
+  任务子目录 location 就绪     : **是**（15 ms；GET /api/location 的 directory == $TASKDIR）
+  serve PID（重载前/后）      : 84513 / 84513
+  POST /api/location/reload: HTTP 204（2563 ms）
+
+POST /api/session/ses_ea6198e91ffe6Tjft7WUa5Xn1f/form        -> HTTP 200  {"data":{"id":"frm_159e689a6001lIYw7xhYg8RZvN","sessionID":"ses_ea6198e91ffe6Tjft7WUa5Xn1f","title":"Pending form (default location)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}}
+POST /api/session/ses_ea6198e91ffe6Tjft7WUa5Xn1f/permission   -> HTTP 200  {"data":{"id":"per_159e689a8001vcob76rKfC2EQk","effect":"ask"}}
+POST /api/session/ses_ea6197b30ffeRUBD1dz0T5Axiy/form        -> HTTP 200  {"data":{"id":"frm_159e689a9001ZYsMtB79Ktv1VA","sessionID":"ses_ea6197b30ffeRUBD1dz0T5Axiy","title":"Pending form (task subdirectory)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}}
+POST /api/session/ses_ea6197b30ffeRUBD1dz0T5Axiy/permission   -> HTTP 200  {"data":{"id":"per_159e689ab001HPaB3k09hsonXo","effect":"ask"}}
+
+════════ 重载前 ════════
+
+--- 默认 location 会话：GET /api/session/<sid>/form -----------------------
+HTTP 200
+{"data":[{"id":"frm_159e689a6001lIYw7xhYg8RZvN","sessionID":"ses_ea6198e91ffe6Tjft7WUa5Xn1f","title":"Pending form (default location)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+--- 默认 location 会话：GET /api/session/<sid>/permission ------------------
+HTTP 200
+{"data":[{"id":"per_159e689a8001vcob76rKfC2EQk","sessionID":"ses_ea6198e91ffe6Tjft7WUa5Xn1f","action":"read","resources":[".env"]}]}
+
+--- 任务子目录会话：GET /api/session/<sid>/form ----------------------------
+HTTP 200
+{"data":[{"id":"frm_159e689a9001ZYsMtB79Ktv1VA","sessionID":"ses_ea6197b30ffeRUBD1dz0T5Axiy","title":"Pending form (task subdirectory)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+
+--- 任务子目录会话：GET /api/session/<sid>/permission -----------------------
+HTTP 200
+{"data":[{"id":"per_159e689ab001HPaB3k09hsonXo","sessionID":"ses_ea6197b30ffeRUBD1dz0T5Axiy","action":"read","resources":[".env"]}]}
+
+--- ⚠ location 作用域证据 A：GET /api/form（**不带** location = 默认 location）---
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":[{"id":"frm_159e689a6001lIYw7xhYg8RZvN","sessionID":"ses_ea6198e91ffe6Tjft7WUa5Xn1f","title":"Pending form (default location)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+   ⇒ 只有**默认 location** 的 pending form；任务子目录的**查不到**
+
+--- ⚠ location 作用域证据 B：GET /api/form?location[directory]=<任务子目录> -----
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/tasks/task-1"},"data":[{"id":"frm_159e689a9001ZYsMtB79Ktv1VA","sessionID":"ses_ea6197b30ffeRUBD1dz0T5Axiy","title":"Pending form (task subdirectory)","fields":[{"key":"answer","title":"Your answer","required":true,"type":"string"}]}]}
+   ⇒ 这次 location 被解析成任务子目录，**只有它的** pending form
+     ⇒ **`GET /api/form` 是 location 作用域的**
+
+--- GET /api/permission/request（默认 location）----------------------------
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":[{"id":"per_159e689a8001vcob76rKfC2EQk","sessionID":"ses_ea6198e91ffe6Tjft7WUa5Xn1f","action":"read","resources":[".env"]}]}
+
+--- GET /api/permission/request?location[directory]=<任务子目录> -----------
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/tasks/task-1"},"data":[{"id":"per_159e689ab001HPaB3k09hsonXo","sessionID":"ses_ea6197b30ffeRUBD1dz0T5Axiy","action":"read","resources":[".env"]}]}
+   ⇒ 同样是 location 作用域的
+
+════════ 重载后 ════════
+
+--- 默认 location 会话：GET /api/session/<sid>/form -----------------------
+HTTP 200
+{"data":[]}
+   ⇒ **被取消**（重载前 1 条 → 重载后 0 条）
+
+--- 默认 location 会话：GET /api/session/<sid>/permission ------------------
+HTTP 200
+{"data":[]}
+   ⇒ **被取消**（重载前 1 条 → 重载后 0 条）
+
+--- 任务子目录会话：GET /api/session/<sid>/form ----------------------------
+HTTP 200
+{"data":[]}
+   ⇒ **也被取消** ⇒ reload 取消的是**所有 location** 的 pending
+
+--- 任务子目录会话：GET /api/session/<sid>/permission -----------------------
+HTTP 200
+{"data":[]}
+   ⇒ **也被取消**
+
+--- GET /api/form（默认 location）-----------------------------------------
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":[]}
+
+--- GET /api/form?location[directory]=<任务子目录> -------------------------
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/tasks/task-1"},"data":[]}
+
+--- GET /api/permission/request（默认 location）----------------------------
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj"},"data":[]}
+
+--- GET /api/permission/request?location[directory]=<任务子目录> -----------
+HTTP 200
+{"location":{"directory":"/private/var/folders/0y/1xtzqt_j3_g_1yff3gnkfsgc0000gn/T/opencode/hot-reload-20261020T152036Z/proj/tasks/task-1"},"data":[]}
+
+--- 结论 -----------------------------------------------------------------
+  ① `location/reload` 会**取消** pending form 与 pending permission（两个 location 都一样）。
+  ② `GET /api/form` / `GET /api/permission/request` 是**按 location 作用域**的：
+     会话被放到任务子目录后，默认 location 的查询**看不到**它的待答复项；
+     而 `location/reload` 取消的是**所有 location**。
+     ⇒ 闸门必须**逐会话**查（`GET /api/session/{id}/form` / `.../permission`），
+       绝不能用默认 location 的全局端点当闸门（会漏判 ⇒ 静默销毁用户正在作答的问题）。

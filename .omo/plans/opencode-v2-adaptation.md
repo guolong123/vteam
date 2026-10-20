@@ -15,7 +15,7 @@
 | v1 现状 | `opencode-ai@latest` = 1.19.3（**已冻结**，不再发版）；`@opencode-ai/sdk` = 1.19.3 |
 | 影响面 | worker 8 文件 / server 4 文件 / web 1 文件 / 文档 1 篇 / 镜像 1 个 |
 | 依赖文档 | `docs/agent-platform/07-opencode-v2-调研与架构决策.md`（本文档订正其过期假设，见 D13） |
-| 契约漂移风险 | **2.0.28 与 2.0.32 的 OpenAPI 存在差异**（如 `GET /api/model` 的响应包装：2.0.28 实测 `{location, data}`，2.0.32 spec 为裸数组）→ **以锁定版本重跑契约基线**（T1 交付物之一） |
+| 契约漂移风险 | **2.0.28 与 2.0.32 的 OpenAPI 存在差异**（如 live root spec（144 ops）与 `/v2/openapi.json` 快照（143 ops）差一个端点；⚠️ `GET /api/model` 的响应包装**两版一致**，都是 `{location, data}`——2.0.32 见发布的 `@opencode/client@2.0.32` `ModelListOutput = { location, data }`，**不是**裸数组）→ **以锁定版本重跑契约基线**（T1 交付物之一） |
 
 ---
 
@@ -30,7 +30,7 @@
 | v2 仓库从 `sst/opencode` 迁到 `anomalyco/opencode` | 依赖升级路径与 issue 追踪路径都变了 |
 | v2 有三个"官方有意破坏"的区：插件 API / server API / TUI 配置 | 正好命中 vteam 的三处最硬耦合：driver、事件流、三个工具生成器 |
 | v1.19.3 **同时提供两套 HTTP 面**：legacy 根路径面（`/session`、`/event`、`/config`…）**和**一套过渡性的 `/api/*` 面；v2 **只保留 `/api/*`，legacy 面已移除** | 解释了 vteam 现有 v1 代码打的是哪一面：`worker/src/driver/v1-driver.ts` 全部走 legacy 根路径面（`POST /session`、`GET /event`…），只有 `GET /api/model` 恰好落在过渡面上——切 v2 时这一条会同时断（要么端点没了，要么响应包装变了） |
-| **契约在 2.0.28 → 2.0.32 之间有漂移**：live root spec（`https://opencode.ai/openapi.json`，144 ops）与 `/v2/openapi.json` 快照（143 ops）差一个端点；`GET /api/model` 的响应形状两版不同 | 本文的实测基线取自 2.0.28，锁版目标却是 2.0.32 → **锁版即锁契约基线**（T1 须用锁定版本重跑一次实测并出快照），否则实现按 2.0.28 的响应包装写、跑在 2.0.32 上会静默解包失败 |
+| **契约在 2.0.28 → 2.0.32 之间有漂移**：live root spec（`https://opencode.ai/openapi.json`，144 ops）与 `/v2/openapi.json` 快照（143 ops）差一个端点；⚠️ `GET /api/model` 的响应包装**两版相同**（都是 `{location, data}`，已对发布的 `@opencode/client@2.0.32` `ModelListOutput` 核实） | 本文的实测基线取自 2.0.28，锁版目标却是 2.0.32 → **锁版即锁契约基线**（T1 须用锁定版本重跑一次实测并出快照），否则实现按 2.0.28 的响应包装写、跑在 2.0.32 上会静默解包失败 |
 
 vteam 当前的 worker 镜像装的是**未锁版本**的 `opencode-ai`（`worker/Dockerfile:30`），运行时无从回答"现在跑的是哪一版"；而 `server/src/workers/workers.service.ts:919-920` 用**精确字符串相等**过滤可调度 worker。因此"版本闸门"必须先于任何 v2 worker 上线。
 
@@ -108,7 +108,7 @@ v1 无前缀路由（`/session`、`/event`、`/config`、`/provider`、`/agent`�
 | `POST /session/{id}/abort` | `POST /api/session/{id}/interrupt`（`?resume=true\|false`） | 返回 `{interrupted:true\|false}`；`false` = 空闲空操作 |
 | `GET /agent?directory=` | `GET /api/agent` | `{location, data: Agent.Info[]}`；**GET 类端点的 location 选择机制未验证 →【待确认 Q7】** |
 | `GET /session/{id}/todo?directory=` | **v2 路由清单中无 todo 端点** | →【待确认 Q8】（"计划 Tab 步骤区"数据源） |
-| `GET /provider` / `GET /api/model` | `GET /api/provider` / `GET /api/model` | 都是 `{location, data:[...]}`——**对象包装，不是裸数组**（⚠️ 2.0.32 spec 里 `GET /api/model` 已改为**裸数组** `Model.Info[]`，与 2.0.28 实测不同 → 见基线漂移，T1 锁版后重跑） |
+| `GET /provider` / `GET /api/model` | `GET /api/provider` / `GET /api/model` | 都是 `{location, data:[...]}`——**对象包装，不是裸数组**（⚠️ **2.0.28 与 2.0.32 形态一致**：2.0.32 见发布的 `@opencode/client@2.0.32` `ModelListOutput = { location, data }`，**无版本差异**；解包处的裸数组分支只是**防御性容忍**，不是版本漂移） |
 | `GET /`（健康） | `GET /api/info` | ⚠️ **v2 的 `GET /` 未鉴权也返回 200**（body 是 web SPA HTML，**不校验鉴权**）→ 旧的 `GET /` 健康检查会**因错误的原因通过**；实现已把探针移到 `GET /api/info`（**未鉴权 401 / 已鉴权 200**）。响应：`{version, pid, urls[], paths{tmp}, capabilities{persistentPty}}` |
 | `GET /event`（SSE） | `GET /api/event` | 帧**无 `event:` 字段**，类型在 `data.type`；见 §2.5 |
 | —（新增） | `POST /api/session/{id}/agent` / `POST /api/session/{id}/model`（均 204） | 切换后续 turn 的 agent / model（角色激活机制）。**实测（T4）`POST /api/session/{id}/agent {"agent":"<name>"}` 会把该 agent 的 `system` 应用到后续 turn**（并新增一条 `type=agent-switched` 消息 + 发出 `session.agent.selected`）；**`POST /api/session` 时 body 直接带 `"agent":"<name>"` 同样生效**；❌ **prompt body 的 `agents:[{name}]` attachment 是 no-op** |
@@ -229,7 +229,7 @@ v2 **接受并归一化 v1 形配置**（实测：v1 形 `opencode.json` 被接�
 
 | 探什么 | 端点 | 备注 |
 |---|---|---|
-| 模型清单（可执行集） | `GET /api/model` | 两种响应形态（2.0.28 `{location,data}` / 2.0.32 裸数组）用容错解包；`enabled:false` 不算可执行；空/非法响应 ⇒ `undefined`（**不断言"零可用"**） |
+| 模型清单（可执行集） | `GET /api/model` | 响应形态 **2.0.28 与 2.0.32 都是 `{location,data}`**（2.0.32 见发布的 `@opencode/client@2.0.32` `ModelListOutput`）；解包用容错实现（裸数组分支为**防御性容忍**，**非**已知版本差异）；`enabled:false` 不算可执行；空/非法响应 ⇒ `undefined`（**不断言"零可用"**） |
 | MCP 状态 | `GET /api/mcp` | **五态**（见下） |
 
 ⇒ **附带拿到 v2 `/api/mcp` 的五状态**（CLI 文本只有 3 个）：
@@ -509,7 +509,7 @@ v2 **接受并归一化 v1 形配置**（实测：v1 形 `opencode.json` 被接�
   2. 单测覆盖三例：`opencode v2.0.28` → major=2；`opencode 1.19.0` → major=1；`garbage` → `unknown` 且**不抛错**（只告警）。
   3. 用 v1 二进制（或 mock 版本输出 major=1）启动 worker → **启动失败**，错误信息含"需要 opencode ≥ 2，当前 1.x，镜像未换 OPENCODE_CLI_SPEC"这类可操作指引。
   4. `Worker.opencodeVersion` 上报值为规范化 semver 串（`2.0.28`），不再是 `opencode v2.0.28` 全文。
-  5. **契约基线快照的 `opencode --version` 与锁定版本一致**；快照与本文档 §2 基线之间的**全部差异项逐条登记到 §10 未决问题**（已知差异：`GET /api/model` 的响应包装 2.0.28 `{location,data}` vs 2.0.32 spec 裸数组；live root spec 144 ops vs `/v2/openapi.json` 143 ops）。
+  5. **契约基线快照的 `opencode --version` 与锁定版本一致**；快照与本文档 §2 基线之间的**全部差异项逐条登记到 §10 未决问题**（已知差异：live root spec 144 ops vs `/v2/openapi.json` 143 ops；⚠️ `GET /api/model` 的响应包装**不构成差异**——2.0.28 与 2.0.32 都是 `{location,data}`）。
 - **依赖**：无
 - **风险**：解析器对未来版本格式过拟合 → 用宽松正则 + 未识别降级为 `unknown`（不判死）。另：锁版版本与实测基线不一致 → **锁版即锁契约基线**，实现一律以快照为准，差异项先进 §10 再改代码。
 
@@ -639,7 +639,7 @@ v2 **接受并归一化 v1 形配置**（实测：v1 形 `opencode.json` 被接�
 #### T9 v2 driver 实现
 
 - **涉及面**：新增 `worker/src/driver/v2-driver.ts`；参考实现对应 §2.3 端点表
-- **交付物**：v2 REST 客户端（端点全带 `/api` 前缀；Basic 鉴权用户名 `opencode`；`POST /api/session` 用 `location:{directory}`；`POST /api/session/{id}/prompt` 用 `{text, files?, agents?, skills?, delivery?}`；`GET /api/session/{id}/message` 用 `{data,cursor}` 解包；`GET /api/model` / `GET /api/provider` 用 `{location,data}` 解包（⚠️ 2.0.32 spec 已改裸数组 → 解包集中在**一个** `unwrapData()` 里容忍两种形态）；`POST /api/session/{id}/interrupt`）
+- **交付物**：v2 REST 客户端（端点全带 `/api` 前缀；Basic 鉴权用户名 `opencode`；`POST /api/session` 用 `location:{directory}`；`POST /api/session/{id}/prompt` 用 `{text, files?, agents?, skills?, delivery?}`；`GET /api/session/{id}/message` 用 `{data,cursor}` 解包；`GET /api/model` / `GET /api/provider` 用 `{location,data}` 解包（2.0.28 与 2.0.32 形态一致；解包集中在**一个** `unwrapData()` 里，另**防御性容忍**裸数组形态）；`POST /api/session/{id}/interrupt`）
 - **验收标准**
   1. 契约测试（打真 v2 serve）：`createSession` 返回 `ses_` 开头 id；`sendMessage` 返回 inbox item；`listModels` 返回非空且 id 形如 `provider/model`；`getMessages` 返回 `{data:[]}` 结构被正确解包；`abort` 在空闲会话上返回 `{interrupted:false}` 而**不报错**。
   2. 错误码归一：401 → 配置错误；404 → 会话失效（触发现有 `isSessionNotFound` 重建路径，`exec-server.ts:1651-1653`）；429/5xx → 保留 status 供上层区分。
@@ -833,8 +833,8 @@ v2 **接受并归一化 v1 形配置**（实测：v1 形 `opencode.json` 被接�
 - **风险**（**次要**）：v2 下**真正的空 MCP 列表仍 exit 0**——但"命令无效"已经是 exit 1 的**显式失败**，两者不再难区分。**对策**：以**非零退出码**为主判据；再叠加"输出**不是**帮助文本"的兜底校验（v2 打印 help 时会含已知帮助关键字），命中同样判为"探针失败"。
 - **补充验收标准（§2.9 修正后 —— 真栈实测，已落地）**
   1. **模型探针不得 shell out 到 opencode CLI**：改为读 **serve 的 `GET /api/model`**（Basic 鉴权，
-     端点与口令从 serve 对象读——serve 换端口重启会自动跟上，不从 env 重读）；两种响应形态
-     （2.0.28 `{location,data}` / 2.0.32 裸数组）都要容错；`enabled:false` 的模型不算"可执行"；
+     端点与口令从 serve 对象读——serve 换端口重启会自动跟上，不从 env 重读）；响应形态
+     （2.0.28 与 2.0.32 **都是** `{location,data}`，另**防御性容忍**裸数组）都要能解；`enabled:false` 的模型不算"可执行"；
      空/非法响应 ⇒ `undefined`（**不断言"零可用"**）。**不留 CLI 兜底。**
   2. **MCP 探针不得 shell out 到 opencode CLI**：改为读 **serve 的 `GET /api/mcp`**；加**形态闸门**
      （不是 v2 `/api/mcp` 的形状 ⇒ `probe_failed`，**绝不报"没有 MCP"**）+ 5s 超时。
@@ -1025,6 +1025,7 @@ v2 **接受并归一化 v1 形配置**（实测：v1 形 `opencode.json` 被接�
 | D12 静默降级可见化 | T7、T15、T16b | 归一化 WARN 被识别并点名键路径；注入后的配置**无**归一化诊断；**`plugins` 合并语义**与 `instructions` 只追加**不能靠配置键解决 → 由 T16b 的隔离 env 兜底**，启动日志显式声明隔离域 |
 | D13 文档订正 | T23 | 过期表述全部消除；路由示例全带 `/api`；写明"无 `system` 字段" |
 | **T14 五条语义**（完成判定 / 首字 / 工具态 / 文本聚合 / 错误抽取） | T14（✅ P3 已落地） | **完成判定规则未被重写**（v2 driver 合成 v1 兼容的 `step-finish`）；在飞豁免 `∈ {running, streaming}`（v2 无 `pending`、保留 `pending` 供 v1 回退）；工具态取值**小写**（与 v1 同族）；文本聚合**保留 `!synthetic` 过滤**（**Q9 已关闭**：v2 工具调用是独立 content 项 ⇒ 占位污染路径结构上封死）；**`state.output` 保持主形态**（只增对 `state.content[]` 数组的容错）；错误抽取**两代通吃**（v2 形 `{type,message,status,response{body}}` → ` (HTTP 401)`）；**合流缝**：先问后记 + 宽限期（500 ms）+ `terminalEvidence` 留痕；**激活**：exec-server 交闸门 ⇒ 一次 run 只发一个终态事件 |
+| **热重载（配置/凭据变更 → 不重启 serve）**（🥇，实施中：`worker/src/reload/config-reloader.ts` · `worker/src/reload/pending-requests.ts`） | 证据：**`docs/agent-platform/opencode-v2-hot-reload-evidence/`**（实测 **2.0.28**，11 份原始输出 + `repro.mjs` 一键复现） | ① **文件监听路径**：`agents.<name>.system` / `mcp.servers.<name>` / `.opencode/skills/<name>/SKILL.md` / `.opencode/plugins/<f>.ts`（**新增**与**原地编辑 → `setup()` 重入**——注入器依赖的那一行）/ 隔离全局配置的 provider 段，**改文件即生效**（实测 200~350 ms）、**serve PID 不变**、**无任何触发调用**；② **显式原语**：`POST /api/location/reload` → **204**、PID 不变、会话存活；③ ⚠️ **有 pending 时 reload 会取消 pending form / permission**（**所有 location**）⇒ 闸门必须**逐会话**查（`GET /api/form` / `GET /api/permission/request` 是 **location 作用域**的）；④ **无 pending 时**文件监听路径生效且 **pending 被保留**；⑤ 效果确认要**有界 settle 窗口**（重建**异步**，2.0.28 实测 ~100 ms，单次读会读到旧快照）。⚠️ **锁版 2.0.32 后按证据目录 `README.md` §5 逐条复检** |
 
 ### 7.4 不变的既有验收基线
 
@@ -1061,7 +1062,7 @@ v2 **接受并归一化 v1 形配置**（实测：v1 形 `opencode.json` 被接�
 |------|------|------|
 | `/api/event` **volatile 契约**（慢消费者 overflow 断流、断线期间事件丢失） | 执行状态丢失 → 任务挂死 | T13 三通道：durable log 补齐（`?after=<lastSeq>`，**一等缓解**）+ 消息轮询兜底 + 重连后重同步；终态判定收口到一个函数 |
 | **OpenAPI schema 与运行时不一致**（SSE 的 `event` 字段：schema 声明必填，2.0.28 运行时不发该行） | 按 schema 实现解析器 → 期望 `event` 字段恒为空 → 事件类型全丢 | **以实机抓帧为准，不要以 schema 为准**；T11 解析器不要求 `event:`，且优先取 `event:`、缺失回退 `data.type`；CI 用真实抓帧 fixture |
-| **锁定版本与实测基线不一致**（本文档基线取自 2.0.28，锁版目标 2.0.32；已知差异：`GET /api/model` 响应包装、spec op 数 143 vs 144） | 按 2.0.28 的响应包装写解包 → 跑在 2.0.32 上静默解包失败 | **锁版即锁契约基线**：T1 用锁定版本重跑实测并出快照入库；差异项逐条登记 §10；解包集中在**一个** `unwrapData()`（容忍两种形态） |
+| **锁定版本与实测基线不一致**（本文档基线取自 2.0.28，锁版目标 2.0.32；已知差异：spec op 数 143 vs 144；⚠️ `GET /api/model` 响应包装**两版一致**，不算差异） | 按 2.0.28 的响应包装写解包 → 跑在 2.0.32 上静默解包失败 | **锁版即锁契约基线**：T1 用锁定版本重跑实测并出快照入库；差异项逐条登记 §10；解包集中在**一个** `unwrapData()`（`{location,data}` 为主，裸数组作防御性容忍） |
 | `durable.seq` 只在 durable 事件上有 | ephemeral 事件（`session.idle`/`permission.asked`/`form.created`）不可靠 | 映射表逐条标注；状态判定只用 durable；ephemeral 只触发"拉一次列表"动作 |
 | v2 的 `GET` 类端点 **location 选择机制未验证** | `GET /api/agent`、`GET /api/session` 可能拿不到目标目录的 agent 集合 | Q7；未验证前，worker 侧改用"创建会话时绑定 `location` + 按会话读"的路径取 agent |
 | v2 路由清单中**无 todo 端点** | "计划 Tab 步骤区"数据源断裂 | Q8；若确无，端点以 404 优雅降级（UI 隐藏步骤区），不阻塞主链路 |
@@ -1195,7 +1196,11 @@ feat/opencode-v2-adaptation（基于 origin/main）
 
 ## 10. 未决问题
 
-> **状态**：**Q1 / Q2 / Q3 / Q11 已关闭**（T4 / T5 / T6 的实测结论，见 `docs/agent-platform/opencode-v2-spike-results.md`，可一键复现）；**Q9 已关闭**（P3 实测：v2 的工具调用是独立 content 项 ⇒ 工具占位污染这条路结构上封死）；**Q16 已关闭**（真栈实测：v2 的 MCP 是**五态**且 CLI 不是 serve 的探针，见 §2.9）；**Q17 / Q18 / Q19 已关闭**（D6(f) 插件交接落地时实测：逐消息 blob 有了 v2 原生载体、插件**按 location 加载**、推送的 system 段**落在内置段之后**）；**Q13（= U5）** 有单次样本但**未正式关闭**；**新增 U6 ~ U9** 四个未知；**Q20 为刻意未做的未来优化**（稳定/易变段拆分）。当前共 **24 项**：**已关闭 9 项**、**仍开放 15 项**。
+> **状态**：**Q1 / Q2 / Q3 / Q11 已关闭**（T4 / T5 / T6 的实测结论，见 `docs/agent-platform/opencode-v2-spike-results.md`，可一键复现）；**Q9 已关闭**（P3 实测：v2 的工具调用是独立 content 项 ⇒ 工具占位污染这条路结构上封死）；**Q16 已关闭**（真栈实测：v2 的 MCP 是**五态**且 CLI 不是 serve 的探针，见 §2.9）；**Q17 / Q18 / Q19 已关闭**（D6(f) 插件交接落地时实测：逐消息 blob 有了 v2 原生载体、插件**按 location 加载**、推送的 system 段**落在内置段之后**）；**Q8 已关闭**（逆分析核实：v2 **删掉了** todo 能力——契约基线 118 paths 中含 `todo` 的路径数 = **0**；vteam 的 `plan_tasks` + `vteam_todo` MCP 是唯一承载，见 `docs/agent-platform/opencode-v2-自研机制与v2原生能力对照.md` §3.8）；**Q13（= U5）** 有单次样本但**未正式关闭**；**新增 U6 ~ U9** 四个未知；**Q20 为刻意未做的未来优化**（稳定/易变段拆分）。
+>
+> **逆分析新增（2026-10-20）**：新增文档 `docs/agent-platform/opencode-v2-自研机制与v2原生能力对照.md`——**vteam 自研机制 vs v2 原生能力**的 15 行逐条判定（redundant 3 / partially-redundant 6 / different-scope 4 / still-needed 2），含「最值得退役的三件事」与「请勿误退役」的护栏表。该分析**关闭 Q8**、**部分解答 Q14**（契约形态已确认，活栈补齐验证仍是残余项），并**新增 U10 ~ U14** 五个开放项（provider 段凭据的最终归属 / `location/reload` 的 2.0.32 行为 / 自动热重载的逐项实测与证据入库 / worker 侧 v2 能力代理端点是否要建 / form→question 的有损映射表）。
+>
+> **热重载证据已入库（2026-10-20）**：新增 `docs/agent-platform/opencode-v2-hot-reload-evidence/`（**11 份逐条原始输出 + `README.md` + 可一键复现的 `repro.mjs`**；实测 **opencode v2.0.28**，隔离 `HOME`/`XDG_*`，无凭据、不连外网）⇒ **U12 已闭环**（六条文件监听行 + `location/reload` + pending 取消/保留 + 无 watcher 开关全部有原始输出）；**U11 仍开放**（2.0.32 的行为未验，复检清单见该目录 `README.md` §5）。当前共 **29 项**：**已关闭 11 项**、**仍开放 18 项**。
 
 | # | 问题 | 为何重要 | 谁来验 | 验证方法 | 阻塞哪个任务 |
 |---|------|----------|--------|----------|-------------|
@@ -1206,13 +1211,13 @@ feat/opencode-v2-adaptation（基于 origin/main）
 | Q5 | 进程内托管在**多租户 worker** 下的 DB 持久化是否可行（每租户独立 location + 共享 `opencode.db`） | 同上；若可行可省掉 spawn 进程的开销与端口管理 | worker 侧（后续） | T21 之后单独立项 spike | 无（仅记录） |
 | Q6 | `DELETE /api/session/{id}/form/{formID}` 是否等价于 v1 的 `POST /question/{id}/reject`（"用户点了拒绝"）？v2 的 `form.cancelled` 事件由谁触发？ | 影响"模型提问 → 用户拒绝"的交互闭环；映射错会导致拒绝后 agent 仍在等答案 | worker 侧 | T9 集成测试里构造一个 form 并分别试 reply / DELETE，观察事件与 agent 是否收口 | T9 → T12 |
 | Q7 | v2 的 **GET 类端点**如何指定 location（`GET /api/agent`、`GET /api/session`）？`GET /api/session` 有 `directory` query 参数，但 `GET /api/agent` 未见；doc 07 提到的 `x-opencode-workspace` 头**未经实测** | 决定"按任务工作目录列出可用 agent"能否实现（v1 是 `GET /agent?directory=`） | worker 侧 | T9 实测：分别用 query / header / 依赖会话绑定三种方式试 `GET /api/agent`，比对返回的 `location` 字段 | T9 → T17/T20 |
-| Q8 | v2 是否提供 todo 读取端点？实测的 117 条 `/api` 路由清单中**无 todo 端点** | vteam 的"计划 Tab 步骤区"数据源（`GET /session/{id}/todo`）可能断裂 | worker 侧 | T9：翻 v2 的 `GET /openapi.json` 全量 paths（118 条）确认；若确无 → 端点 404 优雅降级，UI 隐藏该区 | T9 → T8（`listTodos` 先留空实现） |
+| Q8 | ✅ **已关闭（逆分析核实）**：**v2 没有任何 todo 端点**——契约基线 `docs/agent-platform/opencode-v2-contract-baseline/openapi.json`（**118 paths**）逐条枚举，路径中含 `todo` 的条数 = **0**；v1 确有 `GET /session/{id}/todo`（见附录 A）⇒ **v2 不是「没提供」而是「删了」**（不存在「等 v2 补上」的可能）。⇒ ① 驱动侧已优雅降级：`worker/src/driver/v2-driver.ts` 的 `listTodos` 返回空数组 + 按分钟节流的告警（不再每次轮询刷屏）；② **vteam 的 `plan_tasks` + `vteam_todo` MCP 是唯一承载**（`server/src/tasks/plan-steps.service.ts` 头注释已写明理由：v1 的 todos 是**会话级**、换会话/重置即丢、跨成员与跨任务不可见、且平台注入的工具清单里没有 todo 写入工具）⇒ 计划 Tab 步骤区**数据源不断**（走 `plan_tasks`，不走 opencode todos）。证据：`docs/agent-platform/opencode-v2-自研机制与v2原生能力对照.md` §3.8（逆分析 R8，判定 **still-needed**） | （已关闭，结论已并入附录 A + 逆分析 R8） | worker 侧 + server 侧 | 已完成：契约基线路径枚举（118 paths / 0 条含 `todo`）+ `v2-driver.ts` 的 `listTodos` 降级实现 | **无**（不再是 T9 → T8 的阻塞项） |
 | Q9 | ✅ **已关闭（实测）**：v2 里**没有**"合成文本 / 工具调用占位"这回事——① v2 的 `content[]` 项**没有** `synthetic` 字段，**驱动也从不设置它**（v1 同样不设置：实测 v1 会话 dump 里没有一项带 `synthetic`）；② **v2 里工具调用是独立的 `content` 项（`type:'tool'`）**，与模型写的 `type:'text'` 项**互斥**——实测调工具的那条 assistant 消息**只有**一个 tool 项、**没有**任何文本占位；最终那条 assistant 消息**只有**一个 `type:'text'` 项 ⇒ **v1「工具占位文本污染回复」这条路在 v2 结构上封死**。③ `synthetic` 实为 **vteam 侧**标记（用于**注入**的上下文块，如 `[群聊历史消息]` / `<doclib>`），不是上游概念 ⇒ **`!synthetic` 过滤保留**（对两代 driver 产出的 part 是空操作，对 vteam 注入的合成块仍然正确） | （已关闭，结论已并入 §2.4 / §6.1 / T14） | worker 侧 | 已完成：真实 v2.0.28 run（无凭据 mock provider + 一个插件工具），逐字 dump assistant 消息的 `content[]` 构成 | **无**（不再是 T14 的开放项） |
 | Q10 | v2 的 `assistant` 消息用哪个字段判定"这条消息已终态"？（契约基线给出 `finish?`/`rawFinish?`/`outcome?`/`error?`，但未指明哪一个是完成判定的权威位） | 直接决定"有文本无终态"的误判率——v1 的铁律就是不能判成完成 | worker 侧 | T9/T14：跑一次真实 run，比对 `finish`/`rawFinish`/`outcome` 与 `session.execution.succeeded` 事件的出现时机，取一致的那个 | T9 → T14 |
 | Q11 | ✅ **已关闭**：`delivery:"steer"` 在**当前无 run**时**立即执行**（T4 实测：`session.inbox.enqueued` → `session.execution.started` 相隔 **2~33 ms**，不排队等待下一轮）。追加事实：v2 的 prompt **默认 delivery 就是 `steer`**；`POST /api/session/{id}/prompt` 返回的是**入队项**不是最终答复 → 完成判定只能看 `session.execution.*` 终态事件 | （已关闭，无残余） | worker 侧 | 已完成：`repro.sh` → `T4_STEER_EVENTS`（含毫秒时间戳差） | **无** |
 | Q12 | `POST /api/session/{id}/interrupt?resume=true` 的精确语义（"恢复待投递的 steering 输入与下一项控制指令，排队中的 prompt 仍停放"）在 vteam 的在飞注入场景下是否需要 | 决定"中断并继续"（vteam 是否有此诉求）与"纯中断"的区分 | worker 侧 + 产品 | D7 已给映射（`resume=false`=纯中断）；`resume=true` 是否被 vteam 使用由产品决定 | 无（可先只用 `resume=false`） |
 | Q13 | **（= U5）** v2 是否**实际发出** v1 legacy 事件（`message.updated` / `message.part.updated` / `message.part.delta`）？v2 源码含 `schema/src/v1/legacy-event.ts`，定义了这些 v1 事件名。**T4 spike 抓到的 3 个会话的完整 SSE 帧里命中数均为 0**（`server.connected` 命中 1，v2 事件 24 种）——但**只是单次样本**，未正式关闭 | 决定 vteam 事件层是否需要兼容分支；若 v2 真会发，vteam 可能收到"半 v1 半 v2"的混合流 | worker 侧 | `grep -c 'message.part.delta' docs/agent-platform/opencode-v2-spike-results/evidence/t4-sse-frames.log` → 实测 0；**建议在 T11/T12 的契约测试里固化这条断言**（跑满一轮含工具调用的会话再断言） | T11 / T12（不阻塞） |
-| Q14 | `GET /api/experimental/session/{sessionID}/log` 的**返回形态与参数**是否如预期（`after=<seq>`、`follow=`；`AsyncIterable<SessionLogItemEncoded>`）？该端点在 `experimental` 命名空间，稳定性未知 | 这是 D4 对抗 SSE volatile 契约的**一等缓解手段**（按 seq 精确补齐断线期间的 durable 事件）；形态不符则 T13 的补齐逻辑要改 | worker 侧 | T1 契约基线快照里确认该端点存在与参数；T13 实现时用真 serve 验证 `?after=<seq>` 能补齐断线期间的事件 | T13 |
+| Q14 | **（已解答：契约形态）** `GET /api/experimental/session/{sessionID}/log` 的参数与返回形态**已按契约基线逐字确认**：`after`（`Event.SeqEncoded`，即 seq）、`follow`（`"true"`｜`"false"`）、`200` → **`text/event-stream`**（SSE 帧元素 `SessionLogItemEncoded`）——**与计划原先「`AsyncIterable<SessionLogItemEncoded>`」的假设一致**。**（仍开放）** ① `?after=<seq>` 能否**真的补齐断线期间**的 durable 事件，**未在真 serve 上端到端验过**（只验了契约形态）；② 端点在 `/api/experimental/**`（**显式不稳定**）；③ log 是**事件流**不是消息快照 ⇒ 重建逻辑仍要自己写（逆分析 R6 判定 partially-redundant）。证据：`docs/agent-platform/opencode-v2-自研机制与v2原生能力对照.md` §3.6 + §6.4 | 这是 D4 对抗 SSE volatile 契约的**一等缓解手段**（按 seq 精确补齐断线期间的 durable 事件）；形态已确认 ⇒ T13 的补齐逻辑**可以照此写**，但**能不能补齐**仍要活栈证明 | worker 侧 | 契约部分已完成（基线 `openapi.json` 的 `session.log` operation 逐字段核对）；**残余项**：T13 实现时用真 serve 验证 `?after=<seq>` 能补齐断线期间的事件 | T13（**契约部分不再阻塞**；残余项阻塞 T13 的验收） |
 | Q15 | **（已解答：极性）** v2 归一化器把 `enabled`→`disabled` 的反转处理**正确**：v1 形 `"enabled": true` → 归一化为 `"disabled": false`（= 仍启用）——**vteam 现写的 `enabled` 键不危险**，不构成"全被禁用"。**（仍开放）** `timeout` 三段拆分后 `startup` 段丢失的语义：v1 单值 timeout 在 v2 的 `startup` / `catalog` / `execution` 三段之间应如何分配 | 决定 T15 的 MCP 节改写：极性已定，但**三段 timeout 怎么写**决定启动阶段超时行为（归一化 v1 单值时 `startup` 段会**丢失**，不是补默认值） | worker 侧 | T15 实测：同一份配置分别写 `enabled:true` / `disabled:false` / `disabled:true`，看 `GET /api/mcp` 的实际回显（**极性已验**）；再对 `timeout` 三段各取不同值（如 `{startup:5000,catalog:30000,execution:120000}`）看各段实际生效位置 | T15 |
 | Q16 | ✅ **已关闭（真栈实测）**：v2 的 MCP 状态是**五态**（`connected` / `pending` / `disabled` / `failed` / `needs_auth`），**1:1、不折叠**——`pending`（还在连）与 `disabled`（配了但关着）**都不是 `failed`**（折叠即谎报）。**两端契约同步扩到五态**：worker `McpServerStatus`（`worker/src/protocol/worker-protocol.ts`）↔ server `MCP_STATUS` + `@IsIn`（`server/src/mcp-servers/dto/mcp-status.dto.ts`）。同时确认 **v2 的 CLI 不是 serve 的探针**（§2.9：CLI 绑共享托管后台服务 49374，读的是另一个作用域）⇒ 探针改为直读 serve 的 `GET /api/model` / `GET /api/mcp`。⚠️ **升级顺序是硬约束：先 server 后 worker**——server 的 `@IsIn` 必须**先**接受五值，否则 worker 一上报新值 ⇒ **整条心跳 400**（`mcpStatus` 是 `@ValidateNested({each:true})`，一个非法值 ⇒ 整包校验失败）⇒ **worker 被判离线**；**滚动更新 worker 只有在 server 已是新版之后才安全** | （已关闭，结论已并入 §2.9 / D9 / T17 补充验收标准） | worker 侧 + server 侧 | 真栈实测：worker 探针读 serve 的 `GET /api/mcp` 报 `connected`、注册载荷带 `executableModels`（**10** 个 id，与 serve 的 `GET /api/model` 一致）；server `MCP_STATUS` + `@IsIn` 已扩到五值；web 侧 `MCP_STATUS_THEME` 已按五态渲染（`pending`=连接中 / `disabled`=已停用），并有 `app-unit` 纯单元门守住"主题表对五态完备" | **无**（顺序约束已进 `docs/deployment.md` §八.0 事实 5 / §八.1 / §八.2 阶段 1 与 `chart/vteam/templates/NOTES.txt` 第 9 条） |
 | U6 | v2 是否仍有 **`CLAUDE.md` 回退**？v2 文档称只发现 `AGENTS.md`，但 **T6 spike 未实测**（附录 C 现记的是"读文档"结论） | 决定 workDir 里若出现 `CLAUDE.md` 会不会被注入 system——这会破坏"角色提示唯一来源"的假设，也影响 T16b 的"workDir 不放 `AGENTS.md`"这条约束要不要扩到 `CLAUDE.md` | worker 侧 | 在项目目录放 `CLAUDE.md`（含 `CLAUDE_MARKER`）与 `AGENTS.md`（含 `AGENTS_MARKER`），跑一次 prompt，`grep -o 'CLAUDE_MARKER\|AGENTS_MARKER' docs/agent-platform/opencode-v2-spike-results/evidence/t5-recorded-model-requests.jsonl` → 期望只出现 `AGENTS_MARKER` | T16b（不阻塞主线） |
@@ -1223,7 +1228,11 @@ feat/opencode-v2-adaptation（基于 origin/main）
 | Q18 | ✅ **已关闭（实测）**：**v2 的插件是「按 location 加载」的**——同一份插件文件在 serve 日志里出现**两次** `loading plugin`（对应两个 location，每个 location 一次 `setup`）。⇒ "插件在别处加载过"**推不出**"本会话的 location 也加载了" | 决定"插件路径是否真的生效"的判据怎么写：用**全局**就绪标记会让**新 location 的第一次派发**误判就绪 ⇒ blob 写进交接文件却**没有 hook 读它** ⇒ **blob 静默丢失**（最坏结果） | worker 侧 | 已完成：就绪标记**按 location 分桶**（`.ready/<location 哈希>.txt`，由插件 `setup` 写），判据与 hook 的注册范围**严格一致**；serve 每次（重）启清空全部标记 | **无** |
 | Q19 | ✅ **已关闭（实测）**：插件 `event.system.push(...)` 落在 **opencode 内置 system 段之后** ⇒ **可缓存的前缀是 `[内置][blob][消息…]`**——常量部分（内置段）仍在 blob **之前** ⇒ **前缀缓存受益**（若落在内置段之前，常量部分会被推到可变 blob 后面，内置前缀的缓存就会受损）。⚠️ **与 v1 的次序不同**：v1 把 blob 放在 body 级 `system` 里（**前置**在最前），v2 的插件**只能追加** ⇒ 这个差异**只在跨版本升级那一次**有影响（一次重新缓存），**v2 内部次序稳定** | 决定"把 blob 推进 system 段"会不会**损害** provider 的 prompt 缓存命中 | worker 侧 | 已完成：真二进制录制模型请求，实测 system 段的构成与次序（见 Q17） | **无** |
 | Q20 | **（刻意未做的未来优化）** blob 的**稳定段 / 易变段拆分**：真实 blob 里有几段**易变**内容（【任务状态】/【团队上下文】/【群聊回复要求】）在两次派发之间会变 ⇒ 缓存前缀**从那一点断掉**，其后的内容重新缓存。**这与 v1 完全相同**（v1 同样把整段 blob 放在 body 级 `system` 里、每次 prompt 都变）⇒ **不是回归，是遗留成本**。**稳定的/易变的拆分**（把易变段挪到 blob 之后、或分两次推送）可以进一步稳住前缀，**本次刻意未做** | 直接影响 provider 的 **prompt 缓存命中率**（用户关心的口径）：拆分后前缀可覆盖到易变段之前的那一整段 | worker 侧（后续） | 拆出稳定/易变两段后，用真二进制录两次派发的模型请求，断言**易变段之前的前缀逐字节相同**（当前只能断言"同一会话两次派发的 blob 逐字节相同"，因为 blob 整体在变） | 无（**未来优化**，不阻塞主线） |
-
+| U10 | **vteam 自配 baseUrl provider 的 API key 最终放哪？**——v2 的凭据表（`POST /api/credential`，SQLite `credential` 表）是 **integration 维度**（以 `integrationID` 为键），实测**存得进、读得回**，但**不覆盖** provider 段的 `settings.apiKey`（那才是 v2 真正会读的一处）⇒ 三条候选：(a) 继续写配置文件的 provider 段 `settings.apiKey`（现状）；(b) 把 provider 建成 v2 的 **integration** 再用凭据表；(c) 走 `opencode auth login` 路径。**选哪条 = 架构决策，不是事实问题** | 决定「停止写 `auth.json`」（逆分析 🥈）之后**明文 key 的落盘面**收敛到一处还是两处；也决定 `opencode auth export/import`（D11 备选路径）是否还有意义 | worker 侧 + 架构 | 对发布的 `@opencode/schema@2.0.32` 的 `integration` / `credential` 类型做一次穷举（哪些 provider 能建成 integration、凭据如何被 provider 消费），再对真 serve 实测 (b) 是否真能让自配 provider 拿到 key | 🥈 停止写 `auth.json`（**不阻塞其「停止写」这一步**，但决定「key 落哪」） |
+| U11 | **`POST /api/location/reload` 在 2.0.32 的行为细节未验**——实测行为来自 **2.0.28**（204、serve PID 不变、会话存活、**pending form + permission 被取消**）；OpenAPI 描述明写 *"Pending permissions and forms are cancelled; running sessions continue with fresh services at the next step boundary"*。⇒ 2.0.32 是否仍会 cancel pending 的 permission/form？是否仍保会话？**未验** | 决定热重载（🥇）的 **(a) 条件调用**逻辑是否成立：若有 pending 就必须**降级走文件监听**并明确日志；**若 2.0.32 不再取消 ⇒ 闸门可从「defer」放宽为「直接重载」** | worker 侧 | 锁版到 2.0.32 后重跑 `docs/agent-platform/opencode-v2-hot-reload-evidence/repro.mjs`（2.0.28 的证据与复现脚本已入库，见该目录 `README.md` §5 的复检清单）：造一个 pending permission + 一个 pending form → `POST /api/location/reload` → 观察二者是否被 cancel、会话是否存活、PID 是否不变 | 🥇 热重载（**条件调用逻辑的版本依据**） |
+| U12 | ✅ **已闭环（证据已入库）**——**v2「改文件即生效」的覆盖面已逐项实测**，原始证据在 `docs/agent-platform/opencode-v2-hot-reload-evidence/`（11 份逐条原始输出 + `README.md` + 可复现的 `repro.mjs`；**实测版本 2.0.28**）。逐项结论：`agents.<name>.system` ✅ · `mcp.servers.<name>` ✅（`connected`）· `.opencode/skills/<name>/SKILL.md` ✅ · `.opencode/plugins/<f>.ts` **新增** ✅（`setup()` 被调用）· `.opencode/plugins/<f>.ts` **原地编辑（无 unlink）** ✅（`setup()` **重入**——注入器依赖的那一行）· 隔离全局配置的 provider 段 ✅（`GET /api/provider` / `GET /api/model` 可见）。**每次热重载 serve PID 均不变**；**不需要任何 `watcher` 开关**（v2 的 `watcher` 段只有 `ignore`） | 决定热重载（🥇）能不能真的替掉重启；尤其「provider 段 key 改了」这一条是 🥇 与 🥈 的交汇点 | worker 侧 | **已完成（2.0.28）**：证据见 `docs/agent-platform/opencode-v2-hot-reload-evidence/`（`01`~`06` 是六条文件监听行，`11` 是「无 watcher 开关」）。⚠️ **残余**：这些证据**不是**锁版 2.0.32 的——2.0.32 的逐条复检清单见该目录 `README.md` §5（**尤其「原地编辑插件 → `setup()` 重入」**） | 🥇 热重载（**「自动热重载」这条路径已可落地**；残余只有 2.0.32 复检） |
+| U13 | **是否要给 worker 增加「v2 原生能力代理端点」？**——v2 的 `ctx.*.transform` / `ctx.permission.hook("evaluate")` / `ctx.storage` / `ctx.event.subscribe` **全部只在 opencode 进程内**；vteam 是三层进程（server / worker / serve-in-worker）⇒ 任何「用 v2 原生能力覆盖 server 侧逻辑」的路线，**都必须先有 worker 侧代理端点**。候选：MCP 状态（供 server 侧事件快路）、权限裁决（供 server 侧闸门）、凭据读写 | 决定跨进程陷阱的**代价量级**：是「每个 v2 原生能力都要加一跳」（成本高但通用），还是「只在个别点位加」（便宜但零散）；也决定 R2 / R9 / R15 的事件快路**能不能在 server 侧闭环** | 架构 + worker 侧 | 先出**一页决策**：列出「要代理的能力清单 + 每项的调用方 + 是否值得」，再决定是否立项 | 无（**架构决策项**；但它决定后续多个任务形态） |
+| U14 | **v2 `form` → vteam `question` 的有损映射要逐字段列出来**——v2 的 form 走 `GET /api/session/{id}/form` + `POST .../form/{formID}/reply`（body `{answer*}`）；vteam 的 question 是 `{header, prompt, choices, multiple}` 语义；两者**不是同一形状**，当前映射**有损**（具体丢哪些字段**未逐字段列过**） | 决定 R15 的**事件快路**（`form.created` 事件）能不能替掉轮询：若映射后仍缺关键字段 ⇒ **兜底轮询必须保留**（当前设计已如此保留） | worker 侧 | 逐字段对照 `@opencode/schema@2.0.32` 的 form 类型与 vteam 的 `DriverQuestionRequest`，产出「字段 / v2 来源 / vteam 落点 / 是否丢失」表 | 无（**只影响 R15 的收窄程度**） |
 ---
 
 ## 附录 A. v2 端点速查（v1 → v2 对照）
@@ -1242,7 +1251,7 @@ feat/opencode-v2-adaptation（基于 origin/main）
 | `POST /session/{id}/abort` | `POST /api/session/{id}/interrupt` | query：`resume=true\|false` | `{interrupted: true\|false}` |
 | `GET /agent?directory=` | `GET /api/agent` | location 选择机制 → Q7 | `{location, data: Agent.Info[]}` |
 | `GET /provider` | `GET /api/provider` | — | `{location, data: Provider.Info[]}` |
-| `GET /api/model` | `GET /api/model` | — | 2.0.28 实测 `{location, data: Model.Info[]}`；⚠️ **2.0.32 spec 已改为裸数组** `Model.Info[]`（基线漂移，见 T1） |
+| `GET /api/model` | `GET /api/model` | — | **2.0.28 与 2.0.32 都是** `{location, data: Model.Info[]}`（2.0.28 实测；2.0.32 见发布的 `@opencode/client@2.0.32` `ModelListOutput = { location, data }`）——**无版本差异**（见 T1；解包处的裸数组分支只是防御性容忍） |
 | `GET /` | `GET /api/info` | — | `{version, pid, urls[], paths{tmp}, capabilities{persistentPty}}` |
 | `GET /event`（SSE） | `GET /api/event` | — | `text/event-stream`；**运行时不发 `event:` 行**（OpenAPI schema 声明 `event` 必填但 2.0.28 不发），类型在 `data.type` |
 | — | `GET /api/experimental/session/{id}/log` | query：`after?`（seq）、`follow?` | `AsyncIterable<SessionLogItemEncoded>`——**按聚合的 durable 事件日志，可重放**（D4 的一等缓解手段） |

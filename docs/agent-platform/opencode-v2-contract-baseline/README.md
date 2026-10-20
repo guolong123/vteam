@@ -1,19 +1,27 @@
 # OpenCode v2 契约基线快照（T1 交付物）
 
-本目录是 **worker 镜像锁定版本**（`@opencode/cli@2.0.32`）的 opencode serve 契约基线快照，
-用于**检测未来的契约漂移**：任何实现改动都应先与本快照比对，端点/响应形状/SSE 帧形态
-发生偏离时必须显式登记，而不是默默适配。
+本目录是 **opencode serve 的契约基线快照**，用于**检测未来的契约漂移**：任何实现改动都应先与本快照
+比对，端点/响应形状/SSE 帧形态发生偏离时必须显式登记，而不是默默适配。
+
+⚠️ **快照由哪个版本产出**（务必分清，见下节）：本快照**由本机的 `opencode v2.0.28` 二进制生成**，
+**不是** worker 镜像锁定版本 `@opencode/cli@2.0.32` 的快照。
 
 ## 产出版本与生成方式
 
-- **实测二进制**：`opencode v2.0.28`（`/Users/mac/.opencode/bin/opencode`，`opencode --version`
-  输出 `opencode v2.0.28`）。
-- **锁版目标**：`@opencode/cli@2.0.32`（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`）。
-- ⚠️ **版本不一致的已知差异**（计划 §1.1 / §8.2 已登记）：
-  `GET /api/model` 的响应包装在 2.0.28 实测为 `{location, data}`，而 2.0.32 的 spec 已改为
-  **裸数组** `Model.Info[]`；live root spec（144 ops）与 `/v2/openapi.json`（143 ops）差一个
-  端点。**锁版即锁契约基线**——用 2.0.32 重跑本目录的生成命令即可把基线推进到锁定版本，
-  差异项须同步登记到计划 §10。
+- **实测二进制 / 快照来源**：`opencode v2.0.28`（`/Users/mac/.opencode/bin/opencode`，`opencode --version`
+  输出 `opencode v2.0.28`）——**本目录的 `openapi.json` / `sse-sample.txt` / `config-sample.json`
+  全部由这个 2.0.28 二进制产出**（118 paths / 142 ops / 285 schemas）。
+- **锁版目标**：`@opencode/cli@2.0.32`（`worker/Dockerfile` 的 `ARG OPENCODE_CLI_SPEC`）——
+  **快照尚未用 2.0.32 重跑**，所以它**不是**锁定版本的契约基线。
+- ⚠️ **版本不一致（快照 2.0.28 vs 锁版目标 2.0.32）**（计划 §1.1 / §8.2 已登记）：
+  - **`GET /api/model` 的响应包装：两版一致，都是 `{location, data}`**——
+    2.0.28 实测见本目录 `openapi.json`（`location` 与 `data` 均 `required`）；2.0.32 见**发布的
+    `@opencode/client@2.0.32`** 类型定义 `ModelListOutput = { location, data }`
+    （`dist/promise/generated/types.d.ts`）。**这里不存在版本差异**（此前文档里"2.0.32 改成裸数组"
+    的说法**不成立**，已订正）。
+  - live root spec（144 ops）与 `/v2/openapi.json`（143 ops）差一个端点。
+  - **锁版即锁契约基线**——用 2.0.32 重跑下方「重新生成的命令」即可把基线推进到锁定版本，
+    差异项须同步登记到计划 §10。
 - **生成环境**：隔离的 `HOME` / `XDG_CONFIG_HOME` / `XDG_DATA_HOME`（临时目录），
   因此快照里**不含任何本机全局配置或凭据**；`location.directory` 指向当时的临时工作目录。
 - **生成日期**：2026-10-20。
